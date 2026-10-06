@@ -20,6 +20,11 @@ the counts of what would be sent and calls nothing. It never prints a prompt.
 N prompts per call, same brief each time, because one reply cannot carry several hundred labels;
 a batch whose reply skips a prompt is asked again once, and nothing is recorded unless every batch
 came back whole and from one model.
+
+--tuning F --out L (wave E1h) rates a tuning file that is in the clear instead of a sealed set: the
+same brief, batches and retry rule, the ids being heldout.py's ids of the prompts, and the labels
+written to L as {id, label, rater} rows. Run it once per vendor, each to its own L; it refuses an L
+that exists.
 """
 
 from __future__ import annotations
@@ -73,10 +78,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--set", choices=heldout.SETS)
     ap.add_argument("--batch", type=int, default=0, help="prompts per call; 0 sends one sheet")
+    ap.add_argument("--tuning", help="a clear tuning file of {prompt} rows to rate instead of a sealed set")
+    ap.add_argument("--out", help="with --tuning: the labels file to write, {id, label, rater} rows")
     a = ap.parse_args(argv)
     try:
-        name = a.set or heldout.current_set()
-        data = heldout.load(name)
+        if bool(a.tuning) != bool(a.out) or (a.tuning and a.set):
+            raise kit.KitError("--tuning and --out go together, and without --set")
+        if a.tuning:
+            if Path(a.out).exists():
+                raise kit.KitError(f"{a.out} exists; a labels file is written once")
+            seen: Dict[str, Dict[str, str]] = {}
+            for r in kit.read_jsonl(Path(a.tuning)):
+                if r.get("prompt"):
+                    seen.setdefault(heldout.item_id(r["prompt"]), {"prompt": r["prompt"]})
+            name = f"tuning file {Path(a.tuning).name}"
+            data = {"items": [{"id": k, "prompt": v["prompt"], "labels": {}} for k, v in seen.items()]}
+        else:
+            name = a.set or heldout.current_set()
+            data = heldout.load(name)
         family = kit.VENDOR_FAMILY[a.vendor]
         prior = sorted({r for i in data["items"] for r in i["labels"]})
         if any(r.split(":", 1)[0] in [v for v, f in kit.VENDOR_FAMILY.items() if f == family] for r in prior):
@@ -88,7 +107,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         step = a.batch if a.batch > 0 else max(len(ids), 1)
         batches = [data["items"][n:n + step] for n in range(0, len(ids), step)]
         if a.dry_run:
-            print(f"would send {len(ids)} prompt(s) of set {name} to {a.vendor} in {len(batches)} call(s); "
+            print(f"would send {len(ids)} prompt(s) of {'' if a.tuning else 'set '}{name} to {a.vendor} in {len(batches)} call(s); "
                   f"raters so far: {', '.join(prior) or 'none'}")
             return 0
         binary, how = courier.resolve(a.vendor)
@@ -123,6 +142,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         if len(got) < len(ids):
             raise kit.KitError(f"{a.vendor} labeled {len(got)} of {len(ids)} prompt(s); nothing recorded")
         rater = f"{a.vendor}:{model}"
+        if a.tuning:
+            out = Path(a.out)
+            out.write_text("".join(json.dumps({"id": k, "label": v, "rater": rater}) + "\n" for k, v in got.items()))
+            out.chmod(0o600)
+            print(f"{rater}: {len(got)} label(s) written to {out}")
+            return 0
         tmp = Path(tempfile.mkstemp(prefix="cc-heldout-labels-")[1])
         try:
             tmp.write_text("".join(json.dumps({"id": k, "label": v}) + "\n" for k, v in got.items()))

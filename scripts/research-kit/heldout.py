@@ -31,6 +31,25 @@ v2 was read twice (waves E1c and E1e), the second time by a configuration chosen
 read, so wave E1g seals v3 (`sealed-v3.enc`) for one read of the fast-plus-careful classifier. Its
 candidates are v2's never-opened tuning file plus what the stores have gained since, and all of them
 are sealed: `--fraction 1.0` leaves no tuning split. A prompt the candidates repeat is sealed once.
+
+WAVE E1h (decision aba630ebe329). v3 read `other` at 0.76, so the classifier is chosen again on a
+tuning base that looks like the sealed sets, and row 15 is then read once over a COMPOSITION of sets:
+
+  heldout.py draw --candidates C --strata S,S --take S=N[,S=N] [--exclude F]... --out T.jsonl
+      a fresh tuning sample, in the clear: no prompt of any sealed set or --exclude file, the first N
+      of each stratum in the order of a keyed hash of its own (never seal's split hash, or every
+      drawn prompt would sit on one side of a later split)
+  heldout.py --set vN seal ... --strata S,S [--take S=N|all,...]
+      a set of only the declared strata (the set stores them); --take keeps N of a stratum
+  heldout.py --set vN retire --out F          a set that may carry no further verdict is written out,
+      labels and all, as tuning data (F outside any repo); the sealed file is not touched and
+      `evaluate` refuses the set from then on
+  heldout.py instrument [--pin S=vN,...]       router-heldout/instrument.json: which set each stratum
+      is scored from. With it pinned, `evaluate` without --set (gate row 15's call) scores each
+      stratum from its own set and pools the item floor and the fallback share across them
+  heldout.py reads [--before-ledger vN=K,...]  router-heldout/reads.jsonl, one row per stratum of a
+      set per `evaluate`; the notes say how often each was read before. --before-ledger records, once
+      per set, the reads made before the ledger existed
 """
 
 from __future__ import annotations
@@ -76,6 +95,7 @@ SETS = (
     "v1",
     "v2",
     "v3",
+    "v4",
 )  # oldest first; v1 keeps the file and keychain account it was sealed under
 
 
@@ -104,6 +124,86 @@ def current_set() -> str:
         if sealed_path(name).exists():
             return name
     return "v1"
+
+
+def heldout_dir() -> Path:
+    return kit.research_home() / "router-heldout"
+
+
+def ledger() -> List[Dict[str, Any]]:
+    """The reads ledger's rows; a line that is not a JSON object is skipped."""
+    out: List[Dict[str, Any]] = []
+    try:
+        lines = (heldout_dir() / "reads.jsonl").read_text().splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(r, dict):
+            out.append(r)
+    return out
+
+
+def ledger_add(rows: List[Dict[str, Any]]) -> None:
+    d = heldout_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / "reads.jsonl"
+    with open(p, "a") as fh:
+        fh.write("".join(json.dumps(r, sort_keys=True) + "\n" for r in rows))
+    p.chmod(0o600)
+
+
+def retired(name: str) -> bool:
+    return any(r.get("event") == "retire" and r.get("set") == name for r in ledger())
+
+
+def set_strata(data: Dict[str, Any]) -> List[str]:
+    """The strata a sealed set holds: all four unless it was sealed with --strata."""
+    return [s for s in STRATA if s in (data.get("strata") or STRATA)]
+
+
+def instrument() -> Optional[Dict[str, str]]:
+    """{stratum: set} when a composition is pinned, None when none is. A file that is there and
+    cannot be read as one is an error: the gate must not fall back to some other set in silence."""
+    p = heldout_dir() / "instrument.json"
+    if not p.exists():
+        return None
+    try:
+        plan = json.loads(p.read_text())["strata"]
+        ok = isinstance(plan, dict) and sorted(plan) == sorted(STRATA)
+    except (OSError, ValueError, KeyError, TypeError):
+        ok = False
+    if not ok:
+        raise kit.KitError(f"{p} does not pin one set to each of {', '.join(STRATA)}")
+    return {s: check_set(plan[s]) for s in STRATA}
+
+
+def parse_strata(spec: Optional[str]) -> List[str]:
+    want = [x for x in (spec or "").split(",") if x] or list(STRATA)
+    bad = [x for x in want if x not in STRATA]
+    if bad:
+        raise kit.KitError(f"unknown stratum {', '.join(bad)} ({', '.join(STRATA)})")
+    return [s for s in STRATA if s in want]
+
+
+def parse_take(spec: Optional[str], declared: List[str]) -> Dict[str, Optional[int]]:
+    """{stratum: N, or None for all}; a stratum --take does not name keeps all."""
+    out: Dict[str, Optional[int]] = {}
+    for part in [x for x in (spec or "").split(",") if x]:
+        k, _, n = part.partition("=")
+        if k not in declared or not (n == "all" or n.isdigit()):
+            raise kit.KitError(f"--take {part!r}: expected STRATUM=N|all for a declared stratum")
+        out[k] = None if n == "all" else int(n)
+    return out
+
+
+def take_order(secret: bytes, prompt: str) -> str:
+    """The order prompts are taken in. Its own domain: seal's split reads byte 0 of HMAC(prompt), so
+    an order by that same hash would put every taken prompt on one side of a later split."""
+    return hmac.new(secret, b"take|" + prompt.encode(), hashlib.sha256).hexdigest()
 
 
 def load(name: Optional[str] = None) -> Dict[str, Any]:
@@ -144,12 +244,9 @@ def cmd_seal(a: argparse.Namespace) -> int:
             f"the held-out set {name} is already sealed; it is sealed once"
             + (f" (a new set is `--set {later[0]}`)" if later else "")
         )
-    cands = kit.read_jsonl(Path(a.candidates))
-    bad = [c for c in cands if c.get("stratum") not in STRATA or not c.get("prompt")]
-    if bad:
-        raise kit.KitError(
-            f"{len(bad)} candidate(s) without a prompt or a known stratum ({', '.join(STRATA)})"
-        )
+    declared = parse_strata(a.strata)
+    take = parse_take(a.take, declared)
+    cands = read_candidates(Path(a.candidates), declared)
     used = set()
     for earlier in SETS[: SETS.index(name)]:
         if sealed_path(earlier).exists():
@@ -173,24 +270,38 @@ def cmd_seal(a: argparse.Namespace) -> int:
     for c in cands:
         h = hmac.new(secret, c["prompt"].encode(), hashlib.sha256).digest()
         (sealed if h[0] < int(256 * a.fraction) else tuning).append(c)
-    missing = [s for s in STRATA if not any(c["stratum"] == s for c in sealed)]
+    left = 0  # sealed-side prompts beyond a stratum's --take: left out, and still unused
+    for s, n in take.items():
+        if n is None:
+            continue
+        mine = sorted(
+            (c for c in sealed if c["stratum"] == s),
+            key=lambda c: take_order(secret, c["prompt"]),
+        )
+        over = {id(c) for c in mine[n:]}
+        left += len(over)
+        sealed = [c for c in sealed if id(c) not in over]
+    missing = [s for s in declared if not any(c["stratum"] == s for c in sealed)]
     if len(sealed) < a.min_sealed or missing:
         raise kit.KitError(
             f"the sealed split holds {len(sealed)} prompt(s) (need {a.min_sealed})"
             + (f" and no {', '.join(missing)} stratum" if missing else "")
             + "; add candidates and seal again"
         )
-    per = {s: sum(1 for c in sealed if c["stratum"] == s) for s in STRATA}
+    per = {s: sum(1 for c in sealed if c["stratum"] == s) for s in declared}
+    beyond = f"; {left} left unsealed beyond --take" if left else ""
     if a.dry_run:
         print(
             f"would seal {len(sealed)} prompt(s) as set {name} {json.dumps(per, sort_keys=True)}; "
-            f"{len(tuning)} to the tuning set; {dropped} candidate(s) dropped as already used; "
-            "nothing written"
+            f"{len(tuning)} to the tuning set; {dropped} candidate(s) dropped as already used"
+            f"{beyond}; nothing written"
         )
         return 0
     key = kit.vault_key(KEY_ITEM, key_account(name), create=True)
+    body: Dict[str, Any] = {"strata": declared} if declared != list(STRATA) else {}
     save(
         {
+            **body,
             "set": name,
             "items": [
                 {
@@ -214,6 +325,183 @@ def cmd_seal(a: argparse.Namespace) -> int:
         f"sealed {len(sealed)} prompt(s) as set {name} {json.dumps(per, sort_keys=True)}; "
         f"{len(tuning)} written to the tuning set"
         + (f"; {dropped} candidate(s) dropped as already used" if dropped else "")
+        + beyond
+    )
+    return 0
+
+
+def read_candidates(path: Path, declared: List[str]) -> List[Dict[str, Any]]:
+    """The candidate rows of the declared strata; a row with no prompt or no known stratum is an
+    error, and a row of an undeclared stratum is left out (it stays unused)."""
+    cands = kit.read_jsonl(path)
+    bad = [c for c in cands if c.get("stratum") not in STRATA or not c.get("prompt")]
+    if bad:
+        raise kit.KitError(
+            f"{len(bad)} candidate(s) without a prompt or a known stratum ({', '.join(STRATA)})"
+        )
+    return [c for c in cands if c["stratum"] in declared]
+
+
+def cmd_draw(a: argparse.Namespace) -> int:
+    declared = parse_strata(a.strata)
+    take = parse_take(a.take, declared)
+    cands = read_candidates(Path(a.candidates), declared)
+    used = set()
+    for name in SETS:
+        if sealed_path(name).exists():
+            used |= {seen_key(i["prompt"]) for i in load(name)["items"]}
+    for f in a.exclude or []:
+        used |= {
+            seen_key(r["prompt"]) for r in kit.read_jsonl(Path(f)) if r.get("prompt")
+        }
+    fresh = []
+    for c in cands:
+        k = seen_key(c["prompt"])
+        if k not in used:
+            fresh.append(c)
+            used.add(k)
+    secret = kit.vault_key(KEY_ITEM, "split", create=True).encode()
+    drawn: List[Dict[str, Any]] = []
+    per: Dict[str, int] = {}
+    rest: Dict[str, int] = {}
+    for s in declared:
+        mine = sorted(
+            (c for c in fresh if c["stratum"] == s),
+            key=lambda c: take_order(secret, c["prompt"]),
+        )
+        n = take.get(s)
+        if n is not None and len(mine) < n:
+            raise kit.KitError(
+                f"stratum {s}: {len(mine)} fresh candidate(s), fewer than the {n} to draw; "
+                "nothing written"
+            )
+        got = mine if n is None else mine[:n]
+        drawn += got
+        per[s], rest[s] = len(got), len(mine) - len(got)
+    out = Path(a.out)
+    out.write_text(
+        "".join(
+            json.dumps(
+                {"prompt": c["prompt"], "stratum": c["stratum"], "source": c.get("source")},
+                sort_keys=True,
+            )
+            + "\n"
+            for c in drawn
+        )
+    )
+    out.chmod(0o600)
+    print(
+        f"drew {len(drawn)} prompt(s) {json.dumps(per, sort_keys=True)}; "
+        f"{len(cands) - len(fresh)} candidate(s) dropped as already used; "
+        f"fresh and not drawn {json.dumps(rest, sort_keys=True)}"
+    )
+    return 0
+
+
+def in_a_repo(path: Path) -> bool:
+    return any((d / ".git").exists() for d in path.resolve().parents)
+
+
+def cmd_retire(a: argparse.Namespace) -> int:
+    if not a.set:
+        raise kit.KitError("retire needs --set: name the set that carries no further verdict")
+    out = Path(a.out)
+    if in_a_repo(out):
+        raise kit.KitError(f"{out} is inside a repo; a retired set is written outside the repo")
+    data = load(a.set)
+    out.write_text(
+        "".join(
+            json.dumps(
+                {
+                    "id": i["id"],
+                    "prompt": i["prompt"],
+                    "stratum": i["stratum"],
+                    "source": i.get("source"),
+                    "labels": i["labels"],
+                },
+                sort_keys=True,
+            )
+            + "\n"
+            for i in data["items"]
+        )
+    )
+    out.chmod(0o600)
+    if not retired(a.set):
+        ledger_add([{"event": "retire", "set": a.set, "at": kit.now_iso(), "out": str(out)}])
+    print(
+        f"retired set {a.set}: {len(data['items'])} prompt(s) with their labels written as tuning "
+        "data; the sealed file is unchanged and evaluate refuses the set from now on"
+    )
+    return 0
+
+
+def cmd_instrument(a: argparse.Namespace) -> int:
+    p = heldout_dir() / "instrument.json"
+    if not a.pin:
+        plan = instrument()
+        print(json.dumps(plan, sort_keys=True) if plan else "no instrument pinned")
+        return 0
+    plan = {}
+    for part in a.pin.split(","):
+        s, _, name = part.partition("=")
+        if s not in STRATA:
+            raise kit.KitError(f"--pin {part!r}: expected STRATUM=SET")
+        plan[s] = check_set(name)
+    if sorted(plan) != sorted(STRATA):
+        raise kit.KitError(f"--pin must name each of {', '.join(STRATA)} once")
+    for s, name in plan.items():
+        if retired(name):
+            raise kit.KitError(f"set {name} is retired; it carries no further verdict")
+        if s not in set_strata(load(name)):
+            raise kit.KitError(f"set {name} does not hold {s}")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"strata": plan, "pinned_at": kit.now_iso()}, sort_keys=True) + "\n")
+    p.chmod(0o600)
+    print(f"instrument pinned: {json.dumps(plan, sort_keys=True)}")
+    return 0
+
+
+def reads_before() -> Dict[Any, int]:
+    """{(set, stratum): how many times it has been read}, from the ledger."""
+    n: Dict[Any, int] = {}
+    for r in ledger():
+        if r.get("event") == "read":
+            k = (r.get("set"), r.get("stratum"))
+            n[k] = n.get(k, 0) + int(r.get("times") or 1)
+    return n
+
+
+def cmd_reads(a: argparse.Namespace) -> int:
+    if a.before_ledger:
+        rows = []
+        for part in a.before_ledger.split(","):
+            name, _, k = part.partition("=")
+            check_set(name)
+            if not k.isdigit():
+                raise kit.KitError(f"--before-ledger {part!r}: expected SET=COUNT")
+            if any(r.get("before_ledger") and r.get("set") == name for r in ledger()):
+                continue  # recorded once per set
+            for s in set_strata(load(name)):
+                rows.append(
+                    {
+                        "event": "read",
+                        "set": name,
+                        "stratum": s,
+                        "times": int(k),
+                        "before_ledger": True,
+                        "at": kit.now_iso(),
+                    }
+                )
+        ledger_add(rows)
+    counts = reads_before()
+    print(
+        json.dumps(
+            {
+                "reads": {f"{k[0]} {k[1]}": v for k, v in sorted(counts.items(), key=str)},
+                "retired": sorted(s for s in SETS if retired(s)),
+            },
+            sort_keys=True,
+        )
     )
     return 0
 
@@ -286,20 +574,47 @@ def evaluate(
 ) -> Dict[str, List[str]]:
     """Gate row 15. A fallback (error, timeout, unknown or mixed label) is a miss in every stratum:
     the as-built router records it as `unavailable`, which relays nothing (router.py, §10 item 3), so
-    it never counts as a correct relay. Fallbacks are also counted against MAX_FALLBACK."""
+    it never counts as a correct relay. Fallbacks are also counted against MAX_FALLBACK.
+
+    With no set named, a pinned instrument decides which set each stratum is scored from (wave E1h);
+    the item floor and the fallback share are pooled over everything routed."""
     if not router:
         raise kit.KitError("router not built (wave B1): CC_RESEARCH_ROUTER is unset")
-    name = check_set(name or current_set())
-    data = load(name)
+    pinned = None if name else instrument()
+    if pinned:
+        plan = pinned
+    else:
+        name = check_set(name or current_set())
+        plan = {s: name for s in STRATA}
+    datas: Dict[str, Dict[str, Any]] = {}
+    for n in sorted(set(plan.values())):
+        if retired(n):
+            raise kit.KitError(
+                f"set {n} is retired to tuning data (heldout.py retire); it carries no further verdict"
+            )
+        datas[n] = load(n)
+    # (set, item) for every item of a stratum in the set that stratum is scored from
+    pool = [
+        (n, i)
+        for n in sorted(datas, key=SETS.index)
+        for i in datas[n]["items"]
+        if plan.get(i["stratum"]) == n and i["stratum"] in set_strata(datas[n])
+    ]
     valid = [
-        i
-        for i in data["items"]
+        (n, i)
+        for n, i in pool
         if len(i["labels"]) >= 2 and len(set(i["labels"].values())) == 1
     ]
     fails: List[str] = []
     notes = [
-        f"held-out set {name}: {len(data['items'])} sealed item(s)",
-        f"{len(data['items']) - len(valid)} item(s) excluded for rater disagreement or a missing label",
+        (
+            "held-out instrument, each stratum from its own set: "
+            + " · ".join(f"{s} from {plan[s]}" for s in STRATA)
+            + f"; {len(pool)} sealed item(s)"
+        )
+        if pinned
+        else f"held-out set {name}: {len(pool)} sealed item(s)",
+        f"{len(pool) - len(valid)} item(s) excluded for rater disagreement or a missing label",
     ]
     if len(valid) < MIN_SET:
         return {
@@ -308,19 +623,43 @@ def evaluate(
             ],
             "notes": notes,
         }
+    # The reads ledger: what was read before, said in the notes; then this read, written before the
+    # first call so a read that is cut short still counts.
+    held = sorted(
+        {(n, i["stratum"]) for n, i in pool}, key=lambda k: (STRATA.index(k[1]), k[0])
+    )
+    before = reads_before()
+    notes += [
+        f"stratum {s} of set {n}: read {before.get((n, s), 0)} time(s) before" for n, s in held
+    ]
+    ledger_add(
+        [
+            {
+                "event": "read",
+                "set": n,
+                "stratum": s,
+                "at": kit.now_iso(),
+                "instrument": bool(pinned),
+            }
+            for n, s in held
+        ]
+    )
     hits: Dict[str, List[int]] = {s: [0, 0] for s in STRATA}
     fell: Dict[str, int] = {
         s: 0 for s in STRATA
     }  # fallbacks among the items a stratum counts
+    false_relay: Dict[str, List[int]] = {s: [0, 0] for s in STRATA}
+    store: Dict[str, List[int]] = {"history": [0, 0], "transcript": [0, 0]}
     fallbacks = 0
     rows: List[Dict[str, Any]] = []
 
-    def routed(i: Dict[str, Any], counted: bool) -> Optional[str]:
+    def routed(n: str, i: Dict[str, Any], counted: bool) -> Optional[str]:
         t0 = time.time()
         got = route(router, i["prompt"])
         rows.append(
             {
                 "id": i["id"],
+                "set": n,
                 "stratum": i["stratum"],
                 "counted": counted,
                 "got": got,
@@ -329,17 +668,28 @@ def evaluate(
         )
         return got
 
-    for i in valid:
-        got = routed(i, True)
+    for n, i in valid:
+        got = routed(n, i, True)
         if got is None:
             fallbacks += 1  # None is neither RELAYED nor any gold label: a miss below
         gold = next(iter(i["labels"].values()))
+        if gold not in RELAYED:
+            fr = false_relay[i["stratum"]]
+            fr[0] += 1 if got in RELAYED else 0
+            fr[1] += 1
         h = hits[i["stratum"]]
         h[1] += 1
         if i["stratum"] in COMPLETENESS_STRATA and gold in RELAYED:
             h[0] += 1 if got in RELAYED else 0
         elif i["stratum"] == "other":
             h[0] += 1 if got == gold else 0
+            st = store[
+                "history"
+                if str(i.get("source") or "").startswith("history:")
+                else "transcript"
+            ]
+            st[0] += 1 if got == gold else 0
+            st[1] += 1
         else:
             h[1] -= (
                 1  # a completeness-stratum prompt whose agreed label is not a re-ask
@@ -347,17 +697,17 @@ def evaluate(
             continue
         fell[i["stratum"]] += 1 if got is None else 0
     for s in STRATA:
-        ok, n = hits[s]
+        ok, n_items = hits[s]
         need = MIN_OTHER_CORRECT if s == "other" else MIN_RECALL
-        if n == 0:
+        if n_items == 0:
             fails.append(f"stratum {s}: no agreed item to measure")
-        elif ok / n < need:
+        elif ok / n_items < need:
             fails.append(
-                f"stratum {s}: {'correct-label rate' if s == 'other' else 'recall'} {ok}/{n} = "
-                f"{ok / n:.2f}, below {need}"
+                f"stratum {s}: {'correct-label rate' if s == 'other' else 'recall'} {ok}/{n_items} = "
+                f"{ok / n_items:.2f}, below {need}"
             )
         else:
-            notes.append(f"stratum {s}: {ok}/{n}")
+            notes.append(f"stratum {s}: {ok}/{n_items}")
     rate = fallbacks / len(valid)
     notes.append(
         f"{fallbacks} of {len(valid)} routed item(s) fell back (share {rate:.2f}); "
@@ -371,11 +721,24 @@ def evaluate(
         fails.append(
             f"fallback rate {rate:.2f} (error or timeout at {ROUTER_TIMEOUT_S} s), above {MAX_FALLBACK}"
         )
+    # Shown only, never a failure (wave E1h): what a wrong relay costs is a blocked turn, so the
+    # notes say how often an agreed non-relay prompt was relayed, and how `other` reads in each store.
+    shown = [s for s in ("other",) + COMPLETENESS_STRATA if false_relay[s][1]]
+    if shown:
+        notes.append(
+            "relayed although both raters gave a non-relay label: "
+            + " · ".join(f"{s} {false_relay[s][0]}/{false_relay[s][1]}" for s in shown)
+        )
+    if store["history"][1] or store["transcript"][1]:
+        notes.append(
+            "other by store, correct / items: "
+            + " · ".join(f"{k} {v[0]}/{v[1]}" for k, v in store.items())
+        )
     # Not counted, shown only: a completeness-stratum prompt both raters would relay, under two
     # different relay labels. Row 15 leaves it out as a disagreement; this line says what that costs.
     split = [
-        i
-        for i in data["items"]
+        (n, i)
+        for n, i in pool
         if i["stratum"] in COMPLETENESS_STRATA
         and len(i["labels"]) >= 2
         and len(set(i["labels"].values())) > 1
@@ -383,8 +746,8 @@ def evaluate(
     ]
     if split:
         seen: Dict[str, List[int]] = {s: [0, 0, 0] for s in COMPLETENESS_STRATA}
-        for i in split:
-            got = routed(i, False)
+        for n, i in split:
+            got = routed(n, i, False)
             c = seen[i["stratum"]]
             c[0] += 1 if got in RELAYED else 0
             c[1] += 1
@@ -427,6 +790,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="print the per-stratum counts the split would seal (never a prompt) and write nothing",
     )
+    p.add_argument("--strata", help="seal only these strata (comma-separated); the set stores them")
+    p.add_argument("--take", help="STRATUM=N|all,...: keep N of a stratum's sealed side")
+    p = sub.add_parser("draw")
+    p.add_argument("--candidates", required=True)
+    p.add_argument("--strata", required=True)
+    p.add_argument("--take", help="STRATUM=N|all,...; a stratum it does not name is drawn whole")
+    p.add_argument("--exclude", action="append")
+    p.add_argument("--out", required=True)
+    p = sub.add_parser("retire")
+    p.add_argument("--out", required=True)
+    p = sub.add_parser("instrument")
+    p.add_argument("--pin", help="STRATUM=SET for each of the four strata, comma-separated")
+    p = sub.add_parser("reads")
+    p.add_argument("--before-ledger", help="SET=COUNT,...: reads made before the ledger existed")
     p = sub.add_parser("rater-sheet")
     p.add_argument("--out", required=True)
     p = sub.add_parser("label")
@@ -442,6 +819,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         if a.verb == "seal":
             return cmd_seal(a)
+        if a.verb == "draw":
+            return cmd_draw(a)
+        if a.verb == "retire":
+            return cmd_retire(a)
+        if a.verb == "instrument":
+            return cmd_instrument(a)
+        if a.verb == "reads":
+            return cmd_reads(a)
         if a.verb == "rater-sheet":
             return cmd_rater_sheet(a)
         if a.verb == "label":

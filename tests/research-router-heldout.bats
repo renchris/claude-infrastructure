@@ -293,3 +293,71 @@ STUB
   [[ "$output" == *"labeled 0 of 48"* ]] || false
   [ "$("$H" status | jq '[.[].raters | length] | add')" -eq 0 ]
 }
+
+# ── wave E1h ────────────────────────────────────────────────────────────────────────────────────
+
+@test "wave E1h: --live-frame makes a history row what the hook received: no ! line, a paste expanded from the row or the cache, a lost paste dropped" {
+  : > "$T/s1.jsonl"
+  mkdir -p "$BATS_TEST_TMPDIR/acct/paste-cache" "$BATS_TEST_TMPDIR/elsewhere/paste-cache"
+  printf 'the cached paste body' > "$BATS_TEST_TMPDIR/acct/paste-cache/abc123.txt"
+  printf 'a paste kept by another account' > "$BATS_TEST_TMPDIR/elsewhere/paste-cache/def456.txt"
+  {
+    jq -nc '{display:"!git status",timestamp:1,pastedContents:{}}'
+    jq -nc '{display:"build gadget one",timestamp:2,pastedContents:{}}'
+    jq -nc '{display:"review this [Pasted text #1 +3 lines] please",timestamp:3,pastedContents:{"1":{id:1,type:"text",content:"INLINE BODY"}}}'
+    jq -nc '{display:"and this [Pasted text #1 +9 lines]",timestamp:4,pastedContents:{"1":{id:1,type:"text",contentHash:"abc123"}}}'
+    jq -nc '{display:"lost [Pasted text #1 +2 lines]",timestamp:5,pastedContents:{"1":{id:1,type:"text",contentHash:"000000"}}}'
+    jq -nc '{display:"none [Pasted text #2]",timestamp:6,pastedContents:{}}'
+    jq -nc '{display:"far [Pasted text #1 +1 lines]",timestamp:7,pastedContents:{"1":{id:1,type:"text",contentHash:"def456"}}}'
+  } > "$BATS_TEST_TMPDIR/acct/history.jsonl"
+  c="$BATS_TEST_TMPDIR/c.jsonl"
+  # as before without the flag: the display strings, the ! line among them
+  run python3 "$CAND" --transcripts "$T/*.jsonl" --history "$BATS_TEST_TMPDIR/acct/history.jsonl" --out "$c"
+  [ "$(jq -r .prompt "$c" | wc -l | tr -d ' ')" -eq 7 ]
+  [ "$(grep -c 'Pasted text' "$c")" -eq 5 ]
+  run python3 "$CAND" --transcripts "$T/*.jsonl" --history "$BATS_TEST_TMPDIR/acct/history.jsonl" --live-frame --out "$c"
+  [[ "$output" != *"BODY"* ]] || false
+  [ "$(jq -r .prompt "$c" | sort | tr '\n' '|')" = "and this the cached paste body|build gadget one|review this INLINE BODY please|" ]
+  run python3 "$CAND" --transcripts "$T/*.jsonl" --history "$BATS_TEST_TMPDIR/acct/history.jsonl" --live-frame \
+    --paste-cache "$BATS_TEST_TMPDIR/else*/paste-cache" --out "$c"
+  [ "$(jq -r .prompt "$c" | grep -c 'a paste kept by another account')" -eq 1 ]
+  [ "$(jq -r .prompt "$c" | wc -l | tr -d ' ')" -eq 4 ]
+}
+
+@test "wave E1h: a rater labels a clear tuning file into a labels file, by the sealed set's ids, once, and prints no prompt" {
+  for i in $(seq 1 6); do
+    printf '{"prompt":"are we done with part %s?","stratum":"regex-matched"}\n' "$i"
+    printf '{"prompt":"build widget %s","stratum":"other"}\n' "$i"
+  done > "$BATS_TEST_TMPDIR/tune.jsonl"
+  printf '{"prompt":"build widget 1","stratum":"other"}\n' >> "$BATS_TEST_TMPDIR/tune.jsonl"   # a repeat is rated once
+  RATE="$REPO/scripts/research-kit/heldout-rate.py"
+  stub_vendor "$BATS_TEST_TMPDIR/claude-stub" anthropic
+  stub_vendor "$BATS_TEST_TMPDIR/codex-stub" openai
+  mkdir -p "$BATS_TEST_TMPDIR/codex/2026"
+  printf '{"model":"gpt-rater-2"}\n' > "$BATS_TEST_TMPDIR/codex/2026/rollout-x-t1.jsonl"
+  export CC_RESEARCH_CODEX_SESSIONS="$BATS_TEST_TMPDIR/codex"
+  run python3 "$RATE" --vendor anthropic --tuning "$BATS_TEST_TMPDIR/tune.jsonl" --out "$BATS_TEST_TMPDIR/la.jsonl" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"would send 12 prompt(s) of tuning file tune.jsonl"*"in 1 call(s)"* ]] || false
+  [ ! -e "$BATS_TEST_TMPDIR/la.jsonl" ]
+  CC_RESEARCH_BIN_ANTHROPIC="$BATS_TEST_TMPDIR/claude-stub" run python3 "$RATE" --vendor anthropic --batch 5 \
+    --tuning "$BATS_TEST_TMPDIR/tune.jsonl" --out "$BATS_TEST_TMPDIR/la.jsonl"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"anthropic:claude-rater-1: 12 label(s) written"* ]] || false
+  [[ "$output" != *"widget"* ]] || false
+  CC_RESEARCH_BIN_OPENAI="$BATS_TEST_TMPDIR/codex-stub" run python3 "$RATE" --vendor openai \
+    --tuning "$BATS_TEST_TMPDIR/tune.jsonl" --out "$BATS_TEST_TMPDIR/lo.jsonl"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '"\(.rater) \(.label)"' "$BATS_TEST_TMPDIR/la.jsonl" "$BATS_TEST_TMPDIR/lo.jsonl" | sort | uniq -c | tr -s ' ' | tr '\n' ';')" = " 6 anthropic:claude-rater-1 completeness; 6 anthropic:claude-rater-1 work-order; 6 openai:gpt-rater-2 completeness; 6 openai:gpt-rater-2 work-order;" ]
+  # the ids are heldout.py's ids of the prompts
+  want="$(python3 -c 'import hashlib;print(hashlib.sha256(b"build widget 3").hexdigest()[:12])')"
+  [ "$(jq -r --arg w "$want" 'select(.id==$w) | .label' "$BATS_TEST_TMPDIR/la.jsonl")" = work-order ]
+  # a labels file is written once; --tuning needs --out and takes no --set; no sealed set was needed
+  CC_RESEARCH_BIN_ANTHROPIC="$BATS_TEST_TMPDIR/claude-stub" run python3 "$RATE" --vendor anthropic \
+    --tuning "$BATS_TEST_TMPDIR/tune.jsonl" --out "$BATS_TEST_TMPDIR/la.jsonl"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"written once"* ]] || false
+  run python3 "$RATE" --vendor anthropic --tuning "$BATS_TEST_TMPDIR/tune.jsonl"
+  [ "$status" -eq 2 ]
+  [ ! -e "$CC_RESEARCH_HOME/router-heldout/sealed.enc" ]
+}

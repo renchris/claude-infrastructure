@@ -215,7 +215,7 @@ R
   [[ "$output" == *"two different relay labels), relayed / items / fell back: regex-matched 0/0/0 · regex-missed 0/0/0 · pushback 3/5/0"* ]] || false
   [ "$(wc -l < "$BATS_TEST_TMPDIR/rec.jsonl" | tr -d ' ')" -eq 48 ]
   [ "$(jq -s '[.[] | select(.counted | not)] | length' "$BATS_TEST_TMPDIR/rec.jsonl")" -eq 5 ]
-  [ "$(jq -r 'keys | join(",")' "$BATS_TEST_TMPDIR/rec.jsonl" | sort -u)" = "counted,got,id,stratum,wall_s" ]
+  [ "$(jq -r 'keys | join(",")' "$BATS_TEST_TMPDIR/rec.jsonl" | sort -u)" = "counted,got,id,set,stratum,wall_s" ]
   run grep -c "secret prompt" "$BATS_TEST_TMPDIR/rec.jsonl"
   [ "$output" = 0 ]
 }
@@ -253,4 +253,169 @@ R
   [[ "$output" == *"v3 is already sealed"* ]] || false
   run "$H" status
   [[ "$output" == *"set v3"* ]] || false
+}
+
+# ── wave E1h: a fresh tuning draw, a retired set, a subset seal, a pinned instrument, a reads ledger ──
+
+# mk <word> <n> <strata…> — n candidates per stratum whose prompts start with <word>; history-sourced
+# in even rows, so a note can split `other` by store.
+mk() {
+  local w="$1" n="$2" s i; shift 2
+  for s in "$@"; do for i in $(seq 1 "$n"); do
+    printf '{"prompt":"%s prompt %s %s","stratum":"%s","source":"%s"}\n' "$w" "$s" "$i" "$s" \
+      "$([ $((i % 2)) -eq 0 ] && echo "history:.claude@1" || echo "abcd1234@2026-09-20T10:00:00")"
+  done; done
+}
+ALL="regex-matched regex-missed pushback other"
+router_says() { printf '#!/bin/bash\ncat >/dev/null\necho %s\n' "$1" > "$BATS_TEST_TMPDIR/router"; chmod +x "$BATS_TEST_TMPDIR/router"; }
+
+@test "wave E1h: draw takes a fresh per-stratum sample that no sealed set or excluded file holds, the same on a re-run, and prints no prompt" {
+  mk first 12 $ALL > "$BATS_TEST_TMPDIR/c.jsonl"
+  "$H" seal --candidates "$BATS_TEST_TMPDIR/c.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t.jsonl" --fraction 1.0
+  printf '{"prompt":"fresh prompt other 3"}\n' > "$BATS_TEST_TMPDIR/tuning-old.jsonl"
+  { mk first 12 $ALL; mk fresh 60 $ALL; } > "$BATS_TEST_TMPDIR/pool.jsonl"
+  run "$H" draw --candidates "$BATS_TEST_TMPDIR/pool.jsonl" --strata other,regex-matched \
+    --take other=20,regex-matched=10 --exclude "$BATS_TEST_TMPDIR/tuning-old.jsonl" --out "$BATS_TEST_TMPDIR/d1.jsonl"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"drew 30 prompt(s)"*'"other": 20'*'"regex-matched": 10'* ]] || false
+  [[ "$output" != *"fresh prompt"* ]] || false
+  [ "$(jq -r .stratum "$BATS_TEST_TMPDIR/d1.jsonl" | sort | uniq -c | tr -s ' ' | tr '\n' ';')" = " 20 other; 10 regex-matched;" ]
+  run grep -c 'first prompt\|fresh prompt other 3"' "$BATS_TEST_TMPDIR/d1.jsonl"
+  [ "$output" = 0 ]
+  "$H" draw --candidates "$BATS_TEST_TMPDIR/pool.jsonl" --strata other,regex-matched \
+    --take other=20,regex-matched=10 --exclude "$BATS_TEST_TMPDIR/tuning-old.jsonl" --out "$BATS_TEST_TMPDIR/d2.jsonl"
+  cmp "$BATS_TEST_TMPDIR/d1.jsonl" "$BATS_TEST_TMPDIR/d2.jsonl"
+  # the draw's order is not seal's split hash: a half split of the drawn prompts lands on both sides
+  jq -c 'select(.stratum=="other")' "$BATS_TEST_TMPDIR/d1.jsonl" > "$BATS_TEST_TMPDIR/d-other.jsonl"
+  { cat "$BATS_TEST_TMPDIR/d-other.jsonl"; mk pad 40 regex-matched regex-missed pushback; } > "$BATS_TEST_TMPDIR/c2.jsonl"
+  run "$H" --set v2 seal --candidates "$BATS_TEST_TMPDIR/c2.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t2.jsonl" --dry-run
+  [ "$status" -eq 0 ]
+  n="$(printf '%s' "$output" | sed 's/.*"other": \([0-9]*\).*/\1/')"
+  [ "$n" -gt 0 ] && [ "$n" -lt 20 ]
+  # a stratum with too few fresh prompts is refused, never short-filled in silence
+  run "$H" draw --candidates "$BATS_TEST_TMPDIR/pool.jsonl" --strata other --take other=500 \
+    --exclude "$BATS_TEST_TMPDIR/tuning-old.jsonl" --out "$BATS_TEST_TMPDIR/d3.jsonl"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"stratum other: 59 fresh candidate(s)"* ]] || false
+  [ ! -e "$BATS_TEST_TMPDIR/d3.jsonl" ]
+}
+
+@test "wave E1h: retire writes a read-twice set out as tuning data with its labels, leaves the sealed file byte-identical, and the set carries no verdict again" {
+  mk first 12 $ALL > "$BATS_TEST_TMPDIR/c.jsonl"
+  "$H" seal --candidates "$BATS_TEST_TMPDIR/c.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t.jsonl" --fraction 1.0
+  mk second 12 $ALL > "$BATS_TEST_TMPDIR/c2.jsonl"
+  "$H" --set v2 seal --candidates "$BATS_TEST_TMPDIR/c2.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t2.jsonl" --fraction 1.0
+  label_all v2
+  cp "$CC_RESEARCH_HOME/router-heldout/sealed-v2.enc" "$BATS_TEST_TMPDIR/v2.before"
+  run "$H" --set v2 retire --out "$REPO/tests/retired.jsonl"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"outside the repo"* ]] || false
+  [ ! -e "$REPO/tests/retired.jsonl" ]
+  run "$H" --set v2 retire --out "$BATS_TEST_TMPDIR/retired-v2.jsonl"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"retired set v2"*"48 prompt(s)"* ]] || false
+  [[ "$output" != *"second prompt"* ]] || false
+  cmp "$BATS_TEST_TMPDIR/v2.before" "$CC_RESEARCH_HOME/router-heldout/sealed-v2.enc"
+  [ "$(jq -r 'select(.labels.r1 and .labels.r2 and .prompt and .stratum) | .stratum' "$BATS_TEST_TMPDIR/retired-v2.jsonl" | wc -l | tr -d ' ')" -eq 48 ]
+  [ "$(stat -f %Lp "$BATS_TEST_TMPDIR/retired-v2.jsonl")" = 600 ]
+  [ "$(jq -r 'select(.event=="retire") | .set' "$CC_RESEARCH_HOME/router-heldout/reads.jsonl")" = v2 ]
+  router_says completeness
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" --set v2 evaluate
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"v2 is retired"* ]] || false
+  # a retired set's prompts are still never drawn or sealed again
+  run "$H" draw --candidates "$BATS_TEST_TMPDIR/c2.jsonl" --strata other --take other=1 --out "$BATS_TEST_TMPDIR/d.jsonl"
+  [ "$status" -eq 2 ]
+}
+
+@test "wave E1h: a subset seal holds only its declared strata, takes N or all of each, and stores them" {
+  mk first 12 $ALL > "$BATS_TEST_TMPDIR/c.jsonl"
+  "$H" seal --candidates "$BATS_TEST_TMPDIR/c.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t.jsonl" --fraction 1.0
+  mk fourth 40 other regex-matched regex-missed > "$BATS_TEST_TMPDIR/c4.jsonl"
+  # without --strata the missing pushback stratum is still refused
+  run "$H" --set v4 seal --candidates "$BATS_TEST_TMPDIR/c4.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t4.jsonl" --fraction 1.0
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"no pushback stratum"* ]] || false
+  run "$H" --set v4 seal --candidates "$BATS_TEST_TMPDIR/c4.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t4.jsonl" --fraction 1.0 \
+    --strata other,regex-matched --take other=30,regex-matched=all
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"sealed 70 prompt(s) as set v4"* ]] || false
+  [ "$("$H" --set v4 status 2>/dev/null | jq -c '[.other.items, ."regex-matched".items, (has("regex-missed")), (has("pushback"))]')" = '[30,40,false,false]' ]
+  # a declared stratum with no candidate is refused
+  run "$H" --set v2 seal --candidates "$BATS_TEST_TMPDIR/c4.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t4.jsonl" --fraction 1.0 --strata other,pushback
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"no pushback stratum"* ]] || false
+}
+
+# composite — v1 whole (all four strata), v4 a subset (other, regex-matched), both labeled; the
+# instrument takes other and regex-matched from v4 and the rest from v1.
+composite() {
+  mk first 12 $ALL > "$BATS_TEST_TMPDIR/c.jsonl"
+  "$H" seal --candidates "$BATS_TEST_TMPDIR/c.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t.jsonl" --fraction 1.0
+  label_all v1
+  mk fourth 20 other regex-matched > "$BATS_TEST_TMPDIR/c4.jsonl"
+  "$H" --set v4 seal --candidates "$BATS_TEST_TMPDIR/c4.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t4.jsonl" --fraction 1.0 --strata other,regex-matched
+  label_all v4
+  "$H" instrument --pin other=v4,regex-matched=v4,regex-missed=v1,pushback=v1
+}
+
+@test "wave E1h: a pinned instrument scores each stratum from its own set, pools the item floor and the fallback share, and the record names the set" {
+  composite
+  [ "$(jq -c .strata "$CC_RESEARCH_HOME/router-heldout/instrument.json")" = '{"other":"v4","pushback":"v1","regex-matched":"v4","regex-missed":"v1"}' ]
+  # a router that says completeness: every relay stratum passes, `other` (gold work-order) reads 0
+  router_says completeness
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --record "$BATS_TEST_TMPDIR/rec.jsonl"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"stratum other: correct-label rate 0/20"* ]] || false
+  [[ "$output" == *"stratum regex-matched: 20/20"* ]] || false
+  [[ "$output" == *"stratum regex-missed: 12/12"* ]] || false
+  [[ "$output" == *"stratum pushback: 12/12"* ]] || false
+  [[ "$output" == *"0 of 64 routed item(s) fell back"* ]] || false
+  [ "$(jq -r '"\(.stratum) \(.set)"' "$BATS_TEST_TMPDIR/rec.jsonl" | sort | uniq -c | tr -s ' ' | tr '\n' ';')" = " 20 other v4; 12 pushback v1; 20 regex-matched v4; 12 regex-missed v1;" ]
+  run grep -c 'prompt' "$BATS_TEST_TMPDIR/rec.jsonl"
+  [ "$output" = 0 ]
+  # the gate's own call (no --set) reads the instrument; a named set still reads that set alone
+  router_says work-order
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate
+  [[ "$output" == *"stratum regex-matched: recall 0/20"* ]] || false
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" --set v1 evaluate
+  [[ "$output" == *"stratum regex-matched: recall 0/12"* ]] || false
+  # an instrument that names an unsealed set, or a stratum the set does not hold, is refused
+  run "$H" instrument --pin other=v3,regex-matched=v4,regex-missed=v1,pushback=v1
+  [ "$status" -eq 2 ]
+  run "$H" instrument --pin other=v4,regex-matched=v4,regex-missed=v4,pushback=v1
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"v4 does not hold regex-missed"* ]] || false
+}
+
+@test "wave E1h: every evaluate is written to the reads ledger, and the notes say how often each stratum of each set was read before" {
+  composite
+  router_says completeness
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate
+  [[ "$output" == *"stratum other of set v4: read 0 time(s) before"* ]] || false
+  [[ "$output" == *"stratum pushback of set v1: read 0 time(s) before"* ]] || false
+  [ "$(jq -r 'select(.event=="read") | "\(.set) \(.stratum)"' "$CC_RESEARCH_HOME/router-heldout/reads.jsonl" | sort | tr '\n' ';')" = "v1 pushback;v1 regex-missed;v4 other;v4 regex-matched;" ]
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" --set v1 evaluate
+  [[ "$output" == *"stratum pushback of set v1: read 1 time(s) before"* ]] || false
+  [[ "$output" == *"stratum other of set v1: read 0 time(s) before"* ]] || false
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate
+  [[ "$output" == *"stratum other of set v4: read 1 time(s) before"* ]] || false
+  [[ "$output" == *"stratum pushback of set v1: read 2 time(s) before"* ]] || false
+  # reads made before the ledger existed are counted from a planted row, as the real sets' are
+  printf '{"event":"read","set":"v4","stratum":"other","at":"2026-10-01T00:00:00Z","before_ledger":true}\n' >> "$CC_RESEARCH_HOME/router-heldout/reads.jsonl"
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate
+  [[ "$output" == *"stratum other of set v4: read 3 time(s) before"* ]] || false
+}
+
+@test "wave E1h: the notes give the false-relay rate on agreed non-relay items and split other by store, and neither can fail the row" {
+  composite
+  router_says completeness
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate
+  [[ "$output" == *"relayed although both raters gave a non-relay label: other 20/20"* ]] || false
+  [[ "$output" == *"other by store, correct / items: history 0/10 · transcript 0/10"* ]] || false
+  router_says work-order
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" --set v4 evaluate
+  [[ "$output" == *"relayed although both raters gave a non-relay label: other 0/20"* ]] || false
+  [[ "$output" == *"other by store, correct / items: history 10/10 · transcript 10/10"* ]] || false
+  [[ "$output" != *"stratum other:"*"below"* ]] || false
 }

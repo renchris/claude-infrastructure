@@ -29,6 +29,16 @@ Rows are {prompt, stratum, source}; source is "<session id prefix>@<timestamp>",
 order (--cap-for overrides the cap for one stratum), so a re-run over the same stores picks the same
 set. It prints counts per stratum and NEVER a prompt: the router's builder must not read the
 candidates, half of which are about to be sealed (heldout.py's header, §7).
+
+--live-frame (wave E1h) makes a history row the string the live hook was given. The history keeps a
+prompt's `display`, which differs from what UserPromptSubmit received in two ways (measured
+2026-10-06 over 42,097 history rows and 23,875 transcript prompts): a `!` line is a shell command
+that never reaches the hook (0 transcript prompts start with `!`; 1,301 history rows do), and a
+paste is shown as `[Pasted text #N +M lines]` while the hook got the pasted text (of the placeholder
+rows found again in a transcript, 20 held the expanded text and 0 the placeholder). So `!` rows are
+dropped, and a placeholder is replaced by its paste from the row's `pastedContents` (inline, or by
+hash from a `paste-cache/` directory beside a history file); a row whose paste cannot be found is
+dropped. Without the flag the output is what it was.
 """
 
 from __future__ import annotations
@@ -85,6 +95,7 @@ MACHINE = re.compile(
     r"|HANDOFF-ENGAGE-[A-Za-z0-9._-]+"
 )
 PUSHBACK_MAX = 200
+PASTE = re.compile(r"\[Pasted text #(\d+)(?: \+\d+ lines)?\]")
 
 
 def genuine(c: object) -> Optional[str]:
@@ -135,9 +146,39 @@ def prompts(files: List[str]) -> Iterator[Tuple[str, str, bool]]:
                 last_claim = False
 
 
-def history_prompts(files: List[str]) -> Iterator[Tuple[str, str, bool]]:
+def live_frame(r: Dict[str, object], caches: List[str]) -> Optional[str]:
+    """A history row as the live hook received it, or None when the hook never saw it (a `!` line)
+    or a paste it shows as a placeholder cannot be found."""
+    d = r.get("display")
+    if not isinstance(d, str) or d.lstrip().startswith("!"):
+        return None
+    pasted = r.get("pastedContents")
+    missing = False
+
+    def paste(m: "re.Match[str]") -> str:
+        nonlocal missing
+        e = pasted.get(m.group(1)) if isinstance(pasted, dict) else None
+        if isinstance(e, dict) and isinstance(e.get("content"), str) and e["content"]:
+            return str(e["content"])
+        h = e.get("contentHash") if isinstance(e, dict) else None
+        if isinstance(h, str) and re.fullmatch(r"[0-9a-f]+", h):
+            for c in caches:
+                try:
+                    return (Path(c) / f"{h}.txt").read_text()
+                except (OSError, ValueError):
+                    continue
+        missing = True
+        return ""
+
+    s = PASTE.sub(paste, d)
+    return None if missing else s
+
+
+def history_prompts(files: List[str], live: bool = False,
+                    more_caches: Optional[List[str]] = None) -> Iterator[Tuple[str, str, bool]]:
     """(prompt, source, False) for every genuine typed prompt in a prompt-history file. A slash
     command is not a prompt."""
+    caches = sorted({str(Path(f).parent / "paste-cache") for f in files} | set(more_caches or []))
     for f in files:
         acct = Path(f).parent.name
         try:
@@ -150,7 +191,9 @@ def history_prompts(files: List[str]) -> Iterator[Tuple[str, str, bool]]:
                     r = json.loads(line)
                 except ValueError:
                     continue
-                s = genuine(r.get("display")) if isinstance(r, dict) else None
+                if not isinstance(r, dict):
+                    continue
+                s = genuine(live_frame(r, caches) if live else r.get("display"))
                 if s is None or s.startswith("/"):
                     continue
                 yield s, f"history:{acct}@{r.get('timestamp', '')}", False
@@ -172,11 +215,12 @@ def stratum(s: str, after_claim: bool) -> str:
 
 
 def build(files: List[str], cap: int, history: Optional[List[str]] = None,
-          cap_for: Optional[Dict[str, int]] = None) -> Dict[str, List[Dict[str, str]]]:
+          cap_for: Optional[Dict[str, int]] = None, live: bool = False,
+          caches: Optional[List[str]] = None) -> Dict[str, List[Dict[str, str]]]:
     seen = set()
     by: Dict[str, List[Dict[str, str]]] = {k: [] for k in ("regex-matched", "regex-missed", "pushback", "other")}
     # Transcripts first: they know which prompt followed a done-claim, and the first copy is kept.
-    for s, src, after in list(prompts(files)) + list(history_prompts(history or [])):
+    for s, src, after in list(prompts(files)) + list(history_prompts(history or [], live, caches)):
         k = s[:200]
         if k in seen:
             continue
@@ -198,6 +242,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="glob of prompt-history files (e.g. '~/.claude*/history.jsonl'); default none")
     ap.add_argument("--cap-for", action="append", default=[], metavar="STRATUM=N",
                     help="a cap for one stratum, overriding --cap")
+    ap.add_argument("--live-frame", action="store_true",
+                    help="history rows as the live hook received them: no `!` lines, pastes expanded or the row dropped")
+    ap.add_argument("--paste-cache", action="append",
+                    help="with --live-frame: glob of more paste-cache directories (e.g. '~/.claude*/paste-cache')")
     ap.add_argument("--out", required=True)
     a = ap.parse_args(argv)
     cap_for: Dict[str, int] = {}
@@ -211,7 +259,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     files = sorted({f for g in globs for f in glob.glob(os.path.expanduser(g)) if os.path.getmtime(f) >= cut})
     # realpath: every account's history.jsonl may be one file behind a symlink.
     history = sorted({os.path.realpath(f) for g in a.history or [] for f in glob.glob(os.path.expanduser(g))})
-    by = build(files, a.cap, history, cap_for)
+    caches = sorted({f for g in a.paste_cache or [] for f in glob.glob(os.path.expanduser(g))})
+    by = build(files, a.cap, history, cap_for, a.live_frame, caches)
     rows = [c for k in by for c in by[k]]
     Path(a.out).write_text("".join(json.dumps(c, sort_keys=True) + "\n" for c in rows))
     counts = {k: len(v) for k, v in by.items()}
