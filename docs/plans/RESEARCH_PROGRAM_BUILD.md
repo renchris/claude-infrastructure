@@ -952,6 +952,28 @@ thresholds or the 9 s limit; never read v1 or v2; never tune on v3. Locus S (fir
   different labels in their two reps. Against the offline replay (52/52 · 43/44 · 19/26 · 1/192): `other` is 2
   calls lower and borderline 2 lower, at twice the load of the data the replay used. A tuning pass is not a
   forecast of a held-out pass (the as-built configuration passed tuning and then read 0.88 and 0.72 on v2).
+- **Phase 3, landed and live** (2026-10-05 21:56 CDT): the build is trunk `2e2d17cb5`, the v3 tooling
+  `067278db0`, the record above `55753fdc9`; 13 paths content-verified on `origin/main`. The land's smoke was
+  shed at load 203, so this wave's own suite runs are the behavioral evidence. Converged with
+  `CC_DEPLOY_MAX_LAG_COMMITS=0 bash scripts/deploy-live.sh`; the live `router.py`, `classifier-warm.py`,
+  `heldout.py` and migration are byte-identical to trunk, and the live `router.py` is the file the tuning run
+  measured (sha1 `81f2837f3216`; only test files changed between the measured commit and the landed one). On
+  the live layer with the old daemon still loaded: `ping` exits 2, and one made-up prompt got a label in 2.5 s
+  from the fast call's cold path. **The restart is one operator step, backlog `8c7b2d2f4029`**: `bash
+  ~/Development/claude-infrastructure/migrations/0059-research-classifier-warm.sh`.
+- **Phase 4, v3's candidates, fixed before the seal** (2026-10-05 22:08 CDT; counts only, no prompt read).
+  E1c's own caps (110 · 330 · 100) re-pick v2's sample, because the miner keeps the first N prompts of a
+  stratum in sha order: with them the dry run sealed 98 (30 · 47 · 9 · 12), which is `tuning-v2` plus 6, and
+  `other` would have rested on about 6 counted prompts. Lead ruling, before any seal: mine with larger caps
+  (the pool holds 681 regex-matched, 612 regex-missed, 25,434 other and 49 pushback prompts). **Final caps:
+  regex-matched 250, regex-missed 1000, other 400, pushback 1000**, with `--days 400` and the prompt history as
+  E1c ran it. 7,416 transcripts and 4 history files gave 1,314 mined rows; `tuning-v2.jsonl`'s 92 rows go
+  first, so its copy of a repeated prompt is the one kept. `heldout.py --set v3 seal --fraction 1.0 --exclude
+  tuning.jsonl --dry-run` printed: **would seal 752 — regex-matched 144, regex-missed 326, pushback 9, other
+  273**; 0 to a tuning set; 654 candidates dropped as already in v1, v2, the v1 tuning file or repeated. Every
+  stratum meets the lead's floor (100 · 200 · 250, all pushback), so no cap was raised again. From the seal
+  on, `tuning-v2.jsonl` holds 92 sealed v3 prompts in the clear: it is no longer a tuning set and must not be
+  read by anyone who builds the classifier (E1e's "the set to work on next" is superseded by this line).
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
