@@ -24,7 +24,7 @@ packet `83adb541ea19` actioned. Method version 1.1 is frozen; it changes only fr
 | B2 | S | Item 8: `research-program` skill, `/research-program` command, intake script, briefs, rubric | A2 |
 | C | S | Wave 2: items 9–13, 15, in parallel with the pilot | B1, B2 |
 | D | S (fired `fire-rp-audit-bugfix`), T inside | Audit fixes: `docs/research/upfront-method-audit-2026-10-04/REPORT.md` §3 rows 4–6 | C |
-| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E1d S (fired `fire-rp-v12-e1d`); E1e S (fired `fire-rp-v12-e1e`); E2 Workflow in session d8964eb2; E3 S (E3a fired `fire-rp-v12-e3a`, E3b fired `fire-rp-v12-e3b` with T inside: six teammates; E3c fired `fire-rp-v12-e3c`, L inside; E3d fired `fire-rp-v12-e3d`, L inside); E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
+| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E1d S (fired `fire-rp-v12-e1d`); E1e S (fired `fire-rp-v12-e1e`); E1g S (fired `fire-rp-v12-e1g`); E2 Workflow in session d8964eb2; E3 S (E3a fired `fire-rp-v12-e3a`, E3b fired `fire-rp-v12-e3b` with T inside: six teammates; E3c fired `fire-rp-v12-e3c`, L inside; E3d fired `fire-rp-v12-e3d`, L inside); E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
 
 A1, A2 and A3 touch disjoint files and fire concurrently. B1 and B2 fire when A2 lands. Each dispatched session leads
 its own Agent Team where it has 2+ code-writing tasks.
@@ -869,6 +869,36 @@ Locus S (fired `fire-rp-v12-e1f`), lead-inline (why: three small fixes in four f
   and a `run` row whose evidence file does not exist yet is not claimed STALLED. After the restart the stamp
   exists and the row is live. E1e's measurements (warm latency on the tuning set, then the second read of v2)
   wait for the restart.
+
+#### E1g — the fast-plus-careful classifier, then a new sealed set v3 read once — FIRED (2026-10-05)
+Scope (frozen): operator ruling on decision `b18c74a4f8e1` ("run-both", 2026-10-05: "Proceed with all of your
+recommendations"). (1) Build the union classifier in `router.py` and `classifier-warm.py`: per prompt, a fast call
+(E1b's brief, `docs/research/router-classifier-e1b-2026-10-04/e1b-classifier.patch`, thinking off) and a careful
+call (the as-built brief, thinking on) run concurrently inside the one 9 s limit; a relay label from the fast call
+ends it; else a relay label from the careful call within 9 s; else the fast call's label; `unavailable` only when
+neither answered. The resident daemon serves both kinds; the cold path does the same with two processes. Red-then-
+green tests, `/bin/bash` 3.2 for anything launchd runs. (2) Measure it live on the v1 tuning set (96 rows × 2 reps,
+an in-session daemon on its own socket running this branch's code). Pre-registered pass: relay recall ≥ 0.95 and
+`other` ≥ 0.90 on agreed rows, fallback ≤ 0.10 at 9 s, borderline relays ≥ 17 of 26. Fail ⇒ record and stop; no
+seal. (3) Land, converge, file the daemon restart as one operator step. (4) Mint v3: add `v3` to `SETS`; candidates
+= the untouched `tuning-v2.jsonl` (92) plus `heldout-candidates.py` output minus every earlier set and tuning file;
+seal all of them (no tuning split); rate with `heldout-rate.py` (two vendors, as v2). (5) Read v3 once with
+`heldout.py --set v3 evaluate --record …` through the landed commit's router (an in-session daemon on a `git
+archive` snapshot is allowed, the bytes being the landed ones), and record the verdict. Never change row 15's
+thresholds or the 9 s limit; never read v1 or v2; never tune on v3. Locus S (fired `fire-rp-v12-e1g`).
+- **Why this design** (receipt `docs/research/router-classifier-union-2026-10-05/README.md`, offline replay of
+  E1c's per-call tuning data): union of fast + as-built careful reads recall 52/52, `other` 43/44, borderline
+  19/26, fallback 1/192; thinking-on alone 51/52 · 36/44 · 18/26 · 33/192; thinking-off alone 51/52 · 44/44 ·
+  10/26 · 1/192. Careful arm = as built, by E1c's rule (union with `on-e1b` reads 44/44 · 18/26: within 2 on
+  borderline, so the smaller change from trunk wins).
+- **Why v3 is minted this way** (measured 2026-10-05 by the lead, counts only, no prompt read): the miner finds the
+  same 49 pushback prompts as at v2 (every one already in v1, v2 or `tuning-v2`), and since v2 was mined only 5
+  regex-matched, 8 regex-missed and 67 other new prompts. `evaluate` fails a stratum with no agreed item, and
+  `seal` refuses a split with no pushback, so a v3 from new prompts alone cannot be sealed. `tuning-v2.jsonl`
+  (29 · 42 · 9 · 12, born 2026-10-04 19:59, no labels file) was never tuned on and no tool call ever read it (one
+  transcript tool call names it: E1c's `seal` that wrote it), so it is held-out by every rule here and becomes
+  v3's core. Risk, stated now: 9 pushback prompts at v2's agreement rate (7 of 37) leave about a 15% chance of no
+  agreed pushback item, which reads FAIL by `evaluate`'s rule; that outcome is recorded as such, not re-cut.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
