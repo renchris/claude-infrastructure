@@ -266,14 +266,14 @@ mk() {
       "$([ $((i % 2)) -eq 0 ] && echo "history:.claude@1" || echo "abcd1234@2026-09-20T10:00:00")"
   done; done
 }
-ALL="regex-matched regex-missed pushback other"
+ALL=(regex-matched regex-missed pushback other)
 router_says() { printf '#!/bin/bash\ncat >/dev/null\necho %s\n' "$1" > "$BATS_TEST_TMPDIR/router"; chmod +x "$BATS_TEST_TMPDIR/router"; }
 
 @test "wave E1h: draw takes a fresh per-stratum sample that no sealed set or excluded file holds, the same on a re-run, and prints no prompt" {
-  mk first 12 $ALL > "$BATS_TEST_TMPDIR/c.jsonl"
+  mk first 12 "${ALL[@]}" > "$BATS_TEST_TMPDIR/c.jsonl"
   "$H" seal --candidates "$BATS_TEST_TMPDIR/c.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t.jsonl" --fraction 1.0
   printf '{"prompt":"fresh prompt other 3"}\n' > "$BATS_TEST_TMPDIR/tuning-old.jsonl"
-  { mk first 12 $ALL; mk fresh 60 $ALL; } > "$BATS_TEST_TMPDIR/pool.jsonl"
+  { mk first 12 "${ALL[@]}"; mk fresh 60 "${ALL[@]}"; } > "$BATS_TEST_TMPDIR/pool.jsonl"
   run "$H" draw --candidates "$BATS_TEST_TMPDIR/pool.jsonl" --strata other,regex-matched \
     --take other=20,regex-matched=10 --exclude "$BATS_TEST_TMPDIR/tuning-old.jsonl" --out "$BATS_TEST_TMPDIR/d1.jsonl"
   [ "$status" -eq 0 ]
@@ -301,9 +301,9 @@ router_says() { printf '#!/bin/bash\ncat >/dev/null\necho %s\n' "$1" > "$BATS_TE
 }
 
 @test "wave E1h: retire writes a read-twice set out as tuning data with its labels, leaves the sealed file byte-identical, and the set carries no verdict again" {
-  mk first 12 $ALL > "$BATS_TEST_TMPDIR/c.jsonl"
+  mk first 12 "${ALL[@]}" > "$BATS_TEST_TMPDIR/c.jsonl"
   "$H" seal --candidates "$BATS_TEST_TMPDIR/c.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t.jsonl" --fraction 1.0
-  mk second 12 $ALL > "$BATS_TEST_TMPDIR/c2.jsonl"
+  mk second 12 "${ALL[@]}" > "$BATS_TEST_TMPDIR/c2.jsonl"
   "$H" --set v2 seal --candidates "$BATS_TEST_TMPDIR/c2.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t2.jsonl" --fraction 1.0
   label_all v2
   cp "$CC_RESEARCH_HOME/router-heldout/sealed-v2.enc" "$BATS_TEST_TMPDIR/v2.before"
@@ -329,7 +329,7 @@ router_says() { printf '#!/bin/bash\ncat >/dev/null\necho %s\n' "$1" > "$BATS_TE
 }
 
 @test "wave E1h: a subset seal holds only its declared strata, takes N or all of each, and stores them" {
-  mk first 12 $ALL > "$BATS_TEST_TMPDIR/c.jsonl"
+  mk first 12 "${ALL[@]}" > "$BATS_TEST_TMPDIR/c.jsonl"
   "$H" seal --candidates "$BATS_TEST_TMPDIR/c.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t.jsonl" --fraction 1.0
   mk fourth 40 other regex-matched regex-missed > "$BATS_TEST_TMPDIR/c4.jsonl"
   # without --strata the missing pushback stratum is still refused
@@ -350,7 +350,7 @@ router_says() { printf '#!/bin/bash\ncat >/dev/null\necho %s\n' "$1" > "$BATS_TE
 # composite — v1 whole (all four strata), v4 a subset (other, regex-matched), both labeled; the
 # instrument takes other and regex-matched from v4 and the rest from v1.
 composite() {
-  mk first 12 $ALL > "$BATS_TEST_TMPDIR/c.jsonl"
+  mk first 12 "${ALL[@]}" > "$BATS_TEST_TMPDIR/c.jsonl"
   "$H" seal --candidates "$BATS_TEST_TMPDIR/c.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t.jsonl" --fraction 1.0
   label_all v1
   mk fourth 20 other regex-matched > "$BATS_TEST_TMPDIR/c4.jsonl"
