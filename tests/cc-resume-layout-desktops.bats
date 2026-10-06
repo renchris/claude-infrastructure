@@ -272,10 +272,12 @@ case " $* " in
     [ -f "$KLOG.fail" ] && { echo "Error: no such window"; exit 1; }
     n=$(cat "$KLOG.n" 2>/dev/null || echo 100); n=$((n + 1)); echo "$n" > "$KLOG.n"; echo "$n" ;;
   *" toggle_fullscreen "*) [ -f "$KLOG.fsfail" ] && exit 1 ;;
+  *" ls "*) [ -f "$KLOG.ls" ] && cat "$KLOG.ls" ;;
 esac
 exit 0
 SH
   export CC_RESTORE_WAIT=0 CC_RESTORE_K_BACKOFF=0 CC_RESTORE_FS_GAP=0 CC_RESTORE_MAYBE_S=0 CC_RESTORE_MAYBE_POLL=0
+  export CC_RESTORE_FS_VERIFY=0
   unset CC_ADMIT_RESTORE_R CC_ADMIT_ACTIVE_CEILING CC_RESTORE_DEADLINE CC_RESTORE_KITTY_PID KITTY_PID
 }
 restore() { run --separate-stderr bash "$LAYOUT" --desktops --restore --to unix:/tmp/kitty-4242 --file "$ROWS"; }
@@ -455,6 +457,46 @@ launched_sids() { grep ' launch ' "$KLOG" | grep -o "'sid-[a-z0-9-]*'" | tr -d "
   [ ! -f "$CC_OSASCRIPT_BIN.log" ]
   ! grep -q 'set-window-title' "$KLOG" || false
   [ "$(kv fullscreen_failed)" = 2 ]; [ "$(kv fullscreen_ok)" = 0 ]; [ "$(kv verdict)" = degraded ]
+}
+
+# The fullscreen READ-BACK (2026-10-05 restart: five accepted toggles, five windows left on the main
+# Desktop). A stub hb_display_probe answers each call from fs.seq in turn (last answer repeats);
+# kitty's ls maps head pane 101 to CGWindow 9001.
+fs_probe_setup() { # <answers…> e.g. "0 1"
+  printf '%s\n' "$@" > "$BATS_TEST_TMPDIR/fs.seq"
+  cat > "$FIX/scripts/lib/restore-heartbeat.sh" <<'SH'
+hb_display_probe() {
+  local f="$BATS_TEST_TMPDIR/fs.seq" a
+  printf '%s\n' "$*" >> "$BATS_TEST_TMPDIR/probe.args"
+  a="$(head -1 "$f")"; [ "$(wc -l < "$f")" -gt 1 ] && { tail -n +2 "$f" > "$f.t"; mv "$f.t" "$f"; }
+  printf '%s\tU\t0\t0\t100\t100\t%s\t0\t0\t100\t100\n' "$1" "$a"
+}
+SH
+  printf '[{"id":1,"platform_window_id":9001,"tabs":[{"windows":[{"id":101}]}]}]\n' > "$KLOG.ls"
+}
+
+@test "restore: a toggle read back as windowed gets focus-window and ONE more toggle, then counts by the read-back" {
+  restore_setup; fs_probe_setup 0 1
+  row repo-a 1
+  restore
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'toggle_fullscreen' "$KLOG")" -eq 2 ]
+  grep -q 'focus-window --match id:101' "$KLOG"
+  grep -qx 9001 "$BATS_TEST_TMPDIR/probe.args"
+  [ "$(kv fullscreen_ok)" = 1 ]; [ "$(kv fullscreen_failed)" = 0 ]
+}
+
+@test "restore: windowed after the retry is fullscreen_failed, never a third toggle; read back fullscreen is one toggle" {
+  restore_setup; fs_probe_setup 0
+  row repo-a 1
+  restore
+  [ "$(grep -c 'toggle_fullscreen' "$KLOG")" -eq 2 ]
+  [ "$(kv fullscreen_failed)" = 1 ]; [ "$(kv fullscreen_ok)" = 0 ]; [ "$(kv verdict)" = degraded ]
+  : > "$KLOG"; rm -f "$KLOG.n"; fs_probe_setup 1
+  restore
+  [ "$(grep -c 'toggle_fullscreen' "$KLOG")" -eq 1 ]
+  ! grep -q 'focus-window' "$KLOG" || false
+  [ "$(kv fullscreen_ok)" = 1 ]; [ "$(kv fullscreen_failed)" = 0 ]
 }
 
 @test "restore: kitty past 180 fds (pid from the socket name) stops the restore before the next launch" {

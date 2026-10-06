@@ -82,7 +82,10 @@
 #     session has a live holder (lr_holder_count) and its transcript gained a SessionStart:resume
 #     record, re-checked for CC_RESTORE_MAYBE_S (at least 240 s).
 #   · FULLSCREEN by kitty's own action, by window id: `action --match id:<head> toggle_fullscreen`
-#     (kitty dispatches it to the matched window's OS window), 3 s apart, never re-toggled.
+#     (kitty dispatches it to the matched window's OS window), 3 s apart. The verdict is the READ-BACK
+#     (the window's frame fills its display, via hb_display_probe, polled up to
+#     CC_RESTORE_FS_VERIFY=10 s); a window read back as windowed gets focus-window and ONE more
+#     toggle. A refused toggle, or an unreadable state, is never re-toggled.
 #
 # --restore, LAYOUT FIDELITY (2026-10-05, W3 P7; plan § Amendment B gaps 2 and 3): when the heartbeat
 # recorded kitty's tree, each window comes back as it was, and the one-row plan above is only the
@@ -833,6 +836,36 @@ EOF
     # FULLSCREEN by id, paced: back-to-back toggles are dropped, and a second toggle undoes the first.
     # In window-number order, which for replayed windows is the recorded order; a window recorded as
     # not fullscreen is left windowed.
+    # rc 0 from the toggle only says kitty took the request: on 2026-10-05 all five accepted toggles
+    # left their windows on the main Desktop (fullscreen_ok=5). So the verdict is the READ-BACK —
+    # the window's CGWindow frame filling its display (hb_display_probe's fullscreen column) — and a
+    # window read back as windowed gets ONE more toggle after focus-window. Never re-toggled without
+    # a positive "windowed" reading, since a second toggle would undo a first that landed late.
+    # No probe or no frame ⇒ unknown, counted as before (by rc) and said so.
+    fs_state() { # <head pane> → 1 | 0 | "" — this pane's OS window, fullscreen per its frame
+      local pwid
+      command -v hb_display_probe >/dev/null 2>&1 || return 0
+      pwid="$(kr ls 2>/dev/null | python3 -c 'import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for o in data:
+    if any(w.get("id") == int(sys.argv[1]) for t in o.get("tabs") or [] for w in t.get("windows") or []):
+        print(o.get("platform_window_id") or "")
+        break' "$1" 2>/dev/null)"
+      [ -n "$pwid" ] || return 0
+      CC_HB_SWIFT_BIN="$SWIFT_BIN" hb_display_probe "$pwid" 2>/dev/null | awk -F'\t' -v p="$pwid" '$1 == p { print $7; exit }'
+    }
+    fs_settled() { # <head pane> → fs_state, polled up to FS_VERIFY s while it reads windowed
+      local s t=0
+      while :; do
+        s="$(fs_state "$1")"
+        [ "$s" = 0 ] && [ "$t" -lt "$FS_VERIFY" ] || { printf '%s' "$s"; return 0; }
+        sleep 1; t=$((t + 1))
+      done
+    }
+    FS_VERIFY="${CC_RESTORE_FS_VERIFY:-10}"
     fs_ok=0; fs_bad=0
     for w in $(j=0; while [ "$j" -lt "${#WIN_HEAD[@]}" ]; do printf '%s %s\n' "${WIN_NUM[$j]}" "$j"; j=$((j + 1)); done | sort -n | cut -d' ' -f2); do
       hd="${WIN_HEAD[$w]}"; n="${WIN_NUM[$w]}"
@@ -841,7 +874,18 @@ EOF
       elif [ "$DRY_RUN" = 1 ]; then
         note "DRY [CC-DESK-$n] action --match id:$hd toggle_fullscreen"
       elif kr action --match "id:$hd" toggle_fullscreen >/dev/null 2>&1; then
-        fs_ok=$((fs_ok + 1)); note "  [CC-DESK-$n] fullscreen toggled (window $hd)"; sleep "$FS_GAP"
+        sleep "$FS_GAP"; st="$(fs_settled "$hd")"
+        if [ "$st" = 0 ]; then
+          note "  [CC-DESK-$n] window $hd still windowed after its toggle — focusing it and toggling once more"
+          kr focus-window --match "id:$hd" >/dev/null 2>&1
+          kr action --match "id:$hd" toggle_fullscreen >/dev/null 2>&1
+          sleep "$FS_GAP"; st="$(fs_settled "$hd")"
+        fi
+        case "$st" in
+          1) fs_ok=$((fs_ok + 1)); note "  [CC-DESK-$n] fullscreen (read back, window $hd)" ;;
+          0) fs_bad=$((fs_bad + 1)); note "  [CC-DESK-$n] NOT fullscreen after two toggles (read back, window $hd)" ;;
+          *) fs_ok=$((fs_ok + 1)); note "  [CC-DESK-$n] fullscreen toggled (window $hd; not read back — no display probe)" ;;
+        esac
       else
         fs_bad=$((fs_bad + 1)); note "  [CC-DESK-$n] toggle_fullscreen refused for window $hd — not re-toggled"; sleep "$FS_GAP"
       fi
