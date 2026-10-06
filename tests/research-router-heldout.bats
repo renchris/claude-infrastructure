@@ -111,8 +111,12 @@ rec() {
   run bash -c "printf 'STUB-ERROR' | python3 '$ROUTER' classify"
   [ "$status" -eq 1 ]
   [ -z "$output" ]
-  run bash -c "printf 'x --requires-gate demo' | CC_RESEARCH_CLASSIFIER=false python3 '$ROUTER' classify"
+  # wave E1h: the work-order marker counts only for the program being routed
+  run bash -c "printf 'x --requires-gate demo' | CC_RESEARCH_CLASSIFIER=false CC_RESEARCH_RENDER=true python3 '$ROUTER' classify --program demo"
   [ "$output" = work-order ]
+  run bash -c "printf 'x --requires-gate demo' | CC_RESEARCH_CLASSIFIER=false python3 '$ROUTER' classify"
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
 }
 
 @test "ruling 4bf73c4e55d5: a classifier answering in 6.5 s is labeled by classify and by row 15's route, not dropped" {
@@ -360,4 +364,20 @@ STUB
   run python3 "$RATE" --vendor anthropic --tuning "$BATS_TEST_TMPDIR/tune.jsonl"
   [ "$status" -eq 2 ]
   [ ! -e "$CC_RESEARCH_HOME/router-heldout/sealed.enc" ]
+  # a rater that never labels one prompt: nothing is written, unless --allow-short covers it
+  skip_id="$(python3 -c 'import hashlib;print(hashlib.sha256(b"build widget 2").hexdigest()[:12])')"
+  printf '#!/bin/bash\n"%s" "$@" | sed "s/{[^{}]*%s[^{}]*}//"\n' "$BATS_TEST_TMPDIR/claude-stub" "$skip_id" > "$BATS_TEST_TMPDIR/claude-short"
+  chmod +x "$BATS_TEST_TMPDIR/claude-short"
+  CC_RESEARCH_BIN_ANTHROPIC="$BATS_TEST_TMPDIR/claude-short" run python3 "$RATE" --vendor anthropic \
+    --tuning "$BATS_TEST_TMPDIR/tune.jsonl" --out "$BATS_TEST_TMPDIR/ls.jsonl"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"labeled 11 of 12 prompt(s); nothing recorded"* ]] || false
+  [ ! -e "$BATS_TEST_TMPDIR/ls.jsonl" ]
+  CC_RESEARCH_BIN_ANTHROPIC="$BATS_TEST_TMPDIR/claude-short" run python3 "$RATE" --vendor anthropic --allow-short 1 \
+    --tuning "$BATS_TEST_TMPDIR/tune.jsonl" --out "$BATS_TEST_TMPDIR/ls.jsonl"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"11 label(s) written"*"1 prompt(s) left unlabeled"* ]] || false
+  [ "$(wc -l < "$BATS_TEST_TMPDIR/ls.jsonl" | tr -d ' ')" -eq 11 ]
+  run python3 "$RATE" --vendor anthropic --allow-short 1
+  [ "$status" -eq 2 ]
 }

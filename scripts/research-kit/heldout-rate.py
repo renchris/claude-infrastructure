@@ -24,7 +24,9 @@ came back whole and from one model.
 --tuning F --out L (wave E1h) rates a tuning file that is in the clear instead of a sealed set: the
 same brief, batches and retry rule, the ids being heldout.py's ids of the prompts, and the labels
 written to L as {id, label, rater} rows. Run it once per vendor, each to its own L; it refuses an L
-that exists.
+that exists. --allow-short N (with --tuning only) writes the labels when at most N prompts stayed
+unlabeled after the one re-ask: a tuning row one rater did not label is simply not an agreed row,
+while a sealed set is still recorded whole or not at all.
 """
 
 from __future__ import annotations
@@ -80,9 +82,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--batch", type=int, default=0, help="prompts per call; 0 sends one sheet")
     ap.add_argument("--tuning", help="a clear tuning file of {prompt} rows to rate instead of a sealed set")
     ap.add_argument("--out", help="with --tuning: the labels file to write, {id, label, rater} rows")
+    ap.add_argument("--allow-short", type=int, default=0,
+                    help="with --tuning: write the labels even when up to N prompts stayed unlabeled")
     a = ap.parse_args(argv)
     try:
-        if bool(a.tuning) != bool(a.out) or (a.tuning and a.set):
+        if bool(a.tuning) != bool(a.out) or (a.tuning and a.set) or (a.allow_short and not a.tuning):
             raise kit.KitError("--tuning and --out go together, and without --set")
         if a.tuning:
             if Path(a.out).exists():
@@ -139,14 +143,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         model = next(iter(models))
         if a.model and model != a.model:
             raise kit.KitError(f"asked for {a.model}, {model} responded; nothing recorded")
-        if len(got) < len(ids):
+        if len(got) < len(ids) - (a.allow_short if a.tuning else 0):
             raise kit.KitError(f"{a.vendor} labeled {len(got)} of {len(ids)} prompt(s); nothing recorded")
         rater = f"{a.vendor}:{model}"
         if a.tuning:
             out = Path(a.out)
             out.write_text("".join(json.dumps({"id": k, "label": v, "rater": rater}) + "\n" for k, v in got.items()))
             out.chmod(0o600)
-            print(f"{rater}: {len(got)} label(s) written to {out}")
+            short = f"; {len(ids) - len(got)} prompt(s) left unlabeled" if len(got) < len(ids) else ""
+            print(f"{rater}: {len(got)} label(s) written to {out}{short}")
             return 0
         tmp = Path(tempfile.mkstemp(prefix="cc-heldout-labels-")[1])
         try:
