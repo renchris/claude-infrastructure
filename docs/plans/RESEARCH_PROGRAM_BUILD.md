@@ -1072,6 +1072,41 @@ files, tracks B and C by its lead (ordered around sealed files).
   cold median 2.8 s), and that evidence is thin where row 15 scores — hence measure first.
 - **Stated odds**: about 0.55 that any configuration clears RULE 1 (a STOP is a likely, valid outcome that spends
   no sealed data); about 35-40% that this wave ends with row 15 passing.
+- **Pre-registered rules** (verbatim from the report's "Pre-registered rules" section, committed here before any
+  tuning call; this commit's author date is the proof of order):
+
+  Both rules are committed before any tuning call.
+
+  **RULE 1**: selection and stop, on tuning data only. Agreed means both raters gave the same label. Borderline rows are those where the raters split and one said completeness or pushback.
+
+  A configuration is eligible only if all three hold:
+  - E1 'other': exact-label rate >= 0.95 on the agreed 'other' rows of the fresh sample plus retired v2 (about 220 rows).
+    - Why the margin: the tuning-to-held-out drop on record; a winner's-curse allowance of 0.02-0.04; and v4 needing a true rate of about 0.92 to pass 0.90 nine times in ten at about 280 agreed.
+  - E2 recall: relay recall >= 0.98 pooled over all agreed relay-gold tuning rows, and >= 0.95 within regex-missed (about 38 rows from v2 and v1).
+  - E3 borderline: relay rate >= 0.50 on borderline rows. That is the raters' own relay rate on the prompts they split on.
+    - This deliberately replaces E1g's 17/26 bar as a gate.
+    - Disclosed: Sonnet's v1 figure, 14/26, was known when this anchor was chosen.
+
+  Selection among eligible configurations:
+  1. the highest borderline rate, ties within 0.05;
+  2. then the highest 'other';
+  3. then a haiku_latest model over others (no section 4.1 edit);
+  4. then the lower warm median latency.
+
+  Latency, on the selected configuration through the warm daemon (100 rows): fallback <= 0.03 at 9 s and p90 <= 7.5 s. If it fails, take the next eligible configuration.
+
+  STOP: with no eligible configuration, nothing is landed, v4 is not sealed and no second read happens. The table goes to the operator. Rule 1 uses no v3 data. The v3 router-side splits that circulated during E1h are disclosed as known.
+
+  **RULE 2**: one certification read, with row 15's thresholds unchanged. PASS means 'heldout.py evaluate' over the pinned instrument exits 0:
+  - 'other' >= 0.90 on v4 (first read);
+  - regex-matched recall >= 0.95 on v4 (first read);
+  - regex-missed recall >= 0.95:
+    - on v4 if at least 400 regex-missed candidates are unused by any sealed set or tuning file at the v4 seal;
+    - otherwise on v3's 25 counted items, as a disclosed second read;
+  - pushback recall >= 0.95 on v3's 2 counted items (disclosed second read);
+  - fallback <= 0.10, and at least 40 agreed items.
+
+  There is no re-read on FAIL. That spends the method's '1 repair and 1 re-test' (REPORT:1078). No v3 stratum is read a third time.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
