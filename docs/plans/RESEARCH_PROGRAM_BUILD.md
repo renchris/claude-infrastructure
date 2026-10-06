@@ -1043,7 +1043,7 @@ thresholds or the 9 s limit; never read v1 or v2; never tune on v3. Locus S (fir
   call at the same 9 s the router waits turns every slow careful call into a fallback, and handing the label
   back half a second early is the whole fix.
 
-#### E1h — measure first with every lever open, then one composite read; cap the cost of a false relay — FIRED (2026-10-06)
+#### E1h — measure first with every lever open, then one composite read; cap the cost of a false relay — DONE: STOP under RULE 1, no configuration eligible, no sealed data spent; the cost limits are live (2026-10-06)
 Scope (frozen): the recommendation of `docs/research/reask-overflag-decision-2026-10-06/REPORT.md` (decision
 `aba630ebe329`, workflow `wf_aa8c940c-e38`), adopted whole by the operator 2026-10-06 ("ultracode on each
 /explain-decisions. then proceed with all recommendations"). Execute its "Build scope (wave E1h)" section — tracks
@@ -1166,6 +1166,83 @@ files, tracks B and C by its lead (ordered around sealed files).
   `confirm-rule-replay.md` replayed (14 configurations). Harness and scorer:
   `docs/research/router-classifier-e1h-2026-10-06/` (`e1h-tune.py`, `e1h-score.py`), committed with this
   record. 1,078 rows-times-calls × 4 arms = 4,312 calls, rows one after another.
+- **Tracks A and B landed and live** (03:19 CDT): trunk `45882bfaa`, 16 paths content-verified by the lander and
+  again by `git diff origin/main` (empty) on this wave's paths; the land ran no smoke (the selector answered
+  FULL), so the suite runs above are the behavioral evidence. Two lands were refused first, each on a line this
+  wave wrote in `research-kit-heldout.bats` (an assertion `&&` absorbed, fixed with the repo's fixer; an unquoted
+  list, now an array). Converged with `CC_DEPLOY_MAX_LAG_COMMITS=0 bash scripts/deploy-live.sh`: the live layer
+  is at the trunk tip. Track A does not change a classifier flag or brief, so the resident classifier's
+  configuration id is unchanged (`671326bf353b`) and no restart is owed for it.
+- **The tuning run** (02:48-05:01 CDT; 982 rows, 4,312 cold calls, every call to completion; 1-min load 8-75,
+  median 18; per-call data `docs/research/router-classifier-e1h-2026-10-06/tune.json`, no prompt text).
+
+  | arm | calls | not one label · timed out at 30 s | over 9 s | median · p90 wall |
+  |---|---|---|---|---|
+  | `haiku-off` (the live fast call) | 1,078 | 0 · 0 | 1 | 1.5 s · 1.9 s |
+  | `haiku-on` (the live careful call) | 1,078 | 5 · 1 | 250 | 6.3 s · 11.9 s |
+  | `sonnet-off` | 1,078 | 0 · 0 | 1 | 2.3 s · 3.7 s |
+  | `sonnet-on` | 1,078 | 2 · 0 | 0 | 2.5 s · 4.0 s |
+
+- **The replay of the frozen rule list** (`e1h-score.py tune.json`; output kept as `result.txt`). E1 is the
+  exact label on the 240 agreed `other` rows of the fresh sample and retired v2; E2 is relay recall over the
+  agreed relay-gold rows (163 calls) and inside regex-missed (42 calls); E3 is the relay rate on borderline rows
+  (138 calls). A careful label counts only inside the 8.5 s hand-back.
+
+  | configuration | E1 `other` ≥ 0.95 | E2 recall ≥ 0.98 | E2 regex-missed ≥ 0.95 | E3 borderline ≥ 0.50 | relayed, both raters non-relay | fallback | eligible |
+  |---|---|---|---|---|---|---|---|
+  | `haiku-off` alone | 188 = 0.78 | 157 = 0.96 | 36 = 0.86 | 75 = 0.54 | 42/504 | 1/1078 | no |
+  | `sonnet-off` alone | 206 = 0.86 | 154 = 0.94 | 34 = 0.81 | 64 = 0.46 | 10/504 | 1/1078 | no |
+  | union(`haiku-off`, `haiku-on`), the live router | 186 = 0.78 | 162 = 0.99 | 41 = 0.98 | 106 = 0.77 | 57/504 | 0 | no |
+  | union(`haiku-off`, `sonnet-on`) | 190 = 0.79 | 160 = 0.98 | 39 = 0.93 | 89 = 0.64 | 44/504 | 0 | no |
+  | union(`sonnet-off`, `haiku-on`) | 198 = 0.83 | 162 = 0.99 | 41 = 0.98 | 104 = 0.75 | 36/504 | 0 | no |
+  | union(`sonnet-off`, `sonnet-on`) | 206 = 0.86 | 158 = 0.97 | 37 = 0.88 | 80 = 0.58 | 13/504 | 0 | no |
+  | confirms(`haiku-off`, `haiku-on`) | 186 = 0.78 | 162 = 0.99 | 41 = 0.98 | 102 = 0.74 | 51/504 | 0 | no |
+  | confirms(`haiku-off`, `sonnet-on`) | 199 = 0.83 | 157 = 0.96 | 36 = 0.86 | 70 = 0.51 | 6/504 | 0 | no |
+  | confirms(`sonnet-off`, `haiku-on`) | 197 = 0.82 | 162 = 0.99 | 41 = 0.98 | 101 = 0.73 | 35/504 | 0 | no |
+  | confirms(`sonnet-off`, `sonnet-on`) | 206 = 0.86 | 157 = 0.96 | 36 = 0.86 | 70 = 0.51 | 6/504 | 0 | no |
+  | veto(`haiku-off`, `haiku-on`) | 188 = 0.78 | 157 = 0.96 | 36 = 0.86 | 71 = 0.51 | 36/504 | 0 | no |
+  | veto(`haiku-off`, `sonnet-on`) | 197 = 0.82 | 154 = 0.94 | 33 = 0.79 | 56 = 0.41 | 4/504 | 0 | no |
+  | veto(`sonnet-off`, `haiku-on`) | 205 = 0.85 | 154 = 0.94 | 34 = 0.81 | 62 = 0.45 | 9/504 | 0 | no |
+  | veto(`sonnet-off`, `sonnet-on`) | 206 = 0.86 | 153 = 0.94 | 33 = 0.79 | 55 = 0.40 | 3/504 | 0 | no |
+  | shown only: `haiku-on` alone | 151 = 0.63 | 160 = 0.98 | 40 = 0.95 | 99 = 0.72 | 34/504 | 253/1078 | not a candidate |
+  | shown only: `sonnet-on` alone | 206 = 0.86 | 157 = 0.96 | 36 = 0.86 | 70 = 0.51 | 6/504 | 2/1078 | not a candidate |
+
+- **RULE 1 outcome: STOP.** No configuration is eligible: all 14 fail E1, and the best `other` reading is
+  206 of 240 = 0.86 against 0.95 (228 needed). By the rule nothing about the classifier is landed, v4 is not
+  sealed, no instrument is pinned and no sealed set is read: v3's strata stay at one read each, and RULE 2 was
+  not exercised. Track C steps C4 to C7 did not run. The live router is unchanged from wave E1g.
+- **What the table says, for the operator's decision on the `other` floor** (measured above; no further read
+  was made to get it):
+  - **The `other` test is not failing on relays.** Of each configuration's misses on the 240 rows, 31 to 39
+    are a wrong label among the labels that do not relay (`other`, work-order, research-order, new-idea,
+    concern); no arm or join moves that number. With no relay mistake at all, a configuration would read at
+    best about 0.87 here, still under both this rule's 0.95 and row 15's 0.90. On those same rows the two raters
+    themselves agreed on 240 of 407.
+  - **Wrong relays are what a model change fixes.** On agreed non-relay prompts the live router relays 57 of
+    504 (0.11); `sonnet-off` alone relays 10 (0.02) and the Sonnet pairs under confirms or veto 3 to 6 (0.01).
+    On `other` alone the live router's wrongly relayed rows are 17 of 240 and `sonnet-off`'s is 1.
+  - **Recall is what the careful haiku call buys, and Sonnet alone does not hold it.** Every configuration
+    without `haiku-on` as a relay voter is under 0.98 pooled or under 0.95 in regex-missed (33 to 39 of 42).
+    union(`sonnet-off`, `haiku-on`) passes E2 and E3 (0.99 · 0.98 · 0.75) and cuts wrong relays from 57 to 36
+    of 504, but its `other` is 0.83.
+  - The live configuration reads 0.78 on these 240 rows; v3 read it at 0.76 on 148.
+- **Disclosure.** Before the run finished, an interim score on the first 345 rows was read to decide whether
+  to pre-build C4 (it showed every configuration at 14 or more `other` misses, with 12 the most the rule
+  allows; nothing was pre-built). The rule, the base, the arms and the joins were fixed and committed before
+  the first call and were not changed after it; the scorer gained one shown-only column (what an `other` miss
+  is made of) during the run. The OpenAI rater's two short runs on the tuning sample are stated above.
+- **What remains (the operator's, through the lead; not opened here).** Row 15's `other` condition as written
+  (exact label ≥ 0.90) cannot be met by any configuration measured: the ceiling from label confusion that has
+  nothing to do with relaying is about 0.87. The choices the table supports are whether `other` should be
+  scored on the relay decision instead of the exact label (a method change to row 15), what floor a wrong-relay
+  rate of 0.01 to 0.11 justifies now that a wrong relay costs one word, and whether recall near 0.99 with
+  wrong relays at 0.07 (union of `sonnet-off` and `haiku-on`) is the trade wanted. None is a build step. The
+  fresh pool is intact for a later v4: 23,291 `other` and 256 regex-matched candidates unused.
+- Status: **DONE 2026-10-06 — STOP under RULE 1.** Learnings: a floor on the exact label measures the raters'
+  seven-way taxonomy as much as the router, so the miss breakdown belongs in the scorer before any floor is
+  argued; the land gate lints test files this wave touches line by line, so run bare `shellcheck` and the
+  dead-assertion analyzer on a changed suite before the land, not after; a tuning rater needs a stated
+  tolerance for one unlabeled prompt, or one stubborn prompt costs a whole run.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
