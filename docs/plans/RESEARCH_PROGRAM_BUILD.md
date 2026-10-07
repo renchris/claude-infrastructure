@@ -1368,7 +1368,7 @@ inside it: three ordered steps around sealed files, one small code change each, 
   relayed (1 fell back), regex-missed 2 of 2. Record `router-heldout/reading-v4-2026-10-07.jsonl` and trace beside
   it (mode 600, no prompt text).
 - **Verdict: FAIL**, final for this wave, under RULE 2' exactly as committed (`d68323586`, then the start rule in
-  `6becd2062`). No re-read: this was the method's one re-test (REPORT:1078).
+  `9d6e8f215`). No re-read: this was the method's one re-test (REPORT:1078).
 - **What the failure is made of** (from the tool's record, counts only; no further read was made to get it):
   - **Every recall miss is a fallback.** regex-matched missed 13, and its counted fallbacks are 13; regex-missed
     missed 12, and its fallbacks are 12. Not one relay-gold prompt in either stratum got a wrong label in time.
@@ -1389,7 +1389,7 @@ inside it: three ordered steps around sealed files, one small code change each, 
   faster one; and what a fresh read would need now that v3's completeness strata have each been read twice and
   only 16 unused regex-missed candidates exist. The careful call's model floor (2026-10-15) still applies.
 - Status: **DONE 2026-10-07 — row 15 FAILS on the one read.** Shas: pre-registration `d68323586`; router
-  `79887ba4c`; pre-read record `97451c774`; start rule `6becd2062`; this record (see `git log`). Restart: backlog
+  `79887ba4c`; pre-read record `97451c774`; start rule `9d6e8f215`; this record (see `git log`). Restart: backlog
   `1eb77a3353d2`, run by the operator before the read. Learnings: a pre-registered read needs a stated load bound
   for its whole duration, not only its start, when the row it settles has a wall-clock ceiling; a smoke suite with
   sub-2 s wall-clock assertions reds a land at load ~70 on any tree (A/B: 2 of 4 on the pre-change tree too); and
