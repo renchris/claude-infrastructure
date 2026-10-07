@@ -585,6 +585,31 @@ against legacy at `a037c0bd9` or later (rotate included).
 transcript shows a kickstart. Load average was 70 to 117 at the time. If it happens again, capture
 the time and the load.
 
+CORRECTED (2026-10-07): the watchdog DID send it. `recon/watchdog.log:114`: `22:32:22Z KILL -TERM
+pid=88125: progress=104701 unchanged 916s; past the 900s ceiling, whatever its CPU`, then `holder
+changed: 88125 -> 25909 (restart after this watchdog's kill — not a crash)`. The earlier read stopped
+at line 112. The statement above that the watchdog did not kill it is wrong.
+
+### Two more watchdog restarts under host load (2026-10-07 23:38Z and 23:54Z): same code, 1 of 2 stands
+
+The watchdog killed the reconciler twice more, each time at its 900 s no-progress ceiling, and
+launchd's keepalive restarted it. Each is a `recon/restarts.jsonl` row:
+
+| killed | at | progress, unchanged for | load (1/5/15 min) | successor, started |
+|---|---|---|---|---|
+| 88125 | 22:32:22Z | 104701, 916 s | about 70 to 117 | 25909, 22:32:23Z |
+| 25909 | 23:38:02Z | 605, 908 s | 465 / 355 / 260 | 77808, 23:38:09Z |
+| 77808 | 23:53:52Z | 0, 901 s | about 420 / 430 / 385 | 85839, 23:54:09Z |
+
+All three loaded the same reconciler code. The shared checkout has been `7af2ccc04` since 23:21Z
+(a docs commit), and `scripts/limit-recover/` is identical to `a037c0bd9`. So under the lead's
+ruling above the count stays 1 of 2 at the 02:28:28Z cutoff. No cohort was open across any of them.
+Load was still 400 / 416 / 389 at 23:56Z.
+
+**For the cutover, reported to the lead:** at this load the reconciler makes no measurable progress
+within 900 s, and the watchdog restarts it about every 15 minutes. A limit hit during such a period
+would find a reconciler that restarts partway through the cohort.
+
 ## Census step
 
 Operator step `f0df9145b73a` (the live observe census) was closed with the launchd daemon's own pass:
