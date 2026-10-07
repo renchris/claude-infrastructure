@@ -289,6 +289,16 @@ row() { # row <PASS|FAIL|UNKN|INFO> <label> <detail> [action]
   return 0
 }
 
+ver_ge() { # ver_ge <X.Y.Z> <maj> <min> <patch> — false for anything that is not three integers
+  local a b c
+  IFS=. read -r a b c <<<"$1"
+  case "$a$b$c" in ''|*[!0-9]*) return 1 ;; esac
+  [ -n "$a" ] && [ -n "$b" ] && [ -n "$c" ] || return 1
+  [ "$a" -gt "$2" ] && return 0; [ "$a" -lt "$2" ] && return 1
+  [ "$b" -gt "$3" ] && return 0; [ "$b" -lt "$3" ] && return 1
+  [ "$c" -ge "$4" ]
+}
+
 cmd_setup() {
   [ "${1:-}" = "-h" ] && usage 0
   printf '%s%sCAN THIS BOX OFFLOAD?%s  %s(preconditions, graded from live reads)%s\n\n' \
@@ -296,14 +306,17 @@ cmd_setup() {
 
   # R1 — a binary that can actually create. 2.1.114 has no --cloud; it classifies as refused-harness.
   if [ -x "$CLOUD_CLAUDE" ]; then
+    # Compared NUMERICALLY: the glob this replaces (2.1.2[2-9]*) failed 2.1.300+ and passed 2.1.22-29.
     local v; v="$("$CLOUD_CLAUDE" --version 2>/dev/null | head -1)"
-    case "$v" in
-      2.1.2[2-9]*|2.[2-9]*|[3-9].*) row PASS "create binary" "${v:-?} — $CLOUD_CLAUDE" ;;
-      '')  row UNKN "create binary" "present but --version did not answer: $CLOUD_CLAUDE" \
-             "run it by hand; do NOT infer support from --help (it is blind to hidden flags)" ;;
-      *)   row FAIL "create binary" "$v has no --cloud verb — $CLOUD_CLAUDE" \
-             "export CC_CLOUD_CREATE_BIN=<a 2.1.220+ claude>" ;;
-    esac
+    if [ -z "$v" ]; then
+      row UNKN "create binary" "present but --version did not answer: $CLOUD_CLAUDE" \
+        "run it by hand; do NOT infer support from --help (it is blind to hidden flags)"
+    elif ver_ge "${v%% *}" 2 1 220; then
+      row PASS "create binary" "$v — $CLOUD_CLAUDE"
+    else
+      row FAIL "create binary" "$v has no --cloud verb — $CLOUD_CLAUDE" \
+        "export CC_CLOUD_CREATE_BIN=<a 2.1.220+ claude>"
+    fi
   else
     row FAIL "create binary" "not executable: ${CLOUD_CLAUDE:-(unresolved: bin/cc-claude-bin found none)}" \
       "export CC_CLOUD_CREATE_BIN=<a 2.1.220+ claude>"

@@ -289,6 +289,21 @@ EOF
   [[ "$output" == *"NOT READY"* ]]
 }
 
+@test "setup compares the create binary's version numerically, on both sides of the old glob" {
+  # The glob 2.1.2[2-9]* read 2.1.300 as "no --cloud verb" and 2.1.29 (January, no verb) as fine.
+  local fake="$BATS_TEST_TMPDIR/verclaude" v
+  for v in 2.1.300 2.1.1000 10.0.0; do
+    printf '#!/usr/bin/env bash\necho "%s (Claude Code)"\n' "$v" >"$fake"; chmod +x "$fake"
+    CC_CLOUD_CREATE_BIN="$fake" PATH="$STUBDIR:$PATH" run "$SUT" setup
+    [[ "$output" != *"no --cloud verb"* ]] || false
+  done
+  for v in 2.1.29 2.1.219; do
+    printf '#!/usr/bin/env bash\necho "%s (Claude Code)"\n' "$v" >"$fake"; chmod +x "$fake"
+    CC_CLOUD_CREATE_BIN="$fake" PATH="$STUBDIR:$PATH" run "$SUT" setup
+    [[ "$output" == *"$v (Claude Code) has no --cloud verb"* ]] || false
+  done
+}
+
 @test "setup grades the GitHub App as UNKNOWN, never as absent" {
   # Measured 2026-08-10: gh holds an OAuth (gho_) token and every installation endpoint needs an
   # App JWT or an installation token — a credential CLASS wall. The check-suites proxy can only
