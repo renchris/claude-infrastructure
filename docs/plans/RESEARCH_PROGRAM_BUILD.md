@@ -1284,6 +1284,48 @@ inside it: three ordered steps around sealed files, one small code change each, 
   and an unmeasured classifier: row 15's verdict from this wave does not carry to it, and it needs its own re-read.
   If haiku 4.5 is retired before Haiku 5.5 is staged, every careful call fails, the union join answers with the fast
   call alone, and `sonnet-off` alone read 0.94 pooled recall and 0.81 regex-missed on tuning (below row 15's 0.95).
+- **Step 1, the pre-registration: committed before any classifier call** — `d68323586` (author date
+  2026-10-06T23:13:41-05:00; it was `02cb72bb8` before the land's rebase). The first classifier call of this wave
+  (the `classifier-warm.py probe` below) came after it. `heldout.py evaluate` scores `other` on the relay decision
+  and prints the exact label as a shown-only line; red then green `research-kit-heldout` `1..18`, 18 ok (red on the
+  commit before: the new case, and the pinned-instrument case's old wording). `e1h-score.py` gained the shown-only
+  `other_decision` column; RULE 1's output is otherwise byte-identical (`result-e1i.txt`).
+- **Step 2, the model key: landed and live** — `79887ba4c` (trunk `cf73e2c66..79887ba4c`, 9 paths content-verified
+  by the lander and again by `git diff` against origin/main, empty; converged with `CC_DEPLOY_MAX_LAG_COMMITS=0 bash
+  scripts/deploy-live.sh`, live `router.py` and `heldout.py` byte-identical to trunk). `router.py` `MODEL_KEYS`: fast
+  = `sonnet_latest`, careful = `haiku_latest`; the fast call is E1h's `sonnet-off` arm exactly (only `--model`
+  differs from the haiku fast call). Configuration id `671326bf353b` → `05e87273a59c`, so the live daemon's `ping`
+  exits 2 until the restart. REPORT §4.1 named edit (ruling part (a) of `aba630ebe329`), recorded in §9. Red then
+  green: `research-router` `1..37`, 37 ok (on a `git archive` copy of the commit before, the new case fails at the
+  fast call's model, and the configuration ids under two `sonnet_latest` values are identical there);
+  `research-classifier-warm` `1..45` and `research-router-heldout` `1..16` green. A real `classifier-warm.py probe`
+  answered both kinds, Sonnet through the daemon's stream-json path, in 4.5 s, with no warning on stderr. The runner
+  (`jobs/classifier-warm.sh`) is unchanged, so no `/bin/bash` 3.2 re-run was owed. Canary cost: the daemon's
+  readiness round-trip is one call per kind every 900 s, so about 96 Sonnet calls a day now replace 96 haiku ones.
+  - **The land took two runs.** The first (exit 6) failed two wall-clock cases of `research-classifier-warm`
+    (`< 1.0 s`, `< 2.0 s`, stub children, no model involved) at 1-min load ~70, and its own exoneration re-run was
+    cut. Run side by side 4 times, the pre-change tree failed the `< 2.0 s` case 2 of 4 and the new tree 2 of 4; the
+    `< 1.0 s` case passed 3 of 3 on both. The second run landed (smoke partial: `research-kit-heldout` cut by the
+    budget; the warm suite `1..45` with no failure).
+- **Restart filed as one operator step**: backlog `1eb77a3353d2` ("restart the warm classifier onto the converged
+  Sonnet-fast config"), `--run 'bash ~/Development/claude-infrastructure/migrations/0059-research-classifier-warm.sh'`;
+  migration 0059's re-run kickstarts a daemon whose configuration differs from disk.
+- **Latency through a worktree daemon: not started.** Starting an in-session daemon from the snapshot on its own
+  socket (as E1g did) was refused by the permission layer, and the lead ruled it not to be asked for. The latency
+  check moves to the live daemon after the restart (below). A cold-only read was ruled out (lead, 2026-10-06 23:44):
+  the careful haiku call ran past 9 s on 250 of 1,078 cold tuning calls, so a cold read would cut careful relays
+  that the live router gets and bias the one read toward a recall FAIL.
+- **v4 sealed and labeled, before the read** (2026-10-06). Candidate pool mined fresh with `--live-frame` and history
+  (other 24,200 · pushback 49 · regex-matched 680 · regex-missed 627, against E1h's 24,173 · 49 · 679 · 621). The
+  seal's dry run counted **16 unused regex-missed candidates** (< 400), so by RULE 2' regex-missed and pushback are
+  read from v3 as disclosed second reads. Sealed 23:17:07 CDT: `--set v4 seal --strata other,regex-matched --take
+  other=520,regex-matched=all --fraction 1.0 --exclude tuning.jsonl --exclude tuning-v4.jsonl`, 777 prompts (other
+  520, regex-matched 257; 1,305 dropped as already used), sha1 `2a96bbf0d6fd`; v1, v2, v3 byte-identical before and
+  after (`97695cb083d6`, `e00d6f8969d1`, `aabd144ce51f`); the clear candidate files deleted. Labeled by
+  `anthropic:claude-opus-5-5` and `openai:gpt-5.6-sol` through `heldout-rate.py --set v4 --batch 60`, 777 labels
+  each; agreed **other 305 of 520, regex-matched 206 of 257**. Instrument pinned 2026-10-07T04:30:33Z: other v4,
+  regex-matched v4, regex-missed v3, pushback v3. Reads before this wave's read (ledger): v3 every stratum once, v4
+  none. `tuning-v2.jsonl` was not read; nothing was tuned on v3 or v4.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
