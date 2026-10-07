@@ -1,0 +1,704 @@
+{
+ "calls": [
+  {
+   "n": 0,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 2.79,
+   "load": 78.2
+  },
+  {
+   "n": 1,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 4.17,
+   "load": 83.2
+  },
+  {
+   "n": 2,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 5.53,
+   "load": 88.0
+  },
+  {
+   "n": 3,
+   "stratum": "regex-matched",
+   "label": null,
+   "wall_s": 9.01,
+   "load": 102.8
+  },
+  {
+   "n": 4,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 6.04,
+   "load": 110.1
+  },
+  {
+   "n": 5,
+   "stratum": "regex-matched",
+   "label": null,
+   "wall_s": 9.0,
+   "load": 117.3
+  },
+  {
+   "n": 6,
+   "stratum": "regex-matched",
+   "label": null,
+   "wall_s": 9.0,
+   "load": 128.4
+  },
+  {
+   "n": 7,
+   "stratum": "regex-matched",
+   "label": null,
+   "wall_s": 9.01,
+   "load": 134.4
+  },
+  {
+   "n": 8,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 8.78,
+   "load": 134.9
+  },
+  {
+   "n": 9,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 5.16,
+   "load": 139.2
+  },
+  {
+   "n": 10,
+   "stratum": "regex-matched",
+   "label": null,
+   "wall_s": 9.01,
+   "load": 145.0
+  },
+  {
+   "n": 11,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 8.63,
+   "load": 153.0
+  },
+  {
+   "n": 12,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 4.75,
+   "load": 155.7
+  },
+  {
+   "n": 13,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 5.3,
+   "load": 156.2
+  },
+  {
+   "n": 14,
+   "stratum": "regex-matched",
+   "label": "work-order",
+   "wall_s": 8.62,
+   "load": 156.9
+  },
+  {
+   "n": 15,
+   "stratum": "regex-matched",
+   "label": "work-order",
+   "wall_s": 8.12,
+   "load": 140.3
+  },
+  {
+   "n": 16,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 8.22,
+   "load": 132.1
+  },
+  {
+   "n": 17,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 1.21,
+   "load": 132.1
+  },
+  {
+   "n": 18,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 1.68,
+   "load": 126.8
+  },
+  {
+   "n": 19,
+   "stratum": "regex-matched",
+   "label": "work-order",
+   "wall_s": 8.56,
+   "load": 120.6
+  },
+  {
+   "n": 20,
+   "stratum": "regex-matched",
+   "label": "pushback",
+   "wall_s": 3.26,
+   "load": 114.7
+  },
+  {
+   "n": 21,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 4.08,
+   "load": 108.2
+  },
+  {
+   "n": 22,
+   "stratum": "regex-matched",
+   "label": "work-order",
+   "wall_s": 6.65,
+   "load": 106.5
+  },
+  {
+   "n": 23,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 4.58,
+   "load": 104.8
+  },
+  {
+   "n": 24,
+   "stratum": "regex-matched",
+   "label": "work-order",
+   "wall_s": 5.8,
+   "load": 101.4
+  },
+  {
+   "n": 25,
+   "stratum": "regex-matched",
+   "label": "other",
+   "wall_s": 8.56,
+   "load": 93.2
+  },
+  {
+   "n": 26,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 1.37,
+   "load": 93.2
+  },
+  {
+   "n": 27,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 2.61,
+   "load": 87.9
+  },
+  {
+   "n": 28,
+   "stratum": "regex-matched",
+   "label": "work-order",
+   "wall_s": 4.46,
+   "load": 84.8
+  },
+  {
+   "n": 29,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 4.87,
+   "load": 80.5
+  },
+  {
+   "n": 30,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 1.67,
+   "load": 80.5
+  },
+  {
+   "n": 31,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 1.94,
+   "load": 80.5
+  },
+  {
+   "n": 32,
+   "stratum": "regex-matched",
+   "label": "work-order",
+   "wall_s": 8.56,
+   "load": 77.1
+  },
+  {
+   "n": 33,
+   "stratum": "regex-matched",
+   "label": "pushback",
+   "wall_s": 3.28,
+   "load": 76.1
+  },
+  {
+   "n": 34,
+   "stratum": "regex-matched",
+   "label": "work-order",
+   "wall_s": 4.11,
+   "load": 74.1
+  },
+  {
+   "n": 35,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 2.6,
+   "load": 74.1
+  },
+  {
+   "n": 36,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 2.76,
+   "load": 72.6
+  },
+  {
+   "n": 37,
+   "stratum": "regex-matched",
+   "label": "pushback",
+   "wall_s": 4.33,
+   "load": 68.8
+  },
+  {
+   "n": 38,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 4.21,
+   "load": 68.8
+  },
+  {
+   "n": 39,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 8.56,
+   "load": 63.3
+  },
+  {
+   "n": 40,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 6.83,
+   "load": 60.5
+  },
+  {
+   "n": 41,
+   "stratum": "regex-matched",
+   "label": "work-order",
+   "wall_s": 8.29,
+   "load": 59.5
+  },
+  {
+   "n": 42,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 8.55,
+   "load": 54.5
+  },
+  {
+   "n": 43,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 1.66,
+   "load": 54.5
+  },
+  {
+   "n": 44,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 8.56,
+   "load": 51.7
+  },
+  {
+   "n": 45,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 5.85,
+   "load": 51.3
+  },
+  {
+   "n": 46,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 2.43,
+   "load": 52.0
+  },
+  {
+   "n": 47,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 6.83,
+   "load": 57.1
+  },
+  {
+   "n": 48,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 8.56,
+   "load": 67.2
+  },
+  {
+   "n": 49,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 8.63,
+   "load": 72.9
+  },
+  {
+   "n": 50,
+   "stratum": "regex-matched",
+   "label": "work-order",
+   "wall_s": 8.63,
+   "load": 83.1
+  },
+  {
+   "n": 51,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 8.62,
+   "load": 87.1
+  },
+  {
+   "n": 52,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 8.96,
+   "load": 83.3
+  },
+  {
+   "n": 53,
+   "stratum": "regex-matched",
+   "label": "work-order",
+   "wall_s": 8.57,
+   "load": 82.4
+  },
+  {
+   "n": 54,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 8.57,
+   "load": 79.7
+  },
+  {
+   "n": 55,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 5.82,
+   "load": 79.0
+  },
+  {
+   "n": 56,
+   "stratum": "regex-matched",
+   "label": null,
+   "wall_s": 9.01,
+   "load": 83.5
+  },
+  {
+   "n": 57,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 4.03,
+   "load": 84.8
+  },
+  {
+   "n": 58,
+   "stratum": "regex-matched",
+   "label": null,
+   "wall_s": 9.01,
+   "load": 87.3
+  },
+  {
+   "n": 59,
+   "stratum": "regex-matched",
+   "label": null,
+   "wall_s": 9.01,
+   "load": 91.0
+  },
+  {
+   "n": 60,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 6.07,
+   "load": 88.5
+  },
+  {
+   "n": 61,
+   "stratum": "regex-matched",
+   "label": "work-order",
+   "wall_s": 8.57,
+   "load": 85.6
+  },
+  {
+   "n": 62,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 1.47,
+   "load": 81.9
+  },
+  {
+   "n": 63,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 8.57,
+   "load": 79.1
+  },
+  {
+   "n": 64,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 1.99,
+   "load": 77.1
+  },
+  {
+   "n": 65,
+   "stratum": "regex-matched",
+   "label": "pushback",
+   "wall_s": 4.6,
+   "load": 74.9
+  },
+  {
+   "n": 66,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 6.12,
+   "load": 72.0
+  },
+  {
+   "n": 67,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 7.13,
+   "load": 70.1
+  },
+  {
+   "n": 68,
+   "stratum": "regex-matched",
+   "label": "work-order",
+   "wall_s": 8.56,
+   "load": 66.1
+  },
+  {
+   "n": 69,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 6.29,
+   "load": 64.4
+  },
+  {
+   "n": 70,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 5.18,
+   "load": 62.6
+  },
+  {
+   "n": 71,
+   "stratum": "regex-matched",
+   "label": "other",
+   "wall_s": 7.91,
+   "load": 59.1
+  },
+  {
+   "n": 72,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 1.4,
+   "load": 59.1
+  },
+  {
+   "n": 73,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 3.27,
+   "load": 60.9
+  },
+  {
+   "n": 74,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 2.63,
+   "load": 60.9
+  },
+  {
+   "n": 75,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 6.83,
+   "load": 59.3
+  },
+  {
+   "n": 76,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 4.91,
+   "load": 59.0
+  },
+  {
+   "n": 77,
+   "stratum": "regex-matched",
+   "label": "work-order",
+   "wall_s": 5.32,
+   "load": 58.1
+  },
+  {
+   "n": 78,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 1.72,
+   "load": 58.1
+  },
+  {
+   "n": 79,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 1.31,
+   "load": 58.1
+  },
+  {
+   "n": 80,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 1.32,
+   "load": 57.4
+  },
+  {
+   "n": 81,
+   "stratum": "regex-matched",
+   "label": "other",
+   "wall_s": 8.56,
+   "load": 56.3
+  },
+  {
+   "n": 82,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 8.56,
+   "load": 53.6
+  },
+  {
+   "n": 83,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 8.13,
+   "load": 50.4
+  },
+  {
+   "n": 84,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 6.3,
+   "load": 48.6
+  },
+  {
+   "n": 85,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 8.59,
+   "load": 45.8
+  },
+  {
+   "n": 86,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 6.51,
+   "load": 45.5
+  },
+  {
+   "n": 87,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 1.16,
+   "load": 45.5
+  },
+  {
+   "n": 88,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 1.49,
+   "load": 45.5
+  },
+  {
+   "n": 89,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 1.42,
+   "load": 44.6
+  },
+  {
+   "n": 90,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 2.8,
+   "load": 44.6
+  },
+  {
+   "n": 91,
+   "stratum": "regex-matched",
+   "label": "work-order",
+   "wall_s": 4.92,
+   "load": 44.9
+  },
+  {
+   "n": 92,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 1.3,
+   "load": 44.7
+  },
+  {
+   "n": 93,
+   "stratum": "regex-matched",
+   "label": "work-order",
+   "wall_s": 7.53,
+   "load": 44.0
+  },
+  {
+   "n": 94,
+   "stratum": "regex-matched",
+   "label": "work-order",
+   "wall_s": 8.56,
+   "load": 42.3
+  },
+  {
+   "n": 95,
+   "stratum": "regex-matched",
+   "label": "completeness",
+   "wall_s": 1.18,
+   "load": 42.3
+  },
+  {
+   "n": 96,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 5.97,
+   "load": 42.8
+  },
+  {
+   "n": 97,
+   "stratum": "regex-matched",
+   "label": "work-order",
+   "wall_s": 8.29,
+   "load": 43.6
+  },
+  {
+   "n": 98,
+   "stratum": "regex-matched",
+   "label": "work-order",
+   "wall_s": 7.55,
+   "load": 41.9
+  },
+  {
+   "n": 99,
+   "stratum": "regex-matched",
+   "label": "research-order",
+   "wall_s": 7.6,
+   "load": 41.2
+  }
+ ]
+}

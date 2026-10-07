@@ -1326,6 +1326,27 @@ inside it: three ordered steps around sealed files, one small code change each, 
   each; agreed **other 305 of 520, regex-matched 206 of 257**. Instrument pinned 2026-10-07T04:30:33Z: other v4,
   regex-matched v4, regex-missed v3, pushback v3. Reads before this wave's read (ledger): v3 every stratum once, v4
   none. `tuning-v2.jsonl` was not read; nothing was tuned on v3 or v4.
+- **The operator restarted the classifier** (2026-10-07, before 00:05 CDT): the live daemon's `ping` exits 0 and its
+  socket reports configuration `05e87273a59c`.
+- **Warm latency through the live daemon: FAIL on RULE 1's latency clause, at a load E1h never saw** (2026-10-07
+  00:05-00:24 CDT; `e1i-latency.py`, the first 100 rows of the fresh tuning file, the router's `classify` verb
+  under `heldout.py`'s 9 s limit; per-call data `docs/research/router-classifier-e1h-2026-10-06/e1i-latency.json`,
+  no prompt text). Fallback **8 of 100 = 0.08** (limit 0.03), median 6.07 s, **p90 8.78 s** (limit 7.5), max 9.01 s,
+  at 1-min load 41-157, median 75 (E1h's tuning run: median 18). All 8 fallbacks came at load 83-145; no row ran
+  below load 41. Answering path: the resident fast call 62 + 21 (the careful call still thinking), the resident
+  careful call 9. The ruling adopted this configuration, so the latency clause selects nothing here; it is
+  recorded, and RULE 2' carries its own fallback ceiling (0.10).
+- **When the one read starts, fixed before it starts** (this commit, before the read): the read runs once the
+  1-min load is at most 40 with the 5-min average at most 50, read by `uptime` immediately before the first call,
+  because the latency check above put every fallback at load 83 or more and the read has no second chance. This
+  fixes only the start time; the read is not stopped, restarted or discarded for anything that happens after its
+  first call, and the load is recorded per row in the router's trace. How the read runs: `heldout.py evaluate
+  --record ~/.claude/autonomy/research/router-heldout/reading-v4-2026-10-07.jsonl` with no `--set` (the pinned
+  instrument), once, with `CC_RESEARCH_ROUTER="python3 <snapshot>/scripts/research-kit/router.py classify"`, the
+  snapshot a `git archive` of `79887ba4c`'s `scripts/research-kit` checked identical to the live files, through the
+  restarted live daemon, and `CC_RESEARCH_CLASSIFY_TRACE` beside the record. One made-up prompt goes through first;
+  if the resident path does not answer it, the sealed sets are not opened. Verdict: PASS is `evaluate` exiting 0;
+  anything else is FAIL with the numbers, final for this wave.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
