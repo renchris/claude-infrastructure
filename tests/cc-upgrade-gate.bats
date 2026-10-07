@@ -56,6 +56,21 @@ _stub_bin_registers() {
   [ "$status" -eq 0 ]
 }
 
+# ── #2b the documented invocation is a per-file symlink (~/.claude/scripts/…) with no lib beside it ─
+@test "invoked through a symlink outside the repo → still finds lib/cc-upgrade-gate (not exit 2)" {
+  TMPC="$BATS_TEST_TMPDIR/checks"; mkdir -p "$TMPC"
+  cp "$REPO/lib/cc-upgrade-gate/check01_binary.sh" "$TMPC/"
+  _stub_bin_registers "$TMPC/stubbin"
+  H="$BATS_TEST_TMPDIR/home"; mkdir -p "$H/.claude-next" "$H/.claude/scripts"
+  ln -s "$GATE" "$H/.claude/scripts/cc-upgrade-gate.sh"
+  JSON="$BATS_TEST_TMPDIR/out.json"
+
+  run bash -c 'HOME="$1" CC_UPGRADE_GATE_CHECKS="$2" bash "$3" "$4" claude-opus-5 next >"$5" 2>/dev/null' \
+      _ "$H" "$TMPC" "$H/.claude/scripts/cc-upgrade-gate.sh" "$TMPC/stubbin" "$JSON"
+  [ "$status" -eq 0 ]
+  grep -q '"verdict": "GREEN"' "$JSON"
+}
+
 # ── #3 common.sh contract: emit_result writes exactly one valid JSON line with the given fields ────
 @test "common.sh: emit_result appends exactly one valid JSON line carrying its fields" {
   RES="$BATS_TEST_TMPDIR/results.jsonl"; : > "$RES"

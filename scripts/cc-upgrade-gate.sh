@@ -25,7 +25,15 @@
 # ───────────────────────────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve our own symlink first: ~/.claude/scripts/cc-upgrade-gate.sh is a per-file link into the
+# checkout and lib/cc-upgrade-gate/ is not linked beside it, so a REPO derived from the link's
+# directory finds no common.sh (exit 2 on the documented invocation).
+SELF="${BASH_SOURCE[0]}"
+while [ -L "$SELF" ]; do
+  _t="$(readlink "$SELF")"
+  case "$_t" in /*) SELF="$_t" ;; *) SELF="$(dirname "$SELF")/$_t" ;; esac
+done
+HERE="$(cd "$(dirname "$SELF")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 LIB="$REPO/lib/cc-upgrade-gate"
 # common.sh always loads from the real LIB; the CHECK-discovery dir is overridable so hermetic tests
