@@ -787,6 +787,11 @@ section exists to stop. Every fallback is counted as "classifier unavailable" in
 **Edited 2026-10-06 (decision `aba630ebe329`, part e):** each relay you override as misrouted (§4.2) is counted in
 that block too.
 
+**Edited 2026-10-06 (decisions `aba630ebe329` part a and `1f3b8f2d01b7`, §9): the classifier's model is per call.**
+Since wave E1g the classifier is two calls started together inside the one limit. The fast call (thinking off) runs
+the model config's `sonnet_latest` (`claude-sonnet-5-5`); the careful call (thinking on) stays on `haiku_latest`; a
+relay from either call stands (the union join). Both keep the headless, empty-directory, local-settings form above.
+
 A rule-driven order to research a row below 90% is answered from that row's line: its conviction, its "research
 exhausted at timebox" receipt, and the contact event that would move it. Your most frequent research-order prompt
 (44 genuine prompts in 32 sessions, `evidence/adversary/reality/conviction_frame.out:1`) therefore gets a direct
@@ -1296,6 +1301,12 @@ and from a measured result, as ruling 8 requires. Earlier text is kept and the e
   reads 229 of 240 = 0.95 (205 of the 216 non-relay ones left unflagged, all 24 re-asks relayed), the live router
   223 of 240 = 0.93 (`docs/research/router-classifier-e1h-2026-10-06/`; build plan wave E1i). A wrong relay now costs
   one word (`misrouted`, §4.2).
+- **§4.1, the fast call runs `sonnet_latest`** (ruling part (a) of decision `aba630ebe329`, which allowed this edit
+  only if a non-`haiku_latest` configuration was adopted; `1f3b8f2d01b7` adopted one). Reason: on wave E1h's tuning
+  base Sonnet 5.5 thinking off as the fast call cut agreed non-relay prompts wrongly relayed from 57 of 504 to 36
+  under the union join, with pooled recall unchanged at 0.99. The careful call stays on `haiku_latest`, whose
+  model (`claude-haiku-4-5`) has a retirement floor of 2026-10-15; whatever `haiku_latest` moves to is a new
+  configuration that gate row 15 has not measured.
 
 ---
 

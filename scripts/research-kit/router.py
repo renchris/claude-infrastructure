@@ -71,8 +71,8 @@ appends one row per call to: the label, which call and path answered, wall secon
 the prompt).
 
 THE CLASSIFIER IS TWO CALLS (wave E1g, ruling b18c74a4f8e1): a fast one (wave E1b's brief and system
-prompt, thinking off) and a careful one (the brief as built, thinking on), started together inside
-the one limit. `classify` below states the rule that joins them.
+prompt, thinking off; on `sonnet_latest` since wave E1i, decision 1f3b8f2d01b7) and a careful one (the
+brief as built, thinking on, `haiku_latest`), started together inside the one limit. `classify` below states the rule that joins them.
 """
 
 from __future__ import annotations
@@ -305,8 +305,14 @@ def render_cert(slug: str) -> Tuple[str, str]:
 # ── the classifier ──────────────────────────────────────────────────────────────────────────────
 
 
-def haiku_model() -> str:
-    """model-config.yaml `haiku_latest` (§4.1); `haiku` when it cannot be read."""
+# Each kind's model is a model-config.yaml key (§4.1). Wave E1i (decision 1f3b8f2d01b7): the fast call
+# runs Sonnet, thinking off, as E1h's `sonnet-off` arm measured; the careful call stays on haiku_latest.
+MODEL_KEYS = {"fast": "sonnet_latest", "careful": "haiku_latest"}
+MODEL_ALIASES = {"sonnet_latest": "sonnet", "haiku_latest": "haiku"}
+
+
+def config_model(key: str) -> str:
+    """model-config.yaml `<key>`; its alias (`sonnet`, `haiku`) when it cannot be read."""
     for cand in (
         os.environ.get("CC_MODEL_CONFIG"),
         str(Path.home() / ".claude" / "model-config.yaml"),
@@ -316,12 +322,22 @@ def haiku_model() -> str:
             continue
         try:
             for line in Path(cand).read_text().splitlines():
-                m = re.match(r"\s*haiku_latest:\s*([A-Za-z0-9._-]+)", line)
+                m = re.match(rf"\s*{re.escape(key)}:\s*([A-Za-z0-9._-]+)", line)
                 if m:
                     return m.group(1)
         except OSError:
             continue
-    return "haiku"
+    return MODEL_ALIASES[key]
+
+
+def haiku_model() -> str:
+    """model-config.yaml `haiku_latest` (§4.1); `haiku` when it cannot be read."""
+    return config_model("haiku_latest")
+
+
+def kind_model(kind: str) -> str:
+    """The model a kind of call runs (MODEL_KEYS)."""
+    return config_model(MODEL_KEYS[kind])
 
 
 def classifier_flags(kind: str = "careful") -> List[str]:
@@ -330,7 +346,7 @@ def classifier_flags(kind: str = "careful") -> List[str]:
     flags = [
         "-p",
         "--model",
-        haiku_model(),
+        kind_model(kind),
         "--setting-sources",
         "local",
         "--tools",

@@ -449,11 +449,11 @@ label() { python3 "$ROUTER" status --session "${1:-s1}" | jq -r '.label // "none
   [ -f "$CC_RESEARCH_HOME/route-state/s1.json" ]
 }
 
-@test "the real classifier call: haiku_latest from model-config, local settings only, an empty cwd, the inner guard set" {
+@test "the real classifier call: each kind's model from model-config (fast sonnet_latest, careful haiku_latest), local settings only, an empty cwd, the inner guard set" {
   state certified
   unset CC_RESEARCH_CLASSIFIER
   mkdir -p "$BATS_TEST_TMPDIR/bin"
-  printf 'models:\n  haiku_latest: claude-haiku-test-9   # comment\n' > "$BATS_TEST_TMPDIR/model-config.yaml"
+  printf 'models:\n  sonnet_latest: claude-sonnet-test-7   # comment\n  haiku_latest: claude-haiku-test-9   # comment\n' > "$BATS_TEST_TMPDIR/model-config.yaml"
   export CC_MODEL_CONFIG="$BATS_TEST_TMPDIR/model-config.yaml"
   cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
 #!/bin/bash
@@ -467,9 +467,17 @@ STUB
   PATH="$BATS_TEST_TMPDIR/bin:$PATH" prompt "are we done?" >/dev/null
   [ "$(label)" = completeness ]
   # Since wave E1g the classifier is two calls. The careful one is this command line, unchanged; the
-  # fast one adds its own flags to it (tests/research-classifier-warm.bats pins those).
+  # fast one adds its own flags to it (tests/research-classifier-warm.bats pins those) and, since wave
+  # E1i, runs sonnet_latest instead of haiku_latest.
   grep -qx 'argv=-p --model claude-haiku-test-9 --setting-sources local --tools  --strict-mcp-config --no-session-persistence' "$STUB_ARGS.careful"
-  grep -q '^argv=-p --model claude-haiku-test-9 --setting-sources local --tools  --strict-mcp-config --no-session-persistence --disable-slash-commands ' "$STUB_ARGS.fast"
+  grep -q '^argv=-p --model claude-sonnet-test-7 --setting-sources local --tools  --strict-mcp-config --no-session-persistence --disable-slash-commands ' "$STUB_ARGS.fast"
+  # the fast call's model is part of the configuration id, so a resident classifier started on the
+  # old one reads as not ready and migration 0059 restarts it
+  printf 'models:\n  sonnet_latest: claude-sonnet-test-8\n  haiku_latest: claude-haiku-test-9\n' > "$BATS_TEST_TMPDIR/model-config-2.yaml"
+  cfg() { CC_MODEL_CONFIG="$1" /usr/bin/python3 -c "import sys; sys.path[:0]=['$REPO/scripts/research-kit/lib','$REPO/scripts/research-kit']; import router; print(router.classifier_config())"; }
+  a="$(cfg "$BATS_TEST_TMPDIR/model-config.yaml")" b="$(cfg "$BATS_TEST_TMPDIR/model-config-2.yaml")"
+  [ -n "$a" ]
+  [ "$a" != "$b" ]
   for k in fast careful; do
     grep -qx 'inner=1' "$STUB_ARGS.$k"
     grep -qx 'files=0' "$STUB_ARGS.$k"
