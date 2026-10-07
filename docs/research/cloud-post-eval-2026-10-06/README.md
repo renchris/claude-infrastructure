@@ -26,5 +26,23 @@ readers' scratch copies of vendor docs and were not kept.
 | K07 cc-upgrade target and cloud coverage | adopt narrowed, 65% | holds note corrected, `8e2c8d61a` |
 | K08 version glob in `cc-offload setup` | adopt, 85% | fixed, `cecc3f6b8` |
 
+## Decision research (same day, second pass)
+
+Three researchers per decision, one adversarial, then a judge (`d1-*`, `d2-*`, `judge-d1.md`,
+`judge-d2.md`).
+
+- **Block cloud VMs from pushing to `main`?** (decision `fc5d34097c6e`) Recommend the guard alone,
+  tightened: `scripts/ship-land.sh` refuses a real land when `CLAUDE_CODE_REMOTE` is true, local-folder
+  remotes exempt, no committer-email test (it misses 48 of 341 cloud branches), and the tracked
+  instructions say a cloud session never lands. 70%. The ruleset on `main` fell to 25%: the VM
+  holds the operator's admin token and can edit a ruleset.
+- **Claim the cloud credit?** Recommend claiming on one account first, then the rest if its
+  usage-credits toggle still reads off. 68%.
+
+**CORRECTED (2026-10-06):** the line below says claiming enables Usage Credit. The offer's own help
+page (support.claude.com article 17152539) says the credit is claimed and used with usage credits
+off and is drawn before plan quota; the legal terms only permit Anthropic to enable it. Deadline is
+Oct 7 11:59 PM Pacific.
+
 Side finding with a date: the post's cloud credit must be claimed by 2026-10-07 and its terms
 enable Usage Credit, which `accounts.json` forbids (`a4-economics-and-live-state.md`).
