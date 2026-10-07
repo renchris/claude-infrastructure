@@ -50,6 +50,13 @@ Pre-audit of the 2.1.285–2.1.289 band (2026-10-03, no MANIFEST row yet; eviden
   session (narrowed to unattended sessions only in 2.1.288), which cuts the 3300 s `cc-await-ping`
   arm; 2.1.287 drops earlier thinking when it `--resume`s a session started on 2.1.286 or older,
   which is exactly the `lr-upgrade.sh` relaunch.
+- **CORRECTED (2026-10-06): the 2.1.289 target is retired; nothing below 2.1.291 is eligible.**
+  2.1.288–2.1.290 can lose a session's last messages on quit (CHANGELOG 2.1.291: "Fixed a
+  regression in 2.1.288 where the last messages of a session could be lost when quitting"). No
+  new target is named until the band audit, which must probe the per-agent token budget text the
+  2.1.291 binary carries and no changelog line mentions (`strings` hits for "has a budget of":
+  2.1.284 = 0, 2.1.291 = 6; upstream #99932, enforcement unprobed). The audit has no cloud rows
+  yet: the lane's only binary dependency is the `-p … --cloud <id>` send in `bin/cc-notify`.
 - **2.1.287 changes the revoked-login text** to "OAuth token revoked", so the reopen trigger at
   `docs/plans/MASTER_ACCOUNT_FACTS.md:141-142` (a grep for "has been revoked") goes blind; key it
   on the `authentication_failed` error field instead.
