@@ -1244,7 +1244,7 @@ files, tracks B and C by its lead (ordered around sealed files).
   dead-assertion analyzer on a changed suite before the land, not after; a tuning rater needs a stated
   tolerance for one unlabeled prompt, or one stubborn prompt costs a whole run.
 
-#### E1i — row 15's `other` scored on the relay decision; Sonnet-fast plus haiku-careful; one fresh sealed read — IN PROGRESS (2026-10-06)
+#### E1i — row 15's `other` scored on the relay decision; Sonnet-fast plus haiku-careful; one fresh sealed read — DONE: row 15 FAILS on the one read, on fallbacks (0.15) and recall, every recall miss a 9 s timeout; `other` passes at 0.90 (2026-10-07)
 Scope (frozen): wave E1i — (1) commit the row-15 method change and its pre-registered read rule before any
 classifier call; (2) router.py per-kind model key so the fast call runs Sonnet thinking off, served by the warm
 daemon, red-then-green tests, landed and converged, daemon restart filed as one operator step; (3) seal v4 and make
@@ -1347,6 +1347,53 @@ inside it: three ordered steps around sealed files, one small code change each, 
   restarted live daemon, and `CC_RESEARCH_CLASSIFY_TRACE` beside the record. One made-up prompt goes through first;
   if the resident path does not answer it, the sealed sets are not opened. Verdict: PASS is `evaluate` exiting 0;
   anything else is FAIL with the numbers, final for this wave.
+- **The one read** (2026-10-07 00:26:59-01:39:45 CDT, 73 min; started at 1-min load 28.0 and 5-min 48.4 per the
+  start rule; the made-up probe was answered by the resident fast call in 1.6 s; then load rose: median 53, p90
+  125, max 253 over the router's 594 traced answers; **rc 1**). 1,112 sealed items, 417 excluded for rater
+  disagreement, 695 routed and counted. Reads ledger: v4 `other` and regex-matched first reads, v3 regex-missed
+  and pushback second reads (`reads.jsonl`, 2026-10-07T05:26:59Z); no v3 stratum has been read a third time.
+
+  | condition (RULE 2') | reading | |
+  |---|---|---|
+  | `other`, relay decision (≥ 0.90), v4 first read | 275/305 = 0.90 (0.902) | pass |
+  | regex-matched recall (≥ 0.95), v4 first read | 80/93 = 0.86 | **fail** |
+  | regex-missed recall (≥ 0.95), v3 second read (16 unused candidates < 400) | 13/25 = 0.52 | **fail** |
+  | pushback recall (≥ 0.95), v3 second read | 2/2 = 1.00 | pass |
+  | fallback (≤ 0.10) | 105/695 = 0.15 | **fail** |
+  | agreed items (≥ 40) | 695 | pass |
+
+  Shown only, never a failure: `other` exact label 245/305 = 0.80; relayed although both raters gave a non-relay
+  label: `other` 10/270, regex-matched 9/113, regex-missed 13/155, pushback 0/2; `other` by store, relay decision
+  right: history 179/204, transcript 96/101; prompts the raters relay under two labels: regex-matched 2 of 3
+  relayed (1 fell back), regex-missed 2 of 2. Record `router-heldout/reading-v4-2026-10-07.jsonl` and trace beside
+  it (mode 600, no prompt text).
+- **Verdict: FAIL**, final for this wave, under RULE 2' exactly as committed (`d68323586`, then the start rule in
+  `6becd2062`). No re-read: this was the method's one re-test (REPORT:1078).
+- **What the failure is made of** (from the tool's record, counts only; no further read was made to get it):
+  - **Every recall miss is a fallback.** regex-matched missed 13, and its counted fallbacks are 13; regex-missed
+    missed 12, and its fallbacks are 12. Not one relay-gold prompt in either stratum got a wrong label in time.
+    `other`'s 30 misses are 19 fallbacks, 10 wrong relays and 1 missed re-ask.
+  - **The fallbacks are 9 s timeouts under load.** All 105 ran 9.00-9.03 s. 82 fell in the first half of the read
+    and 23 in the second, which tracks the load (it reached 253 in the first half). The router's answering paths:
+    resident fast call 400 + 152 (careful still thinking), resident careful call 39 + 3. The warm latency check
+    the hour before read the same at load median 75: 8 of 100 fell back, all at load 83-145.
+  - So the classifier's labels held: `other` passed the relay-decision floor, wrong relays on agreed non-relay
+    prompts were 32 of 540 (0.06; E1h's live router 57 of 504 on tuning), and recall on every prompt answered in
+    time was 100% in both completeness strata. What failed is answering inside 9 s on a box whose load ran 2-14
+    times E1h's tuning median.
+- **What remains (the operator's, through the lead; not opened here).** Row 15 now fails on time, not on
+  labels, and the method's re-test is spent. The choices the read supports are about the clock and the machine,
+  none a build step of this wave: whether row 15's fallback ceiling and the 9 s limit are measured on a box under
+  a stated load bound (the gate has none today, and this read's start rule fixed only the first call); whether
+  the careful haiku call (the slow arm: E1h cold 250 of 1,078 over 9 s) stays a relay voter or gives way to a
+  faster one; and what a fresh read would need now that v3's completeness strata have each been read twice and
+  only 16 unused regex-missed candidates exist. The careful call's model floor (2026-10-15) still applies.
+- Status: **DONE 2026-10-07 — row 15 FAILS on the one read.** Shas: pre-registration `d68323586`; router
+  `79887ba4c`; pre-read record `97451c774`; start rule `6becd2062`; this record (see `git log`). Restart: backlog
+  `1eb77a3353d2`, run by the operator before the read. Learnings: a pre-registered read needs a stated load bound
+  for its whole duration, not only its start, when the row it settles has a wall-clock ceiling; a smoke suite with
+  sub-2 s wall-clock assertions reds a land at load ~70 on any tree (A/B: 2 of 4 on the pre-change tree too); and
+  two raters writing one sealed set concurrently is safe only because each writes once, at its end.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
