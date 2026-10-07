@@ -113,6 +113,37 @@ on_branch_with() {  # $1=branch $2=file $3=content  → commit a change on a fre
   grep -q '"sid":"test-sid-123"' "$LAND_LOG"
 }
 
+# ── the CLOUD-VENUE preflight (decision fc5d34097c6e): a cloud session never lands ──────────────
+# The refusal fires before the first fetch, so the non-local origin below is never contacted.
+@test "cloud venue: a land with CLAUDE_CODE_REMOTE=true and a remote origin is refused, exit 2" {
+  git checkout -q -b feat/from-a-vm main
+  printf 'x\n' > vm.txt
+  git add vm.txt && git commit -q -m "feat: vm"
+  local before; before="$(git --git-dir="$ORIGIN" rev-parse main)"
+  git remote set-url origin https://example.invalid/never-contacted.git
+
+  CLAUDE_CODE_REMOTE=true run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"verdict=refused reason=cloud-venue"* ]] || false
+  [ "$(git --git-dir="$ORIGIN" rev-parse main)" = "$before" ]
+}
+
+@test "cloud venue: a folder origin is a fixture and is exempt, so suites pass inside a VM" {
+  CLAUDE_CODE_REMOTE=true run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"reason=cloud-venue"* ]] || false
+  [[ "$output" == *"nothing to land"* ]]
+}
+
+@test "cloud venue: the same remote origin is not refused for cloud-venue when the variable is unset" {
+  # INERT control for the refusal above: only the variable differs. --dry-run is never the subject
+  # of the guard, so the pair is compared on the refusal text alone, before any fetch is attempted.
+  git remote set-url origin https://example.invalid/never-contacted.git
+  run env -u CLAUDE_CODE_REMOTE bash -c 'source /dev/stdin <<<"$(sed -n "/^land_cloud_venue_preflight()/,/^}/p" "$1")"; land_cloud_venue_preflight; echo passed' _ "$SHIPLAND"
+  [ "$status" -eq 0 ]
+  [ "$output" = "passed" ]
+}
+
 # ── the sweep call site is ATTRIBUTED (backlog 175bce12e0e1) ──────────────────────────────────────
 # ship-land invoked stranded-sweep in DEFAULT mode, so `sweep=review` fired on ~955 of 989 lands —
 # an alarm at 97% carries essentially no bits. `--mine` now attributes (callee fixes 634ecdccbc55 /

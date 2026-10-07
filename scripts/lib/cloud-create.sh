@@ -282,13 +282,14 @@ cc_cloud_return_contract() { # $1 = declared branch → the payload preamble, on
   cat <<CC_CLOUD_CONTRACT
 ── FIRST ACT — RUN THESE THREE LINES BEFORE ANYTHING ELSE (this session runs off-box) ──
 You are running in an Anthropic-managed VM. Nothing on the operator's machine can see your
-filesystem, your processes or your terminal, and you cannot run this repo's /ship. Your ONLY
+filesystem, your processes or your terminal, and you must not run this repo's /ship (it refuses
+a land from a cloud session; the desk lands your branch). Your ONLY
 channel back is a git push, and it must go to exactly this branch: $br
 
 Do this NOW — before you plan, before you read a file, before you write a line:
 
     git switch -c $br 2>/dev/null || git switch $br
-    git commit --allow-empty -m 'chore: cloud session boot'
+    git commit --allow-empty -m 'chore: cloud session boot' -m "venue: CLAUDE_CODE_REMOTE=\${CLAUDE_CODE_REMOTE:-unset} uid=\$(id -u) os=\$(uname -s)"
     git push -u origin HEAD
 
 WHY IT IS THE FIRST ACT AND NOT THE LAST. The firing side watches exactly one thing: whether that

@@ -25,8 +25,13 @@ Read these once. Every confusing failure in §6 is one of them showing up as an 
    someone else's session fails with `Session not found`, which reads exactly like a dead session.
    This is the single most misleading error in the system; see §6.
 4. **The channel is asymmetric, permanently.** here→cloud is a real push (a message queue).
-   cloud→here is *pull only*, over git — the VM can push its own working branch and nothing else,
-   and this box has no reachable inbound endpoint. Do not try to symmetrise it.
+   cloud→here is *pull only*, over git — the VM is TOLD to push its own working branch and nothing
+   else, and this box has no reachable inbound endpoint. Do not try to symmetrise it.
+   CORRECTED (2026-10-07): this line used to say the VM *can* push only its own branch. It can push
+   any branch: the vendor's GitHub proxy does not restrict the target, and 104 VM-made commits
+   reached `main` before the brief changed. What holds it now is the brief plus
+   `scripts/ship-land.sh` refusing a land when `CLAUDE_CODE_REMOTE=true`; a typed `git push` to
+   `main` is still open (`docs/research/cloud-post-eval-2026-10-06/judge-d1.md`).
 5. **A declaration must exist at fire time or the session is permanently unobservable.** A cloud
    session that was never declared and pushed nothing leaves zero trace anywhere this box can read.
    There is no forensic path back. `cc-cloud declare` is not bookkeeping, it is the observability.

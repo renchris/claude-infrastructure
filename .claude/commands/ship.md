@@ -106,6 +106,7 @@ Arguments: `$ARGUMENTS`
 - **NEVER commit or land from `~/Development/claude-infrastructure`.** It is the source of the `~/.claude` symlink and often sits on a *foreign session's* feature branch — committing there risks landing onto a branch you did not create, and a concurrent `/ship` of that branch can rebase-drop your commit.
 - Resolve the real CWD (`git rev-parse --show-toplevel`). If it is `~/Development/claude-infrastructure` → **STOP**: tell the user to re-run from a dedicated worktree (`claude -w <name>`), then land from there.
 - Proceed only from a dedicated worktree on your **own** branch.
+- **Never from a cloud session.** With `CLAUDE_CODE_REMOTE=true`, `ship-land.sh` refuses the land (exit 2, `reason=cloud-venue`): push your branch and stop; the desk lands it. `--precheck` and `--dry-run` still run there.
 
 ## 3. Commit in-scope work
 - Stage **only** the files belonging to the current task — explicit paths, **never** a blind `git add -A`. Make one atomic Conventional Commit (lowercase, no redundant verbs).

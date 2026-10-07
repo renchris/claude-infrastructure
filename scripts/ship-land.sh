@@ -1466,6 +1466,27 @@ land_outer_timeout_preflight() {
   return 0
 }
 
+# THE CLOUD-VENUE PREFLIGHT (operator ruling 2026-10-07, decision fc5d34097c6e). A cloud session
+# never lands: it pushes its branch and the desk lands it (scripts/cloud-return.sh). Until this
+# line that was prose in the brief only, while the tracked .claude/CLAUDE.md told every session to
+# land via /ship — all 37 traceable self-landing VMs had been told to, and 104 VM-made commits
+# reached main (docs/research/cloud-post-eval-2026-10-06/judge-d1.md). CLAUDE_CODE_REMOTE is the
+# vendor's documented "true in a cloud session, never true locally" variable.
+# Keyed on the variable ALONE, never on the committer: noreply@anthropic.com misses 48 of 341 VM
+# branches, and 11 VM commits on main carry the operator's own address.
+# SCOPED TO EFFECT: an origin that is a folder on this disk is a test fixture and cannot move the
+# real trunk, so the suites still pass when a cloud session runs them (memory:
+# guard-refusal-fires-on-its-own-harness). No override on purpose: a session that wants one is the
+# case this refuses. It stops /ship, not a typed `git push`.
+land_cloud_venue_preflight() {
+  [[ "${CLAUDE_CODE_REMOTE:-}" = "true" ]] || return 0
+  local url; url="$(git remote get-url origin 2>/dev/null || true)"
+  case "$url" in file://*) return 0 ;; esac
+  [[ -n "$url" && -d "$url" ]] && return 0
+  echo "✗ ship-land: verdict=refused reason=cloud-venue — CLAUDE_CODE_REMOTE=true: a cloud session never lands. Commit on your branch and push THAT branch; the push is your completion signal and the desk lands it (scripts/cloud-return.sh). Nothing was pushed to trunk. --precheck and --dry-run still work here." >&2
+  exit 2
+}
+
 # shellcheck disable=SC2329  # invoked indirectly — the three `trap` lines at dispatch are its only callers.
 _land_sig_verdict() {  # <signame> <signum>
   trap - TERM HUP INT EXIT
@@ -5536,6 +5557,7 @@ main_outer() {
   if [[ "$PRECHECK" = "1" ]]; then main_precheck "$TRUNK" "$WORKING" "$DO_FETCH"; fi
   # A LAND only (a precheck returned above; a --dry-run pushes nothing), and before the landing lock.
   [[ "$DRY_RUN" = "1" ]] || land_outer_timeout_preflight
+  [[ "$DRY_RUN" = "1" ]] || land_cloud_venue_preflight
 
   REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
   BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"

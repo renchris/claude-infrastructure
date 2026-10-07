@@ -25,6 +25,9 @@ commits leave the LIVE `~/.claude` layer stale (this repo is its symlink/source)
 committed-not-landed is itself "work left on the table". The authorization is exclusively for the
 fail-closed project-local `/ship` (landing lock + last-moment re-fetch + full gate + content-verify
 + stranded sweep) — never a bare `git push`. Global Git Safety is unchanged for every other repo.
+**Not from a cloud session.** If `CLAUDE_CODE_REMOTE` is `true` you are in an Anthropic-hosted VM:
+never land, never push to `main`. Commit on your branch and push that branch; the desk lands it
+(`scripts/cloud-return.sh`), and `scripts/ship-land.sh` refuses a land from there.
 After landing, converge (§ Standing-converge below) rather than hand-copying: `~/.claude/CLAUDE.md` is
 a real file install.sh writes from the SELECTED global variant (`CLAUDE.global.slim.md` by default;
 `cc-instructions-variant status`), `~/.claude/rules/10-session-close.md` is its copy of the slim
