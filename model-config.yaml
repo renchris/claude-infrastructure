@@ -139,6 +139,29 @@ versions:
                                             # release (invisible to bump/lint by construction, like opus_staged).
   haiku_latest: claude-haiku-4-5            # retires NOT SOONER than 2026-10-15 (a floor, not a date); Haiku 5.5
                                             # is announced for "the coming weeks" — stage it on release.
+                                            # RELEASED 2026-10-07 and STAGED below. Still Active upstream with
+                                            # no deprecation date (model-deprecations, re-read 2026-10-07; the
+                                            # vendor gives 60 days' notice), so the floor is not a cliff.
+                                            # NO haiku_prior KEY YET, ON PURPOSE: writing it arms the lint's
+                                            # stale sweep and the bump pair (an EMPTY value is worse: the
+                                            # lint would collect "" as a stale literal). Add it in the flip diff.
+  haiku_staged: claude-haiku-5-5            # STAGED 2026-10-07 — NOT routed by this file. Needs Claude Code
+                                            # 2.1.293 (cc-model-registered: 2.1.284 = 0, 2.1.291 = 0,
+                                            # 2.1.292 = 0, 2.1.293 = 21; control claude-opus-5 present).
+                                            # Gate GREEN 14/0/1 on 2.1.293 x claude-haiku-5-5 and x
+                                            # claude-opus-5-5, accounts next next2 next4 (next3 logged out,
+                                            # its entitlement UNPROVEN). Binary move = activation 50.
+                                            # ⚠️ THE ALIAS MOVES WITH THE BINARY, NOT WITH THIS KEY: on
+                                            # 2.1.293 `haiku` and the small/fast helper model resolve to
+                                            # claude-haiku-5-5 on first party (binary read + a live spawn),
+                                            # so a new shell after activation 50 runs Haiku 5.5 for every
+                                            # `model: "haiku"` spawn whatever haiku_latest says. Flip
+                                            # haiku_latest/haiku_prior and clear this key in the diff that
+                                            # follows the activation, with the keying rewrite (census:
+                                            # docs/research/haiku55-upgrade-2026-10-07/notes/census-haiku.md).
+                                            # 1M ctx, 128K out, cutoff Jun 2026, all five effort levels
+                                            # (default medium), thinking cannot be disabled, retires not
+                                            # sooner than 2027-10-07.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # § OPUS 5.5 (lateral bump 2026-09-22) — ADOPTED. opus_latest, the Opus roles and
@@ -864,6 +887,12 @@ pricing_per_mtok:
                                              # currency that binds is plan quota: effort_defaults.sonnet55_cheap.
   claude-sonnet-4-6: [3, 15]                # still served — kept for prior-pinned cost math
   claude-haiku-4-5: [1, 5]
+  claude-haiku-5-5: [0.10, 0.50]            # ADDED 2026-10-07 (pricing page): prompts up to 100,000 tokens.
+                                            # Over 100,000 tokens the whole request bills at 5x
+                                            # ($0.50 / $2.50). Cache read $0.01 (0.1x), 1h cache write
+                                            # $0.20. Its tokenizer counts ~30% more tokens for the same
+                                            # text than Haiku 4.5's. $list only: plan-quota draw per
+                                            # token is NOT STATED and not yet measured.
 
 # Auto-mode model allowlist, derived from decompile of Dk6(G5()) in cli.js 2.1.112.
 # Server-side truth may shift — verify via `claude auto-mode config` after each
@@ -1045,6 +1074,12 @@ roles:
                                             # unpinned → claude-opus-5-5, `model: "haiku"` →
                                             # claude-haiku-4-5-20251001. Unpinned, this slot costs what
                                             # the lead costs.
+                                            # 2026-10-07: on 2.1.293 the same `model: "haiku"` spawn is
+                                            # served claude-haiku-5-5 AT THE LEAD'S EFFORT (measured:
+                                            # Opus 5.5 lead @high → Haiku 5.5 @high; Haiku 4.5 took no
+                                            # effort). Pass the Agent tool's `effort` (new in 2.1.293)
+                                            # at effort_defaults.haiku55_retrieval. This key still names
+                                            # 4.5 until the flip diff (versions.haiku_staged).
   research_adversarial: claude-fable-5-1    # adversarial/red-team/judge/depth-coordination slots
                                             # (10-15%); call-time Agent `model: "fable"` override,
                                             # eval track + active window only; else fallback.
@@ -1461,6 +1496,19 @@ effort_defaults:
 # publishes a "not sooner than" floor for Active models; those are NOT deprecations and are
 # recorded in the § note below rather than as keys, so the lint's stale-literal sweep — which
 # reads this map's keys — cannot mistake a healthy model for a doomed one.
+
+  # ── Haiku 5.5 (STAGED 2026-10-07; ADVISORY like every key here, and not yet measured by us) ──
+  haiku55_default: medium                   # the vendor default and its stated starting point, agentic
+                                            # coding included (effort page; prompting guide). At low it
+                                            # skips searches, stops early and reports unverified changes
+                                            # (prompting guide). Conviction 80%: vendor text only.
+  haiku55_retrieval: medium                 # `model: "haiku"` Explore spawns on 2.1.293. Without an
+                                            # explicit Agent `effort` the spawn inherits the lead's rung.
+                                            # Card: wide agentic search collapses at low (WANDR 3.5% low
+                                            # vs 49.9% max; below Haiku 4.5's 6.4%), DRACO low/medium ties
+                                            # Sonnet 5.5. Conviction 70%: owed = a low/medium/high
+                                            # retrieval A/B on our own file:line lookups vs Haiku 4.5.
+
 deprecations:
   claude-3-haiku: "2026-04-20"              # (PAST — retired)
   claude-opus-4: "2026-06-15"               # undated 4.0 variants (PAST — retired)
@@ -1480,6 +1528,9 @@ deprecations:
 #   Models overview, re-read 2026-09-22, gives retirementNotBefore 2026-10-15 and no retirement date),
 #   and the announcement says Haiku 5.5 follows "in the coming weeks" — stage it on release rather
 #   than acting on the floor.
+#   2026-10-07: Haiku 5.5 released (floor 2027-10-07) and staged (versions.haiku_staged). The
+#   deprecations page still lists claude-haiku-4-5-20251001 as Active, floor 2026-10-15, with no
+#   deprecation date; retirement needs 60 days' notice, so nothing retires on the floor date.
 # Added 2026-09-22 from the Models overview:  claude-opus-5-5  2027-09-22 (floor; released 2026-09-22).
 #   claude-opus-5 has NO lifecycle row there and is listed among CURRENT models in the docs nav, so
 #   its 2027-07-24 floor above is the last recorded value, not a re-read.
