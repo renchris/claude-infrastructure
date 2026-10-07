@@ -5,7 +5,8 @@ docs/plans/RESEARCH_PROGRAM_BUILD.md (wave E1h), committed before any tuning cal
 choice made after seeing a result.
 
   e1h-score.py counts            the tuning base's counts (no classifier data needed)
-  e1h-score.py TUNE.json         the per-configuration table and the RULE 1 outcome
+  e1h-score.py TUNE.json         the per-configuration table and the RULE 1 outcome; its shown-only
+                                 `other_decision` column is wave E1i's row-15 `other` rule
 
 Reads the tuning base and its two-rater labels (outside the repo); never a sealed set, and it prints
 no prompt.
@@ -147,7 +148,8 @@ def frac(pairs: list):
 
 
 def score(rows: dict, calls: dict, rule: str, X: str, Y: str) -> dict:
-    other, recall, missed, border, v1_other, false_relay, times = (
+    other, recall, missed, border, v1_other, false_relay, times, other_decision = (
+        [],
         [],
         [],
         [],
@@ -172,6 +174,10 @@ def score(rows: dict, calls: dict, rule: str, X: str, Y: str) -> dict:
                 false_relay.append(lab in REL)
             if row["stratum"] == "other" and g is not None:
                 (v1_other if row["src"] == "v1" else other).append(lab == g)
+                if row["src"] != "v1":
+                    # wave E1i's row-15 rule (heldout.py evaluate): the relay decision matches the
+                    # gold's, a fallback a miss; shown only, RULE 1 does not read it
+                    other_decision.append(lab is not None and (lab in REL) == (g in REL))
                 if row["src"] != "v1" and lab != g:
                     # what a miss on `other` is made of; shown only, RULE 1 does not read it
                     kind = (
@@ -201,6 +207,7 @@ def score(rows: dict, calls: dict, rule: str, X: str, Y: str) -> dict:
         ("borderline", border),
         ("v1_other", v1_other),
         ("false_relay", false_relay),
+        ("other_decision", other_decision),
     ):
         m[name], m[name + "_n"] = frac(pairs)
     m["fallback"] = f"{fallbacks}/{total}"
@@ -241,6 +248,7 @@ def main() -> int:
         "fallback",
         "v1_other_n",
         "false_relay_n",
+        "other_decision_n",
     )
     for m in table + shown:
         tag = (

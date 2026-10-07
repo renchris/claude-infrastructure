@@ -24,7 +24,7 @@ packet `83adb541ea19` actioned. Method version 1.1 is frozen; it changes only fr
 | B2 | S | Item 8: `research-program` skill, `/research-program` command, intake script, briefs, rubric | A2 |
 | C | S | Wave 2: items 9–13, 15, in parallel with the pilot | B1, B2 |
 | D | S (fired `fire-rp-audit-bugfix`), T inside | Audit fixes: `docs/research/upfront-method-audit-2026-10-04/REPORT.md` §3 rows 4–6 | C |
-| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E1d S (fired `fire-rp-v12-e1d`); E1e S (fired `fire-rp-v12-e1e`); E1g S (fired `fire-rp-v12-e1g`); E1h S (fired `fire-rp-v12-e1h`, T inside for track A); E2 Workflow in session d8964eb2; E3 S (E3a fired `fire-rp-v12-e3a`, E3b fired `fire-rp-v12-e3b` with T inside: six teammates; E3c fired `fire-rp-v12-e3c`, L inside; E3d fired `fire-rp-v12-e3d`, L inside); E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
+| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E1d S (fired `fire-rp-v12-e1d`); E1e S (fired `fire-rp-v12-e1e`); E1g S (fired `fire-rp-v12-e1g`); E1h S (fired `fire-rp-v12-e1h`, T inside for track A); E1i S (fired `fire-rp-v12-e1i`, L inside); E2 Workflow in session d8964eb2; E3 S (E3a fired `fire-rp-v12-e3a`, E3b fired `fire-rp-v12-e3b` with T inside: six teammates; E3c fired `fire-rp-v12-e3c`, L inside; E3d fired `fire-rp-v12-e3d`, L inside); E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
 
 A1, A2 and A3 touch disjoint files and fire concurrently. B1 and B2 fire when A2 lands. Each dispatched session leads
 its own Agent Team where it has 2+ code-writing tasks.
@@ -1243,6 +1243,47 @@ files, tracks B and C by its lead (ordered around sealed files).
   argued; the land gate lints test files this wave touches line by line, so run bare `shellcheck` and the
   dead-assertion analyzer on a changed suite before the land, not after; a tuning rater needs a stated
   tolerance for one unlabeled prompt, or one stubborn prompt costs a whole run.
+
+#### E1i — row 15's `other` scored on the relay decision; Sonnet-fast plus haiku-careful; one fresh sealed read — IN PROGRESS (2026-10-06)
+Scope (frozen): wave E1i — (1) commit the row-15 method change and its pre-registered read rule before any
+classifier call; (2) router.py per-kind model key so the fast call runs Sonnet thinking off, served by the warm
+daemon, red-then-green tests, landed and converged, daemon restart filed as one operator step; (3) seal v4 and make
+ONE composite read; record the verdict in the plan as wave E1i. Locus S (fired `fire-rp-v12-e1i`), lead-inline
+inside it: three ordered steps around sealed files, one small code change each, nothing to fan out.
+- **Operator ruling** (2026-10-06, reply "flag-decision-90", decision packet `1f3b8f2d01b7`, option
+  `flag-decision-90`): score gate row 15's `other` stratum on "not wrongly flagged as a re-ask" (the relay decision)
+  instead of the exact label, floor 0.90; adopt Sonnet-fast (`claude-sonnet-5-5`, thinking off, the E1b brief) as the
+  fast call and haiku-careful (as built, thinking on) as the careful call, under the union join (the live join); then
+  ONE fresh sealed read. Tuning evidence as the packet states it: 205/216 ordinary prompts unflagged (0.949), recall
+  0.99 pooled, 0.98 regex-missed, borderline 0.75; the live router 199/216 (0.921). Receipt
+  `docs/research/router-classifier-e1h-2026-10-06/` (`e1h-score.py`, `tune.json`, `result.txt`); write-up
+  `docs/research/reask-overflag-decision-2026-10-06/REPORT.md`. Method REPORT: named edit at gate row 15 and §6.6,
+  recorded in §9 ("the edit made under decision `1f3b8f2d01b7`").
+- **The `other` rule, one denominator for tuning and the read.** `other` = of the agreed `other` items (both raters
+  gave the same label), the share whose relay decision matches the gold's: the router relays (completeness or
+  pushback) exactly when the agreed label relays. A fallback is a miss, as in every stratum (`heldout.py evaluate`'s
+  contract). The packet's 205/216 is the non-relay part of this rule (agreed non-relay items left unflagged); the
+  read prints that part too, as the existing shown-only false-relay line. On the E1h tuning base the one rule reads
+  (`e1h-score.py tune.json`, new column `other_decision`): adopted pair union(`sonnet-off`, `haiku-on`) **229/240 =
+  0.954** (205/216 non-relay unflagged, 24/24 re-asks relayed, 0 fallbacks); the live router 223/240 = 0.929. The
+  exact-label rate stays a shown-only line. Every other row-15 threshold (recall 0.95, fallback 0.10, 40 agreed
+  items) and the 9 s limit are unchanged.
+- **Pre-registered read rule, RULE 2'** (verbatim from the brief; committed before any classifier call, and this
+  commit's author date is the proof of order): PASS = `heldout.py evaluate` over the pinned instrument exits 0 with
+  `other` (relay decision) >= 0.90 on v4 first read; regex-matched recall >= 0.95 on v4 first read; regex-missed
+  recall >= 0.95 on v4 only if >= 400 unused regex-missed candidates exist at the seal, otherwise v3's counted items
+  as a disclosed second read; pushback recall >= 0.95 on v3's counted items (disclosed second read); fallback <=
+  0.10; >= 40 agreed items. One read, no re-read on FAIL (this is the method's one re-test); no v3 stratum read a
+  third time.
+- **Configuration under test**: fast = `sonnet_latest` (`claude-sonnet-5-5`), thinking off, E1b brief and system
+  prompt; careful = `haiku_latest` (`claude-haiku-4-5`), thinking on, the brief as built; union join; served by the
+  warm daemon (migration 0059). Never tuned on v3 or v4; `tuning-v2.jsonl` is never read.
+- **Disclosed: the careful call's model expires.** `claude-haiku-4-5` has a retirement floor of 2026-10-15
+  (`model-config.yaml` `haiku_latest`; E1h). The careful call follows `haiku_latest`, so after the retirement it
+  becomes whatever `haiku_latest` is staged to — Haiku 5.5 when it is released — which is a new configuration id
+  and an unmeasured classifier: row 15's verdict from this wave does not carry to it, and it needs its own re-read.
+  If haiku 4.5 is retired before Haiku 5.5 is staged, every careful call fails, the union join answers with the fast
+  call alone, and `sonnet-off` alone read 0.94 pooled recall and 0.81 regex-missed on tuning (below row 15's 0.95).
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.

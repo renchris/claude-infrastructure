@@ -645,6 +645,7 @@ def evaluate(
         ]
     )
     hits: Dict[str, List[int]] = {s: [0, 0] for s in STRATA}
+    exact = [0, 0]  # `other`'s exact-label rate: shown only since wave E1i
     fell: Dict[str, int] = {
         s: 0 for s in STRATA
     }  # fallbacks among the items a stratum counts
@@ -682,13 +683,18 @@ def evaluate(
         if i["stratum"] in COMPLETENESS_STRATA and gold in RELAYED:
             h[0] += 1 if got in RELAYED else 0
         elif i["stratum"] == "other":
-            h[0] += 1 if got == gold else 0
+            # Wave E1i (decision 1f3b8f2d01b7, REPORT gate row 15): right when the router relays exactly
+            # when the agreed label relays; a fallback relays nothing but is still a miss.
+            right = got is not None and (got in RELAYED) == (gold in RELAYED)
+            h[0] += 1 if right else 0
+            exact[0] += 1 if got == gold else 0
+            exact[1] += 1
             st = store[
                 "history"
                 if str(i.get("source") or "").startswith("history:")
                 else "transcript"
             ]
-            st[0] += 1 if got == gold else 0
+            st[0] += 1 if right else 0
             st[1] += 1
         else:
             h[1] -= (
@@ -703,11 +709,17 @@ def evaluate(
             fails.append(f"stratum {s}: no agreed item to measure")
         elif ok / n_items < need:
             fails.append(
-                f"stratum {s}: {'correct-label rate' if s == 'other' else 'recall'} {ok}/{n_items} = "
+                f"stratum {s}: {'relay-decision rate' if s == 'other' else 'recall'} {ok}/{n_items} = "
                 f"{ok / n_items:.2f}, below {need}"
             )
         else:
-            notes.append(f"stratum {s}: {ok}/{n_items}")
+            notes.append(
+                f"stratum {s}: {ok}/{n_items}" + (" (relay decision)" if s == "other" else "")
+            )
+    if exact[1]:
+        notes.append(
+            f"other, exact label (shown only, never a failure): {exact[0]}/{exact[1]}"
+        )
     rate = fallbacks / len(valid)
     notes.append(
         f"{fallbacks} of {len(valid)} routed item(s) fell back (share {rate:.2f}); "
@@ -731,7 +743,7 @@ def evaluate(
         )
     if store["history"][1] or store["transcript"][1]:
         notes.append(
-            "other by store, correct / items: "
+            "other by store, relay decision right / items: "
             + " · ".join(f"{k} {v[0]}/{v[1]}" for k, v in store.items())
         )
     # Not counted, shown only: a completeness-stratum prompt both raters would relay, under two
@@ -762,7 +774,7 @@ def evaluate(
         record.chmod(0o600)
     notes.append(
         f"thresholds are assumed inputs until calibration (§6.6): set ≥ {MIN_SET}, recall ≥ {MIN_RECALL}, "
-        f"other ≥ {MIN_OTHER_CORRECT}, fallback ≤ {MAX_FALLBACK}"
+        f"other (relay decision) ≥ {MIN_OTHER_CORRECT}, fallback ≤ {MAX_FALLBACK}"
     )
     return {"fails": fails, "notes": notes}
 

@@ -603,7 +603,7 @@ waves it blocks), with evidence. Each predicate re-executes what it names in thi
 | 12. Reconciliation | 0 unmapped items across plan prose markers, research residuals, backlog, open decisions, custody and dirty files |
 | 13. Reviewers | The vendor preflight ran before the contract page (§3.2, step 6). Every counted round had all reviewers complete, all lenses attested, 3 or more vendors (or 2, one of them non-Anthropic, after a dead-lane default, with "degraded: two vendors" printed, §3.8), responding model ids matching the pins, and 0 integrity hits. A dead or voided slot in a live lane was re-run (at most twice) or taken by another live vendor, with "reduced diversity" printed. No round with a dead vendor lane was counted |
 | 14. Rehearsal | Every frame typed. The relay test passed, or "relay unstable" is printed |
-| 15. Router | This run: the re-ask router (§4.1) labels a held-out set of at least 40 completeness and pushback phrasings, drawn from your transcripts and never used to write or tune it, with a recall of at least 0.95. The set size and the threshold are assumed inputs until the calibration run measures the router (§6.6); the transcripts hold 280 genuine completeness asks to draw from (`evidence/adversary/llm/ask_turns.out:1`). A planted classifier error, a timeout and a mixed label each route as a completeness question. After one repair and one re-test, a recall still below the threshold fails the row |
+| 15. Router | This run: the re-ask router (§4.1) labels a held-out set of at least 40 completeness and pushback phrasings, drawn from your transcripts and never used to write or tune it, with a recall of at least 0.95. The set size and the threshold are assumed inputs until the calibration run measures the router (§6.6); the transcripts hold 280 genuine completeness asks to draw from (`evidence/adversary/llm/ask_turns.out:1`). A planted classifier error, a timeout and a mixed label each route as a completeness question. After one repair and one re-test, a recall still below the threshold fails the row. **Edited 2026-10-06 (decision `1f3b8f2d01b7`, §9):** the held-out `other` prompts (§10 item 11's correct-label floor, 0.90) are scored on the relay decision, not the exact label: an agreed `other` item counts as right when the router relays it exactly when the raters' agreed label relays (completeness or pushback), and a fallback is a miss. The floor stays 0.90; the exact-label rate is printed beside it and never fails the row |
 
 **Stated on the certificate, never blocking:** why it stopped and the rounds used against the forecast; the
 desk-detectable estimate and bound per area and in total; the invisible-hole forecast, labeled "share assumed" until
@@ -1123,7 +1123,8 @@ Nothing else loops. There is no open-ended "find gaps" loop anywhere after the f
   at freeze (those the replayed certification finds plus the known later holes), the rater downgrade share,
   cross-vendor correlation, the invisible share
   (from non-AI detectors: contact probes and 30-day build-escape reports), quota per run,
-  the re-ask router's recall on held-out phrasings (gate row 15), whether `--setting-sources
+  the re-ask router's recall on held-out phrasings (gate row 15; its `other` floor is scored on the relay decision
+  since 2026-10-06, decision `1f3b8f2d01b7`, §9), whether `--setting-sources
   local` holds on the current binary, and whether the OpenAI and Google CLIs sustain the load (6 reviewers a round
   each for the full profile). It then re-runs the §3.12 model at the measured values, for the composition with Opus in
   the frontier slots (§3.8), and for two vendors after a dead-lane default (§3.8).
@@ -1280,6 +1281,21 @@ held-out set v3 about 0.24 of ordinary prompts were relayed (35 of 148), and a r
   set only estimates.
 
 Gate row 15's thresholds are unchanged. These edits lower the cost of a false relay, not its rate.
+
+**Updated 2026-10-06: the edit made under decision `1f3b8f2d01b7`** (the operator's reply "flag-decision-90"), named
+and from a measured result, as ruling 8 requires. Earlier text is kept and the edit is marked where it sits (gate row
+15, §6.6).
+
+- **Gate row 15, the `other` floor is scored on the relay decision.** An agreed `other` item is right when the router
+  relays it (completeness or pushback) exactly when the raters' agreed label relays; a fallback is a miss, as in every
+  stratum. The floor stays 0.90, and every other row-15 threshold and the 9 s limit are unchanged. The exact-label
+  rate is still printed and never fails the row. Reason: on the 240 agreed `other` tuning prompts of wave E1h no
+  configuration reached the exact label above 0.86, and about 0.87 is the ceiling from confusing the five labels that
+  do not relay, which the router treats alike; the raters themselves agreed on the exact label of 240 of 407. On the
+  relay decision the adopted fast-plus-careful pair (Sonnet 5.5 thinking off, then haiku thinking on, union join)
+  reads 229 of 240 = 0.95 (205 of the 216 non-relay ones left unflagged, all 24 re-asks relayed), the live router
+  223 of 240 = 0.93 (`docs/research/router-classifier-e1h-2026-10-06/`; build plan wave E1i). A wrong relay now costs
+  one word (`misrouted`, §4.2).
 
 ---
 

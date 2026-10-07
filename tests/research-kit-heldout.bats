@@ -366,7 +366,7 @@ composite() {
   router_says completeness
   CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --record "$BATS_TEST_TMPDIR/rec.jsonl"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"stratum other: correct-label rate 0/20"* ]] || false
+  [[ "$output" == *"stratum other: relay-decision rate 0/20"* ]] || false
   [[ "$output" == *"stratum regex-matched: 20/20"* ]] || false
   [[ "$output" == *"stratum regex-missed: 12/12"* ]] || false
   [[ "$output" == *"stratum pushback: 12/12"* ]] || false
@@ -407,15 +407,57 @@ composite() {
   [[ "$output" == *"stratum other of set v4: read 3 time(s) before"* ]] || false
 }
 
+@test "wave E1i: other is scored on the relay decision (floor 0.90), a fallback or a missed relay is a miss, and the exact label is shown only" {
+  mk first 12 "${ALL[@]}" > "$BATS_TEST_TMPDIR/c.jsonl"
+  "$H" seal --candidates "$BATS_TEST_TMPDIR/c.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t.jsonl" --fraction 1.0
+  label_all v1
+  mk fourth 20 other regex-matched > "$BATS_TEST_TMPDIR/c4.jsonl"
+  "$H" --set v4 seal --candidates "$BATS_TEST_TMPDIR/c4.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t4.jsonl" --fraction 1.0 --strata other,regex-matched
+  # gold: other 1-4 are re-asks (completeness), other 5-20 work orders; regex-matched completeness
+  "$H" --set v4 rater-sheet --out "$BATS_TEST_TMPDIR/sheet.jsonl"
+  /usr/bin/python3 -c "
+import json
+rows = [json.loads(l) for l in open('$BATS_TEST_TMPDIR/sheet.jsonl')]
+lab = lambda p: ('completeness' if int(p.split()[-1]) <= 4 else 'work-order') if ' other ' in p else 'completeness'
+open('$BATS_TEST_TMPDIR/l.jsonl', 'w').writelines(json.dumps({'id': r['id'], 'label': lab(r['prompt'])}) + '\n' for r in rows)"
+  "$H" --set v4 label --rater r1 --labels "$BATS_TEST_TMPDIR/l.jsonl"
+  "$H" --set v4 label --rater r2 --labels "$BATS_TEST_TMPDIR/l.jsonl"
+  "$H" instrument --pin other=v4,regex-matched=v4,regex-missed=v1,pushback=v1
+  # 1-3 relayed (right), 4 not relayed (a missed re-ask), 5 a fallback, 6-20 `concern`: the wrong
+  # non-relay label, which the relay decision scores right. 18 of 20 = 0.90 passes; WRONG6 relays 6.
+  cat > "$BATS_TEST_TMPDIR/router" <<'R'
+#!/bin/bash
+p="$(cat)"
+case "$p" in
+  "fourth prompt other "[123]) echo completeness ;;
+  "fourth prompt other 4") echo concern ;;
+  "fourth prompt other 5") exit 1 ;;
+  "fourth prompt other 6") if [ -n "${WRONG6:-}" ]; then echo completeness; else echo concern; fi ;;
+  *" other "*) echo concern ;;
+  *) echo completeness ;;
+esac
+R
+  chmod +x "$BATS_TEST_TMPDIR/router"
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"stratum other: 18/20 (relay decision)"* ]] || false
+  [[ "$output" == *"other, exact label (shown only, never a failure): 3/20"* ]] || false
+  [[ "$output" == *"relayed although both raters gave a non-relay label: other 0/16"* ]] || false
+  WRONG6=1 CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"stratum other: relay-decision rate 17/20 = 0.85, below 0.9"* ]] || false
+  [[ "$output" == *"relayed although both raters gave a non-relay label: other 1/16"* ]] || false
+}
+
 @test "wave E1h: the notes give the false-relay rate on agreed non-relay items and split other by store, and neither can fail the row" {
   composite
   router_says completeness
   CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate
   [[ "$output" == *"relayed although both raters gave a non-relay label: other 20/20"* ]] || false
-  [[ "$output" == *"other by store, correct / items: history 0/10 · transcript 0/10"* ]] || false
+  [[ "$output" == *"other by store, relay decision right / items: history 0/10 · transcript 0/10"* ]] || false
   router_says work-order
   CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" --set v4 evaluate
   [[ "$output" == *"relayed although both raters gave a non-relay label: other 0/20"* ]] || false
-  [[ "$output" == *"other by store, correct / items: history 10/10 · transcript 10/10"* ]] || false
+  [[ "$output" == *"other by store, relay decision right / items: history 10/10 · transcript 10/10"* ]] || false
   [[ "$output" != *"stratum other:"*"below"* ]] || false
 }
