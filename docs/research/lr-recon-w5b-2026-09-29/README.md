@@ -541,6 +541,32 @@ Notes, not FAILs (same ruling):
   off next3 at about 06:10Z and did not run again until 15:36Z, so the event was reported 9.5 h
   late. Rig fix: the watcher must announce a post-cutoff limit that joins an existing cohort.
 
+### Restart at 22:32:23Z Oct 7: the reconciler code it runs is unchanged (ruling pending)
+
+The reconciler restarted as pid 25909 at 22:32:23Z Oct 7: the last row of `recon/restarts.jsonl`
+(t=1791412348.63), confirmed by `launchctl print` (`com.reso.lr-reconciler`, pid 25909, runs 9, last
+terminating signal SIGTERM). There was no reboot (boot time Sep 30 20:26Z). The watchdog did not
+kill it: up to 22:31:18Z it logged `slow, not stalled: pid=88125 … — no kill` under load average
+70-110, so the SIGTERM came from outside the watchdog. No cohort was open across the restart; the
+count stood at 1 of 2.
+
+**The two running shas.** pid 88125 loaded the shared checkout at `821786aae` (its HEAD at the 02:28Z
+Oct 6 start, per its reflog); pid 25909 loaded `a037c0bd9` (the checkout's HEAD since 06:51Z Oct 7).
+`git diff --stat 821786aae a037c0bd9 -- scripts/limit-recover`:
+
+- `lr_recon/`: no change. The reconciler's resident Python is byte-identical.
+- 4 scripts, +38/-4: `lr-move-worker.sh`, `lr-move-batch.sh` and `lr-reset-poller.sh` from `7368bd1d4`
+  ("rotate"), and one line of `lr-fleet.sh` from `0cc89c51d`. All four are on the legacy recovery
+  path, the baseline the shadow compares against. The reconciler's actuator (`lr_recon/act.py`)
+  calls `lr-handoff.sh`, `handoff-fire.sh`, `lr-transplant.sh`, `lr-lib.sh` and `cc-tui.sh`, none of
+  which changed. Being bash started fresh for each run, the four took effect for every run from
+  08:10:37Z Oct 6, when the checkout fast-forwarded to `0cc89c51d`, after cohort 1's moves
+  (06:03Z to 06:22Z) and without any restart.
+
+**Two readings, the lead to rule.** Same code in substance: nothing the reconciler runs changed, so
+the cutoff stays 02:28:28Z and the count stays 1 of 2 (85%, this session's read). Literal rule: the
+`scripts/limit-recover` diff is not empty, so the cutoff moves to 22:32:23Z and the count is 0 of 2.
+
 ## Census step
 
 Operator step `f0df9145b73a` (the live observe census) was closed with the launchd daemon's own pass:
