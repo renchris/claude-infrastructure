@@ -541,7 +541,7 @@ Notes, not FAILs (same ruling):
   off next3 at about 06:10Z and did not run again until 15:36Z, so the event was reported 9.5 h
   late. Rig fix: the watcher must announce a post-cutoff limit that joins an existing cohort.
 
-### Restart at 22:32:23Z Oct 7: the reconciler code it runs is unchanged (ruling pending)
+### Restart at 22:32:23Z Oct 7: the reconciler code it runs is unchanged (lead ruling: same-code, 1 of 2 stands)
 
 The reconciler restarted as pid 25909 at 22:32:23Z Oct 7: the last row of `recon/restarts.jsonl`
 (t=1791412348.63), confirmed by `launchctl print` (`com.reso.lr-reconciler`, pid 25909, runs 9, last
@@ -566,6 +566,24 @@ Oct 6 start, per its reflog); pid 25909 loaded `a037c0bd9` (the checkout's HEAD 
 **Two readings, the lead to rule.** Same code in substance: nothing the reconciler runs changed, so
 the cutoff stays 02:28:28Z and the count stays 1 of 2 (85%, this session's read). Literal rule: the
 `scripts/limit-recover` diff is not empty, so the cutoff moves to 22:32:23Z and the count is 0 of 2.
+
+**Lead ruling (2026-10-07 23:08Z, 92%): a same-code restart. The count stays 1 of 2 and the cutoff
+stays 02:28:28Z Oct 6.** The lead re-checked it: `git diff 821786aae a037c0bd9 --
+scripts/limit-recover/lr_recon` is empty; `lr_recon` names the four changed scripts only in comments
+and in one argv match (`store.py:340`) and runs none of them; its actuators are unchanged. No cohort
+spanned the restart, so nothing is lost.
+
+**The restart rule, refined by the same ruling.** "Changed code" means
+`scripts/limit-recover/lr_recon/**` plus the scripts it runs. A change to the legacy path changes
+the comparison partner, not the code under test, so it does not reset the count; each cohort's
+record names the legacy sha it was compared against. Cohort 1's legacy moves (06:03Z to 06:22Z
+Oct 6) ran with the shared checkout at `ff3e87fb7`, then `b87e6da64` from 06:20:47Z; both have
+`scripts/limit-recover/` identical to `821786aae`, i.e. pre-rotate. A cohort from now on is compared
+against legacy at `a037c0bd9` or later (rotate included).
+
+**Open observation, not a blocker.** Nothing on record sent the SIGTERM: not the watchdog, and no
+transcript shows a kickstart. Load average was 70 to 117 at the time. If it happens again, capture
+the time and the load.
 
 ## Census step
 
