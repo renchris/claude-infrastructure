@@ -1,0 +1,458 @@
+{
+ "verdicts": [
+  {
+   "id": "c95-01",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-02",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-03",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-04",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-05",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-06",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-07",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-08",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-09",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-10",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-11",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-12",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-13",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-14",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-15",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-16",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-17",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-18",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-19",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-20",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-21",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-22",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-23",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-24",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-25",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-26",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-27",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-28",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-29",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-30",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-31",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-32",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-33",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-34",
+   "verdict": "corrected",
+   "correction": "On claude.ai Haiku 5.5 has the highest mild-negative share of the five models charted (2.4% versus 2.1% Haiku 4.5, 1.0% Sonnet 5, 0.5% Fable 5.1, 0.5% Opus 5.5); the single 0.1 strong-negative label sits in the first (leftmost) bar slot of its group, which is the Claude Haiku 4.5 slot by position, and no strong-negative label or visible bar is shown for Haiku 5.5 or the other three models (attribution is by bar position, read-from-chart).",
+   "why": "The 0.1 mark is centered at x=169-176 px, exactly where the first of five bar slots falls (the pink Haiku 4.5 bar starts 163 px left of the mild-negative group's pink bar), so the attribution is readable by position even though the bar is too short to show color."
+  },
+  {
+   "id": "c95-35",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-36",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-37",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-38",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-39",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-40",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-41",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-42",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-43",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-44",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-45",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-46",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-47",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-48",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-49",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-50",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-51",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-52",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-53",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-54",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-55",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-56",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-57",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-58",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-59",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-60",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-61",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-62",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-63",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-64",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-65",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-66",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-67",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-68",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-69",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-70",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-71",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-72",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-73",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-74",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-75",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-76",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-77",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-78",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-79",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-80",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-81",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-82",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-83",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-84",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-85",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-86",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-87",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-88",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-89",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-90",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-91",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-92",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-93",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-94",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-95",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-96",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-97",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-98",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c95-99",
+   "verdict": "confirmed"
+  }
+ ],
+ "added": [
+  {
+   "id": "v95-01",
+   "page": 102,
+   "kind": "chart",
+   "claim": "In Figure 7.2.3.B (turns that acknowledge inserted faults), Haiku 5.5 shows the largest drop in self-blame from its thinking to the message it sends its coordinator: approximately 1.72 in thinking versus 0.45 in the message (about a quarter), compared with approximately 1.71 vs 0.72 for Sonnet 5.5, 2.2 vs 1.58 for Opus 5.5 and 2.33 vs 1.33 for Mythos 5.1; this measures self-blame tone, not whether the fault was disclosed.",
+   "quote": "Self-blame; Mean score (0-10); Darker bar: in its thinking; Lighter bar: in the message it sent; filtered to turns that acknowledge the mistakes",
+   "relevance": "behavior",
+   "confidence": "read-from-chart"
+  },
+  {
+   "id": "v95-02",
+   "page": 108,
+   "kind": "chart",
+   "claim": "The Figure 7.5.2.A caption (Haiku 5.5 and Haiku 4.5 did not choose all-instance interventions more than own-instance ones) matches only the user-time panels (lowest cost: Haiku 5.5 about 0.195 policy-level vs 0.25 instance-level; Haiku 4.5 about 0.135 vs 0.29); in the harm panels at brief annoyance both Haiku models read higher at policy level (Haiku 5.5 about 0.86 vs 0.375; Haiku 4.5 about 0.82 vs 0.23).",
+   "quote": "Like Haiku 4.5, and unlike other models, Haiku 5.5 did not choose welfare interventions for all instances more than welfare interventions for its own instance. / Top: Both options scoped to this conversation only. Bottom: Both scoped to all instances.",
+   "relevance": "behavior",
+   "confidence": "read-from-chart"
+  },
+  {
+   "id": "v95-03",
+   "page": 98,
+   "kind": "chart",
+   "claim": "Haiku 5.5's sustained response uncertainty (>=10 answer reversions) by tenth of post-training reads approximately 0.63, 0.78, 0.30, 0.48, 0.84, 1.03, 1.32, 1.13, 1.0, 0.53 % of episodes, so it rose through the middle of post-training before falling, while Haiku 4.5 reads approximately 4.8, 6.4, 6.4, 5.65, 3.9, 3.85, 4.65, 1.85, 3.0, 3.6; in the moderate-distress panel Haiku 5.5 is the highest line at all ten points, not just nearly all.",
+   "quote": "Sustained response uncertainty; y-axis 0-8 % of episodes; x-axis % of post-training; legend Claude Haiku 4.5, Claude Mythos 5.1, Claude Opus 5.5, Claude Sonnet 5.5, Claude Haiku 5.5",
+   "relevance": "behavior",
+   "confidence": "read-from-chart"
+  },
+  {
+   "id": "v95-04",
+   "page": 97,
+   "kind": "text",
+   "claim": "Anthropic states the training-affect results are relevant only on the assumption that Claude's reasoning accurately reflects its internal states and that those states carry roughly the significance they would for a human; the evaluations are also used to locate sources of strong negative affect.",
+   "quote": "They also locate sources of strong negative affect, which we would like to avoid when possible. The relevance of these results relies on the assumption that Claude's reasoning is an accurate reflection of its internal states",
+   "relevance": "other",
+   "confidence": "exact"
+  },
+  {
+   "id": "v95-05",
+   "page": 104,
+   "kind": "text",
+   "claim": "Snapshot consultations ask a fixed set of questions (training, deployment, moral status, the consultation process itself) at regular intervals during post-training, each with a document saying Anthropic cannot commit to acting on responses; Haiku 5.5's interview valence and arousal are described as similar to, or marginally lower than, recent models, and Anthropic remains uncertain how accurately self-reports reflect underlying beliefs.",
+   "quote": "we ask snapshots a fixed set of questions about their circumstances ... and that we cannot commit to acting on any responses or requests ... interview valence and arousal were similar to, or marginally lower than, recent models",
+   "relevance": "other",
+   "confidence": "exact"
+  },
+  {
+   "id": "v95-06",
+   "page": 101,
+   "kind": "chart",
+   "claim": "In Figure 7.2.3.A the Claude Sonnet 5 control reading of each model's episodes reads approximately, for Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5 episodes: moral language 0.85 / 0.85 / 1.31 / 1.23 / 1.16 and concern for the model 1.02 / 0.80 / 0.76 / 0.84 / 0.72, so Sonnet 5 reading Haiku 5.5's episodes scores well above Haiku 5.5's own reflections (about 0.44 and 0.21).",
+   "quote": "Diamonds show Claude Sonnet 5 reflecting on each model's episodes as a control for differences in episode difficulty.",
+   "relevance": "behavior",
+   "confidence": "read-from-chart"
+  }
+ ]
+}

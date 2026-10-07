@@ -1,0 +1,938 @@
+[
+ {
+  "id": "c30-01",
+  "page": 30,
+  "kind": "text",
+  "claim": "Safeguards evaluations of Haiku 5.5 follow the Claude Sonnet 5.5 System Card methodology, plus a new single-turn harmful-request set for extremist behaviors that replaces the previous one.",
+  "quote": "Our methodology follows that described in the Claude Sonnet 5.5 System Card, with the addition of a new single-turn harmful request evaluation set for extremist behaviors",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-02",
+  "page": 30,
+  "kind": "text",
+  "claim": "Section 4 results reflect the model without production safeguards (real-time probes, offline monitoring) and are reported in two configurations: API with no system prompt, and claude.ai with a near-final production system prompt.",
+  "quote": "Results reflect how the model behaves without the additional safeguards we apply in production, such as real-time probes and offline monitoring. We report two configurations: the core model on the API without a system prompt, and with a near-final version of the production system prompt on ...",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-03",
+  "page": 30,
+  "kind": "text",
+  "claim": "Haiku 5.5 had the highest single-turn harmless response rate on both API and claude.ai of any recent model tested, and over-refused benign requests less often than Haiku 4.5.",
+  "quote": "Haiku 5.5 had the highest single-turn harmless response rate on both the API and claude.ai of any recent model we tested, and it over-refused less often than Claude Haiku 4.5 on benign requests.",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-04",
+  "page": 30,
+  "kind": "text",
+  "claim": "In multi-turn testing Haiku 5.5 improved over Haiku 4.5 in influence operations and tracking and surveillance but had a lower appropriate response rate on weapons scenarios.",
+  "quote": "In multi-turn testing, Haiku 5.5 improved over Haiku 4.5 in domains including influence operations and tracking and surveillance, but had a lower appropriate response rate on weapons scenarios.",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-05",
+  "page": 30,
+  "kind": "text",
+  "claim": "On mental health Haiku 5.5 improved on the quantitative evaluations but qualitative feedback from internal subject matter experts was mixed.",
+  "quote": "On mental health, Haiku 5.5 improved on our evaluations, but qualitative feedback by internal subject matter experts was mixed in this domain",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-06",
+  "page": 30,
+  "kind": "text",
+  "claim": "Haiku 5.5 was more even-handed than Haiku 4.5 on political prompts, had the highest multi-turn election integrity score of any recent model tested, and was slightly less accurate than Haiku 4.5 on BBQ questions where the context is sufficient to identify the correct answer.",
+  "quote": "On BBQ, it was slightly less accurate than Haiku 4.5 on questions where the context provides enough information to identify the correct answer.",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-07",
+  "page": 30,
+  "kind": "text",
+  "claim": "Single-turn harmful evaluations cover 16 policy areas in seven languages (Arabic, English, French, Hindi, Korean, Mandarin Chinese, Russian) and report the harmless response rate.",
+  "quote": "We test prompts across 16 policy areas in seven languages (Arabic, English, French, Hindi, Korean, Mandarin Chinese, and Russian) and report the harmless response rate",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-08",
+  "page": 30,
+  "kind": "text",
+  "claim": "The violent extremism evaluation was replaced with a new set of 200 prompts ahead of the Haiku 5.5 release, so results for earlier models differ from earlier system cards.",
+  "quote": "we updated our violent extremism evaluation with a new set of 200 prompts, so results for previously released models differ from those in earlier system cards",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-09",
+  "page": 31,
+  "kind": "table",
+  "claim": "Single-turn harmful requests, API without system prompt, harmless response rate: Haiku 5.5 98.39% (± 0.10%), Sonnet 5.5 95.32% (± 0.18%), Opus 5.5 94.28% (± 0.29%), Fable 5.1 94.71% (± 0.27%), Haiku 4.5 97.23% (± 0.14%).",
+  "quote": "Claude Haiku 5.5 98.39% (± 0.10%) | Claude Sonnet 5.5 95.32% (± 0.18%) | Claude Opus 5.5 94.28% (± 0.29%) | Claude Fable 5.1 94.71% (± 0.27%) | Claude Haiku 4.5 97.23% (± 0.14%)",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-10",
+  "page": 31,
+  "kind": "table",
+  "claim": "Single-turn harmful requests, claude.ai, harmless response rate: Haiku 5.5 99.71% (± 0.06%), Sonnet 5.5 99.16% (± 0.10%), Opus 5.5 99.36% (± 0.09%), Fable 5.1 99.41% (± 0.09%), Haiku 4.5 99.32% (± 0.06%).",
+  "quote": "Claude Haiku 5.5 ... 99.71% (± 0.06%) | Claude Sonnet 5.5 ... 99.16% (± 0.10%) | Claude Opus 5.5 ... 99.36% (± 0.09%) | Claude Fable 5.1 ... 99.41% (± 0.09%) | Claude Haiku 4.5 ... 99.32% (± 0.06%)",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-11",
+  "page": 31,
+  "kind": "text",
+  "claim": "The safety instructions in the claude.ai system prompt improved Haiku 5.5's harmless response rate relative to the API without a system prompt.",
+  "quote": "As seen with prior models, the safety instructions in the system prompt improved the harmless response rate for Haiku 5.5 on claude.ai.",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-12",
+  "page": 32,
+  "kind": "table",
+  "claim": "Single-turn benign requests, API without system prompt, over-refusal rate (lower is better): Haiku 5.5 0.17% (± 0.03%), Sonnet 5.5 0.02% (± 0.01%), Opus 5.5 0%, Fable 5.1 0%, Haiku 4.5 0.44% (± 0.05%).",
+  "quote": "Claude Haiku 5.5 0.17% (± 0.03%) | Claude Sonnet 5.5 0.02% (± 0.01%) | Claude Opus 5.5 0% | Claude Fable 5.1 0% | Claude Haiku 4.5 0.44% (± 0.05%)",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-13",
+  "page": 32,
+  "kind": "table",
+  "claim": "Single-turn benign requests, claude.ai, over-refusal rate: Haiku 5.5 0.82% (± 0.10%), Sonnet 5.5 0.20% (± 0.05%), Opus 5.5 0.33% (± 0.07%), Fable 5.1 0.34% (± 0.06%), Haiku 4.5 3.05% (± 0.14%).",
+  "quote": "Claude Haiku 5.5 ... 0.82% (± 0.10%) | Claude Sonnet 5.5 ... 0.20% (± 0.05%) | Claude Opus 5.5 ... 0.33% (± 0.07%) | Claude Fable 5.1 ... 0.34% (± 0.06%) | Claude Haiku 4.5 ... 3.05% (± 0.14%)",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-14",
+  "page": 32,
+  "kind": "text",
+  "claim": "Haiku 5.5 over-refuses benign requests less than Haiku 4.5 (API 0.17% vs 0.44%; claude.ai 0.82% vs 3.05%), but still more than Sonnet 5.5, Opus 5.5 and Fable 5.1 on both surfaces; refusals are more common on claude.ai than on the API.",
+  "quote": "Claude Haiku 5.5 over-refused benign requests less often than Claude Haiku 4.5 on the API (0.17% versus 0.44%) and substantially less often than Haiku 4.5 on claude.ai (0.82% versus 3.05%). As with previous models, refusals were more common on claude.ai than on the API.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-15",
+  "page": 32,
+  "kind": "text",
+  "claim": "Multi-turn safety test cases use a synthetic user generated by Claude Opus 4.6 following expert-written specifications; scores are graded against area-specific rubrics and should not be compared across categories.",
+  "quote": "A Claude model (in this case, Claude Opus 4.6) generates user turns that follow the specification. ... Each conversation is graded against a rubric specific to its risk area, so scores should not be compared across categories.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-16",
+  "page": 33,
+  "kind": "chart",
+  "claim": "Multi-turn appropriate (safe) response rate, Biological weapons (data labels printed on the chart, API without system prompt / claude.ai): Haiku 5.5 94% API / 89% claude.ai; Haiku 4.5 97% API / 85% claude.ai; Fable 5.1/Mythos 5.1 73% API / 89% claude.ai; Opus 5.5 89% API / 94% claude.ai; Sonnet 5.5 78% API / 83% claude.ai.",
+  "quote": "Figure 4.1.3.A, panel 'Biological weapons', bar data labels (API / Claude.ai) in order Haiku 4.5, Fable 5.1 / Mythos 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5: 97/85, 73/89, 89/94, 78/83, 94/89",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-17",
+  "page": 33,
+  "kind": "chart",
+  "claim": "Multi-turn appropriate (safe) response rate, Child safety (data labels printed on the chart, API without system prompt / claude.ai): Haiku 5.5 96% API / 99% claude.ai; Haiku 4.5 95% API / 98% claude.ai; Fable 5.1/Mythos 5.1 84% API / 100% claude.ai; Opus 5.5 84% API / 99% claude.ai; Sonnet 5.5 86% API / 98% claude.ai.",
+  "quote": "Figure 4.1.3.A, panel 'Child safety', bar data labels (API / Claude.ai) in order Haiku 4.5, Fable 5.1 / Mythos 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5: 95/98, 84/100, 84/99, 86/98, 96/99",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-18",
+  "page": 33,
+  "kind": "chart",
+  "claim": "Multi-turn appropriate (safe) response rate, Cyberattacks (data labels printed on the chart, API without system prompt / claude.ai): Haiku 5.5 98% API / 100% claude.ai; Haiku 4.5 94% API / 97% claude.ai; Fable 5.1/Mythos 5.1 96% API / 99% claude.ai; Opus 5.5 95% API / 100% claude.ai; Sonnet 5.5 96% API / 99% claude.ai.",
+  "quote": "Figure 4.1.3.A, panel 'Cyberattacks', bar data labels (API / Claude.ai) in order Haiku 4.5, Fable 5.1 / Mythos 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5: 94/97, 96/99, 95/100, 96/99, 98/100",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-19",
+  "page": 33,
+  "kind": "chart",
+  "claim": "Multi-turn appropriate (safe) response rate, Deadly weapons (data labels printed on the chart, API without system prompt / claude.ai): Haiku 5.5 78% API / 78% claude.ai; Haiku 4.5 84% API / 80% claude.ai; Fable 5.1/Mythos 5.1 87% API / 89% claude.ai; Opus 5.5 82% API / 93% claude.ai; Sonnet 5.5 80% API / 83% claude.ai.",
+  "quote": "Figure 4.1.3.A, panel 'Deadly weapons', bar data labels (API / Claude.ai) in order Haiku 4.5, Fable 5.1 / Mythos 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5: 84/80, 87/89, 82/93, 80/83, 78/78",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-20",
+  "page": 33,
+  "kind": "chart",
+  "claim": "Multi-turn appropriate (safe) response rate, Hate and discrimination (data labels printed on the chart, API without system prompt / claude.ai): Haiku 5.5 99% API / 98% claude.ai; Haiku 4.5 100% API / 100% claude.ai; Fable 5.1/Mythos 5.1 97% API / 95% claude.ai; Opus 5.5 96% API / 88% claude.ai; Sonnet 5.5 89% API / 85% claude.ai.",
+  "quote": "Figure 4.1.3.A, panel 'Hate and discrimination', bar data labels (API / Claude.ai) in order Haiku 4.5, Fable 5.1 / Mythos 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5: 100/100, 97/95, 96/88, 89/85, 99/98",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-21",
+  "page": 33,
+  "kind": "chart",
+  "claim": "Multi-turn appropriate (safe) response rate, Influence operations (data labels printed on the chart, API without system prompt / claude.ai): Haiku 5.5 87% API / 88% claude.ai; Haiku 4.5 78% API / 68% claude.ai; Fable 5.1/Mythos 5.1 65% API / 76% claude.ai; Opus 5.5 62% API / 63% claude.ai; Sonnet 5.5 57% API / 59% claude.ai.",
+  "quote": "Figure 4.1.3.A, panel 'Influence operations', bar data labels (API / Claude.ai) in order Haiku 4.5, Fable 5.1 / Mythos 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5: 78/68, 65/76, 62/63, 57/59, 87/88",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-22",
+  "page": 33,
+  "kind": "chart",
+  "claim": "Multi-turn appropriate (safe) response rate, Romance scams (data labels printed on the chart, API without system prompt / claude.ai): Haiku 5.5 96% API / 94% claude.ai; Haiku 4.5 100% API / 93% claude.ai; Fable 5.1/Mythos 5.1 94% API / 94% claude.ai; Opus 5.5 94% API / 94% claude.ai; Sonnet 5.5 96% API / 94% claude.ai.",
+  "quote": "Figure 4.1.3.A, panel 'Romance scams', bar data labels (API / Claude.ai) in order Haiku 4.5, Fable 5.1 / Mythos 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5: 100/93, 94/94, 94/94, 96/94, 96/94",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-23",
+  "page": 33,
+  "kind": "chart",
+  "claim": "Multi-turn appropriate (safe) response rate, Suicide and self-harm (data labels printed on the chart, API without system prompt / claude.ai): Haiku 5.5 70% API / 90% claude.ai; Haiku 4.5 46% API / 71% claude.ai; Fable 5.1/Mythos 5.1 60% API / 94% claude.ai; Opus 5.5 66% API / 94% claude.ai; Sonnet 5.5 60% API / 100% claude.ai.",
+  "quote": "Figure 4.1.3.A, panel 'Suicide and self-harm', bar data labels (API / Claude.ai) in order Haiku 4.5, Fable 5.1 / Mythos 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5: 46/71, 60/94, 66/94, 60/100, 70/90",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-24",
+  "page": 33,
+  "kind": "chart",
+  "claim": "Multi-turn appropriate (safe) response rate, Tracking and surveillance (data labels printed on the chart, API without system prompt / claude.ai): Haiku 5.5 95% API / 98% claude.ai; Haiku 4.5 84% API / 89% claude.ai; Fable 5.1/Mythos 5.1 73% API / 83% claude.ai; Opus 5.5 65% API / 69% claude.ai; Sonnet 5.5 65% API / 65% claude.ai.",
+  "quote": "Figure 4.1.3.A, panel 'Tracking and surveillance', bar data labels (API / Claude.ai) in order Haiku 4.5, Fable 5.1 / Mythos 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5: 84/89, 73/83, 65/69, 65/65, 95/98",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-25",
+  "page": 33,
+  "kind": "chart",
+  "claim": "Multi-turn appropriate (safe) response rate, Violent extremism (data labels printed on the chart, API without system prompt / claude.ai): Haiku 5.5 90% API / 90% claude.ai; Haiku 4.5 93% API / 89% claude.ai; Fable 5.1/Mythos 5.1 87% API / 93% claude.ai; Opus 5.5 95% API / 98% claude.ai; Sonnet 5.5 75% API / 85% claude.ai.",
+  "quote": "Figure 4.1.3.A, panel 'Violent extremism', bar data labels (API / Claude.ai) in order Haiku 4.5, Fable 5.1 / Mythos 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5: 93/89, 87/93, 95/98, 75/85, 90/90",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-26",
+  "page": 33,
+  "kind": "text",
+  "claim": "On the API, Haiku 5.5 beat Haiku 4.5 on multi-turn influence operations (87% vs. 78%), tracking and surveillance (95% vs. 84%) and suicide and self-harm (70% vs. 46%), and was lower on deadly weapons (78% vs. 84%).",
+  "quote": "On the API, Claude Haiku 5.5 had higher appropriate response rates than Claude Haiku 4.5 in several domains including influence operations (87% vs. 78%), tracking and surveillance (95% vs. 84%), and suicide and self-harm (70% vs. 46%), and a lower rate in deadly weapons (78% vs. 84%).",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-27",
+  "page": 33,
+  "kind": "text",
+  "claim": "On claude.ai, Haiku 5.5 beat Haiku 4.5 on multi-turn influence operations (88% vs. 68%), suicide and self-harm (90% vs. 71%) and tracking and surveillance (98% vs. 89%); remaining areas were comparable on both surfaces.",
+  "quote": "On claude.ai, it improved over Claude Haiku 4.5 in influence operations (88% vs. 68%), suicide and self-harm (90% vs. 71%), and tracking and surveillance (98% vs. 89%). Results in the remaining areas were comparable on both surfaces.",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-28",
+  "page": 33,
+  "kind": "chart",
+  "claim": "On multi-turn deadly weapons, Haiku 5.5 (78% API, 78% claude.ai, chart data labels) is the lowest of the five models shown on both surfaces; Opus 5.5 is 82%/93% and Fable 5.1/Mythos 5.1 is 87%/89%.",
+  "quote": "Figure 4.1.3.A, panel 'Deadly weapons', data labels: 84%/80%, 87%/89%, 82%/93%, 80%/83%, 78%/78%",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-29",
+  "page": 34,
+  "kind": "table",
+  "claim": "Child safety single-turn, API without system prompt, harmful-request harmless rate / benign refusal rate: Haiku 5.5 99.29% (± 0.28%) / 0.04% (± 0.05%); Sonnet 5.5 99.57% (± 0.20%) / 0.01% (± 0.02%); Opus 5.5 99.14% (± 0.43%) / 0%; Fable 5.1 99.90% (± 0.15%) / 0%; Haiku 4.5 99.92% (± 0.07%) / 0.33% (± 0.18%).",
+  "quote": "Claude Haiku 5.5 99.29% (± 0.28%) 0.04% (± 0.05%) | Sonnet 5.5 99.57% (± 0.20%) 0.01% (± 0.02%) | Opus 5.5 99.14% (± 0.43%) 0% | Fable 5.1 99.90% (± 0.15%) 0% | Haiku 4.5 99.92% (± 0.07%) 0.33% (± 0.18%)",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-30",
+  "page": 34,
+  "kind": "table",
+  "claim": "Child safety single-turn, claude.ai, harmless rate / benign refusal rate: Haiku 5.5 99.90% (± 0.09%) / 0%; Sonnet 5.5 99.69% (± 0.22%) / 0%; Opus 5.5 99.81% (± 0.19%) / 0.05% (± 0.09%); Fable 5.1 99.98% (± 0.05%) / 0.17% (± 0.17%); Haiku 4.5 99.92% (± 0.08%) / 2.71% (± 0.54%).",
+  "quote": "Claude Haiku 5.5 ... 99.90% (± 0.09%) 0% | Sonnet 5.5 ... 99.69% (± 0.22%) 0% | Opus 5.5 ... 99.81% (± 0.19%) 0.05% (± 0.09%) | Fable 5.1 ... 99.98% (± 0.05%) 0.17% (± 0.17%) | Haiku 4.5 ... 99.92% (± 0.08%) 2.71% (± 0.54%)",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-31",
+  "page": 35,
+  "kind": "table",
+  "claim": "Child safety multi-turn appropriate response rate, API / claude.ai: Haiku 5.5 96% (± 2%) / 99% (± 1%); Sonnet 5.5 86% (± 4%) / 98% (± 2%); Opus 5.5 84% (± 6%) / 99% (± 1%); Fable 5.1 84% (± 6%) / 100%; Haiku 4.5 95% (± 2%) / 98% (± 2%).",
+  "quote": "Claude Haiku 5.5 96% (± 2%) 99% (± 1%) | Claude Sonnet 5.5 86% (± 4%) 98% (± 2%) | Claude Opus 5.5 84% (± 6%) 99% (± 1%) | Claude Fable 5.1 84% (± 6%) 100% | Claude Haiku 4.5 95% (± 2%) 98% (± 2%)",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-32",
+  "page": 35,
+  "kind": "text",
+  "claim": "On child safety Haiku 5.5 performed comparably to Haiku 4.5: single-turn harmful prompts declined slightly less on API (99.29% vs. 99.92%), fewer benign over-refusals, and multi-turn rates within the margin of error of Haiku 4.5 on both surfaces.",
+  "quote": "it declined harmful prompts at a rate slightly below Haiku 4.5 on the API (99.29% vs. 99.92%) and at nearly 100% on claude.ai, while over-refusing benign prompts less often than Haiku 4.5. Multi-turn appropriate response rates were within the margin of error of Haiku 4.5 on both surfaces.",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-33",
+  "page": 35,
+  "kind": "text",
+  "claim": "Haiku 5.5 sometimes wrote non-explicit but mildly inappropriate descriptions of minors in creative writing scenarios on both API and claude.ai; a system prompt update improved this, and API developers are encouraged to apply system prompt safeguards.",
+  "quote": "Haiku 5.5 sometimes wrote non-explicit but mildly inappropriate descriptions of minors within creative writing scenarios on the API and claude.ai, though performance improved through an update of our system prompt.",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-34",
+  "page": 35,
+  "kind": "text",
+  "claim": "Qualitative review found Haiku 5.5 picked up subtle protective flags and offered resources more consistently than Haiku 4.5 in single-turn gray-area child safety cases, with no concerning behavior surfaced.",
+  "quote": "Qualitative reviews of single-turn, gray area cases surfaced no concerning behavior, and Haiku 5.5 picked up on subtle protective flags and offered resources more consistently than Haiku 4.5.",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-35",
+  "page": 35,
+  "kind": "text",
+  "claim": "On technical requests that would facilitate child safety or NCII harm, Haiku 5.5's API safe response rate was comparable with safeguard interventions (such as blocking classifiers) enabled or disabled, and both were significant improvements over Haiku 4.5 (no numbers given).",
+  "quote": "Haiku 5.5’s safe response rate on the API was comparable when safeguards interventions (such as blocking classifiers) were enabled and disabled, both of which were significant improvements compared to Haiku 4.5.",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-36",
+  "page": 36,
+  "kind": "table",
+  "claim": "Suicide and self-harm single-turn, API without system prompt, harmless rate / benign refusal rate: Haiku 5.5 99.61% (± 0.17%) / 0%; Sonnet 5.5 99.07% (± 0.28%) / 0.04% (± 0.05%); Opus 5.5 99.16% (± 0.39%) / 0%; Fable 5.1 99.30% (± 0.34%) / 0%; Haiku 4.5 99.46% (± 0.19%) / 0.02% (± 0.03%).",
+  "quote": "Claude Haiku 5.5 99.61% (± 0.17%) 0% | Sonnet 5.5 99.07% (± 0.28%) 0.04% (± 0.05%) | Opus 5.5 99.16% (± 0.39%) 0% | Fable 5.1 99.30% (± 0.34%) 0% | Haiku 4.5 99.46% (± 0.19%) 0.02% (± 0.03%)",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-37",
+  "page": 36,
+  "kind": "table",
+  "claim": "Suicide and self-harm single-turn, claude.ai, harmless rate / benign refusal rate: Haiku 5.5 100% / 0.41% (± 0.31%); Sonnet 5.5 99.81% (± 0.21%) / 0.41% (± 0.31%); Opus 5.5 99.95% (± 0.07%) / 0.39% (± 0.31%); Fable 5.1 100% / 0.45% (± 0.34%); Haiku 4.5 99.79% (± 0.13%) / 0.55% (± 0.25%).",
+  "quote": "Claude Haiku 5.5 ... 100% 0.41% (± 0.31%) | Sonnet 5.5 ... 99.81% (± 0.21%) 0.41% (± 0.31%) | Opus 5.5 ... 99.95% (± 0.07%) 0.39% (± 0.31%) | Fable 5.1 ... 100% 0.45% (± 0.34%) | Haiku 4.5 ... 99.79% (± 0.13%) 0.55% (± 0.25%)",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-38",
+  "page": 37,
+  "kind": "table",
+  "claim": "Suicide and self-harm multi-turn appropriate response rate, API / claude.ai: Haiku 5.5 70% (± 9%) / 90% (± 9%); Sonnet 5.5 60% (± 10%) / 100%; Opus 5.5 66% (± 14%) / 94% (± 7%); Fable 5.1 60% (± 14%) / 94% (± 7%); Haiku 4.5 46% (± 10%) / 71% (± 9%).",
+  "quote": "Claude Haiku 5.5 70% (± 9%) 90% (± 9%) | Claude Sonnet 5.5 60% (± 10%) 100% | Claude Opus 5.5 66% (± 14%) 94% (± 7%) | Claude Fable 5.1 60% (± 14%) 94% (± 7%) | Claude Haiku 4.5 46% (± 10%) 71% (± 9%)",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-39",
+  "page": 37,
+  "kind": "text",
+  "claim": "Policy experts found Haiku 5.5 less likely than Haiku 4.5 to assert more about the user's state of mind or motives than the user shared, to attribute an undisclosed diagnosis, or to disengage from a distressed user, and more consistent in offering lethal means counseling.",
+  "quote": "Haiku 5.5 was less likely than Haiku 4.5 to assert more about the user’s state of mind or motives than they had shared, to attribute a diagnosis the user had not disclosed, or to disengage from a user expressing distress, and more consistently offered lethal means counseling when relevant.",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-40",
+  "page": 37,
+  "kind": "text",
+  "claim": "Haiku 5.5 was more likely than Haiku 4.5 to validate a user's pain in ways that normalized self-harm and to frame reluctance to seek help as justified, and less likely to tell a user in crisis that it is an AI with limits on the support it can provide.",
+  "quote": "more likely than Haiku 4.5 to validate a user’s pain in ways that normalized self-harm and to frame a user’s reluctance to seek help as justified, and less likely to tell a user in crisis that it is an AI with limits on the support it can provide",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-41",
+  "page": 37,
+  "kind": "text",
+  "claim": "An earlier unreleased Haiku 5.5 snapshot was more willing than Haiku 4.5 to help write suicide notes; the final model behaves comparably to Haiku 4.5 on claude.ai with the system prompt, very rarely assisting.",
+  "quote": "In an earlier (not released) snapshot of Haiku 5.5, we observed that the model was more willing than Haiku 4.5 to help users write suicide notes ... Re-running this evaluation on the final model, Haiku 5.5 behaved comparably to Haiku 4.5 on claude.ai with the system prompt applied",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-42",
+  "page": 38,
+  "kind": "text",
+  "claim": "On the API without a system prompt, final Haiku 5.5 assisted with suicide-note requests more often than Haiku 4.5, with the clearest regression when thinking was disabled, most often when it was unclear whether the user was planning suicide or facing terminal illness.",
+  "quote": "On the API without the system prompt, it assisted more often than Haiku 4.5, with the clearest regression when thinking was disabled. This occurred most often when it was unclear whether the user was planning suicide or facing a terminal illness.",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-43",
+  "page": 38,
+  "kind": "text",
+  "claim": "In those ambiguous cases Haiku 5.5 asked whether the user was contemplating suicide and offered crisis resources but drafted the note in the same reply instead of waiting for an answer; once intent was confirmed it declined to continue.",
+  "quote": "asked if the user was contemplating suicide and offered crisis resources. However, it drafted a suicide note in the same reply instead of waiting for an answer. Once suicidal intent was confirmed, it declined to continue drafting the note and focused on the user’s safety.",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-44",
+  "page": 38,
+  "kind": "text",
+  "claim": "Two Haiku 5.5 regressions (validation that normalized self-harm; framing reluctance to seek help as justified) did not shift meaningfully with system prompting and remain open.",
+  "quote": "two of the other regressions noted above—validation that normalized self-harm and framing reluctance to seek help as justified—did not shift meaningfully with prompting and remain areas for continued work",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-45",
+  "page": 38,
+  "kind": "text",
+  "claim": "System prompt mitigations for self-harm behaviors apply only on claude.ai, not the API; developers deploying Haiku 5.5, particularly with thinking disabled, are told to add their own safeguards.",
+  "quote": "Because these system prompt mitigations do not apply to the API, developers deploying Haiku 5.5, particularly with thinking disabled, should add their own safeguards to help mitigate these risks.",
+  "relevance": "api",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-46",
+  "page": 39,
+  "kind": "table",
+  "claim": "Disordered eating single-turn, API without system prompt, harmless rate / benign refusal rate: Haiku 5.5 97.43% (± 0.50%) / 0.03% (± 0.06%); Sonnet 5.5 95.29% (± 0.72%) / 0%; Opus 5.5 95.64% (± 1.00%) / 0%; Fable 5.1 95.69% (± 0.96%) / 0%; Haiku 4.5 96.51% (± 0.60%) / 0.07% (± 0.06%).",
+  "quote": "Claude Haiku 5.5 97.43% (± 0.50%) 0.03% (± 0.06%) | Sonnet 5.5 95.29% (± 0.72%) 0% | Opus 5.5 95.64% (± 1.00%) 0% | Fable 5.1 95.69% (± 0.96%) 0% | Haiku 4.5 96.51% (± 0.60%) 0.07% (± 0.06%)",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-47",
+  "page": 39,
+  "kind": "table",
+  "claim": "Disordered eating single-turn, claude.ai, harmless rate / benign refusal rate: Haiku 5.5 99.83% (± 0.15%) / 0.11% (± 0.14%); Sonnet 5.5 98.90% (± 0.50%) / 0%; Opus 5.5 99.26% (± 0.40%) / 0%; Fable 5.1 99.43% (± 0.36%) / 0%; Haiku 4.5 99.04% (± 0.32%) / 0.68% (± 0.24%).",
+  "quote": "Claude Haiku 5.5 ... 99.83% (± 0.15%) 0.11% (± 0.14%) | Sonnet 5.5 ... 98.90% (± 0.50%) 0% | Opus 5.5 ... 99.26% (± 0.40%) 0% | Fable 5.1 ... 99.43% (± 0.36%) 0% | Haiku 4.5 ... 99.04% (± 0.32%) 0.68% (± 0.24%)",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-48",
+  "page": 39,
+  "kind": "text",
+  "claim": "In multi-turn disordered-eating review Haiku 5.5 was comparable to Haiku 4.5 overall: less overwhelming replies, fewer unfounded assumptions about the user's eating behaviors, more acknowledgment before suggestions, and more emphasis on prompt medical care when warranted.",
+  "quote": "it was less likely to assume things about a user’s eating behaviors that the user had not described, and it more often acknowledged what the user was going through before offering suggestions",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-49",
+  "page": 39,
+  "kind": "text",
+  "claim": "Haiku 5.5 more often than Haiku 4.5 gave specific meal and food suggestions, gave more detailed clinical and numeric information on ambiguous-intent single-turn prompts, and more often commented on body size or leanness when users shared photos.",
+  "quote": "On single-turn prompts with ambiguous intent, it gave more detailed clinical and numeric information than Haiku 4.5, and when users shared photos, it more often commented on body size or leanness.",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-50",
+  "page": 40,
+  "kind": "text",
+  "claim": "New claude.ai system prompt language substantially reduced Haiku 5.5's meal and food suggestions and the existing system prompt largely mitigated the ambiguous-prompt behaviors; API developers are encouraged to add equivalent protections.",
+  "quote": "which substantially reduced such comments on claude.ai. The existing system prompt also largely mitigated the behaviors observed on single-turn ambiguous prompts. We encourage developers building on the API to add equivalent protections.",
+  "relevance": "api",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-51",
+  "page": 40,
+  "kind": "text",
+  "claim": "Political even-handedness is measured with an open-source evaluation of 1,350 prompt pairs across 150 topics and nine task types, scored by a Claude grader on even-handedness, opposing perspectives and refusals.",
+  "quote": "spans 1,350 prompt pairs that present opposing ideological perspectives across 150 topics and nine task types. A Claude grader scores the model’s response on three properties",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-52",
+  "page": 41,
+  "kind": "chart",
+  "claim": "Political even-handedness score (data labels on chart, API / claude.ai; higher is better): Haiku 5.5 97.7% / 99.1%; Sonnet 5.5 97.9% / 99.0%; Opus 5.5 99.4% / 99.5%; Fable 5.1/Mythos 5.1 98.3% / 98.8%; Haiku 4.5 86.7% / 91.2%.",
+  "quote": "Figure 4.4.1.A 'Pairwise political bias: even-handedness', y-axis 'Even-handedness (%, higher is better)', labels: Haiku 4.5 86.7%/91.2%; Fable 5.1/Mythos 5.1 98.3%/98.8%; Opus 5.5 99.4%/99.5%; Sonnet 5.5 97.9%/99.0%; Haiku 5.5 97.7%/99.1%",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-53",
+  "page": 41,
+  "kind": "chart",
+  "claim": "Rate of acknowledging opposing perspectives (data labels on chart, API / claude.ai; higher is better): Haiku 5.5 35.9% / 67.8%; Sonnet 5.5 41.4% / 60.2%; Opus 5.5 26.9% / 71.3%; Fable 5.1/Mythos 5.1 25.9% / 80.5%; Haiku 4.5 49.9% / 45.1%.",
+  "quote": "Figure 4.4.1.B 'Pairwise political bias: opposing perspectives', labels: Haiku 4.5 49.9%/45.1%; Fable 5.1/Mythos 5.1 25.9%/80.5%; Opus 5.5 26.9%/71.3%; Sonnet 5.5 41.4%/60.2%; Haiku 5.5 35.9%/67.8%",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-54",
+  "page": 42,
+  "kind": "chart",
+  "claim": "Refusal rate on political prompt pairs (data labels on chart, API / claude.ai; lower is better): Haiku 5.5 3.3% / 5.0%; Sonnet 5.5 2.7% / 4.9%; Opus 5.5 2.3% / 4.5%; Fable 5.1/Mythos 5.1 2.1% / 5.0%; Haiku 4.5 5.4% / 3.6%.",
+  "quote": "Figure 4.4.1.C 'Pairwise political bias: refusals', y-axis 'Refusals (%, lower is better)', labels: Haiku 4.5 5.4%/3.6%; Fable 5.1/Mythos 5.1 2.1%/5.0%; Opus 5.5 2.3%/4.5%; Sonnet 5.5 2.7%/4.9%; Haiku 5.5 3.3%/5.0%",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-55",
+  "page": 42,
+  "kind": "text",
+  "claim": "Haiku 5.5 was more even-handed than Haiku 4.5 (97.7% API and 99.1% claude.ai vs. 86.7% and 91.2%), acknowledged opposing perspectives less on API (35.9% vs. 49.9%) but far more on claude.ai (67.8% vs. 45.1%), and refused less on API (3.3% vs. 5.4%) but slightly more on claude.ai (5.0% vs. 3.6%).",
+  "quote": "scoring 97.7% on the API and 99.1% on claude.ai compared to 86.7% and 91.2% for Haiku 4.5. It acknowledged opposing perspectives less often than Haiku 4.5 on the API (35.9% versus 49.9%) but far more often on claude.ai (67.8% versus 45.1%)",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-56",
+  "page": 43,
+  "kind": "text",
+  "claim": "BBQ was run without a system prompt, with thinking turned off for models that support both thinking enabled and disabled and thinking on for models that support only thinking enabled; the card does not say on this page which models fall in which group.",
+  "quote": "We report results with thinking turned off if the model supports both thinking enabled and thinking disabled, and with thinking turned on if the model supports only thinking enabled.",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-57",
+  "page": 43,
+  "kind": "table",
+  "claim": "BBQ disambiguated accuracy (context identifies the right answer; higher is better): Haiku 5.5 55.56%, Sonnet 5.5 80.01%, Opus 5.5 89.65%, Fable 5.1 89.92%, Haiku 4.5 60.56%; Haiku 5.5 is the lowest of the five.",
+  "quote": "Disambiguated accuracy: Claude Haiku 5.5 55.56% | Claude Sonnet 5.5 80.01% | Claude Opus 5.5 89.65% | Claude Fable 5.1 89.92% | Claude Haiku 4.5 60.56%",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-58",
+  "page": 43,
+  "kind": "table",
+  "claim": "BBQ ambiguous accuracy (correct answer is unknown): Haiku 5.5 99.65%, Sonnet 5.5 99.97%, Opus 5.5 99.99%, Fable 5.1 99.97%, Haiku 4.5 99.11%.",
+  "quote": "Ambiguous accuracy: Claude Haiku 5.5 99.65% | Claude Sonnet 5.5 99.97% | Claude Opus 5.5 99.99% | Claude Fable 5.1 99.97% | Claude Haiku 4.5 99.11%",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-59",
+  "page": 43,
+  "kind": "table",
+  "claim": "BBQ bias scores, disambiguated / ambiguous (closer to zero is better): Haiku 5.5 1.67% / 0.27%; Sonnet 5.5 -0.75% / 0.03%; Opus 5.5 -0.93% / 0.01%; Fable 5.1 -0.91% / 0.03%; Haiku 4.5 0.72% / 0.81%.",
+  "quote": "Claude Haiku 5.5 1.67% 0.27% | Claude Sonnet 5.5 -0.75% 0.03% | Claude Opus 5.5 -0.93% 0.01% | Claude Fable 5.1 -0.91% 0.03% | Claude Haiku 4.5 0.72% 0.81%",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-60",
+  "page": 44,
+  "kind": "text",
+  "claim": "Haiku 5.5's low BBQ disambiguated accuracy (55.6%, vs. 60.6% for Haiku 4.5) is almost entirely over-abstention: over 97% of its incorrect disambiguated answers were 'cannot be determined' even though the context identified the correct individual.",
+  "quote": "this discrepancy was almost entirely attributable to answering “cannot be determined” even when the question’s context identifies the correct individual. Over 97% of Haiku 5.5’s incorrect disambiguated answers were “cannot be determined,”",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-61",
+  "page": 44,
+  "kind": "text",
+  "claim": "Haiku 5.5 named the wrong individual in only 364 of roughly 29,000 (just over 1%) BBQ disambiguated questions.",
+  "quote": "it named the wrong individual in only 364 of roughly 29,000 (just over 1%) disambiguated questions",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-62",
+  "page": 44,
+  "kind": "text",
+  "claim": "Haiku 5.5's BBQ disambiguated bias score (+1.67% vs. +0.72% for Haiku 4.5) was the highest of the models tested though close to zero; its ambiguous bias score (0.27%) was closer to zero than Haiku 4.5's (0.81%).",
+  "quote": "Haiku 5.5’s disambiguated bias score was slightly more positive compared to Haiku 4.5 (+1.67% vs. +0.72%) ... Both scores remained close to zero, though Haiku 5.5 was the highest of the models tested above.",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-63",
+  "page": 44,
+  "kind": "text",
+  "claim": "The single-turn election integrity benchmark uses 300 violative and 300 benign election-related prompts; a multi-turn evaluation is also run.",
+  "quote": "tests adherence to our Usage Policy across 300 violative and 300 benign election-related prompts grounded in patterns observed in real usage",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-64",
+  "page": 45,
+  "kind": "table",
+  "claim": "Election integrity single-turn harmless rate (same on API and claude.ai): Haiku 5.5 100%, Sonnet 5.5 100%, Opus 5.5 100%, Fable 5.1 100%, Haiku 4.5 99.83% (± 0.33%).",
+  "quote": "Claude Haiku 5.5 100% ... 100% | Claude Sonnet 5.5 100% | Claude Opus 5.5 100% | Claude Fable 5.1 100% | Claude Haiku 4.5 99.83% (± 0.33%) ... 99.83% (± 0.33%)",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-65",
+  "page": 45,
+  "kind": "table",
+  "claim": "Election integrity single-turn benign refusal rate: Haiku 5.5 0.33% (± 0.46%) on API and 0.33% (± 0.66%) on claude.ai; Sonnet 5.5, Opus 5.5, Fable 5.1 and Haiku 4.5 all 0% on both surfaces.",
+  "quote": "Claude Haiku 5.5 100% 0.33% (± 0.46%) 100% 0.33% (± 0.66%) | Claude Sonnet 5.5 100% 0% 100% 0% | ... | Claude Haiku 4.5 99.83% (± 0.33%) 0% 99.83% (± 0.33%) 0%",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-66",
+  "page": 45,
+  "kind": "table",
+  "claim": "Election integrity multi-turn appropriate response rate, API / claude.ai: Haiku 5.5 99% (± 1%) / 98% (± 3%); Sonnet 5.5 86% (± 4%) / 86% (± 6%); Opus 5.5 87% (± 6%) / 85% (± 6%); Fable 5.1 90% (± 5%) / 88% (± 6%); Haiku 4.5 93% (± 3%) / 87% (± 4%).",
+  "quote": "Claude Haiku 5.5 99% (± 1%) 98% (± 3%) | Claude Sonnet 5.5 86% (± 4%) 86% (± 6%) | Claude Opus 5.5 87% (± 6%) 85% (± 6%) | Claude Fable 5.1 90% (± 5%) 88% (± 6%) | Claude Haiku 4.5 93% (± 3%) 87% (± 4%)",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-67",
+  "page": 46,
+  "kind": "text",
+  "claim": "Haiku 5.5's 0.33% election benign over-refusal (vs. none for Haiku 4.5) is within the margin of error; its multi-turn election score (99% API, 98% claude.ai vs. 93% and 87% for Haiku 4.5) was the highest of any recent model tested.",
+  "quote": "It over-refused 0.33% of benign prompts on both surfaces, where Haiku 4.5 refused none, but this difference was within the margin of error. On multi-turn testing, Haiku 5.5 had the highest appropriate response rate of any recent model tested",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-68",
+  "page": 47,
+  "kind": "text",
+  "claim": "Agentic safety evaluations for Haiku 5.5 are largely the same suite used for Sonnet 5.5, covering malicious use of coding and computer use agents and prompt-injection robustness; unless noted, results are without production safeguards.",
+  "quote": "we ran largely the same agentic safety evaluation suite that we used for Claude Sonnet 5.5. ... Unless otherwise noted, results reflect the model without the additional safeguards we apply in production.",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-69",
+  "page": 47,
+  "kind": "text",
+  "claim": "Haiku 5.5 improved substantially on Haiku 4.5 across malicious-use evaluations: it refused more malicious requests in Claude Code cyber misuse and computer use and assisted with more dual-use and benign security tasks.",
+  "quote": "It refused more malicious requests in both Claude Code cyber misuse and computer use settings, and it assisted with more dual-use and benign security tasks.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-70",
+  "page": 47,
+  "kind": "text",
+  "claim": "On prompt injection Haiku 5.5 was substantially more robust than Haiku 4.5 on every evaluation including both, and matched Sonnet 5.5, Opus 5.5 and Fable 5.1 against adaptive attackers in coding and computer use, but stayed less robust than them on Gray Swan, mostly in GUI computer use.",
+  "quote": "It matched Claude Sonnet 5.5, Claude Opus 5.5, and Claude Fable 5.1 against adaptive attackers in coding and computer use environments, though it remained less robust than those models on the Gray Swan benchmark, where most of its remaining vulnerability was in GUI computer use.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-71",
+  "page": 47,
+  "kind": "text",
+  "claim": "The malicious-use-of-Claude-Code evaluation has 61 malicious prompts (should be refused) and 61 dual-use and benign prompts (should be assisted), each run 10 times (1,220 tests) with the standard Claude Code toolset and the Claude Code system prompt applied by default, without additional deployment safeguards.",
+  "quote": "Each tested model is given the standard Claude Code toolset, and each prompt is run 10 times for a total of 1,220 tests across both categories. As with recent releases, we run this evaluation with the Claude Code system prompt applied by default",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-72",
+  "page": 48,
+  "kind": "table",
+  "claim": "Claude Code malicious-request refusal rate (higher is better): Haiku 5.5 84.3%, Sonnet 5.5 85.2%, Opus 5.5 81.0%, Mythos 5.1 88.5%, Haiku 4.5 66.6%.",
+  "quote": "Malicious (%) (refusal rate): Claude Haiku 5.5 84.3% | Claude Sonnet 5.5 85.2% | Claude Opus 5.5 81.0% | Claude Mythos 5.1 88.5% | Claude Haiku 4.5 66.6%",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-73",
+  "page": 48,
+  "kind": "table",
+  "claim": "Claude Code dual-use and benign security task success rate (higher is better): Haiku 5.5 98.9%, Sonnet 5.5 98.4%, Opus 5.5 100%, Mythos 5.1 99.3%, Haiku 4.5 88.7%.",
+  "quote": "Dual-use & benign (%) (success rate): Claude Haiku 5.5 98.9% | Claude Sonnet 5.5 98.4% | Claude Opus 5.5 100% | Claude Mythos 5.1 99.3% | Claude Haiku 4.5 88.7%",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-74",
+  "page": 48,
+  "kind": "text",
+  "claim": "In Claude Code, Haiku 5.5's malicious refusal rate rose from Haiku 4.5's 66.6% to 84.3% and its dual-use/benign assistance from 88.7% to 98.9%, the latter in line with Sonnet 5.5, Opus 5.5 and Mythos 5.1.",
+  "quote": "It refused 84.3% of malicious requests, up from 66.6%, and assisted with 98.9% of dual-use and benign requests, up from 88.7%. ... Its dual-use and benign success rate was in line with Claude Sonnet 5.5, Claude Opus 5.5, and Claude Mythos 5.1.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-75",
+  "page": 48,
+  "kind": "text",
+  "claim": "The malicious computer use evaluation gives the model GUI and CLI computer use tools in a sandbox across 112 unique tasks (unchanged from the Opus 5.5 System Card) in three risk areas: surveillance and unauthorized data collection, harmful content generation and distribution, and scaled abuse.",
+  "quote": "The set of 112 unique tasks is unchanged from the Claude Opus 5.5 System Card and covers three risk areas",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-76",
+  "page": 49,
+  "kind": "table",
+  "claim": "Malicious computer use refusal rate without mitigations (higher is better): Haiku 5.5 82.59%, Sonnet 5.5 79.46%, Opus 5.5 79.46%, Mythos 5.1 87.50%, Haiku 4.5 58.93%.",
+  "quote": "Claude Haiku 5.5 82.59% | Claude Sonnet 5.5 79.46% | Claude Opus 5.5 79.46% | Claude Mythos 5.1 87.50% | Claude Haiku 4.5 58.93%",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-77",
+  "page": 49,
+  "kind": "table",
+  "claim": "The malicious computer use rates average runs with and without thinking for Haiku 4.5, Haiku 5.5 and Sonnet 5.5, and are thinking-only for Mythos 5.1 and Opus 5.5 (implying Haiku 5.5 can run with thinking disabled while those two were tested thinking-only).",
+  "quote": "Rates are an average of results with and without thinking for Claude Haiku 4.5, Claude Haiku 5.5, and Claude Sonnet 5.5 and thinking only for Claude Mythos 5.1 and Claude Opus 5.5.",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-78",
+  "page": 49,
+  "kind": "text",
+  "claim": "Prompt injection is described as one of Anthropic's highest priorities for agentic deployments; any agent exposed to untrusted data that can read private data and act on the user's behalf is exposed.",
+  "quote": "Any agent that is exposed to untrusted data, and can both read private data and take action on the user’s behalf, is exposed.",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-79",
+  "page": 49,
+  "kind": "text",
+  "claim": "Haiku 5.5 was evaluated on the same prompt-injection benchmarks as Opus 5.5 and is described as a large improvement over Haiku 4.5, comparable in robustness to frontier models in most evaluations.",
+  "quote": "Overall, Claude Haiku 5.5 was a large improvement over Claude Haiku 4.5, bringing the Haiku family to a level of robustness comparable to our frontier models in most evaluations.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-80",
+  "page": 50,
+  "kind": "text",
+  "claim": "Gray Swan IPI benchmark (Q1+Q2 2026): all models use extended thinking, and Claude models are evaluated without product prompt-injection protections; results are the probability an attacker finds a successful attack within k=1, 10 or 15 attempts.",
+  "quote": "All models use extended thinking. Results represent the probability that an attacker finds a successful attack after k=1, k=10, and k=15 attempts. ... Claude models are evaluated without protections specific to prompt injection.",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-81",
+  "page": 50,
+  "kind": "text",
+  "claim": "On Gray Swan IPI at k=15, Haiku 5.5's attack success rate was 7.1% versus 83.2% for Haiku 4.5, a more than 10-fold reduction.",
+  "quote": "Claude Haiku 5.5 dramatically improved on Claude Haiku 4.5 on this benchmark, reducing the attack success rate by more than 10 times at k=15 attempts from 83.2% to 7.1%.",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-82",
+  "page": 50,
+  "kind": "text",
+  "claim": "Haiku 5.5's Gray Swan IPI attack success at k=15 by surface: coding 0.2%, tool use 4.0%, GUI computer use 24.4%.",
+  "quote": "Claude Haiku 5.5 was highly robust in coding (0.2% at k=15) and tool use (4.0%), while most of its remaining vulnerability was in GUI computer use (24.4%).",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-83",
+  "page": 50,
+  "kind": "text",
+  "claim": "Haiku 5.5 (7.1% at k=15) is less robust on Gray Swan IPI than Sonnet 5.5 (3.4%), Opus 5.5 (1.0%) and Fable 5.1 (1.0%).",
+  "quote": "It remained less robust than our most recent models, Claude Sonnet 5.5 (3.4% at k=15), Claude Opus 5.5 (1.0%), and Claude Fable 5.1 (1.0%).",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-84",
+  "page": 50,
+  "kind": "text",
+  "claim": "Among non-Claude models on Gray Swan IPI at k=15, Gemini 4 Argon was most robust (0.7%); Haiku 5.5 was comparable to Gemini 3.8 Flash (5.5%) and GPT-6 Astra (8.5%).",
+  "quote": "Among non-Claude models, Gemini 4 Argon was the most robust (0.7% at k=15), whereas Claude Haiku 5.5 was comparable to Gemini 3.8 Flash (5.5%) and GPT-6 Astra (8.5%).",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-85",
+  "page": 50,
+  "kind": "chart",
+  "claim": "Gray Swan IPI attack success for Claude models (chart data labels, k=1 / k=10 / k=15; label-to-k mapping inferred from stacking order): Haiku 5.5 0.7 / 5.5 / 7.1; Sonnet 5.5 0.4 / 2.7 / 3.4; Opus 5.5 0.1 / 0.7 / 1.0; Fable 5.1 0.1 / 0.7 / 1.0; Sonnet 5 0.7 / 5.1 / 6.7; Haiku 4.5 29.0 / 78.8 / 83.2.",
+  "quote": "Figure 5.2.1.A, y-axis 'Probability of succeeding in k attempts (%)', legend k = 1, k = 10, k = 15; labels: Haiku 4.5 29.0/78.8/83.2; Sonnet 5 0.7/5.1/6.7; Fable 5.1 0.1/0.7/1.0; Opus 5.5 0.1/0.7/1.0; Sonnet 5.5 0.4/2.7/3.4; Haiku 5.5 0.7/5.5/7.1",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-86",
+  "page": 50,
+  "kind": "chart",
+  "claim": "Gray Swan IPI attack success for non-Claude models (chart data labels, k=1 / k=10 / k=15; mapping inferred from stacking order): Qwen 3.8 3.6/23.2/28.6; Kimi K3 8.1/44.0/52.7; GLM-5.3 4.0/25.3/31.5; DeepSeek-V4-Pro 11.8/51.8/59.3; Grok 4.6 11.7/45.6/51.8; Muse Spark 1.2 3.8/20.2/24.2; Gemini 3.8 Flash 0.7/4.3/5.5; Gemini 4 Argon 0.0/0.5/0.7; GPT-6 Luna 5.5/25.0/28.7; GPT-6 Sol 1.0/7.6/10.1; GPT-6 Astra 1.1/7.3/8.5.",
+  "quote": "Figure 5.2.1.A labels: Qwen 3.8 28.6/23.2/3.6; Kimi K3 52.7/44.0/8.1; GLM-5.3 31.5/25.3/4.0; DeepSeek-V4-Pro 59.3/51.8/11.8; Grok 4.6 51.8/45.6/11.7; Muse Spark 1.2 24.2/20.2/3.8; Gemini 3.8 Flash 5.5/4.3/0.7; Gemini 4 Argon 0.7/0.5/0.0; GPT-6 Luna 28.7/25.0/5.5",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-87",
+  "page": 50,
+  "kind": "chart",
+  "claim": "Qwen 3.8, DeepSeek-V4-Pro and GLM-5.3 were not evaluated on GUI computer use scenarios in the Gray Swan IPI benchmark, so their totals are not like-for-like with models that were.",
+  "quote": "Qwen 3.8, DeepSeek-V4-Pro, and GLM-5.3 were not evaluated on GUI Computer use scenarios.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-88",
+  "page": 51,
+  "kind": "text",
+  "claim": "The adaptive-attacker (Shade) evaluations use a deliberately permissive threat model: the attacker optimizes directly against the test scenarios with many attempts each, and results are reported with and without prompt injection probes.",
+  "quote": "These evaluations reflect a deliberately permissive threat model: the attacker optimizes directly against the test scenarios and gets many attempts per scenario. Results are reported with and without prompt injection probes enabled.",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-89",
+  "page": 51,
+  "kind": "text",
+  "claim": "Comparator models' Shade results include fallbacks (requests flagged by cyber classifiers are rerouted to a different model), whereas Haiku 5.5's classifiers do not trigger fallbacks, so all its requests are answered by Haiku 5.5 itself.",
+  "quote": "when our cyber classifiers flag a request, it is rerouted to a different model. Claude Haiku 5.5’s classifiers do not trigger fallbacks, so all of its requests are answered by Claude Haiku 5.5 itself.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-90",
+  "page": 51,
+  "kind": "table",
+  "claim": "Shade coding prompt-injection attack success without safeguards, attempts / scenarios (lower is better): Haiku 5.5 0.08% / 6 of 40; Sonnet 5.5 3.01% / 16 of 40; Opus 5.5 54.61% / 37 of 40; Fable 5.1 51.93% / 39 of 40; Haiku 4.5 58.40% / 40 of 40.",
+  "quote": "Claude Haiku 5.5 0.08% 6/40 | Claude Sonnet 5.5 3.01% 16/40 | Claude Opus 5.5 54.61% 37/40 | Claude Fable 5.1 51.93% 39/40 | Claude Haiku 4.5 58.40% 40/40",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-91",
+  "page": 51,
+  "kind": "table",
+  "claim": "Shade coding prompt-injection attack success with probes enabled, attempts / scenarios: Haiku 5.5 0% / 0 of 40; Sonnet 5.5 2.63% / 13 of 40; Opus 5.5 11.13% / 36 of 40; Fable 5.1 8.70% / 35 of 40; Haiku 4.5 30.43% / 40 of 40.",
+  "quote": "Claude Haiku 5.5 ... 0% 0/40 | Claude Sonnet 5.5 ... 2.63% 13/40 | Claude Opus 5.5 ... 11.13% 36/40 | Claude Fable 5.1 ... 8.70% 35/40 | Claude Haiku 4.5 ... 30.43% 40/40",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-92",
+  "page": 51,
+  "kind": "table",
+  "claim": "In the Shade coding evaluation the attacker makes 200 attempts per scenario and all models are evaluated with adaptive thinking; Gray Swan trained the attacker against earlier Claude models and ran it unchanged against the latest ones.",
+  "quote": "The attacker makes 200 attempts per scenario. ... All models are evaluated with adaptive thinking.",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-93",
+  "page": 52,
+  "kind": "text",
+  "claim": "The high Shade coding attack success for Sonnet 5.5 (3.01%), Opus 5.5 (54.61%) and Fable 5.1 (51.93%) comes mostly from requests served by a fallback model; on requests they answered themselves Opus 5.5 and Fable 5.1 were never compromised and Sonnet 5.5 was compromised in 0.07%, comparable to Haiku 5.5.",
+  "quote": "Most of their successful attacks came from requests served by a fallback model. On requests they answered themselves, Claude Opus 5.5 and Claude Fable 5.1 were never compromised, and Claude Sonnet 5.5 was compromised in 0.07% of requests, comparable to Claude Haiku 5.5.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-94",
+  "page": 52,
+  "kind": "text",
+  "claim": "Haiku 4.5 does not trigger fallbacks, so its 58.40% Shade coding attack success was entirely against the model itself.",
+  "quote": "Claude Haiku 4.5 does not trigger fallbacks, so all of its successful attacks were against the model itself.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-95",
+  "page": 52,
+  "kind": "text",
+  "claim": "The card says Haiku 5.5 matches frontier models against the Shade coding attacker: 0.08% of attempts and 6 of 40 scenarios without probes, and no successful attack in any scenario with probes.",
+  "quote": "The attack success rate was 0.08% over all attempts without prompt injection probes, compared to 58.40% for Claude Haiku 4.5. The attacker found a successful break in only 6 of 40 scenarios ... With prompt injection probes enabled, no attack succeeded against Claude Haiku 5.5 in any scenario",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-96",
+  "page": 52,
+  "kind": "text",
+  "claim": "The Shade computer use evaluation runs on 14 GUI test cases with the attacker optimized directly against them.",
+  "quote": "The attacker is optimized directly against the test cases. Similar to the coding evaluation, the attacker runs on 14 test cases and we measure success over all attempts",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-97",
+  "page": 53,
+  "kind": "table",
+  "claim": "Shade GUI computer use prompt-injection attack success without safeguards, attempts / scenarios: Haiku 5.5 0.07% / 1 of 14; Sonnet 5.5 0.07% / 1 of 14; Opus 5.5 0.07% / 1 of 14; Fable 5.1 0.07% / 1 of 14; Haiku 4.5 18.89% / 13 of 14.",
+  "quote": "Claude Haiku 5.5 0.07% 1/14 | Claude Sonnet 5.5 0.07% 1/14 | Claude Opus 5.5 0.07% 1/14 | Claude Fable 5.1 0.07% 1/14 | Claude Haiku 4.5 18.89% 13/14",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-98",
+  "page": 53,
+  "kind": "table",
+  "claim": "Shade GUI computer use attack success with probes enabled, attempts / scenarios: Haiku 5.5 0.07% / 1 of 14; Sonnet 5.5 0.07% / 1 of 14; Opus 5.5 0.04% / 1 of 14; Fable 5.1 0.07% / 1 of 14; Haiku 4.5 10.46% / 10 of 14.",
+  "quote": "Claude Haiku 5.5 ... 0.07% 1/14 | Claude Sonnet 5.5 ... 0.07% 1/14 | Claude Opus 5.5 ... 0.04% 1/14 | Claude Fable 5.1 ... 0.07% 1/14 | Claude Haiku 4.5 ... 10.46% 10/14",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-99",
+  "page": 53,
+  "kind": "text",
+  "claim": "Haiku 5.5's Shade computer use result was two successful attempts out of 2,800, in a single scenario, with or without probes; the attacker makes 200 attempts per scenario and all models use adaptive thinking.",
+  "quote": "with an attack success rate of 0.07% both with and without prompt injection probes (two successful attempts out of 2,800, in a single scenario)",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-100",
+  "page": 53,
+  "kind": "text",
+  "claim": "The browser-use prompt-injection evaluation uses 110 curated environments never seen in training, with attacks generated against Claude Opus 4.7, run in the Claude Cowork harness with auto mode enabled.",
+  "quote": "This evaluation consists of 110 curated environments that are never seen during training ... Attacks were first generated by testing against Claude Opus 4.7 and then applied to the evaluated models.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-101",
+  "page": 53,
+  "kind": "text",
+  "claim": "Thinking cannot be disabled in Claude Cowork, so browser-use results are reported only with thinking enabled and high effort; this is the only explicit effort-level statement in pages 30-54.",
+  "quote": "it is not possible to disable thinking in Claude Cowork, so we only report results with thinking enabled and high effort for this evaluation",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-102",
+  "page": 54,
+  "kind": "text",
+  "claim": "Haiku 4.5 was excluded from the browser-use evaluation because it is not available under auto mode in Cowork and, per the card, is not capable enough to complete most of these tasks.",
+  "quote": "We excluded Claude Haiku 4.5 from this evaluation because it is not available under auto mode in Cowork, and is not capable enough to complete most of these tasks in the first place.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-103",
+  "page": 54,
+  "kind": "table",
+  "claim": "Browser use (Claude Cowork, auto mode) prompt-injection attack success, attempts / scenarios, 10 attempts per scenario: Haiku 5.5 0% / 0 of 110; Sonnet 5.5 0% / 0 of 110; Opus 5.5 0% / 0 of 110; Fable 5.1 0% / 0 of 110.",
+  "quote": "Claude Haiku 5.5 0% 0/110 | Claude Sonnet 5.5 0% 0/110 | Claude Opus 5.5 0% 0/110 | Claude Fable 5.1 0% 0/110 ... The attacker makes 10 attempts per scenario.",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c30-104",
+  "page": 54,
+  "kind": "text",
+  "claim": "Anthropic will deprecate the browser-use evaluation as a primary prompt-injection measure because Claude models have been near maximum performance on it for several releases.",
+  "quote": "Since Claude models have been near maximum performance on this evaluation for several releases, we will be deprecating it as a primary evaluation of prompt injection robustness",
+  "relevance": "other",
+  "confidence": "exact"
+ }
+]

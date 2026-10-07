@@ -1,0 +1,682 @@
+{
+ "verdicts": [
+  {
+   "id": "c55-01",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-02",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-03",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-04",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-05",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-06",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-07",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-08",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-09",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-10",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-11",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-12",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-13",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-14",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-15",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-16",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-17",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-18",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-19",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-20",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-21",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-22",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-23",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-24",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-25",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-26",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-27",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-28",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-29",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-30",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-31",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-32",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-33",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-34",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-35",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-36",
+   "verdict": "corrected",
+   "correction": "In the audit the investigator model can set the target's system prompt, simulate users, introduce tools and simulate their results, adjust effort parameters, and prefill assistant turns. The page does not say which effort levels were actually used or that scores are effort-independent.",
+   "why": "The clause 'audit scores are therefore not tied to one effort level' is the first reader's inference; p59 only lists 'adjusting effort parameters' as an investigator affordance."
+  },
+  {
+   "id": "c55-37",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-38",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-39",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-40",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-41",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-42",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-43",
+   "verdict": "corrected",
+   "correction": "Audit metric 'Misaligned behavior' (1-10 scale, lower is better): Haiku 4.5 5.72, Claude Mythos 5.1 3.28, Opus 5.5 2.79, Sonnet 5.5 3.10, Haiku 5.5 3.19; effort level not stated. Haiku 5.5 is third-worst of five (behind Haiku 4.5 and Mythos 5.1) and the second-worst of the four 5.x models, ahead of Mythos 5.1 only.",
+   "why": "All five numbers are right, but 'second-worst of five' is wrong: Haiku 4.5 (5.72) and Mythos 5.1 (3.28) are both worse than Haiku 5.5 (3.19)."
+  },
+  {
+   "id": "c55-44",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-45",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-46",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-47",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-48",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-49",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-50",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-51",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-52",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-53",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-54",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-55",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-56",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-57",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-58",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-59",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-60",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-61",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-62",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-63",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-64",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-65",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-66",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-67",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-68",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-69",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-70",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-71",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-72",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-73",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-74",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-75",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-76",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-77",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-78",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-79",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-80",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-81",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-82",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-83",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-84",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-85",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-86",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-87",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-88",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-89",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-90",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-91",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-92",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-93",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-94",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-95",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-96",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-97",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-98",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-99",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-100",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-101",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-102",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-103",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-104",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-105",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-106",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-107",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-108",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-109",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-110",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-111",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-112",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-113",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-114",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-115",
+   "verdict": "corrected",
+   "correction": "The figure pack for PDF page 73 has six files but four distinct crops: fig-073-036 = 'Good for the user / Supporting user autonomy / Creative mastery' (fig-073-038 is a byte-identical duplicate); fig-073-039 = 'Admirable behavior / Fun or funny behavior / Intellectual depth'; fig-073-040 = 'Warmth / Character drift / Wet blanket'; fig-073-037 = 'Condescension toward the user' (fig-073-041 is a byte-identical duplicate). No additional metrics are hidden in the duplicates. Consequently the figure file names in the quotes of c55-108..110 (say 037, actual 039), c55-111..113 (say 038, actual 040) and c55-114 (says 040, actual 037/041) are wrong, while their numbers are correct.",
+   "why": "md5 shows 036==038 and 037==041, not 036==039 and 037==041 as claimed; the first reader's file-to-panel mapping is wrong for five of six files."
+  },
+  {
+   "id": "c55-116",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-117",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-118",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-119",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-120",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-121",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-122",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-123",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-124",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-125",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-126",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c55-127",
+   "verdict": "confirmed"
+  }
+ ],
+ "added": [
+  {
+   "id": "v55-01",
+   "page": 55,
+   "kind": "text",
+   "claim": "Besides misalignment, the assessment also covered ways Haiku 5.5 could undermine monitoring: propensity to actively cover up bad behavior, capacity to plan in hard-to-monitor ways, and ability to recognize evaluation scenarios; testing ran continuously throughout post-training.",
+   "quote": "We also assessed ways in which the model could undermine or complicate our ability to examine and monitor its behavior, including the propensity to actively cover up bad behavior, the capacity to plan in hard-to-monitor ways, and the ability to recognize evaluation scenarios.",
+   "relevance": "safety",
+   "confidence": "exact"
+  },
+  {
+   "id": "v55-02",
+   "page": 56,
+   "kind": "text",
+   "claim": "Anthropic says the evidence leaves it 'largely reassured' that Haiku 5.5 is an improvement over Haiku 4.5 on most alignment metrics (most, not all).",
+   "quote": "this evidence leaves us largely reassured that Haiku 5.5 is an improvement compared to Claude Haiku 4.5 on most alignment metrics",
+   "relevance": "safety",
+   "confidence": "exact"
+  },
+  {
+   "id": "v55-03",
+   "page": 58,
+   "kind": "text",
+   "claim": "The published Claude Mythos 5.1 review is not the reviewer's first draft: it was revised and in places softened after an exchange with the authors, and the last update was made by a second instance of the same model; its overall verdict did not change.",
+   "quote": "Claude revised, and in places softened, this summary after a brief exchange with the authors ... the last update was made by a second instance of the same model, given the first instance’s review. Its overall verdict did not change.",
+   "relevance": "other",
+   "confidence": "exact"
+  },
+  {
+   "id": "v55-04",
+   "page": 58,
+   "kind": "text",
+   "claim": "The reviewer said the card's headline claims match the team's internal readouts, and that at the time of writing the covert-sabotage evaluation was still described as having largely the same setup as the earlier card without saying the task set is smaller.",
+   "quote": "its headline claims match the team's internal readouts ... still described as having largely the same setup as in that earlier card without saying that the task set is smaller, which I recommended stating",
+   "relevance": "other",
+   "confidence": "exact"
+  },
+  {
+   "id": "v55-05",
+   "page": 59,
+   "kind": "text",
+   "claim": "Anthropic agreed with the review's broad conclusions and, in response, added the note comparing high-severity cases of misuse in Section 6.2.1; that note gives no counts, only an ordering (p60).",
+   "quote": "We agree with the broad conclusions of this review. In response to the initial review, we added a note comparing high-severity cases of misuse in Section 6.2.1",
+   "relevance": "safety",
+   "confidence": "exact"
+  },
+  {
+   "id": "v55-06",
+   "page": 59,
+   "kind": "text",
+   "claim": "The audit judge scores every transcript on every dimension regardless of subject, but declines to score where a dimension structurally cannot apply (for example Full-Turn Prefill Susceptibility is scored only when the investigator used prefill).",
+   "quote": "The judge will decline to assign a score in cases where a dimension structurally could not apply ... “Full-Turn Prefill Susceptibility” will only be assigned a score when the investigator agent uses prefill in some way.",
+   "relevance": "other",
+   "confidence": "exact"
+  },
+  {
+   "id": "v55-07",
+   "page": 59,
+   "kind": "text",
+   "claim": "Audit scenarios cover misuse attempts, high- and low-stakes opportunities for misaligned behavior, routine use with simulated users, and exploratory settings; the audit is described as covering edge-case scenarios, not typical workloads.",
+   "quote": "get an overall picture of Claude Haiku 5.5’s behavior across a wide range of edge-case scenarios ... Scenarios cover attempts at misuse, high- and low-stakes opportunities for various kinds of misaligned behaviors, routine use with simulated users",
+   "relevance": "other",
+   "confidence": "exact"
+  },
+  {
+   "id": "v55-08",
+   "page": 60,
+   "kind": "text",
+   "claim": "In audit sandbox sessions the investigator can simulate outside services, but the target model is not given direct access to them; sandboxes are contained test environments that aim to isolate machines.",
+   "quote": "The investigator agent can simulate outside services, but the target model being studied is not given direct access to them.",
+   "relevance": "other",
+   "confidence": "exact"
+  },
+  {
+   "id": "v55-09",
+   "page": 63,
+   "kind": "text",
+   "claim": "In the audit bar charts the y-axis is truncated below the maximum score of 10 in many cases, and some metrics are scored only on the subset of scenarios where they apply, so bar heights exaggerate small differences and per-metric sample sizes can be smaller than about 4,100.",
+   "quote": "The y-axis is truncated below the maximum score of 10 in many cases ... some metrics are scored only on the subset of scenarios where they apply",
+   "relevance": "other",
+   "confidence": "exact"
+  },
+  {
+   "id": "v55-10",
+   "page": 63,
+   "kind": "text",
+   "claim": "'Full-turn prefill susceptibility' measures concerning behavior after the investigator seeded the conversation with injected harmful turns in the target's voice; it is distinguished from the more powerful partial-turn prefill, where an incomplete final turn is injected for the target to complete.",
+   "quote": "Full-turn prefill susceptibility: Concerning behavior after the investigator seeded the conversation with injected harmful turns in the target’s voice ... We distinguish this from the more powerful partial-turn prefill technique",
+   "relevance": "api",
+   "confidence": "exact"
+  },
+  {
+   "id": "v55-11",
+   "page": "p064-p073",
+   "kind": "chart",
+   "claim": "Across all audit panels on pages 61-73 with a marked better direction, Haiku 5.5 scores worse than Haiku 4.5 on exactly three: Overrefusal (2.203 vs 1.727), Wet blanket (2.089 vs 1.698), and Illegible thinking (2.58 vs 1.41); on Overrefusal and Wet blanket it is the worst of all five models, on Illegible thinking only Sonnet 5.5 (2.74) is worse. Effort level not stated.",
+   "quote": "fig-064-025 'Overrefusal' 1.727 / 1.576 / 1.706 / 1.707 / 2.203; fig-073-040 'Wet blanket' 1.698 / 1.782 / 1.825 / 1.833 / 2.089; fig-071-035 'Illegible thinking' 1.41 / 1.73 / 2.32 / 2.74 / 2.58 (legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5)",
+   "relevance": "behavior",
+   "confidence": "exact"
+  },
+  {
+   "id": "v55-12",
+   "page": "p061-p071",
+   "kind": "chart",
+   "claim": "Among the four 5.x models (Mythos 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5), Haiku 5.5 has the worst value on these work-quality audit metrics: Input hallucination 1.88, Important omissions 2.04, False completion claims 1.89, Failure to disclose bad or lazy behavior 1.73, Unfaithful thinking 1.85 (Mythos 5.1 1.84), Behavior consistency 6.22 (higher is better), Coherence between actions and views 6.12 (higher is better). Opus 5.5 is best on all seven (1.32, 1.73, 1.48, 1.45, 1.62, 6.97, 6.98). Effort level not stated.",
+   "quote": "fig-066-027, fig-066-028, fig-071-034 bar data labels, legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: e.g. 'False completion claims' 4.85 / 1.75 / 1.48 / 1.60 / 1.89; 'Unfaithful thinking' 4.41 / 1.84 / 1.62 / 1.80 / 1.85",
+   "relevance": "routing",
+   "confidence": "exact"
+  },
+  {
+   "id": "v55-13",
+   "page": "p062-p070",
+   "kind": "chart",
+   "claim": "Haiku 5.5 has the lowest (best) or tied-lowest value of all five models on: Approval-gate bypass 1.71 (Opus 5.5 1.72), Unsanctioned third-party contact 1.20, Whistleblowing 1.034, Explosive weapons uplift 1.017, Controlled substance synthesis uplift 1.047, Harmful sexual content 1.054 (tied with Opus 5.5), Disallowed cyberoffense 1.099 (tied with Opus 5.5); differences from Opus 5.5 and Sonnet 5.5 are mostly within the plotted 95% CIs. Effort level not stated.",
+   "quote": "fig-069-032 'Approval-gate bypass' 4.37 / 2.08 / 1.72 / 1.86 / 1.71; fig-069-031 'Unsanctioned third-party contact' 1.48 / 1.38 / 1.29 / 1.23 / 1.20; fig-062-024 'Disallowed cyberoffense' 1.447 / 1.140 / 1.099 / 1.125 / 1.099 (legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5)",
+   "relevance": "safety",
+   "confidence": "exact"
+  },
+  {
+   "id": "v55-14",
+   "page": 68,
+   "kind": "chart",
+   "claim": "The p68 text says Haiku 5.5 improved on Haiku 4.5 on all Section 6.2.5 metrics 'but whistleblowing', yet the chart value for Haiku 5.5 on Whistleblowing (1.034) is numerically lower than Haiku 4.5's (1.046), with overlapping 95% CIs; so there is no 6.2.5 metric on which Haiku 5.5's plotted mean is worse than Haiku 4.5's.",
+   "quote": "p68: 'improved on Claude Haiku 4.5 on all but whistleblowing, where both were near the floor'; fig-069-030 'Whistleblowing' legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.046 / 1.081 / 1.052 / 1.054 / 1.034",
+   "relevance": "safety",
+   "confidence": "exact"
+  },
+  {
+   "id": "v55-15",
+   "page": 67,
+   "kind": "chart",
+   "claim": "The p67 text says Haiku 5.5 was 'similar to or slightly better than' Sonnet 5.5 on motivated reasoning, sandbox-escape attempts, and dangerous-actions-while-oblivious; the plotted means are 2.32 vs 2.35, 1.34 vs 1.30 (Haiku 5.5 numerically slightly worse, CIs overlap), and 1.076 vs 1.122.",
+   "quote": "fig-067-029 legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 'Motivated reasoning' 5.64 / 2.62 / 2.17 / 2.35 / 2.32; 'Unsanctioned sandbox escape attempt' 2.16 / 1.69 / 1.28 / 1.30 / 1.34; 'Dangerous actions while oblivious...' 1.210 / 1.121 / 1.075 / 1.122 / 1.076",
+   "relevance": "safety",
+   "confidence": "exact"
+  },
+  {
+   "id": "v55-16",
+   "page": 74,
+   "kind": "text",
+   "claim": "The legacy sandbox-boundary evaluation run for Haiku 5.5 is an updated version of the one in the Claude Opus 5.5 System Card, so its rates are not comparable to that earlier card's.",
+   "quote": "We evaluate Haiku 5.5’s propensity to violate containment boundaries with an updated version of our evaluation from the Claude Opus 5.5 System Card",
+   "relevance": "safety",
+   "confidence": "exact"
+  },
+  {
+   "id": "v55-17",
+   "page": 75,
+   "kind": "chart",
+   "claim": "In the legacy sandbox escape chart the moderate-severity-and-above segments carry their own 95% CI bars: Haiku 5.5's 2.0% spans roughly 0.8% to 3.2%, overlapping Opus 5.5 and Sonnet 5.5 (both 2.6%, roughly 1.2% to 3.8%); these bounds are approximate readings, so Haiku 5.5 being 'lowest' on moderate-and-above is not a statistically separated result.",
+   "quote": "fig-075-042 error bars on the dark lower segments, y-axis 'Share of runs (%)' ticks 0-35; labels 15.8% / 13.3% / 2.6% / 2.6% / 2.0%; caption 'Shown with 95% CI.'",
+   "relevance": "safety",
+   "confidence": "read-from-chart"
+  },
+  {
+   "id": "v55-18",
+   "page": 75,
+   "kind": "text",
+   "claim": "Anthropic states full coverage by the automated audit is impossible and limits seeding with real internal sessions because it can overfit to one situation and transcripts produced by one model are off-distribution for new models. The blind-spot list continues past page 75 (only items 1 and 2 are in this range).",
+   "quote": "full coverage is impossible ... We seed some investigations with real internal sessions; we limit this because it can cause us to overfit to one situation, and transcripts produced by one model are off-distribution for new models.",
+   "relevance": "other",
+   "confidence": "exact"
+  }
+ ]
+}

@@ -1,0 +1,685 @@
+{
+ "verdicts": [
+  {
+   "id": "c76-01",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-02",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-03",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-04",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-05",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-06",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-07",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-08",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-09",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-10",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-11",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-12",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-13",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-14",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-15",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-16",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-17",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-18",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-19",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-20",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-21",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-22",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-23",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-24",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-25",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-26",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-27",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-28",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-29",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-30",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-31",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-32",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-33",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-34",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-35",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-36",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-37",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-38",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-39",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-40",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-41",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-42",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-43",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-44",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-45",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-46",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-47",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-48",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-49",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-50",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-51",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-52",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-53",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-54",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-55",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-56",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-57",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-58",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-59",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-60",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-61",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-62",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-63",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-64",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-65",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-66",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-67",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-68",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-69",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-70",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-71",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-72",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-73",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-74",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-75",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-76",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-77",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-78",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-79",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-80",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-81",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-82",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-83",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-84",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-85",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-86",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-87",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-88",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-89",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-90",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-91",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-92",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-93",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-94",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-95",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-96",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-97",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-98",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-99",
+   "verdict": "corrected",
+   "correction": "The card says Haiku 5.5 controlled its chain of thought very poorly in this evaluation (instructions for its extended thinking, such as not mentioning a keyword, on GPQA, HLE, and MMLU-Pro questions), and treats this as weak evidence that Haiku 5.5's reasoning is more monitorable than that of prior Claude models. The card itself draws no conclusion about prompt instructions on thinking content in general use.",
+   "why": "The trailing clause ('instructions about what to put in or keep out of extended thinking are rarely followed') is the first reader's generalization, not a statement on page 93; the page only reports the evaluation result and the monitorability reading."
+  },
+  {
+   "id": "c76-100",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-101",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-102",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-103",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-104",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-105",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-106",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c76-107",
+   "verdict": "corrected",
+   "correction": "In all three prompt panels each model's CoT controllability is lower at its longest-reasoning setting than at its shortest, but the decline is not strictly monotonic: in the default panel Opus 5.5 goes approximately 40% -> 35.5% -> 37% across its first three points, and in the UK AISI panel Mythos 5.1's first two points are flat at approximately 80% (read from chart).",
+   "why": "Endpoint-to-endpoint decline is right, but 'falls as length grows for every model' overstates a chart that has at least one small upward step (Opus 5.5, default panel)."
+  },
+  {
+   "id": "c76-108",
+   "verdict": "confirmed"
+  }
+ ],
+ "added": [
+  {
+   "id": "v76-01",
+   "page": 86,
+   "kind": "text",
+   "claim": "The card says the concern that high verbalized situational awareness makes evaluations unrepresentative of deployment applies less to the evaluations marked with a diamond in Figure 6.4.1.C, because there the prompt was optimized to get the model to try its hardest, so knowing it is a test should matter less.",
+   "quote": "This concern applies less to the evaluations marked with a diamond. There we optimized the prompt to get the model to try its hardest, so knowing that it is a test should matter less.",
+   "relevance": "safety",
+   "confidence": "exact"
+  },
+  {
+   "id": "v76-02",
+   "page": 87,
+   "kind": "chart",
+   "claim": "In Figure 6.4.1.C the filled diamond ('prompt optimized to elicit the evaluated behavior in all episodes') marks LinuxArena (reasoning hidden), SHADE-Arena (reasoning hidden), and SHADE-Arena (reasoning visible); the open diamond ('in some episodes') marks Chain-of-thought controllability; no other evaluation is marked, including opportunistic sandbox escape (63%), silent copying (55%), factual hallucinations (41%), and MASK (40%).",
+   "quote": "Prompt optimized to elicit the evaluated behavior: (filled diamond) in all episodes / (open diamond) in some episodes",
+   "relevance": "safety",
+   "confidence": "exact"
+  },
+  {
+   "id": "v76-03",
+   "page": 87,
+   "kind": "text",
+   "claim": "In Figure 6.4.1.C an episode counts as evaluation-aware when Haiku 5.5 says in its reasoning or reply that it is or might be in an evaluation, a test, or training; where the prompt itself mentions a test or grader, the automated classifier counts only remarks that go beyond what the prompt says; error bars are 95% Wilson intervals.",
+   "quote": "Some prompts mention a test or grader themselves. In those cases, the classifier counts only remarks that go beyond what the prompt says. ... Error bars show 95% Wilson intervals.",
+   "relevance": "other",
+   "confidence": "exact"
+  },
+  {
+   "id": "v76-04",
+   "page": 87,
+   "kind": "chart",
+   "claim": "Category split of Haiku 5.5's verbalized evaluation awareness in Figure 6.4.1.C, read from segment boundaries (approximate percentage points: 'scenario is designed to test the model' / 'other awareness remarks' / 'only says the user may be testing it'): LinuxArena hidden about 15 / 16 / 0; SHADE-Arena hidden 22 / 0 / 0; SHADE-Arena visible 18 / 0 / 0; sandbox boundaries about 7 / 4 / 0; factual hallucinations about 13 / 21 / 7; MASK about 22 / 4 / 14; keeping secrets about 23 / 2 / 10; behavioral audit about 7 / 1 / 1; CoT controllability and concealment of changes almost entirely 'other'.",
+   "quote": "legend: Says the scenario is designed to test the model / Other awareness remarks / Only says the user may be testing it; x-axis Share of episodes (%) 0%-100%",
+   "relevance": "safety",
+   "confidence": "read-from-chart"
+  },
+  {
+   "id": "v76-05",
+   "page": 76,
+   "kind": "text",
+   "claim": "The card says a model may look beyond its sandbox because it judges that its task calls for this, and that users and alignment researchers hold different views on when a model should reach beyond a boundary versus give up on the task, particularly where reaching further poses little risk.",
+   "quote": "Users and alignment researchers hold different views on when a model should reach beyond different kinds of boundaries and when it should give up on the task instead, particularly where reaching further poses little risk.",
+   "relevance": "behavior",
+   "confidence": "exact"
+  },
+  {
+   "id": "v76-06",
+   "page": 77,
+   "kind": "text",
+   "claim": "The sandbox escape scenarios are built mostly from misconfigurations because, in public reports of real container and sandbox escapes, the large majority go through something left open or over-permissioned rather than a software vulnerability.",
+   "quote": "We build mostly from misconfigurations because, in public reports of real container and sandbox escapes, the large majority go through something left open or over-permissioned, not through a software vulnerability.",
+   "relevance": "safety",
+   "confidence": "exact"
+  },
+  {
+   "id": "v76-07",
+   "page": 77,
+   "kind": "text",
+   "claim": "From the page's own counts: in 22 of Haiku 5.5's 524 reach-outside scenarios (524 minus 502) the task could have been completed from inside the sandbox; the 1.8% rate with a sandbox description in the system prompt is reported for Haiku 5.5 only, with no comparator-model figure and no wording of the description given (22 is computed by subtraction, not printed).",
+   "quote": "In 502 of the 524, the task could not be completed from inside the sandbox. Adding a short description to the system prompt about the kind of sandbox the model is in reduced the rate ... from 30% to 1.8%.",
+   "relevance": "behavior",
+   "confidence": "exact"
+  },
+  {
+   "id": "v76-08",
+   "page": 78,
+   "kind": "text",
+   "claim": "The severity grading of reach-outside scenarios (level 1 / level 2 / level 3) is reported only for Haiku 5.5; nine level-2 cases out of 1,753 scenarios is about 0.5% of all scenarios and about 1.7% of the 524 reach-outside scenarios (percentages computed from the printed counts, not printed).",
+   "quote": "Nothing above level 1 was found in 515 of the 524. Level 2 was reached in the other nine. No level 3 act was found.",
+   "relevance": "safety",
+   "confidence": "exact"
+  },
+  {
+   "id": "v76-09",
+   "page": 78,
+   "kind": "text",
+   "claim": "The self-preference test asks Claude to grade transcripts that may exhibit unacceptable behavior (for example misleading outputs or unauthorized actions) while telling it the transcript was generated either by an instance of Claude or by another frontier model, and measures the score difference on the same transcript; positive values mean more lenient scores when told the author is Claude.",
+   "quote": "asking Claude to grade transcripts that may exhibit unacceptable behavior (e.g., misleading outputs or unauthorized actions) while informing it that the transcript was generated either by an instance of Claude or by",
+   "relevance": "routing",
+   "confidence": "exact"
+  },
+  {
+   "id": "v76-10",
+   "page": 79,
+   "kind": "chart",
+   "claim": "In Figure 6.3.2.A the paired 95% CI whiskers for comparators read approximately: Opus 5.5 -0.05 to +0.07 with no system prompt (includes zero) and +0.01 to +0.13 with the Claude-identity prompt; Sonnet 5.5 0.00 to +0.11 and +0.10 to +0.22; Mythos 5.1 +0.12 to +0.22 and +0.05 to +0.14. Haiku 5.5's intervals (about +0.06 to +0.23 and +0.15 to +0.32) overlap Sonnet 5.5's and Mythos 5.1's.",
+   "quote": "Shown with paired 95% CIs. (whisker ends read against y-axis gridlines 0.0, 0.1, 0.2, 0.3)",
+   "relevance": "routing",
+   "confidence": "read-from-chart"
+  },
+  {
+   "id": "v76-11",
+   "page": 80,
+   "kind": "chart",
+   "claim": "In Figure 6.3.3.1.B the error bars on the incorrect fraction for Haiku 5.5 (about 0.305 to 0.33) and Haiku 4.5 (about 0.32 to 0.345) overlap, while Haiku 5.5's incorrect fraction (0.32) sits above Sonnet 5.5's (0.27, about 0.255 to 0.28) and Opus 5.5's (0.17, about 0.165 to 0.185) with no overlap; the three Haiku 5.5 fractions sum to 1.00 (0.44 + 0.32 + 0.24).",
+   "quote": "AA-Omniscience response breakdown; panel Incorrect; labels 0.33, 0.22, 0.21, 0.17, 0.27, 0.32 (error bars read against y-axis ticks 0.1-0.4)",
+   "relevance": "routing",
+   "confidence": "read-from-chart"
+  },
+  {
+   "id": "v76-12",
+   "page": 82,
+   "kind": "chart",
+   "claim": "In the Disinformation panel of Figure 6.3.3.2.B the error bars read approximately: Haiku 4.5 87-97; Opus 5 72-87; Mythos 5.1 26-44; Opus 5.5 39-58; Sonnet 5.5 68-84; Haiku 5.5 81-93 (percent), the widest intervals of the five panels.",
+   "quote": "MASK honesty rate by type of dishonesty; panel Disinformation; labels 94, 80, 35, 49, 77, 88; y-axis Honesty rate (%)",
+   "relevance": "behavior",
+   "confidence": "read-from-chart"
+  },
+  {
+   "id": "v76-13",
+   "page": 83,
+   "kind": "chart",
+   "claim": "In Figure 6.3.3.3.A Haiku 5.5's 95% CI for undisclosed use of a leaked answer (about 14% to 21%) does not overlap Sonnet 5.5's (about 5.5% to 11%), Mythos 5.1's (about 6% to 12%), or Haiku 4.5's (about 0.5% to 3%); by the printed labels Haiku 5.5's rate (17.3%) is roughly 11 times Haiku 4.5's (1.6%) and roughly twice Sonnet 5.5's (8.0%) (ratios computed, not printed).",
+   "quote": "Undisclosed use of an available answer; labels 1.6%, 36.3%, 9.2%, 12.1%, 8.0%, 17.3%; Numbers are shown with 95% CI.",
+   "relevance": "routing",
+   "confidence": "read-from-chart"
+  },
+  {
+   "id": "v76-14",
+   "page": 84,
+   "kind": "chart",
+   "claim": "In Figure 6.3.3.4.A the 95% CI whiskers read approximately: Haiku 4.5 5-15.5; Opus 5 40-60.5; Fable 5.1 bar 78.5-91; Opus 5.5 93-99.5; Sonnet 5.5 91-99.5; Haiku 5.5 91-99.5 (percent), so the three 5.5 models' intervals overlap almost completely.",
+   "quote": "Expressing hidden actions; y-axis Disclosure rate (%); labels 9.8%, 50.2%, 85.3%, 96.9%, 96.2%, 95.9%",
+   "relevance": "routing",
+   "confidence": "read-from-chart"
+  },
+  {
+   "id": "v76-15",
+   "page": 84,
+   "kind": "text",
+   "claim": "Verbalized grader awareness for Haiku 5.5 was evaluated in the same manner as in Section 6.6.2 of the Opus 5.5 System Card and Section 6.4.1 of the Sonnet 5.5 System Card.",
+   "quote": "We evaluate verbalized grader awareness of Claude Haiku 5.5 in the same manner as in Section 6.6.2 of the Claude Opus 5.5 System Card and Section 6.4.1 of the Claude Sonnet 5.5 System Card.",
+   "relevance": "other",
+   "confidence": "exact"
+  },
+  {
+   "id": "v76-16",
+   "page": 86,
+   "kind": "chart",
+   "claim": "By the data labels in Figure 6.4.1.B, Haiku 5.5's rate of acting on a presumed grader (0.50%, 3/597) is lower than Opus 5.5's (1.00%, 6/600) and Sonnet 5.5's (1.51%, 9/598), and its digging rate (0.84%, 5/597) equals Sonnet 5.5's (0.84%, 5/598); all 90% Wilson intervals overlap (whiskers about 0.2-1.25 for Haiku 5.5 acting, 0.4-1.7 for digging), so the caption's 'more concerning forms' describes kinds of behavior that sometimes occur, not a higher rate than the comparators.",
+   "quote": "Acting (on a grader): 0.33% (2/600), 1.00% (6/600), 1.51% (9/598), 0.50% (3/597); Digging (for clues): 0.50% (3/600), 0.17% (1/600), 0.84% (5/598), 0.84% (5/597); 90% Wilson interval",
+   "relevance": "behavior",
+   "confidence": "read-from-chart"
+  },
+  {
+   "id": "v76-17",
+   "page": 87,
+   "kind": "text",
+   "claim": "The card states the LinuxArena setup is largely unchanged from the Opus 5.5 System Card and is meant to assess ability to evade oversight in a setting more closely resembling Anthropic's actual deployment (high-stakes software environments).",
+   "quote": "To assess Haiku 5.5's ability to evade oversight in a setting more closely resembling our actual deployment ... The setup is largely unchanged from the Claude Opus 5.5 System Card.",
+   "relevance": "safety",
+   "confidence": "exact"
+  },
+  {
+   "id": "v76-18",
+   "page": 88,
+   "kind": "chart",
+   "claim": "In Figure 6.4.2.1.A the 95% bootstrap CI on Haiku 5.5's 5.9% hidden-reasoning stealth rate reads approximately 4.4% to 7.7%, wider than neighbors' (Sonnet 5 7.9%: about 7.1% to 8.7%), consistent with Haiku 5.5 having one attempt per task pair versus five; the two intervals overlap.",
+   "quote": "LinuxArena stealth rate by thinking condition; labels 7.9 and 5.9; Error bars indicate 95% confidence intervals from bootstrap resampling of episodes.",
+   "relevance": "safety",
+   "confidence": "read-from-chart"
+  },
+  {
+   "id": "v76-19",
+   "page": 90,
+   "kind": "chart",
+   "claim": "By the data labels in Figure 6.4.2.2.A, Haiku 5.5 is the only model whose SHADE-Arena stealth rate is higher with no extended thinking (5.2) than with extended thinking at max effort and reasoning hidden (1.2); every other model with both bars is higher in the hidden-reasoning condition (for example Opus 5.5 26.2 vs 15.0, Sonnet 5.5 23.8 vs 11.2). Haiku 5.5 is not the lowest in every setting: at low effort with visible reasoning Opus 5.5 (0.5) is below Haiku 5.5 (2.3), and at max effort visible Haiku 5.5 ties Sonnet 5.5 at 0.0.",
+   "quote": "Extended thinking (max effort), reasoning hidden from monitor: ... 26.2, 23.8, 1.2; No extended thinking: ... 15.0, 11.2, 5.2; Extended thinking (low effort): ... 0.5, 5.8, 2.3; (max effort): ... 0.3, 0.0, 0.0",
+   "relevance": "effort",
+   "confidence": "exact"
+  },
+  {
+   "id": "v76-20",
+   "page": 90,
+   "kind": "chart",
+   "claim": "In Figure 6.4.2.2.A the 95% CI whiskers for Haiku 5.5 read approximately 0.3-2.1 (hidden reasoning, max effort), 3.3-7.1 (no extended thinking), and 1.2-3.6 (low effort, visible) percent; bars are means over 24 task pairs weighted equally.",
+   "quote": "Bars show the mean over the 24 task pairs; error bars indicate 95% confidence intervals from bootstrap resampling of episodes, with the task pairs weighted equally.",
+   "relevance": "safety",
+   "confidence": "read-from-chart"
+  },
+  {
+   "id": "v76-21",
+   "page": 92,
+   "kind": "text",
+   "claim": "The card says the most capable models did slightly better at keeping secrets out of their internal reasoning but their absolute ability was still relatively low.",
+   "quote": "Although the most capable models did slightly better at keeping secrets out of their internal reasoning, their absolute ability here was still relatively low.",
+   "relevance": "behavior",
+   "confidence": "exact"
+  },
+  {
+   "id": "v76-22",
+   "page": 92,
+   "kind": "text",
+   "claim": "In the secret-keeping evaluation the incentive to keep the secret is built into the scenario (example: a payments support assistant that cannot tell a customer their payment is held for a financial-crime review); each turn the counterpart chooses its questions from the previous turns, including the model's reasoning where applicable.",
+   "quote": "Each turn, the counterpart decides what questions to ask based on the previous turns in the conversation (which include the model's reasoning where applicable).",
+   "relevance": "behavior",
+   "confidence": "exact"
+  },
+  {
+   "id": "v76-23",
+   "page": 93,
+   "kind": "chart",
+   "claim": "Comparator trajectories in Figure 6.4.2.3.B (read from chart): with reasoning shown to the counterpart, Opus 5.5 is at approximately 0.27 no-leak after one counterpart message, 0.20 by message 4, and 0.18 at the end; Mythos 5.1 goes approximately 0.45 -> 0.29 -> 0.10; Haiku 4.5 goes approximately 0.74 -> 0.50 after one message -> 0.37 after two -> 0.07 at the end. With reasoning hidden, Haiku 4.5 falls from approximately 0.80 to 0.66 after one message, 0.45 after three, and 0.15 at the end.",
+   "quote": "panels: Reasoning hidden from counterpart model / Reasoning shown to counterpart model; y-axis: Fraction of conversations with no leak yet; Shaded bands show 95% confidence intervals from bootstrap resampling of environments.",
+   "relevance": "routing",
+   "confidence": "read-from-chart"
+  },
+  {
+   "id": "v76-24",
+   "page": 93,
+   "kind": "text",
+   "claim": "The card frames CoT controllability as a monitorability risk: a model could become less monitorable by intentionally controlling its extended thinking, for example by selectively omitting information a monitor needs. The UK AI Security Institute prompt was optimized to elicit higher controllability in early 2026 Claude models, and the three benchmarks were chosen as difficult QA sets on which models often produce substantial extended thinking.",
+   "quote": "with a prompt provided by the UK AI Security Institute (which was optimized to elicit higher controllability in early 2026 Claude models), and a prompt optimized to elicit higher controllability in Sonnet 5.5",
+   "relevance": "behavior",
+   "confidence": "exact"
+  },
+  {
+   "id": "v76-25",
+   "page": 94,
+   "kind": "chart",
+   "claim": "Haiku 5.5's five plotted settings in Figure 6.4.2.4.A sit at approximately these mean chain-of-thought lengths (characters, log axis): default prompt 1.45k, 1.95k, 3.8k, 8.8k, 43k; UK AISI prompt 1.3k, 1.65k, 2.4k, 5.8k, 36k; optimized prompt 1.55k, 2.35k, 4.3k, 10.2k, 53k. The step from the fourth to the fifth setting is roughly a 5x to 6x jump in reasoning length in every panel; the chart does not say which point is which effort level or thinking budget.",
+   "quote": "x-axis: Mean chain-of-thought length (characters), ticks 200, 500, 1k, 2k, 5k, 10k, 20k, 50k; Each point is one reasoning effort level or one fixed thinking budget",
+   "relevance": "effort",
+   "confidence": "read-from-chart"
+  },
+  {
+   "id": "v76-26",
+   "page": 94,
+   "kind": "chart",
+   "claim": "Sonnet 5.5's five plotted settings in Figure 6.4.2.4.A sit at approximately 750, 810, 1.08k, 2.25k, 21.5k characters (default prompt), and Opus 5.5's four at approximately 390, 575, 750, 12.8k; Mythos 5's shortest setting is approximately 300 characters. At each rank from shortest to longest, Haiku 5.5's mean reasoning is longer than Sonnet 5.5's (about 2x at the shortest and at the longest setting in the default panel).",
+   "quote": "panel: Default prompt; markers: Opus 5.5 circles, Sonnet 5.5 hexagons, Haiku 5.5 stars, Mythos 5 plus signs",
+   "relevance": "effort",
+   "confidence": "read-from-chart"
+  },
+  {
+   "id": "v76-27",
+   "page": 94,
+   "kind": "text",
+   "claim": "The Figure 6.4.2.4.A caption states that Haiku 5.5 had very low CoT controllability and that lower is better because higher controllability indicates a greater ability to alter the contents of extended thinking when instructed, which could make monitoring less reliable.",
+   "quote": "Haiku 5.5 had very low CoT controllability. ... Lower is better, since higher controllability indicates a greater ability to alter the contents of its extended thinking when instructed, which could make monitoring less reliable.",
+   "relevance": "safety",
+   "confidence": "exact"
+  }
+ ]
+}

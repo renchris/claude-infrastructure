@@ -1,0 +1,45 @@
+== cc-upgrade-gate ==
+  binary:   /Users/chrisren/.claude-293/node_modules/.bin/claude (2.1.293)
+  model:    claude-haiku-5-5
+  accounts: next next2 next4
+  spawn:    live (#7/#8/#9 exercised)
+
+  ✓ #01 binary-registers — modelUsage carries claude-haiku-5-5, is_error=false (registered, no demotion)
+  · #02 entitlement — next: entitled for claude-haiku-5-5
+  · #02 entitlement — next2: entitled for claude-haiku-5-5
+  · #02 entitlement — next4: entitled for claude-haiku-5-5
+  ✓ #02 entitlement — every present account entitled for claude-haiku-5-5: next next2 next4
+  ✓ #03 automode-resolution — auto-mode drove a tool turn on claude-haiku-5-5: is_error=false, no demotion, permission_denials=[], result~GATE_OK
+  ✓ #04 effort-ladder — effort ladder accepted on claude-haiku-5-5: low medium high(+model) xhigh max
+  ✓ #05 launcher-resolution — claude passes --model claude-opus-5-5 + --effort high + --permission-mode auto + SPAWN_DEPTH=1 (effect-read of child argv/env)
+  ✓ #06 spawn-depth-containment — SPAWN_DEPTH=1 reaches the binary via BOTH surfaces (launcher + gate_headless) — #68619 runaway contained
+  ✓ #07 teams-spawn — teammate ran (TEAMMATE_OK in result) + modelUsage carries claude-haiku-5-5 (no demotion)
+  ✓ #08 workflow-run — workflow agent ran (WF_OK in result) + modelUsage carries claude-haiku-5-5 (non-null journal result)
+  ✓ #09 subagent-run — subagent ran + returned (SUBAGENT_OK in result) + modelUsage carries claude-haiku-5-5 (no demotion)
+  ✓ #10 hooks-fire — binary fires CC lifecycle hooks (SessionStart=yes Stop=yes, session ok) + repo hook scripts parse clean
+  ✓ #11 permission-nonblock — auto-mode did NOT block a benign command: is_error=false, permission_denials=[], result~BENIGN_OK
+  ✓ #12 resume-routing — cc routes a resumable session to the claude launcher (--resume gatesid123)
+  ✓ #13 mcp-reachability — MCP tool list resolves on the candidate: 7 server(s) ✔ Connected
+  ○ #14 authstore-writeloss — write-loss window still open, unchanged from the 2.1.220 baseline (known-open upstream, not an upgrade blocker)
+  ✓ #15 spawn-depth-effect — binary refuses at depth >= max (inclusive, 0-based root) — SPAWN_DEPTH=1 yields a FLAT topology
+
+── summary ─────────────────────────────────────────────
+  ✓ # 1 binary-registers           modelUsage carries claude-haiku-5-5, is_error=false (registered, no demotion)
+  ✓ # 2 entitlement                every present account entitled for claude-haiku-5-5: next next2 next4
+  ✓ # 3 automode-resolution        auto-mode drove a tool turn on claude-haiku-5-5: is_error=false, no demotion, permission_denials=[], result~GATE_OK
+  ✓ # 4 effort-ladder              effort ladder accepted on claude-haiku-5-5: low medium high(+model) xhigh max
+  ✓ # 5 launcher-resolution        claude passes --model claude-opus-5-5 + --effort high + --permission-mode auto + SPAWN_DEPTH=1 (effect-read of child argv/env)
+  ✓ # 6 spawn-depth-containment    SPAWN_DEPTH=1 reaches the binary via BOTH surfaces (launcher + gate_headless) — #68619 runaway contained
+  ✓ # 7 teams-spawn                teammate ran (TEAMMATE_OK in result) + modelUsage carries claude-haiku-5-5 (no demotion)
+  ✓ # 8 workflow-run               workflow agent ran (WF_OK in result) + modelUsage carries claude-haiku-5-5 (non-null journal result)
+  ✓ # 9 subagent-run               subagent ran + returned (SUBAGENT_OK in result) + modelUsage carries claude-haiku-5-5 (no demotion)
+  ✓ #10 hooks-fire                 binary fires CC lifecycle hooks (SessionStart=yes Stop=yes, session ok) + repo hook scripts parse clean
+  ✓ #11 permission-nonblock        auto-mode did NOT block a benign command: is_error=false, permission_denials=[], result~BENIGN_OK
+  ✓ #12 resume-routing             cc routes a resumable session to the claude launcher (--resume gatesid123)
+  ✓ #13 mcp-reachability           MCP tool list resolves on the candidate: 7 server(s) ✔ Connected
+  ○ #14 authstore-writeloss        write-loss window still open, unchanged from the 2.1.220 baseline (known-open upstream, not an upgrade blocker)
+  ✓ #15 spawn-depth-effect         binary refuses at depth >= max (inclusive, 0-based root) — SPAWN_DEPTH=1 yields a FLAT topology
+────────────────────────────────────────────────────────
+  14 pass · 0 fail · 1 skip
+  VERDICT: GREEN  (claude-haiku-5-5 on /Users/chrisren/.claude-293/node_modules/.bin/claude 2.1.293)
+  ⇒ ALL GREEN. Ways of working hold — safe to activate (see the cc-upgrade skill, gate.md).

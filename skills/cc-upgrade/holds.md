@@ -74,6 +74,20 @@ Pre-audit of the 2.1.285–2.1.289 band (2026-10-03, no MANIFEST row yet; eviden
   fleet skill relies on `allowed-tools`. #99130, mods served off remotely, matches our own
   `tengu_plugin_hooks_modules:false` reading. Nothing else filed that day touches this fleet.
 
+**CORRECTED (2026-10-07): the band was audited and the fleet target is 2.1.293** (MANIFEST rows
+2.1.285–2.1.293; evidence `docs/research/haiku55-upgrade-2026-10-07/`). State at that row: #84974,
+#85497 and #85764 closed NOT_PLANNED (closures, not fixes); #85264 #85015 #84224 #97888 #97763
+#97687 #99353 #99130 #99932 open. Answers to the pre-audit bullets above: the background Bash
+deadline on 2.1.293 applies to headless sessions only and is **10 minutes for a one-shot `-p`**, 30
+for streaming headless, unless the call passes a `timeout` (binary read; the changelog says only
+30); the per-agent token budget (#99932) is advisory, Agent-tool only, off on all four accounts,
+and `CLAUDE_CODE_RIPPLING_TULIP=0` disables it; resume through the symlinked
+`~/.claude-next/projects` works on 2.1.293 (#98899 does not reproduce); `tests/pane-modal.bats`
+was run by the audit, a live stacked-prompt capture was not. Cautions to re-check next audit: the
+`haiku` alias and the small/fast helper model now mean Haiku 5.5 (a `model: "haiku"` spawn inherits
+the lead's effort); Haiku 5.5 is outside the native read-before-write set; WebSearch's per-session
+stop refills at 100 per hour; the background-job rails were measured on 2.1.284 internals.
+
 🚨 **The ceiling that was REMOVED is the load-bearing one** (historical: 2.1.224 deleted the
 200-subagent-per-session cap). It reads as a feature in the changelog ("long-running sessions no
 longer refuse new agents") and is therefore filed under improvements, not risks — so grep the

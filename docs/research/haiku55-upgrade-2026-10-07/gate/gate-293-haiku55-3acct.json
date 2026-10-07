@@ -1,0 +1,124 @@
+{
+  "gate": "cc-upgrade-gate",
+  "binary": "/Users/chrisren/.claude-293/node_modules/.bin/claude",
+  "binary_version": "2.1.293",
+  "model": "claude-haiku-5-5",
+  "accounts": [
+    "next",
+    "next2",
+    "next4"
+  ],
+  "verdict": "GREEN",
+  "counts": {
+    "pass": 14,
+    "fail": 0,
+    "skip": 1
+  },
+  "checks": [
+    {
+      "check": 1,
+      "slug": "binary-registers",
+      "status": "PASS",
+      "evidence": "modelUsage carries claude-haiku-5-5, is_error=false (registered, no demotion)",
+      "detail": "modelUsage={\"claude-haiku-5-5\":{\"inputTokens\":2,\"outputTokens\":4,\"cacheReadInputTokens\":13269,\"cacheCreationInputTokens\":36846,\"webSearchRequests\":0,\"costUSD\":0.00750409,\"contextWindow\":1000000,\"maxOutputTokens\":128000,\"thinkingTokens\":0,\"canonicalModel\":\"claude-haiku-5-5\",\"provider\":\"firstParty\",\"costBasis\":\"list\"}}"
+    },
+    {
+      "check": 2,
+      "slug": "entitlement",
+      "status": "PASS",
+      "evidence": "every present account entitled for claude-haiku-5-5: next next2 next4",
+      "detail": "entitled=[next next2 next4] skipped=[]"
+    },
+    {
+      "check": 3,
+      "slug": "automode-resolution",
+      "status": "PASS",
+      "evidence": "auto-mode drove a tool turn on claude-haiku-5-5: is_error=false, no demotion, permission_denials=[], result~GATE_OK",
+      "detail": "result=GATE_OK num_turns=2"
+    },
+    {
+      "check": 4,
+      "slug": "effort-ladder",
+      "status": "PASS",
+      "evidence": "effort ladder accepted on claude-haiku-5-5: low medium high(+model) xhigh max",
+      "detail": "modelUsage={\"claude-haiku-5-5\":{\"inputTokens\":2,\"outputTokens\":4,\"cacheReadInputTokens\":13269,\"cacheCreationInputTokens\":36845,\"webSearchRequests\":0,\"costUSD\":0.007503890000000001,\"contextWindow\":1000000,\"maxOutputTokens\":128000,\"thinkingTokens\":0,\"canonicalModel\":\"claude-haiku-5-5\",\"provider\":\"firstParty\",\"costBasis\":\"list\"}}"
+    },
+    {
+      "check": 5,
+      "slug": "launcher-resolution",
+      "status": "PASS",
+      "evidence": "claude passes --model claude-opus-5-5 + --effort high + --permission-mode auto + SPAWN_DEPTH=1 (effect-read of child argv/env)",
+      "detail": "consolidation intact: all 25 retired launcher names absent; claude-prev present"
+    },
+    {
+      "check": 6,
+      "slug": "spawn-depth-containment",
+      "status": "PASS",
+      "evidence": "SPAWN_DEPTH=1 reaches the binary via BOTH surfaces (launcher + gate_headless) \u2014 #68619 runaway contained",
+      "detail": "launcher child env SPAWN_DEPTH=1; common.sh gate_headless exports the guard"
+    },
+    {
+      "check": 7,
+      "slug": "teams-spawn",
+      "status": "PASS",
+      "evidence": "teammate ran (TEAMMATE_OK in result) + modelUsage carries claude-haiku-5-5 (no demotion)",
+      "detail": "modelUsage={\"claude-haiku-5-5\":{\"inputTokens\":4,\"outputTokens\":981,\"cacheReadInputTokens\":67061,\"cacheCreationInputTokens\":41818,\"webSearchRequests\":0,\"costUSD\":0.009525110000000003,\"contextWindow\":1000000,\"maxOutputTokens\":128000,\"thinkingTokens\":598,\"canonicalModel\":\"claude-haiku-5-5\",\"provider\":\"firstParty\",\"costBasis\":\"list\"},\"claude-opus-5-5\":{\"inputTokens\":4,\"outputTokens\":145,\"cacheReadInputTokens\":43558,\"cacheCreationInputTokens\":44990,\"webSearchRequests\":0,\"costUSD\":0.23657759999999997,\"contextWindow\":1000000,\"maxOutputTokens\":128000,\"thinkingTokens\":0,\"canonicalModel\":\"claude-opus-5-5\",\"provider\":\"firstParty\",\"costBasis\":\"list\"}}"
+    },
+    {
+      "check": 8,
+      "slug": "workflow-run",
+      "status": "PASS",
+      "evidence": "workflow agent ran (WF_OK in result) + modelUsage carries claude-haiku-5-5 (non-null journal result)",
+      "detail": "modelUsage={\"claude-haiku-5-5\":{\"inputTokens\":10,\"outputTokens\":396,\"cacheReadInputTokens\":188024,\"cacheCreationInputTokens\":91623,\"webSearchRequests\":0,\"costUSD\":0.017179214999999998,\"contextWindow\":1000000,\"maxOutputTokens\":128000,\"thinkingTokens\":109,\"canonicalModel\":\"claude-haiku-5-5\",\"provider\":\"firstParty\",\"costBasis\":\"list\"}}"
+    },
+    {
+      "check": 9,
+      "slug": "subagent-run",
+      "status": "PASS",
+      "evidence": "subagent ran + returned (SUBAGENT_OK in result) + modelUsage carries claude-haiku-5-5 (no demotion)",
+      "detail": "modelUsage={\"claude-haiku-5-5\":{\"inputTokens\":8,\"outputTokens\":359,\"cacheReadInputTokens\":121356,\"cacheCreationInputTokens\":83755,\"webSearchRequests\":0,\"costUSD\":0.014979035000000002,\"contextWindow\":1000000,\"maxOutputTokens\":128000,\"thinkingTokens\":145,\"canonicalModel\":\"claude-haiku-5-5\",\"provider\":\"firstParty\",\"costBasis\":\"list\"}}"
+    },
+    {
+      "check": 10,
+      "slug": "hooks-fire",
+      "status": "PASS",
+      "evidence": "binary fires CC lifecycle hooks (SessionStart=yes Stop=yes, session ok) + repo hook scripts parse clean",
+      "detail": "injected via --settings; repo hooks bash-n clean (session-start/dod-persist/operator-readout/completion-assert)"
+    },
+    {
+      "check": 11,
+      "slug": "permission-nonblock",
+      "status": "PASS",
+      "evidence": "auto-mode did NOT block a benign command: is_error=false, permission_denials=[], result~BENIGN_OK",
+      "detail": "result=BENIGN_OK permission_denials=[]"
+    },
+    {
+      "check": 12,
+      "slug": "resume-routing",
+      "status": "PASS",
+      "evidence": "cc routes a resumable session to the claude launcher (--resume gatesid123)",
+      "detail": "ccr (zsh-only) routes >=2.1.150 to claude and older to claude-prev \u2014 both arms present"
+    },
+    {
+      "check": 13,
+      "slug": "mcp-reachability",
+      "status": "PASS",
+      "evidence": "MCP tool list resolves on the candidate: 7 server(s) \u2714 Connected",
+      "detail": "claude.ai uidotsh: https://ui.sh/mcp - \u2714 Connected;claude.ai Gmail: https://gmailmcp.googleapis.com/mcp/v1 - \u2714 Connected;claude.ai Google Calendar: https://calendarmcp.googleapis.com/mcp/v1 - \u2714 Connected;claude.ai Google Drive: https://drivemcp.googleapis.com/mcp/v1 - \u2714 Connected;ms365: /Users/chrisren/Library/Application Support/fnm/aliases/default/bin/ms-365-mcp-server  - \u2714 Connected;motion: https://mcp.motion.dev (HTTP) - \u2714 Connected;"
+    },
+    {
+      "check": 14,
+      "slug": "authstore-writeloss",
+      "status": "SKIP",
+      "evidence": "write-loss window still open, unchanged from the 2.1.220 baseline (known-open upstream, not an upgrade blocker)",
+      "detail": "rc=1 skip=present fallback=present timeout=100ms argv>1"
+    },
+    {
+      "check": 15,
+      "slug": "spawn-depth-effect",
+      "status": "PASS",
+      "evidence": "binary refuses at depth >= max (inclusive, 0-based root) \u2014 SPAWN_DEPTH=1 yields a FLAT topology",
+      "detail": "guard reads 'if (depth >= max) throw subagent_depth_cap'; GH #84974 off-by-one NOT present"
+    }
+  ]
+}

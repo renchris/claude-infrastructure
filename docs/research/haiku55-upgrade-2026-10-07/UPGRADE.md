@@ -1,0 +1,26 @@
+# Claude Haiku 5.5 upgrade — run ledger (2026-10-07)
+
+Scope (frozen): run the cc-upgrade **both** lane for `claude-haiku-5-5` — registration, audit of the
+Claude Code 2.1.285–2.1.293 band, candidate install, the gate once per model in the run set, the
+utilization fact base and role × effort table, the activation script, the SSOT change the gate
+permits, and the MANIFEST / ledger record.
+
+Sources given by the operator: the announcement (`anthropic.com/claude-haiku-5-5`), the System Card
+PDF, and "Prompting Claude Haiku 5.5". Fetched copies and the pages they link are in `pack/`
+(`pack/pages/pNNN.txt` is the card's text layer by PDF page; `pack/figs/fig-PPP-NNN.png` are its
+figures at native resolution, PPP = PDF page).
+
+Lane: **both**. `cc-model-registered claude-haiku-5-5` exits 1 on the live pin.
+
+| Phase | Verdict | Evidence | sha |
+|---|---|---|---|
+| P1 registration | live pin 2.1.284: ABSENT (count 0, control `claude-opus-5` 86). 2.1.291: absent (0 / 85). 2.1.292: absent (0 / 85). 2.1.293: PRESENT (21 / 85). Only 2.1.293 can dispatch the id, so it is the only candidate. | `cc-model-registered claude-haiku-5-5 [--bin …]`; 291/292 read from `npm pack @anthropic-ai/claude-code-darwin-arm64@<v>` in `/tmp/cc-reg` | — |
+| P4 gate | **GREEN ×2 on the three logged-in accounts** (`next next2 next4`): 2.1.293 × `claude-haiku-5-5` 14 pass · 0 fail · 1 skip; 2.1.293 × `claude-opus-5-5` 14 pass · 0 fail · 1 skip (the skip is #14 authstore, unchanged upstream). The first runs, with `next3` included, read RED 13/1/1 on #02 only: `next3` is logged out (`claude-accounts`: auth `login-required`), and it failed identically under Opus 5.5, which it is entitled to, so that red is a login, not an entitlement. **`next3` entitlement for Haiku 5.5 is UNPROVEN** until it is logged in (operator step `4e3c2e8599e8`). Run from the worktree path: the documented `~/.claude/scripts/cc-upgrade-gate.sh` exited 2 (`missing ~/.claude/lib/cc-upgrade-gate/common.sh`, the lib is not symlinked); fixed in this branch by resolving the script's own symlink, with a bats case. | `gate/gate-293-{haiku55,opus55}.{json,stderr}` (4 accounts, RED), `gate/gate-293-{haiku55,opus55}-3acct.{json,stderr}` (GREEN) | — |
+| P3 install | `~/.claude-293` installed (`npm install --prefix ~/.claude-293 @anthropic-ai/claude-code@2.1.293`); `~/.claude-284` untouched (rollback). Run ahead of P2 because P1 needs the candidate binary. | `ls -d ~/.claude-293` | — |
+| P2 audit | **ADVANCE to 2.1.293; no blocker.** Band 2.1.285–2.1.293 read in full on three axes + tracker adversary + a referee: 47 rated items, 14 stand as cautions, 20 downgraded, 13 refuted. Standing hold: 1 of 16 held issues fixed (#85886); #84974, #85497, #85764 closed NOT_PLANNED since the 2.1.284 row; no spawn cap restored. Never 2.1.285–2.1.290 (holds.md). Age ~6 h, bar overridden by the mandate. | `notes/cc293-axis{1,2,3}.md`, `notes/cc293-adversary.md`, `notes/cc293-referee.md` | — |
+| P4b probes beyond the gate (live, 2.1.293, account next) | resume through the symlinked `~/.claude-next/projects` recalled the session word (upstream #98899 does not reproduce); Write under auto in `-p` created and overwrote files with `permission_denials=[]` and `backup-before-write` left a `.bak`; the overwrite of a never-read file was NOT refused natively (Haiku 5.5 is outside the binary's read-before-write set); Opus 5.5 lead @high + Explore `model: "haiku"` → subagent transcript model `claude-haiku-5-5`, effort high; budget flags `tengu_rippling_tulip` / `tengu_streamed_bumblebee` cached on 0 of 4 accounts. | commands in this session; scratch dir `/tmp/p293.*` | — |
+| P5a utilize | fact base: 912 card facts (894 confirmed, 18 corrected, 0 refuted, 169 added) + 167 vendor-page facts; role × effort table in `README.md`. One role moves: retrieval → Haiku 5.5 @medium (80%). **Owed:** retrieval A/B by effort, quota draw per token. | `notes/card-*.json`, `notes/docs.*.json`, `notes/critic.md`, `notes/gap-0*.md` | — |
+| P5b feature | binary read 284 vs 293, 8 questions. Nothing adopted. Levers noted: Agent tool `effort` parameter (use it for `model: "haiku"` spawns), `CLAUDE_CODE_RIPPLING_TULIP=0` (operator-owned settings edit), `ANTHROPIC_DEFAULT_HAIKU_MODEL` / `ANTHROPIC_SMALL_FAST_MODEL` (hold levers). | `notes/bin293-probes.md` | — |
+| P6 activation | script written, lint clean, dry run passes preflight (both models return a verified completion on 2.1.293). Operator-run: `bash ~/.claude/autonomy/pending-activation/50-haiku55-cc293-activate.sh --confirm 2.1.293`. | `docs/activation/pending-activation/50-haiku55-cc293-activate.sh` | — |
+| P7 SSOT | **STAGED, not flipped** (binary first): `versions.haiku_staged: claude-haiku-5-5`, pricing row, `effort_defaults.haiku55_{default,retrieval}`, deprecation note. No `haiku_prior` key (an empty one would poison the lint's stale list). Flip + keying rewrite owed after activation (`notes/census-haiku.md`). | `model-config.yaml` | — |
+| P8 record | MANIFEST rows 2.1.285–2.1.293 appended (`skip`, legacy lane only; the last carries REVISIT). holds.md index updated. No memory entry: nothing here generalizes beyond what holds.md and the SSOT now carry. | `~/.claude-versions/MANIFEST.jsonl`, `skills/cc-upgrade/holds.md` | — |

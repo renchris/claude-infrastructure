@@ -1,0 +1,1332 @@
+{
+ "verdicts": [
+  {
+   "id": "d-01",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-02",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-03",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Alias row is overview.md:41; the quoted footnote sentence is at overview.md:56. Content correct."
+  },
+  {
+   "id": "d-04",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-05",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-06",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "First sentence is overview.md:49; the 'before the 4.6 generation the alias resolves to the dated ID' part is overview.md:56. Content correct."
+  },
+  {
+   "id": "d-07",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-08",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-09",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-10",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-11",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-12",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-13",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-14",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-15",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-16",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-17",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-18",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-19",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-20",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-21",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-22",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-23",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-24",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-25",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-26",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-27",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-28",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-29",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Cited line 146 is the table header; the cache-read row is pricing.md:150 and 'All other models use the standard 0.1x multiplier' is pricing.md:43. Haiku 5.5 $0.01 on $0.10 input is 0.1x. Content correct."
+  },
+  {
+   "id": "d-30",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-31",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-32",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-33",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-34",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-35",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-36",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-37",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-38",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-39",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-40",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-41",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-42",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-43",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-44",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-45",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-46",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-47",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-48",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-49",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-50",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-51",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-52",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-53",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-54",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-55",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-56",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-57",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-58",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-59",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-60",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-61",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-62",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-63",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-64",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-65",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-66",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-67",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-68",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-69",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-70",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-71",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-72",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-73",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-74",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-75",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-76",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-77",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-78",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-79",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-80",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-81",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-82",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-83",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-84",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-85",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-86",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-87",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-88",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-89",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-90",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-91",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-92",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-93",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-94",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-95",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-96",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-97",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-98",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-99",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-100",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-101",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-102",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-103",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-104",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-105",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-106",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-107",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-108",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-109",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-110",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-111",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-112",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-113",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-114",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-115",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-116",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-117",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-118",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-119",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-120",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-121",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-122",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-123",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-124",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-125",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-126",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-127",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-128",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-129",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-130",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-131",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "grep confirms migration-guide.md:12 is the only 'Claude Code' line in that file."
+  },
+  {
+   "id": "d-132",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-133",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-134",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-135",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-136",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-137",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Re-read the row: Active, Deprecated N/A, 'Not sooner than October 15, 2026'. That floor is 8 days after the 2026-10-07 launch; the Deprecation history has no Haiku 4.5 entry (see dv-01)."
+  },
+  {
+   "id": "d-138",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-139",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-140",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-141",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-142",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-143",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-144",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-145",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-146",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-147",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-148",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-149",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-150",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-151",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-152",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-153",
+   "verdict": "corrected",
+   "correction": "The announcement says the charts show Haiku 5.5 at each effort setting on THREE benchmarks (OSWorld 2.1 offline subset, GDPval-AA v2.1, Humanity's Last Exam no tools; announcement.txt:68-110). The fourth accuracy-vs-cost chart (Terminal-Bench 4.0, announcement.txt:217-224) is introduced separately to show what the Sonnet 5.5 cache-read price cut means, with legend series Haiku 5.5, Haiku 4.5, Sonnet 5.5 ($0.10 cache reads) and Sonnet 5.5 ($0.20 cache reads). GPT-6 Luna is in the OSWorld and GDPval legends only, not the HLE or Terminal-Bench legends. No data points for any chart are in the text layer.",
+   "why": "announcement.txt:68 reads 'The charts below show how Haiku 5.5 performs on three benchmarks at each effort setting'; line 215 introduces the Terminal-Bench chart as 'what the price cut means for Sonnet 5.5's performance relative to cost'. The first reader counted four effort charts and gave one legend for all of them."
+  },
+  {
+   "id": "d-154",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-155",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-156",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-157",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-158",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-159",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-160",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-161",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-162",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-163",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-164",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-165",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-166",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "Numbers, model names and wording match the cited line(s) on re-read."
+  },
+  {
+   "id": "d-167",
+   "verdict": "confirmed",
+   "correction": "",
+   "why": "grep for 'Claude Code' in announcement.txt returns nothing; the only CLI named is the Devin CLI (line 172). Max and Team subscribers appear only for the API credit (lines 28, 230)."
+  }
+ ],
+ "added": [
+  {
+   "id": "dv-01",
+   "page": "model-deprecations.md:99",
+   "kind": "text",
+   "claim": "The Deprecation history's most recent entry is 2026-09-30 for Claude Sonnet 4.5; there is no deprecation entry, recommended replacement or fixed retirement date for Claude Haiku 4.5 anywhere on the page, even though its 'not sooner than' floor (October 15, 2026, line 91) falls 8 days after the Haiku 5.5 launch date.",
+   "quote": "### 2026-09-30: Claude Sonnet 4.5 model",
+   "relevance": "lifecycle",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-02",
+   "page": "model-deprecations.md:91",
+   "kind": "table",
+   "claim": "The model status table lists Haiku 4.5 only under the dated ID claude-haiku-4-5-20251001; the dateless alias claude-haiku-4-5 has no row, and the page never says what any 'haiku' alias resolves to.",
+   "quote": "| claude-haiku-4-5-20251001  | Active        | N/A                | Not sooner than October 15, 2026   |",
+   "relevance": "lifecycle",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-03",
+   "page": "model-deprecations.md:15",
+   "kind": "text",
+   "claim": "Lifecycle definitions: Active means fully supported and recommended for use; Deprecated means still functional but no longer recommended, with a replacement and retirement date assigned; Retired means requests fail; deprecated models are likely to be less reliable than active models (line 21).",
+   "quote": "**Active:** The model is fully supported and recommended for use.",
+   "relevance": "lifecycle",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-04",
+   "page": "model-deprecations.md:73",
+   "kind": "table",
+   "claim": "Other comparator retirement floors: claude-fable-5 and claude-mythos-5 not sooner than June 9, 2027; claude-opus-5 July 24, 2027; claude-opus-4-8 May 28, 2027; claude-opus-4-7 April 16, 2027; claude-opus-4-6 February 5, 2027; claude-opus-4-5-20251101 November 24, 2026; claude-sonnet-5 June 30, 2027; claude-sonnet-4-6 February 17, 2027; claude-mythos-5-1 September 1, 2027; claude-mythos-preview is Deprecated (June 9, 2026) with retirement 'To be announced'.",
+   "quote": "| claude-fable-5             | Active        | N/A                | Not sooner than June 9, 2027       |",
+   "relevance": "lifecycle",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-05",
+   "page": "model-deprecations.md:231",
+   "kind": "table",
+   "claim": "The API parameter deprecations table marks temperature, top_p and top_k as Deprecated for Claude Opus 4.7 and later: a non-default value returns a 400 on Claude 4.7 and later models and Claude Mythos Preview; the Python SDK v1.0 and later removes the three parameters, so passing them raises a TypeError (line 227).",
+   "quote": "| `temperature`, `top_p`, `top_k` | Deprecated (Claude Opus 4.7 and later) | Returns a 400 error when set to a non-default value on Claude 4.7 and later models",
+   "relevance": "api",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-06",
+   "page": "overview.md:40",
+   "kind": "table",
+   "claim": "The overview table repeats the retirement floors: Fable 5.1 not sooner than September 1, 2027; Opus 5.5 September 22, 2027; Sonnet 5.5 September 28, 2027; Haiku 5.5 October 7, 2027 (exactly one year after launch).",
+   "quote": "Not sooner than September 1, 2027 | Not sooner than September 22, 2027 | Not sooner than September 28, 2027 | Not sooner than October 7, 2027",
+   "relevance": "lifecycle",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-07",
+   "page": "overview.md:84",
+   "kind": "text",
+   "claim": "The overview's only honesty statement is generic and not Haiku-specific: current Claude models are said to give top-tier results in reasoning, coding, multilingual tasks, long-context handling, honesty and image processing; no hallucination or false-completion rates are given on any of the nine pages.",
+   "quote": "Top-tier results in reasoning, coding, multilingual tasks, long-context handling, honesty, and image processing.",
+   "relevance": "behavior",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-08",
+   "page": "overview.md:76",
+   "kind": "text",
+   "claim": "The Models API capabilities object has server_tools flags for web search and code execution (true when the model accepts at least one version of the tool; web fetch is not covered); the overview does not state the values for Haiku 5.5.",
+   "quote": "`server_tools.web_search.supported` and `server_tools.code_execution.supported` are `true` when the model accepts at least one version of that tool, not necessarily every version.",
+   "relevance": "api",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-09",
+   "page": "announcement.txt:35",
+   "kind": "table",
+   "claim": "The announcement benchmark table has columns only for Haiku 5.5, Haiku 4.5, GPT-6 Luna and Sonnet 5.5 (labeled 'For reference'); it prints no Opus 5.5 or Fable 5.1 score for any benchmark, and states an effort level only for Sonnet 5.5 on FrontierCode (Xhigh).",
+   "quote": "|                                                 | Haiku 5.5           | Haiku 4.5           | GPT-6 Luna          |   | Sonnet 5.5For reference |",
+   "relevance": "routing",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-10",
+   "page": "announcement.txt:100",
+   "kind": "text",
+   "claim": "Benchmark definitions given: GDPval-AA v2.1 (Artificial Analysis) evaluates agents on real-world professional work across 44 occupations; OSWorld 2.1 measures operating a real computer on long multi-step tasks (line 89); Terminal-Bench 4.0 measures complex multi-step professional tasks in a command-line interface (line 226).",
+   "quote": "Artificial Analysis’s GDPval-AA v2.1 evaluates agents on real-world professional work across 44 occupations.",
+   "relevance": "other",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-11",
+   "page": "announcement.txt:201",
+   "kind": "text",
+   "claim": "Organizations doing wider-ranging biology or cyber work can apply to the Life Sciences Verification Program and the Cyber Verification Program to lift the corresponding Haiku 5.5 safeguards.",
+   "quote": "Organizations working on wider-ranging biology and cyber activities can apply to our Life Sciences Verification Program and Cyber Verification Program.",
+   "relevance": "safety",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-12",
+   "page": "effort.md:26",
+   "kind": "text",
+   "claim": "The effort feature is generally available (status ga) on the Claude API, Claude Platform on AWS, Amazon Bedrock, Google Cloud and Microsoft Foundry, and claude-haiku-5-5 is in its supportedModels list (line 25); claude-haiku-4-5 is not in that list.",
+   "quote": "supportedPlatforms:",
+   "relevance": "api",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-13",
+   "page": "effort.md:384",
+   "kind": "text",
+   "claim": "Per-message effort mechanism: add a role 'system' message with empty content and the new level in output_config.effort; it takes effect from the next user turn and holds until a later message changes it; such a message can appear anywhere in messages, including first (line 655).",
+   "quote": "Add a `role: \"system\"` message with empty `content` and the new level in `output_config.effort`. The new level takes effect from the next `user` turn and holds until a later message changes it.",
+   "relevance": "api",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-14",
+   "page": "effort.md:357",
+   "kind": "text",
+   "claim": "With tools, higher effort levels may make more tool calls, explain the plan before acting, give detailed summaries of changes and write more comprehensive code comments; lower levels tend to combine operations into fewer calls, make fewer calls, skip preamble and use terse confirmations (lines 350-355). This is generic guidance, not Haiku-specific.",
+   "quote": "Higher effort levels may:",
+   "relevance": "effort",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-15",
+   "page": "effort.md:366",
+   "kind": "text",
+   "claim": "'adaptive' is a thinking mode, not an effort level, and must not be passed as an effort value; thinking controls whether Claude thinks in thinking blocks, effort controls how much work goes into the whole response.",
+   "quote": "Don't pass `adaptive` as an `effort` value: `adaptive` is a thinking mode, not an effort level.",
+   "relevance": "api",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-16",
+   "page": "effort.md:665",
+   "kind": "text",
+   "claim": "Effort best practices: set effort explicitly (the API defaults to high, or medium on Opus 5.5 and Haiku 5.5); use low for speed-sensitive or simple tasks, where it can significantly reduce response times and costs; hold top-level effort constant within cached conversations because changing it invalidates prompt caching (line 669).",
+   "quote": "**Set effort explicitly:** The API defaults to `high` (`medium` on Claude Opus 5.5 and Claude Haiku 5.5), but the right starting point depends on your model and workload.",
+   "relevance": "effort",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-17",
+   "page": "effort.md:271",
+   "kind": "text",
+   "claim": "Comparator, Opus 5.5: Opus 5 and earlier Opus models default to high, so a request that omits effort runs one level lower on Opus 5.5 than it did on Opus 5; the vendor says to run an effort sweep on your own evals rather than carry settings over, set a large max_tokens at higher levels, and notes Opus 5.5 supports per-message effort changes that preserve the prompt cache.",
+   "quote": "`medium` is the default (Claude Opus 5 and earlier Opus models default to `high`, so a request that omits `effort` runs one level lower than it did on Claude Opus 5)",
+   "relevance": "effort",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-18",
+   "page": "effort.md:315",
+   "kind": "text",
+   "claim": "Comparator, Sonnet 5.5: effort levels are recalibrated versus Sonnet 5 (run a fresh sweep); start with high unless the workload is agentic or latency-sensitive; use xhigh or max only where evals show a quality gain; thinking counts toward max_tokens even when the thinking content isn't returned.",
+   "quote": "Its levels are recalibrated, so a level doesn't produce the same amount of thinking as the same level on Claude Sonnet 5.",
+   "relevance": "effort",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-19",
+   "page": "effort.md:657",
+   "kind": "text",
+   "claim": "Comparator, Fable 5.1: prefer a per-message effort change over changing the top-level value between requests, because a top-level change restarts the cache and steers the model less reliably; at high and above set a large max_tokens (line 259).",
+   "quote": "On Claude Fable 5.1, prefer this form over changing the top-level value between requests. A top-level change restarts the cache and also steers the model less reliably",
+   "relevance": "effort",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-20",
+   "page": "migration-guide.md:63",
+   "kind": "text",
+   "claim": "Token counts must be re-measured with model set to claude-haiku-5-5 rather than reusing counts measured on Haiku 4.5.",
+   "quote": "Count your prompts with `model` set to `claude-haiku-5-5` rather than reusing counts measured on Claude Haiku 4.5.",
+   "relevance": "api",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-21",
+   "page": "migration-guide.md:117",
+   "kind": "text",
+   "claim": "Computer toolset agent-loop changes for Haiku 5.5: replace the tools entry with {type: computer_toolset_20260801}, dispatch on each member tool_use block's name and toolset_name rather than input.action, handle every such block in a turn, echo toolset_name on results, and disable zoom with configs {zoom: {enabled: false}} if the environment doesn't implement it.",
+   "quote": "dispatch on each member `tool_use` block's `name` and `toolset_name` rather than on `input.action`, handle every such block in a turn, and echo `toolset_name` on results.",
+   "relevance": "api",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-22",
+   "page": "migration-guide.md:18",
+   "kind": "text",
+   "claim": "The /claude-api migrate skill asks the user to confirm migration scope (entire working directory, a subdirectory, or a file list) before editing any files, and detects Amazon Bedrock and Claude Platform on AWS clients to adjust model ID formats.",
+   "quote": "It asks you to confirm the migration scope (entire working directory, a subdirectory, or a specific file list) before editing any files.",
+   "relevance": "other",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-23",
+   "page": "pricing.md:152",
+   "kind": "text",
+   "claim": "Prompt caching pays off after one cache read for the 5-minute duration (1.25x write) or after two cache reads for the 1-hour duration (2x write); caching multipliers stack with the Batch API discount and data residency (line 154), and batch and caching discounts can be combined (line 539).",
+   "quote": "caching pays off after one cache read for the 5-minute duration (1.25x write), or after two cache reads for the 1-hour duration (2x write)",
+   "relevance": "pricing",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-24",
+   "page": "pricing.md:75",
+   "kind": "text",
+   "claim": "On Amazon Bedrock and Google Cloud, regional and multi-region endpoints carry a 10% premium over global endpoints for Sonnet 4.5, Haiku 4.5, Opus 4.5 and all future models (which covers Haiku 5.5).",
+   "quote": "**Scope:** This pricing structure applies to Claude Sonnet 4.5 (deprecated), Haiku 4.5, Opus 4.5, and all future models.",
+   "relevance": "pricing",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-25",
+   "page": "pricing.md:347",
+   "kind": "text",
+   "claim": "Server tool charges on the Claude API: web search is $10 per 1,000 searches plus token costs; web fetch has no additional charge (line 369); code execution is free when used with web_search_20260209 or web_fetch_20260209 (or later), otherwise billed at $0.05 per container-hour beyond 1,550 free hours per organization per month with a 5-minute minimum (lines 294-300).",
+   "quote": "Web search is available on the Claude API for **$10 per 1,000 searches**, plus standard token costs for search-generated content.",
+   "relevance": "pricing",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-26",
+   "page": "pricing.md:281",
+   "kind": "table",
+   "claim": "The bash tool overhead table lists only 'Claude Opus 5, Claude Opus 4.8, and Claude Opus 4.7' at 325 tokens and 'Claude Opus 4.6, Claude Sonnet 4.6, and earlier' at 244 tokens; it gives no figure for Haiku 5.5, Sonnet 5.5, Opus 5.5 or Fable 5.1.",
+   "quote": "| Claude Opus 5, Claude Opus 4.8, and Claude Opus 4.7 | 325 tokens              |",
+   "relevance": "pricing",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-27",
+   "page": "pricing.md:480",
+   "kind": "text",
+   "claim": "The pricing page's generic cost guidance for agents: choose Haiku for simple tasks, Sonnet for most production workloads, and Opus for the most complex reasoning.",
+   "quote": "**Use appropriate models:** Choose Haiku for simple tasks, Sonnet for most production workloads, and Opus for the most complex reasoning",
+   "relevance": "routing",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-28",
+   "page": "pricing.md:435",
+   "kind": "table",
+   "claim": "Claude Managed Agents bill tokens at the model pricing rates plus session runtime at $0.08 per session-hour (running status only); the Batch API discount does not apply to Managed Agents sessions (line 428).",
+   "quote": "| Session runtime | $0.08 per session-hour | `running` status duration |",
+   "relevance": "pricing",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-29",
+   "page": "pricing.md:403",
+   "kind": "text",
+   "claim": "The browser toolset's about 6,600 input-token overhead grows by about 880 tokens when all four optional members are enabled; screenshots and zoom images in tool results are billed as image input (line 407).",
+   "quote": "Enabling all four optional members adds about 880 tokens, and disabling members with `configs` reduces the count.",
+   "relevance": "pricing",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-30",
+   "page": "refusals-and-fallback.md:186",
+   "kind": "table",
+   "claim": "The refusals page says beneficial life sciences work can also trigger the bio category, and bio refusals before any output are billed; so a benign false-positive bio or frontier_llm refusal on Haiku 5.5 is charged at Haiku 5.5 rates.",
+   "quote": "| `\"bio\"`                  | The request could enable biological harm, such as dangerous lab methods. Beneficial life sciences work can also trigger this category.",
+   "relevance": "safety",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-31",
+   "page": "refusals-and-fallback.md:208",
+   "kind": "text",
+   "claim": "Refusal billing rules apply on every platform (Claude API, Amazon Bedrock, Claude Platform on AWS, Google Cloud, Microsoft Foundry), and the set of billed categories may change as Anthropic refines false-positive rates (line 216).",
+   "quote": "These billing rules apply on every platform: the Claude API, Amazon Bedrock, Claude Platform on AWS, Google Cloud, and Microsoft Foundry.",
+   "relevance": "pricing",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-32",
+   "page": "refusals-and-fallback.md:225",
+   "kind": "table",
+   "claim": "With no server-side fallback on Haiku 5.5, the remaining documented retry routes are client-side: the SDK refusal-fallback middleware (any platform, configured once with a list of fallback models) or a manual retry; the manual-retry example fallback is Claude Opus 4.8 (line 1149), and multi-turn conversations should stay on the fallback model afterward (line 1156).",
+   "quote": "Configure once on the client. Retries happen automatically.",
+   "relevance": "api",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-33",
+   "page": "refusals-and-fallback.md:497",
+   "kind": "text",
+   "claim": "Anthropic sets safeguards per model and per policy category in line with the model's capability; depending on the category a flagged request may fall back to a less capable model or be declined, and the routing is not published per model on the Models API (line 499).",
+   "quote": "Anthropic sets safeguards for each model individually and for each policy category, in line with the model's capability: depending on the category, a flagged request may fall back to a less capable model or be declined.",
+   "relevance": "safety",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-34",
+   "page": "refusals-and-fallback.md:1131",
+   "kind": "text",
+   "claim": "Cross-model thinking blocks (comparators): the API drops Opus 5.5 thinking blocks for every fallback model except Fable 5.1 and Mythos 5.1, drops Sonnet 5.5 blocks for every fallback model except Opus 5.5 on the Claude API and Google Cloud, and Fable 5.1 blocks are preserved only for that model or a newer one; the page gives no such rule for Haiku 5.5 blocks.",
+   "quote": "The API also drops Claude Opus 5.5 blocks for every fallback model except Claude Fable 5.1 and Claude Mythos 5.1",
+   "relevance": "api",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-35",
+   "page": "refusals-and-fallback.md:1180",
+   "kind": "text",
+   "claim": "Refusal handling rules: branch on stop_reason or stop_details.type rather than on content or the inner stop_details fields (category and explanation can be null); configure fallback on every request path including retry handlers and background workers (line 1176).",
+   "quote": "**Branch on `stop_reason` or `stop_details.type`, not on `content` or the inner `stop_details` fields.**",
+   "relevance": "api",
+   "confidence": "exact"
+  },
+  {
+   "id": "dv-36",
+   "page": "refusals-and-fallback.md:204",
+   "kind": "text",
+   "claim": "Asking for a short explanation, the evidence behind a result, or a summary of actions taken is still allowed; a reasoning_extraction refusal usually comes from prompts asking the model to put its thinking or reasoning in the output verbatim or in a fixed format, and that wording can sit in a system prompt, a skill, or a tool description (line 202).",
+   "quote": "You can still ask Claude to explain its answer. Ask for a short explanation, the evidence behind a result, or a summary of the actions it took.",
+   "relevance": "safety",
+   "confidence": "exact"
+  }
+ ]
+}

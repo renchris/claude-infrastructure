@@ -1,0 +1,4 @@
+# Fetched vendor sources (announcement, System Card, platform pages, the CHANGELOG slice) stay local:
+# this repo is public and they are refetchable from the URLs in ../UPGRADE.md.
+*
+!.gitignore

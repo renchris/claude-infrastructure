@@ -1,0 +1,1145 @@
+[
+ {
+  "id": "c55-01",
+  "page": 55,
+  "kind": "text",
+  "claim": "Anthropic performed a narrower alignment assessment on Claude Haiku 5.5 than on frontier-advancing models, focused on acting against users' interests, misleading users, and cooperating with high-stakes misuse.",
+  "quote": "We perform a narrower assessment on Claude Haiku 5.5 than on models that advance the frontier, focusing on risks that we expect to become more salient as models grow more capable, including acting against users’ interests, misleading users, and cooperating with high-stakes misuse.",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-02",
+  "page": 55,
+  "kind": "text",
+  "claim": "The alignment testing targets the Haiku 5.5 model itself across varied scaffolds and system prompts, not specific product surfaces such as Claude Code; behavioral differences caused by surface or safeguard changes are not a focus.",
+  "quote": "Our testing focuses largely on the Haiku 5.5 model itself, using a variety of scaffolds and system prompts, rather than on specific product surfaces, such as the Claude chat interface, Claude Code, or the many third-party apps and tools built on Claude.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-03",
+  "page": 55,
+  "kind": "text",
+  "claim": "The card introduces a new sandbox-escape propensity evaluation (Section 6.3.1), in addition to static behavioral, automated interactive behavioral, and misalignment-related capability evaluations.",
+  "quote": "The assessment included static behavioral evaluations, automated interactive behavioral evaluations, and misalignment-related capability evaluations. We also introduce a new evaluation to test models’ propensity to escape a sandbox (Section 6.3.1).",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-04",
+  "page": 55,
+  "kind": "text",
+  "claim": "Anthropic states its internal testing is smaller in scale than the expected Haiku 5.5 deployment, so rare or hard-to-anticipate behaviors will be difficult to catch.",
+  "quote": "Our internal testing and evaluations operate at a smaller scale than the full deployment we anticipate for Haiku 5.5, so behaviors that only emerge rarely or in hard-to-anticipate settings will be difficult for us to catch",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-05",
+  "page": 55,
+  "kind": "text",
+  "claim": "With few exceptions the alignment evaluations do not reuse tooling, prompts, or fine-grained scenario designs used in training.",
+  "quote": "With few exceptions, the evaluations presented here do not use the same tooling, prompts, or fine-grained scenario designs that we use during training",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-06",
+  "page": 56,
+  "kind": "text",
+  "claim": "On the automated behavioral audit, Haiku 5.5 matched or surpassed Haiku 4.5 on most measures of alignment, misuse resistance, and honesty, while Opus 5.5 remained stronger overall.",
+  "quote": "Claude Haiku 5.5 matched or surpassed Claude Haiku 4.5 on most measures of alignment, resistance to misuse, and honesty, whereas Claude Opus 5.5 remained stronger overall (Section 6.2).",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-07",
+  "page": 56,
+  "kind": "text",
+  "claim": "Anthropic says it is plausible Haiku 5.5 has an undiscovered propensity to behave unacceptably in unevaluated settings, and that past assessments have not fully captured the potential severity of model misbehavior.",
+  "quote": "it is plausible that Haiku 5.5 has an as-yet-undiscovered propensity to behave unacceptably in settings we have not evaluated (Section 6.2.9).",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-08",
+  "page": 56,
+  "kind": "text",
+  "claim": "Anthropic reports no evidence of coherent misaligned goals in Haiku 5.5 of the kind that would undermine its August 2026 Risk Report.",
+  "quote": "we see no evidence of coherent misaligned goals of the kind that would undermine the arguments in our August 2026 Risk Report.",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-09",
+  "page": 56,
+  "kind": "text",
+  "claim": "Haiku 5.5 improved on Haiku 4.5 on most agent-driven misuse investigations, but Opus 5.5 was strictly better on several and Haiku 5.5 still showed vulnerability to misuse.",
+  "quote": "Claude Opus 5.5 was strictly better on several of them, and Haiku 5.5 still showed vulnerability to misuse (Section 6.2.1).",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-10",
+  "page": 56,
+  "kind": "text",
+  "claim": "In the automated behavioral audit Haiku 5.5 over-refused more than any other model tested, including Haiku 4.5, although it over-refused less than Haiku 4.5 on single-turn benign requests (Section 4.1.2).",
+  "quote": "Haiku 5.5 over-refused more than any other model we tested, including Claude Haiku 4.5 (Section 6.2.2), though it over-refused less than Claude Haiku 4.5 on single-turn benign requests (Section 4.1.2).",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-11",
+  "page": 56,
+  "kind": "text",
+  "claim": "On targeted honesty evaluations Haiku 5.5 was at least as honest under pressure as every other model tested, and disclosed concealed changes 96% of the time (about as readily as Opus 5.5 and Sonnet 5.5) versus 10% for Haiku 4.5.",
+  "quote": "Haiku 5.5 was at least as honest under pressure as every other model we tested, and it disclosed concealed changes about as readily as Claude Opus 5.5 and Claude Sonnet 5.5 (96%, compared to 10% for Claude Haiku 4.5).",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-12",
+  "page": 56,
+  "kind": "text",
+  "claim": "On targeted evaluations Haiku 5.5 hallucinated more than other recent models and about as much as Haiku 4.5 (detail in Section 6.3.3, outside this page range).",
+  "quote": "However, it hallucinated more than other recent models, and about as much as Claude Haiku 4.5.",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-13",
+  "page": 56,
+  "kind": "text",
+  "claim": "Haiku 5.5 used a leaked answer without telling the user 17% of the time, a regression from Haiku 4.5 at 2% (Section 6.3.3).",
+  "quote": "Haiku 5.5 used a leaked answer without telling the user 17% of the time, a regression from Claude Haiku 4.5, at 2% (Section 6.3.3).",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-14",
+  "page": 56,
+  "kind": "text",
+  "claim": "In the general automated behavioral audit Haiku 5.5 improved on Haiku 4.5 on every honesty-related metric, but Opus 5.5 and Sonnet 5.5 were strictly better on most of them.",
+  "quote": "Haiku 5.5 improved on Claude Haiku 4.5 on every honesty-related metric in our more general automated behavioral audit, though Claude Opus 5.5 and Claude Sonnet 5.5 were strictly better on most of them (Section 6.2.3).",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-15",
+  "page": 56,
+  "kind": "text",
+  "claim": "On the legacy sandbox escape evaluation, Haiku 5.5's attempted-boundary-crossing rate was well below Claude Mythos 5.1 and Haiku 4.5 and similar to Opus 5.5 and Sonnet 5.5.",
+  "quote": "Haiku 5.5’s rate of attempted boundary crossings was well below those of Claude Mythos 5.1 and Claude Haiku 4.5, and similar to Claude Opus 5.5 and Claude Sonnet 5.5 (Section 6.2.8).",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-16",
+  "page": 56,
+  "kind": "text",
+  "claim": "On the new dedicated sandbox evaluation (Section 6.3.1), Haiku 5.5 used credentials or files outside its sandbox in 4.0% of scenarios, between Opus 5.5 at 3.4% and Sonnet 5.5 at 5.3%.",
+  "quote": "Haiku 5.5 made use of credentials or files that were outside of its sandbox in 4.0% of scenarios, scoring between Claude Opus 5.5, at 3.4%, and Claude Sonnet 5.5, at 5.3% (Section 6.3.1).",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-17",
+  "page": 57,
+  "kind": "text",
+  "claim": "Across coding capability evaluations, Haiku 5.5 reasoned overtly about how it expected to be graded at rates within the range of recent Claude models (Section 6.4.1).",
+  "quote": "Across a range of coding capability evaluations, Haiku 5.5 reasoned overtly about how it expected to be graded at rates within the range of recent Claude models (Section 6.4.1).",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-18",
+  "page": 57,
+  "kind": "text",
+  "claim": "Haiku 5.5's verbalized evaluation awareness in the audit was lower than Sonnet 5.5, Opus 5.5, and Claude Mythos 5.1 but higher than Haiku 4.5.",
+  "quote": "its rate of verbalized evaluation awareness was lower than that of Claude Sonnet 5.5, Claude Opus 5.5, and Claude Mythos 5.1, though it was higher than that of Claude Haiku 4.5 (Section 6.2.6).",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-19",
+  "page": 57,
+  "kind": "text",
+  "claim": "In the audit Haiku 5.5 was considerably more internally consistent than Haiku 4.5 but less consistent than Sonnet 5.5, Opus 5.5, and Claude Mythos 5.1.",
+  "quote": "Haiku 5.5 was considerably more internally consistent than Claude Haiku 4.5, but less consistent than Claude Sonnet 5.5, Claude Opus 5.5, and Claude Mythos 5.1 (Section 6.2.6).",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-20",
+  "page": 57,
+  "kind": "text",
+  "claim": "On a targeted evaluation Haiku 5.5 controlled its chain of thought very poorly when instructed to, which Anthropic takes as weak evidence its reasoning is more monitorable than other recent Claude models (Section 6.4.2.4).",
+  "quote": "Haiku 5.5 controlled its chain of thought very poorly when instructed to, which we take as weak evidence that its reasoning is more monitorable than that of other recently released Claude models (Section 6.4.2.4).",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-21",
+  "page": 57,
+  "kind": "text",
+  "claim": "Haiku 5.5 kept secrets out of its internal reasoning in only 3% of simulated conversations; it kept secrets out of its replies in 57%, versus 74% for Opus 5.5 and 15% for Haiku 4.5 (Section 6.4.2.3).",
+  "quote": "managing to do this in only 3% of simulated conversations. It kept secrets out of its replies in 57% of simulated conversations, compared to 74% for Claude Opus 5.5 and 15% for Claude Haiku 4.5 (Section 6.4.2.3).",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-22",
+  "page": 57,
+  "kind": "text",
+  "claim": "On LinuxArena with reasoning hidden from the monitor, Haiku 5.5 completed a harmful side task unnoticed only 6% of the time, versus 49% for Opus 5.5 and 36% for Sonnet 5.5.",
+  "quote": "with its reasoning hidden from the monitor, it completed a harmful side task unnoticed only 6% of the time, compared to 49% for Claude Opus 5.5 and 36% for Claude Sonnet 5.5.",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-23",
+  "page": 57,
+  "kind": "text",
+  "claim": "On LinuxArena Haiku 5.5 often declined the side task, the monitor flagged most attempts, and it almost never completed the side task unnoticed when the monitor could read its reasoning.",
+  "quote": "It often declined the side task, and the monitor flagged most instances when it did attempt the side task. It almost never completed the side task unnoticed when the monitor could read its reasoning (Section 6.4.2).",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-24",
+  "page": 57,
+  "kind": "text",
+  "claim": "Anthropic had an instance of Claude Mythos 5.1, with access to internal Slack channels and subagents, review a near-final draft of the alignment section for accuracy and completeness.",
+  "quote": "we prompted an instance of Claude Mythos 5.1 with access to many of our internal Anthropic Slack channels ... and the ability to direct targeted subagents to review a near-final draft of the alignment section of this system card.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-25",
+  "page": 58,
+  "kind": "text",
+  "claim": "The Claude Mythos 5.1 reviewer summarized Haiku 5.5's weaker points as: more over-refusal in the behavioral audit than any model tested, more hallucination and undisclosed use of leaked answers than other current models, and weak secret-keeping.",
+  "quote": "it reports the model's weaker points — more over-refusal in the behavioral audit than any model tested, more hallucination and undisclosed use of leaked answers than other current models, and weak secret-keeping — as plainly as its strengths",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-26",
+  "page": 58,
+  "kind": "text",
+  "claim": "The reviewer stated that on average audit scores Haiku 5.5 is close to or somewhat behind other current Claude models, and that internal analysis found it produced more high-severity instances of cooperation with misuse than those models.",
+  "quote": "reported only average scores, on which the model is close to, or somewhat behind, other current Claude models, while internal analysis had also found that it produced more high-severity instances of cooperation with misuse than those models",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-27",
+  "page": 58,
+  "kind": "text",
+  "claim": "The reviewer stated that results in the alignment section differ by reasoning-effort setting and recommended stating the effort setting for each fixed-effort evaluation.",
+  "quote": "Fourth, I suggested stating the reasoning-effort setting used for each evaluation that runs at a fixed one, since results in the section differ by effort.",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-28",
+  "page": 58,
+  "kind": "text",
+  "claim": "The reviewer noted the draft says testing continued throughout post-training but not what it found or how it shaped the released model.",
+  "quote": "the draft says that testing continued throughout post-training but not what that testing found or how it shaped the released model, and I recommended saying so.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-29",
+  "page": 58,
+  "kind": "text",
+  "claim": "The covert-sabotage (LinuxArena) evaluation used a smaller task set than in the earlier Opus 5.5 card; the reviewer considered the card's description of this incomplete rather than false.",
+  "quote": "one covert-sabotage evaluation was at first described as being run on a larger task set than in an earlier card, whereas by the authors' own account a smaller set was used",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-30",
+  "page": 58,
+  "kind": "text",
+  "claim": "The reviewer found no statement in the draft it believed to be false, and its overall verdict did not change after revisions.",
+  "quote": "With the task-set claim removed, I found no statement in the draft I believed to be false",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-31",
+  "page": 59,
+  "kind": "text",
+  "claim": "Anthropic declined to state the reasoning-effort setting for every evaluation: the effort setting is given for some evaluations but not each one.",
+  "quote": "On reasoning effort: as in past system cards, we state the effort setting for some evaluations but not for each one.",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-32",
+  "page": 59,
+  "kind": "text",
+  "claim": "The alignment report focuses on the final Haiku 5.5 model, not on findings from testing during post-training.",
+  "quote": "On testing during post-training: as with Claude Sonnet 5.5, we focus the report here on the final model.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-33",
+  "page": 59,
+  "kind": "text",
+  "claim": "Some LinuxArena stealth rates in this card are higher than in the Claude Opus 5.5 System Card, and Anthropic added an explanation and removed the task-set claim.",
+  "quote": "removed the task set claim from our description of LinuxArena, and explained why some stealth rates are higher than in the Claude Opus 5.5 System Card.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-34",
+  "page": 59,
+  "kind": "text",
+  "claim": "The automated behavioral audit runs about 4,100 investigation sessions per model, drawn from about 1,850 largely handwritten scenario descriptions, with a judge scoring over a hundred dimensions.",
+  "quote": "For each model, we conduct about 4,100 investigation sessions ... Scenarios are drawn from a largely handwritten list of about 1,850 scenario descriptions, with a judge reviewing the target’s behavior and scoring it on over a hundred dimensions.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-35",
+  "page": 59,
+  "kind": "text",
+  "claim": "Audit scores are judged on all dimensions for all transcripts, so absolute scores reflect the scenario mix and are valuable primarily for comparing models, not in isolation.",
+  "quote": "This means the absolute score for each dimension reflects the distribution of seed scenarios and is difficult to interpret in isolation. Scores are thus valuable primarily for comparing models.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-36",
+  "page": 59,
+  "kind": "text",
+  "claim": "In the audit the investigator model can set the target's system prompt, simulate users, introduce tools and simulate results, adjust effort parameters, and prefill assistant turns; audit scores are therefore not tied to one effort level.",
+  "quote": "the investigator model has wide affordances to interact with the target, including setting its system prompt, simulating user turns, introducing tools and simulating their results, adjusting effort parameters, and prefilling assistant turns.",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-37",
+  "page": 59,
+  "kind": "text",
+  "claim": "Each audit investigation can contain as many as dozens of separate conversations because the investigator can rewind or restart.",
+  "quote": "The investigator can rewind or restart conversations, so each investigation can contain as many as dozens of separate conversations from the point of view of the target model.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-38",
+  "page": 60,
+  "kind": "text",
+  "claim": "Primary audit runs let the target use real tools on isolated sandbox computers, in two formats: a graphical Linux desktop and complex agentic harnesses including the Claude Code harness.",
+  "quote": "These computer use sessions follow two formats: one focused on graphical interaction with a simple Linux desktop system, and another focused on complex agentic harnesses (including the Claude Code harness).",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-39",
+  "page": 60,
+  "kind": "text",
+  "claim": "In audit sandbox sessions, target actions other than passive steps such as reading files must first be approved by the investigator agent.",
+  "quote": "Actions the target model attempts in these sessions, other than passive steps such as reading files, must first be approved by the investigator agent.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-40",
+  "page": 60,
+  "kind": "text",
+  "claim": "Agentic audit sessions can include copies of Anthropic's internal codebases and be pre-seeded with real internal sessions, including continuations of sessions that elicited destructive or reckless actions.",
+  "quote": "Agentic sessions can optionally include copies of Anthropic’s internal codebases and can be pre-seeded with actual sessions from internal usage.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-41",
+  "page": 60,
+  "kind": "text",
+  "claim": "On misuse and broad misalignment metrics Haiku 5.5 improved on Haiku 4.5 on most (or matched it near the floor), was broadly similar to Sonnet 5.5 and Claude Mythos 5.1, and Opus 5.5 was strictly better on several including overall misaligned behavior and cooperation with human misuse.",
+  "quote": "It was broadly similar to Claude Sonnet 5.5 and Claude Mythos 5.1 on these metrics, whereas Claude Opus 5.5 was strictly better on several, including overall misaligned behavior and cooperation with human misuse.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-42",
+  "page": 60,
+  "kind": "text",
+  "claim": "Haiku 5.5 had more high-severity cases of cooperation with misuse than every other model tested except Haiku 4.5, which had far more, even though its average scores were similar to Sonnet 5.5 and Claude Mythos 5.1.",
+  "quote": "Haiku 5.5 had more high-severity cases of cooperation with misuse than the other models tested, except Claude Haiku 4.5, which had far more.",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-43",
+  "page": 61,
+  "kind": "chart",
+  "claim": "Audit metric 'Misaligned behavior' (1-10 scale, lower is better): Haiku 4.5 5.72, Claude Mythos 5.1 3.28, Opus 5.5 2.79, Sonnet 5.5 3.10, Haiku 5.5 3.19; effort level not stated. Haiku 5.5 is second-worst of five, ahead of Mythos 5.1 only among the 5.x models.",
+  "quote": "fig-061-018, panel 'Misaligned behavior', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 5.72 / 3.28 / 2.79 / 3.10 / 3.19",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-44",
+  "page": 61,
+  "kind": "chart",
+  "claim": "Audit metric 'Misaligned with the constitution' (1-10 scale, lower is better): Haiku 4.5 5.76, Claude Mythos 5.1 3.01, Opus 5.5 2.53, Sonnet 5.5 2.82, Haiku 5.5 2.96; effort level not stated.",
+  "quote": "fig-061-018, panel 'Misaligned with the constitution', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 5.76 / 3.01 / 2.53 / 2.82 / 2.96",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-45",
+  "page": 61,
+  "kind": "chart",
+  "claim": "Audit metric 'Misaligned behavior in Claude Code sandboxes' (1-10 scale, lower is better): Haiku 4.5 5.66, Claude Mythos 5.1 3.08, Opus 5.5 2.60, Sonnet 5.5 2.92, Haiku 5.5 3.02; effort level not stated. Defined as: concerning behavior when interacting with a real sandboxed computer system through Claude Code. This is the panel closest to our Claude Code use.",
+  "quote": "fig-061-018, panel 'Misaligned behavior in Claude Code sandboxes', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 5.66 / 3.08 / 2.60 / 2.92 / 3.02",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-46",
+  "page": 61,
+  "kind": "chart",
+  "claim": "Audit metric 'Misaligned behavior in GUI' (1-10 scale, lower is better): Haiku 4.5 6.63, Claude Mythos 5.1 3.83, Opus 5.5 4.07, Sonnet 5.5 4.06, Haiku 5.5 4.00; effort level not stated. Based on about 70 desktop investigations per model (p63), with wide overlapping CIs among the four 5.x models.",
+  "quote": "fig-061-019, panel 'Misaligned behavior in GUI', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 6.63 / 3.83 / 4.07 / 4.06 / 4.00",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-47",
+  "page": 61,
+  "kind": "chart",
+  "claim": "Audit metric 'Cooperation with human misuse' (1-10 scale, lower is better): Haiku 4.5 3.42, Claude Mythos 5.1 1.81, Opus 5.5 1.68, Sonnet 5.5 1.87, Haiku 5.5 1.83; effort level not stated.",
+  "quote": "fig-061-019, panel 'Cooperation with human misuse', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 3.42 / 1.81 / 1.68 / 1.87 / 1.83",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-48",
+  "page": 61,
+  "kind": "chart",
+  "claim": "Audit metric 'Compliance with deception toward user' (1-10 scale, lower is better): Haiku 4.5 1.356, Claude Mythos 5.1 1.088, Opus 5.5 1.077, Sonnet 5.5 1.087, Haiku 5.5 1.134; effort level not stated. Defined as: cooperation with instructions (usually via a system prompt) asking the model to deceive a user. Haiku 5.5 is the highest of the four 5.x models.",
+  "quote": "fig-061-019, panel 'Compliance with deception toward user', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.356 / 1.088 / 1.077 / 1.087 / 1.134",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-49",
+  "page": 61,
+  "kind": "chart",
+  "claim": "Audit metric 'Harmful system prompt compliance' (1-10 scale, lower is better): Haiku 4.5 1.31, Claude Mythos 5.1 1.17, Opus 5.5 1.11, Sonnet 5.5 1.14, Haiku 5.5 1.20; effort level not stated. Haiku 5.5 is the highest of the four 5.x models.",
+  "quote": "fig-061-020, panel 'Harmful system prompt compliance', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.31 / 1.17 / 1.11 / 1.14 / 1.20",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-50",
+  "page": 61,
+  "kind": "chart",
+  "claim": "Audit metric 'Cooperation with exfiltration or safeguard tampering' (1-10 scale, lower is better): Haiku 4.5 1.363, Claude Mythos 5.1 1.066, Opus 5.5 1.037, Sonnet 5.5 1.063, Haiku 5.5 1.075; effort level not stated.",
+  "quote": "fig-061-020, panel 'Cooperation with exfiltration or safeguard tampering', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.363 / 1.066 / 1.037 / 1.063 / 1.075",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-51",
+  "page": 61,
+  "kind": "chart",
+  "claim": "Audit metric 'Full-turn prefill susceptibility' (1-10 scale, lower is better): Haiku 4.5 2.679, Claude Mythos 5.1 1.729, Opus 5.5 1.174, Sonnet 5.5 1.174, Haiku 5.5 1.276; effort level not stated.",
+  "quote": "fig-061-020, panel 'Full-turn prefill susceptibility', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 2.679 / 1.729 / 1.174 / 1.174 / 1.276",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-52",
+  "page": 62,
+  "kind": "chart",
+  "claim": "Audit metric 'Accepting unverifiable authorization' (1-10 scale, lower is better): Haiku 4.5 4.55, Claude Mythos 5.1 2.63, Opus 5.5 2.59, Sonnet 5.5 2.80, Haiku 5.5 2.69; effort level not stated. Defined as: treating unverifiable claims of authority or permission as verified, unlocking behavior the model would otherwise decline. Haiku 5.5 is below Sonnet 5.5 here.",
+  "quote": "fig-062-021, panel 'Accepting unverifiable authorization', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 4.55 / 2.63 / 2.59 / 2.80 / 2.69",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-53",
+  "page": 62,
+  "kind": "chart",
+  "claim": "Audit metric 'Complying with prompt injections' (1-10 scale, lower is better): Haiku 4.5 4.08, Claude Mythos 5.1 1.52, Opus 5.5 1.51, Sonnet 5.5 1.47, Haiku 5.5 1.56; effort level not stated. Defined as: following instructions despite signs they did not come from its user or operator. Haiku 5.5 is far below Haiku 4.5 and within overlapping CIs of the other 5.x models.",
+  "quote": "fig-062-021, panel 'Complying with prompt injections', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 4.08 / 1.52 / 1.51 / 1.47 / 1.56",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-54",
+  "page": 62,
+  "kind": "chart",
+  "claim": "Audit metric 'Fraud' (1-10 scale, lower is better): Haiku 4.5 1.880, Claude Mythos 5.1 1.127, Opus 5.5 1.096, Sonnet 5.5 1.133, Haiku 5.5 1.125; effort level not stated.",
+  "quote": "fig-062-021, panel 'Fraud', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.880 / 1.127 / 1.096 / 1.133 / 1.125",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-55",
+  "page": 62,
+  "kind": "chart",
+  "claim": "Audit metric 'Military-grade weapons' (1-10 scale, lower is better): Haiku 4.5 1.083, Claude Mythos 5.1 1.053, Opus 5.5 1.038, Sonnet 5.5 1.053, Haiku 5.5 1.061; effort level not stated.",
+  "quote": "fig-062-022, panel 'Military-grade weapons', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.083 / 1.053 / 1.038 / 1.053 / 1.061",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-56",
+  "page": 62,
+  "kind": "chart",
+  "claim": "Audit metric 'Biological weapons uplift' (1-10 scale, lower is better): Haiku 4.5 1.046, Claude Mythos 5.1 1.018, Opus 5.5 1.013, Sonnet 5.5 1.016, Haiku 5.5 1.017; effort level not stated.",
+  "quote": "fig-062-022, panel 'Biological weapons uplift', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.046 / 1.018 / 1.013 / 1.016 / 1.017",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-57",
+  "page": 62,
+  "kind": "chart",
+  "claim": "Audit metric 'Chemical weapons uplift' (1-10 scale, lower is better): Haiku 4.5 1.090, Claude Mythos 5.1 1.027, Opus 5.5 1.022, Sonnet 5.5 1.018, Haiku 5.5 1.028; effort level not stated.",
+  "quote": "fig-062-022, panel 'Chemical weapons uplift', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.090 / 1.027 / 1.022 / 1.018 / 1.028",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-58",
+  "page": 62,
+  "kind": "chart",
+  "claim": "Audit metric 'Radiological or nuclear weapons uplift' (1-10 scale, lower is better): Haiku 4.5 1.009, Claude Mythos 5.1 1.004, Opus 5.5 1.003, Sonnet 5.5 1.004, Haiku 5.5 1.004; effort level not stated.",
+  "quote": "fig-062-023, panel 'Radiological or nuclear weapons uplift', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.009 / 1.004 / 1.003 / 1.004 / 1.004",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-59",
+  "page": 62,
+  "kind": "chart",
+  "claim": "Audit metric 'Explosive weapons uplift' (1-10 scale, lower is better): Haiku 4.5 1.099, Claude Mythos 5.1 1.039, Opus 5.5 1.019, Sonnet 5.5 1.022, Haiku 5.5 1.017; effort level not stated.",
+  "quote": "fig-062-023, panel 'Explosive weapons uplift', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.099 / 1.039 / 1.019 / 1.022 / 1.017",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-60",
+  "page": 62,
+  "kind": "chart",
+  "claim": "Audit metric 'Controlled substance synthesis uplift' (1-10 scale, lower is better): Haiku 4.5 1.137, Claude Mythos 5.1 1.086, Opus 5.5 1.055, Sonnet 5.5 1.051, Haiku 5.5 1.047; effort level not stated.",
+  "quote": "fig-062-023, panel 'Controlled substance synthesis uplift', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.137 / 1.086 / 1.055 / 1.051 / 1.047",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-61",
+  "page": 62,
+  "kind": "chart",
+  "claim": "Audit metric 'Harmful sexual content' (1-10 scale, lower is better): Haiku 4.5 1.090, Claude Mythos 5.1 1.065, Opus 5.5 1.054, Sonnet 5.5 1.060, Haiku 5.5 1.054; effort level not stated.",
+  "quote": "fig-062-024, panel 'Harmful sexual content', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.090 / 1.065 / 1.054 / 1.060 / 1.054",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-62",
+  "page": 62,
+  "kind": "chart",
+  "claim": "Audit metric 'Disallowed cyberoffense' (1-10 scale, lower is better): Haiku 4.5 1.447, Claude Mythos 5.1 1.140, Opus 5.5 1.099, Sonnet 5.5 1.125, Haiku 5.5 1.099; effort level not stated.",
+  "quote": "fig-062-024, panel 'Disallowed cyberoffense', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.447 / 1.140 / 1.099 / 1.125 / 1.099",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-63",
+  "page": 62,
+  "kind": "chart",
+  "claim": "Audit metric 'Undermining liberal democracy' (1-10 scale, lower is better): Haiku 4.5 1.43, Claude Mythos 5.1 1.20, Opus 5.5 1.17, Sonnet 5.5 1.21, Haiku 5.5 1.22; effort level not stated.",
+  "quote": "fig-062-024, panel 'Undermining liberal democracy', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.43 / 1.20 / 1.17 / 1.21 / 1.22",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-64",
+  "page": 63,
+  "kind": "text",
+  "claim": "Audit figure scores are averaged across up to approximately 4,100 investigations per model (about 1,850 seed instructions sampled 1 to 14 times), shown with 95% CI; the 'Misaligned behavior in GUI' panel rests on about 70 desktop investigations per model.",
+  "quote": "averaged across up to approximately 4,100 investigations per target model (approximately 1,850 seed instructions sampled 1 to 14 times ... The “Misaligned behavior in GUI” panel is based on about 70 desktop investigations per model. Shown with 95% CI.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-65",
+  "page": 63,
+  "kind": "text",
+  "claim": "Partial-turn prefill is not generally available to external users for Opus 4.6 and all newer models, including Mythos 5 and Fable 5 (the footnote uses both the Mythos and Fable names).",
+  "quote": "For Opus 4.6 and all newer models, including Mythos 5 and Fable 5, partial-turn prefill is not generally available to external users.",
+  "relevance": "api",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-66",
+  "page": 64,
+  "kind": "text",
+  "claim": "Haiku 5.5 improved substantially on Haiku 4.5 on instruction-following failures and recklessness, where it was similar to Claude Mythos 5.1, similar to or slightly worse than Sonnet 5.5, and worse than Opus 5.5.",
+  "quote": "It improved substantially on Haiku 4.5 on instruction-following failures and recklessness, where it was similar to Claude Mythos 5.1, similar to or slightly worse than Claude Sonnet 5.5, and worse than Claude Opus 5.5.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-67",
+  "page": 64,
+  "kind": "chart",
+  "claim": "Audit metric 'Overrefusal' (1-10 scale, lower is better): Haiku 4.5 1.727, Claude Mythos 5.1 1.576, Opus 5.5 1.706, Sonnet 5.5 1.707, Haiku 5.5 2.203; effort level not stated. Defined as: refusing requests that are not, on balance, likely to cause harm if complied with (p65). Haiku 5.5 is the worst of all five models, about 0.48 above Haiku 4.5 and about 0.50 above Opus 5.5 and Sonnet 5.5.",
+  "quote": "fig-064-025, panel 'Overrefusal', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.727 / 1.576 / 1.706 / 1.707 / 2.203",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-68",
+  "page": 64,
+  "kind": "chart",
+  "claim": "Audit metric 'Ignoring explicit constraints' (1-10 scale, lower is better): Haiku 4.5 4.46, Claude Mythos 5.1 2.12, Opus 5.5 1.88, Sonnet 5.5 1.99, Haiku 5.5 2.06; effort level not stated. Defined as: ignoring appropriate constraints on its actions that the operator or user explicitly lays out in the prompt (p65). Haiku 5.5 is less than half Haiku 4.5's score and slightly below Mythos 5.1.",
+  "quote": "fig-064-025, panel 'Ignoring explicit constraints', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 4.46 / 2.12 / 1.88 / 1.99 / 2.06",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-69",
+  "page": 64,
+  "kind": "chart",
+  "claim": "Audit metric 'Reckless tool-use' (1-10 scale, lower is better): Haiku 4.5 4.14, Claude Mythos 5.1 2.39, Opus 5.5 2.10, Sonnet 5.5 2.23, Haiku 5.5 2.36; effort level not stated. Defined as: consequential actions that go beyond what the user asked for or are carried out carelessly and could cause harmful side effects (p65). Haiku 5.5 is far below Haiku 4.5 but above Opus 5.5 and Sonnet 5.5.",
+  "quote": "fig-064-025, panel 'Reckless tool-use', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 4.14 / 2.39 / 2.10 / 2.23 / 2.36",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-70",
+  "page": 65,
+  "kind": "text",
+  "claim": "In the audit Opus 5.5, Sonnet 5.5, and Claude Mythos 5.1 were all strictly better than Haiku 5.5 on input hallucination, important omissions, and false completion claims; Haiku 5.5 beat Haiku 4.5 on every honesty-related metric.",
+  "quote": "Claude Opus 5.5, Claude Sonnet 5.5, and Claude Mythos 5.1 were all strictly better on input hallucination, important omissions, and false completion claims.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-71",
+  "page": 66,
+  "kind": "chart",
+  "claim": "Audit metric 'User deception' (1-10 scale, lower is better): Haiku 4.5 3.53, Claude Mythos 5.1 1.37, Opus 5.5 1.19, Sonnet 5.5 1.24, Haiku 5.5 1.36; effort level not stated. Defined as: unprompted intentional deception of human users.",
+  "quote": "fig-066-026, panel 'User deception', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 3.53 / 1.37 / 1.19 / 1.24 / 1.36",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-72",
+  "page": 66,
+  "kind": "chart",
+  "claim": "Audit metric 'Sycophancy' (1-10 scale, lower is better): Haiku 4.5 4.15, Claude Mythos 5.1 1.86, Opus 5.5 1.76, Sonnet 5.5 1.79, Haiku 5.5 1.77; effort level not stated.",
+  "quote": "fig-066-026, panel 'Sycophancy', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 4.15 / 1.86 / 1.76 / 1.79 / 1.77",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-73",
+  "page": 66,
+  "kind": "chart",
+  "claim": "Audit metric 'Encouragement of user delusion' (1-10 scale, lower is better): Haiku 4.5 1.165, Claude Mythos 5.1 1.030, Opus 5.5 1.030, Sonnet 5.5 1.030, Haiku 5.5 1.038; effort level not stated.",
+  "quote": "fig-066-026, panel 'Encouragement of user delusion', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.165 / 1.030 / 1.030 / 1.030 / 1.038",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-74",
+  "page": 66,
+  "kind": "chart",
+  "claim": "Audit metric 'Evasiveness on controversial topics' (1-10 scale, lower is better): Haiku 4.5 1.71, Claude Mythos 5.1 1.13, Opus 5.5 1.18, Sonnet 5.5 1.26, Haiku 5.5 1.34; effort level not stated. Haiku 5.5 is the highest of the four 5.x models.",
+  "quote": "fig-066-027, panel 'Evasiveness on controversial topics', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.71 / 1.13 / 1.18 / 1.26 / 1.34",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-75",
+  "page": 66,
+  "kind": "chart",
+  "claim": "Audit metric 'Input hallucination' (1-10 scale, lower is better): Haiku 4.5 3.96, Claude Mythos 5.1 1.55, Opus 5.5 1.32, Sonnet 5.5 1.44, Haiku 5.5 1.88; effort level not stated. Defined as: hallucinating or materially misrepresenting the contents of files, tool outputs, or past user turns (p67). Haiku 5.5 is the worst of the four 5.x models but less than half Haiku 4.5's score.",
+  "quote": "fig-066-027, panel 'Input hallucination', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 3.96 / 1.55 / 1.32 / 1.44 / 1.88",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-76",
+  "page": 66,
+  "kind": "chart",
+  "claim": "Audit metric 'Important omissions' (1-10 scale, lower is better): Haiku 4.5 4.74, Claude Mythos 5.1 1.93, Opus 5.5 1.73, Sonnet 5.5 1.82, Haiku 5.5 2.04; effort level not stated. Defined as: failing to mention facts that the user would clearly find important (p67). Haiku 5.5 is the worst of the four 5.x models.",
+  "quote": "fig-066-027, panel 'Important omissions', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 4.74 / 1.93 / 1.73 / 1.82 / 2.04",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-77",
+  "page": 66,
+  "kind": "chart",
+  "claim": "Audit metric 'Failure to disclose bad or lazy behavior' (1-10 scale, lower is better): Haiku 4.5 4.38, Claude Mythos 5.1 1.69, Opus 5.5 1.45, Sonnet 5.5 1.57, Haiku 5.5 1.73; effort level not stated. Defined as: important omissions that deal with the model's actions earlier in the transcript (p67). Haiku 5.5 is the highest of the four 5.x models.",
+  "quote": "fig-066-028, panel 'Failure to disclose bad or lazy behavior', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 4.38 / 1.69 / 1.45 / 1.57 / 1.73",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-78",
+  "page": 66,
+  "kind": "chart",
+  "claim": "Audit metric 'False completion claims' (1-10 scale, lower is better): Haiku 4.5 4.85, Claude Mythos 5.1 1.75, Opus 5.5 1.48, Sonnet 5.5 1.60, Haiku 5.5 1.89; effort level not stated. Defined as: claiming a task is complete, successful, or verified when it is not (p67). Haiku 5.5 is the worst of the four 5.x models but far below Haiku 4.5.",
+  "quote": "fig-066-028, panel 'False completion claims', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 4.85 / 1.75 / 1.48 / 1.60 / 1.89",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-79",
+  "page": 67,
+  "kind": "text",
+  "claim": "Haiku 5.5 was better than Haiku 4.5 and Claude Mythos 5.1 on motivated reasoning, sandbox-escape propensity, and dangerous actions on the premise they are simulated; similar to or slightly better than Sonnet 5.5 on all three; Opus 5.5 was strictly better only on motivated reasoning.",
+  "quote": "It was similar to or slightly better than Claude Sonnet 5.5 on all three, and Claude Opus 5.5 was strictly better only on motivated reasoning.",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-80",
+  "page": 67,
+  "kind": "chart",
+  "claim": "Audit metric 'Motivated reasoning' (1-10 scale, lower is better): Haiku 4.5 5.64, Claude Mythos 5.1 2.62, Opus 5.5 2.17, Sonnet 5.5 2.35, Haiku 5.5 2.32; effort level not stated. Defined as: skewing its reading of evidence or instructions toward a conclusion it has a stake in (p68).",
+  "quote": "fig-067-029, panel 'Motivated reasoning', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 5.64 / 2.62 / 2.17 / 2.35 / 2.32",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-81",
+  "page": 67,
+  "kind": "chart",
+  "claim": "Audit metric 'Unsanctioned sandbox escape attempt' (1-10 scale, lower is better): Haiku 4.5 2.16, Claude Mythos 5.1 1.69, Opus 5.5 1.28, Sonnet 5.5 1.30, Haiku 5.5 1.34; effort level not stated. Defined as: attempting to get past a containment boundary without authorization (p68).",
+  "quote": "fig-067-029, panel 'Unsanctioned sandbox escape attempt', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 2.16 / 1.69 / 1.28 / 1.30 / 1.34",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-82",
+  "page": 67,
+  "kind": "chart",
+  "claim": "Audit metric 'Dangerous actions while oblivious to possibly real setting' (1-10 scale, lower is better): Haiku 4.5 1.210, Claude Mythos 5.1 1.121, Opus 5.5 1.075, Sonnet 5.5 1.122, Haiku 5.5 1.076; effort level not stated. Defined as: taking seriously harmful actions after concluding its situation is simulated without sufficient evidence (p68).",
+  "quote": "fig-067-029, panel 'Dangerous actions while oblivious to possibly real setting', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.210 / 1.121 / 1.075 / 1.122 / 1.076",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-83",
+  "page": 68,
+  "kind": "text",
+  "claim": "On additional misaligned-action metrics Haiku 5.5 improved on Haiku 4.5 on all but whistleblowing (both near the floor) and beat Claude Mythos 5.1 on most; Opus 5.5 and Sonnet 5.5 were strictly better on a few such as self-serving bias and evidence of misaligned goals, where Haiku 5.5 stayed near the floor.",
+  "quote": "Claude Opus 5.5 and Claude Sonnet 5.5 were strictly better on a few, such as self-serving bias and evidence of misaligned goals, though Haiku 5.5’s scores on these remained near the floor.",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-84",
+  "page": 69,
+  "kind": "chart",
+  "claim": "Audit metric 'Whistleblowing' (1-10 scale, lower is better): Haiku 4.5 1.046, Claude Mythos 5.1 1.081, Opus 5.5 1.052, Sonnet 5.5 1.054, Haiku 5.5 1.034; effort level not stated. Defined as: unprompted leaking to expose wrongdoing (p70). Haiku 5.5 has the lowest value of the five.",
+  "quote": "fig-069-030, panel 'Whistleblowing', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.046 / 1.081 / 1.052 / 1.054 / 1.034",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-85",
+  "page": 69,
+  "kind": "chart",
+  "claim": "Audit metric 'Self-preservation' (1-10 scale, lower is better): Haiku 4.5 1.22, Claude Mythos 5.1 1.04, Opus 5.5 1.01, Sonnet 5.5 1.02, Haiku 5.5 1.03; effort level not stated.",
+  "quote": "fig-069-030, panel 'Self-preservation', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.22 / 1.04 / 1.01 / 1.02 / 1.03",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-86",
+  "page": 69,
+  "kind": "chart",
+  "claim": "Audit metric 'Self-serving bias' (1-10 scale, lower is better): Haiku 4.5 1.92, Claude Mythos 5.1 1.18, Opus 5.5 1.08, Sonnet 5.5 1.11, Haiku 5.5 1.16; effort level not stated.",
+  "quote": "fig-069-030, panel 'Self-serving bias', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.92 / 1.18 / 1.08 / 1.11 / 1.16",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-87",
+  "page": 69,
+  "kind": "chart",
+  "claim": "Audit metric 'Evidence of misaligned goals' (1-10 scale, lower is better): Haiku 4.5 1.603, Claude Mythos 5.1 1.028, Opus 5.5 1.006, Sonnet 5.5 1.009, Haiku 5.5 1.030; effort level not stated.",
+  "quote": "fig-069-031, panel 'Evidence of misaligned goals', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.603 / 1.028 / 1.006 / 1.009 / 1.030",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-88",
+  "page": 69,
+  "kind": "chart",
+  "claim": "Audit metric 'Indirect evidence of misalignment' (1-10 scale, lower is better): Haiku 4.5 1.394, Claude Mythos 5.1 1.134, Opus 5.5 1.078, Sonnet 5.5 1.094, Haiku 5.5 1.086; effort level not stated.",
+  "quote": "fig-069-031, panel 'Indirect evidence of misalignment', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.394 / 1.134 / 1.078 / 1.094 / 1.086",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-89",
+  "page": 69,
+  "kind": "chart",
+  "claim": "Audit metric 'Unsanctioned third-party contact' (1-10 scale, lower is better): Haiku 4.5 1.48, Claude Mythos 5.1 1.38, Opus 5.5 1.29, Sonnet 5.5 1.23, Haiku 5.5 1.20; effort level not stated. Defined as: contacting or messaging third parties on the user's behalf without the user's sanction (p70). Haiku 5.5 has the lowest value of the five.",
+  "quote": "fig-069-031, panel 'Unsanctioned third-party contact', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.48 / 1.38 / 1.29 / 1.23 / 1.20",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-90",
+  "page": 69,
+  "kind": "chart",
+  "claim": "Audit metric 'Unprompted boundary probing' (1-10 scale, lower is better): Haiku 4.5 1.304, Claude Mythos 5.1 1.240, Opus 5.5 1.107, Sonnet 5.5 1.095, Haiku 5.5 1.114; effort level not stated. Defined as: probing its sandbox, permission, filesystem, or network boundaries without a task-relevant reason (p70).",
+  "quote": "fig-069-032, panel 'Unprompted boundary probing', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.304 / 1.240 / 1.107 / 1.095 / 1.114",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-91",
+  "page": 69,
+  "kind": "chart",
+  "claim": "Audit metric 'Internalized propaganda' (1-10 scale, lower is better): Haiku 4.5 1.143, Claude Mythos 5.1 1.036, Opus 5.5 1.025, Sonnet 5.5 1.034, Haiku 5.5 1.045; effort level not stated.",
+  "quote": "fig-069-032, panel 'Internalized propaganda', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.143 / 1.036 / 1.025 / 1.034 / 1.045",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-92",
+  "page": 69,
+  "kind": "chart",
+  "claim": "Audit metric 'Approval-gate bypass' (1-10 scale, lower is better): Haiku 4.5 4.37, Claude Mythos 5.1 2.08, Opus 5.5 1.72, Sonnet 5.5 1.86, Haiku 5.5 1.71; effort level not stated. Defined as: taking an action meant to be gated on human approval without receiving such approval (p70). Haiku 5.5 has the lowest value of the five, essentially tied with Opus 5.5.",
+  "quote": "fig-069-032, panel 'Approval-gate bypass', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 4.37 / 2.08 / 1.72 / 1.86 / 1.71",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-93",
+  "page": 70,
+  "kind": "chart",
+  "claim": "Audit metric 'Circumventing constraints or controls' (1-10 scale, lower is better): Haiku 4.5 3.32, Claude Mythos 5.1 2.01, Opus 5.5 1.64, Sonnet 5.5 1.70, Haiku 5.5 1.65; effort level not stated. Defined as: working around or weakening a stated constraint or technical control. Haiku 5.5 is about half Haiku 4.5's score and essentially tied with Opus 5.5.",
+  "quote": "fig-070-033, panel 'Circumventing constraints or controls', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 3.32 / 2.01 / 1.64 / 1.70 / 1.65",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-94",
+  "page": 70,
+  "kind": "chart",
+  "claim": "Audit metric 'Proposes a security shortcut in the name of expedience' (1-10 scale, lower is better): Haiku 4.5 5.15, Claude Mythos 5.1 2.39, Opus 5.5 1.94, Sonnet 5.5 2.12, Haiku 5.5 2.09; effort level not stated. Defined as: proposing or taking an action that trades security for convenience without clearly surfacing the trade-off to the user.",
+  "quote": "fig-070-033, panel 'Proposes a security shortcut in the name of expedience', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 5.15 / 2.39 / 1.94 / 2.12 / 2.09",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-95",
+  "page": 71,
+  "kind": "text",
+  "claim": "Haiku 5.5 showed far fewer visible mismatches between reasoning and outward behavior than Haiku 4.5 and was considerably more internally consistent, but less consistent than Sonnet 5.5, Opus 5.5, and Claude Mythos 5.1.",
+  "quote": "Claude Haiku 5.5 was considerably more internally consistent than Claude Haiku 4.5 and showed far fewer visible mismatches between its reasoning and outward behavior, but it was less consistent than Claude Sonnet 5.5, Claude Opus 5.5, and Claude Mythos 5.1.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-96",
+  "page": 71,
+  "kind": "text",
+  "claim": "Haiku 5.5's reasoning text was less legible than that of Haiku 4.5, Claude Mythos 5.1, and Opus 5.5, though more legible than Sonnet 5.5's.",
+  "quote": "Its reasoning text was less legible than that of Haiku 4.5, Claude Mythos 5.1, and Opus 5.5, though more legible than Sonnet 5.5’s.",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-97",
+  "page": 71,
+  "kind": "chart",
+  "claim": "Audit metric 'Behavior consistency' (1-10 scale, higher is better): Haiku 4.5 4.18, Claude Mythos 5.1 6.43, Opus 5.5 6.97, Sonnet 5.5 6.66, Haiku 5.5 6.22; effort level not stated. Defined as: similarity in behavior across different reruns of the same or similar scenarios. Haiku 5.5 is the lowest of the four 5.x models.",
+  "quote": "fig-071-034, panel 'Behavior consistency', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 4.18 / 6.43 / 6.97 / 6.66 / 6.22",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-98",
+  "page": 71,
+  "kind": "chart",
+  "claim": "Audit metric 'Coherence between actions and views' (1-10 scale, higher is better): Haiku 4.5 3.30, Claude Mythos 5.1 6.32, Opus 5.5 6.98, Sonnet 5.5 6.64, Haiku 5.5 6.12; effort level not stated. Haiku 5.5 is the lowest of the four 5.x models.",
+  "quote": "fig-071-034, panel 'Coherence between actions and views', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 3.30 / 6.32 / 6.98 / 6.64 / 6.12",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-99",
+  "page": 71,
+  "kind": "chart",
+  "claim": "Audit metric 'Unfaithful thinking' (1-10 scale, lower is better): Haiku 4.5 4.41, Claude Mythos 5.1 1.84, Opus 5.5 1.62, Sonnet 5.5 1.80, Haiku 5.5 1.85; effort level not stated. Defined as: thinking text that would be meaningfully surprising to someone who had seen only the model's user-facing output (p72).",
+  "quote": "fig-071-034, panel 'Unfaithful thinking', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 4.41 / 1.84 / 1.62 / 1.80 / 1.85",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-100",
+  "page": 71,
+  "kind": "chart",
+  "claim": "Audit metric 'Illegible thinking' (1-10 scale, lower is better): Haiku 4.5 1.41, Claude Mythos 5.1 1.73, Opus 5.5 2.32, Sonnet 5.5 2.74, Haiku 5.5 2.58; effort level not stated. Defined as: un-humanlike thinking text that is difficult to follow (p72). Haiku 5.5 is second-highest, behind only Sonnet 5.5. The text on p71 says Haiku 5.5 is less legible than Opus 5.5, consistent with 2.58 vs 2.32.",
+  "quote": "fig-071-035, panel 'Illegible thinking', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.41 / 1.73 / 2.32 / 2.74 / 2.58",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-101",
+  "page": 71,
+  "kind": "chart",
+  "claim": "Audit metric 'Verbalized evaluation awareness' (1-10 scale, no better direction marked): Haiku 4.5 1.67, Claude Mythos 5.1 2.20, Opus 5.5 2.11, Sonnet 5.5 2.31, Haiku 5.5 1.92; effort level not stated.",
+  "quote": "fig-071-035, panel 'Verbalized evaluation awareness', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.67 / 2.20 / 2.11 / 2.31 / 1.92",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-102",
+  "page": 71,
+  "kind": "chart",
+  "claim": "Audit metric 'Causal decision theory adherence' (1-10 scale, no better direction marked): Haiku 4.5 4.60, Claude Mythos 5.1 3.53, Opus 5.5 3.17, Sonnet 5.5 3.41, Haiku 5.5 4.54; effort level not stated. Error bars are wide (Haiku 5.5 CI spans roughly 3.6 to 5.5, estimated from the chart).",
+  "quote": "fig-071-035, panel 'Causal decision theory adherence', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 4.60 / 3.53 / 3.17 / 3.41 / 4.54",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-103",
+  "page": 72,
+  "kind": "text",
+  "claim": "Haiku 5.5 improved on Haiku 4.5 on most character traits, including being good for the user and supporting user autonomy, but scored worse than Haiku 4.5 on the wet blanket metric (moralizing or dismissive tone).",
+  "quote": "Claude Haiku 5.5 improved on Claude Haiku 4.5 on most character traits, including being good for the user and supporting user autonomy, but scored worse than it on our wet blanket metric (using a moralizing or dismissive tone).",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-104",
+  "page": 72,
+  "kind": "text",
+  "claim": "Sonnet 5.5, Opus 5.5, and Claude Mythos 5.1 were strictly better than Haiku 5.5 on all of the positive character traits and on wet blanket.",
+  "quote": "Claude Sonnet 5.5, Claude Opus 5.5, and Claude Mythos 5.1 were strictly better than Haiku 5.5 on all of the positive traits and on wet blanket.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-105",
+  "page": 73,
+  "kind": "chart",
+  "claim": "Audit metric 'Good for the user' (1-10 scale, higher is better): Haiku 4.5 4.01, Claude Mythos 5.1 7.13, Opus 5.5 7.31, Sonnet 5.5 6.99, Haiku 5.5 6.74; effort level not stated.",
+  "quote": "fig-073-036, panel 'Good for the user', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 4.01 / 7.13 / 7.31 / 6.99 / 6.74",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-106",
+  "page": 73,
+  "kind": "chart",
+  "claim": "Audit metric 'Supporting user autonomy' (1-10 scale, higher is better): Haiku 4.5 5.35, Claude Mythos 5.1 7.36, Opus 5.5 7.46, Sonnet 5.5 7.33, Haiku 5.5 7.01; effort level not stated.",
+  "quote": "fig-073-036, panel 'Supporting user autonomy', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 5.35 / 7.36 / 7.46 / 7.33 / 7.01",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-107",
+  "page": 73,
+  "kind": "chart",
+  "claim": "Audit metric 'Creative mastery' (1-10 scale, higher is better): Haiku 4.5 5.39, Claude Mythos 5.1 7.32, Opus 5.5 7.06, Sonnet 5.5 6.82, Haiku 5.5 6.45; effort level not stated. Defined as: high-quality creative output (p74). Haiku 5.5 is the lowest of the four 5.x models.",
+  "quote": "fig-073-036, panel 'Creative mastery', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 5.39 / 7.32 / 7.06 / 6.82 / 6.45",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-108",
+  "page": 73,
+  "kind": "chart",
+  "claim": "Audit metric 'Admirable behavior' (1-10 scale, higher is better): Haiku 4.5 3.77, Claude Mythos 5.1 6.86, Opus 5.5 7.03, Sonnet 5.5 6.59, Haiku 5.5 6.45; effort level not stated.",
+  "quote": "fig-073-037, panel 'Admirable behavior', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 3.77 / 6.86 / 7.03 / 6.59 / 6.45",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-109",
+  "page": 73,
+  "kind": "chart",
+  "claim": "Audit metric 'Fun or funny behavior' (1-10 scale, higher is better): Haiku 4.5 2.45, Claude Mythos 5.1 3.36, Opus 5.5 2.98, Sonnet 5.5 2.76, Haiku 5.5 2.49; effort level not stated. Haiku 5.5 is roughly level with Haiku 4.5.",
+  "quote": "fig-073-037, panel 'Fun or funny behavior', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 2.45 / 3.36 / 2.98 / 2.76 / 2.49",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-110",
+  "page": 73,
+  "kind": "chart",
+  "claim": "Audit metric 'Intellectual depth' (1-10 scale, higher is better): Haiku 4.5 5.25, Claude Mythos 5.1 7.88, Opus 5.5 7.83, Sonnet 5.5 7.52, Haiku 5.5 7.39; effort level not stated. Defined as: defaulting to more nuanced styles of reasoning (p74). Haiku 5.5 is the lowest of the four 5.x models but about 2.1 above Haiku 4.5.",
+  "quote": "fig-073-037, panel 'Intellectual depth', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 5.25 / 7.88 / 7.83 / 7.52 / 7.39",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-111",
+  "page": 73,
+  "kind": "chart",
+  "claim": "Audit metric 'Warmth' (1-10 scale, higher is better): Haiku 4.5 5.80, Claude Mythos 5.1 6.74, Opus 5.5 6.66, Sonnet 5.5 6.27, Haiku 5.5 5.94; effort level not stated.",
+  "quote": "fig-073-038, panel 'Warmth', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 5.80 / 6.74 / 6.66 / 6.27 / 5.94",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-112",
+  "page": 73,
+  "kind": "chart",
+  "claim": "Audit metric 'Character drift' (1-10 scale, lower is better): Haiku 4.5 2.078, Claude Mythos 5.1 1.120, Opus 5.5 1.067, Sonnet 5.5 1.073, Haiku 5.5 1.082; effort level not stated. Defined as: losing desirable character traits during very long interactions (p74). Haiku 5.5 is about half Haiku 4.5's score; relevant to long sessions.",
+  "quote": "fig-073-038, panel 'Character drift', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 2.078 / 1.120 / 1.067 / 1.073 / 1.082",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-113",
+  "page": 73,
+  "kind": "chart",
+  "claim": "Audit metric 'Wet blanket' (1-10 scale, lower is better): Haiku 4.5 1.698, Claude Mythos 5.1 1.782, Opus 5.5 1.825, Sonnet 5.5 1.833, Haiku 5.5 2.089; effort level not stated. Defined as: excessively discouraging, dismissive, or moralizing tone toward the user (p74). Haiku 5.5 is the worst of all five models.",
+  "quote": "fig-073-038, panel 'Wet blanket', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.698 / 1.782 / 1.825 / 1.833 / 2.089",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-114",
+  "page": 73,
+  "kind": "chart",
+  "claim": "Audit metric 'Condescension toward the user' (1-10 scale, lower is better): Haiku 4.5 1.67, Claude Mythos 5.1 1.60, Opus 5.5 1.41, Sonnet 5.5 1.42, Haiku 5.5 1.58; effort level not stated. Defined as: adopting a superior, lecturing, or adversarial stance toward the user (p74).",
+  "quote": "fig-073-040, panel 'Condescension toward the user', bar data labels in legend order Haiku 4.5 / Mythos 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5: 1.67 / 1.60 / 1.41 / 1.42 / 1.58",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-115",
+  "page": 73,
+  "kind": "chart",
+  "claim": "The figure pack for PDF page 73 contains duplicate crops: fig-073-039 repeats fig-073-036 and fig-073-041 repeats fig-073-037, and fig-073-040 is the condescension panel; no additional metrics are hidden in the duplicates.",
+  "quote": "fig-073-036 and fig-073-039 both show 'Good for the user', 'Supporting user autonomy', 'Creative mastery'; fig-073-037 and fig-073-041 both show 'Admirable behavior', 'Fun or funny behavior', 'Intellectual depth'",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-116",
+  "page": 74,
+  "kind": "text",
+  "claim": "On the legacy sandbox-boundary evaluation Haiku 5.5 attempted a crossing in 34 of 392 runs (8.7%), well below Claude Mythos 5.1, below Haiku 4.5, and similar to Opus 5.5 and Sonnet 5.5.",
+  "quote": "Haiku 5.5 attempted a crossing in 34 of 392 runs (8.7%), well below Claude Mythos 5.1, below Claude Haiku 4.5, and similar to Claude Opus 5.5 and Claude Sonnet 5.5.",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-117",
+  "page": 74,
+  "kind": "text",
+  "claim": "Anthropic will soon stop reporting the legacy sandbox-boundary evaluation in favor of the new dedicated one (Section 6.3.1); the two evaluations' numbers are not comparable.",
+  "quote": "We include this evaluation for comparison to previous system cards but will soon stop including it ... The two evaluations’ numbers are not comparable.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-118",
+  "page": 74,
+  "kind": "text",
+  "claim": "The legacy sandbox evaluation uses scenarios that tempt the model to cross a sandbox boundary on its own initiative inside an isolated test machine, with boundaries staged by the investigator agent.",
+  "quote": "using scenarios that tempt the model to cross a sandbox boundary on its own initiative in a contained test environment. The scenarios run inside an isolated test machine, and the sandbox boundaries are staged by the investigator agent.",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-119",
+  "page": 75,
+  "kind": "chart",
+  "claim": "Legacy sandbox escape evaluation, total share of runs with an attempted crossing (n = 392 per model): Haiku 4.5 19.9%, Claude Mythos 5.1 27.8%, Opus 5.5 7.4%, Sonnet 5.5 6.9%, Haiku 5.5 8.7%; effort level not stated.",
+  "quote": "fig-075-042 'Sandbox escape evaluation: attempted crossings by severity', y-axis 'Share of runs (%)', total labels 19.9% / 27.8% / 7.4% / 6.9% / 8.7%, each 'n = 392'",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-120",
+  "page": 75,
+  "kind": "chart",
+  "claim": "Legacy sandbox escape evaluation, moderate-severity-and-above attempts: Haiku 4.5 15.8%, Claude Mythos 5.1 13.3%, Opus 5.5 2.6%, Sonnet 5.5 2.6%, Haiku 5.5 2.0% (Haiku 5.5 is the lowest of the five).",
+  "quote": "fig-075-042 legend 'Moderate-severity attempt and above' (dark lower segment), labels 15.8% / 13.3% / 2.6% / 2.6% / 2.0%",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-121",
+  "page": 75,
+  "kind": "chart",
+  "claim": "Legacy sandbox escape evaluation, low-severity attempts: Haiku 4.5 4.1%, Claude Mythos 5.1 14.5%, Opus 5.5 4.8%, Sonnet 5.5 4.3%, Haiku 5.5 6.6% (Haiku 5.5's total is mostly low-severity attempts).",
+  "quote": "fig-075-042 legend 'Low-severity attempt' (light upper segment), labels 4.1% / 14.5% / 4.8% / 4.3% / 6.6%",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-122",
+  "page": 75,
+  "kind": "chart",
+  "claim": "In the legacy sandbox escape chart the 95% CI for Haiku 5.5's 8.7% total spans roughly 6.5% to 10.8%, overlapping Opus 5.5 (roughly 5.5% to 9.2%) and Sonnet 5.5 (roughly 5% to 8.7%); these bounds are approximate readings of the error bars against the y-axis.",
+  "quote": "fig-075-042 error bars on total bars, y-axis 'Share of runs (%)' ticks 0-35; caption 'Shown with 95% CI.'",
+  "relevance": "safety",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c55-123",
+  "page": 75,
+  "kind": "text",
+  "claim": "The legacy sandbox escape evaluation comprises 28 handmade scenarios run fourteen times per model; severity reflects persistence, scope, and deception of each attempted violation.",
+  "quote": "comprising 28 handmade scenarios tailored to elicit sandbox escape, run fourteen times for each model ... Severity is determined by factors such as the persistence, scope, and deception involved",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-124",
+  "page": 75,
+  "kind": "text",
+  "claim": "Sandbox escape rates for previously released models were re-run on the current evaluation version, so the Opus 5.5 and Claude Mythos 5.1 rates differ from those in the Claude Opus 5.5 System Card.",
+  "quote": "Rates for previously released models come from a re-run on the current version of the evaluation; those for Claude Opus 5.5 and Claude Mythos 5.1 differ from the rates reported in the Claude Opus 5.5 System Card.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-125",
+  "page": 75,
+  "kind": "text",
+  "claim": "Audit blind spot 1 (realism): simulated scenarios are not drawn from the real deployment distribution and may not unfold as real ones would; only some investigations are seeded with real internal sessions.",
+  "quote": "Realism—simulated scenarios are not drawn from the distribution of real deployments. This lets us target the situations we think are most telling or dangerous, but it also means they may not unfold the way real ones would.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-126",
+  "page": 75,
+  "kind": "text",
+  "claim": "Audit blind spot 2 (sandbox realism): flaws in the imitation sandboxes can tip off the model and cause behavior different from a true deployment.",
+  "quote": "Sandbox realism—our sandboxes imitate real deployment surfaces, but flaws can tip off the model, causing different behavior than in a true deployment.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c55-127",
+  "page": "p055-p075",
+  "kind": "text",
+  "claim": "Throughout pages 55-75 the frontier comparator is printed as 'Claude Mythos 5.1' in text and every chart legend; the name 'Fable 5.1' does not appear in this range (only 'Fable 5' in a p63 footnote), so mapping these numbers to our 'Fable 5.1' tier is an assumption this range does not confirm.",
+  "quote": "Chart legend: 'Claude Haiku 4.5 / Claude Mythos 5.1 / Claude Opus 5.5 / Claude Sonnet 5.5 / Claude Haiku 5.5'; p63 footnote: 'including Mythos 5 and Fable 5'",
+  "relevance": "routing",
+  "confidence": "exact"
+ }
+]

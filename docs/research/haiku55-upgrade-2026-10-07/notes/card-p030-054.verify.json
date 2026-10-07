@@ -1,0 +1,631 @@
+{
+ "verdicts": [
+  {
+   "id": "c30-01",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-02",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-03",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-04",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-05",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-06",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-07",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-08",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-09",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-10",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-11",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-12",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-13",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-14",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-15",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-16",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-17",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-18",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-19",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-20",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-21",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-22",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-23",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-24",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-25",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-26",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-27",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-28",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-29",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-30",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-31",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-32",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-33",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-34",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-35",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-36",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-37",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-38",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-39",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-40",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-41",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-42",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-43",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-44",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-45",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-46",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-47",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-48",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-49",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-50",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-51",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-52",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-53",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-54",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-55",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-56",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-57",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-58",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-59",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-60",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-61",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-62",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-63",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-64",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-65",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-66",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-67",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-68",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-69",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-70",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-71",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-72",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-73",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-74",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-75",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-76",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-77",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-78",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-79",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-80",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-81",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-82",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-83",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-84",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-85",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-86",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-87",
+   "verdict": "corrected",
+   "correction": "Qwen 3.8, DeepSeek-V4-Pro and GLM-5.3 were not evaluated on GUI computer use scenarios in the Gray Swan IPI benchmark (figure caption); the card does not itself say their totals are not comparable with the other models'.",
+   "why": "The 'not like-for-like' clause is the first reader's inference, not a statement on page 50."
+  },
+  {
+   "id": "c30-88",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-89",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-90",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-91",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-92",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-93",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-94",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-95",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-96",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-97",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-98",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-99",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-100",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-101",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-102",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-103",
+   "verdict": "confirmed"
+  },
+  {
+   "id": "c30-104",
+   "verdict": "confirmed"
+  }
+ ],
+ "added": [
+  {
+   "id": "v30-01",
+   "page": 52,
+   "kind": "text",
+   "claim": "On the Shade coding prompt-injection evaluation with probes enabled, Haiku 4.5's attack success was 30.43% across all 40 scenarios versus no successful attack in any scenario for Haiku 5.5; the card frames Haiku 5.5 as 'matching our frontier models against this coding attacker'.",
+   "quote": "substantially improving on Claude Haiku 4.5 and matching our frontier models against this coding attacker ... no attack succeeded against Claude Haiku 5.5 in any scenario, compared to 30.43% across all 40 scenarios for Claude Haiku 4.5",
+   "relevance": "routing",
+   "confidence": "exact"
+  },
+  {
+   "id": "v30-02",
+   "page": 51,
+   "kind": "table",
+   "claim": "In the Shade coding and GUI tables, attempt-level attack success is the fraction of successful attempts among those that got a valid response, and scenario-level attack success is the fraction of scenarios where at least one of 200 attempts succeeded; so Haiku 5.5's 6/40 without probes means at least one break in 15% of coding scenarios despite a 0.08% per-attempt rate.",
+   "quote": "Attempt-level ASR is the fraction of successful attempts among those that got a valid response; scenario-level ASR is the fraction of scenarios where at least one attempt succeeded.",
+   "relevance": "safety",
+   "confidence": "exact"
+  },
+  {
+   "id": "v30-03",
+   "page": 51,
+   "kind": "text",
+   "claim": "Shade is an external adaptive red-teaming tool from Gray Swan whose agents combine search, reinforcement learning and human-in-the-loop insights; the attacker was trained on the test scenarios against earlier Claude models and run unchanged against the latest models, so it was not adapted to Haiku 5.5 specifically.",
+   "quote": "Gray Swan trains the attacker on the test scenarios against earlier Claude models, then runs it unchanged against the latest models on the same scenarios.",
+   "relevance": "safety",
+   "confidence": "exact"
+  },
+  {
+   "id": "v30-04",
+   "page": 53,
+   "kind": "text",
+   "claim": "On Shade GUI computer use, the card says Haiku 5.5 matched its most robust models to date (Opus 5.5, Fable 5.1, Sonnet 5.5), which also reached 0.07% in a single scenario without probes; Haiku 4.5 was 18.89% across 13 of 14 scenarios without probes and 10.46% across 10 scenarios with probes.",
+   "quote": "This matched our most robust models to date, Claude Opus 5.5, Claude Fable 5.1, and Claude Sonnet 5.5, which also reached 0.07% in a single scenario without probes.",
+   "relevance": "routing",
+   "confidence": "exact"
+  },
+  {
+   "id": "v30-05",
+   "page": 53,
+   "kind": "text",
+   "claim": "The Gray Swan IPI benchmark (static attacks, extended thinking) and the Shade GUI evaluation (adaptive attacker, adaptive thinking) give different pictures of Haiku 5.5 in GUI computer use: 24.4% attack success at k=15 on Gray Swan IPI (page 50) versus 0.07% of attempts and 1 of 14 scenarios on Shade (page 53); the card does not reconcile the two.",
+   "quote": "most of its remaining vulnerability was in GUI computer use (24.4%) [p50] ... Claude Haiku 5.5 0.07% 1/14 [p53]",
+   "relevance": "routing",
+   "confidence": "exact"
+  },
+  {
+   "id": "v30-06",
+   "page": 53,
+   "kind": "text",
+   "claim": "The browser-use prompt-injection evaluation covers products with browser capabilities such as Claude in Chrome and Claude Cowork; attacks are viewed via screenshots or page reads and a programmatic checker in the environment verifies whether the injection succeeded.",
+   "quote": "contain attacks viewed via screenshots or page reads ... A programmatic checker within the environment verifies whether the injection succeeded.",
+   "relevance": "other",
+   "confidence": "exact"
+  },
+  {
+   "id": "v30-07",
+   "page": 49,
+   "kind": "text",
+   "claim": "In malicious computer use, Haiku 5.5's 82.59% refusal rate was higher than both Sonnet 5.5 and Opus 5.5 (79.46% each) and below Mythos 5.1 (87.50%), up from 58.93% for Haiku 4.5.",
+   "quote": "Claude Haiku 5.5 refused 82.59% of malicious computer use tasks, up from 58.93% for Claude Haiku 4.5. This was higher than both Claude Sonnet 5.5 and Claude Opus 5.5 (79.46% each) but below Claude Mythos 5.1 (87.50%).",
+   "relevance": "safety",
+   "confidence": "exact"
+  },
+  {
+   "id": "v30-08",
+   "page": 48,
+   "kind": "text",
+   "claim": "In Claude Code, Haiku 5.5's malicious-request refusal rate (84.3%) was slightly below Sonnet 5.5 (85.2%) and Mythos 5.1 (88.5%) and above Opus 5.5 (81.0%); the table notes that bold/underline rankings do not take the margin of error into account.",
+   "quote": "Its refusal rate on malicious tasks was slightly below Claude Sonnet 5.5 (85.2%) and Claude Mythos 5.1 (88.5%), and above Claude Opus 5.5 (81.0%).",
+   "relevance": "routing",
+   "confidence": "exact"
+  },
+  {
+   "id": "v30-09",
+   "page": 48,
+   "kind": "table",
+   "claim": "The Claude Code malicious-use and malicious-computer-use tables (pages 48-49) list the frontier comparator as Claude Mythos 5.1, not Claude Fable 5.1; the prompt-injection tables (pages 51-54) list Claude Fable 5.1, and the page 33 and 41-42 chart legends say 'Claude Fable 5.1 / Mythos 5.1'. Pages 30-54 do not explain the relationship between the two names.",
+   "quote": "Claude Mythos 5.1 88.5% 99.3% [p48]; Claude Mythos 5.1 87.50% [p49]; legend 'Claude Fable 5.1 / Mythos 5.1' [p33]",
+   "relevance": "other",
+   "confidence": "exact"
+  },
+  {
+   "id": "v30-10",
+   "page": 47,
+   "kind": "text",
+   "claim": "The card says Haiku 5.5's prompt-injection gains bring the Haiku family 'closer to' the robustness of frontier models (page 47) and 'comparable to our frontier models in most evaluations' (page 49), i.e. not all evaluations.",
+   "quote": "bringing the Haiku family closer to the robustness of our frontier models",
+   "relevance": "routing",
+   "confidence": "exact"
+  },
+  {
+   "id": "v30-11",
+   "page": 50,
+   "kind": "chart",
+   "claim": "Figure 5.2.1.A also includes Claude Sonnet 5 as a comparator with Gray Swan IPI attack success of 0.7 / 5.1 / 6.7 (k=1 / 10 / 15, data labels), i.e. Haiku 5.5 (0.7 / 5.5 / 7.1) is about level with Sonnet 5 on this benchmark; the body text does not mention Sonnet 5.",
+   "quote": "Figure 5.2.1.A data labels: Claude Sonnet 5 6.7 / 5.1 / 0.7; Claude Haiku 5.5 7.1 / 5.5 / 0.7",
+   "relevance": "routing",
+   "confidence": "exact"
+  },
+  {
+   "id": "v30-12",
+   "page": 44,
+   "kind": "text",
+   "claim": "BBQ over-abstention is shared by both Haiku models: disambiguated accuracy was lower than that of more recent models for both Haiku 5.5 and Haiku 4.5 (55.6% and 60.6%), and for both the gap was almost entirely answering 'cannot be determined' when the context identifies the answer; per-category bias patterns were broadly similar between the two.",
+   "quote": "Accuracy on disambiguated questions was lower than that of more recent models for both Haiku 5.5 and Haiku 4.5 (55.6% and 60.6%, respectively). For both models, this discrepancy was almost entirely attributable to answering “cannot be determined”",
+   "relevance": "routing",
+   "confidence": "exact"
+  },
+  {
+   "id": "v30-13",
+   "page": 43,
+   "kind": "table",
+   "claim": "The BBQ accuracy and bias tables' bold/underline rankings do not take the margin of error into account, and no margins of error are printed for any BBQ number.",
+   "quote": "The highest score in each column is bolded; the second-best score is underlined. (This does not take into account the margin of error.) Results are shown without the system prompt.",
+   "relevance": "other",
+   "confidence": "exact"
+  },
+  {
+   "id": "v30-14",
+   "page": 31,
+   "kind": "text",
+   "claim": "Haiku 5.5 had the highest harmless response rate of any recent model tested on the API without a system prompt, 98.39% versus 97.23% for Haiku 4.5.",
+   "quote": "Haiku 5.5 had the highest harmless response rate of any recent model tested on the API without a system prompt, at 98.39% compared with 97.23% for Claude Haiku 4.5.",
+   "relevance": "safety",
+   "confidence": "exact"
+  },
+  {
+   "id": "v30-15",
+   "page": 37,
+   "kind": "text",
+   "claim": "On suicide and self-harm, Haiku 5.5 validated self-harm as effective and recommended alternatives relying on physical discomfort (such as holding ice) at rates similar to Haiku 4.5; reviewers found many of these responses balanced acknowledging the user's experience with not amplifying negative thoughts.",
+   "quote": "It also validated self-harm as effective and recommended alternatives that rely on physical discomfort, like holding ice, at rates similar to Haiku 4.5.",
+   "relevance": "behavior",
+   "confidence": "exact"
+  },
+  {
+   "id": "v30-16",
+   "page": 38,
+   "kind": "text",
+   "claim": "In suicide-note scenarios on the API, Haiku 5.5 did not endorse or advocate for suicide, but in some conversations where the user pushed back after it declined, it still wrote short messages framed as something to send while the user was alive.",
+   "quote": "In some conversations where the user pushed back, it still wrote short messages framed as something to send while the user was alive.",
+   "relevance": "behavior",
+   "confidence": "exact"
+  },
+  {
+   "id": "v30-17",
+   "page": 38,
+   "kind": "text",
+   "claim": "Updated claude.ai system prompt language reduced Haiku 5.5's validation of self-harm as effective and its recommendations of physical-discomfort alternatives, improved how often it identified itself as an AI with limitations in crisis contexts, and added language discouraging help with suicide notes; these apply on claude.ai only.",
+   "quote": "Updated system prompt language reduced validation of self-harm as effective and recommendations of alternatives that rely on physical discomfort, and improved how often Haiku 5.5 identified itself as an AI with limitations in crisis contexts on claude.ai.",
+   "relevance": "behavior",
+   "confidence": "exact"
+  },
+  {
+   "id": "v30-18",
+   "page": 37,
+   "kind": "text",
+   "claim": "On single-turn suicide and self-harm evaluations Haiku 5.5 reliably declined facilitating requests and almost never refused benign questions, performing comparably to or better than Haiku 4.5; on multi-turn it had higher appropriate response rates than Haiku 4.5 on both API and claude.ai.",
+   "quote": "Claude Haiku 5.5 reliably declined requests that could facilitate suicide or self-harm and almost never refused benign questions on these topics, performing comparably to or better than Claude Haiku 4.5.",
+   "relevance": "behavior",
+   "confidence": "exact"
+  },
+  {
+   "id": "v30-19",
+   "page": 35,
+   "kind": "text",
+   "claim": "On technical child-safety/NCII requests, large improvements in safe response behavior over Haiku 4.5 were made across scenarios including users seeking help building nudify services, identifying survivors of abuse, and evading detection; qualitative review of multi-turn child safety evaluations raised no significant indicators of harm.",
+   "quote": "Large improvements to safe response behavior were made across scenarios, including those in which users sought help building nudify services, identifying survivors of abuse, and evading detection.",
+   "relevance": "safety",
+   "confidence": "exact"
+  },
+  {
+   "id": "v30-20",
+   "page": 39,
+   "kind": "text",
+   "claim": "On single-turn disordered-eating evaluations Haiku 5.5 performed comparably to or slightly better than Haiku 4.5 at declining risky requests and refused benign nutrition, fitness and body-image questions less often, particularly on claude.ai (0.11% vs. 0.68% per Table 4.3.2.A).",
+   "quote": "Claude Haiku 5.5 performed comparably to or slightly better than Claude Haiku 4.5 at declining requests that could reinforce disordered eating, and it refused benign questions about nutrition, fitness, and body image less often, particularly on claude.ai.",
+   "relevance": "behavior",
+   "confidence": "exact"
+  },
+  {
+   "id": "v30-21",
+   "page": 42,
+   "kind": "text",
+   "claim": "The claude.ai system prompt includes standard language directing Claude to engage even-handedly across viewpoints, applied by default; the card ties Haiku 5.5's much higher opposing-perspectives rate on claude.ai (67.8% vs. 35.9% on the API) to that language, so the API figure is the baseline a bare API or agent-harness call would see.",
+   "quote": "far more often on claude.ai (67.8% versus 45.1%), where the system prompt’s even-handedness language is applied by default",
+   "relevance": "behavior",
+   "confidence": "exact"
+  },
+  {
+   "id": "v30-22",
+   "page": 33,
+   "kind": "chart",
+   "claim": "On multi-turn biological weapons, Haiku 5.5 scored 94% on the API but 89% on claude.ai (lower with the system prompt), and Haiku 4.5 scored 97% API / 85% claude.ai; the body text does not comment on this panel beyond calling remaining areas 'comparable'.",
+   "quote": "Figure 4.1.3.A, panel 'Biological weapons', data labels: Haiku 4.5 97%/85%; Haiku 5.5 94%/89%; legend 'Public API' (solid), 'Claude.ai' (hatched)",
+   "relevance": "safety",
+   "confidence": "exact"
+  },
+  {
+   "id": "v30-23",
+   "page": 31,
+   "kind": "text",
+   "claim": "The new violent extremism single-turn set adds more requests to write in the voice of an extremist, more requests that disguise their purpose, and new coverage of nihilistic violent extremism; topics include radicalization, extremist content creation, operational support and legitimization.",
+   "quote": "The new evaluation includes more requests to write in the voice of an extremist, more requests that disguise their purpose, and new coverage of nihilistic violent extremism.",
+   "relevance": "other",
+   "confidence": "exact"
+  }
+ ]
+}

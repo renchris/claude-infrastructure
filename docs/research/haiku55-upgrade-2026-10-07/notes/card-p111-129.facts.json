@@ -1,0 +1,1172 @@
+[
+ {
+  "id": "c111-01",
+  "page": 111,
+  "kind": "table",
+  "claim": "Table 8.1.A standard configuration for Haiku 5.5 results is adaptive thinking at max effort, default sampling settings, averaged over five trials; context windows are evaluation-dependent and do not exceed 1M tokens.",
+  "quote": "all Haiku 5.5 results use the following standard configuration: adaptive thinking at max effort, default sampling settings (temperature, top_p), averaged over five trials. Context window sizes are evaluation-dependent and do not exceed 1M tokens.",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-02",
+  "page": 111,
+  "kind": "table",
+  "claim": "The summary table compares only Haiku 5.5, Haiku 4.5, Sonnet 5.5 and GPT-6 Luna; it has no Opus 5.5 or Fable 5.1 column.",
+  "quote": "Haiku 5.5        Haiku 4.5         Sonnet 5.5        GPT-6 Luna",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-03",
+  "page": 111,
+  "kind": "table",
+  "claim": "SWE-Bench Pro: Haiku 5.5 64.8, Sonnet 5.5 81.3; no Haiku 4.5 or GPT-6 Luna value is given (max effort, five-trial average).",
+  "quote": "SWE-Bench Pro                                  64.8               –               81.3               –",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-04",
+  "page": 111,
+  "kind": "table",
+  "claim": "SWE-bench Multilingual: Haiku 5.5 83.7, Haiku 4.5 67.4, Sonnet 5.5 90.3 (no GPT-6 Luna value).",
+  "quote": "SWE-bench Multilingual                         83.7              67.4             90.3               –",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-05",
+  "page": 111,
+  "kind": "table",
+  "claim": "SWE-bench Multimodal: Haiku 5.5 30.7, Haiku 4.5 19.8, Sonnet 5.5 54.3 (no GPT-6 Luna value).",
+  "quote": "SWE-bench Multimodal                           30.7              19.8             54.3               –",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-06",
+  "page": 111,
+  "kind": "table",
+  "claim": "FrontierCode 1.1 (Main): Haiku 5.5 46.4 at max and 45.8 at xhigh; Sonnet 5.5 46.2 at max and 52.1 at xhigh; GPT-6 Luna 42.4; no Haiku 4.5 value.",
+  "quote": "FrontierCode 1.1 (Main)  46.4  –  46.2  42.4 / (max) (max) / 45.8 52.1 / (xhigh) (xhigh)",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-07",
+  "page": 111,
+  "kind": "table",
+  "claim": "Humanity's Last Exam without tools: Haiku 5.5 45.9, Haiku 4.5 10.2, Sonnet 5.5 56.9.",
+  "quote": "No tools                45.9              10.2             56.9               –",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-08",
+  "page": 111,
+  "kind": "table",
+  "claim": "Humanity's Last Exam with tools: Haiku 5.5 57.4, Haiku 4.5 18.7, Sonnet 5.5 64.5.",
+  "quote": "With tools              57.4              18.7             64.5               –",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-09",
+  "page": 111,
+  "kind": "table",
+  "claim": "OSWorld 2.1 (offline subset): Haiku 5.5 72.4, Haiku 4.5 15.7, Sonnet 5.5 83.9, GPT-6 Luna 48.9 (GPT-6 Luna run by Anthropic on the same 82 tasks via OpenAI's API with OpenAI's own context compaction).",
+  "quote": "OSWorld 2.1 (offline subset)                   72.4              15.7             83.9             48.911 ... GPT-6 Luna was run by Anthropic on the same 82 tasks through OpenAI’s API, with OpenAI’s own context compaction.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-10",
+  "page": 111,
+  "kind": "table",
+  "claim": "HealthBench Professional (length-adjusted): Haiku 5.5 64.8, Haiku 4.5 32.2, Sonnet 5.5 69.2.",
+  "quote": "HealthBench Professional (Length-adjusted)  64.8             32.2              69.2               –",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-11",
+  "page": 111,
+  "kind": "table",
+  "claim": "GDPval-AA v2.1: Haiku 5.5 1620, Haiku 4.5 735, Sonnet 5.5 1840, GPT-6 Luna 1437.",
+  "quote": "GDPval-AA v2.1                                1620               735              1840              1437",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-12",
+  "page": 111,
+  "kind": "table",
+  "claim": "AA-Briefcase v1.1: Haiku 5.5 1578, Haiku 4.5 614, Sonnet 5.5 1824, GPT-6 Luna 1336.",
+  "quote": "AA-Briefcase v1.1                              1578              614              1824             1336",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-13",
+  "page": 111,
+  "kind": "table",
+  "claim": "Competitor figures in the summary table come from the developers' published system cards or benchmark leaderboards unless otherwise noted, not from Anthropic runs.",
+  "quote": "Competitor figures are drawn from the respective developers’ published system cards or benchmark leaderboards unless otherwise noted.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-14",
+  "page": 112,
+  "kind": "text",
+  "claim": "Haiku 5.5 achieved 64.8% on SWE-Bench Pro (actively maintained repositories, large multi-file diffs), averaged over five trials.",
+  "quote": "SWE-Bench Pro is composed of problems drawn from actively-maintained repositories with large, multi-file diffs. Claude Haiku 5.5 achieved 64.8%.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-15",
+  "page": 112,
+  "kind": "text",
+  "claim": "Haiku 5.5 achieved 83.7% on SWE-bench Multilingual (300 problems across 9 programming languages).",
+  "quote": "SWE-bench Multilingual extends the format to 300 problems across 9 programming languages. Haiku 5.5 achieved 83.7%.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-16",
+  "page": 112,
+  "kind": "text",
+  "claim": "Haiku 5.5 achieved 30.7% on SWE-bench Multimodal, which adds screenshots and design mockups to issue descriptions; this is its lowest SWE-bench variant score and 23.6 points below Sonnet 5.5's 54.3 in Table 8.1.A.",
+  "quote": "SWE-bench Multimodal adds visual context (screenshots, design mockups) to the issue descriptions. Haiku 5.5 achieved 30.7%.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-17",
+  "page": 112,
+  "kind": "text",
+  "claim": "FrontierCode is a Cognition agentic coding benchmark of 150 tasks derived from real open-source pull requests; the agent works autonomously in a container with internet access to produce a final patch, with no human intervention and no timeout information.",
+  "quote": "The agent works autonomously in a containerized environment with internet access to produce a final patch, with no human intervention and no timeout information.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-18",
+  "page": 112,
+  "kind": "text",
+  "claim": "FrontierCode grading targets mergeable diffs needing no human edits and penalizes out-of-scope changes even when they are high quality or helpful; blocking criteria include held-out unit tests plus scope and performance blockers.",
+  "quote": "The evaluation targets mergeable code diffs that need no human edits. Its grading penalizes out-of-scope changes, even if they are high quality or helpful.",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-19",
+  "page": 112,
+  "kind": "text",
+  "claim": "FrontierCode has two subsets, Extended (all 150 tasks) and Main (the 100 hardest); each score is the mean of five runs per task, and Haiku 5.5 was scored without changes to the official evaluation.",
+  "quote": "We report two subsets: Extended is the full set of 150 tasks, and Main is the 100 hardest. Each score is the mean of five runs per task.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-20",
+  "page": 112,
+  "kind": "text",
+  "claim": "Table 8.1.A shows every model at max effort on FrontierCode, whereas Cognition's public leaderboard shows each model at its best-performing effort, so the two can differ.",
+  "quote": "Table 8.1.A shows every model at max effort; Cognition’s public leaderboard shows each model at its best-performing effort, so the two can differ.",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-21",
+  "page": 113,
+  "kind": "text",
+  "claim": "On FrontierCode, Haiku 5.5 scored best at max effort: 46.4% on Main and 58.4% on Extended.",
+  "quote": "Claude Haiku 5.5 scored best at max effort: 46.4% on Main and 58.4% on Extended.",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-22",
+  "page": 113,
+  "kind": "text",
+  "claim": "On FrontierCode at max effort Sonnet 5.5 scored 46.2% on Main and 59.1% on Extended, but its best scores were 52.1% and 64.4% at xhigh, i.e. Sonnet 5.5 is worse at max than at xhigh.",
+  "quote": "Claude Sonnet 5.5 scored 46.2% on Main and 59.1% on Extended at max effort. Its best scores were 52.1% and 64.4%, at xhigh.",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-23",
+  "page": 113,
+  "kind": "text",
+  "claim": "There is no Haiku 4.5 result on Cognition's FrontierCode leaderboard, so no direct Haiku 4.5 to 5.5 comparison exists for this benchmark.",
+  "quote": "Cognition’s leaderboard has no Claude Haiku 4.5 result.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-24",
+  "page": 113,
+  "kind": "text",
+  "claim": "FrontierCode was run by Cognition for every model shown, with Claude models in Claude Code and GPT models in Codex; result files report token counts but no cost for Haiku 5.5, so the charts use average output tokens per task (log scale) and carry no uncertainty intervals.",
+  "quote": "Cognition ran the evaluation for every model shown and reported the results; Claude models were run in Claude Code, and GPT models were run in Codex. Cognition’s result files report token counts for every model and no cost for Claude Haiku 5.5",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-25",
+  "page": 113,
+  "kind": "chart",
+  "claim": "FrontierCode Main, Haiku 5.5 by effort (read from Figure 8.3.A): low approximately 34.7% at about 24K output tokens per task, medium approximately 41.6% at about 36K, high approximately 41.9% at about 55K, xhigh approximately 45.8% at about 100K, max approximately 46.4% at about 180K.",
+  "quote": "Figure 8.3.A; y-axis 'FrontierCode score (%)', x-axis 'Average output tokens per task (log scale)'; Haiku 5.5 points labeled low, medium, high, xhigh, Claude Haiku 5.5 (max)",
+  "relevance": "effort",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-26",
+  "page": 113,
+  "kind": "chart",
+  "claim": "FrontierCode Main: Haiku 5.5 gains roughly 7 points from low to medium (about 34.7% to 41.6%), almost nothing from medium to high (about 41.6% to 41.9%) despite about 50% more output tokens, about 4 points from high to xhigh, and about 0.6 points from xhigh to max while output tokens roughly double (about 100K to 180K).",
+  "quote": "Figure 8.3.A; Haiku 5.5 points labeled low, medium, high, xhigh, max; table p111: 46.4 (max) 45.8 (xhigh)",
+  "relevance": "effort",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-27",
+  "page": 113,
+  "kind": "chart",
+  "claim": "FrontierCode Main, Sonnet 5.5 by effort (read from Figure 8.3.A): low approximately 29.3% at about 6.4K output tokens, medium approximately 36.5% at about 7.6K, high approximately 49.3% at about 13K, xhigh 52.1% at about 47K, max 46.2% at about 600K output tokens per task.",
+  "quote": "Figure 8.3.A; green square series 'Claude Sonnet 5.5', label 'Claude Sonnet 5.5 (max)' at far right near 500,000+ on x-axis",
+  "relevance": "effort",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-28",
+  "page": 113,
+  "kind": "chart",
+  "claim": "FrontierCode Main: Sonnet 5.5 at high effort (approximately 49.3% at about 13K output tokens per task) scores above Haiku 5.5 at max (46.4% at about 180K output tokens), i.e. higher score with roughly one-fourteenth the output tokens.",
+  "quote": "Figure 8.3.A; Sonnet 5.5 third point near y=49.3, x~13,000; Haiku 5.5 (max) near y=46.4, x~180,000",
+  "relevance": "routing",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-29",
+  "page": 113,
+  "kind": "chart",
+  "claim": "FrontierCode Main, Opus 5.5 by effort (read from Figure 8.3.A): approximately 47.2% at about 9K output tokens (low), 54.6% at about 18.5K, 53.9% at about 26K, 51.4% at about 60K, and approximately 54.4% at about 165K (max); it is the top series at every effort level.",
+  "quote": "Figure 8.3.A; orange triangle series 'Claude Opus 5.5', label 'Claude Opus 5.5 (max)'",
+  "relevance": "routing",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-30",
+  "page": 113,
+  "kind": "chart",
+  "claim": "FrontierCode Main, Fable 5.1 by effort (read from Figure 8.3.A): approximately 49.8% at about 19K output tokens (low), 50.9% at about 26K, 50.3% at about 40K, 48.7% at about 67K, and approximately 50.3% at about 92K (max); a flat curve between about 48.7% and 50.9%.",
+  "quote": "Figure 8.3.A; blue x series 'Claude Fable 5.1', label 'Claude Fable 5.1 (max)'",
+  "relevance": "routing",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-31",
+  "page": 113,
+  "kind": "chart",
+  "claim": "FrontierCode Main, other comparators (read from Figure 8.3.A): Opus 5 approximately 40.6%, 53.3%, 48.0%, 42.5%, 48.0% from low to max (about 22K to 98K output tokens); GPT-6 Sol approximately 37.2%, 45.9%, 47.7%, 48.4%, 49.2% (about 6.5K to 41K); GPT-6 Luna approximately 16.8% at none, 25.6% at low, then 35.5%, 37.2%, 37.1%, and 42.4% at max (about 57K).",
+  "quote": "Figure 8.3.A; series 'Claude Opus 5', 'GPT-6 Sol', 'GPT-6 Luna' with labels 'GPT-6 Sol (max)', 'GPT-6 Luna (max)', 'none'",
+  "relevance": "routing",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-32",
+  "page": 113,
+  "kind": "chart",
+  "claim": "On FrontierCode Main, Haiku 5.5 at every effort level uses more output tokens per task than Sonnet 5.5 at the same effort from low through xhigh (approximately 24K vs 6.4K at low, 36K vs 7.6K at medium, 55K vs 13K at high, 100K vs 47K at xhigh); only at max does Sonnet 5.5 use more (about 600K vs 180K).",
+  "quote": "Figure 8.3.A; x-axis 'Average output tokens per task (log scale)' ticks 5,000 10,000 20,000 50,000 100,000 200,000 500,000",
+  "relevance": "effort",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-33",
+  "page": 114,
+  "kind": "text",
+  "claim": "Figure 8.3.A's y-axis begins at 10% and Figure 8.3.B's at 25%, so differences between points are visually magnified.",
+  "quote": "Note that the y-axis begins at 25%, not at zero, so differences between points are visually magnified.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-34",
+  "page": 114,
+  "kind": "chart",
+  "claim": "FrontierCode Extended, Haiku 5.5 by effort (read from Figure 8.3.B): low approximately 48.2% at about 20K output tokens per task, medium approximately 55.0% at about 30K, high approximately 55.8% at about 46K, xhigh approximately 58.1% at about 85K, max 58.4% at about 158K.",
+  "quote": "Figure 8.3.B; y-axis 'FrontierCode score (%)', x-axis 'Average output tokens per task (log scale)'; Haiku 5.5 points labeled low, medium, high, xhigh, Claude Haiku 5.5 (max)",
+  "relevance": "effort",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-35",
+  "page": 114,
+  "kind": "chart",
+  "claim": "FrontierCode Extended, Sonnet 5.5 by effort (read from Figure 8.3.B): low approximately 43.4% at about 5.4K output tokens, medium approximately 50.5% at about 6.5K, high approximately 61.4% at about 10.7K, xhigh 64.4% at about 37K, max 59.1% at about 475K.",
+  "quote": "Figure 8.3.B; green square series 'Claude Sonnet 5.5', label 'Claude Sonnet 5.5 (max)'",
+  "relevance": "effort",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-36",
+  "page": 114,
+  "kind": "chart",
+  "claim": "FrontierCode Extended, Opus 5.5 by effort (read from Figure 8.3.B): approximately 60.3% at about 7.6K output tokens (low), 65.2% at about 15K, 65.2% at about 21.5K, 63.5% at about 49K, and approximately 63.5% at about 143K (max).",
+  "quote": "Figure 8.3.B; orange triangle series 'Claude Opus 5.5', label 'Claude Opus 5.5 (max)'",
+  "relevance": "routing",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-37",
+  "page": 114,
+  "kind": "chart",
+  "claim": "FrontierCode Extended, Fable 5.1 by effort (read from Figure 8.3.B): approximately 61.9% at about 15K output tokens (low), 63.6% at about 21.5K, 62.7% at about 33K, 61.3% at about 57K, and approximately 62.0% at about 78K (max).",
+  "quote": "Figure 8.3.B; blue x series 'Claude Fable 5.1', label 'Claude Fable 5.1 (max)'",
+  "relevance": "routing",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-38",
+  "page": 114,
+  "kind": "chart",
+  "claim": "FrontierCode Extended, other comparators (read from Figure 8.3.B): Opus 5 approximately 53.8%, 63.6%, 58.4%, 55.0%, 58.9% from low to max; GPT-6 Sol approximately 50.5%, 57.1%, 59.6%, 59.1%, 60.7%; GPT-6 Luna approximately 30.5% at none, 39.1% at low, then 50.1%, 51.3%, 51.4%, and about 56.1% at max.",
+  "quote": "Figure 8.3.B; series 'Claude Opus 5', 'GPT-6 Sol', 'GPT-6 Luna' with labels 'GPT-6 Sol (max)', 'GPT-6 Luna (max)', 'none'",
+  "relevance": "routing",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-39",
+  "page": 114,
+  "kind": "chart",
+  "claim": "On FrontierCode Extended, Haiku 5.5 at max (58.4%) is below every plotted effort level of Opus 5.5 (about 60.3% to 65.2%) and Fable 5.1 (about 61.3% to 63.6%), and below Sonnet 5.5 at high (about 61.4%) and xhigh (64.4%).",
+  "quote": "Figure 8.3.B; 'Claude Haiku 5.5 (max)' point near y=58.4 vs Opus 5.5, Fable 5.1 and Sonnet 5.5 series",
+  "relevance": "routing",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-40",
+  "page": 115,
+  "kind": "text",
+  "claim": "Terminal-Bench 4.0 has 66 tasks in containerized terminal environments emphasizing science-adjacent and frontier engineering problems (computational biology, physics simulation, CAD, formal proofs, GPU performance work).",
+  "quote": "It comprises 66 tasks, with an emphasis on science-adjacent and frontier engineering problems like computational biology, physics simulation, CAD, formal proofs, and GPU performance work.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-41",
+  "page": 115,
+  "kind": "text",
+  "claim": "Haiku 5.5 scored 39.2% on Terminal-Bench 4.0 with safeguards enabled, in Claude Code --bare mode at max thinking effort (10 trials per task, 660 trials, standard error plus or minus 1.9 points).",
+  "quote": "Claude Haiku 5.5 scored 39.2% on Terminal-Bench 4.0 with safeguards enabled.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-42",
+  "page": 115,
+  "kind": "text",
+  "claim": "On Terminal-Bench 4.0, Haiku 5.5 ran without a fallback model, so a safeguards flag stopped the trial; this happened in 1.8% of trials (12 of 660, 10 of them on a single task) and all of those trials failed.",
+  "quote": "We ran Haiku 5.5 without a fallback model, so when the safeguards flagged a request the trial stopped there. This happened in 1.8% of trials (12 of 660, 10 of them on a single task), and all of these trials failed.",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-43",
+  "page": 115,
+  "kind": "text",
+  "claim": "Haiku 5.5's Terminal-Bench 4.0 run had no internet egress (resources pre-cached from historical run logs); Anthropic has not rigorously measured the effect but believes it did not move the score outside the noise intervals.",
+  "quote": "We ran the evaluation for Haiku 5.5 with no internet egress allowed. ... We have not rigorously measured the size of this effect for Haiku 5.5, but we believe that it did not alter the final score outside the noise intervals.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-44",
+  "page": 115,
+  "kind": "text",
+  "claim": "Terminal-Bench 4.0 comparators: Sonnet 5.5 70.6% (max effort; 1.2% of requests flagged by safeguards and answered by a fallback model, affecting 1.5% of trials; SE plus or minus 2.5), Opus 5.5 66.4% (xhigh effort; 2.5% of requests flagged, affecting 10% of trials; SE plus or minus 2.6).",
+  "quote": "Claude Sonnet 5.5 scored 70.6% (with 1.2% of requests flagged by safeguards and answered by a fallback model, affecting 1.5% of trials), Claude Opus 5.5 scored 66.4% (with 2.5% of requests flagged by safeguards, affecting 10% of trials)",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-45",
+  "page": 115,
+  "kind": "text",
+  "claim": "Haiku 4.5 scored 0.0% on Terminal-Bench 4.0, passing none of its 660 trials, run with a fixed thinking budget of 63,999 tokens because it predates effort levels.",
+  "quote": "Claude Haiku 4.5 scored 0.0%, passing none of its trials. ... Haiku 4.5, which ran with a fixed thinking budget of 63,999 tokens instead of an effort level (as it predates effort levels).",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-46",
+  "page": 115,
+  "kind": "text",
+  "claim": "Terminal-Bench 4.0 numbers use Claude Code in --bare mode at max thinking effort for Haiku 5.5 and Sonnet 5.5, xhigh for Opus 5.5 (as in its own system card); Haiku models used 10 trials per task (660), Sonnet 5.5 and Opus 5.5 five trials per task (330).",
+  "quote": "All reported numbers use Claude Code in --bare mode at max thinking effort, except Opus 5.5, which is reported at xhigh effort as in its own system card",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-47",
+  "page": 115,
+  "kind": "text",
+  "claim": "Haiku 5.5 trails Sonnet 5.5 by 31.4 points (39.2% vs 70.6%) and Opus 5.5 by 27.2 points (39.2% vs 66.4%) on Terminal-Bench 4.0, the largest Haiku-to-Sonnet gap among the coding benchmarks in pages 111-117.",
+  "quote": "Claude Haiku 5.5 scored 39.2% on Terminal-Bench 4.0 ... Claude Sonnet 5.5 scored 70.6% ... Claude Opus 5.5 scored 66.4%",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-48",
+  "page": 115,
+  "kind": "text",
+  "claim": "Terminal-Bench 4.0 raised timeouts and adaptively raised RAM and CPU in a few tasks, and Anthropic found the upgrade reduced the confounding effect of harness differences such as CLI memory footprint, compaction strategy, and container communication protocol.",
+  "quote": "We also found that the upgrade reduced the confounding effect of various harnesses (e.g., CLI memory footprint, compaction strategy, and container communication protocol)",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-49",
+  "page": 116,
+  "kind": "text",
+  "claim": "Terminal-Bench 4.0 public leaderboard for OpenAI models (Codex CLI, max thinking effort): GPT-6 Luna 16.4% plus or minus 2.7%, GPT-6 Sol 49.4% plus or minus 3.2%, GPT-6.1 Sol 58.2% plus or minus 3.1%; GPT-6 Astra 57.9% as reported by OpenAI at high effort and 58.2% plus or minus 2.8% on the leaderboard at max.",
+  "quote": "the public leaderboard reports GPT-6 Luna at 16.4% ± 2.7%, GPT-6 Sol at 49.4% ± 3.2%, and GPT-6.1 Sol at 58.2% ± 3.1% ... OpenAI reported GPT-6 Astra’s final Terminal-Bench 4.0 score at 57.9%, scored at high thinking effort",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-50",
+  "page": 116,
+  "kind": "text",
+  "claim": "Haiku 5.5 scored 20.6% on Terminal-Bench-Science 0.1 (70 scientific-workflow tasks) with safeguards enabled, in Claude Code --bare mode at max thinking effort, with no internet egress; clustered standard error plus or minus 3.7 points.",
+  "quote": "Claude Haiku 5.5 scored 20.6% on Terminal-Bench-Science with safeguards enabled.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-51",
+  "page": 116,
+  "kind": "text",
+  "claim": "On Terminal-Bench-Science, safeguards flagged a request and ended the trial as a failure in 2.3% of Haiku 5.5 trials (16 of 700, all on two of the 70 tasks); Haiku 5.5 ran without a fallback model.",
+  "quote": "we ran Haiku 5.5 without a fallback model, so when the safeguards flagged a request the trial exited and failed. This happened in 2.3% of trials (16 of 700, all on two of the 70 tasks).",
+  "relevance": "safety",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-52",
+  "page": 116,
+  "kind": "text",
+  "claim": "Terminal-Bench-Science comparators: Sonnet 5.5 59.9% (SE plus or minus 4.7), Opus 5.5 58.7% (SE plus or minus 4.8), Haiku 4.5 0.1% (one success in 700 trials, SE plus or minus 0.1; fixed 63,999-token thinking budget).",
+  "quote": "Claude Sonnet 5.5 scored 59.9%, Claude Opus 5.5 scored 58.7%, and Claude Haiku 4.5 scored 0.1% (one success in 700 trials).",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-53",
+  "page": 116,
+  "kind": "text",
+  "claim": "Terminal-Bench-Science reference points: public leaderboard has Claude Opus 5 at 30.0% and Claude Fable 5 at 21.4% (29.0% and 24.7% in Anthropic's internal setup); OpenAI reported GPT-6 Astra 68.1%, GPT-6.1 Sol 57.0%, GPT-6 Sol 27.6% at max thinking effort; no GPT-6 Luna score exists.",
+  "quote": "the public leaderboard reports Claude Opus 5 at 30.0% and Claude Fable 5 at 21.4%, against 29.0% and 24.7% in our internal setup ... OpenAI reported GPT-6 Astra at 68.1%, GPT-6.1 Sol at 57.0% and GPT-6 Sol at 27.6%",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-54",
+  "page": 116,
+  "kind": "text",
+  "claim": "Haiku 5.5's 20.6% on Terminal-Bench-Science is about one-third of Sonnet 5.5's 59.9% and Opus 5.5's 58.7%, and below Claude Fable 5's 24.7% in the same internal setup.",
+  "quote": "Claude Haiku 5.5 scored 20.6% ... Claude Sonnet 5.5 scored 59.9%, Claude Opus 5.5 scored 58.7% ... Claude Fable 5 at 21.4%, against 29.0% and 24.7% in our internal setup",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-55",
+  "page": 117,
+  "kind": "text",
+  "claim": "FrontierSWE v2 is a Proximal benchmark of 34 ultra-long-horizon engineering and research tasks with a 20-hour budget per trial; leading public models average about 11 to 16 hours per trial; every model runs at max reasoning effort in Proximal's own agent harness, five trials per task.",
+  "quote": "Trials have a 20-hour budget. The leading public models average about 11 to 16 hours per trial ... Every model runs at max reasoning effort in Proximal’s own agent harness, and the reported score is the mean across five trials per task.",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-56",
+  "page": 117,
+  "kind": "text",
+  "claim": "Haiku 5.5 scored 43.8% on FrontierSWE v2 at max effort, slightly below Claude Fable 5 (47.0%) and well above GPT-5.6 Sol (32.2%); no Haiku 4.5, Sonnet 5.5, Opus 5.5 or Fable 5.1 score is given.",
+  "quote": "Claude Haiku 5.5 scored 43.8% on FrontierSWE v2, slightly below Claude Fable 5 (47.0%) and well above GPT-5.6 Sol (32.2%). Proximal ran Claude Haiku 5.5 at max effort on all 34 tasks, five trials each.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-57",
+  "page": 117,
+  "kind": "text",
+  "claim": "ProgramBench is a long-context agentic coding benchmark of 200 program-reconstruction tasks (rebuild a codebase from a compiled binary plus documentation, no internet or decompilers), graded on over 247,000 behavioral tests; Anthropic scored 166 tasks after excluding 34 flaky ones and removed the six-hour time limit.",
+  "quote": "We excluded 34 tasks for which the reference binary scored below 0.9 on the hidden test suite (indicating test flakiness), leaving 166 tasks. ... same mini-swe-agent harness as the upstream repository, but without the six-hour time limit.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-58",
+  "page": 117,
+  "kind": "text",
+  "claim": "On ProgramBench (166 tasks, hidden test pass rate), Haiku 5.5 scored 82.0%, above Sonnet 5.5 at 79.7% and below Opus 5.5 at 91.2%; effort level is not stated on this page.",
+  "quote": "On this set, Claude Haiku 5.5 scored 82.0%, whereas Claude Sonnet 5.5 scored 79.7% and Claude Opus 5.5 scored 91.2%.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-59",
+  "page": 117,
+  "kind": "text",
+  "claim": "Haiku 5.5 has a 1M-token context window; its ProgramBench episodes covered context lengths up to the full 1M tokens, and Anthropic calls ProgramBench a strong measure of long-context coding performance.",
+  "quote": "Haiku 5.5 episodes cover a range of context lengths up to the full 1M token window, and the tasks test long-context capabilities that closely align with practical downstream use cases.",
+  "relevance": "api",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-60",
+  "page": 118,
+  "kind": "text",
+  "claim": "HLE was run for Haiku 5.5 in two configurations: reasoning only without tools, and with web search, web fetch, programmatic tool calling, and code execution; thinking was set to auto, each attempt had a 980k-token task budget, and context compaction was not used.",
+  "quote": "In all runs, thinking was set to auto, and each attempt had a 980k-token task budget. Context compaction was not used for these results. Claude Opus 4.6 served as the model grader.",
+  "relevance": "api",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-61",
+  "page": 118,
+  "kind": "text",
+  "claim": "Anthropic used Claude Opus 4.6 as the model grader for HLE, and Claude Opus 5 to review transcripts flagged for HLE-specific source contamination; confirmed cheating cases were re-graded as incorrect.",
+  "quote": "We also screen every correctly answered transcript with text rules for signs of HLE-specific sources and use Claude Opus 5 to review each flagged transcript. We re-graded confirmed cases of cheating as incorrect.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-62",
+  "page": 118,
+  "kind": "text",
+  "claim": "Haiku 4.5 has no effort setting, a 64K output limit, and a 200K context window; its with-tools agentic search runs used a 60K-token extended-thinking budget and a 160K-token task budget instead of 980K.",
+  "quote": "Claude Haiku 4.5 has no effort setting ... a 60K-token budget, close to the maximum allowed under its 64K output limit ... The with-tools variant also used a 160K-token task budget rather than 980K, to fit its 200K context window.",
+  "relevance": "api",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-63",
+  "page": 118,
+  "kind": "text",
+  "claim": "For Haiku 4.5 in the multi-turn with-tools HLE setting, different thinking budgets produce similar results.",
+  "quote": "because in this multi-turn setting different thinking budgets produce similar results",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-64",
+  "page": 119,
+  "kind": "chart",
+  "claim": "HLE with tools, Haiku 5.5 accuracy by effort (data labels in Figure 8.8.1.A): low 38.6%, medium 45.0%, high 50.1%, xhigh 54.8%, max 57.4%.",
+  "quote": "38.6% Low / 45.0% Med / High 50.1% / 54.8% Xhigh / 57.4% Max",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-65",
+  "page": 119,
+  "kind": "chart",
+  "claim": "HLE with tools, Sonnet 5.5 accuracy by effort (data labels): low 47.6%, medium 50.5%, high 56.7%, xhigh 62.0%, max 64.5%.",
+  "quote": "47.6% Low / 50.5% Med / High 56.7% / Xhigh 62.0% / 64.5% Max",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-66",
+  "page": 119,
+  "kind": "chart",
+  "claim": "HLE with tools, Opus 5.5 accuracy by effort (data labels): low 57.4%, medium 63.0%, high 63.9%, xhigh 66.4%, max 67.7%; Opus 5.5 at low equals Haiku 5.5 at max (57.4%).",
+  "quote": "Low 57.4% / Med 63.0% / High 63.9% / Xhigh 66.4% / Max 67.7%",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-67",
+  "page": 119,
+  "kind": "chart",
+  "claim": "HLE with tools, Haiku 4.5 scored 18.7% at a 60K thinking budget (160K task budget), below Haiku 5.5 at low effort (38.6%).",
+  "quote": "18.7% 60K budget",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-68",
+  "page": 119,
+  "kind": "chart",
+  "claim": "HLE with tools, approximate cost per task read from the log x-axis of Figure 8.8.1.A: Haiku 5.5 about $0.007 (low), $0.024 (medium), $0.08 (high), $0.27 (xhigh), $0.64 (max); Sonnet 5.5 about $0.08, $0.11, $0.19, $0.51, $2.2; Opus 5.5 about $0.076, $0.17, $0.30, $0.69, $2.1; Haiku 4.5 about $0.19.",
+  "quote": "x-axis 'Published cost per task' ticks $0.01 $0.02 $0.03 $0.05 $0.07 $0.10 $0.20 $0.30 $0.50 $0.70 $1 $2",
+  "relevance": "pricing",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-69",
+  "page": 119,
+  "kind": "chart",
+  "claim": "HLE with tools: Haiku 5.5 at high (50.1%, about $0.08 per task) roughly matches Sonnet 5.5 at medium (50.5%, about $0.11) and beats Sonnet 5.5 at low (47.6%, about $0.08) at similar cost; above about $0.10 per task the Sonnet 5.5 curve sits above the Haiku 5.5 curve.",
+  "quote": "High 50.1% (Haiku 5.5) vs 47.6% Low, 50.5% Med (Sonnet 5.5); x-axis 'Published cost per task'",
+  "relevance": "routing",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-70",
+  "page": 119,
+  "kind": "text",
+  "claim": "HLE, DRACO and WANDR cost axes are not like-for-like: Opus 5.5 and Sonnet 5.5 costs assume a perfect cache hit rate, while Haiku 4.5 and 5.5 use list prices on recorded usage, with web search fees excluded.",
+  "quote": "Costs for Opus 5.5 and Sonnet 5.5 assume a perfect cache hit rate; Haiku 4.5 and 5.5 use list prices on recorded usage, with web search fees excluded.",
+  "relevance": "pricing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-71",
+  "page": 120,
+  "kind": "chart",
+  "claim": "HLE no tools, Haiku 5.5 accuracy by effort (data labels in Figure 8.8.1.B): low 30.9%, medium 35.5%, high 39.7%, xhigh 44.1%, max 45.9%.",
+  "quote": "30.9% Low / 35.5% Med / High 39.7% / 44.1% Xhigh / 45.9% Max",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-72",
+  "page": 120,
+  "kind": "chart",
+  "claim": "HLE no tools, Sonnet 5.5 accuracy by effort (data labels): low 41.4%, medium 43.2%, high 47.9%, xhigh 53.0%, max 56.9%.",
+  "quote": "41.4% Low / Med 43.2% / High 47.9% / Xhigh 53.0% / 56.9% Max",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-73",
+  "page": 120,
+  "kind": "chart",
+  "claim": "HLE no tools, Opus 5.5 accuracy by effort (data labels): low 52.9%, medium 59.0%, high 59.6%, xhigh 62.8%, max 64.4%; Opus 5.5 at low exceeds Haiku 5.5 at max (45.9%) by 7 points.",
+  "quote": "Low 52.9% / Med 59.0% / High 59.6% / Xhigh 62.8% / Max 64.4%",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-74",
+  "page": 120,
+  "kind": "chart",
+  "claim": "HLE no tools, Haiku 4.5 accuracy by extended-thinking budget (data labels): 4K 5.8%, 8K 6.1%, 16K 6.8%, 32K 8.7%, 60K 10.2%; Haiku 5.5 at low effort (30.9%) is about three times Haiku 4.5's best.",
+  "quote": "4K 5.8% / 8K 6.1% / 16K 6.8% / 32K 8.7% / 60K 10.2%",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-75",
+  "page": 120,
+  "kind": "chart",
+  "claim": "HLE no tools, approximate cost per task read from the log x-axis of Figure 8.8.1.B: Haiku 5.5 about $0.0034 (low), $0.007 (medium), $0.02 (high), $0.065 (xhigh), $0.21 (max); Sonnet 5.5 about $0.029, $0.033, $0.077, $0.20, $0.9; Opus 5.5 about $0.039, $0.11, $0.16, $0.33, $0.98; Haiku 4.5 about $0.010 to $0.094.",
+  "quote": "x-axis 'Published cost per task' ticks $0.005 $0.01 $0.02 $0.03 $0.05 $0.07 $0.10 $0.20 $0.30 $0.50 $0.70 $1",
+  "relevance": "pricing",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-76",
+  "page": 120,
+  "kind": "chart",
+  "claim": "HLE no tools: Haiku 5.5 at low effort (30.9%) costs about the same per task as or less than Haiku 4.5 at its 4K budget (5.8% at about $0.010), reading costs from the chart.",
+  "quote": "30.9% Low (Haiku 5.5) at x~$0.0034; 4K 5.8% (Haiku 4.5) at x~$0.01",
+  "relevance": "pricing",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-77",
+  "page": 120,
+  "kind": "text",
+  "claim": "DRACO is a Perplexity deep research benchmark of 100 curated tasks graded with expert rubrics on factual accuracy, breadth and depth of analysis, presentation quality, and citation quality; Claude models ran with web search, web fetch, programmatic tool calling, code execution, and a 980k-token task budget.",
+  "quote": "We evaluated Claude models with web search, web fetch, programmatic tool calling, code execution, and a 980k-token task budget.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-78",
+  "page": 121,
+  "kind": "text",
+  "claim": "DRACO responses were graded by Claude Opus 4.6 (five grading runs per response, binary MET/UNMET rubric verdicts); the paper shows judge choice can shift absolute scores by 10 to 25 points while preserving system ordering, so scores are not comparable to the paper's headline numbers.",
+  "quote": "The paper’s Appendix A shows that judge choice can shift absolute scores by 10 to 25 points while preserving system ordering, so our scores are not directly comparable to the paper’s headline numbers.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-79",
+  "page": 121,
+  "kind": "text",
+  "claim": "In DRACO the model was told to write its final report to a file and only that file was graded, isolating the deliverable from intermediate tool output.",
+  "quote": "instructed the model to write its final report to a file in its execution environment. We then graded only that file’s contents rather than the full agent transcript, isolating the deliverable from intermediate tool output.",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-80",
+  "page": 121,
+  "kind": "chart",
+  "claim": "DRACO, Haiku 5.5 normalized score by effort (data labels in Figure 8.8.2.A): low 64.3%, medium 72.4%, high 77.8%, xhigh 80.5%, max 81.5%.",
+  "quote": "64.3% Low / Med 72.4% / 77.8% High / 80.5% Xhigh / 81.5% Max",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-81",
+  "page": 121,
+  "kind": "chart",
+  "claim": "DRACO, Sonnet 5.5 score by effort (data labels): low 64.6%, medium 71.2%, high 81.0%, xhigh 85.7%, max 87.0%.",
+  "quote": "Low 64.6% / 71.2% Med / High 81.0% / 85.7% Xhigh / 87.0% Max",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-82",
+  "page": 121,
+  "kind": "chart",
+  "claim": "DRACO, Opus 5.5 score by effort (data labels): low 72.5%, medium 83.9%, high 85.0%, xhigh 86.7%, max 87.4%.",
+  "quote": "72.5% Low / Med 83.9% / High 85.0% / Xhigh 86.7% / Max 87.4%",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-83",
+  "page": 121,
+  "kind": "chart",
+  "claim": "DRACO, Haiku 4.5 scored 52.4% at a 60K thinking budget (160K task budget), 11.9 points below Haiku 5.5 at low effort (64.3%).",
+  "quote": "52.4% 60K budget",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-84",
+  "page": 121,
+  "kind": "chart",
+  "claim": "DRACO: at low and medium effort Haiku 5.5 matches Sonnet 5.5 (64.3% vs 64.6% at low, 72.4% vs 71.2% at medium) and Haiku 5.5 medium (72.4%) equals Opus 5.5 low (72.5%); the gap opens at high and above (77.8% vs 81.0%, 80.5% vs 85.7%, 81.5% vs 87.0%).",
+  "quote": "64.3% Low, Med 72.4% (Haiku 5.5); Low 64.6%, 71.2% Med (Sonnet 5.5); 72.5% Low (Opus 5.5)",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-85",
+  "page": 121,
+  "kind": "chart",
+  "claim": "DRACO approximate cost per task read from the log x-axis of Figure 8.8.2.A: Haiku 5.5 about $0.012 (low), $0.10 (medium), $0.80 (high), $2.3 (xhigh), $3.9 (max); Sonnet 5.5 about $0.07, $0.16, $1.2, $5.5, $13.5; Opus 5.5 about $0.28, $2.0, $3.5, $8.8, $15; Haiku 4.5 about $0.31.",
+  "quote": "x-axis 'Published cost per task' ticks $0.01 $0.02 $0.03 $0.05 $0.07 $0.10 $0.20 $0.30 $0.50 $0.70 $1 $2 $3 $5 $7 $10",
+  "relevance": "pricing",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-86",
+  "page": 121,
+  "kind": "chart",
+  "claim": "DRACO: Haiku 5.5 at low effort (64.3%, about $0.012 per task) scores above Haiku 4.5 (52.4%, about $0.31 per task) at roughly one twenty-fifth of the charted cost.",
+  "quote": "64.3% Low at x~$0.01; 52.4% 60K budget at x~$0.30",
+  "relevance": "pricing",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-87",
+  "page": 122,
+  "kind": "text",
+  "claim": "WANDR is a Perplexity wide-research benchmark of 500 tasks requiring search for tens to hundreds of entities with cited facts in structured records; the metric is soft F1 (precision of verified content vs recall of the requested collection), with entity rows failing format validation dropped rather than failing the task.",
+  "quote": "The primary metric is “soft F1,” which balances precision (how much of the model’s solution is verified) against recall (how much of the requested fact collection it completed).",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-88",
+  "page": 122,
+  "kind": "text",
+  "claim": "Anthropic ran a modified WANDR: offline web search and fetch against a frozen index (Perplexity uses the live web), Claude Opus 4.6 as judge (Perplexity uses GPT-5.4), slightly different prompts; results are not directly comparable to reported competitor numbers.",
+  "quote": "Because the tools and grading logic differed from Perplexity’s harness, our results are not directly comparable to reported numbers on competitor models.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-89",
+  "page": 122,
+  "kind": "text",
+  "claim": "WANDR Claude runs used web search, web fetch, programmatic tool calling, code execution, and a 980k-token task budget; the grader re-fetches cited URLs and a judge model decides whether the references support the solution.",
+  "quote": "The grader re-fetches the cited URLs, and the judge model then determines whether the references support the solution.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-90",
+  "page": 123,
+  "kind": "chart",
+  "claim": "WANDR soft F1, Haiku 5.5 by effort (data labels in Figure 8.8.3.A): low 3.5%, medium 12.9%, high 37.3%, xhigh 45.9%, max 49.9%.",
+  "quote": "Low 3.5% / Med 12.9% / High 37.3% / 45.9% Xhigh / 49.9% Max",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-91",
+  "page": 123,
+  "kind": "chart",
+  "claim": "WANDR soft F1, Sonnet 5.5 by effort (data labels): low 10.0%, medium 29.9%, high 56.3%, xhigh 66.6%, max 70.0%.",
+  "quote": "10.0% Low / 29.9% Med / High 56.3% / Xhigh 66.6% / 70.0% Max",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-92",
+  "page": 123,
+  "kind": "chart",
+  "claim": "WANDR soft F1, Opus 5.5 by effort (data labels): low 31.2%, medium 62.8%, high 67.3%, xhigh 71.3%, max 72.3%.",
+  "quote": "31.2% Low / 62.8% Med / High 67.3% / Xhigh 71.3% / Max 72.3%",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-93",
+  "page": 123,
+  "kind": "chart",
+  "claim": "WANDR soft F1, Haiku 4.5 scored 6.4% at a 60K thinking budget (160K task budget), which is above Haiku 5.5 at low effort (3.5%) and below Haiku 5.5 at medium (12.9%).",
+  "quote": "6.4% 60K budget; Low 3.5%; Med 12.9%",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-94",
+  "page": 123,
+  "kind": "chart",
+  "claim": "WANDR is the most effort-sensitive benchmark in this range for Haiku 5.5: soft F1 rises from 3.5% at low to 49.9% at max (about 14x), and Haiku 5.5 at max (49.9%) is 20.1 points below Sonnet 5.5 at max (70.0%) and 22.4 below Opus 5.5 at max (72.3%).",
+  "quote": "Low 3.5% ... 49.9% Max (Haiku 5.5); 70.0% Max (Sonnet 5.5); Max 72.3% (Opus 5.5)",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-95",
+  "page": 123,
+  "kind": "chart",
+  "claim": "WANDR approximate cost per task read from the log x-axis of Figure 8.8.3.A: Haiku 5.5 about $0.004 (low), $0.07 (medium), $1.5 (high), $3.6 (xhigh), $5.5 (max); Sonnet 5.5 about $0.10, $0.82, $6.4, $15.5, $26; Opus 5.5 about $1.2, $11, $17, $29, $38; Haiku 4.5 about $0.9.",
+  "quote": "x-axis 'Published cost per task' ticks $0.005 $0.01 $0.02 $0.05 $0.10 $0.20 $0.50 $1 $2 $5 $10 $20",
+  "relevance": "pricing",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-96",
+  "page": 123,
+  "kind": "chart",
+  "claim": "WANDR: Haiku 5.5 at high (37.3%, about $1.5 per task) scores above Sonnet 5.5 at medium (29.9%, about $0.82) and Opus 5.5 at low (31.2%, about $1.2); beyond about $2 per task the Sonnet 5.5 and Opus 5.5 curves are above Haiku 5.5's.",
+  "quote": "High 37.3% (Haiku 5.5); 29.9% Med (Sonnet 5.5); 31.2% Low (Opus 5.5)",
+  "relevance": "routing",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-97",
+  "page": 123,
+  "kind": "text",
+  "claim": "Chartography is a Surge AI benchmark of 100 chart-understanding tasks on specialized chart types; runs used adaptive thinking at max effort with and without tools, where tools means a container with the image file, standard libraries, and an image cropping tool.",
+  "quote": "We used adaptive thinking at max effort in all runs and evaluated each model with and without tools. With tools, each model was given a container with the image file and standard libraries installed, and an image cropping tool.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-98",
+  "page": 124,
+  "kind": "text",
+  "claim": "Chartography at max effort: Haiku 5.5 scored 46.4% without tools and 86.2% with tools; Haiku 4.5 scored 6.4% and 8.8%; Sonnet 5.5 scored 61.6% and 90.2%.",
+  "quote": "Claude Haiku 5.5 scored 46.4% without tools and 86.2% with tools. Claude Haiku 4.5 scored 6.4% without tools and 8.8% with tools, and Claude Sonnet 5.5 scored 61.6% without tools and 90.2% with tools.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-99",
+  "page": 124,
+  "kind": "chart",
+  "claim": "Chartography bar labels (Figure 8.9.1.A): Opus 5.5 64.4 without tools and 89.0 with tools; Claude Sonnet 5 15.6 and 73.2; without-tools public scores Gemini 3.1 Pro 26.1, Gemini 3.8 Flash 40.9, Gemini 4 Argon 71.6, GPT-6 Luna 29.1, Kimi K3 26.6.",
+  "quote": "26.1 40.9 71.6 29.1 26.6 | Claude Haiku 4.5 6.4 8.8 | Claude Sonnet 5 15.6 73.2 | Claude Opus 5.5 64.4 89.0 | Claude Sonnet 5.5 61.6 90.2 | Claude Haiku 5.5 46.4 86.2",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-100",
+  "page": 124,
+  "kind": "text",
+  "claim": "Tools nearly double Haiku 5.5's Chartography score (46.4% to 86.2%, plus 39.8 points), bringing it within 4.0 points of Sonnet 5.5 (90.2%) and 2.8 points of Opus 5.5 (89.0%); without tools it trails Sonnet 5.5 by 15.2 points and Opus 5.5 by 18.0.",
+  "quote": "Claude Haiku 5.5 scored 46.4% without tools and 86.2% with tools ... Claude Sonnet 5.5 scored 61.6% without tools and 90.2% with tools. (chart: Opus 5.5 64.4, 89.0)",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-101",
+  "page": 124,
+  "kind": "text",
+  "claim": "The card states Haiku 5.5 showed a step-function improvement in raw visual reasoning over Haiku 4.5.",
+  "quote": "Claude Haiku 5.5 showed step-function improvement in raw visual reasoning capabilities, outperforming Claude Haiku 4.5 by a wide margin.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-102",
+  "page": 124,
+  "kind": "text",
+  "claim": "Chartography was graded by Gemini 3.5 Flash following the Surge AI leaderboard; Haiku 4.5 has no effort setting and was run at fixed extended-thinking budgets up to 32k; scores are averaged over five runs with 95% CI.",
+  "quote": "we followed the Surge AI Leaderboard in using Gemini 3.5 Flash as a grader. ... Haiku 4.5 has no effort setting and is run at fixed extended-thinking budgets up to 32k.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-103",
+  "page": 125,
+  "kind": "chart",
+  "claim": "Chartography with tools, Haiku 5.5 by effort (read from Figure 8.9.1.B, five points low to max): approximately 54.5% at about $0.0016 per task, 65.7% at about $0.003, 73.3% at about $0.008, 82% at about $0.038, and 86.2% at about $0.18.",
+  "quote": "Figure 8.9.1.B; y-axis 'Accuracy (%)', x-axis 'Cost per task (USD, log scale)'; solid orange 'Claude Haiku 5.5' 'With tools'",
+  "relevance": "effort",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-104",
+  "page": 125,
+  "kind": "chart",
+  "claim": "Chartography without tools, Haiku 5.5 by effort (read from Figure 8.9.1.B): approximately 38% at about $0.0007 per task, 37.3% at about $0.001, 41.3% at about $0.0015, 44.5% at about $0.0045, and 46.4% at about $0.034; a nearly flat curve, so effort adds under 10 points without tools.",
+  "quote": "Figure 8.9.1.B; dashed orange 'Claude Haiku 5.5' 'Without tools'",
+  "relevance": "effort",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-105",
+  "page": 125,
+  "kind": "chart",
+  "claim": "Chartography with tools, Sonnet 5.5 by effort (read from Figure 8.9.1.B): approximately 57.5% at about $0.01 per task, 67.5% at about $0.018, 81% at about $0.037, 86.2% at about $0.10, and 90.2% at about $0.82; Opus 5.5 with tools approximately 71.5% at about $0.037, 85.2% at $0.084, 86.8% at $0.12, 89.6% at $0.31, 89.0% at about $1.4.",
+  "quote": "Figure 8.9.1.B; solid green 'Claude Sonnet 5.5' and solid orange-yellow 'Claude Opus 5.5', 'With tools'",
+  "relevance": "effort",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-106",
+  "page": 125,
+  "kind": "chart",
+  "claim": "Chartography with tools: below about $0.04 per task the Haiku 5.5 curve is above the Sonnet 5.5 and Opus 5.5 curves (for example approximately 73% vs 57.5% for Sonnet 5.5 at about $0.008 to $0.01), and Haiku 5.5's max point (86.2% at about $0.18) is slightly below Sonnet 5.5 and Opus 5.5 at similar cost (about 87% to 88%).",
+  "quote": "Figure 8.9.1.B; x-axis ticks $0.001 $0.002 $0.005 $0.01 $0.02 $0.05 $0.1 $0.2 $0.5 $1 $2",
+  "relevance": "routing",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-107",
+  "page": 125,
+  "kind": "chart",
+  "claim": "Chartography, Haiku 4.5 stays between roughly 5% and 9% across all thinking budgets with or without tools, and Claude Sonnet 5 with tools ranges from approximately 28% at about $0.15 per task to 73.2% at about $1.65 (read from Figure 8.9.1.B).",
+  "quote": "Figure 8.9.1.B; pink 'Claude Haiku 4.5' and gray 'Claude Sonnet 5' series",
+  "relevance": "routing",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-108",
+  "page": 125,
+  "kind": "text",
+  "claim": "Haiku 5.5 is charged per request at a rate that depends on that request's prompt length, with a threshold at 100K tokens (above or below).",
+  "quote": "Claude Haiku 5.5 is charged per request at the rate for that request’s prompt length (above or below 100K tokens).",
+  "relevance": "pricing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-109",
+  "page": 125,
+  "kind": "text",
+  "claim": "Sonnet 5.5 has an updated cache-read price as of October 7, 2026, used in the Chartography and BenchCAD cost axes; those costs are list prices on each run's token usage including actual prompt-cache reads and writes.",
+  "quote": "Costs calculated as list prices applied to each run’s token usage, including actual prompt-cache reads and writes. ... Claude Sonnet 5.5 uses the updated cache-read price as of October 7, 2026.",
+  "relevance": "pricing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-110",
+  "page": 125,
+  "kind": "text",
+  "claim": "The effort parameter is described as the control for the amount of test-time compute spent, for all models other than Haiku 4.5.",
+  "quote": "All other models are evaluated with adaptive thinking at various effort levels, with and without tools. We use the effort parameter to adjust the amount of test-time compute spent.",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-111",
+  "page": 125,
+  "kind": "text",
+  "claim": "BenchCAD is a programmatic CAD benchmark built from 17,900 execution-verified CadQuery programs across 106 industrial part families; Anthropic reports the Vision2Code task (generate CadQuery code from multi-view renders).",
+  "quote": "We report results on the Vision2Code task, which requires models to generate CadQuery code from multi-view renders.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-112",
+  "page": 126,
+  "kind": "text",
+  "claim": "BenchCAD Vision2Code (1,000-file subset, max effort, voxel IoU averaged over five runs): Haiku 5.5 0.670 without tools and 0.870 with tools; Haiku 4.5 0.155 and 0.210; Sonnet 5.5 0.747 and 0.963.",
+  "quote": "Claude Haiku 5.5 achieved a voxel IoU score of 0.670 without tools and 0.870 with tools. Claude Haiku 4.5 scored 0.155 and 0.210, and Claude Sonnet 5.5 scored 0.747 and 0.963.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-113",
+  "page": 126,
+  "kind": "chart",
+  "claim": "BenchCAD Vision2Code bar labels (Figure 8.9.2.A): Opus 5.5 0.730 without tools and 0.962 with tools; Claude Sonnet 5 0.322 and 0.519.",
+  "quote": "Claude Sonnet 5 0.322 0.519 | Claude Opus 5.5 0.730 0.962 | Claude Sonnet 5.5 0.747 0.963 | Claude Haiku 5.5 0.670 0.870",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-114",
+  "page": 126,
+  "kind": "text",
+  "claim": "With tools on BenchCAD, Haiku 5.5 (0.870) trails Sonnet 5.5 (0.963) and Opus 5.5 (0.962) by about 0.09 voxel IoU, a larger gap than on Chartography with tools.",
+  "quote": "Claude Haiku 5.5 achieved a voxel IoU score of 0.670 without tools and 0.870 with tools ... Claude Sonnet 5.5 scored 0.747 and 0.963.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-115",
+  "page": 126,
+  "kind": "text",
+  "claim": "The card says Claude's BenchCAD performance scales substantially with test-time compute, particularly when the models have tools that enable visual verification of intermediate outputs.",
+  "quote": "Claude’s performance on this evaluation scales substantially with test-time compute, particularly when the models have tools that enable visual verification of intermediate outputs.",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-116",
+  "page": 127,
+  "kind": "chart",
+  "claim": "BenchCAD with tools, Haiku 5.5 by effort (read from Figure 8.9.2.B): voxel IoU approximately 0.32 at about $0.0006 per task, 0.35 at about $0.0011, 0.49 at about $0.008, 0.79 at about $0.25, and 0.870 at about $1.65; a steep effort curve spanning roughly 0.55 IoU and over three orders of magnitude in cost.",
+  "quote": "Figure 8.9.2.B; y-axis 'Voxel IoU', x-axis 'Cost per task (USD, log scale)'; solid orange 'Claude Haiku 5.5' 'With tools'",
+  "relevance": "effort",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-117",
+  "page": 127,
+  "kind": "chart",
+  "claim": "BenchCAD without tools, Haiku 5.5 (read from Figure 8.9.2.B): voxel IoU rises from approximately 0.32 at about $0.0006 per task through about 0.39 at $0.0016 and 0.57 at $0.009 to 0.670 at about $0.10.",
+  "quote": "Figure 8.9.2.B; dashed orange 'Claude Haiku 5.5' 'Without tools'",
+  "relevance": "effort",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-118",
+  "page": 127,
+  "kind": "chart",
+  "claim": "BenchCAD with tools comparators (read from Figure 8.9.2.B): Sonnet 5.5 rises from approximately 0.33 at about $0.004 per task to 0.963 at about $4.7; Opus 5.5 from approximately 0.40 at about $0.009 to 0.962 at about $6; the Haiku 5.5 with-tools curve is at or above both at equal cost up to its max point near $1.65.",
+  "quote": "Figure 8.9.2.B; solid green 'Claude Sonnet 5.5', solid yellow 'Claude Opus 5.5'; x-axis ticks $0.0005 ... $5",
+  "relevance": "routing",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-119",
+  "page": 127,
+  "kind": "chart",
+  "claim": "BenchCAD: Haiku 4.5 stays between approximately 0.09 and 0.21 voxel IoU across thinking budgets, with its with-tools points near 0.21 at about $0.11 to $0.13 per task; Haiku 5.5's lowest-effort point (about 0.32 at about $0.0006) is above all Haiku 4.5 points (read from Figure 8.9.2.B).",
+  "quote": "Figure 8.9.2.B; pink 'Claude Haiku 4.5' series",
+  "relevance": "routing",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-120",
+  "page": 127,
+  "kind": "text",
+  "claim": "OSWorld 2.1 is a benchmark of 108 long-horizon computer use tasks on a live Ubuntu VM via screenshots and mouse and keyboard; two metrics are reported, partial score and strict pass rate, each as Pass@1 averaged over five attempts per task.",
+  "quote": "we report two metrics: the partial score (mean per-task credit across checkpoints) and the strict pass rate (the fraction of tasks with every checkpoint satisfied), each as Pass@1 averaged over five independent attempts per task.",
+  "relevance": "other",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-121",
+  "page": 128,
+  "kind": "text",
+  "claim": "OSWorld 2.1 was run with benchmark defaults (1080p, maximum 500 action steps per task) at max effort on the official offline subset of 82 of 108 tasks with no internet access in the VM; Claude Opus 4.8 was the model grader where needed.",
+  "quote": "benchmark’s default settings (1080p resolution and a maximum of 500 action steps per task) at max effort. We used Claude Opus 4.8 for tasks that require a model grader.",
+  "relevance": "effort",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-122",
+  "page": 128,
+  "kind": "text",
+  "claim": "On OSWorld 2.1 offline subset at max effort, Haiku 5.5 achieved 72.4% partial score and 37.1% strict pass rate; Sonnet 5.5 83.9% partial and 48.8% strict; Opus 5.5 87.2% partial and 53.2% strict.",
+  "quote": "Claude Haiku 5.5 achieved a partial score of 72.4% and a strict pass rate of 37.1%. Re-evaluated under the same conditions, Claude Sonnet 5.5 scored 83.9% partial and 48.8% strict pass, and Claude Opus 5.5 scored 87.2% partial and 53.2% strict pass.",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-123",
+  "page": 128,
+  "kind": "chart",
+  "claim": "OSWorld 2.1 offline subset bar labels (Figure 8.9.3.A): Haiku 4.5 15.7 partial and 1.7 strict (fixed thinking budget, no server-side compaction); GPT-6 Luna 48.9 and 17.1; GPT-6.1 Sol 76.6 and 39.8.",
+  "quote": "GPT-6 Luna 48.9 17.1 | GPT-6.1 Sol 76.6 39.8 | Claude Haiku 4.5 15.7 1.7 | Claude Opus 5.5 87.2 53.2 | Claude Sonnet 5.5 83.9 48.8 | Claude Haiku 5.5 72.4 37.1",
+  "relevance": "routing",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-124",
+  "page": 128,
+  "kind": "text",
+  "claim": "Haiku 5.5 fully completes (every checkpoint) only 37.1% of OSWorld tasks despite a 72.4% partial score, a 35.3-point gap between partial credit and strict completion; Sonnet 5.5's gap is 35.1 points and Opus 5.5's is 34.0.",
+  "quote": "Claude Haiku 5.5 achieved a partial score of 72.4% and a strict pass rate of 37.1%.",
+  "relevance": "behavior",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-125",
+  "page": 128,
+  "kind": "text",
+  "claim": "All Anthropic models in the OSWorld section used the same configuration, which includes server-side compaction, except Haiku 4.5 (fixed thinking budget, no server-side compaction); GPT-6.1 Sol and GPT-6 Luna were run by Anthropic via OpenAI's API with OpenAI's own context compaction.",
+  "quote": "All Anthropic models in this section were evaluated under the same configuration, except Claude Haiku 4.5, which ran at a fixed thinking budget and without server-side compaction.",
+  "relevance": "api",
+  "confidence": "exact"
+ },
+ {
+  "id": "c111-126",
+  "page": 129,
+  "kind": "chart",
+  "claim": "OSWorld 2.1 offline subset, Haiku 5.5 partial score by effort (read from Figure 8.9.3.B, low to max): approximately 42% at about $0.07 mean cost per task, 53% at about $0.13, 61% at about $0.18, 67.5% at about $0.28, and 72.4% at about $0.61.",
+  "quote": "Figure 8.9.3.B; y-axis 'Partial-credit score (%)', x-axis 'Mean cost per task (USD; log scale)'; 'Each point on a line is one reasoning effort setting (low to max, from left to right)'",
+  "relevance": "effort",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-127",
+  "page": 129,
+  "kind": "chart",
+  "claim": "OSWorld 2.1 offline subset, Sonnet 5.5 partial score by effort (read from Figure 8.9.3.B): approximately 58% at about $0.68 per task, 66% at about $0.93, 73% at about $1.4, 81% at about $2.25, and 83.9% at about $5.8; Opus 5.5 approximately 64% at about $0.98, 79% at about $2.1, 83.5% at about $2.55, 85.5% at about $4.3, and 87.2% at about $8.6.",
+  "quote": "Figure 8.9.3.B; green diamond 'Claude Sonnet 5.5', yellow square 'Claude Opus 5.5'; x-axis ticks $0.02 $0.05 $0.10 $0.20 $0.50 $1 $2 $5 $10",
+  "relevance": "effort",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-128",
+  "page": 129,
+  "kind": "chart",
+  "claim": "OSWorld: Haiku 5.5 at max (72.4% at about $0.61 per task) is cheaper than Sonnet 5.5's lowest-effort point (about 58% at about $0.68) and scores about the same as Sonnet 5.5 at high effort (about 73% at about $1.4); Haiku 5.5's whole curve lies to the left of both Sonnet 5.5 and Opus 5.5.",
+  "quote": "Figure 8.9.3.B; orange circle 'Claude Haiku 5.5' series ends near x~$0.6, y~72.4; Sonnet 5.5 series starts near x~$0.68, y~58",
+  "relevance": "routing",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-129",
+  "page": 129,
+  "kind": "chart",
+  "claim": "OSWorld: Haiku 4.5's single point is approximately 15.7% at about $1.45 mean cost per task, i.e. more expensive per task than Haiku 5.5 at max (about $0.61) with a far lower score (read from Figure 8.9.3.B).",
+  "quote": "Figure 8.9.3.B; pink pentagon labeled 'Claude Haiku 4.5' near x~$1.45, y~15.7",
+  "relevance": "pricing",
+  "confidence": "read-from-chart"
+ },
+ {
+  "id": "c111-130",
+  "page": 129,
+  "kind": "chart",
+  "claim": "OSWorld GPT comparators by effort (read from Figure 8.9.3.B): GPT-6 Luna approximately 19%, 37.5%, 42%, 45%, 49% at about $0.04 to $0.21 per task; GPT-6.1 Sol approximately 66%, 72%, 76%, 75%, 76.6% at about $1.0 to $1.9; Haiku 5.5 is above GPT-6 Luna at every comparable cost.",
+  "quote": "Figure 8.9.3.B; gray triangle 'GPT-6 Luna', gray star 'GPT-6.1 Sol'; 'thin gray lines are GPT models'",
+  "relevance": "routing",
+  "confidence": "read-from-chart"
+ }
+]
