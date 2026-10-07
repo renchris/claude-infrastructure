@@ -138,8 +138,10 @@ for l in open("/Users/chrisren/.claude/logs/auth-timeseries.jsonl"):
  r=json.loads(l);q=p.get(r["acct"]);p[r["acct"]]=r
  n+=bool(q and q["state"]=="OK" and r["state"]=="EMPTY" and (r["n_live"] or 0)>=4)
 print(n)'` prints more than 0.
-  2. Three or more `has been revoked` 401s in any 7 days: `grep -l '"isApiErrorMessage":true' -r
-     ~/.claude*/projects --include='*.jsonl' | xargs grep -h 'has been revoked'` over the window.
+  2. Three or more revoked-login 401s in any 7 days: `grep -l '"isApiErrorMessage":true' -r
+     ~/.claude*/projects --include='*.jsonl' | xargs grep -hE 'has been revoked|token revoked|"error":"authentication_failed"'`
+     over the window. (Claude Code 2.1.287 reworded the text to "OAuth token revoked"; the old phrase
+     alone goes blind on newer binaries, so the pattern matches both wordings and the error field.)
 
 `next2` carries a `.linked` marker but cannot create and falls back to bundle mode. A PARITY GUARD row
 names two hand-copied implementations (`cc-relogin live_sessions()` vs `claude-accounts concurrency()`)

@@ -581,7 +581,8 @@ _sf_fact_scope() { # → the scope on stdout, or nothing
   case "$ERR" in authentication_failed) rc=0 ;; esac
   case "$LAST" in
     *"not logged in"*|*"please run /login"*|*"logged out"*|*[!0-9]401[!0-9]*|401[!0-9]*|*"invalid api key"*|\
-    *"token invalid"*|*"invalid token"*|*"invalid_token"*|*"token has expired"*|*"token is invalid"*) rc=0 ;;
+    *"token invalid"*|*"invalid token"*|*"invalid_token"*|*"token has expired"*|*"token is invalid"*|\
+    *"token revoked"*|*"failed to authenticate"*) rc=0 ;;   # 2.1.287+ wording: "OAuth token revoked"
   esac
   shopt -u nocasematch
   [ "$rc" -eq 0 ] && { printf 'auth'; return 0; }
