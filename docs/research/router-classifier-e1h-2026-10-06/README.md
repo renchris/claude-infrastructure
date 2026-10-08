@@ -19,3 +19,16 @@ wave E1h; the rule was committed at 01:57 CDT, the first classifier call was at 
 What failed: the `other` test (exact label at 0.95 or better on 240 agreed rows). The best reading is 206 of 240
 = 0.858. Most of every configuration's misses are a wrong label among the labels that do not relay (31 to 39 of
 the 240), which no arm and no join changes.
+
+## Wave E1j (2026-10-08): Haiku 5.5 as the careful call
+
+Outcome: **no Haiku 5.5 arm passed RULE E1j** (plan, wave E1j; rule committed `0702f3920` before any call). The
+selection is the measured Haiku 4.5 union in `tune.json`, to be pinned.
+
+- `e1h-tune.py` now takes `--arm NAME,KIND,MODEL,EFFORT,CLAUDE_BIN`, preflights the served model, gates on load
+  and records INVALID reasons; `tune-h55.json` is its run (4 arms, 4,312 calls, 2026-10-07 23:21 to 2026-10-08
+  02:57 CDT). INVALID answer text is replaced by its category; no prompt text.
+- `e1h-score.py tune-h55.json --rule e1j --fast sonnet-off --primary h55-medium --secondary h55-low
+  --diagnostic h55-asbuilt` reprints `result-e1j.txt`.
+- `e1j-latency.json` and `e1j-latency.trace.jsonl`: 200 tuning rows through the live daemon with the router's
+  stall trace on (`e1i-latency.py --n 200`); answer text in the trace is redacted to its length.

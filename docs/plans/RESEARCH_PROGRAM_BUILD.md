@@ -1395,7 +1395,7 @@ inside it: three ordered steps around sealed files, one small code change each, 
   sub-2 s wall-clock assertions reds a land at load ~70 on any tree (A/B: 2 of 4 on the pre-change tree too); and
   two raters writing one sealed set concurrently is safe only because each writes once, at its end.
 
-#### E1j — trace the fallbacks, tune Haiku 5.5 as the careful call, on tuning data only — IN PROGRESS (2026-10-08)
+#### E1j — trace the fallbacks, tune Haiku 5.5 as the careful call, on tuning data only — DONE: no Haiku 5.5 arm passed (recall 159/163, regex-missed 38/42); every live fallback is an accepted warm call held to the limit (2026-10-08)
 Scope (frozen): wave E1j, tuning data only, no sealed set read — (1) fallback tracing in router.py; (2) a Haiku
 5.5-capable tuning harness; (3) the selection rule committed to the plan before any call; (4) the Haiku 5.5
 tuning run held to 1-min load <= 40; (5) a warm-daemon latency check through the live daemon with the trace on;
@@ -1504,6 +1504,72 @@ tuning run held to 1-min load <= 40; (5) a warm-daemon latency check through the
   prompt instead of a label. The router's trace records a non-label answer's first 60 characters, so the
   committed trace replaces answer text with its length, redacted in place (the land's public-repo hygiene gate
   caught it).
+- **Step 4, the tuning run** (2026-10-07 23:21 to 2026-10-08 02:57 CDT; 982 rows, 4,312 cold calls, every call to
+  completion; per-call data `tune-h55.json`, no prompt text). It ran 41 rows, then paused through 15 load gates
+  totalling 9,242 s (load reached 413 between 23:40 and 01:55), and finished in the low-load window after that.
+  The 1-min load at each call's start ran 20.3-40.0 (median 31.5). The binary version is per arm. Each INVALID
+  call's answer text is replaced by its category in the committed file; the raw file stays outside the repo,
+  mode 600, at `router-heldout/tune-h55-raw.json`.
+
+  | arm | binary · effort | calls | no label (of which refused) | over 9 s | median · p90 wall |
+  |---|---|---|---|---|---|
+  | `sonnet-off` (fast partner) | 2.1.293 · none | 1,078 | 0 | 20 | 2.5 s · 4.6 s |
+  | `h55-medium` (primary) | 2.1.293 · medium | 1,078 | 19 (14) | 0 | 1.8 s · 2.9 s |
+  | `h55-low` | 2.1.293 · low | 1,078 | 21 (15) | 1 | 1.7 s · 2.7 s |
+  | `h55-asbuilt` (diagnostic) | 2.1.291 · none | 1,078 | 19 (13) | 3 | 1.9 s · 3.7 s |
+
+  "Refused" is the vendor's own error, `API Error: Haiku 5.5 can't help with this` (exit 1). The other no-label
+  answers are a label wrapped in formatting, or prose. Every as-built call whose stderr was recorded (its 19
+  no-label calls) carried the `[claude-code:unrecognized_model]` warning there (2.1.291 does not register the
+  model); its answered calls printed one label alone on stdout, so the warning does not reach stdout on `-p`.
+
+- **The replay under RULE E1j** (`e1h-score.py tune-h55.json --rule e1j …`; output `result-e1j.txt`):
+
+  | union(`sonnet-off`, …) | `other` relay decision ≥ 228/240 | recall ≥ 160/163 | regex-missed ≥ 40/42 | borderline ≥ 69/138 | fallback ≤ 0.03 | p90 ≤ 7.5 s | wrong relays (both raters non-relay) |
+  |---|---|---|---|---|---|---|---|
+  | `h55-medium` (primary) | 231 | **159** | **38** | 84 | 0/1078 | 4.15 s | 32/504 |
+  | `h55-low` (counts only if the primary fails latency alone) | 234 | 160 | **39** | 80 | 1/1078 | 4.23 s | 24/504 |
+  | `h55-asbuilt` (diagnostic, never selectable) | 234 | 160 | **39** | 76 | 0/1078 | 4.55 s | 29/504 |
+  | for comparison, E1h `tune.json`: `haiku-on` (Haiku 4.5) | 229 | 162 | 41 | 104 | 0/1078 | **8.5 s** | 36/504 |
+
+- **SELECTED: no Haiku 5.5 arm passed — the selection is the measured Haiku 4.5 union, union(`sonnet-off`,
+  `haiku-on`) in `tune.json` (wave E1i's), to be pinned.** The primary fails pooled recall (159/163) and
+  regex-missed (38/42) and passes everything else. `h55-low` does not count, because the primary did not fail
+  the latency bar alone.
+- **What the result is made of** (shown only; no rule was changed by it):
+  - **Haiku 5.5 removes the latency problem.** No careful call ran past the 8.5 s hold at medium effort, against
+    291 of 1,078 for Haiku 4.5 in E1h. The union's p90 decision time is 4.15 s against 8.5 s.
+  - **It loses subtle re-asks.** All 4 of the primary's recall misses are regex-missed prompts on which both
+    calls said `other`. None was a refusal, a late answer or a fallback. Haiku 4.5's one miss was a correct
+    label that arrived after the hold. Haiku 5.5's 14 refusals cost no recall under the union.
+  - **Under this same latency bar, the selection would fail.** The rule makes the Haiku 4.5 union the fallback
+    selection whatever its latency, and that union reads p90 8.5 s against the 7.5 s bar.
+  - **The selected model is about to retire.** `claude-haiku-4-5` has a retirement floor of 2026-10-15
+    (`model-config.yaml`; wave E1h), seven days from this record. Pinning it buys a week at most.
+  - **The fast call ran slow on 2.1.293.** 20 of `sonnet-off`'s calls ran past 9 s (max 18.4 s), against 1 in
+    E1h on the PATH binary. The union absorbs this when the careful call answers, but it is a regression to
+    watch if the fast call moves to 2.1.293.
+- **Rulings a sealed read would need** (the operator's, through the lead; none is a build step of this wave):
+  1. **Frame**: is the next read REPORT §6.5's "fixed as tooling" exit (cap row "Router recall below its
+     threshold (gate row 15)"), or a third attempt? The method's one re-test was spent by E1i.
+  2. **Which careful call to pin**: the rule selects Haiku 4.5, which retires 2026-10-15 and fails this wave's
+     latency bar. Haiku 5.5 at medium misses the recall bars by 1 and 2 calls. The rule's outcome stands as
+     written, so a different pin is the operator's call, not this wave's.
+  3. **Regex-missed data**: a disclosed third read of v3's regex-missed and pushback items. Only 16 unused
+     regex-missed candidates existed at the v4 seal, under the 400 a fresh set needs.
+  4. **regex-matched**: a disclosed second read of v4's regex-matched items.
+  5. **A load bound**, only if the fixed daemon still falls back more than 3% at a load median of 50 or more.
+     The daemon is not fixed yet. Step 5's trace names what to fix: an accepted warm call holds the whole limit,
+     so the cold call never runs (candidates: a cold hedge, and a warm deadline shorter than the limit). That
+     fix was below 90% conviction and is not built here. As it stands: 0 fallbacks in 95 rows under load 150,
+     22 in 105 above it.
+- Status: **DONE 2026-10-08.** Shas: rule `0702f3920` (before any call); trace `70f881599`; latency record
+  `49520aed3`; this record (see `git log`). The live router's model configuration is unchanged (`983448663980`).
+  No sealed set was opened, and `tuning-v2.jsonl` was not read. Learnings: a model's answer can carry prompt
+  text (an e-mail address here), so any field that records a non-label answer must be redacted before it is
+  committed; a load-gated run has to be sized to the machine's low-load window, not to its call count (it waited
+  2.5 h of 3.6 h); and a squash-landed branch is re-synced with `git rebase --skip`, which a fixup on the work
+  branch turns into extra conflicts.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
