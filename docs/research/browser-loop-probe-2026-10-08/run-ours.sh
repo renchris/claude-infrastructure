@@ -73,7 +73,16 @@ T0=$(python3 -I -c 'import time; print(time.time())')
     > "$WORK/stream.jsonl" 2> "$WORK/stream.err"
 ) &
 CP=$!
-( sleep "$BOUND"; kill "$CP" 2>/dev/null ) &
+# The watchdog's sleep must not inherit our stdout and must die with the watchdog: killing only the
+# subshell orphaned the sleep, which held a caller's pipe (`run-ours.sh … | tail`) open for the
+# full bound after every run and stalled the next run by up to 15 minutes.
+(
+  exec >/dev/null 2>&1
+  sleep "$BOUND" &
+  SL=$!
+  trap 'kill "$SL"; exit 0' TERM
+  wait "$SL" && kill "$CP"
+) &
 WD=$!
 wait "$CP"
 RC=$?
