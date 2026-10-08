@@ -32,3 +32,12 @@ selection is the measured Haiku 4.5 union in `tune.json`, to be pinned.
   --diagnostic h55-asbuilt` reprints `result-e1j.txt`.
 - `e1j-latency.json` and `e1j-latency.trace.jsonl`: 200 tuning rows through the live daemon with the router's
   stall trace on (`e1i-latency.py --n 200`); answer text in the trace is redacted to its length.
+
+## Wave E1k — the cold hedge's real-load A/B (RULE E1k in docs/plans/RESEARCH_PROGRAM_BUILD.md)
+
+- `e1i-latency.py --n 300 --hedge-ab` alternates `CC_RESEARCH_HEDGE` by row (even rows on); `e1k-sidecar.py`
+  samples the warm daemon's children once a second; `e1k-ab-report.py CALLS TRACE SIDECAR` prints the per-arm
+  load-band table, the hedge's fire and win counts, the stall attribution and the verdict.
+- `e1k-ab-run<N>.json` (per call: arm, stratum, label, wall, load; no prompt text), `e1k-ab-run<N>.trace.jsonl`
+  (the router's trace, answer text redacted to its length), `e1k-ab-run<N>.sidecar.jsonl` (worker samples; no
+  command lines) and `e1k-ab-run<N>.report.txt` (the report's output).

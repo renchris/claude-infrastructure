@@ -1,0 +1,27 @@
+rows 300; first row started 1791477563.15; 1-min load 39.0-83.9
+
+| arm | 1-min load | rows | fallbacks | median | p90 | held, one call silent |
+|---|---|---|---|---|---|---|
+| hedge on | under 100 | 150 | 0 | 2.17 s | 4.07 s | 0 |
+| hedge on | all | 150 | 0 | 2.17 s | 4.07 s | 0 |
+| hedge off | under 100 | 150 | 0 | 2.37 s | 4.90 s | 2 |
+| hedge off | all | 150 | 0 | 2.37 s | 4.90 s | 2 |
+
+| kind | hedge fired (hedge-on rows) | won | fired on a row that fell back |
+|---|---|---|---|
+| fast | 6 | 0 | 0 |
+| careful | 8 | 0 | 0 |
+
+hedge-on rows with no router row (killed before it): 0
+
+| arm | kind | cause | calls |
+|---|---|---|---|
+| hedge off | fast | unattributed | 2 |
+| hedge on | careful | starved mid-call | 1 |
+| hedge on | careful | still starting | 2 |
+| hedge on | careful | unattributed | 5 |
+| hedge on | fast | starved mid-call | 2 |
+| hedge on | fast | still starting | 2 |
+| hedge on | fast | unattributed | 2 |
+
+verdict (RULE E1k): high load not exercised (0 hedge-on rows above load 150, need 40); no verdict

@@ -1657,6 +1657,38 @@ landed and converged. Locus S (fired `fire-rp-v12-e1k`), lead-inline.
     this wave.
   - This checks the hedge on today's as-built configuration. The pinned configuration gets its own check after
     its restart.
+- **Order of record.** RULE E1k is `082648c5e` on trunk (author date 2026-10-08T10:41:53-05:00; `8c055cea6`
+  before the land's rebase). The first A/B row started at 2026-10-08T11:39:23-05:00, after the converge.
+- **B1 + B2: landed and live.** Cert store `5d28a9507`, hedge `471f7dcd2` (trunk `d2d935cd5..471f7dcd2`, 5 paths
+  content-verified by the lander); converged with `CC_DEPLOY_MAX_LAG_COMMITS=0 bash scripts/deploy-live.sh`
+  (degraded tier, as expected), the live `router.py` and `jobs/classifier-warm.sh` byte-identical to trunk; the
+  daemon's `ping` answered `ready 4` with no restart, and `classifier_config()` still reads `983448663980`. Red
+  then green: 7 new `research-classifier-warm` cases, all 7 failing on a `git archive` copy of the tree before;
+  after: `research-classifier-warm` `1..54` 54 ok, `research-router` `1..38` 38 ok, `research-router-heldout`
+  `1..16` 16 ok, `research-relay-check` `1..17` 17 ok. The cert store reaches the workers at the next daemon
+  start; the 4 live workers still run without it. Four existing cases were re-pointed, not loosened: the two that
+  assert the pre-hedge stall shape now set `CC_RESEARCH_HEDGE=0`, and two trace readers select the verb's own row
+  now that a `held` row can precede it. The no-orphan case runs the router directly and reads its own row
+  (`wall_s < 9`): under `heldout.route` at load ~200 the harness's own process starts could push the router past
+  the outside 9 s before it wrote anything, which is a property of the test bench, not of the give-up point (by
+  hand at load 201: give-up at 8.70 s, whole process 8.90 s).
+- **B5 run 1** (2026-10-08 11:39-11:52 CDT; 300 rows; `e1k-ab-run1.*`): **high load not exercised** — 1-min load
+  39.0-83.9, so 0 hedge-on rows above load 150 against the 40 the bar needs; no verdict. Shown only:
+
+  | arm | 1-min load | rows | fallbacks | median | p90 | held, one call silent |
+  |---|---|---|---|---|---|---|
+  | hedge on | under 100 | 150 | 0 | 2.17 s | 4.07 s | 0 |
+  | hedge off | under 100 | 150 | 0 | 2.37 s | 4.90 s | 2 |
+
+  The hedge fired on 14 hedge-on rows (fast 6, careful 8) and won none: each time the resident call answered
+  first, which is the "warm answer beats a slow cold one" case at work. The two held rows (hedge off, both the
+  fast call silent to 8.5 s) are the shape the hedge exists to rescue; none occurred with it on, but 2 against
+  0 at this load is not evidence. Sidecar: each of the 16 workers the rule named was 4-11 s old with 0.35-0.94 s
+  of CPU when handed its prompt (a worker idle for minutes carries 4-6 s), so at one prompt every ~2.5 s the pool
+  of 2 per kind hands out workers barely past start. Attribution of the 16 calls still waiting on the resident path at 4 s: still
+  starting 4, starved mid-call 3 (runnable in every sample, at PRI 20), unattributed 9 (the worker the rule names
+  left no sample during the call, so it was likely not the one holding the prompt: the canary and other sessions'
+  routers take workers too). Run 2 is armed to start when the 1-min load next reaches 150.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
