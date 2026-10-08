@@ -137,15 +137,43 @@ versions:
                                             # auto-mode classifier runs (classifier_model below).
   sonnet_staged: ""                         # NEW 2026-09-28, empty — the parking slot for the next Sonnet
                                             # release (invisible to bump/lint by construction, like opus_staged).
-  haiku_latest: claude-haiku-4-5            # retires NOT SOONER than 2026-10-15 (a floor, not a date); Haiku 5.5
-                                            # is announced for "the coming weeks" — stage it on release.
-                                            # RELEASED 2026-10-07 and STAGED below. Still Active upstream with
-                                            # no deprecation date (model-deprecations, re-read 2026-10-07; the
-                                            # vendor gives 60 days' notice), so the floor is not a cliff.
-                                            # NO haiku_prior KEY YET, ON PURPOSE: writing it arms the lint's
-                                            # stale sweep and the bump pair (an EMPTY value is worse: the
-                                            # lint would collect "" as a stale literal). Add it in the flip diff.
-  haiku_staged: claude-haiku-5-5            # STAGED 2026-10-07 — NOT routed by this file. Needs Claude Code
+  haiku_latest: claude-haiku-5-5            # FLIPPED 2026-10-07 (was claude-haiku-4-5), after activation 50
+                                            # moved the launcher to 2.1.293 (01:55Z 2026-10-08). Landed in ONE
+                                            # diff with the keying rewrite (census-haiku.md § 6): the
+                                            # handoff-fire probe and the permission decider now pass the
+                                            # `haiku` ALIAS; claude-accounts' raw wire read and
+                                            # cc-memory-extract name the full id.
+                                            # SPLIT FLEET AT THE FLIP (model.md Case A 0b, measured): 22
+                                            # processes still ran 2.1.284 (~19 interactive sessions, 2
+                                            # teammates, 1 daemon), 1 ran 2.1.293. What is safe and why:
+                                            #  · `model: "haiku"` spawns: resolved by the session's OWN
+                                            #    binary — Haiku 4.5 on 2.1.284, 5.5 on 2.1.293. No id passed.
+                                            #  · headless consumers (decider, probes, cc-memory-extract,
+                                            #    headless-precondition-probe) resolve the binary per call
+                                            #    through cc-claude-bin, i.e. 2.1.293, whoever runs them.
+                                            #  · the FULL id on an old binary is SERVED, not refused:
+                                            #    2.1.284 and the 2.1.291 `claude` on PATH (research-kit
+                                            #    router.py's careful call) each print a client-side
+                                            #    `[claude-code:unrecognized_model]` warning and then return
+                                            #    end_turn with modelUsage claude-haiku-5-5. Unlike Opus 5.5
+                                            #    on 2.1.260, nothing is refused by name.
+                                            #  · this key itself is read in code only by router.py.
+                                            # So nothing in the fleet hands a refusable id to an old binary.
+                                            # Haiku 4.5 is still Active upstream with no deprecation date
+                                            # (floor 2026-10-15, 60 days' notice), so 2.1.284 panes lose
+                                            # nothing until they recycle onto a new shell.
+  haiku_prior: claude-haiku-4-5             # SET at the flip. Arms the lint's stale sweep and the bump pair
+                                            # for claude-haiku-4-5; the dated claude-haiku-4-5-20251001 is
+                                            # outside both by the word boundary, by design.
+  haiku_staged: ""                          # CLEARED at the flip 2026-10-07 — the parking slot for the next
+                                            # Haiku release (invisible to bump/lint by construction).
+                                            # [HISTORY — as written at staging:]
+                                            # haiku_latest was claude-haiku-4-5, "retires NOT SOONER than
+                                            # 2026-10-15 (a floor, not a date)"; RELEASED 2026-10-07 and
+                                            # STAGED here. NO haiku_prior KEY then, ON PURPOSE: writing it
+                                            # arms the lint's stale sweep and the bump pair (an EMPTY value
+                                            # is worse: the lint would collect "" as a stale literal).
+                                            # haiku_staged: claude-haiku-5-5 — STAGED 2026-10-07. Needs Claude Code
                                             # 2.1.293 (cc-model-registered: 2.1.284 = 0, 2.1.291 = 0,
                                             # 2.1.292 = 0, 2.1.293 = 21; control claude-opus-5 present).
                                             # Gate GREEN 14/0/1 on 2.1.293 x claude-haiku-5-5 and x
@@ -1065,9 +1093,10 @@ roles:
                                             # dominate "in quota terms"; the settle run found it dominates in
                                             # QUALITY at ~1.5× the quota — the reason to switch, not the one
                                             # predicted.)
-  research_retrieval: claude-haiku-4-5      # Explore tier (25% slot, codebase/file:line lookups). Its
-                                            # retirement floor is 2026-10-15 (see deprecations) and Haiku
-                                            # 5.5 is announced for "the coming weeks" — stage it on release.
+  research_retrieval: claude-haiku-5-5      # Explore tier (25% slot, codebase/file:line lookups). MOVED
+                                            # 2026-10-07 at the Haiku 5.5 flip (was claude-haiku-4-5; its
+                                            # floor 2026-10-15 is in deprecations). ADVISORY: no code reads
+                                            # this key; the spawn's `model: "haiku"` alias is what binds.
                                             # ⚠️ BINDS ONLY WHEN THE SPAWN PASSES `model: "haiku"`. On
                                             # ≥2.1.198 an unpinned Explore runs the LEAD's model, capped at
                                             # opus — measured 2026-09-22 on 2.1.280 under an Opus 5.5 lead:
@@ -1078,8 +1107,8 @@ roles:
                                             # served claude-haiku-5-5 AT THE LEAD'S EFFORT (measured:
                                             # Opus 5.5 lead @high → Haiku 5.5 @high; Haiku 4.5 took no
                                             # effort). Pass the Agent tool's `effort` (new in 2.1.293)
-                                            # at effort_defaults.haiku55_retrieval. This key still names
-                                            # 4.5 until the flip diff (versions.haiku_staged).
+                                            # at effort_defaults.haiku55_retrieval. (Until the flip this
+                                            # key still named 4.5, parked in versions.haiku_staged.)
   research_adversarial: claude-fable-5-1    # adversarial/red-team/judge/depth-coordination slots
                                             # (10-15%); call-time Agent `model: "fable"` override,
                                             # eval track + active window only; else fallback.
@@ -1531,6 +1560,9 @@ deprecations:
 #   2026-10-07: Haiku 5.5 released (floor 2027-10-07) and staged (versions.haiku_staged). The
 #   deprecations page still lists claude-haiku-4-5-20251001 as Active, floor 2026-10-15, with no
 #   deprecation date; retirement needs 60 days' notice, so nothing retires on the floor date.
+#   2026-10-07 (later): FLIPPED — haiku_latest is claude-haiku-5-5, haiku_prior claude-haiku-4-5,
+#   research_retrieval moved. claude-haiku-4-5 is deliberately NOT a deprecations key: the lint
+#   already collects it from haiku_prior, and it has no announced retirement to record.
 # Added 2026-09-22 from the Models overview:  claude-opus-5-5  2027-09-22 (floor; released 2026-09-22).
 #   claude-opus-5 has NO lifecycle row there and is listed among CURRENT models in the docs nav, so
 #   its 2027-07-24 floor above is the last recorded value, not a re-read.

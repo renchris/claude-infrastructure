@@ -143,7 +143,7 @@ import json,sys
 r=json.loads(open(sys.argv[1]).readline())
 print(r["kind"],r["session"],r["ts"],r["store"],r["model"],len(r["prompt_sha"]),len(r["excerpt"]),r["name"])
 ' "$OUT/candidates.jsonl"
-  [ "$output" = "candidate good-1111 2026-09-20T00:00:03Z ~/.claude/projects/-Users-x-proj/memory claude-haiku-4-5-20251001 12 300 sign-off-first" ]
+  [ "$output" = "candidate good-1111 2026-09-20T00:00:03Z ~/.claude/projects/-Users-x-proj/memory claude-haiku-5-5 12 300 sign-off-first" ]
 }
 
 @test "malformed model output is recorded as an error row, never dropped" {

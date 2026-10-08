@@ -51,7 +51,9 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, TextIO
 
-MODEL = "claude-haiku-4-5-20251001"
+# A FULL id, not the alias: it is also written into every candidate record as provenance, where
+# "haiku" would not say which model produced it. Was claude-haiku-4-5-20251001 until 2026-10-07.
+MODEL = "claude-haiku-5-5"
 ASSISTANT_CAP = 1500
 EXCERPT_CAP = 300
 CHUNK_CHARS = 40000

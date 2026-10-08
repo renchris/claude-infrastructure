@@ -13812,10 +13812,16 @@ pre_trust() { # $1=launch dir  $2=config dir
 # property of the probe, and it holds only while /tmp carries no such file. The flag makes the
 # probe's cost independent of wherever it happens to run. Note it does NOT need the user-scope
 # passthrough the fired session gets: a session that will never call a tool loses nothing.
+# The liveness probe's model when the fire is not Fable (probe_account and its dry-run line both read
+# it, so the two cannot disagree): the alias, resolved by $BIN, never a full or dated id.
+PROBE_MODEL_DEFAULT=haiku
 probe_account() { # $1=account → 0 pass; prints rejection class on fail
-  local dir out probe_model="claude-haiku-4-5"
+  local dir out probe_model="$PROBE_MODEL_DEFAULT"
   # Probe the model we will ACTUALLY fire, not a re-pinned literal: hardcoding the id here meant
   # a 5.1 fire was entitlement-probed with Fable 5, testing access to a model it never used.
+  # The non-Fable default is the family ALIAS `haiku` (PROBE_MODEL_DEFAULT, just above),
+  # not a dated id: $BIN resolves it, so the probe follows each binary bump with no edit here and
+  # cannot outlive a retired id (it pinned claude-haiku-4-5 until the Haiku 5.5 flip, 2026-10-07).
   case "$MODEL" in claude-fable-5*) probe_model="$MODEL" ;; esac
   # Point-of-use check, not a load-time one (see the BIN block above for why). A NAMED
   # class matters: without it an absent binary fails all four probes identically and
@@ -17068,7 +17074,7 @@ if [ "$DRY" = 1 ]; then
     esac
   fi
   if [ "$PROBE" = 1 ]; then
-    pm="claude-haiku-4-5"; [ "$FABLE_EFFECTIVE" = 1 ] && pm="$MODEL"
+    pm="$PROBE_MODEL_DEFAULT"; [ "$FABLE_EFFECTIVE" = 1 ] && pm="$MODEL"
     if [ "$EXPLICIT_LAUNCHER" = 1 ]; then echo "probe:    SKIPPED (explicit --launcher gives no account to probe)"
     elif [ -n "$NAMES" ]; then echo "probe:    SKIPPED in dry-run (would probe $pm walking: $(printf '%s' "$NAMES" | tr '\n' ' '))"
     else echo "probe:    SKIPPED in dry-run (would probe $pm on $CHOSEN)"; fi

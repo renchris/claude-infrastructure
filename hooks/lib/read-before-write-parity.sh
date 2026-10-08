@@ -165,6 +165,9 @@ rbw_config_dir() {
 # RBW_ENFORCED_MODELS — 2.1.284's `zr`, the exact-id set kNt() tests. A model in it keeps the native
 # refusal, so the shim stays out; every other model has lost it. Re-read it from the binary on an
 # upgrade (grep the strings for "File has not been read yet" and follow the model test beside it).
+# Re-read on 2.1.293 (2026-10-07, the Haiku 5.5 flip): byte-identical, now `yi`, tested by
+# `Ho(e)=yi.has(It(e))` where It() strips only `[1m]`. claude-haiku-5-5 is NOT in it, so Haiku 5.5
+# sessions are guarded here (the live P4b probe saw 2.1.293 overwrite a never-read file under it).
 RBW_ENFORCED_MODELS=" claude-opus-4-6 claude-haiku-4-5 claude-opus-4-5 claude-opus-4-1 claude-opus-4-0 claude-sonnet-4-5 claude-sonnet-4-0 claude-3-7-sonnet claude-3-5-sonnet claude-3-5-haiku "
 
 # rbw_guard_disabled <model-id>

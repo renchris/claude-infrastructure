@@ -23,7 +23,7 @@ set -uo pipefail
 
 PROG=${0##*/}
 WORK="${CC_HEADLESS_PROBE_DIR:-${TMPDIR:-/tmp}/headless-probe.$$}"
-MODEL="${CC_HEADLESS_PROBE_MODEL:-claude-haiku-4-5-20251001}"
+MODEL="${CC_HEADLESS_PROBE_MODEL:-haiku}"   # family alias: $CLAUDE_BIN resolves it, so no id to re-pin
 KEEP=0
 FORMAT=human
 TIMEOUT_S="${CC_HEADLESS_PROBE_TIMEOUT_S:-90}"

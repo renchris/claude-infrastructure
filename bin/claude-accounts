@@ -1252,7 +1252,14 @@ def fetch_usage(cfg, token, retries=2):
 # miss, and a miss degrades to exactly today's behaviour (the endpoint integer) — never to a
 # guess, and never to a more permissive verdict than the endpoint would have given.
 
-WIRE_MODEL = os.environ.get("CC_ACCOUNTS_WIRE_MODEL", "claude-haiku-4-5-20251001")
+WIRE_MODEL = os.environ.get("CC_ACCOUNTS_WIRE_MODEL", "claude-haiku-5-5")
+# THE BODY MUST CARRY CLAUDE CODE'S SYSTEM LINE, or the read is a silent miss on any current model.
+# Measured 2026-10-07 on an OAuth token, `max_tokens: 1`: with no `system`, only Haiku 4.5 is served;
+# claude-haiku-5-5, claude-sonnet-5-5 and claude-sonnet-4-6 answer 429 `rate_limit_error` carrying
+# ZERO `anthropic-ratelimit-unified-*` headers, which fetch_wire_limits reads as "no reading" (None).
+# With this line, claude-haiku-5-5 answers 200 with all 12 headers. A raw-API site resolves no
+# alias, so the id is a full one; it moved off claude-haiku-4-5-20251001 at the Haiku 5.5 flip.
+WIRE_SYSTEM = "You are Claude Code, Anthropic's official CLI for Claude."
 WIRE_NEAR_WALL = 99.0      # endpoint percent at/above which the integer is ambiguous
 WIRE_TIMEOUT_S = float(os.environ.get("CC_ACCOUNTS_WIRE_TIMEOUT_S", "15"))
 WIRE_STATUSES = ("allowed", "allowed_warning", "rejected")
@@ -1288,7 +1295,7 @@ def fetch_wire_limits(cfg, token, timeout=None):
     if SSL_CTX is None:
         SSL_CTX = _ssl_ctx()
     body = json.dumps({
-        "model": WIRE_MODEL, "max_tokens": 1,
+        "model": WIRE_MODEL, "max_tokens": 1, "system": WIRE_SYSTEM,
         "messages": [{"role": "user", "content": "."}],
     }).encode()
     req = urllib.request.Request(

@@ -33,7 +33,7 @@ CR="$LR/recon-canary"
 KITTEN="${LR_KITTEN_BIN:-/Applications/kitty.app/Contents/MacOS/kitten}"
 SRC_ACCT="${LR_CANARY_SOURCE:-next}"
 SRC_CFG="$HOME/.claude-next"
-MODEL="${LR_CANARY_MODEL:-claude-haiku-4-5-20251001}"
+MODEL="${LR_CANARY_MODEL:-haiku}"   # family alias: $BIN resolves it, so no id to re-pin
 N="" TEARDOWN=0
 while [ $# -gt 0 ]; do
   case "$1" in

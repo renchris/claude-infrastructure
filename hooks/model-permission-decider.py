@@ -126,7 +126,9 @@ def claude_bin() -> str:
     return ""
 
 
-MODEL = os.environ.get("MITL_MODEL", "claude-haiku-4-5-20251001")
+# The family ALIAS, resolved by the cc-claude-bin binary: it follows each Haiku release with no edit
+# here and cannot outlive a retired id (this pinned claude-haiku-4-5-20251001 until 2026-10-07).
+MODEL = os.environ.get("MITL_MODEL", "haiku")
 
 # Internal deadline. MUST stay strictly below the hook `timeout` in
 # settings.json, because a hook that overruns is silently discarded and its

@@ -158,6 +158,15 @@ mutant() { # $1=fixed string to delete, $2=out
   [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 0 ] || false
 }
 
+@test "Haiku 5.5 DENIES: outside 2.1.293's enforced set, while Haiku 4.5 stays natively guarded" {
+  # The 4.5 arm above proves nothing about 5.5 (census S2). Re-read on 2.1.293: the set is unchanged
+  # and lacks claude-haiku-5-5, and a live 2.1.293 Haiku 5.5 run overwrote a never-read file.
+  local t; t="$(tx "$W/tx.jsonl" claude-haiku-5-5 "Read:$W/unrelated.txt")"
+  [ "$(deny_rc "$t" "$TARGET" "$W")" -eq 0 ] || false
+  [ "$(gd_rc claude-haiku-5-5)" -eq 0 ] || false
+  [ "$(gd_rc claude-haiku-4-5)" -eq 1 ] || false
+}
+
 @test "the flag cache is IGNORED: a false velvet_mallet key does not re-arm the native guard" {
   cfg tengu_velvet_mallet_opus_5_5=false tengu_velvet_mallet_opus_5=false
   local t; t="$(tx "$W/tx.jsonl" claude-opus-5-5 "Read:$W/unrelated.txt")"
