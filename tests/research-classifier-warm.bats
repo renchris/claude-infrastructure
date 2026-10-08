@@ -352,8 +352,9 @@ cold() { printf 'cat >/dev/null; echo ran >> "%s"; echo work-order' "$BATS_TEST_
 }
 
 @test "router: a warm process that outlasts the limit is unavailable at the limit" {
+  # With the hedge off (wave E1k's switch), as the router was before it: the hedge's own cases below.
   serve "read -r line; sleep 30" up
-  CC_RESEARCH_CLASSIFIER_TIMEOUT=1 CC_RESEARCH_CLASSIFIER="$(cold)" run bash -c "printf 'are we done?' | python3 '$ROUTER' classify"
+  CC_RESEARCH_HEDGE=0 CC_RESEARCH_CLASSIFIER_TIMEOUT=1 CC_RESEARCH_CLASSIFIER="$(cold)" run bash -c "printf 'are we done?' | python3 '$ROUTER' classify"
   [ "$status" -eq 1 ]
   [ ! -e "$BATS_TEST_TMPDIR/cold-calls" ]
 }
@@ -446,9 +447,10 @@ under() { /usr/bin/python3 -c "import sys; sys.exit(0 if $wall < $1 else 1)"; }
   timed 9 "$(two 'echo other' 'sleep 20; echo completeness')"
   [ "$status" -eq 0 ]
   [ "$output" = other ]
-  [ "$(jq -r '.label' "$BATS_TEST_TMPDIR/trace")" = other ]
-  jq -e '.wall_s >= 8.4 and .wall_s < 8.9' "$BATS_TEST_TMPDIR/trace"
-  jq -e '.why | test("fast call, cold.*careful call: had not answered")' "$BATS_TEST_TMPDIR/trace"
+  # the classify verb's own row (wave E1k adds a `held` row before it, the careful call still pending)
+  [ "$(jq -r 'select(.row == null) | .label' "$BATS_TEST_TMPDIR/trace")" = other ]
+  jq -e 'select(.row == null) | .wall_s >= 8.4 and .wall_s < 8.9' "$BATS_TEST_TMPDIR/trace"
+  jq -e 'select(.row == null) | .why | test("fast call, cold.*careful call: had not answered")' "$BATS_TEST_TMPDIR/trace"
 }
 
 @test "E1g rule: the careful call's label stands when the fast call fails, and unavailable needs both to fail" {
@@ -489,7 +491,8 @@ under() { /usr/bin/python3 -c "import sys; sys.exit(0 if $wall < $1 else 1)"; }
 
 @test "E1j trace: a resident worker that took the prompt and stalls reads as warm and waiting; a label in hand writes no stall row" {
   serve "read -r line; sleep 30" up
-  CC_RESEARCH_CLASSIFY_TRACE="$BATS_TEST_TMPDIR/trace" CC_RESEARCH_CLASSIFIER_TIMEOUT=2 CC_RESEARCH_CLASSIFIER="$(cold)" run bash -c "printf 'are we done?' | python3 '$ROUTER' classify"
+  # the hedge off (wave E1k's switch), or its cold twins would answer: the stall row's shape is the subject
+  CC_RESEARCH_HEDGE=0 CC_RESEARCH_CLASSIFY_TRACE="$BATS_TEST_TMPDIR/trace" CC_RESEARCH_CLASSIFIER_TIMEOUT=2 CC_RESEARCH_CLASSIFIER="$(cold)" run bash -c "printf 'are we done?' | python3 '$ROUTER' classify"
   [ "$status" -eq 1 ]
   [ "$(jq -r '.row // "final"' "$BATS_TEST_TMPDIR/trace" | tr '\n' ' ')" = "stall final " ]
   for k in fast careful; do
@@ -501,8 +504,96 @@ under() { /usr/bin/python3 -c "import sys; sys.exit(0 if $wall < $1 else 1)"; }
   CC_RESEARCH_CLASSIFY_TRACE="$BATS_TEST_TMPDIR/trace" CC_RESEARCH_WARM=0 CC_RESEARCH_CLASSIFIER_TIMEOUT=2 CC_RESEARCH_CLASSIFIER="$(two 'echo other' 'sleep 20')" run bash -c "printf 'are we done?' | python3 '$ROUTER' classify"
   [ "$status" -eq 0 ]
   [ "$output" = other ]
-  [ "$(wc -l < "$BATS_TEST_TMPDIR/trace" | tr -d ' ')" -eq 1 ]
-  [ "$(jq -r '.row // "final"' "$BATS_TEST_TMPDIR/trace")" = final ]
+  # no stall row; the careful call still pending when the hold fired leaves a `held` row (wave E1k)
+  [ "$(jq -r '.row // "final"' "$BATS_TEST_TMPDIR/trace" | tr '\n' ' ')" = "held final " ]
+}
+
+# ── the cold hedge (wave E1k) ───────────────────────────────────────────────────────────────────
+# E1j's trace: every live fallback was a resident worker that took the prompt and went silent, holding
+# its call to the limit, so no cold call ever ran. At HEDGE_AFTER_S (4 s of 9, scaled) a cold twin now
+# starts for each kind still waiting on the resident classifier; the first label of each kind counts,
+# and with no label the router gives up before the caller's 9 s kill so it can end its twins. Assertions
+# are on labels, trace fields and processes, never on short wall times. RED-proof: on the router before
+# this wave every case here fails (no twin, no `hedge` field, killed before its own row).
+
+# stalls_unless_fast <label> — a resident process: the fast kind answers <label> at once, the careful
+# kind takes the prompt and never answers.
+stalls_unless_fast() {
+  printf 'read -r line; if [ "$CC_RESEARCH_CLASSIFIER_KIND" = fast ]; then echo "{\\"type\\":\\"result\\",\\"result\\":\\"%s\\"}"; fi; sleep 30' "$1"
+}
+
+final() { jq -c 'select(.row == null)' "$BATS_TEST_TMPDIR/trace"; }
+
+@test "E1k hedge: a resident worker that took the prompt and never answers no longer costs the label" {
+  serve "read -r line; sleep 30" up
+  CC_RESEARCH_CLASSIFY_TRACE="$BATS_TEST_TMPDIR/trace" CC_RESEARCH_CLASSIFIER_TIMEOUT=4.5 CC_RESEARCH_CLASSIFIER="$(cold)" run bash -c "printf 'are we done?' | python3 '$ROUTER' classify"
+  [ "$status" -eq 0 ]
+  [ "$output" = work-order ]
+  [ "$(wc -l < "$BATS_TEST_TMPDIR/cold-calls" | tr -d ' ')" -eq 2 ]   # one twin per kind
+  final | jq -e '.hedge_on == true and .hedge.fast == {"fired": true, "won": true}
+    and .hedge.careful == {"fired": true, "won": true} and (.why | test("cold hedge"))'
+}
+
+@test "E1k hedge: CC_RESEARCH_HEDGE=0 is the router as E1j left it — no twin, a fallback, and the trace says the hedge was off" {
+  serve "read -r line; sleep 30" up
+  CC_RESEARCH_HEDGE=0 CC_RESEARCH_CLASSIFY_TRACE="$BATS_TEST_TMPDIR/trace" CC_RESEARCH_CLASSIFIER_TIMEOUT=4.5 CC_RESEARCH_CLASSIFIER="$(cold)" run bash -c "printf 'are we done?' | python3 '$ROUTER' classify"
+  [ "$status" -eq 1 ]
+  [ ! -e "$BATS_TEST_TMPDIR/cold-calls" ]
+  final | jq -e '.hedge_on == false and .hedge.fast == {"fired": false, "won": false}
+    and .hedge.careful == {"fired": false, "won": false}'
+}
+
+@test "E1k hedge: one kind stalled on the resident path while the other holds a non-relay label — the stalled kind's cold vote counts" {
+  serve "$(stalls_unless_fast other)" up
+  CC_RESEARCH_CLASSIFY_TRACE="$BATS_TEST_TMPDIR/trace" CC_RESEARCH_CLASSIFIER_TIMEOUT=4.5 CC_RESEARCH_CLASSIFIER="$(two 'echo other' 'echo completeness')" run bash -c "printf 'are we done?' | python3 '$ROUTER' classify"
+  [ "$status" -eq 0 ]
+  [ "$output" = completeness ]   # the union: the careful twin's relay label beats the fast call's other
+  [ "$(cat "$BATS_TEST_TMPDIR/kinds")" = careful ]   # only the stalled kind got a twin
+  final | jq -e '.hedge.fast == {"fired": false, "won": false} and .hedge.careful == {"fired": true, "won": true}'
+}
+
+@test "E1k hedge: the hold firing with one kind still pending leaves a held row naming it" {
+  serve "$(stalls_unless_fast other)" up
+  CC_RESEARCH_CLASSIFY_TRACE="$BATS_TEST_TMPDIR/trace" CC_RESEARCH_CLASSIFIER_TIMEOUT=4.5 CC_RESEARCH_CLASSIFIER="$(two 'echo other' 'sleep 20; echo completeness')" run bash -c "printf 'are we done?' | python3 '$ROUTER' classify"
+  [ "$status" -eq 0 ]
+  [ "$output" = other ]
+  [ "$(jq -r '.row // "final"' "$BATS_TEST_TMPDIR/trace" | tr '\n' ' ')" = "held final " ]
+  head -1 "$BATS_TEST_TMPDIR/trace" | jq -e '(.load | type) == "number" and .fast.answered == true
+    and .careful.answered == false and .careful.path == "warm" and .careful.hedge == {"fired": true, "won": false}
+    and .careful.twin.path == "cold" and .careful.twin.answered == false'
+}
+
+@test "E1k hedge: a resident answer at 5 s beats a slow cold twin, and the resident call was never dropped" {
+  serve "read -r line; sleep 5; echo '{\"type\":\"result\",\"result\":\"pushback\"}'; sleep 30" up
+  CC_RESEARCH_CLASSIFY_TRACE="$BATS_TEST_TMPDIR/trace" CC_RESEARCH_CLASSIFIER="cat >/dev/null; echo ran >> '$BATS_TEST_TMPDIR/cold-calls'; sleep 20; echo work-order" run bash -c "printf 'are we done?' | python3 '$ROUTER' classify"
+  [ "$status" -eq 0 ]
+  [ "$output" = pushback ]
+  [ -s "$BATS_TEST_TMPDIR/cold-calls" ]   # the hedge fired at 4 s ...
+  final | jq -e '(.why | test("resident")) and ([.hedge[] | select(.fired)] | length) >= 1
+    and ([.hedge[] | select(.won)] | length) == 0'   # ... and lost to the resident answer
+}
+
+@test "E1k hedge: a row with no label returns before 9 s, ahead of the caller's kill, and leaves no twin alive" {
+  serve "read -r line; sleep 30" up
+  local stub="cat >/dev/null; echo \$\$ >> '$BATS_TEST_TMPDIR/pids'; sleep 30"
+  # Run directly, not under heldout.route: the subject is the router's own give-up point (8.7 s of
+  # its clock), read from its own row. Under heldout at load ~200 the harness's process starts alone
+  # can push the router past heldout's outside 9 s, and that kill leaves no row to read.
+  CC_RESEARCH_CLASSIFY_TRACE="$BATS_TEST_TMPDIR/trace" CC_RESEARCH_CLASSIFIER="$stub" run bash -c "printf 'is that everything?' | python3 '$ROUTER' classify"
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+  final | jq -e '.label == null and .wall_s < 9 and .hedge.fast.fired and .hedge.careful.fired'
+  [ "$(wc -l < "$BATS_TEST_TMPDIR/pids" | tr -d ' ')" -eq 2 ]
+  local pid i alive
+  for i in $(seq 1 20); do
+    alive=""
+    while read -r pid; do
+      if pgrep -g "$pid" >/dev/null 2>&1 || kill -0 "$pid" 2>/dev/null; then alive="$alive $pid"; fi
+    done < "$BATS_TEST_TMPDIR/pids"
+    [ -z "$alive" ] && break
+    sleep 0.1
+  done
+  [ -z "$alive" ]
 }
 
 # by_kind — a resident classifier process that answers with the kind it was started as.

@@ -59,7 +59,8 @@ research-verb deny. The registry cannot hold these: kit.registry_set keeps only 
 KILL SWITCHES (operator, set in the environment Claude Code is launched with, which no tool call of
 the session can change): CC_RESEARCH_BLOCK=0 turns the tool deny off; CC_RESEARCH_ROUTER=off
 (hooks) turns the routing off; CC_RESEARCH_RELAY_CHECK=0 turns the Stop check off; CC_RESEARCH_WARM=0
-skips the resident classifier (classifier-warm.py) and makes the cold call.
+skips the resident classifier (classifier-warm.py) and makes the cold call; CC_RESEARCH_HEDGE=0 turns
+off the cold hedge (wave E1k), leaving the router as wave E1j left it.
 
 Test seams: CC_RESEARCH_HOME, CC_RESEARCH_REGISTRY, CC_RESEARCH_CLASSIFIER (a shell command given the
 classifier input on stdin, printing a label; it runs once per kind of call, with
@@ -70,7 +71,9 @@ $CC_RESEARCH_HOME/classifier-warm/sock), CC_RESEARCH_CLASSIFY_TRACE (a file the 
 appends one row per call to: the label, which call and path answered, wall seconds and load; never
 the prompt; and, since wave E1j, a `stall` row when no label is in hand STALL_TRACE_MARGIN_S before
 the limit, naming each call's path, what the resident classifier said and whether it answered, so a
-call the caller kills at its limit still leaves its reason).
+call the caller kills at its limit still leaves its reason; and, since wave E1k, `hedge_on` and a
+`hedge` {fired, won} per kind on the verb's row and per kind on every stall row, plus a `held` row
+when the hold returns one kind's label with the other still pending).
 
 THE CLASSIFIER IS TWO CALLS (wave E1g, ruling b18c74a4f8e1): a fast one (wave E1b's brief and system
 prompt, thinking off; on `sonnet_latest` since wave E1i, decision 1f3b8f2d01b7) and a careful one (the
@@ -212,6 +215,18 @@ DELIVER_MARGIN_S = 0.5
 # own row is written, so E1i's 105 fallbacks left no reason. 8.6 s by this clock lands by about 8.9 s
 # of the caller's, after interpreter start (0.07-0.10 s at load 49) and the 0.25 s poll at worst.
 STALL_TRACE_MARGIN_S = 0.4
+# Wave E1k, the cold hedge: E1j's trace found every live fallback was a resident worker that took the
+# prompt and went silent, holding its call to the limit, so the cold call never ran. A kind still
+# waiting on the resident classifier this long into the limit gets a cold twin beside it; the resident
+# call keeps running and the first label of the kind counts. 4 s: 1,022-1,060 of 1,078 Haiku 5.5 cold
+# tuning calls, and 1,034 of the Sonnet fast call's, finish within 4.5 s (docs/research/reask-e1j-rulings-2026-10-08).
+HEDGE_AFTER_S = 4.0
+# With the hedge on and no label in hand this long before the limit, classify gives up (8.7 s of 9):
+# after the stall row, and before heldout.py kills the router at 9 s of its own clock, so the `finally`
+# below still runs and kills the twins' process groups (they start in their own sessions).
+GIVE_UP_MARGIN_S = 0.3
+# What the last classify() did with the hedge, for the classify verb's own trace row.
+LAST_HEDGE: Dict[str, Any] = {}
 
 
 # ── stores ──────────────────────────────────────────────────────────────────────────────────────
@@ -451,9 +466,19 @@ class Call(threading.Thread):
     """One kind of classifier call for one prompt: the resident classifier first, then the cold
     process inside what is left of the limit. `label` None with `done` set is a call that failed."""
 
-    def __init__(self, kind: str, text: str, deadline: float, tick: threading.Event):
+    def __init__(
+        self,
+        kind: str,
+        text: str,
+        deadline: float,
+        tick: threading.Event,
+        twin: bool = False,
+    ):
         super().__init__(daemon=True)
         self.kind, self.text, self.deadline, self.tick = kind, text, deadline, tick
+        # the hedge's cold twin (wave E1k): skips the resident classifier
+        self.twin = twin
+        self.done_at = 0.0
         self.label: Optional[str] = None
         self.reason = ""
         self.done = threading.Event()
@@ -486,14 +511,18 @@ class Call(threading.Thread):
             # a call that broke is a call that did not answer, never a crash
             self.label = None
             self.reason = f"classifier call failed: {e.__class__.__name__}"
+        self.done_at = time.time()
         self.done.set()
         self.tick.set()
 
     def ask(self) -> Tuple[Optional[str], str]:
-        state, reply = warm_classify(
-            self.text, self.deadline - time.time(), self.kind, self
-        )
-        self.warm_s = round(time.time() - self.t0, 2)
+        if self.twin:
+            state, reply = "cold", "skipped by the hedge's cold twin"
+        else:
+            state, reply = warm_classify(
+                self.text, self.deadline - time.time(), self.kind, self
+            )
+            self.warm_s = round(time.time() - self.t0, 2)
         self.warm = state if state == "answer" else f"{state}: {reply}"
         if state == "answer":
             label, why = one_label(reply)
@@ -548,7 +577,10 @@ class Call(threading.Thread):
                 f"classifier ({self.kind} call, cold; the resident one failed: "
                 f"{warm_failed[:120]})"
             )
-        return label, f"classifier ({self.kind} call, cold)"
+        return (
+            label,
+            f"classifier ({self.kind} call, {'cold hedge' if self.twin else 'cold'})",
+        )
 
     def kill(self) -> None:
         if self.proc is not None and self.proc.poll() is None:
@@ -571,6 +603,62 @@ class Call(threading.Thread):
         # caller's limit. The thread is a daemon thread; what it would have removed is removed here.
         if self.dir:
             shutil.rmtree(self.dir, ignore_errors=True)
+
+
+class Vote:
+    """One kind's vote (wave E1k): its call, and the cold twin the hedge may start beside it. The
+    first label either returns is the kind's; the kind has failed only when both have."""
+
+    def __init__(self, call: Call):
+        self.kind = call.kind
+        self.main = call
+        self.twin: Optional[Call] = None
+
+    def calls(self) -> List[Call]:
+        return [self.main] + ([self.twin] if self.twin else [])
+
+    def winner(self) -> Optional[Call]:
+        got = [c for c in self.calls() if c.done.is_set() and c.label]
+        return min(got, key=lambda c: c.done_at) if got else None
+
+    def settled(self) -> bool:
+        return self.winner() is not None or all(c.done.is_set() for c in self.calls())
+
+    @property
+    def label(self) -> Optional[str]:
+        w = self.winner()
+        return w.label if w else None
+
+    @property
+    def reason(self) -> str:
+        w = self.winner()
+        if w:
+            return w.reason
+        if self.twin is None:
+            return self.main.reason
+        return f"{self.main.reason}; its cold hedge: {self.twin.reason}"
+
+    def waiting_warm(self) -> bool:
+        """Still waiting on a resident classifier that took (or is taking) the prompt."""
+        m = self.main
+        return self.twin is None and not m.done.is_set() and m.path == "warm"
+
+    def hedge(self) -> Dict[str, bool]:
+        return {
+            "fired": self.twin is not None,
+            "won": bool(self.twin and self.winner() is self.twin),
+        }
+
+    def trace(self) -> Dict[str, Any]:
+        row = self.main.trace()
+        row["hedge"] = self.hedge()
+        if self.twin is not None:
+            row["twin"] = self.twin.trace()
+        return row
+
+    def stop(self) -> None:
+        for c in self.calls():
+            c.stop()
 
 
 def trace_row(row: Dict[str, Any]) -> None:
@@ -597,7 +685,13 @@ def classify(
     re-ask gets the fast call's label, which is the more reliable of the two on `other`. A relay
     label from the careful call is taken as soon as it arrives: whatever the fast call then says,
     the prompt is relayed. With a label in hand the wait for the other call stops DELIVER_MARGIN_S
-    before the limit."""
+    before the limit.
+
+    The hedge (wave E1k; CC_RESEARCH_HEDGE=0 turns it off): a kind still waiting on the resident
+    classifier HEDGE_AFTER_S into the limit gets a cold twin, also when the other kind already holds a
+    label; each kind's first label is its vote, under the same join. With the hedge on and no label in
+    hand, classify gives up GIVE_UP_MARGIN_S before the limit, so its `finally` ends the twins."""
+    LAST_HEDGE.clear()
     m = WORK_ORDER_MARKER.search(prompt)
     if m and program and m.group(1) == program:
         return "work-order", f"--requires-gate {m.group(1)} marker"
@@ -608,38 +702,57 @@ def classify(
     except ValueError:
         timeout = CLASSIFIER_TIMEOUT_S
     cert = cert or "(none rendered)"
+    scale = timeout / CLASSIFIER_TIMEOUT_S
+    hedge_on = os.environ.get("CC_RESEARCH_HEDGE") != "0"
     t0 = time.time()
     deadline = t0 + timeout
-    hold = deadline - DELIVER_MARGIN_S * timeout / CLASSIFIER_TIMEOUT_S
+    hold = deadline - DELIVER_MARGIN_S * scale
+    give_up = deadline - GIVE_UP_MARGIN_S * scale if hedge_on else deadline
+    hedge_at: Optional[float] = t0 + HEDGE_AFTER_S * scale if hedge_on else None
     stall = (
-        deadline - STALL_TRACE_MARGIN_S * timeout / CLASSIFIER_TIMEOUT_S
+        deadline - STALL_TRACE_MARGIN_S * scale
         if os.environ.get("CC_RESEARCH_CLASSIFY_TRACE")
         else None
     )
     tick = threading.Event()
-    calls = {
-        k: Call(k, BRIEFS[k].format(cert=cert, prompt=prompt), deadline, tick)
-        for k in KINDS
-    }
-    for c in calls.values():
-        c.start()
-    fast, careful = calls["fast"], calls["careful"]
+    texts = {k: BRIEFS[k].format(cert=cert, prompt=prompt) for k in KINDS}
+    votes = {k: Vote(Call(k, texts[k], deadline, tick)) for k in KINDS}
+    for v in votes.values():
+        v.main.start()
+    fast, careful = votes["fast"], votes["careful"]
+
+    def snapshot(row: str, now: float) -> None:
+        trace_row(
+            {
+                "row": row,
+                "t": round(t0, 2),
+                "at_s": round(now - t0, 2),
+                "load": round(os.getloadavg()[0], 1),
+                "fast": fast.trace(),
+                "careful": careful.trace(),
+            }
+        )
+
     try:
         while True:
             tick.clear()
-            f, c = fast.done.is_set(), careful.done.is_set()
-            for call in (fast, careful):
-                if call.done.is_set() and call.label in RELAYED:
-                    return call.label, call.reason
-            have = next(
-                (x for x in (fast, careful) if x.done.is_set() and x.label), None
-            )
             now = time.time()
-            if (f and c) or now >= (hold if have else deadline):
+            for v in (fast, careful):
+                w = v.winner()
+                if w is not None:
+                    for c in v.calls():  # the kind has voted: end its other call now
+                        if c is not w and not c.done.is_set():
+                            c.stop()
+            f, c = fast.settled(), careful.settled()
+            for v in (fast, careful):
+                if v.label in RELAYED:
+                    return v.label, v.reason
+            have = next((x for x in (fast, careful) if x.label), None)
+            if (f and c) or now >= (hold if have else give_up):
                 if have is None:
                     why = [
                         x.reason
-                        if x.done.is_set()
+                        if x.settled()
                         else f"classifier timed out at {timeout:g} s"
                         for x in (fast, careful)
                     ]
@@ -647,30 +760,34 @@ def classify(
                         return None, why[0]
                     return None, f"fast call: {why[0]}; careful call: {why[1]}"[:300]
                 other = careful if have is fast else fast
-                if other.done.is_set() and other.label:
+                if other.settled() and other.label:
                     return have.label, have.reason
-                said = other.reason if other.done.is_set() else "had not answered"
+                if not other.settled():
+                    snapshot("held", now)
+                said = other.reason if other.settled() else "had not answered"
                 return have.label, f"{have.reason}; the {other.kind} call: {said}"[:300]
-            until = hold if have else deadline
+            if hedge_at is not None and now >= hedge_at:
+                for v in (fast, careful):
+                    if v.waiting_warm():
+                        v.twin = Call(v.kind, texts[v.kind], deadline, tick, twin=True)
+                        v.twin.start()
+                hedge_at = None
+            until = hold if have else give_up
+            if hedge_at is not None:
+                until = min(until, hedge_at)
             if stall is not None and have is None:
                 if now >= stall:
-                    trace_row(
-                        {
-                            "row": "stall",
-                            "t": round(t0, 2),
-                            "at_s": round(now - t0, 2),
-                            "load": round(os.getloadavg()[0], 1),
-                            "fast": fast.trace(),
-                            "careful": careful.trace(),
-                        }
-                    )
+                    snapshot("stall", now)
                     stall = None
                 else:
                     until = min(until, stall)
             tick.wait(max(min(until - now, 0.25), 0.0))
     finally:
-        for call in (fast, careful):
-            call.stop()
+        LAST_HEDGE.update(
+            hedge_on=hedge_on, hedge={v.kind: v.hedge() for v in (fast, careful)}
+        )
+        for v in (fast, careful):
+            v.stop()
 
 
 # ── UserPromptSubmit ────────────────────────────────────────────────────────────────────────────
@@ -1334,6 +1451,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "why": why,
                 "wall_s": round(time.time() - t0, 2),
                 "load": round(os.getloadavg()[0], 1),
+                **LAST_HEDGE,
             }
         )
         if not label:

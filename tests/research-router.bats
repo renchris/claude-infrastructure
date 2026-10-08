@@ -485,7 +485,8 @@ STUB
 }
 
 @test "the live classifier's configuration id is pinned: no flag, model key or brief changed since the Haiku 5.5 flip" {
-  # Wave E1j added tracing only. The resident daemon serves the id it was started with, so a change
+  # Wave E1j added tracing only, and wave E1k's cold hedge changes no flag, model or brief either
+  # (the twin is the cold call as built). The resident daemon serves the id it was started with, so a change
   # to any kind's flags or brief would make its ping fail until migration 0059 restarts it; the live
   # model-config (bc7894fe2) reads 983448663980, the id the daemon reported after the flip.
   printf 'models:\n  sonnet_latest: claude-sonnet-5-5\n  haiku_latest: claude-haiku-5-5\n' > "$BATS_TEST_TMPDIR/model-config.yaml"
