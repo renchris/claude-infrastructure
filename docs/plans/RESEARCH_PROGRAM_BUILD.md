@@ -1851,7 +1851,7 @@ rows and the load bound in `evaluate` (wave E1l), the hedge's real-load run 2 (w
   `other` rows at load 182-232. Under RULE E1m (d) this table does not move the pick; it is the real-load
   companion the gate's load-bounded read lacks.
 
-#### E1l — row 15's read guards, the third-read refusal, the load bound, and the pre-registered data rules — IN PROGRESS
+#### E1l — row 15's read guards, the third-read refusal, the load bound, and the pre-registered data rules — DONE: landed and live; the live set map's re-point is the operator's (2026-10-08)
 Scope (frozen): wave E1l — (1) ruling `a7fd5e2ee7c8` guard 1: gate row 15 decrypts and logs a read only when an
 explicit read-consent flag is set, `CC_RESEARCH_ROUTER` is a real command (refuse `off`, the kill-switch value
 `hooks/research-precognition-nudge.sh` defines), and every other gate row passed in the same gate run; otherwise
@@ -1927,6 +1927,37 @@ items"), and the third-read rule (signed override, disclosed cost); (5) the data
     total cap that ends the read with "read spent, no verdict". Each routed row records its 1-min load. The read
     refuses unless RULE E1k's passing real-load figures above load 150 are on record (`heldout.py real-load`),
     and row 15's evidence, which the certificate carries, states the bound beside them.
+- **Order of record.** The pre-registered rules are `3a201a3de` on trunk (author date 2026-10-08T14:25:02-05:00,
+  `ad3857ef4` before the land's rebase), before any v5 seal and before any gate read; no sealed set was opened,
+  decrypted, sealed or evaluated in this wave.
+- **Landed.** Code and tests `20405baa4`, method REPORT §9 edits `4e0f1d8bb` (trunk `6d84fa3a6..20405baa4`, 18
+  paths content-verified by the lander). As built: the certifying run is `gate.sh run --consent-sealed-read`;
+  `gate.run_rows` runs row 15 last and it refuses unless rows 1-14 and 16-19 passed (PASS or FILED) in that run;
+  `heldout.evaluate` refuses, before any decrypt or ledger row, a router that is empty, `off` or not found, a read
+  without consent, a stratum awaiting a fresh set, a third read without a `third-read/<set>.<stratum>` operator
+  signature per extra read (new `cc-signoff` action), no passing RULE E1k record (`heldout.py real-load`, which
+  refuses to record fewer than 40 rows), and a start that cannot reach load 40 within 4 h. After the ledger row,
+  every item waits for load 40 or below under a 12 h total cap, past which the row reads "read spent, no verdict";
+  each `--record` row carries `load1`; the certificate carries the bound and RULE E1k's figures as row 15's stated
+  condition (`conditions` in CERT-v<n>.json, and a line in the .md). Detached launch: `heldout.py` docstring and the
+  research-program skill (`scripts/lib/detach.sh`). Caps are `CC_RESEARCH_ROW15_START_CAP_S` /
+  `_TOTAL_CAP_S`; the bound itself (40) is not settable. A planted load is read only from a fixture research home,
+  never the live store.
+- **Red then green.** 11 new cases (6 `research-kit-heldout`, 4 `research-kit-gate`, 1 `operator-sign`), all 11
+  failing on a `git archive` of the pre-change tree. After: `research-kit-heldout` `1..24` 24 ok,
+  `research-kit-gate` `1..55` (53 ok on the full run, the 2 re-pointed cases then `1..2` 2 ok),
+  `research-router-heldout` `1..16` 16 ok, `operator-sign` `1..24` 24 ok, `cc-research-core` `1..26` 26 ok,
+  `research-kit-blockers` `1..20` 20 ok, `research-kit-yield` `1..20` 20 ok, `research-kit-built-states` `1..42`
+  42 ok; bare `bats-shellcheck-lint` and the dead-assertion analyzer clean on the 8 changed suites. Existing cases
+  were re-pointed, not loosened: every whole-gate run passes the consent flag; the fixture records a RULE E1k pass
+  and plants load 5; two E1h cases no longer make a third read of a v1 stratum (one now asserts the refusal); the
+  row-17 case counts row 15's refusal as the second FAIL; the record's key list gains `load1`.
+- **What this means for the next gate read.** RULE E1k's run 2 failed (wave E1k above: hedge-on fallback 34/150),
+  so no passing record exists and row 15 refuses to read until a run passes and is recorded with `heldout.py
+  real-load`, as ruling `a7fd5e2ee7c8` requires. The live set map still pins regex-missed and pushback to v3; both
+  hold 2 reads, so the gate now refuses that third read instead of spending it silently. The agent's re-point
+  (`instrument --await regex-missed,pushback`, which opens no set) was refused by the auto-mode classifier as a
+  write to a shared store, so it is the operator's step, filed as backlog `b349790e26d3`.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
