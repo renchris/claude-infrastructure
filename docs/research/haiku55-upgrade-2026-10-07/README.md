@@ -134,6 +134,25 @@ and 13 refuted (`notes/cc293-referee.md`). What you take with it:
   (`handoff-fire.sh --bg` parsing, `lr-upgrade.sh`) were measured on 2.1.284 and are not re-measured.
 - Held-open issues: 1 of 16 fixed; nothing restores a spawn cap. `SPAWN_DEPTH=1` stays load-bearing.
 
+## Open decisions re-measured (2026-10-08, binary 2.1.293)
+
+Each row at or below 90% in the table above was measured live and then reviewed by a skeptic that
+recomputed the numbers from the raw rows ([`decisions/`](decisions/): `D<n>-*.md` and
+`D<n>-*.skeptic.md`). Conviction below is the lower of the two readings.
+
+| Decision | Outcome | Conv. | Deciding evidence | Still not settled |
+|---|---|---|---|---|
+| D1 retrieval effort | Keep **medium**, low as slack, never high. The reason changes: low did NOT collapse here, so medium is a tie broken by the silent cost of a missed file. | 80% | 10 many-file sweeps (true sets of 8–40 files) × 2: low 20/20 exact, medium 20/20, high 17/20; Haiku 4.5 10/20 with two context overflows. Low saves ~10% output tokens (p = 0.11). | Sweeps over 40 files or needing a per-file judgment; both rungs sat at ceiling. |
+| D2 extraction / classification | Unchanged: Opus 5.5 default, Haiku 5.5 @medium admissible where quota binds, **checkable output only**. Do not widen it to judgment classification. | 85% | Table extraction: Haiku 5.5 recall 1.000, precision 0.98–0.99 at ~0.3× Opus's draw. Commit-type classification: Haiku 450 vs Opus 521 of 720 labels (p = 0.019; gap 2–18 points). Haiku returned unparseable JSON in 7 of 18 calls until the prompt said "one valid JSON array". | Whether the classification gap is accuracy or one author's labeling habit. |
+| D3 verifier / judge | Stay Opus 5.5. Haiku 5.5 tied it on the one bounded class measured, which is not grounds to widen. | 78% | Claim-vs-source with planted false claims: 0 false accepts in every arm (30 distinct false claims × 2); accuracy 119–120 of 120. At ceiling, so it cannot rank the models; a false-accept rate under ~12% is not ruled out for either. | Harder checks: no line cite, several files, a verifier that reads with tools. |
+| D4 research / synthesis | Stay Opus 5.5 @xhigh. | 91% | Haiku 5.5 lost 6 of 6 frozen briefs at high and at xhigh to a same-day Opus anchor, 3 blind judges unanimous on every brief (p = 0.031); wrong claims 33 / 21 vs 9. | Measured for deep repo synthesis only; web research still rests on the vendor's card. All judges were Opus. |
+| D5 helper calls | Leave on the alias; do not pin. | 86% | A WebFetch summary costs 346 helper output tokens on Haiku 5.5 (307 of them thinking) vs 38 on Haiku 4.5, ≈ 42 Opus-output equivalents, about 2–3% of a short session's draw, and ~1 s. | Title, summary and suggestion helpers do not fire headless and were not measured. |
+| D6 per-agent budget switch | **Apply** `CLAUDE_CODE_RIPPLING_TULIP=0` in the settings `env` block (operator-owned). The budget is NOT merely advisory. | 88% | Forced on, sub-agents finished the full task in 0 of 9 runs vs 6 of 6 with it off (p = 0.0002); `=0` removed it in every run and a settings value beat a shell value. `CLAUDE_CODE_TOTAL_TOKENS_REMINDER=infinite` is the wrong switch. | Whether `=0` beats a real server-sent value (the flag is off on all four accounts, so it could only be forced locally); re-check on each binary. |
+
+`next3`: a direct Haiku 5.5 request on 2.1.293 returned a completion after it was logged back in.
+The gate run against `next3` stalled on its first check for 93 minutes and was stopped, so the
+formal gate verdict for that account is still missing.
+
 ## Still owed (in order)
 
 1. ~~**Operator:** run activation 50~~ — done 2026-10-08T01:55Z. Still owed: re-gate `next3` for
