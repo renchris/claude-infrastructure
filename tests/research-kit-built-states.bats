@@ -23,7 +23,7 @@ setup_file() {
   mkdir -p "$W"
   REC="$("$BATS_TEST_DIRNAME/fixtures/research-kit/build_good.py" "$W")"
   echo "$REC" > "$BATS_FILE_TMPDIR/records-path"
-  "$REPO/scripts/research-kit/gate.sh" run --program demo >/dev/null
+  "$REPO/scripts/research-kit/gate.sh" run --program demo --consent-sealed-read >/dev/null
   /usr/bin/python3 - "$REPO" "$REC" <<'PY'
 import json, sys, time
 repo, rec = sys.argv[1], sys.argv[2]

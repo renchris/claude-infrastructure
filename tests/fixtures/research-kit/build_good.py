@@ -411,6 +411,17 @@ def main() -> None:
         "  *really*) echo pushback ;;\n  *) echo work-order ;;\nesac\n",
     )
     os.chmod(root / "router.sh", 0o755)
+    # Wave E1l: row 15 reads only after RULE E1k's real-load run passed, and at 1-min load <= 40, so
+    # the known-good program records a passing run and plants a quiet machine (fixture homes only).
+    w(root / "e1k-ab-run2.report.txt", "verdict (RULE E1k): PASS\n")
+    subprocess.run(
+        hp
+        + ["real-load", "--run", "2", "--source", str(root / "e1k-ab-run2.report.txt")]
+        + ["--rows", "120", "--fallbacks", "1", "--held", "0"],
+        check=True,
+        capture_output=True,
+    )
+    w(kit.research_home() / "router-heldout" / "load1.fixture", "5\n")
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "rounds")
     print(rec)

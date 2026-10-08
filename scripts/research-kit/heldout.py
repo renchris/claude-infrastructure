@@ -14,9 +14,10 @@ keychain, so this keeps the set out of the builder's way; it does not lock it (�
   heldout.py rater-sheet --out F.jsonl        the sealed prompts by id, for a rater to label
   heldout.py label --rater NAME --labels L.jsonl   L.jsonl rows: {id, label}
   heldout.py status                            counts per stratum and rater; never a prompt
-  heldout.py evaluate [--record F.jsonl]       what gate row 15 runs (router in CC_RESEARCH_ROUTER);
-                                               --record keeps one row per routed item {id, stratum,
-                                               counted, got, wall_s}: no prompt and no rater label
+  heldout.py evaluate --consent-sealed-read [--program P] [--record F.jsonl]
+                                               what gate row 15 runs (router in CC_RESEARCH_ROUTER);
+                                               --record keeps one row per routed item {id, set, stratum,
+                                               counted, got, wall_s, load1}: no prompt and no rater label
 
 The split is deterministic under a secret (HMAC of the prompt), so re-running `seal` cannot be used to
 fish a different sealed set; a sealed set is sealed once.
@@ -50,6 +51,32 @@ tuning base that looks like the sealed sets, and row 15 is then read once over a
   heldout.py reads [--before-ledger vN=K,...]  router-heldout/reads.jsonl, one row per stratum of a
       set per `evaluate`; the notes say how often each was read before. --before-ledger records, once
       per set, the reads made before the ledger existed
+
+WAVE E1l (rulings a7fd5e2ee7c8, 915d7fb98b7f, 17aff7158fa6; docs/research/reask-row15-rulings-final-
+2026-10-08/REPORT.md). `evaluate` decrypts nothing and logs no read unless every one of these holds,
+in this order; a refusal is exit 2 with nothing written:
+  - CC_RESEARCH_ROUTER is a real command: not empty, not `off` (the router's kill switch,
+    hooks/research-precognition-nudge.sh), and a plain first word resolves on PATH
+  - read consent: `evaluate --consent-sealed-read` (gate row 15: `gate.sh run --consent-sealed-read`,
+    and only when rows 1-14 and 16-19 passed in that same run)
+  - every stratum has a set pinned (`instrument --await S,S` leaves a stratum waiting for a fresh set)
+  - no stratum of a set is read a third time without an operator signature per extra read,
+    `cc-signoff research:<slug>/third-read/<set>.<stratum>` (`evaluate --program <slug>` finds it);
+    a signed read is printed as a disclosed cost
+  - RULE E1k's real-load figures above load 150 are on record and pass (`heldout.py real-load`)
+  - the 1-min load reaches 40 or below within the start cap (CC_RESEARCH_ROW15_START_CAP_S, 4 h)
+After the ledger row is written, every item waits for load 40 or below again, under one total cap
+for the read (CC_RESEARCH_ROW15_TOTAL_CAP_S, 12 h); past it the read ends "read spent, no verdict".
+Each routed row records its 1-min load (`load1`), and the notes state the bound beside RULE E1k's
+figures, so the certificate carries both.
+
+  heldout.py real-load --run N --source F --rows N --fallbacks K --held H
+      records RULE E1k's verdict run (hedge-on rows above load 150, their fallbacks, rows held with
+      one call silent); fewer than 40 rows is "high load not exercised" and is refused
+
+A read takes about 73 minutes plus its load waits, so launch the gate DETACHED, never under a tool
+call's timeout or the job reaper (`nohup` is not enough; scripts/lib/detach.sh):
+  . scripts/lib/detach.sh; detach "$LOG" scripts/research-kit/gate.sh run --program P --consent-sealed-read
 """
 
 from __future__ import annotations
@@ -58,6 +85,9 @@ import argparse
 import hashlib
 import hmac
 import json
+import os
+import re
+import shutil
 import subprocess
 import sys
 import time
@@ -89,6 +119,18 @@ MIN_SET, MIN_RECALL, MIN_OTHER_CORRECT, MAX_FALLBACK, ROUTER_TIMEOUT_S = (
     0.10,
     9,
 )
+# Wave E1l. The kill-switch values of CC_RESEARCH_ROUTER (hooks/research-precognition-nudge.sh):
+KILL_SWITCH = ("off",)
+# A stratum of a set is read at most twice; each read beyond that needs its own operator signature
+# (ruling 915d7fb98b7f item 5):
+FREE_READS = 2
+# The load bound (ruling 17aff7158fa6): every item is routed at 1-min load at or below LOAD_BOUND.
+# The caps bound only how long the read waits for that, never the condition, so they may be set.
+LOAD_BOUND = 40.0
+START_CAP_S, TOTAL_CAP_S, POLL_S = 4 * 3600, 12 * 3600, 15.0
+# RULE E1k (docs/plans/RESEARCH_PROGRAM_BUILD.md, wave E1k B5): a pass is hedge-on fallback at most
+# 0.03 over at least 40 hedge-on rows above load 150.
+E1K_LOAD, E1K_MIN_ROWS, E1K_MAX_FALLBACK = 150, 40, 0.03
 
 
 SETS = (
@@ -165,9 +207,10 @@ def set_strata(data: Dict[str, Any]) -> List[str]:
     return [s for s in STRATA if s in (data.get("strata") or STRATA)]
 
 
-def instrument() -> Optional[Dict[str, str]]:
+def instrument() -> Optional[Dict[str, Optional[str]]]:
     """{stratum: set} when a composition is pinned, None when none is. A file that is there and
-    cannot be read as one is an error: the gate must not fall back to some other set in silence."""
+    cannot be read as one is an error: the gate must not fall back to some other set in silence.
+    A stratum mapped to null waits for a fresh set (`instrument --await`, wave E1l)."""
     p = heldout_dir() / "instrument.json"
     if not p.exists():
         return None
@@ -178,7 +221,7 @@ def instrument() -> Optional[Dict[str, str]]:
         ok = False
     if not ok:
         raise kit.KitError(f"{p} does not pin one set to each of {', '.join(STRATA)}")
-    return {s: check_set(plan[s]) for s in STRATA}
+    return {s: None if plan[s] is None else check_set(plan[s]) for s in STRATA}
 
 
 def parse_strata(spec: Optional[str]) -> List[str]:
@@ -195,7 +238,9 @@ def parse_take(spec: Optional[str], declared: List[str]) -> Dict[str, Optional[i
     for part in [x for x in (spec or "").split(",") if x]:
         k, _, n = part.partition("=")
         if k not in declared or not (n == "all" or n.isdigit()):
-            raise kit.KitError(f"--take {part!r}: expected STRATUM=N|all for a declared stratum")
+            raise kit.KitError(
+                f"--take {part!r}: expected STRATUM=N|all for a declared stratum"
+            )
         out[k] = None if n == "all" else int(n)
     return out
 
@@ -270,7 +315,9 @@ def cmd_seal(a: argparse.Namespace) -> int:
     for c in cands:
         h = hmac.new(secret, c["prompt"].encode(), hashlib.sha256).digest()
         (sealed if h[0] < int(256 * a.fraction) else tuning).append(c)
-    left = 0  # sealed-side prompts beyond a stratum's --take: left out, and still unused
+    left = (
+        0  # sealed-side prompts beyond a stratum's --take: left out, and still unused
+    )
     for s, n in take.items():
         if n is None:
             continue
@@ -382,7 +429,11 @@ def cmd_draw(a: argparse.Namespace) -> int:
     out.write_text(
         "".join(
             json.dumps(
-                {"prompt": c["prompt"], "stratum": c["stratum"], "source": c.get("source")},
+                {
+                    "prompt": c["prompt"],
+                    "stratum": c["stratum"],
+                    "source": c.get("source"),
+                },
                 sort_keys=True,
             )
             + "\n"
@@ -404,10 +455,14 @@ def in_a_repo(path: Path) -> bool:
 
 def cmd_retire(a: argparse.Namespace) -> int:
     if not a.set:
-        raise kit.KitError("retire needs --set: name the set that carries no further verdict")
+        raise kit.KitError(
+            "retire needs --set: name the set that carries no further verdict"
+        )
     out = Path(a.out)
     if in_a_repo(out):
-        raise kit.KitError(f"{out} is inside a repo; a retired set is written outside the repo")
+        raise kit.KitError(
+            f"{out} is inside a repo; a retired set is written outside the repo"
+        )
     data = load(a.set)
     out.write_text(
         "".join(
@@ -427,7 +482,9 @@ def cmd_retire(a: argparse.Namespace) -> int:
     )
     out.chmod(0o600)
     if not retired(a.set):
-        ledger_add([{"event": "retire", "set": a.set, "at": kit.now_iso(), "out": str(out)}])
+        ledger_add(
+            [{"event": "retire", "set": a.set, "at": kit.now_iso(), "out": str(out)}]
+        )
     print(
         f"retired set {a.set}: {len(data['items'])} prompt(s) with their labels written as tuning "
         "data; the sealed file is unchanged and evaluate refuses the set from now on"
@@ -437,6 +494,8 @@ def cmd_retire(a: argparse.Namespace) -> int:
 
 def cmd_instrument(a: argparse.Namespace) -> int:
     p = heldout_dir() / "instrument.json"
+    if a.await_:
+        return cmd_instrument_await(p, a.await_)
     if not a.pin:
         plan = instrument()
         print(json.dumps(plan, sort_keys=True) if plan else "no instrument pinned")
@@ -455,9 +514,36 @@ def cmd_instrument(a: argparse.Namespace) -> int:
         if s not in set_strata(load(name)):
             raise kit.KitError(f"set {name} does not hold {s}")
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({"strata": plan, "pinned_at": kit.now_iso()}, sort_keys=True) + "\n")
+    p.write_text(
+        json.dumps({"strata": plan, "pinned_at": kit.now_iso()}, sort_keys=True) + "\n"
+    )
     p.chmod(0o600)
     print(f"instrument pinned: {json.dumps(plan, sort_keys=True)}")
+    return 0
+
+
+def cmd_instrument_await(p: Path, spec: str) -> int:
+    """Unpin strata so they wait for a fresh set (wave E1l, ruling 915d7fb98b7f item 5). It opens no
+    sealed set: the pinned map is edited as it stands, and `evaluate` refuses while one waits."""
+    want = [x for x in spec.split(",") if x]
+    bad = [x for x in want if x not in STRATA]
+    if bad or not want:
+        raise kit.KitError(
+            f"--await {spec!r}: expected STRATUM[,STRATUM] of {', '.join(STRATA)}"
+        )
+    plan = instrument()
+    if plan is None:
+        raise kit.KitError("no instrument pinned; --await edits a pinned one")
+    was = {s: plan[s] for s in want}
+    plan.update({s: None for s in want})
+    p.write_text(
+        json.dumps({"strata": plan, "pinned_at": kit.now_iso()}, sort_keys=True) + "\n"
+    )
+    p.chmod(0o600)
+    print(
+        f"instrument: {', '.join(f'{s} (was {was[s]})' for s in want)} now await a fresh set; "
+        f"pinned: {json.dumps(plan, sort_keys=True)}"
+    )
     return 0
 
 
@@ -497,7 +583,9 @@ def cmd_reads(a: argparse.Namespace) -> int:
     print(
         json.dumps(
             {
-                "reads": {f"{k[0]} {k[1]}": v for k, v in sorted(counts.items(), key=str)},
+                "reads": {
+                    f"{k[0]} {k[1]}": v for k, v in sorted(counts.items(), key=str)
+                },
                 "retired": sorted(s for s in SETS if retired(s)),
             },
             sort_keys=True,
@@ -551,6 +639,144 @@ def counts(data: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def router_refusal(router: Optional[str]) -> Optional[str]:
+    """Why CC_RESEARCH_ROUTER is not a router `evaluate` may spend a read on, or None (wave E1l,
+    ruling a7fd5e2ee7c8 guard 1). route() runs it as `/bin/bash -c`, so `off` would fall back on
+    every item and still spend the read."""
+    if not router or not router.strip():
+        return "router not built (wave B1): CC_RESEARCH_ROUTER is unset"
+    if router.strip().lower() in KILL_SWITCH:
+        return (
+            f"CC_RESEARCH_ROUTER is {router.strip()!r}, the router's kill switch "
+            "(hooks/research-precognition-nudge.sh), not a router: every item would fall back"
+        )
+    first = router.split()[0]
+    if re.fullmatch(r"[A-Za-z0-9_./+-]+", first) and not shutil.which(first):
+        return f"CC_RESEARCH_ROUTER runs {first!r}, which is not found: every item would fall back"
+    return None
+
+
+def live_store() -> str:
+    """The live research store of the real user, whatever HOME says (as fixture_signer.py reads it)."""
+    import pwd
+
+    return os.path.realpath(
+        Path(pwd.getpwuid(os.getuid()).pw_dir) / ".claude" / "autonomy" / "research"
+    )
+
+
+_LOAD_FIXTURE: Dict[str, Any] = {"vals": None, "i": 0}
+
+
+def load1() -> float:
+    """The machine's 1-minute load. A fixture research home, never the live store, may plant a
+    sequence in router-heldout/load1.fixture: one value per line, read in order, the last repeating."""
+    home, live = os.path.realpath(kit.research_home()), live_store()
+    f = heldout_dir() / "load1.fixture"
+    if home != live and not home.startswith(live + os.sep) and f.exists():
+        if _LOAD_FIXTURE["vals"] is None:
+            _LOAD_FIXTURE["vals"] = [float(x) for x in f.read_text().split()] or [0.0]
+        vals, i = _LOAD_FIXTURE["vals"], _LOAD_FIXTURE["i"]
+        _LOAD_FIXTURE["i"] = i + 1
+        return vals[min(i, len(vals) - 1)]
+    return os.getloadavg()[0]
+
+
+def env_seconds(var: str, default: float) -> float:
+    try:
+        return float(os.environ.get(var) or default)
+    except ValueError:
+        raise kit.KitError(f"{var} must be a number of seconds")
+
+
+def wait_load(deadline: float) -> Any:
+    """(True, load) once the 1-min load is at or below LOAD_BOUND; (False, last load) when the next
+    poll would pass `deadline` (time.monotonic()) first."""
+    poll = env_seconds("CC_RESEARCH_ROW15_POLL_S", POLL_S)
+    while True:
+        now = load1()
+        if now <= LOAD_BOUND:
+            return True, now
+        if time.monotonic() + poll > deadline:
+            return False, now
+        time.sleep(poll)
+
+
+def real_load() -> Dict[str, Any]:
+    """RULE E1k's verdict run as `real-load` recorded it. The read waits for its pass (ruling
+    a7fd5e2ee7c8), and the certificate states its figures beside the load bound (17aff7158fa6)."""
+    p = heldout_dir() / "real-load.json"
+    try:
+        r = json.loads(p.read_text())
+        rows, fb = int(r["rows"]), int(r["fallbacks"])
+    except OSError:
+        raise kit.KitError(
+            "RULE E1k's real-load figures above load 150 are not on record (heldout.py real-load): "
+            "the read waits for its pass, and the certificate states them beside the load bound"
+        )
+    except (ValueError, KeyError, TypeError):
+        raise kit.KitError(f"{p} does not hold RULE E1k's figures")
+    if rows < E1K_MIN_ROWS or fb / rows > E1K_MAX_FALLBACK:
+        raise kit.KitError(
+            f"RULE E1k run {r.get('run')} did not pass: hedge-on fallback {fb}/{rows} above load "
+            f"{E1K_LOAD}, against at most {E1K_MAX_FALLBACK} over at least {E1K_MIN_ROWS} rows"
+        )
+    return r
+
+
+def cmd_real_load(a: argparse.Namespace) -> int:
+    p = heldout_dir() / "real-load.json"
+    if a.rows is None:
+        print(p.read_text().strip() if p.exists() else "no RULE E1k figures on record")
+        return 0
+    if a.run is None or a.fallbacks is None or a.held is None or not a.source:
+        raise kit.KitError(
+            "real-load needs --run, --source, --rows, --fallbacks and --held"
+        )
+    if not Path(a.source).exists():
+        raise kit.KitError(
+            f"--source {a.source} does not exist: name the run's own report"
+        )
+    if a.rows < E1K_MIN_ROWS:
+        raise kit.KitError(
+            f"{a.rows} hedge-on rows above load {E1K_LOAD}: high load not exercised (RULE E1k needs "
+            f"{E1K_MIN_ROWS}); no verdict to record"
+        )
+    ok = a.fallbacks / a.rows <= E1K_MAX_FALLBACK
+    rec = {
+        "rule": "E1k",
+        "run": a.run,
+        "source": a.source,
+        "load_floor": E1K_LOAD,
+        "rows": a.rows,
+        "fallbacks": a.fallbacks,
+        "held_one_silent": a.held,
+        "verdict": "PASS" if ok else "FAIL",
+        "recorded_at": kit.now_iso(),
+    }
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(rec, sort_keys=True) + "\n")
+    p.chmod(0o600)
+    print(
+        f"RULE E1k run {a.run}: {rec['verdict']} ({a.fallbacks}/{a.rows} hedge-on fallbacks)"
+    )
+    return 0
+
+
+def third_read_signatures(program: Optional[str]) -> Dict[str, List[Dict[str, Any]]]:
+    """The program's VALID `third-read` operator signatures, by target <set>.<stratum>."""
+    if not program:
+        return {}
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+    import operator_sign
+
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for r in operator_sign.research_records(program, "third-read"):
+        if r["_verdict"] == operator_sign.VALID:
+            out.setdefault(str(r.get("target")), []).append(r)
+    return out
+
+
 def route(router: str, prompt: str) -> Optional[str]:
     """The router's single label, or None for an error, timeout, unknown or mixed label."""
     try:
@@ -570,29 +796,78 @@ def route(router: str, prompt: str) -> Optional[str]:
 
 
 def evaluate(
-    router: Optional[str], name: Optional[str] = None, record: Optional[Path] = None
+    router: Optional[str],
+    name: Optional[str] = None,
+    record: Optional[Path] = None,
+    consent: bool = False,
+    program: Optional[str] = None,
 ) -> Dict[str, List[str]]:
     """Gate row 15. A fallback (error, timeout, unknown or mixed label) is a miss in every stratum:
     the as-built router records it as `unavailable`, which relays nothing (router.py, §10 item 3), so
     it never counts as a correct relay. Fallbacks are also counted against MAX_FALLBACK.
 
     With no set named, a pinned instrument decides which set each stratum is scored from (wave E1h);
-    the item floor and the fallback share are pooled over everything routed."""
-    if not router:
-        raise kit.KitError("router not built (wave B1): CC_RESEARCH_ROUTER is unset")
+    the item floor and the fallback share are pooled over everything routed.
+
+    Wave E1l: every refusal below comes before any set is decrypted or the reads ledger is written
+    (the order is in this module's docstring)."""
+    refusal = router_refusal(router)
+    if refusal:
+        raise kit.KitError(refusal)
+    if not consent:
+        raise kit.KitError(
+            "no read consent: a sealed read is spent only on purpose (heldout.py evaluate "
+            "--consent-sealed-read; gate.sh run --consent-sealed-read); nothing decrypted, no read logged"
+        )
     pinned = None if name else instrument()
     if pinned:
-        plan = pinned
+        waiting = [s for s in STRATA if pinned[s] is None]
+        if waiting:
+            raise kit.KitError(
+                f"stratum {', '.join(waiting)}: no set pinned, it awaits a fresh set (heldout.py "
+                "instrument --await; ruling 915d7fb98b7f); no read logged"
+            )
+        plan: Dict[str, str] = {s: str(pinned[s]) for s in STRATA}
     else:
         name = check_set(name or current_set())
         plan = {s: name for s in STRATA}
-    datas: Dict[str, Dict[str, Any]] = {}
     for n in sorted(set(plan.values())):
         if retired(n):
             raise kit.KitError(
                 f"set {n} is retired to tuning data (heldout.py retire); it carries no further verdict"
             )
-        datas[n] = load(n)
+    # A stratum of a set is read at most FREE_READS times; each read beyond needs its own operator
+    # signature, and is said in the notes as a disclosed cost (ruling 915d7fb98b7f item 5).
+    sigs = third_read_signatures(program)
+    before = reads_before()
+    over, disclosed = [], []
+    for s in STRATA:
+        k, signed = before.get((plan[s], s), 0), sigs.get(f"{plan[s]}.{s}", [])
+        if k >= FREE_READS + len(signed):
+            over.append(f"{s} of {plan[s]} (read {k} times, {len(signed)} signed)")
+        elif k >= FREE_READS:
+            last = max(signed, key=lambda r: r.get("at", 0))
+            disclosed.append(
+                f"stratum {s} of set {plan[s]}: read {k + 1}, beyond the second, a disclosed cost "
+                f"under operator signature {last.get('at_iso')} ({last.get('because')})"
+            )
+    if over:
+        raise kit.KitError(
+            "a read beyond the second is refused without a signed override: "
+            + "; ".join(over)
+            + " (cc-signoff research:<slug>/third-read/<set>.<stratum>, then evaluate --program "
+            "<slug>); no read logged"
+        )
+    companion = real_load()
+    t0 = time.monotonic()
+    cap = env_seconds("CC_RESEARCH_ROW15_START_CAP_S", START_CAP_S)
+    ok, now = wait_load(t0 + cap)
+    if not ok:
+        raise kit.KitError(
+            f"1-min load stayed above {LOAD_BOUND:g} for the start cap ({cap:g} s; last {now:.1f}): "
+            "nothing decrypted, no read logged (ruling 17aff7158fa6)"
+        )
+    datas: Dict[str, Dict[str, Any]] = {n: load(n) for n in sorted(set(plan.values()))}
     # (set, item) for every item of a stratum in the set that stratum is scored from
     pool = [
         (n, i)
@@ -630,8 +905,9 @@ def evaluate(
     )
     before = reads_before()
     notes += [
-        f"stratum {s} of set {n}: read {before.get((n, s), 0)} time(s) before" for n, s in held
-    ]
+        f"stratum {s} of set {n}: read {before.get((n, s), 0)} time(s) before"
+        for n, s in held
+    ] + disclosed
     ledger_add(
         [
             {
@@ -653,8 +929,20 @@ def evaluate(
     store: Dict[str, List[int]] = {"history": [0, 0], "transcript": [0, 0]}
     fallbacks = 0
     rows: List[Dict[str, Any]] = []
+    # The load bound, per item, under one total cap for the read; past it nothing more is routed and
+    # the read ends with no verdict (it is already in the ledger).
+    logged = len(notes)  # the notes a spent read keeps: none of the scoring below is a verdict
+    total_cap = env_seconds("CC_RESEARCH_ROW15_TOTAL_CAP_S", TOTAL_CAP_S)
+    deadline = time.monotonic() + total_cap
+    spent: List[float] = []
 
     def routed(n: str, i: Dict[str, Any], counted: bool) -> Optional[str]:
+        if spent:
+            return None
+        ok, load_now = wait_load(deadline)
+        if not ok:
+            spent.append(load_now)
+            return None
         t0 = time.time()
         got = route(router, i["prompt"])
         rows.append(
@@ -665,6 +953,7 @@ def evaluate(
                 "counted": counted,
                 "got": got,
                 "wall_s": round(time.time() - t0, 2),
+                "load1": round(load_now, 2),
             }
         )
         return got
@@ -714,7 +1003,8 @@ def evaluate(
             )
         else:
             notes.append(
-                f"stratum {s}: {ok}/{n_items}" + (" (relay decision)" if s == "other" else "")
+                f"stratum {s}: {ok}/{n_items}"
+                + (" (relay decision)" if s == "other" else "")
             )
     if exact[1]:
         notes.append(
@@ -769,6 +1059,22 @@ def evaluate(
             "items / fell back: "
             + " · ".join(f"{s} {c[0]}/{c[1]}/{c[2]}" for s, c in seen.items())
         )
+    if spent:
+        del notes[logged:]
+        fails = [
+            f"read spent, no verdict: 1-min load stayed above {LOAD_BOUND:g} past the read's total "
+            f"cap ({total_cap:g} s; last {spent[0]:.1f}) after {len(rows)} routed item(s); the reads "
+            "ledger holds this read"
+        ]
+    else:
+        notes.append(
+            f"load bound (ruling 17aff7158fa6), a stated condition of row 15: every routed item "
+            f"started at 1-min load <= {LOAD_BOUND:g} (highest "
+            f"{max((r['load1'] for r in rows), default=0.0):.1f}); real-load companion, RULE E1k run "
+            f"{companion.get('run')} above load {E1K_LOAD}: hedge-on fallback "
+            f"{companion['fallbacks']}/{companion['rows']}, rows held with one call silent "
+            f"{companion.get('held_one_silent')} ({companion.get('source')})"
+        )
     if record:
         record.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in rows))
         record.chmod(0o600)
@@ -802,30 +1108,57 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="print the per-stratum counts the split would seal (never a prompt) and write nothing",
     )
-    p.add_argument("--strata", help="seal only these strata (comma-separated); the set stores them")
-    p.add_argument("--take", help="STRATUM=N|all,...: keep N of a stratum's sealed side")
+    p.add_argument(
+        "--strata", help="seal only these strata (comma-separated); the set stores them"
+    )
+    p.add_argument(
+        "--take", help="STRATUM=N|all,...: keep N of a stratum's sealed side"
+    )
     p = sub.add_parser("draw")
     p.add_argument("--candidates", required=True)
     p.add_argument("--strata", required=True)
-    p.add_argument("--take", help="STRATUM=N|all,...; a stratum it does not name is drawn whole")
+    p.add_argument(
+        "--take", help="STRATUM=N|all,...; a stratum it does not name is drawn whole"
+    )
     p.add_argument("--exclude", action="append")
     p.add_argument("--out", required=True)
     p = sub.add_parser("retire")
     p.add_argument("--out", required=True)
     p = sub.add_parser("instrument")
-    p.add_argument("--pin", help="STRATUM=SET for each of the four strata, comma-separated")
+    p.add_argument(
+        "--await",
+        dest="await_",
+        help="STRATUM[,STRATUM]: unpin these so they wait for a fresh set; opens no sealed set",
+    )
+    p.add_argument(
+        "--pin", help="STRATUM=SET for each of the four strata, comma-separated"
+    )
     p = sub.add_parser("reads")
-    p.add_argument("--before-ledger", help="SET=COUNT,...: reads made before the ledger existed")
+    p.add_argument(
+        "--before-ledger", help="SET=COUNT,...: reads made before the ledger existed"
+    )
     p = sub.add_parser("rater-sheet")
     p.add_argument("--out", required=True)
     p = sub.add_parser("label")
     p.add_argument("--rater", required=True)
     p.add_argument("--labels", required=True)
     sub.add_parser("status")
+    p = sub.add_parser("real-load")
+    p.add_argument("--run", type=int)
+    p.add_argument("--source", help="the run's own report")
+    p.add_argument("--rows", type=int, help="hedge-on rows above load 150")
+    p.add_argument("--fallbacks", type=int, help="hedge-on fallbacks among them")
+    p.add_argument("--held", type=int, help="hedge-on rows held with one call silent")
     p = sub.add_parser("evaluate")
     p.add_argument(
+        "--consent-sealed-read",
+        action="store_true",
+        help="spend a read of the sealed set(s); without it evaluate decrypts and logs nothing",
+    )
+    p.add_argument("--program", help="the program whose third-read signatures count")
+    p.add_argument(
         "--record",
-        help="write one row per routed item {id, stratum, counted, got, wall_s} to this file",
+        help="write one row per routed item {id, set, stratum, counted, got, wall_s, load1} to this file",
     )
     a = ap.parse_args(argv)
     try:
@@ -835,6 +1168,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_draw(a)
         if a.verb == "retire":
             return cmd_retire(a)
+        if a.verb == "real-load":
+            return cmd_real_load(a)
         if a.verb == "instrument":
             return cmd_instrument(a)
         if a.verb == "reads":
@@ -848,12 +1183,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(json.dumps(counts(load(name)), sort_keys=True))
             print(f"heldout.py: set {name}", file=sys.stderr)
             return 0
-        import os
-
         res = evaluate(
             os.environ.get("CC_RESEARCH_ROUTER"),
             a.set,
             Path(a.record) if a.record else None,
+            consent=a.consent_sealed_read,
+            program=a.program,
         )
         print("\n".join(res["fails"] + res["notes"]))
         return 1 if res["fails"] else 0

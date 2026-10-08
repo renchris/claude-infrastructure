@@ -8,6 +8,16 @@ setup() {
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   H="$REPO/scripts/research-kit/heldout.py"
   export CC_RESEARCH_HOME="$BATS_TEST_TMPDIR/research" CC_RESEARCH_VAULT_KEY="test-key"
+  e1l_ready
+}
+
+# e1l_ready: what wave E1l's read needs besides consent — RULE E1k's passing real-load figures on
+# record, and a quiet machine (a load planted in the fixture home; the live store never reads one).
+e1l_ready() {
+  mkdir -p "$CC_RESEARCH_HOME/router-heldout"
+  printf '{"rule":"E1k","run":2,"source":"fixture","rows":120,"fallbacks":1,"held_one_silent":0,"verdict":"PASS"}\n' \
+    > "$CC_RESEARCH_HOME/router-heldout/real-load.json"
+  printf '5\n' > "$CC_RESEARCH_HOME/router-heldout/load1.fixture"
 }
 
 cands() { # <per-stratum count> [strata...]
@@ -83,7 +93,7 @@ open('$BATS_TEST_TMPDIR/b.jsonl', 'w').writelines(json.dumps({'id': r['id'], 'la
   "$H" label --rater r2 --labels "$BATS_TEST_TMPDIR/b.jsonl"
   printf '#!/bin/bash\ncat >/dev/null\necho completeness\n' > "$BATS_TEST_TMPDIR/router"
   chmod +x "$BATS_TEST_TMPDIR/router"
-  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --consent-sealed-read
   [ "$status" -eq 1 ]
   [[ "$output" == *"24 agreed sealed item(s); at least 40"* ]]
 }
@@ -169,12 +179,12 @@ case "$p" in
 esac
 R
   chmod +x "$BATS_TEST_TMPDIR/router"
-  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --consent-sealed-read
   [ "$status" -eq 1 ]
   [[ "$output" == *"held-out set v2: 48 sealed item(s)"* ]] || false
   [[ "$output" == *"48 of 48 routed item(s) fell back"* ]] || false
   [[ "$output" == *"regex-matched 12 of 12 · regex-missed 12 of 12 · pushback 12 of 12 · other 12 of 12"* ]] || false
-  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" --set v1 evaluate
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" --set v1 evaluate --consent-sealed-read
   [ "$status" -eq 0 ]
   [[ "$output" == *"held-out set v1: 48 sealed item(s)"* ]] || false
   [[ "$output" == *"regex-matched 0 of 12 · regex-missed 0 of 12 · pushback 0 of 12 · other 0 of 12"* ]]
@@ -206,7 +216,7 @@ case "$p" in
 esac
 R
   chmod +x "$BATS_TEST_TMPDIR/router"
-  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --record "$BATS_TEST_TMPDIR/rec.jsonl"
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --consent-sealed-read --record "$BATS_TEST_TMPDIR/rec.jsonl"
   # the 7 agreed pushback prompts are all relayed, so the row passes; the 5 split ones do not count
   [ "$status" -eq 0 ]
   [[ "$output" == *"5 item(s) excluded for rater disagreement"* ]] || false
@@ -215,7 +225,7 @@ R
   [[ "$output" == *"two different relay labels), relayed / items / fell back: regex-matched 0/0/0 · regex-missed 0/0/0 · pushback 3/5/0"* ]] || false
   [ "$(wc -l < "$BATS_TEST_TMPDIR/rec.jsonl" | tr -d ' ')" -eq 48 ]
   [ "$(jq -s '[.[] | select(.counted | not)] | length' "$BATS_TEST_TMPDIR/rec.jsonl")" -eq 5 ]
-  [ "$(jq -r 'keys | join(",")' "$BATS_TEST_TMPDIR/rec.jsonl" | sort -u)" = "counted,got,id,set,stratum,wall_s" ]
+  [ "$(jq -r 'keys | join(",")' "$BATS_TEST_TMPDIR/rec.jsonl" | sort -u)" = "counted,got,id,load1,set,stratum,wall_s" ]
   run grep -c "secret prompt" "$BATS_TEST_TMPDIR/rec.jsonl"
   [ "$output" = 0 ]
 }
@@ -320,7 +330,7 @@ router_says() { printf '#!/bin/bash\ncat >/dev/null\necho %s\n' "$1" > "$BATS_TE
   [ "$(stat -f %Lp "$BATS_TEST_TMPDIR/retired-v2.jsonl")" = 600 ]
   [ "$(jq -r 'select(.event=="retire") | .set' "$CC_RESEARCH_HOME/router-heldout/reads.jsonl")" = v2 ]
   router_says completeness
-  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" --set v2 evaluate
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" --set v2 evaluate --consent-sealed-read
   [ "$status" -eq 2 ]
   [[ "$output" == *"v2 is retired"* ]] || false
   # a retired set's prompts are still never drawn or sealed again
@@ -364,7 +374,7 @@ composite() {
   [ "$(jq -c .strata "$CC_RESEARCH_HOME/router-heldout/instrument.json")" = '{"other":"v4","pushback":"v1","regex-matched":"v4","regex-missed":"v1"}' ]
   # a router that says completeness: every relay stratum passes, `other` (gold work-order) reads 0
   router_says completeness
-  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --record "$BATS_TEST_TMPDIR/rec.jsonl"
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --consent-sealed-read --record "$BATS_TEST_TMPDIR/rec.jsonl"
   [ "$status" -eq 1 ]
   [[ "$output" == *"stratum other: relay-decision rate 0/20"* ]] || false
   [[ "$output" == *"stratum regex-matched: 20/20"* ]] || false
@@ -374,11 +384,10 @@ composite() {
   [ "$(jq -r '"\(.stratum) \(.set)"' "$BATS_TEST_TMPDIR/rec.jsonl" | sort | uniq -c | tr -s ' ' | tr '\n' ';')" = " 20 other v4; 12 pushback v1; 20 regex-matched v4; 12 regex-missed v1;" ]
   run grep -c 'prompt' "$BATS_TEST_TMPDIR/rec.jsonl"
   [ "$output" = 0 ]
-  # the gate's own call (no --set) reads the instrument; a named set still reads that set alone
+  # the gate's own call (no --set) read the instrument above; a named set still reads that set alone
+  # (one instrument read here, not two: a second would make this v1 read a third of pushback, wave E1l)
   router_says work-order
-  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate
-  [[ "$output" == *"stratum regex-matched: recall 0/20"* ]] || false
-  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" --set v1 evaluate
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" --set v1 evaluate --consent-sealed-read
   [[ "$output" == *"stratum regex-matched: recall 0/12"* ]] || false
   # an instrument that names an unsealed set, or a stratum the set does not hold, is refused
   run "$H" instrument --pin other=v3,regex-matched=v4,regex-missed=v1,pushback=v1
@@ -391,20 +400,23 @@ composite() {
 @test "wave E1h: every evaluate is written to the reads ledger, and the notes say how often each stratum of each set was read before" {
   composite
   router_says completeness
-  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --consent-sealed-read
   [[ "$output" == *"stratum other of set v4: read 0 time(s) before"* ]] || false
   [[ "$output" == *"stratum pushback of set v1: read 0 time(s) before"* ]] || false
   [ "$(jq -r 'select(.event=="read") | "\(.set) \(.stratum)"' "$CC_RESEARCH_HOME/router-heldout/reads.jsonl" | sort | tr '\n' ';')" = "v1 pushback;v1 regex-missed;v4 other;v4 regex-matched;" ]
-  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" --set v1 evaluate
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" --set v1 evaluate --consent-sealed-read
   [[ "$output" == *"stratum pushback of set v1: read 1 time(s) before"* ]] || false
   [[ "$output" == *"stratum other of set v1: read 0 time(s) before"* ]] || false
-  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate
-  [[ "$output" == *"stratum other of set v4: read 1 time(s) before"* ]] || false
-  [[ "$output" == *"stratum pushback of set v1: read 2 time(s) before"* ]] || false
+  # wave E1l: pushback and regex-missed of v1 are now read twice, so the instrument's next read is
+  # refused before it reads, and the refusal says how often each was read
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --consent-sealed-read
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"pushback of v1 (read 2 times, 0 signed)"* ]] || false
+  [[ "$output" != *"other of v4"* ]] || false
   # reads made before the ledger existed are counted from a planted row, as the real sets' are
   printf '{"event":"read","set":"v4","stratum":"other","at":"2026-10-01T00:00:00Z","before_ledger":true}\n' >> "$CC_RESEARCH_HOME/router-heldout/reads.jsonl"
-  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate
-  [[ "$output" == *"stratum other of set v4: read 3 time(s) before"* ]] || false
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --consent-sealed-read
+  [[ "$output" == *"other of v4 (read 2 times, 0 signed)"* ]] || false
 }
 
 @test "wave E1i: other is scored on the relay decision (floor 0.90), a fallback or a missed relay is a miss, and the exact label is shown only" {
@@ -438,12 +450,12 @@ case "$p" in
 esac
 R
   chmod +x "$BATS_TEST_TMPDIR/router"
-  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --consent-sealed-read
   [ "$status" -eq 0 ]
   [[ "$output" == *"stratum other: 18/20 (relay decision)"* ]] || false
   [[ "$output" == *"other, exact label (shown only, never a failure): 3/20"* ]] || false
   [[ "$output" == *"relayed although both raters gave a non-relay label: other 0/16"* ]] || false
-  WRONG6=1 CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate
+  WRONG6=1 CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --consent-sealed-read
   [ "$status" -eq 1 ]
   [[ "$output" == *"stratum other: relay-decision rate 17/20 = 0.85, below 0.9"* ]] || false
   [[ "$output" == *"relayed although both raters gave a non-relay label: other 1/16"* ]] || false
@@ -452,12 +464,170 @@ R
 @test "wave E1h: the notes give the false-relay rate on agreed non-relay items and split other by store, and neither can fail the row" {
   composite
   router_says completeness
-  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --consent-sealed-read
   [[ "$output" == *"relayed although both raters gave a non-relay label: other 20/20"* ]] || false
   [[ "$output" == *"other by store, relay decision right / items: history 0/10 · transcript 0/10"* ]] || false
   router_says work-order
-  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" --set v4 evaluate
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" --set v4 evaluate --consent-sealed-read
   [[ "$output" == *"relayed although both raters gave a non-relay label: other 0/20"* ]] || false
   [[ "$output" == *"other by store, relay decision right / items: history 10/10 · transcript 10/10"* ]] || false
   [[ "$output" != *"stratum other:"*"below"* ]] || false
+}
+
+# ── wave E1l (rulings a7fd5e2ee7c8, 915d7fb98b7f, 17aff7158fa6) ─────────────────────────────────────
+# spoil <file>: a sealed file replaced by bytes that cannot be decrypted, kept in <file>.bak. A refusal
+# that comes before any decrypt reads the same with it; a read that got as far as decrypting cannot.
+spoil() { cp "$CC_RESEARCH_HOME/router-heldout/$1" "$CC_RESEARCH_HOME/router-heldout/$1.bak"; printf 'not a sealed set' > "$CC_RESEARCH_HOME/router-heldout/$1"; }
+unspoil() { mv "$CC_RESEARCH_HOME/router-heldout/$1.bak" "$CC_RESEARCH_HOME/router-heldout/$1"; }
+ledger_rows() { cat "$CC_RESEARCH_HOME/router-heldout/reads.jsonl" 2>/dev/null | wc -l | tr -d ' '; }
+# sig <set>.<stratum> [chain-json]: a third-read signature as the operator's own terminal leaves it
+sig() {
+  mkdir -p "$CC_RESEARCH_HOME/demo"
+  printf '{"action":"third-read","target":"%s","at":%s,"at_iso":"2026-10-08T00:00:00Z","because":"fixture","pins":{},"provenance":{"claude_ancestor":false,"chain":%s}}\n' \
+    "$1" "$(date +%s)" "${2:-[\"zsh\",\"kitty\"]}" >> "$CC_RESEARCH_HOME/demo/signoff.jsonl"
+}
+
+@test "wave E1l: with no read consent, the kill switch, or a router that is not found, evaluate refuses before it decrypts and logs no read" {
+  composite
+  router_says completeness
+  spoil sealed.enc
+  spoil sealed-v4.enc
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"no read consent"* ]] || false
+  for v in off OFF " off "; do
+    CC_RESEARCH_ROUTER="$v" run "$H" evaluate --consent-sealed-read
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"the router's kill switch"* ]] || false
+  done
+  CC_RESEARCH_ROUTER="no-such-router-e1l classify" run "$H" evaluate --consent-sealed-read
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"'no-such-router-e1l', which is not found"* ]] || false
+  [ "$(ledger_rows)" = 0 ]
+  # control: with every guard met the same spoiled files are decrypted, and the read dies there
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --consent-sealed-read
+  [ "$status" -ne 0 ]
+  [[ "$output" != *"no read consent"* && "$output" != *"kill switch"* ]] || false
+  # and unspoiled, the real read goes through and is logged
+  unspoil sealed.enc
+  unspoil sealed-v4.enc
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --consent-sealed-read
+  [ "$status" -eq 1 ]
+  [ "$(ledger_rows)" = 4 ]
+}
+
+@test "wave E1l: a third read of a stratum is refused before any decrypt; each valid operator signature buys one, printed as a disclosed cost" {
+  composite
+  router_says completeness
+  export CC_RESEARCH_RECORDS="$BATS_TEST_TMPDIR/records"
+  mkdir -p "$CC_RESEARCH_RECORDS"
+  for i in 1 2; do
+    CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --consent-sealed-read
+    [ "$status" -eq 1 ]
+  done
+  [ "$(ledger_rows)" = 8 ]
+  spoil sealed.enc
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --consent-sealed-read --program demo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"a read beyond the second is refused without a signed override"* ]] || false
+  [[ "$output" == *"regex-missed of v1 (read 2 times, 0 signed)"* ]] || false
+  [[ "$output" == *"other of v4 (read 2 times, 0 signed)"* ]] || false
+  [ "$(ledger_rows)" = 8 ]
+  unspoil sealed.enc
+  # an agent-written signature is void and buys nothing; one stratum signed still leaves three refused
+  sig v1.regex-missed '["claude","zsh"]'
+  sig v1.pushback
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --consent-sealed-read --program demo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"regex-missed of v1 (read 2 times, 0 signed)"* ]] || false
+  [[ "$output" != *"pushback of v1"* ]] || false
+  # a signature counts only for the program it names
+  sig v1.regex-missed
+  sig v4.other
+  sig v4.regex-matched
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --consent-sealed-read
+  [ "$status" -eq 2 ]
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --consent-sealed-read --program demo
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"stratum pushback of set v1: read 3, beyond the second, a disclosed cost under operator signature 2026-10-08T00:00:00Z (fixture)"* ]] || false
+  [ "$(ledger_rows)" = 12 ]
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --consent-sealed-read --program demo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"pushback of v1 (read 3 times, 1 signed)"* ]] || false
+}
+
+@test "wave E1l: instrument --await unpins strata without opening a set, and evaluate refuses while one waits" {
+  composite
+  spoil sealed.enc
+  spoil sealed-v4.enc
+  run "$H" instrument --await regex-missed,pushback
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"regex-missed (was v1), pushback (was v1) now await a fresh set"* ]] || false
+  [ "$(jq -c .strata "$CC_RESEARCH_HOME/router-heldout/instrument.json")" = '{"other":"v4","pushback":null,"regex-matched":"v4","regex-missed":null}' ]
+  router_says completeness
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --consent-sealed-read
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"stratum regex-missed, pushback: no set pinned, it awaits a fresh set"* ]] || false
+  [ "$(ledger_rows)" = 0 ]
+  run "$H" instrument --await regex-missed,bogus
+  [ "$status" -eq 2 ]
+}
+
+@test "wave E1l: the read waits for RULE E1k's pass: no record, a failing run or an unexercised one refuses it; a pass is stated beside the load bound" {
+  composite
+  router_says completeness
+  rm "$CC_RESEARCH_HOME/router-heldout/real-load.json"
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --consent-sealed-read
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"RULE E1k's real-load figures above load 150 are not on record"* ]] || false
+  printf 'verdict\n' > "$BATS_TEST_TMPDIR/run.txt"
+  run "$H" real-load --run 2 --source "$BATS_TEST_TMPDIR/run.txt" --rows 39 --fallbacks 0 --held 0
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"high load not exercised"* ]] || false
+  [ ! -e "$CC_RESEARCH_HOME/router-heldout/real-load.json" ]
+  run "$H" real-load --run 2 --source "$BATS_TEST_TMPDIR/run.txt" --rows 100 --fallbacks 4 --held 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"RULE E1k run 2: FAIL (4/100"* ]] || false
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --consent-sealed-read
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"RULE E1k run 2 did not pass: hedge-on fallback 4/100"* ]] || false
+  [ "$(ledger_rows)" = 0 ]
+  run "$H" real-load --run 3 --source "$BATS_TEST_TMPDIR/run.txt" --rows 100 --fallbacks 3 --held 2
+  [[ "$output" == *"RULE E1k run 3: PASS"* ]] || false
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --consent-sealed-read --record "$BATS_TEST_TMPDIR/rec.jsonl"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"load bound (ruling 17aff7158fa6), a stated condition of row 15: every routed item started at 1-min load <= 40 (highest 5.0); real-load companion, RULE E1k run 3 above load 150: hedge-on fallback 3/100, rows held with one call silent 2 ($BATS_TEST_TMPDIR/run.txt)"* ]] || false
+  [ "$(jq -s 'map(.load1) | unique == [5]' "$BATS_TEST_TMPDIR/rec.jsonl")" = true ]
+}
+
+@test "wave E1l: above load 40 through the start cap the read is refused before any decrypt and logs nothing; a load that falls in time is waited out" {
+  composite
+  router_says completeness
+  spoil sealed.enc
+  printf '90\n' > "$CC_RESEARCH_HOME/router-heldout/load1.fixture"
+  CC_RESEARCH_ROW15_START_CAP_S=0 CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" run "$H" evaluate --consent-sealed-read
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"1-min load stayed above 40 for the start cap (0 s; last 90.0): nothing decrypted, no read logged"* ]] || false
+  [ "$(ledger_rows)" = 0 ]
+  unspoil sealed.enc
+  printf '90\n41\n40\n' > "$CC_RESEARCH_HOME/router-heldout/load1.fixture"
+  CC_RESEARCH_ROW15_START_CAP_S=30 CC_RESEARCH_ROW15_POLL_S=0.01 CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" \
+    run "$H" evaluate --consent-sealed-read --record "$BATS_TEST_TMPDIR/rec.jsonl"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"(highest 40.0)"* ]] || false
+  [ "$(jq -s 'length' "$BATS_TEST_TMPDIR/rec.jsonl")" = 64 ]
+  [ "$(jq -s 'map(.load1) | max == 40' "$BATS_TEST_TMPDIR/rec.jsonl")" = true ]
+}
+
+@test "wave E1l: load above 40 past the total cap mid-read ends it 'read spent, no verdict', and the ledger keeps the read" {
+  composite
+  router_says completeness
+  printf '5\n5\n5\n90\n' > "$CC_RESEARCH_HOME/router-heldout/load1.fixture"
+  CC_RESEARCH_ROW15_TOTAL_CAP_S=0 CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/router" \
+    run "$H" evaluate --consent-sealed-read --record "$BATS_TEST_TMPDIR/rec.jsonl"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"read spent, no verdict: 1-min load stayed above 40 past the read's total cap (0 s; last 90.0) after 2 routed item(s); the reads ledger holds this read"* ]] || false
+  [[ "$output" != *"fell back"* && "$output" != *"stratum other:"* && "$output" != *"load bound ("* ]] || false
+  [ "$(jq -s 'length' "$BATS_TEST_TMPDIR/rec.jsonl")" = 2 ]
+  [ "$(ledger_rows)" = 4 ]
 }

@@ -74,12 +74,12 @@ seed.save_vault('demo', {'seeds': [{'sid': 's%d' % i, 'cohort': 'original', 'sta
 # ── pass-throughs ──────────────────────────────────────────────────────────────────────────────
 
 @test "gate pass-through preserves the gate's exit code: 0 on the good program, 1 on a failed row" {
-  run "$CLI" gate run --program demo
+  run "$CLI" gate run --program demo --consent-sealed-read
   [ "$status" -eq 0 ]
   [[ "$output" == *"CERTIFIED demo"* ]] || false
   rsync -a --delete "$BATS_FILE_TMPDIR/golden/" "$W/"
   jedit frame.json "d['topic_owner']=''"
-  run "$CLI" gate run --program demo
+  run "$CLI" gate run --program demo --consent-sealed-read
   [ "$status" -eq 1 ]
 }
 
@@ -158,7 +158,7 @@ seed.save_vault('demo', {'seeds': [{'sid': 's%d' % i, 'cohort': 'original', 'sta
 }
 
 @test "verdict on a certified program relays the certificate's lines" {
-  "$CLI" gate run --program demo >/dev/null
+  "$CLI" gate run --program demo --consent-sealed-read >/dev/null
   run "$CLI" verdict demo
   [ "$status" -eq 0 ]
   [[ "${lines[0]}" == "Research: demo version 1. CERTIFIED"* ]] || false
@@ -359,7 +359,7 @@ print(router.cert_read('cc-research verdict demo', 'demo'), router.cert_read('cc
 # ── reopen ─────────────────────────────────────────────────────────────────────────────────────
 
 @test "reopen under a claude ancestor is refused with exit 2, names the operator command, writes nothing" {
-  "$CLI" gate run --program demo >/dev/null
+  "$CLI" gate run --program demo --consent-sealed-read >/dev/null
   before="$(snap)"
   run "$FAKE_CLAUDE" -c "'$CLI' reopen --program demo"
   [ "$status" -eq 2 ]

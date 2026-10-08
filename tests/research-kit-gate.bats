@@ -40,11 +40,11 @@ setup() {
 
 # rowstat <n>: the status of gate row n on this run.
 rowstat() {
-  "$G" run --program demo --json 2>/dev/null | /usr/bin/python3 -c "import json,sys; print([r['status'] for r in json.load(sys.stdin) if r['num'] == $1][0])"
+  "$G" run --program demo --consent-sealed-read --json 2>/dev/null | /usr/bin/python3 -c "import json,sys; print([r['status'] for r in json.load(sys.stdin) if r['num'] == $1][0])"
 }
 # rowtext <n>: the evidence lines of row n.
 rowtext() {
-  "$G" run --program demo --json 2>/dev/null | /usr/bin/python3 -c "import json,sys; print('\n'.join([r for r in json.load(sys.stdin) if r['num'] == $1][0]['evidence']))"
+  "$G" run --program demo --consent-sealed-read --json 2>/dev/null | /usr/bin/python3 -c "import json,sys; print('\n'.join([r for r in json.load(sys.stdin) if r['num'] == $1][0]['evidence']))"
 }
 # jedit <file under REC> <python statement over d>: edit a JSON record in place.
 jedit() {
@@ -53,7 +53,7 @@ jedit() {
 state() { /usr/bin/python3 -c "import json; print(json.load(open('$CC_RESEARCH_REGISTRY'))['programs'][0]['state'])"; }
 
 @test "the known-good program passes all 19 rows, certifies, and the registry reads certified" {
-  run "$G" run --program demo
+  run "$G" run --program demo --consent-sealed-read
   [ "$status" -eq 0 ]
   [ "$(printf '%s\n' "$output" | grep -cE '^ ?[0-9]+\. .* PASS$')" -eq 19 ]
   [ "$(state)" = "certified" ]
@@ -61,7 +61,7 @@ state() { /usr/bin/python3 -c "import json; print(json.load(open('$CC_RESEARCH_R
 }
 
 @test "render relays the certificate's state lines and writes nothing" {
-  "$G" run --program demo
+  "$G" run --program demo --consent-sealed-read
   before="$(find "$W" -type f -newer "$REC/cert/CERT-v1.json" | wc -l)"
   run "$G" --render --program demo
   [ "$status" -eq 0 ]
@@ -72,7 +72,7 @@ state() { /usr/bin/python3 -c "import json; print(json.load(open('$CC_RESEARCH_R
 }
 
 @test "render reads the records live: a counted escape after the issue moves the After-signoff line" {
-  "$G" run --program demo
+  "$G" run --program demo --consent-sealed-read
   run "$G" --render --program demo
   [ "$status" -eq 0 ]
   before="$output"
@@ -92,7 +92,7 @@ state() { /usr/bin/python3 -c "import json; print(json.load(open('$CC_RESEARCH_R
 }
 
 @test "render never prints a literal take-backs 0" {
-  "$G" run --program demo
+  "$G" run --program demo --consent-sealed-read
   run "$G" --render --program demo
   [ "$status" -eq 0 ]
   [[ "$output" != *"take-backs 0"* ]] || false
@@ -100,7 +100,7 @@ state() { /usr/bin/python3 -c "import json; print(json.load(open('$CC_RESEARCH_R
 }
 
 @test "render: a residual row renders the Residuals and Scheduled checks lines; none renders neither" {
-  "$G" run --program demo
+  "$G" run --program demo --consent-sealed-read
   run "$G" --render --program demo
   [[ "$output" == *"Residuals: 1 declared (elapsed-time 1)"* ]] || false
   [[ "$output" == *"Scheduled checks: 1 production or elapsed-time check with owner and date (next due "* ]] || false
@@ -117,7 +117,7 @@ state() { /usr/bin/python3 -c "import json; print(json.load(open('$CC_RESEARCH_R
 }
 
 @test "render: Built and Live read unknown, and Calibration counts the calibration rows" {
-  "$G" run --program demo
+  "$G" run --program demo --consent-sealed-read
   run "$G" --render --program demo
   [[ "$output" == *"Built – · Live – · Calibration: none measured (uncalibrated)"* ]] || false
   printf '{"plan":"a"}\n{"plan":"b"}\n' > "$CC_RESEARCH_CALIBRATION"
@@ -147,7 +147,7 @@ state() { /usr/bin/python3 -c "import json; print(json.load(open('$CC_RESEARCH_R
 
 @test "a failing row blocks the certificate and the registry stays registered" {
   printf '{"id":"DR-1","status":"open"}\n' >> "$REC/decisions.jsonl"
-  run "$G" run --program demo
+  run "$G" run --program demo --consent-sealed-read
   [ "$status" -eq 1 ]
   [ "$(state)" = "registered" ]
   [ ! -e "$REC/cert/CERT-v1.json" ]
@@ -236,7 +236,7 @@ state() { /usr/bin/python3 -c "import json; print(json.load(open('$CC_RESEARCH_R
   printf 'one\ntwo\n' > "$W/mem.md"
   h="$(printf 'one\ntwo' | shasum -a 256 | awk '{print $1}')"
   jedit frame.json "d['private_receipts'] = [{'path': '$W/mem.md', 'span': '1-2', 'sha256': '$h'}]"
-  "$G" run --program demo --json >/dev/null 2>&1 || true
+  "$G" run --program demo --consent-sealed-read --json >/dev/null 2>&1 || true
   printf 'one\nTWO\n' > "$W/mem.md"
   [[ "$(rowtext 8)" == *"the cited span changed"* ]]
 }
@@ -268,7 +268,7 @@ state() { /usr/bin/python3 -c "import json; print(json.load(open('$CC_RESEARCH_R
   [ "$(rowstat 11)" = "FILED" ]
   git -C "$W/repo" add -A
   git -C "$W/repo" commit -qm "residual"
-  run "$G" run --program demo
+  run "$G" run --program demo --consent-sealed-read
   [ "$status" -eq 0 ]
 }
 
@@ -335,6 +335,42 @@ state() { /usr/bin/python3 -c "import json; print(json.load(open('$CC_RESEARCH_R
   [ "$(rowstat 15)" = "FAIL" ]
 }
 
+# ── row 15, wave E1l (ruling a7fd5e2ee7c8 guard 1, 17aff7158fa6) ──────────────────────────────────
+reads() { cat "$CC_RESEARCH_HOME/router-heldout/reads.jsonl" 2>/dev/null | wc -l | tr -d ' '; }
+
+@test "row 15 (E1l): a gate run without --consent-sealed-read fails row 15, issues no certificate, and logs no read" {
+  run "$G" run --program demo
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"15. Router"*"FAIL"* ]] || false
+  [[ "$output" == *"no read consent"* ]] || false
+  [ "$(reads)" = 0 ]
+  [ ! -f "$REC/cert/CERT-v1.json" ]
+}
+
+@test "row 15 (E1l): when another row fails in the same run, row 15 runs last and reads nothing" {
+  jedit rehearsal.json 'd["relay"]["passed"] = False'
+  git -C "$REC" commit -qam "plant: relay failed"  # row 12 would otherwise see the plant as dirty
+  run "$G" run --program demo --consent-sealed-read --json
+  [ "$(printf '%s' "$output" | /usr/bin/python3 -c "import json,sys; print([r['status'] for r in json.load(sys.stdin) if r['num'] == 15][0])")" = FAIL ]
+  [[ "$output" == *"row(s) 14 did not pass in this gate run"* ]] || false
+  [ "$(reads)" = 0 ]
+}
+
+@test "row 15 (E1l): the router's kill switch fails row 15 without a read" {
+  CC_RESEARCH_ROUTER=off run rowtext 15
+  [[ "$output" == *"the router's kill switch"* ]] || false
+  [ "$(reads)" = 0 ]
+}
+
+@test "row 15 (E1l): the certificate states the load bound beside RULE E1k's real-load figures" {
+  run "$G" run --program demo --consent-sealed-read
+  [ "$status" -eq 0 ]
+  [ "$(reads)" = 4 ]
+  c="$(jq -r '.conditions["15"]' "$REC/cert/CERT-v1.json")"
+  [[ "$c" == "load bound (ruling 17aff7158fa6), a stated condition of row 15: every routed item started at 1-min load <= 40 (highest 5.0); real-load companion, RULE E1k run 2 above load 150: hedge-on fallback 1/120, rows held with one call silent 0 "* ]] || false
+  grep -qF "Row 15, stated condition: load bound (ruling 17aff7158fa6)" "$REC/cert/CERT-v1.md"
+}
+
 @test "row 16: more rounds than R_max fails" {
   jedit rounds/1/matrix.json 'd["forecast"]["p90"] = -2'
   [[ "$(rowtext 16)" == *"R_max is 2"* ]]
@@ -369,10 +405,12 @@ print([r.status for r in gate.run_rows(gate.make_ctx('demo')) if r.num == 16][0]
   jedit rounds/2/matrix.json 'd["counted"] = False; d["quiet"] = False; d["lanes"]["google"] = "dead"'
   git -C "$REC" commit -qam "plant: round 2 lost"  # row 12 would otherwise see the plant as dirty
   [[ "$(rowtext 17)" == *"1 lost round(s) (2)"* ]] || false
-  run "$G" run --program demo
+  run "$G" run --program demo --consent-sealed-read
   [ "$status" -ne 0 ]
-  [ "$(printf '%s\n' "$output" | grep -cE ' FAIL$')" -eq 1 ]
+  # row 17 and row 15, which reads nothing once another row failed (wave E1l)
+  [ "$(printf '%s\n' "$output" | grep -cE ' FAIL$')" -eq 2 ]
   [[ "$output" == *"17. "*" FAIL"* ]] || false
+  [[ "$output" == *"row(s) 17 did not pass in this gate run"* ]] || false
   [ ! -f "$REC/cert/CERT-v1.json" ]
   [ "$(state)" != "certified" ]
 }
@@ -383,25 +421,25 @@ print([r.status for r in gate.run_rows(gate.make_ctx('demo')) if r.num == 16][0]
   jedit rounds/2/matrix.json 'd["counted"] = False; d["quiet"] = False; d["lanes"]["google"] = "dead"'
   git -C "$REC" add rounds
   git -C "$REC" commit -qm "plant: round 2 lost, round 4 quiet"
-  run "$G" run --program demo
+  run "$G" run --program demo --consent-sealed-read
   [ "$status" -eq 0 ]
   run "$G" --render --program demo
   [[ "${lines[0]}" == *"stopped after 2 quiet rounds; 1 round lost to a dead lane and not counted (round 2)"* ]] || false
 }
 
 @test "a valid operator reopen after the certificate sets the registry back to registered" {
-  "$G" run --program demo
+  "$G" run --program demo --consent-sealed-read
   [ "$(state)" = "certified" ]
   printf '{"action":"reopen","target":null,"at":9e9,"pins":{},"because":"x","provenance":{"claude_ancestor":false,"chain":["zsh","kitty"]}}\n' \
     >> "$CC_RESEARCH_HOME/demo/signoff.jsonl"
-  run "$G" run --program demo
+  run "$G" run --program demo --consent-sealed-read
   [[ "$output" == *"REOPENED"* ]]
 }
 
 @test "an agent-written reopen does nothing" {
-  "$G" run --program demo
+  "$G" run --program demo --consent-sealed-read
   printf '{"action":"reopen","target":null,"at":9e9,"pins":{},"because":"x","provenance":{"claude_ancestor":false,"chain":["claude"]}}\n' \
     >> "$CC_RESEARCH_HOME/demo/signoff.jsonl"
-  run "$G" run --program demo
+  run "$G" run --program demo --consent-sealed-read
   [[ "$output" != *"REOPENED"* ]]
 }

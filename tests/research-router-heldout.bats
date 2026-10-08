@@ -16,6 +16,11 @@ setup() {
   H="$REPO/scripts/research-kit/heldout.py"
   ROUTER="$REPO/scripts/research-kit/router.py"
   T="$BATS_TEST_TMPDIR/projects/p"; mkdir -p "$T"
+  # wave E1l: RULE E1k's passing figures on record and a quiet machine planted in the fixture home
+  mkdir -p "$CC_RESEARCH_HOME/router-heldout"
+  printf '{"rule":"E1k","run":2,"source":"fixture","rows":120,"fallbacks":1,"held_one_silent":0,"verdict":"PASS"}\n' \
+    > "$CC_RESEARCH_HOME/router-heldout/real-load.json"
+  printf '5\n' > "$CC_RESEARCH_HOME/router-heldout/load1.fixture"
 }
 
 # rec <type> <text> [extra-json] — one transcript record.
@@ -156,21 +161,21 @@ EOF
 
 @test "gate row 15 measures router.py classify on the sealed set and passes it" {
   seal_set
-  CC_RESEARCH_ROUTER="python3 '$ROUTER' classify" run "$H" evaluate
+  CC_RESEARCH_ROUTER="python3 '$ROUTER' classify" run "$H" evaluate --consent-sealed-read
   [ "$status" -eq 0 ]
   [[ "$output" == *"stratum regex-missed: 12/12"* ]]
 }
 
 @test "§10 item 11: an always-failing classifier fails row 15 on its fallback rate" {
   seal_set
-  CC_RESEARCH_CLASSIFIER=false CC_RESEARCH_ROUTER="python3 '$ROUTER' classify" run "$H" evaluate
+  CC_RESEARCH_CLASSIFIER=false CC_RESEARCH_ROUTER="python3 '$ROUTER' classify" run "$H" evaluate --consent-sealed-read
   [ "$status" -eq 1 ]
   [[ "$output" == *"fallback rate 1.00"* ]]
 }
 
 @test "a router that always falls back scores 0 recall in every completeness stratum and names its fallback share" {
   seal_set
-  CC_RESEARCH_ROUTER="cat >/dev/null; exit 1" run "$H" evaluate
+  CC_RESEARCH_ROUTER="cat >/dev/null; exit 1" run "$H" evaluate --consent-sealed-read
   [ "$status" -eq 1 ]
   [[ "$output" == *"stratum regex-matched: recall 0/12"* ]] || false
   [[ "$output" == *"stratum pushback: recall 0/12"* ]] || false
@@ -180,7 +185,7 @@ EOF
 @test "one fallback inside the fallback-rate bound is still a recall miss, never a relay" {
   seal_set
   # One regex-matched prompt falls back (1/48 = 0.02, under the 0.10 rate); the stratum drops to 11/12.
-  CC_RESEARCH_ROUTER="p=\$(cat); case \"\$p\" in 'are we done with part 1?') exit 1 ;; esac; printf '%s' \"\$p\" | python3 '$ROUTER' classify" run "$H" evaluate
+  CC_RESEARCH_ROUTER="p=\$(cat); case \"\$p\" in 'are we done with part 1?') exit 1 ;; esac; printf '%s' \"\$p\" | python3 '$ROUTER' classify" run "$H" evaluate --consent-sealed-read
   [ "$status" -eq 1 ]
   [[ "$output" == *"stratum regex-matched: recall 11/12"* ]] || false
   [[ "$output" == *"1 of 48 routed item(s) fell back (share 0.02)"* ]]
@@ -188,7 +193,7 @@ EOF
 
 @test "§10 items 11-12: a classifier that labels everything a work order fails recall in every completeness stratum" {
   seal_set
-  CC_RESEARCH_CLASSIFIER="cat >/dev/null; echo work-order" CC_RESEARCH_ROUTER="python3 '$ROUTER' classify" run "$H" evaluate
+  CC_RESEARCH_CLASSIFIER="cat >/dev/null; echo work-order" CC_RESEARCH_ROUTER="python3 '$ROUTER' classify" run "$H" evaluate --consent-sealed-read
   [ "$status" -eq 1 ]
   [[ "$output" == *"stratum regex-matched: recall 0/12"* ]] || false
   [[ "$output" == *"stratum pushback: recall 0/12"* ]]
@@ -242,7 +247,7 @@ STUB
   CC_RESEARCH_BIN_OPENAI="$BATS_TEST_TMPDIR/codex-stub" run python3 "$RATE" --vendor openai
   [ "$status" -eq 0 ]
   # The set now measures: router.py classify passes row 15 against these gold labels.
-  CC_RESEARCH_ROUTER="python3 '$ROUTER' classify" run "$H" evaluate
+  CC_RESEARCH_ROUTER="python3 '$ROUTER' classify" run "$H" evaluate --consent-sealed-read
   [ "$status" -eq 0 ]
 }
 

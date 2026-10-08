@@ -71,6 +71,11 @@ class Ctx:
     slug: str
     records: Path  # tracked records dir, docs/research/<slug>/
     sealed: Path  # sealed dir, $CC_RESEARCH_HOME/<slug>/
+    # Wave E1l (ruling a7fd5e2ee7c8 guard 1): row 15 spends a sealed read only with the operator's
+    # consent for this run (gate.sh run --consent-sealed-read), and only after every other row of the
+    # same run passed; run_rows hands it those rows here.
+    read_consent: bool = False
+    prior: Optional[List["Row"]] = None
 
     def path(self, rel: str) -> Path:
         return self.records / rel
@@ -103,15 +108,17 @@ def run_rows(ctx: Ctx) -> List[Row]:
         + list(gate_rows_yield.ROWS)
         + list(gate_rows_blockers.ROWS)
     )
-    out = []
-    for fn in fns:
+    def one(fn: Callable[[Ctx], Row]) -> Row:
         try:
-            out.append(fn(ctx))
-        except (
-            Exception
-        ) as e:  # a row that crashes is a FAIL with its error, never a pass
+            return fn(ctx)
+        except Exception as e:  # a row that crashes is a FAIL with its error, never a pass
             num, name = getattr(fn, "row", (0, fn.__name__))
-            out.append(Row(num, name, FAIL, [f"row raised {type(e).__name__}: {e}"]))
+            return Row(num, name, FAIL, [f"row raised {type(e).__name__}: {e}"])
+
+    # A row marked runs_last (row 15, wave E1l) runs after every other row and sees their results.
+    out = [one(fn) for fn in fns if not getattr(fn, "runs_last", False)]
+    ctx.prior = list(out)
+    out += [one(fn) for fn in fns if getattr(fn, "runs_last", False)]
     # Every row 1..ROW_COUNT must be present: a gate that silently lost a row would certify more
     # easily, which is the one direction a gate may never fail in.
     have = {r.num for r in out}
@@ -204,6 +211,7 @@ def cmd_run(a: argparse.Namespace) -> int:
     import gate_cert
 
     ctx = make_ctx(a.program)
+    ctx.read_consent = a.consent_sealed_read
     if reopened(ctx):
         kit.registry_set(a.program, "registered")
         print(f"REOPENED {a.program} by operator signature; registry -> registered")
@@ -236,6 +244,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = sub.add_parser("run")
     p.add_argument("--program", required=True)
     p.add_argument("--json", action="store_true")
+    p.add_argument(
+        "--consent-sealed-read",
+        action="store_true",
+        help="row 15 may spend a read of the sealed held-out set(s) (wave E1l); without it row 15 "
+        "fails and reads nothing",
+    )
     p.set_defaults(fn=cmd_run)
 
     import gate_built

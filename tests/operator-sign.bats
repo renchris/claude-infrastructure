@@ -257,3 +257,19 @@ o.sign_research("research:demo/implementation", evidence="read it")'
   [ "$status" -eq 2 ]
   [[ "$output" == *"fixtures only"* ]]
 }
+
+@test "E1l a third-read signature names one <set>.<stratum>, needs --because, and reads back valid for that target" {
+  run py "$OPERATOR"'
+for row, because in (("research:demo/third-read/v3.regex-missed", "pooled below 20"), ("research:demo/third-read/v3", "x"),
+                     ("research:demo/third-read", "x"), ("research:demo/third-read/v3.pushback", None)):
+    try:
+        r = o.sign_research(row, because=because); print("signed", r["target"])
+    except o.Refused as e:
+        print("refused", row)
+print([(r["target"], r["_verdict"]) for r in o.research_records("demo", "third-read")])'
+  [ "${lines[0]}" = "signed v3.regex-missed" ]
+  [ "${lines[1]}" = "refused research:demo/third-read/v3" ]
+  [ "${lines[2]}" = "refused research:demo/third-read" ]
+  [ "${lines[3]}" = "refused research:demo/third-read/v3.pushback" ]
+  [ "${lines[4]}" = "[('v3.regex-missed', 'valid')]" ]
+}

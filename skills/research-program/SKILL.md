@@ -189,6 +189,15 @@ or is FILED, the certificate is written and the registry goes to `certified`. Ha
 `cc-signoff research:<slug>/cert`. From then on a completeness or pushback question is answered by
 relaying `gate.sh --render --program <slug>` unchanged, and nothing else.
 
+Updated 2026-10-08 (wave E1l, row-15 rulings): a plain `gate.sh run` never spends a sealed read; row 15
+fails without reading, which is the right way to look at the other rows. The certifying run is
+`gate.sh run --program <slug> --consent-sealed-read`, and row 15 then reads only after every other row
+passed, with RULE E1k's passing real-load figures on record (`heldout.py real-load`), at 1-min load 40
+or below. The read takes over an hour plus its load waits, so launch it detached, never under a tool
+timeout: `. scripts/lib/detach.sh; detach "$LOG" scripts/research-kit/gate.sh run --program <slug>
+--consent-sealed-read`. A row-15 FAIL is final for the items it read, and a third read of a stratum
+needs `cc-signoff research:<slug>/third-read/<set>.<stratum>` (method REPORT §9, 2026-10-08).
+
 Updated 2026-10-04 (v1.2): under a 1.2 frame the research gate prints 19 rows, rows 18 and 19 from §12,
 and the research certificate splits its forecast before and after implementation signoff, the
 build-findable share (0.585, "share assumed") before it (§11).

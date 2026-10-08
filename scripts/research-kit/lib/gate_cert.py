@@ -202,11 +202,25 @@ def write_certificate(ctx: Ctx, rows: List[Row]) -> str:
     }
     if kit.is_v12(ctx.frame):
         cert["forecast"].update(impl_split(cert["forecast"]))
+    # Wave E1l (ruling 17aff7158fa6 item 4): row 15 was measured under the load bound, a stated
+    # condition of the certificate, with RULE E1k's real-load figures beside it.
+    cond = [
+        e
+        for r in rows
+        if r.num == 15
+        for e in r.evidence
+        if e.startswith("load bound (ruling 17aff7158fa6)")
+    ]
+    if cond:
+        cert["conditions"] = {"15": cond[0]}
     path = ctx.records / "cert" / f"CERT-v{n}.json"
     kit.write_json_atomic(path, cert)
     # the .md keeps the issue-time snapshot; `gate.sh render` re-reads the records every time
     (ctx.records / "cert" / f"CERT-v{n}.md").write_text(
-        "\n".join(lines_for(ctx.slug, cert, "certified", live_state(ctx.records, cert)))
+        "\n".join(
+            lines_for(ctx.slug, cert, "certified", live_state(ctx.records, cert))
+            + [f"Row 15, stated condition: {c}" for c in (cert.get("conditions") or {}).values()]
+        )
         + "\n"
     )
     return str(path)

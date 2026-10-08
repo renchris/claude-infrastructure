@@ -26,6 +26,9 @@ the program's sealed log `$CC_RESEARCH_HOME/<slug>/signoff.jsonl`:
                (§11, method v1.2: the implementation signoff; `gate.sh built-signed`, `close`,
                `requires` and `render` honour it). Signed only while the registry reads
                build-certified or implementation-signed.
+  third-read/<set>.<stratum>  one read of a held-out stratum already read twice, as a disclosed
+               cost (ruling 915d7fb98b7f item 5, wave E1l; `heldout.py evaluate` and gate row 15
+               honour it, one signature per read beyond the second).
 
 Python 3.9-safe, standard library only.
 """
@@ -46,9 +49,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "research-kit" /
 import kit  # noqa: E402
 
 PS = "/bin/ps"
-ACTIONS = ("frame", "cert", "extra-round", "reopen", "veto", "extend-decision", "implementation")
-TARGETED = ("veto", "extend-decision")  # the actions that name a decision id
-EVIDENCED = ("frame", "cert", "implementation")  # signatures over an artifact the operator read
+ACTIONS = (
+    "frame",
+    "cert",
+    "extra-round",
+    "reopen",
+    "veto",
+    "extend-decision",
+    "implementation",
+    "third-read",
+)
+# the actions that name a target: a decision id, or for third-read a held-out <set>.<stratum>
+TARGETED = ("veto", "extend-decision", "third-read")
+THIRD_READ_TARGET = re.compile(
+    r"^v[0-9]+\.(regex-matched|regex-missed|pushback|other)$"
+)
+EVIDENCED = (
+    "frame",
+    "cert",
+    "implementation",
+)  # signatures over an artifact the operator read
 VALID, VOID, STALE = "valid", "void", "stale"
 # implementation_state()'s statuses, beyond the three verdicts' names
 SIGNED, UNSIGNED, SUPERSEDED = "signed", "unsigned", "superseded"
@@ -152,7 +172,7 @@ def verdict(
 
 ROW_RE = re.compile(
     r"^research:([a-z0-9][a-z0-9-]{0,63})/"
-    r"(frame|cert|extra-round|reopen|veto|extend-decision|implementation)"
+    r"(frame|cert|extra-round|reopen|veto|extend-decision|implementation|third-read)"
     r"(?:/([A-Za-z0-9._-]+))?$"
 )
 
@@ -164,7 +184,7 @@ def parse_row(row: str) -> Optional[Dict[str, Optional[str]]]:
         return None
     slug, action, target = m.group(1), m.group(2), m.group(3)
     if (action in TARGETED) != (target is not None):
-        return None  # veto and extend-decision need a decision id; nothing else takes one
+        return None  # veto, extend-decision and third-read need a target; nothing else takes one
     return {"slug": slug, "action": action, "target": target}
 
 
@@ -221,9 +241,7 @@ def sign_research(
         chain,
         f"cc-signoff {row} "
         + (
-            "--evidence <what you read>"
-            if action in EVIDENCED
-            else '--because "<why>"'
+            "--evidence <what you read>" if action in EVIDENCED else '--because "<why>"'
         ),
     )
     if action in EVIDENCED and not evidence:
@@ -231,7 +249,15 @@ def sign_research(
             "REFUSED — --evidence is required: the path or URL you actually read.\n"
             "A signature with no referent is a claim about nothing."
         )
-    if action in ("extra-round", "reopen", "veto", "extend-decision") and not because:
+    if action == "third-read" and not THIRD_READ_TARGET.match(target or ""):
+        raise Refused(
+            f"REFUSED — {target!r} is not a held-out <set>.<stratum> (e.g. v3.regex-missed): a "
+            "third read is signed for one stratum of one set."
+        )
+    if (
+        action in ("extra-round", "reopen", "veto", "extend-decision", "third-read")
+        and not because
+    ):
         raise Refused(
             f'REFUSED — {action} needs --because "<why>"; it is logged as operator-caused and priced.'
         )
@@ -275,7 +301,8 @@ def sign_research(
                 "one decision on record."
             )
         if any(
-            verdict(r) == VALID for r in research_records(slug, "extend-decision", target)
+            verdict(r) == VALID
+            for r in research_records(slug, "extend-decision", target)
         ):
             raise Refused(
                 f"REFUSED — the one research extension per decision (REPORT.md §12.3) is "
@@ -344,9 +371,15 @@ def implementation_state(slug: str) -> Dict[str, Any]:
     recs = research_records(slug, "implementation")
     if newest is not None:
         key = f"built/{newest.name}"
-        hits = [r for r in recs if r["_verdict"] == VALID and key in (r.get("pins") or {})]
+        hits = [
+            r for r in recs if r["_verdict"] == VALID and key in (r.get("pins") or {})
+        ]
         if hits:
-            return {"status": SIGNED, "cert": name, "record": max(hits, key=lambda r: r.get("at", 0))}
+            return {
+                "status": SIGNED,
+                "cert": name,
+                "record": max(hits, key=lambda r: r.get("at", 0)),
+            }
     if not recs:
         return {"status": UNSIGNED, "cert": name, "record": None}
     last = max(recs, key=lambda r: r.get("at", 0))
@@ -365,6 +398,9 @@ def implementation_words(slug: str, state: Optional[Dict[str, Any]] = None) -> s
     if st["status"] == STALE:
         return "signature STALE (the built certificate changed after it): not signed"
     if st["status"] == SUPERSEDED:
-        old = ", ".join(Path(p).stem for p in sorted(rec.get("pins") or {})) or "no certificate"
+        old = (
+            ", ".join(Path(p).stem for p in sorted(rec.get("pins") or {}))
+            or "no certificate"
+        )
         return f"not signed (the signature on file covers {old})"
     return "not signed"

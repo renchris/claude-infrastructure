@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import kit
-from gate import FAIL, PASS, Ctx, Row
+from gate import FAIL, FILED, PASS, Ctx, Row
 from gate_rows_a import folded, known_rows, numberless_superlative, probes, row, verdict
 
 ALLOWED_RESIDUAL = (
@@ -351,15 +351,45 @@ def row14(ctx: Ctx) -> Row:
 
 @row(15, "Router")
 def row15(ctx: Ctx) -> Row:
+    """Wave E1l (ruling a7fd5e2ee7c8 guard 1): a sealed read is spent only inside a whole gate run
+    whose other rows all passed (PASS or FILED, the gate's own pass), and only with read consent;
+    heldout.evaluate refuses the rest before it decrypts anything or writes the reads ledger."""
+    import gate
     import heldout
 
+    if ctx.prior is None:
+        return Row(
+            15,
+            "Router",
+            FAIL,
+            ["row 15 reads sealed data only inside a whole gate run (gate.sh run); nothing read"],
+        )
+    passed = {r.num for r in ctx.prior if r.status in (PASS, FILED)}
+    short = [n for n in range(1, gate.ROW_COUNT + 1) if n != 15 and n not in passed]
+    if short:
+        return Row(
+            15,
+            "Router",
+            FAIL,
+            [
+                f"row(s) {', '.join(map(str, short))} did not pass in this gate run; row 15 spends a "
+                "sealed read only after every other row passed; nothing read"
+            ],
+        )
     try:
-        res = heldout.evaluate(os.environ.get("CC_RESEARCH_ROUTER"))
+        res = heldout.evaluate(
+            os.environ.get("CC_RESEARCH_ROUTER"),
+            consent=ctx.read_consent,
+            program=ctx.slug,
+        )
     except kit.KitError as e:
         return Row(15, "Router", FAIL, [str(e)])
     return Row(
         15, "Router", PASS if not res["fails"] else FAIL, res["fails"] + res["notes"]
     )
+
+
+row15.runs_last = True  # type: ignore[attr-defined]
 
 
 # ── row 16 ──────────────────────────────────────────────────────────────────────────────────────
