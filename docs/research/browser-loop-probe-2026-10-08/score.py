@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """Score one run: saved leads against expected.json, plus the loop's own counters.
 
-Wrong fields: each of the 9 fields of each expected lead is compared with the saved lead whose name
-matches (first save wins; a missing lead counts all 9 as wrong). Comparison is exact after trimming,
+Wrong fields: each expected lead is paired with the saved lead that matches it on the most fields
+(one saved lead per card; the pairing maximizes total matches), and each of its 9 fields is compared;
+a card with no saved lead counts all 9 as wrong. Pairing by best match, not by exact name, is
+deliberate: the first measured run typed "Lena Voyt" for "Lena Vogt", and a name-keyed pairing scored
+that one misread letter as a missing lead plus a stray save. Comparison is exact after trimming,
 collapsing whitespace and folding case, with three named relaxations: phone compares digits only,
-seats compares as an integer, and notes also fold dash and quote variants. Extra saves (duplicates,
-or names on no card) are counted separately, never folded into the wrong-field count.
+seats compares as an integer, and notes also fold dash and quote variants. Saves left unpaired
+(duplicates, or a lead on no card) are counted as extra saves, never folded into wrong fields.
 
 Usage: python3 -I score.py <saved.jsonl> <stream.jsonl> <wall_seconds>   → one JSON line on stdout
 """
 
 import collections
+import itertools
 import json
 import pathlib
 import re
@@ -57,12 +61,20 @@ def read_jsonl(path):
 
 def main(saved_path, stream_path, wall):
     saved = read_jsonl(saved_path)
-    by_name = {}
-    for lead in saved:
-        by_name.setdefault(norm("name", lead.get("name", "")), lead)
+
+    def hits(exp, got):
+        return sum(norm(f, got.get(f, "")) == norm(f, exp[f]) for f in FIELDS)
+
+    # Brute force over pairings: 3 cards and a handful of saves keep this tiny.
+    best, best_score = (), -1
+    slots = list(range(len(saved))) + [None] * len(EXPECTED)
+    for perm in itertools.permutations(slots, len(EXPECTED)):
+        score = sum(hits(e, saved[i]) for e, i in zip(EXPECTED, perm) if i is not None)
+        if score > best_score:
+            best, best_score = perm, score
     wrong, detail = 0, []
-    for exp in EXPECTED:
-        got = by_name.get(norm("name", exp["name"]))
+    for exp, i in zip(EXPECTED, best):
+        got = None if i is None else saved[i]
         for f in FIELDS:
             if got is None or norm(f, got.get(f, "")) != norm(f, exp[f]):
                 wrong += 1
@@ -74,11 +86,8 @@ def main(saved_path, stream_path, wall):
                         "got": None if got is None else got.get(f),
                     }
                 )
-    expected_names = {norm("name", e["name"]) for e in EXPECTED}
-    counts = collections.Counter(norm("name", s.get("name", "")) for s in saved)
-    extra = sum(c - 1 for c in counts.values()) + sum(
-        c for n, c in counts.items() if n not in expected_names
-    )
+    paired = sum(1 for i in best if i is not None)
+    extra = len(saved) - paired
 
     tools, init, result = collections.Counter(), {}, {}
     for ev in read_jsonl(stream_path):
@@ -97,9 +106,7 @@ def main(saved_path, stream_path, wall):
                 "model": init.get("model"),
                 "cli": init.get("claude_code_version"),
                 "saved": len(saved),
-                "leads_found": sum(
-                    1 for e in EXPECTED if norm("name", e["name"]) in by_name
-                ),
+                "leads_paired": paired,
                 "wrong_fields": wrong,
                 "extra_saves": extra,
                 "tool_calls": sum(tools.values()),
