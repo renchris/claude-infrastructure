@@ -31,12 +31,13 @@
 #      above the heartbeat thread's own writes (one per 10 s, a few centiseconds per window) and far
 #      below a starved pass's share. Two exceptions bound it: a holder still at progress 0 within
 #      600 s of its own lstart is on its first pass and is spared whatever its CPU (startup grace);
-#      and frozen progress past 900 s is killed whatever its CPU, so a loop spinning without
+#      and frozen progress past 3600 s is killed whatever its CPU, so a loop spinning without
 #      progress still dies. No CPU reading yet (no sample 180 s old, or an unparsable `time`) means
-#      no verdict and no kill until that 900 s ceiling. A FIRST pass (progress 0) that accrues CPU
-#      gets a 3600 s ceiling instead: on 2026-10-07 a first pass took ~860 s at load 13-70 and
-#      longer at load ~420, so the 900 s ceiling killed five holders in a row at progress 0 and no
-#      pass completed for 80 min — a restart only buys another first pass.
+#      no verdict and no kill until a 900 s ceiling. The whatever-its-CPU ceiling was 900 s until
+#      2026-10-08: on 2026-10-07 a first pass took ~860 s at load 13-70 and longer at load ~420, so
+#      it killed five holders in a row at progress 0 and no pass completed for 80 min; and a
+#      holder at progress 564 frozen 311 s (load 404) sampled 83% in lstat, the census's own
+#      filesystem walk — working, I/O-bound code. A restart only buys another slow first pass.
 #
 # Never `launchctl kickstart -k` (the kill is ours to attribute; KeepAlive does the restart), never
 # flock(1) (absent on macOS; one launchd job cannot overlap itself anyway).
@@ -67,8 +68,8 @@ STALL_AGE_S=180      # condition 3
 WAKE_GUARD_S=120     # condition 3, wake half
 CPU_MIN_CS=50        # condition 4: CPU centiseconds over the trailing STALL_AGE_S window = working
 STARTUP_GRACE_S=600  # progress 0 this soon after the holder's own lstart = still on its first pass
-STALL_MAX_S=900      # frozen progress this long is killed whatever the CPU says (a spinning loop)
-FIRST_PASS_MAX_S=3600  # ...except a first pass (progress 0) that still accrues CPU: its ceiling
+STALL_MAX_S=900      # frozen progress this long with no CPU evidence of work is killed
+SLOW_MAX_S=3600      # frozen progress this long is killed whatever the CPU says (a spinning loop)
 STALE_HB_S=60        # dead-daemon page
 LOOP_WINDOW_S=600    # two pid changes inside this window = crash loop
 PAGE_LATCH_S=900     # at most one page per this window
@@ -276,11 +277,12 @@ if [ "$ALIVE" -eq 1 ] && is_int "$HB_PROGRESS" && [ $((NOW - PROG_SEEN)) -ge "$S
       log "stalled ${stalled}s at progress=$HB_PROGRESS but kern.waketime unreadable — no kill"
     elif [ $((NOW - wake)) -le "$WAKE_GUARD_S" ]; then
       log "stalled ${stalled}s at progress=$HB_PROGRESS but woke $((NOW - wake))s ago — no kill"
-    elif [ "$HB_PROGRESS" = 0 ] && [ "$stalled" -ge "$STALL_MAX_S" ] && [ "$stalled" -lt "$FIRST_PASS_MAX_S" ] \
-      && is_int "$CPU_WIN" && [ "$CPU_WIN" -ge "$CPU_MIN_CS" ]; then
-      log "first pass, slow not stalled: pid=$HB_PID progress=0 for ${stalled}s, CPU +$(secs "$CPU_WIN")s over the last ${CPU_SPAN}s (load ${load:-?}); first-pass ceiling ${FIRST_PASS_MAX_S}s — no kill"
+    elif [ "$stalled" -ge "$SLOW_MAX_S" ]; then
+      why="past the ${SLOW_MAX_S}s ceiling, whatever its CPU"
+    elif [ "$stalled" -ge "$STALL_MAX_S" ] && is_int "$CPU_WIN" && [ "$CPU_WIN" -ge "$CPU_MIN_CS" ]; then
+      log "slow, not stalled: pid=$HB_PID progress=$HB_PROGRESS unchanged ${stalled}s, CPU +$(secs "$CPU_WIN")s over the last ${CPU_SPAN}s (load ${load:-?}); working-holder ceiling ${SLOW_MAX_S}s — no kill"
     elif [ "$stalled" -ge "$STALL_MAX_S" ]; then
-      why="past the ${STALL_MAX_S}s ceiling, whatever its CPU"
+      why="past the ${STALL_MAX_S}s ceiling with no CPU evidence of work"
     elif [ "$HB_PROGRESS" = 0 ] && is_int "$age" && [ "$age" -lt "$STARTUP_GRACE_S" ]; then
       log "first pass: progress=0 for ${stalled}s, holder started ${age}s ago (startup grace ${STARTUP_GRACE_S}s) — no kill"
     elif ! is_int "$CPU_WIN"; then
