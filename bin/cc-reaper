@@ -715,9 +715,14 @@ _gs_escalation_alive() { # <pid> — did this pid survive the TERM? rc 0 = still
 # reso-keepalive (2026-10-04): the resume-sessions Phase 4 watcher is a detached bash loop meant to
 # run for hours; cc-reaper.log shows it TERMed as orphan-bash 4 times by 2026-10-02 (ages 717-2707 s),
 # so the runbook's "keepalive covering it" criterion failed silently. Pinned as a fixture pair.
+# lr-upgrade drainer (2026-10-08): the launchd poller detaches `lr-upgrade.sh --drain`, which relaunches
+# idle sessions one at a time and ran 11-68 min per drain under load; cc-reaper.log shows it TERMed as
+# orphan-bash 10 times on 2026-10-08 (ages 639-4182 s), three of them mid-session, one AFTER /exit was
+# typed. The drain now bounds itself (LRU_DRAIN_MAX_S) and records per-session state, so it is listed —
+# by its --drain argv only (`[.]` is the same class in awk -v and grep -E): an orphaned `--census` is still reaped.
 # boot-resume / cc-restore (2026-10-02, W3 P2): the launchd session restore relaunches every pane in
 # turn and can run past 600 s; an orphan-bash TERM mid-restore leaves half the fleet unlaunched.
-GARBAGE_WL="lead-supervisor|cc-dispatch|cc-discover|cc-reaper|qos-census|compressor-sentinel|postland-verify|session-search|devserver-gc|deploy-live|cc-relogin|lr-reset-poller|teammate-reap|capacity-alarm|power-policy|log-rotation|restic|worktree-gc|caffeinate|cc-await-ping|mailbox-wake-arm|ship-land|desk-land|cloud-return|cloud-reconcile|nightly-regression|public-publish|reso-keepalive|boot-resume|cc-restore|kitty|tmux|iTerm|launchd"
+GARBAGE_WL="lead-supervisor|cc-dispatch|cc-discover|cc-reaper|qos-census|compressor-sentinel|postland-verify|session-search|devserver-gc|deploy-live|cc-relogin|lr-reset-poller|teammate-reap|capacity-alarm|power-policy|log-rotation|restic|worktree-gc|caffeinate|cc-await-ping|mailbox-wake-arm|ship-land|desk-land|cloud-return|cloud-reconcile|nightly-regression|public-publish|reso-keepalive|boot-resume|cc-restore|lr-upgrade[.]sh --drain|kitty|tmux|iTerm|launchd"
 _gs_argv_reread() { # <pid> → that pid's argv on stdout, "" when unreadable. Under the fixture seam it
                     # reads CC_REAPER_GARBAGE_PS_B2 (else PS_B again), never the live process table.
   local pid="$1" f

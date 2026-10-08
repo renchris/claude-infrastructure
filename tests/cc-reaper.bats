@@ -1977,6 +1977,29 @@ EOF
   [ "$got" = "90613 " ]
 }
 
+# ── THE UPGRADE DRAINER (2026-10-08). The poller detaches `lr-upgrade.sh --drain`; cc-reaper.log shows
+# it TERMed as orphan-bash 10 times that day (ages 639-4182 s), once after /exit was typed into a pane.
+# Pair form, the logged argv verbatim: it survives, the orphan beside it dies.
+@test "garbage: the lr-upgrade drainer is never collected, and an unrelated orphan beside it still is" {
+  mk_garbage_fixtures
+  cat > "$GA" <<'EOF'
+90621 1 69:42 bash
+90622 1 69:42 bash
+90623 1 69:42 bash
+EOF
+  cat > "$GB" <<'EOF'
+90621 /bin/bash /Users/x/.claude/scripts/limit-recover/lr-upgrade.sh --drain
+90622 /bin/bash /Users/x/some/unrelated/orphan.sh
+90623 /bin/bash /Users/x/.claude/scripts/limit-recover/lr-upgrade.sh --census 37
+EOF
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  got="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
+  # RED before the fix: 90621 appears in this list too. The entry names --drain only, so an orphaned
+  # census (90623) is still collected.
+  [ "$got" = "90622 90623 " ]
+}
+
 # ── THE PID THAT CHANGED HANDS (2026-08-16). The kill-time re-verification checked `ucomm` only, and
 # orphan-bash / stuck-wrapper / dead-lead-watchdog all carry the ERE `^bash$` — so for the three
 # classes that dominate the candidate set it asked "is this a bash?" of a pid it had already decided
