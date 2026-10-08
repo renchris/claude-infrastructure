@@ -1602,7 +1602,7 @@ tuning run held to 1-min load <= 40; (5) a warm-daemon latency check through the
   2.5 h of 3.6 h); and a squash-landed branch is re-synced with `git rebase --skip`, which a fixup on the work
   branch turns into extra conflicts.
 
-#### E1k — the per-kind cold hedge, the cert-store export, and a real-load A/B of the hedge, on tuning data only — IN PROGRESS
+#### E1k — the per-kind cold hedge, the cert-store export, and a real-load A/B of the hedge, on tuning data only — DONE: hedge and cert store live; A/B FAIL (hedge-on fallback 34/150 against hedge-off 119/150 at load 106-275), stall named as CPU starvation of the PRI 20 workers (2026-10-08)
 Scope (frozen): wave E1k — B1 the per-kind cold hedge in router.py classify() with its trace and off switch,
 red-then-green; B2 CLAUDE_CODE_CERT_STORE=bundled exported in the warm job script (takes effect at the next
 daemon start; request none); B3 dated CORRECTED lines in the plan for the Haiku 4.5 retirement claim; B4 the
@@ -1689,6 +1689,58 @@ landed and converged. Locus S (fired `fire-rp-v12-e1k`), lead-inline.
   starting 4, starved mid-call 3 (runnable in every sample, at PRI 20), unattributed 9 (the worker the rule names
   left no sample during the call, so it was likely not the one holding the prompt: the canary and other sessions'
   routers take workers too). Run 2 is armed to start when the 1-min load next reaches 150.
+- **B5 run 2 — the verdict** (2026-10-08 14:33:58-15:14 CDT; started by a trigger when the 1-min load reached
+  153.4; same 300 rows, same alternation; `e1k-ab-run2.*`, the sidecar gzipped). **FAIL under RULE E1k: hedge-on
+  fallback 34/150 = 0.227 against 0.03, with 124 hedge-on rows above load 150** (1-min load 105.8-274.9, median
+  202.2). Shown only:
+
+  | arm | 1-min load | rows | fallbacks | median | p90 | held, one call silent |
+  |---|---|---|---|---|---|---|
+  | hedge on | 100-150 | 26 | 1 | 8.12 s | 8.71 s | 8 |
+  | hedge on | 150-250 | 97 | 26 | 8.58 s | 8.93 s | 22 |
+  | hedge on | 250 and over | 27 | 7 | 8.20 s | 9.01 s | 4 |
+  | hedge on | all | 150 | **34** | 8.41 s | 8.93 s | 34 |
+  | hedge off | 100-150 | 26 | 23 | 9.01 s | 9.01 s | 2 |
+  | hedge off | 150-250 | 99 | 80 | 9.01 s | 9.01 s | 3 |
+  | hedge off | 250 and over | 25 | 16 | 9.01 s | 9.02 s | 1 |
+  | hedge off | all | 150 | **119** | 9.01 s | 9.01 s | 6 |
+
+  | kind | hedge fired (of 150 hedge-on rows) | won | fired on a row that still fell back |
+  |---|---|---|---|
+  | fast | 116 | 56 | 26 |
+  | careful | 116 | 68 | 26 |
+
+  - **What it says.** In the same window, row for row, the hedge cut fallbacks from 119/150 to 34/150: the cold
+    twins rescued most rows the resident workers would have lost. It does not reach the 0.03 bar, so ruling 1's
+    condition (b) is not met and the hedge alone is not the "fixed as tooling" exit. The off arm's 0.79 is far
+    worse than E1j's 22/105 above load 150: at this window's load (median 202) the resident path barely
+    worked. **Disclosed: the window overlapped wave E1m's own A/B (14:28-15:09 CDT, two extra warm daemons on
+    their own sockets) and its tuning runs (launched 14:26)**, so part of the load and of the competition for
+    CPU was E1m's. The arms alternate by row, so both saw it equally and the comparison holds; the absolute
+    rates are those of this machine under that combined load. 8 hedge-on rows were killed at the caller's 9 s before the router's own row (its 8.7 s give-up
+    reached too late at this load); they count as fallbacks above. With the hedge on, nearly every answered row
+    is late (median 8.41 s), so the "held, one call silent" column grows: those rows answered on one kind.
+  - **Stall attribution (the sidecar).** Of the 477 calls still waiting on the resident path at 4 s (both
+    arms), the committed rule reads **311 starved mid-call** (runnable, `R`, in at least half the samples
+    during the call, every one at PRI 20), 6 waiting, not starved, 0 still starting, and 160 unattributed. A
+    finer reading of the 311, shown only: median age 24 s when handed the prompt but a median of 0.21 s of CPU
+    (a ready worker carries 4-6 s), and a median of 0.01 s of CPU gained during the call. So these workers were
+    starved before they had finished starting. The rule's "still starting" test (CPU rising in the 3 s before)
+    cannot see a worker that is starved while starting, because its CPU cannot rise. Both readings name the
+    same cause: **CPU starvation of the warm workers in the low-priority (PRI 20) band**, not a keychain wait
+    (that would read as sleeping, `S`: 6 of 477). Under the research's own rule ("only if the A/B check fails
+    and the sidecar names the cause"), that names ProcessType in the plist as the root fix. A readiness check in
+    the pool would decline an unready worker and send the call cold at once instead of at 4 s, which treats the
+    symptom; how much it would recover is unmeasured. Neither is built here. Both need the daemon restarted (migration 0059, the operator's step), which is
+    outside this wave.
+- Status: **DONE 2026-10-08.** Verdict **FAIL** (run 2). Shas: bar `082648c5e` (before any row); cert store
+  `5d28a9507`; hedge `471f7dcd2`; harness `db03a82cf`; run 1 record `9a963f4b0`; this record (see `git log`). The
+  live router's model configuration is unchanged (`983448663980`, Haiku 5.5 as built); no sealed set was opened,
+  `tuning-v2.jsonl` was not read, and no daemon restart was requested. Learnings: a detached bash meant to wait
+  for a load window is killed by `cc-reaper` after 600 s (`docs/lessons/detached-bash-is-reaped-after-ten-minutes.md`):
+  the first trigger died twice unseen, and the Python replacement ran. A "still starting" test keyed on CPU rising
+  cannot fire under the very starvation it is meant to separate from; key it on CPU at hand-off against a
+  ready worker's.
 
 #### E1m — re-tune Haiku 5.5 as the careful call under a pre-registered rule, A/B the two unions, pin the pick — IN PROGRESS
 Scope (frozen): wave E1m — ruling 8633d354bd41 as ruled: (a) a GENERAL brief rule for subtle re-asks for the

@@ -40,7 +40,8 @@ selection is the measured Haiku 4.5 union in `tune.json`, to be pinned.
   load-band table, the hedge's fire and win counts, the stall attribution and the verdict.
 - `e1k-ab-run<N>.json` (per call: arm, stratum, label, wall, load; no prompt text), `e1k-ab-run<N>.trace.jsonl`
   (the router's trace, answer text redacted to its length), `e1k-ab-run<N>.sidecar.jsonl` (worker samples; no
-  command lines) and `e1k-ab-run<N>.report.txt` (the report's output).
+  command lines) and `e1k-ab-run<N>.report.txt` (the report's output). Run 2's sidecar is gzipped
+  (`e1k-ab-run2.sidecar.jsonl.gz`, 1.9 MB raw); `gunzip -k` it before passing it to the report.
 
 ## Wave E1m — Haiku 5.5 re-tuned under RULE E1m, the two unions A/B'd (RULE E1m in docs/plans/RESEARCH_PROGRAM_BUILD.md)
 
