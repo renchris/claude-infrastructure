@@ -20,14 +20,27 @@ ones docs/research/reask-overflag-decision-2026-10-06/confirm-rule-replay.md rep
   veto(X, Y)         X relays and Y may only veto: as confirms, but Y's lone relay does not stand
 A careful label counts only inside the 8.5 s hand-back the live router uses; a call that was INVALID,
 timed out, or arrived late is no label, and no label from either call is a fallback (a miss).
+
+Wave E1j (2026-10-08): the arm lists are arguments, and the E1j selection rule (committed to the plan's
+E1j section before any tuning call) is `--rule e1j`:
+
+  e1h-score.py TUNE.json [--fast A,B] [--careful C,D]          RULE 1 over those arms (default E1h's)
+  e1h-score.py TUNE.json --rule e1j --fast F --primary P --secondary S [--diagnostic D]
+      union(F, each careful arm) against E1j's bars; prints the selection, or that no Haiku 5.5 arm
+      passed (then the selection is E1i's measured Haiku 4.5 union, from tune.json, to be pinned)
 """
 
+import argparse
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
-H = Path.home() / ".claude/autonomy/research/router-heldout"
+H = Path(
+    os.environ.get("E1H_TUNING_BASE")
+    or Path.home() / ".claude/autonomy/research/router-heldout"
+)
 REL = ("completeness", "pushback")
 COMPLETENESS_STRATA = ("regex-matched", "regex-missed", "pushback")
 FAST_LIM, CARE_LIM = 9.0, 8.5
@@ -35,6 +48,15 @@ FAST_ARMS = ("haiku-off", "sonnet-off")
 CARE_ARMS = ("haiku-on", "sonnet-on")
 # RULE 1's numbers
 MIN_OTHER, MIN_RECALL, MIN_MISSED, MIN_BORDER, TIE = 0.95, 0.98, 0.95, 0.50, 0.05
+# Wave E1j's bars, as counts over E1h's denominators (a different denominator is held to the same
+# fraction): `other` on the relay decision, pooled recall, regex-missed recall, borderline relay rate
+E1J_BARS = {
+    "other_decision": (228, 240),
+    "recall": (160, 163),
+    "regex_missed": (40, 42),
+    "borderline": (69, 138),
+}
+E1J_MAX_FALLBACK, E1J_MAX_P90_S = 0.03, 7.5
 
 
 def item_id(prompt: str) -> str:
@@ -177,7 +199,9 @@ def score(rows: dict, calls: dict, rule: str, X: str, Y: str) -> dict:
                 if row["src"] != "v1":
                     # wave E1i's row-15 rule (heldout.py evaluate): the relay decision matches the
                     # gold's, a fallback a miss; shown only, RULE 1 does not read it
-                    other_decision.append(lab is not None and (lab in REL) == (g in REL))
+                    other_decision.append(
+                        lab is not None and (lab in REL) == (g in REL)
+                    )
                 if row["src"] != "v1" and lab != g:
                     # what a miss on `other` is made of; shown only, RULE 1 does not read it
                     kind = (
@@ -224,22 +248,111 @@ def score(rows: dict, calls: dict, rule: str, X: str, Y: str) -> dict:
     return m
 
 
+def e1j_bars(m: dict) -> dict:
+    """{bar: (passed, reading)} for one union configuration under wave E1j's rule."""
+    out = {}
+    for name, (num, den) in E1J_BARS.items():
+        got, n = (int(x) for x in m[name + "_n"].split("/"))
+        out[name] = (n > 0 and got * den >= num * n, f"{got}/{n}")
+    fell, total = (int(x) for x in m["fallback"].split("/"))
+    out["fallback"] = (
+        total > 0 and fell <= E1J_MAX_FALLBACK * total,
+        f"{fell}/{total}",
+    )
+    out["p90"] = (
+        m["decide_p90_s"] is not None and m["decide_p90_s"] <= E1J_MAX_P90_S,
+        f"{m['decide_p90_s']} s",
+    )
+    return out
+
+
+def invalid_reasons(calls: dict, arm: str) -> dict:
+    """{reason: count} over an arm's INVALID and TIMEOUT calls (E1j's harness records why)."""
+    out: dict = {}
+    for per in calls.values():
+        for c in per.get(arm, []):
+            if c["label"] in ("INVALID", "TIMEOUT"):
+                why = c.get("why") or c["label"]
+                out[why] = out.get(why, 0) + 1
+    return out
+
+
+def rule_e1j(rows: dict, calls: dict, a: argparse.Namespace) -> int:
+    careful = [a.primary, a.secondary] + ([a.diagnostic] if a.diagnostic else [])
+    res = {}
+    for Y in careful:
+        m = score(rows, calls, "union", a.fast, Y)
+        bars = e1j_bars(m)
+        quality = all(bars[b][0] for b in E1J_BARS)
+        latency = bars["fallback"][0] and bars["p90"][0]
+        res[Y] = (quality, latency)
+        tag = "diagnostic, never selectable" if Y == a.diagnostic else ""
+        print(
+            f"{m['config']:34s} "
+            + " ".join(f"{b}={r}{'' if ok else ' FAIL'}" for b, (ok, r) in bars.items())
+            + f" decide_median={m['decide_median_s']} s"
+            + f" false_relay={m['false_relay_n']}"
+            + f" quality={'pass' if quality else 'fail'} latency={'pass' if latency else 'fail'}"
+            + (f" ({tag})" if tag else "")
+        )
+    for Y in [a.fast] + careful:
+        inv = invalid_reasons(calls, Y)
+        if inv:
+            print(
+                f"  {Y} INVALID/TIMEOUT: {sum(inv.values())}: "
+                + json.dumps(inv, sort_keys=True)[:600]
+            )
+    pq, pl = res[a.primary]
+    sq, sl = res[a.secondary]
+    if pq and pl:
+        sel = f"union({a.fast}, {a.primary}): the primary arm passes every bar"
+    elif pq and not pl and sq and sl:
+        sel = (
+            f"union({a.fast}, {a.secondary}): the primary passes every quality bar and fails "
+            "the latency bar alone, and the secondary passes every bar"
+        )
+    else:
+        sel = None
+    if sel:
+        print("SELECTED: " + sel)
+    else:
+        print(
+            "SELECTED: no Haiku 5.5 arm passed — the selection is the measured Haiku 4.5 union, "
+            "union(sonnet-off, haiku-on) in tune.json (wave E1i's), to be pinned"
+        )
+    return 0
+
+
 def main() -> int:
+    ap = argparse.ArgumentParser(prog="e1h-score.py")
+    ap.add_argument("tune", help="counts, or a tuning run's JSON")
+    ap.add_argument("--rule", choices=("e1h", "e1j"), default="e1h")
+    ap.add_argument("--fast", default=",".join(FAST_ARMS))
+    ap.add_argument("--careful", default=",".join(CARE_ARMS))
+    ap.add_argument("--primary")
+    ap.add_argument("--secondary")
+    ap.add_argument("--diagnostic")
+    a = ap.parse_args()
     rows = base()
-    if sys.argv[1] == "counts":
+    if a.tune == "counts":
         print(json.dumps(counts(rows), sort_keys=True, indent=1))
         return 0
-    data = json.load(open(sys.argv[1]))
+    data = json.load(open(a.tune))
     calls = data["calls"]
     done = sum(1 for k in rows if k in calls)
     print(
         f"tuning rows with calls: {done} of {len(rows)}; meta {json.dumps(data['meta'], sort_keys=True)}"
     )
-    table = [score(rows, calls, "alone", X, "") for X in FAST_ARMS]
+    if a.rule == "e1j":
+        if not (a.primary and a.secondary) or "," in a.fast:
+            ap.error("--rule e1j needs one --fast arm, --primary and --secondary")
+        return rule_e1j(rows, calls, a)
+    fast_arms, care_arms = a.fast.split(","), a.careful.split(",")
+    table = [score(rows, calls, "alone", X, "") for X in fast_arms]
     for rule in ("union", "confirms", "veto"):
-        table += [score(rows, calls, rule, X, Y) for X in FAST_ARMS for Y in CARE_ARMS]
+        table += [score(rows, calls, rule, X, Y) for X in fast_arms for Y in care_arms]
     # the careful arms alone are shown for the record; the frozen list does not make them candidates
-    shown = [score(rows, calls, "alone", Y, "") for Y in CARE_ARMS]
+    shown = [score(rows, calls, "alone", Y, "") for Y in care_arms]
     cols = (
         "other_n",
         "recall_n",

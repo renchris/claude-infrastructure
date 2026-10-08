@@ -4,7 +4,10 @@ E1h fresh tuning file (`tuning-v4.jsonl`, file order, fixed before any call) thr
 `classify` verb exactly as `heldout.py evaluate` calls it (the command on stdin, a 9 s limit), with
 the resident classifier at CC_RESEARCH_WARM_SOCK. PASS: fallback <= 0.03 and p90 wall <= 7.5 s.
 
-  e1i-latency.py ROUTER_CMD OUT.json
+  e1i-latency.py ROUTER_CMD OUT.json [--n N]
+
+Wave E1j: --n sets how many rows (default 100, E1i's), and each call records its start time `t`, so a
+call can be joined to the router's own trace rows (CC_RESEARCH_CLASSIFY_TRACE, set in ROUTER_CMD).
 
 Reads tuning data only (never a sealed set, never tuning-v2.jsonl); writes per-call wall time, label
 and load to OUT.json and prints a summary; never a prompt.
@@ -32,7 +35,8 @@ ROUTES = (
 
 def main() -> int:
     router, out = sys.argv[1], Path(sys.argv[2])
-    rows = [json.loads(line) for line in open(H / "tuning-v4.jsonl")][:N]
+    n_rows = int(sys.argv[sys.argv.index("--n") + 1]) if "--n" in sys.argv else N
+    rows = [json.loads(line) for line in open(H / "tuning-v4.jsonl")][:n_rows]
     calls = []
     for n, r in enumerate(rows):
         t0 = time.time()
@@ -52,6 +56,7 @@ def main() -> int:
         calls.append(
             {
                 "n": n,
+                "t": round(t0, 2),
                 "stratum": r["stratum"],
                 "label": label,
                 "wall_s": round(time.time() - t0, 2),

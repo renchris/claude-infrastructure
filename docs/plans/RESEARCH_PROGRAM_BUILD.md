@@ -24,7 +24,7 @@ packet `83adb541ea19` actioned. Method version 1.1 is frozen; it changes only fr
 | B2 | S | Item 8: `research-program` skill, `/research-program` command, intake script, briefs, rubric | A2 |
 | C | S | Wave 2: items 9–13, 15, in parallel with the pilot | B1, B2 |
 | D | S (fired `fire-rp-audit-bugfix`), T inside | Audit fixes: `docs/research/upfront-method-audit-2026-10-04/REPORT.md` §3 rows 4–6 | C |
-| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E1d S (fired `fire-rp-v12-e1d`); E1e S (fired `fire-rp-v12-e1e`); E1g S (fired `fire-rp-v12-e1g`); E1h S (fired `fire-rp-v12-e1h`, T inside for track A); E1i S (fired `fire-rp-v12-e1i`, L inside); E2 Workflow in session d8964eb2; E3 S (E3a fired `fire-rp-v12-e3a`, E3b fired `fire-rp-v12-e3b` with T inside: six teammates; E3c fired `fire-rp-v12-e3c`, L inside; E3d fired `fire-rp-v12-e3d`, L inside); E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
+| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E1d S (fired `fire-rp-v12-e1d`); E1e S (fired `fire-rp-v12-e1e`); E1g S (fired `fire-rp-v12-e1g`); E1h S (fired `fire-rp-v12-e1h`, T inside for track A); E1i S (fired `fire-rp-v12-e1i`, L inside); E1j S (fired `fire-rp-v12-e1j`, L inside: one small code change, a harness edit and two ordered measurements around a pre-committed rule, nothing to fan out); E2 Workflow in session d8964eb2; E3 S (E3a fired `fire-rp-v12-e3a`, E3b fired `fire-rp-v12-e3b` with T inside: six teammates; E3c fired `fire-rp-v12-e3c`, L inside; E3d fired `fire-rp-v12-e3d`, L inside); E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
 
 A1, A2 and A3 touch disjoint files and fire concurrently. B1 and B2 fire when A2 lands. Each dispatched session leads
 its own Agent Team where it has 2+ code-writing tasks.
@@ -1394,6 +1394,69 @@ inside it: three ordered steps around sealed files, one small code change each, 
   for its whole duration, not only its start, when the row it settles has a wall-clock ceiling; a smoke suite with
   sub-2 s wall-clock assertions reds a land at load ~70 on any tree (A/B: 2 of 4 on the pre-change tree too); and
   two raters writing one sealed set concurrently is safe only because each writes once, at its end.
+
+#### E1j — trace the fallbacks, tune Haiku 5.5 as the careful call, on tuning data only — IN PROGRESS (2026-10-08)
+Scope (frozen): wave E1j, tuning data only, no sealed set read — (1) fallback tracing in router.py; (2) a Haiku
+5.5-capable tuning harness; (3) the selection rule committed to the plan before any call; (4) the Haiku 5.5
+tuning run held to 1-min load <= 40; (5) a warm-daemon latency check through the live daemon with the trace on;
+(6) record results and the rule's selection in the plan as wave E1j, landed and converged. Locus S (fired
+`fire-rp-v12-e1j`), lead-inline.
+- **Why.** E1i's one read failed only on fallbacks (105/695 = 0.15 > 0.10), every recall miss a 9 s timeout,
+  arriving as stall bursts in which both calls miss together; and `haiku_latest` has since flipped to
+  `claude-haiku-5-5` (`d0ffee48a`, landed `bc7894fe2`), so the live careful call is Haiku 5.5, untuned, on
+  `/opt/homebrew/bin/claude` 2.1.291 with no `--effort` (configuration id `983448663980`). Decision research:
+  `docs/research/reask-haiku55-decision-2026-10-08/REPORT.md`. The operator authorized every recommendation of
+  it above 90% conviction; this wave is exactly those. Not in it (below 90%): hardening the warm path (canary
+  pool, strike counting, cold hedge, ProcessType) and pinning the careful model, effort or binary in router.py
+  with a 0059 restart. The live router's model configuration is left exactly as it is.
+- **The selection rule, RULE E1j** (committed here before any classifier call of this wave; this commit's
+  author date is the proof of order):
+
+  Scoring: union(`sonnet-off`, careful arm) — wave E1g's join, the live router's — replayed by `e1h-score.py
+  tune-h55.json --rule e1j --fast sonnet-off --primary h55-medium --secondary h55-low --diagnostic h55-asbuilt`
+  on the 982-row tuning base of wave E1h (1,078 rows-times-calls), the careful label counted only inside the
+  8.5 s hold and every call inside the 9 s limit.
+
+  Bars, every one required:
+  - relay decision on `other` >= 228/240;
+  - pooled recall >= 160/163;
+  - regex-missed recall >= 40/42;
+  - borderline relay rate >= 69/138;
+  - warm-daemon fallback <= 0.03 and p90 <= 7.5 s. Read in this wave on the union's replayed decision
+    times from the cold tuning calls (fallback = neither call labeled inside the limit; p90 of the moment the
+    router would hand back), because the warm daemon serves only the live configuration and pinning an arm
+    into it is outside this wave. A cold call pays a process start the warm path does not, and runs at load
+    <= 40, which the warm path under real load does not get; so this reading selects, and the selected
+    arm's own warm reading under real load is owed after it is pinned, before any sealed read.
+
+  Arms, all four started at the same instant for a row, rows one after another, every call to completion
+  (30 s cap), recorded in `docs/research/router-classifier-e1h-2026-10-06/tune-h55.json` (never `tune.json`):
+  - `h55-medium`, the PRIMARY: careful brief and command line, `--model claude-haiku-5-5 --effort medium`,
+    claude 2.1.293 by explicit path (`cc-claude-bin`: `~/.claude-293/node_modules/.bin/claude`).
+  - `h55-low`: the same at `--effort low`. It counts only if `h55-medium` passes every quality bar and fails
+    the latency bar alone.
+  - `h55-asbuilt`, DIAGNOSTIC: the live careful call as the daemon runs it, `/opt/homebrew/bin/claude` 2.1.291,
+    `--model claude-haiku-5-5`, no `--effort`. Shown, never selectable. If its preflight serves another model
+    it is dropped and that is recorded.
+  - `sonnet-off`, the fast partner: the live fast call's exact command line and brief, `--model
+    claude-sonnet-5-5`, no `--effort`, on the primary's binary (2.1.293).
+
+  Preflight, before the first tuning row: one `--output-format json` call per arm on a made-up prompt prints
+  the model served (`modelUsage`); a selectable arm serving any other model aborts the run.
+
+  Selection: `h55-medium` if it passes every bar; else `h55-low` if `h55-medium` fails the latency bar alone
+  and `h55-low` passes every bar; else no Haiku 5.5 arm passed, and the selection is the measured Haiku 4.5
+  union, union(`sonnet-off`, `haiku-on`) in `tune.json` (wave E1i's), to be pinned.
+
+  Load: the run starts, and each row starts, only while the 1-min load is <= 40; above it the run pauses
+  between rows; every call records the load at its start. Data: tuning only. `tuning-v2.jsonl` is never read;
+  nothing is tuned on v3 or v4; no sealed set is opened, evaluated, drawn or sealed.
+
+  Warm latency and trace (step 5, after the trace below is landed and converged; the configuration id is
+  unchanged, so no restart): `e1i-latency.py` on the first 200 rows of `tuning-v4.jsonl` in file order, through
+  the live daemon via the live `~/.claude/scripts/research-kit/router.py classify` with
+  `CC_RESEARCH_CLASSIFY_TRACE` set, at whatever load the machine has. Reported, not a selection bar: the
+  configuration it measures is the diagnostic one.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.

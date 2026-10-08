@@ -23,8 +23,27 @@ any join rule and the router's 9 s limit afterwards. Results are keyed by source
 id; no prompt text is written. The run can be stopped and started again: a row already in OUT is kept.
 It stops itself when four rows in a row get no valid label from any arm (a logged-out or limited
 account would otherwise fill the file with failures).
+
+Wave E1j (2026-10-08) made every arm explicit, because `haiku_latest` moved to claude-haiku-5-5 and the
+E1h arms silently followed it (R.haiku_model()):
+
+  e1h-tune.py OUT.json --arm NAME,KIND,MODEL,EFFORT,CLAUDE_BIN [--arm ...] [--limit N]
+              [--max-load 40] [--preflight-only]
+
+  KIND        fast or careful: which of the router's frozen command lines and briefs the arm runs
+  MODEL       the --model value, written in full (no alias, no model-config lookup)
+  EFFORT      the --effort value, or `-` for no --effort flag (the as-built daemon's command line)
+  CLAUDE_BIN  the claude binary, by path; its `--version` is recorded per arm
+
+Before any tuning row, a one-call preflight per arm (`--output-format json`, a made-up prompt, never a
+tuning row) prints the model the binary SERVED (the result's `modelUsage`) and aborts (exit 4) when
+it is not the arm's MODEL. A row starts only while the 1-min load is at most --max-load (default 40);
+above it the run pauses between rows, and every call records the load at its start. An INVALID call
+records why (exit code, the first 60 characters of what it answered, the tail of its stderr). It
+refuses to write tune.json, E1h's record.
 """
 
+import argparse
 import concurrent.futures as cf
 import hashlib
 import importlib.util
@@ -39,8 +58,11 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
 KIT = REPO / "scripts/research-kit"
-H = Path.home() / ".claude/autonomy/research/router-heldout"
-SONNET = "claude-sonnet-5-5"
+H = Path(
+    os.environ.get("E1H_TUNING_BASE")
+    or Path.home() / ".claude/autonomy/research/router-heldout"
+)
+PAUSE_POLL_S = float(os.environ.get("E1H_PAUSE_POLL_S") or 20)
 SOURCES = (
     ("fresh", "tuning-v4.jsonl", 1),
     ("v2", "retired-v2.jsonl", 1),
@@ -54,26 +76,93 @@ R = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(R)
 
 
-def argv(kind: str, model: str) -> list:
+PREFLIGHT_PROMPT = "is the classifier answering?"  # made up; never a tuning row
+
+
+def argv(kind: str, model: str, effort: str, claude_bin: str) -> list:
+    """The router's frozen command line for KIND with only --model replaced and --effort added."""
     f = list(R.classifier_flags(kind))
     f[f.index("--model") + 1] = model
-    return [shutil.which("claude")] + f
+    if effort != "-":
+        f[1:1] = ["--effort", effort]
+    return [claude_bin] + f
 
 
-def arms() -> dict:
-    haiku = R.haiku_model()
-    return {
-        "haiku-off": (argv("fast", haiku), R.BRIEFS["fast"]),
-        "haiku-on": (argv("careful", haiku), R.BRIEFS["careful"]),
-        "sonnet-off": (argv("fast", SONNET), R.BRIEFS["fast"]),
-        "sonnet-on": (argv("careful", SONNET), R.BRIEFS["careful"]),
+def parse_arm(spec: str) -> tuple:
+    parts = spec.split(",")
+    if len(parts) != 5 or parts[1] not in R.KINDS:
+        raise SystemExit(f"--arm wants NAME,KIND,MODEL,EFFORT,CLAUDE_BIN; got {spec!r}")
+    name, kind, model, effort, claude_bin = parts
+    if not os.access(claude_bin, os.X_OK):
+        raise SystemExit(f"--arm {name}: {claude_bin} is not an executable")
+    return name, {
+        "kind": kind,
+        "model": model,
+        "effort": effort,
+        "claude_bin": claude_bin,
     }
+
+
+def arms(specs: list) -> dict:
+    out = {}
+    for spec in specs:
+        name, a = parse_arm(spec)
+        a["argv"] = argv(a["kind"], a["model"], a["effort"], a["claude_bin"])
+        a["brief"] = R.BRIEFS[a["kind"]]
+        out[name] = a
+    return out
+
+
+def version(claude_bin: str) -> str:
+    p = subprocess.run(
+        [claude_bin, "--version"], capture_output=True, text=True, timeout=30
+    )
+    return p.stdout.strip()
+
+
+def preflight(A: dict) -> dict:
+    """One call per arm with --output-format json: {arm: served model ids}. Exits 4 on a mismatch."""
+    served, bad = {}, []
+    for name, a in sorted(A.items()):
+        d = tempfile.mkdtemp(prefix="e1j-preflight-")
+        try:
+            p = subprocess.run(
+                a["argv"] + ["--output-format", "json"],
+                input=a["brief"].format(
+                    cert="(none rendered)", prompt=PREFLIGHT_PROMPT
+                ),
+                capture_output=True,
+                text=True,
+                timeout=60,
+                cwd=d,
+                env=dict(os.environ, CC_RESEARCH_ROUTER_INNER="1"),
+            )
+            out = json.loads(p.stdout or "{}")
+        except (subprocess.TimeoutExpired, ValueError) as e:
+            out = {"error": e.__class__.__name__}
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+        models = sorted((out.get("modelUsage") or {}).keys())
+        served[name] = models
+        ok = any(m == a["model"] or m.startswith(a["model"] + "-") for m in models)
+        print(
+            f"preflight {name}: {a['version']} --model {a['model']} --effort {a['effort']}: "
+            f"served {models or 'nothing'}; answered {str(out.get('result', ''))[:40]!r}; "
+            + ("ok" if ok else "MISMATCH")
+        )
+        if not ok:
+            bad.append(name)
+    if bad:
+        print(f"ABORT: the served model is not the arm's model for {', '.join(bad)}")
+        sys.exit(4)
+    return served
 
 
 def call(cmd: list, brief: str, prompt: str) -> dict:
     d = tempfile.mkdtemp(prefix="e1h-call-")
     t0 = time.time()
     rc = None
+    why = ""
     try:
         p = subprocess.run(
             cmd,
@@ -91,11 +180,16 @@ def call(cmd: list, brief: str, prompt: str) -> dict:
             if rc == 0 and len(words) == 1 and words[0] in R.ROUTES
             else "INVALID"
         )
+        if lab == "INVALID":
+            why = f"rc={rc}; answered {p.stdout.strip()[:60]!r}; stderr {p.stderr.strip()[-120:]!r}"
     except subprocess.TimeoutExpired:
-        lab = "TIMEOUT"
+        lab, why = "TIMEOUT", "no answer in 30 s"
     finally:
         shutil.rmtree(d, ignore_errors=True)
-    return {"label": lab, "wall_s": round(time.time() - t0, 2), "rc": rc}
+    got = {"label": lab, "wall_s": round(time.time() - t0, 2), "rc": rc}
+    if why:
+        got["why"] = why
+    return got
 
 
 def rows() -> list:
@@ -112,32 +206,70 @@ def rows() -> list:
     return out
 
 
+def wait_for_load(max_load: float, pauses: dict) -> None:
+    """Return once the 1-min load is at most max_load; count the pause in `pauses`."""
+    t0 = None
+    while os.getloadavg()[0] > max_load:
+        if t0 is None:
+            t0 = time.time()
+            print(
+                f"paused at load {os.getloadavg()[0]:.1f} (> {max_load:g}) "
+                + time.strftime("%H:%M:%S"),
+                flush=True,
+            )
+        time.sleep(PAUSE_POLL_S)
+    if t0 is not None:
+        pauses["n"] = pauses.get("n", 0) + 1
+        pauses["s"] = round(pauses.get("s", 0) + time.time() - t0)
+        print("resumed " + time.strftime("%H:%M:%S"), flush=True)
+
+
 def main() -> int:
-    out = Path(sys.argv[1])
-    limit = (
-        int(sys.argv[sys.argv.index("--limit") + 1]) if "--limit" in sys.argv else None
-    )
-    A = arms()
-    todo = rows()[:limit]
+    ap = argparse.ArgumentParser(prog="e1h-tune.py")
+    ap.add_argument("out")
+    ap.add_argument("--arm", action="append", required=True)
+    ap.add_argument("--limit", type=int)
+    ap.add_argument("--max-load", type=float, default=40.0)
+    ap.add_argument("--preflight-only", action="store_true")
+    a = ap.parse_args()
+    out = Path(a.out)
+    if out.name == "tune.json":
+        print("refused: tune.json is wave E1h's record; write a new file")
+        return 2
+    A = arms(a.arm)
+    for arm in A.values():
+        arm["version"] = version(arm["claude_bin"])
+    served = preflight(A)
+    if a.preflight_only:
+        return 0
+    todo = rows()[: a.limit]
     data = json.loads(out.read_text()) if out.exists() else {"calls": {}, "meta": {}}
     data["meta"].update(
-        haiku_model=R.haiku_model(),
-        sonnet_model=SONNET,
         classifier_config=R.classifier_config(),
         rows=len(todo),
         arms=sorted(A),
+        arm_spec={
+            n: {k: v for k, v in arm.items() if k not in ("argv", "brief")}
+            | {"served": served[n]}
+            for n, arm in A.items()
+        },
+        max_load=a.max_load,
     )
     data["meta"].setdefault("started", time.strftime("%Y-%m-%dT%H:%M:%S%z"))
+    pauses = data["meta"].setdefault("pauses", {})
     dead = 0
     with cf.ThreadPoolExecutor(len(A)) as ex:
         for n, (key, prompt, reps) in enumerate(todo):
             have = data["calls"].get(key) or {}
-            while min((len(have.get(a, [])) for a in A), default=0) < reps:
+            while min((len(have.get(x, [])) for x in A), default=0) < reps:
+                wait_for_load(a.max_load, pauses)
                 load = round(os.getloadavg()[0], 1)
-                futs = {a: ex.submit(call, A[a][0], A[a][1], prompt) for a in A}
-                got = {a: dict(f.result(), load=load) for a, f in futs.items()}
-                for a in A:
-                    have.setdefault(a, []).append(got[a])
+                futs = {
+                    x: ex.submit(call, A[x]["argv"], A[x]["brief"], prompt) for x in A
+                }
+                got = {x: dict(f.result(), load=load) for x, f in futs.items()}
+                for x in A:
+                    have.setdefault(x, []).append(got[x])
                 data["calls"][key] = have
                 dead = (
                     dead + 1
