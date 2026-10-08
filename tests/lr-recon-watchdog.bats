@@ -147,6 +147,42 @@ ticks_cpu() {  # $1=from $2=to $3=start cs $4=cs added per 30 s tick — progres
   grep -q "unchanged 900s; past the 900s ceiling" "$LR_RECON_ROOT/watchdog.log"
 }
 
+@test "a first pass (progress 0) that accrues CPU is not killed at the 900 s ceiling" {
+  fake_cpu
+  E="$(TZ=UTC LC_ALL=C date -j -f '%a %b %d %T %Y' "$HOLDER_LSTART" +%s)"
+  hb "$HOLDER" "$HOLDER_LSTART" 0 "$E" "$E"
+  ticks_cpu $((E + 10)) $((E + 910)) 100 20  # 2026-10-07: ~860 s first passes, 0.9 s CPU per 180 s
+  [ ! -e "$KLOG" ]
+  grep -q "first pass, slow not stalled: pid=$HOLDER progress=0 for 900s, CPU +1.20s over the last 180s" \
+    "$LR_RECON_ROOT/watchdog.log"
+  grep -q "first-pass ceiling 3600s — no kill" "$LR_RECON_ROOT/watchdog.log"
+}
+
+@test "a first pass still at progress 0 after 3600 s is killed even while it burns CPU" {
+  fake_cpu
+  E="$(TZ=UTC LC_ALL=C date -j -f '%a %b %d %T %Y' "$HOLDER_LSTART" +%s)"
+  hb "$HOLDER" "$HOLDER_LSTART" 0 "$E" "$E"
+  ticks_cpu $((E + 10)) $((E + 10)) 100 20
+  ticks_cpu $((E + 3400)) $((E + 3580)) 2000 20
+  [ ! -e "$KLOG" ]
+  ticks_cpu $((E + 3610)) $((E + 3610)) 2200 20
+  [ "$(sed -n 1p "$KLOG")" = "-TERM $HOLDER" ]
+  grep -q "progress=0 unchanged 3600s; past the 900s ceiling" "$LR_RECON_ROOT/watchdog.log"
+}
+
+@test "a first pass with no CPU reading still dies at the 900 s ceiling" {
+  fake_cpu
+  printf 'garbage\n' > "$CPUF"
+  E="$(TZ=UTC LC_ALL=C date -j -f '%a %b %d %T %Y' "$HOLDER_LSTART" +%s)"
+  hb "$HOLDER" "$HOLDER_LSTART" 0 "$E" "$E"
+  tick $((E + 10))
+  tick $((E + 880))
+  [ ! -e "$KLOG" ]
+  tick $((E + 910))
+  [ "$(sed -n 1p "$KLOG")" = "-TERM $HOLDER" ]
+  grep -q "progress=0 unchanged 900s; past the 900s ceiling" "$LR_RECON_ROOT/watchdog.log"
+}
+
 @test "W7d: an unparsable CPU reading is no verdict, never a kill" {
   fake_cpu
   printf 'garbage\n' > "$CPUF"
