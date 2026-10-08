@@ -156,6 +156,17 @@ fake_token() { printf 'gh''p_%s' "1a2B3c4D5e6F7g8H9i0J1k2L3m4N5o6P7q8R"; }
   [[ "$output" == *"PATH  local-only/x.md"* ]]
 }
 
+@test "the REAL conf refuses a nested .fire/ brief and the tracked truememory-2-0 link (DR-17)" {
+  r="$(mkrepo dr17)"
+  commit_file "$r" .fire/sub/brief.txt "fine"
+  mkdir -p "$r/docs/research"; ln -s /nowhere "$r/docs/research/truememory-2-0"
+  git -C "$r" add -A; git -C "$r" "${G[@]}" commit -q -m link
+  run python3 "$LINT" --repo "$r" --tree HEAD --conf "$REPO/config/public-hygiene.conf"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"PATH  .fire/sub/brief.txt"* ]] || false
+  [[ "$output" == *"PATH  docs/research/truememory-2-0"* ]]
+}
+
 @test "--history sees content deleted long ago, commit messages and author idents" {
   r="$(mkrepo hist)"
   commit_file "$r" gone.md "TopSecretName"
