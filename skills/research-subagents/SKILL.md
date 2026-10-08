@@ -444,6 +444,18 @@ On the **model** axis it is pinned to `roles.research_worker` ONLY in-process/te
   | code review / bug finding | `claude-opus-5-5` | `xhigh` | `effort_defaults.opus55_capability_sensitive` |
   | adversarial / red-team (a DIFFERENT model on purpose) | `claude-fable-5-1` | `high` | `roles.research_adversarial`, `effort_defaults.fable51_capability_sensitive` |
   | retrieval (file:line lookups) | `claude-haiku-5-5` | `medium` | `roles.research_retrieval`, `effort_defaults.haiku55_retrieval` |
+  | extraction with a checkable output, where quota binds (a cost tier; Opus 5.5 stays the default) | `claude-haiku-5-5` | `medium` | `effort_defaults.haiku55_extraction` |
+
+  **The extraction row holds only under the two conditions it was measured with** (decision D2,
+  `docs/research/haiku55-upgrade-2026-10-07/decisions/D2-extraction-second-family.md`): (1) the
+  prompt asks for **"one valid JSON array"** in those words (without them Haiku 5.5 returned
+  unparseable JSON in 7 of 18 calls); (2) the **consumer validates the output and retries** on a
+  parse or schema failure. Checkable output only (fields, rows, spans a validator can test), never
+  judgment classification: on commit-type labels Haiku 5.5 trailed Opus 5.5 by 450 to 521 of 720
+  (p = 0.019). A consumer that validates appends one line per attempt to
+  `~/.claude/autonomy/telemetry/extraction-validate.jsonl`
+  (`{"ts","slot","model","attempt","valid"}`), which `cc-token-ledger --haiku` reads for the
+  revert trigger.
 
   **Every slot in this table also takes `agentType: 'workflow-lean'`** (offline re-gate PASS,
   2026-09-24, `docs/research/token-efficiency-2026-09-23/eval/GATE.md` § Re-gate: −84% list $ per

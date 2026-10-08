@@ -1560,6 +1560,14 @@ effort_defaults:
                                             # at ≈0.12x its draw per token ≈ 0.3x per task. Never as judge
                                             # or verifier (card: uses leaked answers 17.3%), and a refusal
                                             # has no fallback model. Conviction 75%: one task family.
+                                            # RE-MEASURED 2026-10-08 (decision D2, 85%): holds ONLY when
+                                            # (1) the prompt asks for "one valid JSON array" (without it
+                                            # 7 of 18 calls returned unparseable JSON) and (2) the
+                                            # consumer validates and retries. Checkable output only, NOT
+                                            # judgment classification (commit-type labels: 450 vs Opus's
+                                            # 521 of 720, p = 0.019). Revert trigger and its telemetry:
+                                            # docs/research/haiku55-upgrade-2026-10-07/README.md § Revert
+                                            # triggers (`cc-token-ledger --haiku`, extraction-json).
 
 deprecations:
   claude-3-haiku: "2026-04-20"              # (PAST — retired)
