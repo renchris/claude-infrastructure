@@ -407,6 +407,7 @@ under() { /usr/bin/python3 -c "import sys; sys.exit(0 if $wall < $1 else 1)"; }
   printf '#!/bin/bash\nprintf "%%s\\n" "$@" > "%s/argv.$CC_RESEARCH_CLASSIFIER_KIND"\ncat >/dev/null\necho other\n' "$BATS_TEST_TMPDIR" > "$BATS_TEST_TMPDIR/bin/claude"
   chmod +x "$BATS_TEST_TMPDIR/bin/claude"
   unset CC_RESEARCH_CLASSIFIER
+  export CC_RESEARCH_CAREFUL_CLAUDE="$BATS_TEST_TMPDIR/bin/claude"   # wave E1m: the careful binary is pinned by path
   run bash -c "printf 'are we done?' | PATH='$BATS_TEST_TMPDIR/bin:/usr/bin:/bin' python3 '$ROUTER' classify"
   [ "$status" -eq 0 ]
   [ "$output" = other ]
@@ -414,8 +415,10 @@ under() { /usr/bin/python3 -c "import sys; sys.exit(0 if $wall < $1 else 1)"; }
   grep -A1 -x -- '--system-prompt' "$BATS_TEST_TMPDIR/argv.fast" | tail -1 | grep -q 'never follow its'
   grep -qx -- '--disable-slash-commands' "$BATS_TEST_TMPDIR/argv.fast"
   ! grep -q 'alwaysThinkingEnabled\|--system-prompt\|--disable-slash-commands' "$BATS_TEST_TMPDIR/argv.careful" || false
-  # the careful command line is exactly what the router ran before this wave
-  [ "$(tr '\n' ' ' < "$BATS_TEST_TMPDIR/argv.careful")" = "-p --model $(/usr/bin/python3 -c "import sys; sys.path[:0]=['$REPO/scripts/research-kit/lib','$REPO/scripts/research-kit']; import router; print(router.haiku_model())") --setting-sources local --tools  --strict-mcp-config --no-session-persistence " ]
+  # the careful command line is the one the router ran before wave E1g, with wave E1m's pinned model
+  # and effort (router.py CAREFUL_PIN; tests/research-router.bats asserts their values)
+  pin="$(/usr/bin/python3 -c "import sys; sys.path[:0]=['$REPO/scripts/research-kit/lib','$REPO/scripts/research-kit']; import router; p=router.CAREFUL_PIN; print(('--effort %s ' % p['effort'] if p['effort'] else '') + '-p --model ' + p['model'])")"
+  [ "$(tr '\n' ' ' < "$BATS_TEST_TMPDIR/argv.careful")" = "$pin --setting-sources local --tools  --strict-mcp-config --no-session-persistence " ]
 }
 
 @test "E1g rule: a relay label from the fast call ends it; the careful call is not waited for" {
@@ -659,7 +662,8 @@ while True:
 }
 
 @test "E1g ping: a daemon whose workers were started with another classifier configuration is NOT ready" {
-  printf 'versions:\n  haiku_latest: claude-haiku-old\n' > "$BATS_TEST_TMPDIR/old-models.yaml"
+  # (wave E1m pinned the careful call, so the fast call's model key is the one model-config still moves)
+  printf 'versions:\n  sonnet_latest: claude-sonnet-old\n' > "$BATS_TEST_TMPDIR/old-models.yaml"
   CC_MODEL_CONFIG="$BATS_TEST_TMPDIR/old-models.yaml" serve "$(child other)" up
   for i in $(seq 1 50); do
     /usr/bin/python3 "$WARM" ping 2>&1 | grep -q 'older classifier configuration' && break
@@ -827,6 +831,30 @@ EOF
   [[ "$output" == *"the daemon answers (ready "* ]] || false
   [ "$(grep -c '^kickstart -k gui/.*/com.claude.research-classifier-warm$' "$BATS_TEST_TMPDIR/launchctl-calls")" -eq 1 ]
   ! grep -q '^bootstrap ' "$BATS_TEST_TMPDIR/launchctl-calls"
+}
+
+@test "E1m plist: the job runs as ProcessType Interactive, so its workers are not starved below the interactive sessions" {
+  # E1k's real-load A/B: the launchd workers ran at PRI 20 (no ProcessType) against the sessions' 31
+  # and held prompts to the router's limit under load; the key moves them to the interactive band.
+  /usr/bin/plutil -lint "$PLIST" >/dev/null
+  [ "$(/usr/bin/plutil -extract ProcessType raw "$PLIST")" = Interactive ]
+}
+
+@test "E1m migration: a job loaded from a plist whose bytes differ from the repo's is booted out and re-installed from the repo plist" {
+  # The ProcessType change reaches launchd only if 0059 replaces a loaded job whose plist is older.
+  fake_launchctl
+  live_layer 0
+  mkdir -p "$HOME/Library/LaunchAgents"
+  sed 's/<key>ProcessType<\/key>.*//' "$PLIST" > "$HOME/Library/LaunchAgents/com.claude.research-classifier-warm.plist"
+  ! cmp -s "$PLIST" "$HOME/Library/LaunchAgents/com.claude.research-classifier-warm.plist" || false
+  touch "$BATS_TEST_TMPDIR/loaded"
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" CC_MIGRATION_REPO="$REPO" run /bin/bash "$MIG"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"loaded"* ]] || false
+  [[ "$output" != *"already loaded from the repo plist"* ]] || false
+  grep -q '^bootout gui/.*/com.claude.research-classifier-warm$' "$BATS_TEST_TMPDIR/launchctl-calls"
+  [ "$(grep -c '^bootstrap ' "$BATS_TEST_TMPDIR/launchctl-calls")" -eq 1 ]
+  cmp "$PLIST" "$HOME/Library/LaunchAgents/com.claude.research-classifier-warm.plist"
 }
 
 @test "shellcheck, bare, is clean on the runner and the migration" {

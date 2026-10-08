@@ -4,10 +4,15 @@
      (migrations/0059-research-classifier-warm.sh, class c10). A resident daemon: it keeps two
      classifier processes started ahead of the prompt, so the re-ask router's label does not pay a
      cold start inside its 9 s limit (decision 4bf73c4e55d5 option 3; plan wave E1c). When it is
-     not running the router makes the cold call it makes today. -->
+     not running the router makes the cold call it makes today.
+     ProcessType Interactive (wave E1m, from E1k's real-load A/B): with no ProcessType launchd runs the
+     job and its workers at PRI 20, below the interactive sessions' 31, and under heavy load the
+     resident workers starved and held prompts to the router's limit; in-session daemons at the same
+     loads fell back 1-2 times in 403. -->
 <plist version="1.0">
 <dict>
   <key>Label</key>            <string>com.claude.research-classifier-warm</string>
+  <key>ProcessType</key>      <string>Interactive</string>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>

@@ -66,6 +66,7 @@ Test seams: CC_RESEARCH_HOME, CC_RESEARCH_REGISTRY, CC_RESEARCH_CLASSIFIER (a sh
 classifier input on stdin, printing a label; it runs once per kind of call, with
 CC_RESEARCH_CLASSIFIER_KIND=fast|careful in its environment), CC_RESEARCH_CLASSIFIER_TIMEOUT,
 CC_RESEARCH_RENDER (a shell command printing the certificate lines), CC_MODEL_CONFIG,
+CC_RESEARCH_CAREFUL_CLAUDE (the careful call's claude binary; default CAREFUL_PIN's),
 CC_RESEARCH_WARM_SOCK (the resident classifier's socket; default
 $CC_RESEARCH_HOME/classifier-warm/sock), CC_RESEARCH_CLASSIFY_TRACE (a file the `classify` verb
 appends one row per call to: the label, which call and path answered, wall seconds and load; never
@@ -77,7 +78,8 @@ when the hold returns one kind's label with the other still pending).
 
 THE CLASSIFIER IS TWO CALLS (wave E1g, ruling b18c74a4f8e1): a fast one (wave E1b's brief and system
 prompt, thinking off; on `sonnet_latest` since wave E1i, decision 1f3b8f2d01b7) and a careful one (the
-brief as built, thinking on, `haiku_latest`), started together inside the one limit. `classify` below states the rule that joins them.
+brief as built, thinking on; pinned since wave E1m to `claude-haiku-4-5` on claude 2.1.293, CAREFUL_PIN),
+started together inside the one limit. `classify` below states the rule that joins them.
 """
 
 from __future__ import annotations
@@ -196,6 +198,9 @@ FAST_BRIEF = (
 # The two calls every prompt gets (wave E1g). `careful` is the classifier as built; `fast` is E1c's
 # `off-e1b` arm: thinking off answers in about 2 s and labels `other` reliably, thinking on catches
 # the subtly worded completeness prompts and takes more than 9 s about one time in eight.
+# Wave E1m (ruling 8633d354bd41): the careful brief stays as built. The re-tuned Haiku 5.5 brief
+# (docs/research/router-classifier-e1h-2026-10-06/e1m-careful-brief.txt) failed RULE E1m, so the rule
+# locked in the Haiku 4.5 union, measured on this brief.
 KINDS = ("fast", "careful")
 BRIEFS = {"fast": FAST_BRIEF, "careful": CLASSIFIER_BRIEF}
 FAST_FLAGS = [
@@ -327,10 +332,21 @@ def render_cert(slug: str) -> Tuple[str, str]:
 # ── the classifier ──────────────────────────────────────────────────────────────────────────────
 
 
-# Each kind's model is a model-config.yaml key (§4.1). Wave E1i (decision 1f3b8f2d01b7): the fast call
-# runs Sonnet, thinking off, as E1h's `sonnet-off` arm measured; the careful call stays on haiku_latest.
-MODEL_KEYS = {"fast": "sonnet_latest", "careful": "haiku_latest"}
+# The fast call's model is a model-config.yaml key (§4.1). Wave E1i (decision 1f3b8f2d01b7): the fast
+# call runs Sonnet, thinking off, as E1h's `sonnet-off` arm measured. The careful call is pinned below.
+MODEL_KEYS = {"fast": "sonnet_latest"}
 MODEL_ALIASES = {"sonnet_latest": "sonnet", "haiku_latest": "haiku"}
+# Wave E1m (ruling 8633d354bd41): the careful call is pinned here, not read from model-config.yaml, so a
+# move of `haiku_latest` (as on 2026-10-07, bc7894fe2) can no longer change it unseen. RULE E1m locked
+# in the Haiku 4.5 union (the re-tuned Haiku 5.5 failed its bars): Haiku 4.5 with no --effort flag (None),
+# as E1h measured it, on claude 2.1.293 by path, the binary E1m's A/B ran it on. The binary's version is
+# part of classifier_config(), so a binary that moves under the path reads as another configuration.
+# CC_RESEARCH_CAREFUL_CLAUDE is a test seam for the binary.
+CAREFUL_PIN: Dict[str, Optional[str]] = {
+    "model": "claude-haiku-4-5",
+    "effort": None,
+    "claude": "~/.claude-293/node_modules/.bin/claude",
+}
 
 
 def config_model(key: str) -> str:
@@ -358,14 +374,40 @@ def haiku_model() -> str:
 
 
 def kind_model(kind: str) -> str:
-    """The model a kind of call runs (MODEL_KEYS)."""
+    """The model a kind of call runs: the careful call's pin, the fast call's MODEL_KEYS entry."""
+    if kind == "careful":
+        return str(CAREFUL_PIN["model"])
     return config_model(MODEL_KEYS[kind])
+
+
+def careful_claude(expand: bool = True) -> str:
+    """The claude binary the careful call runs (CAREFUL_PIN), `~` expanded unless expand is False
+    (the configuration id carries it as written, so it does not depend on whose HOME computes it)."""
+    path = os.environ.get("CC_RESEARCH_CAREFUL_CLAUDE") or str(CAREFUL_PIN["claude"])
+    return os.path.expanduser(path) if expand else path
+
+
+def claude_version(path: str) -> str:
+    """The version a claude binary is: its package's package.json beside the real file, else a hash
+    of its bytes (a stub, a single-file install); "missing" when there is no such file."""
+    try:
+        real = Path(os.path.realpath(path))
+        for d in (real.parent, real.parent.parent):
+            pkg = d / "package.json"
+            if pkg.is_file():
+                v = json.loads(pkg.read_text()).get("version")
+                if isinstance(v, str) and v:
+                    return v
+        return "sha256:" + hashlib.sha256(real.read_bytes()).hexdigest()[:12]
+    except (OSError, ValueError):
+        return "missing"
 
 
 def classifier_flags(kind: str = "careful") -> List[str]:
     # Headless from an empty directory with local settings only, so no resident instruction or hook
     # loads and the router cannot trigger itself (§4.1). The env guard is the belt to that brace.
-    flags = [
+    effort = CAREFUL_PIN["effort"] if kind == "careful" else None
+    flags = (["--effort", effort] if effort else []) + [
         "-p",
         "--model",
         kind_model(kind),
@@ -383,7 +425,14 @@ def classifier_argv(kind: str = "careful") -> Optional[List[str]]:
     env_cmd = os.environ.get("CC_RESEARCH_CLASSIFIER")
     if env_cmd:
         return ["/bin/bash", "-c", env_cmd]
-    claude = shutil.which("claude")
+    if (
+        kind == "careful"
+    ):  # pinned by path: a missing binary is no classifier, never another one
+        claude: Optional[str] = careful_claude()
+        if not os.access(str(claude), os.X_OK):
+            return None
+    else:
+        claude = shutil.which("claude")
     if not claude:
         return None
     return [claude] + classifier_flags(kind)
@@ -391,10 +440,18 @@ def classifier_argv(kind: str = "careful") -> Optional[List[str]]:
 
 def classifier_config() -> str:
     """An id for what a classifier process is started as: each kind's flags (the model among them)
-    and brief. The resident classifier's processes are started ahead of the prompt, so a daemon
-    started before a change here still serves the old configuration; `classifier-warm.py ping`
-    compares the daemon's id with this one, and migration 0059 restarts a daemon that differs."""
-    spec = [[k, classifier_flags(k), BRIEFS[k]] for k in KINDS]
+    and brief, and (wave E1m) the careful call's pinned binary and that binary's version. The
+    resident classifier's processes are started ahead of the prompt, so a daemon started before a
+    change here still serves the old configuration; `classifier-warm.py ping` compares the daemon's
+    id with this one, and migration 0059 restarts a daemon that differs."""
+    spec: List[Any] = [[k, classifier_flags(k), BRIEFS[k]] for k in KINDS]
+    spec.append(
+        [
+            "careful-claude",
+            careful_claude(expand=False),
+            claude_version(careful_claude()),
+        ]
+    )
     return hashlib.sha256(json.dumps(spec).encode()).hexdigest()[:12]
 
 

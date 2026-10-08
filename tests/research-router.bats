@@ -449,7 +449,61 @@ label() { python3 "$ROUTER" status --session "${1:-s1}" | jq -r '.label // "none
   [ -f "$CC_RESEARCH_HOME/route-state/s1.json" ]
 }
 
-@test "the real classifier call: each kind's model from model-config (fast sonnet_latest, careful haiku_latest), local settings only, an empty cwd, the inner guard set" {
+# Wave E1m's careful-call pin (router.py CAREFUL_PIN, ruling 8633d354bd41), asserted literally below.
+PIN_MODEL=claude-haiku-4-5
+PIN_EFFORT=''          # empty: the careful call carries no --effort flag
+# shellcheck disable=SC2088  # the pin is written with a literal ~, as router.py carries it
+PIN_CLAUDE='~/.claude-293/node_modules/.bin/claude'
+PIN_ID=3eb7e253415c           # classifier_config() with the pinned binary at version 2.1.293
+
+# A claude install laid out as npm lays one out (package.json two levels above the binary), at VERSION,
+# with .bin/claude linked to it: plant_claude DIR VERSION.
+plant_claude() {
+  mkdir -p "$1/node_modules/@anthropic-ai/claude-code/bin" "$1/node_modules/.bin"
+  printf '{"name": "@anthropic-ai/claude-code", "version": "%s"}\n' "$2" > "$1/node_modules/@anthropic-ai/claude-code/package.json"
+  printf '#!/bin/bash\ncat >/dev/null\necho other\n' > "$1/node_modules/@anthropic-ai/claude-code/bin/claude.exe"
+  chmod +x "$1/node_modules/@anthropic-ai/claude-code/bin/claude.exe"
+  ln -sf ../@anthropic-ai/claude-code/bin/claude.exe "$1/node_modules/.bin/claude"
+}
+router_py() { /usr/bin/python3 -c "import sys; sys.path[:0]=['$REPO/scripts/research-kit/lib','$REPO/scripts/research-kit']; import router; $1"; }
+
+@test "E1m pin: the careful call's model, effort and binary are pinned in router.py, not read from model-config" {
+  run router_py 'print(router.CAREFUL_PIN["model"], router.CAREFUL_PIN["effort"] or "", router.CAREFUL_PIN["claude"], sep="|")'
+  [ "$status" -eq 0 ]
+  [ "$output" = "$PIN_MODEL|$PIN_EFFORT|$PIN_CLAUDE" ]
+  unset CC_RESEARCH_CLASSIFIER   # setup's stub seam would stand in for the real command line
+  plant_claude "$HOME/.claude-293" 2.1.293
+  printf 'models:\n  sonnet_latest: claude-sonnet-5-5\n  haiku_latest: claude-haiku-old-1\n' > "$BATS_TEST_TMPDIR/m1.yaml"
+  printf 'models:\n  sonnet_latest: claude-sonnet-5-5\n  haiku_latest: claude-haiku-new-2\n' > "$BATS_TEST_TMPDIR/m2.yaml"
+  argv() { CC_MODEL_CONFIG="$1" router_py 'print(" ".join(router.classifier_argv("careful")))'; }
+  # a move of haiku_latest (as on 2026-10-07) no longer reaches the careful call or the configuration id
+  [ "$(argv "$BATS_TEST_TMPDIR/m1.yaml")" = "$(argv "$BATS_TEST_TMPDIR/m2.yaml")" ]
+  [[ "$(argv "$BATS_TEST_TMPDIR/m1.yaml")" == "$HOME/.claude-293/node_modules/.bin/claude ${PIN_EFFORT:+--effort $PIN_EFFORT }-p --model $PIN_MODEL "* ]] || false
+  cfg() { CC_MODEL_CONFIG="$1" router_py 'print(router.classifier_config())'; }
+  [ "$(cfg "$BATS_TEST_TMPDIR/m1.yaml")" = "$(cfg "$BATS_TEST_TMPDIR/m2.yaml")" ]
+}
+
+@test "E1m pin: the careful binary's version is part of the configuration id, and a missing pinned binary is no careful classifier, never another one" {
+  plant_claude "$HOME/.claude-293" 2.1.293
+  a="$(router_py 'print(router.classifier_config())')"
+  plant_claude "$HOME/.claude-293" 2.1.294        # the same path, another version under it
+  b="$(router_py 'print(router.classifier_config())')"
+  [ -n "$a" ]
+  [ -n "$b" ]
+  [ "$a" != "$b" ]
+  run router_py 'print(router.claude_version(router.careful_claude()))'
+  [ "$output" = 2.1.294 ]
+  mv "$HOME/.claude-293" "$HOME/.claude-293.gone"
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  printf '#!/bin/bash\necho other\n' > "$BATS_TEST_TMPDIR/bin/claude"; chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+  unset CC_RESEARCH_CLASSIFIER
+  run env PATH="$BATS_TEST_TMPDIR/bin:/usr/bin:/bin" /usr/bin/python3 -c "import sys; sys.path[:0]=['$REPO/scripts/research-kit/lib','$REPO/scripts/research-kit']; import router; print(router.classifier_argv('careful')); print(router.classifier_argv('fast')[0])"
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = None ]
+  [ "${lines[1]}" = "$BATS_TEST_TMPDIR/bin/claude" ]
+}
+
+@test "the real classifier call: the fast call's model from model-config (sonnet_latest), the careful call pinned (wave E1m), local settings only, an empty cwd, the inner guard set" {
   state certified
   unset CC_RESEARCH_CLASSIFIER
   mkdir -p "$BATS_TEST_TMPDIR/bin"
@@ -464,12 +518,14 @@ if [ "$CC_RESEARCH_CLASSIFIER_KIND" = fast ]; then echo other; else echo complet
 STUB
   chmod +x "$BATS_TEST_TMPDIR/bin/claude"
   export STUB_ARGS="$BATS_TEST_TMPDIR/args"
+  export CC_RESEARCH_CAREFUL_CLAUDE="$BATS_TEST_TMPDIR/bin/claude"   # the pinned binary's test seam
   PATH="$BATS_TEST_TMPDIR/bin:$PATH" prompt "are we done?" >/dev/null
   [ "$(label)" = completeness ]
-  # Since wave E1g the classifier is two calls. The careful one is this command line, unchanged; the
-  # fast one adds its own flags to it (tests/research-classifier-warm.bats pins those) and, since wave
-  # E1i, runs sonnet_latest instead of haiku_latest.
-  grep -qx 'argv=-p --model claude-haiku-test-9 --setting-sources local --tools  --strict-mcp-config --no-session-persistence' "$STUB_ARGS.careful"
+  # Since wave E1g the classifier is two calls. Since wave E1m the careful one's model and effort are
+  # pinned in router.py, so model-config's haiku_latest (claude-haiku-test-9 here) no longer reaches
+  # it. The fast one adds its own flags (tests/research-classifier-warm.bats pins those) and, since
+  # wave E1i, runs sonnet_latest.
+  grep -qx "argv=${PIN_EFFORT:+--effort $PIN_EFFORT }-p --model $PIN_MODEL --setting-sources local --tools  --strict-mcp-config --no-session-persistence" "$STUB_ARGS.careful"
   grep -q '^argv=-p --model claude-sonnet-test-7 --setting-sources local --tools  --strict-mcp-config --no-session-persistence --disable-slash-commands ' "$STUB_ARGS.fast"
   # the fast call's model is part of the configuration id, so a resident classifier started on the
   # old one reads as not ready and migration 0059 restarts it
@@ -484,15 +540,16 @@ STUB
   done
 }
 
-@test "the live classifier's configuration id is pinned: no flag, model key or brief changed since the Haiku 5.5 flip" {
-  # Wave E1j added tracing only, and wave E1k's cold hedge changes no flag, model or brief either
-  # (the twin is the cold call as built). The resident daemon serves the id it was started with, so a change
-  # to any kind's flags or brief would make its ping fail until migration 0059 restarts it; the live
-  # model-config (bc7894fe2) reads 983448663980, the id the daemon reported after the flip.
+@test "the live classifier's configuration id is pinned: wave E1m's careful pin, on claude 2.1.293" {
+  # Wave E1j added tracing only and wave E1k's hedge changed no flag, model or brief, so the id stayed
+  # 983448663980 until wave E1m pinned the careful call (model, effort, binary and its version, brief).
+  # The resident daemon serves the id it was started with, so this id is the one migration 0059's
+  # restart must bring the daemon to.
+  plant_claude "$HOME/.claude-293" 2.1.293
   printf 'models:\n  sonnet_latest: claude-sonnet-5-5\n  haiku_latest: claude-haiku-5-5\n' > "$BATS_TEST_TMPDIR/model-config.yaml"
   run env CC_MODEL_CONFIG="$BATS_TEST_TMPDIR/model-config.yaml" /usr/bin/python3 -c "import sys; sys.path[:0]=['$REPO/scripts/research-kit/lib','$REPO/scripts/research-kit']; import router; print(router.classifier_config())"
   [ "$status" -eq 0 ]
-  [ "$output" = 983448663980 ]
+  [ "$output" = "$PIN_ID" ]
 }
 
 # ── the block's fast exit (docs/research/concurrency-scale-2026-10-04 fix row 4) ────────────────
