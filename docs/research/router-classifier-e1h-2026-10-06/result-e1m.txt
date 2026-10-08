@@ -1,0 +1,5 @@
+e1m-tune-run1.json: union(sonnet-off, h55-e1m) regex_missed=40/42 FAIL recall=161/163 FAIL other_decision=226/240 FAIL borderline=92/138 false_relay=39/504 FAIL fallback=0/1078 decide_median=2.49 s decide_p90=3.76 s
+e1m-tune-run2.json: union(sonnet-off, h55-e1m) regex_missed=39/42 FAIL recall=160/163 FAIL other_decision=227/240 FAIL borderline=94/138 false_relay=38/504 FAIL fallback=0/1078 decide_median=2.49 s decide_p90=3.85 s
+pooled over the two runs: regex_missed=79/84 FAIL recall=321/326 FAIL
+match Haiku 4.5: FAIL (neither each run nor pooled); no regression on each run: FAIL
+PICK: the Haiku 4.5 union — a bar of RULE E1m failed, so the rule locks in union(Sonnet fast call, Haiku 4.5 careful call)

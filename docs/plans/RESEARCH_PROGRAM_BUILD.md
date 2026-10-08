@@ -1754,6 +1754,13 @@ the classifier configuration id), red-then-green, land, converge, file the daemo
 operator's restart, guard 2 of a7fd5e2ee7c8 (a warm-path replay of the 42 counted regex-missed tuning calls under a
 1-min load bound of 40). Locus S (fired `fire-rp-v12-e1m`), lead-inline. Not in this wave: `heldout.py`, the gate
 rows and the load bound in `evaluate` (wave E1l), the hedge's real-load run 2 (wave E1k).
+Scope (grown, 2026-10-08 15:30, the lead, operator-authorized): +`<key>ProcessType</key><string>Interactive</string>` in
+`launchd/staged/com.claude.research-classifier-warm.plist` in the pin's land (E1k's record `6d84fa3a6`: the hedge
+cut fallbacks 119/150 to 34/150 at load 106-275 and failed its bar; the launchd workers ran at PRI 20 against the
+sessions' 31), with a planted test, and migration 0059 shown to re-install a plist whose bytes changed, so ONE
+restart covers both; +after the operator's restart and before guard 2, the workers' PRI read back (`ps -o pri`)
+and recorded; +E1k's real-load A/B harness (`db03a82cf`) re-run at the next load >= 150 window under RULE E1k's
+bar (`082648c5e`) unchanged, its verdict recorded here.
 - **Why.** The operator ruled 2026-10-08 ("all recommendations";
   `docs/research/reask-row15-rulings-final-2026-10-08/REPORT.md`): re-tune Haiku 5.5 first under a rule that luck
   or overfitting cannot pass, lock in the Haiku 4.5 union if any bar fails. E1j's untuned Haiku 5.5 read 159/163
@@ -1850,6 +1857,42 @@ rows and the load bound in `evaluate` (wave E1l), the hedge's real-load run 2 (w
   catch in time), B held 2. A's wrong in-time labels on re-asks all came at load 150-250. All 3 fallbacks were
   `other` rows at load 182-232. Under RULE E1m (d) this table does not move the pick; it is the real-load
   companion the gate's load-bounded read lacks.
+- **(b) The two runs** (2026-10-08 14:26-17:45 CDT, started together; 982 rows each, 2,156 calls each, every call
+  to completion; 1-min load at each call's start 28.1-40.0, median 36; each run paused 135-136 times for 8,661-8,721
+  s in all; per-call data `e1m-tune-run1.json`, `e1m-tune-run2.json`, no prompt text, INVALID answer text replaced
+  by its category; raw files outside the repo, mode 600). Both runs' careful arm ran the brief file at sha256
+  `a2866071b09017f2…`; the fast partner ran on 2.1.291. Scored by `e1h-score.py … --rule e1m` (`result-e1m.txt`):
+
+  | union(`sonnet-off`, `h55-e1m`) | regex-missed >= 41/42 | recall >= 162/163 | `other` relay decision >= 229/240 | wrong relays <= 36/504 | borderline >= 69/138 | fallback | median · p90 decision |
+  |---|---|---|---|---|---|---|---|
+  | run 1 | **40** | **161** | **226** | **39** | 92 | 0/1078 | 2.49 s · 3.76 s |
+  | run 2 | **39** | **160** | **227** | **38** | 94 | 0/1078 | 2.49 s · 3.85 s |
+  | pooled (>= 82/84, >= 324/326) | **79/84** | **321/326** | | | | | |
+  | for comparison, the Haiku 4.5 union in `tune.json` | 41 | 162 | 229 | 36 | 104 | 0/1078 | 5.95 s · 8.5 s |
+
+  The careful arm's no-label calls: 26 per run (21-22 the vendor's refusal, `API Error: Haiku 5.5 can't help with
+  this`; the rest prose). The fast partner timed out once (run 1).
+- **(d) THE PICK: the Haiku 4.5 union** — union(Sonnet fast call, Haiku 4.5 careful call). Re-tuned Haiku 5.5 fails
+  the match bars on each run and pooled, and also fails two no-regression bars on each run (`other` 226 and 227
+  against 229; wrong relays 39 and 38 against 36): the paragraph caught one or two more subtle re-asks than E1j's
+  untuned arm (40 and 39 against 38) and relayed more prompts that were not re-asks. The bars told the two apart,
+  so the 4 s tiebreak does not apply. What the pick costs, from the A/B: a median decision of 3.91 s against 1.44 s
+  at real load, and 71 of 403 rows held to the 8.5 s hand-back with the careful call silent against 2. Per ruling
+  17aff7158fa6 (5) this pick owes a real-load check, on tuning rows, of recall on rows held with one call silent;
+  the A/B above is that check's first reading (A: 3 wrong in-time labels on 163 re-ask calls, all at load 150-250).
+- **The pin** (router.py): `CAREFUL_PIN` = `claude-haiku-4-5`, effort None (no `--effort` flag, as E1h measured
+  it), binary `~/.claude-293/node_modules/.bin/claude`; the careful brief as built; `haiku_latest` no longer reaches
+  the careful call. `classifier_config()` now carries the pinned path as written and the binary's version (read
+  from the package's `package.json`, else a hash of the file), so a binary that moves under the path reads as
+  another configuration; a missing pinned binary is no careful classifier, never another binary. New
+  configuration id **`3eb7e253415c`** (was `983448663980`); identical under the operator's HOME and a test HOME
+  with a planted 2.1.293. Plus the grown scope's `ProcessType Interactive` in the staged plist. Red then green:
+  on a `git archive` of trunk before the pin, the 7 new or changed cases fail (4 in `research-router`, 3 in
+  `research-classifier-warm`: the careful command line, the plist key, and the changed-plist re-install, which is
+  red there only because the old plist has nothing to re-install; 0059's code is unchanged); after:
+  `research-router` `1..40` 40 ok, `research-router-heldout` `1..16` 16 ok, `research-relay-check` `1..17` 17
+  ok, `research-classifier-warm` `1..56` 55 ok plus one pre-existing flake ("E1j trace: a resident worker that took
+  the prompt and stalls", a 2 s timing case; it failed 1 of 3 on the pre-pin tree too, 2 of 3 on this one).
 
 #### E1l — row 15's read guards, the third-read refusal, the load bound, and the pre-registered data rules — DONE: landed and live; the live set map's re-point is the operator's (2026-10-08)
 Scope (frozen): wave E1l — (1) ruling `a7fd5e2ee7c8` guard 1: gate row 15 decrypts and logs a read only when an
