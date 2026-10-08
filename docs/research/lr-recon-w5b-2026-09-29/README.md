@@ -610,6 +610,29 @@ Load was still 400 / 416 / 389 at 23:56Z.
 within 900 s, and the watchdog restarts it about every 15 minutes. A limit hit during such a period
 would find a reconciler that restarts partway through the cohort.
 
+### Three more watchdog kills: the loop was the 900 s ceiling, not the load (2026-10-08)
+
+| killed | at | progress, unchanged for | successor, started |
+|---|---|---|---|
+| 85839 | 00:10:21Z | 0, 929 s | 80373, 00:10:23Z |
+| 80373 | 00:26:28Z | 0, 923 s | 30684, 00:26:31Z |
+| 30684 | 00:42:31Z | 0, 920 s | 14550, 00:42:31Z |
+
+Every holder from 77808 (23:38Z Oct 7) to 30684 died at progress 0, and the loop continued after the
+load fell: at 00:55:50Z pid 14550 was at progress 0 after 759 s with load 13 to 27. A `sample` of
+14550 showed its main thread mostly in `poll()` reading a forked child (1442 of 1751 samples) at
+about 1.6% CPU. **Lead diagnosis (2026-10-08 01:05Z):** a cold first pass takes about 860 s or
+more, the 900 s ceiling killed each holder at progress 0, and each restart started another first
+pass. pid 14550 finished one at about 00:57Z (progress 15); the watchdog has logged nothing since
+00:55:50Z, and no kill since 00:42:31Z. The fix touches only the watchdog: a progress-0 holder that
+is accruing CPU gets a 3600 s ceiling (`5b8307513`, branch `fix/lr-watchdog-first-pass-ceiling`,
+landing at the time of writing). `lr_recon` is untouched.
+
+All three are same-code restarts (checkout `35e943e46`; `scripts/limit-recover/` identical to
+`a037c0bd9`). The count stays 1 of 2 at the 02:28:28Z Oct 6 cutoff. No cohort was open; the last
+`recon/events.jsonl` row before the loop is 05:37Z Oct 7, and no legacy recovery bundle was written
+after 06:22Z Oct 6, so no limit event fell inside the stall.
+
 ## Census step
 
 Operator step `f0df9145b73a` (the live observe census) was closed with the launchd daemon's own pass:
