@@ -358,3 +358,55 @@ defect() { # sid t detail [cohort id, default this one]
   run /usr/bin/python3 "$L" watch "$LR" --once
   [[ "$output" == *"gained member(s): $CID +cccccccc"* ]] || { echo "$output"; false; }
 }
+
+@test "freeze_due: one capture per frozen (pid, progress), timed from max(progress_wall, first seen)" {
+  run /usr/bin/python3 - "$REPO/tests/rig" <<'PY'
+import sys; sys.path.insert(0, sys.argv[1]); import shadow_lib as S
+hb = {"pid": 7, "progress": 5, "progress_wall": 1000.0}
+due, st = S.freeze_due(hb, {}, 1000.0);       assert not due, "first sight"
+due, st = S.freeze_due(hb, st, 1299.0);       assert not due, "299 s is inside the bound"
+due, st = S.freeze_due(hb, st, 1301.0);       assert due, "301 s is a freeze"
+st["captured"] = True
+due, st = S.freeze_due(hb, st, 1900.0);       assert not due, "one capture per freeze"
+due, st = S.freeze_due(dict(hb, progress=6), st, 1900.0); assert not due, "progress moved: new freeze"
+due, st = S.freeze_due(dict(hb, progress=6), st, 2201.0); assert due, "the new freeze is due 300 s later"
+due, st = S.freeze_due(dict(hb, pid=8), st, 2201.0);      assert not due, "new holder: new freeze"
+# a watcher started late on an old freeze waits its own 300 s rather than guessing
+due, st = S.freeze_due({"pid": 9, "progress": 1, "progress_wall": 0}, {}, 5000.0); assert not due
+due, st = S.freeze_due({"pid": 9, "progress": 1, "progress_wall": 0}, st, 5301.0); assert due
+print("ok")
+PY
+  [ "$status" -eq 0 ] && [ "$output" = ok ] || { echo "$output"; false; }
+}
+
+@test "freeze_once captures load, descendants, kitten round-trip and sample once, then holds" {
+  printf '{"pid":4242,"lstart":"x","progress":725,"wall":2000.0,"progress_wall":1000.0}' > "$LR/recon/heartbeat"
+  run /usr/bin/python3 - "$REPO/tests/rig" "$LR" <<'PY'
+import subprocess, sys; sys.path.insert(0, sys.argv[1]); import shadow_lib as S
+calls = []
+def run(argv, **kw):
+    calls.append(argv[0] if argv[0] != S._kitten() else "kitten")
+    out = {"sysctl": "{ 30.1 25.0 20.0 }",
+           "ps": "4242 1 15:20 S python -m lr_recon\n4300 4242 00:40 S /bin/ps -axo\n4301 4300 00:39 S child-of-child\n999 1 1:00 S unrelated"}.get(argv[0], "")
+    return subprocess.CompletedProcess(argv, 0, out, "")
+assert S.freeze_once(sys.argv[2], now=1000.0, run=run) is None, "first sight"
+assert S.freeze_once(sys.argv[2], now=1200.0, run=run) is None, "200 s: not yet"
+p = S.freeze_once(sys.argv[2], now=1301.0, run=run)
+assert p and p.endswith("-pid4242-p725.txt"), p
+t = open(p).read()
+for want in ("progress 725 · frozen 301 s", "load { 30.1 25.0 20.0 }", "descendants 2",
+             "4300 4242 00:40", "4301 4300 00:39", "sample rc=0"):
+    assert want in t, (want, t)
+assert "unrelated" not in t, t
+assert "sample" in calls, calls
+assert S.freeze_once(sys.argv[2], now=1800.0, run=run) is None, "captured once"
+print("ok")
+PY
+  [ "$status" -eq 0 ] && [ "$output" = ok ] || { echo "$output"; false; }
+}
+
+@test "the watcher stays silent about freezes when there is no heartbeat" {
+  run /usr/bin/python3 "$L" watch "$LR" --once
+  [[ "$output" != *"freeze"* ]] || { echo "$output"; false; }
+  [ ! -d "$LR/shadow-archive/freeze" ]
+}

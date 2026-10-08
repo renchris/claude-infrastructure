@@ -3,6 +3,7 @@
 lane actually did (docs/plans/LIMIT_RECOVER_FLEET_V2.md § W5 "Shadow").
 
   shadow_lib.py watch   LR [--interval S] [--once]   archive every cohort while it is live
+                        [--notify INBOX] [--freeze-notify INBOX]   and capture a frozen heartbeat
   shadow_lib.py list    LR                           archived cohorts, one line each
   shadow_lib.py compare LR CID [--home H]            the gate lines; rc 0 PASS · 1 FAIL · 3 no data
 
@@ -37,6 +38,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -201,10 +203,182 @@ def _live_sids() -> Set[str]:
     return sids
 
 
-def watch(lr: str, interval: float, once: bool, notify: str = "") -> int:
+# ── freeze capture ─────────────────────────────────────────────────────────────────────────────
+# The watchdog kills a holder whose heartbeat ``progress`` is frozen 900 s (lr-recon-watchdog.sh),
+# and on 2026-10-08 it killed PROGRESSING holders at load ~30 with no record of what they were
+# doing. Wedged (the kill is right) and slow (the kill is wrong) look the same from the heartbeat,
+# so once per freeze, well inside the ceiling, the watcher writes what the holder is doing NOW:
+# a 5 s ``sample``, its descendant processes with etime and args, the load, and the round-trip of
+# the same ``kitten @ ls`` the census makes. Lead request, 2026-10-08 04:20Z.
+
+FREEZE_AFTER_S = 300.0
+Run = Any  # subprocess.run's shape: (argv, **kw) -> CompletedProcess
+
+
+def freeze_due(
+    hb: Dict[str, Any], state: Dict[str, Any], now: float
+) -> Tuple[bool, Dict[str, Any]]:
+    """(capture now?, the next state). A new (pid, progress) pair starts a new freeze; the frozen
+    time runs from max(progress_wall, first time this watcher saw the pair), the watchdog's own
+    reading, so a watcher restarted mid-freeze waits rather than guessing. One capture per freeze."""
+    key = [hb.get("pid"), hb.get("progress")]
+    if state.get("key") != key:
+        state = {"key": key, "seen": now, "captured": False}
+    pw = _epoch(hb.get("progress_wall")) or 0.0
+    since = max(pw, float(state["seen"]))
+    due = not state["captured"] and now - since > FREEZE_AFTER_S
+    return due, state
+
+
+def _kitty_sockets(pattern: str = "/tmp/kitty-*") -> List[str]:
+    """``unix:/tmp/kitty-<pid>`` for each real socket whose kitty pid is alive (as observe.py)."""
+    out = []
+    for path in sorted(glob.glob(pattern)):
+        suffix = path.rsplit("kitty-", 1)[-1]
+        if not suffix.isdigit():
+            continue
+        try:
+            if not stat.S_ISSOCK(os.lstat(path).st_mode):
+                continue
+            os.kill(int(suffix), 0)
+        except (OSError, ValueError):
+            continue
+        out.append("unix:" + path)
+    return out
+
+
+def _kitten() -> str:
+    app = "/Applications/kitty.app/Contents/MacOS/kitten"
+    return os.environ.get("LR_KITTEN_BIN") or (app if os.path.exists(app) else "kitten")
+
+
+def _step(
+    run: Run, argv: List[str], timeout: float
+) -> Tuple[Optional[int], float, str]:
+    """(rc or None on timeout/error, seconds, stdout+stderr); never raises."""
+    t0 = time.monotonic()
+    try:
+        p = run(argv, capture_output=True, text=True, timeout=timeout, check=False)
+        return p.returncode, time.monotonic() - t0, (p.stdout or "") + (p.stderr or "")
+    except subprocess.TimeoutExpired:
+        return None, time.monotonic() - t0, "TIMEOUT after %.0fs" % timeout
+    except (OSError, subprocess.SubprocessError) as e:
+        return None, time.monotonic() - t0, "ERROR %s" % e
+
+
+def freeze_capture(
+    lr: str,
+    hb: Dict[str, Any],
+    frozen_s: float,
+    now: float,
+    run: Run = subprocess.run,
+    sockets: Optional[List[str]] = None,
+) -> str:
+    """Write one capture file under LR/shadow-archive/freeze/ and return its path."""
+    pid = int(hb.get("pid") or 0)
+    d = os.path.join(lr, "shadow-archive", "freeze")
+    os.makedirs(d, exist_ok=True)
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(now))
+    base = os.path.join(d, "%s-pid%d-p%s" % (stamp, pid, hb.get("progress")))
+    out = [
+        "freeze capture %s" % time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+        "pid %d · progress %s · frozen %.0f s" % (pid, hb.get("progress"), frozen_s),
+        "heartbeat %s" % json.dumps(hb, separators=(",", ":")),
+    ]
+    rc, _, txt = _step(run, ["sysctl", "-n", "vm.loadavg"], 10)
+    out.append("load %s" % txt.strip())
+    rc, _, txt = _step(run, ["ps", "-axo", "pid=,ppid=,etime=,stat=,args="], 20)
+    kids: Dict[int, List[str]] = {}
+    rows: Dict[int, str] = {}
+    for ln in txt.splitlines():
+        f = ln.split(None, 4)
+        if len(f) >= 4 and f[0].isdigit() and f[1].isdigit():
+            rows[int(f[0])] = ln.strip()
+            kids.setdefault(int(f[1]), []).append(int(f[0]))
+    desc, todo = [], list(kids.get(pid, []))
+    while todo:
+        c = todo.pop(0)
+        desc.append(c)
+        todo.extend(kids.get(c, []))
+    out.append("holder %s" % rows.get(pid, "(not in ps)"))
+    out.append("descendants %d (pid ppid etime stat args)" % len(desc))
+    out.extend("  " + rows[c] for c in desc)
+    socks = _kitty_sockets() if sockets is None else sockets
+    out.append("kitten @ ls round-trip, %d socket(s)" % len(socks))
+    for s in socks:
+        rc, secs, txt = _step(run, [_kitten(), "@", "--to", s, "ls"], 30)
+        out.append("  %s rc=%s %.2fs %d bytes" % (s, rc, secs, len(txt)))
+    rc, secs, txt = _step(
+        run, ["sample", str(pid), "5", "-file", base + ".sample.txt"], 60
+    )
+    out.append("sample rc=%s %.1fs -> %s.sample.txt" % (rc, secs, base))
+    with open(base + ".txt", "w", encoding="utf-8") as fh:
+        fh.write("\n".join(out) + "\n")
+    return base + ".txt"
+
+
+def freeze_once(
+    lr: str, now: Optional[float] = None, run: Run = subprocess.run
+) -> Optional[str]:
+    """Read the heartbeat; capture once if its progress has been frozen > FREEZE_AFTER_S."""
+    now = time.time() if now is None else now
+    try:
+        hb = _load(os.path.join(lr, "recon", "heartbeat"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(hb, dict) or not hb.get("pid"):
+        return None
+    sp = os.path.join(lr, "shadow-archive", "freeze.state.json")
+    try:
+        state = _load(sp)
+    except (OSError, ValueError):
+        state = {}
+    due, state = freeze_due(hb, state, now)
+    path = None
+    if due:
+        pw = _epoch(hb.get("progress_wall")) or 0.0
+        path = freeze_capture(lr, hb, now - max(pw, float(state["seen"])), now, run)
+        state["captured"] = True
+    os.makedirs(os.path.dirname(sp), exist_ok=True)
+    with open(sp, "w", encoding="utf-8") as fh:
+        json.dump(state, fh)
+    return path
+
+
+def _mail(to: str, body: str) -> None:
+    exe = os.path.join(os.environ.get("HOME", ""), ".claude", "bin", "cc-notify")
+    try:
+        subprocess.run(
+            [exe, to, body],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=20,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def watch(
+    lr: str, interval: float, once: bool, notify: str = "", freeze_notify: str = ""
+) -> int:
     """Archive every pass; with ``notify``, mail that inbox once per new cohort (the waiting
-    session's wake path: it never polls)."""
+    session's wake path: it never polls). Each pass also runs ``freeze_once``; a capture is mailed
+    to ``freeze_notify`` (default: ``notify``)."""
     while True:
+        cap = freeze_once(lr)
+        if cap:
+            print(
+                "%s freeze captured: %s"
+                % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), cap),
+                flush=True,
+            )
+            for to in {freeze_notify or notify, notify} - {""}:
+                _mail(
+                    to,
+                    "SHADOW: reconciler heartbeat frozen > %ds — capture %s"
+                    % (FREEZE_AFTER_S, cap),
+                )
         for cid in watch_once(lr):
             joined = " +" in cid
             print(
@@ -793,7 +967,10 @@ def main(argv: List[str]) -> int:
     if cmd == "watch":
         iv = float(argv[argv.index("--interval") + 1]) if "--interval" in argv else 20.0
         nt = argv[argv.index("--notify") + 1] if "--notify" in argv else ""
-        return watch(lr, iv, "--once" in argv, nt)
+        fz = (
+            argv[argv.index("--freeze-notify") + 1] if "--freeze-notify" in argv else ""
+        )
+        return watch(lr, iv, "--once" in argv, nt, fz)
     if cmd == "list":
         for r in _jsonl(os.path.join(lr, "shadow-archive", "index.jsonl")):
             print(
