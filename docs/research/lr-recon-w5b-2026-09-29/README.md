@@ -672,6 +672,36 @@ act cohort, not by the shadow.
 descendant processes (etime and args), the round-trip time of the census's own `kitten @ ls` per
 socket, and a 5 s `sample` (`.sample.txt` beside it), then mails the path (`--freeze-notify`).
 
+### What the freeze captures showed: slow, not wedged (2026-10-08)
+
+All five captures are of pid 62810 (started 04:04:22Z), each taken when progress had been frozen for
+just over 300 s. Files are `shadow-archive/freeze/20261008T<time>Z-pid62810-p<progress>.txt`.
+
+| at | progress | load (1 min) | descendants | `kitten @ ls` | main thread, top of stack |
+|---|---|---|---|---|---|
+| 05:02:28Z | 564 | 404 | 0 | 0.04 s | `lstat` 3642 of 4390 samples (83%) |
+| 06:00:20Z | 1092 | 350 | 0 | 0.23 s | `lstat` 2852 of about 3980 (72%) |
+| 06:10:06Z | 1097 | 344 | 0 | 0.12 s | `lstat` 2478 of 4416 |
+| 06:46:44Z | 1373 | 49 | 0 | rc 1, 10.09 s (`i/o timeout`) | `select()` |
+| 06:52:25Z | 1379 | 44 | 0 | 0.41 s | `lstat` 3865 of about 3965 |
+
+In every capture the second thread is the heartbeat, idle in a timed lock wait. **Lead ruling
+(05:07Z): slow, not wedged.** The main thread walks the filesystem and each `lstat` crawls under
+load. The lead's read of which tree: `observe._sessions` globbing about 23k transcripts across the 4
+config directories every pass, a post-cutover `lr_recon` performance item. The lead then widened the
+watchdog (`4b3f85201`, on trunk, live 05:14Z): every holder whose CPU advances past the floor gets
+the 3600 s ceiling, not only one at progress 0, and a holder with no CPU reading still dies at
+900 s. That is a watchdog-only change, so the count stays 1 of 2. pid 62810 survived every freeze
+above, and there has been no kill since 04:04:21Z.
+
+The 06:46Z capture was a blip. kitty (pid 64211) was alive at 0% CPU and timed out two more
+read-only `kitten @ ls` calls at 06:47Z. The lead found it flapping, not dead: the next call answered
+in 5 s, and the reconciler went on to progress 1379. A failed `ls` makes the census abstain for that
+pass (W7a), which is the safe outcome. **Lead rule:** a kitty timeout counts as part of the overload
+signature unless it lasts more than 15 minutes or a cohort is open. Captures now go to disk and to
+the shadow session only. The lead is told only of a kill or restart, a capture whose signature
+differs, or cohort activity.
+
 ## Census step
 
 Operator step `f0df9145b73a` (the live observe census) was closed with the launchd daemon's own pass:
