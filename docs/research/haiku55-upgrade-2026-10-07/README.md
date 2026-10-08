@@ -153,6 +153,39 @@ recomputed the numbers from the raw rows ([`decisions/`](decisions/): `D<n>-*.md
 The gate run against `next3` stalled on its first check for 93 minutes and was stopped, so the
 formal gate verdict for that account is still missing.
 
+## Revert triggers (2026-10-08)
+
+Each decision above is reversed on evidence, not on a re-read. The evidence is one command, run at
+every binary move (with the cc-upgrade gate) and weekly:
+
+```
+cc-token-ledger --since 7d --haiku          # --json adds one record per Haiku run
+```
+
+It reads transcripts after the fact (no hook writes anything): per Haiku run it records the
+requested model and effort (the spawn's `.meta.json`), the served model and effort (the transcript's
+own records), output tokens (recorded and imputed), thinking characters, turns, wall time, the last
+`stop_reason` and any API error. Each line below names the report line that fires it (the first
+word of that line) and the lever to pull. A rate is read only over the minimum count shown; below
+it, read the runs one by one in `--json`. Subagent output tokens are undercounted in transcripts
+(upstream #97763), which the report's caveats spell out.
+
+Baseline, first read 2026-10-08 over the 7 days to 06:40Z (`--since 7d`) and the window since the
+flip (`--since 2026-10-07T20:00`): 228 / 54 Haiku runs, almost all headless research probes; 6
+Haiku worker spawns since the flip, 5 at medium and 1 at high (a probe that passed no `effort`); 0
+served-model mismatches, 0 refusals, 0 API errors; helper share 0.5% / 0.4% of whole-session draw;
+no extraction consumer logs validation yet; neither budget flag cached on any of 6 accounts.
+
+| Decision | Fires when (report line) | Lever |
+|---|---|---|
+| D1 retrieval effort | `effort-pin`: more than 5% of Haiku worker spawns at an effort other than medium, over at least 20 spawns in 7 days. The pin is not reaching spawns. | `--json` names each off-pin run's session and agentType: add `effort: "medium"` (`effort_defaults.haiku55_retrieval`) at that spawn site. If spawns that pass it still run at another rung, the binary stopped honoring the Agent `effort` parameter: re-measure before the next binary move. |
+| D1 retrieval quality | `retrieval-errors`: API error or context overflow on more than 5% of Explore spawns on Haiku, over at least 20 (the measured baseline is 0 of 60 Haiku 5.5 runs; Haiku 4.5 overflowed 2 of 20). | Split wide sweeps across more workers first (the ≤100K retrieval budget in the research-subagents skill). If overflow persists on sweeps over 40 files, A/B `high` on those sweeps before moving them: D1 measured high at +57% output tokens and the only wrong files (3 of 20). |
+| D1 / D2 routing | `served-mismatch`: any Haiku-requested spawn served another model (a refused alias target silently retries on the previous model). `refusals`: more than 1% of Haiku runs end in a refusal, over at least 50 (Haiku 5.5 has no fallback model). | Mismatch: confirm the session runs a binary that can dispatch `claude-haiku-5-5` and the account is entitled (re-gate it, as `next3` still owes). Refusals: return that slot class to Opus 5.5 (`roles.research_retrieval`, or the extraction slot's `model`). |
+| D2 extraction | `extraction-json`: invalid JSON on more than 5% of Haiku attempts, over at least 20 (the measured baseline with the "one valid JSON array" prompt is 0 of 36), or any downstream correction traced to a Haiku extraction. | Return the slot to Opus 5.5, the default; `haiku55_extraction` is only a cost tier. Until a consumer writes `~/.claude/autonomy/telemetry/extraction-validate.jsonl` (format in the research-subagents skill), this line reads n/a and the decision is unmonitored; the first consumer to route extraction to Haiku owes that log. |
+| D3 verifier, D4 synthesis | `judgment-on-haiku`: any Haiku run under a judgment or synthesis agentType (deep-research, frontier-derivation, the decomposition critic, Plan). Nothing routes there today, so the line should read 0. | Route it back to Opus 5.5. Widening either role to Haiku needs new evidence, not this report: a harder verifier test and a web-research A/B, both owed below. |
+| D5 helper calls | `helper-share`: the no-Haiku-worker figure above 5% of whole-session draw, over at least 100 sessions. | Pin `ANTHROPIC_SMALL_FAST_MODEL` in the settings `env` block (operator-owned, a c10 migration like 0060). Haiku 4.5, the only cheaper pin, retires no sooner than 2026-10-15; after that there is no cheaper helper to pin. |
+| D6 budget switch | `budget-flags`: `tengu_rippling_tulip` or `tengu_streamed_bumblebee` cached ON in any account's `.claude.json` while `CLAUDE_CODE_RIPPLING_TULIP=0` is absent (ALARM). The SessionStart hook `config-mirror-assert.sh` raises the same alarm in the affected account. Also: gate check16 FAIL on any binary move. | ALARM: run migration 0060 (below). check16 FAIL: the switch was renamed or removed; read the candidate binary for the new name, update 0060, and hold the binary move until check16 passes. |
+
 ## Still owed (in order)
 
 1. ~~**Operator:** run activation 50~~ — done 2026-10-08T01:55Z. Still owed: re-gate `next3` for
@@ -162,3 +195,11 @@ formal gate verdict for that account is still missing.
 3. ~~**Measure:** retrieval A/B by effort; quota draw per token; `effort` on every spawn site~~ —
    done (§ Measured after the flip).
 4. **Operator-owned settings edit:** `CLAUDE_CODE_RIPPLING_TULIP=0` in the settings `env` block.
+   Staged 2026-10-08 as c10 migration `migrations/0060-agent-budget-off.sh` (the converger files it
+   as an operator step and never runs it); run:
+   `bash ~/Development/claude-infrastructure/migrations/0060-agent-budget-off.sh --confirm settings.json`.
+5. **Measure, before widening D3:** a harder verifier test (claims with no line cite, claims that
+   span several files, a verifier that reads with tools).
+6. **Measure, before widening D4:** a web-research A/B, with a judge that is not Opus.
+7. **Instrument, before routing extraction to Haiku:** the first consumer validates each attempt and
+   appends it to `~/.claude/autonomy/telemetry/extraction-validate.jsonl`, so the D2 trigger can fire.
