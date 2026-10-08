@@ -1457,6 +1457,53 @@ tuning run held to 1-min load <= 40; (5) a warm-daemon latency check through the
   the live daemon via the live `~/.claude/scripts/research-kit/router.py classify` with
   `CC_RESEARCH_CLASSIFY_TRACE` set, at whatever load the machine has. Reported, not a selection bar: the
   configuration it measures is the diagnostic one.
+- **Order of record.** The rule is `0702f3920` on trunk (author date 2026-10-07T23:20:33-05:00; it was
+  `d7b192de4` before the land's rebase). The wave's first classifier call was the preflight at 23:20:38 CDT.
+  Preflight, all four arms: `sonnet-off` served `claude-sonnet-5-5` on 2.1.293; `h55-medium` and `h55-low` served
+  `claude-haiku-5-5` on 2.1.293; `h55-asbuilt` served `claude-haiku-5-5` on 2.1.291, so no arm was dropped.
+- **Step 1, the stall trace: landed and live** — `70f881599` (trunk `c3ed0a381..70f881599`, 7 paths
+  content-verified by the lander; converged with `CC_DEPLOY_MAX_LAG_COMMITS=0 bash scripts/deploy-live.sh`, the
+  live `router.py` byte-identical to trunk). With no label in hand 0.4 s before the limit (8.6 s by the router's
+  clock), `classify` appends a `stall` row to `CC_RESEARCH_CLASSIFY_TRACE`: each call's path (warm or cold), what
+  the resident classifier said, when the warm path ended and the cold call started, and whether it answered.
+  No flag, model or brief changed: the live `classifier_config()` still reads `983448663980`, pinned by a new
+  `research-router` case, and the daemon's `ping` answered `ready 4` with no restart. Red then green:
+  `research-router` `1..38`, 38 ok; `research-classifier-warm` `1..47`, 47 ok; on a `git archive` copy of the
+  commit before, both new trace cases fail and the configuration-id pin passes (it pins that nothing moved).
+  `research-router-heldout` `1..16` read 15 ok on the first run: the case that expects exactly 1 of 48 items to fall
+  back saw one more at load ~130, and it passed on the new tree and on the commit before when they were rerun
+  side by side at load 130. The land's smoke ran out of budget (partial), so the suite runs above are the
+  behavioral evidence.
+- **Step 2, the harness** (in the rule's commit): `e1h-tune.py --arm NAME,KIND,MODEL,EFFORT,CLAUDE_BIN` (no
+  `R.haiku_model()`), the served-model preflight, INVALID reasons, binary version per arm, the load gate, and a
+  refusal to write `tune.json`; `e1h-score.py` takes arm lists and `--rule e1j`, and with no arguments it still
+  reprints `result-e1i.txt` byte for byte.
+- **Step 5, warm latency through the live daemon with the trace on** (2026-10-08 00:05-00:21 CDT; 200 tuning
+  rows; per-call data `e1j-latency.json`, router trace `e1j-latency.trace.jsonl`, no prompt text in either). The
+  configuration measured is the live one (Haiku 5.5 careful call, as built). **Fallback 22/200 = 0.11, median
+  4.04 s, p90 9.00 s, max 9.02 s, at 1-min load 82-373, median 154**; FAIL against 0.03 and 7.5 s, but this bar
+  selects nothing here.
+
+  | 1-min load | rows | fallbacks | median | p90 |
+  |---|---|---|---|---|
+  | under 100 | 27 | 0 | 3.29 s | 7.13 s |
+  | 100-150 | 68 | 0 | 3.39 s | 7.45 s |
+  | 150-250 | 61 | 6 | 4.01 s | 8.95 s |
+  | 250 and over | 44 | 16 | 7.31 s | 9.01 s |
+
+  **The trace names the stall.** Every one of the 22 fallbacks left a stall row (none was missing, and none
+  failed early). All 22 have one shape: both calls on the warm path, each resident worker had taken the prompt
+  and had not answered by 8.6 s, and no cold call was made. A warm worker that accepts a prompt holds the call
+  until the limit (`warm_classify` waits the whole remaining time), so the cold fallback never gets a turn. Not
+  seen once: the daemon saying no worker was ready (the canary holding the pool), a cold call running slow, or a
+  logged-out answer. The fallbacks came in runs (4, 4, 2, 5, 2 and singles), every one at load 151 or more; 3
+  more stall rows were rescued by a label at 8.64-8.90 s. So the stall is resident workers of both kinds going
+  quiet together under heavy load. That is consistent with CPU starvation of the warm `claude` processes; an
+  upstream stall is not excluded, because the daemon logs no timestamps. Answering paths: resident fast call
+  130, resident careful call 48. In one row the careful call answered with an e-mail address copied out of the
+  prompt instead of a label. The router's trace records a non-label answer's first 60 characters, so the
+  committed trace replaces answer text with its length, redacted in place (the land's public-repo hygiene gate
+  caught it).
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.

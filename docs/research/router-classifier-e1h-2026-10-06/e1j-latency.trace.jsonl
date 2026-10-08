@@ -1,0 +1,203 @@
+{"label": "completeness", "load": 372.8, "t": 1791435914.04, "wall_s": 1.28, "why": "classifier (careful call, resident)"}
+{"at_s": 8.61, "careful": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "fast": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "load": 355.1, "row": "stall", "t": 1791435915.56}
+{"at_s": 8.6, "careful": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "fast": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "load": 348.9, "row": "stall", "t": 1791435924.51}
+{"at_s": 8.6, "careful": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "fast": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "load": 344.2, "row": "stall", "t": 1791435933.41}
+{"at_s": 8.6, "careful": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "fast": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "load": 345.4, "row": "stall", "t": 1791435942.58}
+{"label": "research-order", "load": 345.3, "t": 1791435951.67, "wall_s": 6.74, "why": "classifier (fast call, resident)"}
+{"label": "research-order", "load": 343.7, "t": 1791435958.48, "wall_s": 6.42, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 337.9, "t": 1791435964.97, "wall_s": 3.49, "why": "classifier (careful call, resident)"}
+{"label": "completeness", "load": 331.8, "t": 1791435968.55, "wall_s": 3.9, "why": "classifier (fast call, resident)"}
+{"at_s": 8.61, "careful": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "fast": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "load": 327.9, "row": "stall", "t": 1791435972.51}
+{"at_s": 8.61, "careful": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "fast": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "load": 329.8, "row": "stall", "t": 1791435981.52}
+{"at_s": 8.61, "careful": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "fast": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "load": 330.8, "row": "stall", "t": 1791435990.6}
+{"at_s": 8.6, "careful": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "fast": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "load": 328.1, "row": "stall", "t": 1791435999.55}
+{"label": "completeness", "load": 324.0, "t": 1791436008.55, "wall_s": 6.26, "why": "classifier (careful call, resident)"}
+{"at_s": 8.61, "careful": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "fast": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "load": 324.4, "row": "stall", "t": 1791436014.87}
+{"at_s": 8.61, "careful": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "fast": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "load": 316.5, "row": "stall", "t": 1791436023.89}
+{"label": "research-order", "load": 313.2, "t": 1791436032.88, "wall_s": 7.24, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 309.4, "t": 1791436040.2, "wall_s": 4.65, "why": "classifier (careful call, resident)"}
+{"label": "completeness", "load": 306.9, "t": 1791436044.91, "wall_s": 4.4, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 301.0, "t": 1791436049.38, "wall_s": 8.51, "why": "classifier (fast call, resident); the careful call: had not answered"}
+{"label": "research-order", "load": 294.8, "t": 1791436057.96, "wall_s": 8.51, "why": "classifier (fast call, resident); the careful call: had not answered"}
+{"label": "research-order", "load": 294.8, "t": 1791436066.54, "wall_s": 3.72, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 287.8, "t": 1791436070.32, "wall_s": 7.74, "why": "classifier (fast call, resident)"}
+{"at_s": 8.6, "careful": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "fast": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "load": 291.1, "row": "stall", "t": 1791436078.14}
+{"at_s": 8.6, "careful": {"answered": false, "cold_s": null, "path": "warm", "reason": "classifier answered <21 chars, redacted>, not one route label", "warm": "answer", "warm_s": 5.5}, "fast": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "load": 291.7, "row": "stall", "t": 1791436087.15}
+{"label": "work-order", "load": 291.7, "t": 1791436087.15, "wall_s": 8.9, "why": "classifier (fast call, resident); the careful call: classifier answered <21 chars, redacted>, not one route label"}
+{"label": "other", "load": 291.7, "t": 1791436096.12, "wall_s": 4.11, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 290.9, "t": 1791436100.3, "wall_s": 6.36, "why": "classifier (careful call, resident)"}
+{"label": "completeness", "load": 289.1, "t": 1791436106.74, "wall_s": 6.86, "why": "classifier (careful call, resident)"}
+{"label": "work-order", "load": 287.0, "t": 1791436113.66, "wall_s": 8.2, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 284.5, "t": 1791436121.94, "wall_s": 6.01, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 282.3, "t": 1791436128.02, "wall_s": 4.48, "why": "classifier (careful call, resident)"}
+{"label": "completeness", "load": 282.3, "t": 1791436132.57, "wall_s": 2.48, "why": "classifier (careful call, resident)"}
+{"label": "work-order", "load": 280.7, "t": 1791436135.12, "wall_s": 2.34, "why": "classifier (fast call, resident)"}
+{"label": "pushback", "load": 279.2, "t": 1791436137.52, "wall_s": 5.66, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 273.5, "t": 1791436143.26, "wall_s": 5.29, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 275.3, "t": 1791436148.62, "wall_s": 1.96, "why": "classifier (careful call, resident)"}
+{"label": "completeness", "load": 275.3, "t": 1791436150.64, "wall_s": 2.37, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 276.4, "t": 1791436153.07, "wall_s": 6.64, "why": "classifier (careful call, resident)"}
+{"label": "research-order", "load": 271.4, "t": 1791436159.78, "wall_s": 2.52, "why": "classifier (fast call, resident)"}
+{"at_s": 8.6, "careful": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "fast": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "load": 269.4, "row": "stall", "t": 1791436162.36}
+{"at_s": 8.6, "careful": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "fast": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "load": 268.0, "row": "stall", "t": 1791436171.37}
+{"at_s": 8.6, "careful": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "fast": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "load": 265.7, "row": "stall", "t": 1791436180.37}
+{"at_s": 8.6, "careful": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "fast": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "load": 263.4, "row": "stall", "t": 1791436189.38}
+{"at_s": 8.6, "careful": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "fast": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "load": 254.2, "row": "stall", "t": 1791436198.39}
+{"label": "work-order", "load": 244.4, "t": 1791436207.39, "wall_s": 8.51, "why": "classifier (careful call, resident); the fast call: had not answered"}
+{"label": "research-order", "load": 236.2, "t": 1791436215.99, "wall_s": 6.94, "why": "classifier (fast call, resident)"}
+{"at_s": 8.6, "careful": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "fast": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "load": 234.2, "row": "stall", "t": 1791436223.01}
+{"label": "completeness", "load": 234.2, "t": 1791436223.01, "wall_s": 8.87, "why": "classifier (careful call, resident)"}
+{"label": "research-order", "load": 221.4, "t": 1791436232.05, "wall_s": 8.51, "why": "classifier (fast call, resident); the careful call: had not answered"}
+{"at_s": 8.6, "careful": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "fast": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "load": 218.4, "row": "stall", "t": 1791436240.62}
+{"at_s": 8.6, "careful": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "fast": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "load": 214.7, "row": "stall", "t": 1791436249.65}
+{"label": "work-order", "load": 214.0, "t": 1791436258.65, "wall_s": 5.17, "why": "classifier (fast call, resident)"}
+{"label": "research-order", "load": 212.1, "t": 1791436263.88, "wall_s": 2.59, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 212.1, "t": 1791436266.54, "wall_s": 1.78, "why": "classifier (careful call, resident)"}
+{"label": "work-order", "load": 213.4, "t": 1791436268.39, "wall_s": 4.36, "why": "classifier (fast call, resident)"}
+{"label": "research-order", "load": 213.3, "t": 1791436272.82, "wall_s": 5.32, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 213.3, "t": 1791436278.22, "wall_s": 1.87, "why": "classifier (fast call, resident)"}
+{"label": "research-order", "load": 213.6, "t": 1791436280.17, "wall_s": 6.75, "why": "classifier (fast call, resident)"}
+{"at_s": 8.6, "careful": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "fast": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "load": 219.4, "row": "stall", "t": 1791436287.01}
+{"label": "work-order", "load": 219.4, "t": 1791436296.01, "wall_s": 2.72, "why": "classifier (fast call, resident)"}
+{"at_s": 8.6, "careful": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "fast": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "load": 226.6, "row": "stall", "t": 1791436298.8}
+{"label": "work-order", "load": 229.4, "t": 1791436307.81, "wall_s": 4.78, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 229.4, "t": 1791436312.65, "wall_s": 1.54, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 228.7, "t": 1791436314.26, "wall_s": 1.41, "why": "classifier (fast call, resident)"}
+{"label": "pushback", "load": 228.7, "t": 1791436315.74, "wall_s": 3.16, "why": "classifier (careful call, resident)"}
+{"label": "completeness", "load": 231.4, "t": 1791436318.96, "wall_s": 1.91, "why": "classifier (careful call, resident)"}
+{"label": "pushback", "load": 231.4, "t": 1791436320.93, "wall_s": 2.68, "why": "classifier (careful call, resident)"}
+{"label": "research-order", "load": 232.1, "t": 1791436323.67, "wall_s": 3.34, "why": "classifier (fast call, resident)"}
+{"label": "new-idea", "load": 232.1, "t": 1791436327.07, "wall_s": 1.97, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 235.5, "t": 1791436329.1, "wall_s": 3.51, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 236.7, "t": 1791436332.68, "wall_s": 4.76, "why": "classifier (fast call, resident)"}
+{"label": "research-order", "load": 239.6, "t": 1791436337.5, "wall_s": 5.21, "why": "classifier (fast call, resident)"}
+{"label": "other", "load": 240.3, "t": 1791436342.78, "wall_s": 3.69, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 240.3, "t": 1791436346.53, "wall_s": 3.54, "why": "classifier (careful call, resident)"}
+{"label": "completeness", "load": 241.6, "t": 1791436350.13, "wall_s": 8.4, "why": "classifier (careful call, resident)"}
+{"label": "completeness", "load": 241.4, "t": 1791436358.6, "wall_s": 7.78, "why": "classifier (fast call, resident)"}
+{"label": "research-order", "load": 238.1, "t": 1791436366.47, "wall_s": 4.75, "why": "classifier (fast call, resident)"}
+{"label": "research-order", "load": 233.6, "t": 1791436371.3, "wall_s": 5.97, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 227.7, "t": 1791436377.34, "wall_s": 4.08, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 227.7, "t": 1791436381.49, "wall_s": 1.78, "why": "classifier (careful call, resident)"}
+{"label": "completeness", "load": 223.2, "t": 1791436383.33, "wall_s": 3.04, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 223.2, "t": 1791436386.43, "wall_s": 1.6, "why": "classifier (careful call, resident)"}
+{"label": "research-order", "load": 221.1, "t": 1791436388.09, "wall_s": 5.02, "why": "classifier (fast call, resident)"}
+{"at_s": 8.6, "careful": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "fast": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "load": 202.6, "row": "stall", "t": 1791436393.22}
+{"at_s": 8.61, "careful": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "fast": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "load": 179.4, "row": "stall", "t": 1791436402.2}
+{"label": "work-order", "load": 179.4, "t": 1791436402.2, "wall_s": 8.64, "why": "classifier (fast call, resident); the careful call: had not answered"}
+{"label": "completeness", "load": 179.4, "t": 1791436410.93, "wall_s": 3.08, "why": "classifier (careful call, resident)"}
+{"label": "research-order", "load": 170.7, "t": 1791436414.1, "wall_s": 1.64, "why": "classifier (fast call, resident)"}
+{"label": "research-order", "load": 170.7, "t": 1791436415.81, "wall_s": 4.21, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 162.9, "t": 1791436420.1, "wall_s": 0.92, "why": "classifier (careful call, resident)"}
+{"label": "completeness", "load": 162.9, "t": 1791436421.08, "wall_s": 0.91, "why": "classifier (careful call, resident)"}
+{"label": "completeness", "load": 162.9, "t": 1791436422.05, "wall_s": 1.54, "why": "classifier (careful call, resident)"}
+{"label": "completeness", "load": 162.9, "t": 1791436423.66, "wall_s": 1.51, "why": "classifier (careful call, resident)"}
+{"label": "work-order", "load": 159.3, "t": 1791436425.23, "wall_s": 2.12, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 159.3, "t": 1791436427.4, "wall_s": 1.58, "why": "classifier (careful call, resident)"}
+{"label": "work-order", "load": 153.7, "t": 1791436429.06, "wall_s": 2.26, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 153.7, "t": 1791436431.38, "wall_s": 1.55, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 153.7, "t": 1791436433.03, "wall_s": 0.86, "why": "classifier (careful call, resident)"}
+{"label": "research-order", "load": 149.4, "t": 1791436433.96, "wall_s": 3.23, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 145.3, "t": 1791436437.25, "wall_s": 3.83, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 145.3, "t": 1791436441.16, "wall_s": 3.96, "why": "classifier (fast call, resident)"}
+{"label": "research-order", "load": 144.7, "t": 1791436445.19, "wall_s": 8.51, "why": "classifier (fast call, resident); the careful call: had not answered"}
+{"label": "research-order", "load": 147.5, "t": 1791436453.8, "wall_s": 5.89, "why": "classifier (fast call, resident)"}
+{"label": "research-order", "load": 146.2, "t": 1791436459.8, "wall_s": 6.83, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 143.0, "t": 1791436466.72, "wall_s": 8.5, "why": "classifier (fast call, resident); the careful call: had not answered"}
+{"label": "work-order", "load": 138.0, "t": 1791436475.37, "wall_s": 1.75, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 138.0, "t": 1791436477.2, "wall_s": 2.16, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 130.8, "t": 1791436479.43, "wall_s": 5.06, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 126.9, "t": 1791436484.57, "wall_s": 2.49, "why": "classifier (careful call, resident)"}
+{"label": "research-order", "load": 126.9, "t": 1791436487.16, "wall_s": 2.32, "why": "classifier (fast call, resident)"}
+{"label": "research-order", "load": 122.2, "t": 1791436489.56, "wall_s": 2.3, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 123.0, "t": 1791436491.92, "wall_s": 5.26, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 123.0, "t": 1791436497.29, "wall_s": 2.77, "why": "classifier (careful call, resident)"}
+{"label": "research-order", "load": 129.6, "t": 1791436500.15, "wall_s": 8.05, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 129.6, "t": 1791436508.27, "wall_s": 2.11, "why": "classifier (careful call, resident)"}
+{"label": "completeness", "load": 129.6, "t": 1791436510.44, "wall_s": 0.86, "why": "classifier (careful call, resident)"}
+{"label": "work-order", "load": 129.6, "t": 1791436511.37, "wall_s": 1.23, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 129.6, "t": 1791436512.67, "wall_s": 0.94, "why": "classifier (careful call, resident)"}
+{"label": "research-order", "load": 130.9, "t": 1791436513.67, "wall_s": 4.94, "why": "classifier (fast call, resident)"}
+{"label": "pushback", "load": 123.8, "t": 1791436518.69, "wall_s": 4.55, "why": "classifier (careful call, resident)"}
+{"label": "work-order", "load": 123.8, "t": 1791436523.31, "wall_s": 1.56, "why": "classifier (fast call, resident)"}
+{"label": "other", "load": 118.4, "t": 1791436524.92, "wall_s": 2.03, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 118.4, "t": 1791436527.02, "wall_s": 1.55, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 118.4, "t": 1791436528.64, "wall_s": 1.77, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 114.2, "t": 1791436530.47, "wall_s": 1.32, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 114.2, "t": 1791436531.85, "wall_s": 1.64, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 114.2, "t": 1791436533.55, "wall_s": 1.0, "why": "classifier (careful call, resident)"}
+{"label": "work-order", "load": 112.1, "t": 1791436534.61, "wall_s": 3.11, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 112.1, "t": 1791436537.79, "wall_s": 1.61, "why": "classifier (fast call, resident)"}
+{"label": "research-order", "load": 107.8, "t": 1791436539.48, "wall_s": 3.14, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 104.4, "t": 1791436542.7, "wall_s": 4.08, "why": "classifier (fast call, resident)"}
+{"label": "pushback", "load": 104.4, "t": 1791436546.97, "wall_s": 2.13, "why": "classifier (careful call, resident)"}
+{"label": "work-order", "load": 100.2, "t": 1791436549.23, "wall_s": 4.99, "why": "classifier (fast call, resident)"}
+{"label": "other", "load": 100.1, "t": 1791436554.42, "wall_s": 1.31, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 100.1, "t": 1791436555.81, "wall_s": 1.32, "why": "classifier (careful call, resident)"}
+{"label": "completeness", "load": 97.0, "t": 1791436557.25, "wall_s": 6.83, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 97.0, "t": 1791436564.37, "wall_s": 0.95, "why": "classifier (careful call, resident)"}
+{"label": "work-order", "load": 89.6, "t": 1791436565.38, "wall_s": 5.31, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 89.6, "t": 1791436570.93, "wall_s": 2.43, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 89.6, "t": 1791436573.44, "wall_s": 1.16, "why": "classifier (fast call, resident)"}
+{"label": "research-order", "load": 87.5, "t": 1791436574.68, "wall_s": 4.57, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 87.5, "t": 1791436579.32, "wall_s": 0.78, "why": "classifier (careful call, resident)"}
+{"label": "research-order", "load": 84.2, "t": 1791436580.17, "wall_s": 3.14, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 84.2, "t": 1791436583.42, "wall_s": 1.29, "why": "classifier (careful call, resident)"}
+{"label": "research-order", "load": 82.4, "t": 1791436584.78, "wall_s": 2.05, "why": "classifier (fast call, resident)"}
+{"label": "research-order", "load": 82.4, "t": 1791436586.91, "wall_s": 3.06, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 82.0, "t": 1791436590.09, "wall_s": 3.03, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 84.0, "t": 1791436593.23, "wall_s": 6.22, "why": "classifier (careful call, resident)"}
+{"label": "completeness", "load": 83.5, "t": 1791436599.59, "wall_s": 1.89, "why": "classifier (careful call, resident)"}
+{"label": "completeness", "load": 83.5, "t": 1791436601.55, "wall_s": 2.27, "why": "classifier (careful call, resident)"}
+{"label": "research-order", "load": 84.2, "t": 1791436603.88, "wall_s": 6.51, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 90.5, "t": 1791436610.45, "wall_s": 3.54, "why": "classifier (careful call, resident)"}
+{"label": "other", "load": 90.8, "t": 1791436614.05, "wall_s": 2.58, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 93.1, "t": 1791436616.7, "wall_s": 7.26, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 93.2, "t": 1791436624.01, "wall_s": 3.23, "why": "classifier (fast call, resident)"}
+{"label": "new-idea", "load": 94.3, "t": 1791436627.31, "wall_s": 6.52, "why": "classifier (fast call, resident)"}
+{"label": "new-idea", "load": 96.3, "t": 1791436633.9, "wall_s": 8.51, "why": "classifier (fast call, resident); the careful call: had not answered"}
+{"label": "completeness", "load": 96.1, "t": 1791436642.47, "wall_s": 4.48, "why": "classifier (careful call, resident)"}
+{"label": "other", "load": 97.5, "t": 1791436647.02, "wall_s": 7.06, "why": "classifier (fast call, resident)"}
+{"label": "other", "load": 96.9, "t": 1791436654.14, "wall_s": 2.52, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 96.9, "t": 1791436656.73, "wall_s": 3.57, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 99.8, "t": 1791436660.35, "wall_s": 5.01, "why": "classifier (fast call, resident)"}
+{"label": "other", "load": 100.3, "t": 1791436665.43, "wall_s": 3.8, "why": "classifier (fast call, resident)"}
+{"label": "other", "load": 102.8, "t": 1791436669.29, "wall_s": 2.92, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 102.8, "t": 1791436672.28, "wall_s": 2.27, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 108.1, "t": 1791436674.61, "wall_s": 2.43, "why": "classifier (fast call, resident)"}
+{"label": "other", "load": 108.1, "t": 1791436677.09, "wall_s": 3.1, "why": "classifier (fast call, resident)"}
+{"label": "other", "load": 112.6, "t": 1791436680.25, "wall_s": 1.91, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 112.6, "t": 1791436682.22, "wall_s": 2.86, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 116.1, "t": 1791436685.14, "wall_s": 2.67, "why": "classifier (fast call, resident)"}
+{"label": "new-idea", "load": 121.1, "t": 1791436687.86, "wall_s": 3.44, "why": "classifier (fast call, resident)"}
+{"label": "other", "load": 121.1, "t": 1791436691.36, "wall_s": 3.22, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 125.1, "t": 1791436694.63, "wall_s": 2.21, "why": "classifier (careful call, resident)"}
+{"label": "other", "load": 126.5, "t": 1791436696.91, "wall_s": 5.18, "why": "classifier (fast call, resident)"}
+{"label": "other", "load": 129.3, "t": 1791436702.15, "wall_s": 3.63, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 129.3, "t": 1791436705.83, "wall_s": 2.69, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 129.6, "t": 1791436708.59, "wall_s": 5.77, "why": "classifier (fast call, resident)"}
+{"label": "other", "load": 132.7, "t": 1791436714.55, "wall_s": 3.51, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 137.5, "t": 1791436718.11, "wall_s": 4.26, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 137.5, "t": 1791436722.44, "wall_s": 8.38, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 137.5, "t": 1791436730.88, "wall_s": 3.6, "why": "classifier (careful call, resident)"}
+{"label": "other", "load": 137.4, "t": 1791436734.55, "wall_s": 8.5, "why": "classifier (careful call, resident); the fast call: had not answered"}
+{"label": "completeness", "load": 139.4, "t": 1791436743.13, "wall_s": 5.32, "why": "classifier (careful call, resident)"}
+{"label": "new-idea", "load": 142.4, "t": 1791436748.52, "wall_s": 3.92, "why": "classifier (fast call, resident)"}
+{"label": "other", "load": 145.6, "t": 1791436752.49, "wall_s": 6.81, "why": "classifier (fast call, resident)"}
+{"label": "other", "load": 143.2, "t": 1791436759.36, "wall_s": 4.0, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 141.9, "t": 1791436763.42, "wall_s": 4.88, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 139.6, "t": 1791436768.37, "wall_s": 7.84, "why": "classifier (fast call, resident)"}
+{"label": "other", "load": 151.1, "t": 1791436776.27, "wall_s": 8.51, "why": "classifier (fast call, resident); the careful call: had not answered"}
+{"label": "work-order", "load": 157.8, "t": 1791436784.84, "wall_s": 7.61, "why": "classifier (fast call, resident)"}
+{"label": "pushback", "load": 152.2, "t": 1791436792.54, "wall_s": 8.36, "why": "classifier (fast call, resident)"}
+{"at_s": 8.61, "careful": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "fast": {"answered": false, "cold_s": null, "path": "warm", "reason": "had not answered", "warm": "waiting on the resident classifier", "warm_s": null}, "load": 151.2, "row": "stall", "t": 1791436800.97}
+{"label": "work-order", "load": 144.4, "t": 1791436809.97, "wall_s": 7.39, "why": "classifier (fast call, resident)"}
+{"label": "other", "load": 145.5, "t": 1791436817.41, "wall_s": 3.34, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 145.5, "t": 1791436820.8, "wall_s": 3.39, "why": "classifier (fast call, resident)"}
+{"label": "other", "load": 147.1, "t": 1791436824.25, "wall_s": 5.14, "why": "classifier (fast call, resident)"}
+{"label": "other", "load": 149.5, "t": 1791436829.45, "wall_s": 3.81, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 152.3, "t": 1791436833.32, "wall_s": 3.81, "why": "classifier (fast call, resident)"}
+{"label": "completeness", "load": 154.0, "t": 1791436837.2, "wall_s": 7.12, "why": "classifier (fast call, resident)"}
+{"label": "other", "load": 155.2, "t": 1791436844.38, "wall_s": 3.95, "why": "classifier (fast call, resident)"}
+{"label": "research-order", "load": 156.1, "t": 1791436848.39, "wall_s": 5.29, "why": "classifier (fast call, resident)"}
+{"label": "work-order", "load": 158.7, "t": 1791436853.74, "wall_s": 2.47, "why": "classifier (fast call, resident)"}
