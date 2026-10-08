@@ -1771,6 +1771,33 @@ rows and the load bound in `evaluate` (wave E1l), the hedge's real-load run 2 (w
   - Data: tuning only. `tuning-v2.jsonl` is never read; no sealed set is opened, evaluated, drawn or sealed. No
     fresh subtle re-asks are drawn as extra tuning rows (ruling 915d7fb98b7f allowed it at a price of about a day of
     v5 per ~14 candidates; this wave takes none, so v5 is not delayed).
+- **Order of record.** RULE E1m is `a6eedb897` (author date 2026-10-08T14:26:19-05:00). The wave's first
+  classifier call was the two runs' preflight, launched 14:26:29 CDT (each served `claude-haiku-5-5` on 2.1.293).
+- **(c) The A/B** (2026-10-08 14:28-15:09 CDT; 403 row-calls through each union; `e1m-ab.json`,
+  `e1m-ab-{a,b}.trace.jsonl` (answer text redacted to its length), `e1m-ab.report.txt`). Both daemons answered
+  `ping` with `ready 4` before the first row; starting them on their own sockets was not refused. Each ran from a
+  copy of this wave's router with the pin filled in: A configuration `470d416f7379`, B `9eee80bae774` (B's careful
+  brief byte-identical to `e1m-careful-brief.txt`; the ids predate the id carrying the pinned path as written, a
+  change to the id's text only). Load was high and matched: 1-min load at the row's start 40-280.
+
+  | union | 1-min load | calls | fallbacks | re-ask calls | wrong in-time label on a re-ask | median | p90 | held, careful silent | held, fast silent |
+  |---|---|---|---|---|---|---|---|---|---|
+  | A, Haiku 4.5 | all | 403 | 2 (0.005) | 163 | 3 | 3.91 s | 8.59 s | 71 | 3 |
+  | A | 40-100 | 27 | 0 | 27 | 0 | 1.46 s | 1.74 s | 0 | 0 |
+  | A | 100-150 | 97 | 0 | 48 | 0 | 1.97 s | 8.28 s | 11 | 2 |
+  | A | 150-250 | 234 | 2 | 88 | 3 | 4.30 s | 8.63 s | 47 | 1 |
+  | A | 250 and over | 45 | 0 | 0 | 0 | 5.47 s | 8.74 s | 13 | 0 |
+  | B, Haiku 5.5 re-tuned | all | 403 | 1 (0.002) | 163 | 2 | 1.44 s | 2.49 s | 2 | 2 |
+  | B | 40-100 | 28 | 0 | 28 | 0 | 1.03 s | 1.42 s | 0 | 0 |
+  | B | 100-150 | 97 | 0 | 47 | 0 | 1.36 s | 1.92 s | 0 | 0 |
+  | B | 150-250 | 229 | 1 | 88 | 2 | 1.47 s | 2.69 s | 0 | 2 |
+  | B | 250 and over | 49 | 0 | 0 | 0 | 1.58 s | 7.27 s | 2 | 0 |
+
+  Read: fallbacks are rare in both (the hedge works for either model); the difference is the hold. A held 71 of
+  403 rows to the 8.5 s hand-back with the careful call silent (each one a re-ask the careful call could not
+  catch in time), B held 2. A's wrong in-time labels on re-asks all came at load 150-250. All 3 fallbacks were
+  `other` rows at load 182-232. Under RULE E1m (d) this table does not move the pick; it is the real-load
+  companion the gate's load-bounded read lacks.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
