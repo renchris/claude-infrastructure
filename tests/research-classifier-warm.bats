@@ -279,6 +279,21 @@ launchd_run() {
   [ "$(sed 1,2d "$BATS_TEST_TMPDIR/dirs" | sort -u)" = "$HOME/.claude-b" ]
 }
 
+@test "E1k runner, as launchd starts it under /bin/bash 3.2: every classifier process gets CLAUDE_CODE_CERT_STORE=bundled" {
+  # The workers run --setting-sources local, so the user settings' env block (settings.json:13, which
+  # every interactive session has) never reaches them; under the default store a `claude` start can
+  # block on a starved keychain query. RED-proof: before wave E1k the variable is absent here.
+  accounts "a 0.9"
+  touch "$HOME/.claude-a/login"
+  launchd_run CC_RESEARCH_WARM_CHILD="echo \"\${CLAUDE_CODE_CERT_STORE:-unset}\" >> '$BATS_TEST_TMPDIR/certs'; $(by_login)" 2>"$BATS_TEST_TMPDIR/serve.err" &
+  DPID=$!
+  for i in $(seq 1 100); do /usr/bin/python3 "$WARM" ping >/dev/null 2>&1 && break; sleep 0.1; done
+  run /usr/bin/python3 "$WARM" ping
+  [ "$status" -eq 0 ]
+  [ -s "$BATS_TEST_TMPDIR/certs" ]
+  [ "$(sort -u "$BATS_TEST_TMPDIR/certs")" = bundled ]
+}
+
 # ── router.py ───────────────────────────────────────────────────────────────────────────────────
 
 # The cold classifier stub logs that it ran and answers work-order, so a warm label is told apart.

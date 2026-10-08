@@ -30,6 +30,11 @@ export PATH="$HOME/.claude/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin
 [ -n "${USER:-}" ] || USER="$(/usr/bin/id -un)"
 [ -n "${LOGNAME:-}" ] || LOGNAME="$USER"
 export USER LOGNAME
+# The certificate store every interactive session uses (settings.json env): the workers run
+# --setting-sources local, so that env block never reaches them, and under the default store a
+# `claude` start can block on a starved keychain query (wave E1k; a second live explanation for E1j's
+# stalled workers). Takes effect at the daemon's next start.
+export CLAUDE_CODE_CERT_STORE=bundled
 
 if [ "$#" -ne 0 ]; then
   echo "classifier-warm: takes no arguments" >&2
