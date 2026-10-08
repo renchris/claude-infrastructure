@@ -28,6 +28,14 @@ E1j section before any tuning call) is `--rule e1j`:
   e1h-score.py TUNE.json --rule e1j --fast F --primary P --secondary S [--diagnostic D]
       union(F, each careful arm) against E1j's bars; prints the selection, or that no Haiku 5.5 arm
       passed (then the selection is E1i's measured Haiku 4.5 union, from tune.json, to be pinned)
+
+Wave E1m (2026-10-08): RULE E1m (ruling 8633d354bd41, committed to the plan's E1m section before any
+tuning call) over two independent runs of union(F, C):
+
+  e1h-score.py RUN1.json --rule e1m --run2 RUN2.json --fast F --primary C
+      Haiku 4.5's tuning numbers matched on both runs (regex-missed >= 41/42 and pooled recall >= 162/163
+      on each run, or 82/84 and 324/326 over the two runs pooled), and no regression on each run (relay
+      decision on `other` >= 229/240, wrong relays <= 36/504, borderline >= 69/138); prints the pick.
 """
 
 import argparse
@@ -57,6 +65,12 @@ E1J_BARS = {
     "borderline": (69, 138),
 }
 E1J_MAX_FALLBACK, E1J_MAX_P90_S = 0.03, 7.5
+# Wave E1m's bars (RULE E1m): Haiku 4.5's union numbers in tune.json, matched per run or pooled over two
+# runs, and the no-regression bars per run; `false_relay` is a ceiling, the rest are floors
+E1M_MATCH = {"regex_missed": (41, 42), "recall": (162, 163)}
+E1M_MATCH_POOLED = {"regex_missed": (82, 84), "recall": (324, 326)}
+E1M_FLOORS = {"other_decision": (229, 240), "borderline": (69, 138)}
+E1M_CEILINGS = {"false_relay": (36, 504)}
 
 
 def item_id(prompt: str) -> str:
@@ -323,10 +337,65 @@ def rule_e1j(rows: dict, calls: dict, a: argparse.Namespace) -> int:
     return 0
 
 
+def held(m: dict, name: str, bar: tuple, ceiling: bool = False) -> tuple:
+    """(passed, "got/n") for a count bar over the bar's own denominator (another denominator is held
+    to the same fraction)."""
+    num, den = bar
+    got, n = (int(x) for x in m[name + "_n"].split("/"))
+    ok = n > 0 and (got * den <= num * n if ceiling else got * den >= num * n)
+    return ok, f"{got}/{n}"
+
+
+def rule_e1m(rows: dict, a: argparse.Namespace) -> int:
+    runs = []
+    for path in (a.tune, a.run2):
+        calls = json.load(open(path))["calls"]
+        m = score(rows, calls, "union", a.fast, a.primary)
+        bars = {b: held(m, b, v) for b, v in E1M_MATCH.items()}
+        bars |= {b: held(m, b, v) for b, v in E1M_FLOORS.items()}
+        bars |= {b: held(m, b, v, ceiling=True) for b, v in E1M_CEILINGS.items()}
+        runs.append((path, m, bars))
+        print(
+            f"{Path(path).name}: {m['config']} "
+            + " ".join(f"{b}={r}{'' if ok else ' FAIL'}" for b, (ok, r) in bars.items())
+            + f" fallback={m['fallback']} decide_median={m['decide_median_s']} s"
+            f" decide_p90={m['decide_p90_s']} s"
+        )
+    pooled = {}
+    for b, (num, den) in E1M_MATCH_POOLED.items():
+        got = sum(int(m[b + "_n"].split("/")[0]) for _, m, _ in runs)
+        n = sum(int(m[b + "_n"].split("/")[1]) for _, m, _ in runs)
+        pooled[b] = (n > 0 and got * den >= num * n, f"{got}/{n}")
+    print(
+        "pooled over the two runs: "
+        + " ".join(f"{b}={r}{'' if ok else ' FAIL'}" for b, (ok, r) in pooled.items())
+    )
+    each = all(bars[b][0] for _, _, bars in runs for b in E1M_MATCH)
+    match = each or all(ok for ok, _ in pooled.values())
+    noreg = all(
+        bars[b][0] for _, _, bars in runs for b in (*E1M_FLOORS, *E1M_CEILINGS)
+    )
+    print(
+        f"match Haiku 4.5: {'pass' if match else 'FAIL'} ({'each run' if each else 'pooled' if match else 'neither each run nor pooled'}); "
+        f"no regression on each run: {'pass' if noreg else 'FAIL'}"
+    )
+    if match and noreg:
+        print(
+            f"PICK: union({a.fast}, {a.primary}) — Haiku 5.5, re-tuned, passes every bar of RULE E1m"
+        )
+    else:
+        print(
+            "PICK: the Haiku 4.5 union — a bar of RULE E1m failed, so the rule locks in union(Sonnet "
+            "fast call, Haiku 4.5 careful call)"
+        )
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(prog="e1h-score.py")
     ap.add_argument("tune", help="counts, or a tuning run's JSON")
-    ap.add_argument("--rule", choices=("e1h", "e1j"), default="e1h")
+    ap.add_argument("--rule", choices=("e1h", "e1j", "e1m"), default="e1h")
+    ap.add_argument("--run2")
     ap.add_argument("--fast", default=",".join(FAST_ARMS))
     ap.add_argument("--careful", default=",".join(CARE_ARMS))
     ap.add_argument("--primary")
@@ -337,6 +406,10 @@ def main() -> int:
     if a.tune == "counts":
         print(json.dumps(counts(rows), sort_keys=True, indent=1))
         return 0
+    if a.rule == "e1m":
+        if not (a.primary and a.run2) or "," in a.fast:
+            ap.error("--rule e1m needs --run2, one --fast arm and --primary")
+        return rule_e1m(rows, a)
     data = json.load(open(a.tune))
     calls = data["calls"]
     done = sum(1 for k in rows if k in calls)

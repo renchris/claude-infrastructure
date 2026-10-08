@@ -41,3 +41,11 @@ selection is the measured Haiku 4.5 union in `tune.json`, to be pinned.
 - `e1k-ab-run<N>.json` (per call: arm, stratum, label, wall, load; no prompt text), `e1k-ab-run<N>.trace.jsonl`
   (the router's trace, answer text redacted to its length), `e1k-ab-run<N>.sidecar.jsonl` (worker samples; no
   command lines) and `e1k-ab-run<N>.report.txt` (the report's output).
+
+## Wave E1m — Haiku 5.5 re-tuned under RULE E1m, the two unions A/B'd (RULE E1m in docs/plans/RESEARCH_PROGRAM_BUILD.md)
+
+- `e1m-careful-brief.txt`: the careful brief under test (the as-built brief plus one general paragraph on how
+  completeness is asked). `e1h-tune.py --arm …,BRIEF_FILE` runs an arm on it and records its sha256.
+- `e1h-score.py RUN1 --rule e1m --run2 RUN2 --fast sonnet-off --primary h55-e1m` prints RULE E1m's bars and the pick.
+- `e1m-ab.py run|report` is the matched-load A/B of the two unions through two warm daemons on their own sockets;
+  `e1m-ab.py guard2` is guard 2's load-bounded warm replay of the 42 counted regex-missed calls.

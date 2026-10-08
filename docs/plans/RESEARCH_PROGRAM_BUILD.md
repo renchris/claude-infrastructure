@@ -24,7 +24,7 @@ packet `83adb541ea19` actioned. Method version 1.1 is frozen; it changes only fr
 | B2 | S | Item 8: `research-program` skill, `/research-program` command, intake script, briefs, rubric | A2 |
 | C | S | Wave 2: items 9–13, 15, in parallel with the pilot | B1, B2 |
 | D | S (fired `fire-rp-audit-bugfix`), T inside | Audit fixes: `docs/research/upfront-method-audit-2026-10-04/REPORT.md` §3 rows 4–6 | C |
-| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E1d S (fired `fire-rp-v12-e1d`); E1e S (fired `fire-rp-v12-e1e`); E1g S (fired `fire-rp-v12-e1g`); E1h S (fired `fire-rp-v12-e1h`, T inside for track A); E1i S (fired `fire-rp-v12-e1i`, L inside); E1j S (fired `fire-rp-v12-e1j`, L inside: one small code change, a harness edit and two ordered measurements around a pre-committed rule, nothing to fan out); E1k S (fired `fire-rp-v12-e1k`, L inside: one change in one function, one job-script line, docs, and a measurement run behind a pre-committed bar, nothing to fan out); E2 Workflow in session d8964eb2; E3 S (E3a fired `fire-rp-v12-e3a`, E3b fired `fire-rp-v12-e3b` with T inside: six teammates; E3c fired `fire-rp-v12-e3c`, L inside; E3d fired `fire-rp-v12-e3d`, L inside); E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
+| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E1d S (fired `fire-rp-v12-e1d`); E1e S (fired `fire-rp-v12-e1e`); E1g S (fired `fire-rp-v12-e1g`); E1h S (fired `fire-rp-v12-e1h`, T inside for track A); E1i S (fired `fire-rp-v12-e1i`, L inside); E1j S (fired `fire-rp-v12-e1j`, L inside: one small code change, a harness edit and two ordered measurements around a pre-committed rule, nothing to fan out); E1k S (fired `fire-rp-v12-e1k`, L inside: one change in one function, one job-script line, docs, and a measurement run behind a pre-committed bar, nothing to fan out); E1m S (fired `fire-rp-v12-e1m`, L inside: a brief paragraph, harness and scorer edits behind a pre-committed rule, two load-gated tuning runs and an A/B that run as background processes, then one pin in router.py; nothing to fan out); E2 Workflow in session d8964eb2; E3 S (E3a fired `fire-rp-v12-e3a`, E3b fired `fire-rp-v12-e3b` with T inside: six teammates; E3c fired `fire-rp-v12-e3c`, L inside; E3d fired `fire-rp-v12-e3d`, L inside); E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
 
 A1, A2 and A3 touch disjoint files and fire concurrently. B1 and B2 fire when A2 lands. Each dispatched session leads
 its own Agent Team where it has 2+ code-writing tasks.
@@ -1689,6 +1689,88 @@ landed and converged. Locus S (fired `fire-rp-v12-e1k`), lead-inline.
   starting 4, starved mid-call 3 (runnable in every sample, at PRI 20), unattributed 9 (the worker the rule names
   left no sample during the call, so it was likely not the one holding the prompt: the canary and other sessions'
   routers take workers too). Run 2 is armed to start when the 1-min load next reaches 150.
+
+#### E1m — re-tune Haiku 5.5 as the careful call under a pre-registered rule, A/B the two unions, pin the pick — IN PROGRESS
+Scope (frozen): wave E1m — ruling 8633d354bd41 as ruled: (a) a GENERAL brief rule for subtle re-asks for the
+Haiku 5.5 careful call, written without quoting or paraphrasing any tuning prompt and without its author reading
+the 3 prompts the union misses; binary and effort pinned explicitly; (b) the bars, pre-registered verbatim here
+before any call; (c) before either model is locked in, a matched-load interleaved A/B of the two unions on tuning
+rows only, two warm daemons on separate sockets; (d) the pick under ruling 17aff7158fa6's outcome (the gate's read
+is load-bounded): the recall bars decide, about 4 s more wait per prompt a stated tiebreak toward Haiku 5.5. Not
+the three-call union. Then pin the pick in router.py (model id, effort, binary path, and the binary's version inside
+the classifier configuration id), red-then-green, land, converge, file the daemon restart once; after the
+operator's restart, guard 2 of a7fd5e2ee7c8 (a warm-path replay of the 42 counted regex-missed tuning calls under a
+1-min load bound of 40). Locus S (fired `fire-rp-v12-e1m`), lead-inline. Not in this wave: `heldout.py`, the gate
+rows and the load bound in `evaluate` (wave E1l), the hedge's real-load run 2 (wave E1k).
+- **Why.** The operator ruled 2026-10-08 ("all recommendations";
+  `docs/research/reask-row15-rulings-final-2026-10-08/REPORT.md`): re-tune Haiku 5.5 first under a rule that luck
+  or overfitting cannot pass, lock in the Haiku 4.5 union if any bar fails. E1j's untuned Haiku 5.5 read 159/163
+  pooled and 38/42 regex-missed against the Haiku 4.5 union's 162/163 and 41/42; Haiku 5.5's union decides in
+  about 2.4 s at the median against 5.95 s.
+- **RULE E1m** (committed here before any classifier call of this wave; this commit's author date is the proof of
+  order).
+  - **(a) The brief.** The careful call's brief is the router's as-built careful brief with one paragraph added
+    after the route definitions, `docs/research/router-classifier-e1h-2026-10-06/e1m-careful-brief.txt` (sha256
+    `a2866071b09017f2…`), verbatim:
+
+    > How completeness is asked: an operator seldom asks it in those words, and often asks it again soon after the
+    > agent has said the work is done. A prompt whose point is whether anything is still missing, left over,
+    > unfinished, unchecked or not yet live, or whether the work can now be closed, relied on or handed over as
+    > finished, asks about completeness, whatever its form: a direct question, a hint, a list of things to check,
+    > or a request to confirm. It stays completeness when it also suggests a next step or names an idea. A prompt
+    > that only orders a specific piece of work, without asking about the state of the work, is not completeness.
+
+    It was written from the route definitions and the ruling alone. Its author (this session) has read no tuning,
+    sealed or candidate prompt text, the three the union misses included; the harness and scorer print none.
+    Pinned explicitly: `--model claude-haiku-5-5 --effort medium`, binary
+    `~/.claude-293/node_modules/.bin/claude` (2.1.293, which registers the model; 2.1.291 warns
+    `unrecognized_model`). Thinking stays on, as the careful call's command line has it. Effort is not the lever
+    (E1j: medium, low and as built miss the same prompts); medium is E1j's primary.
+  - **(b) The runs and the bars.** Two independent runs, each a separate `e1h-tune.py` invocation into its own file,
+    started together, each on the full 982-row tuning base of wave E1h (1,078 rows-times-calls), each row's two calls
+    started at the same instant, every call to completion (30 s cap), each row started only while the 1-min load is
+    <= 40:
+    `e1h-tune.py <out> --arm sonnet-off,fast,claude-sonnet-5-5,-,/opt/homebrew/bin/claude --arm
+    h55-e1m,careful,claude-haiku-5-5,medium,$HOME/.claude-293/node_modules/.bin/claude,<e1m-careful-brief.txt>`.
+    The fast partner is the live fast call as it runs today (PATH binary, no `--effort`); each run makes its own
+    fast calls, so the two unions are independent draws. Outputs: `e1m-tune-run1.json`, `e1m-tune-run2.json` (raw
+    files outside the repo, mode 600; committed copies with INVALID answer text replaced by its category, as E1j).
+    Scored by `e1h-score.py e1m-tune-run1.json --rule e1m --run2 e1m-tune-run2.json --fast sonnet-off --primary
+    h55-e1m`: union(`sonnet-off`, `h55-e1m`) under the E1g join, the careful label counted only inside the 8.5 s
+    hold and every call inside the 9 s limit. Haiku 5.5 must:
+    - **match Haiku 4.5** (the union(`sonnet-off`, `haiku-on`) figures in `tune.json`): regex-missed recall >= 41/42
+      AND pooled recall >= 162/163 on EACH run; or, pooled over the two runs, regex-missed >= 82/84 AND pooled recall
+      >= 324/326;
+    - **not regress, on EACH run**: relay decision on `other` (E1i's row-15 rule) >= 229/240; wrong relays (a relay
+      label where both raters agree on a non-relay one) <= 36/504; borderline relay rate >= 69/138.
+    If every bar passes, Haiku 5.5 re-tuned is eligible. **If any bar fails, the rule locks in the Haiku 4.5
+    union** (Sonnet fast call plus Haiku 4.5 careful call). Replaying `tune.json`'s Haiku 4.5 union through this
+    scorer reads exactly at every bar (41/42, 162/163, 229/240, 36/504, 104/138), which is the check that the bars
+    are its numbers.
+  - **(c) The A/B, before either model is locked in.** Two in-session warm daemons, each `classifier-warm.py serve`
+    from its own snapshot of this wave's router code with the careful call pinned, on its own socket, its own
+    `CC_RESEARCH_HOME` (so the live daemon's stamp and socket are untouched) and its own router trace:
+    A = the Haiku 4.5 union (careful `claude-haiku-4-5`, no `--effort`, the as-built brief, as E1h measured it), B =
+    the Haiku 5.5 union (careful as in (a)); both on the binary in (a) for the careful call, the fast call as live.
+    `e1m-ab.py run` takes the 403 tuning row-calls of the bars (the 163 counted re-ask calls and the 240 agreed
+    `other` rows), sends each through both routers back to back under `heldout.py`'s 9 s limit, A first on even
+    rows and B first on odd, at whatever load the machine has. Reported per arm (`e1m-ab.py report`), overall and
+    by 1-min load band: fallback rate, wrong in-time labels on re-ask rows, median and p90 decision time, and rows
+    held with the careful (or fast) call silent. Tuning data only.
+  - **(d) The pick.** Ruling 17aff7158fa6 put a load bound in the gate's read, so **the recall bars in (b) decide**:
+    Haiku 5.5 re-tuned if it passes every bar of (b), else the Haiku 4.5 union. The A/B is recorded beside the pick
+    and does not move it, with one exception, the stated tiebreak: about 4 s less wait per prompt favors Haiku 5.5
+    when (b) cannot tell them apart. The three-call union is not built.
+  - **(e) Guard 2 of a7fd5e2ee7c8** (after the pin is converged and the operator has restarted the daemon onto it):
+    the 42 counted regex-missed tuning calls (v1 rows twice), through the live `router.py classify` and the live
+    daemon with `CC_RESEARCH_CLASSIFY_TRACE` set, each call started only while the 1-min load is <= 40, under the
+    9 s limit (`e1m-ab.py guard2`). A call counts as caught only if it returned a relay label in time AND the
+    router did not hold it with the careful call silent; a held row with the careful call silent counts as a miss
+    whatever label came back. Reported as caught/42 against row 15's 0.95 floor (>= 40/42), beside the tuning
+    figure.
+  - Data: tuning only. `tuning-v2.jsonl` is never read; no sealed set is opened, evaluated, drawn or sealed. No
+    fresh subtle re-asks are drawn as extra tuning rows (ruling 915d7fb98b7f allowed it at a price of about a day of
+    v5 per ~14 candidates; this wave takes none, so v5 is not delayed).
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.

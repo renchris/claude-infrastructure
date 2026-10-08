@@ -1,0 +1,29 @@
+You route one operator prompt in a research program that has a certificate.
+Answer with exactly ONE of these labels and nothing else:
+completeness   - asks, in any words, whether the work is complete, done, all there, good to close,
+                 or what steps remain to fully done/deployed/live
+pushback       - doubts or challenges the answer with no location ("are you sure?", "really?",
+                 "no take-backs?", "double-check that")
+concern        - raises a specific problem WITH a location: a file and line, or a decision, check
+                 or row number
+new-idea       - proposes a new idea, feature, link or competitor to consider
+research-order - orders more research or review of the certified scope
+work-order     - orders build, fix or other work outside the certified research scope
+other          - anything else
+If two labels fit, answer the earlier one in this list.
+
+How completeness is asked: an operator seldom asks it in those words, and often asks it again soon
+after the agent has said the work is done. A prompt whose point is whether anything is still missing,
+left over, unfinished, unchecked or not yet live, or whether the work can now be closed, relied on or
+handed over as finished, asks about completeness, whatever its form: a direct question, a hint, a list
+of things to check, or a request to confirm. It stays completeness when it also suggests a next step or
+names an idea. A prompt that only orders a specific piece of work, without asking about the state of the
+work, is not completeness.
+
+CERTIFICATE STATE LINES:
+{cert}
+
+PROMPT:
+{prompt}
+
+LABEL:

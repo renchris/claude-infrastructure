@@ -41,6 +41,11 @@ it is not the arm's MODEL. A row starts only while the 1-min load is at most --m
 above it the run pauses between rows, and every call records the load at its start. An INVALID call
 records why (exit code, the first 60 characters of what it answered, the tail of its stderr). It
 refuses to write tune.json, E1h's record.
+
+Wave E1m (2026-10-08): an arm may name a brief file as a sixth field, NAME,KIND,MODEL,EFFORT,CLAUDE_BIN,
+BRIEF_FILE: the file is the whole brief, a format string with {cert} and {prompt} as the router's are,
+and its sha256 is recorded per arm. Without it the arm runs the router's frozen brief for its KIND. It
+also refuses to write tune-h55.json, E1j's record.
 """
 
 import argparse
@@ -83,6 +88,9 @@ def argv(kind: str, model: str, effort: str, claude_bin: str) -> list:
     """The router's frozen command line for KIND with only --model replaced and --effort added."""
     f = list(R.classifier_flags(kind))
     f[f.index("--model") + 1] = model
+    if "--effort" in f:  # a kind the router pins an effort for: the arm's EFFORT replaces it
+        i = f.index("--effort")
+        del f[i : i + 2]
     if effort != "-":
         f[1:1] = ["--effort", effort]
     return [claude_bin] + f
@@ -90,17 +98,26 @@ def argv(kind: str, model: str, effort: str, claude_bin: str) -> list:
 
 def parse_arm(spec: str) -> tuple:
     parts = spec.split(",")
-    if len(parts) != 5 or parts[1] not in R.KINDS:
-        raise SystemExit(f"--arm wants NAME,KIND,MODEL,EFFORT,CLAUDE_BIN; got {spec!r}")
-    name, kind, model, effort, claude_bin = parts
+    if len(parts) not in (5, 6) or parts[1] not in R.KINDS:
+        raise SystemExit(
+            f"--arm wants NAME,KIND,MODEL,EFFORT,CLAUDE_BIN[,BRIEF_FILE]; got {spec!r}"
+        )
+    name, kind, model, effort, claude_bin = parts[:5]
     if not os.access(claude_bin, os.X_OK):
         raise SystemExit(f"--arm {name}: {claude_bin} is not an executable")
-    return name, {
+    arm = {
         "kind": kind,
         "model": model,
         "effort": effort,
         "claude_bin": claude_bin,
     }
+    if len(parts) == 6:
+        text = Path(parts[5]).read_text()
+        if "{prompt}" not in text or "{cert}" not in text:
+            raise SystemExit(f"--arm {name}: {parts[5]} has no {{cert}} or {{prompt}} field")
+        arm["brief_file"] = parts[5]
+        arm["brief_sha256"] = hashlib.sha256(text.encode()).hexdigest()
+    return name, arm
 
 
 def arms(specs: list) -> dict:
@@ -108,7 +125,9 @@ def arms(specs: list) -> dict:
     for spec in specs:
         name, a = parse_arm(spec)
         a["argv"] = argv(a["kind"], a["model"], a["effort"], a["claude_bin"])
-        a["brief"] = R.BRIEFS[a["kind"]]
+        a["brief"] = (
+            Path(a["brief_file"]).read_text() if "brief_file" in a else R.BRIEFS[a["kind"]]
+        )
         out[name] = a
     return out
 
@@ -233,8 +252,8 @@ def main() -> int:
     ap.add_argument("--preflight-only", action="store_true")
     a = ap.parse_args()
     out = Path(a.out)
-    if out.name == "tune.json":
-        print("refused: tune.json is wave E1h's record; write a new file")
+    if out.name in ("tune.json", "tune-h55.json"):
+        print(f"refused: {out.name} is an earlier wave's record; write a new file")
         return 2
     A = arms(a.arm)
     for arm in A.values():
