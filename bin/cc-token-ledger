@@ -31,11 +31,16 @@ Usage:
                   (read from each subagent/workflow-agent transcript's sibling .meta.json)
   cc-token-ledger --side-requests                   cost-state minus transcript, per session
                   (sessions still writing at --until are skipped: cost-state runs to process end)
+  cc-token-ledger --haiku [--json]          Haiku runs: effort per spawn, served-model mismatches, refusals,
+                  retrieval errors and overflows, helper share of session draw, extraction JSON
+                  validity (from a consumer's log), budget flags; one line per revert trigger
+                  (docs/research/haiku55-upgrade-2026-10-07/README.md § Revert triggers)
   cc-token-ledger --check                   exit 1 if ENABLE_PROMPT_CACHING_1H is set anywhere
 
 Inputs: every $HOME/.claude*/projects/**/*.jsonl (files deduped by realpath, journal.jsonl skipped),
 responses deduped on message.id. Env (tests): CC_NOW (epoch for relative --since), CC_MODEL_CONFIG
-(price file), CC_TOKEN_LEDGER_WORKERS.
+(price file), CC_TOKEN_LEDGER_WORKERS, CC_EXTRACTION_LOG (--haiku: the validation log,
+default ~/.claude/autonomy/telemetry/extraction-validate.jsonl).
 Exit: 0 ok · 1 --check found the flag, or --task matched nothing · 2 usage or config error.
 """
 
@@ -1052,6 +1057,399 @@ def render_side(v):
     return "\n".join(out)
 
 
+# ─────────────────────────────── Haiku telemetry (--haiku) ───────────────────────────────
+# The evidence behind each Haiku 5.5 routing decision, re-read from transcripts after the fact so a
+# decision can be reversed on data (docs/research/haiku55-upgrade-2026-10-07/README.md § Revert
+# triggers names the line and the threshold for each). No hook writes anything for it: the spawn's
+# requested model and effort are in its <agent>.meta.json, the served model, effort, stop reason and
+# API errors are in its transcript, and the helper calls are cost-state minus transcript.
+HAIKU_TRIGGERS = "docs/research/haiku55-upgrade-2026-10-07/README.md § Revert triggers"
+EFFORT_PIN = "medium"  # effort_defaults.haiku55_retrieval and haiku55_extraction
+# Haiku 5.5 draws ~0.12x Opus 5.5 per output token against a list-price ratio of 0.025x, so a list
+# dollar of Haiku costs ~4.8x the plan quota a list dollar of Opus does (decisions/D5-helper-calls.md,
+# bounds 2.2x to 7.6x). It turns the helper's list-dollar share into a whole-session draw share.
+HELPER_DRAW_PER_LIST_DOLLAR = 4.8
+OVERFLOW_RX = re.compile(r"prompt is too long|context (window|length|limit)|model_context_window_exceeded", re.I)
+# agentTypes whose job is judgment or synthesis, which decisions D3 and D4 keep on Opus 5.5.
+JUDGMENT_AGENT_TYPES = ("deep-research", "frontier-derivation", "research-decomposition-critic", "Plan")
+
+
+def is_haiku(m):
+    return "haiku" in (m or "").lower()
+
+
+def extraction_log_path():
+    return os.environ.get("CC_EXTRACTION_LOG") or os.path.join(
+        HOME, ".claude", "autonomy", "telemetry", "extraction-validate.jsonl")
+
+
+def load_haiku_latest(cfg):
+    """versions.haiku_latest: the id a `model: "haiku"` spawn should be served."""
+    try:
+        with open(cfg, encoding="utf-8") as fh:
+            for line in fh:
+                m = re.match(r"\s+haiku_latest:\s*([A-Za-z0-9.\-]+)", line)
+                if m:
+                    return m.group(1)
+    except (OSError, TypeError):
+        pass
+    return None
+
+
+def read_meta(path):
+    if not path.endswith(".jsonl"):
+        return {}
+    try:
+        with open(path[: -len(".jsonl")] + ".meta.json", encoding="utf-8") as fh:
+            d = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def _thinking_tokens(u):
+    """A thinking-token count when the usage block carries one; Claude Code 2.1.293 writes none."""
+    for k in ("thinking_tokens", "reasoning_tokens"):
+        if isinstance(u.get(k), int):
+            return u[k]
+    d = u.get("output_tokens_details")
+    if isinstance(d, dict):
+        for k in ("thinking_tokens", "reasoning_tokens"):
+            if isinstance(d.get(k), int):
+                return d[k]
+    return None
+
+
+def haiku_run(f, meta):
+    """One pass over one Haiku transcript for what the cost scan does not keep."""
+    msgs = {}
+    order = []
+    errors = []
+    efforts = defaultdict(int)
+    t0 = t1 = None
+    try:
+        fh = open(f["path"], "rb")
+    except OSError:
+        return None
+    with fh:
+        for raw in fh:
+            m = TS_RE.search(raw)
+            if m:
+                t = m.group(1).decode()
+                t0 = t if t0 is None or t < t0 else t0
+                t1 = t if t1 is None or t > t1 else t1
+            if b'"type":"assistant"' not in raw:
+                continue
+            try:
+                r = json.loads(raw)
+            except Exception:
+                continue
+            msg = r.get("message") if isinstance(r, dict) else None
+            if not isinstance(msg, dict):
+                continue
+            if r.get("isApiErrorMessage"):
+                txt = ""
+                for b in msg.get("content") or []:
+                    if isinstance(b, dict) and b.get("type") == "text":
+                        txt = (b.get("text") or "")[:160]
+                        break
+                errors.append({"error": r.get("error") or "", "text": txt})
+                continue
+            mid = msg.get("id") or r.get("requestId") or "nomid:%d" % len(order)
+            row = msgs.get(mid)
+            if row is None:
+                row = msgs[mid] = {"model": msg.get("model") or "", "out": 0, "think": None,
+                                   "think_chars": 0, "text_chars": 0, "stop": None}
+                order.append(mid)
+                if isinstance(r.get("effort"), str):
+                    efforts[r["effort"]] += 1
+            u = msg.get("usage") if isinstance(msg.get("usage"), dict) else {}
+            row["out"] = max(row["out"], int(u.get("output_tokens") or 0))
+            tt = _thinking_tokens(u)
+            if tt is not None:
+                row["think"] = max(row["think"] or 0, tt)
+            if msg.get("stop_reason"):
+                row["stop"] = msg["stop_reason"]
+            for b in msg.get("content") or []:
+                if not isinstance(b, dict):
+                    continue
+                if b.get("type") == "thinking":
+                    row["think_chars"] += len(b.get("thinking") or "")
+                elif b.get("type") == "text":
+                    row["text_chars"] += len(b.get("text") or "")
+    rows = [msgs[k] for k in order if msgs[k]["model"] != "<synthetic>"]
+    stops = [r["stop"] for r in rows if r["stop"]]
+    served = sorted({base_model(r["model"]) for r in rows if r["model"]})
+    thinks = [r["think"] for r in rows if r["think"] is not None]
+    wall = None
+    if t0 and t1:
+        wall = (datetime.strptime(t1, "%Y-%m-%dT%H:%M:%S") - datetime.strptime(t0, "%Y-%m-%dT%H:%M:%S")).total_seconds()
+    effort = max(efforts.items(), key=lambda kv: kv[1])[0] if efforts else None
+    c = f["cls"]
+    return {
+        "session_id": c[3], "agent_id": c[4], "ctx_type": c[0], "account": c[1], "project": c[2],
+        "agent_type": meta.get("agentType") or ("(main)" if c[0] == "main" else "(no meta)"),
+        "requested_model": meta.get("model"), "requested_effort": meta.get("effort"),
+        "served_models": served, "effort": effort or meta.get("effort"),
+        "effort_source": "transcript" if effort else ("meta" if meta.get("effort") else None),
+        "output_tokens": sum(r["out"] for r in rows),
+        "output_tokens_est": int(round(sum(f["est"]))),
+        "thinking_tokens": sum(thinks) if thinks else None,
+        "thinking_chars": sum(r["think_chars"] for r in rows), "text_chars": sum(r["text_chars"] for r in rows),
+        "turns": len(rows), "wall_s": wall, "start": t0,
+        "stop_reason": stops[-1] if stops else None, "refusal": "refusal" in stops,
+        "errors": errors,
+        "overflow": any(OVERFLOW_RX.search(e["error"] + " " + e["text"]) for e in errors)
+                    or "model_context_window_exceeded" in stops,
+    }
+
+
+def haiku_runs(results):
+    runs = []
+    for f in results:
+        if not f["kept"]:
+            continue  # every response is a transplanted copy, counted in its original file
+        ctx = f["cls"][0]
+        meta = read_meta(f["path"]) if ctx != "main" else {}
+        models = [r[R_MODEL] for r in f["kept"] if r[R_MODEL] and r[R_MODEL] != "<synthetic>"]
+        nh = sum(1 for m in models if is_haiku(m))
+        if ctx == "main":
+            if not models or nh * 2 <= len(models):
+                continue  # a main thread counts as a Haiku run only when Haiku served most of it
+        elif not (is_haiku(meta.get("model")) or nh):
+            continue
+        run = haiku_run(f, meta)
+        if run:
+            runs.append(run)
+    runs.sort(key=lambda r: r["start"] or "")
+    return runs
+
+
+def helper_share(results, pricer, since, bounded):
+    """Helper (side-request) Haiku output: cost-state Haiku usage minus Haiku in the transcripts."""
+    by_sid = defaultdict(list)
+    for f in results:
+        by_sid[f["cls"][3]].append(f)
+    acc = {k: dict.fromkeys(("sessions", "helper_out", "session_out", "helper_usd", "helper_draw_usd",
+                             "session_usd"), 0)
+           for k in ("all", "no_haiku_worker")}
+    for sid, fs in by_sid.items():
+        mains = [f for f in fs if f["cls"][0] == "main" and f["cost_state"]]
+        if not mains:
+            continue
+        cs = mains[0]["cost_state"]
+        st = cs.get("startTime")
+        if not isinstance(st, (int, float)):
+            continue
+        st_iso = datetime.fromtimestamp(st / 1000 if st > 1e11 else st, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        if st_iso < since or (bounded and any(f["spans_end"] for f in fs)):
+            continue  # the same window rules as --side-requests
+        tx = defaultdict(lambda: dict.fromkeys(SIDE_KEYS, 0))
+        for f in fs:
+            for r, o in zip(f["kept"], f["est"]):
+                if r[R_TS][:19] < st_iso or not is_haiku(r[R_MODEL]):
+                    continue
+                d = tx[base_model(r[R_MODEL])]
+                d["input"] += r[R_IN]
+                d["cache_write"] += r[R_CCT]
+                d["cache_read"] += r[R_CR]
+                d["output"] += o
+        csum = defaultdict(lambda: dict.fromkeys(SIDE_KEYS, 0))
+        s_out = 0
+        s_usd = 0.0
+        for m, u in (cs.get("modelUsage") or {}).items():
+            if not isinstance(u, dict):
+                continue
+            c = csum[base_model(m)]
+            for k, src in (("input", "inputTokens"), ("cache_write", "cacheCreationInputTokens"),
+                           ("cache_read", "cacheReadInputTokens"), ("output", "outputTokens")):
+                c[k] += u.get(src) or 0
+        h_out = 0
+        h_usd = 0.0
+        h_draw = 0.0  # list $ in Opus-equivalent draw: Haiku 5.5 scaled by its factor, others at list
+        for b, c in csum.items():
+            s_out += c["output"]
+            rate = pricer.rate(b)
+            if rate:
+                s_usd += sum(Pricer.split(c["input"], c["cache_write"], 0, c["cache_write"], c["cache_read"],
+                                          c["output"], rate))
+            if is_haiku(b):
+                t = tx.get(b, dict.fromkeys(SIDE_KEYS, 0))
+                d = {k: c[k] - t[k] for k in SIDE_KEYS}
+                h_out += max(d["output"], 0)
+                u = side_usd(b, d, pricer) or 0.0
+                h_usd += u
+                h_draw += u * (HELPER_DRAW_PER_LIST_DOLLAR if b == "claude-haiku-5-5" else 1.0)
+        keys = ["all"] + ([] if tx else ["no_haiku_worker"])
+        for k in keys:
+            a = acc[k]
+            a["sessions"] += 1
+            a["helper_out"] += h_out
+            a["session_out"] += s_out
+            a["helper_usd"] += h_usd
+            a["helper_draw_usd"] += h_draw
+            a["session_usd"] += s_usd
+    for a in acc.values():
+        a["share_output"] = a["helper_out"] / a["session_out"] if a["session_out"] else None
+        a["share_list_usd"] = a["helper_usd"] / a["session_usd"] if a["session_usd"] else None
+        a["share_draw_est"] = min(1.0, a["helper_draw_usd"] / a["session_usd"]) if a["session_usd"] else None
+    return acc
+
+
+def extraction_validation(since, until):
+    """The invalid-JSON rate from a consumer's validation log, if any consumer writes one.
+    One JSON object per line: {"ts": ISO-8601, "slot": str, "model": str, "attempt": int, "valid": bool}."""
+    p = extraction_log_path()
+    v = {"log": p.replace(HOME, "~"), "present": os.path.isfile(p), "by_model": {}}
+    if not v["present"]:
+        return v
+    agg = defaultdict(lambda: {"attempts": 0, "invalid": 0, "retries": 0})
+    try:
+        with open(p, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    r = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(r, dict) or not since <= str(r.get("ts") or "")[:19] < until:
+                    continue
+                a = agg[base_model(str(r.get("model") or "?"))]
+                a["attempts"] += 1
+                a["invalid"] += 0 if r.get("valid") else 1
+                a["retries"] += 1 if int(r.get("attempt") or 1) > 1 else 0
+    except OSError:
+        v["present"] = False
+        return v
+    for m, a in agg.items():
+        a["invalid_rate"] = a["invalid"] / a["attempts"] if a["attempts"] else None
+    v["by_model"] = dict(agg)
+    return v
+
+
+def budget_flags():
+    exe = os.path.join(HERE, "cc-agent-budget-flags")
+    try:
+        import subprocess
+        p = subprocess.run([exe, "--json"], capture_output=True, text=True, timeout=30)
+        rows = json.loads(p.stdout)
+        return rows if isinstance(rows, list) else None
+    except Exception:
+        return None
+
+
+def _rate(n, d):
+    return {"n": n, "of": d, "rate": (n / d) if d else None}
+
+
+def view_haiku(results, pricer, since, until, bounded, cfg):
+    runs = haiku_runs(results)
+    latest = load_haiku_latest(cfg)
+    workers = [r for r in runs if r["ctx_type"] != "main"]
+    explore = [r for r in workers if r["agent_type"] == "Explore"]
+    by_effort = defaultdict(int)
+    for r in workers:
+        by_effort[r["effort"] or "(unset)"] += 1
+    by_type = defaultdict(int)
+    for r in runs:
+        by_type[r["agent_type"]] += 1
+    mismatched = []
+    asked = 0
+    for r in workers:
+        req = r["requested_model"]
+        if not is_haiku(req):
+            continue
+        asked += 1
+        want = latest if req.lower() == "haiku" else base_model(req)
+        if want and r["served_models"] and r["served_models"] != [want]:
+            mismatched.append({"session_id": r["session_id"], "agent_id": r["agent_id"], "requested": req,
+                               "expected": want, "served": r["served_models"]})
+    s = {
+        "effort_pin": EFFORT_PIN,
+        "effort_by_spawn": dict(sorted(by_effort.items(), key=lambda kv: -kv[1])),
+        "effort_off_pin": _rate(sum(v for k, v in by_effort.items() if k != EFFORT_PIN), len(workers)),
+        "effort_off_pin_explore": _rate(sum(1 for r in explore if r["effort"] != EFFORT_PIN), len(explore)),
+        "retrieval_errors": _rate(sum(1 for r in explore if r["errors"]), len(explore)),
+        "retrieval_overflow": _rate(sum(1 for r in explore if r["overflow"]), len(explore)),
+        "served_mismatch": dict(_rate(len(mismatched), asked), expected_for_alias=latest, runs=mismatched),
+        "refusals": _rate(sum(1 for r in runs if r["refusal"]), len(runs)),
+        "errors_all": _rate(sum(1 for r in runs if r["errors"]), len(runs)),
+        "runs_by_agent_type": dict(sorted(by_type.items(), key=lambda kv: -kv[1])),
+        "judgment_on_haiku": sum(v for k, v in by_type.items() if k in JUDGMENT_AGENT_TYPES),
+        "helper": helper_share(results, pricer, since, bounded),
+        "extraction_json": extraction_validation(since, until),
+        "budget_flags": budget_flags(),
+        "output_tokens": sum(r["output_tokens"] for r in runs),
+        "output_tokens_est": sum(r["output_tokens_est"] for r in runs),
+        "wall_s_median": pct([r["wall_s"] for r in runs if r["wall_s"] is not None], 0.5),
+    }
+    return {"summary": s, "runs": runs, "triggers": HAIKU_TRIGGERS}
+
+
+def _pc(x):
+    return "n/a" if x is None else "%.1f%%" % (100 * x)
+
+
+def render_haiku(v):
+    s = v["summary"]
+    out = ["Haiku telemetry, %s to %s; revert triggers: %s" % (
+        v["meta"]["since"], v["meta"].get("until") or "now", v["triggers"])]
+
+    def line(key, dec, text):
+        out.append("%-17s %-3s %s" % (key, dec, text))
+
+    eo, ex = s["effort_off_pin"], s["effort_off_pin_explore"]
+    line("effort-pin", "D1", "Haiku worker spawns by effort: %s; off %s: %s of %s (%s); Explore: %s of %s (%s)" % (
+        ", ".join("%s %s" % (k, num(n)) for k, n in s["effort_by_spawn"].items()) or "none",
+        s["effort_pin"], num(eo["n"]), num(eo["of"]), _pc(eo["rate"]), num(ex["n"]), num(ex["of"]), _pc(ex["rate"])))
+    re_, ro = s["retrieval_errors"], s["retrieval_overflow"]
+    line("retrieval-errors", "D1", "Explore spawns on Haiku: %s; with an API error %s (%s); context overflow %s (%s)" % (
+        num(re_["of"]), num(re_["n"]), _pc(re_["rate"]), num(ro["n"]), _pc(ro["rate"])))
+    sm = s["served_mismatch"]
+    line("served-mismatch", "all", "Haiku-requested spawns served another model: %s of %s (%s; alias expects %s)" % (
+        num(sm["n"]), num(sm["of"]), _pc(sm["rate"]), sm["expected_for_alias"] or "?"))
+    rf, ea = s["refusals"], s["errors_all"]
+    line("refusals", "all", "Haiku runs ending in a refusal (Haiku 5.5 has no fallback model): %s of %s (%s); any API error: %s (%s)" % (
+        num(rf["n"]), num(rf["of"]), _pc(rf["rate"]), num(ea["n"]), _pc(ea["rate"])))
+    line("judgment-on-haiku", "D3/4", "Haiku runs under a judgment or synthesis agentType: %s (by type: %s)" % (
+        num(s["judgment_on_haiku"]),
+        ", ".join("%s %s" % (k, num(n)) for k, n in list(s["runs_by_agent_type"].items())[:6]) or "none"))
+    ha, hc = s["helper"]["all"], s["helper"]["no_haiku_worker"]
+    line("helper-share", "D5", "helper Haiku output %s tok = %s of session output; est. %s of whole-session draw "
+         "(list-$ share %s, Haiku 5.5 x %.1f), %s sessions; without Haiku workers: %s draw, %s sessions" % (
+             num(ha["helper_out"]), _pc(ha["share_output"]), _pc(ha["share_draw_est"]), _pc(ha["share_list_usd"]),
+             HELPER_DRAW_PER_LIST_DOLLAR, num(ha["sessions"]), _pc(hc["share_draw_est"]), num(hc["sessions"])))
+    xj = s["extraction_json"]
+    if not xj["present"]:
+        line("extraction-json", "D2", "no consumer validation log at %s (n/a)" % xj["log"])
+    else:
+        line("extraction-json", "D2", "; ".join(
+            "%s invalid %s of %s attempts (%s), retries %s" % (m, num(a["invalid"]), num(a["attempts"]),
+                                                              _pc(a["invalid_rate"]), num(a["retries"]))
+            for m, a in sorted(xj["by_model"].items())) or "log present, no rows in the window")
+    bf = s["budget_flags"]
+    if bf is None:
+        line("budget-flags", "D6", "unread (cc-agent-budget-flags absent or failed)")
+    else:
+        hits = ["%s:%s=%s" % (r["account"].rsplit("/", 1)[-1], x["flag"], json.dumps(x["value"]))
+                for r in bf for x in r["flags"]]
+        sw = sorted({r.get("switch") or "absent" for r in bf})
+        line("budget-flags", "D6", "%s; switch CLAUDE_CODE_RIPPLING_TULIP=%s%s" % (
+            ("cached: " + ", ".join(hits)) if hits else "none cached on %d account(s)" % len(bf), "/".join(sw),
+            "; ALARM: a flag is ON with the switch absent" if any(r["alarm"] for r in bf) else ""))
+    out.append("%-17s %-3s %s Haiku runs, output %s tok recorded (%s est.), median wall %s s" % (
+        "volume", "", num(len(v["runs"])), num(s["output_tokens"]), num(s["output_tokens_est"]),
+        "n/a" if s["wall_s_median"] is None else "%.0f" % s["wall_s_median"]))
+    out += ["",
+            "caveats: subagent output_tokens are undercounted in transcripts (upstream #97763); the `est.` column",
+            " imputes the gaps, and the helper line counts any undercounted Haiku-worker output as helper output,",
+            " so read its no-Haiku-worker figure. Thinking tokens are not split out: the usage block carries no",
+            " thinking count (`--json` reports thinking characters per run). Effort is the transcript's own",
+            " per-record value, else the spawn's requested effort. The draw factor %.1f is D5's measurement for" % (
+                HELPER_DRAW_PER_LIST_DOLLAR),
+            " Haiku 5.5 only; older Haiku helper dollars count at list, so pre-2026-10-07 windows read low."]
+    return "\n".join(out)
+
+
 # ─────────────────────────────── main ───────────────────────────────
 def parse_since(s, now):
     m = re.fullmatch(r"(\d+)([dh])", s or "")
@@ -1079,6 +1477,8 @@ def main(argv):
                     help="with --by-agent-type: leave out worker contexts whose project slug matches")
     g.add_argument("--side-requests", action="store_true")
     g.add_argument("--check", action="store_true")
+    g.add_argument("--haiku", action="store_true",
+                   help="Haiku run telemetry and the revert-trigger lines for decisions D1-D6")
     ap.add_argument("--quick", action="store_true",
                     help="with --task: scan only that tree and report recorded output, no imputation")
     ap.add_argument("--workers", type=int, default=int(os.environ.get("CC_TOKEN_LEDGER_WORKERS") or 4))
@@ -1155,6 +1555,10 @@ def main(argv):
         v = view_by_agent_type(results, pricer, a.exclude_slug)
         v["meta"] = meta
         print(json.dumps(v, indent=1) if a.json else render_agent_types(v, a.reprice))
+    elif a.haiku:
+        v = view_haiku(results, pricer, since, until, a.until is not None, cfg)
+        v["meta"] = meta
+        print(json.dumps(v, indent=1) if a.json else render_haiku(v))
     elif a.side_requests:
         v = view_side(results, pricer, since, bounded=a.until is not None)
         v["meta"] = meta
