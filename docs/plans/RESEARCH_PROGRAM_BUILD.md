@@ -24,7 +24,7 @@ packet `83adb541ea19` actioned. Method version 1.1 is frozen; it changes only fr
 | B2 | S | Item 8: `research-program` skill, `/research-program` command, intake script, briefs, rubric | A2 |
 | C | S | Wave 2: items 9–13, 15, in parallel with the pilot | B1, B2 |
 | D | S (fired `fire-rp-audit-bugfix`), T inside | Audit fixes: `docs/research/upfront-method-audit-2026-10-04/REPORT.md` §3 rows 4–6 | C |
-| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E1d S (fired `fire-rp-v12-e1d`); E1e S (fired `fire-rp-v12-e1e`); E1g S (fired `fire-rp-v12-e1g`); E1h S (fired `fire-rp-v12-e1h`, T inside for track A); E1i S (fired `fire-rp-v12-e1i`, L inside); E1j S (fired `fire-rp-v12-e1j`, L inside: one small code change, a harness edit and two ordered measurements around a pre-committed rule, nothing to fan out); E2 Workflow in session d8964eb2; E3 S (E3a fired `fire-rp-v12-e3a`, E3b fired `fire-rp-v12-e3b` with T inside: six teammates; E3c fired `fire-rp-v12-e3c`, L inside; E3d fired `fire-rp-v12-e3d`, L inside); E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
+| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E1d S (fired `fire-rp-v12-e1d`); E1e S (fired `fire-rp-v12-e1e`); E1g S (fired `fire-rp-v12-e1g`); E1h S (fired `fire-rp-v12-e1h`, T inside for track A); E1i S (fired `fire-rp-v12-e1i`, L inside); E1j S (fired `fire-rp-v12-e1j`, L inside: one small code change, a harness edit and two ordered measurements around a pre-committed rule, nothing to fan out); E1k S (fired `fire-rp-v12-e1k`, L inside: one change in one function, one job-script line, docs, and a measurement run behind a pre-committed bar, nothing to fan out); E2 Workflow in session d8964eb2; E3 S (E3a fired `fire-rp-v12-e3a`, E3b fired `fire-rp-v12-e3b` with T inside: six teammates; E3c fired `fire-rp-v12-e3c`, L inside; E3d fired `fire-rp-v12-e3d`, L inside); E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
 
 A1, A2 and A3 touch disjoint files and fire concurrently. B1 and B2 fire when A2 lands. Each dispatched session leads
 its own Agent Team where it has 2+ code-writing tasks.
@@ -1070,6 +1070,12 @@ files, tracks B and C by its lead (ordered around sealed files).
   2026-10-15, so a haiku-4.5 fix expires within weeks. Only a stronger model showed a measured precision effect
   (Sonnet 5.5 thinking off: 1 of 56 neither-relay tuning rows relayed against haiku's 8, paired 7 to 0, p ≈ 0.016,
   cold median 2.8 s), and that evidence is thin where row 15 scores — hence measure first.
+  CORRECTED (2026-10-08, wave E1k): 2026-10-15 is a "not sooner than" floor, not a retirement date. The vendor's
+  deprecations page, fetched 2026-10-08, lists `claude-haiku-4-5-20251001 | Active | N/A | Not sooner than October
+  15, 2026` with "at least 60 days' notice": no deprecation notice exists yet, and retirement comes no earlier
+  than 60 days after one (`model-config.yaml:162-163` agrees). Precedent: Sonnet 4.5 was deprecated 2026-09-30,
+  about a day after its one-year floor, and retires 2026-11-30. So a Haiku 4.5 notice could follow its floor
+  closely, with retirement around mid-December. Source: `docs/research/reask-e1j-rulings-2026-10-08/REPORT.md`.
 - **Stated odds**: about 0.55 that any configuration clears RULE 1 (a STOP is a likely, valid outcome that spends
   no sealed data); about 35-40% that this wave ends with row 15 passing.
 - **Pre-registered rules** (verbatim from the report's "Pre-registered rules" section, committed here before any
@@ -1284,6 +1290,10 @@ inside it: three ordered steps around sealed files, one small code change each, 
   and an unmeasured classifier: row 15's verdict from this wave does not carry to it, and it needs its own re-read.
   If haiku 4.5 is retired before Haiku 5.5 is staged, every careful call fails, the union join answers with the fast
   call alone, and `sonnet-off` alone read 0.94 pooled recall and 0.81 regex-missed on tuning (below row 15's 0.95).
+  CORRECTED (2026-10-08, wave E1k): 2026-10-15 is a "not sooner than" floor. As of 2026-10-08 no deprecation
+  notice is listed, and retirement comes no earlier than 60 days after one; on the Sonnet 4.5 precedent
+  (deprecated 2026-09-30, a day past its floor; retires 2026-11-30) that is around mid-December at the earliest.
+  Full statement under E1h's "Why not the precision pass".
 - **Step 1, the pre-registration: committed before any classifier call** — `d68323586` (author date
   2026-10-06T23:13:41-05:00; it was `02cb72bb8` before the land's rebase). The first classifier call of this wave
   (the `classifier-warm.py probe` below) came after it. `heldout.py evaluate` scores `other` on the relay decision
@@ -1546,6 +1556,10 @@ tuning run held to 1-min load <= 40; (5) a warm-daemon latency check through the
     selection whatever its latency, and that union reads p90 8.5 s against the 7.5 s bar.
   - **The selected model is about to retire.** `claude-haiku-4-5` has a retirement floor of 2026-10-15
     (`model-config.yaml`; wave E1h), seven days from this record. Pinning it buys a week at most.
+    CORRECTED (2026-10-08, wave E1k): false. 2026-10-15 is a "not sooner than" floor; no deprecation notice is
+    listed as of 2026-10-08, and retirement comes no earlier than 60 days after one. On the Sonnet 4.5 precedent
+    (deprecated 2026-09-30, a day past its floor; retires 2026-11-30), a Haiku 4.5 notice could follow its floor
+    closely, with retirement around mid-December. Pinning it buys about two months, not a week.
   - **The fast call ran slow on 2.1.293.** 20 of `sonnet-off`'s calls ran past 9 s (max 18.4 s), against 1 in
     E1h on the PATH binary. The union absorbs this when the careful call answers, but it is a regression to
     watch if the fast call moves to 2.1.293.
@@ -1555,6 +1569,9 @@ tuning run held to 1-min load <= 40; (5) a warm-daemon latency check through the
   2. **Which careful call to pin**: the rule selects Haiku 4.5, which retires 2026-10-15 and fails this wave's
      latency bar. Haiku 5.5 at medium misses the recall bars by 1 and 2 calls. The rule's outcome stands as
      written, so a different pin is the operator's call, not this wave's.
+     CORRECTED (2026-10-08, wave E1k): Haiku 4.5 does not retire on 2026-10-15; that is a "not sooner than"
+     floor, no notice is listed yet, and retirement comes at least 60 days after a notice (around mid-December
+     on the Sonnet 4.5 precedent). See the corrected line under "What the result is made of".
   3. **Regex-missed data**: a disclosed third read of v3's regex-missed and pushback items. Only 16 unused
      regex-missed candidates existed at the v4 seal, under the 400 a fresh set needs.
   4. **regex-matched**: a disclosed second read of v4's regex-matched items.
@@ -1563,6 +1580,20 @@ tuning run held to 1-min load <= 40; (5) a warm-daemon latency check through the
      so the cold call never runs (candidates: a cold hedge, and a warm deadline shorter than the limit). That
      fix was below 90% conviction and is not built here. As it stands: 0 fallbacks in 95 rows under load 150,
      22 in 105 above it.
+- **Measured facts beside these rulings** (recorded 2026-10-08 by wave E1k from the decision research
+  `docs/research/reask-e1j-rulings-2026-10-08/REPORT.md`; each changes how rulings 1, 2 and 5 trade off):
+  - (a) **A hedge started at 4 s can rarely rescue a stalled Haiku 4.5 careful call.** Of each arm's 1,078 cold
+    tuning calls, 143 of Haiku 4.5's finish within 4.5 s, against 1,022-1,060 for the Haiku 5.5 arms (python over
+    `tune.json` and `tune-h55.json`).
+  - (b) **10 of 178 answered rows in step 5 were held to 8.5 s with one call silent** (8 with the careful call
+    silent, 2 with the fast; walls 8.50-8.64 s; 4 of them below load 150; python over
+    `e1j-latency.trace.jsonl`, re-run by E1k). Each is a recall loss the fallback metric cannot see: the label
+    returned was the answering call's alone.
+  - (c) **The live warm workers lack `CLAUDE_CODE_CERT_STORE`** (`ps eww` on daemon 62309's 4 workers: absent on
+    all 4, re-checked by E1k). A keychain query starved at worker start is therefore a second live explanation
+    for the stall, beside the workers starving in the low-priority (PRI 20) band.
+  - (d) **Gate row 15 is itself a sealed read, and it has no load bound** (`gate_rows_b.py:351-362` calls
+    `heldout.evaluate`; `heldout.py` has no `getloadavg`).
 - Status: **DONE 2026-10-08.** Shas: rule `0702f3920` (before any call); trace `70f881599`; latency record
   `49520aed3`; this record (see `git log`). The live router's model configuration is unchanged (`983448663980`).
   No sealed set was opened, and `tuning-v2.jsonl` was not read. Learnings: a model's answer can carry prompt
@@ -1570,6 +1601,62 @@ tuning run held to 1-min load <= 40; (5) a warm-daemon latency check through the
   committed; a load-gated run has to be sized to the machine's low-load window, not to its call count (it waited
   2.5 h of 3.6 h); and a squash-landed branch is re-synced with `git rebase --skip`, which a fixup on the work
   branch turns into extra conflicts.
+
+#### E1k — the per-kind cold hedge, the cert-store export, and a real-load A/B of the hedge, on tuning data only — IN PROGRESS
+Scope (frozen): wave E1k — B1 the per-kind cold hedge in router.py classify() with its trace and off switch,
+red-then-green; B2 CLAUDE_CODE_CERT_STORE=bundled exported in the warm job script (takes effect at the next
+daemon start; request none); B3 dated CORRECTED lines in the plan for the Haiku 4.5 retirement claim; B4 the
+measured facts recorded beside E1j's rulings; B5 the real-load A/B of hedge on vs off through the live router on
+tuning rows, bar committed before the run; record all of it as wave E1k in docs/plans/RESEARCH_PROGRAM_BUILD.md,
+landed and converged. Locus S (fired `fire-rp-v12-e1k`), lead-inline.
+- **Why.** E1j's step 5 found every live fallback (22 of 22) is a warm worker that accepted the prompt and went
+  silent under heavy load: `warm_classify` is handed the whole remaining limit (`router.py:494`, `:420`), and the
+  cold call runs only after it returns (`:505-509`), so no cold call ever ran. The decision research
+  `docs/research/reask-e1j-rulings-2026-10-08/REPORT.md` made five rulings for the operator (all at or below
+  90%, none in this wave) and a build-now set above 90%, which the operator has standing-authorized; this wave
+  is exactly that set. The live router's model configuration is left as it is (Haiku 5.5 as built,
+  configuration id `983448663980`): no pin, no model change, no daemon restart requested. Not in this wave: any
+  sealed set, any pin or effort change, the load bound in `heldout.evaluate` (ruling 5), the Haiku 5.5
+  re-tune (ruling 2).
+- **B1, the hedge** (`router.py` `classify()` only; [91]). At `HEDGE_AFTER_S` = 4.0 s, scaled by timeout/9, a
+  cold twin that skips the warm path starts for each kind whose call is still pending on the warm path, also
+  when the other kind already holds a non-relay label; the warm call keeps running, and for each kind the first
+  label wins under the unchanged E1g join. With no label in hand, `classify` returns unavailable at a give-up
+  point of about 8.7 s (after the 8.6 s stall row, before `heldout.route`'s 9 s kill), so its `finally` kills
+  the hedge's process groups. Trace: a `hedge` field per kind (`fired`, `won`) and `hedge_on` on every row, and a
+  `held` row when the hold fires with one kind still pending. Off switch `CC_RESEARCH_HEDGE=0`, which restores
+  the router as E1j left it (no twin, no early give-up). No flag, model or brief changes, so the configuration
+  id stays `983448663980` and no restart is needed.
+- **B2, the cert store** ([96]): `export CLAUDE_CODE_CERT_STORE=bundled` in `jobs/classifier-warm.sh` beside the
+  PATH, USER and LOGNAME exports, so the warm workers match every interactive session (`settings.json:13`); the
+  workers run `--setting-sources local`, so the user settings' env block never reaches them. It takes effect at
+  the next daemon start (the pin wave's 0059 restart); no restart is requested here.
+- **B5, the real-load A/B: RULE E1k** (committed here before any A/B row; this commit's author date is the proof
+  of order). Run after B1 is landed and converged.
+  - Run: `e1i-latency.py` through the live `~/.claude/scripts/research-kit/router.py classify` with
+    `CC_RESEARCH_CLASSIFY_TRACE` set, on the first 300 rows of `tuning-v4.jsonl` in file order, alternating by
+    row: even rows `CC_RESEARCH_HEDGE=1`, odd rows `CC_RESEARCH_HEDGE=0`, so both arms see the same load. Each
+    call records its arm, its start time and its 1-min load. Tuning data only; `tuning-v2.jsonl` is never read,
+    no sealed set is opened.
+  - **Bar: PASS means hedge-on fallback at most 0.03, with at least 40 hedge-on rows above load 150.** FAIL means
+    hedge-on fallback above 0.03 with at least 40 hedge-on rows above load 150. p90 and the rows held with one
+    call silent are shown only. If fewer than 40 hedge-on rows land above load 150, the run records "high load
+    not exercised", the run is repeated in the next high-load window, and no verdict is given until then. Runs
+    are not pooled: the verdict is the first run that reaches 40 hedge-on rows above load 150.
+  - Reported by load band (under 100, 100-150, 150-250, 250 and over), per arm: rows, fallbacks, median, p90,
+    rows held with one call silent; and per kind, hedge fire and win counts.
+  - Sidecar, 1 Hz for the whole run: the warm daemon's children (pid, kind from the model on its command line,
+    elapsed time, CPU time, RSS, priority, run state). Stall attribution, for each call of a kind still pending
+    on the warm path at the hedge point (either arm): its worker is the oldest live worker of that kind in the
+    last sample at or before the row's start (`Pool.take` hands out the oldest). It is **still starting** if
+    that worker's CPU time rose by 0.5 s or more in the 3 s before the row's start (a ready worker sits idle),
+    **starved mid-call** if it had finished starting and was runnable (`R`) in at least half of its samples
+    during the call, **waiting, not starved** if it had finished starting and was sleeping (`S`) in more than
+    half (a wait on I/O, e.g. upstream), and **unattributed** if no sample of it exists. This decides which root
+    fix applies, if any: ProcessType in the plist, or a readiness check in the daemon's pool; neither is built in
+    this wave.
+  - This checks the hedge on today's as-built configuration. The pinned configuration gets its own check after
+    its restart.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
