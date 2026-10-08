@@ -30,7 +30,10 @@
 #   lr-upgrade.sh --stale-markers [sid]             TSV: stale cross-account handoff markers (read-only)
 #   lr-upgrade.sh --marker-drive <sid> [--requested-by P] [--req-id ID]   set one sid's aside, synchronous
 #                                                   (the drain runs it for kind marker-setaside)
-#   lr-upgrade.sh --auto-enqueue                    the poller's tick: queue every `upgrade` row
+#   lr-upgrade.sh --auto-enqueue                    queue every eligible `upgrade` row (the drain refills itself)
+#   lr-upgrade.sh --status [--json] [--census]      per session: disposition, step, time in step, attempts,
+#                                                   last reason; fleet by binary (read-only)
+#   lr-upgrade.sh --reset <sid|all>                 clear a terminal / backoff (refused while a drain runs)
 #   lr-upgrade.sh --pin-target <sid> <opus|fable|id|clear>  per-session target override (24h TTL)
 #
 # Census columns: pane sid binary model target effort perm cfg cwd pid disposition
@@ -93,6 +96,22 @@ UPG_CLAIMED="$LRU_STATE/claimed"
 UPG_DEFER="$LRU_STATE/upgrade-deferred"
 UPG_LOCK="$LRU_STATE/upgrade-drain.lock"
 UPG_MUTEX_DIR="$LRU_STATE/runs/by-sid"
+UPG_STATE="$LRU_STATE/upgrade-state"      # one record per session (see "STATE RECORD" below)
+UPG_CANARY="$LRU_STATE/upgrade-canary"    # <binlabel>__<model>__<account>: answered one canary turn
+# Bounds of the state machine (2026-10-08). Each is whole seconds or a count; a bad value falls back.
+_lru_num() { case "${1:-}" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
+LRU_DRAIN_MAX_S="$(_lru_num "${LRU_DRAIN_MAX_S:-}" 3600)"           # a drain stops picking after this
+LRU_CENSUS_TIMEOUT_S="$(_lru_num "${LRU_CENSUS_TIMEOUT_S:-}" 300)"  # one bounded census
+LRU_MAX_ATTEMPTS="$(_lru_num "${LRU_MAX_ATTEMPTS:-}" 3)"            # charged faults before a terminal
+LRU_RETRY_BASE_S="$(_lru_num "${LRU_RETRY_BASE_S:-}" 600)"          # backoff 600 s, then 1200 s
+LRU_TERMINAL_TTL_S="$(_lru_num "${LRU_TERMINAL_TTL_S:-}" 21600)"    # exhausted / exit-readback expire
+LRU_EXIT_LINGER_S="$(_lru_num "${LRU_EXIT_LINGER_S:-}" 60)"         # claude exits 11-16 s after /exit
+LRU_EXIT_PENDING_PAGE_S="$(_lru_num "${LRU_EXIT_PENDING_PAGE_S:-}" 1800)"
+LRU_EXIT_PENDING_MAX_S="$(_lru_num "${LRU_EXIT_PENDING_MAX_S:-}" 21600)"
+LRU_SETTLE_TYPE_MAX_AGE_S="$(_lru_num "${LRU_SETTLE_TYPE_MAX_AGE_S:-}" 900)"  # identity older ⇒ never typed into
+LRU_RELAUNCH_MAX="$(_lru_num "${LRU_RELAUNCH_MAX:-}" 2)"
+LRU_READY_S="$(_lru_num "${LRU_READY_S:-}" 60)"
+LRU_CONFIRM_TURN="${LRU_CONFIRM_TURN:-canary}"; case "$LRU_CONFIRM_TURN" in on|off|canary) ;; *) LRU_CONFIRM_TURN=canary ;; esac
 
 lru_say() { printf 'lr-upgrade: %s\n' "$*" >&2; }
 
@@ -1824,6 +1843,10 @@ lru_mint_launcher() { # $1=run dir $2=cfg $3=cwd $4=sid $5=model $6=effort $7=pe
       [ -n "$team" ] || { lru_say "REFUSED: a lead launcher needs its team name"; return 1; }
       xenv="CLAUDE_INTERNAL_ASSISTANT_TEAM_NAME=$team"
       prompt="$prompt Your Agent Team $team was preserved across the relaunch: its live members were upgraded in place first and SendMessage to them still works. One vendor limit: a resumed lead does not poll its team inbox, so replies from those members land unread in $cfg/teams/$team/inboxes/team-lead.json - read them with jq when you expect one." ;;
+    quiet)
+      # A plain upgrade whose (binary, model, account) already answered a canary turn (§7 of the
+      # 2026-10-08 design): relaunched PROMPT-FREE, proven by process, registry, pane and READY.
+      prompt=""; sub="" ;;
     switch)
       # A bg session moved by cc-lr switch with no limit behind it: relaunched PROMPT-FREE. The
       # upgrade text above says "same account", which a move to another account makes false, and a
@@ -1883,6 +1906,14 @@ lru_result() { # $1=sid $2=pane $3=verdict(upgraded|skipped|failed) $4=reason $5
     > "$tmp" 2>/dev/null && mv -f "$tmp" "$UPG_RESULTS/upgrade-$1.json"
   printf '%s\t%s\t%s\t%s\n' "$2" "${1:0:8}" "$3" "$4"
   lru_mail "$7" "CC-LR-UPGRADE pane $2 (${1:0:8}): $3 - $4${5:+ | run: $5}"
+  # The record is final on every exit path; a skip or failure after the mint gives the token back,
+  # and a receipt this drive filed goes with it (unless someone rewrote it since).
+  lru_st_verdict "$1" "$3" "$4"
+  if [ "$3" != upgraded ]; then
+    lru_token_drop
+    [ -n "${LRU_RECEIPT_FILED:-}" ] && lru_receipt_drop "$2" "$LRU_RECEIPT_FILED"
+  fi
+  LRU_RECEIPT_FILED=""
 }
 
 # The capacity decision, BEFORE anything is typed (defect 3). The probe charges nothing; the mint
@@ -1915,10 +1946,12 @@ lru_capacity() { # $1=sid → 0 admitted (LRU_TOKEN may be set) / 9 refused (LRU
 # the composer read-back is width-dependent — the same class as the cc_tui_submit rc 4 failures
 # earlier that day). Reporting those as "failed" named a completed move a failure.
 lru_resumed_on() { # $1=sid $2=binary $3=model → 0 when a live --resume <sid> leaf runs both
-  local p a
+  local p a snap
   command -v lr_resume_procs >/dev/null 2>&1 || return 1
+  snap="$(lru_snapshot)"   # the census's one ps (a fixture file under LRU_PS_SNAPSHOT)
   for p in $(lr_resume_procs "$1" 2>/dev/null); do
-    a="$(ps -o args= -p "$p" 2>/dev/null || true)"
+    a="$(lru_snap_args "$snap" "$p")"
+    [ -n "$a" ] || a="$(ps -o args= -p "$p" 2>/dev/null || true)"   # started after the snapshot
     [ "${a%% *}" = "$2" ] || continue
     [ -z "${3:-}" ] || [ "$(lru_flag "$a" --model "$LRU_RE_MODEL")" = "$3" ] || continue
     return 0
@@ -1962,7 +1995,7 @@ lru_settle() { # $1=sid $2=pane $3=how the pane was left
 # lr-fire-resume's own last word about the confirmation prompt, from the run's state log.
 lru_submit_state() { # $1=run dir → last state line's state, empty when none
   [ -f "$1/events.jsonl" ] || return 0
-  jq -r '.state // empty' "$1/events.jsonl" 2>/dev/null | tail -n 1
+  jq -r 'select(.state != "lru-step") | .state // empty' "$1/events.jsonl" 2>/dev/null | tail -n 1
 }
 
 # The verdict of a stranded or unproven relaunch, from the ledger's settle. rc 0 upgraded · 1 failed.
@@ -1976,21 +2009,522 @@ lru_settle_verdict() { # $1=sid $2=pane $3=how the pane was left $4=no-tool reas
   esac
 }
 
+# ══ STATE RECORD · STEP LEDGER · CRASH SETTLE · BOUNDED RETRY (2026-10-08) ═══════════════════════
+# Measured on the 2.1.284 → 2.1.293 move (docs/research/session-upgrader-2026-10-08/README.md):
+# cc-reaper TERMed the drainer 10 times, three of them mid-session and one AFTER /exit, and nothing
+# recorded which step a killed drive had reached; a skip was re-queued every tick with no bound (125
+# identical skips, 9-13 per session); and every plain session paid a confirming turn (mean 171K
+# cache-write tokens). One JSON record per session, under $UPG_STATE, written only by the drainer
+# (under its lock) or a standalone --drive (under the per-sid mutex). A missing or unwritable record
+# never blocks a drive; it is said aloud and the drive goes on as before.
+lru_now() { printf '%s' "${LRU_NOW:-$(date +%s)}"; }
+lru_load1() { sysctl -n vm.loadavg 2>/dev/null | awk '{ print $2 }'; }
+lru_st_path() { printf '%s/%s.json' "$UPG_STATE" "$1"; }
+lru_st_get() { # $1=sid $2=jq path → the value as text ('' when absent)
+  local f; f="$(lru_st_path "$1")"; [ -f "$f" ] || return 0
+  jq -r "($2) // empty | tostring" "$f" 2>/dev/null || true
+}
+lru_st_put() { # $1=sid $2=jq filter [jq --arg …] → 0 written · 1 LOUD failure
+  local sid="$1" filter="$2" f cur tmp disp; shift 2
+  [ -n "$sid" ] || return 1
+  mkdir -p "$UPG_STATE" 2>/dev/null || { lru_say "state: cannot create $UPG_STATE - the drive goes on unrecorded"; return 1; }
+  f="$(lru_st_path "$sid")"; tmp="$UPG_STATE/.$sid.$$.tmp"
+  cur="$(jq -c 'if type == "object" then . else {} end' "$f" 2>/dev/null)" || cur=""
+  [ -n "$cur" ] || cur='{}'
+  if ! printf '%s' "$cur" | jq -c --arg sid "$sid" --argjson now "$(lru_now)" "$@" \
+        ". + {v: 1, sid: \$sid} | $filter | .updated = \$now" > "$tmp" 2>/dev/null; then
+    rm -f "$tmp"; lru_say "state: FAILED to update ${sid:0:8} (${filter:0:60}…) - the drive goes on without it"; return 1
+  fi
+  mv -f "$tmp" "$f" || return 1
+  disp="$(jq -r '.disposition // empty' "$f" 2>/dev/null)"
+  case "$disp" in in-flight|exit-pending) : > "$UPG_STATE/$sid.open" ;; *) rm -f "$UPG_STATE/$sid.open" ;; esac
+  return 0
+}
+# THE STEP LEDGER is the run's own events.jsonl (lr_state_append's file, lock and 600-char cap), one
+# `lru-step` row per closed step, so the next move can be compared with this one:
+#   cat ~/.reso/limit-recover/upgrade/*/events.jsonl | jq -c 'select(.state == "lru-step")'
+lru_ledger_row() { # $1=run $2=stage $3=detail
+  [ -n "${1:-}" ] || return 0
+  if command -v lr_state_append >/dev/null 2>&1 && lr_state_append "$1" lru-step "$2" "$3" 2>/dev/null; then return 0; fi
+  mkdir -p "$1" 2>/dev/null || return 0
+  jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg run "$1" --arg stg "$2" --arg d "$(printf '%s' "$3" | cut -c1-600)" \
+         --arg w "lr-upgrade.sh:$$" '{ts:$ts,run:$run,state:"lru-step",stage:$stg,detail:$d,writer:$w,attempt:"1"}' \
+    >> "$1/events.jsonl" 2>/dev/null || true
+}
+lru_step_row() { # $1=sid $2=outcome $3=reason [$4=stage prefix] — closes the record's current step
+  local f step since run att pane now
+  f="$(lru_st_path "$1")"; [ -f "$f" ] || return 0
+  IFS='|' read -r step since run att pane <<EOF
+$(jq -r '[(.step // ""), (.step_since // 0 | tostring), (.run // ""), (.attempts // 0 | tostring), (.pane // "")] | join("|")' "$f" 2>/dev/null)
+EOF
+  { [ -n "$step" ] && [ "$step" != "done" ]; } || return 0
+  now="$(lru_now)"; case "$since" in ''|*[!0-9]*) since="$now" ;; esac
+  lru_ledger_row "$run" "${4:-}$step" "outcome=$2 dur_s=$((now - since)) attempt=$((${att:-0} + 1)) sid=${1:0:8} pane=$pane load1=$(lru_load1) reason=$(printf '%s' "${3:--}" | tr '\t\n' '  ' | cut -c1-300)"
+}
+# shellcheck disable=SC2016  # jq/awk programs: their $names are jq/awk variables, not shell ones
+lru_step() { # $1=sid $2=step — closes the previous step (ok) and opens this one
+  lru_step_row "$1" ok ""
+  lru_st_put "$1" '.step = $s | .step_since = $now' --arg s "$2" || true
+}
+
+# §6 THE CLASSES. wait = the session's own state (not charged, re-judged next refill) · fault and
+# readback = our machinery failed (charged, backoff 10 then 20 min, terminal at LRU_MAX_ATTEMPTS) ·
+# notlive / stranded / unanswered = named terminals · keep = leave the record exactly as it is.
+LRU_NEXT_CLASS=""
+lru_class_of() { # $1=verdict $2=reason → ok | wait | fault | readback | notlive | stranded
+  case "$1" in upgraded) echo ok; return 0 ;; esac
+  case "$2" in
+    *"(held: exit-readback)"*) echo readback ;;
+    *"(held: busy"*|*"(held: subagents"*|*"(held: draft"*|*"(held: focused"*|*"(held: bgwork"*|*"(held: locked"*|*"(held: wake"*|*"(held: last-read"*) echo wait ;;
+    *"(held: "*) echo fault ;;
+    "not live:"*) echo notlive ;;
+    "reconciler owns it"*|"busy: another run holds"*|"in flight"*|"census timed out"*|"capacity:"*|"composer-occupied"*) echo wait ;;
+    mid-turn|background-job|subagents-in-flight|bg-host|rate-limited|lead-awaits-teammates|lead-no-team-file|current|self|duplicate|headless|no-transcript|no-target-model|team-test-unavailable|stale-row|teammate-*) echo wait ;;
+    *"nothing typed"*|*"session untouched"*) echo fault ;;
+    *) case "$1" in failed) echo stranded ;; *) echo fault ;; esac ;;
+  esac
+}
+LRU_DRAIN_NEWS=""
+# shellcheck disable=SC2016  # jq/awk programs: their $names are jq/awk variables, not shell ones
+lru_st_verdict() { # $1=sid $2=verdict $3=reason — disposition, counters and terminal names (§6)
+  local sid="$1" cls att rb now disp="" term="" next=0
+  [ -f "$(lru_st_path "$sid")" ] || { LRU_NEXT_CLASS=""; return 0; }
+  cls="${LRU_NEXT_CLASS:-$(lru_class_of "$2" "$3")}"; LRU_NEXT_CLASS=""
+  [ "$cls" = keep ] && return 0
+  lru_step_row "$sid" "$cls" "$3" "${LRU_STAGE_PREFIX:-}"
+  now="$(lru_now)"
+  att="$(lru_st_get "$sid" .attempts)"; att="${att:-0}"; rb="$(lru_st_get "$sid" .readbacks)"; rb="${rb:-0}"
+  case "$cls" in
+    ok) disp=upgraded; term=upgraded ;;
+    wait) disp=waiting ;;
+    notlive) disp=terminal; term=not-live ;;
+    stranded) disp=terminal; term=stranded ;;
+    exit-pending) disp=exit-pending ;;
+    unanswered) disp=terminal; term=exit-unanswered ;;
+    *) att=$((att + 1)); [ "$cls" = readback ] && rb=$((rb + 1))
+       if [ "$att" -ge "$LRU_MAX_ATTEMPTS" ]; then
+         disp=terminal; if [ "$cls" = readback ]; then term=exit-readback; else term=exhausted; fi
+       else
+         disp=retry-wait; next=$((now + LRU_RETRY_BASE_S * (1 << (att - 1))))
+       fi ;;
+  esac
+  lru_st_put "$sid" '.disposition = $d | .last_class = $c | .last_reason = $r | .attempts = ($a | tonumber)
+      | .readbacks = ($rb | tonumber) | .next_eligible = ($n | tonumber)
+      | (if $d == "exit-pending" then .step = "exit-wait" else .step = "done" end) | .step_since = $now
+      | (if $t != "" then .terminal = $t | .terminal_ts = $now else .terminal = null end)
+      | (if $c == "interrupted" then .interrupted = ((.interrupted // 0) + 1) else . end)' \
+      --arg d "$disp" --arg c "$cls" --arg r "$(printf '%s' "$3" | cut -c1-300)" --arg a "$att" --arg rb "$rb" \
+      --arg n "$next" --arg t "$term" || true
+  case "$term" in ''|upgraded) ;; *) LRU_DRAIN_NEWS="${LRU_DRAIN_NEWS}pane $(lru_st_get "$sid" .pane) ${sid:0:8} TERMINAL $term: ${3:0:160}"$'\n' ;; esac
+  return 0
+}
+# ELIGIBLE FOR AUTO-QUEUEING (refill and --auto-enqueue): no record, or a new target, or not in
+# flight / exit-pending, no live terminal, and past its backoff. stranded and exit-unanswered never
+# expire on their own (--reset clears them); the other terminals expire after LRU_TERMINAL_TTL_S.
+lru_st_eligible() { # $1=sid $2=target binlabel $3=target model → 0 may be queued
+  local f; f="$(lru_st_path "$1")"; [ -f "$f" ] || return 0
+  jq -e --arg b "$2" --arg m "$3" --argjson now "$(lru_now)" --argjson ttl "$LRU_TERMINAL_TTL_S" '
+    if ((.target.binlabel // "") != $b or (.target.model // "") != $m) then true
+    elif (.disposition == "in-flight" or .disposition == "exit-pending") then false
+    elif ((.terminal // null) != null and .terminal != "upgraded") then
+      (if (.terminal == "stranded" or .terminal == "exit-unanswered") then false
+       else ($now - (.terminal_ts // 0)) >= $ttl end)
+    else (.next_eligible // 0) <= $now end' "$f" >/dev/null 2>&1
+}
+lru_owner_live() { # $1=pid $2=lstart → 0 when that very process still runs (pid AND start instant)
+  local lst
+  case "${1:-}" in ''|0|*[!0-9]*) return 1 ;; esac
+  lst="$(lru_snap_lstart "$(lru_snapshot)" "$1")"; [ -n "$lst" ] || return 1
+  lru_lstart_matches "${2:-}" "$lst" "$1"
+}
+lru_pid_lstart() { lru_snap_lstart "$(lru_snapshot)" "$1"; }
+# WHICH SIDE OF /exit — from handoff-fire's own log, never from `kill -0` alone (the pane-37 shape:
+# /exit submitted, the old claude still alive 15 min later, read as "refused before /exit").
+lru_hf_evidence() { # $1=handoff-fire log → HFE_OPEN HFE_HOLD HFE_ABANDON HFE_EXIT_SENT
+  HFE_OPEN=0 HFE_HOLD="" HFE_ABANDON=0 HFE_EXIT_SENT=0
+  [ -f "${1:-}" ] || return 0
+  grep -q -e '→ resume-debt open: rc' -e 'resume-debt NOT opened' "$1" 2>/dev/null && HFE_OPEN=1
+  HFE_HOLD="$(sed -n 's/.*recycle ABORTED before \/exit (held: \([^)]*\)).*/\1/p' "$1" 2>/dev/null | head -1)"
+  grep -q '→ resume-debt abandon: rc' "$1" 2>/dev/null && HFE_ABANDON=1
+  if [ "$HFE_OPEN" = 1 ] && [ -z "$HFE_HOLD" ] && [ "$HFE_ABANDON" = 0 ]; then HFE_EXIT_SENT=1; fi
+  return 0
+}
+lru_watchers() { # $1=sid $2=pane → "pid<TAB>lstart" for each live recycle watcher of this pane + sid
+  lru_snapshot | LRU_P="$2" LRU_S="$1" awk "$LRU_PROC_LINE"' && index($0, "handoff-fire.sh __recycle " ENVIRON["LRU_P"] " ") && index($0, ENVIRON["LRU_S"]) { print $1 "\t" $3 " " $4 " " $5 " " $6 " " $7 }'
+}
+LRU_CCFIND_BIN="${LRU_CCFIND_BIN:-$LRU_DIR/../../bin/cc-find}"
+lru_pane_bound() { # $1=sid $2=pane → 0 cc-find binds the LIVE session to this pane · 1 not · 127 no tool
+  local out
+  [ -x "$LRU_CCFIND_BIN" ] || return 127
+  out="$("$LRU_CCFIND_BIN" "$1" 2>/dev/null)" || true
+  printf '%s\n' "$out" | awk -F'\t' -v s="$1" -v p="$2" '$1 == s && $2 == p && $6 == "LIVE" { f = 1 } END { exit !f }'
+}
+# The identity --relaunch-at-shell checks before it types: the old claude's tty and the pane's own
+# kitty (from its registry row). Prints 1 when strong (tty or kitty pid read), else 0.
+lru_identity_write() { # $1=run $2=old pid $3=pane $4=kitty socket
+  local tty kp kls
+  tty="$(ps -o tty= -p "$2" 2>/dev/null | tr -d ' ')"; case "$tty" in ''|'?'|'??') tty="" ;; *) tty="/dev/${tty#/dev/}" ;; esac
+  kp="${4##*kitty-}"; case "$kp" in ''|*[!0-9]*) kp="" ;; esac
+  kls=""; [ -n "$kp" ] && kls="$(TZ=UTC LC_ALL=C ps -o lstart= -p "$kp" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  jq -n --arg w "$3" --arg t "$tty" --arg k "$kp" --arg l "$kls" \
+    '{window_id: $w} + (if $t != "" then {tty: $t} else {} end) + (if $k != "" then {kitty_pid: $k} else {} end) + (if $l != "" then {kitty_lstart: $l} else {} end)' \
+    > "$1/identity.json" 2>/dev/null || true
+  if [ -n "$tty" ] || [ -n "$kp" ]; then printf 1; else printf 0; fi
+}
+# OUR OWN /exit, LEFT IN A COMPOSER (handoff-fire sends no DEL when the read-back is '<unreadable>').
+# The only keystroke this block sends: ONE Ctrl-U, only when the composer reads exactly `/exit`, then
+# a read-back that must be empty. Anything else — a draft, `/exitx`, an unreadable screen — sends
+# nothing. Mirrors handoff-fire's composer_residue_is_ours.
+lru_clear_own_exit() { # $1=pane → 0 cleared · 1 not ours (nothing sent) · 2 unknown
+  local c
+  [ -f "$LRU_TUI_LIB" ] || return 2
+  # shellcheck disable=SC1090
+  c="$( . "$LRU_TUI_LIB" >/dev/null 2>&1; cc_tui_composer "$1" )" || return 2
+  [ "$c" = "/exit" ] || return 1
+  # shellcheck disable=SC1090
+  ( . "$LRU_TUI_LIB" >/dev/null 2>&1; cc_tui_rpc send-text --match "id:$1" $'\x15' ) >/dev/null 2>&1 || return 2
+  sleep "${LRU_CLEAR_SETTLE_S:-1}"
+  # shellcheck disable=SC1090
+  c="$( . "$LRU_TUI_LIB" >/dev/null 2>&1; cc_tui_composer "$1" )" || return 2
+  [ -z "$c" ] && return 0
+  return 2
+}
+lru_receipt_drop() { # $1=pane $2=content we filed → removes the receipt only if it still says that
+  local f="${CC_COMPOSER_RESIDUE_DIR:-$HOME/.claude/logs/composer-residue}/${1//\//_}"
+  [ -n "${2:-}" ] && [ -f "$f" ] || return 0
+  [ "$(cut -f2- "$f" 2>/dev/null)" = "$2" ] && rm -f "$f"
+  return 0
+}
+lru_token_drop() { [ -n "${LRU_TOKEN_LIVE:-}" ] && rm -f "$LRU_TOKEN_LIVE"; LRU_TOKEN_LIVE=""; return 0; }
+lru_timeout() { # $1=seconds $2..=command — bounded when a timeout binary exists, said once otherwise
+  if command -v timeout >/dev/null 2>&1; then timeout -k 5 "$1" "${@:2}"
+  elif command -v gtimeout >/dev/null 2>&1; then gtimeout -k 5 "$1" "${@:2}"
+  else lru_say "no timeout(1) on PATH - running '${2##*/}' unbounded"; "${@:2}"; fi
+}
+lru_census_bounded() { # $1=ref ('' = fleet) → the census rows; rc 124 when it ran past LRU_CENSUS_TIMEOUT_S
+  lru_timeout "$LRU_CENSUS_TIMEOUT_S" /bin/bash "$_LRU_SELF" --census "${1:---all}"
+}
+
+# §5.2 THE ONLY RELAUNCH PATH, live or settle — never a raw `it2 session run`. handoff-fire's
+# --relaunch-at-shell takes the launch lock, proves H(sid)=0, reads the pane AT ITS SHELL and checks
+# the identity file before it types. Anything it cannot prove goes to cc-resume-debt (a NEW window).
+# rc 0 a relaunch was typed and a --resume is up (prove next) · 1 not relaunched here
+# (LRU_RELAUNCH_WHY; the caller settles) · 4 held by another actor (next pass).
+LRU_RELAUNCH_WHY=""
+# shellcheck disable=SC2016  # jq/awk programs: their $names are jq/awk variables, not shell ones
+lru_relaunch_gated() { # $1=sid [$2=launcher minted by this drive]
+  local sid="$1" L="${2:-}" f pane run cfg cwd role lrole team targs tgtm tgtbin eff perm strong alive sock n now out v hrc=0 w ebp caps
+  LRU_RELAUNCH_WHY=""
+  f="$(lru_st_path "$sid")"; [ -f "$f" ] || { LRU_RELAUNCH_WHY="no state record"; return 1; }
+  IFS='|' read -r pane run cfg cwd role team targs tgtm tgtbin eff perm strong alive sock n caps lrole <<EOF
+$(jq -r '[.pane, .run, .cfg, .cwd, (.role // ""), (.team // ""), (.team_args // ""), .target.model, .target.bin, (.effort // "high"),
+          (.perm // "auto"), (.identity_strong // 0 | tostring), (.last_alive_ts // 0 | tostring), (.kitty_sock // ""),
+          (.relaunch_attempts // 0 | tostring), (.cap_refusals // 0 | tostring), (.launch_role // "")] | map(. // "" | tostring) | join("|")' "$f" 2>/dev/null)
+EOF
+  n=$((${n:-0} + 1)); now="$(lru_now)"
+  lru_st_put "$sid" '.relaunch_attempts = ($n | tonumber)' --arg n "$n" || true
+  if [ "$n" -gt "$LRU_RELAUNCH_MAX" ]; then LRU_RELAUNCH_WHY="relaunch attempts spent ($((n - 1)) of $LRU_RELAUNCH_MAX)"
+  elif [ "${strong:-0}" != 1 ]; then LRU_RELAUNCH_WHY="the pane's identity was never read (no tty, no kitty pid)"
+  elif [ $((now - ${alive:-0})) -gt "$LRU_SETTLE_TYPE_MAX_AGE_S" ]; then LRU_RELAUNCH_WHY="the pane's identity is $((now - alive)) s old (> ${LRU_SETTLE_TYPE_MAX_AGE_S} s)"
+  fi
+  if [ -z "$LRU_RELAUNCH_WHY" ] && [ -z "$L" ]; then
+    # SETTLE: the crashed run's token is past its TTL — decide capacity again BEFORE anything is typed,
+    # under the same run dir (the same budget key: three refusals there and the launcher admits).
+    if lru_capacity "$sid"; then
+      L="$(lru_mint_launcher "$run" "$cfg" "$cwd" "$sid" "$tgtm" "$eff" "$perm" "$LRU_TOKEN" "$lrole" "$targs" "$team")" \
+        || LRU_RELAUNCH_WHY="the launcher could not be re-minted in $run"
+    elif [ "${caps:-0}" -lt 3 ]; then
+      lru_st_put "$sid" '.cap_refusals = ((.cap_refusals // 0) + 1)' || true
+      LRU_RELAUNCH_WHY="capacity: ${LRU_CAP_WHY:-refused} (relaunch held; next pass)"
+      LRU_DRAIN_NEWS="${LRU_DRAIN_NEWS}pane $pane ${sid:0:8}: at its shell after /exit, relaunch held on capacity ($((${caps:-0} + 1))/3)"$'\n'
+      return 4
+    else
+      L="$(lru_mint_launcher "$run" "$cfg" "$cwd" "$sid" "$tgtm" "$eff" "$perm" "" "$lrole" "$targs" "$team")" \
+        || LRU_RELAUNCH_WHY="the launcher could not be re-minted in $run"
+    fi
+  fi
+  if [ -z "$LRU_RELAUNCH_WHY" ]; then
+    ebp=0; case "$lrole" in teammate|quiet) ebp=1 ;; esac
+    out="$run/relaunch-at-shell.$n.log"
+    ( cd "$cwd" 2>/dev/null || cd /; lru_timeout 600 env CC_TERM_KITTY_TO="$sock" HF_ENGAGE_BY_PROCESS="$ebp" CLAUDE_CONFIG_DIR="$cfg" \
+        bash "$LRU_HF_BIN" --relaunch-at-shell --source-pane "$pane" --source-session "$sid" --resume-launcher "$L" \
+        --resume-cfg "$cfg" --resume-cwd "$cwd" --expect-identity "$run/identity.json" ) > "$out" 2>&1 || hrc=$?
+    v="$(sed -n 's/^verdict: \([A-Z]*\).*/\1/p' "$out" 2>/dev/null | head -1)"
+    case "$v" in
+      OK) w=0
+          while [ "$w" -lt "${LRU_RELAUNCH_UP_S:-60}" ]; do lru_resumed_on "$sid" "$tgtbin" "$tgtm" && return 0; sleep 2; w=$((w + 2)); done
+          lru_resumed_on "$sid" "$tgtbin" "$tgtm" && return 0
+          LRU_RELAUNCH_WHY="--relaunch-at-shell typed it, but no --resume came up in ${LRU_RELAUNCH_UP_S:-60} s ($out)" ;;
+      HELD) LRU_RELAUNCH_WHY="--relaunch-at-shell $(sed -n 's/^verdict: //p' "$out" | head -1) ($out)"; return 4 ;;
+      *) LRU_RELAUNCH_WHY="--relaunch-at-shell $(sed -n 's/^verdict: //p' "$out" | head -1)${v:+ }${v:-gave no verdict} (rc $hrc; $out)" ;;
+    esac
+  fi
+  [ "$(lru_st_get "$sid" .team_held)" = 1 ] && lru_team_restore "$cfg" "$team" && lru_st_put "$sid" '.team_held = 0'
+  return 1
+}
+
+# §5 CRASH SETTLE — at every drain start, under the drain lock, before anything is driven. It visits
+# every in-flight record whose owner is dead and every exit-pending record. Nothing here types except
+# through lru_relaunch_gated and lru_clear_own_exit, each behind the reconciler fence.
+lru_requeue_claimed() { # $1=sid — a MANUAL request goes back to the queue; auto requests come back by refill
+  local cf; cf="$(lru_st_get "$1" .req.claimed_file)"
+  [ "$(lru_st_get "$1" .req.origin)" = manual ] && [ -n "$cf" ] && [ -f "$cf" ] && mv -f "$cf" "$UPG_QUEUE/" 2>/dev/null
+  return 0
+}
+# shellcheck disable=SC2016  # jq/awk programs: their $names are jq/awk variables, not shell ones
+lru_settle_one() { # $1=sid → prints a result row when it reached a verdict; rc 0
+  local sid="$1" f disp step pane run opid ols hpid hls wpid wls own ownls tok held role team cfg tgtm tgtbin binlabel since paged now note="" rc by
+  f="$(lru_st_path "$sid")"; [ -f "$f" ] || return 0
+  IFS='|' read -r disp step pane run opid ols hpid hls own ownls tok held role team cfg tgtm tgtbin binlabel since paged <<EOF
+$(jq -r '[(.disposition // ""), (.step // ""), (.pane // ""), (.run // ""), (.old.pid // 0), (.old.lstart // ""), (.hf.pid // 0), (.hf.lstart // ""),
+          (.owner.pid // 0), (.owner.lstart // ""), (.token // ""), (.team_held // 0), (.role // ""), (.team // ""), (.cfg // ""),
+          (.target.model // ""), (.target.bin // ""), (.target.binlabel // ""), (.step_since // 0), (.paged // 0)] | map(tostring) | join("|")' "$f" 2>/dev/null)
+EOF
+  now="$(lru_now)"
+  case "$disp" in
+    in-flight)
+      lru_owner_live "$own" "$ownls" && return 0
+      if lru_owner_live "$hpid" "$hls"; then
+        lru_st_put "$sid" '.owner = {pid: ($p | tonumber), lstart: $l, kind: "hf"}' --arg p "$hpid" --arg l "$hls" || true
+        # handoff-fire --await is bounded at ~1200 s; past 1500 s at step fire it is stuck, and said so.
+        [ $(( $(lru_now) - since )) -gt 1500 ] && LRU_DRAIN_NEWS="${LRU_DRAIN_NEWS}pane $pane ${sid:0:8}: handoff-fire pid $hpid still running $(( $(lru_now) - since )) s into step $step - look at the pane"$'\n'
+        return 0
+      fi ;;
+    exit-pending) ;;
+    *) return 0 ;;
+  esac
+  by="$(lru_st_get "$sid" .req.by)"; by="${by:-poller-auto}"
+  LRU_DRIVEN="${LRU_DRIVEN:- }$sid "
+  LRU_STAGE_PREFIX="settle:"
+  if ! lr_recon_may_act "$sid" lr-upgrade 2>/dev/null; then
+    LRU_NEXT_CLASS=keep; lru_result "$sid" "$pane" skipped "settle deferred: the reconciler owns it" "" "" "$by"; LRU_STAGE_PREFIX=""; return 0
+  fi
+  LRU_RD_LOG="$run/resume-debt.log"
+  lru_hf_evidence "$run/handoff-fire.log"
+  case "$disp:$step" in
+    in-flight:claim|in-flight:census|in-flight:precheck|in-flight:capacity|in-flight:hold)
+      [ -n "$tok" ] && rm -f "$tok"
+      [ "$held" = 1 ] && lru_team_restore "$cfg" "$team"
+      lru_requeue_claimed "$sid"
+      LRU_NEXT_CLASS=interrupted
+      lru_result "$sid" "$pane" skipped "interrupted at step $step by the drainer's death (nothing typed; settled)" "" "" "$by" ;;
+    *)
+      if [ "$HFE_EXIT_SENT" = 0 ] && lru_owner_live "$opid" "$ols"; then
+        # BEFORE THE COMMIT POINT: an orphan watcher may still /exit with no idle gate — end it.
+        while IFS=$'\t' read -r wpid wls; do
+          [ -n "$wpid" ] || continue
+          lru_owner_live "$wpid" "$wls" && "${LRU_KILL_BIN:-kill}" -TERM "$wpid" 2>/dev/null && note="$note; watcher $wpid ended"
+        done <<EOF
+$(lru_watchers "$sid" "$pane")
+EOF
+        [ "$held" = 1 ] && lru_team_restore "$cfg" "$team"
+        lru_receipt_drop "$pane" "$(lru_st_get "$sid" .receipt)"
+        [ -n "$tok" ] && rm -f "$tok"
+        if [ "$HFE_HOLD" = exit-readback ]; then rc=0; lru_clear_own_exit "$pane" || rc=$?
+          case "$rc" in 0) note="$note; our /exit cleared from the composer" ;; 1) note="$note; composer is not our /exit (nothing sent)" ;; *) note="$note; composer unreadable (nothing sent)" ;; esac
+        fi
+        lru_requeue_claimed "$sid"
+        if [ -n "$HFE_HOLD" ]; then
+          lru_result "$sid" "$pane" skipped "handoff-fire refused before /exit (held: $HFE_HOLD) - session untouched; settled$note" "" "" "$by"
+        else
+          LRU_NEXT_CLASS=interrupted
+          lru_result "$sid" "$pane" skipped "interrupted at step $step before /exit by the drainer's death (nothing typed; settled$note)" "" "" "$by"
+        fi
+      elif lru_owner_live "$opid" "$ols"; then
+        # /exit SENT, the old claude still alive: exit-pending. Nothing is typed; paged once; terminal
+        # at MAX (an exit later than that is not attributable to our /exit).
+        [ "$held" = 1 ] && lru_team_restore "$cfg" "$team" && lru_st_put "$sid" '.team_held = 0'
+        [ -n "$tok" ] && rm -f "$tok"
+        lru_st_put "$sid" '.last_alive_ts = $now | .exit_sent = 1' || true
+        if [ "$disp" = in-flight ] || [ "$step" != exit-wait ]; then
+          LRU_NEXT_CLASS=exit-pending
+          lru_result "$sid" "$pane" skipped "/exit sent; old claude pid $opid still alive - watched each run (nothing typed; settled)" "" "" "$by"
+        elif [ $((now - since)) -ge "$LRU_EXIT_PENDING_MAX_S" ]; then
+          LRU_NEXT_CLASS=unanswered
+          lru_result "$sid" "$pane" skipped "exit-unanswered: /exit sent $((now - since)) s ago and pid $opid never exited; look at pane $pane" "" "" "$by"
+        elif [ $((now - since)) -ge "$LRU_EXIT_PENDING_PAGE_S" ] && [ "$paged" != 1 ]; then
+          lru_st_put "$sid" '.paged = 1' || true
+          LRU_DRAIN_NEWS="${LRU_DRAIN_NEWS}pane $pane ${sid:0:8}: /exit sent $((now - since)) s ago, old claude pid $opid still alive - look at the pane"$'\n'
+        fi
+      elif lru_resumed_on "$sid" "$tgtbin" "$tgtm"; then
+        if lru_proven "$sid" "$tgtbin" "$tgtm"; then
+          rc=0; lru_pane_bound "$sid" "$pane" || rc=$?
+          case "$rc" in 0) note="pane $pane bound" ;; *) note="pane binding UNPROVEN" ;; esac
+          lru_result "$sid" "$pane" upgraded "now $tgtm on $binlabel; settled after drainer death (proven LIVE, $note)" "" "" "$by"
+        else
+          lru_settle_verdict "$sid" "$pane" "a --resume ${sid:0:8} runs on the target but is not proven LIVE" "relaunch unproven after drainer death" "" "" "$by"
+        fi
+      else
+        lru_st_put "$sid" '.exit_sent = 1 | .step = "relaunch" | .step_since = $now' || true
+        rc=0; lru_relaunch_gated "$sid" || rc=$?
+        case "$rc" in
+          0) if lru_proven "$sid" "$tgtbin" "$tgtm"; then
+               lru_result "$sid" "$pane" upgraded "now $tgtm on $binlabel; relaunched at its shell after drainer death (proven LIVE)" "" "" "$by"
+             else lru_settle_verdict "$sid" "$pane" "relaunched at its shell but not proven LIVE" "relaunch unproven after drainer death" "" "" "$by"; fi ;;
+          4) LRU_NEXT_CLASS=keep; lru_result "$sid" "$pane" skipped "relaunch held: $LRU_RELAUNCH_WHY" "" "" "$by" ;;
+          *) lru_settle_verdict "$sid" "$pane" "pane $pane at a shell after drainer death; $LRU_RELAUNCH_WHY" "pane left at a shell ($LRU_RELAUNCH_WHY)" "" "" "$by" ;;
+        esac
+      fi ;;
+  esac
+  lr_recon_act_done 2>/dev/null || true
+  LRU_STAGE_PREFIX=""
+  return 0
+}
+lru_settle_all() {
+  local o sid
+  for o in "$UPG_STATE"/*.open; do
+    [ -f "$o" ] || continue
+    sid="${o##*/}"; sid="${sid%.open}"
+    lru_settle_one "$sid"
+  done
+  return 0
+}
+lru_st_prune() { # upgraded / not-live records older than 7 d; stranded and exit-unanswered are kept
+  local f now; now="$(lru_now)"
+  for f in "$UPG_STATE"/*.json; do
+    [ -f "$f" ] || continue
+    jq -e --argjson now "$now" '(.terminal == "upgraded" or .terminal == "not-live") and ($now - (.updated // $now)) > 604800' "$f" >/dev/null 2>&1 && rm -f "$f"
+  done
+  return 0
+}
+
+# ── --status: one screen, read-only, no census unless asked ───────────────────────────────────────
+lru_dur() { # $1=seconds → 1h02m / 4m10s / 12s
+  local s="${1:-0}"; case "$s" in ''|*[!0-9-]*) printf -- '-'; return ;; esac
+  [ "$s" -lt 0 ] && s=0
+  if [ "$s" -ge 3600 ]; then printf '%dh%02dm' $((s / 3600)) $((s % 3600 / 60))
+  elif [ "$s" -ge 60 ]; then printf '%dm%02ds' $((s / 60)) $((s % 60))
+  else printf '%ds' "$s"; fi
+}
+lru_status() { # [--json] [--census]
+  local json=0 cen=0 now hp hl live="" rows f census_hdr t
+  while [ $# -gt 0 ]; do case "$1" in --json) json=1 ;; --census) cen=1 ;; *) lru_say "--status: unknown arg $1"; return 3 ;; esac; shift; done
+  now="$(lru_now)"
+  if [ "$cen" = 1 ]; then
+    mkdir -p "$UPG_STATE" 2>/dev/null || true
+    t="$(lru_now)"; rows="$(lru_census_bounded "")" || true
+    { printf '# ts=%s dur_s=%s load1=%s\n' "$(lru_now)" "$(( $(lru_now) - t ))" "$(lru_load1)"; printf '%s\n' "$rows"; } > "$UPG_STATE/.census.tsv.tmp" \
+      && mv -f "$UPG_STATE/.census.tsv.tmp" "$UPG_STATE/.census.tsv"
+  fi
+  hp="$(cat "$UPG_LOCK/pid" 2>/dev/null || true)"; hl="$(cat "$UPG_LOCK/lstart" 2>/dev/null || true)"
+  [ -n "$hp" ] && lru_owner_live "$hp" "$hl" && live="$hp"
+  census_hdr="$(head -1 "$UPG_STATE/.census.tsv" 2>/dev/null)"
+  # shellcheck disable=SC2016  # jq programs
+  local recs; recs="$(for f in "$UPG_STATE"/*.json; do [ -f "$f" ] && cat "$f"; done | jq -s -c '.' 2>/dev/null)"; [ -n "$recs" ] || recs='[]'
+  local fleet; fleet="$(grep -v '^#' "$UPG_STATE/.census.tsv" 2>/dev/null | awk -F'\t' 'NF >= 11 { n = split($3, p, "/"); b = "-"; for (i = 1; i <= n; i++) if (p[i] ~ /^\.claude-/) b = p[i]; c[b]++ } END { for (k in c) printf "%s %d\n", k, c[k] }' | sort)"
+  if [ "$json" = 1 ]; then
+    jq -n --argjson recs "$recs" --arg dpid "$live" --arg hdr "$census_hdr" --arg fleet "$fleet" --argjson now "$now" '
+      {drainer: (if $dpid != "" then {pid: ($dpid | tonumber)} else null end),
+       census: ($hdr | capture("ts=(?<ts>[0-9]+) dur_s=(?<dur_s>[0-9]+) load1=(?<load1>[0-9.]*)")? // null),
+       sessions: $recs,
+       fleet: {by_binary: ($fleet | split("\n") | map(select(length > 0) | split(" ") | {(.[0]): (.[1] | tonumber)}) | add // {}),
+               by_disposition: ($recs | group_by(.disposition) | map({(.[0].disposition // "?"): length}) | add // {})}}'
+    return 0
+  fi
+  printf 'lr-upgrade  %s · drainer %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    "$( if [ -n "$live" ]; then printf 'pid %s up %s' "$live" "$(lru_dur $(( now - $(stat -f %m "$UPG_LOCK" 2>/dev/null || echo "$now") )))"; else printf 'idle'; fi )"
+  if [ -n "$census_hdr" ]; then
+    printf 'census %s ago (%s)\n' "$(lru_dur $(( now - $(printf '%s' "$census_hdr" | sed -n 's/.*ts=\([0-9]*\).*/\1/p') )))" \
+      "$(printf '%s' "$census_hdr" | sed -n 's/.*dur_s=\([0-9]*\) load1=\([0-9.]*\).*/\1 s, load1 \2/p')"
+  else printf 'census: none cached (lr-upgrade.sh --status --census runs one)\n'; fi
+  printf '%-5s %-8s  %-12s %-12s %-13s %-10s %-8s %-4s %s\n' PANE SID8 FROM TO DISPOSITION STEP IN-STEP ATT 'LAST REASON'
+  printf '%s' "$recs" | jq -r --argjson now "$now" --argjson max "$LRU_MAX_ATTEMPTS" --argjson ttl "$LRU_TERMINAL_TTL_S" '
+    sort_by(.disposition != "in-flight", .disposition != "exit-pending", (.pane // "0" | tonumber? // 0)) | .[]
+    | [(.pane // "-"), (.sid // "-")[0:8], (.from.bin // "-"), (.target.binlabel // "-"),
+       (if (.terminal // null) != null and .terminal != "upgraded" then "TERMINAL" else (.disposition // "-") end),
+       (.step // "-"), ((($now - (.step_since // $now)) | tostring)), "\(.attempts // 0)/\($max)",
+       ((if (.terminal // null) != null and .terminal != "upgraded" then .terminal + ": " else "" end)
+        + (.last_reason // "-")
+        + (if (.disposition == "retry-wait") then " (next try in @DUR\((.next_eligible // 0) - $now)@)"
+           elif ((.terminal // null) != null and (.terminal == "exhausted" or .terminal == "exit-readback" or .terminal == "not-live"))
+           then " (expires in @DUR\(((.terminal_ts // 0) + $ttl) - $now)@)" else "" end)),
+       (.owner.pid // 0 | tostring), (.owner.lstart // ""), (.hf.pid // 0 | tostring), (.hf.lstart // "")] | @tsv' 2>/dev/null \
+  | while IFS=$'\t' read -r p s fb tb d st ins att why op ol hp2 hl2; do
+      if [ "$d" = in-flight ] && ! lru_owner_live "$op" "$ol" && ! lru_owner_live "$hp2" "$hl2"; then d="ORPHANED@$st"; fi
+      while case "$why" in *@DUR*@*) true ;; *) false ;; esac; do   # @DUR<s>@ → 11m57s
+        local _n="${why#*@DUR}"; _n="${_n%%@*}"; why="${why%%@DUR*}$(lru_dur "$_n")${why#*@DUR"$_n"@}"
+      done
+      printf '%-5s %-8s  %-12s %-12s %-13s %-10s %-8s %-4s %s\n' "$p" "$s" "$fb" "$tb" "$d" "$st" "$(lru_dur "$ins")" "$att" "${why:0:120}"
+    done
+  printf 'fleet%s: %s — %s\n' "${census_hdr:+ (cached census)}" \
+    "$( [ -n "$fleet" ] && printf '%s\n' "$fleet" | awk '{ printf "%s%s %s", (NR > 1 ? " · " : ""), $1, $2 }' || printf 'no census' )" \
+    "$(printf '%s' "$recs" | jq -r 'group_by(.disposition) | map("\(.[0].disposition // "?") \(length)") | join(" · ")' 2>/dev/null)"
+  printf 'clear a terminal: lr-upgrade.sh --reset <sid> · refresh the census: lr-upgrade.sh --status --census\n'
+}
+# shellcheck disable=SC2016  # jq/awk programs: their $names are jq/awk variables, not shell ones
+lru_reset() { # $1=sid|all — takes the drain lock; refuses while a drainer holds it, and refuses in-flight records
+  local sel="$1" f sid n=0
+  [ -n "$sel" ] || { lru_say "--reset <sid|all>"; return 3; }
+  mkdir -p "$LRU_STATE" 2>/dev/null || true
+  if ! mkdir "$UPG_LOCK" 2>/dev/null; then
+    local hp; hp="$(cat "$UPG_LOCK/pid" 2>/dev/null || true)"
+    if [ -n "$hp" ] && lru_lock_live "$UPG_LOCK" "$hp"; then lru_say "REFUSED: a drainer holds $UPG_LOCK (pid $hp) - nothing reset"; return 2; fi
+    rm -rf "$UPG_LOCK"; mkdir "$UPG_LOCK" 2>/dev/null || { lru_say "REFUSED: could not take $UPG_LOCK - nothing reset"; return 2; }
+  fi
+  echo "$$" > "$UPG_LOCK/pid"
+  for f in "$UPG_STATE"/*.json; do
+    [ -f "$f" ] || continue
+    sid="$(basename "$f" .json)"
+    [ "$sel" = all ] || case "$sid" in "$sel"*) ;; *) continue ;; esac
+    case "$(lru_st_get "$sid" .disposition)" in
+      in-flight|exit-pending) lru_say "REFUSED: ${sid:0:8} is $(lru_st_get "$sid" .disposition) - settle owns it"; continue ;;
+    esac
+    lru_st_put "$sid" '.terminal = null | .attempts = 0 | .readbacks = 0 | .interrupted = 0 | .disposition = "retry-wait" | .next_eligible = $now | .last_reason = "reset by hand"' \
+      && n=$((n + 1))
+  done
+  rm -rf "$UPG_LOCK"
+  lru_say "reset $n record(s)"
+  return 0
+}
+
 # ── drive ONE session ────────────────────────────────────────────────────────────────────────────
 # Fenced like lru_switch_drive: the launch lock spans the relaunch, the retype loop and the settle.
+# shellcheck disable=SC2016  # jq/awk programs: their $names are jq/awk variables, not shell ones
 lru_drive() { # $1=sid $2=pane $3=requested_by $4=req id [$5=scrub-composer text] → prints the result row; rc 0 upgraded · 1 failed · 3 skipped
-  local frc=0
+  local frc=0 disp own ownls hp hl
+  # NEVER A SECOND ACTOR on a record whose owner, handoff-fire foreground or watcher is alive; an
+  # exit-pending session is watched by settle, not driven again; a dead owner's record is settled
+  # (not re-driven) in this call.
+  if [ -f "$(lru_st_path "$1")" ]; then
+    disp="$(lru_st_get "$1" .disposition)"
+    case "$disp" in
+      exit-pending)
+        LRU_NEXT_CLASS=keep; lru_result "$1" "$2" skipped "in flight: /exit was sent earlier and the old claude is watched (exit-pending)" "" "${4:-}" "${3:-?}"; return 3 ;;
+      in-flight)
+        own="$(lru_st_get "$1" .owner.pid)"; ownls="$(lru_st_get "$1" .owner.lstart)"
+        hp="$(lru_st_get "$1" .hf.pid)"; hl="$(lru_st_get "$1" .hf.lstart)"
+        if lru_owner_live "$own" "$ownls" || lru_owner_live "$hp" "$hl" || [ -n "$(lru_watchers "$1" "$2")" ]; then
+          LRU_NEXT_CLASS=keep; lru_result "$1" "$2" skipped "in flight under pid ${own:-?} (handoff-fire ${hp:-0})" "" "${4:-}" "${3:-?}"; return 3
+        fi
+        lru_settle_one "$1"; return 3 ;;
+    esac
+  fi
   if ! lr_recon_may_act "$1" lr-upgrade; then
     lru_result "$1" "$2" skipped "reconciler owns it" "" "${4:-}" "${3:-?}"; return 3
   fi
+  LRU_DRIVE_RUN="$UPG_RUNS/${1:0:8}-$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "$LRU_DRIVE_RUN" 2>/dev/null || true
+  # CLAIM: a fresh in-flight record. A terminal left from an earlier round is cleared, because only
+  # a manual request or --reset can queue a terminal session (refill and auto-enqueue skip them).
+  lru_st_put "$1" '.pane = $p | .disposition = "in-flight" | .step = "claim" | .step_since = $now | .run = $run
+      | .owner = {pid: ($pid | tonumber), lstart: $ls, kind: "drainer"}
+      | .req = {id: $req, by: $by, origin: (if $by == "poller-auto" then "auto" else "manual" end), claimed_file: $cf, scrub_exact: $sc}
+      | .token = "" | .receipt = "" | .hf = {pid: 0, lstart: ""} | .exit_sent = 0 | .team_held = 0 | .relaunch_attempts = 0
+      | .cap_refusals = 0 | .paged = 0 | .canary = 0
+      | (if ((.terminal // null) != null and .terminal != "upgraded") then .terminal = null | .attempts = 0 | .readbacks = 0 else . end)' \
+      --arg p "$2" --arg run "$LRU_DRIVE_RUN" --arg pid "$$" --arg ls "$(lru_pid_lstart "$$")" --arg req "${4:-}" --arg by "${3:-?}" \
+      --arg cf "${LRU_CLAIMED_FILE:-}" --arg sc "${5:-}" || true
   _lru_drive_run "$@" || frc=$?
+  LRU_DRIVE_RUN=""; lru_token_drop
   lr_recon_act_done
   return "$frc"
 }
+# shellcheck disable=SC2016  # jq/awk programs: their $names are jq/awk variables, not shell ones
 _lru_drive_run() {
   local sid="$1" pane="$2" by="${3:-?}" req="${4:-}" row disp bin model tgt eff perm cfg cwd pid
   local LRU_SCRUB_EXACT="${5:-${LRU_SCRUB_EXACT:-}}"; export LRU_SCRUB_EXACT
-  local mutex run L t0 hflog hrc=0 i cmd target_bin sock binlabel st
+  local mutex run L t0 hflog hrc=0 cmd target_bin binlabel st crc=0 hfpid acct sock strong lrole canary_f="" w
+  run="${LRU_DRIVE_RUN:-$UPG_RUNS/${sid:0:8}-$(date -u +%Y%m%dT%H%M%SZ)}"; mkdir -p "$run" 2>/dev/null || true
+  LRU_RD_LOG="$run/resume-debt.log"
   mutex="$UPG_MUTEX_DIR/$sid.active"
   mkdir -p "$UPG_MUTEX_DIR" 2>/dev/null || true
   if ! lru_mutex_take "$sid" "$pane" "lr-upgrade"; then
@@ -1999,9 +2533,18 @@ _lru_drive_run() {
   # shellcheck disable=SC2064  # expand now: the mutex path is fixed for this call
   trap "rm -rf '$mutex' 2>/dev/null" RETURN
 
-  # RE-CHECK AT EXECUTION TIME. The request was judged when it was written; the fleet has moved since.
-  row="$(lru_census "$pane" 2>/dev/null | LRU_S="$sid" awk -F'\t' '$2 == ENVIRON["LRU_S"]' | head -1)"
+  # 1. CENSUS — re-checked at execution time, for this pane only, bounded (a census under load
+  # 100-275 ran minutes on 2026-10-08).
+  lru_step "$sid" census
+  row="$(lru_census_bounded "$pane" 2>/dev/null)" || crc=$?
+  if [ "$crc" = 124 ] || [ "$crc" = 137 ]; then
+    lru_result "$sid" "$pane" skipped "census timed out after ${LRU_CENSUS_TIMEOUT_S} s (nothing typed)" "" "$req" "$by"; return 3
+  fi
+  row="$(printf '%s\n' "$row" | LRU_S="$sid" awk -F'\t' '$2 == ENVIRON["LRU_S"]' | head -1)"
   if [ -z "$row" ]; then
+    if [ "$(lru_st_get "$sid" .exit_sent)" = 1 ]; then
+      lru_result "$sid" "$pane" skipped "no registry row binds pane $pane to ${sid:0:8} now, after an /exit sent earlier (settle owns it)" "" "$req" "$by"; return 3
+    fi
     lru_result "$sid" "$pane" skipped "not live: no registry row binds pane $pane to ${sid:0:8} now" "" "$req" "$by"; return 3
   fi
   IFS=$'\t' read -r _ _ bin model tgt eff perm cfg cwd pid disp <<EOF
@@ -2023,31 +2566,34 @@ EOF
   fi
   [ "$role" = lead ] && team="session-${sid:0:8}"
   target_bin="$("$LRU_CLAUDE_BIN_CMD" 2>/dev/null || true)"
-
-  if ! lru_capacity "$sid"; then
-    lru_result "$sid" "$pane" skipped "capacity: ${LRU_CAP_WHY:-refused} (nothing typed; re-run later)" "cc-lr upgrade $pane" "$req" "$by"; return 3
-  fi
-  run="$UPG_RUNS/${sid:0:8}-$(date -u +%Y%m%dT%H%M%SZ)"
+  binlabel="$(printf '%s\n' "$target_bin" | awk -F/ '{ for (i = 1; i <= NF; i++) if ($i ~ /^\.claude-/) { print $i; exit } ; print $NF }')"
   [ -n "$eff" ] && [ "$eff" != - ] || eff=high
-  L="$(lru_mint_launcher "$run" "$cfg" "$cwd" "$sid" "$tgt" "$eff" "$perm" "$LRU_TOKEN" "$role" "$targs" "$team")" || {
-    lru_result "$sid" "$pane" failed "could not mint an ASCII-only launcher in $run (nothing typed)" "" "$req" "$by"; return 1; }
-  cmd="cd $(printf %q "$cwd") && bash $(printf %q "$L")"
-  hflog="$run/handoff-fire.log"
-  # +1 RAIL JUNK: re-read the composer NOW (the census read may be minutes old). Rail junk gets a
-  # receipt, so handoff-fire's composer gate scrubs it instead of deferring; anything else that
-  # appeared since the census is somebody's draft and stops this session here, untouched.
-  local jrc=0; lru_composer "$pane" || jrc=$?
+  acct="$(jq -r '.account // empty' "$LRU_REG_DIR/$pane.json" 2>/dev/null)"
+  sock="$(jq -r '.kitty_listen_on // empty' "$LRU_REG_DIR/$pane.json" 2>/dev/null)"
+  [ -n "$sock" ] || sock="$(command -v lr_kitty_socket >/dev/null 2>&1 && lr_kitty_socket 2>/dev/null || true)"
+  lru_st_put "$sid" '(if ((.target.binlabel // "") != "" and ((.target.binlabel // "") != $tb or (.target.model // "") != $tm))
+                       then .attempts = 0 | .readbacks = 0 | .interrupted = 0 | .terminal = null else . end)
+      | .role = (if $role == "" then "plain" else $role end) | .team = $team | .team_args = $targs | .cfg = $cfg | .cwd = $cwd
+      | .account = $acct | .effort = $eff | .perm = $perm | .kitty_sock = $sock
+      | .from = {bin: $fb, model: $fm} | .target = {bin: $tbin, binlabel: $tb, model: $tm}
+      | .old = {pid: ($pid | tonumber), lstart: $ols, had_watcher: (if $hw == "watcher" then 1 else 0 end)}' \
+      --arg tb "$binlabel" --arg tm "$tgt" --arg tbin "$target_bin" --arg role "$role" --arg team "$team" --arg targs "$targs" \
+      --arg cfg "$cfg" --arg cwd "$cwd" --arg acct "$acct" --arg eff "$eff" --arg perm "$perm" --arg sock "$sock" \
+      --arg fb "$(printf '%s\n' "$bin" | awk -F/ '{ for (i = 1; i <= NF; i++) if ($i ~ /^\.claude-/) { print $i; exit } ; print $NF }')" \
+      --arg fm "$model" --arg pid "${pid:-0}" --arg ols "$(lru_pid_lstart "$pid")" --arg hw "$(lru_bg_kind "$(lru_snapshot)" "$pid" 2>/dev/null)" || true
+
+  # 2. PRECHECK — every read that can refuse without typing, BEFORE capacity is minted (125 skips on
+  # 2026-10-08 each minted a token first and leaked it for 1020 s). The composer is classified only:
+  # a rail-junk receipt is filed in step 5, immediately before the recycle that consumes it.
+  lru_step "$sid" precheck
+  local jrc=0 junk=0; lru_composer "$pane" || jrc=$?
   case "$jrc" in
     0) ;;
-    3) lru_file_rail_receipt "$pane" "$LRU_COMPOSER_TEXT" \
-         || { lru_result "$sid" "$pane" skipped "composer holds rail junk but its receipt could not be filed (nothing typed)" "" "$req" "$by"; return 3; } ;;
+    3) junk=1 ;;
     1) lru_result "$sid" "$pane" skipped "composer-occupied (appeared after the census; nothing typed)" "" "$req" "$by"; return 3 ;;
     *) lru_result "$sid" "$pane" skipped "composer-unknown (unreadable at the last read; nothing typed)" "" "$req" "$by"; return 3 ;;
   esac
-  # THE RELAUNCH SURFACE, BEFORE ANY /exit (incident 2026-09-28): the relaunch is typed into this
-  # pane, so a pane the terminal does not enumerate now is a close with nowhere to resume into. Only
-  # a positive answer proceeds; an absent ledger tool keeps the pre-ledger behaviour, said aloud.
-  LRU_RD_LOG="$run/resume-debt.log"
+  # THE RELAUNCH SURFACE, BEFORE ANY /exit (incident 2026-09-28): only a positive answer proceeds.
   local src=0; lru_surface "$pane" || src=$?
   case "$src" in
     0) ;;
@@ -2055,96 +2601,171 @@ EOF
     127) lru_say "cc-resume-debt absent ($LRU_RD_BIN): relaunch surface of pane $pane NOT verified - proceeding as before" ;;
     *) lru_result "$sid" "$pane" skipped "relaunch-surface-unverified: relaunch surface unknown for pane $pane (surface rc $src; nothing typed)" "" "$req" "$by"; return 3 ;;
   esac
-  # THE HOLD (lead only), as late as possible: every check that can still refuse without typing has
-  # run. From here to the launcher's --team-restore the lead has no team dir, so its exit-time
-  # cleanupSessionTeams finds no member to kill and nothing to delete.
+
+  # 3. CAPACITY, then the launcher. §7: a plain session is relaunched PROMPT-FREE once this
+  # (binary, model, account) has answered one canary turn; a lead keeps its prompt (it carries the
+  # team-inbox note), a teammate never had one.
+  lru_step "$sid" capacity
+  if ! lru_capacity "$sid"; then
+    lru_result "$sid" "$pane" skipped "capacity: ${LRU_CAP_WHY:-refused} (nothing typed; re-run later)" "cc-lr upgrade $pane" "$req" "$by"; return 3
+  fi
+  LRU_TOKEN_LIVE="$LRU_TOKEN"
+  lrole="$role"
+  if [ -z "$role" ]; then
+    canary_f="$UPG_CANARY/${binlabel}__${tgt}__${acct:-unknown}"
+    case "$LRU_CONFIRM_TURN" in
+      off) lrole=quiet; canary_f="" ;;
+      on) canary_f="" ;;
+      *) if [ -f "$canary_f" ]; then lrole=quiet; canary_f=""; fi ;;
+    esac
+  fi
+  L="$(lru_mint_launcher "$run" "$cfg" "$cwd" "$sid" "$tgt" "$eff" "$perm" "$LRU_TOKEN" "$lrole" "$targs" "$team")" || {
+    lru_result "$sid" "$pane" failed "could not mint an ASCII-only launcher in $run (nothing typed)" "" "$req" "$by"; return 1; }
+  lru_st_put "$sid" '.token = $t | .launch_role = $lr | .canary = (if $c != "" then 1 else 0 end)' \
+    --arg t "$LRU_TOKEN" --arg lr "$lrole" --arg c "$canary_f" || true
+  cmd="cd $(printf %q "$cwd") && bash $(printf %q "$L")"
+  hflog="$run/handoff-fire.log"
+
+  # 4. THE HOLD (lead only), as late as possible: every check that can refuse without typing has run.
   if [ "$role" = lead ]; then
+    lru_step "$sid" hold
     if ! lru_team_hold "$cfg" "$team"; then
       lru_result "$sid" "$pane" skipped "team $team could not be held aside ($(lru_team_dir "$cfg" "$team") absent, or a previous hold $(lru_team_hold_path "$cfg" "$team") was never restored) - nothing typed" "" "$req" "$by"; return 3
     fi
-    held=1
+    held=1; lru_st_put "$sid" '.team_held = 1' || true
+  fi
+
+  # 5. FIRE. The identity --relaunch-at-shell will need, the rail receipt, then handoff-fire's remote
+  # same-account recycle — in the background with its pid recorded, so a drainer killed while it runs
+  # leaves a record that names the process still owning the pane.
+  lru_step "$sid" fire
+  strong="$(lru_identity_write "$run" "$pid" "$pane" "$sock")"
+  lru_st_put "$sid" '.identity = $i | .identity_strong = ($s | tonumber) | .last_alive_ts = $now' \
+    --arg i "$run/identity.json" --arg s "${strong:-0}" || true
+  if [ "$junk" = 1 ]; then
+    lru_file_rail_receipt "$pane" "$LRU_COMPOSER_TEXT" \
+      || { [ "$held" = 1 ] && lru_team_restore "$cfg" "$team"
+           lru_result "$sid" "$pane" skipped "composer holds rail junk but its receipt could not be filed (nothing typed)" "" "$req" "$by"; return 3; }
+    LRU_RECEIPT_FILED="$LRU_COMPOSER_TEXT"
+    lru_st_put "$sid" '.receipt = $r' --arg r "$LRU_COMPOSER_TEXT" || true
   fi
   t0="$(date -u +%FT%T)"
-  # THE RELAUNCH. handoff-fire's remote form, same-account class: it re-proves the binding, the pin,
-  # the account, the absence of a tombstone and the transcript at rest, gates the composer, re-reads
-  # the transcript immediately before /exit, types /exit, waits for the shell and types the launcher.
-  local engage_proc=0; [ "$role" = teammate ] && engage_proc=1
-  # THE EXIT DIALOG, FOR A TEAM ROLE: CANCEL, NEVER CHOOSE. If /exit raises "Background work is
-  # running", both exits are wrong here — "Move to background and exit" hands the conversation to a
-  # background worker by session id (a second live copy beside the --resume we are about to type),
-  # and "Exit and stop tasks" aborts tasks BEFORE shutdown commits, which tears down a live
-  # member's pane. Esc (= Stay) leaves the session exactly as it was; the drive reports it skipped.
+  local engage_proc=0; case "$lrole" in teammate|quiet) engage_proc=1 ;; esac
+  # THE EXIT DIALOG, FOR A TEAM ROLE: CANCEL, NEVER CHOOSE (see lru_switch_drive's notes).
   local bgwork_answer="${CC_RECYCLE_BGWORK_ANSWER:-on}"; [ -n "$role" ] && bgwork_answer=cancel
   ( cd "$cwd" 2>/dev/null || cd /; CC_RECYCLE_BGWORK_ANSWER="$bgwork_answer" HF_ENGAGE_BY_PROCESS="$engage_proc" CLAUDE_CONFIG_DIR="$cfg" bash "$LRU_HF_BIN" --recycle --same-account \
       --source-pane "$pane" --source-session "$sid" --resume-launcher "$L" --resume-cfg "$cfg" \
-      --resume-cwd "$cwd" ${tm_id:+--team-member-id "$tm_id"} --await ) > "$hflog" 2>&1 || hrc=$?
-  binlabel="$(printf '%s\n' "$target_bin" | awk -F/ '{ for (i = 1; i <= NF; i++) if ($i ~ /^\.claude-/) { print $i; exit } ; print $NF }')"
+      --resume-cwd "$cwd" ${tm_id:+--team-member-id "$tm_id"} --await ) > "$hflog" 2>&1 &
+  hfpid=$!
+  lru_st_put "$sid" '.hf = {pid: ($p | tonumber), lstart: $l}' --arg p "$hfpid" --arg l "$(lru_pid_lstart "$hfpid")" || true
+  wait "$hfpid" || hrc=$?
+  lru_hf_evidence "$hflog"
+
   if [ "$hrc" = 0 ] && lru_resumed_on "$sid" "$target_bin" "$tgt" && lru_proven "$sid" "$target_bin" "$tgt"; then
-    if [ "$role" = teammate ]; then
-      lru_result "$sid" "$pane" upgraded "now $tgt on $binlabel (effort $eff) as teammate $tm_id; confirmed by its live --resume process (no prompt by design: the team is not woken)" "" "$req" "$by"; return 0
-    fi
-    lru_result "$sid" "$pane" upgraded "now $tgt on $binlabel (effort $eff)${role:+ as $role}; confirmed by a fresh assistant turn" "" "$req" "$by"; return 0
-  fi
-  # NOT ENGAGED. Which side of the /exit are we on? The old process is the discriminator.
-  if kill -0 "$pid" 2>/dev/null; then
-    # Refused before the /exit: the lead is alive and must get its team back NOW.
-    [ "$held" = 1 ] && { lru_team_restore "$cfg" "$team" || lru_say "!! team $team hold could not be restored - it is at $(lru_team_hold_path "$cfg" "$team")"; }
-    lru_result "$sid" "$pane" skipped "handoff-fire refused before /exit (rc $hrc): $(grep -m1 '^!!' "$hflog" 2>/dev/null | cut -c1-200) - session untouched" "" "$req" "$by"; return 3
-  fi
-  # The old process is gone. Either the relaunch is up (slow engagement) or the pane is at a bare
-  # shell. NEVER leave it there: retype the launcher, bounded. capacity-admit admits a given resume
-  # after 3 refusals on one budget key (this run's dir), so ≤5 tries is enough and cannot loop.
-  # Retype ONLY into a surface that exists: a destroyed window's pane id types nowhere, and its tty
-  # may already belong to someone else's new window.
-  i=0
-  local gone="" trc
-  while ! lru_resumed_on "$sid" "$target_bin" "$tgt"; do
-    [ "$i" -ge "$LRU_RETYPE_MAX" ] && break
-    src=0; lru_surface "$pane" || src=$?
-    if [ "$src" = 1 ]; then
-      gone=1; lru_say "pane $pane is no longer enumerated by the terminal: retyping stopped after $i retype(s)"; break
-    fi
-    i=$((i + 1))
-    sock="$(command -v lr_kitty_socket >/dev/null 2>&1 && lr_kitty_socket 2>/dev/null || true)"
-    trc=0; lru_it2 "$sock" session run -s "$pane" "cd $(printf %q "$cwd") && nocorrect bash $(printf %q "$L")" >/dev/null 2>&1 || trc=$?
-    [ "$trc" = 0 ] || lru_say "retype $i into pane $pane: it2 rc $trc"
-    local w=0
-    while [ "$w" -lt 30 ]; do lru_resumed_on "$sid" "$target_bin" "$tgt" && break; sleep 2; w=$((w + 2)); done
-    lru_resumed_on "$sid" "$target_bin" "$tgt" || sleep "$LRU_RETYPE_GAP_S"
-  done
-  if ! lru_resumed_on "$sid" "$target_bin" "$tgt"; then
-    # The launcher never ran: put the team back so the settle (or the manual relaunch) finds it.
-    [ "$held" = 1 ] && { lru_team_restore "$cfg" "$team" || lru_say "!! team $team hold could not be restored - it is at $(lru_team_hold_path "$cfg" "$team")"; }
-    local left="pane $pane stayed at a bare shell after $i retype(s)"
-    [ -n "$gone" ] && left="pane $pane was gone"
-    lru_settle_verdict "$sid" "$pane" "$left" \
-      "pane left at a bare shell after $i retype(s) (handoff-fire rc $hrc; log $hflog)" "$cmd" "$req" "$by"
+    LRU_TOKEN_LIVE=""
+    lru_st_put "$sid" '.exit_sent = 1' || true
+    lru_prove_verdict "$sid" "$pane" "$role" "$lrole" "$tgt" "$binlabel" "$eff" "$tm_id" "" "$run" "$cfg" "$t0" "$canary_f" "$req" "$by"
     return
   fi
-  # A PROCESS IS NOT PROOF: `upgraded` below requires the registry-bound LIVE read. An unproven
-  # relaunch (an out-of-pane or unregistered --resume) is settled, never reported upgraded.
+  # 6. NOT ENGAGED. Which side of /exit? handoff-fire's own log decides; the old pid breaks only the
+  # tie the log cannot (a log with no debt line, from a path that never opens one).
+  if [ "$HFE_EXIT_SENT" = 0 ] && kill -0 "$pid" 2>/dev/null; then
+    [ "$held" = 1 ] && { lru_team_restore "$cfg" "$team" || lru_say "!! team $team hold could not be restored - it is at $(lru_team_hold_path "$cfg" "$team")"; }
+    local note=""
+    if [ "$HFE_HOLD" = exit-readback ]; then
+      local xrc=0; lru_clear_own_exit "$pane" || xrc=$?
+      case "$xrc" in 0) note="; our /exit cleared from the composer" ;; 1) note="; the composer is not our /exit (nothing sent)" ;; *) note="; composer unreadable (nothing sent)" ;; esac
+    fi
+    lru_result "$sid" "$pane" skipped "handoff-fire refused before /exit (rc $hrc): $(grep -m1 '^!!' "$hflog" 2>/dev/null | cut -c1-200) - session untouched$note" "" "$req" "$by"; return 3
+  fi
+  lru_st_put "$sid" '.exit_sent = 1' || true
+  if kill -0 "$pid" 2>/dev/null; then
+    # /exit SENT and the old claude still runs: it takes 11-16 s to exit (measured). Linger, then
+    # hand it to settle as exit-pending — nothing is typed into a pane whose claude is still up.
+    w=0; while [ "$w" -lt "$LRU_EXIT_LINGER_S" ] && kill -0 "$pid" 2>/dev/null; do sleep 2; w=$((w + 2)); done
+    if kill -0 "$pid" 2>/dev/null; then
+      [ "$held" = 1 ] && { lru_team_restore "$cfg" "$team" && lru_st_put "$sid" '.team_held = 0'; }
+      lru_token_drop
+      lru_st_put "$sid" '.last_alive_ts = $now' || true
+      LRU_NEXT_CLASS=exit-pending
+      lru_result "$sid" "$pane" skipped "/exit sent; old claude pid $pid still alive after ${LRU_EXIT_LINGER_S} s - watched each run (nothing typed)" "" "$req" "$by"; return 3
+    fi
+  fi
+  # The old process is gone; the launcher owns the token now.
+  LRU_TOKEN_LIVE=""
+  local retyped=""
+  if ! lru_resumed_on "$sid" "$target_bin" "$tgt"; then
+    lru_step "$sid" relaunch
+    local grc=0; lru_relaunch_gated "$sid" "$L" || grc=$?
+    case "$grc" in
+      0) retyped="; relaunched at its shell by --relaunch-at-shell after handoff-fire's watcher did not" ;;
+      4) LRU_NEXT_CLASS=keep
+         lru_result "$sid" "$pane" skipped "relaunch held: $LRU_RELAUNCH_WHY (settled next run)" "" "$req" "$by"; return 3 ;;
+      *) [ "$held" = 1 ] && { lru_team_restore "$cfg" "$team" || lru_say "!! team $team hold could not be restored - it is at $(lru_team_hold_path "$cfg" "$team")"; }
+         lru_settle_verdict "$sid" "$pane" "pane $pane left at a shell; $LRU_RELAUNCH_WHY" \
+           "pane left at a bare shell ($LRU_RELAUNCH_WHY; handoff-fire rc $hrc; log $hflog)" "$cmd" "$req" "$by"
+         return ;;
+    esac
+  fi
+  lru_step "$sid" prove
+  # A PROCESS IS NOT PROOF: `upgraded` requires the registry-bound LIVE read.
   if ! lru_proven "$sid" "$target_bin" "$tgt"; then
     lru_settle_verdict "$sid" "$pane" "a --resume ${sid:0:8} process runs on the target but is not proven LIVE in the registry" \
       "relaunch unproven (handoff-fire rc $hrc; log $hflog)" "$cmd" "$req" "$by"
     return
   fi
-  # RELAUNCHED ON THE TARGET — the upgrade is done. Now the confirmation turn, bounded, and cut
-  # short the moment lr-fire-resume itself records that its prompt never reached the transcript.
-  local waited=0 retyped=""
-  [ "$i" -gt 0 ] && retyped="; ${i} retype(s) after handoff-fire's watcher declined to type"
-  # A teammate gets no prompt by design, so there is no confirmation turn to wait for.
+  lru_prove_verdict "$sid" "$pane" "$role" "$lrole" "$tgt" "$binlabel" "$eff" "$tm_id" "$retyped" "$run" "$cfg" "$t0" "$canary_f" "$req" "$by"
+}
+
+# §7 THE VERDICT OF A PROVEN RELAUNCH. teammate: by process, as before. quiet (a plain session whose
+# canary has answered): process + registry (already proven) + the pane binding + lr-fire-resume's
+# READY, and NOTHING is typed if READY is missing. lead and canary: today's fresh-turn rule; a canary
+# that answers writes the file that makes the next plain session of its tuple prompt-free.
+lru_prove_verdict() { # $1=sid $2=pane $3=role $4=launch role $5=model $6=binlabel $7=effort $8=member id $9=retyped ${10}=run ${11}=cfg ${12}=t0 ${13}=canary file ${14}=req ${15}=by
+  local sid="$1" pane="$2" role="$3" lrole="$4" tgt="$5" binlabel="$6" eff="$7" tm_id="$8" retyped="$9" run="${10}" cfg="${11}" t0="${12}" canary_f="${13}" req="${14}" by="${15}"
+  local waited=0 st bound ready="" brc=0 wl=""
+  lru_step "$sid" confirm
   if [ "$role" = teammate ]; then
-    lru_result "$sid" "$pane" upgraded "now $tgt on $binlabel (effort $eff) as teammate $tm_id; no prompt by design (the team is not woken)$retyped" "" "$req" "$by"; return 0
+    lru_result "$sid" "$pane" upgraded "now $tgt on $binlabel (effort $eff) as teammate $tm_id; confirmed by its live --resume process (no prompt by design: the team is not woken)$retyped" "" "$req" "$by"; return 0
+  fi
+  if [ "$lrole" = quiet ]; then
+    lru_pane_bound "$sid" "$pane" || brc=$?
+    case "$brc" in 0) bound="pane $pane bound" ;; 127) bound="pane binding UNPROVEN (no cc-find)" ;; *) bound="pane binding UNPROVEN (cc-find does not name pane $pane)" ;; esac
+    while :; do
+      st="$(jq -r 'select(.state == "READY" or .state == "READY-QUIET" or .state == "READY-NOT-SEEN") | .state' "$run/events.jsonl" 2>/dev/null | tail -n 1)"
+      [ -n "$st" ] && break
+      [ "$waited" -lt "$LRU_READY_S" ] || break
+      sleep 2; waited=$((waited + 2))
+    done
+    case "$st" in
+      READY|READY-QUIET) ready="TUI $st" ;;
+      *) ready="TUI readiness UNPROVEN (lr-fire-resume: ${st:-no state in ${LRU_READY_S} s})"
+         LRU_DRAIN_NEWS="${LRU_DRAIN_NEWS}pane $pane ${sid:0:8}: upgraded, but its TUI readiness is UNPROVEN - look at the pane"$'\n' ;;
+    esac
+    if [ "$(lru_st_get "$sid" .old.had_watcher)" = 1 ]; then
+      # Informational: the SessionStart mailbox-wake-arm hook re-arms it; a cc-await-ping descended
+      # from the new --resume process says it did.
+      local np; np="$(lr_resume_procs "$sid" 2>/dev/null | head -1)"
+      wl="; inbox watcher NOT re-armed"
+      if [ -n "$np" ] && lru_snapshot | awk -v root="$np" "$LRU_PROC_LINE"' { par[$1] = $2; if (index($0, "cc-await-ping")) w[$1] = 1 }
+           END { for (p in w) { q = p; for (i = 0; i < 6; i++) { q = par[q]; if (q == root) f = 1 } } exit !f }'; then
+        wl="; inbox watcher re-armed"
+      fi
+    fi
+    lru_result "$sid" "$pane" upgraded "now $tgt on $binlabel (effort $eff); proven by its registry-bound live --resume process, $bound, $ready; no prompt (this binary, model and account already answered a canary turn)$wl$retyped" "" "$req" "$by"
+    return 0
   fi
   while :; do
     if command -v lr_engaged_after >/dev/null 2>&1 && lr_engaged_after "$cfg" "$sid" "$t0"; then
-      lru_result "$sid" "$pane" upgraded "now $tgt on $binlabel (effort $eff); confirmed by a fresh assistant turn$retyped" "" "$req" "$by"; return 0
+      if [ -n "$canary_f" ]; then mkdir -p "$UPG_CANARY" 2>/dev/null && printf '%s %s\n' "$(lru_now)" "$sid" > "$canary_f"; fi
+      lru_result "$sid" "$pane" upgraded "now $tgt on $binlabel (effort $eff)${role:+ as $role}; confirmed by a fresh assistant turn${canary_f:+ (the canary for this binary, model and account)}$retyped" "" "$req" "$by"; return 0
     fi
     st="$(lru_submit_state "$run")"
     case "$st" in FAILED:submit|FAILED*) break ;; esac
     [ "$waited" -lt "$LRU_ENGAGE_S" ] || break
     sleep 5; waited=$((waited + 5))
   done
+  [ -n "$canary_f" ] && LRU_DRAIN_NEWS="${LRU_DRAIN_NEWS}pane $pane ${sid:0:8}: the canary turn for $binlabel/$tgt did not answer - the next plain session of that tuple is the canary again"$'\n'
   lru_result "$sid" "$pane" upgraded "now $tgt on $binlabel (effort $eff)$retyped; confirmation UNCONFIRMED (lr-fire-resume: ${st:-no state}) - the session is idle on the new binary; if its composer still shows the upgrade prompt, press Enter in pane $pane to confirm or Ctrl-U to discard it" "" "$req" "$by"
   return 0
 }
@@ -2392,6 +3013,13 @@ lru_drain() {
   if command -v lr_pidlock_stamp >/dev/null 2>&1; then lr_pidlock_stamp "$UPG_LOCK" "$$" || true; else echo "$$" > "$UPG_LOCK/pid"; fi
   # shellcheck disable=SC2064
   trap "rm -rf '$UPG_LOCK'" EXIT
+  # SETTLE FIRST (2026-10-08): every record a dead drainer left in flight, and every exit-pending
+  # session, is ruled on before anything new is driven. Then the drain bounds itself: it stops
+  # picking after LRU_DRAIN_MAX_S (never mid-session), which is what lets cc-reaper leave it alone.
+  local t_start; t_start="$(lru_now)"
+  LRU_DRAIN_NEWS="" LRU_DRIVEN=" "
+  lru_settle_all
+  lru_st_prune
   # --until-idle: each drain re-judges every parked switch ONCE (see lru_switch_waitable). Promoted
   # under the drain lock, before the loop, so one drain can never spin on a subject that stays busy.
   local d dn=0
@@ -2399,6 +3027,10 @@ lru_drain() {
   [ "$dn" -eq 0 ] || lru_say "re-judging $dn switch request(s) parked until idle"
   local urc uts c unclaimed=""
   while :; do
+    if [ $(( $(lru_now) - t_start )) -ge "$LRU_DRAIN_MAX_S" ]; then
+      lru_say "budget spent (${LRU_DRAIN_MAX_S} s); $(find "$UPG_QUEUE" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l | tr -d ' ') request(s) left queued for the next drain"
+      break
+    fi
     # The oldest request this drain has not already failed to claim (F2, below).
     q=""
     # shellcheck disable=SC2012  # names are ours (cc-lr-upgrade-<uuid>.json); ls -tr is the mtime order
@@ -2406,7 +3038,8 @@ lru_drain() {
       case $'\n'"$unclaimed"$'\n' in *$'\n'"$c"$'\n'*) continue ;; esac
       q="$c"; break
     done < <(ls -1tr "$UPG_QUEUE"/*.json 2>/dev/null)
-    [ -n "$q" ] || break
+    # EMPTY QUEUE: refill from one bounded census (the poller no longer runs one in its tick).
+    if [ -z "$q" ]; then lru_refill && continue; break; fi
     sid="$(jq -r '.sid // empty' "$q" 2>/dev/null)"; pane="$(jq -r '.source_pane // empty' "$q" 2>/dev/null)"
     by="$(jq -r '.requested_by // "?"' "$q" 2>/dev/null)"; req="$(jq -r '.req_id // empty' "$q" 2>/dev/null)"
     scrub="$(jq -r '.scrub_composer // empty' "$q" 2>/dev/null)"
@@ -2418,6 +3051,10 @@ lru_drain() {
     # deleted the request and then DROVE it anyway: a second typer into one pane. A request that
     # cannot be claimed is left where it is and skipped for the rest of this drain (never re-picked,
     # so an unwritable claimed/ cannot spin the loop). Kill switch LRU_CLAIM_STRICT=off.
+    # ONE DRIVE PER SESSION PER DRAIN (settled ones included), so a refill cannot loop on a sid.
+    if [ -n "$sid" ] && [ "$kind" = upgrade ]; then
+      case "$LRU_DRIVEN" in *" $sid "*) unclaimed="${unclaimed:+$unclaimed$'\n'}$q"; continue ;; esac
+    fi
     if ! mv -f "$q" "$UPG_CLAIMED/" 2>/dev/null; then
       if [ "${LRU_CLAIM_STRICT:-on}" = off ]; then rm -f "$q"
       else
@@ -2442,11 +3079,49 @@ lru_drain() {
               || lru_switch_result "$sid" "$pane" NOTMOVED - "$tgt" "busy, and its request could not be parked in $UPG_DEFER (nothing typed)" "$req" "$by"
           fi
         fi ;;
-      *) lru_drive "$sid" "$pane" "$by" "$req" "$scrub" || true ;;
+      *) LRU_DRIVEN="$LRU_DRIVEN$sid "; LRU_CLAIMED_FILE="$UPG_CLAIMED/${q##*/}"
+         lru_drive "$sid" "$pane" "$by" "$req" "$scrub" || true; LRU_CLAIMED_FILE="" ;;
     esac
     n=$((n + 1))
   done
-  lru_say "drain done: $n session(s)"
+  lru_say "drain done: $n session(s) in $(( $(lru_now) - t_start )) s"
+  [ -n "$LRU_DRAIN_NEWS" ] && lru_mail poller-auto "CC-LR-UPGRADE drain: $(printf '%s' "$LRU_DRAIN_NEWS" | tr '\n' ';' | cut -c1-900)"
+  return 0
+}
+# REFILL (2026-10-08): the drainer's own census replaces the poller's in-tick one, which a shared
+# 60 s bound killed on 27 of 78 ticks and left drain gaps of 60-98 min. One bounded fleet census,
+# cached for --status; each eligible upgrade row is queued once per drain.
+lru_refill() { # → 0 when it queued ≥ 1 request
+  local rows t crc=0 p s tgt d n=0 target_bin binlabel
+  [ "${LR_UPGRADE_AUTO:-on}" = off ] && return 1
+  [ -e "$LRU_STATE/upgrade-auto.off" ] && return 1
+  [ "${LRU_REFILLED:-0}" -ge "${LRU_REFILL_MAX:-3}" ] && return 1
+  LRU_REFILLED=$(( ${LRU_REFILLED:-0} + 1 ))
+  mkdir -p "$UPG_STATE" "$UPG_QUEUE" 2>/dev/null || return 1
+  t="$(lru_now)"; rows="$(lru_census_bounded "")" || crc=$?
+  { printf '# ts=%s dur_s=%s load1=%s rc=%s\n' "$(lru_now)" "$(( $(lru_now) - t ))" "$(lru_load1)" "$crc"; printf '%s\n' "$rows"; } \
+    > "$UPG_STATE/.census.tsv.tmp" 2>/dev/null && mv -f "$UPG_STATE/.census.tsv.tmp" "$UPG_STATE/.census.tsv"
+  [ "$crc" = 0 ] || { lru_say "refill: census rc $crc - nothing queued"; return 1; }
+  target_bin="$("$LRU_CLAUDE_BIN_CMD" 2>/dev/null || true)"
+  binlabel="$(printf '%s\n' "$target_bin" | awk -F/ '{ for (i = 1; i <= NF; i++) if ($i ~ /^\.claude-/) { print $i; exit } ; print $NF }')"
+  while IFS=$'\t' read -r p s _ _ tgt _ _ _ _ _ d; do
+    case "$d" in upgrade|upgrade-teammate|upgrade-lead) ;; *) continue ;; esac
+    case "$LRU_DRIVEN" in *" $s "*) continue ;; esac
+    lru_st_eligible "$s" "$binlabel" "$tgt" || continue
+    lru_write_auto_request "$p" "$s" && n=$((n + 1))
+  done <<EOF
+$rows
+EOF
+  lru_say "refill: $n session(s) queued (census $(( $(lru_now) - t )) s)"
+  [ "$n" -gt 0 ]
+}
+lru_write_auto_request() { # $1=pane $2=sid → the auto-enqueue file shape
+  local req tmp dest
+  req="${2:0:8}-$(date +%s)-auto"
+  tmp="$UPG_QUEUE/.auto-$2.$$.tmp"; dest="$UPG_QUEUE/auto-upgrade-$2.json"
+  jq -n --arg sid "$2" --arg pane "$1" --arg req "$req" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{kind:"upgrade", sid:$sid, source_pane:$pane, requested_by:"poller-auto", req_id:$req, ts:$ts, origin_class:"lr-upgrade-auto"}' \
+    > "$tmp" 2>/dev/null && mv -f "$tmp" "$dest" 2>/dev/null
 }
 
 # ── +2 THE AUTO-TRIGGER (operator ruling 2026-09-22: zero-human, end to end) ─────────────────────
@@ -2459,7 +3134,7 @@ lru_drain() {
 # can never stack duplicate requests behind itself.
 # KILL SWITCHES (either): LR_UPGRADE_AUTO=off · the file $LRU_STATE/upgrade-auto.off
 lru_auto_enqueue() { # → prints one line per queued sid; rc 0 always
-  local census hp q n=0 p s d req dest tmp
+  local census hp q n=0 p s d
   [ "${LR_UPGRADE_AUTO:-on}" = off ] && { lru_say "auto: off (LR_UPGRADE_AUTO=off)"; return 0; }
   [ -e "$LRU_STATE/upgrade-auto.off" ] && { lru_say "auto: off ($LRU_STATE/upgrade-auto.off)"; return 0; }
   for q in "$UPG_QUEUE"/*.json; do [ -f "$q" ] && { lru_say "auto: queue not empty - nothing added"; return 0; }; done
@@ -2467,13 +3142,14 @@ lru_auto_enqueue() { # → prints one line per queued sid; rc 0 always
   if [ -n "$hp" ] && kill -0 "$hp" 2>/dev/null; then lru_say "auto: drainer running (pid $hp) - nothing added"; return 0; fi
   census="$(lru_census "" 2>/dev/null)" || return 0
   mkdir -p "$UPG_QUEUE" 2>/dev/null || return 0
-  while IFS=$'\t' read -r p s _ _ _ _ _ _ _ _ d; do
+  local tgt target_bin binlabel
+  target_bin="$("$LRU_CLAUDE_BIN_CMD" 2>/dev/null || true)"
+  binlabel="$(printf '%s\n' "$target_bin" | awk -F/ '{ for (i = 1; i <= NF; i++) if ($i ~ /^\.claude-/) { print $i; exit } ; print $NF }')"
+  while IFS=$'\t' read -r p s _ _ tgt _ _ _ _ _ d; do
     case "$d" in upgrade|upgrade-teammate|upgrade-lead) ;; *) continue ;; esac
-    req="${s:0:8}-$(date +%s)-auto"
-    tmp="$UPG_QUEUE/.auto-$s.$$.tmp"; dest="$UPG_QUEUE/auto-upgrade-$s.json"
-    jq -n --arg sid "$s" --arg pane "$p" --arg req "$req" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-      '{kind:"upgrade", sid:$sid, source_pane:$pane, requested_by:"poller-auto", req_id:$req, ts:$ts, origin_class:"lr-upgrade-auto"}' \
-      > "$tmp" 2>/dev/null && mv -f "$tmp" "$dest" 2>/dev/null && { printf '%s\t%s\n' "$p" "$s"; n=$((n + 1)); }
+    # Read-only on the record: a terminal, in-flight, exit-pending or backing-off session is not queued.
+    lru_st_eligible "$s" "$binlabel" "$tgt" || continue
+    lru_write_auto_request "$p" "$s" && { printf '%s\t%s\n' "$p" "$s"; n=$((n + 1)); }
   done <<EOF
 $census
 EOF
@@ -2544,9 +3220,12 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
                 *) lru_say "unknown arg $1"; exit 3 ;; esac; done
               lru_marker_drive "$_s" "$_by" "$_rq"; exit $? ;;
     --drain)  lru_drain; exit $? ;;
+    --status) shift; lru_status "$@"; exit $? ;;
+    --reset)  [ $# -ge 2 ] || { lru_say "usage: --reset <sid|sid8|all>"; exit 3; }
+              lru_reset "$2"; exit $? ;;
     --auto-enqueue) lru_auto_enqueue; exit $? ;;
     --team-restore) [ $# -ge 3 ] || { lru_say "usage: --team-restore <cfg> <team>"; exit 3; }
               lru_team_restore "$2" "$3"; exit $? ;;
-    *) lru_say "usage: --census [--all|<ref>] | --drive <sid> <pane> | --switch-census [--from A] [--target A] [--pane P|--sid S] | --switch-drive <sid> <pane> <target> | --stale-markers [sid] | --marker-drive <sid> | --pin-target <sid> <model> | --drain | --auto-enqueue | --team-restore <cfg> <team>"; exit 3 ;;
+    *) lru_say "usage: --census [--all|<ref>] | --drive <sid> <pane> | --switch-census [--from A] [--target A] [--pane P|--sid S] | --switch-drive <sid> <pane> <target> | --stale-markers [sid] | --marker-drive <sid> | --pin-target <sid> <model> | --drain | --status [--json] [--census] | --reset <sid|all> | --auto-enqueue | --team-restore <cfg> <team>"; exit 3 ;;
   esac
 fi

@@ -1467,7 +1467,14 @@ lrp_upgrade_kick() {
   local hp det="" d pid
   # A PARKED switch is work too: the drain start is what re-judges it, so a tick that saw only
   # parked requests and did not kick would leave them waiting out their whole --until-idle budget.
-  compgen -G "$UPG_QUEUE/*.json" >/dev/null 2>&1 || compgen -G "$UPG_DEFER/*.json" >/dev/null 2>&1 || return 0
+  # THE DRAINER REFILLS ITSELF (2026-10-08): with auto on it starts every tick and runs its own
+  # bounded census, and an open state record (an in-flight or exit-pending session a dead drainer
+  # left) starts it even with auto off, so settle runs. The in-tick census this replaces was killed
+  # by the shared 60 s bound on 27 of 78 ticks, leaving drain gaps of 60-98 min.
+  compgen -G "$UPG_QUEUE/*.json" >/dev/null 2>&1 || compgen -G "$UPG_DEFER/*.json" >/dev/null 2>&1 \
+    || compgen -G "$STATE/upgrade-state/*.open" >/dev/null 2>&1 \
+    || [[ "${LR_POLLER_NO_CENSUS:-0}" != 1 && "${LR_UPGRADE_AUTO:-on}" != off && ! -e "$STATE/upgrade-auto.off" ]] \
+    || return 0
   # (pid, lstart) when lr-lib.sh is loaded (F1): a reused pid read as "already running" and the
   # queue then waited on a drainer that did not exist.
   hp="$(cat "$STATE/upgrade-drain.lock/pid" 2>/dev/null || true)"
@@ -1500,19 +1507,10 @@ lrp_upgrade_kick() {
   pid="$( . "$det" && detach "$STATE/upgrade-drain.log" /bin/bash "$UPG_BIN" --drain 2>/dev/null )" || pid=""
   log "UPGRADE-DRAIN started${pid:+ pid $pid} ($UPG_BIN --drain)"
 }
-# +2 THE AUTO-TRIGGER (operator ruling 2026-09-22): every tick, queue every live session whose
-# binary/model differs from the launcher pin + SSOT (lr-upgrade.sh --auto-enqueue — it adds nothing
-# while the queue holds work or a drainer runs, and it owns both kill switches: LR_UPGRADE_AUTO=off
-# and $STATE/upgrade-auto.off). A census, so it is skipped with the census (LR_POLLER_NO_CENSUS).
-# Bounded: the census is one ps snapshot plus a jq per registry row, measured ~6 s on 16 rows.
-if [[ "${LR_POLLER_NO_CENSUS:-0}" != 1 && "${LR_UPGRADE_AUTO:-on}" != off && -f "$UPG_BIN" ]]; then
-  if [[ $DRY -eq 1 ]]; then
-    log "DRY   upgrade auto-trigger would run: $UPG_BIN --auto-enqueue"
-  else
-    _upg_q="$(lrp_bounded_long /bin/bash "$UPG_BIN" --auto-enqueue 2>>"$LOG" || true)"
-    [[ -n "$_upg_q" ]] && log "UPGRADE-AUTO queued: $(printf '%s' "$_upg_q" | awk -F'\t' '{printf "%s%s(%s)", (NR>1?" ":""), $1, substr($2,1,8)}')"
-  fi
-fi
+# +2 THE AUTO-TRIGGER (operator ruling 2026-09-22: zero-human, end to end) lives in the drainer
+# since 2026-10-08: lrp_upgrade_kick starts it every tick while auto is on, and its refill runs the
+# census under its own LRU_CENSUS_TIMEOUT_S rather than this tick's shared 60 s bound. Kill switches
+# unchanged: LR_UPGRADE_AUTO=off, $STATE/upgrade-auto.off, LR_POLLER_NO_CENSUS=1.
 lrp_upgrade_kick
 # +3 THE RESUME-DEBT BACKSTOP (docs/plans/CLOSE_RESUME_CUSTODY.md §2 D4): one `cc-resume-debt sweep`
 # per tick steps every open debt once, so a debt whose settling watcher died still reaches proof or

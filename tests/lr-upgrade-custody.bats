@@ -135,7 +135,9 @@ STUB
   [ ! -s "$BATS_TEST_TMPDIR/it2.log" ] || { echo "retyped into a pane the terminal no longer enumerates"; cat "$BATS_TEST_TMPDIR/it2.log"; false; }
   grep -qx "settle --sid $SID" "$BATS_TEST_TMPDIR/rd.log" || { cat "$BATS_TEST_TMPDIR/rd.log"; false; }
   [ "$(jq -r .verdict "$(result "$SID")")" = upgraded ] || { cat "$(result "$SID")"; false; }
-  [[ "$(jq -r .reason "$(result "$SID")")" == "relaunched in a NEW window by cc-resume-debt (pane 603 was gone)"* ]] || { cat "$(result "$SID")"; false; }
+  # The in-pane relaunch is --relaunch-at-shell's alone now (2026-10-08); with no pane identity it is
+  # never attempted, and the session goes to the ledger's new window.
+  [[ "$(jq -r .reason "$(result "$SID")")" == "relaunched in a NEW window by cc-resume-debt (pane 603 "* ]] || { cat "$(result "$SID")"; false; }
 }
 
 @test "a second failure reports the escalated backlog row" {

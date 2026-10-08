@@ -418,7 +418,17 @@ cc_capacity_admit_reason() { echo "load 9.9/core over 1.5"; }
 cc_capacity_token_mint() { echo "$BATS_TEST_TMPDIR/tok-\$1"; }
 EOF
   export LRU_HF_BIN="$STUBS/hf"
-  printf '#!/bin/bash\necho "hf $*" >> %s\nexit 1\n' "$BATS_TEST_TMPDIR/order.log" > "$LRU_HF_BIN"; chmod +x "$LRU_HF_BIN"
+  # It also records every composer receipt present WHILE it runs: the drive files a receipt just
+  # before the recycle and takes it back when the recycle refuses before /exit (2026-10-08).
+  cat > "$LRU_HF_BIN" <<EOF
+#!/bin/bash
+echo "hf \$*" >> "$BATS_TEST_TMPDIR/order.log"
+for f in "\${CC_COMPOSER_RESIDUE_DIR:-/nonexistent}"/*; do
+  [ -f "\$f" ] && printf '%s\t%s\n' "\${f##*/}" "\$(cut -f2- "\$f")" >> "$BATS_TEST_TMPDIR/receipts-at-hf.log"
+done
+exit 1
+EOF
+  chmod +x "$LRU_HF_BIN"
 }
 
 @test "D1 [RED] a capacity REFUSAL is decided before handoff-fire runs: nothing is typed" {
@@ -515,9 +525,12 @@ tui_stub() { # composer contents come from $BATS_TEST_TMPDIR/composer-<pane>
   SESS_PID="$LIVE_PID" sess 564 27272727-0000-4000-8000-000000000001 "$OLD --model claude-opus-5 --effort high"
   printf 'In-placeupgrade:thissessionwasrelaunchedbycc-lrupgradeonthecurrent' > "$BATS_TEST_TMPDIR/composer-564"
   run bash "$LRU" --drive 27272727-0000-4000-8000-000000000001 564
-  [ -f "$CC_COMPOSER_RESIDUE_DIR/564" ] || { echo "no receipt: $output"; false; }
-  [ "$(cut -f2- "$CC_COMPOSER_RESIDUE_DIR/564")" = "$(cat "$BATS_TEST_TMPDIR/composer-564")" ] || { cat "$CC_COMPOSER_RESIDUE_DIR/564"; false; }
+  # Filed for the recycle (handoff-fire saw it) ...
+  [ "$(awk -F'\t' '$1 == "564" { print $2 }' "$BATS_TEST_TMPDIR/receipts-at-hf.log" 2>/dev/null)" = "$(cat "$BATS_TEST_TMPDIR/composer-564")" ] \
+    || { echo "no receipt at handoff-fire time: $output"; cat "$BATS_TEST_TMPDIR/receipts-at-hf.log" 2>/dev/null; false; }
   grep -q '^hf .*--same-account' "$BATS_TEST_TMPDIR/order.log" || { cat "$BATS_TEST_TMPDIR/order.log"; false; }
+  # ... and taken back when the recycle refused before /exit (the stub exits 1, the session lives).
+  [ ! -f "$CC_COMPOSER_RESIDUE_DIR/564" ] || { echo "a refused recycle left its receipt behind"; false; }
 }
 
 @test "F3 auto-enqueue queues each UPGRADE row once — never beside a busy queue, never when switched off" {
@@ -537,18 +550,26 @@ tui_stub() { # composer contents come from $BATS_TEST_TMPDIR/composer-<pane>
   [ ! -e "$q" ] || { echo "queued beside a non-empty queue"; false; }
 }
 
-@test "F4 [RED] the poller's tick runs the auto-trigger and kicks the drainer; LR_UPGRADE_AUTO=off stops it" {
+@test "F4 [RED] the tick starts the drainer to refill itself; it never runs a census in the tick; auto off stops it unless a record is open" {
+  # 2026-10-08: the in-tick --auto-enqueue census shared the tick's 60 s bound and was killed on 27
+  # of 78 ticks (drain gaps of 60-98 min); the drainer now runs its own bounded census (lru_refill).
   poller_env
   export LR_POLLER_NO_CENSUS=0
-  printf '#!/bin/bash\necho "$*" >> %s\ncase "$1" in --auto-enqueue) mkdir -p %s/upgrade-queue; echo "{}" > %s/upgrade-queue/auto-x.json; printf "570\\t29292929-0000\\n";; esac\n' \
-    "$BATS_TEST_TMPDIR/drain.log" "$PSTATE" "$PSTATE" > "$LR_UPGRADE_BIN"
+  printf '#!/bin/bash\necho "$*" >> %s\n' "$BATS_TEST_TMPDIR/drain.log" > "$LR_UPGRADE_BIN"
   LR_UPGRADE_AUTO=off LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
-  ! grep -q -- '--auto-enqueue' "$BATS_TEST_TMPDIR/drain.log" 2>/dev/null || { echo "ran with the switch off"; false; }
-  LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
-  grep -q -- '--auto-enqueue' "$BATS_TEST_TMPDIR/drain.log" || { cat "$PSTATE/poller.log"; false; }
-  grep -q 'UPGRADE-AUTO queued: 570(29292929)' "$PSTATE/poller.log" || { cat "$PSTATE/poller.log"; false; }
+  sleep 0.5
+  [ ! -s "$BATS_TEST_TMPDIR/drain.log" ] || { echo "auto off, nothing open, yet the drainer ran:"; cat "$BATS_TEST_TMPDIR/drain.log"; false; }
+  # An open record (an in-flight or exit-pending session a dead drainer left) starts it anyway: settle.
+  mkdir -p "$PSTATE/upgrade-state"; : > "$PSTATE/upgrade-state/29292929-0000-4000-8000-000000000001.open"
+  LR_UPGRADE_AUTO=off LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
   await_file "$BATS_TEST_TMPDIR/drain.log"; i=0; while ! grep -qx -- '--drain' "$BATS_TEST_TMPDIR/drain.log" && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+  grep -qx -- '--drain' "$BATS_TEST_TMPDIR/drain.log" || { echo "an open record did not start the drainer"; cat "$PSTATE/poller.log"; false; }
+  rm -f "$PSTATE/upgrade-state/"*.open "$PSTATE/upgrade-drain.lock/pid"; : > "$BATS_TEST_TMPDIR/drain.log"
+  # Auto on, empty queue: the drainer starts (it refills itself), and the tick runs no census.
+  LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  i=0; while ! grep -qx -- '--drain' "$BATS_TEST_TMPDIR/drain.log" && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
   grep -qx -- '--drain' "$BATS_TEST_TMPDIR/drain.log" || { cat "$PSTATE/poller.log"; false; }
+  ! grep -q -- '--auto-enqueue' "$BATS_TEST_TMPDIR/drain.log" || { echo "the tick ran the census itself"; false; }
 }
 
 # ── G. THE PER-SESSION TARGET PIN (2026-09-23) ────────────────────────────────────────────────────
@@ -819,7 +840,7 @@ STUB
   printf '{"kind":"upgrade","sid":"abcd1234-0000-4000-8000-000000000021","source_pane":"721","req_id":"r9","scrub_composer":"e"}\n' > "$LRU_STATE/upgrade-queue/s.json"
   run bash "$LRU" --drain
   kill "$LIVE_PID" 2>/dev/null || true
-  [ "$(cut -f2- "$CC_COMPOSER_RESIDUE_DIR/721" 2>/dev/null)" = e ] || { echo "no receipt for the named stray: $output"; false; }
+  [ "$(awk -F'\t' '$1 == "721" { print $2 }' "$BATS_TEST_TMPDIR/receipts-at-hf.log" 2>/dev/null)" = e ] || { echo "no receipt for the named stray: $output"; false; }
   grep -q '^hf .*--same-account' "$BATS_TEST_TMPDIR/order.log" || { cat "$BATS_TEST_TMPDIR/order.log"; false; }
 }
 
