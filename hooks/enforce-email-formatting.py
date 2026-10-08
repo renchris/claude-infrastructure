@@ -476,6 +476,9 @@ def has_quoted_chain(content: str) -> bool:
 # 2026-08-12 (the ResidenceCo maintenance reply, where get-mail-message's text/plain output
 # was mistaken for lost HTML three separate times — once causing a good draft to be
 # deleted and rebuilt, once flattening the entire quoted chain into one unbroken wall).
+# Rule 5b (2026-10-08): the work mailbox's MCP token was revoked and the tenant refuses device
+# code, so sessions kept sending the operator to a dead device page; measured route and the
+# threaded-reply steps in memory reference-ms365-two-mailboxes-login (reso-management-app).
 # Full provenance: memory feedback_email_formatting.
 RECIPE = """ms365 email recipe (auto-injected — settled, do not re-derive):
 
@@ -487,13 +490,9 @@ RECIPE = """ms365 email recipe (auto-injected — settled, do not re-derive):
    update-mail-message revises a draft in place.
 
 0b. SENDING A DRAFT is allowed, but NEVER IN THE TURN THAT WROTE IT. If you composed
-   or revised a draft since the operator last spoke, send-draft-message is refused —
-   they have not had a chance to read what you wrote, and re-wording it does not help
-   because revising is composing. Say the draft is ready and stop. If they then tell
-   you to send it, that message starts a new turn and the gate opens by itself. Send
-   only the draft they actually named, and never as the second half of your own
-   compose. Do not ask for permission to send in the same turn: the answer is "it is
-   in Drafts and ready", and the gate refuses it anyway.
+   or revised (revising is composing) a draft since the operator last spoke,
+   send-draft-message is refused. Say it is in Drafts and ready, and stop; do not ask
+   to send. If they then say send, the gate opens: send only the draft they named.
 
 1. THREADING. To continue a chain, reply on the ORIGINAL message: create-reply-all-draft /
    reply-all-mail-message with its messageId. NEVER send-mail or create-draft-email with a
@@ -514,18 +513,12 @@ RECIPE = """ms365 email recipe (auto-injected — settled, do not re-derive):
    You write PROSE (blank line between paragraphs, "- " for bullets); it emits the house HTML.
    Pass the contents of body.html as the **Comment**. Three things hand-written markup kept
    getting wrong:
-     • EVERY block element carries its own inline font-family/font-size/colour. Your fragment is
-       pasted into a document somebody else wrote, and Graph copies the original's <style> blocks
-       into the draft's <head> — a vendor `p{margin:0}` silently collapses your paragraph spacing
-       and a `body{color:…}` recolours your prose. Inline beats both.
-     • An explicit colour. Graph drops the reply text into a BARE <body> as a naked text node
-       (measured 2026-09-14) while its own quote header right below is explicitly
-       <font face="Calibri, sans-serif" color="#000000" style="font-size:11pt">. Unstyled text
-       inherits whatever the reading client defaults to — which is why our replies looked GREY
-       against a black quoted chain.
-     • A signature. Graph NEVER adds one (the ms365 server's own tool description: "Signatures
-       are added by the Outlook client only, not via Graph"), and no Graph API can read the
-       user's Outlook signature. If the tool does not put it in the body, the mail goes unsigned.
+     • EVERY block element carries its own inline font/size/colour: Graph copies the original's
+       <style> into the draft, so a vendor `p{margin:0}` collapses your spacing. Inline beats it.
+     • An explicit colour: Graph puts the reply in a BARE <body> (measured 2026-09-14) above a
+       quote header pinned to #000000, so unstyled text renders GREY against a black chain.
+     • A signature: Graph NEVER adds one and cannot read the Outlook signature, so a body
+       without it goes unsigned.
    Hook-enforced: no single paragraph may exceed MAX_BLOCK_CHARS visible chars, on Comment and
    Message.body alike — the density rule is a whole-body average and is blind to one huge <p>.
 
@@ -541,11 +534,9 @@ RECIPE = """ms365 email recipe (auto-injected — settled, do not re-derive):
      c. $HOME/.claude/bin/ms365-reply-splice.py --draft-mime d.eml --body body.html
         --out spliced.html --placeholder CCPLACEHOLDER7X2Q --assert-depth N
      d. update-mail-message with the spliced body.
-   ⚠️ COST OF THIS PATH, and the reason rule 2 is the default: it reads the quote out of Graph and
-   writes it back, and Graph filters unsafe HTML on READ by default — so the sanitised form
-   permanently replaces the stored quote. Rule 2 never reads the quote at all, so it cannot lose
-   anything. It also puts the whole 38KB body through your tool call; the ms365 server has no
-   file-path parameter for any argument (verified against the installed 0.143.0 source).
+   ⚠️ COST, and why rule 2 is the default: Graph filters unsafe HTML on READ, so writing the
+   quote back permanently replaces it with the sanitised form, and the whole 38KB body passes
+   through your tool call (the ms365 server takes no file-path argument). Rule 2 never reads it.
    ⚠️ DEPTH IS A PROPERTY OF THE MESSAGE YOU REPLY TO. Graph quotes that one message, whose own
    HTML supplies every deeper level. An auto-generated confirmation quotes NOTHING, so replying
    to one can only ever yield 1 level.
@@ -580,10 +571,21 @@ RECIPE = """ms365 email recipe (auto-injected — settled, do not re-derive):
    Hook-enforced: a from/sender the named mailbox does not own is DENIED. The hook CANNOT
    check thread-match — a PreToolUse hook sees only the request, never Graph's response —
    so that half is yours. Your backstop is that the operator sees From in Outlook.
-   Why: every vendor email on one order was addressed to «P_DEF_SHORT»; the dispatch-hold request
-   went out from «P_OTHER_SHORT», an address they had never seen on that order, and they
-   dispatched and charged the next morning.
+   Why: a dispatch-hold request went out from «P_OTHER_SHORT» on an order thread that was all
+   «P_DEF_SHORT»; the vendor never saw it as theirs and dispatched and charged.
    Display name is not settable per-message on this account.
+
+5b. «W» WHEN THE MCP CANNOT REACH IT. If an account «W» call fails to get a token, do NOT
+   send the operator to a device-code page: the tenant refuses device code (AADSTS530035).
+   Use a delegated Graph session from YOUR Bash (first run opens a browser sign-in, later runs
+   are silent; it has no Mail.Send, so the operator sends from Outlook on the web):
+     pwsh -NoProfile -Command 'Connect-MgGraph -TenantId «W_DOM» -Scopes Mail.ReadWrite -NoWelcome; Invoke-MgGraphRequest …'
+   Mail TO «W_DOM» forwards to the personal inbox; mail FROM «W» is in its Sent Items, via that session.
+   Threaded reply as «W»: create-reply-draft in account «P» (Graph writes the quote);
+   download-bytes-to-file /me/messages/<draft id>/$value; keep only To, Cc, Subject,
+   In-Reply-To, References, Thread-* and MIME headers; set From: «W»; in the pwsh session
+   POST v1.0/me/messages with the base64 MIME (-ContentType "text/plain"); read it back and
+   `open` its webLink.
 
 6. FRESHNESS — RE-READ RECEIVED MAIL BEFORE YOU SAY "READY". Hook-enforced (R4): a draft
    write is DENIED unless this session listed received mail within CC_MS365_FRESHNESS_MIN
@@ -624,6 +626,7 @@ def _recipe_tokens():
         "P_DEF_SHORT": short(p_def) if p_def else "<default alias>",
         "P_OTHER_SHORT": short(p_other) if p_other else "<second alias>",
         "W": w or "<work mailbox>", "W_USERS": w_users, "W_DEF": w_def or "<work default>",
+        "W_DOM": dom or "<work domain>",
     }
 
 
