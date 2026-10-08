@@ -1,0 +1,8 @@
+{
+  "_source": "SDK launch video FIG 3, frames f-015 (card 1), f-019 (card 2), f-023 and f-024 (card 3); /tmp/browser-sdk/notes/video.md lines 190-284. Card 2's role is 'IT director' and its follow-up is Phone (f-019). The video does not show card 3's plan, seats or follow-up on the card itself; they are taken from the filled form in f-024 (Founder, Starter, 6, Email).",
+  "leads": [
+    {"name": "Priya Raman", "company": "Halcyon Freight", "email": "priya.raman@halcyonfreight.example", "phone": "(415) 555-0142", "role": "Ops lead", "plan": "Team", "seats": 40, "follow_up": "email", "notes": "Wants SSO + audit log. Demo week of Nov 10."},
+    {"name": "Marcus Odell", "company": "Brightline Clinics", "email": "m.odell@brightline.example", "phone": "312-555-0187", "role": "IT director", "plan": "Enterprise", "seats": 250, "follow_up": "phone", "notes": "HIPAA question - send security whitepaper first."},
+    {"name": "Lena Vogt", "company": "Tidewater Studio", "email": "lena@tidewater.example", "phone": "+1 206 555 0119", "role": "Founder", "plan": "Starter", "seats": 6, "follow_up": "email", "notes": "Tiny team, price sensitive. Loved the mobile app."}
+  ]
+}

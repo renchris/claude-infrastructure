@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Northwind CRM · New lead</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 0; display: grid; grid-template-columns: 90px 580px 1fr; height: 100vh; }
+  nav { background: #1d2430; color: #cfd6e2; padding: 12px 8px; }
+  nav a { display: block; color: inherit; text-decoration: none; padding: 6px 4px; }
+  #scans { border-right: 1px solid #ddd; padding: 12px; overflow: auto; }
+  #scans ol { padding-left: 18px; margin: 4px 0 10px; }
+  #viewport { width: 548px; height: 380px; overflow: auto; border: 1px solid #ccc; background: #eee; }
+  #viewport img { display: block; }
+  main { padding: 12px 20px; overflow: auto; }
+  form label { display: block; margin: 6px 0 2px; font-weight: 600; }
+  form input[type=text], form input[type=email], form input[type=number], form select, form textarea { width: 320px; padding: 4px; }
+  fieldset { border: 0; padding: 0; margin: 8px 0; }
+  table { border-collapse: collapse; margin-top: 16px; }
+  td, th { border: 1px solid #ccc; padding: 4px 8px; text-align: left; }
+  #toast { min-height: 20px; color: #176b2c; margin-top: 8px; }
+</style>
+</head>
+<body>
+<nav aria-label="Main"><a href="#">Dash</a><a href="#">Leads</a><a href="#">Accts</a><a href="#">Rpts</a></nav>
+
+<section id="scans" aria-label="Scanned cards">
+  <h2>Scanned cards</h2>
+  <ol id="cardlist"></ol>
+  <div><span id="cardpos"></span>
+    <button type="button" id="prev">◂ Prev card</button>
+    <button type="button" id="next">Next card ▸</button></div>
+  <div style="margin:6px 0">Zoom
+    <button type="button" id="zoomout" aria-label="Zoom out">−</button>
+    <span id="zoomlvl"></span>
+    <button type="button" id="zoomin" aria-label="Zoom in">+</button></div>
+  <div id="viewport"><img id="card" alt="Scanned lead card"></div>
+  <p><small>Source: DevDays 2026 booth · typed from the scanned card</small></p>
+</section>
+
+<main>
+  <h1>New lead</h1>
+  <div id="formhost"></div>
+  <div id="toast" role="status"></div>
+  <table aria-label="Leads">
+    <thead><tr><th>Name</th><th>Company</th><th>Plan</th><th>Seats</th></tr></thead>
+    <tbody id="leads"><tr id="empty"><td colspan="4">No leads entered yet.</td></tr></tbody>
+  </table>
+</main>
+
+<script>
+const N = 3, ZOOMS = [65, 100, 125, 150, 175, 200];
+let cur = 0, z = 0;
+const entered = [false, false, false];
+
+function renderCards() {
+  document.getElementById('cardlist').innerHTML = entered
+    .map((e, i) => `<li>Card ${i + 1} — ${e ? 'entered' : 'to do'}</li>`).join('');
+  document.getElementById('cardpos').textContent = `Card ${cur + 1} of ${N}`;
+  const img = document.getElementById('card');
+  img.src = `cards/card-${cur + 1}.png`;
+  img.style.width = Math.round(820 * ZOOMS[z] / 100) + 'px';
+  document.getElementById('zoomlvl').textContent = ZOOMS[z] + '%';
+}
+
+// The form is rebuilt from scratch after every save, so element handles taken before a save are
+// stale afterwards — the condition the launch video shows its loop recovering from.
+function renderForm() {
+  document.getElementById('formhost').innerHTML = `
+  <form id="lead" autocomplete="off">
+    <label for="f-name">Full name</label><input id="f-name" name="name" type="text">
+    <label for="f-company">Company</label><input id="f-company" name="company" type="text">
+    <label for="f-email">Email</label><input id="f-email" name="email" type="email">
+    <label for="f-phone">Phone</label><input id="f-phone" name="phone" type="text">
+    <label for="f-role">Role / title</label><input id="f-role" name="role" type="text">
+    <label for="f-plan">Plan interest</label>
+    <select id="f-plan" name="plan"><option value="">Choose…</option>
+      <option>Starter</option><option>Team</option><option>Enterprise</option></select>
+    <label for="f-seats">Seats</label><input id="f-seats" name="seats" type="number" min="1">
+    <fieldset><legend>Follow up by</legend>
+      <label style="display:inline"><input type="radio" name="follow_up" value="email"> Email</label>
+      <label style="display:inline"><input type="radio" name="follow_up" value="phone"> Phone</label>
+    </fieldset>
+    <label for="f-notes">Notes</label><textarea id="f-notes" name="notes" rows="3"></textarea>
+    <div style="margin-top:10px"><button type="reset">Clear</button>
+      <button type="submit">Save lead</button></div>
+  </form>`;
+  document.getElementById('lead').addEventListener('submit', save);
+}
+
+async function save(ev) {
+  ev.preventDefault();
+  const f = new FormData(ev.target);
+  const lead = Object.fromEntries(['name', 'company', 'email', 'phone', 'role', 'plan', 'seats', 'follow_up', 'notes']
+    .map(k => [k, (f.get(k) ?? '').toString()]));
+  lead.card_shown = cur + 1;
+  const r = await fetch('/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(lead) });
+  if (!r.ok) { document.getElementById('toast').textContent = 'Save failed'; return; }
+  document.getElementById('empty')?.remove();
+  const row = document.createElement('tr');
+  for (const k of ['name', 'company', 'plan', 'seats']) { const td = document.createElement('td'); td.textContent = lead[k]; row.append(td); }
+  document.getElementById('leads').append(row);
+  entered[cur] = true;
+  document.getElementById('toast').textContent = 'Saved ' + lead.name;
+  renderForm();
+  renderCards();
+}
+
+document.getElementById('next').onclick = () => { cur = (cur + 1) % N; renderCards(); };
+document.getElementById('prev').onclick = () => { cur = (cur + N - 1) % N; renderCards(); };
+document.getElementById('zoomin').onclick = () => { z = Math.min(z + 1, ZOOMS.length - 1); renderCards(); };
+document.getElementById('zoomout').onclick = () => { z = Math.max(z - 1, 0); renderCards(); };
+renderForm();
+renderCards();
+</script>
+</body>
+</html>
