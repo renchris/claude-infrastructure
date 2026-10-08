@@ -1893,6 +1893,17 @@ bar (`082648c5e`) unchanged, its verdict recorded here.
   `research-router` `1..40` 40 ok, `research-router-heldout` `1..16` 16 ok, `research-relay-check` `1..17` 17
   ok, `research-classifier-warm` `1..56` 55 ok plus one pre-existing flake ("E1j trace: a resident worker that took
   the prompt and stalls", a 2 s timing case; it failed 1 of 3 on the pre-pin tree too, 2 of 3 on this one).
+- **Landed and live.** Pin `a5d6bd21f`, record `5f925bdf8` (trunk `fc3609e9f..5f925bdf8`; the lander content-verified
+  every path; smoke partial, cut by load, so the suite runs above are the behavioral evidence). The first land
+  attempt went red on the gate's dead-assertion ratchet (`[ -n "$a" ] && [ -n "$b" ]` in a new case), fixed and
+  squashed into the pin. The land kicked the converge: the live `router.py` is byte-identical to trunk and reads
+  `3eb7e253415c`; the live daemon's `ping` exits 2 ("started with an older classifier configuration"), as it must
+  until the restart.
+- **Restart filed once**: backlog `b0a8958fea0b` ("restart the warm classifier onto the pinned row-15 careful
+  call"), `--run "bash ~/Development/claude-infrastructure/migrations/0059-research-classifier-warm.sh"`. 0059
+  sees the staged plist's new bytes (`ProcessType`), boots the old job out and bootstraps the new one, so one run
+  moves the daemon onto both the pin and the interactive band. Until then the router's cold path and hedge run the
+  pin, and the resident workers still serve Haiku 5.5 as built.
 
 #### E1l — row 15's read guards, the third-read refusal, the load bound, and the pre-registered data rules — DONE: landed and live; the live set map's re-point is the operator's (2026-10-08)
 Scope (frozen): wave E1l — (1) ruling `a7fd5e2ee7c8` guard 1: gate row 15 decrypts and logs a read only when an
