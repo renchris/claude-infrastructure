@@ -567,18 +567,30 @@ lru_file_rail_receipt() { # $1=pane $2=content
 # censuses judge exactly the same population and read duplicates off the same pass.
 lru_live_pass() { # $1=snapshot → lines on stdout
   local snap="$1" f pane pid sid args rlst lst
-  for f in "$LRU_REG_DIR"/*.json; do
-    [ -f "$f" ] || continue
-    pane="$(jq -r '.paneUUID // empty' "$f" 2>/dev/null)"; pid="$(jq -r '.pid // empty' "$f" 2>/dev/null)"
-    sid="$(jq -r '.session_id // empty' "$f" 2>/dev/null)"
+  # ONE jq FOR THE WHOLE REGISTRY (2026-10-08): four per file cost 4.8 s for 35 rows at load 45. A
+  # file jq cannot parse yields no line, which is what the per-file `// empty` reads did. The loop
+  # reads by line (no tab IFS) because an absent lstart is an empty last field, which a tab-IFS read
+  # would collapse; the pathname must not contain a TAB (the registry names files <pane>.json).
+  local regrows pids small
+  regrows="$(for f in "$LRU_REG_DIR"/*.json; do [ -f "$f" ] && jq -r --arg f "$f" '[$f, (.paneUUID // "" | tostring), (.pid // "" | tostring), (.session_id // "" | tostring), (.lstart // "" | tostring)] | join("\t")' "$f" 2>/dev/null; done)"
+  # The snapshot is the whole process table (865 KB, ~60 ms per awk scan at load 45); every lookup
+  # below is for a registry pid, so scan it ONCE down to those pids' lines and look up in that.
+  pids=" $(printf '%s\n' "$regrows" | awk -F'\t' '$3 != "" { printf "%s ", $3 }')"
+  small="$(printf '%s\n' "$snap" | LRU_PIDS="$pids" awk "$LRU_PROC_LINE"' && index(ENVIRON["LRU_PIDS"], " " $1 " ")')"
+  while IFS= read -r line; do
+    f="${line%%$'\t'*}"; line="${line#*$'\t'}"
+    pane="${line%%$'\t'*}"; line="${line#*$'\t'}"
+    pid="${line%%$'\t'*}"; line="${line#*$'\t'}"
+    sid="${line%%$'\t'*}"; rlst="${line#*$'\t'}"
     [ -n "$pane" ] && [ -n "$pid" ] && [ -n "$sid" ] || continue
-    args="$(lru_snap_args "$snap" "$pid")"
+    args="$(lru_snap_args "$small" "$pid")"
     [ -n "$args" ] || continue                                  # not running: not a live row
-    rlst="$(jq -r '.lstart // empty' "$f" 2>/dev/null)"
-    lst="$(lru_snap_lstart "$snap" "$pid")"
+    lst="$(lru_snap_lstart "$small" "$pid")"
     if ! lru_lstart_matches "$rlst" "$lst" "$pid"; then printf 'STALE\t%s\t%s\n' "$f" "$sid"; continue; fi
     printf 'LIVE\t%s\t%s\n' "$f" "$sid"
-  done
+  done <<EOF2
+$regrows
+EOF2
 }
 lru_dup_sids() { # $1=live pass → " sid  sid " for every sid held by more than one LIVE row
   printf '%s\n' "$1" | awk -F'\t' '$1 == "LIVE" { n[$3]++ } END { for (s in n) if (n[s] > 1) printf " %s ", s }'
@@ -612,8 +624,16 @@ EOF
     [ -n "$line" ] || continue
     case "$line" in *$'\tLIVE') ;; *) out="$out$line"$'\n'; continue ;; esac
     f="${line%%$'\t'*}"
-    pane="$(jq -r '.paneUUID' "$f")"; pid="$(jq -r '.pid' "$f")"; sid="$(jq -r '.session_id' "$f")"
-    acct="$(jq -r '.account // empty' "$f")"; cwd="$(jq -r '.cwd // empty' "$f")"
+    IFS=$'\t' read -r pane pid sid acct cwd <<EOF2
+$(jq -r '[.paneUUID, (.pid|tostring), .session_id, (.account // ""), (.cwd // "")] | @tsv' "$f")
+EOF2
+    # ONE ROW ASKED FOR, ONE ROW JUDGED (2026-10-08): the drive re-checks its own pane, and judging
+    # the whole fleet to keep one row cost 24.6 s at load 45 and 91-369 s per session at load
+    # 100-275. Duplicates and leads are already decided from pass 1 and the snapshot, so skipping
+    # an unrequested row here changes no surviving row's disposition.
+    if [ -n "$ref" ] && [ "$pane" != "$ref" ]; then
+      case "$sid" in "$ref"*) ;; *) continue ;; esac
+    fi
     args="$(lru_snap_args "$snap" "$pid")"
     bin="${args%% *}"
     model="$(lru_flag "$args" --model "$LRU_RE_MODEL")"; eff="$(lru_flag "$args" --effort "$LRU_RE_EFFORT")"
