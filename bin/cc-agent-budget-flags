@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# cc-agent-budget-flags — is the server sending us a per-agent token budget, and is the switch on?
+#
+# WHY. Decision D6 (docs/research/haiku55-upgrade-2026-10-07/decisions/D6-agent-budget-switch.md):
+# with the budget forced on, Opus 5.5 sub-agents finished the task in 0 of 9 runs against 6 of 6 with
+# it off, and nothing in the client errors. The budget is server-gated by two flags,
+# tengu_rippling_tulip (the budget) and tengu_streamed_bumblebee, and switched off locally by
+# `CLAUDE_CODE_RIPPLING_TULIP=0` in the settings env block (migration 0060). On 2026-10-08 neither
+# flag was cached on any account, so "the switch is absent" costs nothing today. The day a flag
+# arrives with the switch still absent, sub-agents start returning partial work silently. This tool
+# is the read that notices that day.
+#
+# It reads each account's cached server flags in <dir>/.claude.json (every cache: GrowthBook
+# features, Statsig gates, dynamic configs, experiment features; matched by key or by a .name/.key
+# field) and that account's settings.json env. A flag is ON unless its cached value is false, null,
+# 0, "0", "false" or "". A cached-but-off flag is reported, never alarmed: an alarm that fires on a
+# state that changes nothing is the always-on alarm nobody reads.
+#
+# Usage: cc-agent-budget-flags [--account-dir DIR]... [--json | --brief | --alarm]
+#   default   one line per account: switch value, cached flags, verdict
+#   --json    one JSON array (account, settings, switch, flags[{flag,path,value,on}], alarm)
+#   --brief   print only the alarm lines (nothing when clean); for the SessionStart hook
+#   --alarm   no output; exit status only
+# Accounts default to every $HOME/.claude and $HOME/.claude-* holding a .claude.json.
+# Exit: 0 no alarm · 1 an account has a budget flag ON with the switch absent · 2 usage or no jq.
+set -uo pipefail
+
+KEY=CLAUDE_CODE_RIPPLING_TULIP
+RX='^tengu_(rippling_tulip|streamed_bumblebee)$'
+mode=report
+dirs=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --json) mode=json ;;
+    --brief) mode=brief ;;
+    --alarm) mode=alarm ;;
+    --account-dir) [ $# -ge 2 ] || { echo "cc-agent-budget-flags: --account-dir needs a DIR" >&2; exit 2; }
+                   dirs+=("$2"); shift ;;
+    -h|--help) sed -n '2,/^set -uo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
+    *) echo "cc-agent-budget-flags: unknown argument $1 (see --help)" >&2; exit 2 ;;
+  esac
+  shift
+done
+command -v jq >/dev/null 2>&1 || { echo "cc-agent-budget-flags: jq required" >&2; exit 2; }
+if [ ${#dirs[@]} -eq 0 ]; then
+  for d in "$HOME/.claude" "$HOME"/.claude-*; do
+    [ -f "$d/.claude.json" ] && dirs+=("$d")
+  done
+fi
+
+# shellcheck disable=SC2016  # jq programs: $rx, $p, $k are jq variables
+FLAGS_JQ='[ paths as $p
+            | select(($p[-1] | type) == "string" and ($p[-1] | test($rx)))
+            | {flag: $p[-1], path: ($p | map(tostring) | join(".")), value: getpath($p)} ]
+          + [ paths(objects) as $p | getpath($p) as $o
+              | (($o.name // $o.key // $o.feature // "") | tostring) as $n
+              | select($n | test($rx))
+              | {flag: $n, path: ($p | map(tostring) | join(".")), value: (if $o | has("value") then $o.value else $o end)} ]
+          | map(. + {on: (.value as $v | ($v != false and $v != null and $v != 0
+                                          and $v != "0" and $v != "false" and $v != ""))})'
+
+rows="[]"
+alarm=0
+for d in ${dirs[@]+"${dirs[@]}"}; do
+  cj="$d/.claude.json"
+  sf="$d/settings.json"
+  flags="$(jq -c --arg rx "$RX" "$FLAGS_JQ" "$cj" 2>/dev/null)" || flags=""
+  readable=true
+  [ -n "$flags" ] || { flags="[]"; readable=false; }
+  sw="$(jq -r --arg k "$KEY" '(.env // {})[$k] // empty | tostring' "$sf" 2>/dev/null || true)"
+  row="$(jq -cn --arg a "$d" --arg s "$sf" --arg sw "$sw" --argjson f "$flags" --argjson r "$readable" \
+    '{account: $a, settings: $s, switch: (if $sw == "" then null else $sw end), readable: $r, flags: $f,
+      alarm: (($sw != "0") and ([$f[] | select(.on)] | length > 0))}')"
+  [ "$(printf '%s' "$row" | jq -r .alarm)" = true ] && alarm=1
+  rows="$(jq -cn --argjson a "$rows" --argjson r "$row" '$a + [$r]')"
+done
+
+case "$mode" in
+  json) printf '%s\n' "$rows" | jq . ;;
+  alarm) ;;
+  brief)
+    printf '%s' "$rows" | jq -r --arg k "$KEY" '.[] | select(.alarm)
+      | "⚠ per-agent token budget ON in \(.account | sub(".*/"; "")): \([.flags[] | select(.on) | "\(.flag)=\(.value | tostring)"] | join(", ")) cached, and \($k)=0 is absent from \(.settings). Sub-agents now see a token budget and stop early with no error (decision D6). Apply: bash ~/Development/claude-infrastructure/migrations/0060-agent-budget-off.sh --confirm settings.json"' ;;
+  *)
+    printf '%s' "$rows" | jq -r --arg k "$KEY" '.[] |
+      "\(.account | sub(".*/"; ""))\t\($k)=\(.switch // "absent")\t"
+      + (if .readable | not then "flags: unreadable .claude.json"
+         elif (.flags | length) == 0 then "flags: none cached"
+         else "flags: " + ([.flags[] | "\(.flag)=\(.value | tostring)\(if .on then "" else " (off)" end) [\(.path | split(".")[0])]"] | join(", ")) end)
+      + "\t" + (if .alarm then "ALARM" else "ok" end)' | column -t -s "$(printf '\t')" ;;
+esac
+exit "$alarm"

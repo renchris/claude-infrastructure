@@ -46,7 +46,7 @@ When the new model is the lead model, that set has one member. When it is not (a
 release), the whole fleet's lead still moves binary with it, and a run under the new id alone never
 tests the lead on the new binary. Record every run in the ledger.
 
-## The 15 checks
+## The 16 checks
 
 Each is one file `lib/cc-upgrade-gate/check*.sh` defining a `check_NN`, auto-discovered — adding a
 probe is a new FILE, never an edit to the orchestrator.
@@ -68,6 +68,7 @@ probe is a new FILE, never an edit to the orchestrator.
 | 13 | mcp | session-connected MCP servers resolve on the candidate (`mcp list`, ≥1 `✔ Connected`); none configured ⇒ SKIP. |
 | 14 | authstore-writeloss ‡ | the way of working is STAYING LOGGED IN: reads (never executes) the candidate's credential-write path and reports whether the upstream write-loss window is `FIXED` / `STATUS-QUO` / `WORSE` / `UNREADABLE`. Backed by `scripts/cc-authstore-probe.sh`; the defect is `docs/research/vendor-report-cc-authstore-write-loss.md`. |
 | 15 | depth-effect | the binary still REFUSES a spawn at depth ≥ max (effect): reads the candidate's own depth gate, where an inclusive `>=` is a flat topology and an exclusive `>` is GH #84974. #6 proves delivery; only #15 proves containment. |
+| 16 | agent-budget-switch | `CLAUDE_CODE_RIPPLING_TULIP=0` in a settings env still removes a per-agent token budget FORCED on in the shell (effect: the parent's Agent tool description loses its "budget of N tokens" sentence), and the evidence names any `tengu_rippling_tulip` / `tengu_streamed_bumblebee` flag cached in an account's `.claude.json`. FAIL = migration 0060 went inert on this binary; a control that shows no budget is SKIP (cannot tell). Decision D6: `docs/research/haiku55-upgrade-2026-10-07/decisions/D6-agent-budget-switch.md`. |
 
 † #7 / #8 / #9 are the spawn probes gated by `GATE_SPAWN`.
 
@@ -85,7 +86,7 @@ coupling, not a regression: record it, and change check05 in the same diff as su
 
 ### A feature being adopted gets its own probe
 
-The 15 checks prove *no regression*. They do not prove that a NEW feature works here. When a run
+The other checks prove *no regression*. They do not prove that a NEW feature works here. When a run
 adopts a harness feature (feature.md), add `lib/cc-upgrade-gate/checkNN_<feature>.sh` before
 activation, so the next binary move re-proves it. Update this table and the count in the same diff
 (tests/cc-upgrade-skill.bats compares them to the files).

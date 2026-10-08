@@ -86,6 +86,18 @@ if [ -f "$sf" ] && command -v jq >/dev/null 2>&1; then
   fi
 fi
 
+# ── per-agent token budget (decision D6, migration 0060) ─────────────────────────────────────────
+# The server can turn on a per-agent token budget (flags tengu_rippling_tulip /
+# tengu_streamed_bumblebee); sub-agents shown one stop early with no error. Speak only when THIS
+# account's cache holds a flag ON while CLAUDE_CODE_RIPPLING_TULIP=0 is absent from its settings env:
+# silent on 2026-10-08, when no account caches either flag. ~0.08 s (two jq reads), measured inside a
+# ~1.1 s child the dispatcher runs in parallel.
+abf="$HOME/.claude/bin/cc-agent-budget-flags"
+if [ -x "$abf" ]; then
+  bline="$("$abf" --account-dir "$cfg" --brief 2>/dev/null || true)"
+  [ -n "$bline" ] && msg="${msg:+$msg  }$bline"
+fi
+
 [ -n "$msg" ] || exit 0
 msg="knowledge-layer mirror (${cfg##*/}): $msg"
 

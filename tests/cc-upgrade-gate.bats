@@ -207,3 +207,78 @@ _g15_run() {  # $1 = fixture path → prints "STATUS :: evidence"
   [ "$status" -eq 0 ]
   [[ "$output" == PASS* ]]
 }
+
+# ── #16 per-agent token budget switch (decision D6, migration 0060) ──────────────────────────────
+# The stub answers the parent-side question the way 2.1.293 was measured to: with
+# CLAUDE_CODE_RIPPLING_TULIP set to a number in its env it quotes the budget sentence, and a
+# --settings file's env value replaces the shell value (D6 arm S0). STUB16 selects a binary that
+# ignores the settings value (the regression), one that never shows a budget (cannot tell), and one
+# that answers nothing. The FAIL case is the red-proof: the switch went inert and the probe must say so.
+_g16_run() {  # $1 = STUB16 mode → prints "STATUS :: evidence :: detail"
+  bash -c '
+    export HOME="$1/home" GATE_BIN="$1/stub16" GATE_MODEL=claude-opus-5-5 GATE_ACCOUNTS=next GATE_RETRIES=1 STUB16="$3"
+    mkdir -p "$HOME/.claude-next"
+    . "$2/lib/cc-upgrade-gate/common.sh"
+    emit_result(){ echo "$3 :: $4 :: $5"; }
+    . "$2/lib/cc-upgrade-gate/check16_agent_budget.sh"
+    check_16
+  ' _ "$BATS_TEST_TMPDIR" "$REPO" "$1"
+}
+
+_g16_stub() {
+  cat > "$BATS_TEST_TMPDIR/stub16" <<'STUB'
+#!/usr/bin/env bash
+v="${CLAUDE_CODE_RIPPLING_TULIP:-}"; sf=""
+while [ $# -gt 0 ]; do [ "$1" = --settings ] && { sf="$2"; shift; }; shift; done
+[ "$STUB16" = silent ] && exit 1
+if [ -n "$sf" ] && [ "$STUB16" != ignores ]; then v="$(jq -r '.env.CLAUDE_CODE_RIPPLING_TULIP // empty' "$sf")"; fi
+r=NONE
+if [ "$STUB16" != noforce ] && [ -n "$v" ] && [ "$v" != 0 ]; then
+  r="Each fresh agent you launch has a budget of $(printf "%'d" "$v" 2>/dev/null || echo "$v") tokens, counting the context it starts with."
+fi
+jq -cn --arg r "$r" '{is_error:false,result:$r,modelUsage:{"claude-opus-5-5":{}}}'
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/stub16"
+}
+
+@test "check16: the switch removes a forced budget → PASS" {
+  _g16_stub
+  run _g16_run honors
+  [ "$status" -eq 0 ]
+  [[ "$output" == PASS* ]] || { echo "$output"; false; }
+  [[ "$output" == *"server flags: none cached"* ]] || { echo "$output"; false; }
+}
+
+@test "check16: a binary that still shows the budget with the switch set → FAIL (red-proof)" {
+  _g16_stub
+  run _g16_run ignores
+  [ "$status" -eq 0 ]
+  [[ "$output" == FAIL* ]] || { echo "$output"; false; }
+  [[ "$output" == *"0060 is inert"* ]]
+}
+
+@test "check16: a control that shows no budget cannot tell → SKIP, never a false green" {
+  _g16_stub
+  run _g16_run noforce
+  [[ "$output" == SKIP* ]] || { echo "$output"; false; }
+  [[ "$output" == *"cannot tell"* ]]
+}
+
+@test "check16: no usable answer, or no executable binary → SKIP" {
+  _g16_stub
+  run _g16_run silent
+  [[ "$output" == SKIP* ]] || { echo "$output"; false; }
+  rm "$BATS_TEST_TMPDIR/stub16"
+  run _g16_run honors
+  [[ "$output" == SKIP* ]] || { echo "$output"; false; }
+}
+
+@test "check16: a budget flag cached in an account is named in the evidence" {
+  _g16_stub
+  mkdir -p "$BATS_TEST_TMPDIR/home/.claude-next"
+  printf '{"cachedGrowthBookFeatures":{"tengu_rippling_tulip":250000}}\n' > "$BATS_TEST_TMPDIR/home/.claude-next/.claude.json"
+  run _g16_run honors
+  [[ "$output" == PASS* ]] || { echo "$output"; false; }
+  [[ "$output" == *"claude-next:tengu_rippling_tulip=250000"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"ALARM"* ]]
+}

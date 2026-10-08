@@ -119,9 +119,9 @@ check_stubs() {  # <root>
   fresh; printf 'pinned at 2.1.284 (historical)\n' >>"$S/skills/cc-upgrade/gate.md"
   check_perishable "$S"   # a tagged historical line stays legal
 
-  fresh; cp "$S/lib/cc-upgrade-gate/check15_depth_effect.sh" "$S/lib/cc-upgrade-gate/check16_new.sh"
-  run check_gate_count "$S"; [ "$status" -eq 1 ]; [[ "$output" == *"heading says '15'"* ]] || false
-  fresh; sed -i.bak '/^| 15 |/d' "$S/skills/cc-upgrade/gate.md"
+  fresh; cp "$S/lib/cc-upgrade-gate/check16_agent_budget.sh" "$S/lib/cc-upgrade-gate/check17_new.sh"
+  run check_gate_count "$S"; [ "$status" -eq 1 ]; [[ "$output" == *"heading says '16'"* ]] || false
+  fresh; sed -i.bak '/^| 16 |/d' "$S/skills/cc-upgrade/gate.md"
   run check_gate_count "$S"; [ "$status" -eq 1 ]; [[ "$output" == *"table rows"* ]] || false
 
   fresh; python3 -c "print('x' * 16001)" >>"$S/skills/cc-upgrade/SKILL.md"

@@ -117,3 +117,28 @@ lacks() { ! printf '%s' "$1" | grep -qF -- "$2"; }
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
+
+# Decision D6 (migration 0060): a per-agent budget flag cached ON in this account while
+# CLAUDE_CODE_RIPPLING_TULIP=0 is absent is named in the report; with the switch set, or with the flag
+# cached OFF, the hook stays silent. Uses the repo's own bin/cc-agent-budget-flags at the deployed path.
+@test "D6: a budget flag ON with the switch absent is reported; switch set or flag off is silent" {
+  mkdir -p "$HOME/.claude/bin"
+  cp "$REPO/bin/cc-agent-budget-flags" "$HOME/.claude/bin/"
+  printf '{"cachedGrowthBookFeatures":{"tengu_rippling_tulip":250000}}\n' > "$CLAUDE_CONFIG_DIR/.claude.json"
+  printf '{"env":{}}\n' > "$CLAUDE_CONFIG_DIR/settings.json"
+  run bash "$HOOK"
+  [ "$status" -eq 0 ]
+  m="$(ctx "$output")"
+  [[ "$m" == *"per-agent token budget ON"* ]] || { echo "$output"; false; }
+  [[ "$m" == *"tengu_rippling_tulip=250000"* ]] || { echo "$m"; false; }
+  [[ "$m" == *"0060-agent-budget-off.sh --confirm settings.json"* ]] || { echo "$m"; false; }
+
+  printf '{"env":{"CLAUDE_CODE_RIPPLING_TULIP":"0"}}\n' > "$CLAUDE_CONFIG_DIR/settings.json"
+  run bash "$HOOK"
+  [ "$status" -eq 0 ]; [ -z "$output" ] || { echo "$output"; false; }
+
+  printf '{"env":{}}\n' > "$CLAUDE_CONFIG_DIR/settings.json"
+  printf '{"cachedStatsigGates":{"tengu_streamed_bumblebee":false}}\n' > "$CLAUDE_CONFIG_DIR/.claude.json"
+  run bash "$HOOK"
+  [ "$status" -eq 0 ]; [ -z "$output" ] || { echo "$output"; false; }
+}
