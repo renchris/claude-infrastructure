@@ -53,9 +53,15 @@ _is_shell_script() {
   # The extension is the durable statement of the population: bats parses these with the bash IT
   # resolves, never via a bare `bash`, so their syntax is not this ratchet's business.
   case "$1" in *.bats) return 1 ;; esac
-  # `tr -d '\0'` first: a binary tracked file otherwise makes the command substitution warn
-  # about ignored null bytes, once per file, drowning the verdict.
-  local first; first="$(LC_ALL=C head -1 "$1" 2>/dev/null | LC_ALL=C tr -d '\0')"
+  # The builtin `read`, NEVER `$(head -1 | tr -d '\0')`. This runs once per TRACKED file (~8.5k),
+  # and that pipeline cost three forks each: measured 42 s of a 43 s scan on an idle Linux VM, and
+  # past the 300 s hang-confirm bound on the desk under utility QoS, which filed this suite as
+  # post-land HUNG (cc-backlog aeca00c34eaf; docs/research/bash32-lint-hung-2026-10-08.md). `read`
+  # forks nothing (0.5 s for the same population) and drops NUL bytes silently in 3.2 and 5.x
+  # alike, so a binary file neither warns nor matches. `-n 256` bounds the read on a binary with
+  # no newline; a shebang longer than that cannot be exec'd anyway (kernel limit is 256 on macOS).
+  local first=''
+  IFS= read -r -n 256 first < "$1" 2>/dev/null || true
   case "$first" in
     '#!'*bash*) return 0 ;;
     '#!'*/sh|'#!'*/sh\ *|'#!'*[!a-z]sh|'#!'*[!a-z]sh\ *) return 0 ;;
