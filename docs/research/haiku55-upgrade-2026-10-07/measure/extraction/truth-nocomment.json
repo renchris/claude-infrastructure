@@ -1,0 +1,198 @@
+{
+ "hooks/model-permission-decider.py": {
+  "HOME": [
+   "/"
+  ],
+  "MITL_MODEL": [
+   "claude-haiku-4-5-20251001"
+  ],
+  "MITL_DEADLINE_S": [
+   "38"
+  ],
+  "MITL_PER_SESSION_MAX": [
+   "40"
+  ],
+  "MITL_PER_DAY_MAX": [
+   "400"
+  ],
+  "MITL_MODE": [
+   "shadow"
+  ]
+ },
+ "scripts/headless-precondition-probe.sh": {
+  "CC_HEADLESS_PROBE_DIR": [
+   "${TMPDIR:-/tmp}/headless-probe.$$"
+  ],
+  "TMPDIR": [
+   "/tmp"
+  ],
+  "CC_HEADLESS_PROBE_MODEL": [
+   "claude-haiku-4-5-20251001"
+  ],
+  "CC_HEADLESS_PROBE_TIMEOUT_S": [
+   "90"
+  ],
+  "HP": [
+   ""
+  ],
+  "CC_HEADLESS_PROBE_BIN": [
+   "$(resolve_claude || true)"
+  ],
+  "CC_MAILBOX_DIR": [
+   "$HOME/.claude/mailbox"
+  ],
+  "MAIL_VERDICT": [
+   "no-verdict-token"
+  ],
+  "HOOKS_FIRED": [
+   "none"
+  ]
+ },
+ "scripts/land-lock.sh": {
+  "LAND_LOCK_DIR": [
+   "/tmp/land-lock-${HASH}"
+  ],
+  "LAND_LOG": [
+   "${HOME}/.claude/land.log"
+  ],
+  "LAND_LOCK_TTL": [
+   "1200"
+  ],
+  "LAND_LOCK_WAIT": [
+   "3600"
+  ],
+  "LAND_LOCK_REAP_TTL": [
+   "30"
+  ],
+  "LAND_LOCK_SCAN": [
+   "/tmp/land-lock-*"
+  ],
+  "LAND_SERIALIZE": [
+   "on"
+  ]
+ },
+ "bin/cc-roles": {
+  "CC_ROLES_DIR": [
+   "$HOME/.claude/cc-roles"
+  ],
+  "CC_ROLES_PANE_PROBE": [
+   ""
+  ],
+  "CC_ROLES_PROBE_TIMEOUT_S": [
+   "10"
+  ],
+  "CC_ROLES_TIMEOUT_BIN": [
+   ""
+  ],
+  "PANE_PROBE": [
+   ""
+  ],
+  "PPID": [
+   "$$"
+  ],
+  "CC_PANE_ID": [
+   "${ITERM_SESSION_ID:-}"
+  ],
+  "ITERM_SESSION_ID": [
+   ""
+  ],
+  "SESSION_ID": [
+   ""
+  ]
+ },
+ "scripts/effort-parity-assert.sh": {
+  "CC_EFFORT_SSOT": [
+   ""
+  ],
+  "CC_EFFORT_DIRS": [
+   "$HOME/.claude $HOME/.claude-next $HOME/.claude-secondary $HOME/.claude-tertiary $HOME/.claude-quaternary"
+  ],
+  "CC_EFFORT_ZSHRC": [
+   "$HOME/.zshrc"
+  ],
+  "CC_EFFORT_PS_STRICT": [
+   "0"
+  ],
+  "FLOOR": [
+   "xhigh"
+  ],
+  "LAUNCHER": [
+   "max"
+  ],
+  "CC_EFFORT_PS": [
+   ""
+  ]
+ },
+ "bin/cc-sessions": {
+  "CC_REGISTRY_DIR": [
+   "$HOME/.claude/cc-registry"
+  ],
+  "IT2_BIN": [
+   "$HOME/.claude/bin/it2"
+  ],
+  "CC_CLOUD_BIN": [
+   ""
+  ],
+  "CC_CLOUD_LIST_TIMEOUT_S": [
+   "25"
+  ],
+  "CC_IT2_TIMEOUT_S": [
+   "5"
+  ],
+  "CC_REG_RETAIN_H": [
+   "24"
+  ],
+  "ALL": [
+   "0"
+  ]
+ },
+ "scripts/capacity-ramp.sh": {
+  "CC_RAMP_BIN": [
+   ""
+  ],
+  "CC_RAMP_PIDFILE": [
+   "/tmp/cc-ramp-pids.txt"
+  ],
+  "CC_RAMP_FIFODIR": [
+   "/tmp"
+  ],
+  "CC_RAMP_FLOOR_GB": [
+   "8"
+  ],
+  "CC_RAMP_SEG_MAX": [
+   "15"
+  ],
+  "CC_RAMP_SETTLE": [
+   "4"
+  ],
+  "CC_RAMP_SEG_LOG": [
+   "$HOME/.claude/logs/compressor-sentinel.jsonl"
+  ],
+  "CC_RAMP_SEG_MAX_AGE": [
+   "30"
+  ]
+ },
+ "scripts/occupancy-probe.sh": {
+  "CC_OCC_HZ": [
+   "2"
+  ],
+  "CC_OCC_SECONDS": [
+   "30"
+  ],
+  "CC_OCC_TOPN": [
+   "18"
+  ],
+  "CC_OCC_LABEL": [
+   ""
+  ],
+  "CC_OCC_SELF_PID": [
+   "0"
+  ],
+  "SELF_N": [
+   "0"
+  ],
+  "LABEL": [
+   "(unlabelled)"
+  ]
+ }
+}

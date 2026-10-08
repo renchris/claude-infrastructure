@@ -1,0 +1,13 @@
+h_probepass	In the handoff fire script's per-account liveness probe, on which line is the shell case pattern that treats a probe as PASSED (the success markers it accepts from the CLI's JSON output)?	scripts/handoff-fire.sh:13859
+h_wire7d	The multi-account quota tool reads an unclamped weekly utilization fraction from HTTP response headers. On which line is the header name for the 7-day utilization read?	bin/claude-accounts:1322
+h_memtest	Which test asserts the exact candidate line that the memory-extraction tool prints, including the model id it ran? Give the file and line of that assertion.	tests/cc-memory-extract.bats:146
+h_aliasmap	When the research-kit router cannot read the model SSOT, it falls back to model family aliases. Where is that fallback alias map defined?	scripts/research-kit/router.py:311
+h_scoped	In the repository's model configuration file, on which line is the effort rung set for code-writing teammates working on an anchored brief?	model-config.yaml:1387
+h_preserved	In the stale-model-reference lint, where is the function defined that decides whether a file is exempt because it matches the classification's preserve list?	scripts/claude-lint-models.sh:55
+h_synthetic	The read-before-write shim reads the session's model from the transcript. On which line does it skip the placeholder model value that the harness writes on error turns?	hooks/lib/read-before-write-parity.sh:215
+h_cloud	Which line in the landing script makes it refuse to land when it runs inside an Anthropic-hosted cloud VM?	scripts/ship-land.sh:1482
+h_control	The model-registration checker always counts a control model id beside the requested one. On which line is that control id defined?	bin/cc-model-registered:35
+h_detach2	The handoff fire script carries its own private copy of the helper that detaches a child into a new session. Where is that copy defined?	scripts/handoff-fire.sh:1889
+h_cw1h	In the token ledger, on which line are the price multipliers for 5-minute and 1-hour cache writes defined?	bin/cc-token-ledger:57
+h_noaccess	In the handoff fire script, on which line is a failed probe classified as the account lacking access to the model?	scripts/handoff-fire.sh:13869
+h_research	In the repository's model configuration file, on which line is the Opus 5.5 effort rung for breadth research workers set?	model-config.yaml:1414

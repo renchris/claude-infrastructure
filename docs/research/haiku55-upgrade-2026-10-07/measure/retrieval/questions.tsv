@@ -1,0 +1,16 @@
+probe	In the handoff fire script, where is the function defined that checks whether an account is usable by running a one-turn headless model call before firing? Give the line of the function definition.	scripts/handoff-fire.sh:13815
+rbw	Which file and line define the list of model ids for which Claude Code's own native read-before-write refusal still holds (so the repo's own shim stays out)?	hooks/lib/read-before-write-parity.sh:168
+deadline	In the PreToolUse hook that consults a model to decide permission prompts, where is the internal deadline in seconds for that consult defined?	hooks/model-permission-decider.py:134
+crdefault	In the token ledger tool, where is the cache-read price multiplier defined that applies to any model without its own entry?	bin/cc-token-ledger:62
+stale	In the model-reference lint script, on which line are stale model literals collected from the versions keys whose names end in _prior?	scripts/claude-lint-models.sh:33
+bumploop	In the model-bump sweep tool, on which line does the loop over the model families (frontier, opus, sonnet, haiku) begin?	bin/claude-bump-models:65
+fallback	Where is the default list of fallback model aliases set in the tool that recovers a pane blocked on a model safeguard?	bin/cc-recover-safeguard:116
+careful	In the research-kit router, where is the function defined that returns the model used for the careful classifier kind?	scripts/research-kit/router.py:333
+timeout	In the headless precondition probe script, which line sets the default per-run timeout in seconds?	scripts/headless-precondition-probe.sh:29
+detach	Where is the shared shell helper function defined that spawns a child process in its own session so it survives the calling tool's process-group kill? Give the line of the function definition.	scripts/lib/detach.sh:27
+rbwtest	Which bats test asserts that a write by a model inside the binary's natively enforced set is allowed, because the native guard still refuses? Give the line of that @test.	tests/read-before-write-parity.bats:144
+logpath	In the multi-account quota tool claude-accounts, on which line is the module-level log file path assigned?	bin/claude-accounts:257
+wirenear	In claude-accounts, where is the usage percentage threshold defined at or above which the tool makes a one-token messages call to read the rate-limit headers?	bin/claude-accounts:1256
+which	In the research-kit router, on which line is the claude executable located on PATH for the classifier call?	scripts/research-kit/router.py:364
+kitten	In the limit-recover recon canary rig, where is the path to the kitty kitten binary set?	tests/rig/lr-recon-canary.sh:33
+basemodel	In the token ledger, where is the function defined that normalizes a model id by stripping a [1m] suffix and a date suffix?	bin/cc-token-ledger:333
