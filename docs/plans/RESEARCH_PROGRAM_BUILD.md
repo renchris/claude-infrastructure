@@ -1106,7 +1106,7 @@ files, tracks B and C by its lead (ordered around sealed files).
   - pushback recall >= 0.95 on v3's 2 counted items (disclosed second read);
   - fallback <= 0.10, and at least 40 agreed items.
 
-  There is no re-read on FAIL. That spends the method's '1 repair and 1 re-test' (REPORT:1078). No v3 stratum is read a third time.
+  There is no re-read on FAIL. That spends the method's '1 repair and 1 re-test' (REPORT §6.5 cap row "Router recall below its threshold (gate row 15)"). No v3 stratum is read a third time.
 - **Track A, the false-relay cost limits: built** (2026-10-06, two teammates on disjoint files, merged by the
   lead; shas at the land below). `router.py`: every relay turn shows the operator a one-line notice naming the
   route and the word `misrouted`; a typed `--requires-gate <slug>` is a work order only when the slug is the
@@ -1368,7 +1368,7 @@ inside it: three ordered steps around sealed files, one small code change each, 
   relayed (1 fell back), regex-missed 2 of 2. Record `router-heldout/reading-v4-2026-10-07.jsonl` and trace beside
   it (mode 600, no prompt text).
 - **Verdict: FAIL**, final for this wave, under RULE 2' exactly as committed (`d68323586`, then the start rule in
-  `9d6e8f215`). No re-read: this was the method's one re-test (REPORT:1078).
+  `9d6e8f215`). No re-read: this was the method's one re-test (REPORT §6.5 cap row "Router recall below its threshold (gate row 15)").
 - **What the failure is made of** (from the tool's record, counts only; no further read was made to get it):
   - **Every recall miss is a fallback.** regex-matched missed 13, and its counted fallbacks are 13; regex-missed
     missed 12, and its fallbacks are 12. Not one relay-gold prompt in either stratum got a wrong label in time.

@@ -68,11 +68,11 @@ The report file could not be written; see report_file. The full synthesis is in 
    - Once a program is certified, that is about 0.2-0.24 of ordinary prompts, or about 3-10 a day (estimated).
    - The router is idle today: the one program, TM2, is only registered.
 - 78 1. Measure first, every lever open (Sonnet 5.5 leading, Haiku 5.5 added if it ships), with a pre-registered stop rule, then a composite read (fresh v4 'other' and regex-matched, minimal disclosed reuse of v3). Cost limits land now :: One ruling now. The relay notice and the narrowed --requires-gate are live in days; the 'misrouted' override and the no-carry rule follow under the ruling. In about 1-2 weeks: a certified router (about 35-40%), or a clean stop with per-configuration numbers and no sealed data spent. Sealed v2 is use
-- 10 2. Adopt Sonnet 5.5 thinking off as the relay voter now, on v1 evidence, then the composite read :: About a week sooner. But a likely FAIL on regex-missed (3/4 on its only tuning rows) or on 'other' (CI down to 0.82), which uses up v4 and the method's one re-test (REPORT:1078). Needs the section 4.1 model edit either way
+- 10 2. Adopt Sonnet 5.5 thinking off as the relay voter now, on v1 evidence, then the composite read :: About a week sooner. But a likely FAIL on regex-missed (3/4 on its only tuning rows) or on 'other' (CI down to 0.82), which uses up v4 and the method's one re-test (REPORT §6.5 cap row "Router recall below its threshold (gate row 15)"). Needs the section 4.1 model edit either way
 - 4 3. Precision pass on the haiku 4.5 pair (careful-confirms or a tighter brief) :: Estimated 'other' 0.81-0.87, with a ceiling near 0.90: a likely FAIL. Any pass expires when haiku 4.5 retires (floor 2026-10-15) or haiku_latest flips to Haiku 5.5
 - 3 4. Wait for a fully fresh certification set :: No row-15 pass before February-April 2027 at best, held up by pushback (1 prompt in 4 weeks). The classifier is unchanged when it comes
 - 3 5. Lower the 'other' floor :: Passes on paper now, but about 1 in 4 ordinary program prompts are falsely relayed (3-10 a day). A floor at or below 0.76 chosen after seeing 0.76 fits the instrument to the result. Only a floor set from a cost argument before a fresh read is defensible, and that is option 1's fallback if it stops
-- 2 6. Run uncertified :: Not possible without a method change: row 15 is PASS/FAIL only, the certificate needs every row (gate.py:212-215), and REPORT:1078 forbids issuing one. It also buys nothing, because no program is in a blocking state
+- 2 6. Run uncertified :: Not possible without a method change: row 15 is PASS/FAIL only, the certificate needs every row (gate.py:212-215), and REPORT §6.5 cap row "Router recall below its threshold (gate row 15)" forbids issuing one. It also buys nothing, because no program is in a blocking state
 
 
 ## Build scope (wave E1h)
@@ -193,5 +193,5 @@ STOP: with no eligible configuration, nothing is landed, v4 is not sealed and no
 - pushback recall >= 0.95 on v3's 2 counted items (disclosed second read);
 - fallback <= 0.10, and at least 40 agreed items.
 
-There is no re-read on FAIL. That spends the method's '1 repair and 1 re-test' (REPORT:1078). No v3 stratum is read a third time.
+There is no re-read on FAIL. That spends the method's '1 repair and 1 re-test' (REPORT §6.5 cap row "Router recall below its threshold (gate row 15)"). No v3 stratum is read a third time.
 

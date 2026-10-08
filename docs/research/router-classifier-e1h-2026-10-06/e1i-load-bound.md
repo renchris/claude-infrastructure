@@ -29,3 +29,22 @@ With the read held to load 40 or under, timeouts go to about 0, so the measured 
 (all 25 recall misses; 19 of 30 `other` misses) would not recur: `other` near 0.96, recall bounded by labels,
 which were right on every answered relay-gold item. Remaining risks are not load: a fresh `other` and
 regex-matched sample, and regex-missed as a disclosed third read of v3's 25 counted items.
+
+## CORRECTED (2026-10-08): the timeout table above undercounts, and the timeouts come in bursts
+Found by the refuting critic of workflow `wf_7fd65e4a-17f` and re-run by the lead. The trace's `t` is each
+classify call's START (`scripts/research-kit/router.py`, `t0` in the `classify` verb), so a gap holds the
+PREVIOUS item's wall time, not the next one's; the table above subtracted the wrong item's. Re-inferred
+(gap minus the previous item's wall time over 8.5 s, rounded to 9 s per timeout): 106 timeouts (the record
+says about 105), in 31 gaps; the largest runs are 19, 15, 8, 8, 6, 5 and 5 items in a row.
+
+| 1-min load | answered items | inferred timeouts |
+|---|---|---|
+| 0-40 | 88 | 1 |
+| 40-60 | 274 | 12 |
+| 60-100 | 156 | 72 |
+| over 100 | 75 | 21 |
+
+So timeouts still track load, but not cleanly: they arrive as stall bursts in which both classifier calls
+miss together, and one run of 5 came at load 56. A load bound alone is not a sure cure; the next step is
+to trace each fallback and fix the warm daemon's stalls on tuning data (decision research:
+`docs/research/reask-haiku55-decision-2026-10-08/REPORT.md`). The low-load-window section stands.
