@@ -316,8 +316,39 @@ esac
 # property that lets the 18 class-2 sites stop caring which terminal they are in.
 if [ "$VERB" = address ] && [ $# -eq 0 ]; then pane_self; exit $?; fi
 
+# ── READ VERBS FROM A CALLER WITH NO TERMINAL AT ALL (2026-10-08) ──────────────────────────────
+# `list` and `address <id>` ask "what does the terminal enumerate?". From launchd (the lr-reset-poller
+# drain behind scripts/limit-recover/lr-upgrade.sh) the process carries no KITTY_*, no CC_TERM and no
+# ITERM_SESSION_ID, so the it2 shim takes its iTerm2 arm — deliberately: its "no default divert" pin
+# (tests/it2-wrapper.bats) keeps a headless `claude -p` from opening teammate panes in the operator's
+# kitty. On a kitty box that arm exits 2, cc-resume-debt reads it as surface rc 3, and the drain
+# skipped every idle session 149 times against 10 upgrades (measured 2026-10-08). A READ is safe to
+# answer from discovery where an ACT is not, so only these two verbs, and only with no terminal
+# identity of any kind, ask bin/cc-kitty-socket --unique for the one live kitty and hand the verdict
+# down through the documented CC_TERM + CC_TERM_KITTY_TO seam (the same pair cc-reaper and
+# lr-upgrade's lru_it2 export). Zero or two-or-more live kitties export nothing: the iTerm2 arm runs
+# as before and the answer stays INDETERMINATE. spawn/send/close keep needing the caller's verdict.
+# ITERM_SESSION_ID counts as an iTerm2 identity only when its id half is iTerm2's (a UUID). The
+# numeric `w0t0p0:<kitty window id>` that scripts/kitty-setup.sh writes into every kitty pane names a
+# kitty window, so a process that inherited it with KITTY_* scrubbed still has no terminal of its own.
+# Off switches: IT2_WRAPPER_NO_KITTY (the shared A/B switch) · CC_PANE_KITTY_DISCOVER=off.
+# Seam: CC_KITTY_SOCKET_BIN.
+pane_kitty_discover() {
+  [ -z "${CC_TERM:-}${CC_TERM_KITTY_TO:-}${KITTY_LISTEN_ON:-}${KITTY_WINDOW_ID:-}" ] || return 0
+  # cc-pane-id-lint:allow — a TERMINAL test (is this an iTerm2 pane?), not a pane-id read; CC_PANE_ID says nothing about which terminal.
+  case "$(pane_norm "${ITERM_SESSION_ID:-}")" in ''|*[!0-9]*) [ -z "${ITERM_SESSION_ID:-}" ] || return 0 ;; esac  # cc-pane-id-lint:allow
+  [ -z "${IT2_WRAPPER_NO_KITTY:-}" ] || return 0
+  [ "${CC_PANE_KITTY_DISCOVER:-on}" != off ] || return 0
+  local ks s
+  ks="${CC_KITTY_SOCKET_BIN:-$DRIVER_DIR/cc-kitty-socket}"
+  [ -x "$ks" ] || return 0
+  s="$("$ks" --unique 2>/dev/null)" && [ -n "$s" ] || return 0
+  CC_TERM=kitty; CC_TERM_KITTY_TO="$s"; export CC_TERM CC_TERM_KITTY_TO
+}
+
 case "$DRIVER" in
   iterm2)
+    case "$VERB" in list|address) pane_kitty_discover ;; esac
     case "$VERB" in
       spawn)   drv_iterm2_spawn "$@" ;;
       address) [ $# -ge 1 ] || { die_usage "address: need an id"; exit $?; }

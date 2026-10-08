@@ -236,6 +236,25 @@ if [ -z "${CC_TERM_KITTY_TO:-}" ]; then
   fi
 fi
 
+# ── NO SOCKET IN THE ENVIRONMENT: DISCOVER ONE, OR STAY UNKNOWN (2026-10-08) ──────────────────────
+# A caller that reached this line WITHOUT a socket is one the gate above already accepted on
+# CC_TERM=kitty (teammate-auto-shutdown.sh's pin_term_verdict exports exactly that and nothing else)
+# or on genuine ancestry with KITTY_LISTEN_ON scrubbed. launchd jobs carry no KITTY_LISTEN_ON, and the
+# socket path embeds kitty's pid (unix:/tmp/kitty-<pid>), so it cannot be written down ahead of time.
+# Measured 2026-10-08: `CC_TERM=kitty cc-pane list` with KITTY_* unset exited 2 (rc 4 here) while the
+# same call naming the socket exited 0. Discovery sits BELOW the ancestry gate, so it only changes how
+# an already-authorised caller ADDRESSES kitty, never whether it may drive it. `--unique` refuses zero
+# and two-or-more live sockets alike (window ids restart at 1 in every kitty, so picking one of two is
+# a guess), which falls through to the unchanged rc 4: unknown still means nothing is sent.
+# Seam: CC_KITTY_SOCKET_BIN names the resolver (tests point it at a stub).
+if [ -z "${KITTY_LISTEN_ON:-}${CC_TERM_KITTY_TO:-}" ]; then
+  _ks="${CC_KITTY_SOCKET_BIN:-$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/cc-kitty-socket}"
+  if [ -x "$_ks" ] && _ks_out="$("$_ks" --unique 2>/dev/null)" && [ -n "$_ks_out" ]; then
+    CC_TERM_KITTY_TO="$_ks_out"; export CC_TERM_KITTY_TO
+  fi
+  unset _ks _ks_out
+fi
+
 [ -n "${KITTY_LISTEN_ON:-}${CC_TERM_KITTY_TO:-}" ] || {
   err "no kitty control socket (KITTY_LISTEN_ON unset). kitty.conf needs 'allow_remote_control socket-only' + 'listen_on', and kitty must be RESTARTED — neither option is reloadable."
   exit 4

@@ -12,14 +12,21 @@
 # socket to a caller as CC_TERM_KITTY_TO is it2-kitty's own documented explicit-intent channel
 # (bin/it2-kitty:197 — "naming a socket IS the statement that you mean to drive that kitty").
 #
-# usage: cc-kitty-socket [--all | -h|--help]
+# usage: cc-kitty-socket [--all | --unique | -h|--help]
 # stdout (no argument): exactly one `unix:/path` (the oldest live instance — the operator's login
 #         kitty; test instances are younger). Nothing else, ever.
 #   --all  EVERY live instance, one `unix:/path` per line, oldest first. Skips the KITTY_LISTEN_ON
 #          fast path (an inherited socket is listed only if the glob finds it) and symlinks. A
 #          window id restarts at 1 in every kitty, so a caller reconciling ids needs all of them.
-# rc: 0 resolved · 4 no live socket (mirrors it2-kitty's "no control socket" code) · 64 unknown
-#     argument (every argument used to be silently ignored, so `--all` answered with one line).
+#   --unique  the live instance ONLY IF it is the only one; two or more is rc 5 with no output.
+#          Same glob as --all (no fast path, no symlinks). For callers that DISCOVER rather than
+#          inherit a terminal (bin/it2-kitty, bin/cc-pane, bin/cc-reaper): window ids restart at 1
+#          in every kitty, so "the oldest" of two is a guess about which window 2 the caller meant,
+#          and a guess is how a keystroke lands in the wrong session. Ambiguous stays unknown.
+# rc: 0 resolved · 4 no live socket (mirrors it2-kitty's "no control socket" code) · 5 more than one
+#     live socket under --unique · 64 unknown argument (every argument used to be silently ignored,
+#     so `--all` answered with one line).
+# A socket file must be OWNED by this user: another user's kitty is not ours to drive.
 # NEVER launches anything, never writes anything.
 #
 # Seams (tests only): CC_KITTY_SOCKET_DIR (default /tmp) · CC_KITTY_SOCKET_PS (default /bin/ps —
@@ -43,10 +50,11 @@ _etime_s() {
   echo $(( d*86400 + 10#$h*3600 + 10#$m*60 + 10#$s ))
 }
 
-ALL=0
+ALL=0; UNIQUE=0
 case "${1:-}" in
   '') ;;
   --all) ALL=1 ;;
+  --unique) UNIQUE=1 ;;
   -h|--help) sed -n '2,/^set -u$/{/^set -u$/d;s/^# \{0,1\}//;p;}' "$0"; exit 0 ;;
   *) printf 'cc-kitty-socket: unknown argument %s\n' "$1" >&2; exit 64 ;;
 esac
@@ -54,16 +62,19 @@ esac
 
 # Fast path: born inside kitty — the inherited socket is the right one by construction. NOT for
 # --all: that asks for every instance, and an inherited socket names only the one we were born in.
-if [ "$ALL" = 0 ] && [ -n "${KITTY_LISTEN_ON:-}" ]; then
+# NOT for --unique either: its callers reach for discovery precisely because they inherited nothing.
+if [ "$ALL" = 0 ] && [ "$UNIQUE" = 0 ] && [ -n "${KITTY_LISTEN_ON:-}" ]; then
   _p="${KITTY_LISTEN_ON#unix:}"
   if [ -S "$_p" ]; then printf 'unix:%s\n' "$_p"; exit 0; fi
 fi
 
-best=""; best_et=-1; all=""
+best=""; best_et=-1; all=""; n=0
 for s in "$DIR"/kitty-*; do
   [ -S "$s" ] || continue
-  # -S follows symlinks, so a link to a live socket would list one kitty twice under --all.
-  [ "$ALL" = 1 ] && [ -L "$s" ] && continue
+  # -S follows symlinks, so a link to a live socket would list one kitty twice under --all, and
+  # would make one kitty read as two (a false ambiguity) under --unique.
+  { [ "$ALL" = 1 ] || [ "$UNIQUE" = 1 ]; } && [ -L "$s" ] && continue
+  [ -O "$s" ] || continue
   pid="${s##*-}"
   case "$pid" in ''|*[!0-9]*) continue ;; esac
   # the pid embedded in the socket name must be a LIVE kitty — a recycled pid whose comm is
@@ -75,10 +86,12 @@ for s in "$DIR"/kitty-*; do
   ets="$(_etime_s "$et")"
   all="$all$ets unix:$s
 "
+  n=$((n + 1))
   if [ "$ets" -gt "$best_et" ]; then best="$s"; best_et="$ets"; fi
 done
 
 [ -n "$best" ] || exit 4
+[ "$UNIQUE" = 1 ] && [ "$n" -gt 1 ] && exit 5
 if [ "$ALL" = 1 ]; then
   # oldest first — the same order the single answer is chosen by, so line 1 IS the no-arg answer
   # (ties aside: there the glob's first wins, here the sort's).

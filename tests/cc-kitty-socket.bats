@@ -163,3 +163,49 @@ mksock() { # bind a real unix socket at $1 (a plain file must NOT count as a soc
   [ "$status" -eq 0 ]
   [[ "$output" == *"usage: cc-kitty-socket [--all"* ]]
 }
+
+# ── --unique (2026-10-08): discovery for callers with no terminal env must never pick one of two ──
+# Window ids restart at 1 in every kitty, so "the oldest" of two live kitties is a guess about whose
+# window N a caller means. bin/it2-kitty, bin/cc-pane and bin/cc-reaper ask --unique and treat any
+# non-zero as "unknown" (nothing typed). Zero and one candidates share the default mode's rules.
+
+@test "--unique with exactly one live kitty resolves it, rc 0" {
+  mksock "$T/sock/kitty-30"
+  echo "30 kitty 05:00" > "$PS_TABLE"
+  run "$BIN" --unique
+  [ "$status" -eq 0 ]
+  [ "$output" = "unix:$T/sock/kitty-30" ]
+}
+
+@test "--unique with no live kitty -> rc 4, no output" {
+  run "$BIN" --unique
+  [ "$status" -eq 4 ]
+  [ -z "$output" ]
+}
+
+@test "--unique with two live kitties refuses -> rc 5, no output (the default mode would pick one)" {
+  mksock "$T/sock/kitty-31"
+  mksock "$T/sock/kitty-32"
+  printf '31 kitty 2-01:00:00\n32 kitty 10:00\n' > "$PS_TABLE"
+  run "$BIN" --unique
+  [ "$status" -eq 5 ]
+  [ -z "$output" ]
+}
+
+@test "--unique counts a symlink to the live socket once, not as a second kitty" {
+  mksock "$T/sock/kitty-33"
+  ln -s "$T/sock/kitty-33" "$T/sock/kitty-34"
+  printf '33 kitty 05:00\n34 kitty 05:00\n' > "$PS_TABLE"
+  run "$BIN" --unique
+  [ "$status" -eq 0 ]
+  [ "$output" = "unix:$T/sock/kitty-33" ]
+}
+
+@test "--unique ignores the KITTY_LISTEN_ON fast path (its callers inherited nothing)" {
+  mksock "$T/sock/inherited"
+  mksock "$T/sock/kitty-35"
+  mksock "$T/sock/kitty-36"
+  printf '35 kitty 05:00\n36 kitty 06:00\n' > "$PS_TABLE"
+  KITTY_LISTEN_ON="unix:$T/sock/inherited" run "$BIN" --unique
+  [ "$status" -eq 5 ]
+}

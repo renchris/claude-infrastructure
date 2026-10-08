@@ -114,7 +114,9 @@ GIT_BIN="${CC_REAPER_GIT_BIN:-git}"
 # explicit choice and is never overwritten. CC_REAPER_KITTY_ADDR=0 restores the old behaviour.
 if [ "${CC_REAPER_KITTY_ADDR:-1}" = 1 ] \
    && [ -z "${CC_TERM:-}" ] && [ -z "${CC_TERM_KITTY_TO:-}" ] && [ -z "${KITTY_LISTEN_ON:-}" ]; then
-  _reaper_sock="$("${CC_REAPER_KITTY_SOCKET_BIN:-$HERE/cc-kitty-socket}" 2>/dev/null)" || _reaper_sock=""
+  # --unique (2026-10-08): with two live kitties "the oldest" is a guess about whose window N a close
+  # targets — window ids restart at 1 in every kitty — so ambiguity exports nothing, like no kitty.
+  _reaper_sock="$("${CC_REAPER_KITTY_SOCKET_BIN:-$HERE/cc-kitty-socket}" --unique 2>/dev/null)" || _reaper_sock=""
   if [ -n "$_reaper_sock" ]; then
     CC_TERM=kitty
     CC_TERM_KITTY_TO="$_reaper_sock"
