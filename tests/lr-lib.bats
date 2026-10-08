@@ -683,6 +683,43 @@ bare_fixture() { # $1=dir → a normal checkout with a commit (reflog), then fli
   [ "$output" = 3 ]
 }
 
+# ONE jq over every beat (2026-10-08: a fork per beat over 7105 files took 70-87 s). jq reads the
+# files as one stream, so a beat it cannot parse must fall back to the per-file loop, never cost the
+# beats after it. RED: drop the fallback arm and the count reads 0 or 1, not 3.
+@test "phantom: a beat jq cannot parse costs only itself, one-pass or per-file" {
+  export CC_BEAT_DIR="$BATS_TEST_TMPDIR/beats"; mkdir -p "$CC_BEAT_DIR"
+  export LR_CONFIG_DIRS="$CFG"
+  local i sid
+  printf '{"sid": "broken", "kind": ' > "$CC_BEAT_DIR/0000-broken.json"
+  for i in 1 2 3; do
+    sid="cccc000$i-0000-4000-8000-00000000000$i"
+    printf '{\n  "sid": "%s",\n  "kind": "prompt",\n  "pid": %s\n}\n' "$sid" "$(hk_live)" > "$CC_BEAT_DIR/$sid.json"
+    turn "$CFG/projects/$SLUG/$sid.jsonl" 2026-09-08T22:00:00.000Z claude-opus-5 high
+    limit "$CFG/projects/$SLUG/$sid.jsonl" 2026-09-08T23:11:09.000Z
+  done
+  printf '{"sid":"dddd0001-0000-4000-8000-000000000001","kind":"stop","pid":%s}\n' "$(hk_live)" > "$CC_BEAT_DIR/stop.json"
+  run lr_phantom_actives
+  [ "$output" = 3 ] || { echo "one-pass: $output"; false; }
+  LR_PHANTOM_ONEPASS=off run lr_phantom_actives
+  [ "$output" = 3 ] || { echo "per-file: $output"; false; }
+}
+
+# BOTH CORRECTIONS ONLY SUBTRACT, so an uncorrected ADMIT is final and the beat scan is skipped; a
+# refusal still gets the corrected second probe. RED: drop the lazy arm and PH_LOG gains a line on
+# the admit case.
+@test "probe: an uncorrected admit skips the phantom scan; a refusal still runs it" {
+  PH_LOG="$BATS_TEST_TMPDIR/ph.log"; : > "$PH_LOG"
+  cc_sp_active() { echo 5; }
+  lr_phantom_actives() { echo scan >> "$PH_LOG"; printf 1; }
+  cc_capacity_probe() { [ -z "${CC_SP_ACTIVE_OVERRIDE:-}" ] && return "${RAW_RC:-0}"; return 0; }
+  RAW_RC=0 run lr_capacity_probe_corrected t probe
+  [ "$status" -eq 0 ]; [ ! -s "$PH_LOG" ] || { cat "$PH_LOG"; false; }
+  RAW_RC=9 run lr_capacity_probe_corrected t probe
+  [ "$status" -eq 0 ]; [ "$(grep -c scan "$PH_LOG")" = 1 ]
+  LR_PROBE_LAZY_CORRECTION=off RAW_RC=0 run lr_capacity_probe_corrected t probe
+  [ "$(grep -c scan "$PH_LOG")" = 2 ]
+}
+
 # ── the focus gate (FLEET_V2 W6, resolution 1): one rule for every typing path ──────────────────
 # Readers are stubbed by NAME, the way callers pass theirs. Mutants: drop the LR_MOVE_FOCUSED test
 # (off stops holding) · drop the second read (a draft that appears in the gap passes) · treat

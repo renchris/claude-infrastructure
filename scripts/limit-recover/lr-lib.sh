@@ -359,29 +359,64 @@ lr_phantom_actives() { # → count of live sessions whose mid-turn beat is a usa
   local dir b sid pid kind cfg tx n=0 rest ekind row
   dir="${CC_BEAT_DIR:-$HOME/.claude/cc-beats}"
   [ -d "$dir" ] || { printf '0'; return 0; }
-  for b in "$dir"/*.json; do
-    [ -f "$b" ] || continue
-    # ONE jq pass per beat. An empty field becomes `_`, which no check below accepts, because a
-    # tab is IFS whitespace and `read` would otherwise collapse it and shift the next field left.
-    row="$(jq -r 'if type=="object" then [(.kind // ""), (.pid // ""), (.sid // "")]
-                  | map(tostring | if . == "" then "_" else . end) | @tsv else empty end' "$b" 2>/dev/null)" || continue
+  # ONE jq FOR ALL BEATS, AND ONLY LIVE PROMPT BEATS INTO THE LOOP (2026-10-08): a fork per beat over 7105 files took 70-87 s at load 39-45,
+  # inside every lr-upgrade capacity probe. jq reads the files as one stream, so a single file it
+  # cannot parse ends the stream: any non-zero exit falls back to the per-file loop, which skips
+  # only that file — the count is the per-file one either way. Of 7106 beats 2216 were `prompt`, and
+  # a shell iteration each cost 13 s, so one ps pre-selects live pids (an empty ps keeps every row;
+  # the loop's own kill -0 still decides).
+  local rows
+  if [ "${LR_PHANTOM_ONEPASS:-on}" != off ] \
+     && rows="$(find "$dir" -maxdepth 1 -name '*.json' -type f -print0 2>/dev/null \
+                | xargs -0 jq -r 'if type=="object" then [(.kind // ""), (.pid // ""), (.sid // "")]
+                  | map(tostring | if . == "" then "_" else . end) | @tsv else empty end' 2>/dev/null)"; then
+    :
+  else
+    rows="$(for b in "$dir"/*.json; do
+      [ -f "$b" ] || continue
+      jq -r 'if type=="object" then [(.kind // ""), (.pid // ""), (.sid // "")]
+             | map(tostring | if . == "" then "_" else . end) | @tsv else empty end' "$b" 2>/dev/null
+    done)"
+  fi
+  # The transcripts of every candidate sid, in ONE find per config dir: a projects/*/<sid>.jsonl glob
+  # walks every project dir (tens of thousands per config dir), ~0.15 s each, and ran per sid per
+  # config dir. Same set as the glob: depth 2 under projects/, a regular file, no dot-named project.
+  local cand txs cfg names
+  cand="$(printf '%s\n' "$rows" | awk -F'\t' -v live=" $(ps -axo pid= 2>/dev/null | tr -s ' \n' '  ') " \
+     '$1 == "prompt" && (live == "  " || index(live, " " $2 " "))')"
+  names="$(printf '%s\n' "$cand" | awk -F'\t' '$3 ~ /^[A-Za-z0-9-]+$/ { printf "%s.jsonl\n", $3 }' | sort -u)"
+  txs=""
+  if [ -n "$names" ]; then
+    while IFS= read -r cfg; do
+      [ -n "$cfg" ] && [ -d "$cfg/projects" ] || continue
+      txs="$txs$(find "$cfg/projects/" -mindepth 2 -maxdepth 2 -type f -name '*.jsonl' 2>/dev/null \
+                 | awk -v want="$(printf '%s\n' "$names" | tr '\n' ' ')" -v root="$cfg/projects/" '
+                     { n = split($0, p, "/"); f = p[n]; d = p[n - 1]
+                       if (substr(d, 1, 1) != "." && index(" " want, " " f " ")) print }')"$'\n'
+    done <<EOF
+$(lr_config_dirs)
+EOF
+  fi
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    # An empty field became `_`, which no check below accepts, because a tab is IFS whitespace and
+    # `read` would otherwise collapse it and shift the next field left.
     IFS=$'\t' read -r kind pid sid <<<"$row" || continue
     [ "$kind" = prompt ] || continue
     case "$pid" in ''|*[!0-9]*) continue ;; esac
     kill -0 "$pid" 2>/dev/null || continue          # dead ⇒ the census already discards it
     case "$sid" in ''|*[!A-Za-z0-9-]*) continue ;; esac
-    while IFS= read -r cfg; do
-      [ -n "$cfg" ] || continue
-      for tx in "$cfg"/projects/*/"$sid".jsonl; do
-        [ -f "$tx" ] || continue
-        IFS=$'	' read -r _ _ ekind rest <<<"$(lr_last_api_error "$tx" 2>/dev/null)" || ekind=""
-        # break 2 leaves this beat's config-dir scan; break 3 left the per-beat loop and capped n at 1.
-        [ "$ekind" = limit ] && { n=$((n + 1)); break 2; }
-      done
+    # Any of this sid's transcripts ending on a limit error counts it once.
+    while IFS= read -r tx; do
+      [ -f "$tx" ] || continue
+      IFS=$'\t' read -r _ _ ekind rest <<<"$(lr_last_api_error "$tx" 2>/dev/null)" || ekind=""
+      [ "$ekind" = limit ] && { n=$((n + 1)); break; }
     done <<EOF
-$(lr_config_dirs)
+$(printf '%s\n' "$txs" | awk -v s="/$sid.jsonl" 'length($0) > length(s) && substr($0, length($0) - length(s) + 1) == s')
 EOF
-  done
+  done <<EOF
+$cand
+EOF
   printf '%s' "$n"
 }
 
@@ -420,6 +455,16 @@ lr_capacity_probe_corrected() { # $1=caller $2=what → 0 would-admit / 9 would-
   [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] && [ "${LR_SELF_ACTIVE_CORRECTION:-on}" != off ] && self=1
   # Left UNSET on any unreadable leg, so the probe then sees exactly what it saw before this existed.
   unset CC_SP_ACTIVE_OVERRIDE
+  # BOTH CORRECTIONS ONLY SUBTRACT, SO AN UNCORRECTED ADMIT IS FINAL (2026-10-08). The phantom scan
+  # reads every beat (7105 files) and cost 70-87 s inside each lr-upgrade probe at load 39-45; the
+  # probe charges nothing, so asking it once uncorrected first changes no verdict. Kill switch
+  # LR_PROBE_LAZY_CORRECTION=off.
+  if [ "${LR_PROBE_LAZY_CORRECTION:-on}" != off ] \
+     && CC_ADMIT_LOAD_TERM="${CC_ADMIT_LOAD_TERM:-off}" \
+        CC_ADMIT_MAX_SEGMENT_PCT="${CC_ADMIT_MAX_SEGMENT_PCT:-${LR_SEGMENT_PCT:-90}}" \
+        cc_capacity_probe "$caller" "$what" 2>/dev/null; then
+    return 0
+  fi
   if [ "${LR_FLEET_PHANTOM_CORRECTION:-on}" != off ] && command -v cc_sp_active >/dev/null 2>&1; then
     raw="$(cc_sp_active 2>/dev/null || true)"
     ph="$(lr_phantom_actives 2>/dev/null || true)"
