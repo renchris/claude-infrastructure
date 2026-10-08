@@ -199,6 +199,30 @@ census() { run bash "$LRU" --census --all; }
   printf '%s\n' "$output" | awk -F'\t' '$1==464 { exit !($5=="claude-sonnet-5-5") }' || { echo "$output"; false; }
 }
 
+@test "A7d Haiku stays Haiku: targets versions.haiku_latest, never opus_latest" {
+  # RED before 2026-10-08: Haiku fell through to opus_latest (live pane 50 read target claude-opus-5-5).
+  sed -i '' 's/^versions:$/versions:\
+  haiku_latest: claude-haiku-5-5/' "$LRU_MODEL_CONFIG"
+  sess 465 12121212-0000-4000-8000-000000000006 "$OLD --permission-mode auto --model claude-haiku-4-5"
+  sess 466 12121212-0000-4000-8000-000000000007 "$NEW --permission-mode auto --model claude-haiku-5-5"
+  census
+  [ "$(disp_of 465)" = upgrade ] || { echo "$output"; false; }
+  printf '%s\n' "$output" | awk -F'\t' '$1==465 { exit !($5=="claude-haiku-5-5") }' || { echo "$output"; false; }
+  [ "$(disp_of 466)" = current ] || { echo "$output"; false; }
+}
+
+@test "A7e a headless --print / -p process is HEADLESS, never upgrade, in both censuses" {
+  # RED before 2026-10-08: a `--print` probe whose row named a reused pane read `upgrade`, and the
+  # poller re-queued it every pass for handoff-fire to refuse as stale.
+  sess 467 12121212-0000-4000-8000-000000000008 "$OLD --model claude-opus-5 --print --output-format json --permission-mode auto do a thing"
+  sess 468 12121212-0000-4000-8000-000000000009 "$OLD -p --model claude-opus-5 --permission-mode auto"
+  census
+  [ "$(disp_of 467)" = headless ] || { echo "$output"; false; }
+  [ "$(disp_of 468)" = headless ] || { echo "$output"; false; }
+  run bash "$LRU" --switch-census --target claude-zz
+  printf '%s\n' "$output" | awk -F'\t' '$1==467 { f=1; exit !($NF=="headless") } END { exit !f }' || { echo "$output"; false; }
+}
+
 @test "A8 argv: last WELL-FORMED flag wins; prompt text that mentions a flag is not a flag" {
   sess 470 13131313-0000-4000-8000-000000000001 "$OLD --model claude-opus-5 --effort high --effort max do --effort (set-teammate-effort.sh) and --model is text"
   census

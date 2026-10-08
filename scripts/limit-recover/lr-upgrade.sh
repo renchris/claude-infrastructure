@@ -35,7 +35,7 @@
 #
 # Census columns: pane sid binary model target effort perm cfg cwd pid disposition
 # Dispositions: upgrade · upgrade-teammate · upgrade-lead · current · self · duplicate · no-transcript
-#               · mid-turn · subagents-in-flight · background-job · composer-occupied
+#               · mid-turn · subagents-in-flight · background-job · composer-occupied · headless
 #               · composer-unknown · stale-row
 #               team procedure holds: lead-awaits-teammates · lead-no-team-file · teammate-no-team
 #               · teammate-shutdown-pending · teammate-unidentified
@@ -172,7 +172,8 @@ lru_target_model() { # $1=current model [$2=sid] → the model this session shou
   lru_pinned_target "${2:-}" && return 0
   case "$1" in
     *fable*)  lru_ssot frontier_access model ;;     # Fable keeps Fable: a binary-only move
-    *sonnet*) lru_sonnet_target "$1" ;;             # Sonnet keeps Sonnet (see below)
+    *sonnet*) lru_family_target sonnet "$1" ;;      # Sonnet keeps Sonnet (see below)
+    *haiku*)  lru_family_target haiku "$1" ;;       # Haiku keeps Haiku (same rule, 2026-10-08)
     *)        lru_ssot versions opus_latest ;;      # Opus (and an argv with no --model) → opus_latest
   esac
 }
@@ -182,12 +183,15 @@ lru_target_model() { # $1=current model [$2=sid] → the model this session shou
 # (docs/research/sonnet55-utilization-2026-09-28/notes/harness-hazards-a.md §2). The target is
 # versions.sonnet_latest, but never an OLDER Sonnet than the session already runs: a trunk whose
 # SSOT still names claude-sonnet-5 must not move a claude-sonnet-5-5 session back a version.
-lru_sonnet_target() { # $1=current Sonnet model → sonnet_latest, or $1 when that would be a downgrade
-  local v cur="${1%%\[*}"
-  v="$(lru_ssot versions sonnet_latest)" || v=""
+# HAIKU KEEPS HAIKU (2026-10-08): the same fall-through gave a Haiku 5.5 session an Opus target
+# (census row pane 50, a `claude --model claude-haiku-5-5 --print` probe), so the rule is per family.
+lru_family_target() { # $1=family (sonnet|haiku) $2=current model → <family>_latest, or $2 when that would be a downgrade
+  local fam="$1" v cur="${2%%\[*}"
+  shift
+  v="$(lru_ssot versions "${fam}_latest")" || v=""
   [ -n "$v" ] || { printf '%s' "$1"; return 0; }
   case "$cur" in
-    claude-sonnet-*)
+    claude-"$fam"-*)
       if [ "$cur" != "$v" ] && [ "$(printf '%s\n%s\n' "$v" "$cur" | sort -V | tail -1)" = "$cur" ]; then
         printf '%s' "$1"; return 0
       fi ;;
@@ -216,6 +220,15 @@ lru_flag() { # $1=argv $2=flag $3=value ERE → the value of the LAST well-forme
 LRU_RE_MODEL='claude-[a-z0-9][a-z0-9.-]*(\[1m\])?'
 LRU_RE_EFFORT='low|medium|high|xhigh|max'
 LRU_RE_PERM='default|acceptEdits|plan|bypassPermissions|auto|dontAsk'
+
+# ── HEADLESS (2026-10-08): a `--print`/`-p` process has no TUI, so there is no session to recycle in
+# place. Its registry row can still name a pane (pane 50 named a kitty id reused by another session),
+# and before this the census called it `upgrade`, the poller re-queued it every pass, and handoff-fire
+# refused each one as a stale row. Matching prompt text too is fail-safe: it only ever skips a row.
+lru_headless() { # $1=argv → 0 when the process runs headless
+  case " $1 " in *" --print "*|*" -p "*) return 0 ;; esac
+  return 1
+}
 
 # ── is the transcript AT REST — the same rule as handoff-fire.sh's hf_transcript_at_rest ────────
 # Duplicated rather than sourced: handoff-fire is a 13k-line script with load-time side effects.
@@ -620,6 +633,7 @@ EOF
       disp=""
       case " $args " in *" --agent-id "*|*" --agent-id="*) role=teammate ;; esac
       case "$dupsids" in *" $sid "*) disp=duplicate ;; esac
+      if [ -z "$disp" ] && lru_headless "$args"; then disp=headless; fi
       if [ -z "$disp" ] && [ "$role" = teammate ]; then
         if [ "${LRU_TEAM_PROC:-on}" = off ]; then disp=teammate; else disp="$(lru_teammate_block "$args" "$cfg")"; fi
       fi
@@ -674,7 +688,7 @@ EOF
 # finally worked was a hand-written poller prompt request — this section is that, made a verb.
 #
 # Switch census columns: pane sid account cfg cwd pid disposition
-# Dispositions: move · self · on-target · duplicate · stale-row · teammate · lead-with-teammate
+# Dispositions: move · self · on-target · duplicate · stale-row · headless · teammate · lead-with-teammate
 #               · no-transcript · mid-turn · subagents-in-flight · background-job
 #               · composer-occupied · composer-unknown
 #               bg rows: bg-session · bg-busy · bg-no-pane · bg-split · bg-host (the host pane's row)
@@ -932,6 +946,7 @@ lru_switch_census() {
     else
       args="$(lru_snap_args "$snap" "$pid")"
       case "$dups" in *" $sid "*) disp=duplicate ;; esac
+      if [ -z "$disp" ] && lru_headless "$args"; then disp=headless; fi
       if [ -z "$disp" ]; then case " $args " in *" --agent-id "*|*" --agent-id="*) disp=teammate ;; esac; fi
       if [ -z "$disp" ] && lru_has_live_teammate "$snap" "$sid"; then disp=lead-with-teammate; fi
       if [ -z "$disp" ]; then
