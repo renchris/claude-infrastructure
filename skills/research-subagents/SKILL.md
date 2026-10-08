@@ -443,7 +443,7 @@ On the **model** axis it is pinned to `roles.research_worker` ONLY in-process/te
   | judge / verifier of a hard claim | `claude-opus-5-5` | `xhigh` | `roles.workflow_judge`, `roles.eval_judge` |
   | code review / bug finding | `claude-opus-5-5` | `xhigh` | `effort_defaults.opus55_capability_sensitive` |
   | adversarial / red-team (a DIFFERENT model on purpose) | `claude-fable-5-1` | `high` | `roles.research_adversarial`, `effort_defaults.fable51_capability_sensitive` |
-  | retrieval (file:line lookups) | `claude-haiku-4-5` | — (no effort param) | `roles.research_retrieval` |
+  | retrieval (file:line lookups) | `claude-haiku-5-5` | `medium` | `roles.research_retrieval`, `effort_defaults.haiku55_retrieval` |
 
   **Every slot in this table also takes `agentType: 'workflow-lean'`** (offline re-gate PASS,
   2026-09-24, `docs/research/token-efficiency-2026-09-23/eval/GATE.md` § Re-gate: −84% list $ per
@@ -523,7 +523,7 @@ investigations ≠ rounding error against $50 wave).
 verbatim per brief):
 
 > "Target 150-250K tokens of exploration; hard cap 500K, or ~150K on a
-> 200K-window model such as Haiku. Reasoning quality degrades long before
+> 200K-window model. Reasoning quality degrades long before
 > the context window fills.
 > Make tool calls until next-call falsifiability check fails — predict the
 > next call's result; if you can predict it AND wouldn't change your answer,
@@ -573,9 +573,11 @@ window is nominal, not effective — empirical measurements:
   256K ceiling, 30K floor.** 180K is the modal sweet spot — well below the
   256K reasoning cliff. Hard ceiling: 500K.
 - **Retrieval workers** (pure lookup + extraction, no inferential synthesis):
-  on the pinned retrieval model (`roles.research_retrieval`, `claude-haiku-4-5`)
-  the whole context window is **200K**, so budget **≤150K** and split a larger
-  source set across more workers. A retrieval-only brief that genuinely needs
+  on the pinned retrieval model (`roles.research_retrieval`, Haiku 5.5) budget
+  **≤100K** and split a larger source set across more workers. Its window is 1M, but
+  a request over 100,000 prompt tokens bills at 5× and no long-context retrieval
+  curve is published (`docs/research/haiku55-upgrade-2026-10-07/`). (Haiku 4.5's
+  window was 200K, which is where the old ≤150K came from.) A retrieval-only brief that genuinely needs
   more goes to a 1M-window model (`roles.research_worker`) at **350-500K modal**,
   with the lost-in-middle caveat (TACL 2024: 40-60% middle adherence even on
   retrieval); above 500K expect ~15-25% degradation on multi-needle retrieval per MRCR v2.
@@ -607,10 +609,17 @@ their convergence"* — treat as synthesis (use lower cap). The previous "500–
   inherits the **LEAD model, capped at opus** (2.1.198 change), so a heavy
   Explore fan-out draws opus/lead-tier quota — the ~70× discount does NOT hold
   on the eval track. Use for terminal codebase lookups, file:line discovery,
-  doc URL fetches. **To get the cheap tier, pass `model: "haiku"` on the spawn**
+  doc URL fetches. **To get the cheap tier, pass `model: "haiku"` AND `effort:
+  "medium"` on the spawn** (`effort_defaults.haiku55_retrieval`)
   — measured 2026-09-22 on 2.1.280 under an Opus 5.5 lead: unpinned Explore ran
   `claude-opus-5-5`, `model: "haiku"` ran `claude-haiku-4-5` (both exact on a
-  file:line lookup). That pin is what makes `roles.research_retrieval` bind.
+  file:line lookup; not re-run since). That pin is what makes `roles.research_retrieval` bind.
+  The effort is not optional any more: on 2.1.293 `haiku` is Haiku 5.5, which takes
+  effort, and a spawn without one inherits the LEAD's rung (measured: an Opus 5.5 lead
+  @high spawned Haiku 5.5 @high). On our own file:line lookups high bought nothing over
+  low or medium and spent ~20% more output tokens (`docs/research/haiku55-upgrade-2026-10-07/`).
+  A lead still on 2.1.284 has no Agent `effort` parameter and its `haiku` is Haiku 4.5,
+  which takes none: omit it there.
 - `deep-research` (custom, frontier-tier — frontmatter `opus`; lead passes
   `model: "fable"` at call time during the access window): use for
   multi-axis depth research. It runs flat: subagent spawning is capped at
@@ -665,7 +674,8 @@ inline, queued holes batch at wrap-up; capture via `/frontier-hole`. The
 **Type-mix pin for typical complex research wave (model-tier-aware)**:
 
 - 60% `deep-research` (`roles.research_worker`) — multi-axis breadth-first worker  [worker slot; was `deep-research-sonnet`/Sonnet — see override]
-- 25% `Explore` (`roles.research_retrieval`, **only when spawned with `model: "haiku"`**;
+- 25% `Explore` (`roles.research_retrieval`, **only when spawned with `model: "haiku"`**,
+  and with `effort: "medium"` (`effort_defaults.haiku55_retrieval`) so it does not inherit the lead's rung;
   unpinned it inherits the lead model, capped opus, on every binary the fleet runs
   (≥2.1.198) — so pin it, or price this slice at the lead's tier)
   — codebase lookups, file:line discovery

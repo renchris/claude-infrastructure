@@ -101,7 +101,7 @@ unbounded spawn is the failure mode that reaches the kernel.
 |---|---|
 | Default permission-mode flip (2.1.200 → Manual) | CAUTION — reso pins `auto`; gate #3/#11 prove it survives |
 | Default model flip (2.1.197 → Sonnet 5; the `sonnet` alias itself moved again in 2.1.284) | NEUTRAL for a pinned lead; CAUTION for bare teammate spawns — audit `Agent()` calls for an explicit `model:` |
-| Explore model (2.1.198 → the lead's model, capped at opus, not Haiku) | COST regression — re-price fan-outs; pin `model: "haiku"` where retrieval is the job (research-subagents skill) |
+| Explore model (2.1.198 → the lead's model, capped at opus, not Haiku) | COST regression — re-price fan-outs; pin `model: "haiku"` with `effort` at `effort_defaults.haiku55_retrieval` where retrieval is the job (research-subagents skill) |
 | Background-daemon regression window | BLOCKER until the LAST fix in the cluster (audit.md § Churn) |
 | Effort-override (2.1.186 leader-inherit) | NON-ISSUE — project settings.local.json wins |
 | Hook matchers (2.1.191 comma / 2.1.195 hyphen) | NON-ISSUE — reso uses `\|` + exact MCP names |
