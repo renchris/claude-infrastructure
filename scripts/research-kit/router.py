@@ -68,7 +68,9 @@ CC_RESEARCH_RENDER (a shell command printing the certificate lines), CC_MODEL_CO
 CC_RESEARCH_WARM_SOCK (the resident classifier's socket; default
 $CC_RESEARCH_HOME/classifier-warm/sock), CC_RESEARCH_CLASSIFY_TRACE (a file the `classify` verb
 appends one row per call to: the label, which call and path answered, wall seconds and load; never
-the prompt).
+the prompt; and, since wave E1j, a `stall` row when no label is in hand STALL_TRACE_MARGIN_S before
+the limit, naming each call's path, what the resident classifier said and whether it answered, so a
+call the caller kills at its limit still leaves its reason).
 
 THE CLASSIFIER IS TWO CALLS (wave E1g, ruling b18c74a4f8e1): a fast one (wave E1b's brief and system
 prompt, thinking off; on `sonnet_latest` since wave E1i, decision 1f3b8f2d01b7) and a careful one (the
@@ -205,6 +207,11 @@ FAST_FLAGS = [
 # heldout.py stops a router call at 9 s of its own clock, which includes starting Python (measured
 # 0.07-0.10 s at load 49), and a label printed at 9.0 s of this clock was counted a fallback.
 DELIVER_MARGIN_S = 0.5
+# With no label in hand this long before the limit, the trace gets a `stall` row (wave E1j): a call
+# that ends in a fallback is killed by heldout.py at 9 s of ITS clock, before the `classify` verb's
+# own row is written, so E1i's 105 fallbacks left no reason. 8.6 s by this clock lands by about 8.9 s
+# of the caller's, after interpreter start (0.07-0.10 s at load 49) and the 0.25 s poll at worst.
+STALL_TRACE_MARGIN_S = 0.4
 
 
 # ── stores ──────────────────────────────────────────────────────────────────────────────────────
@@ -454,6 +461,23 @@ class Call(threading.Thread):
         self.sock: Optional[socket.socket] = None
         self.proc: Optional["subprocess.Popen[str]"] = None
         self.dir = ""
+        # for the stall trace (wave E1j): where the call is, and when each path ended or started
+        self.path = "warm"
+        self.warm = "waiting on the resident classifier"
+        self.warm_s: Optional[float] = None
+        self.cold_s: Optional[float] = None
+        self.t0 = time.time()
+
+    def trace(self) -> Dict[str, Any]:
+        done = self.done.is_set()
+        return {
+            "path": self.path,
+            "warm": self.warm[:160],
+            "warm_s": self.warm_s,
+            "cold_s": self.cold_s,
+            "answered": bool(done and self.label),
+            "reason": (self.reason if done else "had not answered")[:160],
+        }
 
     def run(self) -> None:
         try:
@@ -469,6 +493,8 @@ class Call(threading.Thread):
         state, reply = warm_classify(
             self.text, self.deadline - time.time(), self.kind, self
         )
+        self.warm_s = round(time.time() - self.t0, 2)
+        self.warm = state if state == "answer" else f"{state}: {reply}"
         if state == "answer":
             label, why = one_label(reply)
             return label, why or f"classifier ({self.kind} call, resident)"
@@ -485,6 +511,7 @@ class Call(threading.Thread):
         if argv is None:
             return None, "no classifier: `claude` is not on PATH"
         empty = self.dir = tempfile.mkdtemp(prefix="cc-research-router-")
+        self.path, self.cold_s = "cold", round(time.time() - self.t0, 2)
         try:
             # Its own process group, so ending the call ends whatever the classifier started too.
             self.proc = subprocess.Popen(
@@ -546,6 +573,18 @@ class Call(threading.Thread):
             shutil.rmtree(self.dir, ignore_errors=True)
 
 
+def trace_row(row: Dict[str, Any]) -> None:
+    """Append one row to CC_RESEARCH_CLASSIFY_TRACE when it is set; never the prompt."""
+    trace = os.environ.get("CC_RESEARCH_CLASSIFY_TRACE")
+    if not trace:
+        return
+    try:
+        with open(trace, "a") as fh:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+    except OSError:
+        pass
+
+
 def classify(
     prompt: str, cert: str, program: Optional[str] = None
 ) -> Tuple[Optional[str], str]:
@@ -569,8 +608,14 @@ def classify(
     except ValueError:
         timeout = CLASSIFIER_TIMEOUT_S
     cert = cert or "(none rendered)"
-    deadline = time.time() + timeout
+    t0 = time.time()
+    deadline = t0 + timeout
     hold = deadline - DELIVER_MARGIN_S * timeout / CLASSIFIER_TIMEOUT_S
+    stall = (
+        deadline - STALL_TRACE_MARGIN_S * timeout / CLASSIFIER_TIMEOUT_S
+        if os.environ.get("CC_RESEARCH_CLASSIFY_TRACE")
+        else None
+    )
     tick = threading.Event()
     calls = {
         k: Call(k, BRIEFS[k].format(cert=cert, prompt=prompt), deadline, tick)
@@ -606,7 +651,23 @@ def classify(
                     return have.label, have.reason
                 said = other.reason if other.done.is_set() else "had not answered"
                 return have.label, f"{have.reason}; the {other.kind} call: {said}"[:300]
-            tick.wait(min((hold if have else deadline) - now, 0.25))
+            until = hold if have else deadline
+            if stall is not None and have is None:
+                if now >= stall:
+                    trace_row(
+                        {
+                            "row": "stall",
+                            "t": round(t0, 2),
+                            "at_s": round(now - t0, 2),
+                            "load": round(os.getloadavg()[0], 1),
+                            "fast": fast.trace(),
+                            "careful": careful.trace(),
+                        }
+                    )
+                    stall = None
+                else:
+                    until = min(until, stall)
+            tick.wait(max(min(until - now, 0.25), 0.0))
     finally:
         for call in (fast, careful):
             call.stop()
@@ -1266,20 +1327,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         cert = render_cert(a.program)[0] if a.program else ""
         t0 = time.time()
         label, why = classify(sys.stdin.read(), cert, a.program)
-        trace = os.environ.get("CC_RESEARCH_CLASSIFY_TRACE")
-        if trace:
-            row = {
+        trace_row(
+            {
                 "t": round(t0, 2),
                 "label": label,
                 "why": why,
                 "wall_s": round(time.time() - t0, 2),
                 "load": round(os.getloadavg()[0], 1),
             }
-            try:
-                with open(trace, "a") as fh:
-                    fh.write(json.dumps(row, sort_keys=True) + "\n")
-            except OSError:
-                pass
+        )
         if not label:
             return 1  # heldout.route() counts a non-zero exit as a fallback
         print(label)

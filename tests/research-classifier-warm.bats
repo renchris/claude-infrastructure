@@ -448,6 +448,48 @@ under() { /usr/bin/python3 -c "import sys; sys.exit(0 if $wall < $1 else 1)"; }
   under 3
 }
 
+# ── the stall trace (wave E1j) ──────────────────────────────────────────────────────────────────
+# E1i's read lost 105 items to 9 s fallbacks, and heldout.py killed each router before the classify
+# verb wrote its trace row, so no fallback left a reason. With no label in hand STALL_TRACE_MARGIN_S
+# before the limit, the router now writes a `stall` row naming each call's path, what the resident
+# classifier said and whether it answered. RED-proof: on the router before this wave both cases below
+# find no stall row.
+
+@test "E1j trace: a router killed at the caller's 9 s limit has already left a stall row naming each call's path" {
+  local stub
+  stub="$(two 'sleep 20' 'sleep 20')"
+  # exactly as gate row 15 calls it: heldout.route, its own 9 s clock, the router killed at the limit
+  run env CC_RESEARCH_CLASSIFY_TRACE="$BATS_TEST_TMPDIR/trace" CC_RESEARCH_CLASSIFIER="$stub" /usr/bin/python3 -c "import sys; sys.path[:0]=['$REPO/scripts/research-kit/lib','$REPO/scripts/research-kit']; import heldout; print(heldout.route(\"python3 '$ROUTER' classify\", 'is that everything?'))"
+  [ "$status" -eq 0 ]
+  [ "$output" = None ]
+  [ "$(head -1 "$BATS_TEST_TMPDIR/trace" | jq -r '.row')" = stall ]
+  head -1 "$BATS_TEST_TMPDIR/trace" | jq -e '.at_s >= 8.5 and .at_s < 8.9 and (.load | type) == "number"'
+  for k in fast careful; do
+    head -1 "$BATS_TEST_TMPDIR/trace" | jq -e --arg k "$k" '.[$k].path == "cold" and .[$k].answered == false
+      and (.[$k].warm | startswith("cold: no resident classifier")) and .[$k].reason == "had not answered"
+      and (.[$k].cold_s | type) == "number"'
+  done
+  ! grep -q 'is that everything' "$BATS_TEST_TMPDIR/trace" || false   # never the prompt
+}
+
+@test "E1j trace: a resident worker that took the prompt and stalls reads as warm and waiting; a label in hand writes no stall row" {
+  serve "read -r line; sleep 30" up
+  CC_RESEARCH_CLASSIFY_TRACE="$BATS_TEST_TMPDIR/trace" CC_RESEARCH_CLASSIFIER_TIMEOUT=2 CC_RESEARCH_CLASSIFIER="$(cold)" run bash -c "printf 'are we done?' | python3 '$ROUTER' classify"
+  [ "$status" -eq 1 ]
+  [ "$(jq -r '.row // "final"' "$BATS_TEST_TMPDIR/trace" | tr '\n' ' ')" = "stall final " ]
+  for k in fast careful; do
+    head -1 "$BATS_TEST_TMPDIR/trace" | jq -e --arg k "$k" '.[$k].path == "warm" and .[$k].answered == false
+      and .[$k].warm == "waiting on the resident classifier" and .[$k].warm_s == null'
+  done
+  [ ! -e "$BATS_TEST_TMPDIR/cold-calls" ]
+  rm "$BATS_TEST_TMPDIR/trace"
+  CC_RESEARCH_CLASSIFY_TRACE="$BATS_TEST_TMPDIR/trace" CC_RESEARCH_WARM=0 CC_RESEARCH_CLASSIFIER_TIMEOUT=2 CC_RESEARCH_CLASSIFIER="$(two 'echo other' 'sleep 20')" run bash -c "printf 'are we done?' | python3 '$ROUTER' classify"
+  [ "$status" -eq 0 ]
+  [ "$output" = other ]
+  [ "$(wc -l < "$BATS_TEST_TMPDIR/trace" | tr -d ' ')" -eq 1 ]
+  [ "$(jq -r '.row // "final"' "$BATS_TEST_TMPDIR/trace")" = final ]
+}
+
 # by_kind — a resident classifier process that answers with the kind it was started as.
 by_kind() {
   printf 'read -r line; printf "%%s\\n" "$line" >> "%s/$CC_RESEARCH_CLASSIFIER_KIND.$$"; echo "{\\"type\\":\\"result\\",\\"result\\":\\"$CC_RESEARCH_CLASSIFIER_KIND\\"}"; sleep 30' "$SEEN"

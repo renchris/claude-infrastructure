@@ -484,6 +484,16 @@ STUB
   done
 }
 
+@test "the live classifier's configuration id is pinned: no flag, model key or brief changed since the Haiku 5.5 flip" {
+  # Wave E1j added tracing only. The resident daemon serves the id it was started with, so a change
+  # to any kind's flags or brief would make its ping fail until migration 0059 restarts it; the live
+  # model-config (bc7894fe2) reads 983448663980, the id the daemon reported after the flip.
+  printf 'models:\n  sonnet_latest: claude-sonnet-5-5\n  haiku_latest: claude-haiku-5-5\n' > "$BATS_TEST_TMPDIR/model-config.yaml"
+  run env CC_MODEL_CONFIG="$BATS_TEST_TMPDIR/model-config.yaml" /usr/bin/python3 -c "import sys; sys.path[:0]=['$REPO/scripts/research-kit/lib','$REPO/scripts/research-kit']; import router; print(router.classifier_config())"
+  [ "$status" -eq 0 ]
+  [ "$output" = 983448663980 ]
+}
+
 # ── the block's fast exit (docs/research/concurrency-scale-2026-10-04 fix row 4) ────────────────
 # RED-proof: on the pre-fix hook (git show 13b27133f:hooks/research-block.sh) the first case below
 # fails — the router's python starts on every tool call, program or not.
