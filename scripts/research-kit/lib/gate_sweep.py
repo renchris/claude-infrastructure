@@ -5,6 +5,12 @@
                       --receipt R [--default … --deadline ISO] [--due ISO]
       cc-decide open with the program's --project always, and --default-effect no-change on class B,
       so the live autonomy sweep never dispatches a fired program default as backlog work.
+  gate.sh file-packet --program P --overrun-stage N [--what …]
+      §6.5 stage overrun: refuses unless stage N is past 1.5 x its budget with no packet (row 16's
+      own evidence), then files the one class-B packet whose default "proceed" fires after
+      kit.CAPS overrun_default_hours, and records it in budget.json overrun_packets, the field row 16
+      and `budget start` read. The conviction is derived, never typed: the share of the program's
+      decisions that are closed, at most cc-decide's ask ceiling, with the derivation as the receipt.
   gate.sh sweep --program P
       1. a class-B packet cc-decide has expired-actioned applies its default to the decision record,
          unless the operator SIGNED a veto for that decision (cc-signoff research:<P>/veto/<D>);
@@ -67,6 +73,10 @@ def program_packets(ctx: Any, decisions: Dict[str, Dict[str, Any]]) -> Dict[str,
         pid = (ev.get("packet") or {}).get("id")
         if pid:
             out[pid] = ev["id"]
+    for st, pid in (
+        (ctx.json("budget.json") or {}).get("overrun_packets") or {}
+    ).items():
+        out[str(pid)] = f"stage {st} overrun"
     return out
 
 
@@ -141,10 +151,75 @@ def open_packet(
     return out.splitlines()[-1].strip()
 
 
+CLOSED = ("ruled", "carried", "descoped")
+
+
+def file_overrun(ctx: Any, a: argparse.Namespace) -> int:
+    """§6.5: the one class-B "proceed" packet for a stage past 1.5 x its budget."""
+    import cli_core
+
+    st = str(a.overrun_stage)
+    if a.decision or (a.cls and a.cls != "B") or a.conviction is not None or a.default:
+        raise kit.KitError(
+            "--overrun-stage files a fixed packet (class B, default proceed, derived conviction); "
+            "drop --decision, --class C, --conviction and --default"
+        )
+    pkt = (cli_core.load_budget(ctx)["overrun_packets"]).get(st)
+    if pkt:
+        raise kit.KitError(f"stage {st} already has overrun packet {pkt}")
+    over = cli_core.unpacketed_overruns(ctx).get(st)
+    if not over:
+        raise kit.KitError(
+            f"stage {st} is not past {kit.CAPS['overrun_factor']} x its budget; no overrun packet is due"
+        )
+    decisions = kit.fold(ctx.jsonl("decisions.jsonl"))
+    closed = sum(1 for d in decisions.values() if d.get("status") in CLOSED)
+    ask_max = int(os.environ.get("CC_CONVICTION_ASK_MAX") or 90)
+    conv = min(round(100 * closed / len(decisions)) if decisions else 0, ask_max)
+    hours = kit.CAPS["overrun_default_hours"]
+    receipt = (
+        f"cc-research budget --program {ctx.slug} => {over}; {closed} of {len(decisions)} "
+        f"decisions closed, conviction = that share at most {ask_max}"
+    )
+    what = a.what or (
+        f"Research program {ctx.slug}: stage {st} ran past its time cap ({over}). "
+        f"Unless you veto within {hours:g} hours, the program proceeds and its open rows become "
+        "dated carried rows with defaults (§6.5)."
+    )
+    options = [
+        "proceed::the program continues; open rows become dated carried rows",
+        f"veto::the stage stops until you rule (cc-signoff research:{ctx.slug}/veto/overrun-stage-{st})",
+    ]
+    pid = open_packet(
+        ctx,
+        f"overrun-stage-{st}",
+        "B",
+        what,
+        options,
+        conv,
+        receipt,
+        "proceed",
+        iso_plus_hours(hours),
+    )
+    b = cli_core.load_budget(ctx)
+    b["overrun_packets"][st] = pid
+    kit.write_json_atomic(ctx.records / "budget.json", b)
+    print(
+        f"filed {pid} for stage {st} overrun (class B, default proceed, conviction {conv})"
+    )
+    return 0
+
+
 def cmd_file_packet(a: argparse.Namespace) -> int:
     from gate import make_ctx
 
     ctx = make_ctx(a.program)
+    if a.overrun_stage is not None:
+        return file_overrun(ctx, a)
+    if not (a.decision and a.cls and a.receipt):
+        raise kit.KitError(
+            "file-packet needs --decision, --class and --receipt (or --overrun-stage N)"
+        )
     decisions = kit.fold(ctx.jsonl("decisions.jsonl"))
     if a.decision not in decisions:
         raise kit.KitError(f"no decision {a.decision} in decisions.jsonl")
@@ -356,12 +431,13 @@ def cmd_sweep(a: argparse.Namespace) -> int:
 def add_verbs(sub: Any) -> None:
     p = sub.add_parser("file-packet")
     p.add_argument("--program", required=True)
-    p.add_argument("--decision", required=True)
-    p.add_argument("--class", dest="cls", required=True, choices=("B", "C"))
-    p.add_argument("--what", required=True)
+    p.add_argument("--decision")
+    p.add_argument("--overrun-stage", type=int)
+    p.add_argument("--class", dest="cls", choices=("B", "C"))
+    p.add_argument("--what")
     p.add_argument("--option", action="append")
     p.add_argument("--conviction", type=int)
-    p.add_argument("--receipt", required=True)
+    p.add_argument("--receipt")
     p.add_argument("--default")
     p.add_argument("--deadline")
     p.add_argument("--due")

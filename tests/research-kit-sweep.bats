@@ -70,6 +70,45 @@ sig() { # <action> <target|null>
   [[ "$output" == *"--due"* ]]
 }
 
+overrun_stage4() {
+  /usr/bin/python3 -c "
+import json; p='$REC/budget.json'; d=json.load(open(p))
+d.setdefault('stages', {})['4'] = {'started': '2026-09-01T00:00:00Z', 'ended': '2026-09-08T00:00:00Z'}
+json.dump(d, open(p, 'w'))"
+}
+budget_pkt() { /usr/bin/python3 -c "import json; print((json.load(open('$REC/budget.json')).get('overrun_packets') or {}).get('$1', ''))"; }
+
+@test "§6.5: --overrun-stage refuses a stage that is not over its cap, and writes nothing" {
+  run "$G" file-packet --program demo --overrun-stage 4
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"no overrun packet is due"* ]] || false
+  [ -z "$(budget_pkt 4)" ]
+}
+
+@test "§6.5: --overrun-stage files one class-B proceed packet, records it, and row 12's check covers it" {
+  overrun_stage4
+  run "$G" file-packet --program demo --overrun-stage 4
+  [ "$status" -eq 0 ]
+  id="$(budget_pkt 4)"
+  [ -n "$id" ]
+  [ "$(pkt "$id" '["class"]')" = "B" ]
+  [ "$(pkt "$id" '["default_if_no_veto"]')" = "proceed" ]
+  [ "$(pkt "$id" '["default_effect"]')" = "no-change" ]
+  [[ "$(pkt "$id" '["receipt"]')" == *"decisions closed"* ]] || false
+  run "$G" file-packet --program demo --overrun-stage 4
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"already has overrun packet $id"* ]] || false
+  run "$G" sweep --program demo
+  [ "$status" -eq 0 ]
+}
+
+@test "§6.5: --overrun-stage refuses a typed conviction" {
+  overrun_stage4
+  run "$G" file-packet --program demo --overrun-stage 4 --conviction 80
+  [ "$status" -eq 2 ]
+  [ -z "$(budget_pkt 4)" ]
+}
+
 @test "an expired class-B default is applied to the decision record" {
   id="$(file_b)"
   /bin/bash "$D" expire-sweep >/dev/null
