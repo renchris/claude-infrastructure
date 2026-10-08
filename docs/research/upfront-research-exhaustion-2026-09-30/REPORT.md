@@ -603,7 +603,7 @@ waves it blocks), with evidence. Each predicate re-executes what it names in thi
 | 12. Reconciliation | 0 unmapped items across plan prose markers, research residuals, backlog, open decisions, custody and dirty files |
 | 13. Reviewers | The vendor preflight ran before the contract page (§3.2, step 6). Every counted round had all reviewers complete, all lenses attested, 3 or more vendors (or 2, one of them non-Anthropic, after a dead-lane default, with "degraded: two vendors" printed, §3.8), responding model ids matching the pins, and 0 integrity hits. A dead or voided slot in a live lane was re-run (at most twice) or taken by another live vendor, with "reduced diversity" printed. No round with a dead vendor lane was counted |
 | 14. Rehearsal | Every frame typed. The relay test passed, or "relay unstable" is printed |
-| 15. Router | This run: the re-ask router (§4.1) labels a held-out set of at least 40 completeness and pushback phrasings, drawn from your transcripts and never used to write or tune it, with a recall of at least 0.95. The set size and the threshold are assumed inputs until the calibration run measures the router (§6.6); the transcripts hold 280 genuine completeness asks to draw from (`evidence/adversary/llm/ask_turns.out:1`). A planted classifier error, a timeout and a mixed label each route as a completeness question. After one repair and one re-test, a recall still below the threshold fails the row. **Edited 2026-10-06 (decision `1f3b8f2d01b7`, §9):** the held-out `other` prompts (§10 item 11's correct-label floor, 0.90) are scored on the relay decision, not the exact label: an agreed `other` item counts as right when the router relays it exactly when the raters' agreed label relays (completeness or pushback), and a fallback is a miss. The floor stays 0.90; the exact-label rate is printed beside it and never fails the row |
+| 15. Router | This run: the re-ask router (§4.1) labels a held-out set of at least 40 completeness and pushback phrasings, drawn from your transcripts and never used to write or tune it, with a recall of at least 0.95. The set size and the threshold are assumed inputs until the calibration run measures the router (§6.6); the transcripts hold 280 genuine completeness asks to draw from (`evidence/adversary/llm/ask_turns.out:1`). A planted classifier error, a timeout and a mixed label each route as a completeness question. After one repair and one re-test, a recall still below the threshold fails the row. **Edited 2026-10-06 (decision `1f3b8f2d01b7`, §9):** the held-out `other` prompts (§10 item 11's correct-label floor, 0.90) are scored on the relay decision, not the exact label: an agreed `other` item counts as right when the router relays it exactly when the raters' agreed label relays (completeness or pushback), and a fallback is a miss. The floor stays 0.90; the exact-label rate is printed beside it and never fails the row. **Edited 2026-10-08 (rulings `a7fd5e2ee7c8`, `915d7fb98b7f`, `17aff7158fa6`, §9):** the read is taken under a load bound, a stated condition printed on the certificate beside the real-load figures of the router's hedge (every item routed at 1-minute load 40 or below; a start that cannot reach it spends no read, and a read cut off past its total cap is spent with no verdict); the read happens only with the operator's read consent and after every other row passed in the same run; a row-15 FAIL at the gate is final for those items, and the next attempt waits for fresh items; a stratum of a held-out set is read at most twice, and each further read needs its own operator signature and is printed as a disclosed cost. Thresholds and the 9 s limit are unchanged |
 
 **Stated on the certificate, never blocking:** why it stopped and the rounds used against the forecast; the
 desk-detectable estimate and bound per area and in total; the invisible-hole forecast, labeled "share assumed" until
@@ -1101,7 +1101,7 @@ as the next research instrument. The quote never shows a positive yield for a pu
 | Disputed finding | 1 reproduction probe | Material-disputed, named |
 | Divergence rebuild of a unit | Once per program | Unit certified at the cap, rewrite named |
 | Rehearsal and relay test | Once; 1 repair and 1 re-test for the relay | "Relay unstable" printed |
-| Router recall below its threshold (gate row 15) | 1 repair and 1 re-test | Gate row 15 fails, and no certificate issues until the router is fixed as tooling (§8, item 5), not as research on the program |
+| Router recall below its threshold (gate row 15) | 1 repair and 1 re-test | Gate row 15 fails, and no certificate issues until the router is fixed as tooling (§8, item 5), not as research on the program. **Edited 2026-10-08 (§9):** a row-15 FAIL at the gate is final for the items it read; the next attempt waits for fresh items, and the same items are never re-read |
 | Stage overrun | At 1.5 × budget, one class-B packet whose default "proceed" fires after 24 hours | Open rows become dated carried rows with defaults |
 | Escape after the gate | 2 delta rounds per escape | Counted against the forecast |
 | Frame-delta cycle for omissions found during certification | Once per program: its timebox and 2 delta rounds | The omission stays a printed known row gating its dependent build waves |
@@ -1307,6 +1307,36 @@ and from a measured result, as ruling 8 requires. Earlier text is kept and the e
   under the union join, with pooled recall unchanged at 0.99. The careful call stays on `haiku_latest`, whose
   model (`claude-haiku-4-5`) has a retirement floor of 2026-10-15; whatever `haiku_latest` moves to is a new
   configuration that gate row 15 has not measured.
+
+**Updated 2026-10-08: the edits made under the row-15 rulings** `a7fd5e2ee7c8`, `915d7fb98b7f` and `17aff7158fa6`
+(the operator's reply "all recommendations"; `docs/research/reask-row15-rulings-final-2026-10-08/REPORT.md`), each
+named and from a measured result, as ruling 8 requires. Earlier text is kept and each edit is marked where it sits
+(gate row 15 in §3.10, and the gate-row-15 row of §6.5's cap table). Row 15's thresholds, the 9 s limit and the
+classifier configuration are unchanged. Built in wave E1l of `docs/plans/RESEARCH_PROGRAM_BUILD.md`.
+
+- **Gate row 15, the load bound is a stated condition** (`17aff7158fa6`). Before the read is logged the gate waits
+  for 1-minute load 40 or below, under a start cap; if the cap expires it refuses and logs no read. After that each
+  item waits for the same bound, under one long, finite total cap for the read; past it the row prints "read spent,
+  no verdict". Each routed item records its load. The certificate states the bound as a condition of row 15 and
+  prints beside it RULE E1k's real-load figures above load 150 (hedge-on fallback rate, rows held with one call
+  silent), and the read waits until those figures are on record with a pass. The gate is launched detached, so a
+  tool timeout or the job reaper cannot cut the read. Reason: every miss of the 2026-10-07 read was a 9 s timeout,
+  and a 73-minute read started at a random minute overlaps load 150 or more 21.9% of the time; only about a third of
+  live prompts arrive at load 40 or below, which is why the real-load figures stand beside the bound.
+- **Gate row 15, a FAIL at the gate is final for those items** (`a7fd5e2ee7c8`, guard 3). The next attempt waits for
+  fresh items, and the same items are never re-read. Reason: sample noise alone gives row 15 a 22-72% chance of
+  failing per read, so reading the same items until they pass would be a real risk; the cap in §6.5 limits repairs,
+  not reads.
+- **Gate row 15, the third-read rule** (`915d7fb98b7f` item 5, `a7fd5e2ee7c8` guard 4). A stratum of a held-out set
+  is read at most twice. Each further read needs its own operator signature
+  (`cc-signoff research:<slug>/third-read/<set>.<stratum>`) and is printed as a disclosed cost; without one the gate
+  refuses before it opens the set. Reason: the scorer used to note earlier reads without refusing them, so a gate
+  run with the old map would have spent a third read of v3 silently.
+- **Gate row 15, the read guards** (`a7fd5e2ee7c8`, guard 1). The row decrypts and logs a read only with the
+  operator's read consent for that run (`gate.sh run --consent-sealed-read`), only when the router is a real command
+  and not its kill switch `off`, and only after every other row passed in the same run; otherwise it fails without
+  reading. Reason: a session launched with the kill switch would have run `/bin/bash -c off` on every item and still
+  spent the read.
 
 ---
 
