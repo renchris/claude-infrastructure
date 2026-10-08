@@ -14,6 +14,11 @@ DEFAULT_BIN = os.path.expanduser(
     "~/Library/Application Support/fnm/aliases/default/bin/ms-365-mcp-server")
 DEFAULT_NODE = os.path.expanduser(
     "~/Library/Application Support/fnm/aliases/default/bin/node")
+# The operator-owned public-client app registration, the same client id the ms365 entries in
+# mcp-servers.json carry, so every launcher shares one token cache entry per account. The
+# publisher's default client is refused for the work account (device-code sign-in blocked by the
+# tenant's security defaults). A caller's own MS365_MCP_CLIENT_ID still wins.
+DEFAULT_CLIENT_ID = "d5874d54-d502-491e-ab06-2ea21f50bc31"
 
 
 class MS365:
@@ -25,9 +30,11 @@ class MS365:
             raise FileNotFoundError(f"ms-365-mcp-server not found: {binary}")
         if not os.path.exists(node):
             raise FileNotFoundError(f"node not found: {node}")
+        env = dict(os.environ)
+        env.setdefault("MS365_MCP_CLIENT_ID", DEFAULT_CLIENT_ID)
         self.p = subprocess.Popen(
             [node, binary], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, text=True, bufsize=1)
+            stderr=subprocess.DEVNULL, text=True, bufsize=1, env=env)
         self.q = queue.Queue()
         self._id = 0
         threading.Thread(target=self._reader, daemon=True).start()

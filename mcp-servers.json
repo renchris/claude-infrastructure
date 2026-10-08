@@ -30,7 +30,7 @@
       "type": "stdio",
       "command": "~/Library/Application Support/fnm/aliases/default/bin/ms-365-mcp-server",
       "args": [],
-      "env": {}
+      "env": { "MS365_MCP_CLIENT_ID": "d5874d54-d502-491e-ab06-2ea21f50bc31", "MS365_MCP_TENANT_ID": "common" }
     }
   },
 
@@ -51,7 +51,7 @@
         "type": "stdio",
         "command": "npx",
         "args": ["-y", "@softeria/ms-365-mcp-server@0.143.0"],
-        "env": {}
+        "env": { "MS365_MCP_CLIENT_ID": "d5874d54-d502-491e-ab06-2ea21f50bc31", "MS365_MCP_TENANT_ID": "common" }
       }
     }
   }
