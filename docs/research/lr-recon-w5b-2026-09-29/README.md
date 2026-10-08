@@ -573,7 +573,8 @@ scripts/limit-recover/lr_recon` is empty; `lr_recon` names the four changed scri
 and in one argv match (`store.py:340`) and runs none of them; its actuators are unchanged. No cohort
 spanned the restart, so nothing is lost.
 
-**The restart rule, refined by the same ruling.** "Changed code" means
+**The restart rule, refined by the same ruling** (superseded 2026-10-08 by the final rule under
+"Two more kills after the watchdog fix", below). "Changed code" means
 `scripts/limit-recover/lr_recon/**` plus the scripts it runs. A change to the legacy path changes
 the comparison partner, not the code under test, so it does not reset the count; each cohort's
 record names the legacy sha it was compared against. Cohort 1's legacy moves (06:03Z to 06:22Z
@@ -625,13 +626,51 @@ about 1.6% CPU. **Lead diagnosis (2026-10-08 01:05Z):** a cold first pass takes 
 more, the 900 s ceiling killed each holder at progress 0, and each restart started another first
 pass. pid 14550 finished one at about 00:57Z (progress 15); the watchdog has logged nothing since
 00:55:50Z, and no kill since 00:42:31Z. The fix touches only the watchdog: a progress-0 holder that
-is accruing CPU gets a 3600 s ceiling (`5b8307513`, branch `fix/lr-watchdog-first-pass-ceiling`,
-landing at the time of writing). `lr_recon` is untouched.
+is accruing CPU gets a 3600 s ceiling (landed as `7086fb5da`; it was `5b8307513` on its branch
+before the land). `lr_recon` is untouched.
 
 All three are same-code restarts (checkout `35e943e46`; `scripts/limit-recover/` identical to
 `a037c0bd9`). The count stays 1 of 2 at the 02:28:28Z Oct 6 cutoff. No cohort was open; the last
 `recon/events.jsonl` row before the loop is 05:37Z Oct 7, and no legacy recovery bundle was written
 after 06:22Z Oct 6, so no limit event fell inside the stall.
+
+### Two more kills after the watchdog fix, and the final restart rule (2026-10-08)
+
+| killed | at | progress, unchanged for | load at the kill | successor, started |
+|---|---|---|---|---|
+| 14550 | 03:18:03Z | 725, 922 s | 82 to 157 (537 at 03:22Z) | 29035, 03:18:04Z |
+| 29035 | 04:04:21Z | 462, 920 s | about 30 | 62810, 04:04:22Z |
+
+Both holders had made progress, so the fix's 3600 s allowance (which applies only at progress 0)
+did not apply, and the 900 s ceiling killed them; the second at load about 30. Nothing records what
+either was doing during its 920 s.
+
+**The code these restarts loaded.** 29035 loaded checkout `3b3af122d`, which differs from
+`a037c0bd9` only in `lr-recon-watchdog.sh` (the fix). 62810 loaded `bc7894fe2` (taken at 03:46:09Z),
+which also carries `d0ffee48a` ("Haiku 5.5 flip"): `scripts/handoff-fire.sh` +8/-2, its liveness
+probe's model going from the pinned id `claude-haiku-4-5` to the alias `haiku`. `lr_recon/act.py`
+(lines 139 and 161) runs `handoff-fire.sh`, so under the rule as last worded this could have
+reset the count.
+
+**Lead ruling (2026-10-08 04:20Z, 90%): no reset; the count stays 1 of 2 at the 02:28:28Z Oct 6
+cutoff.** The lead checked that `handoff-fire.sh` is called only from `act.py:139,161`, which is
+actuation that observe mode never runs, and that the `d0ffee48a` diff is only the probe model's
+alias. The lead also checked what the planner runs: `bin/claude-accounts` changed in `d0ffee48a`
+and `c3c8fccad` (+58/-24, in `board_eff`, `readout_lines`, `pct_text`, `fetch_usage`, `get_data`
+and `fetch_wire_limits`), which is display and fetch plumbing with no change to assignment,
+ranking or placement.
+
+**FINAL RULE (same ruling; replaces "plus the scripts it runs" above).** The unit under shadow test
+is `scripts/limit-recover/lr_recon/**`, and only a change there resets the count. Every other
+dependency that moved (the legacy scripts, `handoff-fire.sh`, `claude-accounts`, the watchdog) is
+named with its sha beside the cohort it affects. Act-mode actuation is proven by the first attended
+act cohort, not by the shadow.
+
+**Freeze capture (rig, lead request).** To tell a wedged holder (the kill is right) from a slow one
+(the kill is wrong) before the cutover, the watcher now captures each heartbeat freeze once it passes
+300 s. It writes `shadow-archive/freeze/<UTC>-pid<pid>-p<progress>.txt` with the load, the holder's
+descendant processes (etime and args), the round-trip time of the census's own `kitten @ ls` per
+socket, and a 5 s `sample` (`.sample.txt` beside it), then mails the path (`--freeze-notify`).
 
 ## Census step
 
