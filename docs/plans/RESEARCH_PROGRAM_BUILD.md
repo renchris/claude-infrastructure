@@ -24,7 +24,7 @@ packet `83adb541ea19` actioned. Method version 1.1 is frozen; it changes only fr
 | B2 | S | Item 8: `research-program` skill, `/research-program` command, intake script, briefs, rubric | A2 |
 | C | S | Wave 2: items 9–13, 15, in parallel with the pilot | B1, B2 |
 | D | S (fired `fire-rp-audit-bugfix`), T inside | Audit fixes: `docs/research/upfront-method-audit-2026-10-04/REPORT.md` §3 rows 4–6 | C |
-| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E1d S (fired `fire-rp-v12-e1d`); E1e S (fired `fire-rp-v12-e1e`); E1g S (fired `fire-rp-v12-e1g`); E1h S (fired `fire-rp-v12-e1h`, T inside for track A); E1i S (fired `fire-rp-v12-e1i`, L inside); E1j S (fired `fire-rp-v12-e1j`, L inside: one small code change, a harness edit and two ordered measurements around a pre-committed rule, nothing to fan out); E1k S (fired `fire-rp-v12-e1k`, L inside: one change in one function, one job-script line, docs, and a measurement run behind a pre-committed bar, nothing to fan out); E1m S (fired `fire-rp-v12-e1m`, L inside: a brief paragraph, harness and scorer edits behind a pre-committed rule, two load-gated tuning runs and an A/B that run as background processes, then one pin in router.py; nothing to fan out); E2 Workflow in session d8964eb2; E3 S (E3a fired `fire-rp-v12-e3a`, E3b fired `fire-rp-v12-e3b` with T inside: six teammates; E3c fired `fire-rp-v12-e3c`, L inside; E3d fired `fire-rp-v12-e3d`, L inside); E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
+| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E1d S (fired `fire-rp-v12-e1d`); E1e S (fired `fire-rp-v12-e1e`); E1g S (fired `fire-rp-v12-e1g`); E1h S (fired `fire-rp-v12-e1h`, T inside for track A); E1i S (fired `fire-rp-v12-e1i`, L inside); E1j S (fired `fire-rp-v12-e1j`, L inside: one small code change, a harness edit and two ordered measurements around a pre-committed rule, nothing to fan out); E1k S (fired `fire-rp-v12-e1k`, L inside: one change in one function, one job-script line, docs, and a measurement run behind a pre-committed bar, nothing to fan out); E1l S (fired `fire-rp-v12-e1l`, L inside: the guards, the third-read refusal and the load bound all sit in `heldout.evaluate` and row 15, so the changes interlock and nothing fans out); E1m S (fired `fire-rp-v12-e1m`, L inside: a brief paragraph, harness and scorer edits behind a pre-committed rule, two load-gated tuning runs and an A/B that run as background processes, then one pin in router.py; nothing to fan out); E2 Workflow in session d8964eb2; E3 S (E3a fired `fire-rp-v12-e3a`, E3b fired `fire-rp-v12-e3b` with T inside: six teammates; E3c fired `fire-rp-v12-e3c`, L inside; E3d fired `fire-rp-v12-e3d`, L inside); E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
 
 A1, A2 and A3 touch disjoint files and fire concurrently. B1 and B2 fire when A2 lands. Each dispatched session leads
 its own Agent Team where it has 2+ code-writing tasks.
@@ -1850,6 +1850,83 @@ rows and the load bound in `evaluate` (wave E1l), the hedge's real-load run 2 (w
   catch in time), B held 2. A's wrong in-time labels on re-asks all came at load 150-250. All 3 fallbacks were
   `other` rows at load 182-232. Under RULE E1m (d) this table does not move the pick; it is the real-load
   companion the gate's load-bounded read lacks.
+
+#### E1l — row 15's read guards, the third-read refusal, the load bound, and the pre-registered data rules — IN PROGRESS
+Scope (frozen): wave E1l — (1) ruling `a7fd5e2ee7c8` guard 1: gate row 15 decrypts and logs a read only when an
+explicit read-consent flag is set, `CC_RESEARCH_ROUTER` is a real command (refuse `off`, the kill-switch value
+`hooks/research-precognition-nudge.sh` defines), and every other gate row passed in the same gate run; otherwise
+it fails WITHOUT a reads-ledger row; (2) ruling `915d7fb98b7f` item 5: the scorer refuses a THIRD read of any
+stratum unless a signed override is passed, and the gate's set map no longer routes regex-missed and pushback to v3
+by default; (3) ruling `17aff7158fa6`: the load bound in `heldout.evaluate` as ruled (wait for 1-min load <= 40
+with a cap BEFORE the ledger write, refuse and log no read on that cap; a long finite total cap that prints "read
+spent, no verdict"; per-row load recorded; detached launch documented; the bound stated on the certificate beside
+RULE E1k's A/B figures above load 150); (4) the method REPORT §9 named edits for row 15: the load bound as a
+stated condition, guard 3 ("a row-15 FAIL at the gate is final for those items; the next attempt waits for fresh
+items"), and the third-read rule (signed override, disclosed cost); (5) the data rules of `915d7fb98b7f` and
+`0ccbcf9fd49b` pre-registered below, verbatim from the ruled text; landed and converged. Locus S (fired
+`fire-rp-v12-e1l`), lead-inline.
+- **Why.** The operator ruled the five row-15 decisions on 2026-10-08 ("all recommendations";
+  `docs/research/reask-row15-rulings-final-2026-10-08/REPORT.md`). This wave is the gate-side half. Not in this
+  wave: `router.py`, the tuning harness, the Haiku 5.5 re-tune (ruling `8633d354bd41`, wave E1m), RULE E1k's run 2
+  (wave E1k), any sealed set (none is opened, decrypted, sealed or evaluated; tests use fixtures only), row 15's
+  thresholds, the 9 s limit, the classifier configuration.
+- **Pre-registered data rules** (committed here before any v5 seal or gate read; this commit's author date is the
+  proof of order). Quoted verbatim from the ruled text.
+  - Ruling `915d7fb98b7f`, subtle re-asks (regex-missed) and pushback:
+    > (1) Seal one fresh set, v5, for subtle re-asks. If ruling 4 also picks fresh data for plain re-asks, the same
+    > set serves both. Seal it once 400 unused candidates exist (about Nov 4). After the two raters label it, if it
+    > holds fewer than 40 counted subtle re-asks, seal a top-up from later arrivals and pool it before any read.
+    > - Why the floor is 40: below 40, the 0.95 bar allows only 1 miss, so a good router (true recall 0.976)
+    >   fails 16-24% of the time at 30-39 items. At 40 it allows 2 misses and fails 7% of the time.
+    > - Expected ready date: Nov 4 to about Nov 24.
+    >
+    > (2) A timing cap, fixed now. Suppose every other TrueMemory 2.0 gate row and every other router prerequisite
+    > is ready before v5 reaches 40. The router prerequisites are a pass on the second real-load test, the
+    > careful-call pin with its restart, and the load bound. In that case, wait at most 7 days (you may pick
+    > another number). Then read v5 as it stands if it holds at least 20 counted items, and print its false-fail
+    > rate. Below 20, pool v5's items with v3's 25 as a disclosed third read, and only under a signed override of
+    > the standing "no v3 set read a third time" rule.
+    >
+    > (3) Pushback: score it on v5's fresh pushback items. v3's 2 items join only under that same signed override.
+    >
+    > (4) Do not ban the Haiku 5.5 re-tune (ruling 2) from drawing fresh subtle re-asks as tuning rows. That draw is
+    > ruling 2's decision, with the price stated in its packet: each ~14 candidates taken delays v5 about a day.
+    > For example, 100 candidates is about 7 days for roughly 6-11 more labeled re-asks.
+    >
+    > (5) Whatever you rule: before anyone runs TrueMemory 2.0's gate with the router set, re-point the gate's
+    > test-set map off v3 (or make the scorer refuse a third read). Today the map still sends subtle re-asks and
+    > pushback to v3. The scorer notes earlier reads but does not refuse them, so the gate would spend the third
+    > read silently.
+
+    The operator ruled the recommendation as written, so the cap is the 7 days it names.
+  - Ruling `0ccbcf9fd49b`, plain re-asks (regex-matched):
+    > 1. For the gate's read, score regex-matched (plain re-asks) on v4's 93 rater-agreed items, disclosed as a
+    >    second read of the set whose first read failed, where all 13 misses were timeouts.
+    > 2. When ruling 3 seals v5 for regex-missed, seal the new regex-matched prompts in it too. Leave them unread
+    >    for the next program's gate.
+    > 3. Switch this stratum to fresh data only once a fresh set has at least 93 counted items. That way freshness
+    >    never costs test power. At about 3.5 prompts a day and a 0.345 yield, that is around late December, so v4
+    >    is what TM2's gate uses.
+    > 4. Drop fresh-v5-regardless.
+  - Ruling `a7fd5e2ee7c8` guard 3, the rule fixed in advance:
+    > (3) A rule fixed in advance: a row-15 FAIL at the gate is final for those items. The next attempt waits for
+    > fresh items, and the same items are never re-read.
+- **What gets built** (each red then green on planted inputs, fixtures only):
+  - A1 guard 1. `heldout.evaluate` refuses before it decrypts or writes the reads ledger unless it is given read
+    consent (`heldout.py evaluate --consent-sealed-read`; `gate.sh run --consent-sealed-read`) and
+    `CC_RESEARCH_ROUTER` is a real command (not empty, not the kill-switch value `off`, and a first word that
+    resolves when it is a plain command name). `gate.run_rows` runs row 15 after every other row, and row 15
+    refuses unless rows 1-14 and 16-19 all passed (PASS or FILED, the gate's own pass) in that same run.
+  - A2 the third read. `evaluate` refuses, before it decrypts, any stratum of a set the ledger shows read twice or
+    more, unless an operator signature `cc-signoff research:<slug>/third-read/<set>.<stratum>` is on record for
+    each such read; a signed read is printed as a disclosed cost. `heldout.py instrument --await S,S` unpins
+    strata without opening a set, and `evaluate` refuses while any stratum is unpinned. The live map's
+    regex-missed and pushback are re-pointed off v3 with it (to "awaiting a fresh set").
+  - A3 the load bound. Before the ledger write, `evaluate` waits for 1-min load <= 40 up to a start cap and, on
+    that cap, refuses with no read logged; after the write it waits again before each item, under a long finite
+    total cap that ends the read with "read spent, no verdict". Each routed row records its 1-min load. The read
+    refuses unless RULE E1k's passing real-load figures above load 150 are on record (`heldout.py real-load`),
+    and row 15's evidence, which the certificate carries, states the bound beside them.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.
