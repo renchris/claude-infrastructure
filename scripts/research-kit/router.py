@@ -805,6 +805,11 @@ def classify(
                 if v.label in RELAYED:
                     return v.label, v.reason
             have = next((x for x in (fast, careful) if x.label), None)
+            # Before the give-up return, not after it: give_up is only 0.1 s (scaled) past stall, and a
+            # wakeup that late under load returned first and skipped the row (bats at load 35, utility band).
+            if stall is not None and have is None and not (f and c) and now >= stall:
+                snapshot("stall", now)
+                stall = None
             if (f and c) or now >= (hold if have else give_up):
                 if have is None:
                     why = [
@@ -833,11 +838,7 @@ def classify(
             if hedge_at is not None:
                 until = min(until, hedge_at)
             if stall is not None and have is None:
-                if now >= stall:
-                    snapshot("stall", now)
-                    stall = None
-                else:
-                    until = min(until, stall)
+                until = min(until, stall)
             tick.wait(max(min(until - now, 0.25), 0.0))
     finally:
         LAST_HEDGE.update(
