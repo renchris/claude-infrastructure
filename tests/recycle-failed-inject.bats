@@ -78,3 +78,31 @@ ctx() { printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext'; }
   [ "$status" -eq 0 ]
   [[ "$(ctx)" == *"$TOK"* ]] || { echo "$output"; false; }
 }
+
+@test "print before stamp: an unwritable packet dir still delivers the order (and stamps nothing)" {
+  mk_packet
+  chmod 555 "$CC_RECYCLE_FAILED_DIR"
+  hook
+  chmod 755 "$CC_RECYCLE_FAILED_DIR"
+  [ "$status" -eq 0 ]
+  [[ "$(ctx)" == *"$TOK"* ]] || { echo "$output"; false; }
+  [ -z "$(jq -r '.injected_at // empty' "$PKT")" ]
+  [ -z "$(find "$CC_RECYCLE_FAILED_DIR" -name '*.tmp.*')" ]
+}
+
+@test "a tokenless packet (missing, null or empty token) is absent: nothing printed, nothing stamped" {
+  local t
+  for t in 'del(.token)' '.token = null' '.token = ""'; do
+    mk_packet "$t"
+    hook
+    [ "$status" -eq 0 ]
+    [ -z "$output" ] || { echo "[$t] $output"; false; }
+    [ -z "$(jq -r '.injected_at // empty' "$PKT")" ]
+  done
+}
+
+@test "an injected_at already present suppresses, as delivered_at does" {
+  mk_packet '.injected_at = "2026-10-09T05:41:00Z"'
+  hook
+  [ "$status" -eq 0 ] && [ -z "$output" ]
+}
