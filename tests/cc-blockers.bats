@@ -72,6 +72,7 @@ setup() {
   # UNION SCOPE, so this one unfixtured sensor refused unrelated lands. Absent path ⇒ `[ -x ]` is
   # false ⇒ no premise ⇒ silence, exactly as the other four sensors here are pinned.
   export CC_WTGC_ASSERT_SH="$D/absent-wtgc-assert.sh"
+  export CC_HF_ALARM_POLARITY_SH="$D/absent-hf-alarm-polarity.sh"
   sg() { # <ts> <pane> <name> <model> <refusal> <recover_cmd> — append a safeguard-blocked row
     jq -nc --arg ts "$1" --arg p "$2" --arg n "$3" --arg m "$4" --arg r "$5" --arg cmd "$6" \
       '{ts:$ts,actor:"cc-reaper",kind:"safeguard-blocked",pane:$p,name:$n,account:"claude-quaternary",blocked_model:$m,refusal:$r,firedBy:"ORIG",recover_cmd:$cmd}' >> "$BOARD"; }

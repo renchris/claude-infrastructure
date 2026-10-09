@@ -242,6 +242,7 @@ PERMPEND_DIR="${CC_PERMPEND_DIR:-/tmp/cc-permission-pending}"   # MUST match hoo
 BEACON_HOOK="${CC_BEACON_HOOK:-$HOME/.claude/hooks/cc-permission-beacon.sh}"
 REAP_ALARM_SH="${CC_REAP_ALARM_SH:-$HOME/.claude/scripts/teammate-reap-alarm.sh}"
 WTGC_ASSERT_SH="${CC_WTGC_ASSERT_SH:-$HOME/.claude/scripts/worktree-gc-infra-run.sh}"
+HF_ALARM_POLARITY_SH="${CC_HF_ALARM_POLARITY_SH:-$HOME/.claude/scripts/handoff-alarm-polarity.sh}"
 # The cross-session comms registry, keyed by paneUUID and carrying `session_id` — the join that lets
 # a pending beacon name an ACTUAL iTerm2 pane instead of an opaque uuid. Same file cc-sessions reads.
 CC_REGISTRY_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
@@ -1052,6 +1053,25 @@ teammate_reap_rows() { # → one JSON object per line (possibly none)
     "$REAP_ALARM_SH" "$REAP_ALARM_SH" "$now"
 }
 
+# (e1b) HANDOFF-ALARM-DEAF — the population read of hf_alarm's push verdicts. On 2026-10-09 every one
+# of the 24 verdicts ever recorded was refused-rc3 (the push addressed a `desk` role that did not
+# exist), and nothing noticed, because each record was individually fine. The subject
+# (scripts/handoff-alarm-polarity.sh) owns the window, the floor and the abstain; this row only
+# relays a RED. Same pull-rendered reasoning as the teammate-reap row above.
+handoff_alarm_polarity_rows() { # → one JSON object per line (possibly none)
+  local now v out
+  now="$(date +%s 2>/dev/null || true)"
+  case "${now:-}" in ''|*[!0-9]*) return 0 ;; esac
+  [ -x "$HF_ALARM_POLARITY_SH" ] || return 0                          # not deployed ⇒ no premise
+  out="$("$HF_ALARM_POLARITY_SH" --json 2>/dev/null || true)"
+  [ -n "$out" ] || return 0
+  v="$(printf '%s' "$out" | jq -r '.verdict // empty' 2>/dev/null || true)"
+  [ "$v" = red ] || return 0                                          # green and abstain are silence
+  printf '{"kind":"handoff-alarm-deaf","state":"RED","detail":"%s","subject":"%s","recover_cmd":"%s","ts":%s}\n' \
+    "$(printf '%s' "$out" | jq -r '"0/\(.total) heard in \(.window_d)d (\(.refused) refused, \(.no_verdict) unverified)"' 2>/dev/null)" \
+    "$HF_ALARM_POLARITY_SH" "$HF_ALARM_POLARITY_SH" "$now"
+}
+
 # (e2) JANITOR-STALE — the READING half of the worktree janitor, and it exists for the same reason
 # permission-pending below it does: the sensor was built and nothing consumed it. `worktree-gc-infra-run.sh
 # --assert` answers three questions on demand (true population · age of the last verdict · what that
@@ -1436,7 +1456,7 @@ land_holder_rows() {
   bash "$ll" --alarms 2>/dev/null || true
 }
 
-ALARMS_JSON="$({ alarm_rows; deploy_stale_rows; land_holder_rows; dispatch_alarm_rows; orphan_approver_rows; beacon_alarm_rows; permission_pending_rows; fleet_alarm_rows; teammate_reap_rows; janitor_stale_rows; comms_alarm_rows; } 2>/dev/null | jq -s '.' 2>/dev/null || true)"
+ALARMS_JSON="$({ alarm_rows; deploy_stale_rows; land_holder_rows; dispatch_alarm_rows; orphan_approver_rows; beacon_alarm_rows; permission_pending_rows; fleet_alarm_rows; teammate_reap_rows; handoff_alarm_polarity_rows; janitor_stale_rows; comms_alarm_rows; } 2>/dev/null | jq -s '.' 2>/dev/null || true)"
 
 [ -n "$ALARMS_JSON" ] || ALARMS_JSON='[]'
 
@@ -1569,6 +1589,10 @@ njs="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $JANITOR_SEL] | length" 2>/dev/nu
 # recovery (read the box, re-engage its owner), neither of which is any sibling family's.
 COMMS_SEL='select(.kind=="comms-undelivered")'
 nc="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $COMMS_SEL] | length" 2>/dev/null || echo 0)"
+# HANDOFF ALARMS — their own family: the subject is the alarm CHANNEL (every push refused), not a box,
+# a pane or a daemon, so none of the sibling headings would describe it truthfully.
+HFA_SEL='select(.kind=="handoff-alarm-deaf")'
+nha="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $HFA_SEL] | length" 2>/dev/null || echo 0)"
 # ── the ALL-CLEAR line, and why it carries a SENSOR ROSTER (OPERATOR_SURFACE_V2 §4 M8) ───────────
 # Every sensor family above fails OPEN by design (R5/I6: a board that invents blockers is ignored
 # exactly like one that hides them). The cost is that a ZERO-ROW board means EITHER "everything is
@@ -1665,6 +1689,13 @@ if [ "${nc:-0}" != 0 ]; then
   { [ "${nl:-0}" != 0 ] || [ "${nd:-0}" != 0 ] || [ "${np:-0}" != 0 ] || [ "${nf:-0}" != 0 ] || [ "${ntr:-0}" != 0 ] || [ "${njs:-0}" != 0 ]; } && echo
   echo "COMMS — $nc inbox(es) holding mail nobody consumed (run the RECOVER command to read the thread):"
   alarm_table "$COMMS_SEL" "$ALARMS_JSON" 36
+fi
+
+# HANDOFF ALARMS — a recycle or handoff failure alarm was recorded but its push reached no reader.
+if [ "${nha:-0}" != 0 ]; then
+  echo
+  echo "HANDOFF ALARMS — nobody is hearing them (every push in the window was refused or unverified):"
+  alarm_table "$HFA_SEL" "$ALARMS_JSON" 40
 fi
 
 if [ "${n:-0}" != 0 ]; then

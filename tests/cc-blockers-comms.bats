@@ -36,6 +36,7 @@ setup() {
   export CC_WATCHDOG_DIR="$D/watchdog"; mkdir -p "$CC_WATCHDOG_DIR"
   export CC_REAP_ALARM_SH="$D/absent-reap-alarm.sh"
   export CC_WTGC_ASSERT_SH="$D/absent-wtgc-assert.sh"
+  export CC_HF_ALARM_POLARITY_SH="$D/absent-hf-alarm-polarity.sh"
   export CC_MAILBOX_DIR="$D/mbox"; mkdir -p "$CC_MAILBOX_DIR"
   U=11111111-2222-3333-4444-555555555555
   V=66666666-7777-8888-9999-AAAAAAAAAAAA
@@ -155,4 +156,30 @@ comms() { "$B" --json | jq -c '[.[] | select(.kind=="comms-undelivered")]'; }
   esc "$U" undelivered-escalated "" '{"reason":"LIVE — 2 message(s) ⚠"}'
   [ "$(comms | jq -r '.[0].detail')" = "2 unacked now; escalated 0h ago" ]
   [ "$(comms | jq -r '.[0].reason')" = "LIVE  2 message(s) " ]
+}
+
+# HANDOFF-ALARM-DEAF (RECYCLE_KEYSTROKELESS_DELIVERY §D3): scripts/handoff-alarm-polarity.sh owns the
+# verdict; cc-blockers only relays a RED, in its own section, and is silent on green and abstain.
+polarity_stub() { # $1=verdict
+  printf '#!/bin/bash\necho %q\n' "{\"verdict\":\"$1\",\"total\":15,\"heard\":0,\"refused\":15,\"no_verdict\":0,\"window_d\":7,\"min\":5}" > "$D/polarity.sh"
+  chmod +x "$D/polarity.sh"
+  export CC_HF_ALARM_POLARITY_SH="$D/polarity.sh"
+}
+
+@test "a RED handoff-alarm polarity renders its own HANDOFF ALARMS section" {
+  polarity_stub red
+  run "$B"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '^HANDOFF ALARMS — nobody is hearing them'
+  echo "$output" | grep -qF '0/15 heard in 7d (15 refused, 0 unverified)'
+  [ "$("$B" --json | jq '[.[] | select(.kind=="handoff-alarm-deaf")] | length')" = 1 ]
+}
+
+@test "green and abstain polarity verdicts render nothing" {
+  polarity_stub green
+  run "$B"
+  ! echo "$output" | grep -q '^HANDOFF ALARMS' || false
+  polarity_stub abstain
+  run "$B"
+  ! echo "$output" | grep -q '^HANDOFF ALARMS' || false
 }
