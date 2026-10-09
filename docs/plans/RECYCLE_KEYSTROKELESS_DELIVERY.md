@@ -350,6 +350,31 @@ flaw 1).
   - The SessionStart child prints first and stamps second, and treats a tokenless packet as absent.
   - **Residual (accepted):** a stage swapped in during take's check-to-rename window is moved back,
     but a watcher revoke that lands inside that microsecond window would read it as claimed.
+- **U5b (review ORDERING + items 1, 2, 3, 5, 8 + both PLAUSIBLE; all fixed, none refuted):**
+  - **Deferring to a live watcher.** The sweep and `step` (not `settle`) defer without counting while
+    `cc_pane_recycle_pending` reads the debt's pane as pending. `settle` is excluded because its caller
+    is usually the watcher itself, the lock's own holder. The deferral is bounded at 1800 s
+    (`RECYCLE_WAIT_S`), because the lib reads an unparseable lock holder as pending.
+  - **Kitty socket.** The lock key includes the recycler's kitty socket, so `open` records
+    `CC_TERM_KITTY_TO`/`KITTY_LISTEN_ON` for the launchd sweep, which has no kitty environment.
+  - **Live original.** A recovery debt whose original is ALIVE is mailed its packet prompt once
+    (`mailed_at`), then waits up to 600 s for the token-answered proof before escalating.
+  - **Mailbox delivery shape.** Mail reaches a transcript as an `attachment` record
+    (hook_additional_context), not a `user` record, measured on a live transcript. So the
+    token-answered proof and reso-resume-one's delivered check accept attachment records too.
+  - **Exactly-once attach.** reso-resume-one checks the transcript before attaching. `injected_at`
+    counts as delivered; tokenless, unparseable or expired packets (TTL 7 d) are absent. The signal
+    traps stamp too, and transcripts are parsed line by line (`fromjson? // empty`).
+  - **Proofs.** A resume-mode debt is proven by the SAME sid LIVE in its pane. A re-fire proves via
+    the packet's `refired_at` or a `recycle-engaged` row naming the sid after `failed_at`.
+    `page_verdict` comes from cc-notify's stderr verdict, so `mailbox-only` is recorded honestly.
+  - **Indeterminate launch.** boot-resume-launch exits **6**, distinct from 5. It persists
+    `pending-launch/<sid>.json` and opens the debt, and the sweep reconciles by token (window found ⇒
+    live; none after 900 s ⇒ normal relaunch). boot-resume.sh reports 6 as "launch indeterminate,
+    reconciling".
+  - **Deferral counting.** Time-based: MAX_DEFER deferrals whose first is ≥ 600 s old.
+  - **Kitty restart.** `_successor_once` compares the registry row's `kitty_pid` with the one recorded
+    at open when both are known, so a kitty restart's reused window id cannot falsely discharge.
 - **U3:** `--next-to` is implemented in boot-resume-launch but not passed by cc-resume-debt, because
   the recorded pane is usually gone and kitty fails a launch whose `--next-to` matches nothing.
 
