@@ -1024,7 +1024,9 @@ resume_shed=0   # sessions SELECTED but REFUSED by the capacity term — distinc
 resume_ledger=0 # restore v2: already launched by an earlier round of this event (its ledger)
 resume_held=0   # rc 5: not ours to launch — the reconciler owns it, its launch lock is held, it already
                 # has a live holder, or it is PARKED-REBOOT in page mode. Not broken, not waiting on us.
-n_fire=0        # sessions SELECTED to fire (post-consolidation) — distinct from n_open (sessions found)
+resume_indet=0  # rc 6: launch INDETERMINATE — kitty's client timed out and no window carries the token
+                # yet; cc-resume-debt's sweep reconciles it (not held, not failed: not yet known).
+n_fire=0       # sessions SELECTED to fire (post-consolidation) — distinct from n_open (sessions found)
 n_int=0         # classifier verdicts over the sessions that passed the ownership check
 n_rest=0
 opener=""       # desktops (cc-resume-layout --desktops) | windows (one launcher window per session)
@@ -1280,6 +1282,7 @@ EOF
            [ "$RESTORE_V2" = 1 ] && printf '%s\n' "$sid" >> "$EVENT_DIR/launched" 2>/dev/null ;;
         9) resume_shed=$((resume_shed + 1)) ;;
         5) resume_held=$((resume_held + 1)) ;;
+        6) resume_indet=$((resume_indet + 1)) ;;
         *) resume_fail=$((resume_fail + 1)) ;;
       esac
     done <<EOF
@@ -1416,6 +1419,7 @@ if [ "$MODE" = "resume" ]; then
     [ "${gate_verdict:-}" = deadline ] && msg="${msg} Load per core stayed over ${CC_RESTORE_START_LOAD:-6} for the whole wait; restored anyway (${EVENT_DIR}/load.log)."
   fi
   [ "$resume_held" -gt 0 ] && msg="${msg} ⏸ ${resume_held} not launched — owned by the limit-recovery reconciler, already running, or parked for the reboot (see cc-lr status --cohort)."
+  [ "$resume_indet" -gt 0 ] && msg="${msg} ⏳ ${resume_indet} launch indeterminate, reconciling — kitty did not answer in time and no window has appeared yet; cc-resume-debt's sweep relaunches only if none appears (see cc-resume-debt list --open)."
   msg="${msg}
 ${listing}desk-jobs: ${dj_up}/${dj_total} com.claude agent(s) up."
 else

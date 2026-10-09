@@ -83,6 +83,9 @@ if [ "$1" = --check-only ]; then
   exit 0
 fi
 printf '%s\n' "$*" >> "$0.log"
+grep -qx "$3" "$0.indet" 2>/dev/null && exit 6   # an indeterminate kitty launch (review item 2)
+grep -qx "$3" "$0.held" 2>/dev/null && exit 5
+exit 0
 SH
   chmod +x "$CC_RESUME_LAUNCH_BIN"
 
@@ -368,6 +371,23 @@ SH
   [ "$(notify_count)" -eq 1 ]                             # summary page still sent
   grep -q '"mode":"resume"' "$CC_IDL"
   grep -q '"resumed":4' "$CC_IDL"
+}
+
+# ── review item 2: exit 6 (launch indeterminate) is its own outcome, not "held" and not "failed" ──
+@test "resume-mode: a launcher exit 6 reads 'launch indeterminate, reconciling'; exit 5 keeps its 'not launched' meaning" {
+  reg_entry g1 1784700000000 claude-quaternary /Users/x/wt-a aaa
+  reg_entry g2 1784600000000 claude-secondary  /Users/x/wt-b bbb
+  reg_entry g3 1784500000000 claude-tertiary   /Users/x/wt-c ccc
+  echo g1 > "$CC_RESUME_LAUNCH_BIN.indet"
+  echo g2 > "$CC_RESUME_LAUNCH_BIN.held"
+  export CC_BOOT_RESUME_MODE=resume
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -q '1 launch indeterminate, reconciling' "$CC_NOTIFY_BIN.log" || { cat "$CC_NOTIFY_BIN.log"; false; }
+  grep -q '1 not launched — owned by the limit-recovery reconciler' "$CC_NOTIFY_BIN.log"
+  grep -q '"resumed":1' "$CC_IDL"
+  grep -q '"resume_failed":0' "$CC_IDL"        # an indeterminate launch is not a failed one
+  grep -q '"resume_held":1' "$CC_IDL"          # nor a held one
 }
 
 # ── the launcher receives the session's real cwd + sid (so reso-resume-one can act) ──

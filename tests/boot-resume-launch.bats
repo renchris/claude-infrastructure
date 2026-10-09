@@ -37,6 +37,8 @@ setup() {
   export CC_ADMIT_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
   # RESUME DEBT (CLOSE_RESUME_CUSTODY §2 D4) — a recorder, never the real ledger.
   export CC_RESUME_DEBT_BIN="$BATS_TEST_TMPDIR/cc-resume-debt"
+  # An INDETERMINATE launch (exit 6) leaves its token here for cc-resume-debt's sweep — a fixture.
+  export CC_PENDING_LAUNCH_DIR="$BATS_TEST_TMPDIR/pending-launch"
   printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/debt.log"\n' "$BATS_TEST_TMPDIR" > "$CC_RESUME_DEBT_BIN"
   chmod +x "$CC_RESUME_DEBT_BIN"
   unset CC_RESUME_DEBT_SETTLING
@@ -312,6 +314,7 @@ kitty_launch_env() {
   cat > "$BATS_TEST_TMPDIR/kitty" <<'SH'
 #!/bin/bash
 [ "$1" = @ ] && shift
+[ "$1" = --to ] && { printf '%s\n' "$2" > "$KT/kitty.to"; shift 2; }
 case "$1" in
   launch) printf '%s\n' "$@" -------- >> "$KT/kitty.launch"; exit "${KITTY_LAUNCH_RC:-0}" ;;
   ls) printf '%s\n' "$@" > "$KT/kitty.ls"
@@ -347,15 +350,30 @@ launch_token() { sed -n 's/^CC_LAUNCH_TOKEN=//p' "$BATS_TEST_TMPDIR/kitty.launch
   [ "$status" -eq 2 ] || { echo "$output"; false; }
 }
 
-@test "D4: client rc 124 with NO window carrying the token ⇒ exit 5, indeterminate, launched ONCE" {
+@test "D4: client rc 124 with NO window carrying the token ⇒ exit 6, indeterminate, launched ONCE, token persisted, debt opened" {
   kitty_launch_env
+  export CC_TERM_KITTY_TO=unix:/tmp/kitty-fixture
   KITTY_LAUNCH_RC=124 run bash "$LAUNCH" next3 /tmp sid-to-1
-  [ "$status" -eq 5 ] || { echo "status $status: $output"; false; }
-  [[ "$output" == *"indeterminate, not relaunching"* ]] || { echo "$output"; false; }
+  [ "$status" -eq 6 ] || { echo "status $status: $output"; false; }
+  [[ "$output" == *"launch indeterminate, reconciling (exit 6"* ]] || { echo "$output"; false; }
   [ "$(launches)" -eq 1 ] || { cat "$BATS_TEST_TMPDIR/kitty.launch"; false; }
   # the reconciliation asked for exactly this launch's token
   grep -qx -- "env:CC_LAUNCH_TOKEN=$(launch_token)" "$BATS_TEST_TMPDIR/kitty.ls"
-  [ ! -s "$BATS_TEST_TMPDIR/debt.log" ] || { cat "$BATS_TEST_TMPDIR/debt.log"; false; }
+  # review item 2: one immediate ls cannot see a window 9 minutes late, so the token is PERSISTED
+  m="$CC_PENDING_LAUNCH_DIR/sid-to-1.json"
+  [ "$(jq -r .token "$m")" = "$(launch_token)" ] || { cat "$m"; false; }
+  [ "$(jq -r '.acct + " " + .cwd + " " + .kitty_to' "$m")" = "next3 /tmp unix:/tmp/kitty-fixture" ]
+  [ "$(jq -r '.launched_at | type' "$m")" = number ]
+  # …and a debt is opened, so the sweep that reconciles the marker has something to step
+  grep -q '^open --sid sid-to-1 ' "$BATS_TEST_TMPDIR/debt.log" || { cat "$BATS_TEST_TMPDIR/debt.log"; false; }
+}
+
+@test "D4: an indeterminate launch under cc-resume-debt's own retry still persists the token, and opens no second debt" {
+  kitty_launch_env
+  CC_RESUME_DEBT_SETTLING=1 KITTY_LAUNCH_RC=137 run bash "$LAUNCH" next3 /tmp sid-to-4
+  [ "$status" -eq 6 ] || { echo "status $status: $output"; false; }
+  [ -f "$CC_PENDING_LAUNCH_DIR/sid-to-4.json" ]
+  [ ! -e "$BATS_TEST_TMPDIR/debt.log" ] || { cat "$BATS_TEST_TMPDIR/debt.log"; false; }
 }
 
 @test "D4: client rc 137 but the token's window exists ⇒ exit 0, launched late, debt opened" {

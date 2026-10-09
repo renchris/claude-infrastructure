@@ -22,8 +22,11 @@
 #      fence's stores) · CC_BOOT_RESUME_MODE / CC_BOOT_RESUME_STATE_DIR (the posture for PARKED-REBOOT).
 # Exit: 0 launched · 1 verified typing unavailable · 2 usage · 3 driver or reso-resume-one missing
 #      · 4 launch failed · 5 not ours to launch (reconciler owns it, launch lock held, H(sid) not
-#      empty, or PARKED-REBOOT outside `resume` mode, or a kitty launch whose client timed out and
-#      whose CC_LAUNCH_TOKEN no window carries: indeterminate, never launched twice) · 9 capacity shed.
+#      empty, or PARKED-REBOOT outside `resume` mode) · 6 launch INDETERMINATE: a kitty launch whose
+#      client timed out and whose CC_LAUNCH_TOKEN no window carries yet — never launched twice from
+#      here; the token is left in ${CC_PENDING_LAUNCH_DIR:-~/.claude/autonomy/pending-launch}/<sid>.json
+#      and cc-resume-debt's sweep reconciles it (window appears ⇒ launched; none in 15 min ⇒ relaunch)
+#      · 9 capacity shed.
 # Never reuses the current pane (resume-sessions off-by-one rule); always a new window. Fail-loud.
 set -uo pipefail
 
@@ -428,6 +431,23 @@ brl_open_debt() {
   "$rd" open --sid "$sid" ${cfg:+--cfg "$cfg"} --cwd "$cwd" --account "$acct" \
     --by boot-resume-launch >/dev/null 2>&1 || true
 }
+# The token of an INDETERMINATE launch (exit 6), for cc-resume-debt's sweep to reconcile: written by
+# temp + mv; prints the marker path. kitty_to is recorded because the sweep runs with no kitty env.
+brl_pending_launch() {
+  local d="${CC_PENDING_LAUNCH_DIR:-$HOME/.claude/autonomy/pending-launch}" f
+  case "$sid" in ''|.*|*[!A-Za-z0-9._-]*) return 1 ;; esac
+  command -v jq >/dev/null 2>&1 || return 1
+  mkdir -p "$d" 2>/dev/null || return 1
+  f="$d/$sid.json"
+  if jq -n --arg token "$BRL_TOKEN" --arg at "$(date +%s)" --arg acct "$acct" --arg cwd "$cwd" \
+       --arg kto "${CC_TERM_KITTY_TO:-}" \
+       '{token:$token, launched_at:($at|tonumber), acct:$acct, cwd:$cwd, kitty_to:$kto}' > "$f.tmp.$$" 2>/dev/null \
+     && mv -f "$f.tmp.$$" "$f" 2>/dev/null; then
+    printf '%s' "$f"
+  else
+    rm -f "$f.tmp.$$"; return 1
+  fi
+}
 
 if [ "$IN_KITTY" = 1 ]; then
   command -v "$KITTY" >/dev/null 2>&1 || { echo "boot-resume-launch: kitty unavailable" >&2; exit 3; }
@@ -437,8 +457,10 @@ if [ "$IN_KITTY" = 1 ]; then
   # A CLIENT TIMEOUT IS NOT A FAILED LAUNCH (§D4). On 2026-10-09 the bounded client was cut (rc 124)
   # and kitty created window 134 nine minutes later anyway. rc 124 (timeout) or 137 (its -k kill)
   # therefore means "unknown", reconciled by the token: a window carrying it ⇒ launched late, exit 0;
-  # none ⇒ exit 5, which every caller already reads as "do not launch again". A timed-out launch is
-  # never launched a second time from here, because the first may still arrive.
+  # none YET ⇒ exit 6. One immediate `kitty @ ls` cannot see a window that arrives nine minutes
+  # later, so the answer is not given here: the token is persisted (brl_pending_launch), a debt is
+  # opened, and cc-resume-debt's sweep re-asks kitty each pass. A timed-out launch is never launched a
+  # second time from here, because the first may still arrive.
   brl_kitty "${KARGS[@]}" >/dev/null 2>&1; _brl_krc=$?
   case "$_brl_krc" in
     0) ;;
@@ -447,8 +469,13 @@ if [ "$IN_KITTY" = 1 ]; then
          && case "$_brl_ls" in *"$BRL_TOKEN"*) true ;; *) false ;; esac; then
         echo "boot-resume-launch: kitty client rc $_brl_krc for $sid, but the window carrying $BRL_TOKEN exists — launched late" >&2
       else
-        echo "boot-resume-launch: kitty client rc $_brl_krc for $sid and no window carries $BRL_TOKEN — indeterminate, not relaunching (exit 5)" >&2
-        exit 5
+        if _brl_pm="$(brl_pending_launch)"; then
+          echo "boot-resume-launch: kitty client rc $_brl_krc for $sid and no window carries $BRL_TOKEN yet — launch indeterminate, reconciling (exit 6; marker $_brl_pm)" >&2
+        else
+          echo "boot-resume-launch: kitty client rc $_brl_krc for $sid and no window carries $BRL_TOKEN yet — launch indeterminate (exit 6); the pending-launch marker could NOT be written, so nothing will reconcile it" >&2
+        fi
+        brl_open_debt
+        exit 6
       fi ;;
     *) echo "boot-resume-launch: kitty launch failed for $sid" >&2; exit 4 ;;
   esac
