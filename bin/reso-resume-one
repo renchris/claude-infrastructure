@@ -117,6 +117,45 @@ MODEL_CONFIG=${CC_MODEL_CONFIG:-$HOME/.claude/model-config.yaml}
 if [ -z "$acct" ] || [ -z "$wt" ] || [ -z "$sid" ]; then
   printf '%s\n' "usage: reso-resume-one <acct> <wt> <sid> [branch] [--effort E] [--repo PATH] [--permission-mode M] [--prompt-file F]"; exit 2
 fi
+
+# ── A FAILED RECYCLE'S PACKET IS THE FIRST PROMPT (RECYCLE_KEYSTROKELESS_DELIVERY §D4) ────────────
+# On 2026-10-09 a self-recycle died after its /exit and this file resumed the original with NO
+# prompt, although it takes one: the session came back idle and never learned the recycle had
+# failed. Every resume path ends here, so this is the chokepoint. When
+# recycle-failed/<sid>.json exists and is undelivered (no delivered_at), its <sid>.prompt.md becomes
+# the prompt — a launch argument, the only form proven to drive a turn on resume — and attached_at
+# is stamped. An explicit --prompt-file always wins and is never replaced. Either way, a prompt that
+# carries the packet's token exports it as CC_RECYCLE_ATTACHED_TOKEN, which tells the SessionStart
+# child (hooks/recycle-failed-inject.sh) not to inject the same packet a second time.
+RR_PKT="" RR_PKT_TOKEN=""
+rr_pkt_stamp() { # <field> — temp + mv, never in place; best-effort
+  local tmp="$RR_PKT.tmp.$$"
+  if jq --arg f "$1" --arg v "$(date -u +%FT%TZ)" '.[$f] = $v' "$RR_PKT" > "$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$RR_PKT" 2>/dev/null || rm -f "$tmp"
+  else
+    rm -f "$tmp"
+  fi
+}
+case "$sid" in .*|*[!A-Za-z0-9._-]*) ;; *)
+  _rr_pd="${CC_RECYCLE_FAILED_DIR:-$HOME/.claude/autonomy/recycle-failed}"
+  if [ -f "$_rr_pd/$sid.json" ] && command -v jq >/dev/null 2>&1 \
+     && [ -z "$(jq -r '.delivered_at // empty' "$_rr_pd/$sid.json" 2>/dev/null)" ]; then
+    RR_PKT="$_rr_pd/$sid.json"
+    RR_PKT_TOKEN="$(jq -r '.token // empty' "$RR_PKT" 2>/dev/null)"
+    if [ -z "$PROMPT_FILE" ] && [ -s "$_rr_pd/$sid.prompt.md" ] && [ -r "$_rr_pd/$sid.prompt.md" ]; then
+      CC_RR_PROMPT="$(cat "$_rr_pd/$sid.prompt.md")"
+      printf '%s\n' "reso-resume-one: NOTE — recycle-failed packet for $sid is undelivered; attaching $_rr_pd/$sid.prompt.md as the first prompt." >&2
+    fi
+  fi ;;
+esac
+# Stamped and exported at the spawn (below), not here: a gate or fence between here and there may
+# still defer the resume, and attached_at must not claim a launch that never happened.
+rr_pkt_attach() {
+  [ -n "$RR_PKT" ] && [ -n "$RR_PKT_TOKEN" ] && [ -n "$CC_RR_PROMPT" ] || return 0
+  case "$CC_RR_PROMPT" in
+    *"$RR_PKT_TOKEN"*) rr_pkt_stamp attached_at; export CC_RECYCLE_ATTACHED_TOKEN="$RR_PKT_TOKEN" ;;
+  esac
+}
 wt=${wt%/}
 
 # ── CAPACITY GATE, IN THE ENGINE'S OWN BODY (2026-08-17, backlog "gate bin/reso-resume-one in its
@@ -612,6 +651,7 @@ export CC_RR_NO_INTERACT="${CC_RESUME_NO_INTERACT:-}"
 export CC_RR_THRESHOLD="$RESUME_THRESHOLD"
 export CC_RR_MCP_ARGS
 export CC_RR_PERM_MODE="$PERM_MODE" CC_RR_PROMPT
+rr_pkt_attach
 # ── THE SPAWN GOES THROUGH bin/cc-close-attrib (W3 P2, amendment §C 8) ────────────────────────────
 # Every other launch path interposes the close-attribution wrapper, so a session resumed here could
 # die with no close-record and the crash watchdog had nothing to join (the same gap lr-fire-resume.sh
@@ -838,6 +878,26 @@ rr_rc=$?
 rr_fence_release
 trap - EXIT HUP INT TERM
 
+# ── delivered_at: the packet's token reached the session as a USER record (§D4) ─────────────────────
+# Attaching the prompt proves nothing about receipt; the transcript does. A user record carrying the
+# token is delivery, so the packet stops being re-attached here and re-injected at SessionStart. The
+# grep is a cheap pre-filter (transcripts reach tens of MB); jq decides the record type.
+rr_pkt_delivered() {
+  local f
+  [ -n "$RR_PKT" ] && [ -n "$RR_PKT_TOKEN" ] && [ -f "$RR_PKT" ] || return 0
+  [ -z "$(jq -r '.delivered_at // empty' "$RR_PKT" 2>/dev/null)" ] || return 0
+  for f in "$cfg"/projects/*/"$sid".jsonl; do
+    [ -f "$f" ] && grep -qF -- "$RR_PKT_TOKEN" "$f" 2>/dev/null || continue
+    # shellcheck disable=SC2016  # jq program
+    if jq -n --arg tok "$RR_PKT_TOKEN" 'any(inputs | select(type == "object" and .type == "user");
+         (.message // "") | tostring | contains($tok))' "$f" 2>/dev/null | grep -qx true; then
+      rr_pkt_stamp delivered_at; return 0
+    fi
+  done
+  return 0
+}
+rr_pkt_delivered
+
 # ── FALL THROUGH TO A SHELL, so the pane outlives the session (see the block above the expect) ────
 # Two callers must NOT get a shell, and both are identified by an AFFIRMATIVE fact rather than by
 # the absence of one:
@@ -883,5 +943,32 @@ if rr_close_on_clean_exit "$rr_rc"; then
   printf '\n[reso-resume-one] session ended cleanly (rc 0), no recycle pending — closing this pane (CC_PANE_CLOSE_ON_EXIT=0 keeps it).\n' >&2
   exit 0
 fi
+# ── …OR A STAGED SUCCESSOR TAKES THE PANE (RECYCLE_KEYSTROKELESS_DELIVERY §D1) ──────────────────────
+# A recycle stages its successor for this pane's tty (lib/pane-successor.sh); the pane's own process
+# claims and execs it, so nothing is typed into the pane. A resumed pane falls through HERE rather
+# than to the parent zsh's precmd consumer, so this file is a consumer too. take refuses (rc≠0)
+# unless the stage is for this tty, its watcher is alive and it is inside its TTL; then the shell.
+# The lib is resolved exactly as rr_close_on_clean_exit resolves its own, after a test seam.
+rr_successor_take_exec() {
+  local _s="$0" _t _sd _c _lib="" claimed
+  while [ -L "$_s" ]; do
+    _t="$(readlink "$_s" 2>/dev/null)" || break
+    case "$_t" in /*) _s="$_t" ;; *) _s="$(dirname "$_s")/$_t" ;; esac
+  done
+  _sd="$(cd "$(dirname "$_s")" 2>/dev/null && pwd)" || _sd=""
+  for _c in "${CC_PANE_SUCCESSOR_LIB:-}" "${_sd:+$_sd/../lib/pane-successor.sh}" "${HOME:-}/.claude/lib/pane-successor.sh"; do
+    [ -n "$_c" ] && [ -r "$_c" ] && { _lib="$_c"; break; }
+  done
+  [ -n "$_lib" ] || return 1
+  # shellcheck source=/dev/null  # runtime-resolved: seam, checkout sibling, else the live layer
+  . "$_lib" 2>/dev/null || return 1
+  command -v cc_pane_successor_take >/dev/null 2>&1 || return 1
+  command -v cc_pane_successor_exec >/dev/null 2>&1 || return 1
+  claimed="$(cc_pane_successor_take)" && [ -n "$claimed" ] || return 1
+  printf '\n[reso-resume-one] session ended (rc %s) — running the staged successor %s.\n' "$rr_rc" "$claimed" >&2
+  cc_pane_successor_exec "$claimed" 1
+  return 1   # exec returned: fall through to the ordinary shell
+}
+rr_successor_take_exec
 printf '\n[reso-resume-one] session ended (rc %s) — this pane is now an ordinary shell.\n' "$rr_rc" >&2
 exec "${SHELL:-/bin/zsh}" -l -i

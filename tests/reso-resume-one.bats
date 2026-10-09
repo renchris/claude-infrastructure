@@ -919,3 +919,91 @@ argv_from_resume() { perl -0 -ne 'chomp; $on = 1 if $_ eq "--resume"; push @a, $
   [[ "$output" == *"is not one claude takes"* ]] || { echo "$output"; false; }
   [ "$(argc)" = 8 ]
 }
+
+# ── RECYCLE_KEYSTROKELESS_DELIVERY §D4: a failed recycle's packet is the first prompt ──────────────
+# The packet is the shape handoff-fire's rcy_recovery_packet writes; the engine reads delivered_at,
+# token and the sibling <sid>.prompt.md, and stamps attached_at / delivered_at.
+mk_rf_packet() { # <sid> [jq assignment]
+  export CC_RECYCLE_FAILED_DIR="$BATS_TEST_TMPDIR/recycle-failed"; mkdir -p "$CC_RECYCLE_FAILED_DIR"
+  RF_TOK="recycle-recovery:$1:1791000000"; RF_PKT="$CC_RECYCLE_FAILED_DIR/$1.json"
+  jq -n --arg tok "$RF_TOK" "{class:\"relaunch-failed\", token:\$tok} ${2:+| $2}" > "$RF_PKT"
+  printf 'Your self-recycle FAILED.\ntoken %s\n' "$RF_TOK" > "$CC_RECYCLE_FAILED_DIR/$1.prompt.md"
+}
+# The argv shim, plus a transcript whose user record carries the spawn's LAST argument — what claude
+# writes when a launch-argument prompt is submitted.
+transcript_shim() {
+  argv_shim
+  mv "$CC_RESUME_CLAUDE_BIN" "$CC_RESUME_CLAUDE_BIN.argv"
+  cat > "$CC_RESUME_CLAUDE_BIN" <<'SH'
+#!/bin/bash
+d="$HOME/.claude-next/projects/p"; mkdir -p "$d"
+sid=""; prev=""; for a in "$@"; do [ "$prev" = --resume ] && sid="$a"; prev="$a"; done
+jq -nc --arg p "${!#}" '{type:"user",message:{role:"user",content:$p}}' > "$d/$sid.jsonl"
+exec "$0.argv" "$@"
+SH
+  chmod +x "$CC_RESUME_CLAUDE_BIN"
+}
+
+@test "D4: an undelivered packet is attached as the first prompt, then attached_at and delivered_at are stamped" {
+  mk_rf_packet SID-RF1; transcript_shim
+  run env CC_RR_STUB_NO_MENU=1 timeout 60 "$RRO" next "$WT" SID-RF1
+  [ "$status" -eq 0 ] || { echo "status $status: $output"; false; }
+  [[ "$output" == *"recycle-failed packet for SID-RF1 is undelivered; attaching"* ]] || { echo "$output"; false; }
+  [ "$(argv_from_resume)" = "--resume|SID-RF1|$(cat "$CC_RECYCLE_FAILED_DIR/SID-RF1.prompt.md")" ] || { echo "tail: $(argv_from_resume)"; false; }
+  [ -n "$(jq -r '.attached_at // empty' "$RF_PKT")" ] || { cat "$RF_PKT"; false; }
+  [ -n "$(jq -r '.delivered_at // empty' "$RF_PKT")" ] || { cat "$RF_PKT"; false; }
+}
+
+@test "D4: attached but NOT in a user record ⇒ no delivered_at (the stamp reads the transcript, not the argv)" {
+  mk_rf_packet SID-RF2; argv_shim                     # no transcript is written
+  run env CC_RR_STUB_NO_MENU=1 timeout 60 "$RRO" next "$WT" SID-RF2
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -n "$(jq -r '.attached_at // empty' "$RF_PKT")" ]
+  [ -z "$(jq -r '.delivered_at // empty' "$RF_PKT")" ] || { cat "$RF_PKT"; false; }
+}
+
+@test "D4: a DELIVERED packet is never re-attached — the argv is exactly today's" {
+  mk_rf_packet SID-RF3 '.delivered_at = "2026-10-09T05:40:00Z"'; argv_shim
+  run env CC_RR_STUB_NO_MENU=1 timeout 60 "$RRO" next "$WT" SID-RF3
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(argv_from_resume)" = "--resume|SID-RF3" ] || { echo "tail: $(argv_from_resume)"; false; }
+  [[ "$output" != *"attaching"* ]] || false
+  [ -z "$(jq -r '.attached_at // empty' "$RF_PKT")" ]
+}
+
+@test "D4: an explicit --prompt-file wins over an undelivered packet and is never replaced" {
+  mk_rf_packet SID-RF4; argv_shim
+  printf 'restore ref R-1\n' > "$BATS_TEST_TMPDIR/own.txt"
+  run env CC_RR_STUB_NO_MENU=1 timeout 60 "$RRO" next "$WT" SID-RF4 --prompt-file "$BATS_TEST_TMPDIR/own.txt"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(argv_from_resume)" = "--resume|SID-RF4|restore ref R-1" ] || { echo "tail: $(argv_from_resume)"; false; }
+  [[ "$output" != *"attaching"* ]] || false
+  # a prompt that does not carry the token is not the packet: attached_at stays unset
+  [ -z "$(jq -r '.attached_at // empty' "$RF_PKT")" ]
+}
+
+# The fall-through consumer is reachable only from a real tty, so it is driven EXTRACTED, as the
+# close-on-exit rule above is, against a stub lib standing in for U1's lib/pane-successor.sh.
+rr_successor() { # <stub lib body> → runs rr_successor_take_exec
+  local fn; fn="$(sed -n '/^rr_successor_take_exec() {/,/^}/p' "$RRO")"
+  [ -n "$fn" ] || { echo "rr_successor_take_exec not found in $RRO"; return 2; }
+  printf '%s\n' "$1" > "$BATS_TEST_TMPDIR/pane-successor.sh"
+  run env CC_PANE_SUCCESSOR_LIB="$BATS_TEST_TMPDIR/pane-successor.sh" bash -c "$fn"$'\n''rr_rc=0; rr_successor_take_exec' "$RRO"
+}
+
+@test "D4: the fall-through runs a staged successor — take's claim is handed to exec with mode 1" {
+  # shellcheck disable=SC2016  # the stub lib's own program
+  rr_successor 'cc_pane_successor_take() { echo /run/ps/ttys013.claimed.77; }
+cc_pane_successor_exec() { printf "%s|%s\n" "$1" "$2" > "'"$BATS_TEST_TMPDIR"'/exec.log"; exit 0; }'
+  [ "$status" -eq 0 ] || { echo "status $status: $output"; false; }
+  [ "$(cat "$BATS_TEST_TMPDIR/exec.log")" = "/run/ps/ttys013.claimed.77|1" ]
+  [[ "$output" == *"running the staged successor /run/ps/ttys013.claimed.77"* ]] || { echo "$output"; false; }
+}
+
+@test "D4: nothing staged (take refuses) or a lib without the verbs ⇒ rc 1, no exec, the shell follows" {
+  rr_successor 'cc_pane_successor_take() { return 1; }
+cc_pane_successor_exec() { echo EXEC > "'"$BATS_TEST_TMPDIR"'/exec.log"; }'
+  [ "$status" -eq 1 ] && [ ! -e "$BATS_TEST_TMPDIR/exec.log" ] || { echo "$output"; false; }
+  rr_successor 'true'
+  [ "$status" -eq 1 ] && [ ! -e "$BATS_TEST_TMPDIR/exec.log" ] || false
+}
