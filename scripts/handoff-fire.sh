@@ -831,6 +831,10 @@ _fire_gate_of() { # $1=refusal reason → gate name
     # §8 item 13 — the research build-wave gate measured a research program's certificate and live
     # records: not the box, the payload, the argv or the predecessor. Its own denominator.
     research-gate)     printf research  ;;
+    # RECYCLE_KEYSTROKELESS_DELIVERY §D3 — a --recovery-of re-fire refused because its failed recycle
+    # has since engaged, a live claude holds the pane, or the token is malformed. It measured the
+    # RECOVERY's own idempotency, nothing else, so it gets its own denominator.
+    recovery-of)       printf recovery  ;;
     *)                 printf '%s' "${1:-unknown}" ;;
   esac
 }
@@ -3724,8 +3728,10 @@ _hf_now_ms() { # → wall clock in ms: bash 5's EPOCHREALTIME, else whole second
 hf_load_per_core() { # → 1-min load average / logical cpus, 2 decimals; "" if unreadable · seam HF_LOAD_PER_CORE
   if [ -n "${HF_LOAD_PER_CORE+set}" ]; then printf '%s' "$HF_LOAD_PER_CORE"; return 0; fi
   local la nc
-  la="$(sysctl -n vm.loadavg 2>/dev/null | tr -d '{}' | awk '{print $1}' || true)"
-  nc="$(sysctl -n hw.ncpu 2>/dev/null || true)"
+  # Absolute path: the watcher runs detached under whatever PATH its launcher had, and launchd's
+  # omits /usr/sbin (tests/handoff-fire-capacity-gate.bats P8, the bare-name sysctl class).
+  la="$(/usr/sbin/sysctl -n vm.loadavg 2>/dev/null | tr -d '{}' | awk '{print $1}' || true)"
+  nc="$(/usr/sbin/sysctl -n hw.ncpu 2>/dev/null || true)"
   awk -v l="$la" -v n="$nc" 'BEGIN { if (l == "" || n + 0 <= 0) exit; printf "%.2f", l / n }'
 }
 

@@ -743,6 +743,8 @@ _fires() {
       # §8 item 13 — the research build-wave gate (--requires-gate) read a research program's
       # certificate and records, so its refusals get their own denominator.
       research-gate)     printf '%s' "$mapped" | grep -q 'research-gate'     || false ;;
+      # RECYCLE_KEYSTROKELESS_DELIVERY §D3 — the --recovery-of idempotency refusal: own denominator.
+      recovery-of)       printf '%s' "$mapped" | grep -q 'recovery-of'       || false ;;
       *) echo "UNMAPPED refusal reason '$reason' — it will fall into the fail-visible *) arm and be"
          echo "missing from every gate denominator. Add it to _fire_gate_of and to this case."; false ;;
     esac
