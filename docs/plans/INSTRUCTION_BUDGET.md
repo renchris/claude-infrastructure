@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 ---
 
 # Instruction budget — always-loaded instructions under 120k per session, and kept there
@@ -126,7 +126,7 @@ situational file), not "add paths:".
 
 ## Waves
 
-### W1 — global dedupe (S)
+### W1 — global dedupe (S) — DONE bea3da8d5 db0084cda 80ef1543c (step 2: operator ran 0053 2026-10-03)
 
 1. `install.sh` (~L1007-1060): deploy `CLAUDE.global.md` → `~/.claude/CLAUDE.full.md`; deploy the selected
    global variant (registry default `slim`; `full` selects `CLAUDE.global.md`) → `~/.claude/CLAUDE.md` as a
@@ -208,3 +208,13 @@ body file. Land a reso size check in pre-commit + `scripts/ship-land.sh` run_sta
   re-minting them as open work. W1 stays open on its step 2 only; the row is parked on it
   (`docs/parks/8f6752ec3f65.md`).
 - Remaining: the operator runs migration 0053 (backlog b154e11d31b9) → global layer ≈ 60k, DUP rows clear.
+  RESOLVED: b154e11d31b9 closed done 2026-10-03T23:27Z (operator ran 0053); this line went stale until 2026-10-09.
+- 2026-10-09 — plan COMPLETE (dispatch of backlog 8f6752ec3f65). Acceptance re-measured live:
+  all four account `CLAUDE.md`/`rules` links resolve to `~/.claude/CLAUDE.md`/`~/.claude/rules`;
+  `cc-instruction-budget census` shows no DUP row, user tier 59,800, every main checkout ≤ 76,715;
+  reso trunk measured in a detached origin/main worktree = 117,027 (user 59,800 + repo 57,227, no file
+  over 40k); `config/instruction-budget.json` `enforce: true`, `cc-instruction-budget selftest` 7/7.
+  Residual, not plan work: the census reports the WORST recent cwd per repo, and reso's is
+  `wt-pool-3`, a live session on a pre-W3 trunk commit (0 commits of its own, 89 behind) that still
+  loads the old 151.7k ledger. Trunk is fixed; that tree catches up when its owner rebases. The
+  hourly auditor already tracks this class on row 52eb2f0dac1b.
