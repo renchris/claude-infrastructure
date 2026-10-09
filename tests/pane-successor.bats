@@ -12,6 +12,9 @@ setup() {
   LIB="$REPO/lib/pane-successor.sh"
   export HOME="$BATS_TEST_TMPDIR/home"
   mkdir -p "$HOME"
+  # The lr-fire-resume and cc-close-attrib cases reach scripts/lib/capacity-admit.sh, whose gate reads
+  # live load, memory and the session census; the gate is not this suite's subject.
+  export CC_ADMIT_GATE=off
   export CC_PANE_SUCCESSOR_DIR="$BATS_TEST_TMPDIR/ps"
   export CC_PANE_SUCCESSOR_TTY=/dev/ttys913
   unset CC_PANE_SUCCESSOR CC_PANE_SUCCESSOR_NOW

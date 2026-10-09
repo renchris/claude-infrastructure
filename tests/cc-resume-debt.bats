@@ -15,6 +15,11 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   unset CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID CC_SESSION_ID
   export CC_FIRE_CAPACITY_GATE=off CC_ADMIT_GATE=off
+  # Seams whose defaults do not resolve under $HOME (an absolute /tmp path or a bare PATH name); an
+  # absent path is right here, since their sensors fail open on one.
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/handoff-account-sweep.json"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/no-claude-accounts"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/claude-accounts-heal-"
   export CC_RESUME_DEBT_DIR="$BATS_TEST_TMPDIR/debt"
   export CC_RESUME_DEBT_HOLD_S=0 CC_RESUME_DEBT_POLL_S=0 CC_RESUME_DEBT_GRACE_S=240
   export CC_RESUME_DEBT_WAIT_S=0 CC_RESUME_DEBT_NOW=1000

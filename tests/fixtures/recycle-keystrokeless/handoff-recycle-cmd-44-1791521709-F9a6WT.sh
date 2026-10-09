@@ -1,1 +1,3 @@
+# shellcheck shell=bash
+# The 2026-10-09 pane-44 incident's relaunch cmdfile. Everything after these two comment lines is verbatim.
 { cd /Users/chrisren/Development/.worktrees/wt-pool-7 2>/dev/null || cd /Users/chrisren/Development/reso-management-app ; } && nocorrect CC_ACCOUNT_PINNED=1 CLAUDE_ISOLATION_SKIP=1 claude --effort high --strict-mcp-config --mcp-config=/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T//cc-mcp-userscope-.claude-next.json --settings=/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T//cc-mcp-decision-off--Users-chrisren-Development--worktrees-wt-pool-7.json "$(cat /var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T//handoff-prompt-nb-9D2Ngh)"
