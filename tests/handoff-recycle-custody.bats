@@ -98,6 +98,9 @@ SH
   TTYF="$BATS_TEST_TMPDIR/ttys999"; : > "$TTYF"
   export CMDFILE TTYF
   export HF_RECYCLE_SHELL_WAIT_S=6 FIRE_TYPE_ATTEMPTS=1 FIRE_TYPE_SETTLE=0 FIRE_TYPE_PRESETTLE=0
+  # The typing loop is a deadline now (RECYCLE_KEYSTROKELESS_DELIVERY §D2.7, default 600 s); 0 keeps
+  # the old two rounds, which is all a case here that serves a non-echoing screen should wait.
+  export CC_RECYCLE_TYPE_DEADLINE_S=0
   export RCY_BOOT_WAIT_S=1 RCY_BOOT_STALE_S=2 RCY_BOOT_IVL_S=0.2 RCY_BOOT_SLOW_IVL_S=1 RCY_BOOT_PANE_EVERY=2
 }
 

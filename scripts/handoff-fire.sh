@@ -1048,6 +1048,13 @@ fi
 # under ONE engagement marker after printing "Nothing was launched". Derived, not hardcoded, so
 # raising IT2_KITTY_TIMEOUT_S (both scripts read the same env) can never re-invert the pair.
 HF_SPLIT_TIMEOUT_S="${HANDOFF_SPLIT_TIMEOUT_S:-$(( ${IT2_KITTY_TIMEOUT_S:-15} + 30 ))}"
+# THE TYPED LINE'S SEND/READ BOUND — THE SAME INVERSION, ONE VERB DOWN (2026-10-09, pane 44). One
+# `session send` on kitty is TWO kitty calls (bin/it2-kitty's prove_target, then `kitty @ send-text`),
+# each bounded at IT2_KITTY_TIMEOUT_S (15s, bin/it2-kitty:95) — so HF_TIMEOUT_S's 10s around it can
+# only ever convict a slow-but-landing send, and _it2_type_line then scrubbed the line it had just
+# delivered. Measured: kitty executed a timed-out request ~9 min late, and 3 of 4 rc-124 pastes in a
+# scratch window were on screen. Derived from the inner bound for the same reason as the split's.
+HF_SEND_TIMEOUT_S="${HANDOFF_SEND_TIMEOUT_S:-$(( ${IT2_KITTY_TIMEOUT_S:-15} * 2 + 10 ))}"
 # Run an external iTerm2-reaching command under the bound. Returns the command's own rc, or 124 on
 # expiry — which every caller here already treats as "that call failed", its fail-loud path.
 hf_bounded() {
@@ -3674,17 +3681,107 @@ FIRE_NOCORRECT_LINE='unsetopt correct correct_all 2>/dev/null || true'
 # rows below, so a small "last N" window reads only blanks and never sees the command (live-verified
 # 2026-07-19). 500 > any pane height. Whitespace is stripped from both sides so a WRAPPED line still
 # matches. Breadth of the read surface was never the bug — the forgeability of what was sought was.
+#
+# HARDENED AND INSTRUMENTED (RECYCLE_KEYSTROKELESS_DELIVERY §D2, the 2026-10-09 pane-44 strand). At
+# load ~45/core sixteen attempts failed into one pane and WHICH LEG failed is unknown, because no
+# attempt recorded anything. The changes, each against a measured or candidate leg:
+#   · TELEMETRY, opt-in: HF_TYPE_TELEMETRY=- (stdout — the recycle watcher's stdout IS its log) or a
+#     file path. One UTC line per attempt plus a handoffs.jsonl `recycle-type-attempt` row: send rc
+#     and duration, read rc and bytes, nonce_seen, suffix_ok, focused, load per core, CR rc, verdict.
+#   · A FAILED SEND IS "DELIVERY UNKNOWN", NEVER "NOT DELIVERED". Our bound says 124 and it2-kitty
+#     collapses its own inner timeout to rc 1; either may have landed (kitty executed a timed-out
+#     request ~9 min late). So every send is READ before anything scrubs it. The old `continue`
+#     opened the next attempt with a ^U over a line that, 3 times in 4 in a scratch window, was there.
+#   · ECHO POLLING, not one read: a cold `zsh -l -i` under load echoes late, and a single read
+#     FIRE_TYPE_SETTLE after the paste convicted it. The read repeats until the line verifies or a
+#     deadline that scales with load per core — in settle units, so suites that shrink the settle
+#     shrink it too: base 4 + 2 per unit of load/core, capped at 60 (2 s + 1 s/unit, cap 30 s at the
+#     default 0.5 s). Seams: FIRE_TYPE_ECHO_DEADLINE_S (absolute), _BASE / _PER_LOAD / _CAP.
+#   · THE INPUT LINE MUST END WITH THE WIRE, on every pane: whatever follows it would be submitted
+#     with it, whoever typed it. A VISIBLE paste-end marker (ESC[201~ / ^[[201~) right after the wire
+#     refuses the CR too: zsh never renders a marker it consumed, so a visible one is bytes in the
+#     line buffer that the CR would submit onto the last argument (lead ruling, plan § refinements —
+#     the attempt scrubs and the next retypes; the final attempt is plain mode, which carries none).
+#     A copy of the line, or a paste-end echo, fused immediately BEFORE the wire is a late-landing
+#     earlier attempt's residue, and the CR it would earn executes the two fused — refused as well.
+#   · A FAILED CR IS RE-READ: a line that no longer ends with the wire, or a pane whose foreground is
+#     no longer a shell (HF_TYPE_TTY, opt-in), WAS submitted. Success there is what stops a retype of
+#     a command already running — the retype would land in its composer as a chat message.
+_hf_now_ms() { # → wall clock in ms: bash 5's EPOCHREALTIME, else whole seconds (bash 3.2 has none)
+  local t="${EPOCHREALTIME:-}"
+  case "$t" in
+    *[.,]*) t="${t%[.,]*}${t#*[.,]}"; printf '%s' "${t%???}" ;;
+    *) printf '%s000' "$(date +%s)" ;;
+  esac
+}
+
+hf_load_per_core() { # → 1-min load average / logical cpus, 2 decimals; "" if unreadable · seam HF_LOAD_PER_CORE
+  if [ -n "${HF_LOAD_PER_CORE+set}" ]; then printf '%s' "$HF_LOAD_PER_CORE"; return 0; fi
+  local la nc
+  la="$(sysctl -n vm.loadavg 2>/dev/null | tr -d '{}' | awk '{print $1}' || true)"
+  nc="$(sysctl -n hw.ncpu 2>/dev/null || true)"
+  awk -v l="$la" -v n="$nc" 'BEGIN { if (l == "" || n + 0 <= 0) exit; printf "%.2f", l / n }'
+}
+
+_hf_type_emit() { # $1=pane $2=k=v detail → one telemetry line + row, ONLY when HF_TYPE_TELEMETRY is set
+  local dst="${HF_TYPE_TELEMETRY:-}" ln
+  [ -n "$dst" ] || return 0
+  ln="$(date -u +%Y-%m-%dT%H:%M:%SZ) type-attempt pane=$1 $2"
+  if [ "$dst" = - ]; then printf '%s\n' "$ln"; else printf '%s\n' "$ln" >> "$dst" 2>/dev/null || true; fi
+  if command -v emit_recycle_event >/dev/null 2>&1; then emit_recycle_event recycle-type-attempt "" "$1" "$2" || true; fi
+  return 0
+}
+
+# $1=space-stripped read-back $2=want $3=space-stripped line → 0 the line ends with the wire, unfused ·
+# 1 it does not end with it · 2 it does, but residue of an earlier copy is fused right before it ·
+# 3 the wire is there with a visible paste-end marker after it (bytes in the buffer: no CR).
+_hf_wire_is_tail() {
+  local rb="$1" pfx m
+  for m in "$BP_END" '^[[201~'; do
+    if [ "${rb%"$m"}" != "$rb" ]; then
+      rb="${rb%"$m"}"; [ "${rb%"$2"}" != "$rb" ] && return 3
+      return 1
+    fi
+  done
+  [ "${rb%"$2"}" != "$rb" ] || return 1
+  pfx="${rb%"$2"}"
+  [ "${pfx%"$3"}" = "$pfx" ] || return 2
+  { [ "${pfx%"$BP_END"}" = "$pfx" ] && [ "${pfx%'^[[201~'}" = "$pfx" ]; } || return 2
+  return 0
+}
+
+# $1=it2 $2=id $3=nlines $4=bound → prints the space-stripped read-back; rc = the READ's own rc
+_hf_type_read() {
+  HF_TIMEOUT_S="$4" hf_bounded "$1" session read -s "$2" -n "$3" 2>/dev/null | tr -d '[:space:]'
+  return "${PIPESTATUS[0]}"
+}
+
 _it2_type_line() { # $1=it2-bin $2=session-id $3=line → 0 verified+submitted / 1 fail-loud
   local it2="$1" id="$2" line="$3" attempt mode reread want nonce wire focused=0
   local attempts="${FIRE_TYPE_ATTEMPTS:-4}" settle="${FIRE_TYPE_SETTLE:-0.5}" nlines="${FIRE_TYPE_READLINES:-500}"
-  local presettle="${FIRE_TYPE_PRESETTLE:-0.12}"
-  [ -n "$(printf '%s' "$line" | tr -d '[:space:]')" ] || return 1
+  local presettle="${FIRE_TYPE_PRESETTLE:-0.12}" bound="${HF_SEND_TIMEOUT_S:-${HF_TIMEOUT_S:-}}"
+  local lstrip lpc echo_ms t_end srx s_ms rrx tail seen fused crx body
+  lstrip="$(printf '%s' "$line" | tr -d '[:space:]')"
+  [ -n "$lstrip" ] || return 1
+  # Every send and read runs under HF_SEND_TIMEOUT_S, passed as `HF_TIMEOUT_S=… hf_bounded` (the
+  # split's form in it2_split) so the suites that stub hf_bounded keep their passthrough.
   # A FOCUSED pane being moved (the default since decision 7; LR_MOVE_FOCUSED=off holds it before
-  # anything is typed): the operator's keystrokes can land after ours, and a substring match would
-  # CR a line with their text fused onto its end. So the wire must be the read-back's SUFFIX —
-  # nothing after it — before the CR is earned.
+  # anything is typed): the operator's keystrokes can land after ours. The suffix rule below now
+  # binds every pane, so `focused` is recorded for the telemetry rather than switching the match.
   if [ "${LR_MOVE_FOCUSED:-on}" != off ] && [ "$(hf_pane_focused "$id")" = yes ]; then focused=1; fi
+  lpc="$(hf_load_per_core || true)"
+  echo_ms="$(awk -v o="${FIRE_TYPE_ECHO_DEADLINE_S:-}" -v s="$settle" -v l="${lpc:-0}" \
+                 -v b="${FIRE_TYPE_ECHO_BASE:-4}" -v p="${FIRE_TYPE_ECHO_PER_LOAD:-2}" -v c="${FIRE_TYPE_ECHO_CAP:-60}" \
+                 'BEGIN { if (o != "") d = o; else { d = s * (b + p * l); if (d > s * c) d = s * c }; printf "%d", d * 1000 }')"
   for attempt in $(seq 1 "$attempts"); do
+    # The foreground already left the shell: an earlier line landed late and its command is RUNNING.
+    # Typing now would put the wire into it. Only a caller that knows the pane's tty can ask.
+    if [ -n "${HF_TYPE_TTY:-}" ] && command -v pane_cc_state >/dev/null 2>&1 \
+       && [ "$(pane_cc_state "$HF_TYPE_TTY")" = cc ]; then
+      _hf_type_emit "$id" "attempt=$attempt verdict=foreground-cc focused=$focused load_per_core=${lpc:-?}"
+      echo "→ pane $id already holds a claude — an earlier typed line landed late; nothing more typed" >&2
+      return 0
+    fi
     # Fresh per ATTEMPT, not per call: attempt N must not be satisfiable by attempt N-1's echo.
     nonce="hfv-$$-${attempt}-${RANDOM:-0}"
     wire=": $nonce; $line"
@@ -3692,20 +3789,55 @@ _it2_type_line() { # $1=it2-bin $2=session-id $3=line → 0 verified+submitted /
     # Final attempt degrades to a plain (un-bracketed) char-send — covers the exotic case of a shell
     # with bracketed paste disabled; echo-verify still gates the CR so the fallback is never unsafe.
     mode="paste"; [ "$attempt" -ge "$attempts" ] && mode="plain"
-    hf_bounded "$it2" session send -s "$id" $'\x15' >/dev/null 2>&1 || true    # Ctrl-U: scrub any partial line
+    HF_TIMEOUT_S="$bound" hf_bounded "$it2" session send -s "$id" $'\x15' >/dev/null 2>&1 || true    # Ctrl-U: scrub any partial line
     /bin/sleep "$presettle"
+    s_ms="$(_hf_now_ms)"; srx=0
     if [ "$mode" = "paste" ]; then
-      hf_bounded "$it2" session send -s "$id" "${BP_START}${wire}${BP_END}" >/dev/null 2>&1 || { /bin/sleep "$settle"; continue; }
+      HF_TIMEOUT_S="$bound" hf_bounded "$it2" session send -s "$id" "${BP_START}${wire}${BP_END}" >/dev/null 2>&1 || srx=$?
     else
-      hf_bounded "$it2" session send -s "$id" "$wire" >/dev/null 2>&1 || { /bin/sleep "$settle"; continue; }
+      HF_TIMEOUT_S="$bound" hf_bounded "$it2" session send -s "$id" "$wire" >/dev/null 2>&1 || srx=$?
     fi
+    s_ms=$(( $(_hf_now_ms) - s_ms ))
+    # Delivery is unknown on ANY rc, so the poll runs either way; the deadline starts after the send.
+    t_end=$(( $(_hf_now_ms) + echo_ms ))
     /bin/sleep "$settle"
-    reread="$(hf_bounded "$it2" session read -s "$id" -n "$nlines" 2>/dev/null | tr -d '[:space:]' || true)"
-    if { [ "$focused" = 0 ] && printf '%s' "$reread" | grep -qF -- "$want"; } \
-       || { [ "$focused" = 1 ] && [ "${reread%"$want"}" != "$reread" ]; }; then
-      hf_bounded "$it2" session send -s "$id" $'\r' >/dev/null 2>&1 && return 0   # verified → submit
+    while :; do
+      rrx=0; reread="$(_hf_type_read "$it2" "$id" "$nlines" "$bound")" || rrx=$?
+      tail=0; _hf_wire_is_tail "$reread" "$want" "$lstrip" || tail=$?
+      [ "$tail" = 1 ] || break                        # verified (0), or a refusal no wait can clear (2/3)
+      [ "$(_hf_now_ms)" -lt "$t_end" ] || break
+      /bin/sleep "$settle"
+    done
+    seen=0; case "$reread" in *"$nonce"*) seen=1 ;; esac
+    fused=0; [ "$tail" = 2 ] && fused=1
+    body="attempt=$attempt mode=$mode send_rc=$srx send_ms=$s_ms read_rc=$rrx read_bytes=${#reread} nonce_seen=$seen suffix_ok=$([ "$tail" = 0 ] && echo 1 || echo 0) fused=$fused focused=$focused load_per_core=${lpc:-?} echo_deadline_ms=$echo_ms bound_s=${bound:-none}"
+    if [ "$tail" = 0 ]; then
+      crx=0; HF_TIMEOUT_S="$bound" hf_bounded "$it2" session send -s "$id" $'\r' >/dev/null 2>&1 || crx=$?   # verified → submit
+      if [ "$crx" = 0 ]; then _hf_type_emit "$id" "$body cr_rc=0 verdict=submitted"; return 0; fi
+      # The CR's delivery is unknown too. Re-read until the deadline: a line that no longer ends with
+      # the wire, or a foreground that left the shell, means it WAS submitted — never type it again.
+      t_end=$(( $(_hf_now_ms) + echo_ms ))
+      while :; do
+        /bin/sleep "$settle"
+        rrx=0; reread="$(_hf_type_read "$it2" "$id" "$nlines" "$bound")" || rrx=$?
+        if [ -n "${HF_TYPE_TTY:-}" ] && command -v pane_cc_state >/dev/null 2>&1 \
+           && [ "$(pane_cc_state "$HF_TYPE_TTY")" = cc ]; then
+          _hf_type_emit "$id" "$body cr_rc=$crx verdict=submitted-foreground-cc"; return 0
+        fi
+        if [ "$rrx" = 0 ] && [ -n "$reread" ] && ! _hf_wire_is_tail "$reread" "$want" "$lstrip"; then
+          _hf_type_emit "$id" "$body cr_rc=$crx verdict=submitted-line-cleared"; return 0
+        fi
+        [ "$(_hf_now_ms)" -lt "$t_end" ] || break
+      done
+      _hf_type_emit "$id" "$body cr_rc=$crx verdict=cr-unconfirmed"
+    elif [ "$tail" = 3 ]; then
+      _hf_type_emit "$id" "$body verdict=paste-end-echo"
+    elif [ "$fused" = 1 ]; then
+      _hf_type_emit "$id" "$body verdict=residue-fused"
+    else
+      _hf_type_emit "$id" "$body verdict=echo-unverified"
     fi
-    hf_bounded "$it2" session send -s "$id" $'\x15' >/dev/null 2>&1 || true    # scrub the mangled/half line
+    HF_TIMEOUT_S="$bound" hf_bounded "$it2" session send -s "$id" $'\x15' >/dev/null 2>&1 || true    # scrub the mangled/half line
     /bin/sleep "$settle"
   done
   return 1
@@ -10061,9 +10193,22 @@ if [ "${1:-}" = "__recycle" ]; then
       exit 1
     fi
   fi
-  ok=0
-  for _ in 1 2; do
-    if it2_type_verified "$IT2" "$RSID" "$(cat "$CMDFILE")"; then ok=1; break; fi
+  # A DEADLINE, NOT TWO ROUNDS (§D2.7). Pane 44 spent its whole 2 × 4 attempts inside one load spike
+  # and stranded. Waiting at a bare shell costs nothing, so rounds repeat until
+  # CC_RECYCLE_TYPE_DEADLINE_S (default 600) — never fewer than the old two, so 0 restores the old
+  # loop. Each round opts into the per-attempt telemetry (this watcher's stdout is its log) and
+  # names the tty, so a line that landed late and started claude stops the typing instead of being
+  # typed again into its composer. Between rounds the same check runs on the pane itself.
+  ok=0; rcy_type_round=0
+  rcy_type_deadline=$(( $(date +%s) + ${CC_RECYCLE_TYPE_DEADLINE_S:-600} ))
+  while :; do
+    rcy_type_round=$(( rcy_type_round + 1 ))
+    if HF_TYPE_TELEMETRY=- HF_TYPE_TTY="$TTY_PATH" it2_type_verified "$IT2" "$RSID" "$(cat "$CMDFILE")"; then ok=1; break; fi
+    if cc_alive; then
+      echo "→ pane $RSID holds a claude after typing round $rcy_type_round — a typed line landed late"
+      ok=1; break
+    fi
+    [ "$rcy_type_round" -lt 2 ] || [ "$(date +%s)" -lt "$rcy_type_deadline" ] || break
     sleep 3
   done
   [ "$ok" = 1 ] || {
@@ -10073,8 +10218,8 @@ if [ "${1:-}" = "__recycle" ]; then
     # The surface is re-read AFTER the failures so the row says which failure this was: a pane that
     # is gone now needs a new window, a present one refused keystrokes.
     rcy_surface="$(pane_enumerated "$IT2" "$RSID")"
-    emit_recycle_event recycle-dead "" "$RSID" "relaunch write failed twice — pane stranded at a bare shell (pane $rcy_surface after the failed writes)" || true
-    hf_alarm recycle-relaunch-failed "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-RELAUNCH-FAILED: relaunch write into $RSID failed twice — the pane is at a bare shell with NO claude. Run manually in that pane: $(cat "$CMDFILE")" || true
+    emit_recycle_event recycle-dead "" "$RSID" "relaunch write failed twice ($rcy_type_round typing rounds, deadline ${CC_RECYCLE_TYPE_DEADLINE_S:-600}s) — pane stranded at a bare shell (pane $rcy_surface after the failed writes)" || true
+    hf_alarm recycle-relaunch-failed "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-RELAUNCH-FAILED: relaunch write into $RSID failed twice ($rcy_type_round typing rounds; per-attempt telemetry: recycle-type-attempt rows) — the pane is at a bare shell with NO claude. Run manually in that pane: $(cat "$CMDFILE")" || true
     echo "!! it2 relaunch write failed twice — run manually in the pane: $(cat "$CMDFILE")" >&2
     rcy_debt_settle
     exit 1; }

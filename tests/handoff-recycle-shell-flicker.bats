@@ -78,6 +78,9 @@ SH
   CMDFILE="$BATS_TEST_TMPDIR/relaunch.cmd"; printf 'claude --permission-mode auto\n' > "$CMDFILE"
   export CMDFILE
   export HF_RECYCLE_SHELL_WAIT_S=6
+  # The typing loop is a deadline now (RECYCLE_KEYSTROKELESS_DELIVERY §D2.7, default 600 s); 0 keeps
+  # the old two rounds, which is all a case here that serves a non-echoing screen should wait.
+  export CC_RECYCLE_TYPE_DEADLINE_S=0
 }
 
 drive() { bash "$HF" __recycle "$STUB_PANE" /dev/ttys999 "$CMDFILE" "$BATS_TEST_TMPDIR"; }

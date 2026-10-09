@@ -110,7 +110,9 @@ SH
   # Extract the bracketed-paste markers + the helpers under test from the real script.
   eval "$(grep -E '^BP_(START|END)=' "$HF")"
   eval "$(grep -E "^FIRE_NOCORRECT_LINE=" "$HF")"
-  eval "$(sed -n '/^_it2_type_line() {/,/^}/p' "$HF")"
+  for _f in _hf_now_ms hf_load_per_core _hf_type_emit _hf_wire_is_tail _hf_type_read _it2_type_line; do
+    eval "$(sed -n "/^$_f() {/,/^}/p" "$HF")"
+  done
   eval "$(sed -n '/^it2_type_verified() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^_paste_newlines() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^paste_readback_expect() {/,/^}/p' "$HF")"
@@ -192,10 +194,20 @@ readback_of() {  # $1 = payload → the space-stripped composer content CC would
   set_mode corrupt-once
   # FIRE_NOCORRECT=0: otherwise the disarm pre-line consumes the single "corrupt" read and the LAUNCH
   # line would never exercise the recovery this test names.
-  FIRE_NOCORRECT=0 run it2_type_verified "$FAKE_IT2" SID "$CMD"
+  # FIRE_TYPE_ECHO_DEADLINE_S=0: ONE read per attempt, so the corrupt read fails the attempt and the
+  # retry is what recovers — the subject of this case.
+  FIRE_NOCORRECT=0 FIRE_TYPE_ECHO_DEADLINE_S=0 run it2_type_verified "$FAKE_IT2" SID "$CMD"
   [ "$status" -eq 0 ]
   grep -q '^CR$' "$EVENTS"                 # eventually submits after a clean re-verify
   [ "$(grep -c '^PASTE$' "$EVENTS")" -ge 2 ]   # took at least two paste attempts
+}
+
+@test "it2_type_verified: a corrupt FIRST read is re-read within the attempt — no retype (echo polling, §D2.4)" {
+  set_mode corrupt-once
+  FIRE_NOCORRECT=0 FIRE_TYPE_ECHO_DEADLINE_S=1 run it2_type_verified "$FAKE_IT2" SID "$CMD"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^PASTE$' "$EVENTS")" = 1 ] || { cat "$EVENTS"; false; }
+  [ "$(grep -c '^CR$' "$EVENTS")" = 1 ]
 }
 
 @test "it2_type_verified: final attempt falls back to a plain send, still echo-gated" {

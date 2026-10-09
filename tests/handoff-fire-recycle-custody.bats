@@ -786,7 +786,9 @@ SH
   tail_world
   kitty_stub
   local T="$BATS_TEST_TMPDIR/tl.sh"
-  { grep '^BP_START=' "$HF"; grep '^BP_END=' "$HF"; sed -n '/^_it2_type_line() {/,/^}/p' "$HF"; } > "$T"
+  { grep '^BP_START=' "$HF"; grep '^BP_END=' "$HF"
+    for f in _hf_now_ms hf_load_per_core _hf_type_emit _hf_wire_is_tail _hf_type_read _it2_type_line; do
+      sed -n "/^$f() {/,/^}/p" "$HF"; done; } > "$T"
   # shellcheck disable=SC1090
   . "$T"
   # it2 stub: `send` remembers the last non-control text; `read` shows it with TRAIL typed after it.
@@ -809,10 +811,12 @@ SH
   TRAIL="" run _it2_type_line "$STUB/it2e" 901 "claude --resume x"
   [ "$status" -eq 0 ] || { echo "status=$status"; cat "$CALLS"; false; }
   [ "$(calls_n "send \$'\\r'")" = 1 ] || { cat "$CALLS"; false; }
-  # An unfocused pane keeps the substring match: trailing text is not the operator's there.
+  # An UNFOCUSED pane is held to the same suffix rule now (RECYCLE_KEYSTROKELESS_DELIVERY §D2.5):
+  # whatever trails the wire would be submitted with it, whoever typed it — so no CR there either.
   : > "$CALLS"
   TRAIL="ab" run _it2_type_line "$STUB/it2e" 902 "claude --resume x"
-  [ "$status" -eq 0 ] || { echo "status=$status"; cat "$CALLS"; false; }
+  [ "$status" -eq 1 ] || { echo "status=$status"; cat "$CALLS"; false; }
+  [ "$(calls_n "send \$'\\r'")" = 0 ] || { echo "a CR was sent over trailing text"; cat "$CALLS"; false; }
 }
 
 @test "F5 the probe reads a FOCUSED pane's two-character composer as a draft, never as a stray to scrub" {
@@ -900,7 +904,9 @@ SH
   # _it2_type_line treats the focused pane as focused by default: operator text trailing our line
   # withholds the CR.
   local T="$BATS_TEST_TMPDIR/tl.sh"
-  { grep '^BP_START=' "$HF"; grep '^BP_END=' "$HF"; sed -n '/^_it2_type_line() {/,/^}/p' "$HF"; } > "$T"
+  { grep '^BP_START=' "$HF"; grep '^BP_END=' "$HF"
+    for f in _hf_now_ms hf_load_per_core _hf_type_emit _hf_wire_is_tail _hf_type_read _it2_type_line; do
+      sed -n "/^$f() {/,/^}/p" "$HF"; done; } > "$T"
   # shellcheck disable=SC1090
   . "$T"
   cat > "$STUB/it2e" <<'SH'
@@ -1017,6 +1023,9 @@ SH
   export PATH="$W/shim:$PATH" HF_LR_TRANSPLANT="$W/lr-transplant.sh" LR_LOCKS_DIR="$W/locks"
   export CC_REGISTRY_DIR="$W/reg"; mkdir -p "$CC_REGISTRY_DIR"
   export HF_RECYCLE_SHELL_WAIT_S=6 FIRE_TYPE_ATTEMPTS=1 FIRE_TYPE_SETTLE=0 FIRE_TYPE_PRESETTLE=0
+  # The typing loop is a deadline now (RECYCLE_KEYSTROKELESS_DELIVERY §D2.7, default 600 s); 0 keeps
+  # the old two rounds, which is all a case here that serves a non-echoing screen should wait.
+  export CC_RECYCLE_TYPE_DEADLINE_S=0
   export RCY_BOOT_WAIT_S=1 RCY_BOOT_STALE_S=2 RCY_BOOT_IVL_S=0.2 RCY_BOOT_SLOW_IVL_S=1 RCY_BOOT_PANE_EVERY=2
   export LR_RECORD_ID="rec-9"
   unset CC_TERM HANDOFF_TTY_FAIL_FILE SCREEN HF_LAUNCH_REC HF_LAUNCH_ATT HF_RECYCLE_LOCK
