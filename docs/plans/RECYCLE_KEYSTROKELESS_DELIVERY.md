@@ -1,5 +1,5 @@
 ---
-status: open
+status: complete
 ---
 
 # RECYCLE_KEYSTROKELESS_DELIVERY — a recycle must not strand its pane, and a failure must reach the original
@@ -28,9 +28,67 @@ its diff passes 500 LOC.
 | U2 | `delivery` | `scripts/handoff-fire.sh` regions: `_it2_type_line`/`it2_type_verified` (~:3677-3724), bounds (~:1027-1055), recycle foreground staging (~:16370-16830), watcher wait/claim/typed block (~:9399-10080) + tests | §D1 producer side, §D2 | — (codes to the §D1 contract) |
 | U3 | `resume` | `bin/cc-resume-debt`, `scripts/boot-resume-launch.sh`, `bin/reso-resume-one` (incl. its fall-through consumer :862-887), `hooks/session-start-dispatch.sh` child + tests | §D4 | — |
 | U4 | `awareness` | `scripts/handoff-fire.sh`: NEW `rcy_recovery_packet` + `rcy_pane_paint`, `hf_alarm` (~:7900-7940), calls at each post-`/exit` terminal arm, `rcy_debt_settle` (~:9428) + tests | §D3 | U2 (same file: start after U2 merges) |
-
 | U5a | `libfix` | `lib/pane-successor.sh`, `bin/cc-close-attrib`, `hooks/recycle-failed-inject.sh` + tests | review items 4, 6, 7, 9 | U1 (landed) |
 | U5b | `resumefix` | `bin/reso-resume-one`, `bin/cc-resume-debt`, `scripts/boot-resume-launch.sh`, `scripts/boot-resume.sh` (exit-5 messages) + tests | review ORDERING + items 1, 2, 3, 5, 8 + both PLAUSIBLE | U3 (landed) |
+
+### Completion (2026-10-09, dispatched lead aa3e64c4) — every unit DONE, landed and live
+
+All shas below are on `origin/main` (landed in three lands: `d1ccc37f5`, `77b525098`, `7c5256c54`) and
+converged to the live layer with `deploy-live.sh` (the land's own converge kick, degraded tier, never
+`--force`).
+
+- **U1 DONE** — `58649db56` (lib + lr-fire-resume and cc-close-attrib consumers), with gate fix-ups
+  `71936532f` `1a266fa3e` `d1ccc37f5`. Learning: the land gate's ratchets (hermeticity seams,
+  dead-assertion, .bats shellcheck, M11 capacity pins) are the real merge bar. Put them in every brief.
+- **U2 DONE** — `f4b297310` (§D2 typed fallback + per-attempt telemetry), `c54a3c0bd` (§D1 producer +
+  watcher claim-or-revoke), `cafed7eca` `77b525098` (claim-suite race + annotations), `7c5256c54`
+  (sysctl by absolute path). Learning: the claim check must also run inside the shell-wait loop,
+  because a fast consumer claims before the watcher ever samples the bare shell.
+- **U3 DONE** — `0d435c754` (boot-resume-launch), `1fb6b3752` (cc-resume-debt), `38ee1eac7` (SessionStart
+  child), `55bc6fe2e` (reso-resume-one).
+- **U4 DONE** — `a246323e8` (handoff-alarm-polarity), `3578b0e19` (packet, paint, revoke-before-verdict,
+  `--recovery-of`, hf_alarm via jq + sid address, settle `--recovery`), `fe582468b` (`HF_WATCHER_IT2`
+  watcher transport seam for the live proof), `7c5256c54` (recovery-of gets its own gate denominator).
+  The lead wired the polarity check into `cc-blockers` (`64c196ba2`, its own HANDOFF ALARMS section):
+  live it reads RED, 0 of 15 alarms heard in 7 days.
+- **U5a DONE** — `495d4d358` (inject: print before stamp), `5ac7f9159` (nonce-bound stage, pane check,
+  flat successor loop). **U5b DONE** — `f062055cc` (cc-resume-debt), `55cd91521` (reso-resume-one),
+  `6458e9085` (boot-resume-launch exit 6). Every review item was fixed with a test that is red before
+  the fix; none was refuted.
+- **Gates (DoD 2):** merged-tree bats, every new and touched suite, plan line asserted, 0 failures:
+  - New suites: pane-successor 1..31, recycle-failed-inject 1..9, handoff-recycle-typed-fallback
+    1..16, handoff-recycle-successor-claim 1..7, handoff-recycle-recovery-packet 1..17,
+    handoff-alarm-polarity 1..7.
+  - Touched suites: cc-close-attrib 1..32, reso-resume-one 1..62, cc-resume-debt 1..47,
+    boot-resume-launch 1..23, boot-resume 1..72, session-start-dispatch 1..6,
+    lr-recon-fence-callsites 1..22, handoff-alarm-records 1..20, handoff-recycle-custody 1..7,
+    handoff-fire-recycle-custody 1..42, handoff-fire-inject 1..25, handoff-recycle-shell-flicker 1..3,
+    handoff-recycle-remote-resume 1..48, handoff-recycle-dead-escalates 1..7, cc-blockers-comms 1..15,
+    cc-blockers 1..107, cc-blockers-teammate-reap 1..9, handoff-fire-capacity-gate 1..52.
+  - Smoke-cut suites re-run after the last land: handoff-composer-gate 1..60, cc-eligible-history
+    1..16.
+  - U2's wide run over its scope: 1..793, with the 2 runner-cap timeouts green when uncapped.
+  - Bare `shellcheck` is green on every touched script.
+- **Live proof (DoD 3)**, scratch kitty os-windows the lead created and closed by id (153-158). No
+  operator pane was touched. Evidence: `/tmp/rk-e2e/{A,B,C}/evidence.txt`.
+  - **A, claim:** pane 154 logged `recycle-successor-staged`, then `recycle-successor-claimed` ("nothing
+    typed"), then `recycle-engaged`. There were **0** `recycle-type-attempt` rows. The predecessor's
+    close record carries `successor_claim`.
+  - **B, consumer off** (`CC_PANE_SUCCESSOR=off`): pane 155 used the typed fallback and wrote one UTC
+    `type-attempt` line per attempt to the watcher log, plus one `recycle-type-attempt` row each (2,
+    both `verdict=submitted`), then engaged.
+  - **C, typing forced to fail** (`HF_WATCHER_IT2` stub): pane 157 failed 16 typed attempts
+    (`send_rc=1`) and marked the recycle dead, wrote the packet `recycle-failed/04bfa0e6….json` and
+    `.prompt.md`, and painted the pane with the one relaunch command and the packet path.
+    `settle --recovery` resumed the original in window 158 via reso-resume-one, whose FIRST user
+    record is the packet prompt with its token. The inject child stood down (`injected_at` null). The
+    original then re-fired with `--recovery-of` (`refired_at` stamped), and that re-fire was delivered
+    BY CLAIM with nothing typed.
+  - First attempt, lesson recorded: a scratch window whose cwd is an untrusted folder stops at Claude
+    Code's workspace-trust dialog. Accepting it there made the session exit 1. Launch scratch probes
+    from an already-trusted directory.
+- **Filed:** `f61abdb39f2c` (needs-credential). It covers push-send's Pushover env, the one phone
+  consumer the existing rows `516d31862158` and `ee8eaa873f8a` did not name.
 
 - **U5 (added 2026-10-09 by the dispatched lead):** the originating lead's fresh-context review of the
   landed U1+U3 (`d1ccc37f5`) found 9 confirmed and 5 plausible defects
@@ -398,3 +456,5 @@ flaw 1).
 
 - 2026-10-09: filed by 80734d02 after workflow `wf_462dbffc-a38`. The operator re-fired the stranded brief
   by hand from window 134 → pane 138 (engaged 15:46Z), so no live recovery is owed.
+- 2026-10-09: COMPLETE. U1-U5 landed and live (final land `7c5256c54`), DoD items 1-4 met; see
+  "Completion" under Phase 0.
