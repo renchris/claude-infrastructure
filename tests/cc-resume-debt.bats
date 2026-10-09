@@ -23,6 +23,13 @@ setup() {
   export CC_RESUME_DEBT_DIR="$BATS_TEST_TMPDIR/debt"
   export CC_RESUME_DEBT_HOLD_S=0 CC_RESUME_DEBT_POLL_S=0 CC_RESUME_DEBT_GRACE_S=240
   export CC_RESUME_DEBT_WAIT_S=0 CC_RESUME_DEBT_NOW=1000
+  # The closer's kitty is recorded at open (lock key, kitty generation), so an operator shell's own
+  # kitty must not leak into a debt here. Every store the review fix-ups read is a fixture.
+  unset KITTY_PID KITTY_LISTEN_ON CC_TERM_KITTY_TO
+  export LR_LOCKS_DIR="$BATS_TEST_TMPDIR/locks" CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"
+  export CC_PENDING_LAUNCH_DIR="$BATS_TEST_TMPDIR/pending"
+  export CC_RESUME_DEBT_HANDOFFS_LOG="$BATS_TEST_TMPDIR/handoffs.jsonl"
+  export CC_RESUME_DEBT_KITTY_BIN="$BATS_TEST_TMPDIR/bin/kitty"
   # settle's --wait is its one WALL-CLOCK deadline (CC_RESUME_DEBT_NOW pins only the state machine),
   # and settle returns the moment the state decides — so a case that expects a DECIDED outcome gets a
   # ceiling it can never meet on a healthy box. `--wait 5` read rc 3 (undecided) at load ~150, where
@@ -41,7 +48,7 @@ st="$(head -1 "$T/find.seq" 2>/dev/null)"; st="${st:-DEAD}"
 if [ "$(wc -l < "$T/find.seq" 2>/dev/null || echo 0)" -gt 1 ]; then
   tail -n +2 "$T/find.seq" > "$T/find.seq.tmp" && mv "$T/find.seq.tmp" "$T/find.seq"
 fi
-printf '%s\t42\tnext3\t/cfg\t/wt\t%s\tidle\n' "$1" "$st"
+printf '%s\t%s\tnext3\t/cfg\t/wt\t%s\tidle\n' "${FIND_SID:-$1}" "${FIND_PANE:-42}" "$st"
 SH
   cat > "$S/relaunch" <<'SH'
 #!/usr/bin/env bash
@@ -54,9 +61,17 @@ printf '%s\n' "$*" >> "$T/backlog.log"
 [ "$1" = needs ] && printf 'filed\nabcdef012345\n'
 exit "${BACKLOG_RC:-0}"
 SH
+  # cc-notify: records argv, and prints the stderr verdict token the real one prints (bin/cc-notify).
   cat > "$S/notify" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$T/notify.log"
+printf 'cc-notify: verdict=%s enqueued=1 uuid=u-1\n' "${NOTIFY_VERDICT:-delivered}" >&2
+exit "${NOTIFY_RC:-0}"
+SH
+  cat > "$S/kitty" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$T/kitty.log"
+printf '%s' "${KITTY_LS_OUT:-}"
 SH
   cat > "$S/pane" <<'SH'
 #!/usr/bin/env bash
@@ -306,10 +321,11 @@ mk_packet() {
     token:$tok, refire_cmd:"bash /h/.claude/scripts/handoff-fire.sh --recycle --recovery-of \($tok)"}' > "$PKT"
   printf 'Your self-recycle FAILED. token %s\n' "$TOK" > "$PKD/$SID.prompt.md"
 }
-# [pane] — the find stub reports every row in pane 42, so the default 44 has NO successor in it.
+# [pane] [mode] — the find stub reports every row in pane 42, so the default 44 has NO successor in
+# it. A fresh-mode recycle's debt is --mode fresh (a NEW sid succeeds it); resume is the default.
 open_recovery_debt() { # a real cfg dir, so the transcript proof has somewhere to look
   CFGD="$T/cfg"; mkdir -p "$CFGD/projects/p"
-  "$BIN" open --sid "$SID" --cwd "$WT" --account next3 --cfg "$CFGD" --pane "${1:-44}" --by handoff-fire --why "recycle failed"
+  "$BIN" open --sid "$SID" --cwd "$WT" --account next3 --cfg "$CFGD" --pane "${1:-44}" --mode "${2:-resume}" --by handoff-fire --why "recycle failed"
 }
 transcript() { # <jsonl lines…>
   printf '%s\n' "$@" > "$CFGD/projects/p/$SID.jsonl"
@@ -362,8 +378,8 @@ transcript() { # <jsonl lines…>
   grep -q '^done abcdef012345' "$T/backlog.log"
 }
 
-@test "D4: a live successor holding the pane discharges a recovery debt" {
-  mk_packet; open_recovery_debt 42
+@test "D4: a live successor holding the pane discharges a fresh-mode recovery debt" {
+  mk_packet; open_recovery_debt 42 fresh
   "$BIN" settle --sid "$SID" --recovery "$PKT" --wait 0 >/dev/null 2>&1 || true
   printf 'LIVE\n' > "$T/find.seq"            # the pane read (42) reports a LIVE successor sid
   run "$BIN" step --sid "$SID"
@@ -376,21 +392,249 @@ transcript() { # <jsonl lines…>
   run "$BIN" settle --sid "$SID" --recovery "$PKT" --wait "$SETTLE_WAIT"
   [ "$(state)" = escalated ]
   ! grep -q -- '--page' "$T/notify.log" || { cat "$T/notify.log"; false; }
-  grep -q -- "^--from cc-resume-debt $SID STRANDED SESSION $SID .*recovery packet: $PKT" "$T/notify.log"
+  grep -qx -- "--from cc-resume-debt $SID STRANDED SESSION $SID — the recovery of its failed recycle was not proven; recovery packet: $PKT" "$T/notify.log"
   grep -q -- "^needs Re-fire the failed recycle of session $SID .*packet $PKT; re-fire: bash /h/.claude/scripts/handoff-fire.sh --recycle --recovery-of $TOK" "$T/backlog.log"
   grep -q -- "--run bash /h/.claude/scripts/handoff-fire.sh --recycle --recovery-of $TOK  # recovery packet: $PKT\$" "$T/backlog.log"
 }
 
-@test "D4: H(sid)>0 deferrals are counted — the MAX_DEFER-th becomes a failed attempt, then escalates" {
-  open_recovery_debt
+held() { # H(sid) = 1 for every sid
   printf 'lr_holder_count() { echo 1; }\n' > "$T/lr-lib-held.sh"
-  export CC_RESUME_DEBT_LR_LIB="$T/lr-lib-held.sh" CC_RESUME_DEBT_GRACE_S=0 CC_RESUME_DEBT_MAX_DEFER=3
-  "$BIN" step --sid "$SID"; "$BIN" step --sid "$SID"
-  [ "$(state)" = open ] && [ "$(jq -r .deferrals "$CC_RESUME_DEBT_DIR/meta/$SID.json")" = 2 ] || false
-  "$BIN" step --sid "$SID"
+  export CC_RESUME_DEBT_LR_LIB="$T/lr-lib-held.sh"
+}
+meta() { jq -r "$1" "$CC_RESUME_DEBT_DIR/meta/$SID.json"; }
+
+@test "D4: H(sid)>0 deferrals are counted — MAX_DEFER of them spanning DEFER_SPAN_S become a failed attempt, then escalate" {
+  open_recovery_debt; held
+  export CC_RESUME_DEBT_GRACE_S=0 CC_RESUME_DEBT_MAX_DEFER=3 CC_RESUME_DEBT_DEFER_SPAN_S=600
+  CC_RESUME_DEBT_NOW=1000 "$BIN" step --sid "$SID"; CC_RESUME_DEBT_NOW=1300 "$BIN" step --sid "$SID"
+  [ "$(state)" = open ] && [ "$(meta .deferrals)" = 2 ] || false
+  CC_RESUME_DEBT_NOW=1600 "$BIN" step --sid "$SID"
   [ "$(state)" = retrying ] || { cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }
   [ "$(jq -r .relaunch_rc "$CC_RESUME_DEBT_DIR/meta/$SID.json")" = 75 ]
   [ ! -f "$T/relaunch.log" ]                 # never launched beside a live holder
   "$BIN" step --sid "$SID"
   [ "$(state)" = escalated ]
+}
+
+# ── review fix-ups (u1u3-review-2026-10-09) ────────────────────────────────────────────────────────
+@test "PLAUSIBLE A: a transient holder inside settle's poll is NOT a permanent escalation — the relaunch still runs" {
+  open_debt
+  # H(sid)=1 for the first 5 reads, then 0: a launch lock mid-handover, seen by settle's 5 s poll
+  printf 'lr_holder_count() { local n; n=$(cat "%s/hc" 2>/dev/null || echo 0); echo $((n + 1)) > "%s/hc"; if [ "$n" -lt 5 ]; then echo 1; else echo 0; fi; }\n' \
+    "$T" "$T" > "$T/lr-lib-transient.sh"
+  export CC_RESUME_DEBT_LR_LIB="$T/lr-lib-transient.sh" CC_RESUME_DEBT_MAX_DEFER=3
+  run "$BIN" settle --sid "$SID" --wait "$SETTLE_WAIT"
+  [ "$(meta .deferrals)" = 5 ] || { cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }   # all at one clock
+  [ "$(lines "$T/relaunch.log" "$SID")" = 1 ] || { cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }
+  [ "$(meta .relaunch_rc)" = 0 ]             # a real attempt, never the counted-deferral rc 75
+}
+
+# A recycle lock for pane 44, keyed the way handoff-fire keys it, held by a LIVE pid (this shell).
+recycle_lock() { # <key prefix>
+  local sum d; sum="$(printf '%s' "$1:44" | shasum -a 1 | cut -c1-40)"
+  d="$LR_LOCKS_DIR/pane-$sum.recycle"; mkdir -p "$d"
+  printf '{"pid":%s,"lstart":"%s"}\n' "$$" "$(TZ=UTC LC_ALL=C ps -o lstart= -p $$ | tr -s ' ' | sed 's/^ *//; s/ *$//')" > "$d/holder"
+  RLOCK="$d"
+}
+
+@test "ORDERING (a): the sweep defers, uncounted, while the pane's recycle watcher is alive — keyed by the closer's kitty" {
+  recycle_lock unix:/tmp/kitty-777
+  CC_TERM_KITTY_TO=unix:/tmp/kitty-777 "$BIN" open --sid "$SID" --cwd "$WT" --account next3 --pane 44 --mode fresh --by "handoff-fire --recycle"
+  [ "$(meta .kitty_to)" = unix:/tmp/kitty-777 ]
+  export CC_RESUME_DEBT_NOW=5000             # far past GRACE; the sweep has no kitty env of its own
+  run "$BIN" sweep
+  [ "$output" = "$SID open" ] || { echo "$output"; cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }
+  [ ! -f "$T/relaunch.log" ]
+  [ "$(meta '.deferrals // 0')" = 0 ]        # not counted toward MAX_DEFER
+  meta '.events[-1].note' | grep -q 'recycle watcher is alive on pane 44'
+  rm -f "$RLOCK/holder"; rmdir "$RLOCK"      # the watcher is gone
+  run "$BIN" sweep
+  [ "$output" = "$SID retrying" ] || { echo "$output"; false; }
+  [ "$(lines "$T/relaunch.log" "$SID")" = 1 ]
+}
+
+@test "ORDERING (a): settle is NOT deferred by a live recycle lock (its caller is the watcher)" {
+  recycle_lock iterm2
+  "$BIN" open --sid "$SID" --cwd "$WT" --account next3 --pane 44 --mode fresh --by "handoff-fire --recycle"
+  run "$BIN" settle --sid "$SID" --wait "$SETTLE_WAIT"
+  [ "$(lines "$T/relaunch.log" "$SID")" = 1 ] || { cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }
+}
+
+@test "ORDERING (a): a recycle lock that never clears stops deferring after RECYCLE_WAIT_S" {
+  recycle_lock iterm2
+  "$BIN" open --sid "$SID" --cwd "$WT" --account next3 --pane 44 --mode fresh --by t
+  CC_RESUME_DEBT_NOW=5000 "$BIN" step --sid "$SID"
+  [ "$(state)" = open ]
+  CC_RESUME_DEBT_NOW=6800 "$BIN" step --sid "$SID"
+  [ "$(state)" = retrying ] || { cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }
+}
+
+@test "ORDERING (b): settle --recovery on a LIVE original mails the packet prompt ONCE and waits, never escalating in ~15 s" {
+  mk_packet; open_recovery_debt; held
+  run "$BIN" settle --sid "$SID" --recovery "$PKT" --wait 2
+  [ "$status" -eq 3 ] || { echo "status $status"; cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }
+  [ "$(state)" = open ]
+  [ ! -f "$T/backlog.log" ] && [ ! -f "$T/relaunch.log" ] || false
+  [ "$(wc -l < "$T/notify.log" | tr -d ' ')" = 1 ]
+  grep -qx -- "--from cc-resume-debt $SID Your self-recycle FAILED. token $TOK" "$T/notify.log"
+  [ -n "$(jq -r '.mailed_at // empty' "$PKT")" ] || { cat "$PKT"; false; }
+  [ "$(meta .mail_verdict)" = reached ]
+  # mailbox-drain delivers it as an ATTACHMENT record; the original answers — that is the proof
+  transcript '{"type":"attachment","attachment":{"type":"hook_additional_context","content":["Your self-recycle FAILED. token '"$TOK"'"]}}' \
+             '{"type":"assistant","message":{"content":"Re-firing the recycle."}}'
+  run "$BIN" step --sid "$SID"
+  [ "$(state)" = proven ] || { cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }
+  [ "$(wc -l < "$T/notify.log" | tr -d ' ')" = 1 ]
+}
+
+@test "ORDERING (b): a mailed packet unanswered for MAIL_WAIT_S is a failed attempt, then escalates" {
+  mk_packet; open_recovery_debt; held
+  export CC_RESUME_DEBT_MAIL_WAIT_S=600
+  "$BIN" settle --sid "$SID" --recovery "$PKT" --wait 0 >/dev/null 2>&1 || true
+  [ "$(meta .mailed_epoch)" = 1000 ]
+  CC_RESUME_DEBT_NOW=1599 "$BIN" step --sid "$SID"
+  [ "$(state)" = open ]
+  CC_RESUME_DEBT_NOW=1600 "$BIN" step --sid "$SID"
+  [ "$(state)" = retrying ] || { cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }
+  [ "$(meta .relaunch_rc)" = 75 ]
+  "$BIN" step --sid "$SID"
+  [ "$(state)" = escalated ]
+  [ "$(lines "$T/notify.log" 'Your self-recycle FAILED')" = 1 ]   # mailed once, never again
+}
+
+@test "item 3: a RESUME-mode recovery debt is proven by the SAME sid LIVE in its recorded pane" {
+  mk_packet; open_recovery_debt 44
+  [ "$(meta .mode)" = resume ]
+  "$BIN" settle --sid "$SID" --recovery "$PKT" --wait 0 >/dev/null 2>&1 || true
+  printf 'LIVE\n' > "$T/find.seq"
+  FIND_SID="$SID" FIND_PANE=44 run "$BIN" step --sid "$SID"
+  [ "$(state)" = proven ] || { cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }
+  meta '.events[-1].note' | grep -q 'same session LIVE in its recorded pane 44'
+}
+
+@test "item 3 control: the same sid LIVE in ANOTHER pane is still not proof (the 2026-10-09 false proof)" {
+  mk_packet; open_recovery_debt 44
+  "$BIN" settle --sid "$SID" --recovery "$PKT" --wait 0 >/dev/null 2>&1 || true
+  printf 'LIVE\n' > "$T/find.seq"
+  FIND_SID="$SID" FIND_PANE=42 run "$BIN" step --sid "$SID"
+  [ "$(state)" != proven ] || false
+}
+
+@test "item 5: the packet's refired_at discharges a recovery debt, even escalated" {
+  mk_packet; open_recovery_debt
+  "$BIN" settle --sid "$SID" --recovery "$PKT" --wait "$SETTLE_WAIT" >/dev/null 2>&1 || true
+  [ "$(state)" = escalated ]
+  jq '.refired_at = "2026-10-09T06:00:00Z"' "$PKT" > "$PKT.t" && mv "$PKT.t" "$PKT"
+  run "$BIN" step --sid "$SID"
+  [ "$(state)" = proven ] || { cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }
+  meta '.events[-1].note' | grep -q 'refired_at'
+}
+
+@test "item 5: a recycle-engaged row with prev_sid = the debt's sid AFTER failed_at discharges; one before it does not" {
+  mk_packet; open_recovery_debt
+  "$BIN" settle --sid "$SID" --recovery "$PKT" --wait "$SETTLE_WAIT" >/dev/null 2>&1 || true
+  [ "$(state)" = escalated ]
+  { printf '{"ts":"2026-10-09T05:00:00Z","class":"recycle-engaged","engaged":true,"target_pane":"44","prev_sid":"%s"}\n' "$SID"
+    printf '{"truncated\n'; } > "$CC_RESUME_DEBT_HANDOFFS_LOG"
+  "$BIN" step --sid "$SID"
+  [ "$(state)" = escalated ]                  # before failed_at (05:31): the failed recycle's own history
+  printf '{"ts":"2026-10-09T05:40:00Z","class":"recycle-engaged","engaged":true,"target_pane":"91","prev_sid":"%s"}\n' "$SID" >> "$CC_RESUME_DEBT_HANDOFFS_LOG"
+  run "$BIN" step --sid "$SID"
+  [ "$(state)" = proven ] || { cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }
+}
+
+@test "item 5: a tokenless packet falls back to the plain proof (LIVE twice discharges)" {
+  mk_packet; open_recovery_debt
+  jq '.token = ""' "$PKT" > "$PKT.t" && mv "$PKT.t" "$PKT"
+  "$BIN" settle --sid "$SID" --recovery "$PKT" --wait 0 >/dev/null 2>&1 || true
+  printf 'LIVE\n' > "$T/find.seq"
+  run "$BIN" step --sid "$SID"
+  [ "$(state)" = proven ] || { cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }
+}
+
+@test "item 1(d): one malformed transcript line does not zero the token-answered proof" {
+  mk_packet; open_recovery_debt
+  "$BIN" settle --sid "$SID" --recovery "$PKT" --wait 0 >/dev/null 2>&1 || true
+  transcript '{"type":"user","message":{"content":"cut mid-wri' \
+             '{"type":"user","message":{"role":"user","content":"token '"$TOK"'"}}' \
+             '{"type":"assistant","message":{"content":"Re-firing."}}'
+  run "$BIN" step --sid "$SID"
+  [ "$(state)" = proven ] || { cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }
+}
+
+@test "item 8: a mailbox-only enqueue is recorded as mailbox-only, never reached" {
+  open_debt
+  NOTIFY_VERDICT=mailbox-only run "$BIN" settle --sid "$SID" --wait "$SETTLE_WAIT"
+  [ "$(state)" = escalated ]
+  [ "$(meta .page_verdict)" = mailbox-only ] || { cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }
+}
+
+@test "item 8: a recovery escalation's mail names the packet and orders no second re-fire" {
+  mk_packet; open_recovery_debt
+  run "$BIN" settle --sid "$SID" --recovery "$PKT" --wait "$SETTLE_WAIT"
+  [ "$(state)" = escalated ]
+  grep -q "recovery packet: $PKT" "$T/notify.log"
+  ! grep -q 'run:' "$T/notify.log" || { cat "$T/notify.log"; false; }
+  ! grep -q 'cc-do' "$T/notify.log" || false
+}
+
+@test "PLAUSIBLE B: a successor in the same window id of ANOTHER kitty does not discharge a fresh debt" {
+  mkdir -p "$CC_REGISTRY_DIR"
+  KITTY_PID=111 "$BIN" open --sid "$SID" --cwd "$WT" --account next3 --pane 42 --mode fresh --by t
+  [ "$(meta .kitty_pid)" = 111 ]
+  printf '{"session_id":"other","kitty_pid":222}\n' > "$CC_REGISTRY_DIR/42.json"   # kitty restarted
+  printf 'DEAD\nLIVE\n' > "$T/find.seq"
+  "$BIN" step --sid "$SID"
+  [ "$(state)" = open ] || { cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }
+  printf '{"session_id":"other","kitty_pid":111}\n' > "$CC_REGISTRY_DIR/42.json"   # control: same kitty
+  printf 'DEAD\nLIVE\n' > "$T/find.seq"
+  "$BIN" step --sid "$SID"
+  [ "$(state)" = proven ]
+}
+
+@test "PLAUSIBLE B: with no KITTY_PID at open, the closed sid's own registry row supplies the generation" {
+  mkdir -p "$CC_REGISTRY_DIR"
+  printf '{"session_id":"%s","kitty_pid":333}\n' "$SID" > "$CC_REGISTRY_DIR/42.json"
+  "$BIN" open --sid "$SID" --cwd "$WT" --account next3 --pane 42 --mode fresh --by t
+  [ "$(meta .kitty_pid)" = 333 ]
+}
+
+pending_marker() { # <launched_at>
+  mkdir -p "$CC_PENDING_LAUNCH_DIR"
+  printf '{"token":"brl-1-2-3","launched_at":%s,"acct":"next3","cwd":"%s","kitty_to":"unix:/tmp/kitty-9"}\n' "$1" "$WT" \
+    > "$CC_PENDING_LAUNCH_DIR/$SID.json"
+}
+
+@test "item 2: an indeterminate relaunch (rc 6) waits on its marker and is treated as live once its window appears" {
+  open_debt
+  RELAUNCH_RC=6 CC_RESUME_DEBT_NOW=1240 "$BIN" step --sid "$SID"
+  [ "$(state)" = retrying ] || { cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }
+  [ "$(meta .relaunch_rc)" = 6 ]
+  pending_marker 1240                        # what boot-resume-launch leaves behind on its exit 6
+  CC_RESUME_DEBT_NOW=1300 "$BIN" step --sid "$SID"
+  [ "$(state)" = retrying ] || { cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }   # not escalated
+  [ ! -f "$T/backlog.log" ]
+  grep -q -- '@ --to unix:/tmp/kitty-9 ls --match env:CC_LAUNCH_TOKEN=brl-1-2-3' "$T/kitty.log"
+  export CC_RESUME_DEBT_WAIT_S=100000
+  KITTY_LS_OUT='[{"tabs":[{"windows":[{"id":134,"env":{"CC_LAUNCH_TOKEN":"brl-1-2-3"}}]}]}]' \
+    CC_RESUME_DEBT_NOW=1500 "$BIN" step --sid "$SID"
+  [ ! -f "$CC_PENDING_LAUNCH_DIR/$SID.json" ]
+  [ "$(state)" = retrying ] || { cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }
+  [ "$(meta .relaunch_rc)" = 0 ]
+  [ "$(lines "$T/relaunch.log" "$SID")" = 1 ]
+}
+
+@test "item 2: a marker older than PENDING_TTL_S with no window is removed and the normal relaunch follows" {
+  open_debt
+  RELAUNCH_RC=6 CC_RESUME_DEBT_NOW=1240 "$BIN" step --sid "$SID"
+  pending_marker 1240
+  CC_RESUME_DEBT_NOW=2139 "$BIN" step --sid "$SID"
+  [ -f "$CC_PENDING_LAUNCH_DIR/$SID.json" ] && [ "$(state)" = retrying ] || false   # 899 s: still waiting
+  CC_RESUME_DEBT_NOW=2140 "$BIN" step --sid "$SID"   # lost: reopened, and the same step relaunches
+  [ ! -f "$CC_PENDING_LAUNCH_DIR/$SID.json" ]
+  meta '.events | map(.note) | any(test("presumed lost, relaunch allowed"))' | grep -qx true
+  [ "$(state)" = retrying ] || { cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }
+  [ "$(meta .relaunch_rc)" = 0 ]
+  [ "$(lines "$T/relaunch.log" "$SID")" = 2 ]
+  [ ! -f "$T/backlog.log" ]
 }

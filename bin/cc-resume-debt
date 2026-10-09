@@ -21,12 +21,16 @@
 # (rewritten via temp + mv, never partially):
 #   {sid, marker, pane, cfg, account, cwd, by, why, opened_epoch, state, attempts, attempt_epoch,
 #    relaunch_rc, backlog_id, page_verdict, events:[{epoch,state,note}]}
-#   plus, when present: recovery (packet path) and deferrals (H(sid)>0 deferral count).
+#   plus, when present: recovery (packet path), deferrals + first_defer_epoch (H(sid)>0 deferrals),
+#   mailed_epoch (packet prompt mailed to a live original), recycle_wait_epoch (first deferral to a
+#   live recycle watcher), and the closer's kitty_to / kitty_listen_on / kitty_pid.
 #   state ∈ open | retrying | escalated | proven | abandoned
 #
 # STATE MACHINE (one transition per `step`, under a per-sid mkdir lock):
 #   proven | abandoned                         → nothing
 #   any other state, proof holds               → discharge (proven)
+#   a pending-launch marker still young        → nothing (an indeterminate launch may yet arrive)
+#   open, a recycle watcher alive on its pane  → nothing, sweep only (the recycle is not over)
 #   open, age ≥ GRACE (or settle's --now)      → relaunch, retrying
 #   retrying, relaunch rc≠0 or WAIT elapsed    → escalate (backlog row + mailbox), escalated
 #   escalated                                  → nothing new (latched); a later proof still discharges
@@ -38,7 +42,9 @@
 #   3 undecided / store or enumerator failure · 4 settle ended on an abandoned debt.
 #
 # Env seams: CC_RESUME_DEBT_{DIR,CUSTODY_BIN,RESOLVE_BIN,FIND_BIN,PANE_BIN,BACKLOG_BIN,NOTIFY_BIN,
-#   RELAUNCH,NOW,HOLD_S,GRACE_S,WAIT_S,POLL_S,LOCK_STALE_S,MAX_DEFER}.
+#   RELAUNCH,NOW,HOLD_S,GRACE_S,WAIT_S,POLL_S,LOCK_STALE_S,MAX_DEFER,DEFER_SPAN_S,MAIL_WAIT_S,
+#   RECYCLE_WAIT_S,RECYCLE_PENDING_LIB,HANDOFFS_LOG,KITTY_BIN,PENDING_TTL_S}, CC_PENDING_LAUNCH_DIR
+#   (boot-resume-launch's indeterminate-launch markers) and CC_REGISTRY_DIR (the pane registry).
 #   CC_RESUME_DEBT_RELAUNCH is a command PREFIX and is word-split on purpose (default
 #   `bash <repo>/scripts/boot-resume-launch.sh`); <account> <cwd> <sid> are appended, then
 #   `--prompt-file <packet>.prompt.md` for a recovery debt.
@@ -48,8 +54,9 @@
 # TAKEOVER (LIMIT_RECOVER_FLEET_V2_ARCHITECTURE.md §C10 "Relaunch"). A relaunch types a resume, so
 # it is a typer like every other: it runs only when the reconciler fence says act, under the
 # per-sid launch lock, and only while H(sid) — the live holders of the session — is empty. A
-# deferral leaves the debt state as it is and records one `deferred` event; the MAX_DEFER-th
-# H(sid)>0 deferral counts as a failed attempt. The launcher child inherits LR_LAUNCH_LOCK, so
+# deferral leaves the debt state as it is and records one `deferred` event; H(sid)>0 deferrals count
+# as a failed attempt only once there are MAX_DEFER of them spanning DEFER_SPAN_S, and a recovery
+# debt's live original is mailed its packet instead (see _relaunch). The launcher child inherits LR_LAUNCH_LOCK, so
 # boot-resume-launch acts under this lock rather than deferring to it. Every retry is a new window
 # (the in-pane branch was dead and is removed; see above _relaunch).
 set -uo pipefail
@@ -88,6 +95,13 @@ GRACE_S="$(_num "${CC_RESUME_DEBT_GRACE_S:-}" 240)"
 WAIT_S="$(_num "${CC_RESUME_DEBT_WAIT_S:-}" 180)"
 POLL_S="$(_num "${CC_RESUME_DEBT_POLL_S:-}" 5)"
 LOCK_STALE_S="$(_num "${CC_RESUME_DEBT_LOCK_STALE_S:-}" 300)"
+MAIL_WAIT_S="$(_num "${CC_RESUME_DEBT_MAIL_WAIT_S:-}" 600)"
+RECYCLE_WAIT_S="$(_num "${CC_RESUME_DEBT_RECYCLE_WAIT_S:-}" 1800)"
+PENDING_TTL_S="$(_num "${CC_RESUME_DEBT_PENDING_TTL_S:-}" 900)"
+PENDING="${CC_PENDING_LAUNCH_DIR:-$HOME/.claude/autonomy/pending-launch}"
+HANDOFFS_LOG="${CC_RESUME_DEBT_HANDOFFS_LOG:-$HOME/.claude/logs/handoffs.jsonl}"
+KITTY_BIN="${CC_RESUME_DEBT_KITTY_BIN:-kitty}"
+REG_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
 META="$DIR/meta"; LOCKS="$DIR/lock"; LOGS="$DIR/log"
 
 _now() { printf '%s' "${CC_RESUME_DEBT_NOW:-$(date +%s)}"; }
@@ -149,9 +163,31 @@ _prove() { # <sid> <hold>
 # its own proof can never pass. Its debt is also discharged by a LIVE successor holding the pane the
 # close happened in (`cc-find <pane>`, a sid other than the closed one) — without this, a watcher
 # that died after a good relaunch would leave the sweep to resume the old sid beside its successor.
+#
+# A KITTY WINDOW ID IS NOT A PANE ACROSS KITTY RESTARTS: ids restart at 1, so after a restart "a live
+# session in window 44" may be an unrelated session in a NEW kitty's window 44. cc-find does not
+# report the kitty generation, but the registry row it joins on (<pane>.json) carries kitty_pid, and
+# the debt records the closer's own (KITTY_PID at open). Both known and different ⇒ another kitty,
+# not a successor. Either one unknown keeps the pane-id-only reading this proof always had.
+_same_kitty() { # <sid> <pane> → rc 1 only when both kitty generations are known and differ
+  local want got
+  want="$(_get "$1" kitty_pid)"
+  got="$(jq -r '.kitty_pid // "" | tostring' "$REG_DIR/$2.json" 2>/dev/null)"
+  case "$want" in ''|*[!0-9]*) return 0 ;; esac
+  case "$got" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$want" = "$got" ]
+}
 _successor_once() { # <closed sid> <pane>
   local out; out="$("$FIND" "$2" 2>/dev/null)" || true
-  awk -F'\t' -v s="$1" -v p="$2" '$2 == p && $1 != s && $6 == "LIVE" { f = 1 } END { exit !f }' <<<"$out"
+  awk -F'\t' -v s="$1" -v p="$2" '$2 == p && $1 != s && $6 == "LIVE" { f = 1 } END { exit !f }' <<<"$out" \
+    && _same_kitty "$1" "$2"
+}
+# A RESUME-mode recycle relaunches the SAME sid into the same pane, so its success looks like the
+# closed sid LIVE in its recorded pane — which _successor_once (a DIFFERENT sid) can never see.
+_same_in_pane_once() { # <sid> <pane>
+  local out; out="$("$FIND" "$1" 2>/dev/null)" || true
+  awk -F'\t' -v s="$1" -v p="$2" '$1 == s && $2 == p && $6 == "LIVE" { f = 1 } END { exit !f }' <<<"$out" \
+    && _same_kitty "$1" "$2"
 }
 # A RECOVERY debt (settle --recovery <packet>, RECYCLE_KEYSTROKELESS_DELIVERY §D4) is a failed
 # recycle's original. LIVE alone proved nothing on 2026-10-09: the original was resumed with no
@@ -167,38 +203,79 @@ _transcript() { # <sid> → the newest <cfg>/projects/*/<sid>.jsonl, if any
   done
   [ -n "$best" ] && printf '%s' "$best"
 }
-_token_answered() { # <sid> <token> — rc 0 when a user record carries the token and an assistant record follows it
+# The token may arrive as a USER record (a launch-argument prompt) or as an ATTACHMENT record (hook
+# additionalContext: recycle-failed-inject at SessionStart, or mailbox-drain delivering the packet
+# _relaunch mailed to a live original). Either, followed by an assistant record, is an answer. Lines
+# are parsed one by one (`fromjson? // empty`): with `jq -n inputs`, ONE malformed line — a record
+# cut mid-write — failed the whole parse, and the proof could never pass.
+_token_answered() { # <sid> <token> — rc 0 when a user/attachment record carries the token and an assistant record follows it
   local t
   [ -n "$2" ] || return 1
   t="$(_transcript "$1")" || return 1
   grep -qF -- "$2" "$t" 2>/dev/null || return 1   # cheap pre-filter; transcripts reach tens of MB
   # shellcheck disable=SC2016  # jq program
-  jq -n --arg tok "$2" 'reduce (inputs | select(type == "object")) as $r ({u: false, a: false};
-      if (.u | not) and $r.type == "user" and (($r.message // "") | tostring | contains($tok)) then .u = true
+  jq -nR --arg tok "$2" 'reduce (inputs | (fromjson? // empty) | select(type == "object")) as $r ({u: false, a: false};
+      if (.u | not) and ($r.type == "user" or $r.type == "attachment")
+         and ((($r.message // "") | tostring | contains($tok)) or (($r.attachment // "") | tostring | contains($tok))) then .u = true
       elif .u and $r.type == "assistant" then .a = true else . end) | .a' "$t" 2>/dev/null | grep -qx true
 }
+_pkt_field() { # <packet> <field> → the field, or nothing (an unparseable packet reads as no field)
+  jq -r --arg f "$2" 'if type == "object" then (.[$f] // "" | tostring) else "" end' "$1" 2>/dev/null
+}
+# THE RE-FIRE IS A PROOF TOO (review item 5). A recovery debt is settled the moment someone re-fires
+# the failed recycle — the original after reading its packet, the operator's cc-do of the row's
+# refire_cmd, from any pane — and that re-fire owns its own debt from then on. Without this, a re-fire
+# in another pane left the recovery debt escalated forever. Two signs: the packet's refired_at (the
+# re-fire stamps it), or a recycle-engaged row in handoffs.jsonl whose prev_sid is this sid, written
+# after the packet's failed_at (before the failure, an engaged row is the failed recycle's history).
+_refired() { # <sid> <packet>
+  local since
+  [ -n "$(_pkt_field "$2" refired_at)" ] && { _PROOF="the recycle was re-fired (packet refired_at)"; return 0; }
+  [ -f "$HANDOFFS_LOG" ] || return 1
+  since="$(_pkt_field "$2" failed_at)"; [ -n "$since" ] || since="$(_utc "$(_get "$1" opened_epoch)")"
+  # shellcheck disable=SC2016  # jq program
+  grep -F '"recycle-engaged"' "$HANDOFFS_LOG" 2>/dev/null | grep -F -- "$1" \
+    | jq -nR --arg s "$1" --arg t "$since" 'any(inputs | (fromjson? // empty) | select(type == "object");
+        .class == "recycle-engaged" and .engaged == true and .prev_sid == $s and ((.ts // "") >= $t))' 2>/dev/null \
+    | grep -qx true || return 1
+  _PROOF="the recycle was re-fired (a recycle-engaged row with prev_sid $1 after $since)"
+}
+# _prove_debt sets _PROOF to the proof that held; _step records it as the discharge note.
+_PROOF=""
 _prove_debt() { # <sid> <hold> — the proof a debt's mode admits
-  local pane pkt tok
-  pkt="$(_get "$1" recovery)"
-  if [ -n "$pkt" ]; then
-    tok="$(jq -r '.token // ""' "$pkt" 2>/dev/null)"
-    _token_answered "$1" "$tok" && return 0
-    pane="$(_get "$1" pane)"; [ -n "$pane" ] || return 1
+  local pane pkt tok mode
+  pkt="$(_get "$1" recovery)"; tok=""
+  [ -n "$pkt" ] && tok="$(_pkt_field "$pkt" token)"
+  pane="$(_get "$1" pane)"; mode="$(_get "$1" mode)"
+  # A recovery debt whose packet is gone, unparseable or tokenless has nothing stricter to prove
+  # against, so it falls through to the plain proof below rather than staying unprovable.
+  if [ -n "$tok" ]; then
+    _token_answered "$1" "$tok" && { _PROOF="proven: recovery token answered"; return 0; }
+    _refired "$1" "$pkt" && return 0
+    [ -n "$pane" ] || return 1
+    if [ "$mode" = resume ]; then
+      _same_in_pane_once "$1" "$pane" || return 1
+      [ "$2" -gt 0 ] && sleep "$2"
+      _same_in_pane_once "$1" "$pane" || return 1
+      _PROOF="proven: the same session LIVE in its recorded pane $pane (resume-mode recycle)"; return 0
+    fi
     _successor_once "$1" "$pane" || return 1
     [ "$2" -gt 0 ] && sleep "$2"
-    _successor_once "$1" "$pane"; return
+    _successor_once "$1" "$pane" || return 1
+    _PROOF="proven: a live successor holds pane $pane"; return 0
   fi
-  _prove "$1" "$2" && return 0
-  [ "$(_get "$1" mode)" = fresh ] || return 1
-  pane="$(_get "$1" pane)"; [ -n "$pane" ] || return 1
+  _prove "$1" "$2" && { _PROOF="proven LIVE by cc-find"; return 0; }
+  [ "$mode" = fresh ] || return 1
+  [ -n "$pane" ] || return 1
   _successor_once "$1" "$pane" || return 1
   [ "$2" -gt 0 ] && sleep "$2"
-  _successor_once "$1" "$pane"
+  _successor_once "$1" "$pane" || return 1
+  _PROOF="proven: a live successor holds pane $pane"
 }
 
 # ── verbs ───────────────────────────────────────────────────────────────────────────────────────
 _open() {
-  local cur marker now ccwd key val
+  local cur marker now ccwd key val kpid
   [ -n "$SID" ] || _die "open needs --sid"
   if [ -f "$(_meta "$SID")" ] && _active "$(_get "$SID" state)"; then
     _get "$SID" marker; return 0
@@ -217,10 +294,19 @@ EOF
   now="$(_now)"; marker="resume:$SID:$now"
   mkdir -p "$META" 2>/dev/null || _die "cannot create $META" 3
   cur="$(_meta "$SID")"
+  # The closer's kitty, captured here because `open` runs in the closer's environment and the sweep
+  # (launchd) has none: kitty_to/kitty_listen_on key the recycle lock (_recycle_wait), kitty_pid is
+  # the kitty generation (_same_kitty). Without KITTY_PID, the closed sid's own registry row has it.
+  kpid="${KITTY_PID:-}"
+  if [ -z "$kpid" ] && [ -n "$PANE_ID" ] \
+     && [ "$(jq -r '.session_id // ""' "$REG_DIR/$PANE_ID.json" 2>/dev/null)" = "$SID" ]; then
+    kpid="$(jq -r '.kitty_pid // "" | tostring' "$REG_DIR/$PANE_ID.json" 2>/dev/null)"
+  fi
   jq -n --arg sid "$SID" --arg marker "$marker" --arg pane "$PANE_ID" --arg cfg "$CFG" \
     --arg account "$ACCOUNT" --arg cwd "$CWD" --arg by "$BY" --arg why "$WHY" --arg e "$now" \
-    --arg mode "$MODE" \
+    --arg mode "$MODE" --arg kto "${CC_TERM_KITTY_TO:-}" --arg klo "${KITTY_LISTEN_ON:-}" --arg kpid "$kpid" \
     '{sid:$sid, marker:$marker, pane:$pane, mode:$mode, cfg:$cfg, account:$account, cwd:$cwd, by:$by, why:$why,
+      kitty_to:$kto, kitty_listen_on:$klo, kitty_pid:$kpid,
       opened_epoch:($e|tonumber), state:"open", attempts:0, attempt_epoch:0, relaunch_rc:null,
       backlog_id:"", page_verdict:"", events:[{epoch:($e|tonumber), state:"open", note:("opened by "+$by)}]}' \
     > "$cur.tmp.$$" && mv -f "$cur.tmp.$$" "$cur" || _die "meta write failed" 3
@@ -307,14 +393,76 @@ _holders() { # <sid> → H(sid) on stdout; rc 1 when lr-lib is unreachable (the 
 # by the pane-successor consumer (lib/pane-successor.sh, run by the pane's own shell), not typed
 # into from here. Every retry is a new window, with the same sid.
 
-# Deferrals on H(sid)>0 are COUNTED (§D4). A recovery debt is not discharged by liveness, so an
-# original that is alive but never read its packet keeps one holder forever, and an uncounted
-# deferral would leave its debt open and silent. The MAX_DEFER-th deferral is recorded as a failed
-# attempt (relaunch_rc 75), and the next step escalates it.
+# Deferrals on H(sid)>0 are COUNTED (§D4), so a debt cannot stay open and silent behind a holder
+# forever — but counted by TIME as well as by number. Counted by number alone, settle's 5 s poll
+# turned a 15 s transient holder (a launch lock mid-handover) into a permanent escalation with no
+# relaunch ever tried. A deferral becomes a failed attempt (relaunch_rc 75, and the next step
+# escalates) only once there have been MAX_DEFER of them AND the first is DEFER_SPAN_S old.
 MAX_DEFER="$(_num "${CC_RESUME_DEBT_MAX_DEFER:-}" 3)"
+DEFER_SPAN_S="$(_num "${CC_RESUME_DEBT_DEFER_SPAN_S:-}" 600)"
+
+_pkt_stamp() { # <packet> <field> — temp + mv, never in place; best-effort
+  local tmp="$1.tmp.$$"
+  if jq --arg f "$2" --arg v "$(date -u +%FT%TZ)" '.[$f] = $v' "$1" > "$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$1" 2>/dev/null || rm -f "$tmp"
+  else
+    rm -f "$tmp"
+  fi
+}
+_notify_verdict() { # <stderr file> <rc> → page_verdict, read from cc-notify's own stderr token
+  local v
+  v="$(sed -n 's/.*cc-notify: verdict=\([a-z-]*\).*/\1/p' "$1" 2>/dev/null | tail -1)"
+  if [ "$2" -ne 0 ]; then printf 'refused-rc%s%s' "$2" "${v:+ ($v)}"; return 0; fi
+  case "$v" in
+    delivered) printf reached ;;
+    '') printf 'enqueued-unverified' ;;   # rc 0 with no verdict token: enqueued, delivery unknown
+    *) printf '%s' "$v" ;;                # mailbox-only, unverified, degraded … recorded as said
+  esac
+}
+
+# A RECOVERY DEBT'S ORIGINAL IS ALIVE (review ORDERING (b)). Relaunching beside it would be a second
+# writer, and counting the deferral escalated it ~15 s into settle although the original was right
+# there to be told. So the packet's prompt goes to the original's OWN mailbox, once (mailed_epoch in
+# the debt, mailed_at in the packet), and the debt waits for the token-answered proof. MAIL_WAIT_S
+# after the mail with no answer — or a mail that could not be sent — is a failed attempt, and the
+# next step escalates as before.
+_mail_original() { # <sid> <H(sid)> — always rc 1 (the relaunch did not happen)
+  local pkt pf me age err rc v
+  pkt="$(_get "$1" recovery)"; pf="${pkt%.json}.prompt.md"
+  me="$(_num "$(_get "$1" mailed_epoch)" "")"
+  if [ -z "$me" ]; then
+    err="$LOGS/$1.notify.$$"
+    if [ -s "$pf" ]; then
+      _bounded "$NOTIFY" --from cc-resume-debt "$1" "$(cat "$pf")" </dev/null >/dev/null 2>"$err"; rc=$?
+    else
+      printf 'prompt %s missing or empty\n' "$pf" > "$err"; rc=66
+    fi
+    v="$(_notify_verdict "$err" "$rc")"; cat "$err" >> "$LOGS/$1.log" 2>/dev/null; rm -f "$err"
+    if [ "$rc" -ne 0 ]; then
+      # shellcheck disable=SC2016  # jq variables
+      _set "$1" '.attempts += 1 | .attempt_epoch = ($e|tonumber) | .relaunch_rc = 75' --arg e "$(_now)"
+      _ev "$1" retrying "H(sid)=$2: the original is alive but its packet could not be mailed ($v) - counted as a failed attempt"
+      return 1
+    fi
+    _pkt_stamp "$pkt" mailed_at
+    # shellcheck disable=SC2016  # jq variables
+    _set "$1" '.mailed_epoch = ($e|tonumber) | .mail_verdict = $v' --arg e "$(_now)" --arg v "$v"
+    _evnote "$1" deferred "H(sid)=$2: the original is alive - its packet prompt was mailed to it ($v); waiting for its answer"
+    return 1
+  fi
+  age=$(( $(_now) - me ))
+  if [ "$age" -ge "$MAIL_WAIT_S" ]; then
+    # shellcheck disable=SC2016  # jq variables
+    _set "$1" '.attempts += 1 | .attempt_epoch = ($e|tonumber) | .relaunch_rc = 75' --arg e "$(_now)"
+    _ev "$1" retrying "H(sid)=$2: the packet mailed to the live original is unanswered after ${age}s - counted as a failed attempt"
+    return 1
+  fi
+  _evnote "$1" deferred "H(sid)=$2: packet mailed to the live original; waiting for its answer"
+  return 1
+}
 
 _relaunch() { # <sid> — the retry: a NEW window with the SAME sid.
-  local acct cwd rc n pkt pf d
+  local acct cwd rc n pkt pf d first
   local -a extra=()
   mkdir -p "$LOGS" 2>/dev/null
   _fence_load
@@ -329,14 +477,18 @@ _relaunch() { # <sid> — the retry: a NEW window with the SAME sid.
   fi
   case "$n" in ''|*[!0-9]*) n=1 ;; esac
   if [ "$n" -gt 0 ]; then
-    # shellcheck disable=SC2016  # jq program
-    _set "$1" '.deferrals = ((.deferrals // 0) + 1)'
-    d="$(_num "$(_get "$1" deferrals)" 1)"
     lr_recon_act_done
-    if [ "$d" -ge "$MAX_DEFER" ]; then
+    pkt="$(_get "$1" recovery)"
+    if [ -n "$pkt" ] && [ -n "$(_pkt_field "$pkt" token)" ]; then _mail_original "$1" "$n"; return 1; fi
+    # shellcheck disable=SC2016  # jq program
+    _set "$1" '.deferrals = ((.deferrals // 0) + 1) | .first_defer_epoch = (.first_defer_epoch // ($e|tonumber))' \
+      --arg e "$(_now)"
+    d="$(_num "$(_get "$1" deferrals)" 1)"
+    first="$(_num "$(_get "$1" first_defer_epoch)" "$(_now)")"
+    if [ "$d" -ge "$MAX_DEFER" ] && [ $(( $(_now) - first )) -ge "$DEFER_SPAN_S" ]; then
       # shellcheck disable=SC2016  # jq variables
       _set "$1" '.attempts += 1 | .attempt_epoch = ($e|tonumber) | .relaunch_rc = 75' --arg e "$(_now)"
-      _ev "$1" retrying "deferred $d times: H(sid)=$n live holder(s) - counted as a failed attempt"
+      _ev "$1" retrying "deferred $d times over $(( $(_now) - first ))s: H(sid)=$n live holder(s) - counted as a failed attempt"
       return 1
     fi
     _evnote "$1" deferred "H(sid)=$n live holder(s)"
@@ -361,17 +513,102 @@ _relaunch() { # <sid> — the retry: a NEW window with the SAME sid.
   # shellcheck disable=SC2016  # jq variables
   _set "$1" '.attempts += 1 | .attempt_epoch = ($e|tonumber) | .relaunch_rc = ($rc|tonumber)' \
     --arg e "$(_now)" --arg rc "$rc"
-  _ev "$1" retrying "relaunch rc=$rc$([ "$rc" = 9 ] && printf ' (capacity deferred)')"
+  _ev "$1" retrying "relaunch rc=$rc$([ "$rc" = 9 ] && printf ' (capacity deferred)')$([ "$rc" = 6 ] && printf ' (launch indeterminate, reconciling)')"
+}
+
+# ── ORDERING (review must-fix (a)): a recycle still in flight owns the pane ────────────────────────
+# A fresh-mode recycle opens its debt before the /exit, and its watcher's typed fallback may run for
+# 10 minutes. The sweep used to relaunch the original at GRACE (240 s) regardless — before the
+# recovery packet existed, so the original woke with no prompt and settle --recovery then found it
+# alive. While the pane's recycle lock has a live holder (lib/pane-recycle-pending.sh, the ONE
+# reading of that lock) the sweep defers, uncounted. Settle does not: handoff-fire's watcher calls
+# settle AFTER it has judged the recycle failed, so a live holder seen from settle is, as a rule,
+# that caller itself, and deferring there would block the very recovery it asked for.
+# Bounded by RECYCLE_WAIT_S from the first such deferral: the lib reads a holder it cannot parse as
+# PENDING (fail-safe for a closer), and a broken lock must not hold a debt open forever. An absent
+# lib defers nothing (the relaunch it would have prevented is the pre-existing behaviour).
+_RP=""
+_recycle_wait() { # <sid> → rc 0 = deferred to a live recycle watcher; 1 = go on
+  local pane f k first
+  pane="$(_get "$1" pane)"; [ -n "$pane" ] || return 1
+  if [ -z "$_RP" ]; then
+    _RP=absent
+    for f in "${CC_RESUME_DEBT_RECYCLE_PENDING_LIB:-}" "$_REPO/lib/pane-recycle-pending.sh" \
+             "$HOME/.claude/lib/pane-recycle-pending.sh"; do
+      # shellcheck disable=SC1090  # runtime-resolved
+      [ -n "$f" ] && [ -f "$f" ] && . "$f" 2>/dev/null && command -v cc_pane_recycle_pending >/dev/null 2>&1 \
+        && { _RP=ok; break; }
+    done
+  fi
+  [ "$_RP" = ok ] || return 1
+  # The lock key embeds the recycler's kitty socket; the sweep has no kitty env, so the closer's own
+  # (recorded at open) is used when there is one; the subshell keeps it from leaking.
+  if ! ( k="$(_get "$1" kitty_to)"; [ -n "$k" ] && CC_TERM_KITTY_TO="$k"
+         k="$(_get "$1" kitty_listen_on)"; [ -n "$k" ] && KITTY_LISTEN_ON="$k"
+         cc_pane_recycle_pending "$pane" ); then
+    return 1
+  fi
+  # shellcheck disable=SC2016  # jq variables
+  _set "$1" '.recycle_wait_epoch = (.recycle_wait_epoch // ($e|tonumber))' --arg e "$(_now)"
+  first="$(_num "$(_get "$1" recycle_wait_epoch)" "$(_now)")"
+  if [ $(( $(_now) - first )) -ge "$RECYCLE_WAIT_S" ]; then
+    _evnote "$1" deferred "recycle lock on pane $pane still reads pending after ${RECYCLE_WAIT_S}s - no longer deferring to it"
+    return 1
+  fi
+  _evnote "$1" deferred "a recycle watcher is alive on pane $pane - the recycle is not over"
+  return 0
+}
+
+# ── PENDING LAUNCH (review item 2): an indeterminate launch is reconciled, not guessed ─────────────
+# boot-resume-launch exits 6 when its kitty client timed out and no window carried its launch token
+# YET — on 2026-10-09 kitty created the window nine minutes later — and leaves
+# $PENDING/<sid>.json {token, launched_at, acct, cwd, kitty_to}. Each step re-asks kitty for a
+# window carrying the token: one exists ⇒ the launch arrived (marker removed; a retry that rc-6'd is
+# treated as launched and the proof runs its WAIT); none and the marker is PENDING_TTL_S old ⇒ the
+# launch is lost (marker removed; that retry reopens, so the normal relaunch follows); otherwise the
+# debt waits. An unreadable marker counts as lost: it cannot be reconciled, and must not wedge.
+_pending_launch() { # <sid> → rc 0 = still indeterminate (defer); 1 = no marker, or reconciled
+  local m tok at kto out age
+  m="$PENDING/$1.json"; [ -f "$m" ] || return 1
+  tok="$(_pkt_field "$m" token)"; kto="$(_pkt_field "$m" kitty_to)"
+  at="$(_num "$(_pkt_field "$m" launched_at)" 0)"
+  if [ -n "$tok" ]; then
+    if [ -n "$kto" ]; then out="$(_bounded "$KITTY_BIN" @ --to "$kto" ls --match "env:CC_LAUNCH_TOKEN=$tok" 2>/dev/null)"
+    else out="$(_bounded "$KITTY_BIN" @ ls --match "env:CC_LAUNCH_TOKEN=$tok" 2>/dev/null)"; fi
+    case "$out" in
+      *"$tok"*)
+        rm -f "$m"
+        if [ "$(_get "$1" state)" = retrying ] && [ "$(_get "$1" relaunch_rc)" = 6 ]; then
+          # shellcheck disable=SC2016  # jq variables
+          _set "$1" '.relaunch_rc = 0 | .attempt_epoch = ($e|tonumber)' --arg e "$(_now)"
+        fi
+        _evnote "$1" reconciled "pending launch $tok: its window exists - launched late, awaiting proof"
+        return 1 ;;
+    esac
+  fi
+  age=$(( $(_now) - at ))
+  if [ -z "$tok" ] || [ "$age" -ge "$PENDING_TTL_S" ]; then
+    rm -f "$m"
+    if [ "$(_get "$1" state)" = retrying ] && [ "$(_get "$1" relaunch_rc)" = 6 ]; then
+      _ev "$1" open "pending launch ${tok:-<unreadable>}: no window after ${age}s - presumed lost, relaunch allowed"
+    else
+      _evnote "$1" reconciled "pending launch ${tok:-<unreadable>}: no window after ${age}s - marker removed"
+    fi
+    return 1
+  fi
+  _evnote "$1" deferred "pending launch $tok is indeterminate (${age}s old) - waiting for its window"
+  return 0
 }
 
 # _escalate — once per debt: one backlog row (the operator readout renders needs-human rows) and one
 # message to the stranded session's OWN mailbox, which mailbox-drain delivers the moment it next
 # takes a turn. It used to call `cc-notify --page`, a flag cc-notify has never had: every page was
 # refused with rc 2 (bin/cc-notify, the unknown-option arm) and recorded as `refused-rc2`. The
-# verdict still lands in .page_verdict, now for the mailbox send. A recovery debt names the fix
+# verdict still lands in .page_verdict, now for the mailbox send: reached (verdict=delivered),
+# mailbox-only and the other cc-notify verdicts as said, or refused-rc<N>. A recovery debt names the fix
 # itself: the packet's refire_cmd is the row's --run, and the packet path rides in title and --run.
 _escalate() { # <sid>
-  local acct cwd by opened run title out rc id prc msg pkt refire
+  local acct cwd by opened run title out rc id prc msg pkt refire err verdict
   acct="$(_get "$1" account)"; cwd="$(_get "$1" cwd)"; by="$(_get "$1" by)"
   opened="$(_get "$1" opened_epoch)"; pkt="$(_get "$1" recovery)"; refire=""
   [ -n "$pkt" ] && refire="$(jq -r '.refire_cmd // ""' "$pkt" 2>/dev/null)"
@@ -390,12 +627,20 @@ _escalate() { # <sid>
   # shellcheck disable=SC2016  # jq variables
   _set "$1" '.backlog_id = $id' --arg id "$id"
   _ev "$1" escalated "backlog needs rc=$rc id=${id:-none}"
-  if [ -n "$id" ]; then msg="STRANDED SESSION $1 — relaunch failed; run: cc-do $id"
+  if [ -n "$pkt" ]; then
+    # The packet already carries the re-fire order (its prompt); a second one here would be two
+    # instructions to act on one failure. The mail points at the packet and orders nothing.
+    msg="STRANDED SESSION $1 — the recovery of its failed recycle was not proven; recovery packet: $pkt"
+  elif [ -n "$id" ]; then msg="STRANDED SESSION $1 — relaunch failed; run: cc-do $id"
   else msg="STRANDED SESSION $1 — relaunch failed; run: $run"; fi
-  [ -n "$pkt" ] && msg="$msg (recovery packet: $pkt)"
-  _bounded "$NOTIFY" --from cc-resume-debt "$1" "$msg" </dev/null >/dev/null 2>&1; prc=$?
+  # HONEST VERDICT (review item 8). cc-notify exits 0 for a mailbox-only enqueue to a dead target as
+  # well as for a live delivery; only its stderr token tells them apart (bin/cc-notify, Exit:).
+  mkdir -p "$LOGS" 2>/dev/null
+  err="$LOGS/$1.notify.$$"
+  _bounded "$NOTIFY" --from cc-resume-debt "$1" "$msg" </dev/null >/dev/null 2>"$err"; prc=$?
+  verdict="$(_notify_verdict "$err" "$prc")"; cat "$err" >> "$LOGS/$1.log" 2>/dev/null; rm -f "$err"
   # shellcheck disable=SC2016  # jq variables
-  _set "$1" '.page_verdict = $v' --arg v "$([ "$prc" -eq 0 ] && printf reached || printf 'refused-rc%s' "$prc")"
+  _set "$1" '.page_verdict = $v' --arg v "$verdict"
 }
 
 _step() { # <sid> <now-flag 0|1> — ONE transition; a held lock makes it a no-op.
@@ -404,17 +649,20 @@ _step() { # <sid> <now-flag 0|1> — ONE transition; a held lock makes it a no-o
   _lock "$1" || return 0
   st="$(_get "$1" state)"
   if _active "$st"; then
+    _PROOF=""
     if _prove_debt "$1" "$HOLD_S"; then
-      if [ -n "$(_get "$1" recovery)" ]; then
-        _discharge "$1" "proven: recovery token answered, or a live successor holds the pane"
-      else
-        _discharge "$1" "proven LIVE by cc-find"
-      fi
+      rm -f "$PENDING/$1.json" 2>/dev/null
+      _discharge "$1" "${_PROOF:-proven LIVE by cc-find}"
+    elif _pending_launch "$1"; then
+      :   # an indeterminate launch may still arrive: no relaunch, no escalation
     else
+      st="$(_get "$1" state)"   # the reconcile may have reopened a retry
       case "$st" in
         open)
           age=$(( $(_now) - $(_get "$1" opened_epoch) ))
-          { [ "$2" -eq 1 ] || [ "$age" -ge "$GRACE_S" ]; } && _relaunch "$1" ;;
+          if [ "$2" -eq 1 ] || [ "$age" -ge "$GRACE_S" ]; then
+            { [ "$2" -eq 0 ] && _recycle_wait "$1"; } || _relaunch "$1"
+          fi ;;
         retrying)
           age=$(( $(_now) - $(_get "$1" attempt_epoch) ))
           { [ "$(_get "$1" relaunch_rc)" != 0 ] || [ "$age" -ge "$WAIT_S" ]; } && _escalate "$1" ;;
