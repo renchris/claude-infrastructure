@@ -290,6 +290,38 @@ flaw 1).
   as needs-credential, not fixed here.
 - The load source (renders, builds, E1k waiting for ambient load) is outside this plan.
 
+## Refinements where the code proved the plan wrong (dispatched lead, 2026-10-09)
+
+- **U1:** `take` also refuses a group- or world-writable STAGING DIR, not only the `.cmd`, because a
+  writable dir lets another user swap the file. The requested key AND `meta.pane_tty` must both equal
+  the caller's own tty. `exec` also unsets `CC_ACCOUNT_PINNED` and `CLAUDE_ISOLATION_SKIP`, the
+  incident cmdfile's other per-launch prefixes. `stage` clears the previous recycle's
+  `.revoked`/`.claimed.*`, and `take` touches the claim file so `claimed` reports the claim epoch
+  (mv keeps the staged mtime). `install.sh` needed no edit: its `lib/*.sh` loop links the new lib.
+- **U3, `_in_pane_ok`:** deleted rather than repaired. It was dead twice over: `cc-pane state` never
+  existed, and `handoff-fire --relaunch-at-shell` also requires `--expect-identity`, which the debt
+  store never holds. A pane at a bare shell is now reached by the pane-successor consumer. Every debt
+  retry is a new window.
+- **U3, escalation channel:** `cc-notify --from cc-resume-debt <sid> "<msg>"`, the stranded session's
+  own mailbox (a raw uuid is a valid target), plus the needs-human backlog row. A recovery row's
+  `--run` is the packet's `refire_cmd`.
+- **U3, deferrals:** the 3rd H(sid)>0 deferral (`CC_RESUME_DEBT_MAX_DEFER`) counts as a failed
+  attempt (relaunch_rc 75), so the next step escalates.
+- **U3, indeterminate launch:** a kitty rc 124/137 with no window carrying the token exits 5 WITHOUT
+  opening a debt, because a debt's relaunch could double-launch beside a window that arrives 9 min
+  late (the incident's timing). `settle --recovery <missing file>` settles as a plain debt instead
+  of exiting 2, which would break `rcy_debt_settle`.
+- **U3, double delivery:** reso-resume-one exports `CC_RECYCLE_ATTACHED_TOKEN` when the prompt it
+  submits carries the token, and the SessionStart child skips that token. The child is FIRST in
+  CHILDREN, so the dispatcher's 9500-char cap never truncates the packet.
+- **U3, resumers that bypass reso-resume-one** (the SessionStart child is their channel):
+  boot-resume.sh goes through it (via boot-resume-launch, :190); cc-resume-layout.sh goes through it
+  (:165); cc-pane spawns no resume; **lr_recon does NOT** (act.py:143 uses
+  `handoff-fire --relaunch-at-shell`; lr-handoff.sh:1611 and lr-upgrade.sh:60 use lr-fire-resume.sh,
+  which spawns `claude --resume` itself); handoff-fire's own resume-mode launcher does not either.
+- **U3:** `--next-to` is implemented in boot-resume-launch but not passed by cc-resume-debt, because
+  the recorded pane is usually gone and kitty fails a launch whose `--next-to` matches nothing.
+
 ## Status log
 
 - 2026-10-09: filed by 80734d02 after workflow `wf_462dbffc-a38`. The operator re-fired the stranded brief
