@@ -157,23 +157,31 @@ setup() {
   # of the pin cannot see the pin move. This case makes the next copy visible at land time.
   # Runtime trees only. Comment lines are exempt (history may name old dirs); tests/ is not scanned
   # (fixtures carry ps rows that name versioned paths, which is data, not a pin).
+  # A pin that must NOT follow the launcher (a measured configuration frozen by an operator ruling,
+  # e.g. router.py's careful call, ruling 8633d354bd41) is exempt only when the SAME line carries
+  # `deliberate-version-pin: ruling <12-hex id>` — the ruling is what makes it a decision rather than
+  # a stale copy, so a bare marker with no ruling id does not exempt (control below).
   git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || skip "not a git checkout — git grep cannot scan"
   # shellcheck disable=SC2016  # the $ is regex text (a literal $HOME in source), not an expansion
   local pat='(\$HOME|~|/Users/[A-Za-z0-9._-]+)/\.claude-[0-9]+/node_modules'
   local code_only='^[^:]+:[0-9]+:[[:space:]]*#'
+  local ruled='deliberate-version-pin: ruling [0-9a-f]{12}([^0-9a-f]|$)'
 
   # Positive control through the SAME instrument: a planted pin must be found, and a planted
   # comment naming the same path must not. Without this an empty scan below proves nothing.
   local ctl="$BATS_TEST_TMPDIR/ctl"; mkdir -p "$ctl"
   # shellcheck disable=SC2016  # literal source text, planted verbatim
   printf '%s\n' '# history: this used to read $HOME/.claude-220/node_modules/.bin/claude' \
-                'BIN="${X:-$HOME/.claude-220/node_modules/.bin/claude}"' >"$ctl/site.sh"
+                'BIN="${X:-$HOME/.claude-220/node_modules/.bin/claude}"' \
+                'R="$HOME/.claude-293/node_modules/.bin/claude"  # deliberate-version-pin: ruling 8633d354bd41' \
+                'U="$HOME/.claude-293/node_modules/.bin/claude"  # deliberate-version-pin: ruling TBD' >"$ctl/site.sh"
   local ctl_hits
-  ctl_hits="$(git -C "$ctl" grep --no-index -n -E "$pat" -- site.sh | grep -vE "$code_only" || true)"
-  [ "$(printf '%s\n' "$ctl_hits" | grep -c .)" -eq 1 ]
-  [[ "$ctl_hits" == site.sh:2:* ]] || false
+  ctl_hits="$(git -C "$ctl" grep --no-index -n -E "$pat" -- site.sh | grep -vE "$code_only" | grep -vE "$ruled" || true)"
+  [ "$(printf '%s\n' "$ctl_hits" | grep -c .)" -eq 2 ]
+  [[ "$(printf '%s\n' "$ctl_hits" | sed -n 1p)" == site.sh:2:* ]] || false
+  [[ "$(printf '%s\n' "$ctl_hits" | sed -n 2p)" == site.sh:4:* ]] || false
 
   local hits
-  hits="$(git -C "$REPO" grep -n -E "$pat" -- bin scripts hooks lib | grep -vE "$code_only" || true)"
+  hits="$(git -C "$REPO" grep -n -E "$pat" -- bin scripts hooks lib | grep -vE "$code_only" | grep -vE "$ruled" || true)"
   [ -z "$hits" ] || { printf 'versioned claude binary hardcoded — route it through bin/cc-claude-bin:\n%s\n' "$hits" >&2; false; }
 }

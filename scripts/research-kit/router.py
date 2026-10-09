@@ -345,7 +345,7 @@ MODEL_ALIASES = {"sonnet_latest": "sonnet", "haiku_latest": "haiku"}
 CAREFUL_PIN: Dict[str, Optional[str]] = {
     "model": "claude-haiku-4-5",
     "effort": None,
-    "claude": "~/.claude-293/node_modules/.bin/claude",
+    "claude": "~/.claude-293/node_modules/.bin/claude",  # deliberate-version-pin: ruling 8633d354bd41
 }
 
 
