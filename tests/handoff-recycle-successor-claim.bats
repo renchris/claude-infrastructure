@@ -32,6 +32,7 @@ producer_funcs() {
   done
   TARGET_CFG="$BATS_TEST_TMPDIR/cfg-next2"
   config_dir_for_launcher() { [ "$1" = claude2 ] && echo "$TARGET_CFG"; }
+  # shellcheck disable=SC2034  # read by the sourced hf_succ_stage through dynamic scope
   LAUNCHER=claude2 SID=44 WATCHER_PID=$$ rcy_old_sid=6defb493
   CMD="echo \"\$CLAUDE_CONFIG_DIR\" > '$BATS_TEST_TMPDIR/ran-with'"
   BASE="$BATS_TEST_TMPDIR/handoff-recycle-cmd-44.sh"; printf '%s\n' "$CMD" > "$BASE"
