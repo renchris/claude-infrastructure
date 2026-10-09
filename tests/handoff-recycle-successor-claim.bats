@@ -140,7 +140,15 @@ start_watcher() { # → WPID; the watcher's stdout+stderr in $WOUT
 }
 
 stage_for_watcher() { # the producer's half, for the watcher's REAL pid + start time
-  local wl m="$BATS_TEST_TMPDIR/meta.json" c="$BATS_TEST_TMPDIR/succ.cmd"
+  local wl m="$BATS_TEST_TMPDIR/meta.json" c="$BATS_TEST_TMPDIR/succ.cmd" i=0
+  # After the heartbeat, as the foreground does (await_armed): a stage written before the watcher sets
+  # its claim floor rcy_w_t0 (easy under load, while bash still parses this 18K-line script) reads as
+  # an older recycle's claim. Same wait as tests/handoff-recycle-recovery-packet.bats.
+  until grep -q '^→ armed:' "$WOUT" 2>/dev/null; do
+    i=$((i + 1)); [ "$i" -le 300 ] || { echo "watcher never armed"; cat "$WOUT"; return 1; }
+    sleep 0.1
+  done
+  sleep 1                                                # the stage's whole-second mtime lands at or after it
   wl="$(TZ=UTC LC_ALL=C /bin/ps -o lstart= -p "$WPID" | tr -s ' ' | sed 's/^ *//; s/ *$//')"
   [ -n "$wl" ] || { echo "watcher $WPID has no lstart"; return 1; }
   printf 'touch %q\n' "$MARK" > "$c"
