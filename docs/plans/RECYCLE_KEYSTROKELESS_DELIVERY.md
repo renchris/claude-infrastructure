@@ -332,6 +332,22 @@ flaw 1).
   CR, not "strip it and submit". zsh never renders a paste-end marker it consumed, so a VISIBLE marker
   means those bytes are in the line buffer and a CR would submit them onto the last argument. The
   attempt scrubs and the next one retypes (the final attempt is plain mode, which carries no markers).
+- **U2, further refinements:**
+  - Any non-zero send rc means delivery-unknown, not only 124, because it2-kitty collapses its own
+    inner timeout to rc 1.
+  - The echo-poll deadline is settle × (4 + 2 × load/core), capped at settle × 60.
+  - The typing deadline never runs fewer than the old 2 rounds.
+  - The suffix rule binds unfocused panes too.
+  - The claim check also runs inside the shell-wait loop: a consumer can claim and start claude
+    before the watcher ever samples the bare shell, and the watcher would otherwise call the pane
+    dead after 600 s. Claims are epoch-floored at the watcher's start, so an older claim on a reused
+    tty cannot count.
+  - A total claim bound (`CC_RECYCLE_CLAIM_MAX_S`, 120 s, load-scaled) covers a pane that never
+    settles at a shell.
+  - The stage call sits just before `recycle_fire_commit`, after every abort arm.
+  - Load scaling is ×min(4, 1 + load/core ÷ 10) on the engagement, boot and claim bounds.
+  - **Residual:** a fresh recycle into a pane with no consumer (an old consumer inode) pays the 20 s
+    grace before typing.
 - **U2, typing deadline in tests:** suites whose mock screen never echoes now pin
   `CC_RECYCLE_TYPE_DEADLINE_S=0`, which keeps the old two rounds. Without it the 600 s default hangs
   them past bats' per-test bound.
