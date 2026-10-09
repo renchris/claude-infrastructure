@@ -29,6 +29,15 @@ its diff passes 500 LOC.
 | U3 | `resume` | `bin/cc-resume-debt`, `scripts/boot-resume-launch.sh`, `bin/reso-resume-one` (incl. its fall-through consumer :862-887), `hooks/session-start-dispatch.sh` child + tests | §D4 | — |
 | U4 | `awareness` | `scripts/handoff-fire.sh`: NEW `rcy_recovery_packet` + `rcy_pane_paint`, `hf_alarm` (~:7900-7940), calls at each post-`/exit` terminal arm, `rcy_debt_settle` (~:9428) + tests | §D3 | U2 (same file: start after U2 merges) |
 
+| U5a | `libfix` | `lib/pane-successor.sh`, `bin/cc-close-attrib`, `hooks/recycle-failed-inject.sh` + tests | review items 4, 6, 7, 9 | U1 (landed) |
+| U5b | `resumefix` | `bin/reso-resume-one`, `bin/cc-resume-debt`, `scripts/boot-resume-launch.sh`, `scripts/boot-resume.sh` (exit-5 messages) + tests | review ORDERING + items 1, 2, 3, 5, 8 + both PLAUSIBLE | U3 (landed) |
+
+- **U5 (added 2026-10-09 by the dispatched lead):** the originating lead's fresh-context review of the
+  landed U1+U3 (`d1ccc37f5`) found 9 confirmed and 5 plausible defects
+  (`/tmp/rk-review/u1u3-review-2026-10-09.md`). Its two U2/U4 must-fixes went to U4: revoke the
+  staged successor BEFORE any failure verdict, and a real-fixture account test. The rest split by file
+  into U5a/U5b, which run in parallel with U4. Each item is fixed with a test that fails before the
+  fix, or refuted with evidence recorded below.
 - **Worktrees:** one branch per teammate, created by the dispatched lead. Merge order: U1 → U3 → U2 → U4
   (smallest first, and U4 rebases on U2). Gate every merge with the land gate's own shellcheck + the
   touched bats suites.
