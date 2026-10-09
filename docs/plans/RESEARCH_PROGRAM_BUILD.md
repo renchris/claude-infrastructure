@@ -1841,20 +1841,27 @@ bar (`082648c5e`) unchanged, its verdict recorded here.
 
   | union | 1-min load | calls | fallbacks | re-ask calls | wrong in-time label on a re-ask | median | p90 | held, careful silent | held, fast silent |
   |---|---|---|---|---|---|---|---|---|---|
-  | A, Haiku 4.5 | all | 403 | 2 (0.005) | 163 | 3 | 3.91 s | 8.59 s | 71 | 3 |
+  | A, Haiku 4.5 | all | 403 | 2 (0.005) | 163 | 3 | 3.91 s | 8.59 s | 42 | 2 |
   | A | 40-100 | 27 | 0 | 27 | 0 | 1.46 s | 1.74 s | 0 | 0 |
-  | A | 100-150 | 97 | 0 | 48 | 0 | 1.97 s | 8.28 s | 11 | 2 |
-  | A | 150-250 | 234 | 2 | 88 | 3 | 4.30 s | 8.63 s | 47 | 1 |
-  | A | 250 and over | 45 | 0 | 0 | 0 | 5.47 s | 8.74 s | 13 | 0 |
-  | B, Haiku 5.5 re-tuned | all | 403 | 1 (0.002) | 163 | 2 | 1.44 s | 2.49 s | 2 | 2 |
+  | A | 100-150 | 97 | 0 | 48 | 0 | 1.97 s | 8.28 s | 6 | 1 |
+  | A | 150-250 | 234 | 2 | 88 | 3 | 4.30 s | 8.63 s | 27 | 1 |
+  | A | 250 and over | 45 | 0 | 0 | 0 | 5.47 s | 8.74 s | 9 | 0 |
+  | B, Haiku 5.5 re-tuned | all | 403 | 1 (0.002) | 163 | 2 | 1.44 s | 2.49 s | 1 | 1 |
   | B | 40-100 | 28 | 0 | 28 | 0 | 1.03 s | 1.42 s | 0 | 0 |
   | B | 100-150 | 97 | 0 | 47 | 0 | 1.36 s | 1.92 s | 0 | 0 |
-  | B | 150-250 | 229 | 1 | 88 | 2 | 1.47 s | 2.69 s | 0 | 2 |
-  | B | 250 and over | 49 | 0 | 0 | 0 | 1.58 s | 7.27 s | 2 | 0 |
+  | B | 150-250 | 229 | 1 | 88 | 2 | 1.47 s | 2.69 s | 0 | 1 |
+  | B | 250 and over | 49 | 0 | 0 | 0 | 1.58 s | 7.27 s | 1 | 0 |
 
-  Read: fallbacks are rare in both (the hedge works for either model); the difference is the hold. A held 71 of
+  CORRECTED (2026-10-08): the two "held" columns first read A 71 · 3 and B 2 · 2 (bands A 11 · 2, 47 · 1, 13 · 0;
+  B 0 · 2, 2 · 0). `e1m-ab.py` joined a trace's `held` row to every call starting within [t - 1 s, t + 9 s] of it,
+  and calls run back to back, so one hold was also charged to the calls just before it. A `held` row is stamped
+  with the router's own start, so it now belongs to the one call whose span contains it (`held_in`); every hold
+  maps to exactly one call (A 44 of 44 `held` rows, B 2 of 2, no call with two). The other columns are unchanged.
+  Found when guard 2 (below) charged one hold to four calls.
+
+  Read: fallbacks are rare in both (the hedge works for either model); the difference is the hold. A held 42 of
   403 rows to the 8.5 s hand-back with the careful call silent (each one a re-ask the careful call could not
-  catch in time), B held 2. A's wrong in-time labels on re-asks all came at load 150-250. All 3 fallbacks were
+  catch in time), B held 1. A's wrong in-time labels on re-asks all came at load 150-250. All 3 fallbacks were
   `other` rows at load 182-232. Under RULE E1m (d) this table does not move the pick; it is the real-load
   companion the gate's load-bounded read lacks.
 - **(b) The two runs** (2026-10-08 14:26-17:45 CDT, started together; 982 rows each, 2,156 calls each, every call
@@ -1877,7 +1884,8 @@ bar (`082648c5e`) unchanged, its verdict recorded here.
   against 229; wrong relays 39 and 38 against 36): the paragraph caught one or two more subtle re-asks than E1j's
   untuned arm (40 and 39 against 38) and relayed more prompts that were not re-asks. The bars told the two apart,
   so the 4 s tiebreak does not apply. What the pick costs, from the A/B: a median decision of 3.91 s against 1.44 s
-  at real load, and 71 of 403 rows held to the 8.5 s hand-back with the careful call silent against 2. Per ruling
+  at real load, and 42 of 403 rows held to the 8.5 s hand-back with the careful call silent against 1 (CORRECTED
+  2026-10-08 from 71 against 2; the A/B table's correction note). Per ruling
   17aff7158fa6 (5) this pick owes a real-load check, on tuning rows, of recall on rows held with one call silent;
   the A/B above is that check's first reading (A: 3 wrong in-time labels on 163 re-ask calls, all at load 150-250).
 - **The pin** (router.py): `CAREFUL_PIN` = `claude-haiku-4-5`, effort None (no `--effort` flag, as E1h measured
@@ -1904,6 +1912,26 @@ bar (`082648c5e`) unchanged, its verdict recorded here.
   sees the staged plist's new bytes (`ProcessType`), boots the old job out and bootstraps the new one, so one run
   moves the daemon onto both the pin and the interactive band. Until then the router's cold path and hedge run the
   pin, and the resident workers still serve Haiku 5.5 as built.
+- **Restarted** (the operator ran 0059, 2026-10-08 about 20:47 CDT): the installed plist was rewritten at 20:47:42
+  and carries `ProcessType`; `launchctl print` reads `spawn type = interactive (4)`, `runs = 1`; `ping` reads
+  `ready 4` (exit 0, the code on disk). The output the operator saw was 0059's already-loaded branch, so the
+  bootstrap came from a run just before it; the readback above, not that message, is the evidence.
+- **Workers' priority, read back** (`e1m-restart-pri.sidecar.jsonl`: 20 samples, 5 s at 1 Hz, about 47 s after the
+  restart; pid, kind, priority, no command lines): the daemon at PRI 31, the two careful workers (`--model
+  claude-haiku-4-5`) at 31 and 37, the two fast workers (`claude-sonnet-5-5`) at 37. Before: 20 (E1k's sidecar).
+  Every worker now sits at or above the interactive sessions' 31.
+- **(e) Guard 2: caught 40/42, at row 15's 0.95 floor (>= 40): PASS** (20:49-20:50 CDT, through the live
+  `router.py classify` and the restarted daemon, 1-min load at each call's start 22.0-38.3; `e1m-guard2.json`,
+  `e1m-guard2.trace.jsonl` (no answer text in it), `e1m-guard2.result.txt` from `e1m-ab.py guard2-score`). 0
+  fallbacks; the 2 misses are one wrong in-time label (`other`, 7.33 s) and one row held at 8.5 s with the careful
+  call silent (it returned `other`). Beside the tuning figure: the Haiku 4.5 union caught 41/42 in `tune.json`.
+  **Disclosed: the verdict changed after a scorer fix made on seeing the result.** As run, the script printed
+  37/42: its join charged the one hold to the three calls just before it too (all three had already returned a
+  relay label in 1.5-3.2 s, the last ending 0.09 s before the hold's router started). RULE E1m (e) counts a call
+  as a miss when "the router did not hold *it*"; the fix joins a hold to the one call whose span contains it,
+  the same fix that corrects the A/B table above, and the A/B traces show every hold maps to exactly one call.
+  Control: the run as first scored, kept as `/tmp/e1m-chain/guard2.window-scored.json` (outside the repo), reads
+  37 on the same files.
 
 #### E1l — row 15's read guards, the third-read refusal, the load bound, and the pre-registered data rules — DONE: landed and live; the live set map's re-point is the operator's (2026-10-08)
 Scope (frozen): wave E1l — (1) ruling `a7fd5e2ee7c8` guard 1: gate row 15 decrypts and logs a read only when an

@@ -1,0 +1,1 @@
+guard2: caught 40/42 (row 15's floor 0.95: >= 40); fallbacks 0; held with the careful call silent 1; 1-min load at start 22.0-38.3

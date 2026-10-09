@@ -49,7 +49,9 @@ selection is the measured Haiku 4.5 union in `tune.json`, to be pinned.
   completeness is asked). `e1h-tune.py --arm …,BRIEF_FILE` runs an arm on it and records its sha256.
 - `e1h-score.py RUN1 --rule e1m --run2 RUN2 --fast sonnet-off --primary h55-e1m` prints RULE E1m's bars and the pick.
 - `e1m-ab.py run|report` is the matched-load A/B of the two unions through two warm daemons on their own sockets;
-  `e1m-ab.py guard2` is guard 2's load-bounded warm replay of the 42 counted regex-missed calls.
+  `e1m-ab.py guard2` is guard 2's load-bounded warm replay of the 42 counted regex-missed calls; `e1m-ab.py guard2-score`
+  re-scores one from its files. `e1m-guard2.{json,trace.jsonl,result.txt}` are its run after the restart (caught 40/42);
+  `e1m-restart-pri.sidecar.jsonl` is the workers' priority read back after it.
 - Outcome: **RULE E1m failed; the pick is the Haiku 4.5 union** (`result-e1m.txt` from `e1m-tune-run1.json` and
   `e1m-tune-run2.json`; INVALID answer text replaced by its category, no prompt text). `e1m-ab.json`,
   `e1m-ab-{a,b}.trace.jsonl` and `e1m-ab.report.txt` are the A/B (answer text redacted to its length).

@@ -8,6 +8,7 @@ classifier is its own warm daemon on its own socket.
   e1m-ab.py run OUT.json ROUTER_A ROUTER_B [--limit N]
   e1m-ab.py report OUT.json TRACE_A TRACE_B
   e1m-ab.py guard2 OUT.json ROUTER TRACE [--max-load 40]
+  e1m-ab.py guard2-score OUT.json TRACE      (re-score a guard2 run from its files; no calls)
 
 Rows, fixed before any call: the tuning base of wave E1h (e1h-score.py `base()`), in e1h-tune.py's
 row order: every counted re-ask call (a row in a re-ask stratum whose two raters agree on a relay label;
@@ -143,6 +144,13 @@ def held_rows(trace: Path) -> list:
     return rows
 
 
+def held_in(c: dict, held: list) -> list:
+    """The silent kinds of each `held` row that belongs to call c: the router's trace stamps a row with
+    its own start, which falls inside the call's span. Calls run back to back, so a window wider than the
+    call (E1m's first scoring used [t - 1, t + 9 s]) also charged a hold to the calls just before it."""
+    return [s for t, s in held if c["t"] <= t <= c["t"] + c["wall_s"]]
+
+
 def pct(xs: list, q: float):
     xs = sorted(xs)
     return xs[min(int(len(xs) * q), len(xs) - 1)] if xs else None
@@ -171,10 +179,9 @@ def report(out: Path, ta: Path, tb: Path) -> int:
             walls = [c["wall_s"] for c in cs]
             hc = hf = 0
             for c in cs:
-                for t, silent in held[arm]:
-                    if c["t"] - 1 <= t <= c["t"] + LIMIT_S:
-                        hc += "careful" in silent
-                        hf += "fast" in silent
+                for silent in held_in(c, held[arm]):
+                    hc += "careful" in silent
+                    hf += "fast" in silent
             band = (
                 "all" if hi == 10**6 and lo == 0 else f"{lo}-{hi if hi < 10**6 else ''}"
             )
@@ -185,19 +192,27 @@ def report(out: Path, ta: Path, tb: Path) -> int:
 
 
 def guard2(out: Path, router: str, trace: Path, max_load: float) -> int:
-    todo = [r for r in selected() if r[2] and S.base()[r[0]]["stratum"] == "regex-missed"]
+    todo = [
+        r for r in selected() if r[2] and S.base()[r[0]]["stratum"] == "regex-missed"
+    ]
     calls = []
     for n, (key, prompt, _) in enumerate(todo):
         while os.getloadavg()[0] > max_load:
             time.sleep(20)
         calls.append({"n": n, "key": key, **route(router, prompt)})
-        out.write_text(json.dumps({"calls": calls, "max_load": max_load}, indent=0) + "\n")
+        out.write_text(
+            json.dumps({"calls": calls, "max_load": max_load}, indent=0) + "\n"
+        )
+    return guard2_score(out, trace)
+
+
+def guard2_score(out: Path, trace: Path) -> int:
+    d = json.loads(out.read_text())
+    calls, max_load = d["calls"], d["max_load"]
     held = held_rows(trace) if trace.exists() else []
     caught = 0
     for c in calls:
-        silent = any(
-            "careful" in s for t, s in held if c["t"] - 1 <= t <= c["t"] + LIMIT_S
-        )
+        silent = any("careful" in s for s in held_in(c, held))
         c["held_careful_silent"] = silent
         c["caught"] = c["label"] in S.REL and not silent
         caught += c["caught"]
@@ -214,8 +229,14 @@ def guard2(out: Path, router: str, trace: Path, max_load: float) -> int:
 
 def main() -> int:
     if len(sys.argv) >= 5 and sys.argv[1] == "guard2":
-        ml = float(sys.argv[sys.argv.index("--max-load") + 1]) if "--max-load" in sys.argv else 40.0
+        ml = (
+            float(sys.argv[sys.argv.index("--max-load") + 1])
+            if "--max-load" in sys.argv
+            else 40.0
+        )
         return guard2(Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4]), ml)
+    if len(sys.argv) >= 4 and sys.argv[1] == "guard2-score":
+        return guard2_score(Path(sys.argv[2]), Path(sys.argv[3]))
     if len(sys.argv) >= 5 and sys.argv[1] == "run":
         limit = (
             int(sys.argv[sys.argv.index("--limit") + 1])
