@@ -127,7 +127,15 @@ fi
 # is stamped. An explicit --prompt-file always wins and is never replaced. Either way, a prompt that
 # carries the packet's token exports it as CC_RECYCLE_ATTACHED_TOKEN, which tells the SessionStart
 # child (hooks/recycle-failed-inject.sh) not to inject the same packet a second time.
-RR_PKT="" RR_PKT_TOKEN=""
+#
+# EXACTLY ONCE (review item 1). delivered_at used to be stamped only after a normal expect return,
+# so a pane closed under the session (HUP/INT/TERM) left the packet "undelivered" and the next resume
+# attached it again — a second re-fire order for one failure. So: a packet counts as ABSENT unless it
+# parses, carries a token, has neither delivered_at nor injected_at (the SessionStart hook delivered
+# it), and is younger than CC_RECYCLE_PACKET_TTL_S (7 days from failed_at, else the file's mtime);
+# and right before attaching, the transcript is asked whether the token already reached the session
+# — if it did, delivered_at is stamped THEN and nothing is attached. The signal traps stamp too.
+RR_PKT="" RR_PKT_TOKEN="" RR_PKT_OURS=""
 rr_pkt_stamp() { # <field> — temp + mv, never in place; best-effort
   local tmp="$RR_PKT.tmp.$$"
   if jq --arg f "$1" --arg v "$(date -u +%FT%TZ)" '.[$f] = $v' "$RR_PKT" > "$tmp" 2>/dev/null; then
@@ -136,22 +144,73 @@ rr_pkt_stamp() { # <field> — temp + mv, never in place; best-effort
     rm -f "$tmp"
   fi
 }
+rr_pkt_live() { # <packet> → rc 0 and RR_PKT_TOKEN set when the packet may still be attached
+  local tok dlv inj born ttl
+  # One field per line: tab-separated fields would collapse an empty one under bash's IFS rules.
+  { IFS= read -r tok; IFS= read -r dlv; IFS= read -r inj; IFS= read -r born; } <<EOF
+$(jq -r 'if type == "object" then (.token // ""), (.delivered_at // ""), (.injected_at // ""),
+           ((.failed_at // "") | tostring | (fromdateiso8601? // "")) | tostring else empty end' "$1" 2>/dev/null)
+EOF
+  [ -n "$tok" ] && [ -z "$dlv" ] && [ -z "$inj" ] || return 1
+  case "$born" in ''|*[!0-9]*) born="$(stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null)" ;; esac
+  ttl="${CC_RECYCLE_PACKET_TTL_S:-604800}"; case "$ttl" in ''|*[!0-9]*) ttl=604800 ;; esac
+  case "$born" in ''|*[!0-9]*) ;; *)
+    if [ $(( $(date +%s) - born )) -ge "$ttl" ]; then
+      printf '%s\n' "reso-resume-one: NOTE — recycle-failed packet $1 is older than ${ttl}s; not attaching it." >&2
+      return 1
+    fi ;;
+  esac
+  RR_PKT_TOKEN="$tok"
+}
 case "$sid" in .*|*[!A-Za-z0-9._-]*) ;; *)
   _rr_pd="${CC_RECYCLE_FAILED_DIR:-$HOME/.claude/autonomy/recycle-failed}"
-  if [ -f "$_rr_pd/$sid.json" ] && command -v jq >/dev/null 2>&1 \
-     && [ -z "$(jq -r '.delivered_at // empty' "$_rr_pd/$sid.json" 2>/dev/null)" ]; then
+  if [ -f "$_rr_pd/$sid.json" ] && command -v jq >/dev/null 2>&1 && rr_pkt_live "$_rr_pd/$sid.json"; then
     RR_PKT="$_rr_pd/$sid.json"
-    RR_PKT_TOKEN="$(jq -r '.token // empty' "$RR_PKT" 2>/dev/null)"
     if [ -z "$PROMPT_FILE" ] && [ -s "$_rr_pd/$sid.prompt.md" ] && [ -r "$_rr_pd/$sid.prompt.md" ]; then
-      CC_RR_PROMPT="$(cat "$_rr_pd/$sid.prompt.md")"
-      printf '%s\n' "reso-resume-one: NOTE — recycle-failed packet for $sid is undelivered; attaching $_rr_pd/$sid.prompt.md as the first prompt." >&2
+      CC_RR_PROMPT="$(cat "$_rr_pd/$sid.prompt.md")"; RR_PKT_OURS=1
     fi
   fi ;;
 esac
-# Stamped and exported at the spawn (below), not here: a gate or fence between here and there may
-# still defer the resume, and attached_at must not claim a launch that never happened.
+# The token reached the session when a USER record (a launch-argument prompt) or an ATTACHMENT record
+# (hook additionalContext: the SessionStart inject, or cc-resume-debt's mail to a live original)
+# carries it. The grep is a cheap pre-filter (transcripts reach tens of MB); jq decides the record
+# type, one line at a time (`fromjson? // empty`) so one malformed line cannot zero the answer.
+rr_pkt_in_transcript() {
+  local f
+  for f in "$cfg"/projects/*/"$sid".jsonl; do
+    [ -f "$f" ] && grep -qF -- "$RR_PKT_TOKEN" "$f" 2>/dev/null || continue
+    # shellcheck disable=SC2016  # jq program
+    if jq -nR --arg tok "$RR_PKT_TOKEN" 'any(inputs | (fromjson? // empty)
+         | select(type == "object" and (.type == "user" or .type == "attachment"));
+         ((.message // "") | tostring | contains($tok)) or ((.attachment // "") | tostring | contains($tok)))' \
+         "$f" 2>/dev/null | grep -qx true; then
+      return 0
+    fi
+  done
+  return 1
+}
+rr_pkt_delivered() { # stamp delivered_at once the transcript shows the token; best-effort, always rc 0
+  [ -n "$RR_PKT" ] && [ -n "$RR_PKT_TOKEN" ] && [ -f "$RR_PKT" ] && [ -n "${cfg:-}" ] || return 0
+  [ -z "$(jq -r '.delivered_at // empty' "$RR_PKT" 2>/dev/null)" ] || return 0
+  rr_pkt_in_transcript && rr_pkt_stamp delivered_at
+  return 0
+}
+# Checked, stamped and exported at the spawn (below), not here: cfg is resolved further down, and a
+# gate or fence between here and there may still defer the resume — attached_at must not claim a
+# launch that never happened.
 rr_pkt_attach() {
-  [ -n "$RR_PKT" ] && [ -n "$RR_PKT_TOKEN" ] && [ -n "$CC_RR_PROMPT" ] || return 0
+  [ -n "$RR_PKT" ] && [ -n "$RR_PKT_TOKEN" ] || return 0
+  if rr_pkt_in_transcript; then
+    rr_pkt_stamp delivered_at
+    if [ -n "$RR_PKT_OURS" ]; then
+      CC_RR_PROMPT=""; export CC_RR_PROMPT; RR_PKT_OURS=""
+      printf '%s\n' "reso-resume-one: NOTE — recycle-failed packet for $sid already reached the session (transcript); stamped delivered_at, not attaching it again." >&2
+    fi
+    RR_PKT=""
+    return 0
+  fi
+  [ -n "$RR_PKT_OURS" ] && printf '%s\n' "reso-resume-one: NOTE — recycle-failed packet for $sid is undelivered; attaching ${RR_PKT%.json}.prompt.md as the first prompt." >&2
+  [ -n "$CC_RR_PROMPT" ] || return 0
   case "$CC_RR_PROMPT" in
     *"$RR_PKT_TOKEN"*) rr_pkt_stamp attached_at; export CC_RECYCLE_ATTACHED_TOKEN="$RR_PKT_TOKEN" ;;
   esac
@@ -548,9 +607,10 @@ if [ "${CC_RESUME_FENCE:-on}" != off ]; then
   if [ -n "$_RRO_LR" ] && . "$_RRO_LR/lr-recon-fence.sh" 2>/dev/null && . "$_RRO_LR/lr-lib.sh" 2>/dev/null \
      && command -v lr_recon_may_act >/dev/null 2>&1 && command -v lr_holder_count >/dev/null 2>&1; then
     trap 'rr_fence_release' EXIT
-    trap 'rr_fence_release; exit 129' HUP
-    trap 'rr_fence_release; exit 130' INT
-    trap 'rr_fence_release; exit 143' TERM
+    # A signal exit skips the post-exit delivered_at stamp below, so the traps stamp it too (§D4).
+    trap 'rr_fence_release; rr_pkt_delivered; exit 129' HUP
+    trap 'rr_fence_release; rr_pkt_delivered; exit 130' INT
+    trap 'rr_fence_release; rr_pkt_delivered; exit 143' TERM
     _rro_wait="${CC_RESUME_FENCE_WAIT_S:-20}"
     case "$_rro_wait" in ''|*[!0-9]*) _rro_wait=20 ;; esac
     _rro_fv="$(mktemp "${TMPDIR:-/tmp}/rro-fence.XXXXXX" 2>/dev/null)" || _rro_fv=/dev/null
@@ -878,24 +938,9 @@ rr_rc=$?
 rr_fence_release
 trap - EXIT HUP INT TERM
 
-# ── delivered_at: the packet's token reached the session as a USER record (§D4) ─────────────────────
-# Attaching the prompt proves nothing about receipt; the transcript does. A user record carrying the
-# token is delivery, so the packet stops being re-attached here and re-injected at SessionStart. The
-# grep is a cheap pre-filter (transcripts reach tens of MB); jq decides the record type.
-rr_pkt_delivered() {
-  local f
-  [ -n "$RR_PKT" ] && [ -n "$RR_PKT_TOKEN" ] && [ -f "$RR_PKT" ] || return 0
-  [ -z "$(jq -r '.delivered_at // empty' "$RR_PKT" 2>/dev/null)" ] || return 0
-  for f in "$cfg"/projects/*/"$sid".jsonl; do
-    [ -f "$f" ] && grep -qF -- "$RR_PKT_TOKEN" "$f" 2>/dev/null || continue
-    # shellcheck disable=SC2016  # jq program
-    if jq -n --arg tok "$RR_PKT_TOKEN" 'any(inputs | select(type == "object" and .type == "user");
-         (.message // "") | tostring | contains($tok))' "$f" 2>/dev/null | grep -qx true; then
-      rr_pkt_stamp delivered_at; return 0
-    fi
-  done
-  return 0
-}
+# ── delivered_at: the packet's token reached the session (§D4; rr_pkt_delivered, defined above) ────
+# Attaching the prompt proves nothing about receipt; the transcript does. A record carrying the token
+# is delivery, so the packet stops being re-attached here and re-injected at SessionStart.
 rr_pkt_delivered
 
 # ── FALL THROUGH TO A SHELL, so the pane outlives the session (see the block above the expect) ────

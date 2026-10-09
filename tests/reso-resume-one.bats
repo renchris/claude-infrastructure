@@ -938,7 +938,9 @@ transcript_shim() {
 #!/bin/bash
 d="$HOME/.claude-next/projects/p"; mkdir -p "$d"
 sid=""; prev=""; for a in "$@"; do [ "$prev" = --resume ] && sid="$a"; prev="$a"; done
-jq -nc --arg p "${!#}" '{type:"user",message:{role:"user",content:$p}}' > "$d/$sid.jsonl"
+# RF_GARBAGE: a record cut mid-write ahead of the real one (review item 1(d))
+if [ -n "${RF_GARBAGE:-}" ]; then printf '{"type":"user","message":{"content":"cut mid-wri\n' > "$d/$sid.jsonl"; else : > "$d/$sid.jsonl"; fi
+jq -nc --arg p "${!#}" '{type:"user",message:{role:"user",content:$p}}' >> "$d/$sid.jsonl"
 exec "$0.argv" "$@"
 SH
   chmod +x "$CC_RESUME_CLAUDE_BIN"
@@ -980,6 +982,66 @@ SH
   [[ "$output" != *"attaching"* ]] || false
   # a prompt that does not carry the token is not the packet: attached_at stays unset
   [ -z "$(jq -r '.attached_at // empty' "$RF_PKT")" ]
+}
+
+# ── review item 1: exactly-once attach ─────────────────────────────────────────────────────────────
+rr_run() { run env CC_RR_STUB_NO_MENU=1 timeout 60 "$RRO" next "$WT" "$1"; }
+pre_transcript() { # <sid> <record json> — what a session that already read the packet left behind
+  mkdir -p "$HOME/.claude-next/projects/p"; printf '%s\n' "$2" > "$HOME/.claude-next/projects/p/$1.jsonl"
+}
+
+@test "item 1: a token already in the transcript is stamped delivered_at BEFORE attaching, and nothing is attached (the HUP case)" {
+  mk_rf_packet SID-RF5; argv_shim
+  # the previous resume delivered it, then its pane was closed under it: no post-exit stamp ran
+  pre_transcript SID-RF5 "$(jq -nc --arg t "token $RF_TOK" '{type:"user",message:{role:"user",content:$t}}')"
+  rr_run SID-RF5
+  [ "$status" -eq 0 ] || { echo "status $status: $output"; false; }
+  [ "$(argv_from_resume)" = "--resume|SID-RF5" ] || { echo "tail: $(argv_from_resume)"; false; }
+  [ -n "$(jq -r '.delivered_at // empty' "$RF_PKT")" ] || { cat "$RF_PKT"; false; }
+  [ -z "$(jq -r '.attached_at // empty' "$RF_PKT")" ]
+  [[ "$output" == *"already reached the session"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"is undelivered; attaching"* ]] || false
+}
+
+@test "item 1: a token that reached the session as an ATTACHMENT record (hook context, mailbox) is delivery too" {
+  mk_rf_packet SID-RF6; argv_shim
+  pre_transcript SID-RF6 "$(jq -nc --arg t "token $RF_TOK" '{type:"attachment",attachment:{type:"hook_additional_context",content:[$t]}}')"
+  rr_run SID-RF6
+  [ "$(argv_from_resume)" = "--resume|SID-RF6" ] || { echo "tail: $(argv_from_resume)"; false; }
+  [ -n "$(jq -r '.delivered_at // empty' "$RF_PKT")" ] || { cat "$RF_PKT"; false; }
+}
+
+@test "item 1: injected_at counts as delivered — the SessionStart hook already handed it over" {
+  mk_rf_packet SID-RF7 '.injected_at = "2026-10-09T05:35:00Z"'; argv_shim
+  rr_run SID-RF7
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(argv_from_resume)" = "--resume|SID-RF7" ] || { echo "tail: $(argv_from_resume)"; false; }
+}
+
+@test "item 1: a tokenless packet and an unparseable packet are both ABSENT, never attached" {
+  mk_rf_packet SID-RF8 '.token = ""'; argv_shim
+  rr_run SID-RF8
+  [ "$(argv_from_resume)" = "--resume|SID-RF8" ] || { echo "tokenless tail: $(argv_from_resume)"; false; }
+  mk_rf_packet SID-RF9; printf '{"token": "recycle-recov' > "$RF_PKT"
+  rr_run SID-RF9
+  [ "$(argv_from_resume)" = "--resume|SID-RF9" ] || { echo "unparseable tail: $(argv_from_resume)"; false; }
+}
+
+@test "item 1: a packet older than CC_RECYCLE_PACKET_TTL_S (from failed_at) is not attached; a longer TTL attaches it" {
+  mk_rf_packet SID-RFA '.failed_at = "2026-09-01T00:00:00Z"'; argv_shim
+  rr_run SID-RFA
+  [ "$(argv_from_resume)" = "--resume|SID-RFA" ] || { echo "tail: $(argv_from_resume)"; false; }
+  [[ "$output" == *"older than 604800s"* ]] || { echo "$output"; false; }
+  CC_RECYCLE_PACKET_TTL_S=999999999 rr_run SID-RFA
+  [ "$(argv_from_resume)" = "--resume|SID-RFA|$(cat "$CC_RECYCLE_FAILED_DIR/SID-RFA.prompt.md")" ] || { echo "control tail: $(argv_from_resume)"; false; }
+}
+
+@test "item 1(d): one malformed transcript line does not stop the post-exit delivered_at stamp" {
+  mk_rf_packet SID-RFB; transcript_shim
+  RF_GARBAGE=1 rr_run SID-RFB
+  [ "$status" -eq 0 ] || { echo "status $status: $output"; false; }
+  [ -n "$(jq -r '.attached_at // empty' "$RF_PKT")" ]
+  [ -n "$(jq -r '.delivered_at // empty' "$RF_PKT")" ] || { cat "$RF_PKT"; head -2 "$HOME/.claude-next/projects/p/SID-RFB.jsonl"; false; }
 }
 
 # The fall-through consumer is reachable only from a real tty, so it is driven EXTRACTED, as the
