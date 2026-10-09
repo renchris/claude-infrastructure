@@ -121,7 +121,8 @@ rows() { cat "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/null; }
   run grep -c 'session send' "$HOME/it2-calls.log"
   [ "$output" = 0 ] || { cat "$HOME/it2-calls.log"; false; }
   rows | grep '"class":"recycle-dead"' | grep -q 'relaunch surface gone' || { rows; false; }
-  grep -qxF "settle --sid $SESS" "$DEBT_LOG" || { cat "$DEBT_LOG"; false; }
+  # A RECOVERY debt since §D3: the arm wrote the failed recycle's packet, and settle carries it.
+  grep -qxF "settle --sid $SESS --recovery $HOME/.claude/autonomy/recycle-failed/$SESS.json" "$DEBT_LOG" || { cat "$DEBT_LOG"; false; }
 }
 
 @test "relaunch write failure settles the debt, and the row names the surface after the failed writes" {
@@ -129,14 +130,14 @@ rows() { cat "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/null; }
   drive_fresh
   [ "$status" -eq 1 ] || { echo "$output"; false; }
   rows | grep '"class":"recycle-dead"' | grep -q 'pane present after the failed writes' || { rows; false; }
-  grep -qxF "settle --sid $SESS" "$DEBT_LOG" || { cat "$DEBT_LOG"; false; }
+  grep -qxF "settle --sid $SESS --recovery $HOME/.claude/autonomy/recycle-failed/$SESS.json" "$DEBT_LOG" || { cat "$DEBT_LOG"; false; }
 }
 
 @test "a relaunch that never booted (STALE:boot) settles the debt" {
   drive_fresh
   [ "$status" -eq 1 ] || { echo "$output"; false; }
   [[ "$output" == *"STALE:boot"* ]] || { echo "$output"; false; }
-  grep -qxF "settle --sid $SESS" "$DEBT_LOG" || { cat "$DEBT_LOG"; false; }
+  grep -qxF "settle --sid $SESS --recovery $HOME/.claude/autonomy/recycle-failed/$SESS.json" "$DEBT_LOG" || { cat "$DEBT_LOG"; false; }
 }
 
 @test "engagement discharges the debt and never settles it" {

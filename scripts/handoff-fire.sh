@@ -217,6 +217,10 @@
 #                       earlier confirm: skip --phase confirm, and instead require <source>.handed-off
 #                       to exist and the tombstone's handed_off_to to equal --resume-cfg (else held,
 #                       nothing typed). Anywhere else ⇒ exit 2.
+#   --recovery-of TOKEN (with --recycle) this fire re-fires a FAILED recycle (TOKEN =
+#                       recycle-recovery:<sid>:<epoch>, from recycle-failed/<sid>.json). Refused
+#                       (exit 2) when that recycle has since engaged or a live claude holds its pane;
+#                       otherwise the packet is stamped refired_at. Every refire_cmd carries it.
 #   --relaunch-at-shell --source-pane P --source-session S --resume-launcher L --resume-cfg C
 #                       [--resume-cwd W] --expect-identity F [--record-id R]   (W2b) type S's resume
 #                       into pane P, which a recycle left AT ITS SHELL. Reads first, in order: F (JSON,
@@ -550,6 +554,8 @@ RCY_SOURCE_PANE="" RCY_SOURCE_SESSION="" RCY_TRANSPLANTED_SOURCE=0 RCY_REMOTE=0
 # --husk (W2b): the source was ALREADY retired by an earlier confirm (the reconciler's), so this
 # recycle asserts that instead of confirming again — see recycle_fire_commit.
 RCY_HUSK=0
+# --recovery-of (RECYCLE_KEYSTROKELESS_DELIVERY §D3): the token of the failed recycle this fire re-fires.
+RCY_RECOVERY_OF=""
 # --same-account: the OTHER evidence class for the remote form (cc-lr upgrade, 2026-09-22). The
 # session did NOT move; it is relaunched into its OWN uuid on its OWN account (a new binary/model).
 # There is no tombstone to prove anything with, so the evidence is the row, the pin, the account and
@@ -8119,37 +8125,68 @@ write_teardown_marker() { # $1=pane-uuid  $2=mode (terminal|successor|recycle)
 # than a terminal — which is why the record must not need jq to be written or a TTY to be read.
 # NEVER returns nonzero: an alarm helper that can break its caller is a worse bug than the alarm.
 # Kill switch CC_HF_ALARM_RECORDS=0 restores the legacy push-only behaviour verbatim.
-hf_alarm() { # $1=class  $2=pane  $3=sid  $4=successor  $5=detail  → always 0
+#
+# THE RECORD IS BUILT BY jq (RECYCLE_KEYSTROKELESS_DELIVERY §D3, 2026-10-09). The no-jq sanitizer it
+# replaces MAPPED `"` to `'`, and the recycle detail carries the whole relaunch line, whose prompt is
+# `"$(cat …)"`: the record's "run manually" command became `'$(cat …)'`, which a shell never expands
+# (tests/fixtures/recycle-keystrokeless/alarm-20261009T050321Z-22463-28344.json). jq escapes instead
+# of mapping, so the command round-trips byte-for-byte; the sanitized printf survives only as the
+# fallback for a box with no jq, where a corrupted-but-present record still beats none.
+#
+# THE ADDRESS FOLLOWS WHO CAN HEAR IT. All 24 verdicts recorded before this change were refused-rc3:
+# the `desk` role did not exist. With no role file and a known sid, the push goes to that session's
+# OWN mailbox (`cc-notify <sid>`), which mailbox-drain delivers at its next turn and a resume carries
+# — a real reader instead of a dead role. `address` in the record says which was used.
+# HF_ALARM_SID_FALLBACK=0 keeps the role (a caller that mails the sid itself). Optional $6/$7 (or
+# HF_ALARM_REFIRE / HF_ALARM_PACKET) attach the one re-fire command and the recovery packet.
+hf_alarm() { # $1=class  $2=pane  $3=sid  $4=successor  $5=detail  [$6=refire_cmd  $7=packet]  → always 0
   local _class="${1:-}" _pane="${2:-}" _sid="${3:-}" _succ="${4:-}" _raw="${5:-}"
-  local _notify _dir _file _stamp _ts _detail _out _rc _verdict _token
+  local _refire="${6:-${HF_ALARM_REFIRE:-}}" _packet="${7:-${HF_ALARM_PACKET:-}}"
+  local _notify _dir _file _stamp _ts _detail _out _rc _verdict _token _role _addr
   _notify="${CC_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}"
+  _role="${CC_COMPLETION_ROLE:-desk}"
 
   if [ "${CC_HF_ALARM_RECORDS:-1}" = 0 ]; then
-    hf_bounded "$_notify" --role "${CC_COMPLETION_ROLE:-desk}" "$_class: $_raw" >/dev/null 2>&1 || true
+    hf_bounded "$_notify" --role "$_role" "$_class: $_raw" >/dev/null 2>&1 || true
     return 0
   fi
 
-  # SANITIZE for a single-line JSON body written without jq: a newline/CR/tab truncates the record
-  # mid-field and a `"` or `\` makes it unparseable — and the recycle detail carries a whole
-  # relaunch command line, so neither is hypothetical. MAP, never delete: the length and the word
-  # boundaries are what makes the detail readable to the operator who eventually sees it.
-  _detail="$(printf '%s' "$_raw" | tr '\n\r\t"' "   '")" || _detail="$_raw"
-  _detail="${_detail//\\//}"
+  _addr="role:$_role"
+  if [ ! -e "${CC_ROLES_DIR:-$HOME/.claude/cc-roles}/$_role" ] && [ -n "$_sid" ] && [ "${HF_ALARM_SID_FALLBACK:-1}" != 0 ]; then
+    _addr="sid:$_sid"
+  fi
 
-  # RECORD FIRST — mkdir + printf only, every step guarded.
+  # RECORD FIRST — every step guarded.
   _dir="${CC_HANDOFF_ALARM_DIR:-$HOME/.claude/handoff-alarms}"
   mkdir -p "$_dir" 2>/dev/null || true
   _stamp="$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null)" || _stamp=""
   _ts="$(date -u +%FT%TZ 2>/dev/null)" || _ts=""
   _file="alarm-$_stamp-$$-${RANDOM}.json"
-  printf '{"kind":"handoff-alarm","class":"%s","pane":"%s","sid":"%s","successor":"%s","detail":"%s","ts":"%s"}\n' \
-    "$_class" "$_pane" "$_sid" "$_succ" "$_detail" "$_ts" > "$_dir/$_file" 2>/dev/null || true
+  if command -v jq >/dev/null 2>&1 \
+     && jq -cn --arg c "$_class" --arg p "$_pane" --arg s "$_sid" --arg u "$_succ" --arg d "$_raw" --arg t "$_ts" \
+               --arg a "$_addr" --arg r "$_refire" --arg k "$_packet" \
+          '{kind:"handoff-alarm", class:$c, pane:$p, sid:$s, successor:$u, detail:$d, ts:$t, address:$a}
+           + (if $r == "" then {} else {refire_cmd:$r} end) + (if $k == "" then {} else {packet:$k} end)' \
+          > "$_dir/$_file" 2>/dev/null; then
+    :
+  else
+    # NO jq: a single-line body by printf. MAP, never delete — a newline/CR/tab would truncate the
+    # record and a `"` or `\` would make it unparseable; length and word boundaries stay readable.
+    _detail="$(printf '%s' "$_raw" | tr '\n\r\t"' "   '")" || _detail="$_raw"
+    _detail="${_detail//\\//}"
+    printf '{"kind":"handoff-alarm","class":"%s","pane":"%s","sid":"%s","successor":"%s","detail":"%s","ts":"%s","address":"%s"}\n' \
+      "$_class" "$_pane" "$_sid" "$_succ" "$_detail" "$_ts" "$_addr" > "$_dir/$_file" 2>/dev/null || true
+  fi
 
   # PUSH SECOND, bounded, with its verdict kept. `|| _rc=$?` rather than `|| true`: this file runs
   # under `set -e`, and a bare assignment from a failing substitution would abort the caller — the
   # one thing an alarm may never do.
   _out=""; _rc=0
-  _out="$(hf_bounded "$_notify" --role "${CC_COMPLETION_ROLE:-desk}" "$_class: $_raw" 2>&1)" || _rc=$?
+  if [ "${_addr%%:*}" = sid ]; then
+    _out="$(hf_bounded "$_notify" "$_sid" "$_class: $_raw${_refire:+ — re-fire: $_refire}" 2>&1)" || _rc=$?
+  else
+    _out="$(hf_bounded "$_notify" --role "$_role" "$_class: $_raw${_refire:+ — re-fire: $_refire}" 2>&1)" || _rc=$?
+  fi
 
   # First `verdict=<token>` in the reply, extracted WITHOUT a pipeline: under this file's `pipefail`
   # a `grep … | head -1` returns 141 when head closes the pipe on a MATCH, which would blank the
@@ -9659,7 +9696,166 @@ if [ "${1:-}" = "__recycle" ]; then
       echo "⚠ resume-debt settle skipped: no session id was handed to this watcher" >&2
       return 0
     fi
-    _hf_resume_debt settle --sid "$RCY_DEBT_SID"
+    # A packet written this run makes it a RECOVERY debt: the retry carries the packet's prompt, and
+    # only the token answered (or a live successor) discharges it — LIVE alone did not, on 2026-10-09.
+    if [ -n "${RCY_PACKET:-}" ] && [ -f "$RCY_PACKET" ]; then
+      _hf_resume_debt settle --sid "$RCY_DEBT_SID" --recovery "$RCY_PACKET"
+    else
+      _hf_resume_debt settle --sid "$RCY_DEBT_SID"
+    fi
+  }
+  # ══ A POST-/exit FAILURE IS IMPOSSIBLE TO MISS (RECYCLE_KEYSTROKELESS_DELIVERY §D3) ══════════════
+  # 2026-10-09, pane 44: the recycle failed after its /exit and every awareness link was dead — the
+  # alarm went to a `desk` role that does not exist, its sanitizer corrupted the manual command into
+  # `'$(cat …)'`, and nothing the original session would ever read carried the command that re-fires
+  # it. Every terminal arm below that leaves the work stranded now does four things, in this order:
+  #   1. REVOKES the staged successor first (rcy_failure_owned). A consumer that claims between the
+  #      failure verdict and the EXIT trap's revoke would start the successor while settle relaunches
+  #      the original elsewhere — two copies. A revoke that LOSES means the claim owns the pane: the
+  #      arm records recycle-successor-claimed-late and writes no packet and settles nothing.
+  #   2. writes the RECOVERY PACKET (rcy_recovery_packet): recycle-failed/<sid>.json + <sid>.prompt.md,
+  #      carrying the one exact re-fire command, which cc-resume-debt and reso-resume-one hand back
+  #      to the original session as its first prompt.
+  #   3. PAINTS the pane (rcy_pane_paint) where it is a bare shell: one printf to its own tty.
+  #   4. alarms with the packet and command attached (hf_alarm reads HF_ALARM_REFIRE/HF_ALARM_PACKET),
+  #      then settles the debt with --recovery.
+  # The never-confirmed-shell arm is the exception: the original may still be ALIVE (at the background-
+  # work dialog), so a re-fire packet would be wrong. It mails the session instead and counts the try.
+  RCY_PACKET="" RCY_REFIRE_CMD="" HF_ALARM_REFIRE="" HF_ALARM_PACKET=""
+  # The ORIGINAL argv, NUL-separated, handed over by file (HF_RCY_ORIG_ARGV_FILE) — not a positional.
+  RCY_ORIG_ARGV=()
+  if [ -n "${HF_RCY_ORIG_ARGV_FILE:-}" ] && [ -f "$HF_RCY_ORIG_ARGV_FILE" ]; then
+    while IFS= read -r -d '' rcy_a; do RCY_ORIG_ARGV+=("$rcy_a"); done < "$HF_RCY_ORIG_ARGV_FILE"
+  fi
+  rcy_orig_opt() { # $1=--flag → the value the ORIGINAL argv gave it (the last one wins), or nothing
+    local i=0 n="${#RCY_ORIG_ARGV[@]}" v=""
+    while [ "$i" -lt "$n" ]; do
+      if [ "${RCY_ORIG_ARGV[$i]}" = "$1" ] && [ $((i + 1)) -lt "$n" ]; then v="${RCY_ORIG_ARGV[$((i + 1))]}"; fi
+      i=$((i + 1))
+    done
+    printf '%s' "$v"
+  }
+  rcy_refire_cmd() { # $1=token → the one re-fire command line: printf %q of the original argv + --recovery-of
+    local i=0 n="${#RCY_ORIG_ARGV[@]}" a out skip=0
+    out="$(printf '%q' "${HF_RCY_ORIG_SELF:-$0}")"
+    if [ "$n" -gt 0 ]; then
+      while [ "$i" -lt "$n" ]; do
+        a="${RCY_ORIG_ARGV[$i]}"; i=$((i + 1))
+        if [ "$skip" = 1 ]; then skip=0; continue; fi
+        # A re-fire of a re-fire carries only ITS token: the earlier one names an older failure.
+        if [ "$a" = --recovery-of ]; then skip=1; continue; fi
+        out="$out $(printf '%q' "$a")"
+      done
+    else
+      # No argv handed over (an older foreground mid-land, or the relaunch-at-shell form): rebuild
+      # from what this watcher does know, so the command still names the brief and the goal.
+      out="$out --recycle"
+      if [ -n "${RCY_PROMPT_FILE:-}" ]; then out="$out --prompt-file $(printf '%q' "$RCY_PROMPT_FILE")"; fi
+      if [ -n "${FIRE_GOAL:-}" ]; then out="$out --goal $(printf '%q' "$FIRE_GOAL")"; fi
+    fi
+    out="$out --recovery-of $(printf '%q' "$1")"
+    if [ -n "${HF_RCY_ORIG_PWD:-}" ]; then out="cd $(printf '%q' "$HF_RCY_ORIG_PWD") && $out"; fi
+    printf '%s' "$out"
+  }
+  rcy_failure_owned() { # $1=arm → 0 the failure arm proceeds · 1 the pane's consumer claimed the stage first
+    [ "$rcy_succ_lib" = 1 ] || return 0
+    # Past the claim-or-revoke block the stage is already decided, and a claimed successor that then
+    # fails to boot or engage is a failure of ITS OWN that the arm must report.
+    case "${rcy_succ:-none}" in claimed|revoked|vanished) return 0 ;; esac
+    if hf_succ_ours_staged "$TTY_PATH" && cc_pane_successor_revoke "$TTY_PATH" >/dev/null 2>&1; then
+      echo "→ $1: staged successor REVOKED before the failure verdict — nothing can start it now"
+      return 0
+    fi
+    hf_succ_claim_epoch "$TTY_PATH" "$rcy_w_t0" >/dev/null || return 0
+    emit_recycle_event recycle-successor-claimed-late "" "$RSID" "$1: the pane's consumer claimed the staged successor before this failure arm could revoke it; no packet, no settle" || true
+    echo "→ $1: the staged successor was CLAIMED before this failure arm could revoke it — the claim owns the pane; no packet, no settle"
+    return 1
+  }
+  rcy_recovery_packet() { # $1=class $2=cause → recycle-failed/<sid>.json + .prompt.md; sets RCY_PACKET · always 0
+    local sid="${RCY_DEBT_SID:-}" dir ep ts tok last enum load cause what chk brief goal acct eff tmp hl
+    if [ -z "$sid" ]; then echo "⚠ recovery packet skipped: no session id was handed to this watcher" >&2; return 0; fi
+    if ! command -v jq >/dev/null 2>&1; then echo "⚠ recovery packet skipped: jq not found" >&2; return 0; fi
+    dir="${CC_RECYCLE_FAILED_DIR:-$HOME/.claude/autonomy/recycle-failed}"
+    mkdir -p "$dir" 2>/dev/null || { echo "⚠ recovery packet skipped: cannot create $dir" >&2; return 0; }
+    ep="$(date +%s)"; ts="$(date -u -r "$ep" +%FT%TZ 2>/dev/null || date -u +%FT%TZ)"
+    tok="recycle-recovery:$sid:$ep"
+    RCY_REFIRE_CMD="$(rcy_refire_cmd "$tok")"
+    # THE CAUSE: the last per-attempt typing line (§D2 telemetry — this watcher's log, else its
+    # handoffs.jsonl row), the pane's enumeration verdict now, and the load that starved the attempts.
+    last=""
+    if [ -n "${HF_RCY_WATCHER_LOG:-}" ] && [ -f "$HF_RCY_WATCHER_LOG" ]; then
+      last="$(grep ' type-attempt ' "$HF_RCY_WATCHER_LOG" 2>/dev/null | tail -1)" || last=""
+    fi
+    hl="$HOME/.claude/logs/handoffs.jsonl"
+    if [ -z "$last" ] && [ -f "$hl" ]; then
+      last="$(grep -F '"recycle-type-attempt"' "$hl" 2>/dev/null \
+              | jq -r --arg p "$RSID" 'select(.target_pane == $p) | "\(.ts) type-attempt pane=\(.target_pane) \(.detail // "")"' 2>/dev/null \
+              | tail -1)" || last=""
+    fi
+    enum="$(pane_enumerated "$IT2" "$RSID")"
+    load="$(hf_load_per_core || true)"
+    cause="$2; last typing attempt: ${last:-none recorded}; pane_enumerated: $enum; load/core: ${load:-unreadable}"
+    brief="$(rcy_orig_opt --prompt-file)"; [ -n "$brief" ] || brief="${RCY_PROMPT_FILE:-}"
+    goal="$(rcy_orig_opt --goal)"; [ -n "$goal" ] || goal="${FIRE_GOAL:-}"
+    acct="$(rcy_orig_opt --account)"; eff="$(rcy_orig_opt --effort)"
+    tmp="$dir/.$sid.json.$$"
+    if jq -n --arg failed_at "$ts" --arg class "$1" --arg sid "$sid" --arg pane "$RSID" --arg pane_tty "$TTY_PATH" \
+            --arg cause "$cause" --arg brief "$brief" --arg goal "$goal" --arg account "$acct" --arg effort "$eff" \
+            --arg watcher_log "${HF_RCY_WATCHER_LOG:-}" --arg token "$tok" --arg refire_cmd "$RCY_REFIRE_CMD" \
+            --arg relaunch_cmd "$(cat "$CMDFILE" 2>/dev/null || true)" \
+         '{failed_at:$failed_at, class:$class, sid:$sid, pane:$pane, pane_tty:$pane_tty, cause:$cause,
+           brief:$brief, goal:$goal, account:$account, effort:$effort, watcher_log:$watcher_log,
+           token:$token, refire_cmd:$refire_cmd, relaunch_cmd:$relaunch_cmd}' > "$tmp" 2>/dev/null \
+       && mv -f "$tmp" "$dir/$sid.json"; then
+      RCY_PACKET="$dir/$sid.json"
+    else
+      rm -f "$tmp" 2>/dev/null || true
+      echo "⚠ recovery packet NOT written for ${sid:0:8} ($dir)" >&2
+      return 0
+    fi
+    case "$1" in *never-engaged*) what="the successor booted but never took a turn" ;; *) what="the successor never ran" ;; esac
+    chk="$HOME/.claude/bin/cc-find $RSID"
+    tmp="$dir/.$sid.prompt.md.$$"
+    # shellcheck disable=SC2016  # the backticks are markdown around the command, never a substitution
+    if { printf 'Your self-recycle at %s FAILED (%s: %s); %s.\n\n' "$ts" "$1" "$cause" "$what"
+         printf 'FIRST check that no successor is live: run `%s` — a LIVE row for pane %s whose session is not %s is a live successor, and then do NOT re-fire.\n\n' "$chk" "$RSID" "$sid"
+         printf 'If none, re-fire with exactly:\n\n%s\n\nRecovery token: %s\n' "$RCY_REFIRE_CMD" "$tok"
+       } > "$tmp" 2>/dev/null && mv -f "$tmp" "$dir/$sid.prompt.md"; then :
+    else rm -f "$tmp" 2>/dev/null || true; echo "⚠ recovery prompt NOT written for ${sid:0:8} ($dir)" >&2; fi
+    HF_ALARM_REFIRE="$RCY_REFIRE_CMD" HF_ALARM_PACKET="$RCY_PACKET"
+    echo "→ recovery packet: $RCY_PACKET (token $tok) — re-fire: $RCY_REFIRE_CMD"
+    return 0
+  }
+  rcy_pane_paint() { # $1=class $2=cause → a framed banner on the pane's OWN tty (a bare shell) · always 0
+    local bar='!!══════════════════════════════════════════════════════════════════════════════' cmd pk=""
+    # THE COMMAND FOR THIS PANE IS THE RELAUNCH LINE, not refire_cmd. The banner is read at a BARE SHELL,
+    # where the relaunch line starts the successor with its brief in place; refire_cmd re-runs
+    # `handoff-fire.sh --recycle`, which needs a live claude session to recycle — it is the ORIGINAL
+    # session's command, and it reaches that session through the packet (named here) and its prompt.
+    cmd="$(cat "$CMDFILE" 2>/dev/null || true)"
+    if [ -n "${RCY_PACKET:-}" ]; then pk="!!   (the original session's re-fire command and token: $RCY_PACKET)"$'\n'; fi
+    # ONE printf to its own tty, opened by PATH. NOT `it2 session run`: that is the LAUNCH verb, whose
+    # armed-pane branch writes a `$CMD_DIR/<id>.cmd` file instead of typing, so it was never sure to
+    # reach the screen — and the it2 write path is the one that raced on 2026-09-19. A tty is writable
+    # by path from any context, a setsid'd watcher with no controlling terminal included, and under
+    # any load (memory: a verdict goes WHERE THE OPERATOR LOOKS).
+    printf '\n%s\n!! HANDOFF RECYCLE FAILED (%s) at %s\n!!   %s\n!!   The successor did not start. Run this ONE command here, exactly:\n%s\n%s%s\n' \
+      "$bar" "$1" "$(date -u +%FT%TZ)" "$2" "$cmd" "$pk" "$bar" > "$TTY_PATH" 2>/dev/null || true
+    echo "→ failure banner painted to $TTY_PATH"
+    return 0
+  }
+  rcy_never_confirmed_mail() { # $1=message → the session's OWN mailbox + the attempt counted · always 0
+    local sid="${RCY_OLD_SID:-${RCY_DEBT_SID:-}}" dir f n rc=0
+    if [ -z "$sid" ]; then echo "⚠ never-confirmed: no session id to mail" >&2; return 0; fi
+    dir="${CC_RECYCLE_FAILED_DIR:-$HOME/.claude/autonomy/recycle-failed}"; f="$dir/$sid.never-confirmed"
+    mkdir -p "$dir" 2>/dev/null || true
+    n="$(cat "$f" 2>/dev/null || true)"; case "$n" in ''|*[!0-9]*) n=0 ;; esac
+    n=$((n + 1)); printf '%s\n' "$n" > "$f" 2>/dev/null || true
+    # The sid mailbox, not a role: mailbox-drain delivers it at the session's next turn boundary and
+    # hooks/mailbox-wake-arm.sh's asyncRewake wakes an idle one.
+    hf_bounded "${CC_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}" --from handoff-fire "$sid" "$1 (never-confirmed attempt $n)" >/dev/null 2>&1 || rc=$?
+    echo "→ never-confirmed: mailed session ${sid:0:8} (rc $rc, attempt $n, counter $f)"
+    return 0
   }
   # $15: THIS RUN's submit token (W3), positional-last + optional like every argument above it. It is
   # resolved in the FOREGROUND, out of the launcher the recycle is about to type, and handed over only
@@ -10107,6 +10303,9 @@ if [ "${1:-}" = "__recycle" ]; then
       esac ;;
     esac
   done
+  # A claim that beat the revoke means the pane's own shell ran the successor: the pane was not gone
+  # after all, so the claimed path below (and its engagement wait) owns the outcome.
+  if [ "$rcy_vanished" = 1 ] && ! rcy_failure_owned pane-vanished; then rcy_vanished=0; rcy_shell_ok=1; fi
   if [ "$rcy_vanished" = 1 ]; then
     # THE PANE ITSELF IS GONE — a FINDING, not an abstention, and it needs its own arm because the
     # remedy below it is wrong here. The generic recycle-dead alarm says "relaunch manually in that
@@ -10114,6 +10313,8 @@ if [ "${1:-}" = "__recycle" ]; then
     # operator would have been handed for pane 32. Say what is true, and name the two things that
     # can actually recover it: the brief the recycle was carrying, and the relaunch command.
     emit_recycle_event recycle-dead "" "$RSID" "pane VANISHED after ${waited}s — destroyed by its own /exit (no shell under the session); successor never typed" || true
+    # No paint: the pane is gone, and its tty may already belong to a stranger's new window.
+    rcy_recovery_packet pane-vanished "pane $RSID VANISHED ${waited}s after the /exit (destroyed by it); nothing typed"
     hf_alarm recycle-dead "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-DEAD (PANE GONE): pane $RSID no longer exists — 'session list' enumerates other panes but not this one, ${waited}s after the /exit. The pane had no shell under its session, so the /exit destroyed the window itself and the successor could never be typed. This session's continuation is STRANDED. Its brief: ${RCY_PROMPT_FILE:-<none recorded>}. Fire it into a NEW pane: scripts/handoff-fire.sh --prompt-file ${RCY_PROMPT_FILE:-<brief>} --split-right. Raw relaunch line: $(cat "$CMDFILE")" || true
     echo "!! pane $RSID VANISHED ${waited}s after the /exit (enumerated by session list at arm time, absent now) — the pane had no shell under its session, so its own /exit closed it. Nothing was typed; the successor never started. Fire it into a NEW pane: scripts/handoff-fire.sh --prompt-file ${RCY_PROMPT_FILE:-<brief>} --split-right" >&2
     rcy_debt_settle
@@ -10121,6 +10322,9 @@ if [ "${1:-}" = "__recycle" ]; then
   fi
   # The bound expired with no confirmation: one last read, as the old loop condition gave it.
   if [ "$rcy_shell_ok" != 1 ] && [ "$rcy_vanished" != 1 ] && at_shell; then rcy_shell_ok=1; fi
+  # Revoke before the never-confirmed verdict: a claim that wins means the predecessor DID exit and
+  # its successor runs — the pane this loop could not confirm holds the successor, not the original.
+  if [ "$rcy_shell_ok" != 1 ] && ! rcy_failure_owned never-confirmed; then rcy_shell_ok=1; fi
   # The session exited: a retry ticket an earlier held attempt left for it has nothing more to ask.
   if [ "$rcy_shell_ok" = 1 ] && [ -n "${RCY_OLD_SID:-}" ]; then rm -f "$(hf_recycle_retry_dir)/$RCY_OLD_SID.json" 2>/dev/null || true; fi
   if [ "$rcy_shell_ok" != 1 ]; then
@@ -10165,6 +10369,8 @@ if [ "${1:-}" = "__recycle" ]; then
     # stranded pane.
     # The claim is chosen by the probe's own verdict — see rcy_dead_claim.
     rcy_dead_claim="$(rcy_dead_claim "$rcy_dead_verdict" "$waited" "$(cat "$CMDFILE")")"
+    # The session's own mailbox gets rcy_never_confirmed_mail below; the alarm must not mail it twice.
+    HF_ALARM_SID_FALLBACK=0
     hf_alarm recycle-dead "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-DEAD:${rcy_bgwork_note}${rcy_bgwork_note:+ Otherwise:} pane $RSID — $rcy_dead_claim" || true
     # An `if`, not `[ … ] && echo …`. NOT for the errexit reason that suggests itself and that this
     # comment first claimed: measured on this file's own `set -euo pipefail`, a failing FIRST
@@ -10174,6 +10380,10 @@ if [ "${1:-}" = "__recycle" ]; then
     # have to know that exemption to see that this line is conditional.
     if [ -n "$rcy_bgwork_note" ]; then echo "!!${rcy_bgwork_note}" >&2; fi
     echo "!! pane $RSID never reached a CONFIRMED shell prompt in ${waited}s (probe verdict: $rcy_dead_verdict) — NOT typing onto an unconfirmed pane. $rcy_dead_claim" >&2
+    # NO re-fire packet here (§D3, skeptic flaw 4): the original may still be ALIVE — at the
+    # background-work dialog above all — and a packet would hand it a command that starts a second
+    # copy of itself. It is told in its OWN mailbox instead, and the attempt is counted.
+    rcy_never_confirmed_mail "HANDOFF-RECYCLE-NOT-CONFIRMED: your self-recycle in pane $RSID did not complete — the pane never reached a confirmed shell in ${waited}s after the /exit (probe verdict: $rcy_dead_verdict), so NOTHING was typed and no successor started.${rcy_bgwork_note:+ The /exit raised the background-work dialog and this session may still be alive at it.} If you are reading this, you are still running: clear whatever held the /exit, then re-run the recycle."
     rcy_debt_settle
     exit 1
   fi
@@ -10306,7 +10516,10 @@ if [ "${1:-}" = "__recycle" ]; then
   rcy_surface=claimed
   [ "$rcy_succ" = claimed ] || rcy_surface="$(pane_enumerated "$IT2" "$RSID")"
   if [ "$rcy_surface" = absent ]; then
+    rcy_failure_owned surface-gone || exit 0
     emit_recycle_event recycle-dead "" "$RSID" "pane vanished between exit and relaunch — relaunch surface gone" || true
+    # No paint: the pane-405 case — its tty was reused by a NEW window, so a banner would land in a stranger's.
+    rcy_recovery_packet surface-gone "pane $RSID reached a shell after the /exit, then vanished before the relaunch was typed; nothing typed"
     hf_alarm recycle-dead "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-DEAD (SURFACE GONE): pane $RSID reached a shell after the /exit and then vanished before the relaunch could be typed — 'session list' enumerates other panes but not this one. Nothing was typed into it. The session is being relaunched in a NEW window by cc-resume-debt settle; if that escalates, run: $(cat "$CMDFILE") in a new pane" || true
     echo "!! pane $RSID vanished between exit and relaunch — relaunch surface gone; nothing typed, settling the session's resume debt" >&2
     rcy_debt_settle
@@ -10362,8 +10575,12 @@ if [ "${1:-}" = "__recycle" ]; then
     # alarm before exiting; the alarm is what the desk sweeps, the row is what the rate queries see.
     # The surface is re-read AFTER the failures so the row says which failure this was: a pane that
     # is gone now needs a new window, a present one refused keystrokes.
+    rcy_failure_owned relaunch-write-failed || exit 0
     rcy_surface="$(pane_enumerated "$IT2" "$RSID")"
     emit_recycle_event recycle-dead "" "$RSID" "relaunch write failed twice ($rcy_type_round typing rounds, deadline ${CC_RECYCLE_TYPE_DEADLINE_S:-600}s) — pane stranded at a bare shell (pane $rcy_surface after the failed writes)" || true
+    rcy_recovery_packet relaunch-write-failed "relaunch write into $RSID failed ($rcy_type_round typing rounds, deadline ${CC_RECYCLE_TYPE_DEADLINE_S:-600}s); pane stranded at a bare shell"
+    # The pane-44 case exactly: a bare shell the operator is looking at. A gone pane gets no banner.
+    if [ "$rcy_surface" != absent ]; then rcy_pane_paint relaunch-write-failed "the relaunch could not be typed into this pane ($rcy_type_round typing rounds)"; fi
     hf_alarm recycle-relaunch-failed "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-RELAUNCH-FAILED: relaunch write into $RSID failed twice ($rcy_type_round typing rounds; per-attempt telemetry: recycle-type-attempt rows) — the pane is at a bare shell with NO claude. Run manually in that pane: $(cat "$CMDFILE")" || true
     echo "!! it2 relaunch write failed twice — run manually in the pane: $(cat "$CMDFILE")" >&2
     rcy_debt_settle
@@ -10548,8 +10765,11 @@ if [ "${1:-}" = "__recycle" ]; then
         sleep 3; rcy_pp_t=$((rcy_pp_t + 3))
       done
       echo "!! RECYCLE FAILED — the no-prompt relaunch in $RSID never held a live '--resume ${RCY_RESUME_SID:0:8}' claude for ${rcy_pp_hold}s within ${RCY_ENGAGE_TIMEOUT:-180}s. Relaunch manually: $(cat "$CMDFILE")" >&2
+      rcy_failure_owned never-held-resume || exit 0
       emit_recycle_event recycle-dead 0 "$RSID" "no-prompt relaunch never held a live --resume process" || true
-      hf_alarm recycle-dead "$RSID" "" "" "HANDOFF-RECYCLE-DEAD: pane $RSID - the no-prompt (team member) relaunch never held a live --resume process. Relaunch: $(cat "$CMDFILE")"
+      rcy_recovery_packet never-held-resume "the no-prompt relaunch in $RSID never held a live '--resume ${RCY_RESUME_SID:0:8}' claude for ${rcy_pp_hold}s within ${RCY_ENGAGE_TIMEOUT:-180}s"
+      if ! cc_alive; then rcy_pane_paint never-held-resume "the relaunch never held a live claude in this pane"; fi
+      hf_alarm recycle-dead "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-DEAD: pane $RSID - the no-prompt (team member) relaunch never held a live --resume process. Relaunch: $(cat "$CMDFILE")"
       rcy_debt_settle
       exit 1
     fi
@@ -10668,9 +10888,12 @@ if [ "${1:-}" = "__recycle" ]; then
     # assistant turn. This is the "asked, answered no" half of the tri-state above.
     # engaged FALSE here, and it is a real measurement: the window expired with a live claude and no
     # assistant turn. This is the "asked, answered no" half of the tri-state above.
+    rcy_failure_owned never-engaged || exit 0
     emit_recycle_event recycle-dead 0 "$RSID" "relaunched pane $RSID; no assistant turn within ${RCY_ENGAGE_TIMEOUT}s (brief consumed or rejected)" || true
     goal_unreachable recycle-dead || true
-    hf_alarm recycle-dead "$RSID" "" "" "HANDOFF-RECYCLE-DEAD: pane $RSID relaunched but never engaged (no assistant turn in ${RCY_ENGAGE_TIMEOUT}s) — claude is alive at an empty composer, the continuation did NOT start. Re-send the brief or relaunch: $(cat "$CMDFILE")"
+    # No paint: a claude is alive in this pane, and bytes on its tty would land in its TUI.
+    rcy_recovery_packet never-engaged "relaunched in $RSID but no assistant turn within ${RCY_ENGAGE_TIMEOUT}s — $rcy_dead_why; a task-less claude holds the pane"
+    hf_alarm recycle-dead "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-DEAD: pane $RSID relaunched but never engaged (no assistant turn in ${RCY_ENGAGE_TIMEOUT}s) — claude is alive at an empty composer, the continuation did NOT start. Re-send the brief or relaunch: $(cat "$CMDFILE")"
     # DISCHARGE, not settle: a claude IS alive in this pane, so relaunching the sid elsewhere would
     # make two sessions. The HANDOFF-RECYCLE-DEAD alarm above owns what remains.
     _hf_resume_debt discharge --sid "$RCY_DEBT_SID" --why "relaunched claude alive in pane $RSID, unengaged; HANDOFF-RECYCLE-DEAD alarm owns it"
@@ -10725,16 +10948,13 @@ if [ "${1:-}" = "__recycle" ]; then
   [ -n "${RCY_BGCOPY_SHORT:-}" ] && rcy_detail="$rcy_detail; the old conversation was backgrounded as $RCY_BGCOPY_SHORT and stopped — bring it back with: claude attach $RCY_BGCOPY_SHORT"
   [ -n "${RCY_RUN_DIR:-}" ] && command -v lr_state_append >/dev/null 2>&1 \
     && { lr_state_append "$RCY_RUN_DIR" "${rcy_boot_state%%:*}" boot "$rcy_detail" || true; }
+  rcy_failure_owned boot-failed || exit 0
   emit_recycle_event recycle-dead 0 "$RSID" "$rcy_detail" || true
   goal_unreachable recycle-dead || true
+  rcy_recovery_packet boot-failed "$rcy_detail"
   hf_alarm recycle-relaunch-refused "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-RELAUNCH-REFUSED: $rcy_detail. Pane $RSID now holds NO claude and its work is stranded. Relaunch manually in that pane: $(cat "$CMDFILE")" || true
-  # PAINT THE PANE — ONE printf to its own tty, opened by PATH. NOT `it2 session run`: that is the
-  # LAUNCH verb, whose armed-pane branch writes a `$CMD_DIR/<id>.cmd` file instead of typing
-  # (:1419-1431), so the "fallback comment typed into pane" this line used to claim was not
-  # guaranteed to reach the screen at all — and the it2 write path is the one that raced on
-  # 2026-09-19. A tty is writable by path from any context, including a setsid'd watcher with no
-  # controlling terminal (memory: a verdict goes WHERE THE OPERATOR LOOKS).
-  printf '\n!! HANDOFF RECYCLE FAILED — %s\n!!   run manually here: %s\n' "$rcy_detail" "$(cat "$CMDFILE")" > "$TTY_PATH" 2>/dev/null || true
+  # PAINT THE PANE — rcy_pane_paint (one printf to its own tty; why not it2, in its header).
+  rcy_pane_paint boot-failed "$rcy_detail"
   echo "!! $rcy_detail — verdict painted to $TTY_PATH, row + alarm written" >&2
   rcy_debt_settle
   exit 1
@@ -12766,9 +12986,12 @@ fi
 EXPLICIT_LAUNCHER=0
 # The argv exactly as the caller passed it, saved before the parse consumes it, so a failed recycle
 # can name the one command that re-fires it (RECYCLE_KEYSTROKELESS_DELIVERY §U4). `${@+"$@"}`: an
-# empty argv under bash 3.2's `set -u` would otherwise be an unbound-variable abort.
-# shellcheck disable=SC2034  # read by the re-fire renderer, not in this file's own control flow
+# empty argv under bash 3.2's `set -u` would otherwise be an unbound-variable abort. The path this
+# script was invoked BY (absolute, symlink kept: ~/.claude/scripts stays the live layer) and the cwd
+# it was invoked FROM ride beside it, so a relative --prompt-file still resolves when re-fired.
 HF_ORIG_ARGV=(${@+"$@"})
+HF_ORIG_SELF="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$0")" || HF_ORIG_SELF="$0"
+HF_ORIG_PWD="$PWD"
 while [ $# -gt 0 ]; do case "$1" in
   --prompt-file) PROMPT_FILE="${2:?--prompt-file needs a value}"; shift 2 ;;
   --account)     ACCOUNT="${2:?--account needs a value}"; shift 2 ;;
@@ -12793,6 +13016,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --source-session) RCY_SOURCE_SESSION="${2:?--source-session needs a session uuid}"; shift 2 ;;
   --transplanted-source) RCY_TRANSPLANTED_SOURCE=1; shift ;;
   --husk)        RCY_HUSK=1; shift ;;
+  --recovery-of) RCY_RECOVERY_OF="${2:?--recovery-of needs a recycle-recovery token}"; shift 2 ;;
   --same-account) RCY_SAME_ACCOUNT=1; shift ;;
   --team-member-id) HF_TEAM_MEMBER_ID="${2:?--team-member-id needs an agent id}"; shift 2 ;;
   --transplant-cause)
@@ -12898,6 +13122,57 @@ fi
 # --husk names a state only the transplant class can be in (a source already retired by a confirm).
 if [ "$RCY_HUSK" = 1 ] && { [ "$RECYCLE" != 1 ] || [ "$RCY_TRANSPLANTED_SOURCE" != 1 ]; }; then
   echo "!! --husk is only valid with --recycle --transplanted-source: it asserts a transplant's source was already retired, which no other class has" >&2; exit 2
+fi
+# --recovery-of: A RE-FIRE IS IDEMPOTENT (RECYCLE_KEYSTROKELESS_DELIVERY §D3, skeptic flaw 5). The
+# refire_cmd a failed recycle hands out reaches three readers — the original session's recovery
+# prompt, the backlog row cc-resume-debt escalates to, the banner painted into the pane — and any of
+# them may run it after another already has. So the token is checked against the two facts that make
+# a second fire a second copy: the recycle has since ENGAGED (a `recycle-engaged` row naming the
+# token's sid as prev_sid, at or after the token's epoch), or a live claude now holds the packet's
+# pane. Either ⇒ exit 2, named. Otherwise the packet is stamped refired_at and the fire proceeds.
+hf_recovery_of_gate() { # $1=token → 0 proceed (packet stamped) · exit 2 on a refusal
+  local tok="$1" sid ep log n dir pkt tty st tmp
+  case "$tok" in recycle-recovery:?*:?*) ;; *)
+    echo "!! --recovery-of '$tok' REFUSED: not a recovery token (recycle-recovery:<sid>:<epoch>)" >&2
+    emit_fire_refusal recovery-of "malformed token: $tok"; exit 2 ;;
+  esac
+  sid="${tok#recycle-recovery:}"; ep="${sid##*:}"; sid="${sid%:*}"
+  case "$ep" in *[!0-9]*)
+    echo "!! --recovery-of '$tok' REFUSED: the epoch '$ep' is not a number" >&2
+    emit_fire_refusal recovery-of "malformed token: $tok"; exit 2 ;;
+  esac
+  log="${HF_HANDOFFS_LOG:-$HOME/.claude/logs/handoffs.jsonl}"; n=0
+  if [ -s "$log" ] && command -v jq >/dev/null 2>&1; then
+    n="$(grep -F '"recycle-engaged"' "$log" 2>/dev/null | jq -r -s --arg s "$sid" --argjson e "$ep" '
+          def ep: sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch null);
+          [ .[] | select(.class == "recycle-engaged" and .engaged == true and .prev_sid == $s)
+                | select(((.ts // "") | ep) as $t | $t != null and $t >= $e) ] | length' 2>/dev/null)" || n=0
+    case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  fi
+  if [ "$n" -gt 0 ]; then
+    echo "!! --recovery-of $tok REFUSED: the recycle of ${sid:0:8} has ENGAGED since it failed ($n recycle-engaged row(s) after $(date -u -r "$ep" +%FT%TZ 2>/dev/null || echo "epoch $ep") in $log) — a successor already carries this work, and a re-fire would start a second copy" >&2
+    emit_fire_refusal recovery-of "already engaged: $tok"; exit 2
+  fi
+  dir="${CC_RECYCLE_FAILED_DIR:-$HOME/.claude/autonomy/recycle-failed}"; pkt="$dir/$sid.json"; tty=""
+  [ -f "$pkt" ] && tty="$(jq -r '.pane_tty // ""' "$pkt" 2>/dev/null || true)"
+  if [ -n "$tty" ]; then
+    st="$(pane_cc_state "$tty")"
+    if [ "$st" = cc ]; then
+      echo "!! --recovery-of $tok REFUSED: a live claude holds the failed recycle's pane ($tty) — something relaunched there since the failure; re-firing would start a second copy" >&2
+      emit_fire_refusal recovery-of "live claude on $tty: $tok"; exit 2
+    fi
+  fi
+  if [ -f "$pkt" ] && [ "${DRY:-0}" != 1 ]; then
+    tmp="$pkt.tmp.$$"
+    if jq --arg r "$(date -u +%FT%TZ)" '.refired_at = $r' "$pkt" > "$tmp" 2>/dev/null; then mv -f "$tmp" "$pkt"
+    else rm -f "$tmp"; echo "⚠ --recovery-of: could not stamp refired_at on $pkt" >&2; fi
+  fi
+  echo "→ --recovery-of $tok: not engaged since, no live claude on ${tty:-<no packet pane>} — re-firing"
+  return 0
+}
+if [ -n "$RCY_RECOVERY_OF" ]; then
+  [ "$RECYCLE" = 1 ] || { echo "!! --recovery-of is a --recycle flag: it re-fires a failed recycle" >&2; exit 2; }
+  hf_recovery_of_gate "$RCY_RECOVERY_OF"
 fi
 # The two evidence classes of the remote form are EXCLUSIVE: a session either moved (tombstone) or it
 # did not (same account). Accepting both would let whichever check is weaker decide.
@@ -17111,6 +17386,14 @@ recycle_fire_armed() {
   hf_phase detach
   # The watcher's outcome rows keep this recycle's clock (item 4b): exported here, at its detach only.
   export HF_T0_EPOCH HF_RCY_PHASES
+  # THE RE-FIRE INPUTS (§D3), by ENV and a file beside the cmdfile — never a new positional: the
+  # watcher's argv is a counted contract (see "THE INDEX IS THE 15th ARG" in the watcher). The argv is
+  # NUL-separated so no argument (a --goal with spaces, quotes or newlines) can split or fuse.
+  HF_RCY_ORIG_ARGV_FILE="$cmdfile.argv"
+  if [ "${#HF_ORIG_ARGV[@]}" -gt 0 ]; then printf '%s\0' "${HF_ORIG_ARGV[@]}" > "$HF_RCY_ORIG_ARGV_FILE" 2>/dev/null || HF_RCY_ORIG_ARGV_FILE=""
+  else : > "$HF_RCY_ORIG_ARGV_FILE" 2>/dev/null || HF_RCY_ORIG_ARGV_FILE=""; fi
+  HF_RCY_ORIG_SELF="$HF_ORIG_SELF" HF_RCY_ORIG_PWD="$HF_ORIG_PWD" HF_RCY_WATCHER_LOG="$log"
+  export HF_RCY_ORIG_ARGV_FILE HF_RCY_ORIG_SELF HF_RCY_ORIG_PWD HF_RCY_WATCHER_LOG
   WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$LAUNCH_DIR" "$rcy_old_sid" "$RECYCLE_MARKER" "$FIRE_GOAL" "${PROMPT_FILE_ORIG:-$PROMPT_FILE}" "$RESUME_CFG" "${RESUME_LAUNCHER:+${RCY_SOURCE_SESSION:-$rcy_old_sid}}" "$RCY_T0" "$RCY_SRC_TX" "$RCY_RUN_DIR_ARG" "$RCY_SUBMIT_TOKEN_ARG" "$RCY_CALLER_PID_ARG")"
   if ! await_armed "$log"; then
     hf_recycle_disarm

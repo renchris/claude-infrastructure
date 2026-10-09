@@ -103,7 +103,7 @@ pristine_hf() { # $1=class token → prints the path to the pre-change artifact
 
 # ── 1. the record: written first, shaped as the frozen interface ─────────────────────────────────
 
-@test "the record is written with the frozen shape, on ONE line, with no jq in the path" {
+@test "the record is written with the frozen shape, on ONE line" {
   [ -z "$(records)" ]                                   # control: the dir starts empty…
   alarm strand-risk PANE-1 SID-1 SUCC-1 "HANDOFF-STRAND-RISK: successor died before the close instant"
   [ "$status" -eq 0 ]
@@ -203,9 +203,9 @@ and then	a back\slash'
   [ "$status" -eq 0 ]
   [ "$(rec | wc -l | tr -d ' ')" -eq 1 ]
   /usr/bin/python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$(records)"
-  # the text is MAPPED, not deleted — an unreadable detail is a lost alarm by another route
-  rec | grep -q "he said 'boom'" || false
-  rec | grep -q 'back/slash' || false
+  # ESCAPED, never mapped or deleted (§D3: jq builds the record now), so the text round-trips exactly.
+  [ "$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["detail"], end="")' "$(records)")" = 'HANDOFF-RECYCLE-DEAD: he said "boom"
+and then	a back\slash' ] || { rec; false; }
 
   # ORACLE CONTROL: the adjudicator above must be able to REJECT. An unsanitized body built from the
   # same detail has to fail, or `json.load` succeeding proves nothing about the sanitizer.
@@ -227,6 +227,71 @@ and then	a back\slash'
   sed -n '/^hf_alarm()/,/^}/p' "$FIRE" > "$BATS_TEST_TMPDIR/live-lib.sh"
   [ -s "$BATS_TEST_TMPDIR/live-lib.sh" ]
   grep -q '^hf_alarm()' "$BATS_TEST_TMPDIR/live-lib.sh" || false
+}
+
+# ── 6b. RECYCLE_KEYSTROKELESS_DELIVERY §D3: the command round-trips, and the address can hear it ────
+
+@test "THE INCIDENT: the real pane-44 relaunch line round-trips through the record with \"\$(cat …)\" intact" {
+  local fx cmd detail fxa
+  fxa="$REPO/tests/fixtures/recycle-keystrokeless/alarm-20261009T050321Z-22463-28344.json"
+  fx="$(ls "$REPO"/tests/fixtures/recycle-keystrokeless/handoff-recycle-cmd-44-*.sh)"
+  # The control: the REAL record of 2026-10-09 carries the corruption this case forbids.
+  jq -r .detail "$fxa" | grep -qF "'\$(cat " || { echo "the fixture no longer shows the defect"; false; }
+  cmd="$(tail -n +3 "$fx")"
+  [[ "$cmd" == *'"$(cat '* ]] || false
+  # The site's own detail, rebuilt from the fixture record's prefix and the real relaunch line.
+  detail="$(jq -r .detail "$fxa")"; detail="${detail%%Run manually in that pane: *}Run manually in that pane: $cmd"
+  alarm recycle-relaunch-failed 44 6defb493-e229-4318-b0ab-86e7167c39e3 "" "$detail"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .detail "$(records)")" = "$detail" ] || { rec; false; }
+  jq -r .detail "$(records)" | grep -qF '"$(cat ' || { rec; false; }
+  ! jq -r .detail "$(records)" | grep -qF "'\$(cat " || { rec; false; }
+}
+
+@test "no role file + a known sid ⇒ the push goes to the sid's OWN mailbox, and the record says so" {
+  # No $HOME/.claude/cc-roles/desk in this sandbox — the box's live state, where all 24 pushes refused.
+  alarm recycle-dead 44 SID-44 "" "HANDOFF-RECYCLE-DEAD: x"
+  [ "$status" -eq 0 ]
+  pushes | grep -qx 'SID-44 recycle-dead: HANDOFF-RECYCLE-DEAD: x' || { pushes; false; }
+  ! pushes | grep -q -- '--role' || { pushes; false; }
+  [ "$(jq -r .address "$(records)")" = sid:SID-44 ] || { rec; false; }
+}
+
+@test "the role file present ⇒ the role is addressed; no sid ⇒ the role; HF_ALARM_SID_FALLBACK=0 ⇒ the role" {
+  mkdir -p "$HOME/.claude/cc-roles"; : > "$HOME/.claude/cc-roles/desk"
+  alarm recycle-dead 44 SID-44 "" "HANDOFF-RECYCLE-DEAD: with-role"
+  pushes | grep -q -- '--role desk recycle-dead: HANDOFF-RECYCLE-DEAD: with-role' || { pushes; false; }
+  rm -f "$HOME/.claude/cc-roles/desk" "$ALARM_DIR"/alarm-*
+  alarm recycle-dead 44 "" "" "HANDOFF-RECYCLE-DEAD: no-sid"
+  [ "$(jq -r .address "$(records)")" = role:desk ] || { rec; false; }
+  rm -f "$ALARM_DIR"/alarm-*
+  HF_ALARM_SID_FALLBACK=0 alarm recycle-dead 44 SID-44 "" "HANDOFF-RECYCLE-DEAD: opted-out"
+  [ "$(jq -r .address "$(records)")" = role:desk ] || { rec; false; }
+}
+
+@test "refire_cmd and packet ride in the record (args or env) and the re-fire command in the push" {
+  alarm recycle-dead 44 SID-44 "" "HANDOFF-RECYCLE-DEAD: y" 'x --recovery-of "recycle-recovery:SID-44:1"' /pk/SID-44.json
+  [ "$(jq -r .refire_cmd "$(records)")" = 'x --recovery-of "recycle-recovery:SID-44:1"' ] || { rec; false; }
+  [ "$(jq -r .packet "$(records)")" = /pk/SID-44.json ]
+  pushes | grep -qF -- '— re-fire: x --recovery-of "recycle-recovery:SID-44:1"' || { pushes; false; }
+  rm -f "$ALARM_DIR"/alarm-*
+  HF_ALARM_REFIRE=r2 HF_ALARM_PACKET=/pk/2.json alarm recycle-dead 44 SID-44 "" "z"
+  [ "$(jq -r '.refire_cmd + " " + .packet' "$(records)")" = "r2 /pk/2.json" ] || { rec; false; }
+  rm -f "$ALARM_DIR"/alarm-*
+  alarm recycle-dead 44 SID-44 "" "no-extras"
+  jq -e 'has("refire_cmd") or has("packet") | not' "$(records)" >/dev/null || { rec; false; }
+}
+
+@test "with NO jq on PATH the printf fallback still writes one parseable line (mapped, as before)" {
+  [ -x /usr/bin/python3 ] || skip "no /usr/bin/python3 to adjudicate JSON validity"
+  local nb="$BATS_TEST_TMPDIR/nojq" t
+  mkdir -p "$nb"
+  for t in date mkdir tr cat; do ln -s "$(command -v "$t")" "$nb/$t"; done
+  run env PATH="$nb" /bin/bash -c "set -euo pipefail; HF_TIMEOUT_BIN=''; HF_TIMEOUT_S=10; . '$LIB'; hf_alarm \"\$@\"; echo CALLER-CONTINUED" _ \
+    recycle-dead 44 "" "" 'he said "boom"'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *CALLER-CONTINUED* ]] || { echo "$output"; false; }
+  /usr/bin/python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["detail"] == "he said '"'"'boom'"'"'", d' "$(records)"
 }
 
 # ── 7. PER-SITE coverage: one mutant per site, anchored exactly once ──────────────────────────────
