@@ -335,6 +335,21 @@ flaw 1).
 - **U2, typing deadline in tests:** suites whose mock screen never echoes now pin
   `CC_RECYCLE_TYPE_DEADLINE_S=0`, which keeps the old two rounds. Without it the 600 s default hangs
   them past bats' per-test bound.
+- **U5a (review items 4, 6, 7, 9):**
+  - `stage` removes an old `.cmd` first and binds the pair with a nonce, written to meta `.nonce` and
+    as the `.cmd`'s last line (`# cc-pane-successor-nonce: <n>`). `take` claims only on a match. The
+    real-artifact test is therefore "staged bytes plus exactly the nonce line", no longer
+    byte-identical.
+  - `take` refuses when `meta.pane` and `KITTY_WINDOW_ID` are both numeric and differ; the tty alone
+    decides otherwise.
+  - The per-generation zsh nesting is flattened. The consumer's `-c` program is now a LOOP that
+    sources the claim, then any hand-back, so one loop shell serves every generation. A cc-close-attrib
+    whose ancestor (within 3 hops) is that loop writes its claim to
+    `<dir>/<key>.handback.<loop pid>` and exits, instead of exec'ing a nested shell. Measured: the
+    3-generation depths were 3/4/5 before the fix and constant after.
+  - The SessionStart child prints first and stamps second, and treats a tokenless packet as absent.
+  - **Residual (accepted):** a stage swapped in during take's check-to-rename window is moved back,
+    but a watcher revoke that lands inside that microsecond window would read it as claimed.
 - **U3:** `--next-to` is implemented in boot-resume-launch but not passed by cc-resume-debt, because
   the recorded pane is usually gone and kitty fails a launch whose `--next-to` matches nothing.
 
