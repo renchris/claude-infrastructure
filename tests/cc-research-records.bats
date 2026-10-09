@@ -195,7 +195,7 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(fold changes.jsonl CR-1 cause)" = '"operator_new"' ]
   git -C "$REC" add -A && git -C "$REC" commit -qm park  # row 12 refuses uncommitted records
-  run "$G" run --program demo
+  run "$G" run --program demo --consent-sealed-read
   [ "$status" -eq 0 ]
   [ "$(/usr/bin/python3 -c "import json; print(json.load(open('$REC/cert/CERT-v1.json'))['state']['parked'])")" = "1" ]
 }
