@@ -17,7 +17,9 @@ setup() {
   export CC_ADMIT_GATE=off
   export CC_PANE_SUCCESSOR_DIR="$BATS_TEST_TMPDIR/ps"
   export CC_PANE_SUCCESSOR_TTY=/dev/ttys913
-  unset CC_PANE_SUCCESSOR CC_PANE_SUCCESSOR_NOW
+  unset CC_PANE_SUCCESSOR CC_PANE_SUCCESSOR_NOW CC_PANE_SUCCESSOR_LOOP_PID CC_PANE_SUCCESSOR_HANDBACK
+  # The pane-identity check reads KITTY_WINDOW_ID; a suite run from a kitty pane would inherit its own.
+  unset KITTY_WINDOW_ID
   W_PID=$$
   W_LSTART="$(TZ=UTC LC_ALL=C ps -o lstart= -p "$W_PID" | tr -s ' ' | sed 's/^ *//; s/ *$//')"
   CMD="$BATS_TEST_TMPDIR/succ.cmd"
@@ -29,7 +31,8 @@ setup() {
   # ($0 = the word after it, $1 = the claimed path); a bare `-l -i` (the trailing shell) just exits.
   cat > "$FAKESH" <<'EOF'
 #!/bin/bash
-{ printf 'argv:'; printf ' [%s]' "$@"; printf '\n'; printf 'CCD=%s\n' "${CLAUDE_CONFIG_DIR-<unset>}"; } >> "$FAKESH_LOG"
+{ printf 'argv:'; printf ' [%s]' "$@"; printf '\n'; printf 'CCD=%s\n' "${CLAUDE_CONFIG_DIR-<unset>}"
+  printf 'LOOP=%s\n' "${CC_PANE_SUCCESSOR_LOOP_PID-<unset>}"; } >> "$FAKESH_LOG"
 if [ "${3:-}" = -c ]; then shift 3; exec /bin/bash -c "$@"; fi
 exit 0
 EOF
@@ -220,10 +223,13 @@ assert_refused() {
   run env CLAUDE_CONFIG_DIR=/pred CC_ACCOUNT_PINNED=1 SHELL="$FAKESH" /bin/bash -c '. "$1"; cc_pane_successor_exec "$2" 1' _ "$LIB" "$claim"
   [ "$status" -eq 0 ]
   [ "$(cat "$MARK")" = "ran CCD=<unset>" ]
+  grep -q '^argv: \[-l\] \[-i\] \[-c\] \[' "$FAKESH_LOG"
   # shellcheck disable=SC2016
-  grep -qxF "argv: [-l] [-i] [-c] [source \"\$1\"; exec \"\${SHELL:-/bin/zsh}\" -l -i] [cc-successor] [$claim]" "$FAKESH_LOG"
+  grep -qxF 'exec "${SHELL:-/bin/zsh}" -l -i] [cc-successor] ['"$claim"'] ['"$CC_PANE_SUCCESSOR_DIR"'/ttys913.handback]' "$FAKESH_LOG"
   grep -qxF 'argv: [-l] [-i]' "$FAKESH_LOG"
-  ! grep -q '^CCD=/pred' "$FAKESH_LOG"
+  ! grep -q '^CCD=/pred' "$FAKESH_LOG" || false
+  # the trailing login shell keeps the loop's pid but must not advertise the loop: it is gone
+  [ "$(grep '^LOOP=' "$FAKESH_LOG" | tail -1)" = 'LOOP=<unset>' ]
 }
 
 @test "exec (0 flag): no trailing shell, and a cmd that sets CLAUDE_CONFIG_DIR keeps its own" {
@@ -234,16 +240,78 @@ assert_refused() {
   [ "$status" -eq 0 ]
   [ "$(cat "$MARK")" = "ran CCD=/target" ]
   [ "$(grep -c '^argv:' "$FAKESH_LOG")" -eq 1 ]
-  # shellcheck disable=SC2016
-  grep -qxF "argv: [-l] [-i] [-c] [source \"\$1\"] [cc-successor] [$claim]" "$FAKESH_LOG"
+  grep -qF "] [cc-successor] [$claim] [$CC_PANE_SUCCESSOR_DIR/ttys913.handback]" "$FAKESH_LOG"
+  # shellcheck disable=SC2016  # a literal: the trailing-shell line must be absent from the program
+  [ "$(grep -cF 'exec "${SHELL' "$FAKESH_LOG")" -eq 0 ]
 }
 
-@test "real artifact: the 2026-10-09 pane-44 relaunch cmdfile is claimed byte-identical to what was staged" {
+@test "real artifact: the 2026-10-09 pane-44 relaunch cmdfile is claimed byte-identical, plus only its nonce line" {
   fx="$(ls "$REPO"/tests/fixtures/recycle-keystrokeless/handoff-recycle-cmd-44-*.sh)"
   { printf 'export CLAUDE_CONFIG_DIR=%q\n' "$HOME/.claude-next"; cat "$fx"; } > "$CMD"
   stage
+  nonce="$(jq -r .nonce "$CC_PANE_SUCCESSOR_DIR/ttys913.json")"
   claim="$(cc_pane_successor_take)"
-  cmp "$CMD" "$claim"
+  sed '$d' "$claim" | cmp - "$CMD"
+  [ "$(tail -n 1 "$claim")" = "# cc-pane-successor-nonce: $nonce" ]
+}
+
+@test "nonce: a stale .cmd from an earlier stage (another nonce) is refused under the new meta" {
+  stage
+  cp "$CC_PANE_SUCCESSOR_DIR/ttys913.cmd" "$BATS_TEST_TMPDIR/stale.cmd"
+  stage                                   # the next recycle: a new meta, a new nonce
+  cp "$BATS_TEST_TMPDIR/stale.cmd" "$CC_PANE_SUCCESSOR_DIR/ttys913.cmd"
+  assert_refused
+  # and a .cmd that carries no nonce line at all
+  cp "$CMD" "$CC_PANE_SUCCESSOR_DIR/ttys913.cmd"
+  assert_refused
+}
+
+@test "nonce: stage removes the old .cmd FIRST — a stage that dies between its renames leaves nothing takeable" {
+  stage
+  # The next stage writes its meta, then cannot write its .cmd (its temp path is a directory).
+  mkdir "$CC_PANE_SUCCESSOR_DIR/.ttys913.cmd.tmp.$$"
+  run cc_pane_successor_stage ttys913 "$CMD" "$META"
+  [ "$status" -ne 0 ]
+  [ ! -e "$CC_PANE_SUCCESSOR_DIR/ttys913.cmd" ]
+  run cc_pane_successor_take
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}
+
+@test "pane identity: KITTY_WINDOW_ID ≠ meta.pane is refused; equal, or unknown on either side, takes" {
+  stage
+  KITTY_WINDOW_ID=45 assert_refused
+  KITTY_WINDOW_ID=44 run cc_pane_successor_take
+  [ "$status" -eq 0 ]
+  stage
+  run cc_pane_successor_take                    # no KITTY_WINDOW_ID (iTerm, a bare terminal)
+  [ "$status" -eq 0 ]
+  jq '.pane = "w-abc"' "$META" > "$META.2"; mv "$META.2" "$META"
+  stage
+  KITTY_WINDOW_ID=45 run cc_pane_successor_take  # non-numeric meta.pane: the tty decides
+  [ "$status" -eq 0 ]
+  jq 'del(.pane)' "$META" > "$META.2"; mv "$META.2" "$META"
+  stage
+  KITTY_WINDOW_ID=45 run cc_pane_successor_take  # no meta.pane at all
+  [ "$status" -eq 0 ]
+}
+
+@test "handback: refused when the advertised loop is not an ancestor (an inherited env, not a parent)" {
+  stage
+  claim="$(cc_pane_successor_take)"
+  sleep 30 & other=$!
+  # shellcheck disable=SC2016  # $1 and $2 are the inner bash's
+  run env CC_PANE_SUCCESSOR_LOOP_PID="$other" CC_PANE_SUCCESSOR_HANDBACK="$CC_PANE_SUCCESSOR_DIR/ttys913.handback.$other" \
+    /bin/bash -c '. "$1"; cc_pane_successor_handback "$2"' _ "$LIB" "$claim"
+  kill "$other" 2>/dev/null || true
+  [ "$status" -ne 0 ]
+  [ ! -e "$CC_PANE_SUCCESSOR_DIR/ttys913.handback.$other" ]
+  # a hand-back path outside the staging dir is refused before any ancestry read
+  # shellcheck disable=SC2016  # as above
+  run env CC_PANE_SUCCESSOR_LOOP_PID="$$" CC_PANE_SUCCESSOR_HANDBACK="$BATS_TEST_TMPDIR/x.handback.$$" \
+    /bin/bash -c '. "$1"; cc_pane_successor_handback "$2"' _ "$LIB" "$claim"
+  [ "$status" -ne 0 ]
+  [ ! -e "$BATS_TEST_TMPDIR/x.handback.$$" ]
 }
 
 @test "bash 3.2 and zsh: the lib stages, takes and revokes under both" {
@@ -357,4 +425,46 @@ EOF
   echo "$output"
   [[ "$output" == *STILL-STAGED* ]] || false
   [ ! -e "$MARK" ]
+}
+
+@test "cc-close-attrib: three successor generations keep a constant ancestry depth (one loop shell, no nesting)" {
+  mk_cca
+  # A stub claude that, like a recycling session, stages its own successor (the wrapper again, on this
+  # stub) while it runs, and records how many hops separate it from the driver. Generation 1 is the
+  # driver's launch; 2, 3 and 4 are successors. Its tty comes from ps: the wrapper backgrounds it.
+  export GEN_FILE="$BATS_TEST_TMPDIR/gen" DEPTH_LOG="$BATS_TEST_TMPDIR/depth" LIB META_T="$META" \
+         CCA="$REPO/bin/cc-close-attrib" NEXT_CMD="$BATS_TEST_TMPDIR/next.cmd"
+  GSTUB="$BATS_TEST_TMPDIR/gen-stub"
+  cat > "$GSTUB" <<'EOF'
+#!/bin/bash
+[[ "$1" == "--version" ]] && { echo "stub 9.9.9"; exit 0; }
+g=$(( $(cat "$GEN_FILE" 2>/dev/null || echo 0) + 1 )); echo "$g" > "$GEN_FILE"
+d=0; p=$$
+while [ "$p" != "$DRIVER_PID" ] && [ "$d" -lt 30 ]; do p="$(ps -o ppid= -p "$p" | tr -d ' ')"; d=$((d + 1)); done
+echo "gen=$g depth=$d" >> "$DEPTH_LOG"
+if [ "$g" -le 3 ]; then
+  # shellcheck source=lib/pane-successor.sh
+  . "$LIB"
+  me="/dev/$(ps -o tty= -p $$ | tr -d ' ')"
+  printf '"%s" "%s"\n' "$CCA" "$0" > "$NEXT_CMD"
+  sed "s#@TTY@#$me#" "$META_T" > "$NEXT_CMD.json"
+  cc_pane_successor_stage "$me" "$NEXT_CMD" "$NEXT_CMD.json" || echo "gen=$g STAGE-FAILED" >> "$DEPTH_LOG"
+fi
+exit 0
+EOF
+  chmod +x "$GSTUB"
+  # shellcheck disable=SC2016  # the driver's own $$, $1, $2 and $?
+  printf '#!/bin/bash\nexport DRIVER_PID=$$\n"$1" "$2"; echo "wrapper-rc=$?"\n' > "$DRIVER"
+  run env SHELL="$FAKESH" script -q /dev/null "$DRIVER" "$CCA" "$GSTUB"
+  echo "$output"; cat "$DEPTH_LOG"
+  [[ "$output" == *wrapper-rc=0* ]] || false
+  [ "$(grep -c '^gen=[0-9]* depth=' "$DEPTH_LOG")" -eq 4 ]
+  [ "$(grep -c STAGE-FAILED "$DEPTH_LOG")" -eq 0 ]
+  d2="$(sed -n 's/^gen=2 depth=//p' "$DEPTH_LOG")"
+  [ -n "$d2" ]
+  [ "$(sed -n 's/^gen=3 depth=//p' "$DEPTH_LOG")" = "$d2" ]
+  [ "$(sed -n 's/^gen=4 depth=//p' "$DEPTH_LOG")" = "$d2" ]
+  # one successor shell served all three generations, and nothing is left staged or handed back
+  [ "$(grep -c '^argv:' "$FAKESH_LOG")" -eq 1 ]
+  [ -z "$(find "$CC_PANE_SUCCESSOR_DIR" -name '*.cmd' -o -name '*.handback*')" ]
 }

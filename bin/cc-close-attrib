@@ -572,6 +572,10 @@ fi
 #    that is not the pane's own: under lr-fire-resume's expect this wrapper holds the INNER pty, so it
 #    stands down and the outer lr-fire-resume consumes. The record is rewritten with the claim first,
 #    so the close stays attributable after the exec. Anything unreadable keeps today's path.
+#    When THIS session was itself a successor, its parent is the lib's successor LOOP shell: the claim
+#    is handed back to that loop and the wrapper exits normally, so the pane keeps one loop shell
+#    however many recycles follow, instead of one idle login zsh per generation. The pane-close arm
+#    below is skipped on that path: the loop still owns the pane.
 _cca_take_successor() {
   [[ -t 0 ]] || return 0
   _cca_interactive_argv || return 0
@@ -588,6 +592,10 @@ _cca_take_successor() {
   [[ -n "$lib" ]] && . "$lib" 2>/dev/null || return 0
   claimed="$(cc_pane_successor_take)" && [[ -n "$claimed" ]] || return 0
   write_record "$child" "$code" closed "$claimed" || true
+  if command -v cc_pane_successor_handback >/dev/null 2>&1 && cc_pane_successor_handback "$claimed"; then
+    printf '[cc-close-attrib] session ended (rc %s) — the successor loop runs the staged successor %s\n' "$code" "$claimed" >&2
+    exit "$code"
+  fi
   printf '[cc-close-attrib] session ended (rc %s) — running the staged successor %s\n' "$code" "$claimed" >&2
   cc_pane_successor_exec "$claimed" 0 || true
   return 0
