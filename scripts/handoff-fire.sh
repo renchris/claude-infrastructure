@@ -3855,6 +3855,93 @@ it2_type_verified() { # $1=it2-bin $2=session-id $3=command → 0 verified+submi
   _it2_type_line "$it2" "$id" "$cmd"
 }
 
+# ── THE KEYSTROKE-FREE SUCCESSOR (RECYCLE_KEYSTROKELESS_DELIVERY §D1) ───────────────────────────────
+# A fresh-mode recycle STAGES its relaunch in lib/pane-successor.sh before the /exit, and whichever
+# process regains the pane's tty when claude exits (lr-fire-resume's fall-through, reso-resume-one,
+# cc-close-attrib) RUNS it: delivery is a local rename, which load can delay but cannot fail. The
+# watcher decides by claim-or-revoke — a claim skips the typing, a revoke that wins falls back to the
+# §D2 typed path. Resume, transplant and remote recycles never stage: their fold, launch-lock and
+# holder rails must run before anything starts, and only the watcher runs them.
+hf_succ_lib_load() { # → 0 when lib/pane-successor.sh's verbs are defined (sourced once)
+  local c
+  command -v cc_pane_successor_stage >/dev/null 2>&1 && return 0
+  for c in "${CC_PANE_SUCCESSOR_LIB:-}" "${HF_DIR:+$HF_DIR/../lib/pane-successor.sh}" "${HOME:-}/.claude/lib/pane-successor.sh"; do
+    [ -n "$c" ] && [ -f "$c" ] || continue
+    # shellcheck source=/dev/null
+    . "$c" 2>/dev/null || continue
+    command -v cc_pane_successor_stage >/dev/null 2>&1 && return 0
+  done
+  return 1
+}
+
+hf_succ_mode() { # → fresh|resume|transplant|remote — the recycle shape that decides whether to stage
+  if [ -n "${RESUME_LAUNCHER:-}" ]; then echo resume
+  elif [ "${RCY_TRANSPLANTED_SOURCE:-0}" = 1 ] || [ -n "${RCY_TRANSPLANT_CAUSE:-}" ]; then echo transplant
+  elif [ "${RCY_REMOTE:-0}" = 1 ]; then echo remote
+  else echo fresh; fi
+}
+
+# $1=pane tty $2=the typed-path cmdfile (its sibling files carry the stage) → 0 staged · 1 not staged.
+# Never fails a recycle: every refusal is one line and the typed path stays armed in the watcher.
+hf_succ_stage() {
+  local tty="$1" base="$2" mode cfg wl sc mj tok
+  mode="$(hf_succ_mode)"
+  if [ "$mode" != fresh ]; then echo "→ successor: $mode recycle — not staged; the watcher types the relaunch after its rails"; return 1; fi
+  if [ "${CC_PANE_SUCCESSOR:-on}" = off ]; then echo "→ successor: CC_PANE_SUCCESSOR=off — not staged; typed relaunch"; return 1; fi
+  if ! hf_succ_lib_load; then echo "⚠ successor: lib/pane-successor.sh not found — not staged; typed relaunch" >&2; return 1; fi
+  # The TARGET account's config dir, from the launcher $CMD runs — never the consumer's env, which is
+  # the predecessor's (the pane-44 line carried no CLAUDE_CONFIG_DIR and would have inherited it).
+  cfg="$(config_dir_for_launcher "$LAUNCHER" 2>/dev/null || true)"
+  if [ -z "$cfg" ]; then echo "⚠ successor: no config dir for launcher '$LAUNCHER' — not staged; typed relaunch" >&2; return 1; fi
+  wl="$(TZ=UTC LC_ALL=C ps -o lstart= -p "${WATCHER_PID:-}" 2>/dev/null | tr -s ' ' | sed 's/^ *//; s/ *$//' || true)"
+  if [ -z "$wl" ]; then echo "⚠ successor: watcher ${WATCHER_PID:-?} has no readable start time — not staged; typed relaunch" >&2; return 1; fi
+  sc="$base.succ"; mj="$base.succ.json"; tok="hfs-$$-${RANDOM:-0}-$(date +%s)"
+  { printf 'export CLAUDE_CONFIG_DIR=%q\n' "$cfg"
+    printf 'export CC_ACCOUNT_PINNED=1\n'
+    printf '%s\n' "$CMD"; } > "$sc" 2>/dev/null \
+    && jq -n --arg pane "$SID" --arg tty "$tty" --arg pred "${rcy_old_sid:-}" --arg wp "$WATCHER_PID" --arg wl "$wl" \
+            --arg ce "$(date +%s)" --arg ttl "${CC_PANE_SUCCESSOR_TTL_S:-900}" --arg tok "$tok" \
+            '{pane:$pane, pane_tty:$tty, pred_sid:$pred, watcher_pid:($wp|tonumber), watcher_lstart:$wl,
+              created_epoch:($ce|tonumber), ttl_s:($ttl|tonumber), mode:"fresh", token:$tok}' > "$mj" 2>/dev/null \
+    && cc_pane_successor_stage "$tty" "$sc" "$mj" \
+    || { echo "⚠ successor: staging for ${tty##*/} failed — typed relaunch" >&2; return 1; }
+  emit_recycle_event recycle-successor-staged "" "$SID" "staged for ${tty##*/} (cfg $cfg, token $tok); the pane's own shell runs it on claude's exit" || true
+  echo "→ successor staged for ${tty##*/}: the pane's own shell runs it when claude exits — no keystrokes (typed fallback after ${CC_RECYCLE_CLAIM_GRACE_S:-20}s at a bare shell with no claim)"
+  return 0
+}
+
+# $1=tty → 0 when a stage for this tty names THIS watcher and is still waiting (not claimed or revoked)
+hf_succ_ours_staged() {
+  local d k
+  command -v cc_pane_successor_dir >/dev/null 2>&1 || return 1
+  d="$(cc_pane_successor_dir)"; k="${1##*/}"
+  [ -f "$d/$k.cmd" ] || return 1
+  [ "$(jq -r '.watcher_pid // empty' "$d/$k.json" 2>/dev/null || true)" = "$$" ]
+}
+
+# $1=tty $2=epoch floor → 0 + prints the claim epoch when a claim at or after the floor exists. The
+# floor keeps an earlier recycle's claim in the same tty from reading as this one's before the stage
+# (which clears old claims) has happened.
+hf_succ_claim_epoch() {
+  local c e
+  command -v cc_pane_successor_claimed >/dev/null 2>&1 || return 1
+  c="$(cc_pane_successor_claimed "$1" 2>/dev/null)" || return 1
+  e="${c##* }"
+  case "$e" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$e" -ge "${2:-0}" ] || return 1
+  printf '%s' "$e"
+}
+
+hf_succ_exit_revoke() { # $1=tty — the watcher's EXIT trap: a stage still naming this watcher dies with it
+  [ -n "${1:-}" ] || return 0
+  hf_succ_ours_staged "$1" || return 0
+  cc_pane_successor_revoke "$1" >/dev/null 2>&1 || true
+}
+
+hf_load_scaled() { # $1=base seconds → base × min(4, 1 + load_per_core/10), whole seconds
+  awk -v b="$1" -v l="$(hf_load_per_core || true)" 'BEGIN { f = 1 + (l + 0) / 10; if (f > 4) f = 4; printf "%d", b * f }'
+}
+
 # COMPOSER-PRESENCE ORACLE (item b3d1a77c75ae, defect 2). Positive proof that a live CC session — not
 # a shell — owns a pane, so the engagement RESEND below can gate its blind CR on ownership instead of
 # assuming it. TWO INDEPENDENT positive signals, either sufficient (the same OR-structure as
@@ -9528,7 +9615,15 @@ if [ "${1:-}" = "__recycle" ]; then
   # newer recycle is never deleted from under its thief. No lock inherited ⇒ a no-op.
   # The session's LAUNCH lock (taken just before the relaunch is typed) goes too — by then
   # lr-fire-resume has re-taken it by record match, and one still naming this pid is a dead holder.
-  trap 'hf_recycle_lock_release "${HF_RECYCLE_LOCK:-}" "$$" || true; hf_launch_lock_release "${RCY_RESUME_SID:-}" >/dev/null 2>&1 || true' EXIT
+  # A STAGED SUCCESSOR still naming this watcher is revoked on the way out as well (§D1): its
+  # watcher-alive proof would refuse a take anyway, but a stage nobody can claim is clutter that the
+  # next recycle of this tty would otherwise have to explain.
+  trap 'hf_recycle_lock_release "${HF_RECYCLE_LOCK:-}" "$$" || true; hf_launch_lock_release "${RCY_RESUME_SID:-}" >/dev/null 2>&1 || true; hf_succ_exit_revoke "${TTY_PATH:-}" || true' EXIT
+  # The successor lib, loaded once for the claim checks below; absent ⇒ every check is a no-op and
+  # the typed relaunch is the only path, exactly as before. The epoch floor: a claim older than this
+  # watcher belongs to an earlier recycle of the same tty.
+  rcy_succ_lib=0; hf_succ_lib_load && rcy_succ_lib=1
+  rcy_w_t0="$(date +%s)"
   RSID="${2:?__recycle needs a session id}"
   TTY_PATH="${3:?__recycle needs the pane tty}"
   CMDFILE="${4:?__recycle needs the command file}"
@@ -9741,6 +9836,9 @@ if [ "${1:-}" = "__recycle" ]; then
   rcy_vanish_next=15; rcy_bgwork_next="$rcy_bgwork_every"; rcy_nudge_left="60 150 300"
   while [ "$waited" -lt "$rcy_wait_max" ]; do
     if at_shell; then rcy_shell_ok=1; break; fi
+    # The pane's consumer can claim the staged successor and start claude before this loop ever
+    # samples the bare shell between the two; the claim is then the proof that the predecessor exited.
+    if [ "$rcy_succ_lib" = 1 ] && hf_succ_claim_epoch "$TTY_PATH" "$rcy_w_t0" >/dev/null; then rcy_shell_ok=1; break; fi
     sleep "$rcy_poll"; waited=$((waited+rcy_poll))
     # The nudge checkpoint due THIS round, consumed here — before the bgwork arm's `continue` — so a
     # round that answers the dialog skips its nudge exactly as the %-cadence did.
@@ -10079,7 +10177,11 @@ if [ "${1:-}" = "__recycle" ]; then
     rcy_debt_settle
     exit 1
   fi
-  echo "→ pane $RSID CONFIRMED at a shell prompt after ${waited}s — typing relaunch"
+  if [ "$rcy_succ_lib" = 1 ] && hf_succ_claim_epoch "$TTY_PATH" "$rcy_w_t0" >/dev/null; then
+    echo "→ pane $RSID's predecessor exited after ${waited}s and the pane's consumer already claimed the staged successor"
+  else
+    echo "→ pane $RSID CONFIRMED at a shell prompt after ${waited}s — typing relaunch"
+  fi
   # RESUME MODE — fold a re-created source stub (LIMIT_RECOVER_100P, ordering A). The transplant ran
   # BEFORE the /exit (the tombstone is the carve-out's admission evidence), and lr-transplant renamed
   # the source transcript to .handed-off; a live CC appends by PATH, so anything it wrote between the
@@ -10132,7 +10234,10 @@ if [ "${1:-}" = "__recycle" ]; then
   # ignores them, and this one degrades to the honest weaker verdict when they are absent).
   # RCY_OLD_SID ($6) and FIRE_GOAL ($8) are parsed above the wait loop, beside RCY_DEBT_SID.
   RCY_MARKER="${7:-}"                              # token embedded in the relaunch prompt copy
-  RCY_ENGAGE_TIMEOUT="${RCY_ENGAGE_TIMEOUT:-180}"  # env-overridable so tests run in seconds
+  # Load-scaled (§D1): the successor still pays a cold start under load — ×(1 + load/core ÷ 10),
+  # capped ×4, so 180 s at an idle box and 720 s at pane 44's ~45/core. The env value still wins.
+  RCY_ENGAGE_TIMEOUT="${RCY_ENGAGE_TIMEOUT:-$(hf_load_scaled 180)}"  # env-overridable so tests run in seconds
+  case "$RCY_ENGAGE_TIMEOUT" in ''|*[!0-9]*) RCY_ENGAGE_TIMEOUT=180 ;; esac
   # 1 s, down from 5 (W3). The poll is now two cheap local file scans — a tail-bounded probe and the
   # oracle — not an it2 round trip, so the old spacing bought nothing and cost up to 5 s of latency
   # on EVERY recovery plus a 5 s-quantised `within ${rcy_t}s` figure in the ledger row.
@@ -10155,12 +10260,51 @@ if [ "${1:-}" = "__recycle" ]; then
     rm -f "$RCY_RUN_DIR/relaunch.rc" 2>/dev/null || true
   fi
   rcy_typed_at="$(date +%s 2>/dev/null || echo 0)"
+  # ══ THE STAGED SUCCESSOR: CLAIM OR REVOKE (RECYCLE_KEYSTROKELESS_DELIVERY §D1) ══════════════════
+  # A fresh-mode recycle staged its relaunch before the /exit (hf_succ_stage). Whatever regains the
+  # tty may already have RUN it: the claim (a rename) is the ack, so it is read, never inferred. With
+  # no claim, the pane must sit at a bare shell for CC_RECYCLE_CLAIM_GRACE_S (default 20) without
+  # one before this watcher revokes; a revoke that WINS means nothing will run it, so the typed
+  # fallback below takes over; one that LOSES means the consumer renamed it first. A pane that never
+  # settles at a shell is bounded by CC_RECYCLE_CLAIM_MAX_S (120 s, load-scaled). Nothing staged ⇒
+  # nothing to decide, and the typed path runs exactly as before.
+  rcy_succ=none rcy_succ_epoch=""
+  if [ "$rcy_succ_lib" = 1 ] && { hf_succ_ours_staged "$TTY_PATH" || hf_succ_claim_epoch "$TTY_PATH" "$rcy_w_t0" >/dev/null; }; then
+    rcy_cgrace="${CC_RECYCLE_CLAIM_GRACE_S:-20}"; case "$rcy_cgrace" in ''|*[!0-9]*) rcy_cgrace=20 ;; esac
+    rcy_cmax="${CC_RECYCLE_CLAIM_MAX_S:-$(hf_load_scaled 120)}"; case "$rcy_cmax" in ''|*[!0-9]*) rcy_cmax=120 ;; esac
+    rcy_c0="$(date +%s)"; rcy_cshell=""
+    while :; do
+      if rcy_succ_epoch="$(hf_succ_claim_epoch "$TTY_PATH" "$rcy_w_t0")"; then rcy_succ=claimed; break; fi
+      rcy_cnow="$(date +%s)"
+      if at_shell; then [ -n "$rcy_cshell" ] || rcy_cshell="$rcy_cnow"; else rcy_cshell=""; fi
+      if { [ -n "$rcy_cshell" ] && [ $(( rcy_cnow - rcy_cshell )) -ge "$rcy_cgrace" ]; } \
+         || [ $(( rcy_cnow - rcy_c0 )) -ge "$rcy_cmax" ]; then
+        if cc_pane_successor_revoke "$TTY_PATH" >/dev/null 2>&1; then rcy_succ=revoked; break; fi
+        if rcy_succ_epoch="$(hf_succ_claim_epoch "$TTY_PATH" "$rcy_w_t0")"; then rcy_succ=claimed; else rcy_succ=vanished; fi
+        break
+      fi
+      sleep 1
+    done
+    case "$rcy_succ" in
+      claimed)
+        rcy_typed_at="$rcy_succ_epoch"
+        emit_recycle_event recycle-successor-claimed "" "$RSID" "staged successor claimed by the pane's consumer at epoch $rcy_succ_epoch; nothing typed" || true
+        echo "→ successor claimed by the pane's consumer (epoch $rcy_succ_epoch) — no keystrokes" ;;
+      revoked)
+        emit_recycle_event recycle-successor-revoked "" "$RSID" "no claim after ${rcy_cgrace}s at a bare shell (or ${rcy_cmax}s in all); revoked — typed fallback" || true
+        echo "→ successor NOT claimed (${rcy_cgrace}s at a bare shell, or ${rcy_cmax}s in all): revoked — falling back to the typed relaunch" ;;
+      *)
+        emit_recycle_event recycle-successor-revoked "" "$RSID" "the stage was neither claimable nor claimed when revoked; typed fallback" || true
+        echo "⚠ successor stage for ${TTY_PATH##*/} gone with no claim — falling back to the typed relaunch" ;;
+    esac
+  fi
   # SURFACE RE-CHECK between exit and relaunch (CLOSE_RESUME_CUSTODY D3; the 2026-09-28 pane-405
   # incident). A shell confirmed by TTY alone does not prove the PANE survived: that window was
   # destroyed seconds after its /exit and its tty reused by a new window, so at_shell "CONFIRMED" a
   # stranger's shell and both writes failed against a pane id that no longer existed. `absent` is
   # the only verdict that acts (pane_enumerated's contract); `unknown` still attempts the writes.
-  rcy_surface="$(pane_enumerated "$IT2" "$RSID")"
+  rcy_surface=claimed
+  [ "$rcy_succ" = claimed ] || rcy_surface="$(pane_enumerated "$IT2" "$RSID")"
   if [ "$rcy_surface" = absent ]; then
     emit_recycle_event recycle-dead "" "$RSID" "pane vanished between exit and relaunch — relaunch surface gone" || true
     hf_alarm recycle-dead "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-DEAD (SURFACE GONE): pane $RSID reached a shell after the /exit and then vanished before the relaunch could be typed — 'session list' enumerates other panes but not this one. Nothing was typed into it. The session is being relaunched in a NEW window by cc-resume-debt settle; if that escalates, run: $(cat "$CMDFILE") in a new pane" || true
@@ -10175,7 +10319,7 @@ if [ "${1:-}" = "__recycle" ]; then
   # this session between our check and its boot. A foreign live holder, or any holder of the session
   # at all, means a copy is (about to be) running elsewhere: nothing typed, and nothing settled,
   # since settling would relaunch it yet again. Kill switch HF_LAUNCH_LOCK=off = no lock, no check.
-  if [ -n "${RCY_RESUME_SID:-}" ] && [ "${HF_LAUNCH_LOCK:-on}" != off ]; then
+  if [ "$rcy_succ" != claimed ] && [ -n "${RCY_RESUME_SID:-}" ] && [ "${HF_LAUNCH_LOCK:-on}" != off ]; then
     rcy_ll_rc=0; hf_launch_lock_take "$RCY_RESUME_SID" watcher || rcy_ll_rc=$?
     if [ "$rcy_ll_rc" != 0 ]; then
       rcy_ll_what="${HF_LOCK_HOLDER:-<unwritable: $(hf_launch_lock_dir "$RCY_RESUME_SID")>}"
@@ -10201,7 +10345,8 @@ if [ "${1:-}" = "__recycle" ]; then
   # typed again into its composer. Between rounds the same check runs on the pane itself.
   ok=0; rcy_type_round=0
   rcy_type_deadline=$(( $(date +%s) + ${CC_RECYCLE_TYPE_DEADLINE_S:-600} ))
-  while :; do
+  [ "$rcy_succ" != claimed ] || ok=1
+  while [ "$ok" = 0 ]; do
     rcy_type_round=$(( rcy_type_round + 1 ))
     if HF_TYPE_TELEMETRY=- HF_TYPE_TTY="$TTY_PATH" it2_type_verified "$IT2" "$RSID" "$(cat "$CMDFILE")"; then ok=1; break; fi
     if cc_alive; then
@@ -10223,7 +10368,11 @@ if [ "${1:-}" = "__recycle" ]; then
     echo "!! it2 relaunch write failed twice — run manually in the pane: $(cat "$CMDFILE")" >&2
     rcy_debt_settle
     exit 1; }
-  echo "→ relaunch typed into $RSID: $(cat "$CMDFILE")"
+  if [ "$rcy_succ" = claimed ]; then
+    echo "→ relaunch delivered to $RSID by its own shell (staged, no keystrokes): $(cat "$CMDFILE")"
+  else
+    echo "→ relaunch typed into $RSID: $(cat "$CMDFILE")"
+  fi
   # ══ THE BOOT WAIT — POSITIVE DISCRIMINATORS ONLY, AND NO RETYPE (W2, 2026-09-19) ═══════════════
   # WHAT THIS REPLACES, and why the replacement is not a tuning. The old form waited 15 × 3 s for a
   # claude to appear, RETYPED the identical command once, waited another 45 s, and called the result
@@ -10252,8 +10401,9 @@ if [ "${1:-}" = "__recycle" ]; then
   # the non-expect case immediately and is deliberately NOT the oracle: a resumed session runs
   # claude on expect's NESTED pty, where it is invisible to a tty-scoped ps and only
   # pane_cc_state's descendant-closure walk finds it.
-  rcy_boot_wait="${RCY_BOOT_WAIT_S:-60}";        case "$rcy_boot_wait"  in ''|*[!0-9]*) rcy_boot_wait=60 ;; esac
-  rcy_boot_stale="${RCY_BOOT_STALE_S:-180}";     case "$rcy_boot_stale" in ''|*[!0-9]*) rcy_boot_stale=180 ;; esac
+  # Both bounds load-scaled like RCY_ENGAGE_TIMEOUT (§D1: a cold start under load); env still wins.
+  rcy_boot_wait="${RCY_BOOT_WAIT_S:-$(hf_load_scaled 60)}";        case "$rcy_boot_wait"  in ''|*[!0-9]*) rcy_boot_wait=60 ;; esac
+  rcy_boot_stale="${RCY_BOOT_STALE_S:-$(hf_load_scaled 180)}";     case "$rcy_boot_stale" in ''|*[!0-9]*) rcy_boot_stale=180 ;; esac
   rcy_boot_ivl="${RCY_BOOT_IVL_S:-0.5}"
   rcy_boot_slow_ivl="${RCY_BOOT_SLOW_IVL_S:-5}"
   rcy_boot_pane_every="${RCY_BOOT_PANE_EVERY:-6}"; case "$rcy_boot_pane_every" in ''|*[!0-9]*|0) rcy_boot_pane_every=6 ;; esac
@@ -12614,6 +12764,11 @@ MSG
 fi
 
 EXPLICIT_LAUNCHER=0
+# The argv exactly as the caller passed it, saved before the parse consumes it, so a failed recycle
+# can name the one command that re-fires it (RECYCLE_KEYSTROKELESS_DELIVERY §U4). `${@+"$@"}`: an
+# empty argv under bash 3.2's `set -u` would otherwise be an unbound-variable abort.
+# shellcheck disable=SC2034  # read by the re-fire renderer, not in this file's own control flow
+HF_ORIG_ARGV=(${@+"$@"})
 while [ $# -gt 0 ]; do case "$1" in
   --prompt-file) PROMPT_FILE="${2:?--prompt-file needs a value}"; shift 2 ;;
   --account)     ACCOUNT="${2:?--account needs a value}"; shift 2 ;;
@@ -17075,6 +17230,11 @@ recycle_fire_armed() {
       fi
     fi
   fi
+  # THE STAGED SUCCESSOR (§D1), fresh mode only, after every abort arm above and immediately before
+  # the irreversible tail. The watcher is heartbeat-proven and holds the lock, so its pid + lstart is
+  # what the consumer's take proves; if the tail aborts, the watcher is disarmed and its EXIT trap
+  # revokes the stage (a take would refuse it anyway, the watcher being dead).
+  hf_succ_stage "$tty" "$cmdfile" || true
   # THE COMMIT — confirm, the last read, the debt, the /exit — is its own function so a suite can
   # drive the whole irreversible tail over stubs (a full recycle_fire needs a real tty).
   recycle_fire_commit "$rcy_old_sid"
