@@ -43,10 +43,12 @@ mk_meta() { # [tty] [watcher_pid] [lstart] [created_epoch] [ttl_s]
     "${1:-/dev/ttys913}" "${2:-$W_PID}" "${3:-$W_LSTART}" "${4:-$(date +%s)}" "${5:-120}" > "$META"
 }
 
+# shellcheck source=lib/pane-successor.sh
 stage() { . "$LIB"; cc_pane_successor_stage "${1:-ttys913}" "$CMD" "$META"; }
 
 # Every refusal must be SILENT as well as rc 1: a consumer treats any output as a claim path.
 assert_refused() {
+  # shellcheck source=lib/pane-successor.sh
   . "$LIB"
   run cc_pane_successor_take
   [ "$status" -eq 1 ]
@@ -193,9 +195,10 @@ assert_refused() {
 }
 
 @test "race: 50 take-vs-revoke rounds on fresh stages, exactly one winner each" {
+  # shellcheck source=lib/pane-successor.sh
   . "$LIB"
-  local i t r both=0 none=0
-  for i in $(seq 1 50); do
+  local t r both=0 none=0
+  for _ in $(seq 1 50); do
     stage
     rm -f "$BATS_TEST_TMPDIR/t.rc"
     # errexit is on in a bats body, so each rc is captured with && || rather than $?
@@ -329,6 +332,7 @@ EOF
   [[ "$output" == *wrapper-rc=0* ]] || false
   [[ "$output" != *STILL-STAGED* ]] || false
   [ "$(grep -c '^argv:' "$FAKESH_LOG")" -eq 1 ]
+  # shellcheck disable=SC2012  # newest close record by mtime; the names are this suite's own
   rec="$(ls -1t "$CC_CLOSE_RECORDS_DIR"/*.json | head -1)"
   grep -q '"successor_claim":"[^"]*/ttys[0-9]*\.claimed\.[0-9]*"' "$rec"
   grep -q '"record_state":"closed"' "$rec"
@@ -341,6 +345,7 @@ EOF
   [[ "$output" == *wrapper-rc=0* ]] || false
   [[ "$output" == *STILL-STAGED* ]] || false
   [ ! -e "$MARK" ]
+  # shellcheck disable=SC2012  # newest close record by mtime; the names are this suite's own
   rec="$(ls -1t "$CC_CLOSE_RECORDS_DIR"/*.json | head -1)"
   grep -q '"successor_claim":""' "$rec"
 }
