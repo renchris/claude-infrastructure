@@ -1550,6 +1550,28 @@ expect -c '
 if [ ! -t 0 ]; then
   exit "$lr_rc"
 fi
+# >>> lr-successor
+# A STAGED SUCCESSOR RUNS HERE INSTEAD OF BEING TYPED (docs/plans/RECYCLE_KEYSTROKELESS_DELIVERY.md §D1).
+# A recycle stages its relaunch in lib/pane-successor.sh before it sends /exit; this process holds the
+# pane's tty, so it claims the stage (an atomic rename the watcher reads as the ack) and execs it. On
+# 2026-10-09 the typed form failed 16 times at load ~45 per core and stranded pane 44. Anything
+# unreadable — no lib, no stage, a refused take — falls through to the ordinary shell below unchanged.
+lr_succ_s="$0" lr_succ_lib=""
+while [ -L "$lr_succ_s" ]; do
+  lr_succ_t="$(readlink "$lr_succ_s" 2>/dev/null)" || break
+  case "$lr_succ_t" in /*) lr_succ_s="$lr_succ_t" ;; *) lr_succ_s="$(dirname "$lr_succ_s")/$lr_succ_t" ;; esac
+done
+lr_succ_d="$(cd "$(dirname "$lr_succ_s")" 2>/dev/null && pwd)" || lr_succ_d=""
+for lr_succ_c in "${lr_succ_d:+$lr_succ_d/../../lib/pane-successor.sh}" "${HOME:-}/.claude/lib/pane-successor.sh"; do
+  [ -n "$lr_succ_c" ] && [ -r "$lr_succ_c" ] && { lr_succ_lib="$lr_succ_c"; break; }
+done
+# shellcheck source=/dev/null  # runtime-resolved: checkout sibling, else the live layer
+if [ -n "$lr_succ_lib" ] && . "$lr_succ_lib" 2>/dev/null \
+   && lr_succ_claimed="$(cc_pane_successor_take)" && [ -n "$lr_succ_claimed" ]; then
+  printf '\n[lr-fire-resume] session ended (rc %s) — running the staged successor %s\n' "$lr_rc" "$lr_succ_claimed" >&2
+  cc_pane_successor_exec "$lr_succ_claimed" 1 || true
+fi
+# <<< lr-successor
 printf '\n[lr-fire-resume] session ended (rc %s) — this pane is now an ordinary shell.\n' "$lr_rc" >&2
 # `-l -i` is load-bearing, not cosmetic, for the reason bin/cc-pane-runner:69 records: ~/.zprofile
 # puts ~/.claude/shims on PATH and ~/.zshrc synthesizes ITERM_SESSION_ID from KITTY_WINDOW_ID, so a

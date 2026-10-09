@@ -268,7 +268,7 @@ _json_escape() {
 # close_record_field greps an UNANCHORED "<key>": and takes head -1, so an overlapping key would
 # silently shadow). No new liveness field is needed: `ppid` already carries this wrapper's own $$.
 write_record() {
-  local rpid="$1" rcode="$2" rstate="${3:-closed}"
+  local rpid="$1" rcode="$2" rstate="${3:-closed}" rclaim="${4:-}"
   local rsig=""
   [[ "$rcode" =~ ^[0-9]+$ && "$rcode" -gt 128 ]] && rsig=$(( rcode - 128 ))
   # exit_code must stay a bare JSON scalar: a number when we have one, `null` when we do not.
@@ -310,10 +310,14 @@ write_record() {
   # own trap literals (INT/TERM/HUP) or empty, so it needs no _json_escape pass. The NAME is
   # deliberately not a superstring or substring of "signal": close_record_field greps an
   # UNANCHORED "<key>": and takes head -1, so an overlapping key would silently shadow.
+  # successor_claim — the staged successor this wrapper claimed and exec'd after the session
+  # (lib/pane-successor.sh; empty when none). Appended LAST, same additive contract.
+  local claim_json=""
+  [[ -n "$rclaim" ]] && claim_json="$(printf '%s' "$rclaim" | _json_escape)"
   local out="$RECORDS_DIR/${rpid:-0}-${START_EPOCH}.json"
   local tmp="$out.tmp.$$"
-  if printf '{"pid":%s,"ppid":%s,"argv":["%s","%s","%s"],"started_at":"%s","ended_at":"%s","exit_code":%s,"signal":"%s","stderr_tail":"%s","version":"%s","stderr_log":"%s","sig_reached_wrapper":"%s","record_state":"%s"}\n' \
-    "${rpid:-0}" "$$" "$a0" "$a1" "$a2" "$STARTED_AT" "${ENDED_AT:-}" "$rcode_json" "$rsig" "$tail_json" "$rver" "$log_json" "${SIG_TO_WRAPPER:-}" "$rstate" \
+  if printf '{"pid":%s,"ppid":%s,"argv":["%s","%s","%s"],"started_at":"%s","ended_at":"%s","exit_code":%s,"signal":"%s","stderr_tail":"%s","version":"%s","stderr_log":"%s","sig_reached_wrapper":"%s","record_state":"%s","successor_claim":"%s"}\n' \
+    "${rpid:-0}" "$$" "$a0" "$a1" "$a2" "$STARTED_AT" "${ENDED_AT:-}" "$rcode_json" "$rsig" "$tail_json" "$rver" "$log_json" "${SIG_TO_WRAPPER:-}" "$rstate" "$claim_json" \
     > "$tmp" 2>/dev/null; then
     mv -f "$tmp" "$out" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   else
@@ -559,6 +563,36 @@ fi
 [[ -n "$TEE_PID" ]] && kill -TERM "$TEE_PID" 2>/dev/null || true
 # …and the launch watchdog, same rule: our own helper, exact pid, never the session.
 [[ -n "$LAUNCH_WD_PID" ]] && kill -TERM "$LAUNCH_WD_PID" 2>/dev/null || true
+
+# ── A STAGED SUCCESSOR RUNS HERE INSTEAD OF BEING TYPED (docs/plans/RECYCLE_KEYSTROKELESS_DELIVERY.md
+#    §D1). A recycle stages its relaunch in lib/pane-successor.sh before it sends /exit, and this
+#    wrapper regains the pane's tty when claude exits, so it claims the stage (the rename is the
+#    watcher's ack) and execs it — with NO trailing shell: control returns to the parent zsh that
+#    ran the launcher. Only an interactive launch on a real tty may take, and the lib refuses any tty
+#    that is not the pane's own: under lr-fire-resume's expect this wrapper holds the INNER pty, so it
+#    stands down and the outer lr-fire-resume consumes. The record is rewritten with the claim first,
+#    so the close stays attributable after the exec. Anything unreadable keeps today's path.
+_cca_take_successor() {
+  [[ -t 0 ]] || return 0
+  _cca_interactive_argv || return 0
+  local s="$0" t sd c lib="" claimed
+  while [[ -L "$s" ]]; do
+    t="$(readlink "$s" 2>/dev/null)" || break
+    case "$t" in /*) s="$t" ;; *) s="$(dirname "$s")/$t" ;; esac
+  done
+  sd="$(cd "$(dirname "$s")" 2>/dev/null && pwd)" || sd=""
+  for c in "${sd:+$sd/../lib/pane-successor.sh}" "${HOME:-}/.claude/lib/pane-successor.sh"; do
+    [[ -n "$c" && -r "$c" ]] && { lib="$c"; break; }
+  done
+  # shellcheck source=/dev/null  # runtime-resolved: checkout sibling, else the live layer
+  [[ -n "$lib" ]] && . "$lib" 2>/dev/null || return 0
+  claimed="$(cc_pane_successor_take)" && [[ -n "$claimed" ]] || return 0
+  write_record "$child" "$code" closed "$claimed" || true
+  printf '[cc-close-attrib] session ended (rc %s) — running the staged successor %s\n' "$code" "$claimed" >&2
+  cc_pane_successor_exec "$claimed" 0 || true
+  return 0
+}
+_cca_take_successor || true
 
 # ── OPT-IN: A CLEAN /exit CLOSES THE OPERATOR'S OWN WINDOW (2026-09-30; default OFF) ───────────
 #    docs/research/husk-panes-2026-09-30.md root cause 2 / fix F-a. A window the operator opened
