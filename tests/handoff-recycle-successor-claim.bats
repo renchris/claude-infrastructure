@@ -8,6 +8,9 @@
 # slowest pane-44 reading — so a successor that starts here started with no keystrokes at all.
 
 setup() {
+  # M11 pins (tests/handoff-fire-capacity-gate.bats PIN-GUARD): this suite fires; the gate is not its subject.
+  export CC_FIRE_CAPACITY_GATE=off
+  export CC_FIRE_HEADROOM_GATE=off
   export CC_FIRE_CAPACITY_GATE=off CC_FIRE_HEADROOM_GATE=off CC_ADMIT_GATE=off
   export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/account-sweep.json"
   export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/claude-accounts"

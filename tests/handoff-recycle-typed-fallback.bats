@@ -13,6 +13,9 @@
 # (tests/fixtures/recycle-keystrokeless/handoff-recycle-cmd-44-*.sh), quotes and `$(cat …)` intact.
 
 setup() {
+  # M11 pins (tests/handoff-fire-capacity-gate.bats PIN-GUARD): this suite fires; the gate is not its subject.
+  export CC_FIRE_CAPACITY_GATE=off
+  export CC_FIRE_HEADROOM_GATE=off
   export CC_FIRE_CAPACITY_GATE=off CC_FIRE_HEADROOM_GATE=off CC_ADMIT_GATE=off
   # Non-$HOME seams the script reads: pinned to ABSENT paths inside the test dir, never /tmp or PATH.
   export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/account-sweep.json"
