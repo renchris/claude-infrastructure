@@ -1742,7 +1742,7 @@ landed and converged. Locus S (fired `fire-rp-v12-e1k`), lead-inline.
   cannot fire under the very starvation it is meant to separate from; key it on CPU at hand-off against a
   ready worker's.
 
-#### E1m — re-tune Haiku 5.5 as the careful call under a pre-registered rule, A/B the two unions, pin the pick — IN PROGRESS
+#### E1m — re-tune Haiku 5.5 as the careful call under a pre-registered rule, A/B the two unions, pin the pick — DONE: the Haiku 4.5 union, pinned and live (PRI 31-37 after the restart); guard 2 caught 40/42 (PASS at the floor); E1k real-load re-run PASS, hedge-on fallback 0/150 (2026-10-09)
 Scope (frozen): wave E1m — ruling 8633d354bd41 as ruled: (a) a GENERAL brief rule for subtle re-asks for the
 Haiku 5.5 careful call, written without quoting or paraphrasing any tuning prompt and without its author reading
 the 3 prompts the union misses; binary and effort pinned explicitly; (b) the bars, pre-registered verbatim here
@@ -1931,7 +1931,40 @@ bar (`082648c5e`) unchanged, its verdict recorded here.
   as a miss when "the router did not hold *it*"; the fix joins a hold to the one call whose span contains it,
   the same fix that corrects the A/B table above, and the A/B traces show every hold maps to exactly one call.
   Control: the run as first scored, kept as `/tmp/e1m-chain/guard2.window-scored.json` (outside the repo), reads
-  37 on the same files.
+  37 on the same files. Lesson: `docs/lessons/a-time-window-join-over-back-to-back-calls-charges-one-event-to-several.md`.
+- **E1k's real-load A/B, run 3 (Scope grown): PASS under RULE E1k** (bar `082648c5e` unchanged; harness
+  `db03a82cf` as run 2: `e1i-latency.py --n 300 --hedge-ab` through the live `router.py classify` with
+  `CC_RESEARCH_CLASSIFY_TRACE`, `e1k-sidecar.py` at 1 Hz, `e1k-ab-report.py`). Started by a trigger when the 1-min
+  load reached 163.5, 2026-10-08 23:51:06 CDT, done 00:17 on 10-09; 1-min load 118.3-470.9, median 382.5; the
+  restarted daemon (PRI 31-37, the pinned Haiku 4.5 careful call). `e1k-ab-run3.{json,trace.jsonl,report.txt}`
+  and `e1k-ab-run3.sidecar.jsonl.gz` (no prompt text, no answer text in the trace, no command lines).
+  **Hedge-on fallback 0/150 = 0.000 (<= 0.03), with 121 hedge-on rows above load 150 (>= 40).**
+
+  | arm | 1-min load | rows | fallbacks | median | p90 | held, one call silent |
+  |---|---|---|---|---|---|---|
+  | hedge on | 100-150 | 29 | 0 | 5.96 s | 8.59 s | 6 |
+  | hedge on | 150-250 | 17 | 0 | 5.13 s | 8.60 s | 4 |
+  | hedge on | 250 and over | 104 | 0 | 5.18 s | 8.59 s | 16 |
+  | hedge on | all | 150 | 0 | 5.34 s | 8.59 s | 26 |
+  | hedge off | 100-150 | 29 | 0 | 6.26 s | 8.59 s | 6 |
+  | hedge off | 150-250 | 17 | 0 | 4.68 s | 8.57 s | 3 |
+  | hedge off | 250 and over | 104 | 0 | 5.17 s | 8.60 s | 27 |
+  | hedge off | all | 150 | 0 | 5.21 s | 8.59 s | 36 |
+
+  Read: **the fix was the priority, not the hedge.** Hedge-off also fell back 0/150, against run 2's 119/150 at a
+  lower load (median 202 there, 382 here); the hedge fired 99 times (98 careful, 1 fast) and won 0. What the
+  hedge still buys is fewer holds with one call silent (26 against 36). Shown only, as RULE E1k says: p90 is
+  8.59 s in both arms, the Haiku 4.5 careful call riding to the 8.5 s hand-back on about a fifth of rows
+  (E1i's 7.5 s p90 clause is not this rule's bar). The report's join gives each trace row to the one call
+  that started latest before it, and its totals match the trace (62 `held` rows, 26 + 36), so the guard-2
+  join defect above does not reach it.
+- Status: **DONE 2026-10-09.** Pick: the Haiku 4.5 union (RULE E1m failed on both runs). Shas: rule `a6eedb897`
+  (before the first call); A/B record `1deb66bcd`; pin `a5d6bd21f` (+ `ProcessType Interactive`); records
+  `5f925bdf8`, `a9f9d1f10`; guard 2 and the hold-join fix `bc471e0b6`; this record (see `git log`). The
+  operator ran the restart (backlog `b0a8958fea0b`); live configuration `3eb7e253415c`. Guard 2: 40/42, PASS at
+  the floor. E1k run 3: PASS. No sealed set was opened, `tuning-v2.jsonl` was not read. Learnings: join trace
+  events to calls by containment, never by a window wider than the call spacing (lesson above); a launchd job
+  with no `ProcessType` runs its workers at PRI 20, and under load that alone accounted for E1k's fallbacks.
 
 #### E1l — row 15's read guards, the third-read refusal, the load bound, and the pre-registered data rules — DONE: landed and live; the live set map's re-point is the operator's (2026-10-08)
 Scope (frozen): wave E1l — (1) ruling `a7fd5e2ee7c8` guard 1: gate row 15 decrypts and logs a read only when an

@@ -1,0 +1,33 @@
+rows 300; first row started 1791521466.44; 1-min load 118.3-470.9
+
+| arm | 1-min load | rows | fallbacks | median | p90 | held, one call silent |
+|---|---|---|---|---|---|---|
+| hedge on | 100-150 | 29 | 0 | 5.96 s | 8.59 s | 6 |
+| hedge on | 150-250 | 17 | 0 | 5.13 s | 8.60 s | 4 |
+| hedge on | 250 and over | 104 | 0 | 5.18 s | 8.59 s | 16 |
+| hedge on | all | 150 | 0 | 5.34 s | 8.59 s | 26 |
+| hedge off | 100-150 | 29 | 0 | 6.26 s | 8.59 s | 6 |
+| hedge off | 150-250 | 17 | 0 | 4.68 s | 8.57 s | 3 |
+| hedge off | 250 and over | 104 | 0 | 5.17 s | 8.60 s | 27 |
+| hedge off | all | 150 | 0 | 5.21 s | 8.59 s | 36 |
+
+| kind | hedge fired (hedge-on rows) | won | fired on a row that fell back |
+|---|---|---|---|
+| fast | 1 | 0 | 0 |
+| careful | 98 | 0 | 0 |
+
+hedge-on rows with no router row (killed before it): 0
+
+| arm | kind | cause | calls |
+|---|---|---|---|
+| hedge off | careful | starved mid-call | 2 |
+| hedge off | careful | still starting | 5 |
+| hedge off | careful | unattributed | 25 |
+| hedge off | careful | waiting, not starved | 4 |
+| hedge on | careful | starved mid-call | 6 |
+| hedge on | careful | still starting | 9 |
+| hedge on | careful | unattributed | 74 |
+| hedge on | careful | waiting, not starved | 9 |
+| hedge on | fast | waiting, not starved | 1 |
+
+verdict (RULE E1k): PASS: hedge-on fallback 0/150 = 0.000 (<= 0.03), 121 hedge-on rows above load 150
