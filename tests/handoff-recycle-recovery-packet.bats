@@ -408,3 +408,15 @@ gate() { run bash -c 'set -euo pipefail; . "$1"; DRY=0 hf_recovery_of_gate "$2"'
   run env -u CLAUDE_CONFIG_DIR bash -c 'eval "$(grep "^export " "$1")"; printf "%s" "$CLAUDE_CONFIG_DIR"' _ "$c"
   [ "$output" = "$TARGET_CFG" ]
 }
+
+@test "HF_WATCHER_IT2 routes the watcher's own transport (the live proof's forced-failure seam)" {
+  watcher_world
+  cp "$HOME/.claude/bin/it2" "$HOME/alt-it2"
+  sed -i.bak 's|it2-calls.log|alt-it2-calls.log|' "$HOME/alt-it2"
+  HF_WATCHER_IT2="$HOME/alt-it2" start_watcher
+  rm -f "$HOME/pane-cc"
+  await_watcher 120
+  grep -q '^session send' "$HOME/alt-it2-calls.log" || { cat "$HOME/alt-it2-calls.log"; false; }
+  ! grep -q '^session send' "$HOME/it2-calls.log" 2>/dev/null || { cat "$HOME/it2-calls.log"; false; }
+  assert_packet relaunch-write-failed
+}

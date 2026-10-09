@@ -9875,7 +9875,11 @@ if [ "${1:-}" = "__recycle" ]; then
   # foreground; empty unless the session is recycling itself. Positional-last + optional like the rest.
   RCY_CALLER_PID="${16:-}"
   case "$RCY_CALLER_PID" in *[!0-9]*|0|1) RCY_CALLER_PID="" ;; esac
-  IT2="$HOME/.claude/bin/it2"
+  # HF_WATCHER_IT2: the WATCHER's own transport seam, deliberately not IT2_BIN — ten suites set IT2_BIN
+  # for the foreground while relying on this watcher reaching $HOME/.claude/bin/it2. It exists so a live
+  # end-to-end proof can force the post-/exit relaunch writes to fail (RECYCLE_KEYSTROKELESS_DELIVERY
+  # Definition of done, item 3) without touching the foreground's /exit transport.
+  IT2="${HF_WATCHER_IT2:-$HOME/.claude/bin/it2}"
   echo "→ armed: __recycle pid=$$ pgid=$(ps -o pgid= -p $$ | tr -d ' ') sid=$RSID tty=$TTY_PATH caller=${RCY_CALLER_PID:-none}"
   pane_proof "$IT2" "$RSID" __recycle || exit 1
   # THE SECOND SITE OF THE SAME DEFECT, and the reason fixing the foreground alone is not a fix.
