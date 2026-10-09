@@ -319,6 +319,13 @@ flaw 1).
   (:165); cc-pane spawns no resume; **lr_recon does NOT** (act.py:143 uses
   `handoff-fire --relaunch-at-shell`; lr-handoff.sh:1611 and lr-upgrade.sh:60 use lr-fire-resume.sh,
   which spawns `claude --resume` itself); handoff-fire's own resume-mode launcher does not either.
+- **U2, §D2 item 5 reversed:** a trailing literal `ESC[201~` / `^[[201~` in the read-back now means NO
+  CR, not "strip it and submit". zsh never renders a paste-end marker it consumed, so a VISIBLE marker
+  means those bytes are in the line buffer and a CR would submit them onto the last argument. The
+  attempt scrubs and the next one retypes (the final attempt is plain mode, which carries no markers).
+- **U2, typing deadline in tests:** suites whose mock screen never echoes now pin
+  `CC_RECYCLE_TYPE_DEADLINE_S=0`, which keeps the old two rounds. Without it the 600 s default hangs
+  them past bats' per-test bound.
 - **U3:** `--next-to` is implemented in boot-resume-launch but not passed by cc-resume-debt, because
   the recorded pane is usually gone and kitty fails a launch whose `--next-to` matches nothing.
 
