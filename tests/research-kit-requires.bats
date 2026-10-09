@@ -209,9 +209,16 @@ hf_env() {
   [ -n "$fmt" ]
   # shellcheck disable=SC2059  # the format string IS the subject: it is the script's own printf format
   line="$(printf "$fmt" demo B1)"
-  run bash -c "printf 'build wave B1 brief\n<!-- %s -->\n' '$line' | CC_RESEARCH_CLASSIFIER=false python3 '$REPO/scripts/research-kit/router.py' classify"
+  # The marker is slug-bound (e0f9bb418): it routes only for the program it names, so classify is
+  # given that program. Without --program it fell through to the classifier, and passed only where a
+  # resident classifier on the real $HOME answered for it.
+  run bash -c "printf 'build wave B1 brief\n<!-- %s -->\n' '$line' | CC_RESEARCH_CLASSIFIER=false python3 '$REPO/scripts/research-kit/router.py' classify --program demo"
   [ "$status" -eq 0 ]
   [ "$output" = "work-order" ]
+  # the control: the same marker under another program is no work order, so the always-failing
+  # classifier decides and classify falls back
+  run bash -c "printf 'build wave B1 brief\n<!-- %s -->\n' '$line' | CC_RESEARCH_CLASSIFIER=false python3 '$REPO/scripts/research-kit/router.py' classify --program other"
+  [ "$status" -ne 0 ]
 }
 
 # ── wave E3d: a wave that follows implementation signoff (REPORT.md §11) ─────────────────────────
