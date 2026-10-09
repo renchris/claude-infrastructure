@@ -301,3 +301,86 @@ EOF
   echo "$output" | grep -q 'segments'                    # ...and segments is why
   echo "$output" | grep -q 'DEFERRED, not lost'          # a shed is not a failure
 }
+
+# ── RECYCLE_KEYSTROKELESS_DELIVERY §D4: --prompt-file, --next-to, the launch token, rc 124/137 ─────
+# kitty stub for the launch cases: `@ launch` appends its argv (one per line, then a `----` line)
+# and exits KITTY_LAUNCH_RC; `@ ls` records its argv and, only when KITTY_LATE=1, prints a window
+# whose env carries the token read back from the launch argv — the window that arrived late.
+kitty_launch_env() {
+  kitty_ok_env
+  export KT="$BATS_TEST_TMPDIR"
+  cat > "$BATS_TEST_TMPDIR/kitty" <<'SH'
+#!/bin/bash
+[ "$1" = @ ] && shift
+case "$1" in
+  launch) printf '%s\n' "$@" -------- >> "$KT/kitty.launch"; exit "${KITTY_LAUNCH_RC:-0}" ;;
+  ls) printf '%s\n' "$@" > "$KT/kitty.ls"
+      tok="$(sed -n 's/^CC_LAUNCH_TOKEN=//p' "$KT/kitty.launch" | tail -1)"
+      [ "${KITTY_LATE:-0}" = 1 ] || { echo "No matching windows" >&2; exit 1; }
+      printf '[{"tabs":[{"windows":[{"id":134,"env":{"CC_LAUNCH_TOKEN":"%s"}}]}]}]\n' "$tok" ;;
+esac
+SH
+  chmod +x "$BATS_TEST_TMPDIR/kitty"
+}
+launches() { grep -c '^launch$' "$BATS_TEST_TMPDIR/kitty.launch" 2>/dev/null || echo 0; }
+launch_token() { sed -n 's/^CC_LAUNCH_TOKEN=//p' "$BATS_TEST_TMPDIR/kitty.launch" | tail -1; }
+
+@test "D4: every kitty launch carries --env CC_LAUNCH_TOKEN, ahead of the program argv" {
+  kitty_launch_env
+  run bash "$LAUNCH" next3 /tmp sid-tok-1
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -qx -- '--env' "$BATS_TEST_TMPDIR/kitty.launch"
+  [ -n "$(launch_token)" ] || { cat "$BATS_TEST_TMPDIR/kitty.launch"; false; }
+  # the token sits before `--`, so the window's program argv is untouched
+  [ "$(sed -n '/^--$/,$p' "$BATS_TEST_TMPDIR/kitty.launch" | grep -c CC_LAUNCH_TOKEN)" -eq 0 ]
+  grep -qx -- '--type=os-window' "$BATS_TEST_TMPDIR/kitty.launch"
+}
+
+@test "D4: --next-to <pane> launches a window beside that pane, not an os-window" {
+  kitty_launch_env
+  run bash "$LAUNCH" next3 /tmp sid-nt-1 --next-to 44
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -qx -- '--type=window' "$BATS_TEST_TMPDIR/kitty.launch"
+  [ "$(grep -A1 -x -- '--next-to' "$BATS_TEST_TMPDIR/kitty.launch" | tail -1)" = "id:44" ]
+  ! grep -qx -- '--type=os-window' "$BATS_TEST_TMPDIR/kitty.launch" || false
+  run bash "$LAUNCH" next3 /tmp sid-nt-2 --next-to 'id:44; rm'
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+}
+
+@test "D4: client rc 124 with NO window carrying the token ⇒ exit 5, indeterminate, launched ONCE" {
+  kitty_launch_env
+  KITTY_LAUNCH_RC=124 run bash "$LAUNCH" next3 /tmp sid-to-1
+  [ "$status" -eq 5 ] || { echo "status $status: $output"; false; }
+  [[ "$output" == *"indeterminate, not relaunching"* ]] || { echo "$output"; false; }
+  [ "$(launches)" -eq 1 ] || { cat "$BATS_TEST_TMPDIR/kitty.launch"; false; }
+  # the reconciliation asked for exactly this launch's token
+  grep -qx -- "env:CC_LAUNCH_TOKEN=$(launch_token)" "$BATS_TEST_TMPDIR/kitty.ls"
+  [ ! -s "$BATS_TEST_TMPDIR/debt.log" ] || { cat "$BATS_TEST_TMPDIR/debt.log"; false; }
+}
+
+@test "D4: client rc 137 but the token's window exists ⇒ exit 0, launched late, debt opened" {
+  kitty_launch_env
+  KITTY_LAUNCH_RC=137 KITTY_LATE=1 run bash "$LAUNCH" next3 /tmp sid-to-2
+  [ "$status" -eq 0 ] || { echo "status $status: $output"; false; }
+  [[ "$output" == *"launched late"* ]] || { echo "$output"; false; }
+  [ "$(launches)" -eq 1 ]
+  grep -q '^open --sid sid-to-2 ' "$BATS_TEST_TMPDIR/debt.log"
+}
+
+@test "D4: any other client failure is still exit 4 (control for the timeout reconcile)" {
+  kitty_launch_env
+  KITTY_LAUNCH_RC=1 KITTY_LATE=1 run bash "$LAUNCH" next3 /tmp sid-to-3
+  [ "$status" -eq 4 ] || { echo "status $status: $output"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/kitty.ls" ] || false
+}
+
+@test "D4: --prompt-file rides into the reso-resume-one command, quoted, after the branch" {
+  run bash "$LAUNCH" --dry-run next4 /tmp sid-pf-1 br-x --prompt-file "/tmp/it's here.md"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  echo "$output" | grep -qF "CMD: 'env' 'CC_ADMIT_DONE=1' '/Users/x/.reso/bin/reso-resume-one' 'next4' '/tmp' 'sid-pf-1' 'br-x' '--prompt-file' '/tmp/it'\\''s here.md'"
+  # without a branch the option is the 4th word, and is not swallowed as a branch
+  run bash "$LAUNCH" --dry-run next4 /tmp sid-pf-2 --prompt-file /tmp/p.md
+  echo "$output" | grep -qF "'sid-pf-2' '--prompt-file' '/tmp/p.md'"
+  run bash "$LAUNCH" --dry-run next4 /tmp sid-pf-3 --bogus
+  [ "$status" -eq 2 ]
+}

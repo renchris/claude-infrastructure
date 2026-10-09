@@ -7,8 +7,11 @@
 # Claude UI can live. Isolating this GUI-coupled step keeps the orchestrator (detect/decide/dedup/
 # page) fully unit-testable — boot-resume.sh calls this via the CC_RESUME_LAUNCH_BIN seam.
 #
-#   Usage: boot-resume-launch.sh <account-alias> <cwd> <session-id> [branch]
+#   Usage: boot-resume-launch.sh <account-alias> <cwd> <session-id> [branch] [--prompt-file F]
+#                                [--next-to PANE]
 #     account-alias: next|next2|next3|next4|fable.. (already MAPPED by boot-resume.sh)
+#   --prompt-file F: handed to reso-resume-one, which submits it as the resumed session's first prompt.
+#   --next-to PANE: kitty only — open the resume as a window beside kitty window PANE, not an os-window.
 #   --dry-run (or CC_LAUNCH_DRYRUN=1): print the reso-resume-one command + the osascript, run nothing.
 #   --check-only: run only the ownership checks (PARKED-REBOOT, recon fence, live holder) and exit
 #     0 (may launch) or 5 (not ours); opens nothing. boot-resume.sh's --desktops batch path uses it.
@@ -19,7 +22,8 @@
 #      fence's stores) · CC_BOOT_RESUME_MODE / CC_BOOT_RESUME_STATE_DIR (the posture for PARKED-REBOOT).
 # Exit: 0 launched · 1 verified typing unavailable · 2 usage · 3 driver or reso-resume-one missing
 #      · 4 launch failed · 5 not ours to launch (reconciler owns it, launch lock held, H(sid) not
-#      empty, or PARKED-REBOOT outside `resume` mode) · 9 capacity shed.
+#      empty, or PARKED-REBOOT outside `resume` mode, or a kitty launch whose client timed out and
+#      whose CC_LAUNCH_TOKEN no window carries: indeterminate, never launched twice) · 9 capacity shed.
 # Never reuses the current pane (resume-sessions off-by-one rule); always a new window. Fail-loud.
 set -uo pipefail
 
@@ -69,9 +73,26 @@ case "${1:-}" in
   --check-only) CHECKONLY=1; shift ;;
 esac
 
-acct="${1:-}"; cwd="${2:-}"; sid="${3:-}"; branch="${4:-}"
+acct="${1:-}"; cwd="${2:-}"; sid="${3:-}"; branch=""
+# Options ride AFTER the positionals (RECYCLE_KEYSTROKELESS_DELIVERY §D4), as in reso-resume-one:
+# a 4th word starting with -- is an option, not a branch, so every existing caller's argv means
+# exactly what it meant before.
+_brl_n=$(( $# < 3 ? $# : 3 ))
+if [ $# -gt 3 ]; then case "$4" in --*) ;; *) branch="$4"; _brl_n=4 ;; esac; fi
+[ "$_brl_n" -gt 0 ] && shift "$_brl_n"
+PROMPT_FILE="" NEXT_TO=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --prompt-file) PROMPT_FILE="${2:-}"; [ $# -gt 1 ] && shift; shift ;;
+    --next-to)     NEXT_TO="${2:-}"; [ $# -gt 1 ] && shift; shift ;;
+    *) echo "boot-resume-launch: unknown arg $1" >&2; exit 2 ;;
+  esac
+done
+case "$NEXT_TO" in
+  *[!0-9]*) echo "boot-resume-launch: --next-to needs a kitty window id (got '$NEXT_TO')" >&2; exit 2 ;;
+esac
 if [ -z "$acct" ] || [ -z "$sid" ]; then
-  echo "boot-resume-launch: usage: <account-alias> <cwd> <session-id> [branch]" >&2
+  echo "boot-resume-launch: usage: <account-alias> <cwd> <session-id> [branch] [--prompt-file F] [--next-to PANE]" >&2
   exit 2
 fi
 
@@ -178,6 +199,13 @@ shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 # INSIDE the window after this launcher had returned 0. Every word stays single-quoted.
 CMD="'env' 'CC_ADMIT_DONE=1' $(shq "$RESUME_ONE") $(shq "$acct") $(shq "$cwd") $(shq "$sid")"
 [ -n "$branch" ] && CMD="$CMD $(shq "$branch")"
+# The recovery prompt reaches reso-resume-one as its --prompt-file, a LAUNCH argument (§D4):
+# cc-resume-debt's retry of a failed recycle passes the packet's prompt, so the resumed original
+# wakes on it instead of sitting at an empty prompt (the 2026-10-09 strand).
+[ -n "$PROMPT_FILE" ] && CMD="$CMD '--prompt-file' $(shq "$PROMPT_FILE")"
+# A nonce every kitty launch carries in its environment, so a launch whose client timed out can be
+# reconciled against the windows that exist, rather than guessed at (see the launch below).
+BRL_TOKEN="brl-$$-$(date +%s)-${RANDOM:-0}"
 
 if [ "$IN_KITTY" = 1 ]; then
   # ARGV, not a typed command line. `kitty @ launch … -- prog args…` execs the program directly, so
@@ -208,7 +236,11 @@ if [ "$IN_KITTY" = 1 ]; then
   # no recycle pending (6347b1731), and that exit means "close this pane". `; exec zsh -i` re-opened
   # a shell under every such close, so a stale replay left 7 husks the launcher had announced as
   # closing. Every failure still exits non-zero and still gets the shell.
-  KARGS=(launch --type=os-window)
+  # --next-to <pane> opens the resume as a window beside that pane, in its tab, instead of a new
+  # os-window. The token rides as --env, ahead of `--`, so the program argv is unchanged.
+  if [ -n "$NEXT_TO" ]; then KARGS=(launch --type=window --next-to "id:$NEXT_TO")
+  else KARGS=(launch --type=os-window); fi
+  KARGS+=(--env "CC_LAUNCH_TOKEN=$BRL_TOKEN")
   { [ -n "$cwd" ] && [ -d "$cwd" ]; } && KARGS+=(--cwd "$cwd")
   KARGS+=(-- zsh -ic "$CMD || exec zsh -i")
 else
@@ -402,8 +434,25 @@ if [ "$IN_KITTY" = 1 ]; then
   # No `open -a kitty` counterpart on purpose: we are RUNNING inside kitty (that is the predicate),
   # so the app is up by construction, and the control socket — not the app — is the thing that can
   # be missing. If it is, the launch fails and rc 4 reports the cut exactly as osascript's does.
-  brl_kitty "${KARGS[@]}" >/dev/null 2>&1 || { echo "boot-resume-launch: kitty launch failed for $sid" >&2; exit 4; }
-  command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn os-window kitty "" "${cwd:-$PWD}" "boot-resume-launch resume sid:${sid:-}"
+  # A CLIENT TIMEOUT IS NOT A FAILED LAUNCH (§D4). On 2026-10-09 the bounded client was cut (rc 124)
+  # and kitty created window 134 nine minutes later anyway. rc 124 (timeout) or 137 (its -k kill)
+  # therefore means "unknown", reconciled by the token: a window carrying it ⇒ launched late, exit 0;
+  # none ⇒ exit 5, which every caller already reads as "do not launch again". A timed-out launch is
+  # never launched a second time from here, because the first may still arrive.
+  brl_kitty "${KARGS[@]}" >/dev/null 2>&1; _brl_krc=$?
+  case "$_brl_krc" in
+    0) ;;
+    124|137)
+      if _brl_ls="$(brl_kitty ls --match "env:CC_LAUNCH_TOKEN=$BRL_TOKEN" 2>/dev/null)" \
+         && case "$_brl_ls" in *"$BRL_TOKEN"*) true ;; *) false ;; esac; then
+        echo "boot-resume-launch: kitty client rc $_brl_krc for $sid, but the window carrying $BRL_TOKEN exists — launched late" >&2
+      else
+        echo "boot-resume-launch: kitty client rc $_brl_krc for $sid and no window carries $BRL_TOKEN — indeterminate, not relaunching (exit 5)" >&2
+        exit 5
+      fi ;;
+    *) echo "boot-resume-launch: kitty launch failed for $sid" >&2; exit 4 ;;
+  esac
+  command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn "$([ -n "$NEXT_TO" ] && printf window || printf os-window)" kitty "" "${cwd:-$PWD}" "boot-resume-launch resume sid:${sid:-}"
   brl_open_debt
   exit 0
 fi
