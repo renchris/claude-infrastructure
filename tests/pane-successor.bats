@@ -129,8 +129,8 @@ assert_refused() {
   stage
   unset CC_PANE_SUCCESSOR_TTY
   run script -q /dev/null /bin/bash -c '. "$1"; cc_pane_successor_take; echo "rc=$?"' _ "$LIB"
-  [[ "$output" == *rc=1* ]]
-  [[ "$output" != *claimed* ]]
+  [[ "$output" == *rc=1* ]] || false
+  [[ "$output" != *claimed* ]] || false
   [ -f "$CC_PANE_SUCCESSOR_DIR/ttys913.cmd" ]
 }
 
@@ -279,8 +279,8 @@ mk_lr_tail() {
   run env CLAUDE_CONFIG_DIR=/pred SHELL="$FAKESH" "$LR_TAIL"
   [ "$status" -eq 0 ]
   [ "$(cat "$MARK")" = "ran CCD=<unset>" ]
-  [[ "$output" == *"running the staged successor $CC_PANE_SUCCESSOR_DIR/ttys913.claimed."* ]]
-  [[ "$output" != *FELL-THROUGH* ]]
+  [[ "$output" == *"running the staged successor $CC_PANE_SUCCESSOR_DIR/ttys913.claimed."* ]] || false
+  [[ "$output" != *FELL-THROUGH* ]] || false
   grep -qxF 'argv: [-l] [-i]' "$FAKESH_LOG"   # the trailing shell keeps the pane
 }
 
@@ -288,11 +288,11 @@ mk_lr_tail() {
   mk_lr_tail
   run env SHELL="$FAKESH" "$LR_TAIL"
   [ "$status" -eq 0 ]
-  [[ "$output" == *FELL-THROUGH* ]]
+  [[ "$output" == *FELL-THROUGH* ]] || false
   [ ! -e "$MARK" ]
   stage
   run env CC_PANE_SUCCESSOR_TTY=/dev/ttys777 SHELL="$FAKESH" "$LR_TAIL"
-  [[ "$output" == *FELL-THROUGH* ]]
+  [[ "$output" == *FELL-THROUGH* ]] || false
   [ -f "$CC_PANE_SUCCESSOR_DIR/ttys913.cmd" ]
 }
 
@@ -326,8 +326,8 @@ EOF
   run env CLAUDE_CONFIG_DIR=/pred SHELL="$FAKESH" script -q /dev/null "$DRIVER" "$LIB" "$CMD" "$META" "$REPO/bin/cc-close-attrib" "$STUB" ""
   echo "$output"
   [ "$(cat "$MARK")" = "ran CCD=<unset>" ]
-  [[ "$output" == *wrapper-rc=0* ]]
-  [[ "$output" != *STILL-STAGED* ]]
+  [[ "$output" == *wrapper-rc=0* ]] || false
+  [[ "$output" != *STILL-STAGED* ]] || false
   [ "$(grep -c '^argv:' "$FAKESH_LOG")" -eq 1 ]
   rec="$(ls -1t "$CC_CLOSE_RECORDS_DIR"/*.json | head -1)"
   grep -q '"successor_claim":"[^"]*/ttys[0-9]*\.claimed\.[0-9]*"' "$rec"
@@ -338,8 +338,8 @@ EOF
   mk_cca
   run env SHELL="$FAKESH" script -q /dev/null "$DRIVER" "$LIB" "$CMD" "$META" "$REPO/bin/cc-close-attrib" "$STUB" /dev/ttys913
   echo "$output"
-  [[ "$output" == *wrapper-rc=0* ]]
-  [[ "$output" == *STILL-STAGED* ]]
+  [[ "$output" == *wrapper-rc=0* ]] || false
+  [[ "$output" == *STILL-STAGED* ]] || false
   [ ! -e "$MARK" ]
   rec="$(ls -1t "$CC_CLOSE_RECORDS_DIR"/*.json | head -1)"
   grep -q '"successor_claim":""' "$rec"
@@ -350,6 +350,6 @@ EOF
   sed -i '' 's#"\$4" "\$5"#"$4" "$5" -p hi#' "$DRIVER"
   run env SHELL="$FAKESH" script -q /dev/null "$DRIVER" "$LIB" "$CMD" "$META" "$REPO/bin/cc-close-attrib" "$STUB" ""
   echo "$output"
-  [[ "$output" == *STILL-STAGED* ]]
+  [[ "$output" == *STILL-STAGED* ]] || false
   [ ! -e "$MARK" ]
 }

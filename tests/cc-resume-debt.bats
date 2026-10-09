@@ -386,7 +386,7 @@ transcript() { # <jsonl lines…>
   printf 'lr_holder_count() { echo 1; }\n' > "$T/lr-lib-held.sh"
   export CC_RESUME_DEBT_LR_LIB="$T/lr-lib-held.sh" CC_RESUME_DEBT_GRACE_S=0 CC_RESUME_DEBT_MAX_DEFER=3
   "$BIN" step --sid "$SID"; "$BIN" step --sid "$SID"
-  [ "$(state)" = open ] && [ "$(jq -r .deferrals "$CC_RESUME_DEBT_DIR/meta/$SID.json")" = 2 ]
+  [ "$(state)" = open ] && [ "$(jq -r .deferrals "$CC_RESUME_DEBT_DIR/meta/$SID.json")" = 2 ] || false
   "$BIN" step --sid "$SID"
   [ "$(state)" = retrying ] || { cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }
   [ "$(jq -r .relaunch_rc "$CC_RESUME_DEBT_DIR/meta/$SID.json")" = 75 ]

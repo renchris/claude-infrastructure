@@ -1003,7 +1003,8 @@ cc_pane_successor_exec() { printf "%s|%s\n" "$1" "$2" > "'"$BATS_TEST_TMPDIR"'/e
 @test "D4: nothing staged (take refuses) or a lib without the verbs ⇒ rc 1, no exec, the shell follows" {
   rr_successor 'cc_pane_successor_take() { return 1; }
 cc_pane_successor_exec() { echo EXEC > "'"$BATS_TEST_TMPDIR"'/exec.log"; }'
-  [ "$status" -eq 1 ] && [ ! -e "$BATS_TEST_TMPDIR/exec.log" ] || { echo "$output"; false; }
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/exec.log" ] || { echo "$output"; false; }
   rr_successor 'true'
   [ "$status" -eq 1 ] && [ ! -e "$BATS_TEST_TMPDIR/exec.log" ] || false
 }
