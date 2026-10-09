@@ -33,7 +33,11 @@ set -m        # job control: each background child leads its own process group, 
 exec 2>/dev/null   # with job control on, bash reports killed jobs on stderr; the harness needs none of it
 
 DIR="${CC_SSD_HOOK_DIR:-${BASH_SOURCE[0]%/*}}"
-CHILDREN="${CC_SSD_CHILDREN:-session-start.sh setup-plan-symlinks.sh setup-task-symlinks.sh activation-watch.sh escalation-watch.sh accounts-board.sh session-index-start.sh config-mirror-assert.sh frontier-status.sh}"
+# recycle-failed-inject.sh (RECYCLE_KEYSTROKELESS_DELIVERY §D4) is a TENTH child, added after
+# migration 0056, so it needed no settings.json edit. It is FIRST because the merge keeps
+# registration order and the cap cuts from the end: a failed recycle's recovery packet must never be
+# the context that gets truncated.
+CHILDREN="${CC_SSD_CHILDREN:-recycle-failed-inject.sh session-start.sh setup-plan-symlinks.sh setup-task-symlinks.sh activation-watch.sh escalation-watch.sh accounts-board.sh session-index-start.sh config-mirror-assert.sh frontier-status.sh}"
 BOUND="${CC_SSD_BOUND_S:-9}"
 CAP="${CC_SSD_CAP:-9500}"
 case "$BOUND" in ''|*[!0-9]*|0) BOUND=9 ;; esac

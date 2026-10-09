@@ -79,14 +79,16 @@ dispatch() { # <children> [cap]
   [ "$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext | length')" -eq 9500 ]
 }
 
-@test "the shipped child list names nine hooks that exist and none of the four kept separate" {
+@test "the shipped child list names ten hooks that exist and none of the four kept separate" {
   run bash -c 'grep -o "CHILDREN:-[^}]*" "$1"' _ "$SSD"
   local list="${output#CHILDREN:-}" n=0 c
   for c in $list; do
     [ -x "$REPO/hooks/$c" ] || { echo "missing $c"; false; }
     n=$((n + 1))
   done
-  [ "$n" -eq 9 ]
+  # nine folded by 0056, plus recycle-failed-inject.sh (§D4) — first, so the cap never cuts it
+  [ "$n" -eq 10 ]
+  [ "${list%% *}" = recycle-failed-inject.sh ]
   for c in dod-persist.sh desk-brief-inject.sh mailbox-drain.sh mailbox-wake-arm.sh; do
     [[ " $list " != *" $c "* ]] || { echo "$c must stay separate"; false; }
   done
