@@ -6,7 +6,13 @@
 # into its pane failed because the window was gone, and the only trace was a log row. Every mover
 # that closes a session therefore opens a debt here BEFORE the close, and the debt is discharged
 # only by proof. Unproven ⇒ one retry in a NEW window with the SAME session id; still unproven ⇒
-# ONE runnable operator backlog row plus ONE page. Never silent, never twice.
+# ONE runnable operator backlog row plus ONE message to the session's own mailbox. Never silent,
+# never twice.
+#
+# RECOVERY DEBTS (RECYCLE_KEYSTROKELESS_DELIVERY §D4). `settle --recovery <packet>` records a failed
+# recycle's packet (~/.claude/autonomy/recycle-failed/<sid>.json) in meta.recovery. Its retry passes
+# the packet's <sid>.prompt.md as --prompt-file, its proof needs more than liveness (_prove_debt),
+# and its escalation hands the operator the packet's refire_cmd.
 #
 # STORAGE (D1). bin/cc-custody is reused unchanged against a SIBLING store
 #   CC_CUSTODY_DIR=${CC_RESUME_DEBT_DIR:-~/.claude/autonomy/resume-debt}
@@ -15,35 +21,37 @@
 # (rewritten via temp + mv, never partially):
 #   {sid, marker, pane, cfg, account, cwd, by, why, opened_epoch, state, attempts, attempt_epoch,
 #    relaunch_rc, backlog_id, page_verdict, events:[{epoch,state,note}]}
+#   plus, when present: recovery (packet path) and deferrals (H(sid)>0 deferral count).
 #   state ∈ open | retrying | escalated | proven | abandoned
 #
 # STATE MACHINE (one transition per `step`, under a per-sid mkdir lock):
 #   proven | abandoned                         → nothing
 #   any other state, proof holds               → discharge (proven)
 #   open, age ≥ GRACE (or settle's --now)      → relaunch, retrying
-#   retrying, relaunch rc≠0 or WAIT elapsed    → escalate (backlog row + page), escalated
+#   retrying, relaunch rc≠0 or WAIT elapsed    → escalate (backlog row + mailbox), escalated
 #   escalated                                  → nothing new (latched); a later proof still discharges
 # PROOF is `cc-find <sid>` reporting LIVE (registry pid + lstart) on two reads HOLD s apart. A
-# point-in-time argv/ps match is NOT proof — that was the incident's false positive.
+# point-in-time argv/ps match is NOT proof — that was the incident's false positive. A recovery
+# debt's proof is stricter still (see _prove_debt).
 #
 # EXIT CODES: 0 ok · 1 not proven / escalated (prove, settle, surface-absent) · 2 usage ·
 #   3 undecided / store or enumerator failure · 4 settle ended on an abandoned debt.
 #
 # Env seams: CC_RESUME_DEBT_{DIR,CUSTODY_BIN,RESOLVE_BIN,FIND_BIN,PANE_BIN,BACKLOG_BIN,NOTIFY_BIN,
-#   RELAUNCH,NOW,HOLD_S,GRACE_S,WAIT_S,POLL_S,LOCK_STALE_S}.
+#   RELAUNCH,NOW,HOLD_S,GRACE_S,WAIT_S,POLL_S,LOCK_STALE_S,MAX_DEFER}.
 #   CC_RESUME_DEBT_RELAUNCH is a command PREFIX and is word-split on purpose (default
-#   `bash <repo>/scripts/boot-resume-launch.sh`); <account> <cwd> <sid> are appended.
+#   `bash <repo>/scripts/boot-resume-launch.sh`); <account> <cwd> <sid> are appended, then
+#   `--prompt-file <packet>.prompt.md` for a recovery debt.
 #   CC_RESUME_DEBT_NOW pins the state-machine clock (tests); settle's own deadline stays wall-clock.
-#   CC_RESUME_DEBT_{FENCE,LR_LIB,HF_BIN} pin lr-recon-fence.sh, lr-lib.sh and handoff-fire.sh;
-#   CC_RESUME_ONE_BIN is the program an in-pane launcher runs (boot-resume-launch's default).
+#   CC_RESUME_DEBT_{FENCE,LR_LIB} pin lr-recon-fence.sh and lr-lib.sh.
 #
 # TAKEOVER (LIMIT_RECOVER_FLEET_V2_ARCHITECTURE.md §C10 "Relaunch"). A relaunch types a resume, so
 # it is a typer like every other: it runs only when the reconciler fence says act, under the
 # per-sid launch lock, and only while H(sid) — the live holders of the session — is empty. A
-# deferral leaves the debt state as it is and records one `deferred` event. The launcher child
-# inherits LR_LAUNCH_LOCK, so boot-resume-launch acts under this lock rather than deferring to it.
-# IN-PANE FIRST: a debt whose pane is at a shell is relaunched there by handoff-fire
-# --relaunch-at-shell (when that script carries the flag); a new window only otherwise.
+# deferral leaves the debt state as it is and records one `deferred` event; the MAX_DEFER-th
+# H(sid)>0 deferral counts as a failed attempt. The launcher child inherits LR_LAUNCH_LOCK, so
+# boot-resume-launch acts under this lock rather than deferring to it. Every retry is a new window
+# (the in-pane branch was dead and is removed; see above _relaunch).
 set -uo pipefail
 
 _SELF="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
@@ -145,8 +153,41 @@ _successor_once() { # <closed sid> <pane>
   local out; out="$("$FIND" "$2" 2>/dev/null)" || true
   awk -F'\t' -v s="$1" -v p="$2" '$2 == p && $1 != s && $6 == "LIVE" { f = 1 } END { exit !f }' <<<"$out"
 }
+# A RECOVERY debt (settle --recovery <packet>, RECYCLE_KEYSTROKELESS_DELIVERY §D4) is a failed
+# recycle's original. LIVE alone proved nothing on 2026-10-09: the original was resumed with no
+# prompt, sat idle and LIVE, and its debt discharged while nobody re-fired the recycle. Its proof is
+# a live successor holding the pane, or the packet's token in a user record followed by an assistant
+# record — the original read the failure and answered, and a re-fire then owns its own debt.
+_transcript() { # <sid> → the newest <cfg>/projects/*/<sid>.jsonl, if any
+  local cfg f best=""
+  cfg="$(_get "$1" cfg)"; [ -n "$cfg" ] || return 1
+  for f in "$cfg"/projects/*/"$1".jsonl; do
+    [ -f "$f" ] || continue
+    { [ -z "$best" ] || [ "$f" -nt "$best" ]; } && best="$f"
+  done
+  [ -n "$best" ] && printf '%s' "$best"
+}
+_token_answered() { # <sid> <token> — rc 0 when a user record carries the token and an assistant record follows it
+  local t
+  [ -n "$2" ] || return 1
+  t="$(_transcript "$1")" || return 1
+  grep -qF -- "$2" "$t" 2>/dev/null || return 1   # cheap pre-filter; transcripts reach tens of MB
+  # shellcheck disable=SC2016  # jq program
+  jq -n --arg tok "$2" 'reduce (inputs | select(type == "object")) as $r ({u: false, a: false};
+      if (.u | not) and $r.type == "user" and (($r.message // "") | tostring | contains($tok)) then .u = true
+      elif .u and $r.type == "assistant" then .a = true else . end) | .a' "$t" 2>/dev/null | grep -qx true
+}
 _prove_debt() { # <sid> <hold> — the proof a debt's mode admits
-  local pane
+  local pane pkt tok
+  pkt="$(_get "$1" recovery)"
+  if [ -n "$pkt" ]; then
+    tok="$(jq -r '.token // ""' "$pkt" 2>/dev/null)"
+    _token_answered "$1" "$tok" && return 0
+    pane="$(_get "$1" pane)"; [ -n "$pane" ] || return 1
+    _successor_once "$1" "$pane" || return 1
+    [ "$2" -gt 0 ] && sleep "$2"
+    _successor_once "$1" "$pane"; return
+  fi
   _prove "$1" "$2" && return 0
   [ "$(_get "$1" mode)" = fresh ] || return 1
   pane="$(_get "$1" pane)"; [ -n "$pane" ] || return 1
@@ -258,30 +299,23 @@ _holders() { # <sid> → H(sid) on stdout; rc 1 when lr-lib is unreachable (the 
   command -v lr_holder_count >/dev/null 2>&1 || return 1
   lr_holder_count "$1"
 }
-_hf_bin() {
-  if [ -n "${CC_RESUME_DEBT_HF_BIN:-}" ]; then printf '%s' "$CC_RESUME_DEBT_HF_BIN"
-  elif [ -f "$_REPO/scripts/handoff-fire.sh" ]; then printf '%s' "$_REPO/scripts/handoff-fire.sh"
-  else printf '%s' "$HOME/.claude/scripts/handoff-fire.sh"; fi
-}
-# In-pane is chosen only on three positive answers: a recorded pane, a handoff-fire that carries
-# --relaunch-at-shell (it lands in another wave and may be absent), and the pane helper reporting
-# the pane at a shell. cc-pane has no `state` verb today, so its refusal keeps the new-window path.
-_in_pane_ok() { # <pane> <hf>
-  local st
-  [ -n "$1" ] && [ -f "$2" ] || return 1
-  grep -q -- '--relaunch-at-shell' "$2" 2>/dev/null || return 1
-  st="$(_bounded "$PANE" state "$1" 2>/dev/null)" || return 1
-  [ "${st%%[[:space:]]*}" = shell ]
-}
-# A launcher handoff-fire types into the pane's shell: the same engine the new-window path runs.
-_mint_launcher() { # <sid> <acct> <cwd> → path
-  local l="$LOGS/$1.launcher.sh"
-  printf '#!/bin/bash\nexec %q %q %q %q\n' "${CC_RESUME_ONE_BIN:-$HOME/.reso/bin/reso-resume-one}" \
-    "$2" "$3" "$1" > "$l" 2>/dev/null && chmod +x "$l" 2>/dev/null && printf '%s' "$l"
-}
+# THE IN-PANE BRANCH IS GONE (RECYCLE_KEYSTROKELESS_DELIVERY §D4, 2026-10-09). `_in_pane_ok` asked
+# `cc-pane state <pane>`, a verb cc-pane has never had, so it refused on every call and the branch
+# never ran. It was dead twice over: the handoff-fire --relaunch-at-shell it fed also REQUIRES
+# --expect-identity (a pane identity file recorded at close time), which this store never held, so
+# the call would have exited 2 even with a working probe. A pane left at a bare shell is now reached
+# by the pane-successor consumer (lib/pane-successor.sh, run by the pane's own shell), not typed
+# into from here. Every retry is a new window, with the same sid.
 
-_relaunch() { # <sid> — the retry: in the recorded pane when it is at a shell, else a NEW window; the SAME sid.
-  local acct cwd rc n pane cfg hf l
+# Deferrals on H(sid)>0 are COUNTED (§D4). A recovery debt is not discharged by liveness, so an
+# original that is alive but never read its packet keeps one holder forever, and an uncounted
+# deferral would leave its debt open and silent. The MAX_DEFER-th deferral is recorded as a failed
+# attempt (relaunch_rc 75), and the next step escalates it.
+MAX_DEFER="$(_num "${CC_RESUME_DEBT_MAX_DEFER:-}" 3)"
+
+_relaunch() { # <sid> — the retry: a NEW window with the SAME sid.
+  local acct cwd rc n pkt pf d
+  local -a extra=()
   mkdir -p "$LOGS" 2>/dev/null
   _fence_load
   if ! lr_recon_may_act "$1" cc-resume-debt always 2>>"$LOGS/$1.log"; then
@@ -295,20 +329,32 @@ _relaunch() { # <sid> — the retry: in the recorded pane when it is at a shell,
   fi
   case "$n" in ''|*[!0-9]*) n=1 ;; esac
   if [ "$n" -gt 0 ]; then
+    # shellcheck disable=SC2016  # jq program
+    _set "$1" '.deferrals = ((.deferrals // 0) + 1)'
+    d="$(_num "$(_get "$1" deferrals)" 1)"
+    lr_recon_act_done
+    if [ "$d" -ge "$MAX_DEFER" ]; then
+      # shellcheck disable=SC2016  # jq variables
+      _set "$1" '.attempts += 1 | .attempt_epoch = ($e|tonumber) | .relaunch_rc = 75' --arg e "$(_now)"
+      _ev "$1" retrying "deferred $d times: H(sid)=$n live holder(s) - counted as a failed attempt"
+      return 1
+    fi
     _evnote "$1" deferred "H(sid)=$n live holder(s)"
-    lr_recon_act_done; return 1
+    return 1
   fi
   acct="$(_get "$1" account)"; cwd="$(_get "$1" cwd)"
-  pane="$(_get "$1" pane)"; cfg="$(_get "$1" cfg)"; hf="$(_hf_bin)"
+  # A recovery debt's retry carries the packet's prompt, so the resumed original wakes on it.
+  pkt="$(_get "$1" recovery)"
+  if [ -n "$pkt" ]; then
+    pf="${pkt%.json}.prompt.md"
+    if [ -s "$pf" ]; then extra=(--prompt-file "$pf")
+    else _note "recovery prompt $pf missing or empty - relaunching $1 without it"; fi
+  fi
   if [ -z "$acct" ] || [ -z "$cwd" ]; then
     rc=64   # unresolvable subject: counts as a failed attempt, so the next step escalates
-  elif _in_pane_ok "$pane" "$hf" && l="$(_mint_launcher "$1" "$acct" "$cwd")" && [ -n "$l" ]; then
-    CC_RESUME_DEBT_SETTLING=1 bash "$hf" --relaunch-at-shell --source-pane "$pane" --source-session "$1" \
-      --resume-launcher "$l" ${cfg:+--resume-cfg "$cfg"} --resume-cwd "$cwd" </dev/null >>"$LOGS/$1.log" 2>&1
-    rc=$?
   else
     # shellcheck disable=SC2086  # RELAUNCH is a command PREFIX, word-split on purpose (header)
-    CC_RESUME_DEBT_SETTLING=1 $RELAUNCH "$acct" "$cwd" "$1" </dev/null >>"$LOGS/$1.log" 2>&1
+    CC_RESUME_DEBT_SETTLING=1 $RELAUNCH "$acct" "$cwd" "$1" ${extra[@]+"${extra[@]}"} </dev/null >>"$LOGS/$1.log" 2>&1
     rc=$?
   fi
   lr_recon_act_done
@@ -318,23 +364,36 @@ _relaunch() { # <sid> — the retry: in the recorded pane when it is at a shell,
   _ev "$1" retrying "relaunch rc=$rc$([ "$rc" = 9 ] && printf ' (capacity deferred)')"
 }
 
-_escalate() { # <sid> — once per debt: one backlog row, one page.
-  local acct cwd by opened run title out rc id prc msg
+# _escalate — once per debt: one backlog row (the operator readout renders needs-human rows) and one
+# message to the stranded session's OWN mailbox, which mailbox-drain delivers the moment it next
+# takes a turn. It used to call `cc-notify --page`, a flag cc-notify has never had: every page was
+# refused with rc 2 (bin/cc-notify, the unknown-option arm) and recorded as `refused-rc2`. The
+# verdict still lands in .page_verdict, now for the mailbox send. A recovery debt names the fix
+# itself: the packet's refire_cmd is the row's --run, and the packet path rides in title and --run.
+_escalate() { # <sid>
+  local acct cwd by opened run title out rc id prc msg pkt refire
   acct="$(_get "$1" account)"; cwd="$(_get "$1" cwd)"; by="$(_get "$1" by)"
-  opened="$(_get "$1" opened_epoch)"
+  opened="$(_get "$1" opened_epoch)"; pkt="$(_get "$1" recovery)"; refire=""
+  [ -n "$pkt" ] && refire="$(jq -r '.refire_cmd // ""' "$pkt" 2>/dev/null)"
   run="$(printf 'bash %s %q %q %q' "$HOME/.claude/scripts/boot-resume-launch.sh" "$acct" "$cwd" "$1")"
   title="Resume stranded session $1 ($(basename "${cwd:-?}"), account ${acct:-?}) — ${by:-a mover} closed it and the relaunch failed (debt opened $(_utc "$opened"))"
+  if [ -n "$pkt" ]; then
+    # bash -c runs a --run (bin/cc-do), so the trailing packet path is a comment, never an argument.
+    [ -n "$refire" ] && run="$refire  # recovery packet: $pkt"
+    title="Re-fire the failed recycle of session $1 ($(basename "${cwd:-?}"), account ${acct:-?}) — its recovery relaunch was not proven (debt opened $(_utc "$opened")); packet $pkt; re-fire: ${refire:-<packet has no refire_cmd>}"
+  fi
   out="$(env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_SESSION_ID -u CC_SESSION_ID \
            "$BACKLOG" needs "$title" --class needs-human --project claude-infrastructure --run "$run" </dev/null 2>/dev/null)"
   rc=$?
   id=""; [ "$rc" -eq 0 ] && id="$(printf '%s\n' "$out" | grep -xE '[0-9a-f]{12}' | tail -1)"
-  # Latch BEFORE the page: a crash after this point cannot mint a second row.
+  # Latch BEFORE the message: a crash after this point cannot mint a second row.
   # shellcheck disable=SC2016  # jq variables
   _set "$1" '.backlog_id = $id' --arg id "$id"
   _ev "$1" escalated "backlog needs rc=$rc id=${id:-none}"
   if [ -n "$id" ]; then msg="STRANDED SESSION $1 — relaunch failed; run: cc-do $id"
   else msg="STRANDED SESSION $1 — relaunch failed; run: $run"; fi
-  _bounded "$NOTIFY" --page "$msg" </dev/null >/dev/null 2>&1; prc=$?
+  [ -n "$pkt" ] && msg="$msg (recovery packet: $pkt)"
+  _bounded "$NOTIFY" --from cc-resume-debt "$1" "$msg" </dev/null >/dev/null 2>&1; prc=$?
   # shellcheck disable=SC2016  # jq variables
   _set "$1" '.page_verdict = $v' --arg v "$([ "$prc" -eq 0 ] && printf reached || printf 'refused-rc%s' "$prc")"
 }
@@ -346,7 +405,11 @@ _step() { # <sid> <now-flag 0|1> — ONE transition; a held lock makes it a no-o
   st="$(_get "$1" state)"
   if _active "$st"; then
     if _prove_debt "$1" "$HOLD_S"; then
-      _discharge "$1" "proven LIVE by cc-find"
+      if [ -n "$(_get "$1" recovery)" ]; then
+        _discharge "$1" "proven: recovery token answered, or a live successor holds the pane"
+      else
+        _discharge "$1" "proven LIVE by cc-find"
+      fi
     else
       case "$st" in
         open)
@@ -370,6 +433,12 @@ _settle() { # <sid> <wait> — rc 0 proven · 1 escalated · 3 undecided · 4 ab
   if [ ! -f "$(_meta "$1")" ] || ! _active "$(_get "$1" state)"; then
     [ "$BY" = unknown ] && BY="settle (no prior debt)"
     _open >/dev/null || [ -f "$(_meta "$1")" ] || { _note "no debt for $1 and none could be opened"; return 3; }
+  fi
+  # --recovery <packet>: stored on the debt whether it was just opened or already on file, so the
+  # retry, the proof and the escalation below all see it.
+  if [ -n "$RECOVERY" ]; then
+    # shellcheck disable=SC2016  # jq variables
+    _set "$1" '.recovery = $r' --arg r "$RECOVERY" || _note "could not record recovery packet for $1"
   fi
   deadline=$(( SECONDS + $2 ))
   while :; do
@@ -435,7 +504,8 @@ usage: cc-resume-debt open   --sid S [--cfg CFG] [--cwd C] [--pane P] [--account
        cc-resume-debt discharge --sid S --why TEXT
        cc-resume-debt abandon   --sid S --why TEXT
        cc-resume-debt step   --sid S
-       cc-resume-debt settle --sid S [--wait N]
+       cc-resume-debt settle --sid S [--wait N] [--recovery PACKET]
+                             PACKET = a failed recycle's recycle-failed/<sid>.json
        cc-resume-debt sweep
        cc-resume-debt surface --pane P
        cc-resume-debt list [--open] [--escalated] [--json]
@@ -444,7 +514,7 @@ U
 
 # ── args ────────────────────────────────────────────────────────────────────────────────────────
 cmd="${1:-}"; shift 2>/dev/null || true
-SID="" CFG="" CWD="" PANE_ID="" ACCOUNT="" BY="unknown" WHY="" HOLD="" WAIT="" MODE="resume"
+SID="" CFG="" CWD="" PANE_ID="" ACCOUNT="" BY="unknown" WHY="" HOLD="" WAIT="" MODE="resume" RECOVERY=""
 WANT_OPEN=0 WANT_ESC=0 WANT_JSON=0
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -458,6 +528,7 @@ while [ $# -gt 0 ]; do
     --mode) shift; MODE="${1:-}" ;;
     --hold) shift; HOLD="${1:-}" ;;
     --wait) shift; WAIT="${1:-}" ;;
+    --recovery) shift; RECOVERY="${1:-}" ;;
     --open) WANT_OPEN=1 ;;
     --escalated) WANT_ESC=1 ;;
     --json) WANT_JSON=1 ;;
@@ -470,6 +541,10 @@ done
 case "$SID" in ''|[A-Za-z0-9]*) ;; *) _die "bad --sid: $SID" ;; esac
 case "$SID" in *[!A-Za-z0-9._-]*) _die "bad --sid: $SID" ;; esac
 case "$MODE" in resume|fresh) ;; *) _die "bad --mode: $MODE (resume|fresh)" ;; esac
+# A missing packet costs the recovery handling, never the settle: the debt still runs as a plain one.
+if [ -n "$RECOVERY" ] && [ ! -f "$RECOVERY" ]; then
+  _note "--recovery: no such packet: $RECOVERY - settling as a plain resume debt"; RECOVERY=""
+fi
 _need_sid() { [ -n "$SID" ] || _die "$cmd needs --sid"; }
 
 case "$cmd" in

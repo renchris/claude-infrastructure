@@ -238,16 +238,15 @@ rd_deferred() { # the debt is left exactly where it was, with one `deferred` eve
   rd_deferred "H(sid)=1 live holder(s)"
   [ ! -e "$LR_STATE_DIR/locks/$RDSID.launch" ] || false
 }
-@test "cc-resume-debt: in-pane when handoff-fire carries --relaunch-at-shell and the pane is at a shell" {
+# The in-pane branch was removed (RECYCLE_KEYSTROKELESS_DELIVERY §D4): it keyed on a `cc-pane state`
+# verb that never existed, and the handoff-fire --relaunch-at-shell it fed needs an --expect-identity
+# file the debt store never held. Even a stub that ANSWERS `state` with `shell` now gets a new window.
+@test "cc-resume-debt: the retry is a new window even when a pane stub reports a shell (in-pane branch removed)" {
   rd_fixture; printf '# supports --relaunch-at-shell\n' >> "$STUBS/hf"
   PANE_STATE=shell rd_run
-  [ -s "$BATS_TEST_TMPDIR/hf.log" ] || { cat "$BATS_TEST_TMPDIR/out"; false; }
-  h="$(cat "$BATS_TEST_TMPDIR/hf.log")"
-  [[ "$h" == "--relaunch-at-shell --source-pane 42 --source-session $RDSID --resume-launcher "* ]] || { echo "$h"; false; }
-  [[ "$h" == *"--resume-cfg /fx/.claude-next3 --resume-cwd $WT" ]] || { echo "$h"; false; }
-  L="$(printf '%s' "$h" | sed -n 's/.*--resume-launcher \([^ ]*\).*/\1/p')"
-  grep -q "reso-resume-one next3 .*$RDSID" "$L" || { cat "$L"; false; }
-  [ "$(grep -c . "$OBS")" = 1 ]   # the in-pane path ran INSTEAD of the new window, not beside it
+  [ ! -e "$BATS_TEST_TMPDIR/hf.log" ] || { cat "$BATS_TEST_TMPDIR/hf.log"; false; }
+  acted || { cat "$BATS_TEST_TMPDIR/out"; false; }
+  [ "$(grep -c . "$OBS")" = 1 ]
 }
 @test "cc-resume-debt: a new window when the pane is busy, or handoff-fire lacks the flag" {
   rd_fixture; printf '# supports --relaunch-at-shell\n' >> "$STUBS/hf"

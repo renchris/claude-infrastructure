@@ -92,12 +92,13 @@ lines() { [ -f "$1" ] && grep -c -- "$2" "$1" || echo 0; }
   grep -q "^needs Resume stranded session $SID (wt, account next3) — lr-upgrade closed it and the relaunch failed (debt opened 1970-01-01T00:16:40Z)" "$T/backlog.log"
   grep -q -- "--project claude-infrastructure" "$T/backlog.log"
   grep -q -- "--run bash $HOME/.claude/scripts/boot-resume-launch.sh next3 $WT $SID\$" "$T/backlog.log"
-  grep -q -- "--page STRANDED SESSION $SID — relaunch failed; run: cc-do abcdef012345" "$T/notify.log"
+  # the message goes to the stranded session's own mailbox (cc-notify has no --page; §D4)
+  grep -qx -- "--from cc-resume-debt $SID STRANDED SESSION $SID — relaunch failed; run: cc-do abcdef012345" "$T/notify.log"
   [ "$(jq -r .backlog_id "$CC_RESUME_DEBT_DIR/meta/$SID.json")" = abcdef012345 ]
   [ "$(jq -r .page_verdict "$CC_RESUME_DEBT_DIR/meta/$SID.json")" = reached ]
   "$BIN" sweep; "$BIN" sweep
   [ "$(lines "$T/backlog.log" '^needs')" = 1 ]
-  [ "$(lines "$T/notify.log" '--page')" = 1 ]
+  [ "$(lines "$T/notify.log" 'STRANDED SESSION')" = 1 ]
   [ "$(lines "$T/relaunch.log" "$SID")" = 1 ]
 }
 
@@ -288,4 +289,103 @@ lines() { [ -f "$1" ] && grep -c -- "$2" "$1" || echo 0; }
 @test "an unknown --mode is refused" {
   run "$BIN" open --sid "$SID" --mode sideways
   [ "$status" -eq 2 ]
+}
+
+# ── RECYCLE_KEYSTROKELESS_DELIVERY §D4: recovery debts (settle --recovery <packet>) ──────────────
+# The packet is the shape U4's rcy_recovery_packet writes; this suite reads only the fields
+# cc-resume-debt consumes (token, refire_cmd) and the sibling <sid>.prompt.md.
+mk_packet() {
+  PKD="$T/recycle-failed"; mkdir -p "$PKD"
+  PKT="$PKD/$SID.json"; TOK="recycle-recovery:$SID:1791000000"
+  jq -n --arg tok "$TOK" '{failed_at:"2026-10-09T05:31:00Z", class:"relaunch-failed", pane:"44",
+    token:$tok, refire_cmd:"bash /h/.claude/scripts/handoff-fire.sh --recycle --recovery-of \($tok)"}' > "$PKT"
+  printf 'Your self-recycle FAILED. token %s\n' "$TOK" > "$PKD/$SID.prompt.md"
+}
+# [pane] — the find stub reports every row in pane 42, so the default 44 has NO successor in it.
+open_recovery_debt() { # a real cfg dir, so the transcript proof has somewhere to look
+  CFGD="$T/cfg"; mkdir -p "$CFGD/projects/p"
+  "$BIN" open --sid "$SID" --cwd "$WT" --account next3 --cfg "$CFGD" --pane "${1:-44}" --by handoff-fire --why "recycle failed"
+}
+transcript() { # <jsonl lines…>
+  printf '%s\n' "$@" > "$CFGD/projects/p/$SID.jsonl"
+}
+
+@test "D4: settle --recovery stores the packet and its prompt reaches the RELAUNCH argv" {
+  mk_packet; open_recovery_debt
+  run "$BIN" settle --sid "$SID" --recovery "$PKT" --wait "$SETTLE_WAIT"
+  [ "$(jq -r .recovery "$CC_RESUME_DEBT_DIR/meta/$SID.json")" = "$PKT" ]
+  grep -qx "next3 $WT $SID --prompt-file $PKD/$SID.prompt.md SETTLING=1" "$T/relaunch.log" || { cat "$T/relaunch.log"; false; }
+}
+
+@test "D4: a plain settle (no packet) passes NO --prompt-file (control)" {
+  open_recovery_debt
+  run "$BIN" settle --sid "$SID" --wait "$SETTLE_WAIT"
+  grep -qx "next3 $WT $SID SETTLING=1" "$T/relaunch.log" || { cat "$T/relaunch.log"; false; }
+}
+
+@test "D4: a missing --recovery packet is noted and the settle still runs as a plain debt" {
+  open_recovery_debt
+  run "$BIN" settle --sid "$SID" --recovery "$T/absent.json" --wait "$SETTLE_WAIT"
+  [[ "$output" == *"no such packet"* ]] || { echo "$output"; false; }
+  grep -qx "next3 $WT $SID SETTLING=1" "$T/relaunch.log"
+}
+
+@test "D4: with a packet, LIVE alone does NOT discharge — the 2026-10-09 false proof" {
+  mk_packet; open_recovery_debt
+  printf 'LIVE\n' > "$T/find.seq"            # the original is alive (and idle) on every read
+  run "$BIN" settle --sid "$SID" --recovery "$PKT" --wait "$SETTLE_WAIT"
+  [ "$status" -eq 1 ] || { echo "status $status: $output"; false; }
+  [ "$(state)" = escalated ]
+  # control: the same LIVE reads DO discharge a plain debt
+  rm -rf "$CC_RESUME_DEBT_DIR"; printf 'LIVE\n' > "$T/find.seq"
+  open_recovery_debt
+  run "$BIN" settle --sid "$SID" --wait "$SETTLE_WAIT"
+  [ "$status" -eq 0 ] && [ "$(state)" = proven ]
+}
+
+@test "D4: the token in a user record FOLLOWED by an assistant record discharges; the token alone does not" {
+  mk_packet; open_recovery_debt
+  transcript '{"type":"user","message":{"role":"user","content":"Your self-recycle FAILED. token '"$TOK"'"}}'
+  run "$BIN" settle --sid "$SID" --recovery "$PKT" --wait "$SETTLE_WAIT"
+  [ "$(state)" = escalated ] || { cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }
+  transcript '{"type":"assistant","message":{"content":"earlier, before the token"}}' \
+             '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"token '"$TOK"'"}]}}' \
+             '{"type":"assistant","message":{"content":"Checking for a live successor, then re-firing."}}'
+  run "$BIN" step --sid "$SID"
+  [ "$(state)" = proven ] || { cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }
+  jq -e '.events[-1].note | test("recovery token answered")' "$CC_RESUME_DEBT_DIR/meta/$SID.json"
+  grep -q '^done abcdef012345' "$T/backlog.log"
+}
+
+@test "D4: a live successor holding the pane discharges a recovery debt" {
+  mk_packet; open_recovery_debt 42
+  "$BIN" settle --sid "$SID" --recovery "$PKT" --wait 0 >/dev/null 2>&1 || true
+  printf 'LIVE\n' > "$T/find.seq"            # the pane read (42) reports a LIVE successor sid
+  run "$BIN" step --sid "$SID"
+  [ "$(state)" = proven ] || { cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }
+  grep -qx 42 "$T/find.log"
+}
+
+@test "D4: _escalate never passes --page; the row's title and --run carry refire_cmd and the packet" {
+  mk_packet; open_recovery_debt
+  run "$BIN" settle --sid "$SID" --recovery "$PKT" --wait "$SETTLE_WAIT"
+  [ "$(state)" = escalated ]
+  ! grep -q -- '--page' "$T/notify.log" || { cat "$T/notify.log"; false; }
+  grep -q -- "^--from cc-resume-debt $SID STRANDED SESSION $SID .*recovery packet: $PKT" "$T/notify.log"
+  grep -q -- "^needs Re-fire the failed recycle of session $SID .*packet $PKT; re-fire: bash /h/.claude/scripts/handoff-fire.sh --recycle --recovery-of $TOK" "$T/backlog.log"
+  grep -q -- "--run bash /h/.claude/scripts/handoff-fire.sh --recycle --recovery-of $TOK  # recovery packet: $PKT\$" "$T/backlog.log"
+}
+
+@test "D4: H(sid)>0 deferrals are counted — the MAX_DEFER-th becomes a failed attempt, then escalates" {
+  open_recovery_debt
+  printf 'lr_holder_count() { echo 1; }\n' > "$T/lr-lib-held.sh"
+  export CC_RESUME_DEBT_LR_LIB="$T/lr-lib-held.sh" CC_RESUME_DEBT_GRACE_S=0 CC_RESUME_DEBT_MAX_DEFER=3
+  "$BIN" step --sid "$SID"; "$BIN" step --sid "$SID"
+  [ "$(state)" = open ] && [ "$(jq -r .deferrals "$CC_RESUME_DEBT_DIR/meta/$SID.json")" = 2 ]
+  "$BIN" step --sid "$SID"
+  [ "$(state)" = retrying ] || { cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }
+  [ "$(jq -r .relaunch_rc "$CC_RESUME_DEBT_DIR/meta/$SID.json")" = 75 ]
+  [ ! -f "$T/relaunch.log" ]                 # never launched beside a live holder
+  "$BIN" step --sid "$SID"
+  [ "$(state)" = escalated ]
 }
