@@ -118,6 +118,7 @@ mk_tall() { # $1=rows → $POST_FILE, and the payload it holds in $TALL_TEXT
     run read_post
     [ "$status" -eq 0 ] || { echo "rows=$rows rc=$status" >&2; return 1; }
     [ "$output" = "$(printf '%s' "$TALL_TEXT" | tr -d '[:space:]')" ]
+    [ "$rows" -ge 23 ] || continue                             # shorter boxes fit 24 rows anyway
     : > "$READS_FILE"
     FIRE_COMPOSER_READLINES_MAX=24 run read_post               # the pre-fix behaviour, by its seam
     [ "$status" -eq 1 ]
@@ -192,7 +193,7 @@ mk_hostile() { # $1=modal fixture → $POST_FILE
   : > "$READS_FILE"; run read_post; [ "$status" -eq 1 ]
   mk_tall 30; sed -i.bak "40s/^  /⏺ /" "$POST_FILE"              # (iv) a transcript row inside
   : > "$READS_FILE"; run read_post; [ "$status" -eq 1 ]
-  mk_tall 30; echo "❯ 1. Yes" >> "$POST_FILE"                    # (v) a selector under the border
+  mk_tall 30; echo "❯ 1. Yes" >> "$POST_FILE"                    # (v) a selector glyph under the border
   : > "$READS_FILE"; run read_post; [ "$status" -eq 1 ]
   mk_tall 30                                                     # and the unbroken box parses
   : > "$READS_FILE"; run read_post; [ "$status" -eq 0 ]

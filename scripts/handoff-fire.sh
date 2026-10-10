@@ -4044,14 +4044,15 @@ composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer c
   # by a narrower pane stays UNKNOWN, which refuses. scripts/lib/cc-tui.sh and
   # scripts/lib/lr-composer-snapshot.sh carry the same function.
   plain="$(printf '%s\n' "$scr" | LC_ALL=C perl -pe 's/\e\[[0-?]*[ -\/]*[@-~]|\e\][^\a\e]*(?:\a|\e\\)?|\e.//g')"
-  span="$(printf '%s\n' "$plain" | LC_ALL=C awk -v b="$b12" -v u='─' '
+  span="$(printf '%s\n' "$plain" | LC_ALL=C awk -v b="$b12" -v u='─' -v g='❯' '
     function border(s,   t) {                 # a full rule, or a LABELED one: "── label ─" from column 0
       if (index(s, b) > 0) return 1
       t = s; sub(/[ \t\r]+$/, "", t)
       return (index(t, u u) == 1 && length(t) > 3 * length(u) && substr(t, length(t) - length(u) + 1) == u)
     }
-    { if (border($0)) { b2 = b1; b1 = NR } }
+    { if (border($0)) { b2 = b1; b1 = NR; gb = 0 } else if (index($0, g) > 0) gb = 1 }
     END {
+      if (gb) exit 9                                     # a ❯ under the last border: a dialog, not a footer
       if (b1 > 0 && b2 == 0) { print NR - b1; exit 8 }  # a bottom border and no top: maybe a TALL box
       if (b1 == 0 || b2 == 0 || b1 - b2 < 2) exit 9      # no box between two borders ⇒ UNKNOWN
       print (b2 + 1) "," (b1 - 1)
@@ -4065,8 +4066,14 @@ composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer c
   #   (ii)  its top border is a rule starting at column 0;
   #   (iii) its first row starts at column 0 with the prompt glyph ❯;
   #   (iv)  every later row is blank or starts with the two-space continuation indent;
-  #   (v)   no selector row (`❯ 1.`) sits under the bottom border: that border is a dialog's top
-  #         rule, and the "box" above it is an echoed prompt in the transcript.
+  #   (v)   no prompt glyph ❯ anywhere under the bottom border. A dialog draws its selector with it
+  #         (`❯ No, exit` on the trust dialog, no ordinal); a composer footer never does (0 of the 31
+  #         healthy-composer snapshots, teammate-panel footers included). Without this, a trust
+  #         dialog under an echoed prompt shaped like a composer read as that prompt — caught by
+  #         the hostile-transcript test before it landed. (v) also guards the COMMON path (the `gb`
+  #         flag in the awk above): with the echo inside the 24-row window, the pre-fix parse took
+  #         the same bait. Corpus effect: 0 of 997 composer snapshots change; the one fixture that
+  #         does is the resume picker, which read as a "draft" and now reads UNKNOWN.
   # A modal, a teammate panel (╭──╮, the win527 snapshot) or transcript rules above a dialog fail one
   # of those and stay UNKNOWN, exactly as before, so nothing is typed into a screen we cannot read.
   # The common path (both borders in the small window) is unchanged byte for byte. Measured over 1,056
@@ -4095,7 +4102,7 @@ composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer c
         for (i = top + 2; i < bot; i++)                                   # (iv)
           if (line[i] !~ /^[ \t\r]*$/ && substr(line[i], 1, 2) != "  ") exit 9
         for (i = bot + 1; i <= NR; i++)                                   # (v)
-          if (line[i] ~ (g "[ \t]*[0-9]+\\.")) exit 9
+          if (index(line[i], g) > 0) exit 9
         print (top + 1) "," (bot - 1)
       }')" && rc=0 || rc=$?
   fi

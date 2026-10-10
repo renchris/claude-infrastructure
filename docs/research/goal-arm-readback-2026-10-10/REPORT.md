@@ -20,8 +20,20 @@ border is 26 rows from the bottom. `composer_content` gives rc 1 at 24 and 25 ro
 path rewritten. The operator's screenshot of pane 202 (same width, 21 composer rows) is the same shape.
 
 All 5 `mangled` rows in `~/.claude/logs/handoffs.jsonl` say `saw: <unreadable>` (panes 70, 175, 176,
-202, 203); fleet tally at research time 47 set · 5 mangled · 3 unverified. Per-row geometry:
-`slot-forensics.md`.
+202, 203); fleet tally at research time 47 set · 5 mangled · 3 unverified. Every one of the 8
+read-backs on every row was rc 1 (UNKNOWN); none was a content mismatch. Per row (`slot-forensics.md`):
+
+| pane | goal chars | pane width (source) | top border, rows from bottom | pre-fix replay | post-fix replay |
+|---|---|---|---|---|---|
+| 175 | 453 | 28 (firing session's own `get-text` +8 s) | 25+ | rc 1 | exact match |
+| 176 | 437 | 24 (firing session's own `get-text` +11 s) | 29 | rc 1 | exact match |
+| 202 | 583 | 37 (operator screenshot) | 25+ | rc 1 | exact match |
+| 203 | 544 | 32 (live capture) | 26 | rc 1 | exact match |
+| 70 | 347 | unknown, no record survives | fails only at ≤ 25 columns | — | — |
+
+Geometry also separates the populations: goal length alone does not (mangled 347–583 chars, set
+308–650), nor does width alone (set pane 162 was also ~32 columns); the top border's distance does —
+every measured mangled row had it at 25+ rows, no set row with geometry evidence above 24.
 
 Hypotheses (b) mid-turn rendering and (d) timing are not needed: the pane-203 capture was taken
 mid-turn and parses correctly at 26+ rows, and eight polled read-backs all failed the same way, which a
