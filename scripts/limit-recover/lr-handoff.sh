@@ -689,8 +689,18 @@ if [[ $VOLUNTARY -eq 1 && -n "$SOURCE_PANE" && "${LRH_VOLUNTARY_FAILFAST:-on}" !
     fi
     if [[ "$_lrh_vkind" != limit && $_lrh_ev_ok -eq 0 ]]; then
       echo "lr-handoff: REFUSED:not-limited — pane $SOURCE_PANE (session ${SID:0:8}) is not limit-blocked (last api error: ${_lrh_vkind:-none}), and a --voluntary move of ANOTHER pane is refused by the recycle probe's limit gate every time. Nothing was planned, transplanted, locked or waited on." >&2
-      echo "lr-handoff: to move a healthy peer, use the move lane, which writes the operator intent this needs: cc-lr move --sid ${SID:0:8} --to $TARGET" >&2
-      echo "lr-handoff: verdict=NOTMOVED from=- to=${TARGET:--} proven=no trigger=voluntary — refused before planning: a healthy peer is moved by cc-lr move, not by lr-handoff --voluntary --source-pane without an operator intent" >&2
+      # …AND A HUSK IS NOT A HEALTHY PEER (2026-10-10, lr-stranded-husk C3): its stub reads
+      # not-limited because the session MOVED. Name the verb that relaunches it, as the probe does;
+      # LR_SUCCESSOR_GATE=off (lr-lib) keeps the move-lane line.
+      _lrh_st=""
+      command -v lr_successor_state >/dev/null 2>&1 && _lrh_st="$(lr_successor_state "$SID" "$CFG" 2>/dev/null || true)"
+      if [[ "$_lrh_st" == husk\ * ]]; then
+        echo "lr-handoff: pane $SOURCE_PANE is a HUSK — session ${SID:0:8} moved off this account and nothing runs it on its target; relaunch it in this pane: cc-lr recover ${SID:0:8}" >&2
+        echo "lr-handoff: verdict=NOTMOVED from=- to=${TARGET:--} proven=no trigger=voluntary — refused before planning: a husk is relaunched in place by cc-lr recover, not moved again" >&2
+      else
+        echo "lr-handoff: to move a healthy peer, use the move lane, which writes the operator intent this needs: cc-lr move --sid ${SID:0:8} --to $TARGET" >&2
+        echo "lr-handoff: verdict=NOTMOVED from=- to=${TARGET:--} proven=no trigger=voluntary — refused before planning: a healthy peer is moved by cc-lr move, not by lr-handoff --voluntary --source-pane without an operator intent" >&2
+      fi
       exit 6
     fi
   fi

@@ -491,7 +491,9 @@ STUB
   NEWPID="$(cat "$BATS_TEST_TMPDIR/new.pid" 2>/dev/null)"; kill "$NEWPID" 2>/dev/null || true
   r="$LRU_STATE/results/upgrade-$SID.json"
   [ "$(jq -r .verdict "$r")" = upgraded ] || { cat "$r"; echo "$output"; false; }
-  [[ "$(jq -r .reason "$r")" == *"now claude-opus-5-5 on .claude-280"*"UNCONFIRMED (lr-fire-resume: FAILED:submit)"*"press Enter in pane 551"* ]] || { cat "$r"; false; }
+  [[ "$(jq -r .reason "$r")" == *"now claude-opus-5-5 on .claude-280"*"UNCONFIRMED (lr-fire-resume: FAILED:submit)"*"in pane 551"*"is this rail's own and stays unsent"*"a bare --recycle holds on it"* ]] || { cat "$r"; false; }
+  # States the fact, asks nobody for a keystroke (2026-10-10, operator ruling: zero asks).
+  [[ "$(jq -r .reason "$r")" != *"press Enter"* && "$(jq -r .reason "$r")" != *"Ctrl-U"* ]] || { cat "$r"; false; }
   [ ! -s "$BATS_TEST_TMPDIR/it2.log" ] || { echo "retyped over a session that was already up"; false; }
 }
 

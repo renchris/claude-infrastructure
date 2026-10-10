@@ -2775,7 +2775,9 @@ lru_prove_verdict() { # $1=sid $2=pane $3=role $4=launch role $5=model $6=binlab
     sleep 5; waited=$((waited + 5))
   done
   [ -n "$canary_f" ] && LRU_DRAIN_NEWS="${LRU_DRAIN_NEWS}pane $pane ${sid:0:8}: the canary turn for $binlabel/$tgt did not answer - the next plain session of that tuple is the canary again"$'\n'
-  lru_result "$sid" "$pane" upgraded "now $tgt on $binlabel (effort $eff)$retyped; confirmation UNCONFIRMED (lr-fire-resume: ${st:-no state}) - the session is idle on the new binary; if its composer still shows the upgrade prompt, press Enter in pane $pane to confirm or Ctrl-U to discard it" "" "$req" "$by"
+  # NO KEYSTROKE IS ASKED OF ANYONE (2026-10-10, lr-stranded-husk ROOT-CAUSE.md, operator ruling: zero
+  # asks). The prompt left in the composer is this rail's own text (lru_is_rail_junk), not a draft.
+  lru_result "$sid" "$pane" upgraded "now $tgt on $binlabel (effort $eff)$retyped; confirmation UNCONFIRMED (lr-fire-resume: ${st:-no state}) - the session is idle on the new binary; if its composer in pane $pane still shows the upgrade prompt, that text is this rail's own and stays unsent: a limit-recover precheck or a cc_tui_submit pass clears it, and a bare --recycle holds on it" "" "$req" "$by"
   return 0
 }
 

@@ -1263,6 +1263,8 @@ lf_nudge() { # $1=sid $2=holder cfg $3=source acct $4=pane → 0 engaged · 1 no
 # through scripts/limit-recover/lr-page.sh (liveness-free; the text rides as AppleScript ARGV, so a
 # quoted draft cannot become code). Damped to one page per sid per LR_DRAFT_PAGE_MIN (60): the poller
 # retries a held request every 10 min, and one unsent draft is one fact.
+# THE PAGE STATES THE FACT AND ASKS NOBODY (2026-10-10, lr-stranded-husk ROOT-CAUSE.md, operator
+# ruling: zero human in the loop). "Send or clear it" made the operator the rail's next step.
 lf_draft_page() { # $1=sid $2=pane $3=acct → always 0; the page's verdict line goes to stderr
   local sid="$1" pane="$2" acct="$3" pg="" c mark="$STATE/draft-paged/$1"
   for c in "${LF_PAGE_BIN:-}" "$LR/lr-page.sh" "$HOME/.claude/scripts/limit-recover/lr-page.sh"; do
@@ -1271,7 +1273,7 @@ lf_draft_page() { # $1=sid $2=pane $3=acct → always 0; the page's verdict line
   [ -n "$pg" ] || { echo "lr-fleet: lr-page.sh unreachable — the draft hold on pane $pane was not paged" >&2; return 0; }
   [ -n "$(find "$mark" -mmin -"${LR_DRAFT_PAGE_MIN:-60}" 2>/dev/null)" ] && return 0
   mkdir -p "${mark%/*}" 2>/dev/null; : > "$mark" 2>/dev/null || true
-  /bin/bash "$pg" --title "unsent draft" -- "Pane ${pane:-?} holds an unsent draft, so session ${sid:0:8} ($acct) was not moved off its limit${LF_DRAFT_ROW:+: \"$LF_DRAFT_ROW\"}. Send or clear it; the recovery retries.${LF_DRAFT_SNAP:+ Screen: $LF_DRAFT_SNAP}" >&2 || true
+  /bin/bash "$pg" --title "unsent draft" -- "Pane ${pane:-?} holds an unsent draft, so session ${sid:0:8} ($acct) was not moved off its limit${LF_DRAFT_ROW:+: \"$LF_DRAFT_ROW\"}. The draft stays as typed; the recovery retries each pass and holds while the prompt box holds text.${LF_DRAFT_SNAP:+ Screen: $LF_DRAFT_SNAP}" >&2 || true
   return 0
 }
 LF_DRAFT_SNAP=""; LF_DRAFT_ROW=""

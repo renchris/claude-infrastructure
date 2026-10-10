@@ -2120,6 +2120,9 @@ held_run() { # $1 = the HELD token lr-handoff prints (empty = none); $2 = focus
   held_run HELD:draft 0
   grep -q -- '--title unsent draft -- Pane 616 holds an unsent draft, so session 52e35019' "$PAGE_LOG" || { cat "$PAGE_LOG"; false; }
   grep -q 'half a reply, café' "$PAGE_LOG" || { cat "$PAGE_LOG"; false; }
+  # The page states the fact and asks nobody for anything (2026-10-10, operator ruling: zero asks).
+  grep -q 'The draft stays as typed; the recovery retries each pass and holds while the prompt box holds text' "$PAGE_LOG" || { cat "$PAGE_LOG"; false; }
+  ! grep -qi 'send or clear' "$PAGE_LOG" || { cat "$PAGE_LOG"; false; }
   held_run HELD:draft 0
   [ "$(grep -c 'unsent draft' "$PAGE_LOG")" = 1 ] || { cat "$PAGE_LOG"; false; }
 }

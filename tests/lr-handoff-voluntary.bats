@@ -359,6 +359,24 @@ vol_tx() { # $1 = healthy | limit — the pane's transcript under the SOURCE con
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
 
+# A HUSK IS NOT A HEALTHY PEER (2026-10-10, lr-stranded-husk C3): its stub reads not-limited because
+# the session MOVED (.handed-off + a tombstone naming secondary, the copy there) and pane 31 still
+# runs it on this account. The refusal names the one verb that relaunches it, as the probe does.
+@test "[RED] C3: FAIL-FAST on a HUSK names cc-lr recover, never cc-lr move" {
+  vol_tx healthy
+  cp "$HOME/.claude/projects/-fx/$SID.jsonl" "$HOME/.claude/projects/-fx/$SID.jsonl.handed-off"
+  mkdir -p "$HOME/.claude-secondary/projects/-fx"
+  cp "$HOME/.claude/projects/-fx/$SID.jsonl" "$HOME/.claude-secondary/projects/-fx/$SID.jsonl"
+  printf '{"handed_off_to":"%s","ts":"2026-10-10T04:18:07Z"}\n' "$HOME/.claude-secondary" > "$HOME/.claude/projects/-fx/$SID.HANDOFF.json"
+  printf '{"paneUUID":"31","session_id":"%s","pid":%d,"account":"claude"}\n' "$SID" "$$" > "$CC_REGISTRY_DIR/31.json"
+  export LR_MOVE_ENV_DIR="$BATS_TEST_TMPDIR/penv"; mkdir -p "$LR_MOVE_ENV_DIR"; printf '%s' "$HOME/.claude" > "$LR_MOVE_ENV_DIR/$$"
+  fire --voluntary
+  [ "$status" -eq 6 ] || { echo "$output"; false; }
+  [[ "$output" == *"cc-lr recover ${SID:0:8}"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"cc-lr move --sid"* ]] || { echo "$output"; false; }
+  [ ! -s "$TX_LOG" ] || { cat "$TX_LOG"; false; }
+}
+
 # ── 5b. OPERATOR INTENT: the operator's cc-lr move admits a healthy pane (design-swap-v3 D1/F11) ──
 # This section un-pins, on purpose, the rule section 5 pinned: a healthy peer could only move
 # itself. A healthy pane with NEITHER evidence nor an intent is still refused (the case above).
