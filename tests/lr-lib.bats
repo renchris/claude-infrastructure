@@ -943,3 +943,53 @@ ss_state() { run lr_successor_state "$SS_SID" "$1"; }
   printf 'x\n' > "$TGT/projects/-p/$SS_SID.jsonl.handed-off"
   ss_state "$SRC"; [ "$status" -eq 1 ] || { echo "round trip: rc=$status $output"; false; }
 }
+
+# ── ONE TABLE, TWO IMPLEMENTATIONS: the shell predicate vs lr_recon's census.successor_state ─────
+# tests/fixtures/lr-stale-parity/cases.json is read here and by lr_recon/tests/test_census.py
+# (StaleParity); both must give each case's `expect` (the first token, or null for rc 1/rc 2). The
+# census mirrors this predicate in Python over its own evidence, so a rule changed on one side only
+# turns one of the two red. Each case gets its OWN sid, store tree, registry and processes.
+par_leaf() { # $1=sid → a live pid THIS SUITE owns whose argv is `claude --resume <sid>` (reaped in teardown)
+  # shellcheck disable=SC2217  # the </dev/null detaches the job from bats' own stdio (hk_live's hang)
+  ( exec -a "claude --resume $1" sleep 45 ) >/dev/null 2>&1 </dev/null &
+  printf '%s\n' "$!" >> "$BATS_TEST_TMPDIR/hk-pids"; printf '%s' "$!"
+}
+@test "parity: lr_successor_state answers every row of the shared lr-stale-parity table" {
+  local table="$REPO/tests/fixtures/lr-stale-parity/cases.json" n i sid H tp c to ph pane cfg pid acct kv got want fails=""
+  n="$(jq '.cases | length' "$table")"; [ "$n" -gt 10 ]
+  for (( i = 0; i < n; i++ )); do
+    c="$(jq -c ".cases[$i]" "$table")"
+    sid="$(printf 'c2ba%04d-0000-4000-8000-000000000001' "$i")"
+    H="$BATS_TEST_TMPDIR/par$i"; mkdir -p "$H/reg" "$H/state/locks" "$H/env"
+    declare -A st=([src]="$H/.claude-secondary" [tgt]="$H/.claude-quaternary" [ter]="$H/.claude-tertiary")
+    mkdir -p "${st[src]}/projects/-p" "${st[tgt]}/projects/-p" "${st[ter]}/projects/-p"
+    tp="${st[src]}/projects/-p/$sid.jsonl"
+    [ "$(jq -r .handed_off <<< "$c")" = true ] && printf 'x\n' > "$tp.handed-off"
+    [ "$(jq -r .src_jsonl <<< "$c")" = true ] && printf 'x\n' > "$tp"
+    to="$(jq -r '.tomb.to // ""' <<< "$c")"; ph="$(jq -r '.tomb.phase // ""' <<< "$c")"
+    [ -z "$to" ] || printf '{"handed_off_to":"%s"%s}\n' "${st[$to]}" "${ph:+,\"phase\":\"$ph\"}" > "${tp%.jsonl}.HANDOFF.json"
+    [ "$(jq -r .tgt_copy <<< "$c")" = true ] && printf 'x\n' > "${st[tgt]}/projects/-p/$sid.jsonl"
+    while IFS=$'\t' read -r cfg pane; do
+      [ -n "$cfg" ] || continue
+      if [ "$pane" != null ]; then
+        pid="$(hk_live)"
+        # the row's account is its store's basename sans dot (session-register.sh), which
+        # lr_husk_state's leg (a) matches against the source store; an unreadable holder sits on src
+        acct="$(basename "${st[${cfg/none/src}]}")"
+        printf '{"paneUUID":"%s","session_id":"%s","pid":%s,"account":"%s","cwd":"/x"}\n' "$pane" "$sid" "$pid" "${acct#.}" > "$H/reg/$pane.json"
+      else
+        pid="$(par_leaf "$sid")"; sleep 0.3
+      fi
+      [ "$cfg" = none ] || printf '%s' "${st[$cfg]}" > "$H/env/$pid"
+    done < <(jq -r '.holders[] | [.cfg, (.pane // "null")] | @tsv' <<< "$c")
+    kv="$(jq -r '(.env // {}) | to_entries[] | "\(.key)=\(.value)"' <<< "$c")"
+    got="$( export HOME="$H" CC_REGISTRY_DIR="$H/reg" LR_STATE_DIR="$H/state" LR_MOVE_ENV_DIR="$H/env" \
+              CC_HANDOFF_LOG="$H/handoffs.jsonl"; : > "$CC_HANDOFF_LOG"
+            unset LR_CONFIG_DIRS LR_SUCCESSOR_GATE LR_HUSK_RETIRE
+            while IFS= read -r e; do [ -z "$e" ] || export "${e?}"; done <<< "$kv"
+            out="$(lr_successor_state "$sid" "${st[src]}")" && printf '%s' "${out%% *}" || printf null )"
+    want="$(jq -r '.expect // "null"' <<< "$c")"
+    [ "$got" = "$want" ] || fails="$fails"$'\n'"  [$i] $(jq -r .name <<< "$c"): got $got, want $want"
+  done
+  [ -z "$fails" ] || { echo "parity broken:$fails"; false; }
+}

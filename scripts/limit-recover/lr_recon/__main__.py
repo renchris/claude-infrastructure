@@ -21,7 +21,7 @@ import os
 import subprocess
 import sys
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from lr_recon import (
     act,
@@ -222,8 +222,18 @@ def _census(
     # and the reconcile must look in all of them (the parameter existed; nothing passed it, W5 rig).
     amap = _amap(ctx.home)
     stores = list(amap.values())
+    # A stranded husk (moved, no successor runs, the source pane still holds it) is the poller's husk
+    # recovery's to drive (2026-10-10, docs/research/lr-stranded-husk-2026-10-10/ROOT-CAUSE.md): its
+    # request is kept, and this pass opens no record that would compete with that recovery.
+    husk_sids: Set[str] = set()
     stale = census.stale_reconcile(
-        ctx.records, reqs, snap, ctx.clock.boottime(), now, stores=stores
+        ctx.records,
+        reqs,
+        snap,
+        ctx.clock.boottime(),
+        now,
+        stores=stores,
+        husk_sids=husk_sids,
     )
     stale_sids = {sid for sid, verdict, _r in stale if verdict == "NOT_NEEDED"}
     autorecover = zero_human(paths)
@@ -272,6 +282,7 @@ def _census(
             b.name == "IMPOSSIBLE"
             and b.kind == "limited"
             and s.sid not in stale_sids
+            and s.sid not in husk_sids
             and (old is None or not old.open)
         ):
             # W7h defect 3: a limited session the census cannot recover is a cohort member with
@@ -284,7 +295,7 @@ def _census(
             )
             ctx.records[s.sid] = rec
             _event(paths, "impossible", s.sid, rec.record_id, b.reason)
-        if b.name not in RECORD_TYPES or s.sid in stale_sids:
+        if b.name not in RECORD_TYPES or s.sid in stale_sids or s.sid in husk_sids:
             continue
         if (
             b.name == "HELD:team"

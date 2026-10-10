@@ -14,8 +14,10 @@ Decision 2 is SETTLED: a pane with live background work holds until the job ends
 from __future__ import annotations
 
 import dataclasses
+import glob
+import json
 import os
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from lr_recon import facts as F
 from lr_recon import observe_rows, transcript
@@ -529,14 +531,100 @@ def _in_store(
     )
 
 
+def _store_key(cfg: str) -> str:
+    """The PHYSICAL path of a store's projects/ — lr-lib.sh lr_store_key (one store, however spelled)."""
+    return os.path.realpath(os.path.join(cfg.rstrip("/"), "projects"))
+
+
+def _has_copy(cfg: str, sid: str) -> bool:
+    return bool(
+        glob.glob(os.path.join(glob.escape(cfg), "projects", "*", sid + ".jsonl"))
+    )
+
+
+def successor_state(
+    sid: str,
+    src: str,
+    s: Optional[T.SessionObs],
+    env: Optional[Mapping[str, str]] = None,
+) -> Optional[str]:
+    """Who carries a session MOVED off ``src`` now — lr-lib.sh ``lr_successor_state`` over the census's
+    own evidence (2026-10-10, docs/research/lr-stranded-husk-2026-10-10/ROOT-CAUSE.md): 186452ed's
+    request was retired as 'tombstoned' while no successor ever started and its source pane still
+    held it. Holder evidence is ``s.holders[].cfg`` (an empty cfg is unknown); session-row holders
+    are not counted, as in the shell. Tokens: successor · husk · unknown · unmoved · none, and None
+    for no durable move off ``src`` or ``LR_SUCCESSOR_GATE=off``. No ``in-flight``: the census has no
+    handoffs log, and a recycle in flight is kept as a husk is. Parity with the shell predicate is
+    pinned by tests/fixtures/lr-stale-parity/cases.json."""
+    env = os.environ if env is None else env
+    if not sid or not src or env.get("LR_SUCCESSOR_GATE", "on") == "off":
+        return None
+    skey = _store_key(src)
+    proj = os.path.join(glob.escape(src), "projects", "*")
+    ho = bool(glob.glob(os.path.join(proj, sid + ".jsonl.handed-off")))
+    tomb, to = "", ""
+    for f in sorted(glob.glob(os.path.join(proj, sid + ".HANDOFF.json"))):
+        try:
+            with open(f) as fh:
+                cand = str(json.load(fh).get("handed_off_to") or "")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if cand and _store_key(cand) != skey:
+            tomb, to = f, cand
+            break
+    if not tomb or not _has_copy(to, sid):
+        # No durable move the census can SEE: never moved, a mirror, a round trip, or a move known
+        # only by its transplant lock (the census does not read locks; the shell does). Callers keep
+        # today's read, which for a bare .handed-off is still 'tombstoned'.
+        return None
+    unk, src_holder, src_pane = False, False, False
+    for h in s.holders if s is not None else []:
+        if h.src == "session-row":
+            continue
+        if not h.cfg:
+            unk = True
+            continue
+        if _store_key(h.cfg) != skey:
+            return "successor"
+        src_holder = True
+        src_pane = src_pane or h.src == "registry" or h.pane is not None
+    if unk:
+        return "unknown"
+    if not ho:
+        try:
+            with open(tomb) as fh:
+                phase = str(json.load(fh).get("phase") or "")
+        except (OSError, ValueError, AttributeError):
+            phase = ""
+        if phase == "admit" and os.path.exists(
+            tomb[: -len(".HANDOFF.json")] + ".jsonl"
+        ):
+            return "unmoved"  # the inverse of hooks/handed-off-session-guard.sh: never retired
+    if not src_holder or env.get("LR_HUSK_RETIRE", "on") == "off":
+        return "none"
+    return "husk" if src_pane else "unknown"
+
+
 # TODO(W4): swap for lr-reset-poller.sh rq_stale_reason once it is extracted into lr-lib.sh.
 def stale_reason(
-    sid: str, s: Optional[T.SessionObs], transcript_path: str, handed_off: bool
+    sid: str,
+    s: Optional[T.SessionObs],
+    transcript_path: str,
+    handed_off: bool,
+    succ: Optional[str] = None,
 ) -> Optional[str]:
-    """Same contract as the poller's drain-time ``rq_stale_reason`` (lr-reset-poller.sh:745):
-    a reason when the request is STALE, None while it is still a limited, movable session."""
+    """Same contract as the poller's drain-time ``rq_stale_reason`` (lr-reset-poller.sh):
+    a reason when the request is STALE, None while it is still a limited, movable session.
+    ``succ`` is ``successor_state``: a successor retires it, a husk or an unknown holder KEEPS it
+    (the poller drives the husk), and an unmoved admit is judged as the session it still is."""
     if not transcript_path and not handed_off:
         return "no transcript for this sid in any account store"
+    if succ == "successor":
+        return "transplanted — a live successor holds it"
+    if succ in ("husk", "unknown"):
+        return None
+    if succ == "unmoved":
+        handed_off = False
     if handed_off:
         return "transplanted — the source transcript is tombstoned"
     if s is not None and s.transcript.path and not os.path.exists(s.transcript.path):
@@ -555,10 +643,14 @@ def stale_reconcile(
     boottime: Optional[float],
     now: float,
     stores: Sequence[str] = (),
+    husk_sids: Optional[Set[str]] = None,
+    env: Optional[Mapping[str, str]] = None,
 ) -> List[Tuple[str, str, str]]:
     """Check every request and parked record against evidence before anything acts. ``stores``
     is every configured account dir: a sid with no transcript in its own store is looked up in
-    all of them (a ``.handed-off`` tombstone counts as moving, never as absent)."""
+    all of them (a ``.handed-off`` tombstone counts as moving, never as absent). A request over a
+    STRANDED HUSK (``successor_state`` = husk) is kept, not retired, and its sid is added to
+    ``husk_sids`` so the caller opens no competing record: the poller's husk recovery owns it."""
     out: List[Tuple[str, str, str]] = []
     for req in requests:
         rec = records.get(req.sid)
@@ -598,7 +690,12 @@ def stale_reconcile(
         ):
             out.append((req.sid, "NOT_NEEDED", "live on %s already" % s.cfg))
             continue
-        why = stale_reason(req.sid, judged, tp, handed)
+        succ = (
+            successor_state(req.sid, tp.split("/projects/")[0], s, env) if tp else None
+        )
+        if succ == "husk" and husk_sids is not None:
+            husk_sids.add(req.sid)
+        why = stale_reason(req.sid, judged, tp, handed, succ)
         if why:
             out.append((req.sid, "NOT_NEEDED", why))
         elif s is None or not s.holders:

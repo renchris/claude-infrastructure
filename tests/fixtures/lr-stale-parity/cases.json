@@ -1,0 +1,18 @@
+{
+  "_doc": "Shared parity table for the stranded-husk predicate (2026-10-10, docs/research/lr-stranded-husk-2026-10-10/round2/C2.md D). Read by ONE bats loop (tests/lr-lib.bats, the shell lr_successor_state) and ONE pytest (scripts/limit-recover/lr_recon/tests/test_census.py, census.successor_state); both must give `expect`, the first token of the answer, or null for no durable move (shell rc 1 or rc 2). Stores: src=.claude-secondary, tgt=.claude-quaternary, ter=.claude-tertiary. A holder with a pane is a live registry row; one without is a bare `claude --resume <sid>` process; cfg none is a live holder whose account cannot be read. Pane ids are non-numeric on purpose: the shell's lr_husk_state reads the REAL process table for a `__recycle <pane>` watcher, and a numeric id can collide with a live pane. Not in the table, by design: in-flight (the census has no handoffs log) and a move known only by its transplant lock (the census reads no locks).",
+  "cases": [
+    {"name": "the 186452ed shape: source row only", "handed_off": true, "src_jsonl": true, "tomb": {"to": "tgt"}, "tgt_copy": true, "holders": [{"cfg": "src", "pane": "HUSKPANE-c2-168"}], "expect": "husk"},
+    {"name": "a live row on the target", "handed_off": true, "src_jsonl": true, "tomb": {"to": "tgt"}, "tgt_copy": true, "holders": [{"cfg": "src", "pane": "HUSKPANE-c2-168"}, {"cfg": "tgt", "pane": "HUSKPANE-c2-200"}], "expect": "successor"},
+    {"name": "a bare --resume leaf on the target", "handed_off": true, "src_jsonl": true, "tomb": {"to": "tgt"}, "tgt_copy": true, "holders": [{"cfg": "src", "pane": "HUSKPANE-c2-168"}, {"cfg": "tgt", "pane": null}], "expect": "successor"},
+    {"name": "a successor on a third store", "handed_off": true, "src_jsonl": true, "tomb": {"to": "tgt"}, "tgt_copy": true, "holders": [{"cfg": "src", "pane": "HUSKPANE-c2-168"}, {"cfg": "ter", "pane": null}], "expect": "successor"},
+    {"name": "a holder whose account cannot be read", "handed_off": true, "src_jsonl": true, "tomb": {"to": "tgt"}, "tgt_copy": true, "holders": [{"cfg": "none", "pane": "HUSKPANE-c2-168"}], "expect": "unknown"},
+    {"name": "moved, no live holder", "handed_off": true, "src_jsonl": true, "tomb": {"to": "tgt"}, "tgt_copy": true, "holders": [], "expect": "none"},
+    {"name": "a source holder with no pane", "handed_off": true, "src_jsonl": true, "tomb": {"to": "tgt"}, "tgt_copy": true, "holders": [{"cfg": "src", "pane": null}], "expect": "unknown"},
+    {"name": "the panes 2/3/14 shape: admit tombstone, source live", "handed_off": false, "src_jsonl": true, "tomb": {"to": "tgt", "phase": "admit"}, "tgt_copy": true, "holders": [{"cfg": "src", "pane": "HUSKPANE-c2-2"}], "expect": "unmoved"},
+    {"name": "LR_HUSK_RETIRE=off", "handed_off": true, "src_jsonl": true, "tomb": {"to": "tgt"}, "tgt_copy": true, "holders": [{"cfg": "src", "pane": "HUSKPANE-c2-168"}], "env": {"LR_HUSK_RETIRE": "off"}, "expect": "none"},
+    {"name": "LR_SUCCESSOR_GATE=off", "handed_off": true, "src_jsonl": true, "tomb": {"to": "tgt"}, "tgt_copy": true, "holders": [{"cfg": "src", "pane": "HUSKPANE-c2-168"}], "env": {"LR_SUCCESSOR_GATE": "off"}, "expect": null},
+    {"name": "never moved", "handed_off": false, "src_jsonl": true, "tomb": null, "tgt_copy": false, "holders": [{"cfg": "src", "pane": "HUSKPANE-c2-168"}], "expect": null},
+    {"name": "a tombstone whose target copy is absent", "handed_off": true, "src_jsonl": true, "tomb": {"to": "tgt"}, "tgt_copy": false, "holders": [{"cfg": "src", "pane": "HUSKPANE-c2-168"}], "expect": null},
+    {"name": "a same-store tombstone (--mark)", "handed_off": true, "src_jsonl": true, "tomb": {"to": "src"}, "tgt_copy": true, "holders": [{"cfg": "src", "pane": "HUSKPANE-c2-168"}], "expect": null}
+  ]
+}

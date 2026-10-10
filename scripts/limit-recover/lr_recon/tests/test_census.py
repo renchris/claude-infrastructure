@@ -1,5 +1,6 @@
 """census: one bucket per session in order, the ruled defaults and their switches, records, stale."""
 
+import json
 import os
 import tempfile
 import unittest
@@ -411,6 +412,205 @@ class CensusRecords(unittest.TestCase):
             sid="x", transcript=T.TranscriptObs(path="", last={"limit": False})
         )
         self.assertIn("no longer LIMITED", C.stale_reason("x", s, "/p", False))
+
+
+def _write(path, text=""):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as fh:
+        fh.write(text)
+
+
+class StrandedHusk(unittest.TestCase):
+    """A request over a STRANDED HUSK is kept, not retired (2026-10-10, 186452ed: the request was
+    retired 'tombstoned' while no successor ever started and pane 168 still held the session).
+    Spec: docs/research/lr-stranded-husk-2026-10-10/round2/C2.md D."""
+
+    SID = "186452ed-0000-4000-8000-0000000000aa"
+
+    def setUp(self):
+        tmp = tempfile.mkdtemp()
+        self.src = os.path.join(tmp, ".claude-secondary")
+        self.tgt = os.path.join(tmp, ".claude-quaternary")
+        self.tp = os.path.join(self.src, "projects", "-p", self.SID + ".jsonl")
+
+    def _disk(self, admit=False):
+        tomb = {"handed_off_to": self.tgt, "ts": "2026-10-10T04:18:07Z"}
+        if admit:
+            tomb["phase"] = "admit"
+        else:
+            _write(self.tp + ".handed-off", "x\n")
+        _write(self.tp, "stub\n")
+        _write(self.tp[: -len(".jsonl")] + ".HANDOFF.json", json.dumps(tomb))
+        _write(os.path.join(self.tgt, "projects", "-p", self.SID + ".jsonl"), "x\n")
+
+    def _snap(self, *holder_cfgs):
+        holders = [
+            T.HolderObs(pid=10 + i, lstart=L, cfg=c, src="registry", pane=(5, 7))
+            for i, c in enumerate(holder_cfgs)
+        ]
+        s = T.SessionObs(sid=self.SID, cfg=self.src, holders=holders)
+        return T.Snapshot(wall=NOW, uptime_raw=0.0, sessions={self.SID: s})
+
+    def _run(self, snap, env=None, husk=None):
+        reqs = [
+            T.Request(sid=self.SID, origin="hook", raw={"transcript_path": self.tp})
+        ]
+        kw = {} if husk is None else {"husk_sids": husk}
+        if env is not None:
+            kw["env"] = env
+        return C.stale_reconcile({}, reqs, snap, None, NOW, **kw)
+
+    def test_stranded_husk_request_is_not_retired(self):
+        self._disk()
+        out = self._run(
+            self._snap(self.src)
+        )  # today's signature: red on the retire itself
+        self.assertEqual([o for o in out if o[1] == "NOT_NEEDED"], [])
+        husk = set()
+        self._run(self._snap(self.src), env={}, husk=husk)
+        self.assertEqual(husk, {self.SID})
+
+    def test_a_holder_on_the_target_is_still_retired(self):
+        self._disk()
+        out = self._run(self._snap(self.src, self.tgt))
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0][:2], (self.SID, "NOT_NEEDED"))
+        self.assertIn("transplanted", out[0][2])
+
+    def test_no_holder_is_still_retired_tombstoned(self):
+        self._disk()
+        out = self._run(T.Snapshot(wall=NOW, uptime_raw=0.0))
+        self.assertEqual(
+            out,
+            [
+                (
+                    self.SID,
+                    "NOT_NEEDED",
+                    "transplanted — the source transcript is tombstoned",
+                )
+            ],
+        )
+
+    def test_an_admit_phase_tombstone_is_judged_as_the_source(self):
+        self._disk(admit=True)
+        out = self._run(self._snap(self.src))
+        # judged as the session it still is: the stub is not a limit death, so not LIMITED
+        self.assertEqual(len(out), 1)
+        self.assertIn("no longer LIMITED", out[0][2])
+
+    def test_gate_off_is_todays_verdict(self):
+        self._disk()
+        husk = set()
+        out = self._run(
+            self._snap(self.src), env={"LR_SUCCESSOR_GATE": "off"}, husk=husk
+        )
+        self.assertEqual(
+            out,
+            [
+                (
+                    self.SID,
+                    "NOT_NEEDED",
+                    "transplanted — the source transcript is tombstoned",
+                )
+            ],
+        )
+        self.assertEqual(husk, set())
+
+    def test_main_opens_no_record_for_a_husk_sid(self):
+        from unittest import mock
+
+        from lr_recon import __main__ as M
+
+        self._disk()
+        tmp = os.path.dirname(self.src)
+        home = os.path.join(tmp, "home")
+        os.makedirs(home)
+        env = {"LR_STATE_DIR": os.path.join(tmp, "lr"), "HOME": home}
+        env.update({"LR_SUCCESSOR_GATE": "on", "LR_HUSK_RETIRE": "on"})
+        with (
+            mock.patch.dict(os.environ, env),
+            mock.patch("lr_recon.admit.Admission.probe", return_value=(True, "admit")),
+            mock.patch("lr_recon.admit.Admission.mint_token", return_value=None),
+        ):
+            paths = T.Paths.from_env(root=os.path.join(tmp, "lr", "recon"))
+            M.store.ensure_dirs(paths)
+            _write(
+                os.path.join(paths.requests, self.SID + ".json"),
+                json.dumps({"sid": self.SID, "transcript_path": self.tp}),
+            )
+            snap = self._snap(self.src)
+            s = snap.sessions[self.SID]
+            s.acct, s.pid, s.lstart, s.cwd = "next2", 10, L, tmp
+            s.pane, s.registry_name = (5, 7), "p"
+            s.transcript = T.TranscriptObs(path=self.tp, at_rest=True, last=dict(LIMIT))
+            snap.panes["5:7"] = T.PaneObs(
+                kitty_pid=5,
+                window_id=7,
+                sock="s",
+                root_pid=20,
+                root_lstart=L,
+                root_shape="shell",
+                state="claude",
+            )
+            snap.procs[99] = T.ProcRow(99, 1, "S+", L, "/x/claude.exe")
+            ctx = M.Ctx(paths, None, home)
+            M._census(ctx, snap, {}, M.store.list_requests(paths), "observe", NOW)
+            self.assertNotIn(self.SID, ctx.records)
+            # CONTROL: the same LIMITED session NOT moved is recorded, so the skip is the husk's
+            os.remove(self.tp + ".handed-off")
+            os.remove(self.tp[: -len(".jsonl")] + ".HANDOFF.json")
+            ctx = M.Ctx(paths, None, home)
+            M._census(ctx, snap, {}, M.store.list_requests(paths), "observe", NOW)
+            self.assertIn(self.SID, ctx.records)
+
+
+class StaleParity(unittest.TestCase):
+    """census.successor_state against the SHARED table the shell predicate's bats loop reads
+    (tests/fixtures/lr-stale-parity/cases.json): one table, two implementations, one answer."""
+
+    def test_parity_table(self):
+        here = os.path.dirname(os.path.realpath(__file__))
+        table = os.path.join(
+            here, *[".."] * 4, "tests", "fixtures", "lr-stale-parity", "cases.json"
+        )
+        with open(table) as fh:
+            cases = json.load(fh)["cases"]
+        self.assertGreater(len(cases), 10)
+        sid = "c2ba0000-0000-4000-8000-000000000001"
+        names = (("src", "secondary"), ("tgt", "quaternary"), ("ter", "tertiary"))
+        for i, case in enumerate(cases):
+            with self.subTest(case=case["name"]):
+                home = tempfile.mkdtemp()
+                st = {k: os.path.join(home, ".claude-" + v) for k, v in names}
+                for d in st.values():
+                    os.makedirs(os.path.join(d, "projects", "-p"))
+                tp = os.path.join(st["src"], "projects", "-p", sid + ".jsonl")
+                if case["handed_off"]:
+                    _write(tp + ".handed-off", "x\n")
+                if case["src_jsonl"]:
+                    _write(tp, "x\n")
+                if case["tomb"]:
+                    tomb = {"handed_off_to": st[case["tomb"]["to"]]}
+                    if case["tomb"].get("phase"):
+                        tomb["phase"] = case["tomb"]["phase"]
+                    _write(tp[: -len(".jsonl")] + ".HANDOFF.json", json.dumps(tomb))
+                if case["tgt_copy"]:
+                    _write(
+                        os.path.join(st["tgt"], "projects", "-p", sid + ".jsonl"), "x\n"
+                    )
+                holders = [
+                    T.HolderObs(
+                        pid=100 + j,
+                        lstart=L,
+                        cfg="" if h["cfg"] == "none" else st[h["cfg"]],
+                        src="registry" if h["pane"] else "resume-argv",
+                        pane=(1, 100 + j) if h["pane"] else None,
+                    )
+                    for j, h in enumerate(case["holders"])
+                ]
+                s = T.SessionObs(sid=sid, holders=holders)
+                got = C.successor_state(sid, st["src"], s, case.get("env", {}))
+                self.assertEqual(got, case["expect"], (i, case["name"]))
 
 
 if __name__ == "__main__":
