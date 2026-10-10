@@ -793,6 +793,24 @@ lrp_page() {
   log "PAGE  ($1) ${v:-lr-page: no verdict} — $2"
   return 0
 }
+# lrp_husk_owner_row <sid> <pane> <acct> <attempts> → ONE agent-side backlog row for an exhausted
+# stranded-husk recovery; never fatal. WHY NOT THE PAGE (2026-10-10, docs/research/lr-stranded-husk-
+# 2026-10-10/ROOT-CAUSE.md): the "recovery exhausted" page blames an unsent draft and hands the
+# operator the next step, and the operator ruling is zero human in the loop, zero asking. A husk whose
+# recoveries all failed is the rail's to finish, so it becomes OPEN agent work the dispatcher claims.
+# Kill switch LR_HUSK_OWNER_ROW=off restores the page. Seam: LR_BACKLOG_BIN (default the deployed
+# ~/.claude/bin/cc-backlog; never the repo copy, so a fixture $HOME cannot reach a real ledger).
+LRP_BACKLOG_BIN="${LR_BACKLOG_BIN:-${HOME:-}/.claude/bin/cc-backlog}"
+lrp_husk_owner_row() {
+  local sid="$1" pane="$2" acct="$3" att="$4" title id
+  title="limit-recover: stranded husk ${sid:0:8} (pane ${pane:-?}, $acct) still not on a live successor after $att husk recoveries; drive it there"
+  if [[ $DRY -eq 1 ]]; then log "DRY   owner row: $title"; return 0; fi
+  if [[ ! -x "$LRP_BACKLOG_BIN" ]]; then log "OWNER-ROW-LOST $sid — cc-backlog unreachable ($LRP_BACKLOG_BIN): $title"; return 0; fi
+  id="$(lrp_bounded "$LRP_BACKLOG_BIN" add --title "$title" --project claude-infrastructure \
+        --source "lr-reset-poller:stranded-husk:$sid" --run "cc-lr recover ${sid:0:8}" 2>>"$LOG" | tail -1)"
+  log "OWNER-ROW $sid — ${id:-no id echoed} filed: $title"
+  return 0
+}
 # lrp_held_lead <sid> → 0 when the session LEADS live members (decision 4: held on every lane, woken
 # in place at its reset, never moved and never re-spawned). Unknown (no lr-team.sh) is NOT a lead.
 lrp_held_lead() { command -v lr_has_live_teammate >/dev/null 2>&1 && lr_has_live_teammate "${1:?}"; }
@@ -867,7 +885,10 @@ lrp_draft_hold() {
   fi
   [[ -e "$mark" ]] && return 0
   : > "$mark" 2>/dev/null || true
-  lrp_page "unsent draft" "Pane $pane holds an unsent draft, so session ${sid:0:8} was not woken after its limit reset${rowtxt:+: \"$rowtxt\"}. Send or clear it; the next tick retries.${snap:+ Screen: $snap}"
+  # The fact, never an ask (operator ruling 2026-10-10, docs/research/lr-stranded-husk-2026-10-10/
+  # ROOT-CAUSE.md: zero human in the loop, zero asking). The title keeps "unsent draft": pages and
+  # tests key on it.
+  lrp_page "unsent draft" "Pane $pane holds an unsent draft, so session ${sid:0:8} was not woken after its limit reset${rowtxt:+: \"$rowtxt\"}. The draft stays as typed; the recovery retries each pass and holds while the prompt box holds text.${snap:+ Screen: $snap}"
 }
 
 # ── nudge_in_place — THE AT-RESET WAKE, ONE SPEC (resolution 3; D1.15, D4.7, D7.7) ───────────────
@@ -1034,9 +1055,17 @@ run_claim_handoff() { # $1=sid $2=the dispatch's output file
   run_claim_release "$1"
 }
 # rq_stale_reason <sid> <transcript_path> → rc 0 + a reason on stdout when the request is STALE;
-# rc 1 (nothing printed) when the session is still a limited, movable, non-teammate session.
+# rc 1 (nothing printed) when the session is still a limited, movable, non-teammate session;
+# rc 2 + "<pane> <pid>" when it is a STRANDED HUSK — moved, no successor runs, the source pane still
+#   holds it — KEPT for the husk recovery (lr-fleet --one --source-pane routes it to the husk recycle);
+# rc 3 + the predicate's token ("in-flight <pane> <pid>" | "unknown") — KEPT, nothing spent this tick.
+# WHY rc 2/3 (2026-10-10, docs/research/lr-stranded-husk-2026-10-10/ROOT-CAUSE.md): a tombstoned
+# source was read as "the successor carries it", and 186452ed's request was retired at 04:31:42Z while
+# no successor had started and pane 168 still held the session. lr_successor_state (lr-lib.sh) asks
+# which ACCOUNT each live holder runs under instead. Kill switches: LR_SUCCESSOR_GATE=off (today's
+# code, byte for byte) · LR_HUSK_RETIRE=off (the predicate answers none: retired as before).
 rq_stale_reason() {
-  local sid="$1" tp="$2" cfg to="" kind="" c f tm bgh
+  local sid="$1" tp="$2" cfg to="" kind="" c f tm bgh _sp _spid _scfg
   # The hook always writes .transcript_path; an older or hand-written request may not, so look the
   # sid up across the account stores before calling it unconfirmable.
   if [[ -z "$tp" ]] && command -v lr_config_dirs >/dev/null 2>&1; then
@@ -1048,9 +1077,25 @@ rq_stale_reason() {
   fi
   [[ -n "$tp" ]] || { echo "no transcript for this sid in any account store, so nothing on disk can confirm it"; return 0; }
   cfg="${tp%%/projects/*}"
-  if [[ -e "$tp.handed-off" ]]; then echo "transplanted — the source transcript is tombstoned"; return 0; fi
-  if command -v lr_transplant_target >/dev/null 2>&1 && to="$(lr_transplant_target "$sid" "$cfg" 2>/dev/null)"; then
-    echo "transplanted to ${to:-another store}"; return 0
+  local st="" src=2
+  if command -v lr_successor_state >/dev/null 2>&1; then src=0; st="$(lr_successor_state "$sid" "$cfg" 2>/dev/null)" || src=$?; fi
+  if [[ $src -eq 0 ]]; then
+    case "$st" in
+      successor\ *) read -r _ _sp _spid _scfg <<< "$st"
+                    echo "transplanted — a live successor holds it under $_scfg (pane $_sp, pid $_spid)"; return 0 ;;
+      husk\ *)      printf '%s\n' "${st#husk }"; return 2 ;;
+      in-flight\ *|unknown) printf '%s\n' "$st"; return 3 ;;
+      none)         echo "transplanted — the source transcript is tombstoned and no live process holds it"; return 0 ;;
+      *) : ;;   # unmoved: an admit that never retired the source — judged below as the session it still is
+    esac
+  else
+    # rc 1 (no durable move off this store — a lock alone, a round trip, never moved) keeps today's
+    # lock read and skips only the bare `.handed-off` retire; rc 2 (LR_SUCCESSOR_GATE=off, or an
+    # lr-lib.sh without the predicate) is today's code, byte for byte.
+    if [[ $src -ne 1 && -e "$tp.handed-off" ]]; then echo "transplanted — the source transcript is tombstoned"; return 0; fi
+    if command -v lr_transplant_target >/dev/null 2>&1 && to="$(lr_transplant_target "$sid" "$cfg" 2>/dev/null)"; then
+      echo "transplanted to ${to:-another store}"; return 0
+    fi
   fi
   [[ -f "$tp" ]] || { echo "the transcript is gone from $cfg"; return 0; }
   # A LIVE BACKGROUND JOB is never the hook lane's: lr-fleet would spawn a second copy beside a job
@@ -1105,19 +1150,29 @@ rq_record_attempt() { # $1=file $2=verdict — bumps .attempts and stamps the at
 # filed exhausted and paged the operator, while their own account had its headroom back. So when
 # the run the last dispatch started ended PARKED, that dispatch is handed back, once per run, and
 # the request keeps waiting (still paced by LR_REQUEST_RETRY_MIN) instead of exhausting.
-# Kill switch LR_REQUEST_REFUND_PARKS=off.
+# A HELD husk recycle (mech=husk-recycle/HELD:<why>, 2026-10-10 lr-stranded-husk) is the same kind of
+# nothing — it holds while the source pane's prompt box holds text — so it is refunded too, but at
+# most RQ_MAX_ATTEMPTS times per request (.held_refunds): three real failures still exhaust it.
+# Kill switch LR_REQUEST_REFUND_PARKS=off (both arms).
 rq_refund_park() { # $1=request file $2=sid → 0 refunded (attempts -1) · 1 nothing to refund
   [[ "${LR_REQUEST_REFUND_PARKS:-on}" == off ]] && return 1
   local run v done_run t="$1.tmp.$$"
   run="$(sed -n 's/^run=\([^ ]*\) .*/\1/p' "$RESULTS/$2.log" 2>/dev/null | tail -1)"
   [[ -n "$run" && -f "$run/verdict.txt" ]] || return 1
   v="$(cat "$run/verdict.txt" 2>/dev/null)"
-  [[ "$v" == *"verdict=PARKED"* ]] || return 1
+  local held=0
+  case "$v" in
+    *"verdict=PARKED"*) : ;;
+    *" mech=husk-recycle/HELD:"*) held=1
+      (( $(jq -r '.held_refunds // 0' "$1" 2>/dev/null || echo 0) < RQ_MAX_ATTEMPTS )) || return 1 ;;
+    *) return 1 ;;
+  esac
   done_run="$(jq -r '.refunded_run // ""' "$1" 2>/dev/null)"
   [[ "$done_run" == "$run" ]] && return 1
-  jq --arg r "$run" '.attempts = ([((.attempts // 0) - 1), 0] | max) | .refunded_run = $r | .last_verdict = "parked-refunded"' \
+  jq --arg r "$run" --argjson h "$held" '.attempts = ([((.attempts // 0) - 1), 0] | max) | .refunded_run = $r
+       | .held_refunds = ((.held_refunds // 0) + $h) | .last_verdict = (if $h == 1 then "held-refunded" else "parked-refunded" end)' \
      "$1" > "$t" 2>/dev/null && mv -f "$t" "$1" 2>/dev/null || { rm -f "$t" 2>/dev/null; return 1; }
-  log "REQUEST-REFUND $2 — the last dispatch's run parked (nothing moved, nothing typed); its attempt is handed back ($run)"
+  log "REQUEST-REFUND $2 — the last dispatch's run $( (( held )) && echo 'was a HELD husk recycle' || echo parked) (nothing moved, nothing typed); its attempt is handed back ($run)"
   return 0
 }
 # THE PER-ACCOUNT TICK COUNTERS. /bin/bash 3.2 (launchd's interpreter) has no associative arrays,
@@ -1179,7 +1234,8 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
   # by its transcript's store, and one with neither shares a single "unknown" bucket for the cap.
   if [[ -z "$_rq_acct" && -n "$_rq_tp" ]]; then _rq_acct="$(acct_of_cfg "${_rq_tp%%/projects/*}" 2>/dev/null || true)"; fi
   [[ -n "$_rq_acct" ]] || _rq_acct=unknown
-  _rq_hook=0; [[ "$_rq_by" == "stop-failure-marker" ]] && _rq_hook=1
+  _rq_hook=0; case "$_rq_by" in stop-failure-marker|stranded-husk) _rq_hook=1 ;; esac
+  _rq_husk=""
 
   # ── DRAIN-TIME REVALIDATION (D3, 2026-09-28) — the hook's request is a SNAPSHOT of one death ─────
   # It was true when the session died and can be false by the time it is drained: on 2026-09-28 the
@@ -1190,9 +1246,23 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
   # not a teammate, and still LIMITED (its last assistant record is a usage-limit api error). A
   # session that moved to or resumed on a healthy account fails one of the first or the last.
   if (( _rq_hook == 1 )); then
-    if _rq_why="$(rq_stale_reason "$_rq_sid" "$_rq_tp")"; then
-      rq_retire "$_rq" "$_rq_name" "$_rq_sid" "$_rq_by" "$_rq_why"; continue
-    fi
+    _rq_src=0; _rq_why="$(rq_stale_reason "$_rq_sid" "$_rq_tp")" || _rq_src=$?
+    case "$_rq_src" in
+      0) rq_retire "$_rq" "$_rq_name" "$_rq_sid" "$_rq_by" "$_rq_why"
+         # A retired stranded-husk request hands its sid back to § 2b's filer (2026-10-10, C2 skeptic
+         # P3). lr_resume_procs matches ANY argv carrying '--resume <sid>', so one false "successor"
+         # read would otherwise leave the once-per-tombstone marker standing over a husk that is still
+         # live — the incident's own stranded shape, with nothing left to undo it. Exhaustion keeps
+         # the marker (that arm is below), so this cannot become a re-file loop.
+         [[ "$_rq_by" != stranded-husk ]] || rm -f "$PARKED/$_rq_sid.husk-filed" 2>/dev/null
+         continue ;;
+      2) _rq_husk="$_rq_why"; _rq_pane="${_rq_husk%% *}" ;;
+      3) if [[ "$(cat "$RESULTS/$_rq_sid.hold" 2>/dev/null)" != "$_rq_why" ]]; then   # once per reason, never per tick
+           printf '%s\n' "$_rq_why" > "$RESULTS/$_rq_sid.hold" 2>/dev/null || true
+           log "REQUEST-HUSK-HOLD $_rq_sid — $_rq_why; kept, nothing dispatched or spent"
+         fi
+         continue ;;
+    esac
   fi
   [[ -n "$_rq_target" ]] || _rq_target=auto
   [[ -n "$_rq_by" ]] || _rq_by='?'
@@ -1208,7 +1278,7 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
   # it is the breadcrumb `cc-find --limited` reads, and the operator's own `touch` is what releases
   # the whole cohort at once. THIS DAEMON MUST NEVER CREATE $STATE/autorecover.on; its absence is
   # the shipped default and creating it here would be the daemon granting itself the permission.
-  if [[ "$_rq_by" == "stop-failure-marker" ]] && [[ ! -e "$STATE/autorecover.on" ]]; then
+  if (( _rq_hook == 1 )) && [[ ! -e "$STATE/autorecover.on" ]]; then
     _rq_held=$(( _rq_held + 1 ))
     # ONE summary line per tick, after the loop — never one per request per tick. A thirty-strong
     # held cohort at a 10-minute cadence is 4,320 identical lines a day, and this daemon has already
@@ -1311,7 +1381,7 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
     # run claim, the wake text) — without its engagement wait: the request stays queued and the next
     # tick retires it the moment the session is no longer LIMITED. Paced: at most LR_WAKE_PER_ACCT
     # (3) per account per tick, each sid a stable 0-LR_WAKE_JITTER_S (90) s after reset + 120 s.
-    if (( _rq_hook == 1 && _rq_reset > 0 && $(date +%s) >= _rq_reset )) \
+    if (( _rq_hook == 1 && _rq_reset > 0 && $(date +%s) >= _rq_reset )) && [[ -z "$_rq_husk" ]] \
        && command -v lr_registry_live_rows >/dev/null 2>&1 && _rq_rows="$(lr_registry_live_rows "$_rq_sid" 2>/dev/null)"; then
       _rq_jit=$(( $(printf '%s' "$_rq_sid" | cksum | cut -d' ' -f1) % ${LR_WAKE_JITTER_S:-90} ))
       if (( $(date +%s) < _rq_reset + ${LR_NUDGE_AFTER_RESET_S:-120} + _rq_jit )); then continue; fi
@@ -1349,7 +1419,11 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
       log "REQUEST-EXHAUSTED $_rq_sid — $_rq_att dispatch(es) and the session is still LIMITED; filed as exhausted (cc-lr recover ${_rq_sid:0:8} retries it by hand)"
       mv "$_rq" "$RESULTS/${_rq_name%.json}.exhausted.json" 2>/dev/null || true; lrp_act_done
       # ONCE: the request leaves the queue on this line, so there is no later tick to repeat it.
-      lrp_page "recovery exhausted" "Session ${_rq_sid:0:8} (pane ${_rq_pane:-?}, $_rq_acct) is still limited after $_rq_att recovery attempts. The usual cause is an unsent draft in that pane. cc-lr recover ${_rq_sid:0:8} retries it."
+      if [[ -n "$_rq_husk" && "${LR_HUSK_OWNER_ROW:-on}" != off ]]; then
+        lrp_husk_owner_row "$_rq_sid" "$_rq_pane" "$_rq_acct" "$_rq_att"
+      else
+        lrp_page "recovery exhausted" "Session ${_rq_sid:0:8} (pane ${_rq_pane:-?}, $_rq_acct) is still limited after $_rq_att recovery attempts. The usual cause is an unsent draft in that pane. cc-lr recover ${_rq_sid:0:8} retries it."
+      fi
       continue
     fi
     if (( _rq_last > 0 && $(date +%s) - _rq_last < RQ_RETRY_MIN * 60 )); then lrp_act_done; continue; fi
@@ -1376,6 +1450,7 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
   _rq_rc=0; _rq_verdict=""
   case "$_rq_mode" in
     relaunch)
+      [[ -z "$_rq_husk" ]] || log "STRANDED-HUSK $_rq_sid — moved, no successor runs, source pane ${_rq_husk%% *} (pid ${_rq_husk#* }) still holds it; dispatching the husk recovery"
       log "REQUEST $_rq_sid — dispatching the in-place recovery DETACHED (target $_rq_target${_rq_pane:+, pane $_rq_pane}) for $_rq_by"
       # shellcheck disable=SC2086  # deliberate: ${var:+--flag "val"} must word-split into 0 or 2 args
       "$FLEET" --one "$_rq_sid" --target "$_rq_target" ${_rq_pane:+--source-pane "$_rq_pane"} --from-daemon --detach \
@@ -2010,6 +2085,44 @@ reroute_parked() { # $1=sid $2=acct $3=cfg $4=reset epoch → dispatches or does
   return 0
 }
 
+# ── 2b. A STRANDED HUSK IS THE REQUEST LANE'S TO DRIVE (2026-10-10, 186452ed) ─────────────────────
+# A parked record whose session MOVED, whose successor never started and whose source pane still
+# holds it (lr_successor_state = husk) gets ONE stranded-husk request, so the request lane's budget,
+# refund, pacing, run claim and fence drive it. Once per tombstone: the marker holds its mtime.
+# An admit that never retired the source (the guard still passes its prompts) is not a move: § 2
+# wakes it in place like any parked session instead of leaving it HUSK … LEFT PARKED forever — but
+# ONLY while its source pane is alive (C2 skeptic, P10): with no pane, the spawn arm would be refused
+# by lr-fire-resume's tombstone verdict while this loop logged RESUMED and moved the record.
+# Kill switch for all of § 2b: LR_SUCCESSOR_GATE=off (the predicate answers rc 2; nothing is filed
+# and lrp_unmoved is false). Spec: docs/research/lr-stranded-husk-2026-10-10/round2/C2.md.
+lrp_unmoved() { # $1=sid $2=cfg → rc 0 when lr_successor_state answers unmoved (admit tombstone gate first: cheap)
+  local f
+  for f in "$2"/projects/*/"$1".HANDOFF.json; do grep -q '"phase"[[:space:]]*:[[:space:]]*"admit"' "$f" 2>/dev/null && break; f=""; done
+  [[ -n "$f" ]] && command -v lr_successor_state >/dev/null 2>&1 && [[ "$(lr_successor_state "$1" "$2" 2>/dev/null)" == unmoved ]]
+}
+husk_file_request() { # $1=sid $2=acct $3=cfg → files at most one request; never fatal
+  local sid="$1" acct="$2" cfg="$3" st f tp="" tomb="" stamp hpane hpid
+  (( AUTOFIRE == 1 && DRY == 0 )) || return 0
+  [[ -e "$STATE/autorecover.on" && ! -e "$REQUESTS/$sid.json" ]] || return 0
+  command -v lr_successor_state >/dev/null 2>&1 || return 0
+  # CHEAP GATES FIRST (measured 2026-10-10: 33 parked records, all 33 transplanted; 7 named by a
+  # registry row; ~1.5 s per predicate call under load): a husk has a retired source and a row.
+  for f in "$cfg"/projects/*/"$sid".jsonl.handed-off; do [[ -e "$f" ]] && { tp="${f%.handed-off}"; break; }; done
+  [[ -n "$tp" ]] || return 0
+  grep -lqF "$sid" "${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"/*.json 2>/dev/null || return 0
+  for f in "$cfg"/projects/*/"$sid".HANDOFF.json; do [[ -f "$f" ]] && { tomb="$f"; break; }; done
+  stamp="$(stat -f %m "$tomb" 2>/dev/null || echo 0)"
+  [[ "$(cat "$PARKED/$sid.husk-filed" 2>/dev/null)" != "$stamp" ]] || return 0   # once per tombstone
+  st="$(lr_successor_state "$sid" "$cfg" 2>/dev/null)" || return 0
+  [[ "$st" == husk\ * ]] || return 0
+  read -r _ hpane hpid <<< "$st"
+  jq -n --arg sid "$sid" --arg pane "$hpane" --arg acct "$acct" --arg tp "$tp" --arg ts "$(date -u +%FT%TZ)" \
+    '{sid:$sid, target:"auto", source_pane:$pane, requested_by:"stranded-husk", ts:$ts, account:$acct, transcript_path:$tp}' \
+    > "$REQUESTS/.$sid.tmp" 2>/dev/null && mv -f "$REQUESTS/.$sid.tmp" "$REQUESTS/$sid.json" 2>/dev/null || return 0
+  printf '%s\n' "$stamp" > "$PARKED/$sid.husk-filed" 2>/dev/null || true
+  log "STRANDED-HUSK $sid ($acct) — moved off $cfg, no successor runs, source pane $hpane (pid $hpid) still holds it; filed a stranded-husk request"
+}
+
 # ── 2. RESUME (or notify) parked sessions whose reset has passed ───────────────────────
 for pf in "$PARKED"/*.json; do
   [[ -e "$pf" ]] || continue
@@ -2036,6 +2149,7 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
   sid="${_fields[0]}"; acct="${_fields[1]}"; cfg="${_fields[2]}"
   cwd="${_fields[3]}"; reset_at_utc="${_fields[4]}"
   reset_epoch=$(python3 -c "import sys,calendar,time; from datetime import datetime; print(int(calendar.timegm(datetime.fromisoformat(sys.argv[1].replace('Z','+00:00')).utctimetuple())))" "$reset_at_utc" 2>/dev/null || echo 0)
+  husk_file_request "$sid" "$acct" "$cfg"                    # a stranded husk is driven now, reset or not
   if (( now < reset_epoch )); then                           # reset not reached yet —
     reroute_parked "$sid" "$acct" "$cfg" "$reset_epoch"      # …but another account may route now
     continue
@@ -2053,7 +2167,8 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
   # account and its successor is on disk, so THIS store's copy is retired. Re-firing it here would be
   # refused by lr-fire-resume's tombstone verdict every tick until the fire latch tripped — a loop
   # that reads as an outage. Retire the record instead, once, and say where the session went.
-  if command -v lr_transplant_target >/dev/null 2>&1 && _lrp_to="$(lr_transplant_target "$sid" "$cfg")"; then
+  if command -v lr_transplant_target >/dev/null 2>&1 && _lrp_to="$(lr_transplant_target "$sid" "$cfg")" \
+     && ! { lrp_unmoved "$sid" "$cfg" && lr_registry_live_rows "$sid" >/dev/null 2>&1; }; then
     # ── RETIRE ONLY ON RECOVERED (W5-A, 2026-09-20) ───────────────────────────────────────────────
     # THE DEFECT. The `mv` below was UNCONDITIONAL on the transplant READ, and the HUSK branch under
     # it logged `HUSK … retire request written` and then FELL THROUGH to that same `mv` — so this
@@ -2125,7 +2240,7 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
         > "$STATE/requests/retire-husk-$sid.json" 2>/dev/null || true
     fi
     log "TRANSPLANTED $sid ($acct) → $_lrp_to; parked record retired (the successor carries it: ${_lrp_st:-RECOVERED})"
-    mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified" "$PARKED/$sid.husk-noted"; continue
+    mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified" "$PARKED/$sid.husk-noted" "$PARKED/$sid.husk-filed"; continue
   fi
   # LATCHED — leave it PARKED and say nothing. Silence per tick is deliberate: the one LATCHED line
   # at the crossing and the UNLATCHED line at expiry are the whole story, and this daemon has
