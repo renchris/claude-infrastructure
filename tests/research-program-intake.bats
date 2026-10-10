@@ -91,6 +91,50 @@ PY
   [[ "$output" == *"runs once"* || "$output" == *"already registered"* ]]
 }
 
+row9_evidence() {
+  "$G" run --program demo --json 2>/dev/null | python3 -c "
+import json, sys
+print('\n'.join(next(r for r in json.load(sys.stdin) if r['num'] == 9)['evidence']))"
+}
+
+@test "init's frame skeleton carries plan and topic_owner as null, the keys gate rows 8 and 9 read" {
+  init_ok
+  [ "$(frame_field plan)" = "null" ]
+  [ "$(frame_field topic_owner)" = "null" ]
+  python3 -c "import json,sys; fr=json.load(open(sys.argv[1])); assert 'plan' in fr and 'topic_owner' in fr" "$REC/frame.json"
+}
+
+@test "set --plan and --topic-owner alone write both keys, and gate row 9's lint finds the plan" {
+  init_ok
+  CC_RESEARCH_RECORDS="$REC" row9_evidence | grep -q "plan file None (frame.json \`plan\`) missing"
+  mkdir -p "$REC/plan"; printf '# Plan\n\nship 0 regressions in 100 runs\n' > "$REC/plan/PLAN.md"
+  run "$I" set --program demo --plan plan/PLAN.md --topic-owner "the operator, Chris"
+  [ "$status" -eq 0 ]
+  [ "$(frame_field plan)" = '"plan/PLAN.md"' ]
+  [ "$(frame_field topic_owner)" = '"the operator, Chris"' ]
+  ev="$(CC_RESEARCH_RECORDS="$REC" row9_evidence)"
+  [[ "$ev" == *"not frozen"* ]] || false   # row 9 ran and reached past its lint
+  [[ "$ev" != *"(frame.json \`plan\`) missing"* ]] || false
+}
+
+@test "set refuses a --plan that does not resolve, an empty or superlative --topic-owner, frame untouched" {
+  init_ok
+  before="$(shasum "$REC/frame.json")"
+  run "$I" set --program demo --plan nope.md
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"$REC/nope.md"* ]] || false
+  run "$I" set --program demo --topic-owner "   "
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--topic-owner may not be empty"* ]] || false
+  run "$I" set --program demo --topic-owner "the best owner"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"numberless superlative"* ]] || false
+  # a valid flag beside a refused one writes nothing either
+  run "$I" set --program demo --escape-cost-days 3 --plan nope.md
+  [ "$status" -eq 2 ]
+  [ "$(shasum "$REC/frame.json")" = "$before" ]
+}
+
 @test "the contract page refuses before both §3.1 rulings are recorded" {
   init_ok
   "$I" ruling --program demo --which exemption --adopt --quote "yes"
@@ -219,7 +263,7 @@ PY
   [ "$status" -eq 1 ]
   [[ "$output" == *"done  registered"* ]] || false
   [[ "$output" == *"TODO  contract page"* ]] || false
-  [[ "$output" == *"cc-signoff research:demo/frame"* ]]
+  [[ "$output" == *"TODO  topic owner confirmed"*"TODO  plan named"*"cc-signoff research:demo/frame"* ]] || false
 }
 
 # ── method v1.2 (ruling 1bf69e5c1775) ──────────────────────────────────────────────────────────

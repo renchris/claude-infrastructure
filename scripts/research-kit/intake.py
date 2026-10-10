@@ -15,6 +15,7 @@ tracked records (`docs/research/<slug>/` in the deliverable repo) and registers 
   intake.py map      --program P --fac FAC-NN (--row ID | --na "<reason>")
   intake.py map      --program P --frame "<historical frame>" (--axis ID | --excluded "<operator words>")
   intake.py set      --program P [--escape-cost-days N] [--release-gap-days N] [--reference-days N]
+                     [--plan <path under the records dir>] [--topic-owner "<who>"]
   intake.py contract-page --program P
   intake.py lint     --program P      gate row 1 minus the signature: what still blocks the frame
   intake.py status   --program P      the intake steps, done or not
@@ -186,6 +187,8 @@ def cmd_init(a: argparse.Namespace) -> int:
         "populations": [],
         "known_rows": [],
         "escape_cost_days": None,
+        "plan": None,
+        "topic_owner": None,
     }
     kit.write_json_atomic(rec / "frame.json", frame)
     kit.write_json_atomic(
@@ -290,6 +293,18 @@ def cmd_set(a: argparse.Namespace) -> int:
         v = finite_positive(getattr(a, attr), key)
         if v is not None:
             fr[attr] = v
+    # Gate row 9 lints the plan at records/<plan> (gate_rows_b.plan_text) and row 8 needs the topic
+    # owner; both are checked here, before the one save, so a refusal leaves the frame untouched.
+    if a.plan is not None:
+        path = records(a.program) / a.plan
+        if not path.is_file():
+            raise Refused(f"--plan {a.plan!r} resolves to {path}, which is not an existing file")
+        fr["plan"] = a.plan
+    if a.topic_owner is not None:
+        if not a.topic_owner.strip():
+            raise Refused("--topic-owner may not be empty: name who owns the topic (gate row 8)")
+        superlative_check(a.topic_owner, "the topic owner")
+        fr["topic_owner"] = a.topic_owner
     save_frame(a.program, fr)
     print("set")
     return 0
@@ -502,6 +517,8 @@ def cmd_status(a: argparse.Namespace) -> int:
         ("vendor preflight", bool(pf)),
         ("contract page", bool(fr.get("contract_page_at"))),
         ("frame lint clean", not lint_fails(a.program)),
+        ("topic owner confirmed", bool((fr.get("topic_owner") or "").strip())),
+        ("plan named", bool(fr.get("plan")) and (records(a.program) / fr["plan"]).is_file()),
     ]
     for name, ok in steps:
         print(f"{'done' if ok else 'TODO'}  {name}")
@@ -543,6 +560,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--escape-cost-days")
     p.add_argument("--release-gap-days")
     p.add_argument("--reference-days")
+    p.add_argument("--plan", help="the plan file, relative to the program's records dir (gate row 9)")
+    p.add_argument("--topic-owner", help="who owns the topic, confirmed by the operator (gate row 8)")
     p.set_defaults(fn=cmd_set)
     for verb, fn in (("contract-page", cmd_contract_page), ("lint", cmd_lint),
                      ("status", cmd_status)):

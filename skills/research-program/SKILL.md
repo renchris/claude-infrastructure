@@ -88,7 +88,9 @@ and finish the Google sign-in. Park it before anything else, because the preflig
    operator confirms or corrects. Question 10 must be a number:
    `intake.py set --program <slug> --escape-cost-days N` (refuses "infinite"; start at 3, §9 decision 5).
    Record the mean upstream release gap (`--release-gap-days`) and, if known, the measured research time
-   for this project type (`--reference-days`, the §6.3 check).
+   for this project type (`--reference-days`, the §6.3 check). Record the operator-confirmed topic owner
+   (`--topic-owner "<who>"`, gate row 8) and, once the plan file exists, its path relative to the records
+   dir (`--plan PATH`, linted by gate row 9).
 5. **Fill the frame** (`frame.json`, `acceptance.json`, `decisions.jsonl`, `premises.jsonl`,
    `sources.jsonl`, shapes in RECORDS.md). Turn every superlative into a number with a measured ceiling
    and a negative branch; the lint refuses `perfect|100th|maximal|best|exhaustive|absolute|flawless`

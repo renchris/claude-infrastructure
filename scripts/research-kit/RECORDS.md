@@ -30,7 +30,10 @@ Added 2026-10-05 (wave E3d): between `build-certified` and `closed` sits `implem
   exemption: {at, quote}}` (§3.1), `fac_map` `[{fac, row|null, na_reason|null}]` covering FAC-01..FAC-33, `reask_map`
   `[{frame, axis|null, excluded_quote|null}]`, `sources_required` `[source id]`, `populations` `[name]`,
   `known_rows` `[{id, kind:"frame-omission", names_rows:[], blocks_waves:[], resign_due, default:"descope|class-b",
-  status:"open|closed"}]`.
+  status:"open|closed"}]`, `plan` (path of the plan file relative to the records dir, or null; gate row 9 lints it and
+  row 8 skips its headings) and `topic_owner` (who owns the topic, or null; gate row 8 fails while it is empty). Both
+  are written by `intake.py set --plan PATH --topic-owner "<who>"`, which refuses a plan path that is not an existing
+  file under the records dir and an empty or numberless-superlative owner; `init` writes both as null.
 - `acceptance.json`: `{"rows":[{id, predicate, check_cmd, threshold:{metric, op, value}, negative_branch,
   control:{known_bad, known_good}, soundness, residual_label|null}]}`.
 - `decisions.jsonl`: SYNTHESIS shape. The lead writes `tally` `{premises:[PR ids], flip_probe:"P-..",
