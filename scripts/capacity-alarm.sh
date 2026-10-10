@@ -254,7 +254,9 @@
 #        CC_CAP_KALLOC=off (skip the zone read) · CC_CAP_KALLOC_WARN_GB (default 4) ·
 #        CC_CAP_KALLOC_ALARM_GB (default 6) · CC_CAP_KALLOC_MIN_S (default 900, sample damping) ·
 #        CC_CAP_KALLOC_TIMEOUT_S (default 5) · CC_CAP_ZPRINT (zprint binary; ABSOLUTE for rung 8) ·
-#        CC_CAP_BOOTTIME (boot epoch, for stubbing the carry's reboot guard)
+#        CC_CAP_BOOTTIME (boot epoch, for stubbing the carry's reboot guard) ·
+#        CC_CAP_CONVOY (auto | on | off — the convoy-gauge tick; auto = only on this job's own
+#          launchd tick) · CC_CAP_CONVOY_GAUGE (the gauge script) · CC_CAP_CONVOY_TIMEOUT_S (45)
 #
 # bash 3.2 safe. Ships to launchd ⇒ tested under /bin/bash.
 
@@ -2052,4 +2054,37 @@ if [ "$QUIET" != 1 ] && [ "$WANT_JSON" != 1 ]; then
   fi
 fi
 [ "$WANT_JSON" = 1 ] && printf '%s\n' "$JSON"
+
+# ── convoy gauge: one detect-only tick, AFTER the verdict, the row and the page are final ─────────
+# scripts/convoy-gauge.sh reads the thread counts of the user's lsd/trustd/secd/tccd (the one cheap
+# leading signal of the 2026-10-09 LaunchServices lock convoy, which load did not predict) and keeps
+# its own log, flag and page. It rides this job only for the 60 s cadence, so it is FAIL-SOFT by
+# position and by construction: it runs last, its stdout and stderr go nowhere, its exit code is
+# dropped, and it is BOUNDED the way rung 8 bounds zprint (perl + alarm), with a two-step cut to
+# the gauge's whole process group: TERM first, so the gauge can cut its own samples (each in its
+# own group, out of reach of ours), release its edge lock and write its row; then KILL to whatever
+# of the group is still there 5 s later. A missing gauge or a missing perl means no tick.
+# `auto` runs it only on this job's own launchd tick, so a hand-run or a test of this file can never
+# read the live daemons, write the live flag or page the desk. Kill switch: CC_CAP_CONVOY=off.
+convoy_gauge_tick() {
+  local g
+  case "${CC_CAP_CONVOY:-auto}" in
+    off) return 0 ;;
+    on)  : ;;
+    *)   [ "${XPC_SERVICE_NAME:-}" = "com.claude.capacity-alarm" ] || return 0 ;;
+  esac
+  [ "$APPEND" = 1 ] || return 0
+  [ -x /usr/bin/perl ] || return 0
+  g="${CC_CAP_CONVOY_GAUGE:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/convoy-gauge.sh}"
+  [ -f "$g" ] || return 0
+  /usr/bin/perl -MPOSIX=WNOHANG -e 'my $t = shift; my $p = fork; exit 1 unless defined $p;
+    if (!$p) { setpgrp(0, 0); exec @ARGV; exit 127 }
+    $SIG{ALRM} = sub { kill "TERM", -$p; kill "TERM", $p;
+      for (1 .. 50) { waitpid($p, WNOHANG); last unless kill 0, -$p; select(undef, undef, undef, 0.1) }
+      kill "KILL", -$p; kill "KILL", $p; exit 124 };
+    alarm $t; waitpid($p, 0); exit($? >> 8)' "${CC_CAP_CONVOY_TIMEOUT_S:-45}" /bin/bash "$g" \
+    </dev/null >/dev/null 2>&1
+  return 0
+}
+convoy_gauge_tick || true
 exit "$RC"

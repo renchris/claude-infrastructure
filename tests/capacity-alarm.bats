@@ -1143,3 +1143,61 @@ STUB
   [[ "$output" == *"control OK   census trees="* ]] || false
   ! [[ "$output" == *"control FAIL census"* ]] || false
 }
+
+@test "(convoy) the convoy-gauge tick is fail-soft — a failing, noisy or hung gauge moves neither verdict, rc, output nor row" {
+  # scripts/convoy-gauge.sh rides this job's 60 s tick and owns nothing here. The gauge is a stub, so
+  # this reads no live daemon; what is under test is the call site alone: WHEN it runs (only on this
+  # job's own launchd tick, unless forced), and that nothing the gauge does can reach the alarm.
+  local stub="$BATS_TEST_TMPDIR/gauge-stub" ran="$BATS_TEST_TMPDIR/gauge.ran" base hung t0
+  printf '#!/bin/bash\necho ran >> "%s"\necho NOISE-ON-STDOUT; echo NOISE-ON-STDERR >&2\nexit 9\n' "$ran" > "$stub"
+  export CC_CAP_CONVOY_GAUGE="$stub"
+
+  # a hand-run (no launchd label) never runs the gauge: this is the baseline output
+  run env -u XPC_SERVICE_NAME /bin/bash "$ALARM" --json
+  [ "$status" -eq 0 ] || false
+  [ ! -e "$ran" ] || false
+  local base_lines; base_lines="$(printf '%s\n' "$output" | wc -l | tr -d ' ')"
+
+  # the launchd tick runs it once; it exits 9 and prints on both streams, and none of that shows
+  t0=$SECONDS
+  run env XPC_SERVICE_NAME=com.claude.capacity-alarm /bin/bash "$ALARM" --json
+  base=$(( SECONDS - t0 ))
+  [ "$status" -eq 0 ] || false
+  [ "$(wc -l < "$ran" | tr -d ' ')" = 1 ] || false
+  [[ "$output" =~ \"verdict\":\"OK\" ]] || false
+  ! [[ "$output" == *NOISE* ]] || false
+  [ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" = "$base_lines" ] || false
+  [ "$(wc -l < "$CC_CAP_LOG" | tr -d ' ')" = 2 ] || false         # one row per run, the gauge adds none
+
+  # a gauge that never returns is cut at the bound (a 300 s hang would dwarf the margin below). The
+  # cut is two-step and reaches the whole group: the gauge itself gets a TERM it can act on (it
+  # writes its row and releases its lock there), and a child of it that ignores TERM — a forked
+  # child, not an exec, so the group half of the cut is what reaches it — is KILLed after the grace.
+  local termed="$BATS_TEST_TMPDIR/gauge.termed" kid="$BATS_TEST_TMPDIR/gauge.kid"
+  cat > "$stub" <<STUB
+#!/bin/bash
+echo ran >> "$ran"
+trap 'echo term >> "$termed"; exit 143' TERM
+(trap '' TERM; exec /bin/sleep 300) &
+echo \$! > "$kid"
+wait
+STUB
+  t0=$SECONDS
+  run env CC_CAP_CONVOY=on CC_CAP_CONVOY_TIMEOUT_S=1 /bin/bash "$ALARM" --json
+  hung=$(( SECONDS - t0 ))
+  [ "$status" -eq 0 ] || false
+  [ "$(wc -l < "$ran" | tr -d ' ')" = 2 ] || false
+  [[ "$output" =~ \"verdict\":\"OK\" ]] || false
+  [ "$hung" -lt $(( base + 150 )) ] || false
+  [ "$(cat "$termed")" = term ] || false                          # TERM came first
+  local kpid; kpid="$(cat "$kid")"
+  [ -n "$kpid" ] || false
+  local i=0                                                       # launchd reaps the orphan a beat later
+  while kill -0 "$kpid" 2>/dev/null && [ "$i" -lt 20 ]; do sleep 0.1; i=$((i + 1)); done
+  ! kill -0 "$kpid" 2>/dev/null || false                          # nothing of the gauge outlives the tick
+
+  # kill switch
+  run env XPC_SERVICE_NAME=com.claude.capacity-alarm CC_CAP_CONVOY=off /bin/bash "$ALARM" --json
+  [ "$status" -eq 0 ] || false
+  [ "$(wc -l < "$ran" | tr -d ' ')" = 2 ]
+}
