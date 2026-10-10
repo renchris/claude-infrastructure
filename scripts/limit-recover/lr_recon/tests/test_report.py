@@ -516,6 +516,35 @@ class DodLine(unittest.TestCase):
             )  # the re-dispatch
         self.assertIn("double-typer 1", R.dod_line(self.paths, [r]))
 
+    def test_two_moves_each_numbering_attempt_1_are_not_a_double_typer(self):
+        """W5b2 30c3a88d: two moves 31 h apart, one launch take each, both attempt=1 under their
+        own records — keyed (sid, attempt) they merged into a double typer."""
+        r = self._rec(1)
+        with open(self.paths.launch_log, "w") as fh:
+            fh.write(
+                "1\t%s\tlr-fire-resume\ttaken\tpid=45443\tattempt=1\trecord=hf-13384-1\n"
+                % r.sid
+            )
+            fh.write(
+                "2\t%s\tlr-fire-resume\ttaken\tpid=53642\tattempt=1\trecord=hf-73036-2\n"
+                % r.sid
+            )
+            fh.write(
+                "3\t%s\trecon-A\tspawn\tpid=60\tattempt=1\trecord=recon:c1:%s:1\n"
+                % (r.sid, r.sid[:8])
+            )
+            fh.write(
+                "4\t%s\trecon-A\tspawn\tpid=61\tattempt=1\trecord=recon:c2:%s:1\n"
+                % (r.sid, r.sid[:8])
+            )
+        self.assertIn("double-typer 0", R.dod_line(self.paths, [r]))
+        with open(self.paths.launch_log, "a") as fh:
+            fh.write(
+                "5\t%s\trecon-A\tspawn\tpid=62\tattempt=1\trecord=recon:c2:%s:1\n"
+                % (r.sid, r.sid[:8])
+            )  # a second actuator over the SAME record's attempt still counts
+        self.assertIn("double-typer 1", R.dod_line(self.paths, [r]))
+
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 

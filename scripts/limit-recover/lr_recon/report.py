@@ -248,11 +248,14 @@ MOVE_ROLES = ("recon-A", "recon-A-husk", "recon-B", "recon-R")
 
 def _typers(
     paths: T.Paths, sids: Sequence[str]
-) -> Dict[Tuple[str, str], Dict[str, set]]:
-    """(sid, attempt) → {"launch": distinct launch-lock taker pids, "move": move-actuator spawn pids}
-    from recon/launch.log. lr-fire-resume and every fenced legacy actor log their launch-lock take;
-    the daemon logs each move spawn. Either set above 1 is a double typer for that attempt: two
-    processes launching the session, or a second move actuator over the same attempt."""
+) -> Dict[Tuple[str, str, str], Dict[str, set]]:
+    """(sid, record, attempt) → {"launch": distinct launch-lock taker pids, "move": move-actuator
+    spawn pids} from recon/launch.log. lr-fire-resume and every fenced legacy actor log their
+    launch-lock take; the daemon logs each move spawn. Either set above 1 is a double typer for that
+    attempt: two processes launching the session, or a second move actuator over the same attempt.
+    The record is in the key because every move numbers its attempts from 1: keyed (sid, attempt),
+    30c3a88d's two moves 31 h apart (hf-13384-…, hf-73036-…, one take each) read as a double
+    typer (W5b2). The launch lock refuses a concurrent second take, so a split cannot hide one."""
     want, out = set(sids), {}  # type: ignore[var-annotated]
     try:
         with open(paths.launch_log, encoding="utf-8", errors="replace") as fh:
@@ -271,7 +274,11 @@ def _typers(
                 )
                 if cls:
                     # a legacy actor has no attempt: each of its takes is its own key
-                    key = (t[1], kv.get("attempt") or "legacy@" + t[0])
+                    key = (
+                        t[1],
+                        kv.get("record", ""),
+                        kv.get("attempt") or "legacy@" + t[0],
+                    )
                     out.setdefault(key, {"launch": set(), "move": set()})[cls].add(
                         kv.get("pid", "?")
                     )
