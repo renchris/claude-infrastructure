@@ -10117,7 +10117,53 @@ if [ "${1:-}" = "__recycle" ]; then
     done
     return 0
   }
-  rcy_siw_why="" rcy_siw_kind="" rcy_self_siw=0
+  # AN ANSWER THAT NEVER REACHED THE DIALOG (lr-stranded-husk C1, 2026-10-10; ROOT-CAUSE.md). HARDENING,
+  # not a proven fix: the digit is one keystroke sent at a screen read seconds old, and if the dialog
+  # was dismissed in between it lands in the composer as literal text (M1b-pty.md, 2.1.293: the
+  # composer then reads exactly '2' and the process stays alive). It does not claim it would have
+  # recovered pane 168 at 04:20:34 — what that composer held is unknown (it was empty, with no discard
+  # logged, by 04:45), and pane 7 (watcher 17321) read empty or exactly '/exit' at its 60 s nudge,
+  # not our digit. Called only on a round where neither dialog reader sees the dialog, and only on a
+  # retired-source recycle ($13). "Did not land" is all of: the composer reads EXACTLY our digit (or
+  # our /exit + it) on two reads ≥2 s apart, the dialog is not on screen, and the pane is still at the
+  # TUI, not a shell. A non-digit read is NOT proof of landing — with no composer box drawn the parsers
+  # read the last bordered rows (M1b) — so it only means "nothing to do". Our digit at the end of
+  # other text is never edited (the draft carry owns that composer); it is said once. The once-per-
+  # watcher latch is set only after a key went out: a scrub that read an unknown box sent nothing.
+  # rc 0 /exit re-submitted (the caller re-reads the dialog in 3 s) · 1 nothing more was sent.
+  # Kill switch CC_RECYCLE_BGWORK_LAND_CHECK=off.
+  rcy_land_said=0
+  rcy_bgwork_land_check() {
+    local c="" c2="" src=0 pre="${CC_RECYCLE_GOAL_CLEAR_PREWAIT_S:-10}"
+    case "$pre" in ''|*[!0-9]*) pre=10 ;; esac
+    c="$(composer_content "$IT2" "$RSID" 2>/dev/null)" || return 1
+    case "$c" in
+      "$rcy_bg_digit"|"/exit$rcy_bg_digit") ;;
+      *"$rcy_bg_digit")
+        [ "$rcy_land_said" = 0 ] || return 1
+        rcy_land_said=1
+        echo "→ bgwork@${waited}s: the answer '$rcy_bg_digit' (sent at ${rcy_bg_digit_at}s) never reached the dialog — it ends a composer holding other text; nothing sent, left for the carry"
+        emit_recycle_event recycle-bgwork-unlanded "" "$RSID" "answer '$rcy_bg_digit' sent at ${rcy_bg_digit_at}s read back at ${waited}s at the end of other composer text; nothing sent; left for the carry" || true
+        return 1 ;;
+      *) return 1 ;;
+    esac
+    /bin/sleep 2
+    c2="$(composer_content "$IT2" "$RSID" 2>/dev/null)" || return 1
+    [ "$c2" = "$c" ] || return 1                    # it moved in 2 s: someone is typing, or it was not ours
+    pane_bgwork_seen "$IT2" "$RSID" && return 1   # a dialog on screen takes keys as ANSWERS: never type there
+    at_shell && return 1                            # the session is gone after all: nothing to re-submit
+    composer_scrub_verified "$IT2" "$RSID" >/dev/null 2>&1 || src=$?
+    [ "$src" = 2 ] && return 1                      # unknown box: nothing was sent, the check stays armed
+    rcy_land_tried=1
+    if [ "$src" = 0 ] && it2_paste_submit_verified "$IT2" "$RSID" "/exit" "$pre" >/dev/null; then
+      echo "→ bgwork@${waited}s: the answer '$rcy_bg_digit' (sent at ${rcy_bg_digit_at}s) never reached the dialog — the composer read it back twice; scrubbed, /exit re-submitted"
+      emit_recycle_event recycle-bgwork-unlanded "" "$RSID" "answer '$rcy_bg_digit' sent at ${rcy_bg_digit_at}s read back from the composer at ${waited}s; scrubbed; /exit re-submitted" || true
+      return 0
+    fi
+    emit_recycle_event recycle-bgwork-unlanded "" "$RSID" "answer '$rcy_bg_digit' sent at ${rcy_bg_digit_at}s read back from the composer at ${waited}s; scrub or /exit re-submit FAILED; nothing more sent" || true
+    return 1
+  }
+  rcy_siw_why="" rcy_siw_kind="" rcy_self_siw=0 rcy_tp_siw=0 rcy_bg_digit="" rcy_bg_digit_at="" rcy_land_tried=0
   case "$rcy_bgwork_max" in ''|*[!0-9]*) rcy_bgwork_max=2 ;; esac
   # SELFTEST SEAM, same shape and same safety argument as HF_RECYCLE_SHELL_WAIT_S above: it moves
   # only how OFTEN the screen is read. It cannot make the watcher send a key it would not otherwise
@@ -10247,6 +10293,28 @@ if [ "${1:-}" = "__recycle" ]; then
            && [ "${CC_RECYCLE_SELF_STOP_WATCHER:-on}" != off ]; then
           CC_RECYCLE_BGWORK_ANSWER=stop-if-watcher; rcy_self_siw=1
         fi
+        # A TRANSPLANTED LIMIT SOURCE TAKES IT TOO (lr-stranded-husk C1, pane 168, 2026-10-10;
+        # ROOT-CAUSE.md). Its conversation already lives on the target, and keep-work would start a
+        # second live copy on the limited source beside it; its in-process agents died with the
+        # limit, and the remote precheck holds any WORK before /exit (hf_bg_work_gate), so what is
+        # left is the mailbox watcher the successor re-arms. Pane 168's precheck measured exactly
+        # that (watcher only), and the default still answered keep-work '2'.
+        # THIS NARROWS SETTLED DECISION 2 (LIMIT_RECOVER_FLEET_V2.md:532-533, lr_recon/act.py:11-13:
+        # "hold, never Exit and stop tasks") by extending the rule F15 and the self-recycle default
+        # above already apply: a mailbox watcher is not work (hf_bg_work_kind). Real work still never
+        # gets 'Exit and stop tasks' — the guards below require watcher-ONLY jobs. It replaces holding
+        # until cc-await-ping ends by itself (55 min or less on a guarded source), so it is a latency
+        # choice, and a safe one: 4 of 4 production stop-tasks answers were followed by the exit
+        # (handoffs.jsonl, watchers 65185 22463 3807 510), and M1b measured a clean exit in ~1.2 s
+        # with the background shell killed. Lead ruling 2026-10-10: no operator confirmation needed.
+        # Scope: lr-handoff's resume recycle of a tombstoned source ($13) whose cause is limit
+        # (HF_RCY_TRANSPLANT_CAUSE, exported at the detach — the re-exec resets RCY_TRANSPLANT_CAUSE),
+        # with the answer left at its default. Whatever makes stop-if-watcher hold falls back to
+        # TODAY's answer below, never to a new hold. Kill switch CC_RECYCLE_TRANSPLANT_STOP_WATCHER=off.
+        if [ -n "${RCY_SRC_TX:-}" ] && [ "${HF_RCY_TRANSPLANT_CAUSE:-}" = limit ] \
+           && [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" = on ] && [ "${CC_RECYCLE_TRANSPLANT_STOP_WATCHER:-on}" != off ]; then
+          CC_RECYCLE_BGWORK_ANSWER=stop-if-watcher; rcy_tp_siw=1
+        fi
         # STOP-IF-WATCHER (design-swap-v3 F15, 2026-10-04). The operator's move lane restarts idle
         # sessions with no model turn, and about a third of them (10 of 26, measured that day) hold a
         # background cc-await-ping: a mailbox waiter, which hf_bg_work_kind already rules is not work
@@ -10294,13 +10362,20 @@ if [ "${1:-}" = "__recycle" ]; then
           if [ -n "$rcy_siw_key" ]; then
             # typed-send-lint:allow — a single menu digit read off the dialog on screen, never a command line; no shell ever sees it
             hf_bounded "$IT2" session send -s "$RSID" "$rcy_siw_key" >/dev/null 2>&1 || true
-            rcy_bgwork_sent=$((rcy_bgwork_sent + 1))
+            rcy_bgwork_sent=$((rcy_bgwork_sent + 1)); rcy_bg_digit="$rcy_siw_key" rcy_bg_digit_at="$waited"
             echo "→ bgwork@${waited}s: the /exit raised the background-work dialog; stop-if-watcher answered '$rcy_siw_key' (Exit and stop tasks) — the only background job is the mailbox watcher ($rcy_siw_kind)"
-            emit_recycle_event recycle-bgwork-stopped-watcher "" "$RSID" "background-work dialog at ${waited}s answered with the stop-tasks index '$rcy_siw_key'; jobs=$rcy_siw_kind; lane=$([ "$rcy_self_siw" = 1 ] && printf self || printf explicit)" || true
+            emit_recycle_event recycle-bgwork-stopped-watcher "" "$RSID" "background-work dialog at ${waited}s answered with the stop-tasks index '$rcy_siw_key'; jobs=$rcy_siw_kind; lane=$(if [ "$rcy_self_siw" = 1 ]; then printf self; elif [ "$rcy_tp_siw" = 1 ]; then printf transplant; else printf explicit; fi)" || true
             continue
           fi
-          echo "→ bgwork@${waited}s: stop-if-watcher HOLDS ($rcy_siw_why) — answering Stay, as cancel does$([ "$rcy_self_siw" = 1 ] && printf ' (self-recycle default)')"
-          CC_RECYCLE_BGWORK_ANSWER=cancel
+          # The transplant default falls back to TODAY's keys: keep-work where the menu offers it and
+          # the subject leads no live team; otherwise Esc below, and the line says Stay, never keep-work.
+          if [ "$rcy_tp_siw" = 1 ] && [ -n "$bgk" ] && [ "$rcy_team_rc" = 1 ]; then
+            echo "→ bgwork@${waited}s: stop-if-watcher HOLDS ($rcy_siw_why) — answering the keep-work index, as before (transplant default)"
+            CC_RECYCLE_BGWORK_ANSWER=on
+          else
+            echo "→ bgwork@${waited}s: stop-if-watcher HOLDS ($rcy_siw_why) — answering Stay, as cancel does$([ "$rcy_self_siw" = 1 ] && printf ' (self-recycle default)')"
+            CC_RECYCLE_BGWORK_ANSWER=cancel
+          fi
         fi
         if [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" = cancel ] || [ "$rcy_team_rc" != 1 ] \
            || { [ -z "$bgk" ] && [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" != off ]; }; then
@@ -10362,7 +10437,7 @@ if [ "${1:-}" = "__recycle" ]; then
           [ -n "$rcy_bg_tr" ] && rcy_bg_cfg="${rcy_bg_tr%/projects/*}"
           # typed-send-lint:allow — a single menu digit read off the dialog on screen, never a command line; no shell ever sees it
           hf_bounded "$IT2" session send -s "$RSID" "$bgk" >/dev/null 2>&1 || true
-          rcy_bgwork_sent=$((rcy_bgwork_sent + 1))
+          rcy_bgwork_sent=$((rcy_bgwork_sent + 1)); rcy_bg_digit="$bgk" rcy_bg_digit_at="$waited"
           echo "→ bgwork@${waited}s: the /exit raised the background-work dialog; answered '$bgk' (${CC_MODAL_BGWORK_KEEP:-keep-work}) — the session exits and its tasks are NOT stopped"
           emit_recycle_event recycle-bgwork-answered "" "$RSID" "the /exit raised the background-work dialog at ${waited}s; answered with the menu index '$bgk' read off the screen (${CC_MODAL_BGWORK_KEEP:-keep-work}); predecessor goal=${RCY_GOAL_CLEAR}; acct=$(rcy_acct_for_cfg "$rcy_bg_cfg") cfg=${rcy_bg_cfg:-?}" || true
           if [ "${CC_RECYCLE_BGCOPY_STOP:-on}" != off ]; then
@@ -10379,6 +10454,12 @@ if [ "${1:-}" = "__recycle" ]; then
           continue
         fi
         echo "→ bgwork@${waited}s: the background-work dialog is up and answerable ('$bgk') but CC_RECYCLE_BGWORK_ANSWER=off — holding"
+      elif [ -n "${RCY_SRC_TX:-}" ] && [ -n "$rcy_bg_digit" ] && [ "$rcy_land_tried" = 0 ] \
+           && [ "${CC_RECYCLE_BGWORK_LAND_CHECK:-on}" != off ]; then
+        # No dialog on screen this round, and we answered one earlier: did that digit land? Retired-
+        # source recycles only ($13): elsewhere a composer reading '/exit<digit>' can be a person's Esc
+        # (Stay) racing our digit, and re-submitting /exit would override that choice.
+        if rcy_bgwork_land_check; then rcy_bgwork_next=$((waited + 3)); continue; fi
       fi
     fi
     case "$rcy_nudge_at" in 60|150|300)
@@ -17505,7 +17586,11 @@ recycle_fire_armed() {
   if [ "${#HF_ORIG_ARGV[@]}" -gt 0 ]; then printf '%s\0' "${HF_ORIG_ARGV[@]}" > "$HF_RCY_ORIG_ARGV_FILE" 2>/dev/null || HF_RCY_ORIG_ARGV_FILE=""
   else : > "$HF_RCY_ORIG_ARGV_FILE" 2>/dev/null || HF_RCY_ORIG_ARGV_FILE=""; fi
   HF_RCY_ORIG_SELF="$HF_ORIG_SELF" HF_RCY_ORIG_PWD="$HF_ORIG_PWD" HF_RCY_WATCHER_LOG="$log"
-  export HF_RCY_ORIG_ARGV_FILE HF_RCY_ORIG_SELF HF_RCY_ORIG_PWD HF_RCY_WATCHER_LOG
+  # The transplant cause (lr-stranded-husk C1): the watcher's bgwork arm reads it, and the re-exec
+  # resets RCY_TRANSPLANT_CAUSE at the top of the script. Set every detach, empty included, so a
+  # nested recycle never inherits an outer one's cause.
+  HF_RCY_TRANSPLANT_CAUSE="$RCY_TRANSPLANT_CAUSE"
+  export HF_RCY_ORIG_ARGV_FILE HF_RCY_ORIG_SELF HF_RCY_ORIG_PWD HF_RCY_WATCHER_LOG HF_RCY_TRANSPLANT_CAUSE
   WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$LAUNCH_DIR" "$rcy_old_sid" "$RECYCLE_MARKER" "$FIRE_GOAL" "${PROMPT_FILE_ORIG:-$PROMPT_FILE}" "$RESUME_CFG" "${RESUME_LAUNCHER:+${RCY_SOURCE_SESSION:-$rcy_old_sid}}" "$RCY_T0" "$RCY_SRC_TX" "$RCY_RUN_DIR_ARG" "$RCY_SUBMIT_TOKEN_ARG" "$RCY_CALLER_PID_ARG")"
   if ! await_armed "$log"; then
     hf_recycle_disarm

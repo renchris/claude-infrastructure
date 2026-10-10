@@ -446,9 +446,13 @@ case "$1 $2" in
     else printf '%s\n' "${STUB_PANE:-BGWORK-PANE}"; fi
     exit 0 ;;
   "session read")
+    # Every read, as "<sends so far> <epoch s>", so a case can ask how far apart the reads between
+    # two sends were (lr-stranded-husk C1: a missed digit is read back twice, ≥2 s apart).
+    printf '%s %s\n' "$(cat "$HOME/sends.log" 2>/dev/null | wc -l | tr -d ' ')" "$(date +%s)" >> "$HOME/reads.log"
     case "$st" in
       dialog)   cat "$SCREEN"; : > "$HOME/dialog-read" ;;
       composer) printf '%s\n' "────────────────────" "❯ $cm" "────────────────────" ;;
+      both)     cat "$SCREEN_BOTH"; printf '%s\n' "────────────────────" "❯ $cm" "────────────────────" ;;
       *)        printf '%s\n' "(session ended)" ;;
     esac
     exit 0 ;;
@@ -466,7 +470,13 @@ case "$1 $2" in
         fi
         : > "$HOME/stub.composer" ;;
       $'\e[200~'*) t="${p#$'\e[200~'}"; printf '%s%s' "$cm" "${t%$'\e[201~'}" > "$HOME/stub.composer" ;;
-      [0-9]) echo gone > "$HOME/stub.state" ;;
+      [0-9])
+        # ONE-SHOT MISS (lr-stranded-husk C1): the first digit reaches a COMPOSER, not the dialog —
+        # the dialog was gone when it arrived — after whatever that composer already held.
+        if [ "${STUB_DIGIT_TO_COMPOSER:-0}" = 1 ] && [ ! -e "$HOME/digit-missed" ]; then
+          : > "$HOME/digit-missed"; echo "${STUB_MISS_STATE:-composer}" > "$HOME/stub.state"
+          printf '%s%s' "${STUB_COMPOSER_BEFORE-}" "$p" > "$HOME/stub.composer"
+        else echo gone > "$HOME/stub.state"; fi ;;
     esac
     exit 0 ;;
 esac
@@ -775,4 +785,179 @@ ticket() { cat "$H/.claude/autonomy/recycle-retry/sid-before.json" 2>/dev/null |
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *$'2\t-\twork is running'* ]] || { echo "$output"; false; }
   [ "${lines[${#lines[@]}-1]}" = 1 ] || { echo "$output"; false; }
+}
+
+# ── A TRANSPLANTED LIMIT SOURCE, AND AN ANSWER THAT NEVER LANDED (lr-stranded-husk C1, 2026-10-10) ──
+# Pane 168 (186452ed, next2 → next4): lr-fleet --one transplanted it and recycled the pane in place.
+# The precheck measured its only background job as the mailbox watcher, yet the default answered the
+# keep-work index '2' — and that '2' never reached the dialog: no continued-in record, the process
+# lived, all three nudges HELD on a composer that was neither empty nor /exit.
+# A: a LIMIT transplant answers stop-if-watcher by default; whatever makes that hold falls back to
+#    today's answer. The cause rides HF_RCY_TRANSPLANT_CAUSE (the re-exec resets RCY_TRANSPLANT_CAUSE).
+# B: a digit the composer reads back as EXACTLY ours (or our /exit + ours) on two reads ≥2 s apart is
+#    scrubbed and /exit is re-submitted, once per watcher; our digit behind other text is never
+#    edited — the carry owns it. Hardening, scoped to retired-source recycles ($13 set).
+tp_drive() { # siw_env first; $@ = extra env. Positionals = lr-handoff's resume recycle ($10-$13).
+  run env HF_RCY_TRANSPLANT_CAUSE="${TP_CAUSE-limit}" CC_RECYCLE_BGCOPY_WAIT_S=1 "$@" bash "$HF" __recycle \
+    "$STUB_PANE" "$BATS_TEST_TMPDIR/no-such-tty" "$CMDFILE" "$BATS_TEST_TMPDIR" siw-sid "" "" "" \
+    "$BATS_TEST_TMPDIR/tgt" siw-sid "$(date -u +%FT%T)" "${TP_SRC_TX-$BATS_TEST_TMPDIR/.claude-secondary/projects/-p/siw-sid.jsonl}"
+}
+keys_n() { local n; n="$(grep 'session send' "$H/it2-calls.log" 2>/dev/null | grep -c -- "$1" || true)"; printf '%s' "${n:-0}"; }
+
+@test "[RED] TRANSPLANTED LIMIT SOURCE: a watcher-only session is answered 'Exit and stop tasks', never keep-work" {
+  siw_env watcher
+  tp_drive
+  [[ "$output" == *"stop-if-watcher answered '1' (Exit and stop tasks)"* ]] || { echo "$output"; false; }
+  [ "$(keys_n 'BGWORK-PANE 1$')" -ge 1 ] || { siw_keys; false; }
+  [ "$(keys_n 'BGWORK-PANE 2$')" = 0 ] || { siw_keys; false; }
+  run row recycle-bgwork-stopped-watcher
+  [[ "$output" == *"lane=transplant"* ]] || { echo "$output"; false; }
+  run row recycle-bgwork-answered
+  [ -z "$output" ] || { echo "$output"; false; }
+}
+
+@test "[RED] TRANSPLANTED LIMIT SOURCE, agent view off: a watcher-only session exits on 'Exit and stop tasks' instead of holding" {
+  siw_env watcher
+  printf '%s\n' "   Background work is running" "   The following will stop when you exit:" "" \
+    "   shell · cc-await-ping --timeout 3300" "" "   ❯ 1. Exit and stop tasks" "     2. Stay" "" \
+    "   Enter to confirm · Esc to cancel" > "$SCREEN"
+  tp_drive
+  [[ "$output" == *"stop-if-watcher answered '1' (Exit and stop tasks)"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"recycle HELD"* ]] || { echo "$output"; false; }
+  [ "$(keys_n $'BGWORK-PANE \e$')" = 0 ] || { siw_keys; false; }
+}
+
+@test "TRANSPLANTED LIMIT SOURCE over real WORK falls back to today's answer: the keep-work index and the copy stop, never Esc" {
+  siw_env work
+  tp_drive
+  [[ "$output" == *"stop-if-watcher HOLDS (its background jobs are not watcher-only"*"keep-work index, as before"* ]] || { echo "$output"; false; }
+  [ "$(keys_n 'BGWORK-PANE 2$')" -ge 1 ] || { siw_keys; false; }
+  [ "$(keys_n 'BGWORK-PANE 1$')" = 0 ] || { siw_keys; false; }
+  [ "$(keys_n $'BGWORK-PANE \e$')" = 0 ] || { siw_keys; false; }
+  run row recycle-bgcopy-stop
+  [ -n "$output" ] || false
+}
+
+@test "TRANSPLANTED LIMIT SOURCE that LEADS a live team: Stay, and the log never claims the keep-work answer it did not send" {
+  siw_env watcher
+  printf '%s\n' 'lr_team_snapshot() { echo snap; }' 'lr_team_members() { echo 2; }' > "$BATS_TEST_TMPDIR/lr-team.sh"
+  tp_drive HF_TEAM_HOLD=on HF_LR_TEAM="$BATS_TEST_TMPDIR/lr-team.sh"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" != *"keep-work index, as before"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"recycle HELD"*"sent Esc (Stay)"* ]] || { echo "$output"; false; }
+  [ "$(keys_n 'BGWORK-PANE [0-9]$')" = 0 ] || { siw_keys; false; }
+  [ "$(keys_n $'BGWORK-PANE \e$')" = 1 ] || { siw_keys; false; }
+}
+
+@test "SCOPE: a voluntary cause, no source transcript (\$13), the kill switch and an explicit cancel are all unchanged" {
+  siw_env watcher
+  TP_CAUSE=voluntary tp_drive
+  { [ "$(keys_n 'BGWORK-PANE 2$')" -ge 1 ] && [ "$(keys_n 'BGWORK-PANE 1$')" = 0 ]; } || { echo voluntary; siw_keys; false; }
+  rm -f "$H/it2-calls.log"; TP_SRC_TX="" tp_drive
+  { [ "$(keys_n 'BGWORK-PANE 2$')" -ge 1 ] && [ "$(keys_n 'BGWORK-PANE 1$')" = 0 ]; } || { echo no-13; siw_keys; false; }
+  rm -f "$H/it2-calls.log"; tp_drive CC_RECYCLE_TRANSPLANT_STOP_WATCHER=off
+  { [ "$(keys_n 'BGWORK-PANE 2$')" -ge 1 ] && [ "$(keys_n 'BGWORK-PANE 1$')" = 0 ]; } || { echo kill-switch; siw_keys; false; }
+  rm -f "$H/it2-calls.log"; tp_drive CC_RECYCLE_BGWORK_ANSWER=cancel
+  { [ "$status" -eq 1 ] && [ "$(keys_n 'BGWORK-PANE [0-9]$')" = 0 ] && [ "$(keys_n $'BGWORK-PANE \e$')" = 1 ]; } || { echo cancel; siw_keys; false; }
+}
+
+lc_keep_screen() {
+  printf '%s\n' "   Background work is running" "   The following will stop when you exit:" "" "   shell · sleep 600" "" \
+    "   ❯ 1. Exit and stop tasks" "     2. Move to background and exit" "     3. Stay" "" \
+    "   Enter to confirm · Esc to cancel" > "$SCREEN"
+}
+# $13 = the retired source's transcript (lead decision 3: Part B runs only on a retired-source
+# recycle); `lc_drive ""` is the same drive with $13 empty.
+lc_drive() { bash "$HF" __recycle "$STUB_PANE" "$BATS_TEST_TMPDIR/no-such-tty" "$CMDFILE" "$BATS_TEST_TMPDIR" sid-before "" "" "" "" "" "" \
+  "${1-$BATS_TEST_TMPDIR/.claude-secondary/projects/-p/sid-before.jsonl}" "" "" ""; }
+sf() { local n; n="$(grep -cF -- "$1" "$H/sends.log" 2>/dev/null || true)"; printf '%s' "${n:-0}"; }
+CU="\$'\\025'"   # how the stub's printf %q logs Ctrl-U
+
+@test "[RED] AN ANSWER THAT NEVER REACHED THE DIALOG: read back as exactly our digit ⇒ scrubbed, /exit re-submitted once, the dialog answered again" {
+  _selfcall_stub; lc_keep_screen
+  STUB_DIGIT_TO_COMPOSER=1 STUB_REDIALOG=1 CC_RECYCLE_BGWORK_GOAL_CLEAR=off run lc_drive
+  cat "$H/sends.log"   # shown only on failure
+  [ "$(sc_sends ' 2$')" = 2 ]
+  [ "$(sf "$CU")" -ge 1 ]
+  [ "$(sf '/exit')" = 1 ]
+  [ "$(cat "$H/stub.state")" = gone ]
+  d1="$(grep -n ' 2$' "$H/sends.log" | head -1 | cut -d: -f1)"; cu="$(grep -nF -- "$CU" "$H/sends.log" | head -1 | cut -d: -f1)"
+  ex="$(grep -nF -- '/exit' "$H/sends.log" | head -1 | cut -d: -f1)"; d2="$(grep -n ' 2$' "$H/sends.log" | tail -1 | cut -d: -f1)"
+  { [ "$d1" -lt "$cu" ] && [ "$cu" -lt "$ex" ] && [ "$ex" -lt "$d2" ]; } || false
+  run row recycle-bgwork-unlanded
+  [[ "$output" == *"read back from the composer"*"scrubbed; /exit re-submitted"* ]] || { echo "$output"; false; }
+}
+
+@test "[RED] our /exit left behind, then our digit ('/exit2'): scrubbed and re-submitted the same way" {
+  _selfcall_stub; lc_keep_screen
+  STUB_DIGIT_TO_COMPOSER=1 STUB_COMPOSER_BEFORE=/exit STUB_REDIALOG=1 CC_RECYCLE_BGWORK_GOAL_CLEAR=off run lc_drive
+  [ "$(sc_sends ' 2$')" = 2 ] || { cat "$H/sends.log"; false; }
+  [ "$(sf '/exit')" = 1 ] || { cat "$H/sends.log"; false; }
+  [ "$(cat "$H/stub.state")" = gone ]
+}
+
+@test "our digit BEHIND operator text is never edited — no Ctrl-U, no DEL, no /exit; left for the carry, and the row says so" {
+  _selfcall_stub; lc_keep_screen
+  STUB_DIGIT_TO_COMPOSER=1 STUB_COMPOSER_BEFORE="operator draft " STUB_REDIALOG=1 CC_RECYCLE_BGWORK_GOAL_CLEAR=off run lc_drive
+  [ "$(sf "$CU")" = 0 ] || { cat "$H/sends.log"; false; }
+  [ "$(sf "\$'\\177'")" = 0 ] || { cat "$H/sends.log"; false; }
+  [ "$(sf '/exit')" = 0 ] || { cat "$H/sends.log"; false; }
+  [ "$(cat "$H/stub.composer")" = "operator draft 2" ]
+  run row recycle-bgwork-unlanded
+  [[ "$output" == *"left for the carry"* ]] || { echo "$output"; false; }
+  # Said ONCE: the arm comes round every few seconds while the answer budget lasts.
+  [ "$(jq -c 'select(.class=="recycle-bgwork-unlanded")' "$H/.claude/logs/handoffs.jsonl" | wc -l | tr -d ' ')" = 1 ]
+}
+
+@test "a dialog STILL ON SCREEN beside a composer holding our digit is never typed into (any-shape reader off, so the arm missed it)" {
+  _selfcall_stub; lc_keep_screen
+  export SCREEN_BOTH="$BATS_TEST_TMPDIR/both.txt"
+  printf '%s\n' "   Background work is running" "   The following will stop when you exit:" "" "   shell · sleep 600" "" \
+    "   ❯ 1. Exit and stop tasks" "     2. Stay" "" "   Enter to confirm · Esc to cancel" > "$SCREEN_BOTH"
+  STUB_DIGIT_TO_COMPOSER=1 STUB_MISS_STATE=both HF_BGWORK_ANY_SHAPE=off CC_RECYCLE_BGWORK_GOAL_CLEAR=off run lc_drive
+  [ "$(sc_sends '.')" = 1 ] || { cat "$H/sends.log"; false; }
+  [ "$(cat "$H/stub.composer")" = 2 ]
+}
+
+@test "KILL SWITCH: CC_RECYCLE_BGWORK_LAND_CHECK=off leaves the missed digit where it fell — one answer, nothing else sent" {
+  _selfcall_stub; lc_keep_screen
+  STUB_DIGIT_TO_COMPOSER=1 STUB_REDIALOG=1 CC_RECYCLE_BGWORK_GOAL_CLEAR=off CC_RECYCLE_BGWORK_LAND_CHECK=off run lc_drive
+  [ "$(sc_sends '.')" = 1 ] || { cat "$H/sends.log"; false; }
+  [ "$(cat "$H/stub.composer")" = 2 ]
+}
+
+@test "SCOPE: with no retired source (\$13 empty) a missed digit is left alone — exactly one send" {
+  _selfcall_stub; lc_keep_screen
+  STUB_DIGIT_TO_COMPOSER=1 STUB_REDIALOG=1 CC_RECYCLE_BGWORK_GOAL_CLEAR=off run lc_drive ""
+  [ "$(sc_sends '.')" = 1 ] || { cat "$H/sends.log"; false; }
+  [ "$(cat "$H/stub.composer")" = 2 ]
+  run row recycle-bgwork-unlanded
+  [ -z "$output" ] || { echo "$output"; false; }
+}
+
+@test "[RED] THE MISS IS READ TWICE, ≥2 s APART, before any key: one read of our digit is not enough to scrub" {
+  _selfcall_stub; lc_keep_screen
+  STUB_DIGIT_TO_COMPOSER=1 STUB_REDIALOG=1 CC_RECYCLE_BGWORK_GOAL_CLEAR=off run lc_drive
+  d1="$(grep -n ' 2$' "$H/sends.log" | head -1 | cut -d: -f1)"; cu="$(grep -nF -- "$CU" "$H/sends.log" | head -1 | cut -d: -f1)"
+  [ -n "$d1" ] && [ -n "$cu" ] || { cat "$H/sends.log"; false; }
+  # The reads made after the first answer and before the first Ctrl-U span at least 2 s.
+  span="$(awk -v a="$d1" -v b="$cu" '$1 >= a && $1 < b { if (lo == "" || $2 < lo) lo = $2; if ($2 > hi) hi = $2 } END { print hi - lo }' "$H/reads.log")"
+  [ "$span" -ge 2 ] || { echo "span=$span"; cat "$H/sends.log" "$H/reads.log"; false; }
+}
+
+@test "[RED] PANE 168, REPLAYED: limit transplant, watcher-only, the first answer misses ⇒ '1', scrub, /exit, '1' — and the session exits" {
+  _selfcall_stub; lc_keep_screen; self_env watcher
+  STUB_DIGIT_TO_COMPOSER=1 STUB_REDIALOG=1 HF_RCY_TRANSPLANT_CAUSE=limit CC_RECYCLE_BGCOPY_WAIT_S=1 run bash "$HF" __recycle \
+    "$STUB_PANE" "$BATS_TEST_TMPDIR/no-such-tty" "$CMDFILE" "$BATS_TEST_TMPDIR" sid-before "" "" "" "$BATS_TEST_TMPDIR/tgt" \
+    sid-before "$(date -u +%FT%T)" "$BATS_TEST_TMPDIR/.claude-secondary/projects/-p/sid-before.jsonl" "" "" ""
+  cat "$H/sends.log"   # shown only on failure
+  [ "$(sc_sends ' 1$')" = 2 ]
+  [ "$(sc_sends ' 2$')" = 0 ]
+  [ "$(sf "$CU")" -ge 1 ]
+  [ "$(sf '/exit')" = 1 ]
+  [ "$(cat "$H/stub.state")" = gone ]
+  run row recycle-bgwork-stopped-watcher
+  [[ "$output" == *"lane=transplant"* ]] || { echo "$output"; false; }
+  run row recycle-bgwork-unlanded
+  [ -n "$output" ] || false
 }

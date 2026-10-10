@@ -383,6 +383,33 @@ setup_recycle() {
   [ "$output" = "claude --resume abc" ]
 }
 
+# THE TRANSPLANT CAUSE REACHES THE WATCHER (lr-stranded-husk C1, 2026-10-10). The re-exec'd watcher
+# resets RCY_TRANSPLANT_CAUSE at the top of the script, so its bgwork arm reads the cause from
+# HF_RCY_TRANSPLANT_CAUSE, which the detach must export — set every time, empty included, so a nested
+# recycle never inherits an outer one's cause. The stubbed detach records what the watcher would see.
+cause_seen() { cat "$BATS_TEST_TMPDIR/cause" 2>/dev/null || true; }
+@test "[RED] recycle_fire exports the transplant cause to the watcher it detaches" {
+  fixture_normal_pane
+  setup_recycle
+  detach() { env | grep '^HF_RCY_TRANSPLANT_CAUSE=' > "$BATS_TEST_TMPDIR/cause"; printf '4242'; }
+  STUB_TTY=ttys000 RCY_TRANSPLANT_CAUSE=limit
+  run recycle_fire
+  [ -f "$BATS_TEST_TMPDIR/armed" ] || { echo "$output"; false; }
+  [ "$(cause_seen)" = "HF_RCY_TRANSPLANT_CAUSE=limit" ] || { cause_seen; false; }
+}
+
+@test "[RED] an EMPTY cause is exported too: a nested recycle never inherits the outer one's 'limit'" {
+  fixture_normal_pane
+  setup_recycle
+  detach() { env | grep '^HF_RCY_TRANSPLANT_CAUSE=' > "$BATS_TEST_TMPDIR/cause"; printf '4242'; }
+  export HF_RCY_TRANSPLANT_CAUSE=limit
+  # shellcheck disable=SC2034  # RCY_TRANSPLANT_CAUSE is read by the eval'd recycle_fire
+  STUB_TTY=ttys000 RCY_TRANSPLANT_CAUSE=""
+  run recycle_fire
+  [ -f "$BATS_TEST_TMPDIR/armed" ] || { echo "$output"; false; }
+  [ "$(cause_seen)" = "HF_RCY_TRANSPLANT_CAUSE=" ] || { cause_seen; false; }
+}
+
 # ── 5. THE DETECTION HALF — pane_enumerated, so a pane that dies anyway is seen in seconds ───────
 
 stub_it2() {  # $1 = the payload `session list --json` should print
