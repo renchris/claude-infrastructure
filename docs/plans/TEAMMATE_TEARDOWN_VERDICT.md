@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 ---
 
 # Teammate teardown verdict — a lead-ordered teardown is a retirement, not a crash
@@ -45,3 +45,8 @@ Original plan for this phase, kept for the record:
 - In arm 1.5, the sid-keyed marker check ignores `mode`, so a teammate-written `teammate-idle` marker absolves any death of its sid.
 - `handle_crash`'s team scan (~:1973) omits `~/.claude-quaternary/teams`.
 - `skills/agent-teams/SKILL.md` § Shutdown Protocol has stale claims: "idle members never answer" was overturned by the W5 probe, and the skill trusts an `idle_notification` that can be stale. That staleness is how cvf-docs was killed with 3 uncommitted files (kept by its lead in 9bab03777).
+
+## Phase 3 — Land + converge — DONE (`fca2c4f60`, 2026-10-10)
+- Landed via project `scripts/ship-land.sh`: 11 paths content-verified on origin/main, stranded-sweep clean. The selector answered FULL, so no smoke ran at land; the post-land verifier owns the full-suite claim.
+- Converged with `CC_DEPLOY_MAX_LAG_COMMITS=0 bash scripts/deploy-live.sh`: the live layer is at trunk tip fca2c4f60.
+- `cc-teardown.bats` test 1 (the selftest count) failed once under load 150–700. `bin/cc-teardown --selftest` run directly gives 27/27 green, and `cc-teardown` is outside this diff.
