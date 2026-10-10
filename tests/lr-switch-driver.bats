@@ -71,7 +71,10 @@ tui_stub() {
 cc_tui_composer() { tr -d '[:space:]' < "$BATS_TEST_TMPDIR/composer-\$1" 2>/dev/null; return 0; }
 cc_tui_composer_text() { cat "$BATS_TEST_TMPDIR/composer-\$1" 2>/dev/null; return 0; }
 cc_tui_clear() { [ "\${CLEAR_RC:-0}" = 0 ] || return "\$CLEAR_RC"; : > "$BATS_TEST_TMPDIR/composer-\$1"; }
-cc_tui_type() { printf 'paste:%s|%s\n' "\$1" "\$(cat "\$2")" >> "$BATS_TEST_TMPDIR/type.log"; cat "\$2" >> "$BATS_TEST_TMPDIR/composer-\$1"; [ -z "\${CLIP_IMAGE:-}" ] || printf '[Image #1]' >> "$BATS_TEST_TMPDIR/composer-\$1"; }
+cc_tui_type() { printf 'paste:%s|%s\n' "\$1" "\$(cat "\$2")" >> "$BATS_TEST_TMPDIR/type.log"
+  # A bracketed paste of an existing image's path ATTACHES it (Claude Code 2.1.293, round2/M1b-pty.md).
+  case "\$(cat "\$2")" in /*.png) [ -f "\$(cat "\$2")" ] && { printf '[Image #1] ' >> "$BATS_TEST_TMPDIR/composer-\$1"; return 0; } ;; esac
+  cat "\$2" >> "$BATS_TEST_TMPDIR/composer-\$1"; [ -z "\${CLIP_IMAGE:-}" ] || printf '[Image #1]' >> "$BATS_TEST_TMPDIR/composer-\$1"; }
 cc_tui_type_keys() { case "\$(head -c 1 "\$2")" in '!'|'#'|'/'|'?'|'&') return 2 ;; esac; printf 'keys:%s|%s\n' "\$1" "\$(cat "\$2")" >> "$BATS_TEST_TMPDIR/type.log"; cat "\$2" >> "$BATS_TEST_TMPDIR/composer-\$1"; }
 cc_tui_submit() {
   [ ! -s "$BATS_TEST_TMPDIR/composer-\$1" ] || return 3
@@ -382,6 +385,37 @@ DRAFT='I mean http://localhost:3334 cant be reached'
   [ "$(jq -r .verdict "$r")" = SWITCHED ] || { cat "$r"; false; }
   [[ "$(cat "$BATS_TEST_TMPDIR/type.log")" == "paste:584|/compact"* ]] || { cat "$BATS_TEST_TMPDIR/type.log"; false; }
   [[ "$(jq -r .reason "$r")" == *"reads differently"*"saved at"* ]] || { cat "$r"; false; }
+}
+
+@test "D6e [RED] an image chip in the draft is never typed back as text: its saved bytes are re-attached by a paste of their path, then the words go back" {
+  tui_stub; export SUBMIT_ACT=flip LRU_COMPOSER=on LRU_SWITCH_DRAFT_SETTLE_S=0
+  sess 585 68686868-0000-4000-8000-000000000005
+  export CC_CARRY_CC_TMPDIR="$BATS_TEST_TMPDIR/cctmp"
+  img="$CC_CARRY_CC_TMPDIR/claude-$(id -u)/-x/68686868-0000-4000-8000-000000000005/images"; mkdir -p "$img"
+  printf 'PNGBYTES' > "$img/2.png"
+  printf '%s' "see [Image #2] this" > "$BATS_TEST_TMPDIR/composer-585"
+  run bash "$LRU" --switch-drive 68686868-0000-4000-8000-000000000005 585 next2 --req-id r6f
+  r="$LRU_STATE/results/switch-68686868-0000-4000-8000-000000000005.json"
+  [ "$(jq -r .verdict "$r")" = SWITCHED ] || { echo "$output"; cat "$r"; false; }
+  saved="$(cat "$LRU_STATE"/switch/68686868-*/images.txt)"
+  [[ "$saved" == "$LRU_STATE"/switch/68686868-*/2.png ]] || { echo "$saved"; false; }
+  cmp -s "$saved" "$img/2.png" || false
+  [ "$(cat "$BATS_TEST_TMPDIR/type.log")" = "$(printf 'paste:585|%s\nkeys:585|see this' "$saved")" ] || { cat "$BATS_TEST_TMPDIR/type.log"; false; }
+  [ "$(tr -d '[:space:]' < "$BATS_TEST_TMPDIR/composer-585")" = '[Image#1]seethis' ] || { cat "$BATS_TEST_TMPDIR/composer-585"; false; }
+  [[ "$(jq -r .reason "$r")" == *"draft was carried"* ]] || { cat "$r"; false; }
+}
+
+@test "D6f [RED] a pasted block (content only in the session's memory) is never cleared out of a live pane: composer-occupied holds, nothing typed" {
+  tui_stub; export SUBMIT_ACT=flip LRU_COMPOSER=on LRU_SWITCH_DRAFT_SETTLE_S=0
+  sess 586 68686868-0000-4000-8000-000000000006
+  printf '%s' "also fix the margin[Pasted text #1 +19 lines]" > "$BATS_TEST_TMPDIR/composer-586"
+  run bash "$LRU" --switch-drive 68686868-0000-4000-8000-000000000006 586 next2 --req-id r6g
+  r="$LRU_STATE/results/switch-68686868-0000-4000-8000-000000000006.json"
+  [ "$(jq -r .verdict "$r")" = NOTMOVED ] || { echo "$output"; cat "$r"; false; }
+  [[ "$(jq -r .reason "$r")" == *"composer-occupied"* ]] || { cat "$r"; false; }
+  [ "$(cat "$BATS_TEST_TMPDIR/composer-586")" = "also fix the margin[Pasted text #1 +19 lines]" ] || false
+  [ ! -s "$BATS_TEST_TMPDIR/submit.log" ] || { cat "$BATS_TEST_TMPDIR/submit.log"; false; }
+  [ ! -s "$BATS_TEST_TMPDIR/type.log" ] || { cat "$BATS_TEST_TMPDIR/type.log"; false; }
 }
 
 @test "D6c a box that cannot be cleared moves nothing and keeps the draft; LRU_SWITCH_CARRY_DRAFT=off holds as before" {

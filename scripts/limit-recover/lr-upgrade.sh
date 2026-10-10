@@ -59,6 +59,7 @@ LRU_CLAUDE_BIN_CMD="${LRU_CLAUDE_BIN_CMD:-$LRU_DIR/../../bin/cc-claude-bin}"
 LRU_HF_BIN="${LRU_HF_BIN:-$LRU_DIR/../handoff-fire.sh}"
 LRU_FIRE_RESUME="${LRU_FIRE_RESUME:-$LRU_DIR/lr-fire-resume.sh}"
 LRU_TUI_LIB="${LRU_TUI_LIB:-$LRU_DIR/../lib/cc-tui.sh}"
+LRU_CARRY_LIB="${LRU_CARRY_LIB:-$LRU_DIR/../lib/composer-carry.sh}"
 LRU_CA_LIB="${LRU_CA_LIB:-$LRU_DIR/../lib/capacity-admit.sh}"
 LRU_LR_LIB="${LRU_LR_LIB:-$LRU_DIR/lr-lib.sh}"
 # THE ONE LIVE-MEMBER TEST (FLEET_V2 W6, D4.1): scripts/limit-recover/lr-team.sh, shared with the
@@ -1113,46 +1114,32 @@ lru_resume_settled() { # $1=sid $2=since epoch → 0 when a resume run started a
   case "$st" in submitted|FAILED:*) return 0 ;; esac
   return 1
 }
+_lru_draft_ready() { # $1=sid or "" $2=since $3=transcript → 0 the pane may take the draft back
+  { [ -z "$1" ] || lru_resume_settled "$1" "$2"; } && [ -n "$3" ] && lru_at_rest "$3"
+}
 lru_draft_restore() { # $1=pane $2=draft file $3=transcript $4=sid or "" (no move: no resume to wait for) $5=since → note on stdout; rc 0 proven
-  local pane="$1" f="$2" tx="$3" sid="$4" since="$5" calm=0 c want got deadline
-  deadline=$(( $(date +%s) + ${LRU_SWITCH_DRAFT_WAIT_S:-300} ))
-  want="$(LC_ALL=C tr -d '[:space:]' < "$f")"
-  while :; do
-    if { [ -z "$sid" ] || lru_resume_settled "$sid" "$since"; } && [ -n "$tx" ] && lru_at_rest "$tx"; then
-      calm=$((calm + 1))
-    else
-      calm=0
-    fi
-    if [ "$calm" -ge 2 ]; then
-      # shellcheck disable=SC1090
-      c="$( . "$LRU_TUI_LIB" && cc_tui_composer "$pane")" && [ -z "$c" ] && break
-    fi
-    if [ "$(date +%s)" -ge "$deadline" ]; then
-      printf 'your draft was NOT typed back (pane %s never settled with an empty prompt box); it is saved at %s' "$pane" "$f"; return 1
-    fi
-    sleep "${LRU_SWITCH_POLL_S:-5}"
-  done
-  # As KEYSTROKES, never a paste where it can be helped: a paste attaches whatever image is on the
-  # clipboard (pane 33, 2026-10-03: the draft came back with "[Image #2]" after it). A draft the
-  # keystroke path refuses (a leading mode character, a newline) falls back to the paste, and the
-  # read-back below reports it if an image rode along. The settle covers the image chip, which
-  # renders a moment after the text.
-  local trc=0
+  # The wait, the keystrokes-not-paste rule, the image re-attach and the read-back live in
+  # lib/composer-carry.sh (cc_carry_putback), moved there 2026-10-10 to serve handoff-fire's transplant
+  # recycle too (lr-stranded-husk C4/C6); the notes stay this verb's. The images go back FIRST, each by
+  # a bracketed paste of its saved path, then the words as keystrokes (pane 33, 2026-10-03: a text
+  # paste attaches whatever image is on the clipboard).
+  local pane="$1" f="$2" tx="$3" sid="$4" since="$5" rc=0 d short=""
+  d="$(dirname "$f")"
   # shellcheck disable=SC1090
-  ( . "$LRU_TUI_LIB" && cc_tui_type_keys "$pane" "$f" ) >/dev/null 2>&1 || trc=$?
-  # shellcheck disable=SC1090
-  if [ "$trc" = 2 ] && ! ( . "$LRU_TUI_LIB" && cc_tui_type "$pane" "$f" ) >/dev/null 2>&1; then trc=1
-  elif [ "$trc" = 2 ]; then trc=0; fi
-  if [ "$trc" != 0 ]; then
-    printf 'your draft was NOT typed back (the send failed); it is saved at %s' "$f"; return 1
-  fi
-  sleep "${LRU_SWITCH_DRAFT_SETTLE_S:-3}"
-  # shellcheck disable=SC1090
-  got="$( . "$LRU_TUI_LIB" && cc_tui_composer "$pane")" || got=""
-  if [ "$got" = "$want" ]; then
-    printf 'your draft was carried and is back in the prompt box, unsent (copy at %s)' "$f"; return 0
-  fi
-  printf 'your draft was typed back but the prompt box reads differently; the original is saved at %s' "$f"; return 1
+  ( export CC_CARRY_SETTLE_S="${LRU_SWITCH_DRAFT_SETTLE_S:-3}"; . "$LRU_TUI_LIB" && . "$LRU_CARRY_LIB" \
+      && cc_carry_putback "$pane" "$d" "${LRU_SWITCH_DRAFT_WAIT_S:-300}" "${LRU_SWITCH_POLL_S:-5}" _lru_draft_ready "$sid" "$since" "$tx" ) >/dev/null 2>&1 || rc=$?
+  short="$(LC_ALL=C grep -v '^attached:' "$d/putback.txt" 2>/dev/null | tr '\n' ' ')" || short=""
+  short="${short% }"
+  case "$rc" in
+    0) printf 'your draft was carried and is back in the prompt box, unsent (copy at %s)' "$f" ;;
+    5) printf 'your draft was carried and is back in the prompt box, unsent, except what could not be put back: %s (copy at %s)' "$short" "$f" ;;
+    1) printf 'your draft was NOT typed back (pane %s never settled with an empty prompt box); it is saved at %s' "$pane" "$f" ;;
+    3) printf 'your draft was typed back but the prompt box reads differently; the original is saved at %s' "$f" ;;
+    4) printf 'your draft held nothing that could be put back (%s); it is saved at %s' "${short:-no text}" "$f" ;;
+    *) printf 'your draft was NOT typed back (the send failed, rc %s); it is saved at %s' "$rc" "$f" ;;
+  esac
+  [ "$rc" = 0 ] && return 0
+  return 1
 }
 
 # §6 vocabulary, the driver's half: SWITCHED (the flip was observed: proven=yes) · NOTMOVED (nothing
@@ -1193,7 +1180,7 @@ lru_switch_drive() { # $1=sid $2=pane $3=target $4=requested_by $5=req id [$6=un
 }
 _lru_switch_drive_run() {
   local sid="$1" pane="$2" target="$3" by="${4:-?}" req="${5:-}" until_ts="${6:-0}" mutex row from cfg pid run pf src=0 word
-  local tcfg deadline t0 racct rsid tx tpre calm=0 draft="" df="" dnote=""; run=""
+  local tcfg deadline t0 racct rsid tx tpre calm=0 df="" dnote=""; run=""
   if ! tcfg="$(lru_acct_cfg "$target")"; then
     lru_switch_result "$sid" "$pane" NOTMOVED - "$target" "target '$target' is not an account this map knows (nothing typed)" "$req" "$by"; return 3
   fi
@@ -1215,14 +1202,16 @@ EOF
     lru_switch_bg_drive "$sid" "$pane" "$target" "$tcfg" "$from" "$cfg" "$pid" "$by" "$req"; local brc=$?
     rm -rf "$mutex"; return "$brc"
   fi
-  if [ "$word" = composer-occupied ] && [ "${LRU_SWITCH_CARRY_DRAFT:-on}" != off ] && [ -f "$LRU_TUI_LIB" ]; then
+  if [ "$word" = composer-occupied ] && [ "${LRU_SWITCH_CARRY_DRAFT:-on}" != off ] && [ -f "$LRU_TUI_LIB" ] && [ -f "$LRU_CARRY_LIB" ]; then
     run="$LRU_STATE/switch/${sid:0:8}-$(date -u +%Y%m%dT%H%M%SZ)"
     mkdir -p "$run" 2>/dev/null || true
+    # cc_carry_save copies each [Image #N]'s bytes beside the text. Any rc but 0 keeps the hold: an
+    # empty or unreadable box, and rc 3 — a [Pasted text #N] block, whose content lives only in the
+    # live session's memory, so clearing it would destroy it (2026-10-10, lr-stranded-husk C4).
     # shellcheck disable=SC1090
-    draft="$( . "$LRU_TUI_LIB" && cc_tui_composer_text "$pane")" || draft=""
-    if [ -n "$draft" ]; then
+    if ( . "$LRU_TUI_LIB" && . "$LRU_CARRY_LIB" \
+           && cc_carry_save "$pane" "$run" "$(cc_carry_image_dir "$(lru_transcript "$cfg" "$sid" || true)" "$sid")" ) >/dev/null 2>&1; then
       df="$run/draft.txt"
-      printf '%s' "$draft" > "$df"
       # shellcheck disable=SC1090
       if [ -s "$df" ] && ( . "$LRU_TUI_LIB" && cc_tui_clear "$pane" ) >/dev/null 2>&1; then
         word=move
