@@ -98,10 +98,12 @@ root = sys.argv[1]
 sys.path[:0] = [root + "/scripts/research-kit/lib", root + "/scripts/lib"]
 import operator_sign
 text = open(root + "/skills/research-program/SKILL.md").read()
-named = re.findall(r"cc-signoff (research:<slug>/[A-Za-z<>/_-]+)", text)
+# third-read names a <set>.<stratum> target, so one inner dot is part of the action
+named = re.findall(r"cc-signoff (research:<slug>/[A-Za-z<>/_-]+(?:\.[A-Za-z<>_-]+)?)", text)
 seen = set()
 for n in named:
-    p = operator_sign.parse_row(n.replace("<slug>", "demo").replace("<DECISION-ID>", "DR-01"))
+    p = operator_sign.parse_row(n.replace("<slug>", "demo").replace("<DECISION-ID>", "DR-01")
+                                .replace("<set>.<stratum>", "v1.other"))
     assert p, n
     seen.add(p["action"])
 assert seen == set(operator_sign.ACTIONS), (seen, operator_sign.ACTIONS)  # E3c: + extend-decision (§12.3)
