@@ -113,6 +113,65 @@ EOF
   [ "$status" -eq 2 ]
 }
 
+# census repin (RED-proof: each of the four below FAILS on 0c6956972, the kit before the verb: no
+# `repin` subcommand, and row 2 counted and re-ran superseded methods).
+cfield() {
+  /usr/bin/python3 -c "import json; d=json.load(open('$REC/census/callers.json')); print(json.dumps($1))"
+}
+
+@test "census repin: a population that grew after a method was pinned fails row 2 until the stale method is superseded" {
+  # x reads the live plan (a, b, c); y is pinned to the old one (a, b). c is extra to the census.
+  jedit census/callers.json 'd["methods"][0]["cmd"] = "printf \"a\\nb\\nc\\n\""'
+  [ "$(rowstat 2)" = "FAIL" ]
+  run "$CR" census repin --program demo --pop callers --method z --supersedes y --count 3 \
+    --cmd 'printf "c\nb\na\n"' --why "merge added c"
+  [ "$status" -eq 0 ]
+  [ "$(rowstat 2)" = "PASS" ]
+  [ "$(cfield "[m['id'] for m in d['members']]")" = '["a", "b", "c"]' ]
+  [ "$(cfield "[(m['agent'], m.get('superseded_by'), m.get('superseded_why')) for m in d['methods']]")" = \
+    '[["x", null, null], ["y", "z", "merge added c"], ["z", null, null]]' ]
+}
+
+@test "census repin: a member no active method lists moves to retired_members and row 2 passes" {
+  # y reads the live plan, where a ruling removed b; x is pinned to the old one (a, b).
+  jedit census/callers.json 'd["methods"][1]["cmd"] = "echo a"'
+  [ "$(rowstat 2)" = "FAIL" ]
+  run "$CR" census repin --program demo --pop callers --method x2 --supersedes x --count 1 \
+    --cmd 'echo a' --why "ruling removed b"
+  [ "$status" -eq 0 ]
+  [ "$(cfield "[m['id'] for m in d['members']]")" = '["a"]' ]
+  [ "$(cfield "[(m['id'], m['why']) for m in d['retired_members']]")" = '[["b", "ruling removed b"]]' ]
+  [ "$(rowstat 2)" = "PASS" ]
+}
+
+@test "census repin refuses an unknown or superseded OLD, a NEW that is already a method, an empty --why and disagreeing active methods, writing nothing" {
+  run "$CR" census repin --program demo --pop callers --method z --supersedes y --count 2 \
+    --cmd 'printf "a\nb\n"' --why "re-pinned"
+  [ "$status" -eq 0 ]
+  before="$(shasum "$REC/census/callers.json")"
+  refused() {
+    run "$CR" census repin --program demo --pop callers "$@"
+    [ "$status" -eq 2 ]
+    [ "$(shasum "$REC/census/callers.json")" = "$before" ]
+  }
+  refused --method w --supersedes nope --count 2 --cmd 'printf "a\nb\n"' --why r
+  [[ "$output" == *"no method 'nope'"* ]] || false
+  refused --method w --supersedes y --count 2 --cmd 'printf "a\nb\n"' --why r
+  [[ "$output" == *"already superseded by 'z'"* ]] || false
+  refused --method x --supersedes z --count 2 --cmd 'printf "a\nb\n"' --why r
+  [[ "$output" == *"'x' already recorded"* ]] || false
+  refused --method w --supersedes z --count 2 --cmd 'printf "a\nb\n"' --why " "
+  [[ "$output" == *"--why is empty"* ]] || false
+  refused --method w --supersedes z --count 1 --cmd 'echo a' --why r
+  [[ "$output" == *"disagree"*"w lacks ['b']"* ]] || false
+}
+
+@test "row 2: one active method plus one superseded fails the two-method rule" {
+  jedit census/callers.json 'd["methods"][1]["superseded_by"] = "z"'
+  [ "$(rowstat 2)" = "FAIL" ]
+  rowtext 2 | grep -q "1 method(s) active (1 superseded)"
+}
+
 @test "premise and source add append once; a duplicate id is refused and nothing is written" {
   local exp
   exp="$(date -u -v+1440H +%Y-%m-%dT%H:%M:%SZ)"

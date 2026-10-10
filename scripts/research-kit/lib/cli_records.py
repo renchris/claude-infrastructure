@@ -1,12 +1,13 @@
 """cli_records.py — the record verbs of bin/cc-research (REPORT.md §8 item 9) and concern triage
 (§5.1, §5.2, §10 item 8); see cli.py for the verb table.
 
-  census add|critic · premise add · source add · decision add|tally|rule|show
+  census add|repin|critic · premise add · source add · decision add|tally|rule|show
   concern add|list · park · triage
 
 Every record here is append-only (kit.append_jsonl); a census is one JSON file per population,
-rewritten atomically, whose methods are never overwritten. Conviction is never typed: the lead
-writes a tally and kit.conviction derives the number (§3.5), so there is no --conviction flag.
+rewritten atomically, whose methods are superseded (census repin), never overwritten. Conviction
+is never typed: the lead writes a tally and kit.conviction derives the number (§3.5), so there is
+no --conviction flag.
 Triage asks a blind rater for ONE §5.2 bucket per pending challenge; the rater's prompt names every
 bucket with its test and never says which ones count. Python 3.9-safe, standard library only.
 """
@@ -20,7 +21,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import activities
 import kit
@@ -127,8 +128,6 @@ def census_file(r: Path, pop: str) -> Path:
 
 
 def census_add(a: argparse.Namespace) -> int:
-    from gate_rows_a import run_cmd  # the same invocation gate row 2 re-runs
-
     r = recs(a)
     f = census_file(r, a.pop)
     c = kit.read_json(f) or {
@@ -141,8 +140,29 @@ def census_add(a: argparse.Namespace) -> int:
         raise kit.KitError(
             f"{a.pop}: method {a.method!r} already recorded; a method is never overwritten"
         )
+    items = method_items(r, a)
+    c.setdefault("methods", []).append(
+        {"agent": a.method, "cmd": a.cmd, "count": a.count, "at": kit.now_iso()}
+    )
+    have = {str(m.get("id")) for m in c.get("members") or []}
+    c.setdefault("members", []).extend({"id": i} for i in items if i not in have)
+    kit.write_json_atomic(f, c)
+    print(
+        f"census/{a.pop}.json: method {a.method} ({a.count}), {len(c['methods'])} method(s)"
+    )
+    return 0
+
+
+def census_cwd(r: Path) -> Path:
     cwd = Path(frame(r).get("deliverable_repo") or r)
-    rc, out = run_cmd(a.cmd, cwd if cwd.is_dir() else r)
+    return cwd if cwd.is_dir() else r
+
+
+def method_items(r: Path, a: argparse.Namespace) -> List[str]:
+    """Run --cmd as gate row 2 will, and return the member ids --count is checked against."""
+    from gate_rows_a import run_cmd  # the same invocation gate row 2 re-runs
+
+    rc, out = run_cmd(a.cmd, census_cwd(r))
     if rc != 0:
         raise kit.KitError(
             f"{a.pop}: --cmd exited {rc}; gate row 2 re-runs it and needs exit 0"
@@ -153,14 +173,76 @@ def census_add(a: argparse.Namespace) -> int:
         raise kit.KitError(
             f"{a.pop}: --count {a.count}, but method {a.method!r} lists {len(items)}"
         )
-    c.setdefault("methods", []).append(
-        {"agent": a.method, "cmd": a.cmd, "count": a.count, "at": kit.now_iso()}
-    )
-    have = {str(m.get("id")) for m in c.get("members") or []}
-    c.setdefault("members", []).extend({"id": i} for i in items if i not in have)
+    return items
+
+
+def census_repin(a: argparse.Namespace) -> int:
+    """Supersede one method with a re-pinned one and re-baseline the members to what every
+    active method now lists. Nothing is deleted: OLD stays in `methods` marked superseded, and a
+    member no active method lists moves to `retired_members`. All-or-nothing: any refusal
+    leaves the census file untouched."""
+    from gate_rows_a import active_methods, run_cmd
+
+    r = recs(a)
+    f = census_file(r, a.pop)
+    c = kit.read_json(f)
+    if not c:
+        raise kit.KitError(f"{a.pop}: no census yet; `census add` first")
+    if not a.why.strip():
+        raise kit.KitError(f"{a.pop}: --why is empty; a re-pin records its reason")
+    methods = c.get("methods") or []
+    old = next((m for m in methods if m.get("agent") == a.supersedes), None)
+    if old is None:
+        raise kit.KitError(f"{a.pop}: no method {a.supersedes!r} to supersede")
+    if old.get("superseded_by"):
+        raise kit.KitError(
+            f"{a.pop}: method {a.supersedes!r} is already superseded by "
+            f"{old['superseded_by']!r}"
+        )
+    if any(m.get("agent") == a.method for m in methods):
+        raise kit.KitError(
+            f"{a.pop}: method {a.method!r} already recorded; a method is never overwritten"
+        )
+    items = method_items(r, a)
+    at = kit.now_iso()
+    old.update(superseded_by=a.method, superseded_at=at, superseded_why=a.why)
+    new = {"agent": a.method, "cmd": a.cmd, "count": a.count, "at": at}
+    methods.append(new)
+    lists: Dict[str, Set[str]] = {}
+    for m in active_methods(c):
+        if m is new:
+            lists[a.method] = set(items)
+            continue
+        rc, out = run_cmd(str(m.get("cmd") or "false"), census_cwd(r))
+        if rc != 0:
+            raise kit.KitError(
+                f"{a.pop}: active method {m.get('agent')!r} exited {rc} on re-run"
+            )
+        lists[str(m.get("agent"))] = {
+            ln.strip() for ln in out.splitlines() if ln.strip()
+        }
+    union: Set[str] = set().union(*lists.values())
+    differ = [
+        f"{n} lacks {sorted(union - s)}" for n, s in sorted(lists.items()) if s != union
+    ]
+    if differ:
+        raise kit.KitError(
+            f"{a.pop}: the active methods disagree, so the re-pin is refused: "
+            + "; ".join(differ)
+        )
+    kept = [m for m in c.get("members") or [] if str(m.get("id")) in union]
+    gone = [m for m in c.get("members") or [] if str(m.get("id")) not in union]
+    have = {str(m.get("id")) for m in kept}
+    added = sorted(union - have)
+    c["members"] = kept + [{"id": i} for i in added]
+    retired = [x for x in c.get("retired_members") or [] if x.get("id") not in union]
+    retired += [{"id": str(m.get("id")), "at": at, "why": a.why} for m in gone]
+    if retired or "retired_members" in c:
+        c["retired_members"] = retired
     kit.write_json_atomic(f, c)
     print(
-        f"census/{a.pop}.json: method {a.method} ({a.count}), {len(c['methods'])} method(s)"
+        f"census/{a.pop}.json: method {a.method} supersedes {a.supersedes}; "
+        f"{len(c['members'])} member(s), +{len(added)} added, {len(gone)} retired"
     )
     return 0
 
@@ -592,6 +674,28 @@ def add_verbs(sub: Any) -> None:
     p.add_argument("--count", required=True, type=int)
     p.add_argument(
         "--cmd", required=True, help="the generating command gate row 2 re-runs"
+    )
+    p.add_argument(
+        "--items-file",
+        help="the member ids, one per line (default: the command's output)",
+    )
+    p = verb(
+        g,
+        "repin",
+        census_repin,
+        "supersede a stale method with a re-pinned one; members no active method lists retire",
+    )
+    p.add_argument("--pop", required=True)
+    p.add_argument("--method", required=True, help="the new method's agent name")
+    p.add_argument(
+        "--supersedes", required=True, help="the active method this one replaces"
+    )
+    p.add_argument("--count", required=True, type=int)
+    p.add_argument(
+        "--cmd", required=True, help="the generating command gate row 2 re-runs"
+    )
+    p.add_argument(
+        "--why", required=True, help="why the old method is stale (recorded on it)"
     )
     p.add_argument(
         "--items-file",

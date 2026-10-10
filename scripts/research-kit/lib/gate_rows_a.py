@@ -61,6 +61,11 @@ def run_cmd(
         return 127, str(e)
 
 
+def active_methods(census: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """A census's methods minus the superseded ones (`census repin`), which stay recorded only."""
+    return [m for m in census.get("methods") or [] if not m.get("superseded_by")]
+
+
 def numberless_superlative(text: str) -> bool:
     return any(
         SUPERLATIVE.search(s) and not re.search(r"\d", s)
@@ -170,10 +175,15 @@ def row2(ctx: Ctx) -> Row:
         if not c:
             fails.append(f"{pop}: no census file")
             continue
-        methods = c.get("methods") or []
+        # A superseded method is history, not evidence: it is neither re-run nor counted, and a
+        # retired member (census repin) is no longer expected in any re-run.
+        methods = active_methods(c)
         if len(methods) < 2:
+            sup = len(c.get("methods") or []) - len(methods)
             fails.append(
-                f"{pop}: {len(methods)} method(s); 2 independent methods are required"
+                f"{pop}: {len(methods)} method(s)"
+                + (f" active ({sup} superseded)" if sup else "")
+                + "; 2 independent methods are required"
             )
         stored: Set[str] = {str(m.get("id")) for m in c.get("members") or []}
         for m in methods:

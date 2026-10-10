@@ -40,6 +40,10 @@ Added 2026-10-05 (wave E3d): between `build-certified` and `closed` sits `implem
 - `premises.jsonl`, `sources.jsonl`, `census/<pop>.json`, `contact_matrix.json`, `residual.jsonl`, `trace.jsonl`,
   `holes.jsonl`, `changes.jsonl`: SYNTHESIS shapes. `residual.jsonl` `why_unreachable` adds the method-created classes
   `depth-cap`, `stage-budget-exhausted`, `stub-validated` (§10 item 7), each needing `owner_wave`, `due`, `closing_probe`.
+- `census/<pop>.json` additions (written only by `cc-research census repin`): a method may carry
+  `superseded_by: <agent>`, `superseded_at: ISO`, `superseded_why: <text>`; it stays in `methods`, and gate row 2
+  neither re-runs it nor counts it toward the 2 independent methods. `retired_members: [{id, at, why}]` holds members
+  no active method lists any more; they left `members` and gate row 2 does not expect them in a re-run.
 - `probes.jsonl` (written only by `lib/probe_run.py`, through `cc-research probe|self-test|doctor` or the `probe-run.sh` shim): SYNTHESIS shape; `evidence/<probe-id>/{cmd,stdout,stderr,env.json}`.
 - `budget.json`: `{"stages":{"1":{"started":ISO,"ended":ISO|null}, …}, "overrun_packets":{"<stage>":"<packet id>"}}`.
 - `rounds/<k>/matrix.json` (written by `round.sh`): `{round, kind:"frame-critique|certification|delta",
@@ -182,6 +186,11 @@ Cross-module contracts (a consumer depends on exactly these shapes):
   how many relays the operator overrode as `misrouted`. Written by `router.py` `prompt` on an accepted `misrouted`;
   read by `lib/cli_core.py` `overridden_relays`, which reads 0 when the file is missing or garbled. It holds one small
   object per program, so it does not grow.
+- `cc-research census repin --program P --pop POP --method NEW --supersedes OLD --count N --cmd CMD --why TEXT
+  [--items-file F]` re-baselines a census whose population changed after its methods were pinned: it runs CMD as
+  `census add` does, marks OLD superseded, appends NEW, re-runs every active method, and sets `members` to their
+  union (the rest move to `retired_members`). It refuses, writing nothing, on an unknown or already-superseded OLD, a
+  NEW that is already a method, an empty `--why`, or active methods that disagree.
 - `cc-research concern add --program P --text T [--raised-by operator|agent|sweep|build|rehearsal]` appends a
   `challenges.jsonl` row with `triage: "pending"`; `cc-research concern list --program P [--pending] [--json]`.
 - `cc-research triage --program P` buckets pending challenges by the §5.2 table through a blind rater, appending
