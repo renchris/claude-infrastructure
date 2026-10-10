@@ -2655,13 +2655,28 @@ hf_remote_source_pin() { # $1=pane $2=row pid $3=mode → 0 the row's process is
 hf_transcript_at_rest() { # $1=transcript → 0 at rest · 1 in flight · 2 unreadable
   local tx="${1:-}" last
   [ -n "$tx" ] && [ -f "$tx" ] && command -v jq >/dev/null 2>&1 || return 2
+  # A LOCAL COMMAND IS NOT A TURN (lr-stranded-husk, 2026-10-10). /exit, /model, /effort and /login
+  # write three main-thread user records and start no turn: the isMeta <local-command-caveat>, the
+  # <command-name> echo and the <local-command-stdout>. Trailing caveat-led triples are skipped, and
+  # the record before them decides. Across 4,948 transcripts, no model turn followed one. A custom
+  # command (<command-message>, then an isMeta prompt) and /goal (stdout with no caveat, then an
+  # isMeta prompt) DO start a turn and are never skipped. A file holding only the triple proves
+  # nothing and stays rc 1. lr-upgrade.sh's lru_at_rest has the same rule; keep the two in step.
   last="$(tail -n "${HF_REST_TAIL_LINES:-400}" "$tx" 2>/dev/null \
     | jq -rc --argjson win "${HF_STALE_NOTIF_S:-600}" 'select((.type=="assistant" or .type=="user") and ((.isSidechain // false)|not))
               | "\(.type) \(if .type == "assistant" and (.isApiErrorMessage // false) then "api-error" else (.message.stop_reason // "-") end)\(
                   if .type == "user" and ((.message.content | type) == "string")
                      and (.message.content | startswith("<task-notification>"))
                      and ((now - ((.timestamp // "") | sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch now))) > $win)
-                  then " stale-notification" else "" end)"' 2>/dev/null | tail -n 1)"
+                  then " stale-notification" else "" end)\(
+                  if .type == "user" and ((.message.content | type) == "string") then (.message.content
+                    | if startswith("<local-command-caveat>") then " local-caveat"
+                      elif startswith("<command-name>") or startswith("<command-message>") then " local-cmd"
+                      elif startswith("<local-command-stdout>") then " local-out"
+                      else "" end) else "" end)"' 2>/dev/null \
+    | awk '{ l[NR] = $0 } END { i = NR
+             while (i >= 3 && l[i] == "user - local-out" && l[i-1] == "user - local-cmd" && l[i-2] == "user - local-caveat") i -= 3
+             print ((i >= 1 && i < NR) ? l[i] : l[NR]) }')"
   [ -n "$last" ] || return 2
   [ "$last" = "assistant end_turn" ] && return 0
   # An API-error record ENDS the turn: Claude Code writes it once its own retries give up and returns
@@ -17688,15 +17703,24 @@ recycle_fire_armed() {
   # prompt straight past the composer reads above — the handed-off guard lets it through while the
   # admit is unconfirmed — and that prompt is exactly the turn /exit would kill. The source is still
   # the canonical transcript here (confirm has not run), so the read is of the file it lands in.
-  rcy_rest_tx=""
+  rcy_rest_tx="" rcy_rest_join=""
   if [ "$RCY_SAME_ACCOUNT" = 1 ]; then rcy_rest_tx="$HF_SA_TX"
   elif [ "$RCY_REMOTE" = 1 ] && [ "${RCY_FOCUSED:-no}" = yes ]; then
     rcy_rest_tx="${RCY_SRC_TX:-}"
     [ -z "$rcy_rest_tx" ] && [ -n "${HF_TS_TOMBSTONE:-}" ] && rcy_rest_tx="${HF_TS_TOMBSTONE%.HANDOFF.json}.jsonl"
     [ -n "$rcy_rest_tx" ] || rcy_rest_tx="<no source transcript resolved>"
+    # --husk: an EARLIER call's confirm renamed the source, so this path is the post-/exit stub, which
+    # holds no turn to judge. Read it JOINED with .handed-off, as hf_recycle_last_read does
+    # (lr-stranded-husk, 2026-10-10). A failed join keeps the stub, which holds: the old behaviour.
+    if [ "${RCY_HUSK:-0}" = 1 ] && [ -f "$rcy_rest_tx" ] && [ -f "$rcy_rest_tx.handed-off" ] \
+       && rcy_rest_join="$(mktemp "${TMPDIR:-/tmp}/hf-rest-husk-${RCY_TS_SID:0:8}.XXXXXX")"; then
+      if cat "$rcy_rest_tx.handed-off" "$rcy_rest_tx" > "$rcy_rest_join"; then rcy_rest_tx="$rcy_rest_join"
+      else rm -f "$rcy_rest_join"; rcy_rest_join=""; fi
+    fi
   fi
   if [ -n "$rcy_rest_tx" ]; then
     rcy_rest_rc=0; hf_transcript_at_rest "$rcy_rest_tx" || rcy_rest_rc=$?
+    [ -z "$rcy_rest_join" ] || rm -f "$rcy_rest_join"
     if [ "$rcy_rest_rc" != 0 ]; then
       hf_recycle_disarm
       emit_recycle_event recycle-held-busy "" "$SID" "$([ "$RCY_SAME_ACCOUNT" = 1 ] && echo same-account || echo focused-remote): transcript not at rest at the last read (rc $rcy_rest_rc): $rcy_rest_tx" || true

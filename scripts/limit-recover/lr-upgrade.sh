@@ -255,13 +255,22 @@ lru_headless() { # $1=argv → 0 when the process runs headless
 lru_at_rest() { # $1=transcript → 0 at rest · 1 in flight · 2 unreadable
   local tx="${1:-}" last
   [ -n "$tx" ] && [ -f "$tx" ] && command -v jq >/dev/null 2>&1 || return 2
+  # A trailing caveat-led local-command triple (/exit, /model …) is not a turn: see hf_transcript_at_rest.
   last="$(tail -n 400 "$tx" 2>/dev/null \
     | jq -rc --argjson win "${LRU_STALE_NOTIF_S:-600}" 'select((.type=="assistant" or .type=="user") and ((.isSidechain // false)|not))
               | "\(.type) \(if .type == "assistant" and (.isApiErrorMessage // false) then "api-error" else (.message.stop_reason // "-") end)\(
                   if .type == "user" and ((.message.content | type) == "string")
                      and (.message.content | startswith("<task-notification>"))
                      and ((now - ((.timestamp // "") | sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch now))) > $win)
-                  then " stale-notification" else "" end)"' 2>/dev/null | tail -n 1)"
+                  then " stale-notification" else "" end)\(
+                  if .type == "user" and ((.message.content | type) == "string") then (.message.content
+                    | if startswith("<local-command-caveat>") then " local-caveat"
+                      elif startswith("<command-name>") or startswith("<command-message>") then " local-cmd"
+                      elif startswith("<local-command-stdout>") then " local-out"
+                      else "" end) else "" end)"' 2>/dev/null \
+    | awk '{ l[NR] = $0 } END { i = NR
+             while (i >= 3 && l[i] == "user - local-out" && l[i-1] == "user - local-cmd" && l[i-2] == "user - local-caveat") i -= 3
+             print ((i >= 1 && i < NR) ? l[i] : l[NR]) }')"
   [ -n "$last" ] || return 2
   [ "$last" = "assistant end_turn" ] && return 0
   # An API-error record (stop_reason "stop_sequence") ends the turn: see hf_transcript_at_rest.

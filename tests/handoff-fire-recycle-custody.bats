@@ -890,6 +890,33 @@ SH
   [[ "$output" == *"past the at-rest read"* ]] || { echo "$output"; false; }
 }
 
+# lr-stranded-husk, 2026-10-10: a FOCUSED --husk. An earlier call's confirm renamed the source, so the
+# path this read resolves is the post-/exit stub alone, and it holds no turn to judge (rc 1 under any
+# rule). It is read joined with .handed-off, as hf_recycle_last_read does. Mutant: drop the join,
+# and a focused husk is held busy on every attempt.
+@test "F7b [RED] a FOCUSED --husk reads .handed-off joined with its /exit stub at the last moment: at rest on its limit" {
+  tail_world
+  local frag="$BATS_TEST_TMPDIR/rest-frag.sh"
+  {
+    sed -n '/A FOCUSED REMOTE TRANSPLANT GETS THE SAME READ/,/^  if \[ "\$RCY_SAME_ACCOUNT" = 1 \]; then$/p' "$HF"
+    echo '  :; fi'
+    echo 'echo "past the at-rest read"'
+  } > "$frag"
+  ltx "$TX.handed-off"
+  printf '%s\n' \
+    '{"type":"user","isMeta":true,"message":{"role":"user","content":"<local-command-caveat>Caveat: The command below was run directly in Claude Code.</local-command-caveat>"},"timestamp":"2026-10-10T04:19:57.639Z"}' \
+    '{"type":"user","message":{"role":"user","content":"<command-name>/exit</command-name>\n            <command-message>exit</command-message>\n            <command-args></command-args>"},"timestamp":"2026-10-10T04:19:57.638Z"}' \
+    '{"type":"user","message":{"role":"user","content":"<local-command-stdout>(no content)</local-command-stdout>"},"timestamp":"2026-10-10T04:19:57.638Z"}' \
+    > "$TX"
+  RCY_REMOTE=1 RCY_SAME_ACCOUNT=0 RCY_FOCUSED=yes RCY_HUSK=1 RCY_SRC_TX="$TX" run bash -c ". '$FUNCS'; hf_recycle_disarm() { :; }; . '$frag'"
+  [[ "$output" == *"past the at-rest read"* ]] || { echo "status=$status $output"; false; }
+  # Control: a prompt that reached the husk after its /exit is a turn in flight, and still holds.
+  printf '%s\n' '{"type":"user","timestamp":"2026-10-10T04:30:00.000Z","message":{"role":"user","content":"wait, one more thing"}}' >> "$TX"
+  RCY_REMOTE=1 RCY_SAME_ACCOUNT=0 RCY_FOCUSED=yes RCY_HUSK=1 RCY_SRC_TX="$TX" run bash -c ". '$FUNCS'; hf_recycle_disarm() { :; }; . '$frag'"
+  [ "$status" -eq 1 ] || { echo "status=$status $output"; false; }
+  [[ "$output" == *"recycle ABORTED at the last read"* ]] || { echo "$output"; false; }
+}
+
 # D7.6 THE FLIP (operator decision 7, ruled 2026-09-30): LR_MOVE_FOCUSED unset means ON, and only
 # =off holds (F and F3 pin that half). Mutants: `${LR_MOVE_FOCUSED:-off}` back in lr_focus_gate (the
 # recycle holds) · back in _it2_type_line (a CR over operator text on a focused pane).
@@ -1202,6 +1229,31 @@ wrows() { grep "\"class\":\"$1\"" "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/nul
   # Control: a stub whose tail is a user turn in flight really is mid-turn, and still holds.
   cat "$fix/user-prompt.jsonl" >> "$TX"
   ! hf_recycle_last_read || { echo "a turn in flight read as at rest"; false; }
+}
+
+# lr-stranded-husk, 2026-10-10 (186452ed). The /exit a recycle types re-creates the stub as a caveat,
+# an /exit echo and its stdout, then the guard's blocked-prompt system records. Joined with the
+# limited .handed-off, that is a session at rest on its limit, not a turn in flight. Mutant: drop
+# the triple skip in hf_transcript_at_rest, and the --husk last read holds HELD:busy for good.
+@test "14e [RED] an /exit-echo stub joined with a LIMITED .handed-off is at rest at the last read (186452ed)" {
+  tail_world
+  local fix="$REPO/tests/fixtures/lr-recon/jsonl"
+  unset -f lr_last_api_error; unset LR_LIB_LOADED   # tail_world preloaded lr-lib; load it again
+  # shellcheck disable=SC1091  # the REAL reader, not tail_world's stub
+  . "$REPO/scripts/limit-recover/lr-lib.sh"
+  cp "$fix/death-quota-limits.jsonl" "$TX.handed-off"
+  printf '%s\n' \
+    '{"type":"user","isSidechain":false,"isMeta":true,"message":{"role":"user","content":"<local-command-caveat>Caveat: The command below was run directly in Claude Code.</local-command-caveat>"},"timestamp":"2026-10-10T04:19:57.639Z"}' \
+    '{"type":"user","isSidechain":false,"message":{"role":"user","content":"<command-name>/exit</command-name>\n            <command-message>exit</command-message>\n            <command-args></command-args>"},"timestamp":"2026-10-10T04:19:57.638Z"}' \
+    '{"type":"user","isSidechain":false,"message":{"role":"user","content":"<local-command-stdout>(no content)</local-command-stdout>"},"timestamp":"2026-10-10T04:19:57.638Z"}' \
+    > "$TX"
+  cat "$fix/system-informational-retired-source.jsonl" >> "$TX"
+  printf '%s\n' "" > "$READS"
+  hf_recycle_last_read || { echo "refused: $HF_LR_REASON $HF_LR_WHAT"; false; }
+  # Control: a prompt typed into the husk after the /exit is a turn in flight, and still holds.
+  cat "$fix/user-prompt.jsonl" >> "$TX"
+  ! hf_recycle_last_read || { echo "a turn in flight read as at rest"; false; }
+  [ "$HF_LR_REASON" = busy ] || { echo "$HF_LR_REASON $HF_LR_WHAT"; false; }
 }
 
 # ── 15 · THE TARGET ANSWERED WITH A LIMIT: A VERDICT, NOT A WAIT ───────────────────────────────

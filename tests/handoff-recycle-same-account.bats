@@ -300,6 +300,79 @@ teammate_argv() { export PS_ARGS_OUT="/x/claude.exe --agent-id $TM_ID --agent-na
   [ "$status" -eq 2 ]
 }
 
+# ── A LOCAL COMMAND IS NOT A TURN (lr-stranded-husk, 2026-10-10, session 186452ed) ───────────────
+# Claude Code writes a local command (/exit, /model, /effort, /login) as three main-thread USER
+# records: the isMeta <local-command-caveat>, the <command-name> echo and the <local-command-stdout>.
+# No turn follows. Read as a trailing user record, the /exit a recycle types counted as a turn in
+# flight, so the --husk last read of the stub joined with .handed-off held HELD:busy for good.
+# Commands that DO start a turn stay in flight: a custom command writes <command-message> and then
+# an isMeta prompt, and /goal writes <command-name>, stdout and an isMeta prompt, with no caveat.
+local_cmd() { # $1=command (/exit) $2=stdout text → the caveat-led triple, in the shape 2.1.293 writes
+  rec '{"type":"user","isMeta":true,"message":{"role":"user","content":"<local-command-caveat>Caveat: The command below was run directly in Claude Code.</local-command-caveat>"},"timestamp":"2026-09-22T10:00:10Z"}'
+  rec "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"<command-name>$1</command-name>\\n            <command-message>${1#/}</command-message>\\n            <command-args></command-args>\"},\"timestamp\":\"2026-09-22T10:00:10Z\"}"
+  rec "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"<local-command-stdout>$2</local-command-stdout>\"},\"timestamp\":\"2026-09-22T10:00:10Z\"}"
+}
+load_both_rest() {
+  load_rest
+  local lru="$BATS_TEST_TMPDIR/lru.sh"
+  awk '/^lru_at_rest\(\) \{/,/^\}/' "$BATS_TEST_DIRNAME/../scripts/limit-recover/lr-upgrade.sh" > "$lru"
+  [ -s "$lru" ] || { echo "lru_at_rest not found"; false; }
+  # shellcheck disable=SC1090
+  . "$lru"
+}
+both_rc() { # $1=expected rc → both mirrors return it on $TX
+  run hf_transcript_at_rest "$TX"
+  [ "$status" -eq "$1" ] || { echo "hf rc=$status, want $1"; cat "$TX"; return 1; }
+  run lru_at_rest "$TX"
+  [ "$status" -eq "$1" ] || { echo "lru rc=$status, want $1"; cat "$TX"; return 1; }
+}
+
+@test "[RED] at-rest oracle: a local-command triple (/exit) after end_turn or a limit is REST, in both mirrors" {
+  load_both_rest
+  at_rest_tx; local_cmd /exit "(no content)"; both_rc 0
+  # 186452ed: the limit record, then the /exit the recycle typed
+  : > "$TX"; cat "$BATS_TEST_DIRNAME/fixtures/lr-recon/jsonl/death-quota-limits.jsonl" >> "$TX"
+  local_cmd /exit "(no content)"; both_rc 0
+  # two local commands in a row
+  at_rest_tx; local_cmd /model "Set model to Opus"; local_cmd /exit "Bye!"; both_rc 0
+}
+
+@test "at-rest oracle: the record before a local-command triple decides, and a command that starts a turn is in flight" {
+  load_both_rest
+  # a turn in flight before the triple stays in flight
+  at_rest_tx
+  rec '{"type":"assistant","message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"tool_use"}]},"timestamp":"2026-09-22T10:00:05Z"}'
+  local_cmd /model "Set model to Opus"; both_rc 1
+  # a prompt typed after the triple is a turn
+  at_rest_tx; local_cmd /model "Set model to Opus"
+  rec '{"type":"user","message":{"role":"user","content":"please continue"},"timestamp":"2026-09-22T10:00:12Z"}'
+  both_rc 1
+  # a stub holding ONLY the triple proves nothing: rc 1, as before
+  : > "$TX"; local_cmd /exit "(no content)"; both_rc 1
+  # a custom slash command: the <command-message> echo, then the isMeta prompt that starts its turn
+  at_rest_tx
+  rec '{"type":"user","message":{"role":"user","content":"<command-message>limit-recover</command-message>\n<command-name>/limit-recover</command-name>"},"timestamp":"2026-09-22T10:00:10Z"}'
+  both_rc 1
+  rec '{"type":"user","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"# /limit-recover"}]},"timestamp":"2026-09-22T10:00:10Z"}'
+  both_rc 1
+  # /goal: stdout with NO caveat, then the isMeta prompt; in flight at every step, and after a local command too
+  at_rest_tx
+  rec '{"type":"user","message":{"role":"user","content":"<command-name>/goal</command-name>\n<command-message>goal</command-message>\n<command-args>x</command-args>"},"timestamp":"2026-09-22T10:00:10Z"}'
+  rec '{"type":"user","message":{"role":"user","content":"<local-command-stdout>Goal set: x</local-command-stdout>"},"timestamp":"2026-09-22T10:00:10Z"}'
+  both_rc 1
+  rec '{"type":"user","isMeta":true,"message":{"role":"user","content":"A session-scoped Stop hook is now active"},"timestamp":"2026-09-22T10:00:10Z"}'
+  both_rc 1
+  at_rest_tx; local_cmd /effort "Set effort to high"
+  rec '{"type":"user","message":{"role":"user","content":"<command-name>/goal</command-name>\n<command-message>goal</command-message>\n<command-args>x</command-args>"},"timestamp":"2026-09-22T10:00:11Z"}'
+  rec '{"type":"user","message":{"role":"user","content":"<local-command-stdout>Goal set: x</local-command-stdout>"},"timestamp":"2026-09-22T10:00:11Z"}'
+  both_rc 1
+  # a caveat-led command with no stdout (/context) is unchanged: rc 1
+  at_rest_tx
+  rec '{"type":"user","isMeta":true,"message":{"role":"user","content":"<local-command-caveat>Caveat</local-command-caveat>"},"timestamp":"2026-09-22T10:00:10Z"}'
+  rec '{"type":"user","message":{"role":"user","content":"<command-name>/context</command-name>"},"timestamp":"2026-09-22T10:00:10Z"}'
+  both_rc 1
+}
+
 # ── DEFECT 6 — a resume-mode recycle never needs --no-self-retire ─────────────────────────────────
 
 @test "[RED] a fired peer's SELF resume-mode recycle does not die on the prompt trailer" {
