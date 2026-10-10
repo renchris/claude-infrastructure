@@ -72,7 +72,41 @@ Evidence the fail-closed property survives:
   (`tests/composer-tall-readback.bats`).
 - Each shape check is shown load-bearing by breaking the box one way at a time.
 
-Skeptic findings and residual risk: `slot-skeptic.md`; modal catalogue: `slot-modal-failclosed.md`.
+### What the skeptic and modal slots changed (all landed in this branch)
+
+The first cut of D1 had a fail-open, found three ways at once (the hostile-transcript bats case, the
+skeptic's K5, the modal slot's M08+pH): a trust dialog (selector `❯ No, exit`, no ordinal) under an
+echoed prompt shaped like a composer read as that prompt, so a matching payload would earn a CR into
+the dialog. Worse, the **pre-fix** common path had the same hole whenever the echo sat inside 24 rows,
+and read the real 2.1.260 captures of a dialog drawn **above** a live composer (M15/M16,
+`tests/fixtures/teammate-probe/captures/p1-run2*`) as EMPTY — i.e. `/exit` or a paste could land in a
+dialog whose default is "Exit and stop tasks". The shipped rule therefore adds, on **both** paths:
+
+- (ii) the box's top rule starts at column 0 (an indented rule pair is an empty composer printed in
+  tool output — the pre-fix parse read ten short dialogs under such output as EMPTY);
+- (v) no `❯` anywhere under the bottom border (a composer footer never draws one: 0 of 31 healthy
+  snapshots, teammate-panel footers included);
+- (vi) no dialog option row (`❯` at indent 1–4) above the box.
+
+Measured cost: 0 of 1,001 composer snapshots change verdict; 0 of the 90 that parse a box flip
+(modal slot §6). The one fixture that changes is the resume picker, "draft" → UNKNOWN.
+
+**The composer IS height-capped — measured live** on a throwaway pane (2.1.293, 30×46 after split):
+a 785-char single-line paste rendered an 18-row box scrolled to the cursor, first visible row a
+continuation. Pane 203 showed 22 unscrolled rows at 62 lines, so the cap scales with pane height
+(~40%). On a 62-row pane a capped box is taller than 24 rows and its first row is not `❯`, so the
+first cut of D1 would have refused it (skeptic K1/K4b). Shipped: (iii) also accepts a two-space
+continuation as the first row — a **tail-only** box that is content and never EMPTY (an empty read
+there is UNKNOWN), so all it can do is satisfy `paste_readback_ok`'s anchored tail form (≥ 64 chars).
+Real capture and payload: `tests/fixtures/composer-tall/capped-scrolled-2.1.293-46row.*`.
+
+Residual, stated: a payload whose box would overflow the whole screen even capped is not reachable by
+any window (the skeptic estimates ≥ ~645 raw chars at 21×46 before the cap is accounted for); the
+two reads are not atomic, so a dialog appearing between them is caught only if it moves the bottom
+border or draws a selector the second read sees. A fresh session's placeholder (`Try "write a te…"`,
+Unicode ellipsis, first character cursor-highlighted) reads as the draft `T` — pre-existing,
+fail-closed (it holds rather than types), and outside the arm path (the arm runs after engagement).
+Full analyses: `slot-skeptic.md`, `slot-modal-failclosed.md`.
 
 ## Q3. Should an unsubmitted /goal be cleared or retried, and by what path?
 

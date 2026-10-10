@@ -1,0 +1,46 @@
+ in this folder
+ first.
+
+ Claude Code'll
+ be able to read,
+ edit, and
+ execute files
+ here.
+
+ ⚠ This folder
+ pre-approves 139
+ tool
+ permissions in
+ .claude/settings
+ .json and
+ .claude/settings
+ .local.json:
+   Bash(kitten @
+ send-text:*),
+ Bash(kitten @
+ get-text:*),
+ Bash(kitten @
+ launch:*),
+ Bash(kitten @
+ close-window:*),
+ Bash(kitten @
+ ls:*),
+ Bash(bats:*),
+ Bash(cc-bats:*),
+ Bash(bin/cc-bat
+ s:*), and 120
+ more
+ These will apply
+ without asking.
+ Only proceed if
+ you trust this
+ configuration.
+
+ Security guide
+
+ ❯ No, exit
+   Yes, I trust
+   this folder
+
+ Enter to confirm
+ · Esc to cancel

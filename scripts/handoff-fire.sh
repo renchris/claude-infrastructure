@@ -4022,7 +4022,7 @@ EOF
 # A torn/unreadable screen or a missing box returns rc 1 = UNKNOWN, and every caller fails toward
 # NOT typing (the 2026-08-06 rule: typing needs the affirmative).
 composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer content, space-stripped; rc 0 parsed / 1 UNKNOWN
-  local it2="${1:-}" id="${2:-}" scr plain span raw rc b12='────────────'
+  local it2="${1:-}" id="${2:-}" scr plain span raw rc b12='────────────' tailonly=0
   [ -n "$it2" ] && [ -n "$id" ] || return 1
   # DIM IS NOT CONTENT (2026-09-27). CC renders its prompt SUGGESTION inside the box as faint
   # (SGR 2) text; real input is never faint. A plain read cannot tell them apart, so a suggested
@@ -4050,11 +4050,17 @@ composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer c
       t = s; sub(/[ \t\r]+$/, "", t)
       return (index(t, u u) == 1 && length(t) > 3 * length(u) && substr(t, length(t) - length(u) + 1) == u)
     }
-    { if (border($0)) { b2 = b1; b1 = NR; gb = 0 } else if (index($0, g) > 0) gb = 1 }
+    function selector(s,   t, n) {          # ❯ at indent 1-4: a dialog option row, never the composer
+      t = s; sub(/^ +/, "", t); n = length(s) - length(t)
+      return (n >= 1 && n <= 4 && index(t, g) == 1)
+    }
+    { line[NR] = $0; if (border($0)) { b2 = b1; b1 = NR; gb = 0 } else if (index($0, g) > 0) gb = 1 }
     END {
       if (gb) exit 9                                     # a ❯ under the last border: a dialog, not a footer
       if (b1 > 0 && b2 == 0) { print NR - b1; exit 8 }  # a bottom border and no top: maybe a TALL box
       if (b1 == 0 || b2 == 0 || b1 - b2 < 2) exit 9      # no box between two borders ⇒ UNKNOWN
+      if (index(line[b2], u) != 1) exit 9                # an indented "box": a composer printed in output
+      for (i = 1; i < b2; i++) if (selector(line[i])) exit 9   # a dialog drawn ABOVE a live composer
       print (b2 + 1) "," (b1 - 1)
     }')" && rc=0 || rc=$?
   # A TALL COMPOSER (goal-arm-readback, 2026-10-10). A /goal of ~470 chars in a 32-column pane wraps
@@ -4064,7 +4070,11 @@ composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer c
   # and no top) is a bigger window read, and its box is accepted only if it is SHAPED like a composer:
   #   (i)   its bottom border is the same row, counted from the bottom, as in the small read;
   #   (ii)  its top border is a rule starting at column 0;
-  #   (iii) its first row starts at column 0 with the prompt glyph ❯;
+  #   (iii) its first row starts at column 0 with the prompt glyph ❯ — OR it is a two-space
+  #         continuation, because Claude Code caps the box (~40% of the pane: 18 rows on a 46-row
+  #         pane, measured on a throwaway pane 2026-10-10) and scrolls it to the cursor. Such a
+  #         TAIL-ONLY box is content and never EMPTY (an empty read there is UNKNOWN), so all it can
+  #         do is satisfy paste_readback_ok's anchored tail form (≥ PASTE_TAIL_MIN chars);
   #   (iv)  every later row is blank or starts with the two-space continuation indent;
   #   (v)   no prompt glyph ❯ anywhere under the bottom border. A dialog draws its selector with it
   #         (`❯ No, exit` on the trust dialog, no ordinal); a composer footer never does (0 of the 31
@@ -4074,9 +4084,16 @@ composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer c
   #         flag in the awk above): with the echo inside the 24-row window, the pre-fix parse took
   #         the same bait. Corpus effect: 0 of 997 composer snapshots change; the one fixture that
   #         does is the resume picker, which read as a "draft" and now reads UNKNOWN.
+  #   (vi)  no dialog option row (❯ at indent 1-4) ABOVE the box. Claude Code 2.1.260 draws the
+  #         background-work exit dialog above a composer that stays visible (real captures in
+  #         tests/fixtures/teammate-probe/captures/p1-run2*); keystrokes go to the dialog, so the
+  #         composer under it proves nothing. Before this the pre-fix parse read that screen EMPTY,
+  #         i.e. /exit or a paste could land in the dialog, whose default is "Exit and stop tasks".
+  # (v), (vi) and (ii) also guard the COMMON path. Measured on the 90 close-guard snapshots that
+  # parse a box: 0 flip (docs/research/goal-arm-readback-2026-10-10/slot-modal-failclosed.md §6).
   # A modal, a teammate panel (╭──╮, the win527 snapshot) or transcript rules above a dialog fail one
   # of those and stay UNKNOWN, exactly as before, so nothing is typed into a screen we cannot read.
-  # The common path (both borders in the small window) is unchanged byte for byte. Measured over 1,056
+  # The common path (both borders in the small window) changes only by (v). Measured over 1,056
   # composer snapshots: 117 reach this branch, all 117 are rejected, no verdict changes
   # (docs/research/goal-arm-readback-2026-10-10/REPORT.md). lr-fire-resume.sh LR_SCREEN_SH carries
   # the same rule; tests/composer-tall-readback.bats pins both.
@@ -4092,19 +4109,26 @@ composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer c
         t = s; sub(/[ \t\r]+$/, "", t)
         return (index(t, u u) == 1 && length(t) > 3 * length(u) && substr(t, length(t) - length(u) + 1) == u)
       }
+      function selector(s,   t, n) {
+        t = s; sub(/^ +/, "", t); n = length(s) - length(t)
+        return (n >= 1 && n <= 4 && index(t, g) == 1)
+      }
       { line[NR] = $0 }
       END {
         bot = NR - off
         if (bot < 2 || !border(line[bot])) exit 9                        # (i)
         for (top = bot - 1; top > 0 && !border(line[top]); top--) ;
         if (top < 1 || bot - top < 2 || index(line[top], u) != 1) exit 9  # (ii)
-        if (index(line[top + 1], g) != 1) exit 9                          # (iii)
+        tail = (index(line[top + 1], g) != 1)                             # (iii), or a SCROLLED box
+        if (tail && substr(line[top + 1], 1, 2) != "  ") exit 9
         for (i = top + 2; i < bot; i++)                                   # (iv)
           if (line[i] !~ /^[ \t\r]*$/ && substr(line[i], 1, 2) != "  ") exit 9
         for (i = bot + 1; i <= NR; i++)                                   # (v)
           if (index(line[i], g) > 0) exit 9
-        print (top + 1) "," (bot - 1)
+        for (i = 1; i < top; i++) if (selector(line[i])) exit 9          # (vi)
+        print (top + 1) "," (bot - 1) (tail ? ",T" : "")
       }')" && rc=0 || rc=$?
+    case "$span" in *,T) tailonly=1; span="${span%,T}" ;; esac
   fi
   [ "$rc" = 0 ] || return 1
   # Drop every escape sequence and every FAINT run. SGR params are parsed, not substring-matched:
@@ -4141,7 +4165,9 @@ composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer c
   if printf '%s' "$raw" | LC_ALL=C grep -qE '^[[:space:]]*Try "[^"]*("|\.\.\.)[[:space:]]*$'; then
     raw=""
   fi
-  printf '%s' "$raw" | LC_ALL=C tr -d '[:space:]'
+  raw="$(printf '%s' "$raw" | LC_ALL=C tr -d '[:space:]')"
+  [ "$tailonly" = 1 ] && [ -z "$raw" ] && return 1        # a scrolled box is never proof of EMPTY
+  printf '%s' "$raw"
   return 0
 }
 
@@ -4554,15 +4580,18 @@ hf_composer_unintended() { # $1=space-stripped content → class on stdout; rc 0
 #   otherwise, N>0 newlines                 [Pasted text #1 +N lines]     [Pastedtext#1+Nlines]
 #
 # ⚠ THAT TABLE IS WIDTH-DEPENDENT AND THE 120-COLUMN MEASUREMENT COULD NOT SEE IT (2026-08-25).
-# Row 1 says "the text itself" — but the composer is height-capped (~10 body rows) and scrolls to
-# the CURSOR, which after a bracketed paste sits at the END. So "the text itself" holds only while
+# Row 1 says "the text itself" — but the composer is height-capped and scrolls to the CURSOR,
+# which after a bracketed paste sits at the END. CORRECTED (2026-10-10): the cap is not ~10 rows; it
+# scales with the pane (~40%: 18 rows on a 46-row pane measured live, and 22 unscrolled rows were
+# seen on a 62-row pane), and a capped box taller than composer_content's 24-row window is read
+# through its tall-box path (docs/research/goal-arm-readback-2026-10-10/REPORT.md). So "the text itself" holds only while
 # the text FITS. At 120 cols an 800-char payload is ~7 rows and always fits, which is why five
 # pastes at that width never exposed it. In the panes this actually fires into it does not fit:
 # a split-right agent pane is FORTY columns, ~37 usable, so anything past ~370 chars scrolls its
 # head off screen and composer_content — which reads the box, i.e. the VIEWPORT — can only ever
 # return a TAIL. Byte-equality then rejects a pristine paste, every time, for the whole population.
 #
-#   ≤800 chars, ≤2 newlines, and TALLER than the box   the last ~10 rows      a SUFFIX of the text
+#   ≤800 chars, ≤2 newlines, and TALLER than the box   the last cap rows      a SUFFIX of the text
 #
 # MEASURED on the live failure, not derived: fire 2026-08-25T21:30:18Z into pane 49 (40 cols),
 # `--goal` condition 443 chars ⇒ 449-char payload. Read-back began mid-word at raw offset 85

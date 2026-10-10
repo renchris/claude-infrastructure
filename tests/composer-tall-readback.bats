@@ -1,4 +1,7 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2329
+# SC2329: bats invokes setup and each stub (hf_bounded, composer_owned, read_post) through its runner
+# or through the extracted units, so the linter reads them as never called.
 # A TALL COMPOSER READS BACK AS ITSELF; A MODAL STILL DOES NOT (goal-arm-readback, 2026-10-10).
 # Evidence + design: docs/research/goal-arm-readback-2026-10-10/REPORT.md; plan GOAL_ARM_READBACK.md.
 #
@@ -19,6 +22,8 @@
 # repo (trust, settings error, background-work dialog at 29/40/80 columns, resume pickers), alone
 # and under a transcript built to fool the widened read, must never read EMPTY and must never match
 # a payload — so no paste lands in it and no CR follows one.
+
+bats_require_minimum_version 1.5.0  # `run !` (SC2314): a bare `! cmd` mid-test never fails
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -173,7 +178,7 @@ mk_hostile() { # $1=modal fixture → $POST_FILE
   hf_bounded() { windowed_hf_bounded "$@"; }
   run it2_paste_submit_verified it2 sid "/goal row1 row2"
   [ "$status" -eq 4 ]
-  ! grep -q $'SEND:\r' "$SENT_LOG"
+  run ! grep -q $'SEND:\r' "$SENT_LOG"
 }
 
 @test "a modal on screen before the paste: nothing is typed at all (rc 2)" {
@@ -207,6 +212,7 @@ lr_screen() { # → the LR_SCREEN_SH verdict for $POST_FILE through a window-hon
   local prog
   prog="$(sed -n "/<<'LRSCREENSH'/,/^LRSCREENSH\$/p" "$REPO/scripts/limit-recover/lr-fire-resume.sh" | sed '1d;$d')"
   [ -n "$prog" ] || { echo "LR_SCREEN_SH extraction failed" >&2; return 1; }
+  # shellcheck disable=SC2016  # the stub's own $vars, expanded when the stub runs
   printf '#!/bin/bash\nn=; for ((i=1;i<=$#;i++)); do [ "${!i}" = -n ] && { j=$((i+1)); n="${!j}"; }; done\nif [ -n "$n" ]; then tail -n "$n" "%s"; else cat "%s"; fi\n' "$POST_FILE" "$POST_FILE" > "$BATS_TEST_TMPDIR/lr-it2"
   chmod +x "$BATS_TEST_TMPDIR/lr-it2"
   LR_IT2="$BATS_TEST_TMPDIR/lr-it2" LR_PANE=x bash -c "$prog"
@@ -260,9 +266,9 @@ lr_screen() { # → the LR_SCREEN_SH verdict for $POST_FILE through a window-hon
   [ "$rc" -eq 4 ]
   [ "$FIRE_PASTE_LAST_READBACK" = "<unreadable>" ]                # the observation is unchanged
   [ "$FIRE_PASTE_SCRUB" = receipted-unreadable ]
-  ! grep -q '<unreadable>' "$CC_COMPOSER_RESIDUE_DIR/sid-R"
+  run ! grep -q '<unreadable>' "$CC_COMPOSER_RESIDUE_DIR/sid-R"
   composer_residue_is_ours sid-R "/goalreplywithDONE"
-  ! grep -q $'SEND:\r' "$SENT_LOG"
+  run ! grep -q $'SEND:\r' "$SENT_LOG"
 }
 
 @test "a readable mismatch with the scrub off records the WHOLE read, not a 120-char cut" {
@@ -273,4 +279,74 @@ lr_screen() { # → the LR_SCREEN_SH verdict for $POST_FILE through a window-hon
   FIRE_PASTE_READBACK_TRIES=2 it2_paste_submit_verified it2 sid-L "/goal y" 2>/dev/null || rc=$?
   [ "$rc" -eq 4 ]
   composer_residue_is_ours sid-L "$long"
+}
+
+# ── 5. a CAPPED box, and a dialog drawn ABOVE the composer ────────────────────────────────────
+# Claude Code caps the composer (18 rows on a 46-row pane, measured live on a throwaway pane) and
+# scrolls it to the cursor, so a tall box's first visible row is a continuation, not ❯. On a 62-row
+# pane the cap is taller than the 24-row window, so that box reaches the bigger read — where it may
+# only ever match the TAIL of our own text, never read EMPTY.
+
+mk_capped() { # a 62-row screen: a 24-row capped box showing only the END of $1 words → $POST_FILE
+  local words="$1" r
+  CAP_TEXT="/goal head"; for r in $(seq 1 "$words"); do CAP_TEXT="$CAP_TEXT w$r"; done
+  { for r in $(seq 1 30); do echo "  transcript line $r"; done
+    echo "$B"
+    for r in $(seq $((words - 23)) "$words"); do echo "  w$r"; done
+    echo "$B"; echo "  (4) #203 status"; echo "  ⏵⏵ auto mode on"; } > "$POST_FILE"
+}
+
+@test "[RED] a capped, scrolled box taller than 24 rows matches the payload by its tail, and gets its CR" {
+  mk_capped 120
+  run read_post
+  [ "$status" -eq 0 ]
+  paste_readback_ok "$CAP_TEXT" "$output"
+  hf_bounded() { windowed_hf_bounded "$@"; }
+  : > "$READS_FILE"
+  run it2_paste_submit_verified it2 sid "$CAP_TEXT"
+  [ "$status" -eq 0 ]
+  tail -1 "$SENT_LOG" | grep -q $'SEND:\r'
+}
+
+@test "a scrolled box is never proof of EMPTY: blank continuation rows read UNKNOWN" {
+  { for r in $(seq 1 30); do echo "  transcript line $r"; done
+    echo "$B"; for r in $(seq 1 26); do echo "  "; done
+    echo "$B"; echo "  (4) #203 status"; } > "$POST_FILE"
+  run read_post
+  [ "$status" -eq 1 ]
+}
+
+@test "the real 2.1.293 capped box (46-row pane) reads back by its tail" {
+  cp "$FX/capped-scrolled-2.1.293-46row.txt" "$POST_FILE"; cp "$FX/capped-scrolled-2.1.293-46row.ansi.txt" "$POST_FILE.ansi"
+  run read_post
+  [ "$status" -eq 0 ]
+  paste_readback_ok "$(cat "$FX/capped-scrolled-2.1.293-46row.payload.txt")" "$output"
+}
+
+@test "the real 2.1.293 trust dialog in an 18-column pane reads UNKNOWN" {
+  cp "$FX/trust-dialog-2.1.293-18col.txt" "$POST_FILE"
+  run read_post
+  [ "$status" -eq 1 ]
+}
+
+@test "[RED] a dialog drawn ABOVE a live composer (real 2.1.260 captures) reads UNKNOWN, so nothing is typed" {
+  local m
+  for m in "$REPO/tests/fixtures/teammate-probe/captures/p1-run2-exitmodal/pane-before.txt" \
+           "$REPO/tests/fixtures/teammate-probe/captures/p1-run2/lead-pane.after-exit.txt"; do
+    cp "$m" "$POST_FILE"; : > "$READS_FILE"
+    run read_post
+    [ "$status" -eq 1 ] || { echo "rc=$status [$output]: $m" >&2; return 1; }
+  done
+  cp "$POST_FILE" "$PRE_FILE"
+  hf_bounded() { windowed_hf_bounded "$@"; }
+  : > "$READS_FILE"
+  run it2_paste_submit_verified it2 sid "/goal x"
+  [ "$status" -eq 2 ]
+  [ ! -s "$SENT_LOG" ]
+}
+
+@test "an indented rule pair (an empty composer printed in tool output) is not a box" {
+  { echo "  ⎿  $B"; echo "     ❯ "; echo "     $B"; echo "  Do you want to proceed?"; } > "$POST_FILE"
+  run read_post
+  [ "$status" -eq 1 ]
 }
