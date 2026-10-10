@@ -814,3 +814,132 @@ fg_world() {
   [ "$(LR_HID_IDLE_S='' lr_hid_idle_s)" = unreadable ]
   [ "$(LR_HID_IDLE_S=x lr_hid_idle_s)" = unreadable ]
 }
+
+# ══ WHO CARRIES A MOVED SESSION — lr_pid_cfg + lr_successor_state (lr-stranded-husk, 2026-10-10) ══
+# The poller retired pane 168's request (186452ed) because the SOURCE transcript was tombstoned,
+# while no successor had started and the source pane still held the session — the "stranded husk"
+# (docs/research/lr-stranded-husk-2026-10-10/ROOT-CAUSE.md). The predicate keys on the ACCOUNT each
+# live holder runs under. Live facts at base, pinned as shapes below: 186452ed from ~/.claude-secondary
+# answers `husk 168 28699`; panes 2/3/14 (7f5deb68, 1c0f7f90, 4d059264) answer `unmoved`.
+# RED PROOF: run against lr-lib.sh at 982b9f184 (before c2eaac99a) every case here is rc 127.
+# Hermetic: env files under LR_MOVE_ENV_DIR stand in for `ps -E`, except the lr_pid_cfg cases, which
+# read the REAL ps branch over processes this suite spawns and kills itself.
+SS_SID="c2c2a1b2-0000-4000-8000-0000000c2c2c"
+# Pane ids UNFORGEABLE from outside the fixture (the HKPANE rule above): lr_husk_state's leg (c1)
+# reads the REAL process table for `__recycle <pane>`, and 168 is the incident's own live pane, so a
+# real recycle of it would turn these fixtures' husk into in-flight.
+P168=HUSKPANE-c2-168; P200=HUSKPANE-c2-200; P2=HUSKPANE-c2-2
+ss_setup() {
+  SRC="$HOME/.claude-secondary"; TGT="$HOME/.claude-quaternary"; TER="$HOME/.claude-tertiary"
+  mkdir -p "$HOME/.claude/projects" "$HOME/.claude-next" "$SRC/projects/-p" "$TGT/projects/-p" "$TER/projects/-p"
+  ln -s "$HOME/.claude/projects" "$HOME/.claude-next/projects"
+  # shellcheck disable=SC2031  # each @test is its own subshell; this helper sets it for the one calling it
+  export CC_HANDOFF_LOG="$BATS_TEST_TMPDIR/handoffs.jsonl"; : > "$CC_HANDOFF_LOG"
+  export LR_MOVE_ENV_DIR="$BATS_TEST_TMPDIR/env"; mkdir -p "$LR_MOVE_ENV_DIR"
+  unset LR_CONFIG_DIRS LR_SUCCESSOR_GATE LR_HUSK_RETIRE
+}
+ss_retired() { # the 186452ed shape: confirm tombstone (no phase), .handed-off, /exit stub, target copy, lock
+  printf '{"handed_off_to":"%s","target_transcript":"%s/projects/-p/%s.jsonl","ts":"2026-10-10T04:18:07Z","confirm_len":10}\n' "$TGT" "$TGT" "$SS_SID" > "$SRC/projects/-p/$SS_SID.HANDOFF.json"
+  printf 'x\n' > "$SRC/projects/-p/$SS_SID.jsonl.handed-off"; printf 'stub\n' > "$SRC/projects/-p/$SS_SID.jsonl"
+  printf 'x\n' > "$TGT/projects/-p/$SS_SID.jsonl"
+  printf '{"sid":"%s","from":"%s","to":"%s"}\n' "$SS_SID" "$SRC" "$TGT" > "$LR_STATE_DIR/locks/$SS_SID.lock"
+}
+ss_admit() { # the 7f5deb68 shape: admit-phase tombstone, NO .handed-off, the source .jsonl still live
+  printf '{"handed_off_to":"%s","ts":"2026-10-10T05:19:27Z","cause":"voluntary","phase":"admit"}\n' "$TGT" > "$SRC/projects/-p/$SS_SID.HANDOFF.json"
+  printf 'live\n' > "$SRC/projects/-p/$SS_SID.jsonl"; printf 'old\n' > "$TGT/projects/-p/$SS_SID.jsonl"
+  printf '{"sid":"%s","from":"%s","to":"%s"}\n' "$SS_SID" "$SRC" "$TGT" > "$LR_STATE_DIR/locks/$SS_SID.lock"
+}
+ss_row() { # $1=pane $2=pid $3=account $4=cfg → a live registry row plus that pid's environment
+  hk_row "$1" "$SS_SID" "$3" "$2"; [ -z "$4" ] || printf '%s' "$4" > "$LR_MOVE_ENV_DIR/$2"
+}
+ss_leaf() { # → a live pid THIS SUITE owns whose argv is `claude --resume SS_SID` (reaped in teardown)
+  # shellcheck disable=SC2217  # the </dev/null detaches the job from bats' own stdio (hk_live's hang)
+  ( exec -a "claude --resume $SS_SID" sleep 45 ) >/dev/null 2>&1 </dev/null &
+  printf '%s\n' "$!" >> "$BATS_TEST_TMPDIR/hk-pids"; printf '%s' "$!"
+}
+ss_state() { run lr_successor_state "$SS_SID" "$1"; }
+
+@test "lr_pid_cfg, the REAL ps -E branch: an env-less /bin/sleep is rc 1, python3 under X is X, without it \$HOME/.claude, a dead pid rc 1" {
+  unset LR_MOVE_ENV_DIR
+  # Measured 2026-10-10: Apple platform binaries show NO environment block to a same-uid `ps -E`
+  # (0 tokens for /bin/sleep), so the account is unknown — never the $HOME/.claude default, which
+  # would call a source husk a "successor" and retire it (C2 skeptic). An Apple /usr/bin/python3 shim
+  # hides its env the same way, so the env-visible leg needs a non-platform python3.
+  local py; py="$(command -v python3)"
+  [ -n "$py" ] && [ "$py" != /usr/bin/python3 ] || skip "no non-Apple python3 on PATH (its env would be hidden like /bin/sleep's)"
+  # shellcheck disable=SC2217  # the </dev/null detaches each job from bats' own stdio (hk_live's hang)
+  /bin/sleep 45 >/dev/null 2>&1 </dev/null & local s=$!; echo "$s" >> "$BATS_TEST_TMPDIR/hk-pids"
+  CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/cfg-x" "$py" -c 'import time; time.sleep(45)' >/dev/null 2>&1 </dev/null & local x=$!; echo "$x" >> "$BATS_TEST_TMPDIR/hk-pids"
+  env -u CLAUDE_CONFIG_DIR "$py" -c 'import time; time.sleep(45)' >/dev/null 2>&1 </dev/null & local d=$!; echo "$d" >> "$BATS_TEST_TMPDIR/hk-pids"
+  # shellcheck disable=SC2217  # as above
+  /bin/sleep 45 >/dev/null 2>&1 </dev/null & local gone=$!; kill "$gone"; wait "$gone" 2>/dev/null || true
+  sleep 0.5
+  run lr_pid_cfg "$s";    [ "$status" -eq 1 ] || { echo "env-less sleep: rc=$status out=$output"; false; }
+  run lr_pid_cfg "$x";    [ "$status" -eq 0 ] && [ "$output" = "$BATS_TEST_TMPDIR/cfg-x" ] || { echo "python3 under X: rc=$status out=$output"; false; }
+  run lr_pid_cfg "$d";    [ "$status" -eq 0 ] && [ "$output" = "$HOME/.claude" ] || { echo "python3 without X: rc=$status out=$output"; false; }
+  run lr_pid_cfg "$gone"; [ "$status" -eq 1 ] || { echo "dead pid: rc=$status out=$output"; false; }
+  run lr_pid_cfg "";      [ "$status" -eq 1 ]
+  run lr_pid_cfg "12x";   [ "$status" -eq 1 ]
+}
+
+@test "successor_state: the 186452ed shape (source row only, nothing in flight) is husk <pane> <pid>; a fresh handoffs row is in-flight" {
+  ss_setup; ss_retired
+  local p; p="$(hk_live)"; ss_row "$P168" "$p" claude-secondary "$SRC"
+  ss_state "$SRC"; [ "$status" -eq 0 ] && [ "$output" = "husk $P168 $p" ] || { echo "rc=$status $output"; false; }
+  printf '{"ts":"%s","class":"recycle-engaged","prev_sid":"%s"}\n' "$(date -u +%FT%TZ)" "$SS_SID" >> "$CC_HANDOFF_LOG"
+  ss_state "$SRC"; [ "$status" -eq 0 ] && [ "$output" = "in-flight $P168 $p" ] || { echo "rc=$status $output"; false; }
+}
+
+@test "successor_state kill switches: LR_HUSK_RETIRE=off answers none; LR_SUCCESSOR_GATE=off is rc 2" {
+  ss_setup; ss_retired
+  local p; p="$(hk_live)"; ss_row "$P168" "$p" claude-secondary "$SRC"
+  LR_HUSK_RETIRE=off ss_state "$SRC"; [ "$status" -eq 0 ] && [ "$output" = none ] || { echo "rc=$status $output"; false; }
+  LR_SUCCESSOR_GATE=off ss_state "$SRC"; [ "$status" -eq 2 ] && [ -z "$output" ] || { echo "rc=$status $output"; false; }
+}
+
+@test "successor_state: a live holder under another account is the successor — a target row, a bare --resume leaf, a third store, the next mirror" {
+  ss_setup; ss_retired
+  local h p l; h="$(hk_live)"; ss_row "$P168" "$h" claude-secondary "$SRC"
+  p="$(hk_live)"; ss_row "$P200" "$p" claude-quaternary "$TGT"
+  ss_state "$SRC"; [ "$status" -eq 0 ] && [ "$output" = "successor $P200 $p $TGT" ] || { echo "row: rc=$status $output"; false; }
+  rm -f "$CC_REGISTRY_DIR/$P200.json"
+  l="$(ss_leaf)"; sleep 0.3
+  printf '%s' "$TGT" > "$LR_MOVE_ENV_DIR/$l"
+  ss_state "$SRC"; [ "$status" -eq 0 ] && [ "$output" = "successor - $l $TGT" ] || { echo "leaf: rc=$status $output"; false; }
+  printf '%s' "$TER" > "$LR_MOVE_ENV_DIR/$l"
+  ss_state "$SRC"; [[ "$output" == "successor - $l $TER" ]] || { echo "third store: rc=$status $output"; false; }
+  printf '%s' "$HOME/.claude-next" > "$LR_MOVE_ENV_DIR/$l"
+  ss_state "$SRC"; [[ "$output" == "successor - $l "* ]] || { echo "next mirror: rc=$status $output"; false; }
+}
+
+@test "successor_state: an unreadable holder env is unknown; no holder is none; a source holder with no pane is unknown" {
+  ss_setup; ss_retired
+  local h l; h="$(hk_live)"; ss_row "$P168" "$h" claude-secondary ""     # live, no env file
+  ss_state "$SRC"; [ "$status" -eq 0 ] && [ "$output" = unknown ] || { echo "unreadable: rc=$status $output"; false; }
+  rm -f "$CC_REGISTRY_DIR/$P168.json"
+  ss_state "$SRC"; [ "$status" -eq 0 ] && [ "$output" = none ] || { echo "no holder: rc=$status $output"; false; }
+  l="$(ss_leaf)"; sleep 0.3; printf '%s' "$SRC" > "$LR_MOVE_ENV_DIR/$l"
+  ss_state "$SRC"; [ "$status" -eq 0 ] && [ "$output" = unknown ] || { echo "source leaf, no row: rc=$status $output"; false; }
+}
+
+@test "successor_state: the panes 2/3/14 shape (admit tombstone, source live) is unmoved; a lock alone is rc 1" {
+  ss_setup; ss_admit
+  local p; p="$(hk_live)"; ss_row "$P2" "$p" claude-secondary "$SRC"
+  ss_state "$SRC"; [ "$status" -eq 0 ] && [ "$output" = unmoved ] || { echo "admit: rc=$status $output"; false; }
+  rm -f "$SRC/projects/-p/$SS_SID.HANDOFF.json"
+  ss_state "$SRC"; [ "$status" -eq 1 ] || { echo "lock only must stay today's read: rc=$status $output"; false; }
+}
+
+@test "successor_state: not a durable move off this store is rc 1 — the .claude/.claude-next mirror, never moved, a round trip home" {
+  ss_setup
+  mkdir -p "$HOME/.claude/projects/-p"; printf 'x\n' > "$HOME/.claude/projects/-p/$SS_SID.jsonl"
+  printf '{"sid":"%s","from":"%s","to":"%s"}\n' "$SS_SID" "$HOME/.claude" "$HOME/.claude-next" > "$LR_STATE_DIR/locks/$SS_SID.lock"
+  ss_state "$HOME/.claude"; [ "$status" -eq 1 ] || { echo "mirror: rc=$status $output"; false; }
+  rm -f "$LR_STATE_DIR/locks/$SS_SID.lock"
+  printf 'x\n' > "$SRC/projects/-p/$SS_SID.jsonl"
+  ss_state "$SRC"; [ "$status" -eq 1 ] || { echo "never moved: rc=$status $output"; false; }
+  printf '{"handed_off_to":"%s","ts":"2026-10-01T00:00:00Z"}\n' "$TGT" > "$SRC/projects/-p/$SS_SID.HANDOFF.json"
+  printf 'old\n' > "$SRC/projects/-p/$SS_SID.jsonl.handed-off"
+  printf 'x\n' > "$TGT/projects/-p/$SS_SID.jsonl.handed-off"
+  ss_state "$SRC"; [ "$status" -eq 1 ] || { echo "round trip: rc=$status $output"; false; }
+}
