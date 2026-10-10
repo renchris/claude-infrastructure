@@ -530,3 +530,5 @@ Window: the 30 days to 2026-10-10T17:32Z, across five account roots, deduplicate
 ---
 
 **Delivery note.** `REPORT.md` was **not written**. The Write tool refused it with "Subagents should return findings as text, not write report files", and I did not work around that refusal, so the full text above is the deliverable. The caller should save it unchanged as `/Users/chrisren/Development/.worktrees/close-verdict-first/docs/research/close-verdict-first-2026-10-10/REPORT.md`. No tracked file was changed and no git write was run. The scratch artifacts the report cites are in `/tmp/cvf-report/` and `/tmp/cvf-report-proto.wT0neA/`; `/tmp` may be cleaned.
+
+Saved unchanged by the lead from the workflow result on 2026-10-10 (commit af48c4a7f).
