@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 ---
 
 # CLOSE_VERDICT_FIRST — a close leads with the answer to "good to close?"
@@ -76,7 +76,19 @@ polarity reads yes/negation before the anchor; own latch class `verdict` (COMPLE
 old-shape 👤 no is refused too; rules :9 becomes "A ✅ rung is an assertion"; `/wrap` line 2 keeps
 glyph + state clause, replaces the tail.
 
-## W3 — Gate, land, converge, verify
+## W3 — Gate, land, converge, verify — DONE (`cae15ca1c`, 2026-10-10)
+- completion-assert.bats 1..185, 0 failures (LEFT screenshot fires `verdict-first` class `verdict`,
+  RIGHT passes); why-tier 1..16 and research-program-exemption-rules 1..4 green; operator-readout
+  1..121 with 1 failure — test 113 (busy notice), a pre-existing load flake, not this diff: interleaved
+  A/B shows pristine trunk failing it too, cause wrap-ledger's busy probe erroring under load
+  (`BUSY_SRC=error`); the verdict code never runs in that test (no transcript).
+- Landed `cae15ca1c` (24 paths content-verified); converged on the degraded tier; deployed
+  `~/.claude/rules/10-session-close.md`, `CLAUDE.full.md`, hooks carry the rule.
+- Rescue: the docs teammate was killed mid-call (lead read idle as done); its 3 uncommitted files were
+  recovered as `9bab03777`. Teardown misclassification and the /goal read-back bug were fired as their
+  own sessions (custody with pane 16).
+- Not done here, dropped from this scope (REPORT.md §7 keeps them): wrap-ledger's git-only ✅ wording,
+  `SCOPE=met` without evidence, committing the corpus instrument.
 
 bats touched (assert `1..N`), shellcheck bare as the land gate runs it, `scripts/ship-land.sh`,
 `CC_DEPLOY_MAX_LAG_COMMITS=0 bash scripts/deploy-live.sh`, grep deployed
