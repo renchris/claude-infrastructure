@@ -362,6 +362,9 @@ it split perfectly:
 | **Mid-turn** (actively working) | **3 / 3** — each replied `shutdown_approved`, then `teammate_terminated` |
 | **Idle** (`idle_notification: available`) | **0 / 4** |
 
+*(Superseded 2026-09-19 by W5 — see Shutdown Protocol step 3: the idle 0/4 was an environment defect
+that W1 `3cdaa2552` fixed, not vendor behavior. The table is kept as the measurement it was.)*
+
 The four idle survivors kept emitting `{"type":"idle_notification","idleReason":"available"}` for
 **20-40 minutes** with a queued shutdown they never processed; one had finished its work 40 minutes
 before it was still resident. `TaskStop` — the **bare agent name** as `task_id` — terminated all four
@@ -441,8 +444,17 @@ as a known limitation and say a teammate "stays running and addressable while hi
    `SendMessage{shutdown_response, approve:true}`, never prose. A teammate that says "shutting down"
    and sends nothing structured is still running (22 of 25 prose acks still needed a pane close).
 3. **Escalate on silence** — if no `shutdown_approved` / `teammate_terminated` comes back within
-   ~60s, `TaskStop` it (bare agent name as `task_id`). An idle agent will never answer the request,
-   and no amount of waiting changes that; waiting only buys idle-notification turns. **`TaskStop`
+   ~60s, `TaskStop` it (bare agent name as `task_id`). (The old "an idle agent will never answer"
+   is superseded: the W5 probe, `docs/research/SUBAGENT_LIFECYCLE_ROOT_CAUSE_2026-09-19.md` P2, saw an
+   idle member consume the request and exit in 10 s with no model turn; the 0/4 below predates W1.)
+   **Wait the full ~60 s, and check the member's own worktree before escalating.** A member that is
+   mid-tool-call receives the request only at its next turn boundary, and an `idle_notification` can
+   be stale. On 2026-10-10 cvf-docs had resumed 141 ms after the idle notice its lead acted on, and was
+   TaskStopped 14 s after the request, then SIGTERMed, mid-call. Its worktree held 3 uncommitted files.
+   So run `git -C <member worktree> status --porcelain` first: dirty ⇒ wait or checkpoint, never kill.
+   The crash watchdog reads your own transcript's `shutdown_request` / `TaskStop` result for that member
+   and paints its death RETIRED, so escalate through those two. A bare `kill` with neither reads as a
+   crash, by design. **`TaskStop`
    closes the pane and edits the team file; the binary's own warning says the separate
    `claude --agent-id` process may still be running when it returns** — so step 4 is not optional
    ceremony after a `TaskStop`, it is the only thing that has measured the process.
