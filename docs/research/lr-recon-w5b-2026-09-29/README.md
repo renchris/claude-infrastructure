@@ -702,6 +702,95 @@ signature unless it lasts more than 15 minutes or a cohort is open. Captures now
 the shadow session only. The lead is told only of a kill or restart, a capture whose signature
 differs, or cohort activity.
 
+### Four more freeze captures, all slow, not wedged (2026-10-09 and 10)
+
+Same holder (pid 62810), no kill, no restart. Each capture: 0 descendants, `kitten @ ls` rc 0.
+
+| at | progress | load (1 min) | `kitten @ ls` | main thread, top of stack |
+|---|---|---|---|---|
+| 04:54:47Z Oct 9 | 32020 | 450 | 0.25 s | `lstat` 3235 of 4322 (75%), `__getdirentries64` 268 |
+| 00:58:57Z Oct 10 | 70455 | 443 | 0.25 s | **no `lstat`**: `select` 1404, `rename` 549, `open` 347, `fsync` 290, `write` 268 of 4387 |
+| 01:04:44Z Oct 10 | 70461 | 544 | 0.18 s | `lstat` 3132 (about 77%) |
+| 01:15:49Z Oct 10 | 70467 | 954 | 0.08 s | `lstat` 1898 + `__getdirentries64` 1787 of 4379 |
+
+The 00:58Z capture was the first with a different signature and went to the lead. **Lead ruling
+(01:00Z Oct 10): slow, not wedged** — the atomic-write path (rename + fsync) under IO pressure; the
+write volume joins the post-cutover `lr_recon` performance item. The other three match the 2026-10-08
+signature and were not forwarded.
+
+### Not a cohort: a voluntary next→next2 batch move (2026-10-10 01:24Z)
+
+Four legacy bundles appeared at 01:30Z Oct 10 (`d41d9684`, `0ecbdb41`, `8a4396f0` and the lead's own
+`44091255`). All came from `move/20261010T012444Z-next-next2-98959`, a batch move of idle sessions
+requested from pane 168 (verdicts `FAILED=1 NOTMOVED=7`), with `limit_events: []` in every audit and
+no recon cohort: no limit, so nothing to count. The FAILED row was the lead's session
+(`source-ambiguous`); its transplanted copy under next2 was moved aside by the rollback at 01:44Z.
+
+### Cohort 2 of 2 on W7i: next2's weekly limit at 04:04Z Oct 10 PASSES (lead pre-ruling, 91%)
+
+next2 hit its weekly limit (reset 11:00Z Oct 10). The reconciler opened `next2-7d-1791630000` at
+04:04:50Z and filed seven limited sessions into it: `4a70830c` (detected 04:04:50Z), `186452ed`
+(04:05:46Z), `30c3a88d` (about 04:14Z), `ebbc7b61` (about 04:50Z), then `1c0f7f90`, `4d059264` and
+`7f5deb68` (about 05:26Z). The watcher announced the open and each join; the lead was told each time.
+
+**Code.** Reconciler pid 62810 (no `restarts.jsonl` row since 04:04:22Z Oct 8), `lr_recon` byte-identical
+to `821786aae` in every checkout it could have read. The legacy partner was the shared checkout at
+`48e6a35d0` (taken 03:29Z Oct 10) through `81f95b3af` (05:21Z), identical in `scripts/limit-recover`:
+outside `lr_recon` it differs from `821786aae` in 8 legacy scripts (`lr-upgrade.sh` +942/-152 the
+largest; also `lr-lib.sh`, `lr-fire-resume.sh`, `lr-reset-poller.sh`, `lr-move-worker.sh`,
+`lr-move-batch.sh`, `lr-fleet.sh`, `lr-recon-watchdog.sh`). Named per the final rule, no reset.
+`daa386b23` (an `lr_recon` fix: pane re-bind and the `_typers` key) reached the checkout early at
+08:04Z and was held by `f5547c485` at 10:30Z (`lr_recon` back to `821786aae`). Daemon 62810 never
+loaded it, and the comparer imports only `lr_recon.facts` and `lr_recon.types`, so neither number
+below moved in that window.
+
+Compared at 13:02Z Oct 10 (the read the lead's pre-ruling named):
+
+`SHADOW next2-7d-1791630000: members 7 · legacy found 7 · census misses 0 · not owed 0 · placements
+feasible 7/7 · phase agree 2/3 (false-RECOVERED resolved 0, plan differed 0) · legacy-corrected 1:
+ebbc7b61 → PASS` (rc 0). Daemon `dod`: `CLOSED 5/7 (ENGAGED 3, MOVED 0, IN-PLACE 2) · NOT_NEEDED 0 ·
+double-typer 4 · split-brain 0 · lost-records 0 · unowned-non-terminal 1`.
+
+Every member, recon against the world at 13:02Z (`/tmp/w5b2-world-check.sh`: the source pid and its
+`CLAUDE_CONFIG_DIR`, any claude with `--resume <sid>` outside the source's own launch chain, any mover
+process):
+
+| sid | recon | world |
+|---|---|---|
+| `4a70830c` | CLOSED, ENGAGED | legacy RECOVERED to next4; source gone, resumed successor running |
+| `30c3a88d` | CLOSED, ENGAGED | legacy RECOVERED to next; source gone, resumed successor running |
+| `ebbc7b61` | CLOSED, ENGAGED | held HOLD-BGWORK at first, then legacy RECOVERED to next4 (legacy-corrected) |
+| `4d059264` | CLOSED, IN-PLACE | source 15705 alive on next2; answered there after the reset |
+| `1c0f7f90` | CLOSED, IN-PLACE 11:22Z | next2 transcript: the reset nudge at 11:21:40Z, then 22 turns; it self-recycled at 12:18Z to a fresh context on next4 (pid 17895), a later event |
+| `7f5deb68` | PRE-MOVE/PLANNED | source 17554 alive on next2, no successor, no mover |
+| `186452ed` | PRE-MOVE/IN-FLIGHT | source 28699 alive on next2, no successor; the only process naming it is the `lr-stranded-husk` session, whose prompt mentions it |
+
+The two non-terminal members, and the moving members before the reset, were legacy failures, and recon
+reported each one truthfully. `move/20261010T051618Z-next2-next-50417` FAILED `1c0f7f90`, `4d059264`
+and `7f5deb68` (`source-ambiguous`: one holder, two live transcripts after 300 s), and their bundles
+stopped at `admitted`. For `186452ed`, legacy typed `/exit` into a busy session at 04:19:57Z, and the
+process kept running on next2 while the transplanted copy on next4 sat unchanged.
+
+**Lead pre-ruling (2026-10-10 11:12Z, 91%): it counts, 2 of 2,** if at the 13:00Z read the compare is
+PASS and each member is terminal, or non-terminal with recon's phase matching the world (source alive
+on next2, no successor, no move in flight). Both hold above. Waiting for the two to take a turn adds no
+evidence: in-place close after a reset is already shown by two members here and two in cohort 1, and
+`186452ed`'s prompts are blocked by the stale-marker guard until `lr-stranded-husk`'s fix lands.
+
+Notes, not FAILs (lead, same exchange):
+
+- `186452ed`'s record has `pane: null` though it lives in kitty window 168: it was born at 04:05:46Z
+  on a degraded kitty read, and `new_record` never re-binds a pane. A read-only `observe()` probe binds
+  it to (64211, 168). Latent `lr_recon` defect, fail-closed in act mode (`lr-handoff` resolves an empty
+  `--source-pane` from the registry; `duplicate_risk` blocks R). Filed for after the cutover,
+  `675c50ef44d9` ("fix the stale window link and the double-launch miscount after the cutover").
+- `double-typer 4` is a `report.py` artifact, same row: `_typers` keys (sid, attempt) without the
+  record, so separate `lr-fire-resume` runs days apart that each say `attempt=1` merge. `30c3a88d`
+  (records `hf-13384` Oct 8 and `hf-73036` Oct 10), and `1c0f7f90`, `4d059264`, `7f5deb68` (each two
+  or three takes from Oct 4, 6 and 8). None is from this cohort.
+- The comparer's phase rows drop a member that legacy did not finish (`186452ed` after 04:47Z), so
+  `phase agree` covers only the members legacy moved.
+
 ## Census step
 
 Operator step `f0df9145b73a` (the live observe census) was closed with the launchd daemon's own pass:
