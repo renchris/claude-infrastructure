@@ -178,7 +178,8 @@ An ORIGIN session (no fired-peer stamp — hooks/lib/origin-identity.sh) closing
 VERDICT FIRST, NEVER LAST. The rung does not decide the verdict — a ✅ ledger can still mean no —
 and a ✅ line 1 above a `Good to close: no` on line 2 still reads as yes at a glance (operator
 screenshot, 2026-10-10: two closes side by side, both opening ✅; one answered no, and both read
-yes). A no under a line 1 that opens with ✅, 👤 or a done reading is refused as `verdict-first`.
+yes). A no under a line 1 that opens with ✅ or reads as done (including the 👤 readout's "My side is
+done") is refused as `verdict-first`.
 `Complication:` / `Solution:` / `Outcome:` are NOT demanded. Where a close has a real body they
 restate it (`Outcome:` is novel 1 time in 7) for a median 89 words. Write them only if they say
 something the body does not.

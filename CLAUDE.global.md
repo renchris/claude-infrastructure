@@ -519,8 +519,8 @@ gate can only ever REFUTE a false done and nothing ever AFFIRMED a true one):
   `👤` rule below). Computed from live git reads, never from prose, so it is the one line in a close
   the model cannot fake. Read-only turns, and any state it cannot verify, stay silent — a
   certificate that fired at every close would carry no information at all. It reads git, never the
-  task: a close whose own verdict is `no` (a peer still to land, an open plan step) is not overruled
-  by it, and its verdict line still leads.
+  task, so it is withheld under a close whose own verdict is `no` (`cert-verdict-no`), and the
+  close's verdict line leads either way.
 - **Mechanical 🔧.** `session-continue.sh` no longer waits to be armed. If a turn ends with files
   **this session wrote** still uncommitted, it blocks the stop itself and feeds the work back —
   attribution via `hooks/lib/session-writes.sh` (the transcript's own edit records), so a sibling's
@@ -545,14 +545,15 @@ gate can only ever REFUTE a false done and nothing ever AFFIRMED a true one):
   land → `cc-custody return <marker|slug>`; supersede → `cc-custody abandon <token> --why …`.
   **(3) THE ORIGIN CLOSE CONTRACT** (completion-assert D6 + `hooks/lib/close-shape.sh` — ONE code
   path with `/wrap`): an ORIGIN session (no fired-peer stamp — `hooks/lib/origin-identity.sh`)
-  closing genuine completion (✅/👤) after real written work must answer, mechanically matched,
-  **two** things, **verdict first**: line 1 is the verdict, led by its own glyph —
+  closing genuine completion (✅/👤) after real written work this session must answer, mechanically
+  matched, **two** things, **verdict first**: line 1 is the verdict, led by its own glyph —
   `✅ Good to close: yes — nothing of mine is open; follow-on: <filed ids|none>` or
   `❌ Good to close: no — <what remains + who owns it>` — and line 2 relays the ledger's own
   **rung glyph** and state clause (`line-1-rung` accepts the glyph there). An honest no satisfies
   (the contract is that the question is ANSWERED; hedging stays D3's defect, and naming what
-  remains is not a hedge). A no under a line 1 that opens with ✅, 👤 or a done reading is refused
-  (`verdict-first`; kill switch `CC_VERDICT_FIRST=0`). § The close message S2 carries the measurement.
+  remains is not a hedge). A no under a line 1 that opens with a done reading (✅, complete, done,
+  nothing to do, safe to close, 👤 My side is done) is refused (`verdict-first`; kill switch
+  `CC_VERDICT_FIRST=0`). § The close message S2 carries the measurement.
   🚨 **`Complication:` / `Solution:` /
   `Outcome:` are NO LONGER DEMANDED** (W3, 2026-08-23): where a close has a real body above them
   they restate it — `Outcome:` is novel 1 time in 7 — for a median 89 words against a close that

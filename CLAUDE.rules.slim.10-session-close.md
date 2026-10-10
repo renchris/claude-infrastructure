@@ -5,7 +5,7 @@ Drive in-scope work to a finished, verified, committed state (landed per the shi
 
 ### Stop-hook arms
 
-- Close certificate: on a write turn whose ledger is ✅, `operator-readout.sh` prints `✅ SAFE TO CLOSE — nothing of mine is open`, computed from git. Read-only turns and unverifiable states get none.
+- Close certificate: on a write turn whose ledger is ✅, `operator-readout.sh` prints `✅ SAFE TO CLOSE — nothing of mine is open`, computed from git. Read-only turns, unverifiable states and a close answering no get none.
 - **A ✅ rung is an assertion, not a vibe.** Claim it only with: clean tree · landed on trunk,
   verified BY CONTENT (`git ls-tree` present + `git diff` empty on your paths — a count reads 0
   after a sibling rebase and proves nothing) · your diff's gates run green *this turn* · frozen-DoD
@@ -19,7 +19,7 @@ Drive in-scope work to a finished, verified, committed state (landed per the shi
 - Mechanical 🔧: `session-continue.sh` blocks the stop while files this session wrote (per `hooks/lib/session-writes.sh`) are uncommitted, and feeds the work back. If that dirt is deliberately parked or not yours, run `~/.claude/hooks/session-continue.sh clear` and say so in the close.
 - Ship floor: `session-continue.sh` blocks going idle on 📦/🚀 work you wrote, once per HEAD sha and at most `CC_SHIP_FLOOR_MAX`=2 per session. Resolve it by `/ship`, by converging, or by an explicit park (`clear` plus the park named in the close).
 - Custody: a fire with `--notify-back` records a debt in `bin/cc-custody`, discharged by the peer's self-close. Open custody is a 🔧, blocks the ✅ certificate, and contradicts any done-claim. Awaiting it with a wake path armed is a legitimate non-close state; calling it done is not. Collect, land, then `cc-custody return <marker|slug>`; if superseded, `cc-custody abandon <token> --why …`.
-- Origin close contract (`completion-assert.sh` arm D6; template in `hooks/lib/close-shape.sh`, shared with `/wrap`): an origin session (no fired-peer stamp; `hooks/lib/origin-identity.sh`) closing ✅ or 👤 after written work this session leads with the verdict: line 1 `✅ Good to close: yes — nothing of mine is open; follow-on: <filed ids|none>` or `❌ Good to close: no — <what remains + who owns it>`, line 2 the ledger's rung glyph (`line-1-rung`). A no under a line 1 opening ✅, 👤 or a done reading fails (`verdict-first`); naming what remains is no hedge, a both-ways answer is (D3). Assignees and fired peers are exempt; their close is the lead's harvest or the notify-back ping.
+- Origin close contract (`completion-assert.sh` arm D6; template in `hooks/lib/close-shape.sh`, shared with `/wrap`): an origin session (no fired-peer stamp; `hooks/lib/origin-identity.sh`) closing ✅ or 👤 after written work this session leads with the verdict: line 1 `✅ Good to close: yes — nothing of mine is open; follow-on: <filed ids|none>` or `❌ Good to close: no — <what remains + who owns it>`, line 2 the ledger's rung glyph (`line-1-rung`). A no under a line 1 opening ✅ or reading done (`👤 My side is done` included) fails (`verdict-first`); naming what remains is no hedge, a both-ways answer is (D3). Assignees and fired peers are exempt; their close is the lead's harvest or the notify-back ping.
 
 Resident teammates: `~/.claude/scripts/wrap-ledger.sh` reports `RESIDENT_MINE`, the members of this session's team whose process is still running, as a 🔧, including their dirty files in a shared cwd; those files are yours to commit, since only the lead can. A teammate ends only when its lead ends it: send each a `shutdown_request` and escalate to `TaskStop` after about 60 s; the rung clears when the process is gone, not when the pane closes. The check kills nothing; to keep a member working, say so in the close as a stated park. Kill switch `WRAP_RESIDENT=off`.
 
@@ -139,11 +139,11 @@ Omit a slot that has nothing to say; never pad one.
 | S5 EVIDENCE | the sha and/or doc path that holds what this close dropped | whenever anything was dropped |
 | S6 WAITING | what is theirs, each item named in plain English | only when something is theirs |
 
-S1–S3 are the lines the operator scans; S4–S6 are at most three supporting lines. The act marker must fall within the first 3 non-blank, unfenced lines (`CC_ACT_WINDOW`=3), which is why verdict and state hold lines 1–2.
+S1–S3 are the lines the operator scans; S4–S6 are at most three supporting lines. The act marker must fall within the first 3 non-blank, unfenced lines (`CC_ACT_WINDOW`=3).
 
 S1. Run `~/.claude/scripts/wrap-ledger.sh --machine` and take `READOUT`, shaped `<rung glyph> <state clause> — <tail>`. Copy the glyph and state clause verbatim and replace the tail with one clause naming what the work was. Where the tail is a count (`22 uncommitted change(s)`, `N step(s) need you`, `N decision(s)`), your clause partitions it along the groups that follow, e.g. `13 runnable now, 207 need your call`. Under `⛔` keep the tail: it is `BLOCKED_WHAT`, the operator's own words.
 
-S1 carries one rung and states a conclusion, not a category (`12 runnable now, 195 need your call`, not `205 manual steps`). Neither it nor the verdict hedges, and nothing later in the close withdraws either. If something is parked or is theirs, that is the rung (`📦` / `👤`); if it is immaterial, it stays out. A qualification goes in S2's `follow-on:` clause, beside the assertion.
+S1 carries one rung and states a conclusion, not a category (`12 runnable now, 195 need your call`, not `205 manual steps`). Neither it nor the verdict hedges, and nothing later withdraws either. If something is parked or is theirs, that is the rung (`📦` / `👤`); if it is immaterial, it stays out. A qualification goes in S2's `follow-on:` clause, beside the assertion.
 
 S2. The `Good to close:` line, in either form under Origin close contract, first and never last. The rung does not imply it, and a rendered `✅ SAFE TO CLOSE` certificate neither replaces nor overrules it; an honest no satisfies the contract. `Complication:` / `Solution:` / `Outcome:` lines are optional.
 
