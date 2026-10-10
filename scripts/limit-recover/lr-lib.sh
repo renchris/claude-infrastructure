@@ -935,6 +935,62 @@ sys.exit(rc)' "$hlog" && return 1
   return 0
 }
 
+# ── WHO CARRIES A MOVED SESSION NOW — keyed on the ACCOUNT each live holder RUNS UNDER (2026-10-10) ─
+lr_store_key() { # $1=config dir → the PHYSICAL path of its projects/ (one store, however it is spelled)
+  (cd "${1%/}/projects" 2>/dev/null && pwd -P) || printf '%s/projects' "${1%/}"
+}
+lr_pid_cfg() { # $1=pid → the CLAUDE_CONFIG_DIR it runs under (ps -E, LAST token); rc 1 when unreadable
+  local pid="${1:-}" out
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  if [ -n "${LR_MOVE_ENV_DIR:-}" ]; then
+    out="$(cat "$LR_MOVE_ENV_DIR/$pid" 2>/dev/null)"; [ -n "$out" ] || return 1
+    printf '%s' "$out"; return 0
+  fi
+  out="$(ps -E -ww -o command= -p "$pid" 2>/dev/null)"; [ -n "$out" ] || return 1
+  # No environment block (another user's process, or a hardened one): the account is UNKNOWN, never
+  # the $HOME/.claude default — reading it as the default would call a source husk a "successor".
+  printf '%s\n' "$out" | tr ' ' '\n' | grep -qE '^(HOME|PATH)=' || return 1
+  out="$(printf '%s\n' "$out" | tr ' ' '\n' | sed -n 's/^CLAUDE_CONFIG_DIR=//p' | tail -1)"
+  # shellcheck disable=SC2088  # matches a LITERAL '~/' left unexpanded in the env block
+  case "$out" in "~/"*) out="$HOME/${out#\~/}" ;; esac
+  printf '%s' "${out:-$HOME/.claude}"
+}
+lr_successor_state() { # $1=sid $2=source cfg → ONE token line, rc 0 · rc 1 not moved off $2 · rc 2 gate off
+  local sid="${1:-}" src="${2:-}" to skey tomb f phase ho holders hp hpane hcfg spane="" spid="" unk=0
+  [ -n "$sid" ] && [ -n "$src" ] || return 1
+  [ "${LR_SUCCESSOR_GATE:-on}" != off ] || return 2
+  to="$(lr_transplant_target "$sid" "$src" 2>/dev/null)" || return 1
+  skey="$(lr_store_key "$src")"
+  [ "$skey" != "$(lr_store_key "$to")" ] || return 1
+  holders="$( { lr_registry_live_rows "$sid" 2>/dev/null | awk -F'\t' '{ print $2 "\t" $1 }'
+                lr_resume_procs "$sid" 2>/dev/null | awk 'NF { print $1 "\t-" }'; } | awk -F'\t' 'NF && !s[$1]++')"
+  while IFS=$'\t' read -r hp hpane; do
+    [ -n "$hp" ] || continue
+    if ! hcfg="$(lr_pid_cfg "$hp")"; then kill -0 "$hp" 2>/dev/null && unk=1; continue; fi
+    if [ "$(lr_store_key "$hcfg")" != "$skey" ]; then echo "successor ${hpane:--} $hp $hcfg"; return 0; fi
+    if [ -z "$spid" ] || { [ "$spane" = - ] && [ "$hpane" != - ]; }; then spid="$hp"; spane="$hpane"; fi
+  done <<EOF
+$holders
+EOF
+  ho=""; for f in "$src"/projects/*/"$sid".jsonl.handed-off; do [ -e "$f" ] && { ho=1; break; }; done
+  tomb=""
+  for f in "$src"/projects/*/"$sid".HANDOFF.json; do
+    [ -f "$f" ] || continue
+    to="$(sed -n '/"handed_off_to":"/{s/.*"handed_off_to":"\([^"]*\)".*/\1/p;q;}' "$f")"
+    [ -n "$to" ] && [ "$(lr_store_key "$to")" != "$skey" ] && { tomb="$f"; break; }
+  done
+  [ -n "$ho$tomb" ] || return 1      # a LOCK alone is no durable move: callers keep today's read
+  [ "$unk" = 0 ] || { echo unknown; return 0; }
+  if [ -z "$ho" ]; then
+    phase="$(sed -n 's/.*"phase"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$tomb" | head -1)"
+    if [ "$phase" = admit ] && [ -f "${tomb%.HANDOFF.json}.jsonl" ]; then echo unmoved; return 0; fi
+  fi
+  [ -n "$spid" ] || { echo none; return 0; }
+  [ "${LR_HUSK_RETIRE:-on}" != off ] || { echo none; return 0; }
+  [ "$spane" != - ] || { echo unknown; return 0; }
+  if lr_husk_state "$sid" "$src"; then echo "husk $spane $spid"; else echo "in-flight $spane $spid"; fi
+}
+
 # ── A CHECKOUT FLIPPED TO core.bare=true: HEALED BY THE DRIVER, NEVER BY A HUMAN (D1, 2026-09-28) ─
 # `git worktree add|remove` against a shared checkout can leave core.bare=true on it while every
 # working file stays on disk (memory: worktree-ops-can-bare-the-shared-checkout). Every work-tree git
