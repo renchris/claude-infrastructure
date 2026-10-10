@@ -330,6 +330,16 @@ print(s['$1'].get('seed_match'))"; }
   [ "$(seed_match_of H-2)" = "None" ]
 }
 
+@test "close: a material hole from a frame-critique round is skipped by seed match, never parsed as a round number" {
+  seeded_round_2
+  local fc_hole='{"id":"H-0","round":"fc1","locus":{"path":"PLAN.md","lines":"61"},"taxonomy_class":"C4","claim":"the daemon retries a failed write forever: the retry count is unbounded","verification":{"status":"CONFIRMED"},"materiality":{"level":"MATERIAL"}}'
+  printf '%s\n' "$fc_hole" "$SEED_HOLE" > "$CC_RESEARCH_RECORDS/holes.jsonl"
+  run "$R" close --program demo --round 2
+  [ "$status" -eq 0 ]
+  [ "$(seed_match_of H-0)" = "None" ]
+  [ "$(seed_match_of H-1)" = "S-1" ]
+}
+
 @test "close: a round whose only material finding is a caught seed is quiet" {
   seeded_round_2
   printf '%s\n' "$SEED_HOLE" > "$CC_RESEARCH_RECORDS/holes.jsonl"

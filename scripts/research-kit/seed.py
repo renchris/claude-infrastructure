@@ -52,7 +52,9 @@ def vault_lock(slug: str) -> Any:
 def load_vault(slug: str, create_key: bool = False) -> Tuple[Dict[str, Any], str]:
     key = kit.vault_key(KEY_ITEM, slug, create=create_key)
     p = vault_path(slug)
-    vault = json.loads(kit.decrypt(p.read_bytes(), key)) if p.exists() else {"seeds": []}
+    vault = (
+        json.loads(kit.decrypt(p.read_bytes(), key)) if p.exists() else {"seeds": []}
+    )
     kit.test_delay("CC_RESEARCH_TEST_VAULT_DELAY")
     return vault, key
 
@@ -227,10 +229,13 @@ def cmd_match(a: argparse.Namespace) -> int:
     vault, key = load_vault(a.program)
     holes_path = kit.records_dir(a.program) / "holes.jsonl"
     holes = kit.fold(kit.read_jsonl(holes_path)).values()
+    # Certification rounds are numbered; a hole from a frame-critique or integration round ("fc1",
+    # "stage6-W2") predates the seeds, so it can never catch one and is skipped, not parsed.
     material = [
         h
         for h in holes
         if (h.get("materiality") or {}).get("level") == "MATERIAL"
+        and str(h.get("round") or "0").isdigit()
         and int(h.get("round") or 0) <= a.round
     ]
     for s in vault["seeds"]:
