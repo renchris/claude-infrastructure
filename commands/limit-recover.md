@@ -196,7 +196,9 @@ A composer holding text used to stop every recovery (`HELD:draft`), and the "fix
 operator to press Ctrl-U. Recovery now tells a draft from junk by `scripts/lib/composer-intent.sh`
 and clears only the junk: a **stray keystroke** (≤2 characters, not a `/command`), a **leaked
 terminal reply** (`_Ga=…`, `[?62;c`, `P>|…`), or **this rail's own unsubmitted prompt** (a known
-prefix, or a trailing lr submit token). Everything else is still a draft and still holds. Each
+prefix, or a trailing lr submit token). Everything else is a real draft: a transplanted remote
+recycle carries it (below), every other lane holds it as typed and retries, and none hands it to the
+operator. Each
 discard is appended to `~/.claude/logs/composer-discarded.log`. Kill switch
 `CC_COMPOSER_UNINTENDED=off`.
 
@@ -205,7 +207,20 @@ discard is appended to `~/.claude/logs/composer-discarded.log`. Kill switch
   recover` no longer says "nothing to do". If the account has headroom it types one `[limit-recover]`
   continue prompt in the holder's own pane and proves a fresh assistant turn (`nudge-in-place/…`). A
   frame that lr-fire-resume painted over gets one Ctrl-L to repaint it first.
-- **Never ask the operator to clear a stray.** A real draft is theirs, and so is the refusal.
+- **Never ask the operator to clear a stray.**
+- **A real draft is carried or held by the rail, never handed back (operator ruling 2026-10-10,
+  `docs/research/lr-stranded-husk-2026-10-10/ROOT-CAUSE.md`).** Zero human in the loop, zero
+  asking: never ask the operator to clear, press, type or send anything in a pane, and never relay a
+  rail's draft hold as their step. Preserving the draft is the rail's job. A transplanted remote
+  recycle (the source pane a husk, or unfocused) saves the composer text and any `[Image #N]` file,
+  clears the box, moves the session and retypes the text unsent in the successor, naming every saved
+  path (`CC_RECYCLE_CARRY_DRAFT=off` restores the hold). Every other recycle holds the draft as typed
+  and retries. Never send Ctrl-U to a draft that is not saved first. A failed carry puts the draft
+  back or names where it is saved, and its refusal names the next step; re-drive it yourself.
+- **A pane keystroke blocked by a permission or by the classifier is never handed over**, neither as
+  the keystroke nor as a handed script or `▶ Run this` command that sends one. Ask for that
+  permission in chat as its own request, naming the exact rule. Enforced by `hooks/anti-deference-nudge.sh`
+  arm `pane-step-handback` (kill switch `ANTIDEF_PANE_ASK=off`).
 
 ## Iron rules (bind every mode; quote back any you are about to break and STOP)
 
@@ -725,7 +740,10 @@ one-line confirmation turn is reported beside it, never instead of it: `confirme
 assistant turn`, or `confirmation UNCONFIRMED (lr-fire-resume: FAILED:submit)`. Measured on the
 first field run (2026-09-22): 2 of 3 relaunches came up correctly while the prompt injection failed
 in ~25-column split panes (the composer read-back is width-dependent). An UNCONFIRMED session is idle
-on the new binary; press Enter in its pane if the prompt is still in the composer, or Ctrl-U.
+on the new binary and upgraded all the same. A continue prompt left in its composer is this rail's
+own text (`composer-intent.sh` rail-prompt) and stays unsent: no rail re-submits it, a limit-recover
+precheck or a `cc_tui_submit` pass clears it, and a bare `--recycle` holds on it. It is never a key
+for the operator (2026-10-10).
 
 **Agent Teams move too — teammates first, then the lead (2026-09-23).** Research + probe:
 `docs/research/team-inplace-upgrade-2026-09-23/`. A pane TEAMMATE (`--agent-id` in its argv) reads
