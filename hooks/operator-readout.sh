@@ -1296,7 +1296,8 @@ render_block() {
     # explicit that the standing pile is not a close-gate (the 👤 rung counts only steps THIS
     # SESSION filed; the pile has its own counted ◆ line), so it is demoted here and labelled for
     # what it is. Only the certified case reorders — every other rung keeps the existing shape.
-    if [ "$RUNG" = "✅" ] && [ "${CERT_WROTE:-2}" = "0" ]; then
+    # Not under the session's own "no": that close is not a "yes, close", so the pile keeps its place.
+    if [ "$RUNG" = "✅" ] && [ "${CERT_WROTE:-2}" = "0" ] && [ "${CERT_VERDICT:-none}" != "no" ]; then
       hdr="OPERATOR ▸ ${state}${_y:+ · $_y}"
     fi
   elif [ "$total" -gt 0 ]; then hdr="OPERATOR ▸ ${_y:+$_y · }${total} manual step(s)${state:+ · $state}"
