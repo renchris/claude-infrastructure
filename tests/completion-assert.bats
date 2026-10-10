@@ -2229,3 +2229,108 @@ dbl_setup() { # <tag> → sets $DBL_W to the repo cwd, both hooks pointed at one
   [ "$status" -eq 0 ]; [ -z "$output" ]
   /usr/bin/grep -q '"reason":"ledger-clean"' "$COMPLETION_IDL"
 }
+
+# ── CLOSE_VERDICT_FIRST (2026-10-10) — a NO verdict may not open with a line that reads as done ──
+# docs/research/close-verdict-first-2026-10-10/design.md (A′) plus the two skeptic reviews beside
+# it. The operator screenshot that started it: two closes side by side, both opening ✅; one
+# answered no on line 2, and both read yes. LEFT and RIGHT below are those two closes, byte-exact
+# (tests/fixtures/close-verdict-first/). Fixtures load from FILES, never a heredoc inside $( ):
+# bash 3.2 miscounts parentheses there.
+CVF_FIX="$BATS_TEST_DIRNAME/fixtures/close-verdict-first"
+
+# polarity table: one `expected<TAB>line` row per case, every row a single line.
+_cvf_pol_rows() {
+  printf '%s\t%s\n' \
+    no   'Good to close: no — pane 182 owns the next step.' \
+    no   'Are we good to close? No — two steps remain.' \
+    no   'This is not good to close.' \
+    no   "So it isn't good to close yet." \
+    no   'not yet good to close — the reconciler change is out.' \
+    no   'Good to close: **no** — the land is pending.' \
+    no   '❌ Good to close: no — x · ledger: ✅ Complete & live on trunk' \
+    yes  'Good to close: yes — nothing of mine is open; follow-on: none.' \
+    yes  'Yes, good to close. Nothing of mine is open.' \
+    yes  '✅ Good to close — no loose ends; follow-on: none.' \
+    none 'Good to close: no loose ends, nothing open.' \
+    none 'Nothing here mentions the verdict at all.'
+}
+
+@test "verdict-first UNIT: close_verdict_polarity reads the verdict's value (fixtures, table, fence, template)" {
+  run _cs_lib "$REPO" 'close_verdict_polarity "$(cat "$1/tests/fixtures/close-verdict-first/left.txt")"'
+  [ "$output" = no ]
+  run _cs_lib "$REPO" 'close_verdict_polarity "$(cat "$1/tests/fixtures/close-verdict-first/right.txt")"'
+  [ "$output" = yes ]
+  run _cs_lib "$REPO" 'close_verdict_polarity "$(cat "$1/tests/fixtures/close-verdict-first/left-aprime.txt")"'
+  [ "$output" = no ]
+  run _cs_lib "$REPO" 'close_verdict_polarity "$(close_shape_template)"'
+  [ "$output" = none ]
+  run _cs_lib "$REPO" 'close_verdict_polarity "✅ Good to close: yes — nothing of mine is open.
+Pane 182 earlier wrote \"Good to close: no\" about its own change."'
+  [ "$output" = mixed ]
+  run _cs_lib "$REPO" 'close_verdict_polarity "The skeleton reads:
+\`\`\`
+Good to close: no — <what remains>
+\`\`\`
+and nothing else."'
+  [ "$output" = none ]
+  local exp line got bad=0
+  while IFS="$(printf '\t')" read -r exp line; do
+    got="$(bash -c '. "$1/hooks/lib/close-shape.sh"; close_verdict_polarity "$2"' _ "$REPO" "$line")"
+    [ "$got" = "$exp" ] || { echo "polarity($line) = $got, want $exp" >&2; bad=1; }
+  done < <(_cvf_pol_rows)
+  [ "$bad" -eq 0 ]
+}
+
+@test "verdict-first UNIT: close_line_reads_done — done readings, not-done readings, answered questions" {
+  local s bad=0
+  for s in '✅ Complete & live on trunk — nothing to do.' '**✅ Complete**' 'Done and landed.' \
+           'Nothing left to do here.' "Yes, it's safe to close." '- ✅ Safe to close' '✅️ Complete (VS16)'; do
+    bash -c '. "$1/hooks/lib/close-shape.sh"; close_line_reads_done "$2"' _ "$REPO" "$s" \
+      || { echo "should read done: $s" >&2; bad=1; }
+  done
+  for s in '❌ Good to close: no — x' 'Good to close: no — x' '👤 My side is done & landed — 1 step' \
+           "Yes, it's included." '📦 Done, but only on a branch' 'Complete? No — pane 182 owns it.' \
+           'Safe to close: no — x' 'Safe to close? No — x' 'Done? Not yet — x' 'Safe to close — not yet.' \
+           'Completeness check: 2 of 5 rows are still open.'; do
+    if bash -c '. "$1/hooks/lib/close-shape.sh"; close_line_reads_done "$2"' _ "$REPO" "$s"; then
+      echo "should NOT read done: $s" >&2; bad=1
+    fi
+  done
+  [ "$bad" -eq 0 ]
+}
+
+@test "verdict-first UNIT: the A′ template still answers nothing, carries no ▶, and reads polarity none" {
+  run _cs_lib "$REPO" 'close_shape_ok "$(close_shape_template)"'
+  [ "$status" -ne 0 ]
+  run _cs_lib "$REPO" 'printf "%s" "$(close_shape_missing "$(close_shape_template)")"'
+  [ "$output" = "good-to-close-verdict" ]
+  run _cs_lib "$REPO" 'close_verdict_polarity "$(close_shape_template)"'
+  [ "$output" = none ]
+  run _cs_lib "$REPO" 'close_shape_template'
+  if printf '%s' "$output" | grep -q '▶'; then false; fi
+  # line 1 of the skeleton is the verdict; line 2 is the rung relay
+  [ "$(printf '%s\n' "$output" | sed -n 1p | grep -c 'Good to close:')" -eq 1 ]
+  [ "$(printf '%s\n' "$output" | sed -n 2p | grep -c 'S1 line 2')" -eq 1 ]
+}
+
+@test "verdict-first UNIT: the reason explains verdict-first only when it is missing, and quotes no corpus figure" {
+  run _cs_lib "$REPO" 'close_shape_reason ✅ verdict-first'
+  printf '%s' "$output" | grep -q 'A missing verdict-first'
+  printf '%s' "$output" | grep -q 'goes next (a blank line between them helps)'
+  if printf '%s' "$output" | grep -qE '613|73%|90\.7|17\.6'; then false; fi
+  run _cs_lib "$REPO" 'close_shape_reason ✅ line-1-rung'
+  if printf '%s' "$output" | grep -q 'A missing verdict-first'; then false; fi
+  if printf '%s' "$output" | grep -qE '613|73%|90\.7|17\.6'; then false; fi
+}
+
+@test "verdict-first LOCALE: the polarity table and the fixtures read the same under LC_ALL=C" {
+  local exp line got bad=0
+  while IFS="$(printf '\t')" read -r exp line; do
+    got="$(LC_ALL=C bash -c '. "$1/hooks/lib/close-shape.sh"; close_verdict_polarity "$2"' _ "$REPO" "$line")"
+    [ "$got" = "$exp" ] || { echo "LC_ALL=C polarity($line) = $got, want $exp" >&2; bad=1; }
+  done < <(_cvf_pol_rows)
+  [ "$bad" -eq 0 ]
+  got="$(LC_ALL=C bash -c '. "$1/hooks/lib/close-shape.sh"; close_verdict_polarity "$(cat "$1/tests/fixtures/close-verdict-first/left.txt")"' _ "$REPO")"
+  [ "$got" = no ]
+  LC_ALL=C bash -c '. "$1/hooks/lib/close-shape.sh"; close_line_reads_done "$(head -1 "$1/tests/fixtures/close-verdict-first/left.txt")"' _ "$REPO"
+}

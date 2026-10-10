@@ -1,0 +1,9 @@
+✅ Yes, it's safe to close. This session has no open work.
+
+Good to close: yes. Nothing of mine is open. Follow-on: none new.
+
+- **Live ledger:** the worktree is clean, nothing is waiting to land, nothing is out with another session, and nothing filed is mine to finish.
+- **Fresh test set item (1dcc10d88ee3):** this is the step to seal a fresh held-out test set, v5. A dispatcher grabbed it yesterday, even though it's waiting on more data. A later session parked it again with a count: 46 of the 400 needed unused regex-missed candidates exist so far. It's still waiting on that data and closes itself when the sealed set exists.
+- **TrueMemory contract item (01e7de9219c0):** re-signing the TrueMemory 2.0 pilot contract stays blocked until the gate passes. You have nothing to do yet.
+
+I restarted the peer-mail watcher, because the old one had expired.
