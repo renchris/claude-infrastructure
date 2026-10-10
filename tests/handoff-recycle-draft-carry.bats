@@ -167,14 +167,16 @@ putback() { # runs the watcher's put-back over the extracted units, its env give
   box 'typed into a husk'
   : > "${TOMB%.HANDOFF.json}.jsonl.handed-off"
   RCY_HUSK=0 FOCUSED=yes run bash "$DRIVER"
-  [ "$status" -eq 0 ] && [ -f "$ARMED" ] || { echo "$output"; cat "$EVENTS"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$EVENTS"; false; }
+  [ -f "$ARMED" ] || { echo "$output"; cat "$EVENTS"; false; }
   [ "$(cat "$(carried_dir)/draft.txt")" = 'typed into a husk' ] || false
 }
 
 @test "2c [RED] a pasted block on a LIVE source is not carried: its content is not on disk, so the refusal stands and says so" {
   box 'also fix the margin[Pasted text #1 +19 lines]'
   RCY_HUSK=0 FOCUSED=no run bash "$DRIVER"
-  [ "$status" -eq 1 ] && [ ! -f "$ARMED" ] || { echo "$output"; false; }
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ ! -f "$ARMED" ] || { echo "$output"; false; }
   ! grep -q '^CLEAR:' "$SENT_LOG" || { cat "$SENT_LOG"; false; }
   [ "$(cat "$BOX")" = 'also fix the margin[Pasted text #1 +19 lines]' ] || false
   grep -q '^recycle-held-draft.*pasted block' "$EVENTS" || { cat "$EVENTS"; false; }
@@ -184,7 +186,8 @@ putback() { # runs the watcher's put-back over the extracted units, its env give
 @test "2d [RED] a pasted block on a RETIRED source is carried, and every line says the block could not be saved" {
   box 'also fix the margin[Pasted text #1 +19 lines]'
   run bash "$DRIVER"
-  [ "$status" -eq 0 ] && [ -f "$ARMED" ] || { echo "$output"; cat "$EVENTS"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$EVENTS"; false; }
+  [ -f "$ARMED" ] || { echo "$output"; cat "$EVENTS"; false; }
   d="$(carried_dir)"
   [ "$(cat "$d/unsaved.txt")" = '[Pasted text #1 +19 lines]' ] || { cat "$d/unsaved.txt"; false; }
   grep -q '^recycle-composer-carried.*pasted block.*could not be saved' "$EVENTS" || { cat "$EVENTS"; false; }
@@ -195,14 +198,18 @@ putback() { # runs the watcher's put-back over the extracted units, its env give
 @test "3 controls: focused (no --husk), kill switch, self form, not transplanted all REFUSE — no CLEAR, box intact, no hand-back" {
   box 'operator mid-thought'
   RCY_HUSK=0 FOCUSED=yes run bash "$DRIVER"
-  [ "$status" -eq 1 ] && [ ! -f "$ARMED" ] || { echo "$output"; false; }
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ ! -f "$ARMED" ] || { echo "$output"; false; }
   no_handback "$output"
   CC_RECYCLE_CARRY_DRAFT=off run bash "$DRIVER"
-  [ "$status" -eq 1 ] && [ ! -f "$ARMED" ] || { echo "$output"; false; }
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ ! -f "$ARMED" ] || { echo "$output"; false; }
   RCY_REMOTE=0 RESUME_LAUNCHER='' run bash "$DRIVER"
-  [ "$status" -eq 1 ] && [ ! -f "$ARMED" ] || { echo "$output"; false; }
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ ! -f "$ARMED" ] || { echo "$output"; false; }
   RCY_TRANSPLANTED_SOURCE=0 run bash "$DRIVER"
-  [ "$status" -eq 1 ] && [ ! -f "$ARMED" ] || { echo "$output"; false; }
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ ! -f "$ARMED" ] || { echo "$output"; false; }
   ! grep -q '^CLEAR:' "$SENT_LOG" || { cat "$SENT_LOG"; false; }
   [ "$(cat "$BOX")" = 'operator mid-thought' ] || false
   [ "$(grep -c '^recycle-held-draft' "$EVENTS")" = 4 ] || { cat "$EVENTS"; false; }
@@ -229,7 +236,8 @@ putback() { # runs the watcher's put-back over the extracted units, its env give
 @test "4 [RED] a clear that fails with the box untouched: refusal stands, box intact, the saved copy is named, nothing called lost" {
   box 'keep me'
   CLEAR_RC=1 run bash "$DRIVER"
-  [ "$status" -eq 1 ] && [ ! -f "$ARMED" ] || { echo "$output"; false; }
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ ! -f "$ARMED" ] || { echo "$output"; false; }
   [ "$(cat "$BOX")" = 'keep me' ] || false                                # stub's clear failed before blanking
   [ ! -s "$TYPE_LOG" ] || { cat "$TYPE_LOG"; false; }                     # nothing to put back: it never left
   d="$(carried_dir)"; [ -n "$d" ] || false
@@ -241,7 +249,8 @@ putback() { # runs the watcher's put-back over the extracted units, its env give
 @test "4b [RED] a clear that emptied the box but could not prove it: the text is put back in place and the refusal says so (spent, not untouched)" {
   box 'keep me too'
   CLEAR_RC=1 CLEAR_BLANKS=1 run bash "$DRIVER"
-  [ "$status" -eq 1 ] && [ ! -f "$ARMED" ] || { echo "$output"; false; }
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ ! -f "$ARMED" ] || { echo "$output"; false; }
   [ "$(cat "$TYPE_LOG")" = 'keys:77|keep me too' ] || { cat "$TYPE_LOG"; false; }
   d="$(carried_dir)"
   grep -q '^recycle-composer-restored' "$EVENTS" || { cat "$EVENTS"; false; }
@@ -253,7 +262,8 @@ putback() { # runs the watcher's put-back over the extracted units, its env give
 @test "5 [RED] the recycle stops after the clear and before /exit: the EXIT arm types the text back into the SAME box" {
   box 'half a thought'
   ABORT_BEFORE_EXIT=1 run bash "$DRIVER"
-  [ "$status" -eq 1 ] && [ -f "$ARMED" ] || { echo "$output"; false; }
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ -f "$ARMED" ] || { echo "$output"; false; }
   [ "$(cat "$TYPE_LOG")" = 'keys:77|half a thought' ] || { cat "$TYPE_LOG"; false; }
   [ "$(cat "$BOX")" = 'half a thought' ] || false
   grep -q '^recycle-composer-restored' "$EVENTS" || { cat "$EVENTS"; false; }
@@ -262,7 +272,8 @@ putback() { # runs the watcher's put-back over the extracted units, its env give
 @test "5b [RED] stopped before /exit with only [Image #5]: the saved image is re-attached by a bracketed paste of its path" {
   box '[Image #5]'
   ABORT_BEFORE_EXIT=1 run bash "$DRIVER"
-  [ "$status" -eq 1 ] && [ -f "$ARMED" ] || { echo "$output"; false; }
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ -f "$ARMED" ] || { echo "$output"; false; }
   d="$(carried_dir)"
   [ "$(cat "$TYPE_LOG")" = "paste:77|$d/5.png" ] || { cat "$TYPE_LOG"; false; }
   [ "$(tr -d '[:space:]' < "$BOX")" = '[Image#1]' ] || { cat "$BOX"; false; }
@@ -374,7 +385,9 @@ SH
     cc_carry_save 77 "$W/s1" "$IMG"; echo "rc=$?"
     printf "%s" "just text" > "$BOX"; cc_carry_save 77 "$W/s2" "$IMG"; echo "rc=$?"
     : > "$BOX"; cc_carry_save 77 "$W/s3" "$IMG"; echo "rc=$?"'
-  [ "${lines[0]}" = rc=3 ] && [ "${lines[1]}" = rc=0 ] && [ "${lines[2]}" = rc=1 ] || { echo "$output"; false; }
+  [ "${lines[0]}" = rc=3 ] || { echo "$output"; false; }
+  [ "${lines[1]}" = rc=0 ] || { echo "$output"; false; }
+  [ "${lines[2]}" = rc=1 ] || { echo "$output"; false; }
   [ "$(cat "$W/s1/unsaved.txt")" = '[Pasted text #2 +4 lines]' ] || false
   [ "$(cat "$W/s1/images.txt")" = "$(printf '%s\n%s' "$W/s1/5.png" "missing:$IMG/9.png")" ] || { cat "$W/s1/images.txt"; false; }
   cmp -s "$W/s1/5.png" "$IMG/5.png" || false

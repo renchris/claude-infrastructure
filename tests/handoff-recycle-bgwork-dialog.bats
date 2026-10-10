@@ -939,7 +939,8 @@ CU="\$'\\025'"   # how the stub's printf %q logs Ctrl-U
   _selfcall_stub; lc_keep_screen
   STUB_DIGIT_TO_COMPOSER=1 STUB_REDIALOG=1 CC_RECYCLE_BGWORK_GOAL_CLEAR=off run lc_drive
   d1="$(grep -n ' 2$' "$H/sends.log" | head -1 | cut -d: -f1)"; cu="$(grep -nF -- "$CU" "$H/sends.log" | head -1 | cut -d: -f1)"
-  [ -n "$d1" ] && [ -n "$cu" ] || { cat "$H/sends.log"; false; }
+  [ -n "$d1" ] || { cat "$H/sends.log"; false; }
+  [ -n "$cu" ] || { cat "$H/sends.log"; false; }
   # The reads made after the first answer and before the first Ctrl-U span at least 2 s.
   span="$(awk -v a="$d1" -v b="$cu" '$1 >= a && $1 < b { if (lo == "" || $2 < lo) lo = $2; if ($2 > hi) hi = $2 } END { print hi - lo }' "$H/reads.log")"
   [ "$span" -ge 2 ] || { echo "span=$span"; cat "$H/sends.log" "$H/reads.log"; false; }

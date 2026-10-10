@@ -866,7 +866,7 @@ ss_state() { run lr_successor_state "$SS_SID" "$1"; }
   # would call a source husk a "successor" and retire it (C2 skeptic). An Apple /usr/bin/python3 shim
   # hides its env the same way, so the env-visible leg needs a non-platform python3.
   local py; py="$(command -v python3)"
-  [ -n "$py" ] && [ "$py" != /usr/bin/python3 ] || skip "no non-Apple python3 on PATH (its env would be hidden like /bin/sleep's)"
+  if [ -z "$py" ] || [ "$py" = /usr/bin/python3 ]; then skip "no non-Apple python3 on PATH (its env would be hidden like /bin/sleep's)"; fi
   # shellcheck disable=SC2217  # the </dev/null detaches each job from bats' own stdio (hk_live's hang)
   /bin/sleep 45 >/dev/null 2>&1 </dev/null & local s=$!; echo "$s" >> "$BATS_TEST_TMPDIR/hk-pids"
   CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/cfg-x" "$py" -c 'import time; time.sleep(45)' >/dev/null 2>&1 </dev/null & local x=$!; echo "$x" >> "$BATS_TEST_TMPDIR/hk-pids"
@@ -964,11 +964,11 @@ par_leaf() { # $1=sid → a live pid THIS SUITE owns whose argv is `claude --res
     declare -A st=([src]="$H/.claude-secondary" [tgt]="$H/.claude-quaternary" [ter]="$H/.claude-tertiary")
     mkdir -p "${st[src]}/projects/-p" "${st[tgt]}/projects/-p" "${st[ter]}/projects/-p"
     tp="${st[src]}/projects/-p/$sid.jsonl"
-    [ "$(jq -r .handed_off <<< "$c")" = true ] && printf 'x\n' > "$tp.handed-off"
-    [ "$(jq -r .src_jsonl <<< "$c")" = true ] && printf 'x\n' > "$tp"
+    if [ "$(jq -r .handed_off <<< "$c")" = true ]; then printf 'x\n' > "$tp.handed-off"; fi
+    if [ "$(jq -r .src_jsonl <<< "$c")" = true ]; then printf 'x\n' > "$tp"; fi
     to="$(jq -r '.tomb.to // ""' <<< "$c")"; ph="$(jq -r '.tomb.phase // ""' <<< "$c")"
     [ -z "$to" ] || printf '{"handed_off_to":"%s"%s}\n' "${st[$to]}" "${ph:+,\"phase\":\"$ph\"}" > "${tp%.jsonl}.HANDOFF.json"
-    [ "$(jq -r .tgt_copy <<< "$c")" = true ] && printf 'x\n' > "${st[tgt]}/projects/-p/$sid.jsonl"
+    if [ "$(jq -r .tgt_copy <<< "$c")" = true ]; then printf 'x\n' > "${st[tgt]}/projects/-p/$sid.jsonl"; fi
     while IFS=$'\t' read -r cfg pane; do
       [ -n "$cfg" ] || continue
       if [ "$pane" != null ]; then

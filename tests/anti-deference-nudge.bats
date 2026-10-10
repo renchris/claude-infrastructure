@@ -609,7 +609,7 @@ PANE_POS=(
     run runhook "$(mkfix "$m")"
     [ "$status" -eq 0 ]
     if ! fired "$output"; then echo "DID NOT FIRE (should have): $m" >&2; false; fi
-    [[ "$output" == *"Pane-step handback"* ]]
+    [[ "$output" == *"Pane-step handback"* ]] || false
   done
 }
 @test "pane-step-handback: SILENT on narration, quotes, fences, a Run-this block and the genuine three" {
