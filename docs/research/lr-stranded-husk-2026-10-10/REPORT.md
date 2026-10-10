@@ -798,3 +798,23 @@ STEP 3 (VERIFY, READ-ONLY). Run once at the verdict and again 10 minutes later, 
 
 ACCEPTANCE: pid 28699 is gone; one --resume process runs on next4 in kitty window 168; the registry and session rows agree; a fresh turn exists; the draft and images are saved with their paths named; zero operator asks.
 
+
+---
+
+## Round 2 (2026-10-10, workflow wf_4a9b663b-16b + a clean PTY re-run)
+
+Per-lane final specs, red-test specs, skeptic objections and required changes are in `round2/<lane>.md`; PTY facts in `round2/M1b-pty.md`; the at-rest corpus in `round2/M2.md`.
+
+| lane | spec | skeptic | after merging the skeptic's required changes (lead) |
+|---|---|---|---|
+| C1 bgwork answer + landing check | 72 | 62 sound-with-changes | **91** — the one unmeasured fact (where a digit lands after the dialog closes) is now measured: it lands as literal composer text, a reliable "did not land" signal; landing proof is dialog gone + exit. Part A extends the existing stop-if-watcher precedent (watchers are not work, F15) to transplanted limit recycles; Part B is scoped to retired-source recycles. |
+| C2 owner for the stranded husk | 80 | 70 sound-with-changes | **92** — required changes are bounded (env-less holder ⇒ unknown, dead-pane admit guard, husk-filed marker reset, bash 3.2 case). The lr_recon parity commit lands after the FLEET_V2 cohort settles, and before recon.on is ever created. |
+| C3 refusal loop + husk driver | 80 | 72 sound-with-changes | **92** — token cleanup on a held recycle, scoped-await pin, seal LR_MOVE_ENV_DIR in five suites, `%` fix; lands with C1/C4. |
+| C4+C6 draft + image carry | 75 | 58 sound-with-changes | **91** — the image path is now measured (bracketed paste of the absolute path re-attaches a chip); the put-back stays under the reaper's 600 s floor; pasted-text chips decline on a live source. |
+| C5 doctrine + Stop hook | 72 | 55 sound-with-changes | **92** — the refusal text uses C4's real state variables, names a true next step on every lane, and the bats fixture stops pinning a pane-driving handback as allowed. |
+
+Measured on the live box (lead, c2eaac99a): `lr_successor_state` reads 186452ed as `husk 168 28699`; panes 2/3/14 (7f5deb68, 1c0f7f90, 4d059264) read `unmoved` — admitted copies whose source was never retired — so they recover through the ordinary transplanted recycle, not the husk path.
+
+Incident during round 2: a PTY probe slot submitted `/model haiku`, which Claude Code 2.1.293 persisted to the shared `~/.claude/settings.json` despite `--setting-sources project,local` (06:44:33Z). The lead removed the key (~06:58Z; every backup lacks it). Memory: `pty-probe-slash-command-writes-shared-user-settings`.
+
+Execution: five named teammates (Agent Teams, one worktree each), each starting from its lane's prototype diff under /tmp/lrsh-r2/ plus the skeptic's required changes; lead merges, re-runs the suites, lands, converges, then runs the field proof.
