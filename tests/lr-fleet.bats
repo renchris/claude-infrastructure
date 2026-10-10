@@ -2200,7 +2200,9 @@ SH
   husk_fixture
   printf '{"type":"assistant","timestamp":"2026-10-10T05:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"resumed and working"}]}}\n' \
     >> "$TER/projects/$SLUG/$SID.jsonl"
-  sleep 30 & W9A_REAP="$!"
+  # 600 s, reaped by teardown: at load ~300 (2026-10-10) a 30 s stand-in died before the read, and a
+  # DEAD successor correctly reads as a husk — the fixture, not the predicate, went red.
+  sleep 600 & W9A_REAP="$!"
   printf '{"paneUUID":"700","session_id":"%s","pid":%d,"account":"claude-tertiary","cwd":"%s"}\n' "$SID" "$W9A_REAP" "$CWD" > "$CC_REGISTRY_DIR/700.json"
   printf '%s' "$TER" > "$LR_MOVE_ENV_DIR/$W9A_REAP"
   run bash "$FLEET" --one "$SID" --target next3 --source-pane 168

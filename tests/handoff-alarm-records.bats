@@ -94,7 +94,9 @@ count()    { printf '%s' "$1" | grep -c . || true; }
 pristine_hf() { # $1=class token → prints the path to the pre-change artifact
   local rev out="$BATS_TEST_TMPDIR/pristine-$1.sh"
   [ -s "$out" ] && { printf '%s\n' "$out"; return 0; }
-  for rev in $(git -C "$REPO" rev-list -n 200 HEAD -- scripts/handoff-fire.sh); do
+  # The window must outrun the file's churn: at -n 200 the HUSK-PANE artifact sat at depth 197 on
+  # 2026-10-10 and four more commits pushed it out, which read as a red oracle, not a missing fix.
+  for rev in $(git -C "$REPO" rev-list -n 2000 HEAD -- scripts/handoff-fire.sh); do
     git -C "$REPO" show "$rev:scripts/handoff-fire.sh" > "$out" 2>/dev/null || continue
     if grep -qE "$1.*>/dev/null 2>&1 \|\| true" "$out"; then printf '%s\n' "$out"; return 0; fi
   done
