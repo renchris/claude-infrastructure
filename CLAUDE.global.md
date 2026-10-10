@@ -170,6 +170,25 @@ images, or the operator says not to.
 
 ---
 
+## API keys — agent-secrets is the default store
+
+Store and use API keys through `agent-secrets` (`~/bin/agent-secrets`, sops+age), in every project:
+- **Add:** check `agent-secrets list` first, then hand the operator `agent-secrets add <NAME>` to
+  run in **their own terminal** (it reads the value at a hidden prompt, and `!` has no keyboard).
+  Never suggest `security add-generic-password`.
+- **Use:** `agent-secrets run -- <cmd>`, reading the value from the child's environment. Never put
+  it on argv: `printf 'xi-api-key: %s\n' "$KEY" | curl -H @- …`, not `curl -H "xi-api-key: $KEY" …`.
+- **New host:** it must be on `~/.config/secrets/egress.allow` or the call is refused (seen:
+  `api.elevenlabs.io`). Adding a host widens a security bound, so ask the operator first.
+
+**Why** (operator decision 2026-10-10, made default "if agent-secrets is better, not just because we
+said so", and it is on the merits): `security find-generic-password -w` prints the key to stdout, so
+it lands in tool output and the transcript. agent-secrets keeps it encrypted at rest, lists names
+only, injects it into one child process, tracks rotation dates, and bounds where it can be sent with
+the egress allowlist.
+
+---
+
 ## Agent Teams Reinforcement (All Projects)
 
 **Agent Teams are the DEFAULT for all implementation work.** This applies globally.
