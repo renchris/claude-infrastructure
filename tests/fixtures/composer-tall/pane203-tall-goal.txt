@@ -1,0 +1,62 @@
+     peer mail ◀ 2 peer 
+     message(s) from 
+     forwarded:203 — full text: 
+     cc-mail
+
+⏺ 📬 peer mail
+
+⏺ My own pane (203) is a live
+  repro, so I'll capture its
+  screen read as a fixture and
+  check what the -n window
+  covers. 
+
+  Reading it2-kitty session read
+  semantics and my pane id
+  ⎿  $ cd /Users/op/Develo
+     pment/.worktrees/goal-arm-r
+     eadback
+     mkdir -p /tmp/gar && it2 
+     session read -s 203 -n 80 
+     --ansi > 
+     /tmp/gar/pane203-ansi.txt; 
+     it2 session read -s 203 -n 
+     80 > 
+     /tmp/gar/pane203-plain.txt
+     kitty @ ls 2>/dev/null | jq
+     '.[].tabs[].windows[] | 
+     select(.id==203 or 
+     .id==202) | {id, col…
+
+✳ Elucidating… (1m 19s)
+  ⎿  Tip: Use /btw to ask a 
+     quick side question without
+     interrupting Claude's 
+     current work
+
+────────────────────────────────
+❯ /goal a long wrapped /goal
+  pasted into a narrow or busy
+  pane reads back as matching
+  and is submitted, while a
+  real modal still reads as
+  unreadable and gets no
+  Enter, and the fix is landed
+  and live — proven by
+  printing the touched bats
+  summary (1..N, 0 failures)
+  including both replays and
+  git ls-tree origin/main on
+  the changed paths; do not
+  touch scripts/limit-recover/
+  lr_recon, settings.json,
+  completion-assert.sh,
+  close-shape.sh,
+  operator-readout.sh or
+  lead-crash-watchdog.sh; full
+  brief in the prompt above,
+  DoD at docs/plans/GOAL_ARM_R
+  EADBACK.md
+────────────────────────────────
+  (4) #203 bd0889f1 11% · goa…
+  ⏵⏵ auto mode on (shift+tab

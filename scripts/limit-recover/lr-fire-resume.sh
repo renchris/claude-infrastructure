@@ -852,8 +852,35 @@ scr="$("$LR_IT2" session read -s "$LR_PANE" -n "${LR_SCREEN_LINES:-24}" 2>/dev/n
 if LC_ALL=C grep -qE '❯[[:space:]]*[0-9]+\.' <<<"$scr"; then printf MENU; exit 0; fi
 body="$(LC_ALL=C awk -v b='────────────' '
   { line[NR] = $0; if (index($0, b) > 0) { b2 = b1; b1 = NR } }
-  END { if (b1 == 0 || b2 == 0 || b1 - b2 < 2) exit 9; for (i = b2 + 1; i < b1; i++) print line[i] }' <<<"$scr")" \
-  || { printf UNKNOWN; exit 0; }
+  END { if (b1 > 0 && b2 == 0) { print NR - b1; exit 8 }
+        if (b1 == 0 || b2 == 0 || b1 - b2 < 2) exit 9; for (i = b2 + 1; i < b1; i++) print line[i] }' <<<"$scr")" \
+  && rc=0 || rc=$?
+# A TALL COMPOSER (goal-arm-readback, 2026-10-10): a long prompt wrapped in a narrow pane puts the
+# TOP border above the 24-row window, and a healthy composer read UNKNOWN. Only in that shape (a
+# bottom border, no top) is a bigger window read, and its box counts only when shaped like a
+# composer: same bottom row; top rule at column 0; first row the prompt glyph; every later row
+# blank or two-space indented; no dialog selector under it. Anything else stays UNKNOWN. The same
+# rule lives in handoff-fire.sh composer_content (docs/research/goal-arm-readback-2026-10-10/REPORT.md).
+if [ "$rc" = 8 ] && [ "${LR_SCREEN_LINES_MAX:-200}" -gt "${LR_SCREEN_LINES:-24}" ] 2>/dev/null; then
+  off="$body"
+  scr="$("$LR_IT2" session read -s "$LR_PANE" -n "${LR_SCREEN_LINES_MAX:-200}" 2>/dev/null)" || scr=""
+  body="$(LC_ALL=C awk -v b='────────────' -v u='─' -v g='❯' -v off="$off" '
+    function border(s) { return index(s, b) > 0 }
+    { line[NR] = $0 }
+    END {
+      bot = NR - off
+      if (bot < 2 || !border(line[bot])) exit 9
+      for (top = bot - 1; top > 0 && !border(line[top]); top--) ;
+      if (top < 1 || bot - top < 2 || index(line[top], u) != 1) exit 9
+      if (index(line[top + 1], g) != 1) exit 9
+      for (i = top + 2; i < bot; i++)
+        if (line[i] !~ /^[ \t\r]*$/ && substr(line[i], 1, 2) != "  ") exit 9
+      for (i = bot + 1; i <= NR; i++)
+        if (line[i] ~ (g "[ \t]*[0-9]+\\.")) exit 9
+      for (i = top + 1; i < bot; i++) print line[i]
+    }' <<<"$scr")" && rc=0 || rc=$?
+fi
+[ "$rc" = 0 ] || { printf UNKNOWN; exit 0; }
 # The box ink (❯, U+00A0) and the control bytes go; every other character is content (D6.8), so an
 # empty composer reduces to the empty string and a non-ASCII draft does not.
 body="$(printf '%s' "$body" | LC_ALL=C perl -0777 -pe 's/\xE2\x9D\xAF|\xC2\xA0//g; tr/\x00-\x1F\x7F//d')"

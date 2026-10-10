@@ -29,7 +29,7 @@
 #                       NEVER fails the fire: the brief has already landed and been proven to
 #                       engage, so a failed arming leaves a working session that simply has no goal.
 #                       The result is READ BACK from the fired session's own transcript and printed
-#                       as `goal-arm verdict=set|unverified|abstained` (also a handoffs.jsonl row).
+#                       as `goal-arm verdict=set|unverified|abstained|held|mangled|unreachable` (also a handoffs.jsonl row).
 #                       Keep COND a POINTER, not the brief: '<objective> — full brief in the prompt
 #                       above; DoD at <path>'. Env equivalent: FIRE_GOAL.
 #   --account A         next|next2|next3|next4|auto (default auto). auto = live-limit ranking
@@ -4052,9 +4052,53 @@ composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer c
     }
     { if (border($0)) { b2 = b1; b1 = NR } }
     END {
+      if (b1 > 0 && b2 == 0) { print NR - b1; exit 8 }  # a bottom border and no top: maybe a TALL box
       if (b1 == 0 || b2 == 0 || b1 - b2 < 2) exit 9      # no box between two borders ⇒ UNKNOWN
       print (b2 + 1) "," (b1 - 1)
     }')" && rc=0 || rc=$?
+  # A TALL COMPOSER (goal-arm-readback, 2026-10-10). A /goal of ~470 chars in a 32-column pane wraps
+  # to 22 rows; with the footer under the bottom border, the TOP border sat 26 rows up, outside the
+  # 24-row window. Every read-back said UNKNOWN, the arm reported `<unreadable>` and withheld the CR
+  # over a healthy composer (panes 70, 175, 176, 202, 203). Only in that one shape (a bottom border
+  # and no top) is a bigger window read, and its box is accepted only if it is SHAPED like a composer:
+  #   (i)   its bottom border is the same row, counted from the bottom, as in the small read;
+  #   (ii)  its top border is a rule starting at column 0;
+  #   (iii) its first row starts at column 0 with the prompt glyph ❯;
+  #   (iv)  every later row is blank or starts with the two-space continuation indent;
+  #   (v)   no selector row (`❯ 1.`) sits under the bottom border: that border is a dialog's top
+  #         rule, and the "box" above it is an echoed prompt in the transcript.
+  # A modal, a teammate panel (╭──╮, the win527 snapshot) or transcript rules above a dialog fail one
+  # of those and stay UNKNOWN, exactly as before, so nothing is typed into a screen we cannot read.
+  # The common path (both borders in the small window) is unchanged byte for byte. Measured over 1,056
+  # composer snapshots: 117 reach this branch, all 117 are rejected, no verdict changes
+  # (docs/research/goal-arm-readback-2026-10-10/REPORT.md). lr-fire-resume.sh LR_SCREEN_SH carries
+  # the same rule; tests/composer-tall-readback.bats pins both.
+  if [ "$rc" = 8 ] && [ "${FIRE_COMPOSER_READLINES_MAX:-200}" -gt "${FIRE_COMPOSER_READLINES:-24}" ] 2>/dev/null; then
+    local off="$span"
+    scr="$(hf_bounded "$it2" session read -s "$id" -n "${FIRE_COMPOSER_READLINES_MAX:-200}" --ansi 2>/dev/null || true)"
+    [ -n "$scr" ] || scr="$(hf_bounded "$it2" session read -s "$id" -n "${FIRE_COMPOSER_READLINES_MAX:-200}" 2>/dev/null || true)"
+    [ -n "$scr" ] || return 1
+    plain="$(printf '%s\n' "$scr" | LC_ALL=C perl -pe 's/\e\[[0-?]*[ -\/]*[@-~]|\e\][^\a\e]*(?:\a|\e\\)?|\e.//g')"
+    span="$(printf '%s\n' "$plain" | LC_ALL=C awk -v b="$b12" -v u='─' -v g='❯' -v off="$off" '
+      function border(s,   t) {
+        if (index(s, b) > 0) return 1
+        t = s; sub(/[ \t\r]+$/, "", t)
+        return (index(t, u u) == 1 && length(t) > 3 * length(u) && substr(t, length(t) - length(u) + 1) == u)
+      }
+      { line[NR] = $0 }
+      END {
+        bot = NR - off
+        if (bot < 2 || !border(line[bot])) exit 9                        # (i)
+        for (top = bot - 1; top > 0 && !border(line[top]); top--) ;
+        if (top < 1 || bot - top < 2 || index(line[top], u) != 1) exit 9  # (ii)
+        if (index(line[top + 1], g) != 1) exit 9                          # (iii)
+        for (i = top + 2; i < bot; i++)                                   # (iv)
+          if (line[i] !~ /^[ \t\r]*$/ && substr(line[i], 1, 2) != "  ") exit 9
+        for (i = bot + 1; i <= NR; i++)                                   # (v)
+          if (line[i] ~ (g "[ \t]*[0-9]+\\.")) exit 9
+        print (top + 1) "," (bot - 1)
+      }')" && rc=0 || rc=$?
+  fi
   [ "$rc" = 0 ] || return 1
   # Drop every escape sequence and every FAINT run. SGR params are parsed, not substring-matched:
   # the `2` inside truecolor `38;2;r;g;b` is a colour-space selector, not faint, and reading it as
@@ -4643,6 +4687,7 @@ it2_paste_submit_verified() { # $1=it2-bin $2=pane-uuid $3=text [$4=max-pre-wait
   local ivl="${FIRE_PASTE_PREIVL:-5}" t=0 c crc got
   local tries="${FIRE_PASTE_READBACK_TRIES:-8}" n=0
   FIRE_PASTE_LAST_READBACK=""
+  FIRE_PASTE_SCRUB=""   # rc 4 only: scrubbed | receipted-unreadable | receipted-stuck — what is LEFT in the box
   if [ "${CC_FIRE_COMPOSER_GATE:-on}" != off ] && ! composer_owned "$id"; then
     FIRE_PASTE_LAST_READBACK="<not-owned>"
     echo "⚠ verified paste ABSTAINED — no proof a live CC session owns pane $id" >&2
@@ -4682,18 +4727,25 @@ it2_paste_submit_verified() { # $1=it2-bin $2=pane-uuid $3=text [$4=max-pre-wait
       # the chain dies with absence as its only symptom (4h+ measured, 2026-08-23). A scrub that
       # cannot finish, or a box that has become unreadable, still leaves the residue — and THAT
       # is when a receipt is written, so the recycle gate can finish the job later.
-      local scrub_rc=0 scrub_left="" scrub_note=""
+      # A RECEIPT MUST HOLD CONTENT, NEVER A SENTINEL (goal-arm-readback, 2026-10-10). The rc 2
+      # branch used to record FIRE_PASTE_LAST_READBACK — the literal `<unreadable>` — and
+      # composer_residue_is_ours compares byte for byte, so 7 of 8 receipts on disk could never
+      # authorise the scrub their note promised. What the box holds, once readable, is our payload:
+      # record that, stripped the way the read is. The scrub-off branch recorded a 120-char cut of a
+      # longer read; it records the whole read now.
+      local scrub_rc=0 scrub_left="" scrub_note="" want
+      want="$(printf '%s' "$text" | LC_ALL=C perl -0777 -pe 's/\xE2\x9D\xAF|\xC2\xA0//g; tr/\x00-\x1F\x7F//d' | LC_ALL=C tr -d '[:space:]')"
       if [ "${CC_COMPOSER_SCRUB:-on}" != off ]; then
         scrub_left="$(composer_scrub_verified "$it2" "$id")" || scrub_rc=$?
       else
-        scrub_rc=1; scrub_left="$FIRE_PASTE_LAST_READBACK"
+        scrub_rc=1; scrub_left="${got:-$want}"
       fi
       case "$scrub_rc" in
-        0) composer_residue_forget "$id"
+        0) composer_residue_forget "$id"; FIRE_PASTE_SCRUB=scrubbed
            scrub_note="The composer was then SCRUBBED CLEAN (read-back verified), so nothing is left behind and the next recycle is not blocked." ;;
-        2) composer_residue_record "$id" "$FIRE_PASTE_LAST_READBACK"
-           scrub_note="The scrub was NOT attempted — the composer became unreadable, which is dominated by a blocking permission/trust modal, and a keystroke there is consumed as its answer. A residue receipt was recorded so a later recycle can clear it once the modal is gone." ;;
-        *) composer_residue_record "$id" "${scrub_left:-$FIRE_PASTE_LAST_READBACK}"
+        2) composer_residue_record "$id" "$want"; FIRE_PASTE_SCRUB=receipted-unreadable
+           scrub_note="The scrub was NOT attempted — the composer became unreadable, which is dominated by a blocking permission/trust modal, and a keystroke there is consumed as its answer. A residue receipt holding the pasted text was recorded so a later recycle can clear it once the modal is gone." ;;
+        *) composer_residue_record "$id" "${scrub_left:-$want}"; FIRE_PASTE_SCRUB=receipted-stuck
            scrub_note="The scrub could NOT clear it (still holding '$(printf '%.60s' "${scrub_left:-?}")'); a residue receipt was recorded so a later recycle can clear it, and it is safe to clear by hand." ;;
       esac
       echo "⚠ verified paste MANGLED — ${tries} read-back(s) saw '$(printf '%.80s' "$FIRE_PASTE_LAST_READBACK")', expected $(paste_readback_expect "$text"); CR NOT sent. ${scrub_note}" >&2
@@ -8340,7 +8392,7 @@ check_slash_head() { # $1=prompt-file → 0 ok, 1 (loud) if the first non-blank 
 # claimed-outcome-vs-checked-outcome — a `|| true` plus a damping marker on a fake success deletes
 # the message). goal_armed_for_pane re-reads the FIRED session's own transcript for the attachment
 # the harness writes, matching the condition exactly, and every outcome prints a parseable
-# `goal-arm verdict=<set|unverified|abstained>` token and lands a ledger row.
+# `goal-arm verdict=<set|unverified|abstained|held|mangled|unreachable>` token and lands a ledger row.
 
 # Pre-fire validation of a --goal condition. Runs beside the payload gates, BEFORE any side effect,
 # so a malformed goal costs a refusal rather than a half-fired pane.
@@ -8505,9 +8557,23 @@ arm_goal() { # $1=it2-bin $2=pane $3=condition [$4=provenance] → always 0; pri
       command -v cc-notify >/dev/null 2>&1 && cc-notify "$pane" "GOAL-ARM DEFERRED: your composer held unsubmitted text, so the Stop-hook goal was NOT armed (nothing was typed over it). When the composer is clear, arm it yourself by submitting exactly: /goal $cond" >/dev/null 2>&1 || true
       return 0 ;;
     4)
-      echo "⚠ goal NOT armed — post-paste read-back did not match, CR NOT sent; the /goal text sits UNSUBMITTED in pane $pane's composer. goal-arm verdict=mangled reason=readback-mismatch${psfx}" >&2
-      emit_goal_event mangled "${ppfx}post-paste read-back mismatch for pane $pane; CR withheld, paste left unsubmitted; saw: ${FIRE_PASTE_LAST_READBACK:-<unrecorded>}" || true
-      command -v cc-notify >/dev/null 2>&1 && cc-notify "$pane" "GOAL-ARM MANGLED (no harm done): a /goal paste landed in your composer but the read-back did not match, so it was NOT submitted. If the composer shows only the /goal line, press Enter to arm it; otherwise clear the composer and submit exactly: /goal $cond" >/dev/null 2>&1 || true
+      # SAY WHAT IS LEFT, AND SAY IT TO SOMEONE WHO CAN ACT (goal-arm-readback, 2026-10-10). The
+      # scrub at the mismatch usually clears the box now that a tall composer reads, so "sits
+      # UNSUBMITTED" would be false; FIRE_PASTE_SCRUB says which it was. The fired session has no
+      # keyboard and cannot run /goal itself, so its line carries the one instruction it CAN follow
+      # (drive the brief to its end state without the backstop). On a --recycle the firing session
+      # is the one being replaced and nobody reads this stderr, so the desk is paged once.
+      local left="the /goal text sits UNSUBMITTED in pane $pane's composer" ask="If the composer shows only the /goal line, a human can press Enter to arm it; otherwise clear it and submit exactly: /goal $cond"
+      if [ "${FIRE_PASTE_SCRUB:-}" = scrubbed ]; then
+        left="the paste was scrubbed back out, so pane $pane's composer is clear"
+        ask="To arm it, a human submits exactly: /goal $cond"
+      fi
+      echo "⚠ goal NOT armed — post-paste read-back did not match, CR NOT sent; $left. goal-arm verdict=mangled reason=readback-mismatch scrub=${FIRE_PASTE_SCRUB:-none}${psfx}" >&2
+      emit_goal_event mangled "${ppfx}post-paste read-back mismatch for pane $pane; CR withheld; scrub=${FIRE_PASTE_SCRUB:-none}; saw: ${FIRE_PASTE_LAST_READBACK:-<unrecorded>}" || true
+      command -v cc-notify >/dev/null 2>&1 && cc-notify "$pane" "GOAL-ARM MANGLED (nothing was submitted): a /goal paste landed in your composer but the read-back did not match, so no Enter was sent; $left. You are running WITHOUT the goal backstop: nothing will re-prompt you at a Stop, so drive the brief to its stated end state yourself. $ask" >/dev/null 2>&1 || true
+      if [ -n "${RSID:-}" ] && [ "$pane" = "${RSID:-}" ]; then
+        command -v cc-notify >/dev/null 2>&1 && cc-notify --role desk "GOAL-ARM MANGLED on recycled pane $pane: the successor runs WITHOUT its /goal ($left). The firing session was the one replaced, so nobody else saw this. $ask" >/dev/null 2>&1 || true
+      fi
       return 0 ;;
     *)
       echo "⚠ goal NOT armed — the arming paste abstained or failed to send. The session HAS its brief and is working; only the Stop-hook goal is missing. Re-arm by typing '/goal $cond' into pane $pane. goal-arm verdict=abstained reason=paste-refused${psfx}" >&2

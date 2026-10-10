@@ -204,7 +204,7 @@ shell (verified) — metacharacters and newlines arrive literally; only trailing
   and the goal are TWO SUBMISSIONS, and `handoff-fire.sh` sends both: message 1 is the payload exactly
   as always (plain-text-headed, no cap), message 2 is a short `/goal <condition>` bracketed-pasted into
   the pane once engagement is PROVEN. It re-arms across `--recycle`, refuses a multi-line / slash-headed
-  / over-4000-char condition BEFORE firing, and prints `goal-arm verdict=set|unverified|abstained`
+  / over-4000-char condition BEFORE firing, and prints `goal-arm verdict=set|unverified|abstained|held|mangled|unreachable`
   read back from the fired session's own transcript — never a claim. A failed arming leaves a
   session that has its brief and is working; it can never leave a goal with no brief.
   > **📗 WRITE THE CONDITION TO ANTHROPIC'S RECIPE — it is documented, and our old template failed it.**

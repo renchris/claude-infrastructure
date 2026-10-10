@@ -1,0 +1,62 @@
+[m     [38:2:153:153:153mpeer mail ◀ 2 peer 
+[m     [38:2:153:153:153mmessage(s) from 
+[m     [38:2:153:153:153mforwarded:203 — full text: 
+[m     [38:2:153:153:153mcc-mail
+
+[m[38:2:255:255:255m⏺[39m 📬 peer mail
+
+[m[38:2:255:255:255m⏺[39m My own pane (203) is a live
+[m  repro, so I'll capture its
+[m  screen read as a fixture and
+[m  check what the [38:2:177:185:249m-n[39m window
+[m  covers. 
+
+[m[38:2:153:153:153m⏺[39m Reading it2-kitty session read
+[m  semantics and my pane id
+[m[38:2:153:153:153m  ⎿  $ cd /Users/op/Develo
+[m     [38:2:153:153:153mpment/.worktrees/goal-arm-r
+[m     [38:2:153:153:153meadback
+[m     [38:2:153:153:153mmkdir -p /tmp/gar && it2 
+[m     [38:2:153:153:153msession read -s 203 -n 80 
+[m     [38:2:153:153:153m--ansi > 
+[m     [38:2:153:153:153m/tmp/gar/pane203-ansi.txt; 
+[m     [38:2:153:153:153mit2 session read -s 203 -n 
+[m     [38:2:153:153:153m80 > 
+[m     [38:2:153:153:153m/tmp/gar/pane203-plain.txt
+[m     [38:2:153:153:153mkitty @ ls 2>/dev/null | jq
+[m     [38:2:153:153:153m'.[].tabs[].windows[] | 
+[m     [38:2:153:153:153mselect(.id==203 or 
+[m     [38:2:153:153:153m.id==202) | {id, col…
+
+[m[38:2:215:119:87m·[39m [38:2:225:139:107mElucidating…[38:2:215:119:87m [38:2:153:153:153m(1m 19s)
+[m[38:2:153:153:153m  ⎿  Tip: Use /btw to ask a 
+[m     [38:2:153:153:153mquick side question without
+[m     [38:2:153:153:153minterrupting Claude's 
+[m     [38:2:153:153:153mcurrent work
+
+[m[38:2:136:136:136m────────────────────────────────
+[m[38:2:153:153:153m❯ [38:2:177:185:249m/goal[39m a long wrapped [38:2:177:185:249m/goal
+[m  pasted into a narrow or busy
+[m  pane reads back as matching
+[m  and is submitted, while a
+[m  real modal still reads as
+[m  unreadable and gets no
+[m  Enter, and the fix is landed
+[m  and live — proven by
+[m  printing the touched bats
+[m  summary (1..N, 0 failures)
+[m  including both replays and
+[m  git ls-tree origin/main on
+[m  the changed paths; do not
+[m  touch scripts/limit-recover/
+[m  lr_recon, settings.json,
+[m  completion-assert.sh,
+[m  close-shape.sh,
+[m  operator-readout.sh or
+[m  lead-crash-watchdog.sh; full
+[m  brief in the prompt above,
+[m  DoD at docs/plans/GOAL_ARM_R
+[m  EADBACK.md
+[m[38:2:136:136:136m────────────────────────────────
+[m  [38:5:67m([38:5:75m4[38:5:67m)[38:2:153:153:153m #203 bd0889f1 [38:5:245m11% · goa…
+[m  [38:2:255:193:7m⏵⏵ auto mode on[38:2:153:153:153m (shift+tab
