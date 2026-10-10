@@ -234,6 +234,72 @@ n_gloss=$(printf '%s' "$MSG" | grep -E "$OPAQUE_GLOSS_RE" 2>/dev/null | grep -cv
 case "$n_ids"   in ''|*[!0-9]*) n_ids=0 ;;   esac
 case "$n_gloss" in ''|*[!0-9]*) n_gloss=0 ;; esac
 has_id=0; { [ "$n_ids" -ge 1 ] && [ "$n_gloss" -eq 0 ]; } && has_id=1
+# ── PANE-STEP HANDBACK (2026-10-10, lr-stranded-husk C5) ─────────────────────────────────────────
+# The 04:56:34Z close that ended "To finish: in pane 168, clear the prompt box (Ctrl-U), then tell
+# me here" abstained `no-tell`: no arm above knows that handing a TERMINAL-PANE keystroke to the
+# operator is deference. Operator ruling 2026-10-10 (docs/research/lr-stranded-husk-2026-10-10/
+# ROOT-CAUSE.md): zero human in the loop and zero asking — a kitty pane is driven by the rails
+# (handoff-fire's draft carry, cc_tui_submit, composer-intent), so a pane keystroke is never a
+# GUI-only step. The class is an IMPERATIVE or REQUEST (sentence-initial verb, please/can you/you'll
+# need to, a "then tell me / and I'll re-run" tail, or a conditional "once you clear … I'll finish")
+# joined to a pane location (pane N, that pane, the composer, the prompt box) or a key chord. Text
+# the operator would read as quoted, not as the agent's ask, is dropped first: fenced blocks,
+# blockquote lines, inline code, quoted spans. A sentence that names a login, a credential, an
+# approval/permission dialog, a destructive or production change or a force-push is the genuine
+# three and never counts; nor does one naming another app's GUI (Teams, Outlook, Gmail, a browser,
+# an editor, a trust dialog), whose step stays the operator's. Checked per SENTENCE, and BEFORE the
+# HARD_CORE carve-out below, because "I don't have permission to send keys, so please clear pane
+# 168" is exactly the handback the ruling forbids: a missing permission is asked for as its own
+# request, never as the step.
+# RESIDUAL, named rather than hidden: the arm bypasses ALL of HARD_CORE, not only its permission
+# excuse, and PANE_GENUINE vetoes one sentence at a time. So a genuine login or credential step
+# spread over two sentences ("This one needs your login on next4. Then press Enter in pane 168 and
+# tell me when it says done.") still fires (measured 2026-10-10; naming the browser in the second
+# sentence trips the GUI veto and silences it). Corpus incidence 0 of 2,051 candidates; the
+# per-message latch and the per-session cap bound the cost to one re-answer turn.
+# Every match drains its input (no grep -q): the pipefail-sigpipe ratchet allows this file 8 sites.
+# Kill switch ANTIDEF_PANE_ASK=off.
+# shellcheck disable=SC2016  # an awk program: its $0 and gsub are awk's, never the shell's
+PANE_STRIP_AWK='
+/^[ \t]*(```|~~~)/ { f = !f; next }
+f { next }
+/^[ \t]*>/ { next }
+{
+  s = $0
+  gsub(/\342\200\234|\342\200\235/, "\"", s)
+  gsub(/\342\200\230|\342\200\231/, "\047", s)
+  while (match(s, /`[^`]*`/)) { t = substr(s, RSTART + 1, RLENGTH - 2); if (length(t) > 16 || t ~ /[ \t]/) t = " "; s = substr(s, 1, RSTART - 1) t substr(s, RSTART + RLENGTH) }
+  gsub(/"[^"]*"/, " ", s)
+  s = " " s
+  while (match(s, /[^A-Za-z0-9]\047[^\047]*\047/)) s = substr(s, 1, RSTART) " " substr(s, RSTART + RLENGTH)
+  n = split(s, part, /[.!?]+[*_)\047"]*[ \t]+/)
+  for (i = 1; i <= n; i++) print part[i]
+}'
+PANE_VERB='(clear|press|hit|type|send|submit|paste|cancel|dismiss|select|click|tap|wipe|erase|empty|discard)([[:space:],:]|$)'
+PANE_LOC='(pane[[:space:]]*#?[0-9]+|(^|[^a-z])(that|its|the|their|your|source|old|husk|same|each|other|stuck|limited|kitty)( [a-z0-9-]+)? pane([^a-z]|$)|composer|prompt box|input box|message box|prompt line)'
+PANE_CHORD='(ctrl|control)[-+ ]?[a-z]([^a-z]|$)|/exit'
+PANE_KEY="${PANE_CHORD}|(^|[^a-z])esc(ape)?([^a-z]|\$)"
+PANE_START='(^|:|;|—|–|[[:space:]]-[[:space:]])[[:space:]]*([-*+]|[0-9]+[.)])?[[:space:]]*([*_]{1,3})?[[:space:]]*((please|just|now|first|then|so|simply|next)[ ,]+)?'
+PANE_REQ='((can|could|would|will) you( please)?|you( will|.?ll)? (need|have) to|you (should|must)|(i )?needs? you to|i.?d (need|like) you to|please)[ ,]+'
+PANE_TAILPRE='(^|[,;:(]|—|–|[^a-z](and|then|please|just|you (can|could|might|may|just)))[[:space:]]*([*_]{1,3})?[[:space:]]*'
+PANE_TAIL='((tell|let|ping|message|notify|show) me|let me know|for me|(and|then|,) ?i.?(ll| will) (re-?run|retry|continue|resume|finish|take|re-?fire|recover|proceed|restart)|once you|when you.?(ve|re| have| are)? (done|cleared|finished))'
+PANE_RELAY='((send|submit) or clear|clear or (send|submit)|clear/send|send/clear)'
+PANE_NEED='(needs?|need) (one |a |your )?(keystroke|key ?press|keyboard)|keystrokes? (from|by) you|yours to (clear|press|type|send|submit)|only you can (press|type|send|submit|clear)|(keystroke|key ?press)[^.!?]{0,20}only you can|needs? you[^.!?]{0,30}(keystroke|ctrl[-+ ]?[a-z]|esc([^a-z]|$))'
+PANE_EXCUSE='(not allowed|unable|can.?t|cannot) (to )?(press|type|send)[^.!?]{0,40}(pane|keystroke)[^.!?]{0,60}(yours|needs? you|you.?ll (need|have) to|please|by hand)'
+PANE_NEEDLOC='(^|[^a-z])(panes?|composers?|prompt box(es)?|message box(es)?)([^a-z]|$)'
+# A conditional handback, "once you clear pane 168's prompt box, I'll re-run": kept NARROW (the
+# agent's own I'll/I can must follow), because a bare "(once|if|when) you" lead measured 10 new hits
+# over the 2,051 candidates, 9 of them false; this form measured 0 new.
+PANE_COND="(^|[^a-z])(once|if|after|when|as soon as) you ${PANE_VERB}[^.!?]{0,80}${PANE_LOC}[^.!?]{0,40}(i.?ll|i will|i can)([^a-z]|\$)"
+PANE_ASK="${PANE_COND}|${PANE_EXCUSE}|${PANE_NEEDLOC}[^.!?]{0,120}(${PANE_NEED})|(${PANE_NEED})[^.!?]{0,120}${PANE_NEEDLOC}|${PANE_START}${PANE_VERB}[^.!?]{0,80}${PANE_LOC}|${PANE_START}(in|on|over|inside) ${PANE_LOC}[ ,]+${PANE_VERB}|${PANE_REQ}${PANE_VERB}[^.!?]{0,80}(${PANE_LOC}|${PANE_KEY})|${PANE_LOC}[^.!?]{0,80}${PANE_REQ}${PANE_VERB}|${PANE_TAILPRE}${PANE_VERB}[^.!?]{0,80}(${PANE_LOC}|${PANE_KEY})[^.!?]{0,80}${PANE_TAIL}|(${PANE_START}|${PANE_REQ})${PANE_RELAY}|${PANE_START}(press|hit|type|send)[[:space:]]+((ctrl|control)[-+ ]?[a-z]([^a-z]|\$)|/exit[^.!?]{0,20} (in|into) this pane)"
+# The GUI veto (slack … trust) keeps another app's composer, editor pane or trust dialog the
+# operator's; measured to keep all 52 of the 52 corpus hits over the 2,051 candidates.
+PANE_GENUINE='(^|[^a-z])(slack|teams|outlook|gmail|e-?mail|browser|editor|vs ?code|finder|safari|chrome|trust|o?auth|log ?in|login|sign.?in|credential|password|passphrase|api.?key|token|secret|2fa|otp|approv[a-z]*|allow|deny|destructive|production|force.?push|sudo|keychain|touch ?id|permission (prompt|dialog)|drag|scroll|self-close|(no|zero|without( a| any)?) (keystroke|key ?press)|(don.?t|do not|no) need to|needs? nothing|(close|closing)( [a-z0-9#]+){0,3} panes?|panes? [^.!?]{0,30}(close|closing))([^a-z]|$)'
+has_pane=0; PANE_TRIGGER=""
+if [ "${ANTIDEF_PANE_ASK:-on}" != off ]; then
+  _pane_hits="$(printf '%s\n' "$MSG" | awk "$PANE_STRIP_AWK" 2>/dev/null | grep -iE "$PANE_ASK" 2>/dev/null | grep -ivE "$PANE_GENUINE" 2>/dev/null || true)"
+  [ -n "$_pane_hits" ] && { has_pane=1; PANE_TRIGGER="$(printf '%s\n' "$_pane_hits" | awk 'NR==1' | sed 's/^[[:space:]]*//' | cut -c1-160)"; }
+fi
 # ── SEMANTIC SECOND OPINION (Jev) — runs ONLY where the four lexical arms found nothing ──────
 # THE HOLE IT COVERS — and the honest denominator, because the tempting number is rhetoric.
 # This hook abstains `no-tell` on 5,127 of 5,419 evaluations (94.6%), but that is an abstention
@@ -285,7 +351,7 @@ has_id=0; { [ "$n_ids" -ge 1 ] && [ "$n_gloss" -eq 0 ]; } && has_id=1
 # Revival is one env var, and it restores the code path byte for byte: CC_JEV_RETIRED=0.
 has_jev=0; JEV_P=""
 if [ "${CC_JEV_RETIRED:-1}" = 0 ] \
-   && [ "$has_tell" -eq 0 ] && [ "$has_done" -eq 0 ] && [ "$has_cat" -eq 0 ] && [ "$has_id" -eq 0 ]; then
+   && [ "$has_tell" -eq 0 ] && [ "$has_done" -eq 0 ] && [ "$has_cat" -eq 0 ] && [ "$has_id" -eq 0 ] && [ "$has_pane" -eq 0 ]; then
   _ad_jev_lib="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lib/jev.sh"
   if [ -r "$_ad_jev_lib" ]; then
     # shellcheck source=/dev/null
@@ -336,7 +402,7 @@ if [ "${CC_JEV_RETIRED:-1}" = 0 ] \
     fi
   fi
 fi
-{ [ "$has_tell" -eq 1 ] || [ "$has_done" -eq 1 ] || [ "$has_cat" -eq 1 ] || [ "$has_id" -eq 1 ] || [ "$has_jev" -eq 1 ]; } || abstain "no-tell"
+{ [ "$has_tell" -eq 1 ] || [ "$has_done" -eq 1 ] || [ "$has_cat" -eq 1 ] || [ "$has_id" -eq 1 ] || [ "$has_jev" -eq 1 ] || [ "$has_pane" -eq 1 ]; } || abstain "no-tell"
 
 # ── DEFERRING TO A LEAD IS NOT THE DEFERENCE DEFECT (2026-08-02) ────────────────────────────────
 # This hook's premise is one session ↔ one human: its reason text says "the operator cannot act on
@@ -389,7 +455,7 @@ printf '%s' "$MSG" | grep -iqE "$HARD_CORE" && hard=1
 # A genuine blocker is exempt from every nag EXCEPT the opaque-identifier one (2026-10-01): a STOP-ASK
 # is precisely where the operator must act, so it is where a bare id costs most. Before this, every
 # "⛔ Blocked — need your call … decision 1b6654bab64d" close abstained here as genuine-blocker.
-if [ "$hard" -eq 1 ] && [ "$has_id" -eq 0 ]; then
+if [ "$hard" -eq 1 ] && [ "$has_id" -eq 0 ] && [ "$has_pane" -eq 0 ]; then
   # (P15 T-P15-5) Genuine-3 → durable packet. A fork/external-info genuine stop leaves a durable,
   # push-notified class-B packet — never a bare idle. Credential/sudo/destructive/permission
   # reasons are class C (they need a staged one-action artifact the hook cannot produce) → NO
@@ -437,7 +503,11 @@ fi
 
 # ── Decide fire (deference vs false-done), else abstain with a distinct, logged reason. ──
 FIRE_KIND=""
-if [ "$hard" -eq 1 ]; then
+if [ "$has_pane" -eq 1 ]; then
+  # FIRST, ahead of the genuine-blocker exit: the arm carries its own per-sentence carve-out
+  # (PANE_GENUINE), so what reaches here is a pane keystroke handed to the operator.
+  FIRE_KIND="pane-step-handback"
+elif [ "$hard" -eq 1 ]; then
   # Reachable only with has_id=1 (the carve-out above exits otherwise): a genuine blocker that hands
   # the operator a bare id. Only the expansion is demanded; the stop itself stays legitimate.
   FIRE_KIND="opaque-identifier"
@@ -474,7 +544,9 @@ fi
 # 11 days said nothing about WHICH arm was silenced, over WHAT rung, on WHAT text. Those are the
 # same three fields that make a FIRED record readable, and a suppressed one needs them more —
 # nothing downstream can reconstruct them from a reason string. One computation, both records.
-if [ "$FIRE_KIND" = "false-done" ]; then
+if [ "$FIRE_KIND" = "pane-step-handback" ]; then
+  TRIGGER="$PANE_TRIGGER"
+elif [ "$FIRE_KIND" = "false-done" ]; then
   TRIGGER="$(printf '%s' "$MSG" | grep -ioE "$DONE_TELLS" 2>/dev/null | head -1 | tr -d '\n')"
 elif [ "$FIRE_KIND" = "category-not-idea" ]; then
   TRIGGER="$(printf '%s' "$MSG" | grep -ioE "$CATEGORY_TELLS" 2>/dev/null | head -1 | tr -d '\n')"
@@ -525,7 +597,9 @@ log_idl fired "$FIRE_KIND" \
   "$(jq -cn --arg tell "$TRIGGER" --argjson count "$((N+1))" --argjson max "$MAX" \
       '{tell:$tell,count:$count,max:$max}')"
 
-if [ "$FIRE_KIND" = "opaque-identifier" ]; then
+if [ "$FIRE_KIND" = "pane-step-handback" ]; then
+  reason="Pane-step handback: you asked the operator to press, clear, type or send something in a terminal pane (matched: \"${TRIGGER}\"). Operator ruling 2026-10-10: zero human in the loop and zero asking. A kitty pane keystroke is never a GUI-only step: the rails drive panes, and a held draft is the rail's to carry (save the text and any [Image #N] file, clear, move, retype it unsent in the successor, name the saved paths). Do the step yourself through the rail and prove it from disk. If a call was refused for want of a permission, ask for THAT permission in chat as its own request, naming the exact rule, and never hand back the keystroke — neither as words nor as a handed script or command that sends it. Only a login, a credential, an approval or permission dialog, a destructive change, or closing a pane stays the operator's. (pane-step-handback nudge $((N+1))/${MAX})"
+elif [ "$FIRE_KIND" = "opaque-identifier" ]; then
   reason="Opaque-identifier: you handed the operator ${n_ids} bare hex ids and expanded NONE of them (${TRIGGER}). CLAUDE.md § Session Close: 'Every identifier is expanded at first use in that same message' — ≥2 unexpanded ids measured at 49.2% vs 33.6% reply-failure (+15.5pp, p=0.0001), ~10x the effect of length. An id is a filing key, not a fact: the operator cannot answer '0aa3febf3143' without a round-trip asking what it IS, and you already know. Re-close with the QUESTION as the subject and the id in parentheses after it — not 'answer b1614375d051' but 'may the sync endpoint read permissions inside the transaction it guards? (b1614375d051)'. Gloss ONE id anywhere and this never fires. (opaque-identifier nudge $((N+1))/${MAX})"
 elif [ "$FIRE_KIND" = "semantic-deference" ]; then
   reason="Anti-deference (semantic): no banned phrase appears in this message, but read as a whole it hands work back rather than doing it — P(defers)=${JEV_P} on a threshold of ${CC_JEV_MIN_P}. This is the E0 shape CLAUDE.md § Session Close names: a turn that IDENTIFIES work and then yields is not a read-only turn, and 'I have identified the remaining items' is not a close — the items are the work. Run the Follow-On Gate F1-F4 on each thing you just named and DRIVE the passes, here or by firing a session; drop the fails in one line. Surface only the genuine three (external info the operator alone has / an unsettled value-fork / a C10 you cannot self-execute). (semantic-deference nudge $((N+1))/${MAX})"

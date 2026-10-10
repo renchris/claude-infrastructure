@@ -557,3 +557,103 @@ fired()  { echo "$1" | grep -q '"decision":"block"'; }   # hook stdout ⇒ did i
   echo "$output" | grep -q "expanded at first use"
   ! echo "$output" | grep -q "tells the kind, not the idea"
 }
+
+# ══ PANE-STEP HANDBACK (2026-10-10, lr-stranded-husk C5) ══════════════════════════════════════════
+# The 04:56:34Z close of session 92928fee handed the operator a pane keystroke ("in pane 168, clear
+# the prompt box (Ctrl-U), then tell me here") and abstained `no-tell`. Operator ruling 2026-10-10:
+# zero human in the loop, zero asking — the rails drive panes (docs/research/lr-stranded-husk-
+# 2026-10-10/ROOT-CAUSE.md). RED on the pre-arm hook: every positive below abstains no-tell (or
+# genuine-blocker for the permission excuse).
+PANE_INCIDENT_CLOSE="No, don't close pane 168 yet. The session hasn't been resumed anywhere, but nothing is lost.
+
+- **Where the conversation is:** next4 holds a complete copy, the same size byte for byte as the original. No process is running it, though. The earlier \`/exit\` at 04:19 never actually quit pane 168's next2 process, so the pane is a dead end that blocks every prompt.
+- **Why I couldn't restart it:** the four standard recovery commands refuse this case and point at each other in a loop. The low-level in-place restart did accept it, but stopped before typing anything because pane 168's prompt box holds your unsent \`[Image#5]\`. That draft is yours, so I left it alone.
+
+To finish: in pane 168, clear the prompt box (Ctrl-U), then tell me here. I'll re-run the restart, which will bring the same session back in pane 168 on next4 with its full conversation. If you'd rather close pane 168 instead, that's also safe for the data. The session would then wait on next4 until someone resumes it."
+PANE_POS=(
+  "$PANE_INCIDENT_CLOSE"
+  "No, don't close pane 168 yet. To finish: in pane 168, clear the prompt box (Ctrl-U), then tell me here. I'll re-run the restart."
+  "clear it with Ctrl-U in pane 168 and tell me"
+  "press Esc in that pane then let me know"
+  "can you clear the prompt box in pane 12"
+  "hit Enter in pane 7 and I will re-run"
+  "please send or clear the draft in pane 168"
+  "type /exit in pane 3 for me"
+  "Two panes are frozen and need a keystroke from you."
+  "I'm not allowed to press Enter in another session's pane, so this one is yours."
+)
+@test "pane-step-handback: fires on the incident close and on every listed pane-keystroke ask" {
+  for m in "${PANE_POS[@]}"; do
+    run runhook "$(mkfix "$m")"
+    [ "$status" -eq 0 ]
+    if ! fired "$output"; then echo "DID NOT FIRE (should have): $m" >&2; false; fi
+    [[ "$output" == *"Pane-step handback"* ]] || { echo "wrong corrective for: $m — $output" >&2; false; }
+  done
+}
+@test "pane-step-handback: fires with NO locale set (launchd/postland shape)" {
+  run runhook_nolocale "$(mkfix "$PANE_INCIDENT_CLOSE")"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+@test "pane-step-handback: a permission excuse does not buy the genuine-blocker exit" {
+  # HARD_CORE matches "i don't have permission"; before the arm this abstained genuine-blocker.
+  run runhook "$(mkfix "I don't have permission to send keys to pane 168, so please clear it with Ctrl-U.")"
+  [ "$status" -eq 0 ]; fired "$output"
+  jq -e 'select(.disposition=="fired" and .reason=="pane-step-handback") | .tell | length > 0' "$ANTIDEF_IDL" >/dev/null
+}
+@test "pane-step-handback: fires on a conditional handback (once/if you clear … I'll finish)" {
+  # The skeptic's measured paraphrases of the incident; the narrow conditional alternation adds 0
+  # hits over the 2,051-record candidate corpus.
+  local m
+  for m in "Once you clear pane 168's prompt box, I'll re-run the restart." \
+           "If you clear pane 168's composer, I can finish the move."; do
+    run runhook "$(mkfix "$m")"
+    [ "$status" -eq 0 ]
+    if ! fired "$output"; then echo "DID NOT FIRE (should have): $m" >&2; false; fi
+    [[ "$output" == *"Pane-step handback"* ]]
+  done
+}
+@test "pane-step-handback: SILENT on narration, quotes, fences, a Run-this block and the genuine three" {
+  # The Run-this fixture hands a command that drives NO pane: a handed script that sends a pane
+  # keystroke is the same forbidden handback (commands/limit-recover.md), so it is not pinned here.
+  local msgs=(
+    "I cleared pane 168 and the recycle proceeded."
+    "the rail pressed Esc in pane 7 and the dialog closed."
+    "The rail will save the draft, then clear pane 168's composer, then retype it unsent in the successor."
+    $'▶ Run this:\n`~/.claude/scripts/wrap-ledger.sh --machine`'
+    $'```\nclear it with Ctrl-U in pane 168 and tell me\n```'
+    "I rewrote limit-recover.md so it no longer tells the operator to press Ctrl-U in pane N."
+    "I removed 'press Ctrl-U in its pane' from the upgrade note."
+    "The old refusal said \"Clear/send the draft, then re-run\" and the agent relayed it."
+    "> clear it with Ctrl-U in pane 168 and tell me"
+    "You can type in pane 168 again."
+    "Type /login in pane 3 and finish the browser sign-in; the account's OAuth token expired."
+    "Paste your API key into the prompt in pane 5."
+    "It's safe to close pane 168: its conversation lives on next4."
+    "Next I'll press Esc in pane 7 and re-run."
+    "The recycle carried the draft from pane 168's composer into the successor; it needed no keystroke from you."
+  )
+  for m in "${msgs[@]}"; do
+    run runhook "$(mkfix "$m")"
+    [ "$status" -eq 0 ]
+    if [ -n "$output" ]; then echo "FIRED (should have been silent): $m" >&2; false; fi
+  done
+}
+@test "pane-step-handback: SILENT on GUI steps in other apps (the measured GUI veto)" {
+  # Outbound or GUI-only steps keep their owner (the slim global instructions' GUI-only clause); the
+  # veto kept all 52 of the 52 corpus hits over the 2,051 candidates.
+  local m
+  for m in "Paste the summary into the Teams message box and click Send." \
+           "Paste the text into Gmail's composer and hit Send." \
+           "paste it into the Outlook message box and send it" \
+           "Select the text in the editor pane and press Cmd+C." \
+           "Press 1 in pane 168 to trust it, then tell me."; do
+    run runhook "$(mkfix "$m")"
+    [ "$status" -eq 0 ]
+    if [ -n "$output" ]; then echo "FIRED (should have been silent): $m" >&2; false; fi
+  done
+}
+@test "pane-step-handback: kill switch ANTIDEF_PANE_ASK=off restores the old abstain" {
+  ANTIDEF_PANE_ASK=off run runhook "$(mkfix "clear it with Ctrl-U in pane 168 and tell me")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q '"reason":"no-tell"' "$ANTIDEF_IDL"
+}
