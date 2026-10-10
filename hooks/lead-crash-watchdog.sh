@@ -336,11 +336,33 @@ retired_by_desk() {
 # `"type":"shutdown_request"`, addressed to this member (`"requestId":"shutdown-…@<name>"`). Matching
 # the bare word is not enough: every member's instructions attachment and brief mention
 # shutdown_request in prose, which is exactly the contamination root cause 7 found in the close reader.
-# One streaming pass, bounded like last_assistant_text. Unreadable ⇒ `0 - - 0` (not a teammate).
+# One streaming pass, bounded like last_assistant_text. Unreadable ⇒ `0 - - 0 - 0` (not a teammate).
+#
+# Output is TEAMMATE<TAB>NAME<TAB>TEAM<TAB>SHUTDOWN<TAB>SOURCE<TAB>MIDTASK. SOURCE is `own` (the request
+# reached the member's transcript), `lead-request` / `lead-taskstop` (the LEAD's transcript), or `-`.
+# MIDTASK=1 only on a lead source whose member died with a tool call still open.
+#
+# THE LEAD-SIDE SOURCE (2026-10-10, docs/research/teammate-teardown-verdict-2026-10-10/REPORT.md).
+# The member-transcript record is necessary-but-late: a shutdown_request reaches a member only at its
+# next turn boundary, so a BUSY member that is TaskStopped and then SIGTERMed never records it — and
+# TaskStop alone records nothing on the member's side at all. Measured over claude-crashes.jsonl: 28
+# lead-ordered teardowns painted CRASH/abrupt-unknown (cvf-docs, pane 200, was one), 20 of them
+# TaskStop-only; 5 of the 28 were a bare kill with no successful order, and stay CRASH by design. The lead's own transcript holds the order in HARNESS-written form a member cannot
+# author: the SendMessage result's toolUseResult {success, request_id shutdown-…@<name>, target}, and a
+# TaskStop result {task_type: in_process_teammate} joined to `input.task_id == <name>` by tool_use_id.
+# Guards: the lead transcript is resolved from the team (config leadSessionId, else the
+# `session-<sid8>` name); a record carrying teamName/agentName is a member's, never the lead's; the
+# ORDER's timestamp (the TaskStop tool_use — its result lands just after the member's exit flush)
+# must postdate the member's first record (a re-spawned namesake) and fall within 600 s before the
+# member's last write (+2 s), so a lead that TaskStops a member it found already dead absolves nothing.
+# A shutdown_request alone proves only that it was SENT, so it counts just for a member that died
+# between turns and never answered approve:false. Jetsam outranks all of this, as it outranks the
+# member-side source. Skeptic review + fleet replay: REPORT.md § Skeptic (23 of 28 rescued, 0 of 80
+# no-order teammate crashes flipped).
 teammate_facts() {
   local t="${1:-}" out=""
   if [[ -n "$t" && -f "$t" ]]; then
-    out=$(lcw_bounded "${LCW_REPORT_READ_TIMEOUT_S:-30}" "${LCW_PYTHON_BIN:-python3}" - "$t" "${LEAD_AGENT_ID:-}" <<'PY' 2>/dev/null || true
+    out=$(lcw_bounded "${LCW_REPORT_READ_TIMEOUT_S:-30}" "${LCW_PYTHON_BIN:-python3}" - "$t" "${LEAD_AGENT_ID:-}" "${2:-}" <<'PY' 2>/dev/null || true
 import json, re, sys
 argv_id = sys.argv[2] if len(sys.argv) > 2 else ""
 name = argv_id.split("@", 1)[0] if "@" in argv_id else ""
@@ -373,16 +395,147 @@ try:
 except Exception:
     pass
 shut = any((not r) or (not name) or r.endswith("@" + name) for r in rids)
-sys.stdout.write("%d\t%s\t%s\t%d" % (1 if is_team else 0, name or "-", team or "-", 1 if (is_team and shut) else 0))
+source = "own" if (is_team and shut) else "-"
+mid = 0
+def emit():
+    sys.stdout.write("%d\t%s\t%s\t%d\t%s\t%d\n" % (1 if is_team else 0, name or "-", team or "-",
+                     1 if (is_team and shut) else 0, source, mid))
+    sys.stdout.flush()
+# Identity first, flushed: if the lead read below is cut by the bound, the caller still has the
+# member-side facts (it takes the LAST line), instead of losing the teammate identity with the rest.
+emit()
+if is_team and not shut and name and team and team != "-":
+    import glob, os
+    from datetime import datetime
+    def ep(ts):
+        try:
+            return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return None
+    # The member's own facts: when it started (a same-name member spawned EARLIER is not this one),
+    # whether it refused a shutdown (approve:false), and whether a tool call was still open at death.
+    first = None; refused = False; pending = set()
+    try:
+        with open(sys.argv[1], "r", errors="replace") as fh:
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                if first is None and rec.get("timestamp"):
+                    first = ep(rec["timestamp"])
+                msg = rec.get("message") or {}
+                c = msg.get("content") if isinstance(msg, dict) else None
+                if not isinstance(c, list):
+                    continue
+                for b in c:
+                    if not isinstance(b, dict):
+                        continue
+                    if b.get("type") == "tool_use":
+                        pending.add(b.get("id"))
+                        inp = b.get("input") or {}
+                        m = inp.get("message") if isinstance(inp, dict) else None
+                        if isinstance(m, dict) and m.get("type") == "shutdown_response" and m.get("approve") is False:
+                            refused = True
+                    elif b.get("type") == "tool_result":
+                        pending.discard(b.get("tool_use_id"))
+    except Exception:
+        first = None
+    # The anchor is the member's LAST WRITE: a crash stops writing at death, while a member its lead
+    # stopped flushes its exit 0.3-0.7 s AFTER the order (measured, 20 of 26 rows; max 260 s). A caller's
+    # death epoch can only pull it earlier. The ORDER (the TaskStop tool_use, not its result, which lands
+    # just after that flush) must fall in [anchor - window, anchor + 2 s] and after the member's first
+    # record — so a lead that stops a member it found already dead, or an order to an earlier same-name
+    # member, absolves nothing.
+    try:
+        anchor = os.stat(sys.argv[1]).st_mtime
+    except Exception:
+        anchor = None
+    if len(sys.argv) > 3 and sys.argv[3].isdigit() and anchor is not None:
+        anchor = min(anchor, float(sys.argv[3]))
+    win = float(os.environ.get("LCW_LEAD_TEARDOWN_WINDOW_S") or 600)
+    bases = (os.environ.get("CC_ACCOUNT_BASES") or " ".join(os.path.expanduser(p) for p in
+             ("~/.claude", "~/.claude-secondary", "~/.claude-tertiary", "~/.claude-quaternary"))).split()
+    lead_tx = None
+    for b in bases:  # the team config names its lead exactly, whatever the team is called
+        try:
+            lsid = json.load(open(os.path.join(b, "teams", team, "config.json"))).get("leadSessionId") or ""
+        except Exception:
+            lsid = ""
+        if lsid:
+            near = os.path.join(os.path.dirname(sys.argv[1]), lsid + ".jsonl")
+            hits = [near] if os.path.isfile(near) else glob.glob(os.path.join(b, "projects", "*", lsid + ".jsonl"))
+            if hits:
+                lead_tx = hits[0]; break
+    sid8 = team[len("session-"):] if team.startswith("session-") else ""
+    if lead_tx is None and len(sid8) == 8:  # the team dir is gone: its name is session-<lead sid8>
+        near = sorted(glob.glob(os.path.join(os.path.dirname(sys.argv[1]), sid8 + "*.jsonl")))
+        if near:
+            lead_tx = near[0]
+        else:
+            for b in bases:
+                hits = sorted(glob.glob(os.path.join(b, "projects", "*", sid8 + "*.jsonl")))
+                if hits:
+                    lead_tx = hits[0]; break
+    if first is not None and anchor is not None and lead_tx:
+        def inwin(t):
+            return t is not None and t >= first and anchor - win <= t <= anchor + 2
+        stops = {}; got = ""; asked = False
+        try:
+            with open(lead_tx, "r", errors="replace") as fh:
+                for line in fh:
+                    if name not in line and "in_process_teammate" not in line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except Exception:
+                        continue
+                    if rec.get("teamName") or rec.get("agentName"):
+                        continue  # a member's record is never its lead's order
+                    t = ep(rec.get("timestamp"))
+                    msg = rec.get("message") or {}
+                    c = msg.get("content") if isinstance(msg, dict) else None
+                    if rec.get("type") == "assistant" and isinstance(c, list):
+                        for b in c:
+                            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "TaskStop" \
+                               and (b.get("input") or {}).get("task_id") in (name, name + "@" + team):
+                                stops[b.get("id")] = t   # the ORDER's time
+                    if rec.get("type") != "user":
+                        continue
+                    r = rec.get("toolUseResult")
+                    if not isinstance(r, dict):
+                        continue
+                    # (a) TaskStop of this member, joined by tool_use_id; a failed stop is a tool_use_error
+                    #     string, and a same-named background task has another task_type
+                    if r.get("task_type") == "in_process_teammate" and isinstance(c, list):
+                        for b in c:
+                            if isinstance(b, dict) and b.get("type") == "tool_result" and inwin(stops.get(b.get("tool_use_id"))):
+                                got = "lead-taskstop"
+                    # (b) SendMessage shutdown_request, as the HARNESS recorded its delivery to the inbox
+                    if r.get("success") is True and str(r.get("request_id", "")).startswith("shutdown-") \
+                       and str(r.get("request_id", "")).endswith("@" + name) and r.get("target", name) == name and inwin(t):
+                        asked = True
+        except Exception:
+            got = ""; asked = False
+        # A request alone proves it was SENT, not that it ended this member: it counts only for a member
+        # that died between turns (no open tool call) and never refused. A TaskStop is the lead ending it.
+        if not got and asked and not pending and not refused:
+            got = "lead-request"
+        if got:
+            shut = True; source = got; mid = 1 if pending else 0
+            emit()
 PY
 )
+    out="${out%$'\n'}"; out="${out##*$'\n'}"   # the LAST complete line: the lead read may upgrade the first
   fi
-  [[ -n "$out" ]] || out=$'0\t-\t-\t0'
+  [[ -n "$out" ]] || out=$'0\t-\t-\t0\t-\t0'
   printf '%s' "$out"
 }
-retired_teammate() { # $1=transcript → 0 iff a teammate that exited after its lead's shutdown_request
-  local f; f=$(teammate_facts "${1:-}")
-  [[ "${f%%$'\t'*}" == 1 && "${f##*$'\t'}" == 1 ]]
+retired_teammate() { # $1=transcript $2=death epoch (optional) → 0 iff a teammate its lead retired (either source)
+  local f is shut
+  f=$(teammate_facts "${1:-}" "${2:-}")
+  IFS=$'\t' read -r is _ _ shut _ <<< "$f" || true
+  [[ "$is" == 1 && "$shut" == 1 ]]
 }
 
 # EXIT<TAB>SIGNAL<TAB>RECORD_PATH<TAB>VERSION for a pid's newest close-record (empty if none).
@@ -553,7 +706,7 @@ classify_death() {
         # A teammate its lead shut down is retired whatever its exit code says (see teammate_facts):
         # a clean exit is relabelled so the pane verdict says "close it", a signal is not a crash.
         # Jetsam still outranks, as above.
-        if [[ "$cls" != *retired-by-desk ]] && ! jetsam_near_death "$death" && retired_teammate "$t"; then
+        if [[ "$cls" != *retired-by-desk ]] && ! jetsam_near_death "$death" && retired_teammate "$t" "$death"; then
           cls=$'RECYCLE\tretired-teammate'
         fi
         if [[ -n "$t" ]]; then
@@ -579,9 +732,9 @@ classify_death() {
     printf 'CRASH\tjetsam-oom\t%s\t%s' "${kb:-0}" "${recs:-0}"; return 0
   fi
   # 1.4) RETIRED TEAMMATE — a team member that exited after its lead's shutdown_request (see
-  #      teammate_facts). The structured request in its own transcript is the evidence; it outranks
-  #      the markers and prose below because a member never writes either.
-  if retired_teammate "$t"; then
+  #      teammate_facts). The structured request in its own transcript, else its LEAD's recorded
+  #      shutdown_request/TaskStop of it, is the evidence; it outranks the markers and prose below.
+  if retired_teammate "$t" "$death"; then
     printf 'RECYCLE\tretired-teammate\t%s\t%s' "${kb:-0}" "${recs:-0}"; return 0
   fi
   # 1.5) DELIBERATE TEARDOWN — a fresh marker handoff-fire.sh writes the moment a session
@@ -1196,7 +1349,7 @@ death_page_line() {
   local recover="Its pane is still open at a live shell and looks EXACTLY like a clean /exit, so nothing on screen says this happened. Recover with cc-husk-sweep --resume (it resolves the session AND its account; the pane's own printed claude --resume line uses the default account and cannot see another store's transcript)."
   case "$cause" in
     retired-by-desk) recover="Its pane was closed by that retirement and its work was landed before the kill — there is NOTHING to recover here and it must NOT be resumed." ;;
-    retired-teammate) recover="A teammate is not resumable — its lead re-spawns members. Close its pane; there is nothing to recover here." ;;
+    retired-teammate) recover="Its lead ordered this end (shutdown_request or TaskStop) — there is nothing to recover or re-spawn. Close its pane." ;;
   esac
   # THE EVIDENCE CLAUSE IS CONDITIONAL, because the close-record it names is frequently ABSENT and
   # naming it unconditionally sends the reader to an empty path. Measured 2026-09-08 09:24 (backlog
@@ -1436,7 +1589,7 @@ pane_custody_fact() { # $1=tpath → lib/pane-custody.sh's TSV line for LEAD_PAN
 pane_verdict_text() { # $1=sid $2=class $3=cause $4=exit $5=sig $6=tpath → line 1: headline<TAB>title; then a blank line and the block
   local sid="$1" class="$2" cause="$3" ec="${4:-}" sig="${5:-}" tpath="${6:-}"
   local launcher work close reason when role="" rule headline title body resume
-  local tm tm_is tm_name tm_team reopen
+  local tm tm_is tm_name tm_team tm_src tm_mid reopen
   launcher=$(pane_launcher_for_cfg "$LEAD_CFG")
   work=$(pane_work_state "$LEAD_CWD"); close=$(pane_last_close "$tpath"); reason=$(pane_end_reason "$sid")
   when=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -1447,7 +1600,7 @@ pane_verdict_text() { # $1=sid $2=class $3=cause $4=exit $5=sig $6=tpath → lin
   # lead to report to, and its lead re-spawns members itself. So no teammate banner offers --resume —
   # the reopen line names the lead instead. Its team is `session-<lead sid8>`.
   tm=$(teammate_facts "$tpath")
-  IFS=$'\t' read -r tm_is tm_name tm_team _ <<< "$tm" || true
+  IFS=$'\t' read -r tm_is tm_name tm_team _ tm_src tm_mid <<< "$tm" || true
   local reopen_dirty reopen_clean resume_crash crash_note
   reopen_dirty="▶ Reopen it here:   $resume"
   reopen_clean="To reopen the session instead:
@@ -1465,10 +1618,30 @@ $reopen"; resume_crash="$reopen"
   fi
   case "$class:$cause" in
     RECYCLE:retired-teammate)
-      headline="✅ RETIRED — teammate $tm_name (session ${sid:0:8}) was shut down by its lead; its work went to the lead"
+      # No re-spawn advice here: the lead ORDERED this end, so there is nothing to re-spawn. The two
+      # sources differ in what they prove: `own` means the member received the request (its work went
+      # to the lead); a lead source proves the order, not the member's state — so a member that died
+      # with a tool call open is said to have been stopped MID-TASK, and the pane is NOT auto-closed
+      # ("holds nothing" is the closer's trigger), because the warning is the point of the paint.
       title="✅ retired ${sid:0:8}"
-      body="$headline (verdict painted $when).
-   This pane holds nothing: close this pane (Ctrl-D). It is not resumable — its lead re-spawns members." ;;
+      if [[ "${tm_src:-own}" == lead-* ]]; then
+        local how="TaskStop"; [[ "$tm_src" == lead-request ]] && how="shutdown_request"
+        headline="✅ RETIRED — teammate $tm_name (session ${sid:0:8}) was stopped by its lead ($how); this was not a crash"
+        if [[ "${tm_mid:-0}" == 1 ]]; then
+          headline="⚠ RETIRED MID-TASK — teammate $tm_name (session ${sid:0:8}) was stopped by its lead ($how); not a crash, but it was mid-task"
+          title="⚠ retired mid-task ${sid:0:8}"
+          body="$headline (verdict painted $when).
+   ⚠ It was stopped MID-TASK (a tool call never returned): check its worktree for uncommitted work
+   before its lead (session ${tm_team#session-}) removes it. Then close this pane (Ctrl-D); there is nothing to resume."
+        else
+          body="$headline (verdict painted $when).
+   This pane holds nothing: close this pane (Ctrl-D). There is nothing to resume."
+        fi
+      else
+        headline="✅ RETIRED — teammate $tm_name (session ${sid:0:8}) was shut down by its lead; its work went to the lead"
+        body="$headline (verdict painted $when).
+   This pane holds nothing: close this pane (Ctrl-D). There is nothing to resume."
+      fi ;;
     RECYCLE:retired-by-desk)
       headline="✅ RETIRED — Claude session ${sid:0:8}${role} was retired by the desk after its work was collected"
       title="✅ retired ${sid:0:8}"

@@ -176,3 +176,113 @@ painted() { cat "$T/dev/ttys099"; }
   bash "$HOOK" --surface-death "$SID" 63977 CRASH external-sigterm 143 15 "$TX" >/dev/null
   grep -q '^--role desk SESSION DEATH' "$PAGED"
 }
+
+# ── 5. a LEAD-ORDERED teardown the member never recorded (2026-10-10, pane 200) ──────────────────
+# docs/research/teammate-teardown-verdict-2026-10-10/REPORT.md. Teammate cvf-docs was BUSY when its
+# lead sent shutdown_request (it arrives only at a turn boundary), then TaskStopped (records nothing on
+# the member's side) and SIGTERMed (exit 143) — so its own transcript holds no request, and the pane was
+# painted "⛔ NOT A CLEAN EXIT … the lead re-spawns members". The lead's transcript holds the order.
+
+iso() { date -u -r "$(( $(date +%s) - $1 ))" +%Y-%m-%dT%H:%M:%S.000Z; } # $1 = seconds ago
+LEAD_SID="4726bdf3-1111-4222-8333-944455556666"
+mk_busy_member() { # a member whose LAST record is a tool call that never returned (killed mid-call)
+  printf '{"teamName":"session-4726bdf3","agentName":"cvf-docs","type":"user","timestamp":"%s","message":{"role":"user","content":"<teammate-message teammate_id=\\"team-lead\\">\\nApply the doc edits. Then wait for a shutdown_request.\\n</teammate-message>"}}\n' "$(iso 900)" > "$TX"
+  printf '{"teamName":"session-4726bdf3","agentName":"cvf-docs","type":"assistant","timestamp":"%s","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_m1","name":"Bash","input":{"command":"shellcheck x.sh"}}]}}\n' "$(iso 200)" >> "$TX"
+}
+# The lead's records, as the harness writes them: no teamName/agentName; toolUseResult carries the facts.
+lead_request() { # $1=member $2=seconds ago
+  printf '{"type":"user","timestamp":"%s","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_sr%s","content":"{}"}]},"toolUseResult":{"success":true,"message":"Shutdown request sent to %s.","request_id":"shutdown-1791655466065@%s","target":"%s"}}\n' "$(iso "$2")" "$2" "$1" "$1" "$1" >> "$LTX"
+}
+lead_taskstop() { # $1=member $2=seconds ago (the ORDER) $3=ok|fail $4=result lag in seconds (default 0)
+  printf '{"type":"assistant","timestamp":"%s","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_ts%s","name":"TaskStop","input":{"task_id":"%s"}}]}}\n' "$(iso "$2")" "$2" "$1" >> "$LTX"
+  if [ "${3:-ok}" = ok ]; then
+    printf '{"type":"user","timestamp":"%s","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_ts%s","content":"Successfully stopped task"}]},"toolUseResult":{"message":"Successfully stopped task: t5ou0rn4u","task_id":"t5ou0rn4u","task_type":"in_process_teammate"}}\n' "$(iso "$(( $2 - ${4:-0} ))")" "$2" >> "$LTX"
+  else
+    printf '{"type":"user","timestamp":"%s","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_ts%s","content":"<tool_use_error>No task found</tool_use_error>","is_error":true}]},"toolUseResult":"Error: No task found"}\n' "$(iso "$2")" "$2" >> "$LTX"
+  fi
+}
+at() { touch -t "$(date -r "$(( $(date +%s) - $1 ))" +%Y%m%d%H%M.%S)" "$2"; } # $1=seconds ago $2=file
+mk_idle_member() { # between turns: no open tool call
+  mk_member_tx cvf-docs; sed -i '' "s/\"type\":\"user\",/\"type\":\"user\",\"timestamp\":\"$(iso 900)\",/" "$TX"
+}
+setup_lead() { LTX="$T/acct/projects/proj/$LEAD_SID.jsonl"; : > "$LTX"; }
+cls() { bash "$HOOK" --classify "$SID" "${1:-}" | cut -f1-2; }
+
+@test "REPLAY pane 200: shutdown_request → TaskStop → SIGTERM 143 on a busy member is RETIRED by its lead, no re-spawn advice" {
+  mk_busy_member; setup_lead
+  # REAL TIMING (skeptic, fleet replay): the TaskStop RESULT lands just AFTER the member's exit flush,
+  # so the order is judged by its tool_use time. Order -120 s, member's last write -119 s, result -118 s.
+  lead_request cvf-docs 150; lead_taskstop cvf-docs 120 ok 2
+  printf '{"type":"assistant","timestamp":"%s","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_k","name":"Bash","input":{"command":"kill -TERM 23017"}}]}}\n' "$(iso 110)" >> "$LTX"
+  at 119 "$TX"
+  [ "$(cls)" = "$(printf 'RECYCLE\tretired-teammate')" ]
+  printf '{"pid":23017,"exit_code":143,"signal":"15","version":"2.1.293"}\n' > "$T/close/23017-100.json"
+  [ "$(cls 23017)" = "$(printf 'RECYCLE\tretired-teammate')" ]
+  run verdict RECYCLE retired-teammate 143 15
+  [ "$status" -eq 0 ]
+  painted | grep -q 'RETIRED MID-TASK — teammate cvf-docs (session 74148f20) was stopped by its lead (TaskStop); not a crash'
+  painted | grep -q 'check its worktree for uncommitted work'
+  ! painted | grep -q 're-spawns members' || false
+  ! painted | grep -q 'NOT A CLEAN EXIT' || false
+  ! painted | grep -q -- '--resume' || false
+  [ ! -s "$T/closed.txt" ] || { echo "a mid-task retirement was auto-closed, losing its warning"; false; }
+  bash "$HOOK" --surface-death "$SID" 23017 RECYCLE retired-teammate 143 15 "$TX" >/dev/null
+  [ ! -s "$PAGED" ] || { echo "a lead-ordered teardown paged the desk: $(cat "$PAGED")"; false; }
+}
+
+@test "CONTROL: the same busy member dying with NO lead teardown is still NOT A CLEAN EXIT" {
+  mk_busy_member; setup_lead                    # the lead transcript exists but ordered nothing
+  printf '{"pid":23017,"exit_code":143,"signal":"15","version":"2.1.293"}\n' > "$T/close/23017-100.json"
+  [ "$(cls 23017)" = "$(printf 'CRASH\texternal-sigterm')" ]
+  rm -f "$T/close/23017-100.json"
+  [ "$(cls 23017 | cut -f1)" = CRASH ]
+  run verdict CRASH abrupt-unknown "" ""
+  painted | grep -q 'NOT A CLEAN EXIT'
+  ! painted | grep -q 'RETIRED' || false
+}
+
+@test "an idle member retired by its lead's request alone is RETIRED, holds nothing, and its pane is handed to the closer" {
+  mk_idle_member
+  setup_lead; lead_request cvf-docs 60
+  [ "$(cls)" = "$(printf 'RECYCLE\tretired-teammate')" ]
+  run verdict RECYCLE retired-teammate "" ""
+  painted | grep -q 'stopped by its lead (shutdown_request)'
+  painted | grep -q 'This pane holds nothing'
+  ! painted | grep -q 're-spawns members' || false
+  [ -s "$T/closed.txt" ]
+}
+
+@test "lead evidence that cannot be THIS member's teardown absolves nothing" {
+  mk_busy_member; setup_lead
+  lead_taskstop someone-else 120;   [ "$(cls | cut -f1)" = CRASH ]   # another member…
+  printf '{"type":"assistant","timestamp":"%s","message":{"role":"assistant","content":[{"type":"text","text":"Stopping someone-else; cvf-docs keeps working."},{"type":"tool_use","id":"toolu_tx","name":"TaskStop","input":{"task_id":"someone-else"}}]}}\n' "$(iso 100)" >> "$LTX"
+  printf '{"type":"user","timestamp":"%s","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_tx","content":"ok"}]},"toolUseResult":{"message":"Successfully stopped task","task_id":"t9","task_type":"in_process_teammate"}}\n' "$(iso 100)" >> "$LTX"
+  [ "$(cls | cut -f1)" = CRASH ]                                     # …even when its record names this one
+  setup_lead; lead_taskstop cvf-docs 120 fail; [ "$(cls | cut -f1)" = CRASH ]   # a failed stop
+  setup_lead; lead_taskstop cvf-docs 120; sed -i '' 's/"task_type":"in_process_teammate"/"task_type":"local_agent","command":"watch cvf-docs"/' "$LTX"
+  [ "$(cls | cut -f1)" = CRASH ]                                     # a same-named NON-teammate task
+  setup_lead; lead_taskstop cvf-docs 300; sed -i '' "1s/\"timestamp\":\"[^\"]*\"/\"timestamp\":\"$(iso 250)\"/" "$TX"
+  [ "$(cls | cut -f1)" = CRASH ]                                     # predates the member (a namesake)
+  mk_busy_member
+  setup_lead; lead_taskstop cvf-docs 30; at 60 "$TX"
+  [ "$(cls | cut -f1)" = CRASH ]                                     # ordered after its last write: found dead
+  setup_lead; lead_taskstop cvf-docs 700 ok 1; at 60 "$TX"
+  [ "$(cls | cut -f1)" = CRASH ]                                     # ordered >600 s before it died: not this end
+  touch "$TX"
+  setup_lead; lead_request cvf-docs 60
+  [ "$(cls | cut -f1)" = CRASH ]                                     # a request alone, member mid-call: SENT, not proof
+  mk_idle_member; setup_lead
+  printf '{"teamName":"session-4726bdf3","agentName":"cvf-docs","type":"user","timestamp":"%s","message":{"role":"user","content":[]},"toolUseResult":{"success":true,"request_id":"shutdown-1@cvf-docs","target":"cvf-docs"}}\n' "$(iso 60)" >> "$LTX"
+  [ "$(cls | cut -f1)" = CRASH ]                                     # a member-authored record
+  setup_lead; lead_request cvf-docs 150
+  printf '{"teamName":"session-4726bdf3","agentName":"cvf-docs","type":"assistant","timestamp":"%s","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_r","name":"SendMessage","input":{"to":"team-lead","message":{"type":"shutdown_response","request_id":"shutdown-1791655466065@cvf-docs","approve":false}}}]}}\n' "$(iso 140)" >> "$TX"
+  printf '{"teamName":"session-4726bdf3","agentName":"cvf-docs","type":"user","timestamp":"%s","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_r","content":"sent"}]}}\n' "$(iso 139)" >> "$TX"
+  [ "$(cls | cut -f1)" = CRASH ]                                     # it refused the request: a later death is its own
+}
+
+@test "the member-side retired banner gives no re-spawn advice" {
+  mk_member_tx lt-wrap; add_shutdown lt-wrap
+  run verdict RECYCLE retired-teammate "" ""
+  painted | grep -q 'its work went to the lead'
+  ! painted | grep -q 're-spawns members' || false
+}
