@@ -85,6 +85,8 @@
 # ── SAFETY (mirrors anti-deference-nudge.sh:26-41,90-104) ──
 #   L one-shot latch (a fired MSG hash never re-fires) · C hard cap PER CLASS: `assert` (every
 #   conviction arm) = COMPLETION_MAX (default 3), `shape` (D6) = COMPLETION_SHAPE_MAX (default 2),
+#   `verdict` (D6 verdict-first alone) = COMPLETION_VERDICT_MAX (default 2), `act` (D7 alone) =
+#   COMPLETION_ACT_MAX (default 2),
 #   each silent forever after — see the latch block for why one shared counter starved the terminal
 #   close · F fail-safe: block ONLY via {decision:"block"}; EVERY path exits 0;
 #   any read/jq/ledger failure → abstain. No `set -e` (a Stop hook exiting 2 false-blocks).
@@ -97,6 +99,9 @@
 #   (arm D6 — origin Pyramid-close contract; CC_CLOSE_SHAPE=0 is its R8 kill switch) ·
 #   CC_CLOSE_ACT / CC_ACT_WINDOW / COMPLETION_ACT_MAX (arm D7 — the act line; CC_CLOSE_ACT=0 is its
 #   kill switch, and `act` is its own cap class for the reason the latch block gives) ·
+#   CC_VERDICT_FIRST / COMPLETION_VERDICT_MAX (CLOSE_VERDICT_FIRST — D6's `verdict-first` token and
+#   D3's conditional-yes verdict-line branch; CC_VERDICT_FIRST=0 silences every FAIL that land
+#   added, and `verdict` is its own cap class for the reason the latch block gives) ·
 #   PEER_OWNED_LIB / CC_REGISTRY_DIR (LIVE-PEER-OWNED attribution — see the block at that term)
 set -uo pipefail
 
@@ -316,11 +321,24 @@ CLOSE='(^|[^a-z])done([^a-z]|$)|complete([ds]|ly)?([^a-z]|$)|finished|nothing (l
 # than stripped: the anchor is the only token that cares where the line starts.
 CA_SETTLED='✅|safe to close|good to close|^[^A-Za-z]*yes([^a-z]|$)|complete|all done|nothing (left|more) to do'
 CA_RETRACT='parked|unlanded|still (needs|to|open|parked)|remains?([^a-z]|$)|except|(^|[^a-z])but([^a-z]|$)|aside from|one thing|with one|yours|pending|caveat'
-ca_first=""
+# VERDICT LINES (CLOSE_VERDICT_FIRST, 2026-10-10). A line carrying the good-to-close anchor is the
+# close's VERDICT, and the gate and D3 judge it by its POLARITY, never by the rung-line lists above:
+# "Good to close: no — two steps remain, pane 182 owns one" is ONE answer whose content IS the
+# remainder, and CA_RETRACT would read "remain"/"yours"/"pending" in it as a withdrawal (measured:
+# 34.2% of real no-lines would trip it on line 1). A "no" counts only when punctuation or the line
+# end follows it, so "Good to close: no loose ends" — a YES echoing the operator's own question —
+# is not read as NO. Inline, not sourced from close-shape.sh: the gate below runs before
+# _ca_source_close_shape is defined. tests/completion-assert.bats pins agreement with
+# close_verdict_polarity on single lines, and lists the known divergences.
+CA_VERDICT_ANCHOR='good[[:space:]]+to[[:space:]]+close'
+CA_VERDICT_NO='(^|[^a-z])(not|isn.t|aren.t)[[:space:]]+((yet|quite)[[:space:]]+)?good[[:space:]]+to[[:space:]]+close|good[[:space:]]+to[[:space:]]+close[^a-z]*(not([^a-z]|$)|no[[:space:]]*([^a-z[:space:]]|$))'
+CA_YES_HEDGE='good[[:space:]]+to[[:space:]]+close[^a-z]*yes[^a-z]+(but|except|aside from|apart from|other than|once|until|pending|provided|as long as|if|with one thing)([^a-z]|$)'
+ca_first=""; ca_second=""
 while IFS= read -r ca_ln || [ -n "$ca_ln" ]; do
   ca_t="${ca_ln#"${ca_ln%%[![:space:]]*}"}"
   [ -n "$ca_t" ] || continue
-  ca_first="$ca_t"; break
+  if [ -z "$ca_first" ]; then ca_first="$ca_t"; continue; fi
+  ca_second="$ca_t"; break
 done <<< "$MSG"
 
 # A SETTLED-VERDICT FIRST LINE is a close by definition, even when the body carries none of the
@@ -330,8 +348,14 @@ done <<< "$MSG"
 # TINY: everything CA_SETTLED adds beyond CLOSE is "safe to close" / "good to close" / a line-1
 # leading "yes", each of which IS a close. (Consequence, stated rather than hidden: the ledger arm
 # can now also see those three, which is correct — they were closes it was blind to.)
+#   A NEGATIVE verdict line 1 is not a done-tell (CLOSE_VERDICT_FIRST): "Good to close: no — the
+# keep-or-retire call is open with you" matches CA_SETTLED by its anchor alone, so a ⛔ close that
+# leads with its verdict would be convicted by the ledger arm where today's ⛔-led line 1 abstains
+# here. Stated rather than hidden: a no-led close with no CLOSE token now skips every downstream
+# arm, as today's ⛔-led one does (6 of 5,283 anchored closes in 30 days; REPORT.md §4).
 if ! printf '%s' "$MSG" | grep -iqE "$CLOSE"; then
-  { [ -n "$ca_first" ] && printf '%s' "$ca_first" | grep -iqE "$CA_SETTLED"; } || abstain "no-close-tell"
+  { [ -n "$ca_first" ] && printf '%s' "$ca_first" | grep -iqE "$CA_SETTLED" \
+    && ! printf '%s' "$ca_first" | grep -iqE "$CA_VERDICT_NO"; } || abstain "no-close-tell"
 fi
 
 # ── Genuine three (ship/land explicitly EXCLUDED — it is drivable, not a hold). ──
@@ -1052,7 +1076,19 @@ fi
 #   "📦 Done, on a branch only — /ship to land it" (where the remainder IS the rung) does not fire.
 #   CA_SETTLED / CA_RETRACT / ca_first are defined at the close-tell gate above, which needs the
 #   same first line — see the note there on why a settled line 1 counts as a close.
-if [ -n "$ca_first" ] \
+#   A VERDICT LINE 1 (CLOSE_VERDICT_FIRST) is judged differently: the rung-line lists apply only to
+#   the text BEFORE the anchor, plus one verdict-line test — a yes immediately qualified by a
+#   condition or exception ("yes if…", "yes, once…", "yes, but not until…"), which is the founding
+#   shape written as a verdict. A no that names what remains is never a hedge. The conditional-yes
+#   branch is the one new FAIL class here, so CC_VERDICT_FIRST=0 silences it with the rest.
+if [ -n "$ca_first" ] && printf '%s' "$ca_first" | grep -iE "$CA_VERDICT_ANCHOR" >/dev/null; then
+  _ca_pre="$(printf '%s' "$ca_first" | awk -v v="$CA_VERDICT_ANCHOR" '{ l = tolower($0); if (match(l, v)) $0 = substr($0, 1, RSTART - 1); print; exit }')"
+  if { printf '%s' "$_ca_pre" | grep -iE "$CA_SETTLED" >/dev/null \
+       && printf '%s' "$_ca_pre" | grep -iE "$CA_RETRACT" >/dev/null; } \
+     || { [ "${CC_VERDICT_FIRST:-1}" != 0 ] && printf '%s' "$ca_first" | grep -iE "$CA_YES_HEDGE" >/dev/null; }; then
+    d3=1
+  fi
+elif [ -n "$ca_first" ] \
    && printf '%s' "$ca_first" | grep -iE "$CA_SETTLED" >/dev/null \
    && printf '%s' "$ca_first" | grep -iE "$CA_RETRACT" >/dev/null; then
   d3=1
@@ -1259,10 +1295,26 @@ if [ "${CC_CLOSE_SHAPE:-1}" != 0 ] && [ "$contra_shape" -eq 0 ] \
     #   No new class, cap or latch: the token joins _d6_missing and reuses the existing `shape`
     # budget. The arm is already gated to RUNG ∈ {✅,👤} + origin + positive write evidence +
     # contra=0 above, so it cannot reach a mid-wave message.
-    case "$ca_first" in
+    #   UNDER A VERDICT LINE 1 (CLOSE_VERDICT_FIRST, 2026-10-10) the rung line is line 2, so the
+    # containment test reads lines 1-2. Every close that does not lead with a verdict keeps today's
+    # line-1 strictness.
+    _d6_rl="$ca_first"
+    if printf '%s' "$ca_first" | grep -iE "$CA_VERDICT_ANCHOR" >/dev/null; then
+      _d6_rl="$ca_first
+$ca_second"
+    fi
+    case "$_d6_rl" in
       *"$RUNG"*) : ;;
       *) _d6_missing="${_d6_missing:+$_d6_missing }line-1-rung" ;;
     esac
+    # VERDICT-FIRST (CLOSE_VERDICT_FIRST, operator screenshot 2026-10-10): the verdict is NO but
+    # line 1 leads with a done reading (✅ · complete · done · nothing to do · safe to close · "my
+    # side is done"), so the close reads as finished before the no is reached. Position is NOT
+    # demanded — only this contradiction. Fail-open on an older lib; CC_VERDICT_FIRST=0 silences it.
+    if [ "${CC_VERDICT_FIRST:-1}" != 0 ] && command -v close_verdict_not_first >/dev/null 2>&1 \
+       && close_verdict_not_first "$MSG" "$ca_first"; then
+      _d6_missing="${_d6_missing:+$_d6_missing }verdict-first"
+    fi
     # An explicit `if` rather than a trailing `[ … ] && d6=1`: this hook runs under `set -uo
     # pipefail`, so a false test as the last command of the compound would abort the moment
     # anyone adds `-e`.
@@ -1373,8 +1425,16 @@ arm=""
 [ "$d6" -eq 1 ] && arm="${arm:+$arm+}shape"
 [ "$d7" -eq 1 ] && arm="${arm:+$arm+}act"
 
+# `verdict` (CLOSE_VERDICT_FIRST) is a FOURTH class for the same reason: the leads that answer "Good
+# to close?" are long-lived and spend the shape budget on earlier closes (measured 2026-10-10: 37 of
+# 78 sessions with a shape fire reached the cap, and the screenshot's own session had), so the one
+# close this demand exists for would arrive capped. Claimed ONLY when verdict-first is D6's sole
+# token and no conviction arm fired; every other case keeps the class it has today.
 CLASS=assert; CLASS_MAX="$MAX"
-if [ "$d6" -eq 1 ]; then CLASS=shape; CLASS_MAX="${COMPLETION_SHAPE_MAX:-2}"
+if [ "$d6" -eq 1 ] && [ "$_d6_missing" = "verdict-first" ] \
+   && [ "$d1" -eq 0 ] && [ "$d2" -eq 0 ] && [ "$d3" -eq 0 ] && [ "$d4" -eq 0 ] && [ "$d5" -eq 0 ]
+then CLASS=verdict; CLASS_MAX="${COMPLETION_VERDICT_MAX:-2}"
+elif [ "$d6" -eq 1 ]; then CLASS=shape; CLASS_MAX="${COMPLETION_SHAPE_MAX:-2}"
 elif [ "$d7" -eq 1 ] && [ "$contra_shape" -eq 0 ] \
      && [ "$d1" -eq 0 ] && [ "$d2" -eq 0 ] && [ "$d3" -eq 0 ] && [ "$d4" -eq 0 ] && [ "$d5" -eq 0 ]
 then CLASS=act; CLASS_MAX="${COMPLETION_ACT_MAX:-2}"; fi
@@ -1411,8 +1471,8 @@ log_idl fired "false-done" \
 # one; it qualifies this group's own "📦 ⇒ /ship it" remedy and must therefore sit inside it.
 reason=""
 [ "$contra" -eq 1 ] && reason="Completion-assert: your close reads as done/complete, but the LIVE ledger contradicts it — ${facts}. Ship/land of verified net-positive work is DRIVABLE (not a genuine blocker), and so is converging the live layer. Re-answer by DRIVING the remainder to done (📦 ⇒ /ship it; 🚀 landed-but-not-live ⇒ run the converger named above, then re-read; finish the open items; commit with explicit paths) — or name the ONE irreducible blocker (credential / sudo / destructive-migration / external-info only the operator has).${_ca_ushare}"
-[ "$d3" -eq 1 ] && reason="${reason:+$reason }Your line 1 both asserts and withdraws a verdict, so the operator has to ask a follow-up to learn which it is. Pick the ONE rung that actually governs — if something is parked or is the operator's, that IS the rung (📦 / 👤); if it is immaterial, leave it out of line 1 entirely. Line 1 answers 'is it safe to close?' with no qualifier."
-[ "$d1" -eq 1 ] && reason="${reason:+$reason }An operator-only step is not an escape hatch from work you could have done: file it only if you genuinely cannot (a credential, sudo, a GUI, or a value judgment that is theirs). If you can run it, run it now. Your close hands the operator work in prose, so the operator-readout block cannot render it and it stays buried in a paragraph. File each operator-only step — \`cc-backlog needs \"<step>\" --class needs-human [--run \"<exact command>\"]\` — then re-close: line 1 states the rung (👤 when steps are yours), and the steps come from the rendered block, not your prose."
+[ "$d3" -eq 1 ] && reason="${reason:+$reason }Your line 1 both asserts and withdraws a verdict, so the operator has to ask a follow-up to learn which it is. Pick the ONE rung that actually governs — if something is parked or is the operator's, that IS the rung (📦 / 👤); if it is immaterial, leave it out entirely. Line 1 answers 'is it safe to close?' once, with no qualifier: a conditional yes (yes if…, yes once…, yes but…) is a no until the condition holds, so answer no and name the condition. A plain no that names what remains is not a hedge."
+[ "$d1" -eq 1 ] && reason="${reason:+$reason }An operator-only step is not an escape hatch from work you could have done: file it only if you genuinely cannot (a credential, sudo, a GUI, or a value judgment that is theirs). If you can run it, run it now. Your close hands the operator work in prose, so the operator-readout block cannot render it and it stays buried in a paragraph. File each operator-only step — \`cc-backlog needs \"<step>\" --class needs-human [--run \"<exact command>\"]\` — then re-close: the rung line reads 👤 when steps are yours, and the steps come from the rendered block, not your prose."
 [ "$d4" -eq 1 ] && reason="${reason:+$reason }Your close names remaining work and then offers it instead of driving it — the operator's standing ruling is that the answer is always yes, so the question costs a round-trip and yields nothing. Every open item resolves to exactly one of three dispositions, never a fourth: DRIVEN (you do it now), DROPPED (you name it in one line and let it go), or BLOCKED on a genuine operator-only gate (credential / sudo / destructive migration / a real value fork), which then IS your line-1 rung. FILING IS THE EXCEPTION, NOT A CO-EQUAL CHOICE — measured 2026-08-25, 432 of 526 live backlog rows (82.1%) exist because a session wrote something down instead of finishing or dropping it, which is the single largest reason the backlog does not drain. Mint a row ONLY if you can answer all three: why THIS session could not do it ('out of scope' is not a reason), why it will still be true after a p90 of 9.3 days in the queue (ideally a \`--falsifier\` so it self-retracts), and who it is for (\`cc-backlog needs\` operator-only, \`cc-backlog add --why-not-now \"needs-credential|needs-human|not-yet-true|no-capacity: <detail>\"\` agent work — an add WITHOUT it stays YOUR loose end in the ledger). Cannot answer all three ⇒ DROP IT. 'Say the word' is not a disposition. Drive it, drop it, or justify the file — then re-close."
 [ "$d5" -eq 1 ] && reason="${reason:+$reason }You handed over a command that still contains a placeholder, so it cannot be pasted — it has to be filled in first, which is the opposite of the one-thing-to-select-and-paste contract (an operator pasted exactly such a line and got \`no such file or directory\`). Substitute every <angle-bracketed> token with the real value NOW, from a live read, and hand over the literal command. If you cannot resolve a value, that is not a command to hand over at all: DELETE the command from your close and do ONE of two things instead — if the value is the operator's to give, ask for it as your line-1 rung in one sentence naming what the value IS (\"the email address the alarms should go to\", never \"<your-address>\"), or file the step with \`cc-backlog needs \"<step, naming the value>\" --class needs-human --run \"<the command>\"\`, which renders as a ✎ SUPPLY row the operator cannot mistake for something to paste. Re-close with the placeholder line GONE, not restyled."
 [ "$d6" -eq 1 ] && reason="${reason:+$reason }$(close_shape_reason "$RUNG" "$_d6_missing")"

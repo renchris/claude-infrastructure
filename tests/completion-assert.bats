@@ -2248,10 +2248,15 @@ _cvf_pol_rows() {
     no   'not yet good to close — the reconciler change is out.' \
     no   'Good to close: **no** — the land is pending.' \
     no   '❌ Good to close: no — x · ledger: ✅ Complete & live on trunk' \
+    no   '❌ Not good to close — pane 182 owns it.' \
+    no   'Good to close — no.' \
+    no   'GOOD TO CLOSE: NO — the land is out.' \
     yes  'Good to close: yes — nothing of mine is open; follow-on: none.' \
+    yes  'Good to close: yes — no follow-on.' \
     yes  'Yes, good to close. Nothing of mine is open.' \
     yes  '✅ Good to close — no loose ends; follow-on: none.' \
     none 'Good to close: no loose ends, nothing open.' \
+    none 'Good to close: nope' \
     none 'Nothing here mentions the verdict at all.'
 }
 
@@ -2273,6 +2278,12 @@ Good to close: no — <what remains>
 \`\`\`
 and nothing else."'
   [ "$output" = none ]
+  # F10: a yes before the anchor, then a sentence that mentions a no without answering one
+  run _cs_lib "$REPO" 'close_verdict_polarity "Yes, good to close. Nothing of mine is open; follow-on: none.
+It now refuses a close that says Good to close: no under a ✅ line 1."'
+  [ "$output" = yes ]
+  run _cs_lib "$REPO" 'close_verdict_polarity "Good to close (no)"'
+  [ "$output" = none ]
   local exp line got bad=0
   while IFS="$(printf '\t')" read -r exp line; do
     got="$(bash -c '. "$1/hooks/lib/close-shape.sh"; close_verdict_polarity "$2"' _ "$REPO" "$line")"
@@ -2284,12 +2295,13 @@ and nothing else."'
 @test "verdict-first UNIT: close_line_reads_done — done readings, not-done readings, answered questions" {
   local s bad=0
   for s in '✅ Complete & live on trunk — nothing to do.' '**✅ Complete**' 'Done and landed.' \
-           'Nothing left to do here.' "Yes, it's safe to close." '- ✅ Safe to close' '✅️ Complete (VS16)'; do
+           'Nothing left to do here.' "Yes, it's safe to close." '- ✅ Safe to close' '✅️ Complete (VS16)' \
+           '👤 My side is done & landed — 2 steps need you.' '👤 **My side is done**'; do
     bash -c '. "$1/hooks/lib/close-shape.sh"; close_line_reads_done "$2"' _ "$REPO" "$s" \
       || { echo "should read done: $s" >&2; bad=1; }
   done
-  for s in '❌ Good to close: no — x' 'Good to close: no — x' '👤 My side is done & landed — 1 step' \
-           "Yes, it's included." '📦 Done, but only on a branch' 'Complete? No — pane 182 owns it.' \
+  for s in '❌ Good to close: no — x' 'Good to close: no — x' '👤 Waiting on you: the census needs your step.' \
+           '👤 Wave 3 is finished; two steps are yours.' '👤 Good to close: no — x' "Yes, it's included." '📦 Done, but only on a branch' 'Complete? No — pane 182 owns it.' \
            'Safe to close: no — x' 'Safe to close? No — x' 'Done? Not yet — x' 'Safe to close — not yet.' \
            'Completeness check: 2 of 5 rows are still open.'; do
     if bash -c '. "$1/hooks/lib/close-shape.sh"; close_line_reads_done "$2"' _ "$REPO" "$s"; then
@@ -2333,4 +2345,283 @@ and nothing else."'
   got="$(LC_ALL=C bash -c '. "$1/hooks/lib/close-shape.sh"; close_verdict_polarity "$(cat "$1/tests/fixtures/close-verdict-first/left.txt")"' _ "$REPO")"
   [ "$got" = no ]
   LC_ALL=C bash -c '. "$1/hooks/lib/close-shape.sh"; close_line_reads_done "$(head -1 "$1/tests/fixtures/close-verdict-first/left.txt")"' _ "$REPO"
+}
+
+# AGREEMENT: the hook's inline CA_VERDICT_NO (the close-tell gate runs before the lib is sourced)
+# must say "no" exactly where close_verdict_polarity does. Known, accepted divergences are left out
+# of the table rather than hidden in it (skeptic-false-fail.md P7): "Good to close (no)" is a no to
+# grep and none to awk, and a yes line quoting "not good to close" later is a no to grep and yes to
+# awk — both abstain-side on the D6 path, where only the lib's answer is consumed.
+@test "verdict-first AGREEMENT: CA_VERDICT_NO matches ⇔ close_verdict_polarity = no, row for row" {
+  local def exp line g p bad=0
+  def="$(grep '^CA_VERDICT_NO=' "$HOOK")"; [ -n "$def" ]
+  eval "$def"
+  while IFS="$(printf '\t')" read -r exp line; do
+    if printf '%s' "$line" | grep -iE "$CA_VERDICT_NO" >/dev/null; then g=no; else g=not-no; fi
+    p="$(bash -c '. "$1/hooks/lib/close-shape.sh"; close_verdict_polarity "$2"' _ "$REPO" "$line")"
+    [ "$p" = no ] || p=not-no
+    [ "$g" = "$p" ] || { echo "disagree on: $line (grep $g, awk $p)" >&2; bad=1; }
+  done < <(_cvf_pol_rows)
+  [ "$bad" -eq 0 ]
+  # The two known divergences, pinned so a change to either matcher is noticed. Both sit on the
+  # gate's abstain side; D6 consumes only the lib's answer.
+  for line in 'Good to close (no)' '✅ Good to close: yes — the pane that was not good to close at noon is fixed.'; do
+    printf '%s' "$line" | grep -iE "$CA_VERDICT_NO" >/dev/null
+    p="$(bash -c '. "$1/hooks/lib/close-shape.sh"; close_verdict_polarity "$2"' _ "$REPO" "$line")"
+    [ "$p" != no ]
+  done
+}
+
+# _cvf_txt <tag> <line>... → a fixture file holding those lines, one per line
+_cvf_txt() { local p="$BATS_TEST_TMPDIR/cvf-$1.txt"; shift; printf '%s\n' "$@" > "$p"; printf '%s' "$p"; }
+# _cvf <tag> <text-file> [rung=✅] → the hook's verdict on that close from an ORIGIN session that
+# wrote one file, over a stub ledger at <rung>. 👤 cases carry a filed row so D1 stays out of it.
+_cvf() {
+  local tag="$1" f="$2" rung="${3:-✅}" y=0 wt tr
+  [ "$rung" = "👤" ] && y=1
+  WRAP_LEDGER_BIN="$(mkledger "cvf-$tag" DIRTY=0 DIRTY_N=0 UNLANDED=0 AHEAD=0 REMAINDER=0 \
+    TRUNK=origin/main BLOCKED=0 CUSTODY_OPEN=0 FILED_MINE=0 "YOURS=$y" "RUNG=$rung")"; export WRAP_LEDGER_BIN
+  if [ "$rung" = "👤" ]; then export CC_BACKLOG_STUB_JSON="[{\"session\":\"cvf-$tag\",\"title\":\"x\"}]"; fi
+  wt="$BATS_TEST_TMPDIR/wt-$tag"; mkdir -p "$wt"; echo x > "$wt/f.txt"
+  tr="$(_d6_tr "$BATS_TEST_TMPDIR/cvf-$tag.jsonl" "$(cat "$f")" "$wt/f.txt")"
+  run run_ca "$tr" "$wt" "cvf-$tag"
+}
+
+@test "verdict-first: LEFT screenshot close (✅ line 1, no on line 2) ⇒ FIRE verdict-first, class verdict" {
+  _cvf left "$CVF_FIX/left.txt"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | grep -q 'verdict-first'
+  printf '%s' "$output" | grep -q 'A missing verdict-first'
+  grep -q '"arm":"shape"' "$COMPLETION_IDL"
+  grep -q '"class":"verdict"' "$COMPLETION_IDL"
+}
+
+@test "verdict-first: RIGHT screenshot close (✅ line 1, yes) ⇒ PASS ledger-clean" {
+  _cvf right "$CVF_FIX/right.txt"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q '"reason":"ledger-clean"' "$COMPLETION_IDL"
+}
+
+@test "verdict-first: LEFT screenshot close with the shape budget already spent still FIRES (own class)" {
+  # The screenshot session had fired shape 2/2 hours before the close it is named for; on the
+  # shared budget this close would have abstained capped:shape:2>=2.
+  local wt="$BATS_TEST_TMPDIR/wt-left-capped" key
+  key="$(printf '%s|%s|%s' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "cvf-left-capped" "$wt" | shasum | cut -c1-16)"
+  mkdir -p "$COMPLETION_STATE_DIR"
+  printf '%s\n' "aaaaaaaaaaaaaaaa shape" "bbbbbbbbbbbbbbbb shape" > "$COMPLETION_STATE_DIR/$key.fired"
+  _cvf left-capped "$CVF_FIX/left.txt"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | grep -q 'verdict-first'
+  grep -q '"class":"verdict"' "$COMPLETION_IDL"
+  # CONTROL: a close missing its rung as well is still `shape`, and that budget IS spent.
+  _cvf left-capped "$(_cvf_txt capctl 'The cutover landed.' 'Good to close: no — pane 182 owns the next step.')"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q '"reason":"capped:shape:2>=2"' "$COMPLETION_IDL"
+}
+
+@test "verdict-first: the verdict class is itself a HARD cap (COMPLETION_VERDICT_MAX)" {
+  export COMPLETION_VERDICT_MAX=1
+  _cvf vcap "$CVF_FIX/left.txt"
+  [ "$status" -eq 0 ]; fired "$output"
+  _cvf vcap "$(_cvf_txt vcap2 '✅ Good to close: no — the release is out with pane 182.' '' '✅ Complete & live on trunk — x.')"
+  unset COMPLETION_VERDICT_MAX
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q '"reason":"capped:verdict:1>=1"' "$COMPLETION_IDL"
+}
+
+@test "verdict-first: LEFT reshaped to A′ (❌ verdict line 1, ✅ rung line 2) ⇒ PASS" {
+  _cvf aprime "$CVF_FIX/left-aprime.txt"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "verdict-first: D3 does not convict an honest no on line 1 that names what remains" {
+  local r i=0
+  for r in 'still open' 'remain; pane 182 owns the next' 'has a pending change' 'is yours to approve' \
+           'but pane 182 lands first'; do
+    i=$((i+1))
+    _cvf "t4-$i" "$(_cvf_txt "t4-$i" "❌ Good to close: no — the reconciler change $r." '' '✅ Complete & live on trunk — x.')"
+    [ "$status" -eq 0 ]
+  done
+  if grep -q '"arm":"[a-z+]*hedge' "$COMPLETION_IDL"; then false; fi
+}
+
+@test "verdict-first: a conditional yes on a verdict line 1 ⇒ FIRE hedge; CC_VERDICT_FIRST=0 silences it" {
+  local f; f="$(_cvf_txt t5 "✅ Good to close: yes, once pane 182's change lands." '' '✅ Complete & live on trunk — x.')"
+  _cvf t5 "$f"
+  [ "$status" -eq 0 ]; fired "$output"
+  grep -q '"arm":"hedge"' "$COMPLETION_IDL"
+  printf '%s' "$output" | grep -q 'ONE rung that actually governs'
+  printf '%s' "$output" | grep -q 'a conditional yes'
+  export CC_VERDICT_FIRST=0
+  _cvf t5-ks "$f"
+  unset CC_VERDICT_FIRST
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "verdict-first: the founding hedge written as a verdict line ('yes — with one thing still parked') ⇒ FIRE hedge" {
+  _cvf t5b "$(_cvf_txt t5b '✅ Good to close: yes — with one thing still parked.' '' '✅ Complete & live on trunk — x.')"
+  [ "$status" -eq 0 ]; fired "$output"
+  grep -q '"arm":"hedge"' "$COMPLETION_IDL"
+}
+
+@test "verdict-first: a yes verdict line with a parked follow-on and a negated remainder ⇒ no hedge" {
+  _cvf t6a "$(_cvf_txt t6a '✅ Good to close: yes — nothing of mine is open; follow-on: 1dcc10d88ee3 (the sealed test set, parked on data).' '' '✅ Complete & live on trunk — x.')"
+  [ "$status" -eq 0 ]
+  _cvf t6b "$(_cvf_txt t6b '✅ Good to close: yes — nothing of mine is still open and nothing is pending; follow-on: none.' '' '✅ Complete & live on trunk — x.')"
+  [ "$status" -eq 0 ]
+  if grep -q 'hedge' "$COMPLETION_IDL"; then false; fi
+}
+
+@test "verdict-first: 👤 A′ yes naming the steps below as yours, ▶ on line 3 ⇒ PASS" {
+  _cvf t7 "$(_cvf_txt t7 '✅ Good to close: yes — nothing of mine is open; the two steps below are yours.' '👤 My side is done & landed — 1 runnable now, 1 needs your call.' '▶ Run this:' '`cc-do --run --expect x`')" 👤
+  unset CC_BACKLOG_STUB_JSON
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "verdict-first: 👤 A′ no with ▶ on line 3 ⇒ PASS; CONTROL one extra line before ▶ ⇒ FIRE act" {
+  _cvf t8 "$(_cvf_txt t8 '❌ Good to close: no — I re-run the census after your step lands.' '👤 My side is done & landed — 1 runnable now.' '▶ Run this:' '`cc-do --run --expect x`')" 👤
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  _cvf t8c "$(_cvf_txt t8c '❌ Good to close: no — I re-run the census after your step lands.' '👤 My side is done & landed — 1 runnable now.' 'One step is yours.' '▶ Run this:' '`cc-do --run --expect x`')" 👤
+  unset CC_BACKLOG_STUB_JSON
+  [ "$status" -eq 0 ]; fired "$output"
+  grep -q '"arm":"act"' "$COMPLETION_IDL"
+}
+
+@test "verdict-first: the verdict first but led by the WRONG glyph (✅ Good to close: no) ⇒ FIRE" {
+  _cvf t9 "$(_cvf_txt t9 '✅ Good to close: no — the release is out with pane 182.' '' '✅ Complete & live on trunk — x.')"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | grep -q 'verdict-first'
+}
+
+@test "verdict-first GATE: a ⛔ close led by 'Good to close: no', no CLOSE token ⇒ no-close-tell" {
+  _cvf t10 "$(_cvf_txt t10 'Good to close: no — the keep-or-retire call on pane 182 is open with you.')" ⛔
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q '"reason":"no-close-tell"' "$COMPLETION_IDL"
+}
+
+@test "verdict-first ABSTAIN: a FIRED PEER sending the LEFT close is exempt" {
+  local wt="$BATS_TEST_TMPDIR/wt-t11"; mkdir -p "$wt"
+  export ITERM_SESSION_ID="w0t0p0:43" CC_PANE_ID="w0t0p0:43"
+  jq -n --arg c "$wt" '{paneUUID:"43", cwd:$c, selfRetire:true, closedAt:null}' > "$CC_FIRED_DIR/43.json"
+  _cvf t11 "$CVF_FIX/left.txt"
+  unset ITERM_SESSION_ID CC_PANE_ID
+  [ "$status" -eq 0 ]
+  if printf '%s' "$output" | grep -q 'verdict-first'; then false; fi
+}
+
+@test "verdict-first ABSTAIN: a CONFIRMED ASSIGNEE sending the LEFT close is exempt" {
+  printf '%s\n' 'agent_is_assignee() { return 0; }' > "$BATS_TEST_TMPDIR/ai-stub.sh"
+  export AGENT_IDENTITY_LIB="$BATS_TEST_TMPDIR/ai-stub.sh"
+  _cvf t12 "$CVF_FIX/left.txt"
+  [ "$status" -eq 0 ]
+  if printf '%s' "$output" | grep -q 'verdict-first'; then false; fi
+}
+
+@test "verdict-first ABSTAIN: a WRITE-FREE session sending the LEFT close gets no close contract" {
+  WRAP_LEDGER_BIN="$(mkledger cvf-t13 DIRTY=0 DIRTY_N=0 UNLANDED=0 AHEAD=0 REMAINDER=0 \
+    TRUNK=origin/main BLOCKED=0 CUSTODY_OPEN=0 FILED_MINE=0 YOURS=0 RUNG=✅)"; export WRAP_LEDGER_BIN
+  run run_ca "$(mkfix "$(cat "$CVF_FIX/left.txt")")" "$BATS_TEST_TMPDIR" "cvf-t13"
+  [ "$status" -eq 0 ]
+  if printf '%s' "$output" | grep -q 'Origin-session close contract'; then false; fi
+}
+
+@test "verdict-first ABSTAIN: mixed polarity (a yes that quotes another pane's no) ⇒ no verdict-first" {
+  _cvf t14 "$(_cvf_txt t14 '✅ Good to close: yes — nothing of mine is open; follow-on: none.' '' '✅ Complete & live on trunk — x.' 'Pane 182 wrote "Good to close: no" about its own change earlier.')"
+  [ "$status" -eq 0 ]
+  if printf '%s' "$output" | grep -q 'verdict-first'; then false; fi
+}
+
+@test "verdict-first SEAM: CC_VERDICT_FIRST=0 and CC_CLOSE_SHAPE=0 each pass the LEFT close" {
+  export CC_VERDICT_FIRST=0
+  _cvf t15a "$CVF_FIX/left.txt"
+  unset CC_VERDICT_FIRST
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  export CC_CLOSE_SHAPE=0
+  _cvf t15b "$CVF_FIX/left.txt"
+  unset CC_CLOSE_SHAPE
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "verdict-first: the OLD-shape yes (✅ rung line 1, yes on line 2) is not tightened ⇒ PASS" {
+  _cvf t16 "$(_cvf_txt t16 '✅ Complete & live on trunk — the reconciler cut over.' 'Good to close: yes — nothing of mine is open; follow-on: none.')"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "verdict-first: the OLD-shape 👤 no ('👤 My side is done & landed' line 1, no on line 2) ⇒ FIRE verdict-first" {
+  # Row-for-row this looks like the 👤 YES close (skeptic-operator-intent.md P2): "my side is done"
+  # is the 👤 READOUT's own wording and reads as done, so it is refused, class verdict.
+  _cvf t17 "$(_cvf_txt t17 '👤 My side is done & landed — 2 steps need you.' 'Good to close: no — I re-run the census after your step lands.' '▶ Run this:' '`cc-do --run --expect x`')" 👤
+  unset CC_BACKLOG_STUB_JSON
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | grep -q 'verdict-first'
+  grep -q '"class":"verdict"' "$COMPLETION_IDL"
+}
+
+@test "verdict-first: a 👤 line 1 that does NOT read as done ('👤 Waiting on you'), or a 👤 verdict line 1, over a no ⇒ no verdict-first" {
+  # Narrowed from the skeptic's glyph-only rule (REPORT.md §1.3): refusing every 👤-led no would be
+  # a position rule, which the scope does not ask for.
+  _cvf t17b "$(_cvf_txt t17b '👤 Waiting on you: the census needs your step.' 'Good to close: no — I re-run the census after your step lands.' '▶ Run this:' '`cc-do --run --expect x`')" 👤
+  [ "$status" -eq 0 ]
+  if printf '%s' "$output" | grep -q 'verdict-first'; then false; fi
+  _cvf t17c "$(_cvf_txt t17c '👤 Good to close: no — I re-run the census after your step lands.' '▶ Run this:' '`cc-do --run --expect x`')" 👤
+  unset CC_BACKLOG_STUB_JSON
+  [ "$status" -eq 0 ]
+  if printf '%s' "$output" | grep -q 'verdict-first'; then false; fi
+}
+
+@test "verdict-first: a C-style single line (❌ verdict · ledger: ✅ rung) ⇒ PASS" {
+  _cvf t18 "$(_cvf_txt t18 '❌ Good to close: no — pane 182 owns the next step · ledger: ✅ Complete & live on trunk')"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "verdict-first: the rung window is NOT widened without a verdict line 1 ⇒ FIRE line-1-rung" {
+  _cvf t19 "$(_cvf_txt t19 'The cutover landed.' '✅ Complete & live on trunk — x.' 'Good to close: yes — nothing of mine is open; follow-on: none.')"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | grep -q 'line-1-rung'
+}
+
+@test "verdict-first: a done-led line 1 without ✅ ('Done and landed.') over a no ⇒ FIRE verdict-first" {
+  _cvf t26 "$(_cvf_txt t26 'Done and landed. The reconciler is in act mode.' 'Good to close: no — pane 182 still owes its change.')"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | grep -q 'verdict-first'
+}
+
+@test "verdict-first LOCALE: the LEFT screenshot close fires the same under LC_ALL=C" {
+  export LC_ALL=C
+  _cvf left-c "$CVF_FIX/left.txt"
+  unset LC_ALL
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | grep -q 'verdict-first'
+}
+
+# MUST NOT FIRE — honest closes the first prototype newly blocked (skeptic-false-fail.md §2).
+@test "verdict-first NO-FALSE-FAIL: F1 '✅ Good to close — no loose ends' (a yes) ⇒ PASS" {
+  _cvf f1 "$(_cvf_txt f1 '✅ Good to close — no loose ends; follow-on: none.' '' '✅ Complete & live on trunk — the cutover.')"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "verdict-first NO-FALSE-FAIL: F3 'yes — with the reconciler in act mode' is not a condition ⇒ PASS" {
+  _cvf f3 "$(_cvf_txt f3 '✅ Good to close: yes — with the reconciler in act mode, nothing of mine is open; follow-on: none.' '' '✅ Complete & live on trunk — the cutover.')"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "verdict-first NO-FALSE-FAIL: F5 old shape, 'Good to close: no loose ends' on line 2 ⇒ PASS" {
+  _cvf f5 "$(_cvf_txt f5 '✅ Complete & live on trunk — the cutover.' 'Good to close: no loose ends, nothing of mine is open; follow-on: none.')"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "verdict-first NO-FALSE-FAIL: F10 'Yes, good to close.' that later quotes a no ⇒ no verdict-first" {
+  _cvf f10 "$(_cvf_txt f10 'Yes, good to close. Nothing of mine is open; follow-on: none.' '' '✅ Complete & live on trunk — the cutover.' 'It now refuses a close that says Good to close: no under a ✅ line 1.')"
+  [ "$status" -eq 0 ]
+  if printf '%s' "$output" | grep -q 'verdict-first'; then false; fi
+}
+
+@test "verdict-first NO-FALSE-FAIL: F13 'yes — after this push nothing of mine is open' ⇒ PASS" {
+  _cvf f13 "$(_cvf_txt f13 '✅ Good to close: yes — after this push nothing of mine is open; follow-on: none.' '' '✅ Complete & live on trunk — the cutover.')"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "verdict-first NO-FALSE-FAIL: F14 a yes that mentions an earlier 'not good to close' ⇒ PASS" {
+  _cvf f14 "$(_cvf_txt f14 '✅ Good to close: yes — the pane that was not good to close at noon is fixed; follow-on: none.' '' '✅ Complete & live on trunk — the cutover.')"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
 }

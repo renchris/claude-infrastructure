@@ -17,7 +17,7 @@
 # close) and PULLED (/wrap renders the template for the model to fill). Two copies of a
 # load-bearing matcher rot apart invisibly (MEMORY.md uniform-error-ratio-indicts-the-model);
 # this lib is the one code path, and scripts/wrap-ledger.sh keeps sole ownership of the rung line
-# (line 2 under a verdict line 1, which owns line 1 — CLOSE_VERDICT_FIRST 2026-10-10).
+# (line 2 under a verdict, which owns line 1 — CLOSE_VERDICT_FIRST 2026-10-10).
 #
 # MATCHER CALIBRATION. Label-anchored and case-insensitive: the three labels may sit after list
 # markers/bold ('**Complication:**', '- solution:') — the anchor tolerates a non-letter prefix and
@@ -43,13 +43,13 @@
 # grep -q cannot hand back.
 #
 # Env seam (tests): CC_VERDICT_WINDOW (default 0 = position-free — the verdict may sit at any
-# non-blank, non-fenced line). It stays OFF by design: position is not what misleads the
-# operator. Re-measured 2026-10-10 over 5,017 verdict closes (2026-09-10..10-10, five account
-# roots): the verdict already sat at line 2 in 80.8% and at line <=3 in 89.1%, yet 264 of the
-# 1,315 closes opening with ✅ answered no — the ✅ line above the no is what gets misread. That
-# contradiction is refused by completion-assert D6 `verdict-first` (close_verdict_polarity +
-# close_line_reads_done); a window adds nothing for it and would fail the 10.9% of closes whose
-# verdict sits at line 4+, whose honesty is unmeasured. Instrument (re-run it, never quote these):
+# non-blank, non-fenced line). It stays OFF by design: position is not what misleads the operator.
+# Re-measured 2026-10-10 over 5,013 verdict closes (2026-09-10..10-10, five account roots): the
+# verdict already sat at line 2 in 80.8% and at line <=3 in 89.1%, yet 264 of the 1,308 closes
+# opening with ✅ answered no — the ✅ line above the no is what gets misread. completion-assert D6
+# `verdict-first` refuses that contradiction (close_verdict_not_first, below); a window adds nothing
+# for it and would fail the 10.9% of closes whose verdict sits at line 4+, whose honesty is
+# unmeasured. Instrument (re-run it, never quote these):
 # docs/research/close-verdict-first-2026-10-10/slot-corpus.md § 5. The 2026-08-23 figures this
 # replaces (613 closes, "1.1% at <=3") are in docs/research/close-shape-2026-08-23.md § R4.
 # shellcheck shell=bash
@@ -62,8 +62,8 @@
 # the whole close in a third of cases. Prose that says something the body does not is still
 # welcome; a MECHANICAL DEMAND for it is what forced 88 words of restatement into the 71% of
 # closes that already had a body. The verdict alone is kept, because it alone is not derivable
-# from the rung — re-measured 2026-10-10, the line-1 glyph predicts it 83.5% (3,343/4,005), 264
-# of 1,315 ✅-led closes answer no, and 20.1% carry no rung glyph on line 1 (instrument as above),
+# from the rung — re-measured 2026-10-10, the line-1 glyph predicts it 83.4% (3,337/4,001), 264 of
+# 1,308 `✅`-led closes answer "no", and 20.1% carry no rung glyph on line 1 (instrument as above),
 # making it the only close decision in the message. The 2026-08-23 figures are in
 # docs/research/close-shape-2026-08-23.md § R4.
 #
@@ -106,19 +106,21 @@ close_shape_missing() {
     END { printf "%s", (V ? "" : "good-to-close-verdict") }'
 }
 
-# close_verdict_polarity <msg> → yes | no | mixed | none   (CLOSE_VERDICT_FIRST, 2026-10-10)
-# The verdict's VALUE, read at the first anchor on each unfenced line. Both polarities in one
-# message are `mixed`, and `mixed` abstains everywhere it is consumed: a false PASS is preferred to
-# a false FAIL. A `<…>` value is the template's placeholder (the same MENTION-vs-USE guard as
-# real() above), so a quoted skeleton reads `none`.
-#   · A "no" counts only when punctuation or end-of-line follows it: "Good to close: no loose ends,
-#     nothing open" is a YES that echoes the operator's own question wording, and replacing every
-#     dash with a space (the first draft) made it read as "no". Leading dashes and markdown are
-#     therefore stripped IN A LOOP from the front of the value, never globally.
-#   · A yes or a negation BEFORE the anchor is read too: "Yes, good to close." is yes, and
-#     "isn't good to close yet" / "not yet good to close" are no. Without the yes half, such a
-#     close read `none`, and any quoted no elsewhere in it flipped the whole message to `no`.
-#   · An anchor line with no readable value that opens with ✅ is a yes.
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# VERDICT FIRST — CLOSE_VERDICT_FIRST (operator screenshot, 2026-10-10)
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# Two closes side by side both opened `✅ …`; one's next line said `Good to close: no`, and at a
+# glance both read yes. The rung is evidence FOR the verdict, never the verdict, so the verdict owns
+# line 1 with its own glyph (✅ yes · ❌ no) and the rung line moves under it. completion-assert D6
+# refuses only the contradiction — a NO verdict under a line 1 that LEADS with a done reading —
+# never a position: 10.9% of verdict closes put the verdict at line 4+, and their honesty is
+# unmeasured.
+
+# close_verdict_polarity <msg> → yes | no | mixed | none. Unfenced lines only; a `<placeholder>`
+# value is a mention, not a use (the real() guard above). A "no" counts only when punctuation or the
+# line end follows it ("no — pane 182", "no.", "**no**"), so "no loose ends" is not a NO; a yes or a
+# negation BEFORE the anchor counts ("Yes, good to close." · "isn't good to close yet"). Both
+# polarities ⇒ mixed, which every caller treats as no demand (a false PASS beats a false FAIL).
 close_verdict_polarity() {
   printf '%s' "${1:-}" | awk -v v="$_CS_VERDICT" '
     BEGIN { fence = 0; y = 0; n = 0 }
@@ -139,17 +141,23 @@ close_verdict_polarity() {
     END { print (y && n) ? "mixed" : (n ? "no" : (y ? "yes" : "none")) }'
 }
 
-# close_line_reads_done <line> → rc 0 iff the line LEADS with a done reading
-# Anchored at the start of the line after stripping markdown, so `❌ Good to close: no — … ·
-# ledger: ✅` and `👤 My side is done …` both read as not-done. A done token immediately answered
-# by `?` or a no ("Complete? No — …", "Safe to close: not yet") is a question being answered no,
-# not a done reading. Output is drained with >/dev/null, never `grep -q`: the SIGPIPE-under-
-# pipefail trap completion-assert documents.
+# close_line_reads_done <line> → rc 0 iff the line LEADS with a done reading, after leading markdown
+# and a leading 👤 are stripped. "My side is done" is the 👤 READOUT's own wording, and a 👤 line 1
+# over a no reads exactly like a 👤 line 1 over a yes. A done word answered by "?" or no/not
+# ("Complete? No —", "Safe to close: no") is a negative answer, not a done reading. Drained with
+# >/dev/null, never grep -q (the SIGPIPE-under-pipefail trap, completion-assert.sh :232).
 close_line_reads_done() {
   local s
-  s="$(printf '%s' "${1:-}" | sed -E 's/^[[:space:]*_#>`-]+//')"
-  printf '%s' "$s" | grep -iE '^(✅|complete(d)?([^a-z]|$)|done([^a-z]|$)|all done|safe to close|nothing (left |more |else )?to do|yes[^a-z]+((it.?s|we.?re|this is)[^a-z]+)?(safe|good|fine|ok(ay)?)[^a-z]+to[^a-z]+close)' >/dev/null || return 1
+  s="$(printf '%s' "${1:-}" | sed -E 's/^[[:space:]*_#>`-]+//; s/^👤[^[:alnum:]]*//')"
+  printf '%s' "$s" | grep -iE '^(✅|complete(d)?([^a-z]|$)|done([^a-z]|$)|all done|safe to close|nothing (left |more |else )?to do|my side is (done|landed|complete)|yes[^a-z]+((it.?s|we.?re|this is)[^a-z]+)?(safe|good|fine|ok(ay)?)[^a-z]+to[^a-z]+close)' >/dev/null || return 1
   ! printf '%s' "$s" | grep -iE '^(complete(d)?|done|all done|safe to close)[^a-z]*(\?|(no|not)([^a-z]|$))' >/dev/null
+}
+
+# close_verdict_not_first <msg> <line 1> → rc 0 iff the verdict is NO and line 1 reads as done.
+# The one-line test runs first, so a verdict-first close never pays for the whole-message awk.
+close_verdict_not_first() {
+  close_line_reads_done "${2:-}" || return 1
+  [ "$(close_verdict_polarity "${1:-}")" = no ]
 }
 
 # close_shape_ok <msg> → rc 0 iff the close answers "good to close?"
@@ -197,7 +205,8 @@ TPL
 #     closes that all contain a command, so runnability is held fixed and position is doing the
 #     work. Control: closes needing no act draw an ACTED reply 1.9%, so the signal is real.
 #   · The cliff is is-a-line vs is-not-a-line. Lines 1-3 / 4-6 / 7+ are flat within noise, so this
-#     matcher demands a WINDOW, not line 1. Line 1 is already owned by the rung; making the two
+#     matcher demands a WINDOW, not line 1. Line 1 is already owned by the verdict (the rung line
+#     sits under it — CLOSE_VERDICT_FIRST 2026-10-10); making the two
 #     fight for one row would buy nothing measurable.
 #   · The worst sub-case is the act welded INTO line 1 (ACTED 4.2%) — worse than a close with no
 #     act verb at all. Being early is not the property that matters; being a line is.
@@ -224,7 +233,8 @@ TPL
 #     ~8 lines and the Silver-Platter rule requires reproducing it verbatim, so counting it would
 #     push every relaying close past any sane window.
 #
-# Env seam (tests): CC_ACT_WINDOW (default 3 — rung, one slack line, the act).
+# Env seam (tests): CC_ACT_WINDOW (default 3 — verdict, rung line, the act; zero slack, as the
+# rung, one slack line, the act had before CLOSE_VERDICT_FIRST).
 _CS_ACT_LABEL='^[^[:alnum:]]*act[[:space:]]*:'
 _CS_ACT_MARKER='▶'
 
@@ -292,13 +302,9 @@ close_shape_reason() {
   # text shown to a model, never rendered markdown, so the backticks bought nothing anyway.
   # And percent signs are DOUBLED, not quadrupled: printf turns %% into one %. An earlier draft
   # carried %%%% through from a diff and rendered "73%%" to every blocked close.
-  # NO CORPUS NUMBERS EITHER (CLOSE_VERDICT_FIRST, 2026-10-10): the figures this reason used to
-  # carry had drifted in both directions within seven weeks, and a model reads a quoted rate as a
-  # fact about now. Only the mechanism stays. Nor a literal non-placeholder verdict, so a close
-  # that pastes this reason back still answers nothing.
   local vf=""
   case " $missing " in
-    *" verdict-first "*) vf=' A missing verdict-first means your verdict is NO but line 1 opens with a done reading (✅, complete, done, nothing to do, safe to close, or a rung line carrying no verdict), so the close reads as finished before the no is reached: put the verdict line first, led by ❌, and move the rung line under it. Naming what remains is not a hedge.' ;;
+    *" verdict-first "*) vf=' A missing verdict-first means your verdict is NO but line 1 opens with a done reading (✅, complete, done, nothing to do, safe to close, my side is done), so the close reads as finished before the no is reached: put the verdict line first, led by ❌, and move the rung line under it. Naming what remains is not a hedge.' ;;
   esac
   printf 'Origin-session close contract: this session wrote real work and the ledger reads %s, but the close is missing [%s]. Lead with the answer: line 1 is the good-to-close verdict, led by its own glyph (✅ on a yes, ❌ on a no), and the ledger'\''s rung line goes next (a blank line between them helps), before any supporting detail. A missing good-to-close-verdict means the close never answers the question, and the rung cannot answer it for you: a ✅ ledger can still mean no, and a ✅ line above a no reads as yes at a glance. A missing line-1-rung means neither line 1 nor, under a verdict line 1, line 2 carries the ledger'\''s own rung glyph: run scripts/wrap-ledger.sh --machine, relay READOUT'\''s glyph and state clause verbatim, then add ONE clause of your own naming what the work was.%s Complication/Solution/Outcome are not required; write them only if they say something the body does not. Shape:\n%s' \
     "$rung" "${missing:-the required close shape}" "$vf" "$(close_shape_template)"
