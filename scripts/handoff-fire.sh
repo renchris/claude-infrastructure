@@ -4204,6 +4204,175 @@ recycle_composer_gate() { # $1=it2-bin $2=sid $3=max-wait-s $4=interval-s
   done
 }
 
+# ── THE TRANSPLANT RECYCLE CARRIES UNSENT TEXT (lr-stranded-husk C4/C6, operator ruling 2026-10-10) ──
+# docs/research/lr-stranded-husk-2026-10-10/ROOT-CAUSE.md, round2/C4-C6.md. Pane 168 sat refused for
+# hours because its box held `[Image #5]` and this rail called clearing it "not ours to do"; on a husk
+# the guard blocks every submit, so nothing left in that box could ever be delivered where it sat.
+# A held composer on a TRANSPLANTED remote recycle (the session moved; this pane relaunches it on the
+# target) whose source is retired (--husk, or its .jsonl.handed-off exists) or unfocused is carried:
+# saved (text + every image chip's bytes, lib/composer-carry.sh), cleared with read-back, and put back
+# UNSENT into the successor by the watcher once the resumed session is at rest — each image by a
+# bracketed paste of its saved path, which re-attaches it (measured on 2.1.293, round2/M1b-pty.md).
+# An abort before /exit puts it back in place. Whatever cannot go back is named with its saved path.
+# Every other recycle keeps the refusal. Kill switch: CC_RECYCLE_CARRY_DRAFT=off.
+# HF_RCY_CARRY_DIR = the saved copy · HF_RCY_CARRY_STATE = saved (copy made, box untouched) · cleared
+# (box emptied, carry in flight) · handed (/exit is in; the watcher owns it) · spent (put back in place,
+# rc in HF_RCY_CARRY_PUT). Wording: no bare word "draft" on the carry's own lines — lr_recon/classify.py
+# maps it to HOLD (the plural in the drafts/ path is safe).
+hf_rcy_carry_libs() { # → sets HF_RCY_TUI HF_RCY_CARRY; rc 1 when either is missing
+  HF_RCY_TUI="${HF_TUI_LIB:-${HF_DIR:-.}/lib/cc-tui.sh}"; HF_RCY_CARRY="${HF_CARRY_LIB:-${HF_DIR:-.}/lib/composer-carry.sh}"
+  [ -f "$HF_RCY_TUI" ] && [ -f "$HF_RCY_CARRY" ]
+}
+hf_rcy_carry_retired() { # → 0 the source is retired: --husk, or the confirm's .jsonl.handed-off exists
+  [ "${RCY_HUSK:-0}" = 1 ] && return 0
+  [ -n "${HF_TS_TOMBSTONE:-}" ] && [ -f "${HF_TS_TOMBSTONE%.HANDOFF.json}.jsonl.handed-off" ]
+}
+hf_rcy_carry_eligible() { # → 0 this held composer may be carried · 1 not (HF_RCY_CARRY_WHY says why)
+  HF_RCY_CARRY_WHY=""
+  [ "${CC_RECYCLE_CARRY_DRAFT:-on}" != off ] || { HF_RCY_CARRY_WHY="the carry is switched off (CC_RECYCLE_CARRY_DRAFT=off)"; return 1; }
+  [ "${RCY_REMOTE:-0}" = 1 ] && [ "${RCY_TRANSPLANTED_SOURCE:-0}" = 1 ] && [ -n "${RESUME_LAUNCHER:-}" ] \
+    || { HF_RCY_CARRY_WHY="only a transplanted remote recycle carries the prompt box, and this is not one"; return 1; }
+  hf_rcy_carry_libs || { HF_RCY_CARRY_WHY="the carry library is not reachable ($HF_RCY_TUI, $HF_RCY_CARRY)"; return 1; }
+  hf_rcy_carry_retired && return 0
+  # A focused live source may be mid-typing: refuse as before.
+  [ "$(hf_pane_focused "$SID")" != yes ] || { HF_RCY_CARRY_WHY="the source is live and focused, so someone may be typing in it"; return 1; }
+}
+hf_rcy_carry() { # $1=the gate's held content (space-stripped) → 0 saved AND the box PROVEN empty · 1 not carried (HF_RCY_CARRY_WHY)
+  local held="${1:-}" sid dir imgs="" rc=0 src=0 now
+  HF_RCY_CARRY_WHY=""
+  hf_rcy_carry_libs || { HF_RCY_CARRY_WHY="the carry library is not reachable"; return 1; }
+  sid="${RCY_SOURCE_SESSION:-${RCY_TS_SID:-unknown}}"
+  dir="${LR_STATE_DIR:-$HOME/.reso/limit-recover}/drafts/$sid/$(date -u +%Y%m%dT%H%M%SZ)"
+  # shellcheck disable=SC1090
+  [ -z "${HF_TS_TOMBSTONE:-}" ] || imgs="$( . "$HF_RCY_CARRY" && cc_carry_image_dir "$HF_TS_TOMBSTONE" "$sid")" || imgs=""
+  # shellcheck disable=SC1090
+  ( . "$HF_RCY_TUI" && . "$HF_RCY_CARRY" && cc_carry_save "$SID" "$dir" "$imgs" ) >/dev/null 2>&1 || src=$?
+  case "$src" in
+    0) ;;
+    3) # A [Pasted text #N] block lives only in the session's memory: a clear destroys it. A live
+       # source keeps it where it is; a retired one cannot deliver it anyway, so the rest is carried.
+       HF_RCY_CARRY_DIR="$dir"; HF_RCY_CARRY_STATE=saved
+       if ! hf_rcy_carry_retired; then
+         HF_RCY_CARRY_WHY="the box holds a pasted block whose content is not on disk (it lives only in the session's memory), and the source is live, so clearing it would destroy it"
+         return 1
+       fi ;;
+    1) HF_RCY_CARRY_WHY="the box read empty when it was saved, so it changed under the gate"; return 1 ;;
+    *) HF_RCY_CARRY_WHY="the box could not be read again, or the copy could not be written under $dir"; return 1 ;;
+  esac
+  HF_RCY_CARRY_DIR="$dir"; HF_RCY_CARRY_STATE=saved
+  # What was saved must be what the gate held: a box still changing is somebody typing — refuse.
+  if [ "$(LC_ALL=C tr -d '[:space:]' < "$dir/draft.txt")" != "$held" ]; then
+    HF_RCY_CARRY_WHY="the box changed while it was being saved, so someone may be typing in it"
+    return 1
+  fi
+  HF_RCY_CARRY_STATE=cleared
+  # shellcheck disable=SC1090
+  ( . "$HF_RCY_TUI" && cc_tui_clear "$SID" ) >/dev/null 2>&1 || rc=$?
+  if [ "$rc" != 0 ]; then
+    HF_RCY_CARRY_WHY="the box could not be proven empty after the clear (rc $rc)"
+    # A clear that failed with the box as it was has lost nothing; only a box it changed is put back.
+    # shellcheck disable=SC1090
+    now="$( . "$HF_RCY_TUI" && cc_tui_composer "$SID")" || now=""
+    if [ "$now" = "$held" ]; then
+      HF_RCY_CARRY_STATE=saved
+    else
+      hf_rcy_carry_restore_here "$HF_RCY_CARRY_WHY"
+    fi
+    return 1
+  fi
+  # The abort arm runs FIRST on the way out, ahead of the script's own EXIT trap — named once, in
+  # HF_FIRE_EXIT_TRAP where that trap is installed, so this line cannot drift from it. (`trap -p`
+  # inside `$( )` is not a reliable read of the parent's traps on /bin/bash 3.2.)
+  # shellcheck disable=SC2064  # the script's trap is expanded NOW, on purpose
+  trap "hf_rcy_carry_exit_restore; ${HF_FIRE_EXIT_TRAP:-fire_cleanup; hf_inflight_release}" EXIT
+  return 0
+}
+hf_rcy_carry_what() { # → "<n> chars as read[; image(s) …][; pasted block …]" — never the text, never the file name
+  local n i u
+  n="$(LC_ALL=C wc -c < "$HF_RCY_CARRY_DIR/draft.txt" 2>/dev/null | tr -d ' ')" || n="?"
+  i="$(tr '\n' ' ' < "$HF_RCY_CARRY_DIR/images.txt" 2>/dev/null)" || i=""
+  u="$(tr '\n' ' ' < "$HF_RCY_CARRY_DIR/unsaved.txt" 2>/dev/null)" || u=""
+  [ -z "$i" ] || i="; image(s) saved: ${i% }"
+  [ -z "$u" ] || u="; a pasted block (${u% }) could not be saved: its content lived only in the session memory"
+  printf '%s chars as read%s%s' "${n:-?}" "$i" "$u"
+}
+# ABORT BEFORE /exit: the text goes back into THIS pane's box. Runs from the EXIT trap hf_rcy_carry
+# installs; a no-op once the /exit went in (HF_RCY_CARRY_STATE=handed) — the watcher owns it then.
+hf_rcy_carry_exit_restore() { # → always 0
+  [ "${HF_RCY_CARRY_STATE:-}" = cleared ] || return 0
+  hf_rcy_carry_restore_here "the recycle stopped before /exit" || true
+  return 0
+}
+hf_rcy_carry_restore_here() { # $1=why → always 0; sets HF_RCY_CARRY_STATE=spent and HF_RCY_CARRY_PUT=<rc>
+  local rc=0 cls=recycle-composer-restored note u
+  HF_RCY_CARRY_STATE=spent
+  hf_rcy_carry_libs || rc=9
+  # shellcheck disable=SC1090,SC2030  # runtime-resolved libs; the settle is meant for this subshell alone
+  [ "$rc" = 9 ] || ( export CC_CARRY_SETTLE_S="${CC_RECYCLE_CARRY_SETTLE_S:-2}"; . "$HF_RCY_TUI" && . "$HF_RCY_CARRY" \
+      && cc_carry_putback "$SID" "$HF_RCY_CARRY_DIR" "${CC_RECYCLE_CARRY_HERE_WAIT_S:-20}" 1 true ) >/dev/null 2>&1 || rc=$?
+  HF_RCY_CARRY_PUT="$rc"
+  # shellcheck disable=SC1090
+  u="$( . "$HF_RCY_CARRY" && cc_carry_unput "$HF_RCY_CARRY_DIR")" 2>/dev/null || u=""
+  case "$rc" in
+    0) note="${1:-}: the unsent text is back in pane $SID's box, unsent (copy in $HF_RCY_CARRY_DIR)" ;;
+    5) note="${1:-}: the unsent text is back in pane $SID's box, unsent, except what could not be put back: $u (copy in $HF_RCY_CARRY_DIR)" ;;
+    *) cls=recycle-composer-not-restored
+       note="${1:-}: the unsent text could NOT be put back into pane $SID's box (rc $rc${u:+; $u}); it is saved in $HF_RCY_CARRY_DIR" ;;
+  esac
+  emit_recycle_event "$cls" "" "$SID" "$note; $(hf_rcy_carry_what)" || true
+  echo "→ recycle: $note" >&2
+  return 0
+}
+# THE WATCHER'S PUT-BACK, on an engaged arm (the successor answered on the target). Ready = the
+# target copy at rest (hf_transcript_at_rest) on two polls AND the box read empty. Runs while this
+# watcher still holds the pane lock, so no second recycle can /exit the successor under it.
+# THE WAIT FITS UNDER THE REAPER (skeptic, measured 2026-10-10): cc-reaper TERMs a launchd-parented
+# bash older than 600 s (bin/cc-reaper orphan-bash rule; it TERMed a __recycle watcher at 613 s), and a
+# TERM mid-wait would lose this row and its notify. So the wait is min(CC_RECYCLE_CARRY_WAIT_S,
+# CC_RECYCLE_CARRY_REAP_S - watcher age - 60), floored at 0: the record always goes out first.
+hf_rcy_carry_putback() { # → always 0
+  local dir="${HF_RCY_CARRY_DIR:-}" tx="" f rc=0 cls=recycle-composer-returned note u wait left reap
+  [ -n "$dir" ] && [ -f "$dir/draft.txt" ] || return 0
+  wait="${CC_RECYCLE_CARRY_WAIT_S:-900}"; reap="${CC_RECYCLE_CARRY_REAP_S:-600}"
+  case "$wait" in ''|*[!0-9]*) wait=900 ;; esac
+  case "$reap" in ''|*[!0-9]*) reap=600 ;; esac
+  case "${rcy_w_t0:-}" in ''|*[!0-9]*) ;; *)
+    left=$(( reap - ($(date +%s) - rcy_w_t0) - 60 )); [ "$left" -ge 0 ] || left=0
+    [ "$wait" -le "$left" ] || wait="$left" ;;
+  esac
+  hf_rcy_carry_libs || rc=9
+  for f in "${RCY_RESUME_CFG:-/nonexistent}"/projects/*/"${RCY_RESUME_SID:-none}".jsonl; do
+    [ -f "$f" ] && { tx="$f"; break; }
+  done
+  [ "$rc" = 9 ] || [ -n "$tx" ] || rc=8
+  # shellcheck disable=SC1090,SC2030,SC2031  # runtime-resolved libs; the settle is meant for this subshell alone
+  [ "$rc" != 0 ] || ( export CC_CARRY_SETTLE_S="${CC_RECYCLE_CARRY_SETTLE_S:-2}"; . "$HF_RCY_TUI" && . "$HF_RCY_CARRY" \
+      && cc_carry_putback "$RSID" "$dir" "$wait" "${CC_RECYCLE_CARRY_POLL_S:-5}" hf_transcript_at_rest "$tx" ) >/dev/null 2>&1 || rc=$?
+  # shellcheck disable=SC1090
+  u="$( . "${HF_RCY_CARRY:-/nonexistent}" && cc_carry_unput "$dir")" 2>/dev/null || u=""
+  case "$rc" in
+    0) note="the unsent text from before the move is back in pane $RSID's box, unsent (copy in $dir)" ;;
+    5) cls=recycle-composer-partly-returned
+       note="the unsent text from before the move is back in pane $RSID's box, unsent, except what could not be put back: $u (copy in $dir)" ;;
+    4) cls=recycle-composer-not-returned
+       note="nothing from before the move could be put back into pane $RSID's box (${u:-no text}); it is saved in $dir" ;;
+    1) cls=recycle-composer-not-returned
+       note="the unsent text from before the move was NOT typed back: the session did not come to rest with an empty box within ${wait}s; it is saved in $dir" ;;
+    3) cls=recycle-composer-not-returned
+       note="the unsent text from before the move was typed back but the box reads differently; the original is saved in $dir" ;;
+    8) cls=recycle-composer-not-returned
+       note="the unsent text from before the move was NOT typed back: the target transcript could not be read, so rest could not be proven; it is saved in $dir" ;;
+    *) cls=recycle-composer-not-returned
+       note="the unsent text from before the move was NOT typed back (rc $rc); it is saved in $dir" ;;
+  esac
+  HF_RCY_CARRY_DIR="$dir"; note="$note; $(hf_rcy_carry_what)"
+  echo "→ carry: $note"
+  emit_recycle_event "$cls" 1 "$RSID" "$note" || true
+  hf_bounded "${CC_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}" --no-wake --from recycle-watcher "$RSID" \
+    "RECYCLE-CARRY: $note. This is a record, not a request: nothing to do unless the operator asks where it went." >/dev/null 2>&1 || true
+  return 0
+}
+
 # THE RETRY TICKET a refused or held SELF-recycle leaves for its own session (2026-10-05). One JSON
 # file per session id under CC_RECYCLE_RETRY_DIR; hooks/boundary-handoff.sh reads it at the session's
 # next Stop. Written by the watcher's holds (rcy_retry_ticket) and by the foreground's unreadable-
@@ -8251,6 +8420,9 @@ write_teardown_marker() { # $1=pane-uuid  $2=mode (terminal|successor|recycle)
 hf_alarm() { # $1=class  $2=pane  $3=sid  $4=successor  $5=detail  [$6=refire_cmd  $7=packet]  → always 0
   local _class="${1:-}" _pane="${2:-}" _sid="${3:-}" _succ="${4:-}" _raw="${5:-}"
   local _refire="${6:-${HF_ALARM_REFIRE:-}}" _packet="${7:-${HF_ALARM_PACKET:-}}"
+  # A carried prompt box (hf_rcy_carry, 2026-10-10) that no successor took back is named on every
+  # alarm of the run, so each failure arm says where the saved copy is.
+  [ -z "${HF_RCY_CARRY_DIR:-}" ] || _raw="$_raw — the pane's unsent prompt-box text was saved before the /exit: $HF_RCY_CARRY_DIR"
   local _notify _dir _file _stamp _ts _detail _out _rc _verdict _token _role _addr
   _notify="${CC_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}"
   _role="${CC_COMPLETION_ROLE:-desk}"
@@ -9784,6 +9956,9 @@ if [ "${1:-}" = "__recycle" ]; then
   # watcher belongs to an earlier recycle of the same tty.
   rcy_succ_lib=0; hf_succ_lib_load && rcy_succ_lib=1
   rcy_w_t0="$(date +%s)"
+  # A carried prompt box (hf_rcy_carry) is THIS watcher's to put back: kept, but not handed on to
+  # anything it spawns (a debt settle, a re-fire), which would otherwise put it back a second time.
+  export -n HF_RCY_CARRY_DIR HF_RCY_CARRY_STATE 2>/dev/null || true
   RSID="${2:?__recycle needs a session id}"
   TTY_PATH="${3:?__recycle needs the pane tty}"
   CMDFILE="${4:?__recycle needs the command file}"
@@ -10967,6 +11142,7 @@ if [ "${1:-}" = "__recycle" ]; then
             echo "→ relaunched + ENGAGEMENT CONFIRMED BY PROCESS in $RSID (--resume ${RCY_RESUME_SID:0:8} alive ${rcy_pp_hold}s past boot; no prompt by design)"
             emit_recycle_event recycle-engaged 1 "$RSID" "recycled in place; engagement by process (no-prompt relaunch) within ${rcy_pp_t}s" || true
             _hf_resume_debt discharge --sid "$RCY_DEBT_SID" --why "recycle engaged in pane $RSID"
+            hf_rcy_carry_putback
             exit 0
           fi
         fi
@@ -11014,6 +11190,7 @@ if [ "${1:-}" = "__recycle" ]; then
         # goal-arm row that already carries the verdict, rather than promising one that never comes.
         emit_recycle_event recycle-engaged 1 "$RSID" "recycled in place; a real assistant turn within ${rcy_t}s" || true
         _hf_resume_debt discharge --sid "$RCY_DEBT_SID" --why "recycle engaged in pane $RSID"
+        hf_rcy_carry_putback
         exit 0
       fi
       # THE TARGET ANSWERED WITH A LIMIT OR AN AUTH FAILURE: a verdict, not a wait. Exiting releases the
@@ -11059,6 +11236,7 @@ if [ "${1:-}" = "__recycle" ]; then
         emit_recycle_event recycle-unverified "" "$RSID" "unknown — could not read transcript ${RCY_RESUME_CFG:-<no target cfg>}/projects/*/${RCY_RESUME_SID}.jsonl after ${rcy_t}s" || true
         goal_unreachable recycle-unverified || true
         _hf_resume_debt discharge --sid "$RCY_DEBT_SID" --why "relaunched claude alive in pane $RSID; transcript unreadable, engagement unknown"
+        hf_rcy_carry_putback
         exit 0
       fi
       if [ -n "${RCY_SUBMIT_TOKEN:-}" ] && resume_engaged "$RCY_RESUME_CFG" "$RCY_RESUME_SID" "$RCY_T0" ""; then
@@ -11070,6 +11248,7 @@ if [ "${1:-}" = "__recycle" ]; then
         arm_goal "$IT2" "$RSID" "$FIRE_GOAL"
         emit_recycle_event recycle-engaged 1 "$RSID" "recycled in place; ANSWERING on the target within ${rcy_t}s, without the relaunch prompt: $rcy_ans_why" || true
         _hf_resume_debt discharge --sid "$RCY_DEBT_SID" --why "recycle answering in pane $RSID"
+        hf_rcy_carry_putback
         exit 0
       fi
     fi
@@ -15606,8 +15785,10 @@ fire_cleanup() {
 # BOTH, and hf_inflight_release must not live INSIDE fire_cleanup: that function returns early once
 # FIRE_CLEAN_DONE=1, which the SUCCESS path sets before the summary — so a claim released only there
 # would leak on exactly the fires that worked. Release is idempotent and drops only rows this pid
-# wrote, so running it on every exit is safe.
-trap 'fire_cleanup; hf_inflight_release' EXIT
+# wrote, so running it on every exit is safe. Named, because hf_rcy_carry prepends its abort arm to it.
+HF_FIRE_EXIT_TRAP='fire_cleanup; hf_inflight_release'
+# shellcheck disable=SC2064  # expands to the constant above, which names functions resolved at exit
+trap "$HF_FIRE_EXIT_TRAP" EXIT
 
 # Paths are typed into an interactive zsh line — %q-quote them so spaces/metachars can't split
 # or execute (conventional slugs pass through unchanged).
@@ -17367,8 +17548,10 @@ recycle_composer_block() {
   # can always re-fire; a swallowed message cannot be unsent. UNKNOWN (no box readable) also
   # refuses — typing needs the affirmative. Kill switch: CC_RECYCLE_COMPOSER_GATE=off.
   RCY_IT2="${REAL_IT2:-$HOME/.claude/bin/it2}"
+  # The carry's state is this run's alone: one inherited from the environment would be put back again.
+  HF_RCY_CARRY_DIR=""; HF_RCY_CARRY_STATE=""; HF_RCY_CARRY_PUT=""
   if [ "${CC_RECYCLE_COMPOSER_GATE:-on}" != off ]; then
-    rcy_cg_c=""; rcy_cg_rc=0
+    rcy_cg_c=""; rcy_cg_rc=0; rcy_scrub_rc=0
     # A composer that ALREADY reads back as receipted residue is not a human mid-thought, so the
     # 180 s wait for one to finish typing buys nothing; go straight to the attribution arm below.
     rcy_cg_now="$(composer_content "$RCY_IT2" "$SID" 2>/dev/null)" || rcy_cg_now=""
@@ -17424,19 +17607,63 @@ recycle_composer_block() {
       fi
       exit 1
     fi
+    # THE CARRY ARM (lr-stranded-husk C4/C6, operator ruling 2026-10-10; the block above
+    # hf_rcy_carry_libs says what it does and why). The cheap checks sit inline ahead of every call,
+    # so a suite that extracts this function alone reaches no missing name; a missing helper reads as
+    # "not carried" and the refusal below stands. This rail's own residue that failed its scrub is
+    # never carried: the successor's gate would only hold on it again.
+    rcy_carry_why=""
+    if [ "$rcy_cg_rc" = 1 ]; then
+      if [ "${rcy_scrub_rc:-0}" != 0 ]; then
+        rcy_carry_why="it is this rail's own leftover paste, and its scrub failed (rc $rcy_scrub_rc)"
+      elif [ "${CC_RECYCLE_CARRY_DRAFT:-on}" = off ]; then
+        rcy_carry_why="the carry is switched off (CC_RECYCLE_CARRY_DRAFT=off)"
+      elif [ "${RCY_REMOTE:-0}" != 1 ] || [ "${RCY_TRANSPLANTED_SOURCE:-0}" != 1 ] || [ -z "${RESUME_LAUNCHER:-}" ]; then
+        rcy_carry_why="only a transplanted remote recycle carries the prompt box, and this is not one"
+      elif ! hf_rcy_carry_eligible; then
+        rcy_carry_why="${HF_RCY_CARRY_WHY:-the carry could not be checked}"
+      elif hf_rcy_carry "$rcy_cg_c"; then
+        emit_recycle_event recycle-composer-carried "" "$SID" "saved to $HF_RCY_CARRY_DIR, box cleared (read-back verified); the watcher puts it back into the successor's box, unsent, once that is at rest; $(hf_rcy_carry_what)" || true
+        echo "→ recycle: pane $SID's prompt box held unsent text ($(hf_rcy_carry_what)) — saved in $HF_RCY_CARRY_DIR and cleared (read-back verified); it goes back into the successor's box once that is at rest. Proceeding." >&2
+        rcy_cg_rc=0
+      else
+        rcy_carry_why="${HF_RCY_CARRY_WHY:-the carry did not complete}"
+      fi
+    fi
     if [ "$rcy_cg_rc" != 0 ]; then
-      emit_recycle_event recycle-held-draft "" "$SID" "composer non-empty for ${CC_RECYCLE_DRAFT_WAIT:-180}s: ${rcy_cg_c}" || true
-      # AND THE DESK HEARS IT (item 1ea55b6ad9f3). The line below pages the BLOCKED pane — i.e. the
-      # victim — and the stderr above reaches only the process that refused, which on a self-recycle
-      # is the session about to be replaced. So a deferral that is now genuinely foreign (an
-      # operator draft; our own residue is scrubbed by the arm above) still had NO reader outside
-      # this pane: `recycle-held-draft` has been emitted since 2026-08-22 and has zero consumers in
-      # the tree. That is what made the 4h+ outage present as absence and get misdiagnosed as a slow
-      # link — CPU accrual cannot tell working from blocked-at-composer. One page to the desk is the
-      # difference between a stalled chain and a silent one. Best-effort, never blocks the refusal.
-      command -v cc-notify >/dev/null 2>&1 && cc-notify --role desk "RECYCLE BLOCKED on pane $SID: its composer holds unsubmitted text that is NOT this rail's own residue ('$(printf '%.60s' "${rcy_cg_c}")'), so /exit is refused and the succession CANNOT advance until it is sent or cleared. This chain makes no progress meanwhile, and it shows up as absence, never as an error." >/dev/null 2>&1 || true
-      command -v cc-notify >/dev/null 2>&1 && cc-notify "$SID" "RECYCLE DEFERRED: this pane's composer holds an unsubmitted draft ('$(printf '%.60s' "${rcy_cg_c}")') — typing /exit now would merge with it and submit the hybrid (the measured Aug-16/Aug-22 mangle class). Send or clear the draft, then re-run the recycle." >/dev/null 2>&1 || true
-      echo "!! recycle REFUSED after ${CC_RECYCLE_DRAFT_WAIT:-180}s: pane $SID's composer holds unsubmitted text ('${rcy_cg_c}') — /exit would MERGE with it into one text message and it is not this rail's own residue (no matching receipt), so clearing it is not ours to do. Nothing was typed; the session stays alive. Clear/send the draft, then re-run: $CMD" >&2
+      # A HELD DRAFT IS THE RAIL'S TO CARRY, NEVER THE OPERATOR'S TO CLEAR (operator ruling 2026-10-10;
+      # round2/C5.md A2 with its skeptic's changes). Reached when the carry above did not move it. One
+      # row, two pages, one stderr line; none asks a human to clear, press or send anything, each says
+      # what state the box is in and where any saved copy is, and the next step it names is one a
+      # process owns: a self-recycle's retry ticket, the caller's HF_RCY_NEXT_STEP, or plainly none.
+      # AND THE DESK HEARS IT (item 1ea55b6ad9f3): the stderr reaches only the process that refused,
+      # which on a self-recycle is the session about to be replaced; `recycle-held-draft` (lr-handoff's
+      # held class; the word "draft" keeps lr_recon/classify.py's HOLD) once read as absence for 4h+.
+      rcy_carry_why="${rcy_carry_why:-the carry was not attempted}"
+      case "${HF_RCY_CARRY_STATE:-}" in
+        saved) rcy_carry_st="untouched in that pane, as typed; a copy is saved at $HF_RCY_CARRY_DIR" ;;
+        spent) case "${HF_RCY_CARRY_PUT:-}" in
+                 0) rcy_carry_st="put back in place in that pane, unsent (a copy is saved at $HF_RCY_CARRY_DIR)" ;;
+                 5) rcy_carry_st="put back in place in that pane, unsent, except what could not be put back; everything on disk is saved at $HF_RCY_CARRY_DIR" ;;
+                 *) rcy_carry_st="NOT back in that pane (put-back rc ${HF_RCY_CARRY_PUT:-?}); it is saved at $HF_RCY_CARRY_DIR" ;;
+               esac ;;
+        *) rcy_carry_st="untouched in that pane, as typed" ;;
+      esac
+      if [ "${RCY_REMOTE:-0}" != 1 ] && [ -z "${RESUME_LAUNCHER:-}" ]; then
+        rcy_carry_tsid="$(cc_sid_for_pane "$SID" 2>/dev/null || true)"
+        hf_recycle_retry_ticket "$rcy_carry_tsid" "$SID" "its composer holds a draft the carry did not move ($rcy_carry_why)" - "${PROMPT_FILE_ORIG:-${PROMPT_FILE:-}}" >&2 || true
+        rcy_carry_next="Next automated step: the retry ticket for session ${rcy_carry_tsid:-<unresolved>} — that session's next Stop is told when to re-run this recycle"
+      elif [ -n "${HF_RCY_NEXT_STEP:-}" ]; then
+        rcy_carry_next="Next automated step: $HF_RCY_NEXT_STEP"
+      else
+        rcy_carry_next="Next step: the caller that fired this recycle decides on a re-run; no process here re-runs it by itself"
+      fi
+      rcy_carry_rerun="$(printf '%q ' "${HF_ORIG_SELF:-$0}" ${HF_ORIG_ARGV[@]+"${HF_ORIG_ARGV[@]}"})"
+      [ -z "${HF_ORIG_PWD:-}" ] || rcy_carry_rerun="cd $(printf '%q' "$HF_ORIG_PWD") && $rcy_carry_rerun"
+      emit_recycle_event recycle-held-draft "" "$SID" "composer non-empty for ${CC_RECYCLE_DRAFT_WAIT:-180}s; draft not carried ($rcy_carry_why) over '${rcy_cg_c}'; the box is $rcy_carry_st; $rcy_carry_next" || true
+      "${CC_NOTIFY_BIN:-cc-notify}" --role desk "RECYCLE HELD on pane $SID: its composer holds a draft ('$(printf '%.60s' "${rcy_cg_c}")') that the rail's carry did not move ($rcy_carry_why). The box is $rcy_carry_st, and /exit was not typed. $rcy_carry_next." >/dev/null 2>&1 || true
+      "${CC_NOTIFY_BIN:-cc-notify}" "$SID" "RECYCLE DEFERRED: the draft in this pane's composer ('$(printf '%.60s' "${rcy_cg_c}")') was not carried ($rcy_carry_why); the box is $rcy_carry_st, and /exit was not typed. $rcy_carry_next." >/dev/null 2>&1 || true
+      echo "!! recycle REFUSED after ${CC_RECYCLE_DRAFT_WAIT:-180}s: pane $SID's composer holds a draft ('${rcy_cg_c}') and the rail's carry did not move it ($rcy_carry_why) — /exit into it would MERGE with it into one message. The box is $rcy_carry_st; nothing was typed and the session stays alive. Carrying a draft is the rail's job (save the text and every [Image #N] file, clear, move, put it back unsent in the successor), never a step for a person. $rcy_carry_next. Re-run as is: ${rcy_carry_rerun% }" >&2
       exit 1
     fi
   fi
@@ -17616,6 +17843,8 @@ recycle_fire_armed() {
   # nested recycle never inherits an outer one's cause.
   HF_RCY_TRANSPLANT_CAUSE="$RCY_TRANSPLANT_CAUSE"
   export HF_RCY_ORIG_ARGV_FILE HF_RCY_ORIG_SELF HF_RCY_ORIG_PWD HF_RCY_WATCHER_LOG HF_RCY_TRANSPLANT_CAUSE
+  # A carried prompt box (hf_rcy_carry) goes to the watcher, which puts it back on its engaged arms.
+  export HF_RCY_CARRY_DIR HF_RCY_CARRY_STATE
   WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$LAUNCH_DIR" "$rcy_old_sid" "$RECYCLE_MARKER" "$FIRE_GOAL" "${PROMPT_FILE_ORIG:-$PROMPT_FILE}" "$RESUME_CFG" "${RESUME_LAUNCHER:+${RCY_SOURCE_SESSION:-$rcy_old_sid}}" "$RCY_T0" "$RCY_SRC_TX" "$RCY_RUN_DIR_ARG" "$RCY_SUBMIT_TOKEN_ARG" "$RCY_CALLER_PID_ARG")"
   if ! await_armed "$log"; then
     hf_recycle_disarm
@@ -17752,6 +17981,8 @@ recycle_fire_armed() {
   # THE COMMIT — confirm, the last read, the debt, the /exit — is its own function so a suite can
   # drive the whole irreversible tail over stubs (a full recycle_fire needs a real tty).
   recycle_fire_commit "$rcy_old_sid"
+  # /exit is in: a carried box is the watcher's to put back now, never this process's EXIT trap's.
+  [ "${HF_RCY_CARRY_STATE:-}" != cleared ] || HF_RCY_CARRY_STATE=handed
   # --await (remote form only): the /exit went into ANOTHER pane, so this process survives it and
   # can carry the watcher's verdict back to its caller — the fleet driver and lr-handoff need a real
   # exit status, not a "watcher armed" line. Bounded by the watcher's own two windows plus slack.

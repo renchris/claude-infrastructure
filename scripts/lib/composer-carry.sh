@@ -70,6 +70,26 @@ cc_carry_save() { # $1=pane $2=dir $3=image store ("" none) → 0 saved · 1 the
   return 0
 }
 
+# WHAT DID NOT GO BACK, in words, each part with its path: from <dir>/putback.txt once a put-back ran,
+# else from what the save could not keep. Empty when nothing is short.
+cc_carry_unput() { # $1=dir → one line on stdout
+  local d="${1:-}" l out="" src
+  src="$d/putback.txt"
+  if [ ! -f "$src" ]; then
+    src="$d/.unput.$$"
+    { LC_ALL=C grep '^missing:' "$d/images.txt" 2>/dev/null; LC_ALL=C sed 's/^/not-saved:/' "$d/unsaved.txt" 2>/dev/null; } > "$src" 2>/dev/null || return 0
+  fi
+  while IFS= read -r l; do
+    case "$l" in
+      missing:*)      out="${out:+$out; }an image whose bytes were not found at ${l#missing:}" ;;
+      not-attached:*) out="${out:+$out; }an image that did not re-attach, saved at ${l#not-attached:}" ;;
+      not-saved:*)    out="${out:+$out; }a pasted block ${l#not-saved:} that could not be saved (its content lived only in the session's memory)" ;;
+    esac
+  done < "$src"
+  [ "$src" = "$d/putback.txt" ] || rm -f "$src" 2>/dev/null
+  printf '%s' "$out"
+}
+
 _cc_carry_chips() { # stdin: a space-stripped box → the number of image chips in it
   LC_ALL=C grep -oE '\[Image#?[0-9]+\]' | LC_ALL=C wc -l | LC_ALL=C tr -d '[:space:]'
 }

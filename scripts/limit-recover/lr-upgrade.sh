@@ -1128,8 +1128,8 @@ lru_draft_restore() { # $1=pane $2=draft file $3=transcript $4=sid or "" (no mov
   # shellcheck disable=SC1090
   ( export CC_CARRY_SETTLE_S="${LRU_SWITCH_DRAFT_SETTLE_S:-3}"; . "$LRU_TUI_LIB" && . "$LRU_CARRY_LIB" \
       && cc_carry_putback "$pane" "$d" "${LRU_SWITCH_DRAFT_WAIT_S:-300}" "${LRU_SWITCH_POLL_S:-5}" _lru_draft_ready "$sid" "$since" "$tx" ) >/dev/null 2>&1 || rc=$?
-  short="$(LC_ALL=C grep -v '^attached:' "$d/putback.txt" 2>/dev/null | tr '\n' ' ')" || short=""
-  short="${short% }"
+  # shellcheck disable=SC1090
+  short="$( . "$LRU_CARRY_LIB" && cc_carry_unput "$d")" 2>/dev/null || short=""
   case "$rc" in
     0) printf 'your draft was carried and is back in the prompt box, unsent (copy at %s)' "$f" ;;
     5) printf 'your draft was carried and is back in the prompt box, unsent, except what could not be put back: %s (copy at %s)' "$short" "$f" ;;
