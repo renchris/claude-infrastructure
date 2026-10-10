@@ -5,7 +5,7 @@ wraps the composer taller than that, so its top border fell outside the window, 
 border and returned UNKNOWN, and `it2_paste_submit_verified` reported `saw '<unreadable>'` and withheld
 the CR over a composer that was fine. The fix reads a bigger window only in that one shape and accepts
 the box only if it is shaped like a composer, so a modal still reads UNKNOWN and gets no Enter.
-Landed in `373bb4230` (plus the commits named in the plan).
+Landed on trunk as `57765631d` … `41cc634df` (all five named in `docs/plans/GOAL_ARM_READBACK.md` Phase 2) and converged live.
 
 Method: a 5-slot Dynamic Workflow (forensics, modal fail-closed, sibling copies, residue/notify, skeptic),
 read-only `workflow-lean` slots writing `slot-*.md` beside this file, plus the lead's own live

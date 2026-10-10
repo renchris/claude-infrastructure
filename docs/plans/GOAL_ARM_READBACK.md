@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 ---
 
 # GOAL_ARM_READBACK — a tall composer reads as "<unreadable>" and the /goal is never submitted
@@ -18,15 +18,14 @@ Root cause reproduced live on pane 203 (32 cols × 62 rows, mid-turn) before the
 
 Synthesis: `docs/research/goal-arm-readback-2026-10-10/REPORT.md` (Q1–Q4). Conviction in D1 above 90%: corpus replay 0/997 verdicts changed, every repo modal fixture stays fail-closed alone and under a hostile transcript, and the incident screen parses to the exact payload.
 
-## Phase 2 — Fix (lead-inline)
+## Phase 2 — Fix (lead-inline) — DONE (landed `41cc634df`, live 2026-10-10)
 
-- `scripts/handoff-fire.sh` `composer_content`: bigger window only on bottom-border-without-top, accepted only when composer-shaped (5 checks). `FIRE_COMPOSER_READLINES_MAX` (default 200; set ≤ 24 to disable).
-- `scripts/limit-recover/lr-fire-resume.sh` `LR_SCREEN_SH`: the same rule (`LR_SCREEN_LINES_MAX`).
-- Residue receipt on an unreadable scrub records the payload, not `<unreadable>`; scrub-off records the whole read.
-- `arm_goal` mangled branch: truthful about the scrub (`FIRE_PASTE_SCRUB`), tells the fired session to drive without the backstop, pages the desk on a recycle.
-- `commands/handoff.md` verdict list completed.
-- Tests: `tests/composer-tall-readback.bats` (window-honouring stubs; red against HEAD for the tall cases).
-- Commit `373bb4230`.
+Trunk shas: `57765631d` (tall-box read, both copies; residue receipt holds the payload; truthful mangled messages + desk page on recycle; verdict list), `7001ad446` (research), `9e56493ec` (❯ under the last border ⇒ dialog, both paths), `f14b42653` (tail-only acceptance for a capped box; dialog-above and indented-box vetoes; probe fixtures), `41cc634df` (suite closes the capacity-admit gate).
+- Shipped rule, both copies (`composer_content`, `LR_SCREEN_SH`): 24-row read as before; on bottom-border-without-top, a bigger window (`FIRE_COMPOSER_READLINES_MAX` / `LR_SCREEN_LINES_MAX`, default 200; ≤ 24 disables) accepted only when composer-shaped; vetoes (top rule at column 0, no ❯ below the box, no option row above it) on both paths.
+- Key learning: the first cut failed open (trust dialog under an echoed prompt). The hostile-transcript test, the skeptic and the modal slot each caught it; the same hole, and a dialog drawn above a live composer reading EMPTY, already existed before this work.
+- Key learning: the composer IS height-capped (~40% of the pane), measured on a throwaway pane; a capped box on a tall pane reaches the bigger read with a continuation first row, hence tail-only acceptance (never EMPTY).
+- Gates: `tests/composer-tall-readback.bats` 1..20 green, 14 of 20 red on pre-fix `16b6b441f`; touched existing suites 1..178 green; bare shellcheck clean; corpus 0 of 1,001 verdicts changed.
+- Blocker resolved: a teammate spawn was refused by the runtime (it2 unreachable), so the lead wrote both copies (locus L).
 
 ## Out of scope (recorded, not filed)
 
