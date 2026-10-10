@@ -87,8 +87,10 @@ fi
 if [ "$rc" = 0 ]; then echo "cc-notify: verdict=delivered" >&2; else echo "cc-notify: verdict=unresolvable reason=role-unset" >&2; fi
 exit "$rc"
 STUB
+  # shellcheck disable=SC2016  # the stub's own $$ and $FX expand when IT runs, not here
   printf '#!/bin/bash\necho "{ 197.20 180.00 150.00 }"\n' > "$FX/sysctl"
   # shellcheck disable=SC2016  # $* is the stub's own argv, expanded when it runs
+  # shellcheck disable=SC2016  # the stub's own $$ and $FX expand when IT runs, not here
   printf '#!/bin/bash\necho "$*" >> "$FX/sleep.argv"\n' > "$FX/sleep"
   chmod +x "$FX/ps" "$FX/sample" "$FX/notify" "$FX/sysctl" "$FX/sleep"
   export CONVOY_GAUGE_PS="$FX/ps" CONVOY_GAUGE_SAMPLE="$FX/sample"
@@ -113,10 +115,11 @@ evidence_dirs() { find "$FX/evidence" -mindepth 1 -maxdepth 1 -type d 2>/dev/nul
 # all_dead <file of pids> — every pid in it is gone (an orphan is reaped by launchd a beat later)
 all_dead() {
   local p i
-  for p in $(cat "$1"); do
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
     i=0; while kill -0 "$p" 2>/dev/null && [ "$i" -lt 30 ]; do sleep 0.1; i=$((i + 1)); done
     ! kill -0 "$p" 2>/dev/null || return 1
-  done
+  done < "$1"
 }
 
 @test "45 lsd threads, confirmed: trips, writes the flag, captures evidence once and pages the desk once" {
@@ -304,6 +307,7 @@ all_dead() {
 # mutants: `bounded` removed from the sample call (2026-10-09) · the runner's group KILL removed
 # (2026-10-10; the samples ignore TERM, so only the KILL ends them) — each reds this case
 @test "a sample that hangs does not hang the gauge: each is cut at its bound, killed, and the row is still written" {
+  # shellcheck disable=SC2016  # the stub's own $$ and $FX expand when IT runs, not here
   printf '#!/bin/bash\necho $$ >> "$FX/sample.pids"\ntrap "" TERM\nexec /bin/sleep 300\n' > "$FX/sample"
   threads 45 3 4 2
   local t0=$SECONDS
@@ -320,6 +324,7 @@ all_dead() {
 # mutants (2026-10-10): the gauge's TERM trap removed (lock held, no row) · the runner's TERM
 # handler removed (the samples are orphaned) — each reds this case
 @test "a gauge cut by TERM mid-capture kills its samples, releases the lock and still writes its row" {
+  # shellcheck disable=SC2016  # the stub's own $$ and $FX expand when IT runs, not here
   printf '#!/bin/bash\necho $$ >> "$FX/sample.pids"\ntrap "" TERM\nexec /bin/sleep 300\n' > "$FX/sample"
   threads 45 3 4 2
   # the caller's bound, as capacity-alarm runs it: the gauge leads its own process group
@@ -410,6 +415,7 @@ all_dead() {
 @test "the flag lives in getconf DARWIN_USER_TEMP_DIR/cc-shed when no directory is given" {
   mkdir -p "$FX/dtmp"
   # shellcheck disable=SC2016  # $1 is the stub's own argument
+  # shellcheck disable=SC2016  # the stub's own $$ and $FX expand when IT runs, not here
   printf '#!/bin/bash\n[ "$1" = DARWIN_USER_TEMP_DIR ] && echo "%s/dtmp/"\n' "$FX" > "$FX/getconf"
   chmod +x "$FX/getconf"
   unset CONVOY_GAUGE_SHED_DIR
@@ -474,6 +480,7 @@ all_dead() {
   mkdir -p "$FX/repo/scripts" "$FX/repo/bin" "$FX/live/scripts" "$FX/live/bin" "$HOME/.claude/bin"
   cp "$G" "$FX/repo/scripts/convoy-gauge.sh"
   cp "$FX/notify" "$FX/repo/bin/cc-notify"
+  # shellcheck disable=SC2016  # the stub's own $$ and $FX expand when IT runs, not here
   printf '#!/bin/bash\necho decoy >> "$FX/decoy"\nexit 9\n' > "$FX/live/bin/cc-notify"; chmod +x "$FX/live/bin/cc-notify"
   ln -s ../../repo/scripts/convoy-gauge.sh "$FX/live/scripts/convoy-gauge.sh"
   threads 45 3 4 2
