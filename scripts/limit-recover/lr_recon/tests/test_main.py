@@ -812,27 +812,6 @@ class MainTests(unittest.TestCase):
         self.assertEqual(rec.terminal.outcome, "REPLACED-NEW-WINDOW")
         self.assertNotIn("next3.7d", facts)
 
-    def test_an_open_record_born_paneless_is_bound_by_the_census_pass(self):
-        """186452ed: an IN-FLIGHT husk whose session no longer reads LIMITED buckets into no record
-        type, so upsert never sees it; the pass still binds its pane from the first healthy read."""
-        import time
-
-        now = time.time()
-        snap = _snap(now, self.tmp)
-        s = next(iter(snap.sessions.values()))
-        s.transcript.last = {"kind": "ok"}
-        ctx = M.Ctx(self.paths, None, self.home)
-        M.store.ensure_dirs(self.paths)
-        rec = T.Record(sid=s.sid, record_id="r1", source_pid=10, source_lstart=L)
-        rec.substate = "IN-FLIGHT"
-        ctx.records[s.sid] = rec
-        M._census(ctx, snap, {}, [], "observe", now)
-        self.assertIs(ctx.records[s.sid], rec)
-        self.assertEqual((rec.pane, rec.identity.window_id), ((5, 7), 7))
-        with open(self.paths.events) as fh:
-            evs = [json.loads(ln) for ln in fh]
-        self.assertIn(("rebind", "pane 5:7"), [(e["ev"], e.get("detail")) for e in evs])
-
     def test_a_new_death_after_recovery_is_a_new_record(self):
         """CONTROL: a later death on the target has a new ts, so it is recovered too."""
         rec, ctx, facts = self._recovered("t2")

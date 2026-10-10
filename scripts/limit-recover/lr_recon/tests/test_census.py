@@ -1,6 +1,5 @@
 """census: one bucket per session in order, the ruled defaults and their switches, records, stale."""
 
-import dataclasses
 import os
 import tempfile
 import unittest
@@ -284,67 +283,6 @@ class CensusRecords(unittest.TestCase):
         self.assertTrue(C.handled_death(rec, s))
         s.transcript.last = dict(last, ts="t2")
         self.assertFalse(C.handled_death(rec, s))
-
-    def test_a_record_born_on_a_degraded_kitty_read_binds_its_pane_at_the_first_healthy_read(
-        self,
-    ):
-        """186452ed: born at load ~400 with the kitty read degraded, so pane None and an empty
-        identity for life — its pane evidence read "unknown" and it stalled into RECON-DEFECT."""
-        from lr_recon import evidence as E
-
-        b = T.Bucket(sid="abcdef01-x", name="LIMITED", acct="next3", scope="7d")
-        src = T.HolderObs(pid=10, lstart=L, cfg="/c", src="registry")
-        blind = T.SessionObs(
-            sid=b.sid, acct="next3", cfg="/c", pid=10, lstart=L, holders=[src]
-        )
-        degraded = T.Snapshot(wall=NOW, uptime_raw=0.0, degraded=["kitty:64211"])
-        rec, _ = C.upsert({}, b, blind, None, "census", "c1", False, NOW)
-        self.assertEqual((rec.pane, rec.identity.root_pid), (None, 0))
-        self.assertFalse(
-            C.rebind_pane(rec, blind, degraded)
-        )  # still blind: nothing to bind
-        self.assertEqual(E._pane_state(rec, degraded), "unknown")
-
-        pane = T.PaneObs(
-            kitty_pid=64211,
-            kitty_lstart=L,
-            window_id=168,
-            sock="s",
-            tty="ttys012",
-            root_pid=20,
-            root_lstart=L,
-            root_shape="shell",
-            state="claude",
-        )
-        healthy = T.Snapshot(wall=NOW, uptime_raw=0.0, panes={"64211:168": pane})
-
-        def seen(pid=10, lstart=L, bg=False):
-            h = T.HolderObs(pid=pid, lstart=lstart, cfg="/c", src="registry")
-            h.pane, h.bg = (64211, 168), bg
-            return dataclasses.replace(blind, pane=(64211, 168), holders=[h])
-
-        # a holder that is not the record's own source process binds nothing: a reused pid, a
-        # relaunch elsewhere, a background row
-        for other in (
-            seen(lstart="Wed Oct  7 01:00:00 2026"),
-            seen(pid=11),
-            seen(bg=True),
-        ):
-            self.assertFalse(C.rebind_pane(rec, other, healthy))
-            self.assertIsNone(rec.pane)
-        self.assertTrue(C.rebind_pane(rec, seen(), healthy))
-        self.assertEqual(rec.pane, (64211, 168))
-        self.assertEqual(rec.root_shape, "shell")
-        self.assertEqual(
-            rec.identity,
-            T.Identity(64211, L, 168, "ttys012", 20, L),
-        )
-        self.assertEqual(E._pane_state(rec, healthy), "claude")
-        self.assertTrue(E._identity_match(rec, pane))
-        # bound once: a later read never re-points it, and a closed record is never touched
-        self.assertFalse(C.rebind_pane(rec, seen(), healthy))
-        rec.pane, rec.terminal = None, T.Terminal(outcome="CLOSED", at=NOW)
-        self.assertFalse(C.rebind_pane(rec, seen(), healthy))
 
     def test_cohort_id_safe(self):
         self.assertEqual(

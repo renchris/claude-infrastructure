@@ -265,10 +265,6 @@ def _census(
             # typing, so the copied limit record stays last and re-opened the sid over its terminal
             # outcome (W5 rig 80294ba4: REPLACED-NEW-WINDOW overwritten by LAUNCHER-ROOTED)
             continue
-        if old is not None and census.rebind_pane(old, s, snap):
-            # ahead of the bucket: a record whose session no longer buckets into a record type
-            # never reaches upsert, and its pane evidence is read by this pass's derive
-            _event(paths, "rebind", s.sid, old.record_id, "pane %d:%d" % tuple(s.pane))
         _read_composer(s, snap, facts, now, old)
         b = census.bucket(s, snap, facts, now)
         buckets.append(b)

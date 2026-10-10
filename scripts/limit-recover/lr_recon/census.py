@@ -334,43 +334,6 @@ _SUBSTATE = {
 }
 
 
-def _bind(rec: T.Record, where: Optional[Tuple[int, int]], pane: T.PaneObs) -> None:
-    rec.pane = where
-    rec.root_shape = pane.root_shape
-    rec.identity = T.Identity(
-        kitty_pid=pane.kitty_pid,
-        kitty_lstart=pane.kitty_lstart,
-        window_id=pane.window_id,
-        tty=pane.tty,
-        root_pid=pane.root_pid,
-        root_lstart=pane.root_lstart,
-    )
-
-
-def rebind_pane(rec: T.Record, s: T.SessionObs, snap: T.Snapshot) -> bool:
-    """An open record born on a degraded kitty read has pane None and an empty identity, and
-    nothing set them again: its pane evidence read "unknown" for life, so no row past row 8 could
-    match and it stalled into RECON-DEFECT every pass (186452ed, born 04:05:46Z on 2026-10-10 at
-    load ~400 in pane 168 of kitty 64211). The first healthy read binds them, but only through the
-    record's own source holder (pid + lstart) sitting in that window: any other holder may be a
-    relaunch in a different pane, which settle owns."""
-    if not rec.open or rec.pane or not s.pane or not rec.source_pid:
-        return False
-    pane = _pane(s, snap)
-    if pane is None:
-        return False
-    if not any(
-        h.pid == rec.source_pid
-        and h.lstart == rec.source_lstart
-        and h.pane == s.pane
-        and not h.bg
-        for h in s.holders
-    ):
-        return False
-    _bind(rec, s.pane, pane)
-    return True
-
-
 def new_record(
     b: T.Bucket,
     s: T.SessionObs,
@@ -396,7 +359,15 @@ def new_record(
         origin=origin,
     )
     if pane is not None:
-        _bind(rec, s.pane, pane)
+        rec.root_shape = pane.root_shape
+        rec.identity = T.Identity(
+            kitty_pid=pane.kitty_pid,
+            kitty_lstart=pane.kitty_lstart,
+            window_id=pane.window_id,
+            tty=pane.tty,
+            root_pid=pane.root_pid,
+            root_lstart=pane.root_lstart,
+        )
     rec.substate = _SUBSTATE.get(b.name, b.name)
     if b.name in T.MAX_AGE_S or b.name == "STAY":
         rec.wait = T.Wait(
