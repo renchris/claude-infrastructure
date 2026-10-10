@@ -28,6 +28,9 @@ setup() {
   LRU="$REPO/scripts/limit-recover/lr-upgrade.sh"
   CCLR="$REPO/bin/cc-lr"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # Sealed suite-wide (2026-10-10, C3): lr_pid_cfg would otherwise read `ps -E` of a fixture row's
+  # pid — this bats process, carrying the running session's CLAUDE_CONFIG_DIR.
+  export LR_MOVE_ENV_DIR="$BATS_TEST_TMPDIR/penv"; mkdir -p "$LR_MOVE_ENV_DIR"
   export LRU_STATE="$HOME/.reso/limit-recover"; mkdir -p "$LRU_STATE"
   export LR_STATE_DIR="$LRU_STATE"
   export LRU_REG_DIR="$BATS_TEST_TMPDIR/reg"; mkdir -p "$LRU_REG_DIR"
@@ -300,4 +303,21 @@ STUB
   run bash "$CCLR" move --sid "$S1" --to next2 --slots 6 --dry-run
   [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
   [[ "$output" == *"bounds: move 6 at a time (--slots;"* ]] || { echo "$output"; false; }
+}
+
+@test "[RED] C3: a FORWARD husk is hold:husk naming cc-lr recover — never the repair-markers loop" {
+  # 186452ed: repair-markers rightly KEEPs a tombstone that names where the session went, so naming
+  # it from here was a refusal loop. The source pane is alive (CC_REGISTRY_DIR, pid = this process).
+  sess 405 "$S5"
+  local T="$HOME/.claude-tertiary/projects/-x" Q="$HOME/.claude-quaternary/projects/-x"
+  mkdir -p "$Q"; cp "$T/$S5.jsonl" "$T/$S5.jsonl.handed-off"; cp "$T/$S5.jsonl" "$Q/$S5.jsonl"
+  printf '{"handed_off_to":"%s","ts":"2026-10-10T04:18:07Z"}\n' "$HOME/.claude-quaternary" > "$T/$S5.HANDOFF.json"
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/ccreg"; mkdir -p "$CC_REGISTRY_DIR"
+  printf '{"paneUUID":"405","session_id":"%s","pid":%d,"account":"claude-tertiary"}\n' "$S5" "$$" > "$CC_REGISTRY_DIR/405.json"
+  export LR_MOVE_ENV_DIR="$BATS_TEST_TMPDIR/penv"; mkdir -p "$LR_MOVE_ENV_DIR"; printf '%s' "$HOME/.claude-tertiary" > "$LR_MOVE_ENV_DIR/$$"
+  run bash "$CCLR" plan --from next3 --to next2
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(disp "$S5")" = hold:husk ] || { echo "$output"; false; }
+  [[ "$output" == *"cc-lr recover ${S5:0:8}"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"repair-markers --sid $S5"* ]] || { echo "$output"; false; }
 }

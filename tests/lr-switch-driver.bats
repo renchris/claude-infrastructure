@@ -22,6 +22,9 @@ setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   LRU="$REPO/scripts/limit-recover/lr-upgrade.sh"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # Sealed suite-wide (2026-10-10, C3): lr_pid_cfg would otherwise read `ps -E` of a fixture row's
+  # pid — this bats process, carrying the running session's CLAUDE_CONFIG_DIR.
+  export LR_MOVE_ENV_DIR="$BATS_TEST_TMPDIR/penv"; mkdir -p "$LR_MOVE_ENV_DIR"
   export LRU_STATE="$HOME/.reso/limit-recover"; mkdir -p "$LRU_STATE"
   export LRU_REG_DIR="$BATS_TEST_TMPDIR/reg"; mkdir -p "$LRU_REG_DIR"
   # The account map resolves next2 → $HOME/.claude-secondary, so the config root IS $HOME here:

@@ -356,6 +356,18 @@ cl_mutex_take() { # <sid> <pane> → 0 taken (path on stdout), 2 refused
 # two places, both of them admission: RULE 2 in this file, and cf_class == LIMITED in cc-find.
 # Consequence the old sentence hid: a healthy session CAN move accounts in place, which is what
 # `cc-lr switch` below does. What a context-dead session still lacks is not a gate but a driver.
+# A HUSK IS RECOVERABLE, AND THIS IS THE VERB EVERY HUSK REFUSAL NAMES (2026-10-10, 186452ed). Its
+# stub is not LIMITED because the session MOVED: the copy on the target is the limited one, and nothing
+# runs it there. lr_successor_state (lr-lib) is the one judge; LR_SUCCESSOR_GATE=off turns this off.
+CL_HUSK_PANE=""
+cl_husk_pane() { # <sid> <cfg> → rc 0 and CL_HUSK_PANE set when the session is a husk on <cfg>
+  local st
+  CL_HUSK_PANE=""
+  command -v lr_successor_state >/dev/null 2>&1 || return 1
+  st="$(lr_successor_state "$1" "$2" 2>/dev/null)" || return 1
+  case "$st" in husk\ *) st="${st#husk }"; CL_HUSK_PANE="${st%% *}"; return 0 ;; esac
+  return 1
+}
 cl_refuse_not_limited() { # <sid> <pane> <klass> <cfg> <cwd> → always rc 2
   local sid="$1" pane="${2:--}" klass="${3:-UNKNOWN}" cfg="$4" cwd="$5"
   local f tx="" row="" err="" kind=""
@@ -573,10 +585,12 @@ EOF
     echo "cc-lr: REFUSED — ${sid:0:8} (pane ${pane}) is a TEAMMATE: lead-owned, nothing is owed by anyone on it. lr-fleet --one has no teammate guard, so this refusal is the only one. No mutex was created and nothing was started." >&2
     exit 2
   fi
-  if [ "$klass" != LIMITED ]; then
+  if [ "$klass" != LIMITED ] && ! cl_husk_pane "$sid" "$cfg"; then
     cl_refuse_not_limited "$sid" "$pane" "${klass:-UNKNOWN}" "$cfg" "$cwd"
     exit 2
   fi
+  # A husk's pane is the one its own registry row names (the predicate read it), never a guess.
+  [ -n "$CL_HUSK_PANE" ] && [ "$CL_HUSK_PANE" != - ] && pane="$CL_HUSK_PANE"
 
   [ -n "$pane_arg" ] && pane="$pane_arg"
   # AFTER the three refusals (a teammate or a non-limited sid is no more the reconciler's to drive
@@ -1127,7 +1141,14 @@ cl_move_rows() { # <from or ""> <to> <until_idle_s> <sel flag or ""> <sel value>
         if [ "$until_s" -gt 0 ]; then disp="wait:$d" act=wait action="waits until idle (<= ${until_s}s), then restarts on $to"
         else disp="hold:$d" action="busy now; --until-idle S waits for it"; fi ;;
       composer-occupied) disp=hold:draft action="a draft is in its composer; drafts are not carried" ;;
-      retired-source) disp=hold:retired-source action="a stale handoff marker blocks its prompts; repair first: cc-lr repair-markers --sid $s" ;;
+      retired-source)
+        # A FORWARD HUSK IS NOT A STALE MARKER (2026-10-10, 186452ed): repair-markers rightly KEEPs a
+        # tombstone that names where the session went, so naming it here made a refusal loop.
+        if cl_husk_pane "$s" "$cfg"; then
+          disp=hold:husk action="moved off ${ac:-its account} and nothing runs it there; relaunch it in this pane: cc-lr recover ${s:0:8}"
+        else
+          disp=hold:retired-source action="a stale handoff marker blocks its prompts; repair first: cc-lr repair-markers --sid $s"
+        fi ;;
       bg-session) disp=hold:bg-session action="a background job moves only when named: cc-lr switch --sid $s --target $to" ;;
       self) disp=hold:self action="the session that ran this command" ;;
       *) disp="hold:$d" action="not moved" ;;

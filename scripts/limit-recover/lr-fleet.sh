@@ -916,13 +916,17 @@ lf_admit_section() { # $1=sid $2=cfg $3=acct $4=pane $5=cwd $6=tier → 0 admitt
 # which covers the watcher's shell wait and boot wait on every measured recovery; the worst case is
 # longer, and past the bound the answer is UNPROVEN, never a guess). The ledger is the watcher's own
 # (handoff-fire emit_recycle_event), read by class and pane, never by prose.
+# [$4=cfg] SCOPES the row to that store's account (lr_registry_live_rows_in_cfg). The husk relaunch
+# passes its target: until the /exit lands the husk's OWN row is live on the source account, and an
+# unscoped read proves "recovered" off the very process being replaced (the 04:19:09Z row, 186452ed).
 lf_await_relaunch() {
-  local sid="$1" pane="$2" floor="$3" max poll waited=0 row led dead
+  local sid="$1" pane="$2" floor="$3" scope="${4:-}" max poll waited=0 row led dead
   max="${LR_FLEET_PROOF_WAIT_S:-240}"; case "$max" in ''|*[!0-9]*) max=240 ;; esac
   poll="${LR_FLEET_PROOF_POLL_S:-5}"; case "$poll" in ''|*[!0-9]*|0) poll=5 ;; esac
   led="${LR_HANDOFF_LEDGER:-$HOME/.claude/logs/handoffs.jsonl}"
   while :; do
-    row="$(lr_registry_live_rows "$sid" 2>/dev/null | head -1 | cut -f1 || true)"
+    if [ -n "$scope" ]; then row="$(lr_registry_live_rows_in_cfg "$sid" "$scope" 2>/dev/null | head -1 | cut -f1 || true)"
+    else row="$(lr_registry_live_rows "$sid" 2>/dev/null | head -1 | cut -f1 || true)"; fi
     [ -n "$row" ] && { printf '%s' "$row"; return 0; }
     if [ -n "$pane" ] && [ "$pane" != "-" ] && [ -f "$led" ] && command -v jq >/dev/null 2>&1; then
       dead="$(tail -n 500 "$led" 2>/dev/null | jq -rR --arg p "$pane" --arg f "$floor" '
@@ -957,6 +961,9 @@ lf_one() { # $1=sid $2=cfg $3=acct $4=pane $5=cwd $6=tier → rc of the recovery
 _lf_one_act() {
   local sid="$1" cfg="$2" acct="$3" pane="$4" cwd="$5" tier="$6" target rc=0 out rdir="$FLEET_DIR/$RUN" model="" effort="" arc=0
   mkdir -p "$rdir"
+  # A HUSK IS NEVER WOKEN OR MOVED AGAIN — its session already lives on the target (lr_successor_state
+  # said so in the --one router). FIRST, before the wake below, which would type into its blocked pane.
+  if [ "${LF_HUSK:-0}" = 1 ]; then lf_husk_recycle "$sid" "$cfg" "$acct" "$pane"; return $?; fi
   # WAKE IN PLACE BEFORE MOVING: the source account may already have its headroom back (see
   # lf_own_acct_live). Needs a live pane to type into; a session without one still moves.
   if [ -n "$pane" ] && [ "$pane" != - ] && lf_own_acct_live "$acct" "$cfg" "$sid" "${tier%%/*}"; then
@@ -1203,6 +1210,9 @@ lf_nudge() { # $1=sid $2=holder cfg $3=source acct $4=pane → 0 engaged · 1 no
       "a live process holds the session on $hacct but no registry row names its pane, so there is nowhere to type"
     return 1
   fi
+  # A DRY RUN TYPES NOTHING (2026-10-10). This arm had no DRY test, so `--one <sid> --dry-run` on a
+  # held session submitted a real continue prompt — the field proof's own preview would have typed.
+  [ "$DRY" = 1 ] && { lf_row "$sid" "$pane" "$pane" "$acct" "$hacct" "dry-run" "would nudge pane $pane on $hacct with one continue prompt"; return 0; }
   if ! lf_acct_has_headroom "$hacct"; then
     lf_row "$sid" "$pane" "$pane" "$acct" "$hacct" "parked/capped" "$hacct is still at its limit; nothing typed"
     return 1
@@ -1293,6 +1303,110 @@ lf_stranded() { # $1=sid $2=target cfg $3=acct $4=pane $5=cwd $6=tier → 1, and
   echo "lr-fleet: --one $sid — TRANSPLANTED→$tacct but NO live process holds it: stranded, not recovered. Relaunch it in a new window: $cmd" >&2
   lf_row "$sid" "${pane:--}" "-" "$acct" "$tacct" "transplanted-stranded/FAILED" \
     "transplanted to $tacct but no live process holds the session; relaunch in a new window: $cmd"
+  return 1
+}
+# ── A HUSK IS RELAUNCHED IN ITS OWN PANE, ONTO THE STORE IT MOVED TO (2026-10-10, 186452ed) ───────
+# lr_successor_state answered `husk`: the session MOVED (tombstone + .handed-off), nothing runs it on
+# the target, and the source pane is a live process whose every prompt handed-off-session-guard
+# blocks. The one actuator that accepts that state is handoff-fire's `--recycle --transplanted-source
+# --husk`, and this is its one driver (lr-fleet --one, which cc-lr recover and the reset poller call).
+# NO LAUNCHER IS MINTED HERE: the transplant's own bundle holds one (lr-handoff.sh mints it beside the
+# MANIFEST), and the reconciler's A-husk relaunches from the same file (lr_recon/settle.py
+# bundle_launcher) — newest bundle whose MANIFEST names the target store. What has lapsed by now is
+# its admission token, so the probe runs HERE, before /exit, and the token is minted at the very path
+# the launcher exports (cc_capacity_token_mint's explicit-path form): a capacity refusal after the
+# /exit would leave a bare shell and no successor, the one state worse than a husk. A hold types
+# nothing and is HELD:<the ledger's recycle-held-* reason>; the request lane re-drives it. No page and
+# no "send or clear": the draft is the recycle's to carry, not the operator's to clear.
+lf_husk_recycle() { # $1=sid $2=source cfg $3=acct $4=pane → rc 0 recovered · 1 not; the row is written
+  local sid="$1" cfg="$2" acct="$3" pane="$4" to tacct man b L="" cause="" tok tokdir hf="" c rc=0 t0 held after dead="" led
+  local rdir="$FLEET_DIR/$RUN" args minted=0
+  # --resume-cfg IS THE TOMBSTONE'S OWN SPELLING: handoff-fire --husk compares it to handed_off_to as
+  # a string, and the lock (which lr_transplant_target reads first) may spell the same store otherwise.
+  to=""
+  for c in "$cfg"/projects/*/"$sid".HANDOFF.json; do
+    [ -f "$c" ] && to="$(jq -r '.handed_off_to // empty' "$c" 2>/dev/null)" && [ -n "$to" ] && break
+  done
+  [ -n "$to" ] || to="$(lr_transplant_target "$sid" "$cfg" 2>/dev/null)" || to=""
+  if [ -z "$to" ]; then
+    lf_row "$sid" "$pane" "$pane" "$acct" "-" "husk-recycle/HELD:no-target" "no tombstone or lock under $cfg names a successor copy any more; nothing typed"
+    return 1
+  fi
+  tacct="$(lf_acct_of_cfg "$to")"
+  for man in "$HOME/.reso/limit-recover/$sid"/bundle-*/MANIFEST.json; do   # ascending, so the last hit is the newest
+    [ -f "$man" ] || continue
+    [ "$(lr_store_key "$(jq -r '.target_cfg // empty' "$man" 2>/dev/null)")" = "$(lr_store_key "$to")" ] || continue
+    for b in "${man%/MANIFEST.json}/lr-launch-${sid:0:8}-"*.sh; do
+      [ -s "$b" ] && { L="$b"; cause="$(jq -r '.trigger // empty' "$man" 2>/dev/null)"; }
+    done
+  done
+  if [ -z "$L" ]; then
+    lf_row "$sid" "$pane" "$pane" "$acct" "$tacct" "husk-recycle/HELD:no-launcher" "no bundle under $HOME/.reso/limit-recover/$sid targets $tacct with an lr-launch-${sid:0:8}-*.sh; nothing typed"
+    return 1
+  fi
+  for c in "${LF_HF_BIN:-}" "$LR/../handoff-fire.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/handoff-fire.sh" "$HOME/.claude/scripts/handoff-fire.sh"; do
+    [ -n "$c" ] && [ -f "$c" ] && { hf="$c"; break; }
+  done
+  args=(--recycle --transplanted-source --husk --resume-launcher "$L" --resume-cfg "$to" --source-pane "$pane" --source-session "$sid")
+  case "$cause" in limit|voluntary) args+=(--transplant-cause "$cause") ;; esac
+  if [ "$DRY" = 1 ]; then
+    lf_row "$sid" "$pane" "$pane" "$acct" "$tacct" "dry-run" "would relaunch the husk in pane $pane onto $tacct: ${hf:-<handoff-fire.sh unreachable>} ${args[*]}"
+    return 0
+  fi
+  [ -n "$hf" ] || { lf_row "$sid" "$pane" "$pane" "$acct" "$tacct" "husk-recycle/HELD:no-actuator" "handoff-fire.sh is unreachable; nothing typed"; return 1; }
+  if ! lf_acct_has_headroom "$tacct"; then
+    lf_row "$sid" "$pane" "$pane" "$acct" "$tacct" "parked/capped" "$tacct, where the session now lives, is at its limit; the husk in pane $pane is left standing, nothing typed"
+    return 1
+  fi
+  lf_admit_lock_take || { lf_row "$sid" "$pane" "$pane" "$acct" "$tacct" "parked" "the admit lock $LF_ADMIT_LOCK could not be taken or stolen — nothing was probed or typed"; return 1; }
+  LF_PARK_REASON=""
+  if lf_capacity_wait "husk relaunch of ${sid:0:8} onto $tacct"; then
+    tok="$(sed -n '/^export LR_ADMIT_TOKEN=/{s/^export LR_ADMIT_TOKEN=//p;q;}' "$L")"
+    tokdir="${CC_ADMIT_STATE_DIR:-$HOME/.claude/autonomy/capacity-admit}/tokens"
+    case "$tok" in
+      "$tokdir/$sid".*) command -v cc_capacity_token_mint >/dev/null 2>&1 && cc_capacity_token_mint "$sid" "$tok" >/dev/null 2>&1 && minted=1 \
+                          || echo "lr-fleet: WARNING — no admission token minted at $tok; the relaunch evaluates the gate fresh in the pane" >&2 ;;
+      *) echo "lr-fleet: $L exports no token under $tokdir for ${sid:0:8}; the relaunch evaluates the gate fresh in the pane" >&2 ;;
+    esac
+    lf_charge_assign "$tacct"
+  else
+    rc=1
+  fi
+  lf_admit_lock_release
+  if [ "$rc" != 0 ]; then
+    lf_row "$sid" "$pane" "$pane" "$acct" "$tacct" "parked" "capacity${LF_PARK_REASON:+ — $LF_PARK_REASON}; the husk in pane $pane is left standing, nothing typed"
+    return 1
+  fi
+  t0="$(date -u +%FT%TZ)"
+  echo "lr-fleet: --one $sid — a HUSK in pane $pane (moved to $tacct, nothing runs it there); relaunching it in place: $hf ${args[*]}" >&2
+  "$hf" "${args[@]}" > "$rdir/$sid.stdout" 2> "$rdir/$sid.stderr" || rc=$?
+  cat "$rdir/$sid.stderr" >&2
+  if [ "$rc" != 0 ]; then
+    # A HOLD BEFORE /exit LEAVES NOTHING TO REDEEM THE TOKEN (2026-10-10, C3 skeptic). Left in place, an
+    # own token past its TTL is TERMINAL at the launcher's gate (capacity-admit.sh token-stale, rc 9)
+    # for the next actor that runs this same launcher; absent means a fresh evaluation, as before.
+    [ "$minted" = 1 ] && rm -f "$tok"
+    led="${LR_HANDOFF_LEDGER:-$HOME/.claude/logs/handoffs.jsonl}"; held=""
+    [ -f "$led" ] && held="$(tail -n 500 "$led" 2>/dev/null | jq -rR --arg p "$pane" --arg f "$t0" '
+          fromjson? | select(((.class // "") | startswith("recycle-held-")) and ((.target_pane|tostring) == $p) and ((.ts // "") >= $f))
+          | .class' 2>/dev/null | tail -1 || true)"
+    held="${held#recycle-held-}"; [ "$held" != bgwork ] || held=bg-work
+    if [ -n "$held" ]; then
+      lf_row "$sid" "$pane" "$pane" "$acct" "$tacct" "husk-recycle/HELD:$held" "handoff-fire held before /exit (rc $rc): nothing typed, the husk still holds pane $pane; the request lane re-drives it; see $rdir/$sid.stderr"
+    else
+      lf_row "$sid" "$pane" "$pane" "$acct" "$tacct" "husk-recycle/FAILED" "handoff-fire rc $rc with no recycle-held row for pane $pane; see $rdir/$sid.stderr"
+    fi
+    return 1
+  fi
+  after="$(lf_await_relaunch "$sid" "$pane" "$t0" "$to")" || dead="$after"
+  if [ -z "$dead" ] && [ -n "$after" ]; then
+    lf_row "$sid" "$pane" "$after" "$acct" "$tacct" "husk-recycle/RECOVERED" "the husk in pane $pane exited and session ${sid:0:8} registered on $tacct"
+    return 0
+  fi
+  case "$dead" in
+    dead:*) lf_row "$sid" "$pane" "?" "$acct" "$tacct" "husk-recycle/FAILED" "the recycle watcher recorded ${dead#dead:} for pane $pane; see $rdir/$sid.stderr" ;;
+    *) lf_row "$sid" "$pane" "?" "$acct" "$tacct" "husk-recycle/UNPROVEN" "/exit landed but no live row on $tacct names ${sid:0:8} within ${LR_FLEET_PROOF_WAIT_S:-240}s; see $rdir/$sid.stderr" ;;
+  esac
   return 1
 }
 # THE RECORD IS BOUNDED AT THE WRITER, because the pool made this file CONCURRENT (W6b). O_APPEND
@@ -1620,7 +1734,41 @@ EOF
       [ -n "$pane" ] || pane="-"
       [ -n "$cwd" ] || cwd="$(grep -o '"cwd":"[^"]*"' "$cfg"/projects/*/"$SID".jsonl 2>/dev/null | tail -1 | cut -d'"' -f4)"
       tier="$(lr_tier_from_transcript "$cfg" "$SID" 2>/dev/null | tr ' ' '/' || true)"
-      if _to="$(lr_transplanted_to "$SID" "$cfg")"; then
+      # ── WHO HOLDS IT DECIDES, NOT WHICH STORE LISTS IT FIRST (2026-10-10, 186452ed + panes 2/3/14) ──
+      # The store glob above stops at the FIRST <sid>.jsonl: a retired source's stub (186452ed) or a
+      # mirror's stale admit copy (7f5deb68 under ~/.claude), and lf_transplanted_live then counted the
+      # husk as the successor (lr_holder_count is account-blind): it NUDGED a guard-blocked pane at
+      # 04:45Z, and answered "nothing to do" for three unmoved sessions at 05:32Z. The source is the
+      # account the pane's process RUNS under (lr_pid_cfg); lr_successor_state names who carries the
+      # session. rc 1 (no durable move off that store) and rc 2 (LR_SUCCESSOR_GATE=off, or an older
+      # lr-lib) keep the read below byte for byte.
+      _src="$cfg"; _st=""; _sr=2
+      if command -v lr_successor_state >/dev/null 2>&1; then
+        _hp="$(lr_registry_live_rows "$SID" 2>/dev/null | awk -F'\t' -v p="$pane" '$1 == p || p == "-" { print $2; exit }')"
+        [ -n "$_hp" ] && _c="$(lr_pid_cfg "$_hp" 2>/dev/null)" && [ -n "$_c" ] && _src="$_c"
+        _sr=0; _st="$(lr_successor_state "$SID" "$_src" 2>/dev/null)" || _sr=$?
+      fi
+      if [ "$_sr" = 0 ]; then
+        case "$_st" in
+          successor\ *)
+            read -r _ _sp _ _scfg <<<"$_st"
+            [ "$_sp" = - ] || pane="$_sp"
+            _tl=0; lf_transplanted_live "$SID" "$_scfg" || _tl=$?
+            case "$_tl" in 0) exit 0 ;; 2) LF_NUDGE_TO="$_scfg" ;; *) LF_STRANDED_TO="$_scfg" ;; esac ;;
+          husk\ *)
+            read -r _ pane _ <<<"$_st"; cfg="$_src"; acct="$(lf_acct_of_cfg "$cfg")"; LF_HUSK=1 ;;
+          unmoved)
+            # An admit that never retired the source: the session is still the source's, an ordinary
+            # limited one there (woken in place when its account has headroom, else moved as usual).
+            cfg="$_src"; acct="$(lf_acct_of_cfg "$cfg")"
+            tier="$(lr_tier_from_transcript "$cfg" "$SID" 2>/dev/null | tr ' ' '/' || true)" ;;
+          none)
+            LF_STRANDED_TO="$(lr_transplant_target "$SID" "$_src" 2>/dev/null || printf '%s' "$_src")" ;;
+          *)   # in-flight <pane> <pid> | unknown: someone is mid-recovery, or a holder cannot be read
+            lf_row "$SID" "$pane" "$pane" "$acct" "-" "skipped" "$_st — a recovery is in flight on it, or a holder's account is unreadable; nothing typed, nothing moved"
+            LF_HELD_ROW=1 ;;
+        esac
+      elif _to="$(lr_transplanted_to "$SID" "$cfg")"; then
         _tl=0; lf_transplanted_live "$SID" "$_to" || _tl=$?
         case "$_tl" in 0) exit 0 ;; 2) LF_NUDGE_TO="$_to" ;; *) LF_STRANDED_TO="$_to" ;; esac
       fi
@@ -1665,7 +1813,9 @@ EOF
       cfg="$LF_NUDGE_TO"; acct="$(lf_acct_of_cfg "$cfg")"; LF_NUDGE_TO=""
       echo "lr-fleet: --one $SID — held on $acct, which is capped again; recovering it onward from $acct" >&2
     fi
-    if [ -z "${LF_NUDGE_TO:-}" ] && { [ -z "$pane" ] || [ "$pane" = - ]; } \
+    if [ "${LF_HELD_ROW:-0}" = 1 ]; then
+      rc=1                      # the router wrote the row: in flight, or unreadable — nothing is driven
+    elif [ -z "${LF_NUDGE_TO:-}" ] && { [ -z "$pane" ] || [ "$pane" = - ]; } \
        && [ -n "$cwd" ] && [ "$cwd" != - ] && [ ! -d "$cwd" ] && ! lf_cwd_recreatable "$cfg" "$SID" "$cwd"; then
       # CWD-GONE ON THE --one PATH TOO (2026-10-01). The census has refused a reaped worktree since
       # D8, but --one reaches here through the transcript glob without it, so reopening the closed

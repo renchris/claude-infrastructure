@@ -8,6 +8,10 @@ setup() {
   FLEET="$REPO/scripts/limit-recover/lr-fleet.sh"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/bin"
   export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"; mkdir -p "$CC_REGISTRY_DIR"
+  # THE HOLDER'S ACCOUNT IS A FIXTURE FACT (2026-10-10, C3): lr_pid_cfg reads `ps -E` of a row's pid,
+  # and a row's pid here is THIS bats process, whose CLAUDE_CONFIG_DIR is whatever session runs the
+  # suite. The seam answers per pid from a file; an absent file is an unreadable holder.
+  export LR_MOVE_ENV_DIR="$BATS_TEST_TMPDIR/penv"; mkdir -p "$LR_MOVE_ENV_DIR"
   export LR_STATE_DIR="$BATS_TEST_TMPDIR/state"; mkdir -p "$LR_STATE_DIR/locks"
   export CC_ADMIT_GATE=off
   export CC_FIRE_CAPACITY_GATE=off      # hermeticity: --one fires through handoff-fire capacity_gate()
@@ -2118,4 +2122,123 @@ held_run() { # $1 = the HELD token lr-handoff prints (empty = none); $2 = focus
   grep -q 'half a reply, café' "$PAGE_LOG" || { cat "$PAGE_LOG"; false; }
   held_run HELD:draft 0
   [ "$(grep -c 'unsent draft' "$PAGE_LOG")" = 1 ] || { cat "$PAGE_LOG"; false; }
+}
+
+# ── C3 (2026-10-10, 186452ed + panes 2/3/14): WHO HOLDS IT DECIDES, AND A HUSK HAS ONE DRIVER ─────
+# The 186452ed shape: moved SEC→TER (tombstone + .handed-off + lock), a /exit stub re-created on SEC,
+# the full limited copy on TER, and the SOURCE pane still alive on SEC — nothing runs it on TER. The
+# holder's account is read through lr_pid_cfg's seam (LR_MOVE_ENV_DIR/<pid>), never ps -E of this
+# bats process, whose CLAUDE_CONFIG_DIR is whatever session runs the suite.
+husk_fixture() {
+  blocked_tx "$TER" "$SID"
+  cp "$TER/projects/$SLUG/$SID.jsonl" "$SEC/projects/$SLUG/$SID.jsonl.handed-off"
+  printf '{"type":"user","timestamp":"2026-10-10T04:19:57.638Z","message":{"role":"user","content":"<command-name>/exit</command-name>"}}\n' \
+    > "$SEC/projects/$SLUG/$SID.jsonl"
+  printf '{"handed_off_to":"%s","target_transcript":"%s","ts":"2026-10-10T04:18:07Z"}\n' "$TER" "$TER/projects/$SLUG/$SID.jsonl" \
+    > "$SEC/projects/$SLUG/$SID.HANDOFF.json"
+  printf '{"sid":"%s","from":"%s","to":"%s","cause":"limit"}\n' "$SID" "$SEC" "$TER" > "$LR_STATE_DIR/locks/$SID.lock"
+  row 168 "$SID"                                     # the husk: claude-secondary, pid = this bats process
+  export LR_MOVE_ENV_DIR="$BATS_TEST_TMPDIR/penv"; mkdir -p "$LR_MOVE_ENV_DIR"
+  printf '%s' "$SEC" > "$LR_MOVE_ENV_DIR/$$"
+  HB="$HOME/.reso/limit-recover/$SID/bundle-20261010T041549Z"; mkdir -p "$HB"
+  printf '{"sid":"%s","target_cfg":"%s","target":"next3","trigger":"limit"}\n' "$SID" "$TER" > "$HB/MANIFEST.json"
+  HTOK="$HOME/.claude/autonomy/capacity-admit/tokens/$SID.w7i0bBcw"
+  HL="$HB/lr-launch-${SID:0:8}-RK7r1I.sh"
+  printf '#!/bin/bash\nexport LR_ADMIT_TOKEN=%s\nexec true\n' "$HTOK" > "$HL"
+  export LF_HF_BIN="$BATS_TEST_TMPDIR/hf-stub"
+  cat > "$LF_HF_BIN" <<SH
+#!/bin/bash
+printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/hf.argv"
+if [ -n "\${HF_STUB_REREGISTER:-}" ]; then
+  printf '{"paneUUID":"168","session_id":"%s","pid":%d,"account":"claude-tertiary","cwd":"%s"}\n' "$SID" "$$" "$CWD" > "$CC_REGISTRY_DIR/168.json"
+fi
+if [ -n "\${HF_STUB_HELD:-}" ]; then
+  mkdir -p "$HOME/.claude/logs"
+  printf '{"ts":"%s","class":"recycle-held-%s","target_pane":"168"}\n' "\$(date -u +%FT%TZ)" "\$HF_STUB_HELD" >> "$HOME/.claude/logs/handoffs.jsonl"
+  echo "!! recycle ABORTED before /exit (held: \$HF_STUB_HELD): stub" >&2; exit 1
+fi
+exit 0
+SH
+  chmod +x "$LF_HF_BIN"
+  nudge_tui 0 1                                      # a nudge, if anything sends one, is recorded
+}
+
+@test "[RED] C3: a HUSK is relaunched in its own pane by the --husk recycle — never nudged, never moved again" {
+  husk_fixture
+  HF_STUB_REREGISTER=1 LR_FLEET_PROOF_WAIT_S=4 LR_FLEET_PROOF_POLL_S=1 run bash "$FLEET" --one "$SID" --target next3 --source-pane 168
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"husk-recycle/RECOVERED"* ]] || { echo "$output"; false; }
+  [ "$(cat "$BATS_TEST_TMPDIR/hf.argv")" = "--recycle --transplanted-source --husk --resume-launcher $HL --resume-cfg $TER --source-pane 168 --source-session $SID --transplant-cause limit" ] \
+    || { cat "$BATS_TEST_TMPDIR/hf.argv"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/tui.log" ] || { echo "the husk was nudged:"; cat "$BATS_TEST_TMPDIR/tui.log"; false; }
+  [ ! -s "$LRH_LOG" ] || { echo "the session was moved again:"; cat "$LRH_LOG"; false; }
+  # admission was decided BEFORE /exit, at the path the launcher itself exports
+  [ "$(awk -F'\t' 'NR==1 { print NF ":" $2 }' "$HTOK")" = "4:$SID" ] || { cat "$HTOK"; false; }
+}
+
+@test "[RED] C3: a husk recycle handoff-fire HOLDS is husk-recycle/HELD:<its ledger reason> — nothing typed, no page" {
+  husk_fixture
+  HF_STUB_HELD=draft run bash "$FLEET" --one "$SID" --target next3 --source-pane 168
+  [ "$status" -ne 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"husk-recycle/HELD:draft"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"Send or clear"* ]] || { echo "$output"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/tui.log" ] || { cat "$BATS_TEST_TMPDIR/tui.log"; false; }
+}
+
+@test "[RED] C3: --dry-run on a husk names the exact --husk argv and types, mints and charges nothing" {
+  husk_fixture
+  run bash "$FLEET" --one "$SID" --target next3 --source-pane 168 --dry-run
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"would relaunch the husk in pane 168 onto next3"*"--husk --resume-launcher $HL --resume-cfg $TER"* ]] || { echo "$output"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/hf.argv" ] && [ ! -e "$HTOK" ] && [ ! -e "$BATS_TEST_TMPDIR/tui.log" ] || { echo "a dry run acted"; false; }
+}
+
+@test "C3 CONTROL: a live successor on the target is never husk-recycled — today's held read decides" {
+  husk_fixture
+  printf '{"type":"assistant","timestamp":"2026-10-10T05:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"resumed and working"}]}}\n' \
+    >> "$TER/projects/$SLUG/$SID.jsonl"
+  sleep 30 & W9A_REAP="$!"
+  printf '{"paneUUID":"700","session_id":"%s","pid":%d,"account":"claude-tertiary","cwd":"%s"}\n' "$SID" "$W9A_REAP" "$CWD" > "$CC_REGISTRY_DIR/700.json"
+  printf '%s' "$TER" > "$LR_MOVE_ENV_DIR/$W9A_REAP"
+  run bash "$FLEET" --one "$SID" --target next3 --source-pane 168
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"nothing to do"* ]] || { echo "$output"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/hf.argv" ] || { cat "$BATS_TEST_TMPDIR/hf.argv"; false; }
+}
+
+@test "[RED] C3: an admit that never retired its source (panes 2/3/14) is driven FROM the source — never 'nothing to do', never --husk" {
+  # 05:32Z: the store glob stopped at the mirror's stale admit copy (~/.claude via .claude-next), and
+  # lf_transplanted_live counted the SOURCE pane as the successor's holder.
+  local NX="$HOME/.claude" NM="$HOME/.claude-next"
+  mkdir -p "$NX/projects/$SLUG" "$NM"; ln -s "$NX/projects" "$NM/projects"
+  export LR_CONFIG_DIRS="$NX:$SEC:$TER"
+  blocked_tx "$SEC" "$SID"
+  head -n 2 "$SEC/projects/$SLUG/$SID.jsonl" > "$NX/projects/$SLUG/$SID.jsonl"     # the admit's prefix copy
+  printf '{"handed_off_to":"%s","ts":"2026-10-10T05:19:27Z","phase":"admit"}\n' "$NM" > "$SEC/projects/$SLUG/$SID.HANDOFF.json"
+  printf '{"sid":"%s","from":"%s","to":"%s","cause":"voluntary"}\n' "$SID" "$SEC" "$NM" > "$LR_STATE_DIR/locks/$SID.lock"
+  row 2 "$SID"
+  export LR_MOVE_ENV_DIR="$BATS_TEST_TMPDIR/penv"; mkdir -p "$LR_MOVE_ENV_DIR"; printf '%s' "$SEC" > "$LR_MOVE_ENV_DIR/$$"
+  export LF_HF_BIN="$BATS_TEST_TMPDIR/absent-hf"
+  run bash "$FLEET" --one "$SID" --target next3 --source-pane 2
+  [[ "$output" != *"nothing to do"* ]] || { echo "$output"; false; }
+  grep -q -- "--sid $SID --config-dir $SEC " "$LRH_LOG" || { echo "$output"; cat "$LRH_LOG"; false; }
+}
+
+# The proof is SCOPED to the target account (2026-10-10, C3 skeptic): the husk's own row on the
+# source still names the sid, and an unscoped read called that RECOVERED at 04:19:09Z, 48 s before
+# /exit was even typed. No re-register here, so only the source row exists.
+@test "[RED] C3: the husk's own source row never proves the relaunch — scoped await reads UNPROVEN, not RECOVERED" {
+  husk_fixture
+  LR_FLEET_PROOF_WAIT_S=2 LR_FLEET_PROOF_POLL_S=1 run bash "$FLEET" --one "$SID" --target next3 --source-pane 168
+  [[ "$output" == *"husk-recycle/UNPROVEN"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"husk-recycle/RECOVERED"* ]] || { echo "$output"; false; }
+}
+
+# A hold before /exit leaves nothing to redeem the token, and a leftover own token past its TTL is
+# TERMINAL at the launcher's gate (capacity-admit.sh, token-stale rc 9) — absent means a fresh read.
+@test "[RED] C3: a held husk relaunch leaves no admission token at the reused launcher's path" {
+  husk_fixture
+  HF_STUB_HELD=draft run bash "$FLEET" --one "$SID" --target next3 --source-pane 168
+  [[ "$output" == *"husk-recycle/HELD:draft"* ]] || { echo "$output"; false; }
+  [ ! -e "$HTOK" ] || { echo "token left behind:"; cat "$HTOK"; false; }
 }

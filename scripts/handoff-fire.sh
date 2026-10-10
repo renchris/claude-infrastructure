@@ -11818,7 +11818,17 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
       # NAME THE VERB THAT DOES MOVE A HEALTHY PEER (2026-09-23). A caller that reached this gate
       # with a healthy pane and no account fact cannot pass it; a refusal that names no next
       # command is how the incident's driver spent hours.
-      echo "limit: a healthy pane is moved by the move lane, which writes the operator intent this gate needs — cc-lr move --sid ${PRP_SESSION:0:8} --to <acct>"
+      # …AND A HUSK IS NOT A HEALTHY PEER (2026-10-10, 186452ed). Its stub reads not-limited because
+      # the session MOVED; the limited copy is on the target and nothing runs it there. The token is
+      # unchanged (every consumer keeps its mapping); only the verb named is the one that works.
+      _prp_st=""
+      if [ -n "$PRP_TX" ] && command -v lr_successor_state >/dev/null 2>&1; then
+        _prp_st="$(lr_successor_state "$PRP_SESSION" "${PRP_TX%/projects/*}" 2>/dev/null || true)"
+      fi
+      case "$_prp_st" in
+        husk\ *) echo "limit: this pane is a HUSK — session ${PRP_SESSION:0:8} moved off this account and nothing runs it on its target; relaunch it in this pane: cc-lr recover ${PRP_SESSION:0:8}" ;;
+        *) echo "limit: a healthy pane is moved by the move lane, which writes the operator intent this gate needs — cc-lr move --sid ${PRP_SESSION:0:8} --to <acct>" ;;
+      esac
       [ "$PRP_VOLUNTARY" = 1 ] && echo "evidence: ${PRP_EV_OUT:-missing}"
       [ -n "$PRP_INTENT" ] && echo "intent: ${PRP_INT_WHY:-not checked}"
       prp_verdict "REFUSED:not-limited" 5

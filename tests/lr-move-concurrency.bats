@@ -19,6 +19,9 @@
 setup() {
   command -v jq >/dev/null || skip "jq required"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # Sealed suite-wide (2026-10-10, C3): lr_pid_cfg would otherwise read `ps -E` of a fixture row's
+  # pid — this bats process, carrying the running session's CLAUDE_CONFIG_DIR.
+  export LR_MOVE_ENV_DIR="$BATS_TEST_TMPDIR/penv"; mkdir -p "$LR_MOVE_ENV_DIR"
   export CC_ADMIT_GATE=off
   export CC_FIRE_CAPACITY_GATE=off
   # shellcheck source=/dev/null

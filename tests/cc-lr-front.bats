@@ -18,6 +18,9 @@ setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   LR="$REPO/bin/cc-lr"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # Sealed suite-wide (2026-10-10, C3): lr_pid_cfg would otherwise read `ps -E` of a fixture row's
+  # pid — this bats process, carrying the running session's CLAUDE_CONFIG_DIR.
+  export LR_MOVE_ENV_DIR="$BATS_TEST_TMPDIR/penv"; mkdir -p "$LR_MOVE_ENV_DIR"
   export LR_STATE_DIR="$BATS_TEST_TMPDIR/state"; mkdir -p "$LR_STATE_DIR"
   SID="aaaaaaaa-1111-4000-8000-000000000001"
   SID2="bbbbbbbb-2222-4000-8000-000000000002"
@@ -1358,4 +1361,39 @@ STUB
   local d; d="$(moved_dir)" || { echo "$output"; false; }
   jq -e '.until_idle_s == 600' "$d/plan.json" >/dev/null || { cat "$d/plan.json"; false; }
   [ -f "$d/intent/cccc0760-0000-4000-8000-000000000760.json" ] || { echo "$output"; false; }
+}
+
+# ── C3 (2026-10-10, 186452ed): a HUSK is what this verb recovers, not a refusal ─────────────────────
+# Its stub is class SESSION (not LIMITED) because the session MOVED; the limited copy is on the target
+# and nothing runs it there. lr_successor_state is the judge; the holder's account rides the seam.
+husk_store() { # the 186452ed shape under cc-find's cfg column ($HOME/.claude-next), moved to tertiary
+  local S="$HOME/.claude-next/projects/-fixture" T="$HOME/.claude-tertiary/projects/-fixture"
+  mkdir -p "$S" "$T"
+  printf '%s\n' '{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit","uuid":"u1","timestamp":"2026-10-10T04:05:55.562Z","message":{"role":"assistant","content":[{"type":"text","text":"You have hit your weekly limit"}]}}' > "$T/$SID.jsonl"
+  cp "$T/$SID.jsonl" "$S/$SID.jsonl.handed-off"
+  printf '%s\n' '{"type":"user","message":{"role":"user","content":"<command-name>/exit</command-name>"}}' > "$S/$SID.jsonl"
+  printf '{"handed_off_to":"%s"}\n' "$HOME/.claude-tertiary" > "$S/$SID.HANDOFF.json"
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/ccreg"; mkdir -p "$CC_REGISTRY_DIR"
+  printf '{"paneUUID":"168","session_id":"%s","pid":%d,"account":"claude-next"}\n' "$SID" "$$" > "$CC_REGISTRY_DIR/168.json"
+  export LR_MOVE_ENV_DIR="$BATS_TEST_TMPDIR/penv"; mkdir -p "$LR_MOVE_ENV_DIR"
+  printf '%s' "$HOME/.claude-next" > "$LR_MOVE_ENV_DIR/$$"
+}
+
+@test "[RED] C3: recover ADMITS a husk (class SESSION, moved, nothing runs it) and fires --one at its own pane" {
+  husk_store
+  find_stub 0 "$(row "$SID" 168 SESSION)"
+  run bash "$LR" recover 168
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(cat "$BATS_TEST_TMPDIR/fleet.argv")" = "--one $SID --target auto --source-pane 168 --detach" ]
+  [ -d "$MUTEX" ]
+}
+
+@test "C3 CONTROL: LR_SUCCESSOR_GATE=off restores the SESSION refusal on the same husk" {
+  husk_store
+  find_stub 0 "$(row "$SID" 168 SESSION)"
+  LR_SUCCESSOR_GATE=off run bash "$LR" recover 168
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"not LIMITED"* ]] || false
+  [ ! -d "$MUTEX" ]
+  [ ! -e "$BATS_TEST_TMPDIR/fleet.argv" ]
 }

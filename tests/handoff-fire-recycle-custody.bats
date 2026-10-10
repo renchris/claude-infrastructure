@@ -29,6 +29,9 @@ setup() {
   HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   HOME="$(cd "$HOME" && pwd -P)"; export HOME
   mkdir -p "$HOME/.claude/logs"
+  # Sealed suite-wide (2026-10-10, C3): lr_pid_cfg would otherwise read `ps -E` of a fixture row's
+  # pid — this bats process, carrying the running session's CLAUDE_CONFIG_DIR.
+  export LR_MOVE_ENV_DIR="$BATS_TEST_TMPDIR/penv"; mkdir -p "$LR_MOVE_ENV_DIR"
   # HERMETICITY (land ratchet): no live machine load, and the seams that do NOT resolve under $HOME
   # point at absent paths inside the test dir.
   export CC_ADMIT_GATE=off
@@ -1404,4 +1407,22 @@ SH
   local first="$HF_LAUNCH_REC"
   hf_resume_cmd_set "$SID_UUID"
   [ "$HF_LAUNCH_REC" = "$first" ] || { echo "$first → $HF_LAUNCH_REC"; false; }
+}
+
+@test "[RED] C3: the probe's not-limited refusal on a HUSK names cc-lr recover, never cc-lr move" {
+  local SC="$BATS_TEST_TMPDIR/.claude-secondary" TG="$BATS_TEST_TMPDIR/.claude-quaternary"
+  mkdir -p "$SC/projects/-some-repo" "$TG/projects/-some-repo"
+  export CC_PROJECTS_DIRS="$SC/projects"
+  printf '%s\n' '{"type":"assistant","uuid":"u1","timestamp":"2026-10-10T04:05:55.562Z","isApiErrorMessage":true,"error":"rate_limit","message":{"role":"assistant","content":[{"type":"text","text":"You have hit your weekly limit"}]}}' \
+    > "$TG/projects/-some-repo/$SID.jsonl"
+  cp "$TG/projects/-some-repo/$SID.jsonl" "$SC/projects/-some-repo/$SID.jsonl.handed-off"
+  printf '%s\n' '{"type":"user","message":{"role":"user","content":"<command-name>/exit</command-name>"}}' > "$SC/projects/-some-repo/$SID.jsonl"
+  printf '{"handed_off_to":"%s"}\n' "$TG" > "$SC/projects/-some-repo/$SID.HANDOFF.json"
+  printf '{"session_id":"%s","pane":"%s","pid":%d,"account":"claude-secondary"}\n' "$SID" "$PANE" "$$" > "$CC_REGISTRY_DIR/$PANE.json"
+  export LR_MOVE_ENV_DIR="$BATS_TEST_TMPDIR/penv"; mkdir -p "$LR_MOVE_ENV_DIR"; printf '%s' "$SC" > "$LR_MOVE_ENV_DIR/$$"
+  probe
+  [ "$status" -eq 5 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict: REFUSED:not-limited"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"cc-lr recover ${SID:0:8}"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"cc-lr move --sid"* ]] || { echo "$output"; false; }
 }
