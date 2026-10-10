@@ -35,15 +35,15 @@ The operator-steps block is the SAME renderer the `operator-readout.sh` Stop hoo
 close (one code path — the push and pull surfaces cannot drift): one state line, then the collapsed
 step lines from disk truth — `▶ cc-do --run --expect …` for everything runnable (deploy-lag · pending activations),
 one `◆ <n> …` counted line per judgment class (open decisions · blocked backlog), each naming up to
-3 ids and carrying its exact listing command. Relay it VERBATIM below the rung line, the
-`Good to close:` line (when the close carries one) and the act line — never paraphrase the commands
+3 ids and carrying its exact listing command. Relay it VERBATIM below the `Good to close:` line
+(when the close carries one), the rung line and the act line — never paraphrase the commands
 into prose (the silver-platter rule).
 
 **Hand over ONE command, not a list.** Whatever the block shows, the operator gets one `▶ Run this:`
 line with a single inline-code command under it — the block's `cc-do --run --expect <stems>` row runs
 the runnable set with no keystroke and refuses if the queue changed (`cc-do --list` to look first,
 `cc-do <stem>` for exactly one). Per CLAUDE.md §Session Close, the
-close is the rung line, the verdict line, at most one act line, the relayed block, and at most three
+close is the verdict line, the rung line, at most one act line, the relayed block, and at most three
 supporting lines.
 
 ## The three axes, from one code path
@@ -165,14 +165,16 @@ invoked is a fresh question, not a replay of the last Stop.
 
 When this is an ORIGIN session (operator-started — no fired-peer stamp; `hooks/lib/origin-identity.sh
 oi_origin_class`) closing GENUINE completion (rung ✅/👤) after real written work, the close message
-must end with the operator's two standing answers. Render the skeleton from the ONE source and fill
+must OPEN with the answer to "good to close?". Render the skeleton from the ONE source and fill
 it — never restate it from memory (push and pull share this code path; completion-assert D6 blocks a
 shape-missing close, latched + capped):
 
 !`bash -c '. ~/.claude/hooks/lib/close-shape.sh 2>/dev/null || . "$(git rev-parse --show-toplevel 2>/dev/null)/hooks/lib/close-shape.sh"; close_shape_template' 2>/dev/null || true`
 
-Line 1 stays wrap-ledger's rung readout, verbatim. An honest `Good to close: no — <what remains +
-who owns it>` satisfies the contract; a hedged both-ways answer does not (D3 owns that defect).
+Line 1 is the verdict, led by its own glyph: ✅ on a yes, ❌ on a no; leave one blank line under it.
+Line 2 is the rung readout's glyph and state clause, verbatim, with your own clause in place of its
+tail. An honest `❌ Good to close: no — <what remains + who owns it>` satisfies the contract; naming
+what remains is not a hedge, a both-ways answer is (D3).
 
 ## The act line (CLOSE_SCANNABILITY W2, 2026-08-23)
 

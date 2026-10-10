@@ -518,7 +518,9 @@ gate can only ever REFUTE a false done and nothing ever AFFIRMED a true one):
   the standing pile (labelled *standing, not blocking this close* — it is not a close-gate, per the
   `👤` rule below). Computed from live git reads, never from prose, so it is the one line in a close
   the model cannot fake. Read-only turns, and any state it cannot verify, stay silent — a
-  certificate that fired at every close would carry no information at all.
+  certificate that fired at every close would carry no information at all. It reads git, never the
+  task: a close whose own verdict is `no` (a peer still to land, an open plan step) is not overruled
+  by it, and its verdict line still leads.
 - **Mechanical 🔧.** `session-continue.sh` no longer waits to be armed. If a turn ends with files
   **this session wrote** still uncommitted, it blocks the stop itself and feeds the work back —
   attribution via `hooks/lib/session-writes.sh` (the transcript's own edit records), so a sibling's
@@ -544,11 +546,14 @@ gate can only ever REFUTE a false done and nothing ever AFFIRMED a true one):
   **(3) THE ORIGIN CLOSE CONTRACT** (completion-assert D6 + `hooks/lib/close-shape.sh` — ONE code
   path with `/wrap`): an ORIGIN session (no fired-peer stamp — `hooks/lib/origin-identity.sh`)
   closing genuine completion (✅/👤) after real written work must answer, mechanically matched,
-  **two** things: line 1 carries the ledger's own **rung glyph** (`line-1-rung`), and the close
-  states `Good to close: yes — nothing of mine is open; follow-on: <filed ids|none>` — an honest
-  `Good to close: no — <what remains + who owns it>` also satisfies (the contract is that the
-  question is ANSWERED; hedging stays D3's defect). *Put the verdict on the SECOND line, not the
-  last* — § The close message S2 carries the measurement. 🚨 **`Complication:` / `Solution:` /
+  **two** things, **verdict first**: line 1 is the verdict, led by its own glyph —
+  `✅ Good to close: yes — nothing of mine is open; follow-on: <filed ids|none>` or
+  `❌ Good to close: no — <what remains + who owns it>` — and line 2 relays the ledger's own
+  **rung glyph** and state clause (`line-1-rung` accepts the glyph there). An honest no satisfies
+  (the contract is that the question is ANSWERED; hedging stays D3's defect, and naming what
+  remains is not a hedge). A no under a line 1 that opens with ✅, 👤 or a done reading is refused
+  (`verdict-first`; kill switch `CC_VERDICT_FIRST=0`). § The close message S2 carries the measurement.
+  🚨 **`Complication:` / `Solution:` /
   `Outcome:` are NO LONGER DEMANDED** (W3, 2026-08-23): where a close has a real body above them
   they restate it — `Outcome:` is novel 1 time in 7 — for a median 89 words against a close that
   should fit one pane. Write them only where they say something the body does not.
@@ -828,7 +833,7 @@ work.** Everything else the agent drives:
   **Do not restore the old wording.** If a future session finds an account change refused, that is a
   bug in the verb or a genuine gate — read the refusal, name it, and fix it there; a refusal bounds
   the TOOL, never the world.
-- **✅ is a safe-to-close assertion, not a vibe.** Claim it only with: clean tree · landed on trunk,
+- **A ✅ rung is an assertion, not a vibe.** Claim it only with: clean tree · landed on trunk,
   verified BY CONTENT (`git ls-tree` present + `git diff` empty on your paths — a count reads 0
   after a sibling rebase and proves nothing) · your diff's gates run green *this turn* · frozen-DoD
   remainder 0 · no operator step this session created left unrun · and — in the repo that IS the
@@ -873,21 +878,22 @@ what you include, not to compress the writing into fragments, abbreviations, arr
 this rule, not met it. **Skip, by name: root-cause narrative · fix internals · secondary to-dos ·
 em-dash tangents.**
 
-### The six slots, in this order. Unfilled slots are omitted, never padded.
+### The six slots, verdict first. Unfilled slots are omitted, never padded.
 
 | | Slot | The one fact | Present when |
 |---|---|---|---|
-| **S1** | **STATE** — line 1 | the ledger's rung glyph + state clause, relayed, plus ONE clause naming what the work WAS | always |
-| **S2** | **VERDICT** — line 2 | `Good to close: yes\|no — …`, with the follow-on ledger | terminal close (`✅`/`👤`) after real written work |
+| **S2** | **VERDICT** — line 1 | `✅ Good to close: yes — …` or `❌ Good to close: no — …`, with the follow-on ledger | terminal close (`✅`/`👤`) after real written work |
+| **S1** | **STATE** — line 2 (line 1 when no S2 is due) | the ledger's rung glyph + state clause, relayed, plus ONE clause naming what the work WAS | always |
 | **S3** | **ACT** — line 3 | the `▶ Run this:` marker, its command on the next line | only when the operator must do something |
 | **S4** | **OUTCOME** | what is now true **against the frozen scope** that was not before | after written work |
 | **S5** | **EVIDENCE** | the sha and/or doc path that HOLDS what this close dropped | whenever anything was dropped |
 | **S6** | **WAITING** | what is theirs, each item NAMED in plain English | only when something is theirs |
 
-S1–S3 are the three lines they scan; S4–S6 are the ≤3 supporting lines (Ch 6 p. 78). **The order is
-arithmetic, not taste:** S3 occupies two physical rows (`▶ Run this:` then the command), so the
-verdict at line 2 is exactly what keeps the act's marker at non-blank line 3, inside the shipped
-`CC_ACT_WINDOW` of 3 — verified by executing `close_act_missing` on this shape.
+S2, S1, S3 are the three lines they scan, in that order; S4–S6 are the ≤3 supporting lines (Ch 6
+p. 78). **The order is arithmetic, not taste:** S3 occupies two physical rows (`▶ Run this:` then the
+command), so verdict and state holding lines 1–2 is exactly what keeps the act's marker at non-blank
+line 3, inside the shipped `CC_ACT_WINDOW` of 3 — verified by executing `close_act_missing` on this
+shape.
 
 **S1 — STATE. The renderer owns the state clause; you own the subject clause.** Run
 `scripts/wrap-ledger.sh --machine` first and take `READOUT`; its shape is always `<rung glyph> <state
@@ -899,21 +905,23 @@ uncommitted change(s)`, `N step(s) need you`, `N decision(s)`) — three of seve
 and no field on disk knows what you built. **Where the rendered tail is a count, your clause EXPANDS
 it**, in the shape `operator-readout.sh:818-819` already ships: `13 runnable now, 207 need your call`
 partitions the pile along the groupings that follow instead of naming its size. The one exception is
-`⛔`, whose tail is `BLOCKED_WHAT` — the operator's own words — and is kept.
+`⛔`, whose tail is `BLOCKED_WHAT` — the operator's own words — and is kept. Under an S2 verdict this
+line is line 2; with none due it is line 1.
 
 🚨 **ONE rung, UNHEDGED — and the hedge is banned at DOCUMENT scale, not just sentence scale.**
 *"Yes — with one thing still parked"* asserts and withdraws in one sentence and cost a full
 round-trip. So does a close whose line 1 read *"All five resolved — close whenever you like"* and
 whose last paragraph introduced *"Five follow-ons sit in the backlog queue"*: measured, and the
 operator still replied *"Are we good to close?"*. If something is parked or is theirs, **that IS the
-rung** (`📦` / `👤`); if it is immaterial it does not appear in line 1 at all. Never both — and
+rung** (`📦` / `👤`); if it is immaterial it does not appear in the S1 line at all. Never both — and
 anything that would withdraw the assertion goes in S2's `follow-on:` clause, *beside* it, never below
-it. **It must carry an idea, not a category:** *"205 manual steps"* names the pile and says nothing —
+it. A plain `Good to close: no — <what remains + who owns it>` is not a hedge: it is one verdict,
+and the remainder is its content. **It must carry an idea, not a category:** *"205 manual steps"* names the pile and says nothing —
 the blank assertion Minto kills with *"'There are three problems' tells the kind, not the idea"*
 (Ch 7 p. 94). *"12 runnable now, 195 need your call"* is the same facts made into a conclusion, and it
 must summarise the level below it, partitioning along the groupings that actually follow.
 
-**S2 — VERDICT. `Good to close: …`, on line 2, never last.** This line is **not derivable from the
+**S2 — VERDICT. `Good to close: …`, on line 1, led by its own glyph, never last.** This line is **not derivable from the
 rung**: over 613 closes carrying it the rung predicts the verdict only **73.4%** of the time, **48 of
 313 `✅` closes answer "no"**, **39 of 97 `👤` answer "yes"**, `🚀` splits 47/53, **17.6%** carry no
 rung glyph at all (making this the only decision in the message), and **51.4%** carry follow-on ids no
@@ -923,7 +931,11 @@ yes — complete, landed, no loose ends; follow-on: none.` drew the operator's e
 **"Good to close?"**. A rendered certificate is no substitute either — `operator-readout.sh:1254`
 already prints `✅ SAFE TO CLOSE — nothing is left on this side.` at every certified close, and **107
 of 403 `✅` closes still drew a re-ask.** An honest `Good to close: no — <what remains + who owns it>`
-satisfies equally; the contract is that the question is ANSWERED. *`Complication:` / `Solution:` /
+satisfies equally; the contract is that the question is ANSWERED. **A done-reading line above a `no`
+defeats it** (operator screenshot, 2026-10-10): two closes side by side both opened `✅ …`; one's
+next line said `Good to close: no`, and at a glance both read yes. Lines 1 and 2 render as one
+wrapped paragraph, so its opening glyph and words are read as the verdict. Hence the verdict owns
+line 1 and its glyph: ✅ on a yes, ❌ on a no. *`Complication:` / `Solution:` /
 `Outcome:` are no longer required* — where a close has a real body they restate it (`Outcome:` is
 novel 1 time in 7, `Solution:` 2 in 7) for a median 89 words, and scored on whether they change the
 operator's next action they run 1/30, **0/30** and ~3/30 against `Good to close:` at **30/30**. The

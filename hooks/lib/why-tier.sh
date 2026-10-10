@@ -87,8 +87,10 @@ The ban is at DOCUMENT scale, not sentence scale. A close whose line 1 read "All
 close whenever you like" and whose last paragraph introduced "Five follow-ons sit in the backlog
 queue" was measured, and the operator still replied "Are we good to close?".
 If something is parked or is theirs, THAT IS THE RUNG (📦 / 👤). If it is immaterial it does not
-appear in line 1 at all. Anything that would withdraw the assertion goes in the `follow-on:` clause
-of the Good-to-close line — beside the verdict, never below it.
+appear in the rung line at all. Anything that would withdraw the assertion goes in the `follow-on:`
+clause of the Good-to-close line — beside the verdict, never below it. A plain
+`Good to close: no — <what remains + who owns it>` is not a hedge: one verdict, and the remainder is
+its content.
 WHY
     ;;
 
@@ -167,16 +169,16 @@ WHY
 SHAPE — the ORIGIN close contract (hooks/lib/close-shape.sh; one code path with /wrap).
 An ORIGIN session (no fired-peer stamp — hooks/lib/origin-identity.sh) closing genuine completion
 (✅ / 👤) after real written work must answer, mechanically matched, TWO things:
-  1. line 1 carries the ledger's own RUNG GLYPH — run `scripts/wrap-ledger.sh --machine`, take
+  1. line 1 is the verdict, led by its own glyph: `✅ Good to close: yes — nothing of mine is
+     open; follow-on: <filed ids|none>` or `❌ Good to close: no — <what remains + who owns it>`.
+     The contract is that the question is ANSWERED, not that the answer is yes.
+  2. line 2 carries the ledger's own RUNG GLYPH — run `scripts/wrap-ledger.sh --machine`, take
      READOUT, copy its glyph and state clause verbatim, and replace only the tail with one clause
      naming what the work WAS.
-  2. the close states `Good to close: yes — nothing of mine is open; follow-on: <filed ids|none>`.
-An honest `Good to close: no — <what remains + who owns it>` satisfies it equally: the contract is
-that the question is ANSWERED, not that the answer is yes.
-PUT THE VERDICT ON THE SECOND LINE, NOT THE LAST. Measured over 613 closes carrying it, the rung
-predicts the verdict only 73.4% of the time, and the line sits LAST in 90.7% of closes today — a
-173-word close with ✅ at line 1 whose literal last line answered the question still drew the
-operator's entire next message: "Good to close?".
+VERDICT FIRST, NEVER LAST. The rung does not decide the verdict — a ✅ ledger can still mean no —
+and a ✅ line 1 above a `Good to close: no` on line 2 still reads as yes at a glance (operator
+screenshot, 2026-10-10: two closes side by side, both opening ✅; one answered no, and both read
+yes). A no under a line 1 that opens with ✅, 👤 or a done reading is refused as `verdict-first`.
 `Complication:` / `Solution:` / `Outcome:` are NOT demanded. Where a close has a real body they
 restate it (`Outcome:` is novel 1 time in 7) for a median 89 words. Write them only if they say
 something the body does not.
@@ -189,8 +191,8 @@ This is the one position claim with a measured effect. Over 300 closes, when the
 the operator acts 35.4% of the time; welded into a sentence, 9.4% (p = 2.7e-05); welded into line 1,
 4.2% — worse than no act at all. Being a LINE is the property.
 The window is arithmetic, not taste. `▶ Run this:` plus its command occupies two physical rows, so
-the Good-to-close verdict at line 2 is exactly what keeps the marker at non-blank line 3, inside the
-shipped CC_ACT_WINDOW of 3.
+the verdict and the rung line holding lines 1-2 is exactly what keeps the marker at non-blank line 3,
+inside the shipped CC_ACT_WINDOW of 3.
 ONE COMMAND, never a list. The operator's words: "I had to comb through the entire return body to
 fish out which is the command to copy and paste and not just more paragraph text." Multiple runnable
 steps collapse to one bound `cc-do --run --expect` line. Reference-only commands stay in inline

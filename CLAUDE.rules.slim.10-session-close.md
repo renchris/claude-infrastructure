@@ -6,7 +6,7 @@ Drive in-scope work to a finished, verified, committed state (landed per the shi
 ### Stop-hook arms
 
 - Close certificate: on a write turn whose ledger is ✅, `operator-readout.sh` prints `✅ SAFE TO CLOSE — nothing of mine is open`, computed from git. Read-only turns and unverifiable states get none.
-- **✅ is a safe-to-close assertion, not a vibe.** Claim it only with: clean tree · landed on trunk,
+- **A ✅ rung is an assertion, not a vibe.** Claim it only with: clean tree · landed on trunk,
   verified BY CONTENT (`git ls-tree` present + `git diff` empty on your paths — a count reads 0
   after a sibling rebase and proves nothing) · your diff's gates run green *this turn* · frozen-DoD
   remainder 0 · no operator step this session created left unrun · and — in the repo that IS the
@@ -19,7 +19,7 @@ Drive in-scope work to a finished, verified, committed state (landed per the shi
 - Mechanical 🔧: `session-continue.sh` blocks the stop while files this session wrote (per `hooks/lib/session-writes.sh`) are uncommitted, and feeds the work back. If that dirt is deliberately parked or not yours, run `~/.claude/hooks/session-continue.sh clear` and say so in the close.
 - Ship floor: `session-continue.sh` blocks going idle on 📦/🚀 work you wrote, once per HEAD sha and at most `CC_SHIP_FLOOR_MAX`=2 per session. Resolve it by `/ship`, by converging, or by an explicit park (`clear` plus the park named in the close).
 - Custody: a fire with `--notify-back` records a debt in `bin/cc-custody`, discharged by the peer's self-close. Open custody is a 🔧, blocks the ✅ certificate, and contradicts any done-claim. Awaiting it with a wake path armed is a legitimate non-close state; calling it done is not. Collect, land, then `cc-custody return <marker|slug>`; if superseded, `cc-custody abandon <token> --why …`.
-- Origin close contract (`completion-assert.sh` arm D6; template in `hooks/lib/close-shape.sh`, shared with `/wrap`): an origin session (no fired-peer stamp; `hooks/lib/origin-identity.sh`) closing ✅ or 👤 after written work puts the ledger's rung glyph on line 1 (`line-1-rung`) and, on line 2, either `Good to close: yes — nothing of mine is open; follow-on: <filed ids|none>` or `Good to close: no — <what remains + who owns it>`. A hedged both-ways answer fails (arm D3). Assignees and fired peers are exempt; their close is the lead's harvest or the notify-back ping.
+- Origin close contract (`completion-assert.sh` arm D6; template in `hooks/lib/close-shape.sh`, shared with `/wrap`): an origin session (no fired-peer stamp; `hooks/lib/origin-identity.sh`) closing ✅ or 👤 after written work this session leads with the verdict: line 1 `✅ Good to close: yes — nothing of mine is open; follow-on: <filed ids|none>` or `❌ Good to close: no — <what remains + who owns it>`, line 2 the ledger's rung glyph (`line-1-rung`). A no under a line 1 opening ✅, 👤 or a done reading fails (`verdict-first`); naming what remains is no hedge, a both-ways answer is (D3). Assignees and fired peers are exempt; their close is the lead's harvest or the notify-back ping.
 
 Resident teammates: `~/.claude/scripts/wrap-ledger.sh` reports `RESIDENT_MINE`, the members of this session's team whose process is still running, as a 🔧, including their dirty files in a shared cwd; those files are yours to commit, since only the lead can. A teammate ends only when its lead ends it: send each a `shutdown_request` and escalate to `TaskStop` after about 60 s; the rung clears when the process is gone, not when the pane closes. The check kills nothing; to keep a member working, say so in the close as a stated park. Kill switch `WRAP_RESIDENT=off`.
 
@@ -93,7 +93,7 @@ Emit it at every write-turn close; omit it on read-only turns. It is one line: t
 - 📤 Handoff: context or budget exhausted with work remaining. `📤 Out of context — recycling / handing off.`
 - 🔧 Loose ends: unwritten, unverified or uncommitted, or a gate ran red.
 - 📦 Parked: committed, not landed (`trunk..HEAD > 0`).
-- 🚀 Landed, not live: on trunk, but the live layer is past its converge budget or a migration could not reach it. Lag inside the budget is a ✅ with a note; a newly added file gets no budget (when a 🚀 needs reading: `~/.claude/commands/wrap.md`). A new deployed top-level directory is audited by `scripts/deploy-parity-assert.sh`, not the ledger.
+- 🚀 Landed, not live: on trunk, but the live layer is past its converge budget or a migration could not reach it. Lag inside the budget is a ✅ with a note; a newly added file gets no budget (when a 🚀 needs reading: `~/.claude/commands/wrap.md`).
 - 👤 Yours: agent side complete and landed, but operator-only steps this session filed are unrun. It counts only this session's steps; the machine's standing pile is the `◆` line in the `operator-readout.sh` block.
 - ✅ Live: complete, on trunk (`trunk..HEAD = 0`), clean.
 - E0, read-only turn: no readout. A read-only turn that names drivable work is not E0: run the Follow-On Gate on each item and drive the passes (here, in a subagent, in a team, or in a fired session) before yielding. Inside an active research program, a completeness or pushback question is answered by relaying the certificate, and its named residuals are not drivable work (§ Follow-On Gate, Active research program exemption).
@@ -126,26 +126,26 @@ Admissibility: a line appears only if it fills a slot and carries one fact that 
 
 Make the close fit by dropping items, not by compressing the survivors into fragments, abbreviations, arrow chains (`A → B → fails`) or jargon; readable outranks concise. Leave out root-cause narrative, fix internals, secondary to-dos and em-dash tangents.
 
-### The six slots, in this order
+### The six slots, verdict first
 
 Omit a slot that has nothing to say; never pad one.
 
 | Slot | Content | Present when |
 |---|---|---|
-| S1 STATE, line 1 | the ledger's rung glyph and state clause, relayed, plus one clause naming what the work was | always |
-| S2 VERDICT, line 2 | `Good to close: yes\|no — …`, with the follow-on ledger | terminal close (`✅`/`👤`) after real written work |
+| S2 VERDICT, line 1 | `✅ Good to close: yes — …` or `❌ Good to close: no — …`, with the follow-on ledger | terminal close (`✅`/`👤`) after real written work |
+| S1 STATE, line 2 (1 if no S2) | the ledger's rung glyph and state clause, relayed, plus one clause naming what the work was | always |
 | S3 ACT, line 3 | the `▶ Run this:` marker, its command on the next line | only when the operator must do something |
 | S4 OUTCOME | what is now true against the frozen scope that was not before | after written work |
 | S5 EVIDENCE | the sha and/or doc path that holds what this close dropped | whenever anything was dropped |
 | S6 WAITING | what is theirs, each item named in plain English | only when something is theirs |
 
-S1–S3 are the lines the operator scans; S4–S6 are at most three supporting lines. The act marker must fall within the first 3 non-blank, unfenced lines (`CC_ACT_WINDOW`=3), which is why the verdict sits on line 2.
+S1–S3 are the lines the operator scans; S4–S6 are at most three supporting lines. The act marker must fall within the first 3 non-blank, unfenced lines (`CC_ACT_WINDOW`=3), which is why verdict and state hold lines 1–2.
 
 S1. Run `~/.claude/scripts/wrap-ledger.sh --machine` and take `READOUT`, shaped `<rung glyph> <state clause> — <tail>`. Copy the glyph and state clause verbatim and replace the tail with one clause naming what the work was. Where the tail is a count (`22 uncommitted change(s)`, `N step(s) need you`, `N decision(s)`), your clause partitions it along the groups that follow, e.g. `13 runnable now, 207 need your call`. Under `⛔` keep the tail: it is `BLOCKED_WHAT`, the operator's own words.
 
-Line 1 carries one rung and states a conclusion, not a category (`12 runnable now, 195 need your call`, not `205 manual steps`). It does not hedge, and nothing later in the close withdraws it. If something is parked or is theirs, that is the rung (`📦` / `👤`); if it is immaterial, it stays out of line 1. A qualification goes in S2's `follow-on:` clause, beside the assertion.
+S1 carries one rung and states a conclusion, not a category (`12 runnable now, 195 need your call`, not `205 manual steps`). Neither it nor the verdict hedges, and nothing later in the close withdraws either. If something is parked or is theirs, that is the rung (`📦` / `👤`); if it is immaterial, it stays out. A qualification goes in S2's `follow-on:` clause, beside the assertion.
 
-S2. The `Good to close:` line, in either form given under Origin close contract, on line 2 and never as the last line. The rung does not imply it, and a rendered `✅ SAFE TO CLOSE` certificate does not replace it; an honest no satisfies the contract. `Complication:` / `Solution:` / `Outcome:` lines are optional; write one only when it says something the body does not.
+S2. The `Good to close:` line, in either form under Origin close contract, first and never last. The rung does not imply it, and a rendered `✅ SAFE TO CLOSE` certificate neither replaces nor overrules it; an honest no satisfies the contract. `Complication:` / `Solution:` / `Outcome:` lines are optional.
 
 S3. The act is its own line, third, at most one, never welded into a sentence or into line 1. Put a reason before it only when the operator cannot act without one (a `--force`, a destructive flag, a choice between two commands), and then in one line.
 

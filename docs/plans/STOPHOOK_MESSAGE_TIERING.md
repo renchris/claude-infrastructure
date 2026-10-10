@@ -549,7 +549,7 @@ without a topic is a red, not a dangling pointer.
 | `offer` | completion-assert | the three dispositions; "say the word" is not one | 3.3 B4 — **keeps the `cc-backlog needs` vs `cc-backlog add` discriminator** the proposal compressed away |
 | `fence` | completion-assert | the screenshot-measured render form for a command | 3.3 B3 |
 | `placeholder` | completion-assert | why an unfilled slot makes a plattered command unpasteable | 3.3 B5 |
-| `shape` | completion-assert | the ORIGIN close contract (rung glyph + `Good to close:` at line 2) | 3.3 B7 |
+| `shape` | completion-assert | the ORIGIN close contract (`Good to close:` at line 1, rung glyph by line 2) | 3.3 B7 |
 | `act` | completion-assert | why the one command is its own line, third | 3.3 D7 |
 | `custody` | session-continue | collect / return / abandon — **`<marker-or-slug>` spelled in full** | 3.4's named restore |
 | `wake` | session-continue | a watcher is not a wake path; the live-`/goal` refusal | 3.4 + §4 row 7 |
