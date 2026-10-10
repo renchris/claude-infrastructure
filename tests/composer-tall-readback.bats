@@ -33,7 +33,7 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude/logs"
   unset KITTY_WINDOW_ID
   export IT2_WRAPPER_NO_KITTY=1
-  export CC_FIRE_CAPACITY_GATE=off
+  export CC_FIRE_CAPACITY_GATE=off CC_ADMIT_GATE=off
   export CC_COMPOSER_RESIDUE_DIR="$BATS_TEST_TMPDIR/residue"
   export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/account-sweep.json"
   export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/no-such-claude-accounts"
