@@ -428,7 +428,12 @@ ROUTER_OPTIONAL_RANGES = {
     "RECOVERY_W_FLOOR": (0.0, 1.0),     # weekly headroom a recovery target must still hold
     "RECOVERY_S_CEIL": (0.0, 1.0),      # projected 5h utilisation a recovery target must be UNDER
     "RECOVERY_F_FLOOR": (0.0, 1.0),     # f_eff a fable recovery target must still hold
-    "DISPATCH_W_FLOOR": (0.0, 1.0),     # weekly headroom under which a dispatch pick is DEMOTED
+    "DISPATCH_W_FLOOR": (0.0, 1.0),     # weekly headroom under which a dispatch pick is THIN
+    # The strand rescue's three (2026-10-09, see dispatch_floor_row). The lower bounds are the
+    # typo guards: 0.04 typed for 4pp, or 0.0042 for 0.42 pp/h, would lift every thin account.
+    "DISPATCH_STRAND_PP": (1.0, 100.0),       # least forecast-dead weekly pp one new fire needs
+    "DISPATCH_FIRE_BURN_PPH": (0.05, 5.0),    # weekly pp/h one fire is budgeted until the reset
+    "DISPATCH_CLAIM_TTL_MIN": (1.0, 10080.0),  # how long a placement claims its account's spare
 }
 
 
@@ -3217,7 +3222,7 @@ def _assignment_rows(path=None):
     return out
 
 
-def assignment_counts(cfg, path=None, now=None, exempt_src=(), sweep=None):
+def assignment_counts(cfg, path=None, now=None, exempt_src=(), sweep=None, ttl_min=None):
     """Live per-account WEIGHTED count of assignments younger than their TTL. Read at INVOCATION
     time, not sweep time — acting inside the 90s cache TTL is this term's entire purpose. A
     malformed line or missing ledger is silence, never an error: spread is advisory.
@@ -3234,12 +3239,18 @@ def assignment_counts(cfg, path=None, now=None, exempt_src=(), sweep=None):
 
     `sweep` ({acct: (sids, sids_at)}, from the rows' k_sids/k_sids_at) drops a row whose `sid`
     the same account's census already counted in k_work AFTER the row was written — the session
-    is live on disk, so charging its phantom too would count it twice."""
+    is live on disk, so charging its phantom too would count it twice.
+
+    `ttl_min` replaces ASSIGN_TTL_MIN as the default row lifetime for THIS read: the dispatch
+    floor's placement memory (`k_placed`, apply_assignments) asks the same ledger "what was placed
+    here in the last five hours", not "what is too new for the census to have seen". None (every
+    other caller) reads exactly as before."""
     counts = {}
     if not _term_on("CC_ROUTE_ASSIGN"):
         return counts
-    ttl_s = 60.0 * _cliff_env("CC_ROUTE_ASSIGN_TTL_MIN",
-                              cfg["router"].get("ASSIGN_TTL_MIN", ASSIGN_TTL_MIN))
+    ttl_s = 60.0 * (ttl_min if ttl_min is not None else
+                    _cliff_env("CC_ROUTE_ASSIGN_TTL_MIN",
+                               cfg["router"].get("ASSIGN_TTL_MIN", ASSIGN_TTL_MIN)))
     now = time.time() if now is None else now
     rows = _assignment_rows(path)
     voided = {e["void"] for e in rows if isinstance(e.get("void"), str)}
@@ -3485,7 +3496,13 @@ def apply_assignments(rows, cfg):
     fable charge, unchanged), `k_phantom_desk` (launcher-src exempt — W1.5), and `desk_incumbent`
     (W1.4). The desk facts are stamped HERE, beside the phantom count, rather than read inside
     score_interactive, because a scorer runs once per row and would otherwise re-read the ledger
-    four times per decision and could see it change mid-ranking."""
+    four times per decision and could see it change mid-ranking.
+
+    A fourth, `k_placed`: the same count over DISPATCH_CLAIM_TTL_MIN instead of ASSIGN_TTL_MIN —
+    the dispatch floor's placement memory (dispatch_floor_row). No `sweep`: a session the census
+    already counts still holds its claim on the account's spare quota, which is the point. The key
+    is ABSENT with CC_ROUTE_ASSIGN off, and the floor then never promotes: a count of 0 that
+    means "not tracked" would read as "nothing placed"."""
     # A row whose sweep named its sessions (k_sids, as of k_sids_at) lends that list to the
     # ledger read, so a phantom with a `sid` the SAME account's census already counts is not
     # charged a second time. Rows without k_sids_at (walk unmeasured, stub) skip nothing.
@@ -3494,8 +3511,13 @@ def apply_assignments(rows, cfg):
     counts = assignment_counts(cfg, sweep=sweep)
     desk_counts = assignment_counts(cfg, exempt_src=DESK_EXEMPT_SRC, sweep=sweep)
     inc = desk_incumbent(cfg)
+    placed = (assignment_counts(cfg, ttl_min=dispatch_claim_ttl_min(cfg["router"]))
+              if _term_on("CC_ROUTE_ASSIGN") else None)
     for r in rows:
         r["k_phantom"] = counts.get(r.get("acct"), 0)
+        r.pop("k_placed", None)
+        if placed is not None:
+            r["k_placed"] = placed.get(r.get("acct"), 0)
         r["k_phantom_desk"] = desk_counts.get(r.get("acct"), 0)
         r["desk_incumbent"] = (inc is not None and r.get("acct") == inc)
 
@@ -3836,6 +3858,17 @@ def apply_burn(rows, cfg, samples=None):
         s = wk_strand_pp(r)
         if s is not None:
             r["wk_strand_pp"] = s
+        # The dispatch floor's cross-check on that EWMA (dispatch_floor_row): the flat endpoint
+        # pace, and inside WK_EWMA_NEAR_H of the reset the faster of the 24h and 12h spans — a
+        # burst a few hours old is diluted to nothing over 24h exactly when it matters most.
+        # ABSENT whenever either span abstains, and the floor reads absence as "hold".
+        wrh = r.get("weekly_reset_h")
+        f24 = burn_wk_flat_ph(ss, now, WK_FLAT_LOOKBACK_H)
+        f12 = (burn_wk_flat_ph(ss, now, WK_FLAT_NEAR_LOOKBACK_H)
+               if _is_num(wrh) and wrh <= WK_EWMA_NEAR_H else 0.0)
+        r.pop("burn_wk_flat_ph", None)
+        if f24 is not None and f12 is not None:
+            r["burn_wk_flat_ph"] = max(f24, f12)
 
     # S4/M4': the start-time constraint, and the FIRST consumer of S1c's exchange rate. K is
     # stamped on every row beside it because pace_line renders the coefficient in its header and
@@ -4244,6 +4277,41 @@ def burn_wk_ewma_ph(samples_for_acct, now, weekly_reset_h):
     return num / den, span
 
 
+WK_FLAT_LOOKBACK_H = 24.0        # the flat cross-check's span
+WK_FLAT_NEAR_LOOKBACK_H = 12.0   # ...and the second, shorter one inside WK_EWMA_NEAR_H of the reset
+WK_FLAT_MAX_AGE_H = 1.0          # = burn_wk_ewma_ph's own pair bound: older evidence is a gap
+
+
+def _is_num(x):
+    return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+
+def burn_wk_flat_ph(samples_for_acct, now, lookback_h=WK_FLAT_LOOKBACK_H):
+    """Flat trailing weekly pace in %/h: an ENDPOINT DIFFERENCE over the last `lookback_h`.
+
+    The cross-check on burn_wk_ewma_ph for a consumer that AUTHORISES something on a low pace (the
+    dispatch floor's strand rescue). The EWMA skips every pair more than 1h apart, so burn inside
+    a ledger hole is invisible to it — measured 2026-10-09: 36 such holes with the meter rising,
+    45pp hidden. An endpoint difference cannot miss it.
+
+    None when the newest sample is older than WK_FLAT_MAX_AGE_H (the series is stale: a quiet
+    reading that old is no evidence the account is quiet NOW) or the roll-free span behind it is
+    under WK_EWMA_MIN_SPAN_H (the same quantization argument as the EWMA's abstain)."""
+    ss = sorted((e for e in samples_for_acct or []
+                 if e.get("weekly_pct") is not None and e.get("_t") is not None
+                 and 0 <= now - e["_t"] <= lookback_h * 3600.0),
+                key=lambda e: e["_t"])
+    if len(ss) < 2 or now - ss[-1]["_t"] > WK_FLAT_MAX_AGE_H * 3600.0:
+        return None
+    i = len(ss) - 1
+    while i > 0 and not _rolled(ss[i - 1], ss[i], "weekly_reset_at", "weekly_pct"):
+        i -= 1
+    span = (ss[-1]["_t"] - ss[i]["_t"]) / 3600.0
+    if span < WK_EWMA_MIN_SPAN_H:
+        return None
+    return max(0.0, ss[-1]["weekly_pct"] - ss[i]["weekly_pct"]) / span
+
+
 def wk_strand_pp(r):
     """M3a — the weekly pp that DIE at this window's reset at the pace of the last 48 h.
     None when the nowcast cannot speak.
@@ -4445,6 +4513,13 @@ def soonest_reset_line(rows, cfg):
         parts.append("not used for new work: out of weekly quota")
     elif why:
         parts.append(f"not routed: {why}")
+    else:
+        # Routable, so the remaining question is the dispatch floor's: is this account held back
+        # from NEW fires, and why — or is it first in line. Recomputed here, never read off a row
+        # stamp: the stamp is whatever lane ranked last, and the readout ranks three.
+        note = dispatch_floor_note(r, rows, cfg)
+        if note:
+            parts.append(note)
     return " · ".join(parts)
 
 
@@ -5293,10 +5368,37 @@ def cmd_place(args: list, cfg: dict) -> int:
 # reset a ~180x bonus over next2's ~158 h one, so next4 outscored an almost-empty next2 4-6x.
 # Urgency is right about STRANDING and blind to SURVIVAL: a new fire burns for hours, and the
 # account it lands on must still exist at the end. So an account under this much weekly headroom
-# ranks BELOW every account above it. It stays in the list, so it is still the pick when it is the
-# only routable one; the score is untouched, so each group keeps the strand order. Not applied to
-# --recovery (its own floor already EXCLUDES) or to the interactive lane (it has its own tiers).
+# is THIN, and a thin account is HELD: it ranks below every account that is not. It stays in the
+# list, so it is still the pick when it is the only routable one; the score is untouched, so each
+# group keeps the strand order. Not applied to --recovery (its own floor already EXCLUDES) or to
+# the interactive lane (it has its own tiers).
+#
+# ── the STRAND RESCUE (2026-10-09): a thin account that will strand is not held ─────────────────
+# The flat floor could not tell an account about to wall from one about to waste its week. On
+# 2026-10-09 next2 sat at weekly 94 % with 13 h to its reset, burning 0.05 pp/h: ~5pp forecast to
+# die unused, ranked LAST for every new fire by the rule above, for the whole of its last day. So
+# a thin row is judged (dispatch_floor_row) and LIFTED out of the hold when its forecast-dead
+# quota covers a whole new fire: spare >= max(DISPATCH_STRAND_PP, DISPATCH_FIRE_BURN_PPH x hours
+# to the reset), once per fire already placed there inside DISPATCH_CLAIM_TTL_MIN.
+#
+# Lifting alone changes nothing, which is why the general lane also PROMOTES. Replayed over that
+# episode, a lifted next2 scored 0.39x-1.00x of the best rival and was line 1 in 0 of 407 sweeps:
+# the urgency term cannot see 6pp against a rival's 45pp. `--account auto` takes line 1, so a
+# lifted row goes FIRST, ahead of the roomy ones, and the claim above is what stops the second
+# fire from following the first. The fable lane lifts without promoting (fable burn per session is
+# unmeasured), and so does any row the promotion guards refuse (_dispatch_partition).
+#
+# Every missing, stale or malformed input fails toward the 2026-09-27 behaviour (HELD), and the
+# reason is the row's token. Measured over the whole utilization ledger on 2026-10-09: 90 lifted
+# sweeps in completed windows, all in windows that stranded and none in one that reached 99 %;
+# line 1 differs from the flat floor's in 169 of 5,181 sweeps, none in a window that walled.
 DISPATCH_W_FLOOR_DEFAULT = 0.10   # = RECOVERY_W_FLOOR: ~9 h at the worst measured burn rate
+DISPATCH_STRAND_PP_DEFAULT = 4.0  # = STRAND_SCORE_FLOOR = DESK_CLIFF_STRAND_PP; 3.0 lifted 10
+#                                   sweeps in windows that walled, 3.5-4.0 none
+DISPATCH_FIRE_BURN_PPH_DEFAULT = 0.42   # one working session's weekly burn: 6h-block p75 0.39,
+#                                         p90 0.61 pp/h over 2,845 session-hours
+DISPATCH_CLAIM_TTL_MIN_DEFAULT = 300.0  # one 5h window, as DESK_HYST_TTL_MIN. ASSIGN_TTL_MIN (15)
+#                                         cannot hold it: line 1 takes a median of 4 fires an hour
 
 
 def dispatch_w_floor(R):
@@ -5305,27 +5407,188 @@ def dispatch_w_floor(R):
                        DISPATCH_W_FLOOR_DEFAULT, 0.0)
 
 
-def _demote_thin(out, R):
-    """Stable-partition ranked (score, row) pairs: rows at/above the dispatch floor first."""
-    floor = dispatch_w_floor(R)
-    if floor <= 0.0 or not out:
+def _dispatch_knob(env, R, key, default):
+    """Env override > SSOT > default (_cliff_env: malformed or negative falls through), clamped to
+    the key's ROUTER_OPTIONAL_RANGES entry so an env typo is bounded exactly as an SSOT one is."""
+    lo, hi = ROUTER_OPTIONAL_RANGES[key]
+    return clamp(_cliff_env(env, R.get(key, default)), lo, hi)
+
+
+def dispatch_strand_pp(R):
+    """The least forecast-dead weekly pp a new fire needs, or None when the whole rescue is OFF
+    (CC_ROUTE_DISPATCH_STRAND=off|0|false) and the floor is the flat 2026-09-27 one. A _term_on
+    switch for repick_ratio's reason: this term AUTHORISES routing onto a thin account, so its
+    safe failure direction is off and a number must never be what disables it."""
+    if not _term_on("CC_ROUTE_DISPATCH_STRAND"):
+        return None
+    return _dispatch_knob("CC_ROUTE_DISPATCH_STRAND_PP", R, "DISPATCH_STRAND_PP",
+                          DISPATCH_STRAND_PP_DEFAULT)
+
+
+def dispatch_fire_burn_pph(R):
+    return _dispatch_knob("CC_ROUTE_DISPATCH_FIRE_BURN_PPH", R, "DISPATCH_FIRE_BURN_PPH",
+                          DISPATCH_FIRE_BURN_PPH_DEFAULT)
+
+
+def dispatch_claim_ttl_min(R):
+    return _dispatch_knob("CC_ROUTE_DISPATCH_CLAIM_TTL_MIN", R, "DISPATCH_CLAIM_TTL_MIN",
+                          DISPATCH_CLAIM_TTL_MIN_DEFAULT)
+
+
+def dispatch_floor_row(r, R):
+    """ONE derivation of a row's dispatch-floor verdict -> (token, spare_pp|None, need_pp|None).
+    PURE: it reads what apply_burn and apply_assignments stamped and does no I/O. The partition,
+    route-meta and the drain line all call this, so they cannot disagree.
+
+    Ranks by score:  roomy         at/above the floor, or the floor is off
+                     lifted        thin, and its forecast-dead quota covers one more new fire
+    HELD (demoted):  flat          the rescue is switched off
+                     level-stale   the weekly figure itself is inherited (stale_quota / error)
+                     hold-credits  extra-usage is on: an overshoot is paid overage, not a wall
+                     pace-unknown  no reset horizon, no nowcast or no EWMA to judge it on
+                     pace-stale    no flat cross-check: ledger over 1h old or under 6.8h of span
+                     on-pace       spare < need — it will use its week, or too little would die
+                     claimed       spare covers a fire, but not one more than is already placed
+
+    spare = min(wk_strand_pp, 100 x weekly_headroom - max(EWMA, flat pace) x hours to reset),
+    floored at 0. Re-based on weekly_headroom because the nowcast counts from the endpoint integer
+    and to 100, while the floor judges the wire figure against the credits target; the faster of
+    the two paces because each is blind where the other is not (burn_wk_flat_ph).
+    need = max(DISPATCH_STRAND_PP, DISPATCH_FIRE_BURN_PPH x horizon): a fire burns until the
+    reset, so the further out the reset the more it needs. Weekly 96 / 13.6h / zero pace needs
+    5.5pp and holds 4.0 — and `1.00 - 0.96` is 0.040000000000000036, which a bare 4.0 would pass.
+
+    Every comparison is `not x >= y`, so a NaN that reaches one HOLDS. min() and max() DROP a NaN
+    instead of propagating it, hence the explicit test before them."""
+    floor, w = dispatch_w_floor(R), weekly_headroom(r)
+    if floor <= 0.0 or w is None or w >= floor:
+        return "roomy", None, None
+    base = dispatch_strand_pp(R)
+    if base is None:
+        return "flat", None, None
+    if r.get("stale_quota") or r.get("error"):
+        return "level-stale", None, None
+    if r.get("credits_on"):
+        return "hold-credits", None, None
+    # The RAW field, not horizon(): horizon() reads an unknown reset as far away, which is the
+    # right fallback for a score and the wrong one for a product with a pace.
+    wrh = r.get("weekly_reset_h")
+    strand, ewma, flat = r.get("wk_strand_pp"), r.get("burn_wk_ewma_ph"), r.get("burn_wk_flat_ph")
+    if not _is_num(wrh) or not (0 < wrh <= WEEK_H) or not _is_num(strand) or not _is_num(ewma):
+        return "pace-unknown", None, None
+    if not _is_num(flat):
+        return "pace-stale", None, None
+    need = max(base, dispatch_fire_burn_pph(R) * horizon(wrh, R))
+    if strand != strand or ewma != ewma or flat != flat or w != w:
+        return "on-pace", None, need
+    spare = max(0.0, min(strand, 100.0 * w - max(ewma, flat) * wrh))
+    if not spare >= need:
+        return "on-pace", spare, need
+    # A fire already placed here holds a claim on the same spare pp for DISPATCH_CLAIM_TTL_MIN,
+    # long after ASSIGN_TTL_MIN stopped charging it as a phantom: the weekly meter is an integer
+    # and has not moved yet. An absent count is 0 claims — the one input that does not fail
+    # closed, and the reason promotion separately requires k_placed to be present.
+    kp, kpl = r.get("k_phantom"), r.get("k_placed")
+    kp, kpl = kp if _is_num(kp) else 0, kpl if _is_num(kpl) else 0
+    if kp != kp or kpl != kpl or not spare >= need * (1 + max(kp, kpl, 0)):
+        return "claimed", spare, need
+    return "lifted", spare, need
+
+
+def _dispatch_first(s, r, R, roomy):
+    """May this LIFTED row go ahead of the roomy ones? All must hold, and each failure leaves it
+    lifted into plain score order instead:
+      - CC_ROUTE_DISPATCH_STRAND_FIRST is on;
+      - k_placed is on the row: the placement memory is what bounds a pile-on, so with it absent
+        (CC_ROUTE_ASSIGN off, or a row that never went through apply_assignments) nothing would;
+      - no login cliff in play, and 5h-cold — promotion must not carry a row past the soft terms
+        that only its score expresses (10 of 258 rescued rows replayed above S_SOFT);
+      - no roomy row both outscores it AND resets sooner: that one is the more urgent strand."""
+    if not _term_on("CC_ROUTE_DISPATCH_STRAND_FIRST") or not _is_num(r.get("k_placed")):
+        return False
+    if cliff_band(r) != "none" or not _su_projected(r, R) < R["S_SOFT"]:
+        return False
+    t = horizon(r.get("weekly_reset_h"), R)
+    return not any(s2 > s and t2 < t for s2, t2 in roomy)
+
+
+def _dispatch_partition(out, R, promote):
+    """Stable three-way partition of ranked (score, row) pairs: FIRST + KEEP + HELD.
+
+    FIRST  lifted rows that may be promoted (`promote`, and _dispatch_first) — 'lifted-first'
+    KEEP   roomy rows, and lifted rows that may not
+    HELD   every other verdict, flagged thin_demoted
+    Each group keeps its score order; no row is dropped and no score changes. The verdict is
+    stamped on the row (`dispatch_floor`, `dispatch_spare_pp`) and CLEARED on every call: rows are
+    shared across the lanes one readout ranks, so a flag left behind would speak for another."""
+    if dispatch_w_floor(R) <= 0.0 or not out:
         return out
-    keep, thin = [], []
+    judged = []
     for s, r in out:
-        w = weekly_headroom(r)
-        if w is not None and w < floor:
-            r["thin_demoted"] = True
-            thin.append((s, r))
-        else:
+        for key in ("thin_demoted", "dispatch_floor", "dispatch_spare_pp"):
+            r.pop(key, None)
+        tok, spare, _need = dispatch_floor_row(r, R)
+        r["dispatch_floor"] = tok
+        if spare is not None:
+            r["dispatch_spare_pp"] = spare
+        judged.append((s, r, tok))
+    roomy = [(s, horizon(r.get("weekly_reset_h"), R)) for s, r, tok in judged if tok == "roomy"]
+    first, keep, held = [], [], []
+    for s, r, tok in judged:
+        if tok == "lifted" and promote and _dispatch_first(s, r, R, roomy):
+            r["dispatch_floor"] = "lifted-first"
+            first.append((s, r))
+        elif tok in ("roomy", "lifted"):
             keep.append((s, r))
-    return keep + thin
+        else:
+            r["thin_demoted"] = True
+            held.append((s, r))
+    return first + keep + held
+
+
+DISPATCH_FLOOR_NOTE = {
+    "flat": "held for new work: under {floor:.0f}% of the week left",
+    "level-stale": "held for new work: its quota reading is stale",
+    "hold-credits": "held for new work: extra-usage credits are on",
+    "pace-unknown": "held for new work: no pace reading yet",
+    "pace-stale": "held for new work: its pace reading is stale",
+    "claimed": "held for new work: a recent fire already claims that spare quota",
+    "lifted": "open to new work",
+    "lifted-first": "first in line for new work",
+}
+
+
+def dispatch_floor_note(r, rows, cfg):
+    """soonest_reset_line's clause for a THIN row — why new fires skip it, or that they do not —
+    or None when the floor has nothing to say. `rows` is the fleet, to answer "first in line" the
+    way the general lane's partition does."""
+    R = cfg["router"]
+    tok, spare, need = dispatch_floor_row(r, R)
+    if tok == "roomy":
+        return None
+    if tok == "on-pace":
+        if spare is None or need is None:
+            return "held for new work: on pace to use it"
+        return (f"held for new work: {spare:.1f}pp would die unused, "
+                f"a new task needs {need:.1f}")
+    if tok == "lifted":
+        s = score_general(r, cfg)[0]
+        roomy = [(s2, horizon(x.get("weekly_reset_h"), R)) for x in rows
+                 if x is not r and dispatch_floor_row(x, R)[0] == "roomy"
+                 for s2 in [score_general(x, cfg)[0]] if s2]
+        if s and _dispatch_first(s, r, R, roomy):
+            tok = "lifted-first"
+    return DISPATCH_FLOOR_NOTE[tok].format(floor=100.0 * dispatch_w_floor(R))
 
 
 def ranked(rows, cfg, win, kind, recovery=False):
-    """`_ranked` below, with the DISPATCH floor applied to the general and fable lanes."""
+    """`_ranked` below, with the DISPATCH floor applied to the general and fable lanes. Since the
+    strand rescue, line 1 of the general lane is NOT always the highest score: a promoted thin
+    account leads on a lower one. The recycle re-pick compares line 1's score with the incumbent's
+    (repick_ratio), so a promoted line 1 moves no live pane — the conservative direction."""
     out, reasons = _ranked(rows, cfg, win, kind, recovery=recovery)
     if kind in ("general", "fable") and not recovery:
-        out = _demote_thin(out, cfg["router"])
+        out = _dispatch_partition(out, cfg["router"], promote=(kind == "general"))
     return out, reasons
 
 
@@ -8227,6 +8490,18 @@ def main():
                               # so a decision's own threshold is recoverable from its log line.
                               f"repick_ratio={_rr:g}" if (_rr := repick_ratio(cfg.get('router')))
                               else "repick_ratio=off"]
+                             # The dispatch floor's verdict on every THIN candidate, with the
+                             # spare pp it was judged on — so "why was (or was not) the account
+                             # about to reset picked" is answerable from this line. `-` = no thin
+                             # row. One token, no spaces or glob characters: cc-route word-splits
+                             # this line unquoted.
+                             + (["dispatch_floor=" + (",".join(
+                                 f"{r['acct']}:{r['dispatch_floor']}:"
+                                 + (f"{r['dispatch_spare_pp']:.1f}"
+                                    if _is_num(r.get("dispatch_spare_pp")) else "-")
+                                 for _s, r in cand
+                                 if r.get("dispatch_floor") not in (None, "roomy")) or "-")]
+                                if kind in ("general", "fable") and not recovery else [])
                              # The desk lane's own decision inputs: which rung of the degradation
                              # ladder the winner came from, and whether hysteresis was in play.
                              + ([f"desk_tier={desk_keys(w, cfg)[2]}",
