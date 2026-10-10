@@ -1844,3 +1844,111 @@ busy_env() {
   [ "$status" -eq 0 ]
   [[ "$output" != *"⏳"* ]]
 }
+
+# ── verdict-first: no SAFE TO CLOSE under the session's own "Good to close: no" ───────────────────
+# Both certificate paths: the STANDALONE certificate (empty block) and the GOVERNING line (a block
+# with something in it — here a research line, the cheapest item that keeps the rung ✅). The
+# verdict reader is close_verdict_polarity from hooks/lib/close-shape.sh, stubbed through the
+# CLOSE_SHAPE_LIB seam so these cases pin the hook's wiring, not the classifier.
+
+cvf_env() {
+  export CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/cfg"; mkdir -p "$CLAUDE_CONFIG_DIR"
+  export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@e.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@e.com
+  export WRAP_CACHE=off CC_OPREADOUT_COLOR=0 CC_WAKE_FLOOR=0
+  unset KITTY_WINDOW_ID WRAP_SESSION_ID CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID CC_VERDICT_FIRST
+  printf -- '- [x] one\n' > "$BATS_TEST_TMPDIR/dod.md"
+  export WRAP_DOD_FILE="$BATS_TEST_TMPDIR/dod.md"
+  printf '%s\n' 'close_verdict_polarity(){ case "$1" in *"close: no"*) echo no;; *"close: yes"*) echo yes;; *) echo none;; esac; }' \
+    > "$BATS_TEST_TMPDIR/close-shape-stub.sh"
+  printf '%s\n' 'close_shape_ok(){ return 0; }' > "$BATS_TEST_TMPDIR/close-shape-old.sh"
+  export CLOSE_SHAPE_LIB="$BATS_TEST_TMPDIR/close-shape-stub.sh"
+}
+
+cvf_repo() {
+  local o="$BATS_TEST_TMPDIR/o-$1.git" w="$BATS_TEST_TMPDIR/w-$1"
+  git init -q --bare "$o"; git clone -q "$o" "$w" 2>/dev/null
+  ( cd "$w" || exit 1; git checkout -q -b main
+    echo base > f.txt; git add -A; git commit -q -m base
+    git push -q -u origin main ) >/dev/null 2>&1
+  printf '%s' "$(cd "$w" && pwd -P)"
+}
+
+# cvf_tr <out> <edited file> <close text> — a write turn whose last main-agent text is the close
+cvf_tr() {
+  { jq -nc '{type:"user",message:{content:"go"}}'
+    jq -nc --arg p "$2" '{type:"assistant",message:{content:[{type:"tool_use",name:"Edit",input:{file_path:$p}}]}}'
+    jq -nc --arg t "$3" '{type:"assistant",message:{content:[{type:"text",text:$t}]}}'
+  } > "$1"
+  printf '%s' "$1"
+}
+
+cvf_hook() {  # cvf_hook <cwd> <transcript> → systemMessage in $msg
+  run bash -c "jq -nc --arg c '$1' --arg t '$2' '{session_id:\"S1\",cwd:\$c,transcript_path:\$t}' | bash '$HOOK'"
+  msg="$(printf '%s' "$output" | jq -r '.systemMessage // ""' 2>/dev/null)"
+}
+
+# a pending research program — gives the block one line so the GOVERNING ✅ arm renders
+cvf_research() {
+  mkdir -p "$BATS_TEST_TMPDIR/registry" "$BATS_TEST_TMPDIR/bin"
+  printf '{"programs":[{"slug":"alpha","aliases":[],"cwd_roots":["%s"],"state":"certifying"}]}\n' \
+    "$BATS_TEST_TMPDIR/program-root" > "$BATS_TEST_TMPDIR/registry/programs.json"
+  export CC_RESEARCH_REGISTRY="$BATS_TEST_TMPDIR/registry/programs.json"
+  export CC_RESEARCH_BIN="$BATS_TEST_TMPDIR/bin/cc-research"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'case "$1" in pending) printf '"'"'{"programs":[{"program":"alpha","state":"certifying","pending_concerns":2,"waiting_since":"2026-10-01T00:00:00Z","menu":[]}]}\n'"'"' ;; *) exit 2 ;; esac' \
+    > "$CC_RESEARCH_BIN"
+  chmod +x "$CC_RESEARCH_BIN"
+}
+
+CVF_NO=$'✅ Complete & live on trunk — x.\nGood to close: no — two steps remain.'
+CVF_YES=$'✅ Complete & live on trunk — x.\nGood to close: yes — nothing of mine is open.'
+
+@test "verdict-first: a 'no' close withholds the standalone certificate (cert-verdict-no)" {
+  cvf_env
+  w="$(cvf_repo vn1)"; tr="$(cvf_tr "$BATS_TEST_TMPDIR/vn1.jsonl" "$w/f.txt" "$CVF_NO")"
+  cvf_hook "$w" "$tr"
+  [ "$status" -eq 0 ]
+  [[ "$msg" != *"SAFE TO CLOSE"* ]] || false
+  grep -q '"reason":"cert-verdict-no"' "$CC_IDL"
+}
+
+@test "verdict-first: a 'no' close keeps the governing line at '✅ live on trunk'" {
+  cvf_env; cvf_research
+  w="$(cvf_repo vn2)"; tr="$(cvf_tr "$BATS_TEST_TMPDIR/vn2.jsonl" "$w/f.txt" "$CVF_NO")"
+  cvf_hook "$w" "$tr"
+  [ "$status" -eq 0 ]
+  [[ "$msg" == *"◆ research alpha"* ]] || false
+  [[ "$msg" != *"SAFE TO CLOSE"* ]] || false
+  [[ "$(printf '%s\n' "$msg" | head -1)" == *"✅ live on trunk"* ]]
+}
+
+@test "verdict-first: a 'yes' close still renders both certificate paths (control)" {
+  cvf_env
+  w="$(cvf_repo vy1)"; tr="$(cvf_tr "$BATS_TEST_TMPDIR/vy1.jsonl" "$w/f.txt" "$CVF_YES")"
+  cvf_hook "$w" "$tr"
+  [ "$status" -eq 0 ]
+  [[ "$msg" == *"SAFE TO CLOSE — nothing is left on this side"* ]] || false
+  cvf_research; rm -f "$CC_OPREADOUT_STATE_DIR"/* 2>/dev/null || true
+  cvf_hook "$w" "$tr"
+  [ "$status" -eq 0 ]
+  [[ "$(printf '%s\n' "$msg" | head -1)" == *"SAFE TO CLOSE — nothing of mine is open"* ]]
+}
+
+@test "verdict-first: CC_VERDICT_FIRST=0 restores the certificate under a 'no' close (kill switch)" {
+  cvf_env
+  export CC_VERDICT_FIRST=0
+  w="$(cvf_repo vk1)"; tr="$(cvf_tr "$BATS_TEST_TMPDIR/vk1.jsonl" "$w/f.txt" "$CVF_NO")"
+  cvf_hook "$w" "$tr"
+  [ "$status" -eq 0 ]
+  [[ "$msg" == *"SAFE TO CLOSE"* ]] || false
+  ! grep -q '"reason":"cert-verdict-no"' "$CC_IDL"
+}
+
+@test "verdict-first: a close-shape lib without close_verdict_polarity fails open" {
+  cvf_env
+  export CLOSE_SHAPE_LIB="$BATS_TEST_TMPDIR/close-shape-old.sh"
+  w="$(cvf_repo vo1)"; tr="$(cvf_tr "$BATS_TEST_TMPDIR/vo1.jsonl" "$w/f.txt" "$CVF_NO")"
+  cvf_hook "$w" "$tr"
+  [ "$status" -eq 0 ]
+  [[ "$msg" == *"SAFE TO CLOSE"* ]]
+}

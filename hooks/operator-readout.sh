@@ -646,6 +646,9 @@ RUNG="?"; TOTAL=0; Q_N=0
 # Write-turn oracle, three-state (0 wrote · 1 read-only · 2 cannot tell). Default 2 so the pull
 # surface (`--render`, /wrap, bats), which has no transcript to read, never claims a write turn.
 CERT_WROTE=2
+# The session's own last close, read by close_verdict_polarity (yes · no · mixed · none). Only "no"
+# withholds a certificate; set here, never inherited, so the environment cannot plant a verdict.
+CERT_VERDICT="none"
 render_block() {
   local cwd="$1"
   local steps_file; steps_file="$(mktemp "${TMPDIR:-/tmp}/opreadout.XXXXXX")" || return 0
@@ -1133,8 +1136,10 @@ render_block() {
         # SCOPE unknown (no durable DoD) withholds the claim here exactly as it does on the
         # standalone certificate below (operator ruling 2026-10-01): the git facts are clean, but
         # nothing on disk says what "complete" meant, so nothing can say it was reached.
+        # A close whose own verdict line says "Good to close: no" keeps the plain wording: a green
+        # SAFE TO CLOSE under the session's own "no" is two answers to one question.
         local scope; scope="$(scope_of "$led")"
-        if [ "${CERT_WROTE:-2}" = "0" ] && [ "$scope" = "met" ]; then
+        if [ "${CERT_WROTE:-2}" = "0" ] && [ "$scope" = "met" ] && [ "${CERT_VERDICT:-none}" != "no" ]; then
           state="✅ SAFE TO CLOSE — nothing of mine is open"
         elif [ "${CERT_WROTE:-2}" = "0" ] && [ "$scope" = "unknown" ]; then
           state="✅ clean & landed — completeness UNKNOWN (no durable DoD to confirm scope)"
@@ -1635,6 +1640,31 @@ if [ "${CC_CLOSE_CERT:-1}" != "0" ]; then
       session_wrote_here_this_turn "$TP" "$CWD"; CERT_WROTE=$?
     fi
   fi
+
+  # ── CLOSE VERDICT: the certificate must not contradict the close it sits under ──
+  # Measured: a third of certificate renders followed a close whose own verdict line read "Good to
+  # close: no". Read once, here, only on a write turn (nothing certifies otherwise), and only from
+  # the transcript's TAIL — this hook already times out at 10 s on long sessions. Same selector as
+  # hooks/completion-assert.sh:258-261. Every miss (no lib, an older lib without the function, no
+  # text) leaves "none", which is today's behavior: fail OPEN. CC_VERDICT_FIRST=0 skips it.
+  if [ "${CERT_WROTE:-2}" = "0" ] && [ "${CC_VERDICT_FIRST:-1}" != "0" ] && [ -f "$_or_tp" ]; then
+    _cslib="${CLOSE_SHAPE_LIB:-$SCRIPT_DIR/lib/close-shape.sh}"
+    [ -f "$_cslib" ] || { _cst="$0"; [ -L "$_cst" ] && _cst="$(readlink "$_cst")"
+      _cslib="$(cd "$(dirname "$_cst")" 2>/dev/null && pwd)/lib/close-shape.sh"; }
+    [ -f "$_cslib" ] || _cslib="$CFG/hooks/lib/close-shape.sh"
+    [ -f "$_cslib" ] || _cslib="$HOME/.claude/hooks/lib/close-shape.sh"
+    if [ -f "$_cslib" ]; then
+      # shellcheck source=lib/close-shape.sh
+      # shellcheck disable=SC1091
+      if . "$_cslib" 2>/dev/null && command -v close_verdict_polarity >/dev/null 2>&1; then
+        _cstext="$(tail -n 400 "$_or_tp" 2>/dev/null \
+          | jq -c 'select(.type=="assistant" and (.isSidechain != true))
+                   | ([.message.content[]? | select(.type=="text") | .text] | join("\n"))
+                   | select(. != "")' 2>/dev/null | tail -1 | jq -r '. // empty' 2>/dev/null || true)"
+        [ -n "$_cstext" ] && CERT_VERDICT="$(close_verdict_polarity "$_cstext" 2>/dev/null || echo none)"
+      fi
+    fi
+  fi
 fi
 
 # Compose-guard: while session-continue's 🔧 loop is armed the session is mid-drive — the close
@@ -1866,6 +1896,8 @@ if [ -z "$BLOCK" ]; then
   _cscope_v="$(scope_of "$_cled")"
   [ "$_cscope_v" = "unknown" ] && abstain "cert-scope-unknown"
   [ "$_cscope_v" = "met" ] || abstain "cert-scope-open"
+  # WITHHELD UNDER THE SESSION'S OWN "no" (CERT_VERDICT, read once beside the write-turn oracle).
+  [ "${CERT_VERDICT:-none}" = "no" ] && abstain "cert-verdict-no"
   _cscope="frozen-DoD remainder ${_crem}"
   _cert="✅ SAFE TO CLOSE — nothing is left on this side.
    tree clean · landed on ${_ctrunk:-?} (nothing parked) · ${_cscope} · no manual step is yours.
