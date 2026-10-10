@@ -53,13 +53,22 @@ Scope (grown): +`hooks/operator-readout.sh` withholds `✅ SAFE TO CLOSE` when t
 `hooks/lib/why-tier.sh`, `docs/plans/STOPHOOK_MESSAGE_TIERING.md` carry the same template and would
 keep teaching the old shape.
 
-## W2 — Implement (T: in-session teammates)
+## W2 — Implement (T: in-session teammates) — DONE, merged into `close-verdict-first`
 
-| teammate | worktree/branch | files | status |
-|---|---|---|---|
-| cvf-hooks | `cvf-hooks` | close-shape.sh, completion-assert.sh, completion-assert.bats, fixtures | spawned |
-| cvf-docs | `cvf-docs` | rules slim, CLAUDE.global.md, wrap.md, are-we-done.md, why-tier.sh, STOPHOOK plan | spawned |
-| cvf-readout | `cvf-readout` (rebased on cvf-hooks checkpoint A) | operator-readout.sh + its bats | after checkpoint A |
+| teammate | files | commits |
+|---|---|---|
+| cvf-hooks | close-shape.sh, completion-assert.sh, completion-assert.bats, fixtures | `5ad54b1e6`, `b90f8953b` |
+| cvf-docs | rules slim (30,334 → 30,329 loader units), CLAUDE.global.md, wrap.md, are-we-done.md, why-tier.sh, STOPHOOK plan | `eec712aee` |
+| cvf-readout | operator-readout.sh + its bats (decoupled via a `CLOSE_SHAPE_LIB` seam, fail-open) | `e02c87b8e`, lead `67835bcd1` |
+
+- Final hook code = the REPORT.md §2 prototype (41 real-hook replays). Deviations from the lead's first
+  rulings, report wins: old-shape 👤 no is refused only when line 1 is the 👤 readout's "my side is
+  done/landed/complete" (glyph-only would refuse 266 honest-looking 👤 closes in 30 d vs 129); the
+  hedge set keeps `with one thing`.
+- The rules text says "a no under a line 1 opening ✅, 👤 or a done reading fails" — stricter than the
+  hook on purpose (prompt sets the form, hook is the floor).
+- Learning: the machine ran at load 130-300 all afternoon; cc-bats deferred (rc 75) every teammate
+  run, so suites ran from the lead in a retry loop.
 
 Lead rulings on top of design.md: "no" needs punctuation after it; D3 verdict branch behind
 `CC_VERDICT_FIRST`, no `with`/`after`, no both-polarity branch; reads-done rejects `Complete? No`;
@@ -71,4 +80,6 @@ glyph + state clause, replaces the tail.
 
 bats touched (assert `1..N`), shellcheck bare as the land gate runs it, `scripts/ship-land.sh`,
 `CC_DEPLOY_MAX_LAG_COMMITS=0 bash scripts/deploy-live.sh`, grep deployed
-`~/.claude/rules/10-session-close.md` and `~/.claude/CLAUDE.md` for the new rule.
+`~/.claude/rules/10-session-close.md` and `~/.claude/CLAUDE.full.md` for the new rule. (Correction to
+the brief: `~/.claude/CLAUDE.md` is the slim global, which carries no close-placement text — the slim
+variant's close protocol IS the rules file — so it is checked only to confirm it was not changed.)
