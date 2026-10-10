@@ -37,9 +37,35 @@ task-level no; (c) interaction with CC_ACT_WINDOW, D3, D6, D7, opaque-id nudge, 
 operator-readout, peer/assignee exemptions; (d) the 613-close figures in close-shape.sh — re-derive
 or re-scope; (e) exact doc edits. Output: `docs/research/close-verdict-first-2026-10-10/REPORT.md`.
 
-## W2 — Implement
+## W1 — DONE (`9abdc1843`, `b67487b7d`)
+- Design A′ (85% after skeptics; >90% with the fixes below): verdict owns line 1 with its own glyph
+  (`✅ Good to close: yes — …` / `❌ Good to close: no — …`), ledger rung relayed on line 2; the hook
+  refuses only the contradiction (no verdict under a ✅/👤/done-reading line 1, D6 token `verdict-first`).
+- Learnings: the left close was the rule working as written (verdict on line 2 in 81% of closes); 264 of
+  1,315 ✅-led closes answer no (30 d, slot-corpus). In production the hook would also have missed it:
+  the session's `shape` budget was spent and completion-assert timed out (18% of Stop runs at 5 s) — so
+  the rules text is the main lever, the hook the backstop, and verdict-first gets its own latch class.
+- 2026-08-23 figures in close-shape.sh are stale both ways (73%→83%, "90.7% last line"→12.9%) and the
+  instrument that made them is not committed; block reasons carry no corpus numbers from now on.
 
-(filled from REPORT.md)
+Scope (grown): +`hooks/operator-readout.sh` withholds `✅ SAFE TO CLOSE` when the close's verdict is no
+(1/3 of certificate renders follow a no, skeptic-operator-intent P3); +`commands/are-we-done.md`,
+`hooks/lib/why-tier.sh`, `docs/plans/STOPHOOK_MESSAGE_TIERING.md` carry the same template and would
+keep teaching the old shape.
+
+## W2 — Implement (T: in-session teammates)
+
+| teammate | worktree/branch | files | status |
+|---|---|---|---|
+| cvf-hooks | `cvf-hooks` | close-shape.sh, completion-assert.sh, completion-assert.bats, fixtures | spawned |
+| cvf-docs | `cvf-docs` | rules slim, CLAUDE.global.md, wrap.md, are-we-done.md, why-tier.sh, STOPHOOK plan | spawned |
+| cvf-readout | `cvf-readout` (rebased on cvf-hooks checkpoint A) | operator-readout.sh + its bats | after checkpoint A |
+
+Lead rulings on top of design.md: "no" needs punctuation after it; D3 verdict branch behind
+`CC_VERDICT_FIRST`, no `with`/`after`, no both-polarity branch; reads-done rejects `Complete? No`;
+polarity reads yes/negation before the anchor; own latch class `verdict` (COMPLETION_VERDICT_MAX=2);
+old-shape 👤 no is refused too; rules :9 becomes "A ✅ rung is an assertion"; `/wrap` line 2 keeps
+glyph + state clause, replaces the tail.
 
 ## W3 — Gate, land, converge, verify
 
