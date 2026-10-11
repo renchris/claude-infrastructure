@@ -57,6 +57,7 @@ Exit: 0 ok · 1 no such lock · 2 REFUSED (nothing changed) · 3 usage.
 Env: LR_STATE_DIR (default ~/.reso/limit-recover) · LR_LOCK_TTL_S (default 21600) ·
      LR_LOCK_SLACK_S (default 60) · LR_NOW (epoch; tests).
 """
+
 import glob
 import json
 import os
@@ -67,7 +68,9 @@ from datetime import datetime, timezone
 
 RC_OK, RC_NOMATCH, RC_REFUSED, RC_USAGE = 0, 1, 2, 3
 
-STATE_DIR = os.environ.get("LR_STATE_DIR") or os.path.join(os.path.expanduser("~"), ".reso", "limit-recover")
+STATE_DIR = os.environ.get("LR_STATE_DIR") or os.path.join(
+    os.path.expanduser("~"), ".reso", "limit-recover"
+)
 LOCKS_DIR = os.path.join(STATE_DIR, "locks")
 RELEASED_DIR = os.path.join(LOCKS_DIR, "released")
 
@@ -93,14 +96,21 @@ NOW = _int_env("LR_NOW", 0) or int(time.time())
 
 AUTO_EXPIRE = ("ORPHAN", "ABANDONED")
 RELEASABLE = ("ORPHAN", "ABANDONED", "QUIET")
-DISOWNS_MOVE = ("ABANDONED", "QUIET")      # classes whose release also retires the tombstone
+DISOWNS_MOVE = (
+    "ABANDONED",
+    "QUIET",
+)  # classes whose release also retires the tombstone
 
 
 def ts_epoch(s):
     if not isinstance(s, str) or not s:
         return None
     try:
-        return int(datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp())
+        return int(
+            datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ")
+            .replace(tzinfo=timezone.utc)
+            .timestamp()
+        )
     except ValueError:
         return None
 
@@ -112,7 +122,11 @@ def iso(epoch):
 def transcripts(store, sid, suffix=".jsonl"):
     if not store:
         return []
-    return sorted(p for p in glob.glob(os.path.join(store, "projects", "*", sid + suffix)) if os.path.isfile(p))
+    return sorted(
+        p
+        for p in glob.glob(os.path.join(store, "projects", "*", sid + suffix))
+        if os.path.isfile(p)
+    )
 
 
 def mtime(path):
@@ -126,7 +140,10 @@ def stub_beside_retired(store: object, sid: str) -> bool:
     """True when one slug dir of `store` holds both <sid>.jsonl and <sid>.jsonl.handed-off."""
     if not isinstance(store, str) or not store:
         return False
-    return any(os.path.isfile(p[:-len(".handed-off")]) for p in transcripts(store, sid, ".jsonl.handed-off"))
+    return any(
+        os.path.isfile(p[: -len(".handed-off")])
+        for p in transcripts(store, sid, ".jsonl.handed-off")
+    )
 
 
 def read_lock(path):
@@ -144,48 +161,120 @@ def read_lock(path):
 
 def classify(path):
     """→ dict: sid, path, class, why, age, owner, source, ts, raw."""
-    sid = os.path.basename(path)[:-len(".lock")]
+    sid = os.path.basename(path)[: -len(".lock")]
     raw, rec = read_lock(path)
-    row = {"sid": sid, "path": path, "raw": raw, "owner": "", "source": "", "ts": "", "age": None}
+    row = {
+        "sid": sid,
+        "path": path,
+        "raw": raw,
+        "owner": "",
+        "source": "",
+        "ts": "",
+        "age": None,
+    }
     if rec is None:
-        row.update({"class": "UNPARSEABLE", "why": "not a JSON object — cannot say where %s went" % sid})
+        row.update(
+            {
+                "class": "UNPARSEABLE",
+                "why": "not a JSON object — cannot say where %s went" % sid,
+            }
+        )
         return row
     # `owner` since W5-B; `to` on a pre-W5-B lock — the same fallback lr-transplant's own reader uses.
     owner = rec.get("owner") or rec.get("to") or ""
     source = rec.get("from") or ""
     ts = ts_epoch(rec.get("ts"))
-    row.update({"owner": owner, "source": source, "ts": rec.get("ts") or "",
-                "age": (NOW - ts) if ts is not None else None})
+    row.update(
+        {
+            "owner": owner,
+            "source": source,
+            "ts": rec.get("ts") or "",
+            "age": (NOW - ts) if ts is not None else None,
+        }
+    )
     if not owner or not isinstance(owner, str):
-        row.update({"class": "UNPARSEABLE", "why": "names no owner — refusing to guess where %s went" % sid})
+        row.update(
+            {
+                "class": "UNPARSEABLE",
+                "why": "names no owner — refusing to guess where %s went" % sid,
+            }
+        )
         return row
     # A session wrote again after its retire: which copy is whole is unresolved until fold-stub runs,
     # so no age and no successor state may expire this lock.
     if stub_beside_retired(rec.get("from"), sid):
-        row.update({"class": "CUSTODY", "why": "a stub sits beside the retired transcript — custody is unresolved; never expires"})
+        row.update(
+            {
+                "class": "CUSTODY",
+                "why": "a stub sits beside the retired transcript — custody is unresolved; never expires",
+            }
+        )
         return row
     succ = transcripts(owner, sid)
     if not succ:
-        row.update({"class": "ORPHAN", "why": "no %s.jsonl under %s — there is no successor to protect" % (sid, owner)})
+        row.update(
+            {
+                "class": "ORPHAN",
+                "why": "no %s.jsonl under %s — there is no successor to protect"
+                % (sid, owner),
+            }
+        )
         return row
     if ts is None:
         # A successor exists and the move has no usable time, so nothing can be ordered against it.
-        row.update({"class": "CUSTODY", "why": "successor present and the lock's ts is unreadable — cannot prove it never ran"})
+        row.update(
+            {
+                "class": "CUSTODY",
+                "why": "successor present and the lock's ts is unreadable — cannot prove it never ran",
+            }
+        )
         return row
     edge = ts + SLACK_S
     succ_ran = any((mtime(p) or 0) > edge for p in succ)
-    live_src = [p for p in transcripts(source, sid)] if source and os.path.realpath(source) != os.path.realpath(owner) else []
+    live_src = (
+        [p for p in transcripts(source, sid)]
+        if source and os.path.realpath(source) != os.path.realpath(owner)
+        else []
+    )
     src_ran = any((mtime(p) or 0) > edge for p in live_src)
     if not live_src:
-        row.update({"class": "CUSTODY", "why": "the source holds no live %s.jsonl (retired or gone) — the move completed" % sid})
+        row.update(
+            {
+                "class": "CUSTODY",
+                "why": "the source holds no live %s.jsonl (retired or gone) — the move completed"
+                % sid,
+            }
+        )
     elif succ_ran and src_ran:
-        row.update({"class": "SPLIT", "why": "BOTH copies were written after the move: %s and %s" % (succ[0], live_src[0])})
+        row.update(
+            {
+                "class": "SPLIT",
+                "why": "BOTH copies were written after the move: %s and %s"
+                % (succ[0], live_src[0]),
+            }
+        )
     elif succ_ran:
-        row.update({"class": "CUSTODY", "why": "the successor has run since the move (%s)" % succ[0]})
+        row.update(
+            {
+                "class": "CUSTODY",
+                "why": "the successor has run since the move (%s)" % succ[0],
+            }
+        )
     elif src_ran:
-        row.update({"class": "ABANDONED", "why": "the source kept working after the move and the successor never ran (%s)" % live_src[0]})
+        row.update(
+            {
+                "class": "ABANDONED",
+                "why": "the source kept working after the move and the successor never ran (%s)"
+                % live_src[0],
+            }
+        )
     else:
-        row.update({"class": "QUIET", "why": "neither copy written since the move — disk cannot say which is real"})
+        row.update(
+            {
+                "class": "QUIET",
+                "why": "neither copy written since the move — disk cannot say which is real",
+            }
+        )
     return row
 
 
@@ -219,8 +308,17 @@ def render(rows, as_json):
         return
     for r in rows:
         flag = " EXPIRED" if expired(r, TTL_S) else ""
-        print("%-11s %s  age=%-5s owner=%s%s — %s" % (r["class"], r["sid"][:8], fmt_age(r["age"]),
-                                                       r["owner"] or "?", flag, r["why"]))
+        print(
+            "%-11s %s  age=%-5s owner=%s%s — %s"
+            % (
+                r["class"],
+                r["sid"][:8],
+                fmt_age(r["age"]),
+                r["owner"] or "?",
+                flag,
+                r["why"],
+            )
+        )
 
 
 def resolve(ref):
@@ -241,21 +339,35 @@ def archive(row, why, by):
     RENAME FIRST, compare after: a transplant that rewrote the lock between the read and the rename
     must not have ITS claim released on a verdict about the previous one."""
     os.makedirs(RELEASED_DIR, exist_ok=True)
-    dst = os.path.join(RELEASED_DIR, "%s.%s.json" % (row["sid"], iso(NOW).replace(":", "")))
+    dst = os.path.join(
+        RELEASED_DIR, "%s.%s.json" % (row["sid"], iso(NOW).replace(":", ""))
+    )
     n = 1
     while os.path.exists(dst):
-        dst = os.path.join(RELEASED_DIR, "%s.%s.%d.json" % (row["sid"], iso(NOW).replace(":", ""), n))
+        dst = os.path.join(
+            RELEASED_DIR, "%s.%s.%d.json" % (row["sid"], iso(NOW).replace(":", ""), n)
+        )
         n += 1
     os.rename(row["path"], dst)
     raw, rec = read_lock(dst)
     if raw != row["raw"]:
         if not os.path.exists(row["path"]):
             os.rename(dst, row["path"])
-        sys.stderr.write("lr-lock: REFUSED — %s changed under this release (a transplant is writing it); nothing released\n" % row["path"])
+        sys.stderr.write(
+            "lr-lock: REFUSED — %s changed under this release (a transplant is writing it); nothing released\n"
+            % row["path"]
+        )
         return None
     rec = dict(rec or {"unparseable": row["raw"]})
-    rec.update({"released_at": iso(NOW), "released_why": why, "released_class": row["class"],
-                "released_by": by, "released_from": row["path"]})
+    rec.update(
+        {
+            "released_at": iso(NOW),
+            "released_why": why,
+            "released_class": row["class"],
+            "released_by": by,
+            "released_from": row["path"],
+        }
+    )
     tmp = dst + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(rec, fh, sort_keys=True)
@@ -271,23 +383,97 @@ def archive(row, why, by):
             except (OSError, ValueError):
                 continue
             # only the tombstone of THIS move — a --mark SUPERSEDED tombstone names another thing
-            if isinstance(t, dict) and os.path.realpath(t.get("handed_off_to") or "") == owner_real:
+            if (
+                isinstance(t, dict)
+                and os.path.realpath(t.get("handed_off_to") or "") == owner_real
+            ):
                 os.rename(tomb, tomb + ".released")
                 retired.append(tomb + ".released")
         # A RETURN HOP's admit set the target's own leftovers aside (lr-transplant.sh, THE RETURN HOP)
         # and recorded them here; a release disowns the move exactly as abort does, so they go back —
         # link-then-unlink, never over a name that exists again.
         for r in rec.get("returned") if isinstance(rec.get("returned"), list) else []:
-            p, a = (r.get("path"), r.get("aside")) if isinstance(r, dict) else (None, None)
+            p, a = (
+                (r.get("path"), r.get("aside")) if isinstance(r, dict) else (None, None)
+            )
             if not (isinstance(p, str) and isinstance(a, str)):
                 continue
             try:
                 os.link(a, p)
                 os.unlink(a)
-                sys.stderr.write("lr-lock: restored %s (set aside by this move's admit)\n" % p)
+                sys.stderr.write(
+                    "lr-lock: restored %s (set aside by this move's admit)\n" % p
+                )
             except OSError as e:
-                sys.stderr.write("lr-lock: could not restore %s from %s (%s) — left as it is\n" % (p, a, e.strerror))
+                sys.stderr.write(
+                    "lr-lock: could not restore %s from %s (%s) — left as it is\n"
+                    % (p, a, e.strerror)
+                )
+        set_aside_target_copy(row)
     return dst, retired
+
+
+def is_byte_prefix(short, long):
+    """True when every byte of `short` opens `long` (equal files included)."""
+    try:
+        if os.path.getsize(short) > os.path.getsize(long):
+            return False
+        with open(short, "rb") as a, open(long, "rb") as b:
+            while True:
+                chunk = a.read(1 << 20)
+                if not chunk:
+                    return True
+                if b.read(len(chunk)) != chunk:
+                    return False
+    except OSError:
+        return False
+
+
+def set_aside_target_copy(row):
+    """THE TARGET COPY GOES TOO (2026-10-11, pane 14 / 4d059264). Disowning a move used to leave the
+    owner store's <sid>.jsonl behind, and every later move of the session counted it as a second live
+    transcript (the move proof's source-ambiguous), so a session that once had a move released could
+    never move again. Neither disowning class's successor ran, so the copy should be a byte-prefix of
+    the live source and hold nothing of its own. That is CHECKED, not assumed: a copy that is not a
+    prefix stays where it is. Renamed to <name>.released-<UTCts>, never deleted, link-then-unlink."""
+    live = [p for p in transcripts(row["source"], row["sid"])]
+    live_real = {os.path.realpath(p) for p in live}
+    for cp in transcripts(row["owner"], row["sid"]):
+        if os.path.realpath(cp) in live_real:
+            continue  # one store behind two config dirs: the "copy" IS the live source
+        src = [
+            p
+            for p in live
+            if os.path.basename(os.path.dirname(p))
+            == os.path.basename(os.path.dirname(cp))
+        ]
+        if not src or not is_byte_prefix(cp, src[0]):
+            sys.stderr.write(
+                "lr-lock: kept %s — not a byte-prefix of a live source transcript, so it may hold "
+                "turns of its own\n" % cp
+            )
+            continue
+        dst = "%s.released-%s" % (cp, iso(NOW).replace(":", "").replace("-", ""))
+        n = 1
+        while os.path.exists(dst):
+            dst = "%s.released-%s.%d" % (
+                cp,
+                iso(NOW).replace(":", "").replace("-", ""),
+                n,
+            )
+            n += 1
+        try:
+            os.link(cp, dst)
+            os.unlink(cp)
+            sys.stderr.write(
+                "lr-lock: set aside the disowned move's target copy %s → %s (a byte-prefix of %s)\n"
+                % (cp, dst, src[0])
+            )
+        except OSError as e:
+            sys.stderr.write(
+                "lr-lock: could not set aside %s (%s) — left as it is\n"
+                % (cp, e.strerror)
+            )
 
 
 def cmd_list(args):
@@ -325,7 +511,9 @@ def cmd_release(args):
             return usage()
         i += 1
     if not ref or not why.strip():
-        sys.stderr.write('lr-lock: usage: lr-lock release <sid> --why "<text>" [--force]\n')
+        sys.stderr.write(
+            'lr-lock: usage: lr-lock release <sid> --why "<text>" [--force]\n'
+        )
         return RC_USAGE
     path, rc = resolve(ref)
     if path is None:
@@ -336,14 +524,27 @@ def cmd_release(args):
             "lr-lock: REFUSED — %s is %s: %s. This lock is the custody record the resume guard reads "
             "(lr_tombstone_verdict); releasing it lets the session go live on a second account. Pass "
             "--force only once you have established the successor at %s is not the session.\n"
-            % (row["sid"], row["class"], row["why"], row["owner"] or "?"))
+            % (row["sid"], row["class"], row["why"], row["owner"] or "?")
+        )
         return RC_REFUSED
-    done = archive(row, why, "release%s pid=%d host=%s" % (" --force" if force else "", os.getpid(), socket.gethostname()))
+    done = archive(
+        row,
+        why,
+        "release%s pid=%d host=%s"
+        % (" --force" if force else "", os.getpid(), socket.gethostname()),
+    )
     if done is None:
         return RC_REFUSED
     dst, retired = done
-    print("released %s (%s) → %s%s" % (row["sid"][:8], row["class"], dst,
-                                        "".join("; tombstone → %s" % t for t in retired)))
+    print(
+        "released %s (%s) → %s%s"
+        % (
+            row["sid"][:8],
+            row["class"],
+            dst,
+            "".join("; tombstone → %s" % t for t in retired),
+        )
+    )
     return RC_OK
 
 
@@ -368,16 +569,30 @@ def cmd_reap(args):
         if not expired(row, ttl):
             continue
         if dry:
-            print("would expire %s (%s, age %s) — %s" % (row["sid"][:8], row["class"], fmt_age(row["age"]), row["why"]))
+            print(
+                "would expire %s (%s, age %s) — %s"
+                % (row["sid"][:8], row["class"], fmt_age(row["age"]), row["why"])
+            )
             continue
-        done = archive(row, "TTL: %s past %ds — %s" % (row["class"], ttl, row["why"]),
-                       "reap pid=%d host=%s" % (os.getpid(), socket.gethostname()))
+        done = archive(
+            row,
+            "TTL: %s past %ds — %s" % (row["class"], ttl, row["why"]),
+            "reap pid=%d host=%s" % (os.getpid(), socket.gethostname()),
+        )
         if done is None:
             rc = RC_REFUSED
             continue
         dst, retired = done
-        print("expired %s (%s, age %s) → %s%s" % (row["sid"][:8], row["class"], fmt_age(row["age"]), dst,
-                                                  "".join("; tombstone → %s" % t for t in retired)))
+        print(
+            "expired %s (%s, age %s) → %s%s"
+            % (
+                row["sid"][:8],
+                row["class"],
+                fmt_age(row["age"]),
+                dst,
+                "".join("; tombstone → %s" % t for t in retired),
+            )
+        )
     return rc
 
 
@@ -390,7 +605,12 @@ def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
         sys.stdout.write(__doc__)
         return RC_OK if argv else RC_USAGE
-    verbs = {"list": cmd_list, "status": cmd_status, "release": cmd_release, "reap": cmd_reap}
+    verbs = {
+        "list": cmd_list,
+        "status": cmd_status,
+        "release": cmd_release,
+        "reap": cmd_reap,
+    }
     if argv[0] not in verbs:
         return usage()
     return verbs[argv[0]](argv[1:])

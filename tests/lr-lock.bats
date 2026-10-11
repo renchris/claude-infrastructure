@@ -147,6 +147,37 @@ _class() { python3 "$LRL" status "$SID" --json | python3 -c 'import json,sys;pri
   [ "$status" -eq 1 ] || { echo "still reported as moved: $output"; false; }
 }
 
+@test "lr-lock: releasing an ABANDONED move sets the target copy aside, so the session can move again (4d059264)" {
+  # 2026-10-11, pane 14: a release left the owner store's <sid>.jsonl behind, and every later move
+  # counted it as a second live transcript (P3 source-ambiguous) — the session could never move again.
+  _admit
+  printf '{"type":"user","message":{"role":"user"}}\n' >> "$SRC"   # the session kept working where it was
+  _ran "$SRC"
+  cp -p "$DST" "$T/dst.orig"
+  _later 30000
+  [ "$(_class)" = ABANDONED ]
+  _lrl release "${SID:0:8}" --why "move never happened"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ ! -e "$DST" ] || { echo "the abandoned target copy is still a live transcript"; ls -a "$T/to/projects/slug"; false; }
+  aside=( "$DST".released-* )
+  [ -f "${aside[0]}" ] || { echo "the copy was not renamed aside: $output"; ls -a "$T/to/projects/slug"; false; }
+  cmp -s "${aside[0]}" "$T/dst.orig" || { echo "the set-aside copy changed"; false; }
+  [ -f "$SRC" ] || { echo "the live source was touched"; false; }
+}
+
+@test "lr-lock: a target copy that is NOT a byte-prefix of the live source is kept by a release" {
+  _admit
+  printf '{"type":"user","message":{"role":"user","content":"only here"}}\n' > "$DST"
+  _touch_at "$DST" "$(_lock_ts)"                                  # unwritten since the move, by mtime
+  _ran "$SRC"
+  _later 30000
+  [ "$(_class)" = ABANDONED ]
+  _lrl release "${SID:0:8}" --why "move never happened"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$DST" ] || { echo "a copy with bytes of its own was set aside"; ls -a "$T/to/projects/slug"; false; }
+  [[ "$output" == *"not a byte-prefix"* ]] || { echo "$output"; false; }
+}
+
 @test "lr-lock: releasing a RETURN hop's lock puts the target's old marker and retired copy back, byte-for-byte" {
   # the session left to/ for from/ earlier: to/ holds that departure's marker and a prefix copy
   local OLD="$T/to/projects/slug/$SID.HANDOFF.json" RET="$T/to/projects/slug/$SID.jsonl.handed-off"
