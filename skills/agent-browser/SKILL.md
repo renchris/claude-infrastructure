@@ -8,9 +8,11 @@ allowed-tools: Bash
 
 > Adapted from vercel-labs/agent-browser's own skill (Apache-2.0), with local modifications; licence text in `LICENSE-agent-browser` beside this file.
 
-Headless browser automation CLI. Uses bundled Chromium (not existing Chrome sessions).
+Headless browser automation CLI. On this machine (0.27.1) it launches the installed `/Applications/Google Chrome.app` headless, with a fresh `agent-browser-chrome-*` profile per session and no access to the user's Chrome profile.
 
 ## Quick Start
+
+Always pass `--session <your-worker-name>` (see Sessions below); the examples omit it for brevity.
 
 ```bash
 agent-browser open <url>        # Navigate
@@ -86,11 +88,19 @@ agent-browser wait --load networkidle # Wait for network idle
 
 ## Sessions (Isolated Instances)
 
+One session per worker, not per site. Name it after your task, visit sites one after another inside it, and close it as your last step, failure paths included:
+
 ```bash
-agent-browser --session test1 open site-a.com
-agent-browser --session test2 open site-b.com
-agent-browser session list     # List active sessions
+agent-browser --session w-pricing-scan open site-a.com
+agent-browser --session w-pricing-scan open site-b.com   # same session, next site
+agent-browser --session w-pricing-scan close             # always, even after an error
+agent-browser session list                               # List active sessions
 ```
+
+- Each new session name cold-starts a full headless Chrome: a root plus several helpers, each registering with LaunchServices (lsd). Bursts of these were in the writer queue during the 2026-10-09 desktop freeze (`docs/research/freeze-convoy-2026-10-09/PLAN.md`). An unclosed session lingers, and its Chrome can outlive its daemon as an orphan.
+- Open a second concurrent session only when isolation is required, such as two different logins at once.
+- Subagents share their parent's Claude session id, so unique per-worker naming is your job. With no `--session`, every Claude session on the machine shares the one `default` daemon.
+- No `--cdp` sharing between sessions on 0.27.1.
 
 ## Debug Mode
 
