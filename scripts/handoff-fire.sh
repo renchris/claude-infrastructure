@@ -3328,8 +3328,14 @@ hf_exit_readback() { # $1=pane → 0 exact /exit read back and CR sent · 1 not 
     hf_bounded "$RCY_IT2" session send -s "$id" $'\r' >/dev/null 2>&1 || true
     return 0
   fi
+  HF_EXIT_RB_UNDO="no DELs sent (the read did not end in /exit)"
   case "$HF_EXIT_RB_TEXT" in
-    */exit) hf_bounded "$RCY_IT2" session send -s "$id" $'\x7f\x7f\x7f\x7f\x7f' >/dev/null 2>&1 || true ;;
+    */exit) hf_bounded "$RCY_IT2" session send -s "$id" $'\x7f\x7f\x7f\x7f\x7f' >/dev/null 2>&1 || true
+            HF_EXIT_RB_UNDO="five DELs sent to take our /exit back out" ;;
+    *)      # The box may still hold the /exit WE typed (pane 168, 2026-10-11: an unreadable read left it
+            # there). Receipt it, so the next composer gate scrubs it as this rail's own residue
+            # instead of carrying it as somebody's draft.
+            composer_residue_record "$id" "/exit" ;;
   esac
   return 1
 }
@@ -4059,15 +4065,23 @@ composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer c
   # by a narrower pane stays UNKNOWN, which refuses. scripts/lib/cc-tui.sh and
   # scripts/lib/lr-composer-snapshot.sh carry the same function.
   plain="$(printf '%s\n' "$scr" | LC_ALL=C perl -pe 's/\e\[[0-?]*[ -\/]*[@-~]|\e\][^\a\e]*(?:\a|\e\\)?|\e.//g')"
-  span="$(printf '%s\n' "$plain" | LC_ALL=C awk -v b="$b12" -v u='─' -v g='❯' '
+  span="$(printf '%s\n' "$plain" | LC_ALL=C awk -v b="$b12" -v u='─' -v g='❯' -v slashmenu="${HF_COMPOSER_SLASH_MENU:-on}" '
     function border(s,   t) {                 # a full rule, or a LABELED one: "── label ─" from column 0
       if (index(s, b) > 0) return 1
       t = s; sub(/[ \t\r]+$/, "", t)
       return (index(t, u u) == 1 && length(t) > 3 * length(u) && substr(t, length(t) - length(u) + 1) == u)
     }
-    function selector(s,   t, n) {          # ❯ at indent 1-4: a dialog option row, never the composer
+    function selector(s,   t, n, r) {       # ❯ at indent 1-4: a dialog option row, never the composer
       t = s; sub(/^ +/, "", t); n = length(s) - length(t)
-      return (n >= 1 && n <= 4 && index(t, g) == 1)
+      if (!(n >= 1 && n <= 4 && index(t, g) == 1)) return 0
+      # …unless it is the SLASH-COMMAND SUGGESTION menu, whose highlighted row is "❯ /exit  Exit the
+      # CLI". Typing /exit opens it above the box in a short or narrow pane, so every /exit read-back
+      # there read UNKNOWN and the recycle held (pane 168, 38 columns, 2026-10-11 — lr-stranded-husk).
+      # A dialog option carries an ordinal or a word, never a leading slash. Kill switch
+      # HF_COMPOSER_SLASH_MENU=off restores the old rule.
+      r = substr(t, length(g) + 1); sub(/^ +/, "", r)
+      if (slashmenu != "off" && substr(r, 1, 1) == "/") return 0
+      return 1
     }
     { line[NR] = $0; if (border($0)) { b2 = b1; b1 = NR; gb = 0 } else if (index($0, g) > 0) gb = 1 }
     END {
@@ -17365,7 +17379,7 @@ recycle_fire_commit() {
     if ! hf_exit_readback "$SID"; then
       [ -n "$rcy_debt_sid" ] && _hf_resume_debt abandon --sid "$rcy_debt_sid" --why "exit read-back mismatch; nothing submitted, session untouched"
       hf_recycle_hold exit-readback "the /exit read back as '$HF_EXIT_RB_TEXT'" \
-        "the composer read back '$HF_EXIT_RB_TEXT', not '/exit' — five DELs sent to take our /exit back out"
+        "the composer read back '$HF_EXIT_RB_TEXT', not '/exit' — ${HF_EXIT_RB_UNDO:-no DELs sent}"
     fi
     return 0
   fi

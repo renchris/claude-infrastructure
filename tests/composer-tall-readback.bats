@@ -345,6 +345,25 @@ mk_capped() { # a 62-row screen: a 24-row capped box showing only the END of $1 
   [ ! -s "$SENT_LOG" ]
 }
 
+@test "[RED] the SLASH-COMMAND menu above a narrow box is not a dialog: pane 168's /exit reads back as /exit" {
+  # Pane 168, 38 columns, 2026-10-11: typing /exit opened the suggestion menu ABOVE the box, its
+  # highlighted row "❯ /exit  Exit the CLI" read as a dialog, and the read-back held the recycle.
+  { echo "  Then close this pane."; echo ""; echo "  Original prompt: "; echo ""
+    echo "  ❯ /exit          Exit the CLI"; echo "    /context       Visualize current"; echo "                   context usage as…"
+    echo "$B"; echo "❯ /exit"; echo "$B"; echo "  (2) #168 186452ed 26% · wt-cc…"; } > "$POST_FILE"
+  run read_post
+  [ "$status" -eq 0 ] || { echo "rc=$status [$output]"; false; }
+  [ "$output" = /exit ] || { echo "[$output]"; false; }
+  # CONTROL: the same screen with a real dialog option above the box still reads UNKNOWN.
+  sed -i.bak 's/❯ \/exit          Exit the CLI/❯ 1. Exit and stop tasks/' "$POST_FILE"
+  run read_post
+  [ "$status" -eq 1 ] || { echo "rc=$status [$output]"; false; }
+  # KILL SWITCH: HF_COMPOSER_SLASH_MENU=off restores the old rule.
+  sed -i.bak 's/❯ 1. Exit and stop tasks/❯ \/exit          Exit the CLI/' "$POST_FILE"
+  HF_COMPOSER_SLASH_MENU=off run read_post
+  [ "$status" -eq 1 ] || { echo "rc=$status [$output]"; false; }
+}
+
 @test "an indented rule pair (an empty composer printed in tool output) is not a box" {
   { echo "  ⎿  $B"; echo "     ❯ "; echo "     $B"; echo "  Do you want to proceed?"; } > "$POST_FILE"
   run read_post
