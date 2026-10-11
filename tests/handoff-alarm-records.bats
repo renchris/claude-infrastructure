@@ -348,15 +348,41 @@ osa_posts() { [ -f "$OSA_LOG" ] && wc -l < "$OSA_LOG" | tr -d ' ' || echo 0; }
   [ "$(tr '\n' ' ' < "$ORDER_LOG")" = "page push " ] || { cat "$ORDER_LOG"; false; }
 }
 
-@test "STRAND PAGE: every strand variant pages (recycle-dead PANE GONE / SURFACE GONE, relaunch-failed)" {
+@test "STRAND PAGE: every strand variant pages (recycle-dead PANE GONE / SURFACE GONE, relaunch-failed, relaunch-refused)" {
   local c
   for c in "recycle-dead|HANDOFF-RECYCLE-DEAD (PANE GONE): pane 7 no longer exists" \
            "recycle-dead|HANDOFF-RECYCLE-DEAD (SURFACE GONE): pane 7 vanished" \
-           "recycle-relaunch-failed|HANDOFF-RECYCLE-RELAUNCH-FAILED: x"; do
+           "recycle-relaunch-failed|HANDOFF-RECYCLE-RELAUNCH-FAILED: x" \
+           "recycle-relaunch-refused|HANDOFF-RECYCLE-RELAUNCH-REFUSED: pane 7 now holds NO claude"; do
     alarm "${c%%|*}" 7 SID-7 "" "${c#*|}"
     [ "$status" -eq 0 ]
   done
-  [ "$(osa_posts)" -eq 3 ] || { cat "$OSA_LOG"; false; }
+  [ "$(osa_posts)" -eq 4 ] || { cat "$OSA_LOG"; false; }
+  grep -q ' · recycle-relaunch-refused · pane 7 ' "$OSA_LOG" || { cat "$OSA_LOG"; false; }
+}
+
+@test "STRAND PAGE wording: a pane with no claude in it 'is stranded', and the HANDLE leads the text" {
+  alarm recycle-relaunch-failed 44 DEAD-SID "" "HANDOFF-RECYCLE-RELAUNCH-FAILED: the pane is at a bare shell with NO claude"
+  local msg; msg="$(cat "$OSA_LOG")"
+  [[ "$msg" == *"pane 44 is stranded" ]] || { echo "$msg"; false; }
+  [[ "$msg" != *"needs attention"* ]] || { echo "$msg"; false; }
+  # handle FIRST: the 200-char cap cuts from the end, so the end is what a long path may lose
+  [[ "$msg" == *"/$(basename "$(records)") · recycle-relaunch-failed · "* ]] || { echo "$msg"; false; }
+  [[ "${msg%% · *}" == *"$(basename "$(records)")" ]] || { echo "$msg"; false; }
+}
+
+@test "STRAND PAGE wording: a recycle-dead whose claude is STILL RUNNING 'needs attention', never 'is stranded'" {
+  # rcy_dead_claim's `cc` verdict (handoff-fire.sh, the probe-verdict claims): the /exit did not land.
+  alarm recycle-dead 44 SID-44 "" "HANDOFF-RECYCLE-DEAD: pane 44 — the /exit did NOT land: claude is STILL RUNNING in this pane (probe verdict after 30s: cc), so no relaunch was typed and nothing is stranded yet"
+  local msg; msg="$(cat "$OSA_LOG")"
+  [[ "$msg" == *"pane 44 needs attention" ]] || { echo "$msg"; false; }
+  [[ "$msg" != *stranded* ]] || { echo "$msg"; false; }
+}
+
+@test "STRAND PAGE handle: the recovery packet, when the alarm names one, is the handle and comes first" {
+  alarm recycle-dead 44 SID-44 "" "HANDOFF-RECYCLE-DEAD: x" "" /pk/recycle-failed/SID-44.json
+  local msg; msg="$(cat "$OSA_LOG")"
+  [[ "$msg" == "/pk/recycle-failed/SID-44.json · recycle-dead · pane 44 is stranded" ]] || { echo "$msg"; false; }
 }
 
 @test "STRAND PAGE: the OS leg FAILS ⇒ the record says paged=failed:<rc>, and the caller still returns 0" {

@@ -2239,3 +2239,125 @@ truncated_tick() {
   truncated_tick
   [ "$(osa_posts)" -eq 2 ]                               # on again: retried, because nobody saw it
 }
+
+@test "strand rung · a record a live desk already READ (.seen) is not bannered, whatever its paged says" {
+  export CC_SWEEP_OS_CHANNEL=auto
+  mk_strand alarm-read.json recycle-relaunch-failed failed:3
+  mkdir -p "$CC_SWEEP_SEEN_DIR"; : > "$CC_SWEEP_SEEN_DIR/alarm-read.json.seen"
+  mk_strand alarm-unread.json recycle-relaunch-failed failed:3
+  truncated_tick
+  [ "$status" -eq 0 ]
+  [ "$(osa_posts)" -eq 1 ] || { cat "$OSA_LOG"; false; }    # the unread one only — the rung is live
+  grep -q 'alarm-unread.json' "$OSA_LOG"
+  ! grep -q 'alarm-read.json' "$OSA_LOG" || false
+}
+
+# ── Ported from 36a68fc68 (fix/recycle-kitty-w2-sweep-strand-rung): ORDER, observed ───────────────
+# A tick self-bounding at 0b also passes with the rung placed AFTER 0a, so the truncated ticks above
+# cannot see the rung drift below §0a. Witness stubs for the tick's first arm (settings-drift-assert,
+# §0a-i) and 0a's own arm (cloud-refusal-route) record whether a banner was ALREADY posted when each
+# started, and a mutant control moves the call to just above the 0b checkpoint. Re-keyed to this
+# rung's row schema (fired + rung:"strand" + records[]) and `.bannered` damping.
+strand_env() {
+  export CC_SWEEP_OS_CHANNEL=auto
+  # The banner seam. $3 is the message alone (`osascript - <title> <message>`), so its length is
+  # the length the operator's banner would carry. STRAND_OSA_RC makes the OS leg fail.
+  export CC_SWEEP_OSASCRIPT="$BATS_TEST_TMPDIR/strand-osascript"
+  cat > "$CC_SWEEP_OSASCRIPT" <<'SH'
+#!/bin/bash
+cat >/dev/null
+[ "${STRAND_OSA_RC:-0}" = 0 ] || exit "$STRAND_OSA_RC"
+printf '%s\n' "$3" >> "$OSA_LOG"
+SH
+  chmod +x "$CC_SWEEP_OSASCRIPT"
+  # lr-page's phone leg must never leave the box from a suite, whatever the caller's shell exports.
+  unset PUSHOVER_TOKEN PUSHOVER_USER
+  export LR_PAGE_CREDS="$BATS_TEST_TMPDIR/no-pushover.env"
+  export LR_PAGE_LOG="$BATS_TEST_TMPDIR/lr-pages.log"
+  # lr-page cuts its OS leg at 10 s; a loaded box can take that long to fork the stub.
+  export LR_PAGE_OS_TIMEOUT_S=20
+}
+strand_record() { # <basename> <class> [packet]  — the shape hf_alarm writes, 559-char command included
+  local cmd
+  cmd="Run manually in that pane: { cd /Users/x/Development/.worktrees/wt-pool-7 2>/dev/null || cd /Users/x/Development/app ; } && nocorrect CC_ACCOUNT_PINNED=1 CLAUDE_ISOLATION_SKIP=1 claude --effort high --strict-mcp-config --mcp-config=/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T//cc-mcp-userscope-.claude-next.json --settings=/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T//cc-mcp-decision-off--Users-x-Development--worktrees-wt-pool-7.json \"\$(cat /var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T//handoff-prompt-nb-9D2Ngh)\""
+  jq -cn --arg c "$2" --arg d "$cmd" --arg k "${3:-}" \
+    '{kind:"handoff-alarm", class:$c, pane:"44", sid:"6defb493-e229-4318-b0ab-86e7167c39e3", successor:"", detail:$d, ts:"2026-10-09T05:03:21Z", address:"sid:6defb493"}
+     + (if $k == "" then {} else {packet:$k} end)' > "$CC_HANDOFF_ALARM_DIR/$1"
+  touch -t "$(ago 1H)" "$CC_HANDOFF_ALARM_DIR/$1"   # past the rung's min age: hf_alarm's own page is done
+}
+# strand_overrun_tree [sweep] — a DEPLOYED-path copy (only that path runs 0a's acting arms) whose
+# 0a arm outlasts the tick's self-bound. The first arm of the tick and 0a's own arm each record
+# whether a banner had ALREADY been posted when they started: order observed, not inferred.
+strand_overrun_tree() {
+  local cfg="$BATS_TEST_TMPDIR/cfg-strand" d t
+  d="$cfg/scripts"; mkdir -p "$d/lib" "$d/limit-recover"
+  export CLAUDE_CONFIG_DIR="$cfg"
+  export CC_CLOUD_STATE="$BATS_TEST_TMPDIR/cloudstate-strand"; mkdir -p "$CC_CLOUD_STATE"
+  export STRAND_WITNESS="$BATS_TEST_TMPDIR/strand-witness"; : > "$STRAND_WITNESS"
+  cp "${1:-$SWEEP}" "$d/autonomy-sweep.sh"; chmod +x "$d/autonomy-sweep.sh"
+  cp "$REPO"/scripts/lib/*.sh "$d/lib/"
+  cp "$REPO/scripts/limit-recover/lr-page.sh" "$d/limit-recover/lr-page.sh"
+  for t in settings-drift-assert cloud-refusal-route; do
+    cat > "$d/$t.sh" <<STUB
+#!/bin/bash
+if [ -s "\$OSA_LOG" ]; then echo "$t banner=posted"; else echo "$t banner=absent"; fi >> "\$STRAND_WITNESS"
+STUB
+    chmod +x "$d/$t.sh"
+  done
+  echo 'sleep 2' >> "$d/cloud-refusal-route.sh"
+  STRAND_SWEEP="$d/autonomy-sweep.sh"
+}
+strand_rows() { jq -c 'select(.disposition=="fired" and .rung=="strand")' "$CC_IDL" 2>/dev/null; }
+
+@test "strand rung · a tick whose phase 0a OVERRUNS still banners a seeded recycle-relaunch-failed record, once" {
+  strand_env; strand_overrun_tree
+  local rec="alarm-20261009T050321Z-22463-28344.json"
+  # a real packet path's length (79 chars): the handle must fit the banner WITH it, not fall back
+  local packet="/Users/chrisren/.claude/recycle-failed/6defb493-e229-4318-b0ab-86e7167c39e3.json"
+  strand_record "$rec" recycle-relaunch-failed "$packet"
+  run env CC_SWEEP_SELF_BOUND_S=1 "${SWEEP_TO[@]}" bash "$STRAND_SWEEP"
+  [ "$status" -eq 0 ] || { echo "status=$status output=$output"; false; }
+  # the fixture reached the measured regime: 0a's segment cost more than the whole tick's bound,
+  # the tick ended at its FIRST checkpoint, and the ladder (the only other banner site) never ran
+  jq -e 'select(.disposition=="self-bound") | .stopped_before=="0b-author-death-join" and .elapsed_s > .bound_s' "$CC_IDL" >/dev/null
+  ! jq -e 'select(.disposition=="fired" and .rung!="strand")' "$CC_IDL" >/dev/null || false
+  # THE PROPERTY: one os-banner row for the record, and one banner
+  [ "$(strand_rows | jq -r 'select(.notified=="os-banner") | .records[]')" = "$rec" ] || { cat "$CC_IDL"; false; }
+  [ "$(osa_count)" -eq 1 ]
+  # …posted before the tick's first arm and before 0a's, not merely before the 0b checkpoint
+  grep -qx 'settings-drift-assert banner=posted' "$STRAND_WITNESS" || { cat "$STRAND_WITNESS"; false; }
+  grep -qx 'cloud-refusal-route banner=posted' "$STRAND_WITNESS" || { cat "$STRAND_WITNESS"; false; }
+  # a short handle the 200-char OS leg carries whole, LEADING the text, never the relaunch command
+  local msg; msg="$(cat "$OSA_LOG")"
+  [ "${#msg}" -le 200 ]
+  [[ "$msg" == "$packet · recycle-relaunch-failed · pane 44 is stranded" ]] || { echo "$msg"; false; }
+  [[ "$msg" != *"claude --effort"* ]] || false
+  [ "$(seen_count)" -eq 0 ]                # a banner is not a read: the record stays surfaced
+  # DAMPED per record: the record is still unread next tick and must not banner again
+  run env CC_SWEEP_SELF_BOUND_S=1 "${SWEEP_TO[@]}" bash "$STRAND_SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(osa_count)" -eq 1 ]
+  [ "$(strand_rows | wc -l | tr -d ' ')" -eq 1 ]
+}
+
+@test "strand rung CONTROL: the rung placed AFTER 0a posts only once 0a has already run" {
+  # The placement the skeptic showed the naive test cannot tell apart. Same fixture, the call MOVED
+  # to just above the 0b checkpoint: the banner still goes out, so only the witnesses separate it.
+  strand_env
+  local mutant="$BATS_TEST_TMPDIR/sweep-strand-late.sh"
+  SRC="$SWEEP" DST="$mutant" python3 - <<'PY'
+import os
+L = open(os.environ['SRC']).read().split('\n')
+i = next(n for n, l in enumerate(L) if l == 'strand_rung')
+del L[i]
+k = next(n for n, l in enumerate(L) if l == 'sweep_yield 0b-author-death-join')
+L[k:k] = ['strand_rung']
+open(os.environ['DST'], 'w').write('\n'.join(L))
+PY
+  strand_overrun_tree "$mutant"
+  strand_record alarm-late.json recycle-relaunch-failed
+  run env CC_SWEEP_SELF_BOUND_S=1 "${SWEEP_TO[@]}" bash "$STRAND_SWEEP"
+  [ "$status" -eq 0 ] || { echo "status=$status output=$output"; false; }
+  [ "$(osa_count)" -eq 1 ]                                   # the mutant's rung is live code…
+  grep -qx 'cloud-refusal-route banner=absent' "$STRAND_WITNESS" || { cat "$STRAND_WITNESS"; false; }   # …and it ran behind 0a
+}

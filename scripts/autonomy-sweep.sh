@@ -470,55 +470,70 @@ STRAND_MIN_AGE_S="${CC_SWEEP_STRAND_MIN_AGE_S:-60}"   # hf_alarm's own page (≤
 STRAND_MAX="${CC_SWEEP_STRAND_MAX:-3}"
 case "$STRAND_MIN_AGE_S" in ''|*[!0-9]*) STRAND_MIN_AGE_S=60 ;; esac
 case "$STRAND_MAX" in ''|*[!0-9]*) STRAND_MAX=3 ;; esac
-_st_os=0
-case "${CC_SWEEP_OS_CHANNEL:-auto}" in
-  off) ;;
-  on)  _st_os=1 ;;
-  *)   [ -x "${CC_SWEEP_OSASCRIPT:-/usr/bin/osascript}" ] && _st_os=1 ;;
-esac
-# A channel must exist before an attempt can mean anything: with the OS leg off and no phone
-# credentials, every tick would journal the same "failure" (r2 gates its phone leg the same way).
-if [ "${CC_SWEEP_STRAND_PAGE:-on}" != off ] && { [ "$_st_os" = 1 ] || [ -n "${PUSHOVER_TOKEN:-}" ] \
-     || [ -f "${LR_PAGE_CREDS:-$HOME/.config/lr-page/pushover.env}" ]; }; then
-  _st_lrp="${CC_SWEEP_LR_PAGE_BIN:-$_SWEEP_DIR/limit-recover/lr-page.sh}"
-  _st_now="$(date +%s 2>/dev/null || printf 0)"
-  _st_n=0; _st_names=""; _st_failed=""
+# The banner text is per VARIANT and leads with the handle (fix 7 review, 2026-10-11). Some
+# recycle-dead records say the /exit did not land and claude is STILL RUNNING, so "stranded" would
+# be false there; and the 200-char cap cuts from the END, so the handle goes first or it is the
+# first thing lost. The handle is the record's recovery packet when it names one, else the record.
+# The wording rule matches hf_alarm's (scripts/handoff-fire.sh, STRAND PAGE).
+strand_rung() {
+  local os=0 lrp now n=0 names="" failed="" f b c p k hd state msg
+  case "${CC_SWEEP_OS_CHANNEL:-auto}" in
+    off) ;;
+    on)  os=1 ;;
+    *)   [ -x "${CC_SWEEP_OSASCRIPT:-/usr/bin/osascript}" ] && os=1 ;;
+  esac
+  # A channel must exist before an attempt can mean anything: with the OS leg off and no phone
+  # credentials, every tick would journal the same "failure" (r2 gates its phone leg the same way).
+  [ "${CC_SWEEP_STRAND_PAGE:-on}" != off ] || return 0
+  [ "$os" = 1 ] || [ -n "${PUSHOVER_TOKEN:-}" ] || [ -f "${LR_PAGE_CREDS:-$HOME/.config/lr-page/pushover.env}" ] || return 0
+  lrp="${CC_SWEEP_LR_PAGE_BIN:-$_SWEEP_DIR/limit-recover/lr-page.sh}"
+  [ -f "$lrp" ] || return 0
+  now="$(date +%s 2>/dev/null || printf 0)"
   # ONE fork finds the candidates: both hf_alarm writers emit `"class":"<c>"` with no space.
-  while IFS= read -r _st_f; do
-    [ -n "$_st_f" ] && [ -f "$_st_lrp" ] || continue
-    _st_b="$(basename "$_st_f")"
-    [ -f "$SEEN_DIR/$_st_b.bannered" ] && continue
-    case "$(json_field "$_st_f" paged)" in
-      os-banner|phone) mkdir -p "$SEEN_DIR" 2>/dev/null; : > "$SEEN_DIR/$_st_b.bannered" 2>/dev/null; continue ;;
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    b="$(basename "$f")"
+    [ -f "$SEEN_DIR/$b.bannered" ] && continue
+    # A record a live desk already READ needs no banner, whatever `paged` says.
+    is_new "$f" || continue
+    case "$(json_field "$f" paged)" in
+      os-banner|phone) mkdir -p "$SEEN_DIR" 2>/dev/null; : > "$SEEN_DIR/$b.bannered" 2>/dev/null; continue ;;
     esac
-    [ $(( _st_now - $(file_mtime "$_st_f") )) -ge "$STRAND_MIN_AGE_S" ] || continue
-    [ "$_st_n" -lt "$STRAND_MAX" ] || break
-    _st_c="$(json_field "$_st_f" class)"; _st_p="$(json_field "$_st_f" pane)"
-    _st_hd="$HANDOFF_ALARM_DIR"; case "$_st_hd" in "$HOME"/*) _st_hd="~${_st_hd#"$HOME"}" ;; esac
-    _st_msg="$_st_c · pane $_st_p · its continuation is stranded · record $_st_hd/$_st_b"
+    [ $(( now - $(file_mtime "$f") )) -ge "$STRAND_MIN_AGE_S" ] || continue
+    [ "$n" -lt "$STRAND_MAX" ] || break
+    c="$(json_field "$f" class)"; p="$(json_field "$f" pane)"; k="$(json_field "$f" packet)"
+    if [ -z "$k" ]; then
+      hd="$HANDOFF_ALARM_DIR"; case "$hd" in "$HOME"/*) hd="~${hd#"$HOME"}" ;; esac
+      k="$hd/$b"
+    fi
+    state="is stranded"
+    grep -qE 'nothing is stranded|STILL RUNNING|claude is alive' "$f" 2>/dev/null && state="needs attention"
+    msg="$k · $c · pane $p $state"
     if LR_PAGE_OS_CHANNEL="${CC_SWEEP_OS_CHANNEL:-auto}" LR_PAGE_OSASCRIPT_BIN="${CC_SWEEP_OSASCRIPT:-/usr/bin/osascript}" \
-         sweep_bounded 35 bash "$_st_lrp" --title "stranded pane $_st_p" -- "${_st_msg:0:200}" >/dev/null 2>&1; then
-      mkdir -p "$SEEN_DIR" 2>/dev/null; : > "$SEEN_DIR/$_st_b.bannered" 2>/dev/null
-      _st_n=$((_st_n + 1)); _st_names="$_st_names $_st_b"
+         sweep_bounded 35 bash "$lrp" --title "pane $p $state" -- "${msg:0:200}" >/dev/null 2>&1; then
+      mkdir -p "$SEEN_DIR" 2>/dev/null; : > "$SEEN_DIR/$b.bannered" 2>/dev/null
+      n=$((n + 1)); names="$names $b"
     else
-      _st_failed="$_st_b"; break
+      failed="$b"; break
     fi
   done <<EOF
-$(grep -lE '"class":"(recycle-relaunch-failed|recycle-dead)"' "$HANDOFF_ALARM_DIR"/alarm-*.json 2>/dev/null)
+$(grep -lE '"class":"(recycle-relaunch-failed|recycle-relaunch-refused|recycle-dead)"' "$HANDOFF_ALARM_DIR"/alarm-*.json 2>/dev/null)
 EOF
-  if [ "$_st_n" -gt 0 ]; then
-    log_idl fired "$(jq -cn --arg summary "stranded pane(s):$_st_names" --argjson n "$_st_n" \
+  if [ "$n" -gt 0 ]; then
+    log_idl fired "$(jq -cn --arg summary "stranded pane(s):$names" --argjson n "$n" --arg r "${names# }" \
       '{notified:"os-banner",delivered:false,channel:"notification-center-advisory",bannered:$n,
-        rung:"strand",summary:$summary,
+        rung:"strand",records:($r | split(" ")),summary:$summary,
         why:"banner is not proof of read — records stay surfaced until something proves a reader"}')"
   fi
-  if [ -n "$_st_failed" ]; then
-    log_idl strand-page "$(jq -cn --arg r "$_st_failed" \
+  if [ -n "$failed" ]; then
+    log_idl strand-page "$(jq -cn --arg r "$failed" \
       '{delivered:false,record:$r,
         why:"lr-page put no strand banner in front of a human — the record stays unbannered and the next tick retries it"}')"
-    echo "autonomy-sweep: strand page FAILED for $_st_failed — will retry next tick" >&2
+    echo "autonomy-sweep: strand page FAILED for $failed — will retry next tick" >&2
   fi
-fi
+  return 0
+}
+strand_rung
 
 
 # ── 0a-i. CONFIG-DIR GUARDRAIL PARITY — hoisted above §0a, for the reason §0a itself records ──────
