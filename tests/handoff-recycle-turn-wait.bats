@@ -280,6 +280,20 @@ reads() { wc -l < "$READS" | tr -d ' '; }
   [ ! -s "$SENT_LOG" ]
 }
 
+@test "[RED] fix 5: the deferred child's retry ticket does not say the composer was unread 'while the turn was running'" {
+  screen_boxless; tx_tool_use
+  CALLER_PID="$DEAD_PID" run "$DRIVER" 3>&-
+  [ "$status" -eq 0 ]
+  event recycle-deferred-turn
+  tx_tool_result; tx_end_turn                            # the turn ends; the pane stays boxless
+  wait_for 15 test -f "$CC_RECYCLE_RETRY_DIR/sess-aaaa.json"
+  event recycle-turn-ended
+  why="$(jq -r .why "$CC_RECYCLE_RETRY_DIR/sess-aaaa.json")"
+  [[ "$why" != *"while the turn was running"* ]] || { echo "why=$why"; false; }
+  [[ "$why" == *"after the recycling turn had ended"* ]] || { echo "why=$why"; false; }
+  not armed; [ ! -s "$SENT_LOG" ]
+}
+
 # ── 2. the decision, as units ────────────────────────────────────────────────────────────────
 
 @test "settle: a Stop hook that blocks seconds after end_turn is a turn still running" {

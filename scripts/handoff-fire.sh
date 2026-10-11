@@ -4730,7 +4730,7 @@ hf_recycle_defer() { # $1=pane tty
   set +m
   disown "$dpid" 2>/dev/null || true
   printf '%s\n' "$dpid" > "$mark" 2>/dev/null || true
-  emit_recycle_event recycle-deferred-turn "" "$SID" "composer unreadable mid-turn on a self-recycle; waiter pid $dpid runs the recycle once the turn ends (log $dlog)" || true
+  emit_recycle_event recycle-deferred-turn "" "$SID" "composer unreadable with no box drawn (a running turn's shape) while the self-recycle's own tool call runs; waiter pid $dpid runs the recycle once the turn ends (log $dlog)" || true
   echo "→ recycle DEFERRED to the end of this turn: pane $SID's composer cannot be read while this tool call runs, so waiter pid $dpid (own process group) waits up to ${CC_RECYCLE_TURN_WAIT_S:-300}s for the turn to end, then proves the composer empty and types /exit. END YOUR TURN NOW and start no other work: a new prompt, a draft in the composer or a turn that keeps running holds it and leaves a retry ticket. Log: $dlog"
   trap - EXIT
   exit 0
@@ -17828,7 +17828,16 @@ recycle_composer_block() {
       hf_recycle_defer "$tty"
       rcy_composer_unreadable gate
       if [ "$RCY_REMOTE" != 1 ] && [ -z "${RESUME_LAUNCHER:-}" ]; then
-        hf_recycle_retry_ticket "$(cc_sid_for_pane "$SID" 2>/dev/null || true)" "$SID" "the composer could not be read while the turn was running" - "${PROMPT_FILE_ORIG:-${PROMPT_FILE:-}}" >&2 || true
+        # The ticket's sentence must be true where it is written (REPORT.md fix 5): the deferred child
+        # runs this gate AFTER the turn has ended, and a non-deferred run may not be inside a turn at
+        # all. "While the turn was running" led pane 134's session to blame its watcher.
+        # shellcheck disable=SC2031  # set by hf_recycle_defer's subshell, which IS the deferred child reading it here
+        if [ "${RCY_DEFERRED:-0}" = 1 ]; then
+          rcy_cg_why="the composer could not be read (no box drawn, or the pane did not answer) after the recycling turn had ended"
+        else
+          rcy_cg_why="the composer could not be read (no box drawn, or the pane did not answer) for the whole composer wait"
+        fi
+        hf_recycle_retry_ticket "$(cc_sid_for_pane "$SID" 2>/dev/null || true)" "$SID" "$rcy_cg_why" - "${PROMPT_FILE_ORIG:-${PROMPT_FILE:-}}" >&2 || true
       fi
       exit 1
     fi
