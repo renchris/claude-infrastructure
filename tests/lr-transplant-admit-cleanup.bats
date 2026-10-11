@@ -49,7 +49,9 @@ _evidence() { local d last=""; for d in "$LR_STATE_DIR/locks/$SID".failed-admit-
   [ ! -e "$TOMB" ] || { echo "a tombstone was written"; false; }
   local ev; ev="$(_evidence)"
   [ -n "$ev" ] || { ls -la "$LR_STATE_DIR/locks"; false; }
-  [ -f "$ev/$SID.jsonl" ] && [ -d "$ev/$SID" ] && [ -f "$ev/lock" ] || { ls -laR "$ev"; false; }
+  [ -f "$ev/$SID.jsonl" ] || { ls -laR "$ev"; false; }
+  [ -d "$ev/$SID" ] || { ls -laR "$ev"; false; }
+  [ -f "$ev/lock" ] || { ls -laR "$ev"; false; }
   [ "$(shasum -a 256 "$SRC" | cut -d' ' -f1)" = "$SRC_SHA" ] || { echo "source changed"; false; }
   [[ "$stderr" == *"released the lock and moved the partial target copy to $ev"* ]] || { echo "$stderr"; false; }
 }
@@ -84,6 +86,6 @@ _evidence() { local d last=""; for d in "$LR_STATE_DIR/locks/$SID".failed-admit-
   chmod 644 "$T/from/projects/slug/$SID/tool-results/b.txt"
   _admit --record-id R1
   [ "$status" -eq 0 ] || { echo "$stderr"; false; }
-  [ -e "$LOCK" ] && [ -e "$TOMB" ] && [ -e "$DST" ]
+  [ -e "$LOCK" ] && [ -e "$TOMB" ] && [ -e "$DST" ] || false
   [ -z "$(_evidence)" ]
 }
