@@ -172,7 +172,8 @@ cc-lr — find · recover · status · repair, for a limit-blocked session.
                              sessions through `move` (no model turn), then one verdict line per
                              session. --until-idle S also waits out sessions that are busy now.
                              --to auto (the default) lets the router choose per account.
-                             Exit 0 all rotated · 1 some not or still in flight · 3 usage.
+                             A recover the reconciler takes is counted as QUEUED, on its own line.
+                             Exit 0 all rotated (or queued) · 1 some not or still in flight · 3 usage.
   cc-lr switch [--target A|auto] [--dry-run]
                              move THIS pane's session to another account, in place: same
                              window, same uuid, new account. SELF only — no ref, no
@@ -475,12 +476,14 @@ sys.exit(2)' "$1"
 # one place: CL_RL_LIMITED_FILE holds one `cc-find --limited` answer for the whole invocation (the
 # resolver took 17.7 s on a loaded box, 2026-10-06, and four accounts would ask it four times), and
 # CL_RL_OUT collects what was started: `recover<TAB>sid<TAB>pane<TAB>run dir` per fired recovery,
-# `batch<TAB>id` per queued move batch.
+# `queued<TAB>sid<TAB>pane<TAB>request` per recover handed to the live reconciler, `batch<TAB>id` per
+# queued move batch. CL_RL_QF, when set, collects the sid of each recover that was only queued.
 CL_RL_LIMITED_FILE=""
 CL_RL_OUT=""
+CL_RL_QF=""
 cmd_recover_limited() { # [--account A] [--target T] [--until-idle S]
   local acct_f="" target="auto" dirs="" out rc sid pane acct cfg cwd live klass base n=0 fired=0 refused=0
-  local seen="" name cap cap_rc sw_target qrc=1 qf until_s=0
+  local seen="" name cap cap_rc sw_target qrc=1 qf until_s=0 qd queued=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --account) [ $# -ge 2 ] || { usage; exit 3; }; acct_f="$2"; shift 2 ;;
@@ -507,7 +510,8 @@ cmd_recover_limited() { # [--account A] [--target T] [--until-idle S]
       case " $dirs " in *" $base "*) ;; *) continue ;; esac
     fi
     n=$((n + 1)); seen="$seen $sid"
-    if ( cmd_recover "$sid" --target "$target" ${pane:+--source-pane "$pane"} ); then
+    [ -n "${qd:-}" ] || { qd="$(mktemp "${TMPDIR:-/tmp}/cc-lr-rlq.XXXXXX" 2>/dev/null)" || qd=/dev/null; }
+    if ( CL_RL_QF="$qd" cmd_recover "$sid" --target "$target" ${pane:+--source-pane "$pane"} ); then
       fired=$((fired + 1))
     else
       refused=$((refused + 1))
@@ -515,10 +519,13 @@ cmd_recover_limited() { # [--account A] [--target T] [--until-idle S]
   done <<EOF_ROWS
 $out
 EOF_ROWS
+  # THE QUEUED SHARE (B1-3, 2026-10-11): while the reconciler is live a recover QUEUES and returns 0,
+  # so it counted as fired with no run to wait on. Said apart so nobody waits for a verdict.txt.
+  if [ -n "${qd:-}" ] && [ "$qd" != /dev/null ]; then queued="$(grep -c . "$qd" 2>/dev/null || true)"; rm -f "$qd"; fi
   if [ "$n" -eq 0 ]; then
     echo "cc-lr: no LIMITED session${acct_f:+ on $acct_f} — nothing to recover."
   else
-    echo "cc-lr: ${fired} fired, ${refused} refused of ${n} limited session(s)${acct_f:+ on $acct_f}. Verdicts arrive as mail; END THE TURN."
+    echo "cc-lr: ${fired} fired, ${refused} refused of ${n} limited session(s)${acct_f:+ on $acct_f}$([ "${queued:-0}" -gt 0 ] && printf ' (%s of the fired QUEUED for the reconciler, which drives each at its reset)' "$queued"). Verdicts arrive as mail; END THE TURN."
   fi
 
   # ── THE IDLE HALF (2026-09-27). "Recover account N" means every session on it, and at a cap an
@@ -602,6 +609,8 @@ EOF
   # than ours), BEFORE the mutex: a queued request takes no lock and fires nothing.
   if lr_recon_live; then
     cl_recon_queue "$sid" recover "${pane:--}" "$cfg" "$([ "$target" = auto ] || printf '%s' "$target")"
+    [ -z "$CL_RL_OUT" ] || printf 'queued\t%s\t%s\t%s\n' "$sid" "${pane:--}" "$REQ_DIR/$sid.cc-lr.json" >> "$CL_RL_OUT"
+    [ -z "$CL_RL_QF" ] || printf '%s\n' "$sid" >> "$CL_RL_QF"
     return 0
   fi
   cl_fence_or_refuse "$sid"
@@ -1580,7 +1589,7 @@ cl_rotate_verdict_line() { # <pane> <sid> <run dir> → one line from the recove
 }
 cmd_rotate() {
   local list=0 all=0 acct_f="" to="auto" until_s=0 wait_s="${CC_LR_ROTATE_WAIT_S:-600}" json=0
-  local accts="" a rc lf nf rf of t n_rec n_bat good=0 bad=0 left deadline last_kick now seen=" "
+  local accts="" a rc lf nf rf of t n_rec n_bat n_q good=0 bad=0 left deadline last_kick now seen=" "
   local kind x1 x2 x3 bdir key v
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1650,8 +1659,9 @@ cmd_rotate() {
     ( cmd_recover_limited --account "$a" --target "$t" --until-idle "$until_s" ) || true
   done
   n_rec="$(awk -F'\t' '$1 == "recover"' "$of" | grep -c . || true)"; n_bat="$(awk -F'\t' '$1 == "batch"' "$of" | grep -c . || true)"
+  n_q="$(awk -F'\t' '$1 == "queued"' "$of" | grep -c . || true)"
   printf -- '── verdicts ──\n'
-  if [ "$n_rec" -eq 0 ] && [ "$n_bat" -eq 0 ]; then
+  if [ "$n_rec" -eq 0 ] && [ "$n_bat" -eq 0 ] && [ "$n_q" -eq 0 ]; then
     echo "cc-lr rotate: nothing was started — no limited session and no capped account with a movable session in scope."
     cl_bounds_line
     return 1
@@ -1694,12 +1704,18 @@ EOF
     sleep "${CC_LR_MOVE_POLL_S:-3}"
   done
   printf 'cc-lr rotate: %s rotated · %s not · %s still in flight\n' "$good" "$bad" "$left"
+  # THE FOURTH BUCKET, on its own line (B1-3): a recover the live reconciler took has no run here to
+  # wait on — the reconciler drives it at its reset and its verdict reaches cc-lr status, not this.
+  if [ "$n_q" -gt 0 ]; then
+    printf 'cc-lr rotate: %s queued for the reconciler — it drives each at its reset; read its verdict with:\n' "$n_q"
+    awk -F'\t' '$1 == "queued" { printf "    cc-lr status %s\n", substr($2, 1, 8) }' "$of"
+  fi
   if [ "$left" -gt 0 ]; then
     echo "  in flight after ${wait_s}s; the detached drivers and workers keep running, and each verdict is on disk:"
     awk -F'\t' '$1 == "recover" { printf "    cc-lr status %s\n", substr($2, 1, 8) } $1 == "batch" { printf "    cc-lr move --status %s\n", $2 }' "$of"
   fi
   cl_bounds_line
-  [ "$left" -eq 0 ] && [ "$bad" -eq 0 ] && [ "$good" -gt 0 ]
+  [ "$left" -eq 0 ] && [ "$bad" -eq 0 ] && { [ "$good" -gt 0 ] || [ "$n_q" -gt 0 ]; }
 }
 
 cmd_switch() {
