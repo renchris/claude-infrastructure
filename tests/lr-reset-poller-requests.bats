@@ -51,6 +51,7 @@ STUB
   cat > "$LR_FLEET_BIN" <<'STUB'
 #!/bin/bash
 printf '%s\n' "$*" >> "${FLEET_LOG:?}"
+[ -z "${FLEET_ENV_LOG:-}" ] || printf 'notify=%s\n' "${LR_FLEET_NOTIFY_PANE-UNSET}" >> "$FLEET_ENV_LOG"
 _d=0; for _a in "$@"; do [ "$_a" = "--detach" ] && _d=1; done
 if [ "$_d" = 1 ]; then
   echo "lr-fleet: DETACHED — driver pid ${FLEET_DRIVER_PID:-4242} is recovering; the verdict arrives as mail."
@@ -63,6 +64,9 @@ exit "${FLEET_RC:-0}"
 STUB
   chmod +x "$LR_FLEET_BIN"
   export FLEET_LOG="$BATS_TEST_TMPDIR/fleet.log"; : > "$FLEET_LOG"
+  # What the dispatched driver INHERITED as its reply-to (D3): the env, not the argv.
+  export FLEET_ENV_LOG="$BATS_TEST_TMPDIR/fleet-env.log"; : > "$FLEET_ENV_LOG"
+  unset LR_FLEET_NOTIFY_PANE
   # The "driver" the stub names must be ALIVE for as long as the case runs: the poller re-stamps the
   # claim with it (D2), and a dead one is stolen at once. The bats process outlives every tick.
   export FLEET_DRIVER_PID="$$"
@@ -665,4 +669,41 @@ cclr_rq() { # $1=extra JSON object merged into the real cc-lr shape
   cclr_rq '{"source_pane":"700"}'
   tick
   grep -q -- "--source-pane 700 " "$FLEET_LOG" || { cat "$FLEET_LOG"; plog; false; }
+}
+
+@test "[RED] D3: a cc-lr request with requester_pane 225 dispatches with LR_FLEET_NOTIFY_PANE=225" {
+  cclr_rq '{"requester_pane":"225","requester_sid":"aaaaaaaa-0000-4000-8000-000000000225"}'
+  tick
+  [ "$(cat "$FLEET_ENV_LOG")" = "notify=225" ] || { cat "$FLEET_ENV_LOG"; cat "$FLEET_LOG"; plog; false; }
+}
+
+@test "D3: a stop-failure-marker request never carries a reply-to, even one inherited or written into it" {
+  : > "$STATE/autorecover.on"
+  rq "$SID" <<EOF
+{"sid":"$SID","requested_by":"stop-failure-marker","source_pane":"616","requester_pane":"225","transcript_path":"$(lim_tx "$SID")"}
+EOF
+  LR_FLEET_NOTIFY_PANE=999 tick
+  grep -q -- "--one $SID" "$FLEET_LOG" || { cat "$FLEET_LOG"; plog; false; }
+  [ "$(cat "$FLEET_ENV_LOG")" = "notify=UNSET" ] || { cat "$FLEET_ENV_LOG"; false; }
+}
+
+@test "D3: a cc-lr request with no requester_pane (the pre-wave-A shape) dispatches with no reply-to" {
+  cclr_rq
+  tick
+  grep -q -- "--one $SID" "$FLEET_LOG" || { cat "$FLEET_LOG"; plog; false; }
+  [ "$(cat "$FLEET_ENV_LOG")" = "notify=UNSET" ] || { cat "$FLEET_ENV_LOG"; false; }
+}
+
+@test "D3: a requester in the subject's own pane is never the reply-to" {
+  cclr_rq '{"requester_pane":"616"}'
+  tick
+  grep -q -- "--one $SID" "$FLEET_LOG" || { cat "$FLEET_LOG"; plog; false; }
+  [ "$(cat "$FLEET_ENV_LOG")" = "notify=UNSET" ] || { cat "$FLEET_ENV_LOG"; false; }
+}
+
+@test "D3: a requester that is the subject session itself is never the reply-to" {
+  cclr_rq "{\"requester_pane\":\"225\",\"requester_sid\":\"$SID\"}"
+  tick
+  grep -q -- "--one $SID" "$FLEET_LOG" || { cat "$FLEET_LOG"; plog; false; }
+  [ "$(cat "$FLEET_ENV_LOG")" = "notify=UNSET" ] || { cat "$FLEET_ENV_LOG"; plog; false; }
 }

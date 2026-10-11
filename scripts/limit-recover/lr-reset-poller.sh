@@ -1218,9 +1218,9 @@ if not isinstance(d,dict): raise SystemExit(1)
 sys.stdout.write("".join(str(d.get(k) or "")+"\0"
   for k in ("sid","kind","mode","target","source_pane","requested_by","prompt_file",
             "transcript_path","attempts","last_attempt_epoch","reset_at_epoch","account",
-            "pane")))
+            "pane","requester_pane","requester_sid","origin_class")))
 ' "$_rq" 2>/dev/null)
-  if (( ${#_rqf[@]} != 13 )) || [[ -z "${_rqf[0]}" ]]; then
+  if (( ${#_rqf[@]} != 16 )) || [[ -z "${_rqf[0]}" ]]; then
     log "REQUEST-SKIP $_rq_name — unreadable or no sid; parked as malformed"
     mv "$_rq" "$RESULTS/${_rq_name%.json}.malformed.json" 2>/dev/null || true; continue
   fi
@@ -1232,6 +1232,15 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
   # 2026-10-11): read either, the explicit `.source_pane` first. "-" is cc-lr's "no pane".
   [[ -n "$_rq_pane" ]] || _rq_pane="${_rqf[12]}"
   [[ "$_rq_pane" != - ]] || _rq_pane=""
+  # THE REPLY-TO (D3): the pane of the session that RAN cc-lr, which wave A's writer records as
+  # .requester_pane. Only a cc-lr-origin request carries one, and never the subject itself: mailing
+  # a capped subject queues a turn on a capped account and can loop through a fresh stop-failure
+  # request (REPORT rank 1, B3-1 skeptic). Absent (an older cc-lr) ⇒ empty ⇒ no reply-to, as before.
+  _rq_reply=""
+  if [[ "$_rq_by" == cc-lr || "${_rqf[15]}" == cc-lr* ]] && [[ -n "${_rqf[13]}" ]] \
+     && [[ "${_rqf[13]}" != "$_rq_pane" && "${_rqf[14]}" != "$_rq_sid" ]]; then
+    _rq_reply="${_rqf[13]}"
+  fi
   [[ "$_rq_att" =~ ^[0-9]+$ ]] || _rq_att=0
   [[ "$_rq_last" =~ ^[0-9]+$ ]] || _rq_last=0
   [[ "$_rq_reset" =~ ^[0-9]+$ ]] || _rq_reset=0
@@ -1460,9 +1469,14 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
   case "$_rq_mode" in
     relaunch)
       [[ -z "$_rq_husk" ]] || log "STRANDED-HUSK $_rq_sid — moved, no successor runs, source pane ${_rq_husk%% *} (pid ${_rq_husk#* }) still holds it; dispatching the husk recovery"
-      log "REQUEST $_rq_sid — dispatching the in-place recovery DETACHED (target $_rq_target${_rq_pane:+, pane $_rq_pane}) for $_rq_by"
+      log "REQUEST $_rq_sid — dispatching the in-place recovery DETACHED (target $_rq_target${_rq_pane:+, pane $_rq_pane}) for $_rq_by${_rq_reply:+, verdict mailed to pane $_rq_reply}"
+      # The reply-to rides in the ENV lr-fleet's --detach reads it from (lr-fleet.sh, LR_FLEET_NOTIFY_PANE),
+      # set for the requester alone and UNSET otherwise, so a value this daemon happened to inherit
+      # can never address a hook-origin verdict.
+      if [[ -n "$_rq_reply" ]]; then _rq_env=(env "LR_FLEET_NOTIFY_PANE=$_rq_reply")
+      else _rq_env=(env -u LR_FLEET_NOTIFY_PANE); fi
       # shellcheck disable=SC2086  # deliberate: ${var:+--flag "val"} must word-split into 0 or 2 args
-      "$FLEET" --one "$_rq_sid" --target "$_rq_target" ${_rq_pane:+--source-pane "$_rq_pane"} --from-daemon --detach \
+      "${_rq_env[@]}" "$FLEET" --one "$_rq_sid" --target "$_rq_target" ${_rq_pane:+--source-pane "$_rq_pane"} --from-daemon --detach \
         > "$RESULTS/$_rq_sid.log" 2>&1 || _rq_rc=$?
       _rq_verdict=dispatched
       # rc != 0 from --detach means NOTHING was started (it refuses rather than blocking), so the
