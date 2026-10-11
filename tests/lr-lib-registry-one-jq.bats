@@ -71,7 +71,7 @@ same() {
   [ "$output" = "$(printf 'P-11\t%s\tclaude-next\t/w/a b\n12\t%s\t-\t/w/no-acct-no-pane\n13\t%s\t-\t\n17\t%s\t-\t/w/false' "$LIVE" "$LIVE" "$LIVE" "$LIVE")" ] \
     || { printf '%s\n' "$output" | cat -A 2>/dev/null || printf '%s\n' "$output"; false; }
 }
-@test "differential: canonical registry — byte-identical to the $TRUNK loop" {
+@test "differential: canonical registry — byte-identical to the 110ea9a64 loop" {
   load_ref; canonical; same
 }
 @test "differential: a malformed file falls back — byte-identical, and the loop really ran" {
