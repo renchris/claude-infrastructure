@@ -764,8 +764,24 @@ fi
 # every account's mailbox/ is a symlink to one directory, so the successor on the NEW account
 # drains the same inbox the source was reading. The recycle changes the sid by construction, so a
 # sid-keyed lane would deliver a voluntary switch's verdict to an address that no longer exists.
-lrh_verdict() { # <TOKEN> <proven yes|no> <note>
-  local tok="$1" proven="$2" note="${3:--}" msg to notify
+#
+# THE VERDICT IS ALSO THE RUN'S TERMINAL STATE (report lr-reliability-telemetry-speed 2026-10-10, D5).
+# It used to reach stderr and the mail only, never the bundle's events.jsonl that `cc-lr status`
+# reads: 151 of 224 bundles ended non-terminal, and 58d3640a read `admitted` for an hour after it
+# FAILED. So the verdict appends itself as a state before anything else.
+# An optional 4th argument writes a DIFFERENT, non-final state for a verdict that is not the run's
+# last word: the armed SWITCHED-UNPROVEN mailed before the recycle fires is followed by the real
+# outcome, and a sticky final-looking line there would hide a later FAILED or READY-NOT-SEEN from
+# any reader that treats SWITCHED as done. Only a verdict written without it counts as final.
+LRH_FINAL_WRITTEN=0
+lrh_verdict() { # <TOKEN> <proven yes|no> <note> [state, when the verdict is not final]
+  local tok="$1" proven="$2" note="${3:--}" interim="${4:-}" msg to notify
+  if [[ -n "$interim" ]]; then
+    lrh_state "$interim" verdict "verdict=$tok proven=$proven — $note"
+  else
+    lrh_state "$tok" verdict "proven=$proven — $note"
+    LRH_FINAL_WRITTEN=1
+  fi
   msg="lr-handoff ${SID:0:8}: verdict=$tok from=${LRH_FROM_ACCT:--} to=${TARGET:--} proven=$proven trigger=$LRH_CAUSE — $note"
   printf '%s\n' "$msg" >&2
   [[ $VOLUNTARY -eq 1 ]] || return 0
@@ -862,7 +878,28 @@ lrh_git_lock_drop() { # removes ONLY a lock this pid wrote — safe from the EXI
   LRH_GIT_LOCK=""
   return 0
 }
-trap 'lrh_git_lock_drop' EXIT
+# ── A RUN THAT ENDS WITHOUT A VERDICT STILL SAYS SO (D5) ─────────────────────────────────────────
+# Exits that never reach lrh_verdict — the launcher mint, an unreachable handoff-fire, the
+# verified-typing library, the --close-source pane checks, the parser refusals, a `set -e` death —
+# left the log on its last in-flight state forever. On a NON-ZERO exit with no final verdict from
+# this process, and no final state from any other writer, append `exited` with the rc. A zero exit
+# with no verdict is the spawn path handing the run to the relaunched pane, whose own lines
+# (READY, submitted) are the truthful tail; an `exited` there would only race them, so it is left.
+# Chained in front of the git-lock drop, never instead of it; every step is fail-soft.
+lrh_exit_state() { # $1=the exiting rc
+  local rc="${1:-0}" last=""
+  [[ "$rc" =~ ^[0-9]+$ && "$rc" -ne 0 ]] || return 0
+  [[ "${LRH_FINAL_WRITTEN:-0}" -eq 1 ]] && return 0
+  [[ -n "${BUNDLE:-}" && -d "${BUNDLE:-}" ]] || return 0
+  command -v lr_state_append >/dev/null 2>&1 || return 0
+  last="$(lr_state_current "$BUNDLE" 2>/dev/null || true)"
+  case "$last" in
+    NOTMOVED|FAILED*|STRANDED|SWITCHED|SWITCHED-UNPROVEN|REFUSED*|RECOVERED|DONE|ENGAGED|engaged|exited) return 0 ;;
+  esac
+  lr_state_append "$BUNDLE" exited exit "rc=$rc — the run ended with no verdict; its last state was ${last:-none}" || true
+  return 0
+}
+trap 'lrh_exit_state "$?"; lrh_git_lock_drop' EXIT
 
 # --- repo guards -----------------------------------------------------------
 # 🚨 NOTHING IN THIS BLOCK MAY ABORT THE RECOVERY (D1, 2026-09-28). Every read here is CONTEXT for
@@ -1894,7 +1931,7 @@ if [[ $IN_PLACE -eq 1 ]]; then
   # Consequence stated rather than hidden: a SELF switch mails exactly ONE verdict, the armed one,
   # and the terminal SWITCHED/STRANDED lines below are reached only when the process survives —
   # i.e. the driver form, or a recycle that refused before typing anything.
-  lrh_verdict SWITCHED-UNPROVEN no "armed: the transplant is done and the recycle is firing on pane ${SOURCE_PANE:-<this pane>}; the watcher carries the relaunch and its outcome lands in ~/.claude/logs/handoffs.jsonl"
+  lrh_verdict SWITCHED-UNPROVEN no "armed: the transplant is done and the recycle is firing on pane ${SOURCE_PANE:-<this pane>}; the watcher carries the relaunch and its outcome lands in ~/.claude/logs/handoffs.jsonl" recycle-armed
   LRH_RCY_ERR="$(mktemp "$(lrh_tmpdir)/lr-inplace-XXXXXX")" || LRH_RCY_ERR=/dev/null
   LRH_RCY_T0="$(date -u +%FT%TZ)"
   set +e

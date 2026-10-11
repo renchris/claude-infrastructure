@@ -142,3 +142,97 @@ last_state() { local ev; ev="$(events)"; [ -n "$ev" ] || return 1; tail -1 "$ev"
   [ ! -e "$lock" ] || { echo "lock still there"; false; }
   [ -f "$HOME/.claude-next/projects/-x-y/$SID.jsonl" ] || { echo "the source transcript is gone"; false; }
 }
+@test "D5 the D4 stand-down's NOTMOVED is the run's last state, not the admit or the armed line" {
+  cp "$REPO/scripts/limit-recover/lr-transplant.sh" "$LRD/lr-transplant.sh"; chmod +x "$LRD/lr-transplant.sh"
+  HF_RC=1 HF_ERR="!! recycle ABORTED: watcher heartbeat never appeared (log) — /exit NOT typed, session stays alive. Run manually: x" \
+    fire --record-id R1
+  [ "$status" -eq 6 ] || { echo "status=$status $output"; false; }
+  [ "$(last_state)" = NOTMOVED ] || { cat "$(events)"; false; }
+}
+
+# ── D5: every exit leaves a terminal line in the state log `cc-lr status` reads ──────────────────
+# Mutant (verdict half): drop the lrh_state call from lrh_verdict — every verdict row below reads
+# its last in-flight state again (`placed`, `recycle-armed`, `probed`). Mutant (trap half): restore
+# `trap 'lrh_git_lock_drop' EXIT` — the no-verdict rows end on their in-flight state.
+gen() {
+  run env PATH="$STUB:$PATH" CLAUDE_CONFIG_DIR="$HOME/.claude" \
+      "$HANDOFF" --sid "$SID" --target next2 --config-dir "$HOME/.claude-next" \
+      --cwd "$BATS_TEST_TMPDIR/plain" --no-transplant --print-only "$@"
+}
+@test "D5 verdict FAILED: a transplant that dies leaves FAILED as the last state (58d3640a read 'admitted')" {
+  printf '#!/bin/bash\necho "rsync: mkstempat tool-results/x: No such file" >&2\nexit 1\n' > "$LRD/lr-transplant.sh"
+  chmod +x "$LRD/lr-transplant.sh"
+  fire
+  [ "$status" -eq 1 ] || { echo "status=$status $output"; false; }
+  [ "$(last_state)" = FAILED ] || { cat "$(events)"; false; }
+  tail -1 "$(events)" | jq -e '.stage == "verdict" and (.detail | startswith("proven=no — lr-transplant exited 1"))' >/dev/null \
+    || { tail -1 "$(events)"; false; }
+}
+@test "D5 verdict SWITCHED: the armed line is the non-final recycle-armed, and the awaited SWITCHED is written LAST" {
+  fire
+  [ "$status" -eq 0 ] || { echo "status=$status $output"; false; }
+  local ev; ev="$(events)"
+  [ "$(last_state)" = SWITCHED ] || { cat "$ev"; false; }
+  # the armed verdict never writes a SWITCHED* state: a reader matching ^SWITCHED as done must not
+  # be able to stick on it ahead of the real outcome
+  [ "$(jq -r 'select(.stage == "verdict") | .state' "$ev" | tr '\n' ' ')" = "recycle-armed SWITCHED " ] || { cat "$ev"; false; }
+}
+@test "D5 verdict STRANDED: a recycle that fails over a RETIRED source ends STRANDED" {
+  : > "$HOME/.claude-next/projects/-x-y/$SID.jsonl.handed-off"
+  HF_RC=1 HF_ERR="!! recycle ABORTED: something after the confirm" fire
+  [ "$status" -eq 4 ] || { echo "status=$status $output"; false; }
+  [ "$(last_state)" = STRANDED ] || { cat "$(events)"; false; }
+}
+@test "D5 verdict FAILED after the armed line: an abort lr-transplant refuses ends FAILED, never recycle-armed" {
+  cat > "$LRD/lr-transplant.sh" <<'STUB'
+#!/bin/bash
+case " $* " in *" --phase abort "*) echo '{"ok":false,"reason":"target-held"}'; exit 2 ;; esac
+printf '{"ok":true,"target_transcript":"/dev/null"}\n'
+STUB
+  chmod +x "$LRD/lr-transplant.sh"
+  HF_RC=1 HF_ERR="!! recycle ABORTED: watcher heartbeat never appeared (log) — /exit NOT typed" fire
+  [ "$status" -eq 4 ] || { echo "status=$status $output"; false; }
+  [ "$(last_state)" = FAILED ] || { cat "$(events)"; false; }
+}
+@test "D5 no verdict: an unreachable handoff-fire (rc 4, transplant done) ends 'exited' with the rc" {
+  printf '#!/bin/bash\nexit 0\n' > "$BATS_TEST_TMPDIR/hf-noexec"; chmod 644 "$BATS_TEST_TMPDIR/hf-noexec"
+  CC_HANDOFF_FIRE_BIN="$BATS_TEST_TMPDIR/hf-noexec" fire
+  [ "$status" -eq 4 ] || { echo "status=$status $output"; false; }
+  [ "$(last_state)" = exited ] || { cat "$(events)"; false; }
+  tail -1 "$(events)" | jq -e '.stage == "exit" and (.detail | startswith("rc=4 — the run ended with no verdict; its last state was "))' >/dev/null \
+    || { tail -1 "$(events)"; false; }
+}
+@test "D5 no verdict: the live-parser refusal (rc 5) ends 'exited', and the rc is unchanged by the trap" {
+  printf '#!/bin/bash\n# --branch) --model) --effort) --permission-mode) --prompt)\n' > "$LRD/lr-fire-resume.sh"
+  LRH_LIVE_PARSER_CHECK=on gen --no-prompt
+  [ "$status" -eq 5 ] || { echo "status=$status $output"; false; }
+  [ "$(last_state)" = exited ] || { cat "$(events)" 2>&1; false; }
+  tail -1 "$(events)" | jq -e '.detail | startswith("rc=5 ")' >/dev/null || { tail -1 "$(events)"; false; }
+}
+@test "D5 no verdict: an audit that fails (rc 2) right after the bundle exists ends 'exited', last state none" {
+  printf 'import sys\nsys.exit(2)\n' > "$LRD/lr-audit.py"
+  fire
+  [ "$status" -eq 2 ] || { echo "status=$status $output"; false; }
+  [ "$(last_state)" = exited ] || { cat "$(events)" 2>&1; false; }
+  tail -1 "$(events)" | jq -e '.detail == "rc=2 — the run ended with no verdict; its last state was none"' >/dev/null || { tail -1 "$(events)"; false; }
+}
+@test "D5 CONTROL: a zero exit with no verdict (--print-only) writes no 'exited' line" {
+  gen
+  [ "$status" -eq 0 ] || { echo "status=$status $output"; false; }
+  local ev; ev="$(events)"
+  [ -z "$ev" ] || ! jq -e 'select(.state == "exited")' "$ev" >/dev/null || { cat "$ev"; false; }
+}
+@test "D5 CONTROL: a final state from another writer is not followed by 'exited'" {
+  # the exit-trap's disk check: a run whose log already ends FAILED (written by any writer) keeps it
+  printf '#!/bin/bash\nexit 0\n' > "$BATS_TEST_TMPDIR/hf-noexec"; chmod 644 "$BATS_TEST_TMPDIR/hf-noexec"
+  cat > "$LRD/lr-transplant.sh" <<'STUB'
+#!/bin/bash
+for b in "$HOME/.reso/limit-recover/"*/bundle-*; do :; done
+printf '{"ts":"x","state":"FAILED:other-writer","stage":"x","detail":"x"}\n' >> "$b/events.jsonl"
+printf '{"ok":true,"target_transcript":"/dev/null"}\n'
+STUB
+  chmod +x "$LRD/lr-transplant.sh"
+  CC_HANDOFF_FIRE_BIN="$BATS_TEST_TMPDIR/hf-noexec" fire
+  [ "$status" -eq 4 ] || { echo "status=$status $output"; false; }
+  [ "$(last_state)" = FAILED:other-writer ] || { cat "$(events)"; false; }
+}
