@@ -1,0 +1,3 @@
+cc-await-ping: stood down watcher pid 87716 on key [259]
+cc-await-ping: stood down watcher pid 87716 on key [2efbcde0-4149-405f-92a1-02b8c1b7b727]
+cc-await-ping: verdict=stood-down n=2 uuid=259 — 2 watcher(s) of THIS inbox signalled by pid; no pattern used, no sibling touched. Re-arm before going idle (unless a /goal is live): cc-await-ping --timeout 3300 --interval 15

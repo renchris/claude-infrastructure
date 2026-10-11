@@ -1,0 +1,24 @@
+claude tree at signal (standdown=0):
+73745 73465 /Users/chrisren/.claude-293/node_modules/.bin/claude --permission-mode auto --model claude-sonnet-5-5 --effort low --settings {"autoMemoryDirectory"
+ 1538 73745 ps -A -o pid= -o ppid=
+ 1547 73745 ps -A -o pid= -o ppid=
+ 2413 73745 ps -A -o pid= -o ppid=
+ 2420 73745 ps -A -o pid= -o ppid=
+78172 73745 /bin/bash /Users/chrisren/.claude/hooks/mailbox-wake-arm.sh
+78793 78172 /bin/bash /Users/chrisren/.claude/hooks/mailbox-wake-arm.sh
+78815 78793 /bin/bash /Users/chrisren/.claude/hooks/../bin/cc-await-ping 263 --timeout 14340 --interval 15
+ 8250 78815 sleep 15
+79255 78815 /Library/Frameworks/Python.framework/Versions/3.11/Resources/Python.app/Contents/MacOS/Python - /var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T//cc
+78752 73745 caffeinate -i -t 300
+79456 73745 node /Users/chrisren/Library/Application Support/fnm/aliases/default/bin/ms-365-mcp-server
+84096 73745 ps -A -o pid= -o ppid=
+84866 73745 ps -A -o pid= -o ppid=
+86927 73745 ps -A -o pid= -o ppid=
+93402 73745 /bin/zsh -c -l setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true && { \builtin unalias -- 'unsetenv'; \builtin unset -f -- 'unsetenv'; }
+93551 93402 sleep 1800
+98741 73745 ps -A -o pid= -o ppid=
+98749 73745 ps -A -o pid= -o ppid=
+98753 73745 ps -A -o pid= -o ppid=
+99406 73745 ps -A -o pid= -o ppid=
+99408 73745 ps -A -o pid= -o ppid=
+99412 73745 ps -A -o pid= -o ppid=

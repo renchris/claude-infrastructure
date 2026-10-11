@@ -1,0 +1,178 @@
+#!/bin/bash
+# shellcheck disable=SC2009,SC2010,SC2012,SC2018,SC2019  # evidence, kept as run on 2026-10-11; this line was added afterwards for the land gate
+# W6 SIGTERM proof harness. One run = one throwaway kitty tab this script creates and closes.
+# usage: harness.sh <label> <rest|midturn> [attrib|expect <resume-sid> <account>]
+# Types nothing into any pane. Signals exactly one pid: the claude process of its own tab.
+set -u
+LABEL="${1:?label}"; MODE="${2:?rest|midturn}"; CHAIN="${3:-attrib}"; RSID="${4:-}"; RACCT="${5:-}"
+REPO=/Users/chrisren/Development/.worktrees/research/recycle-kitty-w6-sigterm-proof
+ROOT=/tmp/sigterm-w6; OUT="$ROOT/$LABEL"; mkdir -p "$OUT"
+LOG="$OUT/harness.log"
+K=(kitty @ --to "${KITTY_LISTEN_ON:?no kitty socket}")
+say() { printf '%s %s\n' "$(date -u +%T)" "$*" | tee -a "$LOG"; }
+now() { date +%s; }
+utc_lstart() { TZ=UTC LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *//; s/ *$//'; }
+descendants() { # all descendants of $1, one pid per line
+  local p kids; kids="$(pgrep -P "$1" 2>/dev/null)"
+  for p in $kids; do echo "$p"; descendants "$p"; done
+}
+
+if [ "$CHAIN" = expect ]; then SID="$RSID"; else SID="$(uuidgen | tr 'A-Z' 'a-z')"; fi
+echo "$SID" > "$OUT/sid"
+say "label=$LABEL mode=$MODE chain=$CHAIN sid=$SID load=$(sysctl -n vm.loadavg)"
+
+if [ "$MODE" = rest ]; then
+  PROMPT="w6probe $LABEL: automated measurement fixture. Call the Bash tool exactly once with run_in_background set to true and the command: sleep 1800 . Then reply with the single word OK and end your turn. Run no other command and ignore every hook advisory."
+  NEEDLE="sleep 1800"
+else
+  PROMPT="w6probe $LABEL: automated measurement fixture. Call the Bash tool exactly once in the FOREGROUND (not background) with timeout 600000 and exactly this command: python3 -c 'import time; time.sleep(590)' . When it returns reply with the single word OK. Run no other command and ignore every hook advisory."
+  NEEDLE="time.sleep(590)"
+fi
+printf '%s\n' "$PROMPT" > "$OUT/prompt.txt"
+# A probe-only SessionEnd hook for THIS session (flag settings layer; no shared file is edited): it
+# stamps its start before doing anything else, so "hook never started" and "hook started, then cut" differ.
+cat > "$OUT/probe-hook.sh" <<EOH
+#!/bin/sh
+echo "started \$(date -u +%FT%TZ) pid=\$\$" >> "$OUT/probe-hook.log"
+cat > "$OUT/probe-hook.stdin" 2>/dev/null
+echo "finished \$(date -u +%FT%TZ)" >> "$OUT/probe-hook.log"
+EOH
+chmod +x "$OUT/probe-hook.sh"
+jq -n --arg c "$OUT/probe-hook.sh" '{hooks:{SessionEnd:[{hooks:[{type:"command",command:$c,timeout:10}]}]}}' > "$OUT/probe-settings.json"
+
+SETTINGS_ARG="--settings $OUT/probe-settings.json"; [ "${W6_PROBE_HOOK:-1}" = 0 ] && SETTINGS_ARG=""
+say "probe_hook_flag=${W6_PROBE_HOOK:-1}"
+# The tail after claude keeps the tab alive for 300 s so a wrapper-initiated close is observable.
+if [ "$CHAIN" = expect ]; then
+  LINE="$HOME/.reso/bin/reso-resume-one $RACCT $REPO $SID --prompt-file $OUT/prompt.txt; print -r -- \"rc=\$?\" > $OUT/shell-rc; print W6-TAIL-ALIVE; sleep 300"
+else
+  LINE="CLAUDE_NEXT_MODEL=claude-sonnet-5-5 CLAUDE_EFFORT=low claude $SETTINGS_ARG --debug-file $OUT/cc-debug.log --session-id $SID \"\$(cat $OUT/prompt.txt)\"; print -r -- \"rc=\$?\" > $OUT/shell-rc; print W6-TAIL-ALIVE; sleep 300"
+fi
+printf '%s\n' "$LINE" > "$OUT/launch-line.txt"
+WIN="$("${K[@]}" launch --type=tab --keep-focus --tab-title "w6-sigterm-proof-$LABEL" --cwd "$REPO" zsh -l -i -c "$LINE")" || { say "FATAL kitty launch failed"; exit 3; }
+echo "$WIN" > "$OUT/window-id"; say "launched window id=$WIN"
+closewin() { "${K[@]}" close-window --match "id:$WIN" >/dev/null 2>&1; }
+win_present() { "${K[@]}" ls 2>/dev/null | jq -e --argjson w "$WIN" '[.[].tabs[].windows[]|select(.id==$w)]|length>0' >/dev/null; }
+
+# ── locate the window's shell, its tty, the wrapper and the claude pid ──────────────────────────
+WPID=""; for _ in $(seq 1 60); do
+  WPID="$("${K[@]}" ls 2>/dev/null | jq -r --argjson w "$WIN" '.[].tabs[].windows[]|select(.id==$w)|.pid')"; [ -n "$WPID" ] && break; sleep 1; done
+TTY="$(ps -o tty= -p "$WPID" | tr -d ' ')"; say "window shell pid=$WPID tty=$TTY"
+CPID=""; DEADLINE=$(( $(now) + 900 ))
+while [ "$(now)" -lt "$DEADLINE" ]; do
+  # claude = a process naming this sid whose parent is the cc-close-attrib wrapper
+  while read -r p pp; do
+    if ps -o command= -p "$pp" 2>/dev/null | grep -q 'cc-close-attrib' && ! ps -o command= -p "$p" | grep -q '^[^ ]*bash .*cc-close-attrib'; then CPID="$p"; WRAP="$pp"; fi
+  done < <(ps -axo pid=,ppid=,command= | grep -F -- "$SID" | grep -v grep | awk '{print $1, $2}')
+  [ -n "$CPID" ] && break
+  win_present || { say "FATAL window vanished before claude started"; exit 4; }
+  [ -f "$OUT/shell-rc" ] && { say "FATAL launcher returned before claude ran: $(cat "$OUT/shell-rc")"; "${K[@]}" get-text --match "id:$WIN" --extent all > "$OUT/screen-fatal.txt" 2>&1; closewin; exit 5; }
+  sleep 2
+done
+[ -n "$CPID" ] || { say "FATAL no claude pid in 900s"; "${K[@]}" get-text --match "id:$WIN" --extent all > "$OUT/screen-fatal.txt" 2>&1; closewin; exit 6; }
+LSTART="$(utc_lstart "$CPID")"
+say "claude pid=$CPID lstart='$LSTART' wrapper=$WRAP claude_tty=$(ps -o tty= -p "$CPID" | tr -d ' ')"
+ps -o pid,ppid,pgid,tpgid,tty,lstart,command -p "$CPID" -p "$WRAP" -p "$WPID" > "$OUT/ps-chain.txt" 2>&1
+
+# ── wait for the fixture state ─────────────────────────────────────────────────────────────────
+T=""; BG=""; DEADLINE=$(( $(now) + 1200 ))
+while [ "$(now)" -lt "$DEADLINE" ]; do
+  [ -n "$T" ] || T="$(find "$HOME"/.claude*/projects -maxdepth 2 -name "$SID.jsonl" 2>/dev/null | head -1)"
+  BG=""; for d in $(descendants "$CPID"); do ps -o command= -p "$d" 2>/dev/null | grep -q -- "$NEEDLE" && BG="$BG $d"; done
+  if [ -n "$T" ] && [ -n "$BG" ]; then
+    if [ "$MODE" = midturn ]; then sleep 8; break; fi
+    # at rest: the last assistant record is a text reply and a system turn-end record follows it
+    if jq -s -e '
+        (map(select(.type=="assistant")) | last) as $a
+        | (($a.message.content|map(.type)|index("tool_use"))==null) and (($a.message.content|map(.type)|index("text"))!=null)
+          and ([.[]|select(.type=="system" and (.subtype=="turn_duration" or .subtype=="stop_hook_summary"))]|length>0)
+          and ((map(.type)|rindex("assistant")) < ([to_entries[]|select(.value.type=="system" and (.value.subtype=="turn_duration" or .value.subtype=="stop_hook_summary"))|.key]|last))
+      ' "$T" >/dev/null 2>&1; then
+      s1="$(stat -f%z "$T")"; sleep 12; s2="$(stat -f%z "$T")"
+      [ "$s1" = "$s2" ] && break
+    fi
+  fi
+  kill -0 "$CPID" 2>/dev/null || { say "FATAL claude exited on its own before the fixture state"; closewin; exit 7; }
+  sleep 3
+done
+[ -n "$BG" ] || { say "FATAL fixture state not reached in 1200s (T=$T)"; "${K[@]}" get-text --match "id:$WIN" --extent all > "$OUT/screen-fatal.txt" 2>&1; cp "$T" "$OUT/transcript-fatal.jsonl" 2>/dev/null; closewin; exit 8; }
+say "fixture state reached: transcript=$T bg_pids=$BG"
+
+# ── pre-signal evidence ────────────────────────────────────────────────────────────────────────
+cp "$T" "$OUT/transcript-pre.jsonl"
+PRE_LINES="$(wc -l < "$OUT/transcript-pre.jsonl" | tr -d ' ')"
+jq -c '[.type, (.subtype // .message.stop_reason // "")]' "$OUT/transcript-pre.jsonl" | tail -6 > "$OUT/pre-tail-types.txt"
+{ echo "claude tree before signal:"; for d in $CPID $(descendants "$CPID"); do ps -o pid=,ppid=,command= -p "$d" | cut -c1-200; done; } > "$OUT/tree-pre.txt"
+"${K[@]}" get-text --match "id:$WIN" --extent screen > "$OUT/screen-pre.txt" 2>&1
+SESSROW=absent; for c in "$HOME"/.claude*/sessions/"$CPID".json; do [ -f "$c" ] && { SESSROW="$(jq -c '{pid,sessionId,kind,status}' "$c")"; cp "$c" "$OUT/sessions-row-pre.json"; }; done
+say "per-pid sessions row before signal: $SESSROW"
+
+# ── stage the successor (lib/pane-successor.sh), with a live watcher this script owns ──────────
+sleep 1500 & WATCH=$!
+# shellcheck disable=SC1091
+. "$REPO/lib/pane-successor.sh"
+cat > "$OUT/successor.cmd" <<EOF
+printf 'SUCCESSOR-RAN label=%s tty=%s kitty_window=%s at %s\n' "$LABEL" "\$(tty)" "\${KITTY_WINDOW_ID:-}" "\$(date -u +%FT%TZ)" > "$OUT/successor-ran"
+EOF
+jq -n --arg pane "$WIN" --arg tty "/dev/$TTY" --arg sid "$SID" --argjson wp "$WATCH" --arg wl "$(utc_lstart "$WATCH")" \
+   --argjson ce "$(now)" '{pane:$pane,pane_tty:$tty,pred_sid:$sid,watcher_pid:$wp,watcher_lstart:$wl,created_epoch:$ce,ttl_s:900,mode:"recycle",token:"w6-proof"}' > "$OUT/successor-meta.json"
+if cc_pane_successor_stage "$TTY" "$OUT/successor.cmd" "$OUT/successor-meta.json"; then say "successor staged for $TTY"; else say "FATAL stage failed"; kill "$WATCH"; closewin; exit 9; fi
+SDIR="$(cc_pane_successor_dir)"; ls -la "$SDIR" | grep -F "$TTY" > "$OUT/stage-pre.txt"
+
+# ── optional arm: stand the probe session's own inbox watcher down first (keyed on MY window id) ──
+if [ "${W6_STANDDOWN:-0}" = 1 ]; then
+  "$HOME/.claude/bin/cc-await-ping" "$WIN" --stand-down > "$OUT/standdown.txt" 2>&1; say "stand-down rc=$? :: $(tail -1 "$OUT/standdown.txt" | cut -c1-120)"
+  sleep 4
+fi
+{ echo "claude tree at signal (standdown=${W6_STANDDOWN:-0}):"; for d in $CPID $(descendants "$CPID"); do ps -o pid=,ppid=,command= -p "$d" | cut -c1-160; done; } > "$OUT/tree-at-signal.txt"
+WATCHER_ALIVE=no; grep -q 'cc-await-ping\|mailbox-wake-arm' "$OUT/tree-at-signal.txt" && WATCHER_ALIVE=yes
+say "inbox watcher alive at signal: $WATCHER_ALIVE"
+# ── teardown marker, in the exact shape handoff-fire.sh write_teardown_marker emits for a recycle
+TD="$HOME/.claude/watchdog/teardown"; TS="$(date -u +%FT%TZ)"
+printf '{"key_kind":"sid","pane":"%s","sid":"%s","mode":"%s","ts":"%s"}\n'  "$WIN" "$SID" recycle "$TS" > "$TD/$SID.json"
+cp "$TD/$SID.json" "$OUT/teardown-marker.json"; say "marker written $TD/$SID.json"
+
+# ── SIGTERM to the pinned pid ──────────────────────────────────────────────────────────────────
+[ "$(utc_lstart "$CPID")" = "$LSTART" ] || { say "FATAL lstart pin mismatch — not signalling"; kill "$WATCH"; closewin; exit 10; }
+T0="$(perl -MTime::HiRes=time -e 'printf "%.3f", time')"
+kill -TERM "$CPID"; say "SIGTERM sent to $CPID"
+GONE=""; for _ in $(seq 1 1200); do kill -0 "$CPID" 2>/dev/null || { GONE=1; break; }; sleep 0.25; done
+T1="$(perl -MTime::HiRes=time -e 'printf "%.3f", time')"
+EXIT_S="$(echo "$T1 - $T0" | bc)"; say "claude gone=${GONE:-NO} after ${EXIT_S}s (no KILL escalation in this proof)"
+for _ in $(seq 1 120); do [ -f "$OUT/shell-rc" ] && break; sleep 0.5; done
+sleep 5
+
+# ── post-signal evidence ───────────────────────────────────────────────────────────────────────
+cp "$T" "$OUT/transcript-post.jsonl"
+POST_LINES="$(wc -l < "$OUT/transcript-post.jsonl" | tr -d ' ')"
+PREFIX=NO; head -c "$(stat -f%z "$OUT/transcript-pre.jsonl")" "$OUT/transcript-post.jsonl" | cmp -s - "$OUT/transcript-pre.jsonl" && PREFIX=yes
+BADJSON=0; while IFS= read -r l; do printf '%s' "$l" | jq -e . >/dev/null 2>&1 || BADJSON=$((BADJSON+1)); done < "$OUT/transcript-post.jsonl"
+jq -c '[.type, (.subtype // .message.stop_reason // ""), (.timestamp // "")]' "$OUT/transcript-post.jsonl" | tail -10 > "$OUT/post-tail-types.txt"
+BG_ALIVE=""; for b in $BG; do kill -0 "$b" 2>/dev/null && BG_ALIVE="$BG_ALIVE $b"; done
+CR="$(ls -t "$HOME/.claude/logs/close-records/$CPID-"*.json 2>/dev/null | head -1)"; [ -n "$CR" ] && cp "$CR" "$OUT/close-record.json"
+sleep 15; grep -F "sid=$SID" "$HOME/.claude/logs/sessions.log" > "$OUT/sessionend-log.txt" 2>/dev/null
+REGROW=absent; grep -l "$SID" "$HOME/.claude/cc-registry/"*.json >/dev/null 2>&1 && REGROW=still-present
+grep -n -i 'SessionEnd\|shutdown\|SIGTERM' "$OUT/cc-debug.log" 2>/dev/null | tail -40 > "$OUT/debug-shutdown.txt"
+ls -la "$SDIR" | grep -F "$TTY" > "$OUT/stage-post.txt"
+WINP=absent; win_present && WINP=present
+"${K[@]}" get-text --match "id:$WIN" --extent all 2>/dev/null | tail -40 > "$OUT/screen-post.txt"
+DEATH="$(now)"
+CLS_REAL="$(bash "$REPO/hooks/lead-crash-watchdog.sh" --classify "$SID" "$CPID" "$DEATH" 2>&1 | tr '\t' ' ')"
+mkdir -p "$ROOT/empty-teardown"
+CLS_CTRL="$(CC_TEARDOWN_DIR="$ROOT/empty-teardown" bash "$REPO/hooks/lead-crash-watchdog.sh" --classify "$SID" "$CPID" "$DEATH" 2>&1 | tr '\t' ' ')"
+{
+  echo "label=$LABEL mode=$MODE chain=$CHAIN sid=$SID window=$WIN tty=$TTY claude_pid=$CPID lstart='$LSTART'"
+  echo "A1 shell_rc=$(cat "$OUT/shell-rc" 2>/dev/null || echo MISSING) close_record=$( [ -n "$CR" ] && jq -c '{exit_code,signal,sig_reached_wrapper,record_state,successor_claim}' "$CR" || echo MISSING) exit_latency_s=$EXIT_S gone=${GONE:-NO}"
+  echo "A2 transcript pre_lines=$PRE_LINES post_lines=$POST_LINES pre_is_byte_prefix_of_post=$PREFIX unparseable_lines=$BADJSON sessionend_rows=$(wc -l < "$OUT/sessionend-log.txt" | tr -d ' ') :: $(tail -1 "$OUT/sessionend-log.txt") registry_row=$REGROW inbox_watcher_alive_at_signal=$WATCHER_ALIVE debug_sessionend_lines=$(grep -c 'SessionEnd:' "$OUT/cc-debug.log" 2>/dev/null) debug_137_lines=$(grep -c 'status code 137' "$OUT/cc-debug.log" 2>/dev/null) cfg=$(echo "$T" | sed 's|.*/\(\.claude[^/]*\)/projects.*|\1|') probe_hook=[$(tr '\n' ';' < "$OUT/probe-hook.log" 2>/dev/null)] probe_hook_stdin=$(jq -c '{hook_event_name,reason}' "$OUT/probe-hook.stdin" 2>/dev/null)"
+  echo "A3 bg_pids_before=$BG bg_pids_alive_after='${BG_ALIVE}'"
+  echo "A4 stage_post=$(awk '{print $NF}' "$OUT/stage-post.txt" | tr '\n' ' ') successor_ran=$(cat "$OUT/successor-ran" 2>/dev/null || echo NO)"
+  echo "A5 classify_with_marker='$CLS_REAL' classify_control_no_marker='$CLS_CTRL'"
+  echo "PIN sessions_row_before_signal=$SESSROW"
+  echo "A6 window_after_exit=$WINP CC_CLOSE_PANE_ON_EXIT=${CC_CLOSE_PANE_ON_EXIT:-unset}"
+} | tee "$OUT/RESULT.txt" | tee -a "$LOG"
+
+# ── cleanup: only what this script created ─────────────────────────────────────────────────────
+kill "$WATCH" 2>/dev/null
+closewin; sleep 2; win_present && say "WARN window $WIN still present after close" || say "window $WIN closed by harness"
+rm -f "$SDIR/$TTY.claimed."* "$SDIR/$TTY.json" "$SDIR/$TTY.cmd" "$SDIR/$TTY.revoked" 2>/dev/null
+say "done"

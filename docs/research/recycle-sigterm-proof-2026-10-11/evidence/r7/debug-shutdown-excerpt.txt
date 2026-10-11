@@ -1,0 +1,12 @@
+2026-10-11T06:54:01.221Z [DEBUG] [bridge:repl] Hook cleanup: starting teardown for session=cse_01EGaLHooW8ymEKdSkd1DDHd reason=host_exit
+2026-10-11T06:54:01.222Z [DEBUG] [REPL:unmount] REPL unmounting
+2026-10-11T06:54:01.247Z [DEBUG] [concurrentSessions] updatePidFile failed: ENOENT: no such file or directory, open '/Users/chrisren/.claude-next/sessions/8062.json'
+2026-10-11T06:54:01.764Z [DEBUG] [remote-bridge] Torn down (archive=200)
+2026-10-11T06:54:01.917Z [DEBUG] SessionEnd:other [~/.claude/hooks/session-save-id.sh] completed with status 0
+2026-10-11T06:54:01.946Z [DEBUG] SessionEnd:other [~/.claude/hooks/cc-permission-beacon.sh clear] completed with status 0
+2026-10-11T06:54:02.107Z [DEBUG] SessionEnd:other [~/.claude/hooks/live-session-registry.sh] completed with status 0
+2026-10-11T06:54:02.220Z [DEBUG] SessionEnd:other [~/.claude/hooks/session-deregister.sh] completed with status 0
+2026-10-11T06:54:03.577Z [DEBUG] SessionEnd:other [~/.claude/hooks/harvest-skill-end.sh] completed with status 0
+2026-10-11T06:54:03.810Z [DEBUG] SessionEnd:other [~/.claude/hooks/session-end.sh] completed with status 0
+2026-10-11T06:54:04.632Z [DEBUG] SessionEnd:other [~/.claude/hooks/session-index-end.sh] completed with status 0
+2026-10-11T06:54:04.633Z [DEBUG] hooks module cc-plugin-telemetry@builtin session.end settled in 0.5ms (native link, next() included)

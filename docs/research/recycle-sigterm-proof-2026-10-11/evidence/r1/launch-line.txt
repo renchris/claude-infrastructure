@@ -1,0 +1,1 @@
+CLAUDE_NEXT_MODEL=claude-sonnet-5-5 CLAUDE_EFFORT=low claude --session-id 50c592a9-cbef-4927-a363-a3126172532e "$(cat /tmp/sigterm-w6/r1/prompt.txt)"; print -r -- "rc=$?" > /tmp/sigterm-w6/r1/shell-rc; print W6-TAIL-ALIVE; sleep 300

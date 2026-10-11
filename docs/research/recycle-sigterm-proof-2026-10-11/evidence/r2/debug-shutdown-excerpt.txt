@@ -1,0 +1,5 @@
+2026-10-11T06:44:23.417Z [DEBUG] [bridge:repl] Hook cleanup: starting teardown for session=cse_018fyDLjjt78wgwQZHmqCzVU reason=host_exit
+2026-10-11T06:44:23.424Z [DEBUG] [REPL:unmount] REPL unmounting
+2026-10-11T06:44:23.474Z [DEBUG] [concurrentSessions] updatePidFile failed: ENOENT: no such file or directory, open '/Users/chrisren/.claude-tertiary/sessions/3880.json'
+2026-10-11T06:44:24.026Z [DEBUG] [remote-bridge] Torn down (archive=200)
+2026-10-11T06:44:24.029Z [ERROR] Hook SessionStart:startup (SessionStart) error: status code 137

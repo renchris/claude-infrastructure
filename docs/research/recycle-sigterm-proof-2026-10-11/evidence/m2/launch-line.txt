@@ -1,0 +1,1 @@
+CLAUDE_NEXT_MODEL=claude-sonnet-5-5 CLAUDE_EFFORT=low claude --settings /tmp/sigterm-w6/m2/probe-settings.json --debug-file /tmp/sigterm-w6/m2/cc-debug.log --session-id 2f46c39d-311d-454d-b0b3-d3c0d7822b18 "$(cat /tmp/sigterm-w6/m2/prompt.txt)"; print -r -- "rc=$?" > /tmp/sigterm-w6/m2/shell-rc; print W6-TAIL-ALIVE; sleep 300

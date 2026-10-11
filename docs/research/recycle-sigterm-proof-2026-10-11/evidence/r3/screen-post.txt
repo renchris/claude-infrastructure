@@ -1,0 +1,10 @@
+Restored session: Sun 11 Oct 2026 01:44:57 CDT
+◆ pinned — no fresh quota data
+config-mirror: 5 file(s) in .claude-next shadow ~/.claude (.last-update-result.json, .mcp-probe-cache, mcp-needs-auth-cache.json, +2 more) — with its panes closed: _cc_sync_account --convert /Users/ch
+Resume this session with:
+claude --resume b71394ea-c0a6-4377-b072-187a38965c8d
+[cc-close-attrib] session ended (rc 143) — running the staged successor /Users/chrisren/.claude/run/pane-successor/ttys057.claimed.13207
+Saving session...
+...saving history...truncating history files...
+...completed.
+W6-TAIL-ALIVE

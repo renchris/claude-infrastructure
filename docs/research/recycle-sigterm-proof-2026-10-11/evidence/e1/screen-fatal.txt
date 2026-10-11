@@ -1,0 +1,4 @@
+Restored session: Sun 11 Oct 2026 02:08:48 CDT
+reso-resume-one: capacity-admit: REFUSING resume b71394ea-c0a6-4377-b072-187a38965c8d on next — load 444.39 on 10 cores = 44.44/core > ceiling 2.0/core (refusal 1 of 3; once the budget is spent the next evaluation ADMITS and pages)
+  Session b71394ea-c0a6-4377-b072-187a38965c8d is DEFERRED, not lost — re-run once the box settles.
+W6-TAIL-ALIVE

@@ -1,0 +1,7 @@
+label=r2 mode=rest chain=attrib sid=238c5f7e-2dc6-4690-9e68-532bbc26cf2b window=253 tty=ttys057 claude_pid=3880 lstart='Sun Oct 11 06:43:37 2026'
+A1 shell_rc=rc=0 close_record={"exit_code":143,"signal":"15","sig_reached_wrapper":"","record_state":"closed","successor_claim":"/Users/chrisren/.claude/run/pane-successor/ttys057.claimed.3633"} exit_latency_s=1.439 gone=1
+A2 transcript pre_lines=46 post_lines=51 pre_is_byte_prefix_of_post=yes unparseable_lines=0 sessionend_rows=0 ::  registry_row=still-present
+A3 bg_pids_before= 17316 17327 bg_pids_alive_after=''
+A4 stage_post=ttys057.claimed.3633 ttys057.json  successor_ran=SUCCESSOR-RAN label=r2 tty=/dev/ttys057 kitty_window=253 at 2026-10-11T06:44:26Z
+A5 classify_with_marker='RECYCLE deliberate-teardown 424 51' classify_control_no_marker='CRASH external-sigterm 424 51'
+A6 window_after_exit=present CC_CLOSE_PANE_ON_EXIT=unset

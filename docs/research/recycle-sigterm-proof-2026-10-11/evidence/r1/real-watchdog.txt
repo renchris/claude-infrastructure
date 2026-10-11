@@ -1,0 +1,7 @@
+{"ts":"2026-10-11T06:41:02Z","sid":"50c592a9-cbef-4927-a363-a3126172532e","pid":93728,"class":"RECYCLE","cause":"deliberate-teardown","claude_version":"2.1.293","transcript_kb":427,"records":55,"mem_free_pct":"47","concurrent_claude":46,"stderr_log":"","exit_code":"143","signal":"15","stderr_tail_path":"/Users/chrisren/.claude/logs/close-records/93728-1791700789.json","version":"2.1.293"}
+[2026-10-11 01:39:53] registered session=50c592a9-cbef-4927-a363-a3126172532e pid=93728 tty=ttys057 pane=251
+[2026-10-11 01:39:53] spawned watchdog daemon pid=98268 for session=50c592a9-cbef-4927-a363-a3126172532e pid=93728
+[watchdog 50c592a9-cbef-4927-a363-a3126172532e] LEAD CRASH detected pid=93728
+[watchdog 50c592a9-cbef-4927-a363-a3126172532e] death class=RECYCLE cause=deliberate-teardown (427KB/55recs mem_free=47% concurrent=46)
+[2026-10-11 01:41:02] [watchdog 50c592a9-cbef-4927-a363-a3126172532e] pane verdict NOT PAINTED — the pane closed (ttys057 is gone), which already says it
+[watchdog 50c592a9-cbef-4927-a363-a3126172532e] crash — no teams affected (lead had no active team)

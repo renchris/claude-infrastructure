@@ -1,0 +1,11 @@
+claude tree before signal:
+78894 78615 /Users/chrisren/.claude-293/node_modules/.bin/claude --permission-mode auto --model claude-sonnet-5-5 --effort low --settings {"autoMemoryDirectory":"/Users/chrisren/.claude/projects/-User
+82469 78894 /bin/bash /Users/chrisren/.claude/hooks/mailbox-wake-arm.sh
+83072 82469 /bin/bash /Users/chrisren/.claude/hooks/mailbox-wake-arm.sh
+83073 83072 /bin/bash /Users/chrisren/.claude/hooks/../bin/cc-await-ping 256 --timeout 14340 --interval 15
+16010 83073 sleep 15
+83452 83073 /Library/Frameworks/Python.framework/Versions/3.11/Resources/Python.app/Contents/MacOS/Python - /var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T//cc-await-ping-sender.83073 83073
+83259 78894 node /Users/chrisren/Library/Application Support/fnm/aliases/default/bin/ms-365-mcp-server
+83700 78894 caffeinate -i -t 300
+91867 78894 /bin/zsh -c source /Users/chrisren/.claude-next/shell-snapshots/snapshot-zsh-1791701371511-6s08oi.sh 2>/dev/null || true && setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true &&
+91901 91867 sleep 1800

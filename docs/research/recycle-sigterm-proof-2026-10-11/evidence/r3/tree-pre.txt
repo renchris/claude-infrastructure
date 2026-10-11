@@ -1,0 +1,6 @@
+claude tree before signal:
+13454 13207 /Users/chrisren/.claude-293/node_modules/.bin/claude --permission-mode auto --model claude-sonnet-5-5 --effort low --settings {"autoMemoryDirectory":"/Users/chrisren/.claude/projects/-User
+17826 13454 node /Users/chrisren/Library/Application Support/fnm/aliases/default/bin/ms-365-mcp-server
+18385 13454 caffeinate -i -t 300
+25290 13454 /bin/zsh -c source /Users/chrisren/.claude-next/shell-snapshots/snapshot-zsh-1791701165116-gf4ggt.sh 2>/dev/null || true && setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true &&
+25295 25290 sleep 1800

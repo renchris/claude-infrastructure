@@ -1,0 +1,14 @@
+#!/bin/bash
+# shellcheck disable=SC2009,SC2010,SC2012,SC2018,SC2019  # evidence, kept as run on 2026-10-11; this line was added afterwards for the land gate
+# For recent typed-/exit recycles (handoffs.jsonl recycle-engaged rows), does sessions.log hold a SessionEnd row for the predecessor sid?
+L=~/.claude/logs/handoffs.jsonl; S=~/.claude/logs/sessions.log
+jq -r 'select(.class=="recycle-engaged" and .under_test!=true) | [(.ts // .at // .time // ""), (.prev_sid // "")] | @tsv' "$L" 2>/dev/null | tail -40 > /tmp/sigterm-w6/recycle-engaged.tsv
+n=0; hit=0
+while IFS=$'\t' read -r ts sid; do
+  [ -n "$sid" ] || continue; n=$((n+1))
+  row="$(grep -F "Session ended sid=$sid" "$S" | tail -1)"
+  [ -n "$row" ] && hit=$((hit+1))
+  printf '%s\t%s\t%s\n' "$ts" "$sid" "${row:-NO-SESSIONEND-ROW}"
+done < /tmp/sigterm-w6/recycle-engaged.tsv > /tmp/sigterm-w6/baserate.tsv
+echo "typed-/exit recycles checked: $n ; with a SessionEnd row: $hit"
+tail -12 /tmp/sigterm-w6/baserate.tsv | cut -c1-150

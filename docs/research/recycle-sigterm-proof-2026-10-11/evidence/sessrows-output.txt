@@ -1,0 +1,4 @@
+measured 2026-10-11T07:12Z by evidence/sessrows.sh.txt:
+live tty-attached claude processes: 40 ; with sessions/<pid>.json: 36 ; missing: 32924 28005 30062 32326
+sessions rows on disk: 53 ; whose pid is alive: 52
+   2 bg   51 interactive

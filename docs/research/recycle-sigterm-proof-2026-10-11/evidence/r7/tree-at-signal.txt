@@ -1,0 +1,6 @@
+claude tree at signal (standdown=1):
+ 8062  7897 /Users/chrisren/.claude-293/node_modules/.bin/claude --settings={"autoMemoryDirectory":"/Users/chrisren/.claude/projects/-Users-chrisren-Development
+12277  8062 node /Users/chrisren/Library/Application Support/fnm/aliases/default/bin/ms-365-mcp-server
+12916  8062 caffeinate -i -t 300
+22353  8062 /bin/zsh -c source /Users/chrisren/.claude-next/shell-snapshots/snapshot-zsh-1791701604592-vssn1s.sh 2>/dev/null || true && setopt NO_EXTENDED_GLOB 
+22359 22353 sleep 1800

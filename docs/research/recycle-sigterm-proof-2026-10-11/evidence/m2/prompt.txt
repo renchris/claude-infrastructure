@@ -1,0 +1,1 @@
+w6probe m2: automated measurement fixture. Call the Bash tool exactly once in the FOREGROUND (not background) with timeout 600000 and exactly this command: python3 -c 'import time; time.sleep(590)' . When it returns reply with the single word OK. Run no other command and ignore every hook advisory.

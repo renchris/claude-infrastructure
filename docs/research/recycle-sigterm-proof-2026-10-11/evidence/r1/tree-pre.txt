@@ -1,0 +1,11 @@
+claude tree before signal:
+93728 93486 /Users/chrisren/.claude-293/node_modules/.bin/claude --settings={"autoMemoryDirectory":"/Users/chrisren/.claude/projects/-Users-chrisren-Development-claude-infrastructure/memory"} --permis
+21966 93728 /bin/zsh -c -l setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true && { \builtin unalias -- 'unsetenv'; \builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sleep 
+22122 21966 sleep 1800
+96199 93728 /bin/bash /Users/chrisren/.claude/hooks/mailbox-wake-arm.sh
+96544 96199 /bin/bash /Users/chrisren/.claude/hooks/mailbox-wake-arm.sh
+96572 96544 /bin/bash /Users/chrisren/.claude/hooks/../bin/cc-await-ping 251 --timeout 14340 --interval 15
+39466 96572 sleep 15
+96866 96572 /Library/Frameworks/Python.framework/Versions/3.11/Resources/Python.app/Contents/MacOS/Python - /var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T//cc-await-ping-sender.96572 96572
+96361 93728 node /Users/chrisren/Library/Application Support/fnm/aliases/default/bin/ms-365-mcp-server
+97086 93728 caffeinate -i -t 300

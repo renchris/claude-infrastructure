@@ -1,0 +1,15 @@
+#!/bin/bash
+# shellcheck disable=SC2009,SC2010,SC2012,SC2018,SC2019  # evidence, kept as run on 2026-10-11; this line was added afterwards for the land gate
+# Read-only: do live interactive claude processes have a <config>/sessions/<pid>.json row (the pin 1ac887d20 uses)?
+live=0; have=0; miss=""
+while read -r p tty comm; do
+  case "$comm" in *claude.exe|*/claude) ;; *) continue ;; esac
+  [ "$tty" = "??" ] && continue
+  live=$((live+1)); f=""
+  for c in "$HOME"/.claude*/sessions/"$p".json; do [ -f "$c" ] && f="$c"; done
+  if [ -n "$f" ]; then have=$((have+1)); else miss="$miss $p"; fi
+done < <(ps -axo pid=,tty=,comm=)
+echo "live tty-attached claude processes: $live ; with sessions/<pid>.json: $have ; missing:${miss:- none}"
+rows=0; alive=0; for f in "$HOME"/.claude*/sessions/*.json; do [ -f "$f" ] || continue; rows=$((rows+1)); kill -0 "$(jq -r .pid "$f")" 2>/dev/null && alive=$((alive+1)); done
+echo "sessions rows on disk: $rows ; whose pid is alive: $alive"
+jq -r '.kind' "$HOME"/.claude*/sessions/*.json 2>/dev/null | sort | uniq -c | tr '\n' ' '; echo

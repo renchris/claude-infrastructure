@@ -1,0 +1,1 @@
+/Users/chrisren/.reso/bin/reso-resume-one next /Users/chrisren/Development/.worktrees/research/recycle-kitty-w6-sigterm-proof b71394ea-c0a6-4377-b072-187a38965c8d --prompt-file /tmp/sigterm-w6/e1/prompt.txt; print -r -- "rc=$?" > /tmp/sigterm-w6/e1/shell-rc; print W6-TAIL-ALIVE; sleep 300

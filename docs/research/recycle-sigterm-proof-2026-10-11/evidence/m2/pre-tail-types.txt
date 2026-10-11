@@ -1,0 +1,6 @@
+["ai-title",""]
+["mode",""]
+["permission-mode",""]
+["atis-latch",""]
+["bridge-session",""]
+["assistant","tool_use"]

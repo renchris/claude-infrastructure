@@ -1,0 +1,11 @@
+{
+  "pane": "254",
+  "pane_tty": "/dev/ttys057",
+  "pred_sid": "b71394ea-c0a6-4377-b072-187a38965c8d",
+  "watcher_pid": 46652,
+  "watcher_lstart": "Sun Oct 11 06:46:35 2026",
+  "created_epoch": 1791701195,
+  "ttl_s": 900,
+  "mode": "recycle",
+  "token": "w6-proof"
+}

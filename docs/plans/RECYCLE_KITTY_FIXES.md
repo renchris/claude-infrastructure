@@ -39,3 +39,12 @@ Scope (frozen): implement REPORT fixes 2-9, and fix 10 once its throwaway-pane S
   - **W3** (fix 8) continues: it is not in rgk's diff.
   - **W6** continues as the independent check of rgk's SIGTERM design.
   - **W4** shrinks to fix 8b (hold `/exit` under extreme load when the successor cannot be claimed). It is offered to rgk's lead, and fires from here only after rgk lands, since rgk owns `handoff-fire.sh` until then.
+### W6 — SIGTERM proof (2026-10-11): fix 10 may be built
+
+Report: `docs/research/recycle-sigterm-proof-2026-10-11/REPORT.md` (sha: `git log -1 --format=%h -- docs/research/recycle-sigterm-proof-2026-10-11/REPORT.md`).
+
+- Nine at-rest runs and one mid-turn run on 2.1.293, each in a throwaway kitty tab, at 44-54 runnable per core. At rest, 9 of 9: exit 143, transcript appended and not truncated, background shell stopped, staged successor claimed with nothing typed, real watchdog row `RECYCLE deliberate-teardown`, window kept.
+- **SessionEnd hooks ran in only 4 of 9.** Cause not found (the probe-hook flag and a live inbox watcher were both tested and refuted). Fix 10 must treat SessionEnd as best effort.
+- Two changes for the implementation in `1ac887d20` (W4 / `fix/recycle-gaps-kitty`): `HF_EXIT_SIGNAL_GRACE_S` (10 s) is shorter than Claude Code's own 15 s shutdown failsafe, so a slow exit is held as "ignored" and strands the pane, make it 30 s or more; and never stand the inbox watcher down before the signal, because the `asyncRewake` hook's exit starts a turn (measured, run r7).
+- Not measured live: the expect resume chain (`reso-resume-one` refused at its capacity gate, exit 9; not overridden). Its 143 handling is code read plus an offline Tcl check.
+- Learning: the shell that launched claude sees status 0, not 143, when a successor is claimed, because `cc-close-attrib` execs the successor. Read the close-record for the real code.

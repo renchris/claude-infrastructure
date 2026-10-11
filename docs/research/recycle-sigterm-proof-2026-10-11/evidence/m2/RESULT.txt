@@ -1,0 +1,7 @@
+label=m2 mode=midturn chain=attrib sid=2f46c39d-311d-454d-b0b3-d3c0d7822b18 window=261 tty=ttys037 claude_pid=54578 lstart='Sun Oct 11 07:07:43 2026'
+A1 shell_rc=rc=0 close_record={"exit_code":143,"signal":"15","sig_reached_wrapper":"","record_state":"closed","successor_claim":"/Users/chrisren/.claude/run/pane-successor/ttys037.claimed.54455"} exit_latency_s=5.221 gone=1
+A2 transcript pre_lines=33 post_lines=37 pre_is_byte_prefix_of_post=yes unparseable_lines=0 sessionend_rows=1 :: [2026-10-11 02:08:16] Session ended sid=2f46c39d-311d-454d-b0b3-d3c0d7822b18 reason=other registry_row=absent inbox_watcher_alive_at_signal=yes debug_sessionend_lines=8 debug_137_lines=1 cfg=.claude probe_hook=[started 2026-10-11T07:08:16Z pid=76839;finished 2026-10-11T07:08:16Z;] probe_hook_stdin={"hook_event_name":"SessionEnd","reason":"other"}
+A3 bg_pids_before= 66480 66487 bg_pids_alive_after=''
+A4 stage_post=ttys037.claimed.54455 ttys037.json  successor_ran=SUCCESSOR-RAN label=m2 tty=/dev/ttys037 kitty_window=261 at 2026-10-11T07:08:22Z
+A5 classify_with_marker='RECYCLE deliberate-teardown 330 37' classify_control_no_marker='CRASH external-sigterm 330 37'
+A6 window_after_exit=present CC_CLOSE_PANE_ON_EXIT=unset
