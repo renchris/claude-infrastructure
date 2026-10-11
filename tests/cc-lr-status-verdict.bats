@@ -59,7 +59,8 @@ reg_dead() { # a registry row whose pid is certainly gone
   printf '{"session_id":"%s","pid":999999,"paneUUID":"pane-%s"}\n' "$1" "${1:0:8}" > "$HOME/.claude/cc-registry/$1.json"
 }
 transcript() { # <sid> <json line>… — the session's transcript under the fixtured config dir
-  local d="$HOME/.claude-next/projects/$(printf '%s' "$BATS_TEST_TMPDIR/wt" | sed 's/[^A-Za-z0-9]/-/g')" sid="$1" l
+  local d sid="$1" l
+  d="$HOME/.claude-next/projects/$(printf '%s' "$BATS_TEST_TMPDIR/wt" | sed 's/[^A-Za-z0-9]/-/g')"
   mkdir -p "$d"; : > "$d/$sid.jsonl"
   shift; for l in "$@"; do printf '%s\n' "$l" >> "$d/$sid.jsonl"; done
 }
