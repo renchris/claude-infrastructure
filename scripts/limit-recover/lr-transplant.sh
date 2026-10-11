@@ -893,6 +893,38 @@ done <<< "$LRT_CHAIN"
 LRT_HOPS=$((LRT_HOPS-1))
 # The holder fragment is absent without a record id, so an ordinary lock stays byte-identical.
 LRT_HOLDER_JSON="$(lrt_holder_json)"
+# ══ A COPY THAT DIES RELEASES WHAT THIS RUN TOOK (report lr-reliability-telemetry-speed 2026-10-10,
+# ranks 8-9) ════════════════════════════════════════════════════════════════════════════════════
+# Everything from the lock write to the sha check runs under `set -euo pipefail`, so a mid-rsync
+# death (58d3640a: `mkstempat tool-results/… No such file`, rsync rc 23) exits here holding a lock
+# and a partial target copy, with no tombstone. The orphan lock then made the poller retire the
+# request as "transplanted" (lr_transplanted_to reads `to` off the lock) while the session sat
+# LIMITED, and a lead's mail woke it, not the rail.
+# So a run that writes a FRESH lock — no lock and no target transcript before it — arms an EXIT
+# trap for that window: on a non-zero exit it moves the partial copy into an evidence dir (never a
+# deletion) and releases the lock, but only a lock that still records THIS pid. A lock or a target
+# copy that predates the run (a second hop, a --force over a stale lock or copy) is someone else's
+# custody and is left exactly as trunk left it. Disarmed the moment the sha check passes.
+LRT_CLEANUP=0 LRT_DIR_FRESH=0
+[[ -e "$LOCK" || -e "$DST" ]] || LRT_CLEANUP=1
+[[ -e "$DST_DIR/$SID" ]] || LRT_DIR_FRESH=1
+lrt_admit_cleanup() { # $1=the exiting rc → always 0; acts only on a non-zero exit inside the window
+  local rc="${1:-0}" ev
+  [[ "$rc" -ne 0 && "${LRT_CLEANUP:-0}" -eq 1 ]] || return 0
+  [[ -e "$LOCK" && "$(lrt_lock_json pid)" == "$$" ]] || return 0
+  ev="$LOCK_DIR/$SID.failed-admit-$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir "$ev" 2>/dev/null || { ev="$ev.$$"; mkdir "$ev" 2>/dev/null || return 0; }
+  if [[ -e "$DST" ]] && ! mv "$DST" "$ev/" 2>/dev/null; then
+    echo "lr-transplant: the admit died (rc $rc) and the partial target copy $DST could not be moved aside — the lock is KEPT so nothing resumes it; release by hand: python3 ${BASH_SOURCE[0]%/*}/lr-lock.py release $SID --why …" >&2
+    return 0
+  fi
+  if [[ $LRT_DIR_FRESH -eq 1 && -d "$DST_DIR/$SID" ]]; then mv "$DST_DIR/$SID" "$ev/" 2>/dev/null || true; fi
+  cp "$LOCK" "$ev/lock" 2>/dev/null || true
+  rm -f "$LOCK" 2>/dev/null || true
+  echo "lr-transplant: the admit died (rc $rc) after this run took the lock and before the tombstone — released the lock and moved the partial target copy to $ev; the source is untouched and a retry is safe" >&2
+  return 0
+}
+[[ $LRT_CLEANUP -eq 0 ]] || trap 'lrt_admit_cleanup "$?"' EXIT
 printf '{"sid":"%s","from":"%s","to":"%s","ts":"%s","pid":%d,"host":"%s","owner":"%s","ts_first":"%s","chain":[%s]%s%s%s}\n' \
   "$SID" "$FROM" "$TO" "$NOW" "$$" "$(hostname -s)" "$TO" "$LRT_TS_FIRST" "$LRT_CHAIN_JSON" \
   "$LRT_CUSTODY_JSON" "$LRT_CAUSE_JSON" "$LRT_HOLDER_JSON" > "$LOCK"
@@ -916,6 +948,7 @@ SHA_DST=$(shasum -a 256 "$DST" | cut -d' ' -f1)
 if [[ "$SHA_SRC" != "$SHA_DST" ]]; then
   echo "lr-transplant: FATAL — sha mismatch after copy (src=$SHA_SRC dst=$SHA_DST)" >&2; exit 2
 fi
+LRT_CLEANUP=0   # the copy is proven; from here the lock and the target copy are the move's custody
 
 # ══ TOMBSTONE + RETIREMENT — THE CALLER ASSERTS IT, THIS SCRIPT NEVER INFERS IT (D3) ════════════
 # The guard here used to be `KEEP_SOURCE -ne 1 && "${CLAUDE_CODE_SESSION_ID:-}" != "$SID"` — the
