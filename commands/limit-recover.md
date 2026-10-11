@@ -134,6 +134,12 @@ to check the pane id you were handed. The verdict comes back as MAIL — a `cc-n
 `verdict=RECOVERED|UNPROVEN|PARTIAL|PARKED|FAILED` (UNPROVEN: the /exit landed but no live process re-registered the session within the bound), its note and the evidence dir — which `mailbox-drain`
 delivers at your next turn boundary like any other message.
 
+**END THE TURN stops the polling, not the ownership.** This session still owns each recovery until
+the session is working again (Iron rule 8). If no verdict has arrived by the deadline (the reset
+time plus 10 min, or the move bound), read `cc-lr status <ref>` once and re-drive whatever is not
+RECOVERED: a queued request, HELD, `admitted` past its bound and "no run" are not done, and the
+mail can be undeliverable (2026-10-11: "the verdict is on disk only").
+
 Measured 2026-09-19 (`docs/research/lr100p-2026-09-19/research/U11-today-run-audit.md` §2):
 recovering five sessions cost **98.7 minutes**, of which **24.4 lead turn-minutes were foreground
 `until` polling loops** — 17 of them, every one exiting 1–5 s *after* a `task-notification` that
@@ -253,6 +259,19 @@ discard is appended to `~/.claude/logs/composer-discarded.log`. Kill switch
    auto-resume, staggering re-runs, or deferring a workflow re-run are undoable in one command:
    take the safe one, name it in the report, and say how to reverse it. Ask only for a choice
    that cannot be undone.
+8. **Own the outcome until every session is working again.** Never recycle, hand off or close this
+   pane over a recovery without a RECOVERED or SWITCHED verdict, and never fold one into another
+   session's brief or goal: start research or fixes in a NEW pane. When a hand-off is forced (context
+   exhausted, or `Mode: handoff`, where the target session owns its own recovery), the successor's
+   FIRST job is the recoveries, stated as "each session working again" with a deadline and joined to
+   no other deliverable. Check the per-session holder (rule 6, the mutex, the reconciler fence) before
+   driving a session. Never keep a stranded session
+   down as a test case for a fix. A peer fixing the rail's code owns its files, not these sessions:
+   keep driving the recoveries, route only edits to the same scripts to it, and tell it what you did.
+   *(2026-10-11: a /limit-recover pane recycled into a research session with 4 recoveries queued; its
+   "step 0" idled past the 04:00Z reset and a third session deferred to it, so the sessions sat down
+   ~10 min after the reset until the operator asked. 2026-10-10: pane 168 was held down ~21 h "as the
+   field test" for a fix. `docs/research/proactive-parallel-ops-2026-10-11/REPORT.md`.)*
 
 ## Step 0 — ground truth (every mode, before any judgment)
 
@@ -685,7 +704,7 @@ no orphan, no ambiguity about which pane is which*). Script: `scripts/limit-reco
    so the very population it exists to report — a session with two rows — printed its whole block
    twice).
 
-Iron rules 1-7 bind unchanged: the fleet never lands a recovered session's work; every verdict is a disk
+Iron rules 1-8 bind unchanged: the fleet never lands a recovered session's work; every verdict is a disk
 read; a PARTIAL is reported as PARTIAL. The reset poller is the daemon half of the same design:
 registry-based liveness (a live original pane is NUDGED in place, never re-spawned), transplanted
 records retired as such, visible runner-rooted kitty windows via the resolved socket, tier carried

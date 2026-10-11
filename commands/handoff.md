@@ -169,7 +169,8 @@ two `─` rules are the canonical VISIBLE boundary; the fence is the invisible m
    readiness gate — it is the § Post-fire disposition taxonomy read PRE-fire: any live R-USER (open
    discussion, unanswered question), R-DECIDE (a decision the user must make before the new session
    starts — STOP-ASK surfaces, unfrozen scope), or R-WORK blocker (a doc the payload references that
-   doesn't exist yet)? If NONE → fire autonomously: write each track's payload to `/tmp/fire-<slug>.txt` and
+   doesn't exist yet, or operational work this pane started that has no terminal verdict: sessions it is
+   recovering, a deploy, a fire awaiting engagement)? If NONE → fire autonomously: write each track's payload to `/tmp/fire-<slug>.txt` and
    spawn via `~/.claude/scripts/handoff-fire.sh` — every track, not just the first. A SINGLE Mode-A
    track fires as `--recycle` (this pane exits + relaunches with the payload — § Autonomous fire item 4); multi-track,
    forks, and account switches spawn panes. If ANY open item → name them, HOLD fire, and fire once
@@ -207,6 +208,10 @@ shell (verified) — metacharacters and newlines arrive literally; only trailing
   / over-4000-char condition BEFORE firing, and prints `goal-arm verdict=set|unverified|abstained|held|mangled|unreachable`
   read back from the fired session's own transcript — never a claim. A failed arming leaves a
   session that has its brief and is working; it can never leave a goal with no brief.
+  **Never fold a time-critical op (sessions to recover, a reset-timed action) into a research or fix
+  goal or brief:** a background workflow defers the goal's evaluation, peers read the goal as
+  ownership, and "terminal verdict" is met by FAILED (2026-10-11). Finish it here, or fire it as its
+  own track whose goal is the outcome ("each session working again").
   > **📗 WRITE THE CONDITION TO ANTHROPIC'S RECIPE — it is documented, and our old template failed it.**
   > `/goal` has an official page (<https://code.claude.com/docs/en/goal>) whose normative section is
   > titled *"Write an effective condition"*. A condition that holds up across many turns has **three
@@ -455,7 +460,9 @@ with `--worktree <slug>` / `--cwd <dir>` — same pane, new dir, worktree provis
 fire machinery (pool-claim / cold-create / dep install / pre-trust). Before this, a wave-to-wave
 succession needing a fresh worktree could only be a new-pane fire, and the predecessor was left idle
 holding nothing — an ORIGIN session cannot self-close into its successor. Recycle first; spawn a new
-pane only for what a pane cannot BECOME (a different **model**). **A different ACCOUNT does not force
+pane only for what a pane cannot BECOME (a different **model**), or when this pane still holds
+time-critical ops with no terminal verdict (recoveries, a deploy): fire the new scope as a NEW pane and
+finish the ops here. **A different ACCOUNT does not force
 a new pane either, and never did (corrected 2026-09-22)** — this line used to say "account or model",
 which was false for the same reason the worktree clause above it was: a recycle is EXIT + RELAUNCH in
 the same pane, a NEW process, so launch-time identity is honoured rather than violated
@@ -757,7 +764,7 @@ rest. A pending mailbox line means an unprocessed ping: process it, `--ack`, re-
 | **R-PING** | awaiting a back-channel from fired session(s) `<slug…>` — *before* (about to fire more tracks), *during* (decision-gate / blocker pings), or *after* (completion ping) the peer's run. Armed by `--notify-back` (§ item 8); pair with a background `cc-await-ping` so discharge is event-driven, its `--timeout` the fallback wake — but NOT under a live `/goal` (it would disable the goal; the goal's own stop-blocking already keeps you awake) | the ping lands — or the timeout fires: check fired-pane liveness via `cc-sessions`; a DEAD peer escalates to R-DECIDE (the user rules on the lost track) | process the ping → re-emit disposition |
 | **R-USER** | the user is mid-conversation / a reply is plausibly incoming — their LAST message is unanswered, or they said "stay open" | their message is handled and no new reason opened; or they say "close it" / go idle after an offered close | re-emit |
 | **R-DECIDE** | a NAMED open decision / STOP-ASK only the user can rule on | the user rules | act on the ruling → re-emit |
-| **R-WORK** | NAMED current or follow-on work THIS session owns (not delegated to a fired track) | the work is done, verified, committed | re-emit |
+| **R-WORK** | NAMED current or follow-on work THIS session owns (not delegated to a fired track; time-critical ops this session started and folded into a successor of a different scope, such as a research session's "step 0", are NOT delegated) | the work is done, verified, committed | re-emit |
 | **R-DIRTY** | uncommitted in-scope changes in this worktree (self-close would refuse anyway) | a task-clean commit | re-emit |
 
 No other reason exists. "Just in case", "might be useful", "the user may want something" — BANNED:

@@ -204,7 +204,15 @@ subagents or agent teams, we need to."* Waiting for the operator to ask is itsel
 serialized lead that could have fanned out has already lost the time. **A "clean opportunity" =
 2+ pieces of work that are independent (no shared file, no ordering dependency) and each
 self-verifiable** — fan those out immediately, in ONE message so they run concurrently, and keep only
-the synthesis (and anything touching a file you own) on the lead.
+the synthesis (and anything touching a file you own) on the lead. **A peer's goal or ownership of an area
+claims the files it edits and the sessions it is actively driving, not the outcome:** do the rest now
+(run an existing tool, read, wake or recover a session no one holds: check the per-session holder first,
+such as the limit-recover mutex, transplant lock or reconciler fence, and split by session with any other
+actor before a mail wake, which nothing fences), route only same-file edits to the owner, and tell it
+what you did.
+*(2026-10-11: three sessions in a row left rate-limited sessions down because a research session owned
+the limit-recover rail; once the operator asked, the recovery took minutes and collided with nothing.
+`docs/research/proactive-parallel-ops-2026-10-11/REPORT.md`.)*
 
 🚨 **Parallelism has TWO units, and the bigger one is the DEFAULT for implementation.** Teammates
 (`Agent({name})`) and **dispatched sessions** (`handoff-fire.sh`) are both fan-out, but they differ
