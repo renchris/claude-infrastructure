@@ -183,6 +183,20 @@ print("OK")'
   [[ "$output" == *OK* ]] || false
 }
 
+@test "(k) a contradicted auth fact never zeroes capacity; a live auth fact and a contradicted 5h fact still do" {
+  run python3 -c "$LOAD"'
+dead = {"resets_at": None, "contradicted": True}
+rc, plan = place({"a": {}}, {"a": 0}, movers(1), facts=[("a", "auth", dead)])
+assert rc == 0 and plan["s00"]["acct"] == "a", plan
+rc, plan = place({"a": {}}, {"a": 0}, movers(1), facts=[("a", "auth", {"resets_at": None})])
+assert plan["s00"]["acct"] is None and plan["s00"]["reason"] == "fact:auth", plan
+rc, plan = place({"a": {}}, {"a": 0}, movers(1), facts=[("a", "5h", {"contradicted": True})])
+assert plan["s00"]["reason"] == "fact:5h", plan
+print("OK")'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *OK* ]] || false
+}
+
 @test "(h) walk-past: the source, none, unmapped names, and stores holding the sid are all skipped" {
   run python3 -c "$LOAD"'
 rows = {"a": {}, "b": {}, "c": {"weekly_pct": 50}}

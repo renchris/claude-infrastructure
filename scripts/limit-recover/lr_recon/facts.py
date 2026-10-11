@@ -334,8 +334,14 @@ _BLOCK_ORDER = {"auth": 0, "7d": 1, "5h": 2, "fable": 3}
 def blocking(
     facts: Dict[str, T.Fact], acct: str, lane: str, model: str, now: float
 ) -> Optional[T.Fact]:
-    """The fact that stops (acct, lane, model) from serving now, or None. An auth fact always
-    blocks; any other covering fact blocks until its reset has passed.
+    """The fact that stops (acct, lane, model) from serving now, or None. An auth fact blocks
+    until it is contradicted; any other covering fact blocks until its reset has passed.
+
+    A contradicted auth fact is an account that served a turn after it (a re-login). It has no
+    reset to free it and the daemon feeds F.expire no wire rows, so it used to block for good:
+    next2 and next3 got no recovery placement from 2026-10-05 while serving (row 41, decision
+    508c47814658). A contradicted 5h/7d fact still blocks to its reset, because §C4 measured
+    turns landing 19 s after a real death.
 
     With several, the one returned is the one that BINDS: auth first (no reset frees it), then the
     latest known reset, because the account serves again only once every covering window has
@@ -346,7 +352,14 @@ def blocking(
         f
         for f in facts.values()
         if f.acct == acct
-        and (f.scope == "auth" or (covers(f, lane, model) and not reset_passed(f, now)))
+        and (
+            (f.scope == "auth" and not f.contradicted)
+            or (
+                f.scope != "auth"
+                and covers(f, lane, model)
+                and not reset_passed(f, now)
+            )
+        )
     ]
     if not hits:
         return None

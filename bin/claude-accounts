@@ -5343,13 +5343,19 @@ def _place_fact_live(f: dict, row: "dict | None", now: float) -> bool:
     """Unexpired = rejected, and before resets_at+60 (no resets_at never expires on time). A 5h/7d
     fact also dies when the row's wire for THAT window reads allowed at a read time later than
     observed_at+60 — the server has since said yes. No wire read time on the row ⇒ no such expiry:
-    a wire of unknown age cannot outrank a dated refusal."""
+    a wire of unknown age cannot outrank a dated refusal. A CONTRADICTED auth fact is dead: the
+    account served a turn after it, and nothing else ever expires it, so next2/next3 got zero
+    capacity on every call from 2026-10-05 (decision 508c47814658). An account whose auth really
+    is broken is still refused, by its row's own error. A contradicted 5h/7d fact stays live to
+    its reset (lr_recon facts.blocking, §C4)."""
     if f.get("status") != "rejected":
         return False
     ra = _place_epoch(f.get("resets_at"))
     if ra is not None and now >= ra + 60:
         return False
     scope = f.get("scope")
+    if scope == "auth" and f.get("contradicted") is True:
+        return False
     if scope in ("5h", "7d") and row is not None:
         w = row.get("wire") or {}
         read = _place_epoch(w.get("read_at") or w.get("at") or row.get("wire_at"))

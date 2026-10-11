@@ -44,6 +44,23 @@ PHANTOM_PHASES = (
     "RELAUNCHED",
 )
 
+# decision 508c47814658: a --place NON-answer is not a "no data" answer. 124 = the bound fired,
+# 126 = the fork failed. On those two only, a mover already waiting keeps its wait (and its
+# max-age clock) for KEEP_MAX_MISSES consecutive passes; after that it falls through to WAIT_DATA,
+# so a persistent failure still pages. A code failure (1, 64, 65) never keeps.
+TRANSIENT_RC = (124, 126)
+KEEP_ON_NO_ANSWER = ("WAIT_SLOT", "WAIT_RESET", "WAIT_CAPACITY", "WAIT_DATA", "BACKOFF")
+KEEP_MAX_MISSES = 3
+PLACE_TIMEOUT_MIN_S, PLACE_TIMEOUT_MAX_S = 30.0, 120.0
+PLACE_CAUSE = {
+    0: "answered",
+    3: "no-cache",
+    64: "bad-args",
+    65: "unparseable",
+    124: "timeout",
+    126: "oserror",
+}
+
 RunFn = Callable[..., Any]
 
 
@@ -239,12 +256,17 @@ def place(
         "--kwork",
         kf,
         "--json",
+        # cache-only: without it load_cfg forks cc-claude-bin (10 s bound) inside this one
+        "--max-wait",
+        "0",
     ]
     wait = {m.sid: T.Placement(acct=None, reason="wait-data", weight=m.w) for m in mvs}
     try:
         cp = run(argv, capture_output=True, text=True, timeout=timeout)
-    except (OSError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired:
         return wait, 124
+    except OSError:
+        return wait, 126
     finally:
         for p in (mf, kf):
             try:
@@ -268,6 +290,26 @@ def place(
             T.from_dict(T.Placement, row) if isinstance(row, dict) else wait[m.sid]
         )
     return out, 0
+
+
+def place_timeout(load1: float, ncpu: int) -> float:
+    """The --place bound, scaled with load: 30 s at or below load 4/cpu, 120 s at most. The
+    04:00Z non-answers ran at load1 264-968 on 10 cpus, where a 30 s bound starved."""
+    if ncpu <= 0:
+        return PLACE_TIMEOUT_MAX_S
+    scaled = PLACE_TIMEOUT_MIN_S * load1 / (4.0 * ncpu)
+    return min(PLACE_TIMEOUT_MAX_S, max(PLACE_TIMEOUT_MIN_S, scaled))
+
+
+def keep_waits(
+    got: Dict[str, T.Placement], pre: Dict[str, str], rc: int, misses: int
+) -> Dict[str, T.Placement]:
+    """Drop from a non-answer every mover that STARTED the pass waiting, so apply leaves it as it
+    is. ``pre`` is the substate before the census, which rebuckets WAIT_RESET to DETECTED ahead of
+    planning. Only rc 124/126, and only for the first KEEP_MAX_MISSES consecutive misses."""
+    if rc not in TRANSIENT_RC or misses > KEEP_MAX_MISSES:
+        return got
+    return {s: p for s, p in got.items() if pre.get(s) not in KEEP_ON_NO_ANSWER}
 
 
 def start_fresh_sweep(
@@ -463,4 +505,3 @@ def write_plan(
         },
     )
     return path
-

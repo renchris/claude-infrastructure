@@ -130,6 +130,16 @@ class Auth(unittest.TestCase):
         self.assertEqual(F.blocking({f.key: f}, "next2", "fable", "m", NOW), f)
         self.assertIsNone(F.blocking({f.key: f}, "next3", "fable", "m", NOW))
 
+    def test_a_contradicted_auth_fact_never_blocks(self):
+        """Row 41: next2/next3 served turns after their auth facts and stayed blocked for good,
+        because no wire read reaches F.expire. A contradicted 5h/7d fact still blocks to its
+        reset (§C4: turns land 19 s after a real death)."""
+        au = fact("auth", contradicted=True)
+        self.assertIsNone(F.blocking({au.key: au}, "next2", "general", "m", NOW))
+        h5 = fact("5h", resets_at=NOW + 3600, contradicted=True)
+        both = {au.key: au, h5.key: h5}
+        self.assertEqual(F.blocking(both, "next2", "general", "m", NOW), h5)
+
 
 class MergeAndStore(unittest.TestCase):
     def setUp(self):

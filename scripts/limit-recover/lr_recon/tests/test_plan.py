@@ -112,6 +112,57 @@ class PlanTests(unittest.TestCase):
         )
         self.assertEqual(json.loads(fr.files["--kwork"]), {"next4": 1})
 
+    def test_place_is_cache_only_and_splits_timeout_from_oserror(self):
+        """508c47814658: --max-wait 0 keeps cc-claude-bin's 10 s fork out of the bound; 124 is
+        the bound firing, 126 a failed fork, so the place event can tell them apart."""
+        fr = FakeRun(out="{}")
+        P.place("general", [T.Mover(sid="a", src="/c3")], "/f", {}, run=fr)
+        i = fr.argv.index("--max-wait")
+        self.assertEqual(fr.argv[i + 1], "0")
+
+        def raises(exc):
+            def run(argv, **kw):
+                raise exc
+
+            return run
+
+        mv = [T.Mover(sid="a", src="/c3")]
+        slow = raises(subprocess.TimeoutExpired("x", 30))
+        out, rc = P.place("general", mv, "/f", {}, run=slow)
+        self.assertEqual((rc, out["a"].reason), (124, "wait-data"))
+        out, rc = P.place("general", mv, "/f", {}, run=raises(OSError(35, "EAGAIN")))
+        self.assertEqual((rc, out["a"].reason), (126, "wait-data"))
+
+    def test_place_timeout_scales_with_load_between_30_and_120(self):
+        self.assertEqual(P.place_timeout(20, 10), 30.0)
+        self.assertEqual(P.place_timeout(80, 10), 60.0)
+        self.assertEqual(P.place_timeout(905, 10), 120.0)
+        self.assertEqual(
+            P.place_timeout(50, 0), 120.0
+        )  # no cpu count: the cap, never a crash
+
+    def test_keep_waits_holds_pre_census_waits_on_a_transient_miss_only(self):
+        """A timeout or failed fork is a non-answer, not "no data": a mover that was already
+        waiting keeps its wait (and its max-age clock). A DETECTED mover still goes WAIT_DATA,
+        so does every mover on a code failure (rc 1/64/65), and after KEEP_MAX_MISSES passes."""
+        wd = T.Placement(acct=None, reason="wait-data")
+        got = {s: wd for s in ("slot", "reset", "new", "data")}
+        pre = {
+            "slot": "WAIT_SLOT",
+            "reset": "WAIT_RESET",
+            "new": "DETECTED",
+            "data": "WAIT_DATA",
+        }
+        for rc in (124, 126):
+            kept = P.keep_waits(got, pre, rc, 1)
+            self.assertEqual(sorted(kept), ["new"])
+        self.assertEqual(
+            sorted(P.keep_waits(got, pre, 124, P.KEEP_MAX_MISSES)), ["new"]
+        )
+        self.assertEqual(P.keep_waits(got, pre, 124, P.KEEP_MAX_MISSES + 1), got)
+        for rc in (0, 1, 3, 64, 65):
+            self.assertEqual(P.keep_waits(got, pre, rc, 1), got)
+
     def test_apply_planned_wait_reset_wait_slot(self):
         recs = {s: _rec(s) for s in ("a", "b", "c")}
         facts = {"next3.7d": T.Fact(acct="next3", scope="7d", resets_at=NOW + 300)}
@@ -205,7 +256,9 @@ class PlanTests(unittest.TestCase):
         stale = {"next3.7d": T.Fact(acct="next3", scope="7d", observed_at=NOW + 200)}
         self.assertEqual(P.movers([rec], snap, NOW + 305, stale), [])
         fresh = {"next3.7d": T.Fact(acct="next3", scope="7d", observed_at=NOW + 301)}
-        self.assertEqual([m.sid for m in P.movers([rec], snap, NOW + 305, fresh)], ["a"])
+        self.assertEqual(
+            [m.sid for m in P.movers([rec], snap, NOW + 305, fresh)], ["a"]
+        )
         later = NOW + 300 + P.REOFFER_AFTER_S
         self.assertEqual([m.sid for m in P.movers([rec], snap, later)], ["a"])
         idle = _rec("b", kind="idle", substate="WAIT_RESET")

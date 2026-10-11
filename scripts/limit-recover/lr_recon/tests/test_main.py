@@ -1543,6 +1543,80 @@ class MainTests(unittest.TestCase):
         self.assertFalse(any(os.path.exists(p) for p in ctl), "ctl consumed")
         self.assertIn("abandon", [e["ev"] for e in new])
 
+    def test_a_place_non_answer_logs_rc_and_keeps_pre_census_waits(self):
+        """508c47814658: the 04:00Z WAIT_DATA was a non-answer with no rc anywhere. Every --place
+        call now leaves a place event; on a timeout a mover that was already waiting keeps its
+        wait and its clock for KEEP_MAX_MISSES passes, then falls through to WAIT_DATA."""
+        import time
+
+        now = time.time()
+        ctx = M.Ctx(self.paths, None, self.home)
+        slot = T.Record(sid="slot0001", record_id="r:slot", kind="limited")
+        slot.substate = "WAIT_SLOT"
+        slot.wait = T.Wait(reason="WAIT_SLOT", since=now - 500, eta=now + 300)
+        new = T.Record(sid="new00001", record_id="r:new", kind="limited")
+        M.store.ensure_dirs(self.paths)
+        new.substate = "DETECTED"
+        for r in (slot, new):
+            r.timeline.detected, r.cohort_id = now - 600, "next3-7d-1"
+        ctx.records = {r.sid: r for r in (slot, new)}
+        ctx.pre_census = {"slot0001": "WAIT_SLOT", "new00001": "DETECTED"}
+        wd = T.Placement(acct=None, reason="wait-data")
+        miss = ({s: wd for s in ctx.records}, 124)
+        snap = T.Snapshot(wall=now, uptime_raw=0.0)
+        with (
+            mock.patch.object(plan, "place", return_value=miss) as pl,
+            mock.patch("os.getloadavg", return_value=(905.0, 0.0, 0.0)),
+        ):
+            M._plan(ctx, snap, {}, "act", now)
+        self.assertEqual(pl.call_args.kwargs["timeout"], 120.0)
+        self.assertEqual((slot.substate, slot.wait.since), ("WAIT_SLOT", now - 500))
+        self.assertEqual(new.substate, "WAIT_DATA")
+        ev = [json.loads(x) for x in open(self.paths.events)]
+        [row] = [e for e in ev if e["ev"] == "place"]
+        for tok in (
+            "lane=general",
+            "rc=124",
+            "cause=timeout",
+            "n=2",
+            "kept=1",
+            "load1=",
+        ):
+            self.assertIn(tok, row["detail"])
+        with mock.patch.object(plan, "place", return_value=miss):
+            for _ in range(plan.KEEP_MAX_MISSES):
+                M._plan(ctx, snap, {}, "act", now)
+        self.assertEqual(
+            slot.substate, "WAIT_DATA", "a persistent non-answer still pages"
+        )
+        with mock.patch.object(plan, "place", return_value=({}, 0)):
+            M._plan(ctx, snap, {}, "act", now)
+        self.assertEqual(ctx.place_misses["general"], 0)
+
+    def test_run_pass_hands_plan_the_pre_census_substates(self):
+        """The census rebuckets WAIT_RESET to DETECTED before _plan, so keep_waits must read the
+        substate the pass started with (the safety skeptic's 04:04:56Z rebucket)."""
+        ctx = M.Ctx(self.paths, None, self.home)
+        rec = T.Record(sid="abcdef01-0000-0000-0000-000000000001", record_id="r:x")
+        rec.substate = "WAIT_RESET"
+        ctx.records = {rec.sid: rec}
+        seen = {}
+
+        def grab(c, *a, **kw):
+            seen.update(c.pre_census)
+            return 0
+
+        import time
+
+        with (
+            mock.patch(
+                "lr_recon.observe.observe", return_value=_snap(time.time(), self.tmp)
+            ),
+            mock.patch.object(M, "_plan", side_effect=grab),
+        ):
+            M.run_pass(ctx)
+        self.assertEqual(seen.get(rec.sid), "WAIT_RESET")
+
     def test_daemon_loop_starts_and_runs_a_pass(self):
         """W5 rig: the long-running path had never started (Caffeinate() without its pid)."""
 

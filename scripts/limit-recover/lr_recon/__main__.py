@@ -101,6 +101,10 @@ class Ctx:
         self.actions: Dict[
             str, str
         ] = {}  # sid → the action this pass's derive_phase chose
+        # sid → substate before this pass's census (plan.keep_waits); lane → consecutive
+        # transient --place non-answers
+        self.pre_census: Dict[str, str] = {}
+        self.place_misses: Dict[str, int] = {}
 
 
 def _alive(pid: int, lstart: str) -> bool:
@@ -806,7 +810,34 @@ def _plan(
     placed: Dict[str, T.Placement] = {}
     for lane in ("general", "fable"):
         lane_mvs = [m for m in mvs if recs[m.sid].lane == lane]
-        got, rc = plan.place(lane, lane_mvs, paths.facts, kw)
+        if not lane_mvs:
+            continue
+        load1 = os.getloadavg()[0]
+        timeout = plan.place_timeout(load1, os.cpu_count() or 1)
+        t0 = time.monotonic()
+        got, rc = plan.place(lane, lane_mvs, paths.facts, kw, timeout=timeout)
+        dur = time.monotonic() - t0
+        misses = ctx.place_misses.get(lane, 0) + 1 if rc in plan.TRANSIENT_RC else 0
+        ctx.place_misses[lane] = misses
+        n_got = len(got)
+        got = plan.keep_waits(got, ctx.pre_census, rc, misses)
+        _event(
+            paths,
+            "place",
+            detail="lane=%s rc=%d cause=%s n=%d kept=%d misses=%d dur=%.1fs timeout=%.0fs "
+            "load1=%.0f"
+            % (
+                lane,
+                rc,
+                plan.PLACE_CAUSE.get(rc, "exit"),
+                len(lane_mvs),
+                n_got - len(got),
+                misses,
+                dur,
+                timeout,
+                load1,
+            ),
+        )
         if (
             rc == 3 and mode != "observe"
         ):  # a sweep hits the usage endpoint: never in shadow
@@ -1335,6 +1366,7 @@ def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
                 )
     facts = _facts(ctx, snap, now)
     reqs = store.list_requests(paths)
+    ctx.pre_census = {s: r.substate or "" for s, r in ctx.records.items()}
     buckets, stale = _census(ctx, snap, facts, reqs, mode, now)
     _focus_ledger(paths, snap, buckets, mode, now)
     _derive(ctx, snap, now, facts)
