@@ -4231,6 +4231,17 @@ WK_EWMA_HL_NEAR = 4.0        # weekly_reset_h <= 12: weight the last hours hard
 WK_EWMA_HL_FAR = 8.0         # beyond 12 h the hl=4 form may NEVER be extrapolated
 WK_EWMA_NEAR_H = 12.0
 
+# The FLEET pace line (fleet_pace / fleet_pace_line). Every constant below was replayed against the
+# whole utilization ledger by the telemetry judge, 2026-10-10 (docs/research/dispatch-strand-rescue-2026-10-09.md).
+FLEET_WINDOW_H = 24.0         # the realised pace: endpoint deltas over the last day, roll-aware
+FLEET_NEAR_H = 48.0           # resets owed by that pace; 72h fired 5h sooner this week but added two
+                              # August episodes that realised only 9pp and 15pp
+FLEET_SHORT_FLOOR_PP = 30.0   # healthy 09-09..10-02 peaked at a 20pp shortfall, 0 fired hours
+FLEET_ANCHOR_GAP_H = 3.0      # an anchor this much older than now-24h is a ledger hole, not a pace
+FLEET_MAX_AGE_H = 1.0         # a newest row older than this: the series is stale, no line at all
+FLEET_SUSTAIN_H = 1.0         # the shortfall must hold now AND this long ago (two hourly evaluations)
+FLEET_TAIL_H = 72.0           # the read: the day-ago pace needs an anchor at now-48h, plus the gap
+
 
 def burn_wk_ewma_ph(samples_for_acct, now, weekly_reset_h):
     """Roll-aware EWMA of the weekly meter, in %/h, as (value|None, measured_span_h).
@@ -4521,6 +4532,129 @@ def soonest_reset_line(rows, cfg):
         if note:
             parts.append(note)
     return " · ".join(parts)
+
+
+def _fleet_series(samples, accts=None):
+    """{acct: [usable samples, oldest first]} — the fleet fleet_pace speaks for. With `accts`, an
+    account with no usable sample is still a member (an empty list), so the fleet abstains on it
+    rather than shrinking to the accounts that happen to be measured."""
+    by = {a: [] for a in accts} if accts else {}
+    for e in samples or []:
+        a = e.get("acct")
+        if accts and a not in by:
+            continue
+        if e.get("stale") or not _is_num(e.get("_t")) or not _is_num(e.get("weekly_pct")):
+            continue
+        by.setdefault(a, []).append(e)
+    for ss in by.values():
+        ss.sort(key=lambda e: e["_t"])
+    return by
+
+
+def _fleet_burn(by, now):
+    """Realised fleet pace in pp/h at `now`, or None. Per account: the roll-aware sum of weekly
+    deltas from the ANCHOR (its newest row at or before now - FLEET_WINDOW_H) to its newest row;
+    the fleet's pace is the sum of those over the mean anchor age. A pair across a weekly reset
+    adds the new window's level, never a negative delta. None when any account has no anchor, an
+    anchor more than FLEET_ANCHOR_GAP_H older than the window start, or a newest row older than
+    FLEET_MAX_AGE_H — a fleet sum missing one member is not a fleet pace."""
+    if not by:
+        return None
+    start = now - FLEET_WINDOW_H * 3600.0
+    tot, hrs = 0.0, []
+    for ss in by.values():
+        past = [e for e in ss if e["_t"] <= now]
+        if not past or now - past[-1]["_t"] > FLEET_MAX_AGE_H * 3600.0:
+            return None
+        i0 = None
+        for i, e in enumerate(past):
+            if e["_t"] > start:
+                break
+            i0 = i
+        if i0 is None or start - past[i0]["_t"] > FLEET_ANCHOR_GAP_H * 3600.0:
+            return None
+        for a, b in zip(past[i0:], past[i0 + 1:]):
+            if _rolled(a, b, "weekly_reset_at", "weekly_pct"):
+                tot += b["weekly_pct"]
+            else:
+                tot += max(0.0, b["weekly_pct"] - a["weekly_pct"])
+        hrs.append((now - past[i0]["_t"]) / 3600.0)
+    mean_h = sum(hrs) / len(hrs)
+    return tot / mean_h if mean_h > 0 else None
+
+
+def fleet_pace(samples, now, accts=None):
+    """The fleet's realised weekly burn against what its near resets need — pure, no I/O.
+
+    Returns None when the pace abstains (see _fleet_burn), else {pace, needed, short_pp, by, by_h,
+    near, left}. `near` is every account whose weekly window resets inside (0, FLEET_NEAR_H] hours,
+    in reset order. Walking it, cum_j is the quota left on the first j of them; `needed` is the
+    largest cum_j / h_j (the pace that would use it all) and `short_pp` the largest
+    cum_j - pace x h_j (the pp that pace leaves unused by reset j), named by `by` / `by_h`. With
+    nothing near, short_pp is 0.0 and `by` None.
+
+    Why a SUM and not per account: the per-account nowcast (wk_strand_pp) answers each account
+    against its own burn, so three accounts each needing a p93-p98 burn at once read as three
+    separate facts; the fleet has one throughput, and the shortfall is against that."""
+    by = _fleet_series(samples, accts)
+    pace = _fleet_burn(by, now)
+    if pace is None:
+        return None
+    near = []
+    for a, ss in by.items():
+        e = [x for x in ss if x["_t"] <= now][-1]       # exists: _fleet_burn checked it
+        key = _reset_key(e.get("weekly_reset_at"))
+        if key is None:
+            continue
+        wrh = (key * 60.0 - now) / 3600.0
+        if 0 < wrh <= FLEET_NEAR_H:
+            near.append((wrh, a, max(0.0, 100.0 - e["weekly_pct"])))
+    near.sort()
+    cum = needed = 0.0
+    short, by_acct, by_h = 0.0, None, None
+    for wrh, a, left in near:
+        cum += left
+        needed = max(needed, cum / wrh)
+        v = cum - pace * wrh
+        if by_acct is None or v > short:
+            short, by_acct, by_h = v, a, wrh
+    return {"pace": pace, "needed": needed, "short_pp": short, "by": by_acct, "by_h": by_h,
+            "near": [a for _h, a, _l in near], "left": cum}
+
+
+def fleet_pace_line(rows=None, samples=None, now=None):
+    """The readout's one fleet-pace conclusion, or None. Fires only when the realised fleet pace
+    leaves at least FLEET_SHORT_FLOOR_PP unused by some reset inside FLEET_NEAR_H, both now and
+    FLEET_SUSTAIN_H ago; silent in a healthy week and whenever an input is stale.
+
+    Replay (telemetry judge, 2026-10-10, docs/research/dispatch-strand-rescue-2026-10-09.md): first fires 2026-10-09T10:00Z and
+    holds through 10-10T01:56Z; in the prior three weeks one episode, 10-03T05Z..10-04T07Z, after
+    which next4 stranded 26pp; healthy 09-09..10-02 0 fired hours. Ten episodes in 59 days, each
+    followed by a real strand.
+
+    The pp figure is `~`, never a bound: at 10-03T18Z it read 58pp and 26pp died, so a `>=` would
+    have been false. The parenthesis is the pace a day earlier, which is what states the FALL;
+    a "since <time>" would report when an account crossed the 48h horizon, not when pace dropped.
+
+    Readout renderers only: never apply_burn, never the --rank/--route path (that path runs under
+    handoff-fire's 25 s alarm and this reads the ledger). Never in the status line either
+    (operator ruling: no account quota there in any form). CC_ACCOUNTS_FLEET_PACE=off silences it."""
+    if not _term_on("CC_ACCOUNTS_FLEET_PACE"):
+        return None
+    now = time.time() if now is None else now
+    if samples is None:
+        samples = _util_tail(hours=FLEET_TAIL_H)[0]
+    accts = [r["acct"] for r in rows or [] if r.get("acct")] or None
+    cur = fleet_pace(samples, now, accts)
+    prev = fleet_pace(samples, now - FLEET_SUSTAIN_H * 3600.0, accts)
+    if cur is None or prev is None or cur["by"] is None:
+        return None
+    if cur["short_pp"] < FLEET_SHORT_FLOOR_PP or prev["short_pp"] < FLEET_SHORT_FLOOR_PP:
+        return None
+    day = _fleet_burn(_fleet_series(samples, accts), now - FLEET_WINDOW_H * 3600.0)
+    ago = f" ({day:.1f} a day ago)" if day is not None else ""
+    return (f"⚠ {cur['pace']:.1f} pp/h fleet burn{ago} vs {cur['needed']:.1f} needed — "
+            f"~{cur['short_pp']:.0f}pp dies by {cur['by']}'s reset in {fmt_h(cur['by_h'])}")
 
 
 PACE_HEAD = "weekly drain — pp that DIE at reset (nowcast at the last 48h of pace):"
@@ -7155,6 +7289,14 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
             out.extend(bc(ln, BOARD_LABEL) for ln in _wrap_narrow(sr, first="· "))
     else:
         out.append(f"➤ general → **{pick_g or 'none'}** · ➤ fable → **{pick_f or 'none'}**")
+    # The fleet's one pace conclusion, above the per-account drain rows it sums. AMBER on the
+    # board — a warning, never the BOARD_LABEL grey the no-dim-text ruling forbids; plain here.
+    fl = fleet_pace_line(rows)
+    if fl:
+        if narrow:
+            out.extend(bc(ln, AMBER) for ln in _wrap_narrow(fl))
+        else:
+            out.append(fl)
     pl = pace_line(rows)
     if pl:
         # S3: the weekly-drain block is now one row PER ACCOUNT, sorted by pp at risk. Still one
@@ -7501,6 +7643,9 @@ def render_table(rows, cfg, win, cached, prev=None):
     # M7 pace: quota stranded at a weekly reset is the one unrecoverable waste, and nothing on
     # this surface said whether the fleet was on track to 100% until the reset had already
     # answered. Same 82-col budget: one line, soonest reset first.
+    fl = fleet_pace_line(rows)              # the fleet's sum of those rows, as one conclusion
+    if fl:
+        print("  " + c(fl, AMBER))
     pl = pace_line(rows)
     if pl:
         for _pln in pl.split("\n"):          # S3: one row per account, sorted by pp at risk
