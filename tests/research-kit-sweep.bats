@@ -3,7 +3,8 @@
 # and 9). Fired class-B defaults reach the decision records; only an operator-SIGNED veto stops one;
 # a class-C row past its due date converts to class B on its reversible option and descopes its waves;
 # a frame-omission known row past its re-sign date closes by its default. Real bin/cc-decide, in a
-# scratch decisions dir.
+# scratch decisions dir. RED-proof (2026-10-11): on the pre-fix gate_sweep.py the trigger, label and dropped-option
+# refusals filed a packet (exit 0) and the fired default's ruling line carried no revisit_trigger.
 
 setup_file() {
   export HOME="$BATS_FILE_TMPDIR/home"
@@ -42,11 +43,15 @@ for l in open('$REC/decisions.jsonl'):
     r=json.loads(l)
     if r['id']=='DR-1': d.update(r)
 print($1)"; }
+B_OPTS=(--option "retry::writes retried" --option "do-nothing::no change" --option "use-what-exists::the current path")
 file_b() {
-  "$G" file-packet --program demo --decision DR-1 --class B --what "retry policy" --option "retry::writes retried" \
-    --option "do-nothing::no change" --default retry --deadline "${1:-2026-10-01T00:00:00Z}" --conviction 80 --receipt "$REC/frame.json" \
+  "$G" file-packet --program demo --decision DR-1 --class B --what "retry policy" "${B_OPTS[@]}" \
+    --default retry --deadline "${1:-2026-10-01T00:00:00Z}" --conviction 80 --receipt "$REC/frame.json" \
     | awk '{print $2}'
 }
+last_dec() { tail -n 1 "$REC/decisions.jsonl" | /usr/bin/python3 -c "import json,sys; print(json.load(sys.stdin).get('$1'))"; }
+no_trigger() { printf '{"id":"DR-1","revisit_trigger":null}\n' >> "$REC/decisions.jsonl"; }
+n_packets() { find "$CC_DECISIONS_DIR" -name '*.json' 2>/dev/null | wc -l | tr -d ' '; }
 file_c() {
   "$G" file-packet --program demo --decision DR-1 --class C --what "storage backend" --option "a::x" --option "b::y" \
     --conviction 70 --receipt "$REC/frame.json" --due "${1:-2026-09-30T00:00:00Z}" | awk '{print $2}'
@@ -68,6 +73,55 @@ sig() { # <action> <target|null>
   run "$G" file-packet --program demo --decision DR-1 --class C --what x --option "a::x" --option "b::y" --conviction 70 --receipt "$REC/frame.json"
   [ "$status" -eq 2 ]
   [[ "$output" == *"--due"* ]]
+}
+
+@test "file-packet refuses a class-B packet on a reversible decision with no revisit_trigger, and files nothing" {
+  no_trigger
+  run "$G" file-packet --program demo --decision DR-1 --class B --what x "${B_OPTS[@]}" --default retry \
+    --deadline 2026-10-01T00:00:00Z --conviction 80 --receipt "$REC/frame.json"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"revisit_trigger"* ]] || false
+  [ "$(n_packets)" = 0 ]
+}
+
+@test "file-packet --revisit-trigger records the trigger, and the fired default's ruling carries it" {
+  no_trigger
+  run "$G" file-packet --program demo --decision DR-1 --class B --what x "${B_OPTS[@]}" --default retry \
+    --deadline 2026-10-01T00:00:00Z --conviction 80 --receipt "$REC/frame.json" --revisit-trigger "a retry storm"
+  [ "$status" -eq 0 ]
+  [ "$(last_dec revisit_trigger)" = "a retry storm" ]
+  /bin/bash "$D" expire-sweep >/dev/null
+  run "$G" sweep --program demo
+  [ "$status" -eq 0 ]
+  [ "$(last_dec ruled_by)" = "packet-default" ]
+  [ "$(last_dec revisit_trigger)" = "a retry storm" ]
+}
+
+@test "file-packet refuses a class-B --option label that is not among the decision's options" {
+  run "$G" file-packet --program demo --decision DR-1 --class B --what x "${B_OPTS[@]}" --option "rewrite::new store" \
+    --default retry --deadline 2026-10-01T00:00:00Z --conviction 80 --receipt "$REC/frame.json"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"rewrite are not among DR-1's options"* ]] || false
+  [ "$(n_packets)" = 0 ]
+}
+
+@test "file-packet refuses a class-B packet that drops one of the decision's options" {
+  run "$G" file-packet --program demo --decision DR-1 --class B --what x --option "retry::writes retried" \
+    --option "do-nothing::no change" --default retry --deadline 2026-10-01T00:00:00Z --conviction 80 --receipt "$REC/frame.json"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"drops DR-1's option(s) use-what-exists"* ]] || false
+  [ "$(n_packets)" = 0 ]
+}
+
+@test "class C files with no trigger and its own labels, and an irreversible class-B decision files with no trigger" {
+  no_trigger
+  id="$(file_c)"
+  [ "$(pkt "$id" '["class"]')" = "C" ]
+  printf '{"id":"DR-1","reversibility":"irreversible","packet":null}\n' >> "$REC/decisions.jsonl"
+  run "$G" file-packet --program demo --decision DR-1 --class B --what x --option "retry::writes retried" \
+    --option "do-nothing::no change" --option "use-what-exists::the current path" --default retry \
+    --deadline 2026-10-01T00:00:00Z --conviction 80 --receipt "$REC/frame.json"
+  [ "$status" -eq 0 ]
 }
 
 overrun_stage4() {
@@ -116,6 +170,7 @@ budget_pkt() { /usr/bin/python3 -c "import json; print((json.load(open('$REC/bud
   run "$G" sweep --program demo
   [ "$status" -eq 0 ]
   [ "$(dec 'd["status"], d["ruled_by"], d["chosen"], d["decided_by_default_at"]')" = "ruled packet-default retry 90" ]
+  [ "$(last_dec revisit_trigger)" = "a lost write in build" ]
 }
 
 @test "a class-B default not yet expired is left alone" {

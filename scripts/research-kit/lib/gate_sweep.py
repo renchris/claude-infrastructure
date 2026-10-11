@@ -229,6 +229,29 @@ def cmd_file_packet(a: argparse.Namespace) -> int:
         )
     if a.cls == "B" and not (a.default and a.deadline):
         raise kit.KitError("a class-B program packet needs --default and --deadline")
+    d = decisions[a.decision]
+    trigger = a.revisit_trigger or d.get("revisit_trigger")
+    if a.cls == "B":
+        # A fired default rules the row; gate row 5 fails a ruled reversible row with no
+        # revisit_trigger, so the packet must carry one before it can fire.
+        if d.get("reversibility") == "reversible" and not trigger:
+            raise kit.KitError(
+                f"{a.decision} is reversible and has no revisit_trigger: pass --revisit-trigger, "
+                "or the ruling its default writes fails gate row 5"
+            )
+        # The operator vetoes against exactly the record's options: none invented, none dropped.
+        recorded = {str(o.get("label")) for o in d.get("options") or []}
+        offered = {o.split("::", 1)[0] for o in a.option or []}
+        if offered - recorded:
+            raise kit.KitError(
+                f"--option label(s) {', '.join(sorted(offered - recorded))} are not among "
+                f"{a.decision}'s options ({', '.join(sorted(recorded)) or 'none recorded'})"
+            )
+        if recorded - offered:
+            raise kit.KitError(
+                f"the packet drops {a.decision}'s option(s) {', '.join(sorted(recorded - offered))}: "
+                "offer every recorded option"
+            )
     pid = open_packet(
         ctx,
         a.decision,
@@ -240,17 +263,17 @@ def cmd_file_packet(a: argparse.Namespace) -> int:
         a.default,
         a.deadline,
     )
-    kit.append_jsonl(
-        ctx.records / "decisions.jsonl",
-        {
-            "id": a.decision,
-            "packet": {
-                "id": pid,
-                "class": a.cls,
-                "due": a.deadline if a.cls == "B" else a.due,
-            },
+    row: Dict[str, Any] = {
+        "id": a.decision,
+        "packet": {
+            "id": pid,
+            "class": a.cls,
+            "due": a.deadline if a.cls == "B" else a.due,
         },
-    )
+    }
+    if a.revisit_trigger:
+        row["revisit_trigger"] = a.revisit_trigger
+    kit.append_jsonl(ctx.records / "decisions.jsonl", row)
     print(
         f"filed {pid} for {a.decision} (class {a.cls}, project {ctx.frame.get('deliverable_repo')})"
     )
@@ -306,17 +329,18 @@ def cmd_sweep(a: argparse.Namespace) -> int:
                         {"id": did, "vetoed_by_operator": signed_veto.get("at_iso")},
                     )
                 continue
-            kit.append_jsonl(
-                dec_path,
-                {
-                    "id": did,
-                    "status": "ruled",
-                    "ruled_by": "packet-default",
-                    "chosen": p.get("default_if_no_veto"),
-                    "decided_by_default_at": conv,
-                    "receipt": f"cc-decide {p['id']} expired-actioned",
-                },
-            )
+            ruling: Dict[str, Any] = {
+                "id": did,
+                "status": "ruled",
+                "ruled_by": "packet-default",
+                "chosen": p.get("default_if_no_veto"),
+                "decided_by_default_at": conv,
+                "receipt": f"cc-decide {p['id']} expired-actioned",
+            }
+            # The ruling names its own revisit trigger, as an agent ruling does (gate row 5).
+            if d.get("revisit_trigger"):
+                ruling["revisit_trigger"] = d["revisit_trigger"]
+            kit.append_jsonl(dec_path, ruling)
             print(
                 f"applied default of {p['id']} to {did}: {p.get('default_if_no_veto')} (decided by default at {conv}%)"
             )
@@ -441,6 +465,7 @@ def add_verbs(sub: Any) -> None:
     p.add_argument("--default")
     p.add_argument("--deadline")
     p.add_argument("--due")
+    p.add_argument("--revisit-trigger")
     p.set_defaults(fn=cmd_file_packet)
     p = sub.add_parser("sweep")
     p.add_argument("--program", required=True)

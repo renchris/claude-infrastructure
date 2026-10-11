@@ -101,6 +101,12 @@ failed, 2 usage or refusal, 3 a dead vendor lane, 4 a voided slot. Python is 3.9
   (each acceptance row over `control.known_bad`/`known_good`, fixture in env `FIXTURE`, as gate row 6 runs it);
   `probe-run.sh run|doctor` is a bash 3.2 shim onto the first two.
 - `gate.sh register|freeze|run|render|sweep|file-packet|requires|close` (see `lib/gate.py`).
+- `gate.sh file-packet --program P --decision D --class B|C … [--revisit-trigger T]` (`lib/gate_sweep.py`) → exit 2,
+  filing nothing, when a class-B packet sits on a `reversible` decision with no `revisit_trigger` (on the record or
+  passed as `--revisit-trigger`), or when its `--option` labels are not exactly the decision's `options` labels (none
+  invented, none dropped). `--revisit-trigger` is written onto the decision with the `packet` field. When `sweep`
+  applies a fired class-B default, the `ruled_by: packet-default` line carries the decision's `revisit_trigger`, as
+  `cc-research decision rule` does, so gate row 5 passes the ruled reversible row.
 - `gate.sh requires --program P [--wave W] [--json]` (`lib/gate_requires.py`) → exit 0 the build wave may fire, 1
   refused with each reason, 2 the program cannot be read. Reads the newest certificate and the LIVE decision and
   known-row records (the sweep and the frame-delta cycle clear blocks after the certificate). The reader behind
