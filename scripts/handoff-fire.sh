@@ -15882,10 +15882,17 @@ fi
 # "--recycle: original used as-is" assertion in notify-back.bats meaningful rather than merely passing.
 RECYCLE_VERIFY=0 RECYCLE_MARKER=""
 [ "$RECYCLE" = 1 ] && [ "$DRY" = 0 ] && [ -z "$RESUME_LAUNCHER" ] && RECYCLE_VERIFY=1   # resume mode verifies by transcript, not marker
+# hf_copy_brief SRC DST — the fired session's copy of the brief, minus every line carrying the
+# research work-order comment, so the only one the fired session sees is the one appended below after
+# --requires-gate ADMITTED the wave: router.py honours that exact line (FIRED_WORK_ORDER) as
+# allow-all, and a brief's author must not be able to write it. Every other byte is copied as is.
+hf_copy_brief() {
+  LC_ALL=C perl -ne 'print unless /<!-- research work order:/' "$1" > "$2"
+}
 if [ -n "$NOTIFY_BACK" ] || [ "$SELF_RETIRE_TRAILER" = 1 ] || [ "$ENGAGE_VERIFY" = 1 ] || [ "$RECYCLE_VERIFY" = 1 ]; then
   [ -f "$PROMPT_FILE" ] || { echo "!! prompt trailer: prompt file not found: $PROMPT_FILE" >&2; exit 1; }
   PF_NB="$(mktemp "${TMPDIR:-/tmp}/handoff-prompt-nb-XXXXXX")" || { echo "!! prompt trailer: mktemp failed" >&2; exit 1; }
-  cp "$PROMPT_FILE" "$PF_NB" || { echo "!! prompt trailer: could not copy prompt" >&2; exit 1; }
+  hf_copy_brief "$PROMPT_FILE" "$PF_NB" || { echo "!! prompt trailer: could not copy prompt" >&2; exit 1; }
   if [ -n "$NOTIFY_BACK" ]; then
     BACK_SID="$NOTIFY_BACK"
     if [ "$BACK_SID" = "__self__" ]; then

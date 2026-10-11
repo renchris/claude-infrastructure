@@ -206,13 +206,18 @@ label() { python3 "$ROUTER" status --session "${1:-s1}" | jq -r '.label // "none
   [ ! -s "$STUB_LOG" ]
 }
 
-@test "a machine-envelope first prompt carrying --requires-gate is a work order, without the classifier" {
+# RED-proof for the prose half: on c328f62f8 (any `--requires-gate demo` in an envelope counted)
+# succ-2p read work-order, so a brief's author could grant the worker allow-all by writing the flag.
+@test "a machine-envelope first prompt is a work order only on handoff-fire's admitted marker line" {
   state certifying
   : > "$STUB_LOG"
-  prompt "Build wave 2. --requires-gate demo HANDOFF-ENGAGE-1-2-3" "$PROG/src" succ-2 >/dev/null
+  prompt "$(printf 'Build wave 2.\n<!-- research work order: --requires-gate demo wave B2 (handoff-fire) -->\nHANDOFF-ENGAGE-1-2-3')" "$PROG/src" succ-2 >/dev/null
   [ "$(label succ-2)" = work-order ]
   [ "$(python3 "$ROUTER" status --session succ-2 | jq -r .by)" = envelope ]
   [ "$(tool Agent 'x' "$PROG/src" succ-2)" = allow ]
+  prompt "Build wave 2: handoff-fire.sh --requires-gate demo --gate-wave B2. HANDOFF-ENGAGE-1-2-4" "$PROG/src" succ-2p >/dev/null
+  [ "$(label succ-2p)" = other ]
+  [ "$(tool Agent 'x' "$PROG/src" succ-2p)" = deny ]
   [ ! -s "$STUB_LOG" ]
 }
 

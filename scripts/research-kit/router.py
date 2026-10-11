@@ -17,9 +17,11 @@ scripts/lib/research-program.sh (wave A1's resolver, the one key every exemption
       A relay turn (completeness, pushback) also carries a one-line systemMessage, so the operator
       sees the route and the one word that undoes it.
       A machine-envelope FIRST prompt (no route record yet) is labeled without the classifier and
-      recorded `by: envelope`: work-order on a --requires-gate marker, else, for a recycle brief only
-      (a leading `[handoff `, no HANDOFF-ENGAGE-), a named predecessor's non-relayed label, else other. Outside every root (`--by prompt`) only a fired session's own
-      brief (FIRE_BRIEF) is labeled so; any other envelope naming the program leaves the pane ordinary.
+      recorded `by: envelope`: work-order on handoff-fire's admitted --requires-gate marker line
+      (FIRED_WORK_ORDER), else, for a recycle brief only (a leading `[handoff `, no
+      HANDOFF-ENGAGE-), a named predecessor's non-relayed label, else other. Outside every root
+      (`--by prompt`) only a fired session's own brief (FIRE_BRIEF) is labeled so; any other
+      envelope naming the program leaves the pane ordinary.
   router.py tool [--program P]                               (hooks/research-block.sh)
       PreToolUse. Prints a deny, or nothing (allow).
   router.py relay-check --session SID                        (hooks/completion-assert.sh)
@@ -127,6 +129,11 @@ PUSHBACK_LINE = (
     "checked in the next scheduled review."
 )
 WORK_ORDER_MARKER = re.compile(r"--requires-gate[ =]+([a-z0-9][a-z0-9-]*)")
+# The same marker as handoff-fire.sh writes it into a fired brief, the only form an envelope honours.
+FIRED_WORK_ORDER = re.compile(
+    r"^<!-- research work order: --requires-gate ([a-z0-9][a-z0-9-]*) wave \S+ \(handoff-fire\) -->$",
+    re.M,
+)
 OVERRIDE_WORD = (
     "misrouted"  # typed alone right after a relay turn: re-route it as `other`
 )
@@ -874,14 +881,13 @@ def genuine(prompt: str) -> bool:
 
 
 def envelope_label(prompt: str, slug: str, sid: str) -> Tuple[str, str]:
-    """(label, reason) for a machine-envelope FIRST prompt, without the classifier: the work-order
-    marker, else, in a recycle brief, the label of a predecessor session it names, else `other`. A
+    """(label, reason) for a machine-envelope FIRST prompt, without the classifier: handoff-fire's
+    work-order marker line, else, in a recycle brief, the label of a predecessor session it names, else `other`. A
     relayed label is not inherited: it governs one re-ask turn, and the successor's brief is not one."""
-    # Only a marker naming THIS program is a work order (as in classify): prose that merely quotes
-    # the flag ("--requires-gate cannot carry a round") names no program and must not open allow-all.
-    m = next(
-        (x for x in WORK_ORDER_MARKER.finditer(prompt) if x.group(1) == slug), None
-    )
+    # Only the marker line handoff-fire.sh appends after --requires-gate ADMITTED the wave, naming
+    # THIS program, is a work order. A brief's prose is its author's, so a `--requires-gate <slug>`
+    # written anywhere else in it opens nothing (and handoff-fire strips any copy of the line itself).
+    m = next((x for x in FIRED_WORK_ORDER.finditer(prompt) if x.group(1) == slug), None)
     if m:
         return (
             "work-order",
