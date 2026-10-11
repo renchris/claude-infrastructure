@@ -75,24 +75,46 @@ admit_json() { # $1=admitted true|false $2=target_auth $3=reason
         '{admitted:$ok, target:$to, target_auth:$auth, reason:$why, ts:$ts}' > "$BDIR/admit.json.$$.tmp" 2>/dev/null \
     && mv -f "$BDIR/admit.json.$$.tmp" "$BDIR/admit.json" 2>/dev/null
 }
-summary() { # $1=batch verdict (done|refused) $2=note
-  local counts auth_after="${AUTH_AFTER:-unchecked}"
+summary() { # $1=batch verdict (done|refused) $2=note — an operator abort overrides it to `aborted`
+  local rows counts classes acts st="$1" auth_after="${AUTH_AFTER:-unchecked}"
+  # AN ABORT IS ITS OWN STATUS (D9, 2026-10-11). Batch 20261011T032613Z was aborted 18 s before it
+  # was admitted and its summary and mail still read "done: NOTMOVED=7", the same words a failure
+  # earns; the operator could not tell that the stop they asked for was the stop they got.
+  [ ! -e "$BDIR/abort" ] || st=aborted
+  # ONE jq per row: verdict, reason class, and the row's own instruction. The class is the reason's
+  # leading `word:` tag (became-limited, claim-held, worker-died ...) or `aborted`; a MOVED row gets
+  # none. The instruction is the first `cc-lr <verb> ...` the reason names — the "Recover it: cc-lr
+  # recover <sid8>" a became-limited row carries, which the summary used to drop.
   # LEADING-PAREN PATTERNS, AND THEY ARE LOAD-BEARING: launchd runs this file under /bin/bash 3.2,
   # which ends a `$( )` at the first unbalanced `)` — the one closing a bare `a|b)` pattern. The
   # 2026-10-06 batch (7 of 7 MOVED) logged a syntax error here and mailed "done: no rows".
-  counts="$(for f in "$BDIR"/*.json; do
-              case "${f##*/}" in (plan.json|admit.json|summary.json|request*.json|*.watcher.json) continue ;; esac
-              jq -r '.verdict // empty' "$f" 2>/dev/null
-            done | sort | uniq -c | awk '{ printf "%s%s=%s", (NR > 1 ? " " : ""), $2, $1 }')"
-  jq -nc --arg b "$BATCH" --arg st "$1" --arg note "$2" --arg c "${counts:-none}" --arg a "$auth_after" \
+  rows="$(for f in "$BDIR"/*.json; do
+            case "${f##*/}" in (plan.json|admit.json|summary.json|request*.json|*.watcher.json) continue ;; esac
+            jq -r '(.verdict // "") as $v | (.reason // "") as $r | select($v != "")
+                   | [$v,
+                      (if ($v | startswith("MOVED")) then ""
+                       elif ($r | test("^[a-z][a-z-]*:")) then ($r | sub(":.*$"; ""))
+                       elif ($r | test("abort")) then "aborted"
+                       elif ($r | startswith("batch refused")) then "refused"
+                       else "" end),
+                      (($r | [match("cc-lr [a-z][a-z-]*[^;)]*"; "g").string] | first // "") | sub("[ .]+$"; "")),
+                      ((.sid // "") | .[0:8])] | @tsv' "$f" 2>/dev/null
+          done)"
+  counts="$(printf '%s\n' "$rows" | awk -F'\t' '$1 != "" { print $1 }' | sort | uniq -c \
+            | awk '{ printf "%s%s=%s", (NR > 1 ? " " : ""), $2, $1 }')"
+  classes="$(printf '%s\n' "$rows" | awk -F'\t' '$1 != "" && $2 != "" { print $1 "/" $2 }' | sort | uniq -c \
+             | awk '{ printf "%s%s=%s", (NR > 1 ? " " : ""), $2, $1 }')"
+  acts="$(printf '%s\n' "$rows" | awk -F'\t' '$3 != "" { printf "%s%s: %s", (n++ ? "; " : ""), $4, $3 }')"
+  jq -nc --arg b "$BATCH" --arg st "$st" --arg note "$2" --arg c "${counts:-none}" --arg a "$auth_after" \
+        --arg cls "$classes" --arg acts "$acts" \
         --argjson wall "$(( $(date +%s) - T0 ))" --arg from "$FROM" --arg to "$TO" \
-        '{batch:$b, status:$st, note:$note, verdicts:$c, target_auth_after:$a, wall_s:$wall, from:$from, to:$to}' \
+        '{batch:$b, status:$st, note:$note, verdicts:$c, reasons:$cls, actions:$acts, target_auth_after:$a, wall_s:$wall, from:$from, to:$to}' \
         > "$BDIR/summary.json.$$.tmp" 2>/dev/null && mv -f "$BDIR/summary.json.$$.tmp" "$BDIR/summary.json" 2>/dev/null
-  say "$1: ${counts:-no rows} (target auth after: $auth_after) $2"
+  say "$st: ${counts:-no rows}${classes:+ ($classes)} (target auth after: $auth_after) $2${acts:+ Still to do: $acts.}"
   # ONE mail, to the requester only, never to a moved pane (a mailed no-prompt resume takes a turn).
   local notify="${CC_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}"
   if [ "${CC_LR_MOVE_MAIL:-on}" != off ] && [ -n "$BY" ] && [ "$BY" != "?" ] && [ -x "$notify" ]; then
-    "$notify" "$BY" "cc-lr move $BATCH ($FROM -> $TO) $1: ${counts:-no rows}; target auth after the batch: $auth_after. $2 Details: cc-lr move --status $BATCH" >/dev/null 2>&1 || true
+    "$notify" "$BY" "cc-lr move $BATCH ($FROM -> $TO) $st: ${counts:-no rows}${classes:+ ($classes)}; target auth after the batch: $auth_after. $2${acts:+ Still to do: $acts.} Details: cc-lr move --status $BATCH" >/dev/null 2>&1 || true
   fi
 }
 refuse() { # $1=reason — the whole batch: every driven row NOTMOVED, nothing claimed or started
@@ -110,6 +132,23 @@ EOF
 [ "${LR_MOVE_LANE:-on}" != off ] || refuse "LR_MOVE_LANE=off"
 [ -n "$DRIVE" ] || { admit_json true ok "no row to move"; summary "done" "the plan held no row to move."; exit 0; }
 [ -n "$TO" ] && [ -n "$TO_CFG" ] || refuse "the plan names no target account or config dir"
+
+# THE OPERATOR'S ABORT (`cc-lr move --abort`, D9). Only the workers used to read it, so a batch
+# aborted before it started still read the router, took every claim, preseeded and started every
+# worker (20261011T032613Z: abort 03:40:58Z, admitted 03:41:16Z, 7 workers). Read here, again at the
+# end of the admit section (the router and capacity reads are its slow part), and before each worker.
+aborted_stop() { # $1=where $2=target auth — nothing is claimed yet: every driven row NOTMOVED, then stop
+  local sid pane cwd
+  admit_json false "${2:-not-read}" "aborted by the operator $1"
+  while IFS=$'\t' read -r sid pane cwd; do
+    [ -n "$sid" ] && result "$sid" "$pane" NOTMOVED "aborted by the operator $1; nothing touched"
+  done <<EOF
+$DRIVE
+EOF
+  summary aborted "The operator aborted the batch $1; nothing was claimed or started."
+  exit 0
+}
+[ ! -e "$BDIR/abort" ] || aborted_stop "before admission"
 
 # ── ADMIT ────────────────────────────────────────────────────────────────────────────────────────
 ALOCK="$STATE/locks/move-admit.lock"; mkdir -p "$STATE/locks" "$CLAIMS" 2>/dev/null || true
@@ -156,6 +195,7 @@ if [ "${LR_MOVE_KERNEL_CHECK:-on}" != off ] && command -v lr_capacity_probe_corr
     refuse "capacity: $(cc_capacity_admit_reason 2>/dev/null | cut -c1-240)" "$AUTH"
   fi
 fi
+[ ! -e "$BDIR/abort" ] || aborted_stop "during admission" "$AUTH"
 admit_json true "$AUTH" "router: ${ROUTE_WHY:-ranked}"
 
 CLAIMED="" seeded=1 cwds=""
@@ -189,6 +229,11 @@ unlock; trap - EXIT
 seedflag=""; [ "$seeded" = 1 ] && seedflag=1
 while IFS=$'\t' read -r sid pane; do
   [ -n "$sid" ] || continue
+  if [ -e "$BDIR/abort" ]; then
+    lr_claim_release "$CLAIMS" "$sid" "$$"
+    result "$sid" "$pane" NOTMOVED "aborted by the operator before its worker started; nothing touched"
+    continue
+  fi
   wpid=""
   if command -v detach >/dev/null 2>&1; then
     wpid="$(detach "$BDIR/$sid.worker.log" env LR_MOVE_PRESEEDED="$seedflag" /bin/bash "$WORKER" "$BATCH" "$sid" 2>/dev/null)" || wpid=""
