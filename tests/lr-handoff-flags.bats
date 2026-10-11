@@ -341,6 +341,21 @@ ABORT='!! recycle ABORTED before /exit (held: draft): composer: operator draft t
   [[ "$output" == *"verdict=NOTMOVED"* ]] || { echo "$output"; false; }
   [[ "$output" != *"verdict=STRANDED"* ]] || { echo "$output"; false; }
 }
+# hf_recycle_hold's exit-readback form, held AFTER /exit was typed, says so instead of "ABORTED before
+# /exit" (recycle-failures-kitty REPORT.md fix 2); keyed on the old literal alone it fell to STRANDED.
+READBACK_HELD="!! recycle HELD after /exit was TYPED (held: exit-readback): the composer read back '<unreadable>', not '/exit' — no DELs sent: the composer could not be read, so the /exit we typed MAY STILL BE IN THE BOX — clear it before typing; residue receipt /r/31 lets the next recycle's composer gate scrub it — the /exit was NOT submitted (no Enter sent), watcher disarmed, pane lock released, unconfirm rc 0. The session stays alive. Re-run: x"
+@test "the exit-readback hold form (HELD after /exit was TYPED) is NOTMOVED HELD:exit-readback, rc 6, never STRANDED" {
+  HF_RC=1 HF_ERR="$READBACK_HELD" fire
+  [ "$status" -eq 6 ] || { echo "status=$status $output"; false; }
+  [[ "$output" == *"verdict: HELD:exit-readback"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"verdict=STRANDED"* ]] || { echo "$output"; false; }
+}
+@test "the SIGTERM hold form (HELD after SIGTERM) is NOTMOVED HELD:exit-signal-ignored, rc 6, never STRANDED" {
+  HF_RC=1 HF_ERR="!! recycle HELD after SIGTERM (held: exit-signal-ignored): claude pid 4242 is still running 30s after SIGTERM; no KILL was sent and nothing was typed, so the session is alive — watcher disarmed, pane lock released, unconfirm rc 0. Re-run: x" fire
+  [ "$status" -eq 6 ] || { echo "status=$status $output"; false; }
+  [[ "$output" == *"verdict: HELD:exit-signal-ignored"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"verdict=STRANDED"* ]] || { echo "$output"; false; }
+}
 @test "CONTROL: held but the unconfirm FAILED (rc 2) is still STRANDED, rc 4" {
   # a refused unconfirm leaves the confirm's retirement in place: the source IS retired
   : > "$HOME/.claude-next/projects/-x-y/$SID.jsonl.handed-off"

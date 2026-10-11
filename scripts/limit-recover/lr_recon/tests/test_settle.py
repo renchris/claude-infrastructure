@@ -614,6 +614,35 @@ ABORT = (
     " — /exit NOT submitted, watcher disarmed, pane lock released, unconfirm rc 0. The session"
     " stays alive.\n"
 )
+# hf_recycle_hold's exit-readback form, held AFTER /exit was typed (recycle-failures-kitty
+# REPORT.md fix 2): it no longer says "ABORTED before /exit", and a parser keyed on that literal
+# alone read it as no hold at all.
+READBACK_HELD = (
+    "!! recycle HELD after /exit was TYPED (held: exit-readback): the composer read back"
+    " '<unreadable>', not '/exit' — no DELs sent: the composer could not be read, so the /exit we"
+    " typed MAY STILL BE IN THE BOX — clear it before typing; residue receipt /r/31 lets the next"
+    " recycle's composer gate scrub it — the /exit was NOT submitted (no Enter sent), watcher"
+    " disarmed, pane lock released, unconfirm rc 0. The session stays alive. Re-run: x\n"
+)
+
+
+class HoldLineForms(unittest.TestCase):
+    def test_both_hold_line_forms_name_their_hold(self):
+        self.assertEqual(settle._held_after_confirm(ABORT), "HOLD-DRAFT")
+        self.assertEqual(settle._held_after_confirm(READBACK_HELD), "HOLD-COMPOSER")
+        self.assertEqual(
+            settle._held_after_confirm(READBACK_HELD.replace("rc 0.", "rc 2.")), ""
+        )
+
+    def test_the_sigterm_hold_form_names_its_hold(self):
+        # fix 10: a SIGTERM claude ignored is held "after SIGTERM"; the session is alive, so it is
+        # re-probed like any other unreadable-composer hold.
+        line = (
+            "!! recycle HELD after SIGTERM (held: exit-signal-ignored): claude pid 4242 is still"
+            " running 30s after SIGTERM; no KILL was sent and nothing was typed — watcher disarmed,"
+            " pane lock released, unconfirm rc 0. Re-run: x\n"
+        )
+        self.assertEqual(settle._held_after_confirm(line), "HOLD-COMPOSER")
 
 
 class Unconfirm(unittest.TestCase):

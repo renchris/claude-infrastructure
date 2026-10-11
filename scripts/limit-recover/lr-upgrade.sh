@@ -2142,7 +2142,10 @@ lru_hf_evidence() { # $1=handoff-fire log → HFE_OPEN HFE_HOLD HFE_ABANDON HFE_
   HFE_OPEN=0 HFE_HOLD="" HFE_ABANDON=0 HFE_EXIT_SENT=0
   [ -f "${1:-}" ] || return 0
   grep -q -e '→ resume-debt open: rc' -e 'resume-debt NOT opened' "$1" 2>/dev/null && HFE_OPEN=1
-  HFE_HOLD="$(sed -n 's/.*recycle ABORTED before \/exit (held: \([^)]*\)).*/\1/p' "$1" 2>/dev/null | head -1)"
+  # Every hf_recycle_hold form: exit-readback, held AFTER /exit was typed, says "HELD after /exit was
+  # TYPED" (recycle-failures-kitty REPORT.md fix 2), and missing it skips lru_clear_own_exit;
+  # exit-signal-ignored says "HELD after SIGTERM" (fix 10).
+  HFE_HOLD="$(sed -nE 's/.*recycle (ABORTED before \/exit|HELD after \/exit was TYPED|HELD after SIGTERM) \(held: ([^)]*)\).*/\2/p' "$1" 2>/dev/null | head -1)"
   grep -q '→ resume-debt abandon: rc' "$1" 2>/dev/null && HFE_ABANDON=1
   if [ "$HFE_OPEN" = 1 ] && [ -z "$HFE_HOLD" ] && [ "$HFE_ABANDON" = 0 ]; then HFE_EXIT_SENT=1; fi
   return 0

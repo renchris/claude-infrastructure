@@ -548,6 +548,18 @@ s11_drive() { # $1=pane $2=composer after handoff-fire ('' = unreadable)
   nothing_typed
 }
 
+# hf_recycle_hold's exit-readback form says "HELD after /exit was TYPED", not "ABORTED before /exit"
+# (recycle-failures-kitty REPORT.md fix 2); keyed on the old literal, HFE_HOLD read empty and our own
+# /exit was never cleared.
+@test "S11a2 the NEW exit-readback hold form (HELD after /exit was TYPED) still clears our /exit" {
+  READBACK_LINE="!! recycle HELD after /exit was TYPED (held: exit-readback): the composer read back '<unreadable>', not '/exit' — no DELs sent: the composer could not be read, so the /exit we typed MAY STILL BE IN THE BOX — clear it before typing; residue receipt /r/31 lets the next recycle's composer gate scrub it — the /exit was NOT submitted (no Enter sent), watcher disarmed, pane lock released, unconfirm rc 0. The session stays alive. Re-run: x"
+  s11_drive 616 /exit
+  grep -qx 'rpc send-text --match id:616 ^U' "$T/tui.log" || { cat "$T/tui.log"; false; }
+  [ ! -s "$T/composer-616" ]
+  [[ "$(jq -r .reason "$(result "$SID")")" == *"our /exit cleared"* ]] || { cat "$(result "$SID")"; false; }
+  nothing_typed
+}
+
 @test "S11b composer '/exitx' after a readback hold: nothing sent" {
   s11_drive 613 /exitx
   [ "$(cnt 'send-text' "$T/tui.log")" = 0 ] || { cat "$T/tui.log"; false; }

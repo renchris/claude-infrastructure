@@ -72,9 +72,13 @@ RCY_HELD_SUB = {
     "busy": "HOLD-COMPOSER",  # mid-turn: re-probed through the precheck
     "unreachable": "HOLD-COMPOSER",  # composer unreadable (not a draft): re-probed the same way
 }
-# handoff-fire's hf_recycle_hold line: held after the confirm, and whether the unconfirm undid it
+# handoff-fire's hf_recycle_hold line: held after the confirm, and whether the unconfirm undid it.
+# Three forms: exit-readback is held AFTER /exit was typed and says so (recycle-failures-kitty
+# REPORT.md fix 2); exit-signal-ignored is held after a SIGTERM (fix 10); every other class is
+# "ABORTED before /exit".
 _RCY_HELD = re.compile(
-    r"recycle ABORTED before /exit \(held: ([A-Za-z-]+)\):.*\bunconfirm rc (\w+)\."
+    r"recycle (?:ABORTED before /exit|HELD after /exit was TYPED|HELD after SIGTERM) \(held: ([A-Za-z-]+)\):"
+    r".*\bunconfirm rc (\w+)\."
 )
 _STRANDED = re.compile(r"^lr-handoff \S+: verdict=STRANDED\b", re.M)
 _HOLD_SUB = (
@@ -410,7 +414,7 @@ def note_watcher_hold(home: str, rec: T.Record, now: float) -> bool:
 
 
 def _held_after_confirm(text: str) -> str:
-    """The PRE-MOVE hold an `ABORTED before /exit (held: <r>) … unconfirm rc 0` line names, or ''."""
+    """The PRE-MOVE hold a `(held: <r>) … unconfirm rc 0` hold line (either form) names, or ''."""
     hits = [m for m in _RCY_HELD.finditer(text) if m.group(2) == "0"]
     return RCY_HELD_SUB.get(hits[-1].group(1).lower(), "HOLD-COMPOSER") if hits else ""
 

@@ -1968,7 +1968,11 @@ if [[ $IN_PLACE -eq 1 ]]; then
     LRH_REPLACE=1
     [[ -n "$SOURCE_PANE" ]] && CLOSE_SOURCE=1
     rm -f "$LRH_RCY_ERR" 2>/dev/null || true
-  elif _lrh_held="$(grep -oE 'recycle ABORTED before /exit \(held: [A-Za-z-]+\)' "$LRH_RCY_ERR" 2>/dev/null | tail -1)" \
+  # hf_recycle_hold prints three forms: "ABORTED before /exit"; for exit-readback (held after /exit
+  # was typed), "HELD after /exit was TYPED"; for exit-signal-ignored (SIGTERM sent, claude still
+  # running), "HELD after SIGTERM". All carry "(held: <reason>)" (recycle-failures-kitty REPORT.md
+  # fixes 2 and 10); a parser keyed on one form alone reads the others as no hold at all.
+  elif _lrh_held="$(grep -oE 'recycle (ABORTED before /exit|HELD after /exit was TYPED|HELD after SIGTERM) \(held: [A-Za-z-]+\)' "$LRH_RCY_ERR" 2>/dev/null | tail -1)" \
        && [[ -n "$_lrh_held" ]] && grep -q 'unconfirm rc 0\.' "$LRH_RCY_ERR" 2>/dev/null; then
     # HELD AFTER THE CONFIRM, AND UNDONE (W5 rig, draft-after-confirm). handoff-fire's last read held
     # the move before /exit and lr-transplant --phase unconfirm rc 0 restored the source: nothing is
