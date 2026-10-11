@@ -97,7 +97,7 @@ same() {
 @test "differential: an empty registry dir, and one holding only non-files — both rc 1, no output" {
   load_ref
   same
-  [ "$status" -eq 1 ] && [ -z "$output" ]
+  [ "$status" -eq 1 ] && [ -z "$output" ] || false
   mkdir -p "$CC_REGISTRY_DIR/only.json"
   same
   [ "$status" -eq 1 ]
