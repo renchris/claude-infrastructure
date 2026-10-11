@@ -601,7 +601,8 @@ def recheck_why(exit_code: Any, stderr: str) -> str:
     """Why a re-check gave no verdict, in one line."""
     m = RECHECK_CRASH.search(stderr or "")
     if m:
-        line = (stderr or "")[m.start() :].splitlines()[0].strip()
+        text = stderr or ""
+        line = text[text.rfind("\n", 0, m.start()) + 1 :].splitlines()[0].strip()  # whole line
         if line.startswith("Traceback"):
             tail = [ln.strip() for ln in (stderr or "").splitlines() if ln.strip()]
             line = tail[-1] if tail else line

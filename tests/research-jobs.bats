@@ -97,13 +97,15 @@ premise() { # <id> <recheck_cmd> <verdict> [ttl_h]
   premise PR-24 "exit 124" holds                                       # the runner's timeout exit
   premise PR-25 "nosuchtool-xyz | grep -q x" holds                     # 127 hidden behind exit 1
   premise PR-26 'kill -TERM $$' holds                                  # a signal
+  premise PR-29 "bash -c nosuchtool-q" holds                           # a nested shell's crash line
   run job freshness --program demo
   [ "$status" -eq 1 ]
-  for id in PR-21 PR-22 PR-23 PR-24 PR-25 PR-26; do
+  for id in PR-21 PR-22 PR-23 PR-24 PR-25 PR-26 PR-29; do
     [[ "$output" == *"$id: P-fresh-$id gave no verdict"* ]] || false
   done
   [[ "$output" == *"crashed: ModuleNotFoundError"* ]] || false
-  [ "$(count "$REC/probes.jsonl" "r['id'].startswith('P-fresh-PR-2')")" -eq 6 ]
+  [[ "$output" == *"crashed: bash: line 1: nosuchtool-q: command not found"* ]] || false
+  [ "$(count "$REC/probes.jsonl" "r['id'].startswith('P-fresh-PR-2')")" -eq 7 ]
   [ "$(count "$REC/challenges.jsonl" "True")" -eq 0 ]
   [ "$(count "$REC/premises.jsonl" "r.get('carried') is True")" -eq 0 ]
 }
