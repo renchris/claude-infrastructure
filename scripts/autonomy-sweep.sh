@@ -410,12 +410,13 @@ case "$SWEEP_T0" in ''|*[!0-9]*) SWEEP_T0=0 ;; esac
 # can only over-accuse) but it is not silent: `cumulative_s` is read straight off SWEEP_T0, so a
 # row whose elapsed_s exceeds its own cumulative_s delta across consecutive rows is the tell.
 SWEEP_CP_LAST="$SWEEP_T0"
-# The first segment holds §0a-i (the ~4 s config-parity read, hoisted 2026-09-09) AND §0a, because
-# the first checkpoint is `sweep_yield 0b-author-death-join`. The label names both rather than
-# only the second, so ~4 s is not silently attributed to the cloud-return pass — a per-phase
-# meter whose first bucket is mislabelled would misdirect exactly the re-measurement this meter
-# exists to inform (the arms above the first checkpoint are what the self-bound keeps hitting).
-SWEEP_CP_PHASE="${CC_SWEEP_CP_PHASE0:-0a-i-config-parity+0a-cloud-return}"
+# The first segment holds the strand rung (§0-strand, 2026-10-10), §0a-i (the ~4 s config-parity
+# read, hoisted 2026-09-09) AND §0a, because the first checkpoint is `sweep_yield
+# 0b-author-death-join`. The label names all three rather than only the last, so their cost is not
+# silently attributed to the cloud-return pass — a per-phase meter whose first bucket is mislabelled
+# would misdirect exactly the re-measurement this meter exists to inform (the arms above the first
+# checkpoint are what the self-bound keeps hitting).
+SWEEP_CP_PHASE="${CC_SWEEP_CP_PHASE0:-0-strand-page+0a-i-config-parity+0a-cloud-return}"
 SWEEP_PHASE_LOG_MIN_S="${CC_SWEEP_PHASE_LOG_MIN_S:-5}"
 case "$SWEEP_PHASE_LOG_MIN_S" in ''|*[!0-9]*) SWEEP_PHASE_LOG_MIN_S=5 ;; esac
 
@@ -448,6 +449,76 @@ sweep_yield() { # <label of the phase that would run next> — exits 0 rather th
       note:"NOT a fault and NOT a cut. The sweep ended ITSELF before cc-reaper 600s orphan-bash floor, so this tick leaves no TERM row and the next tick starts on schedule. Every arm at or below stopped_before is idempotent and runs next tick. If stopped_before is ALWAYS the same phase, the arms above it now cost more than the bound: re-measure those, do not raise this past 600 minus CC_SWEEP_BOUND_S, because a bound that does not fit the floor it was sized against can only be killed by it."}')"
   exit 0
 }
+
+
+# ── 0-strand. STRAND RUNG — a stranded pane is bannered before ANY arm that can overrun ───────────
+# docs/research/recycle-failures-kitty-2026-10-10/REPORT.md fix 7 (F1). A recycle's relaunch failed
+# and the pane sat at a bare shell. hf_alarm's push went to a `desk` role that does not exist, and
+# this sweep's banner (ladder_v2 r2) runs at the END of a tick: ten consecutive ticks self-bounded
+# before reaching it (§0a alone measured elapsed_s 893 and 413 in the post-F1 ticks), and the
+# operator first heard 2 h later, from an aggregate banner. hf_alarm now pages strand classes
+# itself; this rung is the backstop for a record whose `paged` is not a success (the OS leg failed,
+# the page was switched off, or the record predates the page).
+#
+# It earns its place above §0a-i on §0a's own terms: one grep over the alarm dir and no network
+# when there is nothing to page, and when there is, the most time-critical page this sweep makes.
+# It banners each record ONCE, on the same `.bannered` marker r2 damps on, so r2 does not post it
+# a second time either. It never marks `.seen` (a banner is not a proven read) and never edits the
+# record (EVIDENCE law). Bounded per post and capped per tick; the first failed post ends the pass,
+# because a channel that refused one record will refuse the next. CC_SWEEP_STRAND_PAGE=off skips it.
+STRAND_MIN_AGE_S="${CC_SWEEP_STRAND_MIN_AGE_S:-60}"   # hf_alarm's own page (≤35 s) is done by then
+STRAND_MAX="${CC_SWEEP_STRAND_MAX:-3}"
+case "$STRAND_MIN_AGE_S" in ''|*[!0-9]*) STRAND_MIN_AGE_S=60 ;; esac
+case "$STRAND_MAX" in ''|*[!0-9]*) STRAND_MAX=3 ;; esac
+_st_os=0
+case "${CC_SWEEP_OS_CHANNEL:-auto}" in
+  off) ;;
+  on)  _st_os=1 ;;
+  *)   [ -x "${CC_SWEEP_OSASCRIPT:-/usr/bin/osascript}" ] && _st_os=1 ;;
+esac
+# A channel must exist before an attempt can mean anything: with the OS leg off and no phone
+# credentials, every tick would journal the same "failure" (r2 gates its phone leg the same way).
+if [ "${CC_SWEEP_STRAND_PAGE:-on}" != off ] && { [ "$_st_os" = 1 ] || [ -n "${PUSHOVER_TOKEN:-}" ] \
+     || [ -f "${LR_PAGE_CREDS:-$HOME/.config/lr-page/pushover.env}" ]; }; then
+  _st_lrp="${CC_SWEEP_LR_PAGE_BIN:-$_SWEEP_DIR/limit-recover/lr-page.sh}"
+  _st_now="$(date +%s 2>/dev/null || printf 0)"
+  _st_n=0; _st_names=""; _st_failed=""
+  # ONE fork finds the candidates: both hf_alarm writers emit `"class":"<c>"` with no space.
+  while IFS= read -r _st_f; do
+    [ -n "$_st_f" ] && [ -f "$_st_lrp" ] || continue
+    _st_b="$(basename "$_st_f")"
+    [ -f "$SEEN_DIR/$_st_b.bannered" ] && continue
+    case "$(json_field "$_st_f" paged)" in
+      os-banner|phone) mkdir -p "$SEEN_DIR" 2>/dev/null; : > "$SEEN_DIR/$_st_b.bannered" 2>/dev/null; continue ;;
+    esac
+    [ $(( _st_now - $(file_mtime "$_st_f") )) -ge "$STRAND_MIN_AGE_S" ] || continue
+    [ "$_st_n" -lt "$STRAND_MAX" ] || break
+    _st_c="$(json_field "$_st_f" class)"; _st_p="$(json_field "$_st_f" pane)"
+    _st_hd="$HANDOFF_ALARM_DIR"; case "$_st_hd" in "$HOME"/*) _st_hd="~${_st_hd#"$HOME"}" ;; esac
+    _st_msg="$_st_c · pane $_st_p · its continuation is stranded · record $_st_hd/$_st_b"
+    if LR_PAGE_OS_CHANNEL="${CC_SWEEP_OS_CHANNEL:-auto}" LR_PAGE_OSASCRIPT_BIN="${CC_SWEEP_OSASCRIPT:-/usr/bin/osascript}" \
+         sweep_bounded 35 bash "$_st_lrp" --title "stranded pane $_st_p" -- "${_st_msg:0:200}" >/dev/null 2>&1; then
+      mkdir -p "$SEEN_DIR" 2>/dev/null; : > "$SEEN_DIR/$_st_b.bannered" 2>/dev/null
+      _st_n=$((_st_n + 1)); _st_names="$_st_names $_st_b"
+    else
+      _st_failed="$_st_b"; break
+    fi
+  done <<EOF
+$(grep -lE '"class":"(recycle-relaunch-failed|recycle-dead)"' "$HANDOFF_ALARM_DIR"/alarm-*.json 2>/dev/null)
+EOF
+  if [ "$_st_n" -gt 0 ]; then
+    log_idl fired "$(jq -cn --arg summary "stranded pane(s):$_st_names" --argjson n "$_st_n" \
+      '{notified:"os-banner",delivered:false,channel:"notification-center-advisory",bannered:$n,
+        rung:"strand",summary:$summary,
+        why:"banner is not proof of read — records stay surfaced until something proves a reader"}')"
+  fi
+  if [ -n "$_st_failed" ]; then
+    log_idl strand-page "$(jq -cn --arg r "$_st_failed" \
+      '{delivered:false,record:$r,
+        why:"lr-page put no strand banner in front of a human — the record stays unbannered and the next tick retries it"}')"
+    echo "autonomy-sweep: strand page FAILED for $_st_failed — will retry next tick" >&2
+  fi
+fi
 
 
 # ── 0a-i. CONFIG-DIR GUARDRAIL PARITY — hoisted above §0a, for the reason §0a itself records ──────

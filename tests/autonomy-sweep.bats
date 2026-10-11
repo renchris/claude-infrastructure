@@ -2175,3 +2175,67 @@ dead_desk() {
   grep -q '"drain_autofire_mode":"would-fire"' "$CC_IDL"
   grep -q '"drain_revival":{"mode":"would-fire","decision":"would-fire"}' "$CC_IDL"
 }
+
+# ══ STRAND RUNG (docs/research/recycle-failures-kitty-2026-10-10/REPORT.md fix 7) ════════════════
+# F1: a pane stranded at a bare shell after a recycle's /exit, and the only banner consumer here is
+# ladder_v2 at the END of a tick — ten consecutive ticks self-bounded before reaching it, and the
+# operator first heard 2 h later from an aggregate banner. The strand rung runs before §0a-i/§0a,
+# banners each strand-class record ONCE (the `.bannered` marker r2 already damps on), and is cheap.
+
+mk_strand() { # <basename> <class> [paged] — aged past the rung's min age, so hf_alarm's own page is done
+  printf '{"kind":"handoff-alarm","class":"%s","pane":"44","sid":"DEAD","successor":"","detail":"Run manually in that pane: %s","ts":"t","address":"sid:DEAD"%s}\n' \
+    "$2" "$(printf 'x%.0s' $(seq 1 500))" "${3:+,\"paged\":\"$3\"}" > "$CC_HANDOFF_ALARM_DIR/$1"
+  touch -t "$(ago 1H)" "$CC_HANDOFF_ALARM_DIR/$1"
+}
+truncated_tick() {
+  run env CC_SWEEP_T0=$(( $(date +%s) - 5000 )) CC_SWEEP_SELF_BOUND_S=400 "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ] || echo "truncated tick rc=$status: $output"
+}
+
+@test "strand rung · a strand record is bannered even when the tick dies at its FIRST checkpoint, and never twice" {
+  export CC_SWEEP_OS_CHANNEL=auto
+  rm -f "$CC_ROLES_DIR/desk"
+  mk_strand alarm-strand-1.json recycle-relaunch-failed failed:3
+  truncated_tick
+  [ "$status" -eq 0 ]
+  # the tick was cut where §0a's overrun cuts the live ones — nothing below the first checkpoint ran
+  [ "$(jq -r 'select(.disposition=="self-bound")|.stopped_before' "$CC_IDL" | tail -1)" = "0b-author-death-join" ]
+  [ "$(osa_posts)" -eq 1 ] || { cat "$OSA_LOG" 2>/dev/null; false; }
+  grep -q 'alarm-strand-1.json' "$OSA_LOG"
+  grep -q 'recycle-relaunch-failed' "$OSA_LOG"
+  ! grep -q 'Run manually' "$OSA_LOG" || false           # a handle, never the command
+  [ -f "$CC_SWEEP_SEEN_DIR/alarm-strand-1.json.bannered" ]
+  # the os-banner row, in ladder_v2's shape, marked as this rung's
+  jq -e 'select(.disposition=="fired" and .notified=="os-banner" and .rung=="strand" and .bannered==1)' "$CC_IDL" >/dev/null || { cat "$CC_IDL"; false; }
+  # a second truncated tick, then a FULL tick whose r2 also banners unbannered records: no repost
+  truncated_tick
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(osa_posts)" -eq 1 ] || { cat "$OSA_LOG"; false; }
+}
+
+@test "strand rung · a record hf_alarm already paged is marked, not re-posted; a non-strand record is left to ladder_v2" {
+  export CC_SWEEP_OS_CHANNEL=auto
+  mk_strand alarm-paged.json recycle-dead os-banner
+  mk_strand alarm-husk.json husk-pane
+  truncated_tick
+  [ "$status" -eq 0 ]
+  [ "$(osa_posts)" -eq 0 ] || { cat "$OSA_LOG"; false; }
+  [ -f "$CC_SWEEP_SEEN_DIR/alarm-paged.json.bannered" ]  # so r2 does not post it a second time
+  [ ! -f "$CC_SWEEP_SEEN_DIR/alarm-husk.json.bannered" ]
+}
+
+@test "strand rung · a FAILED post is journalled and retried next tick; CC_SWEEP_STRAND_PAGE=off skips the rung" {
+  export CC_SWEEP_OS_CHANNEL=auto
+  mk_strand alarm-strand-2.json recycle-dead
+  printf '#!/bin/bash\ncat >/dev/null\nprintf "%%s\\n" "$*" >> "$OSA_LOG"\nexit 1\n' > "$BATS_TEST_TMPDIR/bin/osascript"
+  truncated_tick
+  [ "$status" -eq 0 ]
+  [ "$(osa_posts)" -eq 1 ]
+  [ ! -f "$CC_SWEEP_SEEN_DIR/alarm-strand-2.json.bannered" ]
+  jq -e 'select(.disposition=="strand-page" and .delivered==false)' "$CC_IDL" >/dev/null || { cat "$CC_IDL"; false; }
+  CC_SWEEP_STRAND_PAGE=off truncated_tick
+  [ "$(osa_posts)" -eq 1 ]                               # off: not attempted
+  truncated_tick
+  [ "$(osa_posts)" -eq 2 ]                               # on again: retried, because nobody saw it
+}
