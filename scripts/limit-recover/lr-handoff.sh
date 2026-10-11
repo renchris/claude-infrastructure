@@ -1958,7 +1958,13 @@ if [[ $IN_PLACE -eq 1 ]]; then
     # the admit is withdrawn below. (The precheck holds it earlier when the probe can say so.)
     [[ $_lrh_noshell -eq 1 ]] && _lrh_reason=no-shell
     _lrh_ab_rc=0
-    _lrh_ab_out="$("$LR/lr-transplant.sh" --phase abort --sid "$SID" --from "$CFG" --to "$TCFG" \
+    # THE HOLDER IS NAMED, NEVER DEFAULTED (report lr-reliability-telemetry-speed 2026-10-10, D4).
+    # lr-transplant defaults its holder to $PPID, and inside `$( )` that is the substitution
+    # subshell, not this process — so the abort refused its own caller as "a live actuator" every
+    # time a record id put a holder in the lock: 4 of 4 move-lane aborts, each leaving a tombstone,
+    # a lock and a stale target copy. `$$` in a subshell is still this script's pid, i.e. the pid
+    # the admit above recorded. A caller-supplied LR_HOLDER_PID still wins, as it does for the admit.
+    _lrh_ab_out="$(LR_HOLDER_PID="${LR_HOLDER_PID:-$$}" "$LR/lr-transplant.sh" --phase abort --sid "$SID" --from "$CFG" --to "$TCFG" \
         ${RECORD_ID:+--record-id "$RECORD_ID"} ${HF_WATCHER_RECORD:+--watcher-record "$HF_WATCHER_RECORD"} 2>&1)" || _lrh_ab_rc=$?
     if [[ $_lrh_ab_rc -eq 0 ]]; then
       echo "lr-handoff: verdict: HELD:$_lrh_reason — the recycle stood down before any confirm (handoff-fire rc=$LRH_RCY_RC); lr-transplant --phase abort rc 0 withdrew the admit" >&2
