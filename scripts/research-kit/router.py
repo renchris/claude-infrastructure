@@ -911,7 +911,7 @@ def context_for(slug: str, state: str, label: str, cert: str, reason: str) -> st
     if label == UNAVAILABLE:
         return (
             f"{head} UNKNOWN: the re-ask classifier was unavailable ({reason}). Research verbs "
-            "(Agent, Workflow, handoff-fire.sh, the vendor CLIs, round.sh, courier.sh) are blocked this "
+            "(Agent, Workflow, handoff-fire.sh fires, the vendor CLIs, round.sh, courier.sh) are blocked this "
             "turn; other tools are not. If the prompt asks whether the work is complete, relay these "
             f"lines verbatim and add nothing:\n--- certificate state lines ---\n{lines}\n---"
         )
@@ -931,7 +931,7 @@ def context_for(slug: str, state: str, label: str, cert: str, reason: str) -> st
         if state == "certifying":
             return (
                 f"{head} a RESEARCH ORDER while certification runs. The kit's own rounds (round.sh, "
-                "courier.sh) are allowed; Agent, Workflow, handoff-fire.sh and bare vendor CLIs are "
+                "courier.sh) are allowed; Agent, Workflow, handoff-fire.sh fires and bare vendor CLIs are "
                 "blocked this turn."
             )
         return (
@@ -1313,7 +1313,9 @@ def research_clause(
     act = env.get("CC_RESEARCH_ACTIVITY")
     cert_round = bool(certifying and act and act in cert_acts)
     if base == "handoff-fire.sh":
-        return "handoff-fire.sh"
+        # self-close spawns nothing: it only retires the calling pane, so a fired peer in a
+        # certifying program is not left an orphan. Every fire (--recycle, --prompt-file …) stays.
+        return None if rest[:1] == ["self-close"] else "handoff-fire.sh"
     if base in VENDOR:
         if base == "codex" and cert_round and codex_read_only(rest):
             return None  # a certification round's read-only reviewer

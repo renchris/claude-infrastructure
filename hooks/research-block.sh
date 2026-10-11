@@ -4,7 +4,7 @@
 #
 # In a session of a research program whose registry state is `certifying` or `certified` (§10 open
 # item 1: on from the freeze, so the relay trials run with it on), it denies by default the calls
-# that buy research — Agent, Workflow, handoff-fire.sh, the vendor CLIs, `claude -p`, the kit's
+# that buy research — Agent, Workflow, handoff-fire.sh fires (not self-close), the vendor CLIs, `claude -p`, the kit's
 # round.sh/courier.sh and the cc-research buying verbs — unless the turn's prompt was positively
 # labeled a work order or a new idea by the re-ask router (hooks/research-precognition-nudge.sh).
 # On a completeness or pushback turn it denies EVERY tool except the one certificate read. The

@@ -456,6 +456,22 @@ cert_round_open() {
   [ "$(tool Agent 'blind dedup')" = deny ]
 }
 
+# RED-proof: on 7dab6ce0d (research_clause returned "handoff-fire.sh" for every invocation) both
+# self-close assertions read deny — a fired peer in a certifying program could not retire its pane.
+@test "a certifying program lets a session self-close through handoff-fire.sh, and blocks every fire" {
+  state certifying
+  prompt "hello there" >/dev/null
+  [ "$(label)" = other ]
+  # shellcheck disable=SC2088  # the literal ~ is the point: the router reads the command as typed
+  [ "$(tool Bash '~/.claude/scripts/handoff-fire.sh self-close --terminal')" = allow ]
+  # shellcheck disable=SC2088
+  [ "$(tool Bash '~/.claude/scripts/handoff-fire.sh self-close --successor 4')" = allow ]
+  [ "$(tool Bash 'handoff-fire.sh --recycle --prompt-file x')" = deny ]
+  [ "$(tool Bash 'handoff-fire.sh --prompt-file x --worktree b')" = deny ]
+  [ "$(tool Bash 'bash scripts/handoff-fire.sh --prompt-file x')" = deny ]
+  [ "$(tool Bash 'handoff-fire.sh --prompt-file x self-close')" = deny ]
+}
+
 @test "a certification-round activity unlocks nothing once the program is certified" {
   state certified
   cert_round_open
