@@ -335,7 +335,8 @@ cmd_setup() {
   # R3 — account routing. The router is the arbiter; never re-rank from score_* fields.
   if [ -n "$ACCOUNTS_BIN" ]; then
     local acct rc2
-    acct="$("$ACCOUNTS_BIN" --route general 2>/dev/null)"; rc2=$?
+    # STRAND_FIRST=off: `up` places N sessions on this one answer, and a promoted thin account is budgeted for one fire.
+    acct="$(CC_ROUTE_DISPATCH_STRAND_FIRST=off "$ACCOUNTS_BIN" --route general 2>/dev/null)"; rc2=$?
     case "$rc2" in
       0) row PASS "account routing" "→ $acct" ;;
       2) row FAIL "account routing" "nothing routable by policy (quota/window)" "claude-accounts --readout" ;;
@@ -697,7 +698,8 @@ cmd_up_api() {
 
   # The router is the arbiter — never re-rank accounts here.
   if [ "$account" = auto ]; then
-    [ -n "$ACCOUNTS_BIN" ] && account="$("$ACCOUNTS_BIN" --route general 2>/dev/null)"
+    # STRAND_FIRST=off: all $n sessions go to this one answer, and a promoted thin account is budgeted for one fire.
+    [ -n "$ACCOUNTS_BIN" ] && account="$(CC_ROUTE_DISPATCH_STRAND_FIRST=off "$ACCOUNTS_BIN" --route general 2>/dev/null)"
     [ -n "$account" ] && [ "$account" != auto ] || { note "cc-offload: no routable account"; return 9; }
   fi
   # owner/name from the remote, portably. NOT a lazy-quantifier regex: BSD sed has no `+?` and the

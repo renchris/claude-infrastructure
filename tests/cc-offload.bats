@@ -404,6 +404,34 @@ EOF
   [[ "$output" != *"nothing routable"* ]]
 }
 
+# The router's ANSWER here is spent on several sessions (`up -n N` puts all N on it), and a promoted
+# thin account is budgeted for one fire — so both router calls switch promotion off (LEAD-SPEC
+# amendment 5, 2026-10-09). An env prefix is invisible in argv, so this stub records the variable.
+_accounts_env_stub() {
+  cat >"$STUBDIR/claude-accounts" <<'EOF'
+#!/usr/bin/env bash
+echo "accounts $* FIRST=${CC_ROUTE_DISPATCH_STRAND_FIRST-UNSET}" >>"$CALLS"; echo next3
+EOF
+  chmod +x "$STUBDIR/claude-accounts"
+}
+
+@test "setup asks the router with thin-account promotion OFF" {
+  _accounts_env_stub
+  local fake="$BATS_TEST_TMPDIR/newclaude"
+  printf '#!/usr/bin/env bash\necho "2.1.220 (Claude Code)"\n' >"$fake"; chmod +x "$fake"
+  CC_CLOUD_CREATE_BIN="$fake" run "$SUT" setup
+  grep -q '^accounts --route general FIRST=off$' "$CALLS" || false
+}
+
+@test "up -n 3 on account auto makes ONE router call, with thin-account promotion OFF" {
+  _accounts_env_stub; _api_fixture
+  run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" -n 3 --dry-run
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # one answer for all three sessions — which is exactly why it must not be a one-fire account
+  [ "$(grep -c '^accounts --route general' "$CALLS")" = 1 ]
+  grep -q '^accounts --route general FIRST=off$' "$CALLS" || false
+}
+
 # ══ land / gc / watch ═══════════════════════════════════════════════════════════════════════════
 
 @test "land without --all is read-only and never passes CONFIRM" {

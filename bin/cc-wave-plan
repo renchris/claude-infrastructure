@@ -355,7 +355,8 @@ load_ranks() {
   bin="$(accounts_bin)"; [ -n "$bin" ] || fail_config "claude-accounts unavailable (cannot rank accounts)"
   # Captured (not piped from a process substitution) because the rc and the RAW text are both
   # EVIDENCE now: an empty ranked set means nothing until you know whether the oracle answered.
-  RANK_RAW="$(run_oracle "$bin" --rank general ${ORACLE_MAX_AGE_S:+--max-age "$ORACLE_MAX_AGE_S"})"; RANK_RC=$?
+  # STRAND_FIRST=off: this ranking places a whole wave, and a promoted thin account is budgeted for one fire.
+  RANK_RAW="$(CC_ROUTE_DISPATCH_STRAND_FIRST=off run_oracle "$bin" --rank general ${ORACLE_MAX_AGE_S:+--max-age "$ORACLE_MAX_AGE_S"})"; RANK_RC=$?
   # PARSE BY SHAPE, against the producer's literal contract: `--rank` emits
   # `f"{acct} {score:.6f}"` per routable account (claude-accounts:1699), and when NOTHING is
   # routable it prints the sentinel `none` on stdout and exits 2 (policy refused) or 3 (data

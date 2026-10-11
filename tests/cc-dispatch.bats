@@ -92,6 +92,7 @@ EOF
          CC_DISPATCH_ACCOUNTS_BIN="$C/stubs/accounts" \
          CC_DISPATCH_PAGES_DIR="$C/pages" \
          CC_DISPATCH_IDL="$C/idl.jsonl" \
+         CC_DISPATCH_FIRE_LOG="$C/dispatch-fires.log" \
          CC_DISPATCH_PROJECT="/repo/proj" \
          CC_DISPATCH_MAX_SPAWN=2 \
          CC_DISPATCH_CEILING=6 \
@@ -188,6 +189,10 @@ idl_action() { tail -1 "$C/idl.jsonl" | jq -r '.action'; }
   [ "$(status_of "$id")" = claimed ]
   grep -q -- '--prompt-file /tmp/fire.txt --account next3' "$C/spawn.log"
   grep -q '"action":"fired"' "$C/idl.jsonl"
+  # The fire record landed in the PINNED log. Drop setup's CC_DISPATCH_FIRE_LOG export and this
+  # header goes to the live ~/.claude/logs/dispatch-fires.log instead — 630 of that log's 1637
+  # headers were this suite's fixture ids before the pin (2026-10-09).
+  grep -q "item=$id account=" "$C/dispatch-fires.log"
 }
 
 @test "(k) blocked-on-operator item is NOT dispatched (real fold): ZERO spawn, stays blocked, IDL passed" {
@@ -210,6 +215,7 @@ idl_action() { tail -1 "$C/idl.jsonl" | jq -r '.action'; }
   [ "$(status_of "$id")" = open ]
   grep -q -- '--prompt-file /tmp/fire.txt' "$C/spawn.log"
   grep -q '"action":"failed"' "$C/idl.jsonl"
+  grep -q "item=$id account=" "$C/dispatch-fires.log"   # a failed fire is recorded there too
   # …and the verdict NAMES ITS CAUSE (§1(c)/R3). The rc and the fire's own diagnostic both ride on
   # the record; without them "spawn non-zero" is exactly the un-evidenced verdict this rebuild
   # exists to remove, and 112 of them accrued in a single 10 h window saying nothing.

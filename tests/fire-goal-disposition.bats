@@ -51,6 +51,8 @@ setup() {
   # subject under test — clear the slate so every "unset" case is real and every "set" case comes
   # only from its own per-call prefix.
   unset SESSION_ID FIRING_SID FIRE_GOAL WANT_SELF_RETIRE SPAWNED_PANE CHOSEN 2>/dev/null || true
+  # The pick's four inputs to the account_via / ranked keys (section 5): every case sets its own.
+  unset ACCOUNT_VIA RANKED LAUNCHER ACCOUNT 2>/dev/null || true
   FUNCS="$BATS_TEST_TMPDIR/funcs.sh"
   {
     grep '^_iso_now() {' "$HF" || true
@@ -387,4 +389,147 @@ setup() {
   # …and the shipped emitter uses the portable spelling instead.
   run grep -c 'head -n "\$_hf_ndrop"' "$FUNCS"
   [ "$output" = "1" ]
+}
+
+# ── 5 · HOW THE ACCOUNT WAS CHOSEN (account_via / ranked, 2026-10-09) ───────────────────────────
+#
+# A fire row kept its winner and threw away the ranking it won against, so "why did nothing fire at
+# the soonest-reset account?" was an absence in this ledger. These pin the record: the value per
+# pick arm, null where there was no ranking, last-two key position, and the classes that carry it.
+
+RANKED_FIXTURE="$(printf 'next4 0.000517\nnext 0.000294\nnext3 0.000149\nnext2 0.000477\nnext5 0.000001')"
+
+@test "an AUTO fire records account_via:auto and the ranking, in the recycle-repick join, LAST" {
+  command -v jq >/dev/null 2>&1 || skip "row shape needs jq"
+  RANKED="$RANKED_FIXTURE" CHOSEN="next4" SPAWNED_PANE="pane-V" emit_handoff_telemetry 1
+  run jq -r '.account_via' "$LOG"
+  [ "$output" = "auto" ]
+  # First FOUR lines only, as recycle_repick renders them — the demoted row is the score that is
+  # larger than the one before it (next2), which is the whole reason the scores are kept.
+  run jq -r '.ranked' "$LOG"
+  [ "$output" = "next4 0.000517 > next 0.000294 > next3 0.000149 > next2 0.000477" ]
+  run jq -c 'keys_unsorted[-2:]' "$LOG"
+  [ "$output" = '["account_via","ranked"]' ]
+}
+
+@test "an EXPLICIT or LAUNCHER pick records ranked:null even with a ranking in scope" {
+  command -v jq >/dev/null 2>&1 || skip "row shape needs jq"
+  # The resolved arm (ACCOUNT_VIA) decides; with it unset the same two inputs the pick reads do.
+  ACCOUNT_VIA=explicit RANKED="$RANKED_FIXTURE" CHOSEN="next2" emit_handoff_telemetry 1
+  ACCOUNT_VIA="" ACCOUNT="next2" RANKED="$RANKED_FIXTURE" CHOSEN="next2" emit_handoff_telemetry 1
+  ACCOUNT_VIA="" CHOSEN="(explicit launcher)" RANKED="$RANKED_FIXTURE" emit_handoff_telemetry 1
+  run jq -rs 'map([.account_via, (.ranked|tostring)]|join("/"))|join(" ")' "$LOG"
+  [ "$output" = "explicit/null explicit/null launcher/null" ]
+}
+
+@test "a REFUSED row carries both keys last; an ADMITTED row carries neither" {
+  command -v jq >/dev/null 2>&1 || skip "row shape needs jq"
+  # The payload refusal fires AFTER the pick, so it gets the state the pick leaves on the auto arm.
+  ACCOUNT_VIA=auto LAUNCHER=claude-next4 RANKED="$RANKED_FIXTURE" CHOSEN="next4" \
+    emit_fire_refusal payload-backchannel "malformed"
+  emit_fire_refusal capacity "before the pick"              # no ranking yet: null, never a guess
+  LAUNCHER="claude-next3" emit_fire_refusal capacity "before the pick, explicit launcher"
+  RANKED="$RANKED_FIXTURE" emit_fire_event admitted measured "ok" admit capacity
+  run jq -rs 'map(select(.class=="refused")|[.account_via, (.ranked|tostring)]|join("/"))|join(" | ")' "$LOG"
+  [ "$output" = "auto/next4 0.000517 > next 0.000294 > next3 0.000149 > next2 0.000477 | auto/null | launcher/null" ]
+  run jq -cs '.[0]|keys_unsorted[-2:]' "$LOG"
+  [ "$output" = '["account_via","ranked"]' ]
+  run jq -rs '[.[]|select(.class=="admitted")|has("account_via") or has("ranked")]|@csv' "$LOG"
+  [ "$output" = "false" ]
+}
+
+@test "a refusal AFTER the pick reads the resolved arm — LAUNCHER is set on every arm by then" {
+  command -v jq >/dev/null 2>&1 || skip "row shape needs jq"
+  # The state a real fire is in once the pick block has run: LAUNCHER is non-empty whichever arm
+  # was taken, so re-deriving from LAUNCHER/ACCOUNT here labels every payload refusal `launcher`
+  # and drops the ranking — for router picks and named accounts alike.
+  ACCOUNT_VIA=explicit LAUNCHER=claude-next2 ACCOUNT=next2 CHOSEN=next2 RANKED="$RANKED_FIXTURE" \
+    emit_fire_refusal payload-backchannel x
+  ACCOUNT_VIA=auto LAUNCHER=claude-next4 CHOSEN=next4 RANKED="$RANKED_FIXTURE" \
+    emit_fire_refusal payload-backchannel x
+  # …and BEFORE the pick (ACCOUNT_VIA still empty) a named --account is already `explicit`.
+  ACCOUNT_VIA="" LAUNCHER="" ACCOUNT=next2 emit_fire_refusal capacity x
+  run jq -rs 'map([.account_via, (.ranked|tostring)]|join("/"))|join(" | ")' "$LOG"
+  [ "$output" = "explicit/null | auto/next4 0.000517 > next 0.000294 > next3 0.000149 > next2 0.000477 | explicit/null" ]
+}
+
+# The cases above hand the emitters their state. These three run the REAL pick block: a --dry-run
+# fire driven through the pick to the first refusal after it (--extra with a bare `!`, the idiom of
+# tests/handoff-fire-bang-quoting.bats), read back from the fixtured ledger. Without them the three
+# ACCOUNT_VIA assignments are unpinned — swap any two and every case above stays green.
+_fire_to_refusal() { # $@ = the pick flags → runs one dry fire; the refused row lands in $LOG
+  mkdir -p "$HOME/.claude/bin" "$BATS_TEST_TMPDIR/rank"
+  # A fixtured $HOME has no it2 shim and the script reads REAL_IT2 out of it under `set -e`.
+  printf '#!/usr/bin/env bash\nREAL_IT2="/usr/bin/true"\nexec /usr/bin/true "$@"\n' > "$HOME/.claude/bin/it2"
+  # The ranker the auto arm calls by bare name: five lines, the 4th out of score order (a held row).
+  cat > "$BATS_TEST_TMPDIR/rank/claude-accounts" <<'STUB'
+#!/bin/bash
+[ "$1" = --rank ] && printf '%s\n' "next4 0.000517" "next 0.000294" "next3 0.000149" "next2 0.000477" "next5 0.000001"
+exit 0
+STUB
+  chmod +x "$HOME/.claude/bin/it2" "$BATS_TEST_TMPDIR/rank/claude-accounts"
+  printf 'a brief\n' > "$BATS_TEST_TMPDIR/brief.txt"
+  local _rc=0 _out
+  _out="$(HISTFILE="$BATS_TEST_TMPDIR/hist" PATH="$BATS_TEST_TMPDIR/rank:$PATH" \
+    bash "$HF" --dry-run "$@" --prompt-file "$BATS_TEST_TMPDIR/brief.txt" --extra '--foo a!b' 2>&1)" || _rc=$?
+  [ "$_rc" -eq 2 ] || { echo "expected the --extra refusal (2), got $_rc: $_out"; return 1; }
+}
+
+@test "PICK BLOCK, auto arm: a real dry fire's refused row says auto and keeps the ranking" {
+  command -v jq >/dev/null 2>&1 || skip "row shape needs jq"
+  _fire_to_refusal
+  run jq -c 'select(.class=="refused")|[.account, .account_via, .ranked]' "$LOG"
+  [ "$output" = '["next4","auto","next4 0.000517 > next 0.000294 > next3 0.000149 > next2 0.000477"]' ]
+}
+
+@test "PICK BLOCK, explicit and launcher arms: each names itself and records ranked:null" {
+  command -v jq >/dev/null 2>&1 || skip "row shape needs jq"
+  _fire_to_refusal --account next2
+  _fire_to_refusal --launcher claude-next3
+  run jq -cs 'map(select(.class=="refused")|[.account, .account_via, .ranked])' "$LOG"
+  [ "$output" = '[["next2","explicit",null],["(explicit launcher)","launcher",null]]' ]
+}
+
+@test "an INHERITED ACCOUNT_VIA or RANKED does not label a refusal that precedes the pick" {
+  command -v jq >/dev/null 2>&1 || skip "row shape needs jq"
+  # The script resets it at arg-parse. An empty brief is refused before the pick block runs, so the
+  # only thing that could say `explicit` here is a value leaking in from the caller's environment.
+  : > "$BATS_TEST_TMPDIR/empty.txt"
+  # RANKED likewise: inherited, it would hang a ranking on a row that was never ranked.
+  ACCOUNT_VIA=explicit RANKED="next3 0.900000" run bash "$HF" --dry-run --prompt-file "$BATS_TEST_TMPDIR/empty.txt"
+  [ "$status" -eq 1 ] || { echo "expected the payload-empty refusal (1), got $status: $output"; false; }
+  run jq -c 'select(.class=="refused")|[.refuse_reason, .account_via, .ranked]' "$LOG"
+  [ "$output" = '["payload-empty","auto",null]' ]
+}
+
+@test "the jq-less FALLBACK row carries account_via and ranked, and is still valid JSON" {
+  command -v jq >/dev/null 2>&1 || skip "the row is read back with jq"
+  nojq="$BATS_TEST_TMPDIR/nojq"; mkdir -p "$nojq"
+  for b in bash mkdir date ps cat; do ln -sf "$(command -v "$b")" "$nojq/$b"; done
+  run env PATH="$nojq" RANKED="$RANKED_FIXTURE" SPAWNED_PANE="pane-F" CHOSEN="next4" \
+      bash -c ". '$FUNCS'; command -v jq >/dev/null 2>&1 && exit 9; emit_handoff_telemetry 1"
+  [ "$status" -eq 0 ]
+  run env PATH="$nojq" ACCOUNT_VIA=explicit RANKED="$RANKED_FIXTURE" CHOSEN="next2" \
+      bash -c ". '$FUNCS'; command -v jq >/dev/null 2>&1 && exit 9; emit_handoff_telemetry 1"
+  [ "$status" -eq 0 ]
+  run jq -rs 'map([.account_via, (.ranked|tostring)]|join("/"))|join(" | ")' "$LOG"
+  [ "$status" -eq 0 ]
+  [ "$output" = "auto/next4 0.000517 > next 0.000294 > next3 0.000149 > next2 0.000477 | explicit/null" ]
+  run grep -c 'started_at' "$LOG"                          # the fallback is the path that ran
+  [ "$output" = "0" ]
+}
+
+@test "CONTROL: strip the ranked key from the fire row's jq builder and the auto assertion FAILS" {
+  command -v jq >/dev/null 2>&1 || skip "control needs jq"
+  MUT="$BATS_TEST_TMPDIR/mutant-ranked.sh"
+  # shellcheck disable=SC2016  # a literal jq `$rk` anchor, matched as text
+  run grep -c '^         + {ranked:          (if \$rk == "" then null else \$rk end)}' "$FUNCS"
+  [ "$output" = "1" ]                                  # the anchor exists exactly once
+  # shellcheck disable=SC2016  # a literal jq `$rk` anchor, matched as text
+  sed 's/^         + {ranked:          (if \$rk == "" then null else \$rk end)}/        /' "$FUNCS" > "$MUT"
+  bash -n "$MUT"                                       # a broken mutant proves nothing
+  run env RANKED="$RANKED_FIXTURE" CHOSEN="next4" \
+      bash -c ". '$MUT'; emit_handoff_telemetry 1; jq -r 'has(\"ranked\")' '$LOG'"
+  [ "$status" -eq 0 ]
+  [ "$output" = "false" ]
 }

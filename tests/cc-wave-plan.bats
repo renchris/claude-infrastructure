@@ -35,6 +35,8 @@ setup() {
   cat > "$C/bin/claude-accounts" <<'STUB'
 #!/bin/bash
 [ -n "${STUB_ARGV_LOG:-}" ] && printf '%s\n' "$*" >> "$STUB_ARGV_LOG"
+# STUB_ENV_LOG — the promotion switch as THIS call saw it, per verb (argv alone cannot show an env prefix).
+[ -n "${STUB_ENV_LOG:-}" ] && printf '%s FIRST=%s\n' "${1:-}" "${CC_ROUTE_DISPATCH_STRAND_FIRST-UNSET}" >> "$STUB_ENV_LOG"
 # STUB_CACHE_AGE — the shared cache's age in seconds. The caller's `--max-age N` (absent ⇒ the
 # producer's 90s TTL) decides whether it is SERVED or re-SWEPT, and a sweep costs STUB_SWEEP_S —
 # the shape of claude-accounts get_data(): cache_read(grace_s=max_age), else sweep under the lock.
@@ -194,6 +196,20 @@ STUB
   echo "$output" | jq -e '.[0]|select(.id=="a" and .model=="claude-opus-4-8" and .effort=="max" and .account=="next")'
   echo "$output" | jq -e '.[1]|select(.id=="b" and .effort=="high")'
   echo "$output" | jq -e '.[0].fire_line|test("handoff-fire.sh") and test("/tmp/fire-a.txt")'
+}
+
+@test "the wave's ranking is asked for with thin-account PROMOTION OFF, and only that call" {
+  # A promoted thin account is budgeted for ONE fire; this ranking places a whole wave, so line 1
+  # must not be one (LEAD-SPEC amendment 5, 2026-10-09). The prefix sits on run_oracle, a shell
+  # function — the shape a refactor drops without any plan changing on a stubbed ranker.
+  export STUB_ENV_LOG="$BATS_TEST_TMPDIR/env"
+  run "$WP" --items '[{"id":"a","slot":"lead"},{"id":"b","slot":"transcription"}]' --json
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^--rank ' "$STUB_ENV_LOG")" -ge 1 ]
+  ! grep '^--rank ' "$STUB_ENV_LOG" | grep -qv 'FIRST=off$' || false
+  # scoped to the ranker call: the other oracle reads do not inherit it
+  [ "$(grep -vc '^--rank ' "$STUB_ENV_LOG")" -ge 1 ]
+  ! grep -v '^--rank ' "$STUB_ENV_LOG" | grep -q 'FIRST=off$' || false
 }
 
 @test "spread: 3 items, MAX=2, 2 idle accounts → round-robin A,B,A (per-wave cap retained)" {

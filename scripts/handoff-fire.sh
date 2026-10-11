@@ -530,7 +530,9 @@ ACCOUNT_SWEEP_RELOGIN_TIMEOUT_S="${HANDOFF_RELOGIN_TIMEOUT_S:-90}"  # per-accoun
 # override in tests (production leaving this default is what makes the interlock real).
 CC_HEAL_LOCK_PREFIX="${CC_HEAL_LOCK_PREFIX:-/tmp/claude-accounts-heal-}"
 
-PROMPT_FILE="" ACCOUNT="auto" LAUNCHER="" MODEL="" EFFORT="" CWD="" WORKTREE=""
+# ACCOUNT_VIA and RANKED are reset here, not first set at the pick: a refusal raised before the pick
+# writes both to handoffs.jsonl, and a caller-exported value must never label that row.
+PROMPT_FILE="" ACCOUNT="auto" LAUNCHER="" MODEL="" EFFORT="" CWD="" WORKTREE="" ACCOUNT_VIA="" RANKED=""
 # REPO_EXPLICIT/REPO_SRC: only an explicit --repo pins the target repo. Otherwise it is RESOLVED
 # from the firing session's cwd after arg parsing (see § REPO resolution) — $DEFAULT_REPO is the
 # fallback for a fire from outside any git repo, never the default for a fire from inside one.
@@ -763,7 +765,7 @@ emit_fire_event() { # $1=class $2=reason|basis $3=detail [$4=verdict] [$5=gate] 
     # With $4/$5 empty this emits the pre-2026-07-31 object byte-for-byte APART from the two
     # trailing keys `under_test` and `prompt_file` — the two recycle-* callers below are unchanged
     # by construction, not by inspection. Both are appended LAST so no existing key's position
-    # moves.
+    # moves. (A `refused` row carries two more after them — see account_via below.)
     #
     # A REFUSAL CARRIES THE BRIEF TOO, and that is the point rather than an afterthought. The sweep
     # this field exists for asks "was a fire ever made FROM this brief"; without the refusal rows it
@@ -771,10 +773,34 @@ emit_fire_event() { # $1=class $2=reason|basis $3=detail [$4=verdict] [$5=gate] 
     # detector must keep apart — a brief nobody ever attempted (the lost-succession class) and a
     # brief that was attempted and refused by a gate (already recorded, already has a culprit).
     # Convicting the second as the first is precisely the false alarm that would spend the budget.
+    #
+    # account_via / ranked (2026-10-09) — a `refused` row ALSO says how its account was chosen, and,
+    # for an `auto` pick, the ranking it was chosen from. Appended LAST and on class `refused` ONLY,
+    # so the admitted and recycle-* rows keep their shape. `account` alone could not answer "why
+    # this account?": 119 payload refusals at one account read the same whether the router sent
+    # them there or a caller named it. ACCOUNT_VIA is set where the pick resolves; a refusal from a
+    # gate that runs BEFORE the pick derives it from the same two inputs the pick will read
+    # (LAUNCHER, ACCOUNT) and has no ranking yet, so `ranked` is null there, never a guess. The join
+    # is recycle_repick's (first 4 lines, "a s > b s"), in pure bash because the fire row's jq-less
+    # arm renders the same string with no awk on PATH.
+    local _av="${ACCOUNT_VIA:-}" _rk="" _ra _rs _rn=0
+    if [ -z "$_av" ]; then
+      if [ -n "${LAUNCHER:-}" ]; then _av=launcher
+      elif [ "${ACCOUNT:-auto}" != auto ]; then _av=explicit
+      else _av=auto; fi
+    fi
+    if [ "$_av" = auto ] && [ -n "${RANKED:-}" ]; then
+      while read -r _ra _rs _; do
+        _rn=$((_rn + 1)); [ "$_rn" -le 4 ] || break
+        [ -n "$_rs" ] || continue
+        _rk="${_rk:+$_rk > }$_ra $_rs"
+      done <<<"$RANKED"
+    fi
     line=$(jq -cn --arg ts "$(_iso_now)" --arg fs "${FIRING_SID:-}" --arg cl "${1:-unknown}" \
                   --arg r "${2:-unknown}" --arg d "${3:-}" --arg ac "${CHOSEN:-}" \
                   --arg vd "${4:-}" --arg gt "${5:-}" --argjson ut "$(_under_test 2>/dev/null || echo false)" \
                   --arg pf "$(_resolved_prompt_file 2>/dev/null || true)" \
+                  --arg av "$_av" --arg rk "$_rk" \
       '{ts:$ts, class:$cl}
        + (if $vd == "admit" then {basis:$r} else {engaged:false, refuse_reason:$r} end)
        + (if $vd == "" then {} else {verdict:$vd} end)
@@ -783,7 +809,9 @@ emit_fire_event() { # $1=class $2=reason|basis $3=detail [$4=verdict] [$5=gate] 
        + {firing_sid:(if $fs == "" then null else $fs end)}
        + {account:   (if $ac == "" then null else $ac end)}
        + {detail:    (if $d  == "" then null else $d  end)}
-       + {prompt_file:(if $pf == "" then null else $pf end)}' 2>/dev/null) || line=""
+       + {prompt_file:(if $pf == "" then null else $pf end)}
+       + (if $cl == "refused"
+          then {account_via:$av, ranked:(if $rk == "" then null else $rk end)} else {} end)' 2>/dev/null) || line=""
     [ -n "$line" ] && { printf '%s\n' "$line" >> "$log" 2>/dev/null || true; }
   fi
   return 0
@@ -14887,18 +14915,24 @@ fi
 
 # ---- pick the account ------------------------------------------------------------------------
 CHOSEN="" RANKED="" NAMES="" reason=""
+# ACCOUNT_VIA names the arm taken here, for the handoffs.jsonl rows (emit_fire_event,
+# emit_handoff_telemetry): once this block has run LAUNCHER is set on every arm, so it can no
+# longer tell them apart.
 if [ -n "$LAUNCHER" ]; then
+  ACCOUNT_VIA=launcher
   CHOSEN="(explicit launcher)"
   # (dry-run prints the same notice in its readout — don't say it twice)
   [ "$PROBE" = 1 ] && [ "$DRY" = 0 ] && echo "⚠ --probe skipped: explicit --launcher gives no account to probe (use --account instead)" >&2
 elif [ "$ACCOUNT" != "auto" ]; then
   cfg_dir "$ACCOUNT" >/dev/null || { echo "!! unknown account: $ACCOUNT (next|next2|next3|next4|auto)" >&2; exit 1; }
+  ACCOUNT_VIA=explicit
   CHOSEN="$ACCOUNT"
   if [ "$PROBE" = 1 ] && [ "$DRY" = 0 ]; then
     reason="$(probe_account "$ACCOUNT")" || { echo "✗ probe FAILED on $ACCOUNT: $reason" >&2; exit 1; }
   fi
   LAUNCHER="$(launcher_for "$ACCOUNT")"
 else
+  ACCOUNT_VIA=auto
   RANKED_ALL="$(ranked_accounts)" \
     || { echo "✗ halting fire: no routable account (see claude-accounts reasons above)" >&2; exit 1; }
   RANK_SRC="$(printf '%s\n' "$RANKED_ALL" | sed -n '1s/^# //p')"
@@ -18337,6 +18371,31 @@ else
     # (defaulting true) would quietly delete real fires from every production-only denominator.
     local _hf_ut
     if command -v _under_test >/dev/null 2>&1; then _hf_ut="$(_under_test)"; else _hf_ut=false; fi
+    # account_via / ranked (2026-10-09) — HOW the account on this row was chosen, and for an `auto`
+    # pick the ranking it was chosen from. Until now the ranking was recorded only for a recycle
+    # re-pick, so an ordinary `--account auto` fire kept its winner and threw away the field it won
+    # against: "why did nothing fire at the soonest-reset account?" was an absence, unanswerable
+    # from this ledger. Both keys are appended LAST so no existing key moves. The one query:
+    #   jq -c 'select(.class=="handoff" or .class=="self-retire-peer" or .class=="refused")
+    #          | [.ts, .account, .account_via, .ranked]' ~/.claude/logs/handoffs.jsonl
+    # `ranked` is recycle_repick's join (first 4 lines, "a s > b s"), so one reader parses both row
+    # kinds, and a floor that reordered the list shows as a score larger than the one before it. It
+    # is null unless account_via is auto: an explicit pick was chosen from no ranking, and printing
+    # one would claim it had been. Pure bash, no awk — the jq-less arm below runs it too, and a
+    # helper would be an unresolved 127 in the suites that extract this unit alone (see above).
+    local _hf_via="${ACCOUNT_VIA:-}" _hf_rk="" _hf_ra _hf_rs _hf_rn=0
+    if [ -z "$_hf_via" ]; then
+      if [ "${CHOSEN:-}" = "(explicit launcher)" ]; then _hf_via=launcher
+      elif [ "${ACCOUNT:-auto}" != auto ]; then _hf_via=explicit
+      else _hf_via=auto; fi
+    fi
+    if [ "$_hf_via" = auto ] && [ -n "${RANKED:-}" ]; then
+      while read -r _hf_ra _hf_rs _; do
+        _hf_rn=$((_hf_rn + 1)); [ "$_hf_rn" -le 4 ] || break
+        [ -n "$_hf_rs" ] || continue
+        _hf_rk="${_hf_rk:+$_hf_rk > }$_hf_ra $_hf_rs"
+      done <<<"$RANKED"
+    fi
     _hf_json='{}'
     if command -v jq >/dev/null 2>&1; then
       _hf_json=$(jq -cn \
@@ -18348,6 +18407,7 @@ else
         --argjson gr "$([ -n "${FIRE_GOAL:-}" ] && echo true || echo false)" \
         --argjson ut "$_hf_ut" \
         --arg pf "$(_resolved_prompt_file 2>/dev/null || true)" \
+        --arg av "$_hf_via" --arg rk "$_hf_rk" \
         '{ts:$ts, class:$cl, engaged:$en, target_pane:$tp}
          + {goal_requested:  $gr}
          + {prompt_file:     (if $pf == "" then null else $pf end)}
@@ -18361,7 +18421,9 @@ else
          + {started_at:      (if $sa == "" then null else $sa end)}
          + {engaged_at:      (if $ea == "" then null else $ea end)}
          + {engage_proof:    (if $pr == "" then null else $pr end)}
-         + {engage_latency_s:(if $la == "" then null else ($la|tonumber) end)}' 2>/dev/null) || _hf_json=''
+         + {engage_latency_s:(if $la == "" then null else ($la|tonumber) end)}
+         + {account_via:     $av}
+         + {ranked:          (if $rk == "" then null else $rk end)}' 2>/dev/null) || _hf_json=''
     fi
     if [ -n "$_hf_json" ] && [ "$_hf_json" != '{}' ]; then
       printf '%s\n' "$_hf_json" >> "$_hf_log" 2>/dev/null || true
@@ -18396,7 +18458,10 @@ else
       # as a bare quote does. Residual, stated rather than hidden: other C0 controls (0x00-0x08,
       # 0x0B-0x1F) are still emitted raw and jq still rejects them; they cannot be produced by any
       # brief path this tree writes, and the jq arm above is the one that runs in production.
-      printf '{"ts":"%s","firing_sid":"%s","class":"%s","engaged":%s,"target_pane":"%s","account":"%s","firing_rss_kb":%s,"goal_requested":%s,"prompt_file":%s}\n' \
+      # account_via and ranked ride this path too, LAST as in the jq arm. account_via is one of three
+      # literals; ranked is router output ("acct score" tokens) and gets the same two escapes as the
+      # path above, backslash first, because one malformed line poisons every slurp of this ledger.
+      printf '{"ts":"%s","firing_sid":"%s","class":"%s","engaged":%s,"target_pane":"%s","account":"%s","firing_rss_kb":%s,"goal_requested":%s,"prompt_file":%s,"account_via":"%s","ranked":%s}\n' \
         "$_hf_ts" "${FIRING_SID:-?}" "$_hf_class" "${1:-0}" "${SPAWNED_PANE:-}" "${CHOSEN:-?}" "${_hf_rss:-0}" \
         "$([ -n "${FIRE_GOAL:-}" ] && echo true || echo false)" \
         "$(_hf_pf="$(_resolved_prompt_file 2>/dev/null || true)"
@@ -18407,6 +18472,12 @@ else
              _hf_pf="${_hf_pf//$'\n'/\\n}"
              _hf_pf="${_hf_pf//$'\t'/\\t}"
              printf '"%s"' "$_hf_pf"
+           else printf null; fi)" \
+        "$_hf_via" \
+        "$(if [ -n "$_hf_rk" ]; then
+             _hf_rk="${_hf_rk//\\/\\\\}"
+             _hf_rk="${_hf_rk//\"/\\\"}"
+             printf '"%s"' "$_hf_rk"
            else printf null; fi)" \
         >> "$_hf_log" 2>/dev/null || true
     fi
