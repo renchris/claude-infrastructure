@@ -79,6 +79,35 @@ def cmd_freeze(a: Any) -> int:
     print(
         f"FROZEN {a.program} at {sha[:12]}; registry -> certifying (the research block is on from here)"
     )
+    import activities
+    import round as rnd
+
+    if rnd.certification_due(a.program) is None:
+        aid = activities.ensure_open(a.program, "certification-round")
+        print(f"certification activity open: {aid} (tag CC_RESEARCH_ACTIVITY={aid})")
+    return 0
+
+
+def cmd_cert_activity(a: Any) -> int:
+    """Open, or name, the certification-round activity of a certifying, frozen program with a
+    certification round due. Idempotent: a second call prints the same id."""
+    import activities
+    import round as rnd
+
+    state = (kit.registry_get(a.program) or {}).get("state")
+    if state != "certifying":
+        raise kit.KitError(
+            f"cert-activity refused: {a.program} is {state!r}, not certifying"
+        )
+    if not (kit.records_dir(a.program) / "freeze.json").is_file():
+        raise kit.KitError(f"cert-activity refused: {a.program} has no freeze.json")
+    why = rnd.certification_due(a.program)
+    if why:
+        raise kit.KitError(
+            f"cert-activity refused: no certification round is due: {why}"
+        )
+    aid = activities.ensure_open(a.program, "certification-round")
+    print(aid)
     return 0
 
 
@@ -219,7 +248,10 @@ def write_certificate(ctx: Ctx, rows: List[Row]) -> str:
     (ctx.records / "cert" / f"CERT-v{n}.md").write_text(
         "\n".join(
             lines_for(ctx.slug, cert, "certified", live_state(ctx.records, cert))
-            + [f"Row 15, stated condition: {c}" for c in (cert.get("conditions") or {}).values()]
+            + [
+                f"Row 15, stated condition: {c}"
+                for c in (cert.get("conditions") or {}).values()
+            ]
         )
         + "\n"
     )
@@ -353,7 +385,9 @@ def lines_for(
         f"Next version: {s['parked']} ideas parked · Frame defects {s['frame_defects']} · "
         f"Unasked intent {s['unasked_intent']}",
     ]
-    if all(k in fc for k in SPLIT_KEYS):  # a v1.2 certificate (§11); a 1.1 one prints as before
+    if all(
+        k in fc for k in SPLIT_KEYS
+    ):  # a v1.2 certificate (§11); a 1.1 one prints as before
         out.insert(
             3,
             f"Split: before implementation signoff about {fc['before_impl_mean']:.1f} · after "
@@ -482,6 +516,16 @@ def add_verbs(sub: Any) -> None:
     p = sub.add_parser("freeze")
     p.add_argument("--program", required=True)
     p.set_defaults(fn=cmd_freeze)
+    p = sub.add_parser(
+        "cert-activity",
+        help="open (or name) the certification-round activity of a certifying program",
+        description="Print the id of the program's open certification-round activity, opening one "
+        "if none is open. Refused unless the registry reads certifying, freeze.json exists and a "
+        "certification round is due. Tag the round's calls with CC_RESEARCH_ACTIVITY=<id> "
+        "(round.sh, courier.sh, read-only codex exec) and [activity:<id>] (Agent descriptions).",
+    )
+    p.add_argument("--program", required=True)
+    p.set_defaults(fn=cmd_cert_activity)
     p = sub.add_parser("render")
     p.add_argument("--program", required=True)
     p.set_defaults(fn=cmd_render)

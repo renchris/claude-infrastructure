@@ -347,3 +347,52 @@ print(s['$1'].get('seed_match'))"; }
   [ "$status" -eq 0 ]
   [ "$(field 2 'm["quiet"], m["seeds_caught"], m["new_material"]')" = "True 1 0" ]
 }
+
+# act <python over the activities module>: run it with the kit's lib on the path.
+act() { /usr/bin/python3 -c "import sys; sys.path.insert(0, '$REPO/scripts/research-kit/lib'); import activities; $1"; }
+cr_open() { act "print(activities.ensure_open('demo', 'certification-round'))"; }
+cr_state() { act "print(' '.join(a['state'] for a in activities.load()['activities'] if a['kind'] == 'certification-round'))"; }
+
+@test "close: the certification-round activity stays open while the next certification round is due" {
+  fc_done; certs 1 1; open_with_slots 2 complete True
+  aid="$(cr_open)"
+  run "$R" close --program demo --round 2
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"certification activity open: $aid"* ]] || false
+  [ "$(cr_state)" = open ]
+}
+
+@test "close: the certification-round activity closes when the stop rule fires" {
+  fc_done; certs 1 1; mat 2 certification 2 ',"quiet":true,"new_material":0'
+  open_with_slots 3 complete True
+  cr_open >/dev/null
+  run "$R" close --program demo --round 3
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"certification activity closed:"*"stop rule has fired"* ]] || false
+  [ "$(cr_state)" = closed ]
+}
+
+@test "close: the certification-round activity closes at R_max" {
+  fc_done; certs 1 4
+  /usr/bin/python3 -c "import json; p='$CC_RESEARCH_RECORDS/rounds/1/matrix.json'; m=json.load(open(p)); m['forecast']={'p50':1,'p90':1}; json.dump(m, open(p,'w'))"
+  open_with_slots 5 complete True
+  cr_open >/dev/null
+  run "$R" close --program demo --round 5
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"certification activity closed:"*"past R_max = 5"* ]] || false
+  [ "$(cr_state)" = closed ]
+}
+
+@test "activities: ensure_open is idempotent per kind, and close_kind flips only that kind" {
+  a="$(cr_open)"; b="$(cr_open)"
+  [ "$a" = "$b" ]
+  esc="$(act "print(activities.open_activity('demo', 'escape'))")"
+  [ "$esc" != "$a" ]
+  [ "$(act "print(activities.close_kind('demo', 'certification-round'))")" = "['$a']" ]
+  [ "$(act "print(activities.open_ids('demo', 'escape'))")" = "['$esc']" ]
+  [ "$(act "print(activities.open_ids('demo', 'certification-round'))")" = "[]" ]
+  # a closed kind re-opens as a new row, never by reviving the old one
+  c="$(cr_open)"
+  [ "$c" != "$a" ]
+  [ "$(cr_state)" = "closed open" ]
+}

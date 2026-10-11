@@ -137,6 +137,67 @@ state() { /usr/bin/python3 -c "import json; print(json.load(open('$CC_RESEARCH_R
   [ "$(state)" = "certifying" ]
 }
 
+# round_due: re-open review in the known-good records (its last round becomes not quiet, so the stop
+# rule has not fired and certification round 4 is due), committed as freeze requires.
+round_due() {
+  jedit rounds/3/matrix.json "d['quiet']=False; d['new_material']=1"
+  git -C "$W/repo" commit -qam "round 3 not quiet"
+}
+cr_rows() { /usr/bin/python3 -c "import json; print(' '.join(a['id'] + ':' + a['state'] for a in json.load(open('$CC_RESEARCH_HOME/activities.json'))['activities'] if a['kind'] == 'certification-round'))" 2>/dev/null; }
+set_state() { /usr/bin/python3 -c "import json; p='$CC_RESEARCH_REGISTRY'; d=json.load(open(p)); d['programs'][0]['state']='$1'; json.dump(d, open(p, 'w'))"; }
+
+@test "freeze opens exactly one certification-round activity when a round is due, and a re-freeze reuses it" {
+  round_due
+  run "$G" freeze --program demo
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"certification activity open: ACT-demo-1"* ]] || false
+  git -C "$W/repo" add -A; git -C "$W/repo" commit -qm "fix cycle"   # a re-freeze pins a committed snapshot
+  run "$G" freeze --program demo
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"certification activity open: ACT-demo-1"* ]] || false
+  [ "$(cr_rows)" = "ACT-demo-1:open" ]
+}
+
+@test "freeze opens no certification-round activity once the stop rule has fired" {
+  run "$G" freeze --program demo
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"certification activity"* ]] || false
+  [ -z "$(cr_rows)" ]
+}
+
+@test "cert-activity: refused unless certifying, frozen and a round is due; idempotent when it opens" {
+  round_due
+  run "$G" cert-activity --program demo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"'registered', not certifying"* ]] || false
+  set_state certified
+  run "$G" cert-activity --program demo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"'certified', not certifying"* ]] || false
+  set_state certifying
+  mv "$REC/freeze.json" "$REC/freeze.json.off"
+  run "$G" cert-activity --program demo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"no freeze.json"* ]] || false
+  mv "$REC/freeze.json.off" "$REC/freeze.json"
+  [ -z "$(cr_rows)" ]
+  run "$G" cert-activity --program demo
+  [ "$status" -eq 0 ]
+  [ "$output" = ACT-demo-1 ]
+  run "$G" cert-activity --program demo
+  [ "$status" -eq 0 ]
+  [ "$output" = ACT-demo-1 ]
+  [ "$(cr_rows)" = "ACT-demo-1:open" ]
+}
+
+@test "cert-activity: refused when no certification round is due (the stop rule has fired)" {
+  set_state certifying
+  run "$G" cert-activity --program demo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"no certification round is due"*"stop rule has fired"* ]] || false
+  [ -z "$(cr_rows)" ]
+}
+
 @test "freeze is refused while lint shows an error, and the registry stays registered" {
   echo "This is the best design." >> "$REC/PLAN.md"
   git -C "$W/repo" commit -qam "plan"

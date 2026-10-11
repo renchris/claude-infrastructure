@@ -15,11 +15,14 @@ from __future__ import annotations
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import kit
 
-KINDS = ("escape", "frame-delta", "triage-batch")
+# certification-round: opened by the kit itself (gate.sh freeze or cert-activity) while a certifying
+# program has a certification round due, and closed by round.sh close once none is (the stop rule or
+# R_max), so a lead-dispatched round session runs its round with every other research verb blocked.
+KINDS = ("escape", "frame-delta", "triage-batch", "certification-round")
 
 
 def path() -> Path:
@@ -57,26 +60,77 @@ class _Lock:
         os.rmdir(self.dir)
 
 
-def open_activity(program: str, kind: str) -> str:
-    """Open one activity and return its id, ACT-<program>-<n>, n one past the program's highest."""
+def _check(program: str, kind: str) -> None:
     kit.check_slug(program)
     if kind not in KINDS:
         raise kit.KitError(f"unknown activity kind {kind!r}: one of {', '.join(KINDS)}")
+
+
+def _append(data: Dict[str, Any], program: str, kind: str) -> str:
+    """Append one open row to data and return its id, ACT-<program>-<n>, n one past the highest."""
+    prefix = f"ACT-{program}-"
+    nums = [
+        int(a["id"][len(prefix) :])
+        for a in data["activities"]
+        if str(a.get("id", "")).startswith(prefix) and a["id"][len(prefix) :].isdigit()
+    ]
+    aid = f"{prefix}{max(nums, default=0) + 1}"
+    data["activities"].append(
+        {"program": program, "id": aid, "kind": kind, "state": "open"}
+    )
+    return aid
+
+
+def _open_of(data: Dict[str, Any], program: str, kind: str) -> List[Dict[str, Any]]:
+    return [
+        a
+        for a in data["activities"]
+        if isinstance(a, dict)
+        and a.get("program") == program
+        and a.get("kind") == kind
+        and a.get("state") == "open"
+    ]
+
+
+def open_activity(program: str, kind: str) -> str:
+    """Open one activity and return its id, ACT-<program>-<n>, n one past the program's highest."""
+    _check(program, kind)
     with _Lock():
         data = load()
-        prefix = f"ACT-{program}-"
-        nums = [
-            int(a["id"][len(prefix) :])
-            for a in data["activities"]
-            if str(a.get("id", "")).startswith(prefix)
-            and a["id"][len(prefix) :].isdigit()
-        ]
-        aid = f"{prefix}{max(nums, default=0) + 1}"
-        data["activities"].append(
-            {"program": program, "id": aid, "kind": kind, "state": "open"}
-        )
+        aid = _append(data, program, kind)
         kit.write_json_atomic(path(), data)
     return aid
+
+
+def ensure_open(program: str, kind: str) -> str:
+    """The id of the program's first open row of this kind, appending one only when none is open."""
+    _check(program, kind)
+    with _Lock():
+        data = load()
+        hit = _open_of(data, program, kind)
+        if hit:
+            return str(hit[0]["id"])
+        aid = _append(data, program, kind)
+        kit.write_json_atomic(path(), data)
+    return aid
+
+
+def open_ids(program: str, kind: str) -> List[str]:
+    """The ids of the program's open rows of this kind (a read; no lock)."""
+    return [str(a["id"]) for a in _open_of(load(), program, kind)]
+
+
+def close_kind(program: str, kind: str) -> List[str]:
+    """Close every open row of this kind for the program; returns the ids it closed."""
+    _check(program, kind)
+    with _Lock():
+        data = load()
+        hit = _open_of(data, program, kind)
+        for a in hit:
+            a["state"] = "closed"
+        if hit:
+            kit.write_json_atomic(path(), data)
+    return [str(a["id"]) for a in hit]
 
 
 def close_activity(aid: str) -> None:

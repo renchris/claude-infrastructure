@@ -184,6 +184,13 @@ lite 5.25, standard 12 agent-days) and the Stage 9 budget.
   verification-only.
 - Rehearsal and the relay test (20 trials, at least one from a pane outside the program's directory).
 
+Updated 2026-10-11: certification rounds run under a kit-opened `certification-round` activity, so a
+lead-dispatched round session runs unattended while every other research verb stays blocked. `gate.sh
+freeze` opens it when a round is due, `gate.sh cert-activity --program <slug>` prints (or opens) its id,
+and `round.sh close` closes it once no round is due (the stop rule or `R_max`). Tag the round's calls
+`CC_RESEARCH_ACTIVITY=<id>` on `round.sh`, `courier.sh` and read-only `codex exec -s read-only`, and put
+`[activity:<id>]` in Agent descriptions. It unlocks nothing outside `certifying`.
+
 ## Stage 8 — gate, certificate, signoff (§3.10)
 
 `scripts/research-kit/gate.sh run --program <slug>` prints all 16 rows PASS/FAIL/FILED. Every row passes

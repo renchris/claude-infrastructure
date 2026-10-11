@@ -139,8 +139,11 @@ SESSION_UUID = re.compile(
 # A record a machine wrote is not a genuine prompt (the completion-assert.sh kill-switch reader's
 # envelope rule): it keeps the last genuine prompt's label (§4.2), and only a session's first prompt
 # gets a label from it (envelope_label).
+# `Goal set: ` is how the /goal handoff-fire.sh types into every fired pane arrives, and
+# `<\agent-message` a subagent's hand-back: neither is a genuine prompt, so neither relabels a turn.
 MACHINE_ENVELOPE = re.compile(
-    r"^\s*(\[handoff |<teammate-message|<task-notification|<local-command-stdout>|<command-name>)"
+    r"^\s*(\[handoff |<teammate-message|<task-notification|<local-command-stdout>|<command-name>"
+    r"|<\\agent-message|Goal set: )"
     r"|HANDOFF-ENGAGE-[A-Za-z0-9._-]+"
 )
 
@@ -291,22 +294,27 @@ def program_state(slug: str) -> Optional[str]:
     return (prog or {}).get("state")
 
 
-def open_activities(slug: str) -> List[str]:
+def open_activity_kinds(slug: str) -> Dict[str, str]:
+    """{id: kind} of the program's open activities."""
     p = kit.research_home() / "activities.json"
     try:
         data = json.loads(p.read_text())
     except (OSError, ValueError):
-        return []
+        return {}
     acts = data.get("activities") if isinstance(data, dict) else None
-    return [
-        a["id"]
+    return {
+        a["id"]: str(a.get("kind") or "")
         for a in acts or []
         if isinstance(a, dict)
         and a.get("program") == slug
         and a.get("state") == "open"
         and isinstance(a.get("id"), str)
         and re.fullmatch(r"[A-Za-z0-9_.:-]+", a["id"])
-    ]
+    }
+
+
+def open_activities(slug: str) -> List[str]:
+    return list(open_activity_kinds(slug))
 
 
 # ── the certificate read ────────────────────────────────────────────────────────────────────────
@@ -859,7 +867,11 @@ def envelope_label(prompt: str, slug: str, sid: str) -> Tuple[str, str]:
     """(label, reason) for a machine-envelope FIRST prompt, without the classifier: the work-order
     marker, else the label of a predecessor session the envelope names, else `other`. A relayed
     label is not inherited: it governs one re-ask turn, and the successor's brief is not one."""
-    m = WORK_ORDER_MARKER.search(prompt)
+    # Only a marker naming THIS program is a work order (as in classify): prose that merely quotes
+    # the flag ("--requires-gate cannot carry a round") names no program and must not open allow-all.
+    m = next(
+        (x for x in WORK_ORDER_MARKER.finditer(prompt) if x.group(1) == slug), None
+    )
     if m:
         return (
             "work-order",
@@ -1206,7 +1218,8 @@ def clauses(cmd: str) -> List[List[str]]:
 
 def head(toks: List[str]) -> Tuple[Dict[str, str], List[str]]:
     """(env assignments, argv of the real command): assignments, wrappers, their options and a
-    `timeout` duration are stripped, so `env X=1 timeout 5 codex …` reads as codex."""
+    `timeout` duration are stripped, so `env X=1 timeout 5 codex …` reads as codex; so is a
+    `detach <log>` prefix (scripts/lib/detach.sh), so `detach "$LOG" round.sh …` reads as round.sh."""
     env: Dict[str, str] = {}
     i = 0
     while i < len(toks):
@@ -1219,6 +1232,8 @@ def head(toks: List[str]) -> Tuple[Dict[str, str], List[str]]:
             i += 1
             while i < len(toks) and toks[i].startswith("-"):
                 i += 1  # its options; the duration is skipped by the outer i += 1
+        elif b == "detach":
+            i += 1  # scripts/lib/detach.sh: `detach <log> cmd …`; the log path is skipped here
         elif b in WRAPPERS or t.startswith("-"):
             pass
         else:
@@ -1227,10 +1242,59 @@ def head(toks: List[str]) -> Tuple[Dict[str, str], List[str]]:
     return env, []
 
 
+def flag_value(rest: List[str], *names: str) -> Optional[str]:
+    """The value of the first `--name v` / `--name=v` / `-n v` among names, or None."""
+    for i, t in enumerate(rest):
+        for n in names:
+            if t == n and i + 1 < len(rest):
+                return rest[i + 1]
+            if n.startswith("--") and t.startswith(n + "="):
+                return t[len(n) + 1 :]
+    return None
+
+
+# codex flags that widen or bypass the sandbox whatever -s says; a read-only exec carries none.
+CODEX_UNSANDBOX = (
+    "--full-auto",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "--yolo",
+)
+
+
+def codex_read_only(rest: List[str]) -> bool:
+    """`codex exec … -s read-only …` with every sandbox flag read-only and no override."""
+    if rest[:1] != ["exec"]:
+        return False
+    modes: List[str] = []
+    for i, t in enumerate(rest):
+        nxt = rest[i + 1] if i + 1 < len(rest) else ""
+        if t in CODEX_UNSANDBOX:
+            return False
+        if (t in ("-c", "--config") and "sandbox" in nxt) or (
+            t.startswith("--config=") and "sandbox" in t
+        ):
+            return False  # `-c sandbox_mode=…` overrides -s
+        if t in ("-s", "--sandbox"):
+            modes.append(nxt)
+        elif t.startswith("--sandbox="):
+            modes.append(t.partition("=")[2])
+    return bool(modes) and all(m == "read-only" for m in modes)
+
+
 def research_clause(
-    toks: List[str], slug: str, acts: List[str], certifying: bool, label: str
+    toks: List[str],
+    slug: str,
+    acts: List[str],
+    certifying: bool,
+    label: str,
+    cert_acts: Optional[List[str]] = None,
 ) -> Optional[str]:
-    """The research verb a clause runs, or None. Activity-tagged and allowed kit calls are None."""
+    """The research verb a clause runs, or None. Activity-tagged and allowed kit calls are None.
+
+    cert_acts: the program's open certification-round activities (gate.sh freeze / cert-activity).
+    While certifying, a clause tagged with one runs the round's own verbs: `round.sh run --kind
+    certification`, `round.sh close`, and `codex exec` in a read-only sandbox."""
+    cert_acts = cert_acts or []
     env, argv = head(toks)
     if not argv:
         return None
@@ -1238,15 +1302,21 @@ def research_clause(
         c.isspace() for c in argv[0]
     ):  # `bash -c "codex …"`: the script is one token
         for sub in clauses(argv[0]):
-            hit = research_clause(sub, slug, acts, certifying, label)
+            hit = research_clause(
+                sub, slug, acts, certifying, label, cert_acts=cert_acts
+            )
             if hit:
                 return hit
         return None
     base = os.path.basename(argv[0])
     rest = argv[1:]
+    act = env.get("CC_RESEARCH_ACTIVITY")
+    cert_round = bool(certifying and act and act in cert_acts)
     if base == "handoff-fire.sh":
         return "handoff-fire.sh"
     if base in VENDOR:
+        if base == "codex" and cert_round and codex_read_only(rest):
+            return None  # a certification round's read-only reviewer
         return base
     if base == "claude" and any(
         t in ("-p", "--print") or t.startswith("--print=") for t in rest
@@ -1255,11 +1325,23 @@ def research_clause(
     if base == "cc-research" and rest and rest[0] in CC_RESEARCH_BUYING:
         return f"cc-research {rest[0]}"
     if base in KIT_ROUND:
-        act = env.get("CC_RESEARCH_ACTIVITY")
+        if (
+            cert_round
+            and base == "round.sh"
+            and rest
+            and (
+                rest[0] == "close"
+                or (rest[0] == "run" and flag_value(rest, "--kind") == "certification")
+            )
+        ):
+            return None  # the kit-opened certification-round activity
         if (
             act
             and act in acts
-            and (base == "courier.sh" or "--delta" in rest or "delta" in rest)
+            and (
+                base == "courier.sh"
+                or (act not in cert_acts and ("--delta" in rest or "delta" in rest))
+            )
         ):
             return None  # a contract-listed activity (§10 item 8)
         if certifying and label == "research-order":
@@ -1333,7 +1415,10 @@ def cmd_tool(a: argparse.Namespace) -> int:
             "Relay its state lines verbatim, plus at most 3 lines; add no item. Operator kill switch: "
             "launch with CC_RESEARCH_BLOCK=0."
         )
-    acts = open_activities(slug)
+    kinds = open_activity_kinds(slug)
+    # A certification-round activity lets its round through only while the program is certifying.
+    cert_acts = [x for x, k in kinds.items() if k == "certification-round"]
+    acts = [x for x in kinds if state == "certifying" or x not in cert_acts]
     hit: Optional[str] = None
     if tool in ("Agent", "Task", "Workflow"):
         tag = " ".join(str(tin.get(k) or "") for k in ("description", "prompt", "name"))
@@ -1341,7 +1426,9 @@ def cmd_tool(a: argparse.Namespace) -> int:
             hit = tool
     elif tool == "Bash":
         for toks in clauses(cmd):
-            hit = research_clause(toks, slug, acts, state == "certifying", label)
+            hit = research_clause(
+                toks, slug, acts, state == "certifying", label, cert_acts=cert_acts
+            )
             if hit:
                 break
     if not hit:
@@ -1354,8 +1441,10 @@ def cmd_tool(a: argparse.Namespace) -> int:
         f"research block (REPORT.md §4.2): {where} and {why}, so `{hit}` (a research verb) is "
         "blocked. Research on certified scope runs only on a prompt positively labeled a work order "
         "or a new idea, after an operator-signed reopen, or as an open contract-listed activity "
-        "tagged CC_RESEARCH_ACTIVITY=<id> / [activity:<id>]. Operator kill switch: launch with "
-        "CC_RESEARCH_BLOCK=0."
+        "tagged CC_RESEARCH_ACTIVITY=<id> / [activity:<id>]. A certification round runs while "
+        "certifying with CC_RESEARCH_ACTIVITY=<certification-round id> (gate.sh cert-activity "
+        f"--program {slug} prints it) on round.sh, courier.sh and read-only codex exec. Operator "
+        "kill switch: launch with CC_RESEARCH_BLOCK=0."
     )
 
 

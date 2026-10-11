@@ -26,6 +26,9 @@ slots are never handed to another vendor (§3.8). Only after the operator's clas
 "continue on two vendors" has fired (frame.json `degraded: "two vendors"`, `dead_lanes: [..]`) do
 rounds run without that lane, and then only with two families, one of them non-Anthropic.
 
+Closing a certification round closes the program's certification-round activity (lib/activities.py)
+once certification_due says no round is due: the stop rule has fired or R_max is spent.
+
 Round directories: certification `rounds/<n>/`, frame critique `rounds/fc<n>/`, delta
 `rounds/delta-<hole>-<n>/`, built `rounds/b<n>/`. Test override for the courier: CC_RESEARCH_COURIER.
 """
@@ -139,7 +142,9 @@ def plan_built(
     built_freeze(slug)
     done = all_matrices(slug, "built")
     if n != len(done) + 1:
-        raise Refused(f"built round {n} out of order; next is {len(done) + 1} (no skipping)")
+        raise Refused(
+            f"built round {n} out of order; next is {len(done) + 1} (no skipping)"
+        )
     if done and not done[-1].get("closed"):
         raise Refused(f"round {done[-1]['round']} is not closed yet (round.sh close)")
     cap = int(prof["built_hard_cap"])
@@ -156,7 +161,10 @@ def plan_built(
             "built gate, do not review again"
         )
     slots = [(v, s) for v in lanes for s in prof["strategies"]]
-    if fr.get("degraded") != "two vendors" and len(slots) != prof["reviewers_per_round"]:
+    if (
+        fr.get("degraded") != "two vendors"
+        and len(slots) != prof["reviewers_per_round"]
+    ):
         raise Refused(
             f"a {fr['profile']} round is {prof['reviewers_per_round']} reviewers, not {len(slots)}"
         )
@@ -178,9 +186,13 @@ def export_artifact(slug: str, dest: Path) -> Path:
             f"cannot export the built snapshot {fz['snapshot_sha']} from {fz['artifact_root']}: "
             f"{ar.stderr.decode(errors='replace').strip()}"
         )
-    tar = subprocess.run(["/usr/bin/tar", "-x", "-C", str(out)], input=ar.stdout, capture_output=True)
+    tar = subprocess.run(
+        ["/usr/bin/tar", "-x", "-C", str(out)], input=ar.stdout, capture_output=True
+    )
     if tar.returncode != 0:
-        raise Refused(f"cannot unpack the built snapshot: {tar.stderr.decode(errors='replace').strip()}")
+        raise Refused(
+            f"cannot unpack the built snapshot: {tar.stderr.decode(errors='replace').strip()}"
+        )
     return out
 
 
@@ -281,6 +293,19 @@ def plan_slots(
     return str(n), slots, len(counted) + 1 == rmax, rmax
 
 
+def certification_due(slug: str) -> Optional[str]:
+    """None when the program's next certification round may open by every cap above, else the
+    refusal text. Governs the kit-opened certification-round activity (gate.sh freeze and
+    cert-activity open it; cmd_close closes it once this stops being None). The vendor preflight is
+    not consulted: a stale preflight delays a round, it does not end review."""
+    try:
+        done = all_matrices(slug, "certification")
+        plan_slots(slug, "certification", len(done) + 1, None)
+    except kit.KitError as e:
+        return str(e)
+    return None
+
+
 def run_slots(
     slug: str,
     rid: str,
@@ -356,7 +381,8 @@ def run_slots(
         pending = [
             sl
             for sl in state
-            if sl["status"] in ("dead", "void", "partial")  # a partial read is a lost read too
+            if sl["status"]
+            in ("dead", "void", "partial")  # a partial read is a lost read too
             and sl["reruns"] < kit.CAPS["slot_reruns"]
         ]
     for sl in state:
@@ -471,7 +497,9 @@ def cmd_run(a: argparse.Namespace) -> int:
             else "dead"
         )
     freeze = kit.read_json(kit.records_dir(a.program) / "freeze.json", {}) or {}
-    if a.kind == "built":  # a built round is pinned to the built snapshot, not the plan freeze
+    if (
+        a.kind == "built"
+    ):  # a built round is pinned to the built snapshot, not the plan freeze
         freeze = built_freeze(a.program)
     m = {
         "round": rid,
@@ -526,7 +554,9 @@ def cmd_close(a: argparse.Namespace) -> int:
     # only then can a caught seed be told apart from a real finding.
     fr = frame(a.program)
     vault = kit.sealed_dir(a.program) / "vault" / "seeds.enc"
-    built = m.get("kind") == "built"  # its seeds are the harness mutants (§11), not the plan vault
+    built = (
+        m.get("kind") == "built"
+    )  # its seeds are the harness mutants (§11), not the plan vault
     if vault.exists() and fr.get("plan") and not built:
         p = subprocess.run(
             [
@@ -588,6 +618,17 @@ def cmd_close(a: argparse.Namespace) -> int:
         f"round {a.round} closed: new material {m['new_material']}, seeds caught {m['seeds_caught']}, "
         f"quiet={m['quiet']}{', R_max ' + str(m['r_max']) if m.get('forecast') else ''}"
     )
+    if m["kind"] == "certification":
+        import activities
+
+        why = certification_due(a.program)
+        if why:
+            shut = activities.close_kind(a.program, "certification-round")
+            if shut:
+                print(f"certification activity closed: {why}")
+        else:
+            for aid in activities.open_ids(a.program, "certification-round"):
+                print(f"certification activity open: {aid}")
     return 0
 
 

@@ -9,7 +9,13 @@ Invoked through scripts/research-kit/gate.sh. Verbs:
                                                             (idempotent); state and aliases untouched
   freeze    --program P                                     freeze checks; state -> certifying
                                                             (§10 item 1: the relay test then runs
-                                                            with the research block on)
+                                                            with the research block on); opens the
+                                                            certification-round activity when a
+                                                            certification round is due
+  cert-activity --program P                                 print (opening if none) the open
+                                                            certification-round activity's id;
+                                                            refused unless certifying, frozen and
+                                                            a certification round is due
   run       --program P [--json]                            every row PASS/FAIL/FILED with
                                                             evidence; all pass -> certificate
                                                             written, state -> certified
@@ -108,10 +114,13 @@ def run_rows(ctx: Ctx) -> List[Row]:
         + list(gate_rows_yield.ROWS)
         + list(gate_rows_blockers.ROWS)
     )
+
     def one(fn: Callable[[Ctx], Row]) -> Row:
         try:
             return fn(ctx)
-        except Exception as e:  # a row that crashes is a FAIL with its error, never a pass
+        except (
+            Exception
+        ) as e:  # a row that crashes is a FAIL with its error, never a pass
             num, name = getattr(fn, "row", (0, fn.__name__))
             return Row(num, name, FAIL, [f"row raised {type(e).__name__}: {e}"])
 
@@ -160,7 +169,9 @@ def cmd_register(a: argparse.Namespace) -> int:
     prior = kit.registry_get(a.program)
     roots = merged_roots((prior or {}).get("cwd_roots") or [], a.root)
     # Like the roots, a re-register adds aliases and never drops the ones already stored.
-    aliases = list(dict.fromkeys(list((prior or {}).get("aliases") or []) + (a.alias or [])))
+    aliases = list(
+        dict.fromkeys(list((prior or {}).get("aliases") or []) + (a.alias or []))
+    )
     e = kit.registry_set(a.program, "registered", aliases=aliases, cwd_roots=roots)
     print(f"registered {e['slug']} roots={e['cwd_roots']} aliases={e['aliases']}")
     return 0

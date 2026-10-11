@@ -154,6 +154,14 @@ Owns §10 items 1 (deny half), 2, 3, 8, 11, 12, 13 (populating the set). Reads, 
   - Open activities (§10 item 8) live in `$CC_RESEARCH_HOME/activities.json`, not the registry, because
     `kit.registry_set` keeps only its four keys. Tag: `CC_RESEARCH_ACTIVITY=<id>` on the Bash clause,
     `[activity:<id>]` in an Agent description or prompt. Its writer is wave C (triage).
+  - 2026-10-11 (operator, answering decision 0294b8b572e1): certification rounds run under a kit-opened
+    `certification-round` activity, not a filed marker (a marker did not survive relabeling and did not unlock
+    the round's Agent and codex steps). `gate.sh freeze` / `gate.sh cert-activity` open it while a round is
+    due; `round.sh close` closes it at the stop rule or `R_max`. While `certifying` and tagged, it allows
+    `round.sh run --kind certification`, `round.sh close`, `courier.sh`, `codex exec` in a read-only sandbox
+    and `[activity:<id>]` Agents; every other vendor CLI, handoff-fire and `claude -p` stay denied. Router
+    hardening in the same change: `Goal set: ` and `<\agent-message` are machine envelopes, an envelope's
+    `--requires-gate` marker counts only when it names the routed slug, and `detach <log>` is read through.
   - Program resolution by alias is per prompt: a pane that named the program once is ordinary again on its next
     prompt that does not.
   - Kill switches, all launch-environment only (no tool call can set them): `CC_RESEARCH_BLOCK=0`,

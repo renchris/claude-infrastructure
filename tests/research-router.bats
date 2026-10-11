@@ -422,6 +422,87 @@ label() { python3 "$ROUTER" status --session "${1:-s1}" | jq -r '.label // "none
   [ "$(tool Agent '[activity:esc-7] verify the fix')" = deny ]
 }
 
+# cert_round_open: an open kit-opened certification-round activity cr-1, as gate.sh freeze writes it.
+cert_round_open() {
+  printf '{"activities":[{"program":"demo","id":"cr-1","kind":"certification-round","state":"open"}]}\n' \
+    > "$CC_RESEARCH_HOME/activities.json"
+}
+
+@test "a certification-round activity lets a dispatched round session (label other) run only its round's verbs" {
+  state certifying
+  cert_round_open
+  prompt "Run certification round 1 of demo. HANDOFF-ENGAGE-1-2-3" >/dev/null
+  [ "$(label)" = other ]
+  K=scripts/research-kit
+  [ "$(tool Bash "CC_RESEARCH_ACTIVITY=cr-1 $K/round.sh run --program demo --kind certification --round 1")" = allow ]
+  [ "$(tool Bash "CC_RESEARCH_ACTIVITY=cr-1 $K/round.sh run --program demo --kind=certification --round 1")" = allow ]
+  [ "$(tool Bash "CC_RESEARCH_ACTIVITY=cr-1 $K/round.sh close --program demo --round 1")" = allow ]
+  [ "$(tool Bash ". scripts/lib/detach.sh; detach \"\$LOG\" env CC_RESEARCH_ACTIVITY=cr-1 $K/round.sh run --kind certification")" = allow ]
+  [ "$(tool Bash "CC_RESEARCH_ACTIVITY=cr-1 $K/courier.sh run --program demo")" = allow ]
+  [ "$(tool Agent '[activity:cr-1] blind dedup')" = allow ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=cr-1 codex exec -s read-only -m x p')" = allow ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=cr-1 codex exec --sandbox=read-only p')" = allow ]
+  # untagged, another round kind, a writable or overridden codex, other vendors and the fire stay denied
+  [ "$(tool Bash "$K/round.sh run --program demo --kind certification --round 1")" = deny ]
+  [ "$(tool Bash "CC_RESEARCH_ACTIVITY=cr-1 $K/round.sh run --program demo --kind frame-critique --round 1")" = deny ]
+  [ "$(tool Bash "CC_RESEARCH_ACTIVITY=cr-1 $K/round.sh run --program demo --kind delta --round 1")" = deny ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=cr-1 codex exec p')" = deny ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=cr-1 codex exec -s read-only --full-auto p')" = deny ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=cr-1 codex exec -s read-only -c sandbox_mode=danger-full-access p')" = deny ]
+  [ "$(tool Bash 'codex exec -s read-only p')" = deny ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=cr-1 gemini p')" = deny ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=cr-1 handoff-fire.sh --x')" = deny ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=cr-1 claude -p hi')" = deny ]
+  [ "$(tool Agent 'blind dedup')" = deny ]
+}
+
+@test "a certification-round activity unlocks nothing once the program is certified" {
+  state certified
+  cert_round_open
+  prompt "hello there" >/dev/null
+  [ "$(label)" = other ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=cr-1 scripts/research-kit/round.sh run --kind certification --round 4')" = deny ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=cr-1 scripts/research-kit/courier.sh run --program demo')" = deny ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=cr-1 codex exec -s read-only p')" = deny ]
+  [ "$(tool Agent '[activity:cr-1] blind dedup')" = deny ]
+}
+
+@test "the verb detector reads through a detach <log> prefix" {
+  state certifying
+  prompt "hello there" >/dev/null
+  [ "$(label)" = other ]
+  [ "$(tool Bash '. scripts/lib/detach.sh; detach "$LOG" scripts/research-kit/round.sh run --kind certification')" = deny ]
+  [ "$(tool Bash 'detach /tmp/x.log codex exec p')" = deny ]
+}
+
+@test "a /goal echo and a subagent hand-back are machine envelopes: they keep the session's label, unclassified" {
+  state certifying
+  prompt "Run round 1. HANDOFF-ENGAGE-1-2-3" >/dev/null
+  [ "$(label)" = other ]
+  : > "$STUB_LOG"
+  prompt "Goal set: round 1 of demo is closed; build and fix it" >/dev/null
+  [ "$(label)" = other ]
+  prompt '<\agent-message from="a1">fix the build</agent-message>' >/dev/null
+  [ "$(label)" = other ]
+  [ ! -s "$STUB_LOG" ]
+}
+
+@test "an envelope that only quotes --requires-gate (no program slug) is other, never a work order" {
+  state certifying
+  prompt "[handoff 1] the --requires-gate cannot carry a round HANDOFF-ENGAGE-1-2-3" "$PROG/src" q1 >/dev/null
+  [ "$(label q1)" = other ]
+  [ "$(tool Agent 'x' "$PROG/src" q1)" = deny ]
+}
+
+@test "a completeness turn denies a certification-round activity's tagged round and Agent" {
+  state certifying
+  cert_round_open
+  prompt "are we done?" >/dev/null
+  [ "$(label)" = completeness ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=cr-1 scripts/research-kit/round.sh run --kind certification --round 1')" = deny ]
+  [ "$(tool Agent '[activity:cr-1] blind dedup')" = deny ]
+}
+
 @test "no registry at all: both hooks are inert and the nudge is unchanged" {
   rm -f "$CC_RESEARCH_REGISTRY"
   run prompt "are we done?"
