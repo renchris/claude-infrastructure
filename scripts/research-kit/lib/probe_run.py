@@ -42,7 +42,10 @@ ENVS = ("interactive-zsh", "launchd-bash32", "agent-shell")
 
 
 def sh(
-    argv: List[str], timeout: int = 20, env: Optional[Dict[str, str]] = None
+    argv: List[str],
+    timeout: int = 20,
+    env: Optional[Dict[str, str]] = None,
+    cwd: Optional[str] = None,
 ) -> Tuple[int, str, str]:
     try:
         p = subprocess.run(
@@ -52,6 +55,7 @@ def sh(
             text=True,
             timeout=timeout,
             env=env,
+            cwd=cwd,
         )
         return p.returncode, p.stdout, p.stderr
     except subprocess.TimeoutExpired:
@@ -65,13 +69,17 @@ def trunk_sha(cwd: str) -> Optional[str]:
     return out.strip() if rc == 0 else None
 
 
-def env_descriptor() -> Dict[str, Any]:
+def env_descriptor(
+    cwd: Optional[str] = None, env: Optional[Dict[str, str]] = None
+) -> Dict[str, Any]:
+    """The environment a probe ran in: the caller's own, or the cwd and env it was handed."""
+    cwd = cwd or os.getcwd()
     return {
         "interpreter": sys.executable,
-        "PATH": os.environ.get("PATH", ""),
+        "PATH": (env if env is not None else os.environ).get("PATH", ""),
         "os": platform.mac_ver()[0] or platform.platform(),
-        "cwd": os.getcwd(),
-        "trunk_sha": trunk_sha(os.getcwd()),
+        "cwd": cwd,
+        "trunk_sha": trunk_sha(cwd),
     }
 
 
@@ -103,11 +111,14 @@ def cmd_run(a: argparse.Namespace) -> int:
     if any(r.get("id") == a.id for r in kit.read_jsonl(pf)):
         raise kit.KitError(f"probe id {a.id} already recorded; probes are append-only")
     n = max(1, a.n)
+    # a scheduled caller (job freshness) hands its own cwd and env; the CLI runs in the caller's
+    run_cwd: Optional[str] = getattr(a, "cwd", None)
+    run_env: Optional[Dict[str, str]] = getattr(a, "env", None)
     outs: List[str] = []
     errs: List[str] = []
     exits: List[int] = []
     for i in range(n):
-        rc, out, err = sh(cmd, timeout=a.timeout)
+        rc, out, err = sh(cmd, timeout=a.timeout, env=run_env, cwd=run_cwd)
         exits.append(rc)
         outs.append(out if n == 1 else f"=== run {i + 1} exit {rc}\n{out}")
         errs.append(err if n == 1 else f"=== run {i + 1}\n{err}")
@@ -118,7 +129,12 @@ def cmd_run(a: argparse.Namespace) -> int:
         "reason_if_not_run": a.no_negative_control,
     }
     if a.negative_control:
-        rc, _, _ = sh(["/bin/bash", "-c", a.negative_control], timeout=a.timeout)
+        rc, _, _ = sh(
+            ["/bin/bash", "-c", a.negative_control],
+            timeout=a.timeout,
+            env=run_env,
+            cwd=run_cwd,
+        )
         neg = {
             "ran": True,
             "against": a.negative_control,
@@ -131,7 +147,7 @@ def cmd_run(a: argparse.Namespace) -> int:
     (ev / "cmd").write_text(json.dumps(cmd) + "\n")
     (ev / "stdout").write_text("".join(outs))
     (ev / "stderr").write_text("".join(errs))
-    env = env_descriptor()
+    env = env_descriptor(run_cwd, run_env)
     kit.write_json_atomic(ev / "env.json", env)
     rec = {
         "id": a.id,

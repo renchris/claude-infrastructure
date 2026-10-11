@@ -574,6 +574,51 @@ def probe_level(probe: Dict[str, Any]) -> int:
     return lvl
 
 
+# A re-check is a premise's recheck_cmd re-run (`cc-research job freshness`). Its convention: exit 0
+# the premise holds; exit 1 it is refuted, and the output names the leg. Anything else is the
+# environment failing, not the world answering, and gives NO verdict: any other exit (2, 124 the
+# runner's timeout, 126, 127, a signal), or a run whose stderr shows a crash, which a pipeline or
+# `||` can hide behind exit 0 or 1. A no-verdict run never flips, raises a challenge or carries a
+# premise, and gate row 10 does not count it as a re-check. Measured 2026-10-11: under launchd's
+# PATH and cwd "/", 80 of 93 re-checks crashed and the job read every one as a refutation.
+RECHECK_CRASH = re.compile(
+    r"^Traceback \(most recent call last\):"  # Python died (ModuleNotFoundError, …)
+    r"|: command not found$"  # a tool is not on PATH
+    r"|^/bin/bash: "  # the interpreter itself refused (redirect, syntax)
+    r"|^error connecting to |gh auth login|\(HTTP 401\)|\(HTTP 5\d\d\)|API rate limit exceeded",
+    re.M,
+)
+
+
+def recheck_verdict(exit_code: Any, stderr: str) -> Optional[str]:
+    """ "holds", "refuted", or None when the re-check could not answer (see RECHECK_CRASH)."""
+    if exit_code not in (0, 1) or RECHECK_CRASH.search(stderr or ""):
+        return None
+    return "holds" if exit_code == 0 else "refuted"
+
+
+def recheck_why(exit_code: Any, stderr: str) -> str:
+    """Why a re-check gave no verdict, in one line."""
+    m = RECHECK_CRASH.search(stderr or "")
+    if m:
+        line = (stderr or "")[m.start() :].splitlines()[0].strip()
+        if line.startswith("Traceback"):
+            tail = [ln.strip() for ln in (stderr or "").splitlines() if ln.strip()]
+            line = tail[-1] if tail else line
+        return f"exit {exit_code}, crashed: {line[:160]}"
+    return f"exit {exit_code}" + (" (timeout)" if exit_code == 124 else "")
+
+
+def probe_recheck_verdict(records: Path, probe: Dict[str, Any]) -> Optional[str]:
+    """recheck_verdict over a recorded probe and its evidence/<id>/stderr (absent reads empty)."""
+    err = records / "evidence" / str(probe.get("id")) / "stderr"
+    try:
+        text = err.read_text(errors="replace")
+    except OSError:
+        text = ""
+    return recheck_verdict(probe.get("exit"), text)
+
+
 def premise_level(premise: Dict[str, Any], probes: Dict[str, Dict[str, Any]],
                   now: Optional[float] = None) -> int:
     """Achieved level: the best of its own origin tier and its probes; live reads past ttl_h lapse."""

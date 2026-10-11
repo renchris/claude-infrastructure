@@ -317,6 +317,21 @@ set_state() { /usr/bin/python3 -c "import json; p='$CC_RESEARCH_REGISTRY'; d=jso
   [ "$output" = "FAIL" ]
 }
 
+# RED-proof (2026-10-11): before kit.recheck_verdict, row 10 counted the crashed re-check as fresh
+# and the first assertion read PASS.
+@test "row 10: a re-check that crashed (exit 127, a traceback under exit 1) is not a re-check; a clean one is" {
+  later="$(date -u -v+48H +%Y-%m-%dT%H:%M:%SZ)" at="$(date -u -v+47H +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{"id":"P-9","kind":"live-read","closes":["PR-1"],"exit":127,"at":"%s"}\n' "$at" >> "$REC/probes.jsonl"
+  printf '{"id":"P-10","kind":"live-read","closes":["PR-1"],"exit":1,"at":"%s"}\n' "$at" >> "$REC/probes.jsonl"
+  mkdir -p "$REC/evidence/P-10"
+  printf 'Traceback (most recent call last):\nModuleNotFoundError: No module named x\n' > "$REC/evidence/P-10/stderr"
+  CC_NOW="$later" run rowstat 10
+  [ "$output" = "FAIL" ]
+  printf '{"id":"P-11","kind":"live-read","closes":["PR-1"],"exit":1,"at":"%s"}\n' "$at" >> "$REC/probes.jsonl"
+  CC_NOW="$later" run rowstat 10
+  [ "$output" = "PASS" ]
+}
+
 @test "row 11: a residual with a reason outside the allowed list fails" {
   printf '{"id":"RS-2","why_unreachable":"too-hard"}\n' >> "$REC/residual.jsonl"
   printf '{"id":"residual:RS-2","disposition":"done"}\n' >> "$REC/reconcile.jsonl"

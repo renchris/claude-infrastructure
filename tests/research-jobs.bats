@@ -86,6 +86,70 @@ premise() { # <id> <recheck_cmd> <verdict> [ttl_h]
   [ "$(count "$REC/challenges.jsonl" "r.get('premise') == 'PR-9'")" -eq 1 ]
 }
 
+# RED-proof (2026-10-11): on the pre-fix job_freshness (every nonzero exit read "refuted", cwd and
+# PATH launchd's own) the four tests below fail — the environment failures each filed a drift
+# challenge and were carried, the relative recheck exited 1 from the wrong cwd, the crashed premise
+# was never re-run, and the prose and arrow notes ran as shell and wrote "=5" and "true" files.
+@test "freshness: an environment failure gives no verdict — no challenge, no carry, the pass fails naming it" {
+  premise PR-21 nosuchtool-xyz holds                                   # 127
+  premise PR-22 "exit 2" holds
+  premise PR-23 "/usr/bin/python3 -c 'import nosuchmodule_xyz'" holds   # traceback, exit 1
+  premise PR-24 "exit 124" holds                                       # the runner's timeout exit
+  premise PR-25 "nosuchtool-xyz | grep -q x" holds                     # 127 hidden behind exit 1
+  premise PR-26 'kill -TERM $$' holds                                  # a signal
+  run job freshness --program demo
+  [ "$status" -eq 1 ]
+  for id in PR-21 PR-22 PR-23 PR-24 PR-25 PR-26; do
+    [[ "$output" == *"$id: P-fresh-$id gave no verdict"* ]] || false
+  done
+  [[ "$output" == *"crashed: ModuleNotFoundError"* ]] || false
+  [ "$(count "$REC/probes.jsonl" "r['id'].startswith('P-fresh-PR-2')")" -eq 6 ]
+  [ "$(count "$REC/challenges.jsonl" "True")" -eq 0 ]
+  [ "$(count "$REC/premises.jsonl" "r.get('carried') is True")" -eq 0 ]
+}
+
+@test "freshness: a relative recheck_cmd runs from the records' git toplevel with \$HOME/.local/bin on PATH" {
+  mkdir -p "$HOME/.local/bin"
+  printf '#!/bin/bash\nexit 0\n' > "$HOME/.local/bin/tm2tool"
+  chmod +x "$HOME/.local/bin/tm2tool"
+  premise PR-27 "test -f docs/research/demo/frame.json && tm2tool" holds
+  run job freshness --program demo
+  [ "$status" -eq 0 ]
+  [ "$(count "$REC/probes.jsonl" "r['id'] == 'P-fresh-PR-27' and r['exit'] == 0 and r['env']['id'] == 'launchd-bash32-records' and os.path.realpath(r['env']['descriptor']['cwd']) == os.path.realpath('$W/repo')")" -eq 1 ]
+  [ "$(count "$REC/premises.jsonl" "r['id'] == 'PR-27' and r.get('carried') is True and r.get('recheck_verdict') == 'holds'")" -eq 1 ]
+  [ "$(count "$REC/challenges.jsonl" "True")" -eq 0 ]
+}
+
+@test "freshness: a premise whose re-check crashed is re-run next pass under a new probe id, then carried" {
+  premise PR-28 tm2tool2 holds
+  run job freshness --program demo
+  [ "$status" -eq 1 ]
+  mkdir -p "$HOME/.local/bin"
+  printf '#!/bin/bash\nexit 0\n' > "$HOME/.local/bin/tm2tool2"
+  chmod +x "$HOME/.local/bin/tm2tool2"
+  CC_NOW="$(later 3)" run job freshness --program demo
+  [ "$status" -eq 0 ]
+  [ "$(count "$REC/probes.jsonl" "r['id'] == 'P-fresh-PR-28' and r['exit'] == 127")" -eq 1 ]
+  [ "$(count "$REC/probes.jsonl" "r['id'] == 'P-fresh-PR-28-r2' and r['exit'] == 0")" -eq 1 ]
+  [ "$(count "$REC/premises.jsonl" "r['id'] == 'PR-28' and r.get('rechecked_by') == 'P-fresh-PR-28-r2' and r.get('carried') is True")" -eq 1 ]
+  rm -f "$HOME/.local/bin/tm2tool2"
+}
+
+@test "freshness: a prose recheck_cmd is not run; '<cmd> => <expected>' compares stdout and writes no file" {
+  premise PR-31 "unmeasured: needs a timed restack, n>=5 with a load control" holds
+  premise PR-32 "echo true  => true" holds
+  premise PR-33 "echo false  => true" holds
+  run job freshness --program demo
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"PR-31: recheck_cmd is a note, not a command"* ]] || false
+  [ "$(count "$REC/probes.jsonl" "'PR-31' in r.get('closes', [])")" -eq 0 ]
+  [ "$(count "$REC/probes.jsonl" "r['id'] == 'P-fresh-PR-32' and r['exit'] == 0")" -eq 1 ]
+  [ "$(count "$REC/probes.jsonl" "r['id'] == 'P-fresh-PR-33' and r['exit'] == 1")" -eq 1 ]
+  [ "$(count "$REC/challenges.jsonl" "r['premise'] == 'PR-33' and r['kind'] == 'drift'")" -eq 1 ]
+  [ ! -e "$W/repo/=5" ]
+  [ ! -e "$W/repo/true" ]
+}
+
 @test "drift: the first run records a baseline and files nothing; a rule edit naming a row files reality_moved" {
   R="$BATS_TEST_TMPDIR/rules"
   mkdir -p "$R/.claude/rules" "$R/docs/lessons"

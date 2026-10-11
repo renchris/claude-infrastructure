@@ -137,10 +137,13 @@ def row10(ctx: Ctx) -> Row:
     for p in folded(ctx, "premises.jsonl").values():
         if not p.get("recheck_cmd"):
             continue
+        # a run that crashed or timed out answered nothing, so it is not a re-check (kit.recheck_verdict)
         ats = [
             kit.parse_iso(x["at"])
             for x in pr.values()
-            if p["id"] in (x.get("closes") or []) and x.get("at")
+            if p["id"] in (x.get("closes") or [])
+            and x.get("at")
+            and kit.probe_recheck_verdict(ctx.records, x) is not None
         ]
         if not ats or now - max(ats) > DAY:
             fails.append(f"{p['id']}: no re-check within 24 h of the gate")

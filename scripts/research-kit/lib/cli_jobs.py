@@ -13,9 +13,14 @@ prints one summary line per program; exit 1 if any program's pass failed (the ot
              ruled, so a default fires at its deadline before certification begins.
   freshness  a premise with a recheck_cmd whose expiry has passed (`expires`, else validated_at.ts +
              ttl_h), or with no probe within 24 h while the program is certifying (gate row 10), is
-             re-run through probe_run as a probe closing it. A holds/refuted verdict the result flips
-             appends a drift challenge. Each premise is re-validated at most once per program, then
-             carried ({id, carried: true}) and never re-checked.
+             re-run through probe_run as a probe closing it, from the records' git toplevel on a
+             PATH that resolves the original probes' tools (RECHECK_ENV). Exit 0 holds, a clean
+             exit 1 refutes; any other exit or a crash is NO verdict (kit.recheck_verdict): listed
+             under FAILED, never flipped, challenged or carried, and re-run next pass as -r2, -r3 ….
+             A holds/refuted verdict the result flips appends a drift challenge. Each premise is
+             re-validated at most once per program, then carried ({id, carried: true}) and never
+             re-checked. A recheck_cmd that is a prose note is not run; `<cmd> => <expected>`
+             compares the command's trimmed stdout.
   triage     `cc-research triage --program P` as a subprocess (CC_RESEARCH_BIN overrides the binary).
   drift      git blob shas of CLAUDE.global.md, CLAUDE.global.slim.md, .claude/rules/*.md and
              docs/lessons/*.md under CC_RESEARCH_RULES_ROOT (else this repo) against the last run's
@@ -146,6 +151,60 @@ def expiry(p: Dict[str, Any]) -> Optional[float]:
     return None
 
 
+# The re-check environment (env id RECHECK_ENV): /bin/bash 3.2 as launchd runs it, from the git
+# toplevel of the program's records (recheck_cmds are written relative to it), on a PATH that
+# resolves the tools the original probes used. launchd's own PATH and cwd "/" made 80 of 93
+# re-checks crash on 2026-10-11 (gh, python3 packages, relative paths).
+RECHECK_ENV = "launchd-bash32-records"
+RECHECK_PATH_HEAD = ("/opt/homebrew/bin", "/usr/local/bin", "{HOME}/.local/bin")
+# A recheck_cmd that opens with a prose label ("unmeasured: …", "before filing: …") is a note, not
+# a command: run, it redirects into stray files in the worktree (`n>=5` makes a file "=5").
+PROSE_RE = re.compile(r"^\s*[A-Za-z][A-Za-z ,-]*:\s")
+# `<cmd>  => <expected>`: the command's trimmed stdout must equal <expected>. Run as one shell line,
+# `=> true` would redirect into a file "true" and read exit 0 whatever the answer.
+ARROW = " => "
+ARROW_SH = (
+    'out=$(eval "$1"); rc=$?; printf "%s\\n" "$out"; [ "$rc" -eq 0 ] || exit "$rc"; '
+    "got=$(printf '%s' \"$out\" | awk '{$1=$1};1'); "
+    '[ "$got" = "$2" ] && exit 0; echo "expected $2, read $got"; exit 1'
+)
+
+
+def recheck_argv(cmd: str) -> List[str]:
+    if ARROW in cmd:
+        left, _, want = cmd.rpartition(ARROW)
+        return ["/bin/bash", "-c", ARROW_SH, "/bin/bash", left.strip(), want.strip()]
+    return ["/bin/bash", "-c", cmd]
+
+
+def recheck_env() -> Dict[str, str]:
+    home = os.environ.get("HOME", "")
+    seen: List[str] = []
+    head = [
+        d.replace("{HOME}", home)
+        for d in RECHECK_PATH_HEAD
+        if home or "{HOME}" not in d
+    ]
+    for d in head + os.environ.get("PATH", "").split(":") + ["/usr/bin", "/bin"]:
+        if d and d not in seen:
+            seen.append(d)
+    return dict(os.environ, PATH=":".join(seen))
+
+
+def recheck_cwd(rec: Path) -> str:
+    try:
+        p = subprocess.run(
+            ["git", "-C", str(rec), "rev-parse", "--show-toplevel"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return str(rec)
+    return p.stdout.strip() if p.returncode == 0 and p.stdout.strip() else str(rec)
+
+
 def job_freshness(slug: str, state: str) -> Tuple[bool, str]:
     import probe_run
 
@@ -153,25 +212,39 @@ def job_freshness(slug: str, state: str) -> Tuple[bool, str]:
     prem = kit.fold(kit.read_jsonl(rec / "premises.jsonl"))
     probes = kit.fold(kit.read_jsonl(rec / "probes.jsonl"))
     now = kit.parse_iso(kit.now_iso())
+    cwd, env = recheck_cwd(rec), recheck_env()
     done: List[str] = []
+    verdicts: Dict[str, int] = {"holds": 0, "refuted": 0}
     flipped: List[str] = []
     failed: List[str] = []
     for pid, p in sorted(prem.items()):
         if not p.get("recheck_cmd") or p.get("carried"):
             continue
         exp = expiry(p)
-        ats = [
+        ats = [  # a no-verdict run is not a re-check (gate row 10 reads probes the same way)
             kit.parse_iso(x["at"])
             for x in probes.values()
-            if pid in (x.get("closes") or []) and x.get("at")
+            if pid in (x.get("closes") or [])
+            and x.get("at")
+            and kit.probe_recheck_verdict(rec, x) is not None
         ]
         stale = state == "certifying" and (not ats or now - max(ats) > DAY)
         if not (stale or (exp is not None and exp <= now)):
             continue
-        probe_id = f"P-fresh-{pid}"
-        if (
-            probe_id not in probes
-        ):  # a crash after the probe and before `carried` re-uses it
+        rcmd = str(p["recheck_cmd"])
+        if PROSE_RE.match(rcmd):
+            failed.append(f"{pid}: recheck_cmd is a note, not a command ({rcmd[:60]}…)")
+            continue
+        # P-fresh-<pid>, then -r2, -r3 … after a run that gave no verdict. A run WITH a verdict but
+        # no carry (a crash between the probe and the carry) is re-used, not re-run.
+        tries = [f"P-fresh-{pid}"]
+        while tries[-1] in probes:
+            tries.append(f"P-fresh-{pid}-r{len(tries) + 1}")
+        last_run = tries[-2] if len(tries) > 1 else None
+        if last_run and kit.probe_recheck_verdict(rec, probes[last_run]) is not None:
+            probe_id = last_run
+        else:
+            probe_id = tries[-1]
             ns = argparse.Namespace(
                 program=slug,
                 id=probe_id,
@@ -179,7 +252,7 @@ def job_freshness(slug: str, state: str) -> Tuple[bool, str]:
                 closes=[pid],
                 n=1,
                 load_control=False,
-                env_id="launchd-bash32",
+                env_id=RECHECK_ENV,
                 negative_control=None,
                 no_negative_control=(
                     "scheduled freshness re-check: re-runs the premise's own "
@@ -188,7 +261,9 @@ def job_freshness(slug: str, state: str) -> Tuple[bool, str]:
                 falsifier=None,
                 timeout=300,
                 mutates_live=False,
-                cmd=["/bin/bash", "-c", str(p["recheck_cmd"])],
+                cmd=recheck_argv(rcmd),
+                cwd=cwd,
+                env=env,
             )
             try:
                 quiet(probe_run.cmd_run, ns)
@@ -196,7 +271,14 @@ def job_freshness(slug: str, state: str) -> Tuple[bool, str]:
                 failed.append(f"{pid}: {e}")
                 continue
             probes = kit.fold(kit.read_jsonl(rec / "probes.jsonl"))
-        verdict = "holds" if probes[probe_id].get("exit") == 0 else "refuted"
+        verdict = kit.probe_recheck_verdict(rec, probes[probe_id])
+        if verdict is None:  # the environment failed: no flip, no challenge, no carry
+            err = rec / "evidence" / probe_id / "stderr"
+            stderr = err.read_text(errors="replace") if err.is_file() else ""
+            why = kit.recheck_why(probes[probe_id].get("exit"), stderr)
+            failed.append(f"{pid}: {probe_id} gave no verdict ({why})")
+            continue
+        verdicts[verdict] += 1
         last = p.get("verdict")
         if last in ("holds", "refuted") and verdict != last:
             ch = rec / "challenges.jsonl"
@@ -225,9 +307,10 @@ def job_freshness(slug: str, state: str) -> Tuple[bool, str]:
         )
         done.append(pid)
     msg = (
-        f"re-checked {len(done)}, flipped {len(flipped)}"
+        f"re-checked {len(done)} (holds {verdicts['holds']}, refuted {verdicts['refuted']}), "
+        f"flipped {len(flipped)}"
         + (f" ({', '.join(flipped)})" if flipped else "")
-        + (f"; FAILED {'; '.join(failed)}" if failed else "")
+        + (f"; FAILED {len(failed)}: {'; '.join(failed)}" if failed else "")
     )
     return not failed, msg
 
