@@ -201,13 +201,35 @@ case "$_iv" in ''|*[!0-9]*) _iv=15 ;; esac
 # carries only stderr into the synthesized turn (measured — W0-PROBE-WAKE-STDOUT appears 0 times in
 # the proof transcript, the STDERR variant twice). cc-await-ping prints the mail body on stdout, so
 # passing it through unchanged is precisely how this would wake the model with an empty reminder.
-_body="$("$_ping" "$_key" --timeout "$_to" --interval "$_iv" 2>/dev/null)"; _rc=$?
+_errf="$(mktemp "${TMPDIR:-/tmp}/wake-arm.XXXXXX" 2>/dev/null)" || _errf=/dev/null
+_body="$("$_ping" "$_key" --timeout "$_to" --interval "$_iv" 2>"$_errf")"; _rc=$?
+# The watcher's own verdict, read before the file goes. A STOOD-DOWN watcher (this inbox's own
+# `cc-await-ping --stand-down`, or the idle-scoped awaiter seeing a new turn) exits 0 with NO body and
+# consumed nothing — waking on that was the bare "📬 peer mail" with "(…returned no body…)" that made
+# up 15 of 26 measured wakes (docs/research/peer-mail-headline-2026-10-10/slot-lag-ack.md). Nothing is
+# lost by staying quiet: no cursor moved, so any pending mail surfaces at the next boundary.
+_stood=0
+[ "$_errf" != /dev/null ] && grep -q 'verdict=stood-down' "$_errf" 2>/dev/null && _stood=1
+[ "$_errf" != /dev/null ] && rm -f "$_errf"
+[ "$_rc" = 0 ] && [ -z "$_body" ] && [ "$_stood" = 1 ] && exit 0
 
 case "$_rc" in
   0|4)
     # MAIL. rc 4 is "delivered but the shared cursor could not be advanced" — that is a dup risk, not
     # a loss, and it is still mail: surfacing it is strictly better than swallowing it.
     [ -n "$_body" ] || _body="(the watcher reported mail but returned no body — read it with: cc-mail)"
+    # HEADLINES (2026-10-11). The operator-visible row of an asyncRewake wake is the STATIC
+    # `rewakeSummary` from settings — Claude Code 2.1.293 honours a per-wake summary only from an
+    # official-marketplace plugin (slot-rewake.md) — so the per-mail headline has to reach the
+    # operator through the woken session itself: the headlines lead the body, and mail from another
+    # session's pane carries the instruction to acknowledge it in one chat line.
+    _mhl="$(dirname "$0")/lib/mail_headline.py"
+    [ -f "$_mhl" ] || _mhl="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/mail_headline.py"
+    [ -f "$_mhl" ] || _mhl="$HOME/.claude/hooks/lib/mail_headline.py"
+    _own_pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-${KITTY_WINDOW_ID:-}}}"; _own_pane="${_own_pane##*:}"
+    _rendered=""
+    [ -f "$_mhl" ] && _rendered="$(printf '%s\n' "$_body" | python3 "$_mhl" wake --own "$_own_pane" 2>/dev/null)"
+    [ -n "$_rendered" ] && _body="$_rendered"
     printf '%s\n' "$_body" >&2
     [ "$_rc" = 4 ] && printf '%s\n' \
       "⚠ the shared cursor could not be advanced — you may see this mail again (a dup, never a loss)." >&2

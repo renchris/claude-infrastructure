@@ -115,6 +115,34 @@ run_arm() { # [session_id]
   grep -q 'cc-mail' "$BATS_TEST_TMPDIR/err" || false
 }
 
+# STOOD-DOWN (2026-10-11). `cc-await-ping --stand-down` and the idle-scoped awaiter end a watcher
+# with rc 0, no body, and `verdict=stood-down` on stderr — nothing consumed. The adapter read that as
+# mail and woke on "(…returned no body…)": 15 of 26 measured wakes. RED-proof: pre-fix this exits 2.
+@test "STOOD-DOWN: rc 0, no body and a stood-down verdict is SILENT — no empty wake" {
+  cat > "$FAKE/bin/cc-await-ping" <<'FAKEEOF'
+echo "cc-await-ping: verdict=stood-down signal=SIGTERM — stood down by this inbox's own --stand-down" >&2
+exit 0
+FAKEEOF
+  chmod +x "$FAKE/bin/cc-await-ping"
+  run run_arm "$SESS"
+  [ "$status" -eq 0 ]
+  [ ! -s "$BATS_TEST_TMPDIR/err" ]
+}
+
+# HEADLINE (2026-10-11). The wake's operator row is the static settings rewakeSummary (CC 2.1.293
+# takes a per-wake summary only from an official-marketplace plugin), so the per-mail headline leads
+# the body the woken session reads. RED-proof: pre-change stderr was the bare line, no `📬 pane …`.
+@test "HEADLINE: a mail wake leads stderr with the rendered headline, then the body unchanged" {
+  cp "$REPO/hooks/lib/mail_headline.py" "$FAKE/hooks/lib/"
+  raw="2026-10-11T03:46:00+0000 [wt-x-225] [@v1;pane=225;title=/limit-recover pane recovery gap] Panes are working again."
+  fake_ping 0 "$raw"
+  CC_MAIL_NOW=2026-10-11T04:00:00+0000 TZ=UTC run run_arm "$SESS"
+  [ "$status" -eq 2 ]
+  [ "$(sed -n 1p "$BATS_TEST_TMPDIR/err")" = "📬 pane 225 · /limit-recover pane recovery gap · sent 03:46 · arrived 14 min late — Panes are working again." ] || { cat "$BATS_TEST_TMPDIR/err"; false; }
+  grep -qxF "$raw" "$BATS_TEST_TMPDIR/err" || false
+  ! grep -q 'ACKNOWLEDGE' "$BATS_TEST_TMPDIR/err" || false   # asked once, by the drain that re-delivers it
+}
+
 # ── IDENTITY — survives the resume that unset $ITERM_SESSION_ID ──────────────────────────────────
 
 @test "IDENTITY: the PANE is preferred when present (its keyset covers pane AND session)" {

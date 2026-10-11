@@ -36,6 +36,10 @@ setup() {
   # rather than a new test. Pointing at a path that does not exist pins the whole file at the
   # UNVERIFIABLE arm; the four armedness tests below override it with their own stub.
   export CC_NOTIFY_LAUNCHCTL_BIN="$BATS_TEST_TMPDIR/no-launchctl-here"
+  # The SENDER's own identity (2026-10-11: cc-notify writes a `[@v1;pane=…]` headline token from the
+  # sender's registry row, found via these). A runner's real pane must not decide what a line holds;
+  # the tests that need a sender pane export their own below.
+  unset ITERM_SESSION_ID KITTY_WINDOW_ID CC_PANE_ID CLAUDE_CODE_SESSION_ID
   mkdir -p "$CC_REGISTRY_DIR" "$CC_MAILBOX_DIR"
 
   UUID="AAAAAAAA-1111-2222-3333-444444444444"

@@ -1471,6 +1471,21 @@ ${reason}"
             | awk '!seen[$0]++' | head -3 | paste -sd, - 2>/dev/null)"
   [ -n "$_mfrom" ] || _mfrom="peer session"
   _sysmsg="📬 ${_mn} message(s) from ${_mfrom} — delivered to this session's context (cc-thread --me to read the thread)"
+  # HEADLINES (2026-10-11): the same renderer as hooks/mailbox-drain.sh, so the in-loop desk's operator
+  # line names the ORIGIN sender's pane + session title, sent time, lag and title (the sed above reads
+  # the first bracket, which is `forwarded:<box>` for a forward), and the model gets the headlines plus
+  # the one-line acknowledgement ask. The sed line stays as the fallback for a missing renderer.
+  _mhl="$_scd/lib/mail_headline.py"
+  [ -f "$_mhl" ] || _mhl="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/mail_headline.py"
+  if [ -f "$_mhl" ]; then
+    _mown="${CC_PANE_ID:-${ITERM_SESSION_ID:-${KITTY_WINDOW_ID:-}}}"; _mown="${_mown##*:}"
+    _mrend="$(printf '%s\n' "$mail" | python3 "$_mhl" drain --own "$_mown" 2>/dev/null)" || _mrend=""
+    case "$_mrend" in '📬 peer mail ◀ '*)
+      _sysmsg="$(printf '%s\n' "$_mrend" | head -1)"
+      reason="$(printf '%s\n' "$_mrend" | tail -n +2)
+${reason}" ;;
+    esac
+  fi
 fi
 
 # decision:block blocks the stop; reason is fed back to the model as the next turn. systemMessage rides

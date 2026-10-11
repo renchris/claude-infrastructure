@@ -832,8 +832,26 @@ sys.stdout.write("\n".join(out) + "\n")
     fi ;;
 esac
 _block="$(printf '%s\n' "$_shown" | sed 's/^/  │ /')"
-ctx="$(printf '📬 peer mail ◀ %s new %s from other Claude sessions%s\n  ╭─\n%s\n  ╰─ delivered as CONTEXT via the non-keystroke inbox channel — never typed into your input line.\n     Already marked delivered. Triage/act as appropriate; reply to a peer with cc-notify <uuid> "…". Notice from peer Claude sessions on this machine.%s%s%s' \
-  "$n" "$plural" "$warn" "$_block" "$rest" "$_cust_note" "$nudge")"
+# ── HEADLINES (2026-10-11) ──────────────────────────────────────────────────────────────────────
+# One rendered headline per peer line (sender pane + session title, sent time, arrival lag past
+# CC_MAIL_LATE_MIN, answer-first title) for the model, and the operator's one line built from the same
+# render. When a line came from ANOTHER session (its pane token, or a HANDOFF-PING) the model is also
+# asked for one chat line of disposition — at most one per text block, so a burst cannot flood chat.
+# Asked here and in the stop fold only: both commit a cursor, so each line is asked about once (the
+# idle wake peeks, and its turn's drain re-delivers the same lines seconds later). Shared renderer:
+# hooks/lib/mail_headline.py, also used by mailbox-wake-arm.sh and session-continue.sh.
+_mhl="$_scd/lib/mail_headline.py"
+[ -f "$_mhl" ] || _mhl="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/mail_headline.py"
+[ -f "$_mhl" ] || _mhl="$HOME/.claude/hooks/lib/mail_headline.py"
+_heads=""; _dg=""
+if [ -f "$_mhl" ]; then
+  _rend="$(printf '%s\n' "$body" | python3 "$_mhl" drain --own "$own_pane" 2>/dev/null)" || _rend=""
+  _dg="$(printf '%s\n' "$_rend" | head -1)"         # line 1: the operator's one line
+  _heads="$(printf '%s\n' "$_rend" | tail -n +2)"   # the rest: headlines (+ the ack ask) for the model
+fi
+[ -n "$_heads" ] && _heads="$_heads"$'\n'
+ctx="$(printf '📬 peer mail ◀ %s new %s from other Claude sessions%s\n%s  ╭─\n%s\n  ╰─ delivered as CONTEXT via the non-keystroke inbox channel — never typed into your input line.\n     Already marked delivered. Triage/act as appropriate; reply to a peer with cc-notify <uuid> "…". Notice from peer Claude sessions on this machine.%s%s%s' \
+  "$n" "$plural" "$warn" "$_heads" "$_block" "$rest" "$_cust_note" "$nudge")"
 # ── OPERATOR-VISIBLE LINE (2026-07-26) ──────────────────────────────────────────────────────────
 # additionalContext is MODEL-ONLY: it reaches the agent and is never rendered in the conversation,
 # so until now every inbox delivery was invisible to the human. Operator-reported: "I can't see
@@ -862,6 +880,11 @@ if [ "$_sig" -gt 0 ]; then
 else
   msg="📬 peer mail ◀ ${n} lifecycle/fixture message(s), no peer traffic — cc-mail --all"
 fi
+# The headline digest supersedes the name list above when the renderer is present: it names the
+# ORIGIN sender (the sed above reads the first bracket, which is `forwarded:<box>` for a forward),
+# and carries the first message's pane, session title, sent time, lag and title. Still one line, and
+# still no body beyond that ≤72-char title. The sed digest stays as the fallback for a missing lib.
+case "$_dg" in '📬 peer mail ◀ '*) msg="$_dg" ;; esac
 # A custody discharge is a LEDGER state change the operator's close surface reads, so it belongs on
 # the human line as well as the model's — appended to whichever digest was built, because a peer's
 # return ping can arrive alongside either real peer traffic or none.

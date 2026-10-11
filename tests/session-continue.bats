@@ -409,8 +409,9 @@ mkuser_tx_meta() { # <typed-msg> <injected-line1> … → transcript path
   [ "$status" -eq 0 ]
   fired "$output"                                            # the continuation still blocks
   sm="$(printf '%s' "$output" | jq -r '.systemMessage')"
-  printf '%s' "$sm" | grep -q '📬 1 message'
-  printf '%s' "$sm" | grep -q 'cc-reaper'
+  # Since 2026-10-11 the fold renders the drain's headline line (hooks/lib/mail_headline.py), so the
+  # count reads `1 peer message(s)` and the line carries the sender, sent time and title.
+  printf '%s' "$sm" | grep -q '📬 peer mail ◀ 1 peer message(s) · cc-reaper · sent .* — a page'
   printf '%s' "$output" | jq -r '.reason' | grep -q 'a page'  # …and the mail is still in the reason
 }
 

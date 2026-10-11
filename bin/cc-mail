@@ -62,6 +62,18 @@ def nm(u): return names.get(u, u[:8] if u else '?')
 # noise: fixture pages from non-hermetic suites + routine lifecycle surfaces
 NOISE=('HANDOFF-HUSK-PANE','⚠️ REAPER SURFACE','[desk-sweep]')
 LINE=re.compile(r'^(\d{4}-\d{2}-\d{2}T[\d:]{8}[+-]\d{4})\s+\[([^\]]*)\]\s*(.*)$')
+# The sender's `[@v1;pane=…;title=…]` headline token (hooks/lib/mail_headline.py): shown as the sender
+# label `pane N · title` and kept out of the body preview, so it costs no preview width.
+META=re.compile(r'^\[@v\d+;([^\]]*)\]\s*')
+def meta_label(snd, body):
+    mm=META.match(body)
+    if not mm: return snd, body
+    kv={}
+    for p in mm.group(1).split(';'):
+        k,_,v=p.partition('=')
+        kv[k]=re.sub(r'%([0-9A-Fa-f]{2})', lambda x: chr(int(x.group(1),16)), v)
+    lab=('pane '+kv['pane']+(' · '+kv['title'] if kv.get('title') else '')) if kv.get('pane') else snd
+    return lab, body[mm.end():]
 
 rows=[]; noise=0; total=0
 for f in glob.glob(os.path.join(MB,'*.md')):
@@ -74,6 +86,7 @@ for f in glob.glob(os.path.join(MB,'*.md')):
             g=LINE.match(ln.rstrip('\n'))
             if not g: continue
             ts,snd,body=g.groups()
+            osnd=snd; snd,body=meta_label(snd,body)
             try: t=datetime.datetime.strptime(ts,'%Y-%m-%dT%H:%M:%S%z').timestamp()
             except Exception: continue
             if t<cutoff: continue
@@ -81,7 +94,7 @@ for f in glob.glob(os.path.join(MB,'*.md')):
             isn=any(k in body for k in NOISE)
             if isn: noise+=1
             if isn and not ALL: continue
-            if FROM and FROM.lower() not in snd.lower(): continue
+            if FROM and FROM.lower() not in snd.lower() and FROM.lower() not in osnd.lower(): continue
             if GT and GT.lower() not in body.lower(): continue
             rows.append((t,ts[11:19],snd,to,body))
 

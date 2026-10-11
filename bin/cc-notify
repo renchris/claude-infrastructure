@@ -20,6 +20,9 @@
 #                     --receipt on a --cloud target exits 7 = UNKNOWN, NEVER 0: the API's {ok:true} is
 #                     QUEUED, and off-box there is no `acked` cursor that could make it READ.
 #   --from <name>     attribution written to the inbox line (default: own registered name / account)
+#   --subject <text>  the headline title the recipient's operator sees; default is derived from the
+#                     message's first clause (hooks/lib/mail_headline.py). Rides in the line's
+#                     `[@v1;…]` token with the sender's pane and session title (see HEADLINE below).
 #   --mailbox-only    force inbox-only (skip the liveness classification / never a "not-live" note)
 #   --no-wake         never wake a deaf idle target through its messaging socket (bin/cc-wake); also
 #                     CC_NOTIFY_WAKE=0. Default: a live pane with NO watcher armed is woken.
@@ -549,7 +552,7 @@ _on_signal() {
 trap _on_signal TERM INT HUP
 
 # --- parse args ---
-FROM=""; MAILBOX_ONLY=0; TARGET=""; MSG=""; HAVE_TARGET=0; HAVE_MSG=0; ROLE=""; ROLE_GIVEN=0; RECEIPT=0
+FROM=""; SUBJECT=""; FROM_GIVEN=0; MAILBOX_ONLY=0; TARGET=""; MSG=""; HAVE_TARGET=0; HAVE_MSG=0; ROLE=""; ROLE_GIVEN=0; RECEIPT=0
 CLOUD_ID=""; CLOUD_GIVEN=0
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -563,8 +566,10 @@ while [ $# -gt 0 ]; do
     --mailbox-only) MAILBOX_ONLY=1; shift ;;
     --no-wake)      NO_WAKE=1; shift ;;
     --receipt)      RECEIPT=1; shift ;;
-    --from)         FROM="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
-    --from=*)       FROM="${1#--from=}"; shift ;;
+    --from)         FROM="${2:-}"; FROM_GIVEN=1; shift; [ $# -gt 0 ] && shift ;;
+    --from=*)       FROM="${1#--from=}"; FROM_GIVEN=1; shift ;;
+    --subject)      SUBJECT="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
+    --subject=*)    SUBJECT="${1#--subject=}"; shift ;;
     -h|--help)      usage; exit 0 ;;
     --*)            echo "cc-notify: unknown option '$1'" >&2; usage >&2; exit 2 ;;
     *)
@@ -1093,6 +1098,42 @@ resolve_from
 # One message = one line: collapse any embedded newlines/CR to spaces so the <uuid>.seen line-count
 # cursor counts MESSAGES, not physical lines (a multi-line message would otherwise desync the cursor).
 MSG_1LINE="$(printf '%s' "$MSG" | tr '\r\n' '  ')"
+
+# --- HEADLINE token (2026-10-11) ---
+# The recipient's operator sees `pane 225 · <session title> · sent 22:59 — <title>`, and only the
+# SENDER can know its own pane and session title, so they are captured here, at send time, into one
+# `[@v1;pane=…;sid=…;title=…;subj=…]` token written right after `[<from>]`. That position keeps every
+# old reader parsing unchanged (docs/research/peer-mail-headline-2026-10-10/slot-compat.md) and the
+# token rides inside the original line, which forwards copy byte for byte. Captured even under
+# --from (marked `by=flag`): the pane is a fact about where the send ran, the name only a label. No registry row
+# (launchd, cron, a bare shell) and no --subject ⇒ no token, and the line is exactly what it was.
+# Best effort by construction: any failure leaves META empty, never fails or delays the send.
+# ANTI-FORGERY (critic.md §1.4, rule R5). Readers attribute a line by its first bracket after the
+# forward chain, and by a `[@v…]` token right after it — so a --from carrying `]` or a leading
+# `forwarded:`, or a body opening with `[@` or an ISO stamp, could pose as another sender. 0 of 14,725
+# live lines do either, so neutralising them costs no real traffic.
+FROM="$(printf '%s' "$FROM" | tr '[]' '__')"
+case "$FROM" in forwarded:*) FROM="_$FROM" ;; esac
+case "$MSG_1LINE" in
+  '[@'*|[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T*) MSG_1LINE="\\$MSG_1LINE" ;;
+esac
+META=""
+_meta_by=""; [ "$FROM_GIVEN" = 1 ] && _meta_by=flag
+_meta_pane="${own_uuid:-${KITTY_WINDOW_ID:-}}"
+_meta_lib=""
+for _c in "$_sd/../hooks/lib/mail_headline.py" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/mail_headline.py" \
+          "$HOME/.claude/hooks/lib/mail_headline.py"; do
+  [ -f "$_c" ] && { _meta_lib="$_c"; break; }
+done
+if [ -n "$_meta_lib" ]; then
+  _meta_row="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}/${_meta_pane}.json"
+  if [ -n "$_meta_pane" ] && [ -f "$_meta_row" ]; then
+    META="$(python3 "$_meta_lib" meta-from-row "$_meta_row" --subject "${SUBJECT:-}" --by "$_meta_by" 2>/dev/null)" || META=""
+  elif [ -n "${SUBJECT:-}" ]; then
+    META="$(python3 "$_meta_lib" meta --subject "$SUBJECT" --by "$_meta_by" 2>/dev/null)" || META=""
+  fi
+  case "$META" in '[@v1;'*']') ;; *) META="" ;; esac
+fi
 # ── SENDER-SIDE SEND RECORD (F-1, 2026-08-09) ────────────────────────────────────────────────────
 # The inbox is a record of what a target RECEIVED. Nothing recorded what a sender SENT, so no
 # mechanism could answer "did this pane ever announce back?" — and that is exactly the question
@@ -1143,7 +1184,7 @@ _record_send() { # <resolved-target-key> [<target-as-given>]
 }
 mailbox_write() {
   mkdir -p "$MAILBOX_DIR" 2>/dev/null || return 1
-  printf '%s [%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$FROM" "$MSG_1LINE" >> "$MAILBOX_DIR/$uuid.md" || return 1
+  printf '%s [%s] %s%s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$FROM" "${META:+$META }" "$MSG_1LINE" >> "$MAILBOX_DIR/$uuid.md" || return 1
   # Pass the address AS GIVEN alongside the resolved key — see _record_send's header. A --role send
   # is recorded under its role spelling for the same reason: whoever asks later holds the spelling
   # they used, not the one the resolver produced.
@@ -1511,7 +1552,7 @@ case "$_lv" in
       # Teeing would copy the line into the same dead box; say so plainly rather than reporting a
       # reroute that changed nothing (the desk-is-down case the desk-invariant replacement exists for).
       echo "cc-notify: no reroute — the '$DESK_ROLE' role still points at THIS dead address (role=[$desk_uuid_role], chain head=[$desk_uuid]); the triager itself is down ($(desk_invariant_note)). Message recorded, undrained." >&2
-    elif printf '%s [%s] [for:%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$FROM" "$ORIG_UUID" "$MSG_1LINE" \
+    elif printf '%s [%s] %s[for:%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$FROM" "${META:+$META }" "$ORIG_UUID" "$MSG_1LINE" \
            >> "$MAILBOX_DIR/$desk_uuid.md" 2>/dev/null; then
       # HONESTY GATE. The tee landed — but "the desk is the standing triager" is a claim about a
       # READER, and a box is not a reader. Assert it ONLY for a desk that passes target_live; a desk

@@ -164,7 +164,9 @@ lib()  { . "$REPO/hooks/lib/mailbox-pending.sh"; }
 }
 
 @test "D11: systemMessage carries NO message body (a TUI notice, not a transcript)" {
-  seed "2026-07-25T10:00:00+0000 [peer] SECRETPAYLOAD do the thing"
+  # Since 2026-10-11 the line carries the mail's ≤72-char TITLE by design (the peer-mail headline),
+  # so the payload sits past that cap: the property pinned is "never the body beyond its title".
+  seed "2026-07-25T10:00:00+0000 [peer] Do the thing the plan names in its second phase, then report back; SECRETPAYLOAD"
   run bash -c 'echo "{}" | "$0" prompt' "$DRAIN"
   sm="$(printf '%s' "$output" | jq -r '.systemMessage')"
   run bash -c "printf '%s' \"\$1\" | grep -q 'SECRETPAYLOAD'" _ "$sm"

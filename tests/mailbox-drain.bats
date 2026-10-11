@@ -315,7 +315,9 @@ delivered_nothing() { # <output> → 0 iff no mail body was surfaced
   run bash -c 'echo "{}" | "$0" prompt' "$DRAIN"
   msg="$(printf '%s' "$output" | jq -r '.systemMessage')"
   printf '%s' "$msg" | grep -q '6 peer message'       # count is honest…
-  [ "$(printf '%s' "$msg" | tr ',' '\n' | grep -c 'p[0-9]')" -le 3 ]   # …names are capped at 3
+  # DISTINCT names, not comma segments: since 2026-10-11 the line also carries the first message's
+  # headline (`· first: p1 · …`), which repeats a name already listed.
+  [ "$(printf '%s' "$msg" | grep -o 'p[0-9]' | sort -u | grep -c '')" -le 3 ]   # …names are capped at 3
   [[ "$msg" != *"p5"* ]] || false                     # the cap actually bites
 }
 
@@ -330,6 +332,32 @@ an embedded newline that must not leak into the operator line"
   [ "$msg" != "null" ] || false
   printf '%s' "$msg" | grep -q '📬'
   [ "$(printf '%s' "$msg" | grep -c '')" -eq 1 ]
+}
+
+# HEADLINE (2026-10-11): the operator line carries the sender's pane + session title, the sent time,
+# the lag when ≥10 min, and an answer-first title (hooks/lib/mail_headline.py; owner suite for the
+# renderer: tests/mail-headline.bats). RED-proof: pre-change the line was
+# `📬 peer mail ◀ 1 peer message(s) from forwarded:abcd1234 — full text: cc-mail`.
+@test "operator line: a forwarded token line names ORIGIN pane, title, sent, lag; model gets one ack ask" {
+  seed "2026-10-11T03:59:00+0000 [forwarded:abcd1234] 2026-10-11T03:46:00+0000 [wt-x-225] [@v1;pane=225;title=/limit-recover pane recovery gap] Panes 113 and 124 are working again"
+  run bash -c 'echo "{}" | CC_MAIL_NOW=2026-10-11T04:00:00+0000 TZ=UTC "$0" prompt' "$DRAIN"
+  [ "$status" -eq 0 ]
+  msg="$(printf '%s' "$output" | jq -r '.systemMessage')"
+  [ "$msg" = "📬 peer mail ◀ 1 peer message(s) · pane 225 · /limit-recover pane recovery gap · sent 03:46 · arrived 14 min late — Panes 113 and 124 are working again — full text: cc-mail" ] || { echo "$msg"; false; }
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  printf '%s' "$ctx" | grep -qF '  📬 pane 225 · /limit-recover pane recovery gap · sent 03:46 · arrived 14 min late — Panes' || false
+  [ "$(printf '%s' "$ctx" | grep -c 'ACKNOWLEDGE IN CHAT')" -eq 1 ]
+  printf '%s' "$ctx" | grep -q '│ .*Panes 113 and 124 are working again' || false   # the body is still delivered whole
+}
+
+@test "operator line: lifecycle-only and own-pane mail asks for no acknowledgement" {
+  seed "2026-10-11T03:59:00+0000 [w] [@v1;pane=$UUID] note to self" \
+       "2026-10-11T03:59:01+0000 [claude] ⚠️ REAPER SURFACE — session x is finished-operator"
+  run bash -c 'echo "{}" | "$0" prompt' "$DRAIN"
+  [ "$status" -eq 0 ]
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  printf '%s' "$ctx" | grep -q 'note to self' || false
+  ! printf '%s' "$ctx" | grep -q 'ACKNOWLEDGE IN CHAT' || false
 }
 
 # ── ARM-ON-OPEN (2026-07-26) — the nudge must reach a session whose inbox is EMPTY ───────────────
@@ -576,6 +604,15 @@ drain_at() { # $1 = cwd → runs `prompt` mode with that cwd in the payload
   # already enforces for delivery itself).
   msg="$(printf '%s' "$output" | jq -r '.systemMessage')"
   printf '%s' "$msg" | grep -q 'custody −1' || false
+}
+
+@test "custody: a HANDOFF-PING behind the sender's [@v1;…] headline token still DISCHARGES" {
+  custody_setup
+  "$CUSTODY" open --cwd "$ORIG_CWD" --target 77 --marker M-PING-T --slug wave6 --notify-back "$UUID"
+  seed "2026-10-11T03:59:00+0000 [peer] [@v1;pane=77;sid=5e5e5e5e;title=wave six] HANDOFF-PING wave6: DONE — landed"
+  run drain_at "$ORIG_CWD"
+  [ "$status" -eq 0 ]
+  [ "$("$CUSTODY" count --open --cwd "$ORIG_CWD")" = 0 ]
 }
 
 @test "custody CONTROL: the SAME slug open under a DIFFERENT cwd is NOT discharged (scoping)" {
