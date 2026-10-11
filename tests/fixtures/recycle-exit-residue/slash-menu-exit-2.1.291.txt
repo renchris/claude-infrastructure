@@ -1,0 +1,24 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ❯ /exit                                  Exit the CLI
+    /context                               Visualize current context usage as a colored grid
+    /usage-credits                         Configure usage credits or request them from your admin when you hit a limit
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ /exit
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  (4) #214 7bce0617 fix-recycle-exit-residue (1b2b93357) · high
+  ⏵⏵ auto mode on (shift+tab to cycle)

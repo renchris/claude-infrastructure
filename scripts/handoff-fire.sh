@@ -4065,13 +4065,13 @@ composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer c
   # by a narrower pane stays UNKNOWN, which refuses. scripts/lib/cc-tui.sh and
   # scripts/lib/lr-composer-snapshot.sh carry the same function.
   plain="$(printf '%s\n' "$scr" | LC_ALL=C perl -pe 's/\e\[[0-?]*[ -\/]*[@-~]|\e\][^\a\e]*(?:\a|\e\\)?|\e.//g')"
-  span="$(printf '%s\n' "$plain" | LC_ALL=C awk -v b="$b12" -v u='─' -v g='❯' -v slashmenu="${HF_COMPOSER_SLASH_MENU:-on}" '
+  span="$(printf '%s\n' "$plain" | LC_ALL=C awk -v b="$b12" -v u='─' -v g='❯' -v slashmenu="${HF_COMPOSER_SLASH_MENU:-on}" -v nb=$'\302\240' '
     function border(s,   t) {                 # a full rule, or a LABELED one: "── label ─" from column 0
       if (index(s, b) > 0) return 1
       t = s; sub(/[ \t\r]+$/, "", t)
       return (index(t, u u) == 1 && length(t) > 3 * length(u) && substr(t, length(t) - length(u) + 1) == u)
     }
-    function selector(s,   t, n, r) {       # ❯ at indent 1-4: a dialog option row, never the composer
+    function selector(s,   t, n) {          # ❯ at indent 1-4: a dialog option row, never the composer
       t = s; sub(/^ +/, "", t); n = length(s) - length(t)
       if (!(n >= 1 && n <= 4 && index(t, g) == 1)) return 0
       # …unless it is the SLASH-COMMAND SUGGESTION menu, whose highlighted row is "❯ /exit  Exit the
@@ -4079,9 +4079,19 @@ composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer c
       # there read UNKNOWN and the recycle held (pane 168, 38 columns, 2026-10-11 — lr-stranded-husk).
       # A dialog option carries an ordinal or a word, never a leading slash. Kill switch
       # HF_COMPOSER_SLASH_MENU=off restores the old rule.
-      r = substr(t, length(g) + 1); sub(/^ +/, "", r)
-      if (slashmenu != "off" && substr(r, 1, 1) == "/") return 0
+      # ONLY THE ROW NAMING THE COMMAND THE BOX HOLDS (pane 206, 2026-10-10): with the menu open a CR submits
+      # the HIGHLIGHTED row, not the box, so a highlight that differs from what the box holds stays a
+      # selector and the read UNKNOWN (docs/research/recycle-exit-residue-2026-10-10.md).
+      if (slashmenu != "off" && cmd != "" && slashcmd(s) == cmd) return 0
       return 1
+    }
+    function slashcmd(s,   t) {             # "❯ /cmd …" (leading spaces, then space or NBSP) → "/cmd", else ""
+      t = s; sub(/^ +/, "", t)
+      if (index(t, g) != 1) return ""
+      t = substr(t, length(g) + 1)
+      while (substr(t, 1, 1) == " " || index(t, nb) == 1) t = substr(t, (substr(t, 1, 1) == " ") ? 2 : length(nb) + 1)
+      if (substr(t, 1, 1) != "/") return ""
+      sub(/[ \t\r].*$/, "", t); return t
     }
     { line[NR] = $0; if (border($0)) { b2 = b1; b1 = NR; gb = 0 } else if (index($0, g) > 0) gb = 1 }
     END {
@@ -4089,6 +4099,7 @@ composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer c
       if (b1 > 0 && b2 == 0) { print NR - b1; exit 8 }  # a bottom border and no top: maybe a TALL box
       if (b1 == 0 || b2 == 0 || b1 - b2 < 2) exit 9      # no box between two borders ⇒ UNKNOWN
       if (index(line[b2], u) != 1) exit 9                # an indented "box": a composer printed in output
+      cmd = (index(line[b2 + 1], g) == 1) ? slashcmd(line[b2 + 1]) : ""   # the "/cmd" the box holds, if any
       for (i = 1; i < b2; i++) if (selector(line[i])) exit 9   # a dialog drawn ABOVE a live composer
       print (b2 + 1) "," (b1 - 1)
     }')" && rc=0 || rc=$?
