@@ -268,6 +268,8 @@ cl_recon_queue() { # <sid> <mode> <pane> <config_dir> [target] → rc 0 queued (
          + (if $target != "" then {target:$target} else {} end)' > "$tmp" 2>/dev/null \
      && mv -f "$tmp" "$dest" 2>/dev/null; then
     printf 'cc-lr: QUEUED for the reconciler %s → %s\n' "${sid:0:8}" "$dest"
+    # inside recover --limited the summary line says this once for the whole set
+    if [ -z "$CL_RL_QF" ]; then cl_verdict_by "cc-lr status ${sid:0:8}"; cl_tick_note "$dest"; fi
     return 0
   fi
   rm -f "$tmp" 2>/dev/null || true
@@ -313,6 +315,35 @@ cl_this_pane() {
 # pane and session, "" when unknown. `requested_by` keeps its old meaning beside them; the poller reads
 # these only for cc-lr-origin requests, never to mail the subject.
 cl_requester_sid() { printf '%s' "${CLAUDE_CODE_SESSION_ID:-}"; }
+
+# ── what an "in flight" line owes its reader (lr-reliability D10, 2026-10-11) ────────────────────
+# "Verdicts arrive as mail; END THE TURN" promised mail that, for most daemon-run verdicts, reached
+# no inbox; and a request filed while a poller tick ran waited on that tick's exit, 25-48 min that
+# night, while every wait line said "still in flight". So each such line now also says WHEN to look
+# and WHAT to run then, and names a tick that has held the poller's lock past CC_LR_TICK_STUCK_S.
+# Message only: nothing here changes what runs or any exit code.
+cl_verdict_by() { # <command to run> [seconds from now] → one line: the deadline and the fallback read
+  local t
+  t=$(( $(date +%s) + ${2:-${CC_LR_VERDICT_DEADLINE_S:-900}} ))
+  printf 'cc-lr: expect a verdict by %s; if no verdict by then: %s\n' \
+    "$(date -u -r "$t" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$t" +%Y-%m-%dT%H:%M:%SZ)" "$1"
+}
+# The holder identity is the poller's own (lr-reset-poller.sh, SELF-OVERLAP LOCK): pid AND lstart, so
+# a recycled pid is never blamed. The lock's age is its pid file's mtime, written at the tick's start.
+# [request path]: when given and already gone, the tick claimed it — the request HAS started.
+cl_tick_note() { # [request path] → one line when a live tick has held poller.lock too long; else nothing
+  local d="${LR_POLLER_LOCK_DIR:-$STATE/poller.lock}" p l t age
+  [ -z "${1:-}" ] || [ -e "$1" ] || return 0
+  p="$(cat "$d/pid" 2>/dev/null)" || return 0
+  case "$p" in ''|*[!0-9]*) return 0 ;; esac
+  kill -0 "$p" 2>/dev/null || return 0
+  l="$(cat "$d/lstart" 2>/dev/null)"
+  [ -n "$l" ] && [ "$(ps -o lstart= -p "$p" 2>/dev/null | tr -s ' ')" = "$l" ] || return 0
+  t="$(stat -f %m "$d/pid" 2>/dev/null || stat -c %Y "$d/pid" 2>/dev/null)" || return 0
+  age=$(( $(date +%s) - t ))
+  [ "$age" -ge "${CC_LR_TICK_STUCK_S:-600}" ] || return 0
+  printf 'cc-lr: poller tick pid %s has held the lock for %s min; your request has not started\n' "$p" "$(( age / 60 ))"
+}
 
 # ── the mutex: one actuator per session ────────────────────────────────────────────────────────
 # ONE implementation, lr-lib.sh's lr_claim_take (D2, 2026-09-28) — shared with lr-fleet's pool and
@@ -526,6 +557,7 @@ EOF_ROWS
     echo "cc-lr: no LIMITED session${acct_f:+ on $acct_f} — nothing to recover."
   else
     echo "cc-lr: ${fired} fired, ${refused} refused of ${n} limited session(s)${acct_f:+ on $acct_f}$([ "${queued:-0}" -gt 0 ] && printf ' (%s of the fired QUEUED for the reconciler, which drives each at its reset)' "$queued"). Verdicts arrive as mail; END THE TURN."
+    [ "$fired" -eq 0 ] || { cl_verdict_by "cc-lr status --all (or cc-lr status <sid8> per session)"; cl_tick_note; }
   fi
 
   # ── THE IDLE HALF (2026-09-27). "Recover account N" means every session on it, and at a cap an
@@ -1038,6 +1070,7 @@ cmd_switch_driver() { # <target> <dry> <pane> <sid> <from> <all> <wait_s> [exclu
 $census
 EOF
   printf 'cc-lr: %d switch request(s) queued for the poller (requested_by %s); verdicts also arrive as mail\n' "$nq" "${by:-?}"
+  [ "$nq" -eq 0 ] || { cl_verdict_by "cc-lr status <sid8> per session"; cl_tick_note; }
   if [ "$nq" -gt 0 ]; then
     # `kickstart` with NO `-k` — the rule every request writer here follows (see cmd_repair).
     if command -v launchctl >/dev/null 2>&1; then
@@ -1435,6 +1468,7 @@ EOF
     launchctl kickstart "gui/$(id -u)/$POLLER_LABEL" >/dev/null 2>&1 \
       || echo "cc-lr: the kick failed — the poller's own interval will start the batch" >&2
   fi
+  cl_tick_note "$(lr_move_state)/move/requests/$batch.json"
   # Bounded wait; the batch runner and its workers are detached and outlive this process.
   local deadline seen=" " left f v last_kick
   deadline=$(( now + wait_s )); last_kick="$now"
@@ -1466,7 +1500,11 @@ EOF
     [ "$(date +%s)" -lt "$deadline" ] || break
     sleep "${CC_LR_MOVE_POLL_S:-3}"
   done
-  [ "$left" -eq 0 ] || printf '… %s session(s) still in flight after %ss — the workers keep running: cc-lr move --status %s\n' "$left" "$wait_s" "$batch"
+  if [ "$left" -gt 0 ]; then
+    printf '… %s session(s) still in flight after %ss — the workers keep running: cc-lr move --status %s\n' "$left" "$wait_s" "$batch"
+    cl_verdict_by "cc-lr move --status $batch"
+    cl_tick_note "$(lr_move_state)/move/requests/$batch.json"
+  fi
   if [ "$(jq -r '.admitted // true' "$bdir/admit.json" 2>/dev/null)" = false ]; then
     echo "cc-lr move: the batch was REFUSED at admission — $(jq -r '.reason' "$bdir/admit.json"). Nothing moved." >&2
     return 2
@@ -1713,6 +1751,8 @@ EOF
   if [ "$left" -gt 0 ]; then
     echo "  in flight after ${wait_s}s; the detached drivers and workers keep running, and each verdict is on disk:"
     awk -F'\t' '$1 == "recover" { printf "    cc-lr status %s\n", substr($2, 1, 8) } $1 == "batch" { printf "    cc-lr move --status %s\n", $2 }' "$of"
+    cl_verdict_by "the commands above"
+    cl_tick_note
   fi
   cl_bounds_line
   [ "$left" -eq 0 ] && [ "$bad" -eq 0 ] && { [ "$good" -gt 0 ] || [ "$n_q" -gt 0 ]; }
