@@ -22,6 +22,9 @@
 #   a fresh flag no longer reads as tripped  reds the repeat-run, 12-from-tripped, confirm-delay,
 #                                            clear-edge and nothing-measurable cases
 #   2026-10-10 (review round): see the mutant list printed beside each new case's name below.
+#   2026-10-11 (Hammerspoon stall check, 8 cases): each of these reds at least one hammerspoon case —
+#   cpu-flat ceiling 0.05 -> -1 · wall ceiling 300 -> 3000 · confirming re-read forced true ·
+#   thumb age 30 -> 300 · spin floor 0.8 -> 8 · daily sample cap forced true · gap report dropped
 
 setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
@@ -67,6 +70,11 @@ case "$*" in
       done
     done
     awk '{ printf "%5d     1     0 %-4s %3s /usr/libexec/other\n", 9000 + NR, $1, $2 }' "$FX/bands.out" ;;
+  # Hammerspoon's `etime time`: one line of hs.read per successive read (the last one repeats).
+  "-o etime=,time= -p "*)
+    [ -f "$FX/hs.read" ] || exit 1
+    c=$(( $(cat "$FX/calls.hs" 2>/dev/null || echo 0) + 1 )); echo "$c" > "$FX/calls.hs"
+    awk -v c="$c" '{ l[NR] = $0 } END { print (c <= NR) ? l[c] : l[NR] }' "$FX/hs.read" ;;
 esac
 STUB
   cat > "$FX/sample" <<'STUB'
@@ -495,4 +503,120 @@ all_dead() {
   [ "$(row '[.transition,.page]|join(",")')" = "clear,desk" ]
   [ "$(lines "$FX/notify.argv")" = 2 ]
   [ ! -e "$FX/decoy" ]
+}
+
+# ── Hammerspoon stall check (PLAN F6, report-only) ──
+# hs <prev-age-s> <read…> — a running Hammerspoon (pid 1073), a state file whose last reading is
+# <prev-age-s> old at 100.00 s of CPU, and one `etime time` line per successive ps read.
+hs() {
+  local age="$1"; shift
+  export CONVOY_GAUGE_HS_STATE="$FX/hs.state" CONVOY_GAUGE_HS_SCREENSHOT_LOG="$FX/screenshot.log"
+  echo 1073 > "$FX/pid.Hammerspoon"; echo /Applications/Hammerspoon.app/Contents/MacOS/Hammerspoon > "$FX/path.1073"
+  printf 'pid=1073 cpu=100.00 ts=%s state=%s since=%s gapmono= day=%s nsamp=%s\n' "$(( $(date +%s) - age ))" \
+    "${HS_PREV:-ok}" "${HS_SINCE:-}" "$(date +%Y%m%d)" "${HS_NSAMP:-0}" > "$FX/hs.state"
+  rm -f "$FX/calls.hs"; printf '%s\n' "$@" > "$FX/hs.read"
+}
+# shot <age-s> <phase> — append a screenshot.log line <age-s> old.
+shot() {
+  printf 'ts=%s mono=%s phase=%s id=%s file=x.png\n' "$(date -r $(( $(date +%s) - $1 )) +%Y-%m-%dT%H:%M:%S.000%z)" \
+    "${3:-1}" "$2" "${4:-aa11}" >> "$FX/screenshot.log"
+}
+hsrow() { row '[.hs_state,(.hs_why//"null"),.hs_transition,.hs_page]|join(",")'; }
+
+@test "hammerspoon: CPU flat over 60 s and on the re-read is a stall: one sample, one page, a row; nothing is signalled" {
+  hs 60 "11:00 100.02" "11:05 100.02"
+  gauge
+  [ "$status" -eq 0 ]
+  [ "$(hsrow)" = "stall,cpu-flat,stall,desk" ]
+  [ "$(row '[.hs_pid,.hs_cpu_delta_s,.hs_wall_s]|join(",")')" = "1073,0.02,60" ]
+  local s; s="$(row .hs_sample)"
+  [[ "$s" == "$FX/evidence/convoy-hs-"*"/hammerspoon.sample.txt" ]] || false
+  [ -s "$s" ]
+  grep -qx "1073 1 -file $s" "$FX/sample.argv"
+  grep -q 'sample hammerspoon pid=1073 rc=0' "$(dirname "$s")/meta.txt"
+  [ "$(lines "$FX/notify.argv")" = 1 ]
+  grep -q -- '--role desk HAMMERSPOON Hammerspoon stalled ~60s (main thread used no CPU); sample at .*; report-only, nothing was killed' "$FX/notify.argv"
+  grep -q 'state=stall ' "$FX/hs.state"
+  [ "$(row .state)" = clear ]                                     # the daemon verdict is untouched
+}
+
+@test "hammerspoon: a healthy CPU rise is ok; a flat interval with CPU moving on the re-read is ok too" {
+  hs 60 "11:00 101.30"
+  gauge
+  [ "$(hsrow)" = "ok,null,none,none" ]
+  hs 60 "11:00 100.03" "11:05 100.04"
+  gauge
+  [ "$(hsrow)" = "ok,null,none,none" ]
+  [ ! -e "$FX/notify.argv" ] && [ ! -e "$FX/sample.argv" ]
+}
+
+@test "hammerspoon: no verdict on a wall gap over 300 s, a changed pid, or a process under 60 s old" {
+  hs 400 "11:00 100.00"
+  gauge
+  [ "$(row '[.hs_state,(.hs_wall_s|tostring)]|join(",")')" = "skip,null" ]
+  hs 60 "11:00 100.00"; sed -i '' 's/pid=1073/pid=999/' "$FX/hs.state"
+  gauge
+  [ "$(row .hs_state)" = skip ]
+  grep -q '^pid=1073 ' "$FX/hs.state"                             # the new pid is the new baseline
+  hs 60 "00:59 100.00"
+  gauge
+  [ "$(row .hs_state)" = skip ]
+  [ ! -e "$FX/notify.argv" ]
+}
+
+@test "hammerspoon: the screenshot log's LAST line a thumb 31 s old is a stall; one a later shot replaced is not" {
+  shot 31 thumb-shown
+  hs 60 "11:00 101.30"
+  gauge
+  [ "$(hsrow)" = "stall,thumb-open,stall,desk" ]
+  [ "$(row .hs_thumb_open_s)" -ge 31 ]
+  grep -q 'a screenshot thumbnail is stuck on screen' "$FX/notify.argv"
+  rm -f "$FX/notify.argv"; shot 2 created 2 bb22
+  hs 60 "11:00 101.30"
+  gauge
+  [ "$(hsrow)" = "ok,null,none,none" ]
+}
+
+@test "hammerspoon: stall then recovery records the episode length once and pages nobody" {
+  HS_PREV=stall HS_SINCE="$(( $(date +%s) - 120 ))" hs 60 "11:00 100.00" "11:05 100.00"
+  gauge
+  [ "$(hsrow)" = "stall,cpu-flat,none,none" ]                     # still stalled: no second page
+  [ "$(row .hs_stall_s)" -ge 120 ]
+  HS_PREV=stall HS_SINCE="$(( $(date +%s) - 180 ))" hs 60 "11:00 101.30"
+  gauge
+  [ "$(hsrow)" = "ok,null,recover,none" ]
+  [ "$(row .hs_stall_s)" -ge 180 ]
+  grep -q 'HAMMERSPOON RECOVER pid=1073 after ~1[89][0-9]s' "$FX/transitions.log"
+  [ ! -e "$FX/notify.argv" ] && [ ! -e "$FX/sample.argv" ]
+}
+
+@test "hammerspoon: a spin at >= 0.8 core pages; the daily sample cap still pages but takes no sample" {
+  HS_NSAMP=5 hs 60 "11:00 160.00"
+  gauge
+  [ "$(hsrow)" = "spin,spin,stall,desk" ]
+  [ "$(row .hs_sample)" = null ]
+  [ ! -e "$FX/sample.argv" ]
+  grep -q 'Hammerspoon spinning at 1.0 cores; sample at none' "$FX/notify.argv"
+}
+
+@test "hammerspoon: a thumb gap over 10 s that closed since the mark is recorded; the first run only sets the mark" {
+  shot 100 thumb-shown 1000000000000 cc33; shot 88 dismissed 1012000000000 cc33
+  hs 60 "11:00 101.30"; sed -i '' 's/gapmono= /gapmono=500 /' "$FX/hs.state"
+  gauge
+  [ "$(row .hs_gap_s)" = 12 ] || [ "$(row .hs_gap_s)" = 12.0 ]
+  grep -q 'gapmono=1012000000000 ' "$FX/hs.state"
+  gauge                                                          # same log: nothing new
+  [ "$(row .hs_gap_s)" = null ]
+  hs 60 "11:00 101.30"                                           # no mark yet
+  gauge
+  [ "$(row .hs_gap_s)" = null ]
+}
+
+@test "hammerspoon: absent is recorded as absent; CONVOY_GAUGE_HS=off writes no hs_ field" {
+  gauge
+  [ "$(row '[.hs_state,(.hs_pid|tostring)]|join(",")')" = "absent,null" ]
+  hs 60 "11:00 100.00" "11:05 100.00"
+  CONVOY_GAUGE_HS=off gauge
+  [ "$(tail -1 "$CONVOY_GAUGE_LOG" | jq '[keys[]|select(startswith("hs_"))]|length')" = 0 ]
+  [ ! -e "$FX/notify.argv" ]
 }

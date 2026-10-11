@@ -56,6 +56,24 @@
 # 2 s later, so cc-notify's TERM trap can still print its verdict. A TERM to the gauge itself cuts
 # its running samples the same way and waits for them before it writes the row.
 #
+# HAMMERSPOON STALL CHECK (PLAN F6, report-only; ruled 2026-10-11 in place of a heartbeat watchdog).
+# Hammerspoon froze 264 s on 2026-10-09 (and 390 s and 150 s on 10-04) with nothing noticing, and
+# macOS kept no hang report. Each tick: its pid from the same `ps -axo`, then ONE `ps -o etime=,time=`.
+#   stall (cpu-flat)   CPU grew <= 0.05 s since the last tick AND 0.00 s across a CONFIRM_S re-read
+#                      (healthy is ~1.3 s per 30 s: its 5 ms screenshot poll timer)
+#   stall (thumb-open) the LAST line of screenshot.log is a thumb still shown, over 30 s old (only the
+#                      last line: a thumb the next shot replaced never gets its dismissed line)
+#   spin               CPU rate over the interval >= 0.8 of a core
+# No verdict (hs_state=skip, baseline reset) when the process is under 60 s old, the pid changed,
+# there is no earlier reading, or the wall gap is outside 30-300 s (sleep, or a late tick).
+# On the ok -> stall/spin edge only: one bounded `sample` into a convoy-hs-* evidence directory (at
+# most CONVOY_GAUGE_HS_SAMPLES_PER_DAY) and one page on the same desk-first path as a trip. On
+# recovery: hs_stall_s (first stall tick to recovery tick) and a transitions-log line, no page.
+# hs_gap_s: the longest thumb-shown -> dismissed gap over 10 s that closed since the last tick, so a
+# stall shorter than a tick still leaves a row when a screenshot was up.
+#   NEVER kill or signal Hammerspoon, never message it (no hs, hs.ipc or osascript), never play a
+# sound. No launchd job of its own. Its state is one line in CONVOY_GAUGE_HS_STATE.
+#
 # EXIT: 0 on a completed read, whatever the state · 3 when no daemon could be measured (the row is
 # still written, the flag is left alone) · 143 when cut by TERM · 2 usage.
 #
@@ -69,16 +87,19 @@
 #   CONVOY_GAUGE_SAMPLE_TIMEOUT_S=15    bound on each `sample`
 #   CONVOY_GAUGE_PAGE_TIMEOUT_S=10      bound on each page attempt
 #   CONVOY_GAUGE_EVIDENCE_KEEP=30       newest N evidence directories kept
+#   CONVOY_GAUGE_HS=on                  off = no Hammerspoon check and no hs_* fields in the row
+#   CONVOY_GAUGE_HS_SAMPLES_PER_DAY=5   cap on Hammerspoon samples
 # SEAMS: CONVOY_GAUGE_LOG CONVOY_GAUGE_TRANSITIONS_LOG CONVOY_GAUGE_SHED_DIR (the flag's directory)
 #        CONVOY_GAUGE_EVIDENCE_DIR CONVOY_GAUGE_PS CONVOY_GAUGE_SYSCTL
 #        CONVOY_GAUGE_GETCONF CONVOY_GAUGE_SAMPLE (sampler binary; 0 = no sample) CONVOY_GAUGE_SLEEP
 #        CONVOY_GAUGE_NOTIFY (a cc-notify-compatible binary; 0 = no page)
+#        CONVOY_GAUGE_HS_STATE CONVOY_GAUGE_HS_SCREENSHOT_LOG
 # bash 3.2 safe. Ships to launchd ⇒ tested under /bin/bash.
 set -uo pipefail
 
 for a in "$@"; do
   case "$a" in
-    -h|--help) sed -n 2,76p "$0"; exit 0 ;;
+    -h|--help) sed -n 2,95p "$0"; exit 0 ;;
     *) echo "convoy-gauge: unknown argument: $a" >&2; exit 2 ;;
   esac
 done
@@ -103,6 +124,9 @@ SLEEP_BIN="${CONVOY_GAUGE_SLEEP:-/bin/sleep}"
 LOG="${CONVOY_GAUGE_LOG:-$HOME/.claude/logs/convoy-gauge.jsonl}"
 TLOG="${CONVOY_GAUGE_TRANSITIONS_LOG:-$HOME/.claude/logs/convoy-gauge-transitions.log}"
 EVID_ROOT="${CONVOY_GAUGE_EVIDENCE_DIR:-$HOME/.claude/logs/convoy-evidence}"
+HS_STATE_FILE="${CONVOY_GAUGE_HS_STATE:-$HOME/.claude/logs/convoy-gauge-hs.state}"
+HS_LOG="${CONVOY_GAUGE_HS_SCREENSHOT_LOG:-$HOME/Library/Logs/Hammerspoon/screenshot.log}"
+HS_SAMPLES_PER_DAY="${CONVOY_GAUGE_HS_SAMPLES_PER_DAY:-5}"
 PAGE_ROLES="desk orchestrator"
 NOW="$(/bin/date +%s)"
 
@@ -160,13 +184,15 @@ bounded() {
 # readable) and BANDS.
 read_all() {
   local snap cands="" pids="" line d n pid
-  MAX=""; N_LSD=""; N_TRUSTD=""; N_SECD=""; N_TCCD=""; P_LSD=""; P_TRUSTD=""; P_SECD=""; P_TCCD=""
+  MAX=""; N_LSD=""; N_TRUSTD=""; N_SECD=""; N_TCCD=""; P_LSD=""; P_TRUSTD=""; P_SECD=""; P_TCCD=""; P_HS=""
   snap="$("$PS_BIN" -axo pid=,ppid=,uid=,state=,pri=,comm= 2>/dev/null | /usr/bin/awk -v uid="$UID" '
     { seen = 1 }
     $4 ~ /^R/ { p = $5 + 0
       if (p <= 9) bg++; else if (p <= 25) ut++; else if (p <= 36) df++; else if (p <= 63) ui++; else sy++ }
-    $3 == uid && $2 == 1 && NF >= 6 {
+    $3 == uid && NF >= 6 {
       path = $6; for (i = 7; i <= NF; i++) path = path " " $i
+      if (path ~ /\/Hammerspoon\.app\/Contents\/MacOS\/Hammerspoon$/) { print "H", $1; next }
+      if ($2 != 1) next
       if (path ~ /\/CoreSimulator\//) next
       n = path; sub(/.*\//, "", n)
       if (n == "lsd" || n == "trustd" || n == "secd" || n == "tccd") print "D", n ":" $1, $1
@@ -176,6 +202,7 @@ read_all() {
   while IFS= read -r line; do
     case "$line" in
       "B "*) BANDS="${line#B }" ;;
+      "H "*) [ -n "$P_HS" ] || P_HS="${line#H }" ;;
       "D "*) line="${line#D }"; cands="$cands${cands:+ }${line%% *}"; pids="$pids${pids:+,}${line##* }" ;;
     esac
   done <<EOF
@@ -287,6 +314,185 @@ transition() {
   PAGE="undelivered:$tried"
 }
 
+# ── Hammerspoon stall check (see the header) ──
+HS_ON=0; HS_PID=""; HS_CPU=""; HS_DELTA=""; HS_WALL=""; HS_THUMB=""; HS_STATE=""; HS_TRANS=none
+HS_STALL=""; HS_SAMPLE=""; HS_GAP=""; HS_WHY=""; HS_PAGE=none; HS_JOB=""; HS_EVID=""
+
+# hs_secs <[[dd-]hh:]mm:ss[.cc]> — a ps etime or time field in seconds (2 decimals); empty if not one.
+hs_secs() {
+  printf '%s\n' "$1" | /usr/bin/awk '/^[0-9]+(-[0-9]+)?(:[0-9]+)*(\.[0-9]+)?$/ { d = 0; s = $0
+    if (index(s, "-")) { d = substr(s, 1, index(s, "-") - 1); s = substr(s, index(s, "-") + 1) }
+    n = split(s, f, ":"); t = 0; for (i = 1; i <= n; i++) t = t * 60 + f[i]
+    printf "%.2f\n", d * 86400 + t }'
+}
+# hs_read <pid> — one `ps -o etime=,time=`: sets HS_AGE (whole s) and HS_CPU_NOW. rc 1 if unreadable.
+hs_read() {
+  local e t
+  # shellcheck disable=SC2046  # two whitespace-separated ps fields, split on purpose
+  set -- $("$PS_BIN" -o etime=,time= -p "$1" 2>/dev/null | /usr/bin/head -1)
+  e="$(hs_secs "${1:-}")"; t="$(hs_secs "${2:-}")"
+  [ -n "$e" ] && [ -n "$t" ] || return 1
+  HS_AGE="${e%.*}"; HS_CPU_NOW="$t"
+}
+# fle <a> <b> — a <= b, as decimals.
+fle() { /usr/bin/awk -v a="$1" -v b="$2" 'BEGIN { exit !(a + 0 <= b + 0) }'; }
+
+# hs_gaps — the longest thumb-shown -> dismissed gap over 10 s whose dismissal is newer than the
+# last one reported (S_GAPMONO, the log's own mono clock). No earlier mark, or a clock that went
+# backwards (a reboot): take the newest mono as the mark and report nothing.
+hs_gaps() {
+  local r newest max
+  [ -f "$HS_LOG" ] || return 0
+  r="$(/usr/bin/tail -n 400 "$HS_LOG" 2>/dev/null | /usr/bin/awk -v last="$S_GAPMONO" '
+    { ph = ""; id = ""; mo = ""
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^phase=/) ph = substr($i, 7); else if ($i ~ /^id=/) id = substr($i, 4)
+        else if ($i ~ /^mono=[0-9]+$/) mo = substr($i, 6) }
+      if (mo == "") next
+      mo += 0; if (mo > newest) newest = mo
+      if (ph == "thumb-shown") shown[id] = mo
+      else if (ph == "dismissed" && (id in shown) && last != "" && mo > last + 0) {
+        g = (mo - shown[id]) / 1e9; if (g > max) max = g } }
+    END { printf "%.0f %.1f\n", newest, max }')"
+  newest="${r%% *}"; max="${r##* }"
+  case "$newest" in ''|0|*[!0-9]*) return 0 ;; esac
+  if [ -n "$S_GAPMONO" ] && ! fle "$S_GAPMONO" "$newest"; then S_GAPMONO="$newest"; return 0; fi
+  S_GAPMONO="$newest"
+  fle "$max" 10 || HS_GAP="$max"
+}
+
+# hs_thumb_open — HS_THUMB = seconds since the log's LAST line, when that line is a thumb still up.
+hs_thumb_open() {
+  local l ts e
+  [ -f "$HS_LOG" ] || return 0
+  l="$(/usr/bin/tail -n 1 "$HS_LOG" 2>/dev/null)"
+  case "$l" in *" phase=thumb-shown "*|*" phase=thumb-visible "*) ;; *) return 0 ;; esac
+  ts="${l#ts=}"; ts="${ts%% *}"                         # 2026-10-11T12:51:09.951-0500
+  case "$ts" in *.[0-9][0-9][0-9][+-]*) ts="${ts%.*}${ts##*.[0-9][0-9][0-9]}" ;; esac
+  e="$(/bin/date -j -f '%Y-%m-%dT%H:%M:%S%z' "$ts" +%s 2>/dev/null)"
+  case "$e" in ''|*[!0-9]*) return 0 ;; esac
+  HS_THUMB=$(( NOW - e ))
+}
+
+# hs_save — the one-line state: last reading, episode, gap mark, today's sample count.
+hs_save() {
+  (umask 022; /bin/mkdir -p "$(dirname "$HS_STATE_FILE")") 2>/dev/null
+  printf 'pid=%s cpu=%s ts=%s state=%s since=%s gapmono=%s day=%s nsamp=%s\n' "$1" "$2" "$3" \
+    "$S_STATE" "$S_SINCE" "$S_GAPMONO" "$TODAY" "$S_NSAMP" > "$HS_STATE_FILE.tmp.$$" 2>/dev/null \
+    && /bin/mv -f "$HS_STATE_FILE.tmp.$$" "$HS_STATE_FILE" 2>/dev/null
+}
+
+hs_check() {
+  local kv s_pid="" s_cpu="" s_ts="" s_day="" prev _p rc
+  [ "${CONVOY_GAUGE_HS:-on}" != off ] || return 0
+  HS_ON=1; S_STATE=ok; S_SINCE=""; S_GAPMONO=""; S_NSAMP=0
+  TODAY="$(/bin/date +%Y%m%d)"
+  if [ -f "$HS_STATE_FILE" ]; then
+    for kv in $(/usr/bin/head -1 "$HS_STATE_FILE" 2>/dev/null); do
+      case "$kv" in
+        pid=*) s_pid="${kv#pid=}" ;; cpu=*) s_cpu="${kv#cpu=}" ;; ts=*) s_ts="${kv#ts=}" ;;
+        state=*) S_STATE="${kv#state=}" ;; since=*) S_SINCE="${kv#since=}" ;;
+        gapmono=*) S_GAPMONO="${kv#gapmono=}" ;; day=*) s_day="${kv#day=}" ;; nsamp=*) S_NSAMP="${kv#nsamp=}" ;;
+      esac
+    done
+  fi
+  case "$S_STATE" in ok|stall|spin) ;; *) S_STATE=ok ;; esac
+  case "$S_GAPMONO" in *[!0-9]*) S_GAPMONO="" ;; esac
+  case "$S_NSAMP" in ''|*[!0-9]*) S_NSAMP=0 ;; esac
+  [ "$s_day" = "$TODAY" ] || S_NSAMP=0
+  prev="$S_STATE"
+  hs_gaps
+
+  HS_PID="$P_HS"
+  if [ -z "$HS_PID" ] || ! hs_read "$HS_PID"; then
+    HS_STATE=absent; HS_PID=""
+    [ "$prev" = ok ] || { HS_TRANS=gone; S_STATE=ok; S_SINCE=""; }
+    hs_save "" "" ""; return 0
+  fi
+  HS_CPU="$HS_CPU_NOW"
+  case "$s_ts" in ''|*[!0-9]*) s_ts=0 ;; esac
+  HS_WALL=$(( NOW - s_ts ))
+  if [ "$HS_AGE" -le 60 ] || [ "$s_pid" != "$HS_PID" ] || [ -z "$s_cpu" ] \
+     || [ "$HS_WALL" -lt 30 ] || [ "$HS_WALL" -gt 300 ]; then
+    HS_STATE=skip; HS_WALL=""
+    # a new process ends the old one's episode; a late tick or sleep leaves it unjudged
+    [ "$s_pid" = "$HS_PID" ] || { S_STATE=ok; S_SINCE=""; }
+    hs_save "$HS_PID" "$HS_CPU" "$NOW"; return 0
+  fi
+  HS_DELTA="$(/usr/bin/awk -v a="$HS_CPU" -v b="$s_cpu" 'BEGIN { printf "%.2f", a - b }')"
+  if /usr/bin/awk -v d="$HS_DELTA" -v w="$HS_WALL" 'BEGIN { exit !(d / w >= 0.8) }'; then
+    HS_STATE=spin; HS_WHY=spin
+  elif fle "$HS_DELTA" 0.05; then
+    [ "$CONFIRM_S" = 0 ] || "$SLEEP_BIN" "$CONFIRM_S" 2>/dev/null
+    _p="$HS_CPU"
+    if hs_read "$HS_PID" && fle "$(/usr/bin/awk -v a="$HS_CPU_NOW" -v b="$_p" 'BEGIN { print a - b }')" 0.005; then
+      HS_STATE=stall; HS_WHY=cpu-flat
+    fi
+  fi
+  if [ -z "$HS_STATE" ]; then
+    hs_thumb_open
+    if [ -n "$HS_THUMB" ] && [ "$HS_THUMB" -gt 30 ]; then HS_STATE=stall; HS_WHY=thumb-open
+    else HS_STATE=ok; fi
+  fi
+
+  if [ "$HS_STATE" = ok ]; then
+    if [ "$prev" != ok ]; then
+      HS_TRANS=recover
+      case "$S_SINCE" in ''|*[!0-9]*) ;; *) HS_STALL=$(( NOW - S_SINCE )) ;; esac
+      (umask 022; /bin/mkdir -p "$(dirname "$TLOG")") 2>/dev/null
+      printf '%s HAMMERSPOON RECOVER pid=%s after ~%ss — report-only, nothing was touched\n' \
+        "$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)" "$HS_PID" "${HS_STALL:-?}" >> "$TLOG" 2>/dev/null
+    fi
+    S_STATE=ok; S_SINCE=""
+  elif [ "$prev" != ok ]; then
+    S_STATE="$HS_STATE"
+    case "$S_SINCE" in ''|*[!0-9]*) S_SINCE="$NOW" ;; esac
+    HS_STALL=$(( NOW - S_SINCE ))
+  else
+    HS_TRANS=stall; S_STATE="$HS_STATE"; S_SINCE="$NOW"
+    # one bounded sample, in the background beside the page (perl directly, so $! is the runner)
+    if [ "$SAMPLE_BIN" != 0 ] && [ -x /usr/bin/perl ] && [ "$S_NSAMP" -lt "$HS_SAMPLES_PER_DAY" ]; then
+      HS_EVID="$EVID_ROOT/convoy-hs-$(/bin/date -u +%Y%m%dT%H%M%SZ)-$$"
+      if (umask 077; /bin/mkdir -p "$HS_EVID") 2>/dev/null; then
+        printf 'ts=%s hs_pid=%s why=%s cpu_s=%s cpu_delta_s=%s wall_s=%s thumb_open_s=%s\n' "$NOW" "$HS_PID" \
+          "$HS_WHY" "$HS_CPU" "$HS_DELTA" "$HS_WALL" "${HS_THUMB:-null}" > "$HS_EVID/meta.txt" 2>/dev/null
+        HS_SAMPLE="$HS_EVID/hammerspoon.sample.txt"; S_NSAMP=$(( S_NSAMP + 1 ))
+        /usr/bin/perl -MPOSIX=WNOHANG -e "$BOUNDED_PL" "$SAMPLE_TIMEOUT_S" "$SAMPLE_BIN" "$HS_PID" 1 \
+          -file "$HS_SAMPLE" </dev/null >/dev/null 2>&1 &
+        HS_JOB=$!
+      fi
+    fi
+    case "$HS_WHY" in
+      spin) _p="spinning at $(/usr/bin/awk -v d="$HS_DELTA" -v w="$HS_WALL" 'BEGIN { printf "%.1f", d / w }') cores" ;;
+      thumb-open) _p="stalled ~${HS_THUMB}s (a screenshot thumbnail is stuck on screen)" ;;
+      *) _p="stalled ~${HS_WALL}s (main thread used no CPU)" ;;
+    esac
+    _p="Hammerspoon $_p; sample at ${HS_SAMPLE:-none (daily cap or no sampler)}; report-only, nothing was killed"
+    local _keep="$PAGE"; transition "HAMMERSPOON $_p"; HS_PAGE="$PAGE"; PAGE="$_keep"
+    hs_join
+  fi
+  hs_save "$HS_PID" "$HS_CPU" "$NOW"
+}
+# hs_join — wait for the Hammerspoon sample and record its rc. Safe to re-enter from the TERM trap.
+hs_join() {
+  local rc=0
+  [ -n "$HS_JOB" ] || return 0
+  wait "$HS_JOB" 2>/dev/null || rc=$?
+  printf 'sample hammerspoon pid=%s rc=%s\n' "$HS_PID" "$rc" >> "$HS_EVID/meta.txt" 2>/dev/null
+  HS_JOB=""
+}
+
+# hs_json — the row's hs_* fields (empty when the check is off).
+hs_json() {
+  local s=null
+  [ "$HS_ON" = 1 ] || return 0
+  if [ -n "$HS_SAMPLE" ]; then s="${HS_SAMPLE//\\/\\\\}"; s="\"${s//\"/\\\"}\""; fi
+  printf ',"hs_pid":%s,"hs_cpu_s":%s,"hs_cpu_delta_s":%s,"hs_wall_s":%s,"hs_thumb_open_s":%s,"hs_state":"%s","hs_why":%s,"hs_transition":"%s","hs_stall_s":%s,"hs_sample":%s,"hs_gap_s":%s,"hs_page":"%s"' \
+    "${HS_PID:-null}" "${HS_CPU:-null}" "${HS_DELTA:-null}" "${HS_WALL:-null}" "${HS_THUMB:-null}" \
+    "${HS_STATE:-skip}" "$( [ -n "$HS_WHY" ] && printf '"%s"' "$HS_WHY" || echo null)" "$HS_TRANS" \
+    "${HS_STALL:-null}" "$s" "${HS_GAP:-null}" "$HS_PAGE"
+}
+
 # finish <rc> — every exit path: release the lock, write the row (once), print the summary.
 ROW_DONE=0; HELD=0; CUT=false
 finish() {
@@ -297,11 +503,11 @@ finish() {
     if [ -n "$EVID" ]; then _e="${EVID//\\/\\\\}"; _evid_json="\"${_e//\"/\\\"}\""; fi
     [ -z "$NULL_HOLD" ] || _nh="\"$NULL_HOLD\""
     (umask 022; /bin/mkdir -p "$(dirname "$LOG")") 2>/dev/null
-    printf '{"ts":%s,"lsd":%s,"trustd":%s,"secd":%s,"tccd":%s,"lsd_pid":%s,"trustd_pid":%s,"secd_pid":%s,"tccd_pid":%s,"max":%s,"confirm_max":%s,"run_bg":%s,"run_util":%s,"run_default":%s,"run_ui":%s,"run_sys":%s,"load1":%s,"state":"%s","prev":"%s","transition":"%s","null_hold":%s,"captured":%s,"evidence_dir":%s,"page":"%s","cut":%s}\n' \
+    printf '{"ts":%s,"lsd":%s,"trustd":%s,"secd":%s,"tccd":%s,"lsd_pid":%s,"trustd_pid":%s,"secd_pid":%s,"tccd_pid":%s,"max":%s,"confirm_max":%s,"run_bg":%s,"run_util":%s,"run_default":%s,"run_ui":%s,"run_sys":%s,"load1":%s,"state":"%s","prev":"%s","transition":"%s","null_hold":%s,"captured":%s,"evidence_dir":%s,"page":"%s","cut":%s%s}\n' \
       "$NOW" "${F_LSD:-null}" "${F_TRUSTD:-null}" "${F_SECD:-null}" "${F_TCCD:-null}" \
       "${F_P_LSD:-null}" "${F_P_TRUSTD:-null}" "${F_P_SECD:-null}" "${F_P_TCCD:-null}" "${F_MAX:-null}" "${CONFIRM_MAX:-null}" \
       "${RUN_BG:-null}" "${RUN_UTIL:-null}" "${RUN_DEFAULT:-null}" "${RUN_UI:-null}" "${RUN_SYS:-null}" "${LOAD1:-null}" \
-      "$STATE" "$PREV" "$TRANSITION" "$_nh" "$CAPTURED" "$_evid_json" "$PAGE" "$CUT" >> "$LOG" 2>/dev/null
+      "$STATE" "$PREV" "$TRANSITION" "$_nh" "$CAPTURED" "$_evid_json" "$PAGE" "$CUT" "$(hs_json)" >> "$LOG" 2>/dev/null
     printf 'convoy-gauge: %s max=%s load1=%s transition=%s captured=%s page=%s cut=%s\nstate=%s\n' \
       "$(counts)" "${F_MAX:-null}" "${LOAD1:-null}" "$TRANSITION" "$CAPTURED" "$PAGE" "$CUT" "$STATE"
   fi
@@ -315,8 +521,9 @@ on_term() {
   local j
   trap '' TERM INT HUP
   CUT=true
-  for j in $JOBS; do kill -TERM "${j##*:}" 2>/dev/null; done
+  for j in $JOBS $HS_JOB; do kill -TERM "${j##*:}" 2>/dev/null; done
   capture_finish
+  hs_join
   [ "$PAGE" != pending ] || PAGE="cut"
   finish 143
 }
@@ -415,4 +622,5 @@ elif [ "$RC" = 0 ]; then
     transition "CLEAR $(counts) (clear <= $CLEAR threads) — tripped for $_dur; panes are safe to cycle again."
   fi
 fi
+hs_check
 finish "$RC"
