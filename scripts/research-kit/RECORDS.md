@@ -51,7 +51,10 @@ Added 2026-10-05 (wave E3d): between `build-certified` and `closed` sits `implem
 - `budget.json`: `{"stages":{"1":{"started":ISO,"ended":ISO|null}, …}, "overrun_packets":{"<stage>":"<packet id>"}}`.
 - `rounds/<k>/matrix.json` (written by `round.sh`): `{round, kind:"frame-critique|certification|delta",
   snapshot_sha, verification_only, slots:[{pid, vendor, strategy, status:"complete|partial|dead|void", reruns}],
-  lanes:{vendor:"live|dead"}, counted, new_material, seeds_caught, quiet, forecast:{p50,p90}|null, r_max}`.
+  lanes:{vendor:"live|dead"}, counted, new_material, seeds_caught, quiet, forecast:{p50,p90}|null, r_max,
+  reclosed?:[{at, reason, previous:{new_material, seeds_caught, quiet, forecast, r_max}}]}`. `reclosed` is
+  appended by `round.sh close --round K --reclose --reason …`, which re-runs seed match on a closed round (the
+  newest of its kind; refused once a later one opened) and recomputes what close computed.
   `rounds/<k>/panels/<pid>.json` (written by `courier.sh`): SYNTHESIS panel shape, raw output beside it as `<pid>.raw`.
 - `cert/CERT-v<n>.json` and `.md` (written by `gate.sh run`): SYNTHESIS cert shape.
 
@@ -86,7 +89,10 @@ failed, 2 usage or refusal, 3 a dead vendor lane, 4 a voided slot. Python is 3.9
 - `seed.py plant|apply|prescreen|match|status` → vault `<sealed>/vault/seeds.enc`, key from the keychain item
   `cc-research-seed-vault/<slug>` (tests: `CC_RESEARCH_VAULT_KEY`). `match` (run by `round.sh close` before quiet is
   computed) appends `{id, seed_match: <seed id>}` to `holes.jsonl` for each MATERIAL hole restating a seed's defect
-  (span overlap + class + claim, not overlap alone); `prescreen --caught …` marks seeds a blind pre-screen caught
+  (span overlap + class + claim, not overlap alone, or a quote of text only the seed's replacement holds; a
+  class disagreement vetoes either). Spans are those of the SEEDED copy the reviewers read, recomputed by the
+  apply loop and widened by `SEEDED_SPAN_SLACK`, beside the author's `detect_span`; a locus `lines` may list
+  `;`/`,`-separated ranges. `--plan` is the real plan: one missing most live anchors is refused; `prescreen --caught …` marks seeds a blind pre-screen caught
   `discarded`, so they are never planted; `status` prints a second line with seed realism beside real detection.
 - `estimate.py forecast` also prints `found_raw`, `found` (deflated by `false_material_share`), `found_shadow`;
   `estimate.py calibration [--file]` prints coverage, bound sharpness and Spearman rank skill.

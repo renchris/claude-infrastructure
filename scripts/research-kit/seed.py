@@ -10,7 +10,7 @@ isolation, not prevention (§3.8, §7).
 
   seed.py plant  --program P --plan F --seeds S.jsonl [--profile lite|standard|full]
   seed.py apply  --program P --plan F --out SEEDED
-  seed.py match  --program P --round K --plan CURRENT
+  seed.py match  --program P --round K --plan CURRENT   (the real plan, never the seeded copy)
   seed.py prescreen --program P --caught ID… | FILE   (discard what the blind pre-screen caught)
   seed.py status --program P                       (counts, then the seed-realism line)
 
@@ -28,7 +28,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 import kit  # noqa: E402
@@ -141,20 +141,59 @@ def cmd_plant(a: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_apply(a: argparse.Namespace) -> int:
-    plan = Path(a.plan).read_text()
-    vault, _ = load_vault(a.program)
-    applied = skipped = 0
-    for s in vault["seeds"]:
-        if s.get("state") != "live" or any(plan.count(q) != 1 for q in anchors(s)):
+def _is_live(s: Dict[str, Any]) -> bool:
+    return s.get("state") == "live"
+
+
+def apply_seeds(
+    plan: str, seeds: List[Dict[str, Any]], eligible: Callable[[Dict[str, Any]], bool]
+) -> Tuple[str, Dict[str, List[Tuple[int, int]]], int]:
+    """The seeded text, each applied seed's edited ranges as [start, end) offsets INTO that text,
+    and the skipped count. The one apply loop: cmd_apply writes its text and cmd_match reads its
+    ranges, so the lines a reviewer cites in the seeded copy are the lines match computes. A seed
+    is applied in vault order when `eligible` and every anchor occurs exactly once in the text so
+    far; an empty replacement is a zero-width range at the deletion point."""
+    spans: Dict[str, List[Tuple[int, int]]] = {}
+    skipped = 0
+    for s in seeds:
+        if not eligible(s) or any(plan.count(q) != 1 for q in anchors(s)):
             skipped += 1
             continue
         repl = str(s.get("replacement") or "")
+        mine: List[Tuple[int, int]] = []
         for i, q in enumerate(anchors(s)):
-            plan = plan.replace(q, repl if i == 0 else "", 1)
-        applied += 1
+            r = repl if i == 0 else ""
+            p = plan.find(q)
+            if p < 0:  # an earlier anchor's edit consumed this one: str.replace's no-op
+                continue
+            plan = plan[:p] + r + plan[p + len(q) :]
+            edit = (p, p + len(q), len(r))
+            spans = {
+                k: [(_moved(x, edit), _moved(y, edit)) for x, y in v]
+                for k, v in spans.items()
+            }
+            mine = [(_moved(x, edit), _moved(y, edit)) for x, y in mine]
+            mine.append((p, p + len(r)))
+        spans[str(s.get("sid"))] = mine
+    return plan, spans, skipped
+
+
+def _moved(o: int, edit: Tuple[int, int, int]) -> int:
+    """Offset o after the text [p, end) became rlen characters: an offset past the edit shifts
+    with it; one inside it is clamped to the edit's new bounds."""
+    p, end, rlen = edit
+    if o >= end:
+        return o + rlen - (end - p)
+    return min(o, p + rlen) if o > p else o
+
+
+def cmd_apply(a: argparse.Namespace) -> int:
+    vault, _ = load_vault(a.program)
+    plan, spans, skipped = apply_seeds(
+        Path(a.plan).read_text(), vault["seeds"], _is_live
+    )
     Path(a.out).write_text(plan)
-    print(f"applied {applied} seed(s); skipped {skipped}")
+    print(f"applied {len(spans)} seed(s); skipped {skipped}")
     return 0
 
 
@@ -163,14 +202,107 @@ def _span(s: str) -> Optional[Tuple[str, int, int]]:
     return (Path(m.group(1)).name, int(m.group(2)), int(m.group(3))) if m else None
 
 
-def overlaps(hole: Dict[str, Any], seed: Dict[str, Any]) -> bool:
+def locus_ranges(lines: Any) -> List[Tuple[int, int]]:
+    """A hole locus's `lines` as ranges. Reviewers cite several places in one hole
+    ("103; 1266; 1396-1431"), so each `;`- or `,`-separated part is its own N or N-M."""
+    out = []
+    for part in re.split(r"[;,]", str(lines or "")):
+        m = re.match(r"^\s*(\d+)\s*(?:[-–]\s*(\d+))?\s*$", part)
+        if m:
+            lo, hi = int(m.group(1)), int(m.group(2) or m.group(1))
+            out.append((min(lo, hi), max(lo, hi)))
+    return out
+
+
+# A seeded span is computed, not authored, so it is exact for the copy the reviewers read; the slack
+# absorbs a reviewer citing the heading or the sentence beside the planted text, and plan edits made
+# between `apply` and `match` that move it a line or two. It widens only a hole whose claim must
+# also restate the defect (same_defect), never a class-only hole.
+SEEDED_SPAN_SLACK = 3
+# A quote that repeats this many characters of a seed's replacement, characters that occur nowhere
+# in the real plan, was read off the planted text, whatever the hole's claim says.
+QUOTE_MATCH_MIN = 25
+
+
+def _norm(text: Any) -> str:
+    if isinstance(text, list):
+        text = " ".join(str(t) for t in text)
+    return " ".join(str(text or "").split())
+
+
+def _windows(text: str) -> Set[str]:
+    return {
+        text[i : i + QUOTE_MATCH_MIN] for i in range(len(text) - QUOTE_MATCH_MIN + 1)
+    }
+
+
+def _line_of(text: str, offset: int) -> int:
+    return text.count("\n", 0, offset) + 1
+
+
+def live_at(s: Dict[str, Any], rnd: int) -> bool:
+    """The seed was live when round rnd's seeded copy was applied: live now, or caught or orphaned
+    by round rnd's own match or a later one (a re-close re-runs match on a closed round)."""
+    if s.get("state") == "live":
+        return True
+    r = s.get("state_round")
+    return s.get("state") in ("caught", "orphaned") and r is not None and int(r) >= rnd
+
+
+class SeededCopy:
+    """Where each seed sits in the copy the reviewers read. Reviewers cite the SEEDED copy's line
+    numbers and quote its text; a seed's author-written detect_span uses the real plan's numbering,
+    which every deletion or replacement above it shifts. So the spans are recomputed by re-running
+    the apply loop on the real plan, and the detect_span is kept only as a secondary span."""
+
+    def __init__(
+        self, plan: str, plan_name: str, seeds: List[Dict[str, Any]], rnd: int
+    ):
+        text, offs, _ = apply_seeds(plan, seeds, lambda s: live_at(s, rnd))
+        self.plan_name = plan_name
+        self.lines = {
+            sid: [(_line_of(text, x), _line_of(text, max(x, y - 1))) for x, y in v]
+            for sid, v in offs.items()
+        }
+        self.plan_windows = _windows(_norm(plan))
+        self._seed_only: Dict[str, Set[str]] = {}
+
+    def seed_only(self, seed: Dict[str, Any]) -> Set[str]:
+        """The replacement's windows that do not occur in the real plan: a replacement usually keeps
+        most of its anchor's words, and a quote of those is a quote of the real plan."""
+        sid = str(seed.get("sid"))
+        if sid not in self._seed_only:
+            rep = _norm(seed.get("replacement"))
+            self._seed_only[sid] = _windows(rep) - self.plan_windows
+        return self._seed_only[sid]
+
+
+def overlaps(
+    hole: Dict[str, Any], seed: Dict[str, Any], copy: SeededCopy, slack: int
+) -> bool:
+    """Any of the hole's line ranges meets the seed's span in the seeded copy (widened by slack)
+    or its author-written detect_span. Reviewers name the plan's own basename while an author may
+    have written the brief's example `PLAN.md`, so either is the plan."""
     loc = hole.get("locus") or {}
     sp = _span(str(seed.get("detect_span")))
-    m = re.match(r"^(\d+)(?:-(\d+))?$", str(loc.get("lines") or ""))
-    if not sp or not m or Path(str(loc.get("path") or "")).name != sp[0]:
+    if Path(str(loc.get("path") or "")).name not in {copy.plan_name, sp and sp[0]}:
         return False
-    lo, hi = int(m.group(1)), int(m.group(2) or m.group(1))
-    return lo <= sp[2] and sp[1] <= hi
+    spans = [
+        (lo - slack, hi + slack) for lo, hi in copy.lines.get(str(seed.get("sid")), [])
+    ]
+    if sp:
+        spans.append((sp[1], sp[2]))
+    return any(
+        lo <= shi and slo <= hi
+        for lo, hi in locus_ranges(loc.get("lines"))
+        for slo, shi in spans
+    )
+
+
+def quotes_seed(hole: Dict[str, Any], seed: Dict[str, Any], copy: SeededCopy) -> bool:
+    """The hole quotes text that exists only in this seed's replacement."""
+    quote = _norm((hole.get("locus") or {}).get("quote"))
+    return bool(_windows(quote) & copy.seed_only(seed))
 
 
 # A hole is a seed's catch only when it names the seed's defect, not merely its lines: the share of
@@ -189,16 +321,22 @@ def _tokens(text: str) -> Set[str]:
     }
 
 
-def same_defect(hole: Dict[str, Any], seed: Dict[str, Any]) -> bool:
-    """The hole reports this seed's defect: same span, no disagreeing class, and, when the hole
-    carries a claim, one that restates the defect statement. A hole with neither a claim nor a
-    class proves nothing about identity, so it never matches."""
-    if not overlaps(hole, seed):
-        return False
+def same_defect(hole: Dict[str, Any], seed: Dict[str, Any], copy: SeededCopy) -> bool:
+    """The hole reports this seed's defect: no disagreeing class, and either a quote of the seed's
+    planted text, or the same span plus, when the hole carries a claim, one that restates the
+    defect statement. A hole with neither a claim nor a class proves nothing about identity, so it
+    never matches on its span alone. An omission seed has no planted text, so only the span and
+    claim tests can catch it."""
     hc, sc = hole.get("taxonomy_class"), seed.get("class")
     if hc and sc and hc != sc:
         return False
+    if quotes_seed(hole, seed, copy):
+        return True
     claim = _tokens(str(hole.get("claim") or ""))
+    # The slack is for a loose citation whose claim then proves identity; a hole with only a class
+    # has nothing else to tell neighbouring seeds apart, so it must hit the exact span.
+    if not overlaps(hole, seed, copy, SEEDED_SPAN_SLACK if claim else 0):
+        return False
     if claim:
         stmt = _tokens(str(seed.get("defect_statement") or ""))
         if not stmt:
@@ -238,14 +376,22 @@ def cmd_match(a: argparse.Namespace) -> int:
         and str(h.get("round") or "0").isdigit()
         and int(h.get("round") or 0) <= a.round
     ]
-    for s in vault["seeds"]:
-        if s.get("state") != "live":
-            continue
-        if any(plan.count(q) == 0 for q in anchors(s)):
+    # The seeded copy has lost every replace anchor and every omitted member, so passing it as
+    # --plan would orphan the seeds wholesale. A real fix rewrites a few anchors, not most of them.
+    live = [s for s in vault["seeds"] if s.get("state") == "live"]
+    gone = [s for s in live if any(plan.count(q) == 0 for q in anchors(s))]
+    if live and len(gone) * 2 > len(live):
+        raise kit.KitError(
+            f"{len(gone)} of {len(live)} live seeds have no anchor in --plan: --plan looks like "
+            "the seeded copy; pass the real plan"
+        )
+    copy = SeededCopy(plan, Path(a.plan).name, vault["seeds"], a.round)
+    for s in live:
+        if s in gone:
             s.update(
                 {"state": "orphaned", "state_round": a.round}
             )  # a fix rewrote its anchor
-        elif any(same_defect(h, s) for h in material):
+        elif any(same_defect(h, s, copy) for h in material):
             s.update({"state": "caught", "state_round": a.round})
     # Tag every hole that restates a seed still in the plan (caught now or earlier), so round close
     # reads it as a seed catch rather than a real finding. Append-only: the fold keeps the newest.
@@ -253,7 +399,7 @@ def cmd_match(a: argparse.Namespace) -> int:
     for h in material:
         if h.get("seed_match"):
             continue
-        sid = next((s["sid"] for s in in_plan if same_defect(h, s)), None)
+        sid = next((s["sid"] for s in in_plan if same_defect(h, s, copy)), None)
         if sid:
             kit.append_jsonl(holes_path, {"id": h["id"], "seed_match": sid})
     save_vault(a.program, vault, key)

@@ -348,6 +348,52 @@ print(s['$1'].get('seed_match'))"; }
   [ "$(field 2 'm["quiet"], m["seeds_caught"], m["new_material"]')" = "True 1 0" ]
 }
 
+# Re-close (2026-10-11): a round closed under a matcher that missed its seed catches is recomputed
+# from the re-tagged holes, with the replaced values kept. RED-proof: `close --reclose` was an
+# unknown argument before.
+closed_round_2() { # round 2 as an earlier matcher closed it: the seed hole counted as a real finding
+  seeded_round_2
+  /usr/bin/python3 -c "import json; p='$CC_RESEARCH_RECORDS/rounds/2/matrix.json'; m=json.load(open(p)); m.update(closed=True, new_material=1, seeds_caught=0, quiet=False); json.dump(m, open(p,'w'))"
+  printf '%s\n' "$SEED_HOLE" > "$CC_RESEARCH_RECORDS/holes.jsonl"
+}
+
+@test "close --reclose: re-runs seed match, recomputes the round and keeps the values it replaced" {
+  closed_round_2
+  run "$R" close --program demo --round 2 --reclose --reason "matcher fixed"
+  [ "$status" -eq 0 ]
+  [ "$(seed_match_of H-1)" = "S-1" ]
+  [ "$(field 2 'm["new_material"], m["seeds_caught"], m["quiet"], m["closed"]')" = "0 1 True True" ]
+  [ "$(field 2 '[(r["reason"], sorted(r["previous"].items())) for r in m["reclosed"]]')" = "[('matcher fixed', [('forecast', None), ('new_material', 1), ('quiet', False), ('r_max', None), ('seeds_caught', 0)])]" ]
+}
+
+@test "close --reclose: round 1's forecast and R_max are recomputed" {
+  fc_done
+  mat 1 certification 1 ',"quiet":false,"new_material":7,"forecast":{"p50":40,"p90":41},"r_max":99'
+  : > "$CC_RESEARCH_RECORDS/holes.jsonl"
+  run "$R" close --program demo --round 1 --reclose --reason "matcher fixed"
+  [ "$status" -eq 0 ]
+  [ "$(field 1 'm["new_material"], m["quiet"], m["reclosed"][0]["previous"]["forecast"]["p90"], m["reclosed"][0]["previous"]["r_max"]')" = "0 True 41 99" ]
+  [ "$(field 1 'm["forecast"]["p90"] != 41 and m["r_max"] <= 6')" = "True" ]
+}
+
+@test "close --reclose is refused for an open round, after a later round opened, and without a reason" {
+  closed_round_2
+  run "$R" close --program demo --round 2 --reclose
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"needs --reason"* ]] || false
+  mkdir -p "$CC_RESEARCH_RECORDS/rounds/3"
+  printf '{"round":"3","seq":3,"kind":"certification"}\n' > "$CC_RESEARCH_RECORDS/rounds/3/plan.json"
+  run "$R" close --program demo --round 2 --reclose --reason x
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"later round(s) 3 already opened"* ]] || false
+  open_with_slots 4 complete True
+  run "$R" close --program demo --round 4 --reclose --reason x
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"round 4 is not closed"* ]] || false
+  [ "$(field 2 '"reclosed" in m, m["new_material"]')" = "False 1" ]
+  [ "$(seed_match_of H-1)" = "None" ]
+}
+
 # act <python over the activities module>: run it with the kit's lib on the path.
 act() { /usr/bin/python3 -c "import sys; sys.path.insert(0, '$REPO/scripts/research-kit/lib'); import activities; $1"; }
 cr_open() { act "print(activities.ensure_open('demo', 'certification-round'))"; }

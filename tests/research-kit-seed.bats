@@ -176,6 +176,96 @@ good_set() {
   [[ "${lines[1]}" == *"seeds easier"* ]]
 }
 
+# Matching against what the reviewers actually read (2026-10-11, truememory-2-0 round 1 tagged 0 of
+# 60 seeds while ~15 holes quoted seeded-only text). RED-proof: each test below but the class veto
+# fails on seed.py before the fix — a multi-range locus never parsed, spans used the real plan's
+# numbering, the detect_span basename had to equal the hole's, a quote was no evidence, and the
+# seeded copy passed as --plan orphaned every seed.
+DEFECT="the retry count is unbounded, so a failed write loops forever"
+CLAIM="the daemon retries a failed write forever: the retry count is unbounded"
+hole() { # <id> <path> <lines> <class> <claim> [quote]
+  /usr/bin/python3 -c 'import json,sys; a=sys.argv
+loc={"path":a[2],"lines":a[3]}
+if len(a) > 6: loc["quote"]=a[6]
+print(json.dumps({"id":a[1],"round":1,"locus":loc,"taxonomy_class":a[4],"claim":a[5],"materiality":{"level":"MATERIAL"}}))' "$@"
+}
+tag_of() { /usr/bin/python3 -c "import json; s={}
+for l in open('$CC_RESEARCH_RECORDS/holes.jsonl'): r=json.loads(l); s.setdefault(r['id'], {}).update(r)
+print(s['$1'].get('seed_match'))"; }
+retry_seeds() { # S-1 replaces A1 (class C4, the retry defect), S-2 omits A2
+  { seedline S-1 replace "$A1" "The sync daemon retries a failed write forever with no backoff at all." "PLAN.md:61-61" "$DEFECT"
+    seedline S-2 delete-member "$A2" "" "PLAN.md:62-62"; } > "$BATS_TEST_TMPDIR/seeds.jsonl"
+  "$SEED" plant --program demo --plan "${1:-$PLAN}" --seeds "$BATS_TEST_TMPDIR/seeds.jsonl" --profile lite
+}
+
+@test "match: a multi-range locus catches the seed when any of its ranges covers the span" {
+  retry_seeds
+  hole H-1 PLAN.md "5; 61, 70 - 72" C4 "$CLAIM" > "$CC_RESEARCH_RECORDS/holes.jsonl"
+  run "$SEED" match --program demo --round 1 --plan "$PLAN"
+  [ "$output" = '{"original": {"caught": 1, "k_left": 1, "orphaned": 0, "s_eff": 2}}' ]
+  [ "$(tag_of H-1)" = "S-1" ]
+}
+
+@test "match: a hole citing the seeded copy's line numbers catches a seed that an omission above it moved" {
+  # S-0 deletes an 8-line block above A1, so the seeded copy holds S-1's text 7 lines higher than
+  # its detect_span says: further than SEEDED_SPAN_SLACK could explain.
+  { for i in $(seq 1 20); do echo "filler line $i of the plan that says nothing at all"; done
+    echo "Members of the sync population, every one of them a caller:"
+    for i in $(seq 1 7); do echo "- member $i calls the daemon"; done
+    for i in $(seq 29 60); do echo "filler line $i of the plan that says nothing at all"; done
+    echo "$A1"; echo "$A2"; } > "$PLAN"
+  block="$(sed -n 21,28p "$PLAN")"
+  { seedline S-0 delete-member "$block" "" "PLAN.md:21-28"
+    seedline S-1 replace "$A1" "The sync daemon retries a failed write forever with no backoff at all." "PLAN.md:61-61" "$DEFECT"; } \
+    > "$BATS_TEST_TMPDIR/seeds.jsonl"
+  "$SEED" plant --program demo --plan "$PLAN" --seeds "$BATS_TEST_TMPDIR/seeds.jsonl" --profile lite
+  "$SEED" apply --program demo --plan "$PLAN" --out "$BATS_TEST_TMPDIR/seeded.md"
+  n="$(grep -n "forever with no backoff" "$BATS_TEST_TMPDIR/seeded.md" | cut -d: -f1)"
+  [ "$n" = "54" ]
+  hole H-1 PLAN.md "$n" C4 "$CLAIM" > "$CC_RESEARCH_RECORDS/holes.jsonl"
+  run "$SEED" match --program demo --round 1 --plan "$PLAN"
+  [ "$(tag_of H-1)" = "S-1" ]
+}
+
+@test "match: a PLAN.md detect_span matches a hole that names the plan's own basename" {
+  real="$BATS_TEST_TMPDIR/TRUEMEMORY_2_0.md"
+  cp "$PLAN" "$real"
+  retry_seeds "$real"
+  hole H-1 docs/plans/TRUEMEMORY_2_0.md 61 C4 "$CLAIM" > "$CC_RESEARCH_RECORDS/holes.jsonl"
+  run "$SEED" match --program demo --round 1 --plan "$real"
+  [ "$(tag_of H-1)" = "S-1" ]
+}
+
+@test "match: a quote of the seed's planted text catches it whatever the claim says; a quote of text the real plan keeps does not" {
+  retry_seeds
+  { hole H-1 PLAN.md 61 C4 "the loop has no exit condition and will hammer the store" \
+      "retries a failed write forever with no backoff"
+    hole H-2 PLAN.md 61 C4 "the loop has no exit condition and will hammer the store" \
+      "The sync daemon retries a failed write"; } > "$CC_RESEARCH_RECORDS/holes.jsonl"
+  run "$SEED" match --program demo --round 1 --plan "$PLAN"
+  [ "$(tag_of H-1)" = "S-1" ]
+  [ "$(tag_of H-2)" = "None" ]
+}
+
+@test "match: a hole of a different class on the seed's span does not catch it, even quoting the planted text" {
+  retry_seeds
+  hole H-1 PLAN.md 61 C9 "$CLAIM" "retries a failed write forever with no backoff" > "$CC_RESEARCH_RECORDS/holes.jsonl"
+  run "$SEED" match --program demo --round 1 --plan "$PLAN"
+  [ "$output" = '{"original": {"caught": 0, "k_left": 2, "orphaned": 0, "s_eff": 2}}' ]
+  [ "$(tag_of H-1)" = "None" ]
+}
+
+@test "match: the seeded copy passed as --plan is refused, and no seed is orphaned" {
+  retry_seeds
+  "$SEED" apply --program demo --plan "$PLAN" --out "$BATS_TEST_TMPDIR/seeded.md"
+  : > "$CC_RESEARCH_RECORDS/holes.jsonl"
+  run "$SEED" match --program demo --round 1 --plan "$BATS_TEST_TMPDIR/seeded.md"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"looks like the seeded copy; pass the real plan"* ]] || false
+  run "$SEED" status --program demo
+  [ "${lines[0]}" = '{"original": {"caught": 0, "k_left": 2, "orphaned": 0, "s_eff": 2}}' ]
+}
+
 @test "two concurrent plants both land in the vault (the vault write is locked)" {
   good_set
   A3="Option census for DR-04: do nothing, use what exists, and the new daemon."

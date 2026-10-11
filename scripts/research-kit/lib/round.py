@@ -4,6 +4,9 @@
   round.sh run   --program P --kind frame-critique|certification|delta|built --round N --plan SEEDED --brief F
                  [--escape H-id]
   round.sh close --program P --round ID
+  round.sh close --program P --round ID --reclose --reason "<why>"
+                 (a closed round, newest of its kind: re-run seed match and recompute new_material,
+                 seeds_caught, quiet and round 1's forecast/R_max; the old values go to m["reclosed"])
 
 The caps live HERE, in code (§10 item 17), and every refusal names its cap (exit 2):
   - frame critique: exactly 2 rounds of 6 reviewers across at least 3 vendor families;
@@ -550,10 +553,24 @@ def cmd_close(a: argparse.Namespace) -> int:
             f"round {a.round} is counted but planned slot(s) {', '.join(lost)} did not complete; "
             f"re-run them before closing"
         )
+    m["closed"] = True
+    tally(a.program, a.round, m)
+    print(
+        f"round {a.round} closed: new material {m['new_material']}, seeds caught {m['seeds_caught']}, "
+        f"quiet={m['quiet']}{', R_max ' + str(m['r_max']) if m.get('forecast') else ''}"
+    )
+    activity_tail(a.program, m)
+    return 0
+
+
+def tally(slug: str, rid: str, m: Dict[str, Any]) -> None:
+    """Match the seeds, then set the round's new_material, seeds_caught and quiet from its holes
+    (and round 1's forecast and R_max), and write the matrix. Shared by close and re-close."""
+    rd = rounds_dir(slug) / rid
     # Match seeds FIRST: seed.py match writes seed_match onto each hole that restates a seed, and
     # only then can a caught seed be told apart from a real finding.
-    fr = frame(a.program)
-    vault = kit.sealed_dir(a.program) / "vault" / "seeds.enc"
+    fr = frame(slug)
+    vault = kit.sealed_dir(slug) / "vault" / "seeds.enc"
     built = (
         m.get("kind") == "built"
     )  # its seeds are the harness mutants (§11), not the plan vault
@@ -563,11 +580,11 @@ def cmd_close(a: argparse.Namespace) -> int:
                 str(HERE.parent / "seed.py"),
                 "match",
                 "--program",
-                a.program,
+                slug,
                 "--round",
                 str(m.get("seq")),
                 "--plan",
-                str(kit.records_dir(a.program) / fr["plan"]),
+                str(kit.records_dir(slug) / fr["plan"]),
             ],
             capture_output=True,
             text=True,
@@ -586,11 +603,9 @@ def cmd_close(a: argparse.Namespace) -> int:
                 for k in ("s_eff", "caught", "k_left", "orphaned")
             },
         }
-    holes = kit.fold(
-        kit.read_jsonl(kit.records_dir(a.program) / "holes.jsonl")
-    ).values()
+    holes = kit.fold(kit.read_jsonl(kit.records_dir(slug) / "holes.jsonl")).values()
     # a built round is "b<n>": matching its seq would claim certification round n's holes
-    ids = (a.round,) if built else (a.round, str(m.get("seq")))
+    ids = (rid,) if built else (rid, str(m.get("seq")))
     mine = [h for h in holes if str(h.get("round")) in ids]
     real = [
         h
@@ -604,32 +619,83 @@ def cmd_close(a: argparse.Namespace) -> int:
         1 for h in mine if h.get("seed_match")
     )  # never resets the quiet count (§3.9)
     m["quiet"] = bool(m.get("counted")) and not real
-    m["closed"] = True
+    recast = m["kind"] == "certification" and m.get("seq") == 1 and m.get("counted")
+    if recast:  # estimate.forecast reuses a stored round-1 forecast; a re-close must recompute it
+        m.pop("forecast", None)
     kit.write_json_atomic(rd / "matrix.json", m)
-    if m["kind"] == "certification" and m.get("seq") == 1 and m.get("counted"):
+    if recast:
         sys.path.insert(0, str(HERE.parent))
         import estimate
 
-        f = estimate.forecast(a.program)
+        f = estimate.forecast(slug)  # reads the matrix just written
         m["forecast"] = {"p50": f["p50"], "p90": f["p90"]}
         m["r_max"] = f["r_max"]
         kit.write_json_atomic(rd / "matrix.json", m)
+
+
+def later_rounds(slug: str, m: Dict[str, Any]) -> List[str]:
+    """Rounds of m's kind opened after it: a matrix, or the plan an interrupted run left behind."""
+    out = set()
+    for p in list(rounds_dir(slug).glob("*/matrix.json")) + list(
+        rounds_dir(slug).glob("*/plan.json")
+    ):
+        o = kit.read_json(p) or {}
+        if o.get("kind") == m.get("kind") and int(o.get("seq") or 0) > int(
+            m.get("seq") or 0
+        ):
+            out.add(p.parent.name)
+    return sorted(out)
+
+
+def cmd_reclose(a: argparse.Namespace) -> int:
+    """Re-run seed match on a closed round and recompute what close computed from its holes, when a
+    matcher fix re-tags them. Only the newest round of its kind: a later round already opened on the
+    old quiet and R_max. The replaced values are kept under m["reclosed"]."""
+    if not (a.reason or "").strip():
+        raise Refused("--reclose needs --reason: why the round's values are recomputed")
+    rd = rounds_dir(a.program) / a.round
+    m = kit.read_json(rd / "matrix.json")
+    if not m:
+        raise Refused(f"round {a.round} has not run")
+    if not m.get("closed"):
+        raise Refused(f"round {a.round} is not closed; close it first (round.sh close)")
+    later = later_rounds(a.program, m)
+    if later:
+        raise Refused(
+            f"round {a.round} cannot be re-closed: later round(s) {', '.join(later)} already opened"
+        )
+    keys = ("new_material", "seeds_caught", "quiet", "forecast", "r_max")
+    entry = {
+        "at": kit.now_iso(),
+        "reason": a.reason.strip(),
+        "previous": {k: m.get(k) for k in keys},
+    }
+    m["reclosed"] = list(m.get("reclosed") or []) + [entry]
+    tally(a.program, a.round, m)
+    was = entry["previous"]
     print(
-        f"round {a.round} closed: new material {m['new_material']}, seeds caught {m['seeds_caught']}, "
-        f"quiet={m['quiet']}{', R_max ' + str(m['r_max']) if m.get('forecast') else ''}"
+        f"round {a.round} re-closed: new material {was['new_material']} -> {m['new_material']}, "
+        f"seeds caught {was['seeds_caught']} -> {m['seeds_caught']}, "
+        f"quiet {was['quiet']} -> {m['quiet']}"
+        f"{', R_max ' + str(was['r_max']) + ' -> ' + str(m['r_max']) if m.get('forecast') else ''}"
     )
+    activity_tail(a.program, m)
+    return 0
+
+
+def activity_tail(slug: str, m: Dict[str, Any]) -> None:
+    """Close the certification-round activity once no round is due; else name the open one."""
     if m["kind"] == "certification":
         import activities
 
-        why = certification_due(a.program)
+        why = certification_due(slug)
         if why:
-            shut = activities.close_kind(a.program, "certification-round")
+            shut = activities.close_kind(slug, "certification-round")
             if shut:
                 print(f"certification activity closed: {why}")
         else:
-            for aid in activities.open_ids(a.program, "certification-round"):
+            for aid in activities.open_ids(slug, "certification-round"):
                 print(f"certification activity open: {aid}")
-    return 0
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -650,7 +716,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = sub.add_parser("close")
     p.add_argument("--program", required=True)
     p.add_argument("--round", required=True)
-    p.set_defaults(fn=cmd_close)
+    p.add_argument(
+        "--reclose",
+        action="store_true",
+        help="recompute a closed round from its re-tagged holes (newest round of its kind only)",
+    )
+    p.add_argument(
+        "--reason", help="why the round is re-closed (required with --reclose)"
+    )
+    p.set_defaults(fn=lambda a: cmd_reclose(a) if a.reclose else cmd_close(a))
     a = ap.parse_args(argv)
     try:
         kit.check_slug(a.program)
