@@ -60,7 +60,7 @@ fi
 echo "== 3. load $LABEL"
 if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then echo "   loaded"
 else
-  if launchctl print-disabled "$DOMAIN" 2>/dev/null | grep -qF "\"$LABEL\" => disabled"; then
+  if launchctl print-disabled "$DOMAIN" 2>/dev/null | grep -F "\"$LABEL\" => disabled" >/dev/null; then
     launchctl enable "$DOMAIN/$LABEL" || fail "launchctl enable $LABEL failed"
     echo "   cleared the domain-level disabled bit"
   fi
@@ -81,7 +81,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
   fi
   sleep 1
 done
-launchctl print "$DOMAIN/$LABEL" 2>/dev/null | grep -q 'state = running' \
+launchctl print "$DOMAIN/$LABEL" 2>/dev/null | grep 'state = running' >/dev/null \
   || fail "$LABEL is loaded but not running — check ~/.claude/logs/chime-player.err.log"
 [ -n "$pid" ] || fail "$LABEL reports no pid"
 [ -f "$hb" ] || fail "no heartbeat at $hb after 20 s — check ~/.claude/logs/chime-player.err.log"
