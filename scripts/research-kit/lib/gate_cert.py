@@ -330,6 +330,8 @@ def live_state(rec: Path, cert: Dict[str, Any]) -> Dict[str, Any]:
             1
             for c in kit.fold(kit.read_jsonl(rec / "challenges.jsonl")).values()
             if c.get("kind") == "drift" and c.get("raised_by") == "sweep"
+            # a flip triaged refuted was never observed (e.g. raised from a crashed re-check)
+            and c.get("triage") != "refuted"
         ),
         "calibration": len(kit.read_jsonl(cal)) if cal.is_file() else 0,
     }

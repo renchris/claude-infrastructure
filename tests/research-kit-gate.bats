@@ -114,6 +114,13 @@ state() { /usr/bin/python3 -c "import json; print(json.load(open('$CC_RESEARCH_R
   printf '{"id":"P-fresh-PR-1","at":"%s","exit":0}\n' "$CC_NOW" >> "$REC/probes.jsonl"
   run "$G" --render --program demo
   [[ "$output" == *"Scheduled checks: last freshness run "*", no verdict changed"* ]] || false
+  # a sweep drift flip counts until it is triaged refuted (raised from a crashed re-check, 2026-10-11)
+  printf '{"id":"CH-70","raised_by":"sweep","kind":"drift","premise":"PR-1","triage":"pending"}\n' >> "$REC/challenges.jsonl"
+  run "$G" --render --program demo
+  [[ "$output" == *"last freshness run "*", 1 verdict changed"* ]] || false
+  printf '{"id":"CH-70","triage":"refuted"}\n' >> "$REC/challenges.jsonl"
+  run "$G" --render --program demo
+  [[ "$output" == *"last freshness run "*", no verdict changed"* ]] || false
 }
 
 @test "render: Built and Live read unknown, and Calibration counts the calibration rows" {
