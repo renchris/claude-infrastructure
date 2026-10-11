@@ -262,8 +262,8 @@ cl_recon_queue() { # <sid> <mode> <pane> <config_dir> [target] → rc 0 queued (
   dest="$REQ_DIR/$sid.cc-lr.json"
   tmp="$REQ_DIR/.$sid.cc-lr.$$.tmp"
   if jq -nc --arg sid "$sid" --argjson at "$(date +%s)" --arg mode "$mode" --arg pane "$pane" \
-        --arg cfg "$cfg" --arg target "$target" \
-        '{sid:$sid, at:$at, requested_by:"cc-lr", mode:$mode, pane:$pane, config_dir:$cfg}
+        --arg cfg "$cfg" --arg target "$target" --arg rqp "$(cl_this_pane)" --arg rqs "$(cl_requester_sid)" \
+        '{sid:$sid, at:$at, requested_by:"cc-lr", requester_pane:$rqp, requester_sid:$rqs, mode:$mode, pane:$pane, config_dir:$cfg}
          + (if $target != "" then {target:$target} else {} end)' > "$tmp" 2>/dev/null \
      && mv -f "$tmp" "$dest" 2>/dev/null; then
     printf 'cc-lr: QUEUED for the reconciler %s → %s\n' "${sid:0:8}" "$dest"
@@ -307,6 +307,11 @@ cl_this_pane() {
   [ -n "$p" ] || p="${KITTY_WINDOW_ID:-}"
   printf '%s' "$p"
 }
+
+# THE REPLY-TO every request carries (cross-wave contract, lr-reliability D3 2026-10-11): the CALLER's
+# pane and session, "" when unknown. `requested_by` keeps its old meaning beside them; the poller reads
+# these only for cc-lr-origin requests, never to mail the subject.
+cl_requester_sid() { printf '%s' "${CLAUDE_CODE_SESSION_ID:-}"; }
 
 # ── the mutex: one actuator per session ────────────────────────────────────────────────────────
 # ONE implementation, lr-lib.sh's lr_claim_take (D2, 2026-09-28) — shared with lr-fleet's pool and
@@ -1010,7 +1015,8 @@ cmd_switch_driver() { # <target> <dry> <pane> <sid> <from> <all> <wait_s> [exclu
     tmp="$REQ_DIR/.cc-lr-switch-$s.$$.tmp"; dest="$REQ_DIR/cc-lr-switch-$s.json"
     if jq -n --arg sid "$s" --arg pane "$p" --arg to "$target" --arg from "$ac" --arg by "${by:-?}" --arg req "$req" \
           --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson uts "$until_ts" --argjson us "$until_s" \
-          '{kind:"switch", sid:$sid, source_pane:$pane, target:$to, from:$from, requested_by:$by, req_id:$req, ts:$ts, origin_class:"cc-lr-switch"}
+          --arg rqp "$by" --arg rqs "$(cl_requester_sid)" \
+          '{kind:"switch", sid:$sid, source_pane:$pane, target:$to, from:$from, requested_by:$by, requester_pane:$rqp, requester_sid:$rqs, req_id:$req, ts:$ts, origin_class:"cc-lr-switch"}
            + (if $uts > 0 then {until_ts:$uts, until_idle_s:$us} else {} end)' \
           > "$tmp" 2>/dev/null && mv -f "$tmp" "$dest" 2>/dev/null; then
       pending="$pending$s"$'\t'"$req"$'\t'"$p"$'\t'"$ac"$'\n'; nq=$((nq + 1))
@@ -1390,7 +1396,8 @@ cmd_move() {
   ( umask 077; mkdir -p "$bdir/intent" "$(lr_move_state)/move/requests" ) || cl_die "cannot create $bdir; nothing was written" 2
   printf '%s\n' "$rows" | cl_move_rows_json | jq -c --arg b "$batch" --arg from "$from" --arg to "$to" --arg tcfg "${CC_ACCT_DIR:-}" \
       --argjson until "$until_s" --arg slots "$slots" --arg by "${by:-?}" --argjson unver "$unver" --argjson ts "$now" \
-      '{batch:$b, from:$from, to:$to, to_config_dir:$tcfg, until_idle_s:$until, requested_by:$by, target_unverified:$unver, ts:$ts, rows:.}
+      --arg rqp "$by" --arg rqs "$(cl_requester_sid)" \
+      '{batch:$b, from:$from, to:$to, to_config_dir:$tcfg, until_idle_s:$until, requested_by:$by, requester_pane:$rqp, requester_sid:$rqs, target_unverified:$unver, ts:$ts, rows:.}
        + (if $slots != "" then {slots:($slots | tonumber)} else {} end)' > "$bdir/plan.json.$$.tmp" \
     && mv -f "$bdir/plan.json.$$.tmp" "$bdir/plan.json" || cl_die "cannot write $bdir/plan.json; nothing was queued" 2
   # ONE INTENT PER SESSION, mode 0600 (lr-intent.sh checks owner, mode, path, binding and expiry).
@@ -1409,7 +1416,8 @@ EOF
   printf '%s\n' "$rows" | cl_move_table "$from" "$to" "batch $batch"
   cl_bounds_line "$slots"
   tmp="$(lr_move_state)/move/requests/.$batch.$$.tmp"
-  jq -nc --arg b "$batch" --argjson ts "$now" '{kind:"move-batch", batch:$b, ts:$ts}' > "$tmp" \
+  jq -nc --arg b "$batch" --argjson ts "$now" --arg rqp "$by" --arg rqs "$(cl_requester_sid)" \
+    '{kind:"move-batch", batch:$b, ts:$ts, requester_pane:$rqp, requester_sid:$rqs}' > "$tmp" \
     && mv -f "$tmp" "$(lr_move_state)/move/requests/$batch.json" || cl_die "cannot write the batch request; nothing will run" 2
   [ -z "$CL_MOVE_QUEUED_OUT" ] || printf '%s\n' "$batch" > "$CL_MOVE_QUEUED_OUT"
   printf 'cc-lr: batch %s queued for the poller (%s session(s)); re-derive its verdicts any time with: cc-lr move --status %s\n' "$batch" "$nm" "$batch"
@@ -2121,7 +2129,8 @@ cmd_repair() {
   dest="$REQ_DIR/cc-lr-repair-$sid.json"
   jq -n --arg sid "$sid" --arg target "$target" --arg pane "$pane" --arg by "${by:-?}" \
         --arg mode "$mode" --arg bundle "$bundle" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-     '{sid:$sid, target:$target, source_pane:$pane, requested_by:$by, mode:$mode, bundle:$bundle, ts:$ts, origin_class:"cc-lr-repair"}' \
+        --arg rqp "$by" --arg rqs "$(cl_requester_sid)" \
+     '{sid:$sid, target:$target, source_pane:$pane, requested_by:$by, requester_pane:$rqp, requester_sid:$rqs, mode:$mode, bundle:$bundle, ts:$ts, origin_class:"cc-lr-repair"}' \
      > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null || true; cl_die "could not write the request; nothing was queued" 2; }
   mv -f "$tmp" "$dest" 2>/dev/null || { rm -f "$tmp" 2>/dev/null || true; cl_die "could not place $dest; nothing was queued" 2; }
   echo "cc-lr: queued $dest  (sid ${sid:0:8} · mode $mode · target $target · requested_by ${by:-?})"
@@ -2208,7 +2217,8 @@ EOF
     req="${s:0:8}-$(date +%s)-$$-markers"
     tmp="$q/.cc-lr-markers-$s.$$.tmp"; dest="$q/cc-lr-markers-$s.json"
     if jq -n --arg sid "$s" --arg by "${by:-?}" --arg req "$req" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-         '{kind:"marker-setaside", sid:$sid, source_pane:"-", requested_by:$by, req_id:$req, ts:$ts, origin_class:"cc-lr-repair-markers"}' \
+         --arg rqp "$by" --arg rqs "$(cl_requester_sid)" \
+         '{kind:"marker-setaside", sid:$sid, source_pane:"-", requested_by:$by, requester_pane:$rqp, requester_sid:$rqs, req_id:$req, ts:$ts, origin_class:"cc-lr-repair-markers"}' \
          > "$tmp" 2>/dev/null && mv -f "$tmp" "$dest" 2>/dev/null; then
       pending="$pending$s"$'\t'"$req"$'\n'
       echo "cc-lr: queued $dest (the drainer re-judges ${s:0:8} before it renames anything)"
@@ -2359,8 +2369,8 @@ EOF
     req="${s:0:8}-$(date +%s)-$$"
     tmp="$REQ_DIR/.cc-lr-upgrade-$s.$$.tmp"; dest="$REQ_DIR/cc-lr-upgrade-$s.json"
     if jq -n --arg sid "$s" --arg pane "$p" --arg by "${by:-?}" --arg req "$req" \
-          --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg scrub "$scrub" \
-          '{kind:"upgrade", sid:$sid, source_pane:$pane, requested_by:$by, req_id:$req, ts:$ts, origin_class:"cc-lr-upgrade"} + (if $scrub == "" then {} else {scrub_composer:$scrub} end)' \
+          --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg scrub "$scrub" --arg rqp "$by" --arg rqs "$(cl_requester_sid)" \
+          '{kind:"upgrade", sid:$sid, source_pane:$pane, requested_by:$by, requester_pane:$rqp, requester_sid:$rqs, req_id:$req, ts:$ts, origin_class:"cc-lr-upgrade"} + (if $scrub == "" then {} else {scrub_composer:$scrub} end)' \
           > "$tmp" 2>/dev/null && mv -f "$tmp" "$dest" 2>/dev/null; then
       pending="$pending$s"$'\t'"$req"$'\t'"$p"$'\n'; nq=$((nq + 1))
     else

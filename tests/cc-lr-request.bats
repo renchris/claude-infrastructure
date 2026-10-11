@@ -81,6 +81,8 @@ req_field() { python3 -c 'import json,sys; v=json.load(open(sys.argv[1]))[sys.ar
   [ "$output" = "cc-lr: QUEUED for the reconciler aaaaaaaa → $REQ" ] || { echo "$output"; false; }
   [ "$(req_field sid)" = "$SID" ]
   [ "$(req_field requested_by)" = cc-lr ]
+  [ "$(req_field requester_pane)" = "" ]
+  [ "$(req_field requester_sid)" = "" ]
   [ "$(req_field mode)" = recover ]
   [ "$(req_field pane)" = 117 ]
   [ "$(req_field config_dir)" = "$HOME/.claude-next" ]
@@ -90,6 +92,17 @@ req_field() { python3 -c 'import json,sys; v=json.load(open(sys.argv[1]))[sys.ar
   [ ! -e "$MUTEX" ]
   [ ! -e "$LOCK" ]
   [ -z "$(find "$LR_STATE_DIR/requests" -name '.*')" ]
+}
+
+@test "recover, reconciler LIVE: the request names its CALLER as requester_pane + requester_sid" {
+  # Cross-wave contract (lr-reliability D3, 2026-10-11): the reply-to is the caller, never the subject.
+  recon_on; heartbeat "$NOW"
+  run env CC_PANE_ID=223 CLAUDE_CODE_SESSION_ID=ecb81dfc-0000-4000-8000-000000000009 bash "$LR" recover 117
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(req_field requester_pane)" = 223 ]
+  [ "$(req_field requester_sid)" = ecb81dfc-0000-4000-8000-000000000009 ]
+  [ "$(req_field pane)" = 117 ]
+  [ "$(req_field requested_by)" = cc-lr ]
 }
 
 @test "recover, reconciler LIVE with no --target: the request carries no target key" {

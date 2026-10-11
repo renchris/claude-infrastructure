@@ -575,6 +575,19 @@ JUDGE
   [ "$(jq -r .requested_by "$REQ/cc-lr-repair-$SID.json")" = FALLBACK-UUID ]
 }
 
+@test "repair's request carries the caller as requester_pane + requester_sid, \"\" when unknown" {
+  # Cross-wave contract (lr-reliability D3, 2026-10-11): the reply-to beside requested_by.
+  local b; b="$(bundle "$SID" 20260919T170000Z probed)"
+  run env CC_PANE_ID=223 CLAUDE_CODE_SESSION_ID=ecb81dfc-0000-4000-8000-000000000009 bash "$LR" repair "$b"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(jq -r .requester_pane "$REQ/cc-lr-repair-$SID.json")" = 223 ]
+  [ "$(jq -r .requester_sid "$REQ/cc-lr-repair-$SID.json")" = ecb81dfc-0000-4000-8000-000000000009 ]
+  rm -f "$REQ"/*.json
+  run env -u CC_PANE_ID -u ITERM_SESSION_ID -u KITTY_WINDOW_ID -u CLAUDE_CODE_SESSION_ID bash "$LR" repair "$b"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(jq -c '[.requester_pane, .requester_sid]' "$REQ/cc-lr-repair-$SID.json")" = '["",""]' ]
+}
+
 @test "repair REFUSES a bundle with no derivable sid, and writes nothing" {
   mkdir -p "$BATS_TEST_TMPDIR/loose/bundle-1"
   run bash "$LR" repair "$BATS_TEST_TMPDIR/loose/bundle-1"
