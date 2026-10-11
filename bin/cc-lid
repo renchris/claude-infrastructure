@@ -116,25 +116,31 @@ fi
 # the original two lines, byte for byte. NO_COLOR keeps the terminal layout, uncoloured.
 render_state() {   # $1 = on|off · $2 = "now " after a change · $3 = optional tail
   if [ -t 1 ]; then
-    local b='' d='' c='' r=''
+    # Badge layout (operator, 2026-10-10/11, three rounds on screenshots): the state is a
+    # coloured ON/OFF badge on line 1, one plain line says what it means, and the single
+    # command that switches it sits alone after a blank line. Every line stays under ~40
+    # columns, because sentence-length lines wrapped mid-word in a narrow pane and buried
+    # the state. The command line names the state it produces ("Turn OFF:"), so the next
+    # state is never left for the reader to infer.
+    local b='' d='' c='' r='' on_badge=' ON ' off_badge=' OFF '
     if [ -z "${NO_COLOR:-}" ]; then
-      b=$'\e[1m' d=$'\e[2m' c=$'\e[36m' r=$'\e[0m'
-    fi
-    # Three answers, one per line, in this order (operator ruling 2026-10-10, on a layout
-    # that showed the state but not what toggling would do): where it IS now, the exact
-    # command that flips it, and where that command would LEAVE it. Each state is named
-    # ON/OFF as well as by behaviour, in its own colour on both lines (operator, same day:
-    # "still not prescriptive enough of the current state").
-    local y='' g=''
-    [ -z "${NO_COLOR:-}" ] && y=$'\e[1;33m' g=$'\e[1;32m'
-    if [ "$1" = on ]; then
-      printf '%s\n' "${b}Current:${r}  ${y}ON${r} — the laptop ${2}${y}KEEPS RUNNING${r} with the lid closed.${3:- ${d}(survives reboot)${r}}"
-      printf '%s\n' "${b}Toggle:${r}   ${c}cc-lid toggle${r} (or ${c}cc-lid off${r}) → ${g}OFF${r} — it will ${g}SLEEP${r} when the lid is closed."
-      printf '%s\n' "          ${d}While ON: keep it plugged in and out of a bag (no airflow).${r}"
+      b=$'\e[1m' d=$'\e[2m' c=$'\e[1;36m' r=$'\e[0m'
+      on_badge=$'\e[1;30;43m ON \e[0m' off_badge=$'\e[1;30;42m OFF \e[0m'
     else
-      printf '%s\n' "${b}Current:${r}  ${g}OFF${r} — the laptop ${2}${g}SLEEPS${r} when the lid is closed.${3:- ${d}(macOS default)${r}}"
-      printf '%s\n' "${b}Toggle:${r}   ${c}cc-lid toggle${r} (or ${c}cc-lid on${r}) → ${y}ON${r} — it will ${y}KEEP RUNNING${r} with the lid closed."
-      printf '%s\n' "          ${d}caffeinate does not cover lid-close sleep; only cc-lid does.${r}"
+      on_badge='[ON]' off_badge='[OFF]'
+    fi
+    local sw=''
+    [ -n "$2" ] && sw="  ${d}✓ switched${r}"
+    printf '\n'
+    if [ "$1" = on ]; then
+      printf '%s\n' "  ${b}Keep awake with lid closed${r}  ${on_badge}${sw}"
+      printf '%s\n' "  Lid closed: keeps running."
+      printf '%s\n' "  ${d}Keep it plugged in, out of bags.${r}"
+      printf '\n%s\n\n' "  Turn OFF:  ${c}cc-lid off${r}"
+    else
+      printf '%s\n' "  ${b}Keep awake with lid closed${r}  ${off_badge}${sw}"
+      printf '%s\n' "  Lid closed: sleeps (macOS default)."
+      printf '\n%s\n\n' "  Turn ON:   ${c}cc-lid on${r}"
     fi
     return
   fi

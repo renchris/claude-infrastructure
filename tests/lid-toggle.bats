@@ -207,17 +207,30 @@ EOF
 # A terminal gets the short block (no literal backticks, state on line 1); everything
 # else keeps the two-line form the /keep-laptop-alive skill relays verbatim. `script`
 # gives the command a real pty, which is the only honest way to make `[ -t 1 ]` true.
-@test "a terminal gets now / toggle command / where toggling leaves it, both ways" {
+@test "a terminal gets the state badge, its meaning, and the one command that switches it" {
   NO_COLOR=1 run script -q /dev/null "$LID" </dev/null
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Current:  OFF — the laptop SLEEPS when the lid is closed."* ]] || false
-  [[ "$output" == *"Toggle:   cc-lid toggle (or cc-lid on) → ON — it will KEEP RUNNING with the lid closed."* ]] || false
+  [[ "$output" == *"Keep awake with lid closed  [OFF]"* ]] || false
+  [[ "$output" == *"Lid closed: sleeps (macOS default)."* ]] || false
+  [[ "$output" == *"Turn ON:   cc-lid on"* ]] || false
   [[ "$output" != *'`'* ]] || false
   echo 1 > "$D/state"
   NO_COLOR=1 run script -q /dev/null "$LID" </dev/null
-  [[ "$output" == *"Current:  ON — the laptop KEEPS RUNNING with the lid closed."* ]] || false
-  [[ "$output" == *"Toggle:   cc-lid toggle (or cc-lid off) → OFF — it will SLEEP when the lid is closed."* ]] || false
+  [[ "$output" == *"Keep awake with lid closed  [ON]"* ]] || false
+  [[ "$output" == *"Lid closed: keeps running."* ]] || false
+  [[ "$output" == *"Turn OFF:  cc-lid off"* ]] || false
   [[ "$output" != *'`'* ]]
+}
+
+@test "every terminal line fits a 45-column pane" {
+  for s in 0 1; do
+    echo "$s" > "$D/state"
+    NO_COLOR=1 run script -q /dev/null "$LID" </dev/null
+    while IFS= read -r line; do
+      line="${line%$'\r'}"
+      [ "${#line}" -le 45 ] || { echo "too wide (${#line}): $line"; false; }
+    done <<<"$output"
+  done
 }
 
 @test "colour is on in a terminal and NO_COLOR turns it off" {
