@@ -332,6 +332,8 @@ fi
 hdr "3. pane identity for Claude Code"
 # Write $HOME back as a literal so the block survives a HOME that differs at shell-startup time.
 CC_IN_KITTY_RC="${BIN_DIR/#$HOME/\$HOME}/cc-in-kitty"
+# lib/ is BIN_DIR's sibling in the live layer (install.sh links both); the same literal-\$HOME rule.
+SUCC_LIB_RC="$(dirname "${BIN_DIR/#$HOME/\$HOME}")/lib/pane-successor.sh"
 read -r -d '' RC_BLOCK <<EOF
 # >>> $BLOCK_ID >>>
 # Claude Code gates its iTerm2 pane backend on an ENV VAR (it never handshakes with iTerm2):
@@ -353,18 +355,29 @@ read -r -d '' RC_BLOCK <<EOF
 if [ -n "\${KITTY_WINDOW_ID:-}" ] && [ -x "$CC_IN_KITTY_RC" ] && "$CC_IN_KITTY_RC"; then
   export ITERM_SESSION_ID="w0t0p0:\$KITTY_WINDOW_ID"
 fi
+#
+# Keystroke-free recycle: a recycle stages its successor for this pane's tty before it sends /exit,
+# and the shell that regains the tty runs it at its next prompt instead of the watcher typing a launch
+# line into it. The hook forks nothing unless a stage for this tty exists (lib/pane-successor.sh).
+if [ -n "\${ZSH_VERSION:-}" ] && [ -r "$SUCC_LIB_RC" ]; then
+  source "$SUCC_LIB_RC"
+  (( \${precmd_functions[(I)cc_pane_successor_precmd]} )) || precmd_functions+=(cc_pane_successor_precmd)
+fi
 # <<< $BLOCK_ID <<<
 EOF
+rc_block_current() { sed -n "/^# >>> $BLOCK_ID >>>\$/,/^# <<< $BLOCK_ID <<<\$/p" "$SHELL_RC" 2>/dev/null; }
 if [ "$MODE" = apply ]; then
   if ! grep -q "$BLOCK_ID" "$SHELL_RC" 2>/dev/null; then
     cp "$SHELL_RC" "$SHELL_RC.bak-kitty-$(date +%Y%m%d%H%M%S)" 2>/dev/null
     printf '\n%s\n' "$RC_BLOCK" >> "$SHELL_RC"
-  elif ! grep -q "cc-in-kitty" "$SHELL_RC" 2>/dev/null; then
+  elif [ "$(rc_block_current)" != "$RC_BLOCK" ]; then
     # UPGRADE IN PLACE. Idempotence by "block already present" is not enough once the block's
     # CONTENT is the defect: every existing ~/.zshrc carries the stale-guard version, and skipping
     # on the marker alone would mean this fix never reaches a single machine that already ran the
     # old setup. Splice between the markers rather than appending a second block — two blocks would
-    # both run, and the survivor would depend on their order.
+    # both run, and the survivor would depend on their order. Staleness is "differs from what this
+    # script would write", not the absence of one token: keyed on a token, the next change to the
+    # block (the successor hook was the second) reaches no machine that already has the first.
     cp "$SHELL_RC" "$SHELL_RC.bak-kitty-$(date +%Y%m%d%H%M%S)" 2>/dev/null
     RC_BLOCK="$RC_BLOCK" python3 - "$SHELL_RC" "$BLOCK_ID" <<'PY'
 import os, re, sys
@@ -386,6 +399,8 @@ elif ! grep -q "cc-in-kitty" "$SHELL_RC" 2>/dev/null; then
   # The stale block is WORSE than no block on a kitty pane opened from iTerm2: it leaves the
   # inherited iTerm2 UUID in place and the failure surfaces only at spawn time.
   no "$SHELL_RC has the STALE $BLOCK_ID block (keeps an inherited iTerm2 id) — re-run --apply"
+elif [ "$(rc_block_current)" != "$RC_BLOCK" ]; then
+  no "$SHELL_RC has an OUTDATED $BLOCK_ID block (differs from this version's; e.g. no successor-claim hook) — re-run --apply"
 else
   ok "$SHELL_RC exports ITERM_SESSION_ID inside kitty (verified by ancestry)"
 fi

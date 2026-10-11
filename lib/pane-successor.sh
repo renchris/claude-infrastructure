@@ -23,6 +23,8 @@
 #   · exec   <claimed> [1|0] — unset the predecessor's per-launch vars and exec the successor LOOP shell.
 #   · handback <claimed> — a consumer running INSIDE that loop gives it the next claim instead of
 #     exec'ing a shell of its own (see cc_pane_successor_exec for why the chain must stay flat).
+#   · precmd — the zsh prompt hook: the interactive shell itself is a consumer (the kitty-setup rc block
+#     installs it), so a pane whose claude was started from a bare prompt still claims.
 #
 # FAILS SAFE, which here means DO NOT CLAIM. A claim the watcher did not mean (a stale stage, another
 # pane's, a file someone else could have written) runs an arbitrary launch line in the operator's pane;
@@ -241,4 +243,21 @@ cc_pane_successor_handback() { # $1=claimed path → rc 0 = handed to the succes
   if (umask 077; printf '%s\n' "$_c" > "$_t") 2>/dev/null && mv -f "$_t" "$_hb" 2>/dev/null; then return 0; fi
   rm -f "$_t" 2>/dev/null
   return 1
+}
+
+# THE PROMPT-HOOK CONSUMER (recycle-failures-kitty-2026-10-10 REPORT fix 8). Since c54a3c0bd 4 of 9
+# recycles revoked the stage and fell back to typing: the process that regained the tty was a plain
+# interactive zsh, which is none of the consumers above. Its next prompt is the first thing that shell
+# does, so the claim runs from precmd. This runs before EVERY prompt in EVERY pane, and take forks jq,
+# ps and stat, so it is gated on tests zsh evaluates in-process: nothing staged for this tty ⇒ no fork
+# at all. $TTY is zsh's own parameter (a `tty` call would be a fork); it only opens the gate — take
+# re-derives the tty itself and applies every guard, so a wrong $TTY can cost forks but never a claim.
+# The claim replaces this shell (cc_pane_successor_exec keeps a login shell after the successor).
+# A shell started before this hook existed does not have it: that case still falls back to typing.
+cc_pane_successor_precmd() { # zsh precmd hook → always rc 0; on a claim it does not return
+  [[ -n "${TTY:-}" && -e "${CC_PANE_SUCCESSOR_DIR:-${HOME:-}/.claude/run/pane-successor}/${TTY##*/}.cmd" ]] || return 0
+  local _c
+  _c="$(cc_pane_successor_take)" && [ -n "$_c" ] || return 0
+  cc_pane_successor_exec "$_c"
+  return 0
 }
