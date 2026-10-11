@@ -840,7 +840,7 @@ alive() { kill -0 "$1" 2>/dev/null; }
   [ "$(hf_exit_signal_grace)" = 30 ] || { echo "default: $(hf_exit_signal_grace)"; false; }
   [ "$(HF_EXIT_SIGNAL_GRACE_S=45 hf_exit_signal_grace)" = 45 ]
   [ "$(HF_EXIT_SIGNAL_GRACE_S=10s hf_exit_signal_grace)" = 30 ]
-  [ "$(HF_EXIT_SIGNAL_GRACE_S= hf_exit_signal_grace)" = 30 ]
+  [ "$(HF_EXIT_SIGNAL_GRACE_S='' hf_exit_signal_grace)" = 30 ]
 }
 
 @test "16e [RED] HF_EXIT_ACTUATOR=typed restores the typed /exit even when every signal fact holds" {
