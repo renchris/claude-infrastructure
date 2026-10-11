@@ -697,8 +697,11 @@ STUB
   # 51 since 2026-10-04: com.claude.research-classifier-warm (RESEARCH_PROGRAM_BUILD wave E1d), `staged`
   # in launchd/staged/ and loaded only by the operator's migrations/0059; row, plist and count in one land.
   # Still 51 on 2026-10-05 (wave E1f): that row moved `staged` -> `run` after the operator ran 0059; no label added.
-  if [ "$n" != 51 ]; then
-    echo "manifest declares $n labels, expected 51 — if a plist was legitimately added or retired,"
+  # 52 since 2026-10-10: com.claude.chime-player (the resident chime player hooks/notify.sh enqueues
+  # to), `staged` in launchd/staged/ until the operator runs 51-chime-player-activate.sh; row, plist
+  # and count in one land.
+  if [ "$n" != 52 ]; then
+    echo "manifest declares $n labels, expected 52 — if a plist was legitimately added or retired,"
     echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
     grep -vE '^[[:space:]]*(#|$)' "$M" | cut -d'|' -f1 | sed 's/[[:space:]]//g; s/^/  /'
     return 1

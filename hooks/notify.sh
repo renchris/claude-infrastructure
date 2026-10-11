@@ -365,15 +365,74 @@ if [ "${CC_NOTIFY_SOUND_GATE:-1}" != 0 ]; then
   fi
 fi
 
+# ── TRANSPORT: an admitted chime goes to the RESIDENT player, not a new afplay (2026-10-10) ──────
+# WHY: the gate above bounds HOW MANY clients we create; this ends creating them. Measured from
+# coreaudiod's own log: every new audio client process costs 3 TCCAccessRequest calls inside
+# coreaudiod, while ONE long-lived process paid 3 at its first play and ZERO for the next two, a
+# second sound file included. On 2026-10-09 one chime's permission check parked coreaudiod ~7 minutes
+# behind a stalled trustd/secd, which froze Hammerspoon. So com.claude.chime-player
+# (scripts/chime-player.js) holds one NSSound client, and this hook only drops a request file into its
+# spool: a write and a `mv` (atomic, never blocks, never starts a player). Three states, keyed on the
+# player's heartbeat, which it touches every pass:
+#   fresh (age <= 15 s)  enqueue — unless the spool already holds >= 8, then drop (a backlog is the
+#                        player failing to drain; more requests only grow it).
+#   stale                DROP and log `chime-player-stale`. The player is installed but wedged, most
+#                        likely on a stalled coreaudiod — and a fresh client during that stall is
+#                        exactly the 2026-10-09 failure, so NO afplay fallback here, on purpose.
+#   absent               afplay exactly as before: never activated, or the temp dir was cleared before
+#                        launchd restarted it. Landing this before activation changes nothing.
+# A heartbeat that is a symlink or not ours is trusted as nothing (absent ⇒ afplay), the gate's rule.
+# The transport is appended to the log line (`via player|afplay|dropped`) so the split can be counted.
+# Dir: CC_CHIME_DIR, else under whichever notify dir is seamed (no test can reach the live spool),
+# else `getconf DARWIN_USER_TEMP_DIR`/cc-chime — the path scripts/chime-player.sh hands the player.
+# Seams: CC_CHIME_DIR · CC_NOTIFY_CHIME_FRESH_S · CC_NOTIFY_CHIME_SPOOL_MAX ·
+# CC_NOTIFY_CHIME_PLAYER=off (kill switch: afplay unconditionally).
+NTY_VIA=""
+if [ "$NTY_PLAY" = 1 ]; then
+  NTY_VIA=afplay
+  if [ "${CC_NOTIFY_CHIME_PLAYER:-on}" != off ]; then
+    if [ -n "${CC_CHIME_DIR:-}" ]; then NTY_CDIR="$CC_CHIME_DIR"
+    elif [ -n "${CC_NOTIFY_GLOBAL_DIR:-}" ]; then NTY_CDIR="$CC_NOTIFY_GLOBAL_DIR/cc-chime"
+    elif [ "$_nty_dir_seamed" = 1 ]; then NTY_CDIR="$CC_NOTIFY_DIR/cc-chime"
+    else
+      _nty_c="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || true)"
+      NTY_CDIR="${_nty_c:+${_nty_c%/}/cc-chime}"
+    fi
+    _nty_hb="${NTY_CDIR:-/nonexistent}/heartbeat"
+    if [ -n "${NTY_CDIR:-}" ] && [ ! -L "$NTY_CDIR" ] && [ -f "$_nty_hb" ] && [ ! -L "$_nty_hb" ] && [ -O "$_nty_hb" ]; then
+      _nty_cnow="${NTY_NOW:-}"; if [ -z "$_nty_cnow" ]; then _nty_cnow=$(date +%s); fi
+      _nty_hm=$(stat -f %m "$_nty_hb" 2>/dev/null || echo 0)
+      _nty_hage=$(( _nty_cnow - _nty_hm )); _nty_fresh="${CC_NOTIFY_CHIME_FRESH_S:-15}"
+      if (( _nty_hage > _nty_fresh || -_nty_hage > _nty_fresh )); then
+        NTY_VIA=dropped; NTY_PLAY=0; NTY_GATE_WHY="chime-player-stale heartbeat=${_nty_hage}s"
+      else
+        _nty_q=( "$NTY_CDIR"/spool/*.req ); _nty_qn=0
+        if [ -e "${_nty_q[0]}" ]; then _nty_qn=${#_nty_q[@]}; fi
+        _nty_snd="${SOUNDS_DIR}/${SOUND}"; if [[ "$SOUND" == /* ]]; then _nty_snd="$SOUND"; fi
+        _nty_tmp="$NTY_CDIR/.req.$$.$RANDOM"
+        if (( _nty_qn >= ${CC_NOTIFY_CHIME_SPOOL_MAX:-8} )); then
+          NTY_VIA=dropped; NTY_PLAY=0; NTY_GATE_WHY="chime-spool-full n=${_nty_qn}"
+        elif { printf '%s\n' "$_nty_snd" > "$_nty_tmp"; } 2>/dev/null \
+             && mv -f "$_nty_tmp" "$NTY_CDIR/spool/${_nty_cnow}.$$.$RANDOM.req" 2>/dev/null; then
+          NTY_VIA=player
+        else
+          rm -f "$_nty_tmp" 2>/dev/null || true
+          NTY_VIA=dropped; NTY_PLAY=0; NTY_GATE_WHY="chime-enqueue-failed"
+        fi
+      fi
+    fi
+  fi
+fi
+
 # Log for debugging — carries the identity too, so the log is itself triageable after the fact.
 # `|| true`: this is a DIAGNOSTIC, and it was the only side-effecting line here without one — so
 # under `set -e` an unwritable log file (disk full, or a foreign-owned file at this fixed
 # world-writable path after the tmp cleaner reaps it) aborted the hook and the alert was never
 # rendered at all. A missing log line must never cost the notification it is describing.
 if [ "$NTY_PLAY" = 1 ]; then
-  { echo "$(date): Playing ${SOUND} for ${EVENT_TYPE} [${SID8:-nosid}${DIR:+ ${DIR}}]" >> "$NTY_LOG"; } 2>/dev/null || true
+  { echo "$(date): Playing ${SOUND} for ${EVENT_TYPE} [${SID8:-nosid}${DIR:+ ${DIR}}] via ${NTY_VIA}" >> "$NTY_LOG"; } 2>/dev/null || true
 else
-  { echo "$(date): Gated ${SOUND} for ${EVENT_TYPE} [${SID8:-nosid}${DIR:+ ${DIR}}] (${NTY_GATE_WHY})" >> "$NTY_LOG"; } 2>/dev/null || true
+  { echo "$(date): Gated ${SOUND} for ${EVENT_TYPE} [${SID8:-nosid}${DIR:+ ${DIR}}] (${NTY_GATE_WHY})${NTY_VIA:+ via ${NTY_VIA}}" >> "$NTY_LOG"; } 2>/dev/null || true
 fi
 
 # Play sound async (background with disown so script can exit immediately)
@@ -397,7 +456,7 @@ fi
 # `>/dev/null` on the sound player costs nothing — afplay's stdout carries no information anyone
 # reads — and it is what actually ends the wedge. scripts/bg-fd-inherit-lint.sh keeps every other
 # hook from re-introducing the same shape.
-if [ "$NTY_PLAY" = 1 ]; then
+if [ "$NTY_PLAY" = 1 ] && [ "$NTY_VIA" = afplay ]; then
     if [[ "$SOUND" == /* ]]; then
         afplay "${SOUND}" >/dev/null 2>> "$NTY_LOG" &
     else

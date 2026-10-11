@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.chime-player — ONE resident coreaudiod client for every chime hooks/notify.sh plays
+  (2026-10-10). scripts/chime-player.sh pins the spool dir and execs scripts/chime-player.js under
+  `osascript -l JavaScript`, which polls the spool every 0.25 s and plays each request with a cached
+  AppKit NSSound.
+
+  🚨 STAGED, NOT LOADED. It lives in launchd/staged/, outside install.sh's launchd/*.plist glob, on
+  purpose: that glob copies every plist into ~/Library/LaunchAgents, and launchd loads everything
+  there at the next login, so a copy IS an activation (tests/install-staged-plist.bats). Loading it
+  changes how every chime is played, which is the operator's call (C10):
+  docs/activation/pending-activation/51-chime-player-activate.sh installs, loads and verifies it.
+
+  Every chime used to be a fresh afplay, i.e. a NEW coreaudiod client, ~300 a day. Measured
+  2026-10-10 from coreaudiod's own log: a new client process costs 3 TCCAccessRequest calls in
+  coreaudiod; one long-lived process playing three sounds paid 3 at its first play and 0 for the
+  next two. On 2026-10-09 one chime's permission check parked coreaudiod ~7 minutes behind a stalled
+  trustd/secd and froze Hammerspoon. afplay clients also leak coreaudiod IO contexts under load
+  (docs/research/coreaudiod-spin-2026-09-29.md).
+
+  KeepAlive + RunAtLoad, no StartInterval: the cadence lives in the script, as in
+  com.claude.compressor-sentinel. launchd's whole job is to start it and restart it if it dies.
+
+  ThrottleInterval 30, not launchd's default 10: each (re)start is a new audio client and pays the
+  permission check again, so a crash loop at the default floor would be the per-chime client storm
+  this job exists to end, merely renamed. 30 s bounds that at 2 starts a minute. While the player is
+  down its heartbeat goes stale after 15 s and notify.sh DROPS chimes rather than falling back to
+  afplay, so a crash loop costs chimes, never a client storm.
+
+  No ProcessType, so the Standard band: it plays user-facing audio, and a Background-band job is
+  deferred under exactly the load at which chimes are being raised (compressor-sentinel's header has
+  the measurement). Nice and LowPriorityIO are omitted for the same reason.
+
+  Kill switches: CC_NOTIFY_CHIME_PLAYER=off in the hook's environment (notify.sh goes back to afplay),
+  or unload it AND delete its heartbeat, both, in one line:
+    launchctl bootout gui/$UID/com.claude.chime-player; rm -f "$(getconf DARWIN_USER_TEMP_DIR)cc-chime/heartbeat"
+  A bootout alone is NOT a kill switch: the heartbeat file outlives the process, notify.sh reads it
+  as a stale (wedged) player, and DROPS every chime until the next reboot clears the temp dir. Only
+  an absent heartbeat means "no player, use afplay". The uninstall line 51 prints does both and also
+  removes the LaunchAgents copy, so the next login does not load it again.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.chime-player</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>export PATH="$HOME/.claude/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec "$HOME/.claude/scripts/chime-player.sh"</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>  <string>/Users/chrisren/.claude/logs/chime-player.out.log</string>
+    <key>StandardErrorPath</key><string>/Users/chrisren/.claude/logs/chime-player.err.log</string>
+</dict>
+</plist>

@@ -301,7 +301,10 @@ fire() { printf '%s' "$1" | "$H" "$2"; }
 @test "S3: with no seam set, the artifact dir is private — not a fixed name in 1777 /tmp" {
   local base="$BATS_TEST_TMPDIR/tmpbase"; mkdir -p "$base"
   # `env` (not `env -i`) so HOME/PATH/CLAUDE_CONFIG_DIR stay fixtured; only the seam is removed.
-  run env -u CC_NOTIFY_DIR TMPDIR="$base" bash -c 'printf "%s" "$1" | "$2" permission' _ \
+  # CC_CHIME_DIR: with CC_NOTIFY_DIR unset the chime transport would otherwise resolve the LIVE
+  # `getconf DARWIN_USER_TEMP_DIR`/cc-chime, and once the player is activated this case would drop a
+  # real request into its spool and play it out loud. This case is about the artifact dir, not that.
+  run env -u CC_NOTIFY_DIR TMPDIR="$base" CC_CHIME_DIR="$BATS_TEST_TMPDIR/chime" bash -c 'printf "%s" "$1" | "$2" permission' _ \
       "$(payload dflt /w/proj 'ls')" "$H"
   [ "$status" -eq 0 ]
   [ -d "$base/cc-notify" ]
@@ -448,4 +451,76 @@ age_stamp() { # <class> <seconds ago>
   [ "$(cat "$BATS_TEST_TMPDIR"/t?/cc-notify/claude-notify.log | grep -c Playing)" = 1 ]
   [ "$(cat "$BATS_TEST_TMPDIR"/t?/cc-notify/claude-notify.log | grep -c Gated)" = 1 ]
   [ -f "$BATS_TEST_TMPDIR/darwin/cc-notify/sound-complete.stamp" ]
+}
+
+# ── CHIME TRANSPORT — an admitted chime goes to the resident player, not a new afplay (2026-10-10) ─
+# Every afplay is a new coreaudiod client and costs 3 TCC permission checks; the resident
+# com.claude.chime-player paid 0 per play after its first. These pin the three heartbeat states and
+# the kill switch on the hook's real outputs: the spool file it writes, the afplay argv it forks, and
+# its log line. The chime dir is derived from the seamed CC_NOTIFY_DIR, so no case can reach the live
+# spool. RED-proof: each case was run against a mutant of exactly its state (report in the commit).
+CDIR() { printf '%s/cc-chime' "$CC_NOTIFY_DIR"; }
+rec_afplay() {   # afplay stub that records the path it was asked to play
+  printf '#!/bin/bash\nprintf "%%s\\n" "$1" >> "%s/afplay.argv"\n' "$CC_NOTIFY_DIR" > "$STUB/afplay"
+  chmod +x "$STUB/afplay"
+}
+player_up() {    # <heartbeat age in seconds> — a player dir as chime-player.js leaves it
+  mkdir -p "$(CDIR)/spool"
+  touch -t "$(date -r $(( $(date +%s) - $1 )) +%Y%m%d%H%M.%S)" "$(CDIR)/heartbeat"
+}
+spooled() { local n=0 f; for f in "$(CDIR)"/spool/*.req; do [ -e "$f" ] && n=$((n + 1)); done; echo "$n"; }
+# afplay is forked into the background, so its argv file can trail the hook's exit: poll, bounded.
+afplay_argv() { local i=0; while [ ! -s "$CC_NOTIFY_DIR/afplay.argv" ] && [ $i -lt 40 ]; do sleep 0.05; i=$((i + 1)); done; cat "$CC_NOTIFY_DIR/afplay.argv" 2>/dev/null || true; }
+
+@test "T1: fresh heartbeat ⇒ ONE spool request naming the absolute sound, and no afplay" {
+  rec_afplay; player_up 2
+  fire "$(payload sess-t1 /w/proj x)" complete
+  [ "$(spooled)" = 1 ]
+  [ "$(cat "$(CDIR)"/spool/*.req)" = /System/Library/Sounds/Purr.aiff ]
+  [ -z "$(afplay_argv)" ]
+  local tmps=( "$(CDIR)"/.req.* ); [ ! -e "${tmps[0]}" ]   # the temp file was MOVED, not left behind
+  grep -q 'Playing Purr.aiff for complete .* via player$' "$CC_NOTIFY_DIR/claude-notify.log"
+}
+
+@test "T2: stale heartbeat ⇒ the chime is DROPPED and logged — no spool file, no afplay fallback" {
+  rec_afplay; player_up 60
+  fire "$(payload sess-t2 /w/proj x)" complete
+  [ "$(spooled)" = 0 ]
+  [ -z "$(afplay_argv)" ]
+  grep -q 'Gated Purr.aiff for complete .*(chime-player-stale heartbeat=6[0-9]s) via dropped$' "$CC_NOTIFY_DIR/claude-notify.log"
+  [ "$(played)" = 0 ]
+}
+
+@test "T3: no heartbeat ⇒ afplay exactly as before, and no player dir is created" {
+  rec_afplay
+  fire "$(payload sess-t3 /w/proj x)" complete
+  [ "$(afplay_argv)" = /System/Library/Sounds/Purr.aiff ]
+  [ ! -e "$(CDIR)" ]
+  grep -q 'Playing Purr.aiff for complete .* via afplay$' "$CC_NOTIFY_DIR/claude-notify.log"
+}
+
+@test "T4: a spool already holding 8 requests ⇒ dropped and logged, nothing added, no afplay" {
+  rec_afplay; player_up 1
+  for i in 1 2 3 4 5 6 7 8; do echo /System/Library/Sounds/Pop.aiff > "$(CDIR)/spool/1.$i.req"; done
+  fire "$(payload sess-t4 /w/proj x)" complete
+  [ "$(spooled)" = 8 ]
+  [ -z "$(afplay_argv)" ]
+  grep -q '(chime-spool-full n=8) via dropped$' "$CC_NOTIFY_DIR/claude-notify.log"
+}
+
+@test "T5: CC_NOTIFY_CHIME_PLAYER=off ⇒ afplay even with a fresh heartbeat, and nothing spooled" {
+  rec_afplay; player_up 1
+  CC_NOTIFY_CHIME_PLAYER=off fire "$(payload sess-t5 /w/proj x)" complete
+  [ "$(afplay_argv)" = /System/Library/Sounds/Purr.aiff ]
+  [ "$(spooled)" = 0 ]
+}
+
+@test "T6: an ABSOLUTE sound (elicitation's ScreenReader chime) is spooled as-is, not under Sounds/" {
+  # The only event whose SOUND is already a full path. Prefixing it with SOUNDS_DIR enqueues a path
+  # that does not exist, which the player drops while this hook still logs `via player`.
+  rec_afplay; player_up 1
+  printf '%s' '{"session_id":"sess-t6","cwd":"/w/proj","message":"MCP server needs input"}' | "$H" elicitation
+  [ "$(spooled)" = 1 ]
+  [ "$(cat "$(CDIR)"/spool/*.req)" = /System/Library/PrivateFrameworks/ScreenReader.framework/Versions/A/Resources/Sounds/BubbleAppear.aiff ]
+  [ -z "$(afplay_argv)" ]
 }

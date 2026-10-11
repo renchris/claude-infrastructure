@@ -239,6 +239,22 @@ com.claude.coreaudiod-watch       | run    | 300  | ~/.claude/logs/coreaudiod-wa
 # the verdict. Its root twin, the restart watchdog, is a SYSTEM daemon in launchd/system/ installed by
 # the operator's migrations/0057-fseventsd-watchdog.sh, and deliberately has no row (gui domain only).
 com.claude.fseventsd-watch        | run    | 300  | ~/.claude/logs/fseventsd-watch.jsonl | — | 18-fleet-activate.sh
+# ── com.claude.chime-player (2026-10-10) ────────────────────────────────────────────────────────────
+# One resident coreaudiod client that plays every chime hooks/notify.sh admits, in place of a fresh
+# afplay per chime (3 TCC permission checks per new client vs 0 per play once resident, measured from
+# coreaudiod's log; the 2026-10-09 7-minute park behind trustd/secd). KeepAlive internal-loop daemon,
+# like the sentinel: interval_s is its internal tick rounded UP to the field's 1 s grain (it polls at
+# 0.25 s). `staged` until the operator runs 51-chime-player-activate.sh; until then notify.sh sees no
+# heartbeat and plays through afplay exactly as before. Its plist lives in launchd/staged/, like
+# relogin's and cc-gc's below: a plist in launchd/ is copied into ~/Library/LaunchAgents by every
+# converge and loaded at the next login, which would activate it with no operator decision.
+# EVIDENCE IS `-`, AND NEITHER ALTERNATIVE IS HONEST. The real per-tick product is its heartbeat,
+# which notify.sh already reads — but that lives under `getconf DARWIN_USER_TEMP_DIR`, a per-user
+# /var/folders hash this field cannot express (a literal path or `~/` only), and the dir is cleared at
+# reboot. `auto` would read StandardOutPath, which the player never writes (quiet by design: a start
+# line and drops go to stderr), so S5 would call a healthy player STALLED forever. With `-` launchd's
+# own counters still give S1-S4, and a crash-looping KeepAlive job is an S4 row.
+com.claude.chime-player           | staged | 1    | -    | — | 51-chime-player-activate.sh
 # ── com.claude.relogin (row 7, ACCOUNT_ROUTING_V2 M4) ──────────────────────────────────────────────
 # WHY IT WAS MISSING, and why that mattered: this label was invisible to the three-way coverage loop
 # because that loop globs launchd/*.plist and this plist lives in launchd/staged/ — deliberately, so
