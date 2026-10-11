@@ -17,8 +17,8 @@ scripts/lib/research-program.sh (wave A1's resolver, the one key every exemption
       A relay turn (completeness, pushback) also carries a one-line systemMessage, so the operator
       sees the route and the one word that undoes it.
       A machine-envelope FIRST prompt (no route record yet) is labeled without the classifier and
-      recorded `by: envelope`: work-order on a --requires-gate marker, else a named predecessor's
-      non-relayed label, else other. Outside every root (`--by prompt`) only a fired session's own
+      recorded `by: envelope`: work-order on a --requires-gate marker, else, for a recycle brief only
+      (a leading `[handoff `, no HANDOFF-ENGAGE-), a named predecessor's non-relayed label, else other. Outside every root (`--by prompt`) only a fired session's own
       brief (FIRE_BRIEF) is labeled so; any other envelope naming the program leaves the pane ordinary.
   router.py tool [--program P]                               (hooks/research-block.sh)
       PreToolUse. Prints a deny, or nothing (allow).
@@ -154,6 +154,8 @@ MACHINE_ENVELOPE = re.compile(
 # handoff-fire.sh embeds HANDOFF-ENGAGE- in every real non-recycle fire (its ENGAGE_VERIFY copy), and
 # a leading `[handoff ` marks a recycle brief. Outside every root only these route an unrouted pane.
 FIRE_BRIEF = re.compile(r"^\s*\[handoff |HANDOFF-ENGAGE-[A-Za-z0-9._-]+")
+RECYCLE_BRIEF = re.compile(r"^\s*\[handoff ")
+ENGAGE_MARKER = re.compile(r"HANDOFF-ENGAGE-[A-Za-z0-9._-]+")
 
 # The route definitions, shared word for word by the classifier and the held-out raters
 # (heldout-rate.py), so the sealed set's gold labels and the router answer the same question.
@@ -873,8 +875,8 @@ def genuine(prompt: str) -> bool:
 
 def envelope_label(prompt: str, slug: str, sid: str) -> Tuple[str, str]:
     """(label, reason) for a machine-envelope FIRST prompt, without the classifier: the work-order
-    marker, else the label of a predecessor session the envelope names, else `other`. A relayed
-    label is not inherited: it governs one re-ask turn, and the successor's brief is not one."""
+    marker, else, in a recycle brief, the label of a predecessor session it names, else `other`. A
+    relayed label is not inherited: it governs one re-ask turn, and the successor's brief is not one."""
     # Only a marker naming THIS program is a work order (as in classify): prose that merely quotes
     # the flag ("--requires-gate cannot carry a round") names no program and must not open allow-all.
     m = next(
@@ -885,6 +887,11 @@ def envelope_label(prompt: str, slug: str, sid: str) -> Tuple[str, str]:
             "work-order",
             f"machine envelope with the --requires-gate {m.group(1)} marker",
         )
+    # Only a recycle continues its predecessor. A fresh fire's brief is prose its author writes, so a
+    # uuid quoted in it would hand the worker any routed session's label; handoff-fire.sh puts
+    # HANDOFF-ENGAGE- in every fresh fire and never in a recycle, so that marker rules a brief out.
+    if not RECYCLE_BRIEF.search(prompt) or ENGAGE_MARKER.search(prompt):
+        return "other", "machine envelope that is not a recycle brief inherits no label"
     cands = [c.group(1).rstrip("._-") for c in PREDECESSOR.finditer(prompt)]
     for cand in cands + SESSION_UUID.findall(prompt):
         prev = route_load(cand) if cand != sid else None

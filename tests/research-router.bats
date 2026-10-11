@@ -216,13 +216,21 @@ label() { python3 "$ROUTER" status --session "${1:-s1}" | jq -r '.label // "none
   [ ! -s "$STUB_LOG" ]
 }
 
-@test "a machine-envelope first prompt that names a routed predecessor session inherits its label" {
+# A recycle brief carries no HANDOFF-ENGAGE- (handoff-fire.sh sets ENGAGE_VERIFY only when RECYCLE=0).
+# RED-proof for the fresh-fire half: on 5eb67c2a7 (any envelope inherited a named session's label)
+# succ-4 and succ-5 read work-order, so a fired brief quoting a routed uuid laundered allow-all.
+@test "only a recycle brief inherits a named predecessor's label; a fresh fire quoting a session inherits nothing" {
   state certifying
   prompt "build it" "$PROG/src" pred-1 >/dev/null
   [ "$(label pred-1)" = work-order ]
   : > "$STUB_LOG"
-  prompt "[handoff recycle] predecessor session pred-1. HANDOFF-ENGAGE-4-5-6" "$PROG/src" succ-3 >/dev/null
+  prompt "[handoff recycle] predecessor session pred-1." "$PROG/src" succ-3 >/dev/null
   [ "$(label succ-3)" = work-order ]
+  prompt "Run the next wave; predecessor session pred-1. HANDOFF-ENGAGE-4-5-6" "$PROG/src" succ-4 >/dev/null
+  [ "$(label succ-4)" = other ]
+  [ "$(tool Agent 'x' "$PROG/src" succ-4)" = deny ]
+  prompt "[handoff 2] predecessor session pred-1. HANDOFF-ENGAGE-4-5-7" "$PROG/src" succ-5 >/dev/null
+  [ "$(label succ-5)" = other ]
   [ ! -s "$STUB_LOG" ]
 }
 
