@@ -112,6 +112,16 @@ n_alarms() { find "$CC_COMMS_ALARM_DIR" -name 'undelivered-*.json' 2>/dev/null |
   pushed
 }
 
+# RED-proof: before 2026-10-11 the class tag was the line's FIRST bracket, `forwarded:BBBBBBBB`, so a
+# forwarded reaper page got the 600 s peer deadline and this 120 s-old one was not escalated.
+@test "F12: a FORWARDED reaper page keeps its urgent deadline — the tag is the origin's, not the hop's" {
+  ts="$(date -u -r "$((NOW - 120))" +%Y-%m-%dT%H:%M:%S+0000 2>/dev/null || date -u -d "@$((NOW-120))" +%Y-%m-%dT%H:%M:%S+0000)"
+  printf '%s [forwarded:BBBBBBBB] %s [reaper] a page\n' "$ts" "$ts" >> "$CC_MAILBOX_DIR/$U.md"
+  export CC_INBOX_GUARD_LIVE_UUIDS="$U"
+  run "$G" sweep
+  pushed
+}
+
 @test "F8: INDETERMINATE owner (it2 unreadable) → ESCALATE (silence is not fail-loud)" {
   msg_aged 3600 peer
   # no LIVE_UUIDS override + a broken it2 → owner_liveness returns indeterminate

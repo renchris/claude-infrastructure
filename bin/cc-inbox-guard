@@ -376,8 +376,14 @@ scan_window() { # <file> <acked> <lines> <now>
       n = 0; L = length($0)                    # ts = leading run of [0-9T:+-]  (== the old sed)
       while (n < L) { c = substr($0, n+1, 1); if (c ~ /^[0-9T:+-]$/) n++; else break }
       ts = substr($0, 1, n)
-      tag = ""; p = index($0, "[")             # from-tag = the FIRST [...] pair (== the old sed)
-      if (p > 0) { r = substr($0, p+1); q = index(r, "]"); if (q > 0) tag = substr(r, 1, q-1) }
+      # from-tag = the first [...] AFTER any forward chain. A forward reads `<ts> [forwarded:<box>] <ts>
+      # [reaper] …`, and taking its first bracket classed every forwarded page as `forwarded:…`, losing
+      # the urgent deadline (critic.md §1.2, 2026-10-11). The AGE stays the outer stamp, on purpose:
+      # this guard measures time unread in THIS box, and the origin stamp would make adopted mail overdue.
+      o = $0
+      while (match(o, /^[0-9T:+-]+ \[forwarded:[^]]*\] /)) o = substr(o, RLENGTH + 1)
+      tag = ""; p = index(o, "[")
+      if (p > 0) { r = substr(o, p+1); q = index(r, "]"); if (q > 0) tag = substr(r, 1, q-1) }
       # F12 class deadline — THE classifier (it replaced a class_deadline() shell fn; edit it HERE)
       dl = (tag ~ /reaper|supervisor|desk-invariant|deathwatch|PAGE|permission/) ? urg : dfl
       age = -1                                 # -1 = undecided ⇒ hand to the shell fallback
