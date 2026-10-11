@@ -4862,7 +4862,9 @@ rcy_composer_unreadable_static() { # $1=shape (dialog-above|glyph-below|tall-rej
     *)             what="the screen does not show a readable prompt box" ;;
   esac
   RCY_STATIC_WHY="the composer could not be read on a static screen ($shape: $what)${own:+; $own}"
-  emit_recycle_event recycle-held-unreadable-static "" "$SID" "composer UNREADABLE on a STATIC screen, shape $shape ($what), on two reads in a row; held at once (no deferral, no ${CC_RECYCLE_DRAFT_WAIT:-180}s wait), no keystroke sent${own:+; $own}" || true
+  # The screen it could not read, kept as the witness (REPORT.md fix 6, hf_hold_screen_witness).
+  HF_HOLD_SNAP="none (no witness taken)"; hf_hold_screen_witness "$SID" held-unreadable-static 2>/dev/null || true
+  emit_recycle_event recycle-held-unreadable-static "" "$SID" "composer UNREADABLE on a STATIC screen, shape $shape ($what), on two reads in a row; held at once (no deferral, no ${CC_RECYCLE_DRAFT_WAIT:-180}s wait), no keystroke sent${own:+; $own}; screen $HF_HOLD_SNAP" || true
   echo "!! recycle HELD: pane $SID's composer cannot be read and the screen is static, not a running turn — shape $shape: $what. Waiting would not change it, so this holds now. Nothing was typed: under a dialog a keystroke is taken as its answer. ${own:+Note: $own. }The session stays alive. Re-run once the pane shows a plain empty prompt box: $CMD" >&2
   return 0
 }

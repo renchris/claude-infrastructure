@@ -256,12 +256,18 @@ reads() { wc -l < "$READS" | tr -d ' '; }
 
 @test "[RED] F3: a STATIC unreadable screen at rest is HELD at once as recycle-held-unreadable-static — no deferral, no full gate, nothing typed" {
   screen_slash_menu; tx_tool_use; tx_tool_result 0; tx_end_turn 1
+  # The witness store runs for real over the fix-6 transport stub (its reads are not `session read`s).
+  export HF_DIR="$REPO/scripts" LR_COMPOSER_SNAP_DIR="$W/snaps" LCS_CC_TUI="$W/cc-tui-stub.sh" STUB_IN_KITTY=1
+  # shellcheck disable=SC2016  # expanded by the stub library, not here
+  printf 'cc_tui_rpc() { cat "$SCREEN_FILE"; }\n' > "$LCS_CC_TUI"
   HF_COMPOSER_SLASH_MENU=off CC_RECYCLE_TURN_WAIT_PROBE_S=2 CC_RECYCLE_DRAFT_WAIT=10 CALLER_PID="$DEAD_PID" run "$DRIVER" 3>&-
   [ "$status" -eq 1 ]
   event recycle-held-unreadable-static
   grep -q 'dialog-above' "$EVENTS"
   not event recycle-deferred-turn
   [ "$(reads)" -le 3 ] || { echo "reads=$(reads)"; false; }
+  snap="$(find "$LR_COMPOSER_SNAP_DIR" -name '*.ansi' 2>/dev/null | head -n 1)"
+  [ -n "$snap" ] && grep -qF "screen $snap" "$EVENTS" || { echo "no screen witness named"; cat "$EVENTS"; false; }
   not armed; [ ! -s "$SENT_LOG" ]
   # No receipt for our own /exit: the hold does not claim the box holds it.
   not grep -q 'our own /exit' "$EVENTS"
