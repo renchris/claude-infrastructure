@@ -5,6 +5,7 @@
     lr-lock.py status <sid|sid-prefix> [--json]     one lock, classified
     lr-lock.py release <sid|sid-prefix> --why "<text>" [--force]
     lr-lock.py reap [--ttl SECONDS] [--dry-run]     archive every EXPIRED lock (the TTL)
+    lr-lock.py evidence-gc [--dry-run] [--min-age-days N]   free evidence bytes an account store holds
 
 THE DEFECT (cc-backlog 4f8c73bbdb35, VOLUNTARY_ACCOUNT_SWITCH.md § 9). lr-transplant.sh writes
 `$LR_STATE_DIR/locks/<sid>.lock` and nothing on the tree ever removed one: no TTL, no release verb.
@@ -53,15 +54,32 @@ the same target is renamed `<sid>.HANDOFF.json.released` too — `lr_transplant_
 when the lock is gone, and would otherwise keep calling a live source pane a husk. A forced release of
 CUSTODY/SPLIT leaves the tombstone: that move DID happen, and only the lock is being given up.
 
+EVIDENCE GC (decision 6d4722735677, 2026-10-11). lr-transplant files a disowned target copy into
+`locks/<sid>.<aborted|unconfirmed|failed-admit>-<UTCts>/` and never deletes it. `evidence-gc` frees an
+evidence dir's `<sid>.jsonl` and `<sid>/` once the dir is N days old (LR_EVIDENCE_GC_DAYS, default 7),
+and ONLY when every file is proven to exist in an account store: a .jsonl must be a byte-prefix of, and
+any other file identical to, the same name in a store's live `<sid>.jsonl`, `<sid>.jsonl.handed-off`
+or `<sid>/`. A `.stale-*` or `.released-*` copy, another evidence dir, anything resolving into the
+state dir, or the same inode never covers. Measured at decision time: 31/31 dirs covered, 0 unique
+bytes. Crash-safe receipt: GC.json.pending → per-file re-check, then delete → GC.json (per file: rel,
+bytes, covered_by, so `head -c <bytes> <covered_by>` rebuilds it). A sid whose lock has a live holder
+is skipped (confirm's `cp -p` and abort's `mv` rewrite the covering file). A dir with ANY uncovered
+file is kept whole: that is the incident the old never-delete rule guarded against (turns that exist
+nowhere else), so it gets ONE `EVIDENCE-KEPT` stamp, a count in `cc-lr status`, and one page.
+
 Exit: 0 ok · 1 no such lock · 2 REFUSED (nothing changed) · 3 usage.
 Env: LR_STATE_DIR (default ~/.reso/limit-recover) · LR_LOCK_TTL_S (default 21600) ·
-     LR_LOCK_SLACK_S (default 60) · LR_NOW (epoch; tests).
+     LR_LOCK_SLACK_S (default 60) · LR_NOW (epoch; tests) · LR_CONFIG_DIRS (colon list of stores) ·
+     LR_EVIDENCE_GC_DAYS (default 7) · LR_EVIDENCE_GC_PAGE_BIN (default lr-page.sh beside this file).
 """
 
+import fcntl
 import glob
 import json
 import os
+import re
 import socket
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -596,6 +614,381 @@ def cmd_reap(args):
     return rc
 
 
+EVIDENCE_RE = re.compile(
+    r"^(?P<sid>[0-9a-fA-F-]{8,})\.(?P<kind>aborted|unconfirmed|failed-admit)-"
+    r"(?P<ts>\d{8}T\d{6}Z)(?:\.\d+)?$"
+)
+
+
+def config_dirs():
+    """The account stores, as lr-lib.sh lr_config_dirs: LR_CONFIG_DIRS, else the five homes deduped
+    by the PHYSICAL projects/ they read (first spelling wins)."""
+    env = os.environ.get("LR_CONFIG_DIRS", "")
+    if env:
+        return [d for d in env.split(":") if d]
+    home = os.path.expanduser("~")
+    out, seen = [], set()
+    for n in (
+        ".claude",
+        ".claude-next",
+        ".claude-secondary",
+        ".claude-tertiary",
+        ".claude-quaternary",
+    ):
+        h = os.path.join(home, n)
+        if not os.path.isdir(os.path.join(h, "projects")):
+            continue
+        key = os.path.realpath(os.path.join(h, "projects"))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(h)
+    return out
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _lstart(pid):
+    """`ps -o lstart=` in UTC, blanks collapsed (lr-transplant.sh lrt_lstart); empty when none."""
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=dict(os.environ, TZ="UTC", LC_ALL="C"),
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return " ".join(out.split())
+
+
+def lock_held(sid):
+    """True when locks/<sid>.lock names a LIVE process: its holder (pid + lstart, lrt_live semantics),
+    or the transplant pid that wrote it, unless that pid was started after the lock (a reused pid).
+    Unreadable process facts read as held: a skipped dir is retried tomorrow, a raced one is not."""
+    _, rec = read_lock(os.path.join(LOCKS_DIR, sid + ".lock"))
+    if not rec:
+        return False
+    h = rec.get("holder") if isinstance(rec.get("holder"), dict) else {}
+    hp = h.get("pid")
+    if isinstance(hp, int) and not isinstance(hp, bool) and hp > 0 and _pid_alive(hp):
+        want = " ".join(str(h.get("lstart") or "").split())
+        if not want or _lstart(hp) == want:
+            return True
+    p = rec.get("pid")
+    if isinstance(p, int) and not isinstance(p, bool) and p > 0 and _pid_alive(p):
+        started, ts = _lstart(p), ts_epoch(rec.get("ts"))
+        try:
+            st = int(
+                datetime.strptime(started, "%a %b %d %H:%M:%S %Y")
+                .replace(tzinfo=timezone.utc)
+                .timestamp()
+            )
+        except ValueError:
+            return True
+        if ts is None or st <= ts + SLACK_S:
+            return True
+    return False
+
+
+def _under(path, root):
+    r = os.path.realpath(root)
+    return os.path.realpath(path) == r or os.path.realpath(path).startswith(r + os.sep)
+
+
+def _covers(ev, cand, prefix):
+    if _under(cand, STATE_DIR):
+        return False
+    try:
+        if os.path.samefile(ev, cand):
+            return False
+    except OSError:
+        return False
+    if not prefix and os.path.getsize(ev) != os.path.getsize(cand):
+        return False
+    return is_byte_prefix(ev, cand)
+
+
+def cover_index(sid, stores):
+    """→ (main transcript candidates, slug dirs that hold a <sid>/ session dir), from ONE glob per
+    store. A projects/* glob walks ~17,200 dirs per store; one per FILE (405 in a session dir) made
+    the first live dry run CPU-bound for minutes, so callers resolve each file inside these dirs."""
+    mains, slugs = [], []
+    for s in stores:
+        for p in sorted(
+            glob.glob(
+                os.path.join(glob.escape(s), "projects", "*", glob.escape(sid) + "*")
+            )
+        ):
+            n = os.path.basename(p)
+            if n in (sid + ".jsonl", sid + ".jsonl.handed-off") and os.path.isfile(p):
+                mains.append(p)
+            elif n == sid and os.path.isdir(p) and not os.path.islink(p):
+                slugs.append(os.path.dirname(p))
+    return mains, slugs
+
+
+def cover_of(ev, rel, sid, idx):
+    """→ the store path that holds `ev` (relative name `rel` inside the evidence dir), or None."""
+    mains, slugs = idx
+    if rel == sid + ".jsonl":
+        cands = mains
+    else:
+        cands = [
+            p
+            for p in (os.path.join(d, rel) for d in slugs)
+            if os.path.isfile(p) and not os.path.islink(p)
+        ]
+    for c in cands:
+        if _covers(ev, c, rel.endswith(".jsonl")):
+            return c
+    return None
+
+
+def evidence_files(ev_dir, sid):
+    """→ [(rel, abspath)] of every entry GC would delete: <sid>.jsonl and everything under <sid>/.
+    A symlink or special file is listed with abspath None, which never verifies (kept)."""
+    out = []
+    main = os.path.join(ev_dir, sid + ".jsonl")
+    if os.path.lexists(main):
+        out.append(
+            (
+                sid + ".jsonl",
+                main if os.path.isfile(main) and not os.path.islink(main) else None,
+            )
+        )
+    top = os.path.join(ev_dir, sid)
+    if os.path.isdir(top) and not os.path.islink(top):
+        for root, dirs, files in os.walk(top):
+            for n in sorted(files) + sorted(
+                d for d in dirs if os.path.islink(os.path.join(root, d))
+            ):
+                p = os.path.join(root, n)
+                rel = os.path.relpath(p, ev_dir)
+                out.append(
+                    (rel, p if os.path.isfile(p) and not os.path.islink(p) else None)
+                )
+    elif os.path.lexists(top):
+        out.append((sid, None))
+    return out
+
+
+def _write_json(path, obj):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(obj, fh, sort_keys=True, indent=1)
+        fh.write("\n")
+    os.rename(tmp, path)
+
+
+def _load_files(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            d = json.load(fh)
+        return [f for f in d.get("files", []) if isinstance(f, dict)]
+    except (OSError, ValueError, AttributeError):
+        return []
+
+
+def _prune_dirs(top):
+    """Remove the now-empty directories under (and including) `top`; a dir that is not empty stays."""
+    if not os.path.isdir(top) or os.path.islink(top):
+        return
+    for root, dirs, _files in os.walk(top, topdown=False):
+        for d in dirs:
+            try:
+                os.rmdir(os.path.join(root, d))
+            except OSError:
+                pass
+    try:
+        os.rmdir(top)
+    except OSError:
+        pass
+
+
+def gc_one(ev_dir, sid, stores, dry, new_kept):
+    """→ (verdict, bytes). verdict: done | empty | held | kept | freed | would-free | raced."""
+    receipt, pending = (
+        os.path.join(ev_dir, "GC.json"),
+        os.path.join(ev_dir, "GC.json.pending"),
+    )
+    files = evidence_files(ev_dir, sid)
+    if not files:
+        if (
+            os.path.exists(pending) and not dry
+        ):  # died after the last delete, before the rename
+            os.rename(pending, receipt)
+        return (
+            "done" if os.path.exists(receipt) or os.path.exists(pending) else "empty"
+        ), 0
+    if lock_held(sid):
+        return "held", 0
+    plan, uncovered = [], []
+    idx = cover_index(sid, stores)
+    for rel, p in files:
+        c = cover_of(p, rel, sid, idx) if p else None
+        if c is None:
+            uncovered.append(rel)
+        else:
+            plan.append((rel, p, c, os.path.getsize(p)))
+    if uncovered:
+        stamp = os.path.join(ev_dir, "EVIDENCE-KEPT")
+        if not dry and not os.path.exists(stamp):
+            _write_json(
+                stamp,
+                {
+                    "ts": iso(NOW),
+                    "uncovered": len(uncovered),
+                    "first": uncovered[0],
+                    "files": len(files),
+                },
+            )
+            new_kept.append((ev_dir, len(uncovered), uncovered[0]))
+        return "kept", 0
+    nbytes = sum(b for _, _, _, b in plan)
+    if dry:
+        return "would-free", nbytes
+    # A run that died mid-way left a .pending naming files it already freed; they stay on the receipt.
+    planned = {r for r, _, _, _ in plan}
+    recs = [
+        f
+        for f in (_load_files(pending) or _load_files(receipt))
+        if f.get("rel") not in planned
+    ]
+    recs += [{"rel": r, "bytes": b, "covered_by": c} for r, _, c, b in plan]
+    body = {
+        "sid": sid,
+        "dir": ev_dir,
+        "ts": iso(NOW),
+        "files": recs,
+        "freed_bytes": sum(int(f.get("bytes") or 0) for f in recs),
+        "by": "evidence-gc pid=%d host=%s" % (os.getpid(), socket.gethostname()),
+    }
+    _write_json(pending, body)
+    # A transplant may have taken the sid between the verify pass and the first delete.
+    if lock_held(sid):
+        return "held", 0
+    freed = 0
+    idx = cover_index(
+        sid, stores
+    )  # re-resolved: a store copy may have moved since the pass
+    for rel, p, _c, b in plan:
+        # RE-CHECKED right before its delete: the covering copy may have been rewritten since the pass.
+        if cover_of(p, rel, sid, idx) is None:
+            return "raced", freed
+        os.unlink(p)
+        freed += b
+    _prune_dirs(os.path.join(ev_dir, sid))
+    os.rename(pending, receipt)
+    return "freed", freed
+
+
+def _page(new_kept):
+    if not new_kept:
+        return
+    pg = os.environ.get("LR_EVIDENCE_GC_PAGE_BIN") or os.path.join(
+        os.path.dirname(os.path.realpath(__file__)), "lr-page.sh"
+    )
+    d, k, first = new_kept[0]
+    msg = (
+        "limit-recover evidence: %d dir(s) hold bytes no account store has — turns that may exist "
+        "nowhere else, kept untouched. First: %s (%d uncovered, e.g. %s). `cc-lr status` counts them."
+        % (len(new_kept), os.path.basename(d), k, first)
+    )
+    try:
+        r = subprocess.run(
+            ["/bin/bash", pg, "--title", "evidence kept", "--", msg],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        v = (r.stdout.strip().splitlines() or ["lr-page: no verdict"])[-1]
+    except (OSError, subprocess.SubprocessError) as e:
+        v = "lr-page: not run (%s)" % e
+    print("EVIDENCE-PAGE %s" % v)
+
+
+def cmd_evidence_gc(args):
+    dry, days, i = False, _int_env("LR_EVIDENCE_GC_DAYS", 7), 0
+    while i < len(args):
+        a = args[i]
+        if a == "--dry-run":
+            dry = True
+        elif a == "--min-age-days" and i + 1 < len(args):
+            i += 1
+            try:
+                days = int(args[i])
+            except ValueError:
+                return usage()
+        else:
+            return usage()
+        i += 1
+    try:
+        names = sorted(os.listdir(LOCKS_DIR))
+    except FileNotFoundError:
+        names = []
+    mutex = None
+    if not dry:
+        try:
+            mutex = open(os.path.join(STATE_DIR, "evidence-gc.lock"), "a")
+        except OSError as e:
+            print("evidence-gc: verdict=no-state — %s (%s)" % (STATE_DIR, e.strerror))
+            return RC_OK
+        try:
+            fcntl.flock(mutex, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            print(
+                "evidence-gc: verdict=busy — another run holds %s/evidence-gc.lock"
+                % STATE_DIR
+            )
+            return RC_OK
+    stores = config_dirs()
+    tally, nbytes, new_kept = {}, 0, []
+    for n in names:
+        m = EVIDENCE_RE.match(n)
+        ev_dir = os.path.join(LOCKS_DIR, n)
+        if not m or not os.path.isdir(ev_dir) or os.path.islink(ev_dir):
+            continue
+        # Age from the NAME (when lr-transplant filed it), never mtime: GC itself writes in the dir.
+        filed = datetime.strptime(m.group("ts"), "%Y%m%dT%H%M%SZ")
+        age = NOW - int(filed.replace(tzinfo=timezone.utc).timestamp())
+        if age < days * 86400:
+            v, b = "young", 0
+        else:
+            v, b = gc_one(ev_dir, m.group("sid"), stores, dry, new_kept)
+        tally[v] = tally.get(v, 0) + 1
+        nbytes += b
+        if v in ("freed", "would-free", "kept", "raced", "held"):
+            print("EVIDENCE-%s %s %d bytes" % (v.upper(), n, b))
+    if not dry:
+        _page(new_kept)
+    print(
+        "evidence-gc: verdict=%s dirs=%d %s=%d bytes (%.1f MB) stores=%d min_age_days=%d %s"
+        % (
+            "dry-run" if dry else "ok",
+            sum(tally.values()),
+            "would_free" if dry else "freed",
+            nbytes,
+            nbytes / 1048576.0,
+            len(stores),
+            days,
+            " ".join("%s=%d" % kv for kv in sorted(tally.items())),
+        )
+    )
+    return RC_OK
+
+
 def usage():
     sys.stderr.write(__doc__.split("\n\n")[1] + "\n")
     return RC_USAGE
@@ -610,6 +1003,7 @@ def main(argv):
         "status": cmd_status,
         "release": cmd_release,
         "reap": cmd_reap,
+        "evidence-gc": cmd_evidence_gc,
     }
     if argv[0] not in verbs:
         return usage()

@@ -2197,6 +2197,18 @@ cl_status_cohort() { # [cid] → rc 0 (also for "none") · 1 the named cohort is
   return 0
 }
 
+# EVIDENCE THAT EXISTS NOWHERE ELSE (decision 6d4722735677). `lr-lock.py evidence-gc` keeps an evidence
+# dir whole and stamps it EVIDENCE-KEPT when any file is in no account store, i.e. a session's turns
+# that may exist only there. Its page goes out once; this count stays until the dir is resolved.
+cl_evidence_kept() { # → one line when any evidence dir is kept uncovered; silent otherwise
+  local m n=0 first=""
+  for m in "$STATE"/locks/*/EVIDENCE-KEPT; do
+    [ -e "$m" ] && [ ! -e "${m%/EVIDENCE-KEPT}/GC.json" ] || continue
+    n=$((n + 1)); [ -n "$first" ] || first="${m%/EVIDENCE-KEPT}"
+  done
+  [ "$n" -eq 0 ] || printf 'EVIDENCE-KEPT  %d evidence dir(s) hold bytes no account store has (turns that may exist nowhere else); first: %s\n' "$n" "$first"
+}
+
 cmd_status() {
   local ref="" f n out mt st
   local FILES
@@ -2241,6 +2253,7 @@ EOF
     # double-quoted string; $ref does expand. Quoting the ref is what makes an empty or
     # space-bearing ref legible in the refusal.
     echo "cc-lr: no runs under $STATE${ref:+ for '$ref'}" >&2
+    [ -n "$ref" ] || cl_evidence_kept
     return 1
   fi
   out=""; mt=""
@@ -2436,6 +2449,7 @@ EOS
         if (sid in plog) printf "  poller: %s\n", plog[sid]
       }
     }'
+  [ -n "$ref" ] || cl_evidence_kept
   return 0
 }
 

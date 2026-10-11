@@ -272,6 +272,50 @@ lrp_recon_watchdog() {
 }
 lrp_recon_watchdog
 
+# ── THE EVIDENCE GC, ONCE A DAY, DETACHED (decision 6d4722735677, 2026-10-11) ─────────────────────
+# `lr-lock.py evidence-gc` frees an evidence dir's bytes after 7 days only when every file is proven
+# to be in an account store; see its docstring. It reads about twice what it frees (~3.7 GB on its
+# first big day), so it never runs inside this tick: started through scripts/lib/detach.sh (its own
+# session, so neither launchd's group kill nor a tool call's takes it) under `taskpolicy -c utility`,
+# which throttles I/O as well as CPU (nice alone does not). It is a python process, so cc-reaper's
+# 600 s orphan-bash TERM does not apply. The stamp is touched BEFORE the start, so a run that dies is
+# retried tomorrow, not every tick. Kill switch LR_EVIDENCE_GC=off.
+# 🚨 ONLY THE LIVE LAYER STARTS IT, AND ONE AT A TIME (WP7, load investigation 2026-10-11). The first
+# version started one from EVERY tick of every poller test run (a fresh fixture state each time, so
+# the stamp never held) under `taskpolicy -b`, and the background band never runs at load 400-600:
+# 133 of them sat runnable for hours and fed the load they were starved by. So (1) this copy's
+# lr-lock.py must BE the deployed one (`$HOME/.claude/scripts/limit-recover/lr-lock.py`, resolved),
+# which no worktree, snapshot or fixture $HOME is; (2) a run still alive (evidence-gc.pid, kill -0)
+# skips the start; (3) `-c utility`, not `-b`: utility still yields to interactive work but finishes
+# at saturation, where background never gets a slice.
+lrp_evidence_gc_kick() {
+  local stamp="$STATE/evidence-gc.stamp" pidf="$STATE/evidence-gc.pid" py="$LR/lr-lock.py" live
+  local det="" d pid tp=/usr/sbin/taskpolicy
+  [[ "${LR_EVIDENCE_GC:-on}" != off ]] || return 0
+  [[ ! -e "$stamp" ]] || [[ -n "$(find "$stamp" -mmin +"${LR_EVIDENCE_GC_EVERY_MIN:-1440}" 2>/dev/null)" ]] || return 0
+  live="$(/usr/bin/readlink -f "$HOME/.claude/scripts/limit-recover/lr-lock.py" 2>/dev/null)"
+  if [[ -z "$live" || "$(/usr/bin/readlink -f "$py" 2>/dev/null)" != "$live" ]]; then
+    log "EVIDENCE-GC-SKIP $py is not the deployed layer's lr-lock.py; only the live poller starts the GC"; return 0
+  fi
+  pid="$(cat "$pidf" 2>/dev/null)"
+  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+    log "EVIDENCE-GC-SKIP the previous run (pid $pid) is still going"; return 0
+  fi
+  if [[ $DRY -eq 1 ]]; then log "DRY   evidence GC would start: python3 $py evidence-gc"; return 0; fi
+  for d in "$LR/../lib/detach.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/detach.sh" "$HOME/.claude/scripts/lib/detach.sh"; do
+    [[ -f "$d" ]] && { det="$d"; break; }
+  done
+  if [[ ! -f "$py" || -z "$det" ]]; then log "EVIDENCE-GC-SKIP lr-lock.py or scripts/lib/detach.sh unreachable"; return 0; fi
+  [[ -x "$tp" ]] || tp=""
+  : > "$stamp" 2>/dev/null || true
+  # shellcheck disable=SC1090  # runtime-resolved sibling
+  pid="$( . "$det" && detach "$STATE/evidence-gc.log" /usr/bin/env LR_STATE_DIR="$STATE" ${tp:+"$tp" -c utility} /usr/bin/python3 "$py" evidence-gc 2>/dev/null )" || pid=""
+  if [[ "$pid" =~ ^[0-9]+$ ]]; then printf '%s\n' "$pid" > "$pidf" 2>/dev/null; log "EVIDENCE-GC started pid $pid (log $STATE/evidence-gc.log)"
+  else log "EVIDENCE-GC could not be started (retried tomorrow)"; fi
+  return 0
+}
+lrp_evidence_gc_kick
+
 # ── THE MOVE LANE'S KICK (design-swap-v3 N5, 2026-10-04): the first work of the tick ────────────
 # `cc-lr move` writes <state>/move/<batch>/{plan.json,intent/} and one request, then kickstarts this
 # job. The batch runner must not be a child of the session that asked (auto mode refuses an agent

@@ -426,9 +426,12 @@ lrt_assert_lock() { # every custody phase runs under the admit's lock: present, 
 lrt_size() { wc -c < "$1" | tr -d ' '; }
 lrt_sha() { shasum -a 256 "$@" | cut -d' ' -f1; }
 lrt_sha_cat() { cat "$@" | shasum -a 256 | cut -d' ' -f1; }
-# EVIDENCE, NEVER DELETION. The target copy an unconfirm/abort disowns is moved into a directory made
-# fresh for this run, so the `mv` has nothing to overwrite. A tombstone left by an EARLIER cycle at
-# the renamed path is filed there too, so the link-then-unlink rename below always has a free name.
+# EVIDENCE, NEVER DELETED HERE. The target copy an unconfirm/abort disowns is moved into a directory
+# made fresh for this run, so the `mv` has nothing to overwrite. A tombstone left by an EARLIER cycle
+# at the renamed path is filed there too, so the link-then-unlink rename below always has a free name.
+# The bytes are removed later by ONE reader only, `lr-lock.py evidence-gc` (decision 6d4722735677):
+# after 7 days, and only once every file is proven to exist in an account store (a byte-prefix of a
+# live .jsonl, identical otherwise). A dir with any uncovered file is kept whole, stamped and paged.
 lrt_file_evidence() { # $1=kind (unconfirmed|aborted) $2=slug $3=tombstone (may be absent) → sets EVIDENCE
   EVIDENCE="$LOCK_DIR/$SID.$1-$(date -u +%Y%m%dT%H%M%SZ)"
   mkdir "$EVIDENCE" 2>/dev/null || { EVIDENCE="$EVIDENCE.$$"; mkdir "$EVIDENCE"; }
@@ -950,10 +953,12 @@ LRT_HOLDER_JSON="$(lrt_holder_json)"
 # request as "transplanted" (lr_transplanted_to reads `to` off the lock) while the session sat
 # LIMITED, and a lead's mail woke it, not the rail.
 # So a run that writes a FRESH lock — no lock and no target transcript before it — arms an EXIT
-# trap for that window: on a non-zero exit it moves the partial copy into an evidence dir (never a
-# deletion) and releases the lock, but only a lock that still records THIS pid. A lock or a target
-# copy that predates the run (a second hop, a --force over a stale lock or copy) is someone else's
-# custody and is left exactly as trunk left it. Disarmed the moment the sha check passes.
+# trap for that window: on a non-zero exit it moves the partial copy into an evidence dir (not a
+# deletion: only `lr-lock.py evidence-gc` frees it, once every file is proven to be in an account
+# store; see lrt_file_evidence) and releases the lock, but only a lock that still records THIS pid.
+# A lock or a target copy that predates the run (a second hop, a --force over a stale lock or copy)
+# is someone else's custody and is left exactly as trunk left it. Disarmed the moment the sha check
+# passes.
 LRT_CLEANUP=0 LRT_DIR_FRESH=0
 # A target that already holds a live copy before this run is never swept at admit (THE RETURN HOP):
 # its marker may be a later move's tombstone, which is the hazard THE SWEEP NEVER UNDOES describes.
