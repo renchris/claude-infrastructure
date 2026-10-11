@@ -8522,6 +8522,7 @@ hf_alarm() { # $1=class  $2=pane  $3=sid  $4=successor  $5=detail  [$6=refire_cm
   # alarm of the run, so each failure arm says where the saved copy is.
   [ -z "${HF_RCY_CARRY_DIR:-}" ] || _raw="$_raw — the pane's unsent prompt-box text was saved before the /exit: $HF_RCY_CARRY_DIR"
   local _notify _dir _file _stamp _ts _detail _out _rc _verdict _token _role _addr
+  local _paged _lrp _prc _pout _hd _msg _body
   _notify="${CC_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}"
   _role="${CC_COMPLETION_ROLE:-desk}"
 
@@ -8556,6 +8557,43 @@ hf_alarm() { # $1=class  $2=pane  $3=sid  $4=successor  $5=detail  [$6=refire_cm
     printf '{"kind":"handoff-alarm","class":"%s","pane":"%s","sid":"%s","successor":"%s","detail":"%s","ts":"%s","address":"%s"}\n' \
       "$_class" "$_pane" "$_sid" "$_succ" "$_detail" "$_ts" "$_addr" > "$_dir/$_file" 2>/dev/null || true
   fi
+
+  # STRAND PAGE, between the record and the push (docs/research/recycle-failures-kitty-2026-10-10/
+  # REPORT.md fix 7). A relaunch-failed or dead recycle leaves a pane with no live continuation, and
+  # the push below cannot reach anyone for that: no `desk` role exists (19 of 20 verdicts were
+  # refused-rc3), and the sid fallback is the predecessor that just exited. F1's operator heard 2 h
+  # later, from an aggregate banner. So a strand class posts ONE OS banner of its own through
+  # lr-page, BEFORE the bounded push spends its time. The text is a HANDLE (class, pane, record
+  # path), never the relaunch command: the OS leg truncates at 200 chars and F1's line was 559. The
+  # outcome is spliced into the record as `paged`, so the record says whether a human was reached;
+  # autonomy-sweep's strand rung re-pages any record whose `paged` is not a success.
+  # HF_ALARM_STRAND_PAGE=off skips the page (the record then says paged=off).
+  case "$_class" in
+    recycle-relaunch-failed|recycle-dead)
+      _hd="$_dir"; case "$_hd" in "$HOME"/*) _hd="~${_hd#"$HOME"}" ;; esac
+      _msg="$_class · pane $_pane · its continuation is stranded · record $_hd/$_file"
+      if [ "${HF_ALARM_STRAND_PAGE:-on}" = off ]; then
+        _paged=off
+      elif _lrp="$(hf_lr_script lr-page.sh HF_ALARM_LR_PAGE_BIN)"; then
+        # $BASH, not a bare `bash`: a watcher's PATH is whatever detach() inherited. The bound covers
+        # both legs (OS 10 s + phone 20 s inside lr-page) plus their kill grace.
+        _prc=0
+        _pout="$(hf_bounded_s 35 "${BASH:-/bin/bash}" "$_lrp" --title "stranded pane $_pane" -- "${_msg:0:200}" 2>/dev/null)" || _prc=$?
+        if [ "$_prc" -ne 0 ]; then _paged="failed:$_prc"
+        else case "$_pout" in *os=posted*) _paged=os-banner ;; *) _paged=phone ;; esac
+        fi
+      else
+        _paged="failed:unreachable"
+      fi
+      # Splice, not rebuild: the record is one `{…}` line from either writer above, and the token
+      # carries no quote or backslash. Builtins only, so a box with no jq splices too.
+      if IFS= read -r _body < "$_dir/$_file" 2>/dev/null; then
+        case "$_body" in
+          '{'*'}') printf '%s,"paged":"%s"}\n' "${_body%\}}" "$_paged" > "$_dir/$_file" 2>/dev/null || true ;;
+        esac
+      fi
+      ;;
+  esac
 
   # PUSH SECOND, bounded, with its verdict kept. `|| _rc=$?` rather than `|| true`: this file runs
   # under `set -e`, and a bare assignment from a failing substitution would abort the caller — the

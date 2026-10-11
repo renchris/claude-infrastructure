@@ -45,14 +45,37 @@ setup() {
   # answers on stderr the way cc-notify does — a `verdict=` token the caller must parse — and
   # exits ${STUB_RC:-3}: the DEFAULT is the refusal, because refusal is this box's live state and
   # a fixture whose default is success would test the path that is not failing.
+  ORDER_LOG="$BATS_TEST_TMPDIR/order.log"
+  export ORDER_LOG
   cat > "$BATS_TEST_TMPDIR/bin/cc-notify" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$NOTIFY_LOG"
+echo push >> "$ORDER_LOG"
 printf 'cc-notify: verdict=%s enqueued=0\n' "${STUB_VERDICT:-unresolvable}" >&2
 exit "${STUB_RC:-3}"
 SH
   chmod +x "$BATS_TEST_TMPDIR/bin/cc-notify"
   export CC_NOTIFY_BIN="$BATS_TEST_TMPDIR/bin/cc-notify"
+
+  # The STRAND PAGE's OS leg (docs/research/recycle-failures-kitty-2026-10-10/REPORT.md fix 7) goes
+  # through the REAL lr-page.sh with its osascript stubbed — every test, not only the strand cases,
+  # because recycle-dead is a strand class and a test that forgot the stub would post a real banner.
+  # The stub logs the message (argv 3, after `-` and the title) one line per post, and exits
+  # ${OSA_RC:-0}. Phone leg: no credentials anywhere in this sandbox, so lr-page skips it.
+  OSA_LOG="$BATS_TEST_TMPDIR/osascript.log"
+  export OSA_LOG
+  cat > "$BATS_TEST_TMPDIR/bin/osascript" <<'SH'
+#!/usr/bin/env bash
+cat >/dev/null
+printf '%s\n' "$3" >> "$OSA_LOG"
+echo page >> "$ORDER_LOG"
+exit "${OSA_RC:-0}"
+SH
+  chmod +x "$BATS_TEST_TMPDIR/bin/osascript"
+  export LR_PAGE_OSASCRIPT_BIN="$BATS_TEST_TMPDIR/bin/osascript" LR_PAGE_OS_CHANNEL=on
+  export LR_PAGE_LOG="$BATS_TEST_TMPDIR/pages.log" LR_PAGE_CREDS="$BATS_TEST_TMPDIR/no-such-creds"
+  export HF_ALARM_LR_PAGE_BIN="$REPO/scripts/limit-recover/lr-page.sh"
+  unset PUSHOVER_TOKEN PUSHOVER_USER
 
   # Extract the real functions. Each is a plain `name() { … }` block terminated by a lone `}`.
   # HF_TIMEOUT_BIN is pinned empty by the driver: the no-bound branch is the shipped fallback on a
@@ -69,6 +92,7 @@ SH
   {
     sed -n '/^hf_bounded_s()/,/^}/p' "$FIRE"
     sed -n '/^hf_bounded()/,/^}/p'   "$FIRE"
+    sed -n '/^hf_lr_script()/,/^}/p' "$FIRE"
     sed -n '/^hf_alarm()/,/^}/p'     "$FIRE"
   } > "$LIB"
   # Fail loud if the chain ever changes shape again, rather than degrading into rc 127 as above.
@@ -294,6 +318,70 @@ and then	a back\slash' ] || { rec; false; }
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *CALLER-CONTINUED* ]] || { echo "$output"; false; }
   /usr/bin/python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["detail"] == "he said '"'"'boom'"'"'", d' "$(records)"
+}
+
+# ── 6c. STRAND PAGE (recycle-failures-kitty REPORT.md fix 7): a stranded pane reaches a HUMAN ──────
+# F1: the relaunch failed, the pane sat at a bare shell, and the only push went to a `desk` role that
+# does not exist (rc 3) or to the sid of the predecessor that had just exited. The operator heard 2 h
+# later, from an aggregate banner. A strand class now posts ONE short OS banner of its own.
+
+osa_posts() { [ -f "$OSA_LOG" ] && wc -l < "$OSA_LOG" | tr -d ' ' || echo 0; }
+
+@test "STRAND PAGE: a relaunch-failed alarm with a dead sid yields exactly ONE short page carrying the handle, before the push" {
+  # F1's own shape: a dead predecessor sid and a relaunch line far past the OS leg's 200-char cap.
+  local long; long="HANDOFF-RECYCLE-RELAUNCH-FAILED: relaunch write into 44 failed twice — Run manually in that pane: $(printf 'x%.0s' $(seq 1 520))"
+  alarm recycle-relaunch-failed 44 DEAD-PREDECESSOR-SID "" "$long"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *CALLER-CONTINUED* ]] || { echo "$output"; false; }
+  [ "$(osa_posts)" -eq 1 ] || { cat "$OSA_LOG"; false; }
+  local msg; msg="$(cat "$OSA_LOG")"
+  [ "${#msg}" -le 200 ] || { echo "page is ${#msg} chars: $msg"; false; }
+  [[ "$msg" == *recycle-relaunch-failed* ]] || { echo "$msg"; false; }
+  [[ "$msg" == *"pane 44"* ]] || { echo "$msg"; false; }
+  [[ "$msg" == *"$(basename "$(records)")"* ]] || { echo "no record handle in: $msg"; false; }
+  [[ "$msg" != *"Run manually"* ]] || { echo "the page carries the command, not a handle: $msg"; false; }
+  # the record says a human was reached, and it is still ONE parseable line
+  [ "$(rec | wc -l | tr -d ' ')" -eq 1 ]
+  [ "$(jq -r .paged "$(records)")" = os-banner ] || { rec; false; }
+  [ "$(jq -r .detail "$(records)")" = "$long" ] || { rec; false; }
+  # BEFORE the bounded push, which can spend its whole bound mailing nobody
+  [ "$(tr '\n' ' ' < "$ORDER_LOG")" = "page push " ] || { cat "$ORDER_LOG"; false; }
+}
+
+@test "STRAND PAGE: every strand variant pages (recycle-dead PANE GONE / SURFACE GONE, relaunch-failed)" {
+  local c
+  for c in "recycle-dead|HANDOFF-RECYCLE-DEAD (PANE GONE): pane 7 no longer exists" \
+           "recycle-dead|HANDOFF-RECYCLE-DEAD (SURFACE GONE): pane 7 vanished" \
+           "recycle-relaunch-failed|HANDOFF-RECYCLE-RELAUNCH-FAILED: x"; do
+    alarm "${c%%|*}" 7 SID-7 "" "${c#*|}"
+    [ "$status" -eq 0 ]
+  done
+  [ "$(osa_posts)" -eq 3 ] || { cat "$OSA_LOG"; false; }
+}
+
+@test "STRAND PAGE: the OS leg FAILS ⇒ the record says paged=failed:<rc>, and the caller still returns 0" {
+  OSA_RC=1 alarm recycle-relaunch-failed 44 DEAD-SID "" "HANDOFF-RECYCLE-RELAUNCH-FAILED: x"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *CALLER-CONTINUED* ]] || { echo "$output"; false; }
+  [ "$(osa_posts)" -eq 1 ]                              # it WAS attempted…
+  [ "$(jq -r .paged "$(records)")" = failed:1 ] || { rec; false; }   # …and the record says nobody saw it
+  [ -n "$(pushes)" ]                                    # the push is still made after a failed page
+}
+
+@test "STRAND PAGE: a NON-strand class does not page, and HF_ALARM_STRAND_PAGE=off silences a strand one" {
+  alarm recycle-held-bgwork 44 SID-44 "" "HANDOFF-RECYCLE-HELD: predecessor alive at its composer"
+  [ "$status" -eq 0 ]
+  [ "$(osa_posts)" -eq 0 ]
+  jq -e 'has("paged") | not' "$(records)" >/dev/null || { rec; false; }
+  rm -f "$ALARM_DIR"/alarm-*
+  HF_ALARM_STRAND_PAGE=off alarm recycle-relaunch-failed 44 SID-44 "" "x"
+  [ "$(osa_posts)" -eq 0 ]
+  [ "$(jq -r .paged "$(records)")" = off ] || { rec; false; }
+  # POSITIVE CONTROL: the same strand call without the switch DOES page, so the zeros above are the
+  # class gate and the switch, not a page path that never runs.
+  rm -f "$ALARM_DIR"/alarm-*
+  alarm recycle-relaunch-failed 44 SID-44 "" "x"
+  [ "$(osa_posts)" -eq 1 ]
 }
 
 # ── 7. PER-SITE coverage: one mutant per site, anchored exactly once ──────────────────────────────
