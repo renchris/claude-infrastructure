@@ -267,7 +267,7 @@ reads() { wc -l < "$READS" | tr -d ' '; }
   grep -q 'dialog-above' "$EVENTS"
   not event recycle-deferred-turn
   [ "$(reads)" -le 3 ] || { echo "reads=$(reads)"; false; }
-  snap="$(find "$LR_COMPOSER_SNAP_DIR" -name '*.ansi' 2>/dev/null | head -n 1)"
+  snap="$(find "$LR_COMPOSER_SNAP_DIR" -name '*.ansi' 2>/dev/null | awk 'NR<=1')"
   [ -n "$snap" ] && grep -qF "screen $snap" "$EVENTS" || { echo "no screen witness named"; cat "$EVENTS"; false; }
   not armed; [ ! -s "$SENT_LOG" ]
   # No receipt for our own /exit: the hold does not claim the box holds it.
@@ -481,7 +481,7 @@ deferred_turn_ended() { T0="$(date +%s)"; screen_box ""; tx_tool_use; tx_tool_re
   [ "$status" -eq 1 ] || { echo "$output"; false; }
   event recycle-held-unreachable || { cat "$EVENTS"; false; }
   local snap
-  snap="$(find "$LR_COMPOSER_SNAP_DIR" -name '*.ansi' 2>/dev/null | head -n 1)"
+  snap="$(find "$LR_COMPOSER_SNAP_DIR" -name '*.ansi' 2>/dev/null | awk 'NR<=1')"
   [ -n "$snap" ] || { echo "no snapshot written"; cat "$EVENTS"; false; }
   grep -qF 'Bash(handoff-fire.sh --recycle)' "$snap" || { cat "$snap"; false; }
   grep -qF 'Working… (12s)' "$snap" || { cat "$snap"; false; }
