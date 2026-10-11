@@ -1,5 +1,5 @@
 ---
-status: open
+status: complete
 ---
 # Recycle-on-kitty fixes — implementing the 2026-10-10 root-cause report
 
@@ -94,3 +94,9 @@ Landed as `fix(composer-parsers): a dialog over the box reads UNKNOWN in every c
   - Every suite that drives a recycle pins `CC_FIRE_CAPACITY_GATE=off` (hermeticity lint rule 2), so making that the hold's bypass too keeps all of them off the machine's real load, which sat at 8-11 per core while this was built, above the bound. Without it, any of them that reaches the exit with no stage would have held.
   - Only the gate's own verdict 1 holds. Suites that extract `recycle_fire_commit` without the gate get 127 and proceed as before.
   - Not covered: the deferred self-recycle lane holds with no retry ticket; the session stays alive and the operator (or lr-fleet's HELD re-drive) re-runs it.
+
+### Close (2026-10-11): every fix in scope is on trunk
+
+- **rgk (`fix/recycle-gaps-kitty`, pane 232) landed `a60fa9925`**: fixes 2-7 and 10 (SIGTERM exit, grace raised to 30 s per W6) plus the W1/W2 gap lists. Its fix 9 was dropped in favour of W5's. Build results: REPORT.md § Build results.
+- **By fix:** 2-7, 10 → `a60fa9925`; 8 → W3; 8b → W4; 9 → W5. Fix 1 was already in (`0e882c9ac`). The W1 and W2 branches stay unlanded by the 07:05Z ruling; their content reached trunk through rgk.
+- **Learning.** rgk sat idle for about 4 hours (10:28Z-14:51Z) behind a teammate parked on a permission prompt for a command containing `rm -rf` (07:34Z), while rgk's lead believed the teammate was "mid-edit". It surfaced only when this plan's lead, after repeated empty watcher timeouts, read rgk's transcripts: a teammate's last `tool_use` with no `tool_result` for hours is the signature, and an operator answer cleared it.
