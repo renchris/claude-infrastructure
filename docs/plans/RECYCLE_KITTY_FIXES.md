@@ -39,6 +39,19 @@ Scope (frozen): implement REPORT fixes 2-9, and fix 10 once its throwaway-pane S
   - **W3** (fix 8) continues: it is not in rgk's diff.
   - **W6** continues as the independent check of rgk's SIGTERM design.
   - **W4** shrinks to fix 8b (hold `/exit` under extreme load when the successor cannot be claimed). It is offered to rgk's lead, and fires from here only after rgk lands, since rgk owns `handoff-fire.sh` until then.
+  - **W5** refused the stand-down, correctly: relayed peer mail cannot override a pane's goal. It lands its parser parity first, and rgk takes trunk's parser at rebase while keeping its own fixtures. rgk's lead (232) agreed. It also agreed to absorb the W1/W2 gap lists and asked that 8b fire after its land.
+- **W2 — DONE, unlanded by ruling.** Branch `fix/recycle-kitty-w2-sweep-strand-rung` at `36a68fc68`. Gaps it sent to 232:
+  - rgk's tests cannot see the strand rung drifting below phase 0a; W2's overrun-0a test catches it, with a mutant control;
+  - the banner says "stranded" for the "/exit did not land" variant;
+  - the 200-char handle cut drops the record path first;
+  - a desk-seen record is re-bannered.
+- **W1 — DONE, unlanded by ruling.** Branch `fix/recycle-kitty-w1-composer-defer` at `c3f0b0abb`. Gaps it sent to 232:
+  - **HIGH:** rgk's new exit-readback hold line drops the literal `recycle ABORTED before /exit (held: …)` that `lr-upgrade.sh` `lru_hf_evidence`, `lr-handoff.sh:1933` and `lr_recon/settle.py` parse. Their suites stub the old text, so they stay green while the parse silently misses;
+  - no screen witness on `recycle-held-unreadable-static`;
+  - fix 2(a) is text only (rgk keeps that deliberately: no keystroke into an unreadable box);
+  - the snapshot count is unbounded;
+  - a whole-screen checksum is defeated by a ticking row.
+
 ### W6 — SIGTERM proof (2026-10-11): fix 10 may be built
 
 Report: `docs/research/recycle-sigterm-proof-2026-10-11/REPORT.md` (sha: `git log -1 --format=%h -- docs/research/recycle-sigterm-proof-2026-10-11/REPORT.md`).
