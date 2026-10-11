@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# shellcheck disable=SC2030,SC2031  # each @test is its own subshell; per-test exports are the intent
+# shellcheck disable=SC2030,SC2031,SC2016  # each @test is its own subshell; per-test exports are the intent; stub bodies expand in the stub
 # scripts/limit-recover/lr-move-batch.sh — the operator's abort, and what the summary keeps
 # (lr-reliability REPORT D9 / rank 14, 2026-10-11).
 #
@@ -47,7 +47,7 @@ STUB
 teardown() { mvf_teardown; }
 
 batch() { run /bin/bash "$LRD/lr-move-batch.sh" a1; }
-claims() { ls -A "$LR_STATE_DIR/runs/by-sid" 2>/dev/null | grep -c . || true; }
+claims() { local n=0 d; for d in "$LR_STATE_DIR/runs/by-sid"/*; do [ -e "$d" ] && n=$((n + 1)); done; echo "$n"; }
 
 @test "[RED] an abort written before the runner starts: no router read, no claim, no worker; summary and mail say aborted" {
   : > "$BDIR/abort"
@@ -91,7 +91,7 @@ claims() { ls -A "$LR_STATE_DIR/runs/by-sid" 2>/dev/null | grep -c . || true; }
   done
   batch
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [ "$(jq -r .status "$BDIR/summary.json")" = done ]
+  [ "$(jq -r .status "$BDIR/summary.json")" = "done" ]
   # the verdict roll-up is unchanged; the classes and the instruction are new fields beside it
   [ "$(jq -r .verdicts "$BDIR/summary.json")" = "MOVED=3 NOTMOVED=1" ] || { cat "$BDIR/summary.json"; false; }
   [ "$(jq -r .reasons "$BDIR/summary.json")" = "NOTMOVED/became-limited=1" ] || { cat "$BDIR/summary.json"; false; }
@@ -103,7 +103,7 @@ claims() { ls -A "$LR_STATE_DIR/runs/by-sid" 2>/dev/null | grep -c . || true; }
 @test "CONTROL: an all-MOVED batch with no abort keeps its old summary and mail words" {
   batch
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [ "$(jq -r .status "$BDIR/summary.json")" = done ]
+  [ "$(jq -r .status "$BDIR/summary.json")" = "done" ]
   [ "$(jq -r .verdicts "$BDIR/summary.json")" = "MOVED=$N" ] || { cat "$BDIR/summary.json"; for f in "$BDIR"/dddd*.json; do cat "$f"; done; false; }
   [ "$(jq -r .reasons "$BDIR/summary.json")" = "" ]
   [ "$(jq -r .actions "$BDIR/summary.json")" = "" ]
