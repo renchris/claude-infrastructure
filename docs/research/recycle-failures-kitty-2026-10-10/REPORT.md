@@ -4,7 +4,7 @@
 
 The four failures have **two root causes, not one.**
 
-- **F1 (pane 44) is a transport failure under extreme load, on code from before the keystroke-free relaunch existed.** Every one of the 16 typed-relaunch attempts failed because the it2→kitty round trips ran at or near their 10 s bound at a load of about 45 runnable processes per core. The alarm then went to a role that does not exist (`desk`, rc 3). The phone leg is unwired, and the sweep that banners alarms self-bounded for two hours. So the first operator-visible signal was one aggregate banner at 07:06Z (2 am local). **Conviction 80%** on the transport cause and **90%** on the alarm chain.
+- **F1 (pane 44) is a transport failure under extreme load, on code from before the keystroke-free relaunch existed.** Every one of the 16 typed-relaunch attempts failed because the it2→kitty round trips ran at or near their 10 s bound at a load of about 45 runnable processes per core. The alarm then went to a role that does not exist (`desk`, rc 3). The phone leg is unwired, and the sweep that banners alarms self-bounded for two hours. So the first operator-visible signal was one aggregate banner at 07:06Z (2 am local). **Conviction 70%** on the transport cause; the skeptic rates it PLAUSIBLE, because no per-attempt record exists. **Conviction 85%** on the alarm chain.
 - **F2, F3 and F4 (pane 134) are one regression and its residue.** `f14b42653` added a "dialog drawn above the composer" rule. From 23:46Z on 10-10, that rule read Claude Code's slash-command suggestion row (`❯ /exit  Exit the CLI`, which opens as soon as `/exit` is typed) as a dialog.
   - **F2:** the read-back of our own `/exit` came back `<unreadable>`. By design no DELs were sent, but the hold message said "five DELs sent" and no residue receipt was written, so `/exit` stayed in the operator's input box.
   - **F3:** that residue kept the menu open, so the box read UNKNOWN for 30 s mid-turn. The deferral took that to mean "mid-turn" and deferred, and then the box read UNKNOWN for 180 s with the session idle.
@@ -45,7 +45,7 @@ Slot reports (each claim carries file:line@sha or a log quote):
 
 ## Root cause per failure
 
-### F1, pane 44: the relaunch write failed twice — Conviction 80% (cause), 90% (alarm chain)
+### F1, pane 44: the relaunch write failed twice — Conviction 70% (cause, PLAUSIBLE), 85% (alarm chain)
 
 **Cause.** At `bc471e0b6` the watcher had only a typed relaunch: 2 rounds × 2 lines × 4 attempts = 16 bracketed-paste attempts, each verified by one echo read.
 
@@ -59,13 +59,30 @@ Slot reports (each claim carries file:line@sha or a log quote):
   - **zsh spell-correction:** the typed lines are builtins and cannot be corrected. Its "could not disarm" lines are a symptom of the same transport failure.
 - **Not determined:** whether kitty-side lateness or watcher-side process starvation dominated. There was no per-attempt telemetry before `f4b297310`.
 
+**Skeptic corrections** (`skeptic-f1-relaunch.md`):
+
+- **No line was submitted.** zsh history holds both nonce lines for 27 of 29 typed relaunches that night, and none for this watcher (`hfv-22463`). So the zero is strong evidence.
+- **kitty's backlog is measured.** boot-resume-launch's `kitty @ launch` for window 134 timed out at about 05:03:31Z, yet kitty forked the window at 05:12:38Z (`ps -o lstart` of root pid 18273). That is **9 minutes after the client gave up**.
+- **The call arithmetic cannot separate two readings.** Corrected to 38-86 bounded calls, the window gives about 5-11 s per call, which fits two things:
+  - nearly every call timed out, so the failure *is* the transport;
+  - calls completed in about 5-6 s, but the echo failed the verify.
+- **A co-cause the slot dismissed for the wrong reason.**
+  - The relaunch was typed into a **cold `zsh -l -i`** that `lr-fire-resume.sh:1537-1558` execs after claude exits; the predecessor was a cc-lr upgrade resume.
+  - With p10k instant prompt, that shell echoes `^U` and the paste markers literally while `.zshrc` loads. That fails the **focused suffix rule** for both lines (measured, `/tmp/skf1/echoctl-check.sh`).
+  - HEAD names this state `paste-end-echo`.
+  - It can explain early attempts, not the whole 6.5 minutes.
+- **The failure began after about 04:56Z.** The listing and the two background-work exchanges at 04:55:41-51Z worked at the same load.
+
 **Why the operator never heard.**
 
 - `hf_alarm` pushed `cc-notify --role desk`, and no `desk` role exists, so the call returned rc 3 (`role-unset`). 19 of the 20 alarm verdicts on disk are `refused-rc3`.
 - The phone fallback is inert: no Pushover credentials are configured.
 - The only push consumer is `autonomy-sweep.sh`'s `ladder_v2`, which runs at the end of a tick. Ten consecutive ticks from 05:05Z to 06:56Z self-bounded before reaching it.
 - The first banner, at 07:06:39Z, was an aggregate ("368 pages, 192 alarms …") with no command in it.
-- Source: `slot-f1-relaunch.md` §(d).
+- operator-readout did count the record in its `◆` line (87 `fired` rows between 05:03Z and 16:00Z), but only as one unit among hundreds.
+- The operator was awake: he asked for this recycle at 04:53:22Z. A per-record banner at 05:03Z had a real chance; 02:06 local did not.
+- His first message afterwards came at 15:44:04Z, 10 h 41 min after the alarm. Meanwhile the session had been auto-resumed at 05:12:41Z in window 134 with no prompt.
+- Sources: `slot-f1-relaunch.md` §(d) and `skeptic-f1-relaunch.md`.
 
 **Already fixed, and what is not.** The `recycle-keystrokeless` program (live 20:11Z on 10-09) did two things:
 
@@ -193,16 +210,26 @@ Line numbers are at HEAD `b68fa8a25`. Each test is written to be red before the 
    - Test: the turn-wait suite asserts the snapshot carries the fixture's rows.
 7. **Page post-/exit strands directly, and address them to something with a reader (F1).**
    - Where: `hf_alarm` :8434-8500 and its relaunch-failed and dead callers :10977-10983.
-   - For the classes `recycle-relaunch-failed`, `recycle-dead` and surface-gone: post one OS banner per record with the one-line command, instead of mailing a dead predecessor's sid or a missing `desk` role.
-   - In `scripts/autonomy-sweep.sh`, run a strand-only rung before the expensive phases (around `sweep_yield` :422; `ladder_v2` :2432), so a self-bounding tick still banners.
+   - For the classes `recycle-relaunch-failed`, `recycle-dead` and surface-gone: post one OS banner per record, instead of mailing a dead predecessor's sid or a missing `desk` role.
+     - The banner carries a **short handle** (the alarm id or recovery-packet path), not the command: `lr-page`'s OS leg caps text at 200 characters (`scripts/limit-recover/lr-page.sh:16-19`), and F1's line was 559.
+     - Issue it **before** the 10 s cc-notify push and the debt settle.
+     - Only 4 strand-class records exist from 10-03 to 10-10, so page fatigue is low.
+   - In `scripts/autonomy-sweep.sh`, run a strand-only rung **before phase 0a**, not merely before 0b (around `sweep_yield` :422; `ladder_v2` :2432). Phase 0a alone overran in the post-F1 ticks (`elapsed_s` 893 and 413).
    - Tests:
-     - `tests/handoff-alarm-records.bats`: a relaunch-failed alarm with a dead sid yields exactly one page through a stub banner seam;
-     - a sweep case forced to self-bound at phase 0b still writes an `os-banner` row for a seeded strand record.
+     - `tests/handoff-alarm-records.bats`: a relaunch-failed alarm with a dead sid yields exactly one page through a stubbed `LR_PAGE_OSASCRIPT_BIN`;
+     - a second case where the OS leg fails, asserting the record says so;
+     - a sweep case whose phase 0a overruns still writes an `os-banner` row for a seeded strand record.
    - Wiring Pushover is the operator's step, and is not required for the banner.
 8. **Make the staged successor claimable by every interactive pane (F1's residual).**
    - Problem: 4 of 9 exits fell back to typing, because the shell that regained the tty was not a consumer, or was started before the consumer code went live.
    - Where: a zsh `precmd` claim in the `scripts/kitty-setup.sh` rc block, calling `cc_pane_successor_take` (`scripts/lib/pane-successor.sh`).
-   - Test: an interactive `zsh -i` on a pty with a staged successor claims it within one prompt cycle, and no `recycle-successor-revoked` row is written.
+   - Gate the hook on a fork-free `[[ -e …/<tty>.cmd ]]`: `take` forks jq and ps, and this runs at every prompt in every pane.
+   - It does not cover a shell started before the rc change, so it shrinks the revoke-then-type case rather than closing it.
+   - Test: an interactive `zsh -i` on a pty with a staged successor claims it within one prompt cycle, and no `recycle-successor-revoked` row is written. Add negative cases: the same tty with a different window id, a dead watcher, an expired TTL, and nothing forked when nothing is staged.
+8b. **Do not type `/exit` under extreme load when the post-exit path will have to type (F1).**
+   - Today a recycle is exempt from the capacity gate (`scripts/handoff-fire.sh:8303-8305`, :12636). F1 typed `/exit`, the point of no return, at about 45 runnable per core.
+   - Hold or defer the `/exit` when load per core is above a bound **and** the successor stage was refused or cannot be claimed.
+   - Test: with a stubbed load above the bound and a refused stage, assert a hold row and no `/exit` sent. With a staged, claimable successor, assert the recycle proceeds.
 9. **Converge the six composer-parser copies onto the guarded one.**
    - Problem: `0584f0720` patched only `composer_content`. The copies without dialog guards read a background-work dialog above an empty box as **EMPTY**, measured on real 2.1.260 captures:
      - `cc_tui_composer*` (`scripts/lib/cc-tui.sh`:158-205);
@@ -224,4 +251,4 @@ Line numbers are at HEAD `b68fa8a25`. Each test is written to be red before the 
 
 - **F2, F3 and F4 drop below 70%** if a capture of pane 134 between 00:25Z and 02:20Z shows no `❯ /` row above the box, or if any logged write to pane 134 between 00:25Z and 02:20Z turns up.
 - **F2 and F3 rise to about 97%** with a 2.1.293 capture at pane 134's geometry with `/exit` typed, taken in a throwaway pane.
-- **F1's transport cause** would move with per-attempt `recycle-type-attempt` rows from a reproduction at a load above 40 per core. If those showed sends under 1 s with no echo, a late echo would be back in play.
+- **F1's transport cause** would move with per-attempt `recycle-type-attempt` rows from a reproduction at a load above 40 per core. If those showed sends under 1 s with no echo, a late echo, or the instant-prompt echo failing the suffix rule, would be back in play. A record of pane 44's focus state at 04:56-05:03Z would also move it.
