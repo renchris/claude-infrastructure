@@ -274,6 +274,19 @@ def archive(row, why, by):
             if isinstance(t, dict) and os.path.realpath(t.get("handed_off_to") or "") == owner_real:
                 os.rename(tomb, tomb + ".released")
                 retired.append(tomb + ".released")
+        # A RETURN HOP's admit set the target's own leftovers aside (lr-transplant.sh, THE RETURN HOP)
+        # and recorded them here; a release disowns the move exactly as abort does, so they go back —
+        # link-then-unlink, never over a name that exists again.
+        for r in rec.get("returned") if isinstance(rec.get("returned"), list) else []:
+            p, a = (r.get("path"), r.get("aside")) if isinstance(r, dict) else (None, None)
+            if not (isinstance(p, str) and isinstance(a, str)):
+                continue
+            try:
+                os.link(a, p)
+                os.unlink(a)
+                sys.stderr.write("lr-lock: restored %s (set aside by this move's admit)\n" % p)
+            except OSError as e:
+                sys.stderr.write("lr-lock: could not restore %s from %s (%s) — left as it is\n" % (p, a, e.strerror))
     return dst, retired
 
 

@@ -147,6 +147,24 @@ _class() { python3 "$LRL" status "$SID" --json | python3 -c 'import json,sys;pri
   [ "$status" -eq 1 ] || { echo "still reported as moved: $output"; false; }
 }
 
+@test "lr-lock: releasing a RETURN hop's lock puts the target's old marker and retired copy back, byte-for-byte" {
+  # the session left to/ for from/ earlier: to/ holds that departure's marker and a prefix copy
+  local OLD="$T/to/projects/slug/$SID.HANDOFF.json" RET="$T/to/projects/slug/$SID.jsonl.handed-off"
+  printf '{"handed_off_to":"%s","ts":"2026-01-01T00:00:00Z","lock":"%s"}\n' "$T/from" "$LOCK" > "$OLD"
+  head -c 10 "$SRC" > "$RET"
+  cp -p "$OLD" "$T/old.orig"; cp -p "$RET" "$T/ret.orig"
+  _admit
+  [ ! -e "$OLD" ] || { echo "the admit did not set the return hop's marker aside"; ls -a "$T/to/projects/slug"; false; }
+  [ ! -e "$RET" ] || { echo "the admit did not set the return hop's retired copy aside"; ls -a "$T/to/projects/slug"; false; }
+  _later 3000000
+  [ "$(_class)" = QUIET ]
+  _lrl release "${SID:0:8}" --why "return hop given up"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  cmp -s "$OLD" "$T/old.orig" || { echo "$output"; ls -a "$T/to/projects/slug"; false; }
+  cmp -s "$RET" "$T/ret.orig" || { echo "$output"; ls -a "$T/to/projects/slug"; false; }
+  [ -z "$(find "$T/to" -name '*.stale-*')" ] || { find "$T/to"; false; }
+}
+
 @test "lr-lock: release NEVER deletes — it archives out of every reader's glob and records who, why and what" {
   _admit
   _ran "$SRC"

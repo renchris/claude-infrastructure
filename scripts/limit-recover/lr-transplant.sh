@@ -318,6 +318,7 @@ lrt_setaside() { # $1=path → renamed to <path>.stale-<UTCts> (.<pid> on collis
   [[ ! -e "$_n" && ! -L "$_n" ]] || _n="$_n.$$"
   lrt_link_rename "$1" "$_n" || return 1
   LRT_SET_ASIDE="${LRT_SET_ASIDE:+$LRT_SET_ASIDE,}\"$_n\""
+  LRT_LAST_ASIDE="$_n"
 }
 lrt_set_aside_json() { # → `,"set_aside":[…]` when anything was set aside this run, else nothing
   [[ -z "$LRT_SET_ASIDE" ]] || printf ',"set_aside":[%s]' "$LRT_SET_ASIDE"
@@ -330,31 +331,77 @@ lrt_set_aside_json() { # → `,"set_aside":[…]` when anything was set aside th
 # move's reference ts ($2: the custody lock's ts, else the confirm's own time). A missing or
 # malformed ts on either side keeps it: the act is a rename, so every unknown keeps.
 lrt_iso() { [[ "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; }
-lrt_sweep_target() { # $1=the TARGET slug dir now holding the live copy $2=this move's reference ts → set aside its stale marker and retired copy
-  local _d="$1" _ref="${2:-}" _m _to _mts _c _live=""
+# ── THE RETURN HOP, SWEPT AT ADMIT AND UNDONE BY ABORT (2026-10-11, pane 14 / 4d059264) ──────────
+# The confirm-time sweep came one step too late for a session moving BACK into a store it left.
+# Between admit and confirm, handoff-fire --recycle reads every store's tombstone: the target's old
+# marker (T → S) beside the admit's new one (S → T) is A→B→A, which hf_ts_chain_tip refuses as a
+# cycle ("no chain tip"), so the recycle stood down and the move was aborted, every time. So the
+# admit sweeps the target too (mode `admit`), and RECORDS each rename on the lock as `returned`
+# ([{"path","aside"}]): abort and unconfirm, which declare the move did not happen, put both back
+# byte-for-byte (lrt_unreturn), which keeps the old rule "an aborted admit leaves the target's
+# marker". Two differences from the confirm arm: the source is still live at admit, so a marker
+# naming FROM is exempt from the live-copy test (that live copy IS this move's source), and a target
+# that already held a live copy before this run is never swept (lrt_admit_sweep's caller checks).
+LRT_RETURNED=""
+lrt_sweep_target() { # $1=the TARGET slug dir now holding the live copy $2=this move's reference ts [$3=admit] → set aside its stale marker and retired copy
+  local _d="$1" _ref="${2:-}" _mode="${3:-}" _m _to _to_real _mts _c _live=""
   lrt_setaside_on || return 0
   _m="$_d/$SID.HANDOFF.json"
   if [[ -f "$_m" ]]; then
     _to="$(sed -n '/"handed_off_to":"/{s/.*"handed_off_to":"\([^"]*\)".*/\1/p;q;}' "$_m")"
     _mts="$(sed -n '/"ts":"/{s/.*"ts":"\([^"]*\)".*/\1/p;q;}' "$_m")"
-    if [[ -n "$_to" ]]; then for _c in "$_to"/projects/*/"$SID".jsonl; do [[ -f "$_c" ]] && _live="$_c"; done; fi
+    _to_real=""
+    [[ -z "$_to" ]] || _to_real="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$_to/projects")"
+    if [[ -n "$_to" && ! ( "$_mode" == admit && "$_to_real" == "$FROM_PROJ_REAL" ) ]]; then
+      for _c in "$_to"/projects/*/"$SID".jsonl; do [[ -f "$_c" ]] && _live="$_c"; done
+    fi
     # A marker naming ANOTHER store, in the store just confirmed as the live one, records a departure
     # this move undid. One naming TO itself is a same-account superseded mark: left untouched.
-    if [[ -n "$_to" && "$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$_to/projects")" != "$TO_PROJ_REAL" ]]; then
+    if [[ -n "$_to" && "$_to_real" != "$TO_PROJ_REAL" ]]; then
       if [[ -n "$_live" ]]; then
         echo "lr-transplant: kept the target marker $_m: the store it names holds a live copy ($_live), so it records a later move" >&2
       elif ! lrt_iso "$_mts" || ! lrt_iso "$_ref" || [[ ! "$_mts" < "$_ref" ]]; then
         echo "lr-transplant: kept the target marker $_m: its ts (${_mts:-none}) is not provably older than this move (${_ref:-none})" >&2
+      elif lrt_setaside "$_m"; then
+        [[ "$_mode" != admit ]] || LRT_RETURNED+="$_m"$'\t'"$LRT_LAST_ASIDE"$'\n'
       else
-        lrt_setaside "$_m" || echo "lr-transplant: could not set aside the stale target marker $_m (left in place)" >&2
+        echo "lr-transplant: could not set aside the stale target marker $_m (left in place)" >&2
       fi
     fi
   fi
   if lrt_stale_retired "$_d/$SID.jsonl"; then
-    lrt_setaside "$_d/$SID.jsonl.handed-off" || echo "lr-transplant: could not set aside $_d/$SID.jsonl.handed-off (left in place)" >&2
+    if lrt_setaside "$_d/$SID.jsonl.handed-off"; then
+      [[ "$_mode" != admit ]] || LRT_RETURNED+="$_d/$SID.jsonl.handed-off"$'\t'"$LRT_LAST_ASIDE"$'\n'
+    else
+      echo "lr-transplant: could not set aside $_d/$SID.jsonl.handed-off (left in place)" >&2
+    fi
   fi
   return 0
 }
+lrt_unreturn() { # → put back every `returned` pair the lock records (aside → path, never over an existing name); sets LRT_RESTORED
+  local _p _a
+  LRT_RESTORED=""
+  while IFS=$'\t' read -r _p _a; do
+    [[ -n "$_p" && -n "$_a" ]] || continue
+    if [[ -e "$_a" ]] && lrt_link_rename "$_a" "$_p"; then
+      LRT_RESTORED="${LRT_RESTORED:+$LRT_RESTORED,}\"$_p\""
+    else
+      echo "lr-transplant: could not restore $_p from $_a (absent, or $_p exists again) — left as it is" >&2
+    fi
+  done < <(python3 - "$LOCK" 2>/dev/null <<'PY' || true
+import json, sys
+try:
+    with open(sys.argv[1]) as fh:
+        d = json.load(fh)
+except Exception:
+    sys.exit(0)
+for r in (d.get("returned") if isinstance(d, dict) and isinstance(d.get("returned"), list) else []):
+    if isinstance(r, dict) and isinstance(r.get("path"), str) and isinstance(r.get("aside"), str):
+        print("%s\t%s" % (r["path"].replace("\t", " "), r["aside"].replace("\t", " ")))
+PY
+)
+}
+lrt_restored_json() { [[ -z "${LRT_RESTORED:-}" ]] || printf ',"restored_target":[%s]' "$LRT_RESTORED"; }
 lrt_stub() { # → the <sid>.jsonl that sits beside a .handed-off in the same slug dir, empty when none
   local _c
   for _c in "$FROM"/projects/*/"$SID".jsonl.handed-off; do
@@ -551,8 +598,9 @@ if [[ "$PHASE" == unconfirm ]]; then
   lrt_link_rename "$UC_RETIRED" "$UC_SRC" || lrt_refuse stub-present stub-present "$UC_SRC appeared before the restore"
   UC_DIR="$(dirname "$UC_SRC")"
   lrt_file_evidence unconfirmed "$(basename "$UC_DIR")" "$UC_DIR/$SID.HANDOFF.json"
+  lrt_unreturn   # the move did not happen: the target's own leftovers from the hop it reversed go back
   rm -f "$LOCK"
-  printf '{"ok":true,"phase":"unconfirm","sid":"%s","restored":"%s","evidence":"%s"}\n' "$SID" "$UC_SRC" "$EVIDENCE"
+  printf '{"ok":true,"phase":"unconfirm","sid":"%s","restored":"%s","evidence":"%s"%s}\n' "$SID" "$UC_SRC" "$EVIDENCE" "$(lrt_restored_json)"
   exit 0
 fi
 
@@ -651,8 +699,9 @@ PY
     for _c in "$FROM"/projects/*/"$SID".jsonl; do [[ -f "$_c" ]] && { AB_SLUG="$(basename "$(dirname "$_c")")"; break; }; done
   fi
   lrt_file_evidence aborted "$AB_SLUG" "$AB_TOMB"
+  lrt_unreturn   # the move did not happen: the target's own leftovers from the hop it reversed go back
   rm -f "$LOCK"
-  printf '{"ok":true,"phase":"abort","sid":"%s","evidence":"%s"}\n' "$SID" "$EVIDENCE"
+  printf '{"ok":true,"phase":"abort","sid":"%s","evidence":"%s"%s}\n' "$SID" "$EVIDENCE" "$(lrt_restored_json)"
   exit 0
 fi
 
@@ -906,6 +955,10 @@ LRT_HOLDER_JSON="$(lrt_holder_json)"
 # copy that predates the run (a second hop, a --force over a stale lock or copy) is someone else's
 # custody and is left exactly as trunk left it. Disarmed the moment the sha check passes.
 LRT_CLEANUP=0 LRT_DIR_FRESH=0
+# A target that already holds a live copy before this run is never swept at admit (THE RETURN HOP):
+# its marker may be a later move's tombstone, which is the hazard THE SWEEP NEVER UNDOES describes.
+LRT_TO_LIVE_BEFORE=""
+for _c in "$TO"/projects/*/"$SID".jsonl; do [[ -f "$_c" ]] && LRT_TO_LIVE_BEFORE="$_c"; done
 [[ -e "$LOCK" || -e "$DST" ]] || LRT_CLEANUP=1
 [[ -e "$DST_DIR/$SID" ]] || LRT_DIR_FRESH=1
 lrt_admit_cleanup() { # $1=the exiting rc → always 0; acts only on a non-zero exit inside the window
@@ -970,6 +1023,30 @@ LRT_CLEANUP=0   # the copy is proven; from here the lock and the target copy are
 # The source's OWN old retired copy (a round trip's leftover, prefix-proven: see STALE ROUND-TRIP
 # LEFTOVERS) goes aside here, so the guard's admit allowance and the later confirm see a clean source.
 if lrt_stale_retired "$SRC"; then lrt_setaside "$SRC.handed-off" || true; fi
+# THE RETURN HOP: the target's leftovers from the departure this move reverses go aside BEFORE the
+# source's tombstone exists, so no reader ever sees both ends of the cycle. A keep-source run leaves
+# two live copies on purpose and sweeps nothing. The renames land on the lock, where abort, unconfirm
+# and lr-lock.py release find them; should that write fail, they are put straight back.
+if [[ $KEEP_SOURCE -ne 1 && -z "$LRT_TO_LIVE_BEFORE" ]]; then
+  lrt_sweep_target "$DST_DIR" "$NOW" admit
+  if [[ -n "$LRT_RETURNED" ]] && ! printf '%s' "$LRT_RETURNED" | python3 -c '
+import json, os, sys
+lock = sys.argv[1]
+with open(lock) as fh:
+    d = json.load(fh)
+d["returned"] = [{"path": p, "aside": a} for p, a in (l.split("\t", 1) for l in sys.stdin.read().splitlines() if "\t" in l)]
+tmp = "%s.tmp.%d" % (lock, os.getpid())
+with open(tmp, "w") as fh:
+    fh.write(json.dumps(d, ensure_ascii=False, separators=(",", ":")) + "\n")
+os.replace(tmp, lock)
+' "$LOCK"; then
+    while IFS=$'\t' read -r _p _a; do
+      [[ -n "$_p" ]] && { lrt_link_rename "$_a" "$_p" || echo "lr-transplant: could not put back $_p from $_a" >&2; }
+    done <<< "$LRT_RETURNED"
+    LRT_SET_ASIDE=""
+    echo "lr-transplant: could not record the target's set-aside leftovers on $LOCK — put them back; the return-hop cycle stays for the confirm sweep" >&2
+  fi
+fi
 TOMBSTONE="$SRC_DIR/$SID.HANDOFF.json"
 # The phase rides on the tombstone so handed-off-session-guard.sh can tell a half-done move (admit:
 # the source is still the live writer, so a typed prompt belongs there) from a finished one (D7.2a,

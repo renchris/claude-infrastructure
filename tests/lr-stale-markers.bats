@@ -32,6 +32,9 @@ setup() {
   export LRU_CFG_ROOT="$HOME"
   export LRU_PS_SNAPSHOT="$BATS_TEST_TMPDIR/ps.txt"; : > "$LRU_PS_SNAPSHOT"
   export LRU_LR_LIB="$BATS_TEST_TMPDIR/absent-lr-lib.sh" LRU_GAP_S=0
+  # hfev (X6/X7) evaluates handoff-fire's own functions: pin its ambient seams as its chain suite does
+  export CC_FIRE_CAPACITY_GATE=off HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/sweep.json"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/absent-accounts" CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-"
   export LR_CONFIG_DIRS="$HOME/.claude-secondary:$HOME/.claude-tertiary:$HOME/.claude-quaternary"
   STUBS="$BATS_TEST_TMPDIR/stubs"; mkdir -p "$STUBS"
   export LRU_NOTIFY_BIN="$STUBS/cc-notify"
@@ -255,12 +258,14 @@ lrt() { run --separate-stderr bash "$LRT" --sid "$MSID" --from "$HOME/.claude-qu
 
 @test "X1 [RED] confirm sweeps the TARGET: its older marker and its prefix-proven retired copy go aside, and the successor's prompt is admitted; CONTROL LRT_STALE_SETASIDE=off leaves both and the guard refuses" {
   lrtfix
+  # since 2026-10-11 the ADMIT sweeps a return hop's target (X6 — abort puts it back), so the
+  # confirm finds nothing left; X4 keeps the confirm arm itself covered
   lrt --phase admit; [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
-  [ -f "$(SA)/$MSID.HANDOFF.json" ] || { echo "admit must not sweep the target"; false; }
+  [ "$(printf '%s' "$output" | jq '.set_aside | length')" -eq 2 ] || { echo "$output"; false; }
   lrt --phase confirm; [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
   [ ! -e "$(SA)/$MSID.HANDOFF.json" ] || { ls -a "$(SA)"; false; }
   [ ! -e "$(SA)/$MSID.jsonl.handed-off" ] || { ls -a "$(SA)"; false; }
-  [ "$(printf '%s' "$output" | jq '.set_aside | length')" -eq 2 ] || { echo "$output"; false; }
+  [ "$(printf '%s' "$output" | jq 'has("set_aside")')" = false ] || { echo "$output"; false; }
   guard || { echo "the successor's prompt is still refused"; false; }
   # CONTROL, a second session id on the same shape
   MSID=762a6daa-0000-4000-8000-000000000002; lrtfix
@@ -373,4 +378,83 @@ lrt() { run --separate-stderr bash "$LRT" --sid "$MSID" --from "$HOME/.claude-qu
   lockset "$HOME/.claude-tertiary" 2099-01-01T00:00:00Z
   lrt --phase confirm
   [ ! -e "$(SA)/$MSID.HANDOFF.json" ] || { echo "$output $stderr"; ls -a "$(SA)"; false; }
+}
+
+# ── THE RETURN HOP (2026-10-11, pane 14 / 4d059264): admit must not leave a cycle ────────────────
+# handoff-fire --recycle reads every store's tombstone between admit and confirm. Left in place, T's
+# old marker (→ Q) and the admit's new one in Q (→ T) are A→B→A: no chain tip, and the recycle is
+# refused, so every move back into a store the session once left aborted. lrtfix is that shape.
+hfev() { # → handoff-fire's own hf_transplant_evidence over the fixture stores; prints the tombstone it settles on
+  eval "$(sed -n '/^hf_ts_chain_tip() {/,/^}/p; /^hf_transplant_evidence() {/,/^}/p' "$REPO/scripts/handoff-fire.sh")"
+  hf_transplant_evidence "$MSID" "$HOME/.claude-secondary/projects $HOME/.claude-tertiary/projects $HOME/.claude-quaternary/projects" --recycle "" || return $?
+  printf '%s\n' "$HF_TS_TOMBSTONE"
+}
+retfix() { # lrtfix plus byte copies of everything a return hop may touch
+  lrtfix
+  cp -p "$(SA)/$MSID.HANDOFF.json" "$BATS_TEST_TMPDIR/t-tomb.orig"
+  cp -p "$(SA)/$MSID.jsonl.handed-off" "$BATS_TEST_TMPDIR/t-ret.orig"
+  cp -p "$(SB)/$MSID.jsonl" "$BATS_TEST_TMPDIR/q-live.orig"
+}
+restored() { # T holds its old marker and retired copy again, byte-identical, and nothing set aside
+  cmp -s "$(SA)/$MSID.HANDOFF.json" "$BATS_TEST_TMPDIR/t-tomb.orig" || { ls -a "$(SA)"; return 1; }
+  cmp -s "$(SA)/$MSID.jsonl.handed-off" "$BATS_TEST_TMPDIR/t-ret.orig" || { ls -a "$(SA)"; return 1; }
+  [ ! -e "$(SA)/$MSID.jsonl" ] && [ -z "$(find "$(SA)" -name '*.stale-*')" ] || { ls -a "$(SA)"; return 1; }
+}
+
+@test "X6 [RED] a return hop's admit sets the target's old marker and prefix copy aside, so handoff-fire finds ONE chain; abort restores both byte-for-byte" {
+  retfix
+  # CONTROL: the state the admit used to leave is the cycle handoff-fire refuses
+  tomb "$(SB)" "$HOME/.claude-tertiary" 2026-10-11T00:00:00Z
+  run hfev; [ "$status" -eq 2 ] && [[ "$output" == *"(a cycle)"* ]] || { echo "$output"; false; }
+  rm "$(SB)/$MSID.HANDOFF.json"
+  lrt --phase admit; [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
+  [ ! -e "$(SA)/$MSID.HANDOFF.json" ] || { echo "$stderr"; ls -a "$(SA)"; false; }
+  [ ! -e "$(SA)/$MSID.jsonl.handed-off" ] || { echo "$stderr"; ls -a "$(SA)"; false; }
+  set -- "$(SA)/$MSID.HANDOFF.json.stale-"*;     cmp -s "$1" "$BATS_TEST_TMPDIR/t-tomb.orig" || { ls -a "$(SA)"; false; }
+  set -- "$(SA)/$MSID.jsonl.handed-off.stale-"*; cmp -s "$1" "$BATS_TEST_TMPDIR/t-ret.orig" || { ls -a "$(SA)"; false; }
+  [ "$(jq '.returned | length' "$LRU_STATE/locks/$MSID.lock")" -eq 2 ] || { cat "$LRU_STATE/locks/$MSID.lock"; false; }
+  [ "$(printf '%s' "$output" | jq '.set_aside | length')" -eq 2 ] || { echo "$output"; false; }
+  run hfev; [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$output" = "$(SB)/$MSID.HANDOFF.json" ] || { echo "$output"; false; }
+  lrt --phase abort; [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
+  restored || { echo "$output $stderr"; false; }
+  [ "$(printf '%s' "$output" | jq '.restored_target | length')" -eq 2 ] || { echo "$output"; false; }
+  cmp -s "$(SB)/$MSID.jsonl" "$BATS_TEST_TMPDIR/q-live.orig" && [ ! -e "$LRU_STATE/locks/$MSID.lock" ] || false
+}
+
+@test "X7 [RED] unconfirm of a return hop restores the target's old pair too; a confirmed one keeps them aside; CONTROLS kill switch, a marker whose store is live, a forward move" {
+  # unconfirm: the source never exited (a live holder under Q), so the hop is undone
+  retfix
+  mkdir -p "$HOME/.claude-quaternary/sessions"
+  printf '{"pid":%d,"sessionId":"%s"}\n' "$$" "$MSID" > "$HOME/.claude-quaternary/sessions/$$.json"
+  lrt --phase admit; lrt --phase confirm; [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
+  [ ! -e "$(SA)/$MSID.HANDOFF.json" ] || { ls -a "$(SA)"; false; }
+  lrt --phase unconfirm; [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
+  restored || { echo "$output $stderr"; false; }
+  cmp -s "$(SB)/$MSID.jsonl" "$BATS_TEST_TMPDIR/q-live.orig" || false
+  rm -f "$HOME/.claude-quaternary/sessions/$$.json"
+  # a confirmed return hop: T is live, its old pair stays aside, and handoff-fire still sees one chain
+  MSID=762a6daa-0000-4000-8000-000000000006; retfix
+  lrt --phase admit; lrt --phase confirm; [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
+  [ -f "$(SA)/$MSID.jsonl" ] || { ls -a "$(SA)"; false; }
+  [ ! -e "$(SA)/$MSID.HANDOFF.json" ] || { ls -a "$(SA)"; false; }
+  [ ! -e "$(SA)/$MSID.jsonl.handed-off" ] || { ls -a "$(SA)"; false; }
+  run hfev; [ "$status" -eq 0 ] && [ "$output" = "$(SB)/$MSID.HANDOFF.json" ] || { echo "$output"; false; }
+  # CONTROL: LRT_STALE_SETASIDE=off sets nothing aside at admit (and the cycle is back)
+  MSID=762a6daa-0000-4000-8000-000000000007; retfix
+  LRT_STALE_SETASIDE=off lrt --phase admit; [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
+  cmp -s "$(SA)/$MSID.HANDOFF.json" "$BATS_TEST_TMPDIR/t-tomb.orig" || { ls -a "$(SA)"; false; }
+  [ "$(jq 'has("returned")' "$LRU_STATE/locks/$MSID.lock")" = false ] || false
+  # CONTROL: T's marker names a THIRD store that holds a live copy — a real later move, kept
+  MSID=762a6daa-0000-4000-8000-000000000008; retfix
+  tomb "$(SA)" "$HOME/.claude-secondary" 2026-10-03T02:28:25Z; cp -p "$(SA)/$MSID.HANDOFF.json" "$BATS_TEST_TMPDIR/t-tomb.orig"
+  mkdir -p "$HOME/.claude-secondary/projects/-ci"; printf '{}\n' > "$HOME/.claude-secondary/projects/-ci/$MSID.jsonl"
+  lrt --phase admit; [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
+  cmp -s "$(SA)/$MSID.HANDOFF.json" "$BATS_TEST_TMPDIR/t-tomb.orig" || { ls -a "$(SA)"; false; }
+  [[ "$stderr" == *"kept the target marker"*"holds a live copy"* ]] || { echo "$stderr"; false; }
+  # CONTROL: an ordinary forward move (no marker in T) writes no `returned` key on the lock
+  MSID=762a6daa-0000-4000-8000-000000000009
+  printf '%s\n' '{"type":"user"}' > "$(SB)/$MSID.jsonl"
+  lrt --phase admit; [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
+  [ "$(jq 'has("returned")' "$LRU_STATE/locks/$MSID.lock")" = false ] && [ "$(printf '%s' "$output" | jq 'has("set_aside")')" = false ] || false
 }
