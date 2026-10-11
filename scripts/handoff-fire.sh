@@ -3228,7 +3228,14 @@ hf_recycle_hold() { # $1=reason $2=detail $3=what the operator reads → exit 1
   hf_recycle_unconfirm
   hf_recycle_disarm
   emit_recycle_event "recycle-held-$1" "" "$SID" "$2; unconfirm rc $RCY_UNCONFIRM_RC" || true
-  echo "!! recycle ABORTED before /exit (held: $1): $3 — /exit NOT submitted, watcher disarmed, pane lock released, unconfirm rc $RCY_UNCONFIRM_RC. The session stays alive. Re-run: ${CMD:-<the recycle>}" >&2
+  # exit-readback is the one class held AFTER /exit was typed (recycle_fire_commit), so "before
+  # /exit" was false there, and on F2 it told the operator a box still holding /exit was clean
+  # (docs/research/recycle-failures-kitty-2026-10-10/REPORT.md fix 2). $3 says what became of it.
+  if [ "$1" = exit-readback ]; then
+    echo "!! recycle HELD after /exit was TYPED (held: $1): $3 — the /exit was NOT submitted (no Enter sent), watcher disarmed, pane lock released, unconfirm rc $RCY_UNCONFIRM_RC. The session stays alive. Re-run: ${CMD:-<the recycle>}" >&2
+  else
+    echo "!! recycle ABORTED before /exit (held: $1): $3 — /exit NOT submitted, watcher disarmed, pane lock released, unconfirm rc $RCY_UNCONFIRM_RC. The session stays alive. Re-run: ${CMD:-<the recycle>}" >&2
+  fi
   exit 1
 }
 
@@ -3356,14 +3363,18 @@ hf_exit_readback() { # $1=pane → 0 exact /exit read back and CR sent · 1 not 
     hf_bounded "$RCY_IT2" session send -s "$id" $'\r' >/dev/null 2>&1 || true
     return 0
   fi
-  HF_EXIT_RB_UNDO="no DELs sent (the read did not end in /exit)"
+  # HF_EXIT_RB_UNDO is what the operator is told about the box, so it says only what was DONE: no
+  # read verified any removal (docs/research/recycle-failures-kitty-2026-10-10/REPORT.md F2, fix 2).
+  HF_EXIT_RB_UNDO="no DELs sent (the read did not end in /exit), so the box still holds what was read — our /exit may be part of it; clear the composer before typing"
   case "$HF_EXIT_RB_TEXT" in
     */exit) hf_bounded "$RCY_IT2" session send -s "$id" $'\x7f\x7f\x7f\x7f\x7f' >/dev/null 2>&1 || true
-            HF_EXIT_RB_UNDO="five DELs sent to take our /exit back out" ;;
+            HF_EXIT_RB_UNDO="five DELs sent to take our /exit back out (not read back)" ;;
     *)      # The box may still hold the /exit WE typed (pane 168, 2026-10-11: an unreadable read left it
             # there). Receipt it, so the next composer gate scrubs it as this rail's own residue
             # instead of carrying it as somebody's draft.
-            composer_residue_record "$id" "/exit" ;;
+            composer_residue_record "$id" "/exit"
+            [ "$HF_EXIT_RB_TEXT" != "<unreadable>" ] \
+              || HF_EXIT_RB_UNDO="no DELs sent: the composer could not be read, so the /exit we typed MAY STILL BE IN THE BOX — clear it before typing; residue receipt $(composer_residue_dir)/${id//\//_} lets the next recycle's composer gate scrub it" ;;
   esac
   return 1
 }
@@ -17422,7 +17433,7 @@ recycle_fire_commit() {
   # nudge already submits a stranded `/exit` — and only a stranded `/exit`.
   if [ "${HF_EXIT_READBACK:-on}" != off ]; then
     if ! hf_exit_readback "$SID"; then
-      [ -n "$rcy_debt_sid" ] && _hf_resume_debt abandon --sid "$rcy_debt_sid" --why "exit read-back mismatch; nothing submitted, session untouched"
+      [ -n "$rcy_debt_sid" ] && _hf_resume_debt abandon --sid "$rcy_debt_sid" --why "exit read-back mismatch: /exit typed, never submitted, session alive; ${HF_EXIT_RB_UNDO:-no DELs sent}"
       hf_recycle_hold exit-readback "the /exit read back as '$HF_EXIT_RB_TEXT'" \
         "the composer read back '$HF_EXIT_RB_TEXT', not '/exit' — ${HF_EXIT_RB_UNDO:-no DELs sent}"
     fi

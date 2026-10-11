@@ -471,7 +471,8 @@ load_tail_funcs() {
              hf_recycle_fenced hf_recycle_lock_dir _hf_lstart _hf_lock_raw _hf_lock_field \
              _hf_lock_holder_alive hf_recycle_lock_write hf_recycle_lock_take hf_recycle_lock_release \
              hf_recycle_lock_acquire hf_recycle_disarm hf_wake_guard hf_pane_focused hf_lr_lib_load _hf_focus_composer hf_focus_gate \
-             hf_recycle_unconfirm hf_recycle_hold hf_recycle_last_read hf_exit_readback recycle_fire_commit; do
+             hf_recycle_unconfirm hf_recycle_hold hf_recycle_last_read hf_exit_readback recycle_fire_commit \
+             composer_residue_dir composer_residue_record; do
       sed -n "/^$f() {/,/^}/p" "$HF"
     done
   } > "$FUNCS"
@@ -492,7 +493,8 @@ tail_world() {
   CALLS="$BATS_TEST_TMPDIR/calls.log"; : > "$CALLS"
   READS="$STUB/reads"; : > "$READS"
   export CALLS READS
-  # it2: `session read` serves the NEXT queued composer content (the last one repeats) inside a box.
+  # it2: `session read` serves the NEXT queued composer content (the last one repeats) inside a box;
+  # the queued entry `<nobox>` renders a screen with no box at all, which composer_content cannot read.
   cat > "$STUB/it2" <<'SH'
 #!/usr/bin/env bash
 case "$1 $2" in
@@ -501,6 +503,7 @@ case "$1 $2" in
     printf 'read\n' >> "$CALLS"
     c="$(head -n 1 "$READS")"
     [ "$(wc -l < "$READS" | tr -d ' ')" -gt 1 ] && { tail -n +2 "$READS" > "$READS.t"; mv "$READS.t" "$READS"; }
+    if [ "$c" = "<nobox>" ]; then printf 'history\n✻ Working…\n'; exit 0; fi
     printf 'history\n────────────────────\n❯ %s\n────────────────────\n' "$c" ;;
 esac
 exit 0
@@ -642,6 +645,35 @@ SID_UUID="a1b2c3d4-0000-4000-8000-000000000002"
     rm -f "$HOME/.claude/logs/handoffs.jsonl"
     kill "$WATCHER_PID" 2>/dev/null || true
   done
+}
+
+# F2, pane 134 (docs/research/recycle-failures-kitty-2026-10-10/REPORT.md fix 2): the read-back was
+# `<unreadable>`, no DELs went out (correctly), yet the hold said "ABORTED before /exit … /exit NOT
+# submitted" and the resume debt said "session untouched", so the operator was told a box still
+# holding our /exit was clean. The text must say /exit WAS typed, that no DELs were sent and that it
+# may still be in the box, and the receipt the next gate scrubs by must exist.
+@test "7b an UNREADABLE /exit read-back says /exit was typed, no DELs sent, may still be in the box — and receipts it" {
+  tail_world
+  export CC_COMPOSER_RESIDUE_DIR="$BATS_TEST_TMPDIR/residue"
+  printf '%s\n' "" "<nobox>" > "$READS"
+  run recycle_fire_commit "$SESS"
+  [ "$status" -eq 1 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
+  [ "$(calls_n "send /exit")" = 1 ] || { cat "$CALLS"; false; }
+  ! grep -q '177' "$CALLS" || { echo "DELs were sent over an unreadable box"; cat "$CALLS"; false; }
+  [ "$(calls_n "send \$'\\r'")" = 0 ] || { cat "$CALLS"; false; }
+  rows_of recycle-held-exit-readback | grep -qF "read back as '<unreadable>'" || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+  # The operator-facing line: typed, not "before"; no DELs; maybe still in the box; the receipt named.
+  [[ "$output" == *"HELD after /exit was TYPED"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"ABORTED before /exit"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"no DELs sent"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"MAY STILL BE IN THE BOX"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"residue receipt $CC_COMPOSER_RESIDUE_DIR/$PANE"* ]] || { echo "$output"; false; }
+  # The resume debt no longer claims an untouched session.
+  grep -q "^debt abandon --sid $SESS .*/exit typed, never submitted" "$CALLS" || { cat "$CALLS"; false; }
+  ! grep -q 'untouched' "$CALLS" || { cat "$CALLS"; false; }
+  # The receipt the next composer gate scrubs our /exit by.
+  [ -f "$CC_COMPOSER_RESIDUE_DIR/$PANE" ] || { ls -la "$CC_COMPOSER_RESIDUE_DIR" 2>&1; false; }
+  [ "$(cut -f2- < "$CC_COMPOSER_RESIDUE_DIR/$PANE")" = "/exit" ]
 }
 
 # ── 8 · NO BLIND SECOND ENTER ──────────────────────────────────────────────────────────────────
