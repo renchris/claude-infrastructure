@@ -132,7 +132,10 @@ cc-lr recover <ref>            # add --target next3 to pin the account; --source
 Print its three lines verbatim and **END THE TURN**. Do not poll, do not confirm, do not re-census
 to check the pane id you were handed. The verdict comes back as MAIL — a `cc-notify` line carrying
 `verdict=RECOVERED|UNPROVEN|PARTIAL|PARKED|FAILED` (UNPROVEN: the /exit landed but no live process re-registered the session within the bound), its note and the evidence dir — which `mailbox-drain`
-delivers at your next turn boundary like any other message.
+delivers at your next turn boundary like any other message. When the reconciler took the request
+(it is live), its mail goes to your session id once the record is done or escalated: one
+`lr-recon: recovery verdict …` line with a `verdict=CLOSED|NOT_NEEDED|IMPOSSIBLE|REPLACED|ESCALATED`
+token per session, held while your own session is limited or mid-recovery.
 
 **END THE TURN stops the polling, not the ownership.** This session still owns each recovery until
 the session is working again (Iron rule 8). If no verdict has arrived by the deadline (the reset

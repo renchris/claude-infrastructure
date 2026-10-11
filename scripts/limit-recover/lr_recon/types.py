@@ -743,6 +743,9 @@ class Record:
     bundle: str = ""
     confirm_len: Optional[int] = None
     plan_only: bool = False  # daemon-origin without autorecover.on (C2 actuation gate)
+    # the cc-lr session that asked for this recovery: mailed by sid at done/escalated (55dbe05de6e3)
+    requester_sid: str = ""
+    requester_pane: str = ""
     # execution
     phase: str = "PRE-MOVE"
     substate: Optional[str] = "DETECTED"

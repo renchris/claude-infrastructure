@@ -18,6 +18,7 @@ import argparse
 import fcntl
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -262,7 +263,17 @@ def _census(
             and (autorecover or req.origin == "cc-lr")
         ):
             store.claim_request(paths, req_by_sid[sid], verdict, reason)
-            if sid not in ctx.records:
+            old = ctx.records.get(sid)
+            if (
+                old is None
+                # a cc-lr requester asked AFTER this sid's last record closed (it recovered
+                # before the first pass): a fresh member carries the verdict to it (55dbe05de6e3)
+                or (
+                    _requester(req)[0]
+                    and old.terminal is not None
+                    and old.terminal.at < req.at
+                )
+            ):
                 ctx.records[sid] = census.not_needed_record(
                     sid,
                     snap.sessions.get(sid),
@@ -337,7 +348,32 @@ def _census(
             autorecover,
             now,
         )
+    for sid, req in req_by_sid.items():
+        rq_sid, rq_pane = _requester(req)
+        rec = ctx.records.get(sid)
+        # an old closed record never picks up a newer request's requester
+        if (
+            rq_sid
+            and rec is not None
+            and (rec.open or (rec.terminal is not None and rec.terminal.at >= req.at))
+        ):
+            rec.requester_sid, rec.requester_pane = rq_sid, rq_pane
     return buckets, stale
+
+
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+_PANE_RE = re.compile(r"^[A-Za-z0-9._][A-Za-z0-9._-]*$")
+
+
+def _requester(req: Optional[T.Request]) -> Tuple[str, str]:
+    """(requester_sid, requester_pane) of a cc-lr request, '' for anything not well-formed: the
+    sid is the mail address (decision 55dbe05de6e3), the pane only the same-pane guard."""
+    if req is None or req.origin != "cc-lr":
+        return "", ""
+    rs, rp = req.raw.get("requester_sid"), req.raw.get("requester_pane")
+    rs = rs.lower() if isinstance(rs, str) and _UUID_RE.match(rs.lower()) else ""
+    rp = str(rp) if isinstance(rp, (str, int)) and _PANE_RE.match(str(rp)) else ""
+    return rs, rp
 
 
 WAKE_AFTER_S = (
@@ -1123,7 +1159,29 @@ def _cohort(ctx: Ctx, cid: str, recs: List[T.Record], now: float) -> T.Cohort:
     )
 
 
-def _report(ctx: Ctx, mode: str, now: float) -> None:
+def _requester_sets(ctx: Ctx, snap: T.Snapshot) -> Tuple[Set[str], Set[str]]:
+    """(live, held) for Reporter.requester_mails. Held = a mail would wake a session that cannot
+    use it: its last turn is a limit or auth death, it is the subject of an open record of any
+    kind (a mid-move mail makes it take a turn mid-move), or its record ended IMPOSSIBLE and it
+    has served no healthy turn since (recovered by hand, the IMPOSSIBLE record stays)."""
+    live = {sid for sid, s in snap.sessions.items() if s.pid}
+    held: Set[str] = set()
+    for r in ctx.records.values():
+        if r.terminal is not None and r.terminal.outcome == "IMPOSSIBLE":
+            s = snap.sessions.get(r.sid)
+            ok_at = s.transcript.last_assistant_ok_at if s else None
+            if not ok_at or ok_at <= r.terminal.at:
+                held.add(r.sid)
+        elif r.open:
+            held.add(r.sid)
+    for sid, s in snap.sessions.items():
+        last = s.transcript.last or {}
+        if last.get("limit") or last.get("kind") == "auth_cliff":
+            held.add(sid)
+    return live, held
+
+
+def _report(ctx: Ctx, mode: str, now: float, snap: Optional[T.Snapshot] = None) -> None:
     rep = ctx.reporter or report.Reporter(ctx.paths, mode)
     # The mode is re-read every pass (D6.4): the Reporter outlives a `recon/mode` write on the
     # running daemon, and built once it kept every page in observe until a restart.
@@ -1145,6 +1203,12 @@ def _report(ctx: Ctx, mode: str, now: float) -> None:
                 rep.max_age_page(cohort, r)
             report.write_cohort(ctx.paths, cohort, recs, now)
         except Exception as e:  # a surface failure never stops the loop
+            _event(ctx.paths, "report-error", detail=repr(e)[:200])
+    if snap is not None:
+        try:
+            live, held = _requester_sets(ctx, snap)
+            rep.requester_mails(list(ctx.records.values()), live, held)
+        except Exception as e:
             _event(ctx.paths, "report-error", detail=repr(e)[:200])
     try:
         # operator-readout.sh reads this one file instead of loading every record: a Stop hook
@@ -1386,7 +1450,7 @@ def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
         _own_and_charge(ctx, now)
         spawned = _dispatch(ctx, snap, mode, now)
         ctx.actuations += spawned
-    _report(ctx, mode, now)
+    _report(ctx, mode, now, snap)
     _release_terminal(ctx)
     defects = _invariant(ctx, snap, now)
     for rec in ctx.records.values():

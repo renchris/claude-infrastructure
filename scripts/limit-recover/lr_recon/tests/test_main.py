@@ -1617,6 +1617,123 @@ class MainTests(unittest.TestCase):
             M.run_pass(ctx)
         self.assertEqual(seen.get(rec.sid), "WAIT_RESET")
 
+    # ── requester mail (decision 55dbe05de6e3) ─────────────────────────────────────────────────
+    REQ = "aaaaaaaa-1111-2222-3333-444444444444"
+    SID = "abcdef01-0000-0000-0000-000000000001"
+
+    def _asking_snap(self, now, last=None):
+        snap = _snap(now, self.tmp)
+        snap.sessions[self.REQ] = T.SessionObs(
+            sid=self.REQ,
+            acct="next4",
+            pid=11,
+            lstart=L,
+            transcript=T.TranscriptObs(path=_tx(self.tmp), last=last),
+        )
+        return snap
+
+    def _cc_lr_request(self, at):
+        M.store.ensure_dirs(self.paths)
+        with open(
+            os.path.join(self.paths.requests, self.SID + ".cc-lr.json"), "w"
+        ) as fh:
+            json.dump(
+                {
+                    "sid": self.SID,
+                    "mode": "recover",
+                    "at": at,
+                    "requester_sid": self.REQ,
+                    "requester_pane": "225",
+                },
+                fh,
+            )
+
+    def _mails(self, ctx, snap, now):
+        sink = []
+        ctx.reporter = M.report.Reporter(
+            self.paths,
+            "act",
+            page=lambda t: None,
+            mail=lambda a, t: sink.append((a, t)),
+        )
+        M._report(ctx, "act", now, snap)
+        return sink
+
+    def test_a_cc_lr_requester_gets_one_mail_when_its_record_closes(self):
+        import time
+
+        now = time.time()
+        self._cc_lr_request(now - 5)
+        snap = self._asking_snap(now)
+        ctx = M.Ctx(self.paths, None, self.home)
+        M._census(ctx, snap, {}, M.store.list_requests(self.paths), "observe", now)
+        rec = ctx.records[self.SID]
+        self.assertEqual((rec.requester_sid, rec.requester_pane), (self.REQ, "225"))
+        self.assertEqual(self._mails(ctx, snap, now), [], "open: no verdict yet")
+        rec.terminal = T.Terminal(outcome="CLOSED", proof="engaged", at=now + 1)
+        [(addr, text)] = self._mails(ctx, snap, now + 2)
+        self.assertEqual(addr, self.REQ)
+        self.assertIn("verdict=CLOSED", text)
+        self.assertIn("abcdef01", text)
+        self.assertEqual(self._mails(ctx, snap, now + 3), [])
+
+    def test_a_stale_claim_over_an_old_closed_record_still_mails_the_requester(self):
+        """The subject recovered before the first pass and held a record closed an hour before
+        the request: the claim minted nothing, so the verdict reached no one (value skeptic)."""
+        import time
+
+        now = time.time()
+        self._cc_lr_request(now - 10)
+        os.remove(self.req)  # the cc-lr request alone
+        snap = self._asking_snap(now)
+        s = snap.sessions[self.SID]
+        s.holders, s.pid, s.pane = (
+            [],
+            0,
+            None,
+        )  # dead ⇒ the stale reconcile says NOT_NEEDED
+        old = T.Record(sid=self.SID, record_id="recon:old:abcdef01:1", cohort_id="old")
+        old.terminal = T.Terminal(outcome="CLOSED", proof="engaged", at=now - 3600)
+        ctx = M.Ctx(self.paths, None, self.home)
+        ctx.records = {self.SID: old}
+        self._flags(recon_on=True)
+        M._census(ctx, snap, {}, M.store.list_requests(self.paths), "act", now)
+        rec = ctx.records[self.SID]
+        self.assertEqual(
+            (rec.terminal.outcome, rec.requester_sid), ("NOT_NEEDED", self.REQ)
+        )
+        [(addr, text)] = self._mails(ctx, snap, now)
+        self.assertIn("verdict=NOT_NEEDED", text)
+        # an old closed record never picks up a NEWER request's requester by itself
+        ctx2 = M.Ctx(self.paths, None, self.home)
+        ctx2.records = {self.SID: old}
+        self.assertEqual(old.requester_sid, "")
+
+    def test_a_capped_or_busy_requester_is_held(self):
+        """Hold while the requester's last turn is a limit, while it has an open record of any
+        kind (a mid-move mail makes it take a turn mid-move), or while its record is IMPOSSIBLE."""
+        import time
+
+        now = time.time()
+        subject = T.Record(sid=self.SID, record_id="r:s", cohort_id="c1")
+        subject.terminal = T.Terminal(outcome="CLOSED", proof="engaged", at=now)
+        subject.requester_sid = self.REQ
+        limited = {"limit": True, "kind": "limit", "cap": "five_hour"}
+        ctx = M.Ctx(self.paths, None, self.home)
+        ctx.records = {self.SID: subject}
+        self.assertEqual(
+            self._mails(ctx, self._asking_snap(now, last=limited), now), []
+        )
+        mine = T.Record(sid=self.REQ, record_id="r:q", kind="idle", cohort_id="c2")
+        ctx.records[self.REQ] = mine
+        self.assertEqual(self._mails(ctx, self._asking_snap(now), now), [])
+        mine.terminal = T.Terminal(outcome="IMPOSSIBLE", proof="headless", at=now)
+        self.assertEqual(self._mails(ctx, self._asking_snap(now), now), [])
+        # recovered by hand: a healthy turn after the IMPOSSIBLE record releases the hold
+        snap = self._asking_snap(now)
+        snap.sessions[self.REQ].transcript.last_assistant_ok_at = now + 5
+        self.assertEqual(len(self._mails(ctx, snap, now)), 1)
+
     def test_daemon_loop_starts_and_runs_a_pass(self):
         """W5 rig: the long-running path had never started (Caffeinate() without its pid)."""
 

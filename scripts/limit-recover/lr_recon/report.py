@@ -18,7 +18,7 @@ import os
 import re
 import subprocess
 import time
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from lr_recon import store
 from lr_recon import types as T
@@ -31,6 +31,9 @@ REFIRE_S = 3600  # §C11 max-age pages re-fire hourly
 SLO_AFTER_DEATH_S = 600  # §7.4: judged 10 minutes after the cohort's last death
 SHADOW_MAX = 4 * 1024 * 1024
 NOTIFY_TIMEOUT_S = 10
+REQUESTER_MAIL_TRIES = (
+    3  # a requester mail that fails (not rc 124) is retried this many passes
+)
 PAGE_TIMEOUT_S = 45  # lr-page.sh: Notification Center (10 s) + phone (20 s) + slack
 _NOTIFY_VERDICT = re.compile(r"cc-notify: verdict=([A-Za-z-]+)")
 GOOD = ("CLOSED", "NOT_NEEDED", "REPLACED", "REPLACED-NEW-WINDOW")
@@ -121,6 +124,25 @@ def who(rec: T.Record) -> str:
     pane = "pane %d:%d, " % tuple(rec.pane) if rec.pane else ""
     base = os.path.basename(rec.cwd.rstrip("/")) or "?"
     return "session %s (%s%s)" % (rec.sid[:8], pane, base)
+
+
+def _rq_key(rec: T.Record, b: str) -> str:
+    """The requester-mail latch: per record, bucket and terminal time, so a fresh NOT_NEEDED
+    minted under an old record_id (a later cc-lr claim) is still mailed."""
+    at = int(rec.terminal.at) if rec.terminal is not None and rec.terminal.at else 0
+    return "rq:%s:%s:%d" % (rec.record_id, b, at)
+
+
+def _verdict_part(rec: T.Record) -> str:
+    """``verdict=<OUTCOME|ESCALATED> session <sid8> (…)``: the token cc-lr requesters match on."""
+    if rec.terminal is not None:
+        return "verdict=%s %s at %s" % (
+            rec.terminal.outcome,
+            who(rec),
+            _hm(rec.terminal.at),
+        )
+    err = " after %s" % rec.last_error.cls.lower() if rec.last_error else ""
+    return "verdict=ESCALATED %s%s — next: %s" % (who(rec), err, next_action(rec))
 
 
 def next_action(rec: T.Record) -> str:
@@ -466,6 +488,11 @@ class PageFailed(Exception):
     """No channel took the page; Reporter._emit counts it."""
 
 
+class MailUnverified(PageFailed):
+    """cc-notify hit its timeout (rc 124). It writes the mailbox before its slow liveness and
+    wake steps, so the line has most likely landed: latch it, never resend (a duplicate wake)."""
+
+
 def _run(argv: List[str], timeout: float) -> Tuple[int, str]:
     """(rc, stderr). A timeout is rc 124 and a missing binary rc 127, never an exception."""
     try:
@@ -525,7 +552,8 @@ def default_page(text: str) -> None:
 def default_mail(pane: str, text: str) -> None:
     rc, verdict = _cc_notify(pane, text)
     if rc != 0:
-        raise PageFailed("cc-notify %s rc=%d verdict=%s" % (pane, rc, verdict or "-"))
+        why = "cc-notify %s rc=%d verdict=%s" % (pane, rc, verdict or "-")
+        raise MailUnverified(why) if rc == 124 else PageFailed(why)
 
 
 class Reporter:
@@ -564,22 +592,42 @@ class Reporter:
         os.makedirs(self.paths.cohorts, exist_ok=True)
         store.atomic_write_json(self._latch_path(cid), latch)
 
+    def _shadow(self, kind: str, cid: str, text: str, pane: Optional[str]) -> None:
+        os.makedirs(self.paths.shadow, exist_ok=True)
+        row = {"t": self.now(), "kind": kind, "cid": cid, "pane": pane, "text": text}
+        store.append_bounded(
+            os.path.join(self.paths.shadow, "pages.jsonl"), store.dumps(row), SHADOW_MAX
+        )
+        self._shadowed.append("%s %s" % (kind, text))
+
+    def _send_mail(self, cid: str, addr: str, text: str) -> str:
+        """One mail through self._mail, NOT _emit (which swallows the failure the caller must
+        latch on): "sent" | "unverified" (rc 124) | "failed" | "shadowed" (observe mode)."""
+        if self.mode == "observe":
+            self._shadow("MAIL", cid, text, addr)
+            return "shadowed"
+        try:
+            self._mail(addr, text)
+        except MailUnverified:
+            return "unverified"
+        except Exception:  # noqa: BLE001 — a failed mail must never stop the daemon
+            self.failures += 1
+            return "failed"
+        return "sent"
+
+    def _event(self, ev: str, sid: str = "", rid: str = "", detail: str = "") -> None:
+        try:
+            os.makedirs(os.path.dirname(self.paths.events), exist_ok=True)
+            store.append_event(
+                self.paths,
+                T.Event(t=self.now(), ev=ev, sid=sid, record_id=rid, detail=detail),
+            )
+        except OSError:
+            self.failures += 1  # a lost event row must never block the latch after it
+
     def _emit(self, kind: str, cid: str, text: str, pane: Optional[str] = None) -> None:
         if self.mode == "observe":
-            os.makedirs(self.paths.shadow, exist_ok=True)
-            row = {
-                "t": self.now(),
-                "kind": kind,
-                "cid": cid,
-                "pane": pane,
-                "text": text,
-            }
-            store.append_bounded(
-                os.path.join(self.paths.shadow, "pages.jsonl"),
-                store.dumps(row),
-                SHADOW_MAX,
-            )
-            self._shadowed.append("%s %s" % (kind, text))
+            self._shadow(kind, cid, text, pane)
             return
         try:
             if pane is not None:
@@ -734,14 +782,74 @@ class Reporter:
         return say(r) or "in phase %s" % r.phase.lower()
 
     def mail_requester(self, cohort: T.Cohort, pane: str, text: str) -> bool:
-        """§C11 Mail: one mail per cohort, only to a cc-lr requester pane."""
-        latch = self._latch(cohort.cid)
-        if "mail" in latch:
+        """§C11 Mail: one mail per cohort, only to a cc-lr requester pane. Latched only once
+        the send succeeded: latching first lost a failed mail for good."""
+        if "mail" in self._latch(cohort.cid):
             return False
+        text = "%s: %s" % (self._head(cohort), text)
+        if self._send_mail(cohort.cid, pane, text) == "failed":
+            return False
+        latch = self._latch(cohort.cid)
         latch["mail"] = self.now()
         self._save(cohort.cid, latch)
-        self._emit("MAIL", cohort.cid, "%s: %s" % (self._head(cohort), text), pane=pane)
         return True
+
+    def requester_mails(
+        self, records: Sequence[T.Record], live: Set[str], held: Set[str]
+    ) -> int:
+        """Decision 55dbe05de6e3: the cc-lr requester of a record that reached done or escalated
+        gets ONE mail per pass naming every such record, addressed by its session id (the box
+        mailbox-drain and cc-await-ping read; a pane number can be reused). No mail to the subject
+        itself or its pane. While the requester is not live, nothing is latched (one
+        requester-not-live event); while it is ``held`` (capped, busy in a record of its own, or
+        IMPOSSIBLE), nothing is sent or latched. Latched after rc 0 or rc 124 (sent-unverified);
+        any other failure retries next pass, at most REQUESTER_MAIL_TRIES times. Returns mails sent."""
+        due: Dict[str, List[Tuple[T.Record, str]]] = {}
+        for r in records:
+            req, b = r.requester_sid, bucket(r)
+            if not req or b not in ("done", "escalated") or req == r.sid:
+                continue
+            if r.pane and r.requester_pane == str(r.pane[1]):
+                continue
+            latch, key = self._latch(r.cohort_id), _rq_key(r, b)
+            if key in latch:
+                continue
+            if req not in live:
+                nl = "rq-nl:%s:%s" % (r.record_id, req[:8])
+                if nl not in latch:
+                    latch[nl] = self.now()
+                    self._save(r.cohort_id, latch)
+                    self._event("requester-not-live", r.sid, r.record_id, req)
+                continue
+            if req not in held:
+                due.setdefault(req, []).append((r, key))
+        sent = 0
+        for req, items in sorted(due.items()):
+            parts = [_verdict_part(r) for r, _k in items]
+            text = (
+                "lr-recon: recovery verdict for %d session(s) — %s — detail: cc-lr status %s"
+                % (
+                    len(items),
+                    " · ".join(parts),
+                    items[0][0].sid[:8],
+                )
+            )
+            res = self._send_mail(items[0][0].cohort_id, req, text)
+            if res == "unverified":
+                self._event("requester-mail-unverified", req, detail=text[:200])
+            for r, key in items:
+                latch = self._latch(r.cohort_id)
+                if res == "failed":
+                    tries = int(latch.get("rq-try:" + key, 0) or 0) + 1
+                    latch["rq-try:" + key] = tries
+                    if tries >= REQUESTER_MAIL_TRIES:
+                        latch[key] = self.now()
+                        self._event("requester-mail-gave-up", r.sid, r.record_id, req)
+                else:
+                    latch[key] = self.now()
+                self._save(r.cohort_id, latch)
+            sent += res != "failed"
+        return sent
 
     # ── per-record pages ───────────────────────────────────────────────────────────────────────
     def immediate_pages(self, cohort: T.Cohort, rec: T.Record) -> List[str]:

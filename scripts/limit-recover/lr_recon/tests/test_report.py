@@ -188,6 +188,133 @@ class ReportTest(unittest.TestCase):
         self.assertFalse(rep.mail_requester(self.cohort, "7", "again"))
         self.assertEqual(self.mails, [("7", "next3 7d: 3/3 moved")])
 
+    def test_a_failed_cohort_mail_is_not_latched(self) -> None:
+        """mail_requester latched BEFORE sending and _emit swallowed the failure: lost for good."""
+        calls: List[str] = []
+
+        def boom(addr: str, text: str) -> None:
+            calls.append(addr)
+            raise R.PageFailed("rc=3")
+
+        rep = R.Reporter(
+            self.paths, "act", page=self.pages.append, mail=boom, now=self.clock
+        )
+        self.assertFalse(rep.mail_requester(self.cohort, "7", "3/3 moved"))
+        self.assertEqual(rep.failures, 1)
+        rep._mail = lambda p, t: self.mails.append((p, t))
+        self.assertTrue(rep.mail_requester(self.cohort, "7", "3/3 moved"))
+        self.assertEqual((len(calls), len(self.mails)), (1, 1))
+
+    # ── requester mail (decision 55dbe05de6e3) ─────────────────────────────────────────────────
+    REQ = "aaaaaaaa-1111-2222-3333-444444444444"
+
+    def asked(self, r: T.Record, pane: str = "225") -> T.Record:
+        r.requester_sid, r.requester_pane = self.REQ, pane
+        return r
+
+    def events(self) -> List[dict]:
+        try:
+            with open(self.paths.events) as fh:
+                return [json.loads(x) for x in fh]
+        except OSError:
+            return []
+
+    def test_a_requester_gets_one_mail_by_sid_with_a_verdict_token(self) -> None:
+        rep, r = self.reporter(), self.asked(done(rec(1)))
+        self.assertEqual(rep.requester_mails([r], {self.REQ}, set()), 1)
+        [(addr, text)] = self.mails
+        self.assertEqual(addr, self.REQ, "the session box, never the pane number")
+        for tok in ("verdict=CLOSED", "00000001", "cc-lr status 00000001"):
+            self.assertIn(tok, text)
+        self.assertEqual(rep.requester_mails([r], {self.REQ}, set()), 0)
+        self.assertEqual(self.reporter().requester_mails([r], {self.REQ}, set()), 0)
+
+    def test_no_mail_to_the_subject_itself_or_its_pane(self) -> None:
+        own = done(rec(1))
+        own.requester_sid = own.sid
+        same_pane = self.asked(done(rec(2)), pane="2")  # rec(2) sits in pane 12:2
+        live = {own.sid, self.REQ}
+        self.assertEqual(
+            self.reporter().requester_mails([own, same_pane], live, set()), 0
+        )
+        self.assertEqual(self.mails, [])
+
+    def test_a_held_requester_is_mailed_only_once_released(self) -> None:
+        rep, r = self.reporter(), self.asked(done(rec(1)))
+        self.assertEqual(rep.requester_mails([r], {self.REQ}, {self.REQ}), 0)
+        self.assertEqual(rep.requester_mails([r], {self.REQ}, set()), 1)
+
+    def test_a_requester_not_live_is_logged_once_and_never_latched(self) -> None:
+        rep, r = self.reporter(), self.asked(done(rec(1)))
+        for _ in range(2):
+            self.assertEqual(rep.requester_mails([r], set(), set()), 0)
+        self.assertEqual([e["ev"] for e in self.events()], ["requester-not-live"])
+        self.assertEqual(rep.requester_mails([r], {self.REQ}, set()), 1)
+
+    def test_a_failing_send_retries_then_gives_up_after_three(self) -> None:
+        calls: List[str] = []
+
+        def boom(addr: str, text: str) -> None:
+            calls.append(addr)
+            raise R.PageFailed("rc=3")
+
+        rep = R.Reporter(
+            self.paths, "act", page=self.pages.append, mail=boom, now=self.clock
+        )
+        r = self.asked(done(rec(1)))
+        for _ in range(5):
+            rep.requester_mails([r], {self.REQ}, set())
+        self.assertEqual(len(calls), R.REQUESTER_MAIL_TRIES)
+        self.assertEqual([e["ev"] for e in self.events()], ["requester-mail-gave-up"])
+        self.assertEqual(rep.failures, R.REQUESTER_MAIL_TRIES)
+
+    def test_a_timeout_is_sent_unverified_and_never_resent(self) -> None:
+        """cc-notify writes the mailbox before its slow liveness and wake steps, so rc 124 has
+        most likely landed: a retry would be a duplicate wake."""
+        calls: List[str] = []
+
+        def slow(addr: str, text: str) -> None:
+            calls.append(addr)
+            raise R.MailUnverified("rc=124")
+
+        rep = R.Reporter(
+            self.paths, "act", page=self.pages.append, mail=slow, now=self.clock
+        )
+        r = self.asked(done(rec(1)))
+        for _ in range(3):
+            rep.requester_mails([r], {self.REQ}, set())
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(
+            [e["ev"] for e in self.events()], ["requester-mail-unverified"]
+        )
+
+    def test_one_mail_per_requester_per_pass_names_every_record(self) -> None:
+        recs = [self.asked(done(rec(n))) for n in range(1, 6)]
+        self.assertEqual(self.reporter().requester_mails(recs, {self.REQ}, set()), 1)
+        [(_a, text)] = self.mails
+        for n in range(1, 6):
+            self.assertIn("%08d" % n, text)
+
+    def test_escalated_then_closed_is_two_mails_and_waiting_is_none(self) -> None:
+        rep = self.reporter()
+        r = self.asked(rec(1, wait=wait("WAIT_SLOT")))
+        self.assertEqual(rep.requester_mails([r], {self.REQ}, set()), 0)
+        r.escalated = True
+        self.assertEqual(rep.requester_mails([r], {self.REQ}, set()), 1)
+        self.assertIn("verdict=ESCALATED", self.mails[-1][1])
+        done(r, "NOT_NEEDED")
+        self.assertEqual(rep.requester_mails([r], {self.REQ}, set()), 1)
+        self.assertIn("verdict=NOT_NEEDED", self.mails[-1][1])
+        self.assertEqual(len(self.mails), 2)
+
+    def test_observe_shadows_the_requester_mail(self) -> None:
+        rep, r = self.reporter("observe"), self.asked(done(rec(1)))
+        self.assertEqual(rep.requester_mails([r], {self.REQ}, set()), 1)
+        self.assertEqual(self.mails, [])
+        with open(os.path.join(self.paths.shadow, "pages.jsonl")) as fh:
+            [row] = [json.loads(line) for line in fh]
+        self.assertEqual((row["kind"], row["pane"]), ("MAIL", self.REQ))
+
     # ── max ages ───────────────────────────────────────────────────────────────────────────────
     def due(self, r: T.Record, age: float) -> bool:
         return R.max_age_due(r, T0 + age)
@@ -606,8 +733,17 @@ class DefaultSinkTest(unittest.TestCase):
         os.environ["NOTIFY_RC"] = "3"
         rep = self._rep()
         cohort = T.Cohort(cid="c1", acct="next3", scope="7d", opened_at=T0)
-        self.assertTrue(rep.mail_requester(cohort, "7", "3/3 moved"))
+        self.assertFalse(rep.mail_requester(cohort, "7", "3/3 moved"))
         self.assertEqual(rep.failures, 1)
+
+    def test_a_mail_timeout_raises_unverified_not_failed(self) -> None:
+        os.environ["NOTIFY_RC"] = "124"
+        with self.assertRaises(R.MailUnverified):
+            R.default_mail("aaaaaaaa-1111-2222-3333-444444444444", "x")
+        os.environ["NOTIFY_RC"] = "3"
+        with self.assertRaises(R.PageFailed) as cm:
+            R.default_mail("aaaaaaaa-1111-2222-3333-444444444444", "x")
+        self.assertNotIsInstance(cm.exception, R.MailUnverified)
 
     def test_the_default_argv_parses_under_bin_cc_notify(self) -> None:
         """The old sink passed --page, which cc-notify rejects with exit 2 (usage). Replay the argv
