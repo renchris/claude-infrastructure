@@ -4640,6 +4640,19 @@ hf_recycle_retry_ticket() { # $1=session id $2=pane $3=why (one line) $4=job pid
 # those two holds keep the screen through lr-composer-snapshot.sh (the --ansi store the reconciler's
 # draft holds already use), mode 0600, bounded. Kitty only, because that store reads through kitty's
 # transport; elsewhere the row says so. It types nothing and never fails its caller.
+# Bounded by count as well as by mode: keep the newest HF_HOLD_SNAP_KEEP (default 50) witnesses. The
+# store is shared with the reconciler's draft captures (D6.7), which are not this rail's to prune, so
+# only files whose reason starts `held-` are counted or removed. Names start with a UTC timestamp, so
+# a reverse name sort is newest first.
+hf_hold_screen_witness_prune() { # $1=store dir → always 0
+  local d="${1:-}" keep="${HF_HOLD_SNAP_KEEP:-50}" f
+  case "$keep" in ''|*[!0-9]*) keep=50 ;; esac
+  [ -d "$d" ] || return 0
+  find "$d" -maxdepth 1 -type f -name '*-held-*.ansi' 2>/dev/null | sort -r | tail -n +"$((keep + 1))" \
+    | while IFS= read -r f; do rm -f "$f" 2>/dev/null || true; done
+  return 0
+}
+
 hf_hold_screen_witness() { # $1=pane $2=reason → HF_HOLD_SNAP (the .ansi path, or "none (why)"); always 0
   local pane="${1##*:}" lcs="" c out=""
   HF_HOLD_SNAP="none (not a kitty pane)"
@@ -4654,6 +4667,7 @@ hf_hold_screen_witness() { # $1=pane $2=reason → HF_HOLD_SNAP (the .ansi path,
   if [ -n "$out" ] && [ -f "$out" ]; then
     chmod 600 "$out" 2>/dev/null || true
     HF_HOLD_SNAP="$out"
+    hf_hold_screen_witness_prune "${out%/*}"
   else
     HF_HOLD_SNAP="none (no screen captured)"
   fi

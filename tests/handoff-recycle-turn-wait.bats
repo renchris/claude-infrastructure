@@ -43,6 +43,7 @@ setup() {
     sed -n '/^hf_transcript_at_rest() {/,/^}/p'      "$HF"
     sed -n '/^hf_recycle_retry_dir() {/p'            "$HF"
     sed -n '/^hf_recycle_retry_ticket() {/,/^}/p'    "$HF"
+    sed -n '/^hf_hold_screen_witness_prune() {/,/^}/p' "$HF"
     sed -n '/^hf_hold_screen_witness() {/,/^}/p'     "$HF"
     sed -n '/^rcy_composer_unreadable() {/,/^}/p'    "$HF"
     sed -n '/^hf_new_prompt_since() {/,/^}/p'        "$HF"
@@ -486,6 +487,23 @@ deferred_turn_ended() { T0="$(date +%s)"; screen_box ""; tx_tool_use; tx_tool_re
   grep -qF 'Working… (12s)' "$snap" || { cat "$snap"; false; }
   [ "$(stat -f %Lp "$snap" 2>/dev/null || stat -c %a "$snap")" = 600 ]
   grep -qF "screen $snap" "$EVENTS" || { cat "$EVENTS"; false; }
+}
+
+@test "[RED] fix 6: the witness store is bounded — the newest HF_HOLD_SNAP_KEEP held- captures survive, a reconciler capture is never pruned" {
+  screen_boxless; tx_tool_use
+  export HF_DIR="$REPO/scripts" LR_COMPOSER_SNAP_DIR="$W/snaps" LCS_CC_TUI="$W/cc-tui-stub.sh" STUB_IN_KITTY=1 HF_HOLD_SNAP_KEEP=2
+  # shellcheck disable=SC2016  # expanded by the stub library, not here
+  printf 'cc_tui_rpc() { cat "$SCREEN_FILE"; }\n' > "$LCS_CC_TUI"
+  mkdir -p "$LR_COMPOSER_SNAP_DIR"
+  : > "$LR_COMPOSER_SNAP_DIR/20200101T000000Z-win77-sess-aaa-held-unreachable-gate.ansi"
+  : > "$LR_COMPOSER_SNAP_DIR/20200101T000001Z-win77-sess-aaa-held-exit-readback.ansi"
+  : > "$LR_COMPOSER_SNAP_DIR/20200101T000002Z-win77-sess-aaa-draft-hold.ansi"
+  CC_RECYCLE_TURN_WAIT=off CALLER_PID="$DEAD_PID" run "$DRIVER" 3>&-
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ "$(find "$LR_COMPOSER_SNAP_DIR" -name '*-held-*.ansi' | wc -l | tr -d ' ')" = 2 ] || { ls "$LR_COMPOSER_SNAP_DIR"; false; }
+  [ ! -e "$LR_COMPOSER_SNAP_DIR/20200101T000000Z-win77-sess-aaa-held-unreachable-gate.ansi" ] || { ls "$LR_COMPOSER_SNAP_DIR"; false; }
+  [ -e "$LR_COMPOSER_SNAP_DIR/20200101T000001Z-win77-sess-aaa-held-exit-readback.ansi" ] || { ls "$LR_COMPOSER_SNAP_DIR"; false; }
+  [ -e "$LR_COMPOSER_SNAP_DIR/20200101T000002Z-win77-sess-aaa-draft-hold.ansi" ] || { ls "$LR_COMPOSER_SNAP_DIR"; false; }
 }
 
 @test "fix 6: outside kitty the hold names no screen and still holds — the witness never costs the refusal" {
