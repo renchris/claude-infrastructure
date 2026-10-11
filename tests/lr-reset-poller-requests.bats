@@ -639,3 +639,30 @@ JSON
   tick
   grep -q '2 limited session(s) are queued for recovery (by account: next3=2).*about 15 min' "$PAGE_ARGV" || { cat "$PAGE_ARGV"; plog; false; }
 }
+
+# ══ THE cc-lr REQUEST SHAPE AND ITS REPLY-TO (2026-10-11, lr-reliability REPORT D1 + D3) ═════════
+# bin/cc-lr's cl_recon_queue writes {sid, at, requested_by:"cc-lr", mode:"recover", pane, config_dir}
+# and, from wave A on, requester_pane / requester_sid. The poller threw mode "recover" away as an
+# unknown mode (two live losses, poller.log 03:56:01Z and 03:57:21Z), read only .source_pane, and
+# dispatched with no reply-to, so the verdict went to a desk role that does not exist. The reply-to
+# is the REQUESTER's pane and only for a cc-lr request: mailing the capped subject queues a turn on
+# a capped account and can loop through a fresh stop-failure request (B3-1 skeptic).
+cclr_rq() { # $1=extra JSON object merged into the real cc-lr shape
+  mkdir -p "$STATE/requests"
+  jq -nc --arg sid "$SID" --argjson at "$(date +%s)" --arg cfg "$HOME/.claude-tertiary" --argjson x "${1:-null}" \
+    '{sid:$sid, at:$at, requested_by:"cc-lr", mode:"recover", pane:"616", config_dir:$cfg} + ($x // {})' \
+    > "$STATE/requests/$SID.cc-lr.json"
+}
+
+@test "[RED] D1: mode recover from cc-lr is the relaunch path, and .pane is read as the source pane" {
+  cclr_rq
+  tick
+  grep -q -- "--one $SID --target auto --source-pane 616 --from-daemon --detach" "$FLEET_LOG" || { cat "$FLEET_LOG"; plog; false; }
+  [ ! -e "$STATE/results/$SID.cc-lr.unknown-mode.json" ]
+}
+
+@test "D1 CONTROL: .source_pane still wins over .pane when both are present" {
+  cclr_rq '{"source_pane":"700"}'
+  tick
+  grep -q -- "--source-pane 700 " "$FLEET_LOG" || { cat "$FLEET_LOG"; plog; false; }
+}

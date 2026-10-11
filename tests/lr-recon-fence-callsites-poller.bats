@@ -135,8 +135,15 @@ assert_unlocked_act() { # $1=stub
 
 # ── arm fixtures ─────────────────────────────────────────────────────────────────────────────────
 request() { # $1=file basename (default $SID) — a cc-lr-origin recovery (no hook policy gate)
+  # THE SHAPE bin/cc-lr's cl_recon_queue WRITES, not a hand-made one: `cc-lr recover` queues
+  # mode "recover" and names the subject's pane as .pane (never .source_pane), and leaves .target
+  # out when it is auto. The old fixture ({requested_by, target}) carried neither field, so the
+  # poller's `unknown mode 'recover'` park was invisible here while it lost two live requests
+  # (poller.log 2026-10-11 03:56:01Z, 03:57:21Z).
   mkdir -p "$STATE/requests"
-  printf '{"sid":"%s","requested_by":"cc-lr","target":"auto"}\n' "$SID" > "$STATE/requests/${1:-$SID}.json"
+  jq -nc --arg sid "$SID" --argjson at "$NOW" --arg cfg "$HOME/.claude-quaternary" \
+    '{sid:$sid, at:$at, requested_by:"cc-lr", mode:"recover", pane:"616", config_dir:$cfg}' \
+    > "$STATE/requests/${1:-$SID}.json"
 }
 park_future() {
   # § 2a is an unattended move, so it runs only under the zero-human switch (ruling 1, resolution 8):
@@ -259,6 +266,15 @@ live_row() { # the original pane is alive (pid = this bats process) ⇒ §2 take
   tick
   [ "$(acted fleet)" -eq 1 ] || { plog; false; }
   [ ! -e "$STATE/requests/$SID.cc-lr.json" ]
+}
+@test "[RED] cc-lr.json as cc-lr writes it: mode recover survives the open fence and dispatches lr-fleet --one in the subject's pane" {
+  request "$SID.cc-lr"
+  tick
+  line="$(grep "^fleet	" "$ACT_LOG" | head -1)"
+  [[ "$line" == *"argv=--one $SID --target auto --source-pane 616 --from-daemon --detach"* ]] || { plog; false; }
+  [ ! -e "$STATE/results/$SID.cc-lr.unknown-mode.json" ]
+  [ -f "$STATE/claimed/$SID.cc-lr.json" ] || { ls -R "$STATE" >&2; false; }
+  if grep -q "unknown mode" "$STATE/poller.log"; then plog; false; fi
 }
 
 # ══ SUPERSEDED-BY-LIVE-RUN ═══════════════════════════════════════════════════════════════════════

@@ -1217,9 +1217,10 @@ d=json.load(open(sys.argv[1]))
 if not isinstance(d,dict): raise SystemExit(1)
 sys.stdout.write("".join(str(d.get(k) or "")+"\0"
   for k in ("sid","kind","mode","target","source_pane","requested_by","prompt_file",
-            "transcript_path","attempts","last_attempt_epoch","reset_at_epoch","account")))
+            "transcript_path","attempts","last_attempt_epoch","reset_at_epoch","account",
+            "pane")))
 ' "$_rq" 2>/dev/null)
-  if (( ${#_rqf[@]} != 12 )) || [[ -z "${_rqf[0]}" ]]; then
+  if (( ${#_rqf[@]} != 13 )) || [[ -z "${_rqf[0]}" ]]; then
     log "REQUEST-SKIP $_rq_name — unreadable or no sid; parked as malformed"
     mv "$_rq" "$RESULTS/${_rq_name%.json}.malformed.json" 2>/dev/null || true; continue
   fi
@@ -1227,6 +1228,10 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
   _rq_pane="${_rqf[4]}"; _rq_by="${_rqf[5]}"; _rq_pfile="${_rqf[6]}"
   _rq_tp="${_rqf[7]}"; _rq_att="${_rqf[8]}"; _rq_last="${_rqf[9]}"
   _rq_reset="${_rqf[10]}"; _rq_acct="${_rqf[11]}"
+  # bin/cc-lr's cl_recon_queue names the subject's pane `.pane`, never `.source_pane` (D1,
+  # 2026-10-11): read either, the explicit `.source_pane` first. "-" is cc-lr's "no pane".
+  [[ -n "$_rq_pane" ]] || _rq_pane="${_rqf[12]}"
+  [[ "$_rq_pane" != - ]] || _rq_pane=""
   [[ "$_rq_att" =~ ^[0-9]+$ ]] || _rq_att=0
   [[ "$_rq_last" =~ ^[0-9]+$ ]] || _rq_last=0
   [[ "$_rq_reset" =~ ^[0-9]+$ ]] || _rq_reset=0
@@ -1324,6 +1329,10 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
   esac
 
   [[ -n "$_rq_mode" ]] || _rq_mode=relaunch
+  # `cc-lr recover` queues mode "recover" (cl_recon_queue). The reconciler reads that name; this lane
+  # parked it as unknown into a results/ file nothing reads — two live losses on 2026-10-11 (poller.log
+  # 03:56:01Z, 03:57:21Z) while cc-lr had printed QUEUED. A recover IS a relaunch here.
+  [[ "$_rq_mode" != recover ]] || _rq_mode=relaunch
   case "$_rq_mode" in
     relaunch|prompt) : ;;
     *) log "REQUEST-SKIP $_rq_sid — unknown mode '$_rq_mode'; parked"
