@@ -2010,6 +2010,9 @@ def jload(p):
     except (OSError, ValueError):
         return None
 def clean(s):
+    # a field is never cut: a transcript path past 240 chars, or one with a space, must survive
+    return str(s).replace("\t", " ").replace("\n", " ").strip() or "-"
+def brief(s):
     return " ".join(str(s).split())[:240] or "-"
 def epoch_of(s):
     try:
@@ -2063,8 +2066,8 @@ for sid in sids:
         if not m:
             continue
         detail = first.split(" — ", 1)[1] if " — " in first else first
-        out("R", sid, run_ts, m.group(1), mtime(vf) or 0, detail)
-        out("T", sid, m.group(1), mtime(vf) or 0, "rail run " + os.path.basename(d), detail)
+        out("R", sid, run_ts, m.group(1), mtime(vf) or 0, brief(detail))
+        out("T", sid, m.group(1), mtime(vf) or 0, "rail run " + os.path.basename(d), brief(detail))
     rec = jload(os.path.join(recon, "sessions", sid + ".json"))
     if rec:
         term = rec.get("terminal") if isinstance(rec.get("terminal"), dict) else None
@@ -2075,7 +2078,7 @@ for sid in sids:
             word = term["outcome"] + (":" + close["via"] if close.get("via") else "")
             at = term.get("at") or close.get("at") or mtime(os.path.join(recon, "sessions", sid + ".json")) or 0
             out("T", sid, word, at, "reconciler record " + str(rec.get("record_id") or "-") + " (cohort " + cid + ")",
-                term.get("proof") or "-")
+                brief(term.get("proof") or "-"))
         else:
             out("H", sid, "%s/%s" % (rec.get("phase") or "-", rec.get("substate") or "-"), cid)
     if os.path.exists(os.path.join(recon, "owned", sid)) and not (rec and not rec.get("terminal")):
@@ -2087,7 +2090,7 @@ for sid in sids:
         txs.append(r.get("transcript_path") or "")
         if r.get("verdict") == "retired":
             out("T", sid, "REQUEST-RETIRED", epoch_of(r.get("ts")) or mtime(os.path.join(res, sid + ".json")) or 0,
-                "poller request lane", r.get("reason") or "-")
+                "poller request lane", brief(r.get("reason") or "-"))
     for suf, word in ((".exhausted.json", "REQUEST-EXHAUSTED"), (".cc-lr.unknown-mode.json", "REQUEST-PARKED:unknown-mode"),
                       (".unknown-mode.json", "REQUEST-PARKED:unknown-mode")):
         p = os.path.join(res, sid + suf)
@@ -2114,7 +2117,7 @@ for sid in sids:
             tail = fh.read().decode("utf-8", "replace").splitlines()
         hits = [x for x in tail if sid in x and " REQUEST" in x]
         if hits:
-            out("L", sid, hits[-1])
+            out("L", sid, brief(hits[-1]))
     except OSError:
         pass
     cfgs = [c for c in os.environ.get("CL_CFGS", "").split("\n") if c] or [
