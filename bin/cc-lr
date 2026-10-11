@@ -2389,7 +2389,7 @@ EOS
         a = (f in mtime) ? age(now - mtime[f]) : "?"
         if (k != "bad")                   nextcmd = ""
         else if (sid in held)             nextcmd = " → the reconciler holds it (" held[sid] "); no repair: cc-lr status --cohort " hcid[sid]
-        else if (tbest[sid] > mtime[f] && (f in mtime)) nextcmd = " → superseded by " tbw[sid] " at " iso(tbest[sid]) "; see VERDICT below"
+        else if (tbest[sid] > mtime[f] && (f in mtime) && tbw[sid] != s) nextcmd = " → superseded by " tbw[sid] " at " iso(tbest[sid]) "; see VERDICT below"
         else if (!livek || alive)         nextcmd = " → cc-lr repair " bdir
         else                              nextcmd = " → source session is gone; repair types into a pane and cannot apply"
         cause = (d == "-" || d == "") ? "—" : d

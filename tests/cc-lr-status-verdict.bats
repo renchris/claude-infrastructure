@@ -38,7 +38,7 @@ bundle() { # <sid> <stamp> <state>… — one events.jsonl, one line per state g
 fleet_verdict() { # <sid> <run stamp> <verdict line> [epoch]
   local d="$LR_STATE_DIR/fleet/one-$2-${1:0:8}"
   mkdir -p "$d"; printf '%s\n' "$3" > "$d/verdict.txt"
-  [ -z "${4:-}" ] || touch -t "$(date -u -r "$4" +%Y%m%d%H%M.%S)" "$d/verdict.txt"
+  [ -z "${4:-}" ] || touch -t "$(date -r "$4" +%Y%m%d%H%M.%S)" "$d/verdict.txt"   # touch -t reads LOCAL time
 }
 recon_record() { # <sid> <outcome|""> <epoch> [phase/substate when open]
   if [ -n "$2" ]; then
