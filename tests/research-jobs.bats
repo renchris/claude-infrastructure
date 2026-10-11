@@ -198,7 +198,7 @@ d['populations_outside']=[{'name':'releases','refresh_cmd':'cat $F','owner':'lea
 @test "sweep: an expired class-B packet's default is applied to the decision record" {
   printf '{"id":"DR-1","status":"carried","blocks_waves":["B1"]}\n' >> "$REC/decisions.jsonl"
   id="$("$G" file-packet --program demo --decision DR-1 --class B --what "retry policy" --option "retry::writes retried" \
-    --option "do-nothing::no change" --default retry --deadline 2026-10-01T00:00:00Z --conviction 80 --receipt "$REC/frame.json" | awk '{print $2}')"
+    --option "do-nothing::no change" --option "use-what-exists::keep the current policy" --default retry --deadline 2026-10-01T00:00:00Z --conviction 80 --receipt "$REC/frame.json" | awk '{print $2}')"
   /bin/bash "$D" expire-sweep >/dev/null
   run job sweep --program demo
   [ "$status" -eq 0 ]
@@ -212,7 +212,7 @@ d['populations_outside']=[{'name':'releases','refresh_cmd':'cat $F','owner':'lea
   printf '{"id":"DR-1","status":"carried","blocks_waves":["B1"]}\n' >> "$REC/decisions.jsonl"
   past="$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ)"
   "$G" file-packet --program demo --decision DR-1 --class B --what "retry policy" --option "retry::writes retried" \
-    --option "do-nothing::no change" --default retry --deadline "$past" --conviction 80 --receipt "$REC/frame.json" >/dev/null
+    --option "do-nothing::no change" --option "use-what-exists::keep the current policy" --default retry --deadline "$past" --conviction 80 --receipt "$REC/frame.json" >/dev/null
   /bin/bash "$D" expire-sweep >/dev/null
   CC_RESEARCH_BIN="$CLI" run /bin/bash "$RUNNER" sweep
   [ "$status" -eq 0 ]
