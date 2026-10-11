@@ -253,3 +253,40 @@ Line numbers are at HEAD `b68fa8a25`. Each test is written to be red before the 
 - **F2, F3 and F4 drop below 70%** if a capture of pane 134 between 00:25Z and 02:20Z shows no `❯ /` row above the box, or if any logged write to pane 134 between 00:25Z and 02:20Z turns up.
 - **F2 and F3 rise to about 97%** with a 2.1.293 capture at pane 134's geometry with `/exit` typed, taken in a throwaway pane.
 - **F1's transport cause** would move with per-attempt `recycle-type-attempt` rows from a reproduction at a load above 40 per core. If those showed sends under 1 s with no echo, a late echo, or the instant-prompt echo failing the suffix rule, would be back in play. A record of pane 44's focus state at 04:56-05:03Z would also move it.
+
+## Build results (2026-10-11, branch `fix/recycle-gaps-kitty`)
+
+Every ranked fix except 8 and 8b is built and tested. Each new test was run red against the pre-fix
+script and green after.
+
+| Fix | What is now true | Tests (new) |
+|---|---|---|
+| 1 | Already landed as `0e882c9ac` before this build; not redone. | — |
+| 2 | An exit-readback hold says `/exit` **was typed**, whether DELs were sent, and, on an `<unreadable>` read, that the `/exit` may still be in the box with a residue receipt written. The resume-debt reason no longer says "session untouched". No keystroke goes into an unreadable box: under a dialog it would be taken as the dialog's answer. | `handoff-fire-recycle-custody.bats` 7, 7b |
+| 2 (consumers) | `lr-upgrade.sh lru_hf_evidence`, `lr-handoff.sh`'s held-after-confirm branch and `lr_recon/settle.py _RCY_HELD` read all three hold forms (`ABORTED before /exit`, `HELD after /exit was TYPED`, `HELD after SIGTERM`). Before, the new wording read as no hold, so lr-upgrade skipped `lru_clear_own_exit` and lr-handoff fell to STRANDED. | `lr-handoff-flags.bats` (2 hold-form cases), `lr-upgrade-settle.bats` S11a2, `test_settle.HoldLineForms` (2) |
+| 3 | `composer_content` exits **3** for a static unreadable shape (dialog above, glyph below, tall rejected) and 1 for a turn-shaped one. The gate confirms static after two identical reads; the checksum stops at the box's bottom border, so a ticking status line still confirms and a spinner above the box does not. A static screen holds at once as `recycle-held-unreadable-static`, naming the shape, with no deferral and no 180 s wait. | `handoff-recycle-turn-wait.bats`: F3 static hold, own-`/exit` receipt wording, exit code carries the shape, ticking status line vs spinner |
+| 4 | A deferred self-recycle re-reads the session at the last moment before `/exit`; a turn or a new prompt since the deferral holds it. | `handoff-recycle-turn-wait.bats` (deferred re-read cases) |
+| 5 | The deferral's row and the retry ticket no longer say "while the turn was running" on the child that runs after the turn ended. | `handoff-recycle-turn-wait.bats` fix 5 ticket `.why` |
+| 6 | Held-unreachable, held-exit-readback and the static hold keep a 0600 screen witness through `lr-composer-snapshot.sh`, named in the row; the store keeps the newest 50 `held-` captures and never prunes the reconciler's own. | `handoff-recycle-turn-wait.bats` fix 6 (snapshot, bound, outside kitty) |
+| 7 | `recycle-relaunch-failed`, `recycle-relaunch-refused` and `recycle-dead` post one OS banner per record through `lr-page.sh`, before the push. The banner leads with the packet or record handle (≤ 200 chars) and says "is stranded", or "needs attention" when claude is still running. The record carries `paged=`. `autonomy-sweep.sh` runs a strand rung **before** phase 0a that banners an unpaged, unseen strand record once, across ticks. | `handoff-alarm-records.bats` STRAND PAGE (7); `autonomy-sweep.bats` strand rung (6, including an overrun tick and a late-rung mutant control) |
+| 9 | Superseded: session 216's wave landed the convergence of all five parser copies as `04f9be43a` (`tests/composer-parser-parity.bats`, 21 cases) while this build ran. Its own parser commits were dropped at rebase; trunk's suite covers every case they added. | — |
+| 10 | When the last read proved the session at rest, our successor is staged, and exactly one claude on the pane's tree is pinned by session row and start time, the recycle stops claude with `kill -TERM` instead of typing `/exit`. It waits 30 s (Claude Code's own shutdown failsafe is 15 s), never sends KILL, and holds as `exit-signal-ignored` if claude outlives the wait. The teardown marker carries the pid, so the 143 reads as RECYCLE. Anything else, or `HF_EXIT_ACTUATOR=typed`, types `/exit` as before. In practice only fresh-mode recycles stage a successor, so the signal path serves the deferred self-recycle lane; same-account, focused-remote and resume recycles still type. | `handoff-fire-recycle-custody.bats` 16a-16f; `lead-crash-watchdog.bats` signal-exit marker; structural pin in `handoff-recycle-custody.bats` 6 updated to anchor on the signal |
+
+**Gate proof for fix 10.** `proof-sigterm-2.1.293.md` (scratch panes this build created and closed)
+passed all four conditions. Session 216's independent proof
+(`docs/research/recycle-sigterm-proof-2026-10-11/REPORT.md`) passed the built design 9/9 and set the 30 s grace.
+
+**Not built here.** Fix 8 (a zsh `precmd` claim of the staged successor) is session 216's W3. Fix 8b
+(hold `/exit` under extreme load when the successor cannot be claimed) is session 216's, to fire after
+this lands.
+
+**Suites run on the merged branch** (plan line asserted): `autonomy-sweep` 98/98,
+`handoff-fire-recycle-custody` 52/52, `handoff-composer-gate` 60/60, `lr-handoff-flags` 50/50,
+`lead-crash-watchdog` 44/44, `handoff-alarm-records` 27/27, `lr-upgrade-settle` 22/22,
+`composer-tall-readback` 21/21, `composer-parser-parity` 21/21, `handoff-recycle-draft-carry` 19/19,
+`lr-page` 16/16, `handoff-recycle-expect-probe` 12/12, `handoff-recycle-custody` 7/7,
+`recycle-exit-residue` 5/5, `lr_recon.tests.test_settle` 53 OK. `handoff-recycle-turn-wait` was 24/24
+in a low-load window and 24/25 after the witness-bound test was added, at load ~300: the red is test 6,
+"a NEW PROMPT after the deferral", which also passed only 1 of 3 runs on trunk `origin/main` at the
+same load (load ~460), so it is a pre-existing load flake, not this build. Bare shellcheck: 0 findings
+on `handoff-fire.sh`, `autonomy-sweep.sh`, `lr-handoff.sh` and `lr-upgrade.sh`.
