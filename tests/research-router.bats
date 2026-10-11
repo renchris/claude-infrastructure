@@ -529,6 +529,19 @@ cert_round_open() {
   [ "$(tool Bash 'handoff-fire.sh --prompt-file x --cwd /tmp/outside' "$E" lead2)" = deny ]
 }
 
+# Decision (2026-10-11 follow-up): a teammate's first prompt is not a fire brief. Mutant: add
+# `<teammate-message` to FIRE_BRIEF and mate reads other — a work-order lead's teammate denied Agent.
+@test "outside every root a teammate whose first prompt names the program starts ordinary; only an Agent-capable pane can spawn one" {
+  state certifying
+  E="$BATS_TEST_TMPDIR/elsewhere"
+  prompt 'the demo status please' "$E" spawner >/dev/null
+  [ "$(label spawner)" = other ]
+  [ "$(tool Agent 'spawn a teammate' "$E" spawner)" = deny ]
+  prompt '<teammate-message teammate_id="team-lead">the demo: fix the parser</teammate-message>' "$E" mate >/dev/null
+  [ "$(label mate)" = none ]
+  [ "$(tool Agent 'x' "$E" mate)" = allow ]
+}
+
 @test "a certification-round activity unlocks nothing once the program is certified" {
   state certified
   cert_round_open

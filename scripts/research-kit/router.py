@@ -160,6 +160,9 @@ MACHINE_ENVELOPE = re.compile(
 # A fired session's own first prompt, the two envelopes da9da7a18's first-prompt label was meant for:
 # handoff-fire.sh embeds HANDOFF-ENGAGE- in every real non-recycle fire (its ENGAGE_VERIFY copy), and
 # a leading `[handoff ` marks a recycle brief. Outside every root only these route an unrouted pane.
+# A `<teammate-message` is deliberately not one: Agent is denied on every turn routed other, so only
+# an allow-all (ordinary, work-order, new-idea) pane can spawn a teammate, and an ordinary teammate
+# outside every root holds no more than its spawner did.
 FIRE_BRIEF = re.compile(r"^\s*\[handoff |HANDOFF-ENGAGE-[A-Za-z0-9._-]+")
 RECYCLE_BRIEF = re.compile(r"^\s*\[handoff ")
 ENGAGE_MARKER = re.compile(r"HANDOFF-ENGAGE-[A-Za-z0-9._-]+")
