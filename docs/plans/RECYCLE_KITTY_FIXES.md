@@ -84,3 +84,13 @@ Landed as `fix(composer-parsers): a dialog over the box reads UNKNOWN in every c
   - Not closed by this wave (report objection a): a shell started before the rc change has no hook, so its recycle still revokes and types. Every pane relaunched after the converge has it.
   - Not covered: a `.cmd` left by a SIGKILLed watcher keeps the gate open, so that one pane pays `take`'s forks at each prompt until the next stage replaces the file. No claim can result (nonce, lstart and TTL all refuse).
   - Not tested: operator typeahead at the prompt. It stays in the tty buffer and reaches the successor's composer, the same as with every other consumer; the typed fallback is worse, since typeahead interleaves with the launch line.
+
+### W4 — fix 8b, the load hold (landed 2026-10-11; `git log --grep 'load hold'` for the sha)
+
+- **What landed.** `hf_recycle_load_gate` in `scripts/handoff-fire.sh`, called by `recycle_fire_commit` after the last read and before the resume debt, the SIGTERM exit and the typed `/exit`. It holds as `recycle-held-load` (line `recycle ABORTED before /exit (held: load)`, which every existing hold parser already reads, with the `Re-run:` command) when load per core is above the bound **and** no successor of ours is staged for the pane's tty. A staged successor returns before the load is read.
+- **The bound.** `HF_RECYCLE_HOLD_LOAD_PER_CORE`, else ship-land's `CC_GATE_MAX_LOAD_PER_CORE`, else 8 per core (80 on a 10-core box, ship-land's derived ceiling). `0`/`off` and `CC_FIRE_CAPACITY_GATE=off` switch it off; an unreadable load proceeds; a non-numeric bound takes 8.
+- **Tests:** `tests/handoff-recycle-load-hold.bats`, 5 cases over the extracted commit with the load reader stubbed (`HF_LOAD_PER_CORE`). Cases 1, 2 and 5 are red on trunk `a60fa9925`; 3 and 4 are controls, and each case has a mutant that turns it alone red.
+- **Learnings.**
+  - Every suite that drives a recycle pins `CC_FIRE_CAPACITY_GATE=off` (hermeticity lint rule 2), so making that the hold's bypass too keeps all of them off the machine's real load, which sat at 8-11 per core while this was built, above the bound. Without it, any of them that reaches the exit with no stage would have held.
+  - Only the gate's own verdict 1 holds. Suites that extract `recycle_fire_commit` without the gate get 127 and proceed as before.
+  - Not covered: the deferred self-recycle lane holds with no retry ticket; the session stays alive and the operator (or lr-fleet's HELD re-drive) re-runs it.

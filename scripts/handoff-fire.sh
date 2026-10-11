@@ -3493,6 +3493,44 @@ hf_exit_signal() { # $1=pane $2=pane tty $3=session id → 0 claude exited on SI
   done
 }
 
+# THE LOAD HOLD (docs/research/recycle-failures-kitty-2026-10-10/REPORT.md fix 8b). F1 (pane 44,
+# 2026-10-09) typed /exit at ~45 runnable per core; the post-exit path then had to TYPE the relaunch
+# through a kitty RC transport running at its 10 s bound, failed 16 times and stranded the pane. A
+# recycle is exempt from the capacity gate by design (it is net-zero panes), so nothing stood between
+# that load and the point of no return. recycle_fire_commit holds before either exit actuator when
+# BOTH hold:
+#   (1) load per core is above the bound, and
+#   (2) no successor of ours is staged for the pane's tty, so the relaunch will be typed: resume,
+#       transplant and remote recycles never stage, and a fresh one whose stage was refused types too.
+# A staged successor is claimed by a local rename, which load delays but cannot fail, so it proceeds
+# at any load, and its load is never read. The bound is per core, so it scales with hw.ncpu the way
+# ship-land's derived ceiling (hw.ncpu × CC_GATE_MAX_LOAD_PER_CORE) does, from the same factor.
+# An unreadable load proceeds, as ship-land's unreadable sensor does: this is a circuit-breaker, not a
+# capacity model. HF_RECYCLE_HOLD_LOAD_PER_CORE=0|off never holds; a non-numeric value takes 8.
+# CC_FIRE_CAPACITY_GATE=off, the capacity gate's one bypass, switches it off too: it is the same
+# "do not hold on this box's load" decision, and it is what every suite driving a recycle already
+# pins (scripts/test-hermeticity-lint.sh rule 2), so none of them reads the machine's load here.
+hf_recycle_load_bound() { # → the per-core bound; nothing when the hold is off
+  [ "${CC_FIRE_CAPACITY_GATE:-on}" != off ] || return 0
+  awk -v b="${HF_RECYCLE_HOLD_LOAD_PER_CORE:-${CC_GATE_MAX_LOAD_PER_CORE:-8}}" 'BEGIN {
+    if (b == "off") exit
+    if (b ~ /^[0-9]+(\.[0-9]+)?$/) { if (b + 0 > 0) printf "%s", b; exit }
+    printf "8" }'
+}
+
+hf_recycle_load_gate() { # $1=pane tty → 0 proceed · 1 hold (HF_LOAD_HOLD_WHAT)
+  local bound lpc
+  HF_LOAD_HOLD_WHAT=""
+  bound="$(hf_recycle_load_bound)"
+  [ -n "$bound" ] || return 0
+  if [ -n "${WATCHER_PID:-}" ] && hf_succ_ours_staged "${1:-}" "$WATCHER_PID"; then return 0; fi
+  # An unreadable load prints nothing, which compares as 0 below and proceeds.
+  lpc="$(hf_load_per_core || true)"
+  awk -v l="$lpc" -v b="$bound" 'BEGIN { exit !(l + 0 > b + 0) }' || return 0
+  HF_LOAD_HOLD_WHAT="load ${lpc}/core is above the ${bound}/core bound and the relaunch would have to be typed ($(hf_succ_mode) recycle, no successor of ours staged for ${1:-<no tty>})"
+  return 1
+}
+
 # THE SAME-ACCOUNT EVIDENCE (cc-lr upgrade, 2026-09-22). Called AFTER hf_remote_source_bind (the row
 # names S) and hf_remote_source_pin (the row's pid is alive on P's tty); adds the facts that make a
 # relaunch of S into its OWN uuid on its OWN account the only live copy, and safe to interrupt:
@@ -17615,7 +17653,7 @@ spawn() {
 # the pre-confirm reads passed. ORDER: confirm → last read → debt → /exit. Returns 0 once /exit is
 # submitted; every refusal exits 1 with nothing submitted. $1 = the pane's pre-recycle session id.
 recycle_fire_commit() {
-  local rcy_old_sid="${1:-}" rcy_tp="" rcy_tp_rc=0 rcy_debt_sid rcy_debt_cwd wrote rcy_sig_rc=0
+  local rcy_old_sid="${1:-}" rcy_tp="" rcy_tp_rc=0 rcy_debt_sid rcy_debt_cwd wrote rcy_sig_rc=0 rcy_load_rc=0
   RCY_CONFIRM_RAN=0
   # ── D2 — CONFIRM THE TRANSPLANT SNAPSHOT, HERE, BEFORE THE IRREVERSIBLE KEYSTROKE ─────────────
   # lr-transplant's `--phase admit` does `cp -p` then sha-verifies source against destination. That
@@ -17696,6 +17734,14 @@ recycle_fire_commit() {
   # ── THE LAST READ (W2b) — see hf_recycle_last_read. Any refusal unconfirms, disarms, holds. ────
   if ! hf_recycle_last_read; then
     hf_recycle_hold "$HF_LR_REASON" "last read after confirm: $HF_LR_WHAT" "$HF_LR_WHAT"
+  fi
+  # ── THE LOAD HOLD (REPORT.md fix 8b) — see hf_recycle_load_gate. Before the debt and before both
+  # exit actuators, so a held recycle owes nothing and the session stays alive. `tty` is
+  # recycle_fire's local. Only the gate's own verdict 1 holds: a suite that extracts this function
+  # without the gate gets 127, and proceeds as it did before the gate existed.
+  rcy_load_rc=0; hf_recycle_load_gate "${tty:-}" || rcy_load_rc=$?
+  if [ "$rcy_load_rc" = 1 ]; then
+    hf_recycle_hold load "$HF_LOAD_HOLD_WHAT" "$HF_LOAD_HOLD_WHAT; re-run once the load falls"
   fi
   # THE RESUME DEBT OPENS HERE, before the point of no return (CLOSE_RESUME_CUSTODY D4). From the
   # /exit on, the only thing standing between this session and silent abandonment is the watcher,
