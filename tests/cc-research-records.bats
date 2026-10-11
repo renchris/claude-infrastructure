@@ -192,6 +192,49 @@ cfield() {
   [ "$status" -eq 2 ]
 }
 
+# refused <premise revise args>: the call exits 2 (a refusal), naming the args when it does not.
+refused() {
+  local rc=0
+  "$CR" premise revise --program demo "$@" > /dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] || { echo "accepted (exit $rc): $*"; false; }
+}
+
+# RED-proof (K5, 2026-10-11): before `premise revise` existed the first call exits 2 (no such verb).
+@test "premise revise appends one reasoned event per call; refusals write nothing; row 4 reads a refutation" {
+  first="$(head -1 "$REC/premises.jsonl")"
+  n="$(wc -l < "$REC/premises.jsonl")"
+  run "$CR" premise revise --program demo --id PR-1 --recheck-cmd "test -s x" --repointed-from P-1 --why "the old command could not fail"
+  [ "$status" -eq 0 ]
+  [ "$(fold premises.jsonl PR-1 recheck_cmd)" = '"test -s x"' ]
+  [ "$(fold premises.jsonl PR-1 recheck_repointed_from)" = '"P-1"' ]
+  [ "$(fold premises.jsonl PR-1 why)" = '"the old command could not fail"' ]
+  [ "$(fold premises.jsonl PR-1 verdict)" = '"holds"' ]
+  [ "$(head -1 "$REC/premises.jsonl")" = "$first" ]
+  [ "$(wc -l < "$REC/premises.jsonl")" -eq $((n + 1)) ]
+  n=$((n + 1))
+  refused --id PR-1 --verdict refuted --why w                   # refuted names no refuter
+  refused --id PR-1 --verdict holds --refuted-by P-1 --why w    # a refuter without refuted
+  refused --id PR-1 --verdict refuted --refuted-by P-404 --why w
+  refused --id PR-1 --recheck-cmd x --retire-recheck --why w
+  refused --id PR-1 --why w                                     # nothing to revise
+  refused --id PR-404 --verdict holds --why w
+  refused --id PR-1 --verdict holds                             # no --why
+  refused --id PR-1 --verdict holds --why ""
+  refused --id PR-1 --recheck-cmd "unmeasured: later, n>=5" --why w
+  [ "$(wc -l < "$REC/premises.jsonl")" -eq "$n" ]
+  run "$CR" premise revise --program demo --id PR-1 --load-bearing-for DR-1 --load-bearing-for DR-9 --why "DR-9 reads it too"
+  [ "$status" -eq 0 ]
+  [ "$(fold premises.jsonl PR-1 load_bearing_for)" = '["DR-1", "DR-9"]' ]
+  run "$CR" premise revise --program demo --id PR-1 --load-bearing-for DR-1 --retire-recheck --why "decomposed"
+  [ "$status" -eq 0 ]
+  [ "$(fold premises.jsonl PR-1 recheck_cmd)" = 'null' ]
+  [ "$(rowstat 4)" = "PASS" ]
+  run "$CR" premise revise --program demo --id PR-1 --verdict refuted --refuted-by P-1 --why "P-1 reads the opposite"
+  [ "$status" -eq 0 ]
+  [ "$(fold premises.jsonl PR-1 refuted_by)" = '"P-1"' ]
+  rowtext 4 | grep -q "PR-1 refuted but dependent DR-1 was never revised"
+}
+
 @test "decision: no --conviction flag exists; rule is refused below 90 naming the packet route, accepted at 90; show prints the derived value" {
   run "$CR" decision add --program demo --id DR-2 --question "q" --option do-nothing --option use-what-exists --option x
   [ "$status" -eq 0 ]

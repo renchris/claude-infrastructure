@@ -76,14 +76,60 @@ premise() { # <id> <recheck_cmd> <verdict> [ttl_h]
   [ "$(count "$REC/premises.jsonl" "r['id'] in ('PR-8', 'PR-9') and r.get('carried') is True")" -eq 2 ]
 }
 
-@test "freshness: a premise is re-validated once per program, never again" {
+# RED-proof (K1, 2026-10-11): on the pre-K1 job_freshness a carried premise was skipped for good, so
+# the -r2 probe below is never run, and no premise event lists a P-fresh probe in `probes`.
+@test "freshness: while certifying, a carried premise is re-run once stale, its probe joins probes, carried once, one challenge" {
   premise PR-9 false holds
   run job freshness --program demo
   [ "$status" -eq 0 ]
-  CC_NOW="$(later 3)" run job freshness --program demo
+  run job freshness --program demo                                     # fresh: not re-run
   [ "$status" -eq 0 ]
   [ "$(count "$REC/probes.jsonl" "'PR-9' in r.get('closes', [])")" -eq 1 ]
-  [ "$(count "$REC/challenges.jsonl" "r.get('premise') == 'PR-9'")" -eq 1 ]
+  CC_NOW="$(later 3)" run job freshness --program demo
+  [ "$status" -eq 0 ]
+  [ "$(count "$REC/probes.jsonl" "r['id'] == 'P-fresh-PR-9-r2' and r['exit'] == 1")" -eq 1 ]
+  [ "$(count "$REC/premises.jsonl" "r['id'] == 'PR-9' and r.get('rechecked_by') == 'P-fresh-PR-9-r2' and r.get('probes') == ['P-fresh-PR-9', 'P-fresh-PR-9-r2'] and 'carried' not in r and 'verdict' not in r")" -eq 1 ]
+  [ "$(count "$REC/premises.jsonl" "r['id'] == 'PR-9' and r.get('carried') is True")" -eq 1 ]
+  [ "$(count "$REC/challenges.jsonl" "r.get('premise') == 'PR-9'")" -eq 1 ]   # the same reading files once
+  reg demo certified                                                   # outside certifying: never again
+  CC_NOW="$(later 9)" run job freshness --program demo
+  [ "$status" -eq 0 ]
+  [ "$(count "$REC/probes.jsonl" "'PR-9' in r.get('closes', [])")" -eq 2 ]
+}
+
+@test "freshness: a lapsed live-state premise's fresh re-check renews its evidence level" {
+  printf '{"id":"PR-35","truth_lives_in":"live-state","verdict":"holds","recheck_cmd":"true","probes":[],"carried":true,"ttl_h":24}\n' >> "$REC/premises.jsonl"
+  run job freshness --program demo
+  [ "$status" -eq 0 ]
+  run /usr/bin/python3 -c "import sys; sys.path.insert(0, '$REPO/scripts/research-kit/lib'); import kit
+r = kit.records_dir('demo')
+pr = kit.fold(kit.read_jsonl(r / 'premises.jsonl'))['PR-35']
+print(kit.premise_level(pr, kit.fold(kit.read_jsonl(r / 'probes.jsonl'))), kit.premise_at_level(pr, kit.fold(kit.read_jsonl(r / 'probes.jsonl'))))"
+  [ "$status" -eq 0 ]
+  [ "$output" = "3 True" ]
+}
+
+# RED-proof (K2, 2026-10-11): with the pre-K2 `> DAY` test a verdict probe 21 h old reads fresh, so
+# PR-41 is skipped and the gate later that day finds no re-check within 24 h (row 10).
+@test "freshness: a verdict probe 21 h old is stale (24 h less a 4 h margin); one 19 h old is fresh" {
+  printf '{"id":"PR-41","truth_lives_in":"code","verdict":"holds","recheck_cmd":"true","ttl_h":1000000}\n' >> "$REC/premises.jsonl"
+  printf '{"id":"PR-42","truth_lives_in":"code","verdict":"holds","recheck_cmd":"true","ttl_h":1000000}\n' >> "$REC/premises.jsonl"
+  printf '{"id":"P-old-41","closes":["PR-41"],"exit":0,"at":"%s"}\n' "$(later -0.875)" >> "$REC/probes.jsonl"
+  printf '{"id":"P-old-42","closes":["PR-42"],"exit":0,"at":"%s"}\n' "$(later -0.79)" >> "$REC/probes.jsonl"
+  run job freshness --program demo
+  [ "$status" -eq 0 ]
+  [ "$(count "$REC/probes.jsonl" "r['id'] == 'P-fresh-PR-41' and r['exit'] == 0")" -eq 1 ]
+  [ "$(count "$REC/probes.jsonl" "r['id'] == 'P-fresh-PR-42'")" -eq 0 ]
+}
+
+# RED-proof (K3, 2026-10-11): on the pre-K3 PATH sysctl (/usr/sbin) and md5 (/sbin) are not found
+# under a launchd-like PATH, so both re-checks exit 127 and the pass fails with no verdict.
+@test "freshness: the re-check PATH resolves /usr/sbin and /sbin tools under launchd's /usr/bin:/bin" {
+  premise PR-43 "sysctl -n kern.ostype => Darwin" holds
+  premise PR-44 "printf x | md5 => 9dd4e461268c8034f5c8564e155c67a6" holds
+  PATH=/usr/bin:/bin run job freshness --program demo
+  [ "$status" -eq 0 ]
+  [ "$(count "$REC/premises.jsonl" "r['id'] in ('PR-43', 'PR-44') and r.get('recheck_verdict') == 'holds'")" -eq 2 ]
 }
 
 # RED-proof (2026-10-11): on the pre-fix job_freshness (every nonzero exit read "refuted", cwd and

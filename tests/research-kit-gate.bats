@@ -265,6 +265,20 @@ set_state() { /usr/bin/python3 -c "import json; p='$CC_RESEARCH_REGISTRY'; d=jso
   [ "$(rowstat 4)" = "FAIL" ]
 }
 
+# RED-proof (K4, 2026-10-11): the pre-K4 row 4 compared DR-1's ruling with the premise's FOLDED ts,
+# which the 10-04 re-check event moved past it, so it failed "PR-1 refuted but dependent DR-1 was
+# never revised" although DR-1 was ruled after the refutation.
+@test "row 4: a refuted premise's dependent is revised against the event that refuted it, not a later re-check" {
+  printf '{"id":"PR-1","verdict":"refuted","refuted_by":"P-1","ts":"2026-10-02T00:00:00Z"}\n' >> "$REC/premises.jsonl"
+  printf '{"id":"DR-1","status":"ruled","ts":"2026-10-03T00:00:00Z"}\n' >> "$REC/decisions.jsonl"
+  printf '{"id":"PR-1","probes":["P-1","P-2"],"rechecked_by":"P-2","recheck_verdict":"refuted","ts":"2026-10-04T00:00:00Z"}\n' >> "$REC/premises.jsonl"
+  printf '{"id":"PR-1","verdict":"refuted","why":"re-asserted","ts":"2026-10-05T00:00:00Z"}\n' >> "$REC/premises.jsonl"
+  [ "$(rowstat 4)" = "PASS" ]
+  # a NEW refutation (holds, then refuted again) after the ruling does ask for a fresh revision
+  printf '{"id":"PR-1","verdict":"holds","ts":"2026-10-06T00:00:00Z"}\n{"id":"PR-1","verdict":"refuted","ts":"2026-10-07T00:00:00Z"}\n' >> "$REC/premises.jsonl"
+  [[ "$(rowtext 4)" == *"PR-1 refuted but dependent DR-1 was never revised"* ]]
+}
+
 @test "row 5: an agent-ruled decision whose flip probe never ran computes 89 and fails" {
   printf '{"id":"DR-1","tally":{"premises":["PR-1"]}}\n' >> "$REC/decisions.jsonl"
   [[ "$(rowtext 5)" == *"agent-ruled at 89%"* ]]

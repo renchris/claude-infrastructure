@@ -249,10 +249,29 @@ def row3(ctx: Ctx) -> Row:
 # ── row 4 ───────────────────────────────────────────────────────────────────────────────────────
 
 
+def refuted_at(events: List[Dict[str, Any]]) -> Dict[str, str]:
+    """Per premise id, the ts of the event that set verdict=refuted (the move into it; an event that
+    re-asserts refuted moves nothing). A later event with no verdict (a freshness re-check appending
+    its probe, a `premise revise` of the command) is not a refutation, so it never asks a dependent
+    decision to be revised again — keying on the folded ts did exactly that."""
+    out: Dict[str, str] = {}
+    cur: Dict[str, Any] = {}
+    for e in events:
+        pid = e.get("id")
+        if pid is None or "verdict" not in e:
+            continue
+        if e["verdict"] == "refuted" and cur.get(pid) != "refuted":
+            out[pid] = str(e.get("ts", ""))
+        cur[pid] = e["verdict"]
+    return out
+
+
 @row(4, "Premises")
 def row4(ctx: Ctx) -> Row:
     fails: List[str] = []
-    prem = folded(ctx, "premises.jsonl")
+    prem_events = ctx.jsonl("premises.jsonl")
+    prem = kit.fold(prem_events)
+    since = refuted_at(prem_events)
     pr = probes(ctx)
     events = ctx.jsonl("decisions.jsonl")
     refuted = 0
@@ -277,7 +296,7 @@ def row4(ctx: Ctx) -> Row:
                     e
                     for e in events
                     if e.get("id") == dep
-                    and str(e.get("ts", "")) >= str(p.get("ts", ""))
+                    and str(e.get("ts", "")) >= since.get(p["id"], str(p.get("ts", "")))
                     and e.get("status") in ("ruled", "reopened", "carried", "descoped")
                 ]
                 if not later:

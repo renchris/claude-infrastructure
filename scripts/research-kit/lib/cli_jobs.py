@@ -12,15 +12,20 @@ prints one summary line per program; exit 1 if any program's pass failed (the ot
              Also run on a registered program whose decision records name a packet and are not yet
              ruled, so a default fires at its deadline before certification begins.
   freshness  a premise with a recheck_cmd whose expiry has passed (`expires`, else validated_at.ts +
-             ttl_h), or with no probe within 24 h while the program is certifying (gate row 10), is
-             re-run through probe_run as a probe closing it, from the records' git toplevel on a
+             ttl_h), or with no verdict probe within FRESH_S (24 h less a 4 h margin, so a daily
+             pass never lands minutes short of gate row 10's 24 h) while the program is certifying,
+             is re-run through probe_run as a probe closing it, from the records' git toplevel on a
              PATH that resolves the original probes' tools (RECHECK_ENV). Exit 0 holds, a clean
              exit 1 refutes; any other exit or a crash is NO verdict (kit.recheck_verdict): listed
              under FAILED, never flipped, challenged or carried, and re-run next pass as -r2, -r3 ….
-             A holds/refuted verdict the result flips appends a drift challenge. Each premise is
-             re-validated at most once per program, then carried ({id, carried: true}) and never
-             re-checked. A recheck_cmd that is a prose note is not run; `<cmd> => <expected>`
-             compares the command's trimmed stdout.
+             A verdict appends {id, probes: [..., P-fresh], rechecked_by, recheck_verdict} to the
+             premise, so a fresh live read renews its evidence level (gate row 4). The first one also
+             carries it ({carried: true}): after that its expiry no longer re-runs it, but while the
+             program is certifying a carried premise is re-run once it has no verdict probe within
+             FRESH_S, and never re-carried. A holds/refuted verdict the result flips appends a drift
+             challenge, once per change of reading (not again while the re-check reads the same).
+             A recheck_cmd that is a prose note is not run; `<cmd> => <expected>` compares the
+             command's trimmed stdout.
   triage     `cc-research triage --program P` as a subprocess (CC_RESEARCH_BIN overrides the binary).
   drift      git blob shas of CLAUDE.global.md, CLAUDE.global.slim.md, .claude/rules/*.md and
              docs/lessons/*.md under CC_RESEARCH_RULES_ROOT (else this repo) against the last run's
@@ -58,6 +63,10 @@ RESEARCH_ACTIVE = ("certifying", "certified")
 ACTIVE = RESEARCH_ACTIVE + kit.STAGE9_STATES  # §11: the jobs visit a program in Stage 9 until close
 SOAK_STATES = ("build-certifying",)  # §11: the soak runs between built-freeze and built-run
 DAY = 86400.0
+# A premise re-checked within FRESH_S is fresh. 24 h less a 4 h margin: the daily 06:00 pass reads a
+# probe from yesterday's pass as 23 h 59 m old and would skip it, leaving the gate run later that day
+# with no re-check within 24 h (gate row 10).
+FRESH_S = DAY - 4 * 3600
 RULE_GLOBS = (
     "CLAUDE.global.md",
     "CLAUDE.global.slim.md",
@@ -185,7 +194,9 @@ def recheck_env() -> Dict[str, str]:
         for d in RECHECK_PATH_HEAD
         if home or "{HOME}" not in d
     ]
-    for d in head + os.environ.get("PATH", "").split(":") + ["/usr/bin", "/bin"]:
+    # sysctl, lsof, scutil … live in sbin, which launchd's PATH leaves out
+    tail = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+    for d in head + os.environ.get("PATH", "").split(":") + tail:
         if d and d not in seen:
             seen.append(d)
     return dict(os.environ, PATH=":".join(seen))
@@ -218,8 +229,9 @@ def job_freshness(slug: str, state: str) -> Tuple[bool, str]:
     flipped: List[str] = []
     failed: List[str] = []
     for pid, p in sorted(prem.items()):
-        if not p.get("recheck_cmd") or p.get("carried"):
+        if not p.get("recheck_cmd"):
             continue
+        carried = bool(p.get("carried"))
         exp = expiry(p)
         ats = [  # a no-verdict run is not a re-check (gate row 10 reads probes the same way)
             kit.parse_iso(x["at"])
@@ -228,20 +240,28 @@ def job_freshness(slug: str, state: str) -> Tuple[bool, str]:
             and x.get("at")
             and kit.probe_recheck_verdict(rec, x) is not None
         ]
-        stale = state == "certifying" and (not ats or now - max(ats) > DAY)
-        if not (stale or (exp is not None and exp <= now)):
+        stale = state == "certifying" and (not ats or now - max(ats) > FRESH_S)
+        expired = not carried and exp is not None and exp <= now
+        if not (stale or expired):
             continue
         rcmd = str(p["recheck_cmd"])
         if PROSE_RE.match(rcmd):
             failed.append(f"{pid}: recheck_cmd is a note, not a command ({rcmd[:60]}…)")
             continue
-        # P-fresh-<pid>, then -r2, -r3 … after a run that gave no verdict. A run WITH a verdict but
-        # no carry (a crash between the probe and the carry) is re-used, not re-run.
+        # P-fresh-<pid>, then -r2, -r3 … for every later run: after one that gave no verdict, and
+        # for each re-check of a carried premise. A run WITH a verdict the premise never recorded (a
+        # crash between the probe and the premise event) is re-used, not re-run, unless it is stale.
         tries = [f"P-fresh-{pid}"]
         while tries[-1] in probes:
             tries.append(f"P-fresh-{pid}-r{len(tries) + 1}")
         last_run = tries[-2] if len(tries) > 1 else None
-        if last_run and kit.probe_recheck_verdict(rec, probes[last_run]) is not None:
+        recorded = {p.get("rechecked_by"), *(p.get("probes") or [])}
+        if (
+            last_run
+            and last_run not in recorded
+            and not stale
+            and kit.probe_recheck_verdict(rec, probes[last_run]) is not None
+        ):
             probe_id = last_run
         else:
             probe_id = tries[-1]
@@ -280,7 +300,12 @@ def job_freshness(slug: str, state: str) -> Tuple[bool, str]:
             continue
         verdicts[verdict] += 1
         last = p.get("verdict")
-        if last in ("holds", "refuted") and verdict != last:
+        # a carried premise re-checked daily files its flip once, when the reading changes
+        if (
+            last in ("holds", "refuted")
+            and verdict != last
+            and p.get("recheck_verdict") != verdict
+        ):
             ch = rec / "challenges.jsonl"
             kit.append_jsonl(
                 ch,
@@ -296,15 +321,19 @@ def job_freshness(slug: str, state: str) -> Tuple[bool, str]:
                 },
             )
             flipped.append(pid)
-        kit.append_jsonl(
-            rec / "premises.jsonl",
-            {
-                "id": pid,
-                "carried": True,
-                "rechecked_by": probe_id,
-                "recheck_verdict": verdict,
-            },
+        # The probe joins the premise's evidence (a fresh live read renews row 4). No verdict field:
+        # the premise's own verdict moves only by triage or `premise revise`, and gate row 4 keys a
+        # refuted premise's dependents on the event that set it, never on this one.
+        event: Dict[str, Any] = {"id": pid}
+        if not carried:
+            event["carried"] = True
+        own = list(p.get("probes") or [])
+        event.update(
+            probes=own + ([probe_id] if probe_id not in own else []),
+            rechecked_by=probe_id,
+            recheck_verdict=verdict,
         )
+        kit.append_jsonl(rec / "premises.jsonl", event)
         done.append(pid)
     msg = (
         f"re-checked {len(done)} (holds {verdicts['holds']}, refuted {verdicts['refuted']}), "

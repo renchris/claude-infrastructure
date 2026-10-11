@@ -43,6 +43,19 @@ Added 2026-10-05 (wave E3d): between `build-certified` and `closed` sits `implem
 - `premises.jsonl`, `sources.jsonl`, `census/<pop>.json`, `contact_matrix.json`, `residual.jsonl`, `trace.jsonl`,
   `holes.jsonl`, `changes.jsonl`: SYNTHESIS shapes. `residual.jsonl` `why_unreachable` adds the method-created classes
   `depth-cap`, `stage-budget-exhausted`, `stub-validated` (§10 item 7), each needing `owner_wave`, `due`, `closing_probe`.
+- `premises.jsonl` later events (the fold reads the last value of each field):
+  - `cc-research job freshness` appends `{id, probes:[..., "P-fresh-<id>[-rN]"], rechecked_by, recheck_verdict:
+    "holds|refuted"}`, plus `carried: true` on a premise's first re-check. It never writes `verdict`. While the
+    program is certifying, a carried premise with no verdict probe in the last 20 h (24 h less a 4 h margin) is
+    re-run under the next `-rN` id; its probe joins `probes`, so a fresh live read renews its level (gate row 4).
+  - `cc-research premise revise --id PR-n --why "<reason>"` with any of `--recheck-cmd <cmd>` (and optionally
+    `--repointed-from <probe id>`), `--retire-recheck`, `--verdict holds|refuted|partial|unknown` (`refuted` needs
+    `--refuted-by <probe or challenge id>`, which must exist), or `--load-bearing-for <id>` repeated (replaces the
+    list; `''` alone clears it) appends `{id, recheck_cmd?, recheck_repointed_from?, verdict?, refuted_by?,
+    load_bearing_for?, revised: true, why}`. A prose `--recheck-cmd` is refused, as the freshness job refuses to run one.
+  - Gate row 4 asks that a refuted premise's `DR` dependents be revised (ruled, reopened, carried or descoped) at or
+    after the ts of the event that set `verdict` to `refuted`, not the folded ts, so a later re-check or revision
+    event does not re-open them.
 - `census/<pop>.json` additions (written only by `cc-research census repin`): a method may carry
   `superseded_by: <agent>`, `superseded_at: ISO`, `superseded_why: <text>`; it stays in `methods`, and gate row 2
   neither re-runs it nor counts it toward the 2 independent methods. `retired_members: [{id, at, why}]` holds members

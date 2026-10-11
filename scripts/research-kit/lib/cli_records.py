@@ -1,7 +1,7 @@
 """cli_records.py — the record verbs of bin/cc-research (REPORT.md §8 item 9) and concern triage
 (§5.1, §5.2, §10 item 8); see cli.py for the verb table.
 
-  census add|repin|critic · premise add · source add · decision add|tally|rule|show
+  census add|repin|critic · premise add|revise · source add · decision add|tally|rule|show
   concern add|list · park · triage
 
 Every record here is append-only (kit.append_jsonl); a census is one JSON file per population,
@@ -298,6 +298,73 @@ def premise_add(a: argparse.Namespace) -> int:
             "ttl_h": a.ttl_h,
         },
     )
+
+
+def premise_revise(a: argparse.Namespace) -> int:
+    """Append one revision event to an existing premise: its re-check command, its verdict, or what
+    it bears load for, each with the reason. Nothing earlier is rewritten; the fold reads the last."""
+    import cli_jobs
+
+    r = recs(a)
+    if a.id not in folded(r, "premises.jsonl"):
+        raise kit.KitError(
+            f"{a.id} is not in premises.jsonl; `premise add` records a new one"
+        )
+    if not (a.why or "").strip():
+        raise kit.KitError(
+            "--why is required and may not be empty: a revision states its reason"
+        )
+    if (
+        a.recheck_cmd is None
+        and not a.retire_recheck
+        and a.verdict is None
+        and (a.load_bearing_for is None)
+    ):
+        raise kit.KitError(
+            "nothing to revise: give --recheck-cmd, --retire-recheck, --verdict or --load-bearing-for"
+        )
+    if a.recheck_cmd is not None and a.retire_recheck:
+        raise kit.KitError("--recheck-cmd and --retire-recheck contradict each other")
+    if a.repointed_from and a.recheck_cmd is None:
+        raise kit.KitError("--repointed-from names where a new --recheck-cmd came from")
+    if a.recheck_cmd is not None and (
+        not a.recheck_cmd.strip() or cli_jobs.PROSE_RE.match(a.recheck_cmd)
+    ):
+        raise kit.KitError(
+            f"--recheck-cmd {a.recheck_cmd!r} is empty or a prose note, not a command; "
+            "use --retire-recheck to drop the re-check"
+        )
+    if (a.verdict == "refuted") != bool(a.refuted_by):
+        raise kit.KitError(
+            "--refuted-by is required with --verdict refuted, and only with it"
+            if a.verdict == "refuted"
+            else "--refuted-by goes only with --verdict refuted"
+        )
+    if a.refuted_by and not any(
+        a.refuted_by in folded(r, store)
+        for store in ("probes.jsonl", "challenges.jsonl")
+    ):
+        raise kit.KitError(
+            f"--refuted-by {a.refuted_by}: no such probe or challenge in the records"
+        )
+    event: Dict[str, Any] = {"id": a.id}
+    if a.recheck_cmd is not None:
+        event["recheck_cmd"] = a.recheck_cmd
+        if a.repointed_from:
+            event["recheck_repointed_from"] = a.repointed_from
+    if a.retire_recheck:
+        event["recheck_cmd"] = None
+    if a.verdict is not None:
+        event["verdict"] = a.verdict
+        if a.refuted_by:
+            event["refuted_by"] = a.refuted_by
+    if a.load_bearing_for is not None:
+        event["load_bearing_for"] = [x for x in a.load_bearing_for if x]
+    event.update(revised=True, why=a.why.strip())
+    kit.append_jsonl(r / "premises.jsonl", event)
+    fields = [k for k in event if k not in ("id", "revised", "why")]
+    print(f"{a.id}: revised ({', '.join(fields)}) in premises.jsonl")
+    return 0
 
 
 def source_add(a: argparse.Namespace) -> int:
@@ -709,9 +776,30 @@ def add_verbs(sub: Any) -> None:
     p.add_argument("--unlisted-verified", required=True, type=int)
     p.add_argument("--integrated", action="store_true")
 
-    p = verb(
-        group("premise", "premises.jsonl"), "add", premise_add, "append one premise"
+    g = group("premise", "premises.jsonl")
+    p = verb(g, "revise", premise_revise, "append a revision event to one premise")
+    p.add_argument("--id", required=True)
+    p.add_argument("--why", required=True, help="the reason, recorded on the event")
+    p.add_argument("--recheck-cmd", help="the new command `job freshness` re-runs")
+    p.add_argument(
+        "--repointed-from", help="the probe id the new --recheck-cmd was copied from"
     )
+    p.add_argument(
+        "--retire-recheck",
+        action="store_true",
+        help="drop the re-check (recheck_cmd null): no freshness pass or gate row 10",
+    )
+    p.add_argument("--verdict", choices=("holds", "refuted", "partial", "unknown"))
+    p.add_argument(
+        "--refuted-by",
+        help="with --verdict refuted: the probe or challenge that refuted it",
+    )
+    p.add_argument(
+        "--load-bearing-for",
+        action="append",
+        help="repeat for each dependent; replaces the list (pass '' alone to clear it)",
+    )
+    p = verb(g, "add", premise_add, "append one premise")
     p.add_argument("--id", required=True)
     p.add_argument("--claim", required=True)
     p.add_argument(
