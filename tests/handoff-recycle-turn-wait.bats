@@ -288,3 +288,75 @@ units() { # shellcheck disable=SC1090
   rc=0; hf_new_prompt_since "$W/absent.jsonl" "$since" || rc=$?
   [ "$rc" -eq 2 ]
 }
+
+# ── fix 4: a DEFERRED self-recycle re-reads the session at the last moment before /exit ───────────
+# docs/research/recycle-failures-kitty-2026-10-10/REPORT.md fix 4. Once the deferred turn has ended,
+# the composer gate can hold for up to CC_RECYCLE_DRAFT_WAIT, and before this fix the self lane had no
+# at-rest or new-prompt read after it: rcy_rest_tx was set only for same-account and focused-remote.
+# A prompt the operator submitted inside that window was a turn the /exit would kill. The REAL
+# recycle_fire_armed is driven over stubs to its commit; reaching the recycle_fire_commit stub is "the
+# /exit would have been typed", so the held cases assert that marker is ABSENT (a "no SEND:/exit"
+# assertion passes before the fix, because the commit is stubbed).
+armed_driver() {
+  export HF DEAD_PID COMMITTED="$W/committed" T0
+  cat > "$W/armed-driver.sh" <<'DRV'
+#!/usr/bin/env bash
+set -euo pipefail
+# shellcheck disable=SC1090
+. "$W/units.sh"
+eval "$(sed -n '/^recycle_fire_armed() {/,/^}/p' "$HF")"
+hf_bounded() {
+  if [ "${2:-}" = session ] && [ "${3:-}" = read ]; then cat "$SCREEN_FILE" 2>/dev/null; return 0; fi
+  if [ "${2:-}" = session ] && [ "${3:-}" = send ]; then printf '%s\n' "SEND:${6:-}" >> "$SENT_LOG"; return 0; fi
+  return 1
+}
+emit_recycle_event() { printf '%s\t%s\n' "$1" "${4:-}" >> "$EVENTS"; }
+cc_sid_for_pane() { cat "$SIDFILE" 2>/dev/null || true; }
+inherit_recycle_goal() { :; }; pin_term_verdict_for_watcher() { :; }; hf_lr_lib_load() { return 1; }
+hf_recycle_lock_acquire() { :; }; hf_phase() { :; }; detach() { printf '4242'; }
+await_armed() { return 0; }; await_pane_proof() { return 0; }; hf_recycle_owed_clear() { :; }
+write_teardown_marker() { :; }; hf_recycle_disarm() { :; }; hf_succ_stage() { :; }
+recycle_fire_commit() { echo reached > "$COMMITTED"; }
+SID=77; tty=/dev/ttys999; CMD="claude 'brief'"; LAUNCHER=claude; RCY_IT2=it2; RCY_REMOTE=0; RCY_SAME_ACCOUNT=0
+RESUME_LAUNCHER=""; RESUME_CFG=""; HF_TS_TOMBSTONE=""; RECYCLE_MARKER=MK; FIRE_GOAL=""; RCY_TRANSPLANT_CAUSE=""
+PROMPT_FILE="$W/brief.txt"; log="$W/watcher.log"; cmdfile="$W/cmd"; LAUNCH_DIR="$W"; RECYCLE_AWAIT=0
+HF_ORIG_ARGV=(); HF_ORIG_SELF=""; HF_ORIG_PWD=""; HF_T0_EPOCH=0; HF_RCY_PHASES=""; HF_RCY_CARRY_DIR=""; HF_RCY_CARRY_STATE=""
+RCY_DEFERRED=1; RCY_DEFER_CALLER_PID="$DEAD_PID"
+# hf_recycle_defer's locals, which the fork this tail runs in inherits: the transcript recycle_turn_wait
+# judged and the deferral epoch.
+dtx="$TX"; t0="$T0"
+recycle_fire_armed
+DRV
+  chmod +x "$W/armed-driver.sh"
+}
+deferred_turn_ended() { T0="$(date +%s)"; screen_box ""; tx_tool_use; tx_tool_result; tx_end_turn; }
+
+@test "CONTROL fix 4: a deferred self-recycle whose session is still at rest reaches the /exit commit" {
+  deferred_turn_ended; armed_driver
+  run "$W/armed-driver.sh" 3>&-
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$EVENTS"; false; }
+  [ -f "$COMMITTED" ] || { echo "$output"; cat "$EVENTS"; false; }
+  not event recycle-held-new-prompt; not event recycle-held-busy
+}
+
+@test "[RED] fix 4: a prompt submitted after the deferred turn ended HOLDS at the last read — the /exit commit is never reached" {
+  deferred_turn_ended; armed_driver
+  tx_prompt "wait, one more thing first"
+  run "$W/armed-driver.sh" 3>&-
+  [ "$status" -eq 1 ] || { echo "status=$status $output"; cat "$EVENTS"; false; }
+  [ ! -f "$COMMITTED" ] || { echo "the /exit commit was reached over a new prompt"; echo "$output"; false; }
+  event recycle-held-new-prompt || { cat "$EVENTS"; false; }
+  [ ! -s "$SENT_LOG" ]
+  [ "$(jq -r .why "$CC_RECYCLE_RETRY_DIR/sess-aaaa.json")" = "a new prompt arrived after the recycling turn had ended" ]
+}
+
+@test "[RED] fix 4: a turn running again after the deferred turn ended (blocking Stop hook) HOLDS busy — no commit" {
+  deferred_turn_ended; armed_driver
+  tx_hook_feedback
+  run "$W/armed-driver.sh" 3>&-
+  [ "$status" -eq 1 ] || { echo "status=$status $output"; cat "$EVENTS"; false; }
+  [ ! -f "$COMMITTED" ] || { echo "the /exit commit was reached mid-turn"; echo "$output"; false; }
+  grep -q "^recycle-held-busy$(printf '\t')deferred-self: transcript not at rest" "$EVENTS" || { cat "$EVENTS"; false; }
+  [ -f "$CC_RECYCLE_RETRY_DIR/sess-aaaa.json" ]
+}
+

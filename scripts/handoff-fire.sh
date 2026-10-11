@@ -18003,6 +18003,8 @@ recycle_fire_armed() {
   # admit is unconfirmed — and that prompt is exactly the turn /exit would kill. The source is still
   # the canonical transcript here (confirm has not run), so the read is of the file it lands in.
   rcy_rest_tx="" rcy_rest_join=""
+  # shellcheck disable=SC2031  # read inside that same subshell, where the tail runs
+  rcy_deferred="${RCY_DEFERRED:-0}"
   if [ "$RCY_SAME_ACCOUNT" = 1 ]; then rcy_rest_tx="$HF_SA_TX"
   elif [ "$RCY_REMOTE" = 1 ] && [ "${RCY_FOCUSED:-no}" = yes ]; then
     rcy_rest_tx="${RCY_SRC_TX:-}"
@@ -18016,14 +18018,31 @@ recycle_fire_armed() {
       if cat "$rcy_rest_tx.handed-off" "$rcy_rest_tx" > "$rcy_rest_join"; then rcy_rest_tx="$rcy_rest_join"
       else rm -f "$rcy_rest_join"; rcy_rest_join=""; fi
     fi
+  elif [ "$rcy_deferred" = 1 ] && [ -n "${dtx:-}" ]; then
+    # A DEFERRED SELF-RECYCLE GETS THE SAME LAST READ (docs/research/recycle-failures-kitty-2026-10-10/
+    # REPORT.md fix 4). Its turn has ENDED by here, so at-rest is a real question again, and the
+    # composer gate after the turn-end wait can hold up to CC_RECYCLE_DRAFT_WAIT: a prompt the operator
+    # submits inside it starts a turn the /exit would kill, and no read after the wait saw it.
+    # `dtx` and `t0` are hf_recycle_defer's locals — the transcript and the deferral epoch that
+    # recycle_turn_wait judged — inherited by the fork this tail runs in (bash scopes locals
+    # dynamically). An unresolved transcript skips the read, as recycle_turn_wait let the box witness.
+    if hf_new_prompt_since "$dtx" "${t0:-}"; then
+      hf_recycle_disarm
+      emit_recycle_event recycle-held-new-prompt "" "$SID" "deferred self-recycle: a new prompt reached the session after the turn ended, at the last read before /exit: $dtx" || true
+      echo "!! recycle HELD at the last read: a new prompt reached session ${rcy_old_sid:0:8} after its recycling turn ended — nothing typed, watcher disarmed, the session stays alive." >&2
+      hf_recycle_retry_ticket "${rcy_old_sid:-}" "$SID" "a new prompt arrived after the recycling turn had ended" - "${PROMPT_FILE_ORIG:-${PROMPT_FILE:-}}" >&2 || true
+      exit 1
+    fi
+    rcy_rest_tx="$dtx"
   fi
   if [ -n "$rcy_rest_tx" ]; then
     rcy_rest_rc=0; hf_transcript_at_rest "$rcy_rest_tx" || rcy_rest_rc=$?
     [ -z "$rcy_rest_join" ] || rm -f "$rcy_rest_join"
     if [ "$rcy_rest_rc" != 0 ]; then
       hf_recycle_disarm
-      emit_recycle_event recycle-held-busy "" "$SID" "$([ "$RCY_SAME_ACCOUNT" = 1 ] && echo same-account || echo focused-remote): transcript not at rest at the last read (rc $rcy_rest_rc): $rcy_rest_tx" || true
-      echo "!! recycle ABORTED at the last read: session ${RCY_SOURCE_SESSION:0:8} is no longer at rest (rc $rcy_rest_rc — 1 a turn is in flight, 2 unreadable) — nothing typed, watcher disarmed, session untouched. Re-run once it is idle." >&2
+      emit_recycle_event recycle-held-busy "" "$SID" "$(if [ "$RCY_SAME_ACCOUNT" = 1 ]; then echo same-account; elif [ "$RCY_REMOTE" = 1 ]; then echo focused-remote; else echo deferred-self; fi): transcript not at rest at the last read (rc $rcy_rest_rc): $rcy_rest_tx" || true
+      [ "$rcy_deferred" != 1 ] || hf_recycle_retry_ticket "${rcy_old_sid:-}" "$SID" "the session was no longer at rest after its recycling turn had ended" - "${PROMPT_FILE_ORIG:-${PROMPT_FILE:-}}" >&2 || true
+      echo "!! recycle ABORTED at the last read: session $(printf '%.8s' "${RCY_SOURCE_SESSION:-${rcy_old_sid:-}}") is no longer at rest (rc $rcy_rest_rc — 1 a turn is in flight, 2 unreadable) — nothing typed, watcher disarmed, session untouched. Re-run once it is idle." >&2
       exit 1
     fi
   fi
