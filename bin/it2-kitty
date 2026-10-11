@@ -1105,6 +1105,35 @@ if not body or "❯" not in plain(body[0]):
                else ("AGENT-NO-BOX" if no_box else ""))
     print(passing if (alt and passing) else ("UNKNOWN" if alt else "NO-TUI"))
     raise SystemExit
+# A DIALOG OVER THE BOX IS UNKNOWN (2026-10-11, slot-reader-sweep.md). Claude Code 2.1.260 draws its
+# background-work dialog ABOVE a composer that stays visible, and this read that screen EMPTY on
+# two real captures: the box is not where the keys go, so it proves nothing about the pane. The
+# rule is the one handoff-fire.sh composer_content applies, and tests/composer-parser-parity.bats
+# runs both over one corpus:
+#   · a ❯ under the bottom rule: a dialog draws its selector with it, a footer never does;
+#   · a ❯ at indent 1-4 above the box: a dialog option row. The slash-command menu is exempt only
+#     when its highlighted row names the command the box itself holds, because with the menu open
+#     a CR submits the highlight and not the box.
+# No apostrophe in this block either (see the note above the liveness proof).
+def slash_cmd(row):
+    t = row.lstrip(" ")
+    if not t.startswith("❯"):
+        return ""
+    t = t[1:].lstrip(" \u00a0")
+    return re.split(r"[ \t\r]", t, maxsplit=1)[0] if t.startswith("/") else ""
+def dialog_over_box(top, bottom):
+    if any("❯" in l for l in flat[bottom + 1:]):
+        return True
+    first = flat[top + 1]
+    held = slash_cmd(first) if first.startswith("❯") else ""
+    for l in flat[:top]:
+        t = l.lstrip(" ")
+        if 1 <= len(l) - len(t) <= 4 and t.startswith("❯") and not (held and slash_cmd(l) == held):
+            return True
+    return False
+if dialog_over_box(rules[-2], rules[-1]):
+    print("UNKNOWN")
+    raise SystemExit
 print("NON-EMPTY" if has_content(body) else "EMPTY")' 2>/dev/null || printf 'UNKNOWN'
 }
 

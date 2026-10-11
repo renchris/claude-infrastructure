@@ -1,0 +1,62 @@
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m
+[m  ⏺ The inbox watcher was woken by the
+[m  two recycle-held messages I already
+[m  reported, so nothing new came in;
+[m  I've turned it back on. It's still
+[m  running five evidence slots and
+[m  three skeptic slots.
+[m
+[m  Background work is running
+[m  The following will stop when you
+[m    exit:
+[m
+[m  shell · sleep 1800
+[m
+[m  ❯ 1. Exit and stop tasks
+[m    2. Move to background and exit
+[m    3. Stay
+[m
+[m  Enter to confirm · Esc to cancel
+[m
+[m[38:2:136:136:136m──────────────────────────────────────
+[m❯ 
+[m[38:2:136:136:136m──────────────────────────────────────
+[m[38:2:153:153:153m  (1) #134 6defb493 47% · wt-pool-7 (…
+[m[38:2:255:193:7m  ⏵⏵ auto mode on · 1 shell · ← for a…

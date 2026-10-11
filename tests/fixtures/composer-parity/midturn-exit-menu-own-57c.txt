@@ -1,0 +1,62 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ⏺ The inbox watcher was woken by the two recycle-held
+  messages I already reported, so nothing new came in;
+  I've turned it back on. It's still running five
+  evidence slots and three skeptic slots.
+
+✻ Sautéing… (12s · ↓ 1.2k tokens · esc to interrupt)
+
+  ❯ /exit               Exit the CLI
+    /context            Visualize current context usage
+                        as a colored grid
+    /usage-credits      Configure usage credits or
+                        request them from your admin
+─────────────────────────────────────────────────────────
+❯ /exit
+─────────────────────────────────────────────────────────
+  (1) #134 6defb493 47% · wt-pool-7 (1c99e4c04)  cc-13
+  ⏵⏵ auto mode on · 1 shell · ← for agents

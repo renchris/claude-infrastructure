@@ -182,26 +182,67 @@ cc_tui_composer_text() { # $1=window id → stdout: the draft (empty when none);
   return 0
 }
 
+# ── WHERE THE BOX IS, OR UNKNOWN — the one locator the shell readers here share ──────────────────
+# handoff-fire.sh composer_content's common-path rule, row for row (that file is the reference and
+# keeps its own copy: tests/handoff-composer-gate.bats extracts it by name). lr-composer-snapshot.sh
+# calls this function; the three readers that cannot (lr-fire-resume.sh's LR_SCREEN_SH runs under
+# `bash -c` from expect, lr_recon/observe.py and bin/it2-kitty parse in Python) carry the rule
+# themselves, and tests/composer-parser-parity.bats runs all six over one screen corpus.
+#
+# A BOX UNDER A DIALOG IS UNKNOWN (2026-10-11, slot-reader-sweep.md). Until then this read only "the
+# rows between the last two borders", so Claude Code's background-work dialog drawn ABOVE a still
+# visible empty composer read EMPTY on two real 2.1.260 captures, and cc_tui_submit would have
+# pasted into a dialog whose `1` is "Exit and stop tasks". Keystrokes go to the dialog, so the box
+# under it proves nothing. Three shapes refuse:
+#   · a ❯ under the last border — a dialog draws its selector with it, a composer footer never does;
+#   · a top border that does not start at column 0 — a composer printed in output, a teammate panel;
+#   · a ❯ at indent 1-4 above the box — a dialog option row.
+# The slash-command menu is the one exemption, and only when its highlighted row names the command
+# the box itself holds (`  ❯ /exit  Exit the CLI` over `❯ /exit`): with the menu open a CR submits
+# the HIGHLIGHT, so a highlight on any other command stays UNKNOWN (handoff-fire.sh 0e882c9ac).
+# This reads the whole screen where composer_content reads its last 24 rows, so a tall box needs no
+# second read here.
+cc_tui_box_span() { # stdin: the screen, escapes removed → stdout "first,last" box rows; rc 0 found / 1 UNKNOWN
+  LC_ALL=C awk -v b='────────────' -v u='─' -v g='❯' -v nb=$'\302\240' '
+    function border(s,   t) {                 # a full rule, or a LABELED one: "── label ─" from column 0
+      if (index(s, b) > 0) return 1
+      t = s; sub(/[ \t\r]+$/, "", t)
+      return (index(t, u u) == 1 && length(t) > 3 * length(u) && substr(t, length(t) - length(u) + 1) == u)
+    }
+    function slashcmd(s,   t) {             # "❯ /cmd …" (leading spaces, then space or NBSP) → "/cmd", else ""
+      t = s; sub(/^ +/, "", t)
+      if (index(t, g) != 1) return ""
+      t = substr(t, length(g) + 1)
+      while (substr(t, 1, 1) == " " || index(t, nb) == 1) t = substr(t, (substr(t, 1, 1) == " ") ? 2 : length(nb) + 1)
+      if (substr(t, 1, 1) != "/") return ""
+      sub(/[ \t\r].*$/, "", t); return t
+    }
+    function selector(s,   t, n) {          # ❯ at indent 1-4: a dialog option row, never the composer
+      t = s; sub(/^ +/, "", t); n = length(s) - length(t)
+      if (!(n >= 1 && n <= 4 && index(t, g) == 1)) return 0
+      return !(cmd != "" && slashcmd(s) == cmd)
+    }
+    { line[NR] = $0; if (border($0)) { b2 = b1; b1 = NR; gb = 0 } else if (index($0, g) > 0) gb = 1 }
+    END {
+      if (gb) exit 9                                     # a ❯ under the last border: a dialog, not a footer
+      if (b1 == 0 || b2 == 0 || b1 - b2 < 2) exit 9      # no box between two borders
+      if (index(line[b2], u) != 1) exit 9                # an indented "box"
+      cmd = (index(line[b2 + 1], g) == 1) ? slashcmd(line[b2 + 1]) : ""   # the "/cmd" the box holds, if any
+      for (i = 1; i < b2; i++) if (selector(line[i])) exit 9   # a dialog drawn ABOVE a live composer
+      print (b2 + 1) "," (b1 - 1)
+    }' || return 1
+}
+
 # One line per box row: faint runs dropped, box glyphs and control bytes removed, whitespace kept.
 cc_tui_composer_rows() { # $1=window id → stdout: rows; rc 0 parsed / 1 UNKNOWN
-  local id="${1:-}" scr plain span raw rc b12='────────────'
+  local id="${1:-}" scr plain span raw rc
   # DIM IS NOT CONTENT — CC's prompt suggestion renders faint (SGR 2) inside the box; real input
   # never does. Read the rendering and drop faint runs; the parse is the one in composer_content.
   cc_tui_valid_id "$id" || return 1
   scr="$(cc_tui_rpc get-text --match "id:$id" --extent screen --ansi 2>/dev/null)" || scr=""
   [ -n "$scr" ] || scr="$(cc_tui_screen "$id")" || return 1
   plain="$(printf '%s\n' "$scr" | LC_ALL=C perl -pe 's/\e\[[0-?]*[ -\/]*[@-~]|\e\][^\a\e]*(?:\a|\e\\)?|\e.//g')"
-  span="$(printf '%s\n' "$plain" | LC_ALL=C awk -v b="$b12" -v u='─' '
-    function border(s,   t) {                 # a full rule, or a LABELED one: "── label ─" from column 0
-      if (index(s, b) > 0) return 1
-      t = s; sub(/[ \t\r]+$/, "", t)
-      return (index(t, u u) == 1 && length(t) > 3 * length(u) && substr(t, length(t) - length(u) + 1) == u)
-    }
-    { if (border($0)) { b2 = b1; b1 = NR } }
-    END {
-      if (b1 == 0 || b2 == 0 || b1 - b2 < 2) exit 9
-      print (b2 + 1) "," (b1 - 1)
-    }')" && rc=0 || rc=$?
+  span="$(printf '%s\n' "$plain" | cc_tui_box_span)" && rc=0 || rc=$?
   [ "$rc" = 0 ] || return 1
   raw="$(printf '%s\n' "$scr" | LC_ALL=C sed -n "${span}p" | LC_ALL=C perl -ne '
     my ($d, $o) = (0, "");

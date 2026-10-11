@@ -1,0 +1,62 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ⏺ The inbox watcher was woken by the two recycle-held
+  messages I already reported, so nothing new came in;
+  I've turned it back on. It's still running five
+  evidence slots and three skeptic slots.
+
+  ❯ /exit               Exit the CLI
+    /export             Export the current conversation
+                        to a file or clipboard
+    /effort             Set effort level for model
+                        usage
+─────────────────────────────────────────────────────────
+❯ /e
+─────────────────────────────────────────────────────────
+  (1) #134 6defb493 47% · wt-pool-7 (1c99e4c04)  cc-13
+  ⏵⏵ auto mode on · 1 shell · ← for agents

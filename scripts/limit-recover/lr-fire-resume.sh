@@ -850,13 +850,32 @@ scr="$("$LR_IT2" session read -s "$LR_PANE" -n "${LR_SCREEN_LINES:-24}" 2>/dev/n
 # A SELECTOR LINE is `❯` followed by an ordinal — a parked menu. The composer box draws `❯` too, so
 # "contains ❯" would call every healthy screen a menu; the ordinal is what identifies an option.
 if LC_ALL=C grep -qE '❯[[:space:]]*[0-9]+\.' <<<"$scr"; then printf MENU; exit 0; fi
-body="$(LC_ALL=C awk -v b='────────────' -v u='─' -v g='❯' '
-  function selector(s,   t, n) { t = s; sub(/^ +/, "", t); n = length(s) - length(t); return (n >= 1 && n <= 4 && index(t, g) == 1) }
+# THE SLASH-COMMAND MENU IS NOT A DIALOG WHEN IT NAMES THE BOX'S OWN COMMAND (2026-10-11). A typed
+# `/exit` opens the suggestion menu above the box and its highlighted row is `  ❯ /exit  Exit the CLI`,
+# a ❯ at indent 1-4, so this read UNKNOWN on every such screen (slot-reader-sweep.md: the real
+# 2.1.293 capture and all five widths). Only a highlight naming the command the box itself holds is
+# exempt: with the menu open a CR submits the HIGHLIGHT, so any other one stays UNKNOWN. The rule is
+# handoff-fire.sh composer_content's (0e882c9ac); tests/composer-parser-parity.bats pins both.
+body="$(LC_ALL=C awk -v b='────────────' -v u='─' -v g='❯' -v nb=$'\302\240' '
+  function slashcmd(s,   t) {
+    t = s; sub(/^ +/, "", t)
+    if (index(t, g) != 1) return ""
+    t = substr(t, length(g) + 1)
+    while (substr(t, 1, 1) == " " || index(t, nb) == 1) t = substr(t, (substr(t, 1, 1) == " ") ? 2 : length(nb) + 1)
+    if (substr(t, 1, 1) != "/") return ""
+    sub(/[ \t\r].*$/, "", t); return t
+  }
+  function selector(s,   t, n) {
+    t = s; sub(/^ +/, "", t); n = length(s) - length(t)
+    if (!(n >= 1 && n <= 4 && index(t, g) == 1)) return 0
+    return !(cmd != "" && slashcmd(s) == cmd)
+  }
   { line[NR] = $0; if (index($0, b) > 0) { b2 = b1; b1 = NR; gb = 0 } else if (index($0, g) > 0) gb = 1 }
   END { if (gb) exit 9
         if (b1 > 0 && b2 == 0) { print NR - b1; exit 8 }
         if (b1 == 0 || b2 == 0 || b1 - b2 < 2) exit 9
         if (index(line[b2], u) != 1) exit 9
+        cmd = (index(line[b2 + 1], g) == 1) ? slashcmd(line[b2 + 1]) : ""
         for (i = 1; i < b2; i++) if (selector(line[i])) exit 9
         for (i = b2 + 1; i < b1; i++) print line[i] }' <<<"$scr")" \
   && rc=0 || rc=$?

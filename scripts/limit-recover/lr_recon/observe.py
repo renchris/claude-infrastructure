@@ -326,6 +326,7 @@ BORDER = "─" * 12
 _CHROME = frozenset(
     "\u276f"
 )  # ❯; the U+00A0 after it is not printable, so isprintable() drops it
+GLYPH = "\u276f"
 
 
 def _unfaint(line: str) -> str:
@@ -356,9 +357,49 @@ def _unfaint(line: str) -> str:
     return "".join(out)
 
 
+def _slash_command(row: str) -> str:
+    """The "/cmd" of a "❯ /cmd …" row (leading spaces, then spaces or U+00A0 after the glyph), else ""."""
+    t = row.lstrip(" ")
+    if not t.startswith(GLYPH):
+        return ""
+    t = t[len(GLYPH) :].lstrip(" \u00a0")
+    if not t.startswith("/"):
+        return ""
+    return re.split(r"[ \t\r]", t, maxsplit=1)[0]
+
+
+def _dialog_over_box(plain: List[str], top: int, bottom: int) -> bool:
+    """True when a dialog owns the keys although a composer box is still drawn.
+
+    Claude Code 2.1.260 draws its background-work dialog ABOVE a composer that stays visible; read
+    as "the rows between the last two borders" that screen is an empty box, and the idle fan-out
+    would then type at a dialog whose `1` is "Exit and stop tasks" (slot-reader-sweep.md, two real
+    captures). The rule is handoff-fire.sh composer_content's, and tests/composer-parser-parity.bats
+    runs both over one corpus:
+      * a ❯ under the bottom border: a dialog draws its selector with it, a footer never does;
+      * a top border that does not start at column 0: a box printed in output, a teammate panel;
+      * a ❯ at indent 1-4 above the box: a dialog option row. The slash-command menu is exempt
+        only when its highlighted row names the command the box itself holds, because with the
+        menu open a CR submits the highlight, not the box.
+    """
+    if any(GLYPH in ln for ln in plain[bottom + 1 :]):
+        return True
+    if not plain[top].startswith("─"):
+        return True
+    first = plain[top + 1]
+    held = _slash_command(first) if first.startswith(GLYPH) else ""
+    for ln in plain[:top]:
+        body = ln.lstrip(" ")
+        if 1 <= len(ln) - len(body) <= 4 and body.startswith(GLYPH):
+            if not (held and _slash_command(ln) == held):
+                return True
+    return False
+
+
 def composer_from_screen(screen: str) -> str:
     """ "empty" | "draft" | "unknown" from a --ansi screen: the rows strictly between the last two
-    border rows, faint runs dropped; a whole-row `Try "…"` is the placeholder.
+    border rows, faint runs dropped; a whole-row `Try "…"` is the placeholder. A box with a dialog
+    drawn over it is "unknown" (_dialog_over_box).
 
     Only the known chrome is stripped — the prompt glyph ❯, and the U+00A0 after it, which is not
     printable — and every other printable non-space character is content (D6.8). Keeping printable ASCII only read a
@@ -368,8 +409,11 @@ def composer_from_screen(screen: str) -> str:
     borders = [i for i, ln in enumerate(plain) if BORDER in ln]
     if len(borders) < 2 or borders[-1] - borders[-2] < 2:
         return "unknown"
+    top, bottom = borders[-2], borders[-1]
+    if _dialog_over_box(plain, top, bottom):
+        return "unknown"
     rows = []
-    for ln in lines[borders[-2] + 1 : borders[-1]]:
+    for ln in lines[top + 1 : bottom]:
         txt = "".join(
             ch for ch in _unfaint(ln) if ch not in _CHROME and ch.isprintable()
         )

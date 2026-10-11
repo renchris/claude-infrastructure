@@ -1,0 +1,62 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ⏺ The inbox watcher was woken by the two recycle-held
+  messages I already reported, so nothing new came in;
+  I've turned it back on. It's still running five
+  evidence slots and three skeptic slots.
+
+─────────────────────────────────────────────────────────
+❯ /exit
+─────────────────────────────────────────────────────────
+  Background work is running
+  The following will stop when you exit:
+
+  shell · sleep 1800
+
+  ❯ 1. Exit and stop tasks
+    2. Move to background and exit
+    3. Stay
+
+  Enter to confirm · Esc to cancel
+
