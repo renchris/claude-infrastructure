@@ -34,8 +34,8 @@ setup() {
   export CC_NOTIFY_BIN="$BATS_TEST_TMPDIR/no-such-cc-notify"
   export W="$BATS_TEST_TMPDIR"
   export SCREEN_FILE="$W/screen.txt" SENT_LOG="$W/sent.log" EVENTS="$W/events.log"
-  export TX="$W/tx.jsonl" SIDFILE="$W/sid" ARMED="$W/armed"
-  : > "$SENT_LOG"; : > "$EVENTS"; printf 'sess-aaaa' > "$SIDFILE"
+  export TX="$W/tx.jsonl" SIDFILE="$W/sid" ARMED="$W/armed" READS="$W/reads.log"
+  : > "$SENT_LOG"; : > "$EVENTS"; : > "$READS"; printf 'sess-aaaa' > "$SIDFILE"
   UNITS="$W/units.sh"
   {
     sed -n '/^composer_content() {/,/^}/p'           "$HF"
@@ -49,6 +49,7 @@ setup() {
     sed -n '/^recycle_turn_wait() {/,/^}/p'          "$HF"
     sed -n '/^hf_recycle_defer_eligible() {/,/^}/p'  "$HF"
     sed -n '/^hf_recycle_defer() {/,/^}/p'           "$HF"
+    sed -n '/^rcy_composer_unreadable_static() {/,/^}/p' "$HF"
     sed -n '/^composer_scrub_verified() {/,/^}/p'    "$HF"
     sed -n '/^composer_residue_dir() {/,/^}/p'       "$HF"
     sed -n '/^composer_residue_forget() {/,/^}/p'    "$HF"
@@ -70,7 +71,7 @@ set -euo pipefail
 # shellcheck disable=SC1090
 . "$W/units.sh"
 hf_bounded() { # <bin> session <read|send> -s <sid> ... — anything else (cc-notify) is unreachable
-  if [ "${2:-}" = session ] && [ "${3:-}" = read ]; then cat "$SCREEN_FILE" 2>/dev/null; return 0; fi
+  if [ "${2:-}" = session ] && [ "${3:-}" = read ]; then echo r >> "$READS"; cat "$SCREEN_FILE" 2>/dev/null; return 0; fi
   if [ "${2:-}" = session ] && [ "${3:-}" = send ]; then printf '%s\n' "SEND:${6:-}" >> "$SENT_LOG"; return 0; fi
   # The screen witness runs the REAL snapshot store; its kitty transport is the LCS_CC_TUI stub.
   case "${2:-}" in */lr-composer-snapshot.sh) "$@"; return $? ;; esac
@@ -245,6 +246,40 @@ units() { # shellcheck disable=SC1090
   not event recycle-deferred-turn
 }
 
+# ── 1b. a STATIC unreadable screen is held at once (docs/research/recycle-failures-kitty-2026-10-10/
+# REPORT.md F3, fixes 3 and 5). Pane 134: our own /exit stayed in the box under the slash menu, the
+# self-recycle took the UNKNOWN for a running turn, deferred, and the child then spent the full gate
+# on an idle pane. The real 2.1.291 capture with HF_COMPOSER_SLASH_MENU=off is that field shape (a ❯
+# menu row above the box). The gate sleeps with /bin/sleep, so the cost is counted in screen reads.
+screen_slash_menu() { cp "$REPO/tests/fixtures/recycle-exit-residue/slash-menu-exit-2.1.291.txt" "$SCREEN_FILE"; }
+reads() { wc -l < "$READS" | tr -d ' '; }
+
+@test "[RED] F3: a STATIC unreadable screen at rest is HELD at once as recycle-held-unreadable-static — no deferral, no full gate, nothing typed" {
+  screen_slash_menu; tx_tool_use; tx_tool_result 0; tx_end_turn 1
+  HF_COMPOSER_SLASH_MENU=off CC_RECYCLE_TURN_WAIT_PROBE_S=2 CC_RECYCLE_DRAFT_WAIT=10 CALLER_PID="$DEAD_PID" run "$DRIVER" 3>&-
+  [ "$status" -eq 1 ]
+  event recycle-held-unreadable-static
+  grep -q 'dialog-above' "$EVENTS"
+  not event recycle-deferred-turn
+  [ "$(reads)" -le 3 ] || { echo "reads=$(reads)"; false; }
+  not armed; [ ! -s "$SENT_LOG" ]
+  # No receipt for our own /exit: the hold does not claim the box holds it.
+  not grep -q 'our own /exit' "$EVENTS"
+  jq -e '.why | test("static screen")' "$CC_RECYCLE_RETRY_DIR/sess-aaaa.json" >/dev/null
+}
+
+@test "F3: with a fresh receipt for our own /exit, the static hold says the box most likely holds it and it is safe to clear by hand" {
+  screen_slash_menu; tx_tool_use; tx_tool_result 0; tx_end_turn 1
+  mkdir -p "$CC_COMPOSER_RESIDUE_DIR"; printf '2026-10-10T01:21:00Z\t/exit\n' > "$CC_COMPOSER_RESIDUE_DIR/77"
+  HF_COMPOSER_SLASH_MENU=off CC_RECYCLE_TURN_WAIT_PROBE_S=2 CC_RECYCLE_DRAFT_WAIT=10 CALLER_PID="$DEAD_PID" run "$DRIVER" 3>&-
+  [ "$status" -eq 1 ]
+  event recycle-held-unreadable-static
+  grep -q 'our own /exit.*safe to clear that /exit by hand' "$EVENTS"
+  [[ "$output" == *"safe to clear that /exit by hand"* ]] || false
+  jq -e '.why | test("our own /exit")' "$CC_RECYCLE_RETRY_DIR/sess-aaaa.json" >/dev/null
+  [ ! -s "$SENT_LOG" ]
+}
+
 # ── 2. the decision, as units ────────────────────────────────────────────────────────────────
 
 @test "settle: a Stop hook that blocks seconds after end_turn is a turn still running" {
@@ -277,6 +312,37 @@ units() { # shellcheck disable=SC1090
   screen_box "a draft is still a box"
   rc=0; recycle_turn_wait it2 77 "$DEAD_PID" "$W/absent.jsonl" "$(date +%s)" 2 1 0 || rc=$?
   [ "$rc" -eq 0 ]
+}
+
+@test "[RED] the UNKNOWN's shape travels as the exit code: turn-shaped rc 1 waits out the gate, static rc 3 stops at the second read" {
+  units
+  # shellcheck disable=SC2329  # called by composer_content, which units() sourced
+  hf_bounded() { echo r >> "$READS"; cat "$SCREEN_FILE" 2>/dev/null; }
+  # Turn shape: no box. composer_content says 1, and the gate waits out its whole bound (rc 2).
+  screen_boxless
+  rc=0; composer_content it2 77 >/dev/null || rc=$?
+  [ "$rc" -eq 1 ]
+  : > "$READS"; rc=0; recycle_composer_gate it2 77 2 1 >/dev/null || rc=$?
+  [ "$rc" -eq 2 ]; [ "$(reads)" -eq 3 ]
+  # Static shapes: a menu row above the box, and an option row under the last border.
+  screen_slash_menu
+  rc=0; out="$(HF_COMPOSER_SLASH_MENU=off composer_content it2 77)" || rc=$?
+  [ "$rc" -eq 3 ]; [ -z "$out" ]                         # nothing new on stdout
+  : > "$READS"; rc=0; out="$(HF_COMPOSER_SLASH_MENU=off recycle_composer_gate it2 77 30 1)" || rc=$?
+  [ "$rc" -eq 3 ]; [ "$out" = dialog-above ]; [ "$(reads)" -eq 2 ]
+  { echo "$B"; echo "❯ "; echo "$B"; echo "  ❯ 1. Yes"; } > "$SCREEN_FILE"
+  rc=0; out="$(recycle_composer_gate it2 77 30 1)" || rc=$?
+  [ "$rc" -eq 3 ]; [ "$out" = glyph-below ]
+  # A one-read gate (the freshness re-read, the focus gate) never says 3: one read confirms nothing.
+  screen_slash_menu
+  rc=0; HF_COMPOSER_SLASH_MENU=off recycle_composer_gate it2 77 0 1 >/dev/null || rc=$?
+  [ "$rc" -eq 2 ]
+  # A static SHAPE on a screen that changes between reads (a spinner's timer) is not a static screen:
+  # the gate waits out its bound as before.
+  # shellcheck disable=SC2329  # called by composer_content
+  hf_bounded() { echo r >> "$READS"; sed "1s/.*/✻ Working… ($(reads)s)/" "$SCREEN_FILE"; }
+  : > "$READS"; rc=0; HF_COMPOSER_SLASH_MENU=off recycle_composer_gate it2 77 2 1 >/dev/null || rc=$?
+  [ "$rc" -eq 2 ]; [ "$(reads)" -eq 3 ]
 }
 
 @test "hf_new_prompt_since: tool results, hook feedback, subagent traffic and older prompts are not new prompts" {

@@ -170,7 +170,7 @@ mk_hostile() { # $1=modal fixture → $POST_FILE
 @test "the win527 teammate panel (╭──╮ above, wrapped rule) stays UNKNOWN through the bigger window" {
   cp "$FX/win527-teammate-panel.txt" "$POST_FILE"
   run read_post
-  [ "$status" -eq 1 ]
+  [ "$status" -eq 3 ]                # UNKNOWN, static shape (tall-rejected)
 }
 
 @test "a paste that lands in a modal under a hostile transcript gets NO CR (rc 4)" {
@@ -190,16 +190,17 @@ mk_hostile() { # $1=modal fixture → $POST_FILE
   [ ! -s "$SENT_LOG" ]
 }
 
-# Each shape check is load-bearing: break the box one way at a time and it must stay UNKNOWN.
+# Each shape check is load-bearing: break the box one way at a time and it must stay UNKNOWN —
+# rc 3, the static shape a turn ending would not change (recycle-failures-kitty REPORT.md fix 3).
 @test "each shape check refuses on its own: indented rule, no ❯ first row, odd continuation, selector below" {
   mk_tall 30; sed -i.bak "33s/^/ /" "$POST_FILE"                 # (ii) top rule not at column 0
-  run read_post; [ "$status" -eq 1 ]
+  run read_post; [ "$status" -eq 3 ]
   mk_tall 30; sed -i.bak "34s/^❯/>/" "$POST_FILE"                # (iii) first row not the glyph
-  : > "$READS_FILE"; run read_post; [ "$status" -eq 1 ]
+  : > "$READS_FILE"; run read_post; [ "$status" -eq 3 ]
   mk_tall 30; sed -i.bak "40s/^  /⏺ /" "$POST_FILE"              # (iv) a transcript row inside
-  : > "$READS_FILE"; run read_post; [ "$status" -eq 1 ]
+  : > "$READS_FILE"; run read_post; [ "$status" -eq 3 ]
   mk_tall 30; echo "❯ 1. Yes" >> "$POST_FILE"                    # (v) a selector glyph under the border
-  : > "$READS_FILE"; run read_post; [ "$status" -eq 1 ]
+  : > "$READS_FILE"; run read_post; [ "$status" -eq 3 ]
   mk_tall 30                                                     # and the unbroken box parses
   : > "$READS_FILE"; run read_post; [ "$status" -eq 0 ]
 }
@@ -335,7 +336,7 @@ mk_capped() { # a 62-row screen: a 24-row capped box showing only the END of $1 
            "$REPO/tests/fixtures/teammate-probe/captures/p1-run2/lead-pane.after-exit.txt"; do
     cp "$m" "$POST_FILE"; : > "$READS_FILE"
     run read_post
-    [ "$status" -eq 1 ] || { echo "rc=$status [$output]: $m" >&2; return 1; }
+    [ "$status" -eq 3 ] || { echo "rc=$status [$output]: $m" >&2; return 1; }
   done
   cp "$POST_FILE" "$PRE_FILE"
   hf_bounded() { windowed_hf_bounded "$@"; }
@@ -357,11 +358,11 @@ mk_capped() { # a 62-row screen: a 24-row capped box showing only the END of $1 
   # CONTROL: the same screen with a real dialog option above the box still reads UNKNOWN.
   sed -i.bak 's/❯ \/exit          Exit the CLI/❯ 1. Exit and stop tasks/' "$POST_FILE"
   run read_post
-  [ "$status" -eq 1 ] || { echo "rc=$status [$output]"; false; }
+  [ "$status" -eq 3 ] || { echo "rc=$status [$output]"; false; }
   # KILL SWITCH: HF_COMPOSER_SLASH_MENU=off restores the old rule.
   sed -i.bak 's/❯ 1. Exit and stop tasks/❯ \/exit          Exit the CLI/' "$POST_FILE"
   HF_COMPOSER_SLASH_MENU=off run read_post
-  [ "$status" -eq 1 ] || { echo "rc=$status [$output]"; false; }
+  [ "$status" -eq 3 ] || { echo "rc=$status [$output]"; false; }
 }
 
 @test "an indented rule pair (an empty composer printed in tool output) is not a box" {

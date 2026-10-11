@@ -4088,8 +4088,17 @@ EOF
 # tui-literal-phrase-match-is-width-dependent); a border row is width-invariant by construction.
 # A torn/unreadable screen or a missing box returns rc 1 = UNKNOWN, and every caller fails toward
 # NOT typing (the 2026-08-06 rule: typing needs the affirmative).
-composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer content, space-stripped; rc 0 parsed / 1 UNKNOWN
-  local it2="${1:-}" id="${2:-}" scr plain span raw rc b12='────────────' tailonly=0
+# TWO KINDS OF UNKNOWN (docs/research/recycle-failures-kitty-2026-10-10/REPORT.md F3, fix 3). rc 1 is
+# the TURN shape: no read, or no box between two borders, which is what a pane shows while a turn
+# runs. rc 3 is the STATIC shape: a box is drawn but something sits on it (a ❯ option row above it =
+# dialog-above, a ❯ under the last border = glyph-below, a tall box that failed its shape checks =
+# tall-rejected), and that screen does not change when a turn ends. The self-recycle deferred on
+# EVERY unknown, so our own /exit left under the slash menu cost a deferral plus a 180 s wait on an
+# idle pane. The reason travels as the exit code because every caller reads this under `$(…)`; the
+# shape NAME goes to the file HF_COMPOSER_SHAPE_FILE names, when a caller sets one. Both kinds are
+# still UNKNOWN: a caller that tests only for rc 0 refuses on either, exactly as before.
+composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer content, space-stripped; rc 0 parsed / 1 UNKNOWN (turn shape) / 3 UNKNOWN (static shape)
+  local it2="${1:-}" id="${2:-}" scr plain span raw rc b12='────────────' tailonly=0 shape=""
   [ -n "$it2" ] && [ -n "$id" ] || return 1
   # DIM IS NOT CONTENT (2026-09-27). CC renders its prompt SUGGESTION inside the box as faint
   # (SGR 2) text; real input is never faint. A plain read cannot tell them apart, so a suggested
@@ -4141,12 +4150,14 @@ composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer c
     }
     { line[NR] = $0; if (border($0)) { b2 = b1; b1 = NR; gb = 0 } else if (index($0, g) > 0) gb = 1 }
     END {
-      if (gb) exit 9                                     # a ❯ under the last border: a dialog, not a footer
+      # a ❯ under the last border: a dialog, not a footer (static). With no border on screen at all
+      # the flag only means a ❯ somewhere in the output, e.g. an echoed prompt mid-turn: no box.
+      if (gb) exit (b1 > 0 ? 10 : 9)
       if (b1 > 0 && b2 == 0) { print NR - b1; exit 8 }  # a bottom border and no top: maybe a TALL box
       if (b1 == 0 || b2 == 0 || b1 - b2 < 2) exit 9      # no box between two borders ⇒ UNKNOWN
       if (index(line[b2], u) != 1) exit 9                # an indented "box": a composer printed in output
       cmd = (index(line[b2 + 1], g) == 1) ? slashcmd(line[b2 + 1]) : ""   # the "/cmd" the box holds, if any
-      for (i = 1; i < b2; i++) if (selector(line[i])) exit 9   # a dialog drawn ABOVE a live composer
+      for (i = 1; i < b2; i++) if (selector(line[i])) exit 11  # a dialog drawn ABOVE a live composer (static)
       print (b2 + 1) "," (b1 - 1)
     }')" && rc=0 || rc=$?
   # A TALL COMPOSER (goal-arm-readback, 2026-10-10). A /goal of ~470 chars in a 32-column pane wraps
@@ -4202,21 +4213,37 @@ composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer c
       { line[NR] = $0 }
       END {
         bot = NR - off
-        if (bot < 2 || !border(line[bot])) exit 9                        # (i)
+        if (bot < 2 || !border(line[bot])) exit 9                        # (i): the screen MOVED between the reads
         for (top = bot - 1; top > 0 && !border(line[top]); top--) ;
-        if (top < 1 || bot - top < 2 || index(line[top], u) != 1) exit 9  # (ii)
+        if (top < 1) exit 9                                               # a lone rule: no box at all
+        if (bot - top < 2 || index(line[top], u) != 1) exit 12            # (ii) — 12: tall-rejected (static)
         tail = (index(line[top + 1], g) != 1)                             # (iii), or a SCROLLED box
-        if (tail && substr(line[top + 1], 1, 2) != "  ") exit 9
+        if (tail && substr(line[top + 1], 1, 2) != "  ") exit 12
         for (i = top + 2; i < bot; i++)                                   # (iv)
-          if (line[i] !~ /^[ \t\r]*$/ && substr(line[i], 1, 2) != "  ") exit 9
+          if (line[i] !~ /^[ \t\r]*$/ && substr(line[i], 1, 2) != "  ") exit 12
         for (i = bot + 1; i <= NR; i++)                                   # (v)
-          if (index(line[i], g) > 0) exit 9
-        for (i = 1; i < top; i++) if (selector(line[i])) exit 9          # (vi)
+          if (index(line[i], g) > 0) exit 12
+        for (i = 1; i < top; i++) if (selector(line[i])) exit 12         # (vi)
         print (top + 1) "," (bot - 1) (tail ? ",T" : "")
       }')" && rc=0 || rc=$?
     case "$span" in *,T) tailonly=1; span="${span%,T}" ;; esac
   fi
-  [ "$rc" = 0 ] || return 1
+  # The static shapes (F3 above). Two tall-path misses are not: a bottom border that moved between the
+  # two reads (i) is a screen in motion, and a rule with no top border anywhere is no box at all; both
+  # stay the turn shape. The shape file gets the name AND a checksum of the screen, so a caller can
+  # ask whether two reads saw the very same screen (a running turn's spinner timer never does).
+  case "$rc" in
+    0) ;;
+    10) shape=glyph-below ;;
+    11) shape=dialog-above ;;
+    12) shape=tall-rejected ;;
+    *) return 1 ;;
+  esac
+  if [ -n "$shape" ]; then
+    [ -z "${HF_COMPOSER_SHAPE_FILE:-}" ] \
+      || printf '%s\t%s\n' "$shape" "$(printf '%s' "$plain" | cksum)" > "$HF_COMPOSER_SHAPE_FILE" 2>/dev/null || true
+    return 3
+  fi
   # Drop every escape sequence and every FAINT run. SGR params are parsed, not substring-matched:
   # the `2` inside truecolor `38;2;r;g;b` is a colour-space selector, not faint, and reading it as
   # faint would make a coloured draft vanish — the direction that types over operator text.
@@ -4262,12 +4289,25 @@ composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer c
 #   rc 0 = composer PROVEN empty within the wait → safe to type /exit
 #   rc 1 = held: stayed non-empty (last content on stdout)
 #   rc 2 = unknown: unreadable/boxless for the whole wait (never treated as empty)
+#   rc 3 = unknown on a STATIC screen: composer_content's static shape on two reads in a row that saw
+#          the very same screen (the shape name on stdout). Waiting out the bound on it only ages an
+#          idle pane (REPORT.md F3, docs/research/recycle-failures-kitty-2026-10-10/). A screen that
+#          changed between the reads (a running turn's spinner), or a gate of one read (wait 0), never
+#          says 3: nothing confirmed it static, so it stays rc 2 as before.
 recycle_composer_gate() { # $1=it2-bin $2=sid $3=max-wait-s $4=interval-s
-  local it2="$1" sid="$2" wait="${3:-180}" ivl="${4:-15}" t=0 c crc
+  local it2="$1" sid="$2" wait="${3:-180}" ivl="${4:-15}" t=0 c crc shf="" cur="" prev=""
+  shf="$(mktemp "${TMPDIR:-/tmp}/hf-composer-shape.XXXXXX" 2>/dev/null)" || shf=""
   while :; do
-    c="$(composer_content "$it2" "$sid")" && crc=0 || crc=1
-    [ "$crc" = 0 ] && [ -z "$c" ] && return 0
+    [ -z "$shf" ] || : > "$shf"                          # a stale shape must never confirm itself
+    crc=0; c="$(HF_COMPOSER_SHAPE_FILE="$shf" composer_content "$it2" "$sid")" || crc=$?
+    if [ "$crc" = 0 ] && [ -z "$c" ]; then [ -z "$shf" ] || rm -f "$shf"; return 0; fi
+    cur=""; [ "$crc" != 3 ] || [ -z "$shf" ] || cur="$(cat "$shf" 2>/dev/null || true)"
+    if [ -n "$cur" ] && [ "$cur" = "$prev" ]; then
+      rm -f "$shf"; printf '%s' "${cur%%$'\t'*}"; return 3
+    fi
+    prev="$cur"
     if [ "$t" -ge "$wait" ]; then
+      [ -z "$shf" ] || rm -f "$shf"
       if [ "$crc" = 0 ]; then printf '%s' "$c"; return 1; fi
       return 2
     fi
@@ -4622,7 +4662,9 @@ hf_recycle_defer_eligible() { # $1=pane tty → 0 eligible (RCY_DEFER_CALLER_PID
   [ -n "$RCY_DEFER_CALLER_PID" ]
 }
 
-# hf_recycle_defer — the fork. Called from recycle_composer_block when the composer cannot be read.
+# hf_recycle_defer — the fork. Called from recycle_composer_block when the composer cannot be read
+# and the screen has a running turn's shape (gate rc 2); a static unreadable screen (rc 3) is held at
+# once by rcy_composer_unreadable_static instead, since the end of a turn would not change it.
 #   PARENT: prints what happens next and EXITS 0, so the tool call returns and the turn can end.
 #   CHILD:  waits (recycle_turn_wait), then runs recycle_fire_gated — the composer gate first, so a
 #           draft the operator typed meanwhile still holds the recycle. A hold writes the retry ticket.
@@ -4692,6 +4734,36 @@ hf_recycle_defer() { # $1=pane tty
   echo "→ recycle DEFERRED to the end of this turn: pane $SID's composer cannot be read while this tool call runs, so waiter pid $dpid (own process group) waits up to ${CC_RECYCLE_TURN_WAIT_S:-300}s for the turn to end, then proves the composer empty and types /exit. END YOUR TURN NOW and start no other work: a new prompt, a draft in the composer or a turn that keeps running holds it and leaves a retry ticket. Log: $dlog"
   trap - EXIT
   exit 0
+}
+
+# A STATIC UNREADABLE SCREEN IS HELD AT ONCE, NOT DEFERRED (docs/research/recycle-failures-kitty-
+# 2026-10-10/REPORT.md F3, fix 3). Pane 134: our own `/exit` stayed in the box, the slash menu stayed
+# drawn over it, and every read was UNKNOWN. The self-recycle took that for a running turn, deferred,
+# the turn ended 16 s later, and the child then spent the full 180 s gate on an idle session and a
+# screen that never changed, ending recycle-held-unreachable. All three deferrals ever recorded ended
+# that way. A static shape (composer_content rc 3, confirmed by a second read of the same screen)
+# holds now, under its own class and naming the shape. NO KEYSTROKE goes into the box: under a dialog a keystroke is taken
+# as the dialog's answer (operator decision for this build). When this rail itself typed /exit into
+# the pane recently and could not confirm it (hf_exit_readback's receipt), the hold says the box most
+# likely holds our own /exit and is safe to clear by hand. Sets RCY_STATIC_WHY for the retry ticket.
+rcy_composer_unreadable_static() { # $1=shape (dialog-above|glyph-below|tall-rejected) — emits the row and the refusal (stderr); the caller exits
+  local shape="${1:-static}" f rec mt now what own=""
+  f="$(composer_residue_dir)/${SID//\//_}"
+  if [ -f "$f" ] && rec="$(cut -f2- < "$f" 2>/dev/null)" && [ "$rec" = /exit ]; then
+    mt="$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)"; now="$(date +%s)"
+    case "$mt" in ''|*[!0-9]*) mt=0 ;; esac
+    [ $((now - mt)) -gt "${CC_RECYCLE_EXIT_RESIDUE_FRESH_S:-3600}" ] || own="this rail typed /exit into this pane $((now - mt))s ago and could not confirm it went through, so the box most likely still holds our own /exit under the slash menu; it is safe to clear that /exit by hand"
+  fi
+  case "$shape" in
+    dialog-above)  what="a dialog or menu option row (❯) is drawn above the prompt box" ;;
+    glyph-below)   what="a dialog option row (❯) is drawn below the prompt box" ;;
+    tall-rejected) what="a tall prompt box failed the composer shape checks" ;;
+    *)             what="the screen does not show a readable prompt box" ;;
+  esac
+  RCY_STATIC_WHY="the composer could not be read on a static screen ($shape: $what)${own:+; $own}"
+  emit_recycle_event recycle-held-unreadable-static "" "$SID" "composer UNREADABLE on a STATIC screen, shape $shape ($what), on two reads in a row; held at once (no deferral, no ${CC_RECYCLE_DRAFT_WAIT:-180}s wait), no keystroke sent${own:+; $own}" || true
+  echo "!! recycle HELD: pane $SID's composer cannot be read and the screen is static, not a running turn — shape $shape: $what. Waiting would not change it, so this holds now. Nothing was typed: under a dialog a keystroke is taken as its answer. ${own:+Note: $own. }The session stays alive. Re-run once the pane shows a plain empty prompt box: $CMD" >&2
+  return 0
 }
 
 # recycle_nudge_decision — what may the watcher's 60/150/300s checkpoint DO, decided from the
@@ -17735,6 +17807,17 @@ recycle_composer_block() {
       else
         emit_recycle_event recycle-held-draft "" "$SID" "own-residue scrub FAILED (rc $rcy_scrub_rc) over '${rcy_cg_c}'" || true
       fi
+    fi
+    if [ "$rcy_cg_rc" = 3 ]; then
+      # A STATIC unreadable screen (a dialog or menu over the box, confirmed by a second read of the
+      # same screen) is not a running turn, so it is never deferred and never waited out: pane 134 deferred on one and
+      # then spent 180 s on an idle pane (rcy_composer_unreadable_static says why). Same ticket path
+      # as the refusal below; nothing is typed into the box.
+      rcy_composer_unreadable_static "$rcy_cg_c"
+      if [ "$RCY_REMOTE" != 1 ] && [ -z "${RESUME_LAUNCHER:-}" ]; then
+        hf_recycle_retry_ticket "$(cc_sid_for_pane "$SID" 2>/dev/null || true)" "$SID" "${RCY_STATIC_WHY:-the composer could not be read on a static screen}" - "${PROMPT_FILE_ORIG:-${PROMPT_FILE:-}}" >&2 || true
+      fi
+      exit 1
     fi
     if [ "$rcy_cg_rc" = 2 ]; then
       # A self-recycle run mid-turn often has no composer box to read (pane 254, 2026-10-05: 180 s,

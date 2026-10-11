@@ -62,7 +62,7 @@ TUI
   {
     for f in composer_content recycle_composer_gate hf_transcript_at_rest hf_recycle_retry_ticket \
              rcy_composer_unreadable hf_new_prompt_since recycle_turn_wait hf_recycle_defer_eligible \
-             hf_recycle_defer composer_scrub_verified composer_residue_forget composer_residue_is_ours \
+             hf_recycle_defer rcy_composer_unreadable_static composer_scrub_verified composer_residue_forget composer_residue_is_ours \
              recycle_fire_gated recycle_composer_block rcy_draft_refusal \
              hf_rcy_carry_libs hf_rcy_carry_retired hf_rcy_carry_eligible hf_rcy_carry hf_rcy_carry_what \
              hf_rcy_carry_exit_restore hf_rcy_carry_restore_here hf_rcy_carry_putback; do

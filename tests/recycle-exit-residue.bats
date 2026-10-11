@@ -48,7 +48,7 @@ setup() {
     grep '^_iso_now() {' "$HF"
     for f in composer_content recycle_composer_gate hf_transcript_at_rest hf_recycle_retry_ticket \
              rcy_composer_unreadable hf_new_prompt_since recycle_turn_wait hf_recycle_defer_eligible \
-             hf_recycle_defer composer_scrub_verified composer_residue_dir composer_residue_record \
+             hf_recycle_defer rcy_composer_unreadable_static composer_scrub_verified composer_residue_dir composer_residue_record \
              composer_residue_forget composer_residue_is_ours hf_exit_readback recycle_fire_gated \
              recycle_composer_block; do
       sed -n "/^$f() {/,/^}/p" "$HF"
@@ -191,7 +191,7 @@ not() { if "$@"; then return 1; fi; }
 @test "CONTROL: a real dialog above a box holding /exit still reads UNKNOWN" {
   echo dialog > "$MODE"; printf '/exit' > "$BOX"
   run read_box
-  [ "$status" -eq 1 ]
+  [ "$status" -eq 3 ]                # UNKNOWN, static shape (dialog-above): REPORT.md fix 3
 }
 
 @test "CONTROL: a menu whose highlighted command is not the box's own reads UNKNOWN" {
@@ -200,5 +200,5 @@ not() { if "$@"; then return 1; fi; }
   grep -q '❯ /export' "$W/other.txt"                            # the mutation took
   hf_bounded() { [ "${2:-} ${3:-}" = "session read" ] && cat "$W/other.txt"; }
   run composer_content it2 206
-  [ "$status" -eq 1 ]
+  [ "$status" -eq 3 ]                # UNKNOWN, static shape (dialog-above): REPORT.md fix 3
 }
