@@ -1102,3 +1102,35 @@ PY
   grep -q '^no_ui=0$' "$BATS_TEST_TMPDIR/m-noui.out" || { echo "CONTROL FAILED — losing no_ui is invisible"; cat "$BATS_TEST_TMPDIR/m-noui.out"; false; }
   grep -q '^has_main=1$' "$BATS_TEST_TMPDIR/m-noui.out" || { echo "CONTROL FAILED — the no_ui mutation moved main too"; cat "$BATS_TEST_TMPDIR/m-noui.out"; false; }
 }
+
+# ── the inherited Terminal.app identity ─────────────────────────────────────────────
+# A kitty started from Terminal.app hands TERM_PROGRAM=Apple_Terminal and one TERM_SESSION_ID to
+# every pane, which turns on /etc/zshrc_Apple_Terminal's shared session restore in all of them.
+# shellcheck disable=SC2317  # called from the @test bodies below
+env_probe() {
+  CC_TEST_CONF="$1" "$KITTY" +runpy '
+def main():
+    import os
+    from kitty.config import load_config
+    o = load_config(os.environ["CC_TEST_CONF"])
+    for k in ("TERM_PROGRAM", "TERM_PROGRAM_VERSION", "TERM_SESSION_ID"):
+        print("%s=%s" % (k, o.env.get(k, "<inherited>")))
+main()
+' 2>&1
+}
+
+# shellcheck disable=SC2317  # bats invokes @test bodies indirectly
+@test "Terminal.app's TERM_PROGRAM and TERM_SESSION_ID are removed from every pane" {
+  run env_probe "$CONF"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  for k in TERM_PROGRAM TERM_PROGRAM_VERSION TERM_SESSION_ID; do
+    echo "$output" | grep -qx "$k=_delete_this_env_var_" || { echo "$output"; false; }
+  done
+}
+
+# shellcheck disable=SC2317  # bats invokes @test bodies indirectly
+@test "MUTANT CONTROL: without the env lines the variables are inherited, and the guard sees it" {
+  grep -vE '^env TERM_(PROGRAM|PROGRAM_VERSION|SESSION_ID)$' "$CONF" > "$BATS_TEST_TMPDIR/mutant.conf"
+  run env_probe "$BATS_TEST_TMPDIR/mutant.conf"
+  echo "$output" | grep -qx "TERM_SESSION_ID=<inherited>" || { echo "$output"; false; }
+}
