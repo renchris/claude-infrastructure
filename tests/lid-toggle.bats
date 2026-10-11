@@ -210,24 +210,23 @@ EOF
 @test "a terminal gets the state badge, its meaning, and the one command that switches it" {
   NO_COLOR=1 run script -q /dev/null "$LID" </dev/null
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Keep awake with lid closed  [OFF]"* ]] || false
-  [[ "$output" == *"Lid closed: sleeps (macOS default)."* ]] || false
+  [[ "$output" == *"Keep awake, lid closed"* ]] || false
+  [[ "$output" == *"[OFF] Lid closed → sleeps"* ]] || false
   [[ "$output" == *"Turn ON:   cc-lid on"* ]] || false
   [[ "$output" != *'`'* ]] || false
   echo 1 > "$D/state"
   NO_COLOR=1 run script -q /dev/null "$LID" </dev/null
-  [[ "$output" == *"Keep awake with lid closed  [ON]"* ]] || false
-  [[ "$output" == *"Lid closed: keeps running."* ]] || false
+  [[ "$output" == *"[ON]  Lid closed → runs"* ]] || false
   [[ "$output" == *"Turn OFF:  cc-lid off"* ]] || false
   [[ "$output" != *'`'* ]]
 }
 
-@test "every terminal line fits a 45-column pane — status AND after a switch" {
+@test "every terminal line fits a 30-column pane — status AND after a switch" {
   # The switch view was missed once: its "✓ switched" tag rode the badge line and wrapped.
   fits() {
     while IFS= read -r line; do
       line="${line%$'\r'}"
-      [ "${#line}" -le 45 ] || { echo "too wide (${#line}): $line"; return 1; }
+      [ "${#line}" -le 30 ] || { echo "too wide (${#line}): $line"; return 1; }
     done <<<"$output"
   }
   for s in 0 1; do

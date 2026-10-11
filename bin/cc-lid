@@ -130,19 +130,21 @@ render_state() {   # $1 = on|off · $2 = "now " after a change · $3 = optional 
       on_badge='[ON]' off_badge='[OFF]'
     fi
     printf '\n'
-    # A switch gets its own line ABOVE the header: appended to the badge it pushed that
-    # line past a 45-column pane and broke "switched" mid-word (operator screenshot).
+    # Every line ≤ 28 columns: his split panes run ~32 wide, and a 45-column budget still
+    # wrapped the badge and the meaning line mid-word (operator screenshots, 2026-10-11).
+    # A switch gets its own line ABOVE the header so it never rides another line.
     local label=OFF; [ "$1" = on ] && label=ON
-    [ -n "$2" ] && printf '%s\n' "  ${d}✓ Switched to ${label}${r}"
+    [ -n "$2" ] && printf '%s\n' " ${d}✓ Switched to ${label}${r}"
+    printf '%s\n' " ${b}Keep awake, lid closed${r}"
     if [ "$1" = on ]; then
-      printf '%s\n' "  ${b}Keep awake with lid closed${r}  ${on_badge}"
-      printf '%s\n' "  Lid closed: keeps running."
-      printf '%s\n' "  ${d}Keep it plugged in, out of bags.${r}"
-      printf '\n%s\n\n' "  Turn OFF:  ${c}cc-lid off${r}"
+      printf '%s\n' " ${on_badge}  Lid closed → runs"
+      printf '%s\n' "       ${d}Keep it plugged in,${r}"
+      printf '%s\n' "       ${d}out of bags.${r}"
+      printf '\n%s\n\n' " Turn OFF:  ${c}cc-lid off${r}"
     else
-      printf '%s\n' "  ${b}Keep awake with lid closed${r}  ${off_badge}"
-      printf '%s\n' "  Lid closed: sleeps (macOS default)."
-      printf '\n%s\n\n' "  Turn ON:   ${c}cc-lid on${r}"
+      printf '%s\n' " ${off_badge} Lid closed → sleeps"
+      printf '%s\n' "       ${d}(macOS default)${r}"
+      printf '\n%s\n\n' " Turn ON:   ${c}cc-lid on${r}"
     fi
     return
   fi
