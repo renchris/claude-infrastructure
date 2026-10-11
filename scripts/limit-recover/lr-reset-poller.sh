@@ -2254,7 +2254,8 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
     # a move that produced nothing is exactly the case where the parked record is the only thing
     # that would re-fire the recovery. Retiring on the move alone discards it.
     #
-    # TWO INDEPENDENT POSITIVES, EITHER SUFFICIENT, both about the SUCCESSOR and never about the move:
+    # INDEPENDENT POSITIVES, ANY ONE SUFFICIENT, all about the SUCCESSOR and never about the move
+    # (a third, leg (3), follows these two below):
     #   (1) the run's own state log reads RECOVERED — lr_state_current (lr-lib.sh:439), read from the
     #       newest bundle for this sid. This is that function's FIRST production caller in the tree.
     #   (2) a LIVE registry row under the TARGET cfg — lr_registry_live_rows_in_cfg (lr-lib.sh, added
@@ -2265,7 +2266,8 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
     # ⚠ MEASURED 2026-09-20, AND IT IS A DISAGREEMENT WITH THE PLAN, NOT A BUG HERE: no writer in
     # this tree ever appends the state `RECOVERED`. The live vocabulary is admitted / gate-admitted /
     # submit-token-armed / relaunch-typed / FAILED / FAILED:submit, and only 4 of ~140 sid dirs carry
-    # an events.jsonl at all. So leg (1) is INERT today and leg (2) carries the whole gate. Leg (1)
+    # an events.jsonl at all. So leg (1) is INERT today (still so 2026-10-11, after D5) and legs (2)
+    # and (3) carry the gate. Leg (1)
     # stays because it is the predicate the plan specifies and it goes live the day a writer emits
     # it; re-measure with:
     #   jq -r .state $(find ~/.reso/limit-recover -name events.jsonl) | sort -u
@@ -2279,6 +2281,36 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
     if (( _lrp_recovered == 0 )) && command -v lr_registry_live_rows_in_cfg >/dev/null 2>&1 \
        && lr_registry_live_rows_in_cfg "$sid" "$_lrp_to" >/dev/null 2>&1; then
       _lrp_recovered=1; _lrp_st="live-row-on-target${_lrp_st:+ (log says $_lrp_st)}"
+    fi
+    # (3) THE SUCCESSOR RAN AND FINISHED (decision e276a5e2fb63, option (g), 2026-10-11). Leg (1)
+    # can never fire: lr-handoff partitions its verdicts on action and never writes RECOVERED
+    # (lr-handoff.sh "THE VERDICT VOCABULARY": SWITCHED / SWITCHED-UNPROVEN / NOTMOVED / STRANDED /
+    # FAILED). Leg (2) needs the successor alive during a tick. So a successor that took its turns
+    # on the target and exited left the record parked forever: 23 of the 27 live records on
+    # 2026-10-11, each re-read every tick, and each blocking § 1 from parking that sid's next limit
+    # event (`[[ ! -f "$PARKED/$sid.json" ]]`). The leg is lr-handoff's own SWITCHED proven=yes
+    # test: a content-bearing, non-error assistant turn on the TARGET after the tombstone's ts.
+    # Three guards, each failing closed to LEFT PARKED:
+    #   · NO live registry row names the sid. A row means a pane still holds it, and the husk
+    #     lanes (husk_file_request above, the HUSK branch below) own that case.
+    #   · a confirm tombstone with a ts, never an admit one: an admit never retired the source, so
+    #     turns on the target would be a fork, not a carried session.
+    #   · the engagement is read on the target copy lr_transplant_target found.
+    # Why this is not C2's dropped 'moved-on' token (lr-stranded-husk round2/C2.md DROPPED B): that
+    # retire cancelled a husk RELAUNCH request; this record can file none, because husk_file_request
+    # returns at its registry gate for the same no-row sid, and every other arm of this block is
+    # `continue`. Retiring is a mv into resumed/; a newer limit event re-parks it (REPARK above).
+    if (( _lrp_recovered == 0 )) && command -v lr_engaged_after >/dev/null 2>&1 \
+       && ! lr_registry_live_rows "$sid" >/dev/null 2>&1; then
+      _lrp_tts=""
+      for _lrp_f in "$cfg"/projects/*/"$sid".HANDOFF.json; do
+        [[ -f "$_lrp_f" ]] || continue
+        _lrp_tts="$(jq -r 'if (.phase // "") == "admit" then "" else (.ts // "") end' "$_lrp_f" 2>/dev/null)"
+        break
+      done
+      if [[ "$_lrp_tts" == 20*Z ]] && lr_engaged_after "$_lrp_to" "$sid" "${_lrp_tts%Z}"; then
+        _lrp_recovered=1; _lrp_st="engaged-on-target after $_lrp_tts${_lrp_st:+ (log says $_lrp_st)}"
+      fi
     fi
     if (( _lrp_recovered == 0 )); then
       # LEFT PARKED — and said ONCE per record, not once per tick. This arm is reached on every tick

@@ -95,3 +95,42 @@ resume_pgreps() { grep -c "resume $SID" "$PGREP_LOG" || true; }
   [ -f "$STATE/resumed/$SID.json" ] || { plog; false; }
   [ ! -e "$STATE/parked/$SID.json" ]
 }
+
+# ── option (g): a successor that RAN on the target and exited retires the record ─────────────────
+turn_on_target() { # $1=timestamp → one content-bearing, non-error assistant turn on the target copy
+  printf '{"type":"assistant","timestamp":"%s","message":{"role":"assistant","content":[{"type":"text","text":"done, live on trunk"}]}}\n' "$1" >> "$TGT/projects/-p/$SID.jsonl"
+  touch -t 202609010000 "$TGT/projects/-p/$SID.jsonl"
+}
+
+@test "[RED] (g) the successor took a turn on the target after the move and no pane holds the sid: retired TRANSPLANTED" {
+  husk_disk; park_past; turn_on_target 2026-10-10T05:00:00.123Z
+  tick
+  [ "$status" -eq 0 ] || { plog; false; }
+  grep -q "TRANSPLANTED $SID .*engaged-on-target after 2026-10-10T04:18:07Z" "$STATE/poller.log" || { plog; false; }
+  [ -f "$STATE/resumed/$SID.json" ] || { plog; false; }
+  [ ! -e "$STATE/parked/$SID.json" ]
+  [ ! -e "$STATE/parked/$SID.husk-noted" ]
+  [ ! -s "$FLEET_LOG" ] || { cat "$FLEET_LOG"; false; }
+}
+
+@test "(g) GUARD: a turn on the target from BEFORE the tombstone's ts is not the successor: left parked" {
+  husk_disk; park_past; turn_on_target 2026-10-10T04:10:00Z
+  tick
+  [ -f "$STATE/parked/$SID.json" ] || { plog; false; }
+  [ ! -e "$STATE/resumed/$SID.json" ] || { plog; false; }
+}
+
+@test "(g) GUARD: a live registry row on the source (a husk pane) keeps the record for the husk lane" {
+  husk_disk; park_past; turn_on_target 2026-10-10T05:00:00Z; holder 99168 "$$" claude-secondary "$SRC"
+  tick
+  [ -f "$STATE/parked/$SID.json" ] || { plog; false; }
+  [ ! -e "$STATE/resumed/$SID.json" ] || { plog; false; }
+}
+
+@test "(g) GUARD: an ADMIT-phase tombstone (the source was never retired) is never read as a carried session" {
+  husk_disk; park_past; turn_on_target 2026-10-10T05:00:00Z
+  printf '{"handed_off_to":"%s","target_transcript":"%s/projects/-p/%s.jsonl","ts":"2026-10-10T04:18:07Z","phase":"admit"}\n' "$TGT" "$TGT" "$SID" > "$SRC/projects/-p/$SID.HANDOFF.json"
+  tick
+  [ -f "$STATE/parked/$SID.json" ] || { plog; false; }
+  [ ! -e "$STATE/resumed/$SID.json" ] || { plog; false; }
+}
