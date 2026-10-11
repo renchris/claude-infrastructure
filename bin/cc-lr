@@ -1894,6 +1894,212 @@ cl_events_bulk() { # <file…> → "file\tts\tstate\tstage\tdetail" per LINE
   jq -r '[input_filename, (.ts // "-"), (.state // "-"), (.stage // "-"), (.detail // "-")] | @tsv' "$@" 2>/dev/null
 }
 
+# ONE REGISTRY WALK FOR THE WHOLE STATUS (lr-reliability D8, 2026-10-11). lr_registry_live_rows forks
+# jq per registry file per call, and status --all called it once per dead sid's bundle: 206 probes,
+# 200 s, nothing printed until the end. This is the same predicate (session_id + a kill -0'able
+# digit pid, dotfiles skipped by the glob) read in one jq, the shape lr-fleet.sh's lf_husk_arm uses.
+# An empty glob forks nothing. rc 1 when the one read failed (jq aborts on ONE malformed file): the
+# caller then falls back to the per-sid SSOT loop, never to an empty set that would read as "dead".
+cl_live_set() { # → "\n<sid>\n<sid>…" of every sid holding a live registry row; rc 1 when unreadable
+  local reg="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}" f rows s p out=$'\n' files=()
+  for f in "$reg"/*.json; do [ -f "$f" ] && files+=("$f"); done
+  if [ "${#files[@]}" -gt 0 ]; then
+    rows="$(jq -r '[(.session_id // .sessionId // ""), ((.pid // "") | tostring)] | @tsv' "${files[@]}" 2>/dev/null)" || return 1
+    while IFS=$'\t' read -r s p; do
+      case "$p" in ''|*[!0-9]*) continue ;; esac
+      [ -n "$s" ] && kill -0 "$p" 2>/dev/null && out="$out$s"$'\n'
+    done <<EOR
+$rows
+EOR
+  fi
+  printf '%s' "$out"
+}
+
+# EVERY VERDICT THE STORE HOLDS OUTSIDE THE BUNDLE LOG (lr-reliability D5, 2026-10-11). lr-handoff
+# never closes its events.jsonl, so 151 of 224 bundles ended non-terminal and 58d3640a read
+# `admitted` for an hour after it FAILED; and a sid the rail never ran (a parked or retired request,
+# a session the reconciler closed) had no bundle and so no status at all. ONE python fork reads the
+# other stores and tags each row; the renderer below picks the newest terminal. Rows, tab-separated:
+#   S sid                                   a session this answer covers
+#   R sid run_ts word epoch detail          one lr-fleet --one run's verdict.txt (fleet/one-<ts>-<sid8>)
+#   T sid word epoch source detail          a terminal verdict from the reconciler, the poller or the rail
+#   H sid desc cid                          the reconciler HOLDS it (an open record, or its fence owns it)
+#   P sid desc epoch                        a request still queued
+#   L sid line                              the poller's last REQUEST line for it   (one ref only)
+#   X sid transcript since last             its transcript, and when it last turned (one ref only)
+# ref "-" reads events.jsonl paths on stdin (status --all); otherwise ref is a sid prefix or a run path.
+cl_verdict_sources() { # <ref|-> → tagged rows on stdout; rc 0 always
+  CL_CFGS="$(command -v lr_config_dirs >/dev/null 2>&1 && lr_config_dirs 2>/dev/null)" \
+  /usr/bin/python3 -I -c '
+import calendar, json, os, re, sys, time
+state, recon, ref = sys.argv[1], sys.argv[2], sys.argv[3]
+deep = ref != "-"
+UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+REQ = re.compile(r"^(?:cc-lr-[a-z]+-)?([0-9a-f-]{36})(?:\.cc-lr)?\.json$")
+def ls(d):
+    try:
+        return os.listdir(d)
+    except OSError:
+        return []
+def mtime(p):
+    try:
+        return os.stat(p).st_mtime
+    except OSError:
+        return None
+def jload(p):
+    try:
+        with open(p, encoding="utf-8") as fh:
+            v = json.load(fh)
+        return v if isinstance(v, dict) else None
+    except (OSError, ValueError):
+        return None
+def clean(s):
+    return " ".join(str(s).split())[:240] or "-"
+def epoch_of(s):
+    try:
+        return float(calendar.timegm(time.strptime(str(s)[:19], "%Y-%m-%dT%H:%M:%S")))
+    except (ValueError, TypeError):
+        return None
+def out(*f):
+    print("\t".join(clean(x) for x in f))
+if deep:
+    r = ref.rstrip("/")
+    if os.path.exists(r):
+        p = r if os.path.isdir(r) else os.path.dirname(r)
+        cand = {os.path.basename(os.path.dirname(p))}
+    else:
+        pre = r.lower()
+        cand = {n for n in ls(state) if n.startswith(pre)}
+        cand |= {n[:-5] for n in ls(os.path.join(recon, "sessions")) if n.startswith(pre)}
+        for d in ("results", "requests"):
+            for n in ls(os.path.join(state, d)):
+                m = REQ.match(n) or re.match(r"^([0-9a-f-]{36})\.", n)
+                if m and m.group(1).startswith(pre):
+                    cand.add(m.group(1))
+else:
+    cand = set()
+    for line in sys.stdin:
+        b = os.path.dirname(line.strip())
+        cand.add(os.path.basename(os.path.dirname(b)))
+sids = sorted(s for s in cand if UUID.match(s))
+fleet = {}
+fdir = os.path.join(state, "fleet")
+for n in ls(fdir):
+    m = re.match(r"^one-(\d{8}T\d{6}Z)-([0-9a-f]{8})$", n)
+    if m:
+        fleet.setdefault(m.group(2), []).append((m.group(1), os.path.join(fdir, n)))
+pending = {}
+for n in ls(os.path.join(state, "requests")):
+    m = REQ.match(n)
+    if m:
+        pending.setdefault(m.group(1), []).append(os.path.join(state, "requests", n))
+for sid in sids:
+    out("S", sid)
+    cwds, txs = [], []
+    for run_ts, d in sorted(fleet.get(sid[:8], [])):
+        vf = os.path.join(d, "verdict.txt")
+        try:
+            with open(vf, encoding="utf-8", errors="replace") as fh:
+                first = fh.readline()
+        except OSError:
+            continue
+        m = re.search(r"verdict=(\S+)", first)
+        if not m:
+            continue
+        detail = first.split(" — ", 1)[1] if " — " in first else first
+        out("R", sid, run_ts, m.group(1), mtime(vf) or 0, detail)
+        out("T", sid, m.group(1), mtime(vf) or 0, "rail run " + os.path.basename(d), detail)
+    rec = jload(os.path.join(recon, "sessions", sid + ".json"))
+    if rec:
+        term = rec.get("terminal") if isinstance(rec.get("terminal"), dict) else None
+        close = rec.get("close") if isinstance(rec.get("close"), dict) else {}
+        cid = rec.get("cohort_id") or "-"
+        cwds.append(rec.get("cwd") or "")
+        if term and term.get("outcome"):
+            word = term["outcome"] + (":" + close["via"] if close.get("via") else "")
+            at = term.get("at") or close.get("at") or mtime(os.path.join(recon, "sessions", sid + ".json")) or 0
+            out("T", sid, word, at, "reconciler record " + str(rec.get("record_id") or "-") + " (cohort " + cid + ")",
+                term.get("proof") or "-")
+        else:
+            out("H", sid, "%s/%s" % (rec.get("phase") or "-", rec.get("substate") or "-"), cid)
+    if os.path.exists(os.path.join(recon, "owned", sid)) and not (rec and not rec.get("terminal")):
+        out("H", sid, "its fence owns a process it started", (rec or {}).get("cohort_id") or "-")
+    res = os.path.join(state, "results")
+    r = jload(os.path.join(res, sid + ".json"))
+    if r:
+        cwds.append(r.get("cwd") or "")
+        txs.append(r.get("transcript_path") or "")
+        if r.get("verdict") == "retired":
+            out("T", sid, "REQUEST-RETIRED", epoch_of(r.get("ts")) or mtime(os.path.join(res, sid + ".json")) or 0,
+                "poller request lane", r.get("reason") or "-")
+    for suf, word in ((".exhausted.json", "REQUEST-EXHAUSTED"), (".cc-lr.unknown-mode.json", "REQUEST-PARKED:unknown-mode"),
+                      (".unknown-mode.json", "REQUEST-PARKED:unknown-mode")):
+        p = os.path.join(res, sid + suf)
+        if os.path.exists(p):
+            q = jload(p) or {}
+            cwds.append(q.get("cwd") or "")
+            txs.append(q.get("transcript_path") or "")
+            out("T", sid, word, mtime(p) or 0, "poller request lane",
+                "mode %s from %s; the request lane did not run it" % (q.get("mode") or "-", q.get("requested_by") or "-")
+                if "unknown" in suf else "attempts spent; requested by %s" % (q.get("requested_by") or "-"))
+    for p in pending.get(sid, []):
+        q = jload(p) or {}
+        cwds.append(q.get("cwd") or "")
+        txs.append(q.get("transcript_path") or "")
+        at = q.get("at") if isinstance(q.get("at"), (int, float)) else (epoch_of(q.get("ts")) or mtime(p) or 0)
+        out("P", sid, "%s request (mode %s, by %s)" % (os.path.basename(p), q.get("mode") or q.get("kind") or "-",
+                                                      q.get("requested_by") or "-"), at)
+    if not deep:
+        continue
+    try:
+        with open(os.path.join(state, "poller.log"), "rb") as fh:
+            fh.seek(0, 2)
+            fh.seek(max(0, fh.tell() - 4194304))
+            tail = fh.read().decode("utf-8", "replace").splitlines()
+        hits = [x for x in tail if sid in x and " REQUEST" in x]
+        if hits:
+            out("L", sid, hits[-1])
+    except OSError:
+        pass
+    cfgs = [c for c in os.environ.get("CL_CFGS", "").split("\n") if c] or [
+        os.path.join(os.environ.get("HOME", ""), n) for n in (".claude", ".claude-secondary", ".claude-tertiary", ".claude-quaternary")]
+    for c in cwds:
+        if c:
+            enc = re.sub(r"[^A-Za-z0-9]", "-", c)
+            txs += [os.path.join(cfg, "projects", enc, sid + ".jsonl") for cfg in cfgs]
+    live = [t for t in txs if t and os.path.isfile(t)]
+    if not live:
+        continue
+    tx = max(live, key=lambda t: mtime(t) or 0)
+    try:
+        with open(tx, "rb") as fh:
+            fh.seek(0, 2)
+            fh.seek(max(0, fh.tell() - 262144))
+            lines = fh.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        continue
+    turns = []
+    for x in lines:
+        if "\"assistant\"" not in x:
+            continue
+        try:
+            d = json.loads(x)
+        except ValueError:
+            continue
+        if d.get("type") != "assistant":
+            continue
+        m = d.get("message") if isinstance(d.get("message"), dict) else {}
+        c = m.get("content")
+        txt = c if isinstance(c, str) else " ".join(i.get("text", "") for i in (c or []) if isinstance(i, dict))
+        if txt.strip() == "No response requested.":
+            continue
+        turns.append((d.get("timestamp") or "-", bool(d.get("isApiErrorMessage"))))
+    errs = [i for i, t in enumerate(turns) if t[1]]
+    since = next((t[0] for t in turns[errs[-1] + 1:] if not t[1]), "-") if errs else (turns[0][0] if turns else "-")
+    out("X", sid, tx, since, turns[-1][0] if turns else "-")
+' "$STATE" "$RECON_ROOT" "$1" 2>/dev/null || true
+}
+
 # ── the reconciler's cohorts (W4) ──────────────────────────────────────────────────────────────
 # report.py's cohort_status is the ONE renderer of a member's state; its output is persisted as the
 # `status` key of recon/cohorts/<cid>.json, so this only lays those fields out and derives none of
@@ -1964,28 +2170,37 @@ cmd_status() {
 $(cl_bundles "$ref" | LC_ALL=C sort)
 EOF
   n="${#FILES[@]}"
-  if [ "$n" -eq 0 ]; then
+  # THE OTHER STORES (D5). A ref with no bundle at all is still answered when anything else holds it.
+  local vs="" s tag tx since last cls kind _cl_ls t1 t2 t3
+  if [ -n "$ref" ]; then
+    vs="$(cl_verdict_sources "$ref" </dev/null)"
+  elif [ "$n" -gt 0 ]; then
+    vs="$(printf '%s\n' "${FILES[@]}" | cl_verdict_sources -)"
+  fi
+  if [ "$n" -eq 0 ] && [ -z "$vs" ]; then
     # shellcheck disable=SC2016  # the single quotes are DISPLAY characters inside a
     # double-quoted string; $ref does expand. Quoting the ref is what makes an empty or
     # space-bearing ref legible in the refusal.
     echo "cc-lr: no runs under $STATE${ref:+ for '$ref'}" >&2
     return 1
   fi
-  # ONE stat for every file: the mtime of events.jsonl IS the time of the last transition, and a
-  # `date` fork per row would cost more than the whole render.
-  mt="$(stat -f '%m %N' "${FILES[@]}" 2>/dev/null || stat -c '%Y %n' "${FILES[@]}" 2>/dev/null || true)"
-  out="$(cl_events_bulk "${FILES[@]}")"
-  if [ -z "$out" ]; then
-    # FALLBACK — the SSOT per-file reader. Reached when jq refused the bulk read (one malformed
-    # line aborts it) or when a run holds no parsable record at all.
-    command -v lr_state_current >/dev/null 2>&1 || {
-      echo "cc-lr: could not read any run state and lr-lib.sh is not reachable for the per-file fallback" >&2; return 2; }
-    out=""
-    for f in "${FILES[@]}"; do
-      st="$(lr_state_current "$(dirname "$f")" 2>/dev/null || true)"
-      [ -n "$st" ] && out="$out$f"$'\t'"-"$'\t'"$st"$'\t'"-"$'\t'"(read through lr_state_current)"$'\n'
-    done
-    [ -n "$out" ] || { echo "cc-lr: $n run(s) found and none holds a readable state" >&2; return 2; }
+  out=""; mt=""
+  if [ "$n" -gt 0 ]; then
+    # ONE stat for every file: the mtime of events.jsonl IS the time of the last transition, and a
+    # `date` fork per row would cost more than the whole render.
+    mt="$(stat -f '%m %N' "${FILES[@]}" 2>/dev/null || stat -c '%Y %n' "${FILES[@]}" 2>/dev/null || true)"
+    out="$(cl_events_bulk "${FILES[@]}")"
+    if [ -z "$out" ]; then
+      # FALLBACK — the SSOT per-file reader. Reached when jq refused the bulk read (one malformed
+      # line aborts it) or when a run holds no parsable record at all.
+      command -v lr_state_current >/dev/null 2>&1 || {
+        echo "cc-lr: could not read any run state and lr-lib.sh is not reachable for the per-file fallback" >&2; return 2; }
+      for f in "${FILES[@]}"; do
+        st="$(lr_state_current "$(dirname "$f")" 2>/dev/null || true)"
+        [ -n "$st" ] && out="$out$f"$'\t'"-"$'\t'"$st"$'\t'"-"$'\t'"(read through lr_state_current)"$'\n'
+      done
+      [ -n "$out" ] || [ -n "$vs" ] || { echo "cc-lr: $n run(s) found and none holds a readable state" >&2; return 2; }
+    fi
   fi
   # LIVENESS FOR THE `NEXT` COLUMN. `cc-lr repair` re-types a prompt INTO A PANE, so it cannot
   # apply to a run whose session is gone — and a NEXT that names a doomed command is worse than an
@@ -1994,21 +2209,59 @@ EOF
   # session DEAD, and status recommended repair anyway.
   # FAIL-OPEN, deliberately: when lr-lib is unreachable we cannot tell, and an instrument that
   # cannot tell must not SUPPRESS a suggestion that may well be right. Unknown ⇒ today's behaviour.
+  # ONE registry walk (cl_live_set, D8); the per-sid SSOT loop only when that one read failed.
   cl_live=""
   if command -v lr_registry_live_rows >/dev/null 2>&1; then
-    cl_live=$'\n'
-    for _cl_f in "${FILES[@]}"; do
-      _cl_bd="$(dirname "$_cl_f")"; _cl_sid="$(basename "$(dirname "$_cl_bd")")"
-      case "$cl_live" in *$'\n'"$_cl_sid"$'\n'*) continue ;; esac
-      lr_registry_live_rows "$_cl_sid" >/dev/null 2>&1 && cl_live="$cl_live$_cl_sid"$'\n'
-    done
+    if _cl_ls="$(cl_live_set)"; then
+      cl_live="$_cl_ls"$'\n'
+    else
+      cl_live=$'\n'
+      while IFS=$'\t' read -r tag s _; do
+        [ "$tag" = S ] || continue
+        case "$cl_live" in *$'\n'"$s"$'\n'*) continue ;; esac
+        lr_registry_live_rows "$s" >/dev/null 2>&1 && cl_live="$cl_live$s"$'\n'
+      done <<EOV
+$vs
+EOV
+    fi
   fi
-  printf '%s\n' "$out" | CL_NOW="$(date +%s)" CL_MT="$mt" CL_LIVE="$cl_live" \
+  # WHAT THE SESSION IS DOING NOW (one ref only): live and working, live and still limited, or gone.
+  # A session woken outside the rail (peer mail, a hand-typed continue) reads RESOLVED-OUTSIDE-RAIL
+  # instead of the rail's stale FAILED. lr_last_api_error is the SSOT for "the last turn was a limit".
+  if [ -n "$ref" ]; then
+    while IFS=$'\t' read -r tag s; do
+      [ "$tag" = S ] || continue
+      tx=""; since="-"; last="-"
+      while IFS=$'\t' read -r kind _cl_ls t1 t2 t3; do
+        [ "$kind" = X ] && [ "$_cl_ls" = "$s" ] && { tx="$t1"; since="$t2"; last="$t3"; }
+      done <<EOX
+$vs
+EOX
+      if [ -z "$cl_live" ]; then cls=unknown
+      elif case "$cl_live" in *$'\n'"$s"$'\n'*) false ;; *) true ;; esac; then cls=gone
+      elif [ -n "$tx" ] && command -v lr_last_api_error >/dev/null 2>&1 \
+           && [ "$(lr_last_api_error "$tx" 2>/dev/null | cut -f3)" = limit ]; then cls=limited
+      elif [ -n "$tx" ]; then cls=working
+      else cls=live
+      fi
+      vs="$vs"$'\n'"N"$'\t'"$s"$'\t'"$cls"$'\t'"$since"$'\t'"$last"
+    done <<EOS
+$vs
+EOS
+  fi
+  printf '%s' "$out" | CL_NOW="$(date +%s)" CL_MT="$mt" CL_LIVE="$cl_live" CL_VS="$vs" CL_ONE="${ref:+1}" \
     CL_LIVE_KNOWN="$(command -v lr_registry_live_rows >/dev/null 2>&1 && echo 1 || echo 0)" awk -F'\t' '
     function klass(s) {
       if (s == "RECOVERED" || s == "DONE" || s == "ENGAGED" || s == "engaged") return "ok"
       if (s ~ /^FAILED/ || s ~ /^REFUSED/ || s ~ /^STALE/ || s ~ /^INDETERMINATE/ || s ~ /^PARKED/) return "bad"
       return "run"
+    }
+    # A VERDICT word from any store: ok = the rail recovered it · bad = it failed · term = an end
+    # that is neither (held, retired, closed in place, not needed).
+    function vk(w) {
+      if (w ~ /^(RECOVERED|MOVED|DONE|ENGAGED|engaged|CLOSED:ENGAGED|REPLACED)/) return "ok"
+      if (w ~ /^(FAILED|REFUSED|STALE|INDETERMINATE|PARKED|REQUEST-PARKED|REQUEST-EXHAUSTED|IMPOSSIBLE)/) return "bad"
+      return "term"
     }
     function age(sec,   m,h) {
       if (sec < 0) sec = 0
@@ -2016,10 +2269,31 @@ EOF
       if (sec < 3600) { m = int(sec/60); return m "m" (sec - m*60) "s" }
       h = int(sec/3600); m = int((sec - h*3600)/60); return h "h" (m<10?"0":"") m "m"
     }
+    function iso(t,   s,z,era,doe,yoe,y,doy,mp,d,m) {     # civil-from-days: BSD awk has no strftime
+      t = int(t); s = t % 86400; z = (t - s) / 86400 + 719468
+      era = int(z / 146097); doe = z - era * 146097
+      yoe = int((doe - int(doe / 1460) + int(doe / 36524) - int(doe / 146096)) / 365)
+      y = yoe + era * 400; doy = doe - (365 * yoe + int(yoe / 4) - int(yoe / 100))
+      mp = int((5 * doy + 2) / 153); d = doy - int((153 * mp + 2) / 5) + 1
+      m = (mp < 10) ? mp + 3 : mp - 9; if (m <= 2) y++
+      return sprintf("%04d-%02d-%02dT%02d:%02d:%02dZ", y, m, d, int(s / 3600), int((s % 3600) / 60), s % 60)
+    }
     BEGIN {
       now = ENVIRON["CL_NOW"] + 0
       nmt = split(ENVIRON["CL_MT"], mtl, "\n")
       for (i = 1; i <= nmt; i++) { p = index(mtl[i], " "); if (p) mtime[substr(mtl[i], p+1)] = substr(mtl[i], 1, p-1) + 0 }
+      nv = split(ENVIRON["CL_VS"], vl, "\n")
+      for (i = 1; i <= nv; i++) {
+        nfld = split(vl[i], v, "\t")
+        if (v[1] == "S" && !(v[2] in known)) { known[v[2]] = 1; sids[++ns] = v[2] }
+        else if (v[1] == "R") { nr[v[2]]++; rts[v[2], nr[v[2]]] = v[3]; rw[v[2], nr[v[2]]] = v[4]; rd[v[2], nr[v[2]]] = v[6] }
+        else if (v[1] == "T") { k = ++nt[v[2]]; tw[v[2], k] = v[3]; te[v[2], k] = v[4] + 0; tsrc[v[2], k] = v[5]; td[v[2], k] = v[6]
+                                if (v[4] + 0 > tbest[v[2]] + 0) { tbest[v[2]] = v[4] + 0; tbw[v[2]] = v[3] } }
+        else if (v[1] == "H") { held[v[2]] = v[3]; hcid[v[2]] = v[4] }
+        else if (v[1] == "P") { pend[v[2]] = v[3]; pat[v[2]] = v[4] + 0 }
+        else if (v[1] == "L") { plog[v[2]] = v[3] }
+        else if (v[1] == "N") { nowc[v[2]] = v[3]; nows[v[2]] = v[4]; nowl[v[2]] = v[5] }
+      }
     }
     {
       f = $1
@@ -2032,7 +2306,8 @@ EOF
       if (klass($3) != "run") { termS[f] = $3; termD[f] = $5 }
     }
     END {
-      printf "%-36s %-18s %-7s %s\n", "RUN", "STATE", "AGE", "CAUSE / NEXT"
+      if (nf > 0) printf "%-36s %-18s %-7s %s\n", "RUN", "STATE", "AGE", "CAUSE / NEXT"
+      livek = (ENVIRON["CL_LIVE_KNOWN"] == "1")
       for (i = nf; i >= 1; i--) {
         f = order[i]
         s = lastS[f]; d = lastD[f]
@@ -2042,17 +2317,65 @@ EOF
         sid = bdir; sub("/[^/]*$", "", sid); sub(".*/", "", sid)
         id = substr(sid, 1, 8) "/" base
         k = klass(s)
-        # A dead session cannot be repaired: repair TYPES, and there is nothing to type into.
-        livek = (ENVIRON["CL_LIVE_KNOWN"] == "1")
+        # D5 (a): lr-handoff never writes its terminal state, so a run still reading non-terminal
+        # takes the verdict.txt of the lr-fleet --one run that minted it (the newest started no
+        # later than the bundle).
+        viafleet = 0
+        if (k == "run") {
+          bts = base; sub("^bundle-", "", bts); best = 0; viafleet = 0
+          for (j = 1; j <= nr[sid]; j++) if (rts[sid, j] <= bts && (best == 0 || rts[sid, j] > rts[sid, best])) best = j
+          if (best) { s = rw[sid, best]; d = "rail verdict: " rd[sid, best]; k = (vk(s) == "term") ? "end" : (vk(s) == "bad" ? "bad" : "ok"); viafleet = 1 }
+        }
+        if (k != "run") { effS[f] = s; effD[f] = d }
+        # A dead session cannot be repaired: repair TYPES, and there is nothing to type into. Nor
+        # can one the reconciler holds (a second actuator), nor one a later verdict has superseded.
         alive = (index(ENVIRON["CL_LIVE"], "\n" sid "\n") > 0)
-        if (k != "bad")            nextcmd = ""
-        else if (!livek || alive)  nextcmd = " → cc-lr repair " bdir
-        else                       nextcmd = " → source session is gone; repair types into a pane and cannot apply"
-        cause = (d == "-" || d == "") ? "—" : d
         a = (f in mtime) ? age(now - mtime[f]) : "?"
+        if (k != "bad")                   nextcmd = ""
+        else if (sid in held)             nextcmd = " → the reconciler holds it (" held[sid] "); no repair: cc-lr status --cohort " hcid[sid]
+        else if (tbest[sid] > mtime[f] && (f in mtime)) nextcmd = " → superseded by " tbw[sid] " at " iso(tbest[sid]) "; see VERDICT below"
+        else if (!livek || alive)         nextcmd = " → cc-lr repair " bdir
+        else                              nextcmd = " → source session is gone; repair types into a pane and cannot apply"
+        cause = (d == "-" || d == "") ? "—" : d
         printf "%-36s %-18s %-7s %s%s\n", id, s, a, cause, nextcmd
+        # each run with a terminal state of its own is a verdict candidate for its session (a state
+        # borrowed from verdict.txt is already one, as its rail run row)
+        if (k != "run" && !viafleet) { kk = ++nt[sid]; tw[sid, kk] = s; te[sid, kk] = (f in mtime) ? mtime[f] : 0; tsrc[sid, kk] = "run " id; td[sid, kk] = cause }
+        if (!(sid in newest)) newest[sid] = s
       }
-      printf "%d run%s under the state store\n", nf, (nf == 1 ? "" : "s")
+      if (nf > 0) printf "%d run%s under the state store\n", nf, (nf == 1 ? "" : "s")
+      # ONE VERDICT PER SESSION, the newest terminal word any store holds (D5).
+      one = (ENVIRON["CL_ONE"] == "1")
+      for (i = 1; i <= ns; i++) {
+        sid = sids[i]; w = 0
+        for (j = 1; j <= nt[sid]; j++) if (w == 0 || te[sid, j] > te[sid, w]) w = j
+        s8 = substr(sid, 1, 8)
+        if (nowc[sid] == "working" && (w == 0 || vk(tw[sid, w]) != "ok"))
+          printf "VERDICT  %s  RESOLVED-OUTSIDE-RAIL (working since %s) — %s\n", s8, nows[sid],
+            (w ? "last rail word: " tw[sid, w] " at " iso(te[sid, w]) ", " tsrc[sid, w] : "the rail recorded no verdict")
+        else if (w)
+          printf "VERDICT  %s  %s  %s  %s: %s\n", s8, tw[sid, w], iso(te[sid, w]), tsrc[sid, w], td[sid, w]
+        else if (sid in held)
+          printf "PENDING  %s  HELD-BY-RECONCILER  %s, no verdict yet → cc-lr status --cohort %s\n", s8, held[sid], hcid[sid]
+        else if (sid in pend)
+          printf "PENDING  %s  QUEUED since %s  %s\n", s8, iso(pat[sid]), pend[sid]
+        else
+          printf "PENDING  %s  IN-FLIGHT  newest run: %s\n", s8, (sid in newest) ? newest[sid] : "-"
+        if (!one) continue
+        if (sid in nowc) printf "  now: %s%s\n", nowc[sid], (nowl[sid] != "-" && nowl[sid] != "") ? " (last turn " nowl[sid] ")" : ""
+        # the next 4 newest, newest first: what else each store said, so a FAILED that the session
+        # outlived stays visible beside the verdict that replaced it
+        delete used; used[w] = 1
+        for (c = 1; c <= 4; c++) {
+          b = 0
+          for (j = 1; j <= nt[sid]; j++) if (!(j in used) && (b == 0 || te[sid, j] > te[sid, b])) b = j
+          if (!b) break
+          used[b] = 1; printf "  also: %s  %s  %s\n", tw[sid, b], iso(te[sid, b]), tsrc[sid, b]
+        }
+        if (sid in held && w) printf "  the reconciler still holds it: %s → cc-lr status --cohort %s\n", held[sid], hcid[sid]
+        if (sid in pend && w) printf "  still queued: %s\n", pend[sid]
+        if (sid in plog) printf "  poller: %s\n", plog[sid]
+      }
     }'
   return 0
 }
