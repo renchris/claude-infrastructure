@@ -300,6 +300,23 @@ if [ "${ANTIDEF_PANE_ASK:-on}" != off ]; then
   _pane_hits="$(printf '%s\n' "$MSG" | awk "$PANE_STRIP_AWK" 2>/dev/null | grep -iE "$PANE_ASK" 2>/dev/null | grep -ivE "$PANE_GENUINE" 2>/dev/null || true)"
   [ -n "$_pane_hits" ] && { has_pane=1; PANE_TRIGGER="$(printf '%s\n' "$_pane_hits" | awk 'NR==1' | sed 's/^[[:space:]]*//' | cut -c1-160)"; }
 fi
+# ── PEER-OWNER DEFERRAL (2026-10-11) — "pane 223 owns this, so I changed nothing" ───────────────
+# Ownership is a FILE-collision guard, but a session that names a peer as owner tends to stop on the
+# OUTCOME too: 7b65812a closed "I changed no code, because pane 223 owns this exact area" and left
+# rate-limited sessions down until the operator asked, then recovered them in minutes with no
+# collision (docs/research/proactive-parallel-ops-2026-10-11/REPORT.md). A sentence fires only when it
+# names a peer AND a first-person non-action. Measured over 2,674 main-agent messages (530
+# transcripts, 4 days): 2 fires, 1 true positive; all 7 incident shapes fire. Stating the split
+# ("nothing non-colliding remains", "does not collide") is the silent path.
+PEER_REF='(^|[^a-z])((pane|session|peer|desk|lead) #?[0-9]{1,4}([^0-9]|$)|(pane|session) `?[0-9a-f]{8}|(another|the other|a sibling|the sibling|the peer|the research|the owning|the follow-on|that|its) (session|pane)|(its|the) owner)'
+PEER_DEFER='(^|[^a-z])((changed|touched|edited|fixed|did) (no|nothing)[^.!?]{0,40}(because|since|as)|rather than (edit|fix|touch|act|do|run|recover)|(leave|leaving|left) (it|this|that|them|the [a-z-]+( [a-z-]+)?) (to|for|alone)|hand(ing|ed)? (it|this|that|them|the [a-z-]+) (to|off|over)|folded (it |them |this )?into|as (its )?step ?0|(won.?t|will not|didn.?t|did not) (act on|fix|edit|run|recover))([^a-z]|$)'
+PEER_SILENT='non-?colliding|(does not|doesn.?t|won.?t|will not) collide'
+has_peer=0; PEER_TRIGGER=""
+if [ "${ANTIDEF_PEER_DEFER:-on}" != off ] \
+   && [ -z "$(printf '%s' "$MSG" | grep -iE "$PEER_SILENT" 2>/dev/null || true)" ]; then
+  _peer_hits="$(printf '%s\n' "$MSG" | awk "$PANE_STRIP_AWK" 2>/dev/null | grep -iE "$PEER_REF" 2>/dev/null | grep -iE "$PEER_DEFER" 2>/dev/null || true)"
+  [ -n "$_peer_hits" ] && { has_peer=1; PEER_TRIGGER="$(printf '%s\n' "$_peer_hits" | awk 'NR==1' | sed 's/^[[:space:]]*//' | cut -c1-160)"; }
+fi
 # ── SEMANTIC SECOND OPINION (Jev) — runs ONLY where the four lexical arms found nothing ──────
 # THE HOLE IT COVERS — and the honest denominator, because the tempting number is rhetoric.
 # This hook abstains `no-tell` on 5,127 of 5,419 evaluations (94.6%), but that is an abstention
@@ -351,7 +368,7 @@ fi
 # Revival is one env var, and it restores the code path byte for byte: CC_JEV_RETIRED=0.
 has_jev=0; JEV_P=""
 if [ "${CC_JEV_RETIRED:-1}" = 0 ] \
-   && [ "$has_tell" -eq 0 ] && [ "$has_done" -eq 0 ] && [ "$has_cat" -eq 0 ] && [ "$has_id" -eq 0 ] && [ "$has_pane" -eq 0 ]; then
+   && [ "$has_tell" -eq 0 ] && [ "$has_done" -eq 0 ] && [ "$has_cat" -eq 0 ] && [ "$has_id" -eq 0 ] && [ "$has_pane" -eq 0 ] && [ "$has_peer" -eq 0 ]; then
   _ad_jev_lib="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lib/jev.sh"
   if [ -r "$_ad_jev_lib" ]; then
     # shellcheck source=/dev/null
@@ -402,7 +419,7 @@ if [ "${CC_JEV_RETIRED:-1}" = 0 ] \
     fi
   fi
 fi
-{ [ "$has_tell" -eq 1 ] || [ "$has_done" -eq 1 ] || [ "$has_cat" -eq 1 ] || [ "$has_id" -eq 1 ] || [ "$has_jev" -eq 1 ] || [ "$has_pane" -eq 1 ]; } || abstain "no-tell"
+{ [ "$has_tell" -eq 1 ] || [ "$has_done" -eq 1 ] || [ "$has_cat" -eq 1 ] || [ "$has_id" -eq 1 ] || [ "$has_jev" -eq 1 ] || [ "$has_pane" -eq 1 ] || [ "$has_peer" -eq 1 ]; } || abstain "no-tell"
 
 # ── DEFERRING TO A LEAD IS NOT THE DEFERENCE DEFECT (2026-08-02) ────────────────────────────────
 # This hook's premise is one session ↔ one human: its reason text says "the operator cannot act on
@@ -516,6 +533,8 @@ elif [ "$has_tell" -eq 1 ]; then
   FIRE_KIND="deference"
 elif [ "$has_done" -eq 1 ] && [ "$contradiction" -eq 1 ]; then
   FIRE_KIND="false-done"
+elif [ "$has_peer" -eq 1 ]; then
+  FIRE_KIND="peer-owner-deferral"
 elif [ "$has_cat" -eq 1 ]; then
   # LAST in the chain by design: the two established kinds keep precedence, so this can only fire
   # on a message nothing else caught. Ledger-INDEPENDENT — handing work over by count is a
@@ -546,6 +565,8 @@ fi
 # nothing downstream can reconstruct them from a reason string. One computation, both records.
 if [ "$FIRE_KIND" = "pane-step-handback" ]; then
   TRIGGER="$PANE_TRIGGER"
+elif [ "$FIRE_KIND" = "peer-owner-deferral" ]; then
+  TRIGGER="$PEER_TRIGGER"
 elif [ "$FIRE_KIND" = "false-done" ]; then
   TRIGGER="$(printf '%s' "$MSG" | grep -ioE "$DONE_TELLS" 2>/dev/null | head -1 | tr -d '\n')"
 elif [ "$FIRE_KIND" = "category-not-idea" ]; then
@@ -603,6 +624,8 @@ elif [ "$FIRE_KIND" = "opaque-identifier" ]; then
   reason="Opaque-identifier: you handed the operator ${n_ids} bare hex ids and expanded NONE of them (${TRIGGER}). CLAUDE.md § Session Close: 'Every identifier is expanded at first use in that same message' — ≥2 unexpanded ids measured at 49.2% vs 33.6% reply-failure (+15.5pp, p=0.0001), ~10x the effect of length. An id is a filing key, not a fact: the operator cannot answer '0aa3febf3143' without a round-trip asking what it IS, and you already know. Re-close with the QUESTION as the subject and the id in parentheses after it — not 'answer b1614375d051' but 'may the sync endpoint read permissions inside the transaction it guards? (b1614375d051)'. Gloss ONE id anywhere and this never fires. (opaque-identifier nudge $((N+1))/${MAX})"
 elif [ "$FIRE_KIND" = "semantic-deference" ]; then
   reason="Anti-deference (semantic): no banned phrase appears in this message, but read as a whole it hands work back rather than doing it — P(defers)=${JEV_P} on a threshold of ${CC_JEV_MIN_P}. This is the E0 shape CLAUDE.md § Session Close names: a turn that IDENTIFIES work and then yields is not a read-only turn, and 'I have identified the remaining items' is not a close — the items are the work. Run the Follow-On Gate F1-F4 on each thing you just named and DRIVE the passes, here or by firing a session; drop the fails in one line. Surface only the genuine three (external info the operator alone has / an unsettled value-fork / a C10 you cannot self-execute). (semantic-deference nudge $((N+1))/${MAX})"
+elif [ "$FIRE_KIND" = "peer-owner-deferral" ]; then
+  reason="Peer-owner deferral: you named another session as owner and stopped (matched: \"${TRIGGER}\"). Ownership is a FILE-collision guard: two sessions editing the same file collide; running an existing CLI, re-reading status, or waking or recovering a stuck session does not. Split it now: (1) do every non-colliding step yourself this turn; (2) route ONLY the same-file edits to the owner; (3) tell the owner in one line what you did so it does not redo it. If nothing non-colliding remains, say so in one line naming why (\"nothing non-colliding remains: ...\") and this never fires. (peer-owner-deferral nudge $((N+1))/${MAX})"
 elif [ "$FIRE_KIND" = "category-not-idea" ]; then
   reason="Category-not-idea: you handed work over by COUNT, not by CONTENT (matched: \"${TRIGGER}\"). That is the blank assertion CLAUDE.md § Session Close bans, citing Minto Ch 7 p. 94 — \"'There are three problems' tells the kind, not the idea\". The operator cannot act on a count; they have to spend a round-trip asking \"which one?\". You almost certainly already know the answer — say it. Re-close with line 1 naming the THING: not \"one item is yours\" but \"the Fly deploy trigger still points at main, so every /ship deploys\". Name it after a ':' or a dash and this never fires. (category-not-idea nudge $((N+1))/${MAX})"
 else

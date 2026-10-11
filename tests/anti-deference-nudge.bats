@@ -657,3 +657,49 @@ PANE_POS=(
   [ "$status" -eq 0 ]; [ -z "$output" ]
   grep -q '"reason":"no-tell"' "$ANTIDEF_IDL"
 }
+
+# ── peer-owner-deferral (2026-10-11): naming a peer as owner and stopping on the non-colliding part ──
+# Positives are the incident closes verbatim (7b65812a, f1b9b388) plus the synthetic shapes measured
+# with them; negatives are the corpus lines the narrowed verb class was measured to keep silent.
+PEER_POS=(
+  "None of this has been fixed yet. I changed no code, because pane 223 owns this exact area under a live goal and parallel edits to the same scripts would collide."
+  "Diagnosis is complete. The fixes belong to pane 223, which already owns this rail with a live goal, so I'll hand it the findings rather than edit the same scripts in parallel."
+  "The recovery isn't finished yet. Of the 12 sessions, 0 had moved after 10 minutes, so I've recycled this pane into the research session, which collects the last verdicts itself as step 0."
+  "Pane 223 owns this, so I left it alone."
+  "I changed no code because pane 223 owns this area."
+  "Leaving the recoveries to pane 223."
+  "The 4 unfinished recoveries are folded into the research session's STEP 0."
+)
+PEER_NEG=(
+  "Sending all of it to the implementation session in pane 143, which owns this code."
+  "It belongs to another session and may be doing work you care about."
+  "The uncommitted files in this checkout are none of them mine."
+  "Who does what: pane 225 keeps waking 124 and 134 by mail and I won't touch those panes."
+  "Nothing non-colliding remains: every open step edits scripts pane 223 is editing right now."
+  "I recovered all four sessions; pane 223 keeps the code fixes, and recovery does not collide with its edits."
+)
+@test "peer-owner-deferral: fires on the incident closes and the measured shapes" {
+  for m in "${PEER_POS[@]}"; do
+    run runhook "$(mkfix "$m")"
+    [ "$status" -eq 0 ]
+    if ! fired "$output"; then echo "DID NOT FIRE (should have): $m" >&2; false; fi
+    [[ "$output" == *"Peer-owner deferral"* ]] || { echo "wrong corrective for: $m — $output" >&2; false; }
+  done
+  jq -e 'select(.disposition=="fired" and .reason=="peer-owner-deferral") | .tell | length > 0' "$ANTIDEF_IDL" >/dev/null
+}
+@test "peer-owner-deferral: fires with NO locale set (launchd/postland shape)" {
+  run runhook_nolocale "$(mkfix "${PEER_POS[0]}")"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+@test "peer-owner-deferral: SILENT on routing, hygiene, a stated split and the non-colliding receipt" {
+  for m in "${PEER_NEG[@]}"; do
+    run runhook "$(mkfix "$m")"
+    [ "$status" -eq 0 ]
+    if fired "$output"; then echo "FIRED (should be silent): $m — $output" >&2; false; fi
+  done
+}
+@test "peer-owner-deferral: kill switch ANTIDEF_PEER_DEFER=off restores the old abstain" {
+  ANTIDEF_PEER_DEFER=off run runhook "$(mkfix "Pane 223 owns this, so I left it alone.")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q '"reason":"no-tell"' "$ANTIDEF_IDL"
+}
