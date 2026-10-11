@@ -62,7 +62,7 @@ tick_lock() { # <age seconds> [lstart override]
   recon_live
   run bash "$LR" recover 117
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [[ "$output" == *"cc-lr: expect a verdict by 20"*"Z; if no verdict by then: cc-lr status aaaaaaaa"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"cc-lr: a verdict is due by 20"*"Z; if no verdict by then: cc-lr status aaaaaaaa"* ]] || { echo "$output"; false; }
   [[ "$output" != *"poller tick pid"* ]] || { echo "$output"; false; }
 }
 
@@ -94,6 +94,6 @@ tick_lock() { # <age seconds> [lstart override]
   run bash "$LR" recover --limited
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"Verdicts arrive as mail; END THE TURN."* ]] || { echo "$output"; false; }
-  [ "$(printf '%s\n' "$output" | grep -c 'expect a verdict by')" -eq 1 ] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c 'a verdict is due by')" -eq 1 ] || { echo "$output"; false; }
   [ "$(printf '%s\n' "$output" | grep -c "poller tick pid $SLEEP_PID has held the lock for 25 min")" -eq 1 ] || { echo "$output"; false; }
 }

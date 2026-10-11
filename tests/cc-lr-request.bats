@@ -79,7 +79,7 @@ req_field() { python3 -c 'import json,sys; v=json.load(open(sys.argv[1]))[sys.ar
   run bash "$LR" recover 117 --target next3
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ "${lines[0]}" = "cc-lr: QUEUED for the reconciler aaaaaaaa → $REQ" ] || { echo "$output"; false; }
-  [[ "${lines[1]}" == "cc-lr: expect a verdict by "*"; if no verdict by then: cc-lr status aaaaaaaa" ]] || { echo "$output"; false; }
+  [[ "${lines[1]}" == "cc-lr: a verdict is due by "*"; if no verdict by then: cc-lr status aaaaaaaa" ]] || { echo "$output"; false; }
   [ "$(req_field sid)" = "$SID" ]
   [ "$(req_field requested_by)" = cc-lr ]
   [ "$(req_field requester_pane)" = "" ]

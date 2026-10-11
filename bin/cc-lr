@@ -325,7 +325,7 @@ cl_requester_sid() { printf '%s' "${CLAUDE_CODE_SESSION_ID:-}"; }
 cl_verdict_by() { # <command to run> [seconds from now] → one line: the deadline and the fallback read
   local t
   t=$(( $(date +%s) + ${2:-${CC_LR_VERDICT_DEADLINE_S:-900}} ))
-  printf 'cc-lr: expect a verdict by %s; if no verdict by then: %s\n' \
+  printf 'cc-lr: a verdict is due by %s; if no verdict by then: %s\n' \
     "$(date -u -r "$t" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$t" +%Y-%m-%dT%H:%M:%SZ)" "$1"
 }
 # The holder identity is the poller's own (lr-reset-poller.sh, SELF-OVERLAP LOCK): pid AND lstart, so
