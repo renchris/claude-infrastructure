@@ -2130,9 +2130,12 @@ husk_file_request() { # $1=sid $2=acct $3=cfg → files at most one request; nev
   command -v lr_successor_state >/dev/null 2>&1 || return 0
   # CHEAP GATES FIRST (measured 2026-10-10: 33 parked records, all 33 transplanted; 7 named by a
   # registry row; ~1.5 s per predicate call under load): a husk has a retired source and a row.
+  # The registry grep runs BEFORE the glob (decision e276a5e2fb63, 2026-10-11): a projects/* glob
+  # walks ~17,200 project dirs, 0.3-2.5 s in the foreground and ~3.8 s inside the PRI-20 tick,
+  # where the grep takes 0.04 s; 0 of the 27 live husk records were named by a row.
+  grep -lqF "$sid" "${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"/*.json 2>/dev/null || return 0
   for f in "$cfg"/projects/*/"$sid".jsonl.handed-off; do [[ -e "$f" ]] && { tp="${f%.handed-off}"; break; }; done
   [[ -n "$tp" ]] || return 0
-  grep -lqF "$sid" "${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"/*.json 2>/dev/null || return 0
   for f in "$cfg"/projects/*/"$sid".HANDOFF.json; do [[ -f "$f" ]] && { tomb="$f"; break; }; done
   stamp="$(stat -f %m "$tomb" 2>/dev/null || echo 0)"
   [[ "$(cat "$PARKED/$sid.husk-filed" 2>/dev/null)" != "$stamp" ]] || return 0   # once per tombstone
@@ -2177,9 +2180,16 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
     reroute_parked "$sid" "$acct" "$cfg" "$reset_epoch"      # …but another account may route now
     continue
   fi
+  # CHEAPEST CONDITION FIRST, here and in the TRANSPLANTED test below (decision e276a5e2fb63,
+  # 2026-10-11). Every condition only reads state, so the order changes cost, never the truth
+  # value; sid_claimed, the one gate that writes (it drops an expired claim), stays first. Measured
+  # over § 2 at load 130-312 (27 husk records, none named by a registry row): projects/* globs
+  # 35-65%, pgrep 14-21%, python3 10-23%, the registry read 0.4-2.5%. Putting the registry read
+  # ahead of a pgrep and a glob saves 42-57% of § 2.
   _lrp_keep=0
-  if ! sid_claimed "$sid" && pgrep -f "resume $sid" >/dev/null 2>&1 \
+  if ! sid_claimed "$sid" \
      && command -v lr_registry_live_rows >/dev/null 2>&1 && lr_registry_live_rows "$sid" >/dev/null 2>&1 \
+     && pgrep -f "resume $sid" >/dev/null 2>&1 \
      && _lrp_tx="$(lrp_tx_of "$cfg" "$sid")" && lrp_still_limited "$_lrp_tx"; then
     _lrp_keep=1   # D1.15: its only `resume <sid>` holder is still limited in a live pane — wake it, below
   fi
@@ -2191,7 +2201,7 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
   # refused by lr-fire-resume's tombstone verdict every tick until the fire latch tripped — a loop
   # that reads as an outage. Retire the record instead, once, and say where the session went.
   if command -v lr_transplant_target >/dev/null 2>&1 && _lrp_to="$(lr_transplant_target "$sid" "$cfg")" \
-     && ! { lrp_unmoved "$sid" "$cfg" && lr_registry_live_rows "$sid" >/dev/null 2>&1; }; then
+     && ! { lr_registry_live_rows "$sid" >/dev/null 2>&1 && lrp_unmoved "$sid" "$cfg"; }; then
     # ── RETIRE ONLY ON RECOVERED (W5-A, 2026-09-20) ───────────────────────────────────────────────
     # THE DEFECT. The `mv` below was UNCONDITIONAL on the transplant READ, and the HUSK branch under
     # it logged `HUSK … retire request written` and then FELL THROUGH to that same `mv` — so this
