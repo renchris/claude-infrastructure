@@ -222,15 +222,26 @@ EOF
   [[ "$output" != *'`'* ]]
 }
 
-@test "every terminal line fits a 45-column pane" {
+@test "every terminal line fits a 45-column pane — status AND after a switch" {
+  # The switch view was missed once: its "✓ switched" tag rode the badge line and wrapped.
+  fits() {
+    while IFS= read -r line; do
+      line="${line%$'\r'}"
+      [ "${#line}" -le 45 ] || { echo "too wide (${#line}): $line"; return 1; }
+    done <<<"$output"
+  }
   for s in 0 1; do
     echo "$s" > "$D/state"
     NO_COLOR=1 run script -q /dev/null "$LID" </dev/null
-    while IFS= read -r line; do
-      line="${line%$'\r'}"
-      [ "${#line}" -le 45 ] || { echo "too wide (${#line}): $line"; false; }
-    done <<<"$output"
+    fits
   done
+  echo 0 > "$D/state"
+  NO_COLOR=1 CC_LID_SUDO="$D/sudo-can" run script -q /dev/null "$LID" on </dev/null
+  [[ "$output" == *"✓ Switched to ON"* ]] || false
+  fits
+  NO_COLOR=1 CC_LID_SUDO="$D/sudo-can" run script -q /dev/null "$LID" off </dev/null
+  [[ "$output" == *"✓ Switched to OFF"* ]] || false
+  fits
 }
 
 @test "colour is on in a terminal and NO_COLOR turns it off" {
