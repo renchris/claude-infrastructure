@@ -3225,9 +3225,16 @@ hf_recycle_unconfirm() { # → sets RCY_UNCONFIRM_RC (the CLI's rc · "n/a" no c
 # A HOLD AFTER THE ARM: unconfirm (if owed), disarm, one row, one line, exit 1. Nothing is typed by
 # any caller of this — the row class is recycle-held-<reason> and the detail carries the unconfirm rc.
 hf_recycle_hold() { # $1=reason $2=detail $3=what the operator reads → exit 1
+  # The screen first, while it still shows what the read-back saw (REPORT.md fix 6, as at
+  # hf_hold_screen_witness); only exit-readback, the hold whose box state the text can only guess.
+  local snap=""
+  if [ "$1" = exit-readback ]; then
+    HF_HOLD_SNAP="none (no witness taken)"; hf_hold_screen_witness "$SID" held-exit-readback 2>/dev/null || true
+    snap="; screen $HF_HOLD_SNAP"
+  fi
   hf_recycle_unconfirm
   hf_recycle_disarm
-  emit_recycle_event "recycle-held-$1" "" "$SID" "$2; unconfirm rc $RCY_UNCONFIRM_RC" || true
+  emit_recycle_event "recycle-held-$1" "" "$SID" "$2; unconfirm rc $RCY_UNCONFIRM_RC$snap" || true
   # exit-readback is the one class held AFTER /exit was typed (recycle_fire_commit), so "before
   # /exit" was false there, and on F2 it told the operator a box still holding /exit was clean
   # (docs/research/recycle-failures-kitty-2026-10-10/REPORT.md fix 2). $3 says what became of it.
@@ -4474,6 +4481,32 @@ hf_recycle_retry_ticket() { # $1=session id $2=pane $3=why (one line) $4=job pid
   return 0
 }
 
+# THE SCREEN WITNESS (docs/research/recycle-failures-kitty-2026-10-10/REPORT.md fix 6). F2 and F3
+# were held as exit-readback and unreachable with no record of what the pane showed, and their
+# diagnosis had to be rebuilt from replayed captures; one screen would have made it immediate. So
+# those two holds keep the screen through lr-composer-snapshot.sh (the --ansi store the reconciler's
+# draft holds already use), mode 0600, bounded. Kitty only, because that store reads through kitty's
+# transport; elsewhere the row says so. It types nothing and never fails its caller.
+hf_hold_screen_witness() { # $1=pane $2=reason → HF_HOLD_SNAP (the .ansi path, or "none (why)"); always 0
+  local pane="${1##*:}" lcs="" c out=""
+  HF_HOLD_SNAP="none (not a kitty pane)"
+  in_kitty 2>/dev/null || return 0
+  for c in "${HF_DIR:-}/lib/lr-composer-snapshot.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/lr-composer-snapshot.sh" \
+           "$HOME/.claude/scripts/lib/lr-composer-snapshot.sh"; do
+    [ -f "$c" ] && { lcs="$c"; break; }
+  done
+  [ -n "$lcs" ] || { HF_HOLD_SNAP="none (lr-composer-snapshot.sh unreachable)"; return 0; }
+  # umask in the capture's own subshell: the file is born 0600, never readable for a moment.
+  out="$(umask 077; hf_bounded bash "$lcs" snap "$pane" "${RCY_SOURCE_SESSION:-${rcy_old_sid:-}}" "$2" 2>/dev/null)" || out=""
+  if [ -n "$out" ] && [ -f "$out" ]; then
+    chmod 600 "$out" 2>/dev/null || true
+    HF_HOLD_SNAP="$out"
+  else
+    HF_HOLD_SNAP="none (no screen captured)"
+  fi
+  return 0
+}
+
 # UNREADABLE IS NOT A DRAFT (husk panes 2026-09-30, root cause 9). Both composer reads before a
 # recycle's /exit (the bounded gate, and the freshness re-read right before the keystroke) used to
 # fold recycle_composer_gate's rc 2 — no box could be read for the whole wait — into rc 1, emit
@@ -4483,12 +4516,13 @@ hf_recycle_retry_ticket() { # $1=session id $2=pane $3=why (one line) $4=job pid
 # a composer PROVEN empty); only its name and its advice were wrong. It is a pane read that did not
 # answer, so it gets its own class, `recycle-held-unreachable`, and a message that says so.
 rcy_composer_unreadable() { # $1=gate|fresh — emits the row and the refusal (stderr); the caller exits
+  HF_HOLD_SNAP="none (no witness taken)"; hf_hold_screen_witness "$SID" "held-unreachable-${1:-gate}" 2>/dev/null || true
   case "${1:-gate}" in
     fresh)
-      emit_recycle_event recycle-held-unreachable "" "$SID" "freshness re-read pre-/exit: composer UNREADABLE (no box could be read, so empty could not be proven)" || true
+      emit_recycle_event recycle-held-unreachable "" "$SID" "freshness re-read pre-/exit: composer UNREADABLE (no box could be read, so empty could not be proven); screen $HF_HOLD_SNAP" || true
       echo "!! recycle ABORTED at the last read: pane $SID's composer could not be READ between arming and /exit — that is not a draft, it is a pane read that did not answer. Nothing typed, watcher disarmed, session stays alive. Re-run: $CMD" >&2 ;;
     *)
-      emit_recycle_event recycle-held-unreachable "" "$SID" "composer UNREADABLE for ${CC_RECYCLE_DRAFT_WAIT:-180}s — no box could be read, so empty could not be proven" || true
+      emit_recycle_event recycle-held-unreachable "" "$SID" "composer UNREADABLE for ${CC_RECYCLE_DRAFT_WAIT:-180}s — no box could be read, so empty could not be proven; screen $HF_HOLD_SNAP" || true
       echo "!! recycle REFUSED after ${CC_RECYCLE_DRAFT_WAIT:-180}s: pane $SID's composer could not be READ (no box rendered, or the terminal did not answer) — typing /exit needs a composer proven empty. This is NOT a draft. Nothing was typed; the session stays alive. Re-run once the pane reads: $CMD" >&2 ;;
   esac
   return 0

@@ -43,6 +43,7 @@ setup() {
     sed -n '/^hf_transcript_at_rest() {/,/^}/p'      "$HF"
     sed -n '/^hf_recycle_retry_dir() {/p'            "$HF"
     sed -n '/^hf_recycle_retry_ticket() {/,/^}/p'    "$HF"
+    sed -n '/^hf_hold_screen_witness() {/,/^}/p'     "$HF"
     sed -n '/^rcy_composer_unreadable() {/,/^}/p'    "$HF"
     sed -n '/^hf_new_prompt_since() {/,/^}/p'        "$HF"
     sed -n '/^recycle_turn_wait() {/,/^}/p'          "$HF"
@@ -71,8 +72,11 @@ set -euo pipefail
 hf_bounded() { # <bin> session <read|send> -s <sid> ... — anything else (cc-notify) is unreachable
   if [ "${2:-}" = session ] && [ "${3:-}" = read ]; then cat "$SCREEN_FILE" 2>/dev/null; return 0; fi
   if [ "${2:-}" = session ] && [ "${3:-}" = send ]; then printf '%s\n' "SEND:${6:-}" >> "$SENT_LOG"; return 0; fi
+  # The screen witness runs the REAL snapshot store; its kitty transport is the LCS_CC_TUI stub.
+  case "${2:-}" in */lr-composer-snapshot.sh) "$@"; return $? ;; esac
   return 1
 }
+in_kitty() { [ "${STUB_IN_KITTY:-0}" = 1 ]; }
 emit_recycle_event() { printf '%s\t%s\n' "$1" "${4:-}" >> "$EVENTS"; }
 cc-notify() { printf '%s\n' "NOTIFY:$*" >> "$EVENTS"; }
 hf_invoking_call_pid() { [ -n "${CALLER_PID:-}" ] || return 1; printf '%s' "$CALLER_PID"; }
@@ -360,3 +364,32 @@ deferred_turn_ended() { T0="$(date +%s)"; screen_box ""; tx_tool_use; tx_tool_re
   [ -f "$CC_RECYCLE_RETRY_DIR/sess-aaaa.json" ]
 }
 
+# ── fix 6: a held-unreachable keeps the screen it could not read ─────────────────────────────────
+# docs/research/recycle-failures-kitty-2026-10-10/REPORT.md fix 6: F2 and F3 had no screen witness.
+# The REAL lr-composer-snapshot.sh store runs; only its kitty transport (cc_tui_rpc) is a stub serving
+# the fixture screen, so nothing reaches a terminal.
+@test "[RED] fix 6: a held-unreachable composer writes a 0600 screen snapshot carrying the fixture's rows, named in the row" {
+  screen_boxless; tx_tool_use
+  export HF_DIR="$REPO/scripts" LR_COMPOSER_SNAP_DIR="$W/snaps" LCS_CC_TUI="$W/cc-tui-stub.sh" STUB_IN_KITTY=1
+  # shellcheck disable=SC2016  # expanded by the stub library, not here
+  printf 'cc_tui_rpc() { cat "$SCREEN_FILE"; }\n' > "$LCS_CC_TUI"
+  CC_RECYCLE_TURN_WAIT=off CALLER_PID="$DEAD_PID" run "$DRIVER" 3>&-
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  event recycle-held-unreachable || { cat "$EVENTS"; false; }
+  local snap
+  snap="$(find "$LR_COMPOSER_SNAP_DIR" -name '*.ansi' 2>/dev/null | head -n 1)"
+  [ -n "$snap" ] || { echo "no snapshot written"; cat "$EVENTS"; false; }
+  grep -qF 'Bash(handoff-fire.sh --recycle)' "$snap" || { cat "$snap"; false; }
+  grep -qF 'Working… (12s)' "$snap" || { cat "$snap"; false; }
+  [ "$(stat -f %Lp "$snap" 2>/dev/null || stat -c %a "$snap")" = 600 ]
+  grep -qF "screen $snap" "$EVENTS" || { cat "$EVENTS"; false; }
+}
+
+@test "fix 6: outside kitty the hold names no screen and still holds — the witness never costs the refusal" {
+  screen_boxless; tx_tool_use
+  export HF_DIR="$REPO/scripts" LR_COMPOSER_SNAP_DIR="$W/snaps"
+  CC_RECYCLE_TURN_WAIT=off CALLER_PID="$DEAD_PID" run "$DRIVER" 3>&-
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  grep -qF 'screen none (not a kitty pane)' "$EVENTS" || { cat "$EVENTS"; false; }
+  [ ! -d "$LR_COMPOSER_SNAP_DIR" ]
+}
