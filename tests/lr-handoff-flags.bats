@@ -440,6 +440,18 @@ STUB
   [ "$status" -eq 2 ]
   [[ "$output" == *"a placed actuator must carry an explicit --target"* ]]
 }
+@test "--target auto asks the router with thin-account promotion OFF (the pick records no claim)" {
+  # docs/research/dispatch-strand-rescue-2026-10-09.md: a promoted thin account is budgeted for one
+  # fire, and only handoff-fire's --assign writes the claim that caps a second one. An env prefix is
+  # invisible in argv, so the stub records the variable as this call saw it.
+  mkdir -p "$HOME/bin"
+  printf '#!/bin/bash\nprintf "%%s FIRST=%%s\\n" "$*" "${CC_ROUTE_DISPATCH_STRAND_FIRST-UNSET}" >> "%s/route.log"\necho next3\n' \
+    "$BATS_TEST_TMPDIR" > "$HOME/bin/claude-accounts"
+  chmod +x "$HOME/bin/claude-accounts"
+  run env PATH="$STUB:$PATH" CLAUDE_CONFIG_DIR="$HOME/.claude" \
+      "$HANDOFF" --sid "$SID" --target auto --config-dir "$HOME/.claude-next" --no-transplant --print-only
+  grep -q '^--route general FIRST=off$' "$BATS_TEST_TMPDIR/route.log" || { cat "$BATS_TEST_TMPDIR/route.log"; false; }
+}
 @test "LR_ASSIGN_ID, --record-id and --attempt land in the manifest and the run's state log" {
   LR_ASSIGN_ID=as-9 LR_PLACED_BY=reconciler fire --record-id rec-7 --attempt 2
   [ "$status" -eq 0 ]

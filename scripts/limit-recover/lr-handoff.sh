@@ -713,7 +713,8 @@ acct_to_cfg() {
 }
 if [[ "$TARGET" == "auto" ]]; then
   kind="general"; case "$MODEL" in fable|claude-fable-*) kind="fable" ;; esac
-  TARGET=$("$HOME/bin/claude-accounts" --route "$kind" 2>/dev/null | tr -d '[:space:]' || true)
+  # STRAND_FIRST=off: this pick records no --assign claim, and a promoted thin account is budgeted for one fire.
+  TARGET=$(CC_ROUTE_DISPATCH_STRAND_FIRST=off "$HOME/bin/claude-accounts" --route "$kind" 2>/dev/null | tr -d '[:space:]' || true)
   [[ -n "$TARGET" ]] || { echo "lr-handoff: claude-accounts --route $kind returned nothing — pass --target explicitly" >&2; exit 2; }
 fi
 TCFG=$(acct_to_cfg "$TARGET")
