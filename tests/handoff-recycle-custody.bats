@@ -167,12 +167,18 @@ rows() { cat "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/null; }
   [ -n "$aband_ln" ]
   [ -n "$refuse_ln" ]
   # W2b: the PRIMARY keystroke is hf_exit_readback (typed, read back, then Enter); the as_write loop
-  # above survives only behind HF_EXIT_READBACK=off. The debt must open immediately before the first.
+  # above survives only behind HF_EXIT_READBACK=off. Fix 10 (recycle-failures-kitty-2026-10-10) put
+  # the SIGTERM exit (hf_exit_signal) ahead of both, so the FIRST irreversible act is now the signal:
+  # the debt must open immediately before it, and the signal must come before any keystroke.
+  sig_ln="$(grep -n 'hf_exit_signal "\$SID" "\${tty:-}" "\$rcy_debt_sid"' "$HF" | cut -d: -f1)"
   rb_ln="$(grep -n 'if ! hf_exit_readback "\$SID"; then' "$HF" | cut -d: -f1)"
-  echo "readback=$rb_ln"
+  echo "signal=$sig_ln readback=$rb_ln"
+  [ -n "$sig_ln" ]
   [ -n "$rb_ln" ]
-  [ "$open_ln" -lt "$rb_ln" ]
-  [ $(( rb_ln - open_ln )) -lt 20 ]            # immediately before the keystroke, not somewhere upstream
+  [ "$open_ln" -lt "$sig_ln" ]
+  [ $(( sig_ln - open_ln )) -lt 20 ]           # immediately before the first exit act, not somewhere upstream
+  [ "$sig_ln" -lt "$rb_ln" ]
+  [ $(( rb_ln - sig_ln )) -lt 20 ]             # the typed fallback follows the signal attempt directly
   [ "$open_ln" -lt "$exit_ln" ]
   [ "$rb_ln" -lt "$exit_ln" ]
   [ "$exit_ln" -lt "$aband_ln" ]

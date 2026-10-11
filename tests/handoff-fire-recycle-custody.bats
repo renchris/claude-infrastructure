@@ -472,7 +472,8 @@ load_tail_funcs() {
              _hf_lock_holder_alive hf_recycle_lock_write hf_recycle_lock_take hf_recycle_lock_release \
              hf_recycle_lock_acquire hf_recycle_disarm hf_wake_guard hf_pane_focused hf_lr_lib_load _hf_focus_composer hf_focus_gate \
              hf_recycle_unconfirm hf_recycle_hold hf_recycle_last_read hf_exit_readback recycle_fire_commit \
-             composer_residue_dir composer_residue_record; do
+             composer_residue_dir composer_residue_record \
+             pid_is_cc hf_succ_ours_staged write_teardown_marker hf_exit_signal_pin hf_exit_signal; do
       sed -n "/^$f() {/,/^}/p" "$HF"
     done
   } > "$FUNCS"
@@ -556,6 +557,10 @@ teardown() {
   local p
   for p in "$BATS_TEST_TMPDIR"/*.pid; do
     [ -f "$p" ] && { kill "$(cat "$p")" 2>/dev/null || true; }
+  done
+  # .kpid: the signal cases' stub claudes and their pty, some of which ignore TERM by design.
+  for p in "$BATS_TEST_TMPDIR"/*.kpid; do
+    [ -f "$p" ] && { kill -KILL "$(cat "$p")" 2>/dev/null || true; }
   done
   return 0
 }
@@ -704,6 +709,134 @@ SID_UUID="a1b2c3d4-0000-4000-8000-000000000002"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ "$(calls_n "as_write /exit")" = 1 ] || { cat "$CALLS"; false; }
   [ "$(grep -c '^as_write' "$CALLS")" = 1 ] || { cat "$CALLS"; false; }
+}
+
+# ── 16 · THE SIGNAL EXIT (docs/research/recycle-failures-kitty-2026-10-10/REPORT.md fix 10) ─────
+# With the transcript proven at rest, our successor staged and exactly one claude pinned on the
+# pane's tty, the recycle sends SIGTERM instead of typing /exit (gate proof: proof-sigterm-2.1.293.md).
+# The stub claudes are real processes on a REAL pty (`script`), argv[0] `claude`, so the tty tree,
+# pid_is_cc, the lstart pin and the signal are all real; each is KILLed in teardown via its .kpid.
+# Mutant: make hf_exit_signal return 1 at its top — 16a goes red (the typed path runs instead).
+
+# sig_world [honor|ignore] [n stub claudes] [sid their rows name] — tail_world plus the signal facts.
+sig_world() {
+  tail_world
+  local mode="${1:-honor}" n="${2:-1}" rsid="${3:-$SESS}" d="$BATS_TEST_TMPDIR/pty" i trap_cmd="" body p
+  # A second world in one case retires the first one's stubs before their .kpid files are reused.
+  for p in "$BATS_TEST_TMPDIR"/*.kpid; do
+    if [ -f "$p" ]; then kill -KILL "$(cat "$p")" 2>/dev/null || true; rm -f "$p"; fi
+  done
+  rm -rf "$d"; mkdir -p "$d"
+  export CC_SESSIONS_DIRS="$BATS_TEST_TMPDIR/sessions" CC_PANE_SUCCESSOR_DIR="$BATS_TEST_TMPDIR/succ"
+  rm -rf "$CC_SESSIONS_DIRS" "$CC_PANE_SUCCESSOR_DIR"; mkdir -p "$CC_SESSIONS_DIRS" "$CC_PANE_SUCCESSOR_DIR"
+  # shellcheck disable=SC1091
+  . "$REPO/lib/pane-successor.sh"
+  [ "$mode" = ignore ] && trap_cmd='trap "" TERM; '
+  body="${trap_cmd}tty > '$d/tty'; for i in \$(seq 1 $n); do (exec -a claude sleep 300) & echo \$! > '$d/c.'\$i; done; echo \$\$ > '$d/sh'; wait"
+  script -q /dev/null bash -c "$body" </dev/null >/dev/null 2>&1 &
+  echo $! > "$BATS_TEST_TMPDIR/script.kpid"
+  for i in $(seq 1 50); do [ -s "$d/sh" ] && [ -s "$d/c.$n" ] && break; sleep 0.1; done
+  [ -s "$d/c.$n" ] || { echo "the pty stubs never started" >&2; return 1; }
+  cp "$d/sh" "$BATS_TEST_TMPDIR/ptysh.kpid"
+  STUB_PIDS=""
+  for i in $(seq 1 "$n"); do
+    cp "$d/c.$i" "$BATS_TEST_TMPDIR/claude$i.kpid"
+    STUB_PIDS="$STUB_PIDS $(cat "$d/c.$i")"
+    printf '{"pid":%s,"sessionId":"%s"}\n' "$(cat "$d/c.$i")" "$rsid" > "$CC_SESSIONS_DIRS/$(cat "$d/c.$i").json"
+  done
+  # shellcheck disable=SC2034  # read by recycle_fire_commit (recycle_fire's local, dynamically scoped)
+  tty="$(cat "$d/tty")"
+  # Our stage: the shape hf_succ_stage writes, naming THIS world's watcher.
+  printf 'relaunch-cmd\n' > "$CC_PANE_SUCCESSOR_DIR/${tty##*/}.cmd"
+  printf '{"pane":"%s","pane_tty":"%s","watcher_pid":%s,"mode":"fresh"}\n' "$SID" "$tty" "$WATCHER_PID" > "$CC_PANE_SUCCESSOR_DIR/${tty##*/}.json"
+  # shellcheck disable=SC2034  # set by recycle_fire's last rest read
+  RCY_REST_PROVEN=1
+  export HF_EXIT_SIGNAL_GRACE_S=2
+  printf '%s\n' "" > "$READS"
+}
+alive() { kill -0 "$1" 2>/dev/null; }
+
+@test "16a [RED] rest proven + our stage + one pinned claude: SIGTERM, it exits, nothing typed, the row and marker name the pid" {
+  sig_world
+  local p="${STUB_PIDS# }"
+  run recycle_fire_commit "$SESS"
+  [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
+  ! alive "$p" || { echo "stub claude $p survived"; false; }
+  ! grep -q '^send' "$CALLS" || { echo "a keystroke was sent:"; cat "$CALLS"; false; }
+  rows_of recycle-exit-signal | grep -q "pid $p " || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+  [[ "$output" == *"SIGTERM"* ]] || { echo "$output"; false; }
+  # The crash watchdog's keys: the pinned pid, and the session the pin proved.
+  grep -q '"key_kind":"pid"' "$HOME/.claude/watchdog/teardown/$p.json" || { ls "$HOME/.claude/watchdog/teardown"; false; }
+  grep -q '"mode":"recycle"' "$HOME/.claude/watchdog/teardown/$p.json"
+  grep -q "\"sid\":\"$SESS\"" "$HOME/.claude/watchdog/teardown/$SESS.json"
+  # The debt still opened before the act.
+  grep -q '^debt open ' "$CALLS" || { cat "$CALLS"; false; }
+}
+
+@test "16b [RED] rest NOT proven: the typed /exit runs, no signal, and the reason is said" {
+  sig_world
+  # shellcheck disable=SC2034
+  RCY_REST_PROVEN=0
+  printf '%s\n' "" "/exit" > "$READS"
+  run recycle_fire_commit "$SESS"
+  [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
+  [ "$(calls_n "send /exit")" = 1 ] || { cat "$CALLS"; false; }
+  alive "${STUB_PIDS# }" || { echo "the stub was signalled"; false; }
+  [ -z "$(rows_of recycle-exit-signal)" ] || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+  [[ "$output" == *"typed /exit"*"at rest"* ]] || { echo "$output"; false; }
+}
+
+@test "16c [RED] two candidate claudes, none, or no stage of ours: the typed /exit runs and no pid is signalled" {
+  local p
+  sig_world honor 2
+  printf '%s\n' "" "/exit" > "$READS"
+  run recycle_fire_commit "$SESS"
+  [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
+  [ "$(calls_n "send /exit")" = 1 ] || { cat "$CALLS"; false; }
+  for p in $STUB_PIDS; do alive "$p" || { echo "stub $p was signalled"; false; }; done
+  [[ "$output" == *"typed /exit"*"2 claude"* ]] || { echo "$output"; false; }
+
+  sig_world honor 1 "ffffffff-0000-4000-8000-00000000ffff"
+  printf '%s\n' "" "/exit" > "$READS"
+  run recycle_fire_commit "$SESS"
+  [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
+  [ "$(calls_n "send /exit")" = 1 ] || { cat "$CALLS"; false; }
+  alive "${STUB_PIDS# }" || { echo "a claude of ANOTHER session was signalled"; false; }
+  [[ "$output" == *"typed /exit"*"0 claude"* ]] || { echo "$output"; false; }
+
+  sig_world
+  rm -f "$CC_PANE_SUCCESSOR_DIR/${tty##*/}.cmd"
+  printf '%s\n' "" "/exit" > "$READS"
+  run recycle_fire_commit "$SESS"
+  [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
+  [ "$(calls_n "send /exit")" = 1 ] || { cat "$CALLS"; false; }
+  alive "${STUB_PIDS# }" || { echo "signalled with no stage"; false; }
+  [[ "$output" == *"typed /exit"*"successor"* ]] || { echo "$output"; false; }
+}
+
+@test "16d [RED] a claude that ignores TERM is HELD exit-signal-ignored: still alive, no KILL, nothing typed, debt abandoned" {
+  sig_world ignore
+  local p="${STUB_PIDS# }"
+  run recycle_fire_commit "$SESS"
+  [ "$status" -eq 1 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
+  alive "$p" || { echo "the stub died: a KILL was sent, or TERM was not ignored"; false; }
+  ! grep -q '^send' "$CALLS" || { cat "$CALLS"; false; }
+  rows_of recycle-exit-signal | grep -q "pid $p " || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+  rows_of recycle-held-exit-signal-ignored | grep -q "$p" || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+  grep -q "^debt abandon --sid $SESS " "$CALLS" || { cat "$CALLS"; false; }
+  grep -q '^transplant --phase unconfirm ' "$CALLS" || { cat "$CALLS"; false; }
+  [[ "$output" == *"no KILL"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"/exit was TYPED"* ]] || { echo "$output"; false; }
+}
+
+@test "16e [RED] HF_EXIT_ACTUATOR=typed restores the typed /exit even when every signal fact holds" {
+  sig_world
+  printf '%s\n' "" "/exit" > "$READS"
+  HF_EXIT_ACTUATOR=typed run recycle_fire_commit "$SESS"
+  [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
+  [ "$(calls_n "send /exit")" = 1 ] || { cat "$CALLS"; false; }
+  alive "${STUB_PIDS# }" || { echo "the stub was signalled under the kill switch"; false; }
+  [[ "$output" == *"typed /exit"*"HF_EXIT_ACTUATOR=typed"* ]] || { echo "$output"; false; }
 }
 
 # ── 13 · THE WAKE GUARD ────────────────────────────────────────────────────────────────────────

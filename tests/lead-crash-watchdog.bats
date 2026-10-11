@@ -445,6 +445,29 @@ kill_daemons() { local f p
   [ "$(printf '%s' "$output" | cut -f2)" = "deliberate-teardown" ]
 }
 
+# The recycle's SIGTERM exit (docs/research/recycle-failures-kitty-2026-10-10/REPORT.md fix 10)
+# produces exactly this 143. handoff-fire's OWN writer, called as hf_exit_signal calls it, with no
+# SESSION_ID and no registry row: the sid the pin proved must reach the marker, or only a pane key is
+# left, the registry cannot resolve it, and the recycle pages as an external SIGTERM.
+@test "[RED] handoff-fire's signal-exit marker (pid + proven sid, no registry row) makes its 143 RECYCLE" {
+  export CC_CLOSE_RECORDS_DIR="$BATS_TEST_TMPDIR/close-records"; mkdir -p "$CC_CLOSE_RECORDS_DIR"
+  printf '{"pid":9145,"exit_code":143,"signal":"15","stderr_tail":"","version":"2.1.293"}\n' \
+    > "$CC_CLOSE_RECORDS_DIR/9145-100.json"
+  mk_tx s_sig_rcy "ordinary work, no recycle language anywhere in this tail" 1
+  local fn="$BATS_TEST_TMPDIR/wtm.sh"
+  sed -n '/^write_teardown_marker() {/,/^}/p' "$REPO/scripts/handoff-fire.sh" > "$fn"
+  [ -s "$fn" ]
+  ( export HOME="$BATS_TEST_TMPDIR/hfhome"; unset SESSION_ID
+    # shellcheck disable=SC1090
+    . "$fn"; write_teardown_marker 77 recycle 9145 s_sig_rcy )
+  export CC_TEARDOWN_DIR="$BATS_TEST_TMPDIR/hfhome/.claude/watchdog/teardown"
+  grep -q '"key_kind":"pid"' "$CC_TEARDOWN_DIR/9145.json"
+  grep -q '"mode":"recycle"' "$CC_TEARDOWN_DIR/9145.json"
+  run bash "$HOOK" --classify s_sig_rcy 9145 100
+  [ "$(printf '%s' "$output" | cut -f1)" = "RECYCLE" ] || { echo "$output"; ls "$CC_TEARDOWN_DIR"; false; }
+  [ "$(printf '%s' "$output" | cut -f2)" = "deliberate-teardown" ] || { echo "$output"; false; }
+}
+
 @test "control: 0 and 130 are STILL clean-exit (the fix must not convict a voluntary close)" {
   export CC_CLOSE_RECORDS_DIR="$BATS_TEST_TMPDIR/close-records"; mkdir -p "$CC_CLOSE_RECORDS_DIR"
   printf '{"pid":9000,"exit_code":0,"signal":"","stderr_tail":"","version":"2.1.220"}\n'   > "$CC_CLOSE_RECORDS_DIR/9000-100.json"

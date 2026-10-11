@@ -564,6 +564,9 @@ RCY_RECOVERY_OF=""
 # a transcript AT REST — see hf_same_account_evidence. HF_SA_TX is the transcript that proved it,
 # re-read immediately before the /exit.
 RCY_SAME_ACCOUNT=0 HF_SA_TX=""
+# 1 only once recycle_fire's LAST rest read proved the transcript at rest; the signal exit actuator
+# (hf_exit_signal) needs it. Initialised here so no environment value can stand in for that read.
+RCY_REST_PROVEN=0
 # --team-member-id <agent-id>: the team procedure's admission for relaunching a TEAMMATE in place
 # (hf_same_account_evidence). Empty = a teammate row is refused, as it always was.
 HF_TEAM_MEMBER_ID=""
@@ -3240,6 +3243,9 @@ hf_recycle_hold() { # $1=reason $2=detail $3=what the operator reads → exit 1
   # (docs/research/recycle-failures-kitty-2026-10-10/REPORT.md fix 2). $3 says what became of it.
   if [ "$1" = exit-readback ]; then
     echo "!! recycle HELD after /exit was TYPED (held: $1): $3 — the /exit was NOT submitted (no Enter sent), watcher disarmed, pane lock released, unconfirm rc $RCY_UNCONFIRM_RC. The session stays alive. Re-run: ${CMD:-<the recycle>}" >&2
+  elif [ "$1" = exit-signal-ignored ]; then
+    # Held after the SIGTERM (hf_exit_signal), so "before /exit" would be as false here as above.
+    echo "!! recycle HELD after SIGTERM (held: $1): $3 — watcher disarmed, pane lock released, unconfirm rc $RCY_UNCONFIRM_RC. Re-run: ${CMD:-<the recycle>}" >&2
   else
     echo "!! recycle ABORTED before /exit (held: $1): $3 — /exit NOT submitted, watcher disarmed, pane lock released, unconfirm rc $RCY_UNCONFIRM_RC. The session stays alive. Re-run: ${CMD:-<the recycle>}" >&2
   fi
@@ -3384,6 +3390,95 @@ hf_exit_readback() { # $1=pane → 0 exact /exit read back and CR sent · 1 not 
               || HF_EXIT_RB_UNDO="no DELs sent: the composer could not be read, so the /exit we typed MAY STILL BE IN THE BOX — clear it before typing; residue receipt $(composer_residue_dir)/${id//\//_} lets the next recycle's composer gate scrub it" ;;
   esac
   return 1
+}
+
+# THE SIGNAL EXIT — the /exit without the composer (docs/research/recycle-failures-kitty-2026-10-10/
+# REPORT.md fix 10; gate proof proof-sigterm-2.1.293.md beside it). Every composer failure in F2-F4
+# came from TYPING the exit: the read-back, the DEL undo, the residue. CC 2.1.293's SIGTERM handler
+# runs the same shutdown() as /exit, and the proof measured it at rest: gone in ~1 s with exit 143,
+# the transcript appended and not truncated, the background shell stopped, the staged successor
+# claimed and run, and the watchdog reading RECYCLE once the marker exists. SIGTERM and never SIGINT:
+# a SIGINT exits 0, which rr_close_on_clean_exit reads as a clean exit and closes the pane on.
+# It runs ONLY when all three facts hold; otherwise the typed path runs exactly as before:
+#   (1) the last rest read proved the transcript at rest (RCY_REST_PROVEN): a signal mid-turn kills
+#       the turn, and an in-turn self-recycle never has that proof;
+#   (2) OUR successor is staged for the pane's tty: the stage relaunches on claude's exit with no
+#       keystroke; without one, the watcher's typed rails are what this pane was armed for;
+#   (3) exactly one claude is pinned (hf_exit_signal_pin), and its start time is re-read right
+#       before the signal, so a reused pid is never the one signalled.
+# A claude still running after HF_EXIT_SIGNAL_GRACE_S gets no KILL: the caller holds, and says the
+# session is alive. Kill switch HF_EXIT_ACTUATOR=typed.
+
+# The pin: a process on the pane's tty TREE (pane_cc_state's leg (a): a resumed claude runs on
+# expect's NESTED pty) that pid_is_cc accepts AND that CC's own per-pid row names as the session
+# being recycled — the rows cc_sid_for_pane falls back to, CC_SESSIONS_DIRS its seam.
+hf_exit_signal_pin() { # $1=pane tty $2=session id → 0 one pinned (HF_EXIT_SIG_PID, HF_EXIT_SIG_LSTART) · 1 not (HF_EXIT_SIG_WHY)
+  local ptty="${1##*/}" want="${2:-}" roots closure f p s pids="" n=0
+  HF_EXIT_SIG_PID="" HF_EXIT_SIG_LSTART=""
+  if [ -z "$ptty" ] || [ -z "$want" ]; then HF_EXIT_SIG_WHY="no pane tty or no session id to pin a claude by"; return 1; fi
+  roots="$(ps -o pid= -t "$ptty" 2>/dev/null | tr -d ' ' | tr '\n' ' ' || true)"
+  [ -n "$roots" ] || { HF_EXIT_SIG_WHY="no process on $ptty"; return 1; }
+  closure="$(ps -axo pid=,ppid= 2>/dev/null | awk -v roots="$roots" '
+    BEGIN { n = split(roots, a, " "); for (i = 1; i <= n; i++) if (a[i] != "") sel[a[i]] = 1 }
+          { p[NR] = $1; pp[NR] = $2; N = NR }
+    END   { changed = 1
+            while (changed) { changed = 0
+              for (i = 1; i <= N; i++)
+                if (!(p[i] in sel) && (pp[i] in sel)) { sel[p[i]] = 1; changed = 1 } }
+            for (k in sel) printf " %s", k; print " " }' || true)"
+  # shellcheck disable=SC2231  # UNQUOTED ON PURPOSE: the default's `.claude*` expands across accounts
+  for f in ${CC_SESSIONS_DIRS:-$HOME/.claude*/sessions}/*.json; do
+    [ -f "$f" ] || continue
+    s="$(jq -r '.sessionId // empty' "$f" 2>/dev/null || true)"
+    [ "$s" = "$want" ] || continue
+    p="$(jq -r '.pid // empty' "$f" 2>/dev/null || true)"
+    case "$p" in ''|*[!0-9]*) continue ;; esac
+    case "$closure" in *" $p "*) ;; *) continue ;; esac
+    case "$pids " in *" $p "*) continue ;; esac
+    pid_is_cc "$p" || continue
+    pids="$pids $p"; n=$((n + 1))
+  done
+  if [ "$n" != 1 ]; then
+    HF_EXIT_SIG_WHY="$n claude process(es) on ${ptty}'s tree name session ${want:0:8}; the signal needs exactly one"; return 1
+  fi
+  HF_EXIT_SIG_PID="${pids# }"
+  HF_EXIT_SIG_LSTART="$(_hf_lstart "$HF_EXIT_SIG_PID")"
+  if [ -z "$HF_EXIT_SIG_LSTART" ]; then
+    HF_EXIT_SIG_WHY="claude pid $HF_EXIT_SIG_PID has no readable start time"; HF_EXIT_SIG_PID=""; return 1
+  fi
+  return 0
+}
+
+hf_exit_signal() { # $1=pane $2=pane tty $3=session id → 0 claude exited on SIGTERM · 1 not signalled: type /exit (HF_EXIT_SIG_WHY) · 2 signalled, still running
+  local pid now end
+  HF_EXIT_SIG_WHY="" HF_EXIT_SIG_PID="" HF_EXIT_SIG_LSTART=""
+  if [ "${HF_EXIT_ACTUATOR:-signal}" = typed ]; then HF_EXIT_SIG_WHY="HF_EXIT_ACTUATOR=typed"; return 1; fi
+  if [ "${RCY_REST_PROVEN:-0}" != 1 ]; then HF_EXIT_SIG_WHY="at rest was not proven at the last read"; return 1; fi
+  if [ -z "${WATCHER_PID:-}" ] || ! hf_succ_ours_staged "${2:-}" "$WATCHER_PID"; then
+    HF_EXIT_SIG_WHY="no successor of ours is staged for ${2:-<no tty>}"; return 1
+  fi
+  hf_exit_signal_pin "${2:-}" "${3:-}" || return 1
+  pid="$HF_EXIT_SIG_PID"
+  now="$(_hf_lstart "$pid")"
+  if [ "$now" != "$HF_EXIT_SIG_LSTART" ]; then
+    HF_EXIT_SIG_WHY="claude pid $pid changed start time between the pin and the signal ('$HF_EXIT_SIG_LSTART' → '${now:-gone}')"; return 1
+  fi
+  # The 143 this produces reads as an external SIGTERM unless a fresh marker names this session
+  # (lead-crash-watchdog arm 1.5): the pin's sid goes in as that key, the pid as cc-teardown's third.
+  write_teardown_marker "$1" recycle "$pid" "${3:-}" || true
+  emit_recycle_event recycle-exit-signal "" "$1" "SIGTERM to claude pid $pid (lstart $HF_EXIT_SIG_LSTART) of session ${3:0:8}: at rest, successor staged, nothing typed" || true
+  echo "→ exit: SIGTERM to claude pid $pid (session ${3:0:8}) — at rest with our successor staged, so nothing is typed"
+  if ! kill -TERM "$pid" 2>/dev/null && [ "$(_hf_lstart "$pid")" = "$HF_EXIT_SIG_LSTART" ]; then
+    HF_EXIT_SIG_WHY="kill -TERM $pid was refused"; return 1
+  fi
+  end=$((SECONDS + ${HF_EXIT_SIGNAL_GRACE_S:-10}))
+  while :; do
+    # Gone, another process under the pid, or a zombie its shell has yet to reap: all are exited.
+    [ "$(_hf_lstart "$pid")" = "$HF_EXIT_SIG_LSTART" ] || return 0
+    case "$(ps -o stat= -p "$pid" 2>/dev/null || true)" in *Z*) return 0 ;; esac
+    [ "$SECONDS" -lt "$end" ] || return 2
+    sleep 0.2
+  done
 }
 
 # THE SAME-ACCOUNT EVIDENCE (cc-lr upgrade, 2026-09-22). Called AFTER hf_remote_source_bind (the row
@@ -3989,13 +4084,14 @@ hf_succ_stage() {
   return 0
 }
 
-# $1=tty → 0 when a stage for this tty names THIS watcher and is still waiting (not claimed or revoked)
+# $1=tty [$2=watcher pid, default this process] → 0 when a stage for this tty names that watcher and
+# is still waiting (not claimed or revoked). The foreground passes $WATCHER_PID: it is not the watcher.
 hf_succ_ours_staged() {
   local d k
   command -v cc_pane_successor_dir >/dev/null 2>&1 || return 1
   d="$(cc_pane_successor_dir)"; k="${1##*/}"
   [ -f "$d/$k.cmd" ] || return 1
-  [ "$(jq -r '.watcher_pid // empty' "$d/$k.json" 2>/dev/null || true)" = "$$" ]
+  [ "$(jq -r '.watcher_pid // empty' "$d/$k.json" 2>/dev/null || true)" = "${2:-$$}" ]
 }
 
 # $1=tty $2=epoch floor → 0 + prints the claim epoch when a claim at or after the floor exists. The
@@ -8527,9 +8623,12 @@ record_close_succession() { # $1=fired-dir $2=pane $3=kind $4=successor-pane $5=
 # check hits regardless of registry churn; key_kind records each file's own key, and BOTH pane+sid
 # go in the body so the reader can match on either. FULLY GUARDED — a marker write can NEVER block
 # or fail a close. Writers never delete markers; the reader GCs them.
-write_teardown_marker() { # $1=pane-uuid  $2=mode (terminal|successor|recycle)
-  local _pane="${1:-}" _mode="${2:-}" _sid _dir="$HOME/.claude/watchdog/teardown" _ts
-  _sid="${SESSION_ID:-}"
+# $3/$4 come only from the signal exit (hf_exit_signal): the pid about to be TERMed and the session
+# its pin proved. The pid key is bin/cc-teardown's third key, same shape; the proven sid outranks the
+# registry recovery, which can miss and would leave only a pane key for a 143 to be judged by.
+write_teardown_marker() { # $1=pane-uuid  $2=mode (terminal|successor|recycle)  [$3=pid  $4=sid]
+  local _pane="${1:-}" _mode="${2:-}" _pid="${3:-}" _sid _dir="$HOME/.claude/watchdog/teardown" _ts
+  _sid="${4:-${SESSION_ID:-}}"
   if [ -z "$_sid" ] && [ -n "$_pane" ]; then
     # registry rows are pretty-printed ("session_id": "<sid>" — note the space): match tolerantly
     _sid=$(grep -oE '"session_id":[[:space:]]*"[^"]+"' \
@@ -8546,6 +8645,10 @@ write_teardown_marker() { # $1=pane-uuid  $2=mode (terminal|successor|recycle)
   if [ -n "$_pane" ]; then
     printf '{"key_kind":"pane","pane":"%s","sid":"%s","mode":"%s","ts":"%s"}\n' \
       "$_pane" "$_sid" "$_mode" "$_ts" > "$_dir/$_pane.json" 2>/dev/null || true
+  fi
+  if [ -n "$_pid" ]; then
+    printf '{"key_kind":"pid","pane":"%s","sid":"%s","pid":"%s","mode":"%s","ts":"%s"}\n' \
+      "$_pane" "$_sid" "$_pid" "$_mode" "$_ts" > "$_dir/$_pid.json" 2>/dev/null || true
   fi
   return 0
 }
@@ -17473,7 +17576,7 @@ spawn() {
 # the pre-confirm reads passed. ORDER: confirm → last read → debt → /exit. Returns 0 once /exit is
 # submitted; every refusal exits 1 with nothing submitted. $1 = the pane's pre-recycle session id.
 recycle_fire_commit() {
-  local rcy_old_sid="${1:-}" rcy_tp="" rcy_tp_rc=0 rcy_debt_sid rcy_debt_cwd wrote
+  local rcy_old_sid="${1:-}" rcy_tp="" rcy_tp_rc=0 rcy_debt_sid rcy_debt_cwd wrote rcy_sig_rc=0
   RCY_CONFIRM_RAN=0
   # ── D2 — CONFIRM THE TRANSPLANT SNAPSHOT, HERE, BEFORE THE IRREVERSIBLE KEYSTROKE ─────────────
   # lr-transplant's `--phase admit` does `cp -p` then sha-verifies source against destination. That
@@ -17571,6 +17674,18 @@ recycle_fire_commit() {
   else
     echo "⚠ resume-debt NOT opened: no session id resolved for pane $SID — this close is untracked" >&2
   fi
+  # ── THE SIGNAL EXIT (REPORT.md fix 10) — see hf_exit_signal. Exited ⇒ the same return as a
+  # submitted /exit, so the watcher's post-exit path is unchanged. Ignored ⇒ held with the debt
+  # abandoned, as a read-back mismatch is. Not taken ⇒ the typed /exit below, as before. `tty` is
+  # recycle_fire's local (bash scopes locals dynamically).
+  hf_exit_signal "$SID" "${tty:-}" "$rcy_debt_sid" || rcy_sig_rc=$?
+  case "$rcy_sig_rc" in
+    0) return 0 ;;
+    2) [ -n "$rcy_debt_sid" ] && _hf_resume_debt abandon --sid "$rcy_debt_sid" --why "exit signal ignored: SIGTERM sent to claude pid $HF_EXIT_SIG_PID, still running after ${HF_EXIT_SIGNAL_GRACE_S:-10}s, no KILL sent, nothing typed; session alive"
+       hf_recycle_hold exit-signal-ignored "SIGTERM to claude pid $HF_EXIT_SIG_PID (lstart $HF_EXIT_SIG_LSTART) ignored for ${HF_EXIT_SIGNAL_GRACE_S:-10}s, no KILL sent" \
+         "claude pid $HF_EXIT_SIG_PID is still running ${HF_EXIT_SIGNAL_GRACE_S:-10}s after SIGTERM; no KILL was sent and nothing was typed, so the session is alive. Should it exit later, its pane returns to a shell with no relaunch" ;;
+    *) echo "→ exit: typed /exit — $HF_EXIT_SIG_WHY" ;;
+  esac
   # ── /exit, READ BACK (W2b) — see hf_exit_readback. Kill switch HF_EXIT_READBACK=off restores the
   # as_write loop. The blind anti-strand Enter that used to follow it is GONE on both paths: an Enter
   # nobody read back is exactly what submits an operator's draft, and the watcher's content-gated
@@ -18209,6 +18324,9 @@ recycle_fire_armed() {
       echo "!! recycle ABORTED at the last read: session $(printf '%.8s' "${RCY_SOURCE_SESSION:-${rcy_old_sid:-}}") is no longer at rest (rc $rcy_rest_rc — 1 a turn is in flight, 2 unreadable) — nothing typed, watcher disarmed, session untouched. Re-run once it is idle." >&2
       exit 1
     fi
+    # The one fact the signal exit needs that only this read has (hf_exit_signal). An in-turn
+    # self-recycle never reaches here, so it keeps the typed /exit.
+    RCY_REST_PROVEN=1
   fi
   if [ "$RCY_SAME_ACCOUNT" = 1 ]; then
     # …AND NO SUBAGENT WAS SPAWNED SINCE THE GATE (Q4 gap b). A background Agent-tool subagent
