@@ -268,7 +268,8 @@ reads() { wc -l < "$READS" | tr -d ' '; }
   not event recycle-deferred-turn
   [ "$(reads)" -le 3 ] || { echo "reads=$(reads)"; false; }
   snap="$(find "$LR_COMPOSER_SNAP_DIR" -name '*.ansi' 2>/dev/null | awk 'NR<=1')"
-  [ -n "$snap" ] && grep -qF "screen $snap" "$EVENTS" || { echo "no screen witness named"; cat "$EVENTS"; false; }
+  [ -n "$snap" ] || { echo "no snapshot written"; cat "$EVENTS"; false; }
+  grep -qF "screen $snap" "$EVENTS" || { echo "no screen witness named"; cat "$EVENTS"; false; }
   not armed; [ ! -s "$SENT_LOG" ]
   # No receipt for our own /exit: the hold does not claim the box holds it.
   not grep -q 'our own /exit' "$EVENTS"
