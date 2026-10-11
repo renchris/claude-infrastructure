@@ -75,7 +75,7 @@ mvf_plan() {
   BDIR="$bdir"
 }
 # The lr-handoff stand-in. STUB_MODE: move (default) · hold · strand · tomb (moves, but leaves a
-# foreign tombstone in the target). It records its argv, its environment, the number of swap slots
+# foreign tombstone in the target) · watcher-hold (rc 0, then the watcher's after-confirm hold row). It records its argv, its environment, the number of swap slots
 # held while it runs, and one "typer" line per invocation.
 mvf_handoff_stub() {
   export LR_MOVE_HANDOFF_BIN="$STUBS/lr-handoff"
@@ -98,6 +98,13 @@ case "${STUB_MODE:-move}" in
   strand)
     kill "$(jq -r .pid "$CC_REGISTRY_DIR/$pane.json")" 2>/dev/null
     sleep 0.3; exit 4 ;;
+  watcher-hold)
+    # rc 0 unawaited, then the detached watcher holds at the bgwork dialog after the confirm: its row
+    # (STUB_HOLD_DETAIL) and a session left on the source, one copy, as an unconfirm leaves it.
+    mkdir -p "$HOME/.claude/logs"
+    jq -cn --arg a "${HF_RECYCLE_ATTEMPT:-}" --arg d "${STUB_HOLD_DETAIL:-background-work dialog at 30s cancelled with Esc; nothing typed; unconfirm rc 0}" \
+      '{class:"recycle-held-bgwork", attempt:$a, detail:$d}' >> "$HOME/.claude/logs/handoffs.jsonl"
+    exit 0 ;;
 esac
 sleep "${STUB_BOOT_S:-0.3}"
 pid="$(jq -r .pid "$CC_REGISTRY_DIR/$pane.json")"

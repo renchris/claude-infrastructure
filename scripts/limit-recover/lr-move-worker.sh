@@ -173,6 +173,12 @@ held="$(sed -n 's/.*\(HELD:[A-Za-z:-]*\).*/\1/p; s/.*\(REFUSED:[A-Za-z:-]*\).*/\
 # W6. Prove it. A hold (rc 6) is read once: the source must be untouched. Anything else is polled,
 # because the relaunch is still booting when lr-handoff returns (LR_INPLACE_AWAIT=0).
 bound="${LR_MOVE_PROVE_S:-300}"; [ "$hrc" -eq 6 ] && bound="${LR_MOVE_HELD_PROVE_S:-20}"
+watcher_hold() { # → "HELD:<reason>" when this attempt's watcher row held after the confirm and unconfirmed, else empty
+  tail -n 2000 "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/null | jq -R -r --arg a "$REC:1" '
+    fromjson? | select(.attempt == $a and ((.class // "") | startswith("recycle-held-"))
+      and ((.detail // "") | test("unconfirm rc 0($|;)")) and (((.detail // "") | contains("unconfirm=needed")) | not))
+    | .class | sub("^recycle-held-"; "") | if . == "bgwork" then "HELD:bg-work" else "HELD:" + . end' 2>/dev/null | tail -1
+}
 deadline=$(( $(date +%s) + bound )); stable_pid=""; stable_at=0; v="" why="" vpid="" flags=""
 while :; do
   IFS=$'\t' read -r v why vpid flags <<EOF
@@ -188,7 +194,12 @@ EOF
       elif [ $(( now - stable_at )) -ge "${LR_MOVE_STABLE_S:-5}" ]; then finish "$v" "$why" "$flags"
       fi ;;
     NOTMOVED)
-      [ "$hrc" -eq 0 ] || finish NOTMOVED "${held:-HELD:unknown} — $why (lr-handoff rc $hrc)" "$flags" ;;
+      [ "$hrc" -eq 0 ] || finish NOTMOVED "${held:-HELD:unknown} — $why (lr-handoff rc $hrc)" "$flags"
+      # rc 0 is lr-handoff not awaiting the engagement (LR_INPLACE_AWAIT=0): its detached watcher may
+      # since have held at a dialog AFTER the confirm and handed the source back (handoff-fire
+      # rcy_bgwork_unconfirm: `unconfirm rc 0` in its row). That is a named hold, not a bound to wait out.
+      wh="$(watcher_hold)"
+      [ -z "$wh" ] || finish NOTMOVED "$wh — the recycle's watcher held after the confirm and handed the source back; $why" "$flags" ;;
   esac
   [ "$(date +%s)" -lt "$deadline" ] || break
   sleep "${LR_MOVE_PROVE_POLL_S:-2}"

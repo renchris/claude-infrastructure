@@ -121,6 +121,23 @@ invoked() { [ -s "$STUB_LOG/typers.log" ]; }
   [ "$(res verdict)" = MOVED ]
 }
 
+# Move batch 20261011T190215Z, pane 124: lr-handoff returned rc 0 unawaited, then its watcher held at
+# the background-work dialog after the confirm. Once the watcher hands the source back (handoff-fire
+# rcy_bgwork_unconfirm) the session is on the source, one copy: a hold, named from the row at once.
+# Mutant: drop the watcher-row finish in the NOTMOVED arm (the worker waits out its bound instead).
+@test "4b [RED] rc 0, then the watcher held after the confirm and unconfirmed: NOTMOVED HELD:bg-work, without waiting out the bound" {
+  export STUB_MODE=watcher-hold LR_MOVE_PROVE_S=6
+  worker
+  [ "$(res verdict)" = NOTMOVED ] || { res verdict; res reason; false; }
+  [[ "$(res reason)" == "HELD:bg-work"* ]] || { res reason; false; }
+  [ -f "$SRC/projects/-x/$SID.jsonl" ]
+  # A row whose unconfirm did NOT take is no such hold: the bound runs out and the reason says so.
+  rm -f "$BDIR/$SID.json" "$HOME/.claude/logs/handoffs.jsonl"
+  STUB_HOLD_DETAIL="background-work dialog at 30s cancelled with Esc; nothing typed; unconfirm rc 2; unconfirm=needed" worker
+  [ "$(res verdict)" = NOTMOVED ] || { res verdict; res reason; false; }
+  [[ "$(res reason)" != "HELD:"* ]] || { res reason; false; }
+}
+
 @test "9 the session dies during the move: STRANDED, named from disk" {
   export STUB_MODE=strand LR_MOVE_PROVE_S=2
   worker
