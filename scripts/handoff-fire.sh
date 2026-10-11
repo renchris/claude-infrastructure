@@ -3225,6 +3225,31 @@ hf_recycle_unconfirm() { # → sets RCY_UNCONFIRM_RC (the CLI's rc · "n/a" no c
   return 0
 }
 
+# THE WATCHER'S UNCONFIRM, at a background-work hold. The Esc leaves the source alive in its pane
+# after the confirm retired it, and the Esc is the last safe moment to hand it back: its next write
+# re-creates <sid>.jsonl, after which --phase unconfirm refuses stub-present and --phase fold-stub
+# refuses for as long as the session is held — a split brain with no automatic way out (move batch
+# 20261011T190215Z, pane 124). The watcher was detached BEFORE the confirm, so it reads the confirm's
+# operands from the "$CMDFILE.confirmed" file recycle_fire_commit wrote; absent ⇒ no confirm ran.
+# A reconciler-owned record (recon:*) is left to the reconciler: its record is past PRE-MOVE here,
+# and it advances only on its own UNCONFIRM (settle.note_watcher_hold → phase row 9), so the row
+# keeps unconfirm=needed for it. Kill switch CC_RECYCLE_BGWORK_UNCONFIRM=off = that row everywhere.
+rcy_bgwork_unconfirm() { # → sets RCY_BG_UNCONFIRM, the row's unconfirm clause
+  local f="${CMDFILE:-}.confirmed"
+  RCY_BG_UNCONFIRM="unconfirm=needed"
+  case "${LR_RECORD_ID:-}" in recon:*) return 0 ;; esac
+  [ "${CC_RECYCLE_BGWORK_UNCONFIRM:-on}" != off ] && [ -n "${CMDFILE:-}" ] && [ -s "$f" ] || return 0
+  { IFS= read -r RCY_TS_SID && IFS= read -r HF_TS_CFG && IFS= read -r HF_TS_TO; } < "$f" || return 0
+  RCY_CONFIRM_RAN=1
+  hf_recycle_unconfirm
+  # Done exactly once: a second hold exit in this watcher must not claim a second unconfirm.
+  rm -f "$f" 2>/dev/null || true
+  RCY_BG_UNCONFIRM="unconfirm rc $RCY_UNCONFIRM_RC"
+  # Still owed when it did not take: the reconciler (or the operator) reads unconfirm=needed.
+  [ "$RCY_UNCONFIRM_RC" = 0 ] || RCY_BG_UNCONFIRM="$RCY_BG_UNCONFIRM; unconfirm=needed"
+  return 0
+}
+
 # A HOLD AFTER THE ARM: unconfirm (if owed), disarm, one row, one line, exit 1. Nothing is typed by
 # any caller of this — the row class is recycle-held-<reason> and the detail carries the unconfirm rc.
 hf_recycle_hold() { # $1=reason $2=detail $3=what the operator reads → exit 1
@@ -10850,8 +10875,9 @@ if [ "${1:-}" = "__recycle" ]; then
           if [ "$rcy_sc_rc" = 2 ]; then
             # Esc is spent and the session is back at its composer, alive: a second Esc from the hold
             # below would land on a live turn as an interrupt, so hold HERE with nothing more sent.
-            echo "!! recycle HELD at ${waited}s: this recycle's own tool call returned (${RCY_SELFCALL}) and the dialog was dismissed, but /exit could not be re-submitted — the session in $RSID is alive at its composer and NO relaunch was typed. Re-run the recycle." >&2
-            emit_recycle_event recycle-held-bgwork "" "$RSID" "own tool call ${RCY_SELFCALL}; Esc sent; /exit re-submit failed; nothing typed; unconfirm=needed" || true
+            rcy_bgwork_unconfirm
+            echo "!! recycle HELD at ${waited}s: this recycle's own tool call returned (${RCY_SELFCALL}) and the dialog was dismissed, but /exit could not be re-submitted — the session in $RSID is alive at its composer and NO relaunch was typed ($RCY_BG_UNCONFIRM). Re-run the recycle." >&2
+            emit_recycle_event recycle-held-bgwork "" "$RSID" "own tool call ${RCY_SELFCALL}; Esc sent; /exit re-submit failed; nothing typed; $RCY_BG_UNCONFIRM" || true
             rcy_retry_ticket "the dialog was dismissed but /exit could not be re-submitted" - || true
             exit 1
           fi
@@ -10958,19 +10984,22 @@ if [ "${1:-}" = "__recycle" ]; then
         if [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" = cancel ] || [ "$rcy_team_rc" != 1 ] \
            || { [ -z "$bgk" ] && [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" != off ]; }; then
           hf_bounded "$IT2" session send -s "$RSID" $'\e' >/dev/null 2>&1 || true
+          # Hand the source back NOW, before the session's next write can re-create its stub.
+          rcy_bgwork_unconfirm
           # OUR /exit MAY OUTLIVE THE DIALOG (W5 rig N=30, bgwork-after-confirm): Esc cancels the
           # dialog and can leave the /exit this watcher typed in the composer, which every later
           # precheck reads as an operator draft, so the session is HELD:draft forever and never
           # recovers after its job ends. Attribution is structural (we typed it seconds ago), and it
           # is scrubbed only when the composer reads back exactly `/exit`; anything else is left.
           rcy_scrub_own_exit || true
-          echo "!! recycle HELD at ${waited}s: the /exit raised the background-work dialog and this relaunch may not choose either exit ($(if [ -z "$bgk" ]; then printf 'the menu offers no keep-work option'; elif [ "$rcy_team_rc" != 1 ]; then printf 'the subject leads live team members'; else printf 'CC_RECYCLE_BGWORK_ANSWER=cancel'; fi)) — sent Esc (Stay); the session in $RSID is untouched and NO relaunch was typed (composer after Esc: $RCY_EXIT_SCRUB). Re-run once its background work has ended." >&2
+          echo "!! recycle HELD at ${waited}s: the /exit raised the background-work dialog and this relaunch may not choose either exit ($(if [ -z "$bgk" ]; then printf 'the menu offers no keep-work option'; elif [ "$rcy_team_rc" != 1 ]; then printf 'the subject leads live team members'; else printf 'CC_RECYCLE_BGWORK_ANSWER=cancel'; fi)) — sent Esc (Stay); the session in $RSID is untouched and NO relaunch was typed (composer after Esc: $RCY_EXIT_SCRUB; $RCY_BG_UNCONFIRM). Re-run once its background work has ended." >&2
           rcy_hold_pids=-
           case "$rcy_siw_kind" in work\ *pids=*) rcy_hold_pids="${rcy_siw_kind##*pids=}" ;; esac
           rcy_retry_ticket "${rcy_siw_why:-$(if [ "$rcy_team_rc" != 1 ]; then printf 'the session leads live team members, or its team could not be read'; else printf 'background work is running'; fi)}" "$rcy_hold_pids" || true
-          # unconfirm=needed: the transplant confirm ran before the /exit and the session stays in
-          # this pane, so the source must be handed back — the reconciler UNCONFIRMs off this field.
-          emit_recycle_event recycle-held-bgwork "" "$RSID" "background-work dialog at ${waited}s cancelled with Esc; nothing typed; unconfirm=needed" || true
+          # The session stays in this pane, so a confirm that ran is owed back: `unconfirm rc N` when
+          # rcy_bgwork_unconfirm handed it back here, `unconfirm=needed` where the reconciler owns
+          # the record, no confirm marker was found, or the unconfirm did not take.
+          emit_recycle_event recycle-held-bgwork "" "$RSID" "background-work dialog at ${waited}s cancelled with Esc; nothing typed; $RCY_BG_UNCONFIRM" || true
           exit 1
         fi
         if [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" != off ]; then
@@ -10989,8 +11018,9 @@ if [ "${1:-}" = "__recycle" ]; then
             # The /exit did not go back in: the predecessor is alive IN THIS PANE at its composer,
             # which is safe (nothing is orphaned, nothing is stranded) but is not a recycle. Hold
             # loudly, as the cancel arm does, and name the goal so it can be re-armed by hand.
+            rcy_bgwork_unconfirm
             echo "!! recycle HELD at ${waited}s: the background-work dialog was dismissed to clear the predecessor's /goal (${RCY_GOAL_CLEAR}), and /exit could not be re-submitted — the session in $RSID is alive at its composer and NO relaunch was typed.$([ "$RCY_GOAL_CLEAR" = cleared ] && [ -n "${FIRE_GOAL:-}" ] && printf ' Its goal was cleared; re-arm it there with: /goal %s' "$FIRE_GOAL") Re-run the recycle." >&2
-            emit_recycle_event recycle-held-bgwork "" "$RSID" "goal-clear dismissed the dialog at ${waited}s (goal=${RCY_GOAL_CLEAR}); /exit re-submit failed; nothing typed; unconfirm=needed" || true
+            emit_recycle_event recycle-held-bgwork "" "$RSID" "goal-clear dismissed the dialog at ${waited}s (goal=${RCY_GOAL_CLEAR}); /exit re-submit failed; nothing typed; $RCY_BG_UNCONFIRM" || true
             rcy_retry_ticket "the dialog was dismissed to clear the /goal but /exit could not be re-submitted" - || true
             hf_alarm recycle-held-bgwork "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-HELD: pane $RSID — the recycle dismissed the background-work dialog to clear the predecessor's /goal (${RCY_GOAL_CLEAR}) and could not re-submit /exit. The predecessor is alive at its composer; no relaunch was typed.$([ "$RCY_GOAL_CLEAR" = cleared ] && [ -n "${FIRE_GOAL:-}" ] && printf ' Its goal was CLEARED — re-arm it in that pane: /goal %s' "$FIRE_GOAL") Re-run the recycle." || true
             exit 1
@@ -17726,6 +17756,13 @@ recycle_fire_commit() {
     fi
     # From here a stand-down owes an UNCONFIRM: the source is retired and must be handed back.
     RCY_CONFIRM_RAN=1
+    # …and the WATCHER owes it too once /exit is in: it was detached before this confirm ran, so it
+    # learns of it only from this file beside the cmdfile (rcy_bgwork_unconfirm reads it back).
+    # Best-effort: without it the watcher's bgwork hold says unconfirm=needed, as it did before.
+    if [ -n "${cmdfile:-}" ]; then
+      printf '%s\n' "$RCY_TS_SID" "$HF_TS_CFG" "$HF_TS_TO" > "$cmdfile.confirmed" 2>/dev/null \
+        || echo "⚠ recycle: could not write $cmdfile.confirmed — a watcher bgwork hold cannot unconfirm ${RCY_TS_SID:0:8} itself" >&2
+    fi
     hf_canary_hook after-confirm "$SID" "$RCY_TS_SID"
   fi
   # The /exit's wake guard sits BEFORE the last read, not between it and the keystroke: a guard that

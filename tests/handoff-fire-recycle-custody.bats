@@ -697,7 +697,8 @@ SID_UUID="a1b2c3d4-0000-4000-8000-000000000002"
   [ "$(calls_n "send /exit")" = 1 ] || { cat "$CALLS"; false; }
   ! grep -q '177' "$CALLS" || { cat "$CALLS"; false; }
   ! grep -q '^as_write' "$CALLS" || { cat "$CALLS"; false; }
-  ! grep -q 'unconfirm' "$CALLS" || { cat "$CALLS"; false; }
+  # The phase, not the bare word: the debt line carries --cwd, and a checkout named *unconfirm* matched.
+  ! grep -q -- '--phase unconfirm' "$CALLS" || { cat "$CALLS"; false; }
   # The debt opens before the keystroke, never after it.
   local d s
   d="$(grep -n '^debt open ' "$CALLS" | cut -d: -f1)"; s="$(grep -n '^send /exit$' "$CALLS" | cut -d: -f1)"
@@ -1602,6 +1603,79 @@ SH
     fi
     [ "$(typed_relaunch)" = 0 ] || { echo "mode=$mode"; cat "$HOME/it2-calls.log"; false; }
   done
+}
+
+# ── 12e-12g · A BGWORK HOLD AFTER THE CONFIRM HANDS THE SOURCE BACK AT THE Esc ──────────────────
+# Move batch 20261011T190215Z, pane 124: the move lane (LR_INPLACE_AWAIT=0) had exited before the
+# watcher Esc'd the dialog, the row said unconfirm=needed, nothing consumed it outside the
+# reconciler's own records, and the live session re-created its stub beside .handed-off — after
+# which neither unconfirm (stub-present) nor fold-stub (held) can run. Mutants: 12e make
+# rcy_bgwork_unconfirm return at its top · 12f drop its `; unconfirm=needed` refusal clause ·
+# 12g drop its recon:* case · 12h drop the marker write in recycle_fire_commit.
+bgwork_hold_world() { # $1 = record id → a watcher at the 2-option dialog, a confirm marker beside the cmdfile
+  watcher_world
+  rm -f "$HOME/it2-calls.log" "$HOME/.claude/logs/handoffs.jsonl" "$W/calls.log"
+  export SCREEN="$REPO/tests/fixtures/lr-recon/screens/bgwork-dialog-2.1.284-agent-view-off.txt"
+  export CC_PANE_MODAL_LIB="$REPO/hooks/lib/pane-modal.sh" CC_RECYCLE_BGWORK_EVERY_S=3 LR_RECORD_ID="$1"
+  unset HF_WATCHER_RECORD
+  echo $(( $(date +%s) + 600 )) > "$HOME/shell-at"
+  printf '%s\n' "$SID_UUID" "$W/from" "$WCFG" > "$WCMD.confirmed"
+}
+
+@test "12e move lane: the watcher's bgwork hold unconfirms at the Esc and its row says unconfirm rc 0" {
+  bgwork_hold_world "move-20261011T190215Z-b-${SID_UUID:0:8}"
+  drive_watcher
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ "$(grep -c $'session send .*\e' "$HOME/it2-calls.log")" = 1 ] || { cat -v "$HOME/it2-calls.log"; false; }
+  [ "$(typed_relaunch)" = 0 ] || { cat "$HOME/it2-calls.log"; false; }
+  [ "$(grep -cxF "transplant --phase unconfirm --sid $SID_UUID --from $W/from --to $WCFG --record-id move-20261011T190215Z-b-${SID_UUID:0:8}" "$W/calls.log")" = 1 ] \
+    || { cat "$W/calls.log"; echo "$output"; false; }
+  wrows recycle-held-bgwork | grep -q 'nothing typed; unconfirm rc 0"' || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+  ! wrows recycle-held-bgwork | grep -q 'unconfirm=needed' || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+  [ ! -e "$WCMD.confirmed" ] || { echo "the marker outlived its unconfirm"; false; }
+}
+
+@test "12f an unconfirm that is refused keeps unconfirm=needed beside its rc" {
+  bgwork_hold_world "move-b-${SID_UUID:0:8}"
+  FOLD_RC=2 FOLD_OUT='{"ok":false,"reason":"stub-present"}' drive_watcher
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ "$(grep -c -- '--phase unconfirm' "$W/calls.log")" = 1 ] || { cat "$W/calls.log"; false; }
+  wrows recycle-held-bgwork | grep -q 'nothing typed; unconfirm rc 2; unconfirm=needed"' || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+}
+
+@test "12g a reconciler-owned record (recon:*) is left to the reconciler, and no marker means no confirm ran" {
+  bgwork_hold_world "recon:c:${SID_UUID:0:8}:1"
+  drive_watcher
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  ! grep -q -- '--phase unconfirm' "$W/calls.log" 2>/dev/null || { cat "$W/calls.log"; false; }
+  wrows recycle-held-bgwork | grep -q 'nothing typed; unconfirm=needed"' || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+  # A move-lane hold with no marker: no confirm ran in that recycle, so nothing is called.
+  bgwork_hold_world "move-b-${SID_UUID:0:8}"
+  rm -f "$WCMD.confirmed"
+  drive_watcher
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  ! grep -q -- '--phase unconfirm' "$W/calls.log" 2>/dev/null || { cat "$W/calls.log"; false; }
+  wrows recycle-held-bgwork | grep -q 'unconfirm=needed"' || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+}
+
+@test "12h the confirm leaves its operands beside the cmdfile for the watcher; a husk or no confirm leaves none" {
+  tail_world
+  # shellcheck disable=SC2034  # read by recycle_fire_commit through bash's dynamic scope
+  cmdfile="$BATS_TEST_TMPDIR/relaunch-cmd.sh"
+  printf '%s\n' "" "/exit" > "$READS"
+  run recycle_fire_commit "$SESS"
+  [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
+  [ "$(calls_n "transplant --phase confirm --sid $SESS --from $HF_TS_CFG --to $HF_TS_TO --record-id rec-1")" = 1 ] || { cat "$CALLS"; false; }
+  [ "$(cat "$cmdfile.confirmed")" = "$(printf '%s\n' "$SESS" "$HF_TS_CFG" "$HF_TS_TO")" ] || { cat "$cmdfile.confirmed"; false; }
+  # No confirm ran (not a transplant): no marker.
+  tail_world
+  cmdfile="$BATS_TEST_TMPDIR/relaunch-cmd2.sh"
+  # shellcheck disable=SC2034  # globals read by the handoff-fire functions under test
+  RCY_TRANSPLANTED_SOURCE=0
+  printf '%s\n' "" "/exit" > "$READS"
+  run recycle_fire_commit "$SESS"
+  [ "$status" -eq 0 ] || { echo "status=$status $output"; false; }
+  [ ! -e "$cmdfile.confirmed" ] || { echo "a marker without a confirm"; false; }
 }
 
 # ── P · THE 1 s SHELL POLL ─────────────────────────────────────────────────────────────────────

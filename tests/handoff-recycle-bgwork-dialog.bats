@@ -21,7 +21,7 @@
 
 setup() {
   REPO_SRC="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-  HF="$REPO_SRC/scripts/handoff-fire.sh"
+  HF="${HF_OVERRIDE:-$REPO_SRC/scripts/handoff-fire.sh}"
   LIB="$REPO_SRC/hooks/lib/pane-modal.sh"
   [ -f "$HF" ] && [ -f "$LIB" ] || { echo "subject missing" >&2; return 1; }
 
@@ -586,6 +586,37 @@ sc_sends() { local n; n="$(grep -c -- "${1:-.}" "$H/sends.log" 2>/dev/null || tr
   [[ "$output" == *"/exit could not be re-submitted"* ]] || { echo "$output"; false; }
   [ "$(sc_sends "\$'\\\\E'$")" = 1 ] || { cat "$H/sends.log"; false; }
   [ "$(sc_sends '/exit')" = 0 ] || { cat "$H/sends.log"; false; }
+}
+
+# ── the two re-submit holds hand the source back too (move batch 20261011T190215Z, pane 124) ────
+# A confirm marker beside the cmdfile says the foreground's transplant confirm ran; each hold that
+# leaves the session alive at its composer must unconfirm it, as the cancel arm does
+# (tests/handoff-fire-recycle-custody.bats 12e-12h). Mutant: drop the rcy_bgwork_unconfirm call
+# at the hold under test (its row then says unconfirm=needed).
+_tp_marker() {
+  export LR_RECORD_ID="move-b-sid-before" HF_LR_TRANSPLANT="$BATS_TEST_TMPDIR/lr-transplant.sh"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\nexit 0\n' "$BATS_TEST_TMPDIR/tp.log" > "$HF_LR_TRANSPLANT"
+  chmod +x "$HF_LR_TRANSPLANT"
+  printf '%s\n' sid-before "$BATS_TEST_TMPDIR/from" "$BATS_TEST_TMPDIR/to" > "$CMDFILE.confirmed"
+}
+
+@test "[RED] self-call hold: Esc spent, /exit not re-submitted ⇒ the source is unconfirmed, row says unconfirm rc 0" {
+  _selfcall_stub; _tp_marker
+  STUB_AFTER_ESC="operator draft" run drive_sc
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  grep -qxF -- "--phase unconfirm --sid sid-before --from $BATS_TEST_TMPDIR/from --to $BATS_TEST_TMPDIR/to --record-id move-b-sid-before" "$BATS_TEST_TMPDIR/tp.log" \
+    || { cat "$BATS_TEST_TMPDIR/tp.log"; echo "$output"; false; }
+  run row recycle-held-bgwork
+  [[ "$output" == *"/exit re-submit failed; nothing typed; unconfirm rc 0\""* ]] || { echo "$output"; false; }
+}
+
+@test "[RED] goal-clear hold: /exit not re-submitted ⇒ the source is unconfirmed, row says unconfirm rc 0" {
+  _goal_stub; _tp_marker
+  STUB_AFTER_CLEAR="operator draft" CC_RECYCLE_GOAL_CLEAR_PREWAIT_S=0 run drive_goal
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ "$(grep -c -- '--phase unconfirm --sid sid-before' "$BATS_TEST_TMPDIR/tp.log")" = 1 ] || { cat "$BATS_TEST_TMPDIR/tp.log"; echo "$output"; false; }
+  run row recycle-held-bgwork
+  [[ "$output" == *"/exit re-submit failed; nothing typed; unconfirm rc 0\""* ]] || { echo "$output"; false; }
 }
 
 # ── the foreground half: which tool call are we running inside? ──────────────────────────────────
