@@ -179,7 +179,7 @@ Pane 134's box reads empty now (read-only, 02:31Z and 02:57Z).
 
 Line numbers are at HEAD `b68fa8a25`. Each test is written to be red before the fix. The skeptics checked each test against the suite's stubs.
 
-1. **Land the narrowed slash exemption already written on `fix-recycle-exit-residue` (`0e882c9ac`, another live session's branch: do not take it over).**
+1. **DONE, landed by another session as `0e882c9ac` while this report was being written**, with `tests/recycle-exit-residue.bats` (5 cases) and the real 2.1.291 capture as a fixture. Its rationale is `docs/research/recycle-exit-residue-2026-10-10.md`. It also accepts a pointer followed by U+00A0, and its third case covers fix 2's receipt-and-scrub path. The original text of this fix follows for the record: **Land the narrowed slash exemption already written on `fix-recycle-exit-residue`.**
    - Problem: `0584f0720` exempts *any* `❯ /…` row above the box. With the menu open, a CR submits the **highlighted** row, so a box holding `/exit` under a menu highlighting another command reads `/exit`, and the CR runs the other command.
    - Where: `scripts/handoff-fire.sh` `selector()` :4074-4085.
    - Test: `tests/composer-tall-readback.bats`, a case where the highlighted command differs from the box's command → UNKNOWN. Also pin both real captures (`/tmp/slashprobe/exit-typed.ansi.txt`, which is ephemeral, and the branch's `slash-menu-exit-2.1.291.txt`) under `tests/fixtures/`, and assert that `f14b42653`'s parser reads them UNKNOWN, so the fixture provably separates the two parsers.
@@ -193,6 +193,7 @@ Line numbers are at HEAD `b68fa8a25`. Each test is written to be red before the 
      - the receipt file exists;
      - the next gate scrubs it.
    - Today no test greps `HF_EXIT_RB_UNDO` or "no DELs sent".
+   - **Status at trunk `cc863bdaf`:** the receipt-and-scrub half is now tested (`tests/recycle-exit-residue.bats`, "an unreadable read-back types nothing, receipts its /exit, and the deferred retry clears it"). The false text survives, now at `scripts/handoff-fire.sh:3203` ("ABORTED before /exit") and `:17391` ("session untouched").
 3. **Defer only on a turn-shaped UNKNOWN, and hold a static one fast under its own class.**
    - Where: `recycle_composer_gate` :4208 (today every UNKNOWN maps to rc 2), `recycle_composer_block` :17577-17620, `hf_recycle_defer` :4549.
    - The reason must travel as a **distinct exit code**: every caller captures the read with `$(…)`, so an exported variable would be lost.
@@ -202,7 +203,7 @@ Line numbers are at HEAD `b68fa8a25`. Each test is written to be red before the 
    - Where: :17950-17952. When `RCY_DEFERRED=1`, set `rcy_rest_tx` to the deferring transcript and add `hf_new_prompt_since <defer t0>`.
    - Test: eval `recycle_fire_armed` as `tests/handoff-recycle-expect-probe.bats:266` does. Append a user record after `recycle-turn-ended`, then assert `recycle-held-busy`/`-new-prompt` and that the `recycle_fire_commit` stub was **not reached**. A "no SEND:/exit" assertion passes before the fix.
 5. **Make the deferral's wording true.**
-   - Where: :4607 "composer unreadable mid-turn" and :17620 "could not be read while the turn was running". When `RCY_DEFERRED=1` the child runs after the turn has ended.
+   - Where: :4607 "composer unreadable mid-turn" and :17620 "could not be read while the turn was running" (at trunk `cc863bdaf`: :4618 and :17631). When `RCY_DEFERRED=1` the child runs after the turn has ended.
    - Test: assert on the retry ticket's `.why` written by `hf_recycle_retry_ticket`. A `NOTIFY:` line never appears under that suite's `hf_bounded` stub, so an assertion on it passes before the fix.
 6. **Capture the screen on every `held-unreachable` and `held-exit-readback`.**
    - Write it through the existing `scripts/lib/lr-composer-snapshot.sh` facility, mode 0600 and bounded. None of F2 or F3 has a screen witness, and one capture would have made the diagnosis immediate.
