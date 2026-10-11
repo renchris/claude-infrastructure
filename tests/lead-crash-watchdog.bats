@@ -30,6 +30,12 @@ setup() {
   # default is the LIVE ~/.claude/logs/handoffs.jsonl, so leaving it unset would let 1,000+ real rows
   # decide a test's verdict. Absent-by-default here — the arm must degrade cleanly with no log.
   export CC_HANDOFF_LOG="$BATS_TEST_TMPDIR/handoffs.jsonl"
+  # The signal-exit marker case sources handoff-fire.sh, whose account sweep and heal lock default to
+  # absolute /tmp paths and a bare claude-accounts off the operator's PATH. Absent paths: those
+  # sensors fail open, and nothing here wants them.
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/handoff-account-sweep.json"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/no-claude-accounts"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/claude-accounts-heal-"
   mkdir -p "$CC_ACCOUNT_BASES/projects/proj" "$CC_JETSAM_DIRS" "$CC_TEARDOWN_DIR" "$CC_REGISTRY_DIR"
 }
 
