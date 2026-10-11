@@ -217,7 +217,15 @@ def _census(
     now: float,
 ) -> Tuple[List[T.Bucket], List[Tuple[str, str, str]]]:
     paths = ctx.paths
-    req_by_sid = {r.sid: r for r in reqs}
+    # One request per sid, the highest origin: a hook <sid>.json sorts after the operator's
+    # <sid>.cc-lr.json, so last-wins shadowed cc-lr and left the record plan_only (D2, 2026-10-11).
+    req_by_sid: Dict[str, T.Request] = {}
+    for r in reqs:
+        cur = req_by_sid.get(r.sid)
+        if cur is None or census.origin_rank(r.origin) >= census.origin_rank(
+            cur.origin
+        ):
+            req_by_sid[r.sid] = r
     # Every configured account store: a dead session has no live holder, so its own store is unknown
     # and the reconcile must look in all of them (the parameter existed; nothing passed it, W5 rig).
     amap = _amap(ctx.home)

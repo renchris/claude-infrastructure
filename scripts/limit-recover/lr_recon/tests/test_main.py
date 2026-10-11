@@ -735,6 +735,26 @@ class MainTests(unittest.TestCase):
         M._census(ctx, snap, {}, M.store.list_requests(self.paths), "act", now)
         self.assertFalse(os.path.exists(self.req), "both markers + recon.on: claimed")
 
+    def test_a_cc_lr_request_outranks_a_hook_request_for_the_same_sid(self):
+        """D2 (lr-reliability 2026-10-10, rank 2): a hook request <sid>.json sorts after the
+        operator's <sid>.cc-lr.json, so last-wins left the record hook-origin and plan_only
+        (4 of 4 that night). The higher origin wins whatever order the requests arrive in."""
+        import time
+
+        now = time.time()
+        sid = "abcdef01-0000-0000-0000-000000000001"
+        M.store.ensure_dirs(self.paths)
+        with open(os.path.join(self.paths.requests, sid + ".cc-lr.json"), "w") as fh:
+            json.dump({"sid": sid, "mode": "recover"}, fh)
+        reqs = M.store.list_requests(self.paths)
+        self.assertEqual(sorted(r.origin for r in reqs), ["cc-lr", "hook"])
+        for order in (reqs, list(reversed(reqs))):
+            ctx = M.Ctx(self.paths, None, self.home)
+            M._census(ctx, _snap(now, self.tmp), {}, order, "observe", now)
+            rec = ctx.records[sid]
+            self.assertEqual(rec.origin, "cc-lr", [r.origin for r in order])
+            self.assertFalse(rec.plan_only, [r.origin for r in order])
+
     def test_a_stale_request_leaves_a_terminal_not_needed_member(self):
         """W5 rig: a request for a dead session was claimed NOT_NEEDED and left no cohort member."""
         import time
