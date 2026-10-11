@@ -34,6 +34,18 @@ Tool behaviour:
   call of at most 270 seconds that loops until its output shows it finished (for example
   `timeout 270 bash -c 'until grep -q DONE out.log; do sleep 15; done'`), repeated until it has.
   The Bash tool refuses `sleep N` followed by another command.
+- Claude Code's built-in removal check holds a 2-minute prompt and then **denies** the call when
+  nobody answers; no allow rule can approve it. Keep commands readable to it:
+  (1) No `bash -c '…'`/`sh -c '…'` around a function, a `"$@"` runner, a `$VAR` used as a command,
+  `source`/`.`/`eval`, `set --` or `{a,b}`, even with no rm in it. A script that removes nothing may
+  go in a file run as `bash /tmp/<name>.sh` (`timeout N bash /tmp/<name>.sh` for a bound); a plain
+  `timeout N bash -c '<loop>'` with none of those constructs is fine. Do not just unwrap bash into
+  the call: the Bash tool runs zsh, which does not word-split `$VAR`, so bind a multi-word command
+  as a function, `AB(){ agent-browser --session x "$@"; }`, not `AB="agent-browser …"; $AB`.
+  (2) Every rm/rmdir target is a literal absolute path or `"${VAR:?}"`-guarded, never `$D/*`.
+  (3) Never `cd X; rm rel/*`; write `rm -f /abs/X/rel/*`.
+  (4) Never move a removal into a script file, python, `find -delete` or another shell to get past
+  the check; if a removal is still refused, report the exact command to your caller.
 - The Edit and Write tools accept only files opened with the Read tool in this context; a Bash `cat`
   or `sed` read does not count.
 - Label every number you report as measured (name the command) or estimated (name the method).
