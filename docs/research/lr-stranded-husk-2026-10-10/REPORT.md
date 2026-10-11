@@ -818,3 +818,42 @@ Measured on the live box (lead, c2eaac99a): `lr_successor_state` reads 186452ed 
 Incident during round 2: a PTY probe slot submitted `/model haiku`, which Claude Code 2.1.293 persisted to the shared `~/.claude/settings.json` despite `--setting-sources project,local` (06:44:33Z). The lead removed the key (~06:58Z; every backup lacks it). Memory: `pty-probe-slash-command-writes-shared-user-settings`.
 
 Execution: five named teammates (Agent Teams, one worktree each), each starting from its lane's prototype diff under /tmp/lrsh-r2/ plus the skeptic's required changes; lead merges, re-runs the suites, lands, converges, then runs the field proof.
+
+---
+
+## Implementation and field proof (2026-10-10 → 2026-10-11)
+
+**Landed** (content-verified on origin/main; every new case red on the pre-fix tree, green after):
+
+| cause | commits on main | what is now true |
+|---|---|---|
+| shared | 2158f14ad | `lr_successor_state` says who carries a moved session, by each holder's account; an env-less holder is `unknown`, never a successor |
+| C1 | 22df298c6 | a limit-transplant recycle answers "Exit and stop tasks" over a watcher-only session; a digit that lands in the composer is scrubbed and `/exit` re-submitted once |
+| C2 | 3eaac213c, d30f1f3ad, 9cbb4cfaa | the poller (and the reconciler's census) keep a stranded-husk request, file one for an already-retired record, dispatch the husk recovery, and refund a HELD attempt |
+| C3 | 30ecec45d, 8025b3ebf, c69aae9a7 | `lr-fleet --one` drives a husk to `handoff-fire --recycle --transplanted-source --husk --transplant-cause limit`; the at-rest readers see past the `/exit` echo; every refusal names `cc-lr recover <sid8>` and asks nobody for a keystroke |
+| C4 + C6 | edd4c6ab3, 027b7e99a | the recycle saves the prompt box (text + image bytes), clears it, and the watcher puts it back unsent — images by bracketed paste of the saved path; one carry library serves lr-upgrade too |
+| C5 | f190aa016, 25e237eab | the Stop hook blocks "clear/press/type … in pane N and tell me"; limit-recover.md carries the operator ruling |
+| suites | f23669723, e667558fc | two load/history-window fixture fixes; dead assertions revived |
+| C7 (found by the field proof) | 0584f0720 | in a narrow pane `/exit` opens the slash-command menu ABOVE the box; its `❯ /exit` row read as a dialog and the read-back held. Suggestion rows are now exempt; an unconfirmed `/exit` is receipted as rail residue |
+
+Lead re-run on the merged tree (bats, serial, plan lines asserted): 28 suites green, then 10 more after C7. The land gate caught a hermeticity seam, two pipefail pipes, an unused variable and 15 dead assertions in the new suites; all fixed before the land.
+
+**Field proof — pane 168 (session 186452ed), zero operator keystrokes:**
+
+| time (UTC) | actor | event |
+|---|---|---|
+| 10-11 00:30:49 | reset poller (launchd, unattended) | `STRANDED-HUSK … filed a stranded-husk request` |
+| 00:42:17 | poller | dispatched the husk recovery (attempt 1/3) |
+| 00:46:55 | handoff-fire | `recycle-composer-carried`: `[Image #5]` + `5.png` saved to `~/.reso/limit-recover/drafts/186452ed…/20261011T004654Z`, box cleared |
+| 00:47:42 | handoff-fire | HELD `exit-readback` — the slash-menu defect (C7); nothing submitted |
+| 01:08:21 | poller | attempt refunded (HELD, nothing moved) and re-dispatched on the old code; held again |
+| 01:47–01:56 | lead | C7 landed (0584f0720) and converged |
+| 01:58:18 | poller | attempt 3/3 on the fixed code |
+| 01:59:55 | lr-fleet | `husk-recycle/RECOVERED` — the husk (pid 28699) exited; registry row 168 = pid 33527, `claude-quaternary` |
+| 02:00:10 | watcher | `recycle-engaged` — a real assistant turn within 4 s |
+
+Process census: one `claude --resume 186452ed…` (pid 33527) on ttys025, `CLAUDE_CONFIG_DIR=~/.claude-quaternary`, `KITTY_WINDOW_ID=168`. The draft: attempt 3 found only the rail's own `/exit` residue in the box (scrubbed), so the operator's `[Image #5]` stays saved at the path above with byte-identical `5.png`; at 02:02Z the lead put it back into the successor's box, unsent, with the landed carry library (`cc_carry_putback 168 <dir> … at_rest`): rc 0, `attached:…/5.png`, the box reads `[Image#4]` (the successor numbers its own chips), and the successor's `images/4.png` is byte-identical (`cmp`) to the operator's original `5.png`. That write reused the successor's chip path, so the temp copy of the operator's earlier image 4 was replaced; the original is kept in `20261010-preserve/4.png`.
+
+Panes 2/3/14 (`unmoved` admits): recovered in place on next2 after its 11:00Z reset — pane 2 by the new code's first poller tick (00:31:49Z), panes 3 and 14 at 11:21Z.
+
+CI: GitHub Actions is disabled on the private repo by design (`46-public-repo-cutover.sh`: private macOS minutes would bill). CI runs on the public projection (`renchris/claude-infrastructure`), which `public-publish-tick` pushes every 3 h; `hermetic` runs there hourly at :17.
