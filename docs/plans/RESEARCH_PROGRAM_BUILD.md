@@ -163,7 +163,9 @@ Owns §10 items 1 (deny half), 2, 3, 8, 11, 12, 13 (populating the set). Reads, 
     hardening in the same change: `Goal set: ` and `<\agent-message` are machine envelopes, an envelope's
     `--requires-gate` marker counts only when it names the routed slug, and `detach <log>` is read through.
   - Program resolution by alias is per prompt: a pane that named the program once is ordinary again on its next
-    prompt that does not.
+    prompt that does not, and a machine envelope naming it (peer mail, a notify-back, a `Goal set:` echo) does not
+    make it a program session again; only a fired session's own brief (HANDOFF-ENGAGE-, a leading `[handoff `)
+    does (2026-10-11, operator ruling on the lead's re-route by peer mail; router.py FIRE_BRIEF).
   - Kill switches, all launch-environment only (no tool call can set them): `CC_RESEARCH_BLOCK=0`,
     `CC_RESEARCH_ROUTER=off`, `CC_RESEARCH_RELAY_CHECK=0`.
   - The router was written from the route table in REPORT.md §4.1, never from candidate prompts: the evidence

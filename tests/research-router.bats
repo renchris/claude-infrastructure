@@ -472,6 +472,50 @@ cert_round_open() {
   [ "$(tool Bash 'handoff-fire.sh --prompt-file x self-close')" = deny ]
 }
 
+# RED-proof: on 55444343d (envelope_prompt labeled every unrouted envelope naming the program) the
+# lead, fresh and goalonly panes read `other` and the lead's fire reads deny — the 2026-10-11 lead
+# re-routed by peer mail. The worker and inroot halves pin what must survive the fix (mutants: drop
+# `a.by == "prompt"` and inroot's Read is denied; drop the FIRE_BRIEF exception and worker reads none).
+@test "outside every root, an envelope naming the program leaves an ordinary pane ordinary; a fire brief still routes" {
+  state certifying
+  E="$BATS_TEST_TMPDIR/elsewhere"
+  prompt 'the demo: build the parser' "$E" lead >/dev/null
+  [ "$(label lead)" = work-order ]
+  prompt 'upgraded, continue' "$E" lead >/dev/null
+  [ "$(label lead)" = none ]
+  : > "$STUB_LOG"
+  prompt '<task-notification>peer mail: the demo round 1 complete</task-notification>' "$E" lead >/dev/null
+  [ "$(label lead)" = none ]
+  [ "$(tool Bash 'handoff-fire.sh --prompt-file x --worktree fix/kit' "$E" lead)" = allow ]
+  prompt '<task-notification>the demo: round 2 is due</task-notification>' "$E" fresh >/dev/null
+  [ "$(label fresh)" = none ]
+  # The accepted widening, pinned: a /goal echo naming the program leaves an unrouted pane alone too.
+  prompt 'Goal set: the demo round 2 is due' "$E" goalonly >/dev/null
+  [ "$(label goalonly)" = none ]
+  [ ! -s "$STUB_LOG" ]
+  prompt 'Fix the kit for the demo. HANDOFF-ENGAGE-1-2-3' "$E" worker >/dev/null
+  [ "$(label worker)" = other ]
+  [ "$(tool Agent 'x' "$E" worker)" = deny ]
+  [ "$(tool Bash 'handoff-fire.sh --prompt-file x --worktree fix/kit' "$E" worker)" = deny ]
+  prompt '[handoff recycle] continue the demo kit fix' "$E" recycled >/dev/null
+  [ "$(label recycled)" = other ]
+  prompt '<task-notification>peer mail: the demo round 1 complete</task-notification>' "$PROG/src" inroot >/dev/null
+  [ "$(label inroot)" = other ]
+  [ "$(tool Read 'x' "$PROG/src" inroot)" = allow ]
+}
+
+# RED-proof is by mutant: an exemption in research_clause for a fire whose --worktree/--cwd/--repo
+# lies outside every root flips both fires below to allow (operator ruling 2026-10-11: every fire
+# stays a research verb on a turn routed other, wherever it is aimed).
+@test "a pane outside every root routed as other by a genuine prompt keeps every fire blocked, wherever it fires" {
+  state certifying
+  E="$BATS_TEST_TMPDIR/elsewhere"
+  prompt 'the demo status please' "$E" lead2 >/dev/null
+  [ "$(label lead2)" = other ]
+  [ "$(tool Bash 'handoff-fire.sh --prompt-file x --worktree fix/kit --repo /tmp/other' "$E" lead2)" = deny ]
+  [ "$(tool Bash 'handoff-fire.sh --prompt-file x --cwd /tmp/outside' "$E" lead2)" = deny ]
+}
+
 @test "a certification-round activity unlocks nothing once the program is certified" {
   state certified
   cert_round_open

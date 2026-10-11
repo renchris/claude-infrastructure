@@ -18,7 +18,8 @@ scripts/lib/research-program.sh (wave A1's resolver, the one key every exemption
       sees the route and the one word that undoes it.
       A machine-envelope FIRST prompt (no route record yet) is labeled without the classifier and
       recorded `by: envelope`: work-order on a --requires-gate marker, else a named predecessor's
-      non-relayed label, else other.
+      non-relayed label, else other. Outside every root (`--by prompt`) only a fired session's own
+      brief (FIRE_BRIEF) is labeled so; any other envelope naming the program leaves the pane ordinary.
   router.py tool [--program P]                               (hooks/research-block.sh)
       PreToolUse. Prints a deny, or nothing (allow).
   router.py relay-check --session SID                        (hooks/completion-assert.sh)
@@ -36,7 +37,10 @@ prompt. A machine-envelope prompt (a fired or recycled successor's brief) is nev
 keeps the session's last label unless that label is a relay one, which becomes `other`, `by:
 envelope` (a relay label governs one re-ask turn and is not carried into a continuation); as the
 session's FIRST prompt it gets a deterministic `by: envelope` label (envelope_label) so a successor
-is not left unlabeled, which would deny it every tool.
+is not left unlabeled, which would deny it every tool. Outside every root an unlabeled pane is not a
+program session, so there the first-prompt label is given only to a fired session's own brief
+(FIRE_BRIEF: HANDOFF-ENGAGE-…, a leading `[handoff `); peer mail, task notifications and `Goal set:`
+echoes that name the program leave an ordinary pane ordinary.
 
 THE OVERRIDE: the one word `misrouted`, typed alone right after a relay turn in the same program,
 re-routes that previous prompt as `other`, `by: override`, without the classifier. It never grants
@@ -146,6 +150,10 @@ MACHINE_ENVELOPE = re.compile(
     r"|<\\agent-message|Goal set: )"
     r"|HANDOFF-ENGAGE-[A-Za-z0-9._-]+"
 )
+# A fired session's own first prompt, the two envelopes da9da7a18's first-prompt label was meant for:
+# handoff-fire.sh embeds HANDOFF-ENGAGE- in every real non-recycle fire (its ENGAGE_VERIFY copy), and
+# a leading `[handoff ` marks a recycle brief. Outside every root only these route an unrouted pane.
+FIRE_BRIEF = re.compile(r"^\s*\[handoff |HANDOFF-ENGAGE-[A-Za-z0-9._-]+")
 
 # The route definitions, shared word for word by the classifier and the held-out raters
 # (heldout-rate.py), so the sealed set's gold labels and the router answer the same question.
@@ -1094,11 +1102,20 @@ def envelope_prompt(a: argparse.Namespace, sid: str, prompt: str) -> int:
     """A machine-envelope prompt. With a route record a non-relay label stands (§4.2), and a relay
     label is rewritten to `other`, `by: envelope`: it governed one re-ask turn, and a continuation
     is not one. As the session's first prompt in a blocking program it gets envelope_label's label,
-    recorded `by: envelope`, so cmd_tool does not read the session as unlabeled (completeness)."""
+    recorded `by: envelope`, so cmd_tool does not read the session as unlabeled (completeness).
+    A pane routed by name (`--by prompt`, outside every root) with no route record is ordinary, and
+    a machine envelope naming the program (peer mail, a notify-back, a `Goal set:` echo) leaves it
+    ordinary; only a fired session's own brief (FIRE_BRIEF) routes it."""
     if a.clear or not a.program or a.state not in BLOCKING_STATES:
         return 0
     prev = route_load(sid)
     if prev and prev.get("label") not in RELAYED:
+        return 0
+    # REPORT.md:806-807: a continuation keeps the label of the last genuine prompt, and outside every
+    # root that prompt left the pane ordinary (RESEARCH_PROGRAM_BUILD.md, per-prompt alias routing).
+    # The first-prompt label (da9da7a18) exists because an UNLABELED IN-ROOT session is denied every
+    # tool; an unlabeled out-of-root pane is simply not a program session, so it needs none.
+    if not prev and a.by == "prompt" and not FIRE_BRIEF.search(prompt):
         return 0
     if prev:
         label, reason = (
