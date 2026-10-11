@@ -359,6 +359,23 @@ reads() { wc -l < "$READS" | tr -d ' '; }
   [ "$rc" -eq 2 ]; [ "$(reads)" -eq 3 ]
 }
 
+# Peer review of the merged branch: a whole-screen checksum never confirmed a static screen whose
+# status line ticks UNDER the box, so the hold fell back to the full wait (F3 again). The match now
+# stops at the box's bottom border: what ticks below it is ignored, a spinner above it still counts.
+@test "[RED] static confirm: a status line ticking UNDER the box still confirms at the second read; a spinner ABOVE it does not" {
+  units
+  screen_slash_menu
+  # shellcheck disable=SC2329  # called by composer_content
+  hf_bounded() { echo r >> "$READS"; sed "\$s/.*/  ⏵⏵ auto mode on · tick $(reads)/" "$SCREEN_FILE"; }
+  : > "$READS"; rc=0; out="$(HF_COMPOSER_SLASH_MENU=off recycle_composer_gate it2 77 30 1)" || rc=$?
+  [ "$rc" -eq 3 ] || { echo "rc=$rc reads=$(reads)"; false; }
+  [ "$out" = dialog-above ]; [ "$(reads)" -eq 2 ]
+  # shellcheck disable=SC2329  # called by composer_content
+  hf_bounded() { echo r >> "$READS"; sed "16s/.*/✻ Working… ($(reads)s)/" "$SCREEN_FILE"; }
+  : > "$READS"; rc=0; HF_COMPOSER_SLASH_MENU=off recycle_composer_gate it2 77 2 1 >/dev/null || rc=$?
+  [ "$rc" -eq 2 ]; [ "$(reads)" -eq 3 ]
+}
+
 @test "hf_new_prompt_since: tool results, hook feedback, subagent traffic and older prompts are not new prompts" {
   units
   since="$(date +%s)"

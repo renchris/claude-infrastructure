@@ -4248,12 +4248,12 @@ composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer c
     END {
       # a ❯ under the last border: a dialog, not a footer (static). With no border on screen at all
       # the flag only means a ❯ somewhere in the output, e.g. an echoed prompt mid-turn: no box.
-      if (gb) exit (b1 > 0 ? 10 : 9)
+      if (gb) { if (b1 > 0) { print b1; exit 10 }; exit 9 }
       if (b1 > 0 && b2 == 0) { print NR - b1; exit 8 }  # a bottom border and no top: maybe a TALL box
       if (b1 == 0 || b2 == 0 || b1 - b2 < 2) exit 9      # no box between two borders ⇒ UNKNOWN
       if (index(line[b2], u) != 1) exit 9                # an indented "box": a composer printed in output
       cmd = (index(line[b2 + 1], g) == 1) ? slashcmd(line[b2 + 1]) : ""   # the "/cmd" the box holds, if any
-      for (i = 1; i < b2; i++) if (selector(line[i])) exit 11  # a dialog drawn ABOVE a live composer (static)
+      for (i = 1; i < b2; i++) if (selector(line[i])) { print b1; exit 11 }  # a dialog drawn ABOVE a live composer (static)
       print (b2 + 1) "," (b1 - 1)
     }')" && rc=0 || rc=$?
   # A TALL COMPOSER (goal-arm-readback, 2026-10-10). A /goal of ~470 chars in a 32-column pane wraps
@@ -4312,14 +4312,14 @@ composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer c
         if (bot < 2 || !border(line[bot])) exit 9                        # (i): the screen MOVED between the reads
         for (top = bot - 1; top > 0 && !border(line[top]); top--) ;
         if (top < 1) exit 9                                               # a lone rule: no box at all
-        if (bot - top < 2 || index(line[top], u) != 1) exit 12            # (ii) — 12: tall-rejected (static)
+        if (bot - top < 2 || index(line[top], u) != 1) { print bot; exit 12 }  # (ii) — 12: tall-rejected (static)
         tail = (index(line[top + 1], g) != 1)                             # (iii), or a SCROLLED box
-        if (tail && substr(line[top + 1], 1, 2) != "  ") exit 12
+        if (tail && substr(line[top + 1], 1, 2) != "  ") { print bot; exit 12 }
         for (i = top + 2; i < bot; i++)                                   # (iv)
-          if (line[i] !~ /^[ \t\r]*$/ && substr(line[i], 1, 2) != "  ") exit 12
+          if (line[i] !~ /^[ \t\r]*$/ && substr(line[i], 1, 2) != "  ") { print bot; exit 12 }
         for (i = bot + 1; i <= NR; i++)                                   # (v)
-          if (index(line[i], g) > 0) exit 12
-        for (i = 1; i < top; i++) if (selector(line[i])) exit 12         # (vi)
+          if (index(line[i], g) > 0) { print bot; exit 12 }
+        for (i = 1; i < top; i++) if (selector(line[i])) { print bot; exit 12 }  # (vi)
         print (top + 1) "," (bot - 1) (tail ? ",T" : "")
       }')" && rc=0 || rc=$?
     case "$span" in *,T) tailonly=1; span="${span%,T}" ;; esac
@@ -4328,6 +4328,10 @@ composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer c
   # two reads (i) is a screen in motion, and a rule with no top border anywhere is no box at all; both
   # stay the turn shape. The shape file gets the name AND a checksum of the screen, so a caller can
   # ask whether two reads saw the very same screen (a running turn's spinner timer never does).
+  # The checksum stops at the box's bottom border (each static exit above prints that row): the
+  # spinner sits ABOVE the box, so it still breaks the match, while a status line or clock ticking
+  # UNDER the box no longer does. Counting that would never confirm and fall back to the full wait,
+  # which is F3 again (peer review of the merged branch).
   case "$rc" in
     0) ;;
     10) shape=glyph-below ;;
@@ -4336,8 +4340,9 @@ composer_content() { # $1=it2-bin $2=session-id → stdout: printable composer c
     *) return 1 ;;
   esac
   if [ -n "$shape" ]; then
+    case "$span" in ''|*[!0-9]*) span='$' ;; esac
     [ -z "${HF_COMPOSER_SHAPE_FILE:-}" ] \
-      || printf '%s\t%s\n' "$shape" "$(printf '%s' "$plain" | cksum)" > "$HF_COMPOSER_SHAPE_FILE" 2>/dev/null || true
+      || printf '%s\t%s\n' "$shape" "$(printf '%s\n' "$plain" | sed -n "1,${span}p" | cksum)" > "$HF_COMPOSER_SHAPE_FILE" 2>/dev/null || true
     return 3
   fi
   # Drop every escape sequence and every FAINT run. SGR params are parsed, not substring-matched:
