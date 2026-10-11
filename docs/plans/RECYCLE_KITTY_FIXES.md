@@ -31,3 +31,11 @@ Scope (frozen): implement REPORT fixes 2-9, and fix 10 once its throwaway-pane S
 ## Wave status
 
 (Each wave appends its landed sha and learnings here when it reports.)
+
+- 2026-10-11 ~07:00Z: W1, W2, W3, W5 and W6 fired on next2 (panes 246, 247, 248, 249, 250), with goals armed and verified.
+- **2026-10-11 ~07:05Z, ruling: duplicate program found, which wins.** W1 reported that branch `fix/recycle-gaps-kitty` (lead pane 232; 15 commits at `5c9379107`, unlanded) already implements fixes 2-6, 7a, 7b, 9 and 10 (SIGTERM, `1ac887d20`).
+  - **Why it wins:** landing both would put two copies of each mechanism into the same `handoff-fire.sh` functions, and that program is hours ahead.
+  - **W1, W2 and W5** stand down unlanded. Each commits its work on its own branch, runs its new cases against the rgk tree and sends the failures (rgk's real gaps) to pane 232.
+  - **W3** (fix 8) continues: it is not in rgk's diff.
+  - **W6** continues as the independent check of rgk's SIGTERM design.
+  - **W4** shrinks to fix 8b (hold `/exit` under extreme load when the successor cannot be claimed). It is offered to rgk's lead, and fires from here only after rgk lands, since rgk owns `handoff-fire.sh` until then.
