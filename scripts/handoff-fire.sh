@@ -3408,6 +3408,18 @@ hf_exit_readback() { # $1=pane → 0 exact /exit read back and CR sent · 1 not 
 #       before the signal, so a reused pid is never the one signalled.
 # A claude still running after HF_EXIT_SIGNAL_GRACE_S gets no KILL: the caller holds, and says the
 # session is alive. Kill switch HF_EXIT_ACTUATOR=typed.
+# NOTHING HERE STANDS THE SESSION'S INBOX WATCHER DOWN FIRST, and nothing may: `cc-await-ping
+# --stand-down` makes the asyncRewake hook exit 2, CC starts a turn on it, and the at-rest proof is
+# stale before the signal lands (docs/research/recycle-sigterm-proof-2026-10-11/REPORT.md, run r7).
+# The shutdown kills the watcher itself.
+
+# THE GRACE IS 30 s, NOT 10 (same report). shutdown() arms its own failsafe at max(5 s, SessionEnd
+# budget + 5 s), 15 s by default, and SessionEnd alone may take 10 s, so a 10 s grace held a slow
+# but certain exit as exit-signal-ignored — and that hold disarms the watcher and strands the pane.
+# A non-numeric value takes the default rather than ending the wait at once.
+hf_exit_signal_grace() { # → seconds to wait for the exit after SIGTERM
+  case "${HF_EXIT_SIGNAL_GRACE_S:-}" in ''|*[!0-9]*) printf '30' ;; *) printf '%s' "$HF_EXIT_SIGNAL_GRACE_S" ;; esac
+}
 
 # The pin: a process on the pane's tty TREE (pane_cc_state's leg (a): a resumed claude runs on
 # expect's NESTED pty) that pid_is_cc accepts AND that CC's own per-pid row names as the session
@@ -3471,7 +3483,7 @@ hf_exit_signal() { # $1=pane $2=pane tty $3=session id → 0 claude exited on SI
   if ! kill -TERM "$pid" 2>/dev/null && [ "$(_hf_lstart "$pid")" = "$HF_EXIT_SIG_LSTART" ]; then
     HF_EXIT_SIG_WHY="kill -TERM $pid was refused"; return 1
   fi
-  end=$((SECONDS + ${HF_EXIT_SIGNAL_GRACE_S:-10}))
+  end=$((SECONDS + $(hf_exit_signal_grace)))
   while :; do
     # Gone, another process under the pid, or a zombie its shell has yet to reap: all are exited.
     [ "$(_hf_lstart "$pid")" = "$HF_EXIT_SIG_LSTART" ] || return 0
@@ -17694,9 +17706,9 @@ recycle_fire_commit() {
   hf_exit_signal "$SID" "${tty:-}" "$rcy_debt_sid" || rcy_sig_rc=$?
   case "$rcy_sig_rc" in
     0) return 0 ;;
-    2) [ -n "$rcy_debt_sid" ] && _hf_resume_debt abandon --sid "$rcy_debt_sid" --why "exit signal ignored: SIGTERM sent to claude pid $HF_EXIT_SIG_PID, still running after ${HF_EXIT_SIGNAL_GRACE_S:-10}s, no KILL sent, nothing typed; session alive"
-       hf_recycle_hold exit-signal-ignored "SIGTERM to claude pid $HF_EXIT_SIG_PID (lstart $HF_EXIT_SIG_LSTART) ignored for ${HF_EXIT_SIGNAL_GRACE_S:-10}s, no KILL sent" \
-         "claude pid $HF_EXIT_SIG_PID is still running ${HF_EXIT_SIGNAL_GRACE_S:-10}s after SIGTERM; no KILL was sent and nothing was typed, so the session is alive. Should it exit later, its pane returns to a shell with no relaunch" ;;
+    2) [ -n "$rcy_debt_sid" ] && _hf_resume_debt abandon --sid "$rcy_debt_sid" --why "exit signal ignored: SIGTERM sent to claude pid $HF_EXIT_SIG_PID, still running after $(hf_exit_signal_grace)s, no KILL sent, nothing typed; session alive"
+       hf_recycle_hold exit-signal-ignored "SIGTERM to claude pid $HF_EXIT_SIG_PID (lstart $HF_EXIT_SIG_LSTART) ignored for $(hf_exit_signal_grace)s, no KILL sent" \
+         "claude pid $HF_EXIT_SIG_PID is still running $(hf_exit_signal_grace)s after SIGTERM; no KILL was sent and nothing was typed, so the session is alive. Should it exit later, its pane returns to a shell with no relaunch" ;;
     *) echo "→ exit: typed /exit — $HF_EXIT_SIG_WHY" ;;
   esac
   # ── /exit, READ BACK (W2b) — see hf_exit_readback. Kill switch HF_EXIT_READBACK=off restores the

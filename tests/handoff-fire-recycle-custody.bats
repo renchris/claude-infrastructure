@@ -473,7 +473,8 @@ load_tail_funcs() {
              hf_recycle_lock_acquire hf_recycle_disarm hf_wake_guard hf_pane_focused hf_lr_lib_load _hf_focus_composer hf_focus_gate \
              hf_recycle_unconfirm hf_recycle_hold hf_recycle_last_read hf_exit_readback recycle_fire_commit \
              composer_residue_dir composer_residue_record \
-             pid_is_cc hf_succ_ours_staged write_teardown_marker hf_exit_signal_pin hf_exit_signal; do
+             pid_is_cc hf_succ_ours_staged write_teardown_marker hf_exit_signal_pin hf_exit_signal \
+             hf_exit_signal_grace; do
       sed -n "/^$f() {/,/^}/p" "$HF"
     done
   } > "$FUNCS"
@@ -827,6 +828,19 @@ alive() { kill -0 "$1" 2>/dev/null; }
   grep -q '^transplant --phase unconfirm ' "$CALLS" || { cat "$CALLS"; false; }
   [[ "$output" == *"no KILL"* ]] || { echo "$output"; false; }
   [[ "$output" != *"/exit was TYPED"* ]] || { echo "$output"; false; }
+  # The hold names the grace it actually waited (the world sets 2 s).
+  [[ "$output" == *"still running 2s after SIGTERM"* ]] || { echo "$output"; false; }
+}
+
+# docs/research/recycle-sigterm-proof-2026-10-11/REPORT.md: CC's shutdown failsafe is 15 s and
+# SessionEnd alone may take 10, so a 10 s default held a certain exit and stranded the pane.
+@test "16f [RED] the signal grace defaults to 30 s, longer than CC's 15 s failsafe; an override is honoured, junk is not" {
+  load_tail_funcs
+  unset HF_EXIT_SIGNAL_GRACE_S
+  [ "$(hf_exit_signal_grace)" = 30 ] || { echo "default: $(hf_exit_signal_grace)"; false; }
+  [ "$(HF_EXIT_SIGNAL_GRACE_S=45 hf_exit_signal_grace)" = 45 ]
+  [ "$(HF_EXIT_SIGNAL_GRACE_S=10s hf_exit_signal_grace)" = 30 ]
+  [ "$(HF_EXIT_SIGNAL_GRACE_S= hf_exit_signal_grace)" = 30 ]
 }
 
 @test "16e [RED] HF_EXIT_ACTUATOR=typed restores the typed /exit even when every signal fact holds" {
