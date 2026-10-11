@@ -207,23 +207,22 @@ EOF
 # A terminal gets the short block (no literal backticks, state on line 1); everything
 # else keeps the two-line form the /keep-laptop-alive skill relays verbatim. `script`
 # gives the command a real pty, which is the only honest way to make `[ -t 1 ]` true.
-@test "a terminal gets the short block, both ways, with no literal backticks" {
-  run script -q /dev/null "$LID" </dev/null
+@test "a terminal gets now / toggle command / where toggling leaves it, both ways" {
+  NO_COLOR=1 run script -q /dev/null "$LID" </dev/null
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Lid closed →"* ]] || false
-  [[ "$output" == *"SLEEPS"* ]] || false
-  [[ "$output" == *"cc-lid on"* ]] || false
+  [[ "$output" == *"Now:     The laptop SLEEPS when the lid is closed."* ]] || false
+  [[ "$output" == *"Toggle:  cc-lid toggle → it would KEEP RUNNING with the lid closed."* ]] || false
   [[ "$output" != *'`'* ]] || false
-  [[ "$output" != *"The laptop SLEEPS"* ]] || false
   echo 1 > "$D/state"
-  run script -q /dev/null "$LID" </dev/null
-  [[ "$output" == *"KEEPS RUNNING"* ]] || false
-  [[ "$output" == *"cc-lid off"* ]] || false
+  NO_COLOR=1 run script -q /dev/null "$LID" </dev/null
+  [[ "$output" == *"Now:     The laptop KEEPS RUNNING with the lid closed."* ]] || false
+  [[ "$output" == *"Toggle:  cc-lid toggle → it would SLEEP when the lid is closed."* ]] || false
   [[ "$output" != *'`'* ]]
 }
 
-@test "NO_COLOR keeps the terminal layout but emits no escape codes" {
+@test "colour is on in a terminal and NO_COLOR turns it off" {
+  run script -q /dev/null "$LID" </dev/null
+  [[ "$output" == *$'\e['* ]] || false
   NO_COLOR=1 run script -q /dev/null "$LID" </dev/null
-  [[ "$output" == *"Lid closed → SLEEPS"* ]] || false
   [[ "$output" != *$'\e['* ]]
 }
