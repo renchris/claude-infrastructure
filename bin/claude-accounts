@@ -74,6 +74,10 @@ Usage:
       the same rows as data. Three INDEPENDENT facts per backend — installed / authenticated /
       has a headless agent mode — because only the third decides routability, and a presence
       check silently skips it (an editor launcher on PATH is not an agent backend).
+  claude-accounts --stranded [ACCT] [--hours N] [--json]  how much weekly limit was LEFT ON THE
+      TABLE: every closed weekly window (default last 6 weeks), newest first, per account — final
+      %, pp stranded, and when it reached 100% — plus a per-account total. ACCT is
+      next|next2|next3|next4 or 1-4. History only, like --strand-score below.
   claude-accounts --strand-score [--hours N] [--json]  score the weekly-drain NOWCAST against
       what each completed weekly window actually stranded, stratified by how far from the reset
       the projection was made (96/48/24/12/6h). History only — reads the utilization series and
@@ -4490,6 +4494,81 @@ def render_strand_score(sc, hours):
     return lines
 
 
+# ---- --stranded — "how much weekly limit did we leave on the table?" ------------------------------
+STRANDED_ACCTS = ("next", "next2", "next3", "next4")
+
+
+def _stranded_acct(tok):
+    """next|next2|next3|next4, with 1-4 as aliases. None for anything else (the caller exits 64)."""
+    if tok in STRANDED_ACCTS:
+        return tok
+    if tok in ("1", "2", "3", "4"):
+        return STRANDED_ACCTS[int(tok) - 1]
+    return None
+
+
+def stranded_windows(samples, now=None):
+    """completed_weekly_windows, newest first, plus `full_at`: the first sample in that window at
+    weekly_pct >= 100 (None if it never got there). NOT a second window detector — the window set
+    is completed_weekly_windows' verbatim, so a live window is excluded by its rule, not ours.
+
+    Operator question 2026-10-11, "how much weekly limit did we leave on the table for account
+    4?", took 8 tool calls because the answer existed only as strand_score's `realised`, a
+    by-product of scoring forecasts. "0 pp, reached 100% 37 min before reset" is the answer."""
+    wins = completed_weekly_windows(samples, now=now)
+    by_win = {}
+    for e in samples or []:
+        if e.get("_t") is None or e.get("weekly_pct") is None:
+            continue
+        key = _reset_key(e.get("weekly_reset_at"))
+        if key is not None:
+            by_win.setdefault((e.get("acct"), key), []).append(e)
+    out = []
+    for w in wins:
+        ss = by_win.get((w["acct"], round(w["reset_t"] / 60.0)), [])
+        full = min((e["_t"] for e in ss if e["weekly_pct"] >= 100.0), default=None)
+        out.append(dict(w, reset_at=_iso_z(w["reset_t"]), full_at_t=full,
+                        full_at=_iso_z(full) if full is not None else None))
+    out.sort(key=lambda w: w["reset_t"], reverse=True)
+    return out
+
+
+def _iso_z(t):
+    return datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def render_stranded(wins, hours, acct=None):
+    """One row per closed window, newest first, grouped by account, then a per-account total of
+    the pp stranded over the windows shown. Lines, never printed here — main() owns stdout."""
+    who = acct or "any account"
+    if not wins:
+        return [f"weekly limit left on the table — no weekly window of {who} CLOSED and was "
+                f"observed to its close inside the last {hours:.0f}h.",
+                "  (a window counts only once its reset is in the past AND a sample lands within "
+                f"{WEEKLY_TAIL_GAP_H:.0f}h of it — completed_weekly_windows)"]
+    lines = [f"weekly limit left on the table — {len(wins)} closed window(s) of {who}, last "
+             f"{hours:.0f}h, newest first",
+             "",
+             f"  {'acct':<6} {'reset (local)':<22} {'reset (UTC)':<18} {'final':>5} {'left':>6}"
+             "   reached 100%"]
+    for a in sorted({w["acct"] for w in wins}, key=str):
+        mine = [w for w in wins if w["acct"] == a]
+        for w in mine:
+            loc = datetime.fromtimestamp(w["reset_t"]).astimezone().strftime("%a %b %d %H:%M %Z")
+            utc = datetime.fromtimestamp(w["reset_t"], timezone.utc).strftime("%Y-%m-%d %H:%MZ")
+            if w["full_at_t"] is None:
+                full = "never"
+            else:
+                fu = datetime.fromtimestamp(w["full_at_t"], timezone.utc).strftime("%m-%d %H:%MZ")
+                full = f"{fu} ({fmt_h((w['reset_t'] - w['full_at_t']) / 3600.0)} before reset)"
+            lines.append(f"  {a:<6} {loc:<22} {utc:<18} {w['final_pct']:4.0f}% "
+                         f"{w['strand']:4.0f}pp   {full}")
+        tot = sum(w["strand"] for w in mine)
+        lines.append(f"  {a} total: {tot:.0f}pp stranded over {len(mine)} window(s)")
+        lines.append("")
+    return lines[:-1]
+
+
 def soonest_reset_line(rows, cfg):
     """The board's ONE drain line: the usable account whose weekly window resets first — the
     quota that expires soonest — with what is left, the burn needed to use it all, the 48h-pace
@@ -8172,6 +8251,25 @@ def main():
                               "buckets": sc["buckets"], "cells": sc["cells"]}, indent=2))
             return
         print("\n".join(render_strand_score(sc, hours)))
+        return
+
+    # --stranded [ACCT]: the realised half of --strand-score, as its own answer. Same placement,
+    # same reasons — history off the utilization series alone, no sweep, no accounts.json.
+    if "--stranded" in args:
+        i = args.index("--stranded")
+        tok = args[i + 1] if i + 1 < len(args) and not args[i + 1].startswith("--") else None
+        acct = _stranded_acct(tok) if tok is not None else None
+        if tok is not None and acct is None:
+            print(f"claude-accounts: --stranded takes an account ({'|'.join(STRANDED_ACCTS)} "
+                  f"or 1-4; got {tok!r})", file=sys.stderr)
+            sys.exit(64)
+        hours = _num_flag(args, "--hours") or STRAND_SCORE_LOOKBACK_H
+        sam, _span = _util_tail(hours=hours)
+        wins = [w for w in stranded_windows(sam) if acct is None or w["acct"] == acct]
+        if "--json" in args:
+            print(json.dumps({"hours": hours, "acct": acct, "windows": wins}, indent=2))
+            return
+        print("\n".join(render_stranded(wins, hours, acct)))
         return
 
     # --max-wait / --max-age are GLOBAL modifiers, parsed before load_cfg() because --max-wait 0

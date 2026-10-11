@@ -11,6 +11,8 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
 (repo: `claude-infrastructure/bin/claude-accounts`); the account map SSOT is
 `~/.claude/accounts.json` (launcher → config dir → email → mailbox → Dia profile).
 
+**"How much weekly limit did we leave on the table / did we waste quota last week?"** is one command, not this dashboard: `claude-accounts --stranded [acct]` (acct `next`..`next4` or `1`-`4`; `--json` for data) lists every closed weekly window, newest first, with its final %, the pp stranded, when it reached 100%, and a per-account total.
+
 ## Steps
 
 1. **Run the dashboard** (default; pass `--fresh` to bypass the 90s shared cache):
