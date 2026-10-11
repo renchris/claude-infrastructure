@@ -7,6 +7,7 @@
   round.sh close --program P --round ID --reclose --reason "<why>"
                  (a closed round, newest of its kind: re-run seed match and recompute new_material,
                  seeds_caught, quiet and round 1's forecast/R_max; the old values go to m["reclosed"])
+  round.sh artifact|split|verify-split|repass …   settling a round's holes honestly (lib/settle.py)
 
 The caps live HERE, in code (§10 item 17), and every refusal names its cap (exit 2):
   - frame critique: exactly 2 rounds of 6 reviewers across at least 3 vendor families;
@@ -557,7 +558,7 @@ def cmd_close(a: argparse.Namespace) -> int:
     tally(a.program, a.round, m)
     print(
         f"round {a.round} closed: new material {m['new_material']}, seeds caught {m['seeds_caught']}, "
-        f"quiet={m['quiet']}{', R_max ' + str(m['r_max']) if m.get('forecast') else ''}"
+        f"quiet={m['quiet']}{', R_max ' + str(m['r_max']) if m.get('forecast') else ''}{kappa_note(m)}"
     )
     activity_tail(a.program, m)
     return 0
@@ -567,13 +568,15 @@ def tally(slug: str, rid: str, m: Dict[str, Any]) -> None:
     """Match the seeds, then set the round's new_material, seeds_caught and quiet from its holes
     (and round 1's forecast and R_max), and write the matrix. Shared by close and re-close."""
     rd = rounds_dir(slug) / rid
+    built = (
+        m.get("kind") == "built"
+    )  # its seeds are the harness mutants (§11), not the plan vault
+    ids = (rid,) if built else (rid, str(m.get("seq")))
+    refuse_pending_splits(slug, ids)
     # Match seeds FIRST: seed.py match writes seed_match onto each hole that restates a seed, and
     # only then can a caught seed be told apart from a real finding.
     fr = frame(slug)
     vault = kit.sealed_dir(slug) / "vault" / "seeds.enc"
-    built = (
-        m.get("kind") == "built"
-    )  # its seeds are the harness mutants (§11), not the plan vault
     if vault.exists() and fr.get("plan") and not built:
         p = subprocess.run(
             [
@@ -605,7 +608,6 @@ def tally(slug: str, rid: str, m: Dict[str, Any]) -> None:
         }
     holes = kit.fold(kit.read_jsonl(kit.records_dir(slug) / "holes.jsonl")).values()
     # a built round is "b<n>": matching its seq would claim certification round n's holes
-    ids = (rid,) if built else (rid, str(m.get("seq")))
     mine = [h for h in holes if str(h.get("round")) in ids]
     real = [
         h
@@ -613,12 +615,23 @@ def tally(slug: str, rid: str, m: Dict[str, Any]) -> None:
         if (h.get("verification") or {}).get("status") == "CONFIRMED"
         and (h.get("materiality") or {}).get("level") == "MATERIAL"
         and not h.get("seed_match")
+        and not kit.settled_out(h)
     ]
     m["new_material"] = len(real)
     m["seeds_caught"] = sum(
         1 for h in mine if h.get("seed_match")
-    )  # never resets the quiet count (§3.9)
+    )  # never resets the quiet count (§3.9); an artifact or a split-off hole is no catch
     m["quiet"] = bool(m.get("counted")) and not real
+    m["artifacts"] = sorted(str(h["id"]) for h in mine if h.get("artifact"))
+    m["splits"] = sorted(
+        (
+            {"from": str(h["split_from"]), "to": str(h["id"])}
+            for h in mine
+            if h.get("split_from")
+        ),
+        key=lambda s: s["to"],
+    )
+    m["kappa"] = round_kappa(mine)
     recast = m["kind"] == "certification" and m.get("seq") == 1 and m.get("counted")
     if recast:  # estimate.forecast reuses a stored round-1 forecast; a re-close must recompute it
         m.pop("forecast", None)
@@ -631,6 +644,57 @@ def tally(slug: str, rid: str, m: Dict[str, Any]) -> None:
         m["forecast"] = {"p50": f["p50"], "p90": f["p90"]}
         m["r_max"] = f["r_max"]
         kit.write_json_atomic(rd / "matrix.json", m)
+
+
+def refuse_pending_splits(slug: str, ids: Tuple[str, ...]) -> None:
+    """A split-off hole counts only once a verifier read the REAL plan (round.sh verify-split): a
+    round tallied before that would print a count the split is about to change."""
+    pending = sorted(
+        str(h["id"])
+        for h in kit.fold(
+            kit.read_jsonl(kit.records_dir(slug) / "holes.jsonl")
+        ).values()
+        if str(h.get("round")) in ids
+        and h.get("split_from")
+        and (h.get("verification") or {}).get("against") != "real"
+    )
+    if pending:
+        raise Refused(
+            f"split hole(s) {', '.join(pending)} not yet verified against the real plan "
+            "(round.sh verify-split)"
+        )
+
+
+def round_kappa(mine: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """matrix.json `kappa`: rater 1 against rater 2 over the round's rated holes (kit.materiality_kappa),
+    whether the round's one rating re-pass ran, and `unstable` once it ran and agreement stayed low."""
+    k, n = kit.materiality_kappa(mine)
+    repass = any((h.get("materiality") or {}).get("repass") for h in mine)
+    low = k is not None and k < kit.KAPPA_REPASS_BELOW
+    return {
+        "materiality": k,
+        "n": n,
+        "below": kit.KAPPA_REPASS_BELOW,
+        "repass": repass,
+        "unstable": repass and low,
+    }
+
+
+def kappa_note(m: Dict[str, Any]) -> str:
+    kp = m.get("kappa") or {}
+    if kp.get("materiality") is None:
+        return ""
+    out = f", rater kappa {kp['materiality']} over {kp['n']}"
+    if kp.get("unstable"):
+        return out + " (Adjudication unstable: still low after the re-pass)"
+    if kp["materiality"] < kp["below"]:
+        return (
+            out
+            + " (below "
+            + str(kp["below"])
+            + ": rating re-pass due, round.sh repass)"
+        )
+    return out
 
 
 def later_rounds(slug: str, m: Dict[str, Any]) -> List[str]:
@@ -664,7 +728,7 @@ def cmd_reclose(a: argparse.Namespace) -> int:
         raise Refused(
             f"round {a.round} cannot be re-closed: later round(s) {', '.join(later)} already opened"
         )
-    keys = ("new_material", "seeds_caught", "quiet", "forecast", "r_max")
+    keys = ("new_material", "seeds_caught", "quiet", "forecast", "r_max", "kappa")
     entry = {
         "at": kit.now_iso(),
         "reason": a.reason.strip(),
@@ -678,6 +742,7 @@ def cmd_reclose(a: argparse.Namespace) -> int:
         f"seeds caught {was['seeds_caught']} -> {m['seeds_caught']}, "
         f"quiet {was['quiet']} -> {m['quiet']}"
         f"{', R_max ' + str(was['r_max']) + ' -> ' + str(m['r_max']) if m.get('forecast') else ''}"
+        f"{kappa_note(m)}"
     )
     activity_tail(a.program, m)
     return 0
@@ -725,10 +790,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--reason", help="why the round is re-closed (required with --reclose)"
     )
     p.set_defaults(fn=lambda a: cmd_reclose(a) if a.reclose else cmd_close(a))
+    import settle
+
+    settle.add_verbs(sub, sys.modules[__name__])  # artifact, split, verify-split, repass
     a = ap.parse_args(argv)
     try:
         kit.check_slug(a.program)
-        kit.lease_check(a.program)  # run and close both write the program's rounds
+        kit.lease_check(a.program)  # every verb writes the program's rounds or holes
         return int(a.fn(a))
     except kit.KitError as e:
         print(

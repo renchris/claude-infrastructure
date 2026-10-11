@@ -420,7 +420,8 @@ def counted_rounds(slug: str) -> List[Dict[str, Any]]:
 
 
 def counted_holes(slug: str, mats: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """The counted rounds' MATERIAL, non-seed holes, folded; round.py close selects from the same log."""
+    """The counted rounds' MATERIAL, non-seed holes, folded, less an audited artifact and a split-off
+    hole not yet verified on the real plan (kit.settled_out); round.py close selects the same way."""
     rounds = {str(m.get(k)) for m in mats for k in ("round", "seq")}
     holes = kit.fold(kit.read_jsonl(kit.records_dir(slug) / "holes.jsonl")).values()
     return [
@@ -429,6 +430,7 @@ def counted_holes(slug: str, mats: List[Dict[str, Any]]) -> List[Dict[str, Any]]
         if str(h.get("round")) in rounds
         and (h.get("materiality") or {}).get("level") == "MATERIAL"
         and not h.get("seed_match")
+        and not kit.settled_out(h)
     ]
 
 

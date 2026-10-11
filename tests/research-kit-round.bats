@@ -363,7 +363,7 @@ closed_round_2() { # round 2 as an earlier matcher closed it: the seed hole coun
   [ "$status" -eq 0 ]
   [ "$(seed_match_of H-1)" = "S-1" ]
   [ "$(field 2 'm["new_material"], m["seeds_caught"], m["quiet"], m["closed"]')" = "0 1 True True" ]
-  [ "$(field 2 '[(r["reason"], sorted(r["previous"].items())) for r in m["reclosed"]]')" = "[('matcher fixed', [('forecast', None), ('new_material', 1), ('quiet', False), ('r_max', None), ('seeds_caught', 0)])]" ]
+  [ "$(field 2 '[(r["reason"], sorted(r["previous"].items())) for r in m["reclosed"]]')" = "[('matcher fixed', [('forecast', None), ('kappa', None), ('new_material', 1), ('quiet', False), ('r_max', None), ('seeds_caught', 0)])]" ]
 }
 
 @test "close --reclose: round 1's forecast and R_max are recomputed" {
@@ -441,4 +441,121 @@ cr_state() { act "print(' '.join(a['state'] for a in activities.load()['activiti
   c="$(cr_open)"
   [ "$c" != "$a" ]
   [ "$(cr_state)" = "closed open" ]
+}
+
+# Settling a round before any plan edit (2026-10-11, lib/settle.py). RED-proof: `artifact`, `split`,
+# `verify-split` and `repass` were unknown verbs, and close counted an artifact as new material.
+evidence() { mkdir -p "$CC_RESEARCH_RECORDS/evidence"; printf '%s\n' "$2" > "$CC_RESEARCH_RECORDS/evidence/$1"; }
+
+@test "artifact: an untagged hole proved copy damage leaves every count with no catch credit; its evidence must name the real plan" {
+  seeded_round_2
+  printf '%s\n' "$SEED_HOLE" "$REAL_HOLE" > "$CC_RESEARCH_RECORDS/holes.jsonl"
+  "$R" close --program demo --round 2
+  [ "$(field 2 'm["new_material"], m["seeds_caught"]')" = "1 1" ]
+  blob="$(git hash-object "$CC_RESEARCH_RECORDS/PLAN.md")"
+  evidence bad.txt "grep -c on the plan: 0"
+  evidence real.txt "blob $blob: grep -c on the plan: 0"
+  run "$R" artifact --program demo --hole H-2 --reason "copy damage" --evidence evidence/bad.txt
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"names the real plan's blob"* ]] || false
+  run "$R" artifact --program demo --hole H-1 --reason "copy damage" --evidence evidence/real.txt
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"seed-tagged"* ]] || false
+  run "$R" artifact --program demo --hole H-2 --reason "copy damage" --evidence evidence/real.txt
+  [ "$status" -eq 0 ]
+  run "$R" close --program demo --round 2 --reclose --reason "artifact H-2"
+  [ "$status" -eq 0 ]
+  [ "$(field 2 'm["new_material"], m["seeds_caught"], m["quiet"], m["artifacts"]')" = "0 1 True ['H-2']" ]
+  [ "$(seed_match_of H-2)" = "None" ]
+  run /usr/bin/python3 -c "import sys; sys.path[:0]=['$REPO/scripts/research-kit', '$REPO/scripts/research-kit/lib', '$REPO/scripts/lib']; import estimate; print([h['id'] for h in estimate.counted_holes('demo', [{'round': '2', 'seq': 2}])])"
+  [ "$output" = "[]" ]
+}
+
+@test "split: the seed catch stays, the real defect opens as a new hole that counts only once verified on the real plan" {
+  seeded_round_2
+  printf '%s\n' '{"id":"H-2-001","event":"raise","round":2,"source":"panel","finding":"f1"}' \
+    '{"id":"H-2-001","event":"raise","round":2,"source":"panel","finding":"f2"}' \
+    "${SEED_HOLE/H-1/H-2-001}" > "$CC_RESEARCH_RECORDS/holes.jsonl"
+  "$R" close --program demo --round 2
+  [ "$(seed_match_of H-2-001)" = "S-1" ]
+  evidence split.txt "blind adjudicator: f2 is the backoff figure, f1 the planted retry"
+  sp() { run "$R" split --program demo --hole H-2-001 --path PLAN.md --lines 61 --claim "the 2 s backoff has no source" \
+    --reason "over-merge" --evidence evidence/split.txt "$@"; }
+  sp --findings f9 --quote "three times with a 2 s backoff"
+  [[ "$status" -eq 2 && "$output" == *"not raise events of H-2-001"* ]] || false
+  sp --findings f1 f2 --quote "three times with a 2 s backoff"
+  [[ "$status" -eq 2 && "$output" == *"the seed catch must keep one"* ]] || false
+  sp --findings f2 --quote "forever with no backoff"
+  [[ "$status" -eq 2 && "$output" == *"not on lines 61 of the real plan"* ]] || false
+  sp --findings f2 --quote "three times with a 2 s backoff"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"H-2-002 opened from 1 finding"* ]] || false
+  run "$R" close --program demo --round 2 --reclose --reason "split"
+  [[ "$status" -eq 2 && "$output" == *"H-2-002 not yet verified against the real plan"* ]] || false
+  "$REPO/scripts/research-kit/seed.py" apply --program demo --plan "$CC_RESEARCH_RECORDS/PLAN.md" --out "$BATS_TEST_TMPDIR/seeded.md"
+  vs() { run "$R" verify-split --program demo --hole H-2-002 --status CONFIRMED --by verifier --evidence evidence/split.txt --read-plan "$1"; }
+  vs "$BATS_TEST_TMPDIR/seeded.md"
+  [[ "$status" -eq 2 && "$output" == *"never the seeded bundle"* ]] || false
+  vs "$CC_RESEARCH_RECORDS/PLAN.md"
+  [ "$status" -eq 0 ]
+  printf '%s\n' '{"id":"H-2-002","event":"rate","materiality":{"level":"MATERIAL"}}' >> "$CC_RESEARCH_RECORDS/holes.jsonl"
+  run "$R" close --program demo --round 2 --reclose --reason "split H-2-001"
+  [ "$status" -eq 0 ]
+  [ "$(field 2 'm["new_material"], m["seeds_caught"], m["splits"]')" = "1 1 [{'from': 'H-2-001', 'to': 'H-2-002'}]" ]
+  [ "$(seed_match_of H-2-002)" = "None" ]
+}
+
+rated() { # <id> <r1> <r2> <r3|-> <level>: a confirmed round-2 hole and its three ratings
+  /usr/bin/python3 -c 'import json, sys
+i, r1, r2, r3, lvl = sys.argv[1:]
+raters = {"1": {"rating": r1}, "2": {"rating": r2}}
+if r3 != "-": raters["3"] = {"rating": r3}
+print(json.dumps({"id": i, "round": 2, "verification": {"status": "CONFIRMED"}, "materiality": {"level": lvl, "raters": raters}}))' "$@"
+}
+
+@test "repass: low rater agreement earns ONE re-pass whose ratings supersede, and a kappa still low reaches the certificate as Adjudication unstable" {
+  fc_done; open_with_slots 2 complete True
+  { rated H-1 M R M MATERIAL; rated H-2 R M M MATERIAL; rated H-3 M R R REFINEMENT; rated H-4 R M R REFINEMENT; } \
+    > "$CC_RESEARCH_RECORDS/holes.jsonl"
+  run "$R" close --program demo --round 2
+  [[ "$output" == *"rater kappa -1.0 over 4 (below 0.7: rating re-pass due"* ]] || false
+  [ "$(field 2 'm["new_material"], m["kappa"]["repass"], m["kappa"]["unstable"]')" = "2 False False" ]
+  printf '%s\n' '{"id":"H-1","raters":{"1":"M","2":"M"},"level":"MATERIAL"}' \
+    '{"id":"H-2","raters":{"1":"R","2":"R"},"level":"MATERIAL"}' > "$BATS_TEST_TMPDIR/bad.jsonl"
+  run "$R" repass --program demo --round 2 --ratings "$BATS_TEST_TMPDIR/bad.jsonl" --reason "kappa low"
+  [[ "$status" -eq 2 && "$output" == *"H-2: level MATERIAL disagrees"* && "$output" == *"missing H-3, H-4"* ]] || false
+  { printf '%s\n' '{"id":"H-1","raters":{"1":"M","2":"M"},"level":"MATERIAL"}' \
+      '{"id":"H-2","raters":{"1":"R","2":"R"},"level":"REFINEMENT"}' \
+      '{"id":"H-3","raters":{"1":"M","2":"R","3":"R"},"level":"REFINEMENT"}' \
+      '{"id":"H-4","raters":{"1":"R","2":"M","3":"R"},"level":"REFINEMENT"}'; } > "$BATS_TEST_TMPDIR/repass.jsonl"
+  run "$R" repass --program demo --round 2 --ratings "$BATS_TEST_TMPDIR/repass.jsonl" --reason "kappa low"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"rater kappa -1.0 -> 0.0 · Adjudication unstable"* ]] || false
+  [ "$(field 2 'm["new_material"], m["kappa"]["materiality"], m["kappa"]["repass"], m["kappa"]["unstable"]')" = "1 0.0 True True" ]
+  run "$R" repass --program demo --round 2 --ratings "$BATS_TEST_TMPDIR/repass.jsonl" --reason "again"
+  [[ "$status" -eq 2 && "$output" == *"one rating re-pass already ran"* ]] || false
+  run /usr/bin/python3 -c "
+import sys; sys.path[:0] = ['$REPO/scripts/research-kit/lib', '$REPO/scripts/lib', '$REPO/scripts/research-kit']
+import gate, gate_cert, gate_rows_b
+ctx = gate.make_ctx('demo')
+u = gate_rows_b.unstable_rounds(ctx)
+st = dict(decisions=0, populations=0, checks=0, premises_at_level=0, premises=0, sources=0, ruled_90=0,
+          operator_ruled=0, by_default=[], carried=[], parked=0, frame_defects=0, unasked_intent=0)
+cert = dict(version=1, profile='lite', issued='2026-10-11T00:00:00Z', stop='dry', quiet_streak=2, rounds=3,
+            forecast=dict(desk_mean=1.0, invisible_mean=0.5, desk_n95=3, invisible_bound95=1), state=st,
+            fingerprint=dict(model='m', rules='r', memory='x'), adjudication_unstable=u)
+live = dict(after=0, escapes=0, residual={}, scheduled=0, fresh_at=None, flipped=0, calibration=0, last_change=None)
+print(u, gate_cert.lines_for('demo', cert, 'certified', live)[0])"
+  [[ "$output" == "['2'] Adjudication unstable (round 2: rater agreement still low after the re-pass) · Research: demo"* ]] || false
+}
+
+@test "repass is refused when rater agreement is not low" {
+  fc_done; open_with_slots 2 complete True
+  { rated H-1 M M - MATERIAL; rated H-2 R R - REFINEMENT; } > "$CC_RESEARCH_RECORDS/holes.jsonl"
+  "$R" close --program demo --round 2
+  printf '%s\n' '{"id":"H-1","raters":{"1":"M","2":"M"},"level":"MATERIAL"}' '{"id":"H-2","raters":{"1":"R","2":"R"},"level":"REFINEMENT"}' \
+    > "$BATS_TEST_TMPDIR/repass.jsonl"
+  run "$R" repass --program demo --round 2 --ratings "$BATS_TEST_TMPDIR/repass.jsonl" --reason x
+  [[ "$status" -eq 2 && "$output" == *"rater kappa 1.0 is not below 0.7; no re-pass"* ]] || false
+  [ "$(field 2 'm["kappa"]["materiality"], m["kappa"]["unstable"]')" = "1.0 False" ]
 }

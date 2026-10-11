@@ -278,3 +278,86 @@ retry_seeds() { # S-1 replaces A1 (class C4, the retry defect), S-2 omits A2
   [ "$status" -eq 0 ]
   [ "$output" = "S-1,S-2,S-3" ]
 }
+
+# Settling a round before any plan edit (2026-10-11, round-settle kit). RED-proof: on seed.py before
+# the change, detect_span overlapped a seed the copy holds (H-1 below was tagged), an artifact or
+# split-off hole was tagged and caught its seed, and `match --dry-run` / `explain` did not parse.
+shifted_plan() { # S-0 deletes 8 lines above A1, so S-1 sits on copy line 54 while its detect_span says 61
+  { for i in $(seq 1 20); do echo "filler line $i of the plan that says nothing at all"; done
+    echo "Members of the sync population, every one of them a caller:"
+    for i in $(seq 1 7); do echo "- member $i calls the daemon"; done
+    for i in $(seq 29 60); do echo "filler line $i of the plan that says nothing at all"; done
+    echo "$A1"; echo "$A2"
+    for i in $(seq 63 75); do echo "filler line $i of the plan that says nothing at all"; done; } > "$PLAN"
+  { seedline S-0 delete-member "$(sed -n 21,28p "$PLAN")" "" "PLAN.md:21-28"
+    seedline S-1 replace "$A1" "The sync daemon retries a failed write forever with no backoff at all." "PLAN.md:61-61" "$DEFECT"
+    seedline S-2 delete-member "$A2" "" "PLAN.md:62-62" "the launchd caller is missing from the population"; } \
+    > "$BATS_TEST_TMPDIR/seeds.jsonl"
+  "$SEED" plant --program demo --plan "$PLAN" --seeds "$BATS_TEST_TMPDIR/seeds.jsonl" --profile lite
+}
+
+@test "match: an author's detect_span (real-plan lines) no longer tags a hole on the copy's line of that number" {
+  shifted_plan
+  # copy line 61 is filler 7 lines below where S-1 sits in the copy, beyond the slack
+  { hole H-1 PLAN.md 61 C4 "$CLAIM"; hole H-2 PLAN.md 54 C4 "$CLAIM"; } > "$CC_RESEARCH_RECORDS/holes.jsonl"
+  run "$SEED" match --program demo --round 1 --plan "$PLAN"
+  [ "$status" -eq 0 ]
+  [ "$(tag_of H-1)" = "None" ]
+  [ "$(tag_of H-2)" = "S-1" ]
+}
+
+@test "match: an artifact or split-off hole restating a seed neither tags nor catches it" {
+  retry_seeds
+  { hole H-1 PLAN.md 61 C4 "$CLAIM"; hole H-2 PLAN.md 61 C4 "$CLAIM"; } > "$CC_RESEARCH_RECORDS/holes.jsonl"
+  printf '%s\n' '{"id":"H-1","artifact":{"reason":"copy damage"}}' '{"id":"H-2","split_from":"H-0"}' \
+    >> "$CC_RESEARCH_RECORDS/holes.jsonl"
+  run "$SEED" match --program demo --round 1 --plan "$PLAN"
+  [ "$output" = '{"original": {"caught": 0, "k_left": 2, "orphaned": 0, "s_eff": 2}}' ]
+  [ "$(tag_of H-1)" = "None" ]
+  [ "$(tag_of H-2)" = "None" ]
+}
+
+@test "match --dry-run: names the holes a real match would tag, counts the catches, and writes nothing" {
+  shifted_plan
+  { hole H-1 PLAN.md 61 C4 "$CLAIM"; hole H-2 PLAN.md 54 C4 "$CLAIM"
+    hole H-3 PLAN.md 5 C4 "the cutover has no owner and no date"; } > "$CC_RESEARCH_RECORDS/holes.jsonl"
+  before="$(shasum "$CC_RESEARCH_RECORDS/holes.jsonl" "$CC_RESEARCH_HOME/demo/vault/seeds.enc")"
+  run "$SEED" match --program demo --round 1 --plan "$PLAN" --dry-run
+  [ "$status" -eq 0 ]
+  [ "${lines[1]}" = "would tag: H-2" ]
+  [ "${lines[2]}" = "would catch: 1 · would orphan: 0" ]
+  [ "$(shasum "$CC_RESEARCH_RECORDS/holes.jsonl" "$CC_RESEARCH_HOME/demo/vault/seeds.enc")" = "$before" ]
+  [[ "$output" != *"S-"* ]] || false
+  # a tag the matcher no longer derives is named, never removed
+  printf '%s\n' '{"id":"H-1","seed_match":"S-1"}' >> "$CC_RESEARCH_RECORDS/holes.jsonl"
+  run "$SEED" match --program demo --round 1 --plan "$PLAN" --dry-run
+  [ "${lines[3]}" = "tagged but no longer derived (kept; match never removes a tag): H-1" ]
+}
+
+@test "explain: prints each rule's outcome for a named hole, never a seed's sid, op, state or text, and logs the call" {
+  shifted_plan
+  { hole H-1 PLAN.md 61 C4 "$CLAIM"; hole H-2 PLAN.md 54 C4 "$CLAIM"
+    hole H-3 PLAN.md 55 C2 "the population names no launchd caller" "hooks/a.sh, hooks/b.sh"; } > "$CC_RESEARCH_RECORDS/holes.jsonl"
+  run "$SEED" explain --program demo --round 1 --plan "$PLAN" --hole H-1 H-2 H-3
+  [ "$status" -eq 0 ]
+  [[ "${lines[0]}" == "round 1 seeded copy: sha256 "*" lines" ]] || false
+  [[ "$output" == *"H-1: tagged no"*"span none"*"first failing rule: span"* ]] || false
+  [[ "$output" == *"H-2: tagged no"*"span exact"*"matches yes"* ]] || false
+  [[ "$output" == *"H-3: tagged no"*"quote evidence none"* ]] || false
+  # seed-blind: no sid, op type or state, and no 25-character window of any anchor, replacement or statement
+  for w in S-0 S-1 S-2 replace delete-member live caught orphaned "n/a (omission"; do
+    [[ "$output" != *"$w"* ]] || false
+  done
+  /usr/bin/python3 -c '
+import json, sys
+out = sys.stdin.read()
+norm = lambda t: " ".join(str(t).split())
+for l in open(sys.argv[1]):
+    s = json.loads(l)
+    for t in [s.get("anchor_quote"), s.get("replacement"), s.get("defect_statement")]:
+        t = norm(t or "")
+        for i in range(len(t) - 24):
+            assert t[i:i + 25] not in out, t[i:i + 25]' "$BATS_TEST_TMPDIR/seeds.jsonl" <<< "$output"
+  run /usr/bin/python3 -c "import json; r=[json.loads(l) for l in open('$CC_RESEARCH_HOME/demo/explain.jsonl')]; print(len(r), r[0]['holes'], r[0]['round'])"
+  [ "$output" = "1 ['H-1', 'H-2', 'H-3'] 1" ]
+}

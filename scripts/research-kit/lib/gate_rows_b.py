@@ -365,7 +365,9 @@ def row15(ctx: Ctx) -> Row:
             15,
             "Router",
             FAIL,
-            ["row 15 reads sealed data only inside a whole gate run (gate.sh run); nothing read"],
+            [
+                "row 15 reads sealed data only inside a whole gate run (gate.sh run); nothing read"
+            ],
         )
     passed = {r.num for r in ctx.prior if r.status in (PASS, FILED)}
     short = [n for n in range(1, gate.ROW_COUNT + 1) if n != 15 and n not in passed]
@@ -467,6 +469,16 @@ def row16(ctx: Ctx) -> Row:
 def lost_rounds(ctx: Ctx) -> List[str]:
     """Certification rounds that ran and did not count (a dead lane: round.sh's `counted`)."""
     return [str(m.get("round")) for m in cert_rounds(ctx) if not m.get("counted")]
+
+
+def unstable_rounds(ctx: Ctx) -> List[str]:
+    """Certification rounds whose rater agreement stayed low after their one re-pass (§6.5: the
+    certificate prints "Adjudication unstable"; round.py `round_kappa`)."""
+    return [
+        str(m.get("round"))
+        for m in cert_rounds(ctx)
+        if (m.get("kappa") or {}).get("unstable")
+    ]
 
 
 @row(17, "Stop")

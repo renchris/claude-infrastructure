@@ -10,7 +10,11 @@ isolation, not prevention (§3.8, §7).
 
   seed.py plant  --program P --plan F --seeds S.jsonl [--profile lite|standard|full]
   seed.py apply  --program P --plan F --out SEEDED
-  seed.py match  --program P --round K --plan CURRENT   (the real plan, never the seeded copy)
+  seed.py match  --program P --round K --plan CURRENT [--dry-run]   (the real plan, never the seeded
+                 copy; --dry-run prints the tag changes as hole ids and counts and writes nothing)
+  seed.py explain --program P --round K --plan CURRENT --hole ID…   (each match rule's outcome for
+                 a named hole against its closest seed; never a sid, state, op or seed text; logged
+                 to <sealed>/explain.jsonl)
   seed.py prescreen --program P --caught ID… | FILE   (discard what the blind pre-screen caught)
   seed.py status --program P                       (counts, then the seed-realism line)
 
@@ -24,6 +28,7 @@ decision-changing class of hole is an omission (§3.9).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -290,7 +295,10 @@ def overlaps(
     spans = [
         (lo - slack, hi + slack) for lo, hi in copy.lines.get(str(seed.get("sid")), [])
     ]
-    if sp:
+    # detect_span counts the REAL plan's lines and the hole the seeded copy's, so for a seed the
+    # copy holds it is a false overlap wherever an edit above shifted the text; it stands in only
+    # for a seed the copy does not hold.
+    if sp and not spans:
         spans.append((sp[1], sp[2]))
     return any(
         lo <= shi and slo <= hi
@@ -362,11 +370,22 @@ def counts(vault: Dict[str, Any]) -> Dict[str, Dict[str, int]]:
     return {k: v for k, v in out.items() if any(v.values())}
 
 
-def cmd_match(a: argparse.Namespace) -> int:
+def settled_by_record(h: Dict[str, Any]) -> bool:
+    """An audited artifact or a split-off hole (lib/settle.py): match neither tags it nor lets it
+    catch a seed. A split hole restates the REAL plan's defect, an artifact the copy's own damage."""
+    return bool(h.get("artifact") or h.get("split_from"))
+
+
+def match_inputs(
+    a: argparse.Namespace, vault: Dict[str, Any]
+) -> Tuple[
+    List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], SeededCopy
+]:
+    """The round's material holes, the live seeds, the live seeds a fix orphaned, and the copy."""
     plan = Path(a.plan).read_text()
-    vault, key = load_vault(a.program)
-    holes_path = kit.records_dir(a.program) / "holes.jsonl"
-    holes = kit.fold(kit.read_jsonl(holes_path)).values()
+    holes = kit.fold(
+        kit.read_jsonl(kit.records_dir(a.program) / "holes.jsonl")
+    ).values()
     # Certification rounds are numbered; a hole from a frame-critique or integration round ("fc1",
     # "stage6-W2") predates the seeds, so it can never catch one and is skipped, not parsed.
     material = [
@@ -375,6 +394,7 @@ def cmd_match(a: argparse.Namespace) -> int:
         if (h.get("materiality") or {}).get("level") == "MATERIAL"
         and str(h.get("round") or "0").isdigit()
         and int(h.get("round") or 0) <= a.round
+        and not settled_by_record(h)
     ]
     # The seeded copy has lost every replace anchor and every omitted member, so passing it as
     # --plan would orphan the seeds wholesale. A real fix rewrites a few anchors, not most of them.
@@ -385,7 +405,21 @@ def cmd_match(a: argparse.Namespace) -> int:
             f"{len(gone)} of {len(live)} live seeds have no anchor in --plan: --plan looks like "
             "the seeded copy; pass the real plan"
         )
-    copy = SeededCopy(plan, Path(a.plan).name, vault["seeds"], a.round)
+    return (
+        material,
+        live,
+        gone,
+        SeededCopy(plan, Path(a.plan).name, vault["seeds"], a.round),
+    )
+
+
+def match_vault(
+    a: argparse.Namespace, vault: Dict[str, Any]
+) -> Tuple[List[Tuple[str, str]], List[str]]:
+    """Update the seeds' states in `vault` (in memory) and return the (hole id, sid) tags to append,
+    and round K's already-tagged holes the matcher no longer derives (a tag is never removed).
+    Shared by match and match --dry-run, so the dry run is exact."""
+    material, live, gone, copy = match_inputs(a, vault)
     for s in live:
         if s in gone:
             s.update(
@@ -393,17 +427,183 @@ def cmd_match(a: argparse.Namespace) -> int:
             )  # a fix rewrote its anchor
         elif any(same_defect(h, s, copy) for h in material):
             s.update({"state": "caught", "state_round": a.round})
-    # Tag every hole that restates a seed still in the plan (caught now or earlier), so round close
-    # reads it as a seed catch rather than a real finding. Append-only: the fold keeps the newest.
-    in_plan = [s for s in vault["seeds"] if s.get("state") in ("live", "caught")]
+    # Tag every hole that restates a seed the reviewers read in round K's copy, so round close reads
+    # it as a seed catch rather than a real finding. A seed caught in an earlier round is not in this
+    # copy, so a later hole cannot restate it. Append-only: the fold keeps the newest.
+    in_copy = [s for s in vault["seeds"] if copy.lines.get(str(s.get("sid")))]
+    tags = []
     for h in material:
         if h.get("seed_match"):
             continue
-        sid = next((s["sid"] for s in in_plan if same_defect(h, s, copy)), None)
+        sid = next((s["sid"] for s in in_copy if same_defect(h, s, copy)), None)
         if sid:
-            kit.append_jsonl(holes_path, {"id": h["id"], "seed_match": sid})
+            tags.append((str(h["id"]), str(sid)))
+    stale = sorted(
+        str(h["id"])
+        for h in material
+        if h.get("seed_match")
+        and str(h.get("round")) == str(a.round)
+        and not any(same_defect(h, s, copy) for s in in_copy)
+    )
+    return tags, stale
+
+
+def cmd_match(a: argparse.Namespace) -> int:
+    if a.dry_run:
+        return match_dry_run(a)
+    vault, key = load_vault(a.program)
+    tags, _ = match_vault(a, vault)
+    holes_path = kit.records_dir(a.program) / "holes.jsonl"
+    for hid, sid in tags:
+        kit.append_jsonl(holes_path, {"id": hid, "seed_match": sid})
     save_vault(a.program, vault, key)
     print(json.dumps(counts(vault), sort_keys=True))
+    return 0
+
+
+def match_dry_run(a: argparse.Namespace) -> int:
+    """What match would change, as hole ids and counts only: no sid, no seed state, no write."""
+    vault, _ = load_vault(a.program)
+    before = {str(s.get("sid")): s.get("state") for s in vault["seeds"]}
+    tags, stale = match_vault(a, vault)
+    moved = [
+        s for s in vault["seeds"] if before.get(str(s.get("sid"))) != s.get("state")
+    ]
+    print(f"dry run, round {a.round}: nothing written")
+    print(f"would tag: {', '.join(sorted(h for h, _ in tags)) or 'none'}")
+    print(
+        f"would catch: {sum(1 for s in moved if s.get('state') == 'caught')} · "
+        f"would orphan: {sum(1 for s in moved if s.get('state') == 'orphaned')}"
+    )
+    print(
+        "tagged but no longer derived (kept; match never removes a tag): "
+        + (", ".join(stale) or "none")
+    )
+    return 0
+
+
+# ── explain: why one hole did or did not match, seed-blind ──────────────────────────────────────
+
+
+def rule_outcomes(
+    h: Dict[str, Any], s: Dict[str, Any], copy: SeededCopy
+) -> Dict[str, Any]:
+    """Each rule same_defect applies, as an outcome that names no seed: the path, the class
+    (agree, veto, none), a quote of seed-only text (hit, none), the span (exact, slack, detect_span,
+    none) and the claim's token ratio. Omission and replace seeds print alike."""
+    loc = h.get("locus") or {}
+    sp = _span(str(s.get("detect_span")))
+    path_ok = Path(str(loc.get("path") or "")).name in {copy.plan_name, sp and sp[0]}
+    hc, sc = h.get("taxonomy_class"), s.get("class")
+    cls = "veto" if hc and sc and hc != sc else ("agree" if hc and sc else "none")
+    applied = bool(copy.lines.get(str(s.get("sid"))))
+    if overlaps(h, s, copy, 0):
+        span = "exact" if applied else "detect_span"
+    elif applied and overlaps(h, s, copy, SEEDED_SPAN_SLACK):
+        span = "slack"
+    else:
+        span = "none"
+    claim = _tokens(str(h.get("claim") or ""))
+    stmt = _tokens(str(s.get("defect_statement") or ""))
+    ratio = len(claim & stmt) / min(len(claim), len(stmt)) if claim and stmt else None
+    out = {
+        "path": "ok" if path_ok else "other file",
+        "class": cls,
+        "quote": "hit" if quotes_seed(h, s, copy) else "none",
+        "span": span,
+        "ratio": ratio,
+        "matches": same_defect(h, s, copy),
+    }
+    out["first_failing"] = first_failing(out, bool(claim))
+    return out
+
+
+def first_failing(o: Dict[str, Any], has_claim: bool) -> str:
+    """The rule same_defect stopped at, in its own order."""
+    if o["matches"]:
+        return "none (matches)"
+    if o["class"] == "veto":
+        return "class veto"
+    if o["path"] != "ok":
+        return "path"
+    if o["span"] == "none" or (o["span"] == "slack" and not has_claim):
+        return "span"
+    if has_claim:
+        return "claim ratio"
+    return "no claim and no class"
+
+
+SPAN_RANK = {"exact": 3, "detect_span": 2, "slack": 1, "none": 0}
+
+
+def explain_hole(
+    h: Dict[str, Any], seeds: List[Dict[str, Any]], copy: SeededCopy
+) -> List[str]:
+    hid = str(h.get("id"))
+    if settled_by_record(h):
+        kind = "artifact" if h.get("artifact") else "split-off"
+        return [f"{hid}: {kind} record; match skips it"]
+    pool = [
+        s
+        for s in seeds
+        if s.get("state") == "live" or copy.lines.get(str(s.get("sid")))
+    ]
+    if not pool:
+        return [f"{hid}: no seed in this round's copy or live"]
+    tagged = str(h.get("seed_match") or "")
+    scored = [(s, rule_outcomes(h, s, copy)) for s in pool]
+    # the hole's own tagged seed when the copy holds it, else the seed it comes closest to matching
+    best = next(
+        ((s, o) for s, o in scored if tagged and str(s.get("sid")) == tagged), None
+    )
+    if best is None:
+        best = max(
+            scored,
+            key=lambda so: (
+                so[1]["matches"],
+                so[1]["quote"] == "hit",
+                SPAN_RANK[so[1]["span"]],
+                so[1]["ratio"] or 0.0,
+            ),
+        )
+    o = best[1]
+    ratio = "n/a (no claim)" if o["ratio"] is None else f"{o['ratio']:.2f}"
+    return [
+        f"{hid}: tagged {'yes' if tagged else 'no'} · closest seed is its tag: "
+        f"{'yes' if tagged and tagged == str(best[0].get('sid')) else 'no'}",
+        f"  path {o['path']} · class {o['class']} · quote evidence {o['quote']} · span {o['span']}"
+        f" · span only via detect_span {'yes' if o['span'] == 'detect_span' else 'no'}"
+        f" · slack {SEEDED_SPAN_SLACK}",
+        f"  token ratio {ratio} / {DEFECT_MATCH_MIN:.2f} · matches {'yes' if o['matches'] else 'no'}"
+        f" · first failing rule: {o['first_failing']}",
+    ]
+
+
+def cmd_explain(a: argparse.Namespace) -> int:
+    """Per named hole, each match rule's outcome against its closest seed. Never a seed's sid, state,
+    op or text: the outcomes are all it prints, and every call is logged in the sealed dir."""
+    vault, _ = load_vault(a.program)
+    plan = Path(a.plan).read_text()
+    holes = kit.fold(kit.read_jsonl(kit.records_dir(a.program) / "holes.jsonl"))
+    missing = [i for i in a.hole if i not in holes]
+    if missing:
+        raise kit.KitError(f"no such hole: {', '.join(missing)}")
+    text, _, _ = apply_seeds(plan, vault["seeds"], lambda s: live_at(s, a.round))
+    sha = hashlib.sha256(text.encode()).hexdigest()
+    kit.append_jsonl(
+        kit.sealed_dir(a.program, create=True) / "explain.jsonl",
+        {
+            "at": kit.now_iso(),
+            "by": kit.lease_owner(),
+            "round": a.round,
+            "holes": list(a.hole),
+            "copy_sha256": sha,
+        },
+    )
+    copy = SeededCopy(plan, Path(a.plan).name, vault["seeds"], a.round)
+    print(f"round {a.round} seeded copy: sha256 {sha} · {len(text.splitlines())} lines")
+    for i in a.hole:
+        print("\n".join(explain_hole(holes[i], vault["seeds"], copy)))
     return 0
 
 
@@ -469,6 +669,7 @@ def realism(vault: Dict[str, Any], holes: List[Dict[str, Any]]) -> str:
         if (h.get("verification") or {}).get("status") == "CONFIRMED"
         and (h.get("materiality") or {}).get("level") == "MATERIAL"
         and not h.get("seed_match")
+        and not kit.settled_out(h)
     ]
     found = sum(1 for h in real if h.get("source") in REVIEW_SOURCES)
     missed = sum(1 for h in real if h.get("source") in MISSED_SOURCES)
@@ -514,7 +715,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--program", required=True)
     p.add_argument("--round", type=int, required=True)
     p.add_argument("--plan", required=True)
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the tag changes as hole ids and counts; write nothing",
+    )
     p.set_defaults(fn=cmd_match)
+    p = sub.add_parser("explain")
+    p.add_argument("--program", required=True)
+    p.add_argument("--round", type=int, required=True)
+    p.add_argument("--plan", required=True)
+    p.add_argument("--hole", nargs="+", required=True)
+    p.set_defaults(fn=cmd_explain)
     p = sub.add_parser("prescreen")
     p.add_argument("--program", required=True)
     p.add_argument(
@@ -527,7 +739,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     a = ap.parse_args(argv)
     try:
         kit.check_slug(a.program)
-        if a.verb not in VAULT_WRITERS:
+        if a.verb not in VAULT_WRITERS or getattr(a, "dry_run", False):
             return int(a.fn(a))
         kit.lease_check(a.program)
         with vault_lock(a.program):

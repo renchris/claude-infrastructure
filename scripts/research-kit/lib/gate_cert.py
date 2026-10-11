@@ -186,7 +186,7 @@ def write_certificate(ctx: Ctx, rows: List[Row]) -> str:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     import estimate
     from gate_rows_a import known_rows
-    from gate_rows_b import lost_rounds
+    from gate_rows_b import lost_rounds, unstable_rounds
 
     certs = sorted((ctx.records / "cert").glob("CERT-v*.json"))
     n = len(certs) + 1
@@ -221,6 +221,8 @@ def write_certificate(ctx: Ctx, rows: List[Row]) -> str:
         "assumed": f["assumed"],
         "calibrated": False,
         "degraded": ctx.frame.get("degraded"),
+        # §6.5: rounds whose rater agreement stayed low after their one re-pass
+        "adjudication_unstable": unstable_rounds(ctx),
         "known_rows": [r for r in known_rows(ctx) if r.get("status", "open") == "open"],
         "state": summary(ctx, rows),
         "fingerprint": dict(
@@ -362,6 +364,12 @@ def lines_for(
     head = f"Research: {slug} version {cert['version']}. {state.upper()} {when} ({cert['profile']} profile; {why})"
     if cert.get("degraded") == "two vendors":
         head = "degraded: two vendors · " + head
+    unstable = cert.get("adjudication_unstable") or []
+    if unstable:
+        head = (
+            f"Adjudication unstable ({'round' if len(unstable) == 1 else 'rounds'} "
+            f"{', '.join(unstable)}: rater agreement still low after the re-pass) · " + head
+        )
     total = fc["desk_mean"] + fc["invisible_mean"]
     bound = fc["desk_n95"] + fc["invisible_bound95"]
     n = live["after"]

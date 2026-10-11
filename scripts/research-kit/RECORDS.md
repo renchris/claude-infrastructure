@@ -52,9 +52,13 @@ Added 2026-10-05 (wave E3d): between `build-certified` and `closed` sits `implem
 - `rounds/<k>/matrix.json` (written by `round.sh`): `{round, kind:"frame-critique|certification|delta",
   snapshot_sha, verification_only, slots:[{pid, vendor, strategy, status:"complete|partial|dead|void", reruns}],
   lanes:{vendor:"live|dead"}, counted, new_material, seeds_caught, quiet, forecast:{p50,p90}|null, r_max,
-  reclosed?:[{at, reason, previous:{new_material, seeds_caught, quiet, forecast, r_max}}]}`. `reclosed` is
+  artifacts:[hole id], splits:[{from, to}], kappa:{materiality:κ|null, n, below:0.7, repass:bool, unstable:bool},
+  reclosed?:[{at, reason, previous:{new_material, seeds_caught, quiet, forecast, r_max, kappa}}]}`. `reclosed` is
   appended by `round.sh close --round K --reclose --reason …`, which re-runs seed match on a closed round (the
-  newest of its kind; refused once a later one opened) and recomputes what close computed.
+  newest of its kind; refused once a later one opened) and recomputes what close computed. `new_material` leaves
+  out seed-tagged holes and `kit.settled_out` holes (an artifact, or a split-off hole not yet verified on the real
+  plan); `seeds_caught` counts seed-tagged holes only, so it agrees with the vault. `kappa` and the settling
+  records are under "Settling a round" below.
   `rounds/<k>/panels/<pid>.json` (written by `courier.sh`): SYNTHESIS panel shape, raw output beside it as `<pid>.raw`.
 - `cert/CERT-v<n>.json` and `.md` (written by `gate.sh run`): SYNTHESIS cert shape.
 
@@ -94,6 +98,16 @@ failed, 2 usage or refusal, 3 a dead vendor lane, 4 a voided slot. Python is 3.9
   apply loop and widened by `SEEDED_SPAN_SLACK`, beside the author's `detect_span`; a locus `lines` may list
   `;`/`,`-separated ranges. `--plan` is the real plan: one missing most live anchors is refused; `prescreen --caught …` marks seeds a blind pre-screen caught
   `discarded`, so they are never planted; `status` prints a second line with seed realism beside real detection.
+  A seed's `detect_span` (real-plan numbering) stands in only for a seed round K's copy does not hold; a hole is
+  tagged only with a seed applied in round K's copy; an `artifact` or `split_from` hole is never tagged and never
+  catches. `match --dry-run` loads the vault, writes nothing, and prints `would tag: <hole ids>`, `would catch: N ·
+  would orphan: N`, and the round's already-tagged holes the matcher no longer derives (match never removes a tag).
+- `seed.py explain --program P --round K --plan CURRENT --hole ID…` (read-only; the kit owner runs it, not the
+  lead) prints the recomputed round-K copy's sha256 and line count, then per hole: tagged, whether the closest seed
+  is its tag, and that seed's rule outcomes — path, class `agree|veto|none`, quote evidence `hit|none`, span
+  `exact|slack|detect_span|none`, "span only via detect_span", the claim's token ratio against 0.50, matches, and
+  the first failing rule. It never prints a seed's sid, state, op type or text (an omission and a replace seed print
+  alike). Each call appends `{at, by, round, holes, copy_sha256}` to `<sealed>/explain.jsonl`.
 - `estimate.py forecast` also prints `found_raw`, `found` (deflated by `false_material_share`), `found_shadow`;
   `estimate.py calibration [--file]` prints coverage, bound sharpness and Spearman rank skill.
 - Method v1.2: `estimate.py simulate|forecast` read the measured inputs from
@@ -117,6 +131,44 @@ failed, 2 usage or refusal, 3 a dead vendor lane, 4 a voided slot. Python is 3.9
   refused with each reason, 2 the program cannot be read. Reads the newest certificate and the LIVE decision and
   known-row records (the sweep and the frame-delta cycle clear blocks after the certificate). The reader behind
   `handoff-fire.sh --requires-gate P --gate-wave W`.
+
+## Settling a round (`lib/settle.py`, verbs on `round.sh`; added 2026-10-11)
+
+Before any plan edit, a closed certification round's holes can be settled honestly, seed-blind for the lead. Every
+verb runs under the program lease, appends events to `holes.jsonl` (the fold keeps the newest), and refuses with
+exit 2. `--evidence` files must sit inside the records dir (gate row 8 fails a record citing `/tmp`). `by` is
+`kit.lease_owner()`.
+
+- **Artifact** — `round.sh artifact --program P --hole H --reason T --evidence F…` appends `{id, event:
+  "artifact", artifact:{at, by, reason, evidence:[path], plan_blob}}`. Only for an UNTAGGED, CONFIRMED, MATERIAL
+  hole the lead proved is damage the seeded copy did (an omission's visible gap), and at least one evidence file
+  must name the real plan's git blob (`git hash-object`), so the checks are shown to have run on the real plan. No
+  `seed_match`, no catch credit: seed match skips it, round close and `estimate.counted_holes` leave it out, and
+  close lists it in `m["artifacts"]`.
+- **Split** — `round.sh split --program P --hole H --findings FID… --path F --lines L --quote Q --claim C --reason
+  T --evidence F…`. Only for a seed-tagged, CONFIRMED, MATERIAL hole whose merged findings also hold a defect of
+  the REAL plan. The original keeps its `seed_match` (the catch stands) and gets `{id, event: "split", split_to:
+  [new id], split:{at, by, reason, evidence, plan_blob, to}}`. The new hole, `{id, event: "raise", round, source,
+  split_from: H, findings:[FID], claim, locus:{path, lines, quote, numbering: "real"}, plan_blob, split:{…}}`, is
+  opened from the named raise events (each FID must be a `finding` of one of H's raise events, none already split
+  off, and at least one must stay with H); its quote must sit on its cited lines of the real plan. The id is minted
+  under the mint lock with the original's padding (`H-1-022` → `H-1-072`). Seed match skips it.
+- **Verify-split** — `round.sh verify-split --program P --hole NEW --status CONFIRMED|REFUTED|CONTACT --read-plan F
+  --by WHO --evidence F…` appends `{id, event: "verify", verification:{status, against: "real", plan_blob, by,
+  evidence, at}}`, refused unless F (the plan the verifier read) has the blob the split recorded and the real plan
+  is unchanged since: never the seeded bundle. Until then the hole is `kit.settled_out`, and `round.sh close` (and
+  `--reclose`) refuses its round. Rating it goes through the usual three-rater path.
+- **Rating re-pass** (REPORT.md §6.5, "Rating re-pass when agreement is low — Once — 'Adjudication unstable'
+  printed"). Close writes `m["kappa"]`: Cohen's kappa of rater 1 against rater 2 on MATERIAL-or-not over the
+  round's holes both rated (`kit.materiality_kappa`; `materiality.raters` keyed `"1"` or `"r1"`, a code or
+  `{rating}`), and prints "rating re-pass due" below `kit.KAPPA_REPASS_BELOW` (0.7). `round.sh repass --program P
+  --round K --ratings F --reason T` takes F as JSONL `{id, raters:{"1","2","3"?}, level, clause?}` covering every
+  hole of the kappa sample, refuses a level that disagrees with 2-of-3 M, appends per hole `{id, event: "repass",
+  round, materiality:{level, clause, raters, repass:{at, by, reason, kappa_before}}}` (it supersedes the earlier
+  ratings in the fold), then re-closes the round. Refused when kappa is not low, when the round is not closed or a
+  later one opened, and a second time for the same round. A kappa still below 0.7 after it sets
+  `kappa.unstable`; `gate.sh run` copies those rounds to the certificate's `adjudication_unstable`, and the
+  render's first line starts "Adjudication unstable (round K: …) · ".
 
 ## Method v1.2 records (REPORT.md §11 and §12; wave E3b)
 

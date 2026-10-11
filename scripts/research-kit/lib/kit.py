@@ -31,7 +31,7 @@ import socket
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
 # ── 1. paths ────────────────────────────────────────────────────────────────────────────────────
 
@@ -411,6 +411,53 @@ def fold(
             continue
         state.setdefault(k, {}).update(r)
     return state
+
+
+# ── 4a. settling a certification round (lib/settle.py; RECORDS.md "Settling a round") ───────────
+# Rater-1 vs rater-2 agreement below this earns the round ONE rating re-pass (REPORT.md §6.5; the
+# SYNTHESIS L9 threshold); still below it after the re-pass, the certificate prints "Adjudication
+# unstable".
+KAPPA_REPASS_BELOW = 0.7
+
+
+def settled_out(h: Dict[str, Any]) -> bool:
+    """A hole no round count may take as a real finding beyond what seed_match already removes: an
+    audited artifact of the seeded copy, or a split-off hole not yet verified against the REAL plan."""
+    if h.get("artifact"):
+        return True
+    return (
+        bool(h.get("split_from"))
+        and (h.get("verification") or {}).get("against") != "real"
+    )
+
+
+def rater_call(h: Dict[str, Any], k: int) -> Optional[str]:
+    """Rater k's call on a hole: `materiality.raters` keyed "k" or "rk", a code or {rating: code}."""
+    r = (h.get("materiality") or {}).get("raters") or {}
+    v = r.get(str(k), r.get(f"r{k}"))
+    if isinstance(v, dict):
+        v = v.get("rating")
+    return str(v) if v else None
+
+
+def materiality_kappa(holes: Iterable[Dict[str, Any]]) -> Tuple[Optional[float], int]:
+    """Cohen's kappa of rater 1 against rater 2 on MATERIAL-or-not, over the holes both rated, and
+    that count. None with no such hole; 1.0 when both raters gave every hole the same one call."""
+    pairs = [
+        (rater_call(h, 1) == "M", rater_call(h, 2) == "M")
+        for h in holes
+        if rater_call(h, 1) and rater_call(h, 2)
+    ]
+    n = len(pairs)
+    if not n:
+        return None, 0
+    po = sum(1 for a, b in pairs if a == b) / n
+    p1 = sum(1 for a, _ in pairs if a) / n
+    p2 = sum(1 for _, b in pairs if b) / n
+    pe = p1 * p2 + (1 - p1) * (1 - p2)
+    if pe >= 1:
+        return 1.0, n
+    return round((po - pe) / (1 - pe), 3), n
 
 
 # ── 4b. concurrent writers: locked id minting (audit 2026-10-04, continuity lens item 6) ────────
