@@ -210,13 +210,13 @@ EOF
 @test "a terminal gets now / toggle command / where toggling leaves it, both ways" {
   NO_COLOR=1 run script -q /dev/null "$LID" </dev/null
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Now:     The laptop SLEEPS when the lid is closed."* ]] || false
-  [[ "$output" == *"Toggle:  cc-lid toggle → it would KEEP RUNNING with the lid closed."* ]] || false
+  [[ "$output" == *"Current:  OFF — the laptop SLEEPS when the lid is closed."* ]] || false
+  [[ "$output" == *"Toggle:   cc-lid toggle (or cc-lid on) → ON — it will KEEP RUNNING with the lid closed."* ]] || false
   [[ "$output" != *'`'* ]] || false
   echo 1 > "$D/state"
   NO_COLOR=1 run script -q /dev/null "$LID" </dev/null
-  [[ "$output" == *"Now:     The laptop KEEPS RUNNING with the lid closed."* ]] || false
-  [[ "$output" == *"Toggle:  cc-lid toggle → it would SLEEP when the lid is closed."* ]] || false
+  [[ "$output" == *"Current:  ON — the laptop KEEPS RUNNING with the lid closed."* ]] || false
+  [[ "$output" == *"Toggle:   cc-lid toggle (or cc-lid off) → OFF — it will SLEEP when the lid is closed."* ]] || false
   [[ "$output" != *'`'* ]]
 }
 
