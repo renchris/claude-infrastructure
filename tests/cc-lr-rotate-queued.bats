@@ -29,7 +29,7 @@ setup() {
   PATH="$STUBBIN:$PATH"; export PATH
   printf '#!/usr/bin/env bash\necho "$*" >> "%s/launchctl.argv"\n' "$BATS_TEST_TMPDIR" > "$STUBBIN/launchctl"
   for s in "$CC_LR_FLEET_BIN" "$CC_LR_HANDOFF_BIN" "$CC_LR_UPGRADE_BIN"; do
-    printf '#!/usr/bin/env bash\necho "$*" >> "%s/$(basename "$s").argv"\nexit 0\n' "$BATS_TEST_TMPDIR" > "$s"
+    printf '#!/usr/bin/env bash\necho "$*" >> "%s/%s.argv"\nexit 0\n' "$BATS_TEST_TMPDIR" "$(basename "$s")" > "$s"
   done
   # next3 has headroom, so rotate --account next3 is its limited session's recover and nothing else.
   cat > "$CC_ACCOUNTS_BIN" <<SH
