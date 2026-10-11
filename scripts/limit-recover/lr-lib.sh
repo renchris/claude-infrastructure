@@ -277,7 +277,61 @@ print("%s\t%s\t%s" % hit)
 # One line per LIVE process holding the sid: "<pane>\t<pid>\t<account>\t<cwd>". A row whose pid is
 # dead is a stale row and is skipped; a row is written by the session's own SessionStart hook
 # (hooks/session-register.sh) and is the only store keyed by pane that names the sid.
+# ONE jq FOR THE WHOLE REGISTRY (report lr-reliability-telemetry-speed 2026-10-10, D7 / rank 11).
+# The per-file loop below forks basename plus up to five jq per registry file per call, and this
+# function has 26 call sites (two per move poll; the poller's parked lane once per record per tick):
+# measured 1.19 s a call against 0.026 s for one jq at load ~848, and the shared root of the tick
+# that ran past 60 minutes. The fast path reads every file in ONE jq and leaves the shell only the
+# pid check for the rows that name the sid.
+#
+# THE LOOP STAYS THE DEFINITION. The fast path handles the canonical shape only — one JSON value per
+# file, every cell a scalar with no tab, newline or \x1f — and makes jq EXIT NON-ZERO on anything
+# else (a malformed file, two values in one file, an object-valued cell). On any non-zero exit its
+# output is DISCARDED and the per-file loop answers instead, so a call never sees a mixture of the
+# two and a strange file costs speed, never correctness. tests/lr-lib-registry-one-jq.bats pins the
+# two byte-identical, against the loop as it stood at 110ea9a64.
+#
+# \x1f, NEVER TAB, BETWEEN CELLS: tab is IFS whitespace, so `read` collapses an empty cell (an absent
+# account or paneUUID) and shifts every later column left. The unit separator is not whitespace.
 lr_registry_live_rows() { # $1=sid → rows on stdout; rc 0 when at least one is live, 1 when none
+  local sid="${1:-}" regdir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}" f rows pid pane acct cwd _sv n=0
+  local files=()
+  [ -n "$sid" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  for f in "$regdir"/*.json; do
+    [ -f "$f" ] || continue
+    case "${f##*/}" in .*) continue ;; esac
+    files[${#files[@]}]="$f"
+  done
+  # bash 3.2 (the poller's launchd interpreter) calls "${files[@]}" of an empty array unbound under
+  # set -u; no file is also the loop's answer, so say it here.
+  [ "${#files[@]}" -gt 0 ] || return 1
+  if ! rows="$(jq -nr --arg sid "$sid" '
+      def cell: if . == null or . == false then ""
+                elif type == "string" then (if test("[\t\n\u001f]") then error("separator in a cell") else . end)
+                elif type == "number" or type == "boolean" then tostring
+                else error("non-scalar cell") end;
+      reduce (inputs | [(input_filename | cell), ((.session_id // .sessionId // null) | cell),
+                        ((.pid // null) | cell), ((.paneUUID // null) | cell),
+                        ((.account // null) | cell), ((.cwd // null) | cell)]) as $r
+        ({seen: {}, rows: []};
+         if .seen[$r[0]] then error("more than one value in one file")
+         else .seen[$r[0]] = true | .rows += [$r] end)
+      | .rows[] | select(.[1] == $sid) | join("\u001f")' "${files[@]}" 2>/dev/null)"; then
+    lr_registry_live_rows_loop "$sid"
+    return
+  fi
+  while IFS=$'\037' read -r f _sv pid pane acct cwd; do
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$pid" 2>/dev/null || continue
+    [ -n "$pane" ] || pane="$(basename "$f" .json)"
+    printf '%s\t%s\t%s\t%s\n' "$pane" "$pid" "${acct:--}" "$cwd"; n=$((n + 1))
+  done <<EOF
+$rows
+EOF
+  [ "$n" -gt 0 ]
+}
+lr_registry_live_rows_loop() { # $1=sid → as lr_registry_live_rows; the per-file reference it falls back to
   local sid="${1:-}" regdir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}" f pid pane acct cwd n=0
   [ -n "$sid" ] || return 1
   command -v jq >/dev/null 2>&1 || return 1
