@@ -177,7 +177,8 @@
 #   CC_OPREADOUT_NOW (epoch) · CC_OPREADOUT_STATE_DIR · CC_ACTIVATION_DIR · CC_DECISIONS_DIR ·
 #   CC_BACKLOG_FILE · CC_BACKLOG_BIN · WRAP_LEDGER_BIN · WRAP_TRUNK (passes through) ·
 #   CC_SHARED_CHECKOUT · CC_IDL · CC_CONTINUE_SENTINEL · CC_OPREADOUT_CLASSBUDGET · CC_DEPLOY_SCRIPT ·
-#   CC_DO_BIN (unset ⇒ search · path/name ⇒ verbatim · `none` ⇒ absent, forces the I11 degradation)
+#   CC_DO_BIN (unset ⇒ search · path/name ⇒ verbatim · `none` ⇒ absent, forces the I11 degradation) ·
+#   CC_DISPATCH_FIRE_LOG · CC_OPREADOUT_FIRELOOP (off ⇒ no dispatcher fire-loop line)
 set -uo pipefail
 # ── activation marker predicate (hooks/lib/activation-marker.sh) ─────────────────────────────────
 # Resolution mirrors completion-assert.sh's four tiers, for the reason its comment gives: a
@@ -636,6 +637,93 @@ research_lines() {
     return 0
   }
   [ -n "$out" ] && printf '%s\n' "$out"
+  return 0
+}
+
+# ── DISPATCHER FIRE LOOP — ONE counted `◆` line while the dispatcher keeps firing items that keep
+# failing. Each failed fire is already recorded (a `reopen` row with selfRelease + releaseReason
+# spawn-fail in the backlog ledger, a header in the fire log) and nothing aggregates them: on
+# 2026-10-05..09 one brief was refused 243 times across all four accounts and no surface said so.
+# PREDICATE, per id over the last FL_TAIL ledger rows, in ledger order: run += 1 on a spawn-fail
+# self-release · unchanged on claim/venue/link/falsify · reset on any other event (done, block, an
+# operator reopen, …). A run is OPEN unless the id's last row is a claim older than 30 min (a
+# session holds it) or its newest spawn-fail is older than 24 h. big = open runs >= 3; the line
+# fires iff the longest run >= 5 or there are >= 3 big runs. Replayed on the real ledger it holds
+# 46% of prior-three-week hours, and in each such episode 85-100% of real dispatcher fires failed
+# against 5-26% in the silent spans — high duty, not false.
+# TWO THINGS THE LINE MUST NOT DO, both measured on the first design:
+#   1. Print a running count. Every failure would move the block hash and defeat the 900 s damping
+#      latch in every session for as long as the loop runs, so the count is FLOORED to the ladder
+#      5/10/20/50/100/200/500 and the hash moves only at a ladder step.
+#   2. Choose the remedy by item count. The cause is in the rc: 3 or 4 is the payload gate refusing
+#      THAT brief, so blocking it is the fix; any other rc is a machine cause (on 2026-09-25 one
+#      item failed 33 times on the anchor probe, rc=1) and blocking a healthy brief is the wrong
+#      advice. The block remedy therefore needs BOTH a single convicted item and its last rc in
+#      {3,4}; everything else, an unreadable rc included, points at the log.
+# COST: one bounded `tail` and a grep on every render; jq only once at least 5 spawn-fail rows are
+# in the tail (strictly weaker than the predicate: either arm needs >= 5 of them), and the fire
+# log only once the line is firing. That log is bounded by its producer (bin/cc-dispatch rotates
+# it above 4 MiB). Fail-silent throughout — a Stop hook prints a missing line, never an error.
+# Seams: CC_BACKLOG_FILE · CC_DISPATCH_FIRE_LOG · CC_OPREADOUT_NOW. Kill switch: CC_OPREADOUT_FIRELOOP=off.
+fire_loop_line() {
+  [ "${CC_OPREADOUT_FIRELOOP:-on}" = off ] && return 0
+  [ -f "$BLG_FILE" ] || return 0
+  case "$NOW" in ''|*[!0-9]*) return 0 ;; esac
+  command -v jq >/dev/null 2>&1 || return 0
+  local FL_TAIL=5000 log="${CC_DISPATCH_FIRE_LOG:-$HOME/.claude/logs/dispatch-fires.log}"
+  local nf row total nitems id since hdr rc="?" step ladder=0 TABC
+  nf="$(tail -n "$FL_TAIL" "$BLG_FILE" 2>/dev/null | grep -c '"spawn-fail"')"
+  case "${nf:-}" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$nf" -ge 5 ] || return 0
+  # -R + fromjson? so one torn row drops that row instead of the whole read. Timestamps are the
+  # ledger's 20-char UTC form; one that does not parse drops its run (silent, never a guess).
+  row="$(tail -n "$FL_TAIL" "$BLG_FILE" 2>/dev/null | jq -Rrn --argjson now "$NOW" '
+      def ep: try (.[0:19] + "Z" | fromdateiso8601) catch null;
+      reduce (inputs | fromjson?
+              | select(type == "object" and (.id | type) == "string" and (.ts | type) == "string")) as $e
+        ({};
+         $e.id as $i
+         | if $e.event == "reopen" and $e.selfRelease == true and $e.releaseReason == "spawn-fail" then
+             .[$i] = ((.[$i] // {n: 0})
+                      | (if .n == 0 then .first = $e.ts else . end)
+                      | .n += 1 | .lf = $e.ts | .le = "fail" | .lt = $e.ts)
+           elif ($e.event | IN("claim", "venue", "link", "falsify")) then
+             if has($i) then .[$i].le = $e.event | .[$i].lt = $e.ts else . end
+           else del(.[$i]) end)
+      | [ to_entries[] | .value + {id: .key} | select(.n >= 3)
+          | (.lf | ep) as $lf | (.lt | ep) as $lt
+          | select($lf != null and ($now - $lf) <= 86400)
+          | select((.le == "claim" and $lt != null and ($now - $lt) > 1800) | not) ]
+      | sort_by([-.n, .id])
+      | select(length > 0 and (.[0].n >= 5 or length >= 3))
+      | (map(.first) | min) as $f
+      | [ (map(.n) | add), length, .[0].id, ($f[5:10] + " " + $f[11:16] + "Z") ] | @tsv' 2>/dev/null)" || return 0
+  [ -n "$row" ] || return 0
+  TABC="$(printf '\t')"
+  IFS="$TABC" read -r total nitems id since <<< "$row"
+  case "${total:-}" in ''|*[!0-9]*) return 0 ;; esac
+  case "${nitems:-}" in ''|*[!0-9]*) return 0 ;; esac
+  for step in 5 10 20 50 100 200 500; do [ "$total" -ge "$step" ] && ladder="$step"; done
+  [ "$ladder" -gt 0 ] || return 0
+  # The convicted item is the longest open run; its newest fire-log header carries the rc. An id
+  # outside the ledger alphabet is never interpolated into a pattern — its rc stays unknown.
+  case "$id" in ''|*[!A-Za-z0-9_-]*) : ;; *)
+    if [ -f "$log" ]; then
+      hdr="$(grep -a "^===== [^ ]* item=${id} account=[^ ]* rc=[^ ]* pid=" "$log" 2>/dev/null | tail -n 1)"
+      case "$hdr" in *" rc="*) rc="${hdr#* rc=}"; rc="${rc%% *}" ;; esac
+      case "$rc" in ''|*[!0-9]*) rc="?" ;; esac
+    fi ;;
+  esac
+  if [ "$nitems" -eq 1 ] && { [ "$rc" = 3 ] || [ "$rc" = 4 ]; }; then
+    printf ' ◆ %s+ dispatcher fires failed since %s — %s refused at the payload gate (rc=%s) · cc-backlog block %s --needs "<why>"\n' \
+      "$ladder" "$since" "$id" "$rc" "$id"
+  elif [ "$nitems" -eq 1 ]; then
+    printf ' ◆ %s+ dispatcher fires failed since %s — %s, last rc=%s · tail -40 %s\n' \
+      "$ladder" "$since" "$id" "$rc" "$(tildify "$log")"
+  else
+    printf ' ◆ %s+ dispatcher fires failed since %s — %s items, last rc=%s · tail -40 %s\n' \
+      "$ladder" "$since" "$nitems" "$rc" "$(tildify "$log")"
+  fi
   return 0
 }
 
@@ -1230,8 +1318,11 @@ render_block() {
   # priced menu is a purchase decision nobody else can make, and a line that rendered only when
   # some unrelated step happened to fire the block would be the decision delivered by luck.
   local rp_lines; rp_lines="$(research_lines)"
+  # A dispatcher fire loop joins it for the same reason: nothing else aggregates those failures, so
+  # a line that waited for an unrelated step to fire the block would report the loop by luck.
+  local fl_line; fl_line="$(fire_loop_line)"
   if [ "$total" -eq 0 ] && [ "$RUNG" != "📦" ] && [ "$RUNG" != "🚀" ] && [ "$Q_N" -eq 0 ] \
-     && [ -z "$rp_lines" ]; then rm -f "$steps_file"; return 0; fi
+     && [ -z "$rp_lines" ] && [ -z "$fl_line" ]; then rm -f "$steps_file"; return 0; fi
 
   # ALLOCATION. Written out per class rather than looped: four classes is a fixed set, and the
   # alternatives (eval, or a `$(fn)` lookup) cost either clarity or a fork per step.
@@ -1305,6 +1396,8 @@ render_block() {
   # research-only render: the SESSION's state governs line 1 and the program line sits below it —
   # two verdicts, never merged into one sentence.
   elif [ -n "$rp_lines" ]; then hdr="OPERATOR ▸ ${state:-research program awaiting you}${q_line:+ · $q_line}"
+  # fire-loop-only render: same shape — the session verdict on line 1, the loop on its own line.
+  elif [ -n "$fl_line" ]; then hdr="OPERATOR ▸ ${state:-dispatcher fires failing}${q_line:+ · $q_line}"
   else hdr="OPERATOR ▸ ${q_line}"; fi   # queue-only render: the queue IS the governing line
   printf '%s\n' "$hdr"
 
@@ -1536,6 +1629,10 @@ render_block() {
   # ── research programs — one counted `◆` line per program owing a ruling, unnumbered for the same
   # reason as the escalation line: a purchase decision, not a step NSTEPS should count.
   [ -n "$rp_lines" ] && printf '%s\n' "$rp_lines"
+
+  # ── dispatcher fire loop — ONE counted `◆` line, unnumbered like the two above: it reports a
+  # machine loop, and its remedy rides inline rather than under a run mark.
+  [ -n "$fl_line" ] && printf '%s\n' "$fl_line"
 
   # The `+N more` footer is the LEGACY path only. Under the class budget it is not merely redundant,
   # it is the defect: one aggregate number that hides which CLASSES are missing (§4 F5).
