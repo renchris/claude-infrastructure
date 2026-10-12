@@ -122,11 +122,12 @@ print(kit.premise_level(pr, kit.fold(kit.read_jsonl(r / 'probes.jsonl'))), kit.p
   [ "$(count "$REC/probes.jsonl" "r['id'] == 'P-fresh-PR-42'")" -eq 0 ]
 }
 
-# RED-proof (K3, 2026-10-11): on the pre-K3 PATH sysctl (/usr/sbin) and md5 (/sbin) are not found
-# under a launchd-like PATH, so both re-checks exit 127 and the pass fails with no verdict.
-@test "freshness: the re-check PATH resolves /usr/sbin and /sbin tools under launchd's /usr/bin:/bin" {
+# RED-proof (K3, 2026-10-11): on the pre-K3 PATH sysctl (/usr/sbin) is not found under a
+# launchd-like PATH (exit 127, no verdict), and /sbin is absent, so PR-44 reads refuted.
+# PR-44 reads PATH rather than running an /sbin tool by bare name (unattended-path-lint).
+@test "freshness: the re-check PATH resolves /usr/sbin tools and carries /sbin under launchd's /usr/bin:/bin" {
   premise PR-43 "sysctl -n kern.ostype => Darwin" holds
-  premise PR-44 "printf x | md5 => 9dd4e461268c8034f5c8564e155c67a6" holds
+  premise PR-44 "case :\$PATH: in *:/sbin:*) exit 0;; esac; exit 1" holds
   PATH=/usr/bin:/bin run job freshness --program demo
   [ "$status" -eq 0 ]
   [ "$(count "$REC/premises.jsonl" "r['id'] in ('PR-43', 'PR-44') and r.get('recheck_verdict') == 'holds'")" -eq 2 ]
