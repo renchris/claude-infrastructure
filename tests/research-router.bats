@@ -450,7 +450,9 @@ cert_round_open() {
   [ "$(tool Bash "CC_RESEARCH_ACTIVITY=cr-1 $K/round.sh run --program demo --kind certification --round 1")" = allow ]
   [ "$(tool Bash "CC_RESEARCH_ACTIVITY=cr-1 $K/round.sh run --program demo --kind=certification --round 1")" = allow ]
   [ "$(tool Bash "CC_RESEARCH_ACTIVITY=cr-1 $K/round.sh close --program demo --round 1")" = allow ]
-  for v in artifact split verify-split repass; do
+  # reproduce, hold-g, refind joined 2026-10-12. RED-proof: with ROUND_SETTLE as it was, the tagged
+  # `round.sh reproduce` below answers deny.
+  for v in artifact split verify-split reproduce hold-g refind repass; do
     [ "$(tool Bash "CC_RESEARCH_ACTIVITY=cr-1 $K/round.sh $v --program demo --hole H-1-001")" = allow ]
     [ "$(tool Bash "$K/round.sh $v --program demo --hole H-1-001")" = deny ]
   done

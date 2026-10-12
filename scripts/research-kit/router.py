@@ -1204,7 +1204,9 @@ VENDOR = {"codex", "gemini", "agy", "antigravity"}
 KIT_ROUND = {"round.sh", "courier.sh"}
 # The verbs that settle a closed round before any plan edit (lib/settle.py, 4d11ed938). They write
 # only that round's hole and matrix records, so the round's own certification-round activity runs them.
-ROUND_SETTLE = {"artifact", "split", "verify-split", "repass"}
+# reproduce, hold-g and refind (2026-10-12) are settle.py verbs too; hold-g also appends the held
+# known row to known_rows.jsonl.
+ROUND_SETTLE = {"artifact", "split", "verify-split", "reproduce", "hold-g", "refind", "repass"}
 # A front-end return (REPORT.md §6.1; §6.5 "once per area, timeboxed"): gate.sh return-activity opens
 # one per area between two certification rounds, and gate.sh freeze closes it. While certifying, its
 # tag carries the return's fan-out, [activity:<id>] on Agent, Task and Workflow and a read-only
