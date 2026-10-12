@@ -408,16 +408,29 @@ release_and_settle() { # <sid> <seq-ceiling>
   [ "$(jq -r '.operatorT != null' "$CC_BEAT_DIR/or1.json")" = true ]
 }
 
-@test "ORDER: a stalled Stop worker cannot overwrite the next turn's prompt beat" {
+@test "ORDER: a stalled prompt worker cannot overwrite the next turn's prompt beat" {
+  # The Stop beat is synchronous (it is not on the prompt path), so the out-of-order pair that is
+  # still possible is two detached prompt workers: an operator prompt stalled behind a later
+  # machine-fed one. The later boundary's `who` must survive, and the stalled one only raises operatorT.
   export CC_BEAT_LOG="$BATS_TEST_TMPDIR/beat.log"
   held_ps_stub
-  held_emit '{"session_id":"or2","cwd":"/tmp"}' stop
+  held_emit '{"session_id":"or2","cwd":"/tmp","prompt":"quick question"}' prompt
   emit '{"session_id":"or2","cwd":"/tmp","prompt":"Stop hook feedback: keep going"}' prompt
-  [ "$(jq -r '.kind' "$CC_BEAT_DIR/or2.json")" = prompt ]
+  [ "$(jq -r '.who' "$CC_BEAT_DIR/or2.json")" = auto ]
   release_and_settle or2 1
   [ "$(jq -r '.kind' "$CC_BEAT_DIR/or2.json")" = prompt ]
+  [ "$(jq -r '.who'  "$CC_BEAT_DIR/or2.json")" = auto ]
   [ "$(jq -r '.seq'  "$CC_BEAT_DIR/or2.json")" -eq 1 ]
-  [ "$(jq -r '.operatorT' "$CC_BEAT_DIR/or2.json")" = null ]
+  [ "$(jq -r '.operatorT != null' "$CC_BEAT_DIR/or2.json")" = true ]
+}
+
+@test "SYNC: a stop beat is ON DISK when the hook returns, with no poll (cc-await-ping's arm baseline)" {
+  stall1_ps_stub
+  printf '%s' '{"session_id":"sy4","cwd":"/tmp"}' \
+    | env PATH="$BATS_TEST_TMPDIR/bin:$PATH" BEAT_SLOW_PS="$BATS_TEST_TMPDIR/stalled4" CC_BEAT_TIMEOUT=30 \
+      /bin/bash "$BEAT" stop
+  [ -d "$BATS_TEST_TMPDIR/stalled4" ]           # non-vacuity: the walk did stall
+  [ "$(jq -r '.kind' "$CC_BEAT_DIR/sy4.json")" = stop ]
 }
 
 @test "the one-jq parse keeps an empty cwd from shifting fields, and restores an escaped cwd byte-for-byte" {

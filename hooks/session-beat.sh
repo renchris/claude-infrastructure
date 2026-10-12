@@ -61,6 +61,11 @@
 # path, and its readers (cc-limited, spawn-presence) need the flip on disk when it returns. So it runs
 # beat() in the FOREGROUND under the 3 s cap it always had (the bound stop-failure-marker's own
 # header budgets for). CC_BEAT_SYNC=1 is the same switch for any other non-prompt-path caller.
+# The `stop` beat is synchronous too: it is not on the prompt path (a Stop hook runs after the turn,
+# under the same 3 s cap it always had), and `cc-await-ping --idle-scoped` takes its arm-time
+# baseline on the premise that the Stop beat is already on disk when the session-continue floor
+# tells the model to arm (bin/cc-await-ping, the BEAT_BASE_SEQ comment). Detached, a late Stop
+# worker would land after that baseline and read as a new turn. Only the prompt beat detaches.
 #
 # bash 3.2-safe. jq required (absent ⇒ silent no-op, same as session-register.sh).
 set -uo pipefail
@@ -73,7 +78,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 # kind: explicit arg wins (Stop passes `stop`); default is a prompt beat.
 kind="${1:-prompt}"
 sync=0
-{ [ "$kind" = limited ] || [ "${CC_BEAT_SYNC:-}" = 1 ]; } && sync=1
+{ [ "$kind" = limited ] || [ "$kind" = stop ] || [ "${CC_BEAT_SYNC:-}" = 1 ]; } && sync=1
 
 # The worker's HARD timeout. 3 s in the foreground (SYNC MODE), where every second of it is the
 # caller's; detached, the bound only has to keep workers from piling up and land the beat inside the
