@@ -432,3 +432,19 @@ print("OK")
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]]
 }
+
+@test "ps: a killed ps that is never reaped cannot hold the sweep past PS_JOIN_S" {
+  # Measured 2026-10-12: "timed out after 10 seconds", and the call returned after 1,226 s —
+  # subprocess.run's post-kill wait() is unbounded. A run() that blocks stands in for that ps.
+  run python3 -c "$LOAD"'
+ca.PS_JOIN_S = 0.5
+ca.subprocess.run = lambda *a, **k: time.sleep(5)
+t0 = time.monotonic()
+assert ca.concurrency(cfg) is None
+assert time.monotonic() - t0 < 3, time.monotonic() - t0
+assert "concurrency: ps UNAVAILABLE (TimeoutExpired" in open(ca.LOG_PATH).read()
+print("OK")
+'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]]
+}

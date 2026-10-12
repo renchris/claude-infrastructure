@@ -704,11 +704,36 @@ def concurrency(cfg):
     return res
 
 
+PS_JOIN_S = 15.0         # ps's own 10 s timeout plus a 5 s reap allowance
+
+
 def _ps_census(cfg):
-    """The `ps -wwEo` census: the body concurrency() always ran, unchanged in behaviour."""
+    """The `ps -wwEo` census: the body concurrency() always ran, now with a BOUNDED reap.
+
+    subprocess.run's timeout kills ps at 10 s and then waits for it UNBOUNDED. Measured
+    2026-10-12 at load 330: "timed out after 10 seconds", yet the call returned after 1,226 s — a
+    SIGKILLed ps stuck in the kernel is not reaped until it leaves it. That held the whole sweep,
+    and stamped the native census (taken at the scan's start) 20 minutes stale, past its grace. So
+    the call runs on a daemon thread joined at PS_JOIN_S; a ps that will not die is abandoned to
+    that thread (reaped whenever the kernel lets go, or at process exit)."""
+    box = {}
+
+    def _run():
+        try:
+            box["out"] = subprocess.run(["ps", "-wwEo", "pid=,command="], capture_output=True,
+                                        text=True, timeout=10).stdout
+        except (subprocess.TimeoutExpired, OSError) as e:
+            box["err"] = e
+
+    th = threading.Thread(target=_run, name="ps-census", daemon=True)
+    th.start()
+    th.join(PS_JOIN_S)
     try:
-        out = subprocess.run(["ps", "-wwEo", "pid=,command="], capture_output=True, text=True,
-                             timeout=10).stdout
+        if "out" in box:
+            out = box["out"]
+        else:
+            raise box.get("err") or subprocess.TimeoutExpired(
+                "ps", 10, output=f"killed, not reaped within {PS_JOIN_S:.0f}s")
     except (subprocess.TimeoutExpired, OSError) as e:
         # Logged, never silent — same contract as _kwork_unmeasured below. An instrument that
         # changed mid-decision has to be answerable from disk afterwards.
