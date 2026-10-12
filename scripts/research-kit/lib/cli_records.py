@@ -177,9 +177,12 @@ def method_items(r: Path, a: argparse.Namespace) -> List[str]:
 
 
 def census_repin(a: argparse.Namespace) -> int:
-    """Supersede one method with a re-pinned one and re-baseline the members to what every
-    active method now lists. Nothing is deleted: OLD stays in `methods` marked superseded, and a
-    member no active method lists moves to `retired_members`. All-or-nothing: any refusal
+    """Supersede one or more methods with re-pinned ones and re-baseline the members to what
+    every active method now lists. Each --method/--supersedes/--count/--cmd (and --items-file, if
+    given) pairs by position, so a population whose methods are ALL stale is re-pinned in one
+    call: re-pinning them one at a time is refused, because the agreement check below runs the
+    stale method left behind. Nothing is deleted: each OLD stays in `methods` marked superseded,
+    and a member no active method lists moves to `retired_members`. All-or-nothing: any refusal
     leaves the census file untouched."""
     from gate_rows_a import active_methods, run_cmd
 
@@ -190,28 +193,50 @@ def census_repin(a: argparse.Namespace) -> int:
         raise kit.KitError(f"{a.pop}: no census yet; `census add` first")
     if not a.why.strip():
         raise kit.KitError(f"{a.pop}: --why is empty; a re-pin records its reason")
+    n = len(a.method)
+    files = a.items_file or [None] * n
+    if not (len(a.supersedes) == len(a.count) == len(a.cmd) == len(files) == n):
+        raise kit.KitError(
+            f"{a.pop}: --method, --supersedes, --count and --cmd (and --items-file, if given) "
+            "pair by position and must be given the same number of times"
+        )
+    if len(set(a.method)) != n or len(set(a.supersedes)) != n:
+        raise kit.KitError(f"{a.pop}: a method is named twice in one re-pin")
     methods = c.get("methods") or []
-    old = next((m for m in methods if m.get("agent") == a.supersedes), None)
-    if old is None:
-        raise kit.KitError(f"{a.pop}: no method {a.supersedes!r} to supersede")
-    if old.get("superseded_by"):
-        raise kit.KitError(
-            f"{a.pop}: method {a.supersedes!r} is already superseded by "
-            f"{old['superseded_by']!r}"
+    pairs = []
+    for i in range(n):
+        old = next((m for m in methods if m.get("agent") == a.supersedes[i]), None)
+        if old is None:
+            raise kit.KitError(f"{a.pop}: no method {a.supersedes[i]!r} to supersede")
+        if old.get("superseded_by"):
+            raise kit.KitError(
+                f"{a.pop}: method {a.supersedes[i]!r} is already superseded by "
+                f"{old['superseded_by']!r}"
+            )
+        if any(m.get("agent") == a.method[i] for m in methods):
+            raise kit.KitError(
+                f"{a.pop}: method {a.method[i]!r} already recorded; a method is never overwritten"
+            )
+        one = argparse.Namespace(
+            pop=a.pop,
+            method=a.method[i],
+            cmd=a.cmd[i],
+            count=a.count[i],
+            items_file=files[i],
         )
-    if any(m.get("agent") == a.method for m in methods):
-        raise kit.KitError(
-            f"{a.pop}: method {a.method!r} already recorded; a method is never overwritten"
-        )
-    items = method_items(r, a)
+        pairs.append((old, one, method_items(r, one)))
     at = kit.now_iso()
-    old.update(superseded_by=a.method, superseded_at=at, superseded_why=a.why)
-    new = {"agent": a.method, "cmd": a.cmd, "count": a.count, "at": at}
-    methods.append(new)
+    news = {}
+    for old, one, items in pairs:
+        old.update(superseded_by=one.method, superseded_at=at, superseded_why=a.why)
+        new = {"agent": one.method, "cmd": one.cmd, "count": one.count, "at": at}
+        methods.append(new)
+        news[id(new)] = (one.method, items)
     lists: Dict[str, Set[str]] = {}
     for m in active_methods(c):
-        if m is new:
-            lists[a.method] = set(items)
+        if id(m) in news:
+            name, items = news[id(m)]
+            lists[name] = set(items)
             continue
         rc, out = run_cmd(str(m.get("cmd") or "false"), census_cwd(r))
         if rc != 0:
@@ -240,8 +265,11 @@ def census_repin(a: argparse.Namespace) -> int:
     if retired or "retired_members" in c:
         c["retired_members"] = retired
     kit.write_json_atomic(f, c)
+    swaps = ", ".join(
+        f"method {one.method} supersedes {old['agent']}" for old, one, _ in pairs
+    )
     print(
-        f"census/{a.pop}.json: method {a.method} supersedes {a.supersedes}; "
+        f"census/{a.pop}.json: {swaps}; "
         f"{len(c['members'])} member(s), +{len(added)} added, {len(gone)} retired"
     )
     return 0
@@ -822,22 +850,32 @@ def add_verbs(sub: Any) -> None:
         g,
         "repin",
         census_repin,
-        "supersede a stale method with a re-pinned one; members no active method lists retire",
+        "supersede stale methods with re-pinned ones (repeat the four flags to re-pin several "
+        "at once); members no active method lists retire",
     )
     p.add_argument("--pop", required=True)
-    p.add_argument("--method", required=True, help="the new method's agent name")
     p.add_argument(
-        "--supersedes", required=True, help="the active method this one replaces"
+        "--method", required=True, action="append", help="the new method's agent name"
     )
-    p.add_argument("--count", required=True, type=int)
     p.add_argument(
-        "--cmd", required=True, help="the generating command gate row 2 re-runs"
+        "--supersedes",
+        required=True,
+        action="append",
+        help="the active method this one replaces",
+    )
+    p.add_argument("--count", required=True, type=int, action="append")
+    p.add_argument(
+        "--cmd",
+        required=True,
+        action="append",
+        help="the generating command gate row 2 re-runs",
     )
     p.add_argument(
         "--why", required=True, help="why the old method is stale (recorded on it)"
     )
     p.add_argument(
         "--items-file",
+        action="append",
         help="the member ids, one per line (default: the command's output)",
     )
     p = verb(

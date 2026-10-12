@@ -144,6 +144,31 @@ cfield() {
   [ "$(rowstat 2)" = "PASS" ]
 }
 
+@test "census repin: when every method is stale, one call re-pins them all (one at a time is refused)" {
+  # Both x and y are pinned to the old population (a, b); the live one is (a, b, c).
+  before="$(shasum "$REC/census/callers.json")"
+  run "$CR" census repin --program demo --pop callers --method x2 --supersedes x --count 3 \
+    --cmd 'printf "a\nb\nc\n"' --why "c added upstream"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"disagree"* ]] || false
+  [ "$(shasum "$REC/census/callers.json")" = "$before" ]
+  run "$CR" census repin --program demo --pop callers \
+    --method x2 --supersedes x --count 3 --cmd 'printf "a\nb\nc\n"' \
+    --method y2 --supersedes y --count 3 --cmd 'printf "c\nb\na\n"' --why "c added upstream"
+  [ "$status" -eq 0 ]
+  [ "$(cfield "[m['id'] for m in d['members']]")" = '["a", "b", "c"]' ]
+  [ "$(cfield "[(m['agent'], m.get('superseded_by')) for m in d['methods']]")" = \
+    '[["x", "x2"], ["y", "y2"], ["x2", null], ["y2", null]]' ]
+  [ "$(rowstat 2)" = "PASS" ]
+  # unpaired flags are refused, writing nothing
+  before="$(shasum "$REC/census/callers.json")"
+  run "$CR" census repin --program demo --pop callers --method x3 --method y3 --supersedes x2 \
+    --count 3 --cmd 'printf "a\nb\nc\n"' --why r
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"pair by position"* ]] || false
+  [ "$(shasum "$REC/census/callers.json")" = "$before" ]
+}
+
 @test "census repin refuses an unknown or superseded OLD, a NEW that is already a method, an empty --why and disagreeing active methods, writing nothing" {
   run "$CR" census repin --program demo --pop callers --method z --supersedes y --count 2 \
     --cmd 'printf "a\nb\n"' --why "re-pinned"

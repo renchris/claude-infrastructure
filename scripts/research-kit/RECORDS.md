@@ -310,7 +310,10 @@ Cross-module contracts (a consumer depends on exactly these shapes):
   [--items-file F]` re-baselines a census whose population changed after its methods were pinned: it runs CMD as
   `census add` does, marks OLD superseded, appends NEW, re-runs every active method, and sets `members` to their
   union (the rest move to `retired_members`). It refuses, writing nothing, on an unknown or already-superseded OLD, a
-  NEW that is already a method, an empty `--why`, or active methods that disagree.
+  NEW that is already a method, an empty `--why`, or active methods that disagree. When every method of a population
+  is stale, repeat `--method`/`--supersedes`/`--count`/`--cmd` (and `--items-file`, if used) once per method, paired
+  by position, so all of them are re-pinned in one all-or-nothing call: re-pinning them one at a time is refused,
+  because the agreement check re-runs the stale method left behind (added 2026-10-12, census P7 of truememory-2-0).
 - `cc-research concern add --program P --text T [--raised-by operator|agent|sweep|build|rehearsal]` appends a
   `challenges.jsonl` row with `triage: "pending"`; `cc-research concern list --program P [--pending] [--json]`.
 - `cc-research triage --program P` buckets pending challenges by the §5.2 table through a blind rater, appending
