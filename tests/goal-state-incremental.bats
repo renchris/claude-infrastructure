@@ -50,7 +50,7 @@ agree() {
 }
 cached_offset() { sed -n '2p' "$CC_GOAL_SCAN_DIR"/*.scan | awk '{print $2}'; }
 file_size() { wc -c < "$1" | tr -d ' '; }
-inode() { stat -f %i "$1"; }
+inode() { case "${OSTYPE:-}" in darwin*|*bsd*) stat -f %i "$1" ;; *) stat -c %i "$1" ;; esac; }
 
 @test "append: the incremental answer equals a full scan after every append" {
   { prose; filler 30; } > "$T";                agree 1 || false
@@ -105,13 +105,58 @@ inode() { stat -f %i "$1"; }
   [ "$(inc "$T")" = "new goal" ] || false
 }
 
-@test "FRAGMENT: a scan that resumes inside a line falls back to the full scan" {
-  # the cached offset lands mid-record: the writer had flushed only the record's head
+# All three readers agree on $T, cache or no cache (for steps where the subject must NOT write one).
+agree_nocache() {
+  local a b c
+  a="$(verdict inc "$T")"; b="$(verdict full "$T")"; c="$(verdict legacy "$T")"
+  [ "$a" = "$b" ] && [ "$b" = "$c" ] || { echo "step ${1:-?}: inc $a | full $b | legacy $c" >&2; return 1; }
+}
+
+@test "FRAGMENT: a size that ends mid-line is never stored as the offset" {
+  # the writer had flushed only the record's head when the stat ran
   { filler 5; printf '{"type":"attachment","attachment":'; } > "$T"
-  agree 1 || false
+  agree_nocache 1 || false
+  [ -z "$(ls "$CC_GOAL_SCAN_DIR" 2>/dev/null)" ] || false
   printf '{"type":"goal_status","met":false,"sentinel":true,"condition":"split record"}}\n' >> "$T"
   agree 2 || false
   [ "$(inc "$T")" = "split record" ] || false
+  [ "$(cached_offset)" -eq "$(file_size "$T")" ] || false
+}
+
+@test "FRAGMENT: a mid-line offset left in an old cache falls back to the full scan" {
+  { filler 5; arm_rec "split record"; } > "$T"
+  agree 1 || false
+  cf="$(ls "$CC_GOAL_SCAN_DIR"/*.scan)"
+  # forge the offset 10 bytes into the goal record, the shape an unaligned write used to leave
+  off=$(( $(file_size "$T") - $(arm_rec "split record" | wc -c) + 10 ))
+  printf '%s\n%s %s none\n' "$T" "$(inode "$T")" "$off" > "$cf"
+  filler 1 >> "$T"
+  agree 2 || false
+  [ "$(inc "$T")" = "split record" ] || false
+}
+
+@test "STRADDLE: an arm record split inside its anchor is not lost (no false NO-goal)" {
+  # the stat lands after `"type":"goal_st`: a stored offset there would hide the record for good
+  { filler 5; printf '{"type":"attachment","attachment":{"type":"goal_st'; } > "$T"
+  agree_nocache 1 || false
+  printf 'atus","met":false,"sentinel":true,"condition":"straddled goal"}}\n' >> "$T"
+  agree 2 || false
+  [ "$(inc "$T")" = "straddled goal" ] || false
+  filler 3 >> "$T";                            agree 3 || false
+}
+
+@test "STRADDLE: a met record split inside its anchor after a cached live goal is not read as live" {
+  { filler 5; arm_rec "g2"; } > "$T"
+  agree 1 || false
+  printf '{"type":"attachment","attachment":{"type":"goal_sta' >> "$T"
+  agree 2 || false                             # the earlier aligned cache stands
+  printf 'tus","met":true,"condition":"g2"}}\n' >> "$T"
+  agree 3 || false
+  run inc "$T"
+  [ "$status" -eq 1 ] && [ -z "$output" ] || false
+  filler 3 >> "$T";                            agree 4 || false   # and stays off after later appends
+  run inc "$T"
+  [ "$status" -eq 1 ] || false
 }
 
 @test "a corrupt goal record is rc 1 on the incremental path too (never live)" {

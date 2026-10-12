@@ -177,6 +177,15 @@ _goal_scan() {
      && [ $(( sz - off )) -lt "$wmin" ]; then
     return 0                                   # unchanged and the re-read tail stays small
   fi
+  # NEVER STORE A MID-LINE OFFSET. When the stat lands while a record is half flushed, the anchor can
+  # straddle the offset: the grep above missed the partial line, and a tail resumed there would never
+  # hold the whole anchor either, so the record would be lost for good (a met goal read as live
+  # forever). Only an offset just past a newline is stored; otherwise this call writes nothing and the
+  # next one resumes from the previous offset. Two forks, and only on this rare write path.
+  if [ "$sz" -gt 0 ]; then
+    out="$(tail -c +"$sz" "$tp" 2>/dev/null | head -c 1; printf x)"
+    [ "$out" = $'\nx' ] || return 0
+  fi
   if [ ! -d "$dir" ]; then mkdir -p "$dir" 2>/dev/null || return 0; fi
   # The offset is the size read BEFORE the grep: bytes appended since are re-read next time, never
   # skipped. tmp+mv so a concurrent reader sees a whole cache file or the previous one.
