@@ -1173,6 +1173,9 @@ rq_retire() { # $1=file $2=name $3=sid $4=requested_by $5=reason — files the r
     '{sid:$sid, rc:0, ts:$ts, requested_by:$by, mode:"relaunch", verdict:"retired", reason:$why}' \
     > "$RESULTS/$3.json" 2>/dev/null || true
   mv "$1" "$RESULTS/${2%.json}.retired.json" 2>/dev/null || rm -f "$1"
+  # A retired request clears the sid's reroute cap (decision 1dc45a0d583c). Inline paths, not
+  # reroute_cap_clear: the request lane runs before § 2a defines it (the lrp_is_teammate lesson).
+  rm -f "$STATE/reroute/$3.tries" "$STATE/reroute/$3.paged" 2>/dev/null || true
   log "REQUEST-RETIRED $3 — $5; nothing was done"
 }
 # The hook lane's retry budget. A dispatched request STAYS in the queue until the session is seen
@@ -2124,6 +2127,9 @@ reroute_parked() { # $1=sid $2=acct $3=cfg $4=reset epoch → dispatches or does
   if command -v lr_transplant_target >/dev/null 2>&1 && lr_transplant_target "$sid" "$cfg" >/dev/null 2>&1; then
     return 0
   fi
+  # The cap reads the LAST run's verdict before the backoff, so a give-up is paged on the tick that
+  # finds it, not up to LR_REROUTE_EVERY_MIN later (decision 1dc45a0d583c, reroute_cap below).
+  reroute_cap "$sid" "$acct" || return 0
   mark="$REROUTE_DIR/$sid"
   if [[ -f "$mark" ]] && [[ -n "$(find "$mark" -mmin -"$REROUTE_EVERY_MIN" 2>/dev/null)" ]]; then
     return 0
@@ -2151,6 +2157,72 @@ reroute_parked() { # $1=sid $2=acct $3=cfg $4=reset epoch → dispatches or does
   lrp_act_done
   return 0
 }
+
+# ── THE REROUTE CAP (decision 1dc45a0d583c, 2026-10-11) ───────────────────────────────────────────
+# reroute_parked had a 15-minute mark and nothing else: 46bc0436 was dispatched 119 times, 116 of
+# them ending "recycle-in-place/FAILED — lr-handoff rc=2", and 492a787a parked 103 times on CWD-GONE.
+# Each sid's tries are now counted per REFUSAL REASON — the verdict token, the mechanism and the
+# note's first cause token from the last run's verdict.txt — and after LR_REROUTE_MAX_SAME (3) tries
+# ending the same reason the rail stops rerouting it (the parked record stays; § 2 still owns its
+# reset) and pages ONCE through lr-page: the fact, the sid and the evidence path inside lr-page's
+# 200-character cut, no ask and no claim that anything retries (operator ruling 2026-10-10, zero human
+# in the loop). The page marker is written only after lr-page returns 0, so a page that did not post
+# is tried again next tick rather than latched unsent. The state clears when the session recovers by
+# any path: a RECOVERED run, its parked record retiring (RESUMED, TRANSPLANTED, …), REQUEST-RETIRED,
+# or a reconciler close. Kill switch LR_REROUTE_CAP=off.
+# State: $REROUTE_DIR/<sid>.tries = "<count>\t<last counted run>\t<reason>"; <sid>.paged = the reason paged.
+REROUTE_MAX_SAME="${LR_REROUTE_MAX_SAME:-3}"; [[ "$REROUTE_MAX_SAME" =~ ^[1-9][0-9]*$ ]] || REROUTE_MAX_SAME=3
+RECON_SESS="${LR_RECON_ROOT:-$STATE/recon}/sessions"
+reroute_cap_clear() { rm -f "$REROUTE_DIR/$1.tries" "$REROUTE_DIR/$1.paged" 2>/dev/null || true; }
+reroute_reason() { # stdin = verdict.txt → "<VERDICT> <mech> <first cause token>"
+  awk 'NR == 1 {
+    v = $0; sub(/.*verdict=/, "", v); sub(/ .*/, "", v)
+    m = $0; if (!sub(/.* mech=/, "", m)) m = ""; sub(/ .*/, "", m)
+    n = $0; i = index(n, " — "); n = (i ? substr(n, i + 5) : "")
+    sub(/(: |; |, | — |;$).*/, "", n); sub(/ evidence:.*/, "", n)
+    printf "%s %s %s\n", v, m, substr(n, 1, 60) }'
+}
+reroute_cap() { # $1=sid $2=acct → 0 may dispatch · 1 gave up (paged, or the page is retried next tick)
+  local sid="$1" acct="$2" f="$REROUTE_DIR/$1.tries" run v reason n=0 lrun="" lreason="" msg pv prc
+  [[ "${LR_REROUTE_CAP:-on}" != off ]] || return 0
+  if [[ -f "$f" && -f "$RECON_SESS/$sid.json" && "$RECON_SESS/$sid.json" -nt "$f" ]] \
+     && [[ "$(jq -r '.terminal != null' "$RECON_SESS/$sid.json" 2>/dev/null)" == true ]]; then
+    log "REROUTE-CAP-CLEAR $sid — the reconciler closed its record"; reroute_cap_clear "$sid"
+  fi
+  [[ -f "$f" ]] && IFS=$'\t' read -r n lrun lreason < "$f"
+  [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  run="$(sed -n 's/^run=\([^ ]*\) .*/\1/p' "$RESULTS/$sid.log" 2>/dev/null | tail -1)"
+  if [[ -n "$run" && "$run" != "$lrun" && -f "$run/verdict.txt" ]]; then
+    v="$(head -1 "$run/verdict.txt" 2>/dev/null)"
+    case "$v" in
+      *"verdict=RECOVERED "*) [[ -f "$f" ]] && log "REROUTE-CAP-CLEAR $sid — its last run RECOVERED"; reroute_cap_clear "$sid"; return 0 ;;
+      *"verdict=FAILED "*|*"verdict=PARKED "*|*"verdict=HELD:"*|*"verdict=PARTIAL "*|*"verdict=UNPROVEN "*)
+        reason="$(printf '%s\n' "$v" | reroute_reason)"
+        if [[ -n "$reason" && "$reason" == "$lreason" ]]; then n=$(( n + 1 )); else n=1; fi
+        lreason="$reason"; lrun="$run"
+        mkdir -p "$REROUTE_DIR" 2>/dev/null
+        printf '%s\t%s\t%s\n' "$n" "$lrun" "$lreason" > "$f" 2>/dev/null || true ;;
+    esac
+  fi
+  (( n >= REROUTE_MAX_SAME )) || return 0
+  [[ -f "$REROUTE_DIR/$sid.paged" && "$(cat "$REROUTE_DIR/$sid.paged" 2>/dev/null)" == "$lreason" ]] && return 1
+  log "REROUTE-GAVE-UP $sid ($acct) — $n tries in a row ended: $lreason; no further reroute (evidence: $lrun)"
+  msg="Session ${sid:0:8} ($acct): rerouting stopped after $n tries that ended alike. Evidence: $lrun. Each ended: $lreason"
+  if [[ $DRY -eq 1 ]]; then log "DRY   page (reroute stopped): $msg"; return 1; fi
+  if [[ -z "$LRP_PAGE_BIN" ]]; then log "PAGE-LOST (reroute stopped) lr-page.sh unreachable — $msg"; return 1; fi
+  pv="$(/bin/bash "$LRP_PAGE_BIN" --title "reroute stopped" -- "$msg" 2>>"$LOG")" && prc=0 || prc=$?
+  pv="${pv##*$'\n'}"
+  (( prc == 0 )) && { printf '%s\n' "$lreason" > "$REROUTE_DIR/$sid.paged" 2>/dev/null || true; }
+  log "PAGE  (reroute stopped) ${pv:-lr-page: no verdict} — $msg"
+  return 1
+}
+# The sweep: a cap whose parked record is gone belongs to a session that recovered (every retire path
+# moves the record to $RESUMED), so the next limit episode starts at zero.
+for _rc_f in "$REROUTE_DIR"/*.tries; do
+  [[ -e "$_rc_f" ]] || continue
+  _rc_sid="$(basename "$_rc_f" .tries)"
+  [[ -e "$PARKED/$_rc_sid.json" ]] || { reroute_cap_clear "$_rc_sid"; log "REROUTE-CAP-CLEAR $_rc_sid — its parked record retired"; }
+done
 
 # ── 2b. A STRANDED HUSK IS THE REQUEST LANE'S TO DRIVE (2026-10-10, 186452ed) ─────────────────────
 # A parked record whose session MOVED, whose successor never started and whose source pane still
