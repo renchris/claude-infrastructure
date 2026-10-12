@@ -32,14 +32,40 @@ if [ "${CC_RESEARCH_ROUTER:-}" != off ] && [ -z "${CC_RESEARCH_ROUTER_INNER:-}" 
   # shellcheck source=lib/research-router.sh
   # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
   if [ -f "$_rl" ] && . "$_rl" 2>/dev/null && rr_registry_present && rr_init "$0"; then
-    _cwd="$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)"
+    # One jq parse yields the cwd and the session id, \x1f-separated (the hooks/research-block.sh
+    # idiom): a non-whitespace IFS keeps an empty cwd from shifting the fields, and a session id that
+    # is neither a string nor absent prints _sidt=o, which never takes the fast exit below.
+    _fields="$(printf '%s' "$INPUT" | jq -r '[(.cwd // "" | tostring),
+      (.session_id | if type == "string" then "s" elif . == null then "n" else "o" end),
+      (.session_id | if type == "string" then . else "" end)] | join("\u001f")' 2>/dev/null)" && _parsed=1 || _parsed=0
+    IFS=$'\x1f' read -r _cwd _sidt _sid <<EOF
+$_fields
+EOF
     _by=cwd
     _res=""
     [ -n "$_cwd" ] && _res="$(rp_resolve_cwd "$_cwd" 2>/dev/null)"
     if [ -z "$_res" ]; then _by=prompt; _res="$(rp_resolve_prompt "$PROMPT" 2>/dev/null)"; fi
-    _out="$(printf '%s' "$INPUT" | /usr/bin/env python3 "$RR_ROUTER" prompt \
-              --program "${_res%% *}" --state "${_res##* }" --by "$_by" 2>/dev/null)"
-    if [ -n "$_out" ]; then printf '%s\n' "$_out"; exit 0; fi
+    # FAST EXIT (docs/research/load-hook-timeouts-2026-10-11 item 7): with no program resolved,
+    # router.py `prompt` does one thing — route_clear(<sid>) for a genuine prompt, nothing for a
+    # machine envelope — and prints nothing. So when the session also has NO route record the router
+    # is a no-op, and that is every prompt of every session outside a program, on a machine whose
+    # registry exists: one python3 start per prompt saved. A session that DOES carry a record still
+    # goes to the router, which alone knows the genuine/envelope split (MACHINE_ENVELOPE) that decides
+    # whether the record is cleared. The record's name is router.py route_path() — sid with
+    # [^A-Za-z0-9_.-] → _, cut at 128, "unknown" when empty — and, as in research-block.sh, the exit is
+    # taken only for a sid that sanitizer leaves unchanged, so the two cannot drift.
+    _rr_no_route() { # $1=sid → rc 0 iff the sid is sanitizer-stable and has no route record
+      local LC_ALL=C s="${1:-unknown}"   # byte ranges: a locale must not widen A-Z past ASCII
+      case "$s" in *[!A-Za-z0-9_.-]*) return 1 ;; esac
+      [ "${#s}" -le 128 ] || return 1
+      [ ! -e "${CC_RESEARCH_HOME:-$HOME/.claude/autonomy/research}/route-state/$s.json" ]
+    }
+    if [ -n "$_res" ] || [ "$_parsed" != 1 ] || [ "$_sidt" = o ] \
+      || [ "${_fields#*$'\n'}" != "$_fields" ] || ! _rr_no_route "$_sid"; then
+      _out="$(printf '%s' "$INPUT" | /usr/bin/env python3 "$RR_ROUTER" prompt \
+                --program "${_res%% *}" --state "${_res##* }" --by "$_by" 2>/dev/null)"
+      if [ -n "$_out" ]; then printf '%s\n' "$_out"; exit 0; fi
+    fi
     case "${_res##* }" in certifying|certified|build-certifying|build-certified|implementation-signed) exit 0 ;; esac   # routed silently (work-order)
   fi
 fi

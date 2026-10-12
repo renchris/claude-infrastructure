@@ -192,3 +192,47 @@ write_phase_tombstone() { # $1=phase — the admit shape lr-transplant.sh prints
   run env CLAUDE_CONFIG_DIR="$SRC_CFG" "$HOOK" <<<"$PAYLOAD_SRC"
   [ "$status" -eq 2 ]
 }
+
+# ── No interpreter start on the prompt path (load-hook-timeouts-2026-10-11 item 7) ───────────────
+# This hook runs on every prompt of every session and used to start python3 twice before it even
+# looked for a tombstone, and up to four more times with one. It now reads with jq. Two detectors,
+# because the old code resolved /usr/bin/python3 ABSOLUTELY first, where no PATH stub can see it:
+# a python3 stub on PATH that leaves a marker, and the hook's own xtrace, which names every command
+# it runs. Both the ordinary (allowed) and the blocking path are covered, verdicts unchanged.
+no_python_run() { # $1=payload — the hook under /bin/bash -x (the production interpreter), like `run`
+  mkdir -p "$BATS_TEST_TMPDIR/pybin"
+  printf '#!/bin/bash\necho "$*" >> "%s"\nexit 1\n' "$BATS_TEST_TMPDIR/py.marker" > "$BATS_TEST_TMPDIR/pybin/python3"
+  chmod +x "$BATS_TEST_TMPDIR/pybin/python3"
+  run env PATH="$BATS_TEST_TMPDIR/pybin:$PATH" CLAUDE_CONFIG_DIR="$SRC_CFG" PS4='+XT ' \
+    /bin/bash -x "$HOOK" <<<"$1"
+}
+
+@test "no python3: the ordinary prompt (no tombstone) is allowed without starting an interpreter" {
+  no_python_run "$PAYLOAD_SRC"
+  [ "$status" -eq 0 ]
+  [ ! -e "$BATS_TEST_TMPDIR/py.marker" ]
+  [[ "$output" == *"+XT "* ]] || false                                  # the detector saw the run…
+  [ "$(printf '%s\n' "$output" | grep -c python3)" -eq 0 ]              # …and nothing it ran named python3
+}
+
+@test "no python3: a retired source is still BLOCKED with the same message, without starting an interpreter" {
+  write_tombstone "$SRC_DIR" "$DST_CFG" "$DST_TP"
+  no_python_run "$PAYLOAD_SRC"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"⛔ THIS PANE IS A RETIRED SOURCE — your prompt was NOT delivered."* ]] || false
+  [[ "$output" == *"Session ${SID:0:8} was transplanted to next ($DST_CFG) and continues there."* ]] || false
+  [[ "$output" == *"transplant's tombstone was written to prevent — $SRC_DIR/$SID.HANDOFF.json."* ]] || false
+  [[ "$output" == *"this side's transcript stays on disk at $SRC_TP."* ]] || false
+  [ ! -e "$BATS_TEST_TMPDIR/py.marker" ]
+  [[ "$output" == *"+XT "* ]] || false
+  [ "$(printf '%s\n' "$output" | grep -c python3)" -eq 0 ]
+}
+
+@test "the jq reader returns every field even when an EARLIER one is empty (TSV must not shift)" {
+  # handed_off_to set, superseded_by_pid absent (empty field), phase admit: a TAB-IFS `read` would
+  # collapse the empty field and hand "admit" to the wrong variable, turning the D7.2a allow into a block.
+  printf '{"handed_off_to":"%s","superseded_by_pane":"","phase":"admit"}\n' "$DST_CFG" >"$SRC_DIR/$SID.HANDOFF.json"
+  run env CLAUDE_CONFIG_DIR="$SRC_CFG" "$HOOK" <<<"$PAYLOAD_SRC"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -q "allow-admit sid=$SID" "$HOME/.claude/logs/handed-off-guard.log"
+}

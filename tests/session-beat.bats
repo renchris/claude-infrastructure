@@ -19,7 +19,31 @@ setup() {
   . "$REPO/hooks/lib/cc-beat.sh"
 }
 
-emit() { # <json-stdin> <kind>
+# The producer DETACHES its write and returns at once (load-hook-timeouts-2026-10-11 item 7), so a
+# caller that reads the beat must wait for it. wait_beat polls, bounded, until <sid>'s beat exists
+# with seq > <after>; the 45 s bound is inside the 60 s freshness contract the reader relies on
+# (sized for a machine at load ~600, where one `ps` start can take most of a second).
+beat_seq() { jq -r '.seq // 0' "$CC_BEAT_DIR/$1.json" 2>/dev/null || echo 0; }
+wait_beat() { # <sid> [after-seq]
+  local n=0
+  while [ "$n" -lt 450 ]; do
+    [ "$(beat_seq "$1")" -gt "${2:-0}" ] 2>/dev/null && return 0
+    sleep 0.1; n=$((n + 1))
+  done
+  echo "no beat for $1 past seq ${2:-0} within 45 s" >&2; return 1
+}
+
+emit() { # <json-stdin> <kind> — one beat, returned once it is ON DISK
+  local sid before
+  sid="$(printf '%s' "$1" | jq -r '.session_id // empty' 2>/dev/null)"
+  before="$(beat_seq "$sid")"
+  printf '%s' "$1" | /bin/bash "$BEAT" "${2:-prompt}"
+  wait_beat "$sid" "$before"
+}
+
+# For a payload the producer refuses BEFORE it detaches (kill switch, no sid, hostile sid): nothing
+# is forked, so there is nothing to wait for and the absence is final when this returns.
+emit_nowait() { # <json-stdin> <kind>
   printf '%s' "$1" | /bin/bash "$BEAT" "${2:-prompt}"
 }
 
@@ -105,21 +129,21 @@ emit() { # <json-stdin> <kind>
 }
 
 @test "kill switch CC_BEAT=off writes nothing — and with it ON the same call writes (differential)" {
-  CC_BEAT=off emit '{"session_id":"s9","cwd":"/tmp","prompt":"hi"}' prompt
+  CC_BEAT=off emit_nowait '{"session_id":"s9","cwd":"/tmp","prompt":"hi"}' prompt
   [ ! -f "$CC_BEAT_DIR/s9.json" ]
   emit '{"session_id":"s9","cwd":"/tmp","prompt":"hi"}' prompt
   [ -f "$CC_BEAT_DIR/s9.json" ]
 }
 
 @test "FAIL-OPEN producer: garbage stdin and a missing sid still exit 0 (a beat must never cost a session)" {
-  run emit 'not json at all' prompt
+  run emit_nowait 'not json at all' prompt
   [ "$status" -eq 0 ]
-  run emit '{"cwd":"/tmp","prompt":"no sid here"}' prompt
+  run emit_nowait '{"cwd":"/tmp","prompt":"no sid here"}' prompt
   [ "$status" -eq 0 ]
 }
 
 @test "a path-hostile sid is refused, never written outside the beat dir" {
-  emit '{"session_id":"../../escape","cwd":"/tmp","prompt":"hi"}' prompt
+  emit_nowait '{"session_id":"../../escape","cwd":"/tmp","prompt":"hi"}' prompt
   [ ! -e "$BATS_TEST_TMPDIR/escape.json" ]
   [ ! -e "$CC_BEAT_DIR/../../escape.json" ]
 }
@@ -140,6 +164,7 @@ emit() { # <json-stdin> <kind>
     | env TZ=America/Chicago /bin/bash "$BEAT" prompt
   printf '%s' '{"session_id":"tzB","cwd":"/tmp","prompt":"hi"}' \
     | env TZ=Asia/Tokyo /bin/bash "$BEAT" prompt
+  wait_beat tzA; wait_beat tzB
   a="$(jq -r '.lstart' "$CC_BEAT_DIR/tzA.json")"
   b="$(jq -r '.lstart' "$CC_BEAT_DIR/tzB.json")"
   [ -n "$a" ]
@@ -152,6 +177,7 @@ emit() { # <json-stdin> <kind>
   # construction and the assertion could not discriminate (it would pass on the broken writer too).
   printf '%s' '{"session_id":"tzC","cwd":"/tmp","prompt":"hi"}' \
     | env TZ=America/Chicago /bin/bash "$BEAT" prompt
+  wait_beat tzC
   pid="$(jq -r '.pid' "$CC_BEAT_DIR/tzC.json")"
   got="$(jq -r '.lstart' "$CC_BEAT_DIR/tzC.json")"
   utc="$(TZ=UTC ps -o lstart= -p "$pid" | tr -s ' ' | sed 's/^ *//;s/ *$//')"
@@ -169,18 +195,90 @@ emit() { # <json-stdin> <kind>
   # afford one.
   printf '%s' '{"session_id":"kt","cwd":"/tmp","prompt":"hi"}' \
     | env -u CC_PANE_ID -u ITERM_SESSION_ID KITTY_WINDOW_ID=186 /bin/bash "$BEAT" prompt
+  wait_beat kt
   [ "$(jq -r '.pane' "$CC_BEAT_DIR/kt.json")" = 186 ]
 
   # LAST, not first: a session that resolves today keeps the SAME pane when a kitty id is also in
   # the environment. Appending a fallback must never re-address an existing population.
   printf '%s' '{"session_id":"kb","cwd":"/tmp","prompt":"hi"}' \
     | env -u CC_PANE_ID ITERM_SESSION_ID='w0t0p0:112' KITTY_WINDOW_ID=999 /bin/bash "$BEAT" prompt
+  wait_beat kb
   [ "$(jq -r '.pane' "$CC_BEAT_DIR/kb.json")" = 112 ]
 
   # and with no address at all the beat is still written — a missing pane must never cost a beat,
   # because the beat is what keeps the session counted as alive.
   printf '%s' '{"session_id":"kn","cwd":"/tmp","prompt":"hi"}' \
     | env -u CC_PANE_ID -u ITERM_SESSION_ID -u KITTY_WINDOW_ID /bin/bash "$BEAT" prompt
+  wait_beat kn
   [ -s "$CC_BEAT_DIR/kn.json" ]
   [ "$(jq -r '.pane' "$CC_BEAT_DIR/kn.json")" = "" ]
+}
+
+# ══ OFF THE PROMPT PATH — the producer detaches its work (load-hook-timeouts-2026-10-11 item 7) ══
+#
+# Every prompt of every session runs this hook, and it used to hold the turn for six jq starts and up
+# to 24 `ps` (the ancestry walk) under a 3 s cap. It now pays one jq parse in the foreground and
+# detaches the rest. The `ps` stub below stalls the walk's FIRST call for 10 s: a foreground walk
+# cannot return before that, a detached one returns at once and the beat lands after it.
+
+slow_ps_stub() {
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  printf '#!/bin/bash\nif [ -n "${BEAT_SLOW_PS:-}" ] && mkdir "$BEAT_SLOW_PS" 2>/dev/null; then sleep 10; fi\nexec /bin/ps "$@"\n' \
+    > "$BATS_TEST_TMPDIR/bin/ps"
+  chmod +x "$BATS_TEST_TMPDIR/bin/ps"
+}
+
+@test "OFF PATH: the hook returns while a stalled walk is still running, and the beat lands fresh" {
+  slow_ps_stub
+  start=$SECONDS
+  # $( ) waits for EOF on the hook's stdout, so this also proves the worker does not hold the pipe.
+  out="$(printf '%s' '{"session_id":"op1","cwd":"/tmp","prompt":"hello"}' \
+    | env PATH="$BATS_TEST_TMPDIR/bin:$PATH" BEAT_SLOW_PS="$BATS_TEST_TMPDIR/stalled" CC_BEAT_TIMEOUT=40 \
+      /bin/bash "$BEAT" prompt)"
+  elapsed=$(( SECONDS - start ))
+  [ -z "$out" ]
+  # The DESIGN target is <1 s (one jq start); measured at 0 s on an idle box. The bound asserted is
+  # looser because $SECONDS is whole seconds and, at load ~600, bash + one jq start alone has taken
+  # 2 s here; the 10 s stall is what a foreground hook could not get under.
+  [ "$elapsed" -le 4 ] || { echo "hook held the prompt ${elapsed}s" >&2; false; }
+  # Non-vacuity, and the load-proof half: the stub DID stall the walk (the worker reached it) and the
+  # beat is not yet written, so the return above is the detach, not a walk that never ran. (The
+  # worker may reach its first `ps` just after the hook returns; once it has, the beat is ≥10 s away.)
+  n=0; while [ ! -d "$BATS_TEST_TMPDIR/stalled" ] && [ "$n" -lt 80 ]; do sleep 0.1; n=$((n + 1)); done
+  [ -d "$BATS_TEST_TMPDIR/stalled" ]
+  [ ! -e "$CC_BEAT_DIR/op1.json" ]
+  wait_beat op1
+  [ "$(jq -r '.who' "$CC_BEAT_DIR/op1.json")" = operator ]
+  t="$(jq -r '.t' "$CC_BEAT_DIR/op1.json")"
+  [ $(( $(date +%s) - t )) -le 60 ]      # the reader's freshness contract
+}
+
+@test "OFF PATH: a lock left by a killed worker costs one bounded wait, never the beat, and is cleared" {
+  # The per-sid lock serializes a session's detached read-modify-writes (a slow prompt worker must
+  # not let a later Stop worker write back a stale operatorT). A worker killed by its HARD timeout
+  # while holding it must not cost every later beat.
+  mkdir -p "$CC_BEAT_DIR/.lk1.lock"
+  emit '{"session_id":"lk1","cwd":"/tmp","prompt":"hi"}' prompt
+  n=0; while [ -e "$CC_BEAT_DIR/.lk1.lock" ] && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+  [ ! -e "$CC_BEAT_DIR/.lk1.lock" ]
+  [ "$(jq -r '.who' "$CC_BEAT_DIR/lk1.json")" = operator ]
+}
+
+@test "the who regex runs in bash and agrees with the reader's jq test on multi-line and unicode prompts" {
+  # Every alternative is ^-anchored; neither engine may read ^ as a line anchor, or a pasted log
+  # whose SECOND line starts with ⟳ would flip an operator prompt to auto.
+  emit "$(jq -nc '{session_id:"rx1",cwd:"/tmp",prompt:"look at this\n⟳ recycled"}')" prompt
+  [ "$(jq -r '.who' "$CC_BEAT_DIR/rx1.json")" = operator ]
+  emit "$(jq -nc '{session_id:"rx2",cwd:"/tmp",prompt:"⚑ boundary advisory"}')" prompt
+  [ "$(jq -r '.who' "$CC_BEAT_DIR/rx2.json")" = auto ]
+  emit "$(jq -nc '{session_id:"rx3",cwd:"/tmp",prompt:"[Request interrupted by user]"}')" prompt
+  [ "$(jq -r '.who' "$CC_BEAT_DIR/rx3.json")" = auto ]
+}
+
+@test "the one-jq parse keeps an empty cwd from shifting fields, and restores an escaped cwd byte-for-byte" {
+  emit "$(jq -nc '{session_id:"cw1",cwd:"",prompt:"hi"}')" prompt
+  [ "$(jq -r '.cwd' "$CC_BEAT_DIR/cw1.json")" = "$PWD" ]
+  [ "$(jq -r '.who' "$CC_BEAT_DIR/cw1.json")" = operator ]
+  emit "$(jq -nc '{session_id:"cw2",cwd:"/tmp/a\\b\tc",prompt:"hi"}')" prompt
+  [ "$(jq -r '.cwd == "/tmp/a\\b\tc"' "$CC_BEAT_DIR/cw2.json")" = true ]
 }

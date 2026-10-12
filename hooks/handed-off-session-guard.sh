@@ -34,48 +34,75 @@ set -uo pipefail
 INPUT=$(cat 2>/dev/null || true)
 [ -n "$INPUT" ] || exit 0
 
-# Resolve python3 ABSOLUTELY as well as by PATH: hooks inherit a minimal PATH in launchd and
-# headless contexts, which is exactly where a PATH-only lookup is silently unavailable.
-HOG_PY=""
-for _c in /usr/bin/python3 "$(command -v python3 2>/dev/null || true)"; do
-  [ -n "$_c" ] && [ -x "$_c" ] && { HOG_PY="$_c"; break; }
+# ONE jq start per read, never a python3 interpreter (docs/research/load-hook-timeouts-2026-10-11
+# item 7): this runs on every prompt of every session, and the two python3 starts it used to pay
+# before even looking for a tombstone were most of its cost under load. Resolved ABSOLUTELY as well
+# as by PATH: hooks inherit a minimal PATH in launchd and headless contexts, which is exactly where a
+# PATH-only lookup is silently unavailable. No jq ⇒ the sed fallback below.
+HOG_JQ=""
+for _c in "$(command -v jq 2>/dev/null || true)" /usr/bin/jq /opt/homebrew/bin/jq /usr/local/bin/jq; do
+  [ -n "$_c" ] && [ -x "$_c" ] && { HOG_JQ="$_c"; break; }
 done
 
-# Read one top-level string field. The key is anchored on its opening quote AND a preceding
-# delimiter so a longer key cannot satisfy it — `"session_id"` must not be answered by
-# `"parent_session_id"`, the greedy-suffix match that has cost this repo a defect before.
-hog_field() {
-  local key="$1"
-  if [ -n "$HOG_PY" ]; then
-    printf '%s' "$INPUT" | "$HOG_PY" -c '
-import json,sys
-try: d=json.load(sys.stdin)
-except Exception: sys.exit(0)
-v=d.get(sys.argv[1]) if isinstance(d,dict) else None
-print(v if isinstance(v,str) else "")
-' "$key" 2>/dev/null
-  else
-    printf '%s' "$INPUT" | sed -n 's/.*[{,[:space:]]"'"$key"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
-  fi
+# Split one `@tsv` row into the named variables by parameter expansion, not `read`: TAB is IFS
+# whitespace, so `read` would collapse an EMPTY field and shift every later one into the wrong name.
+# @tsv escapes \ TAB LF CR as \\ \t \n \r; each field is unescaped so a value prints exactly as it did
+# when python3 printed it raw (the block messages quote $TP and $TOMB). A 0x02 placeholder keeps an
+# escaped backslash from being read as the start of another escape (not 0x01: that is bash's own
+# internal quoting byte, CTLESC, and mangles inside ${//}). No subshell, no fork.
+hog_split() { # $1=row  $2...=variable names
+  local row="$1" f v; shift
+  for f in "$@"; do
+    v="${row%%$'\t'*}"
+    v="${v//\\\\/$'\002'}"; v="${v//\\t/$'\t'}"; v="${v//\\n/$'\n'}"; v="${v//\\r/$'\r'}"
+    printf -v "$f" '%s' "${v//$'\002'/\\}"
+    case "$row" in *$'\t'*) row="${row#*$'\t'}" ;; *) row="" ;; esac
+  done
 }
 
-SID=$(hog_field session_id)
-TP=$(hog_field transcript_path)
+# A top-level STRING field, else "". The key is anchored on its opening quote AND a preceding
+# delimiter in the sed fallback so a longer key cannot satisfy it — `"session_id"` must not be
+# answered by `"parent_session_id"`, the greedy-suffix match that has cost this repo a defect before
+# (jq's object lookup is exact by construction).
+hog_sed_field() { # $1=key  $2=text
+  printf '%s' "$2" | sed -n 's/.*[{,[:space:]]"'"$1"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
+}
+
+SID=""; TP=""
+if [ -n "$HOG_JQ" ]; then
+  hog_split "$(printf '%s' "$INPUT" | "$HOG_JQ" -rs '
+    def s: if type == "string" then . else "" end;
+    if length == 1 then .[0] else error("not one document") end
+    | [(.session_id | s), (.transcript_path | s)] | @tsv' 2>/dev/null)" SID TP
+else
+  SID=$(hog_sed_field session_id "$INPUT")
+  TP=$(hog_sed_field transcript_path "$INPUT")
+fi
 [ -n "$SID" ] && [ -n "$TP" ] || exit 0
 
 TOMB="$(dirname "$TP")/$SID.HANDOFF.json"
 [ -f "$TOMB" ] || exit 0
 
-TARGET=""
-if [ -n "$HOG_PY" ]; then
-  TARGET=$("$HOG_PY" -c '
-import json,sys
-try: d=json.load(open(sys.argv[1]))
-except Exception: sys.exit(0)
-print(d.get("handed_off_to") or "")
-' "$TOMB" 2>/dev/null)
+# Every tombstone field this hook can need, in ONE read. The per-field rules are the ones the python3
+# reads applied: handed_off_to and superseded_by_pane print any truthy value (`x or ""`), phase only a
+# string, superseded_by_pid only an integer — a JSON boolean included, since python's bool IS an int
+# and `kill -0 True` then fails open. Unparseable, empty or multi-document ⇒ every field "".
+TARGET=""; SUP_PID=""; SUP_PANE=""; PHASE=""
+if [ -n "$HOG_JQ" ]; then
+  hog_split "$("$HOG_JQ" -rs '
+    def truthy: if . == null or . == false or . == 0 or . == "" or . == [] or . == {} then ""
+                elif type == "string" then . elif . == true then "True" elif type == "number" then tostring
+                else tojson end;
+    def pid: if type == "boolean" then (if . then "True" else "False" end)
+             elif type == "number" and . == floor then tostring else "" end;
+    if length == 1 then .[0] else error("not one document") end
+    | [(.handed_off_to | truthy), (.superseded_by_pid | pid), (.superseded_by_pane | truthy),
+       (.phase | if type == "string" then . else "" end)] | @tsv' "$TOMB" 2>/dev/null)" \
+    TARGET SUP_PID SUP_PANE PHASE
 else
   TARGET=$(sed -n 's/.*[{,[:space:]]"handed_off_to"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TOMB" | head -1)
+  SUP_PID=$(sed -n 's/.*[{,[:space:]]"superseded_by_pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$TOMB" | head -1)
+  PHASE=$(sed -n 's/.*[{,[:space:]]"phase"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TOMB" | head -1)
 fi
 [ -n "$TARGET" ] || exit 0
 
@@ -88,18 +115,6 @@ fi
 # whose claude pid IS the named successor is acquitted; every other process holding this session id
 # is the stale copy and its prompts are blocked. A dead successor pid fails OPEN (nothing is carrying
 # the session any more), exactly like the cross-account verdict in lr_tombstone_verdict.
-SUP_PID=""
-if [ -n "$HOG_PY" ]; then
-  SUP_PID=$("$HOG_PY" -c '
-import json,sys
-try: d=json.load(open(sys.argv[1]))
-except Exception: sys.exit(0)
-v=d.get("superseded_by_pid")
-print(v if isinstance(v,int) else "")
-' "$TOMB" 2>/dev/null)
-else
-  SUP_PID=$(sed -n 's/.*[{,[:space:]]"superseded_by_pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$TOMB" | head -1)
-fi
 if [ -n "$SUP_PID" ]; then
   if ! kill -0 "$SUP_PID" 2>/dev/null; then exit 0; fi        # successor gone ⇒ nothing else carries it
   _p="$PPID"; _n=0; _mine="${CC_HOG_SELF_PID:-}"     # CC_HOG_SELF_PID: test seam naming this hook's claude pid
@@ -111,15 +126,6 @@ if [ -n "$SUP_PID" ]; then
   done
   [ -n "$_mine" ] || exit 0                                     # cannot tell who I am ⇒ fail open
   [ "$_mine" = "$SUP_PID" ] && exit 0                           # I AM the live copy
-  SUP_PANE=""
-  if [ -n "$HOG_PY" ]; then
-    SUP_PANE=$("$HOG_PY" -c '
-import json,sys
-try: d=json.load(open(sys.argv[1]))
-except Exception: sys.exit(0)
-print(d.get("superseded_by_pane") or "")
-' "$TOMB" 2>/dev/null)
-  fi
   cat >&2 <<EOF
 ⛔ THIS PANE IS A STALE COPY — your prompt was NOT delivered.
 
@@ -164,19 +170,8 @@ ME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 # three say "not yet retired": the tombstone's phase is admit (lr-transplant writes it for a
 # non-keep-source admit only; confirm rewrites the tombstone without it), <sid>.jsonl is still here,
 # and no <sid>.jsonl.handed-off sits beside it. Anything else — keep-source, a legacy tombstone with no
-# phase, an unasserted run — falls through to the block below.
-PHASE=""
-if [ -n "$HOG_PY" ]; then
-  PHASE=$("$HOG_PY" -c '
-import json,sys
-try: d=json.load(open(sys.argv[1]))
-except Exception: sys.exit(0)
-v=d.get("phase")
-print(v if isinstance(v,str) else "")
-' "$TOMB" 2>/dev/null)
-else
-  PHASE=$(sed -n 's/.*[{,[:space:]]"phase"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TOMB" | head -1)
-fi
+# phase, an unasserted run — falls through to the block below. ($PHASE was read with the other
+# tombstone fields above.)
 SRC_JSONL="$(dirname "$TP")/$SID.jsonl"
 if [ "$PHASE" = admit ] && [ -f "$SRC_JSONL" ] && [ ! -e "$SRC_JSONL.handed-off" ]; then
   _log="$HOME/.claude/logs/handed-off-guard.log"

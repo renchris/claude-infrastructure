@@ -841,3 +841,45 @@ wf() {
   [ "$(tool Agent '[activity:fer-1] census A1')" = deny ]
   [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=fer-1 codex exec -s read-only p')" = deny ]
 }
+
+# ── the re-ask router's fast exit (docs/research/load-hook-timeouts-2026-10-11 item 7) ───────────
+# With no program resolved, router.py `prompt` only ever clears the session's route record, so a
+# session with no record makes it a no-op; the hook skips the python start. Same spy as pyspy, on
+# the UserPromptSubmit side. Prints the hook's stdout, then "py=<starts>".
+nspy() { # <prompt> <cwd> <sid>
+  local real; real="$(command -v python3)"
+  mkdir -p "$BATS_TEST_TMPDIR/spy"
+  printf '#!/bin/bash\necho x >> "%s"\nexec "%s" "$@"\n' "$BATS_TEST_TMPDIR/py.log" "$real" > "$BATS_TEST_TMPDIR/spy/python3"
+  chmod +x "$BATS_TEST_TMPDIR/spy/python3"
+  : > "$BATS_TEST_TMPDIR/py.log"
+  jq -nc --arg p "$1" --arg c "$2" --arg s "$3" '{session_id:$s,cwd:$c,prompt:$p}' \
+    | PATH="$BATS_TEST_TMPDIR/spy:$PATH" bash "$NUDGE"
+  echo "py=$(wc -l < "$BATS_TEST_TMPDIR/py.log" | tr -d ' ')"
+}
+
+@test "router fast exit: a prompt outside every program, in a session with no route record, starts no python and still nudges" {
+  state certified
+  run nspy "are we done?" "$BATS_TEST_TMPDIR/elsewhere" s-none
+  [ "$status" -eq 0 ]
+  [ "$output" = "py=0" ]
+  # The fan-out nudge below the router is untouched by the skip.
+  run nspy "research the options for caching" "$BATS_TEST_TMPDIR/elsewhere" s-none
+  [ "${output##*$'\n'}" = "py=0" ]
+  [[ "$output" == *"RESEARCH-INTENT PRE-COGNITION"* ]] || false
+  [ ! -s "$STUB_LOG" ]
+}
+
+@test "router fast exit is not taken inside a root, nor for a session with a route record (which the router still clears)" {
+  state certified
+  run nspy "are we done?" "$PROG/src" s-in
+  [ "${output##*$'\n'}" = "py=1" ]
+  [ -f "$CC_RESEARCH_HOME/route-state/s-in.json" ]
+  # The same session, now outside every root: the record exists, so the router runs and a genuine
+  # prompt clears it exactly as before.
+  run nspy "thanks, unrelated question" "$BATS_TEST_TMPDIR/elsewhere" s-in
+  [ "${output##*$'\n'}" = "py=1" ]
+  [ ! -e "$CC_RESEARCH_HOME/route-state/s-in.json" ]
+  # …and a sid the router would rename is never skipped on a guess about its record's name.
+  run nspy "hello" "$BATS_TEST_TMPDIR/elsewhere" "x/y z"
+  [ "${output##*$'\n'}" = "py=1" ]
+}

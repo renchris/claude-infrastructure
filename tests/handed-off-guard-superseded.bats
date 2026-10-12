@@ -47,6 +47,14 @@ mk_superseded() { # $1=successor pid  $2=successor pane
   [[ "$output" == *"pane 647"* ]] || { echo "$output"; false; }
 }
 
+@test "a NUMERIC superseded_by_pane still names the live pane (the jq read prints any truthy value, as python's did)" {
+  printf '{"handed_off_to":"%s","superseded_by_pid":%d,"superseded_by_pane":647,"ts":"x"}\n' "$CFG" "$$" > "$TOMB"
+  CC_HOG_SELF_PID=4194100 run bash "$HOOK" <<<"$INPUT"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"(pid $$, pane 647)"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"Say it in pane 647 instead"* ]] || { echo "$output"; false; }
+}
+
 @test "the LIVE copy (this claude pid IS the successor) is acquitted — the primary path is not broken" {
   mk_superseded "$$" 647
   CC_HOG_SELF_PID="$$" run bash "$HOOK" <<<"$INPUT"
