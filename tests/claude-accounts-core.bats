@@ -1539,6 +1539,102 @@ print("OK")'
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
+# ---- the 5h reset clause (operator ask 2026-10-11) ---------------------------------------------
+# An account near or over the 5h cutoff is one the reader wants back, and the ▲ line said only
+# that it was over. Each line below now says WHEN, from the absolute stamp (re-derived now) before
+# the sweep-time countdown. MUTANT: delete `+ r5` from the ▲ line and the first case fails.
+
+@test "--readout 5h: ▲ at 88% says when the window resets, from the absolute stamp" {
+  run python3 -c "$LOAD$READOUT"'
+# 72 minutes out; a stale countdown of 4.0 h beside it must lose to the stamp
+out = rd([row(acct="hot", session_pct=88, session_reset_at=at(1.2), session_reset_h=4.0)])
+tri = [l for l in out.splitlines() if l.startswith("- ▲ `hot`")]
+assert tri, out
+assert re.search(r"routing cutoff; resets in 1h 1[12]m$", tri[0]), tri[0]
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "--readout 5h: 50% carries no reset clause and no 5h line" {
+  run python3 -c "$LOAD$READOUT"'
+out = rd([row(acct="cool", session_pct=50, session_reset_at=at(1.2), session_reset_h=1.2)])
+assert "; resets in" not in out and "has reset since" not in out, out
+assert "▲" not in out and "△" not in out, out
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "--readout 5h: 82% is under the cutoff but inside S_RESET_SHOW, so △ gives the reset" {
+  run python3 -c "$LOAD$READOUT"'
+assert R.get("S_RESET_SHOW", ca.S_RESET_SHOW_DEFAULT) * 100 <= 82 < R["S_CUT"] * 100, R
+out = rd([row(acct="warm", session_pct=82, session_reset_at=at(2.5), session_reset_h=2.5)])
+lines = [l for l in out.splitlines() if "`warm`" in l and ("△" in l or "▲" in l)]
+assert len(lines) == 1, out                      # one line per account in the band, never two
+assert re.fullmatch(r"- △ `warm` — 5h at 82%; resets in 2h (29|30)m", lines[0]), lines[0]
+# no reset known: the line would only repeat the 5h cell, so it is not drawn
+bare = rd([row(acct="warm", session_pct=82, session_reset_at=None, session_reset_h=None)])
+assert "△" not in bare, bare
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "--readout 5h: an elapsed reset stamp says the window has reset since the reading" {
+  run python3 -c "$LOAD$READOUT"'
+past = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
+out = rd([row(acct="old", session_pct=91, session_reset_at=past, session_reset_h=0.4)])
+tri = [l for l in out.splitlines() if l.startswith("- ▲ `old`")]
+assert tri and tri[0].endswith("; its 5-hour window has reset since this reading"), out
+assert "resets in" not in tri[0], tri[0]
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "--readout 5h: under a minute out reads <1m, never a 0m that looks elapsed" {
+  # fmt_board_t floors to whole minutes, so 30 s out would print "resets in 0m".
+  run python3 -c "$LOAD$READOUT"'
+assert ca._reset5_clause({"session_reset_h": 0.5 / 60}) == "; resets in <1m"
+assert ca._reset5_clause({"session_reset_h": None}) == ""
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "--readout 5h: a wire-rejected row carries the clause on its out-of-5-hour sentence" {
+  run python3 -c "$LOAD$READOUT"'
+W = {"5h_util": 1.02, "5h_status": "rejected", "7d_util": 0.4, "7d_status": "allowed",
+     "status": "rejected", "http": 429}
+out = rd([row(acct="wall", session_pct=100, session_reset_at=at(0.75), session_reset_h=0.75,
+              wire=W)])
+s = [l for l in out.splitlines() if "out of 5-hour quota" in l]
+assert s and re.search(r"\(102% used\); resets in 4[45]m$", s[0]), out
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "--readout 5h: the validator refuses an S_RESET_SHOW at or above S_CUT" {
+  # ▲ takes every reading at/above S_CUT first, so such a △ threshold reads as configured and
+  # never prints. MUTANT: drop the S_RESET_SHOW check in _validate_router and both refusals pass.
+  run python3 -c "$LOAD"'
+for v in (R["S_CUT"], min(1.0, R["S_CUT"] + 0.05)):
+    bad = dict(R); bad["S_RESET_SHOW"] = v
+    try:
+        ca._validate_router({"router": bad})
+    except SystemExit as e:
+        assert "S_RESET_SHOW" in str(e) and "S_CUT" in str(e), e
+    else:
+        raise AssertionError(("S_RESET_SHOW at/above S_CUT was accepted", v, R["S_CUT"]))
+ok = dict(R); ok["S_RESET_SHOW"] = R["S_CUT"] - 0.05
+ca._validate_router({"router": ok})                # just below the cutoff is a working threshold
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
 @test "--login-status: the deadline fields are MACHINE forms, and iso_epoch can read them" {
   # The regression this pins: `when` used to carry _fmt_when's "Sun 13:21" and `hours` fmt_h's
   # "2.9d". iso_epoch("Sun 13:21") is 0, so cc-relogin-poll's preferred ISO branch was dead by

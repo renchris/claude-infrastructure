@@ -396,6 +396,46 @@ sys.exit(1 if bad else 0)'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
 
+# The 5h reset clause (2026-10-11) lengthens the ▲ line to ~69 cells and adds a △ line between
+# S_RESET_SHOW and S_CUT, plus the clause on the out-of-5-hour sentence. All three are drawn here
+# and must stay inside the same 76-cell budget, with the reset actually on the board.
+RESET_FIXTURE='
+_t = lambda m: (datetime.now(timezone.utc) + timedelta(minutes=m)).isoformat()
+    rows = [
+  {"acct": "next-quaternary-extremely-long-account-name-for-width-testing",
+   "auth": "ok", "launcher": "claude4", "k": 3,
+   "session_pct": 88.0, "weekly_pct": 46.0, "fable_pct": 18.0,
+   "session_reset_h": 1.2, "weekly_reset_h": 100.4, "login_expires_h": 447.0,
+   "session_reset_at": _t(72), "weekly_reset_at": "2126-01-05T00:00:00+00:00",
+   "login_expires_at": "2126-02-01T00:00:00+00:00"},
+  {"acct": "next2", "auth": "ok", "launcher": "claude2", "k": 1,
+   "session_pct": 82.0, "weekly_pct": 48.0, "fable_pct": 21.0,
+   "session_reset_h": 2.5, "weekly_reset_h": 83.5, "login_expires_h": 636.0,
+   "session_reset_at": _t(150), "weekly_reset_at": "2126-01-04T00:00:00+00:00",
+   "login_expires_at": "2126-03-01T00:00:00+00:00"},
+  {"acct": "next3", "auth": "ok", "launcher": "claude3", "k": 0,
+   "session_pct": 100.0, "weekly_pct": 40.0, "fable_pct": 10.0,
+   "session_reset_h": 0.75, "weekly_reset_h": 60.0, "login_expires_h": 500.0,
+   "session_reset_at": _t(45), "weekly_reset_at": "2126-01-03T00:00:00+00:00",
+   "login_expires_at": "2126-03-01T00:00:00+00:00",
+   "wire": {"5h_util": 1.02, "5h_status": "rejected", "7d_util": 0.4, "7d_status": "allowed",
+            "status": "rejected", "http": 429}},
+]
+    wj, cached, prev = {}, True, None'
+
+@test "15b narrow: the 5h reset clauses (▲, △, out of 5-hour) fit the 76-cell budget" {
+  export CLAUDE_ACCOUNTS_JSON="$D/acct.json"; mk_cfg
+  run bash -c "cd '$REPO' && $(declare -f render_narrow); NARROW_FIXTURE='$RESET_FIXTURE' \
+    render_narrow --readout --narrow --max-wait 0 | python3 -c '$WIDTH_CHECK'"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  CC_BOARD_COLOR=off run bash -c "cd '$REPO' && $(declare -f render_narrow); \
+    NARROW_FIXTURE='$RESET_FIXTURE' render_narrow --readout --narrow --max-wait 0"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"routing cutoff; resets in 1h 1"[12]"m"* ]] || { echo "no ▲ reset: $output"; false; }
+  [[ "$output" == *"△ next2 — 5h at 82%; resets in 2h"* ]] || { echo "no △ line: $output"; false; }
+  [[ "$output" == *"; resets in 4"[45]"m"* ]] || { echo "no out-of-5h reset: $output"; false; }
+}
+
 @test "16 narrow: the desk pick is on the board — it is what the next bare \`claude\` will do" {
   export CLAUDE_ACCOUNTS_JSON="$D/acct.json"; mk_cfg
   run bash -c "cd '$REPO' && $(declare -f render_narrow); NARROW_FIXTURE='$NARROW_FIXTURE' \

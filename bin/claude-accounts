@@ -438,7 +438,11 @@ ROUTER_OPTIONAL_RANGES = {
     "DISPATCH_STRAND_PP": (1.0, 100.0),       # least forecast-dead weekly pp one new fire needs
     "DISPATCH_FIRE_BURN_PPH": (0.05, 5.0),    # weekly pp/h one fire is budgeted until the reset
     "DISPATCH_CLAIM_TTL_MIN": (1.0, 10080.0),  # how long a placement claims its account's spare
+    # Display only: the 5h use at which the readout starts saying when the window resets (`△`),
+    # below S_CUT's `▲`. 80 typed for 0.80 would silently hide the line, hence the range.
+    "S_RESET_SHOW": (0.0, 1.0),
 }
+S_RESET_SHOW_DEFAULT = 0.80
 
 
 def _validate_router(cfg):
@@ -480,6 +484,12 @@ def _validate_router(cfg):
             and not isinstance(R["RECOVERY_S_CEIL"], bool) and R["RECOVERY_S_CEIL"] >= R["S_CUT"]:
         problems.append(f"RECOVERY_S_CEIL ({R['RECOVERY_S_CEIL']}) must be < S_CUT ({R['S_CUT']}): "
                         "a recovery 5h ceiling at/above the shared cutoff excludes nothing")
+    # Same shape, display side: the ▲ line takes every 5h reading at/above S_CUT first, so a △
+    # threshold there would read as configured and never print.
+    if "S_RESET_SHOW" in R and isinstance(R["S_RESET_SHOW"], (int, float)) \
+            and not isinstance(R["S_RESET_SHOW"], bool) and R["S_RESET_SHOW"] >= R["S_CUT"]:
+        problems.append(f"S_RESET_SHOW ({R['S_RESET_SHOW']}) must be < S_CUT ({R['S_CUT']}): "
+                        "the ▲ line owns every 5h reading at/above the cutoff, so △ would never show")
     for key, (lo, hi) in ROUTER_OPTIONAL_RANGES.items():
         if key not in R:
             continue                    # optional by contract — the code default stands
@@ -7957,9 +7967,11 @@ def fmt_board_t(h):
     """Countdown for the narrow board's `resets` and `login` cells: always TWO units.
 
     fmt_h mixes forms ("7.4h" beside "2d 15h"), which a column scan has to decode twice; the
-    board wants one shape per column. This is board-only on purpose — fmt_h's output is parsed
-    by cc-relogin-poll and must not move. Width is <=7 for every input ("12h 24m"), matching
-    _NW_WKR."""
+    board wants one shape per column. It stays out of fmt_h on purpose — fmt_h's output is parsed
+    by cc-relogin-poll and must not move. Its one other reader is _reset5_clause, whose 5h
+    countdown rides the readout's ▲/△ and out-of-5-hour sentences in BOTH presentations, so the
+    chat table and the board say a reset the same way. Width is <=7 for every input ("12h 24m"),
+    matching _NW_WKR."""
     if h is None:
         return "—"
     if h < 0:
@@ -7972,6 +7984,25 @@ def fmt_board_t(h):
     if h >= 2400:                                 # ≥100d: a corrupt/far-future stamp stays narrow
         return "99d+"
     return f"{int(h // 24)}d {int(h % 24)}h"
+
+
+def _reset5_clause(r):
+    """`; resets in 1h 12m` for a row's 5-hour window, or "" when no reset time is known.
+
+    The absolute stamp first: `session_reset_h` is a countdown taken at the SWEEP, so on a cached
+    row it is as stale as the cache, while hrs_until(session_reset_at) is re-derived now. A stamp
+    already past says so instead of `now`: the percent beside it was read before that reset, and
+    a reader must not take it as the window's current state."""
+    h = hrs_until(r.get("session_reset_at"))
+    if h is None:
+        h = r.get("session_reset_h")
+    if not isinstance(h, (int, float)) or isinstance(h, bool) or not math.isfinite(h):
+        return ""                                 # NaN/inf would raise inside fmt_board_t
+    if h <= 0:
+        return "; its 5-hour window has reset since this reading"
+    if h < 1 / 60:                                # fmt_board_t floors to minutes: "0m" reads as elapsed
+        return "; resets in <1m"
+    return f"; resets in {fmt_board_t(h)}"
 
 
 def _wire_note(r):
@@ -8432,6 +8463,7 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None):
     """
     warn_h = float(cfg.get("login_warn_h", 72.0))
     s_cut = cfg["router"]["S_CUT"] * 100
+    s_show = cfg["router"].get("S_RESET_SHOW", S_RESET_SHOW_DEFAULT) * 100
     # THREE lanes, and the DESK one leads (W2.1-2). Until now this surface computed general and
     # fable only, so the lane bare `claude` actually launches on was rendered NOWHERE — and the
     # lanes are not cosmetically different: replayed on two synthetic accounts they invert
@@ -8609,8 +8641,16 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None):
         # to delete, and here it would land beside a cell the operator is reading for precision.
         wu5 = (r.get("wire") or {}).get("5h_util")
         sp = wu5 * 100 if wu5 is not None else r.get("session_pct")
+        # The reset rides the line (operator ask 2026-10-11): an account near or past the cutoff
+        # is one the reader wants back, and WHEN is the half they act on. △ starts at
+        # S_RESET_SHOW (80%) so the time shows before routing stops, and only with a known reset:
+        # without one it would repeat the 5h cell beside it. One line per account either way.
+        r5 = _reset5_clause(r)
         if sp is not None and sp >= s_cut:
-            notes.append(f"▲ `{acct}` — 5h at {sp:.0f}%, at/over the {s_cut:.0f}% routing cutoff")
+            notes.append(f"▲ `{acct}` — 5h at {sp:.0f}%, at/over the {s_cut:.0f}% routing cutoff"
+                         + r5)
+        elif sp is not None and sp >= s_show and r5:
+            notes.append(f"△ `{acct}` — 5h at {sp:.0f}%" + r5)
         # THE THREE-WAY SPLIT THIS BULLET USED TO COLLAPSE. `weekly_pct >= 100` is not a fact
         # about exhaustion — the endpoint rounds UP and clamps, so it covers "99% used and the
         # server says allowed", "exactly full", and "102% used and rejected". Saying **LIMITED**
@@ -8660,7 +8700,8 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None):
                          + (f" ({wire['5h_util'] * 100:.0f}% used"
                             + ("; a lower-priority lane is still open"
                                if wire.get("fallback") == "available" else "")
-                            + ")" if wire.get("5h_util") is not None else ""))
+                            + ")" if wire.get("5h_util") is not None else "")
+                         + r5)
         if (r.get("route_reasons") or {}).get("fable") == "fable-exhausted":
             notes.append(f"○ `{acct}` — Fable exhausted")
         # ¢ keys on SPEND, not on the toggle: an account read credits_on=false with $176.91
