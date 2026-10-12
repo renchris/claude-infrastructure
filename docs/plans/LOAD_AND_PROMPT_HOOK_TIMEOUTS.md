@@ -36,6 +36,15 @@ Wave 1 landing notes (2026-10-12): Workflow worktree slots start at origin/main,
 
 WP8 other `ps -wwEo` consumers → shared census (`tools/auth/auth-timeseries.sh:58`, `bin/cc-relogin`, `bin/cc-reaper`, `scripts/supervisor-e2e.sh`); WP9 cc-bats bounded queue replaces waivable refusal; WP10 migration for O1/O3; WP11 lead-crash-watchdog → one kqueue watcher; WP12 foreground-run-queue load signal for gates. Gate WP11/WP12 on O5.
 
+Wave 2 outcome (2026-10-12, dispatched session for backlog item 55f0aafea981; two teammates):
+
+| WP | Status |
+|---|---|
+| WP8 | **DONE** `a0c09994c` `bae21a7ad`. The "shared census" premise was dropped with WP5 (C), so no module exists to move to; the native census is still in-file in `bin/claude-accounts` and still in A/B soak. Of the four sites only two were unbounded: `auth-timeseries.sh` now takes ONE bounded snapshot per batch (was 5 unbounded walks), never waits on a stuck `ps`, writes `n_live: null` (not 0) when it has no census, and skips a batch while the previous run is alive; `cc-relogin` `live_sessions` joins `ps` on a daemon thread at 15 s and returns -1 (fail closed). `cc-reaper` was already bounded (`_rp_bounded`, 30 s); `supervisor-e2e.sh` has no full-table `ps`. Tests: auth-timeseries-schedule + cc-relogin 96/96. |
+| WP9 | **DECISION** `b74c6368bbdb` (class C, conviction 65 for building it): a waiting queue reverses `bin/cc-bats`'s recorded R1 rule ("a shedder that waits amplifies"), while the refusal it would replace is bypassed 170-430 times a day (`~/.claude/state/bats-waivers.jsonl`, 10-09..10-12). Not built. |
+| WP10 | **DONE** `870767fe8` (0064: `timeout: 5` on handed-off-session-guard.sh + `PYTEST_XDIST_AUTO_NUM_WORKERS=3`, c10, `--confirm settings.json`) · `f01b9c595` (0065: session-search-sweep `SESSION_INDEX_SWEEP_MIN_INTERVAL_S=300` in its plist env, public-publish 10800 → 86400 s plus `fleet.manifest`, c10 reload `--confirm launchd`). Precedent `7820cd375` (0055) for repo plist edits plus a c10 reload. `install.sh` reloads a changed `run` plist at converge, so O3 likely takes effect on the converge; 0065 `--verify` reads it back. |
+| WP11/WP12 | Gated on O5 (`1fa5c54f8b87`, needs sudo). Not started. |
+
 ## Operator-only (file with cc-backlog / cc-decide; never edit settings.json or plists)
 
 O1 `timeout: 5` on `handed-off-session-guard.sh` + `PYTEST_XDIST_AUTO_NUM_WORKERS=3` (migration, c10) · O2 decision: `CC_SENTINEL_KILL=off` for compressor-sentinel (128 SIGKILLs since 10-07 conflict with "never kill work"; recommend off, 75%) · O3 plist throttles (session-index sweep 60 s → 300 s; public-publish daily) · O4 Claude Code upgrade via cc-upgrade + upstream report on the `ps -A` child leak · O5 30 s `eslogger exec` trace to attribute ~21k spawns/min · O6 optional cleanup of non-work orphans.
