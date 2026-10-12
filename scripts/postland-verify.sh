@@ -1179,7 +1179,9 @@ shell_files() { # tracked *.sh + bash/sh-shebang files, worktree-relative
   while IFS= read -r f; do
     [ -f "$WORKTREE/$f" ] || continue
     case "$f" in *.sh) printf '%s\n' "$f"; continue ;; esac
-    first="$(head -1 "$WORKTREE/$f" 2>/dev/null)"
+    # Builtin read, not `$(head -1 …)`: that was a subshell plus a head per tracked file — measured
+    # 1,173 execs in one 30 s exec trace (2026-10-12, 7.4% of the whole box's spawns), every pass.
+    first=""; IFS= read -r first < "$WORKTREE/$f" 2>/dev/null || true
     case "$first" in '#!'*bash*|'#!'*/sh|'#!'*env\ sh) printf '%s\n' "$f" ;; esac
   done <<EOF
 $(git -C "$WORKTREE" ls-files 2>/dev/null)
