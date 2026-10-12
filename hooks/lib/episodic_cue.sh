@@ -30,17 +30,24 @@
 
 # Deref this file's own path (the live layer links it per file) so idl-log.sh resolves beside the
 # REAL file, in the checkout, even when only this file is linked (X1; hooks/memory-nudge.sh:120-134).
+# Sets _EC_LIB_DIR. A path that is not itself a symlink needs no deref (a sibling resolves the same
+# through its directory), which is how hooks/memory-nudge.sh reaches this file: it sources it from
+# its OWN dereferenced dir. Only a per-file link pays the readlink fork, and nothing here forks
+# `dirname` — this runs on every prompt (docs/research/load-hook-timeouts-2026-10-11).
 _ec_deref() {
   local p="$1" t n=0
-  readlink -f "$p" 2>/dev/null && return 0
-  while [ -L "$p" ] && [ "$n" -lt 20 ]; do
-    t="$(readlink "$p")"
-    case "$t" in /*) p="$t" ;; *) p="$(dirname "$p")/$t" ;; esac
-    n=$(( n + 1 ))
-  done
-  printf '%s\n' "$p"
+  if [ -L "$p" ]; then
+    t="$(readlink -f "$p" 2>/dev/null)" && [ -n "$t" ] && p="$t"
+    while [ -L "$p" ] && [ "$n" -lt 20 ]; do
+      t="$(readlink "$p")"
+      case "$t" in /*) p="$t" ;; *) case "$p" in */*) p="${p%/*}/$t" ;; *) p="./$t" ;; esac ;; esac
+      n=$(( n + 1 ))
+    done
+  fi
+  case "$p" in */*) _EC_LIB_DIR="${p%/*}" ;; *) _EC_LIB_DIR=. ;; esac
+  [ -n "$_EC_LIB_DIR" ] || _EC_LIB_DIR=/
 }
-_EC_LIB_DIR="$(dirname "$(_ec_deref "${BASH_SOURCE[0]}")")"
+_ec_deref "${BASH_SOURCE[0]}"
 
 # One jq program: eligibility, the first matching pattern, and the noun query, joined by U+001F.
 # Nouns: lowercase [a-z0-9-] words of 3+ chars (single-quote safe by construction), stopwords, the
@@ -87,7 +94,41 @@ _ec_idl() { # <disposition> <reason> [extra-json]
   # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
   . "$idl" || return 0
   idl_init "${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}" memory-nudge:episodic SID
-  log_idl "$@"
+  # An abstain carries no extra object, so it takes the one-printf writer when the lib has it.
+  if [ "$#" -le 2 ] && declare -F log_idl_fixed >/dev/null; then log_idl_fixed "$@"; else log_idl "$@"; fi
+}
+
+# _ec_cannot_fire <prompt> — rc 0 only when the jq verdict is PROVABLY `no-match`, so the caller can
+# log it without starting jq. Every typed prompt used to pay that jq to learn what, for ~98.5% of
+# them, a substring test already says (docs/research/load-hook-timeouts-2026-10-11, item 5).
+# It is a cost gate and must stay STRICTLY WEAKER than the verdict it skips: it may answer "cannot
+# fire" only where jq would answer no-match, never where jq could fire or say not-typed. So:
+#   - every pattern in pats needs one of the keywords below as a substring (case-folded), and
+#     each keyword is a plain substring of what its regex literally requires — `\b` and the
+#     alternatives around it only ever narrow a match further;
+#   - the prompt must be printable ASCII plus tab/newline/CR. jq matches with Unicode case
+#     folding (a long s folds to s) and Unicode \s, which a byte-wise test cannot mirror, so any
+#     other byte goes to jq;
+#   - and it must be provably typed: no `<` anywhere (covers `\A\s*<`), no HANDOFF- (covers the
+#     handoff tags), an ASCII letter or digit (so not blank), and at most 4,000 bytes — a byte
+#     count is never below jq's codepoint length.
+# Anything it cannot prove goes to jq exactly as before, so the verdict and its IDL row are
+# unchanged; only the fork is gone.
+_ec_cannot_fire() {
+  local LC_ALL=C p="${1:-}" ws=$'\t\n\r'
+  [ "${#p}" -le 4000 ] || return 1
+  # shellcheck disable=SC2101  # false positive: [:print:] IS inside the outer [!…] bracket, beside "$ws"
+  case "$p" in *[![:print:]"$ws"]*|*'<'*|*HANDOFF-*) return 1 ;; esac
+  case "$p" in *[A-Za-z0-9]*) ;; *) return 1 ;; esac
+  case "$p" in
+    *[Ss][Ee][Ss][Ss][Ii][Oo][Nn]*|*[Cc][Oo][Nn][Vv][Ee][Rr][Ss][Aa][Tt][Ii][Oo][Nn]*|*[Cc][Hh][Aa][Tt]*) return 1 ;;  # last-session
+    *[Ww][Ee]' '[Dd][Ii][Dd]*|*[Dd][Ii][Dd]' '[Ww][Ee]*|*[Hh][Aa][Vv][Ee]' '[Ww][Ee]*) return 1 ;;  # like-we-did, did-we
+    *[Tt][Ii][Mm][Ee][Ss]*|*[Aa][Gg][Oo]*) return 1 ;;                                                # used-it-times, time-ago
+    *[Rr][Ee][Ss][Ee][Aa][Rr][Cc][Hh]*|*[Ii][Nn][Vv][Ee][Ss][Tt][Ii][Gg][Aa][Tt][Ii][Oo][Nn]*) return 1 ;;  # retrieve-research
+    *[Aa][Nn][Aa][Ll][Yy][Ss][Ii][Ss]*|*[Ff][Ii][Nn][Dd][Ii][Nn][Gg][Ss]*) return 1 ;;               # retrieve-research
+    *[Bb][Ee][Ff][Oo][Rr][Ee]*|*[Pp][Rr][Ee][Vv][Ii][Oo][Uu][Ss][Ll][Yy]*|*[Aa][Ll][Rr][Ee][Aa][Dd][Yy]*) return 1 ;;  # done-before, we-did-before
+  esac
+  return 0
 }
 
 episodic_cue_line() {
@@ -96,6 +137,8 @@ episodic_cue_line() {
     local p="${1:-}" line v nouns pat sha row dir
     if [ "${CC_EPISODIC_CUE:-on}" = off ]; then
       _ec_idl abstained kill-switch
+    elif _ec_cannot_fire "$p"; then
+      _ec_idl abstained no-match
     else
       line="$(jq -rn --arg p "$p" "$_EC_JQ" 2>/dev/null)" || line=""
       [ -n "$line" ] || line="classify-error"

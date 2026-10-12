@@ -53,6 +53,13 @@
 #   idl_disable
 #       Suppress the append entirely — for a non-hook mode that must write no telemetry
 #       (operator-readout's `--render` pull surface). Call after idl_init.
+#   log_idl_fixed <disposition> <reason>
+#       log_idl for the commonest record (no extra, no merge), in one printf — see its comment.
+#   _IDL_NOW
+#       Optional: a caller that already read the clock may set this to its `date -u
+#       +%Y-%m-%dT%H:%M:%SZ` string, and every record then carries it instead of forking `date`
+#       again. Deliberately NOT reset on source or by idl_init, so a caller that re-sources the
+#       lib keeps it; unset, behaviour is unchanged.
 #
 # An explicit init (rather than ambient IDL_*/hook globals) is deliberate: the caller's variables
 # stay visibly *used*, so shellcheck does not report SC2034 on every contract variable in a hook
@@ -114,11 +121,22 @@ idl_guarded_append() { # <idl-path> <hook> <kind> <record-json>
   return 1
 }
 
+# _idl_mkparent — create the IDL's directory only when it is missing. Builtin path arithmetic and a
+# builtin `-d` test: this runs on every record of every prompt hook, and `mkdir -p "$(dirname …)"`
+# cost two process creations per record to do nothing on all but the first.
+_idl_mkparent() {
+  local d
+  case "$_IDL_PATH" in */*) d="${_IDL_PATH%/*}" ;; *) d=. ;; esac
+  [ -n "$d" ] || d=/
+  [ -d "$d" ] || mkdir -p "$d" 2>/dev/null || true
+}
+
 log_idl() {
   [ "$_IDL_OFF" = 1 ] && return 0
-  mkdir -p "$(dirname "$_IDL_PATH")" 2>/dev/null || true
+  _idl_mkparent
   local ts extra sidval merge
-  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"
+  ts="${_IDL_NOW:-}"
+  [ -n "$ts" ] || ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"
   extra="${3:-}"; [ -n "$extra" ] || extra='{}'
   sidval="${!_IDL_SID_VAR:-?}"; [ -n "$sidval" ] || sidval='?'
   merge='{}'
@@ -130,6 +148,34 @@ log_idl() {
     '{ts:$ts,hook:$hook,sid:$sid,disposition:$disp,reason:$reason} + $merge + $extra' 2>/dev/null)"
   [ -n "$_rec" ] || return 0
   idl_guarded_append "$_IDL_PATH" "$_IDL_HOOK" "$1" "$_rec" || true
+}
+
+# log_idl_fixed <disposition> <reason> — the same record log_idl writes when there is no extra and
+# no merge object, built by ONE printf instead of forking jq + wc + tr (+ date without _IDL_NOW).
+# It is the per-prompt abstain row of the UserPromptSubmit hooks, written on every prompt of every
+# session, which is where those forks were paid (docs/research/load-hook-timeouts-2026-10-11).
+# Byte-identical to log_idl, and only taken when that is provable: `jq -c` keeps key order and emits
+# no whitespace, and no character in [A-Za-z0-9_.:?-] is ever escaped by JSON, so printf of those
+# fields IS the encoding. Any other byte in any field, or a merge slot, hands the call to log_idl,
+# which encodes it — the invariant at the top of this file still binds every field. The record is
+# pure ASCII, so its length is its byte count and the size guard needs no `wc`.
+log_idl_fixed() {
+  [ "$_IDL_OFF" = 1 ] && return 0
+  # C locale: the charset test below must be byte-wise (a UTF-8 collation range can admit more than
+  # ASCII), and ${#rec} must count bytes.
+  local LC_ALL=C
+  local ts sidval rec max="${CC_IDL_MAX_BYTES:-4000}"   # the idl_max_bytes rule, without its subshell
+  case "$max" in ''|*[!0-9]*) max=4000 ;; esac
+  sidval="${!_IDL_SID_VAR:-?}"; [ -n "$sidval" ] || sidval='?'
+  ts="${_IDL_NOW:-}"
+  [ -n "$ts" ] || ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"
+  if [ -n "$_IDL_MERGE_VAR" ]; then log_idl "$@"; return 0; fi
+  case "$ts$_IDL_HOOK$sidval${1:-}${2:-}" in *[!A-Za-z0-9_.:?-]*) log_idl "$@"; return 0 ;; esac
+  printf -v rec '{"ts":"%s","hook":"%s","sid":"%s","disposition":"%s","reason":"%s"}' \
+    "$ts" "$_IDL_HOOK" "$sidval" "${1:-}" "${2:-}"
+  if [ "${#rec}" -gt "$max" ]; then log_idl "$@"; return 0; fi
+  _idl_mkparent
+  printf '%s\n' "$rec" >> "$_IDL_PATH" 2>/dev/null || true
 }
 
 # abstained = evaluated but did not fire (LOGGED, never silent). "didn't fire" must never be

@@ -90,10 +90,22 @@ def verdict($p):
   end;
 (.session_id // "" | tostring | gsub("[[:cntrl:]]"; "/")) as $sid
 | (try verdict(.prompt) catch ["classify-error", "-", "-"]) as $v
-| [$sid] + $v + [(.prompt | if type == "string" then length else 0 end | tostring)]
-| join("\u001f")'
-_MN_RULING_LINE=$(printf '%s' "$INPUT" | jq -r "$_MN_RULING_JQ" 2>/dev/null || echo "")
-IFS=$'\x1f' read -r SID _MN_RV _MN_RPAT _MN_REXC _MN_RLEN <<< "$_MN_RULING_LINE" || true
+| ([$sid] + $v + [(.prompt | if type == "string" then length else 0 end | tostring),
+                  (.cwd // "" | tostring | gsub("[\u001f\n]"; ""))] | join("\u001f"))
+  + "\n" + (.prompt | if type == "string" then . else "" end)'
+# ONE jq for everything this hook reads from stdin (load-hook-timeouts-2026-10-11, item 5): the
+# classifier line above, then the cwd as its last field, then a newline and the RAW prompt for the
+# episodic cue. Those used to be two more jq forks on every prompt. The prompt is last and taken as
+# "everything after the first newline", so its own newlines and U+001F bytes survive; `jq -j` adds
+# no newline and the `x` sentinel keeps the prompt's trailing newlines, which a bare $( ) strips.
+_MN_RULING_LINE="$( { printf '%s' "$INPUT" | jq -j "$_MN_RULING_JQ" 2>/dev/null || true; }; printf x)"
+_MN_RULING_LINE="${_MN_RULING_LINE%x}"
+_mn_nl=$'\n'
+_mn_prompt="${_MN_RULING_LINE#*"$_mn_nl"}"
+[ "$_mn_prompt" != "$_MN_RULING_LINE" ] || _mn_prompt=""
+_MN_RULING_LINE="${_MN_RULING_LINE%%"$_mn_nl"*}"
+CWD=""
+IFS=$'\x1f' read -r SID _MN_RV _MN_RPAT _MN_REXC _MN_RLEN CWD <<< "$_MN_RULING_LINE" || true
 [ -z "$SID" ] && exit 0
 # Defensive: session_id is a harness UUID; refuse anything with path/shell chars
 case "$SID" in *[!a-zA-Z0-9_-]*) exit 0 ;; esac
@@ -102,41 +114,75 @@ case "$SID" in *[!a-zA-Z0-9_-]*) exit 0 ;; esac
 # splits the count from the session when CLAUDE_CONFIG_DIR points elsewhere.
 CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 STATE_DIR="${MEMORY_NUDGE_STATE_DIR:-$CFG/state}"
-mkdir -p "$STATE_DIR" 2>/dev/null || true
-# Prune stale per-session counters (>1 day). -mtime +1 is BSD-safe (unlike -mmin).
-find "$STATE_DIR" -name 'nudge-*.count' -mtime +1 -delete 2>/dev/null || true
+[ -d "$STATE_DIR" ] || mkdir -p "$STATE_DIR" 2>/dev/null || true
+
+# ── PROCESS BUDGET (2026-10-11, docs/research/load-hook-timeouts-2026-10-11 item 5). This hook ran
+# ~40-75 process creations on EVERY prompt — 1.39 s measured at load ~420, and 28 of 162
+# UserPromptSubmit cancels — while eleven prompts in twelve print nothing. Everything below that is
+# not needed to decide "not due" is now either builtin, cached, or skipped by a gate that is
+# strictly weaker than the decision it guards; tests/memory-nudge-forks.bats counts the calls.
+# The clock is read ONCE: the IDL rows (via _IDL_NOW, see hooks/lib/idl-log.sh), the daily prune
+# and the rotor latch all take their time from it.
+_MN_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) || _MN_TS=""
+case "$_MN_TS" in [0-9][0-9][0-9][0-9]-*T*Z) ;; *) _MN_TS="" ;; esac
+_MN_DAY="${_MN_TS%%T*}"
+# shellcheck disable=SC2034  # read by the sourced hooks/lib/idl-log.sh, which shellcheck does not follow
+_IDL_NOW="$_MN_TS"
+
+# Prune stale per-session counters (>1 day). -mtime +1 is BSD-safe (unlike -mmin). ONCE A DAY, not
+# once a prompt: the directory is shared by every account and held ~1,000 counter files, so the
+# per-prompt `find` walked all of them to delete, on almost every prompt, nothing. The stamp holds
+# the UTC day of the last prune and is written BEFORE pruning, so a killed prune is not re-run on
+# every prompt; with no clock it prunes every time, as before. The same pass ages out this hook's
+# own caches (memory-nudge-*.cache below), which bounds how stale a cached path can get.
+_mn_pruned=""
+[ -r "$STATE_DIR/memory-nudge-prune.day" ] && { read -r _mn_pruned < "$STATE_DIR/memory-nudge-prune.day" || true; }
+if [ -z "$_MN_DAY" ] || [ "$_mn_pruned" != "$_MN_DAY" ]; then
+  [ -z "$_MN_DAY" ] || printf '%s\n' "$_MN_DAY" > "$STATE_DIR/memory-nudge-prune.day" 2>/dev/null || true
+  find "$STATE_DIR" \( -name 'nudge-*.count' -o -name 'memory-nudge-*.cache' \) -mtime +1 -delete 2>/dev/null || true
+fi
 
 CF="$STATE_DIR/nudge-${SID}.count"
-COUNT=$(cat "$CF" 2>/dev/null || echo 0)
-COUNT=$((COUNT + 1))
+COUNT=0
+[ -r "$CF" ] && { read -r COUNT < "$CF" || true; }
+case "$COUNT" in ''|*[!0-9]*) COUNT=0 ;; esac
+COUNT=$(( 10#$COUNT + 1 ))
 printf '%s' "$COUNT" > "$CF"
+# Due on the periodic slot? (The other way to be due — an over-cap index on a session's first
+# prompt — needs the measurement, and is decided below.)
+_MN_PERIODIC=0
+[ $(( COUNT % INTERVAL )) -ne 0 ] || _MN_PERIODIC=1
 
 # ── Locate the index this session actually loads ──────────────────────────────
 # Slug = project root with '/' and '.' folded to '-'. For a linked worktree the
 # harness keys on the MAIN worktree, so resolve through the git COMMON dir; a
 # cwd-keyed slug is the fallback for a non-repo cwd.
-slugify() { printf '%s' "$1" | tr '/.' '--'; }
-
 # Deref through the live symlink (this file IS ~/.claude/hooks/memory-nudge.sh when invoked
 # live) so a sibling binary resolves in the CHECKOUT, where it exists the moment the trunk
 # fast-forwards — same load-bearing pattern as backup-before-write.sh's _mib_deref: an
 # underefed dirname would miss a newly-ADDED sibling until a deploy links it, and fail open
 # silently (MEMORY.md deployed-layer-bootstrap-circle / the LIVE_ADDS budget rule).
+# Resolved ONCE into _MN_SELF / _MN_DIR (it was re-run, with a `dirname` fork, for every sibling);
+# a path that is not itself a link needs no readlink, since its siblings resolve the same.
 _mn_deref() {
   local p="$1" t n=0
+  [ -L "$p" ] || { printf '%s\n' "$p"; return 0; }
   readlink -f "$p" 2>/dev/null && return 0
   while [ -L "$p" ] && [ "$n" -lt 20 ]; do
     t="$(readlink "$p")"
-    case "$t" in /*) p="$t" ;; *) p="$(dirname "$p")/$t" ;; esac
+    case "$t" in /*) p="$t" ;; *) case "$p" in */*) p="${p%/*}/$t" ;; *) p="./$t" ;; esac ;; esac
     n=$(( n + 1 ))
   done
   printf '%s\n' "$p"
 }
+_MN_SELF="$(_mn_deref "${BASH_SOURCE[0]}")"
+case "$_MN_SELF" in */*) _MN_DIR="${_MN_SELF%/*}" ;; *) _MN_DIR=. ;; esac
+[ -n "$_MN_DIR" ] || _MN_DIR=/
 
-CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null || echo "")
+# CWD came out of the one stdin jq above.
 [ -n "$CWD" ] && [ -d "$CWD" ] || CWD="$PWD"
 
-_mn_idl="$(dirname "$(_mn_deref "${BASH_SOURCE[0]}")")/lib/idl-log.sh"
+_mn_idl="$_MN_DIR/lib/idl-log.sh"
 
 # ── RULING SHADOW log. Runs on EVERY prompt that got this far — before the interval and damping
 # exits below — so each counted prompt gets exactly one `memory-nudge:ruling` IDL row (its own name,
@@ -158,9 +204,15 @@ _mn_ruling_shadow() {
     . "$_mn_idl" && idl_init "${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}" memory-nudge:ruling SID && have_idl=1
   fi
   [ "${CC_RULING_SHADOW:-off}" = on ] || why=kill-switch
+  # The abstain row is written on EVERY counted prompt, so it takes the one-printf writer
+  # (log_idl_fixed: same bytes, no jq/date/wc/tr forks) whenever the sourced lib carries it.
   case "$why" in
     restatement|ruling) ;;
-    *) [ "$have_idl" -eq 0 ] || log_idl abstained "${why:-classify-error}"; return 0 ;;
+    *) if [ "$have_idl" -eq 1 ]; then
+         if declare -F log_idl_fixed >/dev/null; then log_idl_fixed abstained "${why:-classify-error}"
+         else log_idl abstained "${why:-classify-error}"; fi
+       fi
+       return 0 ;;
   esac
   sha=$( { printf '%s' "$INPUT" | jq -j '.prompt' | shasum -a 1 | cut -d' ' -f1; } 2>/dev/null ) || sha=""
   dir="$HOME/.claude/state"
@@ -186,11 +238,9 @@ _mn_ruling_shadow || true
 # nightly — adoption rides on that log. Resolved through the dereferenced self-path (X1), and a
 # missing lib costs the cue and nothing else. Kill switch CC_EPISODIC_CUE=off.
 _MN_CUE=""
-_mn_ep="$(dirname "$(_mn_deref "${BASH_SOURCE[0]}")")/lib/episodic_cue.sh"
+_mn_ep="$_MN_DIR/lib/episodic_cue.sh"
 if [ -r "$_mn_ep" ]; then
-  # A sentinel keeps the prompt's trailing newlines, which a bare $( ) would strip.
-  _mn_prompt="$(printf '%s' "$INPUT" | jq -j '.prompt | if type == "string" then . else "" end' 2>/dev/null; printf x)"
-  _mn_prompt="${_mn_prompt%x}"
+  # $_mn_prompt (raw, trailing newlines kept) came out of the one stdin jq at the top.
   # shellcheck source=lib/episodic_cue.sh
   # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
   . "$_mn_ep" && _MN_CUE="$(episodic_cue_line "$_mn_prompt" 2>/dev/null)" || _MN_CUE=""
@@ -203,47 +253,98 @@ _mn_not_due() {
 
 MEM="${MEMORY_INDEX_PATH:-}"
 WANT="$MEM"
-if [ -z "$MEM" ]; then
-  ROOT=""
-  if GCD=$(cd "$CWD" 2>/dev/null && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) \
-     && [ -n "$GCD" ]; then
-    ROOT=$(dirname "$GCD")
+RROOT=""
+_MN_RESOLVED=0   # 1 = MEM/WANT/RROOT came from the candidate walk below (no override)
+
+# ── WHERE-CACHE (2026-10-11, load-hook-timeouts item 5). The candidate index paths depend only on
+# the cwd and the config dir, yet resolving them cost a `git rev-parse`, a `dirname`, two `pwd -P`
+# subshells and up to four `tr`s on every prompt. They are cached per cwd as lines: cwd, config
+# dir, the git toplevel (RROOT, read on the due path), then each candidate in walk order. Which
+# candidate EXISTS is never cached — every prompt re-tests each with a builtin `[ -f ]`, so an index
+# created after the cache was written is found on the next prompt. What can go stale is only the
+# git root itself (a cwd that later becomes, or stops being, a repo); the daily prune deletes a
+# cache untouched for over a day, which bounds that. A cwd or path carrying a newline is never
+# cached (one line per field), and a cache whose cwd/config lines differ is a miss.
+_mn_where_read() {
+  local c g l
+  [ -f "$_MN_WC" ] || return 1
+  _mn_cands=""
+  { IFS= read -r c && IFS= read -r g && IFS= read -r RROOT || return 1
+    while IFS= read -r l; do _mn_cands="$_mn_cands$l$_mn_nl"; done
+  } < "$_MN_WC" 2>/dev/null || return 1
+  [ "$c" = "$CWD" ] && [ "$g" = "$CFG" ] && [ -n "$_mn_cands" ]
+}
+_mn_where_compute() {
+  local out gcd root cand phys base s nocache=0
+  _mn_cands=""
+  case "$CWD$CFG" in *"$_mn_nl"*) nocache=1 ;; esac
+  # ONE git for both answers. Inside a .git dir it prints the common dir and then fails on the
+  # toplevel, which is exactly what the two separate calls answered, so the output is read
+  # whatever the exit code.
+  out="$(cd "$CWD" 2>/dev/null && git rev-parse --path-format=absolute --git-common-dir --show-toplevel 2>/dev/null)" || true
+  gcd="${out%%"$_mn_nl"*}"
+  RROOT=""
+  case "$out" in *"$_mn_nl"*) RROOT="${out#*"$_mn_nl"}"; RROOT="${RROOT%%"$_mn_nl"*}" ;; esac
+  # Nothing at all: not a repo, or a git too old for --path-format — the toplevel alone still answers.
+  [ -n "$out" ] || RROOT="$(cd "$CWD" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null)" || RROOT=""
+  root=""
+  if [ -n "$gcd" ]; then
+    case "$gcd" in */*) root="${gcd%/*}"; [ -n "$root" ] || root=/ ;; *) root=. ;; esac
   fi
   # Try each base in BOTH its logical and physical form: git reports a fully
   # resolved path while the harness keys on the cwd it was handed, and on macOS
   # /var vs /private/var share no prefix — one spelling silently finds nothing.
-  for cand in "$ROOT" "$CWD"; do
+  for cand in "$root" "$CWD"; do
     [ -n "$cand" ] || continue
     phys=$(cd "$cand" 2>/dev/null && pwd -P) || phys=""
     for base in "$cand" "$phys"; do
       [ -n "$base" ] || continue
-      p="$CFG/projects/$(slugify "$base")/memory/MEMORY.md"
-      # WANT is where the index BELONGS, recorded whether or not it exists yet. MEM is only set
-      # when the file is already there, so on a brand-new project MEM stays empty — and that is
-      # precisely the session that has to be told the path, because it is the one about to
-      # CREATE the index. See the nudge text below for why naming it matters.
-      [ -n "$WANT" ] || WANT="$p"
-      [ -f "$p" ] && { MEM="$p"; break 2; }
+      case "$base" in *"$_mn_nl"*) nocache=1 ;; esac
+      s="${base//\//-}"; s="${s//./-}"   # the slug: '/' and '.' folded to '-'
+      _mn_cands="$_mn_cands$CFG/projects/$s/memory/MEMORY.md$_mn_nl"
     done
   done
-  # NAME THE PHYSICAL PATH (2026-09-27). On the symlinked accounts $CFG/projects/<slug>/memory is
-  # reached through a symlink into ~/.claude/projects/, and bin/cc-close-attrib pins the harness's
-  # autoMemoryDirectory to the REAL path. CC's write carve-out matches the path AS SPELLED, so a
-  # write to the symlinked spelling this hook used to print raised a permission prompt auto mode
-  # cannot approve — measured 2026-09-27: the model followed this nudge to
-  # ~/.claude-next/projects/…/memory/ and the operator had to click Yes. Resolve the deepest
-  # EXISTING ancestor (memory/ may not exist yet) and re-append the rest, exactly as
-  # cc-close-attrib does, so the two agree. MEMORY_INDEX_PATH above is an override, left as given.
-  if [ -n "$WANT" ]; then
-    _mn_probe="${WANT%/*}" _mn_rest="/${WANT##*/}"
-    while [ -n "$_mn_probe" ] && [ ! -d "$_mn_probe" ]; do
-      _mn_rest="/${_mn_probe##*/}$_mn_rest"; _mn_probe="${_mn_probe%/*}"
-    done
-    if [ -n "$_mn_probe" ] && _mn_real="$(cd -P "$_mn_probe" 2>/dev/null && pwd -P)" && [ -n "$_mn_real" ]; then
-      WANT="${_mn_real%/}$_mn_rest"
-    fi
-  fi
+  case "$RROOT" in *"$_mn_nl"*) nocache=1 ;; esac
+  [ "$nocache" -eq 0 ] || return 0
+  printf '%s\n%s\n%s\n%s' "$CWD" "$CFG" "$RROOT" "$_mn_cands" > "$_MN_WC" 2>/dev/null || true
+}
+if [ -z "$MEM" ]; then
+  _MN_RESOLVED=1
+  _mn_ck="${CWD//\//-}"
+  if [ "${#_mn_ck}" -gt 120 ]; then _mn_ck="${_mn_ck: -120}"; fi
+  _MN_WC="$STATE_DIR/memory-nudge-where-${#CWD}-${_mn_ck}.cache"
+  _mn_where_read || _mn_where_compute
+  _mn_c="$_mn_cands"
+  while [ -n "$_mn_c" ]; do
+    p="${_mn_c%%"$_mn_nl"*}"; _mn_c="${_mn_c#*"$_mn_nl"}"
+    [ -n "$p" ] || continue
+    # WANT is where the index BELONGS, recorded whether or not it exists yet. MEM is only set
+    # when the file is already there, so on a brand-new project MEM stays empty — and that is
+    # precisely the session that has to be told the path, because it is the one about to
+    # CREATE the index. See the nudge text below for why naming it matters.
+    [ -n "$WANT" ] || WANT="$p"
+    [ -f "$p" ] && { MEM="$p"; break; }
+  done
 fi
+# NAME THE PHYSICAL PATH (2026-09-27). On the symlinked accounts $CFG/projects/<slug>/memory is
+# reached through a symlink into ~/.claude/projects/, and bin/cc-close-attrib pins the harness's
+# autoMemoryDirectory to the REAL path. CC's write carve-out matches the path AS SPELLED, so a
+# write to the symlinked spelling this hook used to print raised a permission prompt auto mode
+# cannot approve — measured 2026-09-27: the model followed this nudge to
+# ~/.claude-next/projects/…/memory/ and the operator had to click Yes. Resolve the deepest
+# EXISTING ancestor (memory/ may not exist yet) and re-append the rest, exactly as
+# cc-close-attrib does, so the two agree. MEMORY_INDEX_PATH above is an override, left as given.
+# Only the nudge text reads WANT, so this runs on the due path only (called below the due check).
+_mn_want_physical() {
+  [ "$_MN_RESOLVED" -eq 1 ] && [ -n "$WANT" ] || return 0
+  _mn_probe="${WANT%/*}" _mn_rest="/${WANT##*/}"
+  while [ -n "$_mn_probe" ] && [ ! -d "$_mn_probe" ]; do
+    _mn_rest="/${_mn_probe##*/}$_mn_rest"; _mn_probe="${_mn_probe%/*}"
+  done
+  if [ -n "$_mn_probe" ] && _mn_real="$(cd -P "$_mn_probe" 2>/dev/null && pwd -P)" && [ -n "$_mn_real" ]; then
+    WANT="${_mn_real%/}$_mn_rest"
+  fi
+}
 
 # ── Measure (fail-safe: a side-car must never fail wider than itself) ─────────
 # An unresolvable measure, or a cap this hook cannot read, costs the BUDGET half and nothing
@@ -263,7 +364,7 @@ MEASURE_OK=1
 # Measured: `set -euo pipefail; . /nonexistent || echo fallback; echo after` prints neither
 # `fallback` nor `after` and exits 1, while the `[ -r ]` form below prints both.
 # Testing readability FIRST is what makes the fallback reachable at all.
-_mn_lib="$(dirname "$(_mn_deref "${BASH_SOURCE[0]}")")/lib/memory-index-measure.sh"
+_mn_lib="$_MN_DIR/lib/memory-index-measure.sh"
 [ -r "$_mn_lib" ] || _mn_lib="$CFG/hooks/lib/memory-index-measure.sh"
 if [ -r "$_mn_lib" ]; then
   # shellcheck source=/dev/null   # SC1091 suppression: this gate calls shellcheck without -x
@@ -307,15 +408,86 @@ _mn_stats() {
   ' 2>/dev/null
 }
 
-BUDGET_CTX=""
-if [ "$MEASURE_OK" -eq 1 ] && [ -n "$MEM" ] && [ -f "$MEM" ]; then
-  STATS=$(_mn_stats "$MEM") || STATS=""
-  TOTAL="${STATS%% *}"
-  LINES=$(printf '%s' "$STATS" | cut -d' ' -f2)
-  N=$(printf '%s' "$STATS" | cut -d' ' -f3)
+# _mn_parse_stats — split $STATS into its six fields with one builtin `read` (it was seven
+# `printf | cut` forks), sanitized exactly as before.
+_mn_parse_stats() {
+  TOTAL="" LINES="" N="" ENTRY_B="" PFX="" DROPPED_U=""
+  read -r TOTAL LINES N ENTRY_B PFX DROPPED_U <<< "$STATS" || true
   case "${TOTAL:-x}" in ''|*[!0-9]*) TOTAL="" ;; esac
   case "${LINES:-x}" in ''|*[!0-9]*) LINES=0 ;; esac
   case "${N:-x}" in ''|*[!0-9]*) N=0 ;; esac
+}
+
+# ── STATS CACHE (2026-10-11, load-hook-timeouts item 5). `_mn_stats` is a jq over the whole index,
+# and the index changes a few times a day while this hook runs on every prompt of every session.
+# Its line is cached per index (with the two caps it was computed against) and trusted only while
+# builtin `-nt` tests prove nothing it depends on changed: the cache is newer than the index, than
+# this hook and than the measure lib. `-nt` here is WHOLE SECONDS (bash 3.2), so a cache is written
+# only when the session's counter file — written at the top of THIS prompt, before the measurement
+# read the index — is strictly newer than the index: the index then was last written in an earlier
+# second than the read, and any later write lands in a second >= the counter's. That check is
+# repeated after the write and empties the cache if it no longer holds, so an index write racing
+# the measurement can never leave a stale line behind; the worst case is one extra measurement.
+_mn_stats_cached() {
+  local a b l
+  [ -f "$_MN_SC" ] && [ "$_MN_SC" -nt "$MEM" ] && [ "$_MN_SC" -nt "$_MN_SELF" ] \
+    && [ "$_MN_SC" -nt "$_mn_lib" ] || return 1
+  { read -r a b l < "$_MN_SC"; } 2>/dev/null || return 1
+  [ "$a" = "$LIMIT" ] && [ "$b" = "$LINE_LIMIT" ] || return 1
+  case "$l" in ''|*[!0-9\ ]*) return 1 ;; esac
+  # shellcheck disable=SC2086  # deliberate word split: six numeric fields
+  set -- $l
+  [ "$#" -eq 6 ] || return 1
+  STATS="$l"
+}
+_mn_stats_store() {
+  case "$STATS" in ''|*[!0-9\ ]*) return 0 ;; esac
+  [ "$CF" -nt "$MEM" ] || return 0
+  printf '%s %s %s\n' "$LIMIT" "$LINE_LIMIT" "$STATS" > "$_MN_SC" 2>/dev/null || return 0
+  [ "$CF" -nt "$MEM" ] || : > "$_MN_SC" 2>/dev/null || true
+}
+
+# ── COST GATE on a NON-DUE prompt (2026-10-11). On such a prompt the measurement can matter in
+# exactly two ways: the rotor (TOTAL >= ROTATE_AT) and the over-cap alarm that makes a session's
+# first prompt due (TOTAL >= LIMIT, or LINES > LINE_LIMIT). _mn_raw_small proves neither can happen
+# without starting jq: raw BYTES are never fewer than loader units (every UTF-16 unit costs >= 1
+# byte, a surrogate pair 4; stripping only removes), and raw lines are never fewer than effective
+# lines (stripping and trimming only remove). So bytes below min(ROTATE_AT, LIMIT) with lines at or
+# under LINE_LIMIT means the measurement could not have changed anything, and is skipped. It is a
+# builtin read loop under LC_ALL=C (${#l} = bytes), stopping at the first line that crosses either
+# bound. Residual, stated: bash `read` drops NUL bytes that jq would count, so an index made of
+# NULs could read small; such a file is not an index, and a due prompt still measures it in full.
+_mn_raw_small() {
+  local LC_ALL=C l b=0 n=0 at="$LIMIT"
+  [ -r "$MEM" ] || return 1
+  [ "$ROTATE_AT" -lt "$at" ] 2>/dev/null && at="$ROTATE_AT"
+  while IFS= read -r l || [ -n "$l" ]; do
+    b=$(( b + ${#l} + 1 )); n=$(( n + 1 ))
+    [ "$b" -lt "$at" ] && [ "$n" -le "$LINE_LIMIT" ] || return 1
+  done < "$MEM"
+}
+
+BUDGET_CTX=""
+TOTAL="" LINES=0 N=0 ENTRY_B="" PFX="" DROPPED_U=""
+if [ "$MEASURE_OK" -eq 1 ] && [ -n "$MEM" ] && [ -f "$MEM" ]; then
+  ROTATE_AT="${MEMORY_ROTATE_AT:-$(( LIMIT - 1500 ))}"
+  MN_KEY="${MEM//\//-}"
+  if [ "${#MN_KEY}" -gt 120 ]; then MN_KEY="${MN_KEY: -120}"; fi
+  _MN_SC="$STATE_DIR/memory-nudge-stats-${#MEM}-${MN_KEY}.cache"
+  STATS=""
+  # The periodic slot always measures afresh (one jq in twelve prompts), so the figures the nudge
+  # PRINTS never come from a cache. The residual the `-nt` test cannot see — an index replaced by
+  # a copy carrying an OLDER mtime (`cp -p`, `rsync -t`; no writer of the index does that) — can
+  # then only delay the rotor and the first-prompt alarm, until the next slot, write or prune.
+  if [ "$_MN_PERIODIC" -eq 0 ] && _mn_stats_cached; then
+    :
+  elif [ "$_MN_PERIODIC" -eq 0 ] && _mn_raw_small; then
+    :   # gated: nothing on this prompt can read the figures, so they stay unset
+  else
+    STATS=$(_mn_stats "$MEM") || STATS=""
+    _mn_stats_store
+  fi
+  _mn_parse_stats
 
   # ── ACTUATE, then advise (2026-08-10). Twelve hand-compactions in 14 days proved advisory
   # text cannot hold this line: insertion is machine-speed (Edit appends, plus Bash `>>`
@@ -327,12 +499,12 @@ if [ "$MEASURE_OK" -eq 1 ] && [ -n "$MEM" ] && [ -f "$MEM" ]; then
   # cadence below — advisory cadence and actuation are different duties. After this, the 🚨
   # branch means rotation COULD NOT clear it — an alarm that fires on breaches it could have
   # fixed itself carries no bits (MEMORY.md alarm-polarity-and-attention-budget).
-  ROTATE_AT="${MEMORY_ROTATE_AT:-$(( LIMIT - 1500 ))}"
+  # (ROTATE_AT is set at the top of this block: the cost gate reads it too.)
   ROTATE_NOTE=""
   if [ -n "$TOTAL" ] && [ "$TOTAL" -ge "$ROTATE_AT" ] 2>/dev/null; then
     RB="${MEMORY_ROTATE_BIN:-}"
     if [ -z "$RB" ]; then
-      for c in "$(dirname "$(_mn_deref "${BASH_SOURCE[0]}")")/../bin/cc-memory-rotate" \
+      for c in "$_MN_DIR/../bin/cc-memory-rotate" \
                "$CFG/bin/cc-memory-rotate"; do
         if [ -x "$c" ]; then RB="$c"; break; fi
       done
@@ -362,12 +534,16 @@ if [ "$MEASURE_OK" -eq 1 ] && [ -n "$MEM" ] && [ -f "$MEM" ]; then
       stat -c '%Y %s' -- "$1" 2>/dev/null
     }
     MN_LATCHED=0
-    MN_KEY="${MEM//\//-}"
-    if [ "${#MN_KEY}" -gt 120 ]; then MN_KEY="${MN_KEY: -120}"; fi
+    # (MN_KEY is set at the top of this block: the stats cache is keyed the same way.)
     MN_STAMP="$STATE_DIR/memrotate-${#MEM}-${MN_KEY}.stat"
-    MN_NOWSTAT="$(_mn_stat "$MEM") $(date +%Y-%m-%d)"
+    # The day is the UTC day of the clock read at the top (one `date` a prompt, not two); with no
+    # clock it falls back to asking `date`, as before. Either way it is a day, which is the bound.
+    _mn_rday="$_MN_DAY"; [ -n "$_mn_rday" ] || _mn_rday="$(date +%Y-%m-%d)"
+    MN_NOWSTAT="$(_mn_stat "$MEM") $_mn_rday"
     case "$MN_NOWSTAT" in ' '*) MN_NOWSTAT="" ;; esac
-    if [ -n "$MN_NOWSTAT" ] && [ "$MN_NOWSTAT" = "$(cat "$MN_STAMP" 2>/dev/null)" ]; then
+    _mn_was=""
+    [ -r "$MN_STAMP" ] && { read -r _mn_was < "$MN_STAMP" || true; }
+    if [ -n "$MN_NOWSTAT" ] && [ "$MN_NOWSTAT" = "$_mn_was" ]; then
       MN_LATCHED=1
     fi
     if [ -n "$RB" ] && [ -x "$RB" ] && [ "$MN_LATCHED" -eq 0 ]; then
@@ -382,12 +558,8 @@ if [ "$MEASURE_OK" -eq 1 ] && [ -n "$MEM" ] && [ -f "$MEM" ]; then
             ROTATE_NOTE=" AUTO-ROTATED to hold the read limit (${RV#verdict=rotated }): moved lines are VERBATIM in the cold record — restore = paste the line back."
           fi
           STATS=$(_mn_stats "$MEM") || STATS=""
-          TOTAL="${STATS%% *}"
-          LINES=$(printf '%s' "$STATS" | cut -d' ' -f2)
-          N=$(printf '%s' "$STATS" | cut -d' ' -f3)
-          case "${TOTAL:-x}" in ''|*[!0-9]*) TOTAL="" ;; esac
-          case "${LINES:-x}" in ''|*[!0-9]*) LINES=0 ;; esac
-          case "${N:-x}" in ''|*[!0-9]*) N=0 ;; esac
+          _mn_stats_store
+          _mn_parse_stats
           ;;
         *)
           # In the pressure band under the LIMIT an exhausted rotor is the designed steady
@@ -404,14 +576,33 @@ if [ "$MEASURE_OK" -eq 1 ] && [ -n "$MEM" ] && [ -f "$MEM" ]; then
       fi
     fi
   fi
+fi
 
+# ── DUE CHECK, BEFORE any advisory text is built (2026-10-11, load-hook-timeouts item 5).
+# Fire on the FIRST prompt and every Nth after. An over-limit index is a live,
+# actionable fault, so it speaks up immediately rather than waiting for the
+# periodic slot; when the index is healthy this stays on the periodic cadence.
+# OVERFLOW is read off the figures, by the same two tests that pick the 🚨 arms below (char cap,
+# then line cap, both only for a measured index with entries), so everything after this line —
+# `wc -c`, the advice arithmetic, the path and rules-file resolution — runs on due prompts only.
+OVERFLOW=0
+if [ "$MEASURE_OK" -eq 1 ] && [ -n "$TOTAL" ] && [ "${N:-0}" -gt 0 ] 2>/dev/null; then
+  if [ "$TOTAL" -ge "$LIMIT" ] || [ "$LINES" -gt "$LINE_LIMIT" ]; then OVERFLOW=1; fi
+fi
+if [ "$OVERFLOW" -eq 1 ]; then
+  [ "$COUNT" -eq 1 ] || [ "$_MN_PERIODIC" -eq 1 ] || _mn_not_due
+else
+  [ "$_MN_PERIODIC" -eq 1 ] || _mn_not_due
+fi
+_mn_want_physical
+
+if [ "$MEASURE_OK" -eq 1 ] && [ -n "$MEM" ] && [ -f "$MEM" ]; then
   if [ -n "$TOTAL" ] && [ "${N:-0}" -gt 0 ] 2>/dev/null; then
     # Measure the ENTRY lines only: the file also carries a header/provenance block,
     # and folding that fixed cost into a per-entry average overstates every hook.
     # (_mn_stats counted these over the EFFECTIVE content, in the loader's unit, one newline
     # per entry line included in both — so TOTAL = header + PFX + Sigma_hook holds exactly.)
-    ENTRY_B=$(printf '%s' "$STATS" | cut -d' ' -f4)
-    PFX=$(printf '%s' "$STATS" | cut -d' ' -f5)
+    # ENTRY_B and PFX were split out of $STATS by _mn_parse_stats.
     PFX_AVG=$(( PFX / N ))
     HOOK_AVG=$(( (ENTRY_B - PFX) / N ))
     # Cardinality ceiling: what the limit affords at a disciplined hook length.
@@ -470,7 +661,7 @@ if [ "$MEASURE_OK" -eq 1 ] && [ -n "$MEM" ] && [ -f "$MEM" ]; then
     # Hoisted above the breach arms because BOTH of them need it: the count is the UNION over the
     # two caps (see _mn_stats), and it used to be read inside the char arm only — so the LINE arm,
     # the one case where the char offset says nothing, announced a silent tail with no count of it.
-    DROPPED_U=$(printf '%s' "$STATS" | cut -d' ' -f6)
+    # (DROPPED_U was split out of $STATS by _mn_parse_stats.)
     case "$DROPPED_U" in ''|*[!0-9]*) DROPPED_U=0 ;; esac
     if [ "$TOTAL" -ge "$LIMIT" ]; then
       OVER=$(( TOTAL - LIMIT ))
@@ -601,16 +792,7 @@ if [ "$MEASURE_OK" -eq 1 ] && [ -n "$MEM" ] && [ -f "$MEM" ]; then
   fi
 fi
 
-# Fire on the FIRST prompt and every Nth after. An over-limit index is a live,
-# actionable fault, so it speaks up immediately rather than waiting for the
-# periodic slot; when the index is healthy this stays on the periodic cadence.
-OVERFLOW=0
-case "$BUDGET_CTX" in '🚨'*) OVERFLOW=1 ;; esac
-if [ "$OVERFLOW" -eq 1 ]; then
-  [ "$COUNT" -eq 1 ] || [ $((COUNT % INTERVAL)) -eq 0 ] || _mn_not_due
-else
-  [ $((COUNT % INTERVAL)) -eq 0 ] || _mn_not_due
-fi
+# (The due check moved above the advisory text; OVERFLOW is set there.)
 # One IDL row per DECISION turn (hook `memory-nudge`); non-fire turns exited above, so this adds no
 # per-prompt cost. scripts/idl-expected-fires.tsv measures these rows against the fires the
 # nudge-*.count files imply, so a nudge that stops firing pages SILENT instead of going quiet.
@@ -670,6 +852,9 @@ fi
 RULES_HINT="the project's situational rules file at <project>/.claude/rules/agent-operating-lessons-situational.md (PROJECT-level — ~/.claude/rules/ loads in every repo)"
 if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
   RULES_HINT="$CLAUDE_PROJECT_DIR/.claude/rules/agent-operating-lessons-situational.md (create it if missing)"
+elif [ "$_MN_RESOLVED" -eq 1 ]; then
+  # RROOT came with the cwd's index paths (the where-cache above); no second git.
+  [ -z "$RROOT" ] || RULES_HINT="$RROOT/.claude/rules/agent-operating-lessons-situational.md (create it if missing)"
 elif RROOT=$(cd "$CWD" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null); then
   [ -n "$RROOT" ] && RULES_HINT="$RROOT/.claude/rules/agent-operating-lessons-situational.md (create it if missing)"
 fi
