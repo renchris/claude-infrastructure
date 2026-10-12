@@ -244,7 +244,7 @@ print("rc=%d out_bytes=%d cpu_ms=%d" % (p.returncode, len(p.stdout), int((ru.ru_
 PY
   echo "$output"
   [ "$status" -eq 0 ]
-  [[ $output =~ ^rc=0\ out_bytes=0\ cpu_ms=([0-9]+)$ ]]
+  [[ $output =~ ^rc=0\ out_bytes=0\ cpu_ms=([0-9]+)$ ]] || false
   [ "${BASH_REMATCH[1]}" -lt 3000 ]
   [ ! -e "$LOG" ]
 }
