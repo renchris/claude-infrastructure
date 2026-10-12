@@ -7079,7 +7079,10 @@ def first_read(cfg, name, token, rt_fp, state, overlay):
 LOCAL_DEADLINE_S_DEFAULT = 60
 LOCAL_KC_DEADLINE_S = 8.0
 LOCAL_ATTR_REUSE_S = 300
-LOCAL_CENSUS_RECOMMIT_S = 120
+# An unchanged census is re-committed once the cached stamp is older than this, so the router's
+# `k_native` never ages past ~2 ticks. Was 120 (D7 step 3), which let the cached stamp reach 118 s
+# against DoD 15's 60 s bound — measured live 2026-10-12. Cost: one small CAS write per 40 s.
+LOCAL_CENSUS_RECOMMIT_S = 40
 LOCAL_MIN_BUDGET_S = 15
 LOCAL_HEARTBEAT_S = 600
 LOCAL_WLOCK_WAIT_S = 2.0

@@ -719,3 +719,22 @@ print("OK")
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]]
 }
+
+@test "census: an unchanged count is re-committed before its stamp passes 60 s (DoD 15)" {
+  # Measured live 2026-10-12: with a 120 s re-commit age the router's k_native reached 118 s old.
+  run python3 -c "$LOAD"'
+world()
+now = time.time()
+seed([okrow("next3", k_native=3, k_native_as_of=now - 50), okrow("next4", k_native=1, k_native_as_of=now - 50)])
+run_pass()
+ages = [now - r["k_native_as_of"] for r in cache()["rows"]]
+assert all(a < 5 for a in ages), ages
+seed([okrow("next3", k_native=3, k_native_as_of=now - 10), okrow("next4", k_native=1, k_native_as_of=now - 10)])
+t_before = os.stat(cfg["cache_file"]).st_mtime_ns
+run_pass()
+assert os.stat(cfg["cache_file"]).st_mtime_ns == t_before     # fresh and unchanged: no write
+print("OK")
+'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+}
