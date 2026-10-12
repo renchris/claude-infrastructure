@@ -32,6 +32,7 @@ import importlib.util
 import json
 import os
 import sys
+import time
 from datetime import datetime, timedelta
 
 SRC = os.path.join(
@@ -103,6 +104,15 @@ def to_row(d, now):
         "k": d.get("k", 0),
         "k_work": d.get("k", 0) if legacy else d.get("k_work"),
         "k_src": "work" if legacy else d.get("k_src"),
+        # The native census (ACCOUNTS_BOARD_FRESHNESS D2). k_panes ages its stamp against the WALL
+        # clock, so the stamp is re-dated to keep its age AT THE REPLAYED INSTANT — the same move
+        # hrs() makes for reset stamps. Without it a panes-native record replays as unmeasured.
+        "k_native": d.get("k_native"),
+        "k_native_as_of": (
+            time.time() - (now.timestamp() - d["k_native_as_of"])
+            if isinstance(d.get("k_native_as_of"), (int, float))
+            else None
+        ),
         "k_phantom_desk": 0,
         "desk_incumbent": False,
     }

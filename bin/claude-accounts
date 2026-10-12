@@ -675,9 +675,65 @@ def concurrency(cfg):
     re-check (`:658`) was added. So the two implementations now agree on the UNKNOWN direction and
     the display path is the one that degrades, explicitly, at the renderer.
 
-    Not currently at risk of firing (measured 67-95 ms / 118,665 B at 10 sessions, ~865 KB
-    projected at 150, against a 10 s timeout — ~10x headroom, 07 §6.5), which is why this is a
-    contract fix and not a redesign of the instrument."""
+    Was "not currently at risk" (measured 67-95 ms / 118,665 B at 10 sessions, 07 §6.5). Re-measured
+    2026-10-11: `ps -wwEo` emits 2.43 MB and took 0.5-10.2 s at load 84-780 against its 10 s
+    timeout, and timed out 121 times that day; 11 of 25 desk decisions abstained on
+    `concurrency-unmeasured`, all fleet-wide by construction (one census, four accounts). The
+    instrument now starves, which is what the native census below exists for
+    (docs/plans/ACCOUNTS_BOARD_FRESHNESS.md D1). With `census: "ab"` in accounts.json, a libproc
+    census runs CONCURRENTLY with ps (no added serial time), is published through `_NATIVE_LAST`
+    and logged beside ps as `census-ab:`; this function's return value and its None contract are
+    unchanged, and so is everything that reads it (heal's gate, `row["k"]`)."""
+    global _NATIVE_LAST
+    if _census_mode(cfg) != "ab":
+        return _ps_census(cfg)
+    box = {}
+    w0 = time.monotonic()
+    # A daemon thread, started BEFORE the ps subprocess and joined after it: concurrent, so it
+    # adds no serial time, and its result survives a ps failure — which is the case it is for.
+    th = threading.Thread(target=lambda: box.update(zip(("n", "m"), _native_census(cfg))),
+                          name="native-census", daemon=True)
+    th.start()
+    p0 = time.monotonic()
+    res = _ps_census(cfg)
+    ps_ms = int((time.monotonic() - p0) * 1000)
+    th.join(max(0.0, NATIVE_WALL_BUDGET_S - (time.monotonic() - w0)))
+    nat, meta = (box.get("n"), box.get("m")) if "m" in box else (None, {"reason": "join-timeout"})
+    _NATIVE_LAST = nat
+    log_event(_census_ab_line(cfg, res, nat, meta, ps_ms))
+    return res
+
+
+def _ps_census(cfg):
+    """The `ps -wwEo` census: the body concurrency() always ran, unchanged in behaviour."""
+    try:
+        out = subprocess.run(["ps", "-wwEo", "pid=,command="], capture_output=True, text=True,
+                             timeout=10).stdout
+    except (subprocess.TimeoutExpired, OSError) as e:
+        # Logged, never silent — same contract as _kwork_unmeasured below. An instrument that
+        # changed mid-decision has to be answerable from disk afterwards.
+        log_event(f"concurrency: ps UNAVAILABLE ({type(e).__name__}: {e}) — live-session count "
+                  "UNMEASURED. The router charges 'unknown' (concurrency-unmeasured, a DATA "
+                  "exclusion -> exit 3) and heal() REFUSES to redeem any refresh token this "
+                  "sweep. Previously this returned all-zero, which disarmed both gates at once.")
+        return None
+    return _census_from_lines(cfg, ((line, None) for line in out.splitlines()))
+
+
+def _expand_home(v, home):
+    """`~`-expansion against a GIVEN home, the native census's per-process HOME."""
+    return home + v[1:] if (v == "~" or v.startswith("~/")) else v
+
+
+def _census_from_lines(cfg, entries, reg=None):
+    """Classify `(line, home)` entries into a _Census — the ONE classifier both instruments share.
+
+    A line is `"<pid> <argv…> <env…>"`, the shape `ps -wwEo pid=,command=` prints and the shape
+    the native census builds from KERN_PROCARGS2. `home=None` means the module's HOME (the ps
+    path, byte-identical to before the split); a native entry passes THAT PROCESS's own `HOME=`,
+    so a scratch-HOME fixture's sessions are never attributed through the host's `~/.claude`
+    mirror. In production every session's HOME is the module's, so both instruments agree.
+    `reg` is the registry ({pid: sessionId}) when the caller has already read it."""
     counts = {a["name"]: 0 for a in cfg["accounts"]}
     headless = {a["name"]: 0 for a in cfg["accounts"]}
     # rstrip("/") on the KEYS as well as on the observed dir. The observed side has always been
@@ -693,20 +749,9 @@ def concurrency(cfg):
     # ~/.claude mirrors .claude-next only when nothing more specific claims it.
     if mirror_next is not None:
         by_dir.setdefault(os.path.join(HOME, ".claude"), mirror_next)
-    try:
-        out = subprocess.run(["ps", "-wwEo", "pid=,command="], capture_output=True, text=True,
-                             timeout=10).stdout
-    except (subprocess.TimeoutExpired, OSError) as e:
-        # Logged, never silent — same contract as _kwork_unmeasured below. An instrument that
-        # changed mid-decision has to be answerable from disk afterwards.
-        log_event(f"concurrency: ps UNAVAILABLE ({type(e).__name__}: {e}) — live-session count "
-                  "UNMEASURED. The router charges 'unknown' (concurrency-unmeasured, a DATA "
-                  "exclusion -> exit 3) and heal() REFUSES to redeem any refresh token this "
-                  "sweep. Previously this returned all-zero, which disarmed both gates at once.")
-        return None
     pids = {a["name"]: [] for a in cfg["accounts"]}
     argv_sid = {}
-    for line in out.splitlines():
+    for line, home in entries:
         toks = line.split()
         # The pid column leads; a line without one (a test stub's bare `command=` output) still
         # counts, it just cannot be joined to a session id, so bound_kwork treats it as unknown.
@@ -736,7 +781,10 @@ def concurrency(cfg):
         # ps -E appends env AFTER argv, so the LAST CLAUDE_CONFIG_DIR= match is the real env
         # var — a first-match search could hit prompt text that merely mentions it.
         cfgs = re.findall(r"CLAUDE_CONFIG_DIR=(\S+)", line)
-        d = os.path.expanduser(cfgs[-1]) if cfgs else os.path.join(HOME, ".claude")
+        if home is None:
+            d = os.path.expanduser(cfgs[-1]) if cfgs else os.path.join(HOME, ".claude")
+        else:
+            d = _expand_home(cfgs[-1], home) if cfgs else os.path.join(home, ".claude")
         name = by_dir.get(d.rstrip("/"))
         if name:
             # A headless one-shot is still kept out of the INTERACTIVE count (the pane census and
@@ -750,7 +798,8 @@ def concurrency(cfg):
             m = _RE_ARGV_SID.search(" ".join(toks[1:12]))
             if pid is not None and m:
                 argv_sid[pid] = m.group(1)
-    reg = _registered_sessions(by_dir)
+    if reg is None:
+        reg = _registered_sessions(by_dir)
     live_sids = {n: set() for n in pids}
     unknown = {n: 0 for n in pids}
     for n, plist in pids.items():
@@ -760,7 +809,8 @@ def concurrency(cfg):
                 live_sids[n].update(got)
             else:
                 unknown[n] += 1
-    return _Census(counts, headless=headless, live_sids=live_sids, unknown=unknown)
+    return _Census(counts, headless=headless, live_sids=live_sids, unknown=unknown,
+                   attributed={p for pl in pids.values() for p in pl if p is not None})
 
 
 _RE_ARGV_SID = re.compile(r"(?:--resume|-r|--session-id)[= ]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
@@ -774,6 +824,12 @@ def _registered_sessions(by_dir):
     is absent by construction, and a crashed one is filtered by the pid check. realpath-deduped:
     ~/.claude-next/sessions is a symlink to ~/.claude/sessions. Any unreadable file is skipped —
     its process then lands in `unknown`, which bound_kwork charges conservatively."""
+    return {pid: e["sid"] for pid, e in _registry_entries(by_dir).items()}
+
+
+def _registry_entries(by_dir):
+    """{pid: {sid, entrypoint, startedAt}} for every live registry entry — _registered_sessions'
+    reader, which the native census also needs for its gap-fill and its canary."""
     out, seen = {}, set()
     for d in by_dir:
         sdir = os.path.realpath(os.path.join(os.path.expanduser(d), "sessions"))
@@ -797,8 +853,341 @@ def _registered_sessions(by_dir):
                 continue
             except (PermissionError, OSError):
                 pass
-            out[pid] = sid
+            out[pid] = {"sid": sid, "entrypoint": j.get("entrypoint"),
+                        "startedAt": j.get("startedAt")}
     return out
+
+
+# ---- native census (libproc + KERN_PROCARGS2; docs/plans/ACCOUNTS_BOARD_FRESHNESS.md D1) ---------
+# Why: `ps -wwEo` serialises every process's argv AND env (2.43 MB on 2026-10-11) and starves under
+# load — 121 timeouts that day, each one a fleet-wide `concurrency-unmeasured`. The native census
+# reads argv only for claude-shaped processes: 354 ms against ps's 9,285 ms at load 738, same pid
+# set (synth probe cmp4.py). Lazy by contract (C2): ctypes and both dylibs load inside the first
+# call, never at import, because `--route`/`--rank` sit on the launch path and importing ctypes alone
+# measured 11.6-13.8 ms of CPU. It is NOT a gate instrument yet: `row["k"]` and heal's `k_live` stay
+# ps-only until the Phase 3 soak (`--census-ab-report`) says otherwise.
+_NATIVE_LIBS = None          # (ctypes, libproc, libc, BSDInfo), loaded on first use
+_NATIVE_LAST = None          # the census concurrency() ran beside ps this sweep; collect() reads it
+_NATIVE_META = None          # meta of the last native_census() call, a None result included
+NATIVE_CPU_BUDGET_S = 1.0    # measured user 0.03-0.04 s for a whole census process
+NATIVE_WALL_BUDGET_S = 10.0  # ps's own timeout: the native census must never be the slower one
+_native_cpu_clock = time.thread_time      # seam: the CPU over-budget case stubs it
+_PROC_PIDTBSDINFO = 3
+_NO_TTY = 0xffffffff
+
+
+class _NativeUnavailable(Exception):
+    """The native census cannot run (ctypes or libproc failed to load); str() is the reason."""
+
+
+def _native_libs():
+    global _NATIVE_LIBS
+    if _NATIVE_LIBS is None:
+        try:
+            import ctypes
+            libproc = ctypes.CDLL("/usr/lib/libproc.dylib")
+            libc = ctypes.CDLL(None, use_errno=True)
+        except (ImportError, OSError) as e:
+            raise _NativeUnavailable(f"libproc-load:{type(e).__name__}")
+        u32, i32, u64 = ctypes.c_uint32, ctypes.c_int32, ctypes.c_uint64
+
+        class BSDInfo(ctypes.Structure):
+            # struct proc_bsdinfo, <sys/proc_info.h>. sizeof must equal what proc_pidinfo returns,
+            # which is checked per call — a drifted struct reads as "no info", never as garbage.
+            _fields_ = [("pbi_flags", u32), ("pbi_status", u32), ("pbi_xstatus", u32),
+                        ("pbi_pid", u32), ("pbi_ppid", u32), ("pbi_uid", u32), ("pbi_gid", u32),
+                        ("pbi_ruid", u32), ("pbi_rgid", u32), ("pbi_svuid", u32),
+                        ("pbi_svgid", u32), ("rfu_1", u32), ("pbi_comm", ctypes.c_char * 16),
+                        ("pbi_name", ctypes.c_char * 32), ("pbi_nfiles", u32), ("pbi_pgid", u32),
+                        ("pbi_pjobc", u32), ("e_tdev", u32), ("e_tpgid", u32), ("pbi_nice", i32),
+                        ("pbi_start_tvsec", u64), ("pbi_start_tvusec", u64)]
+        vp, ci = ctypes.c_void_p, ctypes.c_int
+        libproc.proc_listallpids.argtypes, libproc.proc_listallpids.restype = [vp, ci], ci
+        libproc.proc_pidinfo.argtypes, libproc.proc_pidinfo.restype = [ci, ci, u64, vp, ci], ci
+        libproc.proc_pidpath.argtypes, libproc.proc_pidpath.restype = [ci, vp, u32], ci
+        libc.sysctl.argtypes = [ctypes.POINTER(ci), ctypes.c_uint, vp,
+                                ctypes.POINTER(ctypes.c_size_t), vp, ctypes.c_size_t]
+        libc.sysctl.restype = ci
+        _NATIVE_LIBS = (ctypes, libproc, libc, BSDInfo)
+    return _NATIVE_LIBS
+
+
+def _native_proc_entries():
+    """-> (listallpids count, [{pid, comm, start}]) for this uid's processes WITH a controlling
+    terminal — exactly the set `ps -wwEo` lists without -a/-x. The seam the fail-closed cases
+    stub. Raises _NativeUnavailable when libproc cannot load."""
+    ctypes, libproc, _libc, BSDInfo = _native_libs()
+    n = libproc.proc_listallpids(None, 0)
+    if n <= 0:
+        return n, []
+    buf = (ctypes.c_int * (n + 256))()
+    n = libproc.proc_listallpids(buf, ctypes.sizeof(buf))
+    if n <= 0:
+        return n, []
+    uid, out, bi, size = os.getuid(), [], BSDInfo(), ctypes.sizeof(BSDInfo)
+    for pid in buf[:n]:
+        if pid <= 0:
+            continue
+        if libproc.proc_pidinfo(pid, _PROC_PIDTBSDINFO, 0, ctypes.byref(bi), size) != size:
+            continue
+        if bi.pbi_uid != uid or bi.e_tdev == _NO_TTY:
+            continue
+        out.append({"pid": pid, "comm": bi.pbi_comm.decode(errors="replace"),
+                    "start": int(bi.pbi_start_tvsec)})
+    return n, out
+
+
+def _native_pidpath(pid):
+    ctypes, libproc, _libc, _b = _native_libs()
+    buf = ctypes.create_string_buffer(4096)
+    return buf.value.decode(errors="replace") if libproc.proc_pidpath(pid, buf, 4096) > 0 else ""
+
+
+def _native_procargs(pid):
+    """-> (argv, env) from KERN_PROCARGS2, or None when the read fails (exited, or not ours).
+    Layout: int32 argc, exec_path, NUL padding, argc argv strings, env strings, empty string."""
+    ctypes, _lp, libc, _b = _native_libs()
+    mib = (ctypes.c_int * 3)(1, 49, pid)               # CTL_KERN, KERN_PROCARGS2, pid
+    size = ctypes.c_size_t(0)
+    if libc.sysctl(mib, 3, None, ctypes.byref(size), None, 0) != 0 or size.value < 4:
+        return None
+    buf = ctypes.create_string_buffer(size.value)
+    if libc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0) != 0:
+        return None
+    raw = buf.raw[:size.value]
+    argc = int.from_bytes(raw[:4], "little")
+    i = raw.find(b"\0", 4)
+    if i < 0:
+        return None
+    while i < len(raw) and raw[i] == 0:
+        i += 1
+    argv, env = [], []
+    while i < len(raw):
+        j = raw.find(b"\0", i)
+        j = len(raw) if j < 0 else j
+        s = raw[i:j]
+        if len(argv) < argc:
+            argv.append(s.decode(errors="replace"))
+        elif not s:
+            break
+        else:
+            env.append(s.decode(errors="replace"))
+        i = j + 1
+    return argv, env
+
+
+def _native_wants(p):
+    """The argv-read prefilter: claude-shaped comm, or a claude path (a versioned native binary's
+    comm is its version string, e.g. `2.1.293`)."""
+    c = p["comm"]
+    return c.startswith("claude") or c == "node" or "claude" in _native_pidpath(p["pid"])
+
+
+def _native_census(cfg):
+    """-> (_Census | None, meta). The body of native_census(); see there."""
+    t_wall, w0, c0 = time.time(), time.monotonic(), _native_cpu_clock()
+    meta = {"as_of": t_wall, "ms": 0, "cpu_ms": 0, "reason": None, "tty_pop": 0, "reads": 0}
+
+    def done(census, reason=None):
+        meta["ms"] = int((time.monotonic() - w0) * 1000)
+        meta["cpu_ms"] = int((_native_cpu_clock() - c0) * 1000)
+        meta["reason"] = reason
+        if census is not None:
+            census.meta, census.as_of = meta, t_wall
+        return census, meta
+
+    def over():
+        if _native_cpu_clock() - c0 > NATIVE_CPU_BUDGET_S:
+            return "cpu-budget"
+        if time.monotonic() - w0 > NATIVE_WALL_BUDGET_S:
+            return "wall-budget"
+        return None
+
+    try:
+        n_all, procs = _native_proc_entries()
+    except _NativeUnavailable as e:
+        return done(None, str(e))
+    except Exception as e:                       # any ctypes surprise fails closed, never raises
+        return done(None, f"lister:{type(e).__name__}")
+    if n_all <= 0:
+        return done(None, "listallpids-empty")
+    meta["tty_pop"] = len(procs)
+    if not procs:
+        return done(None, "tty-pop-0")
+    by_dir = {a["config_dir"].rstrip("/"): a["name"] for a in cfg["accounts"]}
+    mirror_next = next((a["name"] for a in cfg["accounts"]
+                        if a["config_dir"].rstrip("/").endswith(".claude-next")), None)
+    if mirror_next is not None:
+        by_dir.setdefault(os.path.join(HOME, ".claude"), mirror_next)
+    reg = _registry_entries(by_dir)
+    by_pid = {p["pid"]: p for p in procs}
+
+    def verified(pid):
+        """A live registry pid whose recorded start matches the process now holding that pid."""
+        e, p = reg.get(pid), by_pid.get(pid)
+        sa = e.get("startedAt") if e else None
+        if p is None or not isinstance(sa, (int, float)):
+            return False
+        return p["start"] - 1 <= sa / 1000.0 <= p["start"] + 600
+
+    want = []
+    try:
+        for p in procs:
+            if (why := over()):
+                return done(None, why)
+            if _native_wants(p) or verified(p["pid"]):     # registry gap-fill
+                want.append(p["pid"])
+    except Exception as e:
+        return done(None, f"prefilter:{type(e).__name__}")
+    entries, read = [], set()
+    for pid in want:
+        if (why := over()):
+            return done(None, why)
+        try:
+            got = _native_procargs(pid)
+        except Exception:
+            got = None
+        if got is None:
+            continue
+        argv, env = got
+        read.add(pid)
+        homes = [e[5:] for e in env if e.startswith("HOME=")]
+        entries.append((f"{pid} " + " ".join(argv + env), homes[-1] if homes else HOME))
+    meta["reads"] = len(read)
+    census = _census_from_lines(cfg, entries, reg={p: e["sid"] for p, e in reg.items()})
+    # The REGISTRY CANARY: a live, start-verified, tty-holding registry session that the scan did
+    # not read or did not attribute means the scan is blind to something ps sees — refuse the whole
+    # census rather than undercount (an undercount fails OPEN). A pid that exited mid-scan is churn.
+    missed = []
+    for pid, e in reg.items():
+        if e.get("entrypoint") == "sdk-cli" or not verified(pid):
+            continue
+        if pid not in read or pid not in census.attributed:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                continue
+            except OSError:
+                pass
+            missed.append(pid)
+    if missed:
+        log_event(f"native census: registry canary — live registered pid(s) {sorted(missed)} not "
+                  "read or not attributed; native count refused this pass (ps is unaffected)")
+        return done(None, "registry-canary")
+    if (why := over()):
+        return done(None, why)
+    return done(census)
+
+
+def native_census(cfg):
+    """Live-session census from libproc + KERN_PROCARGS2 -> _Census (with `.meta` and `.as_of`, the
+    scan's start epoch), or None with `_NATIVE_META["reason"]` naming why. Fails CLOSED on: libproc
+    or ctypes not loading, an empty pid list, an empty tty population, more than 1 s of thread CPU,
+    more than 10 s of wall time, or the registry canary. Same classifier as ps
+    (_census_from_lines), with each process's own HOME."""
+    global _NATIVE_META
+    census, _NATIVE_META = _native_census(cfg)
+    return census
+
+
+def _accounts_local_dir():
+    return (os.environ.get("CC_ACCOUNTS_LOCAL_DIR")
+            or os.path.join(HOME, ".claude", "state", "accounts-local"))
+
+
+def _census_mode(cfg):
+    """'ps' | 'ab'. Env CC_ACCOUNTS_CENSUS, then the `census-ps` rollback sentinel, then
+    accounts.json's top-level `census`, then 'ps'. Called on sweeps only — never on the launch path,
+    where k_panes reads the env var alone (no file I/O, C2)."""
+    env = os.environ.get("CC_ACCOUNTS_CENSUS")
+    if env in ("ps", "ab"):
+        return env
+    if os.path.exists(os.path.join(_accounts_local_dir(), "census-ps")):
+        return "ps"
+    return "ab" if cfg.get("census") == "ab" else "ps"
+
+
+def _fmt_counts(cfg, c):
+    return "{" + ",".join(f"{a['name']}:{c.get(a['name'], 0)}" for a in cfg["accounts"]) + "}"
+
+
+def _census_ab_line(cfg, ps, nat, meta, ps_ms):
+    """The per-sweep `census-ab:` log line — counts only, never argv or env."""
+    meta = meta or {}
+    p = _fmt_counts(cfg, ps) if ps is not None else "UNAVAILABLE"
+    n = _fmt_counts(cfg, nat) if nat is not None else f"None({meta.get('reason')})"
+    agree = ("n/a" if ps is None or nat is None else
+             "yes" if all(ps.get(a["name"], 0) == nat.get(a["name"], 0) for a in cfg["accounts"])
+             else "no")
+    return (f"census-ab: ps={p} native={n} agree={agree} ps_ms={ps_ms} "
+            f"native_ms={meta.get('ms', '-')} native_cpu_ms={meta.get('cpu_ms', '-')}")
+
+
+_RE_CENSUS_AB = re.compile(r"^(\S+) census-ab: ps=(\{[^}]*\}|UNAVAILABLE) "
+                           r"native=(?:(\{[^}]*\})|None\(([^)]*)\)) agree=(\S+) ps_ms=(\S+) "
+                           r"native_ms=(\S+) native_cpu_ms=(\S+)")
+SOAK_MIN_DAYS, SOAK_MIN_PS_OK, SOAK_MIN_AGREE, SOAK_MAX_DIFF = 7.0, 500, 0.99, 1
+
+
+def _parse_counts(s):
+    out = {}
+    for part in s.strip("{}").split(","):
+        if ":" in part:
+            k, v = part.split(":", 1)
+            try:
+                out[k] = int(v)
+            except ValueError:
+                pass
+    return out
+
+
+def census_ab_report(path=None, out=None):
+    """`--census-ab-report`: the Phase 3 soak verdict over the `census-ab:` log lines. Read-only.
+    PASS needs >= 7 days, >= 500 ps-OK lines, >= 99% exact agreement among ps-OK lines (a native
+    None counts against it) and a max per-account difference of 1. The denominator always prints."""
+    out = out or sys.stdout
+    rows = []
+    try:
+        with open(path or LOG_PATH, errors="replace") as f:
+            for line in f:
+                if "census-ab:" not in line:
+                    continue
+                m = _RE_CENSUS_AB.match(line)
+                if m:
+                    rows.append(m)
+    except OSError as e:
+        print(f"census-ab-report: cannot read {path or LOG_PATH}: {e}", file=out)
+    stamps = [t for t in (_as_epoch(m.group(1)) for m in rows) if t is not None]
+    days = (max(stamps) - min(stamps)) / 86400.0 if stamps else 0.0
+    ps_ok = [m for m in rows if m.group(2) != "UNAVAILABLE"]
+    agree = sum(1 for m in ps_ok if m.group(5) == "yes")
+    diff = 0
+    for m in ps_ok:
+        if m.group(3):
+            p, n = _parse_counts(m.group(2)), _parse_counts(m.group(3))
+            diff = max([diff] + [abs(p.get(k, 0) - n.get(k, 0)) for k in set(p) | set(n)])
+    reasons = {}
+    for m in rows:
+        if m.group(4) is not None:
+            reasons[m.group(4)] = reasons.get(m.group(4), 0) + 1
+    nms = sorted(int(m.group(7)) for m in rows if m.group(7).isdigit())
+    pct = (lambda q: nms[min(len(nms) - 1, int(q * len(nms)))] if nms else "-")
+    rate = agree / len(ps_ok) if ps_ok else 0.0
+    print(f"census-ab-report: window {days:.1f} d · {len(rows)} line(s) · ps-OK {len(ps_ok)} · "
+          f"ps UNAVAILABLE {len(rows) - len(ps_ok)}", file=out)
+    print(f"  exact agreement {agree}/{len(ps_ok)} ps-OK line(s) = {rate * 100:.1f}% · "
+          f"max per-account |ps-native| {diff}", file=out)
+    print("  native None: " + (" · ".join(f"{k} {v}" for k, v in sorted(reasons.items(), key=lambda kv: -kv[1]))
+                               if reasons else "0"), file=out)
+    print(f"  native_ms p50 {pct(0.5)} · p90 {pct(0.9)}", file=out)
+    miss = [w for ok, w in ((days >= SOAK_MIN_DAYS, f"window {days:.1f} d < {SOAK_MIN_DAYS:.0f} d"),
+                            (len(ps_ok) >= SOAK_MIN_PS_OK,
+                             f"ps-OK {len(ps_ok)} < {SOAK_MIN_PS_OK}"),
+                            (rate >= SOAK_MIN_AGREE,
+                             f"agreement {rate * 100:.1f}% < {SOAK_MIN_AGREE * 100:.0f}%"),
+                            (diff <= SOAK_MAX_DIFF, f"max diff {diff} > {SOAK_MAX_DIFF}")) if not ok]
+    print("soak: PASS" if not miss else f"soak: NOT-YET ({'; '.join(miss)})", file=out)
+    return 0
 
 
 KWORK_BUDGET_S = 15.0      # was 5.0, was 2.0 — see the budget note in working_concurrency's
@@ -2223,6 +2612,22 @@ K_GRACE_S = 600          # same band as cache_grace_s — see inherit_k's docstr
 K_SKEW_TOL_S = 1.0
 
 
+def _as_epoch(v):
+    """A stamp -> epoch seconds: a number passes through, an ISO string is parsed (naive = UTC).
+    None for anything else, so every caller fails toward 'no stamp'."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    if not isinstance(v, str) or not v:
+        return None
+    try:
+        t = datetime.fromisoformat(v.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return (t if t.tzinfo else t.replace(tzinfo=timezone.utc)).timestamp()
+
+
 def inherit_k(row, prev, now=None, grace_s=K_GRACE_S):
     """Carry the LAST sweep's pane census onto a row whose OWN `ps` census could not be taken.
 
@@ -2270,6 +2675,10 @@ def inherit_k(row, prev, now=None, grace_s=K_GRACE_S):
         # grace is measured from the last real MEASUREMENT and not from the last re-inheritance.
         # Without this a permanently-starved `ps` would inherit forever, one 600 s hop at a time.
         k, as_of = pr.get("k_stale"), pr.get("k_stale_as_of")
+    elif _as_epoch(pr.get("k_as_of")) is not None:
+        # Dated by the MEASUREMENT (the ps scan's start), not by the sweep's `ts`, which is stamped
+        # after a 20-100 s sweep and would stretch the grace by exactly that much.
+        as_of = datetime.fromtimestamp(_as_epoch(pr["k_as_of"]), timezone.utc).isoformat()
     elif prev.get("ts"):
         as_of = datetime.fromtimestamp(prev["ts"], timezone.utc).isoformat()
     if k is None or not as_of:
@@ -2553,8 +2962,12 @@ def collect(cfg, no_heal=False, prev=None):
     # None (ps unreadable) rides through as None per row — NOT as 0. `.get(name, 0)` on an empty
     # dict would re-fabricate the very zero the None contract exists to abolish, so the unmeasured
     # case is spelled out rather than defaulted.
+    global _NATIVE_LAST
+    _NATIVE_LAST = None               # concurrency() publishes the native census here in 'ab' mode
+    k_as_of = time.time()             # the ps scan's start epoch, stamped only when ps succeeded
     counts = concurrency(cfg)
-    k_of_name = (lambda _n: None) if counts is None else (lambda n: counts.get(n, 0))
+    native = _NATIVE_LAST
+    k_of_name =(lambda _n: None) if counts is None else (lambda n: counts.get(n, 0))
     _ssl_warm()                       # both lazy urllib globals, main thread, before fan-out
     ledger = load_lastgood()
 
@@ -2612,7 +3025,17 @@ def collect(cfg, no_heal=False, prev=None):
         row["k_sids"] = (sorted(getattr(wcounts, "sids", {}).get(acct["name"], ()))
                          if wcounts is not None else None)
         row["k_sids_at"] = getattr(wcounts, "at", None) if wcounts is not None else None
-        bound_kwork(row, acct["name"], counts, wcounts)
+        if counts is not None:
+            row["k_as_of"] = k_as_of
+        # The native census rides BESIDE `k`, never in it: row["k"] and the probe's k_live stay
+        # ps-only (C6), so heal's rotation gate and handoff-fire's relogin gate still refuse on a
+        # count ps did not take. Only the router's charge (k_panes) may read k_native.
+        if native is not None:
+            row["k_native"] = native.get(acct["name"], 0)
+            row["k_native_as_of"] = native.as_of
+        # ps first, native as the fallback: bound_kwork only ever TIGHTENS, and a None census used
+        # to leave k_work unbounded for the whole sweep.
+        bound_kwork(row, acct["name"], counts if counts is not None else native, wcounts)
         # HERE, not at the probe's k_live argument, and that placement is the safety property:
         # heal()'s rotation gate reads the argument and must keep seeing None (inherit_k's
         # docstring). This stamps a SEPARATE field on the row afterwards, so only the router's
@@ -3079,12 +3502,46 @@ def k_panes(r, now=None, grace_s=K_GRACE_S):
     `grace_s` defaults to the module constant rather than reading cfg["cache_grace_s"]: every
     caller is a pure row-level derivation with no cfg in hand, and the two are the same 600
     (accounts.json's key and K_GRACE_S). A row whose stamp is missing or unparseable is refused —
-    the same fail-closed direction as an absent census."""
+    the same fail-closed direction as an absent census.
+
+    The NATIVE census (`k_native`, D2) is charged first when it is inside the same grace and either
+    ps produced nothing or native is more than 60 s newer — it is a measurement, not an inheritance.
+    The env lookup is the rollback for readers; it is the only thing read here (no file I/O, C2)."""
+    kn = _k_native_pick(r, now, grace_s)
+    if kn is not None:
+        return kn
     k = r.get("k")
     if k is not None:
         return k
     age = _k_stale_s(r, now)
     return r.get("k_stale") if (age is not None and age <= grace_s) else None
+
+
+K_NATIVE_LEAD_S = 60     # native must be this much newer than a ps count to displace it
+
+
+def _k_native_pick(r, now=None, grace_s=K_GRACE_S):
+    """The native count k_panes charges, or None: present, CC_ACCOUNTS_CENSUS != ps, stamped inside
+    the grace, and either `k` is None or native is K_NATIVE_LEAD_S newer than the ps scan."""
+    kn = r.get("k_native")
+    if kn is None or os.environ.get("CC_ACCOUNTS_CENSUS") == "ps":
+        return None
+    age = _k_native_s(r, now)
+    if age is None or not -K_SKEW_TOL_S <= age <= grace_s:
+        return None
+    if r.get("k") is not None:
+        ps_at = _as_epoch(r.get("k_as_of"))
+        if ps_at is None or _as_epoch(r.get("k_native_as_of")) <= ps_at + K_NATIVE_LEAD_S:
+            return None
+    return kn
+
+
+def _k_native_s(r, now=None):
+    """Age in seconds of the row's native census stamp, or None when there is none."""
+    t = _as_epoch(r.get("k_native_as_of"))
+    if r.get("k_native") is None or t is None:
+        return None
+    return (now if now is not None else time.time()) - t
 
 
 def _k_stale_s(r, now=None):
@@ -3111,7 +3568,11 @@ def k_shown(r):
     derivation, so the markdown table and the color table cannot disagree about staleness.
 
     An expired inherited count renders `?`, not `N*`: the board must show what the router is
-    charging, and past the grace it is charging nothing."""
+    charging, and past the grace it is charging nothing. A native count renders UNSTARRED: it is a
+    measurement, not an inheritance."""
+    kn = _k_native_pick(r)
+    if kn is not None:
+        return str(kn)
     if r.get("k") is not None:
         return str(r["k"])
     kp = k_panes(r)
@@ -3120,7 +3581,7 @@ def k_shown(r):
 
 def k_src(r):
     """WHICH instrument produced this row's concurrency charge:
-    'work' | 'panes' | 'panes-stale' | 'unmeasured'.
+    'work' | 'panes-native' | 'panes' | 'panes-stale' | 'unmeasured'.
 
     One derivation, because the cap, the KF gradient, the exclusion reason and route-meta's
     `k_src=` field all have to agree about it. They previously each re-spelled the same ternary.
@@ -3129,9 +3590,14 @@ def k_src(r):
     because THIS sweep's `ps` could not be read. It is a distinct label rather than 'panes' for
     the reason §6 of desk-router-abstention-2026-09-01 documents: a policy that changes which
     accounts are routable must be answerable from disk afterwards, and route-meta reports this
-    field per decision."""
+    field per decision.
+
+    'panes-native' is the libproc census (D2) when k_panes charges it; it takes the resident cap
+    through the same `!= "work"` fall-through as every pane census."""
     if r.get("k_work") is not None and _term_on("CC_ROUTE_KWORK"):
         return "work"
+    if _k_native_pick(r) is not None:
+        return "panes-native"
     if r.get("k") is not None:
         return "panes"
     # k_panes, never `r.get("k_stale")` directly: an inherited count PAST the grace is not a
@@ -6023,6 +6489,9 @@ def record_utilization(rows, path=None, min_interval_s=UTIL_MIN_INTERVAL_S):
                     # 15pp strand was a real concurrency lockout or an artifact of that assumption.
                     # Free to record — same sweep, same row, both fields already on it.
                     "k_work": r.get("k_work"), "k_src": k_src(r),
+                    # D2: the native census and its scan stamp, so a panes-native record replays
+                    # as charged (scripts/desk-strand-replay.py) rather than as unmeasured.
+                    "k_native": r.get("k_native"), "k_native_as_of": r.get("k_native_as_of"),
                     "session_pct": r.get("session_pct"), "weekly_pct": r.get("weekly_pct"),
                     "fable_pct": r.get("fable_pct"),
                     "session_reset_at": r.get("session_reset_at"),
@@ -6124,7 +6593,7 @@ def _prev_snapshot(cfg):
         return {"ts": old.get("ts"),
                 "rows": {r["acct"]: {k: r.get(k) for k in
                                      ("session_pct", "weekly_pct", "fable_pct",
-                                      "quota_as_of", "stale_quota",
+                                      "quota_as_of", "stale_quota", "k_as_of",
                                       "k", "k_stale", "k_stale_as_of")}
                          for r in old.get("rows", [])}}
     except (OSError, json.JSONDecodeError, KeyError):
@@ -8278,6 +8747,11 @@ def main():
         print("\n".join(render_stranded(wins, hours, acct)))
         return
 
+    # --census-ab-report: the Phase 3 soak verdict (ACCOUNTS_BOARD_FRESHNESS D1). Before load_cfg()
+    # for the --strand-score reasons: it reads the event log alone and must never force a sweep.
+    if "--census-ab-report" in args:
+        sys.exit(census_ab_report())
+
     # --max-wait / --max-age are GLOBAL modifiers, parsed before load_cfg() because --max-wait 0
     # also decides whether load_cfg may fork the claude-bin resolver. Shaped exactly like
     # `--login-status --window-h N`: positional value, malformed ⇒ exit 64, absent ⇒ None ⇒ every
@@ -8729,6 +9203,9 @@ def main():
                               # alters which accounts are routable must be answerable from disk,
                               # and the ONE number that evaluates it is the staleness it accepted.
                               f"k_stale_s={_ks if (_ks := _k_stale_s(w)) is not None else '-'}",
+                              # D2 — the age of the native census this row carries, charged or
+                              # not, so a panes-native decision is answerable from disk too.
+                              f"k_native_s={int(_kn) if (_kn := _k_native_s(w)) is not None else '-'}",
                               f"k_eff={k_eff(w)}",
                               f"kwork_to={KWORK_TIMEOUTS}",
                               # §14's re-pick threshold, DECLARED BY THE ROUTER (backlog
