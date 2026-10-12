@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 ---
 # Accounts board + router freshness — implementation plan
 
@@ -597,6 +597,11 @@ bg(){ out=$(bats "$1" 2>&1); n=$(printf '%s\n' "$out" | sed -n 's/^1\.\.\([0-9]*
   - 15: over 30.4 min on the 15 s code, the cached `k_native_as_of` was never more than 50 s old, and the board's live column showed no `?`.
   - 16 is observational: no login or logout has happened since the job loaded. Watch `accounts-local.out.log` for `local: T2 <acct>` and `local: first-read <acct> 200` at the next one.
   - The samples are in `/tmp/af/samples*.tsv`, one row per 20 s: runs, last exit, stamp age, `local_ts` age, cache `ts`, keepwarm swept count, max `k_native` age, and board `?` cells.
+- **Plan closed 2026-10-12** (backlog item `b3c5ddab37bb`). Re-verified on trunk `2516ac7bb` and the live layer: every land sha above is an ancestor of origin/main; the protected files have no diff from `dcf7c53d6`; `--local-refresh` with `CC_ACCOUNTS_LOCAL=off` prints `local: disabled`; the job shows 572 runs, last exit 0, a 20 s interval and a 0 s stamp age; a `ps=UNAVAILABLE` sweep at 20:09:37Z still carried native counts. The headings of §1-§8 and of the detailed W0-W6 task lists were never re-marked and read PENDING to `plan-phase-scan.sh`; they hold no open work, and the frontmatter is the declaration.
+- What stays open lives in the backlog, not here, because nothing reads a closed plan:
+  - DoD 6 (72 h abstention count, due on or after 2026-10-15) is row `7947f9e6dc7f`. The count 13 h after converge is 0, over 1 interactive decision.
+  - DoD 16 (timings at the next real login or logout) is row `5ed9c5541e24`. None has happened yet.
+  - O2 (the Phase 3 ruling) is row `e04527859ada`; the soak reads `NOT-YET (window 0.6 d < 7 d; ps-OK 238 < 500)`.
 
 ## 5. Tests to add or extend
 
