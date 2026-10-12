@@ -2799,7 +2799,8 @@ POLL_LOCK_WAIT_S = 12.0      # fetch_usage's own timeout: a sweep never stalls l
 
 
 def _poll_lock_path(cfg, name):
-    return f"{cfg['cache_file']}.poll-{name}.lock"
+    cf = cfg.get("cache_file")
+    return f"{cf}.poll-{name}.lock" if cf else None
 
 
 def _fetch_usage_polllocked(cfg, name, token):
@@ -2807,14 +2808,15 @@ def _fetch_usage_polllocked(cfg, name, token):
     the local pass's first read must not poll one token at the same instant — the 429 budget is
     per token and sticky. The sweep WAITS at most one fetch's timeout and then proceeds without
     the lock; the first read takes it non-blocking and stays pending when it is held."""
-    fd = _flock_open(_poll_lock_path(cfg, name), POLL_LOCK_WAIT_S)
+    lp = _poll_lock_path(cfg, name)
+    fd = _flock_open(lp, POLL_LOCK_WAIT_S) if lp else None
     try:
         return fetch_usage(cfg, token)
     finally:
         _flock_release(fd)
 
 
-def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
+def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal, first_reads=None):
     """Probe ONE account -> (row, lastgood_entry | None).
 
     Split out of collect() so that an UNEXPECTED exception can be contained per-account:
@@ -2934,6 +2936,18 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
     # THE SHARED BACKOFF. A token that answered 429 is left alone by EVERY caller — keepwarm,
     # `--fresh`, `--rank` — until its backoff runs out; the row is a throttled row exactly as if
     # it had been polled, so nothing downstream can tell the difference except the request count.
+    # THE SWEEP REUSE GUARD (ACCOUNTS_BOARD_FRESHNESS D6). The local pass polled THIS grant within
+    # REPOLL_MIN_S (90 s): a re-poll of the same token within 30 s is a 429 97.6% of the time, so
+    # the sweep reuses that read, dated honestly by when it happened (never now). record_utilization
+    # writes a reused row as stale, so no duplicate burn sample is recorded.
+    fr0 = (first_reads or {}).get(name) or {}
+    ra0 = _as_epoch(fr0.get("read_at"))
+    if (fr0.get("rt_fp") and fr0.get("rt_fp") == row.get("rt_fp") and ra0 is not None
+            and 0 <= time.time() - ra0 <= _repoll_min_s()):
+        _land_quota(row, fr0.get("fields") or {})
+        row["quota_read_at"] = ra0
+        row["quota_reused"] = True
+        return row, (_ledger_entry(row, ra0) if row.get("weekly_pct") is not None else None)
     held = usage_backoff_left(name) if token else 0.0
     read_at = None
     if held > 0:
@@ -3011,21 +3025,7 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
         return row, None
     note_usage_ok(name)
     row["quota_read_at"] = read_at          # D3: HTTP-200 reads only, never an inherited one
-    sp, sr = pick(u, "session")
-    wp, wr = pick(u, "weekly_all")
-    fp, fr = pick(u, "weekly_scoped", cfg["frontier"]["scoped_display_name"])
-    limits_drift(row, u, name)
-    eu = u.get("extra_usage") or {}
-    row.update({
-        # session_reset_at is emitted alongside the *_reset_h countdown for the SAME reason
-        # weekly/fable are: a countdown decays the moment it is serialized, so any consumer
-        # rendering an absolute wall-clock time (the /accounts chat readout does) had to do
-        # now + session_reset_h arithmetic itself. The absolute stamp is the durable form.
-        "session_pct": sp, "session_reset_h": hrs_until(sr), "session_reset_at": sr,
-        "weekly_pct": wp, "weekly_reset_h": hrs_until(wr), "weekly_reset_at": wr,
-        "fable_pct": fp, "fable_reset_h": hrs_until(fr), "fable_reset_at": fr,
-    })
-    set_credits(row, eu.get("is_enabled"), eu.get("used_credits"))
+    sp, wp = _fill_quota(row, u, cfg, name)
     # THE WIRE, only where the endpoint integer is ambiguous (see the fetch_wire_limits block).
     # Never overwrites sp/wp/fp: the recorded series, the burn fit and `_rolled` all key on the
     # ENDPOINT meter, and a mid-series provenance switch would read as a window roll. The wire
@@ -3047,14 +3047,7 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
     # to fail in. A stale meter reads as a stale number; a stale verdict reads as a fresh fact.
     entry = None
     if wp is not None:
-        entry = {
-            "session_pct": sp, "session_reset_at": sr,
-            "weekly_pct": wp, "weekly_reset_at": wr,
-            "fable_pct": fp, "fable_reset_at": fr,
-            "credits_on": bool(eu.get("is_enabled")), "credits_used": eu.get("used_credits") or 0.0,
-            "credits_used_usd": (eu.get("used_credits") or 0.0) / 100.0,
-            "quota_as_of": datetime.now(timezone.utc).isoformat(),
-        }
+        entry = _ledger_entry(row, time.time())
         # …but a REJECTED verdict is stored, because replaying it fails in the safe direction: it
         # can only stop a 429-throttled row from being admitted on these percents, never admit one.
         rej = [win for win in ("5h", "7d")
@@ -3097,6 +3090,10 @@ def collect(cfg, no_heal=False, prev=None):
     k_of_name =(lambda _n: None) if counts is None else (lambda n: counts.get(n, 0))
     _ssl_warm()                       # both lazy urllib globals, main thread, before fan-out
     ledger = load_lastgood()
+    # The local pass's first reads, for probe_account's reuse guard (D6). Passed only when there
+    # are any, so every existing 7-argument probe_account stub keeps working.
+    first_reads = (load_local_overlay(cfg) or {}).get("first_read") or {}
+    fr_kw = {"first_reads": first_reads} if first_reads else {}
 
     def _one(acct):
         """-> (row, entry). NEVER raises: the per-account containment that used to wrap the loop
@@ -3105,7 +3102,7 @@ def collect(cfg, no_heal=False, prev=None):
         of collect() to prevent."""
         name = acct["name"]
         try:
-            return probe_account(cfg, acct, kc, k_of_name(name), ledger, prev, no_heal)
+            return probe_account(cfg, acct, kc, k_of_name(name), ledger, prev, no_heal, **fr_kw)
         except Exception as e:                    # never bare: KeyboardInterrupt/SystemExit pass
             # Containment, not concealment — the traceback goes to the log so a real
             # regression is still discoverable rather than silently degrading forever.
@@ -4178,7 +4175,45 @@ UTIL_TAIL_SEED_B = 131072       # first tail slice; doubled until the SPAN is co
 UTIL_TAIL_MAX_B = 33554432      # 32 MiB — past the 25 MiB rotation bound, so never a real cap
 
 
+_UTIL_MEMO = None            # {"ident", "hours", "rows"} — this process's last _util_tail read
+_UTIL_MEMO_ON = False        # set by --keepwarm, --local-refresh and --readout only (never --route)
+
+
+def _util_ident(path):
+    out = [path]
+    for p in [path] + sorted(glob.glob(path + ".*")):
+        try:
+            st = os.stat(p)
+            out.append((p, st.st_size, st.st_mtime_ns))
+        except OSError:
+            pass
+    return out
+
+
 def _util_tail(path=None, hours=48.0, max_bytes=None):
+    """_util_tail_read behind a per-process memo (ACCOUNTS_BOARD_FRESHNESS D8). One render reads
+    the 16 MB series twice (apply_burn 336 h, fleet_pace_line 72 h) — cProfile put it at 1.22 s of
+    a 1.51 s render. A request no wider than the memo's, on the same file identity (size and
+    mtime_ns of the file and its rotated siblings), is served by filtering the memo by its own
+    cutoff, as copies. Off unless _UTIL_MEMO_ON: the launch path keeps the plain read."""
+    global _UTIL_MEMO
+    if not _UTIL_MEMO_ON or max_bytes:
+        return _util_tail_read(path, hours, max_bytes)
+    p = path or UTIL_PATH
+    ident = _util_ident(p)
+    m = _UTIL_MEMO
+    if m and m["ident"] == ident and hours <= m["hours"]:
+        cutoff = time.time() - max(0.0, hours) * 3600.0
+        out = [dict(e) for e in m["rows"] if e["_t"] >= cutoff]
+        span = ((max(r["_t"] for r in out) - min(r["_t"] for r in out)) / 3600.0
+                if len(out) >= 2 else 0.0)
+        return out, span
+    out, span = _util_tail_read(p, hours, max_bytes)
+    _UTIL_MEMO = {"ident": ident, "hours": hours, "rows": [dict(e) for e in out]}
+    return out, span
+
+
+def _util_tail_read(path=None, hours=48.0, max_bytes=None):
     """Newest `hours` of the utilization series (record_utilization's product), parsed and
     time-stamped, as `(rows, achieved_span_h)`.
 
@@ -6637,7 +6672,8 @@ def record_utilization(rows, path=None, min_interval_s=UTIL_MIN_INTERVAL_S):
                     # inherited/errored rows are KEPT and flagged, never dropped: a gap in the
                     # series is indistinguishable from a quiet period, and the analysis needs to
                     # tell "we could not measure" from "nothing was happening".
-                    "stale": bool(r.get("stale_quota") or r.get("error")),
+                    # A reused first read (D6) is the local pass's sample, not a new one.
+                    "stale": bool(r.get("stale_quota") or r.get("error") or r.get("quota_reused")),
                 }, separators=(",", ":")) + "\n")
                 n += 1
     except OSError:
@@ -6691,18 +6727,640 @@ def cache_commit(cfg, payload):
 def local_overlay_path(cfg):
     """`/tmp/claude-accounts-local.json` beside the cache — derived from cache_file exactly as
     board_path is, so a fixtured cache gets a fixtured overlay."""
-    cf = cfg.get("cache_file") or "/tmp/claude-accounts-cache.json"
+    cf = cfg.get("cache_file")
+    if not cf:
+        return None                      # a config with no cache has no overlay (never the live one)
     return cf[:-len("-cache.json")] + "-local.json" if cf.endswith("-cache.json") else cf + ".local.json"
 
 
-def load_local_overlay(cfg):
-    """The local pass's overlay, or None. (W2: the overlay does not exist yet.)"""
-    return None
+# ---- the local overlay (docs/plans/ACCOUNTS_BOARD_FRESHNESS.md D5) ------------------------------
+# The 20 s local pass (`--local-refresh`) writes `/tmp/claude-accounts-local.json`; its facts reach
+# the cache two ways: the pass's own CAS-guarded write, and cache_commit re-applying rules (a)-(d) to
+# every sweep payload, so a sweep that read the keychain BEFORE a /login cannot revert the login.
+# Every rule fires only when the overlay's stamp is newer than the row's matching stamp. It never
+# touches `ts`, `window`, `prev`, `no_heal` or `cfg_key` (C5), nor `row["k"]` (C6).
+LOCAL_OVERLAY_MAX_AGE_S = 600
+PENDING_RE = re.compile(r"^quota pending — logged in \d\d:\d\d, first read not landed$")
+QUOTA_FIELDS = ("session_pct", "session_reset_at", "weekly_pct", "weekly_reset_at", "fable_pct",
+                "fable_reset_at", "credits_on", "credits_used", "credits_used_usd")
+T2_FROM = ("logged-out", "no-oauth-blob")          # recover on any good verdict
+T2_FROM_IF_NEW_GRANT = ("login-required", "token-invalid")   # only with a different refresh token
+
+
+def _epoch_iso(t):
+    return datetime.fromtimestamp(t, timezone.utc).isoformat() if t is not None else None
+
+
+def _pending_marker(t):
+    # Deliberately avoids `throttled` and `cached`: bin/cc-lr and lr-move-batch.sh string-match
+    # those. Any errored row is data class (reason_class), so a pending row exits 3, never routes.
+    return (f"quota pending — logged in {time.strftime('%H:%M', time.localtime(t))}, "
+            "first read not landed")
+
+
+def _read_json_obj(path):
+    try:
+        with open(path) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _write_json_atomic(path, obj, mode=0o644):
+    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+        with os.fdopen(fd, "w") as f:
+            json.dump(obj, f, separators=(",", ":"))
+        os.replace(tmp, path)
+        return True
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return False
+
+
+def load_local_overlay(cfg, max_age_s=LOCAL_OVERLAY_MAX_AGE_S):
+    """The local pass's overlay, or None when absent, for another config, or older than 600 s."""
+    path = local_overlay_path(cfg)
+    ov = _read_json_obj(path) if path else None
+    if not ov or ov.get("v") != 1 or ov.get("cfg_key") != _cfg_key(cfg):
+        return None
+    ts = _as_epoch(ov.get("local_ts"))
+    if ts is None or time.time() - ts > max_age_s:
+        return None
+    return ov
+
+
+def _copy_login(r, au):
+    for k in ("login_expires_at", "login_expired"):
+        if k in au:
+            r[k] = au[k]
+    if au.get("login_expires_at"):
+        r["login_expires_h"] = hrs_until(au["login_expires_at"])
 
 
 def apply_local_overlay(rows, overlay, payload_ts, writer):
-    """Apply the local overlay to `rows` in place. (W2: no rules yet.)"""
-    return []
+    """Apply the overlay's rules to `rows` in place -> [(acct, rule)] for what changed.
+
+    (a) census: k_native/k_native_as_of (never k); a `strip` census removes them (the ps rollback).
+    (b) T1: the keychain item is GONE -> logged-out, quota marked stale (dated by its real read).
+    (c) T2: a logged-out/no-oauth-blob row, or a login-required/token-invalid row whose refresh
+        token CHANGED, with a good local verdict -> recovered but PENDING: errored until a quota
+        read lands, so it is never routed on pre-logout quota (C7).
+    (d) T4: an ok row whose refresh token changed -> refresh the login_* fields.
+    (e) a failed local observation is never in the overlay, so it changes nothing.
+    (f) writer=="local" ONLY: a first read lands on a pending row, if it read THIS grant, is no
+        older than the payload, and is no older than anything the row already holds."""
+    out = []
+    census = overlay.get("census") or {}
+    auth = overlay.get("auth") or {}
+    frs = overlay.get("first_read") or {}
+    c_at = _as_epoch(census.get("as_of"))
+    for r in rows:
+        a = r.get("acct")
+        touched = False
+        if census.get("strip"):
+            if r.pop("k_native", None) is not None or r.pop("k_native_as_of", None) is not None:
+                out.append((a, "census-strip"))
+        elif (census.get("counts") is not None and c_at is not None
+              and c_at > (_as_epoch(r.get("k_native_as_of")) or 0)):
+            r["k_native"] = census["counts"].get(a, 0)
+            r["k_native_as_of"] = c_at
+        au = auth.get(a)
+        au_at = _as_epoch((au or {}).get("as_of"))
+        if au and au_at is not None and au_at > (_as_epoch(r.get("auth_as_of")) or 0):
+            ks, verdict, cur = au.get("kstate"), au.get("verdict"), r.get("auth")
+            new_grant = bool(au.get("rt_fp")) and au.get("rt_fp") != r.get("rt_fp")
+            if ks == "no-keychain-item" and cur != "logged-out":
+                if not r.get("stale_quota"):
+                    when = _as_epoch(r.get("quota_read_at")) or payload_ts
+                    r["quota_as_of"] = _epoch_iso(when)
+                r["auth"] = r["error"] = "logged-out"
+                r["stale_quota"] = True
+                r["auth_as_of"] = au_at
+                out.append((a, "T1"))
+                touched = True
+            elif ks == "present" and verdict in ("ok", "stale") and (
+                    cur in T2_FROM or (cur in T2_FROM_IF_NEW_GRANT and new_grant)):
+                r["auth"] = verdict
+                r["rt_fp"] = au.get("rt_fp")
+                _copy_login(r, au)
+                r["auth_recovered_at"] = au_at
+                r["error"] = _pending_marker(au_at)
+                r.pop("poll_throttled", None)        # a pending row is never throttle-admitted
+                r["auth_as_of"] = au_at
+                out.append((a, "T2"))
+                touched = True
+            elif ks == "present" and verdict in ("ok", "stale") and cur == "ok" and new_grant:
+                r["rt_fp"] = au.get("rt_fp")
+                _copy_login(r, au)
+                r["auth_as_of"] = au_at
+                out.append((a, "T4"))
+                touched = True
+        fr = frs.get(a)
+        if (writer == "local" and fr and PENDING_RE.match(str(r.get("error") or ""))
+                and fr.get("rt_fp") and fr.get("rt_fp") == r.get("rt_fp")):
+            ra = _as_epoch(fr.get("read_at"))
+            floor = max(_as_epoch(r.get("quota_read_at")) or 0, _as_epoch(r.get("quota_as_of")) or 0,
+                        _as_epoch(r.get("wire_at")) or 0)
+            if ra is not None and payload_ts is not None and ra >= payload_ts and ra >= floor:
+                _land_quota(r, fr.get("fields") or {})
+                r["quota_read_at"] = ra
+                r["quota_src"] = "first-read"
+                for k in ("stale_quota", "quota_as_of", "poll_throttled", "usage_held_s", "error"):
+                    r.pop(k, None)
+                for k in [k for k in r if k.startswith("lastgood_") and k != "lastgood_wire_rejects"]:
+                    r.pop(k, None)
+                out.append((a, "first-read"))
+                touched = True
+        if touched:
+            r["auth_actionable"] = r.get("auth") in ACTIONABLE_AUTH
+            r["login_fixable"] = r.get("auth") in LOGIN_FIXABLE
+    return out
+
+
+def _land_quota(r, fields):
+    """Copy a stored quota read onto a row: re-derive each covered countdown from its absolute
+    stamp, and drop the roll evidence for the buckets the read covers (it supersedes them)."""
+    r.update(fields)
+    covered = [p for p in ("session", "weekly", "fable") if f"{p}_reset_at" in fields]
+    for p in covered:
+        r[f"{p}_reset_h"] = hrs_until(fields.get(f"{p}_reset_at"))
+    rolled, ev = r.get("rolled_since") or [], r.get("reset_evidence") or []
+    keep = [i for i, p in enumerate(rolled) if p not in covered]
+    if keep:
+        r["rolled_since"] = [rolled[i] for i in keep]
+        r["reset_evidence"] = [ev[i] for i in keep if i < len(ev)]
+    else:
+        r.pop("rolled_since", None)
+        r.pop("reset_evidence", None)
+
+
+def _fill_quota(row, u, cfg, name):
+    """The HTTP-200 usage body -> quota fields on `row`. ONE implementation for the sweep's probe
+    and the local pass's first read, so both paths are identical by construction."""
+    sp, sr = pick(u, "session")
+    wp, wr = pick(u, "weekly_all")
+    fp, fr = pick(u, "weekly_scoped", cfg["frontier"]["scoped_display_name"])
+    limits_drift(row, u, name)
+    eu = u.get("extra_usage") or {}
+    row.update({
+        # session_reset_at is emitted alongside the *_reset_h countdown for the SAME reason
+        # weekly/fable are: a countdown decays the moment it is serialized, so any consumer
+        # rendering an absolute wall-clock time (the /accounts chat readout does) had to do
+        # now + session_reset_h arithmetic itself. The absolute stamp is the durable form.
+        "session_pct": sp, "session_reset_h": hrs_until(sr), "session_reset_at": sr,
+        "weekly_pct": wp, "weekly_reset_h": hrs_until(wr), "weekly_reset_at": wr,
+        "fable_pct": fp, "fable_reset_h": hrs_until(fr), "fable_reset_at": fr,
+    })
+    set_credits(row, eu.get("is_enabled"), eu.get("used_credits"))
+    return sp, wp
+
+
+def _ledger_entry(row, read_at):
+    """A last-good ledger entry from a filled row, dated by WHEN the read happened."""
+    return {
+        "session_pct": row.get("session_pct"), "session_reset_at": row.get("session_reset_at"),
+        "weekly_pct": row.get("weekly_pct"), "weekly_reset_at": row.get("weekly_reset_at"),
+        "fable_pct": row.get("fable_pct"), "fable_reset_at": row.get("fable_reset_at"),
+        "credits_on": bool(row.get("credits_on")), "credits_used": row.get("credits_used") or 0.0,
+        "credits_used_usd": (row.get("credits_used") or 0.0) / 100.0,
+        "quota_as_of": _epoch_iso(read_at),
+    }
+
+
+# ---- the first read after a login (D6) -----------------------------------------------------------
+FIRST_READ_MIN_GAP_S = 90.0
+FIRST_READ_MAX_GAP_S = 600.0
+REPOLL_MIN_S_DEFAULT = 90.0
+
+
+def _repoll_min_s():
+    try:
+        return float(os.environ.get("CC_ACCOUNTS_REPOLL_MIN_S", REPOLL_MIN_S_DEFAULT))
+    except ValueError:
+        return REPOLL_MIN_S_DEFAULT
+
+
+def _at_fp(token):
+    return sha256(token.encode()).hexdigest()[:16] if token else None
+
+
+def first_read(cfg, name, token, rt_fp, state, overlay):
+    """ONE OAuth usage GET for a just-logged-in account -> outcome string. Never a /v1/messages
+    call (C3), never heal, never a recorder. Gates in order: the kill switch; an attempt memo keyed
+    on the access token (>= 90 s between attempts, doubling after a non-200, capped at 600 s); the
+    per-account poll lock, non-blocking. The shared 429 backoff is NOT a gate: the new token may
+    not have earned it (the budget is per token)."""
+    if (os.environ.get("CC_ACCOUNTS_FIRST_READ") == "off"
+            or os.path.exists(os.path.join(_accounts_local_dir(), "first-read-off"))):
+        return "off"
+    memo = state.setdefault("fr_memo", {})
+    key = _at_fp(token)
+    m = memo.get(key) or {}
+    now = time.time()
+    if now - (m.get("at") or 0) < (m.get("wait") or 0):
+        return "memo"
+    lp = _poll_lock_path(cfg, name)
+    fd = _flock_open(lp, 0) if lp else None
+    if lp and fd is None:
+        return "poll-locked"
+    try:
+        read_at = time.time()
+        status, u = fetch_usage(cfg, token, retries=0)
+    finally:
+        _flock_release(fd)
+    if status == 200 and u and "limits" in u:
+        row = {}
+        _fill_quota(row, u, cfg, name)
+        save_lastgood({name: _ledger_entry(row, read_at)})
+        overlay.setdefault("first_read", {})[name] = {
+            "read_at": read_at, "rt_fp": rt_fp,
+            "fields": {k: row[k] for k in QUOTA_FIELDS if k in row}}
+        note_usage_ok(name)
+        memo[key] = {"at": now, "wait": FIRST_READ_MIN_GAP_S}
+        return "200"
+    if status == 429:
+        note_usage_429(name)
+    prev_wait = m.get("wait")
+    memo[key] = {"at": now, "wait": (min(FIRST_READ_MAX_GAP_S, prev_wait * 2) if prev_wait
+                                     else FIRST_READ_MIN_GAP_S)}
+    return str(status)
+
+
+# ---- `claude-accounts --local-refresh` (D7) ------------------------------------------------------
+LOCAL_DEADLINE_S_DEFAULT = 60
+LOCAL_KC_DEADLINE_S = 8.0
+LOCAL_ATTR_REUSE_S = 300
+LOCAL_CENSUS_RECOMMIT_S = 120
+LOCAL_MIN_BUDGET_S = 15
+LOCAL_HEARTBEAT_S = 600
+LOCAL_WLOCK_WAIT_S = 2.0
+
+
+def _local_stamp_path():
+    return (os.environ.get("CC_ACCOUNTS_LOCAL_STAMP")
+            or os.path.join(HOME, ".claude", "logs", "accounts-local.stamp"))
+
+
+def _keychain_db_path():
+    return (os.environ.get("CC_ACCOUNTS_KEYCHAIN_DB")
+            or os.path.join(HOME, "Library", "Keychains", "login.keychain-db"))
+
+
+def _touch(path):
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a"):
+            pass
+        os.utime(path, None)
+    except OSError:
+        pass
+
+
+def _kc_ident():
+    try:
+        st = os.stat(_keychain_db_path())
+        return [st.st_ino, st.st_mtime_ns]
+    except OSError:
+        return None
+
+
+_RE_KC_DATE = {k: re.compile(r'"%s"<timedate>=\S*\s+"(\d{14}Z)' % k) for k in ("cdat", "mdat")}
+
+
+def _kc_attrs(svc, kc):
+    """Tier 1: the item's ATTRIBUTES only -> ("absent", None) | ("present", {cdat, mdat}) |
+    ("error", reason). NO `-w`, never `-g`: no secret is read here."""
+    try:
+        p = subprocess.run(["/usr/bin/security", "find-generic-password", "-s", svc, "-a", kc],
+                           capture_output=True, text=True, timeout=LOCAL_KC_DEADLINE_S)
+    except subprocess.TimeoutExpired:
+        return "error", "timeout"
+    except OSError as e:
+        return "error", type(e).__name__
+    if p.returncode == 44:
+        return "absent", None
+    if p.returncode != 0:
+        return "error", f"rc={p.returncode}"
+    got = {k: rx.search(p.stdout) for k, rx in _RE_KC_DATE.items()}
+    if not all(got.values()):
+        return "error", "unparsed"
+    return "present", {k: m.group(1) for k, m in got.items()}
+
+
+def _bounded_parallel(fns, deadline_s):
+    """{key: fn} run on daemon threads joined to ONE deadline -> {key: result}. A key whose fn did
+    not finish is absent: a timeout observation, retried on the next pass (R6)."""
+    out = {}
+
+    def run(k, fn):
+        try:
+            out[k] = fn()
+        except Exception as e:                   # an observation failure, never a crash
+            out[k] = ("error", type(e).__name__)
+    ths = [threading.Thread(target=run, args=(k, fn), daemon=True) for k, fn in fns.items()]
+    for t in ths:
+        t.start()
+    end = time.monotonic() + deadline_s
+    for t in ths:
+        t.join(max(0.0, end - time.monotonic()))
+    return dict(out)
+
+
+def _auth_verdict(it, as_of):
+    """Stored item metadata -> the overlay's auth entry, with stale/expired re-derived at NOW."""
+    if not it.get("present"):
+        return {"as_of": as_of, "kstate": "no-keychain-item", "verdict": "logged-out"}
+    if not it.get("has_creds"):
+        return {"as_of": as_of, "kstate": "present", "verdict": "no-oauth-blob"}
+    stale = (it.get("expiresAt") or 0) / 1000.0 <= time.time() + 60
+    d = {"as_of": as_of, "kstate": "present", "verdict": "stale" if stale else "ok",
+         "rt_fp": it.get("rt_fp")}
+    rte = it.get("refreshTokenExpiresAt")
+    if _iso_ms(rte):
+        d["login_expires_at"] = _iso_ms(rte)
+        d["login_expired"] = bool(_expired_ms(rte))
+    # Mirror probe_account: past the cliff, or stale with no refresh token, is a dead login.
+    if d.get("login_expired") or (stale and not it.get("has_rt")):
+        d["verdict"] = "login-required"
+    return d
+
+
+def _local_auth(cfg, state, overlay, tokens, ident):
+    """Step 4: refresh the overlay's auth entries. Tier 1 reads attributes (4 reads, 8 s); tier 2
+    reads a secret only for an item that appeared or whose cdat/mdat moved. An unchanged keychain
+    file inside 300 s reuses the stored metadata. Identity advances on DEFINITIVE results only."""
+    items = state.setdefault("items", {})
+    kc = cfg["keychain_account"]
+    now = time.time()
+    if (ident is not None and ident == state.get("kc_ident")
+            and now - (state.get("last_attr_check") or 0) < LOCAL_ATTR_REUSE_S):
+        for a in cfg["accounts"]:
+            if a["name"] in items:
+                overlay["auth"][a["name"]] = _auth_verdict(items[a["name"]], now)
+        return []
+    errors = []
+    attrs = _bounded_parallel(
+        {a["name"]: (lambda a=a: _kc_attrs(keychain_service(a["config_dir"]), kc))
+         for a in cfg["accounts"]}, LOCAL_KC_DEADLINE_S)
+    t1, need = time.time(), []
+    for a in cfg["accounts"]:
+        name, r = a["name"], attrs.get(a["name"])
+        if r is None or r[0] == "error":
+            errors.append(f"{name}:{'timeout' if r is None else r[1]}")
+            continue
+        prev = items.get(name) or {}
+        if r[0] == "absent":
+            items[name] = {"present": False, "checked_at": t1}
+            overlay["auth"][name] = _auth_verdict(items[name], t1)
+        elif (prev.get("present") and "has_creds" in prev and prev.get("cdat") == r[1]["cdat"]
+              and prev.get("mdat") == r[1]["mdat"]):
+            prev["checked_at"] = t1
+            overlay["auth"][name] = _auth_verdict(prev, t1)
+        else:
+            need.append((a, r[1]))
+    if need:
+        secrets = _bounded_parallel({a["name"]: (lambda a=a: read_creds(a["config_dir"], kc))
+                                     for a, _ in need}, LOCAL_KC_DEADLINE_S)
+        t2 = time.time()
+        for a, at in need:
+            name, r = a["name"], secrets.get(a["name"])
+            if r is None or r[1] not in ("present", "no-keychain-item"):
+                errors.append(f"{name}:secret-{'timeout' if r is None else r[1]}")
+                continue
+            creds, kstate = r
+            if kstate == "no-keychain-item":
+                items[name] = {"present": False, "checked_at": t2}
+            else:
+                creds = creds or {}
+                rt, tok = creds.get("refreshToken"), creds.get("accessToken")
+                items[name] = {"present": True, "cdat": at["cdat"], "mdat": at["mdat"],
+                               "has_creds": bool(creds), "expiresAt": creds.get("expiresAt"),
+                               "refreshTokenExpiresAt": creds.get("refreshTokenExpiresAt"),
+                               "has_rt": bool(rt), "rt_fp": _rt_fingerprint(rt),
+                               "at_fp": _at_fp(tok), "checked_at": t2}
+                if tok:
+                    tokens[name] = tok
+            overlay["auth"][name] = _auth_verdict(items[name], t2)
+    if not errors:
+        state["kc_ident"], state["last_attr_check"] = ident, now
+    else:
+        state["last_attr_check"] = 0               # a failed read is retried next pass
+    return errors
+
+
+def _read_cache_any_age(cfg):
+    """The cache TTL-IGNORED and cfg-key-checked (the read _prev_snapshot does), or None."""
+    c = _read_json_obj(cfg["cache_file"])
+    return c if c and c.get("cfg_key") == _cfg_key(cfg) and isinstance(c.get("rows"), list) else None
+
+
+def _local_commit(cfg, overlay):
+    """Step 7: the pass's own cache write -> [(acct, rule)] applied, or None when skipped. Under the
+    wlock (2 s, else skip), re-read, apply (writer=local), CAS on the file identity, replace with
+    ts/window/prev/no_heal/cfg_key exactly as read. Never creates a cache."""
+    fd = _flock_open(_wlock_path(cfg), LOCAL_WLOCK_WAIT_S)
+    if fd is None:
+        log_event("local: wlock busy past 2 s — cache write skipped this pass")
+        return None
+    try:
+        path = cfg["cache_file"]
+        try:
+            with open(path) as f:
+                st = os.fstat(f.fileno())
+                c = json.load(f)
+        except (OSError, ValueError):
+            return None
+        if not isinstance(c, dict) or c.get("cfg_key") != _cfg_key(cfg) \
+                or not isinstance(c.get("rows"), list):
+            return None
+        applied = apply_local_overlay(c["rows"], overlay, _as_epoch(c.get("ts")), writer="local")
+        blob = json.dumps(c)
+        try:
+            st2 = os.stat(path)
+        except OSError:
+            return None
+        if (st2.st_ino, st2.st_mtime_ns) != (st.st_ino, st.st_mtime_ns):
+            log_event("local: cache changed under the wlock (a writer without it) — CAS abort")
+            return None
+        tmp = f"{path}.{os.getpid()}.local.tmp"
+        try:
+            with open(tmp, "w") as f:
+                f.write(blob)
+            os.replace(tmp, path)
+        except OSError:
+            return None
+        return applied
+    finally:
+        _flock_release(fd)
+
+
+def _census_commit_wanted(cache, census):
+    rows = cache.get("rows") or []
+    if census.get("strip"):
+        return any("k_native" in r for r in rows)
+    counts = census.get("counts")
+    if counts is None:
+        return False
+    for r in rows:
+        if r.get("k_native") != counts.get(r.get("acct"), 0):
+            return True
+        if time.time() - (_as_epoch(r.get("k_native_as_of")) or 0) > LOCAL_CENSUS_RECOMMIT_S:
+            return True
+    return False
+
+
+def local_refresh(cfg, t0=None):
+    """`--local-refresh`: one pass of the 20 s local job. See D7 for the twelve steps. Never calls
+    heal, fetch_wire_limits, record_utilization, watch_resets, log_route_decision or ps, and never
+    takes the sweep's single-flight lock."""
+    t0 = time.monotonic() if t0 is None else t0
+    stamp = _local_stamp_path()
+    try:
+        deadline = float(os.environ.get("CC_ACCOUNTS_LOCAL_DEADLINE_S", LOCAL_DEADLINE_S_DEFAULT))
+    except ValueError:
+        deadline = LOCAL_DEADLINE_S_DEFAULT
+
+    def budget():
+        return deadline - (time.monotonic() - t0)
+    lock = _flock_open(cfg["cache_file"] + ".local.lock", 0)
+    if lock is None:
+        _touch(stamp)
+        print("local: busy")
+        return 0
+    # SIG_DFL: the alarm KILLS the pass. Every write is atomic, so a killed pass leaves nothing
+    # torn, and the 65 s sweep-side wlock bound is sized against exactly this.
+    signal.signal(signal.SIGALRM, signal.SIG_DFL)
+    signal.alarm(max(1, int(deadline)))
+    lines = []
+    try:
+        state_path = _sidecar(".local-state.json")
+        state = _read_json_obj(state_path) or {}
+        key = _cfg_key(cfg)
+        old = _read_json_obj(local_overlay_path(cfg)) or {}
+        if old.get("cfg_key") != key:
+            old = {}
+        ov = {"v": 1, "cfg_key": key, "local_ts": time.time(), "census": old.get("census") or {},
+              "auth": old.get("auth") or {}, "first_read": old.get("first_read") or {}}
+        # 3. census first, written before any keychain work (R6: a stalled keychain cannot hold it)
+        if _census_mode(cfg) == "ps":
+            ov["census"] = {"as_of": time.time(), "strip": True}
+        else:
+            n = native_census(cfg)
+            meta = _NATIVE_META or {}
+            ov["census"] = {"as_of": meta.get("as_of") or time.time(),
+                            "counts": dict(n) if n is not None else None,
+                            "headless": getattr(n, "headless", None), "ms": meta.get("ms"),
+                            "reason": meta.get("reason")}
+            if n is None:
+                lines.append(f"local: census unmeasured ({meta.get('reason')})")
+        _write_json_atomic(local_overlay_path(cfg), ov)
+        cache = None
+        for rnd in (0, 1):
+            ident = _kc_ident()
+            tokens = {}
+            errs = _local_auth(cfg, state, ov, tokens, ident)
+            if errs:
+                lines.append("local: keychain " + " ".join(errs))
+            ov["local_ts"] = time.time()
+            cache = _read_cache_any_age(cfg)                         # 5
+            if cache is None:
+                _write_json_atomic(local_overlay_path(cfg), ov)
+                break
+            preview = apply_local_overlay(json.loads(json.dumps(cache["rows"])), ov,
+                                          _as_epoch(cache.get("ts")), writer="local")
+            _write_json_atomic(local_overlay_path(cfg), ov)           # 6
+            if preview or _census_commit_wanted(cache, ov["census"]):
+                applied = _local_commit(cfg, ov)                      # 7
+                for a, rule in applied or ():
+                    if rule != "census-strip":
+                        lines.append(f"local: {rule} {a}")
+            # 8. the first read, for pending rows whose local verdict is ok
+            cache = _read_cache_any_age(cfg) or cache
+            for r in cache.get("rows") or []:
+                a = r.get("acct")
+                au = ov["auth"].get(a) or {}
+                if not PENDING_RE.match(str(r.get("error") or "")) or au.get("verdict") != "ok":
+                    continue
+                if budget() < LOCAL_MIN_BUDGET_S:
+                    lines.append(f"local: first-read {a} skipped (budget)")
+                    continue
+                tok = tokens.get(a)
+                if tok is None:
+                    acct = next((x for x in cfg["accounts"] if x["name"] == a), None)
+                    got = _bounded_parallel(
+                        {a: lambda: read_creds(acct["config_dir"], cfg["keychain_account"])},
+                        LOCAL_KC_DEADLINE_S).get(a) if acct else None
+                    if got and got[1] == "present":
+                        tok = (got[0] or {}).get("accessToken")
+                if not tok:
+                    continue
+                res = first_read(cfg, a, tok, au.get("rt_fp"), state, ov)
+                if res not in ("memo", "off"):
+                    lines.append(f"local: first-read {a} {res}")
+                if res == "200":
+                    _write_json_atomic(local_overlay_path(cfg), ov)
+                    for a2, rule in _local_commit(cfg, ov) or ():
+                        if rule == "first-read":
+                            lines.append(f"local: routable {a2} (first read landed)")
+            # 9. prune first reads a later real read has superseded, or older than 600 s
+            cache = _read_cache_any_age(cfg) or cache
+            by = {r.get("acct"): r for r in cache.get("rows") or []}
+            for a, fr in list(ov["first_read"].items()):
+                ra = _as_epoch(fr.get("read_at")) or 0
+                if ((_as_epoch((by.get(a) or {}).get("quota_read_at")) or 0) > ra
+                        or time.time() - ra > LOCAL_OVERLAY_MAX_AGE_S):
+                    del ov["first_read"][a]
+            _write_json_atomic(local_overlay_path(cfg), ov)
+            # 11. launchd drops a WatchPaths fire that lands during a tick: look once more
+            if rnd == 0 and _kc_ident() != ident and budget() >= LOCAL_MIN_BUDGET_S:
+                continue
+            break
+        # 10. the board (D8)
+        if cache is not None and budget() >= LOCAL_MIN_BUDGET_S:
+            msg = _local_board(cfg, state)
+            if msg:
+                lines.append(msg)
+        memo = state.get("fr_memo") or {}
+        state["fr_memo"] = {k: v for k, v in memo.items() if time.time() - (v.get("at") or 0) < 86400}
+        if not lines and time.time() - (state.get("heartbeat_at") or 0) >= LOCAL_HEARTBEAT_S:
+            c = ov.get("census") or {}
+            lines.append("local: ok · census " + (
+                "ps" if c.get("strip") else
+                ",".join(f"{k}:{v}" for k, v in (c.get("counts") or {}).items()) or "unmeasured"))
+        if lines:
+            state["heartbeat_at"] = time.time()
+        _write_json_atomic(state_path, state, mode=0o600)
+    finally:
+        signal.alarm(0)
+        _touch(stamp)
+        _flock_release(lock)
+    for ln in lines:
+        print(ln)
+    sys.stdout.flush()
+    return 0
+
+
+def local_refresh_main():
+    global _UTIL_MEMO_ON
+    _UTIL_MEMO_ON = True
+    t0 = time.monotonic()
+    ld = _accounts_local_dir()
+    try:
+        os.makedirs(ld, exist_ok=True)
+    except OSError:
+        pass
+    if os.environ.get("CC_ACCOUNTS_LOCAL") == "off" or os.path.exists(os.path.join(ld, "off")):
+        _touch(_local_stamp_path())
+        print("local: disabled")
+        return 0
+    return local_refresh(load_cfg(need_claude_bin=False), t0)
 
 
 def board_path(cfg):
@@ -6726,20 +7384,47 @@ def board_path(cfg):
     return cf[:-len("-cache.json")] + "-board.txt" if cf.endswith("-cache.json") else cf + ".board.txt"
 
 
-def write_board(cfg, lines):
+BOARD_WLOCK_WAIT_S = 5.0
+
+
+def write_board(cfg, lines, sig=None, keep_mtime=False, rendered_from_ts=None, producer=None):
     """Atomically publish the rendered board. Returns the path, or None on failure.
 
     os.replace, never a truncate-then-write: the reader is a SessionStart hook that may fire at
     any instant, including the microseconds this producer is mid-write. A torn board is worse
     than a stale one — stale is labelled by the hook's age check, whereas a half-written table
     looks like a complete table with fewer accounts in it.
+
+    Two producers now write it (keepwarm and the local pass, ACCOUNTS_BOARD_FRESHNESS D8), so the
+    write holds the cache wlock (5 s, else skip and log) and records `<board>.meta.json`
+    {sig, rendered_from_ts, producer, at} — which the hook never reads. `keep_mtime` is the local
+    re-render: the board's mtime is the hook's PRODUCER-LIVENESS signal (accounts-board.sh), so a
+    re-render keeps the existing mtime, never creates a missing board, and aborts if the cache
+    moved on since it rendered — a dead keepwarm still reads STALE exactly as before.
     """
     path = board_path(cfg)
     tmp = f"{path}.{os.getpid()}.tmp"
+    fd = _flock_open(_wlock_path(cfg), BOARD_WLOCK_WAIT_S)
+    if fd is None:
+        log_event(f"board: wlock busy past {BOARD_WLOCK_WAIT_S:.0f}s — board write skipped "
+                  f"({producer or 'board'})")
+        return None
     try:
+        st = None
+        if keep_mtime:
+            try:
+                st = os.stat(path)
+            except OSError:
+                return None
+            if (_read_json_obj(cfg["cache_file"]) or {}).get("ts") != rendered_from_ts:
+                return None
         with open(tmp, "w") as f:
             f.write("\n".join(lines) + "\n")
+        if st is not None:
+            os.utime(tmp, ns=(st.st_atime_ns, st.st_mtime_ns))
         os.replace(tmp, path)
+        _write_json_atomic(path + ".meta.json", {"sig": sig, "rendered_from_ts": rendered_from_ts,
+                                                 "producer": producer, "at": time.time()})
         return path
     except OSError:
         # A producer that cannot write the board must not take the CACHE sweep down with it: the
@@ -6751,6 +7436,54 @@ def write_board(cfg, lines):
         except OSError:
             pass
         return None
+    finally:
+        _flock_release(fd)
+
+
+def _board_sig(rows):
+    """What a board row shows that the local pass can change: auth, errored, live count."""
+    return [[r.get("acct"), r.get("auth"), "error" in r, k_shown(r)] for r in rows]
+
+
+def _render_board(cfg, rows, wj, cached, quota_ts=None):
+    """The narrow board from cache rows, on a COPY: k_phantom and burn_* are render-time
+    decorations and must never reach the cache."""
+    rows = json.loads(json.dumps(rows))
+    refresh_login_countdown(rows)
+    apply_assignments(rows, cfg)
+    apply_burn(rows, cfg)
+    return readout_lines(rows, cfg, win_from_json(wj), cached, narrow=True, quota_ts=quota_ts)
+
+
+LOCAL_K_RENDER_MIN_S = 60
+LOCAL_K_RENDER_MAX_LOAD_PER_CPU = 10.0
+
+
+def _local_board(cfg, state):
+    """D8: re-render the board when the cache's signature differs from the board's. An auth or
+    error difference re-renders at once; a live-count-only difference at most once per 60 s, and
+    only when load/cpu <= 10. Returns a `local: …` line when it rendered, else None."""
+    c = _read_cache_any_age(cfg)
+    path = board_path(cfg)
+    if not c or not os.path.exists(path):
+        return None
+    sig = _board_sig(c["rows"])
+    old = (_read_json_obj(path + ".meta.json") or {}).get("sig")
+    if old == sig:
+        return None
+    auth_diff = not old or [x[:3] for x in old] != [x[:3] for x in sig]
+    if not auth_diff:
+        if time.time() - (state.get("last_k_render") or 0) < LOCAL_K_RENDER_MIN_S:
+            return None
+        if os.getloadavg()[0] / (os.cpu_count() or 1) > LOCAL_K_RENDER_MAX_LOAD_PER_CPU:
+            return None
+    lines = _render_board(cfg, c["rows"], c.get("window") or {}, True, quota_ts=c.get("ts"))
+    if write_board(cfg, lines, sig=sig, keep_mtime=True, rendered_from_ts=c.get("ts"),
+                   producer="local") is None:
+        return None
+    if not auth_diff:
+        state["last_k_render"] = time.time()
+    return f"local: board re-rendered ({'auth' if auth_diff else 'live counts'})"
 
 
 def _prev_snapshot(cfg):
@@ -7676,7 +8409,7 @@ def render_readout(rows, cfg, win, cached, narrow=False):
     print("\n".join(readout_lines(rows, cfg, win, cached, narrow)))
 
 
-def readout_lines(rows, cfg, win, cached, narrow=False):
+def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None):
     """Build the /accounts readout as finished lines — the SINGLE renderer, in TWO presentations.
 
     Why this exists: the readout used to be ~200 lines of prose in commands/accounts.md
@@ -7851,7 +8584,12 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
                 _md_cell(wr, r.get("weekly_reset_h")), login]) + " |")
 
         # ---- flags: bullets, never extra columns, and enumerated by SOURCE not by literal
-        if r.get("stale_quota") or r.get("error"):
+        if PENDING_RE.match(str(r.get("error") or "")):
+            # D8: a just-logged-in account, recovered by the local pass, not yet read
+            _hm = time.strftime("%H:%M", time.localtime(_as_epoch(r.get("auth_recovered_at"))
+                                                        or time.time()))
+            notes.append(f"↻ `{acct}` · logged in {_hm}; quota read pending, excluded from routing")
+        elif r.get("stale_quota") or r.get("error"):
             asof = _fmt_asof(r.get("quota_as_of"))
             if r.get("poll_throttled"):
                 notes.append(f"↻ `{acct}` — poll throttled (NOT a usage cap); numbers are "
@@ -8065,6 +8803,15 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
     # restating a bound the reader can already see the actual value of.
     if cached and not narrow:
         out.append(f"_Cache ≤{cfg.get('cache_ttl_s', 90)}s old; `--fresh` forces a live sweep._")
+    if narrow:
+        # D8 / C11: CLOCK times only — a relative age would rot inside the shared file.
+        if quota_ts is None:
+            quota_ts = (_read_json_obj(cfg["cache_file"]) or {}).get("ts")
+        al = [t for r in rows for t in (_as_epoch(r.get("auth_as_of")),
+                                        _as_epoch(r.get("k_native_as_of"))) if t is not None]
+        hms = (lambda t: time.strftime("%H:%M:%S", time.localtime(t)) if t else "—")
+        out.append(bc(f"auth/live {hms(max(al) if al else None)} · quota {hms(_as_epoch(quota_ts))}",
+                      BOARD_LABEL))
     return out
 
 
@@ -8933,13 +9680,21 @@ def main():
     if "--census-ab-report" in args:
         sys.exit(census_ab_report())
 
+    # --local-refresh: the 20 s local job's pass (ACCOUNTS_BOARD_FRESHNESS D7). Before the global
+    # modifiers: it loads cfg without resolving the claude binary, and its kill switch answers
+    # before cfg is read at all.
+    if "--local-refresh" in args:
+        sys.exit(local_refresh_main())
+
     # --max-wait / --max-age are GLOBAL modifiers, parsed before load_cfg() because --max-wait 0
     # also decides whether load_cfg may fork the claude-bin resolver. Shaped exactly like
     # `--login-status --window-h N`: positional value, malformed ⇒ exit 64, absent ⇒ None ⇒ every
     # existing caller byte-identical. Deliberately NOT a `--route-cached` flag — that would need a
     # `--rank-cached` twin, and the doubling is the tell that it belongs on the axis, not the verb.
-    global _CLI
+    global _CLI, _UTIL_MEMO_ON
     _CLI = True
+    # D8: the _util_tail memo serves the board-rendering verbs only; --route/--rank stay plain.
+    _UTIL_MEMO_ON = "--keepwarm" in args or "--readout" in args
     max_wait = _num_flag(args, "--max-wait")
     max_age = _num_flag(args, "--max-age")
     cache_only = max_wait is not None and max_wait <= 0
@@ -9013,11 +9768,15 @@ def main():
         # config dir — which for a launchd producer is launchd's, and for the readers is four
         # different accounts. A shared artifact cannot carry a per-reader fact, and a wrong one
         # here would point the arrow at somebody else's account.
-        refresh_login_countdown(rows)
-        apply_assignments(rows, cfg)
-        apply_burn(rows, cfg)
-        board = write_board(cfg, readout_lines(rows, cfg, win_from_json(wj), was_cached,
-                                               narrow=True))
+        # D8: render from the COMMITTED cache — the overlay-merged rows cache_commit wrote — so
+        # keepwarm can never overwrite a newer local board with the sweep's pre-overlay rows. The
+        # mtime is still stamped now: it is the hook's producer-liveness signal.
+        _c = _read_cache_any_age(cfg)
+        _src = _c["rows"] if _c else rows
+        board = write_board(cfg, _render_board(cfg, _src, wj, was_cached,
+                                               quota_ts=(_c or {}).get("ts")),
+                            sig=_board_sig(_src), rendered_from_ts=(_c or {}).get("ts"),
+                            producer="keepwarm")
         age = _quota_age_s(cfg)
         print(f"keepwarm: {'served-cache' if was_cached else 'swept'} rows={len(rows)} "
               f"reset_pending={','.join(pending) or '-'} "

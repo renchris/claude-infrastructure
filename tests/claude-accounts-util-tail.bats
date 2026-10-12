@@ -146,3 +146,80 @@ print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
+
+# ---- the per-process memo (docs/plans/ACCOUNTS_BOARD_FRESHNESS.md D8) ------------------------------
+# One board render read the 16 MB series twice — apply_burn 336 h, then fleet_pace_line 72 h — and
+# cProfile put _util_tail at 1.22 s of a 1.51 s render. The memo serves the narrower request from
+# the wider read, and only in the board-rendering verbs.
+
+@test "memo: 336 h then 72 h in one process returns exactly what unmemoized reads return, with ONE read" {
+  run python3 -c "$LOAD"'
+p = os.path.join(TMP, "util.jsonl")
+with open(p, "w") as f:
+    for i in range(3000, 0, -1):
+        f.write(rec(i * 6))
+plain = {h: ca._util_tail(path=p, hours=h) for h in (336.0, 72.0)}
+reads = []
+real = ca._util_tail_read
+ca._util_tail_read = lambda *a, **k: (reads.append(a), real(*a, **k))[1]
+ca._UTIL_MEMO_ON = True
+for h in (336.0, 72.0):
+    rows, span = ca._util_tail(path=p, hours=h)
+    assert rows == plain[h][0] and abs(span - plain[h][1]) < 1e-9, (h, len(rows), len(plain[h][0]))
+assert len(reads) == 1, reads
+rows[0]["weekly_pct"] = -1                                      # served as COPIES
+assert ca._util_tail(path=p, hours=72.0)[0][0]["weekly_pct"] != -1
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "memo: a wider request after a narrower one re-reads; a size or mtime change invalidates" {
+  run python3 -c "$LOAD"'
+p = os.path.join(TMP, "util.jsonl")
+with open(p, "w") as f:
+    for i in range(500, 0, -1):
+        f.write(rec(i * 6))
+reads = []
+real = ca._util_tail_read
+ca._util_tail_read = lambda *a, **k: (reads.append(a), real(*a, **k))[1]
+ca._UTIL_MEMO_ON = True
+ca._util_tail(path=p, hours=72.0)
+ca._util_tail(path=p, hours=336.0)
+assert len(reads) == 2, reads
+ca._util_tail(path=p, hours=72.0)
+assert len(reads) == 2
+with open(p, "a") as f:
+    f.write(rec(0, wp=99))
+rows, _ = ca._util_tail(path=p, hours=72.0)
+assert len(reads) == 3 and rows[-1]["weekly_pct"] == 99, reads
+st = os.stat(p)
+os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+ca._util_tail(path=p, hours=72.0)
+assert len(reads) == 4, reads
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "memo: OFF under --route and --rank (the launch path), ON under --keepwarm and --readout" {
+  run python3 -c "$LOAD"'
+class Stop(Exception):
+    pass
+def stop(**k):
+    raise Stop()
+ca.load_cfg = stop
+for argv, want in ((["--route", "interactive", "--max-wait", "0"], False),
+                   (["--rank", "interactive", "--max-wait", "0"], False),
+                   (["--keepwarm"], True), (["--readout"], True)):
+    ca._UTIL_MEMO_ON = None
+    sys.argv = ["claude-accounts"] + argv
+    try:
+        ca.main()
+    except Stop:
+        pass
+    assert ca._UTIL_MEMO_ON is want, (argv, ca._UTIL_MEMO_ON)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
