@@ -58,18 +58,144 @@ _goal_grep() { # $1 = transcript path → matching lines on stdout; rc 0 = grep 
   return 1
 }
 
+# ── INCREMENTAL SCAN (2026-10-11, docs/research/load-hook-timeouts-2026-10-11/DESIGN.md item 6) ──
+# goal_live_condition runs on every UserPromptSubmit (mailbox-drain) and every Stop (session-continue),
+# and used to grep the WHOLE transcript and then fork jq three times. Transcripts are append-only and
+# reach tens of MB, so each prompt re-read every byte it had already read. Measured: the empty-inbox
+# drain took ~1.0 s and mailbox-drain was 39 of 162 UserPromptSubmit cancels.
+#
+# So the predicate's answer is cached per transcript, beside the byte offset it covers:
+#   <scan dir>/<key>.scan   line 1 transcript path · line 2 "<inode> <offset> <state>" · rest condition
+# and the next call greps only the bytes past that offset. LAST record wins, so the tail decides when
+# it holds a goal record and the cached state stands when it holds none — the same answer as a full
+# scan. The cache is a hint, never a source of truth; anything that makes it unusable costs one full
+# scan and nothing else:
+#   · the stored offset is past the current size (truncated/rotated) or the inode changed (replaced)
+#   · the stored path differs (two transcripts sharing a key), or a field does not parse
+#   · jq rejects the tail — a scan that resumed inside a line reads a fragment; the full scan decides
+# Residual, stated: an IN-PLACE rewrite under the same inode that leaves the file at least as long as
+# the stored offset is not detected. Claude Code only appends to a transcript.
+#
+# BOUNDED WRITES. Small transcripts are scanned whole and never cached (CC_GOAL_SCAN_MIN_BYTES,
+# 256 KiB — below that a full grep costs less than the cache's stat). The cache is rewritten only when
+# the state changed or the uncached tail passed CC_GOAL_SCAN_WRITE_BYTES (64 KiB), so most calls pay
+# one stat, one tail and one grep. Kill switch CC_GOAL_SCAN_CACHE=0 (every call scans in full).
+#
+# The grep is anchored on the serialized record key `"type":"goal_status"` (JSON.stringify, no spaces;
+# verified on live transcripts 2026-10-11). The assistant's prose about goals is JSON-escaped inside a
+# string (`\"type\":\"goal_status\"`), so the anchor also drops the decoy hits before jq sees them.
+_GOAL_ANCHOR='"type":"goal_status"'
+# One jq for the verdict and the condition. Line 1 is the state (live|off|none), and for a live goal
+# the condition follows as jq -r prints `.condition // ""` — the bytes the old third jq printed.
+_GOAL_JQ='[ .[] | select(.type == "attachment") | .attachment | select(.type == "goal_status") ]
+  | last
+  | if . == null then "none"
+    elif ((.met // false) or (.failed // false)) then "off"
+    else "live", (.condition // "") end'
+
+# `<size> <inode>` of $1, one fork. Platform picked from OSTYPE rather than by trying both: GNU
+# `stat -f` succeeds at something else (see hooks/lib/mailbox-pending.sh _mbx_mtime).
+_goal_stat() {
+  case "${OSTYPE:-}" in
+    darwin*|*bsd*) stat -f '%z %i' "$1" 2>/dev/null ;;
+    *)             stat -c '%s %i' "$1" 2>/dev/null ;;
+  esac
+}
+
+# Anchored hits at or after byte offset $2 (0 = the whole file). rc as _goal_grep: 0 = grep RAN
+# (matched or not), 1 = grep or tail ERRORED.
+_goal_grep_from() {
+  local _gf_rc
+  if [ "${2:-0}" -gt 0 ] 2>/dev/null; then
+    tail -c +"$(( $2 + 1 ))" "$1" 2>/dev/null | grep -a -F "$_GOAL_ANCHOR" 2>/dev/null
+    _gf_rc="${PIPESTATUS[0]} ${PIPESTATUS[1]}"
+    case "$_gf_rc" in "0 0"|"0 1") return 0 ;; esac
+    return 1
+  fi
+  grep -a -F "$_GOAL_ANCHOR" "$1" 2>/dev/null
+  _gf_rc=$?
+  [ "$_gf_rc" -le 1 ] && return 0
+  return 1
+}
+
+# Sets _GOAL_ST (live|off|none) and _GOAL_COND for transcript $1 (an existing file). rc 1 = unreadable.
+# Globals, not stdout, so the caller keeps the answer without a subshell.
+_goal_scan() {
+  local tp="$1" sz="" ino="" min wmin dir="" key cf="" c_tp="" c_ino="" c_off="" c_st="" c_cond=""
+  local off=0 cached=0 hits out st cond
+  _GOAL_ST="" _GOAL_COND=""
+  if [ "${CC_GOAL_SCAN_CACHE:-1}" != 0 ]; then
+    min="${CC_GOAL_SCAN_MIN_BYTES:-262144}"; case "$min" in ''|*[!0-9]*) min=262144 ;; esac
+    out="$(_goal_stat "$tp")" || out=""
+    sz="${out%% *}" ino="${out#* }"
+    case "$sz" in ''|*[!0-9]*) sz="" ;; esac
+    case "$ino" in ''|*[!0-9]*) sz="" ;; esac
+    [ -n "$sz" ] && [ "$sz" -lt "$min" ] && sz=""
+  fi
+  if [ -n "$sz" ]; then
+    dir="${CC_GOAL_SCAN_DIR:-$HOME/.claude/state/goal-scan}"
+    # The key is the path made filename-safe, cut to its last 200 characters (the session id is at
+    # the end). A collision is caught by the stored path and costs a full scan, never a wrong answer.
+    key="${tp//\//_}"; key="${key//[!A-Za-z0-9._-]/_}"
+    [ "${#key}" -gt 200 ] && key="${key: -200}"
+    cf="$dir/$key.scan"
+    if [ -f "$cf" ]; then
+      # `read -d ''` reads the multi-line condition to EOF and returns 1 there, hence the `|| true`.
+      { IFS= read -r c_tp; read -r c_ino c_off c_st; IFS= read -r -d '' c_cond; } < "$cf" 2>/dev/null || true
+      case "$c_off" in ''|*[!0-9]*) c_off="" ;; esac
+      case "$c_st" in live|off|none) ;; *) c_off="" ;; esac
+      if [ -n "$c_off" ] && [ "$c_tp" = "$tp" ] && [ "$c_ino" = "$ino" ] && [ "$c_off" -le "$sz" ]; then
+        cached=1 off="$c_off"
+      fi
+    fi
+    if [ "$cached" = 1 ] && [ "$off" = "$sz" ]; then   # nothing appended since the cache was written
+      _GOAL_ST="$c_st" _GOAL_COND="$c_cond"
+      return 0
+    fi
+  fi
+  hits="$(_goal_grep_from "$tp" "$off")" || return 1
+  if [ -z "$hits" ]; then
+    st=none cond=""
+  else
+    out="$(printf '%s\n' "$hits" | jq -r --slurp "$_GOAL_JQ" 2>/dev/null)" || out=""
+    if [ -z "$out" ]; then
+      # A tail that starts inside a line hands jq a fragment. Only the full scan may call it corrupt.
+      [ "$off" -gt 0 ] || return 1
+      CC_GOAL_SCAN_CACHE=0 _goal_scan "$tp" || return 1
+      st="$_GOAL_ST" cond="$_GOAL_COND" cached=0 off=0
+    else
+      st="${out%%$'\n'*}" cond=""
+      case "$out" in *$'\n'*) cond="${out#*$'\n'}" ;; esac
+    fi
+  fi
+  # No goal record in the tail ⇒ the record before it (cached) is still the last one.
+  if [ "$st" = none ] && [ "$cached" = 1 ]; then st="$c_st" cond="$c_cond"; fi
+  _GOAL_ST="$st" _GOAL_COND="$cond"
+  [ -n "$cf" ] || return 0
+  wmin="${CC_GOAL_SCAN_WRITE_BYTES:-65536}"; case "$wmin" in ''|*[!0-9]*) wmin=65536 ;; esac
+  if [ "$cached" = 1 ] && [ "$st" = "$c_st" ] && [ "$cond" = "$c_cond" ] \
+     && [ $(( sz - off )) -lt "$wmin" ]; then
+    return 0                                   # unchanged and the re-read tail stays small
+  fi
+  if [ ! -d "$dir" ]; then mkdir -p "$dir" 2>/dev/null || return 0; fi
+  # The offset is the size read BEFORE the grep: bytes appended since are re-read next time, never
+  # skipped. tmp+mv so a concurrent reader sees a whole cache file or the previous one.
+  printf '%s\n%s %s %s\n%s' "$tp" "$ino" "$sz" "$st" "$cond" > "$cf.$$.tmp" 2>/dev/null \
+    && mv -f "$cf.$$.tmp" "$cf" 2>/dev/null || rm -f "$cf.$$.tmp" 2>/dev/null
+  # GC rides the first write for a transcript: caches untouched for 7 days belong to dead sessions.
+  [ "$cached" = 1 ] || find "$dir" -type f -name '*.scan*' -mtime +7 -delete 2>/dev/null || true
+  return 0
+}
+
 goal_live_condition() { # $1 = transcript path → prints the condition; rc 0 iff a /goal is LIVE
-  local tp="$1" rec
+  local tp="$1"
   [ -n "$tp" ] || return 1
   case "$tp" in "~"*) tp="$HOME${tp#\~}" ;; esac
   [ -f "$tp" ] || return 1
   command -v jq >/dev/null 2>&1 || return 1
-  rec="$(_goal_grep "$tp" | jq -rc --slurp '
-    [ .[] | select(.type == "attachment")
-          | .attachment | select(.type == "goal_status") ] | last // empty' 2>/dev/null)" || return 1
-  [ -n "$rec" ] || return 1
-  [ "$(printf '%s' "$rec" | jq -r '(.met // false) or (.failed // false)' 2>/dev/null)" = "false" ] || return 1
-  printf '%s' "$(printf '%s' "$rec" | jq -r '.condition // ""' 2>/dev/null)"
+  _goal_scan "$tp" || return 1
+  [ "$_GOAL_ST" = live ] || return 1
+  printf '%s' "$_GOAL_COND"
   return 0
 }
 

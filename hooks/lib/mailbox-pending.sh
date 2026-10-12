@@ -174,9 +174,10 @@ _mbx_mtime() { # <path> → epoch seconds, 0 when unknowable
 # touching the dup-over-hang policy. It also lets the reap convict faster than the TTL when the
 # holder is provably dead, while still never stealing from a live one before its TTL.
 _mbx_lock() { # <uuid> [max_wait_ms] → 0 acquired, 1 gave up (caller proceeds lock-free: dup-risk, never a hang)
-  local u="$1" ld waited=0 step=50 max="${2:-${CC_MBX_LOCK_WAIT_MS:-2000}}" stale="${CC_MBX_LOCK_STALE_S:-10}"
-  mkdir -p "$(_mbx_dir)" 2>/dev/null || return 1
-  ld="$(_mbx_dir)/.$u.lock"
+  local u="$1" ld waited=0 step=50 max="${2:-${CC_MBX_LOCK_WAIT_MS:-2000}}" stale="${CC_MBX_LOCK_STALE_S:-10}" d
+  d="$(_mbx_dir)"
+  [ -d "$d" ] || mkdir -p "$d" 2>/dev/null || return 1   # the dir nearly always exists: skip the exec
+  ld="$d/.$u.lock"
   while ! mkdir "$ld" 2>/dev/null; do
     local mt now age htok=""
     # A provably-dead holder is reclaimed at once — no need to serve out its TTL. Read with the
@@ -210,7 +211,14 @@ _mbx_unlock() {
   return 0
 }
 
-_mbx_read_int_file() { local f="$1" v=0; [ -f "$f" ] && v="$(head -n1 "$f" 2>/dev/null | tr -dc '0-9')"; _mbx_int "$v"; }
+# First line, digits only — the `read` builtin, not `head | tr`: every cursor read on the drain path
+# runs through here, and two execs per read was most of an empty-inbox drain's cursor cost.
+_mbx_read_int_file() {
+  local f="$1" v=""
+  [ -f "$f" ] && { IFS= read -r v < "$f" 2>/dev/null || true; }
+  v="${v//[!0-9]/}"
+  _mbx_int "$v"
+}
 # atomic write; echoes nothing, returns 1 on failure (F9 — the caller must be able to SEE a write fail).
 _mbx_write_int() {
   local f="$1" n="$2" dir tmp; dir="$(dirname "$f")"
@@ -228,24 +236,29 @@ mailbox_lines() {
   n="$(grep -c '' "$f" 2>/dev/null)"; _mbx_int "$n"
 }
 
-mailbox_seen() { # emitted cursor, clamped [0, lines]; a cursor PAST EOF (rotate/GC/recycle) ⇒ 0 (re-deliver, F11)
-  local u="${1:-}" p lines
+# COUNT ONCE (2026-10-11). The optional [lines] argument is a line count the caller already took
+# (mailbox_lines), so one drain greps the inbox once instead of once per primitive: a count was taken
+# by mailbox_seen, again by mailbox_window_end, and twice more by each pending/unacked count. A
+# non-numeric or absent value recounts, so every existing caller is unchanged.
+mailbox_seen() { # <uuid> [lines] — emitted cursor, clamped [0, lines]; a cursor PAST EOF (rotate/GC/recycle) ⇒ 0 (re-deliver, F11)
+  local u="${1:-}" p lines="${2:-}"
   _mbx_valid_uuid "$u" || { echo 0; return; }
-  p="$(_mbx_read_int_file "$(_mbx_dir)/$u.seen")"; lines="$(mailbox_lines "$u")"
+  p="$(_mbx_read_int_file "$(_mbx_dir)/$u.seen")"
+  case "$lines" in ''|*[!0-9]*) lines="$(mailbox_lines "$u")" ;; esac
   [ "$p" -gt "$lines" ] 2>/dev/null && p=0
   echo "$p"
 }
 
-mailbox_acked() { # consumed cursor, clamped [0, seen]
+mailbox_acked() { # <uuid> [lines] — consumed cursor, clamped [0, seen]
   local u="${1:-}" a seen
   _mbx_valid_uuid "$u" || { echo 0; return; }
-  a="$(_mbx_read_int_file "$(_mbx_dir)/$u.acked")"; seen="$(mailbox_seen "$u")"
+  a="$(_mbx_read_int_file "$(_mbx_dir)/$u.acked")"; seen="$(mailbox_seen "$u" "${2:-}")"
   [ "$a" -gt "$seen" ] 2>/dev/null && a="$seen"
   echo "$a"
 }
 
-mailbox_pending_count() { local d=$(( $(mailbox_lines "${1:-}") - $(mailbox_seen "${1:-}") )); [ "$d" -lt 0 ] && d=0; echo "$d"; }
-mailbox_unacked_count() { local d=$(( $(mailbox_lines "${1:-}") - $(mailbox_acked "${1:-}") )); [ "$d" -lt 0 ] && d=0; echo "$d"; }
+mailbox_pending_count() { local n d; n="$(mailbox_lines "${1:-}")"; d=$(( n - $(mailbox_seen "${1:-}" "$n") )); [ "$d" -lt 0 ] && d=0; echo "$d"; }
+mailbox_unacked_count() { local n d; n="$(mailbox_lines "${1:-}")"; d=$(( n - $(mailbox_acked "${1:-}" "$n") )); [ "$d" -lt 0 ] && d=0; echo "$d"; }
 mailbox_has_pending()   { [ "$(mailbox_pending_count "${1:-}")" -gt 0 ]; }
 
 # ── READ RECEIPT — delivery, surfacing and consumption are THREE events ───────────────────────────
@@ -516,12 +529,12 @@ mailbox_drain_release() { # <uuid> — releases only a claim this process owns
 }
 
 # Echo the cursor a window (from, …] of at most <max> lines ends at (max 0/absent ⇒ to EOF).
-# Exit 1 (echoing <from>) when the window is empty.
-mailbox_window_end() { # <uuid> <from> [max]
-  local u="${1:-}" from max="${3:-0}" cur
+# Exit 1 (echoing <from>) when the window is empty. [lines] = a count already taken (COUNT ONCE above).
+mailbox_window_end() { # <uuid> <from> [max] [lines]
+  local u="${1:-}" from max="${3:-0}" cur="${4:-}"
   from="$(_mbx_int "${2:-0}")"
   case "$max" in ''|*[!0-9]*) max=0 ;; esac
-  cur="$(mailbox_lines "$u")"
+  case "$cur" in ''|*[!0-9]*) cur="$(mailbox_lines "$u")" ;; esac
   if [ "$cur" -le "$from" ]; then echo "$from"; return 1; fi
   if [ "$max" -gt 0 ] && [ $(( cur - from )) -gt "$max" ]; then cur=$(( from + max )); fi
   echo "$cur"
@@ -837,7 +850,10 @@ mailbox_pane_held_by_live_ancestor() { # <pane> → 0 = I am a nested session un
   # (memory: grep-q-under-pipefail-inverts-the-verdict).
   inc="$(sed -n 's/.*"pid":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$row" 2>/dev/null)"
   case "$inc" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$inc" = "$(_mbx_claude_pid)" ] && return 1     # the row is already ours — not a nested write
+  # Memoise in THIS shell first: `$(_mbx_claude_pid)` runs in a subshell, so its memo died there and
+  # the contested path walked the ps chain twice (here, then again in the ancestry check).
+  _mbx_claude_pid >/dev/null
+  [ "$inc" = "$_MBX_CPID" ] && return 1     # the row is already ours — not a nested write
   kill -0 "$inc" 2>/dev/null || return 1
   _mbx_pid_is_strict_ancestor "$inc"
 }
@@ -847,14 +863,22 @@ mailbox_alias_write() { # <pane> <session> → 0 wrote/deduped · 1 invalid · 2
   _mbx_valid_uuid "$pane" || return 1
   _mbx_valid_uuid "$sess" || return 1
   [ "$pane" = "$sess" ] && return 1          # a self-alias carries no information
+  # DEDUP BEFORE THE GATE (2026-10-11, docs/research/load-hook-timeouts-2026-10-11/DESIGN.md item 6).
+  # The tip is already this session on every boundary but a session's first, and a deduped call
+  # writes nothing, so there is nothing for the tenancy gate to refuse. Run first, the gate cost a
+  # registry read and, on any pane with a live registry row, a ps walk up the process chain on every
+  # prompt — inside a UserPromptSubmit hook, under load, where that walk is what timed it out.
+  # Same outcomes: a nested session whose id is already the tip wrote nothing before this either.
+  f="$(_mbx_alias_file "$pane")"
+  tip=""
+  [ -f "$f" ] && tip="$(tail -n1 "$f" 2>/dev/null)"
+  read -r _ tip _ <<<"$tip"                  # field 2, as `awk '{print $2}'` took it — minus the exec
+  [ "$tip" = "$sess" ] && return 0          # already the current occupant → dedup
   # Gated HERE, at the act itself, rather than at mailbox-drain.sh's call site: the write IS the
   # event, and a gate living in the one caller we happen to know about is detection, not enforcement
   # (memory: enforcement-must-live-at-the-chokepoint). A future second writer inherits it.
   mailbox_pane_held_by_live_ancestor "$pane" && return 2
-  dir="$(_mbx_alias_dir)"; mkdir -p "$dir" 2>/dev/null || return 1
-  f="$(_mbx_alias_file "$pane")"
-  tip="$(tail -n1 "$f" 2>/dev/null | awk '{print $2}')"
-  [ "$tip" = "$sess" ] && return 0           # already the current occupant → dedup
+  dir="$(_mbx_alias_dir)"; [ -d "$dir" ] || mkdir -p "$dir" 2>/dev/null || return 1
   printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$sess" >> "$f" 2>/dev/null || return 1
   return 0
 }

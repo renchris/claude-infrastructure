@@ -52,7 +52,8 @@
 
 MODE="${1:-}"
 
-_scd="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+case "$0" in */*) _scd="${0%/*}" ;; *) _scd=. ;; esac   # dirname without the exec
+_scd="$(cd "$_scd" 2>/dev/null && pwd)"
 _lib="$_scd/lib/mailbox-pending.sh"
 [ -f "$_lib" ] || _lib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/mailbox-pending.sh"
 [ -f "$_lib" ] || _lib="$HOME/.claude/hooks/lib/mailbox-pending.sh"
@@ -90,17 +91,28 @@ if [ "$MODE" = "post-tool" ]; then
 fi
 
 own_pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; own_pane="${own_pane##*:}"
-own_sid="$(printf '%s' "$_stdin_json" | jq -r '.session_id // empty' 2>/dev/null || true)"
+# ONE PARSE (2026-10-11, docs/research/load-hook-timeouts-2026-10-11/DESIGN.md item 6). Every field
+# this hook reads from stdin, in one jq: it used to be one jq per field (two on every prompt, three
+# on post-tool, four on a custody drain), on a hook that runs on every prompt and every tool call.
+# The row is joined on TAB and split in bash, NOT read with `IFS=$'\t' read`: tab is IFS whitespace,
+# so consecutive tabs collapse and an empty session_id would shift transcript_path into its slot.
+# Not `@tsv` either, which would rewrite a backslash in a path as `\\`; a tab inside a value becomes
+# a space, which no session id, transcript path or cwd carries.
+_t=$'\t'
+_row="$(printf '%s' "$_stdin_json" | jq -r '[.session_id, .transcript_path, .agent_id, .cwd]
+  | map(. // "" | tostring | gsub("\t"; " ")) | join("\t")' 2>/dev/null || true)"
+case "$_row" in *"$_t"*"$_t"*"$_t"*) ;; *) _row="$_t$_t$_t" ;; esac   # not one well-formed row ⇒ no fields
+own_sid="${_row%%"$_t"*}"; _row="${_row#*"$_t"}"
+own_tp="${_row%%"$_t"*}"; _row="${_row#*"$_t"}"
+own_agent_id="${_row%%"$_t"*}"; own_cwd="${_row#*"$_t"}"
 case "$own_sid" in *[!0-9A-Fa-f-]*) own_sid="" ;; esac
-own_tp="$(printf '%s' "$_stdin_json" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
 
 # SUBAGENTS NEVER DRAIN (2026-09-28). A subagent's PostToolUse payload carries its PARENT's
 # session_id, so keyed on session_id it read the lead's inbox: 27 subagent transcripts in 7 days held
 # peer mail, and the drain advanced the shared .seen cursor, so the lead never saw those lines. The
 # payload's non-empty `.agent_id` is what marks a subagent; the lead drains at its own next boundary.
 # Evidence: docs/research/sonnet55-utilization-2026-09-28/notes/harness-hazards-a.md §1b item 1.
-if [ "$MODE" = "post-tool" ] \
-   && [ -n "$(printf '%s' "$_stdin_json" | jq -r '.agent_id // empty' 2>/dev/null || true)" ]; then
+if [ "$MODE" = "post-tool" ] && [ -n "$own_agent_id" ]; then
   exit 0
 fi
 
@@ -283,9 +295,13 @@ if [ "$_etc" = 1 ]; then
   if mailbox_drain_claim "$own_uuid"; then
     _claimed=1
     trap 'mailbox_drain_release "$own_uuid"' EXIT
-    _from="$(mailbox_seen "$own_uuid")"
-    _end="$(mailbox_window_end "$own_uuid" "$_from" "$MAXLINES")"
-    body="$(mailbox_peek_range "$own_uuid" "$_from" "$_end")" && rc=0
+    # COUNT ONCE: one grep of the inbox serves the cursor clamp, the window and the remainder note
+    # below (an older lib ignores the extra argument and counts for itself — LIB SKEW).
+    _lines="$(mailbox_lines "$own_uuid")"
+    _from="$(mailbox_seen "$own_uuid" "$_lines")"
+    _end="$(mailbox_window_end "$own_uuid" "$_from" "$MAXLINES" "$_lines")"
+    # an empty window (the common prompt) has nothing to peek: skip the subshell and its lock
+    [ "$_end" -gt "$_from" ] 2>/dev/null && body="$(mailbox_peek_range "$own_uuid" "$_from" "$_end")" && rc=0
     [ -n "$body" ] || _end="$_from"
   fi
 else
@@ -618,7 +634,9 @@ warn=""; [ "$rc" = 2 ] && warn=' (⚠ cursor write failed — you may see this a
 rest=""
 if [ "$MAXLINES" -gt 0 ] && command -v mailbox_pending_count >/dev/null 2>&1; then
   if [ "$_claimed" = 1 ]; then
-    _left=$(( $(mailbox_lines "$own_uuid") - _end ))   # .seen is not committed yet: count past OUR window
+    # .seen is not committed yet: count past OUR window. Lines appended since the count arrive at the
+    # next boundary and are simply not in this note.
+    _left=$(( ${_lines:-0} - _end ))
   else
     _left="$(mailbox_pending_count "$own_uuid")"
   fi
@@ -692,7 +710,7 @@ if [ "${CC_DRAIN_CUSTODY_RETURN:-1}" != 0 ] && [ -n "$HANDOFF_PING_TERMINAL_WORD
   # The hook payload's cwd is the session's own — the same $PWD handoff-fire keyed `open` on. $PWD
   # is the fallback, not the primary: a hook's process cwd is the harness's to choose, and keying
   # custody on it without checking would silently address a different store.
-  _cust_cwd="$(printf '%s' "$_stdin_json" | jq -r '.cwd // empty' 2>/dev/null || true)"
+  _cust_cwd="$own_cwd"   # from the one stdin parse at the top
   { [ -n "$_cust_cwd" ] && [ -d "$_cust_cwd" ]; } || _cust_cwd="$PWD"
   if [ -n "$_cust_bin" ]; then
     # The slug charset stops at the first `:` and admits `/` for the cloud namespace. Both

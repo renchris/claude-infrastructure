@@ -1216,3 +1216,88 @@ sf_ctx() { printf '%s' "$1" | jq -r '.hookSpecificOutput.additionalContext'; }
   [ "$(printf '%s\n' "$c" | grep -cF '[stale forward: ')" -eq 7 ]
   [[ "$c" != *'[stale forwards: '* ]] || false
 }
+
+# ── LOAD (2026-10-11, docs/research/load-hook-timeouts-2026-10-11/DESIGN.md item 6) ─────────────
+# mailbox-drain was 39 of 162 UserPromptSubmit cancels: its empty-inbox path took ~1.0 s, and on a
+# pane with a live registry row the alias write walked the ps chain on EVERY prompt. The alias is
+# already current on every boundary but a session's first, so the dedup now runs before that walk.
+#
+# The ps stub logs and hands over to the real ps, so a walk that does happen still behaves.
+load_ps_stub() { # → $LOAD_BIN on PATH logs every ps call to $LOAD_PS_MARK
+  LOAD_BIN="$BATS_TEST_TMPDIR/load-bin"; LOAD_PS_MARK="$BATS_TEST_TMPDIR/ps.called"
+  mkdir -p "$LOAD_BIN"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\nexec /bin/ps "$@"\n' "$LOAD_PS_MARK" > "$LOAD_BIN/ps"
+  chmod +x "$LOAD_BIN/ps"
+}
+load_contested_pane() { # $1 = the alias trail's tip. A LIVE registry row that is not this hook's own
+  # claude: the one shape on which the tenancy gate walks the process chain.
+  mkdir -p "$HOME/.claude/cc-registry" "$CC_MAILBOX_DIR/.alias"
+  printf '{"pid": %s, "paneUUID": "%s"}\n' "$$" "$UUID" > "$HOME/.claude/cc-registry/$UUID.json"
+  printf '2026-10-11T00:00:00+0000 %s\n' "$1" > "$CC_MAILBOX_DIR/.alias/$UUID"
+}
+
+@test "LOAD: an empty-inbox prompt with the alias already current makes NO ps call" {
+  load_ps_stub
+  load_contested_pane "abc-123-def"
+  run bash -c 'printf "{\"session_id\":\"abc-123-def\"}" | PATH="$1:$PATH" "$0" prompt' "$DRAIN" "$LOAD_BIN"
+  [ "$status" -eq 0 ]
+  [ ! -e "$LOAD_PS_MARK" ] || { echo "ps was called:" >&2; cat "$LOAD_PS_MARK" >&2; false; }
+  # the trail is untouched: still one line naming this session
+  [ "$(grep -c '' "$CC_MAILBOX_DIR/.alias/$UUID")" -eq 1 ] || false
+}
+
+@test "LOAD DISCRIMINATOR: the same pane with a DIFFERENT tip still goes through the tenancy gate" {
+  # Without this the case above could pass because the stub is never on the path the hook takes.
+  load_ps_stub
+  load_contested_pane "fff-000-eee"
+  run bash -c 'printf "{\"session_id\":\"abc-123-def\"}" | PATH="$1:$PATH" "$0" prompt' "$DRAIN" "$LOAD_BIN"
+  [ "$status" -eq 0 ]
+  [ -s "$LOAD_PS_MARK" ] || false
+}
+
+load_now() { # wall-clock seconds with a fraction
+  if [ -n "${EPOCHREALTIME:-}" ]; then printf '%s' "$EPOCHREALTIME"
+  else python3 -c 'import time; print("%.6f" % time.time())'; fi
+}
+
+@test "LOAD: an empty-inbox prompt drain runs well inside its budget (sandboxed state; time reported)" {
+  # The realistic steady state: a contested pane whose alias is current, an inbox with every line
+  # already seen, a 1.5 MB transcript holding a LIVE goal whose nudge was already told once, and a
+  # sandboxed scan cache. The design target is ~0.4 s at ordinary load; the bound is 2 s because
+  # this box runs at load 400-600 and a bound sized on a quiet machine can only convict.
+  # SCALED TO THE BAND IT RUNS IN: cc-bats demotes a suite under load (taskpolicy -c utility), where
+  # every exec waits on the scheduler. Measured 2026-10-12 at load ~650: this same warm run took
+  # 0.6-0.8 s from a plain shell and 6.7-9.6 s inside the suite. So the bound is the larger of 2 s
+  # and the cost of 60 fork+exec units (`$(/usr/bin/true)`, the shape of nearly every step in the
+  # hook) timed here, in the same band, just before. The warm path is roughly 45 such units; from a
+  # plain shell at the same load the pre-change path took ~3x as long (1.9-2.9 s vs 0.6-0.8 s).
+  local c0 c1 cal bound _x
+  c0="$(load_now)"; for i in $(seq 1 10); do _x="$(/usr/bin/true)"; done; c1="$(load_now)"
+  cal="$(awk -v s="$c0" -v e="$c1" 'BEGIN { printf "%.3f", e - s }')"
+  bound="$(awk -v c="$cal" 'BEGIN { b = 6 * c; if (b < 2.0) b = 2.0; printf "%.3f", b }')"
+  load_contested_pane "abc-123-def"
+  export CC_GOAL_SCAN_DIR="$BATS_TEST_TMPDIR/goal-scan"
+  printf '2026-10-11T00:00:00+0000 [peer] old\n' > "$CC_MAILBOX_DIR/abc-123-def.md"
+  printf '1\n' > "$CC_MAILBOX_DIR/abc-123-def.seen"
+  T="$BATS_TEST_TMPDIR/big.jsonl"
+  local pad i; pad="$(printf 'p%.0s' $(seq 1 340))"
+  for i in $(seq 1 4000); do
+    printf '{"type":"assistant","message":{"content":[{"type":"text","text":"%s %s"}]}}\n' "$i" "$pad"
+  done > "$T"
+  printf '{"type":"attachment","attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"finish"}}\n' >> "$T"
+  [ "$(wc -c < "$T")" -gt 1400000 ] || false
+  in="{\"session_id\":\"abc-123-def\",\"transcript_path\":\"$T\"}"
+  # cold: first boundary — full scan, cache written, goal nudge told once
+  local s e cold warm
+  s="$(load_now)"; printf '%s' "$in" | "$DRAIN" prompt > "$BATS_TEST_TMPDIR/cold.out"; e="$(load_now)"
+  cold="$(awk -v s="$s" -v e="$e" 'BEGIN { printf "%.3f", e - s }')"
+  grep -qF 'do NOT park' "$BATS_TEST_TMPDIR/cold.out" || false
+  [ -f "$(ls "$CC_GOAL_SCAN_DIR"/*.scan)" ] || false
+  # warm: a later boundary with one more line appended — the path every ordinary prompt takes
+  printf '{"type":"user","message":{"content":"next prompt"}}\n' >> "$T"
+  s="$(load_now)"; printf '%s' "$in" | "$DRAIN" prompt > "$BATS_TEST_TMPDIR/warm.out"; e="$(load_now)"
+  warm="$(awk -v s="$s" -v e="$e" 'BEGIN { printf "%.3f", e - s }')"
+  [ ! -s "$BATS_TEST_TMPDIR/warm.out" ] || false        # empty inbox, nudge already told: silent
+  echo "# empty-inbox drain: cold ${cold}s, warm ${warm}s, bound ${bound}s (10 execs ${cal}s; load: $(sysctl -n vm.loadavg 2>/dev/null || uptime))" >&3
+  awk -v w="$warm" -v b="$bound" 'BEGIN { exit !(w < b) }' || false
+}
