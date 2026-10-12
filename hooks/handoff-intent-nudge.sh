@@ -11,15 +11,28 @@
 #
 # Cheap (grep on the prompt), precise (skips the typed /handoff command itself — the full spec
 # is being injected already), and advisory-only (additionalContext; never blocks).
+#
+# CHEAP GATES FIRST (2026-10-11, docs/research/load-hook-timeouts-2026-10-11). Every
+# UserPromptSubmit hook runs in parallel, so a prompt waits on the SLOWEST one — and this hook was
+# it: 95 of 162 prompt-hook cancels in 40 min, because the assignee check below walks a full-table
+# argv `ps` (measured 559 s once during a ps wave) and it ran BEFORE the intent grep, i.e. on every
+# prompt. Order is now: one jq parse → machine-prompt exit → /handoff exit → intent grep → assignee
+# check, so `ps` runs only on a prompt that actually mentions a handoff. The hook only adds context
+# and never blocks, so the reorder cannot change any blocking outcome.
 set -u
 INPUT="$(cat)"
-PROMPT="$(printf '%s' "$INPUT" | /usr/bin/python3 -c 'import json,sys
-try: print(json.load(sys.stdin).get("prompt",""))
-except Exception: pass' 2>/dev/null)" || exit 0
+PROMPT="$(printf '%s' "$INPUT" | jq -r '.prompt // empty' 2>/dev/null)" || exit 0
 [ -n "$PROMPT" ] || exit 0
+
+# A harness-injected <task-notification> is a machine prompt, not a user's intent: it can quote a
+# finished agent's prose ("hand off", "self-close") verbatim. Such prompts are 5.5-9.8x as frequent
+# as human ones, so this exit alone drops most firings. Leading whitespace is tolerated.
+case "${PROMPT#"${PROMPT%%[![:space:]]*}"}" in '<task-notification>'*) exit 0 ;; esac
 
 # The typed command injects the full spec — no nudge needed on top of it.
 case "$PROMPT" in "/handoff"*) exit 0 ;; esac
+
+printf '%s' "$PROMPT" | grep -qiE 'hand[- ]?off|self[- ]?close|\brelieve|\brelieved\b|recycle (this|the|your|our) (session|pane)|succession' || exit 0
 
 # A background team assignee owns no pane, has no session-registry row, and cannot run
 # handoff-fire.sh — so ~1.2 KB of pane-succession spec is unusable context for it. It matters here
@@ -37,22 +50,20 @@ if [ -f "$_hi_lib" ]; then
   fi
 fi
 
-if printf '%s' "$PROMPT" | grep -qiE 'hand[- ]?off|self[- ]?close|\brelieve|\brelieved\b|recycle (this|the|your|our) (session|pane)|succession'; then
-  # A BACKGROUND JOB gets the rails that work for it (hooks/lib/session-kind.sh): the pane block below
-  # names --split-right and a pane uuid, neither of which a job has (job 032aa97f, 2026-10-03).
-  _hi_sk="$(cd "$(dirname "$(readlink "$0" 2>/dev/null || echo "$0")")" 2>/dev/null && pwd)/lib/session-kind.sh"
-  [ -f "$_hi_sk" ] || _hi_sk="$HOME/.claude/hooks/lib/session-kind.sh"
-  _hi_job=""
-  # shellcheck source=lib/session-kind.sh
-  # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
-  if [ -f "$_hi_sk" ] && . "$_hi_sk" 2>/dev/null; then _hi_job="$(cc_bgjob_short 2>/dev/null || true)"; fi
-  if [ -n "$_hi_job" ] && command -v jq >/dev/null 2>&1; then
-    jq -cn --arg c "HANDOFF-INTENT PARITY (deterministic hook — verbal intent must land on the same rails as a typed /handoff): $(cc_bgjob_succession_step "$_hi_job") To retire this job with nothing continuing, run handoff-fire.sh self-close --terminal (or --successor <job short>); it stops the job the same way. Never improvise teardown by hand." \
-      '{hookSpecificOutput:{hookEventName:"UserPromptSubmit",additionalContext:$c}}'
-    exit 0
-  fi
-  cat <<'JSON'
+# A BACKGROUND JOB gets the rails that work for it (hooks/lib/session-kind.sh): the pane block below
+# names --split-right and a pane uuid, neither of which a job has (job 032aa97f, 2026-10-03).
+_hi_sk="$(cd "$(dirname "$(readlink "$0" 2>/dev/null || echo "$0")")" 2>/dev/null && pwd)/lib/session-kind.sh"
+[ -f "$_hi_sk" ] || _hi_sk="$HOME/.claude/hooks/lib/session-kind.sh"
+_hi_job=""
+# shellcheck source=lib/session-kind.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if [ -f "$_hi_sk" ] && . "$_hi_sk" 2>/dev/null; then _hi_job="$(cc_bgjob_short 2>/dev/null || true)"; fi
+if [ -n "$_hi_job" ] && command -v jq >/dev/null 2>&1; then
+  jq -cn --arg c "HANDOFF-INTENT PARITY (deterministic hook — verbal intent must land on the same rails as a typed /handoff): $(cc_bgjob_succession_step "$_hi_job") To retire this job with nothing continuing, run handoff-fire.sh self-close --terminal (or --successor <job short>); it stops the job the same way. Never improvise teardown by hand." \
+    '{hookSpecificOutput:{hookEventName:"UserPromptSubmit",additionalContext:$c}}'
+  exit 0
+fi
+cat <<'JSON'
 {"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"HANDOFF-INTENT PARITY (deterministic hook — verbal intent must land on the same rails as a typed /handoff): execute handoff/succession mechanics ONLY through the sanctioned paths. (1) Continuation bridge + fire: invoke Skill(handoff) and follow the CURRENT spec — never improvise the chain from memory. (2) In-place continuation of THIS pane: handoff-fire.sh --recycle. (3) Retiring a pane: handoff-fire.sh self-close --successor <pane-uuid> (verified alive, announced into the survivor via cc-notify, focused after close) or --terminal when truly nothing continues — bare self-close is refused (exit 2). (4) NEVER hand-type /exit, use raw osascript, or raw it2 session close for teardown. A pane the operator watches must never vanish without its continuation being visible (memory: handoff-succession-legibility)."}}
 JSON
-fi
 exit 0
