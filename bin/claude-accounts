@@ -2117,18 +2117,74 @@ def load_lastgood():
 
 
 def save_lastgood(ledger):
-    """Atomic replace; best-effort (a failed persist must never break a sweep)."""
+    """MERGE into the ledger on disk, under a flock; best-effort (a failed persist must never
+    break a sweep). Two processes now write it — a sweep and the local pass's first read
+    (ACCOUNTS_BOARD_FRESHNESS D4/D6) — so a plain replace of the in-memory copy a sweep loaded at
+    its start would revert a first read that landed meanwhile. Per account, the entry with the
+    newer `quota_as_of` wins; an equal stamp keeps the caller's (it carries this sweep's fields)."""
     try:
         os.makedirs(os.path.dirname(LASTGOOD_PATH), exist_ok=True)
+    except OSError:
+        return
+    fd = _flock_open(LASTGOOD_PATH + ".lock", LASTGOOD_LOCK_WAIT_S)
+    try:
+        merged = load_lastgood()
+        for acct, e in ledger.items():
+            d = merged.get(acct)
+            te = _as_epoch((e or {}).get("quota_as_of"))
+            td = _as_epoch((d or {}).get("quota_as_of")) if isinstance(d, dict) else None
+            if td is None or (te is not None and te >= td):
+                merged[acct] = e
         # Same pid-is-not-unique-across-threads reason as _save_rejected. Called once per sweep
         # from the MAIN thread today, so this is prophylactic — but the two savers must not
         # differ, or the next caller to move inside the pool re-acquires the defect.
         tmp = f"{LASTGOOD_PATH}.{os.getpid()}.{threading.get_ident()}.tmp"
         with open(tmp, "w") as f:
-            json.dump(ledger, f, indent=2, sort_keys=True)
+            json.dump(merged, f, indent=2, sort_keys=True)
         os.replace(tmp, LASTGOOD_PATH)
     except OSError:
         pass
+    finally:
+        _flock_release(fd)
+
+
+LASTGOOD_LOCK_WAIT_S = 10.0
+
+
+def _flock_open(path, wait_s):
+    """-> an fd holding LOCK_EX on `path`, or None when it was not acquired within `wait_s`
+    seconds (0 = one non-blocking try) or the file cannot be opened. Never raises."""
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError:
+        return None
+    deadline = time.monotonic() + max(0.0, wait_s)
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                os.close(fd)
+                return None
+            time.sleep(0.05)
+        except OSError:
+            os.close(fd)
+            return None
+
+
+def _flock_release(fd):
+    if fd is None:
+        return
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 def inherit_lastgood(row, ledger, prev):
@@ -2286,22 +2342,36 @@ def usage_backoff_left(acct):
 
 
 def note_usage_429(acct):
+    # The threading.Lock serialises this process's threads; the flock serialises PROCESSES — a
+    # sweep and the local pass's first read can now both note a 429 (ACCOUNTS_BOARD_FRESHNESS D4),
+    # and an unlocked load-modify-save drops whichever lands first.
     with _POLLSTATE_LOCK:
-        d = _load_pollstate()
-        rec = d.get(acct) or {}
-        streak = int(rec.get("streak") or 0) + 1
-        d[acct] = {"streak": streak, "at": datetime.now(timezone.utc).isoformat(),
-                   "until": time.time() + usage_backoff_s(streak)}
-        _save_pollstate(d)
+        fd = _flock_open(_sidecar(".pollstate.json") + ".lock", POLLSTATE_LOCK_WAIT_S)
+        try:
+            d = _load_pollstate()
+            rec = d.get(acct) or {}
+            streak = int(rec.get("streak") or 0) + 1
+            d[acct] = {"streak": streak, "at": datetime.now(timezone.utc).isoformat(),
+                       "until": time.time() + usage_backoff_s(streak)}
+            _save_pollstate(d)
+        finally:
+            _flock_release(fd)
     return d[acct]
 
 
 def note_usage_ok(acct):
     with _POLLSTATE_LOCK:
-        d = _load_pollstate()
-        if acct in d:
-            del d[acct]
-            _save_pollstate(d)
+        fd = _flock_open(_sidecar(".pollstate.json") + ".lock", POLLSTATE_LOCK_WAIT_S)
+        try:
+            d = _load_pollstate()
+            if acct in d:
+                del d[acct]
+                _save_pollstate(d)
+        finally:
+            _flock_release(fd)
+
+
+POLLSTATE_LOCK_WAIT_S = 5.0
 
 
 def _reset_evidence_items(entry, acct):
@@ -2700,6 +2770,25 @@ def inherit_k(row, prev, now=None, grace_s=K_GRACE_S):
     return True
 
 
+POLL_LOCK_WAIT_S = 12.0      # fetch_usage's own timeout: a sweep never stalls longer than one fetch
+
+
+def _poll_lock_path(cfg, name):
+    return f"{cfg['cache_file']}.poll-{name}.lock"
+
+
+def _fetch_usage_polllocked(cfg, name, token):
+    """fetch_usage under the per-account poll lock (ACCOUNTS_BOARD_FRESHNESS D4): the sweep and
+    the local pass's first read must not poll one token at the same instant — the 429 budget is
+    per token and sticky. The sweep WAITS at most one fetch's timeout and then proceeds without
+    the lock; the first read takes it non-blocking and stays pending when it is held."""
+    fd = _flock_open(_poll_lock_path(cfg, name), POLL_LOCK_WAIT_S)
+    try:
+        return fetch_usage(cfg, token)
+    finally:
+        _flock_release(fd)
+
+
 def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
     """Probe ONE account -> (row, lastgood_entry | None).
 
@@ -2710,7 +2799,13 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
     name = acct["name"]
     row = {"acct": name, "email": acct.get("email"), "dia_profile": acct.get("dia_profile"),
            "launcher": acct["launcher"], "k": k_live, "auth": None}
+    # PROVENANCE (ACCOUNTS_BOARD_FRESHNESS D3): when this row's auth was read, which grant it read,
+    # and (below) when its quota was. The local pass compares its own stamps against these, so a
+    # sweep that read the keychain BEFORE a /login can never overwrite the login it did not see.
+    row["auth_as_of"] = time.time()
     creds, kstate = read_creds(acct["config_dir"], kc)
+    if creds and creds.get("refreshToken"):
+        row["rt_fp"] = _rt_fingerprint(creds["refreshToken"])
     if kstate != "present":
         row["auth"] = "logged-out" if kstate == "no-keychain-item" else "keychain-error"
         row["error"] = row["auth"]
@@ -2790,6 +2885,7 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
             # only if the refresh token actually changed.
             healed_rt = (creds or {}).get("refreshToken")
             if healed_rt and _rt_fingerprint(healed_rt) != _rt_fingerprint(rt_before):
+                row["rt_fp"] = _rt_fingerprint(healed_rt)
                 row["auth"] = "healed"
                 _clear_rejected(acct["name"])
             else:
@@ -2814,16 +2910,21 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
     # `--fresh`, `--rank` — until its backoff runs out; the row is a throttled row exactly as if
     # it had been polled, so nothing downstream can tell the difference except the request count.
     held = usage_backoff_left(name) if token else 0.0
+    read_at = None
     if held > 0:
         status, u = 429, None
         row["usage_held_s"] = round(held)
     else:
-        status, u = fetch_usage(cfg, token) if token else (None, None)
+        read_at = time.time()
+        status, u = _fetch_usage_polllocked(cfg, name, token) if token else (None, None)
     if status == 401:
         # CC may have rotated the token between our read and the call — one fresh re-read.
         creds, kstate = read_creds(acct["config_dir"], kc)
         token = (creds or {}).get("accessToken")
-        status, u = fetch_usage(cfg, token) if token else (None, None)
+        if (creds or {}).get("refreshToken"):
+            row["rt_fp"] = _rt_fingerprint(creds["refreshToken"])
+        read_at = time.time()
+        status, u = _fetch_usage_polllocked(cfg, name, token) if token else (None, None)
         if status == 401:
             if row["auth"] == "login-required":
                 pass                             # row["error"] already names the real cause
@@ -2884,6 +2985,7 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
         inherit_lastgood(row, ledger, prev)
         return row, None
     note_usage_ok(name)
+    row["quota_read_at"] = read_at          # D3: HTTP-200 reads only, never an inherited one
     sp, sr = pick(u, "session")
     wp, wr = pick(u, "weekly_all")
     fp, fr = pick(u, "weekly_scoped", cfg["frontier"]["scoped_display_name"])
@@ -6528,6 +6630,56 @@ def cache_write(cfg, payload):
         pass
 
 
+# ---- write coordination (docs/plans/ACCOUNTS_BOARD_FRESHNESS.md D4) ------------------------------
+# Two processes now write the cache: the sweep (get_data) and the 20 s local pass
+# (`--local-refresh`). Every cache and board writer holds `<cache_file>.wlock` for its critical
+# section only — there is NO write-anyway bypass except the sweep's, after a wait longer than the
+# local pass can live (its SIGALRM is 60 s), which is unreachable unless a holder survives that.
+CACHE_WLOCK_SWEEP_S = 65.0
+
+
+def _wlock_path(cfg):
+    return cfg["cache_file"] + ".wlock"
+
+
+def cache_commit(cfg, payload):
+    """The sweep's cache write: under the wlock, re-apply the local overlay (D5 rules a-d, never f)
+    to a COPY of the sweep's rows, write, and return the merged rows. get_data still hands its
+    caller the sweep's own rows, so `--fresh`/`--json` stay pure measurement. `ts`, `window`,
+    `prev`, `no_heal` and `cfg_key` are the sweep's, untouched (C5)."""
+    fd = _flock_open(_wlock_path(cfg), CACHE_WLOCK_SWEEP_S)
+    if fd is None:
+        log_event(f"cache_commit: wlock wedged — not acquired in {CACHE_WLOCK_SWEEP_S:.0f}s "
+                  "(the local pass's own alarm is 60 s); writing anyway")
+    try:
+        rows = payload["rows"]
+        ov = load_local_overlay(cfg)
+        if ov is not None:
+            rows = json.loads(json.dumps(rows))
+            apply_local_overlay(rows, ov, payload.get("ts"), writer="sweep")
+        cache_write(cfg, dict(payload, rows=rows))
+        return rows
+    finally:
+        _flock_release(fd)
+
+
+def local_overlay_path(cfg):
+    """`/tmp/claude-accounts-local.json` beside the cache — derived from cache_file exactly as
+    board_path is, so a fixtured cache gets a fixtured overlay."""
+    cf = cfg.get("cache_file") or "/tmp/claude-accounts-cache.json"
+    return cf[:-len("-cache.json")] + "-local.json" if cf.endswith("-cache.json") else cf + ".local.json"
+
+
+def load_local_overlay(cfg):
+    """The local pass's overlay, or None. (W2: the overlay does not exist yet.)"""
+    return None
+
+
+def apply_local_overlay(rows, overlay, payload_ts, writer):
+    """Apply the local overlay to `rows` in place. (W2: no rules yet.)"""
+    return []
+
+
 def board_path(cfg):
     """Where the pre-rendered SessionStart board lives.
 
@@ -6756,7 +6908,11 @@ def get_data(cfg, fresh=False, no_heal=False, max_wait=None, max_age=None, src=N
     deadline = ((_PROC_T0 if _CLI else time.monotonic()) + max_wait) \
         if max_wait is not None and max_wait > 0 else None
     if not fresh:
-        c = cache_read(cfg, want_heal=not no_heal, src=src, grace_s=max_age)
+        # A CACHE-ONLY reader can never heal, so letting the no_heal refusal apply to it only ever
+        # made the launcher abstain on a `cc-relogin --fresh --no-heal` cache with any errored row
+        # (ACCOUNTS_BOARD_FRESHNESS D4). In-memory boolean, no I/O.
+        cache_only = max_wait is not None and max_wait <= 0
+        c = cache_read(cfg, want_heal=not no_heal and not cache_only, src=src, grace_s=max_age)
         if c:
             return c["rows"], c["window"], True, c.get("prev")
     # CACHE-ONLY: abstain before touching the lock. Everything below this line can block —
@@ -6835,8 +6991,8 @@ def get_data(cfg, fresh=False, no_heal=False, max_wait=None, max_age=None, src=N
                   # permanent is carried explicitly: without it a null deadline cannot be told
                   # apart from "the SSOT deadline was unparseable" by any --json consumer.
                   "deadline": win["deadline"].isoformat() if win["deadline"] else None}
-            cache_write(cfg, {"ts": time.time(), "cfg_key": _cfg_key(cfg), "no_heal": no_heal,
-                              "rows": rows, "window": wj, "prev": prev})
+            cache_commit(cfg, {"ts": time.time(), "cfg_key": _cfg_key(cfg), "no_heal": no_heal,
+                               "rows": rows, "window": wj, "prev": prev})
             return rows, wj, False, prev
         finally:
             hold_disarm()
