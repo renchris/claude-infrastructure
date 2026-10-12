@@ -123,6 +123,87 @@ print("OK")'
   [ "$(wc -l < "$HOME/legacy.jsonl")" -gt 0 ] || false
 }
 
+# ---- the bounded census (a D-state ps once wedged a batch for 2h43m) ------------------------------
+
+teardown() {
+  # The lock-holder case spawns a real long-lived process; it must never outlive its test.
+  if [ -f "$BATS_TEST_TMPDIR/holder.pid" ]; then
+    kill "$(cat "$BATS_TEST_TMPDIR/holder.pid")" 2>/dev/null || true
+  fi
+}
+
+@test "census: a ps that never returns is killed at the bound and n_live is null, never 0" {
+  # `exec` so the KILL lands on the sleep itself and nothing is orphaned. null, not 0: a census
+  # that did not complete has measured nothing, and 0 is a false "no live sessions" claim.
+  fake_env
+  printf '#!/bin/sh\nexec sleep 300\n' > "$BATS_TEST_TMPDIR/hang-ps"; chmod +x "$BATS_TEST_TMPDIR/hang-ps"
+  t0=$(date +%s)
+  run timeout 60 env AUTH_TS_OUT="$HOME/h.jsonl" AUTH_TS_KC_ACCT=x \
+    AUTH_TS_PS_BIN="$BATS_TEST_TMPDIR/hang-ps" AUTH_TS_PS_TIMEOUT_S=2 bash "$SUBJ" --once
+  el=$(( $(date +%s) - t0 ))
+  [ "$el" -lt 20 ] || { echo "batch took ${el}s with a 2s census bound (status=$status)"; false; }
+  run python3 -c '
+import json, os
+rows = [json.loads(l) for l in open(os.environ["HOME"] + "/h.jsonl") if l.strip()]
+cfg = [r for r in rows if r["acct"] != "unsuffixed"]
+assert len(cfg) == 5, rows
+assert all(r["n_live"] is None for r in cfg), [r["n_live"] for r in cfg]
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "census: ps runs ONCE per batch, and every account still parses that one snapshot" {
+  # It used to run inside the per-account loop: 5 full-table walks per batch, every 5 minutes.
+  fake_env
+  cnt="$BATS_TEST_TMPDIR/ps-calls"
+  cat > "$BATS_TEST_TMPDIR/count-ps" <<SH
+#!/bin/bash
+echo call >> "$cnt"
+printf '%s\n' "/Users/c/.claude-220/node_modules/.bin/claude --model x CLAUDE_CONFIG_DIR=$HOME/.claude-tertiary"
+SH
+  chmod +x "$BATS_TEST_TMPDIR/count-ps"
+  run timeout 30 env AUTH_TS_OUT="$HOME/c.jsonl" AUTH_TS_KC_ACCT=x \
+    AUTH_TS_PS_BIN="$BATS_TEST_TMPDIR/count-ps" bash "$SUBJ" --once
+  [ "$(wc -l < "$cnt")" -eq 1 ] || { echo "ps ran $(wc -l < "$cnt") times in one batch"; false; }
+  run python3 -c '
+import json, os
+rows = {r["acct"]: r for r in map(json.loads, open(os.environ["HOME"] + "/c.jsonl")) }
+assert rows["next3"]["n_live"] == 1, rows["next3"]
+assert rows["next"]["n_live"] == 0, rows["next"]
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "lock: a live previous --once run → this batch skips, exits 0, appends nothing" {
+  # launchd fires every 5 min whether or not the last batch finished; a wedged one must not stack.
+  fake_env
+  lock="$BATS_TEST_TMPDIR/at.lock"
+  bash -c 'exec -a auth-timeseries-fake sleep 30' >/dev/null 2>&1 3>&- &
+  echo "$!" > "$BATS_TEST_TMPDIR/holder.pid"
+  holder="$!"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [[ "$(/bin/ps -o command= -p "$holder")" == *auth-timeseries* ]] && break
+    sleep 0.2
+  done
+  echo "$holder" > "$lock"
+  run timeout 30 env AUTH_TS_OUT="$HOME/l.jsonl" AUTH_TS_KC_ACCT=x AUTH_TS_LOCK="$lock" \
+    bash "$SUBJ" --once
+  [ "$status" -eq 0 ] || { echo "expected skip exit 0, got $status: $output"; false; }
+  [[ "$output" == *"still alive"* ]] || { echo "no skip line: $output"; false; }
+  [ ! -s "$HOME/l.jsonl" ] || { echo "a skipped batch appended rows"; false; }
+  [ "$(cat "$lock")" = "$holder" ] || { echo "the skipping run clobbered the holder's lock"; false; }
+}
+
+@test "lock: a stale lock (dead pid) is taken over and released on exit" {
+  fake_env
+  lock="$BATS_TEST_TMPDIR/stale.lock"
+  echo 999999 > "$lock"
+  run timeout 30 env AUTH_TS_OUT="$HOME/s2.jsonl" AUTH_TS_KC_ACCT=x AUTH_TS_LOCK="$lock" \
+    bash "$SUBJ" --once
+  [ -s "$HOME/s2.jsonl" ] || { echo "stale lock blocked the batch (status=$status): $output"; false; }
+  [ ! -e "$lock" ] || { echo "lock not released on exit: $(cat "$lock")"; false; }
+}
+
 @test "sampler: read-only — it never writes a credential or calls the network" {
   # The property that makes it safe to schedule at all. Asserted against the source, because the
   # behavioural version would require a keychain we are willing to have mutated.
@@ -164,7 +245,7 @@ print("OK")'
   p="$(printf '%s' "$wrapper" | sed -n 's/.*export PATH="\([^"]*\)".*/\1/p')"
   [ -n "$p" ] || { echo "could not extract PATH from: $wrapper"; false; }
   p="${p//\$HOME/$REAL_HOME}"
-  for b in security shasum cut date sed head wc python3 ps mkdir dirname; do
+  for b in security shasum cut date sed head wc python3 ps mkdir dirname mktemp sleep cat rm; do
     found=0
     IFS=: read -ra dirs <<< "$p"
     for d in "${dirs[@]}"; do [ -x "$d/$b" ] && { found=1; break; }; done

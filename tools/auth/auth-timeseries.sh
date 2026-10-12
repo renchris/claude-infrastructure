@@ -40,11 +40,56 @@ declare -a DIRS=(
 )
 svc() { printf 'Claude Code-credentials-%s' "$(printf '%s' "$1" | shasum -a 256 | cut -c1-8)"; }
 
+# Skip-if-previous-run-alive, --once only. Under load a batch can outlive the 5-min StartInterval
+# (one run wedged 2h43m on a D-state ps), and launchd would otherwise stack a second on top.
+# Single-pid /bin/ps by absolute path: fast, and immune to a PATH-shadowed census stub.
+SNAP=""; OWN_LOCK=0; LOCK=""
+# shellcheck disable=SC2329  # invoked indirectly: `trap cleanup EXIT`
+cleanup() {
+  [ -n "$SNAP" ] && rm -f "$SNAP"
+  if [ "$OWN_LOCK" = 1 ] && [ "$(cat "$LOCK" 2>/dev/null)" = "$$" ]; then rm -f "$LOCK"; fi
+}
+trap cleanup EXIT
+if [ "$ONCE" = 1 ]; then
+  LOCK="${AUTH_TS_LOCK:-$HOME/.claude/state/auth-timeseries.lock}"
+  mkdir -p "$(dirname "$LOCK")" 2>/dev/null || true
+  prev="$(cat "$LOCK" 2>/dev/null || true)"
+  case "$prev" in ''|*[!0-9]*) prev="" ;; esac
+  if [ -n "$prev" ] && [ "$prev" != "$$" ] && kill -0 "$prev" 2>/dev/null; then
+    case "$(/bin/ps -o command= -p "$prev" 2>/dev/null)" in
+      *auth-timeseries*)
+        echo "auth-timeseries: previous run (pid $prev) still alive — skipping this batch" >&2
+        exit 0 ;;
+    esac
+  fi
+  echo "$$" > "$LOCK" 2>/dev/null && OWN_LOCK=1
+fi
+SNAP="$(mktemp "${TMPDIR:-/tmp}/auth-ts-ps.XXXXXX" 2>/dev/null)" || SNAP=""
+
+# ONE bounded process-table snapshot per batch. Under load (~400-600) `ps -wwEo` can sit in
+# uninterruptible wait for minutes, and a caller that waits on it hangs with it — the 2h43m
+# wedge. A D-state ps cannot be reaped by kill, so: bound it, kill it, and NEVER wait on it
+# (disown, so not even shell exit waits). Returns 0 only for a census that completed cleanly.
+census() {
+  [ -n "$SNAP" ] || return 1
+  "${AUTH_TS_PS_BIN:-ps}" -wwEo command= > "$SNAP" 2>/dev/null &
+  local pid=$! ticks=0 lim=$(( ${AUTH_TS_PS_TIMEOUT_S:-15} * 5 ))
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$ticks" -ge "$lim" ]; then
+      kill -KILL "$pid" 2>/dev/null; disown "$pid" 2>/dev/null
+      return 1
+    fi
+    sleep 0.2; ticks=$((ticks + 1))
+  done
+  wait "$pid"   # already exited, so this reaps a finished child and cannot block
+}
+
 END=$(( $(date +%s) + DUR ))
 rows_now() { if [ -f "$OUT" ]; then wc -l < "$OUT" 2>/dev/null || echo 0; else echo 0; fi; }
 BEFORE=$(rows_now)
 while [ "$(date +%s)" -lt "$END" ]; do
   TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  if census; then CENSUS_OK=1; else CENSUS_OK=0; fi
   for row in "${DIRS[@]}" "unsuffixed:"; do
     name="${row%%:*}"; dir="${row#*:}"
     if [ -z "$dir" ]; then s="Claude Code-credentials"; else s="$(svc "$dir")"; fi
@@ -54,8 +99,12 @@ while [ "$(date +%s)" -lt "$END" ]; do
     # truth was 0). Matches BOTH spellings: the .bin/claude symlink AND the native claude.exe
     # it points at — claude-accounts' own concurrency() misses the latter, which is exactly
     # the blindness under investigation, so this instrument must not inherit it.
-    if [ -n "$dir" ]; then
-      n=$(ps -wwEo command= 2>/dev/null | CFG="$dir" python3 -c '
+    # No census this batch ⇒ n stays EMPTY, which the record writes as null: 0 would be a false
+    # "no live sessions" claim.
+    if [ -z "$dir" ]; then n=0
+    elif [ "$CENSUS_OK" != 1 ]; then n=""
+    else
+      n=$(CFG="$dir" python3 -c '
 import sys,os,re
 d=os.environ["CFG"]; n=0
 for line in sys.stdin:
@@ -67,8 +116,8 @@ for line in sys.stdin:
     if {"-p","--print","--version"} & set(head): continue
     m=re.findall(r"CLAUDE_CONFIG_DIR=(\S+)",line)
     if (m[-1].rstrip("/") if m else os.path.expanduser("~/.claude"))==d: n+=1
-print(n)')
-    else n=0; fi
+print(n)' < "$SNAP")
+    fi
     # mdat = the keychain item's WRITE time. Distinct from a token change, and the
     # discriminator the token hashes alone cannot give: a write that leaves the hashes
     # identical is a re-write (a second writer replaying what it already held), while a
@@ -86,7 +135,7 @@ print(n)')
 import sys,json,os,hashlib
 raw=sys.stdin.read().strip()
 rec={"ts":os.environ["TS"],"acct":os.environ["ACCT"],"svc":os.environ["SVC"],
-     "n_live":int(os.environ["NLIVE"]),"mdat":os.environ.get("MDAT") or None}
+     "n_live":int(os.environ["NLIVE"]) if os.environ.get("NLIVE") else None,"mdat":os.environ.get("MDAT") or None}
 if not raw:
     rec["state"]="NO_ITEM"
 else:
