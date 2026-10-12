@@ -1,3 +1,6 @@
+---
+status: in-progress
+---
 # Accounts board + router freshness — implementation plan
 
 Scope (frozen): make the SessionStart account board and the `claude` launcher's routing see auth changes (logout, /login, relogin) and live-session counts within about 30 s, and stop fleet-wide `concurrency-unmeasured` abstentions caused by a starved `ps`. Hard limits: no diff to the SessionStart hooks, the launcher or the keepwarm plist; zero model tokens; no change to the usage-endpoint cadence; no change to what the cache `ts` means.
@@ -470,6 +473,13 @@ Helper (define once per shell):
 ```
 bg(){ out=$(bats "$1" 2>&1); n=$(printf '%s\n' "$out" | sed -n 's/^1\.\.\([0-9]*\)$/\1/p'); ok=$(printf '%s\n' "$out" | grep -c '^ok '); echo "$1 plan=$n ok=$ok"; [ -n "$n" ] && [ "$n" = "$ok" ] || printf '%s\n' "$out" | grep -A5 '^not ok' | head -40; }
 ```
+
+### W0 — DONE 2026-10-11 (compacted)
+
+- Worktree: the recycled session's own `~/Development/.worktrees/feat/accounts-freshness` on `feat/accounts-freshness` (in place of T0.1's path). `BASE=dcf7c53d6`; plan copied in as `6edb6b4e5`.
+- 0063 is free (0060-0062 taken).
+- Baselines (load 367): hook p50 180.1 ms, max 265.1 ms; `--rank` real 1.72-1.81 s; interactive `none` with 3+ `concurrency-unmeasured`: 11 on 2026-10-11; `ps UNAVAILABLE` lines: 121 on 2026-10-11 (UTC dates).
+- Learnings: at load ~420 `ps -axo` itself did not return within 120 s, and a probe sat in `os.waitpid` reaping a killed `ps` for minutes — the sweep's `ps` can outlive its 10 s timeout by far more than the timeout. The native census measured 14-119 ms with 362 tty processes and 83 argv reads at load 449. cc-bats refuses admission while 2 other roots run and load is high; the runner retries rather than waives. The launch-path open set measured identical on BASE and HEAD, and is wider than §5 lists: `{accounts.json, assign ledger, cache, util log}`, plus `route.jsonl` for `--route`.
 
 ### W0 — setup and baselines (L)
 
