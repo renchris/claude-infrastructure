@@ -55,6 +55,17 @@ mk_superseded() { # $1=successor pid  $2=successor pane
   [[ "$output" == *"Say it in pane 647 instead"* ]] || { echo "$output"; false; }
 }
 
+@test "a FLOAT superseded_by_pid (123.0) is not a pid — parity with python's isinstance(v, int)" {
+  # jq alone cannot tell 123 from 123.0 by value; the guard judges the literal. python rejected the
+  # float, so the supersession arm stays silent and a CROSS-account tombstone still blocks the source.
+  # Accepting it instead would hand `kill -0 <pid>.0` a non-pid, fail it, and wave the source through.
+  other="$BATS_TEST_TMPDIR/cfg-tertiary"; mkdir -p "$other/projects/$SLUG"
+  printf '{"handed_off_to":"%s","superseded_by_pid":%d.0,"superseded_by_pane":"647","ts":"x"}\n' "$other" "$$" > "$TOMB"
+  CC_HOG_SELF_PID=4194100 run bash "$HOOK" <<<"$INPUT"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"RETIRED SOURCE"* ]] || { echo "$output"; false; }
+}
+
 @test "the LIVE copy (this claude pid IS the successor) is acquitted — the primary path is not broken" {
   mk_superseded "$$" 647
   CC_HOG_SELF_PID="$$" run bash "$HOOK" <<<"$INPUT"

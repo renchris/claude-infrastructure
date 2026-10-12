@@ -97,6 +97,18 @@ beat() {
 
 sp() { bash -c '. "$1"; shift; "$@"' _ "$SP" "$@"; }
 
+# The REAL producer (hooks/session-beat.sh) detaches a prompt/stop beat's write and returns at once
+# (load-hook-timeouts-2026-10-11 item 7); only `limited` is synchronous. A case that reads a detached
+# beat waits for it, bounded by 45 s, inside the reader's 60 s freshness contract.
+wait_kind() { # <sid> <kind>
+  local n=0
+  while [ "$n" -lt 450 ]; do
+    [ "$(jq -r '.kind // empty' "$CC_BEAT_DIR/$1.json" 2>/dev/null)" = "$2" ] && return 0
+    sleep 0.1; n=$((n + 1))
+  done
+  echo "no $2 beat for $1 within 45 s" >&2; return 1
+}
+
 # Extract one shell function's text from a script, by NAME. awk, not sed: a sed address containing
 # `{` is subject to bash brace expansion at the call site (`{/,/^}` expands to two words), which
 # silently handed sed two malformed scripts and made three cases fail for a harness reason. The point
@@ -574,7 +586,7 @@ EOF
   # readers sample their own zone, so both censuses report 0 — the ACTIVE term deleted by a clock.
   printf '%s' '{"session_id":"tzr","cwd":"/tmp","prompt":"hello"}' \
     | env TZ=America/Chicago CC_BEAT_DIR="$CC_BEAT_DIR" /bin/bash "$REPO/hooks/session-beat.sh" prompt
-  [ "$(jq -r '.kind' "$CC_BEAT_DIR/tzr.json")" = prompt ]
+  wait_kind tzr prompt
   [ -n "$(jq -r '.lstart' "$CC_BEAT_DIR/tzr.json")" ]
   run env -u CC_SP_ACTIVE_OVERRIDE TZ=UTC bash -c '. "$1"; cc_sp_active' _ "$SP"
   [ "$status" -eq 0 ]
@@ -623,6 +635,7 @@ EOF
   # filter deciding, not a fixture that was never countable in the first place.
   printf '%s' '{"session_id":"lim","cwd":"/tmp","prompt":"hello"}' \
     | env CC_BEAT_DIR="$CC_BEAT_DIR" /bin/bash "$REPO/hooks/session-beat.sh" prompt
+  wait_kind lim prompt
   run env -u CC_SP_ACTIVE_OVERRIDE bash -c '. "$1"; cc_sp_active' _ "$SP"
   [ "$status" -eq 0 ]
   [ "$output" = 1 ]
@@ -632,7 +645,7 @@ EOF
   # direction that re-creates the phantom — whereas this can only ever fail closed.
   printf '%s' '{"session_id":"lim","cwd":"/tmp"}' \
     | env CC_BEAT_DIR="$CC_BEAT_DIR" /bin/bash "$REPO/hooks/session-beat.sh" zzz
-  [ "$(jq -r '.kind' "$CC_BEAT_DIR/lim.json")" = zzz ]
+  wait_kind lim zzz
   run env -u CC_SP_ACTIVE_OVERRIDE bash -c '. "$1"; cc_sp_active' _ "$SP"
   [ "$status" -eq 0 ]
   [ "$output" = 0 ]

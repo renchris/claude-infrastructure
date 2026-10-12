@@ -86,7 +86,10 @@ TOMB="$(dirname "$TP")/$SID.HANDOFF.json"
 # Every tombstone field this hook can need, in ONE read. The per-field rules are the ones the python3
 # reads applied: handed_off_to and superseded_by_pane print any truthy value (`x or ""`), phase only a
 # string, superseded_by_pid only an integer — a JSON boolean included, since python's bool IS an int
-# and `kill -0 True` then fails open. Unparseable, empty or multi-document ⇒ every field "".
+# and `kill -0 True` then fails open. "Integer" is judged on the LITERAL (`tojson`, which jq 1.7
+# keeps as written): `. == floor` would accept 123.0, which python's isinstance(v, int) rejected. A
+# dict- or list-valued handed_off_to still prints as JSON where python printed its repr; no writer
+# produces one. Unparseable, empty or multi-document ⇒ every field "".
 TARGET=""; SUP_PID=""; SUP_PANE=""; PHASE=""
 if [ -n "$HOG_JQ" ]; then
   hog_split "$("$HOG_JQ" -rs '
@@ -94,7 +97,7 @@ if [ -n "$HOG_JQ" ]; then
                 elif type == "string" then . elif . == true then "True" elif type == "number" then tostring
                 else tojson end;
     def pid: if type == "boolean" then (if . then "True" else "False" end)
-             elif type == "number" and . == floor then tostring else "" end;
+             elif type == "number" and (tojson | test("^-?[0-9]+$")) then tostring else "" end;
     if length == 1 then .[0] else error("not one document") end
     | [(.handed_off_to | truthy), (.superseded_by_pid | pid), (.superseded_by_pane | truthy),
        (.phase | if type == "string" then . else "" end)] | @tsv' "$TOMB" 2>/dev/null)" \

@@ -253,15 +253,98 @@ slow_ps_stub() {
   [ $(( $(date +%s) - t )) -le 60 ]      # the reader's freshness contract
 }
 
-@test "OFF PATH: a lock left by a killed worker costs one bounded wait, never the beat, and is cleared" {
+@test "OFF PATH: a lock left by a killed worker costs no wait, never the beat, and is cleared" {
   # The per-sid lock serializes a session's detached read-modify-writes (a slow prompt worker must
   # not let a later Stop worker write back a stale operatorT). A worker killed by its HARD timeout
-  # while holding it must not cost every later beat.
-  mkdir -p "$CC_BEAT_DIR/.lk1.lock"
+  # while holding it must not cost every later beat. The lock names its holder's pid; a dead one is
+  # taken over at once.
+  mkdir -p "$CC_BEAT_DIR"
+  /bin/sh -c 'exit 0' & dead=$!; wait "$dead"
+  ln -s "$dead" "$CC_BEAT_DIR/.lk1.lk"
   emit '{"session_id":"lk1","cwd":"/tmp","prompt":"hi"}' prompt
-  n=0; while [ -e "$CC_BEAT_DIR/.lk1.lock" ] && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
-  [ ! -e "$CC_BEAT_DIR/.lk1.lock" ]
+  n=0; while [ -L "$CC_BEAT_DIR/.lk1.lk" ] && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+  [ ! -L "$CC_BEAT_DIR/.lk1.lk" ]
   [ "$(jq -r '.who' "$CC_BEAT_DIR/lk1.json")" = operator ]
+}
+
+@test "OFF PATH: a LIVE holder's lock is never taken over or removed; the waiter still writes its beat" {
+  # At load ~600 a read-modify-write can outlast any guessed bound, so a clock-only takeover would
+  # let two writers run at once and the first one's unlock delete the second's lock. A live holder
+  # (this test's own shell) is waited for — half the HARD timeout, 2 s here — and then the waiter
+  # writes without the lock and leaves the holder's in place.
+  mkdir -p "$CC_BEAT_DIR"
+  ln -s "$$" "$CC_BEAT_DIR/.lv1.lk"
+  printf '%s' '{"session_id":"lv1","cwd":"/tmp","prompt":"hi"}' | CC_BEAT_TIMEOUT=4 /bin/bash "$BEAT" prompt
+  wait_beat lv1
+  [ "$(jq -r '.who' "$CC_BEAT_DIR/lv1.json")" = operator ]
+  [ "$(readlink "$CC_BEAT_DIR/.lv1.lk")" = "$$" ]
+}
+
+@test "OFF PATH: the HARD-timeout timer leaves no orphaned sleep behind" {
+  # The timer subshell is stopped once the beat lands; its own `sleep` is this hook's child too and
+  # must go with it, or every beat leaves a CC_BEAT_TIMEOUT-long sleep running (two per turn).
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  printf '#!/bin/bash\necho $$ >> "$BEAT_SLEEP_PIDS"\nexec /bin/sleep "$@"\n' > "$BATS_TEST_TMPDIR/bin/sleep"
+  chmod +x "$BATS_TEST_TMPDIR/bin/sleep"
+  export BEAT_SLEEP_PIDS="$BATS_TEST_TMPDIR/sleep.pids"
+  printf '%s' '{"session_id":"sl1","cwd":"/tmp","prompt":"hi"}' \
+    | env PATH="$BATS_TEST_TMPDIR/bin:$PATH" CC_BEAT_TIMEOUT=37 /bin/bash "$BEAT" prompt
+  wait_beat sl1
+  n=0; while [ ! -s "$BEAT_SLEEP_PIDS" ] && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
+  [ -s "$BEAT_SLEEP_PIDS" ]      # non-vacuity: the timer's sleep went through the stub
+  n=0; live=1
+  while [ "$n" -lt 100 ]; do
+    live=0
+    while read -r p; do kill -0 "$p" 2>/dev/null && live=1; done < "$BEAT_SLEEP_PIDS"
+    [ "$live" = 0 ] && break
+    sleep 0.1; n=$((n + 1))
+  done
+  [ "$live" = 0 ] || { echo "orphaned sleep: $(cat "$BEAT_SLEEP_PIDS")" >&2; false; }
+}
+
+@test "OFF PATH: a beat that logs nothing creates no log file and no log directory under HOME" {
+  # stop-failure-marker's footprint pin (SA9) diffs $HOME: the log is created only by the one line a
+  # worker logs (a superseded beat), never by every run.
+  emit "$(jq -nc '{session_id:"lg1",cwd:"/tmp",prompt:"hi"}')" prompt
+  CC_BEAT_SYNC=1 emit_nowait '{"session_id":"lg2","cwd":"/tmp","prompt":"hi"}' prompt
+  [ -s "$CC_BEAT_DIR/lg2.json" ]
+  [ ! -e "$HOME/.claude/logs" ]
+}
+
+# ══ SYNC MODE — the `limited` kind (stop-failure-marker's death path) and CC_BEAT_SYNC=1 ═════════
+#
+# stop-failure-marker pipes into this hook, so its parent is not claude and its readers need the flip
+# on disk when it returns. The `ps` stub stalls the walk's first call for 1 s: a detached beat cannot
+# be on disk when the hook returns, a synchronous one must be.
+
+stall1_ps_stub() {
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  printf '#!/bin/bash\nif [ -n "${BEAT_SLOW_PS:-}" ] && mkdir "$BEAT_SLOW_PS" 2>/dev/null; then sleep 1; fi\nexec /bin/ps "$@"\n' \
+    > "$BATS_TEST_TMPDIR/bin/ps"
+  chmod +x "$BATS_TEST_TMPDIR/bin/ps"
+}
+
+@test "SYNC: a limited beat is ON DISK when the hook returns, with no poll" {
+  stall1_ps_stub
+  printf '%s' '{"session_id":"sy1","cwd":"/tmp"}' \
+    | env PATH="$BATS_TEST_TMPDIR/bin:$PATH" BEAT_SLOW_PS="$BATS_TEST_TMPDIR/stalled1" CC_BEAT_TIMEOUT=30 \
+      /bin/bash "$BEAT" limited
+  [ -d "$BATS_TEST_TMPDIR/stalled1" ]           # non-vacuity: the walk did stall
+  [ "$(jq -r '.kind' "$CC_BEAT_DIR/sy1.json")" = limited ]
+}
+
+@test "SYNC: CC_BEAT_SYNC=1 makes any kind synchronous; without it a prompt beat is detached" {
+  stall1_ps_stub
+  printf '%s' '{"session_id":"sy2","cwd":"/tmp","prompt":"hi"}' \
+    | env PATH="$BATS_TEST_TMPDIR/bin:$PATH" BEAT_SLOW_PS="$BATS_TEST_TMPDIR/stalled2" CC_BEAT_TIMEOUT=30 \
+      CC_BEAT_SYNC=1 /bin/bash "$BEAT" prompt
+  [ "$(jq -r '.who' "$CC_BEAT_DIR/sy2.json")" = operator ]
+  # differential: the same call without the switch returns before its stalled walk can write
+  printf '%s' '{"session_id":"sy3","cwd":"/tmp","prompt":"hi"}' \
+    | env PATH="$BATS_TEST_TMPDIR/bin:$PATH" BEAT_SLOW_PS="$BATS_TEST_TMPDIR/stalled3" CC_BEAT_TIMEOUT=30 \
+      /bin/bash "$BEAT" prompt
+  [ ! -e "$CC_BEAT_DIR/sy3.json" ]
+  wait_beat sy3
 }
 
 @test "the who regex runs in bash and agrees with the reader's jq test on multi-line and unicode prompts" {

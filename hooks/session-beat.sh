@@ -41,34 +41,46 @@
 # bash, NOT with scripts/lib/detach.sh: that helper starts /usr/bin/python3 to call setsid, which
 # would put back on every prompt the interpreter start this change exists to remove. `set -m` gives
 # the worker its own process GROUP — the property detach.sh's header names, immunity to a group
-# SIGKILL of the hook — stdin is /dev/null, output goes to a log, and once this hook exits the worker
-# is reparented to launchd, out of any parent-tree walk. `async: true` in settings.json was the other
-# way off the path and was rejected: it has no enforced timeout, so slow runs pile up. The worker
-# keeps its own HARD timeout instead (P8_TIMEOUT, below, 20 s). The ≤60 s freshness contract still
-# holds: the write lands within that bound of the prompt, not at its instant.
+# SIGKILL of the hook — stdin is /dev/null, stdout and stderr go to /dev/null, and once this hook
+# exits the worker is reparented to launchd, out of any parent-tree walk. The one line a worker does
+# log (a superseded beat, see ORDER BY EVENT) is appended to $CC_BEAT_LOG by that branch alone, so a
+# beat that logs nothing creates no log file and no log directory. `async: true` in settings.json was
+# the other way off the path and was rejected: it has no enforced timeout, so slow runs pile up. The
+# worker keeps its own HARD timeout instead (P8_TIMEOUT, below, 20 s). The ≤60 s freshness contract
+# still holds: the write lands within that bound of the prompt, not at its instant.
 # ONE DEPENDENCY THIS ADDS: the ancestry walk now starts from $PPID after the hook has exited, so it
 # relies on the hook's parent being claude itself (2,315 of 2,331 PPID lines in
 # logs/teammate-lifecycle.log, 2026-10-12). Under a non-exec `/bin/sh -c "hook; :"` shim, or a
 # `claude -p` that exits before the worker reaches `ps`, the beat records the dead parent's pid with
 # an empty lstart (the foreground hook used to record claude's pid and lstart there).
 #
+# SYNC MODE — the `limited` kind, or CC_BEAT_SYNC=1. hooks/stop-failure-marker.sh writes the
+# `limited` beat by PIPING into this hook (`printf | bash session-beat.sh limited`), so the hook's
+# parent there is stop-failure-marker, not claude: detached, the walk would find claude only if that
+# parent happened to outlive the worker's first `ps`. That caller is on the death path, not the prompt
+# path, and its readers (cc-limited, spawn-presence) need the flip on disk when it returns. So it runs
+# beat() in the FOREGROUND under the 3 s cap it always had (the bound stop-failure-marker's own
+# header budgets for). CC_BEAT_SYNC=1 is the same switch for any other non-prompt-path caller.
+#
 # bash 3.2-safe. jq required (absent ⇒ silent no-op, same as session-register.sh).
 set -uo pipefail
 
 input=$(cat 2>/dev/null)
-
-# The worker's HARD timeout. 3 s while it ran in the foreground, where every second of it was the
-# turn's; detached, the bound only has to keep workers from piling up and land the beat inside the
-# reader's 60 s freshness window. 20 s does both. A 3 s cap was measured too tight once detached:
-# at load ~600 (2026-10-12) tests/session-beat.bats, whose walk climbs a deep bats ancestry, saw 7
-# of its detached beats never written within 20 s under the 3 s cap.
-P8_TIMEOUT="${CC_BEAT_TIMEOUT:-20}"
 
 [ "${CC_BEAT:-on}" = off ] && exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
 # kind: explicit arg wins (Stop passes `stop`); default is a prompt beat.
 kind="${1:-prompt}"
+sync=0
+{ [ "$kind" = limited ] || [ "${CC_BEAT_SYNC:-}" = 1 ]; } && sync=1
+
+# The worker's HARD timeout. 3 s in the foreground (SYNC MODE), where every second of it is the
+# caller's; detached, the bound only has to keep workers from piling up and land the beat inside the
+# reader's 60 s freshness window. 20 s does both. A 3 s cap was measured too tight once detached:
+# at load ~600 (2026-10-12) tests/session-beat.bats, whose walk climbs a deep bats ancestry, saw 7
+# of its detached beats never written within 20 s under the 3 s cap.
+if [ "$sync" = 1 ]; then P8_TIMEOUT="${CC_BEAT_TIMEOUT:-3}"; else P8_TIMEOUT="${CC_BEAT_TIMEOUT:-20}"; fi
 
 # ONE jq start for every payload field. Line 1 is "<sid> TAB <ms> TAB <cwd>" as @tsv; everything
 # after the first newline is the RAW prompt, so the `who` regex sees exactly the text the old
@@ -111,7 +123,7 @@ if [ "$kind" = prompt ]; then
 fi
 
 beat() {
-  local pane dir tmp prev prevOp prevT now seq cpid lstart walk c i lock held
+  local pane dir tmp prev prevOp prevT now seq cpid lstart walk c i lock held me owner
   # KITTY_WINDOW_ID last, for the same measured no-address class session-register.sh:127 carries:
   # without it a kitty-hosted session's beat records pane "" while its stop-failure marker records
   # a real pane, and a reader comparing the two sees a disagreement that is purely this gap.
@@ -151,19 +163,28 @@ beat() {
   # prompt beat finished before the turn could reach Stop); detached, a slow prompt worker can still
   # be walking `ps` when the Stop worker starts, and two unserialized read-modify-writes would let the
   # later one write back a STALE operatorT — erasing the presence this file exists to keep. The walk
-  # above stays outside the lock; only the short read-modify-write below is inside it. Bounded and
-  # self-healing: past 1-2 s the worker takes the lock over (a holder that slow is presumed killed by
-  # the HARD timeout), so a dead holder costs its successors one wait, never a beat. Only a worker
-  # that HOLDS the lock removes it; one that merely gave up waiting would delete a live sibling's.
-  # The wait is bounded by the CLOCK, not by a try count: at load ~600 each `sleep` fork can take a
-  # second; with a 20-try bound the suite's stale-lock beat never landed in 45 s (2026-10-12).
-  lock="$dir/.$sid.lock"; i=$SECONDS; held=0
-  while :; do
-    if mkdir "$lock" 2>/dev/null; then held=1; break; fi
-    if [ $((SECONDS - i)) -ge 2 ]; then
-      rmdir "$lock" 2>/dev/null; mkdir "$lock" 2>/dev/null && held=1
-      break
+  # above stays outside the lock; only the short read-modify-write below is inside it.
+  # The lock is a SYMLINK whose target is the holder's pid: `ln -s` creates it atomically WITH its
+  # owner, so there is no window in which a lock exists that names nobody. A holder is taken over only
+  # when `kill -0` says it is DEAD (killed by the HARD timeout), so a dead holder costs its successors
+  # nothing, and a live but slow one (at load ~600 a read-modify-write can outlast any guessed bound)
+  # is never robbed. A live holder is waited for up to half the HARD timeout, by the CLOCK, not a try
+  # count (at load ~600 each `sleep` fork can take a second); past that the worker writes WITHOUT the
+  # lock rather than lose the beat, and leaves the holder's lock alone. A lock is removed only while
+  # it still names its remover. Residual: two workers that see the same dead holder at the same
+  # instant can both take over; that needs three beats of one sid in flight plus a killed holder.
+  # $me is this worker's own pid (bash 3.2 has no BASHPID): `exec` makes sh the comsub child itself.
+  me=$(exec /bin/sh -c 'echo "$PPID"')
+  lock="$dir/.$sid.lk"; i=$SECONDS; held=0
+  while [ -n "$me" ]; do
+    if ln -sn "$me" "$lock" 2>/dev/null; then held=1; break; fi
+    owner=$(readlink "$lock" 2>/dev/null)
+    case "$owner" in *[!0-9]*) owner="" ;; esac
+    if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null \
+       && [ "$(readlink "$lock" 2>/dev/null)" = "$owner" ] && rm -f "$lock" 2>/dev/null; then
+      continue
     fi
+    [ $((SECONDS - i)) -ge $((P8_TIMEOUT / 2)) ] && break
     sleep 0.1
   done
 
@@ -200,9 +221,11 @@ beat() {
         rm -f "$tmp" 2>/dev/null
       fi
     fi
-    printf 'session-beat: sid=%s %s beat (event %s) superseded by the newer beat on disk (event %s)\n' \
-      "$sid" "$kind" "$tms" "$prevT" >>"$_log" 2>/dev/null
-    [ "$held" = 1 ] && rmdir "$lock" 2>/dev/null
+    # The only line a worker logs, and the only place the log (and its directory) is created.
+    { [ -d "${_log%/*}" ] || mkdir -p "${_log%/*}"; } 2>/dev/null \
+      && printf 'session-beat: sid=%s %s beat (event %s) superseded by the newer beat on disk (event %s)\n' \
+           "$sid" "$kind" "$tms" "$prevT" >>"$_log" 2>/dev/null
+    [ "$held" = 1 ] && [ "$(readlink "$lock" 2>/dev/null)" = "$me" ] && rm -f "$lock" 2>/dev/null
     return 0
   fi
 
@@ -221,28 +244,43 @@ beat() {
   else
     rm -f "$tmp" 2>/dev/null
   fi
-  [ "$held" = 1 ] && rmdir "$lock" 2>/dev/null
+  [ "$held" = 1 ] && [ "$(readlink "$lock" 2>/dev/null)" = "$me" ] && rm -f "$lock" 2>/dev/null
   return 0
 }
 
-# The worker: beat() under its HARD timeout, in its own process group, stdin /dev/null, output to a
-# log (see OFF THE PROMPT PATH above). The hook returns as soon as the worker is forked; nothing the
-# worker does can hold this hook's stdout pipe open, so the harness reads EOF at once.
 _log="${CC_BEAT_LOG:-$HOME/.claude/logs/session-beat.log}"
-[ -d "${_log%/*}" ] || mkdir -p "${_log%/*}" 2>/dev/null || _log=/dev/null
-set -m
-(
-  set +m
+
+# beat() under its HARD timeout; returns once the beat is written or killed.
+# The timer stops its OWN `sleep` on TERM: a timer killed outright would orphan a P8_TIMEOUT-long
+# `sleep` on every beat, about two per turn per session. `_dead` closes the gap between forking the
+# `sleep` and learning its pid: a TERM landing there is remembered and the `sleep` is stopped on the
+# next line instead of outliving the timer.
+capped_beat() {
+  local _w _k
   beat >/dev/null 2>&1 &
   _w=$!
-  # The timer stops its OWN `sleep` on TERM: a SIGKILLed timer would orphan a P8_TIMEOUT-long
-  # `sleep` on every beat, about two per turn per session.
-  ( trap 'kill "${_s:-}" 2>/dev/null; exit 0' TERM
+  ( _s=""; _dead=0
+    trap '_dead=1; [ -n "$_s" ] && kill "$_s" 2>/dev/null' TERM
     sleep "$P8_TIMEOUT" & _s=$!
+    [ "$_dead" = 1 ] && { kill "$_s" 2>/dev/null; exit 0; }
     wait "$_s" && kill -9 "$_w" 2>/dev/null ) >/dev/null 2>&1 &
   _k=$!
   wait "$_w" >/dev/null 2>&1
   kill "$_k" >/dev/null 2>&1
   wait "$_k" >/dev/null 2>&1
-) </dev/null >>"$_log" 2>&1 &
+}
+
+if [ "$sync" = 1 ]; then
+  capped_beat </dev/null >/dev/null 2>&1
+  exit 0
+fi
+
+# The worker: capped_beat in its own process group, stdin, stdout and stderr all /dev/null (see OFF
+# THE PROMPT PATH above). The hook returns as soon as the worker is forked; nothing the worker does
+# can hold this hook's stdout pipe open, so the harness reads EOF at once.
+set -m
+(
+  set +m
+  capped_beat
+) </dev/null >/dev/null 2>&1 &
 exit 0
