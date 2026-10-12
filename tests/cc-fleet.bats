@@ -700,8 +700,11 @@ STUB
   # 52 since 2026-10-10: com.claude.chime-player (the resident chime player hooks/notify.sh enqueues
   # to), `staged` in launchd/staged/ until the operator runs 51-chime-player-activate.sh; row, plist
   # and count in one land.
-  if [ "$n" != 52 ]; then
-    echo "manifest declares $n labels, expected 52 — if a plist was legitimately added or retired,"
+  # 53 since 2026-10-11: com.claude.accounts-local (ACCOUNTS_BOARD_FRESHNESS D9, the 20 s local auth +
+  # live-session refresh), `staged` in launchd/staged/ until the operator runs migrations/0063;
+  # row, plist and count in one land.
+  if [ "$n" != 53 ]; then
+    echo "manifest declares $n labels, expected 53 — if a plist was legitimately added or retired,"
     echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
     grep -vE '^[[:space:]]*(#|$)' "$M" | cut -d'|' -f1 | sed 's/[[:space:]]//g; s/^/  /'
     return 1

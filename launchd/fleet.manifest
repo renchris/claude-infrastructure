@@ -443,6 +443,16 @@ com.chrisren.screenshot-clipboard  | retired | 0   | -    | 12 | 18-fleet-activa
 com.chrisren.verify-2114-archive   | run    | 0    | auto | 12 | 18-fleet-activate.sh
 com.chrisren.watch-claude-code-2118-hold | run | 0 | auto | 7 | 18-fleet-activate.sh
 com.claude.accounts-keepwarm        | staged | 180  | ~/.claude/logs/accounts-keepwarm.out.log | -  | 36-start-latency-router-activate.sh
+# ── com.claude.accounts-local (2026-10-11, docs/plans/ACCOUNTS_BOARD_FRESHNESS.md D9) ──────────────
+# keepwarm's local sibling: every 20 s (plus a login.keychain-db WatchPaths accelerator) it refreshes
+# auth state and live sessions from this machine only, and never writes the cache `ts`, so keepwarm's
+# usage sweeps are never silenced. `staged`: SSOT in launchd/staged/, loaded only by the operator's
+# c10 step. evidence is the STAMP, not `auto`: the pass touches it on every tick, the disabled one
+# included, while its stdout stays near-empty when healthy. activate names the migration, following
+# the 0051/0058 rows; cc-fleet resolves recover_cmd under docs/activation/pending-activation/, where
+# the migration does not live, so the real command is this one:
+#   bash ~/Development/claude-infrastructure/migrations/0063-accounts-local-job.sh --confirm launchd
+com.claude.accounts-local           | staged | 20   | ~/.claude/logs/accounts-local.stamp | -  | 0063-accounts-local-job.sh
 # ── com.claude.permission-harvest (2026-09-08, docs/plans/PERMISSION_HARVEST.md §5) ────────────────
 # THE ONLY WEEKLY ROW IN THIS FILE, and the reason interval_s above now says what `0` means. `0` is
 # the DAILY sentinel (86400 x 3 = 72 h), so declaring it here would report a job that ran on Sunday

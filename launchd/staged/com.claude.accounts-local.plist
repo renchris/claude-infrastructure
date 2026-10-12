@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.accounts-local — STAGED, NOT LOADED. The 20 s local refresh for the account board and
+  the router: auth state and live sessions, read from this machine only, with no call to the usage
+  endpoint (docs/plans/ACCOUNTS_BOARD_FRESHNESS.md D9).
+
+  WHY IT LIVES IN launchd/staged/ AND NOT launchd/. A plist in launchd/ is COPIED to
+  ~/Library/LaunchAgents by install.sh and macOS arms it at the next login. launchd/staged/ is
+  outside install.sh's non-recursive glob, so this job starts only when the operator runs
+  migration 0063 (tests/install-staged-plist.bats).
+
+  THE `ts` CONTRACT. `claude-accounts --local-refresh` never writes the cache's `ts`. `ts` is the
+  age of the last USAGE sweep, and keepwarm's `--max-age 90` reads it to decide whether to sweep.
+  A local pass every 20 s that moved `ts` would make the cache look forever fresh and silence every
+  keepwarm sweep, so the usage figures would stop moving while the board looked current. The local
+  pass writes its own overlay and touches its own stamp, nothing else.
+
+  FLOOR PLUS ACCELERATOR. StartInterval 20 is the guarantee: the board's auth and session columns
+  are never more than ~20 s plus one pass behind. WatchPaths on login.keychain-db is only an
+  accelerator, so a /login shows up in seconds rather than at the next tick. It cannot be the
+  guarantee: `man launchd.plist` calls WatchPaths race-prone (an event between two loads is lost),
+  and FSEvents went dark on this machine on 2026-09-08, during which no WatchPaths job fired at all.
+  ThrottleInterval 10 stops a burst of keychain writes from relaunching it back to back.
+
+  ProcessType Standard, with no LowPriorityIO: keepwarm's 2026-09-24 note records a PRI-4 tick that
+  sat 3h40m in dyld under load. A local pass is well under a second of CPU, so the clamp buys
+  nothing and costs freshness.
+
+  A DEADLINE THAT COVERS STARTUP. `perl -e 'alarm N; exec ...'` arms the kernel timer before the
+  exec, and a pending alarm survives execve, so a stall in exec, dyld or imports ends with exit 142
+  at 120 s instead of holding the job (launchd never overlaps ticks).
+
+  KILL SWITCHES, in ~/.claude/state/accounts-local/ (CC_ACCOUNTS_LOCAL_DIR overrides):
+    off              the pass prints `local: disabled`, touches the stamp, and does nothing else
+                     (the env form is CC_ACCOUNTS_LOCAL=off)
+    first-read-off   turns off the first-read path (bin/claude-accounts documents it)
+    census-ps        the live-session census uses ps instead of the native libproc census
+  The stamp, ~/.claude/logs/accounts-local.stamp, is the liveness evidence (fleet.manifest).
+
+  Install: bash ~/Development/claude-infrastructure/migrations/0063-accounts-local-job.sh --confirm launchd
+  Uninstall: launchctl bootout gui/$(id -u)/com.claude.accounts-local; rm ~/Library/LaunchAgents/com.claude.accounts-local.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.claude.accounts-local</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-c</string>
+    <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec /usr/bin/perl -e 'alarm shift; exec @ARGV or die "exec: $!"' 120 "$HOME/.claude/bin/claude-accounts" --local-refresh</string>
+  </array>
+
+  <key>StartInterval</key>
+  <integer>20</integer>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>WatchPaths</key>
+  <array>
+    <string>/Users/chrisren/Library/Keychains/login.keychain-db</string>
+  </array>
+
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>ProcessType</key>
+  <string>Standard</string>
+
+  <key>StandardOutPath</key>
+  <string>/Users/chrisren/.claude/logs/accounts-local.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/chrisren/.claude/logs/accounts-local.err.log</string>
+</dict>
+</plist>

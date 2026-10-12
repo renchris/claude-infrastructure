@@ -45,3 +45,4 @@ logs/cc-reaper.log|16|4|rotate
 history.jsonl|16|-|rotate
 logs/auth-timeseries.jsonl|32|-|rotate: already in rotate-autonomy-logs.sh DEFAULT_TARGETS (25 MiB, keep 8) — a breach here means the rotator is not running, not that the store is misbehaving
 logs/account-utilization.jsonl|32|-|rotate: already in rotate-autonomy-logs.sh DEFAULT_TARGETS (25 MiB, keep 8)
+logs/accounts-local.*.log|5|-|append-only diagnostics; truncate with : > ~/.claude/logs/accounts-local.out.log (the stamp is the liveness evidence)
