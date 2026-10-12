@@ -314,8 +314,13 @@ _surviving_member_pid() {  # <member-name> → echoes the pid of a still-running
     # This was `ps -axo pid=,ppid=,command=`, the whole table, and a full-table ps comes in waves
     # where it blocks uninterruptibly for minutes while single-pid `ps -p` stays fast. The awk below
     # only ever accepts a row whose command carries claude.exe, so the candidates are the processes
-    # NAMED claude/claude.exe (`pgrep -x` matches the executable basename, measured: teammates read
-    # `claude.exe`), each read alone in the same row format — the awk and its verdict are unchanged.
+    # NAMED claude/claude.exe, each read alone in the same row format — the awk is unchanged. `pgrep
+    # -x` matches the basename of argv[0] AS INVOKED, not the executable (measured: all 37 live
+    # claude processes had p_comm `claude.exe`, yet `-x claude.exe` found 4 and `-x claude` 33 —
+    # `.bin/claude` vs `.../claude.exe`), so both spellings are listed; a title-rewritten argv[0]
+    # (the daemon's `claude bg-spare`) is no longer a candidate. One observable difference: on
+    # several same-name matches the FIRST pid wins, and pgrep lists ascending pid where `ps -ax`
+    # sorted by tty first, so the pid logged or paged may differ — never whether a survivor is found.
     # `-a` keeps ANCESTORS in the match list: macOS pgrep drops them by default, and the old table
     # did not. The numeric guard drops anything else a pgrep variant might print beside the pid; it
     # is `[[ =~ ]]`, not a case arm, because bash 3.2 misparses a case inside `$( )`.

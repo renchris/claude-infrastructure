@@ -114,6 +114,7 @@ no_full_table() { ! grep -qE -- '(^| )(-A|-e|-a[^ ]*|-x[^ ]*)( |$)' "$PS_LOG" 2>
 # ── W1 ───────────────────────────────────────────────────────────────────────────────────────────
 @test "W1: a hanging full-table ps does not stall the walk — assignee id inside the bound" {
   assignee_rows
+  # shellcheck disable=SC1090  # $LIB is resolved from the repo root in setup
   source "$LIB"
   local t0=$SECONDS
   run agent_is_assignee
@@ -126,6 +127,7 @@ no_full_table() { ! grep -qE -- '(^| )(-A|-e|-a[^ ]*|-x[^ ]*)( |$)' "$PS_LOG" 2>
 
 @test "W1 control: a lead reads as not-assignee, just as fast" {
   lead_rows
+  # shellcheck disable=SC1090  # $LIB is resolved from the repo root in setup
   source "$LIB"
   local t0=$SECONDS
   run agent_is_assignee
@@ -142,6 +144,7 @@ no_full_table() { ! grep -qE -- '(^| )(-A|-e|-a[^ ]*|-x[^ ]*)( |$)' "$PS_LOG" 2>
 # ── W2 ───────────────────────────────────────────────────────────────────────────────────────────
 @test "W2: a brief that merely MENTIONS the three flags is still a non-match" {
   prose_lead_rows
+  # shellcheck disable=SC1090  # $LIB is resolved from the repo root in setup
   source "$LIB"
   local t0=$SECONDS
   run agent_assignee_argv
@@ -155,6 +158,7 @@ no_full_table() { ! grep -qE -- '(^| )(-A|-e|-a[^ ]*|-x[^ ]*)( |$)' "$PS_LOG" 2>
 # ── W3 ───────────────────────────────────────────────────────────────────────────────────────────
 @test "W3: the walk stops at pid 1 and never asks ps about it" {
   lead_rows
+  # shellcheck disable=SC1090  # $LIB is resolved from the repo root in setup
   source "$LIB"
   run agent_assignee_argv
   [ "$status" -eq 1 ]
@@ -165,6 +169,7 @@ no_full_table() { ! grep -qE -- '(^| )(-A|-e|-a[^ ]*|-x[^ ]*)( |$)' "$PS_LOG" 2>
 
 @test "W3: the walk stops at maxhop — an assignee one hop past the bound is not reached" {
   deep_rows 8                                    # hop 8 = the 9th process; default maxhop is 8
+  # shellcheck disable=SC1090  # $LIB is resolved from the repo root in setup
   source "$LIB"
   run agent_assignee_argv
   [ "$status" -eq 1 ]
@@ -177,8 +182,20 @@ no_full_table() { ! grep -qE -- '(^| )(-A|-e|-a[^ ]*|-x[^ ]*)( |$)' "$PS_LOG" 2>
   [ "$(ps_p_calls)" -eq 9 ]
 }
 
+@test "W3: a caller's strict-mode IFS does not cut the walk short" {
+  # Unpinned, `read` put the whole row in the pid field under IFS=$'\n\t' and the walk stopped at
+  # hop 1 — not-an-assignee for a real assignee, while the seam (awk's own FS) still said yes.
+  assignee_rows
+  # shellcheck disable=SC1090  # $LIB is resolved from the repo root in setup
+  source "$LIB"
+  IFS=$'\n\t' run agent_is_assignee
+  [ "$status" -eq 0 ]
+  [ "$output" = "tm@session-t1" ]
+}
+
 @test "W3: a vanished ancestor ends the walk cleanly (ps -p misses)" {
   fixture " 1000  1001 bash /x/hook.sh"          # 1001 is gone
+  # shellcheck disable=SC1090  # $LIB is resolved from the repo root in setup
   source "$LIB"
   run agent_assignee_argv
   [ "$status" -eq 1 ]
@@ -188,15 +205,16 @@ no_full_table() { ! grep -qE -- '(^| )(-A|-e|-a[^ ]*|-x[^ ]*)( |$)' "$PS_LOG" 2>
 # ── W4 ───────────────────────────────────────────────────────────────────────────────────────────
 @test "W4: the CC_WF_PSTABLE_FILE seam is unchanged and never calls ps" {
   assignee_rows
-  export CC_WF_PSTABLE_FILE="$PS_FIXTURE"
+  # shellcheck disable=SC1090  # $LIB is resolved from the repo root in setup
   source "$LIB"
-  run agent_assignee_argv
+  CC_WF_PSTABLE_FILE="$PS_FIXTURE" run agent_assignee_argv
   [ "$status" -eq 0 ]
   [ "$output" = "tm@session-t1" ]
   [ ! -s "$PS_LOG" ]
 }
 
 @test "W4 parity: per-hop rows give the seam's verdict on every fixture" {
+  # shellcheck disable=SC1090  # $LIB is resolved from the repo root in setup
   source "$LIB"
   local f seam walk
   for f in assignee_rows lead_rows prose_lead_rows nested_print_rows "deep_rows 3" "deep_rows 8"; do
@@ -213,6 +231,7 @@ no_full_table() { ! grep -qE -- '(^| )(-A|-e|-a[^ ]*|-x[^ ]*)( |$)' "$PS_LOG" 2>
   # ancestor, so the verdict matches the full-table walk this replaced. Changing that is a policy
   # call for agent_is_assignee's consumers, and this test is where it would show.
   nested_print_rows
+  # shellcheck disable=SC1090  # $LIB is resolved from the repo root in setup
   source "$LIB"
   run agent_is_assignee
   [ "$status" -eq 0 ]
@@ -225,6 +244,7 @@ no_full_table() { ! grep -qE -- '(^| )(-A|-e|-a[^ ]*|-x[^ ]*)( |$)' "$PS_LOG" 2>
 load_survivor_fn() {
   sed -n '/^_surviving_member_pid() {/,/^}/p' "$REPO/hooks/teammate-auto-shutdown.sh" > "$BATS_TEST_TMPDIR/fn.sh"
   [ -s "$BATS_TEST_TMPDIR/fn.sh" ]
+  # shellcheck disable=SC1091  # generated above at test time; the ship gate runs shellcheck without -x
   source "$BATS_TEST_TMPDIR/fn.sh"
 }
 
@@ -241,6 +261,9 @@ load_survivor_fn() {
   [ "$output" = "2002" ]
   [ $((SECONDS - t0)) -lt "$BOUND_S" ]
   no_full_table
+  # The candidate filter is the scan's whole narrowing, so its exact form is pinned: both argv[0]
+  # spellings, ancestors kept. The stub ignores the pattern, so only this line can catch a drift.
+  grep -qxF -- "-a -x claude|claude.exe" "$PGREP_LOG"
 }
 
 @test "W6: a brief that merely MENTIONS the member is not a survivor" {
@@ -249,6 +272,11 @@ load_survivor_fn() {
   load_survivor_fn
   run _surviving_member_pid tm
   [ -z "$output" ]
+  # Positive control: the brief row WAS fetched and judged — an empty answer from a broken pgrep or
+  # a hung full-table read would also be empty, and would prove nothing.
+  [ -s "$PGREP_LOG" ]
+  grep -qE -- '-p 2000$' "$PS_LOG"
+  no_full_table
 }
 
 @test "W6: a survivor that is the hook's own ANCESTOR is still seen (pgrep drops those by default)" {
@@ -261,9 +289,8 @@ load_survivor_fn() {
 
 @test "W6: the seam still wins — CC_WF_PSTABLE_FILE set ⇒ no pgrep, no ps" {
   fixture " 2002     1 $CCBIN --agent-id tm@session-t1 --agent-name tm --team-name session-t1"
-  export CC_WF_PSTABLE_FILE="$PS_FIXTURE"
   load_survivor_fn
-  run _surviving_member_pid tm
+  CC_WF_PSTABLE_FILE="$PS_FIXTURE" run _surviving_member_pid tm
   [ "$output" = "2002" ]
   [ ! -s "$PS_LOG" ]
   [ ! -s "$PGREP_LOG" ]

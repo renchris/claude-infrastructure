@@ -41,7 +41,9 @@
 # the walk stays maxhop deep, so a `claude -p` nested under a teammate still reads as the teammate
 # exactly as it did before (tests/agent-identity-walk.bats pins it), and the CC_WF_PSTABLE_FILE seam
 # keeps meaning what production does. `read -r … <<<` splits the row, never `set -- $row`: argv
-# carries briefs, and an unquoted expansion would glob them against the hook's cwd.
+# carries briefs, and an unquoted expansion would glob them against the hook's cwd. Its IFS is pinned
+# to the whitespace awk's default FS splits on: under a caller's strict-mode `IFS=$'\n\t'` the whole
+# row landed in the pid field and the walk stopped after one hop (measured on /bin/bash 3.2).
 _agent_ancestry_rows() { # <start-pid> <maxhop> → one `pid ppid command` row per hop, start first
   local cur="${1:-}" max="${2:-8}" h=0 row _ai_pid _ai_pp _ai_rest
   case "$max" in ''|*[!0-9]*) max=8 ;; esac
@@ -50,7 +52,7 @@ _agent_ancestry_rows() { # <start-pid> <maxhop> → one `pid ppid command` row p
     row="$(ps -o pid=,ppid=,command= -p "$cur" 2>/dev/null)" || return 0
     [ -n "$row" ] || return 0
     printf '%s\n' "$row"
-    read -r _ai_pid _ai_pp _ai_rest <<<"$row"
+    IFS=$' \t' read -r _ai_pid _ai_pp _ai_rest <<<"$row"   # pinned: a caller's IFS must not split rows
     cur="$_ai_pp"; h=$((h + 1))
   done
   return 0
