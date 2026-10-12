@@ -141,7 +141,7 @@ _goal_scan() {
     cf="$dir/$key.scan"
     if [ -f "$cf" ]; then
       # `read -d ''` reads the multi-line condition to EOF and returns 1 there, hence the `|| true`.
-      { IFS= read -r c_tp; read -r c_ino c_off c_st; IFS= read -r -d '' c_cond; } < "$cf" 2>/dev/null || true
+      { IFS= read -r c_tp; read -r c_ino c_off c_st; IFS= read -r -d '' c_cond; } 2>/dev/null < "$cf" || true
       case "$c_off" in ''|*[!0-9]*) c_off="" ;; esac
       case "$c_st" in live|off|none) ;; *) c_off="" ;; esac
       if [ -n "$c_off" ] && [ "$c_tp" = "$tp" ] && [ "$c_ino" = "$ino" ] && [ "$c_off" -le "$sz" ]; then

@@ -1298,6 +1298,6 @@ load_now() { # wall-clock seconds with a fraction
   s="$(load_now)"; printf '%s' "$in" | "$DRAIN" prompt > "$BATS_TEST_TMPDIR/warm.out"; e="$(load_now)"
   warm="$(awk -v s="$s" -v e="$e" 'BEGIN { printf "%.3f", e - s }')"
   [ ! -s "$BATS_TEST_TMPDIR/warm.out" ] || false        # empty inbox, nudge already told: silent
-  echo "# empty-inbox drain: cold ${cold}s, warm ${warm}s, bound ${bound}s (10 execs ${cal}s; load: $(sysctl -n vm.loadavg 2>/dev/null || uptime))" >&3
+  echo "# empty-inbox drain: cold ${cold}s, warm ${warm}s, bound ${bound}s (10 execs ${cal}s; load: $(/usr/sbin/sysctl -n vm.loadavg 2>/dev/null || uptime))" >&3
   awk -v w="$warm" -v b="$bound" 'BEGIN { exit !(w < b) }' || false
 }

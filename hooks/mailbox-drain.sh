@@ -94,7 +94,7 @@ own_pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; own_pane="${own_pane##*:}"
 # ONE PARSE (2026-10-11, docs/research/load-hook-timeouts-2026-10-11/DESIGN.md item 6). Every field
 # this hook reads from stdin, in one jq: it used to be one jq per field (two on every prompt, three
 # on post-tool, four on a custody drain), on a hook that runs on every prompt and every tool call.
-# The row is joined on TAB and split in bash, NOT read with `IFS=$'\t' read`: tab is IFS whitespace,
+# The row is joined on TAB and split in bash, NOT split with a tab-IFS read: tab is IFS whitespace,
 # so consecutive tabs collapse and an empty session_id would shift transcript_path into its slot.
 # Not `@tsv` either, which would rewrite a backslash in a path as `\\`; a tab inside a value becomes
 # a space, which no session id, transcript path or cwd carries.

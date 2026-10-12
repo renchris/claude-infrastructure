@@ -215,7 +215,7 @@ _mbx_unlock() {
 # runs through here, and two execs per read was most of an empty-inbox drain's cursor cost.
 _mbx_read_int_file() {
   local f="$1" v=""
-  [ -f "$f" ] && { IFS= read -r v < "$f" 2>/dev/null || true; }
+  [ -f "$f" ] && { IFS= read -r v 2>/dev/null < "$f" || true; }
   v="${v//[!0-9]/}"
   _mbx_int "$v"
 }

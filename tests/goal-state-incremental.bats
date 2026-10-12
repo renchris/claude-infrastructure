@@ -50,7 +50,7 @@ agree() {
 }
 cached_offset() { sed -n '2p' "$CC_GOAL_SCAN_DIR"/*.scan | awk '{print $2}'; }
 file_size() { wc -c < "$1" | tr -d ' '; }
-inode() { ls -i "$1" | awk '{print $1}'; }
+inode() { stat -f %i "$1"; }
 
 @test "append: the incremental answer equals a full scan after every append" {
   { prose; filler 30; } > "$T";                agree 1 || false
