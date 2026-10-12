@@ -27,6 +27,8 @@ setup() {
   export CC_WAKE_STAMP_DIR="$BATS_TEST_TMPDIR/stamps"
   export CC_WAKE_LOG="$BATS_TEST_TMPDIR/wake.jsonl"
   export CC_WAKE_POLL_S=1
+  export CC_WAKE_SF_DIR="$BATS_TEST_TMPDIR/sf";        mkdir -p "$CC_WAKE_SF_DIR"
+  export CC_WAKE_RECON_DIR="$BATS_TEST_TMPDIR/recon";  mkdir -p "$CC_WAKE_RECON_DIR/sessions" "$CC_WAKE_RECON_DIR/facts"
   SDIR="$BATS_TEST_TMPDIR/sessions"; mkdir -p "$SDIR"
   export CC_WAKE_SESSIONS_DIRS="$SDIR"
   unset CC_PANE_ID ITERM_SESSION_ID KITTY_WINDOW_ID CC_WAKE CC_WAKE_FROM
@@ -60,7 +62,22 @@ teardown() {
 
 write_session() { # <status> [procStart] [sessionId]
   jq -n --arg st "$1" --arg ps "${2:-$START}" --arg s "${3:-$SESS}" --arg sock "$SOCK" --argjson pid "$TPID" \
-    '{pid:$pid,sessionId:$s,procStart:$ps,status:$st,messagingSocketPath:$sock,version:"2.1.284"}' > "$SDIR/$TPID.json"
+    '{pid:$pid,sessionId:$s,procStart:$ps,status:$st,messagingSocketPath:$sock,cwd:"/w/x",version:"2.1.284"}' > "$SDIR/$TPID.json"
+}
+
+# limited <resetsAt> [transcript] [marker-transcript-path] — the state a usage-limit death leaves: a
+# `limited` beat, the StopFailure marker line naming the account and transcript, and a transcript
+# whose last assistant record is the API error carrying quotaLimits.resetsAt. The sessions dir is
+# $BATS_TEST_TMPDIR/sessions, so the config dir — and the derived transcript home — is $BATS_TEST_TMPDIR.
+limited() {
+  TP="${2:-$BATS_TEST_TMPDIR/projects/-w-x/$SESS.jsonl}"
+  jq -n --arg s "$SESS" --argjson pid "$TPID" '{sid:$s,pid:$pid,kind:"limited",t:2}' > "$CC_BEAT_DIR/$SESS.json"
+  mkdir -p "$(dirname "$TP")"
+  { jq -nc '{type:"assistant",message:{content:"working"}}'
+    jq -nc --argjson r "$1" '{type:"assistant",isApiErrorMessage:true,quotaLimits:{resetsAt:$r,rateLimitType:"seven_day"}}'; } > "$TP"
+  jq -nc --arg s "$SESS" --arg tp "${3-$TP}" \
+    '{ts:"2026-10-11T03:33:23Z",error:"rate_limit",account:"next",session_id:$s,transcript_path:$tp}' \
+    >> "$CC_WAKE_SF_DIR/rate_limit__next.jsonl"
 }
 
 # start_server [ack] — a listener that records everything it receives into $RECV; with `ack` it then
@@ -163,6 +180,133 @@ no_frame() { [ ! -s "$RECV" ]; }
   run "$WAKE" "$PANE" --no-wait
   [ "$status" -eq 1 ]
   [[ "$output" == *"turn is in flight"* ]] || false
+  no_frame
+}
+
+@test "W3: every refused-busy reason names the beat kind, so the log shows which beats exist" {
+  start_server
+  write_session busy
+  run "$WAKE" "$PANE" --no-wait
+  [[ "$output" == *"refused-busy"* ]] || false
+  [[ "$output" == *"beat=stop"* ]] || false
+  write_session idle
+  jq -n --arg s "$SESS" --argjson pid "$TPID" '{sid:$s,pid:$pid,kind:"prompt",t:1}' > "$CC_BEAT_DIR/$SESS.json"
+  run "$WAKE" "$PANE" --no-wait
+  [[ "$output" == *"beat=prompt"* ]] || false
+  no_frame
+}
+
+# ── W3b: a limited session is woken only once its reset has passed (decision bd6d3c14c1e8) ─────────
+@test "W3b: a limited beat 600 s past its reset is woken, and the frame carries the resume clause" {
+  start_server
+  limited "$(( $(date +%s) - 600 ))"
+  run "$WAKE" "$PANE" --no-wait
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=sent"* ]] || false
+  sleep 0.3
+  [[ "$(tail -n1 "$RECV" | jq -r .message.content)" == *"continue the task"* ]] || false
+}
+
+@test "W3b: inside reset+180 s it is refused-limited and nothing is sent" {
+  start_server
+  limited "$(( $(date +%s) - 60 ))"
+  run "$WAKE" "$PANE" --no-wait
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"refused-limited"* ]] || false
+  no_frame
+}
+
+@test "W3b: no transcript anywhere means the reset is unknown — refused-limited, nothing sent" {
+  start_server
+  limited "$(( $(date +%s) - 600 ))"
+  rm -f "$TP"
+  run "$WAKE" "$PANE" --no-wait
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"refused-limited"* ]] || false
+  no_frame
+}
+
+@test "W3b: a healthy assistant record after the death means the limited beat is stale — refused" {
+  start_server
+  limited "$(( $(date +%s) - 600 ))"
+  jq -nc '{type:"assistant",message:{content:"back"}}' >> "$TP"
+  run "$WAKE" "$PANE" --no-wait
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"refused-limited"* ]] || false
+  [[ "$output" == *"stale"* ]] || false
+  no_frame
+}
+
+@test "W3b: the transcript path comes from the sid's StopFailure marker line before any derivation" {
+  start_server
+  limited "$(( $(date +%s) - 600 ))" "$BATS_TEST_TMPDIR/elsewhere/proj/$SESS.jsonl"
+  [ ! -e "$BATS_TEST_TMPDIR/projects/-w-x/$SESS.jsonl" ]      # the cwd derivation cannot find it
+  run "$WAKE" "$PANE" --no-wait
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=sent"* ]] || false
+}
+
+@test "W3b: a transcript under a child project dir of the session's cwd is found by the prefix fallback" {
+  # 66936177 / c56c729c: the sessions file says /…/personal, the transcript lives under
+  # -…-personal-launch-film-2026. The marker line names no usable path here.
+  start_server
+  limited "$(( $(date +%s) - 600 ))" "$BATS_TEST_TMPDIR/projects/-w-x-launch-film/$SESS.jsonl" ""
+  run "$WAKE" "$PANE" --no-wait
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=sent"* ]] || false
+}
+
+@test "W3b: an open rail record in IN-FLIGHT, or past PRE-MOVE, refuses; a closed one does not" {
+  start_server
+  limited "$(( $(date +%s) - 600 ))"
+  REC="$CC_WAKE_RECON_DIR/sessions/$SESS.json"
+  jq -n '{phase:"PRE-MOVE",substate:"IN-FLIGHT",terminal:null}' > "$REC"
+  run "$WAKE" "$PANE" --no-wait
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"refused-limited"* ]] || false
+  [[ "$output" == *"rail"* ]] || false
+  jq -n '{phase:"MOVED",substate:null,terminal:null}' > "$REC"
+  run "$WAKE" "$PANE" --no-wait
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"rail"* ]] || false
+  no_frame
+  jq -n '{phase:"PRE-MOVE",substate:"IN-FLIGHT",terminal:{kind:"CLOSED"}}' > "$REC"   # control
+  run "$WAKE" "$PANE" --no-wait
+  [ "$status" -eq 0 ]
+}
+
+@test "W3b: a <sid>.HANDOFF.json beside the transcript refuses — the session was handed off" {
+  start_server
+  limited "$(( $(date +%s) - 600 ))"
+  echo '{}' > "$(dirname "$TP")/$SESS.HANDOFF.json"
+  run "$WAKE" "$PANE" --no-wait
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"HANDOFF"* ]] || false
+  no_frame
+}
+
+@test "W3b: a live rail fact saying the account is limited again refuses; a contradicted one does not" {
+  start_server
+  limited "$(( $(date +%s) - 600 ))"
+  F="$CC_WAKE_RECON_DIR/facts/next.7d.json"
+  jq -n --argjson r "$(( $(date +%s) + 3600 ))" '{acct:"next",scope:"7d",resets_at:$r,contradicted:false}' > "$F"
+  run "$WAKE" "$PANE" --no-wait
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"refused-limited"* ]] || false
+  [[ "$output" == *"limited again"* ]] || false
+  no_frame
+  jq -n --argjson r "$(( $(date +%s) + 3600 ))" '{acct:"next",scope:"7d",resets_at:$r,contradicted:true}' > "$F"
+  run "$WAKE" "$PANE" --no-wait
+  [ "$status" -eq 0 ]
+}
+
+@test "W3b: a limited beat from a different pid is refused-busy" {
+  start_server
+  limited "$(( $(date +%s) - 600 ))"
+  jq -n --arg s "$SESS" '{sid:$s,pid:1,kind:"limited",t:2}' > "$CC_BEAT_DIR/$SESS.json"
+  run "$WAKE" "$PANE" --no-wait
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"different pid"* ]] || false
   no_frame
 }
 

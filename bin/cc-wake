@@ -28,7 +28,17 @@
 #   W3 idle        TWO independent producers agree: the vendor says status=="idle", AND our presence
 #                  beat's last kind is `stop` for that same live process; and no permission prompt is
 #                  pending (/tmp/cc-permission-pending/<sid>.json). Unknown is not idle.
-#   W4 mail        the target's inbox keyset holds unacked mail. Waking a session to read nothing is a
+#   W3b limited    a last beat of `limited` (the turn died on a usage limit) is wakeable only once that
+#                  limit has reset (decision bd6d3c14c1e8): the reset is read from the session's own
+#                  death record (quotaLimits.resetsAt in its transcript, found through the sid's last
+#                  StopFailure marker line), and the wake waits for reset + CC_WAKE_LIMIT_GRACE_S (180 s,
+#                  the rail's WAKE_AFTER_S 120 + its jitter 60). It refuses with `refused-limited` while
+#                  the reset is unread, still ahead, or stale (a healthy turn followed the death); while
+#                  the rail holds an open recovery record in PLANNED/IN-FLIGHT or past PRE-MOVE, or a
+#                  <sid>.HANDOFF.json sits beside the transcript (a move in progress or done — a mail
+#                  turn would split the transcript); and while a live, non-contradicted rail fact says
+#                  the account is limited again (the rail's own headroom skip, lr_recon/__main__.py).
+#   W4 mail       the target's inbox keyset holds unacked mail. Waking a session to read nothing is a
 #                  wasted turn — the alarm that always fires carries no information.
 #   W5 rate        at most one wake per session per CC_WAKE_MIN_GAP_S (default 120 s).
 # The payload is FIXED text (a count and one instruction). Mail bodies never ride this channel: they
@@ -44,6 +54,7 @@
 # Kill switch: CC_WAKE=off → exit 1 before anything is read or sent.
 # Test seams: CC_REGISTRY_DIR · CC_MAILBOX_DIR · CC_WAKE_SESSIONS_DIRS (space-separated sessions dirs)
 #             CC_BEAT_DIR · CC_PERMPEND_DIR · CC_WAKE_STAMP_DIR · CC_WAKE_LOG · CC_WAKE_POLL_S
+#             CC_WAKE_SF_DIR (StopFailure markers) · CC_WAKE_RECON_DIR (the rail's recon root)
 set -uo pipefail
 
 [ "${CC_WAKE:-on}" = off ] && { echo "cc-wake: disabled (CC_WAKE=off)" >&2; exit 1; }
@@ -142,14 +153,93 @@ for k in "${SJ%.json}".*.key; do
 done
 
 # ── W3 idle — two independent producers, plus no pending permission prompt ───────────────────────
-VSTATUS="$(jq -r '.status // empty' "$SJ")"
-[ "$VSTATUS" = idle ] || finish 1 refused-busy "vendor status is '${VSTATUS:-<none>}', not idle"
+# Every refused-busy reason names the beat kind (`beat=…`), so the log can show which beats exist.
 BEAT="$(cb_last_beat "$SID" 2>/dev/null || true)"
-[ -n "$BEAT" ] || finish 1 refused-busy "no presence beat for $SID — idle cannot be proven"
-[ "$(printf '%s' "$BEAT" | jq -r '.kind // empty')" = stop ] || finish 1 refused-busy "last presence beat is not a Stop — a turn is in flight"
-[ "$(printf '%s' "$BEAT" | jq -r '(.pid // "")|tostring')" = "$PID" ] || finish 1 refused-busy "presence beat names a different pid"
+BKIND="$(printf '%s' "$BEAT" | jq -r '.kind // empty' 2>/dev/null)"; BKIND="${BKIND:-none}"
+VSTATUS="$(jq -r '.status // empty' "$SJ")"
+[ "$VSTATUS" = idle ] || finish 1 refused-busy "vendor status is '${VSTATUS:-<none>}', not idle (beat=$BKIND)"
+[ -n "$BEAT" ] || finish 1 refused-busy "no presence beat for $SID — idle cannot be proven (beat=none)"
+case "$BKIND" in
+  stop|limited) ;;
+  *) finish 1 refused-busy "last presence beat is not a Stop — a turn is in flight (beat=$BKIND)" ;;
+esac
+[ "$(printf '%s' "$BEAT" | jq -r '(.pid // "")|tostring')" = "$PID" ] || finish 1 refused-busy "presence beat names a different pid (beat=$BKIND)"
 PP="${CC_PERMPEND_DIR:-/tmp/cc-permission-pending}/$SID.json"
-[ -f "$PP" ] && finish 1 refused-busy "a permission prompt is pending ($PP) — a message would queue behind a human's answer"
+[ -f "$PP" ] && finish 1 refused-busy "a permission prompt is pending ($PP) — a message would queue behind a human's answer (beat=$BKIND)"
+
+# ── W3b limited — wake only after the limit has reset (decision bd6d3c14c1e8) ────────────────────
+LIMRESET=""
+if [ "$BKIND" = limited ]; then
+  # Every read of another store is bounded: under load a slow tail|jq must abstain, never hang a sender.
+  _tb=""
+  for c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+           /opt/homebrew/bin/timeout /usr/local/bin/timeout /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$c" ] && [ -x "$c" ] && { _tb="$c"; break; }
+  done
+  _bounded() { if [ -n "$_tb" ]; then "$_tb" -k 2 "${CC_WAKE_READ_TIMEOUT_S:-4}" "$@"; else "$@"; fi; }
+  SF_DIR="${CC_WAKE_SF_DIR:-${STOP_FAILURE_MARKER_DIR:-$HOME/.claude/autonomy/stop-failure}}"
+  RECON="${CC_WAKE_RECON_DIR:-${LR_RECON_ROOT:-${LR_STATE_DIR:-$HOME/.reso/limit-recover}/recon}}"
+
+  # The sid's LAST StopFailure marker line names its account and transcript (3 of 49 marker paths
+  # differ from the cwd derivation, so it is read first).
+  # shellcheck disable=SC2016  # the inner shell's program text: $1/$2 must reach it unexpanded
+  MARK="$(_bounded /bin/bash -c 'cat "$1"/*.jsonl 2>/dev/null | grep -F -- "$2" | jq -nRc --arg s "$2" "$3"' _ "$SF_DIR" "$SID" \
+            '[inputs | fromjson? | objects | select(.session_id == $s)] | sort_by(.ts // "") | last // empty' 2>/dev/null || true)"
+  MACCT="$(printf '%s' "$MARK" | jq -r '.account // empty' 2>/dev/null)"
+  TP="$(printf '%s' "$MARK" | jq -r '.transcript_path // empty' 2>/dev/null)"
+  if [ -z "$TP" ] || [ ! -f "$TP" ]; then
+    _cfg="$(dirname "$(dirname "$SJ")")"
+    _enc="$(jq -r '.cwd // empty' "$SJ" 2>/dev/null | sed 's/[^A-Za-z0-9-]/-/g')"
+    TP=""
+    if [ -n "$_enc" ]; then
+      if [ -f "$_cfg/projects/$_enc/$SID.jsonl" ]; then
+        TP="$_cfg/projects/$_enc/$SID.jsonl"
+      else
+        # A transcript under a child project dir of the session's cwd (66936177, c56c729c). The glob
+        # lists a ~17K-entry dir, so it is time-bounded like every other read here.
+        # shellcheck disable=SC2016
+        TP="$(_bounded /bin/bash -c 'for f in "$1"/projects/"$2"*/"$3".jsonl; do [ -f "$f" ] && { printf "%s" "$f"; break; }; done' \
+                _ "$_cfg" "$_enc" "$SID" 2>/dev/null || true)"
+      fi
+    fi
+  fi
+  [ -n "$TP" ] && [ -f "$TP" ] || finish 1 refused-limited "last turn hit a usage limit and no transcript was found — the reset time is unreadable"
+  [ -e "$(dirname "$TP")/$SID.HANDOFF.json" ] \
+    && finish 1 refused-limited "a $SID.HANDOFF.json sits beside the transcript — the session was handed off; a mail turn would split it"
+
+  REC="$RECON/sessions/$SID.json"
+  if [ -f "$REC" ]; then
+    _rs="$(jq -r 'if .terminal == null and ((.phase // "") != "PRE-MOVE" or ((.substate // "") | IN("PLANNED", "IN-FLIGHT")))
+                   then "\(.phase // "?")/\(.substate // "-")" else empty end' "$REC" 2>/dev/null || echo unreadable)"
+    [ -n "$_rs" ] && finish 1 refused-limited "the rail holds an open recovery for this session ($_rs) — a mail turn during a move splits the transcript"
+  fi
+
+  # The death record: the last assistant record, if it is the API error, carries the vendor's reset.
+  # shellcheck disable=SC2016
+  _dr="$(_bounded /bin/bash -c 'tail -c "$2" "$1" 2>/dev/null | jq -Rr "$3" 2>/dev/null | tail -1' _ "$TP" "${CC_WAKE_TAIL_BYTES:-131072}" \
+          'fromjson? | select(type == "object" and .type == "assistant")
+           | if .isApiErrorMessage == true
+             then "\(((.quotaLimits | objects | .resetsAt) // "") | tostring) \(((.quotaLimits | objects | .rateLimitType) // "") | tostring)"
+             else "healthy" end' 2>/dev/null || true)"
+  [ "$_dr" = healthy ] && finish 1 refused-limited "a healthy turn followed the usage-limit death — the limited beat is stale"
+  LIMRESET="${_dr%% *}"; LIMRESET="${LIMRESET%%.*}"; _rtype="${_dr#* }"
+  case "$LIMRESET" in ''|*[!0-9]*) finish 1 refused-limited "last turn hit a usage limit and its reset time is unreadable from the transcript" ;; esac
+  _now="$(date +%s)"; _grace="${CC_WAKE_LIMIT_GRACE_S:-180}"
+  _hm() { date -u -r "$1" +%H:%MZ 2>/dev/null || echo "@$1"; }
+  [ "$_now" -ge $(( LIMRESET + _grace )) ] \
+    || finish 1 refused-limited "last turn hit a usage limit that resets $(_hm "$LIMRESET"); wakeable from $(_hm $(( LIMRESET + _grace )))"
+
+  # Headroom: the rail skips its own wake while a live fact says the account is limited again.
+  [ -n "$MACCT" ] || finish 1 refused-limited "no StopFailure marker names this session's account — headroom cannot be checked"
+  case "$_rtype" in five_hour) _scope=5h ;; seven_day) _scope=7d ;; *) _scope="" ;; esac
+  _f="$RECON/facts/$MACCT.$_scope.json"
+  if [ -n "$_scope" ] && [ -f "$_f" ]; then
+    _fr="$(jq -r --argjson now "$_now" \
+             'if (.contradicted != true) and ((.resets_at // 0) > $now) then (.resets_at | floor | tostring) else empty end' \
+             "$_f" 2>/dev/null || true)"
+    [ -n "$_fr" ] && finish 1 refused-limited "account $MACCT is limited again until $(_hm "$_fr") (rail fact $(basename "$_f"))"
+  fi
+fi
 
 # ── W4 something to read ─────────────────────────────────────────────────────────────────────────
 # PRE-BIRTH RULE (2026-10-04, as in bin/cc-await-ping): a line whose origin stamp predates the target
@@ -188,6 +278,7 @@ if [ -z "$FROM" ]; then
 fi
 FROM="$(printf '%s' "${FROM:-unknown}" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-64)"
 TEXT="📬 peer-wake: you have $N unread peer message(s) in your inbox (woken by cc-wake for $FROM; nothing was typed into your input line). They arrive as context at your next tool boundary. Run this once to surface them, then act on them: cc-mail --pane $PANE --since 2d --full"
+[ -n "$LIMRESET" ] && TEXT="$TEXT Your last turn stopped on a usage limit that reset at $(_hm "$LIMRESET"); after the mail, continue the task you were on."
 FRAME="$(jq -nc --arg sid "$SID" --arg from "cc-wake:$FROM" --arg t "$TEXT" \
   '{type:"user",session_id:$sid,from:$from,message:{role:"user",content:$t},priority:"next"}')"
 
