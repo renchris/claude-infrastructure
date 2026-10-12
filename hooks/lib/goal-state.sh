@@ -122,7 +122,7 @@ _goal_grep_from() {
 # Globals, not stdout, so the caller keeps the answer without a subshell.
 _goal_scan() {
   local tp="$1" sz="" ino="" min wmin dir="" key cf="" c_tp="" c_ino="" c_off="" c_st="" c_cond=""
-  local off=0 cached=0 hits out st cond
+  local off=0 cached=0 small=0 hits out st cond
   _GOAL_ST="" _GOAL_COND=""
   if [ "${CC_GOAL_SCAN_CACHE:-1}" != 0 ]; then
     min="${CC_GOAL_SCAN_MIN_BYTES:-262144}"; case "$min" in ''|*[!0-9]*) min=262144 ;; esac
@@ -130,7 +130,7 @@ _goal_scan() {
     sz="${out%% *}" ino="${out#* }"
     case "$sz" in ''|*[!0-9]*) sz="" ;; esac
     case "$ino" in ''|*[!0-9]*) sz="" ;; esac
-    [ -n "$sz" ] && [ "$sz" -lt "$min" ] && sz=""
+    [ -n "$sz" ] && [ "$sz" -lt "$min" ] && small=1
   fi
   if [ -n "$sz" ]; then
     dir="${CC_GOAL_SCAN_DIR:-$HOME/.claude/state/goal-scan}"
@@ -139,7 +139,14 @@ _goal_scan() {
     key="${tp//\//_}"; key="${key//[!A-Za-z0-9._-]/_}"
     [ "${#key}" -gt 200 ] && key="${key: -200}"
     cf="$dir/$key.scan"
-    if [ -f "$cf" ]; then
+    if [ "$small" = 1 ]; then
+      # Below the floor nothing is cached, but a cache from when this file was bigger is STALE: the
+      # file was truncated in place (same inode), and if it regrows past the old offset that cache
+      # would be trusted and could read a met goal as live. Drop it the moment the shrink is seen.
+      # The -f test is a builtin, so a small transcript that was never cached costs no fork.
+      if [ -f "$cf" ]; then rm -f "$cf" 2>/dev/null; fi
+      cf=""
+    elif [ -f "$cf" ]; then
       # `read -d ''` reads the multi-line condition to EOF and returns 1 there, hence the `|| true`.
       { IFS= read -r c_tp; read -r c_ino c_off c_st; IFS= read -r -d '' c_cond; } 2>/dev/null < "$cf" || true
       case "$c_off" in ''|*[!0-9]*) c_off="" ;; esac

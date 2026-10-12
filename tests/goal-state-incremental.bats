@@ -189,3 +189,19 @@ agree_nocache() {
   [ "$(inc "$T")" = "small" ] || false
   [ ! -e "$CC_GOAL_SCAN_DIR" ] || false
 }
+
+@test "TRUNCATION below the floor: an in-place shrink drops the stale cache (no false live on regrowth)" {
+  export CC_GOAL_SCAN_MIN_BYTES=2000
+  { filler 40; arm_rec "old goal"; } > "$T"
+  [ "$(file_size "$T")" -ge 2000 ] || false
+  [ "$(inc "$T")" = "old goal" ] || false
+  [ -f "$(ls "$CC_GOAL_SCAN_DIR"/*.scan)" ] || false
+  ino="$(inode "$T")"
+  : > "$T"; filler 2 >> "$T"                         # truncated IN PLACE (same inode), below the floor
+  [ "$(inode "$T")" = "$ino" ] || skip "truncation changed the inode here"
+  run inc "$T"; [ "$status" -eq 1 ] || false
+  [ -z "$(ls "$CC_GOAL_SCAN_DIR" 2>/dev/null)" ] || { ls -l "$CC_GOAL_SCAN_DIR" >&2; false; }
+  filler 60 >> "$T"                                   # regrows past the old offset, no goal record
+  [ "$(verdict inc "$T")" = "$(verdict full "$T")" ] || { echo "inc $(verdict inc "$T") full $(verdict full "$T")" >&2; false; }
+  run inc "$T"; [ "$status" -eq 1 ] || false
+}
