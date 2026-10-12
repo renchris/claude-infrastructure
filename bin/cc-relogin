@@ -39,6 +39,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from typing import Any
@@ -96,6 +97,7 @@ OSASCRIPT_BIN = _env("CC_RELOGIN_OSASCRIPT_BIN", "osascript")
 DIA_BUNDLE_ID = "company.thebrowser.dia"
 TMP = _env("CC_RELOGIN_TMP", "/tmp")
 PS_BIN = _env("CC_RELOGIN_PS_BIN", "ps")
+PS_JOIN_S = 15.0         # ps's own 10 s timeout plus a 5 s reap allowance (live_sessions)
 SECURITY_BIN = _env("CC_RELOGIN_SECURITY_BIN", "/usr/bin/security")
 LOG_PATH = _env("CC_RELOGIN_LOG", os.path.join(HOME, ".claude", "logs", "cc-relogin.log"))
 ACCOUNTS_JSON = _env("CLAUDE_ACCOUNTS_JSON", os.path.join(HOME, ".claude", "accounts.json"))
@@ -249,11 +251,25 @@ def live_sessions(config_dir: str) -> int:
     target = os.path.expanduser(config_dir or "").rstrip("/")
     default_dir = os.path.join(HOME, ".claude")
     mirrors_default = target.endswith(".claude-next")
-    try:
-        out = subprocess.run([PS_BIN, "-wwEo", "command="], capture_output=True,
-                             text=True, timeout=10).stdout
-    except (subprocess.TimeoutExpired, OSError):
+    # subprocess.run's timeout kills ps and then WAITS for it unbounded; under load a SIGKILLed ps
+    # in uninterruptible (D-state) wait is not reaped for minutes (one auth-timeseries run wedged
+    # 2h43m). So the call runs on a daemon thread joined at PS_JOIN_S and a ps that will not die
+    # is abandoned to it — bin/claude-accounts _ps_census, same pattern. -1 still fails closed.
+    box: dict[str, str] = {}
+
+    def _run() -> None:
+        try:
+            box["out"] = subprocess.run([PS_BIN, "-wwEo", "command="], capture_output=True,
+                                        text=True, timeout=10).stdout
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
+    th = threading.Thread(target=_run, name="ps-census", daemon=True)
+    th.start()
+    th.join(PS_JOIN_S)
+    if "out" not in box:
         return -1
+    out = box["out"]
     n = 0
     for line in out.splitlines():
         toks = line.split()

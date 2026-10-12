@@ -391,6 +391,31 @@ ssot_cfg() { # [trigger_h] — omit for a config that predates the key
   echo "$output" | grep -q 'UNKNOWN'
 }
 
+@test "a hanging ps → live count UNKNOWN within the bound → REFUSED, never a hung gate" {
+  # `exec` so subprocess.run's own 10 s kill reaps the sleep itself — no orphan outlives the test.
+  needy
+  printf '#!/bin/sh\nexec sleep 300\n' > "$D/hang-ps"; chmod +x "$D/hang-ps"
+  t0=$(date +%s)
+  run env CC_RELOGIN_PS_BIN="$D/hang-ps" "$C" next3
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q 'UNKNOWN'
+  [ $(( $(date +%s) - t0 )) -lt 20 ]
+  [ ! -f "$D/claude-calls" ]
+}
+
+@test "live_sessions(): a ps that cannot be reaped (D-state) is abandoned at PS_JOIN_S → -1" {
+  # The kill-then-wait inside subprocess.run is what hung under load: a SIGKILLed ps in D-state
+  # is not reaped for minutes. Simulated by a run() that never returns; the join bound must win.
+  pyt <<'PY'
+import threading, time
+ccr.PS_JOIN_S = 0.5
+ccr.subprocess.run = lambda *a, **k: threading.Event().wait()
+t0 = time.monotonic()
+assert ccr.live_sessions("/x/.claude-next3") == -1
+assert time.monotonic() - t0 < 5, time.monotonic() - t0
+PY
+}
+
 # ---- --dry-run ------------------------------------------------------------------------------
 
 @test "--dry-run: gate + plan, exit 0, mutates nothing, releases the lock" {
