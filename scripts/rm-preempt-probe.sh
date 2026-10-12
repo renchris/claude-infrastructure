@@ -28,7 +28,14 @@ while [ $# -gt 0 ]; do
 done
 case "$arm" in main|agent|both) ;; *) echo "usage: --arm main|agent|both" >&2; exit 2 ;; esac
 
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# ~/.claude/scripts/ is a per-file symlink farm: resolve this file to the checkout before deriving
+# the repo root, or the probe would register ~/.claude's hook and read ~/.claude's transcript slug.
+p="${BASH_SOURCE[0]}"
+while [ -L "$p" ]; do
+  d="$(cd "$(dirname "$p")" && pwd)"; p="$(readlink "$p")"
+  case "$p" in /*) ;; *) p="$d/$p" ;; esac
+done
+here="$(cd "$(dirname "$p")/.." && pwd)"
 hook="$here/hooks/rm-prompt-preempt.sh"
 cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 bin="${CC_PROBE_BIN:-$(command -v claude)}"
