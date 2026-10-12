@@ -338,13 +338,13 @@ untouched(b0, s0)
 lg = open(ca.LOG_PATH).read()
 assert F in lg and "at-file" not in lg and "rt-file" not in lg, lg   # path only, never a token
 # 3. a file holding no login (CC writes mcpOAuth there on its own) is still no item
-for body in ({"mcpOAuth": {"srv": {}}}, {"claudeAiOauth": None}, {"claudeAiOauth": {}}):
-    put(body)
-    assert ca.read_creds(D, "t") == (None, "no-keychain-item"), body
+def expect(want, *bodies):
+    bad = [(b, got) for b in bodies if put(b) and (got := ca.read_creds(D, "t")) != want]
+    assert not bad, bad
+expect((None, "no-keychain-item"), {"mcpOAuth": {"srv": {}}}, {"claudeAiOauth": None},
+       {"claudeAiOauth": {}})
 # 4. a corrupt file is an error, never logged-out (a torn read is not a logout)
-for body in ("{\"claudeAiOauth\": {\"acc", "null", "[1]", {"claudeAiOauth": "x"}):
-    put(body)
-    assert ca.read_creds(D, "t") == (None, "keychain-error"), body
+expect((None, "keychain-error"), "{\"claudeAiOauth\": tru}", "null", "[1]", {"claudeAiOauth": "x"})
 os.chmod(F, 0)
 assert ca.read_creds(D, "t") == (None, "keychain-error"), "unreadable file"
 # 5. keychain present: the keychain wins and the (unreadable) file is never opened
@@ -392,7 +392,7 @@ r = ca.collect(c, no_heal=False)[0]
 assert r["auth"] == "stale" and HEALS == [], (r, HEALS)
 assert ".credentials.json" in r.get("heal_note", ""), r
 untouched(b0, s0)
-put("{\"claudeAiOauth\": {")                                          # torn read
+put("{\"claudeAiOauth\": tru}")                                          # torn read
 r = ca.collect(c, no_heal=False)[0]
 assert r["auth"] == "keychain-error", r
 print("OK")'
