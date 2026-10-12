@@ -387,6 +387,45 @@ print("OK")
   [[ "$output" == *OK* ]]
 }
 
+@test "keychain item missing but .credentials.json holds the login: no T1 logout; the file read-only; its removal is a T1 inside the reuse window" {
+  # 2026-10-11 ~22:12Z (decision 46fdb85e2f23): next3's item vanished under load while CC ran on
+  # from the credentials file. The sweep reads the file now, so the local pass must too, or it
+  # re-flips the row to logged-out within a minute. RED-proof: on 1ecb6bde8 the first pass after
+  # the item vanishes prints "local: T1 next3".
+  run python3 -c "$LOAD"'
+world()
+seed([okrow("next3"), okrow("next4")])
+run_pass()
+F = os.path.join(acct("next3")["config_dir"], ".credentials.json")
+os.makedirs(os.path.dirname(F), exist_ok=True)
+with open(F, "w") as f:
+    json.dump({"mcpOAuth": {}, "claudeAiOauth": creds()}, f)
+os.chmod(F, 0o600)
+b0, s0 = open(F, "rb").read(), os.stat(F)
+KC["next3"] = None
+kc_moved()
+out = run_pass()
+assert "T1 next3" not in out, out
+r = row_of("next3")
+assert r["auth"] == "ok" and not r.get("error") and ca._excluded(r, cfg["router"]) is None, r
+au = overlay()["auth"]["next3"]
+assert au["kstate"] == "present" and au["verdict"] == "ok", au
+out = run_pass()                                   # reuse window: keychain file unchanged
+assert "T1 next3" not in out and row_of("next3")["auth"] == "ok", out
+s1 = os.stat(F)
+assert open(F, "rb").read() == b0 and (s1.st_ino, s1.st_mtime_ns, s1.st_mode) == \
+    (s0.st_ino, s0.st_mtime_ns, s0.st_mode), "credentials file written"
+assert "at-1" not in log() and "rt-1" not in log()
+os.remove(F)                                       # the login leaves; the keychain db does not move
+out = run_pass()
+assert "local: T1 next3" in out and row_of("next3")["auth"] == "logged-out", out
+assert row_of("next4")["auth"] == "ok"
+print("OK")
+'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]]
+}
+
 @test "rule table: T2 needs a NEW grant from token-invalid; T4 refreshes login_*; error rows never recover; T2 clears poll_throttled" {
   run python3 -c "$LOAD"'
 now = time.time()

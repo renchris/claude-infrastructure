@@ -546,8 +546,65 @@ def _log_keychain_failure(config_dir, path, elapsed_ms, rc=None, stderr=None):
     log_event(f"read_creds {os.path.basename(config_dir.rstrip('/'))}: keychain-error {detail}")
 
 
-def read_creds(config_dir, kc_account):
-    """-> (payload dict | None, state) — state in {present, no-keychain-item, keychain-error}."""
+def creds_file_path(config_dir):
+    return os.path.join(config_dir, ".credentials.json")
+
+
+# config_dir -> "keychain" | "file": where the last read_creds() payload came from. Provenance
+# rides BESIDE the (payload, state) contract rather than in it: a new state member would fall into
+# every fail-closed arm (ACTIONABLE_AUTH, LOGIN_FIXABLE, BAD_AUTH, the glyph map) unreviewed.
+_CREDS_SOURCE = {}
+
+
+def creds_source(config_dir):
+    return _CREDS_SOURCE.get(config_dir)
+
+
+def read_creds_file(config_dir):
+    """READ-ONLY fallback for a MISSING keychain item -> (claudeAiOauth dict | None, state).
+
+    Claude Code itself runs from <config_dir>/.credentials.json when the keychain has no item
+    (2026-10-11 ~22:12Z: next3's item vanished under load for ~34 min while 10+ sessions kept
+    working off the file, and the board called the account logged-out). This opens the file for
+    reading and nothing else: it never writes, creates, chmods or deletes it.
+
+    - no file, or a file with no claudeAiOauth login (CC keeps mcpOAuth there on its own) ->
+      (None, "no-keychain-item"), exactly as before;
+    - unreadable, non-JSON, non-object, or a non-dict claudeAiOauth -> (None, "keychain-error"):
+      the same rule as a corrupt keychain payload. A torn read while CC rewrites the file is not
+      a logout, and logged-out would send the operator at a /login the account does not need."""
+    path = creds_file_path(config_dir)
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except (FileNotFoundError, NotADirectoryError):
+        return None, "no-keychain-item"
+    except OSError as e:
+        _log_keychain_failure(config_dir, f"file-unreadable({type(e).__name__}) {path}", 0)
+        return None, "keychain-error"
+    try:
+        d = json.loads(raw)
+    except ValueError:                           # JSONDecodeError and UnicodeDecodeError
+        _log_keychain_failure(config_dir, f"file-json-decode {path}", 0)
+        return None, "keychain-error"
+    oa = d.get("claudeAiOauth") if isinstance(d, dict) else None
+    if not isinstance(d, dict) or (oa is not None and not isinstance(oa, dict)):
+        _log_keychain_failure(config_dir, f"file-non-object {path}", 0)
+        return None, "keychain-error"
+    if not oa:
+        return None, "no-keychain-item"
+    log_event(f"read_creds {os.path.basename(config_dir.rstrip('/'))}: keychain item missing — "
+              f"read {path} (read-only fallback)")
+    return oa, "present"
+
+
+def read_creds(config_dir, kc_account, file_fallback=True):
+    """-> (payload dict | None, state) — state in {present, no-keychain-item, keychain-error}.
+
+    A MISSING item (rc 44) falls back to read_creds_file() unless file_fallback=False (the
+    --relogin-info caller, whose consumers gate on the keychain itself). A keychain ERROR never
+    falls back. creds_source(config_dir) names where a present payload came from."""
+    _CREDS_SOURCE.pop(config_dir, None)
     t0 = time.monotonic()
     try:
         p = subprocess.run(
@@ -559,7 +616,12 @@ def read_creds(config_dir, kc_account):
         return None, "keychain-error"
     ms = (time.monotonic() - t0) * 1000
     if p.returncode == 44:                       # errSecItemNotFound
-        return None, "no-keychain-item"
+        if not file_fallback:
+            return None, "no-keychain-item"
+        creds, state = read_creds_file(config_dir)
+        if creds is not None:
+            _CREDS_SOURCE[config_dir] = "file"
+        return creds, state
     if p.returncode != 0:                        # locked keychain / ACL / other
         _log_keychain_failure(config_dir, "returncode", ms, rc=p.returncode, stderr=p.stderr)
         return None, "keychain-error"
@@ -576,6 +638,7 @@ def read_creds(config_dir, kc_account):
     if not isinstance(d, dict):
         _log_keychain_failure(config_dir, "non-object", ms, rc=p.returncode)
         return None, "keychain-error"
+    _CREDS_SOURCE[config_dir] = "keychain"
     return (d.get("claudeAiOauth") or None), "present"
 
 
@@ -2902,6 +2965,15 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal, first_reads=None
         # RT still works, so it is left alone. The usage fetch still runs, as for login_expired.
         row["auth"] = "login-required"
         row["error"] = "no refresh token stored — run /login"
+    elif stale and not no_heal and creds_source(acct["config_dir"]) == "file":
+        # The keychain item is MISSING and this grant came from .credentials.json, the only
+        # surviving copy. heal() redeems the refresh token via `claude auth login`, which rotates
+        # the grant server-side and persists the new one to the KEYCHAIN — under the keychain
+        # starvation that lost the item, that write is the step most likely to fail, and a lost
+        # rotation leaves the file holding a retired token. Not ours to risk: CC refreshes its
+        # own file-sourced grant on its next run; the row stays the benign `stale`.
+        row["heal_note"] = ("skipped: grant read from .credentials.json (keychain item missing) "
+                            "— not rotating the only stored copy")
     elif stale and not no_heal:
         rt_before = creds.get("refreshToken")
         # Only the opaque subprocess is serialised — see _HEAL_GATE. Everything around it stays
@@ -7102,20 +7174,63 @@ def _auth_verdict(it, as_of):
     return d
 
 
+def _creds_item(creds, t, cdat=None, mdat=None, src="keychain"):
+    """A present item's stored metadata (never the secret itself) -> the dict _auth_verdict reads."""
+    creds = creds or {}
+    rt, tok = creds.get("refreshToken"), creds.get("accessToken")
+    return {"present": True, "src": src, "cdat": cdat, "mdat": mdat, "has_creds": bool(creds),
+            "expiresAt": creds.get("expiresAt"),
+            "refreshTokenExpiresAt": creds.get("refreshTokenExpiresAt"),
+            "has_rt": bool(rt), "rt_fp": _rt_fingerprint(rt), "at_fp": _at_fp(tok),
+            "checked_at": t}
+
+
+def _file_item(a, t):
+    """A MISSING keychain item -> (stored item, access token) from <config_dir>/.credentials.json,
+    read-only via read_creds_file (the sweep's own fallback, so both writers agree), or
+    (None, None) when the file is unreadable/corrupt — an observation error, retried next pass."""
+    creds, st = read_creds_file(a["config_dir"])
+    if st == "keychain-error":
+        return None, None
+    if creds is None:
+        return {"present": False, "checked_at": t}, None
+    return _creds_item(creds, t, src="file"), creds.get("accessToken")
+
+
 def _local_auth(cfg, state, overlay, tokens, ident):
     """Step 4: refresh the overlay's auth entries. Tier 1 reads attributes (4 reads, 8 s); tier 2
     reads a secret only for an item that appeared or whose cdat/mdat moved. An unchanged keychain
-    file inside 300 s reuses the stored metadata. Identity advances on DEFINITIVE results only."""
+    file inside 300 s reuses the stored metadata. Identity advances on DEFINITIVE results only.
+
+    A MISSING item consults .credentials.json (decision 46fdb85e2f23), and is re-read on EVERY
+    pass, reuse window included: the file is local and cheap, and the keychain identity that keys
+    the reuse does not move when CC rewrites or removes that file."""
     items = state.setdefault("items", {})
     kc = cfg["keychain_account"]
     now = time.time()
+    errors = []
+
+    def absent(a, t):
+        it, tok = _file_item(a, t)
+        if it is None:
+            errors.append(f"{a['name']}:credentials-file")
+            return
+        items[a["name"]] = it
+        if tok:
+            tokens[a["name"]] = tok
+        overlay["auth"][a["name"]] = _auth_verdict(it, t)
+
     if (ident is not None and ident == state.get("kc_ident")
             and now - (state.get("last_attr_check") or 0) < LOCAL_ATTR_REUSE_S):
         for a in cfg["accounts"]:
-            if a["name"] in items:
-                overlay["auth"][a["name"]] = _auth_verdict(items[a["name"]], now)
-        return []
-    errors = []
+            it = items.get(a["name"])
+            if it is not None and (not it.get("present") or it.get("src") == "file"):
+                absent(a, now)
+            elif it is not None:
+                overlay["auth"][a["name"]] = _auth_verdict(it, now)
+        if errors:
+            state["last_attr_check"] = 0
+        return errors
     attrs = _bounded_parallel(
         {a["name"]: (lambda a=a: _kc_attrs(keychain_service(a["config_dir"]), kc))
          for a in cfg["accounts"]}, LOCAL_KC_DEADLINE_S)
@@ -7127,8 +7242,7 @@ def _local_auth(cfg, state, overlay, tokens, ident):
             continue
         prev = items.get(name) or {}
         if r[0] == "absent":
-            items[name] = {"present": False, "checked_at": t1}
-            overlay["auth"][name] = _auth_verdict(items[name], t1)
+            absent(a, t1)
         elif (prev.get("present") and "has_creds" in prev and prev.get("cdat") == r[1]["cdat"]
               and prev.get("mdat") == r[1]["mdat"]):
             prev["checked_at"] = t1
@@ -7147,16 +7261,15 @@ def _local_auth(cfg, state, overlay, tokens, ident):
             creds, kstate = r
             if kstate == "no-keychain-item":
                 items[name] = {"present": False, "checked_at": t2}
+            elif creds_source(a["config_dir"]) == "file":
+                # The item vanished between tier 1 and tier 2 and read_creds fell back to the file:
+                # store it as file-sourced (no cdat/mdat), so the next pass re-reads, not reuses.
+                items[name] = _creds_item(creds, t2, src="file")
             else:
-                creds = creds or {}
-                rt, tok = creds.get("refreshToken"), creds.get("accessToken")
-                items[name] = {"present": True, "cdat": at["cdat"], "mdat": at["mdat"],
-                               "has_creds": bool(creds), "expiresAt": creds.get("expiresAt"),
-                               "refreshTokenExpiresAt": creds.get("refreshTokenExpiresAt"),
-                               "has_rt": bool(rt), "rt_fp": _rt_fingerprint(rt),
-                               "at_fp": _at_fp(tok), "checked_at": t2}
-                if tok:
-                    tokens[name] = tok
+                items[name] = _creds_item(creds, t2, at["cdat"], at["mdat"])
+            tok = (creds or {}).get("accessToken")
+            if tok:
+                tokens[name] = tok
             overlay["auth"][name] = _auth_verdict(items[name], t2)
     if not errors:
         state["kc_ident"], state["last_attr_check"] = ident, now
@@ -9839,7 +9952,9 @@ def main():
             dia_dir = {v.get("name"): k for k, v in ls["profile"]["info_cache"].items()}.get(acct["dia_profile"])
         except (OSError, KeyError, json.JSONDecodeError):
             pass
-        creds, kstate = read_creds(acct["config_dir"], cfg["keychain_account"])
+        # file_fallback=False: cc-relogin and handoff-fire gate on THE KEYCHAIN's state, so a
+        # .credentials.json fallback must never make a missing item read present here.
+        creds, kstate = read_creds(acct["config_dir"], cfg["keychain_account"], file_fallback=False)
         print(json.dumps({**{k: v for k, v in acct.items()}, "dia_profile_dir": dia_dir,
                           "keychain_service": keychain_service(acct["config_dir"]),
                           "keychain_state": kstate, "claude_bin": cfg["claude_bin"],

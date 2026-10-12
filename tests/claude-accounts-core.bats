@@ -296,6 +296,127 @@ print("OK")'
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || false
 }
 
+# ---- credentials-file fallback (decision 46fdb85e2f23) -----------------------------------------
+# 2026-10-11 ~22:12Z next3's keychain item vanished under load ~400 for ~34 min. Claude Code kept
+# running from <config_dir>/.credentials.json, but claude-accounts keyed on the keychain alone,
+# called next3 logged-out and routed around it. A MISSING item (rc 44) now reads that file the way
+# CC does — read-only. A keychain ERROR (locked, ACL, timeout) still never falls back.
+# RED-proof: on 1ecb6bde8 the matrix fails at case 2 (no-keychain-item with a valid file), the
+# collect case at "valid file" (row logged-out).
+CREDS_FILE_FIX='
+D = os.path.join(os.environ["BATS_TEST_TMPDIR"], "cfgdir"); os.makedirs(D, exist_ok=True)
+F = os.path.join(D, ".credentials.json")
+OA = {"accessToken": "at-file", "refreshToken": "rt-file", "expiresAt": 9e12,
+      "refreshTokenExpiresAt": 9e12, "scopes": ["user:inference"], "subscriptionType": "max"}
+def put(body):
+    if os.path.exists(F):
+        os.chmod(F, 0o600)                       # a prior case may have made it unreadable
+    with open(F, "w") as f:
+        f.write(body if isinstance(body, str) else json.dumps(body))
+    os.chmod(F, 0o600)
+    return open(F, "rb").read(), os.stat(F)
+def untouched(b0, s0):
+    s1 = os.stat(F)
+    assert open(F, "rb").read() == b0, "credentials file bytes changed"
+    assert (s1.st_ino, s1.st_mtime_ns, s1.st_mode) == (s0.st_ino, s0.st_mtime_ns, s0.st_mode), \
+        "credentials file was rewritten, replaced or chmodded"
+class P: returncode = 44; stdout = ""; stderr = "The specified item could not be found."
+REAL_RUN = ca.subprocess.run
+ca.subprocess.run = lambda argv, *a, **k: P() if argv[0] == "/usr/bin/security" else REAL_RUN(argv, *a, **k)
+'
+
+@test "read_creds: a MISSING keychain item reads <config_dir>/.credentials.json read-only; a keychain error never does" {
+  run python3 -c "$LOAD$CREDS_FILE_FIX"'
+# 1. no file: unchanged, and nothing is created
+assert ca.read_creds(D, "t") == (None, "no-keychain-item")
+assert not os.path.exists(F), "the fallback created a credentials file"
+# 2. a valid file: its claudeAiOauth blob, as a present item, sourced from the file
+b0, s0 = put({"mcpOAuth": {"srv": {}}, "claudeAiOauth": OA})
+assert ca.read_creds(D, "t") == (OA, "present")
+assert ca.creds_source(D) == "file"
+untouched(b0, s0)
+lg = open(ca.LOG_PATH).read()
+assert F in lg and "at-file" not in lg and "rt-file" not in lg, lg   # path only, never a token
+# 3. a file holding no login (CC writes mcpOAuth there on its own) is still no item
+for body in ({"mcpOAuth": {"srv": {}}}, {"claudeAiOauth": None}, {"claudeAiOauth": {}}):
+    put(body)
+    assert ca.read_creds(D, "t") == (None, "no-keychain-item"), body
+# 4. a corrupt file is an error, never logged-out (a torn read is not a logout)
+for body in ("{\"claudeAiOauth\": {\"acc", "null", "[1]", {"claudeAiOauth": "x"}):
+    put(body)
+    assert ca.read_creds(D, "t") == (None, "keychain-error"), body
+os.chmod(F, 0)
+assert ca.read_creds(D, "t") == (None, "keychain-error"), "unreadable file"
+# 5. keychain present: the keychain wins and the (unreadable) file is never opened
+put({"claudeAiOauth": OA}); os.chmod(F, 0)
+P.returncode, P.stdout = 0, json.dumps({"claudeAiOauth": {"accessToken": "at-kc"}})
+assert ca.read_creds(D, "t") == ({"accessToken": "at-kc"}, "present")
+assert ca.creds_source(D) == "keychain"
+# 6. a keychain ERROR (locked/ACL, timeout) does not fall back, even with a valid file
+os.chmod(F, 0o600)
+P.returncode, P.stdout = 51, ""
+assert ca.read_creds(D, "t") == (None, "keychain-error")
+def stall(argv, *a, **k):
+    raise ca.subprocess.TimeoutExpired(argv, 1)
+ca.subprocess.run = stall
+assert ca.read_creds(D, "t") == (None, "keychain-error")
+assert ca.creds_source(D) is None
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "collect: a missing keychain item with a valid credentials file is a routable row; heal never runs on it" {
+  run python3 -c "$LOAD$CREDS_FILE_FIX"'
+ca.LASTGOOD_PATH = os.environ["CA_LEDGER"]
+c = dict(cfg); c["accounts"] = [dict(cfg["accounts"][0], name="fbtest", config_dir=D)]
+ca.concurrency = lambda _: {"fbtest": 0}
+HEALS = []
+def heal(*a, **k):
+    HEALS.append(a[1]["name"]); return False, "stub"
+ca.heal = heal
+ca.fetch_usage = lambda *a, **k: (200, {"limits": [
+    {"kind": "weekly_all", "percent": 11, "resets_at": None},
+    {"kind": "session", "percent": 5, "resets_at": None}]})
+r = ca.collect(c, no_heal=False)[0]
+assert r["auth"] == "logged-out", r                                  # no file: unchanged
+b0, s0 = put({"mcpOAuth": {}, "claudeAiOauth": OA})
+r = ca.collect(c, no_heal=False)[0]
+assert r["auth"] == "ok" and not r.get("error") and r["weekly_pct"] == 11, r
+assert ca._excluded(r, cfg["router"]) is None, ca._excluded(r, cfg["router"])
+untouched(b0, s0)
+# A STALE file token with zero live sessions: heal() would redeem the refresh token through
+# `claude auth login`, which persists to the KEYCHAIN and rotates the grant the file holds — the
+# only surviving copy. Skipped, and said so.
+b0, s0 = put({"claudeAiOauth": dict(OA, expiresAt=1000)})
+r = ca.collect(c, no_heal=False)[0]
+assert r["auth"] == "stale" and HEALS == [], (r, HEALS)
+assert ".credentials.json" in r.get("heal_note", ""), r
+untouched(b0, s0)
+put("{\"claudeAiOauth\": {")                                          # torn read
+r = ca.collect(c, no_heal=False)[0]
+assert r["auth"] == "keychain-error", r
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "--relogin-info reports the KEYCHAIN alone: a credentials file never makes a missing item read present" {
+  # The relogin gates (cc-relogin need_relogin, handoff-fire's Phase-1 gate) key on keychain_state;
+  # the fallback is for the board and the router, not for deciding whether the keychain needs a login.
+  run python3 -c "$LOAD$CREDS_FILE_FIX"'
+import sys, io, contextlib
+put({"claudeAiOauth": OA})
+c = json.load(open(os.environ["CA_CFG"])); c["accounts"][0]["config_dir"] = D
+json.dump(c, open(os.environ["CA_CFG"], "w"))
+sys.argv = ["claude-accounts", "--relogin-info", "next3"]
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    ca.main()
+info = json.loads(buf.getvalue())
+assert info["keychain_state"] == "no-keychain-item" and info["has_refresh_token"] is False, info
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
 @test "collect: a keychain item with no OAuth blob degrades to one labelled row, not a traceback" {
   run python3 -c "$LOAD"'
 ca.LASTGOOD_PATH = os.environ["CA_LEDGER"]
