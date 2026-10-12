@@ -38,6 +38,8 @@ WP8 other `ps -wwEo` consumers → shared census (`tools/auth/auth-timeseries.sh
 
 O1 `timeout: 5` on `handed-off-session-guard.sh` + `PYTEST_XDIST_AUTO_NUM_WORKERS=3` (migration, c10) · O2 decision: `CC_SENTINEL_KILL=off` for compressor-sentinel (128 SIGKILLs since 10-07 conflict with "never kill work"; recommend off, 75%) · O3 plist throttles (session-index sweep 60 s → 300 s; public-publish daily) · O4 Claude Code upgrade via cc-upgrade + upstream report on the `ps -A` child leak · O5 30 s `eslogger exec` trace to attribute ~21k spawns/min · O6 optional cleanup of non-work orphans.
 
+Filed 2026-10-11: O1 `4ae1c7d77e2b` · O2 decision `f3d6b2b1a2b9` (class C, conviction 75) · O3 `73ea54aec513` · O4 `c2aa7ab8be97` · O5 `1fa5c54f8b87` (runs `bash /tmp/loadinv/o5-exec-trace.sh`) · O6 `ad60ef86e98e`. WP7 sent to pane 303 (`lr-poller-decisions-303`) via cc-notify, delivered unread at send time.
+
 ## Already done this session (2026-10-11)
 
 - Blender headless launch-film render (pid 12507, Cycles 128 spp, frames 1-1500, `use_overwrite=False`) moved to the background QoS band with `taskpolicy -b -p 12507` at the operator's request: PRI 31 → 4, still rendering on spare E-core capacity; load 1-min fell ~600 → ~400. Irreversible in place (restart resumes at the last frame). Memory (17-18 GB) cannot be capped live.
