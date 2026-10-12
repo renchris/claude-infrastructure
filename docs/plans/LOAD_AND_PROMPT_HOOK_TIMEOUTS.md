@@ -34,7 +34,7 @@ Wave 1 landing notes (2026-10-12): Workflow worktree slots start at origin/main,
 
 ## Wave 2/3 (after Wave 1; S locus)
 
-WP8 other `ps -wwEo` consumers → shared census (`tools/auth/auth-timeseries.sh:58`, `bin/cc-relogin`, `bin/cc-reaper`, `scripts/supervisor-e2e.sh`); WP9 cc-bats bounded queue replaces waivable refusal; WP10 migration for O1/O3; WP11 lead-crash-watchdog → one kqueue watcher; WP12 foreground-run-queue load signal for gates. Gate WP11/WP12 on O5.
+WP8 other `ps -wwEo` consumers → shared census (`tools/auth/auth-timeseries.sh:58`, `bin/cc-relogin`, `bin/cc-reaper`, `scripts/supervisor-e2e.sh`); WP9 cc-bats bounded queue replaces waivable refusal; WP10 migration for O1/O3; WP11 lead-crash-watchdog → one kqueue watcher; WP12 foreground-run-queue load signal for gates. Gate WP11/WP12 on O5. **O5 ANSWERED (2026-10-12):** hooks are ≈3–5% of execs; ≈84% is agent-context-sync test runs in its `b13/r5-*` worktrees and 7.4% was postland-verify's per-file `head` (fixed) — so WP11 and the hook-consolidation half of item 12 stay parked (docs/research/load-hook-timeouts-2026-10-11/O5-EXEC-TRACE.md).
 
 Wave 2 outcome (2026-10-12, dispatched session for backlog item 55f0aafea981; two teammates):
 

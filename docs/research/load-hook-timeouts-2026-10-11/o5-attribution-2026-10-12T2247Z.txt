@@ -1,0 +1,94 @@
+events=15920 window=2026-10-12T22:47:24.366557456Z .. 2026-10-12T22:47:54.247153005Z
+
+== cwd root (top 20) ==
+   6226  39.1%  ~/Development/.worktrees/b13/r5-e
+   3770  23.7%  ~/Development/.worktrees/b13/r5-p
+   1783  11.2%  ~/Development/.worktrees/b13/r5-rb
+   1173   7.4%  ~/.claude
+   1027   6.5%  ~/Development/.worktrees/b13/r5-b
+    435   2.7%  ~/Development/.worktrees/b13/r5-ra
+    390   2.4%  /
+    305   1.9%  ~/Development/.worktrees/b13/r5-a
+    201   1.3%  /private/var
+    140   0.9%  ~/Development/.worktrees/tm2-plan
+    127   0.8%  ~/Development/reso-landing-design-research
+     96   0.6%  ~/Development/agent-context-sync
+     53   0.3%  ~/Development/.worktrees/wt-cc-212923-58948
+     48   0.3%  ~/Development/personal
+     40   0.3%  ~/Development/claude-infrastructure
+     29   0.2%  ~/Development/voiceink
+     25   0.2%  ~/Development/.worktrees/wt-cc-142226-72029
+     25   0.2%  ~/Development/.worktrees/wt-cc-214325-42538
+      6   0.0%  ~/Development/.worktrees/wt-pool-5
+      5   0.0%  ~/Development/.worktrees/feat/accounts-freshness
+
+== target binary (top 20) ==
+   5675  35.6%  git
+   1394   8.8%  head
+    960   6.0%  bash
+    771   4.8%  xcodebuild
+    696   4.4%  tr
+    555   3.5%  sed
+    518   3.3%  chmod
+    438   2.8%  grep
+    427   2.7%  jq
+    359   2.3%  mkdir
+    355   2.2%  sh
+    326   2.0%  sleep
+    314   2.0%  cat
+    260   1.6%  dirname
+    242   1.5%  date
+    227   1.4%  xcode-select
+    216   1.4%  awk
+    187   1.2%  pandoc
+    128   0.8%  launchctl
+    118   0.7%  gitleaks
+
+== script in args (top 30) ==
+     75   0.5%  ~/.claude/hooks/research-block.sh
+     70   0.4%  ~/.claude/hooks/waiting-recycle.sh
+     66   0.4%  ~/.claude/hooks/coldcompile-admit.sh
+     60   0.4%  ~/.claude/hooks/memory-index-drain.sh
+     58   0.4%  ~/Development/.worktrees/b13/r5-e/scripts/install.sh
+     56   0.4%  ~/.claude/hooks/smart-bash-allowlist.sh
+     56   0.4%  ~/.claude/hooks/curl-gate-scope.sh
+     56   0.4%  ~/.claude/hooks/git-worktree-guard.sh
+     56   0.4%  ~/.claude/hooks/validate-bash.sh
+     56   0.4%  ~/.claude/hooks/keychain-guard.sh
+     46   0.3%  ~/.claude/hooks/bash-output-offload.sh
+     45   0.3%  ~/.claude/hooks/teammate-checkpoint.sh
+     45   0.3%  ~/.claude/hooks/post-tool-batch.sh
+     42   0.3%  ~/.claude/hooks/rm-safe-allowlist.sh
+     42   0.3%  ~/.claude/hooks/ship-rail-push-allow.sh
+     42   0.3%  ~/.claude/hooks/pr-gate.sh
+     42   0.3%  ~/.claude/hooks/log-bash.sh
+     42   0.3%  ~/.claude/hooks/relay-verbatim.sh
+     33   0.2%  ~/.claude/statusline.sh
+     30   0.2%  ~/.claude/hooks/mailbox-drain.sh post-tool
+     30   0.2%  ~/.claude/hooks/cc-permission-beacon.sh clear
+     28   0.2%  $HOME/.claude/hooks/qos-rewrite.sh
+     28   0.2%  ~/Development/claude-infrastructure/hooks/lib/smart-bash-allowlist.py
+     23   0.1%  /usr/bin/shasum
+     19   0.1%  /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/pytest-of-chrisren/pytest-5510/popen-gw0/test_a_set_up_mac_with_nothing0/home/.local/share/uv/tools/agentsync/bin/python
+     19   0.1%  /private/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/pytest-of-chrisren/pytest-5530/popen-gw1/test_helpers_step_builds_the_o0/home/.local/bin/agentsync
+     18   0.1%  ~/.claude/hooks/qos-rewrite.sh
+     17   0.1%  ~/.claude/hooks/mailbox-drain.sh
+     15   0.1%  ~/Development/claude-infrastructure/hooks/research-block.sh
+     15   0.1%  ~/.claude/hooks/cc-permission-beacon.sh
+
+== session (top 15): count, main cwd, top binaries ==
+   5799  36.4%  sid=30345 cwd=~/Development/.worktrees/b13/r5-e  [git:1900, tr:590, chmod:460, sed:338]
+   3353  21.1%  sid=19028 cwd=~/Development/.worktrees/b13/r5-p  [git:2128, xcodebuild:299, xcode-select:105, launchctl:92]
+   1780  11.2%  sid=9642 cwd=~/Development/.worktrees/b13/r5-rb  [git:1196, xcodebuild:237, xcode-select:70, pandoc:39]
+   1173   7.4%  sid=98498 cwd=~/.claude  [head:1173]
+    391   2.5%  sid=1 cwd=/  [jq:61, bash:38, com.docker.cli:28, awk:26]
+    306   1.9%  sid=37551 cwd=~/Development/.worktrees/b13/r5-a  [git:277, xcodebuild:18, gitleaks:3, xcode-select:2]
+    140   0.9%  sid=70773 cwd=~/Development/.worktrees/tm2-plan  [dirname:46, basename:46, jq:46, cat:1]
+     70   0.4%  sid=7385 cwd=~/Development/agent-context-sync  [sed:35, lsof:35]
+     53   0.3%  sid=83649 cwd=~/Development/.worktrees/b13/r5-b  [git:53]
+     48   0.3%  sid=42696 cwd=~/Development/.worktrees/wt-cc-212923-58948  [jq:40, mkdir:4, grep:2, sleep:2]
+     37   0.2%  sid=48344 cwd=~/Development/.worktrees/b13/r5-p  [mkdir:6, grep:5, jq:4, rm:4]
+     35   0.2%  sid=62713 cwd=~/Development/reso-landing-design-research  [grep:6, mkdir:5, rm:4, tail:3]
+     32   0.2%  sid=59786 cwd=~/Development/.worktrees/b13/r5-ra  [git:15, xcode-select:3, sw_vers:2, sysctl:2]
+     31   0.2%  sid=21461 cwd=~/Development/.worktrees/b13/r5-ra  [git:30, security:1]
+     30   0.2%  sid=61107 cwd=~/Development/.worktrees/b13/r5-p  [grep:14, sed:7, tr:3, bash:2]
