@@ -361,3 +361,22 @@ for l in open(sys.argv[1]):
   run /usr/bin/python3 -c "import json; r=[json.loads(l) for l in open('$CC_RESEARCH_HOME/demo/explain.jsonl')]; print(len(r), r[0]['holes'], r[0]['round'])"
   [ "$output" = "1 ['H-1', 'H-2', 'H-3'] 1" ]
 }
+
+# Match scope (2026-10-12). RED-proof: with `round <= K` in match_inputs, `match --round 2` printed
+# caught 1 and tagged round 1's H-1 with S-1, a seed no round-2 reviewer caught.
+@test "match: round 2 tests only round 2's holes, so an earlier round's untagged hole neither tags nor catches" {
+  retry_seeds
+  hole H-1 PLAN.md 61 C4 "$CLAIM" > "$CC_RESEARCH_RECORDS/holes.jsonl"
+  run "$SEED" match --program demo --round 2 --plan "$PLAN" --dry-run
+  [ "${lines[1]}" = "would tag: none" ]
+  [ "${lines[2]}" = "would catch: 0 · would orphan: 0" ]
+  run "$SEED" match --program demo --round 2 --plan "$PLAN"
+  [ "$output" = '{"original": {"caught": 0, "k_left": 2, "orphaned": 0, "s_eff": 2}}' ]
+  [ "$(tag_of H-1)" = "None" ]
+  # the same claim raised in round 2 is that round's catch, and round 1's hole stays as it was
+  hole H-2 PLAN.md 61 C4 "$CLAIM" | sed 's/"round": 1/"round": 2/' >> "$CC_RESEARCH_RECORDS/holes.jsonl"
+  run "$SEED" match --program demo --round 2 --plan "$PLAN"
+  [ "$output" = '{"original": {"caught": 1, "k_left": 1, "orphaned": 0, "s_eff": 2}}' ]
+  [ "$(tag_of H-2)" = "S-1" ]
+  [ "$(tag_of H-1)" = "None" ]
+}

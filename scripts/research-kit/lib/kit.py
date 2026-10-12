@@ -31,7 +31,7 @@ import socket
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
 # ── 1. paths ────────────────────────────────────────────────────────────────────────────────────
 
@@ -429,6 +429,34 @@ def settled_out(h: Dict[str, Any]) -> bool:
         bool(h.get("split_from"))
         and (h.get("verification") or {}).get("against") != "real"
     )
+
+
+def held_frame_omissions(slug: str) -> Set[str]:
+    """Hole ids held for the post-certificate frame-delta cycle (REPORT.md §5.4): each `hole` an OPEN
+    `frame-omission` known row names, in frame.json `known_rows` or the `known_rows.jsonl` events
+    (`round.sh hold-g` writes those). A row the sweep or the frame-delta closed holds nothing."""
+    rec = records_dir(slug)
+    rows: Dict[str, Dict[str, Any]] = {
+        str(r["id"]): dict(r)
+        for r in (read_json(rec / "frame.json", {}) or {}).get("known_rows") or []
+        if r.get("id")
+    }
+    for ev in read_jsonl(rec / "known_rows.jsonl"):
+        if ev.get("id"):
+            rows.setdefault(str(ev["id"]), {}).update(ev)
+    return {
+        str(r["hole"])
+        for r in rows.values()
+        if r.get("kind") == "frame-omission"
+        and r.get("status", "open") == "open"
+        and r.get("hole")
+    }
+
+
+def held_refind(h: Dict[str, Any], held: Set[str]) -> bool:
+    """A later round's re-find (`round.sh refind`) of a hole still held for the frame-delta cycle:
+    no round count takes it as new material. A re-find of anything else is new material."""
+    return bool(h.get("refind_of")) and str(h["refind_of"]) in held
 
 
 def rater_call(h: Dict[str, Any], k: int) -> Optional[str]:

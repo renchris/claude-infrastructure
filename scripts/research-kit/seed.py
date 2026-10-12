@@ -381,7 +381,11 @@ def match_inputs(
 ) -> Tuple[
     List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], SeededCopy
 ]:
-    """The round's material holes, the live seeds, the live seeds a fix orphaned, and the copy."""
+    """The round's material holes, the live seeds, the live seeds a fix orphaned, and the copy.
+    Only round K's OWN holes: an earlier round's hole cites that round's copy, so testing it against
+    round K's copy would credit a seed applied only now (a shadow planted in the span the hole quotes)
+    with a catch no round-K reviewer made. Earlier rounds' tags and untagged holes stay as their own
+    round's settle left them."""
     plan = Path(a.plan).read_text()
     holes = kit.fold(
         kit.read_jsonl(kit.records_dir(a.program) / "holes.jsonl")
@@ -393,7 +397,7 @@ def match_inputs(
         for h in holes
         if (h.get("materiality") or {}).get("level") == "MATERIAL"
         and str(h.get("round") or "0").isdigit()
-        and int(h.get("round") or 0) <= a.round
+        and int(h.get("round") or 0) == a.round
         and not settled_by_record(h)
     ]
     # The seeded copy has lost every replace anchor and every omitted member, so passing it as

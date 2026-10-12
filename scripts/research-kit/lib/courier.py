@@ -55,7 +55,14 @@ EXCLUDE = {
     "CLAUDE.md",
     "reconcile.jsonl",
     "rehearsal.json",
+    # each carries plan_lines, the seeded copy's size: a tell that the copy is not the real plan
+    "freeze.json",
+    "freezes.jsonl",
 }
+# Round history a blind reviewer must not read (§3.8): a hole id (H-<round>-<n>) is a pointer at an
+# earlier round's finding, and a settling evidence file (evidence/w<wave>-r<round>-…) is its text.
+HOLE_ID = re.compile(r"\bH-\d+-\d+\b")
+SETTLE_EVIDENCE = re.compile(r"^w\d+-r\d+-")
 LANE_BIN = {
     "anthropic": "ANTHROPIC",
     "frontier": "ANTHROPIC",
@@ -405,6 +412,93 @@ def bundle_dir(slug: str, k: str) -> Path:
     return kit.sealed_dir(slug) / "rounds" / str(k) / "bundle"
 
 
+def settle_evidence(slug: str) -> set:
+    """Records-relative paths that a settling record cites as evidence (lib/settle.py: an artifact,
+    a split, a real-plan verdict, a reproduction, a re-find, a held known row)."""
+    rec = kit.records_dir(slug)
+    out: set = set()
+    for r in kit.read_jsonl(rec / "holes.jsonl"):
+        ver = r.get("verification")
+        blocks = [r.get(k) for k in ("artifact", "split", "reproduction", "refind")]
+        if isinstance(ver, dict) and ver.get("against") == "real":
+            blocks.append(ver)
+        for b in blocks:
+            if isinstance(b, dict):
+                out |= {str(e) for e in b.get("evidence") or []}
+    for r in kit.read_jsonl(rec / "known_rows.jsonl"):
+        if isinstance(r.get("held"), dict):
+            out |= {str(e) for e in r["held"].get("evidence") or []}
+    return out
+
+
+def _prune(doc: Any) -> Tuple[Any, int]:
+    """`doc` less every list element that cites a hole id, and how many were dropped."""
+    if isinstance(doc, list):
+        kept = [e for e in doc if not HOLE_ID.search(json.dumps(e))]
+        return kept, len(doc) - len(kept)
+    if isinstance(doc, dict):
+        out, n = {}, 0
+        for k, v in doc.items():
+            out[k], d = _prune(v)
+            n += d
+        return out, n
+    return doc, 0
+
+
+def withhold_round_history(b: Path, slug: str, plan_name: str) -> Tuple[List[str], int]:
+    """Remove round history from the copied records in bundle `b`: settling evidence files, any
+    file whose name or prose cites a hole id, and each JSONL line or JSON array element that cites
+    one. The plan copy is the reviewed text and is never touched. Returns (files withheld, rows
+    dropped)."""
+    cited = settle_evidence(slug)
+    files: List[str] = []
+    rows = 0
+    for p in sorted(b.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(b)
+        if str(rel) == plan_name:
+            continue
+        gone = (
+            str(rel) in cited
+            or any(HOLE_ID.search(part) for part in rel.parts)
+            or (
+                rel.parts[0] == "evidence"
+                and any(SETTLE_EVIDENCE.match(part) for part in rel.parts[1:])
+            )
+        )
+        if not gone:
+            try:
+                text = p.read_text()
+            except (UnicodeDecodeError, OSError):
+                continue
+            if not HOLE_ID.search(text):
+                continue
+            if p.suffix == ".jsonl":
+                lines = text.splitlines(keepends=True)
+                kept = [ln for ln in lines if not HOLE_ID.search(ln)]
+                rows += len(lines) - len(kept)
+                p.write_text("".join(kept))
+                continue
+            doc, n = None, 0
+            if p.suffix == ".json":
+                try:
+                    doc, n = _prune(json.loads(text))
+                except ValueError:
+                    doc = None
+            if doc is not None and not HOLE_ID.search(json.dumps(doc)):
+                rows += n
+                p.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+                continue
+            gone = (
+                True  # prose, or a JSON document that cites a hole id outside any row
+            )
+        if gone:
+            p.unlink()
+            files.append(str(rel))
+    return files, rows
+
+
 def cmd_bundle(a: argparse.Namespace) -> int:
     b = bundle_dir(a.program, a.round)
     if b.exists():
@@ -424,6 +518,13 @@ def cmd_bundle(a: argparse.Namespace) -> int:
             shutil.copytree(src, dst, ignore=shutil.ignore_patterns(*EXCLUDE))
         else:
             shutil.copyfile(src, dst)
+    files, rows = withhold_round_history(b, a.program, Path(a.plan).name)
+    if files or rows:
+        print(
+            f"withheld from the bundle (round history): {len(files)} file(s), {rows} row(s) citing "
+            f"a hole id{': ' + ', '.join(files) if files else ''}",
+            file=sys.stderr,
+        )
     for extra in a.extra or []:
         # lockfile-pinned dependency source and the git-log digest (§3.8 "It contains")
         e = Path(extra)

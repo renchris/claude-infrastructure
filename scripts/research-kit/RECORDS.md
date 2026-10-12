@@ -30,7 +30,8 @@ Added 2026-10-05 (wave E3d): between `build-certified` and `closed` sits `implem
   exemption: {at, quote}}` (§3.1), `fac_map` `[{fac, row|null, na_reason|null}]` covering FAC-01..FAC-33, `reask_map`
   `[{frame, axis|null, excluded_quote|null}]`, `sources_required` `[source id]`, `populations` `[name]`,
   `known_rows` `[{id, kind:"frame-omission", names_rows:[], blocks_waves:[], resign_due, default:"descope|class-b",
-  status:"open|closed"}]`, `plan` (path of the plan file relative to the records dir, or null; gate row 9 lints it and
+  status:"open|closed"}]` (later events, and rows held without re-signing the frame, are lines of `known_rows.jsonl`
+  folded over these by id; a row may carry `hole`, see "Held frame omissions and re-finds" below), `plan` (path of the plan file relative to the records dir, or null; gate row 9 lints it and
   row 8 skips its headings) and `topic_owner` (who owns the topic, or null; gate row 8 fails while it is empty). Both
   are written by `intake.py set --plan PATH --topic-owner "<who>"`, which refuses a plan path that is not an existing
   file under the records dir and an empty or numberless-superlative owner; `init` writes both as null.
@@ -65,12 +66,13 @@ Added 2026-10-05 (wave E3d): between `build-certified` and `closed` sits `implem
 - `rounds/<k>/matrix.json` (written by `round.sh`): `{round, kind:"frame-critique|certification|delta",
   snapshot_sha, verification_only, slots:[{pid, vendor, strategy, status:"complete|partial|dead|void", reruns}],
   lanes:{vendor:"live|dead"}, counted, new_material, seeds_caught, quiet, forecast:{p50,p90}|null, r_max,
-  artifacts:[hole id], splits:[{from, to}], kappa:{materiality:κ|null, n, below:0.7, repass:bool, unstable:bool},
+  artifacts:[hole id], splits:[{from, to}], refinds:[{hole, of}], reproductions:[{hole, status}],
+  kappa:{materiality:κ|null, n, below:0.7, repass:bool, unstable:bool},
   reclosed?:[{at, reason, previous:{new_material, seeds_caught, quiet, forecast, r_max, kappa}}]}`. `reclosed` is
   appended by `round.sh close --round K --reclose --reason …`, which re-runs seed match on a closed round (the
   newest of its kind; refused once a later one opened) and recomputes what close computed. `new_material` leaves
-  out seed-tagged holes and `kit.settled_out` holes (an artifact, or a split-off hole not yet verified on the real
-  plan); `seeds_caught` counts seed-tagged holes only, so it agrees with the vault. `kappa` and the settling
+  out seed-tagged holes, `kit.settled_out` holes (an artifact, or a split-off hole not yet verified on the real
+  plan) and `kit.held_refind` holes (listed in `refinds`); `seeds_caught` counts seed-tagged holes only, so it agrees with the vault. `kappa` and the settling
   records are under "Settling a round" below.
   `rounds/<k>/panels/<pid>.json` (written by `courier.sh`): SYNTHESIS panel shape, raw output beside it as `<pid>.raw`.
 - `cert/CERT-v<n>.json` and `.md` (written by `gate.sh run`): SYNTHESIS cert shape.
@@ -82,6 +84,12 @@ failed, 2 usage or refusal, 3 a dead vendor lane, 4 a voided slot. Python is 3.9
 
 - `courier.sh preflight` → `<sealed>/preflight.json` `{vendor:{binary, ok, model_id, error}}`; exit 3 if any lane dead.
 - `courier.sh bundle --round K` → builds `<sealed>/rounds/K/bundle/`, prints `<path> <sha256 of manifest>`.
+  The bundle is the seeded plan plus the records, less `courier.EXCLUDE` (the hole ledger, rounds, cert, changes,
+  verdicts, `freeze.json` and `freezes.jsonl`, whose `plan_lines` is the seeded copy's size) and less round history
+  (`withhold_round_history`, added 2026-10-12): a file a settling record cites as evidence, a file under `evidence/`
+  named `w<wave>-r<round>-…`, any file whose name or prose cites a hole id (`H-<round>-<n>`), and each JSONL line
+  or JSON array element that cites one (a `trace.jsonl`, `known_rows.jsonl` or `apply-at-build.jsonl` row, a
+  `frame.json` known row). The plan copy is never filtered. What was withheld is named on stderr.
 - `courier.sh run --round K --pid P --vendor V --strategy S --role reviewer|rater|verifier --brief F` → panel json
   + raw; exit 3 on a missing or failing CLI (dead slot), 4 on an integrity hit or model-id mismatch (void slot).
 - `courier.sh integrity --round K` → greps every raw output for the real records path, the deliverable repo path and
@@ -111,8 +119,10 @@ failed, 2 usage or refusal, 3 a dead vendor lane, 4 a voided slot. Python is 3.9
   apply loop and widened by `SEEDED_SPAN_SLACK`, beside the author's `detect_span`; a locus `lines` may list
   `;`/`,`-separated ranges. `--plan` is the real plan: one missing most live anchors is refused; `prescreen --caught …` marks seeds a blind pre-screen caught
   `discarded`, so they are never planted; `status` prints a second line with seed realism beside real detection.
-  A seed's `detect_span` (real-plan numbering) stands in only for a seed round K's copy does not hold; a hole is
-  tagged only with a seed applied in round K's copy; an `artifact` or `split_from` hole is never tagged and never
+  A seed's `detect_span` (real-plan numbering) stands in only for a seed round K's copy does not hold; `match
+  --round K` tests only round K's own holes (2026-10-12: an earlier round's hole cites that round's copy, so its
+  tag, or its lack of one, is frozen at that round's settle and a seed applied later can never be credited to it);
+  a hole is tagged only with a seed applied in round K's copy; an `artifact` or `split_from` hole is never tagged and never
   catches. `match --dry-run` loads the vault, writes nothing, and prints `would tag: <hole ids>`, `would catch: N ·
   would orphan: N`, and the round's already-tagged holes the matcher no longer derives (match never removes a tag).
 - `seed.py explain --program P --round K --plan CURRENT --hole ID…` (read-only; the kit owner runs it, not the
@@ -170,7 +180,37 @@ exit 2. `--evidence` files must sit inside the records dir (gate row 8 fails a r
   --by WHO --evidence F…` appends `{id, event: "verify", verification:{status, against: "real", plan_blob, by,
   evidence, at}}`, refused unless F (the plan the verifier read) has the blob the split recorded and the real plan
   is unchanged since: never the seeded bundle. Until then the hole is `kit.settled_out`, and `round.sh close` (and
-  `--reclose`) refuses its round. Rating it goes through the usual three-rater path.
+  `--reclose`) refuses its round. Rating it goes through the usual three-rater path. A second `verify-split` is
+  refused.
+- **Reproduce** (added 2026-10-12; REPORT.md §6.5, "Disputed finding — 1 reproduction probe") — `round.sh reproduce
+  --program P --hole NEW --status CONFIRMED|REFUTED --read-plan F --by WHO --reason T --evidence F…`. The one second
+  verdict a split hole can get, and only when its `verify-split` verdict was CONTACT. Refused unless F and the real
+  plan both still have the blob the split recorded (so before any plan edit), unless an evidence file names that
+  blob, and a second time for the same hole. Appends `{id, event: "reproduce", verification:{status, against:
+  "real", plan_blob, by, evidence, at}, reproduction:{at, by, reason, evidence, plan_blob, status, first:{the
+  CONTACT verification}}}`. Round close and `estimate.counted_holes` read `verification.status`, so a CONFIRMED
+  one counts once rated and re-closed, and a REFUTED one joins the forecast's false share; close lists both in
+  `m["reproductions"]`.
+
+### Held frame omissions and re-finds (added 2026-10-12; REPORT.md §5.4)
+
+A clause-(g) frame-omission hole the operator sends to the post-certificate frame-delta cycle is HELD: an open
+`frame-omission` known row names it in `hole`. The row lives in `known_rows.jsonl`, not `frame.json`, so the frame
+signature stays valid. `kit.held_frame_omissions` is the one reader.
+
+- **Hold** — `round.sh hold-g --program P --hole H --known-row KR-<n> --names-rows ROW… [--blocks-waves W…]
+  --resign-due YYYY-MM-DDTHH:MM:SSZ [--default class-b|descope] --reason T --evidence F…` appends `{id: KR-<n>,
+  kind: "frame-omission", hole: H, names_rows, blocks_waves, resign_due, default, status: "open", held:{at, by,
+  reason, evidence}}` to `known_rows.jsonl`. Only for a CONFIRMED MATERIAL hole not rated under another clause;
+  refused for a known-row id that exists, a hole already held, and a `resign_due` that is not in the future (the
+  hourly sweep closes an overdue row by its default, which un-holds the hole). The held hole still counts in its
+  own round.
+- **Re-find** — `round.sh refind --program P --hole NEW --of H --reason T --evidence F…` appends `{id: NEW, event:
+  "refind", refind_of: H, refind:{at, by, reason, evidence}}`. The lead runs it after dedup (the adjudicator stays
+  blind to round history). Refused unless H is held, NEW is from a later certification round, and NEW is neither
+  seed-tagged nor settled. A re-find of any other hole, a fixed one included, gets no record and is new material.
+- While H's known row is open, round close and `estimate.counted_holes` leave NEW out of new material
+  (`kit.held_refind`), and close lists it in `m["refinds"]`. Once the row closes, a re-close counts NEW again.
 - **Rating re-pass** (REPORT.md §6.5, "Rating re-pass when agreement is low — Once — 'Adjudication unstable'
   printed"). Close writes `m["kappa"]`: Cohen's kappa of rater 1 against rater 2 on MATERIAL-or-not over the
   round's holes both rated (`kit.materiality_kappa`; `materiality.raters` keyed `"1"` or `"r1"`, a code or

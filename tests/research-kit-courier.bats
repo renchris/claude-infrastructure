@@ -129,6 +129,39 @@ panel() { /usr/bin/python3 -c "import json; d=json.load(open('$CC_RESEARCH_RECOR
   [ "$status" -eq 2 ]
 }
 
+# Round history (2026-10-12). RED-proof: before withhold_round_history and the two freeze names in
+# EXCLUDE, every file below reached the bundle whole, so a blind reviewer could read round 1's finds.
+@test "bundle: earlier rounds' settling evidence, the freeze records and every row citing a hole id stay out" {
+  rec="$CC_RESEARCH_RECORDS"
+  mkdir -p "$rec/evidence/P-1"
+  echo 'out' > "$rec/evidence/P-1/stdout"
+  echo '{"plan_lines":3554}' > "$rec/freeze.json"
+  echo '{"plan_lines":3554}' > "$rec/freezes.jsonl"
+  echo 'two artifacts of the seeded copy' > "$rec/evidence/w21-r1-artifacts.md"
+  echo 'the backoff figure' > "$rec/evidence/split-H-1-030.md"
+  echo 'the adjudicator kept f1' > "$rec/evidence/cited.txt"
+  echo '{"id":"H-1-001","event":"split","split":{"evidence":["evidence/cited.txt"]}}' > "$rec/holes.jsonl"
+  echo 'the fix cycle closed H-1-007 in the retry section' > "$rec/notes.md"
+  printf '%s\n' '{"id":"T-1","from":"FAC-01","to":"plan#retry"}' '{"id":"T-2","from":"H-1-007","rejects":"seed catch"}' > "$rec/trace.jsonl"
+  echo '{"id":"KR-06","kind":"frame-omission","hole":"H-1-006","status":"open"}' > "$rec/known_rows.jsonl"
+  echo '{"known_rows":[{"id":"KR-01","names_rows":["AM-40"]},{"id":"KR-07","hole":"H-1-013"}]}' > "$rec/frame.json"
+  echo 'this plan line names H-1-099 and is the reviewed text' >> "$BATS_TEST_TMPDIR/PLAN.md"
+  run "$C" bundle --program demo --round 2 --plan "$BATS_TEST_TMPDIR/PLAN.md"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"withheld from the bundle (round history): 4 file(s), 3 row(s)"* ]] || false
+  b="$CC_RESEARCH_HOME/demo/rounds/2/bundle"
+  for f in freeze.json freezes.jsonl notes.md evidence/w21-r1-artifacts.md evidence/split-H-1-030.md evidence/cited.txt; do
+    [ ! -e "$b/$f" ] || { echo "in the bundle: $f"; false; }
+  done
+  run grep -rlE --exclude=PLAN.md 'H-[0-9]+-[0-9]+' "$b"
+  [ "$status" -eq 1 ]
+  [ "$(cat "$b/trace.jsonl")" = '{"id":"T-1","from":"FAC-01","to":"plan#retry"}' ]
+  [ "$(/usr/bin/python3 -c "import json; print([r['id'] for r in json.load(open('$b/frame.json'))['known_rows']])")" = "['KR-01']" ]
+  # what a reviewer may read is still there: other evidence, and the plan copy whatever it cites
+  [ -f "$b/evidence/P-1/stdout" ]
+  grep -q 'names H-1-099' "$b/PLAN.md"
+}
+
 @test "bundle: copies carry no integrity needle, so a reviewer that echoes its reads is not voided" {
   printf '{"deliverable_repo":"%s","reviewer_pins":{"openai":"gpt-x"}}\n' "$BATS_TEST_TMPDIR/repo" > "$CC_RESEARCH_RECORDS/frame.json"
   printf 'records live at %s\n' "$CC_RESEARCH_RECORDS" > "$CC_RESEARCH_RECORDS/notes.md"

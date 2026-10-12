@@ -559,3 +559,76 @@ print(u, gate_cert.lines_for('demo', cert, 'certified', live)[0])"
   [[ "$status" -eq 2 && "$output" == *"rater kappa 1.0 is not below 0.7; no re-pass"* ]] || false
   [ "$(field 2 'm["kappa"]["materiality"], m["kappa"]["unstable"]')" = "1.0 False" ]
 }
+
+# Round-2 safety (2026-10-12). RED-proof: `hold-g`, `refind` and `reproduce` were unknown verbs;
+# with `kit.held_refind` dropped from tally the first test reads new material 2, and from
+# estimate.counted_holes it lists H-2-001; a CONTACT split hole had no second verdict at all.
+counted() { /usr/bin/python3 -c "import sys; sys.path[:0]=['$REPO/scripts/research-kit', '$REPO/scripts/research-kit/lib', '$REPO/scripts/lib']; import estimate; print(['%s %s' % (h['id'], (h.get('verification') or {}).get('status')) for h in estimate.counted_holes('demo', [{'round': '2', 'seq': 2}])])"; }
+open_round_2() { /usr/bin/python3 -c "import json; p='$CC_RESEARCH_RECORDS/rounds/2/matrix.json'; m=json.load(open(p)); m['closed']=False; json.dump(m, open(p,'w'))"; }
+
+@test "refind: a re-find of a hole held for the frame-delta cycle is not new material; a re-find of any other hole is, and so is one whose known row closed" {
+  fc_done; mat 1 certification 1; mat 2 certification 2 ',"quiet":false'; open_round_2
+  mh() { printf '{"id":"%s","round":%s,"verification":{"status":"CONFIRMED"},"materiality":{"level":"MATERIAL","clause":"%s"}}\n' "$1" "$2" "$3"; }
+  { mh H-1-006 1 g; mh H-1-007 1 b; mh H-2-001 2 g; mh H-2-002 2 b; } > "$CC_RESEARCH_RECORDS/holes.jsonl"
+  evidence ruling.txt "operator ruling: the omitted rows go to the frame-delta after the certificate"
+  rf() { run "$R" refind --program demo --hole "$1" --of "$2" --reason "same omitted row" --evidence evidence/ruling.txt; }
+  hg() { run "$R" hold-g --program demo --hole "$1" --known-row KR-06 --names-rows AM-40 --blocks-waves W9 \
+    --resign-due "$2" --reason "clause (g), held by ruling" --evidence evidence/ruling.txt; }
+  rf H-2-001 H-1-006
+  [[ "$status" -eq 2 && "$output" == *"H-1-006: not held by an open frame-omission known row"* ]] || false
+  hg H-1-007 2099-01-01T00:00:00Z
+  [[ "$status" -eq 2 && "$output" == *"only a clause-(g) frame omission is held"* ]] || false
+  hg H-1-006 2020-01-01T00:00:00Z
+  [[ "$status" -eq 2 && "$output" == *"not in the future"* ]] || false
+  hg H-1-006 2099-01-01T00:00:00Z
+  [ "$status" -eq 0 ]
+  rf H-2-002 H-1-007
+  [[ "$status" -eq 2 && "$output" == *"a re-find of any other hole is new material"* ]] || false
+  rf H-2-001 H-1-006
+  [ "$status" -eq 0 ]
+  run "$R" close --program demo --round 2
+  [ "$status" -eq 0 ]
+  [ "$(field 2 'm["new_material"], m["quiet"], m["refinds"]')" = "1 False [{'hole': 'H-2-001', 'of': 'H-1-006'}]" ]
+  [ "$(counted)" = "['H-2-002 CONFIRMED']" ]
+  # the held hole itself still counts in its own round; only an OPEN known row holds anything
+  echo '{"id":"KR-06","status":"closed","closed_by":"default"}' >> "$CC_RESEARCH_RECORDS/known_rows.jsonl"
+  run "$R" close --program demo --round 2 --reclose --reason "KR-06 closed"
+  [ "$status" -eq 0 ]
+  [ "$(field 2 'm["new_material"], m["refinds"]')" = "2 []" ]
+}
+
+@test "reproduce: a split hole whose verdict was CONTACT gets ONE reproduction read on the real plan, and round close and the estimate count its CONFIRMED" {
+  seeded_round_2
+  printf '%s\n' '{"id":"H-2-001","event":"raise","round":2,"source":"panel","finding":"f1"}' \
+    '{"id":"H-2-001","event":"raise","round":2,"source":"panel","finding":"f2"}' \
+    "${SEED_HOLE/H-1/H-2-001}" > "$CC_RESEARCH_RECORDS/holes.jsonl"
+  "$R" close --program demo --round 2
+  blob="$(git hash-object "$CC_RESEARCH_RECORDS/PLAN.md")"
+  evidence split.txt "blind adjudicator: f2 is the backoff figure, f1 the planted retry"
+  evidence repro.txt "blob $blob line 61: the 2 s backoff has no source; the store's measured p95 is 9 s"
+  "$R" split --program demo --hole H-2-001 --findings f2 --path PLAN.md --lines 61 --quote "three times with a 2 s backoff" \
+    --claim "the 2 s backoff has no source" --reason "over-merge" --evidence evidence/split.txt
+  "$R" verify-split --program demo --hole H-2-002 --status CONTACT --by verifier --evidence evidence/split.txt \
+    --read-plan "$CC_RESEARCH_RECORDS/PLAN.md"
+  printf '%s\n' '{"id":"H-2-002","event":"rate","materiality":{"level":"MATERIAL"}}' >> "$CC_RESEARCH_RECORDS/holes.jsonl"
+  "$R" close --program demo --round 2 --reclose --reason "split H-2-001"
+  [ "$(field 2 'm["new_material"], m["reproductions"]')" = "0 []" ]
+  rp() { run "$R" reproduce --program demo --hole "$1" --status "$2" --by "lead, records access" --reason "disputed finding" \
+    --evidence "$3" --read-plan "$4"; }
+  "$REPO/scripts/research-kit/seed.py" apply --program demo --plan "$CC_RESEARCH_RECORDS/PLAN.md" --out "$BATS_TEST_TMPDIR/seeded.md"
+  rp H-2-001 CONFIRMED evidence/repro.txt "$CC_RESEARCH_RECORDS/PLAN.md"
+  [[ "$status" -eq 2 && "$output" == *"not a split-off hole verified against the real plan"* ]] || false
+  rp H-2-002 CONFIRMED evidence/repro.txt "$BATS_TEST_TMPDIR/seeded.md"
+  [[ "$status" -eq 2 && "$output" == *"never the seeded bundle"* ]] || false
+  rp H-2-002 CONFIRMED evidence/split.txt "$CC_RESEARCH_RECORDS/PLAN.md"
+  [[ "$status" -eq 2 && "$output" == *"must be shown to have read the real plan"* ]] || false
+  rp H-2-002 CONFIRMED evidence/repro.txt "$CC_RESEARCH_RECORDS/PLAN.md"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"H-2-002: CONTACT -> CONFIRMED by its one reproduction"* ]] || false
+  rp H-2-002 REFUTED evidence/repro.txt "$CC_RESEARCH_RECORDS/PLAN.md"
+  [[ "$status" -eq 2 && "$output" == *"already reproduced (CONFIRMED)"* ]] || false
+  run "$R" close --program demo --round 2 --reclose --reason "H-2-002 reproduced"
+  [ "$status" -eq 0 ]
+  [ "$(field 2 'm["new_material"], m["seeds_caught"], m["reproductions"]')" = "1 1 [{'hole': 'H-2-002', 'status': 'CONFIRMED'}]" ]
+  [ "$(counted)" = "['H-2-002 CONFIRMED']" ]
+}

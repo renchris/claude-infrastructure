@@ -16,6 +16,16 @@
                  --by WHO --evidence F…
       The split hole's verification, refused unless F (the plan the verifier read) is the real
       plan, byte for byte: never the seeded bundle. Until it runs, round close refuses the round.
+  round.sh reproduce --program P --hole NEW --status CONFIRMED|REFUTED --read-plan F --by WHO
+                 --reason T --evidence F…
+      The ONE reproduction (§6.5 "Disputed finding") of a split hole whose verdict was CONTACT,
+      read on the real plan before any plan edit; round close and the estimate honour its verdict.
+  round.sh hold-g --program P --hole H --known-row KR-N --names-rows ROW… --resign-due ISO
+                 --reason T --evidence F…
+      Hold a clause-(g) frame-omission hole for the post-certificate frame-delta cycle (§5.4): an
+      open known row in known_rows.jsonl that names the hole.
+  round.sh refind --program P --hole NEW --of H --reason T --evidence F…
+      A later round's hole that re-finds held hole H: not new material while H's row is open.
   round.sh repass --program P --round K --ratings F --reason T
       The round's ONE rating re-pass (§6.5), only while rater 1 and rater 2 agree below
       kit.KAPPA_REPASS_BELOW. Each line of F, {id, raters, level, clause?}, supersedes that hole's
@@ -296,6 +306,174 @@ def cmd_verify_split(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_reproduce(a: argparse.Namespace) -> int:
+    """§6.5 "Disputed finding — 1 reproduction probe": the one second verdict a split hole can get,
+    and only when its first one was CONTACT. Round close and the estimate read `verification.status`,
+    so CONFIRMED starts counting it (rate it, then re-close) and REFUTED joins the false share."""
+    h = hole(a.program, a.hole)
+    ver = h.get("verification") or {}
+    if not h.get("split_from") or ver.get("against") != "real":
+        raise rounds.Refused(
+            f"{a.hole}: not a split-off hole verified against the real plan (round.sh verify-split first)"
+        )
+    if h.get("reproduction"):
+        raise rounds.Refused(
+            f"{a.hole}: already reproduced ({ver.get('status')}); a disputed finding gets one "
+            "reproduction probe (§6.5)"
+        )
+    if ver.get("status") != "CONTACT":
+        raise rounds.Refused(
+            f"{a.hole}: its verdict is {ver.get('status')}; only a CONTACT verdict is reproduced"
+        )
+    plan = real_plan(a.program)
+    want = str(h.get("plan_blob"))
+    if blob_of(plan) != want:
+        raise rounds.Refused(
+            f"the real plan changed since {a.hole} was split: reproduce before any plan edit"
+        )
+    if blob_of(Path(a.read_plan)) != want:
+        raise rounds.Refused(
+            f"--read-plan {a.read_plan} is not the real plan the split cites (blob {want[:12]}): a "
+            "reproduction reads the real plan, never the seeded bundle"
+        )
+    if not (a.by or "").strip():
+        raise rounds.Refused("--by is required: who ran the reproduction")
+    rec = audit(a, a.program, plan_blob=want)
+    texts = [
+        (kit.records_dir(a.program) / e).read_text(errors="replace")
+        for e in rec["evidence"]
+    ]
+    if not any(want[:7] in t for t in texts):
+        raise rounds.Refused(
+            f"no evidence file names the real plan's blob {want[:12]} (git hash-object {plan.name}): "
+            "the reproduction must be shown to have read the real plan"
+        )
+    kit.append_jsonl(
+        holes_path(a.program),
+        {
+            "id": a.hole,
+            "event": "reproduce",
+            "verification": {
+                "status": a.status,
+                "against": "real",
+                "plan_blob": want,
+                "by": a.by.strip(),
+                "evidence": rec["evidence"],
+                "at": rec["at"],
+            },
+            "reproduction": dict(rec, status=a.status, first=ver),
+        },
+    )
+    print(
+        f"{a.hole}: CONTACT -> {a.status} by its one reproduction. "
+        + (
+            f"Rate it, then re-close round {h.get('round')} (round.sh close --reclose)"
+            if a.status == "CONFIRMED"
+            else f"Re-close round {h.get('round')} to recount (round.sh close --reclose)"
+        )
+    )
+    return 0
+
+
+def known_rows_path(slug: str) -> Path:
+    return kit.records_dir(slug) / "known_rows.jsonl"
+
+
+def cmd_hold_g(a: argparse.Namespace) -> int:
+    """Hold a clause-(g) frame-omission hole for the post-certificate frame-delta cycle (§5.4): an
+    open `frame-omission` known row that names the hole. The hole still counts in its own round;
+    a later round's re-find of it (round.sh refind) does not count as new material while the row
+    is open."""
+    h = hole(a.program, a.hole)
+    confirmed_material(h, "held for the frame-delta cycle")
+    clause = str((h.get("materiality") or {}).get("clause") or "")
+    if clause and "g" not in re.findall(r"[a-z]", clause.lower()):
+        raise rounds.Refused(
+            f"{a.hole}: rated under clause {clause}; only a clause-(g) frame omission is held"
+        )
+    if not re.match(r"^KR-\d+$", a.known_row):
+        raise rounds.Refused(f"--known-row {a.known_row!r}: must read KR-<n>")
+    fr = rounds.frame(a.program)
+    taken = {str(r.get("id")) for r in fr.get("known_rows") or []} | {
+        str(r.get("id")) for r in kit.read_jsonl(known_rows_path(a.program))
+    }
+    if a.known_row in taken:
+        raise rounds.Refused(f"{a.known_row}: a known row with this id already exists")
+    if a.hole in kit.held_frame_omissions(a.program):
+        raise rounds.Refused(f"{a.hole}: already held by an open known row")
+    # The hourly sweep closes an open row by its default once resign_due has passed (gate_sweep),
+    # so a past date would un-hold the hole within the hour.
+    if not re.match(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$", a.resign_due):
+        raise rounds.Refused(
+            f"--resign-due {a.resign_due!r}: must read YYYY-MM-DDTHH:MM:SSZ"
+        )
+    if a.resign_due <= kit.now_iso():
+        raise rounds.Refused(
+            f"--resign-due {a.resign_due} is not in the future: the sweep would close the row by "
+            "its default at once"
+        )
+    kit.append_jsonl(
+        known_rows_path(a.program),
+        {
+            "id": a.known_row,
+            "kind": "frame-omission",
+            "hole": a.hole,
+            "names_rows": list(a.names_rows),
+            "blocks_waves": list(a.blocks_waves or []),
+            "resign_due": a.resign_due,
+            "default": a.default,
+            "status": "open",
+            "held": audit(a, a.program),
+        },
+    )
+    print(
+        f"{a.hole}: held for the frame-delta cycle as {a.known_row} (re-sign due {a.resign_due}); "
+        "a later round's re-find of it is attached with round.sh refind"
+    )
+    return 0
+
+
+def cmd_refind(a: argparse.Namespace) -> int:
+    """Attach a later round's hole to the held hole it re-finds. The LEAD runs this after dedup (the
+    adjudicator stays blind to round history). A re-find of a hole that is not held, a fixed one
+    included, is new material and gets no record."""
+    h = hole(a.program, a.hole)
+    of = hole(a.program, a.of)
+    if a.of not in kit.held_frame_omissions(a.program):
+        raise rounds.Refused(
+            f"{a.of}: not held by an open frame-omission known row (round.sh hold-g); a re-find of "
+            "any other hole is new material"
+        )
+    if h.get("refind_of"):
+        raise rounds.Refused(
+            f"{a.hole}: already recorded as a re-find of {h['refind_of']}"
+        )
+    if h.get("seed_match") or h.get("artifact") or h.get("split_from"):
+        raise rounds.Refused(
+            f"{a.hole}: seed-tagged or already settled; it is not counted as new material anyway"
+        )
+    rh, ro = str(h.get("round") or ""), str(of.get("round") or "")
+    if not (rh.isdigit() and ro.isdigit() and int(rh) > int(ro)):
+        raise rounds.Refused(
+            f"{a.hole} (round {rh or '?'}) is not from a later certification round than {a.of} "
+            f"(round {ro or '?'})"
+        )
+    kit.append_jsonl(
+        holes_path(a.program),
+        {
+            "id": a.hole,
+            "event": "refind",
+            "refind_of": a.of,
+            "refind": audit(a, a.program),
+        },
+    )
+    print(
+        f"{a.hole}: a re-find of held {a.of}; not new material while its known row is open. "
+        f"Re-close round {rh} if it is already closed (round.sh close --reclose)"
+    )
+    return 0
+
+
 def cmd_repass(a: argparse.Namespace) -> int:
     why = reason(a.reason)
     rd = rounds.rounds_dir(a.program) / a.round
@@ -425,6 +603,40 @@ def add_verbs(sub: Any, host: Any) -> None:
     p.add_argument("--by", required=True)
     p.add_argument("--evidence", nargs="+", required=True)
     p.set_defaults(fn=cmd_verify_split)
+    p = sub.add_parser(
+        "reproduce",
+        help="the one reproduction of a split hole whose verdict was CONTACT",
+    )
+    p.add_argument("--program", required=True)
+    p.add_argument("--hole", required=True)
+    p.add_argument("--status", required=True, choices=("CONFIRMED", "REFUTED"))
+    p.add_argument("--read-plan", required=True)
+    p.add_argument("--by", required=True)
+    p.add_argument("--reason", required=True)
+    p.add_argument("--evidence", nargs="+", required=True)
+    p.set_defaults(fn=cmd_reproduce)
+    p = sub.add_parser(
+        "hold-g", help="hold a clause-(g) frame omission for the frame-delta cycle"
+    )
+    p.add_argument("--program", required=True)
+    p.add_argument("--hole", required=True)
+    p.add_argument("--known-row", required=True)
+    p.add_argument("--names-rows", nargs="+", required=True)
+    p.add_argument("--blocks-waves", nargs="*", default=[])
+    p.add_argument("--resign-due", required=True)
+    p.add_argument("--default", choices=("class-b", "descope"), default="class-b")
+    p.add_argument("--reason", required=True)
+    p.add_argument("--evidence", nargs="+", required=True)
+    p.set_defaults(fn=cmd_hold_g)
+    p = sub.add_parser(
+        "refind", help="attach a later round's hole to the held hole it re-finds"
+    )
+    p.add_argument("--program", required=True)
+    p.add_argument("--hole", required=True)
+    p.add_argument("--of", required=True)
+    p.add_argument("--reason", required=True)
+    p.add_argument("--evidence", nargs="+", required=True)
+    p.set_defaults(fn=cmd_refind)
     p = sub.add_parser(
         "repass", help="the round's one rating re-pass when rater agreement is low"
     )

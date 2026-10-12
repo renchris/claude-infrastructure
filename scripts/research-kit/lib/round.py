@@ -7,7 +7,8 @@
   round.sh close --program P --round ID --reclose --reason "<why>"
                  (a closed round, newest of its kind: re-run seed match and recompute new_material,
                  seeds_caught, quiet and round 1's forecast/R_max; the old values go to m["reclosed"])
-  round.sh artifact|split|verify-split|repass …   settling a round's holes honestly (lib/settle.py)
+  round.sh artifact|split|verify-split|reproduce|hold-g|refind|repass …
+                 settling a round's holes honestly (lib/settle.py)
 
 The caps live HERE, in code (§10 item 17), and every refusal names its cap (exit 2):
   - frame critique: exactly 2 rounds of 6 reviewers across at least 3 vendor families;
@@ -609,6 +610,8 @@ def tally(slug: str, rid: str, m: Dict[str, Any]) -> None:
     holes = kit.fold(kit.read_jsonl(kit.records_dir(slug) / "holes.jsonl")).values()
     # a built round is "b<n>": matching its seq would claim certification round n's holes
     mine = [h for h in holes if str(h.get("round")) in ids]
+    # §5.4: a re-find of a hole held for the post-certificate frame-delta cycle is not new material
+    held = kit.held_frame_omissions(slug)
     real = [
         h
         for h in mine
@@ -616,6 +619,7 @@ def tally(slug: str, rid: str, m: Dict[str, Any]) -> None:
         and (h.get("materiality") or {}).get("level") == "MATERIAL"
         and not h.get("seed_match")
         and not kit.settled_out(h)
+        and not kit.held_refind(h, held)
     ]
     m["new_material"] = len(real)
     m["seeds_caught"] = sum(
@@ -630,6 +634,25 @@ def tally(slug: str, rid: str, m: Dict[str, Any]) -> None:
             if h.get("split_from")
         ),
         key=lambda s: s["to"],
+    )
+    m["refinds"] = sorted(
+        (
+            {"hole": str(h["id"]), "of": str(h["refind_of"])}
+            for h in mine
+            if kit.held_refind(h, held)
+        ),
+        key=lambda r: r["hole"],
+    )
+    m["reproductions"] = sorted(
+        (
+            {
+                "hole": str(h["id"]),
+                "status": (h.get("verification") or {}).get("status"),
+            }
+            for h in mine
+            if h.get("reproduction")
+        ),
+        key=lambda r: r["hole"],
     )
     m["kappa"] = round_kappa(mine)
     recast = m["kind"] == "certification" and m.get("seq") == 1 and m.get("counted")
@@ -792,7 +815,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.set_defaults(fn=lambda a: cmd_reclose(a) if a.reclose else cmd_close(a))
     import settle
 
-    settle.add_verbs(sub, sys.modules[__name__])  # artifact, split, verify-split, repass
+    # artifact, split, verify-split, reproduce, hold-g, refind, repass
+    settle.add_verbs(sub, sys.modules[__name__])
     a = ap.parse_args(argv)
     try:
         kit.check_slug(a.program)
