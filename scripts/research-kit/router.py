@@ -1198,6 +1198,9 @@ WRAPPERS = {
 # for individual accounts (scripts/research-kit/lib/courier.py header).
 VENDOR = {"codex", "gemini", "agy", "antigravity"}
 KIT_ROUND = {"round.sh", "courier.sh"}
+# The verbs that settle a closed round before any plan edit (lib/settle.py, 4d11ed938). They write
+# only that round's hole and matrix records, so the round's own certification-round activity runs them.
+ROUND_SETTLE = {"artifact", "split", "verify-split", "repass"}
 CC_RESEARCH_BUYING = {"reopen", "extra-round", "round", "frame-critique", "rehearse"}
 ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
@@ -1326,7 +1329,8 @@ def research_clause(
 
     cert_acts: the program's open certification-round activities (gate.sh freeze / cert-activity).
     While certifying, a clause tagged with one runs the round's own verbs: `round.sh run --kind
-    certification`, `round.sh close`, and `codex exec` in a read-only sandbox."""
+    certification`, `round.sh close`, the round-settling verbs (ROUND_SETTLE), and `codex exec` in a
+    read-only sandbox."""
     cert_acts = cert_acts or []
     env, argv = head(toks)
     if not argv:
@@ -1366,6 +1370,7 @@ def research_clause(
             and rest
             and (
                 rest[0] == "close"
+                or rest[0] in ROUND_SETTLE
                 or (rest[0] == "run" and flag_value(rest, "--kind") == "certification")
             )
         ):

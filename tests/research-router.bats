@@ -450,6 +450,10 @@ cert_round_open() {
   [ "$(tool Bash "CC_RESEARCH_ACTIVITY=cr-1 $K/round.sh run --program demo --kind certification --round 1")" = allow ]
   [ "$(tool Bash "CC_RESEARCH_ACTIVITY=cr-1 $K/round.sh run --program demo --kind=certification --round 1")" = allow ]
   [ "$(tool Bash "CC_RESEARCH_ACTIVITY=cr-1 $K/round.sh close --program demo --round 1")" = allow ]
+  for v in artifact split verify-split repass; do
+    [ "$(tool Bash "CC_RESEARCH_ACTIVITY=cr-1 $K/round.sh $v --program demo --hole H-1-001")" = allow ]
+    [ "$(tool Bash "$K/round.sh $v --program demo --hole H-1-001")" = deny ]
+  done
   [ "$(tool Bash ". scripts/lib/detach.sh; detach \"\$LOG\" env CC_RESEARCH_ACTIVITY=cr-1 $K/round.sh run --kind certification")" = allow ]
   [ "$(tool Bash "CC_RESEARCH_ACTIVITY=cr-1 $K/courier.sh run --program demo")" = allow ]
   [ "$(tool Agent '[activity:cr-1] blind dedup')" = allow ]
