@@ -188,6 +188,16 @@ if [ "$MODE" = "post-tool" ]; then
   { mailbox_has_pending "$own_uuid" \
     || { [ "$own_pane" != "$own_uuid" ] && mailbox_has_pending "$own_pane"; }; } || exit 0
   _pt="$_mdir/$own_uuid.posttool"
+  # WOKEN BUT UNSHOWN ⇒ NO THROTTLE (2026-10-12). cc-await-ping's wake record (<key>.woke, first field =
+  # lines its wake printed through) now stops a re-armed watcher from waking this session a second time
+  # for the same line — and that second wake was, by accident, how a body reached a wake turn whose
+  # first tool call fell inside this throttle. So while any own key's record is past its `.seen`, this
+  # drain runs now. Only the first field is read: a stale record costs an unthrottled drain, nothing more.
+  for _wk in "$own_uuid" "$own_pane"; do
+    _wn="$(head -n1 "$_mdir/$_wk.woke" 2>/dev/null | cut -d' ' -f1)"
+    case "$_wn" in ''|*[!0-9]*) continue ;; esac
+    if [ "$_wn" -gt "$(mailbox_seen "$_wk")" ] && [ "$_wn" -le "$(mailbox_lines "$_wk")" ]; then _min=0; break; fi
+  done
   if [ -f "$_pt" ] && [ "$_min" -gt 0 ]; then
     _ptm="$(stat -f %m "$_pt" 2>/dev/null || stat -c %Y "$_pt" 2>/dev/null || echo 0)"
     case "$_ptm" in ''|*[!0-9]*) _ptm=0 ;; esac

@@ -222,7 +222,7 @@ gc_mailbox() {
       if [ -z "$(find "$f" -maxdepth 0 -mtime +"$MBX_DAYS" 2>/dev/null)" ]; then
         kept_young=$((kept_young + 1)); continue
       fi
-      if [ "$APPLY" -eq 1 ]; then rm -f "$MBX_DIR/$key.md" "$MBX_DIR/$key.seen" "$MBX_DIR/$key.acked" 2>/dev/null
+      if [ "$APPLY" -eq 1 ]; then rm -f "$MBX_DIR/$key.md" "$MBX_DIR/$key.seen" "$MBX_DIR/$key.acked" "$MBX_DIR/$key.woke" 2>/dev/null
       else note "would-reap    $key (acked=$acked/$lines)"; fi
       reaped=$((reaped + 1))
     else
@@ -260,6 +260,8 @@ gc_mailbox() {
   #                            is alive (mailbox_wake_armed); a days-old one already reads "not armed".
   #   .posttool             — a post-tool drain throttle stamp, judged by its mtime in seconds.
   #   .wakefloor            — a Stop-nag budget; absence is a fresh budget, and a dead key has no Stop.
+  #   .woke, no .md          — cc-await-ping's wake record; it reads 0 past EOF or on a line mismatch,
+  #                            so an orphan is the same as absence (and goes with its box otherwise).
   #   .watchers/<key>.<pid> — per-pid watcher claims, trusted only while FRESH (cc-await-ping); the
   #                            pid is also checked, so a recycled pid can only ever cause a KEEP.
   # Same brakes as the boxes — reapable key shape, not live, older than MBX_DAYS. `.forward` is never
@@ -271,12 +273,12 @@ gc_mailbox() {
     base="${sc##*/}"; ext="${base##*.}"; key="${base%.*}"
     reapable_key "$key" || continue
     is_live "$key" && continue
-    case "$ext" in acked|seen) [ -f "$MBX_DIR/$key.md" ] && continue ;; esac
+    case "$ext" in acked|seen|woke) [ -f "$MBX_DIR/$key.md" ] && continue ;; esac
     if [ "$APPLY" -eq 1 ]; then rm -f "$sc" 2>/dev/null
     else note "would-reap    $base (orphan cursor / stale sidecar)"; fi
     cursors=$((cursors + 1))
   done < <(find "$MBX_DIR" -maxdepth 1 -type f \( -name '*.acked' -o -name '*.seen' -o -name '*.posttool' \
-             -o -name '*.wakefloor' -o -name '*.watching' \) -mtime +"$MBX_DAYS" 2>/dev/null)
+             -o -name '*.wakefloor' -o -name '*.watching' -o -name '*.woke' \) -mtime +"$MBX_DAYS" 2>/dev/null)
 
   if [ -d "$MBX_DIR/.watchers" ]; then
     while IFS= read -r sc; do

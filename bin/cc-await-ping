@@ -1333,6 +1333,67 @@ WOKEEOF
   WOKE_MAP="$out$k $v"
 }
 
+# ── WAKE RECORD (2026-10-12) — ONE PING, ONE WAKE, ACROSS A RE-ARM ───────────────────────────────
+# The private cursor dies with this process, so the watcher a lead re-arms after our wake re-seeds
+# from `.seen` — and `.seen` still lags, because we PEEK and a task-notification wake is not a
+# UserPromptSubmit. Measured on lead pane 223, 2026-10-11: three double wakes in one evening, the
+# second fired 2-7 s after the re-arm on `[forwarded:223] <the line we printed>`, which the drain's
+# coverage fold (mailbox-drain.sh → mailbox_migrate) wrote at the PostToolUse of the re-arm call.
+#
+# So on fire we persist how far our wake reached: `<key>.woke` = "<lines printed through> <cksum of
+# that line>". A successor seeds from max(.seen, record) and does not wake on a `[forwarded:<key8>]`
+# copy whose origin sits inside its source key's record. This is a record of WAKES, never of reads:
+# `.seen`/`.acked` stay untouched, so the drain still delivers every line (0366d5cc7b87 holds), and
+# the drain reads the record only to skip its 20 s throttle while a woken line is still unshown.
+# F6a holds because a line past the record was never printed by any watcher. FAIL-OPEN: a missing,
+# unreadable, past-EOF or mismatched record (rotation, GC) reads 0 — an extra wake, never a lost one.
+# Kill switch: CC_AWAIT_WAKE_RECORD=0.
+_wakerec_file() { printf '%s/%s.woke' "$MAILBOX_DIR" "$1"; }
+_wakerec_sum() {   # <key> <n> → cksum of line n of the key's box; empty when unreadable
+  local f; f="$(mailbox_file "$1" 2>/dev/null)" || return 0
+  [ -n "$f" ] && [ -f "$f" ] || return 0
+  sed -n "${2}p" "$f" 2>/dev/null | cksum 2>/dev/null | awk '{print $1 "." $2}'
+}
+_wakerec_read() {   # <key> → lines a predecessor's wake covered; 0 = none, or not trustworthy
+  local n="" s=""
+  [ "${CC_AWAIT_WAKE_RECORD:-1}" != 0 ] || { echo 0; return 0; }
+  { read -r n s < "$(_wakerec_file "$1")"; } 2>/dev/null
+  case "$n" in ''|0|*[!0-9]*) echo 0; return 0 ;; esac
+  if [ "$n" -le "$(mailbox_lines "$1")" ] && [ -n "$s" ] && [ "$s" = "$(_wakerec_sum "$1" "$n")" ]; then
+    echo "$n"
+  else
+    echo 0
+  fi
+}
+_wakerec_write() {   # <key> <n> — atomic; never lowers a still-valid record
+  local f t s
+  [ "${CC_AWAIT_WAKE_RECORD:-1}" != 0 ] || return 0
+  case "$2" in ''|0|*[!0-9]*) return 0 ;; esac
+  [ "$(_wakerec_read "$1")" -lt "$2" ] || return 0
+  s="$(_wakerec_sum "$1" "$2")"; [ -n "$s" ] || return 0
+  f="$(_wakerec_file "$1")"; t="$f.$$.tmp"
+  if printf '%s %s\n' "$2" "$s" > "$t" 2>/dev/null; then mv -f "$t" "$f" 2>/dev/null || rm -f "$t" 2>/dev/null
+  else rm -f "$t" 2>/dev/null; fi
+  return 0
+}
+_woken_forward_line() {   # <line> → 0 iff a [forwarded:<key8>] copy of a line our keyset's record covers
+  local t src origin k n f
+  t="${1#* }"
+  case "$t" in "[forwarded:"*"] "*) ;; *) return 1 ;; esac
+  src="${t#\[forwarded:}"; src="${src%%\]*}"
+  origin="${t#*\] }"
+  [ -n "$src" ] && [ -n "$origin" ] || return 1
+  for k in $(_keys); do
+    [ "${k:0:8}" = "$src" ] || continue
+    n="$(_wakerec_read "$k")"; [ "$n" -gt 0 ] || continue
+    f="$(mailbox_file "$k" 2>/dev/null)" || continue
+    # One awk, no pipe: `head | grep -q` under pipefail reads FALSE on a match (grep exits, head
+    # SIGPIPEs). ENVIRON, not -v, so a backslash in the line is compared verbatim.
+    _WR_ORIGIN="$origin" awk -v n="$n" 'NR > n { exit } $0 == ENVIRON["_WR_ORIGIN"] { hit = 1; exit } END { exit !hit }' "$f" 2>/dev/null && return 0
+  done
+  return 1
+}
+
 # ── F12 (2026-08-22): A WATCHER MUST NOT READ ITS OWN PREDECESSOR'S CORPSE AS THE PING IT AWAITS ───
 # backlog b1a9e3142ee4, NARROWED 2026-08-19 and red-proved here. `_wake_down_notice` writes the
 # WAKE-PATH-DOWN verdict INTO the watched box on purpose (see its header: that placement is correct
@@ -1484,6 +1545,7 @@ _window_wakes() {   # <key> <from> → 0 iff the window holds >=1 line that WAKE
     case "$_line" in "P "*) continue ;; esac          # older than this session: delivered, not a wake
     _line="${_line#L }"
     _own_wake_down_line "$_line" && continue          # our own corpse notice is never a wake
+    _woken_forward_line "$_line" && continue          # a copy of a line a predecessor woke us for
     _line_wakes "$_line" && return 0
   done < <(_window_lines "$1" "$2")
   return 1
@@ -1495,7 +1557,7 @@ _real_mail_after() {   # <key> <from> → 0 iff the window holds >=1 line that i
   [ -n "$_f" ] && [ -f "$_f" ] || return 0
   while IFS= read -r _line || [ -n "$_line" ]; do
     case "$_line" in "P "*) _n=$(( _n + 1 )); continue ;; esac
-    _own_wake_down_line "${_line#L }" || return 0
+    _own_wake_down_line "${_line#L }" || _woken_forward_line "${_line#L }" || return 0
     _n=$(( _n + 1 ))
   done < <(_window_lines "$1" "$2")
   [ "$_n" -gt 0 ] && return 1
@@ -1530,7 +1592,12 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
     for _k in $(_keys); do
       # Seed this key's PRIVATE cursor from .seen the first time we see it — that is the F6a
       # behaviour (already-pending mail fires at once) and it is the ONLY time .seen is consulted.
-      if ! _woke_get "$_k" >/dev/null 2>&1; then _woke_set "$_k" "$(mailbox_seen "$_k")"; fi
+      # A predecessor's WAKE RECORD raises the seed: those lines already woke this session once.
+      if ! _woke_get "$_k" >/dev/null 2>&1; then
+        _sd="$(mailbox_seen "$_k")"; _wr="$(_wakerec_read "$_k")"
+        [ "$_wr" -gt "$_sd" ] && _sd="$_wr"
+        _woke_set "$_k" "$_sd"
+      fi
       _w="$(_woke_get "$_k")"; case "$_w" in ''|*[!0-9]*) _w=0 ;; esac
       if [ "$(mailbox_lines "$_k")" -gt "$_w" ]; then
         # F12: a window holding ONLY our own WAKE-PATH-DOWN corpse-notice is not a ping. Advance our
@@ -1551,7 +1618,7 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
           fi
         else
           _woke_set "$_k" "$(mailbox_lines "$_k")"
-          echo "cc-await-ping: skipped $(( $(mailbox_lines "$_k") - _w )) WAKE-PATH-DOWN control line(s) of our own, or mail older than this session's birth, on [$_k] — not a ping, still watching (they stay unseen for the boundary drain)" >&2
+          echo "cc-await-ping: skipped $(( $(mailbox_lines "$_k") - _w )) WAKE-PATH-DOWN control line(s) of our own, mail older than this session's birth, or forwarded copies of mail a predecessor watcher already woke you for, on [$_k] — not a ping, still watching (they stay unseen for the boundary drain)" >&2
         fi
       fi
     done
@@ -1566,7 +1633,13 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
       # Rationale + the incident in full: the block above mailbox_peek_from in
       # hooks/lib/mailbox-pending.sh. Dup-biased on purpose: if our stdout WAS read, the drain shows
       # it once more; that is cheap, and the alternative was a silent, unrecoverable loss.
-      if command -v mailbox_peek_from >/dev/null 2>&1; then
+      # The window is pinned to an END read BEFORE the print, so the wake record names exactly the
+      # lines this wake carried; a line appended mid-print is outside both and wakes the successor.
+      _END="$(mailbox_lines "$_HIT")"
+      if command -v mailbox_peek_range >/dev/null 2>&1; then
+        _pb="$(mailbox_peek_range "$_HIT" "$_FROM" "$_END")" && printf '%s' "$_pb"   # same bytes as peek_from
+        _wakerec_write "$_HIT" "$_END"
+      elif command -v mailbox_peek_from >/dev/null 2>&1; then
         mailbox_peek_from "$_HIT" "$_FROM"
       else
         # Deployed lib predates peek. Print the window inline — still writing NO cursor, which is the
@@ -1576,7 +1649,7 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
         [ -n "$_pf" ] && [ -f "$_pf" ] && tail -n +"$(( _FROM + 1 ))" "$_pf" 2>/dev/null
       fi
       # Our PRIVATE cursor still advances — that is what stops us re-testing this window — and it is
-      # deliberately the ONLY cursor this path writes.
+      # deliberately the ONLY cursor this path writes (the wake record above is not one: no reader delivers from it).
       _woke_set "$_HIT" "$(mailbox_lines "$_HIT")"
       # The F9 rc-2 escalation that stood here (verdict=ping-cursorfail / exit 4) is gone WITH its
       # subject: it alarmed when the take printed a body but could not advance `.seen`. This path
