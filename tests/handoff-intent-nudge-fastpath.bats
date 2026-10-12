@@ -18,7 +18,7 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/cfg"; mkdir -p "$CLAUDE_CONFIG_DIR"
   export CC_WF_TEAM_ROOTS="$BATS_TEST_TMPDIR/teamroot"; mkdir -p "$CC_WF_TEAM_ROOTS"
-  unset CLAUDE_JOB_DIR CC_WF_PSTABLE_FILE CC_WF_START_PID AGENT_IDENTITY_LIB
+  unset CLAUDE_JOB_DIR CC_WF_PSTABLE_FILE CC_WF_START_PID CC_WF_MAX_HOPS AGENT_IDENTITY_LIB
   MARK="$BATS_TEST_TMPDIR/ps-ran"
   STUB="$BATS_TEST_TMPDIR/stub"; mkdir -p "$STUB"
   printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\nexit 1\n' "$MARK" > "$STUB/ps"
@@ -42,7 +42,9 @@ pstable() {
   nudge "please hand off when done"
   [ "$status" -eq 0 ]
   [ -f "$MARK" ] || { echo "ps stub never ran"; false; }
-  grep -q -- '-axo' "$MARK"
+  # Form-agnostic: both the table call (`-axo pid=,ppid=,command=`) and a per-hop
+  # `-o pid=,ppid=,command= -p PID` walk name `command=`, so this survives either lib shape.
+  grep -q -- 'command=' "$MARK"
   [[ "$output" == *"HANDOFF-INTENT PARITY"* ]] || { echo "$output"; false; }
 }
 

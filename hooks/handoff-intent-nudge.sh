@@ -26,8 +26,11 @@ PROMPT="$(printf '%s' "$INPUT" | jq -r '.prompt // empty' 2>/dev/null)" || exit 
 
 # A harness-injected <task-notification> is a machine prompt, not a user's intent: it can quote a
 # finished agent's prose ("hand off", "self-close") verbatim. Such prompts are 5.5-9.8x as frequent
-# as human ones, so this exit alone drops most firings. Leading whitespace is tolerated.
-case "${PROMPT#"${PROMPT%%[![:space:]]*}"}" in '<task-notification>'*) exit 0 ;; esac
+# as human ones, so this exit alone drops most firings. Leading whitespace is tolerated, via an
+# anchored regex: the `${PROMPT#"${PROMPT%%[![:space:]]*}"}` strip is superlinear under bash 3.2
+# (50.8 s on a 1.7 MB prompt with 20000 leading spaces). Regex in a variable for 3.2 quoting rules.
+_hi_tn='^[[:space:]]*<task-notification>'
+[[ $PROMPT =~ $_hi_tn ]] && exit 0
 
 # The typed command injects the full spec — no nudge needed on top of it.
 case "$PROMPT" in "/handoff"*) exit 0 ;; esac
