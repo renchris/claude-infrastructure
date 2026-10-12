@@ -23,7 +23,7 @@
 # resolves the dialog in under 5 s, both from the main thread and from a workflow-lean Workflow slot,
 # with `--permission-mode auto` and a --settings overlay that registers only this hook. The claim
 # rests on reading the 2.1.293 code; 35 of the 41 reachable rows are workflow dialogs. That proof is
-# scripts/rm-preempt-probe.sh (main + workflow-lean subagent arms); the batch-hold above keeps
+# scripts/rm-preempt-probe.sh (main + subagent arms); the batch-hold above keeps
 # scripts/c10-batch.sh from registering the hook before it has printed verdict=PASS.
 #
 # WHY ITS OWN ENTRY. The existing PermissionRequest groups (notify.sh, cc-permission-beacon.sh,

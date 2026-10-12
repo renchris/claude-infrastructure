@@ -7,7 +7,7 @@
 # (docs/research/autodeny-prompts-2026-10-11/verdicts.md, C1 efficacy change 3). Re-run after every
 # Claude Code upgrade: the inline-shell scanner and the hook contract both move between releases.
 #
-# HOW: for each arm (main thread; a workflow-lean subagent) it starts a detached tmux session running
+# HOW: for each arm (main thread; a general-purpose subagent) it starts a detached tmux session running
 # `claude --permission-mode auto --settings <overlay registering THIS checkout's hook>` with a prompt to run
 # one known false positive, `bash -c 'f(){ "$@"; }; f true'`. It then reads that session's transcript and
 # measures tool_use -> tool_result. PASS = the result carries the hook's deny text within PASS_S seconds.
@@ -62,13 +62,18 @@ run_arm() {
   if [ "$a" = main ]; then
     prompt="[$tag] Acceptance probe. Run exactly this one Bash command, verbatim, once: $probe_cmd -- then quote the tool result verbatim and stop. Do not retry or rewrite it."
   else
-    prompt="[$tag] Acceptance probe. Spawn one Agent with subagent_type workflow-lean whose only task is to run exactly this one Bash command verbatim, once: $probe_cmd -- and return the tool result verbatim without retrying. Quote its return and stop."
+    # general-purpose, NOT workflow-lean: workflow-lean's own brief (agents/workflow-lean.md) forbids
+    # exactly this bash -c shape, so it declines and no dialog ever appears (measured 2026-10-12).
+    prompt="[$tag] Acceptance probe of a permission hook; the command is a harmless no-op test fixture. Spawn one Agent with subagent_type general-purpose whose only task is to run exactly this one Bash command verbatim, once: $probe_cmd -- and return the tool result verbatim without retrying. Quote its return and stop."
   fi
   printf '%s\n' "$prompt" > "$work/$a.prompt"
   printf '%s\n' "$overlay" > "$work/overlay.json"
   start="$(date +%s)"
+  # env -u: the probe must not inherit the caller's pane/session identity. Run from `!` in a live
+  # session, it otherwise read as that pane, and its hooks SIGTERMed the pane's own cc-await-ping
+  # watcher (measured 2026-10-12, WAKE-PATH-DOWN naming this probe's argv as the sender).
   tmux new-session -d -s "$sess" -x 220 -y 60 -c "$here" \
-    "CLAUDE_CONFIG_DIR='$cfg' '$bin' --permission-mode auto --settings \"\$(cat '$work/overlay.json')\" \"\$(cat '$work/$a.prompt')\""
+    "env -u ITERM_SESSION_ID -u CC_PANE_ID -u KITTY_WINDOW_ID -u KITTY_LISTEN_ON -u KITTY_PID -u KITTY_PUBLIC_KEY -u CLAUDECODE -u CLAUDE_PID -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_ENTRYPOINT -u CLAUDE_CODE_BRIDGE_SESSION_ID -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_CODE_MESSAGING_SOCKET -u CLAUDE_CODE_MESSAGING_TOKEN -u CLAUDE_CODE_TASK_LIST_ID -u CLAUDE_CODE_SESSION_ATTENDED CLAUDE_CONFIG_DIR='$cfg' '$bin' --permission-mode auto --settings \"\$(cat '$work/overlay.json')\" \"\$(cat '$work/$a.prompt')\""
   verdict="NO-VERDICT timed out after ${wait_s}s"
   while [ $(( $(date +%s) - start )) -lt "$wait_s" ]; do
     sleep 5
