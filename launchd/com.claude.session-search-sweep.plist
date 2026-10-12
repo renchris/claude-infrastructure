@@ -12,6 +12,18 @@
     </array>
     <key>StartInterval</key>
     <integer>60</integer>
+    <!--
+        StartInterval stays 60 (tests/session-index-sweep.bats pins it); the throttle is the
+        script's own knob (hooks/session-index-sweep.sh "Cadence knob"): a tick inside 300 s of the
+        last real pass exits before touching the DB, instead of walking every project directory
+        each minute (docs/plans/LOAD_AND_PROMPT_HOOK_TIMEOUTS.md O3). Index lag becomes at most
+        5 min. A loaded job re-reads this only on reload: c10, migrations/0065.
+    -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>SESSION_INDEX_SWEEP_MIN_INTERVAL_S</key>
+        <string>300</string>
+    </dict>
     <key>LowPriorityIO</key>
     <true/>
     <key>Nice</key>

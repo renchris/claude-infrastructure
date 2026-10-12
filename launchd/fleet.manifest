@@ -542,7 +542,7 @@ homebrew.mxcl.postgresql@14        | run    | 0    | -    | 12 | 42-postgresql14
 #              not live. 18-fleet-activate.sh reconciles every `expect = run` label straight from this
 #              manifest, so it is correct for this row by construction.
 com.claude.browse-mirror           | run    | 600  | auto | 11 | 18-fleet-activate.sh
-com.claude.public-publish         | run    | 10800 | auto | 12 | 46-public-repo-cutover.sh
+com.claude.public-publish         | run    | 86400 | auto | 12 | 46-public-repo-cutover.sh
 # ── com.reso.lr-reconciler* (2026-09-29, LIMIT_RECOVER_FLEET_V2_ARCHITECTURE §C2/§C9) ────────────────
 # The one com.reso family this repo DOES own: unlike the reso-owned jobs excluded above, their SSOT is
 # scripts/limit-recover/ here. `staged` = built, not loaded; W5's operator step (lr-recon-launchd.sh)

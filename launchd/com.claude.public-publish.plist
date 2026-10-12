@@ -20,7 +20,10 @@
     <string>-lc</string>
     <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:$PATH"; if [ -x /usr/sbin/taskpolicy ]; then exec /usr/sbin/taskpolicy -c utility ~/.claude/scripts/public-publish-tick.sh; fi; exec ~/.claude/scripts/public-publish-tick.sh</string>
   </array>
-  <key>StartInterval</key>    <integer>10800</integer>
+  <!-- Daily, not every 3 h (2026-10-12, docs/plans/LOAD_AND_PROMPT_HOOK_TIMEOUTS.md O3): each tick
+       re-runs the filter-repo projection, and a public mirror a day behind costs nothing.
+       A loaded job re-reads this only on reload: c10, migrations/0065. -->
+  <key>StartInterval</key>    <integer>86400</integer>
   <key>RunAtLoad</key>        <false/>
   <key>Nice</key>             <integer>10</integer>
   <key>StandardOutPath</key>  <string>/Users/chrisren/.claude/logs/public-publish.out.log</string>
