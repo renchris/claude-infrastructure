@@ -21,6 +21,16 @@ C2 workflow-lean/deep-research guidance, C4 `bin/cc-autodeny-census`, C5 narrow 
   remote-only; transcripts are the only complete local record (dedupe across stores). The permission-archive beacon saw
   26/48 and cannot tell an auto-deny from a human deny; supervisor pages arrive after the 120 s timer fires.
 
+## Outcome (2026-10-12)
+
+- Live acceptance probe (`scripts/rm-preempt-probe.sh`, operator run): main thread PASS, hook deny after
+  0.3 s; Workflow slot PASS, 0.9 s (vs the 120 s timer). Registered by migration 0061; the five 0062 allow
+  rules applied. Both read back by content.
+- Probe lessons: a workflow-lean slot declines the trap command (its new brief forbids it), and a plain
+  Agent-tool subagent cannot prompt, so Claude Code denies it in 0.1 s with no dialog; a child `claude` must
+  `env -u` the caller's pane identity or its hooks act on that pane (it SIGTERMed a watcher on run 1).
+- Re-run the probe after every Claude Code upgrade; track recurrence with `cc-autodeny-census --since 7d`.
+
 ## Files
 
 | file | content |
