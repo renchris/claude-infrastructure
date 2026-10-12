@@ -500,6 +500,18 @@ bg(){ out=$(bats "$1" 2>&1); n=$(printf '%s\n' "$out" | sed -n 's/^1\.\.\([0-9]*
   - **Abstentions:** `jq -r 'select(.slot=="interactive" and .outcome=="none") | select([.excluded[]?|select(.=="concurrency-unmeasured")]|length>=3) | .ts[0:10]' ~/.claude/route/route.jsonl | sort | uniq -c | tail -7`
   - **ps failures per day:** `grep 'concurrency: ps UNAVAILABLE' ~/.claude/logs/claude-accounts.log | cut -c1-10 | uniq -c | tail -7`
 
+### W1-W4 — implemented 2026-10-11/12 (compacted; detailed tasks kept below for reference)
+
+- Commits on `feat/accounts-freshness`: W1 `34107d4a5` (+ fixup `3acd8adc3`), bounded ps reap `9d5bb554f`, W2 `a9a20bae9`, W3+W4 `09f80c8c9`. Land A ships W1 + the reap fix from branch `feat/accounts-freshness-a` (worktree `~/Development/.worktrees/af-w1-test`), so W2 stays off trunk until Land B.
+- **Scope (grown): +bounded ps reap.** Measured 2026-10-12 at load 330: `ps` "timed out after 10 seconds" yet `concurrency()` returned after 1,226 s, because `subprocess.run` waits unbounded for a SIGKILLed `ps` stuck in the kernel. In `ab` mode that stamped the native count 20 min stale, past its grace, defeating D1-D2. `_ps_census` now runs on a daemon thread joined at `PS_JOIN_S` = 15 s, which keeps every `subprocess.run` stub working.
+- Live checks: native census 14-354 ms (362 tty processes, 80-83 argv reads, load 330-449); a live `--local-refresh` pass took 0.40-0.53 s wall, left cache `ts` byte-identical, made 0 usage polls, and its native counts equalled the cached ps counts exactly. Its first pass printed T4 for all four rows, which is expected: the live cache was written by pre-change code, so its rows had no `rt_fp`.
+- Deviations from the text below, each deliberate:
+  - The launch-path audit pins the measured open set `{accounts.json, assign ledger, cache, util log}` (+ `route.jsonl` for `--route`), identical on BASE and HEAD; §5 listed it without the assign ledger and route records.
+  - The first-read prune is `quota_read_at > read_at` (strict), not `>=`: rule (f) and the reuse guard both set `quota_read_at = read_at`, so `>=` would prune the first read before the sweep's reuse guard could use it.
+  - `_auth_verdict` mirrors probe_account: past the login cliff, or stale with no refresh token, is `login-required` (so T2 never recovers a dead login).
+  - W3 and W4 are one commit: their edits interleave in one file and form one feature.
+- bats admission: two research sessions re-took both cc-bats slots back to back for over 20 minutes, so runs use the wrapper's recorded waiver (`CC_BATS_MAX_ROOTS=0` with a reason), one suite at a time.
+
 ### W1 — native census and router charge, then Land A (L)
 
 - **T1.1** Add the `accounts.json` `"census": "ab"` key and its `"_census"` doc, and `_census_mode()` (D1).
