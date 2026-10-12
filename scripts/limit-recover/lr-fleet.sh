@@ -1889,7 +1889,11 @@ EOF
       _lf_notify="${CC_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}"
       if [ -x "$_lf_notify" ]; then
         if [ -n "${LR_FLEET_REQUESTER:-}" ]; then "$_lf_notify" "$LR_FLEET_REQUESTER" "$_lf_msg" || echo "lr-fleet: cc-notify to ${LR_FLEET_REQUESTER} FAILED — the verdict is on disk only: $FLEET_DIR/$RUN/verdict.txt" >&2
-        else "$_lf_notify" --role desk "$_lf_msg" || echo "lr-fleet: no requester pane and the desk role did not take it — the verdict is on disk only: $FLEET_DIR/$RUN/verdict.txt" >&2
+        # The desk call mutes cc-notify's phone fallback (decision 1dc45a0d583c, as bin/cc-desk-page
+        # does): the desk has no claimant, so the fallback would push "undeliverable page" for every
+        # daemon verdict once phone creds exist. The rail's phone leg is lr-page's, at the reroute
+        # give-up (lr-reset-poller.sh reroute_parked). Never the limited session's own pane.
+        else CC_NOTIFY_PHONE_FALLBACK=0 "$_lf_notify" --role desk "$_lf_msg" || echo "lr-fleet: no requester pane and the desk role did not take it — the verdict is on disk only: $FLEET_DIR/$RUN/verdict.txt" >&2
         fi
       else
         echo "lr-fleet: cc-notify unreachable at $_lf_notify — the verdict is on disk only: $FLEET_DIR/$RUN/verdict.txt" >&2

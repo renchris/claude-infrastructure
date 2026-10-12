@@ -2090,6 +2090,26 @@ held_run() { # $1 = the HELD token lr-handoff prints (empty = none); $2 = focus
   grep -q 'verdict=FAILED rc=6' "$NOTIFY_LOG" || { cat "$NOTIFY_LOG"; false; }
 }
 
+# Decision 1dc45a0d583c: with no requester the verdict goes to `--role desk`, which has no claimant, so
+# cc-notify's own phone fallback would push "undeliverable page" for EVERY daemon verdict the moment
+# Pushover credentials exist. The phone leg for the rail is lr-page's alone (the reroute give-up page).
+@test "[1dc45a0d583c] a no-requester verdict reaches the desk with cc-notify's phone leg OFF" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"; held_notify_stub
+  printf '#!/bin/bash\nprintf "pf=%%s %%s\\n" "${CC_NOTIFY_PHONE_FALLBACK:-unset}" "$*" >> "$NOTIFY_LOG"\n' > "$CC_NOTIFY_BIN"
+  unset LR_FLEET_REQUESTER
+  held_run ""
+  grep -q '^pf=0 --role desk lr-fleet --one' "$NOTIFY_LOG" || { cat "$NOTIFY_LOG"; false; }
+}
+
+@test "1dc45a0d583c CONTROL: a requester's mail keeps cc-notify's own default — only the desk call is muted" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"; held_notify_stub
+  printf '#!/bin/bash\nprintf "pf=%%s %%s\\n" "${CC_NOTIFY_PHONE_FALLBACK:-unset}" "$*" >> "$NOTIFY_LOG"\n' > "$CC_NOTIFY_BIN"
+  unset CC_NOTIFY_PHONE_FALLBACK
+  export LR_FLEET_REQUESTER=999
+  held_run ""
+  grep -q '^pf=unset 999 lr-fleet --one' "$NOTIFY_LOG" || { cat "$NOTIFY_LOG"; false; }
+}
+
 @test "[D6.7] a HELD:draft keeps the pane's screen — pane, sid and focus reach the snapshot, the row names it" {
   blocked_tx "$SEC" "$SID"; row 616 "$SID"; held_notify_stub
   held_run HELD:draft 0
