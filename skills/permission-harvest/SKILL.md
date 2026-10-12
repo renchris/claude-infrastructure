@@ -201,6 +201,21 @@ migration and no bespoke activation script**; `18-fleet-activate.sh` is the mani
 A file newly added to this loop has no symlink, is absent from the live tree, and every consumer
 guard on it is a silent skip until `scripts/deploy-live.sh` converges (the `LIVE_ADDS` rung).
 
+### 7a. TIMED AUTO-DENIES — reviewed first, every week (2026-10-11)
+
+In the weekly review, also run `cc-autodeny-census --since 7d` (read-only; add `--log` to append
+new rows to `~/.claude/logs/autodeny.jsonl`) and relay its table verbatim. It lists every prompt that
+Claude Code denied on its own ("will automatically deny this request in M:SS"). The transcripts are
+the only complete local record of these; the archive above sees about half and cannot tell them from
+a human deny. **Treat any timed auto-deny as higher priority than ordinary prompts:** an ordinary
+prompt pauses work until someone answers, but a timed auto-deny refuses unattended work outright.
+None of them are this skill's to fix with an allow rule. They are Claude Code's dangerous-removal
+safety check, which no allow rule clears, so the fix is the command shape (cause groups G1–G5) or the
+`rm-prompt-preempt` hook. Compare the census count with the "C1 preempted" line it prints, which
+counts dialogs the hook answered at once. Only the classifier-fallback rows (`F1`, inferred) can be
+helped by allow rules here. Method and the 64-row baseline:
+`docs/research/autodeny-prompts-2026-10-11/`.
+
 ### 7b. THE BANG SOURCE (`--bang`, 2026-10-01)
 
 A second population: the commands the operator ran with `!`, most pasted from a `▶ Run this:`

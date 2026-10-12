@@ -1,0 +1,828 @@
+#!/usr/bin/env python3
+"""cc-autodeny-census — the durable local record of Claude Code's timed auto-denied permission prompts.
+
+Claude Code (>= 2.1.284) shows some permission dialogs with a countdown — "Claude Code will
+automatically deny this request in M:SS, to avoid blocking progress on an unattended session" — and
+denies the call when nobody answers. Its own events for this are sent to Anthropic only; the session
+transcripts are the only complete local record. This tool reads them, read-only.
+
+Usage:
+  cc-autodeny-census [--since Nd|YYYY-MM-DD] [--summary] [--json] [--log]
+
+  --since   window start: Nd (N days back from now) or a UTC date. Default 7d.
+  --summary a small table by outcome x cause x context, plus totals and date range (the default
+            output when --json is not given; with --json it goes to stderr).
+  --json    one JSON document on stdout: {since, generated, predicate, totals, rows}.
+  --log     append rows not yet logged (dedup by tool_use_id) to ~/.claude/logs/autodeny.jsonl.
+            This log is the ONLY thing the tool writes.
+
+What it finds:
+  * Measured rows (inferred:false): every tool_result that carries the dangerous-removal safety
+    check's deny text ("denied by a built-in Claude Code safety check, not by the user") or a
+    permissionDecision with reasonType "safetyCheck", decision "reject" and source "config" (a
+    person rejecting the dialog is source "user_reject" and is not counted). Outcome:
+      timed_out  dialog shown, nobody answered, denied after >= 110 s (the timer is 120 s)
+      capped     denied with no dialog because the session already let 3 dialogs expire
+      immediate  denied in < 10 s: a context that cannot prompt (headless / async subagent)
+      unknown    an elapsed time in between, or no tool_use timestamp to measure from
+  * Inferred rows (inferred:true, with a method name), never mixed into the measured totals:
+      inferred_fallback_timeout / inferred_fallback_or_slow_classifier — the auto-mode classifier's
+        denial-limit fallback dialog (timed, 2.1.260+). Its expiry text is identical to an ordinary
+        classifier deny, so it is inferred: count consecutive classifier denies per transcript,
+        resetting ONLY on a classifier-decided allow (permissionDecision reasonType "classifier",
+        decision "accept"); rule, hook and fast-path allows do not reset it. The 3rd consecutive deny
+        qualifies when its tool_use->tool_result time is >= 120 s. A deny whose reason says "Stage 2
+        classifier error" or "unavailable" is labelled inferred_fallback_or_slow_classifier, since a
+        slow classifier error takes as long. Transcripts written before CC recorded
+        permissionDecision (<= 2.1.284) cannot show a classifier allow, so there the method is
+        classifier_streak_legacy_window: >= 2 earlier classifier denies within 600 s, at most one row
+        per streak (a deny within 600 s of the last such row is skipped).
+      answered_probable — a user_temporary accept (a person answered a dialog) whose Bash command
+        matches the dangerous-removal prompt shape predicate. The predicate is imported from
+        hooks/lib/rm_prompt_shape.py when that file exists at run time (next to this script's real
+        path, then ~/.claude/hooks/lib); otherwise an inline copy of the research prototype
+        (docs/research/autodeny-prompts-2026-10-11/prototypes/detect2.py + prfinal.py) is used.
+        The summary and --json name which one ran.
+
+Cause groups (docs/research/autodeny-prompts-2026-10-11/README.md):
+  G1 bash -c / sh -c script the check cannot read, with no rm in it   G2 cd X; rm rel/* (relative glob)
+  G3 unguarded variable target ($D/*, "$X"/*)                          G4 bash -c script that does run rm
+  G5 a workspace / critical literal path (e.g. the rm -f "" probe)     F1 classifier denial-limit fallback
+  other: anything else (e.g. a command-substitution target)
+
+Stores: every ~/.claude*/projects directory, deduplicated by realpath, including subagents/**.
+Rows are deduplicated by tool_use_id across stores (the same call is often copied between account
+stores; the copy that also holds the tool_use wins); each row lists every store it was seen in. A row NEVER holds the full command: only
+cmd_head (<= 200 chars) and cmd_sha256 of the full text.
+
+Prefilter: rg -l (grep -rl when rg is missing) over files modified since the window start; only hit
+files are parsed.
+
+Exit: 0 on success, 2 on a usage error, 1 when --log could not write its log.
+"""
+
+import datetime
+import hashlib
+import importlib.util
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+SAFETY = "Permission for this command was denied by a built-in Claude Code safety check"
+SAFETY_MARK = "denied by a built-in Claude Code safety check, not by the user"
+CLS1 = "Permission for this action was denied by the Claude Code auto mode classifier"
+CLS2 = "Permission for this action has been denied. Reason:"
+PATTERNS = [
+    SAFETY_MARK,
+    '"reasonType":"safetyCheck"',
+    "denied by the Claude Code auto mode classifier",
+    CLS2,
+    '"source":"user_temporary"',
+]
+CAPPED_RE = re.compile(r"gone unanswered \d+ times")
+FALLBACK_MIN_S = 120.0
+LEGACY_WINDOW_S = 600.0
+HEAD = 200
+
+# ── the dangerous-removal prompt shape predicate (inline copy of the research prototype) ─────────
+# Ports CC 2.1.293's nan() and Hin() regexes onto the -c script read by a shell-word reader, plus the
+# rm-target shapes. Source: docs/research/autodeny-prompts-2026-10-11/prototypes/detect2.py, prfinal.py.
+_SHELLS = r"(?:ba|z|da|k|rba)?sh"
+_INL = re.compile(
+    r"(?:^|(?<=[\s;&|(`{]))(?:[\w./-]*/)?" + _SHELLS
+    + r"\s+((?:-[A-Za-z]+\s+|--[\w-]+\s+)*)-[A-Za-z]*c[A-Za-z]*\s+|(?:^|(?<=[\s;&|(`{]))\"?\$\{?\w+\}?\"?\s+-c\s+"
+)
+
+
+def _read_word(s, i):
+    out = []
+    n = len(s)
+    while i < n:
+        c = s[i]
+        if c in " \t\n;&|<>()":
+            break
+        if c == "'":
+            j = s.find("'", i + 1)
+            j = n if j < 0 else j
+            out.append(s[i + 1:j])
+            i = j + 1
+        elif c == "$" and i + 1 < n and s[i + 1] == "'":
+            j = i + 2
+            while j < n and s[j] != "'":
+                j += 2 if s[j] == "\\" else 1
+            out.append(s[i + 2:j])
+            i = j + 1
+        elif c == '"':
+            j = i + 1
+            buf = []
+            while j < n and s[j] != '"':
+                if s[j] == "\\" and j + 1 < n and s[j + 1] in '"\\$`\n':
+                    buf.append(s[j + 1])
+                    j += 2
+                else:
+                    buf.append(s[j])
+                    j += 1
+            out.append("".join(buf))
+            i = j + 1
+        elif c == "\\" and i + 1 < n:
+            out.append(s[i + 1])
+            i += 2
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def _scripts(cmd):
+    for m in _INL.finditer(cmd):
+        yield _read_word(cmd, m.end())
+
+
+_NAN1 = re.compile(r"\{[^{}\s]*(?:,|\.\.)")
+_NAN2 = re.compile(r"(?:^|[^\w.-])rm(?:dir)?(?![\w.-])", re.I)
+_NAN3 = re.compile(r"(?:^|[;&|(){}\n`!])\s*(?:\w+\+?=\S*\s+)*\$")
+
+
+def _nan(e):
+    n = re.sub(r"""\$(?=['"])|['"\\]""", "", e)
+    return bool(_NAN1.search(n) or _NAN2.search(n) or _NAN3.search(n))
+
+
+_HIN_RE = re.compile(
+    r"""\bfunction\b|\balias\b|\bIFS\b|\w\s*\(\s*\)|(?:^|[\s;&|(){}])(?:argv|[0-9]+)(?:\[[^\]]*\])?=|(?:^|[\s;&|(){}!])set\s[^;&|\n]*(?:\$\(|`)"""
+)
+_WRAP = {"env", "command", "exec", "nohup", "nice", "time", "builtin", "sudo", "xargs", "timeout", "stdbuf",
+         "caffeinate", "then", "do", "else", "elif", "if", "while", "until", "!"}
+
+
+def _segs(e):
+    for part in re.split(r"[;&|\n(){}`]+", e):
+        toks = part.split()
+        if toks:
+            yield toks
+
+
+def _hin(e):
+    if _HIN_RE.search(e):
+        return "hin_re"
+    for toks in _segs(e):
+        k = 0
+        while k < len(toks) and (toks[k] in _WRAP or re.match(r"^(?:-|\d+$)", toks[k]) or re.match(r"^\w+=", toks[k])):
+            k += 1
+        if k >= len(toks):
+            continue
+        w = toks[k].strip("\"'")
+        if re.match(r"^(?:shift|source|\.|eval|trap)$", w):
+            return "src_eval"
+        if re.match(r"^\$(?!\{?[0-9@*#])", w):
+            return "dollar_cmd"
+        if w == "set" and any(t in ("-", "--") or not re.match(r"^[-+]", t) for t in toks[k + 1:]):
+            return "set_args"
+    return None
+
+
+_RM_OCC = re.compile(
+    r"""(?:^|[;&|\n({`]|&&|\|\||\bthen\b|\bdo\b|\belse\b)\s*(?:sudo\s+|command\s+|xargs\s+)?(?:/bin/|/usr/bin/)?(rm|rmdir)\s+([^;&|\n)]*)"""
+)
+_VAR_SLASH = re.compile(r"""\$\{?([A-Za-z_]\w*|[0-9@*])\}?"?/(?:[*?\[$/"']|\s|$)""")
+_CD = re.compile(r"""(?:^|[;&|\n(]|&&)\s*(?:cd|pushd)\s+\S""")
+_VARSHELL = re.compile(r"""(?:^|[\s;&|(])"?\$\{?\w+\}?"?\s+-[A-Za-z]*c[A-Za-z]*\s""")
+
+
+def _rm_targets(cmd):
+    for m in _RM_OCC.finditer(cmd):
+        args = [a for a in m.group(2).split() if not a.startswith(("-", "2>", ">"))]
+        yield m.group(1), args, m.start()
+
+
+def _unguarded_var(cmd):
+    for _v, args, _pos in _rm_targets(cmd):
+        for a in args:
+            if "${" in a and ":?" in a:
+                continue
+            if _VAR_SLASH.search(a):
+                return a
+    return None
+
+
+def _cd_rel_glob(cmd):
+    for _v, args, pos in _rm_targets(cmd):
+        if not _CD.search(cmd[:pos + 1]):
+            continue
+        for a in args:
+            s = a.strip("\"'")
+            if s.startswith(("/", "~", "$")):
+                continue
+            if re.search(r"[*?\[]", s):
+                return a
+    return None
+
+
+def inline_shape(cmd):
+    """prfinal.shape: 'inline_shell' | 'unguarded_var' | 'cd_rel_glob' | None."""
+    for sc in _scripts(cmd):
+        if (_nan(sc) or "$'" in sc) and _hin(sc):
+            return "inline_shell"
+    if _unguarded_var(cmd):
+        return "unguarded_var"
+    if _cd_rel_glob(cmd):
+        return "cd_rel_glob"
+    if _VARSHELL.search(cmd):
+        return "inline_shell"
+    return None
+
+
+def _normalize_shape(res):
+    if res is None or res is False:
+        return None
+    if isinstance(res, dict):
+        res = res.get("shape")
+    elif isinstance(res, (list, tuple)):
+        res = res[0] if res else None
+    if not res:
+        return None
+    res = str(res).split(":")[0]
+    return None if res in ("none", "None", "") else res  # rm_prompt_shape.classify -> ("none", "", False)
+
+
+def load_shape_predicate():
+    """Returns (callable, label). Prefers hooks/lib/rm_prompt_shape.py; falls back to inline_shape."""
+    override = os.environ.get("CC_AUTODENY_SHAPE_MODULE", "")
+    if override == "none":
+        return inline_shape, "inline prototype copy (forced by CC_AUTODENY_SHAPE_MODULE=none)"
+    here = os.path.dirname(os.path.realpath(__file__))
+    cands = [override] if override else [
+        os.path.join(here, "..", "hooks", "lib", "rm_prompt_shape.py"),
+        os.path.expanduser("~/.claude/hooks/lib/rm_prompt_shape.py"),
+    ]
+    for path in cands:
+        if not path or not os.path.isfile(path):
+            continue
+        try:
+            spec = importlib.util.spec_from_file_location("rm_prompt_shape", path)
+            mod = importlib.util.module_from_spec(spec)
+            sys.dont_write_bytecode = True  # no __pycache__ beside the module: the log is our only write
+            spec.loader.exec_module(mod)
+        except Exception:
+            continue
+        for name in ("shape", "classify_shape", "classify"):
+            fn = getattr(mod, name, None)
+            if callable(fn):
+                def pred(cmd, _fn=fn):
+                    try:
+                        return _normalize_shape(_fn(cmd))
+                    except Exception:
+                        return inline_shape(cmd)
+                return pred, "%s:%s" % (os.path.realpath(path), name)
+    return inline_shape, "inline prototype copy (hooks/lib/rm_prompt_shape.py not found)"
+
+
+# ── helpers ───────────────────────────────────────────────────────────────────────────────────────
+def parse_ts(s):
+    if not isinstance(s, str) or not s:
+        return None
+    try:
+        d = datetime.datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=datetime.timezone.utc)
+    return d
+
+
+def text_of(c):
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        return " ".join(x.get("text", "") for x in c if isinstance(x, dict) and isinstance(x.get("text", ""), str))
+    return ""
+
+
+def vtuple(v):
+    try:
+        return tuple(int(x) for x in re.findall(r"\d+", v or "")[:3]) or (0,)
+    except ValueError:
+        return (0,)
+
+
+def tilde(p):
+    home = os.path.expanduser("~")
+    return "~" + p[len(home):] if home and p.startswith(home + "/") else p
+
+
+def head(s, n=HEAD):
+    s = (s or "").replace("\r", " ").replace("\n", " \\n ").replace("\t", " ")
+    return s[:n]
+
+
+_RM_WORD = re.compile(r"(^|[\s;&|(`{])(/bin/)?(rm|rmdir|unlink)(\s|$)")
+
+
+def cause_of(flagged, cmd, shape_fn):
+    fl = flagged or ""
+    low = fl.lower()
+    if "shell -c" in fl:
+        return ("G4", "inline_shell_c_with_rm") if _RM_WORD.search(cmd or "") else ("G1", "inline_shell_c_no_rm")
+    if "changes directories before the removal" in fl or "changes directory" in fl:
+        return "G2", "cd_then_relative_glob"
+    if "variable" in low:
+        return "G3", "unguarded_var_target"
+    if "command substitution" in low:
+        return "other", "cmd_substitution_target"
+    if "workspace directory" in low or "home directory" in low or "system directory" in low:
+        return "G5", "workspace_or_critical_path"
+    s = _shape_safe(shape_fn, cmd)
+    if s == "cd_rel_glob":
+        return "G2", "cd_then_relative_glob"
+    if s == "unguarded_var":
+        return "G3", "unguarded_var_target"
+    return "other", "other"
+
+
+def _shape_safe(shape_fn, cmd):
+    if not cmd:
+        return None
+    try:
+        return shape_fn(cmd)
+    except Exception:
+        return None
+
+
+def context_of(path):
+    if "/subagents/workflows/" in path:
+        return "workflow"
+    if "/subagents/" in path:
+        return "subagent"
+    return "main"
+
+
+def agent_type_of(path, cache):
+    meta = path[:-len(".jsonl")] + ".meta.json" if path.endswith(".jsonl") else None
+    if not meta:
+        return None
+    if meta in cache:
+        return cache[meta]
+    at = None
+    try:
+        with open(meta, errors="replace") as fh:
+            at = (json.load(fh) or {}).get("agentType")
+    except (OSError, ValueError, AttributeError):
+        at = None
+    cache[meta] = at
+    return at
+
+
+# ── discovery + prefilter ──────────────────────────────────────────────────────────────────────────
+def discover_stores():
+    home = os.path.expanduser("~")
+    seen = {}
+    try:
+        names = sorted(os.listdir(home))
+    except OSError:
+        names = []
+    for n in names:
+        if not n.startswith(".claude"):
+            continue
+        p = os.path.join(home, n, "projects")
+        if not os.path.isdir(p):
+            continue
+        rp = os.path.realpath(p)
+        seen.setdefault(rp, tilde(p))
+    return seen  # realpath -> display name (first spelling found)
+
+
+def candidate_files(stores, since_epoch):
+    out = []
+    for rp in stores:
+        for dirpath, _dirs, files in os.walk(rp):
+            for f in files:
+                if not f.endswith(".jsonl"):
+                    continue
+                p = os.path.join(dirpath, f)
+                try:
+                    if os.path.getmtime(p) < since_epoch:
+                        continue
+                except OSError:
+                    continue
+                out.append(p)
+    return out
+
+
+def prefilter(files):
+    """Files containing any marker. rg -l -F, falling back to grep -l -F."""
+    if not files:
+        return [], "none"
+    rg = shutil.which("rg")
+    if rg:
+        base = [rg, "-l", "-F", "--no-messages", "--no-ignore", "--hidden", "--no-config"]
+        tool = "rg"
+    else:
+        g = shutil.which("grep") or "/usr/bin/grep"
+        base = [g, "-l", "-F", "-s"]
+        tool = "grep"
+    for p in PATTERNS:
+        base += ["-e", p]
+    hits = []
+    chunk = 400
+    for i in range(0, len(files), chunk):
+        part = files[i:i + chunk]
+        try:
+            r = subprocess.run(base + ["--"] + part, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                               universal_newlines=True, check=False)
+        except OSError:
+            continue
+        hits.extend(l for l in r.stdout.splitlines() if l)
+    return sorted(set(hits)), tool
+
+
+# ── the scan ───────────────────────────────────────────────────────────────────────────────────────
+def scan_file(path, store_name, shape_fn, meta_cache, emit):
+    uses = {}
+    consec = 0
+    total = 0
+    legacy_hist = []
+    legacy_emit = None  # t1 epoch of the last legacy-window row emitted in this file
+    ctx = context_of(path)
+    try:
+        fh = open(path, errors="replace")
+    except OSError:
+        return False
+    with fh:
+        for line in fh:
+            if '"tool_use"' not in line and '"tool_result"' not in line:
+                continue
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(e, dict):
+                continue
+            msg = e.get("message")
+            cont = msg.get("content") if isinstance(msg, dict) else None
+            if not isinstance(cont, list):
+                continue
+            ts = e.get("timestamp")
+            for b in cont:
+                if not isinstance(b, dict):
+                    continue
+                typ = b.get("type")
+                if typ == "tool_use":
+                    inp = b.get("input")
+                    cmd = inp.get("command") if isinstance(inp, dict) else None
+                    uses[b.get("id")] = (ts, b.get("name"), cmd if isinstance(cmd, str) else None)
+                    continue
+                if typ != "tool_result":
+                    continue
+                tid = b.get("tool_use_id")
+                txt = text_of(b.get("content"))
+                s = txt.lstrip()
+                for pre in ("Error: ", "<tool_use_error>"):
+                    if s.startswith(pre):
+                        s = s[len(pre):]
+                pd = e.get("permissionDecision")
+                has_pd = isinstance(pd, dict)
+                pd = pd if has_pd else {}
+                u = uses.get(tid) or (None, None, None)
+                t0, t1 = parse_ts(u[0]), parse_ts(ts)
+                el = (t1 - t0).total_seconds() if (t0 and t1) else None
+                cmd = u[2]
+                base = {
+                    "tool_use_id": tid,
+                    "ts": ts,
+                    "session": e.get("sessionId"),
+                    "agent_id": e.get("agentId"),
+                    "project": None,
+                    "context": ctx,
+                    "agent_type": agent_type_of(path, meta_cache) if ctx != "main" else None,
+                    "version": e.get("version"),
+                    "tool": u[1],
+                    "elapsed_s": None if el is None else round(el, 1),
+                    "cmd_head": head(cmd) if cmd is not None else None,
+                    "cmd_sha256": hashlib.sha256(cmd.encode("utf-8", "replace")).hexdigest() if cmd is not None else None,
+                    "stores": [store_name],
+                    "file": tilde(path),
+                }
+                # source "config" is CC's own auto-deny (every real 2.1.293 safetyCheck reject, 103/103,
+                # 2026-10-11); a person clicking No on the dialog is "user_reject" and is not an auto-deny.
+                is_safety = s.startswith(SAFETY) or (pd.get("reasonType") == "safetyCheck" and pd.get("decision") == "reject"
+                                                     and pd.get("source") == "config")
+                is_cls_deny = s.startswith(CLS1) or s.startswith(CLS2) or (
+                    pd.get("reasonType") == "classifier" and pd.get("decision") == "reject")
+                if is_safety:
+                    flagged = s.split("What was flagged:", 1)[1].strip() if "What was flagged:" in s else ""
+                    if CAPPED_RE.search(s):
+                        outcome = "capped"
+                    elif el is not None and el >= 110:
+                        outcome = "timed_out"
+                    elif el is not None and el < 10:
+                        outcome = "immediate"
+                    else:
+                        outcome = "unknown"
+                    grp, cause = cause_of(flagged, cmd, shape_fn)
+                    emit(dict(base, kind="safety_autodeny", outcome=outcome, cause_group=grp, cause=cause,
+                              flagged_head=head(flagged), inferred=False,
+                              method="deny_text" if s.startswith(SAFETY) else "reasonType_safetyCheck"))
+                    continue
+                if is_cls_deny:
+                    consec += 1
+                    total += 1
+                    t1e = t1.timestamp() if t1 else None
+                    reason = s
+                    for p in (CLS1 + ". Reason: ", CLS1, CLS2):
+                        if reason.startswith(p):
+                            reason = reason[len(p):]
+                            break
+                    reason = reason.split(". If you have other tasks")[0]
+                    if vtuple(e.get("version")) >= (2, 1, 260) and el is not None and el >= FALLBACK_MIN_S:
+                        n_consec = consec
+                        if has_pd:
+                            ok, method = consec == 3, "classifier_streak_3rd"
+                        else:
+                            recent = [x for x in legacy_hist if t1e is not None and 0 <= t1e - x <= LEGACY_WINDOW_S]
+                            # one row per streak: a deny within the window of the last emitted
+                            # legacy row is the same streak, not a second fallback
+                            same_streak = (legacy_emit is not None and t1e is not None
+                                           and 0 <= t1e - legacy_emit <= LEGACY_WINDOW_S)
+                            ok, method = len(recent) >= 2 and not same_streak, "classifier_streak_legacy_window"
+                            n_consec = len(recent) + 1  # the file-wide count never resets without a pd
+                            if ok:
+                                legacy_emit = t1e
+                        if ok:
+                            slow = "Stage 2 classifier error" in reason or "unavailable" in reason
+                            emit(dict(base, kind="inferred_fallback",
+                                      outcome="inferred_fallback_or_slow_classifier" if slow else "inferred_fallback_timeout",
+                                      cause_group="F1", cause="classifier_denial_limit_fallback",
+                                      reason_head=head(reason), consecutive=n_consec, inferred=True, method=method))
+                    if t1e is not None:
+                        legacy_hist.append(t1e)
+                    if total >= 20:  # CC's total limit: legacy fallback, both counters back to 0
+                        consec = total = 0
+                    continue
+                if pd.get("decision") == "accept" and pd.get("reasonType") == "classifier":
+                    consec = 0  # only a classifier-decided allow resets the streak
+                    continue
+                if pd.get("source") == "user_temporary" and pd.get("decision") == "accept" and u[1] == "Bash" and cmd:
+                    shp = _shape_safe(shape_fn, cmd)
+                    if shp:
+                        if shp == "inline_shell":
+                            grp, cause = ("G4", "inline_shell_c_with_rm") if _RM_WORD.search(cmd) else ("G1", "inline_shell_c_no_rm")
+                        elif shp == "cd_rel_glob":
+                            grp, cause = "G2", "cd_then_relative_glob"
+                        elif shp == "unguarded_var":
+                            grp, cause = "G3", "unguarded_var_target"
+                        else:
+                            grp, cause = "other", shp
+                        emit(dict(base, kind="inferred_answered", outcome="answered_probable", cause_group=grp,
+                                  cause=cause, inferred=True, method="user_temporary_accept+rm_prompt_shape"))
+    return True
+
+
+def run_scan(since_dt, shape_fn):
+    stores = discover_stores()
+    since_epoch = since_dt.timestamp()
+    files = candidate_files(stores, since_epoch)
+    hits, tool = prefilter(files)
+    rows = {}
+    meta_cache = {}
+    unreadable = 0
+
+    def store_of(path):
+        best = None
+        for rp, name in stores.items():
+            if path.startswith(rp + os.sep) and (best is None or len(rp) > len(best[0])):
+                best = (rp, name)
+        return best
+
+    for path in hits:
+        sb = store_of(path)
+        if not sb:
+            continue
+        rp, name = sb
+        project = os.path.relpath(path, rp).split(os.sep)[0]
+
+        def emit(r, _project=project):
+            r["project"] = _project
+            t = parse_ts(r.get("ts"))
+            if t is None or t < since_dt:
+                return
+            key = r.get("tool_use_id") or "%s|%s|%s" % (r.get("session"), r.get("ts"), r.get("kind"))
+            old = rows.get(key)
+            if old is None:
+                rows[key] = r
+                return
+            stores_u = sorted(set(old["stores"]) | set(r["stores"]))
+
+            def fullness(x):
+                return (x.get("elapsed_s") is not None) + (x.get("cmd_head") is not None)
+
+            # A copy holding only the tool_result was classified without the tool_use (no elapsed,
+            # no command: outcome "unknown"); a copy that has them replaces it whole.
+            if fullness(r) > fullness(old):
+                rows[key] = old = r
+            elif old.get("elapsed_s") is None and r.get("elapsed_s") is not None:
+                old["elapsed_s"] = r["elapsed_s"]
+            old["stores"] = stores_u
+
+        if not scan_file(path, name, shape_fn, meta_cache, emit):
+            unreadable += 1
+    out = sorted(rows.values(), key=lambda r: r.get("ts") or "")
+    stats = {"stores": sorted(stores.values()), "files_in_window": len(files), "hit_files": len(hits),
+             "prefilter": tool, "unreadable": unreadable}
+    return out, stats
+
+
+# ── output ─────────────────────────────────────────────────────────────────────────────────────────
+def count(rows, key):
+    c = {}
+    for r in rows:
+        k = key(r)
+        c[k] = c.get(k, 0) + 1
+    return c
+
+
+def preempt_count(since_dt):
+    """Rows in C1's rm-prompt-preempt.jsonl inside the window (dialogs answered instantly by the hook)."""
+    p = os.path.expanduser("~/.claude/logs/rm-prompt-preempt.jsonl")
+    if not os.path.isfile(p):
+        return None
+    n = 0
+    try:
+        with open(p, errors="replace") as fh:
+            for line in fh:
+                try:
+                    o = json.loads(line)
+                except ValueError:
+                    continue
+                ts = o.get("ts") if isinstance(o, dict) else None
+                if isinstance(ts, (int, float)):
+                    if ts >= since_dt.timestamp():
+                        n += 1
+                else:
+                    t = parse_ts(ts)
+                    if t is not None and t >= since_dt:
+                        n += 1
+    except OSError:
+        return None
+    return n
+
+
+def totals(rows):
+    meas = [r for r in rows if not r.get("inferred")]
+    inf = [r for r in rows if r.get("inferred")]
+    t = {
+        "measured": len(meas),
+        "by_outcome": count(meas, lambda r: r["outcome"]),
+        "by_cause_group": count(meas, lambda r: r["cause_group"]),
+        "by_context": count(meas, lambda r: r["context"]),
+        "by_agent_type": count([r for r in meas if r.get("agent_type")], lambda r: r["agent_type"]),
+        "by_version": count(meas, lambda r: r.get("version") or "?"),
+        "first_ts": meas[0]["ts"] if meas else None,
+        "last_ts": meas[-1]["ts"] if meas else None,
+        "inferred": count(inf, lambda r: r["outcome"]),
+    }
+    return t
+
+
+def fmt_counts(d):
+    return ", ".join("%s %d" % (k, v) for k, v in sorted(d.items(), key=lambda kv: (-kv[1], str(kv[0])))) or "none"
+
+
+def print_summary(rows, stats, since_dt, pred_label, elapsed, preempt, out=None):
+    out = out or sys.stdout
+
+    def print(*a):  # noqa: A001 — every line of the summary goes to one stream
+        out.write(" ".join(str(x) for x in a) + "\n")
+
+    t = totals(rows)
+    meas = [r for r in rows if not r.get("inferred")]
+    print("cc-autodeny-census — timed / auto-denied permission prompts since %s (UTC)" % since_dt.strftime("%Y-%m-%d %H:%M"))
+    print("stores: %s · %d transcript files in window, %d prefilter hits (%s) · %.1f s"
+          % (", ".join(stats["stores"]) or "none", stats["files_in_window"], stats["hit_files"], stats["prefilter"], elapsed))
+    print()
+    print("MEASURED — dangerous-removal safety check, deduped by tool_use_id: %d" % t["measured"])
+    if meas:
+        print("  range: %s -> %s" % (t["first_ts"], t["last_ts"]))
+        print("  %-10s %-6s %-9s %4s" % ("outcome", "cause", "context", "n"))
+        tab = count(meas, lambda r: (r["outcome"], r["cause_group"], r["context"]))
+        for (o, g, c), n in sorted(tab.items(), key=lambda kv: (kv[0][0], kv[0][1], kv[0][2])):
+            print("  %-10s %-6s %-9s %4d" % (o, g, c, n))
+        print("  outcome: %s" % fmt_counts(t["by_outcome"]))
+        print("  cause:   %s" % fmt_counts(t["by_cause_group"]))
+        print("  context: %s" % fmt_counts(t["by_context"]))
+        print("  agent:   %s" % fmt_counts(t["by_agent_type"]))
+        print("  version: %s" % fmt_counts(t["by_version"]))
+    print()
+    print("INFERRED (labelled inferred:true, not in the totals above): %s" % fmt_counts(t["inferred"]))
+    print("  shape predicate: %s" % pred_label)
+    if preempt is not None:
+        print("C1 preempted dialogs (~/.claude/logs/rm-prompt-preempt.jsonl, same window): %d" % preempt)
+    if stats.get("unreadable"):
+        print("unreadable hit files: %d" % stats["unreadable"])
+
+
+def append_log(rows):
+    p = os.path.expanduser("~/.claude/logs/autodeny.jsonl")
+    seen = set()
+    if os.path.isfile(p):
+        with open(p, errors="replace") as fh:
+            for line in fh:
+                try:
+                    o = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(o, dict) and o.get("tool_use_id"):
+                    seen.add(o["tool_use_id"])
+    new = [r for r in rows if r.get("tool_use_id") and r["tool_use_id"] not in seen]
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with open(p, "a") as fh:
+        for r in new:
+            fh.write(json.dumps(dict(r, logged_at=now), sort_keys=True) + "\n")
+    return len(new), len(rows) - len(new), p
+
+
+def parse_since(v):
+    now = datetime.datetime.now(datetime.timezone.utc)
+    m = re.fullmatch(r"(\d+)d", v or "")
+    if m:
+        return now - datetime.timedelta(days=int(m.group(1)))
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", v or ""):
+        try:
+            return datetime.datetime.strptime(v, "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc)
+        except ValueError:
+            return None
+    return None
+
+
+def usage(msg):
+    sys.stderr.write("cc-autodeny-census: %s\nusage: cc-autodeny-census [--since Nd|YYYY-MM-DD] [--summary] [--json] [--log]\n" % msg)
+    return 2
+
+
+def main(argv):
+    since = "7d"
+    want_json = want_summary = want_log = False
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("-h", "--help"):
+            print(__doc__)
+            return 0
+        if a == "--since":
+            if i + 1 >= len(argv):
+                return usage("--since needs a value")
+            since = argv[i + 1]
+            i += 2
+            continue
+        if a.startswith("--since="):
+            since = a.split("=", 1)[1]
+        elif a == "--json":
+            want_json = True
+        elif a == "--summary":
+            want_summary = True
+        elif a == "--log":
+            want_log = True
+        else:
+            return usage("unknown argument: %s" % a)
+        i += 1
+    since_dt = parse_since(since)
+    if since_dt is None:
+        return usage("--since must be Nd or YYYY-MM-DD, got %r" % since)
+    if not want_json:
+        want_summary = True
+    t0 = time.time()
+    shape_fn, pred_label = load_shape_predicate()
+    rows, stats = run_scan(since_dt, shape_fn)
+    elapsed = time.time() - t0
+    rc = 0
+    if want_log:
+        try:
+            n_new, n_old, p = append_log(rows)
+            sys.stderr.write("cc-autodeny-census: logged %d new row(s) to %s (%d already present)\n" % (n_new, tilde(p), n_old))
+        except OSError as ex:
+            sys.stderr.write("cc-autodeny-census: could not write the log: %s\n" % ex)
+            rc = 1
+    if want_json:
+        doc = {
+            "since": since_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "generated": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "predicate": pred_label,
+            "scan": dict(stats, elapsed_s=round(elapsed, 1)),
+            "totals": totals(rows),
+            "preempted": preempt_count(since_dt),
+            "rows": rows,
+        }
+        print(json.dumps(doc, sort_keys=True))
+    if want_summary:
+        # With --json, stdout stays one parseable document and the table goes to stderr.
+        print_summary(rows, stats, since_dt, pred_label, elapsed, preempt_count(since_dt),
+                      out=sys.stderr if want_json else sys.stdout)
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
