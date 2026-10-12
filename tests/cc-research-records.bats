@@ -266,6 +266,52 @@ refused() {
   [[ "$output" == *"do-nothing"* ]]
 }
 
+# RED-proof: on 931209017 `decision reopen` and `decision rule --by` do not exist (argparse exits 2
+# on "invalid choice" / "unrecognized arguments"), so no asserted text prints and DR-2 never leaves
+# its agent ruling.
+@test "decision reopen: the operator's reopen of a ruled decision fails row 5 until his re-ruling, which needs his words and a revisit trigger and no 90; a third reopen is refused" {
+  "$CR" decision add --program demo --id DR-2 --question "q" --option do-nothing --option use-what-exists --option x
+  "$CR" premise add --program demo --id PR-2 --claim "c" --truth-lives-in code --load-bearing-for DR-2
+  "$CR" decision tally --program demo --id DR-2 --premise PR-2 --flip-probe P-2 --flip-result negative
+  # an open decision is not the operator's to rule through this verb: it goes to him as a packet
+  run "$CR" decision rule --program demo --id DR-2 --chosen x --by operator --receipt "he said x" --revisit-trigger t
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"re-rules a decision the operator reopened"*"cc-research gate file-packet"* ]] || false
+  run "$CR" decision reopen --program demo --id DR-2 --because "P7 moved" --receipt "re-plan it"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"status 'open'; only a ruled decision is reopened"* ]] || false
+  # DR-2 as a ruled decision whose derived conviction has since fallen to 0
+  printf '{"id":"DR-2","status":"ruled","ruled_by":"agent","chosen":"x","receipt":"old","revisit_trigger":"old"}\n' >> "$REC/decisions.jsonl"
+  run "$CR" decision reopen --program demo --id DR-2 --because "census P7 moved" --receipt "operator 2026-10-12: re-plan DR-2"
+  [ "$status" -eq 0 ]
+  [ "$output" = "DR-2: reopened by operator (1 of 2)" ]
+  [ "$(fold decisions.jsonl DR-2 status)" = '"reopened"' ]
+  [ "$(fold decisions.jsonl DR-2 reopen_receipt)" = '"operator 2026-10-12: re-plan DR-2"' ]
+  rowtext 5 | grep -q "DR-2: status 'reopened'"
+  run "$CR" decision rule --program demo --id DR-2 --chosen x --by operator --receipt "keep x"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"needs --receipt (his words) and --revisit-trigger"* ]] || false
+  run "$CR" decision rule --program demo --id DR-2 --chosen x --by operator --revisit-trigger "P7 moves again"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"needs --receipt (his words) and --revisit-trigger"* ]] || false
+  run "$CR" decision rule --program demo --id DR-2 --chosen x --revisit-trigger "P7 moves again"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"derived conviction 0%; an agent rules only at 90"* ]] || false
+  run "$CR" decision rule --program demo --id DR-2 --chosen x --by operator --receipt "operator 2026-10-12: keep x" --revisit-trigger "P7 moves again"
+  [ "$status" -eq 0 ]
+  [ "$output" = "DR-2: ruled x by operator (derived 0%)" ]
+  [ "$(fold decisions.jsonl DR-2 ruled_by)" = '"operator"' ]
+  [ "$(fold decisions.jsonl DR-2 receipt)" = '"operator 2026-10-12: keep x"' ]
+  run rowtext 5
+  [[ "$output" != *"DR-2"* ]] || false
+  "$CR" decision reopen --program demo --id DR-2 --because "again" --receipt "re-plan again"
+  "$CR" decision rule --program demo --id DR-2 --chosen x --by operator --receipt "keep x" --revisit-trigger t
+  run "$CR" decision reopen --program demo --id DR-2 --because "a third time" --receipt "once more"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"already reopened 2 times; the cap is 2 per decision"* ]] || false
+  [ "$(fold decisions.jsonl DR-2 status)" = '"ruled"' ]
+}
+
 @test "concern add appends a pending challenge; concern list --pending shows it" {
   run "$CR" concern add --program demo --text "first worry"
   [ "$status" -eq 0 ]

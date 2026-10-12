@@ -1,7 +1,7 @@
 """cli_records.py — the record verbs of bin/cc-research (REPORT.md §8 item 9) and concern triage
 (§5.1, §5.2, §10 item 8); see cli.py for the verb table.
 
-  census add|repin|critic · premise add|revise · source add · decision add|tally|rule|show
+  census add|repin|critic · premise add|revise · source add · decision add|tally|rule|reopen|show
   concern add|list · park · triage
 
 Every record here is append-only (kit.append_jsonl); a census is one JSON file per population,
@@ -470,6 +470,8 @@ def decision_rule(a: argparse.Namespace) -> int:
     if a.chosen not in {o.get("label") for o in d.get("options") or []}:
         raise kit.KitError(f"{a.id}: {a.chosen!r} is not one of its options")
     c = derived(r, d)
+    if a.by == "operator":
+        return rule_by_operator(r, a, d, c)
     if c is None or c < 90:
         raise kit.KitError(
             f"{a.id}: derived conviction {c}%; an agent rules only at 90 (§3.5). "
@@ -491,6 +493,76 @@ def decision_rule(a: argparse.Namespace) -> int:
         r / "decisions.jsonl", {k: v for k, v in row.items() if v is not None}
     )
     print(f"{a.id}: ruled {a.chosen} by agent at a derived {c}%")
+    return 0
+
+
+def rule_by_operator(
+    r: Path, a: argparse.Namespace, d: Dict[str, Any], c: Optional[int]
+) -> int:
+    """Record the operator's re-ruling of a decision he reopened (`decision reopen`). The 90 rule is
+    the agent's (§3.5); his ruling needs his words as the receipt and a revisit trigger instead."""
+    if d.get("status") != "reopened" or d.get("reopened_by") != "operator":
+        raise kit.KitError(
+            f"{a.id}: --by operator re-rules a decision the operator reopened (`decision reopen`); "
+            f"an open one goes to him as a packet: {PACKET_ROUTE}"
+        )
+    if not (a.receipt or "").strip() or not (a.revisit_trigger or "").strip():
+        raise kit.KitError(
+            f"{a.id}: an operator ruling needs --receipt (his words) and --revisit-trigger"
+        )
+    kit.append_jsonl(
+        r / "decisions.jsonl",
+        {
+            "id": a.id,
+            "status": "ruled",
+            "ruled_by": "operator",
+            "chosen": a.chosen,
+            "receipt": a.receipt,
+            "revisit_trigger": a.revisit_trigger,
+        },
+    )
+    print(f"{a.id}: ruled {a.chosen} by operator (derived {c}%)")
+    return 0
+
+
+def decision_reopen(a: argparse.Namespace) -> int:
+    """Reopen a ruled decision on the operator's ruling (REPORT.md §6.5: a decision is reopened at
+    most CAPS["refutation_reopens"] times). It stays `reopened`, which gate row 5 fails, until
+    `decision rule --by operator` records his re-ruling."""
+    r = recs(a)
+    d = decision_get(r, a.id)
+    if d.get("status") != "ruled":
+        raise kit.KitError(
+            f"{a.id}: status {d.get('status')!r}; only a ruled decision is reopened"
+        )
+    if not a.because.strip() or not a.receipt.strip():
+        raise kit.KitError(
+            f"{a.id}: a reopen needs --because (what fired) and --receipt (the operator's words)"
+        )
+    cap = kit.CAPS["refutation_reopens"]
+    used = sum(
+        1
+        for e in kit.read_jsonl(r / "decisions.jsonl")
+        if e.get("id") == a.id and e.get("status") == "reopened"
+    )
+    if used >= cap:
+        raise kit.KitError(
+            f"{a.id}: already reopened {used} times; the cap is {cap} per decision (§6.5). It is "
+            "carried as a set or filed as a packet instead"
+        )
+    kit.append_jsonl(
+        r / "decisions.jsonl",
+        {
+            "id": a.id,
+            "status": "reopened",
+            "reopened_by": "operator",
+            "reopened_because": a.because,
+            "reopen_receipt": a.receipt,
+            "reopened_at": kit.now_iso(),
+            "reopens": used + 1,
+        },
+    )
+    print(f"{a.id}: reopened by operator ({used + 1} of {cap})")
     return 0
 
 
@@ -861,6 +933,22 @@ def add_verbs(sub: Any) -> None:
     p.add_argument("--chosen", required=True)
     p.add_argument("--receipt")
     p.add_argument("--revisit-trigger")
+    p.add_argument(
+        "--by",
+        default="agent",
+        choices=("agent", "operator"),
+        help="operator: record his re-ruling of a decision he reopened (needs --receipt, his "
+        "words, and --revisit-trigger; no 90 rule)",
+    )
+    p = verb(
+        g,
+        "reopen",
+        decision_reopen,
+        "reopen a ruled decision on the operator's ruling (at most 2 reopens per decision)",
+    )
+    p.add_argument("--id", required=True)
+    p.add_argument("--because", required=True, help="the flip condition that fired")
+    p.add_argument("--receipt", required=True, help="the operator's words")
     p = verb(g, "show", decision_show, "print a decision with its derived conviction")
     p.add_argument("--id", required=True)
     p.add_argument("--json", action="store_true")
