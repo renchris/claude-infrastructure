@@ -495,7 +495,12 @@ under() { /usr/bin/python3 -c "import sys; sys.exit(0 if $wall < $1 else 1)"; }
 @test "E1j trace: a resident worker that took the prompt and stalls reads as warm and waiting; a label in hand writes no stall row" {
   serve "read -r line; sleep 30" up
   # the hedge off (wave E1k's switch), or its cold twins would answer: the stall row's shape is the subject
-  CC_RESEARCH_HEDGE=0 CC_RESEARCH_CLASSIFY_TRACE="$BATS_TEST_TMPDIR/trace" CC_RESEARCH_CLASSIFIER_TIMEOUT=2 CC_RESEARCH_CLASSIFIER="$(cold)" run bash -c "printf 'are we done?' | python3 '$ROUTER' classify"
+  # The limit is the real 9 s, not a scaled-down one (2026-10-12): the stall and held rows are taken
+  # at a loop wake-up between their margin and the calls' own deadline, and every margin scales with
+  # the limit. At 2 s that window was 89 ms (stall) and 111 ms (held); at load 35 the loop woke at
+  # 2.0 s, after a call had already timed out, and this test failed 6 of 6 on trunk. At 9 s the
+  # windows are the production 400 and 500 ms. No assertion here is on a wall time.
+  CC_RESEARCH_HEDGE=0 CC_RESEARCH_CLASSIFY_TRACE="$BATS_TEST_TMPDIR/trace" CC_RESEARCH_CLASSIFIER_TIMEOUT=9 CC_RESEARCH_CLASSIFIER="$(cold)" run bash -c "printf 'are we done?' | python3 '$ROUTER' classify"
   [ "$status" -eq 1 ]
   [ "$(jq -r '.row // "final"' "$BATS_TEST_TMPDIR/trace" | tr '\n' ' ')" = "stall final " ]
   for k in fast careful; do
@@ -504,7 +509,7 @@ under() { /usr/bin/python3 -c "import sys; sys.exit(0 if $wall < $1 else 1)"; }
   done
   [ ! -e "$BATS_TEST_TMPDIR/cold-calls" ]
   rm "$BATS_TEST_TMPDIR/trace"
-  CC_RESEARCH_CLASSIFY_TRACE="$BATS_TEST_TMPDIR/trace" CC_RESEARCH_WARM=0 CC_RESEARCH_CLASSIFIER_TIMEOUT=2 CC_RESEARCH_CLASSIFIER="$(two 'echo other' 'sleep 20')" run bash -c "printf 'are we done?' | python3 '$ROUTER' classify"
+  CC_RESEARCH_CLASSIFY_TRACE="$BATS_TEST_TMPDIR/trace" CC_RESEARCH_WARM=0 CC_RESEARCH_CLASSIFIER_TIMEOUT=9 CC_RESEARCH_CLASSIFIER="$(two 'echo other' 'sleep 20')" run bash -c "printf 'are we done?' | python3 '$ROUTER' classify"
   [ "$status" -eq 0 ]
   [ "$output" = other ]
   # no stall row; the careful call still pending when the hold fired leaves a `held` row (wave E1k)
