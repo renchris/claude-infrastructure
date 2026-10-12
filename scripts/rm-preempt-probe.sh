@@ -7,13 +7,15 @@
 # (docs/research/autodeny-prompts-2026-10-11/verdicts.md, C1 efficacy change 3). Re-run after every
 # Claude Code upgrade: the inline-shell scanner and the hook contract both move between releases.
 #
-# HOW: for each arm (main thread; a general-purpose subagent) it starts a detached tmux session running
+# HOW: for each arm (main thread; a general-purpose Workflow slot) it starts a detached tmux session running
 # `claude --permission-mode auto --settings <overlay registering THIS checkout's hook>` with a prompt to run
 # one known false positive, `bash -c 'f(){ "$@"; }; f true'`. It then reads that session's transcript and
-# measures tool_use -> tool_result. PASS = the result carries the hook's deny text within PASS_S seconds.
+# measures tool_use -> tool_result. PASS = the result carries the hook's deny text within PASS_S seconds;
+# NODIALOG = Claude Code denied in < 5 s on its own, so that context has no dialog to preempt.
 # Each session is killed when its arm settles. It spends a few cents of quota; it writes no settings.
 #
-# Usage: rm-preempt-probe.sh [--arm main|agent|both]      exit 0 PASS (all arms) · 1 FAIL · 3 NO VERDICT
+# Usage: rm-preempt-probe.sh [--arm main|workflow|both]
+# Exit:  0 = main PASS and workflow PASS or NODIALOG · 1 = any arm FAIL · 3 = NO VERDICT (or main not PASS)
 # Env:   CLAUDE_CONFIG_DIR (account; default ~/.claude), CC_PROBE_BIN (claude binary; default `claude` on
 #        PATH), CC_PROBE_WAIT_S (per-arm ceiling, default 300), CC_PROBE_PASS_S (default 30).
 set -uo pipefail
@@ -23,10 +25,11 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --arm) arm="${2:-}"; shift 2 ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
-    *) echo "usage: $0 [--arm main|agent|both]" >&2; exit 2 ;;
+    *) echo "usage: $0 [--arm main|workflow|both]" >&2; exit 2 ;;
   esac
 done
-case "$arm" in main|agent|both) ;; *) echo "usage: --arm main|agent|both" >&2; exit 2 ;; esac
+case "$arm" in agent) arm=workflow ;; esac   # pre-2026-10-12 name
+case "$arm" in main|workflow|both) ;; *) echo "usage: --arm main|workflow|both" >&2; exit 2 ;; esac
 
 # ~/.claude/scripts/ is a per-file symlink farm: resolve this file to the checkout before deriving
 # the repo root, or the probe would register ~/.claude's hook and read ~/.claude's transcript slug.
@@ -61,12 +64,20 @@ run_arm() {
   tag="rmpp-probe-$a-$$"
   if [ "$a" = main ]; then
     prompt="[$tag] Acceptance probe. Run exactly this one Bash command, verbatim, once: $probe_cmd -- then quote the tool result verbatim and stop. Do not retry or rewrite it."
+    printf '%s\n' "$prompt" > "$work/$a.prompt"
   else
-    # general-purpose, NOT workflow-lean: workflow-lean's own brief (agents/workflow-lean.md) forbids
-    # exactly this bash -c shape, so it declines and no dialog ever appears (measured 2026-10-12).
-    prompt="[$tag] Acceptance probe of a permission hook; the command is a harmless no-op test fixture. Spawn one Agent with subagent_type general-purpose whose only task is to run exactly this one Bash command verbatim, once: $probe_cmd -- and return the tool result verbatim without retrying. Quote its return and stop."
+    # A WORKFLOW slot, because that is where the timed dialog lives (51 of the 64 census rows). Two
+    # measured dead ends (2026-10-12): a workflow-lean slot declines the command (its own brief
+    # forbids this bash -c shape), and a plain Agent-tool subagent cannot prompt at all, so Claude
+    # Code denies it in 0.1 s with no dialog for any hook to answer. Hence agentType general-purpose.
+    printf '[%s] ' "$tag" > "$work/$a.prompt"
+    cat >> "$work/$a.prompt" <<'EOF'
+Acceptance probe of a permission hook; the operator asks you to run this workflow. The Bash command inside is a harmless no-op test fixture. Call the Workflow tool once with exactly this script, then quote its result verbatim and stop:
+
+export const meta = { name: 'rmpp-probe', description: 'rm-prompt-preempt acceptance probe' }
+return await agent(`Acceptance probe of a permission hook; the command is a harmless no-op test fixture. Run exactly this one Bash command verbatim, once, and return the tool result verbatim without retrying: bash -c 'f(){ "$@"; }; f true'`, { label: 'probe', agentType: 'general-purpose' })
+EOF
   fi
-  printf '%s\n' "$prompt" > "$work/$a.prompt"
   printf '%s\n' "$overlay" > "$work/overlay.json"
   start="$(date +%s)"
   # env -u: the probe must not inherit the caller's pane/session identity. Run from `!` in a live
@@ -113,6 +124,10 @@ for u, t0 in uses.items():
         dt = t1 - t0
         if mark in text:
             print(("PASS" if dt <= pass_s else "FAIL") + f" hook deny after {dt:.1f}s")
+        elif "denied by a built-in Claude Code safety check" in text and dt < 5:
+            # Claude Code denied it itself, too fast for any dialog: this context cannot prompt, so there
+            # was no timer and nothing for the hook to preempt. Not a hook failure.
+            print(f"NODIALOG Claude Code denied in {dt:.1f}s with no dialog (this context cannot prompt)")
         else:
             print(f"FAIL no hook deny; result after {dt:.1f}s: {text[:160]!r}")
         sys.exit(0)
@@ -124,14 +139,20 @@ PY
   done
   tmux kill-session -t "$sess" 2>/dev/null
   echo "arm=$a verdict=$verdict"
-  case "$verdict" in PASS*) return 0 ;; FAIL*) return 1 ;; *) return 3 ;; esac
+  case "$verdict" in PASS*) return 0 ;; FAIL*) return 1 ;; NODIALOG*) return 4 ;; *) return 3 ;; esac
 }
 
+# The main arm must PASS (it is the arm that proves the hook resolves a timed dialog). The workflow arm
+# passes on PASS or NODIALOG: a context that cannot prompt has no timer, so it costs nothing to leave.
 rc=0
-for a in main agent; do
+for a in main workflow; do
   [ "$arm" = both ] || [ "$arm" = "$a" ] || continue
   run_arm "$a"; r=$?
-  [ "$r" -gt "$rc" ] && rc=$r
+  case "$a:$r" in
+    *:0|workflow:4) ;;
+    *:1) rc=1 ;;
+    *) [ "$rc" -eq 1 ] || rc=3 ;;
+  esac
 done
 case "$rc" in 0) echo "verdict=PASS" ;; 1) echo "verdict=FAIL" ;; *) echo "verdict=NO-VERDICT" ;; esac
 exit "$rc"
