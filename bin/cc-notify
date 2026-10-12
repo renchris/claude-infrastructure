@@ -492,10 +492,14 @@ verdict() { # <verdict> [k=v ...]
 #     unset). It is NOT this file's rc 3 and never becomes one: they are different subsystems, and
 #     the 2026-08-10 log's "(phone: push-rc-3)" was the credentials, not the role file.
 #   · damped per (role, reason) for CC_NOTIFY_PHONE_DAMP_TTL seconds, so a 300 s reaper sweep against
-#     a permanently-unset role rings once, not every five minutes. A damp is reported, never silent.
+#     a permanently-unset role rings once, not every five minutes. A damp is reported, never silent,
+#     and it reports the STAMPED outcome: the stamp is "<epoch> <push-send rc>", so a damped unwired
+#     leg reads phone-unwired, never "already phoned" (decision 8c95cd3ef284: the bare-epoch stamp
+#     printed phone-damped 278 times in the fleet logs while the phone was reached 0 times). A legacy
+#     bare-epoch stamp carries no outcome, so it counts as absent.
 #   · it NEVER changes the exit code: the send still failed, and a phone leg is not a delivery.
 phone_fallback() { # <reason> <detail>
-  local reason="$1" detail="${2:-}" key mk now last rc
+  local reason="$1" detail="${2:-}" key mk now last lastrc rc
   [ "$PHONE_FALLBACK" = 1 ] || { echo "cc-notify: fallback=phone-off (CC_NOTIFY_PHONE_FALLBACK=0)" >&2; return 0; }
   # HERMETICITY (same bats signals hooks/lib/comms-alarm.sh stamps as test_origin): under a suite,
   # only an EXPLICITLY seamed push binary may fire. Left to the probe order, ANY existing suite that
@@ -512,16 +516,22 @@ phone_fallback() { # <reason> <detail>
   key="$(printf '%s-%s' "${ROLE:-none}" "$reason" | tr -c 'A-Za-z0-9._-' '_')"
   mk="$PHONE_DAMP_DIR/$key.stamp"
   now="$(date +%s 2>/dev/null || echo 0)"
-  last="$(cat "$mk" 2>/dev/null || echo 0)"
+  last=0 lastrc=''
+  [ -f "$mk" ] && { read -r last lastrc || :; } < "$mk" 2>/dev/null
   case "$last" in (*[!0-9]*|'') last=0 ;; esac
+  case "$lastrc" in (*[!0-9]*|'') last=0 ;; esac
   if [ "$last" -gt 0 ] && [ "$(( now - last ))" -lt "$PHONE_DAMP_TTL" ]; then
-    echo "cc-notify: fallback=phone-damped — the operator was already phoned for [$key] $(( now - last ))s ago (TTL ${PHONE_DAMP_TTL}s)" >&2
+    case "$lastrc" in
+      0) echo "cc-notify: fallback=phone-damped — the operator was already phoned for [$key] $(( now - last ))s ago (TTL ${PHONE_DAMP_TTL}s)" >&2 ;;
+      3) echo "cc-notify: fallback=phone-unwired — not retried; push-send was INERT (creds unset) for [$key] $(( now - last ))s ago (TTL ${PHONE_DAMP_TTL}s). The operator was reached by NO channel" >&2 ;;
+      *) echo "cc-notify: fallback=phone-failed rc=$lastrc — not retried; the phone leg failed for [$key] $(( now - last ))s ago (TTL ${PHONE_DAMP_TTL}s). The operator was reached by NO channel" >&2 ;;
+    esac
     return 0
   fi
   "$PUSH_BIN" send --title "⚠️ undeliverable page ($reason)" \
     --message "cc-notify could not address ${ROLE:+role:}${ROLE:-a target}: $detail — ${MSG:-}" >/dev/null 2>&1
   rc=$?
-  mkdir -p "$PHONE_DAMP_DIR" 2>/dev/null && printf '%s' "$now" > "$mk" 2>/dev/null || true
+  mkdir -p "$PHONE_DAMP_DIR" 2>/dev/null && printf '%s %s' "$now" "$rc" > "$mk" 2>/dev/null || true
   case "$rc" in
     0) echo "cc-notify: fallback=phoned — the desk was unreachable, the OPERATOR was paged on his phone (the message itself was NOT delivered)" >&2 ;;
     3) echo "cc-notify: fallback=phone-unwired — push-send is INERT (PUSHOVER_TOKEN/PUSHOVER_USER unset). This is push-send's exit 3, NOT a role failure: the phone channel has never been wired, so the operator is unreachable even with a perfect role file" >&2 ;;

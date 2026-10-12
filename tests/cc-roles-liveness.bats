@@ -172,6 +172,42 @@ stop_holder() { [ -n "${HOLDER:-}" ] && kill "$HOLDER" 2>/dev/null || true; wait
   [[ "$output" == *"fallback=phone-unwired"* ]]
 }
 
+# Decision 8c95cd3ef284: the damp stamp used to be a bare epoch written whatever push-send returned,
+# so an unwired leg read back as "the operator was already phoned" for 30 min (278 such lines in the
+# fleet logs, 0 real pushes). The stamp now carries the rc and the damp reports THAT outcome.
+@test "an UNWIRED phone is never reported as already phoned on the damped second call (8c95cd3ef284)" {
+  { printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\nexit 3\n' "$PUSHLOG"; } > "$CC_NOTIFY_PUSH_BIN"; chmod +x "$CC_NOTIFY_PUSH_BIN"
+  run "$NOTIFY" --role desk "first"
+  [[ "$output" == *"fallback=phone-unwired"* ]] || false
+  run "$NOTIFY" --role desk "second"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"fallback=phone-unwired"* ]] || false
+  [[ "$output" == *"not retried"* ]] || false          # the damped form, not a second real attempt
+  [[ "$output" != *"phone-damped"* ]] || false
+  [[ "$output" != *"already phoned"* ]] || false
+  [ "$(wc -l < "$PUSHLOG")" -eq 1 ]                     # still damped: one attempt per TTL
+}
+
+@test "a FAILED phone leg is damped as phone-failed rc=N, never as already phoned (8c95cd3ef284)" {
+  { printf '#!/bin/bash\nexit 5\n'; } > "$CC_NOTIFY_PUSH_BIN"; chmod +x "$CC_NOTIFY_PUSH_BIN"
+  run "$NOTIFY" --role desk "first"
+  [[ "$output" == *"fallback=phone-failed rc=5"* ]] || false
+  run "$NOTIFY" --role desk "second"
+  [[ "$output" == *"fallback=phone-failed rc=5"* ]] || false
+  [[ "$output" == *"not retried"* ]] || false
+  [[ "$output" != *"phone-damped"* ]] || false
+}
+
+@test "a legacy bare-epoch stamp counts as absent and does not damp a real send (8c95cd3ef284)" {
+  mkdir -p "$CC_NOTIFY_PHONE_DAMP_DIR"
+  printf '%s' "$(date +%s)" > "$CC_NOTIFY_PHONE_DAMP_DIR/desk-role-unset.stamp"
+  run "$NOTIFY" --role desk "overnight run finished"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"fallback=phoned"* ]] || false
+  [[ "$output" != *"phone-damped"* ]] || false
+  [ "$(grep -c 'undeliverable page' "$PUSHLOG")" -eq 1 ]
+}
+
 @test "the phone leg is DAMPED per (role,reason) so a 5-minute sweep rings once, not forever" {
   run "$NOTIFY" --role desk "first"
   [[ "$output" == *"fallback=phoned"* ]] || false
