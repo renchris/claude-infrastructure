@@ -46,6 +46,11 @@
 # way off the path and was rejected: it has no enforced timeout, so slow runs pile up. The worker
 # keeps its own HARD timeout instead (P8_TIMEOUT, below, 20 s). The ≤60 s freshness contract still
 # holds: the write lands within that bound of the prompt, not at its instant.
+# ONE DEPENDENCY THIS ADDS: the ancestry walk now starts from $PPID after the hook has exited, so it
+# relies on the hook's parent being claude itself (2,315 of 2,331 PPID lines in
+# logs/teammate-lifecycle.log, 2026-10-12). Under a non-exec `/bin/sh -c "hook; :"` shim, or a
+# `claude -p` that exits before the worker reaches `ps`, the beat records the dead parent's pid with
+# an empty lstart (the foreground hook used to record claude's pid and lstart there).
 #
 # bash 3.2-safe. jq required (absent ⇒ silent no-op, same as session-register.sh).
 set -uo pipefail
@@ -65,21 +70,28 @@ command -v jq >/dev/null 2>&1 || exit 0
 # kind: explicit arg wins (Stop passes `stop`); default is a prompt beat.
 kind="${1:-prompt}"
 
-# ONE jq start for every payload field. Line 1 is "<sid> TAB <cwd>" as @tsv; everything after the
-# first newline is the RAW prompt, so the `who` regex sees exactly the text the old per-field
-# `jq -r '.prompt'` produced (an @tsv field would arrive with its \t \n \\ escaped).
+# ONE jq start for every payload field. Line 1 is "<sid> TAB <ms> TAB <cwd>" as @tsv; everything
+# after the first newline is the RAW prompt, so the `who` regex sees exactly the text the old
+# per-field `jq -r '.prompt'` produced (an @tsv field would arrive with its \t \n \\ escaped).
+# <ms> is the EVENT's clock, read here in the foreground where boundaries are still in turn order;
+# see ORDER BY EVENT in beat().
 _parsed=$(printf '%s' "$input" | jq -r '
-  ([(.session_id // "" | tostring), (.cwd // "" | tostring)] | @tsv), (.prompt // "" | tostring)' 2>/dev/null)
+  ([(.session_id // "" | tostring), (now * 1000 | floor | tostring), (.cwd // "" | tostring)] | @tsv),
+  (.prompt // "" | tostring)' 2>/dev/null)
 _head="${_parsed%%$'\n'*}"
 prompt=""
 case "$_parsed" in *$'\n'*) prompt="${_parsed#*$'\n'}" ;; esac
 sid="${_head%%$'\t'*}"
+_rest=""
+case "$_head" in *$'\t'*) _rest="${_head#*$'\t'}" ;; esac
+tms="${_rest%%$'\t'*}"
 cwd=""
-case "$_head" in *$'\t'*) cwd="${_head#*$'\t'}" ;; esac
+case "$_rest" in *$'\t'*) cwd="${_rest#*$'\t'}" ;; esac
 [ -n "$sid" ] || exit 0
 # sid is the IDENTITY key, deliberately NOT the pane: tmux panes inherit the server's
 # ITERM_SESSION_ID, so a pane-keyed beat would have N sessions overwrite one row.
 case "$sid" in *[!0-9A-Za-z_-]*) exit 0 ;; esac   # path-safety: sid becomes a filename
+case "$tms" in ''|*[!0-9]*) tms=$(( $(date +%s) * 1000 )) ;; esac   # unreachable when jq parsed sid
 # Undo @tsv's escaping of the cwd (\\ \t \n \r); 0x02 holds an escaped backslash meanwhile (not
 # 0x01, bash's internal CTLESC byte, which mangles inside ${//}).
 cwd="${cwd//\\\\/$'\002'}"; cwd="${cwd//\\t/$'\t'}"; cwd="${cwd//\\n/$'\n'}"; cwd="${cwd//\\r/$'\r'}"
@@ -99,13 +111,15 @@ if [ "$kind" = prompt ]; then
 fi
 
 beat() {
-  local pane dir tmp prev prevOp now seq cpid lstart walk c i lock
+  local pane dir tmp prev prevOp prevT now seq cpid lstart walk c i lock held
   # KITTY_WINDOW_ID last, for the same measured no-address class session-register.sh:127 carries:
   # without it a kitty-hosted session's beat records pane "" while its stop-failure marker records
   # a real pane, and a reader comparing the two sees a disagreement that is purely this gap.
   pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-${KITTY_WINDOW_ID:-}}}"; pane="${pane##*:}"
 
-  now=$(date +%s)
+  # `t` is the event's own second, taken from the foreground stamp — not this worker's clock, which
+  # can trail the event by as long as the walk below took.
+  now=$((tms / 1000))
 
   # Durable claude-ancestor PID + its lstart — identity is (pid,lstart), never pid alone: a
   # RECYCLED pid must not masquerade as this session (the reaper's a17 S-4 pin, now the beat's too).
@@ -138,42 +152,76 @@ beat() {
   # be walking `ps` when the Stop worker starts, and two unserialized read-modify-writes would let the
   # later one write back a STALE operatorT — erasing the presence this file exists to keep. The walk
   # above stays outside the lock; only the short read-modify-write below is inside it. Bounded and
-  # self-healing: past 1-2 s the worker proceeds anyway and removes the lock when done, so a worker
-  # killed by the HARD timeout while holding it costs its successors one wait, never a beat.
+  # self-healing: past 1-2 s the worker takes the lock over (a holder that slow is presumed killed by
+  # the HARD timeout), so a dead holder costs its successors one wait, never a beat. Only a worker
+  # that HOLDS the lock removes it; one that merely gave up waiting would delete a live sibling's.
   # The wait is bounded by the CLOCK, not by a try count: at load ~600 each `sleep` fork can take a
   # second; with a 20-try bound the suite's stale-lock beat never landed in 45 s (2026-10-12).
-  lock="$dir/.$sid.lock"; i=$SECONDS
-  until mkdir "$lock" 2>/dev/null; do
-    [ $((SECONDS - i)) -ge 2 ] && break
+  lock="$dir/.$sid.lock"; i=$SECONDS; held=0
+  while :; do
+    if mkdir "$lock" 2>/dev/null; then held=1; break; fi
+    if [ $((SECONDS - i)) -ge 2 ]; then
+      rmdir "$lock" 2>/dev/null; mkdir "$lock" 2>/dev/null && held=1
+      break
+    fi
     sleep 0.1
   done
 
   # Carry the sticky operator high-water mark and the sequence forward from the previous beat.
-  prevOp=""; seq=0
+  # A beat from before the event stamp existed is ordered by its whole-second `t`.
+  prevOp=""; seq=0; prevT=0
   if [ -f "$dir/$sid.json" ]; then
-    prev=$(jq -r '[(.operatorT // ""), (.seq // 0)] | @tsv' "$dir/$sid.json" 2>/dev/null)
-    prevOp="${prev%%$'\t'*}"
-    seq="${prev#*$'\t'}"
+    prev=$(jq -r '[(.operatorT // ""), (.seq // 0),
+                   (.tms // (if (.t | type) == "number" then .t * 1000 | floor else 0 end))] | @tsv' \
+           "$dir/$sid.json" 2>/dev/null)
+    prevOp="${prev%%$'\t'*}"; prev="${prev#*$'\t'}"
+    seq="${prev%%$'\t'*}"
+    prevT="${prev#*$'\t'}"
   fi
   case "$seq"   in ''|*[!0-9]*) seq=0 ;; esac
   case "$prevOp" in *[!0-9]*) prevOp="" ;; esac
+  case "$prevT" in ''|*[!0-9]*) prevT=0 ;; esac
+
+  # ORDER BY EVENT, NOT BY ARRIVAL. Detached, a turn's prompt beat and its Stop beat (or a Stop beat
+  # and the very next "Stop hook feedback:" prompt, milliseconds later) are two workers, and the lock
+  # above decides only that they do not write at once — not which writes LAST. Whichever reaches it
+  # second used to win, so a stalled worker left the previous boundary's kind on disk until the next
+  # one, possibly hours: cc-wake refuses a session whose last beat is not a Stop, session-busy reads
+  # a mid-turn session as idle, and cc-await-ping reads a late `prompt` as a new turn. Measured with
+  # 0-1.4 s of `ps` jitter per call: the stale Stop beat survived into the next turn in 6 of 12
+  # trials. A worker whose event is OLDER than the beat on disk therefore writes nothing of its own —
+  # kind, t, who, seq stay the newer event's — and only raises the operatorT high-water mark.
+  tmp="$dir/.$sid.$$.tmp"
+  if [ "$prevT" -gt "$tms" ]; then
+    if [ "$who" = operator ] && { [ -z "$prevOp" ] || [ "$now" -gt "$prevOp" ]; }; then
+      if jq --argjson opT "$now" '.operatorT = $opT' "$dir/$sid.json" > "$tmp" 2>/dev/null; then
+        mv -f "$tmp" "$dir/$sid.json" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+      else
+        rm -f "$tmp" 2>/dev/null
+      fi
+    fi
+    printf 'session-beat: sid=%s %s beat (event %s) superseded by the newer beat on disk (event %s)\n' \
+      "$sid" "$kind" "$tms" "$prevT" >>"$_log" 2>/dev/null
+    [ "$held" = 1 ] && rmdir "$lock" 2>/dev/null
+    return 0
+  fi
+
   seq=$((seq + 1))
   # A high-water mark in fact as well as in name: a worker that took its clock reading before a
   # sibling's later one must not lower the mark that sibling wrote.
   if [ "$who" = operator ] && { [ -z "$prevOp" ] || [ "$now" -gt "$prevOp" ]; }; then prevOp="$now"; fi
 
-  tmp="$dir/.$sid.$$.tmp"
   if jq -n --arg sid "$sid" --arg pane "$pane" --arg cwd "$cwd" --arg kind "$kind" \
           --arg who "$who" --arg lstart "$lstart" --arg opT "$prevOp" \
-          --argjson pid "$cpid" --argjson t "$now" --argjson seq "$seq" \
-        '{sid:$sid, pane:$pane, cwd:$cwd, pid:$pid, lstart:$lstart, t:$t, kind:$kind, who:$who,
-          operatorT:(if $opT=="" then null else ($opT|tonumber) end), seq:$seq}' \
+          --argjson pid "$cpid" --argjson t "$now" --argjson tms "$tms" --argjson seq "$seq" \
+        '{sid:$sid, pane:$pane, cwd:$cwd, pid:$pid, lstart:$lstart, t:$t, tms:$tms, kind:$kind,
+          who:$who, operatorT:(if $opT=="" then null else ($opT|tonumber) end), seq:$seq}' \
         > "$tmp" 2>/dev/null; then
     mv -f "$tmp" "$dir/$sid.json" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   else
     rm -f "$tmp" 2>/dev/null
   fi
-  rmdir "$lock" 2>/dev/null
+  [ "$held" = 1 ] && rmdir "$lock" 2>/dev/null
   return 0
 }
 
@@ -187,10 +235,14 @@ set -m
   set +m
   beat >/dev/null 2>&1 &
   _w=$!
-  ( sleep "$P8_TIMEOUT"; kill -9 "$_w" 2>/dev/null ) >/dev/null 2>&1 &
+  # The timer stops its OWN `sleep` on TERM: a SIGKILLed timer would orphan a P8_TIMEOUT-long
+  # `sleep` on every beat, about two per turn per session.
+  ( trap 'kill "${_s:-}" 2>/dev/null; exit 0' TERM
+    sleep "$P8_TIMEOUT" & _s=$!
+    wait "$_s" && kill -9 "$_w" 2>/dev/null ) >/dev/null 2>&1 &
   _k=$!
   wait "$_w" >/dev/null 2>&1
-  kill -9 "$_k" >/dev/null 2>&1
+  kill "$_k" >/dev/null 2>&1
   wait "$_k" >/dev/null 2>&1
 ) </dev/null >>"$_log" 2>&1 &
 exit 0

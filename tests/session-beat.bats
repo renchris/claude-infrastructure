@@ -275,6 +275,68 @@ slow_ps_stub() {
   [ "$(jq -r '.who' "$CC_BEAT_DIR/rx3.json")" = auto ]
 }
 
+# ══ ORDER BY EVENT — two detached workers of one session must leave the LATER boundary on disk ══
+#
+# Detached, a turn's prompt beat and its Stop beat are separate workers; the per-sid lock stops them
+# writing at once but not from landing out of order. A stalled worker used to win by arriving last,
+# leaving the previous boundary's kind on disk (cc-wake, session-busy and cc-await-ping all read it).
+# The `ps` stub below HOLDS the first worker's walk until the test releases it, so the earlier event
+# deterministically reaches the lock second.
+
+held_ps_stub() {
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  printf '#!/bin/bash\nif [ -n "${BEAT_HOLD_PS:-}" ] && mkdir "$BEAT_HOLD_PS" 2>/dev/null; then n=0; while [ ! -e "$BEAT_HOLD_PS/release" ] && [ "$n" -lt 400 ]; do sleep 0.1; n=$((n + 1)); done; fi\nexec /bin/ps "$@"\n' \
+    > "$BATS_TEST_TMPDIR/bin/ps"
+  chmod +x "$BATS_TEST_TMPDIR/bin/ps"
+}
+
+held_emit() { # <json-stdin> <kind> — fire a beat whose worker is held at its first `ps`
+  printf '%s' "$1" | env PATH="$BATS_TEST_TMPDIR/bin:$PATH" BEAT_HOLD_PS="$BATS_TEST_TMPDIR/held" \
+    CC_BEAT_TIMEOUT=60 /bin/bash "$BEAT" "$2"
+  local n=0
+  while [ ! -d "$BATS_TEST_TMPDIR/held" ] && [ "$n" -lt 200 ]; do sleep 0.1; n=$((n + 1)); done
+  [ -d "$BATS_TEST_TMPDIR/held" ]
+}
+
+# The released worker has settled once it logs its supersession — or, on a hook that does not order
+# by event, once it writes over the beat (seq past <ceiling>), which the kind assertion then catches.
+release_and_settle() { # <sid> <seq-ceiling>
+  local n=0
+  touch "$BATS_TEST_TMPDIR/held/release"
+  while [ "$n" -lt 450 ]; do
+    grep -q "sid=$1 .*superseded" "$CC_BEAT_LOG" 2>/dev/null && return 0
+    [ "$(beat_seq "$1")" -gt "$2" ] 2>/dev/null && return 0
+    sleep 0.1; n=$((n + 1))
+  done
+  echo "held worker for $1 never settled within 45 s" >&2; return 1
+}
+
+@test "ORDER: a stalled prompt worker cannot overwrite the later Stop beat, but still raises operatorT" {
+  export CC_BEAT_LOG="$BATS_TEST_TMPDIR/beat.log"
+  held_ps_stub
+  held_emit '{"session_id":"or1","cwd":"/tmp","prompt":"quick question"}' prompt
+  emit '{"session_id":"or1","cwd":"/tmp"}' stop
+  [ "$(jq -r '.kind' "$CC_BEAT_DIR/or1.json")" = stop ]
+  release_and_settle or1 1
+  [ "$(jq -r '.kind' "$CC_BEAT_DIR/or1.json")" = stop ]
+  [ "$(jq -r '.who'  "$CC_BEAT_DIR/or1.json")" = auto ]
+  [ "$(jq -r '.seq'  "$CC_BEAT_DIR/or1.json")" -eq 1 ]
+  # presence is still kept: the late operator prompt raised the sticky mark on the Stop beat
+  [ "$(jq -r '.operatorT != null' "$CC_BEAT_DIR/or1.json")" = true ]
+}
+
+@test "ORDER: a stalled Stop worker cannot overwrite the next turn's prompt beat" {
+  export CC_BEAT_LOG="$BATS_TEST_TMPDIR/beat.log"
+  held_ps_stub
+  held_emit '{"session_id":"or2","cwd":"/tmp"}' stop
+  emit '{"session_id":"or2","cwd":"/tmp","prompt":"Stop hook feedback: keep going"}' prompt
+  [ "$(jq -r '.kind' "$CC_BEAT_DIR/or2.json")" = prompt ]
+  release_and_settle or2 1
+  [ "$(jq -r '.kind' "$CC_BEAT_DIR/or2.json")" = prompt ]
+  [ "$(jq -r '.seq'  "$CC_BEAT_DIR/or2.json")" -eq 1 ]
+  [ "$(jq -r '.operatorT' "$CC_BEAT_DIR/or2.json")" = null ]
+}
+
 @test "the one-jq parse keeps an empty cwd from shifting fields, and restores an escaped cwd byte-for-byte" {
   emit "$(jq -nc '{session_id:"cw1",cwd:"",prompt:"hi"}')" prompt
   [ "$(jq -r '.cwd' "$CC_BEAT_DIR/cw1.json")" = "$PWD" ]
