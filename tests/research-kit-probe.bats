@@ -69,6 +69,22 @@ last_field() { # <jq-ish python expr over the last probe record>
   [[ "$output" == *"exit=0"* ]]
 }
 
+# RED-proof (2026-10-11): subprocess.run's timeout killed only the direct child, so the backgrounded
+# sleep below outlived the probe and `kill -0` still found it.
+@test "a timed-out probe exits 124 and kills what its command started, grandchildren included" {
+  pf="$BATS_TEST_TMPDIR/grandchild.pid"
+  run "$PR" run --program demo --id P-11 --kind read --timeout 3 --negative-control false -- \
+    /bin/bash -c "sleep 60 & echo \$! > '$pf'; wait"
+  [[ "$output" == *"exit=124"* ]] || false
+  [ -s "$pf" ]
+  gone=0
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    kill -0 "$(cat "$pf")" 2> /dev/null || { gone=1; break; }
+    sleep 0.5
+  done
+  [ "$gone" -eq 1 ]
+}
+
 # A fake interactive zsh: evaluates the fenced command in bash with `print` and `whence` shims, a
 # PATH holding a tool the agent's PATH does not, and terminal escape noise on the answer line.
 fake_zsh() {

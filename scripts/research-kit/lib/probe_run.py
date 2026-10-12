@@ -19,6 +19,7 @@ import json
 import os
 import platform
 import re
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -47,21 +48,35 @@ def sh(
     env: Optional[Dict[str, str]] = None,
     cwd: Optional[str] = None,
 ) -> Tuple[int, str, str]:
+    # Its own session, so a timeout kills everything the command started: subprocess.run's timeout
+    # kills only the direct child, and a timed-out re-check's grandchildren ran on (measured
+    # 2026-10-11, stage-8 prep).
     try:
-        p = subprocess.run(
+        p = subprocess.Popen(
             argv,
             stdin=subprocess.DEVNULL,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
             env=env,
             cwd=cwd,
+            start_new_session=True,
         )
-        return p.returncode, p.stdout, p.stderr
-    except subprocess.TimeoutExpired:
-        return 124, "", f"timeout after {timeout}s"
     except OSError as e:
         return 127, "", str(e)
+    try:
+        out, err = p.communicate(timeout=timeout)
+        return p.returncode, out, err
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except OSError:
+            p.kill()
+        try:
+            p.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass  # a descendant left the group (its own setsid) and holds the pipes: do not wait
+        return 124, "", f"timeout after {timeout}s"
 
 
 def trunk_sha(cwd: str) -> Optional[str]:
