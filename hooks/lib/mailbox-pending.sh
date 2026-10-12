@@ -240,11 +240,19 @@ mailbox_lines() {
 # (mailbox_lines), so one drain greps the inbox once instead of once per primitive: a count was taken
 # by mailbox_seen, again by mailbox_window_end, and twice more by each pending/unacked count. A
 # non-numeric or absent value recounts, so every existing caller is unchanged.
+# A SUPPLIED COUNT NEVER CONVICTS A ROTATION ON ITS OWN. It was taken BEFORE the cursor read, so a
+# line appended and committed to .seen in between reads as a cursor past EOF — and the F11 reset
+# would re-deliver the whole inbox. Uncounted, the order was cursor-then-count and the count could
+# never be behind the cursor; so a cursor past a supplied count is re-checked against a FRESH count,
+# which restores that order. Only the rare past-EOF path pays the second grep.
 mailbox_seen() { # <uuid> [lines] — emitted cursor, clamped [0, lines]; a cursor PAST EOF (rotate/GC/recycle) ⇒ 0 (re-deliver, F11)
   local u="${1:-}" p lines="${2:-}"
   _mbx_valid_uuid "$u" || { echo 0; return; }
   p="$(_mbx_read_int_file "$(_mbx_dir)/$u.seen")"
-  case "$lines" in ''|*[!0-9]*) lines="$(mailbox_lines "$u")" ;; esac
+  case "$lines" in
+    ''|*[!0-9]*) lines="$(mailbox_lines "$u")" ;;
+    *) [ "$p" -gt "$lines" ] 2>/dev/null && lines="$(mailbox_lines "$u")" ;;   # stale precount ≠ rotation
+  esac
   [ "$p" -gt "$lines" ] 2>/dev/null && p=0
   echo "$p"
 }
@@ -789,9 +797,11 @@ MBXEOF
 # strand a legitimate tenant's addressing; allowing wrongly costs one polluted trail entry.
 #
 # FORK-LEAN BY ORDERING, which this library has already paid for once (the 5.0s tipset incident
-# above): the common boundary has no registry row for its pane, or a row that is its own, and pays a
-# single `[ -f ]` plus one `sed`. The ps walk runs ONLY on the contested path — a row that exists,
-# names a live pid, and that pid is not ours. `_mbx_claude_pid` is memoised for the process.
+# above): the common boundary never reaches this gate at all — mailbox_alias_write's dedup returns
+# first whenever the alias tip is already this session. Past the dedup, a pane with no registry row
+# pays a single `[ -f ]`; one WITH a row pays one `sed` plus the `_mbx_claude_pid` walk (its own row
+# included — that walk is what tells "ours" from "not ours"), and the ancestry walk runs only on the
+# contested path: a row that names a live pid that is not ours. `_mbx_claude_pid` is memoised.
 # No `jq`: this library deliberately has no jq dependency, and the registry row is flat JSON.
 # Kill switch: CC_MBX_ALIAS_TENANCY=0.
 #
@@ -804,7 +814,7 @@ MBXEOF
 #                                   in our ancestor chain either, so the walk already excludes it.
 #                                   It is a FORK-SAVING FAST PATH (skips up to 16 `ps` calls on a
 #                                   stale-row pane), which on a per-boundary hook is worth keeping.
-#   `[ "$inc" = "$(_mbx_claude_pid)" ]` NOT load-bearing, same reason: the walk starts at our
+#   `[ "$inc" = "$_MBX_CPID" ]`     NOT load-bearing, same reason: the walk starts at our
 #                                   claude's PARENT, so our own pid can never match. Also a fast path.
 #   `[ -f "$row" ]`                 unmutatable: without it the `sed` reads a missing file, yields
 #                                   empty, and the `case` below fails OPEN anyway. Kept as the
@@ -858,6 +868,8 @@ mailbox_pane_held_by_live_ancestor() { # <pane> → 0 = I am a nested session un
   _mbx_pid_is_strict_ancestor "$inc"
 }
 
+# rc 0 for a dedup comes BEFORE the tenancy gate: a nested session whose id is already the tip gets
+# 0, not 2 — it writes nothing either way, and the one caller ignores the rc.
 mailbox_alias_write() { # <pane> <session> → 0 wrote/deduped · 1 invalid · 2 REFUSED (not the tenant)
   local pane="${1:-}" sess="${2:-}" f tip dir
   _mbx_valid_uuid "$pane" || return 1

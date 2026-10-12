@@ -1271,6 +1271,9 @@ load_now() { # wall-clock seconds with a fraction
   # and the cost of 60 fork+exec units (`$(/usr/bin/true)`, the shape of nearly every step in the
   # hook) timed here, in the same band, just before. The warm path is roughly 45 such units; from a
   # plain shell at the same load the pre-change path took ~3x as long (1.9-2.9 s vs 0.6-0.8 s).
+  # THIS CASE DOES NOT DISCRIMINATE: the pre-change drain also fits under this bound. It reports the
+  # measurement and catches a gross regression (a hang, a per-line loop); the change itself is pinned
+  # by the no-ps case above, the COUNT ONCE case below, and tests/goal-state-incremental.bats.
   local c0 c1 cal bound _x
   c0="$(load_now)"; for i in $(seq 1 10); do _x="$(/usr/bin/true)"; done; c1="$(load_now)"
   cal="$(awk -v s="$c0" -v e="$c1" 'BEGIN { printf "%.3f", e - s }')"
@@ -1300,4 +1303,70 @@ load_now() { # wall-clock seconds with a fraction
   [ ! -s "$BATS_TEST_TMPDIR/warm.out" ] || false        # empty inbox, nudge already told: silent
   echo "# empty-inbox drain: cold ${cold}s, warm ${warm}s, bound ${bound}s (10 execs ${cal}s; load: $(/usr/sbin/sysctl -n vm.loadavg 2>/dev/null || uptime))" >&3
   awk -v w="$warm" -v b="$bound" 'BEGIN { exit !(w < b) }' || false
+}
+
+# ── COUNT ONCE vs the past-EOF check ─────────────────────────────────────────────────────────────
+# A drain counts the inbox once and hands that count to mailbox_seen. The count is then taken BEFORE
+# the cursor read, so a line appended and committed to .seen in between (a writer outside the claim:
+# the pane-key seal, a lib-skewed take) shows a cursor past the count — which the F11 check reads as a
+# rotation and answers by re-delivering the whole inbox. The stub below makes that window happen on
+# demand: on the FIRST `grep -c ''` of the inbox it takes the real count, then appends a line and
+# commits .seen to the new EOF, then reports the count it took. Every `grep -c ''` of the inbox is logged.
+count_grep_stub() { # → $CG_BIN on PATH; env STUB_INBOX STUB_SEEN STUB_LOG [STUB_RACE = one-shot marker]
+  CG_BIN="$BATS_TEST_TMPDIR/cg-bin"; mkdir -p "$CG_BIN"
+  printf '%s\n' '#!/bin/bash' \
+    'if [ "$1" = "-c" ] && [ -z "$2" ] && [ "$3" = "$STUB_INBOX" ]; then' \
+    '  printf "count\n" >> "$STUB_LOG"' \
+    '  if [ -n "${STUB_RACE:-}" ] && [ ! -e "$STUB_RACE" ]; then' \
+    '    : > "$STUB_RACE"' \
+    '    n="$(/usr/bin/grep -c "" "$3")"' \
+    '    printf "raced in\n" >> "$3"' \
+    '    printf "%s\n" "$((n + 1))" > "$STUB_SEEN"' \
+    '    printf "%s\n" "$n"; exit 0' \
+    '  fi' \
+    'fi' \
+    'exec /usr/bin/grep "$@"' > "$CG_BIN/grep"
+  chmod +x "$CG_BIN/grep"
+  export STUB_INBOX="$MBOX" STUB_SEEN="$SEEN" STUB_LOG="$BATS_TEST_TMPDIR/grep-count.log"
+}
+
+@test "COUNT ONCE: an empty-inbox prompt drain counts the inbox exactly once" {
+  seed "old 1" "old 2" "old 3"
+  printf '3\n' > "$SEEN"
+  count_grep_stub
+  run bash -c 'echo "{}" | PATH="$1:$PATH" "$0" prompt' "$DRAIN" "$CG_BIN"
+  [ "$status" -eq 0 ]
+  delivered_nothing "$output"
+  [ "$(/usr/bin/grep -c '' "$STUB_LOG")" -eq 1 ] || { echo "inbox counted:" >&2; cat "$STUB_LOG" >&2; false; }
+}
+
+@test "COUNT ONCE: a cursor committed past a stale precount is NOT a rotation (no re-delivery)" {
+  seed "old 1" "old 2" "old 3" "old 4" "old 5"
+  printf '5\n' > "$SEEN"
+  count_grep_stub
+  export STUB_RACE="$BATS_TEST_TMPDIR/raced"
+  run bash -c 'echo "{}" | PATH="$1:$PATH" "$0" prompt' "$DRAIN" "$CG_BIN"
+  [ "$status" -eq 0 ]
+  [ -e "$STUB_RACE" ] || false                 # the window really opened inside this drain
+  delivered_nothing "$output"                  # neither the five old lines nor the raced-in one
+  [[ "$output" != *'old 1'* ]] || false
+  [ "$(cat "$SEEN")" -eq 6 ] || false          # the committed cursor survives, never reset to 0
+}
+
+@test "COUNT ONCE (lib): mailbox_seen and pending_count never convict a rotation the file only grew past" {
+  . "$REPO/hooks/lib/mailbox-pending.sh"
+  seed "old 1" "old 2" "old 3" "old 4" "old 5"
+  # precount 5, then a line arrives and .seen is committed to it: a supplied count of 5 is stale
+  add "new 6"; printf '6\n' > "$SEEN"
+  [ "$(mailbox_seen "$UUID" 5)" -eq 6 ] || false
+  [ "$(mailbox_acked "$UUID" 5)" -eq 0 ] || false
+  # the same window opened inside pending_count's own count-then-read
+  count_grep_stub
+  export STUB_RACE="$BATS_TEST_TMPDIR/raced"
+  [ "$(PATH="$CG_BIN:$PATH" mailbox_pending_count "$UUID")" -eq 0 ] || false
+  [ -e "$STUB_RACE" ] || false
+  # a REAL rotation still resets: the cursor is past a fresh count too
+  seed "rotated 1" "rotated 2"; printf '9\n' > "$SEEN"
+  [ "$(mailbox_seen "$UUID" 2)" -eq 0 ] || false
+  [ "$(mailbox_seen "$UUID")" -eq 0 ] || false
 }
