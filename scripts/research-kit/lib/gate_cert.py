@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import subprocess
 import sys
 import time
@@ -82,9 +83,90 @@ def cmd_freeze(a: Any) -> int:
     import activities
     import round as rnd
 
+    # The re-freeze ends every front-end return: its edits are in the snapshot now pinned.
+    for aid in activities.close_kind(a.program, activities.FRONT_END_RETURN):
+        print(f"front-end return closed by the re-freeze: {aid}")
     if rnd.certification_due(a.program) is None:
         aid = activities.ensure_open(a.program, "certification-round")
         print(f"certification activity open: {aid} (tag CC_RESEARCH_ACTIVITY={aid})")
+    return 0
+
+
+# REPORT.md §6.1 says "well above the design point"; §10 row 16 (the 2026-10-04 audit) proposes 1.5x,
+# which the calibration run measures. Assumed until then.
+FER_FACTOR = 1.5
+# REPORT.md §6.1 ceiling: "one front-end return per area (lite 1 x 1 day; standard and full 3 x 1.5 days)".
+FER_AREAS = {"lite": 1, "standard": 3, "full": 3}
+AREA_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def cmd_return_activity(a: Any) -> int:
+    """Open (or name) one area's front-end-return activity (REPORT.md §6.1, §6.5). Refused unless the
+    program is certifying and frozen, its newest certification round is closed and the next has not
+    started, a counted round's n_hat is above FER_FACTOR x the design point, and the profile's area
+    cap is not used up. The window check comes first, so a second call for an open area still
+    prints its id only inside the window."""
+    import activities
+    import estimate
+    import round as rnd
+
+    slug = a.program
+    state = (kit.registry_get(slug) or {}).get("state")
+    if state != "certifying":
+        raise kit.KitError(
+            f"return-activity refused: {slug} is {state!r}, not certifying"
+        )
+    if not (kit.records_dir(slug) / "freeze.json").is_file():
+        raise kit.KitError(f"return-activity refused: {slug} has no freeze.json")
+    if not AREA_RE.match(a.area or ""):
+        raise kit.KitError(f"return-activity refused: bad area name {a.area!r}")
+    if not (a.because or "").strip():
+        raise kit.KitError(
+            "return-activity refused: --because names the recorded course and areas decisions"
+        )
+    done = rnd.all_matrices(slug, "certification")
+    nxt = len(done) + 1
+    if (
+        not done
+        or not done[-1].get("closed")
+        or not any(m.get("counted") for m in done)
+        or (rnd.rounds_dir(slug) / str(nxt)).exists()
+    ):
+        raise kit.KitError(
+            "return-activity refused: a front-end return opens after a counted certification round "
+            f"has closed and before the next one runs (§6.1); certification rounds: {len(done)}"
+            + (
+                f", round {nxt} already started"
+                if done and done[-1].get("closed")
+                else ""
+            )
+        )
+    frame = make_ctx(slug).frame
+    design = kit.profile(str(frame.get("profile") or ""))["design_holes"]
+    n_hat = float(estimate.forecast(slug)["n_hat"])
+    if n_hat <= FER_FACTOR * design:
+        raise kit.KitError(
+            f"return-activity refused: the estimate n_hat {n_hat:g} is not above {FER_FACTOR:g} x "
+            f"the {frame.get('profile')} design point {design}"
+        )
+    aid, shut, _ = activities.open_return(
+        slug,
+        a.area,
+        FER_AREAS[kit.round_profile(slug, frame)],
+        {
+            "n_hat": n_hat,
+            "design_holes": design,
+            "after_round": len(done),
+            "opened_at": kit.now_iso(),
+            "because": a.because,
+        },
+    )
+    for x in shut:
+        print(
+            f"certification activity closed for the return: {x} (gate.sh freeze re-opens one)",
+            file=sys.stderr,
+        )
+    print(aid)
     return 0
 
 
@@ -197,7 +279,9 @@ def write_certificate(ctx: Ctx, rows: List[Row]) -> str:
         "cert": f"CERT-v{n}",
         "program": ctx.slug,
         "version": n,
-        "profile": ctx.frame.get("profile"),
+        "profile": kit.round_profile(ctx.slug, ctx.frame),
+        # a signed switch (cc-signoff research:<slug>/profile/<name>): {"to","from","after_round",…}
+        "profile_switch": kit.profile_switch(ctx.slug),
         "snapshot_sha": fz.get("snapshot_sha"),
         "issued": issued,
         "stop": f["stop"],
@@ -361,14 +445,21 @@ def lines_for(
             f"; {plural(len(lost), 'round')} lost to a dead lane and not counted "
             f"({'round' if len(lost) == 1 else 'rounds'} {', '.join(lost)})"
         )
-    head = f"Research: {slug} version {cert['version']}. {state.upper()} {when} ({cert['profile']} profile; {why})"
+    sw = cert.get("profile_switch") or {}
+    switched = (
+        f" from round {sw['after_round'] + 1}, {sw['from']} through round {sw['after_round']}"
+        if sw
+        else ""
+    )
+    head = f"Research: {slug} version {cert['version']}. {state.upper()} {when} ({cert['profile']} profile{switched}; {why})"
     if cert.get("degraded") == "two vendors":
         head = "degraded: two vendors · " + head
     unstable = cert.get("adjudication_unstable") or []
     if unstable:
         head = (
             f"Adjudication unstable ({'round' if len(unstable) == 1 else 'rounds'} "
-            f"{', '.join(unstable)}: rater agreement still low after the re-pass) · " + head
+            f"{', '.join(unstable)}: rater agreement still low after the re-pass) · "
+            + head
         )
     total = fc["desk_mean"] + fc["invisible_mean"]
     bound = fc["desk_n95"] + fc["invisible_bound95"]
@@ -536,6 +627,26 @@ def add_verbs(sub: Any) -> None:
     )
     p.add_argument("--program", required=True)
     p.set_defaults(fn=cmd_cert_activity)
+    p = sub.add_parser(
+        "return-activity",
+        help="open (or name) one area's front-end-return activity (REPORT.md §6.1)",
+        description="Print the id of the area's open front-end-return activity, opening one if "
+        "none is open and closing the certification-round activity. Refused unless the registry "
+        "reads certifying, freeze.json exists, the newest certification round is closed and the "
+        "next has not started, the estimate is above 1.5 x the design point, the area has not "
+        "already had its return and the profile's area cap (lite 1, standard and full 3) is not "
+        "used up. gate.sh freeze closes it. Tag the area's calls with [activity:<id>] (Agent and "
+        "Workflow inputs) and CC_RESEARCH_ACTIVITY=<id> (read-only codex exec); the lead fires the "
+        "area's workers itself, because handoff-fire.sh stays denied under every activity tag.",
+    )
+    p.add_argument("--program", required=True)
+    p.add_argument("--area", required=True)
+    p.add_argument(
+        "--because",
+        required=True,
+        help="the recorded course and areas decisions this return follows",
+    )
+    p.set_defaults(fn=cmd_return_activity)
     p = sub.add_parser("render")
     p.add_argument("--program", required=True)
     p.set_defaults(fn=cmd_render)

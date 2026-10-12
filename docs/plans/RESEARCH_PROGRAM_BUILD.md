@@ -162,6 +162,17 @@ Owns §10 items 1 (deny half), 2, 3, 8, 11, 12, 13 (populating the set). Reads, 
     and `[activity:<id>]` Agents; every other vendor CLI, handoff-fire and `claude -p` stay denied. Router
     hardening in the same change: `Goal set: ` and `<\agent-message` are machine envelopes, an envelope's
     `--requires-gate` marker counts only when it names the routed slug, and `detach <log>` is read through.
+  - 2026-10-12 (operator, "proceed with all recommendations" on the post-settle decisions): a §6.1 front-end
+    return runs under a kit-opened `front-end-return` activity, one per area. `gate.sh return-activity --program
+    <slug> --area <A> --because "<course and areas decisions>"` opens it between two certification rounds
+    (closing the round's activity), `gate.sh freeze` closes it. While `certifying` and tagged, it allows
+    `[activity:<id>]` anywhere in an Agent, Task or Workflow input and `codex exec` in a read-only sandbox, and
+    nothing else: no `round.sh`, `courier.sh`, other vendor CLI, `claude -p` or buying verb. `handoff-fire.sh`
+    stays denied under every activity tag except `self-close`, as in the 2026-10-11 ruling: a tagged fire could
+    mint an unrouted or allow-all worker (`--extra`, `--cwd`, recycle inheritance, the `CC_RESEARCH_GATE` seam),
+    so the lead fires each area's workers from its own turn. Same change: the operator-signed profile switch
+    (`cc-signoff research:<slug>/profile/<name>`) and the contract page re-rendered at the program's measured
+    forecast; all three are specified in `scripts/research-kit/RECORDS.md` § A running program.
   - Program resolution by alias is per prompt: a pane that named the program once is ordinary again on its next
     prompt that does not, and a machine envelope naming it (peer mail, a notify-back, a `Goal set:` echo) does not
     make it a program session again; only a fired session's own brief (HANDOFF-ENGAGE-, a leading `[handoff `)

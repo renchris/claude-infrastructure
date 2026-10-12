@@ -229,12 +229,12 @@ def menu(slug: str) -> List[Dict[str, str]]:
     items: List[Dict[str, str]] = []
     if not extra_round_granted(slug):
         ctx = ctx_for(slug)
-        prof = kit.profile(ctx.frame.get("profile") or "")
+        prof = kit.profile(kit.round_profile(slug, ctx.frame))
         certs = gate_rows_b.cert_rounds(ctx)
         p90 = (certs[0].get("forecast") or {}).get("p90") if certs else None
         now, after = (
-            kit.r_max(prof["name"], p90, False),
-            kit.r_max(prof["name"], p90, True),
+            kit.round_cap(slug, ctx.frame, p90, False),
+            kit.round_cap(slug, ctx.frame, p90, True),
         )
         items.append(
             {

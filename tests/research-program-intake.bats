@@ -360,3 +360,67 @@ PY
   grep -q "ceiling (every loop at its cap) about 12 days" "$REC/CONTRACT.md"
   ! grep -q "v1.2 additions" "$REC/CONTRACT.md"
 }
+
+# ── the contract page of a running program: its own forecast, its current profile, no new field ──
+
+# counted_round_1 <new material>: the program is certifying and certification round 1 closed counted.
+counted_round_1() {
+  mkdir -p "$REC/rounds/1"
+  printf '{"round":"1","seq":1,"kind":"certification","counted":true,"closed":true,"new_material":%s,"quiet":false,"forecast":{"p50":3,"p90":4}}\n' "$1" \
+    > "$REC/rounds/1/matrix.json"
+  python3 -c "import json; p='$CC_RESEARCH_REGISTRY'; d=json.load(open(p)); d['programs'][0]['state']='certifying'; json.dump(d, open(p, 'w'))"
+}
+frame_keys() { python3 -c "import json; print(' '.join(sorted(json.load(open('$REC/frame.json')))))"; }
+
+# RED-proof: on 931209017 the re-render prints "Forecast at the design point (20 holes at freeze)",
+# writes reviewer_effort back into frame.json and re-adds the dropped google pin.
+@test "contract page of a running program: its own measured forecast and current profile, and no field added to the signed frame" {
+  init_wide standard 2>/dev/null; rulings_ok
+  "$I" set --program demo --escape-cost-days 3
+  preflight "2026-10-01T11:00:00Z"
+  "$I" contract-page --program demo
+  grep -q "Forecast at the design point (20 holes at freeze)" "$REC/CONTRACT.md"
+  # the frame as signed before reviewer_effort existed, with one vendor never pinned
+  python3 -c "import json; p='$REC/frame.json'; d=json.load(open(p)); d.pop('reviewer_effort'); d['reviewer_pins'].pop('google'); json.dump(d, open(p, 'w'))"
+  counted_round_1 30
+  keys="$(frame_keys)"
+  run "$I" contract-page --program demo
+  [ "$status" -eq 0 ]
+  [ "$(frame_keys)" = "$keys" ]
+  [ "$(frame_field reviewer_effort)" = "null" ]
+  [ "$(frame_field reviewer_pins | jq -r 'has("google")')" = "false" ]
+  [ "$(frame_field contract_page_sha256)" = "\"$(shasum -a 256 "$REC/CONTRACT.md" | cut -d' ' -f1)\"" ]
+  grep -q "^## Profile: standard$" "$REC/CONTRACT.md"
+  grep -q "Forecast from this program's own 1 counted certification round(s)" "$REC/CONTRACT.md"
+  grep -Eq "30 material holes found so far, estimated holes at freeze [0-9.]+ \(at most [0-9.]+ at 95%" "$REC/CONTRACT.md"
+  grep -Eq "After signoff: desk-detectable about [0-9.]+ \(at most [0-9]+ at 95%\), invisible to any reviewer about [0-9.]+ " "$REC/CONTRACT.md"
+  grep -Eq "chance of at least one material change after signoff [0-9.]+\. Model output" "$REC/CONTRACT.md"
+  run grep -c "Forecast at the design point" "$REC/CONTRACT.md"
+  [ "$output" = 0 ]
+  # the figures are the program's own estimate.py forecast, read back rather than restated here
+  n_hat="$(python3 "$REPO/scripts/research-kit/estimate.py" forecast --program demo | jq -r '.n_hat | tostring | sub("\\.0$"; "")')"
+  grep -q "estimated holes at freeze $n_hat (at most" "$REC/CONTRACT.md"
+  # a signed switch to lite: the page names it, the round cap follows it, the signed days do not
+  "$REPO/tests/fixtures/research-kit/fixture_signer.py" research:demo/profile/lite --because "course c1"
+  run "$I" contract-page --program demo
+  [ "$status" -eq 0 ]
+  [ "$(frame_keys)" = "$keys" ]
+  grep -q "^## Profile: lite from round 2 (standard through round 1; switched by your signature of " "$REC/CONTRACT.md"
+  grep -q "Reviewers per round 8 (2 per slot set), quiet rounds to stop 2, round cap 6 counted rounds (1 counted so far), original seeds 60" "$REC/CONTRACT.md"
+  grep -q "Stages 1–6 budget 11.5 agent-days" "$REC/CONTRACT.md"
+  grep -q "ceiling (every loop at its cap) about 28 days (§6.1), as signed on the standard profile and kept through the switch" "$REC/CONTRACT.md"
+}
+
+# RED-proof: on 931209017 this render succeeds at the design point and writes five frame fields.
+@test "contract page of a running program refuses when the frame carries no page to re-render, and writes nothing" {
+  init_ok; rulings_ok
+  "$I" set --program demo --escape-cost-days 3
+  preflight "2026-10-01T11:00:00Z"
+  counted_round_1 30
+  before="$(shasum "$REC/frame.json")"
+  run "$I" contract-page --program demo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"there is no signed page to re-render"* ]] || false
+  [ "$(shasum "$REC/frame.json")" = "$before" ]
+  [ ! -e "$REC/CONTRACT.md" ]
+}

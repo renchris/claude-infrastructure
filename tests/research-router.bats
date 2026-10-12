@@ -764,3 +764,78 @@ pyspy() {
   run pyspy "$BATS_TEST_TMPDIR/elsewhere" "a/b c"
   [ "$output" = "deny"$'\n'"py=1" ]
 }
+
+# fer_open: an open kit-opened front-end-return activity fer-1 (gate.sh return-activity) beside a
+# closed one, fer-0, and the certification-round activity that opening the return closed.
+fer_open() {
+  printf '{"activities":[{"program":"demo","id":"cr-1","kind":"certification-round","state":"closed"},{"program":"demo","id":"fer-0","kind":"front-end-return","area":"A0","state":"closed"},{"program":"demo","id":"fer-1","kind":"front-end-return","area":"A1","state":"open"}]}\n' \
+    > "$CC_RESEARCH_HOME/activities.json"
+}
+
+# wf <tool_input json>: one Workflow PreToolUse whose input is a script and its args.
+wf() {
+  jq -nc --argjson i "$1" --arg c "$PROG/src" '{session_id:"s1",cwd:$c,tool_name:"Workflow",tool_input:$i}' \
+    | bash "$BLOCK" | jq -r '.hookSpecificOutput.permissionDecision // empty' | grep -q deny \
+    && echo deny || echo allow
+}
+
+# RED-proof: on 931209017 (before the front-end-return kind) the tagged Workflow args and the read-only
+# codex read deny, and the fer-tagged courier.sh and delta round read allow (any open activity let
+# both through). The five handoff-fire lines hold on that commit too; their red is the mutant that
+# adds `or fer` to research_clause's handoff-fire arm (the prototype's exemption): all five flip to
+# allow (measured 2026-10-12).
+@test "a front-end-return activity lets a return session (label other) fan out to Agents, Workflows and read-only codex, and nothing else" {
+  state certifying
+  fer_open
+  prompt "Area A1, Stages 2-5. HANDOFF-ENGAGE-1-2-3" >/dev/null
+  [ "$(label)" = other ]
+  K=scripts/research-kit
+  [ "$(tool Agent '[activity:fer-1] census A1')" = allow ]
+  [ "$(tool Task '[activity:fer-1] census A1')" = allow ]
+  [ "$(tool Workflow '[activity:fer-1] census A1')" = allow ]
+  # a Workflow input is a script and its args: the tag is read wherever the input carries it
+  [ "$(wf '{"script":"census.workflow.js","args":{"note":"[activity:fer-1] A1"}}')" = allow ]
+  [ "$(wf '{"script":"census.workflow.js","args":{"note":"A1"}}')" = deny ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=fer-1 codex exec -s read-only -m x p')" = allow ]
+  # handoff-fire stays denied under the return's tag, in each measured escape form; self-close passes
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=fer-1 handoff-fire.sh --prompt-file b.md --worktree w')" = deny ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=fer-1 bash scripts/handoff-fire.sh --recycle --prompt-file b.md')" = deny ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=fer-1 CC_RESEARCH_GATE=/tmp/x handoff-fire.sh --requires-gate demo --gate-wave X --prompt-file b.md')" = deny ]
+  [ "$(tool Bash "CC_RESEARCH_ACTIVITY=fer-1 handoff-fire.sh --prompt-file b.md --extra '--resume u'")" = deny ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=fer-1 handoff-fire.sh --prompt-file b.md --cwd /elsewhere')" = deny ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=fer-1 handoff-fire.sh self-close --terminal')" = allow ]
+  # untagged, closed, unknown, a writable codex, other vendors, claude -p, round verbs and buying verbs
+  [ "$(tool Agent 'census A1')" = deny ]
+  [ "$(tool Agent '[activity:fer-0] census A0')" = deny ]
+  [ "$(tool Agent '[activity:cr-1] census A1')" = deny ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=fer-0 codex exec -s read-only p')" = deny ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=fer-9 codex exec -s read-only p')" = deny ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=fer-1 codex exec p')" = deny ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=fer-1 codex exec -s read-only --full-auto p')" = deny ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=fer-1 gemini p')" = deny ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=fer-1 agy --print p')" = deny ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=fer-1 claude -p hi')" = deny ]
+  [ "$(tool Bash "CC_RESEARCH_ACTIVITY=fer-1 $K/courier.sh run --program demo --role reviewer")" = deny ]
+  [ "$(tool Bash "CC_RESEARCH_ACTIVITY=fer-1 $K/round.sh run --program demo --kind delta --round 1")" = deny ]
+  [ "$(tool Bash "CC_RESEARCH_ACTIVITY=fer-1 $K/round.sh run --program demo --kind certification --round 2")" = deny ]
+  [ "$(tool Bash "CC_RESEARCH_ACTIVITY=fer-1 $K/round.sh close --program demo --round 1")" = deny ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=fer-1 cc-research rehearse --program demo')" = deny ]
+}
+
+# RED-proof: on 931209017 the certified fer-1 Agent reads allow (only certification-round ids were
+# dropped outside certifying).
+@test "a front-end-return activity unlocks nothing once certified, nor on a completeness turn" {
+  state certified
+  fer_open
+  prompt "hello there" >/dev/null
+  [ "$(label)" = other ]
+  [ "$(tool Agent '[activity:fer-1] census A1')" = deny ]
+  [ "$(wf '{"script":"census.workflow.js","args":{"note":"[activity:fer-1] A1"}}')" = deny ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=fer-1 codex exec -s read-only p')" = deny ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=fer-1 handoff-fire.sh --prompt-file b.md')" = deny ]
+  state certifying
+  prompt "are we done?" >/dev/null
+  [ "$(label)" = completeness ]
+  [ "$(tool Agent '[activity:fer-1] census A1')" = deny ]
+  [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=fer-1 codex exec -s read-only p')" = deny ]
+}

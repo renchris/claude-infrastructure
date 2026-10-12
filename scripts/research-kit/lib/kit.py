@@ -238,6 +238,56 @@ def r_max(
     return cap + (1 if extra_round_granted else 0)
 
 
+def profile_switch(slug: str) -> Optional[Dict[str, Any]]:
+    """The program's operator-signed profile switch, or None: {"to", "from", "after_round", "at_iso"}.
+
+    `cc-signoff research:<slug>/profile/<name>` writes it between two certification rounds
+    (operator_sign.sign_research); after_round is the counted certification rounds at signing. A void
+    record (agent-written, or with no chain) is no switch. frame.json is never edited: the frame
+    signature pins it, and the frame's own profile keeps governing what was signed in days."""
+    import sys
+
+    lib = str(Path(__file__).resolve().parents[2] / "lib")
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    import operator_sign
+
+    rec = operator_sign.latest_valid(slug, "profile")
+    if rec is None or rec.get("target") not in PROFILES:
+        return None
+    return {
+        "to": rec["target"],
+        "from": rec.get("from"),
+        "after_round": int(rec.get("after_round") or 0),
+        "at_iso": rec.get("at_iso"),
+    }
+
+
+def round_profile(slug: str, frame: Dict[str, Any]) -> str:
+    """The profile certification and delta rounds run on from here: the signed switch's, else the
+    frame's. Stage budgets, the ceiling, the design point, seeds and Stage 9 stay on frame["profile"]."""
+    sw = profile_switch(slug)
+    return sw["to"] if sw else str(frame.get("profile") or "")
+
+
+def round_cap(
+    slug: str,
+    frame: Dict[str, Any],
+    round1_p90: Optional[float],
+    extra_round_granted: bool = False,
+) -> int:
+    """R_max for this program. Unswitched it is r_max on the frame's profile. After a signed switch
+    it is min(the new profile's hard cap, rounds counted at the switch + r_max on the new profile),
+    +1 only for a signed extra set: the switch can never buy more rounds than the new profile's cap."""
+    sw = profile_switch(slug)
+    if not sw:
+        return r_max(str(frame.get("profile") or ""), round1_p90, extra_round_granted)
+    cap = min(
+        profile(sw["to"])["hard_cap"], sw["after_round"] + r_max(sw["to"], round1_p90)
+    )
+    return cap + (1 if extra_round_granted else 0)
+
+
 def max_original_seeds(profile_name: str, plan_lines: int) -> int:
     return min(
         profile(profile_name)["seeds_original"],

@@ -320,3 +320,92 @@ Cross-module contracts (a consumer depends on exactly these shapes):
   registry program in `certifying|certified`). The launchd runners in `scripts/research-kit/jobs/` call only this.
 - `cc-research reference-class record|show|check` → `docs/research/research-reference-class.jsonl` in
   claude-infrastructure (append-only).
+
+## A running program: the front-end return, the profile switch, the re-rendered contract page (added 2026-10-12)
+
+Three additions for a certifying program that takes REPORT.md §6.1's front-end return and then narrows its profile.
+None edits `frame.json` beyond the contract page's own two fields.
+
+### `gate.sh return-activity --program P --area A --because "<the recorded course and areas decisions>"`
+
+Prints the id of area A's open `front-end-return` activity, opening one if none is open (`lib/activities.py`
+`open_return`). The row in `$CC_RESEARCH_HOME/activities.json` carries `area`, `n_hat`, `design_holes`,
+`after_round`, `opened_at` and `because`.
+
+- **Window.** The registry reads `certifying`, `freeze.json` exists, the newest certification round is closed, at
+  least one is counted, and `rounds/<next>` does not exist. A second call for an open area prints the same id, and
+  only inside that window.
+- **Trigger.** `estimate.py forecast` `n_hat` is above `FER_FACTOR` (1.5, assumed: §6.1 says "well above", audit
+  row 16 proposes 1.5×) times the design point of the frame's profile.
+- **Once per area, capped.** An area whose return has closed is refused (§6.5). A new area is refused past the
+  current round profile's cap, `FER_AREAS`: lite 1, standard and full 3 (§6.1's ceiling formula). Open every area
+  before signing a switch to lite.
+- **Effect on the round.** Opening closes the open `certification-round` activity, and `round.py` `plan_slots`
+  refuses a certification round while any return is open, so `cert-activity` refuses too. `gate.sh freeze` closes
+  every return, then opens the round's activity again under a new id.
+- **What the tag unlocks, while `certifying` only** (`router.py`): `[activity:<id>]` anywhere in an Agent, Task or
+  Workflow input, and `CC_RESEARCH_ACTIVITY=<id> codex exec` in a read-only sandbox. Nothing else: no `round.sh`, no
+  `courier.sh`, no other vendor CLI, no `claude -p`, no `cc-research` buying verb, and nothing once `certified`.
+  `handoff-fire.sh` stays denied under every activity tag except `self-close` (operator ruling 2026-10-11), so the
+  lead fires each area's workers from its own turn and a worker at its context limit notifies back and self-closes.
+- **Not enforced:** the tag does not tie a call's work to its area; that is the brief's job.
+
+### The profile switch: `cc-signoff research:<slug>/profile/<name> --because "<why>"` (operator, own terminal)
+
+One line in `<sealed>/signoff.jsonl` with `action: "profile"`, `target` the new profile, plus `from` (the frame's
+profile) and `after_round` (K, the certification rounds counted when it was signed). `kit.profile_switch` reads the
+newest VALID one; an agent-written record or one with no chain is void and switches nothing. There is no agent verb:
+without the signature the program stays on its frame's profile.
+
+- **Refused at signing** unless the program is `certifying`, the newest certification round is closed and the next
+  has not started, the target has a lower hard cap than the frame's profile, no valid switch exists yet (one per
+  program), and K is at least 1 and below the target's hard cap (a round is still left to run as the
+  verification-only cap round).
+- **The rule for R_max** (`kit.round_cap`): `min(target hard cap, K + kit.r_max(target, round-1 p90))`, `+1` only
+  for a VALID `extra-round` signature. `kit.r_max(target, p90)` is §3.8's own cap on the target profile, `min(p90 +
+  4, hard cap)`, and the p90 is still round 1's recorded forecast. For standard to lite after round 1 this is
+  `min(6, 1 + 6) = 6`: rounds 2–6 run on lite. The outer `min` is what keeps a switch from buying rounds: the total
+  never exceeds the narrower profile's hard cap, whatever K is.
+- **What follows the switch** (`kit.round_profile`): reviewers per round and quiet rounds to stop for the
+  certification and delta rounds still to run (`round.py` `plan_slots`), the stop state and `r_max` in `estimate.py
+  forecast`, gate row 16, the `cc-research` extra-round menu, the return's area cap, and the certificate, whose
+  `profile` is the new one and whose `profile_switch` prints as "lite profile from round K+1, standard through
+  round K".
+- **What stays on `frame.json` `profile`:** everything signed in days or seeds. The six stage budgets
+  (`cc-research budget`, the yield stop), the §6.1 ceiling and its v1.2 additions (`cc-research ceiling`, so
+  standard's 28 days stay 28 and the calendar ceiling date does not move), the design point, the original seed count
+  (`seed.py`), and Stage 9's built-round cap and budget.
+
+### `intake.py contract-page` once a certification round is counted
+
+Before any counted certification round the page is unchanged: the forecast at the profile's design point, and the
+five frame fields it has always written. Once `estimate.counted_rounds` is non-empty it is a re-render:
+
+- The profile section names the round profile (with a signed switch: "lite from round K+1 (standard through round K;
+  switched by your signature of <time>)"), its reviewers per round, quiet rounds to stop and the round cap from
+  `estimate.py forecast`, with the original seeds, stage budgets and ceiling still the frame profile's.
+- The forecast line is this program's own `estimate.py forecast`: material holes found, `n_hat` and its 95% bound
+  (`found + desk_n95`), the false-material share and its source, desk-detectable and invisible changes after signoff
+  with their 95% bounds, and `p_any`. No design-point simulation is run or printed.
+- It writes `CONTRACT.md` and only `contract_page_at` and `contract_page_sha256` in `frame.json`
+  (`intake.RERENDER_KEYS`). It never adds `reviewer_effort`, `reviewer_pins` entries or `reference_override`, and
+  prints the reviewer effort the signed frame carries (or "none pinned"). It refuses if the frame carries no
+  contract page to re-render. The two changed fields make the frame signature stale by design: the operator reads
+  the new page and signs `cc-signoff research:<slug>/frame` again.
+
+### An operator-ruled reopen of a ruled decision: `cc-research decision reopen`, then `decision rule --by operator`
+
+For a ruled decision whose flip condition fired and which the operator re-plans (§6.5: a decision is reopened at most
+`kit.CAPS["refutation_reopens"]` = 2 times). `decision rule` alone cannot take it: it needs status `open` or
+`reopened`, and rules as agent only at a derived 90.
+
+- `cc-research decision reopen --program P --id D --because "<what fired>" --receipt "<the operator's words>"`
+  appends `{status: "reopened", reopened_by: "operator", reopened_because, reopen_receipt, reopened_at, reopens: n}`.
+  Refused unless the decision is `ruled`, and once its `reopened` events number 2. While `reopened`, gate row 5
+  fails on it and `gate.sh requires` blocks its waves.
+- `cc-research decision rule --program P --id D --chosen <option> --by operator --receipt "<his words>"
+  --revisit-trigger "<trigger>"` appends `{status: "ruled", ruled_by: "operator", chosen, receipt,
+  revisit_trigger}`. No 90 rule applies; both `--receipt` and `--revisit-trigger` are required. Refused unless the
+  decision is `reopened` with `reopened_by: "operator"`: an open decision still goes to him as a packet
+  (`gate.sh file-packet`). The receipt is his quote as recorded, not a signature; row 5 reads `ruled_by: operator`
+  with a receipt as it always has.

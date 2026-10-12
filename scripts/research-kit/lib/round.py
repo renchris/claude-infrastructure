@@ -240,12 +240,23 @@ def plan_slots(
             raise Refused(
                 f"delta rounds per escape are capped at 2 (§5.3 step 3); {escape} has {len(mine)}"
             )
-        slots = [(v, s) for v in lanes for s in prof["strategies"]]
+        rprof = kit.profile(kit.round_profile(slug, fr))
+        slots = [(v, s) for v in lanes for s in rprof["strategies"]]
         return f"delta-{escape}-{n}", slots, n == 2, 2
     if kind == "built":
         return plan_built(slug, fr, prof, lanes, n)
     if kind != "certification":
         raise Refused(f"unknown round kind {kind!r}")
+    import activities
+
+    fer = activities.open_ids(slug, activities.FRONT_END_RETURN)
+    if fer:
+        raise Refused(
+            f"a front-end return is open ({', '.join(fer)}): its plan edits end at the re-freeze "
+            "(gate.sh freeze), and no certification round runs before it"
+        )
+    # A signed profile switch (kit.profile_switch) moves the rounds still to run onto its profile.
+    prof = kit.profile(kit.round_profile(slug, fr))
     fc = all_matrices(slug, "frame-critique")
     if len(fc) < kit.CAPS["frame_critique_rounds"] or not all(
         m.get("closed") for m in fc
@@ -261,7 +272,7 @@ def plan_slots(
     if done and not done[-1].get("closed"):
         raise Refused(f"round {done[-1]['round']} is not closed yet (round.sh close)")
     p90 = (done[0].get("forecast") or {}).get("p90") if done else None
-    rmax = kit.r_max(fr["profile"], p90, extra_round_granted(slug))
+    rmax = kit.round_cap(slug, fr, p90, extra_round_granted(slug))
     counted = [m for m in done if m.get("counted")]
     # R_max bounds COUNTED rounds: a round lost to a dead lane read nothing, so it spends no review
     # budget. UNCOUNTED_ROUNDS_MAX bounds those instead, so a permanently walled vendor cannot loop.
@@ -292,7 +303,7 @@ def plan_slots(
         and len(slots) != prof["reviewers_per_round"]
     ):
         raise Refused(
-            f"a {fr['profile']} round is {prof['reviewers_per_round']} reviewers, not {len(slots)}"
+            f"a {prof['name']} round is {prof['reviewers_per_round']} reviewers, not {len(slots)}"
         )
     check_families(slots, fr, 3)
     return str(n), slots, len(counted) + 1 == rmax, rmax

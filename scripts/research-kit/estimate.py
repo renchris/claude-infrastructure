@@ -449,7 +449,8 @@ def forecast(
     frame = kit.read_json(kit.records_dir(slug) / "frame.json", {}) or {}
     if not frame.get("profile"):
         raise kit.KitError("frame.json has no profile")
-    prof = kit.profile(frame["profile"])
+    # the stop rule and R_max follow a signed profile switch (kit.round_profile, kit.round_cap)
+    prof = kit.profile(kit.round_profile(slug, frame))
     mats = counted_rounds(slug)
     if not mats:
         raise kit.KitError(
@@ -518,7 +519,7 @@ def forecast(
     import operator_sign  # noqa: E402  (scripts/lib, on the path through kit's caller)
 
     extra = operator_sign.latest_valid(slug, "extra-round") is not None
-    rmax = kit.r_max(frame["profile"], p90, extra)
+    rmax = kit.round_cap(slug, frame, p90, extra)
     streak = 0
     for m in reversed(mats):
         if not m.get("quiet"):

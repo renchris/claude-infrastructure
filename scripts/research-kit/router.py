@@ -59,8 +59,12 @@ leaves the research-verb deny in force, never a stale label from an earlier turn
 OPEN ACTIVITIES (§10 item 8), read here and written by triage or the kit (wave C):
   $CC_RESEARCH_HOME/activities.json  {"activities":[{"program","id","kind","state":"open"}]}
 A Bash clause carrying `CC_RESEARCH_ACTIVITY=<open id>` that runs round.sh --delta or courier.sh,
-or an Agent call whose description or prompt carries `[activity:<open id>]`, is allowed through the
-research-verb deny. The registry cannot hold these: kit.registry_set keeps only its four keys.
+or an Agent, Task or Workflow call whose input carries `[activity:<open id>]` anywhere, is allowed
+through the research-verb deny. The registry cannot hold these: kit.registry_set keeps only its four
+keys. Two kinds are kit-opened and count only while the program is certifying: certification-round
+(its round's own verbs) and front-end-return (gate.sh return-activity: tagged Agent/Task/Workflow
+and a read-only `codex exec`, never a round verb). handoff-fire.sh stays denied under every activity
+tag except `self-close`; a return's area workers are fired by the lead from its own turn.
 
 KILL SWITCHES (operator, set in the environment Claude Code is launched with, which no tool call of
 the session can change): CC_RESEARCH_BLOCK=0 turns the tool deny off; CC_RESEARCH_ROUTER=off
@@ -1201,6 +1205,13 @@ KIT_ROUND = {"round.sh", "courier.sh"}
 # The verbs that settle a closed round before any plan edit (lib/settle.py, 4d11ed938). They write
 # only that round's hole and matrix records, so the round's own certification-round activity runs them.
 ROUND_SETTLE = {"artifact", "split", "verify-split", "repass"}
+# A front-end return (REPORT.md §6.1; §6.5 "once per area, timeboxed"): gate.sh return-activity opens
+# one per area between two certification rounds, and gate.sh freeze closes it. While certifying, its
+# tag carries the return's fan-out, [activity:<id>] on Agent, Task and Workflow and a read-only
+# `codex exec`, and nothing else: no round verb (round.sh, courier.sh), no other vendor, no
+# `claude -p`, no cc-research buying verb, and no handoff-fire.sh (the lead fires the area's workers
+# from its own turn; under every activity tag only `self-close` passes, operator ruling 2026-10-11).
+FRONT_END_RETURN = "front-end-return"
 CC_RESEARCH_BUYING = {"reopen", "extra-round", "round", "frame-critique", "rehearse"}
 ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
@@ -1324,14 +1335,18 @@ def research_clause(
     certifying: bool,
     label: str,
     cert_acts: Optional[List[str]] = None,
+    fer_acts: Optional[List[str]] = None,
 ) -> Optional[str]:
     """The research verb a clause runs, or None. Activity-tagged and allowed kit calls are None.
 
     cert_acts: the program's open certification-round activities (gate.sh freeze / cert-activity).
     While certifying, a clause tagged with one runs the round's own verbs: `round.sh run --kind
     certification`, `round.sh close`, the round-settling verbs (ROUND_SETTLE), and `codex exec` in a
-    read-only sandbox."""
+    read-only sandbox.
+    fer_acts: the program's open front-end-return activities (gate.sh return-activity). While
+    certifying, a clause tagged with one runs a read-only `codex exec` and no other research verb."""
     cert_acts = cert_acts or []
+    fer_acts = fer_acts or []
     env, argv = head(toks)
     if not argv:
         return None
@@ -1340,7 +1355,13 @@ def research_clause(
     ):  # `bash -c "codex …"`: the script is one token
         for sub in clauses(argv[0]):
             hit = research_clause(
-                sub, slug, acts, certifying, label, cert_acts=cert_acts
+                sub,
+                slug,
+                acts,
+                certifying,
+                label,
+                cert_acts=cert_acts,
+                fer_acts=fer_acts,
             )
             if hit:
                 return hit
@@ -1349,13 +1370,16 @@ def research_clause(
     rest = argv[1:]
     act = env.get("CC_RESEARCH_ACTIVITY")
     cert_round = bool(certifying and act and act in cert_acts)
+    fer = bool(certifying and act and act in fer_acts)
     if base == "handoff-fire.sh":
         # self-close spawns nothing: it only retires the calling pane, so a fired peer in a
-        # certifying program is not left an orphan. Every fire (--recycle, --prompt-file …) stays.
+        # certifying program is not left an orphan. Every fire (--recycle, --prompt-file …) stays,
+        # under every activity tag: a fire can mint an unrouted or allow-all worker (--extra,
+        # --cwd, recycle inheritance, the CC_RESEARCH_GATE seam), and no flag list closes that.
         return None if rest[:1] == ["self-close"] else "handoff-fire.sh"
     if base in VENDOR:
-        if base == "codex" and cert_round and codex_read_only(rest):
-            return None  # a certification round's read-only reviewer
+        if base == "codex" and (cert_round or fer) and codex_read_only(rest):
+            return None  # a round's read-only reviewer, or a return's read-only census critic
         return base
     if base == "claude" and any(
         t in ("-p", "--print") or t.startswith("--print=") for t in rest
@@ -1378,6 +1402,7 @@ def research_clause(
         if (
             act
             and act in acts
+            and act not in fer_acts  # a front-end return runs no round verb
             and (
                 base == "courier.sh"
                 or (act not in cert_acts and ("--delta" in rest or "delta" in rest))
@@ -1458,16 +1483,26 @@ def cmd_tool(a: argparse.Namespace) -> int:
     kinds = open_activity_kinds(slug)
     # A certification-round activity lets its round through only while the program is certifying.
     cert_acts = [x for x, k in kinds.items() if k == "certification-round"]
-    acts = [x for x in kinds if state == "certifying" or x not in cert_acts]
+    # …and so does a front-end return: both are kit-opened stages of certification.
+    fer_acts = [x for x, k in kinds.items() if k == FRONT_END_RETURN]
+    acts = [x for x in kinds if state == "certifying" or x not in cert_acts + fer_acts]
     hit: Optional[str] = None
     if tool in ("Agent", "Task", "Workflow"):
-        tag = " ".join(str(tin.get(k) or "") for k in ("description", "prompt", "name"))
+        # The whole input, so a Workflow call (whose input is a script and its args, not a
+        # description) can carry its tag too.
+        tag = json.dumps(tin, ensure_ascii=False)
         if not any(f"[activity:{x}]" in tag for x in acts):
             hit = tool
     elif tool == "Bash":
         for toks in clauses(cmd):
             hit = research_clause(
-                toks, slug, acts, state == "certifying", label, cert_acts=cert_acts
+                toks,
+                slug,
+                acts,
+                state == "certifying",
+                label,
+                cert_acts=cert_acts,
+                fer_acts=fer_acts,
             )
             if hit:
                 break
@@ -1483,8 +1518,11 @@ def cmd_tool(a: argparse.Namespace) -> int:
         "or a new idea, after an operator-signed reopen, or as an open contract-listed activity "
         "tagged CC_RESEARCH_ACTIVITY=<id> / [activity:<id>]. A certification round runs while "
         "certifying with CC_RESEARCH_ACTIVITY=<certification-round id> (gate.sh cert-activity "
-        f"--program {slug} prints it) on round.sh, courier.sh and read-only codex exec. Operator "
-        "kill switch: launch with CC_RESEARCH_BLOCK=0."
+        f"--program {slug} prints it) on round.sh, courier.sh and read-only codex exec. A front-end "
+        "return runs while certifying with CC_RESEARCH_ACTIVITY=<front-end-return id> (gate.sh "
+        f"return-activity --program {slug} --area <A> prints it) on read-only codex exec, and "
+        "[activity:<id>] on Agent and Workflow; handoff-fire.sh stays blocked under every activity "
+        "tag except self-close. Operator kill switch: launch with CC_RESEARCH_BLOCK=0."
     )
 
 

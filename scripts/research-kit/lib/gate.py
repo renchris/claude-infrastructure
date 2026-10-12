@@ -16,6 +16,11 @@ Invoked through scripts/research-kit/gate.sh. Verbs:
                                                             certification-round activity's id;
                                                             refused unless certifying, frozen and
                                                             a certification round is due
+  return-activity --program P --area A --because "<why>"    print (opening if none) the area's
+                                                            front-end-return activity id (§6.1);
+                                                            only between two certification rounds,
+                                                            once per area, capped per profile;
+                                                            freeze closes it
   run       --program P [--json]                            every row PASS/FAIL/FILED with
                                                             evidence; all pass -> certificate
                                                             written, state -> certified

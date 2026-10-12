@@ -419,7 +419,7 @@ def row16(ctx: Ctx) -> Row:
             f"{len(extras)} extra round sets signed; the cap is {kit.CAPS['extra_round_sets']} per program"
         )
     p90 = (certs[0].get("forecast") or {}).get("p90") if certs else None
-    rmax = kit.r_max(prof["name"], p90, bool(extras))
+    rmax = kit.round_cap(ctx.slug, fr, p90, bool(extras))
     if len(certs) > rmax:
         fails.append(f"{len(certs)} certification rounds ran; R_max is {rmax}")
     fc = cert_rounds(ctx, "frame-critique")

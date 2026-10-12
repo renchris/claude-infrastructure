@@ -205,6 +205,197 @@ set_state() { /usr/bin/python3 -c "import json; p='$CC_RESEARCH_REGISTRY'; d=jso
   [ -z "$(cr_rows)" ]
 }
 
+# ── the front-end return (REPORT.md §6.1, §6.5): gate.sh return-activity ─────────────────────────
+# RED-proof (all four tests): on 931209017 gate.sh has no return-activity verb, so every call exits 2
+# on argparse's "invalid choice" and no asserted id or refusal text is printed; activities.py also
+# refuses the front-end-return kind there.
+
+# many_holes [n]: round 1 found n material holes, so the estimate sits above 1.5 x the design point.
+many_holes() { jedit rounds/1/matrix.json "d['new_material']=${1:-30}"; }
+fer_rows() { /usr/bin/python3 -c "import json; print(' '.join(a['id'] + ':' + a.get('area', '-') + ':' + a['state'] for a in json.load(open('$CC_RESEARCH_HOME/activities.json'))['activities'] if a['kind'] == 'front-end-return'))" 2>/dev/null; }
+ret() { "$G" return-activity --program demo --area "$1" --because "course c1; areas a1"; }
+
+@test "return-activity: opens an area's return between rounds, closing the round's tag; names it again; blocks the next round; freeze closes it; the area never reopens" {
+  round_due
+  many_holes
+  git -C "$W/repo" commit -qam "round 1 found many"
+  "$G" freeze --program demo
+  [ "$(cr_rows)" = "ACT-demo-1:open" ]
+  run ret A1
+  [ "$status" -eq 0 ]
+  [ "${lines[${#lines[@]}-1]}" = "ACT-demo-2" ]
+  [[ "$output" == *"certification activity closed for the return: ACT-demo-1"* ]] || false
+  [ "$(cr_rows)" = "ACT-demo-1:closed" ]
+  [ "$(fer_rows)" = "ACT-demo-2:A1:open" ]
+  [ "$(/usr/bin/python3 -c "import json; a=json.load(open('$CC_RESEARCH_HOME/activities.json'))['activities'][-1]; print(a['because'], a['n_hat'] > 15, a['design_holes'], a['after_round'])")" = "course c1; areas a1 True 10 3" ]
+  run ret A1
+  [ "$status" -eq 0 ]
+  [ "$output" = "ACT-demo-2" ]
+  [ "$(fer_rows)" = "ACT-demo-2:A1:open" ]
+  # no certification round, and so no round tag, while the return is open
+  run "$G" cert-activity --program demo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"a front-end return is open (ACT-demo-2)"* ]] || false
+  [ "$(cr_rows)" = "ACT-demo-1:closed" ]
+  git -C "$W/repo" add -A; git -C "$W/repo" commit -qm "the return's edits"   # a re-freeze pins a committed snapshot
+  run "$G" freeze --program demo
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"front-end return closed by the re-freeze: ACT-demo-2"* ]] || false
+  [[ "$output" == *"certification activity open: ACT-demo-3"* ]] || false
+  [ "$(fer_rows)" = "ACT-demo-2:A1:closed" ]
+  run ret A1
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"'A1' already had its front-end return (ACT-demo-2)"* ]] || false
+  [ "$(fer_rows)" = "ACT-demo-2:A1:closed" ]
+}
+
+@test "return-activity: refused when not certifying, outside the window between rounds, on a low estimate, and for a bad area or an empty reason" {
+  run ret A1
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"'registered', not certifying"* ]] || false
+  set_state certifying
+  run ret A1
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"n_hat 1 is not above 1.5 x the lite design point 10"* ]] || false
+  many_holes
+  mkdir "$REC/rounds/4"   # round 4 has started
+  run ret A1
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"before the next one runs"* ]] || false
+  rmdir "$REC/rounds/4"
+  jedit rounds/3/matrix.json "d['closed']=False"   # round 3 is still running
+  run ret A1
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"before the next one runs"* ]] || false
+  jedit rounds/3/matrix.json "d['closed']=True"
+  run ret "a b"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"bad area name 'a b'"* ]] || false
+  run "$G" return-activity --program demo --area A1 --because " "
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--because names the recorded course and areas decisions"* ]] || false
+  [ -z "$(fer_rows)" ]
+  # the control: with every refusal's cause removed, the same call opens
+  run ret A1
+  [ "$status" -eq 0 ]
+  [ "$(fer_rows)" = "ACT-demo-1:A1:open" ]
+}
+
+@test "return-activity: the area cap is the profile's, 1 on lite and 3 on standard" {
+  set_state certifying
+  many_holes 40
+  ret A1
+  run ret A2
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"used its 1 front-end return area(s) (A1)"* ]] || false
+  jedit frame.json "d['profile']='standard'"
+  ret A2
+  ret A3
+  run ret A4
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"used its 3 front-end return area(s) (A1, A2, A3)"* ]] || false
+  [ "$(fer_rows)" = "ACT-demo-1:A1:open ACT-demo-2:A2:open ACT-demo-3:A3:open" ]
+}
+
+# ── the signed profile switch of a running program (cc-signoff research:<slug>/profile/<name>) ────
+# RED-proof: on 931209017 `profile` is not a signing action, so the fixture signer exits 2 and the
+# round cap, the planned reviewers and the certificate stay on the frame's standard profile. The
+# ceiling and budget lines hold on that commit too (nothing switched); their red is the mutant that
+# reads kit.round_profile in cli_core.cmd_ceiling and budget_report (28 -> 12 days, 11.5 -> 4.25).
+# The "unsigned" test also holds on that commit; its red is the mutant where kit.profile_switch takes
+# the newest record whatever its verdict (the round cap reads 6 off the agent-written record).
+# All three reds measured 2026-10-12.
+
+SIGNER() { "$REPO/tests/fixtures/research-kit/fixture_signer.py" "$@"; }
+standard_running() { # the known-good program, signed on standard, certifying, round 4 due
+  jedit frame.json "d['profile']='standard'"
+  jedit rounds/3/matrix.json "d['quiet']=False; d['new_material']=1"
+  set_state certifying
+}
+rmax() { /usr/bin/python3 "$REPO/scripts/research-kit/estimate.py" forecast --program demo | /usr/bin/python3 -c "import json,sys; print(json.load(sys.stdin)['r_max'])"; }
+next_round() { /usr/bin/python3 -c "import sys; sys.path.insert(0, '$REPO/scripts/research-kit/lib'); import round as r
+try:
+    rid, slots, vonly, cap = r.plan_slots('demo', 'certification', 4, None); print(rid, len(slots), cap)
+except r.kit.KitError as e:
+    print('refused:', e)"; }
+ceiling() { "$REPO/bin/cc-research" ceiling --program demo --json | /usr/bin/python3 -c "import json,sys; d=json.load(sys.stdin); print(d['profile'], d['ceiling_days'])"; }
+
+@test "profile switch: unsigned, the program stays on its frame's profile; an agent-written record is void and switches nothing" {
+  standard_running
+  [ "$(rmax)" = 8 ]   # min(round-1 p90 4 + 4, standard's hard cap 10)
+  [ "$(next_round)" = "4 16 8" ]
+  printf '{"action":"profile","target":"lite","from":"standard","after_round":3,"at":9e9,"pins":{},"provenance":{"claude_ancestor":false,"chain":["zsh","claude"]}}\n' \
+    >> "$CC_RESEARCH_HOME/demo/signoff.jsonl"
+  [ "$(rmax)" = 8 ]
+  [ "$(next_round)" = "4 16 8" ]
+  printf '{"action":"profile","target":"lite","from":"standard","after_round":3,"at":9e9,"pins":{}}\n' \
+    >> "$CC_RESEARCH_HOME/demo/signoff.jsonl"
+  [ "$(rmax)" = 8 ]
+}
+
+@test "profile switch: signed after round 3, rounds 4 on run on lite under R_max min(6, 3 + lite's cap), and the ceiling and stage budgets stay the frame's" {
+  standard_running
+  before="$(ceiling)"
+  [ "$before" = "standard 28.0" ]
+  budget_before="$("$REPO/bin/cc-research" budget --program demo --json | /usr/bin/python3 -c "import json,sys; d=json.load(sys.stdin); print(d['profile'], sum(s['budget_days'] for s in d['stages'].values()))")"
+  [ "$budget_before" = "standard 11.5" ]
+  frame_before="$(shasum "$REC/frame.json")"
+  run SIGNER research:demo/profile/lite --because "course c1: return then certify on lite"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"SIGNED research:demo/profile/lite"* ]] || false
+  [ "$(/usr/bin/python3 -c "import json; r=json.loads(open('$CC_RESEARCH_HOME/demo/signoff.jsonl').read().splitlines()[-1]); print(r['from'], r['after_round'], r['target'])")" = "standard 3 lite" ]
+  [ "$(rmax)" = 6 ]
+  [ "$(next_round)" = "4 8 6" ]
+  [ "$(ceiling)" = "$before" ]
+  [ "$("$REPO/bin/cc-research" budget --program demo --json | /usr/bin/python3 -c "import json,sys; d=json.load(sys.stdin); print(d['profile'], sum(s['budget_days'] for s in d['stages'].values()))")" = "$budget_before" ]
+  [ "$(shasum "$REC/frame.json")" = "$frame_before" ]
+  # one switch per program
+  run SIGNER research:demo/profile/lite --because "again"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"the one profile switch per program is already signed"* ]] || false
+}
+
+@test "profile switch: the signature is refused without a reason, outside certifying, mid-round, to a wider profile, and past the new cap" {
+  standard_running
+  run SIGNER research:demo/profile/lite
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"profile needs --because"* ]] || false
+  run SIGNER research:demo/profile/full --because x
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"full is not narrower than standard"* ]] || false
+  run SIGNER research:demo/profile/tiny --because x
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"'tiny' is not a profile"* ]] || false
+  mkdir "$REC/rounds/4"
+  run SIGNER research:demo/profile/lite --because x
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"round 4 has already started on standard"* ]] || false
+  rmdir "$REC/rounds/4"
+  jedit rounds/3/matrix.json "d['closed']=False"
+  run SIGNER research:demo/profile/lite --because x
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"signed between rounds"* ]] || false
+  jedit rounds/3/matrix.json "d['closed']=True"
+  for n in 4 5 6; do   # six counted rounds: lite's hard cap leaves none to run
+    mkdir "$REC/rounds/$n"
+    /usr/bin/python3 -c "import json; m=json.load(open('$REC/rounds/3/matrix.json')); m['round']='$n'; m['seq']=$n; json.dump(m, open('$REC/rounds/$n/matrix.json', 'w'))"
+  done
+  run SIGNER research:demo/profile/lite --because x
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"6 counted round(s) so far against lite's hard cap of 6"* ]] || false
+  rm "$REC"/rounds/[456]/matrix.json; rmdir "$REC"/rounds/[456]
+  set_state certified
+  run SIGNER research:demo/profile/lite --because x
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"demo is certified, not certifying"* ]] || false
+  run grep -c '"action": "profile"' "$CC_RESEARCH_HOME/demo/signoff.jsonl"
+  [ "$output" = 0 ]
+  # the control: back in the window, the same call signs
+  set_state certifying
+  run SIGNER research:demo/profile/lite --because x
+  [ "$status" -eq 0 ]
+}
+
 @test "freeze is refused while lint shows an error, and the registry stays registered" {
   echo "This is the best design." >> "$REC/PLAN.md"
   git -C "$W/repo" commit -qam "plan"

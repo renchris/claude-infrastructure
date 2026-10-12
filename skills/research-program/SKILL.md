@@ -37,6 +37,9 @@ for a case-sized question answerable in a day, or when the operator declines eit
     extension on a decision tagged research, at most once per decision (§12.3).
   - `cc-signoff research:<slug>/implementation` — v1.2 (§11, added 2026-10-05): the implementation
     signoff, after `gate.sh built-run`; it pins the newest built certificate by path and hash.
+  - `cc-signoff research:<slug>/profile/lite` — added 2026-10-12: move a certifying program's remaining
+    rounds to a narrower profile, between two rounds, once per program; the ceiling, the stage budgets
+    and the seeds stay as signed.
 - **Program packets only through `gate.sh file-packet`**, never a bare `cc-decide open`: it adds the
   deliverable repo as `--project` and, for class B, `--default-effect no-change`, and gate row 12 fails
   any program packet without them (§10 item 4). Run `gate.sh sweep --program <slug>` daily in the pilot.
@@ -190,6 +193,19 @@ freeze` opens it when a round is due, `gate.sh cert-activity --program <slug>` p
 and `round.sh close` closes it once no round is due (the stop rule or `R_max`). Tag the round's calls
 `CC_RESEARCH_ACTIVITY=<id>` on `round.sh`, `courier.sh` and read-only `codex exec -s read-only`, and put
 `[activity:<id>]` in Agent descriptions. It unlocks nothing outside `certifying`.
+
+Updated 2026-10-12: a front-end return (§6.1: the round's estimate is well above the design point, so the
+affected area returns once to Stages 2–5) runs under a kit-opened `front-end-return` activity. After a
+round closes and before the next one runs, `gate.sh return-activity --program <slug> --area <A> --because
+"<the recorded course and areas decisions>"` prints the area's id and closes the round's activity; areas
+are capped per profile (lite 1, standard and full 3) and an area returns once. Put `[activity:<id>]` in
+every Agent and Workflow input and prefix `CC_RESEARCH_ACTIVITY=<id>` on `codex exec -s read-only`. The
+tag runs no `round.sh`, `courier.sh` or `handoff-fire.sh`: the lead fires each area's workers from its
+own turn, and a worker at its context limit notifies back and self-closes. `gate.sh freeze` closes every
+return and opens a new certification-round id. Narrowing the profile of a running program is the
+operator's `cc-signoff research:<slug>/profile/lite --because "<why>"`, signed between two rounds; then
+`intake.py contract-page --program <slug>` re-renders the page at the program's own forecast for the
+frame re-sign (`scripts/research-kit/RECORDS.md` § A running program).
 
 ## Stage 8 — gate, certificate, signoff (§3.10)
 

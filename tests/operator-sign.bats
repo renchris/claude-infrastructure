@@ -273,3 +273,20 @@ print([(r["target"], r["_verdict"]) for r in o.research_records("demo", "third-r
   [ "${lines[3]}" = "refused research:demo/third-read/v3.pushback" ]
   [ "${lines[4]}" = "[('v3.regex-missed', 'valid')]" ]
 }
+
+# The profile switch of a running program. Its window, once-per-program and round-cap behaviour are
+# pinned on the full fixture in research-kit-gate.bats; here, the row grammar and the ancestry arm.
+# RED-proof: on 931209017 parse_row reads both rows as None, and the CLI exits 2 ("not research:…")
+# where an agent's attempt must exit 3.
+@test "parse_row: profile is a research action and needs the profile's name" {
+  run py 'print(o.parse_row("research:demo/profile"), o.parse_row("research:demo/profile/lite")["target"])'
+  [ "$output" = "None lite" ]
+}
+
+@test "a profile-switch signature under a claude ancestor is refused with exit 3 and writes nothing" {
+  run "$FAKE_CLAUDE" -c "'$REPO/bin/cc-signoff' research:demo/profile/lite --because 'return then lite'; exit \$?"
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"descended from a claude process"* ]] || false
+  [[ "$output" == *"cc-signoff research:demo/profile/lite --because"* ]] || false
+  [ ! -e "$CC_RESEARCH_HOME/demo/signoff.jsonl" ]
+}

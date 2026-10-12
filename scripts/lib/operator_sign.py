@@ -29,6 +29,10 @@ the program's sealed log `$CC_RESEARCH_HOME/<slug>/signoff.jsonl`:
   third-read/<set>.<stratum>  one read of a held-out stratum already read twice, as a disclosed
                cost (ruling 915d7fb98b7f item 5, wave E1l; `heldout.py evaluate` and gate row 15
                honour it, one signature per read beyond the second).
+  profile/<name>  move a certifying program's remaining rounds to a narrower profile, between two
+               certification rounds, once per program (kit.profile_switch; round.sh, estimate.py
+               and gate row 16 honour it). The record carries `from` and `after_round`; frame.json,
+               the signed stage budgets, the ceiling and the seeds are untouched.
 
 Python 3.9-safe, standard library only.
 """
@@ -58,9 +62,11 @@ ACTIONS = (
     "extend-decision",
     "implementation",
     "third-read",
+    "profile",
 )
-# the actions that name a target: a decision id, or for third-read a held-out <set>.<stratum>
-TARGETED = ("veto", "extend-decision", "third-read")
+# the actions that name a target: a decision id, for third-read a held-out <set>.<stratum>, for
+# profile the profile's name
+TARGETED = ("veto", "extend-decision", "third-read", "profile")
 THIRD_READ_TARGET = re.compile(
     r"^v[0-9]+\.(regex-matched|regex-missed|pushback|other)$"
 )
@@ -172,7 +178,7 @@ def verdict(
 
 ROW_RE = re.compile(
     r"^research:([a-z0-9][a-z0-9-]{0,63})/"
-    r"(frame|cert|extra-round|reopen|veto|extend-decision|implementation|third-read)"
+    r"(frame|cert|extra-round|reopen|veto|extend-decision|implementation|third-read|profile)"
     r"(?:/([A-Za-z0-9._-]+))?$"
 )
 
@@ -184,8 +190,62 @@ def parse_row(row: str) -> Optional[Dict[str, Optional[str]]]:
         return None
     slug, action, target = m.group(1), m.group(2), m.group(3)
     if (action in TARGETED) != (target is not None):
-        return None  # veto, extend-decision and third-read need a target; nothing else takes one
+        return None  # the TARGETED actions need a target; nothing else takes one
     return {"slug": slug, "action": action, "target": target}
+
+
+def profile_switch_terms(slug: str, target: Optional[str]) -> Dict[str, Any]:
+    """What a profile-switch signature records ({"from", "after_round"}), or Refused.
+
+    A switch is signed while the program is certifying, between two certification rounds (the
+    newest one closed, the next not started), once per program, and only to a narrower profile whose
+    hard cap still leaves a round to run."""
+    if target not in kit.PROFILES:
+        raise Refused(
+            f"REFUSED — {target!r} is not a profile: one of {', '.join(kit.PROFILES)}."
+        )
+    state = (kit.registry_get(slug) or {}).get("state")
+    if state != "certifying":
+        raise Refused(
+            f"REFUSED — {slug} is {state or 'not registered'}, not certifying: a profile switch "
+            "moves the certification rounds still to run."
+        )
+    rec = kit.records_dir(slug)
+    cur = (kit.read_json(rec / "frame.json") or {}).get("profile")
+    if cur not in kit.PROFILES:
+        raise Refused(
+            f"REFUSED — {rec / 'frame.json'} names no profile to switch from."
+        )
+    if any(verdict(r) == VALID for r in research_records(slug, "profile")):
+        raise Refused("REFUSED — the one profile switch per program is already signed.")
+    cap = kit.PROFILES[target]["hard_cap"]
+    if cap >= kit.PROFILES[cur]["hard_cap"]:
+        raise Refused(
+            f"REFUSED — {target} is not narrower than {cur}: a switch only narrows review; wider "
+            "review is an extra round set or a reopen."
+        )
+    mats = [kit.read_json(p) for p in (rec / "rounds").glob("*/matrix.json")]
+    mats = sorted(
+        [m for m in mats if m and m.get("kind", "certification") == "certification"],
+        key=lambda m: int(m.get("seq") or 0),
+    )
+    if not mats or not mats[-1].get("closed"):
+        raise Refused(
+            "REFUSED — a profile switch is signed between rounds, after a certification round "
+            "has closed (round.sh close)."
+        )
+    if (rec / "rounds" / str(len(mats) + 1)).exists():
+        raise Refused(
+            f"REFUSED — round {len(mats) + 1} has already started on {cur}; sign the switch after "
+            "it closes."
+        )
+    counted = sum(1 for m in mats if m.get("counted"))
+    if counted < 1 or counted >= cap:
+        raise Refused(
+            f"REFUSED — {counted} counted round(s) so far against {target}'s hard cap of {cap}: "
+            "the switch needs a counted round behind it and a round still to run."
+        )
+    return {"from": cur, "after_round": counted}
 
 
 def research_log(slug: str) -> Path:
@@ -255,7 +315,8 @@ def sign_research(
             "third read is signed for one stratum of one set."
         )
     if (
-        action in ("extra-round", "reopen", "veto", "extend-decision", "third-read")
+        action
+        in ("extra-round", "reopen", "veto", "extend-decision", "third-read", "profile")
         and not because
     ):
         raise Refused(
@@ -308,8 +369,10 @@ def sign_research(
                 f"REFUSED — the one research extension per decision (REPORT.md §12.3) is "
                 f"already bought for {target}."
             )
+    terms = profile_switch_terms(slug, target) if action == "profile" else {}
     now = time.time()
     rec = {
+        **terms,
         "row": row,
         "program": slug,
         "action": action,

@@ -7,6 +7,8 @@ state to "closed", so the file is the history of what was let through.
 
   {"activities": [{"program", "id": "ACT-<program>-<n>", "kind", "state": "open|closed"}]}
 
+A front-end-return row also carries area, n_hat, design_holes, opened_at and because.
+
 Python 3.9-safe, standard library only.
 """
 
@@ -15,14 +17,27 @@ from __future__ import annotations
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import kit
 
 # certification-round: opened by the kit itself (gate.sh freeze or cert-activity) while a certifying
 # program has a certification round due, and closed by round.sh close once none is (the stop rule or
 # R_max), so a lead-dispatched round session runs its round with every other research verb blocked.
-KINDS = ("escape", "frame-delta", "triage-batch", "certification-round")
+# front-end-return: opened by the kit (gate.sh return-activity) once per area, between one
+# certification round's close and the next round's run, when the estimate is well above the design
+# point (REPORT.md §6.1, §6.5). Opening one closes the certification-round activity; gate.sh freeze
+# closes every one and re-opens the round's. Its tag carries [activity:<id>] Agent/Workflow calls and
+# read-only `codex exec` only: the lead fires the area's workers itself, and handoff-fire.sh stays
+# denied under every activity tag (operator ruling 2026-10-11).
+FRONT_END_RETURN = "front-end-return"
+KINDS = (
+    "escape",
+    "frame-delta",
+    "triage-batch",
+    "certification-round",
+    FRONT_END_RETURN,
+)
 
 
 def path() -> Path:
@@ -66,7 +81,12 @@ def _check(program: str, kind: str) -> None:
         raise kit.KitError(f"unknown activity kind {kind!r}: one of {', '.join(KINDS)}")
 
 
-def _append(data: Dict[str, Any], program: str, kind: str) -> str:
+def _append(
+    data: Dict[str, Any],
+    program: str,
+    kind: str,
+    extra: Optional[Dict[str, Any]] = None,
+) -> str:
     """Append one open row to data and return its id, ACT-<program>-<n>, n one past the highest."""
     prefix = f"ACT-{program}-"
     nums = [
@@ -75,10 +95,50 @@ def _append(data: Dict[str, Any], program: str, kind: str) -> str:
         if str(a.get("id", "")).startswith(prefix) and a["id"][len(prefix) :].isdigit()
     ]
     aid = f"{prefix}{max(nums, default=0) + 1}"
-    data["activities"].append(
-        {"program": program, "id": aid, "kind": kind, "state": "open"}
-    )
+    row = dict(extra or {})
+    row.update({"program": program, "id": aid, "kind": kind, "state": "open"})
+    data["activities"].append(row)
     return aid
+
+
+def open_return(
+    program: str, area: str, cap: int, fields: Dict[str, Any]
+) -> Tuple[str, List[str], bool]:
+    """Open one area's front-end return under one lock: (id, certification-round ids it closed,
+    False); or (the open row's id, [], True) when that area's return is already open. An area whose
+    return has closed is refused (once per area, §6.5), and so is a new area past `cap` (§6.1)."""
+    _check(program, FRONT_END_RETURN)
+    with _Lock():
+        data = load()
+        mine = [
+            a
+            for a in data["activities"]
+            if isinstance(a, dict)
+            and a.get("program") == program
+            and a.get("kind") == FRONT_END_RETURN
+        ]
+        same = [a for a in mine if a.get("area") == area]
+        if same and same[-1].get("state") == "open":
+            return str(same[-1]["id"]), [], True
+        if same:
+            raise kit.KitError(
+                f"area {area!r} already had its front-end return ({same[-1]['id']}): a return "
+                "runs once per area (REPORT.md §6.5)"
+            )
+        used = sorted({str(a.get("area")) for a in mine})
+        if len(used) >= cap:
+            raise kit.KitError(
+                f"{program} has used its {cap} front-end return area(s) ({', '.join(used)}): "
+                "REPORT.md §6.1 prices no more"
+            )
+        # The round's tag must not carry return work: a return edits the plan a round would review.
+        shut = []
+        for a in _open_of(data, program, "certification-round"):
+            a["state"] = "closed"
+            shut.append(str(a["id"]))
+        aid = _append(data, program, FRONT_END_RETURN, dict(fields, area=area))
+        kit.write_json_atomic(path(), data)
+    return aid, shut, False
 
 
 def _open_of(data: Dict[str, Any], program: str, kind: str) -> List[Dict[str, Any]]:

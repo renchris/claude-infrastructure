@@ -377,6 +377,82 @@ def v12_ceiling_lines(prof: Dict[str, Any], ceiling: float) -> List[str]:
     ]
 
 
+# The only frame.json keys a mid-certification re-render writes; both exist on any signed frame.
+RERENDER_KEYS = ("contract_page_at", "contract_page_sha256")
+
+
+def measured_forecast(slug: str) -> Optional[Dict[str, Any]]:
+    """estimate.py forecast over the program's own counted certification rounds; None before one."""
+    import estimate
+
+    if not estimate.counted_rounds(slug):
+        return None
+    return estimate.forecast(slug)
+
+
+def design_profile_lines(fr: Dict[str, Any], prof: Dict[str, Any], typical: float,
+                         ceiling: float) -> List[str]:
+    """The profile section before any round is counted: the forecast at the profile's design point."""
+    f = forecast(fr["profile"])
+    f_base = forecast(fr["profile"], base=True)
+    wider = wider_profile_note(fr["profile"])
+    return [
+        f"## Profile: {prof['name']}",
+        "",
+        f"- Reviewers per round {prof['reviewers_per_round']} ({prof['per_slot_set']} per slot set), "
+        f"quiet rounds to stop {prof['quiet_to_stop']}, hard cap {prof['hard_cap']} rounds, "
+        f"original seeds {prof['seeds_original']}.",
+        f"- Stages 1–6 budget {prof['stage_budget_days']:g} agent-days; typical total about "
+        f"{typical:g} days; ceiling (every loop at its cap) about {ceiling:g} days (§6.1). Only you "
+        "can exceed it, through the signing tool.",
+    ] + (v12_ceiling_lines(prof, ceiling) if kit.is_v12(fr) else []) + [
+        f"- Forecast at the design point ({prof['design_holes']} holes at freeze), at the measured "
+        f"inputs (method v1.2; research-calibration REPORT §3): rounds {f['rounds_p50']} typical / "
+        f"{f['rounds_p90']} at the 90th percentile, the round cap reached in {f['cap_pct']}% of "
+        f"simulated programs; desk-detectable left {f['desk_left']}, invisible left "
+        f"{f['invisible_left']}; chance of at least one material change after signoff {f['p_any']}; "
+        f"chance the 95% bound is exceeded {f['take_back_pct']}%. Model output.",
+        f"- Contrast, the pre-calibration assumed inputs (what this page stated before v1.2): desk-detectable "
+        f"left {f_base['desk_left']}, invisible left {f_base['invisible_left']}, chance of at least one "
+        f"material change after signoff {f_base['p_any']}.",
+    ] + ([f"- **{wider}**"] if wider else [])
+
+
+def measured_profile_lines(slug: str, fr: Dict[str, Any], prof: Dict[str, Any], f: Dict[str, Any],
+                           typical: float, ceiling: float) -> List[str]:
+    """The profile section once a certification round is counted: the profile the remaining rounds
+    run on (a signed switch included) and this program's own forecast, in place of the design point.
+    What was signed in days and seeds (stage budgets, the ceiling, original seeds) stays on the
+    frame's profile `prof`."""
+    sw = kit.profile_switch(slug)
+    rprof = kit.profile(kit.round_profile(slug, fr))
+    name = rprof["name"]
+    if sw:
+        name += (f" from round {sw['after_round'] + 1} ({sw['from']} through round "
+                 f"{sw['after_round']}; switched by your signature of {sw['at_iso']})")
+    n95 = f["found"] + f["desk_n95"]
+    return [
+        f"## Profile: {name}",
+        "",
+        f"- Reviewers per round {rprof['reviewers_per_round']} ({rprof['per_slot_set']} per slot set), "
+        f"quiet rounds to stop {rprof['quiet_to_stop']}, round cap {f['r_max']} counted rounds "
+        f"({f['rounds_counted']} counted so far), original seeds {prof['seeds_original']}.",
+        f"- Stages 1–6 budget {prof['stage_budget_days']:g} agent-days; typical total about "
+        f"{typical:g} days; ceiling (every loop at its cap) about {ceiling:g} days (§6.1), as signed on "
+        f"the {prof['name']} profile" + (" and kept through the switch" if sw else "") + ". Only you "
+        "can exceed it, through the signing tool.",
+    ] + (v12_ceiling_lines(prof, ceiling) if kit.is_v12(fr) else []) + [
+        f"- Forecast from this program's own {f['rounds_counted']} counted certification round(s) "
+        f"(estimate.py forecast, {f['inputs']} inputs), in place of the design point of "
+        f"{prof['design_holes']} holes at freeze: {f['found_raw']} material holes found so far, "
+        f"estimated holes at freeze {f['n_hat']:g} (at most {n95:g} at 95%; false material share "
+        f"{f['false_material_share']:g}, from the {f['false_material_source']}). After signoff: "
+        f"desk-detectable about {f['desk_mean']:g} (at most {f['desk_n95']} at 95%), invisible to any "
+        f"reviewer about {f['invisible_mean']:g} (at most {f['invisible_bound95']} at 95%, share "
+        f"assumed); chance of at least one material change after signoff {f['p_any']:g}. Model output.",
+    ]
+
+
 def cmd_contract_page(a: argparse.Namespace) -> int:
     fr = load_frame(a.program)
     missing = [k for k in RULINGS if not (fr.get("rulings", {}).get(k) or {}).get("at")]
@@ -406,12 +482,22 @@ def cmd_contract_page(a: argparse.Namespace) -> int:
             pins.setdefault(v, r["model_id"])
     # Reviewer effort is pinned beside the model ids, so the frame signature covers it too; a frame
     # that already carries reviewer_effort keeps its own (courier.REVIEWER_EFFORT is the default).
-    effort = dict(fr["reviewer_effort"] if "reviewer_effort" in fr else REVIEWER_EFFORT)
+    # Once a certification round is counted the page is a re-render: it prints what the signed frame
+    # carries and adds no field to it.
+    measured = measured_forecast(a.program)
+    if measured is not None and not all(k in fr for k in RERENDER_KEYS):
+        raise Refused("a counted certification round exists but frame.json carries no contract page "
+                      f"({', '.join(RERENDER_KEYS)}): there is no signed page to re-render")
+    if measured is None:
+        effort = dict(fr["reviewer_effort"] if "reviewer_effort" in fr else REVIEWER_EFFORT)
+    else:
+        effort = dict(fr.get("reviewer_effort") or {})
     prof = kit.profile(fr["profile"])
-    f = forecast(fr["profile"])
-    f_base = forecast(fr["profile"], base=True)
-    wider = wider_profile_note(fr["profile"])
     typical, ceiling = PROFILE_DAYS[fr["profile"]]
+    if measured is None:
+        profile_lines = design_profile_lines(fr, prof, typical, ceiling)
+    else:
+        profile_lines = measured_profile_lines(a.program, fr, prof, measured, typical, ceiling)
     lines = [
         f"# Contract page — {a.program} (frame v{fr.get('version')})",
         "",
@@ -429,25 +515,7 @@ def cmd_contract_page(a: argparse.Namespace) -> int:
         "",
     ] + [f"- {x}" for x in POST_CERT_ACTIVITIES] + [
         "",
-        f"## Profile: {prof['name']}",
-        "",
-        f"- Reviewers per round {prof['reviewers_per_round']} ({prof['per_slot_set']} per slot set), "
-        f"quiet rounds to stop {prof['quiet_to_stop']}, hard cap {prof['hard_cap']} rounds, "
-        f"original seeds {prof['seeds_original']}.",
-        f"- Stages 1–6 budget {prof['stage_budget_days']:g} agent-days; typical total about "
-        f"{typical:g} days; ceiling (every loop at its cap) about {ceiling:g} days (§6.1). Only you "
-        "can exceed it, through the signing tool.",
-    ] + (v12_ceiling_lines(prof, ceiling) if kit.is_v12(fr) else []) + [
-        f"- Forecast at the design point ({prof['design_holes']} holes at freeze), at the measured "
-        f"inputs (method v1.2; research-calibration REPORT §3): rounds {f['rounds_p50']} typical / "
-        f"{f['rounds_p90']} at the 90th percentile, the round cap reached in {f['cap_pct']}% of "
-        f"simulated programs; desk-detectable left {f['desk_left']}, invisible left "
-        f"{f['invisible_left']}; chance of at least one material change after signoff {f['p_any']}; "
-        f"chance the 95% bound is exceeded {f['take_back_pct']}%. Model output.",
-        f"- Contrast, the pre-calibration assumed inputs (what this page stated before v1.2): desk-detectable "
-        f"left {f_base['desk_left']}, invisible left {f_base['invisible_left']}, chance of at least one "
-        f"material change after signoff {f_base['p_any']}.",
-    ] + ([f"- **{wider}**"] if wider else []) + [
+    ] + profile_lines + [
         "",
         "## Your escape cost",
         "",
@@ -477,11 +545,12 @@ def cmd_contract_page(a: argparse.Namespace) -> int:
     page = "\n".join(lines) + "\n"
     out = records(a.program) / "CONTRACT.md"
     out.write_text(page)
-    fr["reviewer_pins"] = pins
-    fr["reviewer_effort"] = effort
+    if measured is None:
+        fr["reviewer_pins"] = pins
+        fr["reviewer_effort"] = effort
+        fr["reference_override"] = override
     fr["contract_page_at"] = now
     fr["contract_page_sha256"] = hashlib.sha256(page.encode()).hexdigest()
-    fr["reference_override"] = override
     save_frame(a.program, fr)
     log(a.program, "contract-page", sha256=fr["contract_page_sha256"])
     print(f"contract page: {out}")
