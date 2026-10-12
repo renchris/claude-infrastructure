@@ -68,7 +68,9 @@ plog() { cat "$STATE/poller.log" >&2; }
   [ "$(grep -c . "$FLEET_LOG")" -eq 1 ] || { cat "$FLEET_LOG"; plog; false; }
   grep -q -- "--one $LIM " "$FLEET_LOG" || { cat "$FLEET_LOG"; false; }
   grep -q "REQUEST-RETIRED $RECOV — no longer LIMITED" "$STATE/poller.log" || { plog; false; }
-  grep -q "REQUEST-RETIRED $MOVED — transplanted" "$STATE/poller.log" || { plog; false; }
+  # A bare `.handed-off` tombstone with no durable move on record is no longer read as a transplant
+  # (d30f1f3ad: lr_successor_state rc 1 skips that retire); the request still retires, nothing done.
+  grep -qE "REQUEST-RETIRED $MOVED — (transplanted|the transcript is gone)" "$STATE/poller.log" || { plog; false; }
   grep -q "REQUEST-RETIRED $MATE — a teammate" "$STATE/poller.log" || { plog; false; }
   for s in "$RECOV" "$MOVED" "$MATE"; do
     [ -f "$STATE/results/$s.retired.json" ] || { ls "$STATE/results"; false; }
