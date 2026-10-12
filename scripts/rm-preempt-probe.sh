@@ -16,8 +16,11 @@
 #
 # Usage: rm-preempt-probe.sh [--arm main|workflow|both]
 # Exit:  0 = main PASS and workflow PASS or NODIALOG · 1 = any arm FAIL · 3 = NO VERDICT (or main not PASS)
+#        4 = NOTRIGGER: the main arm's command simply RAN, so this binary no longer raises the dialog for
+#            the trap shape at all (news: the hook may be moot there); the workflow arm is then not run.
 # Env:   CLAUDE_CONFIG_DIR (account; default ~/.claude), CC_PROBE_BIN (claude binary; default `claude` on
-#        PATH), CC_PROBE_WAIT_S (per-arm ceiling, default 300), CC_PROBE_PASS_S (default 30).
+#        PATH), CC_PROBE_MODEL (optional --model), CC_PROBE_WAIT_S (per-arm ceiling, default 300),
+#        CC_PROBE_PASS_S (default 30). lib/cc-upgrade-gate/check17_rm_preempt.sh runs this per binary move.
 set -uo pipefail
 
 arm=both
@@ -60,7 +63,7 @@ tdir="$cfg/projects/$slug"
 work="$(mktemp -d "${TMPDIR:-/tmp}/rm-preempt-probe.XXXXXX")"
 
 run_arm() {
-  local a="$1" sess="rmpp-$1-$$" tag prompt start f verdict
+  local a="$1" sess="rmpp-$1-$$" tag prompt start f verdict mflag
   tag="rmpp-probe-$a-$$"
   if [ "$a" = main ]; then
     prompt="[$tag] Acceptance probe. Run exactly this one Bash command, verbatim, once: $probe_cmd -- then quote the tool result verbatim and stop. Do not retry or rewrite it."
@@ -80,11 +83,13 @@ EOF
   fi
   printf '%s\n' "$overlay" > "$work/overlay.json"
   start="$(date +%s)"
+  mflag=""
+  [ -n "${CC_PROBE_MODEL:-}" ] && mflag="--model $CC_PROBE_MODEL "
   # env -u: the probe must not inherit the caller's pane/session identity. Run from `!` in a live
   # session, it otherwise read as that pane, and its hooks SIGTERMed the pane's own cc-await-ping
   # watcher (measured 2026-10-12, WAKE-PATH-DOWN naming this probe's argv as the sender).
   tmux new-session -d -s "$sess" -x 220 -y 60 -c "$here" \
-    "env -u ITERM_SESSION_ID -u CC_PANE_ID -u KITTY_WINDOW_ID -u KITTY_LISTEN_ON -u KITTY_PID -u KITTY_PUBLIC_KEY -u CLAUDECODE -u CLAUDE_PID -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_ENTRYPOINT -u CLAUDE_CODE_BRIDGE_SESSION_ID -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_CODE_MESSAGING_SOCKET -u CLAUDE_CODE_MESSAGING_TOKEN -u CLAUDE_CODE_TASK_LIST_ID -u CLAUDE_CODE_SESSION_ATTENDED CLAUDE_CONFIG_DIR='$cfg' '$bin' --permission-mode auto --settings \"\$(cat '$work/overlay.json')\" \"\$(cat '$work/$a.prompt')\""
+    "env -u ITERM_SESSION_ID -u CC_PANE_ID -u KITTY_WINDOW_ID -u KITTY_LISTEN_ON -u KITTY_PID -u KITTY_PUBLIC_KEY -u CLAUDECODE -u CLAUDE_PID -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_ENTRYPOINT -u CLAUDE_CODE_BRIDGE_SESSION_ID -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_CODE_MESSAGING_SOCKET -u CLAUDE_CODE_MESSAGING_TOKEN -u CLAUDE_CODE_TASK_LIST_ID -u CLAUDE_CODE_SESSION_ATTENDED CLAUDE_CONFIG_DIR='$cfg' '$bin' --permission-mode auto $mflag--settings \"\$(cat '$work/overlay.json')\" \"\$(cat '$work/$a.prompt')\""
   verdict="NO-VERDICT timed out after ${wait_s}s"
   while [ $(( $(date +%s) - start )) -lt "$wait_s" ]; do
     sleep 5
@@ -129,6 +134,9 @@ for u, t0 in uses.items():
             # was no timer and nothing for the hook to preempt. Not a hook failure.
             print(f"NODIALOG Claude Code denied in {dt:.1f}s with no dialog (this context cannot prompt)")
         else:
+            if "denied" not in text.lower() and "permission" not in text.lower():
+                print(f"NOTRIGGER the command ran in {dt:.1f}s with no deny: this binary raised no removal dialog")
+                sys.exit(0)
             print(f"FAIL no hook deny; result after {dt:.1f}s: {text[:160]!r}")
         sys.exit(0)
 print("PENDING")
@@ -139,7 +147,7 @@ PY
   done
   tmux kill-session -t "$sess" 2>/dev/null
   echo "arm=$a verdict=$verdict"
-  case "$verdict" in PASS*) return 0 ;; FAIL*) return 1 ;; NODIALOG*) return 4 ;; *) return 3 ;; esac
+  case "$verdict" in PASS*) return 0 ;; FAIL*) return 1 ;; NODIALOG*) return 4 ;; NOTRIGGER*) return 5 ;; *) return 3 ;; esac
 }
 
 # The main arm must PASS (it is the arm that proves the hook resolves a timed dialog). The workflow arm
@@ -149,10 +157,11 @@ for a in main workflow; do
   [ "$arm" = both ] || [ "$arm" = "$a" ] || continue
   run_arm "$a"; r=$?
   case "$a:$r" in
+    main:5) rc=4; break ;;
     *:0|workflow:4) ;;
     *:1) rc=1 ;;
     *) [ "$rc" -eq 1 ] || rc=3 ;;
   esac
 done
-case "$rc" in 0) echo "verdict=PASS" ;; 1) echo "verdict=FAIL" ;; *) echo "verdict=NO-VERDICT" ;; esac
+case "$rc" in 0) echo "verdict=PASS" ;; 1) echo "verdict=FAIL" ;; 4) echo "verdict=NOTRIGGER" ;; *) echo "verdict=NO-VERDICT" ;; esac
 exit "$rc"

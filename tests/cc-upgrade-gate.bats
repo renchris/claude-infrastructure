@@ -282,3 +282,67 @@ STUB
   [[ "$output" == *"claude-next:tengu_rippling_tulip=250000"* ]] || { echo "$output"; false; }
   [[ "$output" == *"ALARM"* ]]
 }
+
+# ── #17 rm-prompt-preempt: the hook still answers the TIMED removal dialog on the candidate ──────────
+# The real probe starts interactive sessions, so these cases pin the CHECK's contract against a stub
+# probe placed where the check resolves it (<root>/scripts/rm-preempt-probe.sh, root found through
+# symlinks): the verdict mapping, that the candidate binary/model/account reach the probe, and that a
+# probe with no verdict fails closed. The FAIL case is the red-proof.
+_g17_tree() {  # $1 = stub exit code → builds $BATS_TEST_TMPDIR/t with the real check + a stub probe
+  local t="$BATS_TEST_TMPDIR/t"
+  mkdir -p "$t/lib/cc-upgrade-gate" "$t/scripts" "$BATS_TEST_TMPDIR/home/.claude-next"
+  cp "$REPO/lib/cc-upgrade-gate/check17_rm_preempt.sh" "$t/lib/cc-upgrade-gate/"
+  printf '#!/usr/bin/env bash\nprintf "%%s|%%s|%%s\\n" "$CC_PROBE_BIN" "$CC_PROBE_MODEL" "$CLAUDE_CONFIG_DIR" > "%s/probe-env"\necho "arm=main verdict=stub"\necho "verdict=stub%s"\nexit %s\n' \
+    "$BATS_TEST_TMPDIR" "$1" "$1" > "$t/scripts/rm-preempt-probe.sh"
+}
+_g17_run() {  # $1 = path of the check file to source → prints "STATUS :: evidence :: detail"
+  bash -c '
+    export HOME="$1/home" GATE_BIN=/cand/claude GATE_MODEL=claude-opus-5-5 GATE_ACCOUNTS=next GATE_SPAWN="${GATE_SPAWN:-1}"
+    . "$2/lib/cc-upgrade-gate/common.sh"
+    emit_result(){ echo "$3 :: $4 :: $5"; }
+    . "$3"
+    check_17
+  ' _ "$BATS_TEST_TMPDIR" "$REPO" "$1"
+}
+
+@test "check17: probe PASS → PASS, and the candidate binary, model and account reach the probe" {
+  _g17_tree 0
+  run _g17_run "$BATS_TEST_TMPDIR/t/lib/cc-upgrade-gate/check17_rm_preempt.sh"
+  [[ "$output" == PASS* ]] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=stub0"* ]] || { echo "$output"; false; }
+  [ "$(cut -d'|' -f1,2 "$BATS_TEST_TMPDIR/probe-env")" = "/cand/claude|claude-opus-5-5" ]
+  [[ "$(cut -d'|' -f3 "$BATS_TEST_TMPDIR/probe-env")" == */.claude-next ]] || false
+}
+
+@test "check17: the hook no longer preempts the timer → FAIL (red-proof)" {
+  _g17_tree 1
+  run _g17_run "$BATS_TEST_TMPDIR/t/lib/cc-upgrade-gate/check17_rm_preempt.sh"
+  [[ "$output" == FAIL* ]] || { echo "$output"; false; }
+  [[ "$output" == *"wait 120 s"* ]] || { echo "$output"; false; }
+}
+
+@test "check17: NOTRIGGER is SKIP and reads as news; no verdict fails closed" {
+  _g17_tree 4
+  run _g17_run "$BATS_TEST_TMPDIR/t/lib/cc-upgrade-gate/check17_rm_preempt.sh"
+  [[ "$output" == SKIP*NEWS* ]] || { echo "$output"; false; }
+  _g17_tree 3
+  run _g17_run "$BATS_TEST_TMPDIR/t/lib/cc-upgrade-gate/check17_rm_preempt.sh"
+  [[ "$output" == FAIL*"no verdict (rc=3)"* ]] || { echo "$output"; false; }
+}
+
+@test "check17: sourced through a symlink it still finds the probe in the real tree" {
+  _g17_tree 0
+  mkdir -p "$BATS_TEST_TMPDIR/farm"
+  ln -s "$BATS_TEST_TMPDIR/t/lib/cc-upgrade-gate/check17_rm_preempt.sh" "$BATS_TEST_TMPDIR/farm/check17_rm_preempt.sh"
+  run _g17_run "$BATS_TEST_TMPDIR/farm/check17_rm_preempt.sh"
+  [[ "$output" == PASS* ]] || { echo "$output"; false; }
+}
+
+@test "check17: GATE_SPAWN=0 → SKIP; a missing probe → FAIL" {
+  _g17_tree 0
+  GATE_SPAWN=0 run _g17_run "$BATS_TEST_TMPDIR/t/lib/cc-upgrade-gate/check17_rm_preempt.sh"
+  [[ "$output" == SKIP*GATE_SPAWN=0* ]] || { echo "$output"; false; }
+  rm -f "$BATS_TEST_TMPDIR/t/scripts/rm-preempt-probe.sh"
+  run _g17_run "$BATS_TEST_TMPDIR/t/lib/cc-upgrade-gate/check17_rm_preempt.sh"
+  [[ "$output" == FAIL*"probe missing"* ]] || { echo "$output"; false; }
+}
