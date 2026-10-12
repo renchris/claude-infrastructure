@@ -310,7 +310,20 @@ _surviving_member_pid() {  # <member-name> → echoes the pid of a still-running
   if [[ -n "${CC_WF_PSTABLE_FILE:-}" && -f "${CC_WF_PSTABLE_FILE}" ]]; then
     tbl="$(cat "$CC_WF_PSTABLE_FILE" 2>/dev/null)"
   else
-    tbl="$(ps -axo pid=,ppid=,command= 2>/dev/null)"
+    # CANDIDATES BY NAME, ROWS PER PID (2026-10-11, docs/research/load-hook-timeouts-2026-10-11).
+    # This was `ps -axo pid=,ppid=,command=`, the whole table, and a full-table ps comes in waves
+    # where it blocks uninterruptibly for minutes while single-pid `ps -p` stays fast. The awk below
+    # only ever accepts a row whose command carries claude.exe, so the candidates are the processes
+    # NAMED claude/claude.exe (`pgrep -x` matches the executable basename, measured: teammates read
+    # `claude.exe`), each read alone in the same row format — the awk and its verdict are unchanged.
+    # `-a` keeps ANCESTORS in the match list: macOS pgrep drops them by default, and the old table
+    # did not. The numeric guard drops anything else a pgrep variant might print beside the pid; it
+    # is `[[ =~ ]]`, not a case arm, because bash 3.2 misparses a case inside `$( )`.
+    local _sm_pid
+    tbl="$(pgrep -a -x 'claude|claude.exe' 2>/dev/null | while read -r _sm_pid _; do
+             [[ "$_sm_pid" =~ ^[0-9]+$ ]] || continue
+             ps -o pid=,ppid=,command= -p "$_sm_pid" 2>/dev/null
+           done)"
   fi
   [[ -n "$tbl" ]] || return 1
   printf '%s\n' "$tbl" | awk -v who="$who" '

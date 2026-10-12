@@ -30,6 +30,32 @@
 # WHY NOT REUSE handoff-fire.sh's agent_id_on_tty (:942): it is tty-keyed, and a hook HAS NO TTY —
 # `ps -o tty= -p $$` reads `??` here (verified). That oracle resolves its tty from the session
 # registry, and an assignee pane has no registry row at all (134/134, lead-crash-watchdog.sh:596).
+#
+# PER-HOP, NEVER THE WHOLE TABLE (2026-10-11, docs/research/load-hook-timeouts-2026-10-11). The
+# walk used to read `ps -axo pid=,ppid=,command=` — every process on the box — to visit at most
+# maxhop of them. A full-table ps comes in WAVES where it blocks uninterruptibly for minutes, while a
+# single-pid `ps -p` stays fast through the same wave, and this lib sits under 15+ hooks including
+# the Stop hooks with the most cancels (355/309/168/112/98/89). So the rows are now fetched one hop at
+# a time and handed to the SAME awk program, unchanged: it receives exactly the rows it would have
+# visited, so its verdict cannot differ. No early stop at the nearest claude ancestor, deliberately —
+# the walk stays maxhop deep, so a `claude -p` nested under a teammate still reads as the teammate
+# exactly as it did before (tests/agent-identity-walk.bats pins it), and the CC_WF_PSTABLE_FILE seam
+# keeps meaning what production does. `read -r … <<<` splits the row, never `set -- $row`: argv
+# carries briefs, and an unquoted expansion would glob them against the hook's cwd.
+_agent_ancestry_rows() { # <start-pid> <maxhop> → one `pid ppid command` row per hop, start first
+  local cur="${1:-}" max="${2:-8}" h=0 row _ai_pid _ai_pp _ai_rest
+  case "$max" in ''|*[!0-9]*) max=8 ;; esac
+  while [ "$h" -lt "$max" ]; do
+    case "$cur" in ''|0|1|*[!0-9]*) return 0 ;; esac
+    row="$(ps -o pid=,ppid=,command= -p "$cur" 2>/dev/null)" || return 0
+    [ -n "$row" ] || return 0
+    printf '%s\n' "$row"
+    read -r _ai_pid _ai_pp _ai_rest <<<"$row"
+    cur="$_ai_pp"; h=$((h + 1))
+  done
+  return 0
+}
+
 agent_assignee_argv() { # → 0 = this session IS a team assignee; echoes the matched agent-id
   # CC_WF_START_PID exists so the suite can pin where the walk begins: a hook's own $$ is a pid the
   # test cannot know in advance, so without it the ancestry could only be tested by stubbing out the
@@ -48,7 +74,7 @@ agent_assignee_argv() { # → 0 = this session IS a team assignee; echoes the ma
   { if [ -n "${CC_WF_PSTABLE_FILE:-}" ] && [ -f "${CC_WF_PSTABLE_FILE}" ]; then
       cat "$CC_WF_PSTABLE_FILE" 2>/dev/null
     else
-      ps -axo pid=,ppid=,command= 2>/dev/null
+      _agent_ancestry_rows "${CC_WF_START_PID:-$$}" "${CC_WF_MAX_HOPS:-8}"
     fi; } | awk -v start="${CC_WF_START_PID:-$$}" -v maxhop="${CC_WF_MAX_HOPS:-8}" '
     { PP[$1] = $2; L[$1] = $0 }
     function cmdof(p,   n, f, i, c) {
