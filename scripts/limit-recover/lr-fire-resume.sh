@@ -833,12 +833,33 @@ LR_SCREEN_WANT="$(printf '%s' "$PROMPT" | _lrf_ink | perl -CS -0777 -ne 'print s
 # text is ours, whatever form the head took.
 LR_SCREEN_NONCE=""
 [ "$LR_SUBMIT_TOKEN_IN_PROMPT" = 1 ] && LR_SCREEN_NONCE="${LR_SUBMIT_TOKEN##*:}"
-case "$LR_SCREEN_NONCE" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;; *) LR_SCREEN_NONCE="" ;; esac
+# The reconciler mints `lrr-` + 12 hex (lr_recon/act.py) with no `:` in it, so the strip above leaves
+# the whole token, which is random for THIS run in the same way and is kept whole.
+case "$LR_SCREEN_NONCE" in
+  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+  lrr-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+  *) LR_SCREEN_NONCE="" ;;
+esac
 # …AND A CHIP WITH ONLY A FRAGMENT OF OUR TAIL AFTER IT (pane 815, the same morning). The typed
 # prompt is collapsed into the chip and only the last few keystrokes land as text after it — `2bd7`,
 # half the nonce — so the whole-nonce needle above misses too. The tail of OUR prompt is random
 # (it ends in the nonce), so a fragment of it after a chip is ours; a fragment must be ≥2 characters.
 LR_SCREEN_TAIL="$(printf '%s' "$PROMPT" | _lrf_ink | perl -CS -0777 -ne 'print length($_) > 48 ? substr($_, -48) : $_')"
+# …AND A LONE CHIP WITH NOTHING AFTER IT (4fe9935f, 2026-10-13). A one-line prompt over Claude Code's
+# paste threshold arrives as ONE chip and the composer shows `[Pasted text #N]` and nothing else, so
+# none of the three needles above has anything to match: the run read DRAFT, the +5 s re-CR was
+# withheld, and the session sat with its relaunch prompt unsubmitted. The `#N` is NOT a count of
+# lost pastes: 2.1.293 mints text and image chips from ONE counter floored past every id in the
+# resumed transcript, and that transcript held `[Image #1]`, so the first paste of the process was
+# #2. A lone chip is therefore the WHOLE prompt, never its tail. It counts as ours when its line
+# count is our prompt's newline count, \r\n|\r|\n each counted once — handoff-fire.sh
+# paste_readback_ok's placeholder rule, which keeps the number pinned so a different paste reads
+# DRAFT. Unset (by-hand runs, no prompt) disables it.
+LR_SCREEN_NL=""
+if [ -n "$PROMPT" ]; then
+  _lrf_s="${PROMPT//$'\r\n'/$'\n'}"; _lrf_s="${_lrf_s//$'\r'/$'\n'}"; _lrf_s="${_lrf_s//[!$'\n']/}"
+  LR_SCREEN_NL="${#_lrf_s}"
+fi
 IFS='' read -r -d '' LR_SCREEN_SH <<'LRSCREENSH' || true
 # EMPTY | DRAFT | DRAFT-MINE | MENU | UNKNOWN — the composer, read out of band from the pane itself.
 # The box is found by its BORDER RUNS (a repeat of U+2500), never by a literal TUI phrase: a phrase
@@ -932,6 +953,12 @@ case "$body" in
       case "$LR_SCREEN_TAIL" in *"$rest"*) printf DRAFT-MINE; exit 0 ;; esac
     fi ;;
 esac
+# A lone chip whose line count is our prompt's (see LR_SCREEN_NL): the whole box, anchored.
+case "${LR_SCREEN_NL:-}" in
+  ''|*[!0-9]*) ;;
+  0) LC_ALL=C grep -qE '^\[Pastedtext#[0-9]+\]$' <<<"$body" && { printf DRAFT-MINE; exit 0; } ;;
+  *) LC_ALL=C grep -qE "^\[Pastedtext#[0-9]+[+]${LR_SCREEN_NL}lines\]\$" <<<"$body" && { printf DRAFT-MINE; exit 0; } ;;
+esac
 printf DRAFT
 LRSCREENSH
 IFS='' read -r -d '' LR_NOTE_SH <<'LRNOTESH' || true
@@ -948,6 +975,25 @@ command -v lr_state_append >/dev/null 2>&1 || {
   echo "!! lr-fire-resume: lr-lib.sh unreachable — state '${LR_ST_STATE:-}' NOT recorded" >&2; exit 0; }
 lr_state_append "$LR_RUN_DIR" "${LR_ST_STATE:-}" "${LR_ST_STAGE:-}" "${LR_ST_DETAIL:-}" || true
 LRNOTESH
+# ONE pane capture into the run bundle, for the moments whose cause no log can rebuild later: the CR
+# sent unconfirmed, the re-CR withheld, NOT SUBMITTED (4fe9935f, 2026-10-13 — the CR was lost and
+# nothing on disk could say what the composer held when it was sent). Prints the file it wrote, and
+# writes a NO CAPTURE file rather than nothing when the pane cannot be read, so a missing screen is
+# never mistaken for a capture nobody asked for.
+IFS='' read -r -d '' LR_CAPTURE_SH <<'LRCAPTURESH' || true
+[ -n "${LR_RUN_DIR:-}" ] && [ -d "$LR_RUN_DIR" ] || exit 0
+tag="$(printf '%s' "${LR_CAP_TAG:-capture}" | LC_ALL=C tr -c 'A-Za-z0-9_-' '-')"
+out="$LR_RUN_DIR/screen-$tag-$(date -u +%Y%m%dT%H%M%SZ).txt"
+if [ -z "${LR_IT2:-}" ] || [ -z "${LR_PANE:-}" ]; then
+  printf 'NO CAPTURE: no pane reader (LR_IT2=%s LR_PANE=%s)\n' "${LR_IT2:-}" "${LR_PANE:-}" > "$out" || exit 0
+else
+  { printf '# %s · pane %s · %s · last %s rows\n' "${LR_CAP_TAG:-capture}" "$LR_PANE" \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${LR_CAPTURE_LINES:-60}"
+    "$LR_IT2" session read -s "$LR_PANE" -n "${LR_CAPTURE_LINES:-60}" 2>&1 || printf 'NO CAPTURE: the pane read failed (rc %s)\n' "$?"
+  } > "$out" || exit 0
+fi
+printf '%s' "$out"
+LRCAPTURESH
 # The launch-lock holder handover (see lr_launch_guard): once expect has spawned claude, the lock is
 # held by THAT pid, so a later launcher finds a live holder while it runs and a stale one once it is
 # gone. Nothing ever releases it; empty when the guard is off, which makes the expect side a no-op.
@@ -964,6 +1010,7 @@ jq -cn --arg r "${LR_RECORD_ID:-}" --arg a "${LR_ATTEMPT:-}" --argjson pid "$p" 
 LRLOCKSH
 [ "${LR_LAUNCH_GUARD:-on}" = off ] && LR_LOCK_SH=""
 export LR_PROBE LR_LIB_PATH LR_IT2 LR_PANE LR_SCREEN_WANT LR_SCREEN_NONCE LR_SCREEN_TAIL LR_SCREEN_SH LR_NOTE_SH
+export LR_SCREEN_NL LR_CAPTURE_SH
 export LR_LOCK_DIR LR_LOCK_SH
 # ══ NOTHING WRITES TO THE PANE TTY ONCE THE TUI OWNS IT (2026-09-28) ═════════════════════════════
 # The expect program used to report every step with send_user, i.e. raw bytes on the very tty
@@ -1085,6 +1132,16 @@ expect -c '
     if {$v eq ""} { return UNKNOWN }
     return $v
   }
+  # The pane as it is NOW, saved into the bundle (LR_CAPTURE_SH). Returns the file, or a phrase
+  # saying none was written, for the note that cites it.
+  proc lr_capture {tag} {
+    global env
+    if {![info exists env(LR_CAPTURE_SH)]} { return "no capture" }
+    set p ""
+    catch { set p [string trim [exec env LR_CAP_TAG=$tag /bin/bash -c $env(LR_CAPTURE_SH)]] }
+    if {$p eq ""} { return "no capture" }
+    return $p
+  }
   # THE CR IS SENT ONLY ONCE THE COMPOSER HAS AFFIRMATIVELY PAINTED OUR TEXT (2026-09-22).
   # The three settle sleeps around the inject were cut from 2/1/1 to 0.3/0.2/0.2 in ba5e3c1e1, whose
   # own comment names the hazard they exist for: keeping the text and the CR from coalescing into
@@ -1128,7 +1185,8 @@ expect -c '
     # NOT MEASURED, so fall through rather than withhold: our own text is already typed, so a CR
     # here can only submit it or be swallowed exactly as before — it cannot answer a menu we would
     # have read. Withholding would strand every run whose pane is unreadable.
-    lr_note CR-UNCONFIRMED inject "composer never read DRAFT-MINE within ${bound}s — sending the CR unconfirmed, as before"
+    set cap [lr_capture CR-UNCONFIRMED]
+    lr_note CR-UNCONFIRMED inject "composer never read DRAFT-MINE within ${bound}s — sending the CR unconfirmed, as before; screen: $cap"
     send -- "\r"
   }
   # submitted <ts> | queued <ts> | none | unreadable | skip — `unreadable` and `skip` are NOT `none`.
@@ -1512,7 +1570,8 @@ expect -c '
             lr_say "nothing in the transcript ${el}s after the first CR and the screen reads $sv — NOT a measured failure (an EMPTY composer is what a successful submit leaves, and UNKNOWN means no pane was read). No keystroke sent; re-reading the composer on the look schedule and polling the transcript to ${deadline}s."
           }
         } else {
-          lr_say "nothing in the transcript ${el}s after the first CR and the composer reads $sv, not our prompt — NOT re-sending Enter; polling the transcript to ${deadline}s."
+          set cap [lr_capture RECR-WITHHELD]
+          lr_say "nothing in the transcript ${el}s after the first CR and the composer reads $sv, not our prompt — NOT re-sending Enter; polling the transcript to ${deadline}s. screen: $cap"
           # STOP LOOKING, KEEP POLLING. This used to `break`, which with the first look at 5 s ended
           # the poll and wrote FAILED:submit while an accepted Enter can take 1.6-11 s (W0) to land.
           set recr $recrmax
@@ -1532,8 +1591,9 @@ expect -c '
     } elseif {$verb eq "skip"} {
       lr_say "submission not verified — this run carries no submit token (a by-hand run, or lr-submit-probe.sh is unreachable)."
     } else {
-      lr_note FAILED:submit submit "no record of the prompt in the transcript within ${deadline}s"
-      lr_tell "✗ NOT SUBMITTED — the prompt never reached the transcript within ${deadline}s. The session is alive and may be TASK-LESS: check the composer, and type the prompt by hand only if it is not already answered."
+      set cap [lr_capture NOT-SUBMITTED]
+      lr_note FAILED:submit submit "no record of the prompt in the transcript within ${deadline}s; screen: $cap"
+      lr_tell "✗ NOT SUBMITTED — the prompt never reached the transcript within ${deadline}s. The session is alive and may be TASK-LESS: check the composer, and type the prompt by hand only if it is not already answered. Screen at this moment: $cap"
     }
     set timeout 300
   }

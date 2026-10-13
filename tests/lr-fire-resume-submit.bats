@@ -382,7 +382,9 @@ SH
   export LR_SCREEN_SH
   LR_NOTE_SH="$(sed -n "/<<'LRNOTESH'/,/^LRNOTESH\$/p" "$FIRE" | sed '1d;$d')"
   export LR_NOTE_SH
-  [ -n "$LR_SCREEN_SH" ] && [ -n "$LR_NOTE_SH" ] || { echo "helper-program extraction failed" >&2; return 1; }
+  LR_CAPTURE_SH="$(sed -n "/<<'LRCAPTURESH'/,/^LRCAPTURESH\$/p" "$FIRE" | sed '1d;$d')"
+  export LR_CAPTURE_SH
+  [ -n "$LR_SCREEN_SH" ] && [ -n "$LR_NOTE_SH" ] && [ -n "$LR_CAPTURE_SH" ] || { echo "helper-program extraction failed" >&2; return 1; }
   export LR_PROBE="$REPO/scripts/limit-recover/lr-submit-probe.sh"
   export LR_SUBMIT_TOKEN="$TOK"
   export LR_RUN_DIR="$BATS_TEST_TMPDIR/run"
@@ -409,6 +411,9 @@ screen() { # $1 = call ordinal, $2 = one of empty|menu|mine
     # the recovery was in flight. Structurally identical to `mine`: same box, same border runs, same
     # prompt glyph. Only the CONTENT differs, which is the whole of the DRAFT / DRAFT-MINE split.
     other) printf '%s\n' "  chrome" "$b" " ❯ git status --porcelain # typed by someone else" "$b" " ? for shortcuts" > "$f" ;;
+    # The 4fe9935f shape (2026-10-13): a one-line prompt over the paste threshold, shown as ONE chip
+    # and nothing else. #2 because the resumed transcript already held an [Image #1].
+    chip)  printf '%s\n' "  chrome" "$b" " ❯ [Pasted text #2]" "$b" " ? for shortcuts" > "$f" ;;
     # NO BORDER RUNS, so the awk box parse exits 9 and the oracle returns UNKNOWN — the same
     # verdict its first guard returns when LR_PANE is empty, which is the shape that cannot be
     # fixtured here (the stub IS the pane read). The helper's own note above records that a
@@ -1309,4 +1314,81 @@ nonce_screen() { # $1=composer row → prints the LR_SCREEN_SH verdict
 @test "lr-fire-resume derives the nonce from the armed token and exports it to the screen program" {
   grep -q 'LR_SCREEN_NONCE="${LR_SUBMIT_TOKEN##\*:}"' "$FIRE"
   grep -q 'export LR_PROBE LR_LIB_PATH LR_IT2 LR_PANE LR_SCREEN_WANT LR_SCREEN_NONCE LR_SCREEN_TAIL' "$FIRE"
+}
+
+# ── A LONE CHIP IS OUR WHOLE PROMPT, AND THE MOMENTS IT GOES WRONG ARE SAVED (4fe9935f, 2026-10-13) ─
+# The relaunch prompt was one line of ~1000 chars, so the composer showed `[Pasted text #2]` and
+# nothing else: no head, no nonce, no tail fragment. The reader said DRAFT, the +5 s re-CR was
+# withheld, and the session sat unsubmitted. The #2 is not a lost paste — Claude Code 2.1.293 mints
+# text and image chips from one counter floored past the ids in the resumed transcript, which held
+# [Image #1] — so a lone chip is the whole prompt, matched by its pinned line count.
+
+@test "a LONE chip whose line count is our prompt's reads DRAFT-MINE; another count or extra words do not" {
+  export LR_SCREEN_WANT="Resumedinplaceonnext4—samepane,samesess" LR_SCREEN_NONCE="" LR_SCREEN_TAIL=""
+  export LR_SCREEN_NL=0
+  [ "$(nonce_screen '[Pasted text #2]')" = DRAFT-MINE ]
+  [ "$(nonce_screen '[Pasted text #2 +3 lines]')" = DRAFT ]
+  [ "$(nonce_screen 'please also [Pasted text #2]')" = DRAFT ]
+  [ "$(nonce_screen '[Pasted text #2]andmynotes')" = DRAFT ]
+  LR_SCREEN_NL=3
+  [ "$(nonce_screen '[Pasted text #1 +3 lines]')" = DRAFT-MINE ]
+  [ "$(nonce_screen '[Pasted text #1]')" = DRAFT ]
+  unset LR_SCREEN_NL                                        # by-hand run: no prompt, no claim
+  [ "$(nonce_screen '[Pasted text #2]')" = DRAFT ]
+}
+
+@test "the newline count and the reconciler's lrr- nonce are derived by the subject itself" {
+  local span
+  span="$(sed -n '/^LR_SCREEN_NONCE=""$/,/^export LR_SCREEN_NL LR_CAPTURE_SH$/p' "$FIRE")"
+  [ -n "$span" ] || { echo "the derivation span moved — its anchors are stale"; false; }
+  run bash -c 'LR_SUBMIT_TOKEN_IN_PROMPT=1; LR_SUBMIT_TOKEN=lrr-28a0aea868a1; PROMPT=$'"'"'a\r\nb\rc\nd'"'"'
+               _lrf_ink() { cat; }; LR_IT2=; LR_PANE=; '"$span"'
+               printf "%s|%s" "$LR_SCREEN_NONCE" "$LR_SCREEN_NL"'
+  [ "$output" = "lrr-28a0aea868a1|3" ] || { echo "got: $output"; false; }
+  run bash -c 'LR_SUBMIT_TOKEN_IN_PROMPT=1; LR_SUBMIT_TOKEN=lrr-xyz; PROMPT=one
+               _lrf_ink() { cat; }; LR_IT2=; LR_PANE=; '"$span"'
+               printf "%s|%s" "$LR_SCREEN_NONCE" "$LR_SCREEN_NL"'
+  [ "$output" = "|0" ] || { echo "a malformed token became a nonce: $output"; false; }
+}
+
+@test "RED-PROOF 4fe9935f: a lone chip holding our one-line prompt is painted, and earns the re-CR" {
+  exp_setup
+  export LR_RECR_SCHEDULE=1,2 LR_SUBMIT_RECR_MAX=1 LR_SUBMIT_PAINT_S=3 LR_SCREEN_NL=0
+  screen 1 empty          # quiet arm: our prompt IS typed
+  screen 2 chip           # …and it sits there as one chip, which is all the composer shows
+  : > "$TX"               # the first CR is lost, as it was on 4fe9935f
+  lr_expect_run 90
+  [[ "$(states)" == *"composer-painted"* ]] || { echo "the chip was not read as ours before the CR: $(states)"; false; }
+  [[ "$(states)" != *"CR-UNCONFIRMED"* ]] || { echo "states: $(states)"; false; }
+  [ "$(states | tr ' ' '\n' | grep -c '^SUBMIT-RECR$')" = 1 ] || { echo "no re-CR over our own chip: $(states)"; false; }
+  [ "$(wc -l < "$LR_TEST_GOT" | tr -d ' ')" = 2 ] || { cat "$LR_TEST_GOT"; false; }
+}
+
+@test "the pane is saved into the bundle at CR-UNCONFIRMED, at a withheld re-CR and at NOT SUBMITTED" {
+  exp_setup
+  export LR_SUBMIT_PAINT_S=1 LR_RECR_SCHEDULE=1,2
+  screen 1 empty
+  screen 2 other          # never ours: the CR goes unconfirmed, the re-CR is withheld, nothing lands
+  : > "$TX"
+  lr_expect_run 90
+  local tag f caps
+  for tag in CR-UNCONFIRMED RECR-WITHHELD NOT-SUBMITTED; do
+    caps=("$LR_RUN_DIR"/screen-"$tag"-*.txt); f="${caps[0]}"
+    [ -f "$f" ] || { echo "no $tag capture in:"; printf '%s\n' "$LR_RUN_DIR"/*; false; }
+    grep -q 'typed by someone else' "$f" || { echo "$tag capture does not hold the pane:"; cat "$f"; false; }
+  done
+  [[ "$(details)" == *"screen: $LR_RUN_DIR/screen-CR-UNCONFIRMED-"* ]] || { echo "details: $(details)"; false; }
+  [[ "$(details)" == *"screen: $LR_RUN_DIR/screen-NOT-SUBMITTED-"* ]] || { echo "details: $(details)"; false; }
+  [[ "$(said)" == *"screen: $LR_RUN_DIR/screen-RECR-WITHHELD-"* ]] || { said; false; }
+}
+
+@test "an unreadable pane still leaves a NO CAPTURE file, never silence" {
+  local sh; sh="$(sed -n "/<<'LRCAPTURESH'/,/^LRCAPTURESH\$/p" "$FIRE" | sed '1d;$d')"
+  [ -n "$sh" ] || { echo "LR_CAPTURE_SH extraction failed"; false; }
+  mkdir -p "$BATS_TEST_TMPDIR/run"
+  run env LR_RUN_DIR="$BATS_TEST_TMPDIR/run" LR_IT2= LR_PANE= LR_CAP_TAG=NOT-SUBMITTED bash -c "$sh"
+  [ -f "$output" ] || { echo "no file named: $output"; false; }
+  grep -q '^NO CAPTURE: no pane reader' "$output"
+  run env LR_RUN_DIR= LR_CAP_TAG=x bash -c "$sh"            # no bundle: inert, writes nowhere
+  [ "$status" -eq 0 ] && [ -z "$output" ]
 }

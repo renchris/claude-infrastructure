@@ -64,6 +64,7 @@ proc send_user {args} {}
 proc lr_say {m} {}
 proc lr_tell {m} {}
 proc lr_note {a b c} {}
+proc lr_capture {tag} { return "no capture" }
 proc sleep {n} {}
 proc lr_pump {n} {}
 proc lr_screen {} { global SCREENS LOOKS; set v [lindex $SCREENS $LOOKS]; incr LOOKS
