@@ -790,6 +790,23 @@ def premise_at_level(premise: Dict[str, Any], probes: Dict[str, Dict[str, Any]],
     return premise.get("verdict") == "holds" and premise_level(premise, probes, now) >= need
 
 
+def carried_set_ok(s: Any) -> bool:
+    """A carried decision's set as gate row 5 reads it and `decision carry` writes it: 2-4 members
+    each with a feasibility probe, a narrowing probe with wave, owner and due, a revision budget."""
+    if not isinstance(s, dict):
+        return False
+    members = s.get("members") or []
+    npb = s.get("narrowing_probe") or {}
+    return bool(
+        isinstance(members, list)
+        and 2 <= len(members) <= 4
+        and all(isinstance(m, dict) and m.get("feasibility_probe") for m in members)
+        and isinstance(npb, dict)
+        and all(npb.get(k) for k in ("wave", "owner", "due"))
+        and s.get("revision_budget_h")
+    )
+
+
 def conviction(decision: Dict[str, Any], premises: Dict[str, Dict[str, Any]],
                probes: Dict[str, Dict[str, Any]], now: Optional[float] = None) -> Optional[int]:
     """The §3.5 rule, from the decision's stored tally. None = no load-bearing factual premise, so a

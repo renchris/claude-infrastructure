@@ -175,6 +175,18 @@ PR-n` records the claim on the probe but does not join it; join it with `cc-rese
 `probes.jsonl` or whose `closes` does not name the premise, and never sets the verdict (a refuting
 probe still goes through `--verdict refuted --refuted-by P-x`).
 
+A refuted premise needs every decision it bears on revised after the refutation (gate row 4). Take the
+operator's words first, then record them; neither verb is run on the lead's own judgment:
+
+- The set still stands, or he swaps its members: `cc-research decision carry --program P --id DR-n
+  --because "<what changed>" --receipt "<his words>" [--set FILE]`. Without `--set` it re-affirms the
+  carried set unchanged; `--set FILE` replaces it with a JSON `{members, narrowing_probe,
+  revision_budget_h}` in the shape row 5 checks. It also takes a ruled or reopened decision into a set
+  (`--set` required), withdrawing the earlier ruling.
+- He re-plans it: `cc-research decision reopen --program P --id DR-n --because "<what fired>" --receipt
+  "<his words>"`, for a ruled or a carried decision, at most 2 reopens per decision. Row 5 fails on it
+  until `decision rule --by operator` or `decision carry` closes it.
+
 Stage 8 checks both: gate row 18 (yield stop) and row 19 (decision blockers), each PASS as "not
 applicable" under a 1.1 frame. The contract page's ceiling already carries the yield ceiling (§12's price:
 lite 5.25, standard 12 agent-days) and the Stage 9 budget.

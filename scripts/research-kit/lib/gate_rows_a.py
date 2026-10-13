@@ -350,12 +350,7 @@ def row5(ctx: Ctx) -> Row:
                 filed.append(
                     f"{did}: class C, due {pk['due']}, blocks {d.get('blocks_waves') or []}"
                 )
-            elif (
-                2 <= len(members) <= 4
-                and all(m.get("feasibility_probe") for m in members)
-                and all(npb.get(k) for k in ("wave", "owner", "due"))
-                and s.get("revision_budget_h")
-            ):
+            elif kit.carried_set_ok(s):
                 filed.append(
                     f"{did}: carried set of {len(members)}, narrows in {npb['wave']} by {npb['due']}"
                 )

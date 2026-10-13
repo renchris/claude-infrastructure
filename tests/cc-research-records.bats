@@ -327,7 +327,7 @@ refused() {
   [[ "$output" == *"re-rules a decision the operator reopened"*"cc-research gate file-packet"* ]] || false
   run "$CR" decision reopen --program demo --id DR-2 --because "P7 moved" --receipt "re-plan it"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"status 'open'; only a ruled decision is reopened"* ]] || false
+  [[ "$output" == *"status 'open'; only a ruled or carried decision is reopened"* ]] || false
   # DR-2 as a ruled decision whose derived conviction has since fallen to 0
   printf '{"id":"DR-2","status":"ruled","ruled_by":"agent","chosen":"x","receipt":"old","revisit_trigger":"old"}\n' >> "$REC/decisions.jsonl"
   run "$CR" decision reopen --program demo --id DR-2 --because "census P7 moved" --receipt "operator 2026-10-12: re-plan DR-2"
@@ -358,6 +358,142 @@ refused() {
   [ "$status" -eq 2 ]
   [[ "$output" == *"already reopened 2 times; the cap is 2 per decision"* ]] || false
   [ "$(fold decisions.jsonl DR-2 status)" = '"ruled"' ]
+}
+
+# set_json <members> [key to drop]: a carried set in the shape gate row 5 reads.
+set_json() {
+  /usr/bin/python3 -c "
+import json, time
+due = time.strftime('%Y-%m-%dT00:00:00Z', time.gmtime(time.time() + 30 * 86400))
+s = {'members': [{'label': 'm%d' % i, 'feasibility_probe': 'P-%d' % i} for i in range(1, $1 + 1)],
+     'narrowing_probe': {'wave': 'W1', 'owner': 'lead', 'due': due},
+     'revision_budget_h': 4}
+drop = '${2:-}'
+if drop == 'feasibility_probe':
+    del s['members'][0][drop]
+elif drop == 'due':
+    del s['narrowing_probe'][drop]
+elif drop:
+    del s[drop]
+print(json.dumps(s, sort_keys=True))"
+}
+# seed_carried <members>: DR-1 as a carried set, dated before any refutation a test writes.
+seed_carried() {
+  printf '{"id": "DR-1", "status": "carried", "ts": "2020-01-01T00:00:00Z", "set": %s}\n' "$(set_json "$1")" >> "$REC/decisions.jsonl"
+}
+no_carry() {
+  local rc=0
+  "$CR" decision carry --program demo "$@" > /dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] || { echo "accepted (exit $rc): $*"; false; }
+}
+
+# RED-proof (2026-10-13): before `decision carry` existed the first call exits 2 (argparse "invalid
+# choice"), nothing is appended, and row 4 keeps "PR-1 refuted but dependent DR-1 was never revised".
+@test "decision carry: the operator's re-affirmation of a carried set after its premise is refuted lets row 4 pass the dependent; it copies the set and writes no conviction" {
+  seed_carried 2
+  "$CR" premise revise --program demo --id PR-1 --verdict refuted --refuted-by P-1 --why "P-1 reads the opposite"
+  rowtext 4 | grep -q "PR-1 refuted but dependent DR-1 was never revised"
+  before="$(fold decisions.jsonl DR-1 set)"
+  n="$(wc -l < "$REC/decisions.jsonl")"
+  no_carry --id DR-1 --because "PR-1 refuted"                            # no --receipt
+  no_carry --id DR-1 --receipt "keep the set"                            # no --because
+  no_carry --id DR-1 --because " " --receipt "keep the set"
+  no_carry --id DR-1 --because "PR-1 refuted" --receipt ""
+  no_carry --id DR-1 --because b --receipt r --conviction 95             # no such flag
+  [ "$(wc -l < "$REC/decisions.jsonl")" -eq "$n" ]
+  run "$CR" decision carry --program demo --id DR-1 --because "PR-1 refuted by P-1" --receipt "operator 2026-10-13: the set stands"
+  [ "$status" -eq 0 ]
+  [ "$output" = "DR-1: carried by operator (set of 2 re-affirmed)" ]
+  [ "$(wc -l < "$REC/decisions.jsonl")" -eq $((n + 1)) ]
+  [ "$(fold decisions.jsonl DR-1 status)" = '"carried"' ]
+  [ "$(fold decisions.jsonl DR-1 set)" = "$before" ]
+  [ "$(fold decisions.jsonl DR-1 carried_by)" = '"operator"' ]
+  [ "$(fold decisions.jsonl DR-1 carried_because)" = '"PR-1 refuted by P-1"' ]
+  [ "$(fold decisions.jsonl DR-1 carry_receipt)" = '"operator 2026-10-13: the set stands"' ]
+  [ "$(fold decisions.jsonl DR-1 carried_at)" = "\"$CC_NOW\"" ]
+  [ "$(fold decisions.jsonl DR-1 conviction)" = "null" ]
+  tail -1 "$REC/decisions.jsonl" | grep -q '"set": {'
+  run rowtext 4
+  [[ "$output" != *"DR-1"* ]] || false
+  [ "$(rowstat 4)" = "PASS" ]
+  rowtext 5 | grep -q "DR-1: carried set of 2, narrows in W1"
+}
+
+# RED-proof (2026-10-13): `decision carry` does not exist before this change, so every call exits 2
+# and the accepted ones below never write.
+@test "decision carry --set replaces the set in the shape row 5 checks; a malformed set and an open, descoped or unknown decision are refused, writing nothing" {
+  seed_carried 2
+  n="$(wc -l < "$REC/decisions.jsonl")"
+  set_json 1 > "$W/one.json"
+  set_json 5 > "$W/five.json"
+  set_json 3 feasibility_probe > "$W/noprobe.json"
+  set_json 3 due > "$W/nodue.json"
+  set_json 3 revision_budget_h > "$W/nobudget.json"
+  set_json 3 narrowing_probe > "$W/nonarrow.json"
+  echo "not json" > "$W/bad.json"
+  echo '[1, 2]' > "$W/list.json"
+  for f in one five noprobe nodue nobudget nonarrow bad list absent; do
+    no_carry --id DR-1 --because b --receipt r --set "$W/$f.json"
+  done
+  no_carry --id DR-404 --because b --receipt r
+  "$CR" decision add --program demo --id DR-2 --question "q" --option do-nothing --option use-what-exists --option x
+  set_json 3 > "$W/three.json"
+  n=$((n + 1))
+  no_carry --id DR-2 --because b --receipt r --set "$W/three.json"       # open: goes to him as a packet
+  printf '{"id": "DR-2", "status": "descoped", "descoped_waves": ["W2"]}\n' >> "$REC/decisions.jsonl"
+  n=$((n + 1))
+  no_carry --id DR-2 --because b --receipt r --set "$W/three.json"
+  [ "$(wc -l < "$REC/decisions.jsonl")" -eq "$n" ]
+  run "$CR" decision carry --program demo --id DR-2 --because b --receipt r --set "$W/three.json"
+  [[ "$output" == *"status 'descoped'; only a carried, ruled or reopened decision is carried"* ]] || false
+  run "$CR" decision carry --program demo --id DR-1 --because "W1 narrowed it" --receipt "operator: carry these three" --set "$W/three.json"
+  [ "$status" -eq 0 ]
+  [ "$output" = "DR-1: carried by operator (set of 3 replaced)" ]
+  [ "$(fold decisions.jsonl DR-1 set)" = "$(cat "$W/three.json")" ]
+  rowtext 5 | grep -q "DR-1: carried set of 3, narrows in W1"
+  # a carried decision whose folded set is not well-formed is not re-affirmed without --set
+  printf '{"id": "DR-1", "set": %s}\n' "$(cat "$W/one.json")" >> "$REC/decisions.jsonl"
+  run "$CR" decision carry --program demo --id DR-1 --because b --receipt r
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"no well-formed set to re-affirm"*"--set"* ]] || false
+  # one carried on a dated class-C packet has no set to copy: it is re-affirmed without one
+  due="$(date -u -v+30d +%Y-%m-%dT00:00:00Z)"
+  printf '{"id": "DR-5", "status": "carried", "packet": {"id": "p", "class": "C", "due": "%s"}}\n' "$due" >> "$REC/decisions.jsonl"
+  run "$CR" decision carry --program demo --id DR-5 --because b --receipt r
+  [ "$status" -eq 0 ]
+  [ "$output" = "DR-5: carried by operator (on its class-C packet)" ]
+  [ "$(fold decisions.jsonl DR-5 set)" = "null" ]
+  rowtext 5 | grep -q "DR-5: class C, due $due"
+}
+
+# RED-proof (2026-10-13): before this change `decision carry` does not exist and `decision reopen`
+# refuses DR-1 once it is carried ("only a ruled decision is reopened"), both exit 2.
+@test "decision carry takes a ruled decision into a set only with --set and withdraws its ruling; decision reopen accepts a carried decision under the same 2-reopen cap" {
+  set_json 2 > "$W/two.json"
+  no_carry --id DR-1 --because b --receipt r                             # ruled: it has no set
+  run "$CR" decision reopen --program demo --id DR-1 --because "PR-1 moved" --receipt "re-plan it"
+  [ "$status" -eq 0 ]
+  [ "$output" = "DR-1: reopened by operator (1 of 2)" ]
+  "$CR" decision rule --program demo --id DR-1 --chosen retry --by operator --receipt "keep retry" --revisit-trigger t
+  run "$CR" decision carry --program demo --id DR-1 --because "two options survive" --receipt "operator: carry both" --set "$W/two.json"
+  [ "$status" -eq 0 ]
+  [ "$(fold decisions.jsonl DR-1 status)" = '"carried"' ]
+  [ "$(fold decisions.jsonl DR-1 chosen)" = "null" ]
+  [ "$(fold decisions.jsonl DR-1 ruled_by)" = "null" ]
+  run "$CR" decision reopen --program demo --id DR-1 --because "the set's premise fell" --receipt "operator: re-plan the set"
+  [ "$status" -eq 0 ]
+  [ "$output" = "DR-1: reopened by operator (2 of 2)" ]
+  [ "$(fold decisions.jsonl DR-1 status)" = '"reopened"' ]
+  rowtext 5 | grep -q "DR-1: status 'reopened'"
+  # a reopened set is carried again on his words, its folded set unchanged
+  run "$CR" decision carry --program demo --id DR-1 --because "re-planned" --receipt "operator: the two stand"
+  [ "$status" -eq 0 ]
+  [ "$(fold decisions.jsonl DR-1 status)" = '"carried"' ]
+  [ "$(fold decisions.jsonl DR-1 set)" = "$(cat "$W/two.json")" ]
+  run "$CR" decision reopen --program demo --id DR-1 --because "a third time" --receipt "once more"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"already reopened 2 times; the cap is 2 per decision"* ]] || false
+  [ "$(fold decisions.jsonl DR-1 status)" = '"carried"' ]
 }
 
 @test "concern add appends a pending challenge; concern list --pending shows it" {

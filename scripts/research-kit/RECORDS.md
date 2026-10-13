@@ -453,11 +453,35 @@ For a ruled decision whose flip condition fired and which the operator re-plans 
 
 - `cc-research decision reopen --program P --id D --because "<what fired>" --receipt "<the operator's words>"`
   appends `{status: "reopened", reopened_by: "operator", reopened_because, reopen_receipt, reopened_at, reopens: n}`.
-  Refused unless the decision is `ruled`, and once its `reopened` events number 2. While `reopened`, gate row 5
-  fails on it and `gate.sh requires` blocks its waves.
+  Refused unless the decision is `ruled` or `carried`, and once its `reopened` events number 2 (one cap per decision,
+  whichever state each reopen left). While `reopened`, gate row 5 fails on it and `gate.sh requires` blocks its
+  waves; it leaves that state by his re-ruling (below) or by `decision carry`.
 - `cc-research decision rule --program P --id D --chosen <option> --by operator --receipt "<his words>"
   --revisit-trigger "<trigger>"` appends `{status: "ruled", ruled_by: "operator", chosen, receipt,
   revisit_trigger}`. No 90 rule applies; both `--receipt` and `--revisit-trigger` are required. Refused unless the
   decision is `reopened` with `reopened_by: "operator"`: an open decision still goes to him as a packet
   (`gate.sh file-packet`). The receipt is his quote as recorded, not a signature; row 5 reads `ruled_by: operator`
   with a receipt as it always has.
+
+### Revising a carried decision: `cc-research decision carry`
+
+Gate row 4 asks that every `DR` dependent of a refuted premise carry an event with status ruled, reopened, carried or
+descoped dated at or after the refutation. For a carried decision whose set still stands, no other verb writes one:
+`decision reopen` would leave row 5 failing, and `gate.sh file-packet` appends only `packet`.
+
+- `cc-research decision carry --program P --id D --because "<what changed>" --receipt "<the operator's words>"
+  [--set FILE]` appends `{status: "carried", carried_by: "operator", carried_because, carry_receipt, carried_at,
+  set}`, dated now. It rules nothing and never writes a conviction. Both `--because` and `--receipt` are required;
+  the receipt is his quote as recorded, not a signature.
+- Without `--set` it re-affirms: the event copies the folded `set` unchanged, and is refused when that set is not
+  well-formed. `--set FILE` replaces it with the JSON object in FILE, `{members: [{label, feasibility_probe, ...}],
+  narrowing_probe: {wave, owner, due, ...}, revision_budget_h}`. Either way the set must pass the check gate row 5
+  makes (`kit.carried_set_ok`, the one predicate both use): 2-4 members each with a `feasibility_probe`, a
+  `narrowing_probe` with `wave`, `owner` and `due`, and a `revision_budget_h`. A carried decision that stands on a
+  dated class-C packet instead of a set is re-affirmed with no `set` field.
+- Accepted for a decision that is `carried`, `ruled` or `reopened`; refused for an `open` one (it goes to him as a
+  packet), a `descoped` one and an unknown id. A ruled or reopened decision has no set, so it needs `--set`, and the
+  event writes `chosen: null` and `ruled_by: null`: the earlier ruling is withdrawn. A carried decision keeps its
+  `ruled_by`.
+- No gate row changed its verdict for this verb: row 4 already counted a `carried` event, and row 5 reads the set as
+  before.

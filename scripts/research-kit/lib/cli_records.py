@@ -1,7 +1,7 @@
 """cli_records.py — the record verbs of bin/cc-research (REPORT.md §8 item 9) and concern triage
 (§5.1, §5.2, §10 item 8); see cli.py for the verb table.
 
-  census add|repin|critic · premise add|revise · source add · decision add|tally|rule|reopen|show
+  census add|repin|critic · premise add|revise · source add · decision add|tally|rule|reopen|carry|show
   concern add|list · park · triage
 
 Every record here is append-only (kit.append_jsonl); a census is one JSON file per population,
@@ -581,14 +581,15 @@ def rule_by_operator(
 
 
 def decision_reopen(a: argparse.Namespace) -> int:
-    """Reopen a ruled decision on the operator's ruling (REPORT.md §6.5: a decision is reopened at
-    most CAPS["refutation_reopens"] times). It stays `reopened`, which gate row 5 fails, until
-    `decision rule --by operator` records his re-ruling."""
+    """Reopen a ruled or carried decision on the operator's ruling (REPORT.md §6.5: a decision is
+    reopened at most CAPS["refutation_reopens"] times). It stays `reopened`, which gate row 5
+    fails, until `decision rule --by operator` records his re-ruling or `decision carry` carries it
+    as a set."""
     r = recs(a)
     d = decision_get(r, a.id)
-    if d.get("status") != "ruled":
+    if d.get("status") not in ("ruled", "carried"):
         raise kit.KitError(
-            f"{a.id}: status {d.get('status')!r}; only a ruled decision is reopened"
+            f"{a.id}: status {d.get('status')!r}; only a ruled or carried decision is reopened"
         )
     if not a.because.strip() or not a.receipt.strip():
         raise kit.KitError(
@@ -618,6 +619,76 @@ def decision_reopen(a: argparse.Namespace) -> int:
         },
     )
     print(f"{a.id}: reopened by operator ({used + 1} of {cap})")
+    return 0
+
+
+def carry_set(a: argparse.Namespace, d: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The set a carry event writes: --set FILE's, else the folded one unchanged. None only for a
+    carried decision that stands on a dated class-C packet, which row 5 reads instead of a set."""
+    shape = (
+        "2-4 members each with a feasibility_probe, a narrowing_probe with wave, owner and due, "
+        "and revision_budget_h (gate row 5)"
+    )
+    if a.set:
+        try:
+            s = json.loads(Path(a.set).read_text())
+        except (OSError, ValueError) as e:
+            raise kit.KitError(
+                f"{a.id}: --set {a.set} is not a readable JSON file ({e})"
+            )
+        if not kit.carried_set_ok(s):
+            raise kit.KitError(
+                f"{a.id}: --set {a.set} is not a well-formed set: {shape}"
+            )
+        return s
+    s = d.get("set")
+    if kit.carried_set_ok(s):
+        return s
+    pk = d.get("packet") or {}
+    if d.get("status") == "carried" and pk.get("class") == "C" and pk.get("due"):
+        return None
+    raise kit.KitError(
+        f"{a.id}: no well-formed set to re-affirm; pass --set FILE holding {shape}"
+    )
+
+
+def decision_carry(a: argparse.Namespace) -> int:
+    """Carry a decision as a set on the operator's words: re-affirm a carried set after one of its
+    premises is refuted (the revision gate row 4 asks for), replace it (--set), or take a ruled or
+    reopened decision into a set. It rules nothing and writes no conviction."""
+    r = recs(a)
+    d = decision_get(r, a.id)
+    st = d.get("status")
+    if st not in ("carried", "ruled", "reopened"):
+        raise kit.KitError(
+            f"{a.id}: status {st!r}; only a carried, ruled or reopened decision is carried. An "
+            f"open one goes to the operator as a packet: {PACKET_ROUTE}"
+        )
+    if not a.because.strip() or not a.receipt.strip():
+        raise kit.KitError(
+            f"{a.id}: a carry needs --because (what changed) and --receipt (the operator's words)"
+        )
+    s = carry_set(a, d)
+    row: Dict[str, Any] = {
+        "id": a.id,
+        "status": "carried",
+        "carried_by": "operator",
+        "carried_because": a.because,
+        "carry_receipt": a.receipt,
+        "carried_at": kit.now_iso(),
+    }
+    if s is not None:
+        row["set"] = s
+    if st != "carried":
+        # the earlier ruling is withdrawn, so the fold must not keep reading it as the choice
+        row.update(chosen=None, ruled_by=None)
+    kit.append_jsonl(r / "decisions.jsonl", row)
+    how = (
+        "on its class-C packet"
+        if s is None
+        else f"set of {len(s['members'])} {'replaced' if a.set else 're-affirmed'}"
+    )
+    print(f"{a.id}: carried by operator ({how})")
     return 0
 
 
@@ -1015,11 +1086,28 @@ def add_verbs(sub: Any) -> None:
         g,
         "reopen",
         decision_reopen,
-        "reopen a ruled decision on the operator's ruling (at most 2 reopens per decision)",
+        "reopen a ruled or carried decision on the operator's ruling (at most 2 reopens per decision)",
     )
     p.add_argument("--id", required=True)
     p.add_argument("--because", required=True, help="the flip condition that fired")
     p.add_argument("--receipt", required=True, help="the operator's words")
+    p = verb(
+        g,
+        "carry",
+        decision_carry,
+        "carry a carried, ruled or reopened decision as a set on the operator's words",
+    )
+    p.add_argument("--id", required=True)
+    p.add_argument(
+        "--because", required=True, help="what changed (the refuted premise)"
+    )
+    p.add_argument("--receipt", required=True, help="the operator's words")
+    p.add_argument(
+        "--set",
+        metavar="FILE",
+        help="JSON set replacing the carried one: {members, narrowing_probe, revision_budget_h}; "
+        "omitted, the current set is re-affirmed unchanged",
+    )
     p = verb(g, "show", decision_show, "print a decision with its derived conviction")
     p.add_argument("--id", required=True)
     p.add_argument("--json", action="store_true")
