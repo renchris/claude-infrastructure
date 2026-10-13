@@ -519,6 +519,20 @@ ceiling() { "$REPO/bin/cc-research" ceiling --program demo --json | /usr/bin/pyt
   [[ "$(rowtext 9)" == *"changed after the freeze"* ]]
 }
 
+@test "row 9: a fix cycle before the verification-only cap round certifies the snapshot the cap round examined" {
+  # REPORT.md §3.8: the cap round reviews at full width and never edits, so the snapshot it examined is
+  # the last one examined. Rounds 1-2 saw the pre-fix snapshot; the cap round saw the frozen one.
+  jedit rounds/1/matrix.json "d['snapshot_sha']='0'*40"
+  jedit rounds/2/matrix.json "d['snapshot_sha']='0'*40"
+  jedit rounds/3/matrix.json "d['verification_only']=True"
+  [[ "$(rowtext 9)" != *"is not the one the last"* ]] || false
+}
+
+@test "row 9: a cap round that examined a snapshot older than the freeze still fails" {
+  jedit rounds/3/matrix.json "d['verification_only']=True; d['snapshot_sha']='0'*40"
+  [[ "$(rowtext 9)" == *"is not the one the last counted round examined"* ]] || false
+}
+
 @test "row 9: a plan citing a probe that never ran fails lint" {
   echo "Measured by P-77." >> "$REC/PLAN.md"
   [[ "$(rowtext 9)" == *"P-77"* ]]

@@ -99,17 +99,15 @@ def row9(ctx: Ctx) -> Row:
         return verdict(9, "Freeze", fails + ["not frozen (gate.sh freeze)"], [], [])
     if fz.get("plan_blob") and blob(plan_text(ctx)) != fz["plan_blob"]:
         fails.append("the plan changed after the freeze")
-    full = [
-        m
-        for m in cert_rounds(ctx)
-        if m.get("counted") and not m.get("verification_only")
-    ]
-    if not full:
+    # The verification-only cap round reviews at full width and never edits (REPORT.md §3.8), so after
+    # a fix cycle before it, the snapshot it examined is the last one examined and the one certified.
+    counted = [m for m in cert_rounds(ctx) if m.get("counted")]
+    if not any(not m.get("verification_only") for m in counted):
         fails.append("no counted full certification round")
-    elif full[-1].get("snapshot_sha") != fz["snapshot_sha"]:
+    elif counted[-1].get("snapshot_sha") != fz["snapshot_sha"]:
         fails.append(
-            f"the certified snapshot {fz['snapshot_sha'][:12]} is not the one the last full round "
-            f"examined ({str(full[-1].get('snapshot_sha'))[:12]})"
+            f"the certified snapshot {fz['snapshot_sha'][:12]} is not the one the last counted round "
+            f"examined ({str(counted[-1].get('snapshot_sha'))[:12]})"
         )
     vonly = {str(m["round"]) for m in cert_rounds(ctx) if m.get("verification_only")}
     named = {str(r.get("hole")) for r in known_rows(ctx)}
