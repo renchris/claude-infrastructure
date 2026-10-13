@@ -212,13 +212,29 @@ lrt_norm() { # $1=an lstart string → trimmed, runs of blanks collapsed to one 
 lrt_lstart() { # $1=pid → its start time as `ps` renders it in UTC, normalised; empty when there is none
   lrt_norm "$(TZ=UTC LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null || true)"
 }
+# THE RECORDED lstart IS WHATEVER ITS WRITER'S `ps` PRINTED, and an lstart string carries no zone.
+# Every store this rail writes renders it `TZ=UTC LC_ALL=C`, and comparing against that one form
+# refused a LIVE source as source-dead when the value came from a plain `ps -o lstart= -p PID`
+# (2026-10-13, pid 78979: "Sun 11 Oct 14:11:30 2026" in en_CA and "Sun Oct 11 14:11:30 2026" under
+# LC_ALL=C, both local time, against "Sun Oct 11 19:11:30 2026" in UTC). Two things differ between
+# those renderings, and each is taken out on its own:
+#   the ZONE   the process's start is rendered in UTC and in this process's own zone, and the
+#              recorded value must equal one of the two;
+#   the ORDER  a day-first locale prints `Sun 11 Oct`; lrt_canon puts both sides month-first. It is
+#              done on the STRING, never by rendering under the caller's locale, because launchd
+#              runs this script under C, where that locale's form cannot be produced at all.
+# A recycled pid still has to have started in the same second, in one of the two zones, to pass.
+lrt_canon() { # $1=an lstart string → normalised, and month-first when it was day-first
+  lrt_norm "$1" | awk '{ if ($2 ~ /^[0-9]+$/ && $3 !~ /^[0-9]/) { t = $2; $2 = $3; $3 = t } print }'
+}
 lrt_live() { # $1=pid $2=recorded lstart → rc 0 iff THAT process is alive (an empty lstart judges the pid alone)
   local _l
   [[ "$1" =~ ^[0-9]+$ ]] && [[ "$1" -gt 0 ]] || return 1
   kill -0 "$1" 2>/dev/null || return 1
-  _l="$(lrt_norm "$2")"
+  _l="$(lrt_canon "$2")"
   [[ -n "$_l" ]] || return 0
-  [[ "$(lrt_lstart "$1")" == "$_l" ]]
+  [[ "$(lrt_canon "$(lrt_lstart "$1")")" == "$_l" ]] && return 0
+  [[ "$(lrt_canon "$(LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null || true)")" == "$_l" ]]
 }
 lrt_holders() { # $1=config dir → one `pid<TAB>procStart` row per sessions/*.json naming $SID; malformed skipped
   python3 - "$1" "$SID" 2>/dev/null <<'PY' || true
