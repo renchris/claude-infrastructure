@@ -115,7 +115,9 @@ if [ "${1:-}" = "--why" ]; then
   printf 'session-continue: FATAL — the --why reference tier is missing (%s). Cure: bash ~/Development/claude-infrastructure/install.sh\n' "$_wt" >&2
   exit 2
 fi
-_scd="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+# $0's directory by parameter expansion, not dirname(1): one process start fewer on every Stop.
+case "$0" in */*) _sc_d0="${0%/*}"; [ -n "$_sc_d0" ] || _sc_d0=/ ;; *) _sc_d0=. ;; esac
+_scd="$(cd "$_sc_d0" 2>/dev/null && pwd)"
 _lib="$_scd/lib/continue-sentinel.sh"
 [ -f "$_lib" ] || _lib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/continue-sentinel.sh"
 [ -f "$_lib" ] || _lib="$HOME/.claude/hooks/lib/continue-sentinel.sh"
@@ -306,10 +308,46 @@ esac
 # ---- Stop-hook actuation mode (no recognized arg; JSON on stdin) ----------------
 SC_LED_CACHE=""   # one wrap-ledger sample per Stop, shared mechanical-arm → ship-floor (review #7)
 input=$(cat 2>/dev/null || printf '{}')
-cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)
+# ONE jq for the three stdin fields this hook reads (it used to start jq four to six times per Stop:
+# cwd, session_id, and transcript_path once in each function that wanted it). The fast path is taken
+# only when each field is absent or a string with no newline in it, the only shapes the harness
+# sends; anything else (a non-object, a number, two documents, no jq) leaves _sc_fast=0 and
+# in_field falls back to the original per-field read, so an odd payload parses as it always did.
+_sc_us=$'\037'; _sc_fast=0; _sc_in_cwd=""; _sc_in_sid=""; _sc_in_tp=""
+_sc_in="$(printf '%s' "$input" | jq -r --arg us "$_sc_us" '
+  [.cwd, .session_id, .transcript_path] as $f
+  | if ($f | all(. == null or . == false
+                 or (type == "string" and ((contains("\n") or contains($us)) | not))))
+    then "ok" + $us + ($f[0] // "") + $us + ($f[1] // "") + $us + ($f[2] // "")
+    else "legacy" end' 2>/dev/null || true)"
+case "$_sc_in" in
+  *$'\n'*) : ;;
+  "ok$_sc_us"*) IFS="$_sc_us" read -r _ _sc_in_cwd _sc_in_sid _sc_in_tp <<< "$_sc_in"; _sc_fast=1 ;;
+esac
+in_field() {  # <cwd|session_id|transcript_path> → what `jq -r '.<name> // empty'` prints for stdin
+  if [ "$_sc_fast" = 1 ]; then
+    case "$1" in
+      cwd)             printf '%s\n' "$_sc_in_cwd" ;;
+      session_id)      printf '%s\n' "$_sc_in_sid" ;;
+      transcript_path) printf '%s\n' "$_sc_in_tp" ;;
+    esac
+    return 0
+  fi
+  printf '%s' "$input" | jq -r ".$1 // empty" 2>/dev/null
+}
+# led_field <ledger text> <KEY> → the value of its first `KEY=` line. Pure bash: the
+# `grep -E '^KEY=' | head -1 | cut -d= -f2-` it replaces was three process starts per field.
+led_field() {
+  local _lfl
+  while IFS= read -r _lfl || [ -n "$_lfl" ]; do
+    case "$_lfl" in "$2="*) printf '%s\n' "${_lfl#*=}"; return 0 ;; esac
+  done <<< "$1"
+  return 0
+}
+cwd=$(in_field cwd)
 [ -n "$cwd" ] || cwd="$PWD"
 f=$(sentinel_for "$cwd")
-cur_sid=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
+cur_sid=$(in_field session_id)
 [ -n "$cur_sid" ] || cur_sid="${CLAUDE_CODE_SESSION_ID:-}"
 
 # ── THE DOUBLE-BLOCK MARKER (backlog 79e2b74796af) ───────────────────────────────────────────────
@@ -350,7 +388,7 @@ KILL_RE='(^|[^[:alnum:]])and( then)? stop([^[:alnum:]]|$)|no[ _-]?auto[ _-]?cont
 # carry no text and are skipped). No transcript path ⇒ can't read ⇒ caller falls through.
 last_user_msg() {
   local tp
-  tp=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)
+  tp=$(in_field transcript_path)
   case "$tp" in "~"*) tp="$HOME${tp#\~}" ;; esac
   [ -n "$tp" ] && [ -f "$tp" ] || return 1
   # `jq -c` then decode — NOT `jq -r … | tail -1`. With -r the message's OWN newlines reach the
@@ -732,7 +770,7 @@ wake_floor() { # → echoes JSON on stdout when it wants to BLOCK; otherwise sil
   local _wf_goal=""
   if command -v goal_live_condition >/dev/null 2>&1; then
     local _wf_tp
-    _wf_tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)"
+    _wf_tp="$(in_field transcript_path)"
     _wf_goal="$(goal_live_condition "$_wf_tp" 2>/dev/null)" || _wf_goal=""
     if [ -n "$_wf_goal" ] && [ "$pend" -gt 0 ]; then
       printf 'session-continue: wake floor ABSTAINS (a /goal is LIVE and mail is already pending — the goal-forced turns deliver it, and the idle-scoped arm would refuse over pending mail anyway).\n' >&2
@@ -969,7 +1007,7 @@ ${reason}"
 # the CLAUDE_CONTINUE_MAX cap and its named re-arm lever, and the IDL record. A second loop with its
 # own bound is how two caps that must agree drift apart.
 # Seams: CC_MECH_CONTINUE (0 disables) · WRAP_LEDGER_BIN · SESSION_WRITES_LIB
-TP_MECH="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)"
+TP_MECH="$(in_field transcript_path)"
 # ── the wrap-ledger memo's EVENT key (P0-4, scripts/wrap-ledger.sh § THE MEMO) ──
 # Seven Stop-hook call sites each pay a full ~180 ms / 19-git ledger on every close, and TWO of them
 # are in this file (the mechanical arm and the ship floor, which already share one sample via
@@ -1061,7 +1099,7 @@ mechanical_arm() {   # rc 0 = armed (fall through to the armed path) · rc 1 = d
   led="$( cd "$cwd" 2>/dev/null && WRAP_BUSY=off bash "$wrap" --machine 2>/dev/null || true )"
   [ -n "$led" ] || return 1
   SC_LED_CACHE="$led"
-  rung="$(printf '%s' "$led" | grep -E '^RUNG=' | head -1 | cut -d= -f2-)"
+  rung="$(led_field "$led" RUNG)"
   [ "$rung" = "🔧" ] || return 1
 
   # Attribution. rc 2 (cannot tell) must NOT arm: a Stop hook may never block a turn on its own
@@ -1174,7 +1212,7 @@ ship_floor() { # → echoes JSON to BLOCK (rc 1); rc 0 otherwise (never emits on
     led="$( cd "$cwd" 2>/dev/null && WRAP_BUSY=off bash "$wrap" --machine 2>/dev/null || true )"   # no BUSY probe: see mechanical_arm
   fi
   [ -n "$led" ] || return 0
-  rung="$(printf '%s' "$led" | grep -E '^RUNG=' | head -1 | cut -d= -f2-)"
+  rung="$(led_field "$led" RUNG)"
   case "$rung" in "📦"|"🚀") : ;; *) return 0 ;; esac
 
   # Attribution oracle — the shared lib, resolved through $0's own symlink first (a brand-new fn
@@ -1195,7 +1233,7 @@ ship_floor() { # → echoes JSON to BLOCK (rc 1); rc 0 otherwise (never emits on
   # not nudge you over a sibling's commits" from "never evaluated at all".
   if [ "$rung" = "📦" ]; then
     command -v session_unlanded_mine >/dev/null 2>&1 || return 0
-    trunk="$(printf '%s' "$led" | grep -E '^TRUNK=' | head -1 | cut -d= -f2-)"
+    trunk="$(led_field "$led" TRUNK)"
     { [ -n "$trunk" ] && [ "$trunk" != none ]; } || return 0
     session_unlanded_mine "$TP_MECH" "$cwd" "$trunk" >/dev/null 2>&1 || {
       log_idl abstained "ship-floor-not-mine" "$(jq -cn --arg r "$rung" '{rung:$r}' 2>/dev/null)"; return 0; }
@@ -1228,8 +1266,8 @@ ship_floor() { # → echoes JSON to BLOCK (rc 1); rc 0 otherwise (never emits on
   fi
   printf '%s %s %s' "${cur_sid:-?}" "$head_sha" "$(( pcnt + 1 ))" > "$sfile" 2>/dev/null || true
 
-  ahead="$(printf '%s' "$led" | grep -E '^AHEAD=' | head -1 | cut -d= -f2-)"
-  shas="$(printf '%s' "$led" | grep -E '^SHAS=' | head -1 | cut -d= -f2-)"
+  ahead="$(led_field "$led" AHEAD)"
+  shas="$(led_field "$led" SHAS)"
   local reason
   if [ "$rung" = "📦" ]; then
     reason="📦 SHIP FLOOR — you are going idle on committed-but-unlanded work YOU wrote (${ahead:-?} commit(s): ${shas:-?}). Committed ≠ landed: a branch only this machine can see is one crash or forgotten worktree from lost — the measured top loss class (62 stranded commits across 21 abandoned-wave branches). Apply the ship policy NOW: /ship it (auto-fire by default; where THIS repo's own CLAUDE.md says landing spends money, offer it and park instead). If this park is DELIBERATE, say so in your close — this floor is already spent for the current commit and re-fires at most once per NEW commit (≤${maxs}/session). (ship floor $(( pcnt + 1 ))/${maxs})"
@@ -1364,7 +1402,7 @@ reblock_is_idle_repeat() { # rc 0 = skip this block (identical reason, idle forc
   command -v jq >/dev/null 2>&1 || return 1
   [ "$(cat "${f}.src" 2>/dev/null)" = mech ] && return 1
   local tp scan prev want pend step
-  tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)"
+  tp="$(in_field transcript_path)"
   case "$tp" in "~"*) tp="$HOME${tp#\~}" ;; esac
   [ -n "$tp" ] && [ -f "$tp" ] || return 1
   case "$_ouid" in
