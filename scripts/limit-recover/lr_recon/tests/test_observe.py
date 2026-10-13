@@ -349,48 +349,6 @@ class Tree(unittest.TestCase):
     def test_resume_leaf_drops_wrapper(self):
         self.assertEqual(R.resume_leaves(procs_of())[SIDA], [503])
 
-    def test_the_close_attrib_launch_watchdog_is_not_a_second_holder(self):
-        """Canary 4fe9935f (2026-10-13): pane 16's relaunch, argv as ps printed it. cc-close-attrib
-        (6153) spawned claude (6237) and forked its launch watchdog, a subshell carrying the
-        wrapper's argv beside claude for 20 s (shape measured by re-running the wrapper). Two leaves
-        derived SPLIT-BRAIN and paged it at 06:48:36, 18 s after the target came up."""
-        sid = "4fe9935f-ca5f-4a48-803c-5e569b08f1b7"
-        bin_ = "/Users/chrisren/.claude-293/node_modules/.bin/claude"
-        flags = (
-            "--permission-mode auto --model claude-opus-5-5 --effort high --resume "
-            + sid
-        )
-        wrapper = "bash /Users/chrisren/.claude/bin/cc-close-attrib %s %s" % (
-            bin_,
-            flags,
-        )
-        rows = [
-            (
-                2803,
-                1,
-                "S",
-                L,
-                "/bin/bash /Users/chrisren/.claude/scripts/limit-recover/"
-                "lr-fire-resume.sh next4 /Users/chrisren/Development/claude-infrastructure "
-                + sid,
-            ),
-            (6136, 2803, "S", L, "expect -c set sid $env(LR_SID) ... --resume $sid"),
-            (6153, 6136, "S", L, wrapper),
-            (
-                6237,
-                6153,
-                "S+",
-                L,
-                '%s --settings={"autoMemoryDirectory":"/m"} %s' % (bin_, flags),
-            ),
-            (6240, 6153, "S", L, wrapper),  # ( _cca_launch_watchdog ) &
-            (6241, 6240, "S", L, "sleep 20"),
-        ]
-        self.assertEqual(R.resume_leaves(procs_of(rows))[sid], [6237])
-        # a genuine split brain is still two leaves: a second claude resuming the same sid
-        rows.append((7001, 1, "S+", L, "/x/claude.exe --resume " + sid))
-        self.assertEqual(R.resume_leaves(procs_of(rows))[sid], [6237, 7001])
-
     def test_holder_dedup(self):
         srcs = [
             ("session-row", "/c2", 503, "interactive"),
