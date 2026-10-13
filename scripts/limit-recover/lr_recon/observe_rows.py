@@ -217,11 +217,31 @@ def resume_sid(args: str) -> str:
     return ""
 
 
+# A row whose argv[0] is one of these only carries `--resume <sid>` as text: it is never the session.
+# The same list lr-fire-resume.sh's lr_sid_holders skips.
+NOT_A_SESSION = (
+    "bash",
+    "sh",
+    "zsh",
+    "expect",
+    "env",
+    "grep",
+    "ps",
+    "awk",
+    "sed",
+    "python3",
+)
+
+
 def resume_leaves(procs: Dict[int, T.ProcRow]) -> Dict[str, List[int]]:
-    """sid → live pids carrying `--resume <sid>`, minus any wrapper whose descendant carries it too."""
+    """sid → live pids carrying `--resume <sid>`, minus any wrapper whose descendant carries it too,
+    and minus a shell or tool row (NOT_A_SESSION). bin/cc-close-attrib's launch watchdog is a forked
+    subshell of the wrapper, so it carries the wrapper's argv beside claude, not above it, for its
+    first 20 s: every wrapped relaunch read two holders and SPLIT-BRAIN (canary 4fe9935f, 06:48Z on
+    2026-10-13: target up 06:48:18, SPLIT-BRAIN paged 06:48:36, the source already gone)."""
     by_sid: Dict[str, List[int]] = {}
     for r in procs.values():
-        if r.zombie:
+        if r.zombie or argv0(r.args) in NOT_A_SESSION:
             continue
         sid = resume_sid(r.args)
         if sid:
