@@ -1264,11 +1264,17 @@ def _consume_ctl(
 def _refire(ctx: Ctx, now: float) -> int:
     """The daemon side of ``cc-lr cohort refire`` (§C11): re-arms one OPEN member's budget through
     classify.rearm — the same entry point the 15-minute re-arm uses, so a refire can never grant
-    more than the clock would. An operator refire also resets the automatic re-arm count."""
+    more than the clock would. An operator refire also resets the automatic re-arm count.
+
+    It also forgets the last admission refusal, so the next pass logs the gate's answer again. A
+    refusal is logged only when its reason changes (``_dispatch``), so a refire of a member the
+    gate was still refusing for the same reason left ``refire`` as the newest event and nothing
+    after it (14233392, 2026-10-13: ``restore-r`` before and after, read as a refire ignored)."""
 
     def apply(rec: T.Record, _by: str) -> None:
         classify.rearm(rec, now)
         rec.close.pop("rearms", None)
+        rec.close.pop("admit_refused", None)
 
     return _consume_ctl(ctx, REFIRE_SUFFIX, "refire", apply)
 

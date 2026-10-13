@@ -525,6 +525,18 @@ class MainTests(unittest.TestCase):
         self.assertEqual((ev["ev"], ev["sid"]), ("refire", sid))
         self.assertEqual(M._refire(ctx, 200.0), 0)  # consumed once, never re-applied
 
+    def test_refire_forgets_the_last_admission_refusal(self):
+        # 14233392, 2026-10-13: refused restore-r, refired, refused restore-r again. _dispatch logs a
+        # refusal only when its reason changes, so nothing followed the refire event.
+        sid = "abcdef01-0000-0000-0000-00000000000a"
+        ctx = M.Ctx(self.paths, None, self.home)
+        r = T.Record(sid=sid, record_id="ra")
+        r.close = {"admit_refused": "restore-r", "rearms": 2}
+        ctx.records[sid] = r
+        self._ctl(sid)
+        self.assertEqual(M._refire(ctx, 100.0), 1)
+        self.assertNotIn("admit_refused", r.close)
+
     # ── D1.10: ownership ends with the record ─────────────────────────────────────────────────
     def _own(self, rec):
         M.store.ensure_dirs(self.paths)
