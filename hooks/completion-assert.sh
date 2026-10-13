@@ -137,7 +137,9 @@ input="$(cat 2>/dev/null || printf '{}')"
 
 # B-3 writer = the SSOT lib hooks/lib/idl-log.sh (consolidation audit 02); see that file for the
 # "jq-encode EVERY field" invariant this used to duplicate in four places.
-_cascd="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+# $0's directory by parameter expansion, not dirname(1): one process start fewer on every Stop.
+case "$0" in */*) _ca_d0="${0%/*}"; [ -n "$_ca_d0" ] || _ca_d0=/ ;; *) _ca_d0=. ;; esac
+_cascd="$(cd "$_ca_d0" 2>/dev/null && pwd)"
 _ilib="$_cascd/lib/idl-log.sh"
 # A BRAND-NEW hooks/lib file has no ~/.claude/hooks/lib symlink until install.sh runs — and when
 # this hook executes from ~/.claude/hooks/, the CFG and $HOME tiers below resolve to that SAME
@@ -160,9 +162,26 @@ idl_init "$IDL" "completion-assert"
 
 command -v jq >/dev/null 2>&1 || abstain "no-jq"
 
-SID="$(printf '%s' "$input" | jq -r '.session_id // "?"' 2>/dev/null || echo '?')"
-TP="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
-CWD="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
+# ONE jq for the three stdin fields (was three starts). The fast path is taken only when each field
+# is absent or a string with no newline in it, the only shapes the harness sends; anything else (a
+# non-object, a number, two documents) is read by the three original calls, so an odd payload
+# parses exactly as it always did.
+_ca_us=$'\037'; _ca_fast=0; SID="?"; TP=""; CWD=""
+_ca_in="$(printf '%s' "$input" | jq -r --arg us "$_ca_us" '
+  [.session_id, .transcript_path, .cwd] as $f
+  | if ($f | all(. == null or . == false
+                 or (type == "string" and ((contains("\n") or contains($us)) | not))))
+    then "ok" + $us + ($f[0] // "?") + $us + ($f[1] // "") + $us + ($f[2] // "")
+    else "legacy" end' 2>/dev/null || true)"
+case "$_ca_in" in
+  *$'\n'*) : ;;
+  "ok$_ca_us"*) IFS="$_ca_us" read -r _ SID TP CWD <<< "$_ca_in"; _ca_fast=1 ;;
+esac
+if [ "$_ca_fast" != 1 ]; then
+  SID="$(printf '%s' "$input" | jq -r '.session_id // "?"' 2>/dev/null || echo '?')"
+  TP="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
+  CWD="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
+fi
 
 [ -n "$TP" ] || abstain "no-transcript-path"
 case "$TP" in "~"*) TP="$HOME${TP#\~}" ;; esac
@@ -279,7 +298,20 @@ MSG="$(printf '%s' "$LASTJSON" | jq -r '. // empty' 2>/dev/null || true)"
 # than warns. Own class `relay`, latched by message hash like every arm, cap COMPLETION_RELAY_MAX
 # (default 2). Kill switch: CC_RESEARCH_RELAY_CHECK=0. Any failure to locate or run the router is
 # "cannot tell" and falls through to the arms below, unchanged.
-if [ "${CC_RESEARCH_RELAY_CHECK:-1}" != 0 ]; then
+# FAST EXIT (the research-block.sh / research-precognition-nudge.sh precedent). `relay-check`
+# returns 0 with no output whenever the session has no route record (router.py cmd_relay_check:
+# `if not route … return 0`), and that is every Stop of every session that was never routed inside
+# a research program. Deciding it here saves the python3 start, and the readlink and dirname that
+# locate the router, on each of those Stops. The record's name is router.py route_path(): sid with
+# [^A-Za-z0-9_.-] → _, cut at 128 chars, "unknown" when empty. The exit is taken only for a sid
+# that sanitizer leaves UNCHANGED, so the two cannot drift; any other sid goes to the router.
+_ca_no_route() { # $1=sid → rc 0 iff the sid is sanitizer-stable and has no route record
+  local LC_ALL=C s="${1:-unknown}"   # byte ranges: a locale must not widen A-Z past ASCII
+  case "$s" in *[!A-Za-z0-9_.-]*) return 1 ;; esac
+  [ "${#s}" -le 128 ] || return 1
+  [ ! -e "${CC_RESEARCH_HOME:-$HOME/.claude/autonomy/research}/route-state/$s.json" ]
+}
+if [ "${CC_RESEARCH_RELAY_CHECK:-1}" != 0 ] && ! _ca_no_route "$SID"; then
   _ca_rr="${CC_RESEARCH_ROUTER_PY:-}"
   if [ -z "$_ca_rr" ]; then
     _ca_t="$0"; [ -L "$_ca_t" ] && _ca_t="$(readlink "$_ca_t")"
@@ -291,8 +323,8 @@ if [ "${CC_RESEARCH_RELAY_CHECK:-1}" != 0 ]; then
     _ca_rrc=$?
     if [ "$_ca_rrc" -eq 1 ] && [ -n "$_ca_rreason" ]; then
       mkdir -p "$STATE_DIR" 2>/dev/null || true
-      _ca_rkey="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | shasum 2>/dev/null | cut -c1-16)"
-      _ca_rhash="$(printf '%s' "$MSG" | shasum 2>/dev/null | cut -c1-16)"
+      _ca_rkey="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | shasum 2>/dev/null)"; _ca_rkey="${_ca_rkey:0:16}"   # sliced here; was `| cut -c1-16`
+      _ca_rhash="$(printf '%s' "$MSG" | shasum 2>/dev/null)"; _ca_rhash="${_ca_rhash:0:16}"   # sliced here; was `| cut -c1-16`
       [ -n "$_ca_rkey" ] && [ -n "$_ca_rhash" ] || abstain "relay-no-hash"
       _ca_rfired="$STATE_DIR/$_ca_rkey.fired"
       if [ -f "$_ca_rfired" ] && awk -v h="$_ca_rhash" '$1 == h { hit = 1 } END { exit(hit ? 0 : 1) }' "$_ca_rfired" 2>/dev/null
@@ -365,7 +397,7 @@ printf '%s' "$MSG" | grep -iqE "$GENUINE" && abstain "genuine-blocker"
 # ── Ledger contradiction from LIVE reads (the ground-truth discriminator). ──
 WRAP="${WRAP_LEDGER_BIN:-}"
 if [ -z "$WRAP" ]; then
-  for cand in "$(dirname "$0")/../scripts/wrap-ledger.sh" "$CFG/scripts/wrap-ledger.sh" "$HOME/.claude/scripts/wrap-ledger.sh"; do
+  for cand in "$_ca_d0/../scripts/wrap-ledger.sh" "$CFG/scripts/wrap-ledger.sh" "$HOME/.claude/scripts/wrap-ledger.sh"; do
     [ -f "$cand" ] && { WRAP="$cand"; break; }
   done
 fi
@@ -379,13 +411,27 @@ fi
 # `?` is BOTH jq's default at :64 AND yours-class's own unresolvable sentinel, so an unknown session
 # passes NO flag rather than a literal "?" — passing it would assert we know the session when we do
 # not. Both branches keep the `|| true`: a wrap-ledger failure must still never break the hook.
+# WRAP_BUSY=off (the session-continue.sh treatment, 2026-10-04). The ledger's BUSY probe is a whole
+# process-table scan plus lsof through proc-scope.sh, bounded at 8 s, and this hook's timeout is
+# 5 s: a slow scan cancelled the hook before it could say anything. BUSY and PERMPEND are reported
+# fields that never move RUNG (wrap-ledger.sh § WORKING vs IDLING), and none of the eighteen fields
+# read below is one of them, so the probe is skipped. The memo key carries WRAP_BUSY, so a BUSY
+# reader (operator-readout, notify, cc-classify) is never served this BUSY-less ledger.
 if [ -n "$SID" ] && [ "$SID" != "?" ]; then
-  LED="$( cd "$CWD" 2>/dev/null && bash "$WRAP" --machine --session "$SID" 2>/dev/null || true )"
+  LED="$( cd "$CWD" 2>/dev/null && WRAP_BUSY=off bash "$WRAP" --machine --session "$SID" 2>/dev/null || true )"
 else
-  LED="$( cd "$CWD" 2>/dev/null && bash "$WRAP" --machine 2>/dev/null || true )"
+  LED="$( cd "$CWD" 2>/dev/null && WRAP_BUSY=off bash "$WRAP" --machine 2>/dev/null || true )"
 fi
 [ -n "$LED" ] || abstain "no-ledger"
-lfield() { printf '%s' "$LED" | grep -E "^$1=" | head -1 | cut -d= -f2- || true; }
+# The value of the ledger's first `KEY=` line, read in the shell: `grep | head -1 | cut` was three
+# process starts per field, and this hook reads eighteen fields.
+lfield() {
+  local _lfl
+  while IFS= read -r _lfl || [ -n "$_lfl" ]; do
+    case "$_lfl" in "$1="*) printf '%s\n' "${_lfl#*=}"; return 0 ;; esac
+  done <<< "$LED"
+  return 0
+}
 RUNG="$(lfield RUNG)"
 case "$RUNG" in ''|'?') abstain "ledger-uncomputable" ;; esac
 DIRTY="$(lfield DIRTY)";     case "$DIRTY" in ''|*[!0-9]*) DIRTY=0 ;; esac
@@ -440,6 +486,19 @@ _ca_ai_source() {   # rc 0 sourced hooks/lib/agent-identity.sh · rc 1 no lib
   # shellcheck source=lib/agent-identity.sh
   # shellcheck disable=SC1091
   . "$lib" 2>/dev/null || return 1
+  # ONE ancestry walk per Stop (the session-continue.sh CC_SC_ASSIGNEE_MEMO treatment). Two guards
+  # below ask agent_is_assignee, and each ask walked this process's ancestry with one `ps` per hop:
+  # 16 process starts for a question whose answer cannot change during the run. The walk is asked
+  # once and the function replaced by its answer: same stdout, same rc. Re-applied on every source,
+  # because sourcing the lib redefines the function. CC_CA_ASSIGNEE_MEMO=0 restores a live walk.
+  if [ "${CC_CA_ASSIGNEE_MEMO:-1}" != "0" ]; then
+    if [ -z "${_ca_aid_done:-}" ]; then
+      # shellcheck disable=SC2218  # defined by the agent-identity lib sourced just above
+      _ca_aid_memo="$(agent_assignee_argv)"; _ca_aid_rc=$?; _ca_aid_done=1
+    fi
+    agent_assignee_argv() { [ -n "$_ca_aid_memo" ] && printf '%s\n' "$_ca_aid_memo"; return "$_ca_aid_rc"; }
+  fi
+  return 0
 }
 
 _ca_assignee() {
@@ -734,6 +793,10 @@ contra=0; facts=""; _ca_exon=""
 # rather than inside each block because the oracle shells out to `ps` and jq, and the two terms ask
 # the identical question. `set -uo pipefail` is on and errexit is not, so a non-zero read is safe.
 _ca_sc=""; _ca_sc_rc=1
+# Prime the one-walk ancestry memo in THIS shell. The oracle below runs inside `$(…)`, so a memo
+# it set would die with that subshell and the guards further down would walk again. It asks the
+# ancestry unconditionally, so priming here starts nothing the Stop was not already going to start.
+_ca_ai_source || true
 if _ca_sc="$(_ca_assignee_shared_cwd)" && [ -n "$_ca_sc" ]; then _ca_sc_rc=0; else _ca_sc=""; fi
 if [ "$DIRTY" -eq 1 ]; then
   _ca_mine dirty; _ca_d=$?
@@ -1050,7 +1113,7 @@ CA_D1SRC="$(printf '%s' "$MSG_UNQ" | tr '[:upper:]' '[:lower:]' | sed -E "s/$CA_
 if printf '%s' "$CA_D1SRC" | grep -iqE "$CA_HANDOFF"; then
   CCB="${CC_BACKLOG_BIN:-}"
   if [ -z "$CCB" ]; then
-    for cand in "$(dirname "$0")/../bin/cc-backlog" "$CFG/bin/cc-backlog" "$HOME/.claude/bin/cc-backlog"; do
+    for cand in "$_ca_d0/../bin/cc-backlog" "$CFG/bin/cc-backlog" "$HOME/.claude/bin/cc-backlog"; do
       [ -x "$cand" ] && { CCB="$cand"; break; }
     done
   fi
@@ -1377,9 +1440,9 @@ mkdir -p "$STATE_DIR" 2>/dev/null || true
 # GC stale per-session .fired latch-sets — SKEY embeds SID, so each is per-session and otherwise
 # never reaped (mirrors memory-nudge.sh:26). A live session recreates its own on the next fire.
 find "$STATE_DIR" -name '*.fired' -mtime +7 -delete 2>/dev/null || true
-SKEY="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | shasum 2>/dev/null | cut -c1-16)"
+SKEY="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | shasum 2>/dev/null)"; SKEY="${SKEY:0:16}"   # sliced here; was `| cut -c1-16`
 [ -n "$SKEY" ] || abstain "no-skey"
-HASH="$(printf '%s' "$MSG" | shasum 2>/dev/null | cut -c1-16)"
+HASH="$(printf '%s' "$MSG" | shasum 2>/dev/null)"; HASH="${HASH:0:16}"   # sliced here; was `| cut -c1-16`
 [ -n "$HASH" ] || abstain "no-hash"
 FIRED="$STATE_DIR/$SKEY.fired"
 # THE STARVATION this splits (item 3b464e94b3ff, 2026-08-17). ONE counter served every arm, so a
