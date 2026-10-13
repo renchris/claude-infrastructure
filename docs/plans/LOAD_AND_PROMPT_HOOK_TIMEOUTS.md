@@ -10,7 +10,7 @@ Design and evidence: `docs/research/load-hook-timeouts-2026-10-11/DESIGN.md` (ra
 
 ## Phase 0 — Agent Team Orchestration
 
-- **Execution locus per wave:** Wave 1 = **L+Workflow** — the operator invoked ultracode, so the recycled lead runs one Workflow with one `isolation: 'worktree'` code-writing slot per WP (default agent, not workflow-lean), then lands the branches itself one at a time. Wave 2/3 = **S** (dispatched handoff sessions), only after Wave 1 is converged and O5's exec trace has run.
+- **Execution locus per wave:** Wave 1 = **L+Workflow** — the operator invoked ultracode, so the recycled lead runs one Workflow with one `isolation: 'worktree'` code-writing slot per WP (default agent, not workflow-lean), then lands the branches itself one at a time. Wave 2/3 = **S** (dispatched handoff sessions), only after Wave 1 is converged and O5's exec trace has run. Wave 4 (Stop hooks) = **S**, one dispatched session, with the four hooks done lead-inline (**L**) inside it: all four share `scripts/wrap-ledger.sh` and `hooks/lib/`, and their suites misreport when run inside a teammate (assignee guards read the runner's ancestry).
 - **Lead context budget:** keep ≥50% free; the lead only reviews diffs, lands, converges and files. Succession point: after Wave 1 converges, or at 60% fill, whichever is first.
 - **Load etiquette for every slot (machine at load ~400-600):** run only the bats files your WP names, never the full suite; no `ps -A`/`ps -ax` in new code; never kill/signal anything.
 
@@ -44,6 +44,28 @@ Wave 2 outcome (2026-10-12, dispatched session for backlog item 55f0aafea981; tw
 | WP9 | **DECISION** `b74c6368bbdb` (class C, conviction 65 for building it): a waiting queue reverses `bin/cc-bats`'s recorded R1 rule ("a shedder that waits amplifies"), while the refusal it would replace is bypassed 170-430 times a day (`~/.claude/state/bats-waivers.jsonl`, 10-09..10-12). Not built. |
 | WP10 | **DONE** `870767fe8` (0064: `timeout: 5` on handed-off-session-guard.sh + `PYTEST_XDIST_AUTO_NUM_WORKERS=3`, c10, `--confirm settings.json`) · `f01b9c595` (0065: session-search-sweep `SESSION_INDEX_SWEEP_MIN_INTERVAL_S=300` in its plist env, public-publish 10800 → 86400 s plus `fleet.manifest`, c10 reload `--confirm launchd`). Precedent `7820cd375` (0055) for repo plist edits plus a c10 reload. `install.sh` reloads a changed `run` plist at converge, so O3 likely takes effect on the converge; 0065 `--verify` reads it back. |
 | WP11/WP12 | Gated on O5 (`1fa5c54f8b87`, needs sudo). Not started. |
+
+## Wave 4 — Stop-hook cancels (2026-10-12, dispatched session)
+
+Scope (frozen): cut the Stop-hook `hook_cancelled` rate at high load for operator-readout, session-continue, boundary-handoff and completion-assert, without changing what any of them decides or prints; land each fix through the project-local /ship and converge.
+
+Baseline (2026-10-12 23:16-23:46Z, load 520-680, 25 active transcripts, `count-cancels.py 30 --event Stop`): operator-readout 13 · session-continue 9 · boundary-handoff 3 · completion-assert 3.
+
+Root cause: process starts, not transcript size (a 28 MB transcript scans in 0.2 s; live transcripts are p90 6 MB). Each start costs ~25 ms at a load of 400, and the four hooks made 170-500 of them on their slow paths, most inside `scripts/wrap-ledger.sh`. The ledger's memo key carries `--session` and `WRAP_BUSY`, so the hooks of one Stop asked three different questions and computed up to three ledgers concurrently; any ask without `WRAP_BUSY=off` also ran the BUSY probe (`ps -eo` over the whole table plus `lsof`, bounded at 8 s, against 5 s hook timeouts).
+
+| Hook | Slow path, external process starts (measured with exec-logging PATH stubs under /bin/bash) | What changed | Commit |
+|---|---|---|---|
+| operator-readout | full render ≈500 live (10-31 s at load 380-560); fixture 230 → 187; in-TTL Stop 26 | `cc-resume-debt list` no longer starts basename per meta file (172 live; 43 → 3 for 40 metas); ledger fields read in the shell (was `grep \| head \| cut` each); one stdin jq; no dirname, no `cut` after digests | `d7d73b625` |
+| session-continue | idle Stop with ledger computed: 173-190 live; fixture 103 → 87; 33 on a memo hit | one stdin jq (was 4-6); RUNG/TRUNK/AHEAD/SHAS read in the shell | `9ff7c67b9` |
+| completion-assert | done claim: 301 live (9.3 s at load 380); fixture 153 → 98; no close tell 20 → 15 | no python3 when the session has no route record (the research-block.sh precedent); ledger asked with `WRAP_BUSY=off`; one ancestry walk per Stop (`CC_CA_ASSIGNEE_MEMO`); 18 ledger fields read in the shell | `a461815ca` |
+| boundary-handoff | free-win Stop (35-73% fill): fixture 139 → 110; 57 when session-continue's memo exists | free-win ledger ask uses `WRAP_BUSY=off`, which is session-continue's memo key, so the two share one compute; RUNG read in the shell; one stdin jq | `c256f952f` |
+| wrap-ledger (shared) | 11 dirname starts per compute → 0 | script directory by parameter expansion | `1523e5098` |
+
+Parity: `tests/{operator-readout,session-continue,completion-assert,boundary-handoff}-forks.bats` rebuild the pre-change hook and ledger from git (`tests/stop-hook-forks-helpers.bash`, base `e1fbd8a5a`) and compare stdout, stderr, IDL rows and latch/state files byte for byte, including nine malformed stdin payloads per hook. Each suite's count tests go red when its hook is reverted (run 2026-10-12). Direct regression suites: 36 files, 35 green; `wrap-ledger-research` case 7 is a wall-clock assertion (7-12 s against a 10 s limit) that fails on the unchanged ledger too.
+
+Learnings: (1) the one-jq stdin parse is safe only with the original per-field reads kept as the fallback for anything that is not a newline-free string, since `jq -r` prints non-strings and multi-document input differently. (2) A memo set inside `$(…)` dies with the subshell: completion-assert's ancestry memo has to be primed in the main shell before the first guard that runs in a substitution. (3) A parity test that crosses a wall-clock bound measures the box: the hook bounds `cc-resume-debt list` at 3 s, so the pre-change arm dropped the stranded line under load, which is also what the live hook did.
+
+Not done, on purpose: the ancestry walk is still one `ps -p` per hop (up to 8) in each hook, because Wave 1 ruled out an early stop; the BUSY probe's full-table `ps -eo` (`hooks/lib/proc-scope.sh:32`) still runs under operator-readout's own ledger ask, which is the one reader that prints BUSY; `cb_system_live` (`hooks/lib/cc-beat.sh:67`) starts one jq per beat file (7,344 files) for a session with no beat of its own.
 
 ## Operator-only (file with cc-backlog / cc-decide; never edit settings.json or plists)
 
