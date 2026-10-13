@@ -517,7 +517,8 @@ lru_bg_kind() { # $1=snapshot $2=pid → none | watcher | work
       kind = "none"
       for (j in par) {
         if (par[j] != ENVIRON["LRU_P"]) continue
-        if (bin[j] !~ /(^|\/)(zsh|bash)$/ || index(args[j], "shell-snapshots") == 0) continue
+        # both argv shapes of a Bash-tool shell: handoff-fire.sh hf_bg_work_kind (keep the two in step)
+        if (bin[j] !~ /(^|\/)(zsh|bash)$/ || (index(args[j], "shell-snapshots") == 0 && args[j] !~ /claude-[0-9a-f]+-cwd/)) continue
         w = (ENVIRON["LRU_STRICT"] != "1" && index(args[j], "cc-await-ping") > 0)
         if (w) for (c in par) if (par[c] == j && args[c] !~ /cc-await-ping/ && bin[c] !~ /(^|\/)tail$/) w = 0
         if (!w) { kind = "work"; break }

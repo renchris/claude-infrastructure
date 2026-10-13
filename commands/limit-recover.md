@@ -91,7 +91,8 @@ account that reads 100% on its 5-hour or weekly limit. `rotate` sends the first 
 `recover` (it owes a turn) and the second through `move` (restarted in its pane, no model turn),
 then prints one verdict per session as each lands. It is a front over those two verbs, so every
 refusal below still applies per session. `--until-idle S` also waits out sessions that are busy
-now; without it they are listed as held. `--no-wait` returns once everything is queued and names
+now; without it they are listed as held. (On a server-rejected account a background job is not
+"busy": see the rule below.) `--no-wait` returns once everything is queued and names
 where each verdict will land. A bare `cc-lr rotate` moves nothing: the act needs `--all` or
 `--account` said aloud.
 
@@ -104,6 +105,42 @@ recoveries 2 at a time (`LR_ONE_MAX_CONCURRENT`; first-turn bursts on the target
 session that times out waiting for a move slot now says `slot-wait:`, never `capacity:`. Do not
 raise either width from a session: nothing has run above them, and the one batch at width 4
 coincided with load 150 on 10 CPUs and 2 of 7 slow boots.
+
+### A session on a server-rejected account always moves (operator ruling 2026-10-13)
+
+"We need to fix and improve our limit recover skill to recover all panes." When the source
+account's own API has answered `rejected` for its 5-hour or weekly window (the reconciler's fact
+ledger, `recon/facts/<acct>.<5h|7d>.json`: not contradicted by a later healthy turn, not past its
+reset; read by `lr_source_dead`), a session there cannot take a turn until the reset. Nothing it is
+"busy" with can be used there, so no hold leaves it there and no step is handed to the operator.
+Never offer a manual `/exit` for such a session: re-run the rotation, and if it does not move,
+that is a defect to fix in the rail.
+
+- **A background job does not hold it.** `plan`, `move` and `rotate` list it as `move` (not
+  `hold:background-job` / `wait:background-job`), the recycle's own job gate lets it through, and
+  when `/exit` raises the background-work dialog the watcher answers **Exit and stop tasks**. The
+  jobs end with the exit, so the watcher first records each one's command line and directory in
+  `~/.reso/limit-recover/carried-jobs/<sid>.<epoch>.jsonl`, and once the session is up on the
+  target it mails that list to the pane (`JOBS-CARRIED: …`), telling the session to start again
+  whichever it still needs. The mail wakes a session that came back with no prompt. "Move to
+  background" is never chosen on any lane.
+- **A live `/goal` and a harness notification behind the limit error do not hold it** (2026-10-13,
+  panes 297 and 113).
+- **A refused first turn is bounded.** The reconciler's restore budget counts every mid-turn
+  session on the machine, so a busy fleet refused a limited member on every pass until its reset.
+  After 3 passes of that refusal the cohort is admitted one member per 30 s, with a page, like any
+  other admission refusal. While a refusal stands, `cc-lr status --cohort` names the gate and its
+  numbers (`admission gate restore-r refuses its first turn (active 12 + in flight 0 + 1 vs R 8)`).
+
+What still holds on a rejected account, each for a stated reason: an Agent Team **lead with live
+members** and a **team member** (a lead's exit kills its members' panes; see § Mode: upgrade), a
+**ship-land** job (a land killed between rebase and push costs more than the wait, and it ends by
+itself), a **launcher-rooted pane with a job** (its move replaces the pane, and nothing on that
+path records the jobs), a typed **draft**, and a turn **in flight** in the transcript. A healthy
+source keeps every hold exactly as before. Kill switches: `LR_DEAD_SOURCE_RELEASE=off` (no hold
+is released on this evidence) and `CC_RECYCLE_DEAD_SOURCE_STOP=off` (the dialog is answered as
+before). `cc-lr switch` asks the subject to take a turn, which a rejected account cannot serve,
+and it still lists `background-job` as held; use `rotate` or `move` for a rejected account.
 
 **`/limit-recover account N` (or no ref at all) is also ONE command:**
 
@@ -799,7 +836,9 @@ is still listed. Kill switch `CC_TEAMMATE_ORPHAN_CLOSE=off`. Held states: `teamm
 If a team relaunch's `/exit` raises the background-work dialog, the watcher CANCELS it (Esc = Stay;
 `CC_RECYCLE_BGWORK_ANSWER=cancel`) and types nothing: "Move to background" would hand the
 conversation to a background worker beside the `--resume` about to be typed, and "Exit and stop
-tasks" aborts tasks before shutdown commits, taking a live member's pane with it.
+tasks" aborts tasks before shutdown commits, taking a live member's pane with it. This Stay holds
+for a lead with live members and for a member on a server-rejected account too (§ The fast path,
+the rejected-source rule).
 
 **A stray keystroke in a composer** (`composer-occupied` on one character nobody meant to leave) is
 cleared only by name: `cc-lr upgrade <pane> --scrub-composer '<exact text>'` — one pane, never with

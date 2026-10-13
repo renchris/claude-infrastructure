@@ -1198,7 +1198,18 @@ cl_move_rows() { # <from or ""> <to> <until_idle_s> <sel flag or ""> <sel value>
     case "$d" in
       move) disp=move act=move action="restart on $to in this pane, no prompt" ;;
       on-target) disp=on-target act=none action="already on $to" ;;
-      mid-turn|subagents-in-flight|background-job|composer-unknown)
+      background-job)
+        # A JOB DOES NOT HOLD A SESSION ON A REJECTED ACCOUNT (operator ruling 2026-10-13). No turn
+        # runs there until the reset, so nothing the job produces can be used, and a job that never
+        # ends (pane 16's `zprint -d`) never released --until-idle. The session moves; the recycle
+        # records each job's command line and directory before the exit and mails them to the
+        # successor (the recycle watcher, rcy_jobs_capture). A healthy source waits or holds as before;
+        # a ship-land job is held by the recycle's own gate on either.
+        if command -v lr_source_dead >/dev/null 2>&1 && lr_source_dead "$ac" >/dev/null 2>&1; then
+          disp=move act=move action="restart on $to in this pane, no prompt; $ac is rejected, so its background jobs end with the exit and are named to the successor"
+        elif [ "$until_s" -gt 0 ]; then disp="wait:$d" act=wait action="waits until idle (<= ${until_s}s), then restarts on $to"
+        else disp="hold:$d" action="busy now; --until-idle S waits for it"; fi ;;
+      mid-turn|subagents-in-flight|composer-unknown)
         if [ "$until_s" -gt 0 ]; then disp="wait:$d" act=wait action="waits until idle (<= ${until_s}s), then restarts on $to"
         else disp="hold:$d" action="busy now; --until-idle S waits for it"; fi ;;
       composer-occupied) disp=hold:draft action="a draft is in its composer; drafts are not carried" ;;

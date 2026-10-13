@@ -2812,6 +2812,12 @@ PY
 # expensive — a land killed between rebase and push. One ps snapshot, so every answer describes the
 # same instant. HF_PS_SNAPSHOT (a file, `pid ppid lstart(5) args`) is the test seam;
 # HF_WATCHER_IS_JOB=1 is the kill switch that counts watchers as work.
+# TWO ARGV SHAPES, ONE JOB (2026-10-13, pane 12). A session whose shell snapshot was never written
+# starts its Bash-tool shells as `zsh -c -l setopt … eval '<cmd>' < /dev/null && pwd -P >| /tmp/
+# claude-31db-cwd`, with no `shell-snapshots` in the argv: 2 of the 19 such shells live that day.
+# Both shapes end in the harness's own cwd probe, so that trailer names the job as well. Read by
+# the first shape alone, pane 12's watcher and polling loop were "none": the plan said move, /exit
+# raised the background-work dialog, and stop-if-watcher held because it saw no watcher.
 hf_bg_work_kind() { # $1=pid → "<none|watcher|work|unknown> shipland=<yes|no> pids=<a,b|->"
   local pid="${1:-}" snap
   if [ -n "${HF_PS_SNAPSHOT:-}" ]; then snap="$(cat "$HF_PS_SNAPSHOT" 2>/dev/null || true)"
@@ -2824,7 +2830,7 @@ hf_bg_work_kind() { # $1=pid → "<none|watcher|work|unknown> shipland=<yes|no> 
       kind = "none"; ship = "no"; pids = ""
       for (j in par) {
         if (par[j] != ENVIRON["HF_BG_P"]) continue
-        if (bin[j] !~ /(^|\/)(zsh|bash)$/ || index(args[j], "shell-snapshots") == 0) continue
+        if (bin[j] !~ /(^|\/)(zsh|bash)$/ || (index(args[j], "shell-snapshots") == 0 && args[j] !~ /claude-[0-9a-f]+-cwd/)) continue
         pids = pids (pids == "" ? "" : ",") j
         w = (ENVIRON["HF_BG_STRICT"] != "1" && index(args[j], "cc-await-ping") > 0)
         if (w) for (c in par) if (par[c] == j && args[c] !~ /cc-await-ping/ && bin[c] !~ /(^|\/)tail$/) w = 0
@@ -2899,6 +2905,26 @@ hf_dead_source_notification() { # $1=transcript to read $2=its path in the store
   command -v lr_source_dead >/dev/null 2>&1 || return 1
   lr_source_dead "$acct"
 }
+# A BACKGROUND JOB ON A REJECTED ACCOUNT DOES NOT HOLD THE SESSION THERE (operator ruling
+# 2026-10-13: "fix and improve our limit recover skill to recover all panes"). The job hold protects
+# work the session will consume on a later turn. On an account the fact ledger calls rejected no
+# turn runs until the reset, so nothing the job produces can be consumed there, and a job that
+# never ends (pane 16's `zprint -d`) held its session for good. The session moves; its jobs end
+# with the exit, and the recycle watcher captures each one's command line and directory first and
+# names them to the successor (rcy_jobs_capture, rcy_jobs_mail).
+# NOT released: a ship-land job. A land killed between its rebase and its push is the one job whose
+# death costs more than the wait, and it ends by itself, so that hold cannot strand a session.
+# A lead with live members and a team member are held by their own gates, before and after this one.
+hf_source_dead_for_tx() { # $1=a path under <cfg>/projects/ (names the account) → rc 0 and "<acct>.<scope> <resets_at>"
+  local acct lib
+  acct="$(hf_tx_account "${1:-}")" || return 1
+  if ! command -v lr_source_dead >/dev/null 2>&1 && lib="$(hf_lr_script lr-lib.sh HF_LR_LIB)"; then
+    # shellcheck disable=SC1090  # runtime-resolved library ladder
+    . "$lib" 2>/dev/null || true
+  fi
+  command -v lr_source_dead >/dev/null 2>&1 || return 1
+  lr_source_dead "$acct"
+}
 hf_bg_work_gate() { # $1=registry pid $2=1 when limited $3=transcript [$4=the transcript's own path, when $3 is a joined copy] → rc 0 proceed · 3 hold (verdict in HF_BG_HOLD)
   local pid="${1:-}" limited="${2:-0}" tx="${3:-}" rest=0 kind dead
   HF_BG_HOLD=""
@@ -2929,8 +2955,15 @@ hf_bg_work_gate() { # $1=registry pid $2=1 when limited $3=transcript [$4=the tr
   case "$kind" in
     unknown\ *) echo "bg_work: unknown (ps unreadable)"; return 0 ;;
     work\ *)
+      case "$kind" in
+        *" shipland=yes "*) echo "bg_work: $kind"; HF_BG_HOLD="HELD:bg-work:ship-land"; return 3 ;;
+      esac
+      if command -v hf_source_dead_for_tx >/dev/null 2>&1 && dead="$(hf_source_dead_for_tx "${4:-$tx}")"; then
+        echo "bg_work: $kind — not held: the source account is rejected ($dead), so no turn can use these jobs there; they end with the exit and are named to the successor"
+        return 0
+      fi
       echo "bg_work: $kind"
-      case "$kind" in *" shipland=yes "*) HF_BG_HOLD="HELD:bg-work:ship-land" ;; *) HF_BG_HOLD="HELD:bg-work:other" ;; esac
+      HF_BG_HOLD="HELD:bg-work:other"
       return 3 ;;
   esac
   echo "bg_work: $kind"
@@ -3310,6 +3343,82 @@ rcy_bgwork_unconfirm() { # → sets RCY_BG_UNCONFIRM, the row's unconfirm clause
   RCY_BG_UNCONFIRM="unconfirm rc $RCY_UNCONFIRM_RC"
   # Still owed when it did not take: the reconciler (or the operator) reads unconfirm=needed.
   [ "$RCY_UNCONFIRM_RC" = 0 ] || RCY_BG_UNCONFIRM="$RCY_BG_UNCONFIRM; unconfirm=needed"
+  return 0
+}
+
+# ── A REJECTED SOURCE: THE JOBS ARE CARRIED, THE SESSION MOVES (operator ruling 2026-10-13) ────────
+# The dialog's two exits are "Move to background" (never chosen: it hands the conversation to a
+# background worker beside the --resume this watcher types) and "Exit and stop tasks". On a source
+# the fact ledger calls rejected the watcher takes the second, for any job but a ship-land, because
+# Stay keeps the session on an account where it cannot take a turn (panes 12 and 16, 2026-10-13).
+# What the exit kills is recorded first and mailed to the successor once it is up, the way a
+# composer draft is saved before the move and put back after it. Kill switch
+# CC_RECYCLE_DEAD_SOURCE_STOP=off: every answer as before.
+rcy_source_dead() { # → rc 0 and "<acct>.<scope> <resets_at>" when the session's SOURCE account is rejected
+  local a
+  command -v hf_source_dead_for_tx >/dev/null 2>&1 || return 1
+  if [ -n "${RCY_SRC_TX:-}" ]; then hf_source_dead_for_tx "$RCY_SRC_TX"; return $?; fi
+  a="$(jq -r '.account // empty' "$REG_DIR/${RSID:-}.json" 2>/dev/null || true)"
+  [ -n "$a" ] || return 1
+  hf_source_dead_for_tx "$HOME/.${a#.}/projects/-"
+}
+rcy_jobs_snapshot() { # → the ps rows hf_bg_work_kind reads (HF_PS_SNAPSHOT is the same seam)
+  if [ -n "${HF_PS_SNAPSHOT:-}" ]; then cat "$HF_PS_SNAPSHOT" 2>/dev/null || true
+  else TZ=UTC LC_ALL=C ps -axww -o pid=,ppid=,lstart=,args= 2>/dev/null || true; fi
+}
+# A team member is the lead's to move (commands/limit-recover.md § Mode: upgrade): its argv says so.
+rcy_subject_is_member() { # $1=claude pid → rc 0 when its argv carries a team member's flags
+  case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac
+  rcy_jobs_snapshot | HF_BG_P="$1" awk '$1 == ENVIRON["HF_BG_P"] && (/ --parent-session-id / || / --agent-id /) { f = 1 } END { exit !f }'
+}
+# One JSON line per Bash-tool shell under the claude pid: its command (the text the harness wrapped
+# in eval '…'), the directory it runs in, and whether it is the mailbox watcher. rc 1 when the
+# classifier named jobs and none could be written, so the caller holds rather than lose them.
+rcy_jobs_capture() { # $1=claude pid $2=the dead-source evidence → RCY_JOBS_FILE, RCY_JOBS_N
+  local pid="${1:-}" dir f snap jp jl ja cmd cwd w n=0
+  RCY_JOBS_FILE="" RCY_JOBS_N=0
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  command -v jq >/dev/null 2>&1 || return 1
+  dir="${LR_STATE_DIR:-$HOME/.reso/limit-recover}/carried-jobs"
+  mkdir -p "$dir" 2>/dev/null || return 1
+  f="$dir/${RCY_OLD_SID:-pane-${RSID:-unknown}}.$(date +%s).jsonl"
+  snap="$(rcy_jobs_snapshot)"
+  : > "$f" || return 1
+  while IFS=$'\t' read -r jp jl ja; do
+    [ -n "$jp" ] || continue
+    cmd="${ja#*eval \'}"; [ "$cmd" != "$ja" ] || cmd="$ja"
+    cmd="${cmd%\' < /dev/null*}"; cmd="${cmd%\' \\< /dev/null*}"
+    cmd="${cmd//\'\"\'\"\'/\'}"
+    # The directory is read off the live process, and only while that pid is still the process the
+    # row named (same start second): a recycled pid's directory would be a wrong instruction.
+    cwd=""
+    if [ "${HF_JOB_CWD:-on}" != off ] \
+       && [ "$(TZ=UTC LC_ALL=C ps -o lstart= -p "$jp" 2>/dev/null | tr -s ' ' | sed -e 's/^ //' -e 's/ $//')" = "$(printf '%s' "$jl" | tr -s ' ')" ]; then
+      cwd="$(lsof -a -p "$jp" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | sed -n '1p' || true)"
+    fi
+    w=false; case "$ja" in *cc-await-ping*) w=true ;; esac
+    jq -nc --arg pid "$jp" --arg lstart "$jl" --arg cmd "$cmd" --arg cwd "${cwd:-}" --argjson watcher "$w" \
+          --arg sid "${RCY_OLD_SID:-}" --arg pane "${RSID:-}" --arg why "${2:-}" \
+          '{sid:$sid, pane:$pane, pid:($pid|tonumber), started_utc:$lstart, cwd:$cwd, watcher:$watcher, command:$cmd, source_rejected:$why}' \
+      >> "$f" 2>/dev/null && n=$((n + 1))
+  done < <(printf '%s\n' "$snap" | HF_BG_P="$pid" awk '
+    $1 ~ /^[0-9]+$/ && $3 ~ /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)$/ && $7 ~ /^[0-9][0-9][0-9][0-9]$/ && $2 == ENVIRON["HF_BG_P"] {
+      a = $0; for (i = 1; i <= 7; i++) sub(/^ *[^ ]+/, "", a); sub(/^ +/, "", a)
+      if ($8 !~ /(^|\/)(zsh|bash)$/ || (index(a, "shell-snapshots") == 0 && a !~ /claude-[0-9a-f]+-cwd/)) next
+      printf "%s\t%s %s %s %s %s\t%s\n", $1, $3, $4, $5, $6, $7, a }')
+  RCY_JOBS_FILE="$f" RCY_JOBS_N="$n"
+  return 0
+}
+# The successor is told once it is up: mail to its own pane, which wakes a session that came back
+# with no prompt (the move lane) and rides the first turn of one that came back with one.
+rcy_jobs_mail() { # → 0 always; a no-op unless this watcher recorded jobs
+  local list
+  [ -n "${RCY_JOBS_FILE:-}" ] && [ -s "$RCY_JOBS_FILE" ] && [ -z "${RCY_JOBS_MAILED:-}" ] || return 0
+  RCY_JOBS_MAILED=1
+  list="$(jq -rs 'to_entries | map("[\(.key + 1)] in \(if .value.cwd == "" then "an unread directory" else .value.cwd end)\(if .value.watcher then " (your inbox watcher)" else "" end): \(.value.command | .[0:400])") | join("  ·  ")' "$RCY_JOBS_FILE" 2>/dev/null || true)"
+  hf_bounded "${CC_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}" --from limit-recover --subject "your background jobs ended with the move" "$RSID" \
+    "JOBS-CARRIED: limit-recover moved this session off an account the server is rejecting (${RCY_JOBS_WHY:-rejected}), and the exit ended its ${RCY_JOBS_N:-} background job(s). Nothing else was lost. Start again whichever of these you still need, and check first whether what a job was waiting for has already happened: ${list:-see the file}. Full record: $RCY_JOBS_FILE" >/dev/null 2>&1 || true
+  emit_recycle_event recycle-jobs-carried 1 "$RSID" "${RCY_JOBS_N:-0} background job(s) named to the successor by mail; record $RCY_JOBS_FILE" || true
   return 0
 }
 
@@ -10831,7 +10940,7 @@ if [ "${1:-}" = "__recycle" ]; then
     emit_recycle_event recycle-bgwork-unlanded "" "$RSID" "answer '$rcy_bg_digit' sent at ${rcy_bg_digit_at}s read back from the composer at ${waited}s; scrub or /exit re-submit FAILED; nothing more sent" || true
     return 1
   }
-  rcy_siw_why="" rcy_siw_kind="" rcy_self_siw=0 rcy_tp_siw=0 rcy_bg_digit="" rcy_bg_digit_at="" rcy_land_tried=0
+  rcy_siw_why="" rcy_siw_kind="" rcy_self_siw=0 rcy_tp_siw=0 rcy_dead_siw=0 rcy_dead_src="" rcy_bg_digit="" rcy_bg_digit_at="" rcy_land_tried=0
   case "$rcy_bgwork_max" in ''|*[!0-9]*) rcy_bgwork_max=2 ;; esac
   # SELFTEST SEAM, same shape and same safety argument as HF_RECYCLE_SHELL_WAIT_S above: it moves
   # only how OFTEN the screen is read. It cannot make the watcher send a key it would not otherwise
@@ -10984,6 +11093,18 @@ if [ "${1:-}" = "__recycle" ]; then
            && [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" = on ] && [ "${CC_RECYCLE_TRANSPLANT_STOP_WATCHER:-on}" != off ]; then
           CC_RECYCLE_BGWORK_ANSWER=stop-if-watcher; rcy_tp_siw=1
         fi
+        # A REJECTED SOURCE TAKES IT ON EVERY LANE, FOR WORK AS WELL AS A WATCHER (operator ruling
+        # 2026-10-13; rcy_source_dead above). It overrides `cancel` too: the reconciler and the
+        # move lane ask for Stay to protect jobs a healthy source will use, and here Stay only
+        # keeps the session where it cannot take a turn. Not for a lead with live members (the
+        # test above), not for a team member, never a ship-land job, and never the keep-work index.
+        rcy_dead_siw=0 rcy_dead_src=""
+        if [ "$rcy_team_rc" = 1 ] && [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" != off ] \
+           && [ "${CC_RECYCLE_DEAD_SOURCE_STOP:-on}" != off ] \
+           && ! rcy_subject_is_member "$(jq -r '.pid // empty' "$REG_DIR/$RSID.json" 2>/dev/null || true)" \
+           && rcy_dead_src="$(rcy_source_dead)"; then
+          CC_RECYCLE_BGWORK_ANSWER=stop-if-watcher; rcy_dead_siw=1
+        fi
         # STOP-IF-WATCHER (design-swap-v3 F15, 2026-10-04). The operator's move lane restarts idle
         # sessions with no model turn, and about a third of them (10 of 26, measured that day) hold a
         # background cc-await-ping: a mailbox waiter, which hf_bg_work_kind already rules is not work
@@ -11013,7 +11134,13 @@ if [ "${1:-}" = "__recycle" ]; then
                    rcy_siw_kind="$(hf_bg_work_kind "$rcy_siw_pid")"
                    case "$rcy_siw_kind" in
                      watcher\ *) ;;
-                     *) rcy_siw_why="its background jobs are not watcher-only (${rcy_siw_kind:-unread})" ;;
+                     *) rcy_siw_why="its background jobs are not watcher-only (${rcy_siw_kind:-unread})"
+                        if [ "$rcy_dead_siw" = 1 ]; then
+                          case "$rcy_siw_kind" in
+                            *" shipland=yes "*) rcy_siw_why="a ship-land job is running ($rcy_siw_kind), which no lane stops" ;;
+                            work\ *|none\ *) rcy_siw_why="" ;;   # `none`: the dialog itself says a task exists
+                          esac
+                        fi ;;
                    esac
                  fi ;;
             esac
@@ -11028,17 +11155,28 @@ if [ "${1:-}" = "__recycle" ]; then
               esac
             fi
           fi
+          # The jobs are recorded while they are still alive, before the key that ends them.
+          if [ -n "$rcy_siw_key" ] && [ "$rcy_dead_siw" = 1 ] && ! rcy_jobs_capture "$rcy_siw_pid" "$rcy_dead_src"; then
+            rcy_siw_key=""; rcy_siw_why="its background jobs could not be recorded for the successor"
+          fi
           if [ -n "$rcy_siw_key" ]; then
             # typed-send-lint:allow — a single menu digit read off the dialog on screen, never a command line; no shell ever sees it
             hf_bounded "$IT2" session send -s "$RSID" "$rcy_siw_key" >/dev/null 2>&1 || true
             rcy_bgwork_sent=$((rcy_bgwork_sent + 1)); rcy_bg_digit="$rcy_siw_key" rcy_bg_digit_at="$waited"
+            if [ "$rcy_dead_siw" = 1 ]; then
+              RCY_JOBS_WHY="$rcy_dead_src"
+              echo "→ bgwork@${waited}s: the /exit raised the background-work dialog; answered '$rcy_siw_key' (Exit and stop tasks) — the source account is rejected ($rcy_dead_src), so Stay would keep the session where it cannot take a turn; ${RCY_JOBS_N:-0} job(s) recorded in ${RCY_JOBS_FILE:-nothing} for the successor ($rcy_siw_kind)"
+              emit_recycle_event recycle-bgwork-stopped-dead-source "" "$RSID" "background-work dialog at ${waited}s answered with the stop-tasks index '$rcy_siw_key'; source rejected ($rcy_dead_src); jobs=$rcy_siw_kind; recorded=${RCY_JOBS_N:-0} in ${RCY_JOBS_FILE:-none}" || true
+              continue
+            fi
             echo "→ bgwork@${waited}s: the /exit raised the background-work dialog; stop-if-watcher answered '$rcy_siw_key' (Exit and stop tasks) — the only background job is the mailbox watcher ($rcy_siw_kind)"
             emit_recycle_event recycle-bgwork-stopped-watcher "" "$RSID" "background-work dialog at ${waited}s answered with the stop-tasks index '$rcy_siw_key'; jobs=$rcy_siw_kind; lane=$(if [ "$rcy_self_siw" = 1 ]; then printf self; elif [ "$rcy_tp_siw" = 1 ]; then printf transplant; else printf explicit; fi)" || true
             continue
           fi
           # The transplant default falls back to TODAY's keys: keep-work where the menu offers it and
           # the subject leads no live team; otherwise Esc below, and the line says Stay, never keep-work.
-          if [ "$rcy_tp_siw" = 1 ] && [ -n "$bgk" ] && [ "$rcy_team_rc" = 1 ]; then
+          # A rejected source never falls back to keep-work: it holds with Stay.
+          if [ "$rcy_tp_siw" = 1 ] && [ "$rcy_dead_siw" != 1 ] && [ -n "$bgk" ] && [ "$rcy_team_rc" = 1 ]; then
             echo "→ bgwork@${waited}s: stop-if-watcher HOLDS ($rcy_siw_why) — answering the keep-work index, as before (transplant default)"
             CC_RECYCLE_BGWORK_ANSWER=on
           else
@@ -11623,6 +11761,7 @@ if [ "${1:-}" = "__recycle" ]; then
           sleep "$rcy_pp_hold"; rcy_pp_t=$((rcy_pp_t + rcy_pp_hold))
           if rcy_pp_up; then
             echo "→ relaunched + ENGAGEMENT CONFIRMED BY PROCESS in $RSID (--resume ${RCY_RESUME_SID:0:8} alive ${rcy_pp_hold}s past boot; no prompt by design)"
+            rcy_jobs_mail || true
             emit_recycle_event recycle-engaged 1 "$RSID" "recycled in place; engagement by process (no-prompt relaunch) within ${rcy_pp_t}s" || true
             _hf_resume_debt discharge --sid "$RCY_DEBT_SID" --why "recycle engaged in pane $RSID"
             hf_rcy_carry_putback
@@ -11671,6 +11810,7 @@ if [ "${1:-}" = "__recycle" ]; then
         arm_goal "$IT2" "$RSID" "$FIRE_GOAL"
         # …and RECORD the success. Strictly after arm_goal so the row's goal_requested sits beside a
         # goal-arm row that already carries the verdict, rather than promising one that never comes.
+        rcy_jobs_mail || true
         emit_recycle_event recycle-engaged 1 "$RSID" "recycled in place; a real assistant turn within ${rcy_t}s" || true
         _hf_resume_debt discharge --sid "$RCY_DEBT_SID" --why "recycle engaged in pane $RSID"
         hf_rcy_carry_putback
@@ -11729,6 +11869,7 @@ if [ "${1:-}" = "__recycle" ]; then
           && rcy_ans_why="$rcy_ans_why (the launcher logged READY-NOT-SEEN: it typed no prompt)"
         echo "→ relaunched + ENGAGEMENT CONFIRMED BY TRANSCRIPT in $RSID — the session is ANSWERING on $RCY_RESUME_CFG (a real assistant turn after the relaunch), but $rcy_ans_why"
         arm_goal "$IT2" "$RSID" "$FIRE_GOAL"
+        rcy_jobs_mail || true
         emit_recycle_event recycle-engaged 1 "$RSID" "recycled in place; ANSWERING on the target within ${rcy_t}s, without the relaunch prompt: $rcy_ans_why" || true
         _hf_resume_debt discharge --sid "$RCY_DEBT_SID" --why "recycle answering in pane $RSID"
         hf_rcy_carry_putback

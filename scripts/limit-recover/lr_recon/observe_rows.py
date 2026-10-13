@@ -31,6 +31,7 @@ _UUID_RE = re.compile(
     r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"
 )
 _HOST_RE = re.compile(r'"pid"\s*:\s*(\d+)')
+_CWD_PROBE_RE = re.compile(r"claude-[0-9a-f]+-cwd")
 
 GlobFn = Callable[[str], List[str]]
 
@@ -265,7 +266,11 @@ def bg_work_for(
     for c in sorted(cps):
         for j in sorted(kids.get(c, [])):
             r = procs[j]
-            if argv0(r.args) not in ("zsh", "bash") or "shell-snapshots" not in r.args:
+            # the second shape (no snapshot file) ends in the same cwd probe: handoff-fire.sh
+            # hf_bg_work_kind, 2026-10-13 pane 12
+            if argv0(r.args) not in ("zsh", "bash") or not (
+                "shell-snapshots" in r.args or _CWD_PROBE_RE.search(r.args)
+            ):
                 continue
             desc = descendants(j, kids)
             watcher = "cc-await-ping" in r.args and all(

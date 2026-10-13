@@ -194,9 +194,9 @@ class CensusBuckets(unittest.TestCase):
         # it holds before the in-place stay too: the wake types into the same composer
         stay = _fact(resets=NOW + 600)
         self.assertEqual(self.b(s, facts=stay).name, "HOLD-DRAFT")
-        # background work is the earlier hold
+        # background work is the earlier hold, while no fact says the account is rejected
         s.bg_work = [T.BgWork(kind="shell", pid=3)]
-        self.assertEqual(self.b(s).name, "HOLD-BGWORK")
+        self.assertEqual(self.b(s, facts={}).name, "HOLD-BGWORK")
 
     def test_a_limited_session_with_no_affirmative_draft_moves_as_before(self):
         for composer in ("empty", "", "unknown"):

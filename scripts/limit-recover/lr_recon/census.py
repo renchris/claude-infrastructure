@@ -220,8 +220,11 @@ def bucket(
             return _mk(
                 s, "HOLD-FOCUS", "focused pane (LR_MOVE_FOCUSED=off)", kind, bind
             )
-        if work:
-            ship = any(b.ship_land for b in s.bg_work)
+        ship = any(b.ship_land for b in s.bg_work)
+        # A launcher-rooted pane keeps the hold on a rejected source too: its move is R, which
+        # retires the pane beside a new one, and nothing on that path records the jobs first.
+        launcher = pane is not None and pane.root_shape == "launcher"
+        if work and (ship or launcher or not source_rejected(fact)):
             return _mk(
                 s,
                 "HOLD-BGWORK",
@@ -242,7 +245,27 @@ def bucket(
         if pane is not None and pane.root_shape == "launcher":
             return _mk(s, "LAUNCHER-ROOTED", "launcher-rooted pane ⇒ R", kind, bind)
         return _mk(s, "LIMITED", "last assistant record is the limit", kind, bind)
-    return _idle(s, fact, focused, bool(s.bg_work), now, env)
+    any_bg = bool(s.bg_work) and (
+        any(b.ship_land for b in s.bg_work) or not source_rejected(fact)
+    )
+    return _idle(s, fact, focused, any_bg, now, env)
+
+
+def source_rejected(fact: Optional[T.Fact]) -> bool:
+    """The account's own API said rejected for its 5h or 7d window, and no healthy turn has
+    contradicted it. A session there cannot take a turn until the reset, so a background job is
+    not a reason to keep it there: nothing the job produces can be used, and a job that never ends
+    held its session for good (operator ruling 2026-10-13, superseding decision 2 for this case
+    only). The jobs end with the exit, and the recycle watcher records each one and names them to
+    the successor (handoff-fire.sh rcy_jobs_capture). A ship-land job still holds: a land killed
+    between rebase and push costs more than the wait, and it ends by itself. ``F.blocking`` has
+    already dropped a fact whose reset has passed."""
+    return (
+        fact is not None
+        and fact.scope in FANOUT_SCOPES
+        and fact.status == "rejected"
+        and not fact.contradicted
+    )
 
 
 def _idle(
