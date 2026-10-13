@@ -518,6 +518,26 @@ ceiling() { "$REPO/bin/cc-research" ceiling --program demo --json | /usr/bin/pyt
   [ "$(rowstat 8)" = "FAIL" ]
 }
 
+# holes.jsonl is append-only and records vendor text verbatim (truememory-2-0 H-3-008, 2026-10-13: a blind
+# verifier's suggested probe ran on a scratch copy under /tmp). Only the fields the lead writes are scanned.
+@test "row 8: /tmp inside a verifier's probe, a rater's note or a blind reviewer's claim in holes.jsonl passes" {
+  [ "$(rowstat 8)" = "PASS" ]
+  printf '%s\n' \
+    '{"id":"H-1","event":"verify","round":1,"verification":{"status":"CONFIRMED","probe":"cp -R a /tmp/f1probe/c1","consequence":"ran under /tmp/x/","read":{"path":"PLAN.md","quote":"see /tmp/y/"},"by":"courier verifier"}}' \
+    '{"id":"H-1","event":"rate","round":1,"materiality":{"level":"MATERIAL","note":"repro in /tmp/z/"}}' \
+    '{"id":"H-1","event":"raise","round":1,"claim":"writes to /tmp/q/","title":"/tmp/t/","locus":{"path":"PLAN.md","quote":"/tmp/l/"},"raised_by":{"blind":true,"panel":"r1p1"}}' \
+    >> "$REC/holes.jsonl"
+  [ "$(rowstat 8)" = "PASS" ]
+}
+
+@test "row 8: /tmp in a lead-written holes.jsonl field (evidence, a split-off claim) still fails" {
+  printf '%s\n' '{"id":"H-1","event":"verify","verification":{"status":"CONFIRMED","against":"real","by":"lead","evidence":["/tmp/proof.txt"]}}' >> "$REC/holes.jsonl"
+  [[ "$(rowtext 8)" == *"holes.jsonl: cites a path under /tmp"* ]] || false
+  rsync -a --delete "$BATS_FILE_TMPDIR/golden/" "$W/"
+  printf '%s\n' '{"id":"H-1","event":"raise","round":1,"claim":"writes to /tmp/q/","split_from":"H-0"}' >> "$REC/holes.jsonl"
+  [[ "$(rowtext 8)" == *"holes.jsonl: cites a path under /tmp"* ]]
+}
+
 @test "row 8: a research heading with no trace fails" {
   printf '\n## Untraced claim\n' >> "$REC/research.md"
   [[ "$(rowtext 8)" == *"untraced-claim"* ]]

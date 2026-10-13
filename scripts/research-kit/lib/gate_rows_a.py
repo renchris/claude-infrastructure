@@ -10,6 +10,7 @@ never read from what an agent typed.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -506,6 +507,38 @@ def text_files(root: Path) -> List[Path]:
     return out
 
 
+# holes.jsonl is append-only and records what vendor reviewers, verifiers and raters wrote verbatim, so
+# a scratch path a verifier SUGGESTED (truememory-2-0 H-3-008: a probe run on a copy under /tmp) could
+# never be cleaned out. These fields are vendor text, not paths the program cites; the /tmp scan skips
+# them and still reads every lead-written field (evidence lists, a split-off hole's claim, reasons).
+HOLE_VENDOR_TEXT = {
+    "verification": ("probe", "consequence", "read"),  # the courier verifier's verdict
+    "materiality": ("note",),  # a rater's note
+}
+# a blind panel reviewer's raise (raised_by.blind): its claim, title and locus.quote
+HOLE_BLIND_RAISE_TEXT = ("claim", "title")
+
+
+def hole_lead_text(line: str) -> str:
+    """One holes.jsonl line less its vendor-authored text (an unparseable line is scanned whole)."""
+    try:
+        d = json.loads(line)
+    except ValueError:
+        return line
+    if not isinstance(d, dict):
+        return line
+    for k, fields in HOLE_VENDOR_TEXT.items():
+        if isinstance(d.get(k), dict):
+            d[k] = {f: v for f, v in d[k].items() if f not in fields}
+    rb = d.get("raised_by")
+    if d.get("event") == "raise" and isinstance(rb, dict) and rb.get("blind") is True:
+        for f in HOLE_BLIND_RAISE_TEXT:
+            d.pop(f, None)
+        if isinstance(d.get("locus"), dict):
+            d["locus"] = {f: v for f, v in d["locus"].items() if f != "quote"}
+    return json.dumps(d)
+
+
 @row(8, "Trace and persistence")
 def row8(ctx: Ctx) -> Row:
     fails: List[str] = []
@@ -531,7 +564,10 @@ def row8(ctx: Ctx) -> Row:
                     f"{md.name}#{heading_slug(m.group(1))}: research heading never traced"
                 )
     for f in text_files(ctx.records):
-        if re.search(r"(?<![\w.])/(private/)?tmp/", f.read_text(errors="replace")):
+        text = f.read_text(errors="replace")
+        if f == ctx.path("holes.jsonl"):
+            text = "\n".join(hole_lead_text(ln) for ln in text.splitlines())
+        if re.search(r"(?<![\w.])/(private/)?tmp/", text):
             fails.append(
                 f"{f.relative_to(ctx.records)}: cites a path under /tmp (wiped on reboot)"
             )

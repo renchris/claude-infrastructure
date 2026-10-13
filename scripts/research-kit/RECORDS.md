@@ -163,7 +163,9 @@ failed, 2 usage or refusal, 3 a dead vendor lane, 4 a voided slot. Python is 3.9
 
 Before any plan edit, a closed certification round's holes can be settled honestly, seed-blind for the lead. Every
 verb runs under the program lease, appends events to `holes.jsonl` (the fold keeps the newest), and refuses with
-exit 2. `--evidence` files must sit inside the records dir (gate row 8 fails a record citing `/tmp`). `by` is
+exit 2. `--evidence` files must sit inside the records dir (gate row 8 fails a record citing `/tmp`). Row 8's `/tmp` scan of
+`holes.jsonl` skips text vendors wrote verbatim (`gate_rows_a.HOLE_VENDOR_TEXT`: `verification.probe|consequence|read`,
+`materiality.note`, and a blind raise's `claim`, `title` and `locus.quote`; added 2026-10-13) and scans every lead field. `by` is
 `kit.lease_owner()`.
 
 - **Artifact** — `round.sh artifact --program P --hole H --reason T --evidence F…` appends `{id, event:
