@@ -1460,6 +1460,22 @@ cc-resume-layout: verdict=ok launched=1 shed=0 failed=0 windows=1 fullscreen_ok=
   ! grep -q 'login bug' "$CC_NOTIFY_BIN.log" || false          # the page never carries the text
 }
 
+@test "v2 event: a heartbeat tree the reboot prep marked degraded gives its sessions no window group" {
+  export CC_BOOTUUID_OVERRIDE=UUID-1
+  KP="$(dead_pid)"; HD="$CC_HEARTBEAT_DIR/UUID-1/$KP"
+  hbeat UUID-1 "$KP" 1784804900 '[{"session_id":"e1","account":"claude-next","cwd":"/x/e1","name":"EV-ONE","pid":1,"startedAt":1,"paneUUID":"11"}]'
+  echo '[{"id":6,"tabs":[{"windows":[{"id":11}]}]}]' > "$HD/hb.kitty-ls.json"
+  stub_layout "$SUM_OK1"
+  run /bin/bash "$SCRIPT" --event 1784805000 --kind crash
+  [ "$status" -eq 0 ]
+  [ "$(row_of "$CC_RESUME_LAYOUT_BIN.rows" e1 | cut -f8,9)" = "k${KP}w6	1" ]     # the recorded OS window, slot 1
+  rm -rf "$CC_BOOT_RESUME_STATE_DIR" "$CC_RESUME_LAYOUT_BIN".*; stub_layout "$SUM_OK1"
+  echo 'kitty did not answer the tree read' > "$HD/hb.layout-degraded"
+  run /bin/bash "$SCRIPT" --event 1784805000 --kind crash
+  [ "$status" -eq 0 ]
+  [ "$(row_of "$CC_RESUME_LAYOUT_BIN.rows" e1 | cut -f8,9)" = "$(printf '\037\t\037')" ]
+}
+
 @test "v2 reboot: a box that is not empty gets no keystroke and the draft stays on disk; without restore-v2 none is typed" {
   roster alarm 1784799900 "[$(rrow a1 claude-next /x/a ALARM-ONE)]"
   saved_draft alarm a1 'fix the login bug'
