@@ -1045,6 +1045,37 @@ EOF
   if lr_husk_state "$sid" "$src"; then echo "husk $spane $spid"; else echo "in-flight $spane $spid"; fi
 }
 
+# ── IS THE SOURCE ACCOUNT DEAD — THE ACCOUNT FACT LEDGER, READ ONCE (2026-10-13) ────────────────
+# Some holds exist to protect a turn the source could still take: a live /goal that would drive the
+# session on mid-move, a harness notification that may be starting a turn. When the account's own
+# API has answered `rejected` for its 5h or 7d window, no turn can run there, so those holds guard
+# nothing and only keep the session on the account that cannot serve it (rotation of next3,
+# 2026-10-13: panes 297 and 113 sat held for hours on a weekly-rejected account).
+# The evidence is the reconciler's ledger (lr_recon/facts.py, recon/facts/<acct>.<scope>.json), under
+# its own rules: status rejected, not contradicted (a healthy turn after it means the account
+# serves), and not past its reset. A fact with no resets_at (a wire read) counts only while it is
+# younger than its window. `auth` is not read here: a logged-out account is account-relogin's.
+# FAIL CLOSED: no jq, no file, an unparseable file or a bad name is "not dead", so every hold stays.
+# Kill switch LR_DEAD_SOURCE_RELEASE=off: never dead, every hold as before.
+lr_source_dead() { # $1=account NAME → rc 0 and "<acct>.<scope> <resets_at|->" when it cannot take a turn
+  local a="${1:-}" d s f out
+  [ "${LR_DEAD_SOURCE_RELEASE:-on}" != off ] || return 1
+  case "$a" in ''|*[!A-Za-z0-9_-]*) return 1 ;; esac
+  command -v jq >/dev/null 2>&1 || return 1
+  d="${LR_RECON_ROOT:-${LR_STATE_DIR:-$HOME/.reso/limit-recover}/recon}/facts"
+  for s in 7d 5h; do
+    f="$d/$a.$s.json"
+    [ -f "$f" ] || continue
+    out="$(jq -r --argjson now "$(date +%s)" --argjson win "$([ "$s" = 7d ] && echo 604800 || echo 18000)" '
+      select(type == "object" and .status == "rejected" and .contradicted != true)
+      | if (.resets_at | type) == "number" then (if .resets_at > $now then (.resets_at | floor | tostring) else empty end)
+        elif (.observed_at | type) == "number" and ($now - .observed_at) < $win then "-"
+        else empty end' "$f" 2>/dev/null)"
+    [ -n "$out" ] && { printf '%s.%s %s\n' "$a" "$s" "$out"; return 0; }
+  done
+  return 1
+}
+
 # ── A CHECKOUT FLIPPED TO core.bare=true: HEALED BY THE DRIVER, NEVER BY A HUMAN (D1, 2026-09-28) ─
 # `git worktree add|remove` against a shared checkout can leave core.bare=true on it while every
 # working file stays on disk (memory: worktree-ops-can-bare-the-shared-checkout). Every work-tree git

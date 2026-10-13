@@ -39,7 +39,8 @@
 #   lock-mismatch        no lock, a lock naming another store or record id, or the wrong state for
 #                        this phase (detail says which)
 #   target-held          a live process holds the session, or the target moved on since the confirm
-#   stub-present         unconfirm would restore <sid>.jsonl over a stub that already exists
+#   stub-present         unconfirm found a stub <sid>.jsonl and NO live source to fold it for (a live
+#                        source's stub is folded into the restore; see --phase unconfirm)
 #   source-dead          unconfirm restores only for a LIVE source; nobody would write to it
 #
 # Output: one JSON object on stdout.
@@ -589,8 +590,18 @@ if [[ "$PHASE" == unconfirm ]]; then
     lrt_refuse lock-mismatch not-retired "no $SID.jsonl.handed-off under $FROM/projects — nothing to unconfirm (an unconfirmed move is given up with --phase abort)"
   fi
   UC_SRC="${UC_RETIRED%.handed-off}"
-  [[ ! -e "$UC_SRC" ]] || lrt_refuse stub-present stub-present "$UC_SRC already exists beside its .handed-off copy"
-  lrt_held "$FROM" || lrt_refuse source-dead source-dead "no live process holds $SID under $FROM"
+  # A STUB BESIDE THE RETIRED COPY, AND THE SOURCE IS ALIVE: THE CANCELLED EXIT (2026-10-13, pane 12).
+  # `/exit` writes its own three local-command records the moment it is typed, before the
+  # background-work dialog it may raise. So a watcher that answers Stay and unconfirms ALWAYS finds
+  # a stub: this phase refused stub-present, fold-stub refuses while the source lives, and the
+  # session sat half-moved with no undo (c56c729c, move batch 20261013T014855Z). For a live source
+  # the stub is the tail of its own transcript, so the restore folds it in (below). With no live
+  # source the refusal stands: nobody would write to the restored path, and fold-stub owns that state.
+  UC_LIVE=0; ! lrt_held "$FROM" || UC_LIVE=1
+  if [[ -e "$UC_SRC" && $UC_LIVE -eq 0 ]]; then
+    lrt_refuse stub-present stub-present "$UC_SRC already exists beside its .handed-off copy"
+  fi
+  [[ $UC_LIVE -eq 1 ]] || lrt_refuse source-dead source-dead "no live process holds $SID under $FROM"
   # pid 0 is the reconciler's "never recorded": the holder check above is then the whole test.
   if [[ -n "$SOURCE_PID" && "$SOURCE_PID" -gt 0 ]]; then
     lrt_live "$SOURCE_PID" "$SOURCE_LSTART" \
@@ -598,12 +609,47 @@ if [[ "$PHASE" == unconfirm ]]; then
   fi
   ! lrt_held "$TO" || lrt_refuse target-held target-held "a live process holds $SID under $TO"
   lrt_assert_lock
-  lrt_link_rename "$UC_RETIRED" "$UC_SRC" || lrt_refuse stub-present stub-present "$UC_SRC appeared before the restore"
+  # THE FOLDING RESTORE. The source appends by PATH (its write after the retire made a new file, which
+  # is what a stub is), so each pass takes the stub off the path with a rename, appends it to the
+  # retired copy, and links the retired copy back onto the path. The link never overwrites: a stub
+  # the source wrote in between fails it and the next pass folds that one too. Bytes that reached a
+  # set-aside stub after it was read (a write in flight across the rename) are appended to the
+  # restored transcript before the stub is unlinked, so the restored file holds every byte written.
+  UC_FOLDED=0
+  UC_ASIDES=()
+  UC_SIZES=()
+  UC_TRY=0
+  while :; do
+    if [[ -e "$UC_SRC" ]]; then
+      UC_ASIDE="$UC_SRC.unconfirm-stub-$(date -u +%Y%m%dT%H%M%SZ).$$.$UC_TRY"
+      lrt_link_rename "$UC_SRC" "$UC_ASIDE" || lrt_refuse stub-present stub-present "could not set the stub $UC_SRC aside; nothing was restored"
+      UC_N="$(lrt_size "$UC_ASIDE")"
+      head -c "$UC_N" "$UC_ASIDE" >> "$UC_RETIRED"
+      UC_ASIDES+=("$UC_ASIDE"); UC_SIZES+=("$UC_N"); UC_FOLDED=$((UC_FOLDED + UC_N))
+    fi
+    lrt_link_rename "$UC_RETIRED" "$UC_SRC" && break
+    UC_TRY=$((UC_TRY + 1))
+    [[ $UC_TRY -lt ${LRT_UNCONFIRM_FOLD_TRIES:-5} ]] \
+      || lrt_refuse stub-present stub-present "$UC_SRC kept reappearing across $UC_TRY folds; the retired copy holds every stub folded so far"
+  done
+  # Counted, not `"${!UC_ASIDES[@]}"`: bash 3.2 under `set -u` calls an empty array unbound.
+  _i=0
+  while [[ $_i -lt ${#UC_ASIDES[@]} ]]; do
+    UC_NOW="$(lrt_size "${UC_ASIDES[$_i]}")"
+    if [[ "$UC_NOW" -gt "${UC_SIZES[$_i]}" ]]; then
+      tail -c "+$(( UC_SIZES[_i] + 1 ))" "${UC_ASIDES[$_i]}" >> "$UC_SRC"
+      UC_FOLDED=$((UC_FOLDED + UC_NOW - UC_SIZES[_i]))
+    fi
+    unlink "${UC_ASIDES[$_i]}"
+    _i=$((_i + 1))
+  done
   UC_DIR="$(dirname "$UC_SRC")"
   lrt_file_evidence unconfirmed "$(basename "$UC_DIR")" "$UC_DIR/$SID.HANDOFF.json"
   lrt_unreturn   # the move did not happen: the target's own leftovers from the hop it reversed go back
   rm -f "$LOCK"
-  printf '{"ok":true,"phase":"unconfirm","sid":"%s","restored":"%s","evidence":"%s"%s}\n' "$SID" "$UC_SRC" "$EVIDENCE" "$(lrt_restored_json)"
+  UC_FOLD_JSON=""
+  [[ $UC_FOLDED -eq 0 ]] || UC_FOLD_JSON=",\"folded_stub_bytes\":$UC_FOLDED"
+  printf '{"ok":true,"phase":"unconfirm","sid":"%s","restored":"%s","evidence":"%s"%s%s}\n' "$SID" "$UC_SRC" "$EVIDENCE" "$(lrt_restored_json)" "$UC_FOLD_JSON"
   exit 0
 fi
 

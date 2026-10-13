@@ -1,0 +1,8 @@
+{"type":"assistant","isSidechain":false,"timestamp":"2026-10-13T01:45:10.947Z","version":"2.1.293","message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"thinking"}]}}
+{"type":"assistant","isSidechain":false,"timestamp":"2026-10-13T01:45:10.949Z","version":"2.1.293","message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"text"}]}}
+{"type":"assistant","isSidechain":false,"timestamp":"2026-10-13T01:45:11.959Z","version":"2.1.293","message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"tool_use"}]}}
+{"type":"user","isSidechain":false,"timestamp":"2026-10-13T01:45:41.179Z","version":"2.1.293","message":{"role":"user","content":[{"type":"tool_result"}]}}
+{"type":"assistant","isSidechain":false,"timestamp":"2026-10-13T01:45:41.724Z","version":"2.1.293","isApiErrorMessage":true,"error":"rate_limit","apiErrorStatus":429,"message":{"role":"assistant","stop_reason":"stop_sequence","content":[{"type":"text","text":"You've hit your weekly limit · resets 7am (America/Chicago)"}]}}
+{"type":"user","isSidechain":false,"timestamp":"2026-10-13T01:45:49.450Z","version":"2.1.293","message":{"role":"user","content":"[operator prompt elided]"}}
+{"type":"assistant","isSidechain":false,"timestamp":"2026-10-13T01:45:50.749Z","version":"2.1.293","isApiErrorMessage":true,"error":"rate_limit","apiErrorStatus":429,"message":{"role":"assistant","stop_reason":"stop_sequence","content":[{"type":"text","text":"You've hit your weekly limit · resets 7am (America/Chicago)"}]}}
+{"type":"user","isSidechain":false,"timestamp":"2026-10-13T01:46:24.554Z","version":"2.1.293","message":{"role":"user","content":"<task-notification>\n<task-id>elided</task-id>\n<status>completed</status>\n</task-notification>"}}

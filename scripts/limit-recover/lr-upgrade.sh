@@ -258,8 +258,11 @@ lru_at_rest() { # $1=transcript → 0 at rest · 1 in flight · 2 unreadable
   [ -n "$tx" ] && [ -f "$tx" ] && command -v jq >/dev/null 2>&1 || return 2
   # A trailing caveat-led local-command triple (/exit, /model …) is not a turn: see hf_transcript_at_rest.
   last="$(tail -n 400 "$tx" 2>/dev/null \
-    | jq -rc --argjson win "${LRU_STALE_NOTIF_S:-600}" 'select((.type=="assistant" or .type=="user") and ((.isSidechain // false)|not))
-              | "\(.type) \(if .type == "assistant" and (.isApiErrorMessage // false) then "api-error" else (.message.stop_reason // "-") end)\(
+    | jq -rc --argjson win "${LRU_STALE_NOTIF_S:-600}" 'select((.type=="assistant" or .type=="user"
+                  or (.type=="system" and .subtype=="informational" and ((.content | type) == "string")
+                      and (.content | startswith("A hook blocked the turn from ending")) and (.content | contains("overriding and ending turn"))))
+                and ((.isSidechain // false)|not))
+              | if .type == "system" then "system block-cap" else "\(.type) \(if .type == "assistant" and (.isApiErrorMessage // false) then "api-error" else (.message.stop_reason // "-") end)\(
                   if .type == "user" and ((.message.content | type) == "string")
                      and (.message.content | startswith("<task-notification>"))
                      and ((now - ((.timestamp // "") | sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch now))) > $win)
@@ -268,7 +271,7 @@ lru_at_rest() { # $1=transcript → 0 at rest · 1 in flight · 2 unreadable
                     | if startswith("<local-command-caveat>") then " local-caveat"
                       elif startswith("<command-name>") or startswith("<command-message>") then " local-cmd"
                       elif startswith("<local-command-stdout>") then " local-out"
-                      else "" end) else "" end)"' 2>/dev/null \
+                      else "" end) else "" end)" end' 2>/dev/null \
     | awk '{ l[NR] = $0 } END { i = NR
              while (i >= 3 && l[i] == "user - local-out" && l[i-1] == "user - local-cmd" && l[i-2] == "user - local-caveat") i -= 3
              print ((i >= 1 && i < NR) ? l[i] : l[NR]) }')"
@@ -276,6 +279,14 @@ lru_at_rest() { # $1=transcript → 0 at rest · 1 in flight · 2 unreadable
   [ "$last" = "assistant end_turn" ] && return 0
   # An API-error record (stop_reason "stop_sequence") ends the turn: see hf_transcript_at_rest.
   [ "$last" = "assistant api-error" ] && return 0
+  # THE HARNESS ENDED THE TURN AT ITS STOP-HOOK BLOCK CAP (2026-10-13, pane 297). A blocking Stop
+  # hook (a live /goal) appends an isMeta "Stop hook feedback:" user record after each end_turn; at
+  # CLAUDE_CODE_STOP_HOOK_BLOCK_CAP blocks the harness writes the system record "A hook blocked the
+  # turn from ending N consecutive times — overriding and ending turn" and stops. The last
+  # assistant/user record is then that feedback, which read as a turn in flight for 3+ hours. The
+  # override record is the harness's own word that the turn ended; any prompt after it is a later
+  # record and reads in flight as before. Same rule in hf_transcript_at_rest — keep the two in step.
+  [ "$last" = "system block-cap" ] && return 0
   # A <task-notification> the harness appended with no turn after it, older than the window, is not a
   # turn in flight: a real turn writes its first assistant record within seconds. Measured 2026-09-23
   # on pane 480 — resumed onto 2.1.280 at 00:18Z with a lost background task, the harness appended

@@ -2694,8 +2694,11 @@ hf_transcript_at_rest() { # $1=transcript → 0 at rest · 1 in flight · 2 unre
   # isMeta prompt) DO start a turn and are never skipped. A file holding only the triple proves
   # nothing and stays rc 1. lr-upgrade.sh's lru_at_rest has the same rule; keep the two in step.
   last="$(tail -n "${HF_REST_TAIL_LINES:-400}" "$tx" 2>/dev/null \
-    | jq -rc --argjson win "${HF_STALE_NOTIF_S:-600}" 'select((.type=="assistant" or .type=="user") and ((.isSidechain // false)|not))
-              | "\(.type) \(if .type == "assistant" and (.isApiErrorMessage // false) then "api-error" else (.message.stop_reason // "-") end)\(
+    | jq -rc --argjson win "${HF_STALE_NOTIF_S:-600}" 'select((.type=="assistant" or .type=="user"
+                  or (.type=="system" and .subtype=="informational" and ((.content | type) == "string")
+                      and (.content | startswith("A hook blocked the turn from ending")) and (.content | contains("overriding and ending turn"))))
+                and ((.isSidechain // false)|not))
+              | if .type == "system" then "system block-cap" else "\(.type) \(if .type == "assistant" and (.isApiErrorMessage // false) then "api-error" else (.message.stop_reason // "-") end)\(
                   if .type == "user" and ((.message.content | type) == "string")
                      and (.message.content | startswith("<task-notification>"))
                      and ((now - ((.timestamp // "") | sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch now))) > $win)
@@ -2704,7 +2707,7 @@ hf_transcript_at_rest() { # $1=transcript → 0 at rest · 1 in flight · 2 unre
                     | if startswith("<local-command-caveat>") then " local-caveat"
                       elif startswith("<command-name>") or startswith("<command-message>") then " local-cmd"
                       elif startswith("<local-command-stdout>") then " local-out"
-                      else "" end) else "" end)"' 2>/dev/null \
+                      else "" end) else "" end)" end' 2>/dev/null \
     | awk '{ l[NR] = $0 } END { i = NR
              while (i >= 3 && l[i] == "user - local-out" && l[i-1] == "user - local-cmd" && l[i-2] == "user - local-caveat") i -= 3
              print ((i >= 1 && i < NR) ? l[i] : l[NR]) }')"
@@ -2714,6 +2717,14 @@ hf_transcript_at_rest() { # $1=transcript → 0 at rest · 1 in flight · 2 unre
   # to the composer, with stop_reason "stop_sequence" (fixtures 2.1.260/2.1.284). An auth cliff is at
   # rest exactly as a limit is; without this every voluntary auth hop was HELD:mid-turn (W5 rig).
   [ "$last" = "assistant api-error" ] && return 0
+  # THE HARNESS ENDED THE TURN AT ITS STOP-HOOK BLOCK CAP (2026-10-13, pane 297, 2.1.293). After
+  # CLAUDE_CODE_STOP_HOOK_BLOCK_CAP consecutive Stop-hook blocks the harness writes the system record
+  # "A hook blocked the turn from ending N consecutive times — overriding and ending turn" and
+  # stops, leaving the hook's isMeta "Stop hook feedback:" user record as the last assistant/user
+  # record: a goal-paused session idle for 3+ hours read as a turn in flight. The override record is
+  # the harness's own word that the turn ended; a prompt after it is a later record and reads in
+  # flight as before. lr-upgrade.sh's lru_at_rest has the same rule — keep the two in step.
+  [ "$last" = "system block-cap" ] && return 0
   # A <task-notification> the harness appended with no turn after it, older than the window, is not a
   # turn in flight: a real turn writes its first assistant record within seconds. Measured 2026-09-23
   # on pane 480 — resumed onto 2.1.280 at 00:18Z with a lost background task, the harness appended
@@ -2841,11 +2852,62 @@ hf_bg_work_kind() { # $1=pid → "<none|watcher|work|unknown> shipland=<yes|no> 
 # in flight, so it is the mutual exclusion between a driver and a human /limit-recover: a session
 # mid-turn is HELD:busy here, and one whose human turn finished is refused as not-limited upstream.
 # It runs BEFORE the pid test, so a pane with no registry pid is still held while its turn runs.
-hf_bg_work_gate() { # $1=registry pid $2=1 when limited $3=transcript → rc 0 proceed · 3 hold (verdict in HF_BG_HOLD)
-  local pid="${1:-}" limited="${2:-0}" tx="${3:-}" rest=0 kind
+#
+# A NOTIFICATION AFTER THE LIMIT, ON A REJECTED ACCOUNT, IS NOT THAT PROMPT (2026-10-13, pane 113).
+# A finished background task or Workflow agent appends a <task-notification> user record. It is
+# "in flight" for HF_STALE_NOTIF_S, and on a limited session each one restarted the wait: 14233392
+# died on its weekly limit at 01:45:50Z, a Workflow agent (itself dying on the limit) notified at
+# 01:46:24Z, and the recovery fired at 01:47:51Z was HELD:busy. The hold protects a turn the session
+# could still take. It protects nothing when BOTH hold: every assistant/user record after the last
+# limit error is a harness notification (nobody typed), and the account fact ledger says the account
+# is rejected and not past its reset (lr-lib.sh lr_source_dead), so a turn the notification starts
+# can only end in the same limit error. A typed prompt after the limit holds as before, and so does
+# a notification on an account the ledger does not call rejected: its turn may be running.
+# FAIL CLOSED: an unreadable transcript, an unnamed account or an unreachable lr-lib all hold.
+hf_tx_account() { # $1=a transcript under <cfg>/projects/ → the account NAME of <cfg>; rc 1 when the map cannot name it
+  local cfg="${1%/projects/*}" b n="" m
+  [ -n "${1:-}" ] && [ "$cfg" != "$1" ] || return 1
+  b="${cfg##*/}"
+  if ! command -v cc_acct_name_for_dir_basename >/dev/null 2>&1; then
+    for m in "${CC_ACCOUNT_MAP:-}" "$(dirname "$0")/../lib/account-map.generated.sh" "$HOME/.claude/lib/account-map.generated.sh"; do
+      # shellcheck source=/dev/null
+      [ -n "$m" ] && [ -f "$m" ] && { source "$m"; break; }
+    done
+  fi
+  command -v cc_acct_name_for_dir_basename >/dev/null 2>&1 || return 1
+  n="$(cc_acct_name_for_dir_basename "$b" 2>/dev/null || true)"
+  [ -n "$n" ] || n="$(cc_acct_name_for_dir_basename "${b#.}" 2>/dev/null || true)"
+  [ -n "$n" ] || return 1
+  printf '%s' "$n"
+}
+hf_dead_source_notification() { # $1=transcript to read $2=its path in the store (names the account) → rc 0 and "<acct>.<scope> <resets_at>"
+  local tx="${1:-}" acct lib tail
+  [ -n "$tx" ] && [ -f "$tx" ] && command -v jq >/dev/null 2>&1 || return 1
+  tail="$(tail -n "${HF_REST_TAIL_LINES:-400}" "$tx" 2>/dev/null \
+    | jq -rc 'select((.type=="assistant" or .type=="user") and ((.isSidechain // false)|not))
+              | if .type == "assistant" then (if (.isApiErrorMessage // false) and ((.error // "") == "rate_limit" or (.apiErrorStatus // 0) == 429) then "limit" else "turn" end)
+                elif ((.message.content | type) == "string") and (.message.content | startswith("<task-notification>")) then "notification"
+                else "prompt" end' 2>/dev/null \
+    | awk '{ l[NR] = $0 } END { n = 0; for (i = NR; i >= 1 && l[i] == "notification"; i--) n++
+             print ((n > 0 && i >= 1 && l[i] == "limit") ? "yes" : "no") }')"
+  [ "$tail" = yes ] || return 1
+  acct="$(hf_tx_account "${2:-$tx}")" || return 1
+  if ! command -v lr_source_dead >/dev/null 2>&1 && lib="$(hf_lr_script lr-lib.sh HF_LR_LIB)"; then
+    # shellcheck disable=SC1090  # runtime-resolved library ladder
+    . "$lib" 2>/dev/null || true
+  fi
+  command -v lr_source_dead >/dev/null 2>&1 || return 1
+  lr_source_dead "$acct"
+}
+hf_bg_work_gate() { # $1=registry pid $2=1 when limited $3=transcript [$4=the transcript's own path, when $3 is a joined copy] → rc 0 proceed · 3 hold (verdict in HF_BG_HOLD)
+  local pid="${1:-}" limited="${2:-0}" tx="${3:-}" rest=0 kind dead
   HF_BG_HOLD=""
   if [ "$limited" = 1 ]; then
     hf_transcript_at_rest "$tx" || rest=$?
+    if [ "$rest" = 1 ] && dead="$(hf_dead_source_notification "$tx" "${4:-$tx}")"; then
+      echo "bg_work: limited on a rejected account ($dead) — the records after the limit are harness notifications, which start no turn it can answer"
+      rest=0
+    fi
     if [ "$rest" != 0 ]; then
       if [ "$rest" = 1 ]; then echo "bg_work: unknown (limited, but a turn is in flight after the limit)"
       else echo "bg_work: unknown (limited, but the transcript is unreadable — at rest cannot be shown)"; fi
@@ -3226,10 +3288,11 @@ hf_recycle_unconfirm() { # → sets RCY_UNCONFIRM_RC (the CLI's rc · "n/a" no c
 }
 
 # THE WATCHER'S UNCONFIRM, at a background-work hold. The Esc leaves the source alive in its pane
-# after the confirm retired it, and the Esc is the last safe moment to hand it back: its next write
-# re-creates <sid>.jsonl, after which --phase unconfirm refuses stub-present and --phase fold-stub
-# refuses for as long as the session is held — a split brain with no automatic way out (move batch
-# 20261011T190215Z, pane 124). The watcher was detached BEFORE the confirm, so it reads the confirm's
+# after the confirm retired it, so the watcher hands it back here. The /exit has already written its
+# own three records as a stub <sid>.jsonl by then; --phase unconfirm folds a LIVE source's stub into
+# the restore (2026-10-13 — before that it refused stub-present and --phase fold-stub refused while
+# the session was held: move batches 20261011T190215Z pane 124, 20261013T014855Z pane 12).
+# The watcher was detached BEFORE the confirm, so it reads the confirm's
 # operands from the "$CMDFILE.confirmed" file recycle_fire_commit wrote; absent ⇒ no confirm ran.
 # A reconciler-owned record (recon:*) is left to the reconciler: its record is past PRE-MOVE here,
 # and it advances only on its own UNCONFIRM (settle.note_watcher_hold → phase row 9), so the row
@@ -3331,8 +3394,10 @@ hf_recycle_last_read() { # → 0 every read clean · 1 refused (HF_LR_REASON, HF
     fi
     # STILL LIMITED IS NOT AT REST (D1.2): a prompt typed after the limit is a turn in flight that the
     # limit read cannot see until its reply lands. The joined file stays until the bg-work gate below,
-    # which re-reads it.
+    # which re-reads it. A harness notification on a rejected account is not that prompt: see
+    # hf_dead_source_notification.
     rc=0; hf_transcript_at_rest "${tx_read:-$tx}" || rc=$?
+    if [ "$rc" = 1 ] && hf_dead_source_notification "${tx_read:-$tx}" "$tx" >/dev/null; then rc=0; fi
     if [ "$rc" != 0 ]; then
       [ -n "$joined" ] && rm -f "$joined"
       HF_LR_REASON=busy; HF_LR_WHAT="limited, but not at rest (rc $rc — 1 a prompt after the limit is in flight, 2 unreadable): ${tx:-<none>}"; return 1
@@ -3369,7 +3434,7 @@ hf_recycle_last_read() { # → 0 every read clean · 1 refused (HF_LR_REASON, HF
   # re-proves at-rest for a voluntary move, so it reads the SAME transcript the proof above read —
   # retired + stub when a stub exists. Handed the stub alone it could never prove at-rest and held
   # HELD:mid-turn a session that was at rest (W5b canary 3: 181 husk spawns, every one held).
-  rc=0; hf_bg_work_gate "${HF_REMOTE_ROW_PID:-}" "$limited" "${tx_read:-$tx}" || rc=$?
+  rc=0; hf_bg_work_gate "${HF_REMOTE_ROW_PID:-}" "$limited" "${tx_read:-$tx}" "$tx" || rc=$?
   [ -n "$joined" ] && rm -f "$joined"
   if [ "$rc" != 0 ]; then
     HF_LR_REASON=bg-work; HF_LR_WHAT="${HF_BG_HOLD:-held}"; return 1

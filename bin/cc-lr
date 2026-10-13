@@ -1157,6 +1157,19 @@ cl_move_goal_lib() {
   return 1
 }
 cl_move_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+# A HALF-MOVED LIVE SESSION: confirm retired its transcript to .handed-off, the /exit was cancelled,
+# and the session's next write re-created <sid>.jsonl as a stub. Told apart from a round trip's
+# stale leftovers (repair-markers' case) by the bytes: there the retired copy is a strict prefix of
+# the live transcript; here the live file is only the tail written after the retire.
+cl_half_moved() { # <live transcript> → rc 0 and CL_HALF_TO (the store its tombstone names)
+  local tx="$1" ret="$1.handed-off" n
+  CL_HALF_TO=""
+  [ -n "$tx" ] && [ -f "$tx" ] && [ -f "$ret" ] || return 1
+  n="$(wc -c < "$ret" | tr -d ' ')"
+  if [ "$(wc -c < "$tx" | tr -d ' ')" -gt "$n" ] && head -c "$n" "$tx" | cmp -s - "$ret"; then return 1; fi
+  CL_HALF_TO="$(jq -r '.handed_off_to // empty' "${tx%.jsonl}.HANDOFF.json" 2>/dev/null || true)"
+  [ -n "$CL_HALF_TO" ]
+}
 # THE PLAN ROWS. stdout TSV, one row per session:
 #   pane sid account config_dir cwd pid disposition act action idle_s cache
 # act ∈ move | wait | hold | none (on-target). rc 1 when no live session matched, 2 census failure.
@@ -1194,6 +1207,10 @@ cl_move_rows() { # <from or ""> <to> <until_idle_s> <sel flag or ""> <sel value>
         # tombstone that names where the session went, so naming it here made a refusal loop.
         if cl_husk_pane "$s" "$cfg"; then
           disp=hold:husk action="moved off ${ac:-its account} and nothing runs it there; relaunch it in this pane: cc-lr recover ${s:0:8}"
+        elif cl_half_moved "$tx"; then
+          # A CANCELLED EXIT IS NOT A STALE MARKER EITHER (2026-10-13, c56c729c): repair-markers KEEPs
+          # a retired copy that holds bytes the live transcript lacks, so naming it here was a loop.
+          disp=hold:half-moved action="its exit was cancelled after the source was retired; hand it back: bash ${UPGRADE_BIN%/*}/lr-transplant.sh --phase unconfirm --sid $s --from $cfg --to $CL_HALF_TO"
         else
           disp=hold:retired-source action="a stale handoff marker blocks its prompts; repair first: cc-lr repair-markers --sid $s"
         fi ;;
@@ -1216,8 +1233,13 @@ cl_move_rows() { # <from or ""> <to> <until_idle_s> <sel flag or ""> <sel value>
         disp="hold:api-error-$kind" act=hold action="its last record is an api error ($kind); not an idle, healthy session"
       elif [ -n "$hp" ]; then
         disp=hold:in-flight act=hold action="another actuator holds its claim (pid $hp)"
+      # THE GOAL HOLD GUARDS A TURN THE SOURCE COULD TAKE. On an account the fact ledger calls
+      # rejected (lr_source_dead) no turn runs, so the goal drives nothing and the hold only kept the
+      # session on the account that cannot serve it (pane 297, 2026-10-13). The goal moves with the
+      # transcript and drives the session again on the target.
       elif [ "${CC_LR_MOVE_GOAL_HOLD:-on}" != off ] && [ -n "$tx" ] && command -v goal_live_condition >/dev/null 2>&1 \
-           && goal_live_condition "$tx" >/dev/null 2>&1; then
+           && goal_live_condition "$tx" >/dev/null 2>&1 \
+           && ! { command -v lr_source_dead >/dev/null 2>&1 && lr_source_dead "$ac" >/dev/null 2>&1; }; then
         disp=hold:goal-live act=hold action="a /goal is live; its goal would drive it on mid-move"
       elif [ "$cold" -eq 1 ] && [ "$cache" = warm ]; then
         disp=hold:warm-cache act=hold action="skipped by --cold-only (idle ${idle}s < 3600s: a move would cost its cache)"
@@ -2594,7 +2616,7 @@ cmd_repair_markers() {
     [ -n "$s" ] || continue
     case "$rv" in
       STALE-RETIRED) note=" · old retired copy is a prefix of the live one: set aside too" ;;
-      KEPT) note=" · retired copy $ret kept (it holds bytes the live transcript lacks)" ;;
+      KEPT) note=" · retired copy $ret kept (it holds bytes the live transcript lacks; if a move's exit was cancelled, this verb has nothing to repair and \`cc-lr plan --sid ${s:0:8} --to <account>\` prints the hand-back command)" ;;
       *) note="" ;;
     esac
     printf '%-5s %s  %s · %s%s\n' "$v" "${s:0:8}" "$st" "$why" "$note"

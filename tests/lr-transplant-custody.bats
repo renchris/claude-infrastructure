@@ -140,9 +140,12 @@ print("\n".join(act.cmd_transplant(r, "unconfirm")))' "$SID" "$T/from" "$T/to" "
   [ ! -e "$RET" ] || { echo "the source was not restored"; false; }
 }
 
-@test "custody 4: unconfirm with a stub present refuses stub-present, every file byte-identical" {
+# With a LIVE source the stub is folded into the restore (tests/lr-dead-source-holds.bats 3a): /exit
+# writes a stub before any dialog can cancel it, so refusing there left every cancelled exit with no
+# undo. The refusal below is what remains: no live source, so nobody would write to the restored path.
+@test "custody 4: unconfirm with a stub present and no live source refuses stub-present, every file byte-identical" {
   _confirmed
-  _live; _register "$T/from" s1 "$LIVE_PID" "$LIVE_LSTART"
+  _dead; _register "$T/from" s1 "$DEAD_PID" "$DEAD_LSTART"
   printf '{"type":"assistant","uuid":"tail1"}\n' > "$SRC"
   local before; before="$(_snap "$RET" "$SRC" "$DST" "$TOMB" "$LOCK")"
   _phase unconfirm
