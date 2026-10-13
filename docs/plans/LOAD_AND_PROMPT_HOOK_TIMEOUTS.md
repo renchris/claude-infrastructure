@@ -55,13 +55,23 @@ Root cause: process starts, not transcript size (a 28 MB transcript scans in 0.2
 
 | Hook | Slow path, external process starts (measured with exec-logging PATH stubs under /bin/bash) | What changed | Commit |
 |---|---|---|---|
-| operator-readout | full render ≈500 live (10-31 s at load 380-560); fixture 230 → 187; in-TTL Stop 26 | `cc-resume-debt list` no longer starts basename per meta file (172 live; 43 → 3 for 40 metas); ledger fields read in the shell (was `grep \| head \| cut` each); one stdin jq; no dirname, no `cut` after digests | `d7d73b625` |
-| session-continue | idle Stop with ledger computed: 173-190 live; fixture 103 → 87; 33 on a memo hit | one stdin jq (was 4-6); RUNG/TRUNK/AHEAD/SHAS read in the shell | `9ff7c67b9` |
-| completion-assert | done claim: 301 live (9.3 s at load 380); fixture 153 → 98; no close tell 20 → 15 | no python3 when the session has no route record (the research-block.sh precedent); ledger asked with `WRAP_BUSY=off`; one ancestry walk per Stop (`CC_CA_ASSIGNEE_MEMO`); 18 ledger fields read in the shell | `a461815ca` |
-| boundary-handoff | free-win Stop (35-73% fill): fixture 139 → 110; 57 when session-continue's memo exists | free-win ledger ask uses `WRAP_BUSY=off`, which is session-continue's memo key, so the two share one compute; RUNG read in the shell; one stdin jq | `c256f952f` |
-| wrap-ledger (shared) | 11 dirname starts per compute → 0 | script directory by parameter expansion | `1523e5098` |
+| operator-readout | full render ≈500 live (10-31 s at load 380-560); fixture 230 → 187; in-TTL Stop 26 | `cc-resume-debt list` no longer starts basename per meta file (172 live; 43 → 3 for 40 metas); ledger fields read in the shell (was `grep \| head \| cut` each); one stdin jq; no dirname, no `cut` after digests | `d60b350d7` |
+| session-continue | idle Stop with ledger computed: 173-190 live; fixture 103 → 87; 33 on a memo hit | one stdin jq (was 4-6); RUNG/TRUNK/AHEAD/SHAS read in the shell | `4ac344417` |
+| completion-assert | done claim: 301 live (9.3 s at load 380); fixture 153 → 98; no close tell 20 → 15 | no python3 when the session has no route record (the research-block.sh precedent); ledger asked with `WRAP_BUSY=off`; one ancestry walk per Stop (`CC_CA_ASSIGNEE_MEMO`); 18 ledger fields read in the shell | `26b6c2a2e` |
+| boundary-handoff | free-win Stop (35-73% fill): fixture 139 → 110; 57 when session-continue's memo exists | free-win ledger ask uses `WRAP_BUSY=off`, which is session-continue's memo key, so the two share one compute; RUNG read in the shell; one stdin jq | `80f004d0f` |
+| wrap-ledger (shared) | 11 dirname starts per compute → 0 | script directory by parameter expansion | `da3949756` |
 
 Parity: `tests/{operator-readout,session-continue,completion-assert,boundary-handoff}-forks.bats` rebuild the pre-change hook and ledger from git (`tests/stop-hook-forks-helpers.bash`, base `e1fbd8a5a`) and compare stdout, stderr, IDL rows and latch/state files byte for byte, including nine malformed stdin payloads per hook. Each suite's count tests go red when its hook is reverted (run 2026-10-12). Direct regression suites: 36 files, 35 green; `wrap-ledger-research` case 7 is a wall-clock assertion (7-12 s against a 10 s limit) that fails on the unchanged ledger too.
+
+Landed `0c814ef6a` (smoke partial at its 900 s budget, 0 not-ok), live layer converged 2026-10-13 02:23Z. Stop cancels after, same counter (`count-cancels.py <min> [since] --event Stop`):
+
+| Window | 1-min load | Transcripts | operator-readout | session-continue | boundary-handoff | completion-assert |
+|---|---|---|---|---|---|---|
+| before, 10-12 23:16-23:46Z | 520-680 | 25 | 13 | 9 | 3 | 3 |
+| before, 10-13 01:22-02:24Z (62 min) | mean 54, max 176 | 273 | 4 | 6 | 0 | 3 |
+| after, 10-13 02:24-02:55Z | mean 22, max 32 | 21 | 0 | 0 | 0 | 0 |
+
+The after row is NOT the controlled comparison: load fell to ~25 before the land (the agent-context-sync test runs stopped) and far fewer transcripts were active, so it shows no regression, not the size of the cut. The high-load row (30 min with every 1-min sample ≥ 300) is still owed; re-run `python3 -I docs/research/load-hook-timeouts-2026-10-11/count-cancels.py 30 --event Stop` during the next such period and add it here.
 
 Learnings: (1) the one-jq stdin parse is safe only with the original per-field reads kept as the fallback for anything that is not a newline-free string, since `jq -r` prints non-strings and multi-document input differently. (2) A memo set inside `$(…)` dies with the subshell: completion-assert's ancestry memo has to be primed in the main shell before the first guard that runs in a substitution. (3) A parity test that crosses a wall-clock bound measures the box: the hook bounds `cc-resume-debt list` at 3 s, so the pre-change arm dropped the stranded line under load, which is also what the live hook did.
 
