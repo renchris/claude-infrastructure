@@ -116,6 +116,20 @@ def row9(ctx: Ctx) -> Row:
     # name: the same selection as round close's new_material and estimate.counted_holes
     held = kit.held_frame_omissions(ctx.slug)
     for h in folded(ctx, "holes.jsonl").values():
+        # a rehearsal find is adjudicated before it is named or dropped (round.sh rehearsal-verify,
+        # rehearsal-rate): one raised and left there would pass the gate unread
+        if h.get("source") == "rehearsal" and h["id"] not in named:
+            ver = (h.get("verification") or {}).get("status")
+            if not ver:
+                fails.append(
+                    f"{h['id']}: a rehearsal find not yet verified (round.sh rehearsal-verify)"
+                )
+                continue
+            if ver == "CONFIRMED" and not (h.get("materiality") or {}).get("level"):
+                fails.append(
+                    f"{h['id']}: a rehearsal find verified CONFIRMED but not rated (round.sh rehearsal-rate)"
+                )
+                continue
         late = h.get("source") == "rehearsal" or str(h.get("round")) in vonly
         if (
             late

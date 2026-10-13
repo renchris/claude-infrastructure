@@ -9,6 +9,9 @@
                  seeds_caught, quiet and round 1's forecast/R_max; the old values go to m["reclosed"])
   round.sh artifact|split|verify-split|reproduce|hold-g|refind|repass|name-cap …
                  settling a round's holes honestly (lib/settle.py)
+  round.sh rehearsal-raise|rehearsal-verify|rehearsal-rate|rehearsal-name …
+                 a rehearsal find in the reserved round `rehearsal`: raised, verified, rated and named
+                 as a known row (lib/rehearsal.py)
 
 The caps live HERE, in code (§10 item 17), and every refusal names its cap (exit 2):
   - frame critique: exactly 2 rounds of 6 reviewers across at least 3 vendor families;
@@ -884,6 +887,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # artifact, split, verify-split, reproduce, hold-g, refind, repass
     settle.add_verbs(sub, sys.modules[__name__])
+    import rehearsal
+
+    # rehearsal-raise, rehearsal-verify, rehearsal-rate, rehearsal-name (never in router ROUND_SETTLE)
+    rehearsal.add_verbs(sub, sys.modules[__name__])
     a = ap.parse_args(argv)
     try:
         kit.check_slug(a.program)

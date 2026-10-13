@@ -1229,6 +1229,8 @@ KIT_ROUND = {"round.sh", "courier.sh"}
 # Once no round is due but the last round still owes a settle step (round.py settle_owed), the row
 # stays open carrying `settle_round`: SETTLE-ONLY. Its tag runs these verbs, that round's re-close
 # and its rater or verifier slots, and nothing else: no round, no bundle, no reviewer, no Agent.
+# The rehearsal's verbs (round.sh rehearsal-raise|verify|rate|name, lib/rehearsal.py) are deliberately
+# NOT here: the rehearsal runs from outside the program root, so a session inside it gains nothing.
 ROUND_SETTLE = {
     "artifact",
     "split",
@@ -1430,9 +1432,15 @@ def research_clause(
     if base in KIT_ROUND:
         if settle_rid is not None:
             rnd = flag_value(rest, "--round")
-            if base == "round.sh" and rest and (
-                rest[0] in ROUND_SETTLE
-                or (rest[0] == "close" and "--reclose" in rest and rnd == settle_rid)
+            if (
+                base == "round.sh"
+                and rest
+                and (
+                    rest[0] in ROUND_SETTLE
+                    or (
+                        rest[0] == "close" and "--reclose" in rest and rnd == settle_rid
+                    )
+                )
             ):
                 return None  # the settle-only certification-round activity
             if (

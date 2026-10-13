@@ -175,6 +175,17 @@ print(len(rows), [r['ts'] for r in rows], [r['lanes']['google']['ok'] for r in r
   grep -q 'names H-1-099' "$b/PLAN.md"
 }
 
+# RED-proof: HOLE_ID read only H-<round>-<n>, so a rehearsal known row (round.sh rehearsal-name,
+# hole H-RH-<n>) reached every later bundle (a delta or built round) whole.
+@test "bundle: a known row naming a rehearsal find (H-RH-<n>) is round history too" {
+  printf '%s\n' '{"id":"KR-09","kind":"rehearsal","hole":"H-RH-1","status":"open"}' \
+    '{"id":"KR-01","kind":"frame-omission","names_rows":["AM-40"],"status":"open"}' > "$CC_RESEARCH_RECORDS/known_rows.jsonl"
+  run "$C" bundle --program demo --round 2 --plan "$BATS_TEST_TMPDIR/PLAN.md"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"withheld from the bundle (round history): 0 file(s), 1 row(s)"* ]] || false
+  [ "$(/usr/bin/python3 -c "import json; print([json.loads(l)['id'] for l in open('$CC_RESEARCH_HOME/demo/rounds/2/bundle/known_rows.jsonl')])")" = "['KR-01']" ]
+}
+
 @test "bundle: copies carry no integrity needle, so a reviewer that echoes its reads is not voided" {
   printf '{"deliverable_repo":"%s","reviewer_pins":{"openai":"gpt-x"}}\n' "$BATS_TEST_TMPDIR/repo" > "$CC_RESEARCH_RECORDS/frame.json"
   printf 'records live at %s\n' "$CC_RESEARCH_RECORDS" > "$CC_RESEARCH_RECORDS/notes.md"

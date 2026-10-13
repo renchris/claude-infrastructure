@@ -11,7 +11,9 @@
 // MERELY ORCHESTRATED HERE, and stated so rather than hidden: the frame list comes from
 // `rehearse frames`; each trial's cwd is the one this script assigns (a Workflow agent cannot move
 // its process cwd without a tool call the relay test forbids); each trial's tool list is the
-// session's own report; a frame session's material find becoming a named known row is the lead's.
+// session's own report; a frame session's material find becoming a named known row is the lead's,
+// through round.sh rehearsal-raise, rehearsal-verify, rehearsal-rate and rehearsal-name, run from
+// outside the program root (lib/rehearsal.py; RECORDS.md "Rehearsal finds").
 export const meta = {
   name: 'research-rehearsal',
   description: 'Rehearsal: one blind session per historical frame, 20 relay trials, then rehearse record',

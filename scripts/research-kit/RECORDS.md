@@ -272,6 +272,60 @@ wave 1, and the plan is not edited." Closing the last round (R_max spent or the 
   artifact or unverified split-off and a re-find of a held hole (`kit.not_new_material`): the same selection as
   close's `new_material` and `estimate.counted_holes`.
 
+### Rehearsal finds (added 2026-10-13; REPORT.md §3.8 "Rehearsal")
+
+"A verified material find becomes a named known row." The rehearsal runs once, after the stop and before issue,
+and never edits the plan. Its blind frame sessions' finds go through four `round.sh` verbs (`lib/rehearsal.py`),
+each under the program lease. **The choice: a reserved round of the round machinery, not a path of its own.** The
+finds live in the reserved round id `rehearsal` (hole ids `H-RH-<n>`, panels, briefs and `attempts.jsonl` under
+`rounds/rehearsal/`, the bundle at `<sealed>/rounds/rehearsal/bundle/`), so they use the hole ledger, the
+courier, the certification round's rater assignment and panel checks, and `known_rows.jsonl` exactly as a round's
+finds do, and every round count skips them for free: `rounds/rehearsal/` never holds a `matrix.json`, and round
+`rehearsal` matches no certification, built or delta id (round close, `estimate.counted_holes`, seed match and
+the gate's round rows select rounds by matrix or by round number). No verb here opens a fix cycle or a freeze.
+
+- **Raise** — `round.sh rehearsal-raise --program P --frame F --path PLAN --lines L --quote Q --claim C [--names
+  ROW…] [--receipt T]` appends `{id: H-RH-<n>, event: "raise", round: "rehearsal", source: "rehearsal", raised_by:
+  {frame, blind: true, by, at}, claim, names, locus:{path, lines, quote, numbering: "real"}, plan_blob, receipt?}`.
+  Refused before the stop (no certification round has run, the last one is open, or `round.certification_due`
+  says one is still due), for a frame that is not a `reask_map` frame with an axis, when the plan is not frozen or
+  its blob differs from `freeze.json` `plan_blob`, for a path that is not the real plan, a quote not on the cited
+  lines, and an empty claim. Gate row 8's `/tmp` scan skips the session's claim, receipt and quote, as it skips a
+  blind reviewer's (`gate_rows_a.HOLE_BLIND_RAISE_TEXT`).
+- **Verify** — `round.sh rehearsal-verify --program P --hole H-RH-<n> --vendor V` builds the reserved round's
+  bundle of the REAL plan once (`courier.sh bundle --round rehearsal`), writes `briefs/H-RH-<n>-verifier.txt` (the
+  frozen `skills/research-program/briefs/verifier.md` verbatim, then the finding under the neutral fid `f1`: a hole
+  id would tell the verifier where it came from), and runs `courier.sh run --round rehearsal --pid H-RH-<n>-verifier
+  --role verifier`. The panel is checked as `check-round` checks one (`cli_cert.panel_breaches`: pin, effort,
+  integrity); a dead, void or verdictless panel records nothing (exit 3 or 4) and may be re-run within the slot
+  re-run cap. Appends `{id, event: "verify", verification:{status, against: "real", plan_blob, by, vendor, panel,
+  read, consequence, probe, at}}`. Refused for a hole that is not a rehearsal find, one already verified, a vendor
+  that is not a live lane, and a plan that changed since the raise.
+- **Rate** — `round.sh rehearsal-rate --program P --hole H-RH-<n>` runs the three raters of `cli_cert.raters` (rater
+  1 non-Anthropic, rater 2 another family, rater 3 the third; the two-vendor default's fresh-process rater 3 too) on
+  the frozen `briefs/rater.md` (RUBRIC.md), pids `H-RH-<n>-rater<k>`, in parallel through `courier.sh run --role
+  rater`. Only a CONFIRMED hole, once. A lost rater records nothing and the re-run runs only the raters without a
+  valid call. Appends `{id, event: "rate", materiality:{level, clause, raters:{"1"|"2"|"3": {rating, clause, vendor,
+  panel}}, at}}`: the level is the median call (M > R > C > G), so MATERIAL is 2 of 3 M, the rule `round.sh repass`
+  checks; the clause is the one most material calls gave, the earlier rater on a tie. The verifier already
+  reproduced the consequence, so a material level is MATERIAL, never MATERIAL-DISPUTED. Rater notes stay in the
+  panels' raw output, not the ledger.
+- **Name** — `round.sh rehearsal-name --program P --hole H-RH-<n> --known-row KR-<n> --wave W --reason T --evidence
+  F…` appends `{id: KR-<n>, kind: "rehearsal", hole, round: "rehearsal", frame, applied_in_wave: W, blocks_waves:
+  [], status: "open", named:{at, by, reason, evidence}}` to `known_rows.jsonl`: a row applied in build wave W (W1
+  by the method) that blocks no wave, for the reason a cap-round row blocks none. Refused for a certification
+  round's hole (that is `name-cap`'s or `hold-g`'s), a hole that is not CONFIRMED MATERIAL, a clause-(g) find
+  (`round.sh hold-g` holds it for the frame-delta cycle, as a round's), a hole already named, a known-row id that
+  exists and a bad wave id. The bundle withholds the row and its evidence from any later round
+  (`courier.HOLE_ID` reads `H-RH-<n>` too).
+- **Gate row 9** fails a rehearsal hole that no known row names and that is not yet verified, or verified
+  CONFIRMED and not rated, and, as before, a MATERIAL one left unnamed. A REFUTED, CONTACT or below-material find
+  passes. Each `H-RH-<n>` still needs its `trace.jsonl` row (gate row 8), to its known row or a recorded rejection.
+- **Where they run.** None of the four is in router.py `ROUND_SETTLE`, and `courier.sh run --round rehearsal` is
+  no settle round's slot, so a session inside the program root gains nothing under a certification-round or
+  settle-only tag: the rehearsal orchestrator runs them from outside the root. `cc-research rehearse record` (the
+  relay test) is unchanged.
+
 ## Method v1.2 records (REPORT.md §11 and §12; wave E3b)
 
 Both mechanisms apply only when `frame.json` carries `method_version` `"1.2"` or later (`kit.is_v12`); absent reads

@@ -59,9 +59,10 @@ EXCLUDE = {
     "freeze.json",
     "freezes.jsonl",
 }
-# Round history a blind reviewer must not read (§3.8): a hole id (H-<round>-<n>) is a pointer at an
-# earlier round's finding, and a settling evidence file (evidence/w<wave>-r<round>-…) is its text.
-HOLE_ID = re.compile(r"\bH-\d+-\d+\b")
+# Round history a blind reviewer must not read (§3.8): a hole id (H-<round>-<n>, or a rehearsal find's
+# H-RH-<n>) is a pointer at an earlier finding, and a settling evidence file (evidence/w<wave>-r<round>-…)
+# is its text.
+HOLE_ID = re.compile(r"\bH-(?:\d+|RH)-\d+\b")
 SETTLE_EVIDENCE = re.compile(r"^w\d+-r\d+-")
 LANE_BIN = {
     "anthropic": "ANTHROPIC",
@@ -168,7 +169,15 @@ def argv_for(
     """`effort` comes from effort_for(), which already dropped it for anything but a reviewer."""
     if LANE_BIN[vendor] == "ANTHROPIC":
         return (
-            [binary, "-p", "--setting-sources", "local", "--strict-mcp-config", "--output-format", "json"]
+            [
+                binary,
+                "-p",
+                "--setting-sources",
+                "local",
+                "--strict-mcp-config",
+                "--output-format",
+                "json",
+            ]
             + (["--model", model] if model else [])
             + (["--effort", effort] if effort else [])
             + [prompt]

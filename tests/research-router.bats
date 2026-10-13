@@ -500,6 +500,17 @@ cert_round_open() {
   [ "$(tool Bash "$T $K/courier.sh run --program demo --round 6 --role rater --brief b")" = deny ]
   [ "$(tool Bash "$T $K/courier.sh bundle --program demo --round 6 --plan p")" = deny ]
   [ "$(tool Agent '[activity:cr-1] blind dedup')" = deny ]
+  # The rehearsal's verbs (round.sh rehearsal-*, 2026-10-13) run from outside the program root; a
+  # session inside it gets none of them under either tag, nor the reserved round's rater slots.
+  for v in rehearsal-raise rehearsal-verify rehearsal-rate rehearsal-name; do
+    [ "$(tool Bash "$T $K/round.sh $v --program demo --hole H-RH-1")" = deny ]
+  done
+  [ "$(tool Bash "$T $K/courier.sh run --program demo --round rehearsal --role rater --brief b")" = deny ]
+  printf '{"activities":[{"program":"demo","id":"cr-1","kind":"certification-round","state":"open"}]}\n' \
+    > "$CC_RESEARCH_HOME/activities.json"
+  for v in rehearsal-raise rehearsal-verify rehearsal-rate rehearsal-name; do
+    [ "$(tool Bash "$T $K/round.sh $v --program demo --hole H-RH-1")" = deny ]
+  done
 }
 
 # RED-proof: on 7dab6ce0d (research_clause returned "handoff-fire.sh" for every invocation) both

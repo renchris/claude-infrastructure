@@ -586,6 +586,25 @@ ceiling() { "$REPO/bin/cc-research" ceiling --program demo --json | /usr/bin/pyt
   [[ "$t" != *"H-3-001"* && "$t" != *"H-3-002"* && "$t" != *"H-3-003"* ]] || false
 }
 
+# Rehearsal finds (round.sh rehearsal-*, lib/rehearsal.py). RED-proof: before it, row 9 read only a
+# rehearsal hole's level, so a find raised and never verified, or verified CONFIRMED and never rated,
+# passed the gate unadjudicated (H-RH-3 and H-RH-4 below).
+@test "row 9: a named rehearsal find passes; an unnamed MATERIAL one, and one never verified or never rated, fail" {
+  hr() { printf '{"id":"%s","event":"raise","round":"rehearsal","source":"rehearsal"%s}\n' "$1" "${2:-}" >> "$REC/holes.jsonl"; }
+  hr H-RH-1 ',"verification":{"status":"CONFIRMED"},"materiality":{"level":"MATERIAL","clause":"b"}'
+  hr H-RH-2 ',"verification":{"status":"CONFIRMED"},"materiality":{"level":"MATERIAL","clause":"b"}'
+  hr H-RH-3
+  hr H-RH-4 ',"verification":{"status":"CONFIRMED"}'
+  hr H-RH-5 ',"verification":{"status":"REFUTED"}'
+  hr H-RH-6 ',"verification":{"status":"CONFIRMED"},"materiality":{"level":"REFINEMENT"}'
+  echo '{"id":"KR-90","kind":"rehearsal","hole":"H-RH-1","applied_in_wave":"W1","blocks_waves":[],"status":"open"}' >> "$REC/known_rows.jsonl"
+  t="$(rowtext 9)"
+  [[ "$t" == *"H-RH-2: a cap-round or rehearsal find that is not a named known row"* ]] || false
+  [[ "$t" == *"H-RH-3: a rehearsal find not yet verified (round.sh rehearsal-verify)"* ]] || false
+  [[ "$t" == *"H-RH-4: a rehearsal find verified CONFIRMED but not rated (round.sh rehearsal-rate)"* ]] || false
+  [[ "$t" != *"H-RH-1"* && "$t" != *"H-RH-5"* && "$t" != *"H-RH-6"* ]] || false
+}
+
 @test "row 9: a plan citing a probe that never ran fails lint" {
   echo "Measured by P-77." >> "$REC/PLAN.md"
   [[ "$(rowtext 9)" == *"P-77"* ]]

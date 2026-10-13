@@ -510,8 +510,9 @@ HOLE_VENDOR_TEXT = {
     "verification": ("probe", "consequence", "read"),  # the courier verifier's verdict
     "materiality": ("note",),  # a rater's note
 }
-# a blind panel reviewer's raise (raised_by.blind): its claim, title and locus.quote
-HOLE_BLIND_RAISE_TEXT = ("claim", "title")
+# a blind panel reviewer's or rehearsal session's raise (raised_by.blind): its claim, title, read
+# receipt and locus.quote
+HOLE_BLIND_RAISE_TEXT = ("claim", "title", "receipt")
 
 
 def hole_lead_text(line: str) -> str:

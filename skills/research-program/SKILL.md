@@ -208,6 +208,25 @@ lite 5.25, standard 12 agent-days) and the Stage 9 budget.
   verification-only.
 - Rehearsal and the relay test (20 trials, at least one from a pane outside the program's directory).
 
+Updated 2026-10-13: a rehearsal find becomes a named known row through four `round.sh` verbs in the reserved
+round `rehearsal`, run by the rehearsal orchestrator from OUTSIDE the program root (none of them runs under a
+round's activity tag), after the stop, never editing the plan (`scripts/research-kit/RECORDS.md` § Rehearsal
+finds):
+
+1. Raise each session's find: `round.sh rehearsal-raise --program <slug> --frame "<the session's reask_map frame>"
+   --path <plan> --lines <L> --quote "<verbatim>" --claim "<the find>" [--names ROW…] [--receipt "<read receipt>"]`
+   prints its id, `H-RH-<n>`.
+2. Verify it: `round.sh rehearsal-verify --program <slug> --hole H-RH-<n> --vendor <lane>` (the frozen verifier
+   brief through `courier.sh run --round rehearsal --role verifier`).
+3. Rate a CONFIRMED one: `round.sh rehearsal-rate --program <slug> --hole H-RH-<n>` (the round's three raters on
+   the frozen rater brief and RUBRIC.md; MATERIAL is 2 of 3 M). Exit 3 or 4 means a lost read: run it again.
+4. Name a CONFIRMED MATERIAL one: `round.sh rehearsal-name --program <slug> --hole H-RH-<n> --known-row KR-<n>
+   --wave W1 --reason "<why>" --evidence <file under the records dir>` (a `rehearsal` known row applied in build
+   wave 1, blocking no wave). A clause-(g) find is held instead with `round.sh hold-g`.
+
+Trace each `H-RH-<n>` in `trace.jsonl` (gate row 8). Gate row 9 fails a rehearsal find left unverified, CONFIRMED
+and unrated, or MATERIAL and unnamed.
+
 Updated 2026-10-11: certification rounds run under a kit-opened `certification-round` activity, so a
 lead-dispatched round session runs unattended while every other research verb stays blocked. `gate.sh
 freeze` opens it when a round is due, `gate.sh cert-activity --program <slug>` prints (or opens) its id,
