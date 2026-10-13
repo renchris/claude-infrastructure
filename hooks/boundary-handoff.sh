@@ -179,7 +179,9 @@ TEL_DIR="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}"
 
 # Shared sentinel-path SSOT — lets the compose-guard below check session-continue's REAL path
 # (G-P6-6b). Resolve next to this script (repo + symlinked ~/.claude/hooks/ install), then fall back.
-_bscd="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+# $0's directory by parameter expansion, not dirname(1): one process start fewer on every Stop.
+case "$0" in */*) _bh_d0="${0%/*}"; [ -n "$_bh_d0" ] || _bh_d0=/ ;; *) _bh_d0=. ;; esac
+_bscd="$(cd "$_bh_d0" 2>/dev/null && pwd)"
 _blib="$_bscd/lib/continue-sentinel.sh"
 [ -f "$_blib" ] || _blib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/continue-sentinel.sh"
 [ -f "$_blib" ] || _blib="$HOME/.claude/hooks/lib/continue-sentinel.sh"
@@ -197,8 +199,25 @@ _celib="$_bscd/lib/context-econ.sh"
 [ -f "$_celib" ] && . "$_celib" 2>/dev/null || true
 
 stdin_json="$(cat 2>/dev/null || true)"
-sid="$(printf '%s' "$stdin_json" | jq -r '.session_id // empty' 2>/dev/null || true)"
-tp="$(printf '%s' "$stdin_json" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
+# ONE jq for the two stdin fields (was two starts). The fast path is taken only when each field is
+# absent or a string with no newline in it, the only shapes the harness sends; anything else (a
+# non-object, a number, two documents, no jq) is read by the two original calls, so an odd payload
+# parses exactly as it always did.
+_bh_us=$'\037'; _bh_fast=0; sid=""; tp=""
+_bh_in="$(printf '%s' "$stdin_json" | jq -r --arg us "$_bh_us" '
+  [.session_id, .transcript_path] as $f
+  | if ($f | all(. == null or . == false
+                 or (type == "string" and ((contains("\n") or contains($us)) | not))))
+    then "ok" + $us + ($f[0] // "") + $us + ($f[1] // "")
+    else "legacy" end' 2>/dev/null || true)"
+case "$_bh_in" in
+  *$'\n'*) : ;;
+  "ok$_bh_us"*) IFS="$_bh_us" read -r _ sid tp <<< "$_bh_in"; _bh_fast=1 ;;
+esac
+if [ "$_bh_fast" != 1 ]; then
+  sid="$(printf '%s' "$stdin_json" | jq -r '.session_id // empty' 2>/dev/null || true)"
+  tp="$(printf '%s' "$stdin_json" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
+fi
 
 # ── B-3: one IDL line per invocation. Never fails the hook. ──
 # SIZE_JSON — the measured size pair, merged into EVERY record once the size axis has been read. Empty
@@ -511,7 +530,17 @@ free_win_now() {
   done
   FREEWIN_RUNG="no-ledger"
   [ -n "$w" ] || return 1
-  r="$( cd "$c" 2>/dev/null && bash "$w" --machine 2>/dev/null | grep -E '^RUNG=' | head -1 | cut -d= -f2- )"
+  # WRAP_BUSY=off: this arm reads only RUNG, and the ledger's BUSY probe (a whole process-table
+  # scan plus lsof, bounded at 8 s against this hook's 5 s timeout) is a reported field that never
+  # moves RUNG (wrap-ledger.sh § WORKING vs IDLING). It also makes this the same memo key
+  # session-continue asks with, so the two share one compute per Stop instead of running two.
+  # RUNG is then read in the shell; `| grep | head -1 | cut` was three more process starts.
+  local led _bh_l
+  r=""
+  led="$( cd "$c" 2>/dev/null && WRAP_BUSY=off bash "$w" --machine 2>/dev/null )"
+  while IFS= read -r _bh_l || [ -n "$_bh_l" ]; do
+    case "$_bh_l" in RUNG=*) r="${_bh_l#*=}"; break ;; esac
+  done <<< "$led"
   # An EMPTY read is "the ledger did not answer", not "the ledger said no" — keep them apart, or a
   # broken wrap-ledger would be filed forever as a fleet of legitimately-busy sessions.
   FREEWIN_RUNG="${r:-no-answer}"
@@ -654,7 +683,7 @@ fi
 
 # ── B-2: one-shot latch (hash(configdir|cwd)-HEADsha) + used_pct-delta re-arm ──
 cfg="$(jq -r '.config_dir // empty' "$tel" 2>/dev/null || true)"
-key="$(printf '%s|%s' "$cfg" "$cwd" | shasum 2>/dev/null | cut -c1-16)"
+key="$(printf '%s|%s' "$cfg" "$cwd" | shasum 2>/dev/null)"; key="${key:0:16}"   # was `| cut -c1-16`
 latch="$LATCH_DIR/${key}-${head}"
 idle_rearm=0
 mkdir -p "$LATCH_DIR" 2>/dev/null || true
