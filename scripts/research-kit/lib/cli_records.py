@@ -329,12 +329,14 @@ def premise_add(a: argparse.Namespace) -> int:
 
 
 def premise_revise(a: argparse.Namespace) -> int:
-    """Append one revision event to an existing premise: its re-check command, its verdict, or what
-    it bears load for, each with the reason. Nothing earlier is rewritten; the fold reads the last."""
+    """Append one revision event to an existing premise: its re-check command, its verdict, what it
+    bears load for, or the recorded probes that close it, each with the reason. Nothing earlier is
+    rewritten; the fold reads the last."""
     import cli_jobs
 
     r = recs(a)
-    if a.id not in folded(r, "premises.jsonl"):
+    premise = folded(r, "premises.jsonl").get(a.id)
+    if premise is None:
         raise kit.KitError(
             f"{a.id} is not in premises.jsonl; `premise add` records a new one"
         )
@@ -342,15 +344,36 @@ def premise_revise(a: argparse.Namespace) -> int:
         raise kit.KitError(
             "--why is required and may not be empty: a revision states its reason"
         )
-    if (
-        a.recheck_cmd is None
-        and not a.retire_recheck
-        and a.verdict is None
-        and (a.load_bearing_for is None)
-    ):
+    other_fields = (
+        a.recheck_cmd is not None
+        or a.retire_recheck
+        or a.verdict is not None
+        or a.load_bearing_for is not None
+    )
+    if not other_fields and not a.probe:
         raise kit.KitError(
-            "nothing to revise: give --recheck-cmd, --retire-recheck, --verdict or --load-bearing-for"
+            "nothing to revise: give --recheck-cmd, --retire-recheck, --verdict, "
+            "--load-bearing-for or --probe"
         )
+    joined = list(premise.get("probes") or [])
+    new_probes: List[str] = []
+    if a.probe:
+        probes = folded(r, "probes.jsonl")
+        for pid in a.probe:
+            if pid not in probes:
+                raise kit.KitError(f"--probe {pid}: no such probe in probes.jsonl")
+            if a.id not in (probes[pid].get("closes") or []):
+                raise kit.KitError(
+                    f"--probe {pid} does not close {a.id} (its closes: "
+                    f"{probes[pid].get('closes') or []}); only a probe recorded with "
+                    f"--closes {a.id} joins it"
+                )
+            if pid not in joined and pid not in new_probes:
+                new_probes.append(pid)
+        if not new_probes and not other_fields:
+            raise kit.KitError(
+                f"nothing to revise: {', '.join(a.probe)} already joined to {a.id}"
+            )
     if a.recheck_cmd is not None and a.retire_recheck:
         raise kit.KitError("--recheck-cmd and --retire-recheck contradict each other")
     if a.repointed_from and a.recheck_cmd is None:
@@ -388,6 +411,10 @@ def premise_revise(a: argparse.Namespace) -> int:
             event["refuted_by"] = a.refuted_by
     if a.load_bearing_for is not None:
         event["load_bearing_for"] = [x for x in a.load_bearing_for if x]
+    if new_probes:
+        event["probes"] = (
+            joined + new_probes
+        )  # the fold reads the last value: the full list
     event.update(revised=True, why=a.why.strip())
     kit.append_jsonl(r / "premises.jsonl", event)
     fields = [k for k in event if k not in ("id", "revised", "why")]
@@ -908,6 +935,12 @@ def add_verbs(sub: Any) -> None:
         "--load-bearing-for",
         action="append",
         help="repeat for each dependent; replaces the list (pass '' alone to clear it)",
+    )
+    p.add_argument(
+        "--probe",
+        action="append",
+        help="repeat; a recorded probe whose closes names this premise joins its probes "
+        "(the level gate row 4 reads); never sets the verdict",
     )
     p = verb(g, "add", premise_add, "append one premise")
     p.add_argument("--id", required=True)

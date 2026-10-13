@@ -260,6 +260,29 @@ refused() {
   rowtext 4 | grep -q "PR-1 refuted but dependent DR-1 was never revised"
 }
 
+# RED-proof (2026-10-12): before `--probe` existed every call below exits 2 (unrecognized argument),
+# so the join is refused and row 4 stays FAIL.
+@test "premise revise --probe joins a recorded probe that closes the premise, raising the level row 4 reads; unknown or non-closing probes are refused" {
+  printf '%s\n' '{"id": "PR-1", "truth_lives_in": "live-state"}' >> "$REC/premises.jsonl"
+  printf '{"id": "P-5", "kind": "live-read", "env": {"id": "agent-shell"}, "closes": ["PR-1"], "exit": 0, "n": 1, "stdin": "/dev/null", "negative_control": {"ran": true, "reported_refutation": true}, "raw": "evidence/P-5/", "at": "%s"}\n' "$CC_NOW" >> "$REC/probes.jsonl"
+  mkdir -p "$REC/evidence/P-5" && echo ok > "$REC/evidence/P-5/stdout"
+  rowtext 4 | grep -q "PR-1: at E2, needs E3"
+  n="$(wc -l < "$REC/premises.jsonl")"
+  refused --id PR-1 --probe P-404 --why w                       # no such probe
+  refused --id PR-1 --probe P-2 --why w                         # P-2 closes nothing
+  refused --id PR-404 --probe P-5 --why w                       # no such premise
+  refused --id PR-1 --probe P-1 --why w                         # already joined: nothing to revise
+  refused --id PR-1 --probe P-5                                 # no --why
+  [ "$(wc -l < "$REC/premises.jsonl")" -eq "$n" ]
+  run "$CR" premise revise --program demo --id PR-1 --probe P-5 --probe P-1 --probe P-5 --why "P-5 read the live state"
+  [ "$status" -eq 0 ]
+  [ "$(fold premises.jsonl PR-1 probes)" = '["P-1", "P-5"]' ]
+  [ "$(fold premises.jsonl PR-1 verdict)" = '"holds"' ]
+  [ "$(fold premises.jsonl PR-1 why)" = '"P-5 read the live state"' ]
+  [ "$(wc -l < "$REC/premises.jsonl")" -eq $((n + 1)) ]
+  [ "$(rowstat 4)" = "PASS" ]
+}
+
 @test "decision: no --conviction flag exists; rule is refused below 90 naming the packet route, accepted at 90; show prints the derived value" {
   run "$CR" decision add --program demo --id DR-2 --question "q" --option do-nothing --option use-what-exists --option x
   [ "$status" -eq 0 ]

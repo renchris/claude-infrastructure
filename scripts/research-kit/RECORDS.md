@@ -54,6 +54,10 @@ Added 2026-10-05 (wave E3d): between `build-certified` and `closed` sits `implem
     `--refuted-by <probe or challenge id>`, which must exist), or `--load-bearing-for <id>` repeated (replaces the
     list; `''` alone clears it) appends `{id, recheck_cmd?, recheck_repointed_from?, verdict?, refuted_by?,
     load_bearing_for?, revised: true, why}`. A prose `--recheck-cmd` is refused, as the freshness job refuses to run one.
+    `--probe <probe id>` repeated joins recorded probes to the premise, so `kit.premise_level` (gate row 4) counts them:
+    it writes `probes` as the folded list plus the new ids, de-duplicated. It is refused for a probe id absent from
+    `probes.jsonl`, for one whose `closes` does not name the premise (record it with `probe-run.sh run --closes PR-n`),
+    and when every id is already joined and nothing else is revised. It never writes `verdict`.
   - Gate row 4 asks that a refuted premise's `DR` dependents be revised (ruled, reopened, carried or descoped) at or
     after the ts of the event that set `verdict` to `refuted`, not the folded ts, so a later re-check or revision
     event does not re-open them.

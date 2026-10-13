@@ -169,6 +169,12 @@ extension could reach, and its price of one more timebox. The operator buys it w
 `cc-signoff research:<slug>/extend-decision/<DECISION-ID>`; it is quoted as a change to that decision's
 conviction, never as a yield.
 
+A probe raises a premise's level only once it is joined to that premise. `probe-run.sh run --closes
+PR-n` records the claim on the probe but does not join it; join it with `cc-research premise revise
+--program P --id PR-n --probe P-x [--probe P-y …] --why "<reason>"`, which refuses a probe absent from
+`probes.jsonl` or whose `closes` does not name the premise, and never sets the verdict (a refuting
+probe still goes through `--verdict refuted --refuted-by P-x`).
+
 Stage 8 checks both: gate row 18 (yield stop) and row 19 (decision blockers), each PASS as "not
 applicable" under a 1.1 frame. The contract page's ceiling already carries the yield ceiling (§12's price:
 lite 5.25, standard 12 agent-days) and the Stage 9 budget.
