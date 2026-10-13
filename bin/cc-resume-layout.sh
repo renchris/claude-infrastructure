@@ -92,7 +92,8 @@
 # fallback for rows no tree places. Nothing here runs without --restore.
 #   · THE TREE is hb.kitty-ls.json (scripts/lib/restore-heartbeat.sh): --tree FILE, else the newest one
 #     under the heartbeat root for each kitty pid the rows' group column names (k<pid>w<os window>).
-#     CC_RESTORE_TREE=off turns the replay off. A row is matched to its old pane through the
+#     CC_RESTORE_TREE=off turns the replay off, and a tree with hb.layout-degraded beside it (the
+#     reboot prep could not vouch for it) is not replayed unless --tree names it. A row is matched to its old pane through the
 #     hb.roster.json beside the tree (paneUUID is the kitty window id).
 #   · SPLITS: every tab's layout_state pairs are rebuilt with their orientation and bias. A pair is
 #     made by splitting the pane already there: the new pane is the first leaf of the pair's second
@@ -376,6 +377,12 @@ EOF
           case "$st" in ''|*[!0-9]*) st=0 ;; esac
           if [ "$st" -gt "$bs" ]; then best="$f"; bs="$st"; fi
         done
+        # The reboot prep marks a tree it could not vouch for (scripts/alarm-reboot-prep.sh). Half an
+        # arrangement is worse than the plain rows, so that tree is not replayed, and it says so.
+        if [ -n "$best" ] && [ -f "${best%/*}/hb.layout-degraded" ]; then
+          note "cc-resume-layout: ⚠ the recorded tree of kitty $kp is marked degraded ($(head -n 1 "${best%/*}/hb.layout-degraded" 2>/dev/null)) — not replayed; its sessions come back in the plain row layout"
+          best=""
+        fi
         [ -n "$best" ] && TREES+=("$best")
       done
     fi

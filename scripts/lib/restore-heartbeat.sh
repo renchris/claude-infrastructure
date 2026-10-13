@@ -37,6 +37,10 @@
 #                      bounds), whether it fills that display, and its own bounds, all in the top-left
 #                      global coordinates System Events uses. From one bounded Swift read (about 0.5 s);
 #                      on failure the last good one stays
+#   hb.layout-degraded written only by scripts/alarm-reboot-prep.sh, when the tree it asked for before a
+#                      scripted reboot did not arrive or does not hold every session pane (one line: why).
+#                      cc-resume-layout.sh does not replay a tree beside it, and boot-resume.sh takes no
+#                      window groups from it; the next tick that reads a tree removes it
 # Empty TSV cells are written as $'\037' (boot-resume.sh's field-collapse guard).
 #
 # cc-sessions SWEEPS registry rows of dead sessions started over 24 h ago. boot-resume.sh therefore
@@ -48,7 +52,7 @@
 #
 # /bin/bash 3.2 safe: launchd runs it. Sourced: defines functions only.
 # Seams: CC_HEARTBEAT_DIR · CC_HB_SESSIONS_BIN · CC_HB_KITTEN_BIN · CC_HB_PS_BIN · CC_HB_LSOF_BIN ·
-#   CC_HB_NOW · CC_HB_RETAIN_DAYS · CC_HB_SWIFT_BIN · CC_HB_TIMEOUT_BIN ("" forces the perl bound) · CC_BOOTUUID_OVERRIDE ·
+#   CC_HB_NOW · CC_HB_RETAIN_DAYS · CC_HB_LS_TIMEOUT (5 s; the reboot prep asks with 15) · CC_HB_SWIFT_BIN · CC_HB_TIMEOUT_BIN ("" forces the perl bound) · CC_BOOTUUID_OVERRIDE ·
 #   CC_ROLES_DIR · CC_HB_MAILBOX_DIR · CC_HB_AGENT_BROWSER_DIR
 
 HB_PAD=$'\037'
@@ -326,9 +330,10 @@ hb_tick() {
     if [ "$kp" != 0 ] && [ -n "$kb" ] && [ -x "$kb" ]; then
       sock="$(jq -r '[.[] | .kitty_listen_on // empty][0] // ""' "$dir/hb.roster.json" 2>/dev/null)"
       [ -n "$sock" ] || sock="unix:/tmp/kitty-$kp"
-      if _hb_to 5 "$kb" @ --to "$sock" ls > "$dir/.hb.kitty-ls.json.tmp" 2>/dev/null \
+      if _hb_to "${CC_HB_LS_TIMEOUT:-5}" "$kb" @ --to "$sock" ls > "$dir/.hb.kitty-ls.json.tmp" 2>/dev/null \
          && jq -e 'type == "array"' "$dir/.hb.kitty-ls.json.tmp" >/dev/null 2>&1; then
-        _hb_mv "$dir/.hb.kitty-ls.json.tmp" "$dir/hb.kitty-ls.json"
+        # A tree read this tick is whole again, so a reboot prep's verdict on an older one is void.
+        _hb_mv "$dir/.hb.kitty-ls.json.tmp" "$dir/hb.kitty-ls.json" && rm -f "$dir/hb.layout-degraded"
       else
         rm -f "$dir/.hb.kitty-ls.json.tmp"
       fi

@@ -60,6 +60,13 @@
 #      alarm roster by start epoch, so it outranks a roster taken hours before. Registry rows that
 #      started after the heartbeat's tick are added, since they were live at the cut too. Live without
 #      the restore-v2 flag: without it a power-off restores at most 4 sessions (the registry cap).
+#      A SCRIPTED reboot (2026-10-13): alarm-reboot-prep.sh takes that same heartbeat itself, at its own
+#      start epoch and with the kitty tree checked, so the heartbeat is the source and restore v2
+#      replays the arrangement the operator had (cc-resume-layout.sh --restore, LAYOUT FIDELITY). A tree
+#      the prep could not vouch for carries hb.layout-degraded and is not replayed: plain rows instead.
+#      The prep also saves each pane's unsent prompt-box text; restore v2 types it back into the pane
+#      its session came back in, after the layout and the prompts, and never submits it (step 5 below,
+#      scripts/lib/reboot-drafts.sh).
 #
 # EVENT MODE: --event <epoch> --kind restart|crash [--kitty-pid K] [--roster-dir D] [--plan-only]
 #   A restore inside the running boot (a kitty restart or crash; reached through cc-restore). The
@@ -182,6 +189,12 @@ _kql="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lib/kitty-queue.sh"
 # shellcheck source=lib/kitty-queue.sh
 # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
 . "$_kql" 2>/dev/null || echo "boot-resume: ⚠ cannot source $_kql — no deaf-kitty page this run" >&2
+# The unsent drafts the reboot prep saved (restore v2 only). Missing = the drafts stay on disk, untyped.
+_rdl="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lib/reboot-drafts.sh"
+[ -f "$_rdl" ] || _rdl="$HOME/.claude/scripts/lib/reboot-drafts.sh"
+# shellcheck source=lib/reboot-drafts.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+. "$_rdl" 2>/dev/null || echo "boot-resume: ⚠ cannot source $_rdl — saved drafts are not typed back this run" >&2
 NOTIFY="$(resolve_bin "${CC_NOTIFY_BIN:-}" cc-notify)"
 # The addressless fallback for a delta with no desk role (see step 3 in the header). Resolved
 # here rather than at the use site so an unresolvable cc-backlog is a KNOWN-empty string on the
@@ -861,6 +874,9 @@ tree_slots() { # → "sid\tgroup\tslot" for each roster session found in the hea
   local hd
   while IFS= read -r hd; do
     [ -n "$hd" ] && [ -f "$hd/hb.kitty-ls.json" ] && [ -f "$hd/hb.roster.json" ] || continue
+    # A tree the reboot prep marked degraded gives no window groups either: the layout does not
+    # replay it, and rows grouped by half of an old arrangement would be a partial one.
+    [ -f "$hd/hb.layout-degraded" ] && continue
     jq -r --slurpfile r "$hd/hb.roster.json" --arg kp "${hd##*/}" '
       ($r[0] | if type == "array" then . else [] end
          | map(select(type == "object" and (.session_id // "") != "" and (.paneUUID // "") != "")
@@ -1035,6 +1051,7 @@ nudged=""       # the keepalive's markers: cwds of INTERRUPTED sessions only
 n_wake=0        # restore v2: at rest, but with work open at the cut that died with the process
 n_noted=0; n_note_fail=0   # restore v2: inbox notes written this round / refused by cc-notify
 n_prompt=0; n_prompt_ok=0; n_prompt_fb=0; n_prompt_noreply=0; n_prompt_bad=0   # launch-argument prompts
+n_draft_typed=0; n_draft_kept=0; n_draft_left=0; drafts_dir=""; layout_ran=0     # the reboot prep's unsent drafts
 PROMPTED=""     # restore v2: "<sid>\t<prompt file>\t<nonce>" per row that got a prompt
 kv() { printf '%s\n' "$2" | tr ' ' '\n' | sed -n "s/^$1=//p" | head -1; }   # <key> <summary-line>
 num() { case "$1" in ''|*[!0-9]*) printf 0 ;; *) printf '%s' "$1" ;; esac; }
@@ -1240,7 +1257,7 @@ EOF
       # command substitution's pipeline status never reaches this shell. pipefail makes $? the
       # layout's own, since printf cannot fail here.
       printf '%s' "$ADMITTED" | "$LAYOUT" "${LAY_ARGS[@]}" >"$STATE_DIR/last-layout.out" 2>>"$STATE_DIR/last-layout.txt"
-      layout_rc=$?
+      layout_rc=$?; layout_ran=1
       layout_sum="$(grep '^cc-resume-layout: verdict=' "$STATE_DIR/last-layout.out" 2>/dev/null | tail -1)"
       [ "$layout_rc" = 3 ] && [ "$tries" -gt 0 ] || break
       # By PATH, not by name: the staged sandbox build shares kitty's bundle id, so `-a kitty` could
@@ -1340,6 +1357,21 @@ EOF
 $PROMPTED
 EOF
     fi
+    # 5. DRAFTS. alarm-reboot-prep.sh saved the text that sat unsent in each pane's prompt box; each
+    #    one is typed back into the pane its session came back in, and never submitted. After the
+    #    prompts above, because their fallback pastes into the same box and must find it empty. Only
+    #    for the panes THIS round's layout opened: a map left by an earlier restore names window ids
+    #    of a kitty that is gone, and the same number now belongs to some other pane.
+    if [ -z "$EVENT" ] && [ "$layout_ran" = 1 ] && [ -s "$STATE_DIR/last-layout.map" ] \
+       && command -v rd_putback >/dev/null 2>&1 && drafts_dir="$(rd_pick "$ROSTER_DIR" "$LOWER" "$BOOT")"; then
+      # The socket is handed to these calls only (launchd gives this job no KITTY_WINDOW_ID).
+      d_sock="${CC_TERM_KITTY_TO:-}"
+      [ -z "$d_sock" ] && [ -n "$KSOCK_BIN" ] && d_sock="$("$KSOCK_BIN" 2>/dev/null | head -1)"
+      d_sum="$(CC_TERM_KITTY_TO="$d_sock" rd_putback "$drafts_dir" "$STATE_DIR/last-layout.map" "$EVENT_DIR/drafts.log" 2>/dev/null )" || d_sum=""
+      n_draft_typed="$(num "$(kv typed "$d_sum")")"
+      n_draft_kept="$(num "$(kv kept "$d_sum")")"
+      n_draft_left="$(num "$(kv left "$d_sum")")"
+    fi
   fi
   if [ -n "$nudged" ] && [ "$resumed" -gt 0 ] && [ -n "$KEEPALIVE" ] && [ -x "$KEEPALIVE" ]; then
     # Under launchd there is no KITTY_WINDOW_ID, and the keepalive's kitty arm is inert without a
@@ -1415,6 +1447,9 @@ if [ "$MODE" = "resume" ]; then
     [ "$n_prompt_noreply" -gt 0 ] && msg="${msg} ⚠ ${n_prompt_noreply} prompt(s) were submitted but no turn ran (${EVENT_DIR}/prompt.log)."
     [ "$n_prompt_bad" -gt 0 ] && msg="${msg} ⚠ ${n_prompt_bad} prompt(s) never reached their session, and the fallback could not deliver them either (${EVENT_DIR}/prompt.log) — those sessions are back but idle."
     [ "${CC_RESTORE_NUDGE:-on}" = off ] && msg="${msg} CC_RESTORE_NUDGE=off: notes only, no prompts."
+    [ "$n_draft_typed" -gt 0 ] && msg="${msg} ✏ ${n_draft_typed} unsent draft(s) saved before the reboot were typed back into their prompt box, not sent."
+    [ "$n_draft_kept" -gt 0 ] && msg="${msg} ⚠ ${n_draft_kept} saved draft(s) were NOT typed back, because the box was not empty or could not be read; the text is in ${drafts_dir}/<session id>/draft.txt (${EVENT_DIR}/drafts.log says why)."
+    [ "$n_draft_left" -gt 0 ] && msg="${msg} ${n_draft_left} saved draft(s) belong to sessions this round did not open; they stay in ${drafts_dir}."
     [ "$n_meta_none" -gt 0 ] && msg="${msg} ${n_meta_none} had no recorded model or effort, so they came back on the launcher's defaults."
     [ "${gate_verdict:-}" = deadline ] && msg="${msg} Load per core stayed over ${CC_RESTORE_START_LOAD:-6} for the whole wait; restored anyway (${EVENT_DIR}/load.log)."
   fi
@@ -1430,7 +1465,7 @@ fi
 
 V2_IDL=""
 if [ "$RESTORE_V2" = 1 ]; then
-  V2_IDL=",\"restore_v2\":true,\"wake_lost\":${n_wake},\"noted\":${n_noted},\"note_failed\":${n_note_fail},\"prompts\":${n_prompt},\"prompts_confirmed\":${n_prompt_ok},\"prompts_fallback\":${n_prompt_fb},\"prompts_no_reply\":${n_prompt_noreply},\"prompts_unconfirmed\":${n_prompt_bad},\"ledger_skipped\":${resume_ledger},\"exhausted\":${n_exhausted},\"no_model\":${n_meta_none},\"gate\":\"${gate_verdict:-}\",\"done\":$(restore_done && echo true || echo false)"
+  V2_IDL=",\"restore_v2\":true,\"wake_lost\":${n_wake},\"noted\":${n_noted},\"note_failed\":${n_note_fail},\"prompts\":${n_prompt},\"prompts_confirmed\":${n_prompt_ok},\"prompts_fallback\":${n_prompt_fb},\"prompts_no_reply\":${n_prompt_noreply},\"prompts_unconfirmed\":${n_prompt_bad},\"drafts_typed\":${n_draft_typed},\"drafts_kept\":${n_draft_kept},\"ledger_skipped\":${resume_ledger},\"exhausted\":${n_exhausted},\"no_model\":${n_meta_none},\"gate\":\"${gate_verdict:-}\",\"done\":$(restore_done && echo true || echo false)"
   # One page per event, not per round: a later round marks and logs, and says nothing.
   if [ -f "$EVENT_DIR/paged" ]; then
     mark_processed

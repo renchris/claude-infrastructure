@@ -693,6 +693,22 @@ launch_n() { grep ' launch ' "$KLOG" | sed -n "${1}p"; }
   grep -q -- '--location=hsplit' "$KLOG"; ! grep -q 'goto-layout' "$KLOG" || false
 }
 
+@test "tree: one the reboot prep marked degraded is not replayed and says so; without the mark it is" {
+  tree_setup
+  tree "$(koswin 6 700 "$(ktab splits '{"horizontal":false,"one":1,"two":2}' 1:11 2:12)")"; roster 11 sid-repo-a-1 12 sid-repo-a-2
+  trow 1; trow 2
+  echo 'kitty did not answer the tree read' > "$HBD/hb.layout-degraded"
+  trestore
+  [ "$status" -eq 0 ]
+  ! grep -q hsplit "$KLOG" || false                                # the recorded split is NOT rebuilt
+  [ "$(grep -c 'goto-layout .* horizontal' "$KLOG")" -eq 1 ]       # the plain row instead
+  ! printf '%s\n' "$output" | grep -q '^cc-resume-layout: layout ' || false
+  printf '%s\n' "$stderr" | grep -q 'marked degraded (kitty did not answer the tree read)'
+  rm -f "$KLOG"* "$HBD/hb.layout-degraded"
+  trestore
+  grep -q -- '--location=hsplit' "$KLOG"; ! grep -q 'goto-layout' "$KLOG" || false
+}
+
 @test "tree: a maybe row gets no map line, and the next pane of its tab opens the window instead" {
   tree_setup
   tree "$(koswin 6 700 "$(ktab splits '{"one":1,"two":2}' 1:11 2:12)")"; roster 11 sid-repo-a-1 12 sid-repo-a-2

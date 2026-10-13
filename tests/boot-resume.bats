@@ -1410,3 +1410,73 @@ deaf_fixture() { # <queued rows> <sample: peer|nopeer|broken>
   run /bin/bash "$SCRIPT"
   grep -q SENTINEL "$plan"
 }
+
+# ── the reboot prep's unsent drafts (2026-10-13; scripts/lib/reboot-drafts.sh) ─────────────────────
+# alarm-reboot-prep.sh saved a pane's unsent prompt-box text beside its roster. Restore v2 types it
+# into the pane the layout's map line names for that session, never submits it, and deletes it. The
+# stub kitty renders pane N's box from $0.d/N.box and records every send-text.
+drafts_kitty() {
+  export CC_TERM_KITTY="$BATS_TEST_TMPDIR/stub-kitty" CC_CARRY_SETTLE_S=0 CC_RESTORE_DRAFT_WAIT=5 CC_RESTORE_DRAFT_POLL=0
+  mkdir -p "$CC_TERM_KITTY.d"
+  cat > "$CC_TERM_KITTY" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "$0.log"
+shift 3; cmd="$1"; shift
+id=""; file=""
+while [ $# -gt 0 ]; do
+  case "$1" in --match) id="${2#id:}"; shift 2 ;; --from-file) file="$2"; shift 2 ;; *) shift ;; esac
+done
+case "$cmd" in
+  ls) printf '[{"tabs":[{"windows":[{"id":%s}]}]}]\n' "$id" ;;
+  get-text) [ -f "$0.d/$id.box" ] || exit 1
+    printf ' output above\n────────────────────────────────────────\n❯ %s\n────────────────────────────────────────\n  ? for shortcuts\n' "$(cat "$0.d/$id.box")" ;;
+  send-text) [ -n "$file" ] || exit 0; cat "$file" >> "$0.d/$id.box"; cat "$file" >> "$0.d/$id.typed" ;;
+esac
+SH
+  chmod +x "$CC_TERM_KITTY"
+}
+saved_draft() { # <roster tag> <sid> <text>
+  local d="$CC_BOOT_RESUME_ROSTER_DIR/reboot-$1.drafts/$2"
+  mkdir -p "$d"; printf '%s' "$3" > "$d/draft.txt"; : > "$d/images.txt"; : > "$d/unsaved.txt"
+}
+SUM_DRAFT='cc-resume-layout: map sid=a1 wid=51 oswin=1
+cc-resume-layout: verdict=ok launched=1 shed=0 failed=0 windows=1 fullscreen_ok=1 fullscreen_failed=0'
+
+@test "v2 reboot: a draft the prep saved is typed into the pane its session came back in, not sent, and deleted" {
+  roster alarm 1784799900 "[$(rrow a1 claude-next /x/a ALARM-ONE)]"
+  saved_draft alarm a1 'fix the login bug'
+  export CC_BOOT_RESUME_MODE=resume
+  mkdir -p "$CC_BOOT_RESUME_STATE_DIR"; touch "$CC_BOOT_RESUME_STATE_DIR/restore-v2"
+  drafts_kitty; : > "$CC_TERM_KITTY.d/51.box"
+  stub_layout "$SUM_DRAFT"
+  run /bin/bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$CC_TERM_KITTY.d/51.typed")" = 'fix the login bug' ]
+  [ "$(grep -c ' send-text ' "$CC_TERM_KITTY.log")" -eq 1 ]
+  ! grep ' send-text ' "$CC_TERM_KITTY.log" | grep -qv -- '--from-file' || false   # no CR
+  [ ! -e "$CC_BOOT_RESUME_ROSTER_DIR/reboot-alarm.drafts" ]
+  grep -q 'sid=a1 wid=51 rc=0 typed' "$CC_BOOT_RESUME_STATE_DIR/events/boot-1784800000/drafts.log"
+  grep -q '1 unsent draft(s) saved before the reboot were typed back into their prompt box, not sent' "$CC_NOTIFY_BIN.log"
+  ! grep -q 'login bug' "$CC_NOTIFY_BIN.log" || false          # the page never carries the text
+}
+
+@test "v2 reboot: a box that is not empty gets no keystroke and the draft stays on disk; without restore-v2 none is typed" {
+  roster alarm 1784799900 "[$(rrow a1 claude-next /x/a ALARM-ONE)]"
+  saved_draft alarm a1 'fix the login bug'
+  export CC_BOOT_RESUME_MODE=resume CC_RESTORE_DRAFT_WAIT=1
+  drafts_kitty; export CC_RESTORE_DRAFT_WAIT=1; : > "$CC_TERM_KITTY.d/51.box"
+  stub_layout "$SUM_DRAFT"
+  run /bin/bash "$SCRIPT"                                       # no restore-v2 flag: the layout prints no map
+  [ "$status" -eq 0 ]
+  [ ! -e "$CC_TERM_KITTY.log" ]
+  [ -f "$CC_BOOT_RESUME_ROSTER_DIR/reboot-alarm.drafts/a1/draft.txt" ]
+  rm -rf "$CC_BOOT_RESUME_STATE_DIR" "$CC_RESUME_LAYOUT_BIN".* "$CC_NOTIFY_BIN.log"; stub_layout "$SUM_DRAFT"
+  mkdir -p "$CC_BOOT_RESUME_STATE_DIR"; touch "$CC_BOOT_RESUME_STATE_DIR/restore-v2"
+  printf '%s' 'the operator is typing' > "$CC_TERM_KITTY.d/51.box"
+  run /bin/bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  ! grep -q ' send-text ' "$CC_TERM_KITTY.log" || false
+  [ "$(cat "$CC_TERM_KITTY.d/51.box")" = 'the operator is typing' ]
+  [ "$(cat "$CC_BOOT_RESUME_ROSTER_DIR/reboot-alarm.drafts/a1/draft.txt")" = 'fix the login bug' ]
+  grep -q '1 saved draft(s) were NOT typed back' "$CC_NOTIFY_BIN.log"
+}
