@@ -207,6 +207,16 @@ operator's `cc-signoff research:<slug>/profile/lite --because "<why>"`, signed b
 `intake.py contract-page --program <slug>` re-renders the page at the program's own forecast for the
 frame re-sign (`scripts/research-kit/RECORDS.md` § A running program).
 
+Updated 2026-10-12: the last round settles under its own activity. When `round.sh close` finds no round
+due but the round still owes a settle step (its rating re-pass, an unheld clause-(g) hole, or in the
+verification-only cap round an unnamed CONFIRMED MATERIAL find), it keeps the certification-round activity
+open SETTLE-ONLY and lists what is owed; if it was already closed, `gate.sh cert-activity --program <slug>`
+re-opens it settle-only. Its tag runs `round.sh repass|hold-g|refind|name-cap|…`, `round.sh close --round K
+--reclose` and `courier.sh run --round K --role rater|verifier`, and no round, bundle, reviewer or Agent; the
+last settle step closes it. Name each non-(g) cap-round find with `round.sh name-cap --program <slug> --hole
+H --known-row KR-<n> --wave W1 --reason "<why>" --evidence <file>`: a `cap-round` known row applied in build
+wave 1 that blocks no wave (`scripts/research-kit/RECORDS.md` § Settling the last round).
+
 ## Stage 8 — gate, certificate, signoff (§3.10)
 
 `scripts/research-kit/gate.sh run --program <slug>` prints all 16 rows PASS/FAIL/FILED. Every row passes

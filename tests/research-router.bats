@@ -452,7 +452,8 @@ cert_round_open() {
   [ "$(tool Bash "CC_RESEARCH_ACTIVITY=cr-1 $K/round.sh close --program demo --round 1")" = allow ]
   # reproduce, hold-g, refind joined 2026-10-12. RED-proof: with ROUND_SETTLE as it was, the tagged
   # `round.sh reproduce` below answers deny.
-  for v in artifact split verify-split reproduce hold-g refind repass; do
+  # name-cap joined 2026-10-12 (the cap round's non-(g) known row).
+  for v in artifact split verify-split reproduce hold-g refind repass name-cap; do
     [ "$(tool Bash "CC_RESEARCH_ACTIVITY=cr-1 $K/round.sh $v --program demo --hole H-1-001")" = allow ]
     [ "$(tool Bash "$K/round.sh $v --program demo --hole H-1-001")" = deny ]
   done
@@ -473,6 +474,32 @@ cert_round_open() {
   [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=cr-1 handoff-fire.sh --x')" = deny ]
   [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=cr-1 claude -p hi')" = deny ]
   [ "$(tool Agent 'blind dedup')" = deny ]
+}
+
+# RED-proof (2026-10-12): a settle-only row (settle_round set, the last round closed with settle steps
+# owed) let through every verb of a round-due row, so `round.sh run`, a reviewer slot and a new bundle
+# below answered allow.
+@test "a settle-only certification-round activity lets through its round's settle steps and nothing else" {
+  state certifying
+  printf '{"activities":[{"program":"demo","id":"cr-1","kind":"certification-round","state":"open","settle_round":"5"}]}\n' \
+    > "$CC_RESEARCH_HOME/activities.json"
+  prompt "Settle certification round 5 of demo. HANDOFF-ENGAGE-1-2-3" >/dev/null
+  [ "$(label)" = other ]
+  K=scripts/research-kit
+  T="CC_RESEARCH_ACTIVITY=cr-1"
+  for v in artifact split verify-split reproduce hold-g refind repass name-cap; do
+    [ "$(tool Bash "$T $K/round.sh $v --program demo --hole H-5-001")" = allow ]
+  done
+  [ "$(tool Bash "$T $K/round.sh close --program demo --round 5 --reclose --reason x")" = allow ]
+  [ "$(tool Bash "$T $K/courier.sh run --program demo --round 5 --pid r5h1 --role rater --brief b")" = allow ]
+  [ "$(tool Bash "$T $K/courier.sh run --program demo --round=5 --role=verifier --brief b")" = allow ]
+  [ "$(tool Bash "$T codex exec -s read-only p")" = allow ]
+  [ "$(tool Bash "$T $K/round.sh run --program demo --kind certification --round 6")" = deny ]
+  [ "$(tool Bash "$T $K/round.sh close --program demo --round 6")" = deny ]
+  [ "$(tool Bash "$T $K/courier.sh run --program demo --round 5 --role reviewer --brief b")" = deny ]
+  [ "$(tool Bash "$T $K/courier.sh run --program demo --round 6 --role rater --brief b")" = deny ]
+  [ "$(tool Bash "$T $K/courier.sh bundle --program demo --round 6 --plan p")" = deny ]
+  [ "$(tool Agent '[activity:cr-1] blind dedup')" = deny ]
 }
 
 # RED-proof: on 7dab6ce0d (research_clause returned "handoff-fire.sh" for every invocation) both

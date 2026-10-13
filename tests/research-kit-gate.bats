@@ -202,7 +202,25 @@ set_state() { /usr/bin/python3 -c "import json; p='$CC_RESEARCH_REGISTRY'; d=jso
   run "$G" cert-activity --program demo
   [ "$status" -eq 2 ]
   [[ "$output" == *"no certification round is due"*"stop rule has fired"* ]] || false
+  [[ "$output" == *"round 3 owes no settle step"* ]] || false
   [ -z "$(cr_rows)" ]
+}
+
+# RED-proof (2026-10-12): cert-activity refused whenever no round was due, so a last round closed at
+# the stop with a re-pass still owed could never settle under the research block.
+@test "cert-activity: after the stop, a last round that still owes a settle step re-opens the activity settle-only" {
+  set_state certifying
+  jedit rounds/3/matrix.json "d['kappa']={'materiality':0.1,'n':4,'below':0.7,'repass':False,'unstable':False}"
+  run "$G" cert-activity --program demo
+  [ "$status" -eq 0 ]
+  [ "${lines[${#lines[@]}-1]}" = ACT-demo-1 ]
+  [[ "$output" == *"settle-only: round 3 owes rating re-pass (round.sh repass)"* ]] || false
+  [ "$(cr_rows)" = "ACT-demo-1:open" ]
+  [ "$(/usr/bin/python3 -c "import json; print(json.load(open('$CC_RESEARCH_HOME/activities.json'))['activities'][0]['settle_round'])")" = 3 ]
+  jedit rounds/3/matrix.json "d['kappa']['repass']=True"
+  run "$G" cert-activity --program demo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"no certification round is due"*"round 3 owes no settle step"* ]] || false
 }
 
 # ── the front-end return (REPORT.md §6.1, §6.5): gate.sh return-activity ─────────────────────────
@@ -531,6 +549,21 @@ ceiling() { "$REPO/bin/cc-research" ceiling --program demo --json | /usr/bin/pyt
 @test "row 9: a cap round that examined a snapshot older than the freeze still fails" {
   jedit rounds/3/matrix.json "d['verification_only']=True; d['snapshot_sha']='0'*40"
   [[ "$(rowtext 9)" == *"is not the one the last counted round examined"* ]] || false
+}
+
+# RED-proof (2026-10-12): row 9 failed every MATERIAL cap-round hole with no known row, so the re-find,
+# the artifact and the seed catch below each failed it although round close counts none of them.
+@test "row 9: a cap-round re-find of a held hole, an artifact and a seed catch need no known row; an unnamed real find still fails" {
+  jedit rounds/3/matrix.json "d['verification_only']=True"
+  echo '{"id":"KR-1","kind":"frame-omission","hole":"H-1","status":"open"}' > "$REC/known_rows.jsonl"
+  hc() { printf '{"id":"%s","round":3,"verification":{"status":"CONFIRMED"},"materiality":{"level":"MATERIAL"}%s}\n' "$1" "${2:-}" >> "$REC/holes.jsonl"; }
+  hc H-3-001 ',"artifact":{"reason":"copy damage"}'
+  hc H-3-002 ',"seed_match":"S-1"'
+  hc H-3-003 ',"refind_of":"H-1"'
+  hc H-3-004
+  t="$(rowtext 9)"
+  [[ "$t" == *"H-3-004: a cap-round or rehearsal find that is not a named known row"* ]] || false
+  [[ "$t" != *"H-3-001"* && "$t" != *"H-3-002"* && "$t" != *"H-3-003"* ]] || false
 }
 
 @test "row 9: a plan citing a probe that never ran fails lint" {

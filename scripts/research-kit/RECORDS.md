@@ -223,6 +223,45 @@ signature stays valid. `kit.held_frame_omissions` is the one reader.
   `kappa.unstable`; `gate.sh run` copies those rounds to the certificate's `adjudication_unstable`, and the
   render's first line starts "Adjudication unstable (round K: …) · ".
 
+### Settling the last round, and naming the cap round's finds (added 2026-10-12; REPORT.md §3.8)
+
+"The cap round is verification-only. Its finds are listed on the certificate as named known rows applied in build
+wave 1, and the plan is not edited." Closing the last round (R_max spent or the stop rule fired) used to close the
+`certification-round` activity at once, before its settle steps could run under it.
+
+- **What the last round owes** — `round.py settle_owed`, the one predicate `round.sh close`, the settle verbs and
+  `gate.sh cert-activity` all read: once the newest certification round has closed, (1) its rating re-pass, while
+  `m["kappa"].materiality` is below `kappa.below` and `kappa.repass` is false; (2) each of its CONFIRMED MATERIAL
+  holes that counts as new material (`kit.not_new_material` is false) and that no known row names: a clause-(g)
+  one is held (`round.sh hold-g`), and in a verification-only round any other one is named (`round.sh name-cap`).
+- **The activity** — with no round due, close keeps the open `certification-round` row while anything is owed and
+  sets its `settle_round` to that round: SETTLE-ONLY. `hold-g`, `refind`, `name-cap` and `repass` (through its
+  re-close) re-read what is owed, and the last one closes the row. If the row was already closed (a round closed
+  before this fix), `gate.sh cert-activity --program P` re-opens it settle-only, printing `settle-only: round K
+  owes …` on stderr and the id on stdout; it refuses when nothing is owed ("round K owes no settle step") and while
+  a front-end return is open. A due round clears `settle_round` (freeze, cert-activity, close).
+- **What settle-only lets through** (router.py `open_settle_rounds`): under `CC_RESEARCH_ACTIVITY=<id>`, `round.sh`
+  with a ROUND_SETTLE verb (artifact, split, verify-split, reproduce, hold-g, refind, repass, name-cap), `round.sh
+  close --round K --reclose`, `courier.sh run --round K --role rater|verifier`, and a read-only `codex exec`.
+  Nothing else: no `round.sh run`, no plain close, no `courier.sh bundle`, no reviewer slot, no other round's slot,
+  no tagged Agent or Workflow. `round.sh run` past R_max stays refused by the kit as before.
+- **Name a cap-round find** — `round.sh name-cap --program P --hole H --known-row KR-<n> --wave W --reason T
+  --evidence F…` appends `{id: KR-<n>, kind: "cap-round", hole: H, round, applied_in_wave: W, blocks_waves: [],
+  status: "open", named:{at, by, reason, evidence}}` to `known_rows.jsonl`. Refused unless H is a hole of a
+  verification-only certification round that has closed, CONFIRMED MATERIAL, neither an artifact nor a split-off,
+  not seed-tagged, not a re-find of a held hole, and not rated under clause (g) (that is `hold-g`'s); refused for a
+  hole already named by any known row, a known-row id that exists, and a wave id that is not `[A-Za-z0-9][A-Za-z0-9._-]*`.
+  The bundle withholds its evidence like a held row's (courier.py `settle_evidence`).
+- **What a cap-round row blocks: nothing.** `blocks_waves` is empty, so `gate.sh requires` never refuses a wave on
+  it (gate_requires.py reads `blocks_waves` for every open known row). A frame-omission row blocks its waves because
+  the frame they build from is wrong until the frame-delta cycle re-signs it; a cap-round find is a known defect of
+  a plan whose frame is sound, and its fix IS the work of the wave it names (`applied_in_wave`). Blocking that wave
+  would deadlock the fix, and blocking later waves would add a gate the method does not ask for. The certificate
+  still lists it under "Known rows", and gate row 1 notes it as open.
+- **Gate row 9** fails a cap-round or rehearsal MATERIAL hole that no known row names, now less a seed catch, an
+  artifact or unverified split-off and a re-find of a held hole (`kit.not_new_material`): the same selection as
+  close's `new_material` and `estimate.counted_holes`.
+
 ## Method v1.2 records (REPORT.md §11 and §12; wave E3b)
 
 Both mechanisms apply only when `frame.json` carries `method_version` `"1.2"` or later (`kit.is_v12`); absent reads

@@ -24,6 +24,9 @@ import kit
 # certification-round: opened by the kit itself (gate.sh freeze or cert-activity) while a certifying
 # program has a certification round due, and closed by round.sh close once none is (the stop rule or
 # R_max), so a lead-dispatched round session runs its round with every other research verb blocked.
+# While the last round still owes a settle step (round.py settle_owed: its re-pass, an unheld clause-(g)
+# hole, an unnamed cap-round find) the row stays open with `settle_round` set, and the research block
+# lets that tag through the round's settle steps only; the last settle verb closes it.
 # front-end-return: opened by the kit (gate.sh return-activity) once per area, between one
 # certification round's close and the next round's run, when the estimate is well above the design
 # point (REPORT.md §6.1, §6.5). Opening one closes the certification-round activity; gate.sh freeze
@@ -162,16 +165,30 @@ def open_activity(program: str, kind: str) -> str:
     return aid
 
 
-def ensure_open(program: str, kind: str) -> str:
-    """The id of the program's first open row of this kind, appending one only when none is open."""
+def ensure_open(
+    program: str, kind: str, settle_round: Optional[str] = None, create: bool = True
+) -> Optional[str]:
+    """The id of the program's first open row of this kind, appending one when none is open (None,
+    and nothing written, when create is False). Every open row of the kind is left carrying
+    `settle_round` (a settle-only certification-round row, round.py settle_owed) or, when it is
+    None, none: a plain row."""
     _check(program, kind)
     with _Lock():
         data = load()
         hit = _open_of(data, program, kind)
-        if hit:
-            return str(hit[0]["id"])
-        aid = _append(data, program, kind)
-        kit.write_json_atomic(path(), data)
+        if not hit and not create:
+            return None
+        aid = str(hit[0]["id"]) if hit else _append(data, program, kind)
+        changed = not hit
+        for a in _open_of(data, program, kind):
+            if a.get("settle_round") != settle_round:
+                changed = True
+                if settle_round is None:
+                    a.pop("settle_round", None)
+                else:
+                    a["settle_round"] = settle_round
+        if changed:
+            kit.write_json_atomic(path(), data)
     return aid
 
 

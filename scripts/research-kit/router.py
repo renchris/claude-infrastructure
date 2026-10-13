@@ -341,6 +341,26 @@ def open_activities(slug: str) -> List[str]:
     return list(open_activity_kinds(slug))
 
 
+def open_settle_rounds(slug: str) -> Dict[str, str]:
+    """{id: round} of the program's open settle-only certification-round rows (lib/activities.py)."""
+    p = kit.research_home() / "activities.json"
+    try:
+        data = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return {}
+    acts = data.get("activities") if isinstance(data, dict) else None
+    return {
+        a["id"]: str(a["settle_round"])
+        for a in acts or []
+        if isinstance(a, dict)
+        and a.get("program") == slug
+        and a.get("state") == "open"
+        and a.get("kind") == "certification-round"
+        and a.get("settle_round") is not None
+        and isinstance(a.get("id"), str)
+    }
+
+
 # ── the certificate read ────────────────────────────────────────────────────────────────────────
 
 
@@ -1205,8 +1225,20 @@ KIT_ROUND = {"round.sh", "courier.sh"}
 # The verbs that settle a closed round before any plan edit (lib/settle.py, 4d11ed938). They write
 # only that round's hole and matrix records, so the round's own certification-round activity runs them.
 # reproduce, hold-g and refind (2026-10-12) are settle.py verbs too; hold-g also appends the held
-# known row to known_rows.jsonl.
-ROUND_SETTLE = {"artifact", "split", "verify-split", "reproduce", "hold-g", "refind", "repass"}
+# known row to known_rows.jsonl, and name-cap (2026-10-12) a verification-only cap round's named row.
+# Once no round is due but the last round still owes a settle step (round.py settle_owed), the row
+# stays open carrying `settle_round`: SETTLE-ONLY. Its tag runs these verbs, that round's re-close
+# and its rater or verifier slots, and nothing else: no round, no bundle, no reviewer, no Agent.
+ROUND_SETTLE = {
+    "artifact",
+    "split",
+    "verify-split",
+    "reproduce",
+    "hold-g",
+    "refind",
+    "repass",
+    "name-cap",
+}
 # A front-end return (REPORT.md §6.1; §6.5 "once per area, timeboxed"): gate.sh return-activity opens
 # one per area between two certification rounds, and gate.sh freeze closes it. While certifying, its
 # tag carries the return's fan-out, [activity:<id>] on Agent, Task and Workflow and a read-only
@@ -1338,6 +1370,7 @@ def research_clause(
     label: str,
     cert_acts: Optional[List[str]] = None,
     fer_acts: Optional[List[str]] = None,
+    settle: Optional[Dict[str, str]] = None,
 ) -> Optional[str]:
     """The research verb a clause runs, or None. Activity-tagged and allowed kit calls are None.
 
@@ -1345,6 +1378,9 @@ def research_clause(
     While certifying, a clause tagged with one runs the round's own verbs: `round.sh run --kind
     certification`, `round.sh close`, the round-settling verbs (ROUND_SETTLE), and `codex exec` in a
     read-only sandbox.
+    settle: {id: round} of those that are settle-only (open_settle_rounds): a clause tagged with one
+    runs that round's ROUND_SETTLE verbs, its `round.sh close --reclose`, its `courier.sh run` rater
+    or verifier slots and a read-only `codex exec`, and no round, bundle or reviewer slot.
     fer_acts: the program's open front-end-return activities (gate.sh return-activity). While
     certifying, a clause tagged with one runs a read-only `codex exec` and no other research verb."""
     cert_acts = cert_acts or []
@@ -1364,6 +1400,7 @@ def research_clause(
                 label,
                 cert_acts=cert_acts,
                 fer_acts=fer_acts,
+                settle=settle,
             )
             if hit:
                 return hit
@@ -1373,6 +1410,7 @@ def research_clause(
     act = env.get("CC_RESEARCH_ACTIVITY")
     cert_round = bool(certifying and act and act in cert_acts)
     fer = bool(certifying and act and act in fer_acts)
+    settle_rid = (settle or {}).get(act or "") if cert_round else None
     if base == "handoff-fire.sh":
         # self-close spawns nothing: it only retires the calling pane, so a fired peer in a
         # certifying program is not left an orphan. Every fire (--recycle, --prompt-file …) stays,
@@ -1390,6 +1428,21 @@ def research_clause(
     if base == "cc-research" and rest and rest[0] in CC_RESEARCH_BUYING:
         return f"cc-research {rest[0]}"
     if base in KIT_ROUND:
+        if settle_rid is not None:
+            rnd = flag_value(rest, "--round")
+            if base == "round.sh" and rest and (
+                rest[0] in ROUND_SETTLE
+                or (rest[0] == "close" and "--reclose" in rest and rnd == settle_rid)
+            ):
+                return None  # the settle-only certification-round activity
+            if (
+                base == "courier.sh"
+                and rest[:1] == ["run"]
+                and flag_value(rest, "--role") in ("rater", "verifier")
+                and rnd == settle_rid
+            ):
+                return None  # a rater or verifier of the round being settled
+            return None if certifying and label == "research-order" else base
         if (
             cert_round
             and base == "round.sh"
@@ -1487,13 +1540,15 @@ def cmd_tool(a: argparse.Namespace) -> int:
     cert_acts = [x for x, k in kinds.items() if k == "certification-round"]
     # …and so does a front-end return: both are kit-opened stages of certification.
     fer_acts = [x for x, k in kinds.items() if k == FRONT_END_RETURN]
+    # …and a settle-only one lets through only the last round's settle steps (no Agent or Workflow).
+    settle = {x: r for x, r in open_settle_rounds(slug).items() if x in cert_acts}
     acts = [x for x in kinds if state == "certifying" or x not in cert_acts + fer_acts]
     hit: Optional[str] = None
     if tool in ("Agent", "Task", "Workflow"):
         # The whole input, so a Workflow call (whose input is a script and its args, not a
         # description) can carry its tag too.
         tag = json.dumps(tin, ensure_ascii=False)
-        if not any(f"[activity:{x}]" in tag for x in acts):
+        if not any(f"[activity:{x}]" in tag for x in acts if x not in settle):
             hit = tool
     elif tool == "Bash":
         for toks in clauses(cmd):
@@ -1505,6 +1560,7 @@ def cmd_tool(a: argparse.Namespace) -> int:
                 label,
                 cert_acts=cert_acts,
                 fer_acts=fer_acts,
+                settle=settle,
             )
             if hit:
                 break

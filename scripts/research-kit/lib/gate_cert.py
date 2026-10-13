@@ -172,7 +172,9 @@ def cmd_return_activity(a: Any) -> int:
 
 def cmd_cert_activity(a: Any) -> int:
     """Open, or name, the certification-round activity of a certifying, frozen program with a
-    certification round due. Idempotent: a second call prints the same id."""
+    certification round due. Idempotent: a second call prints the same id. With no round due (the
+    stop rule or R_max) but the last round still owing a settle step (round.py settle_owed), the
+    activity opens settle-only instead: its tag runs that round's settle steps and no round."""
     import activities
     import round as rnd
 
@@ -185,9 +187,21 @@ def cmd_cert_activity(a: Any) -> int:
         raise kit.KitError(f"cert-activity refused: {a.program} has no freeze.json")
     why = rnd.certification_due(a.program)
     if why:
-        raise kit.KitError(
-            f"cert-activity refused: no certification round is due: {why}"
+        # a front-end return edits the plan the last round reviewed: nothing settles under it
+        rid, owed = (
+            (None, [])
+            if activities.open_ids(a.program, activities.FRONT_END_RETURN)
+            else rnd.settle_owed(a.program)
         )
+        if not owed:
+            raise kit.KitError(
+                f"cert-activity refused: no certification round is due: {why}"
+                + (f"; round {rid} owes no settle step" if rid else "")
+            )
+        aid = activities.ensure_open(a.program, "certification-round", settle_round=rid)
+        print(f"settle-only: round {rid} owes {', '.join(owed)}", file=sys.stderr)
+        print(aid)
+        return 0
     aid = activities.ensure_open(a.program, "certification-round")
     print(aid)
     return 0
@@ -622,7 +636,9 @@ def add_verbs(sub: Any) -> None:
         help="open (or name) the certification-round activity of a certifying program",
         description="Print the id of the program's open certification-round activity, opening one "
         "if none is open. Refused unless the registry reads certifying, freeze.json exists and a "
-        "certification round is due. Tag the round's calls with CC_RESEARCH_ACTIVITY=<id> "
+        "certification round is due, or none is due but the last round still owes a settle step (its "
+        "re-pass, an unheld clause-(g) hole, an unnamed cap-round find): then the activity is "
+        "settle-only. Tag the round's calls with CC_RESEARCH_ACTIVITY=<id> "
         "(round.sh, courier.sh, read-only codex exec) and [activity:<id>] (Agent descriptions).",
     )
     p.add_argument("--program", required=True)

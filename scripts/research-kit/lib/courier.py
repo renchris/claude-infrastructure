@@ -414,7 +414,7 @@ def bundle_dir(slug: str, k: str) -> Path:
 
 def settle_evidence(slug: str) -> set:
     """Records-relative paths that a settling record cites as evidence (lib/settle.py: an artifact,
-    a split, a real-plan verdict, a reproduction, a re-find, a held known row)."""
+    a split, a real-plan verdict, a reproduction, a re-find, a held or named known row)."""
     rec = kit.records_dir(slug)
     out: set = set()
     for r in kit.read_jsonl(rec / "holes.jsonl"):
@@ -426,8 +426,9 @@ def settle_evidence(slug: str) -> set:
             if isinstance(b, dict):
                 out |= {str(e) for e in b.get("evidence") or []}
     for r in kit.read_jsonl(rec / "known_rows.jsonl"):
-        if isinstance(r.get("held"), dict):
-            out |= {str(e) for e in r["held"].get("evidence") or []}
+        for k in ("held", "named"):  # round.sh hold-g, round.sh name-cap
+            if isinstance(r.get(k), dict):
+                out |= {str(e) for e in r[k].get("evidence") or []}
     return out
 
 

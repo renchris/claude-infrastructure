@@ -632,3 +632,89 @@ open_round_2() { /usr/bin/python3 -c "import json; p='$CC_RESEARCH_RECORDS/round
   [ "$(field 2 'm["new_material"], m["seeds_caught"], m["reproductions"]')" = "1 1 [{'hole': 'H-2-002', 'status': 'CONFIRMED'}]" ]
   [ "$(counted)" = "['H-2-002 CONFIRMED']" ]
 }
+
+# Settling the verification-only cap round (2026-10-12). RED-proof: close shut the activity at R_max
+# before the round's re-pass and hold-g could run under it, and `name-cap` was an unknown verb.
+cap_round_5() { # rounds 1-4 counted with round-1 p90 1, so R_max = 5; round 5 open, verification-only
+  fc_done; certs 1 4
+  /usr/bin/python3 -c "import json; p='$CC_RESEARCH_RECORDS/rounds/1/matrix.json'; m=json.load(open(p)); m['forecast']={'p50':1,'p90':1}; json.dump(m, open(p,'w'))"
+  open_with_slots 5 complete True
+  /usr/bin/python3 -c "import json; p='$CC_RESEARCH_RECORDS/rounds/5/matrix.json'; m=json.load(open(p)); m['verification_only']=True; json.dump(m, open(p,'w'))"
+}
+caph() { # <id> <round> <status> <level> <clause> <r1> <r2> [extra json]: a rated hole
+  /usr/bin/python3 -c 'import json, sys
+i, rnd, st, lvl, cl, r1, r2 = sys.argv[1:8]
+h = {"id": i, "round": int(rnd), "verification": {"status": st},
+     "materiality": {"level": lvl, "clause": cl, "raters": {"1": {"rating": r1}, "2": {"rating": r2}, "3": {"rating": "M"}}}}
+h.update(json.loads(sys.argv[8]) if len(sys.argv) > 8 else {})
+print(json.dumps(h))' "$@"
+}
+cr_settle() { act "print(' '.join(str(a.get('settle_round')) for a in activities.load()['activities'] if a['kind'] == 'certification-round'))"; }
+
+@test "close: the cap round keeps the activity open, settle-only, until its re-pass ran and every new CONFIRMED MATERIAL hole is held or named; it then closes" {
+  cap_round_5
+  { caph H-5-001 5 CONFIRMED MATERIAL g M R; caph H-5-002 5 CONFIRMED MATERIAL b R M; } > "$CC_RESEARCH_RECORDS/holes.jsonl"
+  aid="$(cr_open)"
+  run "$R" close --program demo --round 5
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"rating re-pass due"* ]] || false
+  [[ "$output" == *"certification activity kept open to settle round 5: $aid"* ]] || false
+  [[ "$output" == *"rating re-pass (round.sh repass)"*"H-5-001 (round.sh hold-g)"*"H-5-002 (round.sh name-cap)"* ]] || false
+  [ "$(cr_state)" = open ]
+  [ "$(cr_settle)" = 5 ]
+  # it unlocks nothing new: no counted round past R_max
+  run_cert 6
+  [[ "$status" -eq 2 && "$output" == *"past R_max = 5"* ]] || false
+  printf '%s\n' '{"id":"H-5-001","raters":{"1":"M","2":"M"},"level":"MATERIAL","clause":"g"}' \
+    '{"id":"H-5-002","raters":{"1":"M","2":"M"},"level":"MATERIAL","clause":"b"}' > "$BATS_TEST_TMPDIR/repass.jsonl"
+  run "$R" repass --program demo --round 5 --ratings "$BATS_TEST_TMPDIR/repass.jsonl" --reason "kappa low"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"kept open to settle round 5"* && "$output" != *"repass)"* ]] || false
+  [ "$(cr_state)" = open ]
+  evidence ruling.txt "operator ruling: cap-round finds are named known rows applied in build wave 1"
+  run "$R" hold-g --program demo --hole H-5-001 --known-row KR-07 --names-rows AM-40 --resign-due 2099-01-01T00:00:00Z \
+    --reason "clause (g), held by ruling" --evidence evidence/ruling.txt
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"kept open to settle round 5"*"H-5-002 (round.sh name-cap)"* ]] || false
+  [ "$(cr_state)" = open ]
+  run "$R" name-cap --program demo --hole H-5-002 --known-row KR-08 --wave W1 --reason "cap-round find" --evidence evidence/ruling.txt
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"certification activity closed:"*"past R_max = 5"* ]] || false
+  [ "$(cr_state)" = closed ]
+}
+
+@test "name-cap: names a CONFIRMED MATERIAL non-(g) find of the closed cap round as an open cap-round known row applied in a build wave, blocking none" {
+  cap_round_5
+  { caph H-4-001 4 CONFIRMED MATERIAL b M M; caph H-5-001 5 CONFIRMED MATERIAL g M M
+    caph H-5-002 5 CONFIRMED REFINEMENT b R R; caph H-5-003 5 REFUTED MATERIAL b M M
+    caph H-5-004 5 CONFIRMED MATERIAL b M M '{"seed_match":"S-1"}'; caph H-5-005 5 CONFIRMED MATERIAL b M M; } \
+    > "$CC_RESEARCH_RECORDS/holes.jsonl"
+  evidence ruling.txt "operator ruling: cap-round finds are named known rows applied in build wave 1"
+  nc() { run "$R" name-cap --program demo --hole "$1" --known-row "$2" --wave "${3:-W1}" --reason "cap-round find" --evidence evidence/ruling.txt; }
+  nc H-5-005 KR-09
+  [[ "$status" -eq 2 && "$output" == *"round 5 is not closed"* ]] || false
+  "$R" close --program demo --round 5
+  nc H-4-001 KR-09
+  [[ "$status" -eq 2 && "$output" == *"not a find of the verification-only cap round"* ]] || false
+  nc H-5-002 KR-09
+  [[ "$status" -eq 2 && "$output" == *"only a CONFIRMED MATERIAL hole"* ]] || false
+  nc H-5-003 KR-09
+  [[ "$status" -eq 2 && "$output" == *"only a CONFIRMED MATERIAL hole"* ]] || false
+  nc H-5-001 KR-09
+  [[ "$status" -eq 2 && "$output" == *"clause-(g)"*"round.sh hold-g"* ]] || false
+  nc H-5-004 KR-09
+  [[ "$status" -eq 2 && "$output" == *"seed-tagged"* ]] || false
+  nc H-5-005 KR9
+  [[ "$status" -eq 2 && "$output" == *"must read KR-<n>"* ]] || false
+  nc H-5-005 KR-09 "W 1"
+  [[ "$status" -eq 2 && "$output" == *"--wave"* ]] || false
+  echo '{"id":"KR-01","kind":"frame-omission","hole":"H-1-001","status":"open"}' > "$CC_RESEARCH_RECORDS/known_rows.jsonl"
+  nc H-5-005 KR-01
+  [[ "$status" -eq 2 && "$output" == *"KR-01: a known row with this id already exists"* ]] || false
+  nc H-5-005 KR-09
+  [ "$status" -eq 0 ]
+  [ "$(/usr/bin/python3 -c "import json; r=[json.loads(l) for l in open('$CC_RESEARCH_RECORDS/known_rows.jsonl')][-1]; print(r['id'], r['kind'], r['hole'], r['round'], r['applied_in_wave'], r['blocks_waves'], r['status'], r['named']['evidence'])")" \
+    = "KR-09 cap-round H-5-005 5 W1 [] open ['evidence/ruling.txt']" ]
+  nc H-5-005 KR-10
+  [[ "$status" -eq 2 && "$output" == *"H-5-005: already named by KR-09"* ]] || false
+}

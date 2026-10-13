@@ -122,6 +122,15 @@ kr()  { printf '%s\n' "$1" >> "$REC/known_rows.jsonl"; }
   [ "$status" -eq 0 ]
 }
 
+@test "an open cap-round known row (round.sh name-cap) blocks no wave: the wave it names applies it" {
+  certify
+  kr '{"id":"KR-3","kind":"cap-round","hole":"H-6-001","round":"6","applied_in_wave":"W1","blocks_waves":[],"status":"open"}'
+  run "$G" requires --program demo --wave W1
+  [ "$status" -eq 0 ]
+  run "$G" requires --program demo
+  [ "$status" -eq 0 ]
+}
+
 @test "a wave the sweep descoped refuses, for a decision and for a known row" {
   certify
   dec '{"id":"DR-7","status":"carried","packet":{"id":"q","class":"B","due":"2099-01-01T00:00:00Z"},"descoped_waves":["B6"]}'

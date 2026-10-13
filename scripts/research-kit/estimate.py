@@ -420,9 +420,9 @@ def counted_rounds(slug: str) -> List[Dict[str, Any]]:
 
 
 def counted_holes(slug: str, mats: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """The counted rounds' MATERIAL, non-seed holes, folded, less an audited artifact, a split-off
-    hole not yet verified on the real plan (kit.settled_out) and a re-find of a hole held for the
-    frame-delta cycle (kit.held_refind); round.py close selects the same way."""
+    """The counted rounds' MATERIAL holes, folded, less a seed catch, an audited artifact, a split-off
+    hole not yet verified on the real plan and a re-find of a hole held for the frame-delta cycle
+    (kit.not_new_material); round.py close and gate row 9 select the same way."""
     rounds = {str(m.get(k)) for m in mats for k in ("round", "seq")}
     held = kit.held_frame_omissions(slug)
     holes = kit.fold(kit.read_jsonl(kit.records_dir(slug) / "holes.jsonl")).values()
@@ -431,9 +431,7 @@ def counted_holes(slug: str, mats: List[Dict[str, Any]]) -> List[Dict[str, Any]]
         for h in holes
         if str(h.get("round")) in rounds
         and (h.get("materiality") or {}).get("level") == "MATERIAL"
-        and not h.get("seed_match")
-        and not kit.settled_out(h)
-        and not kit.held_refind(h, held)
+        and not kit.not_new_material(h, held)
     ]
 
 

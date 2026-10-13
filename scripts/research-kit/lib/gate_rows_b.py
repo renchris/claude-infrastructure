@@ -111,11 +111,15 @@ def row9(ctx: Ctx) -> Row:
         )
     vonly = {str(m["round"]) for m in cert_rounds(ctx) if m.get("verification_only")}
     named = {str(r.get("hole")) for r in known_rows(ctx)}
+    # a seed catch, an artifact or unverified split-off, and a re-find of a held hole are no find to
+    # name: the same selection as round close's new_material and estimate.counted_holes
+    held = kit.held_frame_omissions(ctx.slug)
     for h in folded(ctx, "holes.jsonl").values():
         late = h.get("source") == "rehearsal" or str(h.get("round")) in vonly
         if (
             late
             and (h.get("materiality") or {}).get("level") == "MATERIAL"
+            and not kit.not_new_material(h, held)
             and h["id"] not in named
         ):
             fails.append(

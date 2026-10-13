@@ -31,6 +31,12 @@
       kit.KAPPA_REPASS_BELOW. Each line of F, {id, raters, level, clause?}, supersedes that hole's
       earlier ratings in the fold; the round is then re-closed, and a kappa still low prints
       "Adjudication unstable", which the certificate carries.
+  round.sh name-cap --program P --hole H --known-row KR-N --wave W --reason T --evidence F…
+      Name a CONFIRMED MATERIAL non-(g) find of the closed verification-only cap round (§3.8) as an
+      open `cap-round` known row applied in build wave W; it blocks no wave. Gate row 9 passes it.
+
+hold-g, refind and name-cap end by re-reading what the last certification round still owes
+(round.py settle_owed), and the last settle step closes the certification-round activity.
 
 Records are append-only events on holes.jsonl; the fold makes the newest win. Python 3.9-safe.
 """
@@ -430,6 +436,7 @@ def cmd_hold_g(a: argparse.Namespace) -> int:
         f"{a.hole}: held for the frame-delta cycle as {a.known_row} (re-sign due {a.resign_due}); "
         "a later round's re-find of it is attached with round.sh refind"
     )
+    settle_tail(a.program, h)
     return 0
 
 
@@ -471,6 +478,85 @@ def cmd_refind(a: argparse.Namespace) -> int:
         f"{a.hole}: a re-find of held {a.of}; not new material while its known row is open. "
         f"Re-close round {rh} if it is already closed (round.sh close --reclose)"
     )
+    settle_tail(a.program, h)
+    return 0
+
+
+def settle_tail(slug: str, h: Dict[str, Any]) -> None:
+    """After a settle verb on a certification round's hole: close the certification-round activity
+    if that was the last settle step owed, or name what is still owed (round.py activity_tail)."""
+    if str(h.get("round") or "").isdigit():
+        rounds.activity_tail(slug, {"kind": "certification"})
+
+
+WAVE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def cmd_name_cap(a: argparse.Namespace) -> int:
+    """Name a find of the verification-only cap round as a known row (REPORT.md §3.8: "Its finds are
+    listed on the certificate as named known rows applied in build wave 1, and the plan is not
+    edited"): an open `cap-round` row in known_rows.jsonl naming the hole and the build wave that
+    applies it. It blocks no wave (gate_requires reads `blocks_waves`, and it is empty): the fix is
+    the applying wave's own work, so blocking that wave would deadlock it, and the plan it builds
+    from is not wrong the way a frame omission's frame is. A clause-(g) find is hold-g's."""
+    h = hole(a.program, a.hole)
+    rnd = str(h.get("round") or "")
+    cap = [
+        m
+        for m in rounds.all_matrices(a.program, "certification")
+        if m.get("verification_only") and rnd in (str(m.get("round")), str(m.get("seq")))
+    ]
+    if not cap:
+        raise rounds.Refused(
+            f"{a.hole} (round {rnd or '?'}) is not a find of the verification-only cap round; only a "
+            "cap-round find is named this way (REPORT.md §3.8)"
+        )
+    if not cap[0].get("closed"):
+        raise rounds.Refused(
+            f"round {rnd} is not closed; name its finds after round.sh close (seed match runs there)"
+        )
+    confirmed_material(h, "named as a cap-round known row")
+    if h.get("seed_match"):
+        raise rounds.Refused(
+            f"{a.hole}: seed-tagged ({h['seed_match']}); a caught seed is no defect of the real plan"
+        )
+    if kit.held_refind(h, kit.held_frame_omissions(a.program)):
+        raise rounds.Refused(
+            f"{a.hole}: a re-find of held {h['refind_of']}; it is not new material while that row is open"
+        )
+    if kit.clause_g(h):
+        raise rounds.Refused(
+            f"{a.hole}: rated under clause {(h.get('materiality') or {}).get('clause')}, a clause-(g) "
+            "frame omission: hold it for the frame-delta cycle (round.sh hold-g)"
+        )
+    if not re.match(r"^KR-\d+$", a.known_row):
+        raise rounds.Refused(f"--known-row {a.known_row!r}: must read KR-<n>")
+    if not WAVE_RE.match(a.wave or ""):
+        raise rounds.Refused(f"--wave {a.wave!r}: not a wave id")
+    rows = kit.known_rows(a.program)
+    by = [str(r.get("id")) for r in rows if str(r.get("hole")) == a.hole]
+    if by:
+        raise rounds.Refused(f"{a.hole}: already named by {', '.join(by)}")
+    if a.known_row in {str(r.get("id")) for r in rows}:
+        raise rounds.Refused(f"{a.known_row}: a known row with this id already exists")
+    kit.append_jsonl(
+        known_rows_path(a.program),
+        {
+            "id": a.known_row,
+            "kind": "cap-round",
+            "hole": a.hole,
+            "round": rnd,
+            "applied_in_wave": a.wave,
+            "blocks_waves": [],
+            "status": "open",
+            "named": audit(a, a.program),
+        },
+    )
+    print(
+        f"{a.hole}: named as {a.known_row}, a cap-round known row applied in build wave {a.wave}; "
+        "the plan is not edited and the row blocks no wave"
+    )
+    settle_tail(a.program, h)
     return 0
 
 
@@ -645,3 +731,14 @@ def add_verbs(sub: Any, host: Any) -> None:
     p.add_argument("--ratings", required=True)
     p.add_argument("--reason", required=True)
     p.set_defaults(fn=cmd_repass)
+    p = sub.add_parser(
+        "name-cap",
+        help="name a non-(g) find of the verification-only cap round as a known row",
+    )
+    p.add_argument("--program", required=True)
+    p.add_argument("--hole", required=True)
+    p.add_argument("--known-row", required=True)
+    p.add_argument("--wave", required=True, help="the build wave that applies it (W1)")
+    p.add_argument("--reason", required=True)
+    p.add_argument("--evidence", nargs="+", required=True)
+    p.set_defaults(fn=cmd_name_cap)

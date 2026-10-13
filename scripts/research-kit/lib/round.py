@@ -7,7 +7,7 @@
   round.sh close --program P --round ID --reclose --reason "<why>"
                  (a closed round, newest of its kind: re-run seed match and recompute new_material,
                  seeds_caught, quiet and round 1's forecast/R_max; the old values go to m["reclosed"])
-  round.sh artifact|split|verify-split|reproduce|hold-g|refind|repass …
+  round.sh artifact|split|verify-split|reproduce|hold-g|refind|repass|name-cap …
                  settling a round's holes honestly (lib/settle.py)
 
 The caps live HERE, in code (§10 item 17), and every refusal names its cap (exit 2):
@@ -32,7 +32,8 @@ slots are never handed to another vendor (§3.8). Only after the operator's clas
 rounds run without that lane, and then only with two families, one of them non-Anthropic.
 
 Closing a certification round closes the program's certification-round activity (lib/activities.py)
-once certification_due says no round is due: the stop rule has fired or R_max is spent.
+once certification_due says no round is due (the stop rule has fired or R_max is spent) and the last
+round owes no settle step (settle_owed); until then the activity stays open, settle-only.
 
 Round directories: certification `rounds/<n>/`, frame critique `rounds/fc<n>/`, delta
 `rounds/delta-<hole>-<n>/`, built `rounds/b<n>/`. Test override for the courier: CC_RESEARCH_COURIER.
@@ -628,9 +629,7 @@ def tally(slug: str, rid: str, m: Dict[str, Any]) -> None:
         for h in mine
         if (h.get("verification") or {}).get("status") == "CONFIRMED"
         and (h.get("materiality") or {}).get("level") == "MATERIAL"
-        and not h.get("seed_match")
-        and not kit.settled_out(h)
-        and not kit.held_refind(h, held)
+        and not kit.not_new_material(h, held)
     ]
     m["new_material"] = len(real)
     m["seeds_caught"] = sum(
@@ -782,19 +781,76 @@ def cmd_reclose(a: argparse.Namespace) -> int:
     return 0
 
 
-def activity_tail(slug: str, m: Dict[str, Any]) -> None:
-    """Close the certification-round activity once no round is due; else name the open one."""
-    if m["kind"] == "certification":
-        import activities
+def settle_owed(slug: str) -> Tuple[Optional[str], List[str]]:
+    """(the newest certification round, the settle steps it still owes) once it has closed: its one
+    rating re-pass while rater agreement is low and none ran (round_kappa), and each of its
+    CONFIRMED MATERIAL holes that counts as new material (kit.not_new_material) and no known row
+    names: a clause-(g) one is held (round.sh hold-g), and in the verification-only cap round any
+    other is named (round.sh name-cap). Gate row 9 fails the cap-round holes left unnamed."""
+    done = all_matrices(slug, "certification")
+    if not done or not done[-1].get("closed"):
+        return None, []
+    m = done[-1]
+    rid = str(m.get("round"))
+    owed: List[str] = []
+    kp = m.get("kappa") or {}
+    k = kp.get("materiality")
+    if (
+        k is not None
+        and k < float(kp.get("below", kit.KAPPA_REPASS_BELOW))
+        and not kp.get("repass")
+    ):
+        owed.append("rating re-pass (round.sh repass)")
+    ids = (rid, str(m.get("seq")))
+    held = kit.held_frame_omissions(slug)
+    named = {str(r.get("hole")) for r in kit.known_rows(slug)}
+    holes = kit.fold(kit.read_jsonl(kit.records_dir(slug) / "holes.jsonl")).values()
+    for h in sorted(holes, key=lambda h: str(h["id"])):
+        if (
+            str(h.get("round")) not in ids
+            or (h.get("verification") or {}).get("status") != "CONFIRMED"
+            or (h.get("materiality") or {}).get("level") != "MATERIAL"
+            or kit.not_new_material(h, held)
+            or str(h["id"]) in named
+        ):
+            continue
+        if kit.clause_g(h):
+            owed.append(f"{h['id']} (round.sh hold-g)")
+        elif m.get("verification_only"):
+            owed.append(f"{h['id']} (round.sh name-cap)")
+    return rid, owed
 
-        why = certification_due(slug)
-        if why:
-            shut = activities.close_kind(slug, "certification-round")
-            if shut:
-                print(f"certification activity closed: {why}")
-        else:
-            for aid in activities.open_ids(slug, "certification-round"):
-                print(f"certification activity open: {aid}")
+
+def activity_tail(slug: str, m: Dict[str, Any]) -> None:
+    """Close the certification-round activity once no round is due and the last round owes no settle
+    step (settle_owed). While it owes one the open activity stays, settle-only (its row carries
+    settle_round, and the research block lets through that round's settle steps and nothing else);
+    while a round is due it is a plain round activity. Never opens one: gate.sh cert-activity does."""
+    if m["kind"] != "certification":
+        return
+    import activities
+
+    kind = "certification-round"
+    why = certification_due(slug)
+    if not why:
+        activities.ensure_open(
+            slug, kind, create=False
+        )  # a due round is no settle-only row
+        for aid in activities.open_ids(slug, kind):
+            print(f"certification activity open: {aid}")
+        return
+    rid, owed = settle_owed(slug)
+    if not owed:
+        if activities.close_kind(slug, kind):
+            print(f"certification activity closed: {why}")
+        return
+    aid = activities.ensure_open(slug, kind, settle_round=rid, create=False)
+    print(
+        f"certification activity kept open to settle round {rid}: {aid}; it owes {', '.join(owed)}"
+        if aid
+        else f"round {rid} owes {', '.join(owed)}: re-open its settle-only activity with "
+        f"gate.sh cert-activity --program {slug}"
+    )
 
 
 def main(argv: Optional[List[str]] = None) -> int:

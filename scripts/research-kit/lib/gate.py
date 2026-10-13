@@ -15,7 +15,9 @@ Invoked through scripts/research-kit/gate.sh. Verbs:
   cert-activity --program P                                 print (opening if none) the open
                                                             certification-round activity's id;
                                                             refused unless certifying, frozen and
-                                                            a certification round is due
+                                                            a certification round is due, or the
+                                                            last round still owes a settle step
+                                                            (then settle-only, round.py settle_owed)
   return-activity --program P --area A --because "<why>"    print (opening if none) the area's
                                                             front-end-return activity id (§6.1);
                                                             only between two certification rounds,

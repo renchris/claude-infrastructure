@@ -481,10 +481,9 @@ def settled_out(h: Dict[str, Any]) -> bool:
     )
 
 
-def held_frame_omissions(slug: str) -> Set[str]:
-    """Hole ids held for the post-certificate frame-delta cycle (REPORT.md §5.4): each `hole` an OPEN
-    `frame-omission` known row names, in frame.json `known_rows` or the `known_rows.jsonl` events
-    (`round.sh hold-g` writes those). A row the sweep or the frame-delta closed holds nothing."""
+def known_rows(slug: str) -> List[Dict[str, Any]]:
+    """Every known row, folded: frame.json `known_rows`, then the `known_rows.jsonl` events
+    (`round.sh hold-g` and `name-cap` write those; the sweep and the frame-delta close them)."""
     rec = records_dir(slug)
     rows: Dict[str, Dict[str, Any]] = {
         str(r["id"]): dict(r)
@@ -494,9 +493,16 @@ def held_frame_omissions(slug: str) -> Set[str]:
     for ev in read_jsonl(rec / "known_rows.jsonl"):
         if ev.get("id"):
             rows.setdefault(str(ev["id"]), {}).update(ev)
+    return list(rows.values())
+
+
+def held_frame_omissions(slug: str) -> Set[str]:
+    """Hole ids held for the post-certificate frame-delta cycle (REPORT.md §5.4): each `hole` an OPEN
+    `frame-omission` known row names (known_rows). A row the sweep or the frame-delta closed holds
+    nothing."""
     return {
         str(r["hole"])
-        for r in rows.values()
+        for r in known_rows(slug)
         if r.get("kind") == "frame-omission"
         and r.get("status", "open") == "open"
         and r.get("hole")
@@ -507,6 +513,19 @@ def held_refind(h: Dict[str, Any], held: Set[str]) -> bool:
     """A later round's re-find (`round.sh refind`) of a hole still held for the frame-delta cycle:
     no round count takes it as new material. A re-find of anything else is new material."""
     return bool(h.get("refind_of")) and str(h["refind_of"]) in held
+
+
+def not_new_material(h: Dict[str, Any], held: Set[str]) -> bool:
+    """A hole no count takes as new material whatever its rating: a seed catch (seed.py match tags it
+    seed_match at round close), an artifact or an unverified split-off (settled_out), or a re-find of
+    a held hole (held_refind). Round close, estimate.counted_holes and gate row 9 all select with it."""
+    return bool(h.get("seed_match")) or settled_out(h) or held_refind(h, held)
+
+
+def clause_g(h: Dict[str, Any]) -> bool:
+    """Rated under clause (g), a frame omission (REPORT.md §3.11): `round.sh hold-g` holds it."""
+    clause = str((h.get("materiality") or {}).get("clause") or "")
+    return "g" in re.findall(r"[a-z]", clause.lower())
 
 
 def rater_call(h: Dict[str, Any], k: int) -> Optional[str]:
