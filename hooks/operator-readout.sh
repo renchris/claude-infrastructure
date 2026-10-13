@@ -186,7 +186,10 @@ set -uo pipefail
 # symlink into the checkout is tried FIRST. Fails SAFE — if the lib cannot be sourced we fall back
 # to the historical bare `.done` test, so this surface degrades to its old behaviour and never
 # goes inert.
-_amd="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+# $0's directory by parameter expansion, not dirname(1): this file used to start dirname twice
+# before reading a byte of stdin, and every process start is ~25 ms at a load of 400.
+case "$0" in */*) _or_d0="${0%/*}"; [ -n "$_or_d0" ] || _or_d0=/ ;; *) _or_d0=. ;; esac
+_amd="$(cd "$_or_d0" 2>/dev/null && pwd)"
 _amlib="$_amd/lib/activation-marker.sh"
 [ -f "$_amlib" ] || { _amt="$0"; [ -L "$_amt" ] && _amt="$(readlink "$_amt")"
   _amlib="$(cd "$(dirname "$_amt")" 2>/dev/null && pwd)/lib/activation-marker.sh"; }
@@ -317,7 +320,7 @@ MAX="${CC_OPREADOUT_MAX:-6}"          # the ITEMIZED-line budget (§4 M2); rollu
 TTL="${CC_OPREADOUT_TTL_S:-900}"
 NOW="${CC_OPREADOUT_NOW:-$(date +%s 2>/dev/null || echo 0)}"
 SID="?"
-SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+SCRIPT_DIR="$_amd"   # the same directory resolved above; nothing changes directory in between
 
 # cc-do — the ONE-COMMAND driver the collapse render points at. RESOLVED, never assumed (I11 again):
 # `bin/cc-*` deploys by glob in install.sh, so this hook can land BEFORE the driver reaches PATH, and
@@ -429,15 +432,41 @@ expect_token() { # stdin: stems in display order; $1: widest list the line holds
   if [ "${n:-0}" -le 3 ] && [ "${#j}" -le "${1:-${#j}}" ]; then printf '%s\n' "$j"
   else printf '%s\n' "$s" | expect_fp; fi
 }
+# kv_first <KEY=value text> <KEY> → the value of the FIRST line starting `KEY=` (everything after
+# its first `=`); rc 1 when there is none. Pure bash: the `grep -E "^KEY=" | head -1 | cut -d= -f2-`
+# it replaces was three process starts per field, and one render reads about twenty fields.
+kv_first() {
+  local _kl
+  while IFS= read -r _kl || [ -n "$_kl" ]; do
+    case "$_kl" in "$2="*) printf '%s\n' "${_kl#*=}"; return 0 ;; esac
+  done <<< "$1"
+  return 1
+}
+# sha16 (stdin) → the first 16 hex digits of its SHA-1, empty when shasum is missing. The digest is
+# sliced in the shell; `| cut -c1-16` was a second process start at each of six call sites.
+sha16() {
+  local _h
+  _h="$(shasum 2>/dev/null)"
+  printf '%s' "${_h:0:16}"
+}
+# bn <path> [suffix] → basename(1)'s answer without the process start: trailing slashes dropped,
+# `/` stays `/`, and the suffix is removed unless it is the whole name.
+bn() {
+  local _b="$1"
+  while [ "${#_b}" -gt 1 ] && [ "${_b%/}" != "$_b" ]; do _b="${_b%/}"; done
+  [ "$_b" = / ] || _b="${_b##*/}"
+  if [ -n "${2:-}" ] && [ "$_b" != "$2" ]; then _b="${_b%"$2"}"; fi
+  printf '%s\n' "$_b"
+}
 # scope_of <wrap-ledger --machine text> → met | open | unknown. Reads the ledger's own SCOPE field;
 # a ledger too old to carry it is derived from DOD/REMAINDER the way the ledger itself derives it,
 # so a live layer one fast-forward behind this hook can never read an absent DoD as `met`.
 scope_of() {
   local s d r
-  s="$(printf '%s\n' "$1" | sed -n 's/^SCOPE=//p' | head -1)"
+  s="$(kv_first "$1" SCOPE)"
   case "$s" in met|open|unknown) printf '%s' "$s"; return 0 ;; esac
-  d="$(printf '%s\n' "$1" | sed -n 's/^DOD=//p' | head -1)"
-  r="$(printf '%s\n' "$1" | sed -n 's/^REMAINDER=//p' | head -1)"
+  d="$(kv_first "$1" DOD)"
+  r="$(kv_first "$1" REMAINDER)"
   case "$r" in ''|*[!0-9]*) r=0 ;; esac
   if [ "$d" != "present" ]; then printf 'unknown'
   elif [ "$r" -gt 0 ]; then printf 'open'
@@ -808,7 +837,7 @@ render_block() {
           # Stem = the script's basename, derived exactly as bin/cc-do names it, so the collapse
           # row's `--expect` names the step the way cc-do will find it.
           printf 'deploy\t▶\tbash %s   [deploy: live layer %s behind origin/%s]\t%s\n' \
-            "$(tildify "$dscript")" "$behind" "$sbr" "$(basename "${dscript%.sh}")" >> "$steps_file"
+            "$(tildify "$dscript")" "$behind" "$sbr" "$(bn "${dscript%.sh}")" >> "$steps_file"
         else
           local dwhy
           dwhy="$(printf '%s\n' "$dout" | tail -1 | tr -d '\t')"
@@ -836,7 +865,7 @@ render_block() {
       [ -f "$f" ] || continue
       activation_settled "$f" && continue
       disp="$(tildify "$f")"; pre=""
-      stem="$(basename "$f" .sh)"
+      stem="$(bn "$f" .sh)"
       grep -q 'CONFIRM' "$f" 2>/dev/null && pre="CONFIRM=1 "
       # THE WRAPPING CULPRIT (operator screenshot 2026-07-31): `CONFIRM=1 bash <path> && touch
       # <path>.done` names the same 60-char path TWICE and wrapped to four terminal lines per step —
@@ -1041,7 +1070,7 @@ render_block() {
   if [ -n "$cwd" ] && [ -d "$cwd" ]; then
     q_proj="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || true)"
     [ -n "$q_proj" ] || q_proj="$cwd"
-    q_proj="$(basename "$q_proj")"
+    q_proj="$(bn "$q_proj")"
   fi
   if [ -n "$q_proj" ] && [ -n "$blg" ] && [ -f "$BLG_FILE" ]; then
     Q_N="$(blg_list_cached "$blg" --open --json \
@@ -1101,7 +1130,7 @@ render_block() {
     fi
   fi
   if [ -n "$led" ]; then
-    lf() { printf '%s' "$led" | grep -E "^$1=" | head -1 | cut -d= -f2-; }
+    lf() { kv_first "$led" "$1"; }
     RUNG="$(lf RUNG)"; [ -n "$RUNG" ] || RUNG="?"
     # ⏳ working-vs-idling (D8 / A10 §6.3), published as globals from the ledger read that ALREADY
     # happens here — the same trick RUNG/TOTAL use, and the reason this costs zero extra forks.
@@ -1667,7 +1696,22 @@ input="$(cat 2>/dev/null || printf '{}')"
 [ "${CC_OPREADOUT_DISABLE:-0}" = "1" ] && abstain "disabled"
 command -v jq >/dev/null 2>&1 || abstain "no-jq"
 
-SID="$(printf '%s' "$input" | jq -r '.session_id // "?"' 2>/dev/null || echo '?')"
+# ONE jq for the three stdin fields (was three starts, the other two below the assignee guard). The
+# fast path is taken only when each field is absent or a string with no newline in it, the only
+# shapes the harness sends; anything else (a non-object, a number, two documents) leaves _or_fast=0
+# and is read by the three original calls, so an odd payload parses exactly as it always did.
+_or_us=$'\037'; _or_fast=0; CWD=""; TP=""
+_or_in="$(printf '%s' "$input" | jq -r --arg us "$_or_us" '
+  [.session_id, .cwd, .transcript_path] as $f
+  | if ($f | all(. == null or . == false
+                 or (type == "string" and ((contains("\n") or contains($us)) | not))))
+    then "ok" + $us + ($f[0] // "?") + $us + ($f[1] // "") + $us + ($f[2] // "")
+    else "legacy" end' 2>/dev/null || true)"
+case "$_or_in" in
+  *$'\n'*) : ;;
+  "ok$_or_us"*) IFS="$_or_us" read -r _ SID CWD TP <<< "$_or_in"; _or_fast=1 ;;
+esac
+[ "$_or_fast" = 1 ] || SID="$(printf '%s' "$input" | jq -r '.session_id // "?"' 2>/dev/null || echo '?')"
 
 # ── NO OPERATOR, NO OPERATOR BLOCK (2026-08-02) ──────────────────────────────────────────────────
 # Observed: a teammate pane (@preview-index-fix, spawned Agent({name,team_name})) rendered
@@ -1696,8 +1740,10 @@ fi
 # SID is parsed above, before the assignee guard, so that guard's abstain is ATTRIBUTABLE — an IDL
 # row reading sid "?" cannot be traced to the session it silenced, and this is the one hook whose
 # silence an operator may need to explain later.
-CWD="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
-TP="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
+if [ "$_or_fast" != 1 ]; then
+  CWD="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
+  TP="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
+fi
 
 # ── the wrap-ledger memo's EVENT key (P0-4, scripts/wrap-ledger.sh § THE MEMO) ──
 # Seven Stop-hook call sites each pay a full ~180 ms / 19-git ledger on every close, and TWO of them
@@ -1800,7 +1846,7 @@ _dl_tp="${TP/#\~/$HOME}"
 if [ "${CC_DEADLINE_LINE:-on}" != off ] && [ "$SID" != "?" ] && [ -f "$_dl_tp" ] \
    && [ "$(tail -c 262144 "$_dl_tp" 2>/dev/null | grep -o '"entrypoint":"[a-z-]*"' | tail -1)" = '"entrypoint":"cli"' ]; then
   _dl_f="${DL_DIR:-$HOME/Development/personal/deadlines}/.state/due72"
-  _DL_LATCH="$STATE_DIR/dl72-$(printf '%s' "$SID" | shasum 2>/dev/null | cut -c1-16)"
+  _DL_LATCH="$STATE_DIR/dl72-$(printf '%s' "$SID" | sha16)"
   if [ -s "$_dl_f" ] && [ ! -f "$_DL_LATCH" ]; then
     IFS=$'\t' read -r _dl_n _dl_top < "$_dl_f" 2>/dev/null || _dl_n=""
     case "$_dl_n" in ''|*[!0-9]*|0) ;; *) _DL_LINE="⏰ ${_dl_n} due ≤72h — top: ${_dl_top}" ;; esac
@@ -1852,7 +1898,14 @@ cheap_stamp() {
   done
   if [ -n "$cwd" ]; then
     s="$s|$(git -C "$cwd" rev-parse HEAD 2>/dev/null || printf -)"
-    s="$s|$(git -C "$cwd" status --porcelain --untracked-files=no 2>/dev/null | wc -l | tr -d ' ')"
+    # Line count in the shell (was `| wc -l | tr -d ' '`): porcelain rows are never empty, so the
+    # number of rows read is the number of newlines wc counted, and no output is still 0.
+    local _cs_o _cs_l _cs_n=0
+    _cs_o="$(git -C "$cwd" status --porcelain --untracked-files=no 2>/dev/null)"
+    if [ -n "$_cs_o" ]; then
+      while IFS= read -r _cs_l; do _cs_n=$((_cs_n + 1)); done <<< "$_cs_o"
+    fi
+    s="$s|$_cs_n"
   else
     s="$s|-|-"
   fi
@@ -1862,11 +1915,11 @@ cheap_stamp() {
 }
 
 mkdir -p "$STATE_DIR" 2>/dev/null || true
-SKEY="$(printf '%s|%s|%s' "$CFG" "$SID" "${CWD:-}" | shasum 2>/dev/null | cut -c1-16)"
+SKEY="$(printf '%s|%s|%s' "$CFG" "$SID" "${CWD:-}" | sha16)"
 LATCH="$STATE_DIR/$SKEY.last"
 STAMP=""
 if [ "${CC_READOUT_DAMP:-on}" != "off" ] && [ -n "$SKEY" ] && [ -f "$LATCH" ]; then
-  STAMP="$(cheap_stamp "${CWD:-}" | shasum 2>/dev/null | cut -c1-16)"
+  STAMP="$(cheap_stamp "${CWD:-}" | sha16)"
   # Latch line format: "<content-hash> <ts> [<stamp>]". A 2-field line is the PRE-M3 format — treat
   # a missing stamp as "unknown", which falls through to a full render and rewrites the new format.
   # Never infer equality from an absent field.
@@ -1941,7 +1994,7 @@ if [ -z "$BLOCK" ]; then
         "${OR_PERMPEND:-0}" "${OR_PERMPEND_AGE:-0}" "${RUNG:-?}" 0 "${OR_BUSY_SAMPLE:-}" 2>/dev/null || true )"
   fi
   if [ -n "$_bz_line" ] && [ "${CC_BUSY_NOTICE:-1}" != "0" ]; then
-    _bz_hash="$(printf '%s' "$_bz_line" | shasum 2>/dev/null | cut -c1-16)"
+    _bz_hash="$(printf '%s' "$_bz_line" | sha16)"
     _bz_latch="$STATE_DIR/busy-${SKEY:-none}"
     _bz_fire=1
     if [ -n "$_bz_hash" ] && [ -f "$_bz_latch" ]; then
@@ -1979,7 +2032,7 @@ if [ -z "$BLOCK" ]; then
   [ -n "$_cwrap" ] && [ -f "$_cwrap" ] || abstain "nothing-to-surface"
   _cled="$( cd "${CWD:-}" 2>/dev/null && bash "$_cwrap" --machine 2>/dev/null || true )"
   [ -n "$_cled" ] || abstain "nothing-to-surface"
-  _clf() { printf '%s' "$_cled" | grep -E "^$1=" | head -1 | cut -d= -f2-; }
+  _clf() { kv_first "$_cled" "$1"; }
   # Re-confirm the rung from THIS read: between render_block and here a sibling could have landed or
   # dirtied the tree, and a certificate is the one output that must never be stale.
   [ "$(_clf RUNG)" = "✅" ] || abstain "cert-rung-moved"
@@ -2010,12 +2063,12 @@ fi
 
 # Damping latch: change → render now; unchanged → re-assert only after TTL.
 # (STATE_DIR/SKEY/LATCH are established by the pre-render stamp gate above — not recomputed here.)
-HASH="$(printf '%s' "$BLOCK" | shasum 2>/dev/null | cut -c1-16)"
+HASH="$(printf '%s' "$BLOCK" | sha16)"
 if [ -n "$SKEY" ] && [ -n "$HASH" ]; then
   # The stamp may not have been computed above (kill switch, or no latch file existed). Compute it
   # now so the latch we write is always usable by the NEXT turn's cheap gate — a latch missing its
   # stamp field silently disables the optimization forever after.
-  [ -n "$STAMP" ] || STAMP="$(cheap_stamp "${CWD:-}" | shasum 2>/dev/null | cut -c1-16)"
+  [ -n "$STAMP" ] || STAMP="$(cheap_stamp "${CWD:-}" | sha16)"
   if [ -f "$LATCH" ]; then
     read -r prev_hash prev_ts _prev_stamp < "$LATCH" 2>/dev/null || { prev_hash=""; prev_ts=0; }
     case "$prev_ts" in ''|*[!0-9]*) prev_ts=0 ;; esac

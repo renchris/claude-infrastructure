@@ -699,8 +699,13 @@ _settle() { # <sid> <wait> — rc 0 proven · 1 escalated · 3 undecided · 4 ab
 }
 
 _sids() { # every sid with a meta file
-  local f
-  for f in "$META"/*.json; do [ -f "$f" ] && basename "$f" .json; done
+  # The name is cut in the shell, not by basename(1): operator-readout's Stop hook runs `list` on
+  # every full render, and one process start per meta file was 172 of that render's ~500.
+  local f b
+  for f in "$META"/*.json; do
+    [ -f "$f" ] || continue
+    b="${f##*/}"; printf '%s\n' "${b%.json}"
+  done
   return 0
 }
 
