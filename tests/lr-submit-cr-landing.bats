@@ -124,6 +124,10 @@ TCL
     echo 'set poll 30; set qmax 180; set deadline $poll; set verb skip; set ts ""'
     echo 'set recr 0; set recrmax 2; set nextlook [expr {$poll - 1}]; set unmeasured 0'
     echo 'set t0 0'
+    # The look schedule is WALL CLOCK since the first CR (tcr), not loop turns. With lr_pump stubbed
+    # no time passes, so each pump moves tcr back a second; the first look lands at 29 s as before.
+    echo 'set sched {5 15 30 45}; set si 0; set tcr [expr {[clock milliseconds] - 29000}]'
+    echo 'proc lr_pump {n} { global tcr; set tcr [expr {$tcr - 1000}] }'
     echo 'set SCREENS {EMPTY DRAFT-MINE}'
     cat "$BATS_TEST_TMPDIR/loop.tcl"
     echo 'puts "sent=[llength $SENT]"'
