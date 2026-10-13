@@ -117,6 +117,9 @@ and finish the Google sign-in. Park it before anything else, because the preflig
    on the operator step, class-B default "continue on two vendors" after 48 h). It writes `CONTRACT.md`,
    pins the responding model ids and the reviewer effort (`reviewer_effort`: Opus xhigh, Fable high,
    OpenAI xhigh), and stores the page's hash in `frame.json`, so the frame signature covers the page.
+   Every later preflight (each certification round needs a fresh one) is appended to the sealed
+   `preflights.jsonl`; gate row 13 reads that history, or the hash-pinned page's own preflight lines,
+   for the run that preceded the page, so re-running the preflight never fails row 13.
 9. **Lint, then the operator signs.** `intake.py lint --program <slug>` is gate row 1 without the
    signature; `intake.py status --program <slug>` lists what is left. When both are clean, hand the
    operator `cc-signoff research:<slug>/frame`.

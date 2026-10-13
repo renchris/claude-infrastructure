@@ -82,7 +82,11 @@ Added 2026-10-05 (wave E3d): between `build-certified` and `closed` sits `implem
 Every script: `--program <slug>` (and optionally env `CC_RESEARCH_RECORDS` for the records dir). Exit 0 ok, 1 a check
 failed, 2 usage or refusal, 3 a dead vendor lane, 4 a voided slot. Python is 3.9-safe; bash is 3.2-safe.
 
-- `courier.sh preflight` → `<sealed>/preflight.json` `{vendor:{binary, ok, model_id, error}}`; exit 3 if any lane dead.
+- `courier.sh preflight` → `<sealed>/preflight.json` `{vendor:{binary, ok, model_id, error}}`, the latest run
+  (open-round reads it for freshness), and appends every run to `<sealed>/preflights.jsonl` `{ts, lanes:{vendor:{...}}}`
+  (added 2026-10-13); exit 3 if any lane dead. Gate row 13 passes on any recorded run that is all-live (or meets the
+  frame's "two vendors" rule) with every `at` strictly before `contract_page_at`: `preflight.json`, a `preflights.jsonl`
+  line, or the "Vendor preflight" lines of `CONTRACT.md` when its sha256 equals `contract_page_sha256` (a mismatch fails).
 - `courier.sh bundle --round K` → builds `<sealed>/rounds/K/bundle/`, prints `<path> <sha256 of manifest>`.
   The bundle is the seeded plan plus the records, less `courier.EXCLUDE` (the hole ledger, rounds, cert, changes,
   verdicts, `freeze.json` and `freezes.jsonl`, whose `plan_lines` is the seeded copy's size) and less round history

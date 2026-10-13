@@ -629,6 +629,74 @@ ceiling() { "$REPO/bin/cc-research" ceiling --program demo --json | /usr/bin/pyt
   [ "$(rowstat 13)" = "FAIL" ]
 }
 
+# Row 13 and the re-run preflight (2026-10-13, program truememory-2-0): every certification round
+# needs a fresh preflight, and courier.sh preflight rewrites preflight.json whole, so the snapshot
+# always post-dates the contract page. The evidence is the append-only history and the page itself.
+# pfrun <at> [google ok]: one courier.sh preflight run, as preflight.json and a history line.
+pfrun() {
+  /usr/bin/python3 - "$CC_RESEARCH_HOME/demo" "$1" "${2:-True}" <<'PY'
+import json, sys
+d, at, g = sys.argv[1], sys.argv[2], sys.argv[3] == "True"
+pins = {"anthropic": "claude-opus-5-5", "frontier": "claude-fable-5-1", "openai": "gpt-x", "google": "gemini-x"}
+run = {v: {"ok": g or v != "google", "model_id": m, "at": at} for v, m in pins.items()}
+json.dump(run, open(d + "/preflight.json", "w"))
+open(d + "/preflights.jsonl", "a").write(json.dumps({"ts": at, "lanes": run}) + "\n")
+PY
+}
+# page <at> [tamper]: CONTRACT.md with its vendor preflight lines dated <at>, its hash pinned in the frame.
+page() {
+  /usr/bin/python3 - "$REC" "$1" "${2:-}" <<'PY'
+import hashlib, json, sys
+rec, at, tamper = sys.argv[1], sys.argv[2], sys.argv[3]
+pins = {"anthropic": "claude-opus-5-5", "frontier": "claude-fable-5-1", "google": "gemini-x", "openai": "gpt-x"}
+page = "# Contract page — demo\n\n## Vendor preflight (responding model ids, pinned for the program)\n\n" + "".join(
+    f"- {v}: live {m} at {at}\n" for v, m in pins.items()) + "\nReviewer effort: none pinned\n"
+fr = json.load(open(rec + "/frame.json"))
+fr["contract_page_sha256"] = hashlib.sha256(page.encode()).hexdigest()
+json.dump(fr, open(rec + "/frame.json", "w"))
+open(rec + "/CONTRACT.md", "w").write(page.replace("2026", "2025") if tamper else page)
+PY
+}
+
+@test "row 13: an all-live preflight in the history before the contract page passes after later re-runs" {
+  jedit frame.json 'd["contract_page_at"] = "2026-10-05T00:00:00Z"'
+  pfrun "2026-10-04T00:00:00Z"
+  pfrun "2026-10-06T00:00:00Z"
+  [ "$(rowstat 13)" = "PASS" ]
+}
+
+@test "row 13: a history run before the contract page with a dead lane is no evidence" {
+  jedit frame.json 'd["contract_page_at"] = "2026-10-05T00:00:00Z"'
+  pfrun "2026-10-04T00:00:00Z" False
+  pfrun "2026-10-06T00:00:00Z"
+  [[ "$(rowtext 13)" == *"did not run before the contract page"* ]]
+}
+
+@test "row 13: a contract page that preceded every recorded preflight still fails" {
+  jedit frame.json 'd["contract_page_at"] = "2026-10-05T00:00:00Z"'
+  pfrun "2026-10-06T00:00:00Z"
+  pfrun "2026-10-07T00:00:00Z"
+  [[ "$(rowtext 13)" == *"did not run before the contract page"* ]]
+}
+
+@test "row 13: with no history, the hash-pinned contract page's own all-live preflight lines are the evidence" {
+  jedit frame.json 'd["contract_page_at"] = "2026-10-05T00:00:00Z"'
+  pfrun "2026-10-06T00:00:00Z"
+  rm "$CC_RESEARCH_HOME/demo/preflights.jsonl"
+  page "2026-10-04T00:00:00Z"
+  [ "$(rowstat 13)" = "PASS" ]
+}
+
+@test "row 13: a contract page whose hash does not match the frame is no evidence and fails" {
+  jedit frame.json 'd["contract_page_at"] = "2026-10-05T00:00:00Z"'
+  pfrun "2026-10-06T00:00:00Z"
+  rm "$CC_RESEARCH_HOME/demo/preflights.jsonl"
+  page "2026-10-04T00:00:00Z" tamper
+  run rowtext 13
+  [[ "$output" == *"did not run before the contract page"* ]] || false
+  [[ "$output" == *"CONTRACT.md does not match"* ]]
+}
+
 @test "row 13: a counted round whose reviewer answered as an unpinned model fails" {
   /usr/bin/python3 -c "import json; p='$REC/rounds/2/panels/r2p5.json'; d=json.load(open(p)); d['responding_model']='gpt-old'; json.dump(d, open(p,'w'))"
   [[ "$(rowtext 13)" == *"gpt-old"* ]]

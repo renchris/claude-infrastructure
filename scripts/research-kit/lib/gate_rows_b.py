@@ -9,11 +9,12 @@ Unknown fails: a missing record is a FAIL with its reason.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import kit
 from gate import FAIL, FILED, PASS, Ctx, Row
@@ -259,6 +260,37 @@ def row12(ctx: Ctx) -> Row:
 # ── row 13 ──────────────────────────────────────────────────────────────────────────────────────
 
 
+PAGE_PREFLIGHT = re.compile(r"^- ([a-z][a-z0-9-]*): (live|DEAD) (\S+) at (\S+)$")
+
+
+def all_live(run: Dict[str, Any], two: bool) -> bool:
+    """A preflight run every vendor lane passed, or, on a frame degraded to two vendors, whose live
+    lanes span two families other than Anthropic alone (the counted-round rule below)."""
+    live = {v for v in kit.VENDORS if (run.get(v) or {}).get("ok")}
+    if live == set(kit.VENDORS):
+        return True
+    fams = {kit.VENDOR_FAMILY[v] for v in live}
+    return two and len(fams) >= 2
+
+
+def page_preflight(ctx: Ctx) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """The preflight run CONTRACT.md printed, as {vendor: {ok, model_id, at}}, when the page still
+    hashes to frame.json's contract_page_sha256 (the frame signature covers that hash); else None,
+    with the reason a page that exists is no evidence."""
+    p, want = ctx.path("CONTRACT.md"), ctx.frame.get("contract_page_sha256")
+    if not p.is_file() or not want:
+        return None, None
+    body = p.read_bytes()
+    if hashlib.sha256(body).hexdigest() != want:
+        return None, "CONTRACT.md does not match frame.json contract_page_sha256"
+    run: Dict[str, Any] = {}
+    for ln in body.decode(errors="replace").splitlines():
+        m = PAGE_PREFLIGHT.match(ln)
+        if m:
+            run[m[1]] = {"ok": m[2] == "live", "model_id": m[3], "at": m[4]}
+    return run or None, None
+
+
 @row(13, "Reviewers")
 def row13(ctx: Ctx) -> Row:
     fails: List[str] = []
@@ -271,10 +303,24 @@ def row13(ctx: Ctx) -> Row:
             FAIL,
             ["the vendor preflight never ran (courier.sh preflight)"],
         )
-    first = min(str(v.get("at")) for v in pf.values())
-    if not fr.get("contract_page_at") or first >= str(fr["contract_page_at"]):
-        fails.append("the vendor preflight did not run before the contract page")
     two = fr.get("degraded") == "two vendors"
+    # Every certification round re-runs the preflight and preflight.json keeps only the latest run, so
+    # the run that preceded the contract page is read from the append-only history, or, for a program
+    # whose pre-page run predates that history, from the hash-pinned page that printed it.
+    runs = [pf] + [
+        r.get("lanes") or {} for r in kit.read_jsonl(ctx.sealed / "preflights.jsonl")
+    ]
+    page_run, page_bad = page_preflight(ctx)
+    if page_bad:
+        fails.append(page_bad)
+    if page_run:
+        runs.append(page_run)
+    page_at = str(fr.get("contract_page_at") or "")
+    if not page_at or not any(
+        r and all_live(r, two) and all(str(v.get("at")) < page_at for v in r.values())
+        for r in runs
+    ):
+        fails.append("the vendor preflight did not run before the contract page")
     pins = fr.get("reviewer_pins") or {}
     # reviewer effort (decision 8c5cb4cdc518); a frame without reviewer_effort pins none, as before
     efforts = fr.get("reviewer_effort") or {}

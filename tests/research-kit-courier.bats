@@ -82,6 +82,19 @@ panel() { /usr/bin/python3 -c "import json; d=json.load(open('$CC_RESEARCH_RECOR
   [ "$(lane google)" = "True gemini-x" ]
 }
 
+@test "preflight: every run is appended to preflights.jsonl; preflight.json keeps only the latest" {
+  CC_NOW="2026-10-01T00:00:00Z" run "$C" preflight --program demo
+  [ "$status" -eq 0 ]
+  CC_RESEARCH_BIN_GOOGLE="$BATS_TEST_TMPDIR/bin/nope" CC_NOW="2026-10-02T00:00:00Z" run "$C" preflight --program demo
+  [ "$status" -eq 3 ]
+  run /usr/bin/python3 -c "
+import json
+rows = [json.loads(l) for l in open('$CC_RESEARCH_HOME/demo/preflights.jsonl')]
+print(len(rows), [r['ts'] for r in rows], [r['lanes']['google']['ok'] for r in rows], rows[0]['lanes']['anthropic']['at'])"
+  [ "$output" = "2 ['2026-10-01T00:00:00Z', '2026-10-02T00:00:00Z'] [True, False] 2026-10-01T00:00:00Z" ]
+  [ "$(lane google)" = "False None" ]
+}
+
 @test "preflight: a missing CLI is a dead lane, exit 3, never a reply" {
   CC_RESEARCH_BIN_GOOGLE="$BATS_TEST_TMPDIR/bin/nope" run "$C" preflight --program demo
   [ "$status" -eq 3 ]

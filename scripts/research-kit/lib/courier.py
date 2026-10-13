@@ -397,6 +397,10 @@ def cmd_preflight(a: argparse.Namespace) -> int:
             f"{v:<10} {'live' if rec['ok'] else 'DEAD'}  {rec['model_id'] or '-'}  "
             f"{binary or '-'}{'  — ' + str(rec['error']) if rec['error'] else ''}"
         )
+    # preflight.json is the latest run (rounds read it for freshness); preflights.jsonl keeps every
+    # run, because each certification round re-runs the preflight and gate row 13 needs the one that
+    # ran before the contract page.
+    kit.append_jsonl(kit.sealed_dir(a.program) / "preflights.jsonl", {"lanes": out})
     kit.write_json_atomic(kit.sealed_dir(a.program) / "preflight.json", out)
     return DEAD if any(not r["ok"] for r in out.values()) else 0
 
