@@ -160,7 +160,12 @@ class RejectedSourceIsNotHeldForAJob(unittest.TestCase):
         self.assertEqual(self.b(self.s(), fact()), "LAUNCHER-ROOTED")
         self.assertEqual(self.b(self.s(), {}), "HOLD-BGWORK")
         with tempfile.TemporaryDirectory() as tmp:
-            paths = T.Paths.from_env(root=os.path.join(tmp, "lr", "recon"))
+            # lr_root comes from the environment, not from `root`: named here, or the record
+            # would be written under the real state tree
+            paths = T.Paths.from_env(
+                env={"HOME": tmp, "LR_STATE_DIR": os.path.join(tmp, "lr")}
+            )
+            self.assertTrue(paths.lr_root.startswith(tmp))
             M.store.ensure_dirs(paths)
             ctx = M.Ctx(paths, None, tmp)
             s = self.s()
