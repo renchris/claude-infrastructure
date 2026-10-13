@@ -221,10 +221,10 @@ def bucket(
                 s, "HOLD-FOCUS", "focused pane (LR_MOVE_FOCUSED=off)", kind, bind
             )
         ship = any(b.ship_land for b in s.bg_work)
-        # A launcher-rooted pane keeps the hold on a rejected source too: its move is R, which
-        # retires the pane beside a new one, and nothing on that path records the jobs first.
-        launcher = pane is not None and pane.root_shape == "launcher"
-        if work and (ship or launcher or not source_rejected(fact)):
+        # A launcher-rooted pane is released too. Pane 12 was one (2026-10-13): R recycled it in
+        # place and the watcher carried its job. Where R replaces the pane instead, the daemon's
+        # own record of the jobs (__main__._record_jobs) is what survives.
+        if work and (ship or not source_rejected(fact)):
             return _mk(
                 s,
                 "HOLD-BGWORK",

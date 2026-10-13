@@ -135,8 +135,9 @@ that is a defect to fix in the rail.
 What still holds on a rejected account, each for a stated reason: an Agent Team **lead with live
 members** and a **team member** (a lead's exit kills its members' panes; see § Mode: upgrade), a
 **ship-land** job (a land killed between rebase and push costs more than the wait, and it ends by
-itself), a **launcher-rooted pane with a job** (its move replaces the pane, and nothing on that
-path records the jobs), a typed **draft**, and a turn **in flight** in the transcript. A healthy
+itself), a typed **draft**, and a turn **in flight** in the transcript. (The reconciler also writes
+the jobs down itself before it dispatches a move, `carried-jobs/<sid>.<epoch>.recon.jsonl`, so the
+record exists even where the move replaces the pane instead of recycling it.) A healthy
 source keeps every hold exactly as before. Kill switches: `LR_DEAD_SOURCE_RELEASE=off` (no hold
 is released on this evidence) and `CC_RECYCLE_DEAD_SOURCE_STOP=off` (the dialog is answered as
 before). `cc-lr switch` asks the subject to take a turn, which a rejected account cannot serve,

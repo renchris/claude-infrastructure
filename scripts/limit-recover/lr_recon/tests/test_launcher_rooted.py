@@ -225,7 +225,9 @@ class LauncherRootedTests(unittest.TestCase):
     def test_background_work_precedes_r(self):
         ctx, snap, facts = self.limited()
         snap.sessions[SID].bg_work = [T.BgWork(kind="shell", pid=3)]
-        out = self.run_pass(ctx, snap, facts)
+        # while no fact says the account is rejected; on a rejected one the job does not hold it
+        # (operator ruling 2026-10-13, tests/test_rejected_source_bgwork.py)
+        out = self.run_pass(ctx, snap, {})
         self.assertEqual(out["buckets"], ["HOLD-BGWORK"])
         self.assertEqual((out["rec"].substate, out["which"]), ("HOLD-BGWORK", None))
 

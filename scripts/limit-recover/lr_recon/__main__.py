@@ -1006,6 +1006,41 @@ def _admit(
     return True, why
 
 
+def _record_jobs(ctx: Ctx, rec: T.Record, snap: T.Snapshot, now: float) -> str:
+    """Before a move is dispatched, write down the background jobs its exit will end: one JSON line
+    per job under ``<lr_root>/carried-jobs/``. The recycle watcher records and mails them itself
+    when it answers the background-work dialog (handoff-fire.sh rcy_jobs_capture); this is the
+    record that exists whichever path the move takes, R's replace included. Never raises."""
+    s = snap.sessions.get(rec.sid)
+    if s is None or not s.bg_work:
+        return ""
+    path = os.path.join(
+        ctx.paths.lr_root, "carried-jobs", "%s.%d.recon.jsonl" % (rec.sid, int(now))
+    )
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            for b in s.bg_work:
+                fh.write(
+                    json.dumps(
+                        {
+                            "sid": rec.sid,
+                            "pane": rec.pane[1] if rec.pane else None,
+                            "pid": b.pid,
+                            "started_utc": b.lstart,
+                            "watcher": b.watcher_only,
+                            "argv": b.argv,
+                            "recorded_by": "lr-reconciler",
+                        }
+                    )
+                    + "\n"
+                )
+    except OSError:
+        return ""
+    _event(ctx.paths, "jobs-recorded", rec.sid, rec.record_id, path)
+    return path
+
+
 def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
     n = 0
     running = act.running_count(ctx.records, snap)
@@ -1066,6 +1101,8 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
         if not argv:
             continue
         pane = snap.panes.get("%d:%d" % rec.pane) if rec.pane else None
+        if which in settle.MOVE_ACTUATORS:
+            _record_jobs(ctx, rec, snap, now)
         pid = act.spawn(
             ctx.paths,
             rec,

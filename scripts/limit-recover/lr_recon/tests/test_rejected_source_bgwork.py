@@ -147,6 +147,40 @@ class RejectedSourceIsNotHeldForAJob(unittest.TestCase):
         ship = [T.BgWork(kind="shell", pid=3, ship_land=True)]
         self.assertEqual(self.b(self.s(bg_work=ship), fact()), "HOLD-BGWORK")
 
+    def test_a_launcher_rooted_pane_is_released_too_and_its_jobs_are_written_down(
+        self,
+    ) -> None:
+        # both panes read root_shape=launcher in the reconciler's records that day
+        import json
+        import tempfile
+
+        from lr_recon import __main__ as M
+
+        self.pane.root_shape = "launcher"
+        self.assertEqual(self.b(self.s(), fact()), "LAUNCHER-ROOTED")
+        self.assertEqual(self.b(self.s(), {}), "HOLD-BGWORK")
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = T.Paths.from_env(root=os.path.join(tmp, "lr", "recon"))
+            M.store.ensure_dirs(paths)
+            ctx = M.Ctx(paths, None, tmp)
+            s = self.s()
+            self.snap.sessions[s.sid] = s
+            rec = T.Record(sid=s.sid, record_id="recon:c:4fe9935f:1", pane=(64211, 16))
+            path = M._record_jobs(ctx, rec, self.snap, NOW)
+            self.assertTrue(
+                path.startswith(os.path.join(paths.lr_root, "carried-jobs"))
+            )
+            with open(path, encoding="utf-8") as fh:
+                rows = [json.loads(x) for x in fh]
+            self.assertEqual(sorted(r["pid"] for r in rows), [10476, 88781])
+            job = [r for r in rows if r["pid"] == 88781][0]
+            self.assertIn(
+                "eval 'cd ~/Development/claude-infrastructure; grep -n -E", job["argv"]
+            )
+            self.assertFalse(job["watcher"])
+            s.bg_work = []
+            self.assertEqual(M._record_jobs(ctx, rec, self.snap, NOW + 1), "")
+
     def test_a_lead_with_live_members_is_still_held_on_a_rejected_account(self) -> None:
         sid = "4fe9935f-ca5f-4a48-803c-5e569b08f1b7"
         self.snap.procs = {
