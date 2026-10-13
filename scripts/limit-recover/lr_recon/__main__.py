@@ -1035,11 +1035,24 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
             continue
         ok, why = _admit(ctx, rec, which, snap, now)
         if not ok:
+            # The gate's numbers ride with its name, for `cc-lr status --cohort` (report.next_action):
+            # a standing refusal read "the reconciler continues" for as long as it stood.
+            terms = ctx.admission.last_terms if why in ("restore-r", "drip") else ""
             if rec.close.get("admit_refused") != why:
                 rec.close["admit_refused"] = why
-                _event(ctx.paths, "admit-refused", rec.sid, rec.record_id, why)
+                _event(
+                    ctx.paths,
+                    "admit-refused",
+                    rec.sid,
+                    rec.record_id,
+                    "%s (%s)" % (why, terms) if terms else why,
+                )
+            rec.close["admit_terms"] = terms
+            rec.close.setdefault("admit_refused_at", now)
             continue
         rec.close.pop("admit_refused", None)
+        rec.close.pop("admit_terms", None)
+        rec.close.pop("admit_refused_at", None)
         if (
             which in settle.MOVE_ACTUATORS
             and rec.close.get("move_attempt") == rec.attempt

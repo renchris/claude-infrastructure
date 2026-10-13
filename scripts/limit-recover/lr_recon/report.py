@@ -169,6 +169,17 @@ def next_action(rec: T.Record) -> str:
         )
     if st.startswith("WAIT"):
         return "wakes at %s" % _hm(eta) if eta else "the reconciler retries"
+    gate = rec.close.get("admit_refused")
+    if gate:
+        # A standing admission refusal, by the gate's name and numbers (14233392, 2026-10-13: it
+        # read "the reconciler continues" for the ten hours the restore budget refused it).
+        terms = rec.close.get("admit_terms")
+        since = rec.close.get("admit_refused_at")
+        return "admission gate %s refuses its first turn%s%s; re-offered every pass" % (
+            gate,
+            " (%s)" % terms if terms else "",
+            " since %s" % _hm(since) if since else "",
+        )
     return "the reconciler continues (%s)" % rec.phase.lower()
 
 

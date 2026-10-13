@@ -95,6 +95,11 @@ class Admission:
         self.last_drip_at: Dict[str, float] = {}
         self.paged: Set[str] = set()
         self.page_due = False
+        # the restore budget's numbers at the last decide, for the status line
+        self.last_terms = ""
+        self.over_at: Dict[
+            str, float
+        ] = {}  # cohort -> the pass that last counted a restore-r
 
     # ── gate 1: the frozen restore budget ────────────────────────────────────────────────────
     def enter_active(
@@ -125,6 +130,7 @@ class Admission:
         self.refusals.clear()
         self.last_drip_at.clear()
         self.paged.clear()
+        self.over_at.clear()
         self.page_due = False
 
     def restore_ok(self, active: int, unredeemed: int) -> bool:
@@ -224,13 +230,33 @@ class Admission:
         load5 is accepted for the caller's symmetry with ``enter_active``; the brake reads load1 only,
         because L_open already carries the lagging load5 term (§C6 gate 2)."""
         del load5
-        if self.restore_r is None or not self.restore_ok(active, unredeemed):
+        self.last_terms = "active %d + in flight %d + 1 vs R %s" % (
+            active,
+            unredeemed,
+            "unset" if self.restore_r is None else self.restore_r,
+        )
+        if self.restore_r is None:
+            return False, "restore-r"
+        # THE RESTORE BUDGET IS BOUNDED LIKE THE PROBE THAT CARRIES THE SAME TERM (2026-10-13,
+        # 14233392). `active` is every mid-turn session on the machine, so once the rest of the fleet
+        # is busier than it was at ACTIVE entry this refuses on every pass: measured active 12,
+        # in flight 0, R frozen at the floor of 8, one member refused from 1791856395 until its
+        # reset. The probe's active term reads the same R and has always opened the drip after
+        # DRIP_AFTER refusals; this check ran in front of it and returned before that bound. It now
+        # counts in the same run, and past the run only the brake, the pacer and the drip's own
+        # clock decide. The run counts PASSES, not members: inside one pass the budget binds
+        # exactly as before, however many members it refuses.
+        over = not self.restore_ok(active, unredeemed)
+        if over and self.refusals.get(cohort, 0) < DRIP_AFTER:
+            if self.over_at.get(cohort) != now:
+                self.over_at[cohort] = now
+                self.refusals[cohort] = self.refusals.get(cohort, 0) + 1
             return False, "restore-r"
         if not self.cpu_ok(load1, ncpu, now):
             return False, "cpu"
         if not self.pacer_ok(acct, now, sid):
             return False, "pacer:%s" % acct
-        ok, reason = self.probe(self.restore_r)
+        ok, reason = (False, "restore-r") if over else self.probe(self.restore_r)
         if not ok:
             run = self.refusals.get(cohort, 0)
             if run < DRIP_AFTER:
