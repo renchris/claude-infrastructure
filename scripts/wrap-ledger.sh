@@ -206,6 +206,12 @@
 #                    WRAP_CACHE_LOCK_STALE_S · WRAP_CACHE_HOLDER_MAX_S
 set -uo pipefail
 
+# This script's directory, by parameter expansion. It was a dirname(1) substitution at eleven call sites:
+# up to eleven process starts per ledger, in a script the Stop hooks run at every turn end, where
+# each start costs ~25 ms at a load of 400. Same string dirname(1) printed for any path a caller
+# passes (`a/b.sh` → `a`, `b.sh` → `.`, `/b.sh` → `/`).
+case "$0" in */*) WL_SELF_DIR="${0%/*}"; [ -n "$WL_SELF_DIR" ] || WL_SELF_DIR=/ ;; *) WL_SELF_DIR=. ;; esac
+
 MODE="readout"
 SESSION_FLAG=""
 TRANSCRIPT_FLAG=""
@@ -617,7 +623,7 @@ UNLANDED=0; { [ "$AHEAD" -gt 0 ] || [ "$CHERRY" -eq 1 ]; } && UNLANDED=1
 # commits really are unlanded, and the certificate stays unreachable). ONE reader for the predicate,
 # shared with the producer — never a second copy (memory: make-the-actuator-the-arbiter).
 LANDING=0; LANDING_PID=""; LANDING_AGE=0
-_wl_lil="${WRAP_LAND_INFLIGHT_LIB:-$(dirname "$0")/../hooks/lib/land-inflight.sh}"
+_wl_lil="${WRAP_LAND_INFLIGHT_LIB:-$WL_SELF_DIR/../hooks/lib/land-inflight.sh}"
 [ -f "$_wl_lil" ] || _wl_lil="$HOME/.claude/hooks/lib/land-inflight.sh"
 if [ -f "$_wl_lil" ]; then
   # shellcheck source=../hooks/lib/land-inflight.sh
@@ -642,7 +648,7 @@ fi
 # Resolution = hooks/lib/dod-path.sh (CLOSE_INTEGRITY W3): repo-identity key with legacy
 # path-hash read-fallback, shared with the producer so the two cannot drift. The inline fallback
 # preserves the exact legacy formula for a live layer that has not yet linked the lib.
-_wl_dplib="$(dirname "$0")/../hooks/lib/dod-path.sh"
+_wl_dplib="$WL_SELF_DIR/../hooks/lib/dod-path.sh"
 [ -f "$_wl_dplib" ] || { _wl_dpt="$0"; [ -L "$_wl_dpt" ] && _wl_dpt="$(readlink "$_wl_dpt")"
   _wl_dplib="$(cd "$(dirname "$_wl_dpt")" 2>/dev/null && pwd)/../hooks/lib/dod-path.sh"; }
 [ -f "$_wl_dplib" ] || _wl_dplib="$HOME/.claude/hooks/lib/dod-path.sh"
@@ -768,7 +774,7 @@ compute_goal_liveness() {
   # ONE arbiter for the record dictionary — hooks/lib/goal-state.sh, shared with every other
   # goal-reading surface. Re-implementing the sentinel/met/failed table here is how two readers
   # of the same records start disagreeing (MEMORY.md make-the-actuator-the-arbiter).
-  lib="$(dirname "$0")/../hooks/lib/goal-state.sh"
+  lib="$WL_SELF_DIR/../hooks/lib/goal-state.sh"
   [ -f "$lib" ] || lib="$HOME/.claude/hooks/lib/goal-state.sh"
   [ -f "$lib" ] || { GOAL_SRC="error"; return 0; }
   # shellcheck source=../hooks/lib/goal-state.sh
@@ -816,7 +822,7 @@ RESEARCH_PROGRAM="none"; RESEARCH_VERDICT="none"; RESEARCH_PENDING="-"
 compute_research() {
   local lib slug bin out st pc
   case "${WRAP_RESEARCH:-on}" in off|0|no|OFF|NO) return 0 ;; esac
-  lib="$(dirname "$0")/lib/research-program.sh"
+  lib="$WL_SELF_DIR/lib/research-program.sh"
   [ -f "$lib" ] || { lib="$0"; [ -L "$lib" ] && lib="$(readlink "$lib")"
     lib="$(cd "$(dirname "$lib")" 2>/dev/null && pwd)/lib/research-program.sh"; }
   [ -f "$lib" ] || lib="$HOME/.claude/scripts/lib/research-program.sh"
@@ -859,7 +865,7 @@ compute_research() {
 _resolve_backlog_bin() {
   if [ -n "${CC_BACKLOG_BIN:-}" ]; then printf '%s' "$CC_BACKLOG_BIN"; return 0; fi
   local c
-  for c in "$(dirname "$0")/../bin/cc-backlog" "$HOME/.claude/bin/cc-backlog" \
+  for c in "$WL_SELF_DIR/../bin/cc-backlog" "$HOME/.claude/bin/cc-backlog" \
            "$(command -v cc-backlog 2>/dev/null || true)"; do
     [ -n "$c" ] && [ -x "$c" ] && { printf '%s' "$c"; return 0; }
   done
@@ -957,7 +963,7 @@ _wl_detach_ready() { # rc 0 = `detach` is callable
   command -v detach >/dev/null 2>&1 && return 0
   [ -x /usr/bin/python3 ] || return 1
   local l
-  for l in "$(dirname "$0")/lib/detach.sh" "$HOME/.claude/scripts/lib/detach.sh"; do
+  for l in "$WL_SELF_DIR/lib/detach.sh" "$HOME/.claude/scripts/lib/detach.sh"; do
     # shellcheck source=lib/detach.sh
     # shellcheck disable=SC1091
     [ -f "$l" ] && . "$l" 2>/dev/null && command -v detach >/dev/null 2>&1 && return 0
@@ -1062,7 +1068,7 @@ WL_PEER_SIDS=""
 _wl_fired_peer_sids() {
   local lib tp start="" pane rc=0 out
   WL_PEER_SIDS=""
-  lib="$(dirname "$0")/lib/fired-peers.sh"
+  lib="$WL_SELF_DIR/lib/fired-peers.sh"
   [ -f "$lib" ] || lib="$HOME/.claude/scripts/lib/fired-peers.sh"
   # shellcheck source=lib/fired-peers.sh
   # shellcheck disable=SC1091
@@ -1121,7 +1127,7 @@ count_operator_steps() {
 _resolve_decide_bin() {
   if [ -n "${CC_DECIDE_BIN:-}" ]; then printf '%s' "$CC_DECIDE_BIN"; return 0; fi
   local c
-  for c in "$(dirname "$0")/../bin/cc-decide" "$HOME/.claude/bin/cc-decide" \
+  for c in "$WL_SELF_DIR/../bin/cc-decide" "$HOME/.claude/bin/cc-decide" \
            "$(command -v cc-decide 2>/dev/null || true)"; do
     [ -n "$c" ] && [ -x "$c" ] && { printf '%s' "$c"; return 0; }
   done
@@ -1364,7 +1370,7 @@ count_open_custody() {
   local bin n j pane pair
   if [ -n "${CC_CUSTODY_BIN:-}" ]; then bin="$CC_CUSTODY_BIN"
   else
-    for bin in "$(dirname "$0")/../bin/cc-custody" "$HOME/.claude/bin/cc-custody" \
+    for bin in "$WL_SELF_DIR/../bin/cc-custody" "$HOME/.claude/bin/cc-custody" \
                "$(command -v cc-custody 2>/dev/null || true)"; do
       [ -n "$bin" ] && [ -x "$bin" ] && break; bin=""
     done
@@ -1539,7 +1545,7 @@ EOF
   # (hooks/lib/session-writes.sh). Best-effort throughout — an unresolvable session id, an absent
   # transcript or rc 2 all yield nothing, and the rung above is already decided without this.
   local sw_lib tp msid dirty
-  sw_lib="$(dirname "$0")/../hooks/lib/session-writes.sh"
+  sw_lib="$WL_SELF_DIR/../hooks/lib/session-writes.sh"
   [ -f "$sw_lib" ] || sw_lib="$HOME/.claude/hooks/lib/session-writes.sh"
   [ -f "$sw_lib" ] || return 0
   # The lib is SOURCED IN A CHILD (the `bash -c` below), never into this shell: wrap-ledger runs
@@ -2458,7 +2464,7 @@ fi
 # manufactured state. "IDLE" asserted by a blind instrument is the one answer that misleads.
 BUSY=0; BUSY_STATE="UNKNOWN"; BUSY_SRC="none"; BUSY_AGE=0; BUSY_SAMPLE=""; BUSY_SUSPECT=0
 PERMPEND=0; PERMPEND_AGE=0
-_wl_sbl="${WRAP_SESSION_BUSY_LIB:-$(dirname "$0")/../hooks/lib/session-busy.sh}"
+_wl_sbl="${WRAP_SESSION_BUSY_LIB:-$WL_SELF_DIR/../hooks/lib/session-busy.sh}"
 [ -f "$_wl_sbl" ] || _wl_sbl="$HOME/.claude/hooks/lib/session-busy.sh"
 if [ "${WRAP_BUSY:-on}" != "off" ] && [ -f "$_wl_sbl" ]; then
   # shellcheck source=../hooks/lib/session-busy.sh
