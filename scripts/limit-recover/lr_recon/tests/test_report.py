@@ -672,6 +672,35 @@ class DodLine(unittest.TestCase):
             )  # a second actuator over the SAME record's attempt still counts
         self.assertIn("double-typer 1", R.dod_line(self.paths, [r]))
 
+    # recon/launch.log for c56c729c as the 2026-10-13 canary (cohort next3-7d-1791892800) read it:
+    # three legacy moves, each its own attempt=1, then the recon move's R + its resume
+    CANARY_C56C = (
+        "1791486700\t{sid}\tlr-fire-resume\ttaken\tpid=51949\tattempt=1\trecord=hf-86310-1791486611\n"
+        "1791610505\t{sid}\tlr-fire-resume\ttaken\tpid=89759\tattempt=1"
+        "\trecord=move-20261010T053236Z-next2-next-94596-c56c729c\n"
+        "1791745889\t{sid}\tlr-fire-resume\ttaken\tpid=77689\tattempt=1"
+        "\trecord=move-20261011T190215Z-next-next3-91913-c56c729c\n"
+        "1791873170\t{sid}\trecon-R\tspawn\tpid=73583\tattempt=3"
+        "\trecord=recon:next3-7d-1791892800:c56c729c:1\n"
+        "1791873239\t{sid}\tlr-fire-resume\ttaken\tpid=25008\tattempt=3"
+        "\trecord=recon:next3-7d-1791892800:c56c729c:1\n"
+    )
+
+    def test_canary_c56c729c_three_legacy_moves_are_not_a_double_typer(self):
+        """The first act canary read double-typer 1: the three legacy moves' attempt=1 takes, days
+        apart under three records, merged on (sid, attempt)."""
+        r = self._rec(1)
+        r.sid = "c56c729c-0952-4ff7-9638-cf9aae3f6db4"
+        with open(self.paths.launch_log, "w") as fh:
+            fh.write(self.CANARY_C56C.format(sid=r.sid))
+        self.assertIn("double-typer 0", R.dod_line(self.paths, [r]))
+        with open(self.paths.launch_log, "a") as fh:
+            fh.write(
+                "1791873300\t%s\tlr-fire-resume\ttaken\tpid=25999\tattempt=3"
+                "\trecord=recon:next3-7d-1791892800:c56c729c:1\n" % r.sid
+            )  # a second launch take on ONE record's attempt is a real double typer
+        self.assertIn("double-typer 1", R.dod_line(self.paths, [r]))
+
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
