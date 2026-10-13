@@ -666,6 +666,31 @@ def replaced_elsewhere(rec: T.Record, snap: T.Snapshot, now: float) -> bool:
     return False
 
 
+def replaced_in_place(rec: T.Record, snap: T.Snapshot) -> str:
+    """After a successful R, the session live again in the record's OWN window under this move's
+    target proves the R too: lr-handoff recycles a launcher-rooted pane in place when it can (same
+    window, same uuid). Only a different window counted, so canary 4fe9935f (2026-10-13, pane 16,
+    next3 → next4, live there from 06:48:18) was scored "R rc 0 but no live holder in a new window"
+    at 120 s; the attempt bump made its own target read as another recovery path, and it closed
+    "engaged elsewhere". Proven here, the phase table closes it as this move's. Returns the proof."""
+    if not rec.close.get("replaced_at") or rec.terminal is not None or not rec.pane:
+        return ""
+    s = snap.sessions.get(rec.sid)
+    for h in s.holders if s else []:
+        if (
+            not h.bg
+            and h.pane is not None
+            and tuple(h.pane) == tuple(rec.pane)
+            and _same_cfg(h.cfg, rec.target_cfg)
+            and (h.pid, h.lstart) != (rec.source_pid, rec.source_lstart)
+        ):
+            rec.close.pop("replaced_at", None)
+            return "live in its own window %d:%d on %s after R" % (
+                tuple(h.pane) + (rec.target_acct or os.path.basename(h.cfg),)
+            )
+    return ""
+
+
 def engaged_elsewhere(rec: T.Record, snap: T.Snapshot, now: float) -> str:
     """W5b2 defect C: a session another recovery path moved (legacy limit-recover, a hand move,
     boot-resume) and that is working again never read as engaged. Row 5 needs this attempt's own

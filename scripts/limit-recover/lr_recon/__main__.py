@@ -680,6 +680,9 @@ def _derive(
         if settle.replaced_elsewhere(rec, snap, now):
             _event(ctx.paths, "replaced", rec.sid, rec.record_id, rec.terminal.proof)
             continue
+        r_proof = settle.replaced_in_place(rec, snap)
+        if r_proof:
+            _event(ctx.paths, "r-in-place", rec.sid, rec.record_id, r_proof)
         if settle.replacement_unproven(rec, now):
             _event(
                 ctx.paths, "r-unproven", rec.sid, rec.record_id, rec.last_error.detail

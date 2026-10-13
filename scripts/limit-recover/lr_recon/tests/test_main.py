@@ -1340,6 +1340,78 @@ class MainTests(unittest.TestCase):
                 self.assertEqual(M.settle.engaged_elsewhere(rec, snap, now), "")
                 self.assertIsNone(rec.terminal)
 
+    def test_canary_4fe9935f_an_r_that_recycled_in_place_is_this_moves_own(self):
+        """The first act canary (cohort next3-7d-1791892800, 2026-10-13): R moved 4fe9935f next3 →
+        next4 IN PLACE (pane 64211:16, rc 0 at 06:47:48Z) and the session was live there from
+        06:48:18 (pid 6237). Only a holder in a NEW window proved an R, so the 06:49:54 pass scored
+        "r-unproven" and bumped the attempt, and the 06:50:03 pass closed it CLOSED by="elsewhere"
+        — the reconciler crediting its own move to "another recovery path"."""
+        cfg = {a: os.path.join(self.tmp, "cfg-" + a) for a in ("next3", "next4")}
+        for d in cfg.values():
+            os.makedirs(os.path.join(d, "projects"), exist_ok=True)
+        sid = "4fe9935f-ca5f-4a48-803c-5e569b08f1b7"
+        rec = T.Record(sid=sid, record_id="recon:next3-7d-1791892800:4fe9935f:1")
+        rec.kind, rec.pane, rec.root_shape = "limited", (64211, 16), "launcher"
+        rec.source_acct, rec.source_cfg = "next3", cfg["next3"]
+        rec.source_pid, rec.source_lstart = 80475, "Sun Oct 11 12:09:25 2026"
+        rec.target_acct, rec.target_cfg = "next4", cfg["next4"]
+        rec.cwd, rec.confirm_len, rec.submit_token = (
+            self.tmp,
+            2074554,
+            "lrr-28a0aea868a1",
+        )
+        rec.phase, rec.substate, rec.attempt = "RELAUNCHED", "UNPROMPTED", 1
+        rec.timeline.detected, rec.timeline.planned = (
+            1791868300.269506,
+            1791874030.346097,
+        )
+        rec.timeline.confirmed = 1791874059.0757987
+        rec.close.update(move_attempt=1, replaced_at=1791874068.440663)
+        rec.next_eligible_at = 1791874068.440663 + M.settle.R_PROOF_S
+        h = T.HolderObs(
+            6237,
+            "Tue Oct 13 06:48:18 2026",
+            cfg["next4"],
+            "session-row",
+            pane=(64211, 16),
+        )
+        tx = T.TranscriptObs(
+            path="/t.jsonl", last={"kind": "ok"}, last_assistant_ok_at=1791874150.0
+        )
+        s = T.SessionObs(
+            sid=sid,
+            acct="next4",
+            cfg=cfg["next4"],
+            holders=[h],
+            transcript=tx,
+            pane=(64211, 16),
+        )
+        ctx = M.Ctx(self.paths, None, self.home)
+        M.store.ensure_dirs(self.paths)
+        ctx.records = {sid: rec}
+        for now in (1791874099.86775, 1791874194.819614, 1791874203.563922):
+            M._derive(ctx, T.Snapshot(wall=now, uptime_raw=0.0, sessions={sid: s}), now)
+        evs = [(e["ev"], e.get("detail", "")) for e in self._events()]
+        self.assertIn(
+            ("r-in-place", "live in its own window 64211:16 on next4 after R"), evs
+        )
+        self.assertNotIn("r-unproven", [e for e, _ in evs])
+        self.assertNotIn("engaged-elsewhere", [e for e, _ in evs])
+        self.assertIsNone(rec.terminal)  # the phase table closes it, as this move's
+        self.assertEqual((rec.attempt, rec.last_error), (1, None))
+        self.assertEqual((rec.phase, rec.substate), ("RELAUNCHED", "UNPROMPTED"))
+        self.assertNotIn("by", rec.close)
+        # CONTROL: the source's own process back in that window proves nothing
+        rec.close["replaced_at"] = 1791874068.440663
+        s.holders = [
+            T.HolderObs(
+                80475, rec.source_lstart, cfg["next3"], "session-row", pane=(64211, 16)
+            )
+        ]
+        self.assertEqual(
+            M.settle.replaced_in_place(rec, T.Snapshot(0.0, 0.0, sessions={sid: s})), ""
+        )
+
     def _rec(self, phase, target="next4"):
         rec = T.Record(sid="abcdef01-0000-0000-0000-000000000001", record_id="r1")
         rec.phase, rec.target_acct, rec.pane = phase, target, (5, 7)
