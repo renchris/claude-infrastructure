@@ -394,6 +394,19 @@ fi
 GENUINE='your (credential|password|api.?key|secret|token|login|cookie)|need (your|the)[^.]{0,40}(credential|password|secret|token|key|access|permission|approval)|only you (can|have|know)|which account|i (do ?n.?t|do not|dont) have (access|the |your |permission)|can you (provide|share|tell me|give me|confirm which)|(^|[^a-z])sudo([^a-z]|$)|interactive login|auth login|gcloud auth|destructive migration|drop table|delete[^.]{0,20}production|which (do you|would you|of (these|the)|option|approach|one)|(would|do) you prefer|which direction'
 printf '%s' "$MSG" | grep -iqE "$GENUINE" && abstain "genuine-blocker"
 
+_ca_sw_source() { # → rc 0 with hooks/lib/session-writes.sh loaded · rc 1 no lib
+  local lib
+  lib="${SESSION_WRITES_LIB:-$_cascd/lib/session-writes.sh}"
+  [ -f "$lib" ] || { local t="$0"; [ -L "$t" ] && t="$(readlink "$t")"
+    lib="$(cd "$(dirname "$t")" 2>/dev/null && pwd)/lib/session-writes.sh"; }
+  [ -f "$lib" ] || lib="$CFG/hooks/lib/session-writes.sh"
+  [ -f "$lib" ] || lib="$HOME/.claude/hooks/lib/session-writes.sh"
+  [ -f "$lib" ] || return 1
+  # shellcheck source=lib/session-writes.sh
+  # shellcheck disable=SC1091
+  . "$lib" 2>/dev/null || return 1
+}
+
 # ── Ledger contradiction from LIVE reads (the ground-truth discriminator). ──
 WRAP="${WRAP_LEDGER_BIN:-}"
 if [ -z "$WRAP" ]; then
@@ -417,11 +430,25 @@ fi
 # fields that never move RUNG (wrap-ledger.sh § WORKING vs IDLING), and none of the eighteen fields
 # read below is one of them, so the probe is skipped. The memo key carries WRAP_BUSY, so a BUSY
 # reader (operator-readout, notify, cc-classify) is never served this BUSY-less ledger.
+#
+# PREFETCH (2026-10-14, docs/plans/LOAD_AND_PROMPT_HOOK_TIMEOUTS.md Wave 4b). On a dirty tree the
+# attribution terms below need one `git status -uall` snapshot, which they used to take only AFTER
+# this ledger ask: 0.6-2 s in a repo with large untracked trees (~/Development/personal, where this
+# hook's cancels concentrate), added to the ledger's 1.7 s. The snapshot now starts here, beside the
+# ledger, into the run memo (session-writes.sh sw_porcelain_prefetch: same command, same bound),
+# and is waited on before the ledger is read, so nothing outlives the hook and every reader finds it.
+# Kill switch: CC_CA_PREFETCH=off (the snapshot is then taken by the first reader, as before).
+_ca_pf_pid=""
+if [ "${CC_CA_PREFETCH:-on}" != off ] && _ca_sw_source && command -v sw_porcelain_prefetch >/dev/null 2>&1 \
+   && sw_run_memo_init; then
+  sw_porcelain_prefetch "$CWD" && _ca_pf_pid="$_SW_PREFETCH_PID"
+fi
 if [ -n "$SID" ] && [ "$SID" != "?" ]; then
   LED="$( cd "$CWD" 2>/dev/null && WRAP_BUSY=off bash "$WRAP" --machine --session "$SID" 2>/dev/null || true )"
 else
   LED="$( cd "$CWD" 2>/dev/null && WRAP_BUSY=off bash "$WRAP" --machine 2>/dev/null || true )"
 fi
+[ -n "$_ca_pf_pid" ] && wait "$_ca_pf_pid" 2>/dev/null
 [ -n "$LED" ] || abstain "no-ledger"
 # The value of the ledger's first `KEY=` line, read in the shell: `grep | head -1 | cut` was three
 # process starts per field, and this hook reads eighteen fields.
@@ -573,16 +600,8 @@ _ca_assignee_shared_cwd() {   # stdout: member=<n>,team=<t>,occupants=<N> · rc 
 }
 
 _ca_mine() { # $1=kind (dirty|unlanded) → rc 0 mine · 1 not mine · 2 cannot tell
-  local lib rc
-  lib="${SESSION_WRITES_LIB:-$_cascd/lib/session-writes.sh}"
-  [ -f "$lib" ] || { local t="$0"; [ -L "$t" ] && t="$(readlink "$t")"
-    lib="$(cd "$(dirname "$t")" 2>/dev/null && pwd)/lib/session-writes.sh"; }
-  [ -f "$lib" ] || lib="$CFG/hooks/lib/session-writes.sh"
-  [ -f "$lib" ] || lib="$HOME/.claude/hooks/lib/session-writes.sh"
-  [ -f "$lib" ] || return 2
-  # shellcheck source=lib/session-writes.sh
-  # shellcheck disable=SC1091
-  . "$lib" 2>/dev/null || return 2
+  local rc
+  _ca_sw_source || return 2
   # A session that recorded NO writes at all is NOT evidence of innocence — IN GENERAL. The
   # transcript may predate the commits, or the work may have gone through Bash (`sed -i`, a
   # heredoc), which the oracle cannot see by construction. Exonerating on that would gut the guard:
@@ -798,6 +817,12 @@ _ca_sc=""; _ca_sc_rc=1
 # ancestry unconditionally, so priming here starts nothing the Stop was not already going to start.
 _ca_ai_source || true
 if _ca_sc="$(_ca_assignee_shared_cwd)" && [ -n "$_ca_sc" ]; then _ca_sc_rc=0; else _ca_sc=""; fi
+# One transcript read and one `git status -uall` per run for every attribution term below, most of
+# which run inside `$(…)` (session-writes.sh § PER-RUN MEMO). Made HERE, in the main shell, so the
+# subshells share it and its EXIT trap fires when the hook ends.
+if [ "$DIRTY" -eq 1 ] || [ "$UNLANDED" -eq 1 ]; then
+  _ca_sw_source && command -v sw_run_memo_init >/dev/null 2>&1 && sw_run_memo_init
+fi
 if [ "$DIRTY" -eq 1 ]; then
   _ca_mine dirty; _ca_d=$?
   _ca_dp=""; _ca_dx=""; _ca_du=""; _ca_dpe=""
@@ -1097,6 +1122,25 @@ MSG_UNQ="$(printf '%s' "$MSG" | sed -E 's/`[^`]*`//g; s/"[^"]*"//g; s/“[^“�
 #   The disk oracle is `cc-backlog list --blocked --json` filtered on THIS session: a peer-filed
 #   `cc-backlog needs "<step>"` lands a blocked item carrying `.session`, and THAT is what
 #   operator-readout.sh can render. Any failure to read ⇒ cannot tell ⇒ d1 stays 0 (fail-open).
+# _ca_blg_cached <list args…> → rc 0 with the backlog fold operator-readout already cached for these
+#   args (its `blg_list_cached`: the store's exact (mtime,size) key, no TTL), rc 1 on a miss.
+#   READ-ONLY — a miss falls through to the bounded live call below, unchanged. The live call re-folds
+#   the whole 10 MB store (2.1 s on a replayed Stop, and its 5 s bound fired on another), while
+#   operator-readout runs at the same Stop and keeps this entry warm. The key is built exactly as
+#   operator-readout.sh builds it; tests/completion-assert-durations.bats fills an entry with that
+#   function and reads it back here, so the two cannot drift apart unseen. A stubbed binary
+#   (CC_BACKLOG_BIN) is never served from the shared cache, as in wrap-ledger.sh's `auto` mode.
+_ca_blg_cached() {
+  [ -z "${CC_BACKLOG_BIN:-}" ] || return 1
+  local f="${CC_BACKLOG_FILE:-$HOME/.claude/autonomy/backlog.jsonl}" dir key out
+  dir="${CC_ORB_BLG_CACHE_DIR:-${TMPDIR:-/tmp}/cc-orb-blg-cache.$UID}"
+  key="$(stat -f '%m-%z' "$f" 2>/dev/null)" || return 1
+  [ -n "$key" ] || return 1
+  key="$key-$f-$*"; key="${key//[^A-Za-z0-9._-]/_}"
+  out="$dir/$key"
+  [ -s "$out" ] || return 1
+  cat "$out" 2>/dev/null
+}
 CA_HANDOFF='remains? yours|are yours|is yours|on your (end|side)|you.?ll need to|you will need to|requires your|needs your|still needs (a|the|your|to be)|left (to|for) you|for you to (run|do)|keep an eye on|worth (watching|keeping)|i.?d recommend you|up to you|your call to|manual step'
 #   NEGATED HANDOFFS ARE THE OPPOSITE OF A HANDOFF (FP #3 of this family, 2026-08-01). The close
 #   "✅ … nothing for you to run" was BLOCKED: `for you to run` matched, and the matcher cannot see
@@ -1118,7 +1162,9 @@ if printf '%s' "$CA_D1SRC" | grep -iqE "$CA_HANDOFF"; then
     done
   fi
   if [ -n "$CCB" ] && [ -x "$CCB" ]; then
-    if command -v timeout >/dev/null 2>&1; then
+    if BJ="$(_ca_blg_cached --blocked --json)"; then
+      brc=0
+    elif command -v timeout >/dev/null 2>&1; then
       BJ="$(timeout 5 "$CCB" list --blocked --json 2>/dev/null)"; brc=$?
     else
       BJ="$("$CCB" list --blocked --json 2>/dev/null)"; brc=$?

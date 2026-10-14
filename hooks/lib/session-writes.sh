@@ -395,14 +395,40 @@ EOF
 #   tree per run when SW_RUN_MEMO is set: peer-owned.sh's three whole-tree readers and this file's
 #   used to take one each, at ~2 s apiece on a tree with large untracked directories.
 _sw_porcelain_full() {
-  local top="$1" out="$2" memo=""
-  if _sw_memo_path "porc-$top"; then
-    memo="$_SW_MEMO"
-    if [ -f "$memo.ok" ]; then cat "$memo" > "$out" 2>/dev/null && return 0; fi
-  fi
+  local top="$1" out="$2" frc=0
+  _sw_porcelain_fill "$top" || frc=$?
+  case "$frc" in
+    0) cat "$_SW_MEMO" > "$out" 2>/dev/null && return 0; return 2 ;;
+    2) return 2 ;;     # git failed or timed out: one attempt, exactly as before the memo
+  esac
   ( cd "$top" 2>/dev/null && _sw_bounded 5 git -c core.quotePath=false status --porcelain -z -uall ) >"$out" 2>/dev/null || return 2
-  if [ -n "$memo" ]; then cat "$out" > "$memo" 2>/dev/null && : > "$memo.ok"; fi
   return 0
+}
+
+# _sw_porcelain_fill <top> → rc 0 with the run memo holding the snapshot (_SW_MEMO, marked `.ok` only
+#   once complete) · rc 1 no memo · rc 2 git failed. The snapshot is written STRAIGHT into the memo,
+#   no copy, so a prefetch that no reader ends up needing costs exactly its one git call.
+_sw_porcelain_fill() {
+  _sw_memo_path "porc-$1" || return 1
+  [ -f "$_SW_MEMO.ok" ] && return 0
+  ( cd "$1" 2>/dev/null && _sw_bounded 5 git -c core.quotePath=false status --porcelain -z -uall ) >"$_SW_MEMO" 2>/dev/null || return 2
+  : > "$_SW_MEMO.ok"
+}
+
+# sw_porcelain_prefetch <dir> → rc 0 with _SW_PREFETCH_PID = a BACKGROUND _sw_porcelain_full of
+#   <dir>'s toplevel, filling the run memo under the key session_dirty_mine and peer-owned.sh's
+#   readers look it up by. The caller must `wait` on the pid in the SAME shell before any reader runs
+#   (a reader that ran first would take its own snapshot — correct, only slower). Same git command,
+#   same bound; only the start time moves, so a hook can overlap the snapshot with other reads
+#   (completion-assert overlaps it with its ledger ask). rc 1 = no memo or no repo: nothing started.
+sw_porcelain_prefetch() {
+  local top
+  _SW_PREFETCH_PID=""
+  [ -n "${SW_RUN_MEMO:-}" ] && [ -d "$SW_RUN_MEMO" ] || return 1
+  top="$(cd "${1:-.}" 2>/dev/null && _sw_bounded 5 git rev-parse --show-toplevel 2>/dev/null)" || return 1
+  [ -n "$top" ] || return 1
+  ( _sw_porcelain_fill "$top" ) >/dev/null 2>&1 &
+  _SW_PREFETCH_PID=$!
 }
 
 # _sw_porcelain_for <top> <canonical written paths> <outfile> → rc 0 with a porcelain -z stream in
