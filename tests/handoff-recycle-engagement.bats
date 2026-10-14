@@ -122,6 +122,34 @@ row() { printf '{"paneUUID":"%s","session_id":"%s"}\n' "$PANE" "$1" > "$REGDIR/$
   [ "$status" -eq 3 ] || { echo "a provenance miss must read unverified (3), got $status"; false; }
 }
 
+@test "TYPED relaunch (no staged cfg, cwd known): the cwd's slug under ANY projects dir, brief first, a turn after → engaged" {
+  # A typed fallback stages no .succ, so the watcher has the cwd but not the config dir. The slug,
+  # first-record and birth rules still hold; only the account is unconstrained.
+  succ_provenance
+  row "$OLD_SID"
+  local typed
+  typed="$PROJDIR/$(printf '%s' "$SCWD" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g')"
+  mkdir -p "$typed"
+  printf '%s\n' \
+    '{"type":"user","message":{"content":"brief <!-- handoff-fire recycle engagement marker: MK-TYPED (ignore) -->"}}' \
+    '{"type":"assistant","message":{"content":"on it"}}' > "$typed/$NEW_SID.jsonl"
+  run recycle_engaged "$PANE" "$OLD_SID" "MK-TYPED" "" "$SCWD" "$SEPOCH"
+  [ "$status" -eq 0 ] || { echo "a typed relaunch's own transcript read as status=$status"; false; }
+}
+
+@test "TYPED relaunch (no staged cfg): the pane-434 OBSERVER (another slug, marker in a tool_result) → still NOT engaged" {
+  succ_provenance
+  row "$OLD_SID"
+  mkdir -p "$PROJDIR/-Users-someone-Development-observer"
+  printf '%s\n' \
+    '{"type":"user","message":{"content":"keep redesigning the landing page"}}' \
+    '{"type":"user","message":{"content":[{"type":"tool_result","content":"58913 claude brief <!-- handoff-fire recycle engagement marker: MK-TOBS (ignore) -->"}]}}' \
+    '{"type":"assistant","message":{"content":"it is still starting"}}' \
+    > "$PROJDIR/-Users-someone-Development-observer/observer-sess.jsonl"
+  run recycle_engaged "$PANE" "$OLD_SID" "MK-TOBS" "" "$SCWD" "$SEPOCH"
+  [ "$status" -eq 3 ] || { echo "a provenance miss must read unverified (3), got $status"; false; }
+}
+
 @test "own cfg + slug, but the marker only in a LATER user record (a sibling ran ps) → NOT engaged" {
   succ_provenance
   row "$OLD_SID"

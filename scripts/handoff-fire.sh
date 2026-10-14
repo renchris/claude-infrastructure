@@ -7162,12 +7162,24 @@ recycle_engaged() {
   # transcript can engage: <its config dir>/projects/<its cwd's slug>/, with the brief as the FIRST
   # user record, born at or after the claim, answered after it (succ_own_turn_in). Claude Code
   # slugs the PHYSICAL cwd (node's getcwd), so the resolved form is tried beside the given one.
-  if [ -n "$marker" ] && [ -n "$scfg" ] && [ -n "$scwd" ]; then
-    own_dirs="$scfg/projects/$(printf '%s' "$scwd" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g')"
+  # A TYPED relaunch stages no successor, so its config dir is unknown; the cwd's slug, the first-record
+  # rule and the birth bound are then checked under every account's projects dir instead. That still
+  # excludes the pane-434 witness (another slug, the marker in a later tool_result), and it keeps a
+  # typed relaunch that engaged from reading as unverified.
+  if [ -n "$marker" ] && [ -n "$scwd" ]; then
+    local roots slug pslug="" nl=$'\n'
+    # shellcheck disable=SC2086  # CC_PROJECTS_DIRS is an intentional space-separated dir list
+    if [ -n "$scfg" ]; then roots="$scfg/projects"; else roots="$(printf '%s\n' $CC_PROJECTS_DIRS)"; fi
+    slug="$(printf '%s' "$scwd" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g')"
     phys="$(cd -P "$scwd" 2>/dev/null && pwd -P || true)"
-    [ -n "$phys" ] && own_p="$scfg/projects/$(printf '%s' "$phys" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g')"
-    [ -n "$own_p" ] && [ "$own_p" != "$own_dirs" ] && own_dirs="$own_dirs
-$own_p"
+    [ -n "$phys" ] && pslug="$(printf '%s' "$phys" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g')"
+    while IFS= read -r own_p; do
+      [ -n "$own_p" ] || continue
+      own_dirs="${own_dirs:+$own_dirs$nl}$own_p/$slug"
+      [ -n "$pslug" ] && [ "$pslug" != "$slug" ] && own_dirs="$own_dirs$nl$own_p/$pslug"
+    done <<ROOTS
+$roots
+ROOTS
     while IFS= read -r pdir; do
       [ -d "$pdir" ] || continue
       while IFS= read -r hit; do
@@ -7183,7 +7195,7 @@ OWN
   fi
   # EVERYWHERE ELSE the marker is evidence that a successor EXISTS (some session saw its argv), never
   # that it engaged: a hit beside an assistant turn is a provenance miss (3). With the successor's
-  # config dir or cwd unknown, every hit lands here — the arm can no longer engage on its own.
+  # cwd unknown, every hit lands here — the arm can no longer engage on its own.
   # shellcheck disable=SC2086  # CC_PROJECTS_DIRS is an intentional space-separated dir list
   if [ -n "$marker" ]; then
     for pdir in $CC_PROJECTS_DIRS; do
