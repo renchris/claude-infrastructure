@@ -9,9 +9,10 @@
 
 TASK_LIST_ID="${CLAUDE_CODE_TASK_LIST_ID:-}"
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
-# Both hooks source task-helpers.sh above, which resolves the index against the RUNNING
-# session's config dir. Re-hardcoding it here re-introduced the account-2/3/4 mis-target
-# that helper exists to prevent.
+# Both hooks source task-helpers.sh above, which resolves the store against the RUNNING
+# session's config dir and the index to the SHARED file (its 2026-10-14 note: the tmp+mv
+# writes below would otherwise replace an account's symlink with a fork). Re-hardcoding
+# either here re-introduces a defect that helper exists to prevent.
 INDEX="$TASKS_INDEX"
 
 # ── Store-wide maintenance (--sweep) — DETACHED from the session-start critical path ────────

@@ -107,3 +107,20 @@ mk_fresh_dir() {  # a dir whose summary POSTDATES its one task → guard must sk
   [ -d "$CC_TASKS_DIR/new-empty" ]
   [ -d "$CC_TASKS_DIR/old-full" ]
 }
+
+# The index is SHARED by policy (lib/config-mirror.zsh, 2026-07-29): an account dir carries a
+# symlink to ~/.claude/tasks-index.json. Writing through $CLAUDE_CONFIG_DIR/tasks-index.json with
+# tmp+mv replaced that link with a real file — the fork docs/research/recycle-failure-2026-10-14.md
+# § Q5 found in all four account dirs.
+@test "account config dir: the index write lands in the SHARED file and leaves the link in place" {
+  unset CC_TASKS_INDEX
+  export CLAUDE_CONFIG_DIR="$HOME/.claude-quaternary"
+  mkdir -p "$HOME/.claude" "$CLAUDE_CONFIG_DIR"
+  printf '{"version":1,"taskLists":{}}\n' > "$HOME/.claude/tasks-index.json"
+  ln -s "$HOME/.claude/tasks-index.json" "$CLAUDE_CONFIG_DIR/tasks-index.json"
+  export CLAUDE_CODE_TASK_LIST_ID="board-shared"
+  run run_hook
+  [ "$status" -eq 0 ]
+  [ -L "$CLAUDE_CONFIG_DIR/tasks-index.json" ] || { echo "the account's link was replaced by a real file (re-forked)" >&2; false; }
+  [ "$(jq -r '.taskLists["board-shared"].projectName' "$HOME/.claude/tasks-index.json")" = proj ]
+}

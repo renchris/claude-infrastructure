@@ -10,9 +10,17 @@
 # three of four accounts, silently and with no error anywhere. The mirror now symlinks tasks/ so
 # both spellings land in the same place — deriving it anyway keeps these hooks correct if that ever
 # stops being true, rather than correct only by coincidence.
+#
+# THE INDEX IS THE EXCEPTION, AND IT IS NOT A RE-HARDCODE (2026-10-14). The mis-target above was the
+# tasks/ DIR. The index is a single shared FILE by policy (lib/config-mirror.zsh, 2026-07-29), so an
+# account dir carries only a symlink to ~/.claude/tasks-index.json — and setup-task-symlinks.sh
+# rewrites the index with tmp + `mv`, which REPLACES that symlink with a real file. Resolved per
+# config dir, every account re-forked the shared index at its next task hook (all four were real
+# files, 27.9 KB in quaternary vs 821 B shared: docs/research/recycle-failure-2026-10-14.md § Q5).
+# So the index resolves to the shared file itself, as bin/cc-task-store and bin/cc-tlid already do.
 CC_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 TASKS_DIR="${CC_TASKS_DIR:-$CC_CONFIG_DIR/tasks}"
-TASKS_INDEX="${CC_TASKS_INDEX:-$CC_CONFIG_DIR/tasks-index.json}"
+TASKS_INDEX="${CC_TASKS_INDEX:-$HOME/.claude/tasks-index.json}"
 [ -d "$TASKS_DIR" ]   || TASKS_DIR="$HOME/.claude/tasks"
 [ -f "$TASKS_INDEX" ] || TASKS_INDEX="$HOME/.claude/tasks-index.json"
 

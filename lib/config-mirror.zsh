@@ -34,12 +34,18 @@
 # `mv -f <dir> <dir>.premirror-bak` — which for 245/251/186 boards means they simply stop being
 # reachable. Run `cc-task-store merge` (content) BEFORE any --convert (linkage). cc-task-store is
 # additive and never modifies a source, so the order is enforceable and re-runnable.
+#
+# `.mcp-probe-cache` AND `.last-update-result.json` ARE ISOLATED IN EVERY DIR (2026-10-14). Both are
+# written per config dir — the probe cache by hooks/session-start.sh (tmp + `mv -f`), the update
+# result by Claude Code's updater — so each was a real file in all four accounts, reported as a
+# FORK at every launch, and `--convert` would have shared one account's MCP probe cache into the
+# other three until the next `mv` re-forked it (docs/research/recycle-failure-2026-10-14.md § Q5).
 
 typeset -gA _CC_ISOLATE
-_CC_ISOLATE[$HOME/.claude-next]='.claude.json .claude.json.backup backups-identity daemon jobs'
-_CC_ISOLATE[$HOME/.claude-secondary]='.claude.json .claude.json.backup backups-identity daemon jobs .credentials.json projects sessions session-env shell-snapshots history.jsonl session-index.db session-index.db-shm session-index.db-wal session-index.lock session-index.lock.d stats-cache.json statsig telemetry watchdog teams logs file-history run ide state debug plan-history plan-versions drafts mcp-needs-auth-cache.json .last-session .last-interaction .last-search-results.json'
-_CC_ISOLATE[$HOME/.claude-tertiary]='.claude.json .claude.json.backup backups-identity daemon jobs .credentials.json projects sessions session-env shell-snapshots history.jsonl session-index.db session-index.db-shm session-index.db-wal session-index.lock session-index.lock.d stats-cache.json statsig telemetry watchdog teams logs file-history run ide state debug plan-history plan-versions drafts mcp-needs-auth-cache.json .last-session .last-interaction .last-search-results.json'
-_CC_ISOLATE[$HOME/.claude-quaternary]='.claude.json .claude.json.backup backups-identity daemon jobs .credentials.json projects sessions session-env shell-snapshots history.jsonl session-index.db session-index.db-shm session-index.db-wal session-index.lock session-index.lock.d stats-cache.json statsig telemetry watchdog teams logs file-history run ide state debug plan-history plan-versions drafts mcp-needs-auth-cache.json .last-session .last-interaction .last-search-results.json'
+_CC_ISOLATE[$HOME/.claude-next]='.claude.json .claude.json.backup backups-identity daemon jobs .mcp-probe-cache .last-update-result.json'
+_CC_ISOLATE[$HOME/.claude-secondary]='.claude.json .claude.json.backup backups-identity daemon jobs .credentials.json projects sessions session-env shell-snapshots history.jsonl session-index.db session-index.db-shm session-index.db-wal session-index.lock session-index.lock.d stats-cache.json statsig telemetry watchdog teams logs file-history run ide state debug plan-history plan-versions drafts mcp-needs-auth-cache.json .last-session .last-interaction .last-search-results.json .mcp-probe-cache .last-update-result.json'
+_CC_ISOLATE[$HOME/.claude-tertiary]='.claude.json .claude.json.backup backups-identity daemon jobs .credentials.json projects sessions session-env shell-snapshots history.jsonl session-index.db session-index.db-shm session-index.db-wal session-index.lock session-index.lock.d stats-cache.json statsig telemetry watchdog teams logs file-history run ide state debug plan-history plan-versions drafts mcp-needs-auth-cache.json .last-session .last-interaction .last-search-results.json .mcp-probe-cache .last-update-result.json'
+_CC_ISOLATE[$HOME/.claude-quaternary]='.claude.json .claude.json.backup backups-identity daemon jobs .credentials.json projects sessions session-env shell-snapshots history.jsonl session-index.db session-index.db-shm session-index.db-wal session-index.lock session-index.lock.d stats-cache.json statsig telemetry watchdog teams logs file-history run ide state debug plan-history plan-versions drafts mcp-needs-auth-cache.json .last-session .last-interaction .last-search-results.json .mcp-probe-cache .last-update-result.json'
 
 # ── fork-free symlink-target read ──────────────────────────────────────────────────────────────
 # `$(readlink X)` costs a FORK PLUS A SUBSHELL per call, and the mirror calls it once per mirrored
@@ -199,7 +205,10 @@ _cc_sync_config_mirror() {
       # The ACTUATOR reports, deliberately: a separate detector would have to re-implement the
       # isolate list, the transient-name skip and the already-correct-symlink test, and would drift
       # from them silently. This line cannot disagree with the decision it is reporting.
-      (( convert )) || { (( fork_summary )) && forks+=("$name") || print -u2 "config-mirror: FORKED real '$name' in ${dst:t} — shadows ~/.claude/$name; safe mode cannot fix it, run with --convert (all that account's panes closed)"; continue; }
+      # A `*bak*` name is skipped from the per-name line exactly as the tty fold below drops it
+      # (2026-10-14): piped through `| tee`, 539 settings.json.bak-* lines per run buried a pane.
+      # --convert still moves them aside; only the report changes.
+      (( convert )) || { (( fork_summary )) && forks+=("$name") || [[ "$name" == *bak* ]] || print -u2 "config-mirror: FORKED real '$name' in ${dst:t} — shadows ~/.claude/$name; safe mode cannot fix it, run with --convert (all that account's panes closed)"; continue; }
       mv -f "$dst/$name" "$dst/$name.premirror-bak" 2>/dev/null
     fi
     ln -sfn "$e" "$dst/$name"

@@ -256,10 +256,66 @@ fork_fixture() {
   [ "$(printf '%s\n' "$output" | grep -c 'config-mirror:' || true)" = 0 ] || { echo "$output"; false; }
 }
 
-@test "piped (the hook's view) still prints one FORKED line per name" {
+@test "piped (the hook's view) still prints one FORKED line per LIVE name, none for a backup" {
   command -v zsh >/dev/null 2>&1 || skip "zsh unavailable"
   fork_fixture
   run zsh -fc "source '$MIRROR'; _cc_sync_config_mirror \"\$HOME/.claude-next\" 2>&1 >/dev/null"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [ "$(printf '%s\n' "$output" | grep -c 'FORKED real' || true)" = 4 ] || { echo "$output"; false; }
+  # 2026-10-14: piped through `| tee`, 539 settings.json.bak-* lines per run buried a pane
+  # (docs/research/recycle-failure-2026-10-14.md § Q5). Backups change nothing and the tty fold
+  # already drops them; the per-name report now does too.
+  [ "$(printf '%s\n' "$output" | grep -c 'FORKED real' || true)" = 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"FORKED real 'commands'"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"FORKED real 'tasks-index.json'"* ]] || { echo "$output"; false; }
+  [[ "$output" != *bak-kitty* ]] || { echo "backups named per-line: $output"; false; }
+}
+
+# ── per-account caches are isolated (2026-10-14) ────────────────────────────────────────────────
+# `.mcp-probe-cache` (hooks/session-start.sh, tmp+mv per account) and `.last-update-result.json`
+# (the updater, per config dir) were real files in all four accounts, reported as forks at every
+# launch, and --convert would have shared one account's MCP probe cache into the other three.
+
+@test "per-account caches are in EVERY account's isolate list" {
+  for acct in .claude-next .claude-secondary .claude-tertiary .claude-quaternary; do
+    run isolate_line "$acct"
+    [ "$status" -eq 0 ]
+    local list="${output#*=\'}"; list="${list%\'}"
+    for key in .mcp-probe-cache .last-update-result.json; do
+      [[ " $list " == *" $key "* ]] || { echo "$acct lacks $key: $output" >&2; false; }
+    done
+  done
+}
+
+@test "EFFECT: a real .mcp-probe-cache in an account dir is not FORKED and stays real under --convert" {
+  command -v zsh >/dev/null 2>&1 || skip "zsh unavailable"
+  export HOME="$D/fh-cache"
+  mkdir -p "$HOME/.claude" "$HOME/.claude-quaternary"
+  printf '{}\n' > "$HOME/.claude/.claude.json"
+  local n
+  for n in .mcp-probe-cache .last-update-result.json; do
+    printf 'acct1\n' > "$HOME/.claude/$n"; printf 'acct4\n' > "$HOME/.claude-quaternary/$n"
+  done
+  run zsh -fc "source '$MIRROR'; _cc_sync_config_mirror \"\$HOME/.claude-quaternary\" 2>&1 >/dev/null"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c 'FORKED real' || true)" = 0 ] || { echo "$output"; false; }
+  run zsh -fc "source '$MIRROR'; _cc_sync_config_mirror --convert \"\$HOME/.claude-quaternary\" 2>&1 >/dev/null"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  for n in .mcp-probe-cache .last-update-result.json; do
+    [ ! -L "$HOME/.claude-quaternary/$n" ] || { echo "$n was shared by --convert" >&2; false; }
+    [ "$(cat "$HOME/.claude-quaternary/$n")" = acct4 ]
+    [ ! -e "$HOME/.claude-quaternary/$n.premirror-bak" ]
+  done
+}
+
+@test "piped: a real settings.json.bak-x prints no per-name FORKED line" {
+  command -v zsh >/dev/null 2>&1 || skip "zsh unavailable"
+  export HOME="$D/fh-bak"
+  mkdir -p "$HOME/.claude" "$HOME/.claude-secondary"
+  printf '{}\n' > "$HOME/.claude/.claude.json"
+  printf 'src\n' > "$HOME/.claude/settings.json.bak-x"; printf 'fork\n' > "$HOME/.claude-secondary/settings.json.bak-x"
+  run zsh -fc "source '$MIRROR'; _cc_sync_config_mirror \"\$HOME/.claude-secondary\" 2>&1 >/dev/null"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c 'FORKED real' || true)" = 0 ] || { echo "$output"; false; }
+  [ -f "$HOME/.claude-secondary/settings.json.bak-x" ]
+  [ ! -L "$HOME/.claude-secondary/settings.json.bak-x" ]
 }
