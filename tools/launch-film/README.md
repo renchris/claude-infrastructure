@@ -5,7 +5,8 @@ terminal-fleet film built in `tools/hero-film/` (git history keeps that one).
 
 | Artifact | What it is | File |
 |---|---|---|
-| **Loop** | the README's first element: an animated WebP, 1048 × 590, every one of the film's 1,755 frames at 60 fps, no sound, loops forever | `assets/hero/hero.webp` |
+| **Hero** | the README's first element: GitHub's inline video player showing the master (1920 × 1080, 60 fps, with sound), uploaded as an attachment to closed issue #1, "README media: launch film" | the attachment URL at the top of `README.md` |
+| **Loop** | an animated WebP, 1048 × 590, every one of the film's 1,755 frames at 60 fps, no sound; no longer on the README (there it looked crushed and silent) | `assets/hero/hero.webp` |
 | **Poster** | one still from the film, 1920 × 1080 | `assets/hero/poster.jpg` |
 | **Film** | the full film with sound: 29.25 s, 1920 × 1080, 60 fps, H.264 + AAC | `assets/hero/launch-film.mp4` |
 
@@ -28,7 +29,7 @@ An agent made it end to end: no studio, no stock footage, no generated video, no
    one Mac.
 4. **Preview-gated rounds.** Before the final render, each round was a cheap full-length preview
    with sound and one question. Four preview rounds fixed speed, staging, the hand-offs and the
-   sound at about two hours each.
+   sound; the two that were timed took 2.7 and 3.2 hours.
 5. **Sound.** A score composed in code, plus sound effects generated with ElevenLabs (sea, poofs,
    brush, chalk). No voice.
 
@@ -55,10 +56,14 @@ Illustration:
 - **The two asks.** `sudo pmset` and "Spend about $250 of quota?" are examples of the two kinds of
   question that reach a person, not a record of one event.
 
-## The README loop
+## The README hero and the loop
 
-GitHub strips `<video>` from a README, so the hero is an animated WebP and the film with sound is a
-link beside it.
+The README's hero is GitHub's inline video player:
+- the master is an attachment on closed issue #1;
+- its bare `https://github.com/user-attachments/assets/<uuid>` URL sits on its own line;
+- GitHub strips a raw `<video>` tag, but not an attachment URL.
+
+The animated WebP below is kept for places that need a silent loop. As the README hero it looked crushed and had no sound (2026-10-13).
 
 ```sh
 bash tools/launch-film/encode-loop.sh MASTER.mp4 assets/hero/hero.webp   # 1048 px wide, q20

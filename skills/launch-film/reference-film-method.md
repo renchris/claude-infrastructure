@@ -1,8 +1,9 @@
 # Designing a launch film against a reference film
 
-Use this when the operator hands over a film ("design against this") or when § 4 step 2 of `SKILL.md` names a
-reference film. It turns someone else's film into a design brief for ours without copying it. It complements
-§ 6's "carry the method, never the look": this file is how to find the method inside a film.
+Use this when the operator hands over a film ("design against this"), and only after the story gate (`SKILL.md` §1).
+A reference sets the finish bar and teaches method. It never supplies a shot, a subject or an accent colour.
+- Every route that restaged reference shots was rejected: "We are WAY to overfit exact copy cat of the original source film" and "We need some ORIGINAL storyboarding not just exact copies from our sources" (2026-10-02).
+- A reference's accent colour "feels out of place" (2026-09-29).
 
 ## Privacy first
 
@@ -69,5 +70,5 @@ optional.
 
 Every quality is rebuilt from our own product's records: our invariant must be literally present in our real
 artefacts, our source set must be real captures, our sentence comes from the frozen message, our exact moment
-carries only verified facts. Then continue with `SKILL.md` § 4 from the look-frame step. If a stranger could lay our
+carries only verified facts. Then continue with `SKILL.md` §2 (look gate). If a stranger could lay our
 frame next to the reference and name the reference, it is a copy: redo it.

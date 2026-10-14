@@ -1,9 +1,8 @@
 # A design gate for launch films, and three lessons from a cut film
 
-Beside `SKILL.md` § 4 step 12. Written after the claude-infrastructure v3 film (2026-09-28), whose predecessor passed
-every VERIFY check and was rejected on sight as "looks very broken": type struck through by rule lines, a card caught
-mid-transform, frames with no subject, type too small to read at 1080p. Every one of those checks measured encoding.
-None measured design.
+Beside `SKILL.md` §8, for films drawn by a web page or canvas. Written after a 2026-09-28 film passed every encoding
+check and was rejected on sight as "looks very broken": type struck through by rule lines, a card caught
+mid-transform, frames with no subject, type too small to read at 1080p. None of those checks measured design.
 
 ## 1. Make the page report its own layout, then gate on it
 
@@ -22,7 +21,7 @@ Coordinates in 1080p CSS px, because 1080p is the size a film is judged at. `kit
 |---|---|---|
 | D1 | text crossed by a line | no text box touches a line segment (its own stroke width + 2 px) |
 | D2 | text on text | the headline/card lines overlap no other text box |
-| D3 | unreadable type | every text ≥ 28 px at 1080p; the headline and the name ≥ 40 px |
+| D3 | unreadable type | every read ≥ 28 px at 1080p; a headline ≥ 72 px; the product name ≥ 84 px |
 | D4 | out of frame | headline and card lines inside the safe area |
 | D5 | mid-transform text | no moving shape covers a text box |
 | D6 | a film-specific invariant | e.g. the one line every shot is framed on sits at the same place in every frame |
@@ -31,17 +30,25 @@ Coordinates in 1080p CSS px, because 1080p is the size a film is judged at. `kit
 fail (it failed 319 frames on v3), then pass again on the real page. A gate that has never failed proves nothing, and
 the previous film's gates had never failed.
 
+**Read the clock from the cue export, and say what ran.** Duration, beats and splices come from the film's own cue
+file, never from constants. The 2026-10 gate kept its 25.0 s story clock and its old beat list after the edit spliced
+in 255 close-up frames and a restage removed two cuts. Its film-mode frame count expected 1,500 frames against a
+1,755-frame master, so its "DESIGN PASS" on the final was the page-layout check alone. A gate prints which checks ran
+and the frame count it read; a pass with a skipped section is a fail.
+
 It earned its place twice in one build: D5 caught the opening collapse sliding over the `❯`, and D3 would have caught
 panes that re-tiled wider between captures (their type shrank below the others) had the contact sheet not caught it
 first.
 
-## 2. The invariant is usually already on screen: read the product's own live UI
+## 2. Capturing a product's live UI (when UI is a beat, not the carrier)
 
-For a terminal product, `kitty @ get-text --match id:<n> --extent screen --ansi` returns a live pane's screen with its
-real colours. Claude Code runs on the alternate screen, so there is **no scrollback**: `--extent all` returns the
-screen and nothing more. To collect varied real states, poll snapshots (a detached script, every ~45 s, deduplicated
-by hash, only panes whose cwd is the product's) and freeze the pool before the final build, because panes re-tile and
-a "latest capture" changes size under you. Leave out panes whose content is personal or a customer's.
+A whole film of real UI read as "very "tutorial"" (2026-10-03), and real screens in a dark set as "so dark, b-roll
+abstract and gloomy" (2026-10-01). When a beat does need a real pane, `kitty @ get-text --match id:<n> --extent screen
+--ansi` returns a live pane's screen with its real colours. Claude Code runs on the alternate screen, so there is **no
+scrollback**: `--extent all` returns the screen and nothing more. To collect varied real states, poll snapshots (a
+detached script every ~45 s, deduplicated by hash, only panes whose cwd is the product's) and freeze the pool before
+the final build, because panes re-tile and a "latest capture" changes size under you. Leave out panes whose content
+names another project, a person or a customer.
 
 ## 3. Hard cuts and motion blur do not mix
 

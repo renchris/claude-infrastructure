@@ -1,208 +1,216 @@
 ---
 name: launch-film
-description: "Make, re-work or audit a launch video, brag film or README hero loop, including one that reads as template or AI slop, to the operator's bar: studio-grade restraint, every string and sound real, verify-gated. Owns taste; hyperframes owns mechanics."
+description: "Make, re-work or audit a launch film or README hero video: story, look, board, stills, motion previews, sound, final render and README, each ending on one operator yes, with checks for past rejections. Owns taste; hyperframes owns mechanics."
 ---
 
 # Launch film
 
-Worked example: the Natural TTS launch film, v3, accepted with *"Great. Add to our README.md"* and then
-*"position launch film as the first hero/header asset"* (2026-09-27). Film: `natural-text-to-voice-extension`
-README, first media under the badges (commit `0d3c429`). Everything reusable from it is in `kit/` beside this
-file, because the originals live in git-excluded `brag-output-*/work/` folders and brag-slim's own text was only
-ever in `/tmp`.
+Story → look → board → stills check → motion previews → sound → one final render → README. Each step ends on an
+operator question, and nothing downstream is built before its yes. Carry this order to a new product, never a finished
+film's look.
 
-Evidence files beside this skill (read them before changing a rule here):
-`operator-feedback.md` (every operator word on the film, verbatim, dated) and `pipeline.md` (each script: CLI,
-invariants, coupling, measured numbers). **`studio-method.md`** holds the craft rules and design gates that separate
-a designed film from a slide deck, measured across the Opus 5.5 motion-design wave. Read it before any design work:
-the 2026-09-28 film had every mechanic in this file and was still rejected as "prezi slides".
+Read this file top to bottom. Open an appendix only when a step names it:
+- `operator-feedback.md`: every verdict verbatim and dated; the evidence for each rule here.
+- `studio-method.md`: craft rules and design gates for 2D and code-built films.
+- `pipeline.md`, `design-gate.md`, `kit/`: the web (CDP) pipeline, for 2D films and for the §1 rough film.
+- `pipeline-3d.md`: the path-traced pipeline (state page → Blender Cycles), previews, resumable renders, paid sound.
+- `reference-film-method.md`: reading a reference film for method, after §1.
 
-## 1. The bar, in the operator's words
+## 0. Working rules (every step)
 
-Two lineages, one taste. Each verdict names what it rejected; the rule is the rejection, not the agent's reading of it.
+1. Write every operator word verbatim and dated into the project's `BRIEF.md` before acting on it; keep timings in
+   `STATUS.md`. A recycled context reads both first.
+2. One decision per question, worded "(yes / what to change)". When the operator is curious about an alternative, show
+   both side by side instead of arguing.
+3. A "(Recommended)" option must pass every rule in this file: never a render longer than a preview before §5, a fixed
+   length, a beat that halts the film, or a raw system sound. A recommended pick stays provisional until the motion
+   yes: four 2026-10 picks were reversed at motion review, and "Render the full film (Recommended)" started a 34.8 h
+   render before anyone had seen the motion.
+4. Deliver, then ask. Send a copy under 30 MiB and `open` the master, and ask only after the send has succeeded: a
+   question sent beside a failed upload may be answered unseen. Order: film, then board or stills, then the question.
+5. Only the operator's yes counts. A critic's SHIP, a passing gate or your own "APPROVED" is a floor: a film refined
+   through nine critic rounds to SHIP drew "I don't think we signed off on this general idea" (2026-10-01).
+6. An answer that is not an answer (a side question, a typed comment, silence) is recorded verbatim and acted on as
+   named, and the same gate question is asked again. A no that names no fault gets one multi-select of candidate faults,
+   measured ones included: four bare "Change it" answers became "Props feel random"; "which dark thing?" became "The
+   mood".
+7. A "Yes, but…" freezes everything it did not name. Fix the named faults, nothing else.
+8. The session that asked acts on the answer within the scope it was given; relay only what changes scope ("Yes — take
+   it to motion" waited 11 h for a relay, 2026-10-02).
+9. While a question is open, run the state measurements and the budget probe; never start the long render. When the
+   operator must act (a permission, a key, a publish), give the exact action, then poll its observable state in a
+   bounded background loop instead of waiting to be told.
+10. Spend: free first; paid tools only for an approved use, with the cost stated before asking. When a paid route hits a
+    limit, fall back to the free one at once.
+11. Ruled out unless the operator reopens them: a human shoot or studio, stock footage with type over it, generated
+    video as the film's basis, narration over dark frames.
 
-| When | Verdict on | Operator's words | What it rejected |
-|---|---|---|---|
-| 2026-09-24 | agent-context-sync animated-SVG hero | "This needs to be more of a hero launch video rather than a secondary supplementary infographic" | a correct, captioned diagram as the hero |
-| 2026-09-24 | its canvas film | "the scene is very abstract … there is no 3d transpilation transitions from scene to scene" | metaphor fields; hard cuts |
-| 2026-09-25 | claude-infrastructure 20 fps loop | "make the film more smooth (ie. 60fps) … I don't feel oriented nor I can read anything in time" | low frame rate; fast flights; short holds |
-| 2026-09-26 | Natural TTS v1 (light indigo, Iowan serif, soft) | "This is good. It's very "2000s classroom friendly" vibes. Can we make it more startup modern? … the same energy as … an Apple launch product" | the look and pace, **not** the story (kept through v3) |
-| 2026-09-26 | (mid-build) | "compete with the design and brand guidelines of ElevenLabs / SuperWhisper/WhisprFlow / Awwwards / Anthropic" · "showcase the ability of you the world class motion designer Opus 5.5" | generic "good design" |
-| 2026-09-26 | Natural TTS v2 (black stage, iridescent orb, glows, gradient text, mono index labels, shockwave) | "from "mvp ai template slop" to "world-class design studio" … well-design the orb … like ElevenLabs and ChatGPT Voice … EVEN BETTER … less "purple gradient" prominent vibes whicih is the "AI slop" theme default" | showing off through template tropes |
-| 2026-09-27 | Natural TTS v3 (warm paper stage, one cobalt-ink orb, near-black type) | "Great. Add to our README.md" | — accepted |
+## 1. Story gate
 
-Read together:
-1. **Content survives, looks get re-rolled.** Keep a working story and truth rules; change look, pace and sound.
-2. **Startup-modern means flagship-launch energy with studio restraint.** Craft shows in the object, the motion and
-   the type — never in auras, glows or gradients. v2 showed off *and* was rejected; v3 held back *and* was accepted.
-3. **Benchmark against named brands and beat them** (ElevenLabs, ChatGPT Voice, Anthropic, Awwwards, Apple
-   keynotes). Study the operator's references as data (measured colours, frame grabs), never from memory.
-4. **Concrete, continuous, legible:** real things with real names, one world with eased camera flights, 60 fps on
-   anything that moves, every line held ≥ 1.0 s + 0.3 s/word.
-5. **Frame 0 is the answer; an accepted film becomes the page's first hero asset.**
+From the repo, with no look, reference or medium yet (`kit/brag-slim/SKILL.md` for the intake):
+1. The product in use: its 2–3 beats (entry → action → result).
+2. The intake: what it is, who it is for, what sets it apart, the most impressive true claim, the visual hook, what to
+   show.
+3. **Value points, MECE.** One row per point: the point · the mechanism in the repo that does it · how it appears on
+   screen as an action. Split along the operator's axes; write down what is left out on purpose.
+4. **One angle** that makes the value felt, not explained. Do not picture the problem the product removes: walls of
+   real terminal text for a product that quiets them drew "It still reads very noisy and confusing" (2026-10-04).
+5. **Carrier mini-gate.** In chat, send the value-points table with 2–3 carrier candidates and ask "Which carrier, or
+   your idea?". In 2026-10 the operator's own carrier came straight after this table ("First tell me the value points
+   we will go through in the story…", then "a "swarm" of efficiently self managing Clawds"). Characters from the host
+   product's world acting out its real mechanics, one throughline followed through every shot, passed. UI objects
+   acting out a metaphor read as "so weird and makes zero sense"; an invented object with no anchor read as "abstract
+   and i dont understand it"; a UI walkthrough read as "very "tutorial"".
+6. **Truth.** Every number on screen is measured under a written rule; every mechanic shown is real; stakes are true.
+   Names on screen belong to this product. Real UI, icons and sounds, when shown, keep their real form but are
+   translated into the film's material, never pasted in.
+7. Beats, then a deliberately rough film (any medium, plain look) at whatever length its reads need (≥ 1.0 s + 0.3 s
+   per word). Report the length; never offer one as a choice.
 
-Honest limit: the operator never ruled on single elements of v3 (the paper stage, the ink orb, the music). The
-design system in §2 is the agent's, accepted as a whole. Treat it as the proven default, not as law.
+**Gate:** "Is this the right STORY, even if the look still needs work? (yes / what to change)". On yes the story is
+frozen; a look note never changes it.
 
-6. **"Broken" and "prezi slides" are separate from "slop"** (2026-09-28, claude-infrastructure): type crossed by
-   lines, a card smeared mid-transform, frames with no subject, and unreadable small type read as broken. Layouts
-   that change between beats with nothing carried across read as slides. Every encoding gate passed on that film,
-   so the design gates in `studio-method.md` §4 are now part of VERIFY.
+## 2. Look gate
 
-## 2. The look that passed (Natural TTS v3)
+1. Two looks of the frozen story side by side, each at full length with its own mix and its own words treatment, each
+   labelled with its measured full-render time. (In 2026-10 this was two 23 s films; a stills-only A/B is untested.)
+2. Fidelity means finish against the operator's named comparators, not a number of dimensions. In 2026-10 a
+   path-traced, dressed, worn and inhabited set passed (its props were built in code); raster code-built 3D read as
+   "school project 3d render" and an undressed set of scanned assets as "'blender demo' quality". A 2D film passed for
+   Natural TTS.
+3. Bright and inhabited: never dark, never an empty void ("purgatory rather than utopia").
+4. **The words are part of the look.** List in-world ideas for them before generating anything ("can we ideate before
+   you generate?"), show mock-ups of the chosen few, and let one idea carry every read: four unrelated lettering props
+   drew "Props feel random". References and generated mock-ups set the minimum finish; preview one built element at
+   100 % against its mock-up before building the rest ("We need to BEAT the quality from nano banana frames").
 
-This look is one film's accepted answer, not a house style. A warm paper ground with a clay accent and an italic
-serif is now also part of what viewers read as the default "AI-made" Opus look (`studio-method.md` §3). A second
-product decides its look from zero.
+**Gate:** the operator picks a look. Then close it one element at a time (character, set, props, words), each with "Is
+<element> at the bar? (yes / what to change)". Never offer a render longer than a preview here: in 2026-10, 14 of 15
+"render the full film now?" offers drew look notes instead of answers, and the look stage ran 70.6 h.
 
-**The AI-slop tells — remove every one before the operator sees a frame:** purple/indigo/violet/pink auras or
-gradients as the dominant field; iridescent or gradient-filled text; glow blooms; vignettes; light streaks;
-shockwave rings; glossy specular "ornament" spheres; mono uppercase labels with `01 / 03` index numbers; heavy grain
-used as a look (≤ 0.02, and only to dither).
+## 3. Board gate
 
-**The system that replaced them:**
-- **Colour comes from the product, not a template.** Pull the palette from the repo (brand README, CSS variables,
-  icon). One accent. Keep product truth: the real icon and the real UI keep their real colours even when they are a
-  gradient (v3 kept the indigo icon tile).
-- **Colour lives in one object.** ~90 % of every frame is warm neutrals and near-black type; one saturated object
-  takes the rest (ElevenLabs measured: page `#FDFCFC`, panels `#F5F3F1`, one colour field per section).
-- **Warm light stage, never template-black:** stage `#EFEDE8`, page `#FBFAF7`, so white UI reads as objects.
-  Focus without darkness: fade the rest toward paper (~15 %) instead of dimming to black.
-- **Type:** near-black `#141414` SF Pro Display 400–500, tracking ≈ −0.035 em, large; one serif italic supporting
-  line; captions SF Pro Text 20–22 px, muted `#8A857D`, sentence case.
-- **One signature object, made of the product's own story** (v3: "the ink of the text becomes a living voice" —
-  cobalt ink blooming in a milk-white sphere on paper). It must differ from every reference, not average them.
-  Prototype it alone (`kit/example/orb.js`; a `gltest/`-style page rendered by a copy of `render.mjs`), keep a
-  reject log with the reason for each rejection, and drive it with real data (the product's audio spectrum via
-  `kit/audio/spectrum.py`) — data changes speed and bloom, never the pattern's scale.
-- **Motion:** eased camera choreography, 4-subframe motion blur, transitions made of the object itself (ink wash)
-  rather than colour takeovers or hard cuts.
+A storyboard in film format:
+- script spine: words · feature · time;
+- feature map: every feature against its repo mechanism, MECE, with what was left out. It is a coverage check: the shot
+  list follows the carrier's action, and no shot exists only to show a feature;
+- shot list, one row per shot: time (s, frames) · camera move as a verb, start → end framing · angle and size · lens
+  and depth of field · staging and action · feature landed · on-screen words · the cut out;
+- several set-ups, heights and transitions ("As a filmographer we need multiple shots at multiple
+  angles/motions/transitions"); cut outside read windows, on a match (a held line, a whip, a shape, an object passed
+  across the cut);
+- every on-screen number re-measured, with its script beside the board;
+- changes numbered C1…Cn, each separable, with a reason;
+- the contact board generated from the edit list in film order with timecodes.
 
-## 3. Truth rules (every film)
+**Gate:** an answer per change. A board approves structure only. Light, sound, length and timing are judged on the §5
+preview, so keep them out of the board question: two board-approved changes (a quiet window in the score, a sun moving
+behind the stops) came back as "the music just cuts out and then its dark and gloomy for no reason".
 
-1. Every legible string and every product sound is real: copy from the README, store listing and UI; product audio
-   used exactly as the product returned it — no gain, no cuts inside a clip.
-2. For a product that speaks or plays sound: music and effects are **digital silence** under it.
-3. No invented UI or features; measured latencies are shown as measured.
-4. Graphics that are not the product (an orb, a chip) sit off the product's UI and are driven by real data.
-5. Captions and share copy state only verified facts (version, machine, voices, speeds).
+## 4. Stills check (internal, before every render)
 
-## 4. Procedure
+First, middle and last frame of every shot and every close-up, reviewed at three zooms (`studio-method.md` §5):
+- staging measured from the scene state: nothing intersects anything (count = 0), and each subject has a clear gap in
+  front of it;
+- every close-up lens has a clear line of sight to its subject on every frame, ends included;
+- the backdrop shows the same world in every shot, and nothing in the background is a still photo while the foreground
+  moves;
+- words live in the scene: one in-world medium that fits the set, made on screen by a visible maker, reading ≥ 28 px at
+  1080p with contrast checked; hand-made lettering has no two identical glyphs ("The text still reads as font").
 
-1. **Intake** (brag-slim's questions, `kit/brag-slim/SKILL.md`): what it is, who it's for, what sets it apart, the
-   most impressive true claim, the visual hook, the real UI to show, share caption. Write the angle in one sentence.
-   Output folder `brag-output[-<timestamp>]/` with `work/` beside the plan; git-exclude it
-   (`.git/info/exclude`: `/brag-output*/`), never commit renders.
-2. **References.** One read-only research subagent per reference (the operator's links, plus the named brands);
-   each writes `research/<slot>/notes.md` + `contact.png` with measured values. Read the sheets, not the pages.
-   - **A reference FILM from the operator** ("design against this"): extract it with `reference-film-method.md`
-     beside this file (method vs surface, mapped onto the current film's defects); the frame-level study stays
-     private.
-3. **Look-frame to the operator early** — one still of the hero moment, before the full build. Critics passed films
-   the operator rejected on sight twice (abstract; unreadable pace).
-4. **`timeline.json` is the single source of timing** (`kit/timeline.json`): fps, size, duration, bpm, product clips
-   with `speech_on/off`, `silence_windows`, music sections, sfx. Picture events sit on the beat grid.
-5. **Composition = a web page that is a pure function of t** (contract, from `kit/example/scene.js`): top-level
-   await loads the timeline, data and REAL product files through the render server (its root is the repo); fonts
-   loaded explicitly; `renderAt(t)` computes everything closed-form (use running integrals, never accumulate);
-   `window.__render = async t => { renderAt(t); await raf(); await raf(); }`, `__info()`, `__ready`. Kill every CSS
-   transition/animation, in every shadow root that hosts real product CSS (`kit/example/scene.js`, grep
-   `transition: none !important`), including vendor pseudo-elements the `*` rule misses (a slider thumb leaked).
-6. **Stills review before any full render:** `./sheet.sh out.png t1 t2 …` over every scene AND mid-transition
-   frames. Check against §1 and the §2 tell list, frame by frame. Review at three zoom levels
-   (`studio-method.md` §5): a sheet covering 100 % of the duration, a strip of every frame of each transition, and a
-   crop of every string that carries the story. Before this step, write the reads sheet: one timed line per read,
-   with no two overlapping.
-7. **Purity check:** render the same t set in forward and reverse order, diff the PNGs; byte-identical (or ≤ 4/255
-   compositor AA) or find the leaking state.
-8. **Render in the background:** `caffeinate -d` running (display-off stalls capture), then
-   `node render.mjs video --dpr 2 --sub 4`. Watch the render's own pid or the log's final `frames` line, never
-   `pgrep -f 'render.mjs video'` (it matches the watcher). On a lost renderer: `--from <s> --out out/frames-b.mkv`,
-   then `./join.sh <n>`.
-9. **Score:** synthesize it (`kit/sound/soundtrack2.py ../timeline.json`, numpy/scipy; brief constraints in
-   `kit/sound/BRIEF.md`). Bundled stock tracks without a documented licence are out. Band-check against a reference and
-   EQ (`tone2.py`) with values re-measured per film. A teammate may own the score; it gets reaped after reporting, so
-   read its files rather than waiting for its message.
-10. **Mix** (only with product audio): `python3 mix.py timeline.json sound/music_sfx_eq.wav out/mix.wav`.
-11. **Finish:** `./finish.sh <poster seconds>` — poster replaces frame 0 only; one BT.709 conversion; CRF 22 +
-    `-tune grain` for grained looks (CRF 14 on grain cost 74 MB), 14–18 for grain-free.
-12. **Verify:** `python3 verify.py timeline.json` must print `VERIFY PASS`. For a film with no product audio, cut the
-    clip and Parakeet checks and **assert** what it only prints today: frame count = round(duration·fps), size,
-    yuv420p/bt709, PSNR(frame 0, poster) and PSNR(frame 1, render 1) > ~40 dB, LUFS in band, true peak ≤ −1 dBTP.
-    Encoding gates alone passed a film the operator called broken, so VERIFY also runs the design gates in
-    `studio-method.md` §4: text vs line, minimum type size, text in transit, subject coverage and static share.
-13. **Deliver so the operator can watch it:** `open brag.mp4` and SendUserFile the mp4 + jpg + share copy. The
-    operator judges by watching the MP4, not by reading the plan.
-14. **README, once accepted:** first hero asset, directly under the title and badges. GitHub strips `<video>`: upload
-    the MP4 (≤ 10 MB) to a closed issue titled `README media: <name>` with `gh issue create --attach`, put the bare
-    `github.com/user-attachments/assets/<uuid>` URL on its own line under a `<!-- <name> -->` marker, caption with
-    verified facts only, and check `gh api markdown -f mode=gfm -f context=<owner/repo> -F text=@README.md` renders a
-    `<video>` for that uuid. (Recipe: natural-text-to-voice-extension `scripts/release/embed-hero-video.sh`.) For a
-    silent looping hero, use demo-recording's animated-WebP rules instead.
+No operator question unless the look itself changed.
 
-## 5. The kit (`kit/`)
+## 5. Motion gate (repeat until yes)
 
-| File | Use | Change for a new film |
-|---|---|---|
-| `render.mjs` | CDP frame renderer, 90 s call timeout, `--dpr`, `--sub` motion blur, `--from/--to` | lives at `<repo>/brag-output*/work/` (it serves `../..` as root); page path; 1920×1080 is hard-coded; add `.woff2/.webp/.jpg` MIME types; `CHROME` path |
-| `join.sh`, `sheet.sh` | resume a crashed render; review sheets | none (join does not assert the count) |
-| `finish.sh` | poster as frame 0, BT.709 encode | `FPS`; drop the audio input for a silent film; CRF by grain; x264 level for 4K/60 |
-| `verify.py` | delivery gate | see step 12 |
-| `picture_gate.py`, `review.py`, `render.mjs geom` | the design gates of `studio-method.md` § 4, measured from the page's own geometry and the decoded film; the three-zoom review with its manifest | mark `data-role`/`data-texture`/`data-glyph` on the page; pass `--lockup <s>` |
-| `mix.py`, `audio/envelopes.py`, `audio/spectrum.py` | product-audio mix; audio-reactive data | mix is voice-specific (24 kHz, 2:1); spectrum works on any WAV, e.g. the score |
-| `sound/soundtrack2.py`, `tone2.py`, `BRIEF.md` | synthesized score, EQ, brief | key/chords hard-coded (D minor); SFX types; reference glob points at `/tmp` |
-| `example/` | v3's `scene.js` (page contract, closed-form helpers, the transition kill rule), `orb.js` (deterministic WebGL: clear, scissor to bbox, uniforms only, `gl.finish()`), `style.css`, `index.html`, the v3 plan | pattern only; the choreography is product-specific |
-| `brag-slim/` | latent-spaces/brag 0.4.0 `/brag-slim` (MIT, licence beside it) | the procedure this pipeline follows |
+The final render is never the first full-length view of the motion. Each round:
+1. **Measure from the scene state, before pixels:** each subject's own screen speed with camera motion removed (cap a
+   named subject near 0.73 frame widths per second, 1,400 px/s at 1920 wide; the 0.47 widths/s whole-picture cap of
+   the 2D loop gate is untested in 3D); move starts per beat (stagger them); intersections; loudness per second; mean
+   light per shot.
+2. **Render a cheap full-length preview with the sound** (`pipeline-3d.md` §4): half size, low samples, every other
+   frame held. Reuse unchanged frames from the last round.
+3. **Ask one question:** "Is the motion right now, and the staging, music and light with it? (yes / what to change)".
 
-Measured on an M1 Max: v3 rendered 675 frames at `--dpr 2 --sub 4` in 19 min (≈1.7 s/frame); final 7.3 MB.
+Every preview is held to:
+- every change has a visible giver and receiver: nothing appears with nobody beside it, no lettering without a hand, no
+  turn without a motive (2026-10: each mechanic a paw-to-paw pennant pass with both characters on screen, taught once
+  close, then repeated wide);
+- every appearance has anticipation (about 0.5 s) and a settle; a character beat holds about 1 s;
+- the product's interruptions happen in stride, inside a camera move with the music running; a beat that halts the
+  film to explain reads as "a "stop" from the movie immersiveness";
+- many units at once read as order: events on the beat grid, staggered starts, no crossings ("Ensure it looks
+  organized at scale");
+- no dark or dead beat; "dark" can mean mood (energy dropping, a crowd going still, music thinning), which no luminance
+  number catches ("The mood");
+- 60 fps on everything that moves; every read ≥ 1.0 s + 0.3 s per word;
+- length is an output: never squeeze beats to a clock, never pad ("Appropriate length for the best film, rather than
+  trying to fit the best film within a set length").
 
-## 6. Carrying it to another repo (e.g. claude-infrastructure)
+**Gate:** "Yes, motion is right".
 
-- **Reconcile before building.** claude-infrastructure already has `tools/hero-film/` (a 3D three.js world,
-  48 s 4K60 film + 36 s WebP loop, pacing gate `npm run hero:pacing`) and an unlanded `hero-brag` branch with a third
-  toolchain (`scripts/hero-brag-*`). Extend one of them; do not fork another.
-- **Audit the existing film against §1-§2 frame by frame**, from a contact sheet of the real MP4
-  (`ffmpeg -i film.mp4 -vf "fps=2/3,scale=640:-1" f%02d.png`, then montage). Mark every §2 tell (dark template
-  stage, glowing lines, bloom, gradient fields) and every place colour is not the product's.
-- **Where the lineages seem to disagree, the operator decides from a look-frame.** Both are compatible: 3D camera
-  flights, 60 fps, concreteness and reading time (infra) sit inside restraint, product-sourced colour and one
-  signature object (Natural TTS). What the operator has not ruled on is a dark stage with a glow-lit world outside a
-  voice product. Show one re-graded still next to the current one and let them pick.
-- **Find the repo's signature object in its own story** (the Natural TTS orb was the text's ink becoming voice).
-  For an infra repo that is a real thing on screen (a terminal pane, a commit landing, a file turning live), never
-  an abstract orb pasted in.
-- **Real strings only:** terminal output and file names from real runs, as that repo's hero-film honesty rule says.
-- **Carry the METHOD, never the look.** On 2026-09-27 the operator rejected a claude-infrastructure build that had
-  Natural TTS's paper stage, one accent and Iowan italic: *"we overfit to the exact output style and not the
-  methodology of design and composition … We should have different inspiration from our claude harness infrastructure
-  that helps self manages 15+ concurrent sessions"*. The method is: research the product's OWN domain, then design one
-  signature object from its story that beats those references. For an agent-fleet repo that research wave was ten
-  read-only slots, each writing `notes.md` + `contact.png`: Claude brand films, parallel-agent products, infra launches,
-  real-world fleet control (ATC, rail tokens, Apollo), Apple's software craft, studio motion, terminal staging,
-  autonomy and the human decision, plus a hostile critic of the look-frame and a red team of the object. They
-  converged on what no agent product shows: time, work crossing one lock one at a time, and a film that ends on the
-  one decision left. The object that came out of it was **the day sheet**: one real day of the repo drawn as a train
-  timetable from `land.log`, with each land a thread through the lock. Every mark on it was a real record.
-- **Prototype the object alone through the film's own renderer** (`render.mjs --page proto/index.html --stills-dir
-  proto/stills`), keep a reject log with the reason per rejection, and only then build the film on it. Its purity
-  check caught three leaks the eye did not: a composited label layer (`will-change: transform`) whose text phase kept
-  the history of earlier frames, a canvas context carrying drawing state between redraws, and a font the page never
-  awaited before its first draw.
+## 6. Sound (beside the final render)
+
+- A product whose output is sound plays it as returned and gets the room (Natural TTS: music to digital silence under
+  the voice). Otherwise the score never drops out; under a quieter beat, a few dB at most (a bed 10–25 dB down still
+  read as "The halfway point cutoff without music is so jarring").
+- Incidental system sounds (a notification chime) are translated into the score as an in-key accent, never dropped in
+  raw.
+- Paid generation only after the motion yes: A/B passes on the same picture, level-matched, cost stated first.
+
+**Gate:** the operator picks a mix. Sound blocks only the finish, never the render.
+
+## 7. Final render
+
+Start the pixels on the motion yes. Budget from a timed probe at final settings on the heaviest shots, on the machine
+as it is loaded: probe median × frames × 2 for a machine shared with other sessions. Write the budget down and re-check
+it after 50 frames. (2026-10: scaling the preview by samples × pixels overestimated 8×; the two full renders ran 1.7×
+and 2.2× their probe-based estimates.) One renderer, resumable, verified frames, and a watcher that speaks only on a
+stall, a rate change over 2× or done (`pipeline-3d.md` §5).
+
+## 8. Finish, verify, ask
+
+- One colour conversion; a lossless master; an H.264 + AAC deliverable. Assert with ffprobe: size, fps, frame count =
+  round(duration × fps), an audio stream, loudness and true peak in band.
+- Every gate reads duration, beats and splices from the cue export, never a constant, and prints which checks ran and
+  the frame count it read. A pass with a skipped section is a fail.
+- Watch it end to end, then deliver per §0.4 with its board: "Is this the launch film? (yes / what to change)". In the
+  same message, ask for whatever §9 needs from the operator (browser automation for the upload, the publish go).
+
+## 9. README
+
+A film with sound is the README hero as GitHub's inline video player at master quality, never an animated WebP (silent,
+visibly compressed). An animated WebP is only for a silent loop that was never a film. A session brief that says
+otherwise is wrong: fix the brief.
+1. `gh issue create` a closed issue "README media: <film>", its body saying what it hosts and not to delete it.
+2. Upload the master, not a send copy, as an attachment (100 MB on GitHub Pro). There is no public API for
+   attachments; a logged-in browser uploads it.
+3. Put the bare `https://github.com/user-attachments/assets/<uuid>` URL on its own line under the title and badges;
+   caption with verified facts only.
+4. `gh api markdown -f mode=gfm -f context=<owner/repo> -F text=@README.md` must render a `<video>` for that uuid; then
+   check on github.com that it plays with sound at full size.
+
+**Gate:** the hero equals the master in resolution, frame rate and audio.
+
+## 10. Worked examples (sequence and verdicts; their looks are not templates)
+
+**Natural TTS, 2026-09-26/27.** One prompt, "Create our launch video with https://github.com/latent-spaces/brag" →
+brag-slim intake → one angle → v1: "This is good. It's very "2000s classroom friendly" vibes" (story kept) → two look
+re-rolls → "Great. Add to our README.md". README via an issue attachment (`03fe526`), first hero asset (`0d3c429`).
+
+**claude-infrastructure, 2026-09-25 → 10-13.** About 25 directions without a story yes that held (re-skins of one
+script, then starts from a look, a reference or a medium) → "Why cant we see how we came to producing the NaturalTTS
+from prompts/first principles and not overfit to the actual output?" → §1 re-run → story "Yes" about an hour later →
+look A/B → board → a 34.8 h render before any motion preview → four previews → "Yes, motion is right" → 81.4 h final →
+"Yes" (2026-10-13) → README WebP: "crushed … also no sound" → attachment video (`24cb58e9f`). Verdicts:
+`operator-feedback.md`. Full record: `~/Development/personal/launch-film-2026/` (`BRIEF.md`, `STATUS.md`,
+`RETROSPECTIVE.md`, `first-principles/`).
 
 ## Do NOT
 
-- Do not answer "startup modern" with a black stage, purple/violet gradients, glows and gradient text: that exact
-  answer was v2, and it drew "mvp ai template slop".
-- Do not change the story when the note is about the look ("This is good" kept v1's storyboard alive to v3).
-- Do not imitate a reference's object (ElevenLabs' tangerine velvet, ChatGPT's white clouds in blue); beat it with
-  one that comes from your product.
-- Do not use stock or bundled music without a documented licence; do not put anything under product speech.
-- Do not recolour real product UI or the real icon to fit the palette.
-- Do not full-render before a stills sheet and the purity check; do not render without `caffeinate -d`.
-- Do not treat your own "APPROVED" as the operator's: every v1-v3 still review was the agent's; only watching the
-  MP4 produced a verdict.
-- Do not hand the model your own previous film as a reference: references leak content, and a look copied that way
-  was rejected as inherited.
-- Do not ease a state change over half a second, or draw type while its container moves. The first reads as a
-  slideshow transition; the second smears.
-- Do not cite `file:line` into the kit or the source repos in new notes; cite a grep (line numbers rot).
+- Carry an approved film's look to another product ("we overfit to the exact output style and not the methodology of
+  design and composition").
+- Restage a reference's shot or borrow its accent colour. If a stranger could name the reference from our frame, redo it.
+- Use the AI-template tells (`studio-method.md` §3).
+- Hand the model our own previous film as a reference: references leak content.
+- Use music without a documented licence.
+- Cite `file:line` in new notes; cite a grep.

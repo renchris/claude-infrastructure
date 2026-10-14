@@ -1,5 +1,12 @@
 # Launch-film pipeline harvest (natural-text-to-voice-extension, v1 → v3)
 
+Scope: the web (CDP) pipeline, for 2D and code-built films and for the rough film of `SKILL.md` §1:
+- its run order is in §4 ("Run order");
+- its failure lessons are in §6;
+- its kit index is in §7.
+
+A path-traced film uses `pipeline-3d.md` instead. The `file:line` references below are historical citations into the Natural TTS repo; new notes cite greps.
+
 Root: `~/Development/natural-text-to-voice-extension/`. v1 = `brag-output/`, v2 = `brag-output-2026-09-26-123925/`,
 v3 = `brag-output-2026-09-26-151455/` (final). All paths below are under `<vN>/work/` unless stated.
 
@@ -22,11 +29,6 @@ v3 = `brag-output-2026-09-26-151455/` (final). All paths below are under `<vN>/w
 - The one external dependency on brag's assets: `sound/soundtrack2.py:61` `REFERENCE_GLOB =
   "/tmp/brag-src-0926/skills/brag/assets/music/*.mp3"`, used only to report band balance against brag's bundled
   tracks (`tone2.py` then EQs toward them). Missing /tmp copy → that report section is lost, not the render.
-- Separately, the **claude-infrastructure** film (candidate 4) was also made with `/brag-slim`, on the unlanded branch
-  `hero-brag` (worktree `~/Development/.worktrees/hero-brag`, commits 34684c59d..d9c8fbe53, not on origin/main). It has
-  its own, different toolchain: `scripts/hero-brag-{capture.mjs,render.sh,pacing.py,score.py,review.py}`, capture via
-  `window.__seek(t)`, **6 parallel CDP workers**, 3840×2160 @ 60 fps, JPEG q97, CRF 14, AAC at −16 LUFS, plus a
-  pacing gate. Worth reconciling with this kit rather than forking a third.
 
 ## 1. v1 → v2 → v3: what was added when
 
@@ -251,3 +253,28 @@ final "frames" line, not `pgrep -f`) → [`mix.py`] → `finish.sh <poster s>` �
 - CSS transitions leak state between frames, including vendor pseudo-elements the `*` rule misses → kill rule + two-order check.
 - Measure loudness/gain per channel, not `-ac 1` (+3 dB dual-mono artefact).
 - Screen capture stalls with the display off (project MEMORY: keep `caffeinate -d` running during renders).
+
+- Prototype a signature object alone, through the film's own renderer, before building the film on it. A prototype's purity check (2026-09-28) caught three leaks the eye missed:
+  - a composited label layer (`will-change: transform`) whose text kept the history of earlier frames;
+  - a canvas context that carried drawing state between redraws;
+  - a font that was never awaited before the first draw.
+
+## 7. Kit index (`kit/`)
+
+| File | Use | Change for a new film |
+|---|---|---|
+| `render.mjs` | CDP frame renderer, 90 s call timeout, `--dpr`, `--sub` motion blur, `--from/--to` | lives at `<repo>/brag-output*/work/` (it serves `../..` as root); page path; 1920×1080 is hard-coded; add `.woff2/.webp/.jpg` MIME types; `CHROME` path |
+| `join.sh`, `sheet.sh` | resume a crashed render; review sheets | none (join does not assert the count) |
+| `finish.sh` | poster as frame 0, BT.709 encode | `FPS`; drop the audio input for a silent film; CRF by grain; x264 level for 4K/60 |
+| `verify.py` | delivery gate | see `verify.py` in §2 |
+| `picture_gate.py`, `review.py`, `render.mjs geom` | the design gates of `studio-method.md` § 4, measured from the page's own geometry and the decoded film; the three-zoom review with its manifest | mark `data-role`/`data-texture`/`data-glyph` on the page; pass `--lockup <s>` |
+| `mix.py`, `audio/envelopes.py`, `audio/spectrum.py` | product-audio mix; audio-reactive data | mix is voice-specific (24 kHz, 2:1); spectrum works on any WAV, e.g. the score |
+| `sound/soundtrack2.py`, `tone2.py`, `BRIEF.md` | synthesized score, EQ, brief | key/chords hard-coded (D minor); SFX types; reference glob points at `/tmp` |
+| `example/` | v3's `scene.js` (page contract, closed-form helpers, the transition kill rule), `orb.js` (deterministic WebGL: clear, scissor to bbox, uniforms only, `gl.finish()`), `style.css`, `index.html`, the v3 plan | pattern only; the choreography is product-specific |
+| `brag-slim/` | latent-spaces/brag 0.4.0 `/brag-slim` (MIT, licence beside it) | the procedure this pipeline follows |
+
+Measured on an M1 Max: v3 rendered 675 frames at `--dpr 2 --sub 4` in 19 min (≈1.7 s/frame); final 7.3 MB.
+
+- Output folder `brag-output[-<timestamp>]/` with `work/` beside the plan; git-exclude it (`.git/info/exclude`:
+  `/brag-output*/`), never commit renders.
+- A teammate may own the score; it gets reaped after reporting, so read its files rather than waiting for its message.

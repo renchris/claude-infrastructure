@@ -1,6 +1,6 @@
 ---
 name: demo-recording
-description: "Record a live screen, terminal or agent demo and embed it in a README as animated WebP (GitHub strips <video>): capture, terminal window sizing, near-lossless encode recipe, contact-sheet review. Not for understanding an existing video."
+description: "Record a screen, terminal or agent demo for a README as a silent animated WebP: capture, window sizing, near-lossless encode, contact-sheet review. A film with sound is a GitHub attachment video (launch-film §9). Not for understanding a video."
 ---
 
 <!-- markdownlint-configure-file {
@@ -39,8 +39,14 @@ live API (`gh api /markdown`, 2026-07-29):
 | `<img src="a.gif">` | survives, auto-linked |
 | `<img src="a.webp">` | survives, auto-linked **identically to GIF** |
 
-So the inline slot holds **an image and nothing else**. An MP4 can only ever be a
-*link* beside it.
+So raw HTML gets the inline slot for **an image and nothing else**. An MP4 in the
+repo can only ever be a *link* beside it.
+
+**The exception is an attachment URL.**
+- A bare `https://github.com/user-attachments/assets/<uuid>` URL on its own line (uploaded to an issue or PR) renders as GitHub's inline video player, with sound.
+- `gh api markdown` returns a `<video>` for it.
+- Use it for any film with sound (`launch-film` §9; Natural TTS `03fe526`, claude-infrastructure `24cb58e9f`).
+- On 2026-10-13 a launch film shipped as a silent 1048×590 WebP drew "How come the image quality looks crushed … also no sound". The WebP recipes below are for silent demo loops only.
 
 **GitHub serves animated WebP untouched.** Measured end to end on a public repo:
 a relative `<img src="x.webp">` is rewritten to `/{owner}/{repo}/raw/{ref}/{path}`

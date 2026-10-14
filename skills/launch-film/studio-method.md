@@ -1,8 +1,8 @@
 # Studio method: what separates a designed launch film from a slide deck
 
-Read this before designing a film and again before the stills review. `SKILL.md` owns the bar, the truth rules and
-the procedure; this file owns the craft rules and the design gates that make a film read as designed rather than as
-slides.
+Craft rules and design gates for 2D and code-built films (web page, canvas, SVG). `SKILL.md` owns the order of work and
+its checks, and wins any conflict. Rules that a later verdict overturned have been rewritten; the record is in
+`operator-feedback.md`.
 
 **Source.** Distilled on 2026-09-28 from @0xMovez's X Article "How to build motion design studio with Opus 5.5
 (Full-course)" (https://x.com/0xMovez/status/2104216919033192746). Also from the 21 posts it embeds, their threads,
@@ -12,11 +12,6 @@ guanmo-ai/awesome-ai-motion and athemeroy/awesome-opus-5-5-videos, plus whatship
 drawn from measurements. The raw extraction, quotes, frames and per-film teardowns are in a private study on the
 operator's machine (`~/Development/personal/opus-motion-studio-study/`, `KNOWLEDGE.md` first). Third-party
 teardowns stay out of this public repo.
-
-**Why it exists.** On 2026-09-28 the operator rejected the claude-infrastructure film as "looks very broken … a
-basic 'prezi' high school slides presentation" (`operator-feedback.md`). That film already had everything the
-course teaches: a `seek(t)` page, springs, a synthesized score, contact sheets, a purity check and a verify script.
-**The engine was not the gap.** The gaps were the craft rules in §2 and gates that measure the picture (§4).
 
 ## 1. What the course teaches that we already do (keep)
 
@@ -31,10 +26,10 @@ render. Three additions from it are worth taking:
 
 ## 2. The craft rules (measured in the films that read as designed)
 
-1. **One invariant carries the whole film; nothing is ever a new layout.** The best films hold a single element
-   through every shot and change everything else. Examples: one horizon line at one height across ~35 shots, one
-   container pinned to screen centre for 14 s, one fixed broadcast HUD. A deck has no invariant, because every
-   slide is its own layout. Build a *set* the camera moves through, not cards.
+1. **One invariant carries each sequence; nothing becomes a new layout with nothing carried across.** A film may have
+   many set-ups ("As a filmographer we need multiple shots at multiple angles/motions/transitions", 2026-10-04); what
+   reads as slides is a change with nothing held across it. Hold one element across every cut: a horizon at one
+   height, a protagonist, a throughline object. Build a *set* the camera moves through, not cards.
 2. **Content is absent while its container transforms.** Measured in the best UI-morph film: type leaves within
    2–3 frames of the morph starting and returns 0.35–0.55 s later, when the spring is ~80 % settled, staggered
    35–60 ms top to bottom. Colour flips happen while the container is empty. Motion blur then only ever smears an
@@ -46,10 +41,10 @@ render. Three additions from it are worth taking:
    every beat gained a subject once one small object (a caret) was handed across each seam. The rejected film's
    signature object, a timetable, was the frame itself. Every seam is a designed match: act N+1's first frame
    equals act N's last.
-4. **The real product changes state in every beat.** Typed input, a click, a ✓, a count-up, a toggle, a commit
-   landing. A panel that only appears is a slide. Break screenshots into components and animate the parts (the
-   single prompt line that visibly turned one launch film from slides into motion design). Use the product's
-   own strings, not slogans.
+4. **The subject changes state in every beat.** Typed input, a ✓, a count-up, a hand-off, a character's act. A panel or
+   a character that only appears is a slide. In a UI beat, break screenshots into components and animate the parts,
+   using the product's own strings; a whole film of UI read as "very "tutorial"" (2026-10-03), so UI is a beat, not
+   the carrier.
 5. **Motion never stops, and reads never overlap.** The "prezi" signature is measurable. Measure static share,
    meaning the fraction of frames whose mean absolute difference from the previous frame is under 0.5/255: the
    best reels sit at 25–28 %, while the same prompt on a weaker model gave 87 % (hard cuts between held cards).
@@ -57,17 +52,20 @@ render. Three additions from it are worth taking:
    state for 5–7 s. Both constraints hold at once: keep the frame alive (camera drift, the object, data ticking)
    while each read gets at least 1.0 s + 0.3 s per word, and never start a read before the previous one ends.
    Write the reads down as a timed sheet before code, and let the reads set the film's length.
-6. **Pace on a grid; change on bars.** Use 120–128 BPM. Put section changes on bar lines, small events on beats,
-   and the first big visual on the bar-2 downbeat. Leave 80–100 ms of digital silence over an emptied frame
-   before a drop. Make the film a whole number of bars.
+6. **Events on the beat grid; length from the reads.** Put cuts, section changes and small events on beats, and
+   stagger moves that would start on the same beat. The approved 2026-10 film cut on beats 6, 10, 16 and 22 at 96 BPM
+   and was sized on beat 40, then grew from 25.0 to 29.25 s when its close-ups needed about 1 s to read ("Appropriate
+   length for the best film, rather than trying to fit the best film within a set length", 2026-10-09). Never squeeze a
+   read to land on a bar.
 7. **Springs with a little mass.** Measured on the best UI films: containers ζ 0.75–0.88, k ≈ 260–350 (unit mass,
    seconds), 2 % settle in 0.23–0.46 s, overshoot ≤ 5 % (about 9 % only on a big reveal). For an indicator, a
    stiffer leading edge (k≈460, ζ≈0.75) against a softer trailing one (k≈235, ζ≈0.96) gives about a 30 % stretch
    mid-move. The lockup is critically damped. Type never overshoots. A move that eases over 0.5 s reads as a
    slideshow transition: snap the change, and put the ease on the settle.
-8. **Scale: the subject fills the frame.** The product's real unit takes ≥ 40 % of the frame in every beat. No
-   frame is more than half empty field for over 1 s. Show UI flat or macro, never tilted past about 15°, and keep
-   frame 0 on the subject.
+8. **Scale (UI films): the subject fills the frame.** The product's real unit takes ≥ 40 % of the frame in every beat;
+   no frame is more than half empty field for over 1 s; UI flat or macro, never tilted past about 15°; frame 0 on the
+   subject. In a set or character film the equivalent is one focal subject per frame (a crowd may fill the frame
+   around it) and no empty void.
 9. **Type is a system with fixed jobs.** Use 3–4 voices at most: a display voice for claims, one emphasis voice,
    mono only for real data, and a text face for captions. Set copy in runs of 1–3 words that land on events.
    Vary scale on purpose, from caption size to type that fills the frame. Never let text alone be the shot.
@@ -92,6 +90,14 @@ reason in the brief before it appears:
 - dotted spheres, circle → triangle → star morphs, chromatic fringes and full-frame colour flashes;
 - an "open to new work" end card.
 
+The AI-template tells, removed before the operator sees a frame (2026-09-26, "mvp ai template slop"):
+- purple, indigo, violet or pink auras or gradients as the dominant field;
+- iridescent or gradient-filled text;
+- glow blooms, vignettes, light streaks and shockwave rings;
+- glossy specular ornament spheres;
+- mono uppercase labels with `01 / 03` index numbers;
+- grain used as a look (keep it ≤ 0.02, and only to dither).
+
 Bans remove tells and add no craft. The rejected film obeyed every ban and still read as a slide. Before the
 storyboard, the one signature object gets a material study: several rendered variants with a reject log (studios
 publish 10–20 such explorations for one launch).
@@ -110,7 +116,7 @@ geometry, measure there; otherwise measure the decoded MP4.
 | Gate | Fails when | Catches |
 |---|---|---|
 | Text vs line | a visible text box intersects a stroke, rule or another text box (0 px tolerance) | type crossed by lines; labels overrun by their leaders |
-| Minimum type | text meant to be read is under 22 px at 1080p, or a headline is under 84 px (the bake-off's values; the red team's cap-height estimate was ~24 px). Smaller text is texture and must not carry words | unreadable captions and axis labels |
+| Minimum type | text meant to be read is under 28 px at 1080p, a headline under 72 px, or the product name under 84 px (the values the approved 2026-10 film's gate used; `design-gate.md` D3 uses the same). Smaller text is texture and must not carry words | unreadable captions and axis labels |
 | Text in transit | a text layer is drawn while its container's transform is changing, or text sits on a skewed or 3D-transformed plane | smeared, skewed cards mid-transform |
 | Subject coverage | for more than 0.3 s the subject covers under ~15 % of the frame, or ink is under 2 % | subjectless frames, hairlines on empty paper |
 | Dead hold | any stretch outside the lockup over ~1.2 s in which no pixel changes (mean abs diff < 0.001/255 at 160×90, measured on the lossless render). The reels' static share (MAD < 0.5/255, best reels 25–28 %) is printed for the record but does not gate a launch film: see the calibration below | slide grammar |
@@ -165,16 +171,20 @@ Consistency comes mostly from shared code (one frozen API for type, colour and m
   placed by its measured peak, about 0.03 s before contact.
 - Heavy sounds (the thump, the transition swell) go on downbeats with the scene changes; light UI sounds go on the
   off-beats.
-- Hold the kick for bar 1 and drop it on bar 2. Leave true silence before the drop.
+- Hold the kick for bar 1 and bring it in on bar 2. Unless the product's own output is sound (then it gets the room),
+  the music never drops out. A deliberate silence read as "the music just cuts out" (2026-10-08), and a bed 10–25 dB
+  down still read as "The halfway point cutoff without music is so jarring" (2026-10-09). Under a quieter beat, take
+  it down a few dB at most.
 - Choose a tempo with a whole number of frames per beat (60·fps/BPM an integer: 120 BPM is 30 frames at 60 fps).
   Otherwise no cut can sit exactly on a beat.
 - Beat-lock the montage and snap section edges to beats, but size sections by the story, not in whole bars.
-- Mark the story's turn by removing the kick and its payoff by bringing it back. Dip 5–8 LU for about 1.8 s
-  before a hit. A single recognisable transition cue can do the work of a title card.
+- Mark the story's turn with orchestration (a new instrument, a register change, a chord change), not by removing the
+  bed. A single recognisable transition cue can do the work of a title card.
 - Use a small pitched palette (bells or plucks, a sub-kick, a pad) and 2–3 noise-based effect families.
 - Master to about −14 to −16 LUFS, with true peak ≤ −1 dBTP after the AAC encode. Keep the bass mono below 120 Hz.
   Make an A/V sync check (< 1 ms against the cue export) fail the build. The rejected film shipped at −19 LUFS.
 - Put whooshes on each move's computed peak-velocity frame, and impacts on the frame where a spring first reaches its
   target, both read from the same cue export as the picture.
-- **The film must read with the sound off.** The strongest dev-tool launch films ship with the sound quiet or
-  absent. Avoid the "clicky techy synth" bed that viewers now name as the default.
+- **The picture carries the story with the sound off, and the film ships with sound.** The README hero plays it
+  (2026-10-13: "also no sound, ensure that we have it to play sounds like we do with our NaturalTTS film"). Avoid the
+  "clicky techy synth" bed that viewers now name as the default.
