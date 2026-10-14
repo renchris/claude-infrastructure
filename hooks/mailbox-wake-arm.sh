@@ -68,6 +68,21 @@ set -uo pipefail
 # mode is visible from inside a hook (MEMORY.md version-identity-is-the-running-process). Test
 # seam: CC_WAKE_ARM_HARNESS_ARGV substitutes the argv without walking ps.
 #
+# ── …AND EVERY OTHER NON-INTERACTIVE MODE (2026-10-14) ───────────────────────────────────────────
+# `-p` is not the only way in. 2.1.293's interactivity predicate is
+# `t4e(){… return n||t||o||!process.stdout.isTTY}`: a session with NO -p whose stdout is a pipe is
+# non-interactive too, and it dispatched this hook SYNC. Pane 434 was exactly that — a successor
+# whose stdout was the operator's `| tee`; the argv-only guard armed, and the watch blocked its
+# birth for 6 min until another session killed it (docs/research/recycle-failure-2026-10-14.md
+# § Q2). Two more oracles close it, either one sufficient:
+#   - CLAUDE_CODE_ENTRYPOINT=sdk-cli. The binary sets it from the same flag (`e?"sdk-cli":"cli"`).
+#     PROBED LIVE 2026-10-14 on 2.1.293 (pty stdin, stdout piped, no -p): the hook saw sdk-cli even
+#     though the launching shell exported cli — the harness sets it, it is not inherited.
+#   - the harness process's fd 1 is not a tty (`lsof -d 1`), the predicate itself, read directly.
+#     Test seam: CC_WAKE_ARM_HARNESS_FD1 substitutes fd 1's name (same `+x` semantics as the argv).
+# Streaming input (`--input-format stream-json`) still arms in every mode: the dispatcher backgrounds
+# an asyncRewake hook when interactive OR streaming (`so=!Ee()||Zlt()`).
+#
 # FAIL DIRECTION — cannot resolve an ancestor ⇒ SKIP (exit 0). A skipped arm restores the
 # pre-registration status quo (the nag + boundary drain still exist); a wrongly-armed SYNC watch
 # wedges a session birth for hours. Under-arming is recoverable, over-arming is not.
@@ -81,6 +96,7 @@ _stdin="$(cat 2>/dev/null || true)"
 # `+x` not `:-`: SET-but-EMPTY means "provably unresolvable" and is honored verbatim, so a test can
 # exercise the fail-closed branch without fixturing ps (the cc-await-ping IT2_BIN `${VAR-}` pattern —
 # a test that cannot turn the oracle off cannot prove the fail-closed direction exists).
+_harness_pid=""
 if [ "${CC_WAKE_ARM_HARNESS_ARGV+x}" = x ]; then
   _harness="$CC_WAKE_ARM_HARNESS_ARGV"
 else
@@ -89,18 +105,31 @@ else
   while [ -n "$_anc" ] && [ "$_anc" != 1 ] && [ "$_hops" -lt 6 ]; do
     _cmdline="$(ps -o command= -p "$_anc" 2>/dev/null || true)"
     case "$_cmdline" in
-      *claude*|*node*) _harness="$_cmdline"; break ;;
+      *claude*|*node*) _harness="$_cmdline"; _harness_pid="$_anc"; break ;;
     esac
     _anc="$(ps -o ppid= -p "$_anc" 2>/dev/null | tr -d ' ' || true)"
     _hops=$(( _hops + 1 ))
   done
 fi
 [ -n "$_harness" ] || exit 0   # unresolvable dispatch mode → skip (under-arm, never wedge)
-case " $_harness " in
-  *" -p "*|*" --print "*)
-    case "$_harness" in
-      *--input-format*stream-json*) : ;;  # streaming input ⇒ K true ⇒ async dispatch is honored
-      *) exit 0 ;;                        # one-shot print ⇒ SYNC dispatch ⇒ arming would block birth
+case "$_harness" in
+  *--input-format*stream-json*) : ;;  # streaming input ⇒ K true ⇒ async dispatch is honored
+  *)
+    case " $_harness " in
+      *" -p "*|*" --print "*) exit 0 ;;   # one-shot print ⇒ SYNC dispatch ⇒ arming would block birth
+    esac
+    # No -p, but stdout not a tty is the same mode (header, 2026-10-14). Entrypoint first: free.
+    [ "${CLAUDE_CODE_ENTRYPOINT:-}" != sdk-cli ] || exit 0
+    if [ "${CC_WAKE_ARM_HARNESS_FD1+x}" = x ]; then
+      _fd1="$CC_WAKE_ARM_HARNESS_FD1"
+    elif [ -n "$_harness_pid" ]; then
+      _fd1="$(lsof -w -a -p "$_harness_pid" -d 1 -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)"
+    else
+      _fd1=""
+    fi
+    case "$_fd1" in
+      /dev/tty*|/dev/pts/*) : ;;   # the TUI's terminal ⇒ interactive ⇒ async dispatch
+      *) exit 0 ;;                 # a pipe, a file, or unresolvable ⇒ skip (under-arm, never wedge)
     esac
     ;;
 esac

@@ -1,4 +1,7 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2030,SC2031
+# (Per-test `export` of a seam is the bats idiom here: each @test is its own subshell by design,
+# which is exactly what the linter's subshell-scope note reports.)
 # mailbox-wake-arm.bats — the SessionStart asyncRewake ADAPTER.
 #
 # WHAT IT GUARDS. asyncRewake wakes the model on exit 2; cc-await-ping exits 0 on mail-arrived and 2
@@ -50,6 +53,11 @@ setup() {
   # operator's interactive claude ancestor, red under launchd — the polarity trap of
   # MEMORY.md hermetic-in-stubs-not-in-interpreter. Guard-specific tests override per-case.
   export CC_WAKE_ARM_HARNESS_ARGV="/fixture/.claude-220/node_modules/.bin/claude --permission-mode auto --model claude-opus-5"
+  # The other two interactivity oracles, pinned to the INTERACTIVE answer for the same reason: an
+  # argv seam carries no pid, so fd 1 cannot be resolved by walking — and the entrypoint would
+  # otherwise be whatever the process running bats happens to carry (sdk-cli under a headless one).
+  export CC_WAKE_ARM_HARNESS_FD1="/dev/ttys008"
+  export CLAUDE_CODE_ENTRYPOINT="cli"
 }
 
 # Install a fake watcher that records its argv and exits with the code this test is about.
@@ -223,6 +231,44 @@ FAKEEOF
   run run_arm "$SESS"
   [ "$status" -eq 0 ]
   [ ! -f "$ARGV" ]
+}
+
+# Pane 434 (docs/research/recycle-failure-2026-10-14.md § Q2): NO -p on argv, but stdout piped into
+# `| tee` — 2.1.293 runs that session non-interactive and dispatched this hook SYNC, and the watch
+# blocked its birth for 6 min until it was killed. The argv oracle alone cannot see that mode.
+
+@test "GUARD: no -p but CLAUDE_CODE_ENTRYPOINT=sdk-cli (stdout not a tty) → NO watcher, exit 0" {
+  fake_ping 0 "mail that must never be consumed"
+  export CLAUDE_CODE_ENTRYPOINT="sdk-cli"
+  run run_arm "$SESS"
+  [ "$status" -eq 0 ]
+  [ ! -f "$ARGV" ]
+}
+
+@test "GUARD: no -p but the harness's fd 1 is a pipe → NO watcher, exit 0" {
+  fake_ping 0 "mail that must never be consumed"
+  export CC_WAKE_ARM_HARNESS_FD1="->0x606b6f63ebe4a5fa"
+  run run_arm "$SESS"
+  [ "$status" -eq 0 ]
+  [ ! -f "$ARGV" ]
+}
+
+@test "GUARD: harness fd 1 unresolvable (seam set-but-empty) → SKIP" {
+  fake_ping 0 "mail"
+  export CC_WAKE_ARM_HARNESS_FD1=""
+  run run_arm "$SESS"
+  [ "$status" -eq 0 ]
+  [ ! -f "$ARGV" ]
+}
+
+@test "GUARD: streaming input still arms even with sdk-cli and a piped fd 1 (async dispatch holds)" {
+  fake_ping 2 ""
+  export CC_WAKE_ARM_HARNESS_ARGV="/fixture/bin/claude -p --input-format stream-json --output-format stream-json"
+  export CLAUDE_CODE_ENTRYPOINT="sdk-cli"
+  export CC_WAKE_ARM_HARNESS_FD1="->0x5cc312147a3f5068"
+  run run_arm "$SESS"
+  [ "$status" -eq 0 ]
+  [ -f "$ARGV" ]
 }
 
 # ── CLAIM GUARD (W2) ─────────────────────────────────────────────────────────────────────────────
