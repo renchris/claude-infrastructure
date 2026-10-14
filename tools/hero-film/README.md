@@ -1,5 +1,12 @@
 # README hero: the launch film
 
+> Superseded 2026-10-13. The README hero is now the film described in `tools/launch-film/README.md`,
+> and this film's outputs (`assets/hero/hero-{dark,light}.webp`, `poster-{dark,light}.png` and its
+> `launch-film.mp4`) are no longer in the tree; git history keeps them. `npm run hero:loop` would
+> write the old files back and `npm run hero:film` would overwrite the current
+> `assets/hero/launch-film.mp4`, so do not run either against this checkout. The rest of this page
+> describes the superseded film.
+
 The first element of this repo's README: a launch film, not an infographic. One page that is a pure
 function of time (`index.html` + `film.js`, one three.js world in `world.js`, every surface drawn in
 `panes.js`), photographed frame by frame over the Chrome DevTools Protocol and encoded into:
