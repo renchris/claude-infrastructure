@@ -217,6 +217,42 @@ rr_pkt_attach() {
 }
 wt=${wt%/}
 
+# ── THE PANE'S SHELL, AND A REFUSAL THAT KEEPS ITS PANE ─────────────────────────────────────────────
+# rr_pane_shell is the ordinary shell every pane-keeping path ends in. A pane launched
+# `reso-resume-one … | tee log` would hand that shell (and any claude typed in it) the pipe as stdout,
+# and claude reads a non-tty stdout as print mode: re-point it at the pane's terminal first, as
+# lib/pane-successor.sh's loop does (recycle-failure-2026-10-14 F2). No controlling tty ⇒ unchanged.
+# The re-point is its own function so the script's normal end keeps its top-level
+# `exec "${SHELL:-/bin/zsh}" -l -i`, which tests/handoff-recycle-pane-survives.bats pins.
+rr_pane_tty() {
+  if [ -t 0 ] && { [ ! -t 1 ] || [ ! -t 2 ]; } && [ -w /dev/tty ] && (: >/dev/tty) 2>/dev/null; then
+    exec >/dev/tty 2>/dev/tty; printf '%s\n' "[reso-resume-one] output was not the terminal (a pipe or file); re-attached to /dev/tty" >&2
+  fi
+}
+rr_pane_shell() {
+  rr_pane_tty
+  exec "${SHELL:-/bin/zsh}" -l -i
+}
+# rr_refused_exit replaces `exit N` on every refusal before the session starts (F6). Launched BARE as
+# a pane's command (kitty @ launch, bin/kitty-split-launch.sh), an exit takes the window and its
+# reason with it: pane 433 printed its capacity refusal and closed within a second. kitty's --hold
+# cannot be the fix — it would also hold the pane this engine closes on purpose after a clean exit.
+# So a refusal keeps the pane exactly as the normal end does, but only when this process IS the
+# pane: stdin is a terminal, the headless test path is off, and the parent is not a shell. Under a
+# shell — an operator's prompt or a script that reads the code (9 = shed) — the code is returned.
+rr_refused_exit() { # $1=exit code
+  local _pc
+  if [ -z "${CC_RESUME_NO_INTERACT:-}" ] && [ -t 0 ]; then
+    _pc="$(ps -o comm= -p "$PPID" 2>/dev/null)"; _pc="${_pc##*/}"; _pc="${_pc#-}"
+    case "$_pc" in
+      ''|sh|bash|zsh|dash|ksh|mksh|fish|tcsh|csh) ;;
+      *) printf '\n[reso-resume-one] not resumed (rc %s) — this pane is now an ordinary shell, so the reason above stays readable.\n' "$1" >&2
+         rr_pane_shell ;;
+    esac
+  fi
+  exit "$1"
+}
+
 # ── CAPACITY GATE, IN THE ENGINE'S OWN BODY (2026-08-17, backlog "gate bin/reso-resume-one in its
 #    own body") ────────────────────────────────────────────────────────────────────────────────
 # §12.1 lists this engine as a capacity BYPASS: every IN-REPO invocation reaches it through
@@ -263,10 +299,14 @@ if [ -z "${CC_ADMIT_DONE:-}" ]; then
     . "$_RRO_CA" 2>/dev/null || _RRO_CA=""
   fi
   if [ -n "$_RRO_CA" ]; then
-    if ! cc_capacity_admit reso-resume-one "resume ${sid} on ${acct}"; then
+    # PER-RUN BUDGET (F6). Unkeyed, the refusal counter is ONE file for every reso-resume-one on the
+    # box: pane 434 was admitted `budget-expired` on its first refusal because unrelated resumes had
+    # spent refusals 1-3 days earlier. Keyed on the session id, as lr-fire-resume keys on its run, and
+    # scoped to this call so it never reaches the session's environment.
+    if ! CC_ADMIT_BUDGET_KEY="$sid" cc_capacity_admit reso-resume-one "resume ${sid} on ${acct}"; then
       printf '%s\n' "reso-resume-one: $(cc_capacity_admit_reason)" >&2
       printf '%s\n' "  Session $sid is DEFERRED, not lost — re-run once the box settles." >&2
-      exit 9
+      rr_refused_exit 9
     fi
     printf '%s\n' "reso-resume-one: $(cc_capacity_admit_reason)" >&2
   else
@@ -435,21 +475,21 @@ resolve_repo() { # <worktree> <branch> → repo root on stdout, or 1
 wt_existed=0; [[ -d "$wt" ]] && wt_existed=1
 if [[ ! -d "$wt" ]]; then
   if [[ -z "$br" ]]; then
-    printf '%s\n' "reso-resume-one: worktree $wt missing and no branch given to recreate it" >&2; exit 1
+    printf '%s\n' "reso-resume-one: worktree $wt missing and no branch given to recreate it" >&2; rr_refused_exit 1
   fi
   REPO=$(resolve_repo "$wt" "$br") || {
     printf '%s\n' "reso-resume-one: REFUSING — cannot tell which repo owns the reaped worktree $wt." >&2
     printf '%s\n' "  No .git/worktrees back-reference to it under ${CC_RESUME_REPO_ROOTS:-$HOME/Development}," >&2
     printf '%s\n' "  and branch '$br' does not resolve to exactly one repo there." >&2
     printf '%s\n' "  Name it explicitly:  reso-resume-one $acct $wt $sid $br --repo /path/to/repo" >&2
-    exit 3
+    rr_refused_exit 3
   }
   if ! git -C "$REPO" show-ref --verify --quiet "refs/heads/$br"; then
-    printf '%s\n' "reso-resume-one: branch '$br' does not exist in $REPO — nothing to recreate $wt from" >&2; exit 1
+    printf '%s\n' "reso-resume-one: branch '$br' does not exist in $REPO — nothing to recreate $wt from" >&2; rr_refused_exit 1
   fi
   git -C "$REPO" worktree prune 2>/dev/null
   git -C "$REPO" worktree add "$wt" "$br" || {
-    printf '%s\n' "reso-resume-one: worktree add failed ($REPO → $wt @ $br)" >&2; exit 1
+    printf '%s\n' "reso-resume-one: worktree add failed ($REPO → $wt @ $br)" >&2; rr_refused_exit 1
   }
 fi
 
@@ -501,22 +541,22 @@ if [[ "$wt_existed" -eq 1 && -n "$br" && "${CC_RESUME_ALLOW_BRANCH_DRIFT:-0}" !=
     printf '%s\n' "  row says branch '$br'; the directory is on '$wt_branch'." >&2
     printf '%s\n' "  A pooled worktree is re-let to another branch, so resuming $sid here would work in a tree another session owns." >&2
     printf '%s\n' "  If that is genuinely intended:  CC_RESUME_ALLOW_BRANCH_DRIFT=1 reso-resume-one $*" >&2
-    exit 3
+    rr_refused_exit 3
   fi
 fi
-cd "$wt" || exit 1
+cd "$wt" || rr_refused_exit 1
 
 _binrow=$(resolve_claude_bin) || {
   printf '%s\n' "reso-resume-one: REFUSING — no installed claude binary found under ~/.claude-*."
   printf '%s\n' "  Override explicitly:  CC_RESUME_CLAUDE_BIN=/path/to/claude reso-resume-one $*"
-  exit 3
+  rr_refused_exit 3
 }
 RESOLVED_VERSION=${_binrow%%	*}
 bin=${_binrow#*	}
 model=$(resolve_model) || {
   printf '%s\n' "reso-resume-one: REFUSING — cannot read opus_latest from $MODEL_CONFIG."
   printf '%s\n' "  Override explicitly:  CC_RESUME_MODEL=claude-opus-5 reso-resume-one $*"
-  exit 3
+  rr_refused_exit 3
 }
 effort=${CC_RESUME_EFFORT:-high}
 # The fable arms set the MODEL only. They used to re-pin `effort=high` as well, which is what made
@@ -532,7 +572,7 @@ case "$acct" in
   fable2|claude-fable2) cfg=$HOME/.claude-secondary;  model=claude-fable-5-1 ;;
   fable3|claude-fable3) cfg=$HOME/.claude-tertiary;   model=claude-fable-5-1 ;;
   fable4|claude-fable4) cfg=$HOME/.claude-quaternary; model=claude-fable-5-1 ;;
-  *) printf '%s\n' "unknown account $acct"; exit 2 ;;
+  *) printf '%s\n' "unknown account $acct"; rr_refused_exit 2 ;;
 esac
 # LAST, so it beats both the account default and CC_RESUME_EFFORT — an explicit flag is the caller
 # saying what tier the session it is CONTINUING was running at, and nothing above knows that.
@@ -1016,10 +1056,5 @@ rr_successor_take_exec() {
 }
 rr_successor_take_exec
 printf '\n[reso-resume-one] session ended (rc %s) — this pane is now an ordinary shell.\n' "$rr_rc" >&2
-# A pane launched `reso-resume-one … | tee log` would hand the shell (and any claude typed in it) the
-# pipe as stdout, and claude reads a non-tty stdout as print mode: re-point it at the pane's terminal,
-# as lib/pane-successor.sh's loop does (recycle-failure-2026-10-14 F2). No controlling tty ⇒ unchanged.
-if [ -t 0 ] && { [ ! -t 1 ] || [ ! -t 2 ]; } && [ -w /dev/tty ] && (: >/dev/tty) 2>/dev/null; then
-  exec >/dev/tty 2>/dev/tty; printf '%s\n' "[reso-resume-one] output was not the terminal (a pipe or file); re-attached to /dev/tty" >&2
-fi
+rr_pane_tty   # re-points a piped stdout at the pane's terminal first (defined above the gate)
 exec "${SHELL:-/bin/zsh}" -l -i

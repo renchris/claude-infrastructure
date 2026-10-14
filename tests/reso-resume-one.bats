@@ -476,6 +476,58 @@ mk_reaped_worktree() { # <repo-name> <branch> <wtpath>
     || { echo "the control did not shed — there is no gate for the marker to suppress: $output"; false; }
 }
 
+@test "GATE budget is per run — one session's spent refusals do not admit another (pane 434)" {
+  # docs/research/recycle-failure-2026-10-14.md F6: the refusal counter was ONE file for every
+  # reso-resume-one on the box, so refusals from unrelated resumes days earlier pre-spent the budget
+  # and pane 434 was admitted `budget-expired` on its own first refusal. Keyed per session, SID-B
+  # starts its own count however many times SID-A was refused into the same state dir.
+  local s sd="$BATS_TEST_TMPDIR/admit-perrun"
+  for s in SID-A SID-A SID-A SID-B; do
+    run env -u CC_ADMIT_DONE CC_ADMIT_GATE=on CC_ADMIT_BUDGET=3 \
+        CC_ADMIT_LOADAVG_OVERRIDE=999 CC_ADMIT_HEADROOM_OVERRIDE=64 CC_ADMIT_STATE_DIR="$sd" \
+        CC_RESUME_DRYRUN=1 timeout 60 "$RRO" next "$BATS_TEST_TMPDIR/wts/perrun-$s" "$s" feat/perrun
+    echo "$s → $status: $output"
+  done
+  [ "$status" -eq 9 ] || { echo "SID-B was admitted on SID-A's spent budget"; false; }
+  echo "$output" | grep -q "refusal 1 of 3" \
+    || { echo "SID-B's refusal was not its first: $output"; false; }
+}
+
+# A refusal in a pane of its own must stay readable. Launched bare as the pane's command (kitty @
+# launch, kitty-split-launch.sh), an exit takes the window and the reason with it: pane 433 printed
+# its capacity refusal and closed within a second (F6). The pane's process is script(1)'s child here
+# — a real terminal on stdin and a parent that is not a shell — and the fake $SHELL says it was run.
+mk_fakesh() {
+  FAKESH="$BATS_TEST_TMPDIR/fakesh"
+  # shellcheck disable=SC2016  # $* expands in the fake shell
+  printf '#!/bin/bash\necho "FAKESH ran: $*"\nexit 0\n' > "$FAKESH"; chmod +x "$FAKESH"
+}
+
+@test "a refusal in a pane of its own falls through to a shell, so the reason stays readable (pane 433)" {
+  mk_fakesh
+  run env -u CC_ADMIT_DONE -u CC_RESUME_NO_INTERACT CC_ADMIT_GATE=on \
+      CC_ADMIT_LOADAVG_OVERRIDE=999 CC_ADMIT_HEADROOM_OVERRIDE=64 \
+      CC_ADMIT_STATE_DIR="$BATS_TEST_TMPDIR/admit-pane" SHELL="$FAKESH" \
+      CC_RESUME_DRYRUN=1 timeout 60 script -q /dev/null "$RRO" next "$BATS_TEST_TMPDIR/wts/pane" SID-PANE feat/pane </dev/null
+  echo "$output"
+  echo "$output" | grep -q "DEFERRED, not lost"
+  echo "$output" | grep -q "FAKESH ran: -l -i" \
+    || { echo "the refused pane exited instead of keeping a shell"; false; }
+}
+
+@test "a refusal under a calling shell still exits 9 — a script reads the code, it gets no shell" {
+  mk_fakesh
+  # shellcheck disable=SC2016  # $1-$4 and $? expand in the calling shell
+  run env -u CC_ADMIT_DONE -u CC_RESUME_NO_INTERACT CC_ADMIT_GATE=on \
+      CC_ADMIT_LOADAVG_OVERRIDE=999 CC_ADMIT_HEADROOM_OVERRIDE=64 \
+      CC_ADMIT_STATE_DIR="$BATS_TEST_TMPDIR/admit-script" SHELL="$FAKESH" CC_RESUME_DRYRUN=1 \
+      timeout 60 script -q /dev/null /bin/bash -c '"$1" next "$2" "$3" "$4"; echo "rc=$?"' _ \
+      "$RRO" "$BATS_TEST_TMPDIR/wts/script" SID-SCRIPT feat/script </dev/null
+  echo "$output"
+  echo "$output" | grep -q "rc=9"
+  ! echo "$output" | grep -q "FAKESH ran" || { echo "a scripted caller was handed a shell"; false; }
+}
+
 # ── SOURCE-SUPPRESSION OF THE RESUME DIALOG (backlog 267ebd112350) ───────────────────────────────
 # The matcher above wins a keystroke race against Ink's raw-mode mount. The binary will not RAISE
 # the dialog at all for a session younger than CLAUDE_CODE_RESUME_THRESHOLD_MINUTES, and a session
