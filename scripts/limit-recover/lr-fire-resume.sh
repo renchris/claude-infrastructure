@@ -1694,4 +1694,10 @@ printf '\n[lr-fire-resume] session ended (rc %s) — this pane is now an ordinar
 # puts ~/.claude/shims on PATH and ~/.zshrc synthesizes ITERM_SESSION_ID from KITTY_WINDOW_ID, so a
 # non-login non-interactive shell yields a pane that is alive and UNADDRESSABLE — and the launcher
 # names a recycle relaunches with are zsh FUNCTIONS defined only in the interactive rc.
+# A pane launched `… | tee log` would hand that shell (and any claude typed in it) the pipe as stdout,
+# and claude reads a non-tty stdout as print mode: re-point it at the pane's terminal, as
+# lib/pane-successor.sh's loop does (recycle-failure-2026-10-14 F2). No controlling tty ⇒ unchanged.
+if [ -t 0 ] && { [ ! -t 1 ] || [ ! -t 2 ]; } && [ -w /dev/tty ] && (: >/dev/tty) 2>/dev/null; then
+  exec >/dev/tty 2>/dev/tty; printf '%s\n' "[lr-fire-resume] output was not the terminal (a pipe or file); re-attached to /dev/tty" >&2
+fi
 exec "${SHELL:-/bin/zsh}" -l -i

@@ -245,6 +245,32 @@ assert_refused() {
   [ "$(grep -cF 'exec "${SHELL' "$FAKESH_LOG")" -eq 0 ]
 }
 
+# The pane-434 shape (docs/research/recycle-failure-2026-10-14.md F2): the pane was launched
+# `… 2>&1 | tee log`, so the successor shell inherited the pipe as stdout and claude, which treats a
+# non-tty stdout as print mode, never painted. The .cmd records what claude would see on fd 1.
+@test "exec: a piped stdout on the pane's terminal is re-attached to it before the successor runs" {
+  # shellcheck disable=SC2016  # $t expands in the successor shell
+  printf 't=no; [ -t 1 ] && t=yes; echo "tty1=$t" > %q\n' "$MARK" > "$CMD"
+  stage
+  claim="$(cc_pane_successor_take)"
+  run env SHELL="$FAKESH" script -q /dev/null /bin/bash -c '. "$1"; cc_pane_successor_exec "$2" 0 2>&1 | cat' _ "$LIB" "$claim"
+  echo "$output"
+  [ "$(cat "$MARK")" = tty1=yes ]
+  [[ "$output" == *"[pane-successor] stdout and stderr were not the terminal"*"re-attached to /dev/tty"* ]] || false
+}
+
+@test "exec: with no terminal on stdin nothing is re-attached and the successor still runs (fail open)" {
+  # shellcheck disable=SC2016  # $t expands in the successor shell
+  printf 't=no; [ -t 1 ] && t=yes; echo "tty1=$t" > %q\n' "$MARK" > "$CMD"
+  stage
+  claim="$(cc_pane_successor_take)"
+  run env SHELL="$FAKESH" /bin/bash -c '. "$1"; cc_pane_successor_exec "$2" 0 </dev/null 2>&1 | cat' _ "$LIB" "$claim"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$MARK")" = tty1=no ]
+  [[ "$output" != *"[pane-successor]"* ]] || false
+}
+
 @test "real artifact: the 2026-10-09 pane-44 relaunch cmdfile is claimed byte-identical, plus only its nonce line" {
   fx="$(ls "$REPO"/tests/fixtures/recycle-keystrokeless/handoff-recycle-cmd-44-*.sh)"
   { printf 'export CLAUDE_CONFIG_DIR=%q\n' "$HOME/.claude-next"; cat "$fx"; } > "$CMD"

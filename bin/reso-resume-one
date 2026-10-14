@@ -1016,4 +1016,10 @@ rr_successor_take_exec() {
 }
 rr_successor_take_exec
 printf '\n[reso-resume-one] session ended (rc %s) — this pane is now an ordinary shell.\n' "$rr_rc" >&2
+# A pane launched `reso-resume-one … | tee log` would hand the shell (and any claude typed in it) the
+# pipe as stdout, and claude reads a non-tty stdout as print mode: re-point it at the pane's terminal,
+# as lib/pane-successor.sh's loop does (recycle-failure-2026-10-14 F2). No controlling tty ⇒ unchanged.
+if [ -t 0 ] && { [ ! -t 1 ] || [ ! -t 2 ]; } && [ -w /dev/tty ] && (: >/dev/tty) 2>/dev/null; then
+  exec >/dev/tty 2>/dev/tty; printf '%s\n' "[reso-resume-one] output was not the terminal (a pipe or file); re-attached to /dev/tty" >&2
+fi
 exec "${SHELL:-/bin/zsh}" -l -i

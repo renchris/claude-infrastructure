@@ -200,8 +200,21 @@ cc_pane_successor_claimed() { # $1=tty → rc 0 + "<claim path> <claim epoch>" i
 # .cmd exports its own), and the loop's two vars are unset when it ends, because the trailing login
 # shell keeps the SAME pid — a claude typed there later must not hand back to a loop that is gone.
 # $1 = the claimed path, $2 = the hand-back prefix (the loop appends its own pid).
+# THE PANE'S TERMINAL, NOT WHATEVER THE PANE WAS LAUNCHED INTO (docs/research/recycle-failure-2026-10-14.md
+# F2). Pane 434 was launched `zsh -lc 'reso-resume-one … 2>&1 | tee log; exec zsh -l'`; the predecessor
+# ran under expect's own pty and never noticed, but this shell inherited the tee pipe as stdout, and
+# Claude Code treats a non-tty stdout as print mode: no TUI, ever. So when stdin is the terminal and
+# stdout or stderr is not, they are re-pointed at /dev/tty first, and the one line saying so goes to
+# the new stderr. No controlling tty (the open fails even though /dev/tty is mode 666) ⇒ unchanged.
 # shellcheck disable=SC2016  # every $ here expands in the successor shell, not in this one
 _CC_PANE_SUCCESSOR_LOOP='__ccs_f="$1"; __ccs_h="$2.$$"
+if [ -t 0 ] && { [ ! -t 1 ] || [ ! -t 2 ]; } && [ -w /dev/tty ] && (: >/dev/tty) 2>/dev/null; then
+  __ccs_r="stdout and stderr were"; [ -t 1 ] && __ccs_r="stderr was"; [ -t 2 ] && __ccs_r="stdout was"
+  [ -t 1 ] || exec >/dev/tty
+  [ -t 2 ] || exec 2>/dev/tty
+  printf "[pane-successor] %s not the terminal (a pipe or file); re-attached to /dev/tty so claude runs interactive\n" "$__ccs_r" >&2
+  unset __ccs_r
+fi
 export CC_PANE_SUCCESSOR_LOOP_PID="$$" CC_PANE_SUCCESSOR_HANDBACK="$__ccs_h"
 while [ -n "$__ccs_f" ] && [ -f "$__ccs_f" ]; do
   unset CLAUDE_CONFIG_DIR CC_ACCOUNT_PINNED CLAUDE_ISOLATION_SKIP
