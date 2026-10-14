@@ -623,29 +623,60 @@ lr_recon_line() {
 # Bounded and fail-silent (this is a Stop hook): a timeout, a missing binary or a garbled reply
 # prints nothing and leaves one IDL line, so "no line" stays distinguishable from "could not read".
 # Seams: CC_RESEARCH_REGISTRY · CC_RESEARCH_BIN · CC_OPREADOUT_RESEARCH_TIMEOUT_S (default 3).
-research_lines() {
-  local reg bin c to="" s raw out
+# _or_research_resolve → rc 0 with _OR_RP_BIN / _OR_RP_TO / _OR_RP_S set for `cc-research pending`;
+#   rc 1 = no registry or no jq (research_lines prints nothing) · rc 2 = no binary. ONE resolution,
+#   shared by research_lines and its prefetch, so the two cannot ask different binaries.
+_or_research_resolve() {
+  local reg c
+  _OR_RP_BIN=""; _OR_RP_TO=""; _OR_RP_S=3
   reg="${CC_RESEARCH_REGISTRY:-$HOME/.claude/autonomy/research/programs.json}"
-  [ -f "$reg" ] || return 0
-  command -v jq >/dev/null 2>&1 || return 0
-  bin="${CC_RESEARCH_BIN:-}"
-  if [ -z "$bin" ]; then
-    bin="$HOME/.claude/bin/cc-research"
-    [ -x "$bin" ] || bin="$SCRIPT_DIR/../bin/cc-research"
+  [ -f "$reg" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  _OR_RP_BIN="${CC_RESEARCH_BIN:-}"
+  if [ -z "$_OR_RP_BIN" ]; then
+    _OR_RP_BIN="$HOME/.claude/bin/cc-research"
+    [ -x "$_OR_RP_BIN" ] || _OR_RP_BIN="$SCRIPT_DIR/../bin/cc-research"
   fi
-  if [ ! -x "$bin" ]; then
+  [ -x "$_OR_RP_BIN" ] || return 2
+  _OR_RP_S="${CC_OPREADOUT_RESEARCH_TIMEOUT_S:-3}"; case "$_OR_RP_S" in ''|*[!0-9]*) _OR_RP_S=3 ;; esac
+  # Absolute paths only, as in stranded_sessions: a Stop hook may inherit the stock PATH.
+  for c in /opt/homebrew/bin/timeout /usr/local/bin/timeout /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -x "$c" ] && { _OR_RP_TO="$c"; break; }
+  done
+  return 0
+}
+
+# _or_research_prefetch <file> → starts the bounded `cc-research pending --json` in the BACKGROUND,
+#   its stdout to <file> and its exit status to <file>.rc, and sets _OR_RP_PID. research_lines reads
+#   that pair instead of running the call once render_block has `wait`ed on the pid (2026-10-14,
+#   § PREFETCH in render_block). Nothing is logged here: research_lines still owns every IDL row.
+_or_research_prefetch() {
+  _OR_RP_PID=""; _OR_RP_F=""
+  _or_research_resolve || return 0
+  _OR_RP_F="$1"
+  ( if [ -n "$_OR_RP_TO" ]; then "$_OR_RP_TO" -k 1 "$_OR_RP_S" "$_OR_RP_BIN" pending --json
+    else "$_OR_RP_BIN" pending --json; fi > "$_OR_RP_F" 2>/dev/null
+    printf '%s\n' "$?" > "$_OR_RP_F.rc" ) &
+  _OR_RP_PID=$!
+}
+
+research_lines() {
+  local raw out rrc=0 rres=0
+  _or_research_resolve || rres=$?
+  [ "$rres" -eq 1 ] && return 0
+  if [ "$rres" -eq 2 ]; then
     log_idl degraded "research-pending-unread" '{"why":"no cc-research binary"}'
     return 0
   fi
-  s="${CC_OPREADOUT_RESEARCH_TIMEOUT_S:-3}"; case "$s" in ''|*[!0-9]*) s=3 ;; esac
-  # Absolute paths only, as in stranded_sessions: a Stop hook may inherit the stock PATH.
-  for c in /opt/homebrew/bin/timeout /usr/local/bin/timeout /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
-    [ -x "$c" ] && { to="$c"; break; }
-  done
-  if [ -n "$to" ]; then raw="$("$to" -k 1 "$s" "$bin" pending --json 2>/dev/null)"
-  else raw="$("$bin" pending --json 2>/dev/null)"; fi
-  # shellcheck disable=SC2181  # the substitution's status is the read's verdict
-  if [ $? -ne 0 ]; then
+  if [ -n "${_OR_RP_F:-}" ] && [ -f "$_OR_RP_F.rc" ]; then
+    # The prefetched read (render_block waited on it). Same command, same bound; the status file
+    # carries what `$?` of the substitution below would have.
+    raw=""; [ -f "$_OR_RP_F" ] && raw="$(< "$_OR_RP_F")"
+    { read -r rrc < "$_OR_RP_F.rc"; } 2>/dev/null || rrc=1
+    case "$rrc" in ''|*[!0-9]*) rrc=1 ;; esac
+  elif [ -n "$_OR_RP_TO" ]; then raw="$("$_OR_RP_TO" -k 1 "$_OR_RP_S" "$_OR_RP_BIN" pending --json 2>/dev/null)" || rrc=$?
+  else raw="$("$_OR_RP_BIN" pending --json 2>/dev/null)" || rrc=$?; fi
+  if [ "$rrc" -ne 0 ]; then
     log_idl degraded "research-pending-unread" '{"why":"cc-research pending failed or timed out"}'
     return 0
   fi
@@ -775,6 +806,35 @@ render_block() {
   # TABC once, not per-`read`: `IFS="$(printf '\t')" read` re-runs that substitution on EVERY
   # iteration, so hoisting it removes one fork per step rather than adding any (C19).
   local TABC; TABC="$(printf '\t')"
+  # ── PREFETCH (2026-10-14, docs/plans/LOAD_AND_PROMPT_HOOK_TIMEOUTS.md Wave 5) ──
+  # The two slowest reads in this function are the ledger (1.5-4 s at a load of ~25: it is the one
+  # ask with the BUSY probe, so no sibling hook's memo can serve it) and `cc-research pending`
+  # (0.6-1.3 s). Neither depends on anything computed below, yet both ran AFTER every other read, so
+  # their times added: 5-8.5 s of a 10 s budget at LOW load on replayed real Stops. They start HERE,
+  # in the background, with the very commands, arguments and environment the read sites used, and
+  # are collected by `wait` where those sites were — the output is the same bytes, only the wall
+  # time overlaps. The files ride on $steps_file's name (no new mktemp fork, C19) and are removed
+  # with it. No `return` lies between here and the collection points, so nothing is orphaned.
+  local wrap="" _wl_sid="" _or_wf _or_led_pid=""
+  _or_research_prefetch "$steps_file.rp"
+  if [ -n "$cwd" ] && [ -d "$cwd" ]; then
+    wrap="${WRAP_LEDGER_BIN:-}"
+    if [ -z "$wrap" ]; then
+      for _or_wf in "$SCRIPT_DIR/../scripts/wrap-ledger.sh" "$CFG/scripts/wrap-ledger.sh" "$HOME/.claude/scripts/wrap-ledger.sh"; do
+        [ -f "$_or_wf" ] && { wrap="$_or_wf"; break; }
+      done
+    fi
+    # Why the session id is passed: see the ledger read site below.
+    _wl_sid=""; case "${SID:-}" in ''|'?') ;; *) _wl_sid="$SID" ;; esac
+    if [ -n "$wrap" ]; then
+      if [ -n "$_wl_sid" ]; then
+        ( cd "$cwd" 2>/dev/null && bash "$wrap" --machine --session "$_wl_sid" ) > "$steps_file.led" 2>/dev/null &
+      else
+        ( cd "$cwd" 2>/dev/null && bash "$wrap" --machine ) > "$steps_file.led" 2>/dev/null &
+      fi
+      _or_led_pid=$!
+    fi
+  fi
   # ONE switch for the WHOLE of M2 — allocation AND ordering. Bound here, before the first producer,
   # because F6's CONFIRM-first reorder happens at APPEND time: gating only the allocation left the
   # reorder live under `off`, so the switch did not restore the incumbent and A15 was unprovable.
@@ -1089,16 +1149,11 @@ render_block() {
   local esc_n; esc_n="$(escalation_unseen_count)"
 
   # ── state line from the un-fakeable ledger (cwd repo; skipped cleanly outside a repo) ──
-  local state="" wrap="" led="" branch ahead shas dirty_n gate remainder parts custody dact
+  local state="" led="" branch ahead shas dirty_n gate remainder parts custody dact
   local resident resident_names
   RUNG="?"
   if [ -n "$cwd" ] && [ -d "$cwd" ]; then
-    wrap="${WRAP_LEDGER_BIN:-}"
-    if [ -z "$wrap" ]; then
-      for f in "$SCRIPT_DIR/../scripts/wrap-ledger.sh" "$CFG/scripts/wrap-ledger.sh" "$HOME/.claude/scripts/wrap-ledger.sh"; do
-        [ -f "$f" ] && { wrap="$f"; break; }
-      done
-    fi
+    # `wrap` and `_wl_sid` were resolved, and the read itself started, at § PREFETCH above.
     # PASS THE SESSION ID WE ARE ALREADY HOLDING. wrap-ledger resolves it as
     # `--session > WRAP_SESSION_ID > CLAUDE_SESSION_ID > CLAUDE_CODE_SESSION_ID > unresolvable`
     # (scripts/wrap-ledger.sh:628-638). Withholding it cost two different things, and the second is
@@ -1120,13 +1175,9 @@ render_block() {
     # Guarded on "?" because render mode (/wrap, tests) never parses stdin and leaves SID at its
     # "?" default; passing that would assert a session that does not exist. Spelled as two explicit
     # invocations rather than ${var:+…} so no word-splitting question arises in the substitution.
-    _wl_sid=""; case "${SID:-}" in ''|'?') ;; *) _wl_sid="$SID" ;; esac
-    if [ -n "$wrap" ]; then
-      if [ -n "$_wl_sid" ]; then
-        led="$( cd "$cwd" 2>/dev/null && bash "$wrap" --machine --session "$_wl_sid" 2>/dev/null || true )"
-      else
-        led="$( cd "$cwd" 2>/dev/null && bash "$wrap" --machine 2>/dev/null || true )"
-      fi
+    if [ -n "$_or_led_pid" ]; then
+      wait "$_or_led_pid" 2>/dev/null
+      [ -f "$steps_file.led" ] && led="$(< "$steps_file.led")"
     fi
   fi
   if [ -n "$led" ]; then
@@ -1346,12 +1397,13 @@ render_block() {
   # Research programs owing the operator a ruling join the predicate: a pending concern or an open
   # priced menu is a purchase decision nobody else can make, and a line that rendered only when
   # some unrelated step happened to fire the block would be the decision delivered by luck.
+  [ -n "${_OR_RP_PID:-}" ] && wait "$_OR_RP_PID" 2>/dev/null   # § PREFETCH: research_lines reads it
   local rp_lines; rp_lines="$(research_lines)"
   # A dispatcher fire loop joins it for the same reason: nothing else aggregates those failures, so
   # a line that waited for an unrelated step to fire the block would report the loop by luck.
   local fl_line; fl_line="$(fire_loop_line)"
   if [ "$total" -eq 0 ] && [ "$RUNG" != "📦" ] && [ "$RUNG" != "🚀" ] && [ "$Q_N" -eq 0 ] \
-     && [ -z "$rp_lines" ] && [ -z "$fl_line" ]; then rm -f "$steps_file"; return 0; fi
+     && [ -z "$rp_lines" ] && [ -z "$fl_line" ]; then rm -f "$steps_file" "$steps_file.led" "$steps_file.rp" "$steps_file.rp.rc"; return 0; fi
 
   # ALLOCATION. Written out per class rather than looped: four classes is a fixed set, and the
   # alternatives (eval, or a `$(fn)` lookup) cost either clarity or a fork per step.
@@ -1572,7 +1624,7 @@ render_block() {
         fi
       fi
     done
-    rm -f "$steps_file"
+    rm -f "$steps_file" "$steps_file.led" "$steps_file.rp" "$steps_file.rp.rc"
     shown="$total"
   else
 
@@ -1638,7 +1690,7 @@ render_block() {
     fi
   done < "$steps_file"
   [ -n "$last_cls" ] && close_class "$last_cls" "$pc"
-  rm -f "$steps_file"
+  rm -f "$steps_file" "$steps_file.led" "$steps_file.rp" "$steps_file.rp.rc"
   fi   # ── end CBUDGET collapse / itemise branch ──
 
   # ── stranded sessions (CLOSE_RESUME_CUSTODY D4) — outside both mode branches, like the line below.

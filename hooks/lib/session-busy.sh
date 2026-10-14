@@ -192,6 +192,85 @@ _sb_is_infra() {  # <command line> → 0 when this process is wake/watchdog infr
   [ -z "$(printf '1 0 %s\n' "${1:-}" | _sb_filter_candidates "")" ]
 }
 
+# ── THE TWO WALKS, IN ONE AWK EACH (2026-10-14, docs/plans/LOAD_AND_PROMPT_HOOK_TIMEOUTS.md Wave 5) ──
+# proc-scope.sh's ps_scope_ancestors forks `printf | awk` over the whole table per hop, and
+# ps_scope_descendants interprets the whole table in bash once per pass (up to 12). Over a ~1,300-
+# row table that was 36k traced lines and ~1.2 s of the 1.65 s this probe took inside
+# operator-readout's ledger at a load of ~30 — the Stop hook's critical path. These two return the
+# SAME STRING for the same inputs, rule for rule: proc-scope's lookup (first row whose $1 == p, awk
+# comparison), its cycle and 0/1 stops, its `read -r pid ppid rest` field split, its numeric-pid
+# guard, ps_scope_is_session's argv[0] test, its space-padded set membership (empty ppid included)
+# and its 12-pass fixed point in table order. proc-scope.sh itself is NOT changed: it is also the
+# SIGKILL selector of scripts/gate-cleanup.sh. tests/session-busy-walks.bats replays both against
+# the live table and adversarial fixtures and compares the strings. An awk failure falls back to the
+# proc-scope function, so the worst case is the old cost, never a different set.
+_sb_ancestors() {  # <pid> <snapshot> → what ps_scope_ancestors prints
+  local out
+  if out="$(printf '%s\n' "${2:-}" | awk -v p0="${1:-}" '
+      { n++; K[n] = $1; V[n] = $2 }
+      function ppid_of(p,   i) { for (i = 1; i <= n; i++) if (K[i] == p) return V[i]; return "" }
+      END {
+        set = " " p0 " "
+        a = ppid_of(p0)
+        while (a != "" && a != "0" && a != "1") {
+          if (index(set, " " a " ")) break
+          set = set a " "
+          a = ppid_of(a)
+        }
+        printf "%s", set
+      }' 2>/dev/null)"; then
+    printf '%s' "$out"
+  else
+    ps_scope_ancestors "$1" "$2"
+  fi
+}
+
+_sb_descendants() {  # <roots> <snapshot> <exclude-set> → what ps_scope_descendants prints
+  local out
+  if out="$(printf '%s\n' "${2:-}" | awk -v sel0="${1:-}" -v ex="${3:-}" '
+      # `read -r pid ppid rest` under the default IFS: leading blanks dropped, two words, then the
+      # remainder with its leading and trailing blanks dropped.
+      {
+        l = $0; sub(/^[ \t]+/, "", l)
+        w1 = l; rest = ""; w2 = ""
+        if (match(l, /[ \t]/)) {
+          w1 = substr(l, 1, RSTART - 1); l = substr(l, RSTART); sub(/^[ \t]+/, "", l)
+          w2 = l
+          if (match(l, /[ \t]/)) { w2 = substr(l, 1, RSTART - 1); rest = substr(l, RSTART); sub(/^[ \t]+/, "", rest) }
+          else l = ""
+        } else l = ""
+        sub(/[ \t]+$/, "", rest); sub(/[ \t]+$/, "", w2)
+        n++; P[n] = w1; Q[n] = w2; R[n] = rest
+      }
+      function is_session(c,   t0, i) {
+        t0 = c; i = index(c, " "); if (i) t0 = substr(c, 1, i - 1)
+        sub(/.*\//, "", t0)
+        if (t0 == "claude" || t0 == "node" || substr(t0, 1, 7) == "claude-") return 1
+        if (index(c, "/node_modules/.bin/claude")) return 1
+        return 0
+      }
+      END {
+        sel = sel0
+        for (pass = 1; pass <= 12; pass++) {
+          added = 0
+          for (i = 1; i <= n; i++) {
+            pid = P[i]
+            if (pid == "" || pid ~ /[^0-9]/) continue
+            if (index(ex, " " pid " ")) continue
+            if (is_session(R[i])) continue
+            if (index(" " sel " ", " " pid " ")) continue
+            if (index(" " sel " ", " " Q[i] " ")) { sel = sel pid " "; added = 1 }
+          }
+          if (!added) break
+        }
+        printf "%s", sel
+      }' 2>/dev/null)"; then
+    printf '%s' "$out"
+  else
+    ps_scope_descendants "$1" "$2" "$3"
+  fi
+}
+
 sb_busy_jobs() {  # [<dir>] → "<n> <sample-argv>" on stdout, rc 0, when a job of mine is executing;
                   #           empty + rc 1 otherwise (including every unreadable case).
                   # THE SAMPLE IS NOT A NICETY — it is what makes the fail-toward-WORK correctable.
@@ -206,8 +285,8 @@ sb_busy_jobs() {  # [<dir>] → "<n> <sample-argv>" on stdout, rc 0, when a job 
   # is the fixture lesson in tests/pkill-scope.bats one layer down — argv is not identity — arriving
   # from the other side. A genuinely backgrounded job is not in this subtree: it outlives the shell
   # that spawned it and is reparented, which is precisely the case this arm exists to catch.
-  _sb_up="$(ps_scope_ancestors "$$" "$snap")"
-  _sb_dn="$(ps_scope_descendants "$$ " "$snap" "")"
+  _sb_up="$(_sb_ancestors "$$" "$snap")"
+  _sb_dn="$(_sb_descendants "$$ " "$snap" "")"
   ex=" $(printf '%s %s' "$_sb_up" "$_sb_dn" | tr ' ' '\n' | awk 'NF' | sort -u | tr '\n' ' ')"
   # TWO PASSES, because cwd is the expensive fact. Pass 1 narrows by the CHEAP argv-position rules
   # (self/ancestor · a session is not a job · infrastructure); pass 2 resolves cwd for the survivors
@@ -261,7 +340,7 @@ sb_busy_jobs() {  # [<dir>] → "<n> <sample-argv>" on stdout, rc 0, when a job 
       }' "$_sb_tf" -)"
   rm -f "$_sb_tf"
   [ -n "$roots" ] || return 1
-  sel="$(ps_scope_descendants "$roots" "$snap" "$ex")"
+  sel="$(_sb_descendants "$roots" "$snap" "$ex")"
   n="$(printf '%s' "$sel" | tr ' ' '\n' | awk 'NF' | sort -u | wc -l | tr -d ' ')"
   [ "${n:-0}" -gt 0 ] 2>/dev/null || return 1
   # Sample = the FIRST root's argv, trimmed to 140 chars. NOT 90: a worktree path is ~60 characters
