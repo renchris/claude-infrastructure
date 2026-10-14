@@ -1,8 +1,9 @@
 <div align="center">
 
-<img src="assets/hero/hero.webp" width="838" alt="A 29-second looping 3D film, set on a sunlit stone terrace above the sea. An orange plush Clawd, the Claude Code mascot, sits at a laptop holding a pennant marked “/goal”. A second Clawd pops in beside it in a puff of cloud and is handed a pennant of its own; more arrive the same way as the camera rises, until dozens are working at laptops in rings on round rugs. Close-ups show newcomers appearing in a wizard hat, in sunglasses and in goggles. One Clawd finishes painting a plank sign: “The sessions run each other.” Another chalks a board: “40 sessions at once. 1,366 agents in a day.”, while behind it a card reading “SAFE TO CLOSE” pops up over a laptop, and the laptop shuts. A ring on a laptop lid stops at 73 %; a fresh Clawd arrives, takes the “/goal” pennant and the same seat, and the first one walks away, past a board that reads “Work outlives the session.” A Clawd trots up to the camera holding a tag, “sudo pmset, only you can grant this”, which flips to “granted”. Another holds up a paddle, “Spend about $250 of quota?”, with a note, “70% sure, research attached”, and YES is ticked green. The camera rises over the whole terrace to a sign: “claude-infrastructure. The sessions run each other. You only decide. github.com/renchris/claude-infrastructure”. Then the film starts again.">
+https://github.com/user-attachments/assets/5e078d27-f2cf-490f-b5d4-c979bec26f36
 
-<sub>The numbers are measured: 40 sessions at once and 1,366 agents in one day, counted from this machine’s Claude Code transcripts. The film is agent-made end to end: story, storyboard, 3D render and sound. <a href="assets/hero/launch-film.mp4">The 29-second film with sound</a> (1920×1080, 60 fps) · <a href="tools/launch-film/README.md">how it was made</a>.</sub>
+<b>The 29-second launch film.</b> Press play, then unmute.<br>
+<sub>The numbers are measured: 40 sessions at once and 1,366 agents in one day, counted from this machine’s Claude Code transcripts. The film is agent-made end to end: story, storyboard, 3D render and sound. 1920×1080, 60 fps. No player here? Open <a href="assets/hero/launch-film.mp4">the MP4 with sound</a> · <a href="tools/launch-film/README.md">how it was made</a>.</sub>
 
 ## `~/.claude`, deployed from git.<br>The sessions run each other.<br>You only decide.
 
