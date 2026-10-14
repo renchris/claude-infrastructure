@@ -10944,7 +10944,8 @@ if [ "${1:-}" = "__recycle" ]; then
     while kill -0 "$RCY_CALLER_PID" 2>/dev/null && [ "$t" -lt "$wmax" ]; do
       /bin/sleep 1; t=$((t + 1))
     done
-    waited=$((waited + t))
+    # The loop's clock is wall time since its start (F5), so re-read it rather than add this wait.
+    [ -z "${rcy_wait_t0:-}" ] || waited=$(( $(date +%s) - rcy_wait_t0 ))
     if kill -0 "$RCY_CALLER_PID" 2>/dev/null; then RCY_SELFCALL="still-running:${t}s"; return 1; fi
     RCY_SELFCALL="returned:${t}s"
     hf_bounded "$IT2" session send -s "$RSID" $'\e' >/dev/null 2>&1 || true
@@ -11064,12 +11065,18 @@ if [ "${1:-}" = "__recycle" ]; then
   rcy_poll="${HF_RECYCLE_SHELL_POLL_S:-1}"
   case "$rcy_poll" in 1|2|3) ;; *) rcy_poll=1 ;; esac
   rcy_vanish_next=15; rcy_bgwork_next="$rcy_bgwork_every"; rcy_nudge_left="60 150 300"
+  # WALL SECONDS, NOT A SUM OF SLEEPS (pane 434, 2026-10-14). `waited` used to add rcy_poll per
+  # round, blind to the ps/jq/it2 forks each round runs: at ~31/core the "first dialog check at 15s"
+  # came 2 min 40 s after arming, and the 600 s bound stretched by the same factor. Every cadence
+  # and latch below (rcy_bgwork_next, rcy_vanish_next, rcy_nudge_left) and the bound now read the
+  # clock, so "at 15s" in a row means fifteen seconds.
+  rcy_wait_t0="$(date +%s)"
   while [ "$waited" -lt "$rcy_wait_max" ]; do
     if at_shell; then rcy_shell_ok=1; break; fi
     # The pane's consumer can claim the staged successor and start claude before this loop ever
     # samples the bare shell between the two; the claim is then the proof that the predecessor exited.
     if [ "$rcy_succ_lib" = 1 ] && hf_succ_claim_epoch "$TTY_PATH" "$rcy_w_t0" >/dev/null; then rcy_shell_ok=1; break; fi
-    sleep "$rcy_poll"; waited=$((waited+rcy_poll))
+    sleep "$rcy_poll"; waited=$(( $(date +%s) - rcy_wait_t0 ))
     # The nudge checkpoint due THIS round, consumed here — before the bgwork arm's `continue` — so a
     # round that answers the dialog skips its nudge exactly as the %-cadence did.
     rcy_nudge_at=""
@@ -11892,7 +11899,9 @@ if [ "${1:-}" = "__recycle" ]; then
       rcy_debt_settle
       exit 1
     fi
-    rcy_t=0
+    # Wall seconds since the window opened, like the shell-wait loop's `waited` (F5): "within 2s" in
+    # a row used to be a sum of RCY_ENGAGE_INTERVAL sleeps, blind to each poll's own scan time.
+    rcy_t=0; rcy_t0="$(date +%s)"
     rcy_submit_ts=""
     # THE SUCCESSOR'S PROVENANCE for recycle_engaged's marker arm (pane 434): its config dir is the
     # one hf_succ_stage wrote beside the command file, its cwd is RCWD, and nothing it wrote can be
@@ -11959,7 +11968,7 @@ if [ "${1:-}" = "__recycle" ]; then
         _hf_resume_debt discharge --sid "$RCY_DEBT_SID" --why "target answered $rcy_te in pane $RSID; the next move hops from it"
         exit 1
       fi
-      sleep "$RCY_ENGAGE_INTERVAL"; rcy_t=$((rcy_t + RCY_ENGAGE_INTERVAL))
+      sleep "$RCY_ENGAGE_INTERVAL"; rcy_t=$(( $(date +%s) - rcy_t0 ))
     done
     # ── W7e: READ THE TARGET BEFORE CALLING A RESUME DEAD ─────────────────────────────────────────
     # Measured 2026-10-01 (sessions 89bdedfa, 8e18da3f, moved to .claude-tertiary): lr-fire-resume

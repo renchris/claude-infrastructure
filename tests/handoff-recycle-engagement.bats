@@ -450,6 +450,31 @@ SH
   ! grep -q "HANDOFF-RECYCLE-DEAD" "$H/ccnotify-calls.log" 2>/dev/null || { echo "dead alarm paged on a provenance miss"; false; }
 }
 
+@test "[RED] WALL CLOCK: the engage window RCY_ENGAGE_TIMEOUT holds in wall seconds when each poll is slow" {
+  # pane 434's "within 2s" was a sum of RCY_ENGAGE_INTERVAL sleeps, blind to the scan each poll
+  # runs. A `find` shim makes the marker scan cost 2 s, as load does, and logs when each began: 4
+  # polls of sleep-sum span ≥ 9 wall seconds; a wall-clock window ends within one poll of its bound.
+  watcher_setup
+  row "$OLD_SID"
+  cat > "$SHIM/find" <<'SH'
+#!/usr/bin/env bash
+case "$*" in *.jsonl*) date +%s >> "$HOME/engage-polls.log"; /bin/sleep 2 ;; esac
+exec /usr/bin/find "$@"
+SH
+  chmod +x "$SHIM/find"
+  run env HOME="$H" PATH="$SHIM:$PATH" RCY_ENGAGE_TIMEOUT=4 RCY_ENGAGE_INTERVAL=1 \
+      IT2_BIN="$H/.claude/bin/it2" \
+      bash "$HF" __recycle "$PANE" /dev/ttys999 "$CMDF" /tmp "$OLD_SID" "MK-SLOW"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  local first last
+  first="$(head -1 "$H/engage-polls.log" 2>/dev/null)"; last="$(tail -1 "$H/engage-polls.log" 2>/dev/null)"
+  echo "$output"
+  [ -n "$first" ] || { echo "no engage poll ran"; false; }
+  [ -n "$last" ] || { echo "no engage poll ran"; false; }
+  echo "# engage polls spanned $((last - first))s for a 4s window" >&3
+  [ $((last - first)) -le 7 ] || { echo "the 4s engage window ran $((last - first)) wall seconds"; false; }
+}
+
 @test "cc_headless_on_tty: a claude on the tty whose fd 1 is a PIPE → named; fd 1 on the tty → silent" {
   eval "$(sed -n '/^pid_is_cc() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^cc_headless_on_tty() {/,/^}/p' "$HF")"
