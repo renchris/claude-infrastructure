@@ -1,0 +1,141 @@
+# Recycle failure, pane 434, 2026-10-14 04:35–04:48Z
+
+Scope (frozen): find why `handoff-fire.sh --recycle` failed in pane 434 on 2026-10-14 ~04:37–04:45Z, answer the five symptom questions with file:line evidence, and write a ranked long-horizon fix plan. Research and plan only: no change to handoff-fire.sh, any hook or any bin/ script in this session.
+
+## Verdict
+
+The recycle machinery delivered the successor correctly; the pane died because of how the pane had been launched. The operator's relaunch wrapped `reso-resume-one` in `2>&1 | tee /tmp/email-resume.log`. The predecessor never noticed, because `reso-resume-one` runs claude under `expect`, which gives it its own pty. The successor ran outside `expect`, in the pane's own shell, so its stdout was the tee pipe. Claude Code 2.1.293 treats a session whose stdout is not a TTY as **non-interactive**. That session never paints a TUI, and in that mode its `asyncRewake` SessionStart hook `mailbox-wake-arm.sh` runs **synchronously**. The hook's headless guard looks only for `-p`/`--print` on argv, so it armed a multi-hour inbox watch that blocked session birth. As a result there was no transcript and no turn for 6 min 19 s, until another session killed the process.
+
+The recycle still logged `engaged:true` because its verifier accepts **any** transcript on the machine that contains the recycle marker and has an assistant turn. The lead session had run `ps` on the stuck successor, which wrote the successor's argv, marker included, into the lead's own transcript 29 s before the check.
+
+## Root causes
+
+| # | Symptom | Root cause | Evidence |
+|---|---|---|---|
+| 1 | /exit hit the background-work dialog; ~2.5 min before it was answered | Every self-recycle types /exit while its own Bash call is still running, and Claude Code lists that call as background work. The menu offered "Move to background", so the self-call retry and the stop-if-watcher default were both skipped (they only run when that option is absent), and the watcher picked option '2'. Its "at 15s" is a sum of sleep seconds, which under load was about 2.5 minutes of wall time. | screen in `email-resume.log`: `shell · cat > /tmp/recycle-reso-email-desktop.txt <<'EOF'…  1. Exit and stop tasks 2. Move to background and exit 3. Stay`; `scripts/handoff-fire.sh:11038`, `:11070` (both gated `[ -z "$bgk" ]`), `:11250` (sends `$bgk`), `:10949` (15 s cadence), `:10973` (`waited=$((waited+rcy_poll))`); tool_result `→ exit: typed /exit` at 04:38:24Z vs the bgwork row at 04:40:38Z |
+| 2 | Successor never painted, never wrote a transcript | stdout = the operator's `\| tee` pipe ⇒ Claude Code runs non-interactive (no TUI, ever) ⇒ the SessionStart hook `mailbox-wake-arm.sh` (asyncRewake) runs synchronously ⇒ its argv-only guard misses this mode and arms a long watch ⇒ session birth is blocked | `lsof.txt:31` (fd 1 PIPE) vs `:30` (fd 0 ttys008); 2.1.293 binary: `function t4e(…){…return n\|\|t\|\|o\|\|!process.stdout.isTTY}` and `pn(){…w=n.kind==="non-interactive"\|\|t4e(e)…Qwo(!w)}`; binary: `so=!Ee()\|\|Zlt();if((e.async\|\|e.asyncRewake&&so)&&!_e){…backgrounding process`; `hooks/mailbox-wake-arm.sh:60-66`, `:100` (`*" -p "*\|*" --print "*)` only); hook pid 62087 child of 58913, ELAPSED 05:47 at 04:47:21Z; `sample.txt:24-31` (main thread idle in kevent64, 2600/2600) |
+| 3 | `recycle-engaged` `engaged:true` with no successor transcript | `recycle_engaged` marker arm scans every transcript modified in the last 240 min across all 5 config dirs and excludes only the predecessor's own file. The lead session (`c294596e`) put the marker into its own transcript at 04:43:40.839Z through a `ps` tool_result of the successor's argv. | `scripts/handoff-fire.sh:7089-7103`; false premise at `:5697` ("NEVER echoed … only the FIRED session's transcript can hold it"); `~/.claude/projects/-Users-chrisren-Development-reso-landing-design-research/c294596e-….jsonl:811` |
+| 4 | Plain `reso-resume-one` in pane 433 died in ~1 s | capacity-admit refused it (load 32.48/core > 2.0) ⇒ `exit 9` before anything else ran; `kitty-split-launch.sh` opens the window without `--hold`, so the window closed with the reason. Pane 434 was admitted only because the shared refusal counter, pre-spent by two unrelated resumes days earlier, hit its budget. | `bin/reso-resume-one:266-269`; `~/.claude/autonomy/idl.jsonl:39225` (04:31:53Z, "refusal 3 of budget 3"), `:39240` (04:32:50Z, `basis":"budget-expired"`); `bin/kitty-split-launch.sh:146`; `scripts/lib/capacity-admit.sh:558-570` (per-run key exists, unused by reso-resume-one) |
+| 5 | Wall of `config-mirror: FORKED …` lines | 542 real files in `~/.claude-quaternary` where the mirror wants symlinks. Safe mode skips each and reports it. Per-name lines are printed only when stderr is not a tty, and the tee pipe made it one. Two mirror runs per `claude4` launch × 542 = 1084 lines. It blocks nothing: 539 of the 542 are `*bak*` backups. Of the other 3, two are per-account files missing from the isolate list, and `tasks-index.json` is a shared-by-policy file that its writer re-forks. | `lib/config-mirror.zsh:132` (`[[ -t 2 ]] && fork_summary=1`), `:202` (print + `continue`), `:207-213` (tty fold drops `*bak*`); `~/.zshrc:270` + `:485` (two syncs); `email-resume.log`: 542 names × 2 |
+
+Control case: the same predecessor session (`db3559f8`) was recycled at 01:04Z in pane 382, with the same account, the same staged-successor path and the same '2' answer. That successor engaged for real (its goal was read back from its own transcript, watcher 3673 log). Pane 382's stdout was the tty. The only difference that matters is the `| tee`.
+
+## Timeline (UTC, 2026-10-14)
+
+| time | event | source |
+|---|---|---|
+| 04:31:52 | kitty split 433 launched with bare `reso-resume-one …` | `~/.claude/logs/pane-spawns.jsonl:4775` |
+| 04:31:53 | capacity-admit refuses (3 of 3) ⇒ exit 9 ⇒ window gone | `idl.jsonl:39225` |
+| 04:32:50 | pane 434 (`… 2>&1 \| tee …; exec zsh -l`) admitted, `budget-expired` | `idl.jsonl:39240` |
+| 04:35:39 | predecessor writes the brief and runs `handoff-fire.sh --recycle` in one Bash call | predecessor transcript |
+| 04:37:13 | `recycle-intent` (phases `self-id@3s intent@89s`) | `handoffs-rows.jsonl` |
+| 04:37:55–59 | watcher 3555 detached; successor staged for ttys008 | `handoffs-rows.jsonl`, `.succ.json` |
+| ≤04:38:24 | foreground types `/exit` ("at rest was not proven"); the call returns at 04:38:24.373 | predecessor transcript tool_result |
+| 04:40:38 | watcher's first dialog check, "at 15s" (sleep-sum) ⇒ answers '2' | `handoff-recycle-434-…log` |
+| 04:40:44 | background copy `5d8cf160` stopped with `claude stop` | `recycle-bgcopy-stop` row |
+| 04:40:49 | `reso-resume-one` falls through ⇒ `cc_pane_successor_exec` ⇒ `zsh -l -i` loop; 1084 FORKED lines | `bin/reso-resume-one:1013`, `lib/pane-successor.sh:225` |
+| 04:41:29 | successor claude 58913 starts, stdout = pipe ⇒ non-interactive | close record `58913-1791952889.json`, `lsof.txt` |
+| 04:41:34 | its SessionStart hook `mailbox-wake-arm.sh` (62087) starts, synchronous | other session's ps at 04:47:21 |
+| 04:43:40 | lead's transcript records a `ps` of the successor argv, marker included | `c294596e….jsonl:811` |
+| 04:44:09 | `recycle-engaged` `engaged:true`, "within 2s" | `handoffs-rows.jsonl` |
+| 04:47:48 | 58913 SIGTERM'd by another session (exit 143, stderr empty) | close record |
+| 04:48:53 | fresh interactive successor `3d69b489` (entrypoint `cli`) | `~/.claude-quaternary/projects/…email-design-v2/3d69b489….jsonl` |
+
+Load all evening was ~31/core (`load.txt`: 273.95 / 305.97 / 294.16 on 10 cores). It stretched every step (89 s to recycle intent, ~2.5 min from arming to the first dialog check, 40 s from claim to claude exec). It caused none of the five symptoms.
+
+## Q1. The background-work dialog, and whether "Move to background" is right
+
+**Why the dialog.** The dialog listed exactly one task: `shell · cat > /tmp/recycle-reso-email-desktop.txt <<'EOF'…`. That is the predecessor's own recycle call, the heredoc-plus-`handoff-fire.sh --recycle` Bash command. Every self-recycle types /exit from inside that call, and Claude Code counts an in-flight foreground call as background work. This was measured on 2.1.284 in both agent-view modes (`docs/research/selfrecycle-agentview-off-2026-09-30/README.md`, table rows `fgbash off`/`fgbash on`). No inbox watcher was involved: the predecessor's last `cc-await-ping` was armed at 00:45Z in a different process.
+
+**Why ~2.5 min, and why "at 15s".** The foreground typed /exit at or before 04:38:24Z. The call then returned, but the dialog does not close when the call ends (same README, finding 2). The watcher checks for the dialog only every `CC_RECYCLE_BGWORK_EVERY_S`=15 loop-seconds (`scripts/handoff-fire.sh:10949`). Its `waited` counter adds only the `sleep` seconds (`:10973`) and not the time spent in each iteration's `ps`/`jq`/it2 forks. At ~31/core, 15 loop-seconds took ~2 min 40 s of wall time (armed 04:37:57Z, first check 04:40:38Z). The "predecessor exited after 16s" and "within 2s" figures in the log and rows are sleep-sums in the same way (`:11836`).
+
+**Why '2'.** Two arms already handle a self-recycle correctly, and both are gated on the menu having **no** keep-work option, `[ -z "$bgk" ]`. The first is the self-call retry at `:11038`: wait for the caller pid to exit, press Esc, re-submit /exit. The second is the self-recycle stop-if-watcher default at `:11070`. Pane 434's menu offered "2. Move to background and exit", so neither arm ran, and the default `CC_RECYCLE_BGWORK_ANSWER=on` sent the keep-work digit (`:11250`). Then `rcy_bgcopy_stop` (`:7046-7079`) had to `claude stop` the background copy it had just created.
+
+**Is "Move to background" right for a recycle?** Not for a self-recycle. It forks the whole predecessor conversation into a second live session, and that session must then be stopped. The stop is a race: the earliest measured first reply from a copy came 9.4 s after the fork (`:7024-7025`), and under load the `claude stop` itself slows down. The retry path is measured to exit cleanly with no dialog in both view modes once the call has returned (README finding 3, row `fgbash on`). Here the caller had already returned two minutes before the watcher looked. Keep-work stays correct for the recovery lanes that operator decision `75ea14d27d0f` governs (`:7014-7026`), where the background work is real.
+
+## Q2. Why the successor never painted or wrote a transcript
+
+1. **It was never going to paint.** `lsof.txt:30-31`: fd 0 is `/dev/ttys008`, fd 1 is a PIPE. The pane was launched as `zsh -lc '~/.reso/bin/reso-resume-one … 2>&1 | tee /tmp/email-resume.log; …'` (`tty-procs.txt:12`). The predecessor never saw this, because `reso-resume-one` runs claude under `expect` on a new pty (`bin/reso-resume-one:758`). The successor runs from `reso-resume-one`'s fall-through instead: `cc_pane_successor_exec` (`bin/reso-resume-one:1010-1014`) execs `zsh -l -i -c <loop>` (`lib/pane-successor.sh:225`), which inherits the tee pipe as stdout. In 2.1.293 the interactivity predicate is `t4e(){… return n||t||o||!process.stdout.isTTY}`, and `pn()` sets `w = n.kind==="non-interactive"||t4e(e)` and then `Qwo(!w)`. So a launch with no `-p` but a piped stdout is a print-mode session: no TUI, and output only at the end. The same binary also sets `CLAUDE_CODE_ENTRYPOINT` to `e?"sdk-cli":"cli"`.
+2. **It was blocked at birth.** In 2.1.293 the hook dispatcher backgrounds an `asyncRewake` hook only when `so=!Ee()||Zlt()`, meaning interactive or streaming input. The hook's own header read the same gate out of 2.1.220 (`hooks/mailbox-wake-arm.sh:60-66`), and the 2.1.293 dispatcher still has that shape. `mailbox-wake-arm.sh` is registered on SessionStart with `timeout: 14400` (live `~/.claude/settings.json`). Its headless guard (`:100`) skips arming only when the harness argv contains ` -p ` or ` --print `. The successor's argv had neither (`ps.txt:9`), so the hook armed its long watch synchronously. At 04:47:21Z hook pid 62087, a child of 58913, was still alive with ELAPSED 05:47. The sample shows claude's main thread idle in `kevent64` for all 2600 samples (`sample.txt:24-31`), which means it was waiting on a child or I/O and not computing. No transcript was ever written. The close record shows SIGTERM at 04:47:48Z, exit 143, empty stderr.
+3. **Ruled out.**
+   - **config-mirror FORKED.** It printed before claude was exec'd and never returns non-zero for a fork (`lib/config-mirror.zsh:202`).
+   - **cc-close-attrib.** It touches only fd 2, a FIFO into `tee -a …/.stderr.AXWMMU` (`lsof.txt:32,35,39`), and argv. It fails open (`bin/cc-close-attrib:42-44`).
+   - **autoMemoryDirectory.** The value is correct. `email-design-v2`'s git common dir is `~/Development/reso-web-app/.git` (origin `renchris/reso-web-app`), and cc-close-attrib deliberately points every worktree at its main checkout's memory slug (`bin/cc-close-attrib:57-68, 94-117`).
+   - **MCP startup.** `ms-365-mcp-server` was a child, still `R+` at 3:27. It may have been a second thing the headless startup waited on, but the synchronous hook alone accounts for the block.
+   - **Load.** Load slowed every step but blocked nothing. The pane-382 control recycle ran on the same box earlier the same evening and engaged.
+
+## Q3. Why `engaged:true` with no successor transcript, and what it must check
+
+`recycle_engaged` (`scripts/handoff-fire.sh:7081-7125`) returns 0 if **any** `*.jsonl` under any of the five `CC_PROJECTS_DIRS` (`:471`) that was modified in the last 240 min contains the marker and has a content-bearing assistant record (`assistant_turn_in`, `:5706`). The only exclusion is the predecessor's own filename (`:7096`). Its premise, stated at `:5694-5698`, is that the marker is "NEVER echoed … so only the FIRED session's transcript can hold it". That premise is false. The launch line passes the brief as an argument (`"$(cat …handoff-prompt-nb-LDz4jj)"`, the `.cmd` file), so the marker sits in the successor's **argv**, and any session that runs `ps -o args` records it. Three transcripts held this marker. The one that tripped the check was the lead's (`c294596e`, line 811, a `ps` tool_result at 04:43:40.839Z); the check ran at 04:44:07–09Z. The other two (`76f00708`, this session) came later.
+
+Consequences of the false positive, beyond a wrong row:
+- the resume debt is discharged (`:11815`);
+- no `recycle-dead` row, recovery packet or alarm is written;
+- `--recovery-of` refuses a re-fire because "the recycle … has ENGAGED" (`:14151-14174`).
+
+So the lie switches off exactly the recovery a dead successor needs.
+
+What it must check instead (all of these, for the marker arm):
+1. The transcript lives under the **staged successor's** config dir (the `.succ` file's `CLAUDE_CONFIG_DIR`) and the **successor cwd's** project slug, not anywhere on the machine.
+2. The marker is in its **first `user` record**. `marker_in_user_record` already exists at `:5731`; it must also be the first user record, so that a tool_result on a later line does not count.
+3. The transcript was born after the claim epoch, and it holds an assistant record **after** that user record.
+4. Optionally, a cheap interactivity check in `cc_alive`: the claude process on the tty has fd 1 on the tty. That would have flagged this successor at 04:41Z as "alive but headless".
+
+## Q4. Why the plain `reso-resume-one` in pane 433 died instantly
+
+`bin/reso-resume-one:266` calls `cc_capacity_admit reso-resume-one`. On a refusal it prints the reason and "DEFERRED, not lost" to stderr and runs `exit 9` (`:267-269`). That happens before the recon fence, the worktree check and `expect`. The refusal is logged at `~/.claude/autonomy/idl.jsonl:39225` (04:31:53Z, 1 s after the split's spawn row `pane-spawns.jsonl:4775`): "load … 32.48/core > ceiling 2.0/core (refusal 3 of budget 3)". `bin/kitty-split-launch.sh:146` builds `kitty @ launch` with no `--hold`. The command was bare, with no trailing shell, so the window closed and took the reason with it.
+
+Pane 434 got through only because the refusal state is a single counter shared by every `reso-resume-one` on the machine (`~/.claude/autonomy/capacity-admit/reso-resume-one.refusals`). Refusals 1 and 2 came from unrelated resumes on Oct 11 and Oct 12. 434's attempt was the fourth refusal, and the gate admitted it as `budget-expired` (`idl.jsonl:39240`). `scripts/lib/capacity-admit.sh:558-570` describes exactly this cross-run problem and offers `CC_ADMIT_BUDGET_KEY` as the fix, but `reso-resume-one` never sets it. The exit code 9 and the stderr text are inferred from the code and the log row; nothing captured the window itself. Detail: `/tmp/recycle-fail-research/q4-pane433.md` (subagent report; its two load-bearing citations re-read here).
+
+## Q5. The config-mirror FORKED state for `.claude-quaternary`
+
+**What it means.** `~/.claude-quaternary` holds 542 real files whose names also exist in `~/.claude`. Outside each account's isolate set (`lib/config-mirror.zsh:39-43`), the mirror's contract is that every such name is a symlink to `~/.claude/<name>`. Safe mode never moves a real file, so it reports each one and skips it (`:202`). Of the 542:
+- 539 are `*bak*` backups (332 `settings.json.bak-kitty-*`, plus other `settings.json.*bak*`). They are this account's own historical copies: a sampled one differs from its `~/.claude` namesake. Nothing reads them.
+- 3 are live files, and all three are also real files in `.claude-next`, `-secondary` and `-tertiary`:
+  - `.last-update-result.json` is written by Claude Code's updater in each config dir.
+  - `.mcp-probe-cache` is per-account state (`hooks/session-start.sh:141`), rewritten by tmp+`mv -f` (`:168-171`). The isolate lists do not name it.
+  - `tasks-index.json` is a genuine fork of a file the mirror shares **on purpose**: task boards were un-isolated on 2026-07-29 (`lib/config-mirror.zsh:16-35`). Its writer, `hooks/setup-task-symlinks.sh:15`, targets `$CLAUDE_CONFIG_DIR/tasks-index.json` (path from `hooks/lib/task-helpers.sh:15`) and rewrites it with tmp+`mv` (`:49-50`, `:110-111`). An `mv` replaces a symlink with a real file, so each account re-forks the shared index at its next task hook.
+
+**Does it block anything?** No. The loop `continue`s, `_cc_sync_account` returns 0, and the launch goes on. On a tty the forks fold into one summary line, and backups are dropped from it (`:207-213`). The wall appeared only because `2>&1 | tee` made stderr a pipe (`:132`). It cost two 542-name loops per `claude4` launch (`~/.zshrc:270`, then the `claude` launcher at `~/.zshrc:485`), and it buried the pane.
+
+**The safe way to resolve it.** Do **not** run `--convert` now. `--convert` moves each real file to `*.premirror-bak` and symlinks the shared one in, and both live writers above replace the link with `mv` on their next run. `.mcp-probe-cache` would re-fork at the next SessionStart, and until then all four accounts would share one MCP probe cache, which is wrong because the caches are per account. `tasks-index.json` would re-fork at the next task hook, and the moved-aside copy (27.9 KB in quaternary against 821 B in `~/.claude`) holds the list-to-project map for boards the shared index lacks. The order:
+1. Fix F7 below: isolate `.mcp-probe-cache` and `.last-update-result.json`; point the task-index writer at the shared path; keep `*bak*` out of the per-name report.
+2. Merge the four per-account task indexes into `~/.claude/tasks-index.json`.
+3. Optionally, with all next4 panes closed, convert, which also moves the 539 backups aside.
+
+## Ranked fix plan
+
+Ranked by how much each fix protects (how bad × how likely to recur) against its risk. None of it was implemented here, by brief. F1, F4 and F5 touch `scripts/handoff-fire.sh`; F3 touches a hook; F2 touches a lib that every successor runs. That is one implementation wave, best run as a dispatched session with the suites named below.
+
+| rank | fix | file(s) | test that would have caught it | risk |
+|---|---|---|---|---|
+| F1 | **Engagement must be the successor's own turn.** Marker arm: only the staged successor's cfg dir + cwd slug, marker in the **first** `user` record, born after the claim epoch, assistant record after it. Rewrite the false premise at `:5694-5698`. Add "alive but headless" to `cc_alive` (claude's fd 1 on the tty) so the row says what was seen. | `scripts/handoff-fire.sh:7081-7125`, `:5694-5698`, `cc_alive` near `:10770` | `tests/handoff-recycle-engagement.bats`: an observer transcript in **another** cfg dir and slug, with the marker inside a tool_result and an assistant turn, must give NOT engaged. It fails on today's code (the suite only fixtures the successor's own transcript). | Medium. Too strict a match reports a live successor as dead and invites a duplicate. Mitigation: keep the registry row-change arm; on a provenance miss emit `recycle-unverified`, not `recycle-dead`. |
+| F2 | **A successor always gets the pane's terminal.** In the successor loop, before `source "$__ccs_f"`: if stdin is a tty and stdout or stderr is not, re-point them at `/dev/tty` (guarded by `[ -w /dev/tty ]`, fail open) and say so in one line. Give `reso-resume-one`'s and `lr-fire-resume`'s fall-through `exec $SHELL -l -i` the same treatment. | `lib/pane-successor.sh:204-226`; `bin/reso-resume-one:1019`; `bin/lr-fire-resume` fall-through | `tests/pane-successor.bats`: run the loop under `script -q /dev/null` with stdout piped to `cat`; the staged `.cmd` records `[ -t 1 ]`; assert a tty. | Low. Costs only the tee copy of the successor's output. Without a controlling tty it falls back to today's behaviour. |
+| F3 | **The wake-arm hook must know every headless mode.** Also skip arming when `CLAUDE_CODE_ENTRYPOINT=sdk-cli` (inherited from the harness; the binary sets it from the same non-interactive flag) or when the harness's fd 1 is not a tty. First verify with one live probe (pty stdin, piped stdout, haiku, `CC_WAKE_ARM` probe log) that the hook actually sees `sdk-cli`. | `hooks/mailbox-wake-arm.sh:97-106` | `tests/mailbox-wake-arm.bats`: `CC_WAKE_ARM_HARNESS_ARGV` with **no** `-p`, plus `CLAUDE_CODE_ENTRYPOINT=sdk-cli`, must exit 0 and arm no watcher. | Low. Under-arming is the hook's declared safe direction (`:71-73`). |
+| F4 | **A self-recycle never takes keep-work.** Run the self-call retry (wait for `RCY_CALLER_PID`, Esc, /exit again) whatever the menu offers, and fall back to today's answer only when the call has not returned within `CC_RECYCLE_SELFCALL_WAIT_S`. Also make the self-recycle stop-if-watcher default apply when keep-work is offered. | `scripts/handoff-fire.sh:11038`, `:11070` | `tests/handoff-recycle-bgwork-dialog.bats`: a screen fixture with "2. Move to background and exit" and an exited caller pid must send Esc + `/exit`, never `2`, and write no `recycle-bgwork-answered` row. | Low. Measured in both view modes (`selfrecycle-agentview-off-2026-09-30`, row `fgbash on`). |
+| F5 | **Clock the watcher in wall seconds.** Derive `waited`, `rcy_t`, the 15 s dialog cadence and the 600 s bound from `date +%s` deltas, so "at 15s" and "within 2s" mean seconds and the bounds hold under load. | `scripts/handoff-fire.sh:10949`, `:10973`, `:11836` | bats with a stubbed slow `pane_cc_state` (2 s per call) and a 1 s poll: the reported seconds must be ≥ the wall seconds. | Low. Suites that pin today's sleep-sum numbers need updating. |
+| F6 | **A refused resume is visible and charged to its own run.** Set `CC_ADMIT_BUDGET_KEY` per run (the session id), as `lr-fire-resume` does. Keep a refused window readable, either with `--hold` in kitty-split-launch for a non-shell command or by having reso-resume-one's early exits fall through to a shell as its normal exit does. | `bin/reso-resume-one:266-270`; `bin/kitty-split-launch.sh:146` | `tests/reso-resume-one.bats`: two different sids refused in turn do not share one budget. `tests/kitty-split-launch-path.bats`: a command that exits 9 leaves a window. | Low. Each run now waits out its own budget, which may delay an admit that today's shared counter would wrongly allow. |
+| F7 | **The mirror stops crying wolf, and the shared task index stops forking.** Add `.mcp-probe-cache` and `.last-update-result.json` to every account's isolate set. Make the task-index writer resolve the shared `~/.claude/tasks-index.json`, as the 2026-07-29 policy intends (`lib/config-mirror.zsh:16-35`), and merge the per-account indexes into it once. Drop `*bak*` names from the per-name FORKED report, as the tty fold already does. | `lib/config-mirror.zsh:39-43`, `:202-213`; `hooks/lib/task-helpers.sh:15-17`; `hooks/setup-task-symlinks.sh:15` | `tests/config-mirror-isolate.bats`: a real `.mcp-probe-cache` in dst prints no FORKED line and stays real under `--convert`. A task-hook test: with `CLAUDE_CONFIG_DIR` set to an account dir, the index is written to the shared path. | Low to medium. The merge has to keep every board's list-to-project mapping. |
+
+Separate from the code: wrapping a pane's launcher in `| tee` to capture a log silently changes what every later process in that pane gets on stdout. F2 makes that safe. Until it lands, capture a launch with `script -q <log> <cmd>`, which keeps a pty, rather than with `| tee`.
+
+## What is the operator's to run
+
+- **Nothing, to restore service.** Pane 434 was relaunched as interactive session `3d69b489` at 04:48:53Z by another session. This session did not touch it.
+- **Optional, after F7 lands, with all next4 panes closed:** the convert that `hooks/config-mirror-assert.sh:37` prints, `zsh -fc 'source ~/.claude/lib/config-mirror.zsh; _cc_sync_account --convert ~/.claude-quaternary'`. It moves the 539 `*bak*` forks aside. Running it before F7 re-forks both live files and moves aside a task index whose mappings the shared copy lacks.
+- The stopped background copies `5d8cf160` (this recycle) and `72e838d8` (pane 382's) sit in `~/.claude-quaternary/jobs/` with state `stopped`. Nothing needs doing; `claude attach <id>` brings either one back.
+
+## Unknowns
+
+- The exact phase the headless successor was in when killed (hook vs MCP connect). The sample has no symbols. The synchronous hook is sufficient and was observed, but MCP startup is not excluded as a second wait.
+- Whether hooks see `CLAUDE_CODE_ENTRYPOINT=sdk-cli` in a stdout-not-a-TTY session. The binary sets it from the same flag, but F3's first step is a live probe to confirm it.
+- The 433 window's stderr. kitty discarded it; the cause comes from the code plus the idl row.
+
+## Evidence index
+
+- `~/.claude/logs/recycle-fail-434-2026-10-14/` — `ps.txt`, `tty-procs.txt`, `lsof.txt`, `sample.txt`, `screen.txt`, `email-resume.log`, `handoffs-rows.jsonl`, `load.txt` (lead capture, 04:45Z).
+- `$TMPDIR/handoff-recycle-434-1791952634-Ad1xWh.log` (watcher 3555), `$TMPDIR/handoff-recycle-cmd-434-1791952634-zi3W6K.sh{,.succ,.succ.json,.argv}`; control: `$TMPDIR/handoff-recycle-382-1791939858-nalJe1.log` (watcher 3673).
+- `~/.claude/logs/close-records/58913-1791952889.json` (successor: 04:41:29–04:47:48Z, exit 143).
+- Transcripts: predecessor `~/.claude-quaternary/projects/-Users-chrisren-Development--worktrees-email-design-v2/db3559f8-….jsonl`; false witness `~/.claude/projects/-Users-chrisren-Development-reso-landing-design-research/c294596e-….jsonl:811`; observer `~/.claude/projects/-Users-chrisren-Development--worktrees-email-design-v2/76f00708-….jsonl`; relaunch `…/3d69b489-….jsonl`.
+- Binary: `~/.claude-293/node_modules/@anthropic-ai/claude-code/bin/claude.exe` (2.1.293), strings quoted above via `LC_ALL=C grep -ao`.
+- `/tmp/recycle-fail-research/q4-pane433.md` — pane 433 subagent report.
