@@ -77,6 +77,35 @@ Learnings: (1) the one-jq stdin parse is safe only with the original per-field r
 
 Not done, on purpose: the ancestry walk is still one `ps -p` per hop (up to 8) in each hook, because Wave 1 ruled out an early stop; the BUSY probe's full-table `ps -eo` (`hooks/lib/proc-scope.sh:32`) still runs under operator-readout's own ledger ask, which is the one reader that prints BUSY; `cb_system_live` (`hooks/lib/cc-beat.sh:67`) starts one jq per beat file (7,344 files) for a session with no beat of its own.
 
+### Wave 4b — Stop-hook DURATIONS (2026-10-14, dispatched session `stop-hook-durations`)
+
+Scope (frozen): bring the p95 runtime of operator-readout (10 s Stop timeout), session-continue, completion-assert and boundary-handoff (5 s each) under half their timeout on this machine, with byte-identical verdicts and output; land each fix through the project-local /ship and converge.
+
+Why a second pass: after `0c814ef6a` went live, 2026-10-13 02:24Z → 10-14 20:05Z still recorded 854 `hook_cancelled` (operator-readout 451, session-continue 274, completion-assert 99, boundary-handoff 30), only 27 of them in minutes with 1-min load ≥ 300. Wave 4 cut process counts but never timed a run against its limit. 08:00-20:11Z on 10-14 (median load 15): operator-readout p50 7.5 s, 4.8 cancels/h; session-continue 4.1/h; completion-assert 1.6/h; boundary-handoff 0.5/h. History records a success only when a hook prints, so for the three mostly-silent hooks cancels/hour is the only unbiased history metric; p95 comes from replays.
+
+Method (scripts in `docs/research/load-hook-timeouts-2026-10-11/`): `stop-hook-durations.py <since> [until]` (per-hook runs, cancels, cancels/h, p50/p95/p99 from history); `cutreplay.py <hook> <n> <outdir>` rebuilds the EXACT Stop input of recorded cancels (the transcript cut just before that Stop's attachments, plus its subagents dir and cwd); each was replayed in a sandbox (CLAUDE_CONFIG_DIR, mailbox, TMPDIR and every write seam pointed at copies, shared caches seeded warm), old trunk tree vs new tree, the four hooks concurrent as the harness runs them, timed and traced with bash 5 `PS4=$EPOCHREALTIME` and exported `SHELLOPTS` so child scripts trace too.
+
+Where the time went (measured, not assumed):
+
+| Site | Measured on a real cancelled Stop | Cause |
+|---|---|---|
+| `session_unlanded_mine` (`hooks/lib/session-writes.sh`) | session-continue 162 s, tm2-plan worktree | one `grep -qxF` fork per file of a large `trunk..HEAD` diff |
+| `session_dirty_mine` | session-continue 4-6.4 s, ~/Development/personal | `git status -uall` 2.0 s (484 untracked files under asset trees; `-uno` 20 ms) + one `grep` per record |
+| `peer-owned.sh` readers + repeated transcript reads | completion-assert 24 s (it then returned `decision: block` — the live hook was killed at 5 s, i.e. the gate failed OPEN) | 4× `git status -uall`, 16× the same transcript jq, one `stat` + `grep` fork per record (507 records) |
+| completion-assert D1 | 2.1 s, once hit its 5 s bound | uncached `cc-backlog list --blocked` (10 MB fold) |
+| operator-readout | 5-8.5 s alone at load ~25 | ledger (with BUSY probe 1.65 s) and `cc-research pending` (0.6-1.3 s) run after, not beside, the other reads |
+| BUSY probe (`session-busy.sh`) | 1.65 s | proc-scope's ancestor/descendant walks interpreted in bash over ~1,300 rows (36k traced lines) |
+| boundary-handoff | 65-530 ms replayed | no own cost; it waits on the shared no-session ledger memo |
+
+Changes (all keep the same answer; parity proven old-vs-new on replays: stdout, stderr and IDL rows byte-identical):
+- `session-writes.sh`: per-run memo (`SW_RUN_MEMO`, made by `sw_run_memo_init` in the hook's main shell, removed by an EXIT trap) for transcript reads (rc 0/1 only) and the full porcelain; `_sw_has_line` + `_sw_isect` (one awk hash join, probe in-shell, awk failure falls back to the full set) replace per-record grep; `_sw_canon_lines` (one `cd`/`pwd -P` per distinct dir); `session_dirty_mine` reads `-uno` plus `-uall` restricted to the written paths as literal pathspecs (falls back to the full read for submodules, >400 paths, a failed narrowed read, or a memoized snapshot).
+- `peer-owned.sh`: one porcelain snapshot per run, lazily batched `stat -f %m` (64 per call; a misaligned batch falls back per path), in-shell membership; `dirt_edited_by_live_peer` keeps its exact `printf | grep` for a newline-bearing path.
+- `completion-assert.sh`: memo initialized before the attribution terms; D1 reads operator-readout's exact-keyed backlog cache first (read-only; miss = the old bounded call).
+- `operator-readout.sh`: § PREFETCH — the ledger and `cc-research pending` start in the background at the top of `render_block` with the identical commands and are collected by `wait` where they were read.
+- `session-busy.sh`: `_sb_ancestors` / `_sb_descendants`, one awk each, rule-for-rule copies of proc-scope's walks (proc-scope itself untouched: it is gate-cleanup's SIGKILL selector); differential-tested against proc-scope on random and adversarial tables (12-pass cap, cycles, sessions, blanks).
+
+Replay results so far (load ~25, real cancelled Stops, four hooks concurrent): completion-assert 12.3 s → 3.2-4.4 s; session-continue 4.0-4.7 s → 1.2-2.0 s; operator-readout alone 4.9-6.6 s → 2.6-4.6 s (before the BUSY awk). Open: the ledger itself is fork-bound (~60-90 starts plus sibling CLIs); at load ~170 each start costs ~0.1 s, so a cold ledger is 6-10 s regardless of the fixes above — the remaining floor for boundary-handoff and session-continue under load.
+
 ## Operator-only (file with cc-backlog / cc-decide; never edit settings.json or plists)
 
 O1 `timeout: 5` on `handed-off-session-guard.sh` + `PYTEST_XDIST_AUTO_NUM_WORKERS=3` (migration, c10) · O2 decision: `CC_SENTINEL_KILL=off` for compressor-sentinel (128 SIGKILLs since 10-07 conflict with "never kill work"; recommend off, 75%) · O3 plist throttles (session-index sweep 60 s → 300 s; public-publish daily) · O4 Claude Code upgrade via cc-upgrade + upstream report on the `ps -A` child leak · O5 30 s `eslogger exec` trace to attribute ~21k spawns/min · O6 optional cleanup of non-work orphans.
