@@ -11131,17 +11131,24 @@ if [ "${1:-}" = "__recycle" ]; then
         if [ "${HF_TEAM_HOLD:-on}" != off ] && [ -n "${RCY_OLD_SID:-}" ]; then
           rcy_team_rc=0; hf_team_live "$RCY_OLD_SID" || rcy_team_rc=$?
         fi
-        # A SELF-RECYCLE'S OWN CALL (W7c): the no-keep-work menu, a subject with no live members, and
-        # a tool call of this very session that the foreground named. Once per watcher: a dialog that
-        # comes back after the retry is work the recycle did not start, and the hold below takes it.
-        if [ -z "$bgk" ] && [ "$rcy_team_rc" = 1 ] && [ "$rcy_selfcall_tried" = 0 ] && [ -n "$RCY_CALLER_PID" ] \
+        # A SELF-RECYCLE'S OWN CALL (W7c): a subject with no live members, and a tool call of this
+        # very session that the foreground named. Once per watcher: a dialog that comes back after the
+        # retry is work the recycle did not start, and the hold below takes it.
+        # WHATEVER THE MENU OFFERS (pane 434, 2026-10-14). This arm used to run only on the view-off
+        # menu (no keep-work option). Pane 434's menu listed just the recycle's own call and offered
+        # "Move to background", so the arm was skipped and the default answered keep-work: a second
+        # live copy of the whole conversation, stopped afterwards by rcy_bgcopy_stop in a race. The
+        # retry is measured clean in both view modes once the call returns
+        # (docs/research/selfrecycle-agentview-off-2026-09-30/, row `fgbash on`); a call that does not
+        # return inside CC_RECYCLE_SELFCALL_WAIT_S falls through to today's answer, keep-work included.
+        if [ "$rcy_team_rc" = 1 ] && [ "$rcy_selfcall_tried" = 0 ] && [ -n "$RCY_CALLER_PID" ] \
            && [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" != cancel ] && [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" != off ] \
            && [ "${CC_RECYCLE_SELFCALL_RETRY:-on}" != off ]; then
           rcy_selfcall_tried=1
           rcy_sc_rc=0; rcy_bgwork_selfcall_retry || rcy_sc_rc=$?
           if [ "$rcy_sc_rc" = 0 ]; then
             echo "→ bgwork@${waited}s: the dialog was raised by this recycle's own tool call (pid $RCY_CALLER_PID, ${RCY_SELFCALL}) — Esc (Stay), /exit re-submitted; nothing was stopped"
-            emit_recycle_event recycle-bgwork-selfcall "" "$RSID" "no-keep-work dialog at ${waited}s; own tool call pid $RCY_CALLER_PID ${RCY_SELFCALL}; Esc then /exit re-submitted" || true
+            emit_recycle_event recycle-bgwork-selfcall "" "$RSID" "$(if [ -n "$bgk" ]; then printf 'keep-work (%s)' "$bgk"; else printf 'no-keep-work'; fi) dialog at ${waited}s; own tool call pid $RCY_CALLER_PID ${RCY_SELFCALL}; Esc then /exit re-submitted" || true
             rcy_bgwork_next=$((waited + 3))
             continue
           fi
@@ -11166,8 +11173,13 @@ if [ "${1:-}" = "__recycle" ]; then
         # answer was left at its default; an explicit value is never overridden. The self-call retry
         # above runs first, so the recycle's own Bash call is gone before the jobs are classified:
         # while it still runs they read as work and this holds. Kill switch CC_RECYCLE_SELF_STOP_WATCHER=off.
-        if [ -z "$bgk" ] && [ -n "$RCY_CALLER_PID" ] && [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" = on ] \
-           && [ "${CC_RECYCLE_SELF_STOP_WATCHER:-on}" != off ]; then
+        # With keep-work on the menu too (pane 434), once the recycle's own call has returned: a
+        # watcher-only session is then stopped rather than forked into a background copy. While the
+        # call still runs, and whenever stop-if-watcher holds (real work), a keep-work menu keeps
+        # today's answer — the lead's ruling 2026-10-14: no new HELD outcome where today completes.
+        if [ -n "$RCY_CALLER_PID" ] && [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" = on ] \
+           && [ "${CC_RECYCLE_SELF_STOP_WATCHER:-on}" != off ] \
+           && { [ -z "$bgk" ] || ! kill -0 "$RCY_CALLER_PID" 2>/dev/null; }; then
           CC_RECYCLE_BGWORK_ANSWER=stop-if-watcher; rcy_self_siw=1
         fi
         # A TRANSPLANTED LIMIT SOURCE TAKES IT TOO (lr-stranded-husk C1, pane 168, 2026-10-10;
@@ -11274,9 +11286,11 @@ if [ "${1:-}" = "__recycle" ]; then
           fi
           # The transplant default falls back to TODAY's keys: keep-work where the menu offers it and
           # the subject leads no live team; otherwise Esc below, and the line says Stay, never keep-work.
+          # The self-recycle default does the same since it also runs on a keep-work menu (pane 434):
+          # the view-off menu keeps its Stay hold, a keep-work menu keeps today's keep-work answer.
           # A rejected source never falls back to keep-work: it holds with Stay.
-          if [ "$rcy_tp_siw" = 1 ] && [ "$rcy_dead_siw" != 1 ] && [ -n "$bgk" ] && [ "$rcy_team_rc" = 1 ]; then
-            echo "→ bgwork@${waited}s: stop-if-watcher HOLDS ($rcy_siw_why) — answering the keep-work index, as before (transplant default)"
+          if { [ "$rcy_tp_siw" = 1 ] || [ "$rcy_self_siw" = 1 ]; } && [ "$rcy_dead_siw" != 1 ] && [ -n "$bgk" ] && [ "$rcy_team_rc" = 1 ]; then
+            echo "→ bgwork@${waited}s: stop-if-watcher HOLDS ($rcy_siw_why) — answering the keep-work index, as before ($(if [ "$rcy_tp_siw" = 1 ]; then printf transplant; else printf self-recycle; fi) default)"
             CC_RECYCLE_BGWORK_ANSWER=on
           else
             echo "→ bgwork@${waited}s: stop-if-watcher HOLDS ($rcy_siw_why) — answering Stay, as cancel does$([ "$rcy_self_siw" = 1 ] && printf ' (self-recycle default)')"

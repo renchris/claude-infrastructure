@@ -561,13 +561,67 @@ sc_sends() { local n; n="$(grep -c -- "${1:-.}" "$H/sends.log" 2>/dev/null || tr
   [ "$(sc_sends "\$'\\\\E'$")" = 1 ] || { cat "$H/sends.log"; false; }
 }
 
-@test "the KEEP-WORK menu (agent view on) is answered as before — the retry is for the view-off menu only" {
-  _selfcall_stub
-  cp "$BATS_TEST_TMPDIR/screen.keep" "$SCREEN" 2>/dev/null || printf '%s\n' \
-    "   Background work is running" "   The following will stop when you exit:" "" "   shell · sleep 600" "" \
+# THE KEEP-WORK MENU ON A SELF-RECYCLE (pane 434, 2026-10-14). The menu listed exactly one task, the
+# recycle's own Bash call, and offered "2. Move to background and exit". Both self-recycle arms were
+# gated on the menu having NO keep-work option, so the watcher answered '2': a second live copy of the
+# whole conversation, which rcy_bgcopy_stop then had to `claude stop`. A self-recycle now retries its
+# own call whatever the menu offers; today's keep-work answer is the fallback only while that call
+# has not returned inside CC_RECYCLE_SELFCALL_WAIT_S.
+_keep_menu() { # the agent-view-on menu over the recycle's own call, as pane 434 showed it
+  printf '%s\n' \
+    "   Background work is running" "   The following will stop when you exit:" "" \
+    "   shell · cat > /tmp/recycle-reso-email-desktop.txt <<'EOF'…" "" \
     "   ❯ 1. Exit and stop tasks" "     2. Move to background and exit" "     3. Stay" "" \
     "   Enter to confirm · Esc to cancel" > "$SCREEN"
+}
+
+@test "[RED] pane 434: the KEEP-WORK menu over an EXITED own call ⇒ Esc and /exit again — never '2', no answered row" {
+  CALLER_LIFE=0 _selfcall_stub; _keep_menu
   CC_RECYCLE_BGWORK_GOAL_CLEAR=off run drive_sc
+  cat "$H/sends.log" "$H/.claude/logs/handoffs.jsonl" 2>/dev/null   # shown only on failure
+  [ "$(sc_sends ' 2$')" = 0 ] || { echo "the keep-work index was sent on a self-recycle"; false; }
+  [ "$(sc_sends "\$'\\\\E'$")" = 1 ] || false                        # one Esc (Stay)
+  [ "$(sc_sends '/exit')" = 1 ] || false                             # /exit went back in once
+  run row recycle-bgwork-answered
+  [ -z "$output" ] || { echo "recycle-bgwork-answered written: $output"; false; }
+  run row recycle-bgwork-selfcall
+  [[ "$output" == *"own tool call pid $CALLER_PID returned:"* ]] || { echo "$output"; false; }
+}
+
+@test "the KEEP-WORK menu over an own call that does NOT return inside the bound ⇒ today's answer, the keep-work index" {
+  CALLER_LIFE=30 _selfcall_stub; _keep_menu
+  CC_RECYCLE_SELFCALL_WAIT_S=2 CC_RECYCLE_BGWORK_GOAL_CLEAR=off run drive_sc
+  kill "$CALLER_PID" 2>/dev/null || true
+  [[ "$output" == *"did not return (still-running:2s)"* ]] || { echo "$output"; false; }
+  [ "$(sc_sends '/exit')" = 0 ] || { cat "$H/sends.log"; false; }
+  [ "$(sc_sends ' 2$')" = 1 ] || { cat "$H/sends.log"; false; }
+}
+
+@test "[RED] the KEEP-WORK menu coming back over the session's own WATCHER ⇒ the self default stops it ('1'), never '2'" {
+  _selfcall_stub; self_env watcher; _keep_menu
+  STUB_REDIALOG=1 CC_RECYCLE_BGWORK_GOAL_CLEAR=off run drive_sc
+  [[ "$output" == *"stop-if-watcher answered '1' (Exit and stop tasks)"* ]] || { echo "$output"; false; }
+  [ "$(sc_sends ' 2$')" = 0 ] || { cat "$H/sends.log"; false; }
+  [ "$(sc_sends 'caller=gone 1$')" = 1 ] || { cat "$H/sends.log"; false; }
+  run row recycle-bgwork-stopped-watcher
+  [[ "$output" == *"lane=self"* ]] || { echo "$output"; false; }
+}
+
+@test "the KEEP-WORK menu coming back over real WORK after the retry ⇒ today's keep-work answer, never a new hold" {
+  # Lead ruling 2026-10-14: the change is the retry; where stop-if-watcher holds on a keep-work menu
+  # the recycle completes as it does today, rather than gaining a HELD outcome it never had.
+  _selfcall_stub; self_env work; _keep_menu
+  STUB_REDIALOG=1 CC_RECYCLE_BGWORK_GOAL_CLEAR=off run drive_sc
+  [[ "$output" == *"stop-if-watcher HOLDS (its background jobs are not watcher-only"*"(self-recycle default)"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"recycle HELD"* ]] || { echo "$output"; false; }
+  [ "$(sc_sends 'caller=gone 2$')" = 1 ] || { cat "$H/sends.log"; false; }
+  run ticket
+  [ -z "$output" ]
+}
+
+@test "NOT a self-recycle: the KEEP-WORK menu is answered as before — no retry, the keep-work index" {
+  _selfcall_stub; _keep_menu
+  CC_RECYCLE_BGWORK_GOAL_CLEAR=off run drive_sc ""
   [ "$(sc_sends '/exit')" = 0 ] || { cat "$H/sends.log"; false; }
   [ "$(sc_sends ' 2$')" = 1 ] || { cat "$H/sends.log"; false; }
 }
