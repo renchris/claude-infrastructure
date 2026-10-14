@@ -112,6 +112,88 @@ _sw_bounded() { local s="$1"; shift
   if command -v timeout >/dev/null 2>&1; then timeout "$s" "$@"; else "$@"; fi
 }
 
+# ── PER-RUN MEMO AND FORK BUDGET (2026-10-14, docs/plans/LOAD_AND_PROMPT_HOOK_TIMEOUTS.md Wave 5) ──
+# WHY. Replayed on real cancelled Stops, completion-assert asked `session_writes_paths` of one
+# transcript 16 times and `git status -uall` of one tree 4 times in a single run, then forked one
+# `grep` and one `stat` per dirty record (507 records in ~/Development/personal): 24 s untraced,
+# against a 5 s Stop timeout. The Stop then ended CANCELLED, which is the gate failing open.
+#
+# SW_RUN_MEMO names a directory the HOOK owns for exactly one run (`sw_run_memo_init` makes it, the
+# hook removes it at exit). Unset ⇒ no memo and every read happens as before. Inside one run the
+# transcript is not growing (the model is stopped) and the tree is whatever it is at this Stop, so
+# answering the second ask from the first answer gives the verdict a re-read would. Only rc 0/1
+# answers are kept: rc 2 (cannot-tell — a timeout, an unreadable file) is re-asked, as before.
+sw_run_memo_init() { # → sets and exports SW_RUN_MEMO (a fresh dir) unless one is already set
+  # Call it in the hook's MAIN shell: the EXIT trap that removes the dir belongs to the shell that
+  # made it, and a dir made inside `$(…)` would be removed when that subshell ends. The trap is set
+  # only when the hook has none of its own (none of the four Stop hooks sets one); otherwise the
+  # dir is left for the OS's TMPDIR sweep rather than clobbering the hook's trap.
+  [ -n "${SW_RUN_MEMO:-}" ] && [ -d "$SW_RUN_MEMO" ] && return 0
+  SW_RUN_MEMO="$(mktemp -d "${TMPDIR:-/tmp}/sw-run.XXXXXX" 2>/dev/null)" || { SW_RUN_MEMO=""; return 1; }
+  export SW_RUN_MEMO
+  [ -n "$(trap -p EXIT)" ] || trap '_sw_run_memo_done' EXIT
+}
+_sw_run_memo_done() {
+  [ -n "${SW_RUN_MEMO:-}" ] && [ -d "$SW_RUN_MEMO" ] || return 0
+  rm -f "$SW_RUN_MEMO"/* 2>/dev/null
+  rmdir "$SW_RUN_MEMO" 2>/dev/null
+  return 0
+}
+_sw_memo_path() { # <key> → _SW_MEMO = file path in SW_RUN_MEMO, or "" when there is no memo
+  _SW_MEMO=""
+  [ -n "${SW_RUN_MEMO:-}" ] && [ -d "$SW_RUN_MEMO" ] || return 1
+  local k="${1//[^A-Za-z0-9._-]/_}"
+  [ "${#k}" -gt 160 ] && k="${k: -160}"
+  _SW_MEMO="$SW_RUN_MEMO/$k"
+}
+
+# _sw_has_line <needle> <haystack> [probe] → rc 0 iff some LINE of haystack equals needle exactly.
+#   The in-shell form of `grep -qxF "$needle" <<<"$haystack"`, which each reader below used to fork
+#   once per dirty record. [probe] is `_sw_isect`'s result for this haystack (a subset that holds
+#   every needle the caller will ask about, so the scan stays short); without it the haystack is
+#   scanned. A needle holding a newline is several patterns to `grep -F`, so that (unwritable-by-
+#   Write) shape keeps the grep against the FULL haystack and with it the exact old meaning.
+_sw_has_line() {
+  case "$1" in *$'\n'*) grep -qxF -- "$1" <<<"$2"; return $? ;; esac
+  case $'\n'"${3-$2}"$'\n' in *$'\n'"$1"$'\n'*) return 0 ;; esac
+  return 1
+}
+
+# _sw_isect <haystack lines> <needle lines> → _SW_PROBE = the haystack lines equal to some needle
+#   line (one awk hash join, LC_ALL=C so equality is bytewise), for `_sw_has_line`'s [probe].
+#   A newline-free needle is a line of the haystack iff it is a line of that result, so probing it
+#   answers what scanning the haystack would. WHY: an in-shell scan is O(haystack) per needle —
+#   measured 13 s under /bin/bash 3.2 for 2,000 needles against 1,000 written paths. If awk fails,
+#   _SW_PROBE is the whole haystack: a failed join must cost time, never turn a hit into a miss.
+#   _SW_ISECT_OK=1 only when the join itself ran and succeeded (so _SW_PROBE is exactly the matches).
+_sw_isect() {
+  local r
+  _SW_PROBE="$1"; _SW_ISECT_OK=0
+  [ -n "$1" ] && [ -n "$2" ] || return 0
+  if r="$(LC_ALL=C awk 'NR == FNR { want[$0] = 1; next } ($0 in want)' \
+            /dev/fd/3 /dev/fd/4 3<<<"$2" 4<<<"$1" 2>/dev/null)"; then
+    _SW_PROBE="$r"; _SW_ISECT_OK=1
+  fi
+  return 0
+}
+
+# _sw_porc_needles <top> <porcelain -z file> → _SW_NEEDLES = "$top/<path>" per record, one per line,
+#   parsed exactly as the readers below parse the stream (a rename's OLD-path record is consumed).
+_sw_porc_needles() {
+  local top="$1" rec rel skip_next=0
+  local -a acc=()
+  while IFS= read -r -d '' rec; do
+    [ -n "$rec" ] || continue
+    if [ "$skip_next" -eq 1 ]; then skip_next=0; continue; fi
+    case "$rec" in [RC]*) skip_next=1 ;; esac
+    rel="${rec:3}"
+    acc+=("${top}/${rel}")
+  done < "$2"
+  _SW_NEEDLES=""
+  [ "${#acc[@]}" -gt 0 ] && printf -v _SW_NEEDLES '%s\n' "${acc[@]}"   # array + one join: see _sw_canon_lines
+  return 0
+}
+
 # _sw_subagent_files <transcript_path> → NUL-delimited paths of this session's subagent transcripts
 #   The harness writes every subagent's records to `<session>/subagents/**/agent-*.jsonl` beside the
 #   main `<session>.jsonl` — plain subagents directly under it, Dynamic Workflow agents under
@@ -133,10 +215,20 @@ _sw_subagent_files() {
 #   between them — a turn oracle that recognised three of the four write tools would fail in the
 #   loud direction and look identical to the session one at a glance.
 _sw_paths() {
-  local tp="${1:-}" turn="${2:-false}" out rc
+  local tp="${1:-}" turn="${2:-false}" out rc memo=""
   command -v jq >/dev/null 2>&1 || return 2
   case "$tp" in "~"*) tp="$HOME${tp#\~}" ;; esac
   [ -n "$tp" ] && [ -f "$tp" ] || return 2
+  if _sw_memo_path "paths-$turn-$tp"; then
+    memo="$_SW_MEMO"
+    if [ -f "$memo.rc" ]; then
+      read -r rc < "$memo.rc" 2>/dev/null || rc=""
+      case "$rc" in
+        0) out="$(< "$memo")"; printf '%s\n' "$out"; return 0 ;;
+        1) return 1 ;;
+      esac
+    fi
+  fi
   # SESSION scope reads the subagent transcripts too; TURN scope reads the main chain only, because
   # a turn boundary is a position in the MAIN file and the subagent files are separate streams with
   # no shared order. A turn-scoped miss withholds the close certificate, the safe direction there.
@@ -187,7 +279,11 @@ _sw_paths() {
   # branch wrong is how an unreadable transcript would silently certify a close as safe.
   [ "$rc" -eq 0 ] || return 2
   out="$(printf '%s' "$out" | sort -u)"
-  [ -n "$out" ] || return 1
+  if [ -z "$out" ]; then
+    [ -n "$memo" ] && printf '1\n' > "$memo.rc" 2>/dev/null
+    return 1
+  fi
+  if [ -n "$memo" ]; then printf '%s' "$out" > "$memo" 2>/dev/null && printf '0\n' > "$memo.rc" 2>/dev/null; fi
   printf '%s\n' "$out"
   return 0
 }
@@ -212,9 +308,48 @@ session_writes_paths_turn() { _sw_paths "${1:-}" true; }
 _sw_canon() {
   local p="${1:-}" d b phys
   [ -n "$p" ] || return 1
-  d="$(dirname "$p")"; b="$(basename "$p")"
+  _sw_split "$p"; d="$_SW_D"; b="$_SW_B"
   phys="$(cd "$d" 2>/dev/null && pwd -P 2>/dev/null)"
   if [ -n "$phys" ]; then printf '%s/%s\n' "$phys" "$b"; else printf '%s\n' "$p"; fi
+}
+
+# _sw_split <path> → _SW_D, _SW_B = what `dirname` / `basename` print for it.
+#   Parameter expansion for the shape every recorded write has (absolute, no `//`, no trailing `/`,
+#   not `/` itself), where the two agree with the tools byte for byte; anything else still forks
+#   the tools, so an odd spelling keeps their exact answer.
+_sw_split() {
+  local p="$1"
+  case "$p" in
+    */ | *//* | [!/]* | '') _SW_D="$(dirname "$p")"; _SW_B="$(basename "$p")" ;;
+    *) _SW_B="${p##*/}"; _SW_D="${p%/*}"; [ -n "$_SW_D" ] || _SW_D=/ ;;
+  esac
+}
+
+# _sw_canon_lines <newline list> → _SW_CANON = the list's non-empty lines, each through _sw_canon
+#   and newline-terminated; "" when there are none. The exact string the readers below used to build
+#   one `$(_sw_canon …)` at a time — so it ends with the same newline a `$(…)` strip leaves — with
+#   one `cd … pwd -P` per DISTINCT directory instead of three forks per path.
+#   ACCUMULATES IN AN ARRAY, joined once by `printf -v`: a bash `acc="${acc}…"` loop is quadratic in
+#   practice — measured 33 s (bash 5) and 73 s (/bin/bash 3.2) to build 950 KB from 7,940 lines.
+_sw_canon_lines() {
+  local p d b phys lastd="" lastphys=""
+  local -a acc=()
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    _sw_split "$p"; d="$_SW_D"; b="$_SW_B"
+    if [ "$d" != "$lastd" ] || [ -z "$lastd" ]; then
+      phys="$(cd "$d" 2>/dev/null && pwd -P 2>/dev/null)"
+      lastd="$d"; lastphys="$phys"
+    else
+      phys="$lastphys"
+    fi
+    if [ -n "$phys" ]; then acc+=("${phys}/${b}"); else acc+=("$p"); fi
+  done <<EOF
+$1
+EOF
+  _SW_CANON=""
+  [ "${#acc[@]}" -gt 0 ] && printf -v _SW_CANON '%s\n' "${acc[@]}"
+  return 0
 }
 
 # session_wrote_here_this_turn <transcript_path> [repo_dir]
@@ -255,6 +390,70 @@ EOF
   return 1
 }
 
+# _sw_porcelain_full <top> <outfile> → rc 0 with `git status --porcelain -z -uall` of <top> in
+#   <outfile>; rc ≠ 0 when git failed or timed out (the file is then not to be read). One snapshot per
+#   tree per run when SW_RUN_MEMO is set: peer-owned.sh's three whole-tree readers and this file's
+#   used to take one each, at ~2 s apiece on a tree with large untracked directories.
+_sw_porcelain_full() {
+  local top="$1" out="$2" memo=""
+  if _sw_memo_path "porc-$top"; then
+    memo="$_SW_MEMO"
+    if [ -f "$memo.ok" ]; then cat "$memo" > "$out" 2>/dev/null && return 0; fi
+  fi
+  ( cd "$top" 2>/dev/null && _sw_bounded 5 git -c core.quotePath=false status --porcelain -z -uall ) >"$out" 2>/dev/null || return 2
+  if [ -n "$memo" ]; then cat "$out" > "$memo" 2>/dev/null && : > "$memo.ok"; fi
+  return 0
+}
+
+# _sw_porcelain_for <top> <canonical written paths> <outfile> → rc 0 with a porcelain -z stream in
+#   <outfile> whose records, filtered to `$top/<path>` ∈ the written set, are exactly and in the same
+#   order as those of `git status --porcelain -z -uall`; rc ≠ 0 when git failed.
+#   WHY NOT JUST THE FULL READ. `-uall` enumerates every file of every untracked directory, and only
+#   the untracked half costs: on ~/Development/personal (571 tracked files, 484 untracked under
+#   large asset trees) `-uall` took 2.0 s, `-uno` 20 ms, and `-uall` limited to the session's own
+#   paths 44 ms (2026-10-14). session_dirty_mine only ever matches records whose path this session
+#   wrote, so it asks git about those paths alone:
+#     · TRACKED records come from an unrestricted `-uno` read. Porcelain v1 prints every tracked
+#       record (renames included, with their OLD-path record) before any `??` record, and `-u` does
+#       not change the tracked half, so this is the full read's tracked half verbatim — renames are
+#       detected over the whole index exactly as before, never against a narrowed pathspec.
+#     · UNTRACKED records come from `-uall` with the written paths as LITERAL pathspecs, keeping only
+#       its `??` records. A literal pathspec selects exactly that path (or what lies under it, and the
+#       caller's exact-line match drops those), and git lists untracked paths in path order either way.
+#   Falls back to the full read when a snapshot is already memoized for this run, the tree has
+#   submodules (whose untracked-content records `-uno` reads differently), the written set is large
+#   enough to crowd argv (SW_PATHSPEC_MAX, default 400), or the narrowed read fails (a pathspec
+#   beyond a symlink is an error to git where the full read is not).
+_sw_porcelain_for() {
+  local top="$1" mine="$2" out="$3" p n=0 rec skip_next=0 untf
+  local -a specs=()
+  if _sw_memo_path "porc-$top" && [ -f "$_SW_MEMO.ok" ]; then _sw_porcelain_full "$top" "$out"; return $?; fi
+  [ -e "$top/.gitmodules" ] && { _sw_porcelain_full "$top" "$out"; return $?; }
+  while IFS= read -r p; do
+    case "$p" in "$top"/?*) specs+=("${p#"$top"/}"); n=$(( n + 1 )) ;; esac
+  done <<EOF
+$mine
+EOF
+  [ "$n" -le "${SW_PATHSPEC_MAX:-400}" ] || { _sw_porcelain_full "$top" "$out"; return $?; }
+  ( cd "$top" 2>/dev/null && _sw_bounded 5 git -c core.quotePath=false status --porcelain -z -uno ) >"$out" 2>/dev/null || return 2
+  [ "$n" -gt 0 ] || return 0
+  untf="$(mktemp "${TMPDIR:-/tmp}/sw-unt.XXXXXX" 2>/dev/null)" || { _sw_porcelain_full "$top" "$out"; return $?; }
+  if ! ( cd "$top" 2>/dev/null && export GIT_LITERAL_PATHSPECS=1 \
+         && _sw_bounded 5 git -c core.quotePath=false status --porcelain -z -uall -- "${specs[@]}" ) >"$untf" 2>/dev/null; then
+    rm -f "$untf" 2>/dev/null
+    _sw_porcelain_full "$top" "$out"; return $?
+  fi
+  while IFS= read -r -d '' rec; do
+    if [ "$skip_next" -eq 1 ]; then skip_next=0; continue; fi
+    case "$rec" in
+      [RC]*) skip_next=1 ;;
+      '?? '*) printf '%s\0' "$rec" >> "$out" ;;
+    esac
+  done < "$untf"
+  rm -f "$untf" 2>/dev/null
+  return 0
+}
+
 # session_dirty_mine <transcript_path> [repo_dir]
 #   The intersection that arm (B) turns on: tracked paths that are BOTH dirty in the work tree AND
 #   written by this session. stdout = repo-relative paths, one per line.
@@ -289,14 +488,8 @@ session_dirty_mine() {
   # shared with the certificate's repo filter so the two can never disagree about what one path is.
   # No associative-array memo — macOS ships bash 3.2, and the written-path set is small and already
   # de-duplicated, so a subshell per path is cheaper than a portability problem.
-  local _p mine_c=""
-  while IFS= read -r _p; do
-    [ -n "$_p" ] || continue
-    mine_c="${mine_c}$(_sw_canon "$_p")"$'\n'
-  done <<EOF
-$mine
-EOF
-  mine="$mine_c"
+  _sw_canon_lines "$mine"
+  mine="$_SW_CANON"
 
   # -z: NUL-delimited records, each `XY<space>path`; a rename/copy emits `XY<space>NEW<NUL>OLD<NUL>`,
   # i.e. the OLD path arrives as its own bare record with NO status prefix.
@@ -316,11 +509,12 @@ EOF
   # just permanent silence) and would therefore never have surfaced on its own.
   local tmpf
   tmpf="$(mktemp "${TMPDIR:-/tmp}/sw-porc.XXXXXX" 2>/dev/null)" || return 2
-  if ! ( cd "$top" 2>/dev/null && _sw_bounded 5 git -c core.quotePath=false status --porcelain -z -uall ) >"$tmpf" 2>/dev/null; then
+  if ! _sw_porcelain_for "$top" "$mine" "$tmpf"; then
     rm -f "$tmpf" 2>/dev/null; return 2
   fi
 
   local hit=0 rel abs rec skip_next=0
+  _sw_porc_needles "$top" "$tmpf"; _sw_isect "$mine" "$_SW_NEEDLES"
   while IFS= read -r -d '' rec; do
     [ -n "$rec" ] || continue
     # Consume a rename/copy's trailing OLD-path record explicitly rather than letting the 3-char
@@ -351,7 +545,8 @@ EOF
     # shape already landed three lines below — not as a fix with a red-proof behind it. The
     # deferral note at LIVENESS_DETECTOR_FAILNEG.md:286-289 rested on keeping 6509abd2's diff
     # attributable, and that reason has expired.
-    if grep -qxF "$abs" <<<"$mine"; then
+    # In-shell since 2026-10-14 (`_sw_has_line`): same exact-line test, no fork per record.
+    if _sw_has_line "$abs" "$mine" "$_SW_PROBE"; then
       printf '%s\n' "$rel"; hit=1
     fi
   done < "$tmpf"
@@ -382,14 +577,8 @@ session_unlanded_mine() {
   top="$(cd "$dir" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null)" || return 2
   [ -n "$top" ] || return 2
   top="$(cd "$top" 2>/dev/null && pwd -P 2>/dev/null || printf '%s' "$top")"
-  local _p canon=""
-  while IFS= read -r _p; do
-    [ -n "$_p" ] || continue
-    canon="${canon}$(_sw_canon "$_p")"$'\n'
-  done <<EOF
-$out
-EOF
-  out="$canon"
+  _sw_canon_lines "$out"
+  out="$_SW_CANON"
   # THE DIFF GOES TO A FILE, NEVER A HEREDOC'D COMMAND SUBSTITUTION (2026-08-11,
   # LIVENESS_DETECTOR_FAILNEG candidate instance #6; independently convicted by the codex adversarial
   # screen, docs/research/codex-probe-screen-2026-08-10/screen-session-writes.md).
@@ -415,6 +604,26 @@ EOF
   if ! ( cd "$top" 2>/dev/null && _sw_bounded 5 git diff --name-only "$trunk"..HEAD ) >"$difff" 2>/dev/null; then
     rm -f "$difff" 2>/dev/null; return 2
   fi
+  # Array + one join, never `needles="${needles}…"`: that loop alone took 33-73 s over a 7,940-file
+  # diff (see _sw_canon_lines), slower than the per-file grep it replaces.
+  local needles=""
+  local -a nl=()
+  while IFS= read -r f; do
+    [ -n "$f" ] && nl+=("${top}/${f}")
+  done < "$difff"
+  [ "${#nl[@]}" -gt 0 ] && printf -v needles '%s\n' "${nl[@]}"
+  _sw_isect "$out" "$needles"
+  # The verdict is "is ANY diff path one I wrote", and each `$top/$f` is newline-free (`read -r` line,
+  # and a $top holding a newline skips this), so when the join ran it IS the answer: rc 0 iff it
+  # matched something. Walking 7,940 paths to rediscover that cost ~1 s per Stop on tm2-plan.
+  case "$top" in
+    *$'\n'*) ;;
+    *) if [ "${_SW_ISECT_OK:-0}" = 1 ]; then
+         rm -f "$difff" 2>/dev/null
+         [ -n "$_SW_PROBE" ] && return 0
+         return 1
+       fi ;;
+  esac
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     # A HERESTRING, not `printf | grep`: under a consumer that sets `-o pipefail` (completion-assert.sh
@@ -425,7 +634,9 @@ EOF
     # here, so this diff stays attributable to the read it is fixing.)
     # BREAK, never `rm` here: the loop is READING $difff, and removing it inside the read is the
     # SC2094 the land gate blocks on. One cleanup site after the read — the sibling's shape too.
-    grep -qxF "$top/$f" <<<"$out" && { hit=1; break; }
+    # In-shell (`_sw_has_line`) since 2026-10-14: a branch thousands of files ahead of trunk forked one
+    # grep per file here, measured 162 s on a real Stop of the tm2-plan worktree.
+    _sw_has_line "$top/$f" "$out" "$_SW_PROBE" && { hit=1; break; }
   done < "$difff"
   rm -f "$difff" 2>/dev/null
   [ "$hit" -eq 1 ] && return 0

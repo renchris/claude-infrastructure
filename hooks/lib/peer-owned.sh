@@ -379,6 +379,81 @@ _po_mtime() {
   printf '%s\n' "$m"
 }
 
+# ── FORK BUDGET FOR THE PER-RECORD READERS (2026-10-14, LOAD_AND_PROMPT_HOOK_TIMEOUTS.md Wave 5) ──
+# Each reader below walks every dirty record and used to fork a `stat` (and some a `grep`) per
+# record. On a real cancelled Stop over ~/Development/personal (507 records) completion-assert spent
+# 15.6 s of its 24 s in this file. The answers are unchanged; only the process count is:
+#   · _po_porcelain   one `git status -uall` snapshot per tree per run (session-writes.sh memo);
+#   · _po_mt_at       `stat -f %m` over 64 records per call, fetched only when the walk reaches
+#                     them, so a walk that stops at its first record still costs one call. A batch
+#                     whose output does not line up one numeric line per path (a deleted file, a GNU
+#                     stat) marks its slots empty and those records take `_po_mtime` as before;
+#   · `_sw_has_line` + `_sw_isect` for the exact-line membership tests (session-writes.sh).
+
+# _po_porcelain <top> <outfile> → rc 0 with `git status --porcelain -z -uall` of <top> in <outfile>
+_po_porcelain() {
+  if _po_sw_source && command -v _sw_porcelain_full >/dev/null 2>&1; then
+    _sw_porcelain_full "$1" "$2"; return $?
+  fi
+  ( cd "$1" 2>/dev/null && _po_bounded 5 git -c core.quotePath=false status --porcelain -z -uall ) >"$2" 2>/dev/null
+}
+
+# _po_in_set <needle> <set> <probe> → dirt_edited_by_live_peer's membership test: the old
+#   `printf '%s' "$set" | grep -xF -- "$needle" >/dev/null` verbatim for a needle holding a newline
+#   (several patterns to grep), the in-shell probe of `_sw_isect`'s join for every other needle.
+_po_in_set() {
+  case "$1" in *$'\n'*) printf '%s' "$2" | grep -xF -- "$1" >/dev/null; return $? ;; esac
+  case $'\n'"$3"$'\n' in *$'\n'"$1"$'\n'*) return 0 ;; esac
+  return 1
+}
+
+# _po_abs_list <top> <porcelain file> → _PO_ABS[] = "$top/<path>" for each record with a non-empty
+#   path, parsed exactly as the readers parse it, in order; resets the _po_mt_at batch cache.
+_po_abs_list() {
+  local top="$1" rec rel skip_next=0
+  _PO_ABS=(); _PO_MT=(); _PO_MT_DONE=""
+  while IFS= read -r -d '' rec; do
+    [ -n "$rec" ] || continue
+    if [ "$skip_next" -eq 1 ]; then skip_next=0; continue; fi
+    case "$rec" in [RC]*) skip_next=1 ;; esac
+    rel="${rec:3}"
+    [ -n "$rel" ] || continue
+    _PO_ABS+=("$top/$rel")
+  done < "$2"
+}
+
+# _po_mt_at <index> → rc 0 with _PO_MT_V = the mtime of _PO_ABS[index], or rc 1 where `_po_mtime`
+#   would fail. Call it in the CURRENT shell (never inside `$(…)`, which would discard the batch).
+#   Never a different value than `_po_mtime "${_PO_ABS[index]}"`: a batch slot is used only when
+#   its whole batch printed exactly one numeric line per path.
+_po_mt_at() {
+  local i="$1" c=$(( $1 / 64 )) b out line k=0 ok=1 want
+  local -a got=()
+  _PO_MT_V=""
+  case " $_PO_MT_DONE " in
+    *" $c "*) ;;
+    *)
+      _PO_MT_DONE="$_PO_MT_DONE $c"
+      b=$(( c * 64 ))
+      want=$(( ${#_PO_ABS[@]} - b )); [ "$want" -gt 64 ] && want=64
+      if [ "$want" -gt 0 ] && out="$(stat -f %m -- "${_PO_ABS[@]:$b:$want}" 2>/dev/null)"; then
+        while IFS= read -r line; do got+=("$line"); done <<<"$out"
+        [ "${#got[@]}" -eq "$want" ] || ok=0
+        while [ "$ok" -eq 1 ] && [ "$k" -lt "${#got[@]}" ]; do
+          case "${got[k]}" in ''|*[!0-9]*) ok=0 ;; esac
+          k=$(( k + 1 ))
+        done
+        k=0
+        if [ "$ok" -eq 1 ]; then
+          while [ "$k" -lt "$want" ]; do _PO_MT[b + k]="${got[k]}"; k=$(( k + 1 )); done
+        fi
+      fi
+      ;;
+  esac
+  if [ -n "${_PO_MT[i]:-}" ]; then _PO_MT_V="${_PO_MT[i]}"; return 0; fi
+  _PO_MT_V="$(_po_mtime "${_PO_ABS[i]}")" || return 1
+}
+
 # dirt_predates_session <repo_dir> <my_session_id> <transcript_path>
 #   "Was every dirty path in this tree last modified BEFORE this session started?"
 #   stdout on rc 0 = a whitespace-free evidence string for the caller's IDL.
@@ -386,7 +461,7 @@ _po_mtime() {
 #       · 2 cannot-tell   (see THREE STATES above)
 dirt_predates_session() {
   local dir="${1:-}" sid="${2:-}" tp="${3:-}"
-  local top start porcf rec rel abs mt newest=0 n=0 skip_next=0 rc=0
+  local top start porcf rec rel mt newest=0 n=0 skip_next=0 rc=0
 
   command -v git >/dev/null 2>&1 || return 2
   [ -n "$dir" ] || return 2
@@ -403,9 +478,10 @@ dirt_predates_session() {
   # files are never seen, and a path with a space is emitted quoted. Diverging from that shape here
   # would give the two readers of one porcelain stream different ideas of what a dirty path is.
   porcf="$(mktemp "${TMPDIR:-/tmp}/po-porc.XXXXXX" 2>/dev/null)" || return 2
-  if ! ( cd "$top" 2>/dev/null && _po_bounded 5 git -c core.quotePath=false status --porcelain -z -uall ) >"$porcf" 2>/dev/null; then
+  if ! _po_porcelain "$top" "$porcf"; then
     rm -f "$porcf" 2>/dev/null; return 2
   fi
+  _po_abs_list "$top" "$porcf"
 
   while IFS= read -r -d '' rec; do
     [ -n "$rec" ] || continue
@@ -415,8 +491,8 @@ dirt_predates_session() {
     case "$rec" in [RC]*) skip_next=1 ;; esac
     rel="${rec:3}"
     [ -n "$rel" ] || continue
-    abs="$top/$rel"
-    if ! mt="$(_po_mtime "$abs")"; then rc=2; break; fi   # deletion / unreadable ⇒ cannot tell
+    if ! _po_mt_at "$n"; then rc=2; break; fi   # deletion / unreadable ⇒ cannot tell
+    mt="$_PO_MT_V"
     n=$(( n + 1 ))
     if [ "$mt" -gt "$newest" ]; then newest="$mt"; fi
     # STRICTLY BEFORE. Same-second equality is refuted, not exonerated: mtime granularity is one
@@ -602,7 +678,7 @@ _po_activity() {
 #       · 2 cannot-tell   (see THREE STATES above)
 dirt_outside_session_execution() {
   local dir="${1:-}" tp="${2:-}"
-  local top act meta first last bg wl porcf rec rel abs mt swrc
+  local top act meta first last bg wl porcf rec rel mt swrc
   local n=0 nw=0 newest=0 rc=0 skip_next=0 hit w_a w_b
 
   command -v git >/dev/null 2>&1 || return 2
@@ -643,9 +719,10 @@ dirt_outside_session_execution() {
   # session_dirty_mine and dirt_predates_session already pay for; diverging here would give a third
   # reader of one porcelain stream a third idea of what a dirty path is.
   porcf="$(mktemp "${TMPDIR:-/tmp}/po-exec.XXXXXX" 2>/dev/null)" || return 2
-  if ! ( cd "$top" 2>/dev/null && _po_bounded 5 git -c core.quotePath=false status --porcelain -z -uall ) >"$porcf" 2>/dev/null; then
+  if ! _po_porcelain "$top" "$porcf"; then
     rm -f "$porcf" 2>/dev/null; return 2
   fi
+  _po_abs_list "$top" "$porcf"
 
   while IFS= read -r -d '' rec; do
     [ -n "$rec" ] || continue
@@ -653,8 +730,8 @@ dirt_outside_session_execution() {
     case "$rec" in [RC]*) skip_next=1 ;; esac
     rel="${rec:3}"
     [ -n "$rel" ] || continue
-    abs="$top/$rel"
-    if ! mt="$(_po_mtime "$abs")"; then rc=2; break; fi     # deletion / unreadable ⇒ cannot tell
+    if ! _po_mt_at "$n"; then rc=2; break; fi     # deletion / unreadable ⇒ cannot tell
+    mt="$_PO_MT_V"
     n=$(( n + 1 ))
     [ "$mt" -gt "$newest" ] && newest="$mt"
     # (2) outside the interval the transcript testifies about ⇒ cannot-tell, never "no command ran"
@@ -744,8 +821,9 @@ EOF
 #       · 2 cannot-tell   (see THREE STATES above)
 dirt_unreachable_by_session() {
   local dir="${1:-}" sid="${2:-}" tp="${3:-}"
-  local top start act meta first last bg wl mine mine_c="" swrc porcf rec rel abs mt p
+  local top start act meta first last bg wl mine mine_c="" swrc porcf rec rel abs mt
   local plist="" n=0 rc=0 skip_next=0 verdict pre gap ref unk nw
+  local -a pl=()
 
   command -v git >/dev/null 2>&1 || return 2
   [ -n "$dir" ] || return 2
@@ -755,12 +833,7 @@ dirt_unreachable_by_session() {
   _po_sw_source || return 2
   mine="$(session_writes_paths "$tp" 2>/dev/null)" && swrc=0 || swrc=$?
   [ "$swrc" -eq 2 ] && return 2
-  while IFS= read -r p; do
-    [ -n "$p" ] || continue
-    mine_c="${mine_c}$(_sw_canon "$p")"$'\n'
-  done <<EOF
-$mine
-EOF
+  _sw_canon_lines "$mine"; mine_c="$_SW_CANON"
 
   start="$(_po_session_start "$tp" "$sid")" || return 2
   case "$start" in ''|*[!0-9]*) return 2 ;; esac
@@ -785,9 +858,13 @@ EOF
   # -z + core.quotePath=false + -uall + a FILE: the four lessons every porcelain reader in these two
   # libs has already paid for — see session_dirty_mine.
   porcf="$(mktemp "${TMPDIR:-/tmp}/po-reach.XXXXXX" 2>/dev/null)" || return 2
-  if ! ( cd "$top" 2>/dev/null && _po_bounded 5 git -c core.quotePath=false status --porcelain -z -uall ) >"$porcf" 2>/dev/null; then
+  if ! _po_porcelain "$top" "$porcf"; then
     rm -f "$porcf" 2>/dev/null; return 2
   fi
+  _po_abs_list "$top" "$porcf"
+  local needles=""
+  [ "${#_PO_ABS[@]}" -gt 0 ] && printf -v needles '%s\n' "${_PO_ABS[@]}"   # one join, never a `+=` loop
+  _sw_isect "$mine_c" "$needles"
   while IFS= read -r -d '' rec; do
     [ -n "$rec" ] || continue
     if [ "$skip_next" -eq 1 ]; then skip_next=0; continue; fi
@@ -795,17 +872,20 @@ EOF
     rel="${rec:3}"
     [ -n "$rel" ] || continue
     abs="$top/$rel"
-    # (a) positive self-evidence refutes the whole tree. Herestring, not a pipe (pipefail + SIGPIPE).
-    if [ -n "$mine_c" ] && grep -qxF "$abs" <<<"$mine_c"; then rc=1; break; fi
-    if ! mt="$(_po_mtime "$abs")"; then rc=2; break; fi         # (b) deletion / unreadable
+    # (a) positive self-evidence refutes the whole tree. In-shell exact-line test since 2026-10-14
+    # (`_sw_has_line`, probing the `_sw_isect` join) — the same question, no grep fork per record.
+    if [ -n "$mine_c" ] && _sw_has_line "$abs" "$mine_c" "$_SW_PROBE"; then rc=1; break; fi
+    if ! _po_mt_at "$n"; then rc=2; break; fi         # (b) deletion / unreadable
+    mt="$_PO_MT_V"
     n=$(( n + 1 ))
-    plist="${plist}P ${mt}"$'\n'
+    pl+=("P ${mt}")
   done < "$porcf"
   rm -f "$porcf" 2>/dev/null
   [ "$rc" -eq 0 ] || return "$rc"
   # An empty population manufactures an exoneration out of nothing (MEMORY.md
   # cap-whose-population-is-empty) — the tree is not dirty, so there is no verdict to give.
   [ "$n" -gt 0 ] || return 2
+  printf -v plist '%s\n' "${pl[@]}"   # one join: a `plist="${plist}…"` loop is quadratic (session-writes.sh)
 
   # (c) one awk pass. Paths × windows is O(P·W), and a bash loop over a heredoc per path would be the
   # cost centre at fleet scale (a long session carries thousands of tool calls). The window test is
@@ -891,7 +971,7 @@ _po_peer_transcript() {
 #       · 2 cannot-tell
 dirt_edited_by_live_peer() {
   local dir="${1:-}" sid="${2:-}" tp="${3:-}"
-  local top reg_dir rows mine rc pid label pcwd psid ptp ppaths p peer_set="" peers="" n=0 rec rel abs
+  local top reg_dir rows mine rc pid label pcwd psid ptp ppaths peer_set="" peers="" n=0 rec rel abs
   command -v git >/dev/null 2>&1 || return 2
   command -v jq  >/dev/null 2>&1 || return 2
   [ -n "$dir" ] || return 2
@@ -906,9 +986,7 @@ dirt_edited_by_live_peer() {
   [ "$rc" -eq 2 ] && return 2
   local mine_c=""
   if [ "$rc" -eq 0 ]; then
-    while IFS= read -r p; do [ -n "$p" ] && mine_c="${mine_c}$(_sw_canon "$p")"$'\n'; done <<EOF
-$mine
-EOF
+    _sw_canon_lines "$mine"; mine_c="$_SW_CANON"
   fi
 
   # Every LIVE peer in this tree (not just the first, unlike _po_live_peer: dirt can be several
@@ -937,11 +1015,7 @@ EOF
     esac
     ptp="$(_po_peer_transcript "$psid" "$pcwd")" || continue
     ppaths="$(session_writes_paths "$ptp")" || continue
-    while IFS= read -r p; do
-      [ -n "$p" ] && peer_set="${peer_set}$(_sw_canon "$p")"$'\n'
-    done <<EOF
-$ppaths
-EOF
+    _sw_canon_lines "$ppaths"; peer_set="${peer_set}${_SW_CANON}"
     peers="${peers:+$peers+}${label:-peer}#$pid"
   done <<EOF
 $rows
@@ -952,10 +1026,13 @@ EOF
   # session-writes.sh session_dirty_mine), -uall so a new directory lists its files.
   local tmpf skip_next=0
   tmpf="$(mktemp "${TMPDIR:-/tmp}/po-peerdirt.XXXXXX" 2>/dev/null)" || return 2
-  if ! ( cd "$top" 2>/dev/null && _po_bounded 5 git -c core.quotePath=false status --porcelain -z -uall ) >"$tmpf" 2>/dev/null; then
+  if ! _po_porcelain "$top" "$tmpf"; then
     rm -f "$tmpf" 2>/dev/null; return 2
   fi
-  local verdict=0
+  local verdict=0 mine_probe peer_probe
+  _sw_porc_needles "$top" "$tmpf"
+  _sw_isect "$mine_c" "$_SW_NEEDLES"; mine_probe="$_SW_PROBE"
+  _sw_isect "$peer_set" "$_SW_NEEDLES"; peer_probe="$_SW_PROBE"
   while IFS= read -r -d '' rec; do
     [ -n "$rec" ] || continue
     if [ "$skip_next" -eq 1 ]; then skip_next=0; continue; fi
@@ -964,9 +1041,10 @@ EOF
     n=$((n + 1))
     # DRAINED (`>/dev/null`), never `grep -q`: completion-assert sources this under pipefail, where
     # an early-exiting grep SIGPIPEs printf and a MATCH reads false — on the first line that would
-    # skip our own refutation, i.e. exonerate the wrong way.
-    if [ -n "$mine_c" ] && printf '%s' "$mine_c" | grep -xF -- "$abs" >/dev/null; then verdict=1; break; fi
-    printf '%s' "$peer_set" | grep -xF -- "$abs" >/dev/null || { verdict=1; break; }
+    # skip our own refutation, i.e. exonerate the wrong way. Since 2026-10-14 only a path holding a
+    # newline still takes that pipeline; every other path is the same exact-line test in-shell.
+    if [ -n "$mine_c" ] && _po_in_set "$abs" "$mine_c" "$mine_probe"; then verdict=1; break; fi
+    _po_in_set "$abs" "$peer_set" "$peer_probe" || { verdict=1; break; }
   done <"$tmpf"
   rm -f "$tmpf" 2>/dev/null
   [ "$verdict" -eq 0 ] || return 1
