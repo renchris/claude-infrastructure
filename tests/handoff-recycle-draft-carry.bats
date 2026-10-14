@@ -24,7 +24,10 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude/logs"
   export TMPDIR="$BATS_TEST_TMPDIR/tmp"; mkdir -p "$TMPDIR"
   unset KITTY_WINDOW_ID CC_PANE_ID ITERM_SESSION_ID
-  export IT2_WRAPPER_NO_KITTY=1 CC_FIRE_CAPACITY_GATE=off
+  export IT2_WRAPPER_NO_KITTY=1
+  # M11: both terms of the fire capacity gate are pinned, not ambient (handoff-fire-capacity-gate.bats PIN-GUARD)
+  export CC_FIRE_CAPACITY_GATE=off
+  export CC_FIRE_HEADROOM_GATE=off
   # The account-sweep and heal seams default to /tmp and a bare claude-accounts: absent paths here.
   export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/account-sweep.json" CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/no-claude-accounts" \
          CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-"
@@ -322,9 +325,11 @@ putback() { # runs the watcher's put-back over the extracted units, its env give
   ! grep -qi 'exact' "$EVENTS" "$NOTIFY_LOG" || false
 }
 
-@test "7 pins: /exit hands the carry to the watcher; four engaged exits put it back; the watcher does not re-export it" {
+@test "7 pins: /exit hands the carry to the watcher; four engaged exits and the unverified exit put it back; the watcher does not re-export it" {
   grep -A3 '^  recycle_fire_commit "\$rcy_old_sid"$' "$HF" | grep -q 'HF_RCY_CARRY_STATE=handed' || false
-  [ "$(grep -cE '^ +hf_rcy_carry_putback$' "$HF")" = 4 ] || false
+  # Five: the four engaged exits, plus recycle-unverified (pane 434, 2026-10-14), which also exits 0
+  # over a relaunched pane and so owes the draft back exactly as an engaged exit does.
+  [ "$(grep -cE '^ +hf_rcy_carry_putback$' "$HF")" = 5 ] || false
   grep -q '^  export -n HF_RCY_CARRY_DIR' "$HF" || false
   grep -qE '^  export HF_RCY_CARRY_DIR HF_RCY_CARRY_STATE' "$HF" || false
 }

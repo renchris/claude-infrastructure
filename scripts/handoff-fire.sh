@@ -3336,7 +3336,7 @@ rcy_bgwork_unconfirm() { # → sets RCY_BG_UNCONFIRM, the row's unconfirm clause
   case "${LR_RECORD_ID:-}" in recon:*) return 0 ;; esac
   [ "${CC_RECYCLE_BGWORK_UNCONFIRM:-on}" != off ] && [ -n "${CMDFILE:-}" ] && [ -s "$f" ] || return 0
   { IFS= read -r RCY_TS_SID && IFS= read -r HF_TS_CFG && IFS= read -r HF_TS_TO; } < "$f" || return 0
-  RCY_CONFIRM_RAN=1
+  RCY_CONFIRM_RAN=1   # read back from the confirm's file (the confirm site itself is in recycle_fire_commit)
   hf_recycle_unconfirm
   # Done exactly once: a second hold exit in this watcher must not claim a second unconfirm.
   rm -f "$f" 2>/dev/null || true
@@ -18131,15 +18131,17 @@ recycle_fire_commit() {
       echo "!! recycle ABORTED: lr-transplant.sh --phase confirm REFUSED (rc $rcy_tp_rc) for session ${RCY_TS_SID:0:8} — the destination transcript is NOT provably identical to the source, so resuming it would orphan the tail. Nothing typed, watcher disarmed, the source session stays alive and correct. Re-run: $CMD" >&2
       exit 1
     fi
-    # From here a stand-down owes an UNCONFIRM: the source is retired and must be handed back.
-    RCY_CONFIRM_RAN=1
-    # …and the WATCHER owes it too once /exit is in: it was detached before this confirm ran, so it
-    # learns of it only from this file beside the cmdfile (rcy_bgwork_unconfirm reads it back).
+    # The WATCHER owes an unconfirm too once /exit is in: it was detached before this confirm ran, so
+    # it learns of it only from this file beside the cmdfile (rcy_bgwork_unconfirm reads it back).
     # Best-effort: without it the watcher's bgwork hold says unconfirm=needed, as it did before.
     if [ -n "${cmdfile:-}" ]; then
       printf '%s\n' "$RCY_TS_SID" "$HF_TS_CFG" "$HF_TS_TO" > "$cmdfile.confirmed" 2>/dev/null \
         || echo "⚠ recycle: could not write $cmdfile.confirmed — a watcher bgwork hold cannot unconfirm ${RCY_TS_SID:0:8} itself" >&2
     fi
+    # From here a stand-down owes an UNCONFIRM: the source is retired and must be handed back. Set
+    # after the write above (which cannot exit) so the canary hook stays on the very next line, as
+    # tests/handoff-fire-canary-hook.bats pins.
+    RCY_CONFIRM_RAN=1
     hf_canary_hook after-confirm "$SID" "$RCY_TS_SID"
   fi
   # The /exit's wake guard sits BEFORE the last read, not between it and the keystroke: a guard that
