@@ -61,21 +61,97 @@ SH
   export HOME="$H"
 
   eval "$(sed -n '/^assistant_turn_in() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^succ_own_turn_in() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^cc_sid_for_pane() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^recycle_engaged() {/,/^}/p' "$HF")"
+}
+
+# The staged successor's provenance: its config dir and the cwd it was launched in. Claude Code
+# writes its transcript at <cfg>/projects/<cwd with every non-alphanumeric char as '-'>/<sid>.jsonl.
+succ_provenance() {
+  SCFG="$BATS_TEST_TMPDIR/succ-cfg"; SCWD="$BATS_TEST_TMPDIR/succ-wt"
+  mkdir -p "$SCWD"
+  SOWN="$SCFG/projects/$(printf '%s' "$SCWD" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g')"
+  mkdir -p "$SOWN"
+  SEPOCH="$(( $(date +%s) - 60 ))"
 }
 
 row() { printf '{"paneUUID":"%s","session_id":"%s"}\n' "$PANE" "$1" > "$REGDIR/$PANE.json"; }
 
 # ── recycle_engaged: the predicate ────────────────────────────────────────────────────────────────
 
-@test "marker in the relaunch's transcript WITH an assistant turn → engaged" {
+@test "marker + assistant turn but NO successor provenance → unverified (3), never engaged" {
+  # Without the staged successor's config dir and cwd nothing ties this transcript to the relaunch:
+  # the marker rides in the successor's ARGV, so any session that ran `ps` can hold it. The scan
+  # still SEES it (3, not 1), so the watcher reports unverified instead of dead.
   row "$OLD_SID"
   printf '%s\n' \
     '{"type":"user","message":{"content":"brief <!-- handoff-fire recycle engagement marker: MK-1 (ignore) -->"}}' \
     '{"type":"assistant","message":{"content":"on it"}}' > "$PROJDIR/$NEW_SID.jsonl"
   run recycle_engaged "$PANE" "$OLD_SID" "MK-1"
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 3 ] || { echo "status=$status"; false; }
+}
+
+@test "the successor's OWN transcript (its cfg + cwd slug, marker in the first user record, a turn after) → engaged" {
+  succ_provenance
+  row "$OLD_SID"
+  printf '%s\n' \
+    '{"type":"system","subtype":"init"}' \
+    '{"type":"user","message":{"content":"brief <!-- handoff-fire recycle engagement marker: MK-OWN (ignore) -->"}}' \
+    '{"type":"assistant","message":{"content":"on it"}}' > "$SOWN/$NEW_SID.jsonl"
+  run recycle_engaged "$PANE" "$OLD_SID" "MK-OWN" "$SCFG" "$SCWD" "$SEPOCH"
+  [ "$status" -eq 0 ] || { echo "status=$status"; false; }
+}
+
+@test "RED-PROOF pane 434: an OBSERVER transcript (another cfg + slug, marker in a later tool_result, a turn) → NOT engaged" {
+  # 2026-10-14: the lead session ran `ps` on the stuck successor, so the successor's argv — marker
+  # included — landed in the LEAD's transcript as a tool_result, beside plenty of assistant turns.
+  # The old marker arm took any transcript on the machine and logged engaged:true for a successor
+  # that never wrote a byte. That transcript is in another config dir and another project slug.
+  succ_provenance
+  row "$OLD_SID"
+  mkdir -p "$PROJDIR/-Users-someone-Development-observer"
+  printf '%s\n' \
+    '{"type":"user","message":{"content":"keep redesigning the landing page"}}' \
+    '{"type":"assistant","message":{"content":"checking the stuck pane"}}' \
+    '{"type":"user","message":{"content":[{"type":"tool_result","content":"58913 claude brief <!-- handoff-fire recycle engagement marker: MK-OBS (ignore) -->"}]}}' \
+    '{"type":"assistant","message":{"content":"it is still starting"}}' \
+    > "$PROJDIR/-Users-someone-Development-observer/observer-sess.jsonl"
+  run recycle_engaged "$PANE" "$OLD_SID" "MK-OBS" "$SCFG" "$SCWD" "$SEPOCH"
+  [ "$status" -ne 0 ] || { echo "an observer's ps output was read as the successor's turn"; false; }
+  [ "$status" -eq 3 ] || { echo "a provenance miss must read unverified (3), got $status"; false; }
+}
+
+@test "own cfg + slug, but the marker only in a LATER user record (a sibling ran ps) → NOT engaged" {
+  succ_provenance
+  row "$OLD_SID"
+  printf '%s\n' \
+    '{"type":"user","message":{"content":"an unrelated session in the same worktree"}}' \
+    '{"type":"user","message":{"content":[{"type":"tool_result","content":"ps: claude <!-- handoff-fire recycle engagement marker: MK-SIB (ignore) -->"}]}}' \
+    '{"type":"assistant","message":{"content":"noted"}}' > "$SOWN/sibling-sess.jsonl"
+  run recycle_engaged "$PANE" "$OLD_SID" "MK-SIB" "$SCFG" "$SCWD" "$SEPOCH"
+  [ "$status" -ne 0 ] || { echo "a later tool_result counted as the first user record"; false; }
+}
+
+@test "own cfg + slug, first user record carries the marker, but born BEFORE the claim epoch → NOT engaged" {
+  succ_provenance
+  row "$OLD_SID"
+  printf '%s\n' \
+    '{"type":"user","message":{"content":"brief <!-- handoff-fire recycle engagement marker: MK-OLD (ignore) -->"}}' \
+    '{"type":"assistant","message":{"content":"on it"}}' > "$SOWN/$NEW_SID.jsonl"
+  run recycle_engaged "$PANE" "$OLD_SID" "MK-OLD" "$SCFG" "$SCWD" "$(( $(date +%s) + 600 ))"
+  [ "$status" -ne 0 ] || { echo "a transcript older than the claim was read as the successor's"; false; }
+}
+
+@test "own cfg + slug, marker in the first user record but NO assistant turn after it → NOT engaged" {
+  succ_provenance
+  row "$OLD_SID"
+  printf '%s\n' \
+    '{"type":"assistant","message":{"content":"a turn BEFORE the brief cannot answer it"}}' \
+    '{"type":"user","message":{"content":"brief <!-- handoff-fire recycle engagement marker: MK-NOTURN (ignore) -->"}}' \
+    > "$SOWN/$NEW_SID.jsonl"
+  run recycle_engaged "$PANE" "$OLD_SID" "MK-NOTURN" "$SCFG" "$SCWD" "$SEPOCH"
+  [ "$status" -ne 0 ] || { echo "a turn before the brief counted as engagement"; false; }
 }
 
 @test "RED-PROOF marker present but ZERO assistant turns → NOT engaged (birth is not engagement)" {
@@ -349,6 +425,56 @@ SH
   [ "$status" -eq 1 ]
   grep -q '"class":"recycle-dead"' "$H/.claude/logs/handoffs.jsonl" \
     || { echo "no recycle-dead event written"; cat "$H/.claude/logs/handoffs.jsonl" 2>/dev/null; false; }
+}
+
+@test "RED-PROOF watcher pane 434: a marker seen only in an OBSERVER transcript → recycle-unverified, never engaged, never dead" {
+  # The pane-434 shape end to end: the only marker hit is another session's `ps` of the successor.
+  # Engaged is a lie (it discharged the debt and refused --recovery-of); dead is also unproven (a live
+  # successor may still be writing under a dir we could not attribute). Unverified, no page.
+  watcher_setup
+  row "$OLD_SID"
+  mkdir -p "$PROJDIR/-Users-someone-Development-observer"
+  printf '%s\n' \
+    '{"type":"user","message":{"content":"keep redesigning the landing page"}}' \
+    '{"type":"user","message":{"content":[{"type":"tool_result","content":"claude brief <!-- handoff-fire recycle engagement marker: MK-OBSW (ignore) -->"}]}}' \
+    '{"type":"assistant","message":{"content":"it is still starting"}}' \
+    > "$PROJDIR/-Users-someone-Development-observer/observer-sess.jsonl"
+  run env HOME="$H" PATH="$SHIM:$PATH" RCY_ENGAGE_TIMEOUT=2 RCY_ENGAGE_INTERVAL=1 \
+      IT2_BIN="$H/.claude/bin/it2" \
+      bash "$HF" __recycle "$PANE" /dev/ttys999 "$CMDF" /tmp "$OLD_SID" "MK-OBSW"
+  ! [[ "$output" == *"ENGAGEMENT CONFIRMED"* ]] || { echo "$output"; echo "an observer transcript confirmed engagement"; false; }
+  grep -q '"class":"recycle-unverified"' "$H/.claude/logs/handoffs.jsonl" \
+    || { echo "no recycle-unverified event"; cat "$H/.claude/logs/handoffs.jsonl" 2>/dev/null; false; }
+  ! grep -q '"class":"recycle-engaged"' "$H/.claude/logs/handoffs.jsonl" || { echo "recycle-engaged written"; false; }
+  ! grep -q '"class":"recycle-dead"' "$H/.claude/logs/handoffs.jsonl" || { echo "recycle-dead written on a provenance miss"; false; }
+  ! grep -q "HANDOFF-RECYCLE-DEAD" "$H/ccnotify-calls.log" 2>/dev/null || { echo "dead alarm paged on a provenance miss"; false; }
+}
+
+@test "cc_headless_on_tty: a claude on the tty whose fd 1 is a PIPE → named; fd 1 on the tty → silent" {
+  eval "$(sed -n '/^pid_is_cc() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^cc_headless_on_tty() {/,/^}/p' "$HF")"
+  SHIM="$BATS_TEST_TMPDIR/hshim"; mkdir -p "$SHIM"
+  cat > "$SHIM/ps" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"-t "*)       printf '100\n200\n' ;;
+  *"comm= -p 200"*) printf 'claude\n' ;;
+  *"comm= -p 100"*) printf -- '-zsh\n' ;;
+  *"args= -p 100"*) printf -- '-zsh\n' ;;
+esac
+SH
+  cat > "$SHIM/lsof" <<'SH'
+#!/usr/bin/env bash
+printf 'p200\nf1\nt%s\nn%s\n' "${LSOF_T:-PIPE}" "${LSOF_N:-->0x1234}"
+SH
+  chmod +x "$SHIM/ps" "$SHIM/lsof"
+  PATH="$SHIM:$PATH" run cc_headless_on_tty /dev/ttys999
+  echo "status=$status output=$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pid 200"* ]] || false
+  [[ "$output" == *PIPE* ]] || false
+  LSOF_T=CHR LSOF_N=/dev/ttys999 PATH="$SHIM:$PATH" run cc_headless_on_tty /dev/ttys999
+  [ "$status" -eq 1 ] && [ -z "$output" ] || { echo "a tty-attached claude was called headless: $output"; false; }
 }
 
 # ── the arming side: the marker reaches the relaunched session ────────────────────────────────────

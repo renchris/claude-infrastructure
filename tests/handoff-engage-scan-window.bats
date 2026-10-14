@@ -44,6 +44,7 @@ setup() {
 
   eval "$(sed -n '/^assistant_turn_in() {/,/^}/p' "$HF")"
   eval "$(sed -n '/^engagement_seen() {/,/^}/p'   "$HF")"
+  eval "$(sed -n '/^succ_own_turn_in() {/,/^}/p'  "$HF")"
   eval "$(sed -n '/^cc_sid_for_pane() {/,/^}/p'   "$HF")"
   eval "$(sed -n '/^recycle_engaged() {/,/^}/p'   "$HF")"
 }
@@ -117,11 +118,14 @@ row() { printf '{"paneUUID":"%s","session_id":"%s"}\n' "$PANE" "$1" > "$REG/$PAN
 
 # ── recycle_engaged (the recycle path — same defect, 5 dirs instead of 1) ─────────────────────────
 
-@test "recycle_engaged: a FRESH marked transcript is inside the window → engaged" {
+# Since pane 434 (2026-10-14) the machine-wide scan these cases time can no longer ENGAGE on its own:
+# with no successor config dir/cwd handed in, a marker hit beside a turn is a provenance miss, rc 3.
+# So "scanned" reads 3 and "not scanned" reads 1 — the window under test is unchanged.
+@test "recycle_engaged: a FRESH marked transcript is inside the window → seen (3, provenance unproven)" {
   row "$OLD_SID"
   engaged_transcript "$PROJ/$NEW_SID.jsonl" "MK-R-FRESH"
   run recycle_engaged "$PANE" "$OLD_SID" "MK-R-FRESH"
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 3 ]
 }
 
 @test "RED-PROOF recycle_engaged: a marked transcript OLDER than the window is not scanned" {
@@ -137,5 +141,5 @@ row() { printf '{"paneUUID":"%s","session_id":"%s"}\n' "$PANE" "$1" > "$REG/$PAN
   engaged_transcript "$PROJ/$NEW_SID.jsonl" "MK-R-STALE"
   age_minutes "$PROJ/$NEW_SID.jsonl" 2880
   CC_ENGAGE_SCAN_WINDOW=0 run recycle_engaged "$PANE" "$OLD_SID" "MK-R-STALE"
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 3 ]
 }

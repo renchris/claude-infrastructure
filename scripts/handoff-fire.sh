@@ -5694,8 +5694,12 @@ pane_bgwork_seen() { # $1=it2-bin $2=session-id → 0 the dialog is on screen (a
 # line by transcript-birth — the fired prompt carries a unique marker; when a JSONL under the
 # target account's projects dir contains it, the session actually ingested the brief. A cc-registry
 # row for the fired pane bearing a session_id is an equivalent positive. The marker is globally
-# unique and is NEVER echoed to this session's own stream, so only the FIRED session's transcript
-# can hold it (this session merely wrote it into a launch-time file the launcher `cat`s at exec).
+# unique, but it is NOT private to the fired session: the launch line `cat`s the brief into the
+# fired claude's ARGV, so any session that runs `ps -o args` on it records the marker in its OWN
+# transcript, beside its own assistant turns. Pane 434, 2026-10-14: a lead's `ps` of a stuck,
+# headless successor put the marker into the lead's transcript and the recycle logged engaged:true
+# for a successor that never wrote a byte. So where the fired session's config dir and cwd are
+# known, the marker counts only in THAT transcript's first user record (succ_own_turn_in).
 #
 # BIRTH IS NOT ENGAGEMENT (item ff2d6609a33e). Both signals above prove only that a transcript/row
 # came into EXISTENCE — attachment + system rows land, and the registry row is written by the
@@ -5736,6 +5740,40 @@ marker_in_user_record() { # $1=transcript jsonl $2=marker → 0 the brief arrive
                               | select(.type == "user"
                                        and (((.message.content? // .content? // "") | tostring) | contains($m)))
                               | "1")' "$f" 2>/dev/null)" = 1 ]
+}
+
+# THE SUCCESSOR'S OWN TURN (recycle path, pane 434). marker_in_user_record accepts the marker in ANY
+# user record, and a tool_result is a user record — which is exactly how an observer's `ps` output
+# carries it. A relaunched session receives its brief as its FIRST user record (measured on live
+# successor transcripts 2026-10-14: no meta or sidechain user record precedes it), so that record and
+# only that one must carry the marker, a content-bearing assistant record must come AFTER it, and the
+# file must be born at or after the claim epoch so an earlier session in the same slug cannot answer.
+# Birth time where the filesystem has one (BSD %B, GNU %W), else mtime: never older than birth, so
+# the fallback can only admit, never wrongly refuse. No jq ⇒ 1 (withheld, not guessed).
+succ_own_turn_in() { # $1=transcript jsonl $2=marker [$3=claim epoch] → 0 the brief's first record was answered / 1 not
+  local f="$1" m="$2" ep="${3:-}" born
+  [ -s "$f" ] && [ -n "$m" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  case "$ep" in
+    ''|*[!0-9]*) ;;
+    *)
+      born="$(stat -f '%B' "$f" 2>/dev/null || true)"
+      case "$born" in ''|0|*[!0-9]*) born="$(stat -c '%W' "$f" 2>/dev/null || true)" ;; esac
+      case "$born" in ''|0|*[!0-9]*) born="$(stat -f '%m' "$f" 2>/dev/null || stat -c '%Y' "$f" 2>/dev/null || true)" ;; esac
+      case "$born" in ''|*[!0-9]*) return 1 ;; esac
+      [ "$born" -ge "$ep" ] || return 1 ;;
+  esac
+  # One streaming pass that stops at the verdict: false the moment the first user record lacks the
+  # marker, true at the first answering assistant record after it.
+  [ "$(jq -rn --arg m "$m" 'first(foreach inputs as $r ({u: null, a: false};
+            if .u == null then
+              (if $r.type == "user" and ($r.isMeta != true) and ($r.isSidechain != true)
+               then .u = ((($r.message.content? // $r.content? // "") | tostring) | contains($m)) else . end)
+            elif .u == true and $r.type == "assistant"
+                 and ((($r.message.content? // $r.content? // "") | tostring | length) > 0)
+            then .a = true
+            else . end;
+            select(.u == false or .a) | .a))' "$f" 2>/dev/null)" = true ]
 }
 
 # FOUR outcomes, and the third one is the fix (2026-08-11, LIVENESS_DETECTOR_FAILNEG instances 2/3/5):
@@ -6285,6 +6323,31 @@ pid_is_cc() { # $1=pid → 0 live CC process / 1 not
   a0="$(ps -o args= -p "$pid" 2>/dev/null | awk 'NR==1{print $1}' || true)"
   [ -n "$a0" ] || return 1
   printf '%s' "$a0" | grep -E 'node|claude' >/dev/null
+}
+
+# ALIVE BUT HEADLESS (pane 434, 2026-10-14). A claude whose stdout is not a TTY runs non-interactive:
+# it never paints a TUI, and its asyncRewake SessionStart hooks run synchronously, so it can hold the
+# pane's tty while never taking a turn. pane 434's successor inherited an operator's `| tee` as fd 1
+# and sat like that for 6 min. This reads which; it only ANNOTATES a not-engaged row and never
+# changes a verdict. Fails open: no lsof, no CC on the tty, or an unreadable fd 1 ⇒ 1 and silence.
+cc_headless_on_tty() { # $1=tty path → 0 + "pid <pid> fd 1 is <TYPE> <name>" when a CC there has fd 1 off it / 1 not shown
+  local tty="${1:-}" pid out t n
+  [ -n "$tty" ] || return 1
+  command -v lsof >/dev/null 2>&1 || return 1
+  while IFS= read -r pid; do
+    pid="$(printf '%s' "$pid" | tr -d ' ')"
+    pid_is_cc "$pid" || continue
+    out="$(lsof -a -p "$pid" -d 1 -Ftn 2>/dev/null || true)"
+    t="$(printf '%s\n' "$out" | sed -n 's/^t//p' | awk 'NR<=1')"
+    n="$(printf '%s\n' "$out" | sed -n 's/^n//p' | awk 'NR<=1')"
+    [ -n "$n" ] || continue
+    [ "$n" = "$tty" ] && continue
+    printf 'pid %s fd 1 is %s %s' "$pid" "${t:-?}" "$n"
+    return 0
+  done <<EOF
+$(ps -t "${tty##*/}" -o pid= 2>/dev/null || true)
+EOF
+  return 1
 }
 
 # ---- THE TOOL CALL A SELF-RECYCLE RUNS INSIDE (FLEET_V2 W7c, 2026-09-30) -------------------------
@@ -7078,23 +7141,58 @@ rcy_bgcopy_stop() { # $1=predecessor transcript $2=byte size before the answer $
   fi
 }
 
-recycle_engaged() { # $1=pane $2=pre-recycle-sid $3=marker → 0 engaged / 1 not
-  local pane="${1:-}" oldsid="${2:-}" marker="${3:-}" pdir newsid hit scan_win=""
+# $1=pane $2=pre-recycle-sid $3=marker [$4=successor config dir $5=successor cwd $6=claim epoch]
+# → 0 engaged / 1 not / 3 the marker was seen, beside an assistant turn, only where it cannot be
+# attributed to the successor — the watcher reports that as recycle-unverified, never dead or engaged.
+recycle_engaged() {
+  local pane="${1:-}" oldsid="${2:-}" marker="${3:-}" scfg="${4:-}" scwd="${5:-}" sepoch="${6:-}" \
+        pdir newsid hit scan_win="" own_dirs="" own_p="" phys="" miss=0
   # Same mtime scoping as engagement_seen, and this path needed it MORE: it sweeps every entry of
   # CC_PROJECTS_DIRS (5 dirs / 4.6 GB measured), so an unscoped pass costs ~40s inside a watcher that
   # is polling. Scoped, all five dirs together measure 0.54s. Inlined rather than shared with
   # engagement_seen on purpose: both functions are sed-extracted as ISOLATED units by their suites
   # (tests/handoff-recycle-engagement.bats:58, tests/fire-engagement.bats:33), so a new collaborator
   # would be a 127 under `set -e` — the trap this file has already paid for once (V2 §11, defect 1).
+  # succ_own_turn_in is the one collaborator added since (pane 434), and every suite that extracts
+  # this function (handoff-recycle-engagement, handoff-engage-scan-window) extracts it too.
   [ "${CC_ENGAGE_SCAN_WINDOW:-1}" != 0 ] && scan_win="-mmin -${CC_ENGAGE_SCAN_WINDOW_MIN:-240}"
+  # PROVENANCE (pane 434, 2026-10-14). The marker rides in the successor's ARGV, so a session that
+  # ran `ps` on it holds the marker too, next to its own assistant turns — and the machine-wide scan
+  # below took that observer's transcript for the successor's. Only the staged successor's own
+  # transcript can engage: <its config dir>/projects/<its cwd's slug>/, with the brief as the FIRST
+  # user record, born at or after the claim, answered after it (succ_own_turn_in). Claude Code
+  # slugs the PHYSICAL cwd (node's getcwd), so the resolved form is tried beside the given one.
+  if [ -n "$marker" ] && [ -n "$scfg" ] && [ -n "$scwd" ]; then
+    own_dirs="$scfg/projects/$(printf '%s' "$scwd" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g')"
+    phys="$(cd -P "$scwd" 2>/dev/null && pwd -P || true)"
+    [ -n "$phys" ] && own_p="$scfg/projects/$(printf '%s' "$phys" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g')"
+    [ -n "$own_p" ] && [ "$own_p" != "$own_dirs" ] && own_dirs="$own_dirs
+$own_p"
+    while IFS= read -r pdir; do
+      [ -d "$pdir" ] || continue
+      while IFS= read -r hit; do
+        [ -n "$hit" ] || continue
+        [ -n "$oldsid" ] && [ "$(basename "$hit")" = "$oldsid.jsonl" ] && continue
+        if succ_own_turn_in "$hit" "$marker" "$sepoch"; then return 0; fi
+      done <<HITS
+$(find "$pdir" -maxdepth 1 -name '*.jsonl' -type f -exec grep -lF -- "$marker" {} + 2>/dev/null)
+HITS
+    done <<OWN
+$own_dirs
+OWN
+  fi
+  # EVERYWHERE ELSE the marker is evidence that a successor EXISTS (some session saw its argv), never
+  # that it engaged: a hit beside an assistant turn is a provenance miss (3). With the successor's
+  # config dir or cwd unknown, every hit lands here — the arm can no longer engage on its own.
   # shellcheck disable=SC2086  # CC_PROJECTS_DIRS is an intentional space-separated dir list
   if [ -n "$marker" ]; then
     for pdir in $CC_PROJECTS_DIRS; do
       [ -d "$pdir" ] || continue
       while IFS= read -r hit; do
         [ -n "$hit" ] || continue
+        [ "$miss" = 0 ] || continue
         [ -n "$oldsid" ] && [ "$(basename "$hit")" = "$oldsid.jsonl" ] && continue
-        if assistant_turn_in "$hit"; then return 0; fi
+        if assistant_turn_in "$hit"; then miss=1; fi
       done <<EOF
 $(
         # shellcheck disable=SC2086  # scan_win is an intentional operand PAIR, or empty under the kill switch
@@ -7121,6 +7219,7 @@ EOF
       done
     done
   fi
+  [ "$miss" = 0 ] || return 3
   return 1
 }
 
@@ -11781,6 +11880,13 @@ if [ "${1:-}" = "__recycle" ]; then
     fi
     rcy_t=0
     rcy_submit_ts=""
+    # THE SUCCESSOR'S PROVENANCE for recycle_engaged's marker arm (pane 434): its config dir is the
+    # one hf_succ_stage wrote beside the command file, its cwd is RCWD, and nothing it wrote can be
+    # older than rcy_typed_at (the claim epoch on the staged path, the typing instant otherwise).
+    # A %q-quoted value is not unquoted here — it reads as unknown, which costs only the marker arm.
+    rcy_scfg="$(sed -n 's/^export CLAUDE_CONFIG_DIR=//p' "$CMDFILE.succ" 2>/dev/null | head -1 || true)"
+    case "$rcy_scfg" in *[\\\'\"\$]*) rcy_scfg="" ;; esac
+    rcy_prov_miss=0
     while [ "$rcy_t" -lt "$RCY_ENGAGE_TIMEOUT" ]; do
       # ── SUBMISSION IS ITS OWN QUESTION, ASKED FIRST AND RECORDED SEPARATELY (W3) ───────────────
       # `armed` and `engaged` are different states with different remedies — a prompt that never left
@@ -11800,8 +11906,14 @@ if [ "${1:-}" = "__recycle" ]; then
             ;;
         esac
       fi
-      if { [ -n "$RCY_RESUME_SID" ] && resume_engaged "$RCY_RESUME_CFG" "$RCY_RESUME_SID" "$RCY_T0" "${RCY_SUBMIT_TOKEN:-}"; } \
-         || { [ -z "$RCY_RESUME_SID" ] && recycle_engaged "$RSID" "$RCY_OLD_SID" "$RCY_MARKER"; }; then
+      rcy_eng=0
+      if [ -n "$RCY_RESUME_SID" ]; then
+        resume_engaged "$RCY_RESUME_CFG" "$RCY_RESUME_SID" "$RCY_T0" "${RCY_SUBMIT_TOKEN:-}" || rcy_eng=$?
+      else
+        recycle_engaged "$RSID" "$RCY_OLD_SID" "$RCY_MARKER" "$rcy_scfg" "$RCWD" "${rcy_typed_at:-}" || rcy_eng=$?
+        [ "$rcy_eng" != 3 ] || rcy_prov_miss=1
+      fi
+      if [ "$rcy_eng" = 0 ]; then
         echo "→ relaunched + ENGAGEMENT CONFIRMED in $RSID (a real assistant turn, not just a process)"
         # MESSAGE 2, re-armed. A recycle mints a NEW session id, and a goal is a SESSION-SCOPED Stop
         # hook — measured 2026-08-08: the successor's transcript carries zero goal_status, and the
@@ -11876,6 +11988,23 @@ if [ "${1:-}" = "__recycle" ]; then
         exit 0
       fi
     fi
+    # What the pane's claude looks like, for the row text only: a successor whose fd 1 is not the
+    # pane's tty is non-interactive and will never take a turn there (pane 434). Never a verdict.
+    rcy_hl="$(cc_headless_on_tty "$TTY_PATH" || true)"
+    [ -z "$rcy_hl" ] || rcy_hl="; alive but headless: $rcy_hl"
+    # PROVENANCE MISS (pane 434). The marker WAS seen beside an assistant turn, but only in a
+    # transcript that is not the staged successor's own (or the successor's config dir/cwd was not
+    # known). Engaged would be the lie that discharged pane 434's debt and refused --recovery-of; dead
+    # is unproven too, since a live successor may be writing where it cannot be attributed. So: no
+    # recovery packet, no dead alarm — an unverified row that says what was and was not seen.
+    if [ "$rcy_prov_miss" = 1 ]; then
+      echo "→ relaunched in $RSID — engagement UNVERIFIED: the recycle marker appeared beside an assistant turn only OUTSIDE the successor's own transcript (${rcy_scfg:-<config dir unknown>}/projects/<slug of ${RCWD:-<cwd unknown>}>)$rcy_hl — read the pane, not this line"
+      emit_recycle_event recycle-unverified "" "$RSID" "marker seen only outside the successor's own transcript within ${rcy_t}s (cfg ${rcy_scfg:-unknown}, cwd ${RCWD:-unknown})$rcy_hl" || true
+      goal_unreachable recycle-unverified || true
+      _hf_resume_debt discharge --sid "$RCY_DEBT_SID" --why "relaunched in pane $RSID; engagement unverified (marker only outside the successor's own transcript)"
+      hf_rcy_carry_putback
+      exit 0
+    fi
     # DEAD RECYCLE. Deliberately NO re-type: unlike the fire path, this pane holds a LIVE claude, and
     # pasting the brief into a session that IS working but whose transcript we simply could not read
     # would interrupt its turn. A recycle's only reader is the operator/desk, so the truthful verdict
@@ -11900,7 +12029,7 @@ if [ "${1:-}" = "__recycle" ]; then
     # engaged FALSE here, and it is a real measurement: the window expired with a live claude and no
     # assistant turn. This is the "asked, answered no" half of the tri-state above.
     rcy_failure_owned never-engaged || exit 0
-    emit_recycle_event recycle-dead 0 "$RSID" "relaunched pane $RSID; no assistant turn within ${RCY_ENGAGE_TIMEOUT}s (brief consumed or rejected)" || true
+    emit_recycle_event recycle-dead 0 "$RSID" "relaunched pane $RSID; no assistant turn within ${RCY_ENGAGE_TIMEOUT}s (brief consumed or rejected)$rcy_hl" || true
     goal_unreachable recycle-dead || true
     # No paint: a claude is alive in this pane, and bytes on its tty would land in its TUI.
     rcy_recovery_packet never-engaged "relaunched in $RSID but no assistant turn within ${RCY_ENGAGE_TIMEOUT}s — $rcy_dead_why; a task-less claude holds the pane"
