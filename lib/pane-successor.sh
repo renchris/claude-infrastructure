@@ -284,8 +284,10 @@ cc_pane_successor_precmd() { # zsh precmd hook → always rc 0; on a claim it do
 # every other rc lets the exit proceed. It acts only when this shell is the pane's root process:
 # window $KITTY_WINDOW_ID's `pid` in `kitty @ ls` is $$, or $PPID when that parent is not itself a
 # shell (kitty may start the shell through a wrapper; a nested shell's parent shell is the root).
-# A HANGUP means kitty is already closing the window (or died), so the hook skips: a revoked tty
-# is no longer a tty on fd 0, and a closing or dead kitty no longer lists the window. Deliberately NO TRAPHUP: a
+# A HANGUP means kitty is already closing the window (or died), so the hook skips — and the signal
+# that proves it is kitty's own: a window kitty is closing, or a dead kitty, is not in `kitty @ ls`,
+# where the root check below stops. fd 0 no longer being a tty is a cheap extra skip, not the proof
+# (a pty whose master is gone still answers isatty — measured under load). Deliberately NO TRAPHUP: a
 # function trap replaces zsh's own SIGHUP handling, which is what HUPs the pane's foreground job
 # (review wf_bf440f65-940 measured a claude/sleep surviving the pane's close with one defined).
 # zsh runs zshexit on a normal exit and on SIGHUP, not on `exec` (measured, README :367).
@@ -295,8 +297,9 @@ cc_pane_fs_zshexit() { # zsh zshexit hook → rc 0; on a guard refusal it execs 
   [ -n "${KITTY_WINDOW_ID:-}" ] || return 0
   [ "${CC_KITTY_FS_GUARD:-}" != off ] || return 0
   case "$KITTY_WINDOW_ID" in *[!0-9]*) return 0 ;; esac
-  # Hung up ⇒ kitty is already closing this window: skip. Tested on the OPEN fd 0 (an ioctl, which a
-  # revoked tty fails), never by opening /dev/tty — that open BLOCKS forever after a hangup (measured).
+  # A cheap early skip when fd 0 is no longer a tty. Tested on the OPEN fd 0, never by opening
+  # /dev/tty — that open BLOCKS forever after a hangup (measured). The window's absence from
+  # `kitty @ ls` below is the real hangup test.
   [ -t 0 ] || return 0
   local _k="${CC_TERM_KITTY:-}" _tb="" _c _pid _pc _g="${CC_KITTY_FS_GUARD:-}"
   [ -n "$_k" ] || _k="$(command -v kitty 2>/dev/null)" || _k=/Applications/kitty.app/Contents/MacOS/kitty

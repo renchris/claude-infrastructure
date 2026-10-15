@@ -512,7 +512,9 @@ fs_env() {
   unset KITTY_LISTEN_ON KITTY_PID CC_KITTY_FS_GUARD
   GUARD_LOG="$BATS_TEST_TMPDIR/guard.log"; LS_LOG="$BATS_TEST_TMPDIR/ls.log"
   # shellcheck disable=SC2016  # stub bodies expand when the STUB runs
-  printf '#!/bin/bash\n[ "$1 $2" = "@ ls" ] || { echo "kitty $*" >> %q; exit 0; }\necho ls >> %q\necho "[{\\"id\\":1,\\"tabs\\":[{\\"id\\":1,\\"windows\\":[{\\"id\\":77,\\"pid\\":${FAKE_KITTY_PID:-0}}]}]}]"\n' \
+  # once $KFS_CLOSED exists the window is gone from `ls` — what kitty shows once it is closing it
+  export KFS_CLOSED="$BATS_TEST_TMPDIR/closed"
+  printf '#!/bin/bash\n[ "$1 $2" = "@ ls" ] || { echo "kitty $*" >> %q; exit 0; }\necho ls >> %q\n[ -e "$KFS_CLOSED" ] && { echo "[]"; exit 0; }\necho "[{\\"id\\":1,\\"tabs\\":[{\\"id\\":1,\\"windows\\":[{\\"id\\":77,\\"pid\\":${FAKE_KITTY_PID:-0}}]}]}]"\n' \
     "$BATS_TEST_TMPDIR/kitty.log" "$LS_LOG" > "$s/kitty"
   printf '#!/bin/bash\necho "osascript $*" >> %q\nexit 0\n' "$BATS_TEST_TMPDIR/kitty.log" > "$s/osascript"
   # shellcheck disable=SC2016
@@ -526,8 +528,9 @@ fs_env() {
   cat > "$PTY" <<'PY'
 # pty_run.py exit|hangup <argv...> — run argv as the session leader of a fresh pty.
 #   exit:   drain the pty until the child exits; print what it wrote, then "rc=<n>".
-#   hangup: after 1.5 s, close the master and SIGHUP the child (what kitty does when a window
-#           closes); print "rc=<n>" (or "alive") and whether the `sleep 31.5` it started survived.
+#   hangup: after 1.5 s, mark the window closed (the fake `ls` stops listing it), close the master
+#           and SIGHUP the child — what kitty does when it closes a window; print "rc=<n>" (or
+#           "alive") and whether the `sleep 31.5` it started survived.
 import os, pty, signal, subprocess, sys, time
 mode, argv = sys.argv[1], sys.argv[2:]
 pid, fd = pty.fork()
@@ -552,6 +555,7 @@ if mode == "exit":
     print("rc=%s" % reap(10))
 else:
     time.sleep(1.5)
+    open(os.environ["KFS_CLOSED"], "w").close()   # kitty drops the window, then hangs up its pty
     os.close(fd); os.kill(pid, signal.SIGHUP)
     rc = reap(3)
     time.sleep(0.5)
