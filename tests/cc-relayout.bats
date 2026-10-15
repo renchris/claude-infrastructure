@@ -9,8 +9,11 @@
 #   · apply: each move is ONE `detach-window --match id:<pane> --target-tab id:<tab>`, then the
 #     apply-layout kitten gets a spec whose pairs are the recorded tree in LIVE window ids; the verdict
 #     is the read-back of `kitty @ ls`, not the kitten's word;
-#   · refusal: an OS window a pane leaves or joins that reads fullscreen, or whose state cannot be
-#     read, stops the run before anything is sent (exit 3) — the 2026-10-15 kitty crash shape;
+#   · guard: immediately before EACH detach-window, bin/kitty-fullscreen-guard is asked about that
+#     pane (--scope pane --tool cc-relayout, --mode refuse unless --exit-fullscreen); only exit 0
+#     sends the move. Any other exit (3 refused, 4 not found, a guard that cannot run) skips that move
+#     alone: the rest proceed, the target tab is laid out without the skipped pane, and the run ends
+#     verdict=partial, exit 3. A dry run never calls the guard (--mode toggle would move windows);
 #   · usage: --to must be a unix: socket (exit 2), and nothing is sent;
 #   · a recorded session that is not live is left out and its sibling takes its place.
 #
@@ -20,19 +23,20 @@
 # beside a shell (22). A and C join through registry rows; B only through its command line, and a
 # decoy registry row from ANOTHER kitty points B at the shell 22.
 #
-# RED-proof: at HEAD~3 (before bc9d782ea) bin/cc-relayout does not exist: run in a scratch copy of
+# RED-proof (guard cases 2b, 3, 4, 5, 6b; 2026-10-15, measured on scratch copies): e44b4883c's
+# cc-relayout (the blanket fullscreen refusal) fails every case but 6 — the probe stub answers
+# nothing, so it refuses the whole plan, dry runs included. With guard() made to return 0 always,
+# exactly 2b, 3, 4, 5 and 6b fail; the other nine stay green.
+# Older RED-proof: at HEAD~3 (before bc9d782ea) bin/cc-relayout does not exist: run in a scratch copy of
 # this tree at that state every case fails at its first `[ "$status" -eq … ]` (status 127, command
-# not found). On a scratch COPY of the current tree with cc-relayout's `if blocked:` turned into
-# `if False:` (the fullscreen/unreadable refusal removed), cases 3, 4, 5 and 5b fail at
-# `[ "$status" -eq 3 ]`: the run goes on, sends detach-window and the kitten, and exits 1 on the
-# read-back. The other cases stay green, so those fail for the intended reason. Case 5b
-# fails on 13993a836's cc-relayout (the window with no platform id was skipped): exit 1, moves sent.
+# not found).
 # Cases 8, 8b and 11 fail on cebafa946's cc-relayout (review 2026-10-15): a stale registry row put
 # session A on the shell pane 22 (plan tree H:0.700(22,…)); a session on two panes was resolved by
 # dict order instead of refused; two recorded shells in one directory both became live pane 13.
 #
-# Hermetic: HOME, TMPDIR, the registry, the pane-spawn log and the swift probe are per-test; kitty
-# and swift are recording stubs; no case talks to a real kitty or reads the real screen.
+# Hermetic: HOME, TMPDIR, the registry, the pane-spawn log, the guard and the swift probe are
+# per-test; kitty, the guard and swift are recording stubs; no case talks to a real kitty or reads
+# the real screen.
 
 setup() {
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd -P)"
@@ -74,28 +78,51 @@ exit 0
 SH
   chmod +x "$CC_TERM_KITTY"
 
-  # swift stub: argv is `<probe.swift> <pwid>…`; logs the pwids and prints an 11-field row for each
-  # pwid listed in $SWFS ("<pwid> <fullscreen 0|1>"); a pwid not listed gets no row.
-  export SWLOG="$BATS_TEST_TMPDIR/swift.log" SWFS="$BATS_TEST_TMPDIR/swift.fs"
-  printf '601 0\n602 0\n' > "$SWFS"
+  # guard stub: logs `guard <argv>` into the SAME log as kitty (so order is observable) and exits
+  # with the code $GRC gives its --window ("<wid> <rc>" rows; 0 when not listed). It decides nothing.
+  export GRC="$BATS_TEST_TMPDIR/guard.rc"; : > "$GRC"
+  export CC_FS_GUARD="$BATS_TEST_TMPDIR/guard-stub"
+  cat > "$CC_FS_GUARD" <<'SH'
+#!/bin/bash
+printf 'guard %s\n' "$*" >> "$KLOG"
+rc="$(awk -v w="$2" '$1 == w { print $2 }' "$GRC")"
+[ "${rc:-0}" -eq 0 ] || echo "kitty-fullscreen-guard: refused (stub) kitty window $2" >&2
+exit "${rc:-0}"
+SH
+  chmod +x "$CC_FS_GUARD"
+
+  # swift (the old fullscreen probe) answers nothing: cc-relayout no longer probes, and an old
+  # build that still does refuses here instead of reading the real screen
+  export SWLOG="$BATS_TEST_TMPDIR/swift.log"
   export CC_HB_SWIFT_BIN="$BATS_TEST_TMPDIR/swift-stub"
   cat > "$CC_HB_SWIFT_BIN" <<'SH'
 #!/bin/bash
 shift
 printf '%s\n' "$*" >> "$SWLOG"
-for p in "$@"; do
-  fs="$(awk -v p="$p" '$1 == p { print $2 }' "$SWFS")"
-  if [ -n "$fs" ]; then
-    printf '%s\tFAKE-DISPLAY\t0\t0\t1728\t1117\t%s\t0\t0\t1000\t800\n' "$p" "$fs"
-  fi
-done
 exit 0
 SH
   chmod +x "$CC_HB_SWIFT_BIN"
 }
 
 # every call the stub logged other than `ls` — the calls that would change something
-changes() { grep -v -E "^@ --to $TO ls\$" "$KLOG" || true; }
+changes() { grep -v -E "^(@ --to $TO ls|guard .*)\$" "$KLOG" || true; }
+GUARD_ARGS="--to unix:/tmp/kitty-4242 --scope pane --tool cc-relayout --mode"
+
+# live ls edits: rewrite <file> with python statements over `d` (the ls list)
+ls_edit() { python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+exec(sys.argv[2])
+json.dump(d, open(sys.argv[3] if len(sys.argv) > 3 else sys.argv[1], "w"))' "$@"; }
+
+# B (12) moved out of tab 10 into OS window 3 (platform 603), alone: its move empties that window
+B_ALONE='
+t = d[0]["tabs"][0]
+b = [w for w in t["windows"] if w["id"] == 12][0]
+t["windows"] = [w for w in t["windows"] if w["id"] != 12]
+t["layout_state"]["pairs"] = {"one": 110}
+t["layout_state"]["all_windows"]["window_groups"] = [{"id": 110, "window_ids": [11]}]
+d.append({"id": 3, "platform_window_id": 603, "tabs": [{"id": 30, "layout": "splits", "layout_state": {"class": "Splits", "pairs": {"one": 120}, "all_windows": {"window_groups": [{"id": 120, "window_ids": [12]}]}}, "windows": [b]}]})'
 
 @test "1. dry run prints the plan (registry + cmdline join, decoy ignored) and sends no change" {
   run "$SUBJ" --to "$TO" --tree "$TREE"
@@ -109,14 +136,15 @@ changes() { grep -v -E "^@ --to $TO ls\$" "$KLOG" || true; }
   # the stub log is live (ls was asked), and nothing else was sent
   grep -qxF "@ --to $TO ls" "$KLOG"
   [ -z "$(changes)" ]
-  # the probe was asked about exactly the window C leaves (602) and the one it joins (601)
-  [ "$(cat "$SWLOG")" = "601 602" ]
+  # a dry run asks neither the guard nor the old probe
+  [ "$(grep -c '^guard ' "$KLOG")" -eq 0 ]
+  [ ! -e "$SWLOG" ]
 }
 
 @test "2. --apply: one detach-window, then the kitten with the recorded tree in live ids; static ls reads back mismatch" {
   run "$SUBJ" --to "$TO" --tree "$TREE" --apply
   [ "$status" -eq 1 ]
-  echo "$output" | grep -qxF "cc-relayout: verdict=mismatch moved=1 restarted=0 tabs=1 mismatched=1"
+  echo "$output" | grep -qxF "cc-relayout: verdict=mismatch moved=1 skipped=0 restarted=0 tabs=1 mismatched=1"
   echo "$output" | grep -qE '^cc-relayout: tab rec_os=7 rec_tab=0 live_tab=10 verdict=mismatch \('
   [ "$(changes | wc -l | tr -d ' ')" -eq 2 ]
   [ "$(changes | sed -n 1p)" = "@ --to $TO detach-window --match id:21 --target-tab id:10" ]
@@ -144,55 +172,71 @@ sys.exit(0 if got["pairs"] == want and got["result"] == sys.argv[6] + ".result" 
   [ "${lines[0]}" = '{"bias": 0.7, "one": 11, "two": {"horizontal": false, "one": 12, "two": 21}}' ]
 }
 
-@test "2b. --apply: a read-back that matches the record is verdict=ok, exit 0" {
+@test "2b. a move the guard passes (its answer for a non-last pane, fullscreen or not) is sent right after the guard call; read-back ok, exit 0" {
   cp "$FIXD/live-ls-after.json" "$KLS.after"
   run "$SUBJ" --to "$TO" --tree "$TREE" --apply
   [ "$status" -eq 0 ]
   echo "$output" | grep -qxF "cc-relayout: tab rec_os=7 rec_tab=0 live_tab=10 verdict=ok"
-  echo "$output" | grep -qxF "cc-relayout: verdict=ok moved=1 restarted=0 tabs=1 mismatched=0"
+  echo "$output" | grep -qxF "cc-relayout: verdict=ok moved=1 skipped=0 restarted=0 tabs=1 mismatched=0"
   [ "$(changes | grep -c -E ' (detach-window|kitten) ')" -eq 2 ]
+  # exactly one guard call, the one line before its detach-window
+  [ "$(grep -c '^guard ' "$KLOG")" -eq 1 ]
+  [ "$(grep -A1 '^guard ' "$KLOG")" = "guard --window 21 $GUARD_ARGS refuse
+@ --to $TO detach-window --match id:21 --target-tab id:10" ]
 }
 
-@test "3. the window a pane LEAVES reads fullscreen: refused, exit 3, nothing sent even with --apply" {
-  printf '601 0\n602 1\n' > "$SWFS"
+@test "3. the last-pane move the guard refuses (rc 3) is skipped; the other move proceeds and the tab is laid out without it" {
+  ls_edit "$KLS" "$B_ALONE"
+  # the read-back once the kitten ran: A and C in tab 10 at the recorded 0.7, B still alone in OS window 3
+  ls_edit "$FIXD/live-ls-after.json" "$B_ALONE"'
+t["layout_state"]["pairs"] = {"bias": 0.7, "one": 110, "two": 210}
+t["layout_state"]["all_windows"]["window_groups"] = [{"id": 110, "window_ids": [11]}, {"id": 210, "window_ids": [21]}]
+t["windows"] = [w for w in t["windows"] if w["id"] != 12] + [w for w in d[0]["tabs"][0]["windows"] if w["id"] == 21]' "$KLS.after"
+  # the dry run marks the move that would empty its window, and asks nobody
+  run "$SUBJ" --to "$TO" --tree "$TREE"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qxF "cc-relayout: plan move pane=12 sid=$SB from tab=30 empties OS window 3 (the guard decides at --apply)"
+  echo "$output" | grep -qxF "cc-relayout: plan move pane=21 sid=$SC from tab=20"
+  [ -z "$(changes)" ]
+  printf '12 3\n' > "$GRC"
   run "$SUBJ" --to "$TO" --tree "$TREE" --apply
   [ "$status" -eq 3 ]
-  echo "$output" | grep -qxF "cc-relayout: refuse: OS window 602 reads fullscreen"
-  [ "$(echo "$output" | grep -c 'refuse: ')" -eq 1 ]
-  echo "$output" | grep -qxF "cc-relayout: verdict=refused moved=0 restarted=0 tabs=1 mismatched=0"
-  [ -z "$(changes)" ]
+  echo "$output" | grep -qF "cc-relayout: skip pane=12 sid=$SB from tab=30: kitty-fullscreen-guard rc 3, it stays where it is (kitty-fullscreen-guard: refused (stub) kitty window 12)"
+  echo "$output" | grep -qxF "cc-relayout: tab rec_os=7 rec_tab=0 live_tab=10 verdict=ok"
+  echo "$output" | grep -qxF "cc-relayout: verdict=partial moved=1 skipped=1 restarted=0 tabs=1 mismatched=0"
+  [ "$(grep -c '^guard ' "$KLOG")" -eq 2 ]
+  [ "$(changes | grep -c ' detach-window ')" -eq 1 ]
+  changes | grep -qxF "@ --to $TO detach-window --match id:21 --target-tab id:10"
+  # the recorded H:0.7(A, V(B, C)) without B: H:0.7(A, C)
+  python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["pairs"] == {"bias": 0.7, "one": 11, "two": 21} else 1)' "$KLOG.spec"
 }
 
-@test "4. the window a pane JOINS reads fullscreen: refused, exit 3, nothing sent even with --apply" {
-  printf '601 1\n602 0\n' > "$SWFS"
+@test "4. guard exit 4 (window not found) skips the move too; the tab is laid out without that pane" {
+  printf '21 4\n' > "$GRC"
+  ls_edit "$KLS" 'd[0]["tabs"][0]["layout_state"]["pairs"]["bias"] = 0.7' "$KLS.after"
   run "$SUBJ" --to "$TO" --tree "$TREE" --apply
   [ "$status" -eq 3 ]
-  echo "$output" | grep -qxF "cc-relayout: refuse: OS window 601 reads fullscreen"
-  [ "$(echo "$output" | grep -c 'refuse: ')" -eq 1 ]
-  echo "$output" | grep -qxF "cc-relayout: verdict=refused moved=0 restarted=0 tabs=1 mismatched=0"
-  [ -z "$(changes)" ]
+  echo "$output" | grep -qF "cc-relayout: skip pane=21 sid=$SC from tab=20: kitty-fullscreen-guard rc 4,"
+  echo "$output" | grep -qxF "cc-relayout: verdict=partial moved=0 skipped=1 restarted=0 tabs=1 mismatched=0"
+  [ "$(changes | grep -c ' detach-window ')" -eq 0 ]
+  python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["pairs"] == {"bias": 0.7, "one": 11, "two": 12} else 1)' "$KLOG.spec"
 }
 
-@test "5. fullscreen state unreadable (probe prints nothing): refused, exit 3, nothing sent" {
-  : > "$SWFS"
+@test "5. a guard that cannot run skips every move: fail closed, nothing moved" {
+  export CC_FS_GUARD="$BATS_TEST_TMPDIR/no-such-guard"
+  ls_edit "$KLS" 'd[0]["tabs"][0]["layout_state"]["pairs"]["bias"] = 0.7' "$KLS.after"
   run "$SUBJ" --to "$TO" --tree "$TREE" --apply
   [ "$status" -eq 3 ]
-  echo "$output" | grep -qxF "cc-relayout: refuse: OS window 601 reads unreadable"
-  echo "$output" | grep -qxF "cc-relayout: refuse: OS window 602 reads unreadable"
-  echo "$output" | grep -qxF "cc-relayout: verdict=refused moved=0 restarted=0 tabs=1 mismatched=0"
-  [ "$(cat "$SWLOG")" = "601 602" ]
-  [ -z "$(changes)" ]
+  echo "$output" | grep -qF "cc-relayout: skip pane=21 sid=$SC from tab=20: kitty-fullscreen-guard rc 3,"
+  echo "$output" | grep -qF "cc-relayout: verdict=partial moved=0 skipped=1 "
+  [ "$(changes | grep -c ' detach-window ')" -eq 0 ]
 }
 
-@test "5b. a window with no platform id cannot be probed: refused, exit 3, nothing sent" {
-  # Regression (2026-10-15 review): the window C leaves had no platform_window_id, was never probed,
-  # and so was never refused — the move went out over a fullscreen state nobody read.
-  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d[1].pop("platform_window_id", None); json.dump(d, open(sys.argv[1], "w"))' "$KLS"
-  run "$SUBJ" --to "$TO" --tree "$TREE" --apply
-  [ "$status" -eq 3 ]
-  echo "$output" | grep -qxF "cc-relayout: refuse: OS window (no platform id) reads unreadable"
-  echo "$output" | grep -qxF "cc-relayout: verdict=refused moved=0 restarted=0 tabs=1 mismatched=0"
-  [ -z "$(changes)" ]
+@test "6b. --exit-fullscreen hands the guard --mode toggle" {
+  run "$SUBJ" --to "$TO" --tree "$TREE" --apply --exit-fullscreen
+  [ "$status" -eq 1 ]                                   # the static ls reads back mismatch
+  grep -qxF "guard --window 21 $GUARD_ARGS toggle" "$KLOG"
+  [ "$(grep -c '^guard ' "$KLOG")" -eq 1 ]
 }
 
 @test "6. --to that is not a unix: socket is a usage error (exit 2) and kitty is never called" {
@@ -211,7 +255,6 @@ sys.exit(0 if got["pairs"] == want and got["result"] == sys.argv[6] + ".result" 
   echo "$output" | grep -qxF "cc-relayout: plan rec_os=7 rec_tab=0 -> tab 10 tree=H:0.700(11,12)"
   [ "$(echo "$output" | grep -c 'plan move ')" -eq 0 ]
   echo "$output" | grep -qxF "cc-relayout: dry run: 0 move(s), 1 tab(s); nothing changed (add --apply)"
-  [ "$(cat "$SWLOG")" = "601" ]
   [ -z "$(changes)" ]
 }
 
@@ -240,7 +283,7 @@ json.dump(d, open(sys.argv[5], "w"))' "$@"; }
   run "$SUBJ" --to "$TO" --tree "$TREE" --apply
   [ "$status" -eq 3 ]
   echo "$output" | grep -qxF "cc-relayout: refuse: session $SA is in more than one pane — which one to move cannot be told"
-  echo "$output" | grep -qxF "cc-relayout: verdict=refused moved=0 restarted=0 tabs=0 mismatched=0"
+  echo "$output" | grep -qxF "cc-relayout: verdict=refused moved=0 skipped=0 restarted=0 tabs=0 mismatched=0"
   [ -z "$(changes)" ]
 }
 
@@ -249,7 +292,7 @@ json.dump(d, open(sys.argv[5], "w"))' "$@"; }
   run "$SUBJ" --to "$TO" --tree "$TREE" --apply
   [ "$status" -eq 1 ]
   echo "$output" | grep -qxF "cc-relayout: pane 21 sid=$SC: process changed or gone"
-  echo "$output" | grep -qxF "cc-relayout: verdict=mismatch moved=1 restarted=1 tabs=1 mismatched=0"
+  echo "$output" | grep -qxF "cc-relayout: verdict=mismatch moved=1 skipped=0 restarted=1 tabs=1 mismatched=0"
 }
 
 @test "10. a pane the record does not know stays in the target tab, to the right of the recorded tree" {

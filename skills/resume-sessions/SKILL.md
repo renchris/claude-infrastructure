@@ -48,8 +48,11 @@ recorded. A clean exit is left out, and its neighbour takes its space without mo
   cc-relayout --to unix:/tmp/kitty-<live pid> --tree <heartbeat dir of the DEAD kitty>/hb.kitty-ls.json           # plan
   cc-relayout --to unix:/tmp/kitty-<live pid> --tree <heartbeat dir of the DEAD kitty>/hb.kitty-ls.json --apply   # move
   ```
-  It refuses if any window involved reads as fullscreen. Removing the last pane of a native-fullscreen
-  window is what crashed kitty 0.48.2 on 2026-10-15, so take the windows out of fullscreen by hand first.
+  It works in the standard one-fullscreen-window-per-Desktop layout: before each pane it removes,
+  `kitty-fullscreen-guard` decides. A move that leaves panes behind proceeds even in fullscreen; a
+  move that would empty a fullscreen window (what crashed kitty 0.48.2 on 2026-10-15) is skipped and
+  reported, and the run ends `verdict=partial`, exit 3. `--apply --exit-fullscreen` lets the guard
+  take such a window out of fullscreen first, so that move proceeds too (operator runs only).
 - **Why this phase exists (2026-10-15).** After the 00:01:27 crash, the recovery followed Phases 1-2
   and the layout section below. It ran `cc-resume-layout.sh --per-window 4`, which groups by project,
   and then a hand-written 2x2 driver once the capacity gate refused at load 41. All 20 sessions came

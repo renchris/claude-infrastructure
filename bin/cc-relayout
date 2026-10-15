@@ -4,6 +4,7 @@ and tab, the same split position (axis, bias, pane order). Panes are MOVED, neve
 
   cc-relayout --to unix:/tmp/kitty-<pid> --tree <dir>/hb.kitty-ls.json            dry run: the plan
   cc-relayout --to unix:/tmp/kitty-<pid> --tree <dir>/hb.kitty-ls.json --apply    do it, then read back
+  … --apply --exit-fullscreen      let the guard take a fullscreen window out of fullscreen (operator runs only)
 
   --tree       a heartbeat kitty tree (scripts/lib/restore-heartbeat.sh) with hb.roster.json beside it;
                after a crash: ~/.claude/autonomy/heartbeat/<boot>/<dead kitty pid>/hb.kitty-ls.json
@@ -22,9 +23,14 @@ HOW, in order:
      (in the live OS window holding most of that recorded window's panes); a tab with none of
      them gets a new tab in that window, or a new OS window, opened on a placeholder pane this
      tool closes again once the panes have arrived;
-  3. REFUSES before moving anything if any OS window a pane leaves or joins reads as fullscreen, or
-     its state cannot be read (hb_display_probe). Removing the last pane of a native-fullscreen
-     window is what crashed kitty 0.48.2 on 2026-10-15 (docs/research/kitty-crash-2026-10-15);
+  3. immediately before EACH pane it removes from a window (a move, or closing a placeholder) it asks
+     bin/kitty-fullscreen-guard (--scope pane), and acts only on exit 0. Removing the last pane of a
+     native-fullscreen window is what crashed kitty 0.48.2 on 2026-10-15
+     (docs/research/kitty-crash-2026-10-15); a move that does not empty its OS window is safe in
+     fullscreen, so the operator's one-fullscreen-window-per-Desktop layout is rearranged in place.
+     --mode refuse by default; --mode toggle only with --exit-fullscreen. A refused move is SKIPPED
+     and reported, its pane stays where it is, and its target tab is laid out without it; a new
+     tab or OS window is opened only once a move into it has passed the guard;
   4. moves with `kitty @ detach-window --match id:<pane> --target-tab id:<tab>`, which keeps the
      process: it is the same Window object re-attached (kitty boss._move_window_to);
   5. sets each target tab's tree exactly with scripts/kitty-apply-layout.py; panes in that tab the
@@ -36,10 +42,11 @@ Panes whose session is not live (a clean exit, not resumed) are left out; the pa
 their order and take the space, as kitty does when a pane closes. Shell panes are never moved; one
 already in a target tab whose working directory matches a recorded shell pane takes that place.
 
-Prints `cc-relayout: plan …` lines, then (with --apply) `cc-relayout: tab …` lines and one
-`cc-relayout: verdict=ok|mismatch|refused moved=N restarted=N tabs=N mismatched=N`.
-Exit: 0 ok (or a clean dry run) · 1 mismatch or a restarted pane · 2 usage · 3 refused (fullscreen,
-unknown fullscreen state, kitty unreachable).
+Prints `cc-relayout: plan …` lines (a dry run asks nobody, so a move that would empty its OS window
+is marked `empties OS window`), then (with --apply) `cc-relayout: skip …` and `cc-relayout: tab …` lines and one
+`cc-relayout: verdict=ok|partial|mismatch|refused moved=N skipped=N restarted=N tabs=N mismatched=N`.
+Exit: 0 ok (or a clean dry run) · 1 mismatch or a restarted pane · 2 usage · 3 refused: wholly
+(kitty unreachable, a session in two panes) or in part (verdict=partial: the guard refused a move).
 """
 import argparse
 import glob
@@ -58,6 +65,7 @@ import kitty_tree as kt  # noqa: E402
 
 KITTY = os.environ.get("CC_TERM_KITTY") or "/Applications/kitty.app/Contents/MacOS/kitty"
 KITTEN = os.path.join(REPO, "scripts", "kitty-apply-layout.py")
+GUARD = os.environ.get("CC_FS_GUARD") or os.path.join(REPO, "bin", "kitty-fullscreen-guard")
 REGISTRY = os.environ.get("CC_REGISTRY_DIR") or os.path.expanduser("~/.claude/cc-registry")
 
 
@@ -192,20 +200,15 @@ def live_sids(data, kitty_pid, wanted):
     return {w: s for w, s in one.items() if s not in dup}, dup
 
 
-def fullscreen(pwids):
-    """{platform window id: '1' | '0' | ''} — hb_display_probe's geometric reading ('' = unreadable)."""
-    lib = os.path.join(LIB, "restore-heartbeat.sh")
+def guard(to, wid, mode):
+    """kitty-fullscreen-guard on removing pane <wid> from its window → (rc, its stderr). Only 0 lets
+    the caller act; anything else (refused, not found, usage, a guard that did not run) skips."""
     try:
-        out = subprocess.run(["/bin/bash", "-c", '. "$1"; shift; hb_display_probe "$@"', "_", lib] + [str(p) for p in pwids],
-                             capture_output=True, text=True, timeout=60).stdout
-    except subprocess.TimeoutExpired:
-        out = ""
-    got = {}
-    for line in out.splitlines():
-        f = line.split("\t")
-        if len(f) == 11:
-            got[f[0]] = f[6]
-    return {str(p): got.get(str(p), "") for p in pwids}
+        r = subprocess.run([GUARD, "--window", str(wid), "--to", to, "--scope", "pane", "--tool", "cc-relayout",
+                            "--mode", mode], capture_output=True, text=True, timeout=60)
+        return r.returncode, ((r.stderr or "").strip().splitlines() or [""])[-1]
+    except (OSError, subprocess.SubprocessError) as e:
+        return 3, str(e)
 
 
 def plan(rec, data, sid_of_wid):
@@ -283,6 +286,8 @@ def main(argv):
     ap.add_argument("--tree", required=True)
     ap.add_argument("--kitty-pid", default="")
     ap.add_argument("--apply", action="store_true")
+    ap.add_argument("--exit-fullscreen", action="store_true",
+                    help="the guard may take a fullscreen window out of fullscreen (--mode toggle)")
     a = ap.parse_args(argv)
     if not a.to.startswith("unix:"):
         die("--to must be a unix: socket address")
@@ -295,7 +300,7 @@ def main(argv):
     if dup:
         for x in dup:
             say("refuse: session %s is in more than one pane — which one to move cannot be told" % x)
-        say("verdict=refused moved=0 restarted=0 tabs=0 mismatched=0")
+        say("verdict=refused moved=0 skipped=0 restarted=0 tabs=0 mismatched=0")
         return 3
     say("record %s: %d tab(s), %d session(s); %d of them live in this kitty" % (a.tree, len(rec), len(wanted), len(sid_of_wid)))
     steps = plan(rec, data, sid_of_wid)
@@ -311,61 +316,80 @@ def main(argv):
                 moves.append((w, here, s))
         say("plan rec_os=%s rec_tab=%s -> %s tree=%s" % (
             s["rec_os"], s["rec_tab"], "tab %s" % tgt if isinstance(tgt, int) else "+".join(map(str, tgt)), kt.sig(s["tree"])))
+    # A dry run asks nobody: it marks the moves that would empty their OS window, which the guard
+    # decides at --apply time (fine in a windowed window, skipped in a fullscreen one).
+    panes_in = {}
+    for w in win:
+        panes_in[win[w][0]] = panes_in.get(win[w][0], 0) + 1
     for w, here, s in moves:
-        say("plan move pane=%s sid=%s from tab=%s" % (w, sid_of_wid[w], here))
-    involved = {win[w][1] for w, _, _ in moves}
-    for s in steps:
+        panes_in[win[w][0]] -= 1
         if isinstance(s["target"], int):
-            involved |= {win[w][1] for w in win if win[w][2] == s["target"]}
-        elif s["target"][0] == "new-tab":
-            involved |= {win[w][1] for w in win if win[w][0] == s["target"][1]}
-    fs = fullscreen(sorted(str(p) for p in involved if p)) if involved else {}
-    # a window with no platform id cannot be probed, so it is unreadable, never assumed windowed
-    fs.update({"(no platform id)": "" for p in involved if not p})
-    blocked = sorted(p for p, v in fs.items() if v != "0")
-    if blocked:
-        for p in blocked:
-            say("refuse: OS window %s reads %s" % (p, "fullscreen" if fs[p] == "1" else "unreadable"))
-        say("verdict=refused moved=0 restarted=0 tabs=%d mismatched=0" % len(steps))
-        return 3
+            dest = next(win[x][0] for x in win if win[x][2] == s["target"])
+            panes_in[dest] = panes_in.get(dest, 0) + 1
+        say("plan move pane=%s sid=%s from tab=%s%s" % (
+            w, sid_of_wid[w], here, " empties OS window %s (the guard decides at --apply)" % win[w][0] if not panes_in[win[w][0]] else ""))
     if not a.apply:
         say("dry run: %d move(s), %d tab(s); nothing changed (add --apply)" % (len(moves), len(steps)))
         return 0
 
+    mode = "toggle" if a.exit_fullscreen else "refuse"
     pid_before = {w: win[w][3].get("pid") for w in sid_of_wid}
     tmp = tempfile.mkdtemp(prefix="cc-relayout.")
     placeholders = []
-    moved = 0
+    moved, skipped = 0, set()
     for s in steps:
-        tgt = s["target"]
-        if not isinstance(tgt, int):
-            # a tab to hold them: a placeholder pane opens it, and is closed once they are in
-            if tgt[0] == "new-tab":
-                anchor = next(w for w in sorted(win) if win[w][0] == tgt[1])
-                rc, out, err = k("launch", "--keep-focus", "--type=tab", "--match", "window_id:%d" % anchor, "/bin/sleep", "600")
-                surface = "tab"
-            else:
-                rc, out, err = k("launch", "--keep-focus", "--type=os-window", "/bin/sleep", "600")
-                surface = "os-window"
-            if not out.strip().isdigit():
-                die("could not open a %s for rec_os=%s: %s" % (surface, s["rec_os"], err.strip()), 1)
-            ph = int(out.strip())
-            log_pane_spawn(surface, ph, "cc-relayout placeholder for recorded window %s" % s["rec_os"])
-            placeholders.append(ph)
-            tgt = windows(k.ls())[ph][2]
-            s["target"] = tgt
         for w in kt.leaves(s["tree"]):
-            if w in sid_of_wid and windows(k.ls())[w][2] != tgt:
-                rc, out, err = k("detach-window", "--match", "id:%d" % w, "--target-tab", "id:%d" % tgt)
-                if rc != 0:
-                    say("move pane=%s FAILED: %s" % (w, err.strip()))
+            if w not in sid_of_wid:
+                continue
+            now = windows(k.ls())
+            if w not in now:
+                say("skip pane=%s sid=%s: gone from kitty" % (w, sid_of_wid[w]))
+                skipped.add(w)
+                continue
+            if now[w][2] == s["target"]:
+                continue
+            rc, why = guard(a.to, w, mode)
+            if rc != 0:
+                say("skip pane=%s sid=%s from tab=%s: kitty-fullscreen-guard rc %s, it stays where it is (%s)" % (
+                    w, sid_of_wid[w], now[w][2], rc, why))
+                skipped.add(w)
+                continue
+            tgt = s["target"]
+            if not isinstance(tgt, int):
+                # a tab to hold them, opened only now that one may move: a placeholder pane opens
+                # it, and is closed once they are in
+                if tgt[0] == "new-tab":
+                    anchor = next(x for x in sorted(now) if now[x][0] == tgt[1])
+                    rc, out, err = k("launch", "--keep-focus", "--type=tab", "--match", "window_id:%d" % anchor, "/bin/sleep", "600")
+                    surface = "tab"
                 else:
-                    moved += 1
+                    rc, out, err = k("launch", "--keep-focus", "--type=os-window", "/bin/sleep", "600")
+                    surface = "os-window"
+                if not out.strip().isdigit():
+                    die("could not open a %s for rec_os=%s: %s" % (surface, s["rec_os"], err.strip()), 1)
+                ph = int(out.strip())
+                log_pane_spawn(surface, ph, "cc-relayout placeholder for recorded window %s" % s["rec_os"])
+                placeholders.append(ph)
+                tgt = s["target"] = windows(k.ls())[ph][2]
+            rc, out, err = k("detach-window", "--match", "id:%d" % w, "--target-tab", "id:%d" % tgt)
+            if rc != 0:
+                say("move pane=%s FAILED: %s" % (w, err.strip()))
+            else:
+                moved += 1
+        # what depended on a skipped move: the target tab is laid out without that pane
+        s["tree"] = kt.relabel(s["tree"], lambda x: None if x in skipped else x)
     for ph in placeholders:
+        rc, why = guard(a.to, ph, mode)
+        if rc != 0:
+            say("placeholder pane=%s left open: kitty-fullscreen-guard rc %s (%s)" % (ph, rc, why))
+            continue
         k("close-window", "--match", "id:%d" % ph)
     time.sleep(0.5)
     bad = 0
     for s in steps:
+        if not isinstance(s["target"], int) or s["tree"] is None:
+            say("tab rec_os=%s rec_tab=%s verdict=skipped (none of its panes could move)" % (s["rec_os"], s["rec_tab"]))
+            continue
         ok, d = apply_tree(k, s["target"], s["tree"], k.ls(), tmp)
         bad += 0 if ok else 1
         say("tab rec_os=%s rec_tab=%s live_tab=%s verdict=%s%s" % (
@@ -374,9 +398,10 @@ def main(argv):
     restarted = [w for w in pid_before if after.get(w, (0, 0, 0, {}))[3].get("pid") != pid_before[w]]
     for w in restarted:
         say("pane %s sid=%s: process changed or gone" % (w, sid_of_wid[w]))
-    verdict = "ok" if not bad and not restarted else "mismatch"
-    say("verdict=%s moved=%d restarted=%d tabs=%d mismatched=%d" % (verdict, moved, len(restarted), len(steps), bad))
-    return 0 if verdict == "ok" else 1
+    verdict = "mismatch" if bad or restarted else "partial" if skipped else "ok"
+    say("verdict=%s moved=%d skipped=%d restarted=%d tabs=%d mismatched=%d" % (
+        verdict, moved, len(skipped), len(restarted), len(steps), bad))
+    return {"ok": 0, "partial": 3}.get(verdict, 1)
 
 
 if __name__ == "__main__":
