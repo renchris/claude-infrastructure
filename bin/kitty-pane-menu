@@ -983,8 +983,6 @@ def refocus() -> None:
         pass
 
 
-FULLSCREEN_ALERT = ("This is the last pane of a fullscreen window and it did not leave fullscreen "
-                    "cleanly; leave fullscreen and try again.")
 GUARD_VERDICTS = {0: "safe", 1: "then-failed", 2: "usage", 3: "refused", 4: "window-not-found",
                   127: "guard-unavailable"}
 
@@ -1016,22 +1014,12 @@ def fullscreen_guard(wid: int, scope: str) -> int:
         return 127
 
 
-def alert_fullscreen() -> None:
-    script = (f'display alert "Pane not moved" message "{_as_str(FULLSCREEN_ALERT)}" '
-              'as warning buttons {"OK"} default button "OK"')
-    try:
-        subprocess.run(["osascript", "-e", script], capture_output=True, timeout=120)
-    except (OSError, subprocess.TimeoutExpired):
-        pass
-
-
 def guarded(wid: int, scope: str, result: dict) -> bool:
-    """Run the guard, record its verdict in `result`, alert on a fullscreen refusal."""
+    """Run the guard and record its verdict in `result`. A fullscreen refusal's alert is the
+    guard's own (it names the window and its last state), so this file raises none."""
     rc = fullscreen_guard(wid, scope)
     result["verdict"] = "guard-off" if guard_path() == "off" else GUARD_VERDICTS.get(rc, f"rc-{rc}")
     result["rc"] = rc
-    if rc == 3:
-        alert_fullscreen()
     return rc == 0
 
 

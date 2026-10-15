@@ -350,8 +350,6 @@ def close(ids: list[int]) -> None:
         kitty("close-window", "--match", f"id:{wid}")
 
 
-FULLSCREEN_ALERT = ("This is the last pane of a fullscreen window and it did not leave fullscreen "
-                    "cleanly; leave fullscreen and try again.")
 GUARD_VERDICTS = {0: "safe", 1: "then-failed", 2: "usage", 3: "refused", 4: "window-not-found",
                   127: "guard-unavailable"}
 
@@ -384,16 +382,6 @@ def fullscreen_guard(wid: int, scope: str) -> int:
         return 127
 
 
-def alert_fullscreen() -> None:
-    esc = FULLSCREEN_ALERT.replace("\\", "\\\\").replace('"', '\\"')
-    script = (f'display alert "Pane not closed" message "{esc}" '
-              'as warning buttons {"OK"} default button "OK"')
-    try:
-        subprocess.run(["osascript", "-e", script], capture_output=True, timeout=120)
-    except (OSError, subprocess.TimeoutExpired):
-        pass
-
-
 def guarded_close(ids: list[int], scope: str, osw: dict | None, choice: str) -> None:
     """Intent row, the fullscreen guard as the LAST gate, then close(), then a result row.
 
@@ -406,9 +394,7 @@ def guarded_close(ids: list[int], scope: str, osw: dict | None, choice: str) -> 
     rc = fullscreen_guard(ids[0], "os-window" if scope == "os-window" else "pane")
     verdict = "guard-off" if guard_path() == "off" else GUARD_VERDICTS.get(rc, f"rc-{rc}")
     if rc == 0:
-        close(ids)
-    elif rc == 3:
-        alert_fullscreen()
+        close(ids)  # a fullscreen refusal's alert is the guard's own (window id + last state)
     log_row("kitty-confirm-close", "result", choice=choice, wid=ids[0], verdict=verdict, rc=rc)
 
 

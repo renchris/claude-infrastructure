@@ -107,12 +107,13 @@ rows() { python3 -c 'import json,sys; [print(json.dumps(json.loads(l), sort_keys
   [ "$output" = "1" ] || { cat "$CALLS"; false; }
 }
 
-@test "2 guard rc 3: no detach, the fullscreen alert on screen, result row rc 3" {
+@test "2 guard rc 3: no detach, no second alert from the menu (the guard owns it), result row rc 3" {
   STUB_RC=3 KPG_PICK="destination — 1 pane" run python3 "$BIN/kitty-pane-menu"
   [ "$status" -eq 0 ]
   run grep -c 'detach-window\|layout_action equalize' "$CALLS"
   [ "$output" = "0" ] || { cat "$CALLS"; false; }
-  grep -q 'osascript .*display alert.*last pane of a fullscreen window and it did not leave fullscreen cleanly; leave fullscreen and try again' "$CALLS" || { cat "$CALLS"; false; }
+  run grep -c 'display alert' "$CALLS"
+  [ "$output" = "0" ] || { cat "$CALLS"; false; }
   run rows
   grep -q '"phase": "result".*"rc": 3.*"verdict": "refused"' <<<"$output" || { echo "$output"; false; }
 }
@@ -191,7 +192,7 @@ rows() { python3 -c 'import json,sys; [print(json.dumps(json.loads(l), sort_keys
   [ -n "$g" ] && [ -n "$c" ] && [ -n "$d" ] && [ "$d" -lt "$g" ] && [ "$g" -lt "$c" ] || { cat "$CALLS"; false; }
 }
 
-@test "10 confirm-close not-busy: guard then close; guard rc 3 closes nothing and alerts" {
+@test "10 confirm-close not-busy: guard then close; guard rc 3 closes nothing, no second alert" {
   run python3 "$BIN/kitty-confirm-close" window --window 50
   [ "$status" -eq 0 ]
   g=$(first '^guard --window 50 '); c=$(first 'close-window --match id:50')
@@ -200,7 +201,8 @@ rows() { python3 -c 'import json,sys; [print(json.dumps(json.loads(l), sort_keys
   STUB_RC=3 run python3 "$BIN/kitty-confirm-close" window --window 50
   run grep -c 'close-window' "$CALLS"
   [ "$output" = "0" ] || { cat "$CALLS"; false; }
-  grep -q 'display alert.*leave fullscreen and try again' "$CALLS" || { cat "$CALLS"; false; }
+  run grep -c 'display alert' "$CALLS"
+  [ "$output" = "0" ] || { cat "$CALLS"; false; }
   run rows
   grep -q '"choice": "close-silent".*"phase": "intent"' <<<"${lines[0]}" || { echo "$output"; false; }
   grep -q '"phase": "result".*"rc": 3' <<<"${lines[1]}" || { echo "$output"; false; }
