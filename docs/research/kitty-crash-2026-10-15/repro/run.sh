@@ -1,0 +1,187 @@
+#!/bin/bash
+# run.sh — the 2026-10-15 kitty crash repro matrix, against ONE throwaway kitty that is relaunched
+# only when a trial kills it (a cold kitty start measured ~2 min at load 58, so one kitty per trial
+# would cost hours).
+#
+#   run.sh <reps> <cell>...       cell = action:ctx[:delay_ms[:post[:panes]]]
+#   env: KCR_BFS=1      the destination B is ALSO native fullscreen on its own Space (the incident:
+#                       every OS window was; the move destination a87e was one of them)
+#        KCR_EXTRA=N    N more one-pane native-fullscreen OS windows, created once per kitty
+#        KCR_AFS=0      CONTROL: leave A windowed (never fullscreen) — the same destroy, no transition
+#        KCR_ENV="K=V …" extra environment for the throwaway kitty, e.g. NSZombieEnabled=YES
+#                       MallocScribble=1 — a use-after-free then fails on EVERY occurrence instead
+#                       of only when the freed memory happens to be reused
+#     action  move   detach-window --target-tab   (kitty-pane-menu "Move to <window>")
+#             close  close-window                 (kitty-confirm-close's close)
+#             exit   the pane's child process exits
+#             fsoff-move | fsoff-close  the CANDIDATE GUARD: toggle A's fullscreen off, poll the
+#                    probe until A's window is no longer on a type-4 Space, settle 1 s, then act
+#     ctx     idle   throwaway kitty is the front app, nothing in flight for >= 1.5 s
+#             helper the stand-in helper (probe helper) activates, pops an NSMenu, cancels it,
+#                    exits; the action fires <delay_ms> after it exits
+#             settle like helper, then the GUARD's settle: wait until the throwaway kitty is the
+#                    front app again, plus <delay_ms>, before the action (the candidate fix)
+#     post    none | activate | menu — `activate`: ~100 ms after the action, re-activate the
+#             throwaway kitty by an Apple Event to its PID (what refocus()'s osascript did at .558,
+#             without addressing any app by name). `menu`: the menu's whole tail — equalize_tab_of
+#             (`action --self layout_action equalize`), then the AE activate.
+#     panes   panes in A before the trial (default 1). With 2, the extra pane is closed 1 s before
+#             the action (pane 8 left window 5 shortly before the move).
+#
+# Rows append to $RUN/results.tsv:
+#   ts rep action ctx delay post panes bfs extra crashed rc fs front_before front_at_action kitty_pid ips note
+#
+# SAFETY: every `kitty @` carries --to unix:$SOCK (this run's own socket, never /tmp); the kitty is
+# launched under `env -i`, so no KITTY_LISTEN_ON / KITTY_WINDOW_ID / ITERM_SESSION_ID of the live
+# instance leaks in; the only pids signalled are our own $! kitty (re-checked) and sleeps whose
+# parent is that kitty. No osascript, no `tell application "kitty"`.
+set -u
+RUN="${KCR_RUN:-$HOME/Development/.worktrees/kitty-repro}"
+PROBE="$RUN/probe"
+CONF="$RUN/conf/kitty.conf"
+K=/Applications/kitty.app/Contents/MacOS/kitty
+SOCK="$RUN/k.sock"
+RES="$RUN/results.tsv"
+LOG="$RUN/logs/run-$$.log"
+mkdir -p "$RUN/logs" "$RUN/cache"
+[ -s "$RES" ] || printf 'ts\trep\taction\tctx\tdelay\tpost\tpanes\tbfs\textra\tcrashed\trc\tfs\tfront_before\tfront_at_action\tkitty_pid\tips\tnote\n' > "$RES"
+REPS="$1"; shift
+
+now() { perl -MTime::HiRes=time -e 'printf "%.3f", time'; }
+msleep() { perl -e "select(undef,undef,undef,$1/1000)"; }
+note() { printf '%s %s\n' "$(now)" "$*" >> "$LOG"; }
+KR() { "$K" @ --to "unix:$SOCK" "$@"; }
+py() { /usr/bin/python3 -c "$@"; }
+KPID=""
+
+mine() { [ -n "$KPID" ] && [ "$(ps -o ppid= -p "$KPID" 2>/dev/null | tr -d ' ')" = "$$" ] &&
+         ps -o comm= -p "$KPID" 2>/dev/null | grep -q '/kitty.app/Contents/MacOS/kitty$'; }
+
+launch_kitty() {
+  local kenv=()
+  read -r -a kenv <<<"${KCR_ENV:-}"
+  rm -f "$SOCK"
+  env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+      LANG=en_US.UTF-8 TMPDIR="${TMPDIR:-/tmp}" KITTY_CACHE_DIRECTORY="$RUN/cache" ${kenv[@]+"${kenv[@]}"} \
+      "$K" --config "$CONF" -o allow_remote_control=socket-only -o confirm_os_window_close=0 \
+      --instance-group=kcrash-repro --listen-on "unix:$SOCK" --title kcrash-repro-B /bin/sleep 86400 >> "$LOG" 2>&1 &
+  KPID=$!
+  local t0; t0=$(now)
+  for _ in $(seq 1 1200); do [ -S "$SOCK" ] && KR ls >/dev/null 2>&1 && break; kill -0 "$KPID" 2>/dev/null || break; sleep 0.25; done
+  note "kitty $KPID up after $(perl -e "printf '%.1f', $(now) - $t0") s"
+  [ -S "$SOCK" ] || return 1
+  local b w; b=$(tree | py 'import json,sys; print(json.load(sys.stdin)[0]["tabs"][0]["windows"][0]["id"])')
+  [ "${KCR_BFS:-0}" = 1 ] && make_fs "$b"
+  for _ in $(seq 1 "${KCR_EXTRA:-0}"); do
+    w=$(KR launch --type=os-window --title kcrash-repro-X /bin/sleep 86400 2>>"$LOG"); make_fs "$w"
+  done
+  return 0
+}
+make_fs() { # <kitty window id> -> 0 iff its OS window reads native fullscreen
+  local p i; p=$(pw_of "$1")
+  KR focus-window --match "id:$1" >/dev/null 2>&1
+  KR action --match "id:$1" toggle_fullscreen >/dev/null 2>&1
+  for i in $(seq 1 40); do
+    is_fs "$p" && { sleep 1.5; return 0; }
+    [ "$i" = 16 ] && { KR focus-window --match "id:$1" >/dev/null 2>&1; KR action --match "id:$1" toggle_fullscreen >/dev/null 2>&1; }
+    sleep 0.25
+  done
+  note "make_fs $1 ($p): NOT fullscreen"; return 1
+}
+
+quit_kitty() {
+  mine || return 0
+  for pw in $("$PROBE" fs "$KPID" | awk -F'\t' '$7 ~ /(^|,)4(,|$)/ {print $1}'); do
+    w=$(KR ls 2>/dev/null | py 'import json,sys
+for o in json.load(sys.stdin):
+    if str(o.get("platform_window_id")) == sys.argv[1]: print(o["tabs"][0]["windows"][0]["id"]); break' "$pw")
+    [ -n "$w" ] && KR action --match "id:$w" toggle_fullscreen >/dev/null 2>&1 && sleep 2.5
+  done
+  KR action quit >/dev/null 2>&1
+  for _ in $(seq 1 40); do kill -0 "$KPID" 2>/dev/null || break; sleep 0.25; done
+  mine && kill -KILL "$KPID"
+  wait "$KPID" 2>/dev/null
+  rm -f "$SOCK"
+}
+trap quit_kitty EXIT
+
+tree() { KR ls 2>/dev/null; }
+# B = the first OS window (the launch window) — the persistent move destination. `tree` lists OS
+# windows in creation order, so t[0] is B for the kitty's whole life.
+b_tab() { tree | py 'import json,sys; t=json.load(sys.stdin); print(t[0]["tabs"][0]["id"])'; }
+# close every pane in B except its first, so B never empties
+trim_b() {
+  for w in $(tree | py 'import json,sys
+t=json.load(sys.stdin); ws=[w["id"] for tb in t[0]["tabs"] for w in tb["windows"]]
+print(" ".join(map(str, ws[1:])))'); do KR close-window --match "id:$w" >/dev/null 2>&1; done
+}
+pw_of() { tree | py 'import json,sys
+for o in json.load(sys.stdin):
+    for tb in o["tabs"]:
+        if any(w["id"] == int(sys.argv[1]) for w in tb["windows"]): print(o["platform_window_id"])' "$1"; }
+child_of() { tree | py 'import json,sys
+for o in json.load(sys.stdin):
+    for tb in o["tabs"]:
+        for w in tb["windows"]:
+            if w["id"] == int(sys.argv[1]): print(w.get("pid") or "")' "$1"; }
+is_fs() { "$PROBE" fs "$KPID" | awk -F'\t' -v p="$1" '$1 == p && $7 ~ /(^|,)4(,|$)/ {f=1} END {exit !f}'; }
+
+trial() { # rep action ctx delay post panes
+  local rep="$1" action="$2" ctx="$3" delay="$4" post="$5" panes="$6"
+  local A PWA TABB CHILD EXTRA="" fs=0 fb fa="-" crashed=0 rc="-" ips mark nt=""
+  if ! kill -0 "$KPID" 2>/dev/null; then launch_kitty || { note "launch failed"; return 1; }; fi
+  trim_b; TABB=$(b_tab)
+  A=$(KR launch --type=os-window --title kcrash-repro-A /bin/sleep 86400 2>>"$LOG")
+  PWA=$(pw_of "$A"); CHILD=$(child_of "$A")
+  [ "$panes" = 2 ] && EXTRA=$(KR launch --match "id:$A" --type=window /bin/sleep 86400 2>>"$LOG")
+  if [ "${KCR_AFS:-1}" = 1 ]; then make_fs "$A" && fs=1; else KR focus-window --match "id:$A" >/dev/null 2>&1; sleep 1.5; fi
+  if [ -n "$EXTRA" ]; then KR close-window --match "id:$EXTRA" >/dev/null 2>&1; sleep 1; KR focus-window --match "id:$A" >/dev/null 2>&1; sleep 0.5; fi
+  fb=$("$PROBE" front)
+  mark="$RUN/logs/mark-$$-$rep"; : > "$mark"
+  note "rep=$rep $action/$ctx/$delay/$post/$panes bfs=${KCR_BFS:-0} extra=${KCR_EXTRA:-0} A=$A pwA=$PWA tabB=$TABB child=$CHILD fs=$fs front=$fb"
+  case "$ctx" in
+    idle) ;;
+    helper) "$PROBE" helper 250 300 2>>"$LOG"; [ "$delay" -gt 0 ] && msleep "$delay" ;;
+    settle) "$PROBE" helper 250 300 2>>"$LOG"
+            for _ in $(seq 1 40); do [ "$("$PROBE" front)" = "$KPID" ] && break; msleep 25; done
+            [ "$delay" -gt 0 ] && msleep "$delay" ;;
+  esac
+  case "$action" in
+    fsoff-*) KR action --match "id:$A" toggle_fullscreen >/dev/null 2>&1
+             for _ in $(seq 1 60); do is_fs "$PWA" || break; msleep 100; done
+             is_fs "$PWA" && nt="${nt}still-fs;"; sleep 1; action="${action#fsoff-}"; nt="${nt}fsoff;" ;;
+  esac
+  note "action $action"
+  case "$action" in
+    move)  KR detach-window --match "id:$A" --target-tab "id:$TABB" >>"$LOG" 2>&1 ;;
+    close) KR close-window --match "id:$A" >>"$LOG" 2>&1 ;;
+    exit)  if [ -n "$CHILD" ] && [ "$(ps -o ppid= -p "$CHILD" | tr -d ' ')" = "$KPID" ]; then kill -TERM "$CHILD"; else nt="child-not-ours"; fi ;;
+  esac
+  case "$post" in
+    activate) msleep 100; "$PROBE" activate "$KPID" 2>>"$LOG" ;;
+    menu) KITTY_WINDOW_ID="$A" "$K" @ --to "unix:$SOCK" action --self layout_action equalize >/dev/null 2>&1
+          KR ls >/dev/null 2>&1; "$PROBE" activate "$KPID" 2>>"$LOG" ;;
+  esac
+  fa=$("$PROBE" front)
+  for _ in $(seq 1 12); do kill -0 "$KPID" 2>/dev/null || { crashed=1; break; }; sleep 0.25; done
+  if [ "$crashed" = 1 ]; then wait "$KPID"; rc=$?; sleep 3; fi
+  zl=$(grep -c 'deallocated instance' "$LOG" 2>/dev/null); [ "${zl:-0}" -gt "${ZSEEN:-0}" ] && { nt="${nt}ZOMBIE($(grep 'deallocated instance' "$LOG" | tail -1 | grep -o '\-\[[^]]*\]'));"; ZSEEN=$zl; }
+  ips=$(find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -name 'kitty-*.ips' -newer "$mark" 2>/dev/null | head -1)
+  if [ "$crashed" = 0 ]; then
+    if [ -n "$(pw_of "$A")" ] && [ "$action" != move ]; then nt="${nt}A-still-present"; fi
+    # a leftover fullscreen A (action failed) must leave fullscreen before the next trial
+    if [ -n "$PWA" ] && is_fs "$PWA"; then KR action --match "id:$A" toggle_fullscreen >/dev/null 2>&1; sleep 2.5; KR close-window --match "id:$A" >/dev/null 2>&1; nt="${nt}fs-left"; fi
+  fi
+  rm -f "$mark"
+  note "crashed=$crashed rc=$rc ips=$ips"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%H:%M:%S)" "$rep" "$action" "$ctx" "$delay" "$post" "$panes" "${KCR_BFS:-0}" "${KCR_EXTRA:-0}" \
+    "$crashed" "$rc" "$fs" "$fb" "$fa" "$KPID" "${ips:+${ips##*/}}" "${nt:--}" | tee -a "$RES"
+  sleep 1
+}
+
+for rep in $(seq 1 "$REPS"); do
+  for cell in "$@"; do
+    IFS=: read -r a c d p n <<<"$cell"
+    trial "$rep" "$a" "$c" "${d:-0}" "${p:-none}" "${n:-1}"
+  done
+done
