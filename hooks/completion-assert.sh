@@ -407,6 +407,103 @@ _ca_sw_source() { # → rc 0 with hooks/lib/session-writes.sh loaded · rc 1 no 
   . "$lib" 2>/dev/null || return 1
 }
 
+# ── D1 INPUTS — moved above the ledger (2026-10-15, Wave 4b) ──────────────────────────────────────
+# D1 judges the close TEXT against one disk read, and the text is known here, so whether D1 will
+# need that read is known before the ledger is asked. The read (`cc-backlog list --blocked`, a
+# 10 MB fold) is the largest single cost left in this hook: 2.8 s on a replayed cancelled Stop at
+# load ~50, beside a 1.3 s ledger, and it misses operator-readout's cache exactly when the session
+# has just written the backlog (the store's key moved), which is when D1 matters. It now starts
+# beside the ledger (§ PREFETCH below) and is collected where D1 is judged. The block below is
+# unchanged apart from its position.
+
+# QUOTED SPANS ARE MENTION, NOT USE — FP found 2026-08-01 by this hook firing on the very close
+# that shipped it. D1 and D4 match PROSE: a close that QUOTES a defect is discussing it, not
+# committing it. That close carried a table of the operator's own examples — "two things remain
+# yours" and "Say the word and I'll pick up either" — and both matched, so the guard convicted the
+# change that fixes the thing it names. That is the denylist-blocks-its-own-fix class (MEMORY.md
+# denylist-enumerates-spellings: the same family of guard once denied the commit message describing
+# its own rule). Not hypothetical here — every future review, doc or post-mortem of these four
+# defects re-triggers it, and each costs exactly the round-trip this arm exists to remove.
+#
+# So D1/D4 match a view with backtick, ASCII-double-quoted and curly-quoted spans REMOVED. D2
+# already did this for inline-backtick command mentions; this extends the same rule to the two
+# prose arms. It cannot launder a REAL handoff: a genuine "two things remain yours" is written as
+# a bare statement — wrapping it in quotes is precisely what marks it as a citation.
+# D3 is deliberately NOT stripped: it scopes to line 1, where a quoted verdict is still the verdict.
+# shellcheck disable=SC2016  # the backticks are LITERAL markdown being stripped, not a subshell —
+# single quotes are exactly right here, and double-quoting would make shellcheck's suggestion true.
+MSG_UNQ="$(printf '%s' "$MSG" | sed -E 's/`[^`]*`//g; s/"[^"]*"//g; s/“[^“”]*”//g' 2>/dev/null || true)"
+[ -n "$MSG_UNQ" ] || MSG_UNQ="$MSG"     # a strip that ate everything ⇒ fall back, never a silent 0
+
+# D1 — the close hands the operator work in a sentence, and nothing on disk records it.
+#   The disk oracle is `cc-backlog list --blocked --json` filtered on THIS session: a peer-filed
+#   `cc-backlog needs "<step>"` lands a blocked item carrying `.session`, and THAT is what
+#   operator-readout.sh can render. Any failure to read ⇒ cannot tell ⇒ d1 stays 0 (fail-open).
+# _ca_blg_cached <list args…> → rc 0 with the backlog fold operator-readout already cached for these
+#   args (its `blg_list_cached`: the store's exact (mtime,size) key, no TTL), rc 1 on a miss.
+#   READ-ONLY — a miss falls through to the bounded live call below, unchanged. The live call re-folds
+#   the whole 10 MB store (2.1 s on a replayed Stop, and its 5 s bound fired on another), while
+#   operator-readout runs at the same Stop and keeps this entry warm. The key is built exactly as
+#   operator-readout.sh builds it; tests/completion-assert-durations.bats fills an entry with that
+#   function and reads it back here, so the two cannot drift apart unseen. A stubbed binary
+#   (CC_BACKLOG_BIN) is never served from the shared cache, as in wrap-ledger.sh's `auto` mode.
+_ca_blg_cached() {
+  [ -z "${CC_BACKLOG_BIN:-}" ] || return 1
+  local f="${CC_BACKLOG_FILE:-$HOME/.claude/autonomy/backlog.jsonl}" dir key out
+  dir="${CC_ORB_BLG_CACHE_DIR:-${TMPDIR:-/tmp}/cc-orb-blg-cache.$UID}"
+  key="$(stat -f '%m-%z' "$f" 2>/dev/null)" || return 1
+  [ -n "$key" ] || return 1
+  key="$key-$f-$*"; key="${key//[^A-Za-z0-9._-]/_}"
+  out="$dir/$key"
+  [ -s "$out" ] || return 1
+  cat "$out" 2>/dev/null
+}
+CA_HANDOFF='remains? yours|are yours|is yours|on your (end|side)|you.?ll need to|you will need to|requires your|needs your|still needs (a|the|your|to be)|left (to|for) you|for you to (run|do)|keep an eye on|worth (watching|keeping)|i.?d recommend you|up to you|your call to|manual step'
+#   NEGATED HANDOFFS ARE THE OPPOSITE OF A HANDOFF (FP #3 of this family, 2026-08-01). The close
+#   "✅ … nothing for you to run" was BLOCKED: `for you to run` matched, and the matcher cannot see
+#   the `nothing` two words to its left. The sentence asserts there is nothing to hand over — the
+#   exact state the arm wants — so convicting it inverts the guard. Same shape as the quoted-span
+#   FP and the placeholder FP before it: a phrase matcher reading a fragment, blind to the
+#   operator that governs it.
+#   Negated occurrences are DELETED before the match, the technique D4 already uses on its offer
+#   lines. Lowercased first because BSD sed has no case-insensitive flag, and the test is a
+#   boolean so the fold costs nothing.
+CA_NEG='(nothing|none|no|not|never|zero)[[:space:]]+([a-z]{1,10}[[:space:]]+){0,2}('"$CA_HANDOFF"')'
+CA_D1SRC="$(printf '%s' "$MSG_UNQ" | tr '[:upper:]' '[:lower:]' | sed -E "s/$CA_NEG//g" 2>/dev/null || true)"
+[ -n "$CA_D1SRC" ] || CA_D1SRC="$(printf '%s' "$MSG_UNQ" | tr '[:upper:]' '[:lower:]')"
+CA_D1_WANT=0; CCB=""; BJ=""; brc=1
+if printf '%s' "$CA_D1SRC" | grep -iqE "$CA_HANDOFF"; then
+  CA_D1_WANT=1
+  CCB="${CC_BACKLOG_BIN:-}"
+  if [ -z "$CCB" ]; then
+    for cand in "$_ca_d0/../bin/cc-backlog" "$CFG/bin/cc-backlog" "$HOME/.claude/bin/cc-backlog"; do
+      [ -x "$cand" ] && { CCB="$cand"; break; }
+    done
+  fi
+fi
+# _ca_d1_read → D1's disk read, printed, with its rc: the warm shared entry (rc 0), else the bounded
+#   live fold (its own rc). The same calls, in the same order, as when they were inline at D1.
+_ca_d1_read() {
+  local c
+  if c="$(_ca_blg_cached --blocked --json)"; then printf '%s' "$c"; return 0; fi
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 5 "$CCB" list --blocked --json 2>/dev/null; return $?
+  fi
+  "$CCB" list --blocked --json 2>/dev/null
+}
+# _ca_d1_collect → waits for the prefetched read and sets BJ/brc from it exactly as the inline
+#   `BJ="$(_ca_d1_read)"; brc=$?` would: `$( )` strips trailing newlines, so the file read does too.
+#   A missing rc file (the job died before writing it) is rc 1: cannot tell ⇒ d1 stays 0, as before.
+_ca_d1_pid=""; _ca_d1_f=""
+_ca_d1_collect() {
+  [ -n "$_ca_d1_pid" ] || return 0
+  wait "$_ca_d1_pid" 2>/dev/null
+  _ca_d1_pid=""
+  BJ="$(cat "$_ca_d1_f" 2>/dev/null)"
+  brc="$(cat "$_ca_d1_f.rc" 2>/dev/null)"
+  case "$brc" in ''|*[!0-9]*) brc=1 ;; esac
+}
+
 # ── Ledger contradiction from LIVE reads (the ground-truth discriminator). ──
 WRAP="${WRAP_LEDGER_BIN:-}"
 if [ -z "$WRAP" ]; then
@@ -443,13 +540,36 @@ if [ "${CC_CA_PREFETCH:-on}" != off ] && _ca_sw_source && command -v sw_porcelai
    && sw_run_memo_init; then
   sw_porcelain_prefetch "$CWD" && _ca_pf_pid="$_SW_PREFETCH_PID"
 fi
-if [ -n "$SID" ] && [ "$SID" != "?" ]; then
+# D1's read starts here too, into the run memo, when D1 will need it (§ D1 INPUTS). It is collected
+# at D1, or before either abstain below, so nothing outlives the hook. Without a run memo it stays
+# inline at D1, as before. Kill switch: CC_CA_D1_PREFETCH=off.
+if [ "$CA_D1_WANT" = 1 ] && [ -n "$CCB" ] && [ -x "$CCB" ] && [ "${CC_CA_D1_PREFETCH:-on}" != off ] \
+   && [ -n "${SW_RUN_MEMO:-}" ] && [ -d "$SW_RUN_MEMO" ]; then
+  _ca_d1_f="$SW_RUN_MEMO/ca-d1-blocked"
+  ( _ca_d1_read > "$_ca_d1_f"; printf '%s\n' "$?" > "$_ca_d1_f.rc" ) 2>/dev/null &
+  _ca_d1_pid=$!
+fi
+# THE SHARED LEDGER (2026-10-15, Wave 4b). wrap-ledger resolves the session as --session >
+# WRAP_SESSION_ID > CLAUDE_SESSION_ID > CLAUDE_CODE_SESSION_ID, and its memo key carries the flag.
+# Claude Code exports CLAUDE_CODE_SESSION_ID to its hooks, so session-continue and boundary-handoff
+# (no flag) already get this Stop's session from the environment and share one single-flight
+# ledger; the flag put this hook on a key of its own and made it a third cold computation beside
+# theirs. Measured 2026-10-15 in the memo dir: per Stop, the flag-keyed and env-keyed ledgers
+# differ only in the *_SRC labels (and BUSY, which neither computes), and this hook reads no *_SRC
+# field. So when the environment already resolves to $SID the flag is dropped and the hook joins
+# their key; any other environment keeps the flag, exactly as before. Kill switch:
+# CC_CA_SHARED_LEDGER=off.
+_ca_envsid="${WRAP_SESSION_ID:-}"
+[ -n "$_ca_envsid" ] || _ca_envsid="${CLAUDE_SESSION_ID:-}"
+[ -n "$_ca_envsid" ] || _ca_envsid="${CLAUDE_CODE_SESSION_ID:-}"
+if [ -n "$SID" ] && [ "$SID" != "?" ] \
+   && { [ "${CC_CA_SHARED_LEDGER:-on}" = off ] || [ "$_ca_envsid" != "$SID" ]; }; then
   LED="$( cd "$CWD" 2>/dev/null && WRAP_BUSY=off bash "$WRAP" --machine --session "$SID" 2>/dev/null || true )"
 else
   LED="$( cd "$CWD" 2>/dev/null && WRAP_BUSY=off bash "$WRAP" --machine 2>/dev/null || true )"
 fi
 [ -n "$_ca_pf_pid" ] && wait "$_ca_pf_pid" 2>/dev/null
-[ -n "$LED" ] || abstain "no-ledger"
+[ -n "$LED" ] || { _ca_d1_collect; abstain "no-ledger"; }
 # The value of the ledger's first `KEY=` line, read in the shell: `grep | head -1 | cut` was three
 # process starts per field, and this hook reads eighteen fields.
 lfield() {
@@ -460,7 +580,7 @@ lfield() {
   return 0
 }
 RUNG="$(lfield RUNG)"
-case "$RUNG" in ''|'?') abstain "ledger-uncomputable" ;; esac
+case "$RUNG" in ''|'?') _ca_d1_collect; abstain "ledger-uncomputable" ;; esac
 DIRTY="$(lfield DIRTY)";     case "$DIRTY" in ''|*[!0-9]*) DIRTY=0 ;; esac
 DIRTY_N="$(lfield DIRTY_N)"; case "$DIRTY_N" in ''|*[!0-9]*) DIRTY_N=0 ;; esac
 UNLANDED="$(lfield UNLANDED)"; case "$UNLANDED" in ''|*[!0-9]*) UNLANDED=0 ;; esac
@@ -1099,75 +1219,15 @@ while IFS= read -r ca_ln || [ -n "$ca_ln" ]; do
   d2=1; break
 done <<< "$MSG"
 
-# QUOTED SPANS ARE MENTION, NOT USE — FP found 2026-08-01 by this hook firing on the very close
-# that shipped it. D1 and D4 match PROSE: a close that QUOTES a defect is discussing it, not
-# committing it. That close carried a table of the operator's own examples — "two things remain
-# yours" and "Say the word and I'll pick up either" — and both matched, so the guard convicted the
-# change that fixes the thing it names. That is the denylist-blocks-its-own-fix class (MEMORY.md
-# denylist-enumerates-spellings: the same family of guard once denied the commit message describing
-# its own rule). Not hypothetical here — every future review, doc or post-mortem of these four
-# defects re-triggers it, and each costs exactly the round-trip this arm exists to remove.
-#
-# So D1/D4 match a view with backtick, ASCII-double-quoted and curly-quoted spans REMOVED. D2
-# already did this for inline-backtick command mentions; this extends the same rule to the two
-# prose arms. It cannot launder a REAL handoff: a genuine "two things remain yours" is written as
-# a bare statement — wrapping it in quotes is precisely what marks it as a citation.
-# D3 is deliberately NOT stripped: it scopes to line 1, where a quoted verdict is still the verdict.
-# shellcheck disable=SC2016  # the backticks are LITERAL markdown being stripped, not a subshell —
-# single quotes are exactly right here, and double-quoting would make shellcheck's suggestion true.
-MSG_UNQ="$(printf '%s' "$MSG" | sed -E 's/`[^`]*`//g; s/"[^"]*"//g; s/“[^“”]*”//g' 2>/dev/null || true)"
-[ -n "$MSG_UNQ" ] || MSG_UNQ="$MSG"     # a strip that ate everything ⇒ fall back, never a silent 0
-
-# D1 — the close hands the operator work in a sentence, and nothing on disk records it.
-#   The disk oracle is `cc-backlog list --blocked --json` filtered on THIS session: a peer-filed
-#   `cc-backlog needs "<step>"` lands a blocked item carrying `.session`, and THAT is what
-#   operator-readout.sh can render. Any failure to read ⇒ cannot tell ⇒ d1 stays 0 (fail-open).
-# _ca_blg_cached <list args…> → rc 0 with the backlog fold operator-readout already cached for these
-#   args (its `blg_list_cached`: the store's exact (mtime,size) key, no TTL), rc 1 on a miss.
-#   READ-ONLY — a miss falls through to the bounded live call below, unchanged. The live call re-folds
-#   the whole 10 MB store (2.1 s on a replayed Stop, and its 5 s bound fired on another), while
-#   operator-readout runs at the same Stop and keeps this entry warm. The key is built exactly as
-#   operator-readout.sh builds it; tests/completion-assert-durations.bats fills an entry with that
-#   function and reads it back here, so the two cannot drift apart unseen. A stubbed binary
-#   (CC_BACKLOG_BIN) is never served from the shared cache, as in wrap-ledger.sh's `auto` mode.
-_ca_blg_cached() {
-  [ -z "${CC_BACKLOG_BIN:-}" ] || return 1
-  local f="${CC_BACKLOG_FILE:-$HOME/.claude/autonomy/backlog.jsonl}" dir key out
-  dir="${CC_ORB_BLG_CACHE_DIR:-${TMPDIR:-/tmp}/cc-orb-blg-cache.$UID}"
-  key="$(stat -f '%m-%z' "$f" 2>/dev/null)" || return 1
-  [ -n "$key" ] || return 1
-  key="$key-$f-$*"; key="${key//[^A-Za-z0-9._-]/_}"
-  out="$dir/$key"
-  [ -s "$out" ] || return 1
-  cat "$out" 2>/dev/null
-}
-CA_HANDOFF='remains? yours|are yours|is yours|on your (end|side)|you.?ll need to|you will need to|requires your|needs your|still needs (a|the|your|to be)|left (to|for) you|for you to (run|do)|keep an eye on|worth (watching|keeping)|i.?d recommend you|up to you|your call to|manual step'
-#   NEGATED HANDOFFS ARE THE OPPOSITE OF A HANDOFF (FP #3 of this family, 2026-08-01). The close
-#   "✅ … nothing for you to run" was BLOCKED: `for you to run` matched, and the matcher cannot see
-#   the `nothing` two words to its left. The sentence asserts there is nothing to hand over — the
-#   exact state the arm wants — so convicting it inverts the guard. Same shape as the quoted-span
-#   FP and the placeholder FP before it: a phrase matcher reading a fragment, blind to the
-#   operator that governs it.
-#   Negated occurrences are DELETED before the match, the technique D4 already uses on its offer
-#   lines. Lowercased first because BSD sed has no case-insensitive flag, and the test is a
-#   boolean so the fold costs nothing.
-CA_NEG='(nothing|none|no|not|never|zero)[[:space:]]+([a-z]{1,10}[[:space:]]+){0,2}('"$CA_HANDOFF"')'
-CA_D1SRC="$(printf '%s' "$MSG_UNQ" | tr '[:upper:]' '[:lower:]' | sed -E "s/$CA_NEG//g" 2>/dev/null || true)"
-[ -n "$CA_D1SRC" ] || CA_D1SRC="$(printf '%s' "$MSG_UNQ" | tr '[:upper:]' '[:lower:]')"
-if printf '%s' "$CA_D1SRC" | grep -iqE "$CA_HANDOFF"; then
-  CCB="${CC_BACKLOG_BIN:-}"
-  if [ -z "$CCB" ]; then
-    for cand in "$_ca_d0/../bin/cc-backlog" "$CFG/bin/cc-backlog" "$HOME/.claude/bin/cc-backlog"; do
-      [ -x "$cand" ] && { CCB="$cand"; break; }
-    done
-  fi
+# D1 — the close hands the operator work in a sentence, and nothing on disk records it. Its inputs
+#   (MSG_UNQ, CA_D1SRC, CA_D1_WANT, CCB) are computed above the ledger, § D1 INPUTS, so its disk
+#   read can run beside the ledger; here it is collected and judged.
+if [ "$CA_D1_WANT" = 1 ]; then
   if [ -n "$CCB" ] && [ -x "$CCB" ]; then
-    if BJ="$(_ca_blg_cached --blocked --json)"; then
-      brc=0
-    elif command -v timeout >/dev/null 2>&1; then
-      BJ="$(timeout 5 "$CCB" list --blocked --json 2>/dev/null)"; brc=$?
+    if [ -n "$_ca_d1_pid" ]; then
+      _ca_d1_collect
     else
-      BJ="$("$CCB" list --blocked --json 2>/dev/null)"; brc=$?
+      BJ="$(_ca_d1_read)"; brc=$?
     fi
     # `[]` (rc 0, valid array, no row for this session) is the ONLY affirmative "not filed".
     if [ "$brc" -eq 0 ] && printf '%s' "$BJ" | jq -e 'type=="array"' >/dev/null 2>&1; then

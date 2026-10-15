@@ -198,3 +198,55 @@ fill_cache() {
   blank; payload "$tp" | stop new stubbed
   ! grep -q 'operator-only step is not an escape hatch' "$SHF_OUT_DIR/stubbed.out"
 }
+
+@test "C4 D1's backlog read runs BESIDE the ledger, not after it (control: CC_CA_D1_PREFETCH=off)" {
+  # 2026-10-15: on a replayed cancelled Stop the cold fold was 2.8 s after a 1.3 s ledger. Both made
+  # slow here by 2 s; serial >= 4 s, overlapped ~2 s, and every arm answers the same.
+  filed_row
+  local tp s e o n arm root sw
+  tp="$(transcript "Landed. You'll need to rotate the key yourself.")"
+  printf '#!/bin/bash\nsleep 2\nexec %q "$@"\n' "$REPO/bin/cc-backlog" > "$BATS_TEST_TMPDIR/slow-backlog"
+  printf '#!/bin/bash\nsleep 2\nexec bash %q "$@"\n' "$REPO/scripts/wrap-ledger.sh" > "$BATS_TEST_TMPDIR/slow-ledger.sh"
+  chmod +x "$BATS_TEST_TMPDIR/slow-backlog"
+  export CC_BACKLOG_BIN="$BATS_TEST_TMPDIR/slow-backlog" WRAP_LEDGER_BIN="$BATS_TEST_TMPDIR/slow-ledger.sh"
+  for arm in old serial new; do
+    root="$REPO"; sw=on; [ "$arm" = old ] && root="$OLD"; [ "$arm" = serial ] && sw=off
+    blank
+    s="$(perl -MTime::HiRes=time -e 'printf "%d", time*1000')"
+    payload "$tp" | TMPDIR="$BATS_TEST_TMPDIR/tmp" CC_CA_D1_PREFETCH="$sw" \
+      /bin/bash "$root/hooks/completion-assert.sh" > "$SHF_OUT_DIR/d$arm.out" 2>/dev/null || true
+    e="$(perl -MTime::HiRes=time -e 'printf "%d", time*1000')"
+    echo $(( e - s )) > "$SHF_OUT_DIR/d$arm.ms"
+  done
+  o="$(cat "$SHF_OUT_DIR/dserial.ms")"; n="$(cat "$SHF_OUT_DIR/dnew.ms")"
+  echo "# backlog + ledger both slow: D1 prefetch off $o ms, on $n ms (pre-change hook $(cat "$SHF_OUT_DIR/dold.ms") ms)" >&3
+  cmp "$SHF_OUT_DIR/dold.out" "$SHF_OUT_DIR/dnew.out"
+  cmp "$SHF_OUT_DIR/dserial.out" "$SHF_OUT_DIR/dnew.out"
+  [ "$o" -ge 4000 ]
+  [ $(( n + 1500 )) -le "$o" ]
+  # nothing outlives the hook: the run memo (and the prefetch file in it) is gone
+  [ -z "$(find "$BATS_TEST_TMPDIR/tmp" -name 'sw-run.*' 2>/dev/null)" ]
+}
+
+@test "C5 the ledger is asked on the SHARED key when the environment already names this session" {
+  # session-continue and boundary-handoff ask without --session; Claude Code exports
+  # CLAUDE_CODE_SESSION_ID, so the flag only put this hook on a memo key of its own.
+  big_dirt
+  local tp; tp="$(transcript 'All done — everything is complete and landed.')"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\nexec bash %q "$@"\n' "$BATS_TEST_TMPDIR/ledger-args" \
+    "$REPO/scripts/wrap-ledger.sh" > "$BATS_TEST_TMPDIR/rec-ledger.sh"
+  export CLAUDE_CODE_SESSION_ID=sidA
+  blank; payload "$tp" | stop old o
+  export WRAP_LEDGER_BIN="$BATS_TEST_TMPDIR/rec-ledger.sh"
+  blank; : > "$BATS_TEST_TMPDIR/ledger-args"; payload "$tp" | stop new n
+  [ "$(cat "$BATS_TEST_TMPDIR/ledger-args")" = "--machine" ]
+  shf_same o n
+  # a different session in the environment, or the kill switch, keeps the flag (the old call)
+  export CLAUDE_CODE_SESSION_ID=sidB
+  blank; : > "$BATS_TEST_TMPDIR/ledger-args"; payload "$tp" | stop new other
+  [ "$(cat "$BATS_TEST_TMPDIR/ledger-args")" = "--machine --session sidA" ]
+  export CLAUDE_CODE_SESSION_ID=sidA CC_CA_SHARED_LEDGER=off
+  blank; : > "$BATS_TEST_TMPDIR/ledger-args"; payload "$tp" | stop new off
+  [ "$(cat "$BATS_TEST_TMPDIR/ledger-args")" = "--machine --session sidA" ]
+  shf_same o off
+}
