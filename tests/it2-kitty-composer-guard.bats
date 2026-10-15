@@ -64,6 +64,10 @@ exit 0
 SH
   chmod +x "$BIN/kitty"
   export CC_TERM_KITTY="$BIN/kitty"
+  # The fullscreen guard (kitty-crash-2026-10-15) is session close's last gate; a stub answering 0
+  # keeps this suite on its own subject (the guard's half is pinned in tests/it2-kitty.bats).
+  printf '#!/bin/bash\nexit 0\n' > "$BIN/fs-guard"; chmod +x "$BIN/fs-guard"
+  export CC_KITTY_FS_GUARD="$BIN/fs-guard"
   export PATH="$BIN:$PATH"
   export KITTY_WINDOW_ID=300
   export CC_KITTY_ARGV_SPAWN=0

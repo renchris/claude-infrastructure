@@ -1474,6 +1474,37 @@ else:
           ;;
       esac
     fi
+    # THE FULLSCREEN GUARD (docs/research/kitty-crash-2026-10-15/README.md § Chosen fix). The very
+    # last gate: closing the last pane of a native-fullscreen OS window destroys that window while it
+    # is still in fullscreen, the precondition of the 2026-10-15 kitty crash. Mode refuse, never
+    # toggle: this actuator's callers run it under 8-10 s timeouts that cannot fit a toggle-and-wait,
+    # and it must not flip a window on a Space the operator may not be looking at. rc 0 = removing
+    # this pane is safe (or does not empty its OS window); anything else, including a guard that is
+    # missing or cannot be exec'd, keeps the pane. CC_KITTY_FS_GUARD=off is the operator kill switch.
+    _fsg="${CC_KITTY_FS_GUARD:-}"
+    if [ "$_fsg" = off ]; then
+      err "CC_KITTY_FS_GUARD=off — fullscreen guard disabled; closing window $SESSION unguarded."
+    else
+      if [ -z "$_fsg" ]; then
+        _fsg="$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/kitty-fullscreen-guard"
+        [ -x "$_fsg" ] || _fsg="$HOME/.claude/bin/kitty-fullscreen-guard"
+      fi
+      if [ ! -x "$_fsg" ]; then
+        err "refusing to close window $SESSION — fullscreen guard not found or not executable: $_fsg"
+        err "Without it nothing can prove this close does not empty a native-fullscreen window."
+        exit 1
+      fi
+      CC_TERM_KITTY="$KITTY_BIN" "$_fsg" --window "$SESSION" \
+        --to "${CC_TERM_KITTY_TO:-${KITTY_LISTEN_ON:-}}" --mode refuse --scope pane --tool it2-kitty
+      _fsrc=$?
+      if [ "$_fsrc" -ne 0 ]; then
+        err "refusing to close window $SESSION — fullscreen guard rc $_fsrc: it is the last pane of a"
+        err "kitty window in native fullscreen (or the window's state could not be read). An autonomous"
+        err "close would destroy that window while still in fullscreen, the 2026-10-15 crash"
+        err "precondition, so the pane stays open. Close it by hand (⌘W or the pane menu, both guarded)."
+        exit 1
+      fi
+    fi
     kt close-window --match "id:$SESSION" || exit 1
     ;;
 

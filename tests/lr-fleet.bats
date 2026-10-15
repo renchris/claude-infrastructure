@@ -1583,6 +1583,61 @@ SH
   [ ! -s "$BATS_TEST_TMPDIR/kitty-close.log" ] || { echo "a close reached the terminal: $(cat "$BATS_TEST_TMPDIR/kitty-close.log")"; false; }
 }
 
+# THE FULLSCREEN GUARD (kitty-crash-2026-10-15). The no-successor-pane close went out as a raw
+# `kitty @ close-window`, which no guard sees; it now goes through the it2 shim's `session close`,
+# whose last gate keeps the last pane of a native-fullscreen window open.
+# RED-proof: against `git show HEAD:scripts/limit-recover/lr-fleet.sh` the rc 3 case fails (the raw
+# close-window reaches the terminal and the guard is never asked).
+husk_close_fixture() { # a complete proof for husk pane 4242 with --yes; the guard stub answers $STUB_RC
+  blocked_tx "$SEC" "$SID"; row 4242 "$SID"; husk_lock
+  printf '{"type":"assistant","timestamp":"2026-09-09T00:52:00.000Z","message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"the successor speaking"}]}}\n' \
+    >> "$TER/projects/$SLUG/$SID.jsonl"
+  mkdir -p "$BATS_TEST_TMPDIR/psbin"
+  cat > "$BATS_TEST_TMPDIR/psbin/ps" <<PS
+#!/bin/bash
+case "\$*" in
+  *command=*) printf '%s\n' " 77721     1 claude --permission-mode auto --resume $SID" ;;
+  *) exec /bin/ps "\$@" ;;
+esac
+PS
+  printf '#!/bin/bash\necho unix:/nonexistent/kitty-fixture\n' > "$BATS_TEST_TMPDIR/kitty-socket"
+  # lists window 4242 until a close-window is recorded, so the fresh-ls read-back sees the effect
+  cat > "$BATS_TEST_TMPDIR/kitty" <<'SH'
+#!/bin/bash
+d="$(dirname "$0")"
+case "$*" in
+  *close-window*) printf '%s\n' "$*" >> "$d/kitty-close.log" ;;
+  *" ls") if [ -e "$d/kitty-close.log" ]; then echo '[]'; else printf '[{"tabs":[{"windows":[{"id":4242}]}]}]\n'; fi ;;
+esac
+SH
+  # shellcheck disable=SC2016  # the stub's $* / ${STUB_RC} expand when the STUB runs
+  printf '#!/bin/bash\necho "$*" >> "%s"\nexit "${STUB_RC:-0}"\n' "$BATS_TEST_TMPDIR/fs-guard.log" > "$BATS_TEST_TMPDIR/fs-guard"
+  chmod +x "$BATS_TEST_TMPDIR/psbin/ps" "$BATS_TEST_TMPDIR/kitty-socket" "$BATS_TEST_TMPDIR/kitty" "$BATS_TEST_TMPDIR/fs-guard"
+}
+husk_close_run() {
+  # CC_CLOSE_COMPOSER_GUARD=off: the shim's composer guard reads get-text, which this kitty does not
+  # serve; that guard is pinned in tests/it2-kitty-composer-guard.bats, not here.
+  PATH="$BATS_TEST_TMPDIR/psbin:$PATH" CC_KITTY_SOCKET_BIN="$BATS_TEST_TMPDIR/kitty-socket" \
+    CC_TERM_KITTY="$BATS_TEST_TMPDIR/kitty" CC_KITTY_FS_GUARD="$BATS_TEST_TMPDIR/fs-guard" \
+    CC_CLOSE_COMPOSER_GUARD=off run bash "$FLEET" --retire-husks --yes
+}
+
+@test "retire-husks: the close goes through the it2 shim, so a fullscreen-guard refusal keeps the husk" {
+  husk_close_fixture
+  STUB_RC=3 husk_close_run
+  grep -q -- '--window 4242 --to unix:/nonexistent/kitty-fixture --mode refuse' "$BATS_TEST_TMPDIR/fs-guard.log" \
+    || { echo "the guard was never asked: $output"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/kitty-close.log" ] || { echo "a close reached the terminal: $(cat "$BATS_TEST_TMPDIR/kitty-close.log")"; false; }
+  [[ "$output" == *"STILL OPEN"* ]] || { echo "$output"; false; }
+}
+
+@test "retire-husks: a guard that says safe lets the shim close the husk, read back as RETIRED" {
+  husk_close_fixture
+  STUB_RC=0 husk_close_run
+  grep -q -- 'close-window --match id:4242' "$BATS_TEST_TMPDIR/kitty-close.log" || { echo "$output"; false; }
+  [[ "$output" == *"RETIRED — window 4242 is gone"* ]] || { echo "$output"; false; }
+}
+
 @test "retire-husks: --pane narrows to one husk and ignores the others" {
   blocked_tx "$SEC" "$SID"; husk_successor_turn; row HUSKP-9x7z "$SID"; husk_lock
   run bash "$FLEET" --retire-husks --pane NOT-THIS-PANE

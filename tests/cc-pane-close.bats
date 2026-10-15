@@ -25,6 +25,9 @@ setup() {
   # shellcheck disable=SC2016
   printf '#!/bin/bash\necho "$*" >> "$FIX/kill.log"\nrm -f "$FIX/lstart.$ROOT"\n' > "$S/kill"
   printf '#!/bin/bash\ncat "$FIX/custody.tsv" 2>/dev/null\n' > "$S/custody"
+  # the fullscreen guard: records its argv, answers $STUB_RC (0 = no window reads fullscreen)
+  printf '#!/bin/bash\necho "$*" >> "$FIX/guard.log"\nexit "${STUB_RC:-0}"\n' > "$S/fs-guard"
+  export CC_KITTY_FS_GUARD="$S/fs-guard"
   chmod +x "$S"/*
   NOW=$(date +%s); K=$((NOW - 36000)); REG=$((NOW - 7200))
   lst 610 "$K"
@@ -50,6 +53,33 @@ plain_no()  { transcript '{"type":"user","cwd":"CWD","message":{"role":"user","c
   [ "$status" -eq 0 ]
   [[ "$output" == *"pane 69: CLOSED"*"retired Agent-Teams member"*"SIGHUP to the window shell (pid 5001)"* ]] || false
   [ "$(cat "$FIX/kill.log")" = "-HUP 5001" ]
+}
+
+# THE FULLSCREEN GUARD (kitty-crash-2026-10-15). With remote control down nothing can count the
+# window's siblings, so a HUP could empty a native-fullscreen OS window — the crash precondition.
+# RED-proof: against `git show HEAD:bin/cc-pane-close` the refusal case sends `-HUP 5001` (fails).
+@test "remote control down + a kitty window reads fullscreen: refused, nothing signalled" {
+  teammate
+  STUB_RC=3 run "$CLOSE" --pane 69
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"pane 69: REFUSED"*"native fullscreen"* ]] || false
+  [ ! -e "$FIX/kill.log" ]
+}
+
+@test "the HUP fallback asks the guard about EVERY window of this kitty, and sends the HUP on rc 0" {
+  teammate
+  STUB_RC=0 run "$CLOSE" --pane 69
+  [ "$status" -eq 0 ]
+  [ "$(cat "$FIX/kill.log")" = "-HUP 5001" ]
+  [ "$(cat "$FIX/guard.log")" = "--any-fs --kitty-pid 610" ]
+}
+
+@test "a fullscreen guard that cannot be found refuses the HUP (fail closed)" {
+  teammate
+  CC_KITTY_FS_GUARD="$BATS_TEST_TMPDIR/no-such-guard" run "$CLOSE" --pane 69
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"REFUSED"*"native fullscreen"* ]] || false
+  [ ! -e "$FIX/kill.log" ]
 }
 
 @test "a still-running claude refuses — nothing is signalled" {

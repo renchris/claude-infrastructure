@@ -2098,15 +2098,24 @@ print("yes" if any(str(x["id"])==w for o in d for t in o["tabs"] for x in t["win
         continue
       fi
       # THE CLOSE. Prefer the sanctioned self-close, which announces into the successor and keeps the
-      # succession legible; the raw close-window is the fallback for a successor with no pane id.
-      hf=""
+      # succession legible; the it2 shim's `session close` is the fallback for a successor with no
+      # pane id. Never a raw `kitty @ close-window`: the shim carries the fullscreen guard
+      # (kitty-crash-2026-10-15), which keeps the last pane of a native-fullscreen window open. The
+      # checkout's bin/it2-kitty first (bin/it2 is install.sh's COPY of bin/it2-wrapper, which execs
+      # it2-kitty under CC_TERM=kitty); no shim at all means no close, and the read-back says so.
+      hf=""; it2=""
+      for c in "$LR/../../bin/it2-kitty" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/it2" "$HOME/.claude/bin/it2"; do
+        [ -x "$c" ] && { it2="$c"; break; }
+      done
       for c in "$(dirname "$0")/../handoff-fire.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/handoff-fire.sh" "$HOME/.claude/scripts/handoff-fire.sh"; do
         [ -x "$c" ] && { hf="$c"; break; }
       done
       if [ -n "$suc_pane" ] && [ -n "$hf" ]; then
         "$hf" self-close --transplanted-source --source-pane "$pane" --source-session "$sid" --successor "$suc_pane" >&2 || true
+      elif [ -n "$it2" ]; then
+        CC_TERM=kitty CC_TERM_KITTY_TO="$sock" "$it2" session close -f -s "$pane" >&2 || true
       else
-        "$kb" @ --to "$sock" close-window --match "id:$pane" >/dev/null 2>&1 || true
+        echo "   no it2 shim found — not closing window $pane by any unguarded path" >&2
       fi
       # READ BACK FROM A FRESH LS. Never the close's own return.
       after="$("$kb" @ --to "$sock" ls 2>/dev/null | W="$pane" /usr/bin/python3 -c 'import json,sys,os

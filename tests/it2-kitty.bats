@@ -41,6 +41,13 @@ setup() {
   # In setup, not per-test: a per-test unset leaves every OTHER test inheriting (rule 1's argument
   # in scripts/test-hermeticity-lint.sh, now enforced there by rule 6).
   unset CC_PANE_CMD CC_PANE_CMD_DIR CC_PANE_CMD_INTERACTIVE
+  # The fullscreen guard (kitty-crash-2026-10-15) gates every close. A stub that logs its argv and
+  # answers $STUB_RC (default 0 = safe), so no close here reaches the real guard's kitten/CGS reads.
+  GUARD_LOG="$BATS_TEST_TMPDIR/fs-guard.log"
+  export CC_KITTY_FS_GUARD="$BATS_TEST_TMPDIR/fs-guard"
+  # shellcheck disable=SC2016  # the stub's $* / ${STUB_RC} expand when the STUB runs
+  printf '#!/bin/bash\necho "$*" >> "%s"\nexit "${STUB_RC:-0}"\n' "$GUARD_LOG" > "$CC_KITTY_FS_GUARD"
+  chmod +x "$CC_KITTY_FS_GUARD"
 }
 
 # A stand-in for `kitty @ … ls`. Three panes across two tabs in one OS window, so a flattening bug
@@ -444,6 +451,59 @@ JSON
   run "$K" session close -f -s 15
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   grep -q -- 'get-text --match id:15' "$CALLS" || { cat "$CALLS"; false; }
+}
+
+# ── THE FULLSCREEN GUARD (kitty-crash-2026-10-15, README § Chosen fix) ──────────────────────────
+# Closing the last pane of a native-fullscreen kitty window destroys that window while still in
+# fullscreen, the crash precondition. `session close` runs the guard in REFUSE mode as its LAST
+# gate. The guard is a stub (setup); these pin the shim's half of the contract.
+# RED-proof: against `git show HEAD:bin/it2-kitty` the rc 3, refuse-mode and missing-guard cases
+# fail (close-window is sent, the guard is never called).
+@test "fullscreen guard rc 3: exit 1, NO close-window, stderr names fullscreen" {
+  fake_kitty_identity
+  id_payload 15 4242 '["claude","--agent-name","m"]'
+  STUB_RC=3 run "$K" session close -f -s 15
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"native fullscreen"* ]] || { echo "$output"; false; }
+  if grep -q -- 'close-window' "$CALLS"; then echo "close sent despite the guard" >&2; false; fi
+}
+
+@test "fullscreen guard rc 0: close-window is sent, and the guard ran in REFUSE mode on this window" {
+  fake_kitty_identity
+  id_payload 15 4242 '["claude","--agent-name","m"]'
+  run "$K" session close -f -s 15
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -q -- 'close-window --match id:15' "$CALLS" || { cat "$CALLS"; false; }
+  [ "$(cat "$GUARD_LOG")" = "--window 15 --to $CC_TERM_KITTY_TO --mode refuse --scope pane --tool it2-kitty" ] \
+    || { cat "$GUARD_LOG"; false; }
+}
+
+@test "fullscreen guard is the LAST gate: a composer refusal never reaches it" {
+  fake_kitty_identity
+  id_payload 15 4242 '["claude","--agent-name","m"]'
+  # get-text now serves a composer holding unsent text, so the composer guard refuses (67).
+  sed -i '' 's/❯\\xc2\\xa0/❯ unsent words/' "$CC_TERM_KITTY"
+  run "$K" session close -f -s 15
+  [ "$status" -eq 67 ] || { echo "$output"; cat "$CC_TERM_KITTY"; false; }
+  [ ! -e "$GUARD_LOG" ] || { echo "guard ran before the composer guard: $(cat "$GUARD_LOG")"; false; }
+}
+
+@test "CC_KITTY_FS_GUARD=off (operator kill switch): closes, with a stderr note" {
+  fake_kitty_identity
+  id_payload 15 4242 '["claude","--agent-name","m"]'
+  CC_KITTY_FS_GUARD=off run "$K" session close -f -s 15
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"CC_KITTY_FS_GUARD=off"* ]] || { echo "$output"; false; }
+  grep -q -- 'close-window --match id:15' "$CALLS" || { cat "$CALLS"; false; }
+}
+
+@test "a missing fullscreen guard refuses the close (fail closed) and names the path" {
+  fake_kitty_identity
+  id_payload 15 4242 '["claude","--agent-name","m"]'
+  CC_KITTY_FS_GUARD="$BATS_TEST_TMPDIR/no-such-guard" run "$K" session close -f -s 15
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"no-such-guard"* ]] || { echo "$output"; false; }
+  if grep -q -- 'close-window' "$CALLS"; then echo "close sent without a guard" >&2; false; fi
 }
 
 # ── DELIVERY MUST PROVE ITS TARGET (backlog d90bbcd9e01f) ────────────────────────────────────────

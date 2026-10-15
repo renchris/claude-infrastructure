@@ -83,6 +83,20 @@ log_row() { # pane verdict reason [sid]
     '{ts:$ts,pane:$p,verdict:$v,reason:$r,sid:$s}' >> "$LOG" 2>/dev/null || true
 }
 refuse() { printf 'pane %s: REFUSED — %s\n' "$1" "$2"; log_row "$1" refused "$2" "${3:-}"; RC=1; }
+# rc 0 = no window of this kitty reads native fullscreen, so a blind SIGHUP cannot empty one.
+# Guard: $CC_KITTY_FS_GUARD (`off` = the operator kill switch), else beside this script, else
+# ~/.claude/bin. A guard that cannot be found, or no kitty pid to ask about, fails CLOSED.
+fs_guard_any_clear() {
+  local g="${CC_KITTY_FS_GUARD:-}"
+  if [ "$g" = off ]; then echo "cc-pane-close: CC_KITTY_FS_GUARD=off — fullscreen guard disabled" >&2; return 0; fi
+  if [ -z "$g" ]; then
+    g="$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/kitty-fullscreen-guard"
+    [ -x "$g" ] || g="$HOME/.claude/bin/kitty-fullscreen-guard"
+  fi
+  [ -x "$g" ] || { echo "cc-pane-close: fullscreen guard not found or not executable: $g" >&2; return 1; }
+  [ -n "$KPID" ] || return 1
+  "$g" --any-fs --kitty-pid "$KPID" >&2
+}
 
 transcript_for() { # sid → path
   local IFS=: s f
@@ -218,6 +232,11 @@ for pane in "${PANES[@]}"; do
   how=""
   if remote_answers && CC_TERM=kitty CC_TERM_KITTY_TO="unix:/tmp/kitty-$KPID" "$IT2" session close -f -s "$pane" --expect-generation "$KPID" >/dev/null 2>&1; then
     how="kitty remote control"
+  elif ! fs_guard_any_clear; then
+    # THE FULLSCREEN GUARD (kitty-crash-2026-10-15). Without remote control nothing here can count
+    # this window's siblings, so a HUP might empty a native-fullscreen OS window — the crash
+    # precondition. Any window reading fullscreen (or an unreadable read) keeps the pane.
+    refuse "$pane" "kitty remote control is down and a kitty window is in native fullscreen (or unreadable); a SIGHUP cannot prove this pane is not the last one of a fullscreen window" "$sid"; continue
   elif "$KILL" -HUP "$shell" 2>/dev/null; then
     how="SIGHUP to the window shell (pid $shell)"
   else
