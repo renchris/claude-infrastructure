@@ -1,7 +1,7 @@
 # kitty crash 2026-10-15 00:01:27 — root-cause investigation
 
 Status: investigation complete (workflow `wf_496e7f13-644`, 6 angles + synthesis + adversarial skeptic); fix NOT yet implemented.
-Status (2026-10-15, phase 2): the guard and every caller landed at `fb3edd4ff` and are live (converged; `~/.claude/bin/kitty-fullscreen-guard` linked); the post-land repro waits on an unlocked screen — see § "Phase 2 landed".
+Status (2026-10-15, phase 2): the guard and every caller landed at `fb3edd4ff` and are live (converged; `~/.claude/bin/kitty-fullscreen-guard` linked); post-land repro (10:37, unlocked screen) 21 trials, 0 crashed, every trial left fullscreen before close — see § "Phase 2 landed".
 Status (2026-10-15, phase 1): precondition reproduced (32/32 unguarded fullscreen destroys close the window while still in fullscreen; the segfault itself 0/32); fix chosen and corrected by a 4-lens adversarial review — see § "Repro and chosen fix" at the end. Phase 2 implements it.
 Evidence copies (outside the repo, survive the /tmp boot wipe): `~/.claude/autonomy/incidents/kitty-crash-2026-10-15/`
 (`.ips`, `unilog-0127.txt` = unified log 23:58–00:02:30, `log.txt` = kitty-script log, `cocoa_window_v0.48.2.m`, `hb.kitty-ls.json`, `workflow-raw-findings.json`).
@@ -412,7 +412,7 @@ Each trial takes over the operator's screen with a native-fullscreen Space for ~
 
 # Phase 2 landed (2026-10-15)
 
-**Result.** The § "Chosen fix" spec landed on `origin/main` at `fb3edd4ff` (19 commits, `34c5b2186`..`fb3edd4ff`), content-verified by `ship-land.sh` (35 paths present and identical) and converged (`CC_DEPLOY_MAX_LAG_COMMITS=0 deploy-live.sh`, live tip `fb3edd4ff`). A 4-lens adversarial review of the diff (workflow `wf_bf440f65-940`, 31 agents, every finding sent to a skeptic) confirmed 24 findings; every high and medium one is fixed in the landed code, the rest are listed under Residuals. The pre-land smoke against a throwaway kitty read LEFT-FULLSCREEN-FIRST on both guarded trials. The post-land matrix could not run: the screen was locked from 02:43, and a locked screen cannot enter native fullscreen (below).
+**Result.** The § "Chosen fix" spec landed on `origin/main` at `fb3edd4ff` (19 commits, `34c5b2186`..`fb3edd4ff`), content-verified by `ship-land.sh` (35 paths present and identical) and converged (`CC_DEPLOY_MAX_LAG_COMMITS=0 deploy-live.sh`, live tip `fb3edd4ff`). A 4-lens adversarial review of the diff (workflow `wf_bf440f65-940`, 31 agents, every finding sent to a skeptic) confirmed 24 findings; every high and medium one is fixed in the landed code, the rest are listed under Residuals. The pre-land smoke against a throwaway kitty read LEFT-FULLSCREEN-FIRST on both guarded trials. The post-land matrix could not run at 03:28 (the screen was locked from 02:43, and a locked screen cannot enter native fullscreen); it ran at 10:37 on an unlocked screen: 21 trials, 0 crashed, every trial left fullscreen before A closed (below).
 
 ## What landed, by spec item
 
@@ -449,6 +449,23 @@ Pre-land smoke (02:13, the branch before the review fixes; same kitten query/tog
 The harness's own quit also left fullscreen first once `quit_kitty` targeted with `--self` (two more windows, −5305 / −2596 ms).
 
 Post-land (03:28, landed code): **not measurable — the screen was locked** (`CGSSessionScreenIsLocked = 1` since 02:43). On a locked screen `toggle_fullscreen` does not take and every window reads offscreen, so all 14 trials ran with A windowed (`fs=0`). What that run does show: 0 crashes, and the guard refused every last-pane trial `refused-unknown` (fail-closed when it cannot read the state). `repro/post-land.sh` runs the full post-land matrix with the review's arms (unfocused / background-Space target, a second display, a destroy during AppKit's automatic fullscreen of a new window, probe rows timestamped, load per trial, `.ips` restricted to the throwaway's pid) and prints the table; it refuses with exit 3 while the screen is locked.
+
+Post-land (10:37–10:40, landed code `fb3edd4ff`, screen unlocked, load 10–14; `repro/post-land.sh` as committed): **21 trials, 0 crashed; every trial left fullscreen before A closed.** The two `unfocus` cells are the guard refusing (rc 3) after focus moved off the target during the wait: A left fullscreen and was **not** closed, which is the fail-closed outcome. The live kitty (pid 44163) was untouched (same pid, uptime unbroken).
+
+| Cell (action/ctx/delay/post/panes) | Display | Trials | Crashed | A fullscreen before | Guard rc | Close order of A |
+|---|---|---|---|---|---|---|
+| guard-move/idle/0/none/1 | 1 | 2 | 0 | 1,1 | 0,0 | LEFT-FULLSCREEN-FIRST −1824; −1831 ms |
+| guard-close/idle/0/none/1 | 1 | 2 | 0 | 1,1 | 0,0 | LEFT-FULLSCREEN-FIRST −1818; −1821 ms |
+| guard-exit/idle/0/none/1 | 1 | 2 | 0 | 1,1 | 0,0 | LEFT-FULLSCREEN-FIRST −1795; −1818 ms |
+| menu-move/idle/0/none/1 | 1 | 2 | 0 | 1,1 | 0,0 | LEFT-FULLSCREEN-FIRST −1729; −1735 ms |
+| menu-new/idle/0/none/1 | 1 | 2 | 0 | 1,1 | 0,0 | LEFT-FULLSCREEN-FIRST −1812; −1813 ms |
+| menu-close/idle/0/none/1 | 1 | 2 | 0 | 1,1 | 0,0 | LEFT-FULLSCREEN-FIRST −1731; −1726 ms |
+| guard-move/unfocus/0/none/1 | 1 | 2 | 0 | 1,1 | 3,3 | refused, A not closed, left fullscreen −2586; −2582 ms |
+| guard-move/idle/0/none/1 | 2 | 1 | 0 | 1 | 0 | LEFT-FULLSCREEN-FIRST −1831 ms |
+| guard-move/unfocus/0/none/1 | 2 | 1 | 0 | 1 | 3 | refused, A not closed, left fullscreen −2582 ms |
+| menu-move/idle/0/none/1 | 2 | 1 | 0 | 1 | 0 | LEFT-FULLSCREEN-FIRST −1734 ms |
+| guard-move/autofs/200/none/1 | 1 | 2 | 0 | auto,auto | 0,0 | LEFT-FULLSCREEN-FIRST −1769; −1821 ms |
+| guard-move/autofs/700/none/1 | 1 | 2 | 0 | auto,auto | 0,0 | LEFT-FULLSCREEN-FIRST −1967; −1829 ms |
 
 Refocus (landed menu, real osascript, 03:34): from a process reparented to launchd — what a background child of a dead kitty is — `refocus()` launched nothing, and an activation lookup of the dead throwaway pid returned nil. The set of kitty processes was the live one alone before and after.
 
