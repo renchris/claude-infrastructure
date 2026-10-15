@@ -522,7 +522,8 @@ fs_env() {
   # the shell a refused exit execs into: it records that the pane was KEPT, then ends the test
   printf '#!/bin/bash\necho kept >> %q\nexit 0\n' "$BATS_TEST_TMPDIR/kept.log" > "$s/keepshell"
   chmod +x "$s"/*
-  export PATH="$s:$(dirname "$(command -v jq)"):/usr/bin:/bin" CC_TERM_KITTY="$s/kitty" CC_KITTY_FS_GUARD="$s/guard"
+  local jqdir; jqdir="$(dirname "$(command -v jq)")"
+  export PATH="$s:$jqdir:/usr/bin:/bin" CC_TERM_KITTY="$s/kitty" CC_KITTY_FS_GUARD="$s/guard"
   export KITTY_WINDOW_ID=77 SHELL="$s/keepshell"
   PTY="$BATS_TEST_TMPDIR/pty_run.py"
   cat > "$PTY" <<'PY'
