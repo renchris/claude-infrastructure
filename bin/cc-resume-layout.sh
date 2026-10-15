@@ -371,7 +371,9 @@ EOF
       hbroot="${CC_HEARTBEAT_DIR:-${HOME:-}/.claude/autonomy/heartbeat}"
       for kp in $(for r in "${ROWS[@]}"; do cell "$r" 8; echo; done | sed -n 's/^k\([0-9][0-9]*\)w[0-9][0-9]*$/\1/p' | sort -u); do
         best=""; bs=-1
-        for f in "$hbroot"/*/"$kp"/hb.kitty-ls.json; do
+        # The crash page's copy in its event outlives the 7-day prune of the heartbeat root.
+        for f in "$hbroot"/*/"$kp"/hb.kitty-ls.json \
+                 "${CC_BOOT_RESUME_STATE_DIR:-${HOME:-}/.claude/autonomy/boot-resume}"/events/*/hb/"$kp"/hb.kitty-ls.json; do
           [ -f "$f" ] || continue
           st="$(head -n 1 "${f%/*}/hb.start" 2>/dev/null | awk '{ print $1 }')"
           case "$st" in ''|*[!0-9]*) st=0 ;; esac
@@ -390,9 +392,12 @@ EOF
       # the 00:01:27 crash, 20 sessions in different pane positions. A row's session id in a
       # heartbeat roster names the tree it was recorded in. Newest tree first; a tree joins only for
       # sessions no tree already chosen holds, so an older arrangement never overrides a newer one.
+      # Only rows with NO group: a grouped row names its kitty, and that kitty's record governs — a
+      # tree marked degraded, or gone, means the plain row layout, never an older arrangement.
       while IFS= read -r f; do
         [ -n "$f" ] && TREES+=("$f")
-      done < <(for r in "${ROWS[@]}"; do cell "$r" 2; echo; done | python3 -c '
+      done < <(for r in "${ROWS[@]}"; do printf '%s\t%s\n' "$(cell "$r" 8)" "$(cell "$r" 2)"; done \
+               | awk -F'\t' '$1 !~ /^k[0-9]+w[0-9]+$/ { print $2 }' | python3 -c '
 import glob, json, os, subprocess, sys
 root, chosen = sys.argv[1], sys.argv[2:]
 want = {l.strip() for l in sys.stdin if l.strip()}
@@ -756,7 +761,7 @@ EOF
       [ -f "$_kl/kitty_tree.py" ] && { KTREE_LIB="$_kl"; break; }
     done
     unset _kl
-    TOPS=""; tree_ok=0; tree_fixed=0; tree_bad=0
+    TOPS=""; tree_ok=0; tree_fixed=0; tree_bad=0; tree_unk=0
     RB_DIR="$(mktemp -d "${TMPDIR:-/tmp}/cc-resume-tree.XXXXXX" 2>/dev/null)" || RB_DIR=""
     # tree_check <ls.json> → prints "ok" | "differs <spec.json>" | "unknown <why>"; the spec holds
     # the planned tree in this tab's window ids, ready for the kitten.
@@ -812,13 +817,15 @@ print("differs %s %s" % (spec_path, "; ".join(d)[:400]))
         note "  [CC-DESK-$cur] tree read-back skipped — scripts/lib/kitty_tree.py or a temp dir is missing"
         return 0
       fi
-      kr ls > "$RB_DIR/ls.json" 2>/dev/null || { note "  [CC-DESK-$cur] tree read-back: kitty @ ls failed"; tree_bad=$((tree_bad + 1)); return 0; }
+      kr ls > "$RB_DIR/ls.json" 2>/dev/null || {
+        tree_unk=$((tree_unk + 1)); note "  [CC-DESK-$cur] tree read-back: kitty @ ls failed"
+        printf 'cc-resume-layout: tree-verify oswin=%s tab=%s verdict=unknown\n' "$cur" "$ctab"; return 0; }
       r="$(tree_check "$RB_DIR/ls.json" "$RB_DIR/spec-$cur-$ctab.json" "$thead")"
       case "$r" in
         ok) tree_ok=$((tree_ok + 1)); note "  [CC-DESK-$cur] tree read back as recorded"
             printf 'cc-resume-layout: tree-verify oswin=%s tab=%s verdict=ok\n' "$cur" "$ctab"; return 0 ;;
         differs*) ;;
-        *) tree_bad=$((tree_bad + 1)); note "  [CC-DESK-$cur] tree read-back: $r"
+        *) tree_unk=$((tree_unk + 1)); note "  [CC-DESK-$cur] tree read-back: $r"
            printf 'cc-resume-layout: tree-verify oswin=%s tab=%s verdict=unknown\n' "$cur" "$ctab"; return 0 ;;
       esac
       spec="$(printf '%s' "$r" | awk '{ print $2 }')"; why="${r#differs * }"
@@ -1047,8 +1054,8 @@ for o in data:
       fi
     done
     # Only a replay prints this line, so the default restore's stdout is still map lines then verdict.
-    [ "${#TREES[@]}" -gt 0 ] && printf 'cc-resume-layout: layout tree_windows=%s shells=%s placed=%s placed_failed=%s tree_ok=%s tree_fixed=%s tree_mismatch=%s\n' \
-      "$NTREE" "$nshell" "$placed" "$place_bad" "$tree_ok" "$tree_fixed" "$tree_bad"
+    [ "${#TREES[@]}" -gt 0 ] && printf 'cc-resume-layout: layout tree_windows=%s shells=%s placed=%s placed_failed=%s tree_ok=%s tree_fixed=%s tree_mismatch=%s tree_unknown=%s\n' \
+      "$NTREE" "$nshell" "$placed" "$place_bad" "$tree_ok" "$tree_fixed" "$tree_bad" "$tree_unk"
     [ -n "$RB_DIR" ] && rm -f "$RB_DIR"/*.json "$RB_DIR"/*.result 2>/dev/null && rmdir "$RB_DIR" 2>/dev/null
 
     # MAYBE rows: restored only with a live holder AND a new SessionStart:resume record.
