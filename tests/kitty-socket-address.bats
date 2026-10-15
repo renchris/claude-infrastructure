@@ -64,6 +64,7 @@ setup() {
   CLOSE="$REPO/bin/kitty-confirm-close"
   MENU="$REPO/bin/kitty-pane-menu"
   URLOPEN="$REPO/bin/cc-url-open"
+  GUARD="$REPO/bin/kitty-fullscreen-guard"   # the fourth copy: a kitty.conf-launched background guard has no KITTY_LISTEN_ON
 
   # The seams the subjects read. A stray value in the developer's env would silently point the whole
   # suite at a real conf or a real socket, which is the one way every case below goes vacuous.
@@ -371,12 +372,12 @@ SHIM
 
 # ── the source anchor ────────────────────────────────────────────────────────────────────────────
 
-@test "REGRESSION ANCHOR: the three copies carry the SAME default and the SAME parse" {
+@test "REGRESSION ANCHOR: every copy carries the SAME default and the SAME parse" {
   # The derivation is duplicated on purpose (see this file's header). Duplication is only safe while
   # the copies agree, and these two constants are exactly the pair that could drift without any
   # behavioural difference ON THIS BOX'S OWN CONF — the shipped listen_on matches the default, so a
   # copy that lost the conf read entirely would still pass every case above on the live machine.
-  for f in "$CLOSE" "$MENU" "$URLOPEN"; do
+  for f in "$CLOSE" "$MENU" "$URLOPEN" "$GUARD"; do
     grep -qF 'DEFAULT_LISTEN_ON = "unix:/tmp/kitty-{kitty_pid}"' "$f" || false
     grep -qF '_LISTEN_ON = re.compile(r"[ \t]*listen_on[ \t]+([^#]*)")' "$f" || false
     grep -qF 'os.environ.get("CC_KITTY_CONF")' "$f" || false

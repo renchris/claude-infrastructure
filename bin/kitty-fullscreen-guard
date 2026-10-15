@@ -1,0 +1,653 @@
+#!/usr/bin/env python3
+"""kitty-fullscreen-guard — the last gate before anything empties a kitty OS window.
+
+WHY THIS EXISTS (docs/research/kitty-crash-2026-10-15/README.md § Chosen fix, lines 337-391)
+    Destroying the last pane of a native-fullscreen kitty window closes the NSWindow while AppKit
+    still holds it in fullscreen — the exact state of the 2026-10-15 crash stack
+    (`_NSExitFullScreenTransitionController dealloc` on an already-closed window). Every destroy
+    path behaves the same (move, close, child exit), so every caller runs this guard immediately
+    before its destructive call, and acts only on exit 0.
+
+USAGE
+    kitty-fullscreen-guard --window <kitty window id> [--to <address>] --mode toggle|refuse
+                           [--scope pane|tab|os-window] [--tool <caller name>]
+                           [--then <kitty action> [action args...]]      # must be the LAST option
+    kitty-fullscreen-guard --any-fs --kitty-pid <pid>
+
+EXIT CODES
+    0  safe to empty the window NOW (or the removal would not empty the OS window at all)
+    1  only with --then: the guard said safe but the follow-up action failed
+    2  usage
+    3  refused — the caller must not act
+    4  the window was not found — the caller must not act either
+
+HOW IT DECIDES
+    1. A no-UI kitten (lib/kitty-fs-kitten.py, `kitty @ kitten --match id:<wid>`) reports whether
+       removing --scope empties the OS window, and its platform_window_id. Not last → exit 0 with
+       no state read.
+    2. The state is read OUTSIDE kitty, from the CGS Space types of that platform window (the same
+       SPI as docs/research/kitty-crash-2026-10-15/repro/probe.swift:18-50): FS = the types include
+       4; WINDOWED = exactly [0] and onscreen; UNKNOWN = anything else. The Space type is not a
+       transition detector (it leaves 4 up to 0.39 s before an exit animation ends and never reads
+       4 during an enter), so "windowed" only counts after it has held for STABLE_S, longer than the
+       longest transition measured (0.90 s).
+    3. --mode refuse (autonomous callers) never toggles. --mode toggle (operator-initiated) toggles
+       an FS window out of fullscreen ONCE — only when it is onscreen, so the operator is never
+       pulled across Spaces — then waits for a stable windowed read, and never toggles again.
+"""
+
+from __future__ import annotations
+
+import glob
+import json
+import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import time
+from typing import Any, NamedTuple
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+try:
+    from kitty_pane_actions import log_row
+except Exception:
+
+    def log_row(*a: Any, **k: Any) -> None:
+        pass
+
+
+TOOL = "kitty-fullscreen-guard"
+SAMPLE_S = 0.1  # poll interval
+STABLE_S = 1.0  # a windowed read counts only after holding this long (> 0.90 s longest transition)
+UNKNOWN_DEADLINE_S = 3.0  # toggle mode, before toggling: UNKNOWN is polled this long, then refused
+AFTER_DEADLINE_S = 8.0  # after the one toggle: stable windowed must arrive by then
+KITTY_CALL_TIMEOUT_S = 5.0
+ALERT_TIMEOUT_S = 60.0
+
+FS, WINDOWED, UNKNOWN = "FS", "WINDOWED", "UNKNOWN"
+SCOPES = ("pane", "tab", "os-window")
+KITTEN = os.path.realpath(
+    os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib", "kitty-fs-kitten.py")
+)
+
+
+class WindowState(NamedTuple):
+    state: str
+    types: list[int] | None
+    onscreen: bool | None
+    bounds: tuple[float, float, float, float] | None
+
+
+class NotFound(Exception):
+    pass
+
+
+class KittenFailed(Exception):
+    pass
+
+
+# ── the control-socket address ───────────────────────────────────────────────────────────────────
+#
+# Copied VERBATIM from bin/kitty-confirm-close (its comment block explains the duplication; this is
+# the fourth copy). Used only when --to and KITTY_LISTEN_ON are both absent — a
+# `launch --type=background` child (the native-binding rebinds in config/kitty.conf) has neither.
+# tests/kitty-socket-address.bats holds the copies' constants in agreement.
+KITTY_PID = "{kitty_pid}"
+DEFAULT_LISTEN_ON = "unix:/tmp/kitty-{kitty_pid}"
+_LISTEN_ON = re.compile(r"[ \t]*listen_on[ \t]+([^#]*)")
+
+
+def kitty_conf() -> str:
+    return os.environ.get("CC_KITTY_CONF") or os.path.expanduser("~/.config/kitty/kitty.conf")
+
+
+def listen_on_template() -> str:
+    tmpl = ""
+    try:
+        with open(kitty_conf(), encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                m = _LISTEN_ON.match(line)
+                if m:
+                    value = "".join(m.group(1).split())
+                    if value:
+                        tmpl = value
+    except OSError:
+        pass
+    return tmpl or DEFAULT_LISTEN_ON
+
+
+def _socket(path: str) -> str | None:
+    try:
+        if stat.S_ISSOCK(os.stat(path).st_mode):
+            return f"unix:{path}"
+    except OSError:
+        pass
+    return None
+
+
+def socket_address() -> str | None:
+    env = os.environ.get("KITTY_LISTEN_ON", "")
+    if env and not env.startswith("fd:"):
+        return env
+
+    tmpl = listen_on_template()
+    if not tmpl.startswith("unix:/"):
+        return tmpl
+
+    path = tmpl[len("unix:") :]
+    found = _socket(path.replace(KITTY_PID, str(os.getppid())))
+    if found:
+        return found
+
+    if KITTY_PID not in path:
+        return None
+
+    shape = re.compile(re.escape(path).replace(re.escape(KITTY_PID), r"\d+"))
+    addrs = [
+        addr
+        for addr in (
+            _socket(p)
+            for p in sorted(glob.glob(path.replace(KITTY_PID, "*")))
+            if shape.fullmatch(p)
+        )
+        if addr
+    ]
+    return addrs[0] if len(addrs) == 1 else None
+
+
+# ── seams: the three things tests replace in-process ─────────────────────────────────────────────
+
+
+def _now() -> float:
+    return time.monotonic()
+
+
+def _sleep(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+def kitty_bin() -> str:
+    return (
+        os.environ.get("CC_TERM_KITTY")
+        or shutil.which("kitty")
+        or "/Applications/kitty.app/Contents/MacOS/kitty"
+    )
+
+
+def _at(addr: str | None) -> list[str]:
+    return [kitty_bin(), "@"] + (["--to", addr] if addr else [])
+
+
+def kitten_query(addr: str | None, wid: int, toggle: bool = False) -> dict[str, Any]:
+    """Ask the kitten about <wid> (and toggle its OS window's fullscreen when asked).
+
+    Raises NotFound for a MatchError (kitty's text: `No matching windows for expression: id:N`,
+    rc/base.py:46) and KittenFailed for anything else that is not one JSON object about <wid>.
+    """
+    cmd = _at(addr) + ["kitten", "--match", f"id:{wid}", KITTEN, "toggle" if toggle else "query"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=KITTY_CALL_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise KittenFailed(f"kitty @ kitten: {e}") from e
+    if r.returncode != 0:
+        if "No matching windows" in (r.stderr or "") + (r.stdout or ""):
+            raise NotFound((r.stderr or "").strip())
+        raise KittenFailed(f"kitty @ kitten rc={r.returncode}: {(r.stderr or '').strip()[:200]}")
+    try:
+        info = json.loads(r.stdout)
+    except (json.JSONDecodeError, TypeError) as e:
+        raise KittenFailed(f"kitten reply is not JSON: {(r.stdout or '')[:200]!r}") from e
+    if not isinstance(info, dict) or "error" in info or info.get("wid") != wid:
+        raise KittenFailed(f"kitten reply unusable: {info!r}"[:300])
+    return info
+
+
+# ── the CGS state read (ctypes, outside kitty) ───────────────────────────────────────────────────
+
+_CG_PATH = "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics"
+_CF_PATH = "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+_kCFNumberSInt64Type = 4
+_kCGWindowListOptionAll = 0
+_kCGWindowListOptionIncludingWindow = 1 << 3
+_SPACE_MASK_ALL = 0x7
+_cgs_cache: Any = None
+
+
+def _cgs() -> Any:
+    """dlopen CoreGraphics + CoreFoundation once and type every call. Raises on any load failure."""
+    global _cgs_cache
+    if _cgs_cache is not None:
+        return _cgs_cache
+    import ctypes as c
+
+    cg, cf = c.CDLL(_CG_PATH), c.CDLL(_CF_PATH)
+    try:
+        conn_fn = cg._CGSDefaultConnection
+    except AttributeError:
+        conn_fn = cg.CGSMainConnectionID
+    conn_fn.restype, conn_fn.argtypes = c.c_int32, []
+    cg.CGSCopySpacesForWindows.restype = c.c_void_p
+    cg.CGSCopySpacesForWindows.argtypes = [c.c_int32, c.c_int32, c.c_void_p]
+    cg.CGSSpaceGetType.restype = c.c_int32
+    cg.CGSSpaceGetType.argtypes = [c.c_int32, c.c_uint64]
+    cg.CGWindowListCopyWindowInfo.restype = c.c_void_p
+    cg.CGWindowListCopyWindowInfo.argtypes = [c.c_uint32, c.c_uint32]
+
+    class CGRect(c.Structure):
+        _fields_ = [("x", c.c_double), ("y", c.c_double), ("w", c.c_double), ("h", c.c_double)]
+
+    cg.CGRectMakeWithDictionaryRepresentation.restype = c.c_bool
+    cg.CGRectMakeWithDictionaryRepresentation.argtypes = [c.c_void_p, c.POINTER(CGRect)]
+    cf.CFNumberCreate.restype = c.c_void_p
+    cf.CFNumberCreate.argtypes = [c.c_void_p, c.c_long, c.c_void_p]
+    cf.CFNumberGetValue.restype = c.c_bool
+    cf.CFNumberGetValue.argtypes = [c.c_void_p, c.c_long, c.c_void_p]
+    cf.CFArrayCreate.restype = c.c_void_p
+    cf.CFArrayCreate.argtypes = [c.c_void_p, c.POINTER(c.c_void_p), c.c_long, c.c_void_p]
+    cf.CFArrayGetCount.restype = c.c_long
+    cf.CFArrayGetCount.argtypes = [c.c_void_p]
+    cf.CFArrayGetValueAtIndex.restype = c.c_void_p
+    cf.CFArrayGetValueAtIndex.argtypes = [c.c_void_p, c.c_long]
+    cf.CFDictionaryGetValue.restype = c.c_void_p
+    cf.CFDictionaryGetValue.argtypes = [c.c_void_p, c.c_void_p]
+    cf.CFBooleanGetValue.restype = c.c_bool
+    cf.CFBooleanGetValue.argtypes = [c.c_void_p]
+    cf.CFRelease.restype, cf.CFRelease.argtypes = None, [c.c_void_p]
+
+    def key(name: str) -> int:
+        return c.c_void_p.in_dll(cg, name).value
+
+    _cgs_cache = {
+        "c": c,
+        "cg": cg,
+        "cf": cf,
+        "conn": conn_fn(),
+        "CGRect": CGRect,
+        "callbacks": c.addressof(c.c_char.in_dll(cf, "kCFTypeArrayCallBacks")),
+        "kOnscreen": key("kCGWindowIsOnscreen"),
+        "kBounds": key("kCGWindowBounds"),
+        "kNumber": key("kCGWindowNumber"),
+        "kPid": key("kCGWindowOwnerPID"),
+        "kLayer": key("kCGWindowLayer"),
+    }
+    return _cgs_cache
+
+
+def _cf_int(L: Any, num: int | None) -> int | None:
+    if not num:
+        return None
+    c = L["c"]
+    out = c.c_int64(0)
+    return out.value if L["cf"].CFNumberGetValue(num, _kCFNumberSInt64Type, c.byref(out)) else None
+
+
+def _space_types(L: Any, pwid: int) -> list[int] | None:
+    """CGSCopySpacesForWindows(conn, 0x7, [pwid]) → each Space's CGSSpaceGetType. None = read failed."""
+    c, cf, cg = L["c"], L["cf"], L["cg"]
+    val = c.c_int64(pwid)
+    num = cf.CFNumberCreate(None, _kCFNumberSInt64Type, c.byref(val))
+    if not num:
+        return None
+    try:
+        vals = (c.c_void_p * 1)(num)
+        arr = cf.CFArrayCreate(None, vals, 1, L["callbacks"])
+        if not arr:
+            return None
+        try:
+            spaces = cg.CGSCopySpacesForWindows(L["conn"], _SPACE_MASK_ALL, arr)
+        finally:
+            cf.CFRelease(arr)
+    finally:
+        cf.CFRelease(num)
+    if not spaces:
+        return None
+    try:
+        types = []
+        for i in range(cf.CFArrayGetCount(spaces)):
+            sid = _cf_int(L, cf.CFArrayGetValueAtIndex(spaces, i))
+            if sid is None:
+                return None
+            types.append(int(cg.CGSSpaceGetType(L["conn"], sid)))
+        return types
+    finally:
+        cf.CFRelease(spaces)
+
+
+def _row_facts(L: Any, row: int) -> tuple[bool, tuple[float, float, float, float] | None]:
+    c, cf, cg = L["c"], L["cf"], L["cg"]
+    on = cf.CFDictionaryGetValue(row, L["kOnscreen"])  # absent when offscreen
+    onscreen = bool(on) and bool(cf.CFBooleanGetValue(on))
+    bounds = None
+    bd = cf.CFDictionaryGetValue(row, L["kBounds"])
+    if bd:
+        rect = L["CGRect"]()
+        if cg.CGRectMakeWithDictionaryRepresentation(bd, c.byref(rect)):
+            bounds = (rect.x, rect.y, rect.w, rect.h)
+    return onscreen, bounds
+
+
+def classify(types: list[int] | None, onscreen: bool | None) -> str:
+    if types and 4 in types:
+        return FS
+    if types == [0] and onscreen:
+        return WINDOWED
+    return UNKNOWN
+
+
+def read_window_state(platform_window_id: Any) -> WindowState:
+    """Three-valued read of one platform window: (state, types, onscreen, bounds). Never raises."""
+    if not isinstance(platform_window_id, int) or isinstance(platform_window_id, bool):
+        return WindowState(UNKNOWN, None, None, None)
+    if platform_window_id <= 0:
+        return WindowState(UNKNOWN, None, None, None)
+    try:
+        L = _cgs()
+        info = L["cg"].CGWindowListCopyWindowInfo(
+            _kCGWindowListOptionIncludingWindow, platform_window_id
+        )
+        if not info:
+            return WindowState(UNKNOWN, None, None, None)
+        try:
+            cf = L["cf"]
+            onscreen, bounds = None, None
+            for i in range(cf.CFArrayGetCount(info)):
+                row = cf.CFArrayGetValueAtIndex(info, i)
+                if _cf_int(L, cf.CFDictionaryGetValue(row, L["kNumber"])) == platform_window_id:
+                    onscreen, bounds = _row_facts(L, row)
+                    break
+        finally:
+            L["cf"].CFRelease(info)
+        if onscreen is None:  # no row for this window
+            return WindowState(UNKNOWN, None, None, None)
+        types = _space_types(L, platform_window_id)
+        return WindowState(classify(types, onscreen), types, onscreen, bounds)
+    except Exception:
+        return WindowState(UNKNOWN, None, None, None)
+
+
+def pid_window_states(pid: int) -> list[tuple[int, WindowState]] | None:
+    """Every layer-0 window taller than 200 px owned by <pid> (probe.swift's filter: kitty's own
+    helper windows are smaller), with its Space types. None = the window list could not be read."""
+    try:
+        L = _cgs()
+        cf = L["cf"]
+        info = L["cg"].CGWindowListCopyWindowInfo(_kCGWindowListOptionAll, 0)
+        if not info:
+            return None
+        rows = []
+        try:
+            for i in range(cf.CFArrayGetCount(info)):
+                row = cf.CFArrayGetValueAtIndex(info, i)
+                if _cf_int(L, cf.CFDictionaryGetValue(row, L["kPid"])) != pid:
+                    continue
+                if _cf_int(L, cf.CFDictionaryGetValue(row, L["kLayer"])) != 0:
+                    continue
+                onscreen, bounds = _row_facts(L, row)
+                if bounds is None or bounds[3] <= 200:
+                    continue
+                num = _cf_int(L, cf.CFDictionaryGetValue(row, L["kNumber"]))
+                rows.append((num, onscreen, bounds))
+        finally:
+            cf.CFRelease(info)
+        out = []
+        for num, onscreen, bounds in rows:
+            types = _space_types(L, num) if num else None
+            out.append((num or 0, WindowState(classify(types, onscreen), types, onscreen, bounds)))
+        return out
+    except Exception:
+        return None
+
+
+# ── the decision ─────────────────────────────────────────────────────────────────────────────────
+
+
+def _alert(wid: int, last: WindowState) -> None:
+    """Toggle-mode refusals only. Strings travel through argv, never into the script text, and
+    nothing names application "kitty" (that LAUNCHES a dead kitty — how it came back at 00:01:28)."""
+    script = [
+        "-e", "on run argv",
+        "-e", "display alert (item 1 of argv) message (item 2 of argv) giving up after 55",
+        "-e", "end run",
+    ]
+    title = "kitty: pane not moved or closed"
+    msg = (
+        f"kitty window {wid} is the last pane of a fullscreen window and it did not leave "
+        f"fullscreen cleanly (last state: {last.state}, Space types {last.types}). "
+        "Leave fullscreen and try again."
+    )
+    try:
+        subprocess.run(
+            ["osascript", *script, title, msg],
+            capture_output=True,
+            timeout=ALERT_TIMEOUT_S,
+        )
+    except Exception:
+        pass
+
+
+def _refuse_mode(pwid: Any) -> tuple[str, WindowState]:
+    start = _now()
+    while True:
+        s = read_window_state(pwid)
+        if s.state != WINDOWED:
+            return ("refused-fs" if s.state == FS else "refused-unknown"), s
+        if _now() - start >= STABLE_S:
+            return "safe-windowed", s
+        _sleep(SAMPLE_S)
+
+
+def _before_toggle(pwid: Any) -> tuple[str, WindowState]:
+    """→ ("safe-windowed" | "toggle" | "refused-not-visible" | "refused-unknown", last read)."""
+    start = _now()
+    since = None
+    while True:
+        s = read_window_state(pwid)
+        t = _now()
+        if s.state == FS:
+            return ("toggle" if s.onscreen else "refused-not-visible"), s
+        if s.state == WINDOWED:
+            since = t if since is None else since
+            if t - since >= STABLE_S:
+                return "safe-windowed", s
+        else:
+            since = None
+            if t - start >= UNKNOWN_DEADLINE_S:
+                return "refused-unknown", s
+        _sleep(SAMPLE_S)
+
+
+def _after_toggle(pwid: Any) -> tuple[str, WindowState]:
+    deadline = _now() + AFTER_DEADLINE_S
+    since, held = None, None
+    while True:
+        s = read_window_state(pwid)
+        t = _now()
+        if s.state == WINDOWED and s.bounds is not None:
+            if since is None or s.bounds != held:
+                since, held = t, s.bounds
+            elif t - since >= STABLE_S:
+                r = read_window_state(pwid)
+                if r.state == WINDOWED and r.bounds == held:
+                    return "safe-after-toggle", r
+                s, since, held = r, None, None
+        else:
+            since, held = None, None
+        if _now() >= deadline:
+            return "refused-timeout", s
+        _sleep(SAMPLE_S)
+
+
+def decide(addr: str | None, wid: int, mode: str, scope: str) -> tuple[int, str, dict, WindowState]:
+    """→ (rc, verdict, kitten info, last state read)."""
+    none = WindowState(UNKNOWN, None, None, None)
+    try:
+        info = kitten_query(addr, wid)
+    except NotFound:
+        return 4, "not-found", {}, none
+    except KittenFailed:
+        return 3, "kitten-failed", {}, none
+    last_for = info.get("last_for") or {}
+    if last_for.get(scope) is False:
+        return 0, "safe-not-last", info, none
+    if last_for.get(scope) is not True:
+        return 3, "kitten-failed", info, none
+    pwid = info.get("platform_window_id")
+
+    if mode == "refuse":
+        verdict, s = _refuse_mode(pwid)
+        return (0 if verdict == "safe-windowed" else 3), verdict, info, s
+
+    verdict, s = _before_toggle(pwid)
+    if verdict != "toggle":
+        return (0 if verdict == "safe-windowed" else 3), verdict, info, s
+    try:
+        toggled = kitten_query(addr, wid, toggle=True)
+    except NotFound:
+        return 4, "not-found", info, s
+    except KittenFailed:
+        return 3, "kitten-failed", info, s
+    entered = toggled.get("toggled_into_fullscreen")
+    if entered is True:
+        # It ENTERED fullscreen: our read said FS but kitty disagreed. Undo exactly that, once.
+        try:
+            kitten_query(addr, wid, toggle=True)
+        except (NotFound, KittenFailed):
+            pass
+        return 3, "refused-entered", info, s
+    if entered is not False:
+        return 3, "kitten-failed", info, s
+    verdict, s = _after_toggle(pwid)
+    return (0 if verdict == "safe-after-toggle" else 3), verdict, info, s
+
+
+def run_then(addr: str | None, wid: int, action: list[str]) -> int:
+    # kitty 0.48.2 IGNORES `action --match` (client sends match_window, server reads match —
+    # rc/action.py:58 vs rc/base.py:381); --self + KITTY_WINDOW_ID is the only exact target.
+    env = dict(os.environ, KITTY_WINDOW_ID=str(wid))
+    try:
+        r = subprocess.run(
+            _at(addr) + ["action", "--self", *action],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=KITTY_CALL_TIMEOUT_S * 2,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"{TOOL}: --then {' '.join(action)} failed: {e}", file=sys.stderr)
+        return 1
+    if r.returncode != 0:
+        print(f"{TOOL}: --then {' '.join(action)} rc={r.returncode}: {r.stderr.strip()}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def any_fs(pid: int) -> int:
+    rows = pid_window_states(pid)
+    if rows is None:
+        verdict, rc, detail = "refused-unknown", 3, "window list unreadable"
+    else:
+        fs = [n for n, s in rows if s.state == FS]
+        # A FAILED read (types None) refuses. An EMPTY Space list does not: a window on no Space
+        # (kitty keeps an ordered-out 500x500 helper window) cannot be in fullscreen, and counting it
+        # would make this refuse on every kitty, forever.
+        bad = [n for n, s in rows if s.state != FS and s.types is None]
+        if fs:
+            verdict, rc, detail = "refused-fs", 3, f"fullscreen windows {fs}"
+        elif bad:
+            verdict, rc, detail = "refused-unknown", 3, f"unreadable windows {bad}"
+        else:
+            verdict, rc, detail = "safe-windowed", 0, f"{len(rows)} windows, none fullscreen"
+    log_row(TOOL, "verdict", mode="any-fs", verdict=verdict, rc=rc, detail=detail, kitty_pid=pid)
+    if rc:
+        print(f"{TOOL}: refused ({verdict}) kitty pid {pid}: {detail}", file=sys.stderr)
+    return rc
+
+
+USAGE = (
+    "usage: kitty-fullscreen-guard --window <id> [--to <address>] --mode toggle|refuse\n"
+    "                              [--scope pane|tab|os-window] [--tool <name>] [--then <action> ...]\n"
+    "       kitty-fullscreen-guard --any-fs --kitty-pid <pid>"
+)
+
+
+def parse(argv: list[str]) -> dict[str, Any] | None:
+    opts: dict[str, Any] = {"scope": "pane", "then": None, "to": None, "tool": None, "mode": None}
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--then":
+            if i + 1 >= len(argv):
+                return None
+            opts["then"] = argv[i + 1 :]
+            break
+        if a == "--any-fs":
+            opts["any_fs"] = True
+            i += 1
+            continue
+        if a in ("--window", "--to", "--mode", "--scope", "--tool", "--kitty-pid"):
+            if i + 1 >= len(argv):
+                return None
+            opts[a[2:].replace("-", "_")] = argv[i + 1]
+            i += 2
+            continue
+        return None
+    if opts.get("any_fs"):
+        try:
+            opts["kitty_pid"] = int(opts.get("kitty_pid") or "")
+        except ValueError:
+            return None
+        return opts if opts["kitty_pid"] > 0 else None
+    try:
+        opts["window"] = int(opts.get("window") or "")
+    except ValueError:
+        return None
+    if opts["window"] <= 0 or opts["mode"] not in ("toggle", "refuse") or opts["scope"] not in SCOPES:
+        return None
+    return opts
+
+
+def main(argv: list[str] | None = None) -> int:
+    opts = parse(sys.argv[1:] if argv is None else argv)
+    if opts is None:
+        print(USAGE, file=sys.stderr)
+        return 2
+    if opts.get("any_fs"):
+        return any_fs(opts["kitty_pid"])
+
+    wid, mode, scope = opts["window"], opts["mode"], opts["scope"]
+    addr = opts["to"] or socket_address()
+    rc, verdict, info, last = decide(addr, wid, mode, scope)
+    log_row(
+        TOOL,
+        "verdict",
+        wid=wid,
+        os_window_id=info.get("os_window_id"),
+        platform_window_id=info.get("platform_window_id"),
+        panes=info.get("panes_in_os_window"),
+        state=last.state if verdict != "safe-not-last" else None,
+        verdict=verdict,
+        rc=rc,
+        mode=mode,
+        scope=scope,
+        caller=opts["tool"],
+    )
+    if rc != 0:
+        print(
+            f"{TOOL}: refused ({verdict}) kitty window {wid} scope={scope} mode={mode}: "
+            f"state={last.state} types={last.types} onscreen={last.onscreen}",
+            file=sys.stderr,
+        )
+        if rc == 3 and mode == "toggle":
+            _alert(wid, last)
+        return rc
+    if opts["then"]:
+        trc = run_then(addr, wid, opts["then"])
+        log_row(TOOL, "result", wid=wid, choice=" ".join(opts["then"]), rc=trc, caller=opts["tool"])
+        return trc
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
