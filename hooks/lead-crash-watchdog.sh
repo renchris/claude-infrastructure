@@ -623,6 +623,70 @@ jetsam_near_death() { # $1=death epoch → 0 iff a JetsamEvent report lies withi
   return 1
 }
 
+# ── a HUP is not a clean exit until something says the terminal survived (incident 2026-10-15) ──────
+# When kitty segfaulted at 05:01:34Z it SIGHUPed every pane; 18 Claude sessions caught the HUP, ran
+# SessionEnd and exited 0, so their close-records read `exit_code 0` + `sig_reached_wrapper HUP`, and
+# step 0's exit-code map filed 17 of the 18 as RECYCLE/clean-exit. But an ordinary ⌘W also HUPs its
+# pane, so a HUP alone proves nothing either way. What separates them is CORROBORATION: a terminal
+# death HUPs many panes in the same second, and kitty leaves a crash report. So:
+#   · >= LCW_HUP_SIBLINGS_MIN (2) OTHER HUP records ending within ±LCW_HUP_SIBLING_WINDOW_S (15) of
+#     this one, or a kitty crash report within ±JETSAM_WINDOW_S (6 min) of the death ⇒ terminal-died;
+#   · neither ⇒ the caller files a silent pane-hangup.
+# The close-records dir holds thousands of files, so siblings are pre-filtered by MTIME (a record is
+# written at its ended_at) inside one bounded find+stat, and only those near the death are opened.
+# The crash-report scan is the jetsam scan's shape, same dirs and same bound. Real names on this
+# fleet are `kitty-YYYY-MM-DD-HHMMSS.ips`; `kitty.*.ips` is matched as well.
+# Seams: CC_CLOSE_RECORDS_DIR · CC_JETSAM_DIRS · LCW_HUP_SIBLINGS_MIN · LCW_HUP_SIBLING_WINDOW_S.
+utc_stamp_epoch() { # $1=YYYY-MM-DDTHH:MM:SSZ → epoch on stdout, nothing if unparseable
+  [[ -n "${1:-}" ]] || return 0
+  TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s 2>/dev/null || date -u -d "$1" +%s 2>/dev/null || true
+}
+
+# hup_corroboration <record-path> <death-epoch> → rc 0 + the evidence as text iff corroborated
+hup_corroboration() {
+  local rec="$1" death="$2" anchor dir out mt f sib n=0 d
+  local win="${LCW_HUP_SIBLING_WINDOW_S:-15}" need="${LCW_HUP_SIBLINGS_MIN:-2}"
+  local pre=$(( ${LCW_HUP_SIBLING_WINDOW_S:-15} + 120 ))   # mtime slack: record write vs its ended_at
+  anchor=$(utc_stamp_epoch "$(close_record_field "$rec" ended_at)")
+  case "$anchor" in ''|*[!0-9]*) anchor="$death" ;; esac
+  case "$anchor" in ''|*[!0-9]*) return 1 ;; esac
+  dir="${CC_CLOSE_RECORDS_DIR:-$HOME/.claude/logs/close-records}"
+  if [[ -n "$LCW_OSA_TB" && -x "$LCW_OSA_TB" ]]; then
+    out=$("$LCW_OSA_TB" -k 3 "${LCW_JETSAM_SCAN_TIMEOUT_S:-10}" find "$dir" -maxdepth 1 -name '*.json' -exec stat -f '%m %N' {} + 2>/dev/null || true)
+  else
+    out=$(find "$dir" -maxdepth 1 -name '*.json' -exec stat -f '%m %N' {} + 2>/dev/null || true)
+  fi
+  while IFS= read -r f; do
+    mt="${f%% *}"; f="${f#* }"
+    case "$mt" in ''|*[!0-9]*) continue ;; esac
+    [[ "$f" != "$rec" ]] || continue
+    d=$(( mt > anchor ? mt - anchor : anchor - mt ))
+    if [[ "$d" -gt "$pre" ]]; then continue; fi
+    if [[ "$(close_record_field "$f" sig_reached_wrapper)" != "HUP" ]]; then continue; fi
+    sib=$(utc_stamp_epoch "$(close_record_field "$f" ended_at)")
+    case "$sib" in ''|*[!0-9]*) continue ;; esac
+    d=$(( sib > anchor ? sib - anchor : anchor - sib ))
+    if [[ "$d" -le "$win" ]]; then n=$(( n + 1 )); fi
+  done <<< "$out"
+  if [[ "$n" -ge "$need" ]]; then printf '%s sibling HUPs within %ss' "$n" "$win"; return 0; fi
+  case "$death" in ''|*[!0-9]*) return 1 ;; esac
+  local jdirs="${CC_JETSAM_DIRS:-/Library/Logs/DiagnosticReports $HOME/Library/Logs/DiagnosticReports}"
+  # shellcheck disable=SC2086  # intentional word-split over space-separated dirs (as jetsam_near_death)
+  if [[ -n "$LCW_OSA_TB" && -x "$LCW_OSA_TB" ]]; then
+    out=$("$LCW_OSA_TB" -k 3 "${LCW_JETSAM_SCAN_TIMEOUT_S:-10}" find $jdirs \( -name 'kitty-*.ips' -o -name 'kitty.*.ips' \) -print 2>/dev/null || true)
+  else
+    out=$(find $jdirs \( -name 'kitty-*.ips' -o -name 'kitty.*.ips' \) -print 2>/dev/null || true)
+  fi
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    mt=$(stat -f%m "$f" 2>/dev/null || stat -c%Y "$f" 2>/dev/null || echo 0)
+    case "$mt" in ''|*[!0-9]*) continue ;; esac
+    d=$(( mt > death ? mt - death : death - mt ))
+    if [[ "$d" -le "$JETSAM_WINDOW_S" ]]; then printf 'a kitty crash report (%s)' "${f##*/}"; return 0; fi
+  done <<< "$out"
+  return 1
+}
+
 # ── when did this session die? — the anchor jetsam attribution is judged against ────────────────────
 # Deliberately NOT parsed from the watchdog log: the daemon writes its "LEAD CRASH detected" lines with a
 # bare `echo` into an already-redirected stdout, so — unlike the hook's log() lines — they carry NO
@@ -691,7 +755,18 @@ classify_death() {
     cr=$(find_close_record "$pid") || cr=""
     if [[ -n "$cr" ]]; then
       ec=$(close_record_field "$cr" exit_code)
-      if cls=$(map_exit_class "$ec"); then
+      # A HUP-reached record does not self-certify through the exit-code map (see hup_corroboration):
+      # 0/130 and 129 (the HUP's own exit) are what a hung-up pane exits with, whether ⌘W or a dead
+      # terminal sent it. 143/137/139 keep their own meaning. The relabels below apply unchanged.
+      local hup_ok=1
+      if [[ "$(close_record_field "$cr" sig_reached_wrapper)" == "HUP" ]]; then
+        case "$ec" in 0|129|130) hup_ok=0 ;; esac
+      fi
+      if [[ "$hup_ok" -eq 0 ]]; then
+        if hup_corroboration "$cr" "$death" >/dev/null; then cls=$'CRASH\tterminal-died'
+        else cls=$'RECYCLE\tpane-hangup'; fi
+      fi
+      if [[ "$hup_ok" -eq 0 ]] || cls=$(map_exit_class "$ec"); then
         # …but a CRASH class here is a claim about a SIGNAL, and a signal cannot tell a deliberate
         # retirement from an OOM kill. cc-teardown's SIGKILL leg produced exit 137 for a session that
         # was collected, landed and returned — see retired_by_desk for the incident. A sanctioned
@@ -1326,6 +1401,12 @@ death_page_line() {
   case "$cause" in
     external-sigterm) what="was KILLED by an external SIGTERM (exit ${ec:-143}, signal ${sig:-15}) — it did NOT exit" ;;
     jetsam-oom)       what="was KILLED by the OOM killer (jetsam)" ;;
+    # The evidence is re-read rather than passed: the record and its ended_at are all it needs.
+    terminal-died)
+      local hcr hev
+      hcr=$(find_close_record "$pid" 2>/dev/null) || hcr=""
+      hev=$(hup_corroboration "$hcr" "$(utc_stamp_epoch "$(close_record_field "$hcr" ended_at)")" 2>/dev/null) || hev=""
+      what="died with its terminal — kitty went away and SIGHUPed every pane (${hev:-sibling HUP deaths or a kitty crash report}) — it did NOT exit on its own" ;;
     # NOT a crash: cc-teardown collected this session and then killed it. The page exists only so a
     # reader who reaches this line by another route is told that, and told not to resume it.
     retired-by-desk)  what="was RETIRED deliberately by cc-teardown after its work was collected — this is NOT a crash" ;;

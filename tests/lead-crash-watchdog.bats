@@ -633,3 +633,96 @@ lw_harness() { # $1=lead-liveness rc (1=gone, 0=alive) ; sets CALLED file
   run bash "$HOOK" --classify s_clean 9151
   [ "$(printf '%s' "$output" | cut -f2)" = "clean-exit" ]
 }
+
+# ── a HUP is not a clean exit until something says the terminal survived (incident 2026-10-15) ──────
+# kitty segfaulted and SIGHUPed every pane; 18 sessions caught the HUP and exited 0, and step 0 filed
+# 17 of 18 as RECYCLE/clean-exit. A ⌘W also HUPs, so a LONE HUP must stay silent (pane-hangup); only a
+# corroborated one (>= 2 sibling HUP records within ±15 s, or a kitty-*.ips within ±6 min) is CRASH.
+# RED-proof: the two terminal-died classify tests and the page test fail on the pre-fix hook
+# (git show 52d853b06:hooks/lead-crash-watchdog.sh), which prints clean-exit for both fixtures.
+hup_rec() { # $1=pid $2=ended_at offset from HUP_NOW (s) [$3=exit code, default 0]
+  local ended; ended=$(TZ=UTC date -r $(( HUP_NOW + $2 )) +%Y-%m-%dT%H:%M:%SZ)
+  printf '{"pid":%s,"exit_code":%s,"signal":"","ended_at":"%s","sig_reached_wrapper":"HUP","record_state":"closed"}\n' \
+    "$1" "${3:-0}" "$ended" > "$CC_CLOSE_RECORDS_DIR/$1-100.json"
+}
+hup_setup() { # $1=sid
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude/logs" "$HOME/.claude/watchdog"
+  export CC_CLOSE_RECORDS_DIR="$BATS_TEST_TMPDIR/close-records"; mkdir -p "$CC_CLOSE_RECORDS_DIR"
+  HUP_NOW=$(date +%s)
+  mk_tx "$1" "ordinary work, no recycle language anywhere in this tail" 1
+}
+kitty_ips_at() { # $1=mtime offset from HUP_NOW (s)
+  local f="$CC_JETSAM_DIRS/kitty-2026-10-15-050134.ips"
+  : > "$f"; touch -t "$(date -r $(( HUP_NOW + $1 )) +%Y%m%d%H%M.%S)" "$f"
+}
+
+@test "HUP + 2 sibling HUP deaths within 15 s → CRASH / terminal-died" {
+  hup_setup s_hup_sib
+  hup_rec 9201 0; hup_rec 9202 -1; hup_rec 9203 2
+  run bash "$HOOK" --classify s_hup_sib 9201 "$HUP_NOW"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | cut -f1)" = "CRASH" ] || { echo "$output"; false; }
+  [ "$(printf '%s' "$output" | cut -f2)" = "terminal-died" ]
+}
+
+@test "control: a LONE HUP (HUP siblings > 15 s away, a non-HUP neighbour) → silent RECYCLE / pane-hangup" {
+  hup_setup s_hup_lone
+  hup_rec 9211 0; hup_rec 9212 -60; hup_rec 9213 40
+  printf '{"pid":9214,"exit_code":0,"ended_at":"%s","sig_reached_wrapper":"","record_state":"closed"}\n' \
+    "$(TZ=UTC date -r "$HUP_NOW" +%Y-%m-%dT%H:%M:%SZ)" > "$CC_CLOSE_RECORDS_DIR/9214-100.json"
+  run bash "$HOOK" --classify s_hup_lone 9211 "$HUP_NOW"
+  [ "$(printf '%s' "$output" | cut -f1)" = "RECYCLE" ] || { echo "$output"; false; }
+  [ "$(printf '%s' "$output" | cut -f2)" = "pane-hangup" ]
+}
+
+@test "lone HUP + a kitty crash report within 6 min → CRASH / terminal-died" {
+  hup_setup s_hup_ips
+  hup_rec 9221 0
+  kitty_ips_at -120
+  run bash "$HOOK" --classify s_hup_ips 9221 "$HUP_NOW"
+  [ "$(printf '%s' "$output" | cut -f1)" = "CRASH" ] || { echo "$output"; false; }
+  [ "$(printf '%s' "$output" | cut -f2)" = "terminal-died" ]
+}
+
+@test "lone HUP + a kitty crash report 10 min away → RECYCLE / pane-hangup" {
+  hup_setup s_hup_far
+  hup_rec 9231 0
+  kitty_ips_at -600
+  run bash "$HOOK" --classify s_hup_far 9231 "$HUP_NOW"
+  [ "$(printf '%s' "$output" | cut -f1)" = "RECYCLE" ] || { echo "$output"; false; }
+  [ "$(printf '%s' "$output" | cut -f2)" = "pane-hangup" ]
+}
+
+@test "a record WITHOUT sig_reached_wrapper, exit 0, beside HUP siblings and a kitty report → still clean-exit" {
+  hup_setup s_nohup
+  hup_rec 9242 0; hup_rec 9243 1
+  printf '{"pid":9241,"exit_code":0,"signal":"","ended_at":"%s","record_state":"closed"}\n' \
+    "$(TZ=UTC date -r "$HUP_NOW" +%Y-%m-%dT%H:%M:%SZ)" > "$CC_CLOSE_RECORDS_DIR/9241-100.json"
+  kitty_ips_at 0
+  run bash "$HOOK" --classify s_nohup 9241 "$HUP_NOW"
+  [ "$(printf '%s' "$output" | cut -f1)" = "RECYCLE" ] || { echo "$output"; false; }
+  [ "$(printf '%s' "$output" | cut -f2)" = "clean-exit" ]
+}
+
+@test "corroborated HUP WITH a fresh teardown marker → RECYCLE / retired-by-desk, not CRASH" {
+  hup_setup s_hup_ret
+  hup_rec 9251 0; hup_rec 9252 1; hup_rec 9253 -1
+  printf '{"key_kind":"sid","pane":"499","sid":"s_hup_ret","mode":"teardown","ts":"now"}\n' \
+    > "$CC_TEARDOWN_DIR/s_hup_ret.json"
+  run bash "$HOOK" --classify s_hup_ret 9251 "$HUP_NOW"
+  [ "$(printf '%s' "$output" | cut -f1)" = "RECYCLE" ] || { echo "$output"; false; }
+  [ "$(printf '%s' "$output" | cut -f2)" = "retired-by-desk" ]
+}
+
+@test "the terminal-died page names its corroboration" {
+  hup_setup s_hup_page
+  hup_rec 9261 0; hup_rec 9262 1; hup_rec 9263 -2
+  # Delivery is stubbed: the pager records argv, osascript is a no-op, the pane verdict is off.
+  export CC_DEATH_PAGER="$BATS_TEST_TMPDIR/stub-pager" CC_DEATH_OSA_BIN="$BATS_TEST_TMPDIR/stub-osa" CC_PANE_VERDICT=0
+  printf '#!/bin/bash\nexit 0\n' > "$CC_DEATH_PAGER"; cp "$CC_DEATH_PAGER" "$CC_DEATH_OSA_BIN"
+  chmod +x "$CC_DEATH_PAGER" "$CC_DEATH_OSA_BIN"
+  run env -u KITTY_LISTEN_ON -u KITTY_WINDOW_ID -u KITTY_PID \
+    bash "$HOOK" --surface-death s_hup_page 9261 CRASH terminal-died 0 "" ""
+  [[ "$output" == *"died with its terminal"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"2 sibling HUPs within 15s"* ]] || { echo "$output"; false; }
+}
