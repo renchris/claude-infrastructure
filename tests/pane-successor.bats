@@ -621,7 +621,8 @@ fs_zsh() { /usr/bin/python3 "$PTY" exit zsh -f -i -c '. "$1"; export FAKE_KITTY_
   [ "$output" = "n=0" ]
   # off is checked before ANY work: not even the `@ ls` lookup runs
   CC_KITTY_FS_GUARD=off run fs_zsh '$$'
-  [ ! -e "$LS_LOG" ] && [ ! -e "$GUARD_LOG" ] || { echo "$output"; false; }
+  [ ! -e "$LS_LOG" ] || { echo "$output"; false; }
+  [ ! -e "$GUARD_LOG" ] || { echo "$output"; false; }
   # control: the same shell without the switch does look (proves the off case is not vacuous)
   run fs_zsh '$$'
   [ -s "$LS_LOG" ]

@@ -100,7 +100,9 @@ rows() { python3 -c 'import json,sys; [print(json.dumps(json.loads(l), sort_keys
   run grep -c "^guard --window 50 --to $ADDR --mode toggle --scope pane --tool kitty-pane-menu " "$CALLS"
   [ "$output" = "1" ] || { cat "$CALLS"; false; }
   g=$(first '^guard '); d=$(first 'detach-window --match id:50 --target-tab id:2')
-  [ -n "$g" ] && [ -n "$d" ] && [ "$g" -lt "$d" ] || { cat "$CALLS"; false; }
+  [ -n "$g" ] || { cat "$CALLS"; false; }
+  [ -n "$d" ] || { cat "$CALLS"; false; }
+  [ "$g" -lt "$d" ] || { cat "$CALLS"; false; }
   # The re-check is a FRESH full `ls` taken after the pick and before the guard.
   [ "$(wc -l <"$KPG_LS_N")" -ge 2 ] || false
   run grep -c 'layout_action equalize' "$CALLS"
@@ -130,7 +132,9 @@ rows() { python3 -c 'import json,sys; [print(json.dumps(json.loads(l), sort_keys
   [ "$status" -eq 0 ]
   g=$(first "^guard --window 50 --to $ADDR --mode toggle --scope pane --tool kitty-pane-menu ")
   d=$(first '^kitty @ detach-window --match id:50 --to')
-  [ -n "$g" ] && [ -n "$d" ] && [ "$g" -lt "$d" ] || { cat "$CALLS"; false; }
+  [ -n "$g" ] || { cat "$CALLS"; false; }
+  [ -n "$d" ] || { cat "$CALLS"; false; }
+  [ "$g" -lt "$d" ] || { cat "$CALLS"; false; }
   : >"$CALLS"
   STUB_RC=3 KPG_PICK="Move to New Window" run python3 "$BIN/kitty-pane-menu"
   run grep -c 'detach-window' "$CALLS"
@@ -200,7 +204,9 @@ rows() { python3 -c 'import json,sys; [print(json.dumps(json.loads(l), sort_keys
   run python3 "$BIN/kitty-confirm-close" window --window 50
   [ "$status" -eq 0 ]
   g=$(first '^guard --window 50 '); c=$(first 'close-window --match id:50')
-  [ -n "$g" ] && [ -n "$c" ] && [ "$g" -lt "$c" ] || { cat "$CALLS"; false; }
+  [ -n "$g" ] || { cat "$CALLS"; false; }
+  [ -n "$c" ] || { cat "$CALLS"; false; }
+  [ "$g" -lt "$c" ] || { cat "$CALLS"; false; }
   : >"$CALLS"; : >"$CC_KITTY_PANE_ACTIONS_LOG"
   STUB_RC=3 run python3 "$BIN/kitty-confirm-close" window --window 50
   run grep -c 'close-window' "$CALLS"
