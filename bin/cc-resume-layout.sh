@@ -81,8 +81,9 @@
 #     launch that errored or timed out prints `maybe sid=…` and counts as restored only once the
 #     session has a live holder (lr_holder_count) and its transcript gained a SessionStart:resume
 #     record, re-checked for CC_RESTORE_MAYBE_S (at least 240 s).
-#   · FULLSCREEN by kitty's own action, by window id: `action --match id:<head> toggle_fullscreen`
-#     (kitty dispatches it to the matched window's OS window), 3 s apart. The verdict is the READ-BACK
+#   · FULLSCREEN by kitty's own action, by window id: `KITTY_WINDOW_ID=<head> action --self
+#     toggle_fullscreen` once `ls --match id:<head>` finds the window (0.48.2 IGNORES `action
+#     --match` and toggles the ACTIVE window — kitty-crash-2026-10-15 README), 3 s apart. The verdict is the READ-BACK
 #     (the window's frame fills its display, via hb_display_probe, polled up to
 #     CC_RESTORE_FS_VERIFY=10 s); a window read back as windowed gets focus-window and ONE more
 #     toggle. A refused toggle, or an unreadable state, is never re-toggled.
@@ -1035,13 +1036,18 @@ for o in data:
       if [ "${WFS[$n]:-1}" = 0 ]; then
         note "$([ "$DRY_RUN" = 1 ] && printf 'DRY' || printf ' ') [CC-DESK-$n] left windowed, as recorded"
       elif [ "$DRY_RUN" = 1 ]; then
-        note "DRY [CC-DESK-$n] action --match id:$hd toggle_fullscreen"
-      elif kr action --match "id:$hd" toggle_fullscreen >/dev/null 2>&1; then
+        note "DRY [CC-DESK-$n] KITTY_WINDOW_ID=$hd action --self toggle_fullscreen"
+      # kitty 0.48.2 drops `action --match` (the client sends match_window, the server reads match)
+      # and toggles whichever window is ACTIVE, so the target rides in KITTY_WINDOW_ID with --self.
+      # The existence check runs first: a toggle must never be sent for a window that is gone.
+      elif ! kr ls --match "id:$hd" >/dev/null 2>&1; then
+        fs_bad=$((fs_bad + 1)); note "  [CC-DESK-$n] window $hd not found — not toggled"
+      elif KITTY_WINDOW_ID="$hd" kr action --self toggle_fullscreen >/dev/null 2>&1; then
         sleep "$FS_GAP"; st="$(fs_settled "$hd")"
         if [ "$st" = 0 ]; then
           note "  [CC-DESK-$n] window $hd still windowed after its toggle — focusing it and toggling once more"
           kr focus-window --match "id:$hd" >/dev/null 2>&1
-          kr action --match "id:$hd" toggle_fullscreen >/dev/null 2>&1
+          KITTY_WINDOW_ID="$hd" kr action --self toggle_fullscreen >/dev/null 2>&1
           sleep "$FS_GAP"; st="$(fs_settled "$hd")"
         fi
         case "$st" in

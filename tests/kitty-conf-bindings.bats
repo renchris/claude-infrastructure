@@ -76,10 +76,11 @@ def main():
     # 11=cmd+opt+shift. These were read off the parse below, NOT off the GLFW header, where the
     # CONTROL and ALT bits are the other way round. Guessing there probes an EMPTY chord, and an
     # empty chord fails every assertion for a reason that has nothing to do with the config.
-    # keys: 100=d, 98=b, 119=w, 111=o, 57350=left.  Arrows are not ASCII, hence the 5-digit code.
+    # keys: 100=d, 98=b, 119=w, 111=o, 113=q, 57350=left.  Arrows are not ASCII, hence the 5-digit code.
     for label, mods, key in (("cmd_d",8,100), ("cmd_shift_d",9,100), ("cmd_shift_b",9,98),
                              ("cmd_w",8,119), ("ctrl_shift_w",5,119), ("cmd_shift_w",9,119),
                              ("cmd_shift_o",9,111), ("cmd_opt_o",10,111), ("cmd_opt_shift_o",11,111),
+                             ("ctrl_shift_q",5,113),
                              ("cmd_opt_shift_left",11,57350), ("cmd_opt_b",10,98)):
         b = binds(mods, key)
         print("%s_n=%d" % (label, len(b)))
@@ -391,17 +392,34 @@ band_disarmed()  { grep -q '^# DISARMED-map cmd+' "$CONF"; }
 # `move_window` on an axis with no neighbour already behaves. `_n=1` is the collision guard: it
 # asserts our binding is the ONLY one on that chord, so a future kitty default landing on ⌘⇧O
 # (the ⌘⇧D hazard, one key over) turns this red instead of silently taking the chord.
+#
+# GUARDED 2026-10-15. Emptying a FULLSCREEN OS window crashed kitty and every session in it
+# (docs/research/kitty-crash-2026-10-15/README.md § "Chosen fix"), so each detach chord — and
+# kitty's default ⌃⇧Q close_tab — now launches bin/kitty-fullscreen-guard, which leaves fullscreen
+# when needed and then runs the ORIGINAL action via `--then`. What is pinned is the full winning
+# definition: the guard, the right --scope (a pane for detach_window, the whole tab for
+# detach_tab / close_tab), and the original action as the --then tail. A bare action back on any
+# of these chords is the crash route, and the mutant controls below prove that is caught.
+# RED-proof: against the pre-fix conf (git show 52d853b06:config/kitty.conf in a scratch repo
+# skeleton holding a copy of this file) both guarded-form tests fail on their first grep.
+guarded() {  # $1 = scope, $2.. = the native action the guard runs after a safe verdict
+  local scope="$1"; shift
+  printf 'launch --type=background ${HOME}/.claude/bin/kitty-fullscreen-guard --window @active-kitty-window-id --mode toggle --scope %s --tool kitty.conf --then %s' "$scope" "$*"
+}
 
-@test "cmd+shift+o detaches a pane into a chosen tab — the only cross-OS-window route" {
+@test "cmd+shift+o detaches a pane into a chosen tab — through the fullscreen guard" {
   run probe "$CONF"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  echo "$output" | grep -qx 'cmd_shift_o_last=detach_window ask' || { echo "$output"; false; }
+  echo "$output" | grep -qxF "cmd_shift_o_last=$(guarded pane detach_window ask)" || { echo "$output"; false; }
   echo "$output" | grep -qx 'cmd_shift_o_n=1' || { echo "chord is contested — see the ⌘⇧D hazard"; echo "$output"; false; }
 }
 
-@test "cmd+opt+o detaches to a new OS window and cmd+opt+shift+o moves the whole tab" {
+@test "cmd+opt+o, cmd+opt+shift+o and ctrl+shift+q are guarded with the right scope" {
   run probe "$CONF"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # ⌃⇧Q carries kitty's own close_tab default as well, so n=2 is healthy there and is not
+  # asserted (the same reasoning as the close chords below); ours must be the LAST.
+  echo "$output" | grep -qxF "ctrl_shift_q_last=$(guarded tab close_tab)" || { echo "$output"; false; }
   # detach_tab is on ⌘⌥⇧O, not ⌘⌃O: the ⌘⌃ chords were retired wholesale (1d507193) to keep the
   # arrow-family shape ⌘⌥ = neighbour, ⌘⇧ = move, ⌘⌥⇧ = move to edge. Probing the retired chord
   # reads n=0 and an empty definition, which fails as a missing binding rather than a moved one.
@@ -413,10 +431,33 @@ band_disarmed()  { grep -q '^# DISARMED-map cmd+' "$CONF"; }
   # is a redundant second route to an action that still works, not the silent destructive inversion
   # the ⌘⇧D and ⌘W guards exist for. An absence assertion would instead go red the next time ⌘⌃ is
   # deliberately used for anything, i.e. it would be a tripwire on the conf's own next change.
-  echo "$output" | grep -qx 'cmd_opt_o_last=detach_window' || { echo "$output"; false; }
-  echo "$output" | grep -qx 'cmd_opt_shift_o_last=detach_tab ask' || { echo "$output"; false; }
+  echo "$output" | grep -qxF "cmd_opt_o_last=$(guarded pane detach_window)" || { echo "$output"; false; }
+  echo "$output" | grep -qxF "cmd_opt_shift_o_last=$(guarded tab detach_tab ask)" || { echo "$output"; false; }
   echo "$output" | grep -qx 'cmd_opt_o_n=1' || { echo "$output"; false; }
   echo "$output" | grep -qx 'cmd_opt_shift_o_n=1' || { echo "$output"; false; }
+}
+
+@test "MUTANT CONTROL: a bare detach re-bound after the guarded one wins, and the guard sees it" {
+  # Last-wins means a later bare `map cmd+shift+o detach_window ask` silently reopens the crash
+  # route with the guarded line still in the file. Prove that conf reads as NOT guarded.
+  MUT="$BATS_TEST_TMPDIR/mutant-detach.conf"
+  { cat "$CONF"; echo 'map cmd+shift+o detach_window ask'; } > "$MUT"
+  run probe "$MUT"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  echo "$output" | grep -qx 'cmd_shift_o_last=detach_window ask' || { echo "mutation did not take"; echo "$output"; false; }
+  ! echo "$output" | grep -qxF "cmd_shift_o_last=$(guarded pane detach_window ask)" || {
+    echo "CONTROL FAILED — the guarded-form assertion cannot see a bare re-bind:"; echo "$output"; false; }
+}
+
+@test "MUTANT CONTROL: dropping the ctrl+shift+q guard lets kitty's bare close_tab win" {
+  # ⌃⇧Q is not bound bare anywhere in the file — kitty supplies it — so the hazard is the guard line
+  # going missing, not a second line appearing. Strip it and prove kitty's default resurfaces.
+  MUT="$BATS_TEST_TMPDIR/mutant-close-tab.conf"
+  grep -v '^map ctrl+shift+q ' "$CONF" > "$MUT"
+  run probe "$MUT"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  echo "$output" | grep -qx 'ctrl_shift_q_last=close_tab' || {
+    echo "CONTROL FAILED — kitty's default did not resurface:"; echo "$output"; false; }
 }
 
 @test "move_to_screen_edge is bound — move_window cannot place a pane with no neighbour to swap" {

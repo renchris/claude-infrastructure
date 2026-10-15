@@ -272,6 +272,7 @@ case " $* " in
     [ -f "$KLOG.fail" ] && { echo "Error: no such window"; exit 1; }
     n=$(cat "$KLOG.n" 2>/dev/null || echo 100); n=$((n + 1)); echo "$n" > "$KLOG.n"; echo "$n" ;;
   *" toggle_fullscreen "*) [ -f "$KLOG.fsfail" ] && exit 1 ;;
+  *" ls --match id:"*) for a; do :; done; grep -qx "${a#id:}" "$KLOG.gone" 2>/dev/null && exit 1 ;;
   *" ls "*) [ -f "$KLOG.ls" ] && cat "$KLOG.ls" ;;
 esac
 exit 0
@@ -452,11 +453,30 @@ launched_sids() { grep ' launch ' "$KLOG" | grep -o "'sid-[a-z0-9-]*'" | tr -d "
   restore
   [ "$status" -eq 0 ]
   [ "$(grep -c 'toggle_fullscreen' "$KLOG")" -eq 2 ]
-  grep -q 'action --match id:101 toggle_fullscreen' "$KLOG"
-  grep -q 'action --match id:107 toggle_fullscreen' "$KLOG"
+  # kitty 0.48.2 ignores `action --match` and toggles the ACTIVE window, so the target must ride in
+  # KITTY_WINDOW_ID with --self (docs/research/kitty-crash-2026-10-15/README.md).
+  # RED-proof: against git show 52d853b06:bin/cc-resume-layout.sh these two greps fail (the log
+  # reads `KW= … action --match id:101 toggle_fullscreen`), as does the gone-window case below.
+  grep -q '^KW=101 .*action --self toggle_fullscreen$' "$KLOG"
+  grep -q '^KW=107 .*action --self toggle_fullscreen$' "$KLOG"
+  ! grep -q 'action --match' "$KLOG" || false
   [ ! -f "$CC_OSASCRIPT_BIN.log" ]
   ! grep -q 'set-window-title' "$KLOG" || false
   [ "$(kv fullscreen_failed)" = 2 ]; [ "$(kv fullscreen_ok)" = 0 ]; [ "$(kv verdict)" = degraded ]
+}
+
+@test "restore: a head window that no longer exists is not toggled — --self must never get a stale id" {
+  restore_setup
+  for i in 1 2 3 4 5 6 7; do row repo-a "$i"; done
+  echo 101 > "$KLOG.gone"
+  restore
+  [ "$status" -eq 0 ]
+  grep -q 'ls --match id:101$' "$KLOG"
+  ! grep -q '^KW=101 .*toggle_fullscreen' "$KLOG" || false
+  grep -q '^KW=107 .*action --self toggle_fullscreen$' "$KLOG"
+  [ "$(grep -c 'toggle_fullscreen' "$KLOG")" -eq 1 ]
+  printf '%s\n' "$stderr" | grep -q 'window 101 not found — not toggled'
+  [ "$(kv fullscreen_failed)" = 1 ]
 }
 
 # The fullscreen READ-BACK (2026-10-05 restart: five accepted toggles, five windows left on the main
@@ -621,7 +641,7 @@ launch_n() { grep ' launch ' "$KLOG" | sed -n "${1}p"; }
   printf '%s\n' "$output" | grep -qx 'cc-resume-layout: map sid=sid-repo-a-4 wid=101 oswin=2'
   printf '%s\n' "$output" | grep -qx 'cc-resume-layout: map sid=sid-repo-a-2 wid=103 oswin=1'
   # fullscreen: window 6 (head 102) before window 7 (head 101), once each
-  [ "$(grep toggle_fullscreen "$KLOG" | grep -o 'id:[0-9]*' | tr '\n' ' ')" = "id:102 id:101 " ]
+  [ "$(grep toggle_fullscreen "$KLOG" | grep -o '^KW=[0-9]*' | tr '\n' ' ')" = "KW=102 KW=101 " ]
   [ "$(kv windows)" = 2 ]; [ "$(kv fullscreen_ok)" = 2 ]
 }
 
@@ -646,7 +666,7 @@ launch_n() { grep ' launch ' "$KLOG" | sed -n "${1}p"; }
   [ "$(grep -c "set-window-title --match id:101 CC-DESK-1-" "$KLOG")" -eq 1 ]
   [ "$(grep -c 'set-window-title --match id:101 $' "$KLOG")" -eq 1 ]
   [ "$(grep -n 'set-window-title --match id:101 CC-DESK' "$KLOG" | cut -d: -f1)" -lt "$(grep -n 'toggle_fullscreen' "$KLOG" | head -1 | cut -d: -f1)" ]
-  [ "$(grep toggle_fullscreen "$KLOG" | grep -o 'id:[0-9]*' | tr '\n' ' ')" = "id:101 id:103 " ]   # 102 was windowed
+  [ "$(grep toggle_fullscreen "$KLOG" | grep -o '^KW=[0-9]*' | tr '\n' ' ')" = "KW=101 KW=103 " ]   # 102 was windowed
   printf '%s\n' "$output" | grep -qx 'cc-resume-layout: layout tree_windows=3 shells=0 placed=2 placed_failed=1 tree_ok=0 tree_fixed=0 tree_mismatch=0 tree_unknown=0'
   printf '%s\n' "$stderr" | grep -q 'tree read-back skipped'           # the zeros are a skip: no kitty_tree.py in this fixture
   [ "$(kv fullscreen_ok)" = 2 ]; [ "$(kv verdict)" = ok ]
