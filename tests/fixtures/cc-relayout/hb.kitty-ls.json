@@ -1,0 +1,26 @@
+[
+  {
+    "id": 7,
+    "platform_window_id": 7007,
+    "tabs": [
+      {
+        "id": 3,
+        "layout": "splits",
+        "layout_state": {
+          "class": "Splits",
+          "pairs": {"bias": 0.7, "one": 40, "two": {"horizontal": false, "one": 50, "two": 60}},
+          "all_windows": {"window_groups": [
+            {"id": 40, "window_ids": [4]},
+            {"id": 50, "window_ids": [5]},
+            {"id": 60, "window_ids": [6]}
+          ]}
+        },
+        "windows": [
+          {"id": 4, "cwd": "/work/a"},
+          {"id": 5, "cwd": "/work/b"},
+          {"id": 6, "cwd": "/work/c"}
+        ]
+      }
+    ]
+  }
+]

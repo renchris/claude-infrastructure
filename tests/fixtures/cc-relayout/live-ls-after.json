@@ -1,0 +1,46 @@
+[
+  {
+    "id": 1,
+    "platform_window_id": 601,
+    "tabs": [
+      {
+        "id": 10,
+        "layout": "splits",
+        "layout_state": {
+          "class": "Splits",
+          "pairs": {"bias": 0.7, "one": 110, "two": {"horizontal": false, "one": 120, "two": 210}},
+          "all_windows": {"window_groups": [
+            {"id": 110, "window_ids": [11]},
+            {"id": 120, "window_ids": [12]},
+            {"id": 210, "window_ids": [21]}
+          ]}
+        },
+        "windows": [
+          {"id": 11, "pid": 1011, "cwd": "/work/a", "cmdline": ["claude"]},
+          {"id": 12, "pid": 1012, "cwd": "/work/b", "cmdline": ["/bin/bash", "reso-resume-one", "22222222-2222-4222-8222-222222222222"]},
+          {"id": 21, "pid": 1021, "cwd": "/work/c", "cmdline": ["claude"]}
+        ]
+      }
+    ]
+  },
+  {
+    "id": 2,
+    "platform_window_id": 602,
+    "tabs": [
+      {
+        "id": 20,
+        "layout": "splits",
+        "layout_state": {
+          "class": "Splits",
+          "pairs": {"one": 220},
+          "all_windows": {"window_groups": [
+            {"id": 220, "window_ids": [22]}
+          ]}
+        },
+        "windows": [
+          {"id": 22, "pid": 1022, "cwd": "/work/shell", "cmdline": ["/bin/zsh"]}
+        ]
+      }
+    ]
+  }
+]
