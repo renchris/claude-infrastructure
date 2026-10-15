@@ -280,7 +280,9 @@ def main(argv):
             involved |= {win[w][1] for w in win if win[w][2] == s["target"]}
         elif s["target"][0] == "new-tab":
             involved |= {win[w][1] for w in win if win[w][0] == s["target"][1]}
-    fs = fullscreen(sorted(p for p in involved if p)) if involved else {}
+    fs = fullscreen(sorted(str(p) for p in involved if p)) if involved else {}
+    # a window with no platform id cannot be probed, so it is unreadable, never assumed windowed
+    fs.update({"(no platform id)": "" for p in involved if not p})
     blocked = sorted(p for p, v in fs.items() if v != "0")
     if blocked:
         for p in blocked:
