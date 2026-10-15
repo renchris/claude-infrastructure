@@ -1147,7 +1147,12 @@ def main() -> int:
     result: dict = {}
 
     if choice == "Paste":
-        result["rc"] = kitty("action", "--match", f"id:{wid}", "paste_from_selection").returncode
+        # --self + KITTY_WINDOW_ID, never `action --match`: kitty 0.48.2 ignores --match on `action`
+        # and pastes into the ACTIVE window, which a right-click in another window does not move
+        # (docs/research/kitty-crash-2026-10-15/README.md, "a second kitty defect").
+        cmd = ["kitty", "@"] + (["--to", ADDRESS] if ADDRESS else []) + ["action", "--self", "paste_from_selection"]
+        result["rc"] = subprocess.run(cmd, capture_output=True, text=True,
+                                      env=dict(os.environ, KITTY_WINDOW_ID=str(wid))).returncode
     elif choice == "Move to New Window":
         if guarded(wid, "pane", result):
             # `detach-window` with NO --target-tab CREATES an OS window, so this is a pane-spawn

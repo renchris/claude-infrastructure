@@ -41,7 +41,7 @@ setup() {
   cat >"$STUBS/kitty" <<'SH'
 #!/bin/sh
 n=$(grep -c '"phase":"intent"' "$CC_KITTY_PANE_ACTIONS_LOG" 2>/dev/null || true)
-echo "kitty $* [intents=${n:-0}]" >>"$CALLS"
+echo "kitty $* [intents=${n:-0}] [wid=${KITTY_WINDOW_ID:-}]" >>"$CALLS"
 case " $* " in
   *" ls --match "*) cat "$KPG_TREE" ;;
   *" ls "*) echo x >>"$KPG_LS_N"
@@ -140,7 +140,7 @@ rows() { python3 -c 'import json,sys; [print(json.dumps(json.loads(l), sort_keys
 @test "5 the menu's intent row is on disk before the guard and before the destroy" {
   KPG_PICK="destination — 1 pane" run python3 "$BIN/kitty-pane-menu"
   grep -q '^guard .*\[intents=1\]$' "$CALLS" || { cat "$CALLS"; false; }
-  grep -q '^kitty @ detach-window .*\[intents=1\]$' "$CALLS" || { cat "$CALLS"; false; }
+  grep -q '^kitty @ detach-window .*\[intents=1\] \[wid=\]$' "$CALLS" || { cat "$CALLS"; false; }
   run rows
   [ "${#lines[@]}" -eq 2 ] || { echo "$output"; false; }
   grep -q '"choice": "destination — 1 pane".*"os_window_id": 1.*"panes": 1.*"phase": "intent".*"platform_window_id": 101.*"tool": "kitty-pane-menu".*"wid": 50' <<<"${lines[0]}" || { echo "$output"; false; }
@@ -191,7 +191,7 @@ rows() { python3 -c 'import json,sys; [print(json.dumps(json.loads(l), sort_keys
   KPG_TREE="$busy" KPG_BUTTON=Close run python3 "$BIN/kitty-confirm-close" window --window 50
   [ "$status" -eq 0 ]
   g=$(first "^guard --window 50 --to $ADDR --mode toggle --scope pane --tool kitty-confirm-close ")
-  c=$(first '^kitty @ close-window --match id:50 .*\[intents=1\]$')
+  c=$(first '^kitty @ close-window --match id:50 .*\[intents=1\] \[wid=\]$')
   d=$(first '^osascript - ')
   [ -n "$g" ] && [ -n "$c" ] && [ -n "$d" ] && [ "$d" -lt "$g" ] && [ "$g" -lt "$c" ] || { cat "$CALLS"; false; }
 }
@@ -250,5 +250,15 @@ PY
   KPG_PICK="" run python3 "$BIN/kitty-pane-menu"
   grep -q 'choose from list' "$CALLS" || { cat "$CALLS"; false; }
   run grep -c 'application "kitty"' "$CALLS"
+  [ "$output" = "0" ] || { cat "$CALLS"; false; }
+}
+
+@test "14 Paste targets the clicked pane with --self + KITTY_WINDOW_ID, never the ignored action --match" {
+  # RED-proof: against the pre-fix menu the call is `action --match id:50 paste_from_selection`, which
+  # kitty 0.48.2 runs on the ACTIVE window.
+  KPG_PICK="Paste" run python3 "$BIN/kitty-pane-menu"
+  [ "$status" -eq 0 ]
+  grep -q '^kitty @ .*action --self paste_from_selection .*\[wid=50\]' "$CALLS" || { cat "$CALLS"; false; }
+  run grep -c 'action --match' "$CALLS"
   [ "$output" = "0" ] || { cat "$CALLS"; false; }
 }
