@@ -385,7 +385,50 @@ EOF
         fi
         [ -n "$best" ] && TREES+=("$best")
       done
+      # BY SESSION ID (2026-10-15): rows from lr-select or a hand-built TSV carry no k<pid>w<n> group,
+      # so the loop above finds no tree and every session came back in the plain row layout — after
+      # the 00:01:27 crash, 20 sessions in different pane positions. A row's session id in a
+      # heartbeat roster names the tree it was recorded in. Newest tree first; a tree joins only for
+      # sessions no tree already chosen holds, so an older arrangement never overrides a newer one.
+      while IFS= read -r f; do
+        [ -n "$f" ] && TREES+=("$f")
+      done < <(for r in "${ROWS[@]}"; do cell "$r" 2; echo; done | python3 -c '
+import glob, json, os, subprocess, sys
+root, chosen = sys.argv[1], sys.argv[2:]
+want = {l.strip() for l in sys.stdin if l.strip()}
+def roster(d):
+    try:
+        return {e.get("session_id") for e in json.load(open(os.path.join(d, "hb.roster.json"))) if isinstance(e, dict)}
+    except Exception:
+        return set()
+for f in chosen:
+    want -= roster(os.path.dirname(f))
+cands = []
+def live_kitty(pid):   # a running kitty records where its panes ARE now, not where they were
+    try:
+        out = subprocess.run(["/bin/ps", "-p", pid, "-o", "comm="], capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return False
+    return out.strip().endswith("kitty")
+# The crash page copies the heartbeat of the dead kitty into its event (events/<id>/hb/<pid>/), which
+# outlives the 7-day prune of the heartbeat root (restore-heartbeat.sh hb_prune).
+events = os.path.join(os.environ.get("CC_BOOT_RESUME_STATE_DIR") or os.path.expanduser("~/.claude/autonomy/boot-resume"), "events")
+for f in glob.glob(os.path.join(root, "*", "*", "hb.kitty-ls.json")) + glob.glob(os.path.join(events, "*", "hb", "*", "hb.kitty-ls.json")):
+    d = os.path.dirname(f)
+    if os.path.exists(os.path.join(d, "hb.layout-degraded")) or live_kitty(os.path.basename(d)):
+        continue
+    try:
+        st = int(open(os.path.join(d, "hb.start")).read().split()[0])
+    except Exception:
+        st = 0
+    cands.append((st, f))
+for _, f in sorted(cands, reverse=True):
+    got = want & roster(os.path.dirname(f))
+    if got:
+        print(f); want -= got
+' "$hbroot" ${TREES[@]+"${TREES[@]}"} 2>/dev/null)
     fi
+    [ "${#TREES[@]}" -gt 0 ] && [ -z "$TREE" ] && note "cc-resume-layout: recorded tree(s) found: ${TREES[*]}"
 
     # PLAN, three kinds of line, fields separated by \037 (so an empty field keeps its place):
     #   W  window#  source  platform_window_id  tabs  panes  claude  shells  layout-signature
@@ -694,10 +737,115 @@ EOF
       else place_bad=$((place_bad + 1)); note "  [CC-DESK-$n] NOT placed (${r:-no answer}) — Accessibility for kitty? The panes are right, the display is not"; fi
     }
 
+    # TREE READ-BACK (2026-10-15). Launching each pane --next-to its anchor builds the recorded tree
+    # only while every launch lands: a split whose anchor timed out (a maybe row) opens beside the
+    # tab's last pane instead (WHERE, below), and nothing read the result back. So a replayed splits
+    # tab is read back from `kitty @ ls` once built, and a tree that differs from the plan in shape,
+    # axis, bias or pane order is set EXACTLY by scripts/kitty-apply-layout.py — a kitten that calls
+    # kitty's own Splits.set_layout_state on the panes already there, so nothing restarts — then
+    # read back again. The verdict is the second read-back, never the kitten's word.
+    APPLY_KITTEN="${CC_KITTY_APPLY_LAYOUT_KITTEN:-}"
+    if [ -z "$APPLY_KITTEN" ]; then
+      for _ak in "$HERE/../scripts/kitty-apply-layout.py" "${HOME:-}/.claude/scripts/kitty-apply-layout.py"; do
+        [ -f "$_ak" ] && { APPLY_KITTEN="$(cd "$(dirname "$_ak")" && pwd -P)/$(basename "$_ak")"; break; }
+      done
+      unset _ak
+    fi
+    KTREE_LIB=""
+    for _kl in "$HERE/../scripts/lib" "${HOME:-}/.claude/scripts/lib"; do
+      [ -f "$_kl/kitty_tree.py" ] && { KTREE_LIB="$_kl"; break; }
+    done
+    unset _kl
+    TOPS=""; tree_ok=0; tree_fixed=0; tree_bad=0
+    RB_DIR="$(mktemp -d "${TMPDIR:-/tmp}/cc-resume-tree.XXXXXX" 2>/dev/null)" || RB_DIR=""
+    # tree_check <ls.json> → prints "ok" | "differs <spec.json>" | "unknown <why>"; the spec holds
+    # the planned tree in this tab's window ids, ready for the kitten.
+    tree_check() {
+      printf '%s' "$TOPS" | python3 -c '
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import kitty_tree as kt
+ls_path, wids, spec_path, head = sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
+ops = [l.split("\x1f") for l in sys.stdin.read().splitlines() if l.startswith("P\x1f")]
+wid = dict(p.split("=", 1) for p in wids.split())
+plan = None
+for o in ops:   # P win tab key kind idx how anchor bias sid — what the planner meant (TOPS)
+    key, how, anc, bias = o[3], o[6], o[7], o[8]
+    plan = key if plan is None else kt.split_at(plan, anc, key, how == "vsplit", bias or None)
+try:
+    tabs = kt.ls_tabs(json.load(open(ls_path)))
+except Exception as e:
+    print("unknown kitty-ls-unreadable"); sys.exit(0)
+tab = next((t for t in tabs if head in t["windows"]), None)
+if tab is None:
+    print("unknown head-pane-gone"); sys.exit(0)
+blob = {w["id"]: json.dumps(w) for o in json.load(open(ls_path)) for t in o.get("tabs") or [] for w in t.get("windows") or []}
+def resolve(key):
+    w = wid.get(key)
+    if w and int(w) in tab["windows"]:
+        return int(w)
+    return None
+want = kt.relabel(plan, resolve)
+# A maybe row has no wid; its pane is found by the session id in its command line.
+have_ids = set(kt.leaves(want))
+for o in ops:
+    if o[3] not in wid and o[4] == "row":
+        sid = o[9] if len(o) > 9 else ""
+        hit = [w for w in tab["windows"] if w not in have_ids and sid and sid in blob.get(w, "")]
+        if len(hit) == 1:
+            wid[o[3]] = str(hit[0]); have_ids.add(hit[0])
+want = kt.relabel(plan, resolve)
+extra = [w for w in tab["windows"] if w not in set(kt.leaves(want))]
+want = kt.append_row(want, extra)
+d = kt.diff(want, tab["tree"])
+if not d:
+    print("ok"); sys.exit(0)
+json.dump({"pairs": kt.to_pairs(want), "result": spec_path + ".result", "diff": d}, open(spec_path, "w"))
+print("differs %s %s" % (spec_path, "; ".join(d)[:400]))
+' "$KTREE_LIB" "$1" "$(for k2 in "${!WIDS[@]}"; do printf '%s=%s ' "$k2" "${WIDS[$k2]}"; done)" "$2" "$3" 2>/dev/null \
+        || printf 'unknown read-back-failed\n'
+    }
+    verify_restore_tab() {
+      local r spec why
+      [ "$DRY_RUN" = 1 ] && return 0
+      if [ -z "$KTREE_LIB" ] || [ -z "$RB_DIR" ]; then
+        note "  [CC-DESK-$cur] tree read-back skipped — scripts/lib/kitty_tree.py or a temp dir is missing"
+        return 0
+      fi
+      kr ls > "$RB_DIR/ls.json" 2>/dev/null || { note "  [CC-DESK-$cur] tree read-back: kitty @ ls failed"; tree_bad=$((tree_bad + 1)); return 0; }
+      r="$(tree_check "$RB_DIR/ls.json" "$RB_DIR/spec-$cur-$ctab.json" "$thead")"
+      case "$r" in
+        ok) tree_ok=$((tree_ok + 1)); note "  [CC-DESK-$cur] tree read back as recorded"
+            printf 'cc-resume-layout: tree-verify oswin=%s tab=%s verdict=ok\n' "$cur" "$ctab"; return 0 ;;
+        differs*) ;;
+        *) tree_bad=$((tree_bad + 1)); note "  [CC-DESK-$cur] tree read-back: $r"
+           printf 'cc-resume-layout: tree-verify oswin=%s tab=%s verdict=unknown\n' "$cur" "$ctab"; return 0 ;;
+      esac
+      spec="$(printf '%s' "$r" | awk '{ print $2 }')"; why="${r#differs * }"
+      note "  [CC-DESK-$cur] tree differs from the record ($why) — setting it exactly"
+      if [ -n "$APPLY_KITTEN" ]; then
+        kr kitten --match "id:$thead" "$APPLY_KITTEN" "$spec" >/dev/null 2>&1 \
+          || note "  [CC-DESK-$cur] the apply-layout kitten was refused"
+        sleep "${CC_RESTORE_APPLY_SETTLE:-1}"
+      else
+        note "  [CC-DESK-$cur] scripts/kitty-apply-layout.py not found — the tree stays as launched"
+      fi
+      kr ls > "$RB_DIR/ls.json" 2>/dev/null
+      r="$(tree_check "$RB_DIR/ls.json" "$RB_DIR/spec-$cur-$ctab-2.json" "$thead")"
+      if [ "$r" = ok ]; then
+        tree_fixed=$((tree_fixed + 1)); note "  [CC-DESK-$cur] tree set and read back as recorded"
+        printf 'cc-resume-layout: tree-verify oswin=%s tab=%s verdict=fixed\n' "$cur" "$ctab"
+      else
+        tree_bad=$((tree_bad + 1)); note "  [CC-DESK-$cur] ⚠ tree STILL differs after the kitten: $r ($(cat "$spec.result" 2>/dev/null))"
+        printf 'cc-resume-layout: tree-verify oswin=%s tab=%s verdict=mismatch\n' "$cur" "$ctab"
+      fi
+    }
+
     cur=""; ctab=""; head=""; thead=""; tlast=""; tfin=""
     close_restore_tab() { # a replayed splits tab stays as built; any other becomes its layout, then even widths
       [ -n "$thead" ] || return 0
-      [ "$tfin" = keep ] && return 0
+      [ "$tfin" = keep ] && { verify_restore_tab; TOPS=""; return 0; }
+      TOPS=""
       if [ "$DRY_RUN" = 1 ]; then
         note "DRY [CC-DESK-$cur] goto-layout --match window_id:$thead $tfin"
         note "DRY [CC-DESK-$cur] kitten ${EQ_KITTEN:-kitty-equalize.py} (reset_window_sizes)"
@@ -732,6 +880,7 @@ EOF
         case "$effort" in ''|low|medium|high|xhigh|max) ;; *) note "cc-resume-layout: effort '$effort' for $sid is not one reso-resume-one takes — dropped"; effort="" ;; esac
         case "$model" in *[!A-Za-z0-9._-]*) note "cc-resume-layout: model '$model' for $sid is malformed — dropped"; model="" ;; esac
       fi
+      TOPS="${TOPS}P"$'\037'"$win"$'\037'"$tab"$'\037'"$key"$'\037'"$kind"$'\037'"$idx"$'\037'"$how"$'\037'"$anc"$'\037'"$bias"$'\037'"$sid"$'\n'
       if [ "$DRY_RUN" = 1 ]; then
         at=""; [ -n "$anc" ] && [ "$how" != tab ] && at=" next-to=#$anc"
         if [ "$kind" = row ]; then
@@ -898,8 +1047,9 @@ for o in data:
       fi
     done
     # Only a replay prints this line, so the default restore's stdout is still map lines then verdict.
-    [ "${#TREES[@]}" -gt 0 ] && printf 'cc-resume-layout: layout tree_windows=%s shells=%s placed=%s placed_failed=%s\n' \
-      "$NTREE" "$nshell" "$placed" "$place_bad"
+    [ "${#TREES[@]}" -gt 0 ] && printf 'cc-resume-layout: layout tree_windows=%s shells=%s placed=%s placed_failed=%s tree_ok=%s tree_fixed=%s tree_mismatch=%s\n' \
+      "$NTREE" "$nshell" "$placed" "$place_bad" "$tree_ok" "$tree_fixed" "$tree_bad"
+    [ -n "$RB_DIR" ] && rm -f "$RB_DIR"/*.json "$RB_DIR"/*.result 2>/dev/null && rmdir "$RB_DIR" 2>/dev/null
 
     # MAYBE rows: restored only with a live holder AND a new SessionStart:resume record.
     maybe_left=0
