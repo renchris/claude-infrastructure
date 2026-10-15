@@ -43,6 +43,8 @@ def handle_result(
     args: list[str], answer: str, target_window_id: int, boss: Any
 ) -> str:
     spec_path = args[1] if len(args) > 1 else ""
+    if not spec_path:
+        return _write("", {"ok": False, "why": "no spec path given"})
     try:
         with open(spec_path) as fh:
             spec = json.load(fh)
