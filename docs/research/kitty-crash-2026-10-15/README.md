@@ -1,6 +1,7 @@
 # kitty crash 2026-10-15 00:01:27 — root-cause investigation
 
 Status: investigation complete (workflow `wf_496e7f13-644`, 6 angles + synthesis + adversarial skeptic); fix NOT yet implemented.
+Status (2026-10-15, phase 2): the guard and every caller landed at `fb3edd4ff` and are live (converged; `~/.claude/bin/kitty-fullscreen-guard` linked); the post-land repro waits on an unlocked screen — see § "Phase 2 landed".
 Status (2026-10-15, phase 1): precondition reproduced (32/32 unguarded fullscreen destroys close the window while still in fullscreen; the segfault itself 0/32); fix chosen and corrected by a 4-lens adversarial review — see § "Repro and chosen fix" at the end. Phase 2 implements it.
 Evidence copies (outside the repo, survive the /tmp boot wipe): `~/.claude/autonomy/incidents/kitty-crash-2026-10-15/`
 (`.ips`, `unilog-0127.txt` = unified log 23:58–00:02:30, `log.txt` = kitty-script log, `cocoa_window_v0.48.2.m`, `hb.kitty-ls.json`, `workflow-raw-findings.json`).
@@ -408,3 +409,52 @@ log show --start '<run start>' --style compact --predicate 'processID == <throwa
 ```
 
 Each trial takes over the operator's screen with a native-fullscreen Space for ~10 s. On exit, `run.sh` toggles its fullscreen windows off and quits its kitty, but its toggle has the `--match` defect above, so check for leftover fullscreen Spaces.
+
+# Phase 2 landed (2026-10-15)
+
+**Result.** The § "Chosen fix" spec landed on `origin/main` at `fb3edd4ff` (19 commits, `34c5b2186`..`fb3edd4ff`), content-verified by `ship-land.sh` (35 paths present and identical) and converged (`CC_DEPLOY_MAX_LAG_COMMITS=0 deploy-live.sh`, live tip `fb3edd4ff`). A 4-lens adversarial review of the diff (workflow `wf_bf440f65-940`, 31 agents, every finding sent to a skeptic) confirmed 24 findings; every high and medium one is fixed in the landed code, the rest are listed under Residuals. The pre-land smoke against a throwaway kitty read LEFT-FULLSCREEN-FIRST on both guarded trials. The post-land matrix could not run: the screen was locked from 02:43, and a locked screen cannot enter native fullscreen (below).
+
+## What landed, by spec item
+
+| Spec item | Where | Notes |
+|---|---|---|
+| Guard + no-UI kitten | `bin/kitty-fullscreen-guard`, `lib/kitty-fs-kitten.py` | As specified, plus three review corrections: `--then` acts **inside** the kitten after re-checking the window exists and is still active (bare `detach_window` and the `ask` chooser's new-window/new-tab branches move the ACTIVE window, `boss.py:3318`); an undo after a toggle that ENTERED fullscreen waits for FS to hold 1.0 s (kitty drops a toggle mid-transition, `cocoa_window.m:2339`); `--any-fs` samples for 1.0 s. |
+| Menu / confirm-close | `bin/kitty-pane-menu`, `bin/kitty-confirm-close` | Guard last, toggle mode; Close Pane is guarded once, in confirm-close, after the dialog. One alert per refusal, the guard's. Paste now targets with `--self` too. |
+| Autonomous closers | `bin/it2-kitty` session close, `bin/cc-pane-runner`, `bin/reso-resume-one`, `scripts/limit-recover/lr-fleet.sh` (now through the it2 shim) | Refuse mode; refusal keeps the pane/shell. |
+| Root-shell exit | `lib/pane-successor.sh` `cc_pane_fs_zshexit` | Toggle mode; a refusal execs a fresh shell (the pane stays). **No TRAPHUP** — a function trap replaced zsh's own HUP handling and left a pane's foreground claude alive after its window closed (review, measured). A hangup is recognised by kitty no longer listing the window; opening `/dev/tty` after a hangup blocks forever and isatty still answers on a dead pty, both measured. |
+| Native bindings | `config/kitty.conf` ⌘⇧O / ⌘⌥O / ⌘⌥⇧O / ⌃⇧Q | Background launch of the guard `--then <same action>`; `@active-kitty-window-id` is substituted for background launches (kitty 0.48.2 `launch.py:751`). Fullscreen mode and the one-window-per-Desktop layout unchanged. |
+| SIGHUP fallback | `bin/cc-pane-close` | `--any-fs` refusal, and no SIGHUP at all once remote control has answered and refused. |
+| Never relaunch kitty | menu `refocus()` and `choose()`, confirm-close post-dialog | Activate the parent pid through `NSRunningApplication` only when it is a live kitty; nothing names `application "kitty"`. |
+| Action log | `lib/kitty_pane_actions.py` → `~/.claude/logs/kitty-pane-actions.jsonl` | Intent row fsynced before the destroy; guard verdict rows. |
+| Watchdog | `hooks/lead-crash-watchdog.sh` | HUP + ≥2 sibling HUPs within ±15 s, or a kitty `.ips` within ±6 min ⇒ CRASH `terminal-died`; a lone HUP ⇒ RECYCLE `pane-hangup`. |
+| Restore toggle | `bin/cc-resume-layout.sh` | `KITTY_WINDOW_ID=<head> action --self toggle_fullscreen` after an existence check. |
+| Deploy link | `scripts/kitty-setup.sh` | Links the guard; callers also find it beside their real path. Without this the four rebinds, ⌘W and the menu would have failed closed on every pane (review, high). |
+
+## Suites run (plan line → result)
+
+- All changed suites, before the review fixes: `1..685`, 684 ok; the one red (`lr-fleet.bats` #395, a ≤3 s timing test, 41 s at load 37) passed alone at load 18 (`1..1`).
+- Suites that reach the guarded paths through the real `it2-kitty` or runners: `1..401`, 399 ok; the two reds (`spawn-wedge-watchdog.bats` "arming") fail identically on trunk `545fde903`, so they are not this change's.
+- After the review fixes and the rebase onto `545fde903`: `1..544` across 21 suites, 543 ok + the hangup case, fixed in `22532a37b`; then `pane-successor.bats` + `lr-fleet.bats` `1..190` all ok, `kitty-pane-guard.bats` `1..14`, `kitty-fullscreen-guard.bats` `1..23`, `kitty-setup-guard-link.bats` `1..2`, `cc-pane-close.bats` `1..20`, the watchdog HUP cases `1..9`, all ok. Bare `shellcheck` clean on every changed shell file.
+- RED-proofs: each new or changed regression case was run against the pre-fix file (or the reviewed first draft) and failed for the intended reason; the file headers record which.
+
+## Repro against the throwaway kitty
+
+Pre-land smoke (02:13, the branch before the review fixes; same kitten query/toggle and CGS read as landed):
+
+| Cell | Trials | Crashed | A fullscreen before | Guard rc | Close order of A |
+|---|---|---|---|---|---|
+| guard-move/idle | 1 | 0 | 1 | 0 | LEFT-FULLSCREEN-FIRST −2276 ms |
+| menu-move/idle (landed-shape menu, fake native helper, fake osascript) | 1 | 0 | 1 | 0 | LEFT-FULLSCREEN-FIRST −1910 ms |
+
+The harness's own quit also left fullscreen first once `quit_kitty` targeted with `--self` (two more windows, −5305 / −2596 ms).
+
+Post-land (03:28, landed code): **not measurable — the screen was locked** (`CGSSessionScreenIsLocked = 1` since 02:43). On a locked screen `toggle_fullscreen` does not take and every window reads offscreen, so all 14 trials ran with A windowed (`fs=0`). What that run does show: 0 crashes, and the guard refused every last-pane trial `refused-unknown` (fail-closed when it cannot read the state). `repro/post-land.sh` runs the full post-land matrix with the review's arms (unfocused / background-Space target, a second display, a destroy during AppKit's automatic fullscreen of a new window, probe rows timestamped, load per trial, `.ips` restricted to the throwaway's pid) and prints the table; it refuses with exit 3 while the screen is locked.
+
+Refocus (landed menu, real osascript, 03:34): from a process reparented to launchd — what a background child of a dead kitty is — `refocus()` launched nothing, and an activation lookup of the dead throwaway pid returned nil. The set of kitty processes was the live one alone before and after.
+
+## Residuals (confirmed by the review, not fixed here)
+
+- The `ask` choosers (⌘⇧O, ⌘⌥⇧O) are asynchronous: the guard leaves fullscreen before the chooser opens, so a cancelled chooser leaves the window windowed, and the move itself happens in kitty's callback after the guard returned. Closing it needs the kitty patch (decision `a41897063971`).
+- `lead-crash-watchdog.sh`: a deliberate ⌘Q / kitty restart HUPs every pane at once and reads `terminal-died`; any `kitty-*.ips` within 6 min corroborates, including a throwaway repro kitty's.
+- `scripts/handoff-fire.sh` `hf_close_pane` discards it2's stderr, so a deliberate fullscreen refusal looks like a transient failure to its retry loop.
+- The converge's `install.sh` pass did not create the new `bin/kitty-fullscreen-guard` link (it silences `kitty-setup.sh`); running `scripts/kitty-setup.sh` from the canonical tree did. A brand-new `bin/kitty-*` file needs that until the install pass is fixed.
