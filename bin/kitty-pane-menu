@@ -992,9 +992,12 @@ def guard_path() -> str:
     env = os.environ.get("CC_KITTY_FS_GUARD")
     if env:
         return env
-    sib = os.path.join(HERE, "kitty-fullscreen-guard")
-    if os.path.exists(sib):
-        return sib
+    # HERE is abspath (kitty launches ~/.claude/bin/<name>); the realpath sibling is the checkout's,
+    # which exists even before kitty-setup.sh has linked the guard into ~/.claude/bin.
+    for sib in (os.path.join(HERE, "kitty-fullscreen-guard"),
+                os.path.join(os.path.dirname(os.path.realpath(__file__)), "kitty-fullscreen-guard")):
+        if os.path.exists(sib):
+            return sib
     return os.path.join(os.path.expanduser("~"), ".claude", "bin", "kitty-fullscreen-guard")
 
 

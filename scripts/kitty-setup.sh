@@ -179,7 +179,7 @@ fi
 if [ "$MODE" = undo ]; then
   hdr "reverting"
   [ -L "$KCONF_DIR/kitty.conf" ] && { rm -f "$KCONF_DIR/kitty.conf"; ok "removed kitty.conf symlink"; }
-  for f in it2-kitty cc-term kitty-split-cwd.sh cc-in-kitty kitty-confirm-close kitty-pane-menu kitty-split-launch.sh; do
+  for f in it2-kitty cc-term kitty-split-cwd.sh cc-in-kitty kitty-confirm-close kitty-pane-menu kitty-split-launch.sh kitty-fullscreen-guard; do
     [ -L "$BIN_DIR/$f" ] && { rm -f "$BIN_DIR/$f"; ok "removed $BIN_DIR/$f"; }
   done
   # kitty-pane-menu-native is a COMPILED file, not a symlink — the -L check above would never
@@ -285,6 +285,9 @@ if [ "$MODE" = apply ]; then
   ln -sfn "$REPO/bin/kitty-confirm-close" "$BIN_DIR/kitty-confirm-close"
   ln -sfn "$REPO/bin/kitty-pane-menu" "$BIN_DIR/kitty-pane-menu"
   ln -sfn "$REPO/bin/kitty-split-launch.sh" "$BIN_DIR/kitty-split-launch.sh"
+  # The last gate before anything empties a fullscreen OS window (kitty-crash-2026-10-15). kitty.conf's
+  # detach / close_tab rebinds launch it by THIS path, and ⌘W and the pane menu fail CLOSED without it.
+  ln -sfn "$REPO/bin/kitty-fullscreen-guard" "$BIN_DIR/kitty-fullscreen-guard"
   # kitty-pane-menu-native is a COMPILED binary, not source — it cannot be symlinked, and the repo
   # does not commit build artifacts. Compile fresh on every apply so it always matches the
   # checked-in .swift; kitty-pane-menu's own choose_native() already degrades to the AppleScript
@@ -307,6 +310,8 @@ grep -q "TERMINAL DISPATCH" "$BIN_DIR/it2" 2>/dev/null \
                                      || no "kitty-split-cwd.sh missing at $BIN_DIR — cmd+D cannot open a split"
 [ -x "$BIN_DIR/kitty-confirm-close" ] && ok "kitty-confirm-close deployed (cmd+W guards live sessions)" \
                                        || no "kitty-confirm-close missing at $BIN_DIR — cmd+W kills panes with no prompt"
+[ -x "$BIN_DIR/kitty-fullscreen-guard" ] && ok "kitty-fullscreen-guard deployed (last pane of a fullscreen window leaves fullscreen first)" \
+                                          || no "kitty-fullscreen-guard missing at $BIN_DIR — cmd+W, the pane menu and the detach chords refuse"
 [ -x "$BIN_DIR/kitty-pane-menu" ] && ok "kitty-pane-menu deployed (cmd+right = Move Session to…)" \
                                    || no "kitty-pane-menu missing at $BIN_DIR — cmd+right cannot open the move menu"
 [ -x "$BIN_DIR/kitty-pane-menu-native" ] && ok "kitty-pane-menu-native compiled (cursor-anchored NSMenu, not just the dialog)" \
