@@ -127,6 +127,21 @@ completion-assert, second pass (2026-10-15). All 8 after-window cancels rebuilt 
 
 Changes (`hooks/completion-assert.sh`, byte-identical stdout on all 8 replays old vs new; `tests/completion-assert-durations.bats` C4, C5): D1's inputs moved above the ledger and its read prefetched into the run memo beside it (collected at D1 or before either ledger abstain; kill switch `CC_CA_D1_PREFETCH=off`); the `--session` flag dropped when the environment already resolves to the same session, so the hook joins the shared single-flight key (any other environment keeps the flag; kill switch `CC_CA_SHARED_LEDGER=off`). Replays: case 6 6.1 → 3.8 s, case 1 4.4 → 3.3 s (the D1 cases); simulated four-way Stop, completion-assert's ledger wait 1.83 → 1.21 s cold. The ledger itself stays the floor: 0.94 s at load 17, 3.4 s at load ~50 in a claude-infrastructure worktree, its largest single term `cc-decide list --open --class C` (0.3 s at load 17).
 
+Landed `151363d40` (completion-assert, above; direct suites durations 8/8, forks 8/8, assignee-shared-cwd 9/9, completion-assert 185/185); live checkout converged to it 2026-10-15T06:14:28Z.
+
+Second after-window, 2026-10-15T06:15Z → 12:16Z (6.02 h, 1-min load median 13 / p95 36), same script:
+
+| hook (Stop timeout) | before 10-14 15:30Z → 21:30Z (load 21 / 195) | after 1, 10-14 22:34Z → 10-15 04:36Z (load 16 / 35) | after 2, post-`151363d40` (load 13 / 36) |
+|---|---|---|---|
+| operator-readout (10 s) | 5.17/h; p50 7.0 s / p95 10.2 s | 0.17/h; 3.5 s / 7.4 s | 2 / 30 runs = 0.33/h; 3.2 s / 10.1 s |
+| session-continue (5 s) | 4.67/h | 0.50/h | 2 / 8 = 0.33/h |
+| completion-assert (5 s) | 2.83/h | 1.33/h | 2 / 2 = 0.33/h |
+| boundary-handoff (5 s) | 0.50/h | 0.17/h | 1 / 1 = 0.17/h |
+
+Every after-2 cancel falls in three Stops, none after 07:21Z (the last ~5 h clean): 06:15:34Z in this worktree, a minute after the deploy's `install.sh` (completion-assert + session-continue together); 06:23:35Z operator-readout alone (load 39 → 55); 07:20:43Z in `tm2-plan` during a load spike (25 → 46-55 over 07:13-07:22Z), where all four hooks cancelled together. The load logger sampled through both, so neither was a machine stall. Uncached, the same ledger in `tm2-plan` is 1.1 s at load 25 (largest term `cc-research verdict` 0.46 s, an active research program there).
+
+Verdict against the frozen scope: each hook's own cost is now well inside its timeout at ordinary load, and completion-assert, the one hook the first pass did not move, went 2.83 → 0.33 cancels/h. NOT met: "p95 under half the timeout" for operator-readout (history p95 10.1 s from 2 cancels in 30 runs); for the three silent hooks history cannot give a p95 (it records only cancels and printing runs). What remains is correlated whole-Stop cancels at load spikes, whose shared dependency is the ledger's per-call fork cost (it scales ~3× from load 17 to 50) plus operator-readout's own BUSY-on ledger computed beside the shared one. Open, for a separate wave: cut the ledger's fork count under load (largest terms `cc-research verdict`, `cc-decide list`, `git cherry`), and let operator-readout reuse the shared BUSY-off ledger for the fields it has rather than computing a second one.
+
 ## Operator-only (file with cc-backlog / cc-decide; never edit settings.json or plists)
 
 O1 `timeout: 5` on `handed-off-session-guard.sh` + `PYTEST_XDIST_AUTO_NUM_WORKERS=3` (migration, c10) · O2 decision: `CC_SENTINEL_KILL=off` for compressor-sentinel (128 SIGKILLs since 10-07 conflict with "never kill work"; recommend off, 75%) · O3 plist throttles (session-index sweep 60 s → 300 s; public-publish daily) · O4 Claude Code upgrade via cc-upgrade + upstream report on the `ps -A` child leak · O5 30 s `eslogger exec` trace to attribute ~21k spawns/min · O6 optional cleanup of non-work orphans.
