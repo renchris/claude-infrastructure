@@ -497,72 +497,131 @@ EOF
 
 # ── cc_pane_fs_zshexit: a pane's ROOT zsh leaves fullscreen (guard, mode toggle) before it exits
 #    (docs/research/kitty-crash-2026-10-15/README.md § Chosen fix). A real `zsh -f -i -c` sources the lib,
-#    so the lib's own registration is the subject. SAFETY: no real kitty is reachable — KITTY_LISTEN_ON
-#    and KITTY_PID are unset, CC_TERM_KITTY and PATH's kitty/osascript are fakes, the guard is a stub
-#    that only logs its argv. The fake kitty answers `@ ls` with window 77 whose pid is $FAKE_KITTY_PID,
-#    which the zsh under test exports as $$ (root), $PPID (wrapper) or 1 (not root).
-#    RED-proof: against `git show HEAD:lib/pane-successor.sh` (no hook) the two "guard called" cases
-#    fail and the rest pass; with TRAPHUP removed, the SIGHUP case fails (zsh runs zshexit on HUP).
+#    so the lib's own registration is the subject, and it runs on a REAL pty (pty_run.py): the hook's
+#    hangup test reads the tty, and a kitty close is "master closed, then SIGHUP to the shell".
+#    SAFETY: no real kitty is reachable — KITTY_LISTEN_ON and KITTY_PID are unset, CC_TERM_KITTY and
+#    PATH's kitty/osascript are fakes, the guard is a stub that logs its argv and exits $STUB_RC. The
+#    fake kitty answers `@ ls` with window 77 whose pid is $FAKE_KITTY_PID, which the zsh under test
+#    exports as $$ (root), $PPID (wrapper) or 1 (not root), and logs every call to ls.log.
+#    RED-proof: against `git show HEAD~1:lib/pane-successor.sh` (the TRAPHUP draft) the hangup case
+#    fails — its foreground sleep survives the close — and the refusal case fails (the shell exits).
 fs_env() {
   command -v zsh >/dev/null || skip "no zsh"
   local s="$BATS_TEST_TMPDIR/fsbin"
   mkdir -p "$s"
   unset KITTY_LISTEN_ON KITTY_PID CC_KITTY_FS_GUARD
-  GUARD_LOG="$BATS_TEST_TMPDIR/guard.log"
+  GUARD_LOG="$BATS_TEST_TMPDIR/guard.log"; LS_LOG="$BATS_TEST_TMPDIR/ls.log"
   # shellcheck disable=SC2016  # stub bodies expand when the STUB runs
-  printf '#!/bin/bash\n[ "$1 $2" = "@ ls" ] || { echo "kitty $*" >> %q; exit 0; }\necho "[{\\"id\\":1,\\"tabs\\":[{\\"id\\":1,\\"windows\\":[{\\"id\\":77,\\"pid\\":${FAKE_KITTY_PID:-0}}]}]}]"\n' \
-    "$BATS_TEST_TMPDIR/kitty.log" > "$s/kitty"
+  printf '#!/bin/bash\n[ "$1 $2" = "@ ls" ] || { echo "kitty $*" >> %q; exit 0; }\necho ls >> %q\necho "[{\\"id\\":1,\\"tabs\\":[{\\"id\\":1,\\"windows\\":[{\\"id\\":77,\\"pid\\":${FAKE_KITTY_PID:-0}}]}]}]"\n' \
+    "$BATS_TEST_TMPDIR/kitty.log" "$LS_LOG" > "$s/kitty"
   printf '#!/bin/bash\necho "osascript $*" >> %q\nexit 0\n' "$BATS_TEST_TMPDIR/kitty.log" > "$s/osascript"
   # shellcheck disable=SC2016
   printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\nexit "${STUB_RC:-0}"\n' "$GUARD_LOG" > "$s/guard"
+  # the shell a refused exit execs into: it records that the pane was KEPT, then ends the test
+  printf '#!/bin/bash\necho kept >> %q\nexit 0\n' "$BATS_TEST_TMPDIR/kept.log" > "$s/keepshell"
   chmod +x "$s"/*
   export PATH="$s:$(dirname "$(command -v jq)"):/usr/bin:/bin" CC_TERM_KITTY="$s/kitty" CC_KITTY_FS_GUARD="$s/guard"
-  export KITTY_WINDOW_ID=77
+  export KITTY_WINDOW_ID=77 SHELL="$s/keepshell"
+  PTY="$BATS_TEST_TMPDIR/pty_run.py"
+  cat > "$PTY" <<'PY'
+# pty_run.py exit|hangup <argv...> — run argv as the session leader of a fresh pty.
+#   exit:   drain the pty until the child exits; print what it wrote, then "rc=<n>".
+#   hangup: after 1.5 s, close the master and SIGHUP the child (what kitty does when a window
+#           closes); print "rc=<n>" (or "alive") and whether the `sleep 31.5` it started survived.
+import os, pty, signal, subprocess, sys, time
+mode, argv = sys.argv[1], sys.argv[2:]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(argv[0], argv)
+def reap(limit):
+    end = time.time() + limit
+    while time.time() < end:
+        r, st = os.waitpid(pid, os.WNOHANG)
+        if r: return os.waitstatus_to_exitcode(st)
+        time.sleep(0.05)
+    return None
+if mode == "exit":
+    buf = b""
+    while True:
+        try:
+            chunk = os.read(fd, 4096)
+        except OSError: break
+        if not chunk: break
+        buf += chunk
+    sys.stdout.write(buf.decode(errors="replace"))
+    print("rc=%s" % reap(10))
+else:
+    time.sleep(1.5)
+    os.close(fd); os.kill(pid, signal.SIGHUP)
+    rc = reap(3)
+    time.sleep(0.5)
+    alive = subprocess.run(["pgrep", "-f", "^sleep 31.5$"], capture_output=True).returncode == 0
+    print("rc=%s sleep=%s" % ("alive" if rc is None else rc, "alive" if alive else "gone"))
+    subprocess.run(["pkill", "-f", "^sleep 31.5$"])
+PY
 }
 # $1 = what FAKE_KITTY_PID is set to inside the shell ('$$', '$PPID', '1'); $2 = how it ends (default: exit 0)
-fs_zsh() { zsh -f -i -c '. "$1"; export FAKE_KITTY_PID='"$1"'; '"${2:-exit 0}" _ "${FS_LIB:-$LIB}" </dev/null; }
+fs_zsh() { /usr/bin/python3 "$PTY" exit zsh -f -i -c '. "$1"; export FAKE_KITTY_PID='"$1"'; '"${2:-exit 0}" _ "${FS_LIB:-$LIB}"; }
 
 @test "zshexit: the pane's root shell exiting normally runs the guard in toggle mode for its window" {
   fs_env
   run fs_zsh '$$'
-  cat "$GUARD_LOG" 2>/dev/null || true
-  [ "$(cat "$GUARD_LOG")" = "--window 77 --mode toggle --scope pane --tool zshexit" ]
+  [ "$(cat "$GUARD_LOG")" = "--window 77 --mode toggle --scope pane --tool zshexit" ] || { echo "$output"; false; }
   [ ! -e "$BATS_TEST_TMPDIR/kitty.log" ]   # the hook only reads (`@ ls`); the guard is the only actor
 }
 
 @test "zshexit: a root reached through a non-shell wrapper (window pid = \$PPID) runs the guard" {
   fs_env
   # perl is the wrapper; `system` keeps it alive as zsh's parent
-  run perl -e 'system @ARGV; exit($? >> 8)' zsh -f -i -c '. "$1"; export FAKE_KITTY_PID=$PPID; exit 0' _ "${FS_LIB:-$LIB}"
-  [ "$(cat "$GUARD_LOG")" = "--window 77 --mode toggle --scope pane --tool zshexit" ]
+  run /usr/bin/python3 "$PTY" exit perl -e 'system @ARGV; exit($? >> 8)' zsh -f -i -c '. "$1"; export FAKE_KITTY_PID=$PPID; exit 0' _ "${FS_LIB:-$LIB}"
+  [ "$(cat "$GUARD_LOG")" = "--window 77 --mode toggle --scope pane --tool zshexit" ] || { echo "$output"; false; }
 }
 
 @test "zshexit: a shell nested under the root shell (parent is a shell) does not run the guard" {
   fs_env
-  run bash -c 'zsh -f -i -c ". \"\$1\"; export FAKE_KITTY_PID=\$PPID; exit 0" _ "$1"; true' _ "${FS_LIB:-$LIB}"
+  run /usr/bin/python3 "$PTY" exit bash -c 'zsh -f -i -c ". \"\$1\"; export FAKE_KITTY_PID=\$PPID; exit 0" _ "$1"; true' _ "${FS_LIB:-$LIB}"
+  [ -s "$LS_LOG" ] || { echo "$output"; false; }   # it did look — and declined
   [ ! -e "$GUARD_LOG" ]
 }
 
 @test "zshexit: a shell that is not the window's process (pid mismatch) does not run the guard" {
   fs_env
   run fs_zsh 1
+  [ -s "$LS_LOG" ] || { echo "$output"; false; }
   [ ! -e "$GUARD_LOG" ]
 }
 
-@test "zshexit: SIGHUP (kitty already closing the window) exits 129 without running the guard" {
+@test "zshexit: a kitty close (master gone + SIGHUP) skips the guard AND still HUPs the foreground job" {
   fs_env
-  run fs_zsh '$$' 'kill -HUP $$; sleep 2; exit 0'
-  [ "$status" -eq 129 ]
-  [ ! -e "$GUARD_LOG" ]
+  run /usr/bin/python3 "$PTY" hangup zsh -f -i -c '. "$1"; export FAKE_KITTY_PID=$$; sleep 31.5; exit 0' _ "${FS_LIB:-$LIB}"
+  [[ "$output" == *"sleep=gone"* ]] || { echo "$output"; false; }   # zsh's own HUP handling ran
+  [[ "$output" != *"rc=alive"* ]] || { echo "$output"; false; }
+  [ ! -e "$GUARD_LOG" ] || { cat "$GUARD_LOG"; false; }
 }
 
-@test "zshexit: KITTY_WINDOW_ID unset ⇒ the hook is not registered; CC_KITTY_FS_GUARD=off ⇒ no guard" {
+@test "zshexit: a guard REFUSAL (rc 3) keeps the pane — the exit becomes a fresh shell" {
+  fs_env
+  STUB_RC=3 run fs_zsh '$$'
+  [ "$(cat "$GUARD_LOG")" = "--window 77 --mode toggle --scope pane --tool zshexit" ]
+  [ "$(cat "$BATS_TEST_TMPDIR/kept.log")" = kept ] || { echo "$output"; false; }
+  [[ "$output" == *"pane kept; leave fullscreen, then exit again"* ]] || { echo "$output"; false; }
+  # rc 4 (the window is already gone) and rc 0 let the exit proceed
+  rm -f "$BATS_TEST_TMPDIR/kept.log"
+  STUB_RC=4 run fs_zsh '$$'
+  [ ! -e "$BATS_TEST_TMPDIR/kept.log" ]
+}
+
+@test "zshexit: KITTY_WINDOW_ID unset ⇒ the hook is not registered; CC_KITTY_FS_GUARD=off ⇒ it does nothing" {
   fs_env
   run env -u KITTY_WINDOW_ID zsh -f -i -c '. "$1"; print -r -- "n=${#zshexit_functions}"; exit 0' _ "$LIB"
   [ "$output" = "n=0" ]
+  # off is checked before ANY work: not even the `@ ls` lookup runs
   CC_KITTY_FS_GUARD=off run fs_zsh '$$'
-  [ ! -e "$GUARD_LOG" ]
-  # control: the same shell with the window set does register it (once, even when sourced twice)
+  [ ! -e "$LS_LOG" ] && [ ! -e "$GUARD_LOG" ] || { echo "$output"; false; }
+  # control: the same shell without the switch does look (proves the off case is not vacuous)
+  run fs_zsh '$$'
+  [ -s "$LS_LOG" ]
+  # registration happens once, even when sourced twice
   run zsh -f -i -c '. "$1"; . "$1"; print -r -- "n=${#zshexit_functions}"; exit 0' _ "$LIB"
   [ "$output" = "n=1" ]
 }
