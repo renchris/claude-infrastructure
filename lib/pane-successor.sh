@@ -274,3 +274,63 @@ cc_pane_successor_precmd() { # zsh precmd hook → always rc 0; on a claim it do
   cc_pane_successor_exec "$_c"
   return 0
 }
+
+# THE ROOT-SHELL EXIT HOOK (docs/research/kitty-crash-2026-10-15/README.md § Chosen fix). Emptying a
+# native-fullscreen OS window crashed the whole kitty on 2026-10-15, and a typed `exit` / Ctrl-D in a
+# pane's ROOT shell is one way to empty it. So before such a shell exits it runs the fullscreen guard in
+# TOGGLE mode (it leaves fullscreen first, so kitty's destroy happens windowed); its rc is ignored, the
+# shell is exiting anyway. It acts only when this shell is the pane's root process: window
+# $KITTY_WINDOW_ID's `pid` in `kitty @ ls` is $$, or $PPID when that parent is not itself a shell (kitty
+# may start the shell through a wrapper; a nested shell's parent shell is the root, not it). A SIGHUP
+# means kitty is already closing the window, so TRAPHUP records it, still exits, and the hook skips.
+# zsh runs zshexit on a normal exit and on SIGHUP, not on `exec` (measured, README :367).
+# Registered by THIS lib only in an interactive zsh with KITTY_WINDOW_ID set, so ~/.zshrc needs no edit
+# and a shell outside kitty pays zero forks. Kill switch CC_KITTY_FS_GUARD=off; a path overrides the guard.
+cc_pane_fs_zshexit() { # zsh zshexit hook → always rc 0
+  [ -n "${KITTY_WINDOW_ID:-}" ] || return 0
+  [ "${CC_KITTY_FS_GUARD:-}" != off ] || return 0
+  [ "${_CC_FS_HUP:-0}" != 1 ] || return 0
+  case "$KITTY_WINDOW_ID" in *[!0-9]*) return 0 ;; esac
+  local _k="${CC_TERM_KITTY:-}" _tb="" _c _pid _pc _g="${CC_KITTY_FS_GUARD:-}"
+  [ -n "$_k" ] || _k="$(command -v kitty 2>/dev/null)" || _k=/Applications/kitty.app/Contents/MacOS/kitty
+  for _c in "$(command -v timeout 2>/dev/null)" /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+            /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { _tb="$_c"; break; }
+  done
+  # `kitty @ ls` bounded at 3 s: timeout(1), else perl's alarm (always on macOS).
+  if [ -n "$_tb" ]; then
+    _pid="$("$_tb" 3 "$_k" @ ls 2>/dev/null | jq -r --argjson w "$KITTY_WINDOW_ID" \
+      '.[].tabs[].windows[] | select(.id == $w) | .pid' 2>/dev/null)"
+  else
+    # shellcheck disable=SC2016  # perl code, not shell
+    _pid="$(/usr/bin/perl -e 'alarm shift; exec @ARGV or exit 127' 3 "$_k" @ ls 2>/dev/null | jq -r \
+      --argjson w "$KITTY_WINDOW_ID" '.[].tabs[].windows[] | select(.id == $w) | .pid' 2>/dev/null)"
+  fi
+  case "$_pid" in ''|*[!0-9]*) return 0 ;; esac
+  if [ "$_pid" != "$$" ]; then
+    [ "$_pid" = "${PPID:-}" ] || return 0
+    _pc="$(ps -o comm= -p "$PPID" 2>/dev/null)"
+    case "${_pc##*/}" in *sh) return 0 ;; esac
+  fi
+  if [ -z "$_g" ]; then
+    _g="${_CC_FS_LIB_DIR:+$_CC_FS_LIB_DIR/../bin/kitty-fullscreen-guard}"
+    [ -n "$_g" ] && [ -x "$_g" ] || _g="${HOME:-}/.claude/bin/kitty-fullscreen-guard"
+  fi
+  if [ ! -x "$_g" ]; then
+    printf 'cc_pane_fs_zshexit: no fullscreen guard at %s — exiting without it\n' "$_g" >&2
+    return 0
+  fi
+  "$_g" --window "$KITTY_WINDOW_ID" --mode toggle --scope pane --tool zshexit >&2 || true
+  return 0
+}
+
+# zsh-only syntax lives in a string so bash never parses it. An existing TRAPHUP is left alone.
+if [ -n "${ZSH_VERSION:-}" ] && [ -n "${KITTY_WINDOW_ID:-}" ]; then
+  # shellcheck disable=SC2016  # zsh code evaluated by zsh
+  eval '
+  if [[ -o interactive ]]; then
+    _CC_FS_LIB_DIR=${${(%):-%x}:A:h}
+    (( ${zshexit_functions[(I)cc_pane_fs_zshexit]} )) || zshexit_functions+=(cc_pane_fs_zshexit)
+    (( ${+functions[TRAPHUP]} )) || TRAPHUP() { _CC_FS_HUP=1; exit 129; }
+  fi'
+fi

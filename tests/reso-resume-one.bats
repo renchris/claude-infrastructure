@@ -783,7 +783,15 @@ rr_decide() { # $1=claude rc → runs rr_close_on_clean_exit; status 0 = close, 
   [ -n "$fn" ] || { echo "rr_close_on_clean_exit not found in $RRO"; return 2; }
   run bash -c "$fn"$'\n''rr_close_on_clean_exit "$1"' "$RRO" "$1"
 }
-rr_env() { export LR_LOCKS_DIR="$BATS_TEST_TMPDIR/locks" KITTY_WINDOW_ID=42; }
+rr_env() { # the fullscreen guard (the close's LAST gate) is a stub logging argv, exiting $GUARD_RC (default 0)
+  export LR_LOCKS_DIR="$BATS_TEST_TMPDIR/locks" KITTY_WINDOW_ID=42
+  unset KITTY_LISTEN_ON KITTY_PID
+  RR_GUARD_LOG="$BATS_TEST_TMPDIR/guard-log"
+  # shellcheck disable=SC2016
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\nexit "${GUARD_RC:-0}"\n' "$RR_GUARD_LOG" > "$BATS_TEST_TMPDIR/fsguard"
+  chmod +x "$BATS_TEST_TMPDIR/fsguard"
+  export CC_KITTY_FS_GUARD="$BATS_TEST_TMPDIR/fsguard"
+}
 rr_hold_recycle() { # a recycle lock for window 42 held by a LIVE pid (this test's shell)
   local d; d="$LR_LOCKS_DIR/pane-$(printf '%s' "iterm2:42" | shasum -a 1 | cut -c1-40).recycle"
   mkdir -p "$d"
@@ -808,6 +816,30 @@ rr_hold_recycle() { # a recycle lock for window 42 held by a LIVE pid (this test
   rr_hold_recycle
   rr_decide 0
   [ "$status" -eq 1 ] || { echo "closed a pane mid-recycle"; false; }
+}
+
+# Fullscreen guard (docs/research/kitty-crash-2026-10-15/README.md § Chosen fix). RED-proof: against
+# `git show HEAD:bin/reso-resume-one` the rc-3 and missing-guard cases return 0 (close) and the argv
+# case finds no guard log.
+@test "close-on-exit: the guard is asked in refuse mode for this window; its rc 0 closes" {
+  rr_env
+  rr_decide 0
+  [ "$status" -eq 0 ] || false
+  [ "$(cat "$RR_GUARD_LOG")" = "--window 42 --mode refuse --scope pane --tool reso-resume-one" ]
+}
+
+@test "close-on-exit: the guard refusing (rc 3: last pane of a fullscreen window) keeps the shell" {
+  rr_env; export GUARD_RC=3
+  rr_decide 0
+  [ "$status" -eq 1 ] || { echo "closed the last pane of a fullscreen window"; false; }
+  [[ "$output" == *"keeping the shell"* ]]
+}
+
+@test "close-on-exit: a guard that cannot be found keeps the shell (fail closed)" {
+  rr_env; export CC_KITTY_FS_GUARD="$BATS_TEST_TMPDIR/no-such-guard"
+  rr_decide 0
+  [ "$status" -eq 1 ] || false
+  [[ "$output" == *"no-such-guard"* ]]
 }
 
 @test "close-on-exit: CC_PANE_CLOSE_ON_EXIT=0 keeps the shell" {

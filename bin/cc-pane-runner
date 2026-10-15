@@ -193,6 +193,30 @@ _close_on_exit() { # $1=command $2=its exit status $3=1 iff a fleet launcher del
     printf 'cc-pane-runner: %s exited 0 — recycle pending, keeping the shell\n' "$_v" >&2
     return 0
   fi
+  # THE LAST GATE: kitty-fullscreen-guard (docs/research/kitty-crash-2026-10-15/README.md § Chosen fix).
+  # Emptying a native-fullscreen OS window from inside crashed the whole kitty on 2026-10-15, taking
+  # every session with it. REFUSE mode never toggles: rc != 0 (fullscreen, unreadable, not found)
+  # keeps the shell — the accepted cost is a husk in a fullscreen window. Not in kitty ⇒ nothing to
+  # empty ⇒ no gate. CC_KITTY_FS_GUARD=off is the operator's kill switch; a path overrides the guard.
+  if [ -n "${KITTY_WINDOW_ID:-}" ]; then
+    _c="${CC_KITTY_FS_GUARD:-}"
+    if [ "$_c" = off ]; then
+      printf 'cc-pane-runner: CC_KITTY_FS_GUARD=off — closing without the fullscreen guard\n' >&2
+    else
+      if [ -z "$_c" ]; then
+        _c="${_sd:+$_sd/kitty-fullscreen-guard}"
+        [ -n "$_c" ] && [ -x "$_c" ] || _c="${HOME:-}/.claude/bin/kitty-fullscreen-guard"
+      fi
+      if [ ! -x "$_c" ]; then
+        printf 'cc-pane-runner: fullscreen guard not executable at %s — keeping the shell\n' "$_c" >&2
+        return 0
+      fi
+      if ! "$_c" --window "$KITTY_WINDOW_ID" --mode refuse --scope pane --tool cc-pane-runner >&2; then
+        printf 'cc-pane-runner: %s exited 0 — last pane of a fullscreen (or unreadable) kitty window, keeping the shell\n' "$_v" >&2
+        return 0
+      fi
+    fi
+  fi
   printf 'cc-pane-runner: %s exited 0 — closing this pane (CC_PANE_CLOSE_ON_EXIT=0 keeps it)\n' "$_v" >&2
   [ -n "${_armed:-}" ] && rm -f "$_armed" 2>/dev/null
   exit 0

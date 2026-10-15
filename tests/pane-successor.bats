@@ -494,3 +494,83 @@ EOF
   [ "$(grep -c '^argv:' "$FAKESH_LOG")" -eq 1 ]
   [ -z "$(find "$CC_PANE_SUCCESSOR_DIR" -name '*.cmd' -o -name '*.handback*')" ]
 }
+
+# ── cc_pane_fs_zshexit: a pane's ROOT zsh leaves fullscreen (guard, mode toggle) before it exits
+#    (docs/research/kitty-crash-2026-10-15/README.md § Chosen fix). A real `zsh -f -i -c` sources the lib,
+#    so the lib's own registration is the subject. SAFETY: no real kitty is reachable — KITTY_LISTEN_ON
+#    and KITTY_PID are unset, CC_TERM_KITTY and PATH's kitty/osascript are fakes, the guard is a stub
+#    that only logs its argv. The fake kitty answers `@ ls` with window 77 whose pid is $FAKE_KITTY_PID,
+#    which the zsh under test exports as $$ (root), $PPID (wrapper) or 1 (not root).
+#    RED-proof: against `git show HEAD:lib/pane-successor.sh` (no hook) the two "guard called" cases
+#    fail and the rest pass; with TRAPHUP removed, the SIGHUP case fails (zsh runs zshexit on HUP).
+fs_env() {
+  command -v zsh >/dev/null || skip "no zsh"
+  local s="$BATS_TEST_TMPDIR/fsbin"
+  mkdir -p "$s"
+  unset KITTY_LISTEN_ON KITTY_PID CC_KITTY_FS_GUARD
+  GUARD_LOG="$BATS_TEST_TMPDIR/guard.log"
+  # shellcheck disable=SC2016  # stub bodies expand when the STUB runs
+  printf '#!/bin/bash\n[ "$1 $2" = "@ ls" ] || { echo "kitty $*" >> %q; exit 0; }\necho "[{\\"id\\":1,\\"tabs\\":[{\\"id\\":1,\\"windows\\":[{\\"id\\":77,\\"pid\\":${FAKE_KITTY_PID:-0}}]}]}]"\n' \
+    "$BATS_TEST_TMPDIR/kitty.log" > "$s/kitty"
+  printf '#!/bin/bash\necho "osascript $*" >> %q\nexit 0\n' "$BATS_TEST_TMPDIR/kitty.log" > "$s/osascript"
+  # shellcheck disable=SC2016
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\nexit "${STUB_RC:-0}"\n' "$GUARD_LOG" > "$s/guard"
+  chmod +x "$s"/*
+  export PATH="$s:$(dirname "$(command -v jq)"):/usr/bin:/bin" CC_TERM_KITTY="$s/kitty" CC_KITTY_FS_GUARD="$s/guard"
+  export KITTY_WINDOW_ID=77
+}
+# $1 = what FAKE_KITTY_PID is set to inside the shell ('$$', '$PPID', '1'); $2 = how it ends (default: exit 0)
+fs_zsh() { zsh -f -i -c '. "$1"; export FAKE_KITTY_PID='"$1"'; '"${2:-exit 0}" _ "${FS_LIB:-$LIB}" </dev/null; }
+
+@test "zshexit: the pane's root shell exiting normally runs the guard in toggle mode for its window" {
+  fs_env
+  run fs_zsh '$$'
+  cat "$GUARD_LOG" 2>/dev/null || true
+  [ "$(cat "$GUARD_LOG")" = "--window 77 --mode toggle --scope pane --tool zshexit" ]
+  [ ! -e "$BATS_TEST_TMPDIR/kitty.log" ]   # the hook only reads (`@ ls`); the guard is the only actor
+}
+
+@test "zshexit: a root reached through a non-shell wrapper (window pid = \$PPID) runs the guard" {
+  fs_env
+  # perl is the wrapper; `system` keeps it alive as zsh's parent
+  run perl -e 'system @ARGV; exit($? >> 8)' zsh -f -i -c '. "$1"; export FAKE_KITTY_PID=$PPID; exit 0' _ "${FS_LIB:-$LIB}"
+  [ "$(cat "$GUARD_LOG")" = "--window 77 --mode toggle --scope pane --tool zshexit" ]
+}
+
+@test "zshexit: a shell nested under the root shell (parent is a shell) does not run the guard" {
+  fs_env
+  run bash -c 'zsh -f -i -c ". \"\$1\"; export FAKE_KITTY_PID=\$PPID; exit 0" _ "$1"; true' _ "${FS_LIB:-$LIB}"
+  [ ! -e "$GUARD_LOG" ]
+}
+
+@test "zshexit: a shell that is not the window's process (pid mismatch) does not run the guard" {
+  fs_env
+  run fs_zsh 1
+  [ ! -e "$GUARD_LOG" ]
+}
+
+@test "zshexit: SIGHUP (kitty already closing the window) exits 129 without running the guard" {
+  fs_env
+  run fs_zsh '$$' 'kill -HUP $$; sleep 2; exit 0'
+  [ "$status" -eq 129 ]
+  [ ! -e "$GUARD_LOG" ]
+}
+
+@test "zshexit: KITTY_WINDOW_ID unset ⇒ the hook is not registered; CC_KITTY_FS_GUARD=off ⇒ no guard" {
+  fs_env
+  run env -u KITTY_WINDOW_ID zsh -f -i -c '. "$1"; print -r -- "n=${#zshexit_functions}"; exit 0' _ "$LIB"
+  [ "$output" = "n=0" ]
+  CC_KITTY_FS_GUARD=off run fs_zsh '$$'
+  [ ! -e "$GUARD_LOG" ]
+  # control: the same shell with the window set does register it (once, even when sourced twice)
+  run zsh -f -i -c '. "$1"; . "$1"; print -r -- "n=${#zshexit_functions}"; exit 0' _ "$LIB"
+  [ "$output" = "n=1" ]
+}
+
+@test "zshexit: the lib still parses and sources under bash 3.2, inside and outside kitty" {
+  /bin/bash -n "$LIB"
+  run /bin/bash -c '. "$1" && type cc_pane_fs_zshexit >/dev/null && echo ok' _ "$LIB"
+  [ "$output" = ok ]
+  run env KITTY_WINDOW_ID=77 /bin/bash -c '. "$1" && echo ok' _ "$LIB"
+  [ "$output" = ok ]
+}

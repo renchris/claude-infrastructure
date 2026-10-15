@@ -22,6 +22,15 @@ setup() {
   unset KITTY_LISTEN_ON CC_TERM_KITTY_TO CC_PANE_CLOSE_ON_EXIT CC_PANE_CMD_INTERACTIVE CC_PANE_CMD CC_PANE_CMD_DIR
   unset CC_PANE_RUNNER_OWNS_CLOSE CC_CLOSE_PANE_ON_EXIT CC_MEMDIR_REALPATH CC_CLOSE_ATTRIB_DISABLED
   export PATH="$S:/usr/bin:/bin"
+  # The fullscreen guard (bin/kitty-fullscreen-guard) is the close's LAST gate: a stub that logs its
+  # argv and exits $GUARD_RC (default 0 = safe to close). No real kitty is reachable: KITTY_PID unset,
+  # kitty and osascript on PATH are loggers.
+  unset KITTY_PID
+  # shellcheck disable=SC2016
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\nexit "${GUARD_RC:-0}"\n' "$T/guard-log" > "$S/fsguard"
+  printf '#!/bin/bash\necho "$0 $*" >> %q\nexit 0\n' "$T/kitty-log" > "$S/kitty"
+  cp "$S/kitty" "$S/osascript"
+  export CC_KITTY_FS_GUARD="$S/fsguard" CC_TERM_KITTY="$S/kitty"
 
   # `claude` — records what it saw of the ownership marker, then exits $STUB_RC.
   # shellcheck disable=SC2016  # stub bodies are literal; they expand when the STUB runs
@@ -155,6 +164,36 @@ run_wrap() { CC_CLOSE_ATTRIB_PS_BIN="$S/fakeps" CC_CLOSE_ATTRIB_KILL_BIN="$S/fak
   [ "$status" -eq 7 ]
   [ -e "$T/shell-ran" ]
   [[ "$output" == *"CC_PANE_CLOSE_ON_EXIT=0, keeping the shell"* ]]
+}
+
+# Fullscreen guard (docs/research/kitty-crash-2026-10-15/README.md § Chosen fix): emptying a fullscreen
+# OS window crashed kitty. RED-proof: against `git show HEAD:bin/cc-pane-runner` the "refuses" and
+# "missing guard" cases close the pane (status 0, no shell) and the argv case finds no guard log.
+@test "runner: a clean exit asks the guard in refuse mode for this window, then closes on rc 0" {
+  run_runner "claude"
+  [ "$status" -eq 0 ]
+  [ ! -e "$T/shell-ran" ]
+  [ "$(cat "$T/guard-log")" = "--window 42 --mode refuse --scope pane --tool cc-pane-runner" ]
+  [ ! -e "$T/kitty-log" ]
+}
+
+@test "runner: the guard refusing (rc 3: last pane of a fullscreen window) keeps the shell" {
+  GUARD_RC=3 run_runner "claude"
+  [ "$status" -eq 7 ]
+  [ -e "$T/shell-ran" ]
+  [[ "$output" == *"last pane of a fullscreen (or unreadable) kitty window, keeping the shell"* ]]
+}
+
+@test "runner: a guard that cannot be found keeps the shell (fail closed), naming the path" {
+  CC_KITTY_FS_GUARD="$T/no-such-guard" run_runner "claude"
+  [ "$status" -eq 7 ]
+  [[ "$output" == *"fullscreen guard not executable at $T/no-such-guard"* ]]
+}
+
+@test "runner: outside kitty (no KITTY_WINDOW_ID) the guard is not consulted and the pane closes" {
+  KITTY_WINDOW_ID='' GUARD_RC=3 run_runner "claude"
+  [ "$status" -eq 0 ]
+  [ ! -e "$T/guard-log" ]
 }
 
 @test "runner: the command sees CC_PANE_RUNNER_OWNS_CLOSE=1; the fallback shell does not" {

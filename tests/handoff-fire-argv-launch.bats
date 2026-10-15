@@ -60,6 +60,10 @@ setup() {
   # so the command it runs (and every descendant of it) can no longer inherit a spent record at all.
   # "env mode CONSUMES its delivery record" below is that half's control.
   unset CC_PANE_CMD CC_PANE_CMD_INTERACTIVE CC_PANE_CMD_WAIT_S CC_PANE_RUNNER
+  # Runner cases that inherit KITTY_WINDOW_ID reach its close path, whose last gate is the fullscreen
+  # guard: a stub answering rc 0 (safe), so no case here can reach a real kitty through it.
+  printf '#!/bin/bash\nexit 0\n' > "$BATS_TEST_TMPDIR/fsguard"; chmod +x "$BATS_TEST_TMPDIR/fsguard"
+  export CC_KITTY_FS_GUARD="$BATS_TEST_TMPDIR/fsguard"
   KLOG="$BATS_TEST_TMPDIR/kitty.log"
   fake_kitty
 }

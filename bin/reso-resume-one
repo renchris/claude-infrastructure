@@ -1022,6 +1022,24 @@ rr_close_on_clean_exit() { # $1=claude's exit status → 0 close the pane / 1 ke
   . "$_lib" 2>/dev/null || return 1
   command -v cc_pane_recycle_pending >/dev/null 2>&1 || return 1
   cc_pane_recycle_pending "${KITTY_WINDOW_ID:-}" && return 1
+  # THE LAST GATE: kitty-fullscreen-guard in REFUSE mode (docs/research/kitty-crash-2026-10-15/README.md
+  # § Chosen fix) — emptying a native-fullscreen OS window crashed the whole kitty on 2026-10-15. Any
+  # rc != 0, or a guard that cannot be found, keeps the shell. Not in kitty ⇒ no gate.
+  # CC_KITTY_FS_GUARD=off is the operator's kill switch; a path overrides the guard.
+  [ -n "${KITTY_WINDOW_ID:-}" ] || return 0
+  _c="${CC_KITTY_FS_GUARD:-}"
+  if [ "$_c" = off ]; then
+    printf '[reso-resume-one] CC_KITTY_FS_GUARD=off — closing without the fullscreen guard\n' >&2
+    return 0
+  fi
+  if [ -z "$_c" ]; then
+    _c="${_sd:+$_sd/kitty-fullscreen-guard}"
+    [ -n "$_c" ] && [ -x "$_c" ] || _c="${HOME:-}/.claude/bin/kitty-fullscreen-guard"
+  fi
+  if [ ! -x "$_c" ] || ! "$_c" --window "$KITTY_WINDOW_ID" --mode refuse --scope pane --tool reso-resume-one >&2; then
+    printf '[reso-resume-one] last pane of a fullscreen (or unreadable) kitty window, or no guard at %s — keeping the shell\n' "$_c" >&2
+    return 1
+  fi
   return 0
 }
 if rr_close_on_clean_exit "$rr_rc"; then
