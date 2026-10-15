@@ -39,6 +39,10 @@ SH
   # a directory without one, so the centered-dialog path (the osascript stub) is the one taken.
   BIN="$BATS_TEST_TMPDIR/bin"; mkdir -p "$BIN"; cp "$MENU" "$BIN/kitty-pane-menu"
   export PATH="$STUBS:$PATH" KITTY_LISTEN_ON="unix:$BATS_TEST_TMPDIR/sock"
+  # A move now passes the fullscreen guard first (tests/kitty-pane-guard.bats owns it); an
+  # always-safe stub keeps this suite about the ROUTE.
+  printf '#!/bin/sh\nexit 0\n' >"$STUBS/fs-guard"; chmod +x "$STUBS/fs-guard"
+  export CC_KITTY_FS_GUARD="$STUBS/fs-guard" CC_KITTY_PANE_ACTIONS_LOG="$BATS_TEST_TMPDIR/actions.jsonl"
 }
 
 # os-window 1 holds the clicked pane (window 50, focused). os-window 24 holds tab 24. os-window 30

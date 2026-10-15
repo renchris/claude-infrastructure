@@ -108,6 +108,15 @@ from collections import Counter
 HERE = os.path.dirname(os.path.abspath(__file__))
 KITTY_ICON = "/Applications/kitty.app/Contents/Resources/kitty.icns"
 
+# The action log (lib/kitty_pane_actions.py, one writer): the 2026-10-15 crash was attributed at
+# 75% and no better because "Move to <window>" wrote nothing. Bookkeeping never fails a pick.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+try:
+    from kitty_pane_actions import log_row
+except Exception:  # noqa: BLE001 — a missing lib must not take the menu down with it
+    def log_row(*a, **k):  # type: ignore[misc]
+        pass
+
 
 def log_pane_spawn(surface: str, backend: str, pane: str, detail: str) -> None:
     """One row per pane this menu CREATES (item 1467ea1dad4f).
@@ -911,8 +920,10 @@ def choose(items: list[str]) -> str | None:
     applescript_list = ", ".join(
         '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"' for s in items
     )
+    # `activate` is osascript itself, so the dialog still comes to the front. It used to be
+    # `tell application "kitty" to activate`, which LAUNCHES a dead kitty (refocus() below).
     script = (
-        'tell application "kitty" to activate\n'
+        'activate\n'
         f'set r to (choose from list {{{applescript_list}}} '
         'with title "kitty" with prompt "Move pane to…")\n'
         'if r is false then return ""\n'
@@ -950,7 +961,82 @@ def _as_str(s: str) -> str:
 
 
 def refocus() -> None:
-    subprocess.run(["osascript", "-e", 'tell application "kitty" to activate'], capture_output=True)
+    """Give focus back to the kitty that launched this menu — and NEVER launch one.
+
+    `tell application "kitty" to activate` launches kitty when it is dead, which is how kitty came
+    back at 00:01:28 on 2026-10-15 (docs/research/kitty-crash-2026-10-15/README.md). A
+    `--type=background` child of a dead kitty is reparented to launchd, so the parent pid is the
+    test: activate THAT pid through NSRunningApplication, which returns nil for a dead process
+    rather than starting anything."""
+    ppid = os.getppid()
+    try:
+        r = subprocess.run(["ps", "-o", "comm=", "-p", str(ppid)],
+                           capture_output=True, text=True, timeout=5)
+        comm = (getattr(r, "stdout", "") or "").strip()
+        if r.returncode != 0 or not comm.endswith("kitty"):
+            return
+        js = ('ObjC.import("AppKit"); '
+              f'var a = $.NSRunningApplication.runningApplicationWithProcessIdentifier({ppid}); '
+              'if (a && !a.isNil()) { a.activateWithOptions(2); }')
+        subprocess.run(["osascript", "-l", "JavaScript", "-e", js], capture_output=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+FULLSCREEN_ALERT = ("This is the last pane of a fullscreen window and it did not leave fullscreen "
+                    "cleanly; leave fullscreen and try again.")
+GUARD_VERDICTS = {0: "safe", 1: "then-failed", 2: "usage", 3: "refused", 4: "window-not-found",
+                  127: "guard-unavailable"}
+
+
+def guard_path() -> str:
+    """$CC_KITTY_FS_GUARD (`off` = operator kill switch), else the sibling, else ~/.claude/bin."""
+    env = os.environ.get("CC_KITTY_FS_GUARD")
+    if env:
+        return env
+    sib = os.path.join(HERE, "kitty-fullscreen-guard")
+    if os.path.exists(sib):
+        return sib
+    return os.path.join(os.path.expanduser("~"), ".claude", "bin", "kitty-fullscreen-guard")
+
+
+def fullscreen_guard(wid: int, scope: str) -> int:
+    """The LAST gate before a removal that may empty a fullscreen OS window (the 2026-10-15
+    crash). Unbounded on purpose: the guard bounds itself. A guard that cannot run REFUSES."""
+    g = guard_path()
+    if g == "off":
+        print("kitty-pane-menu: fullscreen guard disabled (CC_KITTY_FS_GUARD=off)", file=sys.stderr)
+        return 0
+    argv = [g, "--window", str(wid)] + (["--to", ADDRESS] if ADDRESS else [])
+    argv += ["--mode", "toggle", "--scope", scope, "--tool", "kitty-pane-menu"]
+    try:
+        return subprocess.run(argv).returncode
+    except OSError as e:
+        print(f"kitty-pane-menu: fullscreen guard not runnable ({g}): {e} — refusing", file=sys.stderr)
+        return 127
+
+
+def alert_fullscreen() -> None:
+    script = (f'display alert "Pane not moved" message "{_as_str(FULLSCREEN_ALERT)}" '
+              'as warning buttons {"OK"} default button "OK"')
+    try:
+        subprocess.run(["osascript", "-e", script], capture_output=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def guarded(wid: int, scope: str, result: dict) -> bool:
+    """Run the guard, record its verdict in `result`, alert on a fullscreen refusal."""
+    rc = fullscreen_guard(wid, scope)
+    result["verdict"] = "guard-off" if guard_path() == "off" else GUARD_VERDICTS.get(rc, f"rc-{rc}")
+    result["rc"] = rc
+    if rc == 3:
+        alert_fullscreen()
+    return rc == 0
+
+
+def tab_exists(tree: list, tab_id: int) -> bool:
+    return any(t.get("id") == tab_id for o in tree for t in o.get("tabs", []))
 
 
 USAGE = "usage: kitty-pane-menu [--check]"
@@ -1058,30 +1144,54 @@ def main() -> int:
     if choice is _NATIVE_UNAVAILABLE:
         choice = choose(items)
     if not choice:
-        return 0  # cancelled (native: genuinely dismissed; dialog: Cancel/Escape)
+        return 0  # cancelled (native: genuinely dismissed; dialog: Cancel/Escape) — logs nothing
+
+    # The INTENT row is fsynced before anything below can destroy a window, so a kitty that dies
+    # inside the call still leaves on disk which pick, which pane, and how many panes its OS window
+    # held — the attribution whose absence capped the 2026-10-15 diagnosis at 75%.
+    own = next((o for o in tree if o.get("id") == self_osw), None)
+    log_row("kitty-pane-menu", "intent", choice=choice, wid=wid, os_window_id=self_osw,
+            platform_window_id=(own or {}).get("platform_window_id"),
+            panes=sum(len(t.get("windows", [])) for t in (own or {}).get("tabs", [])) if own else None)
+    result: dict = {}
 
     if choice == "Paste":
-        kitty("action", "--match", f"id:{wid}", "paste_from_selection")
+        result["rc"] = kitty("action", "--match", f"id:{wid}", "paste_from_selection").returncode
     elif choice == "Move to New Window":
-        # `detach-window` with NO --target-tab CREATES an OS window, so this is a pane-spawn and it
-        # gets a row like every other one (item 1467ea1dad4f). The --target-tab branch below only
-        # RE-HOMES an existing window and deliberately does not log: one row per surface CREATED.
-        log_pane_spawn("os-window", "kitty", str(wid), "kitty-pane-menu detach-window (new window)")
-        kitty("detach-window", "--match", f"id:{wid}")
+        if guarded(wid, "pane", result):
+            # `detach-window` with NO --target-tab CREATES an OS window, so this is a pane-spawn
+            # and it gets a row like every other one (item 1467ea1dad4f). The --target-tab branch
+            # below only RE-HOMES an existing window and deliberately does not log one.
+            log_pane_spawn("os-window", "kitty", str(wid), "kitty-pane-menu detach-window (new window)")
+            result["rc"] = kitty("detach-window", "--match", f"id:{wid}").returncode
     elif choice == "Close Pane":
         # --window, not a bare `window`: this menu anchors on the pane under the POINTER and
         # kitty-confirm-close anchors on the FOCUSED one, so on a right-click in a window macOS
         # did not raise, the two disagree — and a pane at a bare shell prompt closes with no
         # dialog, making that disagreement silent. One close path, one target.
-        subprocess.run([os.path.join(HERE, "kitty-confirm-close"), "window", "--window", str(wid)])
+        # NOT guarded here: kitty-confirm-close guards its own close AFTER its dialog. Guarding
+        # here too would leave fullscreen before the dialog, and a Cancel must not touch it.
+        result["rc"] = subprocess.run(
+            [os.path.join(HERE, "kitty-confirm-close"), "window", "--window", str(wid)]).returncode
     else:
         for target_tab, label, _src in targets:
             if label == choice:
+                # Re-checked in a FRESH tree before the guard: the window population churns, and a
+                # guard that leaves fullscreen for a move whose destination is gone is a visible
+                # change from an action that cannot happen.
+                if not tab_exists(load(), target_tab):
+                    print(f"kitty-pane-menu: move failed: destination tab id:{target_tab} is gone",
+                          file=sys.stderr)
+                    result["verdict"] = "destination-gone"
+                    break
+                if not guarded(wid, "pane", result):
+                    break
                 # The return code was discarded here. A destination that died between the pop and
                 # the pick is real — the window population churns — and kitty reports it as
                 # `No matching tabs for expression: id:N`, rc 1, which rendered as a pane that
                 # simply did not move and no reason anywhere.
                 r = kitty("detach-window", "--match", f"id:{wid}", "--target-tab", f"id:{target_tab}")
+                result["rc"] = r.returncode
                 if r.returncode != 0:
                     print(
                         f"kitty-pane-menu: move failed (rc {r.returncode}): "
@@ -1095,6 +1205,7 @@ def main() -> int:
                     equalize_tab_of(wid)
                 break
 
+    log_row("kitty-pane-menu", "result", choice=choice, wid=wid, **result)
     refocus()
     return 0
 

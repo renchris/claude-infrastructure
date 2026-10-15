@@ -39,7 +39,16 @@ import stat
 import subprocess
 import sys
 
+HERE = os.path.dirname(os.path.abspath(__file__))
 KITTY_ICON = "/Applications/kitty.app/Contents/Resources/kitty.icns"
+
+# The action log (lib/kitty_pane_actions.py, one writer). Bookkeeping never fails a close.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+try:
+    from kitty_pane_actions import log_row
+except Exception:  # noqa: BLE001 — a missing lib must not take the close guard down with it
+    def log_row(*a, **k):  # type: ignore[misc]
+        pass
 
 # AppleScript takes its strings through argv rather than string interpolation. Quoting a window
 # title into an -e statement is a quoting bug waiting to happen — a pane title containing a double
@@ -341,6 +350,91 @@ def close(ids: list[int]) -> None:
         kitty("close-window", "--match", f"id:{wid}")
 
 
+FULLSCREEN_ALERT = ("This is the last pane of a fullscreen window and it did not leave fullscreen "
+                    "cleanly; leave fullscreen and try again.")
+GUARD_VERDICTS = {0: "safe", 1: "then-failed", 2: "usage", 3: "refused", 4: "window-not-found",
+                  127: "guard-unavailable"}
+
+
+def guard_path() -> str:
+    """$CC_KITTY_FS_GUARD (`off` = operator kill switch), else the sibling, else ~/.claude/bin."""
+    env = os.environ.get("CC_KITTY_FS_GUARD")
+    if env:
+        return env
+    sib = os.path.join(HERE, "kitty-fullscreen-guard")
+    if os.path.exists(sib):
+        return sib
+    return os.path.join(os.path.expanduser("~"), ".claude", "bin", "kitty-fullscreen-guard")
+
+
+def fullscreen_guard(wid: int, scope: str) -> int:
+    """The LAST gate before a close that may empty a fullscreen OS window (the 2026-10-15 crash).
+    Unbounded on purpose: the guard bounds itself. A guard that cannot run REFUSES."""
+    g = guard_path()
+    if g == "off":
+        print("kitty-confirm-close: fullscreen guard disabled (CC_KITTY_FS_GUARD=off)", file=sys.stderr)
+        return 0
+    argv = [g, "--window", str(wid)] + (["--to", ADDRESS] if ADDRESS else [])
+    argv += ["--mode", "toggle", "--scope", scope, "--tool", "kitty-confirm-close"]
+    try:
+        return subprocess.run(argv).returncode
+    except OSError as e:
+        print(f"kitty-confirm-close: fullscreen guard not runnable ({g}): {e} — refusing",
+              file=sys.stderr)
+        return 127
+
+
+def alert_fullscreen() -> None:
+    esc = FULLSCREEN_ALERT.replace("\\", "\\\\").replace('"', '\\"')
+    script = (f'display alert "Pane not closed" message "{esc}" '
+              'as warning buttons {"OK"} default button "OK"')
+    try:
+        subprocess.run(["osascript", "-e", script], capture_output=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def guarded_close(ids: list[int], scope: str, osw: dict | None, choice: str) -> None:
+    """Intent row, the fullscreen guard as the LAST gate, then close(), then a result row.
+
+    Called only AFTER the not-busy decision or a confirmed dialog — a Cancel never reaches here,
+    so a Cancel never touches fullscreen. The guard for the FIRST id is enough: os-window scope
+    already means the whole window, and window scope is one pane."""
+    log_row("kitty-confirm-close", "intent", choice=choice, wid=ids[0],
+            os_window_id=(osw or {}).get("id"), platform_window_id=(osw or {}).get("platform_window_id"),
+            panes=len(windows_of(osw)) if osw else None, detail=f"ids={ids}")
+    rc = fullscreen_guard(ids[0], "os-window" if scope == "os-window" else "pane")
+    verdict = "guard-off" if guard_path() == "off" else GUARD_VERDICTS.get(rc, f"rc-{rc}")
+    if rc == 0:
+        close(ids)
+    elif rc == 3:
+        alert_fullscreen()
+    log_row("kitty-confirm-close", "result", choice=choice, wid=ids[0], verdict=verdict, rc=rc)
+
+
+def refocus_parent_kitty() -> None:
+    """Give focus back to the kitty that launched this script — and NEVER launch one.
+
+    `tell application "kitty" to activate` launches kitty when it is dead, which is how kitty came
+    back at 00:01:28 on 2026-10-15 (docs/research/kitty-crash-2026-10-15/README.md). A
+    `--type=background` child of a dead kitty is reparented to launchd, so the parent pid is the
+    test: activate THAT pid through NSRunningApplication, which returns nil for a dead process
+    rather than starting anything."""
+    ppid = os.getppid()
+    try:
+        r = subprocess.run(["ps", "-o", "comm=", "-p", str(ppid)],
+                           capture_output=True, text=True, timeout=5)
+        comm = (getattr(r, "stdout", "") or "").strip()
+        if r.returncode != 0 or not comm.endswith("kitty"):
+            return
+        js = ('ObjC.import("AppKit"); '
+              f'var a = $.NSRunningApplication.runningApplicationWithProcessIdentifier({ppid}); '
+              'if (a && !a.isNil()) { a.activateWithOptions(2); }')
+        subprocess.run(["osascript", "-l", "JavaScript", "-e", js], capture_output=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
 USAGE = "usage: kitty-confirm-close {window|os-window} [--window <id>] [--check]"
 
 
@@ -440,20 +534,19 @@ def main() -> int:
             print("---\n" + describe(targets, scope)[0])
         return 0
 
+    osw = owning_os_window(tree, wid)
     if not busy:
-        close(ids)  # bare shell prompt(s) — close silently, as `ignore-shell` would
+        # bare shell prompt(s) — close silently, as `ignore-shell` would
+        guarded_close(ids, scope, osw, "close-silent")
         return 0
 
     message, title = describe(targets, scope)
     if confirm(message, title):
-        close(ids)
+        guarded_close(ids, scope, osw, "close-confirmed")
 
     # The dialog stole application focus to guarantee it came to the front; give it back either
-    # way, or a cancel leaves the operator typing into no terminal at all.
-    subprocess.run(
-        ["osascript", "-e", 'tell application "kitty" to activate'],
-        capture_output=True,
-    )
+    # way, or a cancel leaves the operator typing into no terminal at all. By pid, never by name.
+    refocus_parent_kitty()
     return 0
 
 

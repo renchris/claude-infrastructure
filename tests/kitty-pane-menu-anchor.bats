@@ -39,6 +39,11 @@ setup() {
   # Sandboxed so a case cannot read the operator's real registry and render a label off it.
   HOME="$BATS_TEST_TMPDIR/home"; export HOME
   mkdir -p "$HOME/.claude/cc-registry"
+  export CC_KITTY_PANE_ACTIONS_LOG="$BATS_TEST_TMPDIR/actions.jsonl"
+  # #14's closes now pass through the fullscreen guard (tests/kitty-pane-guard.bats owns it); an
+  # always-safe stub keeps this suite about WHICH pane closes, never about fullscreen.
+  printf '#!/bin/sh\nexit 0\n' >"$BATS_TEST_TMPDIR/fs-guard"; chmod +x "$BATS_TEST_TMPDIR/fs-guard"
+  export CC_KITTY_FS_GUARD="$BATS_TEST_TMPDIR/fs-guard"
 }
 
 kpm() {
