@@ -3,7 +3,7 @@
 # docs/research/kitty-crash-2026-10-15/README.md § Chosen fix). It runs ONLY kitty's own API: no
 # ctypes, no blocking, nothing that waits on kitty's main loop (the exit transition needs that loop).
 #
-# Invoked as `kitty @ --to <addr> kitten --match id:<wid> <this file> query|toggle`.
+# Invoked as `kitty @ --to <addr> kitten --match id:<wid> <this file> query|toggle|act <action...>`.
 # - `--match` resolves exactly: a missing pane is a MatchError (rc/base.py:381-384), never the active
 #   window, which is why targeting goes through a kitten and not `action --match` (ignored in 0.48.2).
 # - A no-UI kitten's handle_result runs synchronously in the boss (boss.py:2325-2326, args =
@@ -77,10 +77,33 @@ def describe(boss: Any, wid: int) -> dict[str, Any]:
     }
 
 
+def act(boss: Any, wid: int, action: list[str]) -> dict[str, Any]:
+    """Run a native action on <wid> in the SAME main-loop call that checks it is still the target.
+
+    `kitty @ action --self` is not enough after the guard's wait (up to ~9 s): bare `detach_window`
+    and the `ask` chooser's New-OS-Window / New-tab branches move `boss.active_window`, not the
+    dispatch window (boss.py:3318 `window = window or self.active_window`), and a window that died
+    in the wait makes `--self` fall back to the active window outright (rc/base.py:376-377). So the
+    act refuses unless <wid> still exists AND is still the active window; then the action's
+    "active window" IS the guarded pane."""
+    w = boss.window_id_map.get(wid)
+    if w is None:
+        return {"error": f"window {wid} is gone"}
+    if getattr(boss, "active_window", None) is not w:
+        return {"error": "focus-moved", "wid": wid}
+    try:
+        consumed = boss.combine(" ".join(action), w, raise_error=True)
+    except Exception as e:  # noqa: BLE001 — reported to the guard, never raised into kitty
+        return {"error": f"action failed: {e}", "wid": wid}
+    return {"wid": wid, "acted": bool(consumed)}
+
+
 @result_handler(no_ui=True)
 def handle_result(
     args: list[str], answer: str, target_window_id: int, boss: Any
 ) -> str:
+    if args[1:2] == ["act"]:
+        return json.dumps(act(boss, target_window_id, args[2:]), separators=(",", ":"))
     info = describe(boss, target_window_id)
     if "error" not in info and "toggle" in args[1:]:
         if toggle_fullscreen is None:

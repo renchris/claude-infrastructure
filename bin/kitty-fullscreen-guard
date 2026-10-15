@@ -17,6 +17,8 @@ USAGE
 EXIT CODES
     0  safe to empty the window NOW (or the removal would not empty the OS window at all)
     1  only with --then: the guard said safe but the follow-up action failed
+       (with --then, 3 also covers focus moving off the window during the wait, and 4 the window
+       vanishing — in both cases nothing was done)
     2  usage
     3  refused — the caller must not act
     4  the window was not found — the caller must not act either
@@ -479,6 +481,32 @@ def _after_toggle(pwid: Any) -> tuple[str, WindowState]:
         _sleep(SAMPLE_S)
 
 
+def _undo_entered(addr: str | None, wid: int, pwid: Any, info: dict) -> tuple[int, str, dict, WindowState]:
+    """After a toggle that reported ENTERING fullscreen: FS held for STABLE_S ⇒ the enter finished,
+    send exactly one undo (its boolean ignored); WINDOWED held ⇒ the toggle never took, send none;
+    neither by the deadline ⇒ send none. Always a refusal."""
+    deadline = _now() + AFTER_DEADLINE_S
+    held, since = None, None
+    while True:
+        s = read_window_state(pwid)
+        t = _now()
+        if s.state in (FS, WINDOWED):
+            if s.state != held:
+                held, since = s.state, t
+            elif t - since >= STABLE_S:
+                if held == FS:
+                    try:
+                        kitten_query(addr, wid, toggle=True)
+                    except (NotFound, KittenFailed):
+                        pass
+                return 3, "refused-entered", info, s
+        else:
+            held, since = None, None
+        if t >= deadline:
+            return 3, "refused-timeout", info, s
+        _sleep(SAMPLE_S)
+
+
 def decide(addr: str | None, wid: int, mode: str, scope: str) -> tuple[int, str, dict, WindowState]:
     """→ (rc, verdict, kitten info, last state read)."""
     none = WindowState(UNKNOWN, None, None, None)
@@ -510,12 +538,11 @@ def decide(addr: str | None, wid: int, mode: str, scope: str) -> tuple[int, str,
         return 3, "kitten-failed", info, s
     entered = toggled.get("toggled_into_fullscreen")
     if entered is True:
-        # It ENTERED fullscreen: our read said FS but kitty disagreed. Undo exactly that, once.
-        try:
-            kitten_query(addr, wid, toggle=True)
-        except (NotFound, KittenFailed):
-            pass
-        return 3, "refused-entered", info, s
+        # It ENTERED fullscreen: our read said FS but kitty disagreed. The undo must NOT be sent
+        # now: kitty drops a toggle while `in_fullscreen_transition` is set (cocoa_window.m:2339),
+        # and the boolean is computed from the styleMask even for a dropped toggle (:3686-3690). So
+        # wait for the transition to END, then undo at most once — or not at all if it never took.
+        return _undo_entered(addr, wid, pwid, info)
     if entered is not False:
         return 3, "kitten-failed", info, s
     verdict, s = _after_toggle(pwid)
@@ -523,28 +550,46 @@ def decide(addr: str | None, wid: int, mode: str, scope: str) -> tuple[int, str,
 
 
 def run_then(addr: str | None, wid: int, action: list[str]) -> int:
-    # kitty 0.48.2 IGNORES `action --match` (client sends match_window, server reads match —
-    # rc/action.py:58 vs rc/base.py:381); --self + KITTY_WINDOW_ID is the only exact target.
-    env = dict(os.environ, KITTY_WINDOW_ID=str(wid))
+    """Run the native action through the kitten's `act`, in ONE kitty main-loop call that first
+    re-checks <wid> exists and is still the active window. Never `kitty @ action --self` here:
+    after the guard's wait, --self falls back to the ACTIVE window when <wid> is gone, and bare
+    detach_window moves the active window whatever --self names (lib/kitty-fs-kitten.py act()).
+    → 0 acted · 4 the window is gone · 3 focus moved off it (nothing done) · 1 the action failed."""
+    cmd = _at(addr) + ["kitten", "--match", f"id:{wid}", KITTEN, "act", *action]
     try:
-        r = subprocess.run(
-            _at(addr) + ["action", "--self", *action],
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=KITTY_CALL_TIMEOUT_S * 2,
-        )
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=KITTY_CALL_TIMEOUT_S * 2)
     except (OSError, subprocess.SubprocessError) as e:
         print(f"{TOOL}: --then {' '.join(action)} failed: {e}", file=sys.stderr)
         return 1
-    if r.returncode != 0:
-        print(f"{TOOL}: --then {' '.join(action)} rc={r.returncode}: {r.stderr.strip()}", file=sys.stderr)
-        return 1
-    return 0
+    if r.returncode != 0 and "No matching windows" in (r.stderr or "") + (r.stdout or ""):
+        print(f"{TOOL}: --then {' '.join(action)}: window {wid} is gone — nothing done", file=sys.stderr)
+        return 4
+    try:
+        out = json.loads(r.stdout) if r.returncode == 0 else {"error": (r.stderr or "").strip()[:200]}
+    except (json.JSONDecodeError, TypeError):
+        out = {"error": f"unreadable act reply {(r.stdout or '')[:200]!r}"}
+    if out.get("acted"):
+        return 0
+    err = str(out.get("error") or "not consumed")
+    print(f"{TOOL}: --then {' '.join(action)}: {err} — nothing done", file=sys.stderr)
+    if "gone" in err:
+        return 4
+    return 3 if err == "focus-moved" else 1
 
 
 def any_fs(pid: int) -> int:
-    rows = pid_window_states(pid)
+    """No window of <pid> reads FS on ANY sample across STABLE_S (one sample could land inside an
+    enter animation, where the type never reads 4), and no read fails."""
+    start, rows = _now(), []
+    while True:
+        sample = pid_window_states(pid)
+        if sample is None or any(s.state == FS for _n, s in sample):
+            rows = sample
+            break
+        rows = sample
+        if _now() - start >= STABLE_S:
+            break
+        _sleep(SAMPLE_S)
     if rows is None:
         verdict, rc, detail = "refused-unknown", 3, "window list unreadable"
     else:

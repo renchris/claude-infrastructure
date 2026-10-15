@@ -15,8 +15,10 @@
 # `osascript` on PATH. NOTHING HERE TALKS TO A REAL KITTY: KITTY_LISTEN_ON/KITTY_WINDOW_ID are
 # unset, and CC_TERM_KITTY names the fake.
 #
-# RED-proof: the guard did not exist before this change (every case fails on a missing file). The
-# stability gate's own control is case 16: with STABLE_S forced to 0, the enter-animation case (5)
+# RED-proof: the guard did not exist before this change (every case fails on a missing file). Cases
+# 11 and 18 were re-proven RED against the first draft (immediate undo; `action --self` --then),
+# which the 2026-10-15 review (wf_bf440f65-940) showed kitty mis-targets. The stability gate's own
+# control is case 16: with STABLE_S forced to 0, the enter-animation case (5)
 # and the half-second-windowed case (10) return 0, which is the regression these cases catch.
 
 setup() {
@@ -32,8 +34,10 @@ setup() {
   # $KFG_KITTEN_RC (stderr $KFG_KITTEN_ERR); everything else rc 0.
   cat >"$STUBS/kitty" <<'SH'
 #!/bin/sh
-echo "kitty $* [KITTY_WINDOW_ID=${KITTY_WINDOW_ID:-}]" >>"$CALLS"
+n=$(grep -c '"phase":"verdict"' "$CC_KITTY_PANE_ACTIONS_LOG" 2>/dev/null || true)
+echo "kitty $* [KITTY_WINDOW_ID=${KITTY_WINDOW_ID:-}] [verdicts=${n:-0}]" >>"$CALLS"
 case " $* " in
+  *" act "*) d='{"wid":7,"acted":true}'; printf '%s\n' "${KFG_ACT_OUT:-$d}"; exit 0 ;;
   *" kitten "*) [ -n "$KFG_KITTEN_ERR" ] && echo "$KFG_KITTEN_ERR" >&2
                printf '%s\n' "$KFG_KITTEN_OUT"; exit "${KFG_KITTEN_RC:-0}" ;;
 esac
@@ -143,9 +147,17 @@ field() { tr ' ' '\n' <<<"$output" | sed -n "s/^$1=//p"; }
   python3 -c "import sys; sys.exit(0 if float('$(field t)') >= 1.8 else 1)" || { echo "$output"; false; }
 }
 
-@test "11 toggle mode: a toggle that ENTERED fullscreen is toggled back and refuses" {
-  run drive 'kitten(entered=True); states(lambda t: FS); run()'
-  [[ "$output" == "rc=3 verdict=refused-entered toggles=2 "* ]] || { echo "$output"; false; }
+@test "11 toggle mode: a toggle that ENTERED fullscreen is undone once, only after the enter settles" {
+  # FS held 1.0 s after the bad toggle ⇒ exactly one undo, sent no earlier than 1.0 s later
+  run drive 'kitten(entered=True); states(lambda t: FS); run(); print("undo_at", round(toggles[1] - toggles[0], 1))'
+  [[ "${lines[0]}" == "rc=3 verdict=refused-entered toggles=2 "* ]] || { echo "$output"; false; }
+  python3 -c "import sys; sys.exit(0 if float('${lines[1]#undo_at }') >= 1.0 else 1)" || { echo "$output"; false; }
+  # windowed held ⇒ the toggle never took: NO undo (an undo would now ENTER fullscreen)
+  run drive 'kitten(entered=True); states(lambda t: FS if not toggles else W()); run()'
+  [[ "$output" == "rc=3 verdict=refused-entered toggles=1 "* ]] || { echo "$output"; false; }
+  # never settles ⇒ no undo, refused at the deadline
+  run drive 'kitten(entered=True); states(lambda t: FS if not toggles else UNK); run()'
+  [[ "$output" == "rc=3 verdict=refused-timeout toggles=1 "* ]] || { echo "$output"; false; }
 }
 
 @test "12 toggle mode: fullscreen on a Space nobody is looking at refuses — no Space switch" {
@@ -194,18 +206,25 @@ field() { tr ' ' '\n' <<<"$output" | sed -n "s/^$1=//p"; }
   [ "$status" -eq 3 ] || { echo "$output"; false; }
 }
 
-@test "18 CLI --then: runs the action with --self on THAT window only after rc 0, and logs the verdict" {
+@test "18 CLI --then: acts through the kitten on THAT window only after rc 0, with the verdict row already on disk" {
   KFG_KITTEN_OUT='{"wid":7,"os_window_id":2,"platform_window_id":99,"panes_in_os_window":2,"tabs_in_os_window":1,"panes_in_tab":2,"last_for":{"pane":false,"tab":true,"os-window":true}}' \
     run "$GUARD" --window 7 --to unix:/nowhere --mode toggle --scope pane --tool kitty.conf --then detach_window ask
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  grep -qx 'kitty @ --to unix:/nowhere action --self detach_window ask \[KITTY_WINDOW_ID=7\]' "$CALLS" || { cat "$CALLS"; false; }
+  grep -qx "kitty @ --to unix:/nowhere kitten --match id:7 $KITTEN act detach_window ask \\[KITTY_WINDOW_ID=\\] \\[verdicts=1\\]" "$CALLS" || { cat "$CALLS"; false; }
+  run grep -c 'action --self' "$CALLS"
+  [ "$output" = "0" ] || { cat "$CALLS"; false; }
   grep -q '"tool":"kitty-fullscreen-guard","phase":"verdict".*"verdict":"safe-not-last".*"caller":"kitty.conf"' "$CC_KITTY_PANE_ACTIONS_LOG" || { cat "$CC_KITTY_PANE_ACTIONS_LOG"; false; }
   : >"$CALLS"
   KFG_KITTEN_RC=1 KFG_KITTEN_ERR='No matching windows for expression: id:7' KFG_KITTEN_OUT='' \
     run "$GUARD" --window 7 --to unix:/nowhere --mode toggle --then detach_window ask
   [ "$status" -eq 4 ]
-  run grep -c ' action ' "$CALLS"
+  run grep -c ' act ' "$CALLS"
   [ "$output" = "0" ] || { cat "$CALLS"; false; }
+  # the kitten found focus moved off the window during the wait: nothing done, rc 3
+  KFG_ACT_OUT='{"error":"focus-moved","wid":7}' KFG_KITTEN_OUT='{"wid":7,"os_window_id":2,"platform_window_id":99,"panes_in_os_window":2,"tabs_in_os_window":1,"panes_in_tab":2,"last_for":{"pane":false,"tab":true,"os-window":true}}' \
+    run "$GUARD" --window 7 --to unix:/nowhere --mode toggle --then detach_window
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$output" == *"focus-moved — nothing done"* ]] || { echo "$output"; false; }
 }
 
 @test "19 CLI: usage errors exit 2 (no window, bad mode, bad scope, empty --then)" {
@@ -225,12 +244,36 @@ field() { tr ' ' '\n' <<<"$output" | sed -n "s/^$1=//p"; }
   [ "${lines[-1]}" = "3" ] || { echo "$output"; false; }
   run drive 'g.pid_window_states = lambda pid: None; print(g.any_fs(42))'
   [ "${lines[-1]}" = "3" ] || { echo "$output"; false; }
+  # one clear sample is not enough: a window that reads FS 0.5 s later (an enter landing) refuses
+  run drive 'g.pid_window_states = lambda pid: [(1, W() if clock[0] < 0.5 else FS)]; print(g.any_fs(42))'
+  [ "${lines[-1]}" = "3" ] || { echo "$output"; false; }
 }
 
 @test "21 the state read is three-valued and fails to UNKNOWN, never to WINDOWED" {
   run drive 'print(g.classify([4], False), g.classify([0, 4], True), g.classify([0], True), g.classify([0], False), g.classify([], True), g.classify(None, True), g.classify([1], True)); print(g.read_window_state(None).state, g.read_window_state(0).state, g.read_window_state(-5).state, g.read_window_state(True).state)'
   [ "${lines[0]}" = "FS FS WINDOWED UNKNOWN UNKNOWN UNKNOWN UNKNOWN" ] || { echo "$output"; false; }
   [ "${lines[1]}" = "UNKNOWN UNKNOWN UNKNOWN UNKNOWN" ] || { echo "$output"; false; }
+  # the REAL CGS path (dlopen, CGWindowList, CF reads): a window id nobody owns is UNKNOWN, and
+  # this python process — which owns no window — lists as an empty, READABLE set, not a failure
+  run drive 'print(g.read_window_state(2**31 - 1).state, g.pid_window_states(os.getpid()))'
+  [ "$output" = "UNKNOWN []" ] || { echo "$output"; false; }
+}
+
+@test "23 CLI toggle-mode refusal: the guard's OWN alert names the window and its state (callers raise none)" {
+  # last pane of an OS window whose platform id no window owns ⇒ the real read is UNKNOWN for 3 s
+  KFG_KITTEN_OUT='{"wid":7,"os_window_id":2,"platform_window_id":2147483646,"panes_in_os_window":1,"tabs_in_os_window":1,"panes_in_tab":1,"last_for":{"pane":true,"tab":true,"os-window":true}}' \
+    run "$GUARD" --window 7 --to unix:/nowhere --mode toggle --tool t
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  grep -q '^osascript .*display alert.*kitty window 7 is the last pane of a fullscreen window.*last state: UNKNOWN.*Leave fullscreen and try again' "$CALLS" || { cat "$CALLS"; false; }
+  run grep -c 'application "kitty"' "$CALLS"
+  [ "$output" = "0" ] || { cat "$CALLS"; false; }
+  # refuse mode never alerts — its callers are autonomous and nobody is at the keyboard
+  : >"$CALLS"
+  KFG_KITTEN_OUT='{"wid":7,"os_window_id":2,"platform_window_id":2147483646,"panes_in_os_window":1,"tabs_in_os_window":1,"panes_in_tab":1,"last_for":{"pane":true,"tab":true,"os-window":true}}' \
+    run "$GUARD" --window 7 --to unix:/nowhere --mode refuse
+  [ "$status" -eq 3 ]
+  run grep -c '^osascript' "$CALLS"
+  [ "$output" = "0" ] || { cat "$CALLS"; false; }
 }
 
 @test "22 kitten: last_for per scope, and toggle only when asked, on the window's OS window" {
@@ -264,6 +307,13 @@ def main():
     r = json.loads(k.handle_result([os.environ["KITTEN"], "toggle"], "", 7, boss))
     print("toggle", calls, r["toggled_into_fullscreen"], r["platform_window_id"])
     print(json.loads(k.handle_result([os.environ["KITTEN"], "query"], "", 404, boss)))
+    combined = []
+    boss.combine = lambda a, w, raise_error=False: combined.append((a, w is boss.window_id_map[7])) or True
+    boss.active_window = boss.window_id_map[8]
+    print("act-unfocused", json.loads(k.handle_result([os.environ["KITTEN"], "act", "detach_window"], "", 7, boss)), combined)
+    boss.active_window = boss.window_id_map[7]
+    print("act-focused", json.loads(k.handle_result([os.environ["KITTEN"], "act", "detach_window", "ask"], "", 7, boss)), combined)
+    print("act-gone", json.loads(k.handle_result([os.environ["KITTEN"], "act", "close_tab"], "", 404, boss)))
 main()
 '
   [ "$status" -eq 0 ] || { echo "$output"; false; }
@@ -273,4 +323,7 @@ main()
   [ "${lines[3]}" = "toggles-after-query []" ] || { echo "$output"; false; }
   [ "${lines[4]}" = "toggle [5] False 1005" ] || { echo "$output"; false; }
   [[ "${lines[5]}" == *"error"* ]] || { echo "$output"; false; }
+  [ "${lines[6]}" = "act-unfocused {'error': 'focus-moved', 'wid': 7} []" ] || { echo "$output"; false; }
+  [ "${lines[7]}" = "act-focused {'wid': 7, 'acted': True} [('detach_window ask', True)]" ] || { echo "$output"; false; }
+  [[ "${lines[8]}" == "act-gone {'error': 'window 404 is gone'}" ]] || { echo "$output"; false; }
 }
