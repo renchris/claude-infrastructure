@@ -1,0 +1,142 @@
+[
+ {
+  "session_id": "00000000-0000-4000-8000-000000000001",
+  "paneUUID": "11",
+  "account": "next4",
+  "cwd": "/work/proj-9",
+  "name": "pane-01"
+ },
+ {
+  "session_id": "00000000-0000-4000-8000-000000000002",
+  "paneUUID": "113",
+  "account": "next",
+  "cwd": "/work/proj-11",
+  "name": "pane-02"
+ },
+ {
+  "session_id": "00000000-0000-4000-8000-000000000003",
+  "paneUUID": "14",
+  "account": "next2",
+  "cwd": "/work/proj-8",
+  "name": "pane-03"
+ },
+ {
+  "session_id": "00000000-0000-4000-8000-000000000004",
+  "paneUUID": "16",
+  "account": "next4",
+  "cwd": "/work/proj-3",
+  "name": "pane-04"
+ },
+ {
+  "session_id": "00000000-0000-4000-8000-000000000005",
+  "paneUUID": "172",
+  "account": "next2",
+  "cwd": "/work/proj-10",
+  "name": "pane-05"
+ },
+ {
+  "session_id": "00000000-0000-4000-8000-000000000006",
+  "paneUUID": "2",
+  "account": "next2",
+  "cwd": "/work/proj-1",
+  "name": "pane-06"
+ },
+ {
+  "session_id": "00000000-0000-4000-8000-000000000007",
+  "paneUUID": "297",
+  "account": "next2",
+  "cwd": "/work/proj-14",
+  "name": "pane-07"
+ },
+ {
+  "session_id": "00000000-0000-4000-8000-000000000008",
+  "paneUUID": "3",
+  "account": "next2",
+  "cwd": "/work/proj-2",
+  "name": "pane-08"
+ },
+ {
+  "session_id": "00000000-0000-4000-8000-000000000009",
+  "paneUUID": "319",
+  "account": "next2",
+  "cwd": "/work/proj-4",
+  "name": "pane-09"
+ },
+ {
+  "session_id": "00000000-0000-4000-8000-000000000010",
+  "paneUUID": "32",
+  "account": "next2",
+  "cwd": "/work/proj-7",
+  "name": "pane-10"
+ },
+ {
+  "session_id": "00000000-0000-4000-8000-000000000011",
+  "paneUUID": "329",
+  "account": "next2",
+  "cwd": "/work/proj-6",
+  "name": "pane-11"
+ },
+ {
+  "session_id": "00000000-0000-4000-8000-000000000012",
+  "paneUUID": "369",
+  "account": "next2",
+  "cwd": "/work/proj-6",
+  "name": "pane-12"
+ },
+ {
+  "session_id": "00000000-0000-4000-8000-000000000013",
+  "paneUUID": "398",
+  "account": "next4",
+  "cwd": "/work/proj-15",
+  "name": "pane-13"
+ },
+ {
+  "session_id": "00000000-0000-4000-8000-000000000014",
+  "paneUUID": "4",
+  "account": "next",
+  "cwd": "/work/proj-12",
+  "name": "pane-14"
+ },
+ {
+  "session_id": "00000000-0000-4000-8000-000000000015",
+  "paneUUID": "401",
+  "account": "next4",
+  "cwd": "/work/proj-16",
+  "name": "pane-15"
+ },
+ {
+  "session_id": "00000000-0000-4000-8000-000000000016",
+  "paneUUID": "410",
+  "account": "next2",
+  "cwd": "/work/proj-6",
+  "name": "pane-16"
+ },
+ {
+  "session_id": "00000000-0000-4000-8000-000000000017",
+  "paneUUID": "455",
+  "account": "next2",
+  "cwd": "/work/proj-17",
+  "name": "pane-17"
+ },
+ {
+  "session_id": "00000000-0000-4000-8000-000000000018",
+  "paneUUID": "460",
+  "account": "next2",
+  "cwd": "/work/proj-6",
+  "name": "pane-18"
+ },
+ {
+  "session_id": "00000000-0000-4000-8000-000000000019",
+  "paneUUID": "7",
+  "account": "next4",
+  "cwd": "/work/proj-13",
+  "name": "pane-19"
+ },
+ {
+  "session_id": "00000000-0000-4000-8000-000000000020",
+  "paneUUID": "8",
+  "account": "next2",
+  "cwd": "/work/proj-6",
+  "name": "pane-20"
+ }
+]

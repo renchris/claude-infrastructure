@@ -1,0 +1,392 @@
+[
+ {
+  "id": 2,
+  "platform_window_id": 33888,
+  "tabs": [
+   {
+    "id": 2,
+    "layout": "splits",
+    "layout_state": {
+     "class": "Splits",
+     "opts": {
+      "equalize_on_window_close": "y",
+      "split_axis": "horizontal"
+     },
+     "pairs": {
+      "bias": 0.16666666666666666,
+      "one": 2,
+      "two": {
+       "bias": 0.2,
+       "one": 3,
+       "two": {
+        "one": {
+         "one": 68,
+         "two": 467
+        },
+        "two": {
+         "one": 380,
+         "two": 527
+        }
+       }
+      }
+     },
+     "all_windows": {
+      "window_groups": [
+       {
+        "id": 2,
+        "window_ids": [
+         2
+        ]
+       },
+       {
+        "id": 3,
+        "window_ids": [
+         3
+        ]
+       },
+       {
+        "id": 68,
+        "window_ids": [
+         16
+        ]
+       },
+       {
+        "id": 467,
+        "window_ids": [
+         401
+        ]
+       },
+       {
+        "id": 380,
+        "window_ids": [
+         319
+        ]
+       },
+       {
+        "id": 527,
+        "window_ids": [
+         455
+        ]
+       }
+      ]
+     }
+    },
+    "windows": [
+     {
+      "id": 2,
+      "cwd": "/work/proj-1"
+     },
+     {
+      "id": 3,
+      "cwd": "/work/proj-2"
+     },
+     {
+      "id": 16,
+      "cwd": "/work/proj-3"
+     },
+     {
+      "id": 319,
+      "cwd": "/work/proj-4"
+     },
+     {
+      "id": 401,
+      "cwd": "/work/proj-3"
+     },
+     {
+      "id": 455,
+      "cwd": "/work/proj-4"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": 5,
+  "platform_window_id": 33905,
+  "tabs": [
+   {
+    "id": 5,
+    "layout": "splits",
+    "layout_state": {
+     "class": "Splits",
+     "opts": {
+      "equalize_on_window_close": "y",
+      "split_axis": "horizontal"
+     },
+     "pairs": {
+      "one": 8,
+      "two": 480
+     },
+     "all_windows": {
+      "window_groups": [
+       {
+        "id": 8,
+        "window_ids": [
+         8
+        ]
+       },
+       {
+        "id": 480,
+        "window_ids": [
+         410
+        ]
+       }
+      ]
+     }
+    },
+    "windows": [
+     {
+      "id": 8,
+      "cwd": "/work/proj-5"
+     },
+     {
+      "id": 410,
+      "cwd": "/work/proj-6"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": 11,
+  "platform_window_id": 43134,
+  "tabs": [
+   {
+    "id": 11,
+    "layout": "splits",
+    "layout_state": {
+     "class": "Splits",
+     "opts": {
+      "equalize_on_window_close": "y",
+      "split_axis": "horizontal"
+     },
+     "pairs": {
+      "bias": 0.25,
+      "one": 156,
+      "two": {
+       "bias": 0.3333333333333333,
+       "one": 243,
+       "two": {
+        "one": 80,
+        "two": 532
+       }
+      }
+     },
+     "all_windows": {
+      "window_groups": [
+       {
+        "id": 156,
+        "window_ids": [
+         14
+        ]
+       },
+       {
+        "id": 243,
+        "window_ids": [
+         11
+        ]
+       },
+       {
+        "id": 80,
+        "window_ids": [
+         32
+        ]
+       },
+       {
+        "id": 532,
+        "window_ids": [
+         460
+        ]
+       }
+      ]
+     }
+    },
+    "windows": [
+     {
+      "id": 32,
+      "cwd": "/work/proj-7"
+     },
+     {
+      "id": 14,
+      "cwd": "/work/proj-8"
+     },
+     {
+      "id": 11,
+      "cwd": "/work/proj-9"
+     },
+     {
+      "id": 460,
+      "cwd": "/work/proj-6"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": 26,
+  "platform_window_id": 65284,
+  "tabs": [
+   {
+    "id": 48,
+    "layout": "splits",
+    "layout_state": {
+     "class": "Splits",
+     "opts": {
+      "equalize_on_window_close": "y",
+      "split_axis": "horizontal"
+     },
+     "pairs": {
+      "one": 351,
+      "two": 396
+     },
+     "all_windows": {
+      "window_groups": [
+       {
+        "id": 351,
+        "window_ids": [
+         172
+        ]
+       },
+       {
+        "id": 396,
+        "window_ids": [
+         113
+        ]
+       }
+      ]
+     }
+    },
+    "windows": [
+     {
+      "id": 172,
+      "cwd": "/work/proj-10"
+     },
+     {
+      "id": 113,
+      "cwd": "/work/proj-11"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": 31,
+  "platform_window_id": 78542,
+  "tabs": [
+   {
+    "id": 56,
+    "layout": "splits",
+    "layout_state": {
+     "class": "Splits",
+     "opts": {
+      "equalize_on_window_close": "y",
+      "split_axis": "horizontal"
+     },
+     "pairs": {
+      "one": {
+       "one": 475,
+       "two": 478
+      },
+      "two": {
+       "one": 476,
+       "two": 477
+      }
+     },
+     "all_windows": {
+      "window_groups": [
+       {
+        "id": 475,
+        "window_ids": [
+         4
+        ]
+       },
+       {
+        "id": 478,
+        "window_ids": [
+         7
+        ]
+       },
+       {
+        "id": 476,
+        "window_ids": [
+         398
+        ]
+       },
+       {
+        "id": 477,
+        "window_ids": [
+         297
+        ]
+       }
+      ]
+     }
+    },
+    "windows": [
+     {
+      "id": 4,
+      "cwd": "/work/proj-3"
+     },
+     {
+      "id": 398,
+      "cwd": "/work/proj-12"
+     },
+     {
+      "id": 297,
+      "cwd": "/work/proj-6"
+     },
+     {
+      "id": 7,
+      "cwd": "/work/proj-13"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": 32,
+  "platform_window_id": 82306,
+  "tabs": [
+   {
+    "id": 58,
+    "layout": "splits",
+    "layout_state": {
+     "class": "Splits",
+     "opts": {
+      "equalize_on_window_close": "y",
+      "split_axis": "horizontal"
+     },
+     "pairs": {
+      "one": 508,
+      "two": 509
+     },
+     "all_windows": {
+      "window_groups": [
+       {
+        "id": 508,
+        "window_ids": [
+         329
+        ]
+       },
+       {
+        "id": 509,
+        "window_ids": [
+         369
+        ]
+       }
+      ]
+     }
+    },
+    "windows": [
+     {
+      "id": 329,
+      "cwd": "/work/proj-6"
+     },
+     {
+      "id": 369,
+      "cwd": "/work/proj-6"
+     }
+    ]
+   }
+  ]
+ }
+]

@@ -23,10 +23,13 @@
 # RED-proof: at HEAD~3 (before bc9d782ea) bin/cc-relayout does not exist: run in a scratch copy of
 # this tree at that state every case fails at its first `[ "$status" -eq … ]` (status 127, command
 # not found). On a scratch COPY of the current tree with cc-relayout's `if blocked:` turned into
-# `if False:` (the fullscreen/unreadable refusal removed), cases 3, 4 and 5 fail at
+# `if False:` (the fullscreen/unreadable refusal removed), cases 3, 4, 5 and 5b fail at
 # `[ "$status" -eq 3 ]`: the run goes on, sends detach-window and the kitten, and exits 1 on the
-# read-back. The other five cases stay green, so those three fail for the intended reason. Case 5b
+# read-back. The other cases stay green, so those fail for the intended reason. Case 5b
 # fails on 13993a836's cc-relayout (the window with no platform id was skipped): exit 1, moves sent.
+# Cases 8, 8b and 11 fail on cebafa946's cc-relayout (review 2026-10-15): a stale registry row put
+# session A on the shell pane 22 (plan tree H:0.700(22,…)); a session on two panes was resolved by
+# dict order instead of refused; two recorded shells in one directory both became live pane 13.
 #
 # Hermetic: HOME, TMPDIR, the registry, the pane-spawn log and the swift probe are per-test; kitty
 # and swift are recording stubs; no case talks to a real kitty or reads the real screen.
@@ -119,8 +122,7 @@ changes() { grep -v -E "^@ --to $TO ls\$" "$KLOG" || true; }
   [ "$(changes | sed -n 1p)" = "@ --to $TO detach-window --match id:21 --target-tab id:10" ]
   kl="$(changes | sed -n 2p)"
   spec="${kl##* }"
-  [ "$kl" = "@ --to $TO kitten --match id:11 $REPO/scripts/kitty-apply-layout.py $spec" ] \
-    || [ "$kl" = "@ --to $TO kitten --match id:12 $REPO/scripts/kitty-apply-layout.py $spec" ]
+  [ "$kl" = "@ --to $TO kitten --match id:11 $REPO/scripts/kitty-apply-layout.py $spec" ]
   # expected pairs: the fixture's recorded pairs, group -> window -> session -> live id, by the
   # test's own mapping (A=11, B=12, C=21), not by scripts/lib/kitty_tree.py
   run python3 -c '
@@ -211,4 +213,70 @@ sys.exit(0 if got["pairs"] == want and got["result"] == sys.argv[6] + ".result" 
   echo "$output" | grep -qxF "cc-relayout: dry run: 0 move(s), 1 tab(s); nothing changed (add --apply)"
   [ "$(cat "$SWLOG")" = "601" ]
   [ -z "$(changes)" ]
+}
+
+# live ls with one window changed: <pane> <key> <json value>
+live_with() { python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+for o in d:
+    for t in o["tabs"]:
+        for w in t["windows"]:
+            if w["id"] == int(sys.argv[2]):
+                w[sys.argv[3]] = json.loads(sys.argv[4])
+json.dump(d, open(sys.argv[5], "w"))' "$@"; }
+
+@test "8. a registry row whose process is not alive under its pane is ignored (a stale row)" {
+  # A's session, said to be in the shell pane 22 by a row whose pid (1) does not run under that pane
+  printf '{"kitty_pid": 4242, "paneUUID": "22", "pid": 1, "session_id": "%s"}\n' "$SA" > "$CC_REGISTRY_DIR/stale.json"
+  run "$SUBJ" --to "$TO" --tree "$TREE"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qxF "cc-relayout: plan rec_os=7 rec_tab=0 -> tab 10 tree=H:0.700(11,V(12,21))"
+  [ -z "$(changes)" ]
+}
+
+@test "8b. a session that two panes claim is refused: exit 3, nothing sent" {
+  printf '{"kitty_pid": 4242, "paneUUID": "22", "session_id": "%s"}\n' "$SA" > "$CC_REGISTRY_DIR/twice.json"
+  run "$SUBJ" --to "$TO" --tree "$TREE" --apply
+  [ "$status" -eq 3 ]
+  echo "$output" | grep -qxF "cc-relayout: refuse: session $SA is in more than one pane — which one to move cannot be told"
+  echo "$output" | grep -qxF "cc-relayout: verdict=refused moved=0 restarted=0 tabs=0 mismatched=0"
+  [ -z "$(changes)" ]
+}
+
+@test "9. a moved pane whose process changed is reported as restarted, exit 1" {
+  live_with "$FIXD/live-ls-after.json" 21 pid 4999 "$KLS.after"
+  run "$SUBJ" --to "$TO" --tree "$TREE" --apply
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -qxF "cc-relayout: pane 21 sid=$SC: process changed or gone"
+  echo "$output" | grep -qxF "cc-relayout: verdict=mismatch moved=1 restarted=1 tabs=1 mismatched=0"
+}
+
+@test "10. a pane the record does not know stays in the target tab, to the right of the recorded tree" {
+  python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+t = d[0]["tabs"][0]
+t["windows"].append({"id": 13, "pid": 1013, "cwd": "/work/other", "cmdline": ["/bin/zsh"]})
+t["layout_state"]["all_windows"]["window_groups"].append({"id": 130, "window_ids": [13]})
+t["layout_state"]["pairs"] = {"one": t["layout_state"]["pairs"], "two": 130}
+json.dump(d, open(sys.argv[1], "w"))' "$KLS"
+  run "$SUBJ" --to "$TO" --tree "$TREE" --apply
+  [ "$status" -eq 1 ]                                   # the static ls never reads back as planned
+  python3 -c '
+import json, sys
+got = json.load(open(sys.argv[1]))["pairs"]
+want = {"one": {"bias": 0.7, "one": 11, "two": {"horizontal": False, "one": 12, "two": 21}}, "two": 13}
+sys.exit(0 if got == want else 1)' "$KLOG.spec"
+}
+
+@test "11. two recorded shells in one directory take two distinct live shells, never one pane twice" {
+  R="$BATS_TEST_TMPDIR/rec2"; mkdir -p "$R"
+  # recorded: H(A, V(shell /work/w, shell /work/w)); live tab 10: A=11 and shells 13, 14 in /work/w
+  printf '%s\n' '[{"id": 3, "platform_window_id": 700, "tabs": [{"id": 1, "layout": "splits", "layout_state": {"class": "Splits", "pairs": {"one": 1, "two": {"horizontal": false, "one": 2, "two": 3}}, "all_windows": {"window_groups": [{"id": 1, "window_ids": [4]}, {"id": 2, "window_ids": [5]}, {"id": 3, "window_ids": [6]}]}}, "windows": [{"id": 4, "cwd": "/work/a"}, {"id": 5, "cwd": "/work/w"}, {"id": 6, "cwd": "/work/w"}]}]}]' > "$R/hb.kitty-ls.json"
+  printf '[{"session_id": "%s", "paneUUID": "4", "cwd": "/work/a"}]\n' "$SA" > "$R/hb.roster.json"
+  printf '%s\n' '[{"id": 1, "platform_window_id": 601, "tabs": [{"id": 10, "layout": "splits", "layout_state": {"class": "Splits", "pairs": {"one": 110, "two": {"one": 130, "two": 140}}, "all_windows": {"window_groups": [{"id": 110, "window_ids": [11]}, {"id": 130, "window_ids": [13]}, {"id": 140, "window_ids": [14]}]}}, "windows": [{"id": 11, "pid": 1011, "cwd": "/work/a", "cmdline": ["claude"]}, {"id": 13, "pid": 1013, "cwd": "/work/w", "cmdline": ["/bin/zsh"]}, {"id": 14, "pid": 1014, "cwd": "/work/w", "cmdline": ["/bin/zsh"]}]}]}]' > "$KLS"
+  run "$SUBJ" --to "$TO" --tree "$R/hb.kitty-ls.json"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qxF "cc-relayout: plan rec_os=3 rec_tab=0 -> tab 10 tree=H(11,V(13,14))"
 }

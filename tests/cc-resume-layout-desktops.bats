@@ -597,7 +597,8 @@ launch_n() { grep ' launch ' "$KLOG" | sed -n "${1}p"; }
   ! grep -q 'goto-layout\|kitten\|layout_action\|rotate' "$KLOG" || false     # equalizing would erase the biases
   [ "$(grep ' launch ' "$KLOG" | grep -vc -- '--keep-focus')" -eq 0 ]
   [ "$(printf '%s\n' "$output" | grep -c '^cc-resume-layout: map ')" -eq 2 ]   # a shell gets no map line
-  printf '%s\n' "$output" | grep -qx 'cc-resume-layout: layout tree_windows=1 shells=1 placed=0 placed_failed=0'
+  printf '%s\n' "$output" | grep -qx 'cc-resume-layout: layout tree_windows=1 shells=1 placed=0 placed_failed=0 tree_ok=0 tree_fixed=0 tree_mismatch=0 tree_unknown=0'
+  printf '%s\n' "$stderr" | grep -q 'tree read-back skipped'           # the zeros are a skip: no kitty_tree.py in this fixture
   [ "$(kv launched)" = 2 ]; [ "$(kv windows)" = 1 ]; [ "$(kv verdict)" = ok ]
 }
 
@@ -646,7 +647,8 @@ launch_n() { grep ' launch ' "$KLOG" | sed -n "${1}p"; }
   [ "$(grep -c 'set-window-title --match id:101 $' "$KLOG")" -eq 1 ]
   [ "$(grep -n 'set-window-title --match id:101 CC-DESK' "$KLOG" | cut -d: -f1)" -lt "$(grep -n 'toggle_fullscreen' "$KLOG" | head -1 | cut -d: -f1)" ]
   [ "$(grep toggle_fullscreen "$KLOG" | grep -o 'id:[0-9]*' | tr '\n' ' ')" = "id:101 id:103 " ]   # 102 was windowed
-  printf '%s\n' "$output" | grep -qx 'cc-resume-layout: layout tree_windows=3 shells=0 placed=2 placed_failed=1'
+  printf '%s\n' "$output" | grep -qx 'cc-resume-layout: layout tree_windows=3 shells=0 placed=2 placed_failed=1 tree_ok=0 tree_fixed=0 tree_mismatch=0 tree_unknown=0'
+  printf '%s\n' "$stderr" | grep -q 'tree read-back skipped'           # the zeros are a skip: no kitty_tree.py in this fixture
   [ "$(kv fullscreen_ok)" = 2 ]; [ "$(kv verdict)" = ok ]
 }
 
