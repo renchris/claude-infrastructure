@@ -18,6 +18,45 @@ Account → config dir: `next`→`.claude-next` · `next2`→`.claude-secondary`
 
 ---
 
+## Phase 0 — kitty crashed or was restarted: bring back the RECORDED arrangement (do this first)
+
+Every 5 minutes the heartbeat (`scripts/lib/restore-heartbeat.sh`) records each kitty's full tree:
+`~/.claude/autonomy/heartbeat/<boot>/<kitty pid>/hb.kitty-ls.json`, which holds every OS window, tab
+and split (axis, bias, pane order). Beside it are `hb.roster.json` (which session was in which pane)
+and `hb.displays.tsv` (display, frame, fullscreen). After a kitty crash, the crash page files one
+operator row that carries the restore command (`cc-backlog list --blocked`, run `cc-restore`). **That
+command is the recovery. Phases 1-2 are for sessions that no kitty recorded.**
+
+```
+cc-restore --after-crash --kitty-pid <dead kitty pid> --dry-run   # the plan: each window's tree, display, fullscreen
+cc-restore --after-crash --kitty-pid <dead kitty pid>             # restore it
+```
+
+It resumes every session that was alive in that kitty. Each one comes back in its own OS window, on
+its recorded display, native fullscreen one window per Desktop where it was before, and in the same
+split position. It waits on load and does not shed (`cc-resume-layout.sh --desktops --restore`).
+Each rebuilt tab is read back and set exactly if it drifted. Watch for
+`cc-resume-layout: tree-verify … verdict=ok|fixed` on its output; `mismatch` means a tab is not as
+recorded. A clean exit is left out, and its neighbour takes its space without moving the others.
+
+- **Rows from somewhere else** (lr-select, a hand-built TSV): pipe them to
+  `cc-resume-layout.sh --desktops --restore`, not to the default or plain `--desktops` path. It finds
+  each session's recorded tree by session id, so a 4-column TSV is enough.
+- **Sessions already resumed in the wrong places** (by hand, or by an older recovery): move them back
+  without restarting them.
+  ```
+  cc-relayout --to unix:/tmp/kitty-<live pid> --tree <heartbeat dir of the DEAD kitty>/hb.kitty-ls.json           # plan
+  cc-relayout --to unix:/tmp/kitty-<live pid> --tree <heartbeat dir of the DEAD kitty>/hb.kitty-ls.json --apply   # move
+  ```
+  It refuses if any window involved reads as fullscreen. Removing the last pane of a native-fullscreen
+  window is what crashed kitty 0.48.2 on 2026-10-15, so take the windows out of fullscreen by hand first.
+- **Why this phase exists (2026-10-15).** After the 00:01:27 crash, the recovery followed Phases 1-2
+  and the layout section below. It ran `cc-resume-layout.sh --per-window 4`, which groups by project,
+  and then a hand-written 2x2 driver once the capacity gate refused at load 41. All 20 sessions came
+  back in the right windows at best, and in different pane positions. The crash page's
+  `cc-restore --after-crash` row was never run. Diagnosis:
+  `docs/research/kitty-crash-2026-10-15/resume-pane-positions.md`.
+
 ## Phase 1 — Anchor the crash & find the open sessions
 
 1. **Reboot time** = crash anchor: `sysctl -n kern.boottime`. Sessions "open at crash" = transcripts last
@@ -111,6 +150,10 @@ For the Fable session use account `fable4` (etc.) to keep it on `claude-fable-5-
 high while its statusline still read "Fable 5". Omit the flag and prior behaviour is unchanged
 (`high`). Same flag, same values and same reason as `lr-handoff.sh --effort` (`0c00b814`).
 
+🚨 **After a kitty crash or restart, the layout is the RECORDED one: Phase 0, never the paths
+below.** They only group by project, so every pane comes back somewhere new (2026-10-15). They are
+for sessions no kitty heartbeat recorded.
+
 🚨 **Layout — ONE OS WINDOW PER MONITOR, split panes inside each. Do not hand-roll it; pipe the
 winners into `bin/cc-resume-layout.sh`** (operator ruling 2026-08-24):
 
@@ -128,7 +171,8 @@ places each window on its screen. `--per-window N` · `--stagger SECS` · `--use
 the 15:24 reboot recovery): one native-fullscreen OS window per macOS Desktop, at most 4 panes each
 as a 2x2, grouped by project. The per-monitor mode put 5 panes side by side at 37 columns, which
 wraps Claude Code's footer; the 2x2 gives ~77x22 per pane. Same TSV in; `--dry-run --desktops`
-prints the plan. It is what `scripts/boot-resume.sh` uses in resume mode.
+prints the plan. (Correction, 2026-10-15: `scripts/boot-resume.sh` uses `--desktops --restore`, which
+replays the recorded tree. Plain `--desktops` is only the 2x2 for sessions with no record.)
 
 **Why this is a rule and not a preference.** The two sentences below said "a window per account"
 and "anchor the split to the CALLING pane" — neither says where the WINDOWS go. Recovering 10
