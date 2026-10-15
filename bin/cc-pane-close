@@ -228,10 +228,17 @@ for pane in "${PANES[@]}"; do
     printf 'pane %s: WOULD CLOSE — session %s, %s; window shell pid %s on %s\n' "$pane" "${sid:0:8}" "$why" "$shell" "$tty"
     log_row "$pane" would-close "$why" "$sid"; continue
   fi
-  # ACT — remote control first (pinned to this kitty), else signal the window's shell.
+  # ACT — remote control first (pinned to this kitty), else signal the window's shell. The SIGHUP is a
+  # fallback for remote control being DOWN, never for remote control saying no: a refusal from the
+  # it2 shim (its fullscreen guard, composer guard or identity pin) is a verdict, and a HUP sent past
+  # it would empty exactly the window the per-window guard refused to (review wf_bf440f65-940).
   how=""
-  if remote_answers && CC_TERM=kitty CC_TERM_KITTY_TO="unix:/tmp/kitty-$KPID" "$IT2" session close -f -s "$pane" --expect-generation "$KPID" >/dev/null 2>&1; then
-    how="kitty remote control"
+  if remote_answers; then
+    if CC_TERM=kitty CC_TERM_KITTY_TO="unix:/tmp/kitty-$KPID" "$IT2" session close -f -s "$pane" --expect-generation "$KPID" >/dev/null 2>&1; then
+      how="kitty remote control"
+    else
+      refuse "$pane" "kitty remote control refused the close (fullscreen guard, composer guard or identity pin); not falling back to SIGHUP" "$sid"; continue
+    fi
   elif ! fs_guard_any_clear; then
     # THE FULLSCREEN GUARD (kitty-crash-2026-10-15). Without remote control nothing here can count
     # this window's siblings, so a HUP might empty a native-fullscreen OS window — the crash

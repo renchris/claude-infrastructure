@@ -74,6 +74,19 @@ plain_no()  { transcript '{"type":"user","cwd":"CWD","message":{"role":"user","c
   [ "$(cat "$FIX/guard.log")" = "--any-fs --kitty-pid 610" ]
 }
 
+# RED-proof: against `git show b53dddb30:bin/cc-pane-close` the refusal fell through to `-HUP 5001`.
+@test "remote control UP but refusing the close: refused, and no SIGHUP is sent past the refusal" {
+  teammate
+  # an it2 that answers the listing (remote is up) and refuses the close, as its fullscreen guard does
+  printf '#!/bin/bash\necho "it2 $*" >> "$FIX/it2.log"\ncase "$1 $2" in "session list") echo "[]"; exit 0 ;; esac\nexit 1\n' > "$S/it2"
+  chmod +x "$S/it2"
+  CC_PANE_CLOSE_REMOTE=on CC_PANE_CLOSE_IT2="$S/it2" STUB_RC=0 run "$CLOSE" --pane 69
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"pane 69: REFUSED"*"remote control refused the close"* ]] || false
+  grep -q '^it2 session close -f -s 69 ' "$FIX/it2.log" || { cat "$FIX/it2.log"; false; }
+  [ ! -e "$FIX/kill.log" ]
+}
+
 @test "a fullscreen guard that cannot be found refuses the HUP (fail closed)" {
   teammate
   CC_KITTY_FS_GUARD="$BATS_TEST_TMPDIR/no-such-guard" run "$CLOSE" --pane 69
