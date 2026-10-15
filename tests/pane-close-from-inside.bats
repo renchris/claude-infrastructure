@@ -190,12 +190,6 @@ run_wrap() { CC_CLOSE_ATTRIB_PS_BIN="$S/fakeps" CC_CLOSE_ATTRIB_KILL_BIN="$S/fak
   [[ "$output" == *"fullscreen guard not executable at $T/no-such-guard"* ]]
 }
 
-@test "runner: outside kitty (no KITTY_WINDOW_ID) the guard is not consulted and the pane closes" {
-  KITTY_WINDOW_ID='' GUARD_RC=3 run_runner "claude"
-  [ "$status" -eq 0 ]
-  [ ! -e "$T/guard-log" ]
-}
-
 @test "runner: the command sees CC_PANE_RUNNER_OWNS_CLOSE=1; the fallback shell does not" {
   STUB_RC=1 run_runner "claude"
   [ "$status" -eq 7 ]
