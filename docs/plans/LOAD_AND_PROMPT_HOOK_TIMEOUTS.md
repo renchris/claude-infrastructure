@@ -106,6 +106,21 @@ Changes (all keep the same answer; parity proven old-vs-new on replays: stdout, 
 
 Replay results so far (load ~25, real cancelled Stops, four hooks concurrent): completion-assert 12.3 s → 3.2-4.4 s; session-continue 4.0-4.7 s → 1.2-2.0 s; operator-readout alone 4.9-6.6 s → 2.6-4.6 s (before the BUSY awk). Open: the ledger itself is fork-bound (~60-90 starts plus sibling CLIs); at load ~170 each start costs ~0.1 s, so a cold ledger is 6-10 s regardless of the fixes above — the remaining floor for boundary-handoff and session-continue under load.
 
+Landed and converged: `a432bcec0` (session-writes), `fd9e12d1e` (completion-assert), `6af62766a` (operator-readout), `7db5c3fe8` (this section); the live checkout reached `7db5c3fe8` at 2026-10-14T22:33:52Z.
+
+Live before/after (2026-10-15, `stop-hook-durations.py`, records de-duplicated by uuid across the mirrored account dirs). The after window ran at much lower load than either before window, so the raw cancels/h overstate the gain; the load-matched columns count only minutes with 1-min load ≤ 40 (same history, inline filter over `capacity-alarm.jsonl`).
+
+| hook (Stop timeout) | before 10-13 02:24Z → 10-14 20:05Z, 41.68 h, load median 27 / p95 254 | before 10-14 15:30Z → 21:30Z, 6.00 h, load 21 / 195 | after 10-14 22:34Z → 10-15 04:36Z, 6.04 h, load 16 / 35 | load ≤ 40 only: before 22.27 h → after 5.50 h |
+|---|---|---|---|---|
+| operator-readout (10 s) | 321 / 643 runs = 7.70/h | 31 = 5.17/h | 1 / 67 = 0.17/h | 2.25/h → 0.18/h |
+| session-continue (5 s) | 225 / 261 = 5.40/h | 28 = 4.67/h | 3 / 11 = 0.50/h | 1.80/h → 0.55/h |
+| completion-assert (5 s) | 90 / 90 = 2.16/h | 17 = 2.83/h | 8 / 8 = 1.33/h | 1.26/h → 1.45/h (not improved) |
+| boundary-handoff (5 s) | 28 / 28 = 0.67/h | 3 = 0.50/h | 1 / 1 = 0.17/h | 0.00/h → 0.18/h (one event) |
+
+operator-readout from history (it prints on every run, so its percentiles are unbiased): p50 10.0 s / p95 10.4 s (41.68 h window), 7.0 s / 10.2 s (6 h window) → 3.5 s / 7.4 s after; p95 is still above half its timeout. For the other three, history records only cancels and printing runs, so cancels/h is the metric (memory: stop-hook-history-durations-are-biased-to-printers).
+
+Verdict: operator-readout and session-continue improved materially at matched load; completion-assert did NOT — every one of its 8 after-window records is a cancel at ~5.1 s, at 1-min load 11-28, in `~/Development/personal` (4), the `tm2-plan` worktree (2), a launch-film dir and a `wt-cc-*` worktree; session-continue's 3 cancels and boundary-handoff's 1 share those Stops (tm2-plan 03:23-03:24Z) plus one in this worktree (03:50Z, load 25). Open: completion-assert's remaining cost at moderate load is not the large-diff / untracked-tree reads the replays measured, and the ledger fork floor above remains for the others.
+
 ## Operator-only (file with cc-backlog / cc-decide; never edit settings.json or plists)
 
 O1 `timeout: 5` on `handed-off-session-guard.sh` + `PYTEST_XDIST_AUTO_NUM_WORKERS=3` (migration, c10) · O2 decision: `CC_SENTINEL_KILL=off` for compressor-sentinel (128 SIGKILLs since 10-07 conflict with "never kill work"; recommend off, 75%) · O3 plist throttles (session-index sweep 60 s → 300 s; public-publish daily) · O4 Claude Code upgrade via cc-upgrade + upstream report on the `ps -A` child leak · O5 30 s `eslogger exec` trace to attribute ~21k spawns/min · O6 optional cleanup of non-work orphans.
