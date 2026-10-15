@@ -124,17 +124,43 @@ def recorded(tree_path):
         i = ti.setdefault(t["os_window"], 0)
         ti[t["os_window"]] += 1
         # a pane with no session is a shell: it keeps its place by its working directory
-        tree = kt.relabel(t["tree"], lambda w: sid_of.get(str(w)) or ("shell:" + cwd_of.get(w, "")))
+        # (the recorded window id keeps two shells in one directory two distinct leaves)
+        tree = kt.relabel(t["tree"], lambda w: sid_of.get(str(w)) or ("shell:%s#%s" % (cwd_of.get(w, ""), w)))
         if tree is not None:
             out.append((t["os_window"], i, tree))
     return out
 
 
 def live_sids(data, kitty_pid, wanted):
-    """{live window id: session id} for the sessions the record names."""
+    """({live window id: session id}, [sessions found in more than one pane])."""
     win = windows(data)
     got = {}
-    for f in glob.glob(os.path.join(REGISTRY, "*.json")):
+
+    try:
+        ps = subprocess.run(["/bin/ps", "-axo", "pid=,ppid="], capture_output=True, text=True, timeout=20).stdout
+    except subprocess.TimeoutExpired:
+        ps = ""
+    parent = {}
+    for line in ps.splitlines():
+        f = line.split()
+        if len(f) == 2 and f[0].isdigit() and f[1].isdigit():
+            parent[int(f[0])] = int(f[1])
+
+    def holds(wd, pid):
+        """the row's process is alive and runs under this pane: claude sits below the pane's shell,
+        often under expect on a pty of its own, so the pane's foreground list does not name it"""
+        try:
+            pid = int(pid)
+        except (TypeError, ValueError):
+            return False
+        top = {wd.get("pid")} | {x.get("pid") for x in wd.get("foreground_processes") or []}
+        seen = 0
+        while pid in parent and seen < 64:
+            if pid in top:
+                return True
+            pid, seen = parent[pid], seen + 1
+        return False
+    for f in sorted(glob.glob(os.path.join(REGISTRY, "*.json"))):
         try:
             r = json.load(open(f))
         except (OSError, ValueError):
@@ -145,18 +171,25 @@ def live_sids(data, kitty_pid, wanted):
             w = int(str(r.get("paneUUID") or r.get("pane") or "").split(":")[-1])
         except ValueError:
             continue
-        if w in win:
-            got[w] = r["session_id"]
-    taken = set(got.values())
+        # A row outlives its session by up to a day (the sweep), and the pane may now hold a shell
+        # or another claude: the row counts only while its process is alive under that pane.
+        if w in win and (r.get("pid") in (None, "") or holds(win[w][3], r.get("pid"))):
+            got.setdefault(w, set()).add(r["session_id"])
     for w, (_, _, _, wd) in win.items():
         if w in got:
             continue
-        blob = json.dumps([wd.get("cmdline"), [p.get("cmdline") for p in wd.get("foreground_processes") or []]])
-        hit = [s for s in wanted if s in blob and s not in taken]
-        if len(hit) == 1:
-            got[w] = hit[0]
-            taken.add(hit[0])
-    return got
+        # The pane's LAUNCH command only (reso-resume-one takes the sid as an argument): a
+        # foreground `less <sid>.jsonl` mentions a session without holding it.
+        blob = json.dumps(wd.get("cmdline"))
+        hit = {s for s in wanted if s in blob}
+        if hit:
+            got[w] = hit
+    one = {w: next(iter(ss)) for w, ss in got.items() if len(ss) == 1}
+    seen = {}
+    for w, s in one.items():
+        seen.setdefault(s, []).append(w)
+    dup = sorted(s for s, ws in seen.items() if len(ws) > 1)
+    return {w: s for w, s in one.items() if s not in dup}, dup
 
 
 def fullscreen(pwids):
@@ -215,7 +248,8 @@ def plan(rec, data, sid_of_wid):
                 free = [w for w in sorted(win) if win[w][2] == target and w not in sid_of_wid]
                 pick = {}
                 for x in shells:
-                    hit = [w for w in free if "shell:" + (win[w][3].get("cwd") or "") == x and w not in pick.values()]
+                    hit = [w for w in free if "shell:" + (win[w][3].get("cwd") or "") == x.rsplit("#", 1)[0]
+                           and w not in pick.values()]
                     if hit:
                         pick[x] = hit[0]
                 live = kt.relabel(tree, lambda s: wid_of.get(s) if not s.startswith("shell:") else pick.get(s))
@@ -257,7 +291,12 @@ def main(argv):
     data = k.ls()
     rec = recorded(a.tree)
     wanted = {s for _, _, t in rec for s in kt.leaves(t) if not s.startswith("shell:")}
-    sid_of_wid = live_sids(data, kpid, wanted)
+    sid_of_wid, dup = live_sids(data, kpid, wanted)
+    if dup:
+        for x in dup:
+            say("refuse: session %s is in more than one pane — which one to move cannot be told" % x)
+        say("verdict=refused moved=0 restarted=0 tabs=0 mismatched=0")
+        return 3
     say("record %s: %d tab(s), %d session(s); %d of them live in this kitty" % (a.tree, len(rec), len(wanted), len(sid_of_wid)))
     steps = plan(rec, data, sid_of_wid)
     win = windows(data)
