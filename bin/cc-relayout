@@ -18,7 +18,7 @@ places NEW panes; this one rearranges panes that already hold a live claude.
 HOW, in order:
   1. live pane → session: the session registry (~/.claude/cc-registry/*.json, kitty_pid + paneUUID,
      written by hooks/session-register.sh), else exactly one recorded session id in the pane's
-     command line (reso-resume-one takes the sid as an argument);
+     command line (the resume engine takes the sid as an argument);
   2. each recorded tab, its panes now live, gets a live tab: the one already holding most of them
      (in the live OS window holding most of that recorded window's panes); a tab with none of
      them gets a new tab in that window, or a new OS window, opened on a placeholder pane this
