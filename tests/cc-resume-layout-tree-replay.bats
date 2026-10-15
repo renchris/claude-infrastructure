@@ -364,7 +364,7 @@ layout_tail() { printf '%s\n' "$output" | sed -n 's/^cc-resume-layout: layout tr
   rb_restore
   [ "$status" -eq 0 ]
   [ "$(grep -c ' launch ' "$KLOG")" -eq 3 ]
-  [ "$(grep -c ' ls' "$KLOG")" -eq 1 ]
+  [ "$(grep -c ' ls$' "$KLOG")" -eq 1 ]                           # the read-back; the fullscreen step's `ls --match id:<head>` is not one
   [ "$(printf '%s\n' "$output" | grep '^cc-resume-layout: tree-verify ')" = 'cc-resume-layout: tree-verify oswin=1 tab=0 verdict=ok' ]
   ! grep -q ' kitten ' "$KLOG" || false
   [ "$(layout_tail)" = 'tree_ok=1 tree_fixed=0 tree_mismatch=0 tree_unknown=0' ]
@@ -377,7 +377,7 @@ layout_tail() { printf '%s\n' "$output" | sed -n 's/^cc-resume-layout: layout tr
   # the stub's ls never changes, so the read-back after the kitten still differs
   [ "$(printf '%s\n' "$output" | grep '^cc-resume-layout: tree-verify ')" = 'cc-resume-layout: tree-verify oswin=1 tab=0 verdict=mismatch' ]
   [ "$(layout_tail)" = 'tree_ok=0 tree_fixed=0 tree_mismatch=1 tree_unknown=0' ]
-  [ "$(grep -c ' ls' "$KLOG")" -eq 2 ]                           # read back again after the kitten
+  [ "$(grep -c ' ls$' "$KLOG")" -eq 2 ]                         # read back again after the kitten
   head_id="$(head -1 "$KLOG.map" | awk '{ print $2 }')"
   grep ' launch ' "$KLOG" | head -1 | grep -q -- '--type=os-window'
   [ "$(grep -c ' kitten ' "$KLOG")" -eq 1 ]
