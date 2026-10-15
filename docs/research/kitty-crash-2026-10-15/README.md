@@ -1,6 +1,7 @@
 # kitty crash 2026-10-15 00:01:27 — root-cause investigation
 
 Status: investigation complete (workflow `wf_496e7f13-644`, 6 angles + synthesis + adversarial skeptic); fix NOT yet implemented.
+Status (2026-10-15, phase 1): precondition reproduced (32/32 unguarded fullscreen destroys close the window while still in fullscreen; the segfault itself 0/32); fix chosen and corrected by a 4-lens adversarial review — see § "Repro and chosen fix" at the end. Phase 2 implements it.
 Evidence copies (outside the repo, survive the /tmp boot wipe): `~/.claude/autonomy/incidents/kitty-crash-2026-10-15/`
 (`.ips`, `unilog-0127.txt` = unified log 23:58–00:02:30, `log.txt` = kitty-script log, `cocoa_window_v0.48.2.m`, `hb.kitty-ls.json`, `workflow-raw-findings.json`).
 
@@ -18,6 +19,7 @@ Evidence copies (outside the repo, survive the /tmp boot wipe): `~/.claude/auton
 - "Pane 8 closed itself on rc 0." `lr-fire-resume.sh` always `exec zsh -l -i` on a terminal stdin (`:1703`); only `reso-resume-one` closes on rc 0. Pane 8 was an idle shell, most likely closed by hand just before.
 - "1b1eb844 surviving until the SIGHUP proves it was moved." `ended_at` measures claude's 4–9 s shutdown lag.
 - "Fix #1: toggle fullscreen off, wait, then act." Toggling off STARTS the very exit transition whose controller is in the crash stack; fullscreen read-back is unreliable on this Mac (`docs/research/session-durability-2026-10.md:72`) and load is ~70.
+  - CORRECTED (2026-10-15, phase 1 repro): refuted as written (a fixed wait, a blind read-back), adopted in a corrected form. The CGS Space type reads native fullscreen reliably for a window at rest, and a deliberate toggle-off runs its exit transition on a LIVE window. The guard therefore waits for a stable windowed read longer than any transition, and only then acts. See § "Repro and chosen fix".
 
 ## Fix candidates, after the skeptic
 
@@ -250,3 +252,159 @@ Under this reading, closing a fullscreen window while kitty is already active an
 - **Also:** `lr-fire-resume` panes leave an idle shell behind after a clean exit. That invited the manual close that most likely set this up.
 
 Evidence: `~/Library/Logs/DiagnosticReports/kitty-2026-10-15-000214.ips`, `/tmp/unilog-0127.txt`, `/tmp/kcrash-scripts/log.txt`, `~/.claude/autonomy/heartbeat/753919F0-7855-45C2-8449-023706DAEAFD/64211/hb.kitty-ls.json`, `~/.claude/logs/close-records/`, `~/.reso/limit-recover/66936177-b305-4678-b95a-73404985e324/bundle-20261013T014941Z/lr-launch-66936177-VqCnCS.sh`, `/Users/chrisren/Development/.worktrees/wt-cc-000146-45877/scripts/limit-recover/lr-fire-resume.sh`, `bin/kitty-pane-menu`, `bin/kitty-confirm-close`, `bin/reso-resume-one`, `/tmp/kitty-upstream-research/cocoa_window_v0.48.2.m`.
+---
+
+# Repro and chosen fix (2026-10-15, phase 1)
+
+**Result.** Destroying a native-fullscreen kitty window by any path closes the window while it is still in fullscreen: AppKit's fullscreen teardown (the toolbar window's removal) runs after the window has closed. This held in 32 of 32 unguarded trials, through move, close-window and child exit, and in the same order as the incident. The segfault itself did not reproduce: 0 of 32, and 0 of 8 under NSZombieEnabled + MallocScribble. A guard that leaves fullscreen, waits until the window is stably windowed, and only then acts removes the precondition. The fix is that guard, placed at every chokepoint our tools own. An adversarial review (4 lenses, below) found three defects in the first guard design, and they are corrected in the spec here.
+
+## How it was run
+
+- Harness:
+  - [`repro/run.sh`](repro/run.sh): the matrix driver.
+  - [`repro/probe.swift`](repro/probe.swift): reads the Space type, reads the front app, provides the stand-in helper app, and sends the activate Apple Event addressed by pid.
+  - [`repro/close-order.py`](repro/close-order.py): orders each window's close against its fullscreen teardown.
+  - [`repro/trial.sh`](repro/trial.sh): the first version, one kitty per trial. A cold kitty start once took ~2 min at load 58, so `run.sh` keeps one throwaway kitty and relaunches it only after a crash.
+- The throwaway kitty:
+  - same binary as the live one (`/Applications/kitty.app`, 0.48.2), running a copy of the live `kitty.conf`;
+  - `--listen-on unix:~/Development/.worktrees/kitty-repro/k.sock` and `--instance-group=kcrash-repro`;
+  - launched under `env -i`, so no `KITTY_LISTEN_ON`, `KITTY_WINDOW_ID` or `ITERM_SESSION_ID` from the live instance leaked in.
+- Isolation from the live kitty: every `kitty @` call carried `--to` the throwaway's socket. No osascript ran, and nothing named `application "kitty"`. The live kitty was never addressed.
+- Native fullscreen was verified before every action by the window's CGS Space type (`CGSCopySpacesForWindows` + `CGSSpaceGetType` = 4).
+- The stand-in helper copies the activation of `kitty-pane-menu-native.swift:272-296`:
+  - it is an `.accessory` app that activates itself and pops an NSMenu at the pointer;
+  - it cancels the menu after 250 ms, holds 300 ms (the real helper's exit sat ~300 ms on the analytics barrier, unilog `:305`), then exits;
+  - the action fired right after it exited.
+- `post=menu` replays the menu's tail after the action: `equalize_tab_of`, then a `kitty @ ls`, then the activate Apple Event that `refocus()` sends, addressed to the throwaway's pid.
+- Load averaged 55–59 during the runs (the incident: ~47–70).
+- Evidence, outside the repo: `~/.claude/autonomy/incidents/kitty-crash-2026-10-15/repro-2026-10-15/` holds `results-*.tsv`, `run-*.log`, one AppKit Window-category log per throwaway (`window-<pid>.log`) and `close-order-<pid>.tsv`.
+
+## Matrix
+
+"Close order" comes from `close-order.py`:
+- **in fullscreen**: the window logged `finishing close`, and its `NSToolbarFullScreenWindow` was removed from the group and closed afterwards.
+- **left fullscreen first**: the toolbar window was gone before the window closed.
+
+The number is the toolbar's close time minus the window's.
+
+| Configuration | Action | Context | Trials | Crashed | Close order |
+|---|---|---|---|---|---|
+| Destination windowed | move (`detach-window --target-tab`) | idle / after helper | 1 / 1 | 0 | in fullscreen, +21 / +16 ms |
+| Destination windowed | close (`close-window`) | idle / after helper | 1 / 1 | 0 | in fullscreen, +19 / +19 ms |
+| Destination windowed | child exit | idle / after helper | 1 / 1 | 0 | in fullscreen, +23 / +21 ms |
+| Destination + 2 more windows fullscreen | move, then the menu's tail | after helper | 3 | 0 | in fullscreen, +21..+29 ms |
+| same | move, then the menu's tail | idle | 3 | 0 | in fullscreen, +23..+26 ms |
+| same | move | after helper | 3 | 0 | in fullscreen, +19..+20 ms |
+| same, source had 2 panes, one closed 1 s before | move, then the menu's tail | after helper | 3 | 0 | in fullscreen, +20..+25 ms |
+| same | close, then the menu's tail | after helper | 3 | 0 | in fullscreen, +20..+29 ms |
+| same | child exit | idle | 3 | 0 | in fullscreen, +21..+30 ms |
+| Zombies + scribble, destination + 1 window fullscreen | move, then the menu's tail | after helper | 2 | 0, no zombie message | in fullscreen, +19 / +26 ms |
+| same | move / close / child exit | idle | 2 / 2 / 2 | 0, no zombie message | in fullscreen, +22..+29 ms |
+| same, **guarded** (focus, toggle, poll, settle 1 s) | move, then the menu's tail | after helper | 2 | 0 | **left fullscreen first** |
+| same, **guarded** | close | idle | 2 | 0 | **left fullscreen first** |
+| **Incident**, kitty 64211 | move (most likely) | after helper | 1 | **SIGSEGV** | in fullscreen, **+40 ms** |
+
+Totals:
+- **Unguarded:** 32 trials, 0 crashes, 32 of 32 closed in fullscreen.
+- **Guarded:** 4 trials, 0 crashes, 4 of 4 left fullscreen first.
+- **Zombies:** confirmed active in the throwaway before the zombie trials ran (`heap` listed `_NSZombie_*` classes).
+
+## What the repro settles, and what it does not
+
+1. **The precondition is deterministic and path-independent.** Every destroy of a native-fullscreen window closes the window while AppKit still holds it in fullscreen. The crash stack is in exactly that state: `_NSExitFullScreenTransitionController dealloc` drops the last reference to a window that has already closed. Move, close-window and child exit behave identically, so guarding the menu's move alone would leave two thirds of the trigger class open.
+2. **The repro did not reach the crash phase. It shows the precondition, not the fault.**
+   - The kitty-side sequence differs from the incident in two ways. In every repro close, an `_NSFullScreenMouseDetectionWindow` closes 5–17 ms after the window; the incident has none. In the incident, kitty also reordered its other fullscreen window a87e relative to 8471 in the same millisecond, which happened in 0 of 32 repro closes.
+   - WindowServer kept the incident's 33905 past its close (still not removed at the crash). Its SkyBridge log never recorded the repro windows, so that hold cannot be compared.
+   - 0 of 32 caps the per-destroy rate at ~9% (95%). It cannot tell a rare race from a crash that needs a missing co-factor.
+   - The zombie null shows only that the repro path holds no latent freed-object dereference. The `.ips` x0 (`0x600000793100 | 1`) is an odd value read out of a slot, which zombies cannot flag.
+3. **The co-factor was untested, not ruled out.** The incident destroyed the window 15 ms after kitty reactivated; the repro's fastest was 20 ms. kitty's main loop logged nothing from .121 to .447 in the incident (probably stalled ≥300 ms, with 18 streaming sessions across 6 fullscreen windows), while the repro kitty answered every time. The stand-in cancels its menu instead of performing a pick, never follows a right mouse-down, and is not kitty's child. And Mission Control, which ran 3 s before the incident, was not replayed. **The fix does not depend on which co-factor it was**: whatever opens the race, the guard removes the state the race runs in.
+4. **The fullscreen read-back premise is corrected, for this detector only.** `session-durability-2026-10.md:72` ("every read-back tried so far is blind") measured frame heuristics and AX. The CGS Space type read 4 on all 36 at-rest fullscreen verifications and on the live windows, and `/usr/bin/python3` reads it through ctypes. It is not a transition detector: the type leaves 4 0.17–0.39 s *before* an exit animation ends, and it never reads 4 *during* an enter animation. So "not 4" means windowed only after it has held steady for longer than a transition takes (§ Chosen fix).
+5. **The earlier objection to "toggle off, then act" is answered by ordering plus a stability gate, not by the toggle alone.** A deliberate toggle-off runs the exit transition on a live window. In the 4 guarded trials the transition ended 0.61–0.83 s before the destroy, and that margin came from the fixed 1 s settle, not from the poll. The guard below replaces the fixed settle with a positive stability read.
+6. **A second kitty defect, found by the review:** `kitty @ action --match id:N <action>` ignores the match. In 0.48.2 the client sends `match_window` (`rc/action.py:58`), the server reads only `match` (`rc/base.py:381`), and the action runs on the *active* window. The guarded trials only worked because `run.sh` focused the target first.
+   - This also explains the measured `--match … equalize` no-op (`kitty-pane-menu:259-266`).
+   - It explains the "still windowed after its toggle, focusing it and toggling once more" retry in `cc-resume-layout.sh:883-889`: that toggle hits whichever window is active, not the one named.
+   - `kitty @ kitten --match` does honor its match (`rc/kitten.py`).
+
+## Adversarial review (workflow `wf_8d3c744e-7e1`, four lenses at xhigh)
+
+| Claim | Verdict | What changed |
+|---|---|---|
+| Unguarded destroys always close in fullscreen, as in the incident | WEAKENED | Holds as measured. It is the precondition, not the crash phase; the repro's sequence differs from the incident's (point 2 above). |
+| The crash is a race; the helper co-factor is not needed | WEAKENED; "not needed" REFUTED | Restated as "untested". The co-factor arms are listed in point 3. |
+| Guard: toggle, poll until not 4, settle 1 s, act | WEAKENED | Wrong target (`action --match` ignored), an early signal (Space type flips before the transition ends), and it fails open (an unknown read counts as windowed). All three are corrected below. |
+| Placement: menu, confirm-close, it2 close, runners | WEAKENED | Must be the LAST gate before the destroy. The autonomous closers' 8–10 s outer timeouts cannot fit a toggle and wait. Native kitty bindings, ⌃⇧Q, `lr-fleet.sh:2109`, `cc-pane-close`'s SIGHUP fallback and typed `exit` / Ctrl-D were uncovered. |
+
+## Chosen fix (implemented in phase 2)
+
+**The guard: `bin/kitty-fullscreen-guard`** (new; Python 3, stdlib and ctypes only).
+
+- **Usage:** `--window <kitty window id> [--to <address>] --mode toggle|refuse`. Exit codes: 0 = safe to empty the window now; 3 = refused, the caller must not empty it.
+- **Last-pane check and targeting:** done inside kitty by a small no-UI kitten (`kitty @ kitten --match id:<wid> <repo>/lib/kitty-fs-kitten.py`). `--match` resolves exactly, and a missing pane is a MatchError, never a fallback to the active window. The kitten:
+  - reports whether `wid` is the last pane of its OS window, and the OS window's `platform_window_id`;
+  - when asked to, calls `toggle_fullscreen(os_window_id)` and returns its boolean result. True means the call ENTERED fullscreen: the guard toggles back and refuses.
+  - The kitten runs only kitty's own API; no ctypes runs inside the live kitty process.
+- **State read:** three-valued, from the CGS Space types of `platform_window_id`, read outside kitty:
+  - **FS**: the types include 4;
+  - **WINDOWED**: the types are exactly `[0]` and the window is onscreen;
+  - **UNKNOWN**: anything else — SPI load failure, a missing window row, an empty Space list, another type value, a null or ≤0 id.
+  - UNKNOWN refuses.
+- **Before toggling:** proceed with no toggle only if the window reads WINDOWED on every 100 ms sample for ≥1.0 s, which is longer than the longest transition measured (0.90 s); this closes the enter-animation gap. FS means toggle. UNKNOWN means poll to a 3 s wall-clock deadline, then refuse.
+- **After toggling:** poll every 100 ms to an 8 s wall-clock deadline. The window must read WINDOWED with identical bounds for ≥1.0 s, then the guard re-reads once and returns 0.
+- **Failure:** never toggle a second time; refuse with an alert naming the window and its last state.
+- **Mode and visibility:** `--mode toggle` (operator-initiated callers) toggles only when the window's Space is the one its display is currently showing, so the operator never gets pulled across Spaces. `--mode refuse` (autonomous callers) never toggles: if the pane is the last one of an FS or UNKNOWN window, it exits 3.
+- **Logging:** every verdict appends a row to the action log below.
+
+**Callers.** The guard is always the LAST gate, run after every other check has passed and immediately before the destructive call:
+
+- **`bin/kitty-pane-menu`**: Move to <window> (after re-checking that the destination tab still exists), Move to New Window and Close Pane. Mode toggle. Exit 3 means no action, plus an alert: "This is the last pane of a fullscreen window and it did not leave fullscreen cleanly; leave fullscreen and try again."
+- **`bin/kitty-confirm-close`**: `close(ids)`, only when `ids` is every pane of the OS window, and only after the dialog said Close or the not-busy decision. Mode toggle. A Cancel must leave fullscreen untouched.
+- **`bin/it2-kitty` `session close`** (`:1477`, after the composer guard): mode refuse. Exit 3 becomes exit 1 plus a stderr line. A last pane in a fullscreen window stays open, and the operator closes it by hand through a guarded path. This is the shared actuator for handoff self-close, `cc-pane-close`, `cc-teardown`, teammate shutdown, lr-upgrade and Claude Code's own pane kill. Its callers' 8–10 s timeouts (`hf_bounded`, `pane-close-retry`, `teammate-auto-shutdown`) cannot fit a toggle and wait, and it never toggles a window on a Space the operator may not be looking at.
+- **`bin/cc-pane-runner` `_close_on_exit`** (`:169-200`) **and `bin/reso-resume-one` `rr_close_on_clean_exit`** (`:1007-1029`): mode refuse. Exit 3 keeps the shell (their existing keep branch). The accepted cost: a husk shell stays in a fullscreen window when its last session ends cleanly.
+- **A pane's root shell exiting by hand** (typed `exit` or Ctrl-D, the likely way pane 8 left window 5): a `zshexit` hook registered from `lib/pane-successor.sh`, which the kitty-setup block in `~/.zshrc` already sources, so `~/.zshrc` needs no hand edit.
+  - It acts only when the shell is the pane's root process, meaning its parent is the window's `pid` in `kitty @ ls`.
+  - Mode toggle.
+  - It skips on SIGHUP: a HUP means kitty is already closing the window. A `TRAPHUP` that records the flag and still exits handles this.
+  - Measured here: zsh runs `zshexit` on a normal exit and on SIGHUP, but not on `exec`.
+- **kitty's native bindings** (`config/kitty.conf:879-886`: ⌘⇧O `detach_window ask`, ⌘⌥O `detach_window`, ⌘⌥⇧O `detach_tab ask`, plus kitty's unoverridden default ⌃⇧Q `close_tab`): rebind each to a background launch that runs the guard in toggle mode and then the same native action with `kitty @ action --self` (`KITTY_WINDOW_ID` set). kitty's own chooser UI is unchanged. This changes key routing, not the fullscreen mode or the one-window-per-Desktop layout, so it needs no ruling. Update `tests/kitty-conf-bindings.bats:395-417`.
+- **`scripts/limit-recover/lr-fleet.sh:2109`**: replace the raw `kitty @ close-window` with the `it2` shim, so it gets the guard.
+- **`bin/cc-pane-close:219-222` SIGHUP fallback** (runs only when remote control is dead): refuse whenever any kitty window reads Space type 4, because without remote control it cannot prove the pane is not the last one.
+
+**Never relaunch a dead kitty.** `refocus()` (`kitty-pane-menu:952`), the dialog's leading activate (`:915`) and `kitty-confirm-close`'s post-dialog activate (`:453-456`) must stop addressing kitty by name; `tell application "kitty"` launches a dead kitty, which is how kitty came back at 00:01:28. They should skip when the parent pid is not a live kitty (a `--type=background` child of a dead kitty is reparented to launchd), and otherwise activate that pid in a way that cannot launch an app.
+
+**Action log.** `~/.claude/logs/kitty-pane-actions.jsonl` gets an intent row and a result row for every pane-menu choice, confirm-close action and guard verdict. Fields: ts, tool, choice, kitty window id, OS window id, `platform_window_id`, panes in the OS window, state read, guard verdict, rc. The intent row is flushed before the destructive call, so a crash still leaves the attribution whose absence capped the incident at 75%.
+
+**Crash watchdog.** In `hooks/lead-crash-watchdog.sh` `classify_death` step 0 (`:686-718`), a close-record with `sig_reached_wrapper=HUP` no longer self-certifies as RECYCLE/clean-exit.
+- A HUP death corroborated by at least 2 other HUP close-records ending within ±15 s, or by a `kitty-*.ips` within ±6 min, is CRASH `terminal-died`.
+- An isolated HUP is RECYCLE `pane-hangup`, which stays silent, because an ordinary ⌘W also HUPs.
+- Records without the key behave as before.
+
+**Same root fact, smallest change.** `bin/cc-resume-layout.sh:883-889` toggles fullscreen with `action --match`, which kitty ignores. It should target with `--self` and `KITTY_WINDOW_ID`, or through the guard's kitten. That makes the existing one-window-per-Desktop restore toggle the window it names, and leaves the layout unchanged.
+
+**Still exposed**, because it is kitty-internal: the red traffic-light button, kitty's menu-bar close items, and a pane whose root process is neither a zsh nor one of our runners and exits on its own. A kitty-side guard cannot be a synchronous watcher or kitten, because the exit transition needs kitty's main loop and blocking it would deadlock. Closing these needs a kitty patch (decision below).
+
+**Before phase 2 calls it done, the repro gets the review's missing arms:**
+- the guard driven against an unfocused target, the target on a background Space, and a second display;
+- a destroy during AppKit's automatic fullscreen of a new window;
+- the probe rows logged with timestamps, and load recorded for each trial;
+- `front_at_action` sampled before the action;
+- `quit_kitty` targeting with `--self`: its `action --match` toggle missed and destroyed fullscreen windows at quit;
+- the `.ips` scan restricted to the throwaway's own pid.
+
+## Not built: dropped or filed
+
+- `macos_traditional_fullscreen yes`: dropped. The guard removes the precondition without touching the 2026-09-30 one-native-fullscreen-window-per-Desktop ruling (e950bde6d), and kitty #9572 is a separate crash with that option.
+- Detachable terminal holder: dropped here. `session-durability-2026-10.md` § "What not to build" already rules out a tmux migration, and this crash class is closed at our own chokepoints.
+- Upgrade to kitty 0.49.x: dropped. The destroy path is unchanged on master.
+- Upstream reports for both kitty defects, plus a local patch that leaves fullscreen inside `_glfwPlatformDestroyWindow` and would cover kitty's own paths: filed as operator decision `a41897063971`. The reports are outbound acts, and the patch rides on the open patched-build decision 0a8ffe58562a.
+
+## Re-running the repro
+
+```
+cd docs/research/kitty-crash-2026-10-15/repro
+swiftc -O -o ~/Development/.worktrees/kitty-repro/probe probe.swift
+mkdir -p ~/Development/.worktrees/kitty-repro/conf && cp ~/.config/kitty/kitty.conf ~/Development/.worktrees/kitty-repro/conf/ && cp -R ~/.config/kitty/drag-arm.d ~/Development/.worktrees/kitty-repro/conf/
+KCR_BFS=1 KCR_EXTRA=1 ./run.sh 2 move:helper:0:menu close:idle exit:idle fsoff-move:helper:0:menu
+log show --start '<run start>' --style compact --predicate 'processID == <throwaway pid> AND category == "Window"' | ./close-order.py
+```
+
+Each trial takes over the operator's screen with a native-fullscreen Space for ~10 s. On exit, `run.sh` toggles its fullscreen windows off and quits its kitty, but its toggle has the `--match` defect above, so check for leftover fullscreen Spaces.
