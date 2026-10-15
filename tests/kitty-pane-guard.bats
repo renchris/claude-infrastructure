@@ -170,8 +170,12 @@ rows() { python3 -c 'import json,sys; [print(json.dumps(json.loads(l), sort_keys
     >"$BATS_TEST_TMPDIR/tree2.json"
   KPG_TREE2="$BATS_TEST_TMPDIR/tree2.json" KPG_PICK="destination — 1 pane" run python3 "$BIN/kitty-pane-menu"
   [ "$status" -eq 0 ]
+  [[ "$output" == *"move failed: destination tab id:"*" is gone"* ]] || { echo "$output"; false; }
   run grep -c '^guard \|detach-window' "$CALLS"
   [ "$output" = "0" ] || { cat "$CALLS"; false; }
+  # the attribution row the action log exists for: the pick, and why nothing happened
+  run rows
+  grep -q '"phase": "result".*"verdict": "destination-gone"' <<<"${lines[1]}" || { echo "$output"; false; }
 }
 
 @test "9 confirm-close: Cancel never calls the guard; Close runs the guard, then close-window" {

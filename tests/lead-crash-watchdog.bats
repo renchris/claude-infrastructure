@@ -675,6 +675,25 @@ kitty_ips_at() { # $1=mtime offset from HUP_NOW (s)
   [ "$(printf '%s' "$output" | cut -f2)" = "pane-hangup" ]
 }
 
+@test "control: exactly ONE HUP sibling within 15 s is still a pane-hangup — two ⌘Ws are not a dead terminal" {
+  hup_setup s_hup_one
+  hup_rec 9271 0; hup_rec 9272 5
+  run bash "$HOOK" --classify s_hup_one 9271 "$HUP_NOW"
+  [ "$(printf '%s' "$output" | cut -f1)" = "RECYCLE" ] || { echo "$output"; false; }
+  [ "$(printf '%s' "$output" | cut -f2)" = "pane-hangup" ]
+}
+
+@test "the ±15 s sibling window is inclusive at 15 and closed at 16" {
+  hup_setup s_hup_edge
+  hup_rec 9281 0; hup_rec 9282 -15; hup_rec 9283 15
+  run bash "$HOOK" --classify s_hup_edge 9281 "$HUP_NOW"
+  [ "$(printf '%s' "$output" | cut -f2)" = "terminal-died" ] || { echo "$output"; false; }
+  rm -f "$CC_CLOSE_RECORDS_DIR"/928[23]-100.json
+  hup_rec 9284 -16; hup_rec 9285 16
+  run bash "$HOOK" --classify s_hup_edge 9281 "$HUP_NOW"
+  [ "$(printf '%s' "$output" | cut -f2)" = "pane-hangup" ] || { echo "$output"; false; }
+}
+
 @test "lone HUP + a kitty crash report within 6 min → CRASH / terminal-died" {
   hup_setup s_hup_ips
   hup_rec 9221 0
