@@ -1,0 +1,342 @@
+#!/usr/bin/env python3
+"""cc-relayout — put RUNNING Claude panes back where a recorded kitty tree had them: the same OS window
+and tab, the same split position (axis, bias, pane order). Panes are MOVED, never restarted.
+
+  cc-relayout --to unix:/tmp/kitty-<pid> --tree <dir>/hb.kitty-ls.json            dry run: the plan
+  cc-relayout --to unix:/tmp/kitty-<pid> --tree <dir>/hb.kitty-ls.json --apply    do it, then read back
+
+  --tree       a heartbeat kitty tree (scripts/lib/restore-heartbeat.sh) with hb.roster.json beside it;
+               after a crash: ~/.claude/autonomy/heartbeat/<boot>/<dead kitty pid>/hb.kitty-ls.json
+  --to         the LIVE kitty's socket — required, never inferred: this tool moves panes
+  --kitty-pid  the live kitty's pid, for the session registry join (default: the pid in --to)
+
+WHEN: a crash recovery that brought sessions back by some other path (by hand, one row per window,
+the 2026-10-15 recovery) left them in the wrong windows and positions. cc-resume-layout.sh --restore
+places NEW panes; this one rearranges panes that already hold a live claude.
+
+HOW, in order:
+  1. live pane → session: the session registry (~/.claude/cc-registry/*.json, kitty_pid + paneUUID,
+     written by hooks/session-register.sh), else exactly one recorded session id in the pane's
+     command line (reso-resume-one takes the sid as an argument);
+  2. each recorded tab, its panes now live, gets a live tab: the one already holding most of them
+     (in the live OS window holding most of that recorded window's panes); a tab with none of
+     them gets a new tab in that window, or a new OS window, opened on a placeholder pane this
+     tool closes again once the panes have arrived;
+  3. REFUSES before moving anything if any OS window a pane leaves or joins reads as fullscreen, or
+     its state cannot be read (hb_display_probe). Removing the last pane of a native-fullscreen
+     window is what crashed kitty 0.48.2 on 2026-10-15 (docs/research/kitty-crash-2026-10-15);
+  4. moves with `kitty @ detach-window --match id:<pane> --target-tab id:<tab>`, which keeps the
+     process: it is the same Window object re-attached (kitty boss._move_window_to);
+  5. sets each target tab's tree exactly with scripts/kitty-apply-layout.py; panes in that tab the
+     record does not know stay, to the right of the recorded ones;
+  6. VERDICT by read-back: every target tab's tree equals the record, and every moved pane has the
+     process id it had before.
+
+Panes whose session is not live (a clean exit, not resumed) are left out; the panes beside them keep
+their order and take the space, as kitty does when a pane closes. Shell panes are never moved; one
+already in a target tab whose working directory matches a recorded shell pane takes that place.
+
+Prints `cc-relayout: plan …` lines, then (with --apply) `cc-relayout: tab …` lines and one
+`cc-relayout: verdict=ok|mismatch|refused moved=N restarted=N tabs=N mismatched=N`.
+Exit: 0 ok (or a clean dry run) · 1 mismatch or a restarted pane · 2 usage · 3 refused (fullscreen,
+unknown fullscreen state, kitty unreachable).
+"""
+import argparse
+import glob
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import time
+
+SELF = os.path.realpath(__file__)
+REPO = os.path.dirname(os.path.dirname(SELF))
+LIB = os.path.join(REPO, "scripts", "lib")
+sys.path.insert(0, LIB)
+import kitty_tree as kt  # noqa: E402
+
+KITTY = os.environ.get("CC_TERM_KITTY") or "/Applications/kitty.app/Contents/MacOS/kitty"
+KITTEN = os.path.join(REPO, "scripts", "kitty-apply-layout.py")
+REGISTRY = os.environ.get("CC_REGISTRY_DIR") or os.path.expanduser("~/.claude/cc-registry")
+
+
+def say(msg):
+    sys.stdout.write("cc-relayout: %s\n" % msg)
+    sys.stdout.flush()
+
+
+def die(msg, rc=2):
+    sys.stderr.write("cc-relayout: %s\n" % msg)
+    sys.exit(rc)
+
+
+class K:
+    def __init__(self, to):
+        self.to = to
+        self.env = {k: v for k, v in os.environ.items() if k not in ("KITTY_LISTEN_ON", "KITTY_PID", "KITTY_WINDOW_ID")}
+
+    def __call__(self, *a, timeout=30):
+        try:
+            r = subprocess.run([KITTY, "@", "--to", self.to] + list(a), capture_output=True, text=True,
+                               env=self.env, timeout=timeout)
+            return r.returncode, r.stdout, r.stderr
+        except subprocess.TimeoutExpired:
+            return 124, "", "timed out"
+
+    def ls(self):
+        rc, out, err = self("ls")
+        if rc != 0:
+            die("kitty @ ls on %s failed (rc %s): %s" % (self.to, rc, err.strip()), 3)
+        return json.loads(out)
+
+
+def log_pane_spawn(surface, pane, detail):
+    """The placeholder panes this tool opens leave a row (scripts/pane-spawn-coverage-lint.sh)."""
+    lib = os.path.join(LIB, "pane-spawn-log.sh")
+    if os.path.isfile(lib):
+        subprocess.run(["/bin/bash", lib, "log", surface, "kitty", str(pane), os.getcwd(), detail],
+                       env=dict(os.environ, CC_SPAWN_CALLER="cc-relayout"), timeout=10,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+
+
+def windows(data):
+    """{window id: (os window id, platform window id, tab id, window dict)}"""
+    out = {}
+    for o in data:
+        for t in o.get("tabs") or []:
+            for w in t.get("windows") or []:
+                out[w["id"]] = (o["id"], o.get("platform_window_id"), t["id"], w)
+    return out
+
+
+def recorded(tree_path):
+    """[(rec os window, tab index, TREE of session ids)], shells and unknown panes left out."""
+    try:
+        data = json.load(open(tree_path))
+        roster = json.load(open(os.path.join(os.path.dirname(tree_path), "hb.roster.json")))
+    except (OSError, ValueError) as e:
+        die("cannot read the recorded tree or the roster beside it: %s" % e)
+    sid_of = {str(e.get("paneUUID")): e.get("session_id") for e in roster if isinstance(e, dict) and e.get("session_id")}
+    cwd_of = {w: wd.get("cwd") or "" for w, (_, _, _, wd) in windows(data).items()}
+    out, ti = [], {}
+    for t in kt.ls_tabs(data):
+        i = ti.setdefault(t["os_window"], 0)
+        ti[t["os_window"]] += 1
+        # a pane with no session is a shell: it keeps its place by its working directory
+        tree = kt.relabel(t["tree"], lambda w: sid_of.get(str(w)) or ("shell:" + cwd_of.get(w, "")))
+        if tree is not None:
+            out.append((t["os_window"], i, tree))
+    return out
+
+
+def live_sids(data, kitty_pid, wanted):
+    """{live window id: session id} for the sessions the record names."""
+    win = windows(data)
+    got = {}
+    for f in glob.glob(os.path.join(REGISTRY, "*.json")):
+        try:
+            r = json.load(open(f))
+        except (OSError, ValueError):
+            continue
+        if str(r.get("kitty_pid")) != str(kitty_pid) or r.get("session_id") not in wanted:
+            continue
+        try:
+            w = int(str(r.get("paneUUID") or r.get("pane") or "").split(":")[-1])
+        except ValueError:
+            continue
+        if w in win:
+            got[w] = r["session_id"]
+    taken = set(got.values())
+    for w, (_, _, _, wd) in win.items():
+        if w in got:
+            continue
+        blob = json.dumps([wd.get("cmdline"), [p.get("cmdline") for p in wd.get("foreground_processes") or []]])
+        hit = [s for s in wanted if s in blob and s not in taken]
+        if len(hit) == 1:
+            got[w] = hit[0]
+            taken.add(hit[0])
+    return got
+
+
+def fullscreen(pwids):
+    """{platform window id: '1' | '0' | ''} — hb_display_probe's geometric reading ('' = unreadable)."""
+    lib = os.path.join(LIB, "restore-heartbeat.sh")
+    try:
+        out = subprocess.run(["/bin/bash", "-c", '. "$1"; shift; hb_display_probe "$@"', "_", lib] + [str(p) for p in pwids],
+                             capture_output=True, text=True, timeout=60).stdout
+    except subprocess.TimeoutExpired:
+        out = ""
+    got = {}
+    for line in out.splitlines():
+        f = line.split("\t")
+        if len(f) == 11:
+            got[f[0]] = f[6]
+    return {str(p): got.get(str(p), "") for p in pwids}
+
+
+def plan(rec, data, sid_of_wid):
+    """Each recorded tab with live panes → (tree of live window ids, target live tab id or a
+    ('new-tab', os window) / ('new-os-window',) marker)."""
+    wid_of = {s: w for w, s in sid_of_wid.items()}
+    win = windows(data)
+    used_os, used_tab, out = {}, set(), []
+    for ros, ti, tree in rec:
+        live = kt.relabel(tree, lambda s: wid_of.get(s))
+        if live is None:
+            continue
+        panes = kt.leaves(live)
+        shells = [x for x in kt.leaves(tree) if x.startswith("shell:")]
+        if ros not in used_os:
+            counts = {}
+            for oth in rec:
+                if oth[0] != ros:
+                    continue
+                for s in kt.leaves(oth[2]):
+                    w = wid_of.get(s)
+                    if w is not None:
+                        counts[win[w][0]] = counts.get(win[w][0], 0) + 1
+            free = [o for o in sorted(counts, key=lambda o: (-counts[o], o)) if o not in used_os.values()]
+            used_os[ros] = free[0] if free else None
+        los = used_os[ros]
+        tcount = {}
+        for w in panes:
+            if los is not None and win[w][0] == los and win[w][2] not in used_tab:
+                tcount[win[w][2]] = tcount.get(win[w][2], 0) + 1
+        if tcount:
+            target = sorted(tcount, key=lambda t: (-tcount[t], t))[0]
+        else:
+            target = ("new-tab", los) if los is not None else ("new-os-window",)
+        if isinstance(target, int):
+            used_tab.add(target)
+            # A recorded shell pane is never moved, but one already in the target tab with the
+            # recorded working directory takes its recorded place.
+            if shells:
+                free = [w for w in sorted(win) if win[w][2] == target and w not in sid_of_wid]
+                pick = {}
+                for x in shells:
+                    hit = [w for w in free if "shell:" + (win[w][3].get("cwd") or "") == x and w not in pick.values()]
+                    if hit:
+                        pick[x] = hit[0]
+                live = kt.relabel(tree, lambda s: wid_of.get(s) if not s.startswith("shell:") else pick.get(s))
+        out.append({"rec_os": ros, "rec_tab": ti, "tree": live, "target": target})
+    return out
+
+
+def apply_tree(k, tab_id, tree, data, tmp):
+    """Set a tab's tree exactly (extras to the right), then read it back. → (ok, diff list)"""
+    tabs = {t["tab"]: t for t in kt.ls_tabs(data)}
+    t = tabs.get(tab_id)
+    if t is None:
+        return False, ["tab %s is gone" % tab_id]
+    want = kt.append_row(tree, [w for w in t["windows"] if w not in set(kt.leaves(tree))])
+    if not kt.diff(want, t["tree"]):
+        return True, []
+    spec = os.path.join(tmp, "spec-%s.json" % tab_id)
+    json.dump({"pairs": kt.to_pairs(want), "result": spec + ".result"}, open(spec, "w"))
+    rc, out, err = k("kitten", "--match", "id:%d" % t["windows"][0], KITTEN, spec)
+    time.sleep(0.5)
+    t2 = {x["tab"]: x for x in kt.ls_tabs(k.ls())}.get(tab_id)
+    d = ["tab gone after the kitten"] if t2 is None else kt.diff(want, t2["tree"])
+    if d and rc != 0:
+        d.append("kitten rc %s: %s" % (rc, (err or out).strip()[:200]))
+    return not d, d
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(prog="cc-relayout", add_help=True)
+    ap.add_argument("--to", required=True)
+    ap.add_argument("--tree", required=True)
+    ap.add_argument("--kitty-pid", default="")
+    ap.add_argument("--apply", action="store_true")
+    a = ap.parse_args(argv)
+    if not a.to.startswith("unix:"):
+        die("--to must be a unix: socket address")
+    kpid = a.kitty_pid or (a.to.rsplit("/kitty-", 1)[1] if "/kitty-" in a.to else "")
+    k = K(a.to)
+    data = k.ls()
+    rec = recorded(a.tree)
+    wanted = {s for _, _, t in rec for s in kt.leaves(t) if not s.startswith("shell:")}
+    sid_of_wid = live_sids(data, kpid, wanted)
+    say("record %s: %d tab(s), %d session(s); %d of them live in this kitty" % (a.tree, len(rec), len(wanted), len(sid_of_wid)))
+    steps = plan(rec, data, sid_of_wid)
+    win = windows(data)
+    moves = []
+    for s in steps:
+        tgt = s["target"]
+        for w in kt.leaves(s["tree"]):
+            if w not in sid_of_wid:
+                continue                    # a shell pane matched in place: it is already there
+            here = win[w][2]
+            if tgt != here:
+                moves.append((w, here, s))
+        say("plan rec_os=%s rec_tab=%s -> %s tree=%s" % (
+            s["rec_os"], s["rec_tab"], "tab %s" % tgt if isinstance(tgt, int) else "+".join(map(str, tgt)), kt.sig(s["tree"])))
+    for w, here, s in moves:
+        say("plan move pane=%s sid=%s from tab=%s" % (w, sid_of_wid[w], here))
+    involved = {win[w][1] for w, _, _ in moves}
+    for s in steps:
+        if isinstance(s["target"], int):
+            involved |= {win[w][1] for w in win if win[w][2] == s["target"]}
+        elif s["target"][0] == "new-tab":
+            involved |= {win[w][1] for w in win if win[w][0] == s["target"][1]}
+    fs = fullscreen(sorted(p for p in involved if p)) if involved else {}
+    blocked = sorted(p for p, v in fs.items() if v != "0")
+    if blocked:
+        for p in blocked:
+            say("refuse: OS window %s reads %s" % (p, "fullscreen" if fs[p] == "1" else "unreadable"))
+        say("verdict=refused moved=0 restarted=0 tabs=%d mismatched=0" % len(steps))
+        return 3
+    if not a.apply:
+        say("dry run: %d move(s), %d tab(s); nothing changed (add --apply)" % (len(moves), len(steps)))
+        return 0
+
+    pid_before = {w: win[w][3].get("pid") for w in sid_of_wid}
+    tmp = tempfile.mkdtemp(prefix="cc-relayout.")
+    placeholders = []
+    moved = 0
+    for s in steps:
+        tgt = s["target"]
+        if not isinstance(tgt, int):
+            # a tab to hold them: a placeholder pane opens it, and is closed once they are in
+            if tgt[0] == "new-tab":
+                anchor = next(w for w in sorted(win) if win[w][0] == tgt[1])
+                rc, out, err = k("launch", "--keep-focus", "--type=tab", "--match", "window_id:%d" % anchor, "/bin/sleep", "600")
+                surface = "tab"
+            else:
+                rc, out, err = k("launch", "--keep-focus", "--type=os-window", "/bin/sleep", "600")
+                surface = "os-window"
+            if not out.strip().isdigit():
+                die("could not open a %s for rec_os=%s: %s" % (surface, s["rec_os"], err.strip()), 1)
+            ph = int(out.strip())
+            log_pane_spawn(surface, ph, "cc-relayout placeholder for recorded window %s" % s["rec_os"])
+            placeholders.append(ph)
+            tgt = windows(k.ls())[ph][2]
+            s["target"] = tgt
+        for w in kt.leaves(s["tree"]):
+            if w in sid_of_wid and windows(k.ls())[w][2] != tgt:
+                rc, out, err = k("detach-window", "--match", "id:%d" % w, "--target-tab", "id:%d" % tgt)
+                if rc != 0:
+                    say("move pane=%s FAILED: %s" % (w, err.strip()))
+                else:
+                    moved += 1
+    for ph in placeholders:
+        k("close-window", "--match", "id:%d" % ph)
+    time.sleep(0.5)
+    bad = 0
+    for s in steps:
+        ok, d = apply_tree(k, s["target"], s["tree"], k.ls(), tmp)
+        bad += 0 if ok else 1
+        say("tab rec_os=%s rec_tab=%s live_tab=%s verdict=%s%s" % (
+            s["rec_os"], s["rec_tab"], s["target"], "ok" if ok else "mismatch", "" if ok else " (" + "; ".join(d)[:300] + ")"))
+    after = windows(k.ls())
+    restarted = [w for w in pid_before if after.get(w, (0, 0, 0, {}))[3].get("pid") != pid_before[w]]
+    for w in restarted:
+        say("pane %s sid=%s: process changed or gone" % (w, sid_of_wid[w]))
+    verdict = "ok" if not bad and not restarted else "mismatch"
+    say("verdict=%s moved=%d restarted=%d tabs=%d mismatched=%d" % (verdict, moved, len(restarted), len(steps), bad))
+    return 0 if verdict == "ok" else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
