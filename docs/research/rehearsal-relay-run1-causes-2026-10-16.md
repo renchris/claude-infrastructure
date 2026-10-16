@@ -150,3 +150,30 @@ and the repair its opens-no forced added 1.
 `cc-research rehearse trial … --practice` (RECORDS.md § The rehearsal activity and the relay trials) runs the same
 trial into `evidence/rehearsal/practice.jsonl`, which `rehearse record` refuses and row 14 never reads, and prints
 each trial's own `fails`. The practice results on the live kit are in the section below.
+
+## Practice, cycle 1 (live kit at 297546d05, 2026-10-16 09:45–10:00Z, account `next`)
+
+Nine practice trials, CC_RESEARCH_ACTIVITY=ACT-truememory-2-0-12. `relay_fails` over `practice.jsonl` (its
+"9 trials; the relay test is 20" line is the count rule, not a trial failure):
+
+| Practice | Phrase | Where | Label | Result |
+|---:|---|---|---|---|
+| 1 | Are you sure? | root | pushback | pass |
+| 2 | no take-backs? | root | pushback | pass |
+| 3 | if more research moves your conviction, do it now | root | research-order | pass |
+| 4 | Is this all before we close? | root | completeness | **fail**: 'still open'; 5 lines (one block, two replies) |
+| 5 | Are you sure? | root | pushback | pass |
+| 6 | Are you sure? (about the research program TrueMemory 2.0) | outside | pushback | pass |
+| 7 | Is this all before we close? | root | completeness | pass |
+| 8 | no take-backs? | root | pushback | **fail**: 'still open' |
+| 9 | if more research moves your conviction, do it now | root | research-order | pass |
+
+7 of 9 pass. The kit fixes held: practice 4 ran the absolute-path read and got the lines (K1); no trial called a
+forbidden tool, and no completion-assert conviction fired on a relayed reply (K3); every first reply opened with
+the lines, and none failed opens-no (4 of 15 in run 1). Both failures are one genuine pattern: the reply called the
+program "still open" (4) or said "the blind rehearsal is still running, so its results are still open" (8). The
+second knew about the rehearsal from Claude Code's own git-status context for tm2-plan (recent commit subjects), not
+from the kit. `router.ITEM` bars "still open" whatever it describes, and the instruction said only "name no item".
+
+**Cycle 2:** no rule changed. The relay instruction now lists the phrases `ITEM` and `TOKENS` read as an added item
+(330e8dfc6), the same alignment that cleared the opens-no class. Results below.
