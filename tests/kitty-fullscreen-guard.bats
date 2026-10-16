@@ -28,6 +28,8 @@ setup() {
   unset KITTY_LISTEN_ON KITTY_WINDOW_ID KITTY_PID CC_KITTY_FS_GUARD
   HOME="$BATS_TEST_TMPDIR/home"; export HOME; mkdir -p "$HOME"
   export CC_KITTY_PANE_ACTIONS_LOG="$BATS_TEST_TMPDIR/actions.jsonl"
+  # the policy file and the per-process fsfix cache (guard docstring § RELAX / § POLICY)
+  export CC_KITTY_FS_GUARD_STATE_DIR="$BATS_TEST_TMPDIR/fs-guard-state"
   export CALLS="$BATS_TEST_TMPDIR/calls.log"; : >"$CALLS"
   STUBS="$BATS_TEST_TMPDIR/stubs"; mkdir -p "$STUBS"
   # kitty: logs argv + KITTY_WINDOW_ID; `kitten` answers $KFG_KITTEN_OUT on stdout with rc
@@ -69,24 +71,40 @@ def states(fn):
 INFO = {"wid": 7, "os_window_id": 2, "platform_window_id": 99, "panes_in_os_window": 1,
         "tabs_in_os_window": 1, "panes_in_tab": 1,
         "last_for": {"pane": True, "tab": True, "os-window": True}}
-def kitten(entered=False, last=True, raise_=None):
+# extra: reply keys such as fsfix=True, pid=4242 (the relax-on-fix inputs)
+def kitten(entered=False, last=True, raise_=None, **extra):
     def k(addr, wid, toggle=False):
         if raise_: raise raise_
         if toggle:
-            toggles.append(clock[0]); return dict(INFO, toggled_into_fullscreen=entered)
-        return dict(INFO, last_for=dict(INFO["last_for"], pane=last))
+            toggles.append(clock[0]); return dict(INFO, toggled_into_fullscreen=entered, **extra)
+        return dict(INFO, last_for=dict(INFO["last_for"], pane=last), **extra)
     g.kitten_query = k
 def since_toggle(): return clock[0] - toggles[0] if toggles else None
-def run(mode="toggle", scope="pane"):
-    rc, verdict, _info, last = g.decide("unix:/nowhere", 7, mode, scope)
+def run(mode="toggle", scope="pane", policy="block-stock"):
+    rc, verdict, _info, last, relaxed = g.decide("unix:/nowhere", 7, mode, scope, policy)
     print(f"rc={rc} verdict={verdict} toggles={len(toggles)} reads={len(reads)} t={clock[0]:.1f}"
-          f" state={last.state}")
+          f" state={last.state} relaxed={relaxed}")
+# The process-start seam: hermetic by default (no ps), START[0] is "the" start time of any pid.
+START = [1000]
+REAL_PROC_START = g.proc_start
+g.proc_start = lambda pid: START[0]
+def policy(text):
+    d = os.environ["CC_KITTY_FS_GUARD_STATE_DIR"]; os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "policy"), "w") as fh: fh.write(text)
+def cache(pid, start, value):
+    d = os.environ["CC_KITTY_FS_GUARD_STATE_DIR"]; os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, f"fsfix-{pid}-{start}"), "w") as fh: fh.write(value)
+# main() in-process: the seams stay replaced, while _alert and --then still exec the PATH stubs
+def cli(*a):
+    rc = g.main(list(a)); print(f"rc={rc} toggles={len(toggles)}")
 PY
 }
 
 # drive '<python scenario>'  — runs the harness, then the scenario (which calls run()).
 drive() { /usr/bin/python3 -c "exec(open('$BATS_TEST_TMPDIR/h.py').read()); $1"; }
 field() { tr ' ' '\n' <<<"$output" | sed -n "s/^$1=//p"; }
+# the last verdict row the guard wrote
+vrow() { grep '"phase":"verdict"' "$CC_KITTY_PANE_ACTIONS_LOG" | tail -1; }
 
 @test "1 not the last pane: rc 0 with no CGS read and no toggle" {
   run drive 'kitten(last=False); states(lambda t: FS); run()'
@@ -314,6 +332,13 @@ def main():
     boss.active_window = boss.window_id_map[7]
     print("act-focused", json.loads(k.handle_result([os.environ["KITTEN"], "act", "detach_window", "ask"], "", 7, boss)), combined)
     print("act-gone", json.loads(k.handle_result([os.environ["KITTEN"], "act", "close_tab"], "", 404, boss)))
+    # relax-on-fix inputs: pid is this process, fsfix a REAL objc_getClass read (a bool, never None
+    # where ctypes works). Controls: a class every process has reads True, an absent one False —
+    # the F3 trap was an absent class reading True (`None != 0`).
+    q = json.loads(k.handle_result([os.environ["KITTEN"], "query"], "", 7, boss))
+    print("fsfix", q["pid"] == os.getpid(), type(q["fsfix"]).__name__)
+    k.FSFIX_MARKER = b"NSObject"; present = k.fsfix()
+    k.FSFIX_MARKER = b"CcNoSuchClassAnywhere"; print("marker-control", present, k.fsfix())
 main()
 '
   [ "$status" -eq 0 ] || { echo "$output"; false; }
@@ -326,4 +351,146 @@ main()
   [ "${lines[6]}" = "act-unfocused {'error': 'focus-moved', 'wid': 7} []" ] || { echo "$output"; false; }
   [ "${lines[7]}" = "act-focused {'wid': 7, 'acted': True} [('detach_window ask', True)]" ] || { echo "$output"; false; }
   [[ "${lines[8]}" == "act-gone {'error': 'window 404 is gone'}" ]] || { echo "$output"; false; }
+  [ "${lines[9]}" = "fsfix True bool" ] || { echo "$output"; false; }
+  [ "${lines[10]}" = "marker-control True False" ] || { echo "$output"; false; }
+}
+
+# ── RELAX ON THE FIX (2026-10-16; guard docstring § RELAX and § POLICY) ─────────────────────────
+# A refused-fs verdict becomes rc 0 only when the RUNNING kitty reports fsfix true (or the policy
+# file relaxes stock kitty, D1 options B/C), the policy is not `enforce`, and the last read was FS
+# AND onscreen. A relaxable call never toggles. RED-proof: every case below fails on the pre-change
+# guard (no 5-tuple decide, no policy/cache, no would_rc row).
+
+@test "24 RELAX refuse mode: fsfix + FS onscreen ⇒ rc 0, row keeps refused-fs with would_rc 3, no stderr refusal, no alert" {
+  run drive 'kitten(fsfix=True, pid=4242); states(lambda t: FS); cli("--window", "7", "--to", "unix:/nowhere", "--mode", "refuse", "--tool", "t")'
+  [ "$output" = "rc=0 toggles=0" ] || { echo "$output"; false; }
+  vrow | grep -q '"verdict":"refused-fs","rc":0,.*"fsfix":true,"policy":"block-stock","would_rc":3,"relaxed":"fsfix","enforced":false' || { cat "$CC_KITTY_PANE_ACTIONS_LOG"; false; }
+  run grep -c '^osascript' "$CALLS"
+  [ "$output" = "0" ] || { cat "$CALLS"; false; }
+  # the cache for that kitty process is written as a side effect (read back by --any-fs)
+  [ "$(cat "$CC_KITTY_FS_GUARD_STATE_DIR/fsfix-4242-1000")" = "true" ]
+}
+
+@test "25 RELAX toggle mode: the kitten's toggle is NEVER sent, and the refusal alert never shows" {
+  run drive 'kitten(fsfix=True); states(lambda t: FS); cli("--window", "7", "--to", "unix:/nowhere", "--mode", "toggle", "--tool", "kitty.conf")'
+  [ "$output" = "rc=0 toggles=0" ] || { echo "$output"; false; }
+  vrow | grep -q '"verdict":"refused-fs","rc":0,"mode":"toggle".*"would_rc":3,"relaxed":"fsfix"' || { cat "$CC_KITTY_PANE_ACTIONS_LOG"; false; }
+  run grep -c '^osascript' "$CALLS"
+  [ "$output" = "0" ] || { cat "$CALLS"; false; }
+  # coerced to REFUSE mode, not to the pre-toggle wait: an UNKNOWN read refuses at once, even one
+  # that would clear to FS-onscreen a second later (no relax without a stable read)
+  run drive 'kitten(fsfix=True); states(lambda t: UNK if t < 1.0 else FS); run()'
+  [[ "$output" == "rc=3 verdict=refused-unknown toggles=0 reads=1 t=0.0 "*" relaxed=None" ]] || { echo "$output"; false; }
+}
+
+@test "26 RELAX with --then: the native action still runs through the kitten, after the relaxed verdict" {
+  run drive 'kitten(fsfix=True); states(lambda t: FS); cli("--window", "7", "--to", "unix:/nowhere", "--mode", "toggle", "--tool", "kitty.conf", "--then", "detach_window", "ask")'
+  [ "$output" = "rc=0 toggles=0" ] || { echo "$output"; false; }
+  grep -qx "kitty @ --to unix:/nowhere kitten --match id:7 $KITTEN act detach_window ask \\[KITTY_WINDOW_ID=\\] \\[verdicts=1\\]" "$CALLS" || { cat "$CALLS"; false; }
+}
+
+@test "27 policy enforce: fsfix true still refuses (rc 3), and toggle mode toggles exactly as before" {
+  run drive 'policy("enforce\n"); kitten(fsfix=True); states(lambda t: FS); cli("--window", "7", "--to", "unix:/nowhere", "--mode", "refuse")'
+  [[ "$output" == *"refused (refused-fs) kitty window 7"*"rc=3 toggles=0" ]] || { echo "$output"; false; }
+  vrow | grep -q '"verdict":"refused-fs","rc":3,.*"policy":"enforce"' || { cat "$CC_KITTY_PANE_ACTIONS_LOG"; false; }
+  run grep -c 'would_rc' "$CC_KITTY_PANE_ACTIONS_LOG"
+  [ "$output" = "0" ]
+  run drive 'kitten(fsfix=True); states(lambda t: FS if not toggles else W()); run(policy="enforce")'
+  [[ "$output" == "rc=0 verdict=safe-after-toggle toggles=1 "*" relaxed=None" ]] || { echo "$output"; false; }
+}
+
+@test "28 not fixed: fsfix None or false (stock kitty) under the default policy refuses, and toggle mode still toggles" {
+  run drive 'kitten(fsfix=None, pid=4242); states(lambda t: FS); run("refuse")'
+  [[ "$output" == "rc=3 verdict=refused-fs toggles=0 "*" relaxed=None" ]] || { echo "$output"; false; }
+  run drive 'kitten(fsfix=False); states(lambda t: FS); run("refuse")'
+  [[ "$output" == "rc=3 verdict=refused-fs toggles=0 "*" relaxed=None" ]] || { echo "$output"; false; }
+  run drive 'kitten(fsfix=False); states(lambda t: FS if not toggles else W()); run()'
+  [[ "$output" == "rc=0 verdict=safe-after-toggle toggles=1 "* ]] || { echo "$output"; false; }
+  # a None fsfix is never cached; a false one is (so --any-fs reads "not fixed", not "unknown")
+  run drive 'kitten(fsfix=None, pid=4242); states(lambda t: W()); run("refuse"); kitten(fsfix=False, pid=4343); run("refuse")'
+  [ ! -e "$CC_KITTY_FS_GUARD_STATE_DIR/fsfix-4242-1000" ]
+  [ "$(cat "$CC_KITTY_FS_GUARD_STATE_DIR/fsfix-4343-1000")" = "false" ]
+}
+
+@test "29 RELAX needs onscreen: fsfix true but FS on a background Space keeps rc 3 (unmeasured residual, README § Residuals)" {
+  run drive 'kitten(fsfix=True); states(lambda t: FS_BG); run("refuse")'
+  [[ "$output" == "rc=3 verdict=refused-fs toggles=0 "*" relaxed=None" ]] || { echo "$output"; false; }
+  run drive 'kitten(fsfix=True); states(lambda t: FS_BG); run()'
+  [[ "$output" == "rc=3 verdict=refused-not-visible toggles=0 "*" relaxed=None" ]] || { echo "$output"; false; }
+  # unknown is not fullscreen-onscreen either
+  run drive 'kitten(fsfix=True); states(lambda t: UNK); run("refuse")'
+  [[ "$output" == "rc=3 verdict=refused-unknown toggles=0 "*" relaxed=None" ]] || { echo "$output"; false; }
+}
+
+@test "30 D1 options B/C: relax-stock-refuse relaxes stock refuse mode only; relax-stock also stops the toggle" {
+  run drive 'kitten(fsfix=False); states(lambda t: FS); run("refuse", policy="relax-stock-refuse")'
+  [[ "$output" == "rc=0 verdict=refused-fs toggles=0 "*" relaxed=policy" ]] || { echo "$output"; false; }
+  run drive 'kitten(fsfix=False); states(lambda t: FS if not toggles else W()); run(policy="relax-stock-refuse")'
+  [[ "$output" == "rc=0 verdict=safe-after-toggle toggles=1 "*" relaxed=None" ]] || { echo "$output"; false; }
+  run drive 'kitten(fsfix=False); states(lambda t: FS); run(policy="relax-stock")'
+  [[ "$output" == "rc=0 verdict=refused-fs toggles=0 "*" relaxed=policy" ]] || { echo "$output"; false; }
+  # the onscreen requirement holds under every policy
+  run drive 'kitten(fsfix=False); states(lambda t: FS_BG); run("refuse", policy="relax-stock")'
+  [[ "$output" == "rc=3 verdict=refused-fs "* ]] || { echo "$output"; false; }
+  # and the policy is read from the file, one line
+  run drive 'policy("relax-stock-refuse\n"); kitten(fsfix=False); states(lambda t: FS); cli("--window", "7", "--to", "unix:/nowhere", "--mode", "refuse")'
+  [ "$output" = "rc=0 toggles=0" ] || { echo "$output"; false; }
+  vrow | grep -q '"policy":"relax-stock-refuse","would_rc":3,"relaxed":"policy","enforced":false' || { cat "$CC_KITTY_PANE_ACTIONS_LOG"; false; }
+}
+
+@test "31 policy file: an unknown value enforces and says so ONCE; empty and comments-only read as the default" {
+  run drive 'policy("relax-everything\n"); kitten(fsfix=True); states(lambda t: FS); cli("--window", "7", "--to", "unix:/nowhere", "--mode", "refuse")'
+  [[ "$output" == *"rc=3 toggles=0" ]] || { echo "$output"; false; }
+  [ "$(grep -c "'relax-everything' is not one of block-stock, enforce, relax-stock-refuse, relax-stock — enforcing" <<<"$output")" = "1" ] || { echo "$output"; false; }
+  vrow | grep -q '"policy":"enforce","policy_refused":"relax-everything"' || { cat "$CC_KITTY_PANE_ACTIONS_LOG"; false; }
+  run drive 'policy(""); print(g.read_policy()); policy("# D1 pending\n\n"); print(g.read_policy()); policy("  enforce  \n# why\n"); print(g.read_policy())'
+  [ "${lines[0]}" = "('block-stock', None)" ] || { echo "$output"; false; }
+  [ "${lines[1]}" = "('block-stock', None)" ] || { echo "$output"; false; }
+  [ "${lines[2]}" = "('enforce', None)" ] || { echo "$output"; false; }
+  # unreadable ⇒ enforce (a directory where the file should be)
+  rm -f "$CC_KITTY_FS_GUARD_STATE_DIR/policy"
+  mkdir "$CC_KITTY_FS_GUARD_STATE_DIR/policy"
+  run drive 'print(g.read_policy()[0])'
+  [ "${lines[-1]}" = "enforce" ] || { echo "$output"; false; }
+}
+
+@test "32 fsfix cache is keyed on pid AND start time: same pid, different start ⇒ not fixed" {
+  run drive 'kitten(fsfix=True, pid=4242); states(lambda t: W()); run("refuse"); print(g.cached_fsfix(4242)); START[0] = 2000; print(g.cached_fsfix(4242))'
+  [ "${lines[1]}" = "True" ] || { echo "$output"; false; }
+  [ "${lines[2]}" = "None" ] || { echo "$output"; false; }
+  # a new process with that pid overwrites, and the dead one's file goes
+  run drive 'START[0] = 2000; kitten(fsfix=False, pid=4242); states(lambda t: W()); run("refuse"); print(g.cached_fsfix(4242))'
+  [ "${lines[-1]}" = "False" ] || { echo "$output"; false; }
+  [ ! -e "$CC_KITTY_FS_GUARD_STATE_DIR/fsfix-4242-1000" ]
+  [ -e "$CC_KITTY_FS_GUARD_STATE_DIR/fsfix-4242-2000" ]
+  # an unreadable start time never hits; garbage content is not a value
+  run drive 'g.proc_start = lambda pid: None; print(g.cached_fsfix(4242))'
+  [ "${lines[-1]}" = "None" ] || { echo "$output"; false; }
+  run drive 'cache(77, 1000, "yes\n"); print(g.cached_fsfix(77))'
+  [ "${lines[-1]}" = "None" ] || { echo "$output"; false; }
+  # the REAL start-time read: this process has one and it is stable; a pid that cannot exist has none
+  run drive 'a = REAL_PROC_START(os.getpid()); print(isinstance(a, int) and a > 0, a == REAL_PROC_START(os.getpid()), REAL_PROC_START(-1))'
+  [ "${lines[-1]}" = "True True None" ] || { echo "$output"; false; }
+}
+
+@test "33 --any-fs RELAX: cached fsfix true + every FS window onscreen ⇒ 0; missing cache, offscreen FS or enforce ⇒ 3" {
+  run drive 'cache(42, 1000, "true\n"); g.pid_window_states = lambda pid: [(1, FS), (2, W())]; print(g.any_fs(42))'
+  [ "${lines[-1]}" = "0" ] || { echo "$output"; false; }
+  vrow | grep -q '"mode":"any-fs","verdict":"refused-fs","rc":0,.*"fsfix":true,.*"would_rc":3,"relaxed":"fsfix","enforced":false' || { cat "$CC_KITTY_PANE_ACTIONS_LOG"; false; }
+  # no cache for this kitty process (pid 43 was never cached) ⇒ not fixed
+  run drive 'g.pid_window_states = lambda pid: [(1, FS)]; print(g.any_fs(43))'
+  [ "${lines[-1]}" = "3" ] || { echo "$output"; false; }
+  run drive 'cache(42, 1000, "true\n"); g.pid_window_states = lambda pid: [(1, FS), (2, FS_BG)]; print(g.any_fs(42))'
+  [ "${lines[-1]}" = "3" ] || { echo "$output"; false; }
+  run drive 'cache(42, 1000, "true\n"); g.pid_window_states = lambda pid: [(1, FS), (2, UNK)]; print(g.any_fs(42))'
+  [ "${lines[-1]}" = "3" ] || { echo "$output"; false; }
+  run drive 'cache(42, 1000, "true\n"); policy("enforce\n"); g.pid_window_states = lambda pid: [(1, FS)]; print(g.any_fs(42))'
+  [ "${lines[-1]}" = "3" ] || { echo "$output"; false; }
+  rm -f "$CC_KITTY_FS_GUARD_STATE_DIR/policy"   # back to the default for the cases below
+  # one onscreen sample is not enough: a window that goes fullscreen OFFSCREEN 0.5 s later refuses
+  run drive 'cache(42, 1000, "true\n"); g.pid_window_states = lambda pid: [(1, FS)] + ([(2, FS_BG)] if clock[0] >= 0.5 else []); print(g.any_fs(42))'
+  [ "${lines[-1]}" = "3" ] || { echo "$output"; false; }
+  # through the CLI, with the cache keyed on a pid's real start (this bats shell's)
+  run drive "g.proc_start = REAL_PROC_START; cache($$, REAL_PROC_START($$), 'true\n'); g.pid_window_states = lambda pid: [(1, FS)]; print(g.main(['--any-fs', '--kitty-pid', '$$']))"
+  [ "${lines[-1]}" = "0" ] || { echo "$output"; false; }
 }

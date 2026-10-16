@@ -51,8 +51,14 @@ recorded. A clean exit is left out, and its neighbour takes its space without mo
   It works in the standard one-fullscreen-window-per-Desktop layout: before each pane it removes,
   `kitty-fullscreen-guard` decides. A move that leaves panes behind proceeds even in fullscreen; a
   move that would empty a fullscreen window (what crashed kitty 0.48.2 on 2026-10-15) is skipped and
-  reported, and the run ends `verdict=partial`, exit 3. `--apply --exit-fullscreen` lets the guard
-  take such a window out of fullscreen first, so that move proceeds too (operator runs only).
+  reported, and the run ends `verdict=partial`, exit 3 — on stock kitty. Once the running kitty is
+  the rebuilt patched bundle (marker class GLFWFsFixV2), such a move proceeds when that window is
+  onscreen, and is still skipped when it sits on a background Space (guard docstring § RELAX; the
+  operator's one-line policy file `~/.claude/state/kitty-fs-guard/policy` can turn that off with
+  `enforce`). On stock kitty, `--apply --exit-fullscreen` lets the guard
+  take such a window out of fullscreen first, so that move proceeds too (operator runs only); on the
+  patched build (or on stock kitty under `relax-stock`) the guard never toggles unless the policy
+  is `enforce`, so the flag changes nothing there.
 - **Why this phase exists (2026-10-15).** After the 00:01:27 crash, the recovery followed Phases 1-2
   and the layout section below. It ran `cc-resume-layout.sh --per-window 4`, which groups by project,
   and then a hand-written 2x2 driver once the capacity gate refused at load 41. All 20 sessions came

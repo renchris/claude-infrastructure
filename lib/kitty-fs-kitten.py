@@ -1,7 +1,18 @@
 #!/usr/bin/env python3
 # kitty-fs-kitten.py — the kitty-side half of bin/kitty-fullscreen-guard (2026-10-15 crash fix,
-# docs/research/kitty-crash-2026-10-15/README.md § Chosen fix). It runs ONLY kitty's own API: no
-# ctypes, no blocking, nothing that waits on kitty's main loop (the exit transition needs that loop).
+# docs/research/kitty-crash-2026-10-15/README.md § Chosen fix). It runs ONLY kitty's own API plus ONE
+# ctypes read (fsfix, below): no blocking, nothing that waits on kitty's main loop (the exit
+# transition needs that loop).
+#
+# CHANGED 2026-10-16 (was "no ctypes"): every reply carries `pid` (this kitty process) and `fsfix`,
+# whether the RUNNING kitty carries our fullscreen-destroy fix with the upstream backport. The marker
+# is the empty ObjC class GLFWFsFixV2, which only the rebuilt bundle registers; GLFWDeferredClose is
+# NOT the marker, because the bundle staged on 2026-10-16 has it but lacks the backport (corrections
+# F2). objc_getClass is a read of the runtime's class table: no message send, no main-loop wait.
+# restype MUST be c_void_p and the test MUST be bool(): with c_void_p an absent class comes back as
+# None, and `None != 0` is True, which would read stock kitty as fixed; the default c_int restype
+# truncates the pointer (F3). ctypes is in kitty's bundled python (`kitty +runpy` imports it). Any
+# failure reports None, which the guard treats as "not fixed" — there is no lsof fallback (F3).
 #
 # Invoked as `kitty @ --to <addr> kitten --match id:<wid> <this file> query|toggle|act <action...>`.
 # - `--match` resolves exactly: a missing pane is a MatchError (rc/base.py:381-384), never the active
@@ -14,6 +25,7 @@
 #   returns None (boss.py:1351-1356) while the C call returns True when it ENTERED fullscreen, False
 #   when it left, None when the OS window is gone (glfw.c:1359-1368, 2471-2478). The guard needs it.
 import json
+import os
 from typing import Any
 
 from kittens.tui.handler import result_handler
@@ -26,6 +38,23 @@ except (
 ):  # outside kitty: handle_result reports the failure instead of import-crashing
     toggle_fullscreen = None
     platform_window_id = None
+
+
+FSFIX_MARKER = b"GLFWFsFixV2"
+_LIBOBJC = "/usr/lib/libobjc.A.dylib"
+
+
+def fsfix() -> "bool | None":
+    """True iff this process has the ObjC class GLFWFsFixV2 registered; None if the read failed."""
+    try:
+        import ctypes
+
+        L = ctypes.CDLL(_LIBOBJC)
+        L.objc_getClass.restype = ctypes.c_void_p
+        L.objc_getClass.argtypes = [ctypes.c_char_p]
+        return bool(L.objc_getClass(FSFIX_MARKER))
+    except Exception:  # noqa: BLE001 — reported as None (= enforce), never raised into kitty
+        return None
 
 
 def main(args: list[str]) -> None:
@@ -74,6 +103,11 @@ def describe(boss: Any, wid: int) -> dict[str, Any]:
             "tab": len(tabs) == 1,
             "os-window": True,
         },
+        # The guard's relax-on-fix inputs (bin/kitty-fullscreen-guard § RELAX ON THE FIX): this
+        # kitty's pid keys the guard's per-process fsfix cache, which --any-fs reads when remote
+        # control is down.
+        "pid": os.getpid(),
+        "fsfix": fsfix(),
     }
 
 

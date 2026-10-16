@@ -36,6 +36,52 @@ HOW IT DECIDES
     3. --mode refuse (autonomous callers) never toggles. --mode toggle (operator-initiated) toggles
        an FS window out of fullscreen ONCE — only when it is onscreen, so the operator is never
        pulled across Spaces — then waits for a stable windowed read, and never toggles again.
+
+RELAX ON THE FIX (2026-10-16; README § Corrections after upstream review, and the follow-up brief's
+corrections F1-F4, F9 in ~/.claude/autonomy/incidents/kitty-crash-2026-10-15/upstream-2026-10-16/)
+    A kitty running our fullscreen-destroy patch WITH the upstream backport leaves fullscreen itself
+    before it closes, so refusing a fullscreen last pane the operator is looking at protects nothing
+    there. The kitten reports `pid` and `fsfix` (the ObjC class GLFWFsFixV2 is registered in that
+    process; only the rebuilt bundle carries it — GLFWDeferredClose alone is NOT enough, F2). One
+    call is RELAXED iff all three hold:
+      · the policy below is not `enforce`;
+      · the running kitty reports fsfix true (relaxed="fsfix"), or the policy relaxes stock kitty
+        for this mode (relaxed="policy", D1 options B/C);
+      · the verdict is refused-fs and the last read was FS with onscreen=True.
+    A fullscreen window that is NOT onscreen keeps rc 3: its exit transition would run on a Space the
+    operator is not looking at, which was never measured (README § Residuals, "whether macOS
+    switches the operator to that Space"; F1). fsfix false or None (unreadable) means not fixed.
+    A relaxable call is read-only — toggle mode is coerced to refuse mode: it never sends a toggle,
+    and an UNKNOWN read refuses at once rather than getting toggle mode's UNKNOWN_DEADLINE_S grace —
+    and its rc 3 becomes 0: the verdict row keeps its verdict and adds would_rc=3,
+    relaxed and enforced=false; there is no stderr refusal and no alert, and --then still runs.
+    rc 2 and rc 4 never change. Every verdict row also carries the fsfix and policy it was decided on.
+
+    --any-fs runs when remote control is DOWN, so it cannot ask the kitten. It reads the last non-None
+    fsfix this guard cached for that kitty process at <state dir>/fsfix-<pid>-<start epoch>, keyed on
+    pid AND process start time (`ps -o lstart=`, as scripts/kitty-build-swap.sh cmd_verify reads
+    it), so a stock kitty that reuses a patched kitty's pid after a rollback never inherits "true"
+    (F4). Missing, unreadable or another start's cache means not fixed. It cannot tell which window
+    the pane lives in, so it relaxes only when EVERY fullscreen window of that kitty reads onscreen
+    (and no read failed): whichever window it is, it is then one the operator is looking at.
+
+POLICY — ONE FILE, ONE LINE (operator decision D1, cc-decide e3920969aba9)
+    <state dir>/policy, where <state dir> = $CC_KITTY_FS_GUARD_STATE_DIR or
+    ~/.claude/state/kitty-fs-guard. A file and not an env var: the chords and every kitty-spawned
+    pane inherit KITTY's environment, which no shell export reaches (F9). Its first non-blank,
+    non-# line selects:
+      absent, empty or block-stock  D1 option A, the default: stock kitty enforces as before; relax
+                                    only on fsfix, as above
+      enforce                       never relax, not even on the patched build
+      relax-stock-refuse            D1 option B: ALSO relax on stock kitty, refuse mode and --any-fs
+                                    only (operator chords keep leaving fullscreen first)
+      relax-stock                   D1 option C: ALSO relax on stock kitty in both modes; toggle mode
+                                    then never toggles
+      anything else, or unreadable  treated as enforce, said once on stderr (fail closed)
+    The onscreen requirement holds under every policy. Flipping D1 is one line:
+        mkdir -p ~/.claude/state/kitty-fs-guard && echo relax-stock-refuse >~/.claude/state/kitty-fs-guard/policy
+    (or relax-stock / enforce), and `rm -f ~/.claude/state/kitty-fs-guard/policy` restores the default.
+    --mode toggle stays a valid flag under every policy, so no caller's argv changes.
 """
 
 from __future__ import annotations
@@ -70,6 +116,14 @@ ALERT_TIMEOUT_S = 60.0
 
 FS, WINDOWED, UNKNOWN = "FS", "WINDOWED", "UNKNOWN"
 SCOPES = ("pane", "tab", "os-window")
+# The policy file's values (docstring § POLICY). BLOCK_STOCK is D1 option A, the default.
+BLOCK_STOCK, ENFORCE, RELAX_STOCK_REFUSE, RELAX_STOCK = (
+    "block-stock",
+    "enforce",
+    "relax-stock-refuse",
+    "relax-stock",
+)
+POLICIES = (BLOCK_STOCK, ENFORCE, RELAX_STOCK_REFUSE, RELAX_STOCK)
 KITTEN = os.path.realpath(
     os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib", "kitty-fs-kitten.py")
 )
@@ -402,6 +456,115 @@ def pid_window_states(pid: int) -> list[tuple[int, WindowState]] | None:
         return None
 
 
+# ── relax on the fix: the policy file and the per-process fsfix cache (docstring § RELAX) ────────
+
+
+def state_dir() -> str:
+    # HOME, not CLAUDE_CONFIG_DIR, for the reason lib/kitty_pane_actions.py gives: one machine, one
+    # kitty, four account config dirs.
+    return os.environ.get("CC_KITTY_FS_GUARD_STATE_DIR") or os.path.join(
+        os.path.expanduser("~"), ".claude", "state", "kitty-fs-guard"
+    )
+
+
+def read_policy() -> tuple[str, str | None]:
+    """→ (policy in effect, the raw value when it was refused). Absent/empty = BLOCK_STOCK; an
+    unknown or unreadable value is ENFORCE, said once on stderr — the caller reads it once a run."""
+    path = os.path.join(state_dir(), "policy")
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read(4096)
+    except FileNotFoundError:
+        return BLOCK_STOCK, None
+    except OSError as e:
+        raw = f"unreadable: {e.__class__.__name__}"
+    else:
+        lines = [ln.strip() for ln in text.splitlines()]
+        value = next((ln for ln in lines if ln and not ln.startswith("#")), "")
+        if not value:
+            return BLOCK_STOCK, None
+        if value in POLICIES:
+            return value, None
+        raw = value[:80]
+    print(f"{TOOL}: policy file {path}: {raw!r} is not one of {', '.join(POLICIES)} — enforcing", file=sys.stderr)
+    return ENFORCE, raw
+
+
+def relax_reason(policy: str, fsfix: Any, mode: str) -> str | None:
+    """May a refused-fs-onscreen verdict be relaxed? → "fsfix" | "policy" | None. Decided BEFORE
+    any state read, because a relaxable call must also be a read-only one (never toggles)."""
+    if policy == ENFORCE or policy not in POLICIES:
+        return None
+    if fsfix is True:
+        return "fsfix"
+    if policy == RELAX_STOCK or (policy == RELAX_STOCK_REFUSE and mode in ("refuse", "any-fs")):
+        return "policy"
+    return None
+
+
+def proc_start(pid: int) -> int | None:
+    """<pid>'s start time as an epoch second, read the way scripts/kitty-build-swap.sh cmd_verify
+    reads it (`ps -o lstart=`). None = no such process or unreadable — the cache then never hits."""
+    try:
+        r = subprocess.run(
+            ["/bin/ps", "-o", "lstart=", "-p", str(int(pid))],
+            capture_output=True,
+            text=True,
+            timeout=KITTY_CALL_TIMEOUT_S,
+            env=dict(os.environ, LC_ALL="C"),
+        )
+        text = " ".join((r.stdout or "").split())
+        if r.returncode != 0 or not text:
+            return None
+        return int(time.mktime(time.strptime(text, "%a %b %d %H:%M:%S %Y")))
+    except Exception:
+        return None
+
+
+def _fsfix_path(pid: int, start: int) -> str:
+    return os.path.join(state_dir(), f"fsfix-{pid}-{start}")
+
+
+def cache_fsfix(info: dict) -> None:
+    """Remember a non-None fsfix for the kitty process that reported it. Best-effort: a guard call
+    never fails on its own bookkeeping, and a cache that did not get written only means enforce."""
+    pid, fsfix = info.get("pid"), info.get("fsfix")
+    if not isinstance(fsfix, bool) or not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return
+    start = proc_start(pid)
+    if start is None:
+        return
+    path = _fsfix_path(pid, start)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.tmp{os.getpid()}"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write("true\n" if fsfix else "false\n")
+        os.replace(tmp, path)
+        for old in glob.glob(os.path.join(state_dir(), f"fsfix-{pid}-*")):
+            if old != path and ".tmp" not in os.path.basename(old):  # never a writer's in-flight tmp
+                try:
+                    os.unlink(old)  # an earlier process with this pid: dead by definition
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+
+def cached_fsfix(pid: int) -> bool | None:
+    """The cached fsfix for THIS process (pid + start time), or None: missing, unreadable, or written
+    for an earlier process that had the same pid."""
+    start = proc_start(pid)
+    if start is None:
+        return None
+    try:
+        with open(_fsfix_path(pid, start), encoding="utf-8") as fh:
+            value = fh.read(16).strip()
+    except OSError:
+        return None
+    return {"true": True, "false": False}.get(value)
+
+
 # ── the decision ─────────────────────────────────────────────────────────────────────────────────
 
 
@@ -507,46 +670,73 @@ def _undo_entered(addr: str | None, wid: int, pwid: Any, info: dict) -> tuple[in
         _sleep(SAMPLE_S)
 
 
-def decide(addr: str | None, wid: int, mode: str, scope: str) -> tuple[int, str, dict, WindowState]:
-    """→ (rc, verdict, kitten info, last state read)."""
+def relaxed_rc(rc: int, verdict: str, last: WindowState, reason: str | None) -> tuple[int, str | None]:
+    """The relax mapping (docstring § RELAX): only a refused-fs verdict whose last read was FS AND
+    onscreen becomes rc 0. → (rc, the reason it was relaxed or None)."""
+    if reason and rc == 3 and verdict == "refused-fs" and last.state == FS and last.onscreen is True:
+        return 0, reason
+    return rc, None
+
+
+def decide(
+    addr: str | None, wid: int, mode: str, scope: str, policy: str = BLOCK_STOCK
+) -> tuple[int, str, dict, WindowState, str | None]:
+    """→ (rc, verdict, kitten info, last state read, relaxed reason or None). A relaxed rc is
+    already mapped (3 → 0); the caller records would_rc 3 whenever the reason is not None."""
     none = WindowState(UNKNOWN, None, None, None)
     try:
         info = kitten_query(addr, wid)
     except NotFound:
-        return 4, "not-found", {}, none
+        return 4, "not-found", {}, none, None
     except KittenFailed:
-        return 3, "kitten-failed", {}, none
+        return 3, "kitten-failed", {}, none, None
+    cache_fsfix(info)
     last_for = info.get("last_for") or {}
     if last_for.get(scope) is False:
-        return 0, "safe-not-last", info, none
+        return 0, "safe-not-last", info, none, None
     if last_for.get(scope) is not True:
-        return 3, "kitten-failed", info, none
+        return 3, "kitten-failed", info, none, None
     pwid = info.get("platform_window_id")
+
+    reason = relax_reason(policy, info.get("fsfix"), mode)
+    if reason is not None:
+        # Relaxable ⇒ READ-ONLY, and toggle mode is COERCED TO REFUSE MODE (the brief's A2.4): both
+        # run _refuse_mode, never _before_toggle. Not _before_toggle's read-only half, because its
+        # UNKNOWN_DEADLINE_S grace would let an UNKNOWN read (usually a transition) that then reads
+        # FS-onscreen be relaxed with no stability hold, where refuse mode refuses on the first
+        # UNKNOWN (adversarial review 2026-10-16). The cost, fail-closed: on the patched build a
+        # toggle-mode chord pressed mid-transition does nothing (press again) instead of waiting.
+        # Toggle mode's verdict vocabulary is kept for FS offscreen: refused-not-visible, rc 3.
+        verdict, s = _refuse_mode(pwid)
+        if mode != "refuse" and verdict == "refused-fs" and s.onscreen is not True:
+            verdict = "refused-not-visible"
+        rc, relaxed = relaxed_rc(0 if verdict == "safe-windowed" else 3, verdict, s, reason)
+        return rc, verdict, info, s, relaxed
 
     if mode == "refuse":
         verdict, s = _refuse_mode(pwid)
-        return (0 if verdict == "safe-windowed" else 3), verdict, info, s
+        return (0 if verdict == "safe-windowed" else 3), verdict, info, s, None
 
     verdict, s = _before_toggle(pwid)
     if verdict != "toggle":
-        return (0 if verdict == "safe-windowed" else 3), verdict, info, s
+        return (0 if verdict == "safe-windowed" else 3), verdict, info, s, None
     try:
         toggled = kitten_query(addr, wid, toggle=True)
     except NotFound:
-        return 4, "not-found", info, s
+        return 4, "not-found", info, s, None
     except KittenFailed:
-        return 3, "kitten-failed", info, s
+        return 3, "kitten-failed", info, s, None
     entered = toggled.get("toggled_into_fullscreen")
     if entered is True:
         # It ENTERED fullscreen: our read said FS but kitty disagreed. The undo must NOT be sent
         # now: kitty drops a toggle while `in_fullscreen_transition` is set (cocoa_window.m:2339),
         # and the boolean is computed from the styleMask even for a dropped toggle (:3686-3690). So
         # wait for the transition to END, then undo at most once — or not at all if it never took.
-        return _undo_entered(addr, wid, pwid, info)
+        return (*_undo_entered(addr, wid, pwid, info), None)
     if entered is not False:
-        return 3, "kitten-failed", info, s
+        return 3, "kitten-failed", info, s, None
     verdict, s = _after_toggle(pwid)
-    return (0 if verdict == "safe-after-toggle" else 3), verdict, info, s
+    return (0 if verdict == "safe-after-toggle" else 3), verdict, info, s, None
 
 
 def run_then(addr: str | None, wid: int, action: list[str]) -> int:
@@ -577,9 +767,26 @@ def run_then(addr: str | None, wid: int, action: list[str]) -> int:
     return 3 if err == "focus-moved" else 1
 
 
-def any_fs(pid: int) -> int:
+def _all_fs_onscreen(rows: list[tuple[int, WindowState]] | None) -> bool:
+    """A readable sample in which every FS window is onscreen and no other window's read failed."""
+    if rows is None:
+        return False
+    return all(
+        s.onscreen is True if s.state == FS else s.types is not None for _n, s in rows
+    )
+
+
+def any_fs(pid: int, policy: str | None = None) -> int:
     """No window of <pid> reads FS on ANY sample across STABLE_S (one sample could land inside an
-    enter animation, where the type never reads 4), and no read fails."""
+    enter animation, where the type never reads 4), and no read fails.
+
+    Relaxed (docstring § RELAX) only from the per-process fsfix CACHE — remote control is down here,
+    so the kitten cannot be asked — or a stock-relaxing policy, and only when every FS window reads
+    onscreen and nothing was unreadable: the caller (cc-pane-close's SIGHUP fallback) does not know
+    which window its pane is in, so "the target is onscreen" is provable only as "every candidate
+    is". On the one-fullscreen-window-per-Desktop layout that is rarely true, and it stays refused."""
+    if policy is None:
+        policy, _raw = read_policy()
     start, rows = _now(), []
     while True:
         sample = pid_window_states(pid)
@@ -604,7 +811,33 @@ def any_fs(pid: int) -> int:
             verdict, rc, detail = "refused-unknown", 3, f"unreadable windows {bad}"
         else:
             verdict, rc, detail = "safe-windowed", 0, f"{len(rows)} windows, none fullscreen"
-    log_row(TOOL, "verdict", mode="any-fs", verdict=verdict, rc=rc, detail=detail, kitty_pid=pid)
+    fsfix = cached_fsfix(pid) if policy != ENFORCE else None
+    relaxed = None
+    reason = relax_reason(policy, fsfix, "any-fs") if verdict == "refused-fs" else None
+    if reason and _all_fs_onscreen(rows):
+        # The sampling above stops at the FIRST fullscreen sample. Relaxing on it would drop the
+        # "one sample is not enough" rule, so the relax holds only if every further sample up to
+        # STABLE_S is also readable with every fullscreen window onscreen.
+        ok = True
+        while ok and _now() - start < STABLE_S:
+            _sleep(SAMPLE_S)
+            ok = _all_fs_onscreen(pid_window_states(pid))
+        if ok:
+            rc, relaxed = 0, reason
+    log_row(
+        TOOL,
+        "verdict",
+        mode="any-fs",
+        verdict=verdict,
+        rc=rc,
+        detail=detail,
+        kitty_pid=pid,
+        fsfix=fsfix,
+        policy=policy,
+        would_rc=3 if relaxed else None,
+        relaxed=relaxed,
+        enforced=False if relaxed else None,
+    )
     if rc:
         print(f"{TOOL}: refused ({verdict}) kitty pid {pid}: {detail}", file=sys.stderr)
     return rc
@@ -658,12 +891,13 @@ def main(argv: list[str] | None = None) -> int:
     if opts is None:
         print(USAGE, file=sys.stderr)
         return 2
+    policy, policy_raw = read_policy()  # once a run: an unknown value is said on stderr once
     if opts.get("any_fs"):
-        return any_fs(opts["kitty_pid"])
+        return any_fs(opts["kitty_pid"], policy)
 
     wid, mode, scope = opts["window"], opts["mode"], opts["scope"]
     addr = opts["to"] or socket_address()
-    rc, verdict, info, last = decide(addr, wid, mode, scope)
+    rc, verdict, info, last, relaxed = decide(addr, wid, mode, scope, policy)
     log_row(
         TOOL,
         "verdict",
@@ -677,6 +911,12 @@ def main(argv: list[str] | None = None) -> int:
         mode=mode,
         scope=scope,
         caller=opts["tool"],
+        fsfix=info.get("fsfix"),
+        policy=policy,
+        policy_refused=policy_raw,
+        would_rc=3 if relaxed else None,
+        relaxed=relaxed,
+        enforced=False if relaxed else None,
     )
     if rc != 0:
         print(
