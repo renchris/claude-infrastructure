@@ -1,0 +1,7 @@
+deduped token census — window 2026-09-27 · 16078 file(s) · 402629 billed response(s)
+  output                 131,575,931
+  cache_creation       1,791,593,932
+  input                      846,236
+  cache_read          64,243,782,404
+  dedup: 620,496 of 1,024,319 record(s) were repeats (60.6%) — summing lines would have over-counted by 2.54x
+  output: 29,556 response(s) raised to their final record's count (+41,167,115 over the first-record placeholder); agent output stays a lower bound

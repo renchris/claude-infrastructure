@@ -1,0 +1,53 @@
+{
+ "by_class": {
+  "D": {
+   "added": 7770,
+   "commits": 67,
+   "deleted": 947
+  },
+  "G-plan": {
+   "added": 26130,
+   "commits": 50,
+   "deleted": 694
+  },
+  "G-trig": {
+   "added": 4560,
+   "commits": 12,
+   "deleted": 269
+  },
+  "O": {
+   "added": 379,
+   "commits": 2,
+   "deleted": 244
+  },
+  "T": {
+   "added": 1016,
+   "commits": 3,
+   "deleted": 56
+  }
+ },
+ "by_week": {
+  "Wk1": {
+   "D": 28,
+   "G-plan": 39,
+   "G-trig": 3,
+   "O": 2
+  },
+  "Wk2": {
+   "D": 22,
+   "G-plan": 10,
+   "G-trig": 2,
+   "T": 1
+  },
+  "Wk3": {
+   "D": 17,
+   "G-plan": 1,
+   "G-trig": 7,
+   "T": 2
+  }
+ },
+ "kit_commits": 134,
+ "kit_share_of_trunk": 0.0887,
+ "origin_main_commits_since_0928": 1511,
+ "unclassified": []
+}

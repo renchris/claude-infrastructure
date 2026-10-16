@@ -1,0 +1,68 @@
+{
+ "program_commits_total": 291,
+ "program_commits_since_intake": 217,
+ "program_fixup_commits": 9,
+ "frame_sign_or_resign_commits": [
+  "390b73707",
+  "c9ed7263a",
+  "566c07705",
+  "99c41d2cb",
+  "286adeec3",
+  "45ff686fe"
+ ],
+ "contract_page_renders": 4,
+ "freezes": 6,
+ "plan_lines_first_freeze_to_last": [
+  3554,
+  3921
+ ],
+ "round_recloses": 9,
+ "round_kappa": [
+  0.065,
+  0.135,
+  0.049,
+  0.097,
+  0.235,
+  0.016
+ ],
+ "profile_switch": "standard -> lite after counted round 1 (operator signature 2026-10-12T16:19:54Z, CONTRACT.md)",
+ "review_regimes_over_one_plan": {
+  "plan critique rounds": 29,
+  "frame critique rounds": 2,
+  "certification rounds": 6
+ },
+ "decisions_ruled_more_than_once": 6,
+ "decision_rule_events": 28,
+ "decisions": 22,
+ "premises_refuted": 17,
+ "challenges_total": 74,
+ "challenges_void": 65,
+ "kit_defect_fix_commits": 67,
+ "kit_commits": 134,
+ "kit_v12_stage9_commits": 11,
+ "kit_v12_stage9_lines_added": 4847,
+ "kit_router_commits": 39,
+ "kit_router_lines_added": 13075,
+ "router_gate_row_now": "row 15 Router FAIL: 'router not built (wave B1): CC_RESEARCH_ROUTER is unset' (tm2-cert.log)",
+ "gate_now": {
+  "failing": [
+   15
+  ],
+  "file": "~/Development/claude-private/tm2-plan/tm2-cert.log",
+  "filed": 4,
+  "pass": 14,
+  "rows": 19,
+  "when": "2026-10-16T12:55:00.785443+00:00"
+ },
+ "abandoned_fires": [
+  "fire-kit-row4-filed",
+  "fire-tm2-s6-w1"
+ ],
+ "kit_fires": 21,
+ "fires": 58,
+ "bundle_backups": 107,
+ "bundle_gb": 35.27,
+ "same_morning_refile": "a9e1c97a9 (07:43 local) filed six premises not-yet-true due 2026-10-31; 0c3a5504e (08:09 local) re-dated them to 2026-12-31/2027-01-31/2027-03-31; kit 40158a730 built --refile for it",
+ "s8_load_fix_commits": 5,
+ "s8_freshness_commits": 7
+}

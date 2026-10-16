@@ -1,0 +1,619 @@
+{
+ "plan_critique_rounds": [
+  {
+   "round": 1,
+   "at": "2026-09-29T17:45:26-05:00",
+   "verified": 37,
+   "sha": "d526f0bec"
+  },
+  {
+   "round": 2,
+   "at": "2026-09-29T18:52:31-05:00",
+   "verified": 26,
+   "sha": "72657f190"
+  },
+  {
+   "round": 3,
+   "at": "2026-09-29T19:58:54-05:00",
+   "verified": 22,
+   "sha": "155ede543"
+  },
+  {
+   "round": 4,
+   "at": "2026-09-29T21:15:07-05:00",
+   "verified": 25,
+   "sha": "a9b451002"
+  },
+  {
+   "round": 5,
+   "at": "2026-09-29T22:04:17-05:00",
+   "verified": 28,
+   "sha": "0be94f9d8"
+  },
+  {
+   "round": 6,
+   "at": "2026-09-29T23:22:56-05:00",
+   "verified": 24,
+   "sha": "60b2631ea"
+  },
+  {
+   "round": 7,
+   "at": "2026-09-30T01:13:10-05:00",
+   "verified": 21,
+   "sha": "9f4780a7a"
+  },
+  {
+   "round": 8,
+   "at": "2026-09-30T03:13:54-05:00",
+   "verified": 17,
+   "sha": "db432f972"
+  },
+  {
+   "round": 9,
+   "at": "2026-09-30T04:21:17-05:00",
+   "verified": 22,
+   "sha": "23e989416"
+  },
+  {
+   "round": 10,
+   "at": "2026-09-30T06:53:05-05:00",
+   "verified": 21,
+   "sha": "2b0566a94"
+  },
+  {
+   "round": 11,
+   "at": "2026-09-30T10:23:00-05:00",
+   "verified": 22,
+   "sha": "2f77c5c39"
+  },
+  {
+   "round": 12,
+   "at": "2026-09-30T12:16:00-05:00",
+   "verified": 20,
+   "sha": "f0c1ead46"
+  },
+  {
+   "round": 13,
+   "at": "2026-09-30T13:23:52-05:00",
+   "verified": 18,
+   "sha": "e3fbaac5a"
+  },
+  {
+   "round": 14,
+   "at": "2026-09-30T14:56:06-05:00",
+   "verified": 21,
+   "sha": "f59c405fe"
+  },
+  {
+   "round": 15,
+   "at": "2026-09-30T19:42:12-05:00",
+   "verified": 18,
+   "sha": "009427985"
+  },
+  {
+   "round": 16,
+   "at": "2026-09-30T21:41:05-05:00",
+   "verified": 17,
+   "sha": "b18f2d3f8"
+  },
+  {
+   "round": 17,
+   "at": "2026-09-30T23:51:39-05:00",
+   "verified": 13,
+   "sha": "a9ac1b9ed"
+  },
+  {
+   "round": 18,
+   "at": "2026-10-01T02:52:02-05:00",
+   "verified": 14,
+   "sha": "1d6c61a39"
+  },
+  {
+   "round": 19,
+   "at": "2026-10-01T04:17:21-05:00",
+   "verified": 13,
+   "sha": "8d53c6044"
+  },
+  {
+   "round": 20,
+   "at": "2026-10-01T05:33:02-05:00",
+   "verified": 10,
+   "sha": "09e7dac8a"
+  },
+  {
+   "round": 21,
+   "at": "2026-10-01T06:42:07-05:00",
+   "verified": 12,
+   "sha": "9d17587c6"
+  },
+  {
+   "round": 22,
+   "at": "2026-10-01T10:19:38-05:00",
+   "verified": 7,
+   "sha": "46ebd6347"
+  },
+  {
+   "round": 23,
+   "at": "2026-10-01T21:49:54-05:00",
+   "verified": 9,
+   "sha": "29122eec3"
+  },
+  {
+   "round": 24,
+   "at": "2026-10-01T23:34:34-05:00",
+   "verified": 16,
+   "sha": "45641b270"
+  },
+  {
+   "round": 25,
+   "at": "2026-10-02T00:36:03-05:00",
+   "verified": 13,
+   "sha": "46e444128"
+  },
+  {
+   "round": 26,
+   "at": "2026-10-02T12:55:05-05:00",
+   "verified": 13,
+   "sha": "9548e779f"
+  },
+  {
+   "round": 27,
+   "at": "2026-10-02T14:57:24-05:00",
+   "verified": 8,
+   "sha": "af0d828b5"
+  },
+  {
+   "round": 28,
+   "at": "2026-10-02T16:15:06-05:00",
+   "verified": 11,
+   "sha": "de16c25ef"
+  },
+  {
+   "round": 29,
+   "at": "2026-10-02T17:00:26-05:00",
+   "verified": 21,
+   "sha": "e38fd6984"
+  }
+ ],
+ "rounds": [
+  {
+   "round": "fc1",
+   "kind": "frame-critique",
+   "at": "2026-10-02T03:38:39Z",
+   "new_material": 22,
+   "seeds_caught": 0,
+   "seeds_planted": null,
+   "kappa": null,
+   "reclosed": 0,
+   "slots": 6,
+   "panels_by_vendor": {
+    "google": 1,
+    "frontier": 2,
+    "anthropic": 1,
+    "openai": 2
+   },
+   "quiet": false
+  },
+  {
+   "round": "fc2",
+   "kind": "frame-critique",
+   "at": "2026-10-02T04:16:52Z",
+   "new_material": 18,
+   "seeds_caught": 0,
+   "seeds_planted": null,
+   "kappa": null,
+   "reclosed": 0,
+   "slots": 6,
+   "panels_by_vendor": {
+    "frontier": 2,
+    "anthropic": 1,
+    "openai": 2,
+    "google": 1
+   },
+   "quiet": false
+  },
+  {
+   "round": "1",
+   "kind": "certification",
+   "at": "2026-10-11T16:01:40Z",
+   "new_material": 32,
+   "seeds_caught": 20,
+   "seeds_planted": {
+    "original": {
+     "caught": 20,
+     "k_left": 40,
+     "orphaned": 0,
+     "s_eff": 60
+    },
+    "shadow": {
+     "caught": 0,
+     "k_left": 0,
+     "orphaned": 0,
+     "s_eff": 0
+    }
+   },
+   "kappa": 0.065,
+   "reclosed": 2,
+   "slots": 16,
+   "panels_by_vendor": {
+    "anthropic": 80,
+    "openai": 10,
+    "frontier": 4,
+    "google": 12
+   },
+   "quiet": false
+  },
+  {
+   "round": "2",
+   "kind": "certification",
+   "at": "2026-10-12T17:30:53Z",
+   "new_material": 13,
+   "seeds_caught": 20,
+   "seeds_planted": {
+    "original": {
+     "caught": 21,
+     "k_left": 38,
+     "orphaned": 1,
+     "s_eff": 59
+    },
+    "shadow": {
+     "caught": 18,
+     "k_left": 6,
+     "orphaned": 0,
+     "s_eff": 24
+    }
+   },
+   "kappa": 0.135,
+   "reclosed": 1,
+   "slots": 8,
+   "panels_by_vendor": {
+    "openai": 8,
+    "google": 9,
+    "anthropic": 55,
+    "frontier": 2
+   },
+   "quiet": false
+  },
+  {
+   "round": "3",
+   "kind": "certification",
+   "at": "2026-10-12T20:07:10Z",
+   "new_material": 11,
+   "seeds_caught": 5,
+   "seeds_planted": {
+    "original": {
+     "caught": 21,
+     "k_left": 38,
+     "orphaned": 1,
+     "s_eff": 59
+    },
+    "shadow": {
+     "caught": 23,
+     "k_left": 9,
+     "orphaned": 0,
+     "s_eff": 32
+    }
+   },
+   "kappa": 0.049,
+   "reclosed": 2,
+   "slots": 8,
+   "panels_by_vendor": {
+    "anthropic": 50,
+    "openai": 6,
+    "frontier": 2,
+    "google": 7
+   },
+   "quiet": false
+  },
+  {
+   "round": "4",
+   "kind": "certification",
+   "at": "2026-10-12T21:28:25Z",
+   "new_material": 10,
+   "seeds_caught": 11,
+   "seeds_planted": {
+    "original": {
+     "caught": 24,
+     "k_left": 35,
+     "orphaned": 1,
+     "s_eff": 59
+    },
+    "shadow": {
+     "caught": 32,
+     "k_left": 15,
+     "orphaned": 0,
+     "s_eff": 47
+    }
+   },
+   "kappa": 0.097,
+   "reclosed": 1,
+   "slots": 8,
+   "panels_by_vendor": {
+    "anthropic": 53,
+    "google": 9,
+    "openai": 8,
+    "frontier": 2
+   },
+   "quiet": false
+  },
+  {
+   "round": "5",
+   "kind": "certification",
+   "at": "2026-10-13T00:38:57Z",
+   "new_material": 9,
+   "seeds_caught": 5,
+   "seeds_planted": {
+    "original": {
+     "caught": 24,
+     "k_left": 35,
+     "orphaned": 1,
+     "s_eff": 59
+    },
+    "shadow": {
+     "caught": 37,
+     "k_left": 20,
+     "orphaned": 2,
+     "s_eff": 57
+    }
+   },
+   "kappa": 0.235,
+   "reclosed": 2,
+   "slots": 8,
+   "panels_by_vendor": {
+    "anthropic": 48,
+    "frontier": 2,
+    "google": 6,
+    "openai": 6
+   },
+   "quiet": false
+  },
+  {
+   "round": "6",
+   "kind": "certification",
+   "at": "2026-10-13T01:52:31Z",
+   "new_material": 8,
+   "seeds_caught": 6,
+   "seeds_planted": {
+    "original": {
+     "caught": 24,
+     "k_left": 35,
+     "orphaned": 1,
+     "s_eff": 59
+    },
+    "shadow": {
+     "caught": 43,
+     "k_left": 26,
+     "orphaned": 2,
+     "s_eff": 69
+    }
+   },
+   "kappa": 0.016,
+   "reclosed": 1,
+   "slots": 8,
+   "panels_by_vendor": {
+    "anthropic": 49,
+    "google": 7,
+    "openai": 8,
+    "frontier": 2
+   },
+   "quiet": false
+  }
+ ],
+ "weekly": [
+  {
+   "week": "Wk1",
+   "days": 7.0,
+   "core_pp_M1": 160.0,
+   "working_hours": 123,
+   "operator_wait_hours": 19,
+   "session_hours": 351,
+   "plan_critique_verified_findings": 437,
+   "real_new_material_holes": 100,
+   "of_which_name_a_decision": 46,
+   "decisions_first_ruled": 4,
+   "premises_reaching_required_level": 73,
+   "probes_run": 271,
+   "findings_per_day": 76.7,
+   "findings_per_10pp": 33.6,
+   "findings_per_100_session_hours": 153.0
+  },
+  {
+   "week": "Wk2",
+   "days": 7.0,
+   "core_pp_M1": 29.2,
+   "working_hours": 126,
+   "operator_wait_hours": 35,
+   "session_hours": 380,
+   "plan_critique_verified_findings": 0,
+   "real_new_material_holes": 36,
+   "of_which_name_a_decision": 21,
+   "decisions_first_ruled": 18,
+   "premises_reaching_required_level": 20,
+   "probes_run": 269,
+   "findings_per_day": 5.1,
+   "findings_per_10pp": 12.3,
+   "findings_per_100_session_hours": 9.5
+  },
+  {
+   "week": "Wk3",
+   "days": 4.38,
+   "core_pp_M1": 31.0,
+   "working_hours": 87,
+   "operator_wait_hours": 18,
+   "session_hours": 567,
+   "plan_critique_verified_findings": 0,
+   "real_new_material_holes": 54,
+   "of_which_name_a_decision": 35,
+   "decisions_first_ruled": 0,
+   "premises_reaching_required_level": 9,
+   "probes_run": 471,
+   "findings_per_day": 12.3,
+   "findings_per_10pp": 17.4,
+   "findings_per_100_session_hours": 9.5
+  }
+ ],
+ "stages": [
+  {
+   "stage": "P0 pre-program",
+   "wall_days": 5.13,
+   "core_pp_M1": 103.8,
+   "material_holes": 0,
+   "decision_naming": 0,
+   "plan_critique_findings": 437,
+   "days_per_decision_naming_hole": null,
+   "pays_vs_escape_price": null
+  },
+  {
+   "stage": "S1",
+   "wall_days": 0.06,
+   "core_pp_M1": 2.2,
+   "material_holes": 40,
+   "decision_naming": 16,
+   "plan_critique_findings": 0,
+   "days_per_decision_naming_hole": 0.0,
+   "pays_vs_escape_price": true
+  },
+  {
+   "stage": "S2",
+   "wall_days": 0.06,
+   "core_pp_M1": 1.8,
+   "material_holes": 0,
+   "decision_naming": 0,
+   "plan_critique_findings": 0,
+   "days_per_decision_naming_hole": null,
+   "pays_vs_escape_price": null
+  },
+  {
+   "stage": "gap S2-S3",
+   "wall_days": 0.02,
+   "core_pp_M1": 4.0,
+   "material_holes": 0,
+   "decision_naming": 0,
+   "plan_critique_findings": 0,
+   "days_per_decision_naming_hole": null,
+   "pays_vs_escape_price": null
+  },
+  {
+   "stage": "S3",
+   "wall_days": 0.89,
+   "core_pp_M1": 12.2,
+   "material_holes": 0,
+   "decision_naming": 0,
+   "plan_critique_findings": 0,
+   "days_per_decision_naming_hole": null,
+   "pays_vs_escape_price": null
+  },
+  {
+   "stage": "gap S3-S4",
+   "wall_days": 0.95,
+   "core_pp_M1": 2.8,
+   "material_holes": 0,
+   "decision_naming": 0,
+   "plan_critique_findings": 0,
+   "days_per_decision_naming_hole": null,
+   "pays_vs_escape_price": null
+  },
+  {
+   "stage": "S4",
+   "wall_days": 4.61,
+   "core_pp_M1": 43.4,
+   "material_holes": 60,
+   "decision_naming": 30,
+   "plan_critique_findings": 0,
+   "days_per_decision_naming_hole": 0.15,
+   "pays_vs_escape_price": true
+  },
+  {
+   "stage": "S5",
+   "wall_days": 0.15,
+   "core_pp_M1": 3.5,
+   "material_holes": 0,
+   "decision_naming": 0,
+   "plan_critique_findings": 0,
+   "days_per_decision_naming_hole": null,
+   "pays_vs_escape_price": null
+  },
+  {
+   "stage": "gap S5-S6",
+   "wall_days": 1.01,
+   "core_pp_M1": 1.8,
+   "material_holes": 0,
+   "decision_naming": 0,
+   "plan_critique_findings": 0,
+   "days_per_decision_naming_hole": null,
+   "pays_vs_escape_price": null
+  },
+  {
+   "stage": "S6",
+   "wall_days": 0.78,
+   "core_pp_M1": 1.9,
+   "material_holes": 4,
+   "decision_naming": 0,
+   "plan_critique_findings": 0,
+   "days_per_decision_naming_hole": null,
+   "pays_vs_escape_price": null
+  },
+  {
+   "stage": "S7",
+   "wall_days": 2.52,
+   "core_pp_M1": 31.7,
+   "material_holes": 83,
+   "decision_naming": 53,
+   "plan_critique_findings": 0,
+   "days_per_decision_naming_hole": 0.05,
+   "pays_vs_escape_price": true
+  },
+  {
+   "stage": "S8",
+   "wall_days": 3.41,
+   "core_pp_M1": 11.2,
+   "material_holes": 3,
+   "decision_naming": 3,
+   "plan_critique_findings": 0,
+   "days_per_decision_naming_hole": 1.14,
+   "pays_vs_escape_price": true
+  }
+ ],
+ "forecast_now": {
+  "found": 83.0,
+  "n_hat": 205.0,
+  "desk_mean": 127.45,
+  "desk_n95": 199,
+  "invisible_mean": 28.22,
+  "invisible_bound95": 76,
+  "p_any": 1.0,
+  "stop": "cap",
+  "rounds_counted": 6,
+  "quiet_streak": 0
+ },
+ "forecast_contract_page_after_round_1": {
+  "found": 32,
+  "n_hat": 98,
+  "n95": 145
+ },
+ "wk3_commit_categories": {
+  "commits": 104,
+  "fixups": 5,
+  "by_category_first_match": {
+   "re-dating, re-filing, re-ruling, affirming": 6,
+   "rehearsal and relay trials": 6,
+   "freshness and re-checks": 15,
+   "finding or fix of a finding": 42,
+   "certification round mechanics": 4,
+   "other": 20,
+   "gate rows and trace bookkeeping": 11
+  }
+ },
+ "s8_commits": 51,
+ "s8_commit_categories": {
+  "re-dating, re-filing, re-ruling, affirming": 5,
+  "rehearsal and relay trials": 6,
+  "freshness and re-checks": 12,
+  "finding or fix of a finding": 4,
+  "certification round mechanics": 1,
+  "other": 14,
+  "gate rows and trace bookkeeping": 9
+ },
+ "s8_load_fix_commits": 5,
+ "s8_freshness_commits": 7
+}

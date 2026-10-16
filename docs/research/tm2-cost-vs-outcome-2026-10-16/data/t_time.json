@@ -1,0 +1,773 @@
+{
+ "now": "2026-10-16T14:00:00Z",
+ "span_days": {
+  "TrueMemory study (b486587e9)": 18.53,
+  "first TM2 plan commit (b2401a113)": 17.17,
+  "program intake (intake.jsonl init)": 14.45
+ },
+ "marks": {
+  "TrueMemory study (b486587e9)": "2026-09-27T20:15:51-05:00",
+  "first TM2 plan commit (b2401a113)": "2026-09-29T04:56:09-05:00",
+  "program intake (intake.jsonl init)": "2026-10-02T03:11:20Z"
+ },
+ "stages": [
+  {
+   "stage": "P0 pre-program",
+   "start": "2026-09-27T00:00:00Z",
+   "end": "2026-10-02T03:11:20Z",
+   "wall_days": 5.13
+  },
+  {
+   "stage": "S1",
+   "start": "2026-10-02T03:11:20Z",
+   "end": "2026-10-02T04:36:44Z",
+   "wall_days": 0.06,
+   "kit_agent_days": 0.06,
+   "in_budget_json": true,
+   "budget_days": 2.0,
+   "cap_days": 3.0
+  },
+  {
+   "stage": "S2",
+   "start": "2026-10-02T04:36:44Z",
+   "end": "2026-10-02T05:57:46Z",
+   "wall_days": 0.06,
+   "kit_agent_days": 0.06,
+   "in_budget_json": true,
+   "budget_days": 1.5,
+   "cap_days": 2.25
+  },
+  {
+   "stage": "gap S2-S3",
+   "start": "2026-10-02T05:57:46Z",
+   "end": "2026-10-02T06:26:09Z",
+   "wall_days": 0.02
+  },
+  {
+   "stage": "S3",
+   "start": "2026-10-02T06:26:09Z",
+   "end": "2026-10-03T03:51:14Z",
+   "wall_days": 0.89,
+   "kit_agent_days": 0.89,
+   "in_budget_json": true,
+   "budget_days": 1.5,
+   "cap_days": 2.25
+  },
+  {
+   "stage": "gap S3-S4",
+   "start": "2026-10-03T03:51:14Z",
+   "end": "2026-10-04T02:41:59Z",
+   "wall_days": 0.95
+  },
+  {
+   "stage": "S4",
+   "start": "2026-10-04T02:41:59Z",
+   "end": "2026-10-08T17:19:54Z",
+   "wall_days": 4.61,
+   "kit_agent_days": 4.61,
+   "in_budget_json": true,
+   "budget_days": 3.0,
+   "cap_days": 4.5
+  },
+  {
+   "stage": "S5",
+   "start": "2026-10-08T17:19:54Z",
+   "end": "2026-10-08T21:01:34Z",
+   "wall_days": 0.15,
+   "kit_agent_days": 0.15,
+   "in_budget_json": true,
+   "budget_days": 2.5,
+   "cap_days": 3.75
+  },
+  {
+   "stage": "gap S5-S6",
+   "start": "2026-10-08T21:01:34Z",
+   "end": "2026-10-09T21:15:19Z",
+   "wall_days": 1.01
+  },
+  {
+   "stage": "S6",
+   "start": "2026-10-09T21:15:19Z",
+   "end": "2026-10-10T15:52:16Z",
+   "wall_days": 0.78,
+   "kit_agent_days": null,
+   "in_budget_json": false,
+   "budget_days": 1.0,
+   "cap_days": 1.5
+  },
+  {
+   "stage": "S7",
+   "start": "2026-10-10T15:52:16Z",
+   "end": "2026-10-13T04:15:43Z",
+   "wall_days": 2.52,
+   "kit_agent_days": null,
+   "in_budget_json": false,
+   "budget_days": null,
+   "cap_days": null
+  },
+  {
+   "stage": "S8",
+   "start": "2026-10-13T04:15:43Z",
+   "end": "2026-10-16T14:00:00Z",
+   "wall_days": 3.41,
+   "kit_agent_days": null,
+   "in_budget_json": false,
+   "budget_days": null,
+   "cap_days": null
+  }
+ ],
+ "stages_1_6_agent_days": 6.55,
+ "stages_1_6_budget": 11.5,
+ "hours_total": 423,
+ "first_active_hour": "2026-09-28T23:00Z",
+ "hour_causes": {
+  "working": 336,
+  "waiting: operator": 72,
+  "idle: night (23:00-08:00 local)": 8,
+  "idle: daytime, unexplained": 6,
+  "waiting: vendor wall": 1
+ },
+ "hour_causes_by_stage": {
+  "P0 pre-program": {
+   "working": 58,
+   "waiting: operator": 18
+  },
+  "S1": {
+   "working": 2
+  },
+  "S2": {
+   "working": 1
+  },
+  "S3": {
+   "working": 14,
+   "idle: night (23:00-08:00 local)": 4,
+   "idle: daytime, unexplained": 4
+  },
+  "gap S3-S4": {
+   "working": 23
+  },
+  "S4": {
+   "working": 84,
+   "waiting: operator": 20,
+   "idle: night (23:00-08:00 local)": 4,
+   "idle: daytime, unexplained": 2
+  },
+  "S5": {
+   "working": 4
+  },
+  "gap S5-S6": {
+   "working": 16,
+   "waiting: operator": 8
+  },
+  "S6": {
+   "working": 11,
+   "waiting: operator": 8
+  },
+  "S7": {
+   "working": 58,
+   "waiting: vendor wall": 1,
+   "waiting: operator": 1
+  },
+  "S8": {
+   "working": 65,
+   "waiting: operator": 17
+  }
+ },
+ "hour_causes_by_week": {
+  "Wk1": {
+   "working": 123,
+   "waiting: operator": 19,
+   "idle: night (23:00-08:00 local)": 4,
+   "idle: daytime, unexplained": 4
+  },
+  "Wk2": {
+   "working": 126,
+   "waiting: operator": 35,
+   "idle: night (23:00-08:00 local)": 4,
+   "idle: daytime, unexplained": 2,
+   "waiting: vendor wall": 1
+  },
+  "Wk3": {
+   "working": 87,
+   "waiting: operator": 18
+  }
+ },
+ "working_hours_with_operator_open": 237,
+ "sessions_per_working_hour": {
+  "mean": 3.86,
+  "median": 2,
+  "p90": 6,
+  "max": 61,
+  "session_hours": 1296
+ },
+ "idle_gaps_ge_2h": {
+  "count": 13,
+  "hours": 77.0,
+  "longest": [
+   {
+    "from": "2026-09-29T02:00Z",
+    "to": "2026-09-29T19:00Z",
+    "hours": 17.0
+   },
+   {
+    "from": "2026-10-15T09:00Z",
+    "to": "2026-10-16T00:00Z",
+    "hours": 15.0
+   },
+   {
+    "from": "2026-10-06T15:00Z",
+    "to": "2026-10-07T01:00Z",
+    "hours": 10.0
+   },
+   {
+    "from": "2026-10-02T09:00Z",
+    "to": "2026-10-02T17:00Z",
+    "hours": 8.0
+   },
+   {
+    "from": "2026-10-08T09:00Z",
+    "to": "2026-10-08T15:00Z",
+    "hours": 6.0
+   },
+   {
+    "from": "2026-10-10T09:00Z",
+    "to": "2026-10-10T14:00Z",
+    "hours": 5.0
+   },
+   {
+    "from": "2026-10-05T18:00Z",
+    "to": "2026-10-05T21:00Z",
+    "hours": 3.0
+   },
+   {
+    "from": "2026-10-06T11:00Z",
+    "to": "2026-10-06T14:00Z",
+    "hours": 3.0
+   },
+   {
+    "from": "2026-10-09T07:00Z",
+    "to": "2026-10-09T09:00Z",
+    "hours": 2.0
+   },
+   {
+    "from": "2026-10-09T10:00Z",
+    "to": "2026-10-09T12:00Z",
+    "hours": 2.0
+   },
+   {
+    "from": "2026-10-09T13:00Z",
+    "to": "2026-10-09T15:00Z",
+    "hours": 2.0
+   },
+   {
+    "from": "2026-10-10T06:00Z",
+    "to": "2026-10-10T08:00Z",
+    "hours": 2.0
+   }
+  ]
+ },
+ "operator_packets": {
+  "count": 56,
+  "by_class": {
+   "C": 39,
+   "B": 17
+  },
+  "status": {
+   "actioned": 49,
+   "vetoed": 2,
+   "expired-actioned": 5
+  },
+  "class_C_open_hours": [
+   19.8,
+   14.8,
+   7.8,
+   4.6,
+   25.5,
+   6.6,
+   6.0,
+   2.1,
+   18.5,
+   1.6,
+   73.9,
+   73.9,
+   73.8,
+   73.7,
+   73.7,
+   73.6,
+   71.5,
+   7.1,
+   2.3,
+   1.7,
+   3.7,
+   31.2,
+   2.8,
+   6.4,
+   9.5,
+   7.9,
+   92.4,
+   0.3,
+   71.1,
+   71.1,
+   66.7,
+   66.7,
+   66.7,
+   66.7,
+   66.7,
+   66.7,
+   66.7,
+   66.7,
+   66.7
+  ],
+  "by_scope_class": {
+   "kit or method/C": 22,
+   "kit or method/B": 2,
+   "program (tm2-plan)/C": 17,
+   "program (tm2-plan)/B": 15
+  },
+  "class_C_median_open_hours": 31.19638888888889,
+  "unresolved": [],
+  "class_C_created_by_day": {
+   "2026-09-28": 1,
+   "2026-09-29": 4,
+   "2026-09-30": 1,
+   "2026-10-01": 3,
+   "2026-10-03": 1,
+   "2026-10-04": 7,
+   "2026-10-05": 2,
+   "2026-10-06": 1,
+   "2026-10-08": 2,
+   "2026-10-09": 1,
+   "2026-10-10": 1,
+   "2026-10-11": 2,
+   "2026-10-12": 2,
+   "2026-10-13": 11
+  }
+ },
+ "fires": {
+  "count": 58,
+  "by_end": {
+   "return": 54,
+   "abandon": 2,
+   "open": 2
+  },
+  "by_week": {
+   "Wk3": 39,
+   "Wk1": 3,
+   "Wk2": 16
+  },
+  "kit_fires": 21,
+  "hours_total": 155.0,
+  "abandoned": [
+   "fire-kit-row4-filed",
+   "fire-tm2-s6-w1"
+  ],
+  "list": [
+   {
+    "slug": "fire-tm2-stage2",
+    "opened": "2026-10-02T04:38Z",
+    "hours": 1.35,
+    "end": "return",
+    "week": "Wk1"
+   },
+   {
+    "slug": "fire-tm2-slice",
+    "opened": "2026-10-02T06:46Z",
+    "hours": 13.53,
+    "end": "return",
+    "week": "Wk1"
+   },
+   {
+    "slug": "fire-tm2-s4",
+    "opened": "2026-10-04T03:53Z",
+    "hours": 3.32,
+    "end": "return",
+    "week": "Wk1"
+   },
+   {
+    "slug": "fire-tm2-k11-cursor",
+    "opened": "2026-10-08T05:10Z",
+    "hours": 0.28,
+    "end": "return",
+    "week": "Wk2"
+   },
+   {
+    "slug": "fire-tm2-s5-w1",
+    "opened": "2026-10-08T17:27Z",
+    "hours": 3.7,
+    "end": "return",
+    "week": "Wk2"
+   },
+   {
+    "slug": "fire-tm2-s6-w1",
+    "opened": "2026-10-09T21:16Z",
+    "hours": 0.54,
+    "end": "abandon",
+    "week": "Wk2"
+   },
+   {
+    "slug": "fire-tm2-s6-w1b",
+    "opened": "2026-10-10T00:40Z",
+    "hours": 2.08,
+    "end": "return",
+    "week": "Wk2"
+   },
+   {
+    "slug": "fire-tm2-s6-w1c",
+    "opened": "2026-10-10T02:47Z",
+    "hours": 0.39,
+    "end": "return",
+    "week": "Wk2"
+   },
+   {
+    "slug": "fire-kit-census-repin",
+    "opened": "2026-10-10T02:51Z",
+    "hours": 0.66,
+    "end": "return",
+    "week": "Wk2"
+   },
+   {
+    "slug": "fire-kit-frame-plan-owner",
+    "opened": "2026-10-10T04:47Z",
+    "hours": 0.58,
+    "end": "return",
+    "week": "Wk2"
+   },
+   {
+    "slug": "fire-tm2-w1-seeds",
+    "opened": "2026-10-10T16:00Z",
+    "hours": 0.55,
+    "end": "return",
+    "week": "Wk2"
+   },
+   {
+    "slug": "fire-tm2-w2-1-round",
+    "opened": "2026-10-10T16:36Z",
+    "hours": 38.26,
+    "end": "return",
+    "week": "Wk2"
+   },
+   {
+    "slug": "fire-tm2-kit-cert-activity",
+    "opened": "2026-10-11T03:45Z",
+    "hours": 0.75,
+    "end": "return",
+    "week": "Wk2"
+   },
+   {
+    "slug": "fire-tm2-kit-sweep-trigger",
+    "opened": "2026-10-11T03:47Z",
+    "hours": 2.01,
+    "end": "return",
+    "week": "Wk2"
+   },
+   {
+    "slug": "fire-tm2-dr13a-buildlist",
+    "opened": "2026-10-11T03:51Z",
+    "hours": 0.17,
+    "end": "return",
+    "week": "Wk2"
+   },
+   {
+    "slug": "fire-tm2-kit-freshness-fix",
+    "opened": "2026-10-11T13:08Z",
+    "hours": 0.94,
+    "end": "return",
+    "week": "Wk2"
+   },
+   {
+    "slug": "fire-tm2-kit-selfclose",
+    "opened": "2026-10-11T14:06Z",
+    "hours": 0.23,
+    "end": "return",
+    "week": "Wk2"
+   },
+   {
+    "slug": "fire-tm2-stage8-prep",
+    "opened": "2026-10-11T22:07Z",
+    "hours": 1.62,
+    "end": "return",
+    "week": "Wk2"
+   },
+   {
+    "slug": "fire-kit-round1-settle",
+    "opened": "2026-10-11T22:56Z",
+    "hours": 1.23,
+    "end": "return",
+    "week": "Wk2"
+   },
+   {
+    "slug": "fire-kit-return-activity",
+    "opened": "2026-10-12T06:48Z",
+    "hours": 0.94,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-kit-round2-safety",
+    "opened": "2026-10-12T06:49Z",
+    "hours": 1.62,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-tm2-return-r1",
+    "opened": "2026-10-12T07:47Z",
+    "hours": 0.21,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-tm2-return-r2",
+    "opened": "2026-10-12T07:48Z",
+    "hours": 0.53,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-tm2-return-r3",
+    "opened": "2026-10-12T07:49Z",
+    "hours": 0.35,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-tm2-integrator",
+    "opened": "2026-10-12T08:23Z",
+    "hours": 0.45,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-tm2-stage8-records",
+    "opened": "2026-10-12T12:38Z",
+    "hours": 0.04,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-tm2-w22",
+    "opened": "2026-10-12T17:11Z",
+    "hours": 1.98,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-tm2-w22-fix",
+    "opened": "2026-10-12T19:30Z",
+    "hours": 0.29,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-tm2-w23",
+    "opened": "2026-10-12T19:50Z",
+    "hours": 0.97,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-tm2-w23-fix",
+    "opened": "2026-10-12T20:50Z",
+    "hours": 0.22,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-tm2-w24",
+    "opened": "2026-10-12T21:04Z",
+    "hours": 1.67,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-tm2-w24-fix",
+    "opened": "2026-10-12T23:19Z",
+    "hours": 0.47,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-tm2-w25",
+    "opened": "2026-10-12T23:50Z",
+    "hours": 1.37,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-tm2-w25-fix",
+    "opened": "2026-10-13T01:14Z",
+    "hours": 0.23,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-tm2-w26",
+    "opened": "2026-10-13T01:31Z",
+    "hours": 2.75,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-kit-cap-round-settle",
+    "opened": "2026-10-13T03:11Z",
+    "hours": 0.93,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-kit-row13-preflight",
+    "opened": "2026-10-13T04:32Z",
+    "hours": 0.51,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-tm2-s8-records",
+    "opened": "2026-10-13T04:34Z",
+    "hours": 0.69,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-kit-premise-probe-join",
+    "opened": "2026-10-13T04:55Z",
+    "hours": 0.23,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-tm2-w3-rehearsal",
+    "opened": "2026-10-13T05:19Z",
+    "hours": 0.1,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-tm2-s8-measure",
+    "opened": "2026-10-13T05:21Z",
+    "hours": 50.98,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-kit-rehearsal-finds",
+    "opened": "2026-10-13T05:22Z",
+    "hours": 0.44,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-kit-decision-carry",
+    "opened": "2026-10-13T05:24Z",
+    "hours": 0.26,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-kit-descope-restore",
+    "opened": "2026-10-16T04:11Z",
+    "hours": 2.73,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-tm2-s8-github-stacks",
+    "opened": "2026-10-16T04:13Z",
+    "hours": 0.45,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-kit-row4-filed",
+    "opened": "2026-10-16T07:28Z",
+    "hours": 5.76,
+    "end": "abandon",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-kit-rehearsal",
+    "opened": "2026-10-16T07:29Z",
+    "hours": 0.85,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-kit-trial-routing",
+    "opened": "2026-10-16T08:48Z",
+    "hours": 0.48,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-tm2-ghsa4-refresh",
+    "opened": "2026-10-16T08:56Z",
+    "hours": 0.1,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-kit-rehearsal-rater-path",
+    "opened": "2026-10-16T09:00Z",
+    "hours": 0.49,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-kit-relay-preflight",
+    "opened": "2026-10-16T09:20Z",
+    "hours": 1.59,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-kit-agy-viewfile",
+    "opened": "2026-10-16T09:31Z",
+    "hours": 0.52,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-kit-relay-nocommand",
+    "opened": "2026-10-16T11:01Z",
+    "hours": 0.58,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-kit-row8-trial-text",
+    "opened": "2026-10-16T11:47Z",
+    "hours": 0.2,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-kit-row4-filed-2",
+    "opened": "2026-10-16T12:04Z",
+    "hours": 0.64,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-kit-premise-refile",
+    "opened": "2026-10-16T12:55Z",
+    "hours": 0.23,
+    "end": "return",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-method-exhaust-then-proceed",
+    "opened": "2026-10-16T14:07Z",
+    "hours": 0.0,
+    "end": "open",
+    "week": "Wk3"
+   },
+   {
+    "slug": "fire-tm2-cost-vs-outcome",
+    "opened": "2026-10-16T14:11Z",
+    "hours": 0.0,
+    "end": "open",
+    "week": "Wk3"
+   }
+  ]
+ }
+}

@@ -1,0 +1,22 @@
+PASS kit_commits: headline=134 independent=134
+NOTE kit_commits_D: headline=67 subject-rule fix/revert=61
+PASS fleet_responses: headline=402873 independent=402629 (within 0.1%)
+PASS holes_distinct: headline=429 independent=429
+PASS decisions: headline=22 independent=22
+PASS premises: headline=111 independent=111
+PASS probes: headline=1011 independent=1011
+PASS round_1_new_material: headline=32 independent=32
+PASS round_2_new_material: headline=13 independent=13
+PASS round_3_new_material: headline=11 independent=11
+PASS round_4_new_material: headline=10 independent=10
+PASS round_5_new_material: headline=9 independent=9
+PASS round_6_new_material: headline=8 independent=8
+PASS material_real_new_certification_rounds_1_6: headline=83 independent=83
+PASS plan_critique_rounds_1_23_verified_findings: headline=437 independent=437
+PASS upstream_prs_opened_by_us: headline=0 independent=0
+PASS pp_core_M1_vs_M2: headline=220.2 independent=217.5 (within 10%)
+PASS span_days_since_first_tm2_plan_commit: headline=17.17 independent=17.17
+PASS fires: headline=58 independent=58
+PASS gate_pass_now: headline=14 independent=14
+PASS gate_filed_now: headline=4 independent=4
+PASS operator_packets: headline=56 independent=56

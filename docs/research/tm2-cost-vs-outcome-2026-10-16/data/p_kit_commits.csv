@@ -1,0 +1,135 @@
+sha,committed,week,class,added,deleted,files,fixup,subject,reason
+40158a730,2026-10-16T08:00:28-05:00,Wk3,T,202,14,9,False,feat(research-kit): premise file --refile supersedes a not-yet-true filing,re-file supersedes a same-morning not-yet-true filing
+70d46e643,2026-10-16T07:08:09-05:00,Wk3,T,617,27,12,False,feat(research-kit): gate row 4 files a build-only premise not-yet-true,row 4 files TM2's build-only premises not-yet-true
+bcc23e97c,2026-10-16T06:51:01-05:00,Wk3,D,69,1,3,False,fix(research-kit): row 8 /tmp scan skips a relay trial's observed reply and tools,row 8 /tmp scan hit relay trial text
+80e89ab38,2026-10-16T06:07:19-05:00,Wk3,D,19,1,2,False,fix(research-kit): relay context bars suggesting a command or next step,relay context suggested next steps
+14c951fd7,2026-10-16T05:05:20-05:00,Wk3,D,14,2,3,False,fix(research-kit): the relay instruction names the phrases the Stop check reads as an added item,relay instruction missed Stop-check phrases
+56f1c3a07,2026-10-16T04:56:12-05:00,Wk3,D,114,12,5,False,"fix(research-kit): agy reads stay inside the bundle, and a rater lost past its cap no longer strands a fixed level",agy reads escaped bundle; rater cap stranded level
+15adbe4b0,2026-10-16T04:36:52-05:00,Wk3,G-trig,198,57,5,False,"feat(research-kit): rehearse trial --practice, a real relay trial the relay test never reads",practice relay trial
+921b85267,2026-10-16T04:36:41-05:00,Wk3,D,142,15,4,False,"fix(research-kit): the relay names a certificate read that runs from the program's root, and two Stop arms no longer contradict",relay named an unrunnable read; Stop arms contradicted
+1b5258733,2026-10-16T04:08:09-05:00,Wk3,D,216,25,7,False,fix(research-kit): rehearsal trials route a research order as a relay while certifying,rehearsal trials misrouted while certifying
+0b8636a2a,2026-10-16T04:03:37-05:00,Wk3,D,35,4,2,False,fix(research-kit): a rehearsal find's briefs cite the plan by its bundle path,rehearsal briefs cited wrong plan path
+e29c3fdb4,2026-10-16T02:55:07-05:00,Wk3,G-trig,1163,63,15,False,feat(research-kit): agent-run rehearsal — a rehearsal activity and a bare-pane relay trial verb,agent-run rehearsal (operator could not run it)
+a860db7c2,2026-10-16T01:32:10-05:00,Wk3,G-trig,173,22,5,False,"feat(research-kit): decision affirm, and sweep step 2 supersedes instead of converting an answered decision",decision affirm; sweep supersedes
+af46ca131,2026-10-15T23:24:01-05:00,Wk3,D,211,4,5,False,fix(research-kit): an answered sweep-converted decision restores its waves and closes its class-B packet,answered sweep-converted decision stayed blocked
+d1adcfd24,2026-10-13T00:40:53-05:00,Wk3,G-plan,939,10,13,False,"feat(research-kit): rehearsal finds raised, verified, rated and named as known rows",rehearsal finds as known rows
+5e11243a7,2026-10-13T00:33:40-05:00,Wk3,G-trig,288,16,6,False,"feat(research-kit): decision carry revises a carried decision, and decision reopen accepts one",decision carry revise / reopen
+2cb602f17,2026-10-13T00:02:32-05:00,Wk3,G-trig,76,10,4,False,feat(research-kit): premise revise --probe joins recorded probes that close the premise,premise revise --probe
+3b4ab4fdf,2026-10-12T23:57:37-05:00,Wk3,D,60,2,3,False,fix(research-kit): gate row 8's /tmp scan skips vendor text quoted verbatim in holes.jsonl,row 8 /tmp scan hit vendor quotes
+9000cec6f,2026-10-12T23:39:26-05:00,Wk3,D,143,5,6,False,"fix(research-kit): gate row 13 reads the preflight that ran before the contract page, not the latest one",row 13 read an overwritten preflight
+26e83e2ba,2026-10-12T22:30:25-05:00,Wk3,D,516,46,16,False,"fix(research-kit): the verification-only cap round settles under its own activity, and names its finds",cap round could not settle / name finds
+4fc7688d9,2026-10-12T22:05:58-05:00,Wk3,D,21,9,2,False,fix(research-kit): gate row 9 certifies the snapshot the verification-only cap round examined,row 9 certified the wrong snapshot
+5c10d15f4,2026-10-12T03:03:45-05:00,Wk3,D,6,2,2,False,"fix(research-router): a certification-round activity runs the new settling verbs (reproduce, hold-g, refind)",activity could not run new settling verbs
+b55d29ecf,2026-10-12T02:54:13-05:00,Wk3,D,92,26,3,False,fix(research-kit): census repin re-pins several stale methods in one call,census repin one method per call
+23ac3a5de,2026-10-12T02:39:54-05:00,Wk3,G-trig,933,61,19,False,"feat(research-kit): front-end-return activity, operator-signed profile switch, contract page at the measured forecast","front-end return, profile switch, re-rendered contract page"
+9fdde4e2d,2026-10-12T02:39:54-05:00,Wk3,G-trig,135,1,2,False,feat(cc-research): operator-ruled reopen and re-rule of a ruled decision,operator reopen/re-rule of a decision
+4c7010dae,2026-10-12T02:21:40-05:00,Wk3,D,551,14,10,False,"fix(research-kit): round-2 safety — bundles withhold round history, held re-finds are not new material, match tests only its own round, a CONTACT split hole gets one reproduction",round-2 safety: bundle leaked history; re-finds counted
+0d3b70bca,2026-10-12T01:17:26-05:00,Wk3,D,37,6,2,False,fix(research-kit): a timed-out probe kills its whole process group,timed-out probe left children running
+0b0a1cf64,2026-10-12T01:17:26-05:00,Wk3,D,282,30,7,False,fix(research-kit): freshness re-runs carried premises while certifying; row 4 keys on the refuting event; premise revise,freshness skipped carried premises; row 4 key
+91d21b830,2026-10-11T21:52:42-05:00,Wk2,D,10,1,2,False,"fix(research-router): a certification-round activity runs the round-settling verbs (artifact, split, verify-split, repass)",activity could not run settling verbs
+cf9a55fcd,2026-10-11T19:22:23-05:00,Wk2,D,16,0,2,False,test(research-router): a teammate outside every root whose first prompt names the program starts ordinary,test for the router fix
+9b2a729d6,2026-10-11T19:22:23-05:00,Wk2,D,59,13,4,False,fix(research-router): only handoff-fire's admitted marker line makes a fired brief a work order,router read any brief as a work order
+b6e453ee1,2026-10-11T19:22:23-05:00,Wk2,D,21,6,2,False,fix(research-router): only a recycle brief inherits a named predecessor's label,router label inheritance too wide
+d318ec014,2026-10-11T19:22:23-05:00,Wk2,D,67,4,3,False,fix(research-router): an out-of-root ordinary pane stays ordinary on machine envelopes naming a program,router mislabeled out-of-root pane
+4d11ed938,2026-10-11T19:01:24-05:00,Wk2,G-trig,1064,28,10,False,feat(research-kit): settle a certification round before any plan edit,settle a round before plan edits
+55444343d,2026-10-11T16:47:35-05:00,Wk2,D,410,48,5,False,fix(research-kit): seed match reads the seeded copy; round.sh close --reclose recomputes a closed round,seed match read the wrong copy
+544fa4aa7,2026-10-11T09:09:26-05:00,Wk2,D,22,4,3,False,fix(research-kit): a certifying program lets a session self-close through handoff-fire.sh; every fire stays blocked,certifying program blocked self-close
+7dab6ce0d,2026-10-11T08:50:40-05:00,Wk2,D,6,3,2,False,"fix(research-kit): a no-verdict re-check quotes its whole crash line, so the missing tool is named",no-verdict re-check hid the missing tool
+46d4d64a2,2026-10-11T08:25:27-05:00,Wk2,D,9,0,2,False,fix(research-kit): the certificate's freshness line no longer counts a drift flip triaged refuted,certificate miscounted triaged drift flip
+0816f9cb4,2026-10-11T08:19:34-05:00,Wk2,D,249,23,6,False,"fix(research-kit): job freshness reads an environment failure as no verdict, never a refutation",freshness read env crash as refutation
+13614c2bf,2026-10-11T00:11:04-05:00,Wk2,D,110,24,3,False,fix(research-kit): file-packet refuses a class-B packet with no revisit_trigger or off-record options; the sweep's default ruling carries the trigger,file-packet accepted malformed class-B packet
+0ed9589d0,2026-10-10T23:07:24-05:00,Wk2,D,489,44,10,False,feat(research-kit): kit-opened certification-round activity and four router hardening fixes,research block refused the program's own round
+16b6b441f,2026-10-10T11:42:44-05:00,Wk2,D,16,1,2,False,fix(research-kit): seed match skips holes from non-numbered rounds instead of crashing on int('fc1'),seed match crashed on round 'fc1'
+ac402dd96,2026-10-09T23:59:48-05:00,Wk2,D,71,3,4,False,"feat(research-kit): intake.py set --plan and --topic-owner, the frame keys gate rows 8 and 9 read",frame lacked keys gate rows 8-9 read
+48e6a35d0,2026-10-09T22:22:48-05:00,Wk2,T,197,15,4,False,feat(research-kit): census repin — supersede a stale method and retire members no active method lists; gate row 2 skips superseded methods,census re-pin after TM2's replan merge
+0901322a6,2026-10-09T11:50:34-05:00,Wk2,D,6,5,1,False,"fix(research-router): write the E1j stall row before the give-up return, so a late wakeup cannot skip it",stall row skipped by late wakeup
+80712ea08,2026-10-09T11:50:34-05:00,Wk2,D,14,6,2,False,fix(cc-claude-bin ratchet): exempt a RULED version pin — router.py careful call (ruling 8633d354bd41),version-pin ratchet blocked ruled pin
+a5d6bd21f,2026-10-08T18:27:54-05:00,Wk2,D,173,26,4,False,"feat(research-router): pin the careful call — claude-haiku-4-5, no effort flag, claude 2.1.293 by path, the binary's version in the configuration id; warm job runs as ProcessType Interactive",pin router careful call after drift
+20405baa4,2026-10-08T15:35:11-05:00,Wk2,D,789,110,16,False,"feat(research-kit): row 15 read guards, third-read refusal and load bound (wave E1l)",row 15 read guards / load bound
+44b261af4,2026-10-08T12:04:46-05:00,Wk2,G-trig,119,4,2,False,feat(research-kit): file-packet --overrun-stage files the §6.5 overrun packet and records it in budget.json,overrun packet verb (TM2 stage 4 overran)
+471f7dcd2,2026-10-08T11:32:13-05:00,Wk2,D,260,50,3,False,"feat(research-router): per-kind cold hedge in classify(), with its trace and off switch",router cold-start latency hedge
+5d28a9507,2026-10-08T11:32:13-05:00,Wk2,D,20,0,2,False,feat(research-router): warm classifier workers start with CLAUDE_CODE_CERT_STORE=bundled,router workers hung on keychain
+70f881599,2026-10-07T23:38:06-05:00,Wk2,D,119,11,3,False,feat(research-router): stall trace row before the caller's 9 s kill,router stall invisible (trace row)
+79887ba4c,2026-10-06T23:42:37-05:00,Wk2,G-plan,123,11,4,False,"feat(research-router): wave E1i — the fast call runs sonnet_latest, thinking off (decision 1f3b8f2d01b7)",router fast call model (E1i)
+d68323586,2026-10-06T23:42:37-05:00,Wk2,G-plan,151,14,6,False,feat(research-program): wave E1i pre-registration — row 15's other scored on the relay decision (decision 1f3b8f2d01b7),E1i pre-registration
+07a2a8029,2026-10-06T03:11:19-05:00,Wk2,G-plan,30,5,2,False,feat(research-kit): tuning rater tolerates a stated number of unlabeled prompts; the work-order marker test follows the slug rule,tuning rater tolerance
+c6b110492,2026-10-06T03:11:19-05:00,Wk2,G-plan,114,10,5,False,feat(research-kit): count overridden relays in cc-research pending and the operator readout,count overridden relays
+e0f9bb418,2026-10-06T03:11:19-05:00,Wk2,G-plan,262,30,2,False,"feat(research-router): relay notice, slug-bound --requires-gate, one-word misrouted override, no relay label on envelope turns",router relay notice etc.
+a3c4b556f,2026-10-06T03:11:19-05:00,Wk2,G-plan,731,39,5,False,"feat(research-kit): held-out tooling for wave E1h — draw, retire, subset seal, pinned instrument, reads ledger, tuning rater, live-frame miner",held-out tooling (E1h)
+067278db0,2026-10-05T21:54:40-05:00,Wk2,G-plan,59,5,2,False,"feat(research-kit): heldout set v3, sealed whole, a repeated candidate sealed once (wave E1g)",held-out set v3
+2e2d17cb5,2026-10-05T21:54:40-05:00,Wk2,G-plan,913,230,5,False,"feat(research-kit): fast-plus-careful re-ask classifier (wave E1g, ruling b18c74a4f8e1)",fast-plus-careful classifier (E1g)
+10349a46e,2026-10-05T03:12:18-05:00,Wk2,D,603,42,8,False,fix(research-router): a logged-out warm classifier no longer costs every classification,logged-out warm classifier cost every call
+1d8feb56c,2026-10-05T00:57:54-05:00,Wk2,G-plan,749,41,23,False,"feat(research-sign): the implementation signature — operator-only, pinned to the built certificate",implementation signature
+adc7e2d6c,2026-10-05T00:33:18-05:00,Wk2,G-plan,838,7,8,False,"feat(research-router): resident (warm) classifier, staged behind c10 migration 0059",warm router classifier
+7b2f50ce3,2026-10-04T23:51:47-05:00,Wk1,D,14,0,2,False,fix(research-render): a build-state render drops the research lines' 'Built –' placeholder,render placeholder bug
+aa5bb7a65,2026-10-04T23:51:47-05:00,Wk1,D,31,5,3,False,fix(research-ceiling): cc-research ceiling adds the v1.2 yield ceiling and Stage 9 budget,ceiling omitted v1.2 parts
+36f811d89,2026-10-04T23:51:47-05:00,Wk1,G-plan,299,9,7,False,"feat(research-jobs): Stage 9 soak scheduler — cc-research job soak, staged plist, c10 migration 0058",Stage 9 soak scheduler
+655459ce9,2026-10-04T23:51:46-05:00,Wk1,G-plan,61,0,2,False,feat(research-intake): contract-page ceiling carries the v1.2 yield ceiling and Stage 9 budget,contract-page v1.2 ceiling
+940d2925c,2026-10-04T23:02:08-05:00,Wk1,G-plan,553,21,9,False,"feat(research-kit): Stage 9 registry states, built-freeze and the forecast split",Stage 9 registry states
+8f9f8d3d6,2026-10-04T23:02:08-05:00,Wk1,G-plan,1040,2,3,False,feat(research-kit): built gate rows 20-25,built gate rows 20-25
+b428d019f,2026-10-04T23:02:08-05:00,Wk1,G-plan,1311,47,10,False,"feat(research-kit): Stage 9 instruments, built rounds and the built certificate",Stage 9 built-artifact certificate
+b74d33b95,2026-10-04T23:02:08-05:00,Wk1,G-plan,1035,19,11,False,feat(research-kit): stages 3 and 5 stop on yield; decisions below 90 tagged by what blocks them,yield stop for stages 3 and 5
+6ab93d373,2026-10-04T23:02:08-05:00,Wk1,G-plan,479,10,14,False,feat(research-kit): method v1.2 spec and skeleton — built-artifact stage and yield stop,method v1.2 spec skeleton
+835da4f84,2026-10-04T21:16:56-05:00,Wk1,G-plan,490,53,5,False,"feat(research-kit): second sealed held-out set (--set v2), prompt-history source and batched raters",held-out set v2
+e44627831,2026-10-04T20:42:56-05:00,Wk1,G-plan,115,9,3,False,"feat(research-kit): intake warns on a profile wider than lite, and stamps method v1.2","intake profile warning, v1.2 stamp"
+d4045400a,2026-10-04T20:42:56-05:00,Wk1,G-plan,195,18,2,False,feat(research-kit): estimate.py reads the measured inputs by default (method v1.2),estimate.py measured inputs (v1.2)
+da9c13320,2026-10-04T20:32:49-05:00,Wk1,G-plan,191,11,10,False,"feat(research-kit): pin certification reviewer effort per vendor (Opus xhigh, Fable high, OpenAI xhigh)",pin reviewer effort per vendor
+0e2c97516,2026-10-04T19:41:47-05:00,Wk1,D,2,70,2,False,"revert(research-router): E1b classifier change, which read worse on gate row 15",revert of E1b (read worse)
+1e78179b6,2026-10-04T19:41:47-05:00,Wk1,G-plan,70,2,2,False,feat(research-router): slimmer classifier start and data-delimited brief (wave E1b),router classifier slimming (E1b)
+eb367c280,2026-10-04T16:29:31-05:00,Wk1,G-plan,17,4,4,False,feat(research-kit): re-ask classifier and gate row 15 time limit 9 s (ruling 4bf73c4e55d5),"router re-ask classifier, row 15 limit"
+f0742dec5,2026-10-04T08:00:31-05:00,Wk1,D,13,3,2,False,fix(research-kit): re-register keeps the program's stored aliases,re-register dropped aliases
+0d5ad49c0,2026-10-04T08:00:31-05:00,Wk1,D,1,0,1,False,fix(research-kit): gate.py imports os again for add-root (lost in the ops/registry merge),import lost in a merge
+b2b09e273,2026-10-04T08:00:31-05:00,Wk1,G-trig,99,3,2,False,fix(research-kit): a program covers more than one root,program spanning several roots
+3b4a9f0d7,2026-10-04T07:37:04-05:00,Wk1,G-trig,12,2,1,False,"docs(research-kit): records contract for round resume, the uncounted cap, check-round rerun and the lease","records doc: resume, cap, lease"
+7e67e96a2,2026-10-04T07:37:04-05:00,Wk1,D,20,11,2,False,fix(research-kit): round.sh re-runs a partial slot and counts a lane live only when every slot completed,partial slot not re-run
+4a511e3fb,2026-10-04T07:37:04-05:00,Wk1,G-trig,300,2,7,False,"feat(research-kit): program lease, one writing owner at a time",program lease after concurrent writers
+eb7653f57,2026-10-04T07:37:04-05:00,Wk1,D,105,34,6,False,fix(research-kit): locked id minting and seed-vault writes,id minting / vault writes raced
+e0f390797,2026-10-04T07:37:04-05:00,Wk1,D,59,10,2,False,fix(research-kit): scheduled sweep reaches a registered program with an open packet,sweep missed a program with an open packet
+3bbefd668,2026-10-04T07:37:04-05:00,Wk1,D,78,7,2,False,"fix(research-kit): R_max bounds counted rounds, and round.sh needs a fresh preflight",R_max unbounded; stale preflight accepted
+20b8d9cbc,2026-10-04T07:37:04-05:00,Wk1,D,115,16,2,False,fix(research-kit): re-entering an interrupted round resumes it instead of wedging,interrupted round wedged
+2fae4d7b5,2026-10-04T07:37:04-05:00,Wk1,D,41,0,2,False,fix(research-kit): close refuses a counted round whose planned slots did not all complete,close counted a round with incomplete slots
+65b3713cf,2026-10-04T07:35:32-05:00,Wk1,D,85,11,4,False,fix(research-kit): gate row 17 requires an honest stop,row 17 accepted a dishonest stop
+fa06657b8,2026-10-04T07:35:32-05:00,Wk1,D,185,9,2,False,fix(research-kit): the certificate renders the records live,certificate rendered stale records
+9d011c6f0,2026-10-04T07:13:17-05:00,Wk1,G-plan,7,2,1,False,"docs(research-kit): records contract for seed prescreen, seed_match and the deflated forecast",records doc for the above
+0d8dfbd12,2026-10-04T07:13:17-05:00,Wk1,G-plan,146,5,2,False,feat(research-kit): seed pre-screen and seed-realism statistic,"seed pre-screen, realism statistic"
+da5eea40e,2026-10-04T07:13:16-05:00,Wk1,D,122,24,4,False,fix(research-kit): seed catches no longer count as real findings,seed catches counted as real findings
+d69121e0a,2026-10-04T07:13:16-05:00,Wk1,G-plan,76,0,1,False,feat(research-kit): estimate.py calibration reports sharpness and rank skill,calibration sharpness/rank skill
+d1048d356,2026-10-04T07:13:16-05:00,Wk1,D,32,6,1,False,fix(research-kit): forecast deflates found by the false-material share,forecast ignored false-material share
+dc51b2368,2026-10-04T07:13:16-05:00,Wk1,D,43,6,1,False,fix(research-kit): shadow stratum draws from its own found count,shadow stratum drew from wrong count
+c18ccd4bd,2026-10-04T07:13:16-05:00,Wk1,D,113,13,2,False,fix(research-kit): invisible bound at the measured u_hi 0.234,invisible bound wrong; re-measured
+fb345896a,2026-10-04T07:13:16-05:00,Wk1,D,120,6,2,False,"fix(research-kit): a lane is live only when every planned slot completed, and open-round needs a fresh all-live preflight",lane counted live with incomplete slots
+bc17af96d,2026-10-04T07:13:16-05:00,Wk1,D,113,19,3,False,"fix(research-kit): check-round re-runs every non-complete planned slot, not only voided ones",check-round skipped non-voided incomplete slots
+a2f39ff84,2026-10-04T06:41:26-05:00,Wk1,D,3,0,1,False,docs(research-kit): router header names the by: envelope route label,doc for the route-label fix
+da9da7a18,2026-10-04T06:40:19-05:00,Wk1,D,99,3,2,False,fix(research-kit): machine-envelope first prompt gets a deterministic route label,machine-envelope prompt mislabeled
+8b531dd34,2026-10-04T06:40:19-05:00,Wk1,D,27,5,2,False,fix(research-kit): heldout scores a router fallback as a miss in every stratum,heldout scored router fallback wrong
+3cb00ec08,2026-10-04T06:33:58-05:00,Wk1,D,39,3,2,False,fix(research-kit): relay check runs on an unavailable turn whose reply opens with a verdict,relay check skipped a verdict-first reply
+9989d3a78,2026-10-04T05:24:14-05:00,Wk1,O,30,13,6,False,fix(headless): helpers load no operator settings or tools they do not use; dl-sweep reads the final JSON,"headless helper settings, repo-wide"
+cbe90eb63,2026-10-03T22:59:01-05:00,Wk1,O,349,231,12,False,"fix(instructions): slim variant loads as two files, each under the 40k per-file budget","instruction-variant budget fix, repo-wide"
+82d87ac10,2026-10-01T22:59:42-05:00,Wk1,D,28,0,2,False,"fix(research-kit): bundle copies carry placeholders, not the paths the integrity check hunts",bundle paths tripped integrity check
+30e07d8c5,2026-10-01T22:25:27-05:00,Wk1,D,33,6,2,False,fix(research-kit): the Google reviewer reads its bundle with Antigravity's file viewer,Google lane cannot read bundle
+d55b04fa9,2026-10-01T21:03:52-05:00,Wk1,D,151,44,8,False,"fix(research-kit): the Google reviewer lane runs the Antigravity CLI, since Google retired gemini for individual accounts",Google lane broken (gemini retired) -> Antigravity
+baa05b780,2026-10-01T17:46:54-05:00,Wk1,G-plan,357,3,3,False,feat(cc-research): reference-class timing per project type,reference-class timing
+1a6f19e58,2026-10-01T17:35:02-05:00,Wk1,G-plan,447,5,3,False,"feat(cc-research): probe, doctor and harness self-test verbs; probe-run.sh becomes their shim",probe/doctor verbs
+168a4207f,2026-10-01T17:21:50-05:00,Wk1,G-plan,1043,4,4,False,"feat(cc-research): record verbs, concern triage and the activities writer","record verbs, triage"
+9ff555f83,2026-10-01T17:21:50-05:00,Wk1,G-plan,832,3,2,False,"feat(cc-research): state verbs — verdict, menu, pending, budget, ceiling, reopen",state verbs
+dd4fe7050,2026-10-01T16:19:02-05:00,Wk1,G-plan,5,3,1,False,docs(research-kit): records contract names the cc-research probe verbs and the unknown wait,records contract doc
+686836cb9,2026-10-01T16:13:39-05:00,Wk1,G-plan,282,0,5,False,"feat(research-kit): round, frame-critique and rehearsal workflows over cc-research verbs",round/frame-critique/rehearsal workflows
+97e1fea96,2026-10-01T16:13:39-05:00,Wk1,G-plan,738,4,3,False,feat(cc-research): certification verbs with raters and the responding-model check in code,certification verbs
+a6c2155b7,2026-10-01T16:07:24-05:00,Wk1,G-plan,258,2,9,False,"feat(research-kit): launchd runner, five staged plists and c10 migration 0051",launchd runner
+6756b475b,2026-10-01T16:07:24-05:00,Wk1,G-plan,608,4,3,False,"feat(cc-research): scheduled job passes — sweep, freshness, triage, drift, market",scheduled jobs
+d9b6df940,2026-10-01T16:07:24-05:00,Wk1,G-plan,152,0,9,False,feat(cc-research): verb table skeleton and cross-module contracts for wave C,cc-research verb table
+89937d701,2026-10-01T10:40:52-05:00,Wk1,G-plan,496,13,8,False,feat(research-program): wave C item 13 — handoff-fire --requires-gate over gate.sh requires,handoff-fire --requires-gate
+0fb32f503,2026-10-01T07:34:52-05:00,Wk1,G-plan,1224,0,13,False,"feat(research-program): wave B2 — research-program skill, /research-program, intake script, briefs, rubric","skill, intake, briefs, rubric"
+19ddcc365,2026-10-01T06:01:56-05:00,Wk1,G-plan,2138,1,16,False,"feat(research-program): wave B1 — re-ask router, research block, relay check, c10 migration","router, research block, relay check"
+6adde7e46,2026-10-01T03:46:03-05:00,Wk1,G-plan,657,0,3,False,"feat(research-kit): research index over docs/research, with a staleness check",research index
+92cf72197,2026-10-01T03:46:03-05:00,Wk1,G-plan,2625,15,9,False,"feat(research-kit): the 16-row gate, freeze to certifying, certificate render, due-date sweep and the sealed router held-out set","16-row gate, freeze, certificate"
+b9cdb53c9,2026-10-01T03:46:03-05:00,Wk1,G-plan,1092,5,6,False,"feat(research-kit): round runner with every cap in code, and the estimator ported from the corrected model",round runner + estimator
+23f3f324a,2026-10-01T03:46:02-05:00,Wk1,G-plan,628,2,4,False,"feat(research-kit): courier with vendor preflight, fresh bundles, dead and void slots, integrity grep",courier
+3f5d99b3e,2026-10-01T03:46:02-05:00,Wk1,G-plan,359,0,2,False,feat(research-kit): seeds with required omission operators and an encrypted vault,seeds + vault
+c70bdb50f,2026-10-01T03:46:02-05:00,Wk1,G-plan,438,0,4,False,feat(research-kit): probe runner and environment doctor; a negative control that passes earns no level,"probe runner, doctor"
+a7a827b4f,2026-10-01T03:46:02-05:00,Wk1,G-plan,47,0,1,False,feat(research-kit): sealed-at-rest encryption with a keychain key,sealed-at-rest encryption
+c7ecde16a,2026-10-01T03:46:02-05:00,Wk1,D,23,7,1,False,fix(research-kit): dispatcher imports the per-owner modules; reopen resets the registry,dispatcher import / reopen bug
+5568521dd,2026-10-01T03:46:02-05:00,Wk1,G-plan,25,15,5,False,refactor(research-kit): one gate module per owner,refactor during build-out
+d9f279903,2026-10-01T03:46:02-05:00,Wk1,D,8,1,1,False,fix(research-kit): gate fails any row the modules do not provide,gate passed rows no module provided
+6c412fac1,2026-10-01T03:46:02-05:00,Wk1,G-plan,141,0,3,False,"docs(research-kit): records and interfaces contract; evidence levels, conviction rule and reopen in the shared lib",records contract
+86369a8be,2026-10-01T03:46:02-05:00,Wk1,G-plan,544,1,6,False,"feat(research-kit): shared kit contract, gate dispatcher and registry writer","kit contract, gate dispatcher, registry"

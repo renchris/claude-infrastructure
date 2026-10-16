@@ -1,0 +1,554 @@
+{
+ "apply_at_build": {
+  "distinct": 59,
+  "status": {
+   "done": 9,
+   "open": 50
+  }
+ },
+ "challenges": {
+  "distinct": 74,
+  "triage": {
+   "already-recorded": 2,
+   "generic": 7,
+   "refuted": 65
+  },
+  "void": 65
+ },
+ "changes": {
+  "distinct": 1
+ },
+ "contract_page_renders": [
+  "2026-10-02T04:19:42Z",
+  "2026-10-02T06:05:45Z",
+  "2026-10-02T06:13:02Z",
+  "2026-10-12T17:07:27Z"
+ ],
+ "decisions": {
+  "carried_set": 9,
+  "distinct": 22,
+  "events": 214,
+  "first_ruled_by_week": {
+   "Wk0": 0,
+   "Wk1": 4,
+   "Wk2": 18,
+   "Wk3": 0
+  },
+  "rule_events_total": 28,
+  "ruled_by": {
+   "agent": 3,
+   "operator": 13,
+   "packet-default": 6
+  },
+  "ruled_more_than_once": 6,
+  "status": {
+   "carried": 5,
+   "ruled": 17
+  }
+ },
+ "freezes": [
+  {
+   "at": "2026-10-10T15:51:23Z",
+   "plan_lines": 3554,
+   "snapshot": "c9ed7263a"
+  },
+  {
+   "at": "2026-10-12T08:49:49Z",
+   "plan_lines": 3699,
+   "snapshot": "7609ed722"
+  },
+  {
+   "at": "2026-10-12T19:46:34Z",
+   "plan_lines": 3749,
+   "snapshot": "9593f049e"
+  },
+  {
+   "at": "2026-10-12T21:01:56Z",
+   "plan_lines": 3789,
+   "snapshot": "b47b8bb92"
+  },
+  {
+   "at": "2026-10-12T23:46:20Z",
+   "plan_lines": 3907,
+   "snapshot": "fb93e41a2"
+  },
+  {
+   "at": "2026-10-13T01:27:20Z",
+   "plan_lines": 3921,
+   "snapshot": "006255169"
+  }
+ ],
+ "gate_outputs": [
+  {
+   "failing": [
+    2,
+    4,
+    5,
+    8,
+    9,
+    10,
+    12,
+    13,
+    14,
+    15,
+    17
+   ],
+   "file": "~/Development/.worktrees/tm2-plan/docs/research/truememory-2.0-2026-09-28/stage6-work/gate-w1b-baseline.txt",
+   "filed": 2,
+   "pass": 6,
+   "rows": 19,
+   "when": "2026-10-09T20:25:28-05:00"
+  },
+  {
+   "failing": [
+    4,
+    5,
+    8,
+    9,
+    10,
+    13,
+    14,
+    15,
+    17
+   ],
+   "file": "~/Development/.worktrees/tm2-plan/docs/research/truememory-2.0-2026-09-28/stage6-work/w1-gate-run-1.log",
+   "filed": 2,
+   "pass": 8,
+   "rows": 19,
+   "when": "2026-10-09T21:20:07.339435+00:00"
+  },
+  {
+   "failing": [
+    2,
+    4,
+    5,
+    6,
+    8,
+    9,
+    10,
+    12,
+    13,
+    14,
+    15,
+    17
+   ],
+   "file": "~/Development/.worktrees/tm2-plan/docs/research/truememory-2.0-2026-09-28/stage6-work/gate-w1b-final.txt",
+   "filed": 2,
+   "pass": 5,
+   "rows": 19,
+   "when": "2026-10-09T21:44:16-05:00"
+  },
+  {
+   "failing": [
+    4,
+    5,
+    8,
+    9,
+    10,
+    13,
+    14,
+    15,
+    17
+   ],
+   "file": "~/Development/.worktrees/tm2-plan/docs/research/truememory-2.0-2026-09-28/stage6-work/gate-after-repin.txt",
+   "filed": 2,
+   "pass": 8,
+   "rows": 19,
+   "when": "2026-10-09T22:37:09-05:00"
+  },
+  {
+   "failing": [
+    4,
+    5,
+    8,
+    9,
+    10,
+    13,
+    14,
+    15,
+    17
+   ],
+   "file": "~/Development/.worktrees/tm2-plan/docs/research/truememory-2.0-2026-09-28/stage6-work/gate-w2.txt",
+   "filed": 2,
+   "pass": 8,
+   "rows": 19,
+   "when": "2026-10-09T23:45:24-05:00"
+  },
+  {
+   "failing": [
+    4,
+    5,
+    6,
+    9,
+    10,
+    13,
+    14,
+    15,
+    17
+   ],
+   "file": "~/Development/.worktrees/tm2-plan/docs/research/truememory-2.0-2026-09-28/stage6-work/gate-w3-prefreeze.txt",
+   "filed": 2,
+   "pass": 8,
+   "rows": 19,
+   "when": "2026-10-10T10:51:17-05:00"
+  },
+  {
+   "failing": [
+    4,
+    8,
+    12,
+    15
+   ],
+   "file": "~/Development/claude-private/tm2-plan/tm2-plain-gate-1016c.log",
+   "filed": 3,
+   "pass": 12,
+   "rows": 19,
+   "when": "2026-10-16T11:46:22.034925+00:00"
+  },
+  {
+   "failing": [
+    15
+   ],
+   "file": "~/Development/claude-private/tm2-plan/tm2-cert.log",
+   "filed": 4,
+   "pass": 14,
+   "rows": 19,
+   "when": "2026-10-16T12:55:00.785443+00:00"
+  }
+ ],
+ "holes": {
+  "by_family": {
+   "certification round 1": {
+    "artifact/held re-find": 2,
+    "confirmed material": 54,
+    "holes": 72,
+    "level:MATERIAL": 54,
+    "level:None": 5,
+    "level:REFINEMENT": 13,
+    "real new material": 32,
+    "real new material naming a decision": 21,
+    "seed catches (planted)": 20,
+    "verify:CONFIRMED": 66,
+    "verify:CONTACT": 2,
+    "verify:REFUTED": 4
+   },
+   "certification round 2": {
+    "artifact/held re-find": 7,
+    "confirmed material": 39,
+    "holes": 50,
+    "level:GENERIC": 1,
+    "level:MATERIAL": 39,
+    "level:None": 1,
+    "level:REFINEMENT": 9,
+    "real new material": 13,
+    "real new material naming a decision": 6,
+    "seed catches (planted)": 19,
+    "verify:CONFIRMED": 49,
+    "verify:REFUTED": 1
+   },
+   "certification round 3": {
+    "artifact/held re-find": 9,
+    "confirmed material": 25,
+    "holes": 44,
+    "level:MATERIAL": 25,
+    "level:None": 5,
+    "level:REFINEMENT": 14,
+    "real new material": 11,
+    "real new material naming a decision": 5,
+    "seed catches (planted)": 5,
+    "verify:CONFIRMED": 37,
+    "verify:CONTACT": 2,
+    "verify:REFUTED": 5
+   },
+   "certification round 4": {
+    "artifact/held re-find": 7,
+    "confirmed material": 28,
+    "holes": 47,
+    "level:GENERIC": 1,
+    "level:MATERIAL": 28,
+    "level:None": 2,
+    "level:REFINEMENT": 16,
+    "real new material": 10,
+    "real new material naming a decision": 10,
+    "seed catches (planted)": 11,
+    "verify:CONFIRMED": 41,
+    "verify:CONTACT": 4,
+    "verify:REFUTED": 2
+   },
+   "certification round 5": {
+    "artifact/held re-find": 10,
+    "confirmed material": 24,
+    "holes": 43,
+    "level:GENERIC": 3,
+    "level:MATERIAL": 24,
+    "level:None": 4,
+    "level:REFINEMENT": 12,
+    "real new material": 9,
+    "real new material naming a decision": 5,
+    "seed catches (planted)": 5,
+    "verify:CONFIRMED": 37,
+    "verify:CONTACT": 2,
+    "verify:REFUTED": 4
+   },
+   "certification round 6": {
+    "artifact/held re-find": 12,
+    "confirmed material": 26,
+    "holes": 43,
+    "level:COSMETIC": 1,
+    "level:GENERIC": 2,
+    "level:MATERIAL": 26,
+    "level:None": 2,
+    "level:REFINEMENT": 12,
+    "real new material": 8,
+    "real new material naming a decision": 6,
+    "seed catches (planted)": 6,
+    "verify:CONFIRMED": 40,
+    "verify:CONTACT": 1,
+    "verify:REFUTED": 2
+   },
+   "frame critique (fc1)": {
+    "confirmed material": 22,
+    "disposition:fixed": 24,
+    "disposition:rejected": 3,
+    "holes": 27,
+    "level:MATERIAL": 22,
+    "level:None": 3,
+    "level:REFINEMENT": 2,
+    "real new material": 22,
+    "real new material naming a decision": 7,
+    "verify:CONFIRMED": 24,
+    "verify:REFUTED": 3
+   },
+   "frame critique (fc2)": {
+    "confirmed material": 18,
+    "disposition:fixed": 23,
+    "disposition:rejected": 1,
+    "holes": 24,
+    "level:MATERIAL": 18,
+    "level:None": 1,
+    "level:REFINEMENT": 5,
+    "real new material": 18,
+    "real new material naming a decision": 9,
+    "verify:CONFIRMED": 23,
+    "verify:REFUTED": 1
+   },
+   "plan critique round 24 (replan)": {
+    "confirmed material": 10,
+    "disposition:fixed": 10,
+    "holes": 10,
+    "level:MATERIAL": 10,
+    "real new material": 10,
+    "real new material naming a decision": 7,
+    "verify:CONFIRMED": 10
+   },
+   "plan critique round 25 (replan)": {
+    "confirmed material": 9,
+    "disposition:fixed": 9,
+    "holes": 9,
+    "level:MATERIAL": 9,
+    "real new material": 9,
+    "real new material naming a decision": 4,
+    "verify:CONFIRMED": 9
+   },
+   "plan critique round 26 (replan)": {
+    "confirmed material": 13,
+    "disposition:fixed": 13,
+    "holes": 13,
+    "level:MATERIAL": 13,
+    "real new material": 13,
+    "real new material naming a decision": 6,
+    "verify:CONFIRMED": 13
+   },
+   "plan critique round 27 (replan)": {
+    "confirmed material": 8,
+    "disposition:fixed": 8,
+    "holes": 8,
+    "level:MATERIAL": 8,
+    "real new material": 8,
+    "real new material naming a decision": 4,
+    "verify:CONFIRMED": 8
+   },
+   "plan critique round 28 (replan)": {
+    "confirmed material": 7,
+    "disposition:fixed": 7,
+    "holes": 7,
+    "level:MATERIAL": 7,
+    "real new material": 7,
+    "real new material naming a decision": 3,
+    "verify:CONFIRMED": 7
+   },
+   "plan critique round 29 (replan)": {
+    "confirmed material": 13,
+    "disposition:apply-at-build": 5,
+    "disposition:triaged": 8,
+    "holes": 13,
+    "level:MATERIAL": 13,
+    "real new material": 13,
+    "real new material naming a decision": 6,
+    "verify:CONFIRMED": 13
+   },
+   "rehearsal": {
+    "confirmed material": 3,
+    "holes": 3,
+    "level:MATERIAL": 3,
+    "real new material": 3,
+    "real new material naming a decision": 3,
+    "verify:CONFIRMED": 3
+   },
+   "stage6-W2": {
+    "confirmed material": 4,
+    "disposition:fixed": 16,
+    "holes": 16,
+    "level:MATERIAL": 4,
+    "level:REFINEMENT": 12,
+    "real new material": 4,
+    "verify:CONFIRMED": 16
+   }
+  },
+  "confirmed_material_by_week": {
+   "Wk0": 0,
+   "Wk1": 100,
+   "Wk2": 58,
+   "Wk3": 145
+  },
+  "distinct": 429,
+  "events": 2401,
+  "fixed_dispositions_by_week": {
+   "Wk0": 0,
+   "Wk1": 94,
+   "Wk2": 16,
+   "Wk3": 0
+  },
+  "real_new_material_by_day": {
+   "10-01": 40,
+   "10-03": 60,
+   "10-09": 4,
+   "10-11": 32,
+   "10-12": 51,
+   "10-16": 3
+  },
+  "real_new_material_by_week": {
+   "Wk0": 0,
+   "Wk1": 100,
+   "Wk2": 36,
+   "Wk3": 54
+  },
+  "real_new_material_naming_decision_by_week": {
+   "Wk0": 0,
+   "Wk1": 46,
+   "Wk2": 21,
+   "Wk3": 35
+  }
+ },
+ "known_rows": {
+  "distinct": 30,
+  "kind": {
+   "cap-round": 6,
+   "frame-omission": 21,
+   "rehearsal": 3
+  },
+  "status": {
+   "closed": 5,
+   "open": 25
+  }
+ },
+ "plan_commits": 61,
+ "plan_size_by_day": {
+  "2026-09-29": {
+   "bytes": 402231,
+   "lines": 2975,
+   "sha": "6c7e6adc1"
+  },
+  "2026-09-30": {
+   "bytes": 447084,
+   "lines": 3285,
+   "sha": "56d5a8d1b"
+  },
+  "2026-10-01": {
+   "bytes": 458244,
+   "lines": 3359,
+   "sha": "aafb8d6d0"
+  },
+  "2026-10-02": {
+   "bytes": 469746,
+   "lines": 3407,
+   "sha": "b7c392ec0"
+  },
+  "2026-10-08": {
+   "bytes": 466614,
+   "lines": 3397,
+   "sha": "da2dc6927"
+  },
+  "2026-10-09": {
+   "bytes": 494449,
+   "lines": 3554,
+   "sha": "4aa48a6ee"
+  },
+  "2026-10-12": {
+   "bytes": 539411,
+   "lines": 3921,
+   "sha": "cb9c75af4"
+  }
+ },
+ "premises": {
+  "achieved_level_now": {
+   "E1": 8,
+   "E2": 5,
+   "E3": 41,
+   "E4": 7,
+   "E5": 42,
+   "E6": 8
+  },
+  "at_required_level_now": 87,
+  "below_required_now": 24,
+  "distinct": 111,
+  "events": 880,
+  "first_reached_required_level_by_week": {
+   "Wk0": 0,
+   "Wk1": 73,
+   "Wk2": 20,
+   "Wk3": 9
+  },
+  "refuted": 17,
+  "required_level": {
+   "E2": 21,
+   "E3": 26,
+   "E4": 45,
+   "E5": 9,
+   "E6": 10
+  },
+  "verdict": {
+   "holds": 90,
+   "partial": 4,
+   "refuted": 17
+  }
+ },
+ "probes": {
+  "by_kind": {
+   "dry-run-deploy": 5,
+   "fault-inject": 47,
+   "handed-cmd": 3,
+   "live-read": 701,
+   "measure": 14,
+   "operator-view": 8,
+   "read": 108,
+   "read-through": 20,
+   "reproduce": 44,
+   "skeleton": 5,
+   "spike": 56
+  },
+  "by_week": {
+   "Wk0": 0,
+   "Wk1": 271,
+   "Wk2": 269,
+   "Wk3": 471
+  },
+  "exit0": 751,
+  "total": 1011
+ },
+ "residual": {
+  "distinct": 48,
+  "superseded": 7
+ },
+ "trace_rows": 450
+}

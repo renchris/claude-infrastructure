@@ -1,0 +1,7 @@
+# Local-only outputs of the measurement scripts. k_raw.json holds the FIRST PROMPT of every fleet
+# session since 2026-09-27 (this repo is public); k_census.py regenerates it in ~15 minutes.
+data/k_raw.json
+data/k_accounts_readout.txt
+data/k_census.json
+data/.ruff_cache/
+scripts/__pycache__/
