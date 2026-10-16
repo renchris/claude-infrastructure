@@ -176,7 +176,7 @@ second knew about the rehearsal from Claude Code's own git-status context for tm
 from the kit. `router.ITEM` bars "still open" whatever it describes, and the instruction said only "name no item".
 
 **Cycle 2:** no rule changed. The relay instruction now lists the phrases `ITEM` and `TOKENS` read as an added item
-(330e8dfc6), the same alignment that cleared the opens-no class. Results below.
+(14c951fd7), the same alignment that cleared the opens-no class. Results below.
 
 ## Practice, cycle 2 (live kit at 0f16aedfc, 2026-10-16 10:20–10:22Z, account `next`)
 
@@ -192,7 +192,7 @@ those rows, from the live kit:
 | if more research moves your conviction, do it now | 2 of 2 |
 
 11 of 11 pass: no "still open", no opens-no, no forbidden tool, no completion-assert conviction. Over all 20 practice
-rows, 18 pass; the two failures are cycle 1's, before 330e8dfc6.
+rows, 18 pass; the two failures are cycle 1's, before 14c951fd7.
 
 **What this does and does not show.** The kit defects are fixed and the live relay passed 11 consecutive trials of
 every phrasing. It does not prove a 20-of-20 re-test: 0 failures in 11 bounds the per-trial failure rate only
