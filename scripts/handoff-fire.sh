@@ -16450,6 +16450,16 @@ if [ -n "$NOTIFY_BACK" ] || [ "$SELF_RETIRE_TRAILER" = 1 ] || [ "$ENGAGE_VERIFY"
   # labels a prompt carrying it work-order without calling the classifier (router.py WORK_ORDER_MARKER).
   if [ -n "$REQUIRES_GATE" ]; then
     printf '\n<!-- research work order: --requires-gate %s wave %s (handoff-fire) -->\n' "$REQUIRES_GATE" "${GATE_WAVE:--}" >> "$PF_NB"
+    # Method v1.3 (research REPORT.md §13.2): a real fire of a gated wave starts it, so a filed due
+    # keyed to this wave (`W1+30d`) counts from now. A dry run starts nothing; a refusal here (the
+    # gate moved since the check above) records nothing and says so.
+    if [ -n "$GATE_WAVE" ] && [ "${DRY:-0}" != 1 ]; then
+      if _rg_start="$(bash "${CC_RESEARCH_GATE:-$HF_DIR/research-kit/gate.sh}" requires --program "$REQUIRES_GATE" --wave "$GATE_WAVE" ${GATE_AFTER_SIGNOFF:+"$GATE_AFTER_SIGNOFF"} --start 2>&1)"; then
+        printf '%s\n' "$_rg_start" | grep -v '^CLEAR ' || :
+      else
+        echo "!! --requires-gate $REQUIRES_GATE: wave $GATE_WAVE start NOT recorded, so a due keyed to it stays pending: $_rg_start" >&2
+      fi
+    fi
   fi
   if [ "$RECYCLE_VERIFY" = 1 ]; then
     # Same construction, distinct token namespace so a recycle marker can never be confused with a

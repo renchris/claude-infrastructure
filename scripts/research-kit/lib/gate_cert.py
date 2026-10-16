@@ -21,7 +21,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import kit
 from gate import FILED, Ctx, Row, make_ctx
@@ -464,7 +464,9 @@ def live_state(rec: Path, cert: Dict[str, Any]) -> Dict[str, Any]:
         if c.get("cause") in COUNTED_CAUSES and c.get("status") != "parked" and after(c)
     ]
     res = list(kit.fold(kit.read_jsonl(rec / "residual.jsonl")).values())
-    gone = kit.superseded_residuals(res)  # a refiled filing is history, never a scheduled check
+    gone = kit.superseded_residuals(
+        res
+    )  # a refiled filing is history, never a scheduled check
     res = [r for r in res if r.get("id") not in gone]
     classes: Dict[str, int] = {}
     for r in res:
@@ -477,6 +479,23 @@ def live_state(rec: Path, cert: Dict[str, Any]) -> Dict[str, Any]:
         and (r.get("owner") or r.get("owner_wave"))
         and r.get("due")
     ]
+    # Method v1.3 (REPORT.md §13.2): a keyed due sorts by what it resolved to; one whose event has
+    # not happened is pending and is counted, never compared as text with a date.
+    due_at: List[
+        Tuple[float, str]
+    ] = []  # (when, as printed): a date as filed, an event resolved
+    pending = 0
+    for r in sched:
+        kind, t = kit.resolve_due(r["due"], rec)
+        if t is not None:
+            shown = (
+                str(r["due"])
+                if kind == "date"
+                else time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+            )
+            due_at.append((t, shown))
+        elif kind == "pending":
+            pending += 1
     fresh = [
         str(p["at"])
         for p in kit.fold(kit.read_jsonl(rec / "probes.jsonl")).values()
@@ -492,7 +511,8 @@ def live_state(rec: Path, cert: Dict[str, Any]) -> Dict[str, Any]:
         "residual": classes,
         "scheduled": len(sched),
         "not_yet": sum(1 for r in sched if r.get("why_unreachable") == kit.NOT_YET),
-        "next_due": min((str(r["due"]) for r in sched), default=None),
+        "next_due": min(due_at)[1] if due_at else None,
+        "due_pending": pending,
         "fresh_at": max(fresh, default=None),
         "flipped": sum(
             1
@@ -606,7 +626,18 @@ def lines_for(
         ]
         sched.append(
             f"{' and '.join(kinds)} with "
-            f"{'owner and date' if k == 1 else 'owners and dates'} (next due {live['next_due']})"
+            f"{'owner and date' if k == 1 else 'owners and dates'} ("
+            + "; ".join(
+                x
+                for x in (
+                    f"next due {live['next_due']}" if live.get("next_due") else "",
+                    f"{live['due_pending']} due when the wave or certificate they wait on starts"
+                    if live.get("due_pending")
+                    else "",
+                )
+                if x
+            )
+            + ")"
         )
     if live["fresh_at"]:
         when = time.strftime(

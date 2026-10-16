@@ -193,10 +193,25 @@ CAPS = {
 }
 
 YIELD_STAGES = (3, 5)  # §12.1: contact, and the build-to-learn skeleton
-BUILD_FINDABLE_SHARE = 0.585  # §11: share of after-signoff changes building finds; "share assumed"
-AS_BUILT_KINDS = ("skeleton", "handed-cmd", "dry-run-deploy", "fault-inject")  # §11 instrument 3
-AS_BUILT_ENV = {"path": "/usr/bin:/bin", "interpreter": "/bin/bash", "interpreter_major": "3.2"}
-SOAK_BOUNDARIES = ("hour", "utc-midnight", "local-midnight")  # default; frame.json soak_boundaries
+BUILD_FINDABLE_SHARE = (
+    0.585  # §11: share of after-signoff changes building finds; "share assumed"
+)
+AS_BUILT_KINDS = (
+    "skeleton",
+    "handed-cmd",
+    "dry-run-deploy",
+    "fault-inject",
+)  # §11 instrument 3
+AS_BUILT_ENV = {
+    "path": "/usr/bin:/bin",
+    "interpreter": "/bin/bash",
+    "interpreter_major": "3.2",
+}
+SOAK_BOUNDARIES = (
+    "hour",
+    "utc-midnight",
+    "local-midnight",
+)  # default; frame.json soak_boundaries
 
 
 def method_version(frame: Dict[str, Any]) -> tuple:
@@ -297,8 +312,15 @@ def max_original_seeds(profile_name: str, plan_lines: int) -> int:
 
 # ── 3. the program registry (contract owned by wave A1; gate.sh is its only writer) ────────────
 
-STATES = ("registered", "certifying", "certified", "build-certifying", "build-certified",
-          "implementation-signed", "closed")
+STATES = (
+    "registered",
+    "certifying",
+    "certified",
+    "build-certifying",
+    "build-certified",
+    "implementation-signed",
+    "closed",
+)
 # Method v1.2 (REPORT.md §11): build-certifying is set by `gate.sh built-freeze` after the last build
 # wave, build-certified by `gate.sh built-run`, implementation-signed by `gate.sh built-signed` once
 # the operator has signed the built certificate (cc-signoff research:<slug>/implementation).
@@ -306,7 +328,9 @@ STATES = ("registered", "certifying", "certified", "build-certifying", "build-ce
 ACTIVE_STATES = STATES[:-1]
 BUILD_STATES = ("build-certifying", "build-certified")
 IMPL_SIGNED = "implementation-signed"
-STAGE9_STATES = BUILD_STATES + (IMPL_SIGNED,)  # built records exist; live until `gate.sh close`
+STAGE9_STATES = BUILD_STATES + (
+    IMPL_SIGNED,
+)  # built records exist; live until `gate.sh close`
 _ENTRY_KEYS = ("slug", "aliases", "cwd_roots", "state")
 
 
@@ -597,7 +621,9 @@ def mint_id(path: Path, prefix: str) -> str:
 # heartbeat}. Opt-in: with no lease file nothing is refused. Every writing verb of cc-research,
 # gate.sh, round.sh and seed.py calls lease_check first; the holder's own check is its heartbeat.
 
-LEASE_TTL_S = 1800.0  # a lease whose heartbeat is older than this is stale: anyone may write
+LEASE_TTL_S = (
+    1800.0  # a lease whose heartbeat is older than this is stale: anyone may write
+)
 
 
 def lease_owner() -> str:
@@ -618,7 +644,9 @@ def lease_age(lease: Dict[str, Any]) -> float:
     try:
         return parse_iso(now_iso()) - parse_iso(str(lease["heartbeat"]))
     except (KeyError, ValueError) as e:
-        raise KitError(f"lease has no readable heartbeat ({e}); remove it by hand") from e
+        raise KitError(
+            f"lease has no readable heartbeat ({e}); remove it by hand"
+        ) from e
 
 
 def _lease_held(slug: str, owner: str) -> Optional[Dict[str, Any]]:
@@ -639,7 +667,9 @@ def _lease_refusal(slug: str, lease: Dict[str, Any], owner: str) -> KitError:
 
 
 def _lease_lock(slug: str) -> Any:
-    return mkdir_lock(sealed_dir(slug, create=True) / "lease.lock", "lease", "lease writer")
+    return mkdir_lock(
+        sealed_dir(slug, create=True) / "lease.lock", "lease", "lease writer"
+    )
 
 
 def lease_check(slug: str, owner: Optional[str] = None) -> None:
@@ -695,11 +725,28 @@ def lease_release(slug: str, owner: Optional[str] = None) -> bool:
 #   E0 recall · E1 secondary text · E2 primary read · E3 live read (with expiry)
 #   E4 measurement (>= 5 samples with a load control) · E5 execution in the target env · E6 operator's own look
 
-REQUIRED_LEVEL = {"code": 2, "document": 2, "live-state": 3, "behavior": 4, "target-env": 5,
-                  "operator": 6}
-_PROBE_LEVEL = {"read": 2, "read-through": 2, "live-read": 3, "measure": 4, "spike": 5,
-                "skeleton": 5, "model-check": 5, "fault-inject": 5, "dry-run-deploy": 5,
-                "handed-cmd": 5, "reproduce": 5, "operator-view": 6}
+REQUIRED_LEVEL = {
+    "code": 2,
+    "document": 2,
+    "live-state": 3,
+    "behavior": 4,
+    "target-env": 5,
+    "operator": 6,
+}
+_PROBE_LEVEL = {
+    "read": 2,
+    "read-through": 2,
+    "live-read": 3,
+    "measure": 4,
+    "spike": 5,
+    "skeleton": 5,
+    "model-check": 5,
+    "fault-inject": 5,
+    "dry-run-deploy": 5,
+    "handed-cmd": 5,
+    "reproduce": 5,
+    "operator-view": 6,
+}
 
 
 def probe_level(probe: Dict[str, Any]) -> int:
@@ -711,10 +758,10 @@ def probe_level(probe: Dict[str, Any]) -> int:
     if not nc.get("ran") and not nc.get("reason_if_not_run"):
         return 0
     if nc.get("ran") and not nc.get("reported_refutation"):
-        return 0                      # it ran against known-bad input and still passed: cannot fail
+        return 0  # it ran against known-bad input and still passed: cannot fail
     lvl = _PROBE_LEVEL.get(probe.get("kind", ""), 0)
     if lvl == 4 and (int(probe.get("n") or 0) < 5 or not probe.get("load_control")):
-        return 1                      # a measurement without 5 samples and a load control is anecdote
+        return 1  # a measurement without 5 samples and a load control is anecdote
     return lvl
 
 
@@ -746,7 +793,9 @@ def recheck_why(exit_code: Any, stderr: str) -> str:
     m = RECHECK_CRASH.search(stderr or "")
     if m:
         text = stderr or ""
-        line = text[text.rfind("\n", 0, m.start()) + 1 :].splitlines()[0].strip()  # whole line
+        line = (
+            text[text.rfind("\n", 0, m.start()) + 1 :].splitlines()[0].strip()
+        )  # whole line
         if line.startswith("Traceback"):
             tail = [ln.strip() for ln in (stderr or "").splitlines() if ln.strip()]
             line = tail[-1] if tail else line
@@ -764,13 +813,16 @@ def probe_recheck_verdict(records: Path, probe: Dict[str, Any]) -> Optional[str]
     return recheck_verdict(probe.get("exit"), text)
 
 
-def premise_level(premise: Dict[str, Any], probes: Dict[str, Dict[str, Any]],
-                  now: Optional[float] = None) -> int:
+def premise_level(
+    premise: Dict[str, Any],
+    probes: Dict[str, Dict[str, Any]],
+    now: Optional[float] = None,
+) -> int:
     """Achieved level: the best of its own origin tier and its probes; live reads past ttl_h lapse."""
     now = time.time() if now is None else now
     origin = str((premise.get("origin") or {}).get("tier", "E0"))
     best = int(origin[1:]) if origin[:1] == "E" and origin[1:].isdigit() else 0
-    best = min(best, 1)               # recall and secondary text never close a load-bearing claim
+    best = min(best, 1)  # recall and secondary text never close a load-bearing claim
     ttl = premise.get("ttl_h")
     for pid in premise.get("probes") or []:
         pr = probes.get(pid)
@@ -784,10 +836,16 @@ def premise_level(premise: Dict[str, Any], probes: Dict[str, Dict[str, Any]],
     return best
 
 
-def premise_at_level(premise: Dict[str, Any], probes: Dict[str, Dict[str, Any]],
-                     now: Optional[float] = None) -> bool:
+def premise_at_level(
+    premise: Dict[str, Any],
+    probes: Dict[str, Dict[str, Any]],
+    now: Optional[float] = None,
+) -> bool:
     need = REQUIRED_LEVEL.get(premise.get("truth_lives_in", ""), 99)
-    return premise.get("verdict") == "holds" and premise_level(premise, probes, now) >= need
+    return (
+        premise.get("verdict") == "holds"
+        and premise_level(premise, probes, now) >= need
+    )
 
 
 def carried_set_ok(s: Any) -> bool:
@@ -836,7 +894,11 @@ def not_yet_rows(residual_events: List[Dict[str, Any]]) -> Dict[str, Dict[str, A
     gone = superseded_residuals(rows)
     out: Dict[str, Dict[str, Any]] = {}
     for r in rows:
-        if r.get("why_unreachable") == NOT_YET and r.get("premise") and r["id"] not in gone:
+        if (
+            r.get("why_unreachable") == NOT_YET
+            and r.get("premise")
+            and r["id"] not in gone
+        ):
             out[str(r["premise"])] = r
     return out
 
@@ -852,6 +914,82 @@ def parse_due(s: Any) -> Optional[float]:
         except ValueError:
             continue
     return None
+
+
+# Method v1.3 (REPORT.md §13.2, "exhaust, then proceed"): a filed due may be keyed to an event
+# instead of guessed as a date, `<event>+<N>d`, where the event is a build wave's start (waves.jsonl,
+# written by `gate.sh requires --wave W --start`) or the certificate's issue (`cert`). Until its event
+# happens a keyed due is pending and never past, so a filing need not be re-dated when the program's
+# own waits move its wave.
+DUE_EVENT_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)\+([0-9]{1,4})d$")
+CERT_EVENT = "cert"
+WAVES_LOG = "waves.jsonl"
+
+
+def due_event(s: Any) -> Optional[Tuple[str, int]]:
+    """'W1+30d' -> ('W1', 30); 'cert+7d' -> ('cert', 7); anything else None."""
+    m = DUE_EVENT_RE.match(str(s or ""))
+    return (m.group(1), int(m.group(2))) if m else None
+
+
+def wave_starts(records: Optional[Path]) -> Dict[str, str]:
+    """wave id -> the ISO time it first started (the first `started` event wins)."""
+    out: Dict[str, str] = {}
+    if records is None:
+        return out
+    for r in read_jsonl(Path(records) / WAVES_LOG):
+        if r.get("event") == "started" and r.get("wave") and r.get("at"):
+            out.setdefault(str(r["wave"]), str(r["at"]))
+    return out
+
+
+def cert_issued(records: Optional[Path]) -> Optional[str]:
+    """The first certificate's issue time (ISO), or None: everything else the program needed was
+    ready then, which is the event a `cert+<N>d` due counts from."""
+    if records is None:
+        return None
+    certs = sorted(
+        Path(records).glob("cert/CERT-v*.json"),
+        key=lambda p: int(re.sub(r"\D", "", p.stem) or 0),
+    )
+    for c in certs:
+        issued = (read_json(c, {}) or {}).get("issued")
+        if issued:
+            return str(issued)
+    return None
+
+
+def resolve_due(s: Any, records: Optional[Path]) -> Tuple[str, Optional[float]]:
+    """('date', t) for a date due; ('event', t) for a keyed due whose event happened; ('pending',
+    None) for one whose event has not; ('bad', None) for anything else."""
+    t = parse_due(s)
+    if t is not None:
+        return "date", t
+    ev = due_event(s)
+    if ev is None:
+        return "bad", None
+    at = (
+        cert_issued(records) if ev[0] == CERT_EVENT else wave_starts(records).get(ev[0])
+    )
+    if not at:
+        return "pending", None
+    return "event", parse_iso(at) + ev[1] * 86400.0
+
+
+def due_note(s: Any, records: Optional[Path]) -> str:
+    """How a due reads on a gate line: the date as filed, or the keyed due with its event's state."""
+    ev = due_event(s)
+    if ev is None:
+        return str(s)
+    what = (
+        "no certificate issued" if ev[0] == CERT_EVENT else f"{ev[0]} has not started"
+    )
+    at = (
+        cert_issued(records) if ev[0] == CERT_EVENT else wave_starts(records).get(ev[0])
+    )
+    if not at:
+        return f"{s} (pending: {what})"
+    return f"{s} ({'cert issued' if ev[0] == CERT_EVENT else ev[0] + ' started'} {at})"
 
 
 def not_yet_waves(
@@ -879,8 +1017,12 @@ def not_yet_closed(
     )
 
 
-def conviction(decision: Dict[str, Any], premises: Dict[str, Dict[str, Any]],
-               probes: Dict[str, Dict[str, Any]], now: Optional[float] = None) -> Optional[int]:
+def conviction(
+    decision: Dict[str, Any],
+    premises: Dict[str, Dict[str, Any]],
+    probes: Dict[str, Dict[str, Any]],
+    now: Optional[float] = None,
+) -> Optional[int]:
     """The §3.5 rule, from the decision's stored tally. None = no load-bearing factual premise, so a
     taste or value call the operator rules.
 
@@ -892,10 +1034,15 @@ def conviction(decision: Dict[str, Any], premises: Dict[str, Dict[str, Any]],
     ids = list(tally.get("premises") or decision.get("premises") or [])
     if not ids:
         return None
-    ok = sum(1 for i in ids if i in premises and premise_at_level(premises[i], probes, now))
+    ok = sum(
+        1 for i in ids if i in premises and premise_at_level(premises[i], probes, now)
+    )
     flip = tally.get("flip_probe")
-    flip_negative = bool(flip) and tally.get("flip_result") == "negative" and \
-        probe_level(probes.get(flip, {})) > 0
+    flip_negative = (
+        bool(flip)
+        and tally.get("flip_result") == "negative"
+        and probe_level(probes.get(flip, {})) > 0
+    )
     if ok == len(ids) and flip_negative:
         return 90
     return (89 * ok) // len(ids)
@@ -913,27 +1060,52 @@ def vault_key(item: str, account: str, create: bool = False) -> str:
     """The key for keychain item <item>/<account>; env CC_RESEARCH_VAULT_KEY overrides (tests)."""
     import secrets
     import subprocess
+
     env = os.environ.get("CC_RESEARCH_VAULT_KEY")
     if env:
         return env
-    out = subprocess.run(("/usr/bin/security", "find-generic-password", "-s", item, "-a", account,
-                          "-w"), capture_output=True, text=True)
+    out = subprocess.run(
+        ("/usr/bin/security", "find-generic-password", "-s", item, "-a", account, "-w"),
+        capture_output=True,
+        text=True,
+    )
     if out.returncode == 0 and out.stdout.strip():
         return out.stdout.strip()
     if not create:
-        raise KitError(f"no keychain item {item}/{account}; nothing sealed under it can be read")
+        raise KitError(
+            f"no keychain item {item}/{account}; nothing sealed under it can be read"
+        )
     key = secrets.token_hex(32)
-    add = subprocess.run(("/usr/bin/security", "add-generic-password", "-s", item, "-a", account,
-                          "-w", key), capture_output=True, text=True)
+    add = subprocess.run(
+        (
+            "/usr/bin/security",
+            "add-generic-password",
+            "-s",
+            item,
+            "-a",
+            account,
+            "-w",
+            key,
+        ),
+        capture_output=True,
+        text=True,
+    )
     if add.returncode != 0:
-        raise KitError(f"cannot create keychain item {item}/{account}: {add.stderr.strip()}")
+        raise KitError(
+            f"cannot create keychain item {item}/{account}: {add.stderr.strip()}"
+        )
     return key
 
 
 def encrypt(plaintext: bytes, key: str) -> bytes:
     import subprocess
-    out = subprocess.run((OPENSSL,) + _ENC + ("-pass", "env:CC_KIT_K"), input=plaintext,
-                         capture_output=True, env=dict(os.environ, CC_KIT_K=key))
+
+    out = subprocess.run(
+        (OPENSSL,) + _ENC + ("-pass", "env:CC_KIT_K"),
+        input=plaintext,
+        capture_output=True,
+        env=dict(os.environ, CC_KIT_K=key),
+    )
     if out.returncode != 0:
         raise KitError(f"encrypt failed: {out.stderr.decode(errors='replace').strip()}")
     return out.stdout
@@ -941,8 +1113,13 @@ def encrypt(plaintext: bytes, key: str) -> bytes:
 
 def decrypt(ciphertext: bytes, key: str) -> bytes:
     import subprocess
-    out = subprocess.run((OPENSSL,) + _ENC + ("-d", "-pass", "env:CC_KIT_K"), input=ciphertext,
-                         capture_output=True, env=dict(os.environ, CC_KIT_K=key))
+
+    out = subprocess.run(
+        (OPENSSL,) + _ENC + ("-d", "-pass", "env:CC_KIT_K"),
+        input=ciphertext,
+        capture_output=True,
+        env=dict(os.environ, CC_KIT_K=key),
+    )
     if out.returncode != 0:
         raise KitError("decrypt failed: wrong key or corrupted vault")
     return out.stdout

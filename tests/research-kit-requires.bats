@@ -213,6 +213,42 @@ kr()  { printf '%s\n' "$1" >> "$REC/known_rows.jsonl"; }
   [ "$status" -eq 0 ]
 }
 
+# RED-proof (method v1.3, 2026-10-16): before `--start` existed every call with it exits 2
+# (unrecognized argument) and no store records when a wave began, so a due could only be a date.
+@test "v1.3 requires --start: records a wave's start once, only when the wave is admitted; kit.resolve_due keys a due on it" {
+  run "$G" requires --program demo --wave B3 --start # not certified: refused, nothing recorded
+  [ "$status" -eq 1 ]
+  [ ! -e "$REC/waves.jsonl" ]
+  run "$G" requires --program demo --start
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--start needs --wave"* ]] || { echo "$output"; false; }
+  certify
+  run "$G" requires --program demo --wave B3 --start
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"STARTED demo wave B3 at "* ]] || { echo "$output"; false; }
+  run "$G" requires --program demo --wave B3 --start
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already started at"* ]] || { echo "$output"; false; }
+  [ "$(grep -c '"event": "started"' "$REC/waves.jsonl")" -eq 1 ]
+  # a refused wave starts nothing
+  dec '{"id":"DR-7","status":"open","blocks_waves":["B6"]}'
+  run "$G" requires --program demo --wave B6 --start
+  [ "$status" -eq 1 ]
+  [ "$(grep -c '"wave": "B6"' "$REC/waves.jsonl")" -eq 0 ]
+  # resolution: a started wave resolves, an unstarted one is pending, cert+N waits for an issue date
+  out="$(/usr/bin/env python3 -c "
+import sys; sys.path.insert(0, '$REPO/scripts/research-kit/lib'); import kit
+r = '$REC'
+print(kit.resolve_due('B3+2d', r)[0], kit.resolve_due('B9+2d', r)[0], kit.resolve_due('cert+7d', r)[0],
+      kit.resolve_due('2099-01-01', r)[0], kit.resolve_due('soon', r)[0])")"
+  [ "$out" = "event pending pending date bad" ] || { echo "$out"; false; }
+  /usr/bin/python3 -c "import json; p='$REC/cert/CERT-v1.json'; d=json.load(open(p)); d['issued']='2026-01-01T00:00:00Z'; json.dump(d, open(p, 'w'))"
+  out="$(/usr/bin/env python3 -c "
+import sys, time; sys.path.insert(0, '$REPO/scripts/research-kit/lib'); import kit
+k, t = kit.resolve_due('cert+7d', '$REC'); print(k, time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(t)))")"
+  [ "$out" = "event 2026-01-08T00:00:00Z" ] || { echo "$out"; false; }
+}
+
 @test "without --wave there is no closure to scope to, so a block on ANY wave refuses (fail closed)" {
   certify
   dec '{"id":"DR-9","status":"carried","packet":{"id":"p","class":"C","due":"2099-01-01T00:00:00Z"},"blocks_waves":["B2"]}'

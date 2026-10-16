@@ -62,7 +62,9 @@ def _cert_no(p: Any) -> int:
     return int(m.group(1)) if m else -1
 
 
-def blockers(slug: str, wave: Optional[str], after_signoff: bool = False) -> Dict[str, Any]:
+def blockers(
+    slug: str, wave: Optional[str], after_signoff: bool = False
+) -> Dict[str, Any]:
     """{"cert": id|None, "reasons": [str]} — empty reasons means the wave may fire."""
     import gate
     from gate_rows_a import known_rows
@@ -86,8 +88,8 @@ def blockers(slug: str, wave: Optional[str], after_signoff: bool = False) -> Dic
         elif after_signoff and state != kit.IMPL_SIGNED:
             reasons.append(
                 f"this wave follows implementation signoff and the registry state is {state!r}: {why}"
-                if not ok else
-                f"this wave follows implementation signoff and the registry state is {state!r}: "
+                if not ok
+                else f"this wave follows implementation signoff and the registry state is {state!r}: "
                 f"run gate.sh built-signed --program {slug}"
             )
     ctx = gate.make_ctx(slug)
@@ -110,10 +112,14 @@ def blockers(slug: str, wave: Optional[str], after_signoff: bool = False) -> Dic
     for d in kit.fold(ctx.jsonl("decisions.jsonl")).values():
         did = d.get("id")
         if wave is not None and wave in (d.get("descoped_waves") or []):
-            reasons.append(f"{did}: descoped wave {wave} (the sweep converted it; it does not build)")
+            reasons.append(
+                f"{did}: descoped wave {wave} (the sweep converted it; it does not build)"
+            )
             continue
         st = d.get("status")
-        if st not in BLOCKING_DECISION_STATES or not _names(wave, d.get("blocks_waves")):
+        if st not in BLOCKING_DECISION_STATES or not _names(
+            wave, d.get("blocks_waves")
+        ):
             continue
         pk = d.get("packet") or {}
         npb = (d.get("set") or {}).get("narrowing_probe") or {}
@@ -137,9 +143,13 @@ def blockers(slug: str, wave: Optional[str], after_signoff: bool = False) -> Dic
     for kr in known_rows(ctx):
         kid = kr.get("id")
         if wave is not None and wave in (kr.get("descoped_waves") or []):
-            reasons.append(f"{kid}: descoped wave {wave} (closed by its default; it does not build)")
+            reasons.append(
+                f"{kid}: descoped wave {wave} (closed by its default; it does not build)"
+            )
             continue
-        if kr.get("status", "open") != "open" or not _names(wave, kr.get("blocks_waves")):
+        if kr.get("status", "open") != "open" or not _names(
+            wave, kr.get("blocks_waves")
+        ):
             continue
         reasons.append(
             f"{kid}: open {kr.get('kind') or 'known'} row (rows {', '.join(kr.get('names_rows') or []) or '-'}) "
@@ -185,18 +195,55 @@ def blockers(slug: str, wave: Optional[str], after_signoff: bool = False) -> Dic
     return {"cert": cert.get("cert"), "reasons": reasons}
 
 
+def record_start(slug: str, wave: str, cert: Optional[str]) -> str:
+    """Method v1.3 (REPORT.md §13.2): the first admitted `--start` of a wave appends one `started` row
+    to waves.jsonl, the event a due keyed `<wave>+<N>d` resolves from. A later one records nothing."""
+    import gate
+
+    rec = gate.make_ctx(slug).records
+    at = kit.wave_starts(rec).get(wave)
+    if at:
+        return f"wave {wave} already started at {at}"
+    now = kit.now_iso()
+    kit.append_jsonl(
+        rec / kit.WAVES_LOG, {"wave": wave, "event": "started", "at": now, "cert": cert}
+    )
+    return f"STARTED {slug} wave {wave} at {now}"
+
+
 def cmd_requires(a: Any) -> int:
     kit.check_slug(a.program)
     if a.wave is not None and not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*$", a.wave):
         raise kit.KitError(f"bad wave id {a.wave!r}")
+    if a.start and a.wave is None:
+        raise kit.KitError(
+            "--start needs --wave: a start is recorded for one admitted wave"
+        )
     r = blockers(a.program, a.wave, a.after_signoff)
     ok = not r["reasons"]
+    if ok and a.start:
+        started = record_start(a.program, a.wave, r["cert"])
+        if a.json:
+            r = dict(r, started=started)
+        else:
+            print(started)
     if a.json:
-        print(json.dumps(dict(r, program=a.program, wave=a.wave, verdict="clear" if ok else "refused")))
+        print(
+            json.dumps(
+                dict(
+                    r,
+                    program=a.program,
+                    wave=a.wave,
+                    verdict="clear" if ok else "refused",
+                )
+            )
+        )
     else:
         where = f"wave {a.wave}" if a.wave else "every wave"
         if ok:
-            print(f"CLEAR {a.program} {where}: {r['cert']} carries nothing that blocks it")
+            print(
+                f"CLEAR {a.program} {where}: {r['cert']} carries nothing that blocks it"
+            )
         else:
             print(f"REFUSED {a.program} {where}:")
             for x in r["reasons"]:
@@ -209,5 +256,10 @@ def add_verbs(sub: Any) -> None:
     p.add_argument("--program", required=True)
     p.add_argument("--wave")
     p.add_argument("--after-signoff", action="store_true")
+    p.add_argument(
+        "--start",
+        action="store_true",
+        help="record the wave's start when it is admitted (method v1.3: keyed dues count from it)",
+    )
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_requires)

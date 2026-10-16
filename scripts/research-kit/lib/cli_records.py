@@ -463,8 +463,11 @@ def premise_file(a: argparse.Namespace) -> int:
     pr = folded(r, "probes.jsonl")
     if kit.premise_at_level(premise, pr):
         raise kit.KitError(f"{a.id} is already at its required level; nothing to file")
-    if kit.parse_due(a.due) is None:
-        raise kit.KitError(f"--due {a.due!r} is not ISO-8601 UTC or YYYY-MM-DD")
+    if kit.parse_due(a.due) is None and kit.due_event(a.due) is None:
+        raise kit.KitError(
+            f"--due {a.due!r} is not ISO-8601 UTC or YYYY-MM-DD, nor an event due "
+            "<wave>+<N>d or cert+<N>d (method v1.3)"
+        )
     residual = kit.read_jsonl(r / "residual.jsonl")
     old = kit.not_yet_rows(residual).get(a.id)
     if old is not None and not a.refile:
@@ -502,7 +505,12 @@ def premise_file(a: argparse.Namespace) -> int:
     ctx = gate.make_ctx(a.program)
     decisions = kit.fold(ctx.jsonl("decisions.jsonl"))
     problems = not_yet_problems(
-        premise, row, decisions, descoped_waves(ctx, decisions), kit.parse_iso(kit.now_iso())
+        premise,
+        row,
+        decisions,
+        descoped_waves(ctx, decisions),
+        kit.parse_iso(kit.now_iso()),
+        r,
     )
     if problems:
         raise kit.KitError(
@@ -523,7 +531,8 @@ def premise_file(a: argparse.Namespace) -> int:
     waves = kit.not_yet_waves(row, premise, decisions)
     verb, sup = ("refiled", f", superseding {old['id']}") if old else ("filed", "")
     print(
-        f"{row['id']}: {verb} {a.id} not-yet-true until {a.owner_wave} ({a.awaits}), due {a.due}"
+        f"{row['id']}: {verb} {a.id} not-yet-true until {a.owner_wave} ({a.awaits}), "
+        f"due {kit.due_note(a.due, r)}"
         f"{sup}; waves {', '.join(waves)} wait for {a.closing_probe} to join it"
     )
     return 0

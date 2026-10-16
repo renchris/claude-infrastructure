@@ -14,6 +14,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
@@ -300,9 +301,11 @@ def not_yet_problems(
     decisions: Dict[str, Dict[str, Any]],
     descoped: Set[str],
     now: float,
+    records: Optional[Path] = None,
 ) -> List[str]:
     """Why a not-yet-true filing does not carry its below-level premise, or [] when it does (decision
-    55e7da1e7311). One implementation for gate row 4 and `cc-research premise file`."""
+    55e7da1e7311). One implementation for gate row 4 and `cc-research premise file`. `records` is
+    the program's records dir, which a due keyed to an event (method v1.3) resolves against."""
     import cli_jobs
 
     out: List[str] = []
@@ -323,9 +326,34 @@ def not_yet_problems(
     ]
     if miss:
         out.append(f"the filing is missing {', '.join(miss)}")
-    due = kit.parse_due(row.get("due"))
-    if row.get("due") and (due is None or due <= now):
+    kind, due = kit.resolve_due(row.get("due"), records)
+    if row.get("due") and (kind == "bad" or (kind == "date" and due <= now)):
         out.append(f"due {row.get('due')!r} is unparseable or already past")
+    elif kind == "event" and due is not None and due <= now:
+        ev_, at_ = kit.due_event(row.get("due")), None
+        if ev_ is not None:
+            at_ = (
+                kit.cert_issued(records)
+                if ev_[0] == kit.CERT_EVENT
+                else kit.wave_starts(records).get(ev_[0])
+            )
+        what = (
+            "cert issued"
+            if ev_ and ev_[0] == kit.CERT_EVENT
+            else f"{ev_[0] if ev_ else '?'} started"
+        )
+        out.append(
+            f"due {row.get('due')!r} ({what} {at_}) resolved to "
+            f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(due))}, already past"
+        )
+    ev = kit.due_event(row.get("due"))
+    if ev and ev[0] != kit.CERT_EVENT:
+        named = {row.get("owner_wave")} | set(kit.not_yet_waves(row, p, decisions))
+        if ev[0] not in named:
+            out.append(
+                f"due {row.get('due')!r} is keyed to {ev[0]}, a wave this filing does not name; "
+                "key it to its owner wave, a wave resting on it, or cert"
+            )
     rc = str(p.get("recheck_cmd") or "")
     if not rc.strip() or cli_jobs.PROSE_RE.match(rc):
         out.append("its recheck_cmd is missing or a prose note, not a command")
@@ -365,11 +393,13 @@ def not_yet_problems(
     return out
 
 
-def not_yet_line(p: Dict[str, Any], row: Dict[str, Any], need: Any) -> str:
+def not_yet_line(
+    p: Dict[str, Any], row: Dict[str, Any], need: Any, records: Optional[Path] = None
+) -> str:
     return (
         f"{p['id']}: at E{need[0]}, needs E{need[1]}; not yet true until {row.get('owner_wave')} "
-        f"({row.get('awaits')}), owner {row.get('owner')}, due {row.get('due')}, closing probe "
-        f"{row.get('closing_probe')}"
+        f"({row.get('awaits')}), owner {row.get('owner')}, due {kit.due_note(row.get('due'), records)}, "
+        f"closing probe {row.get('closing_probe')}"
     )
 
 
@@ -401,12 +431,12 @@ def row4(ctx: Ctx) -> Row:
             )
             row_ = nyt.get(p["id"])
             why = (
-                not_yet_problems(p, row_, decisions, descoped, now)
+                not_yet_problems(p, row_, decisions, descoped, now, ctx.records)
                 if row_
                 else ["not filed"]
             )
             if not why:
-                filed.append(not_yet_line(p, row_, need))
+                filed.append(not_yet_line(p, row_, need, ctx.records))
             else:
                 if row_:
                     fails += [f"{p['id']}: filed not-yet-true, but {w}" for w in why]

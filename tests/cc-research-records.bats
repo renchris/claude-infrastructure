@@ -390,6 +390,35 @@ pfile_refused() {
   rowtext 4 | grep -q "due 2099-07-01, closing probe P-10"
 }
 
+# RED-proof (method v1.3, 2026-10-16): before event-keyed dues existed `--due B3+30d` is refused as
+# "not ISO-8601 UTC or YYYY-MM-DD", so a filing could only carry a calendar guess, and the six
+# truememory-2-0 filings had to be re-dated the day the certificate's own wait moved their wave.
+@test "v1.3 premise file --due <wave>+<N>d: pending until the wave starts, then due from its start; keyed only to a wave the filing names or cert" {
+  printf '%s\n' '{"id":"PR-2","truth_lives_in":"target-env","verdict":"partial","probes":[],"load_bearing_for":["DR-2"],"recheck_cmd":"true"}' >> "$REC/premises.jsonl"
+  printf '%s\n' '{"id":"DR-2","status":"ruled","ruled_by":"operator","blocks_waves":["B4"]}' >> "$REC/decisions.jsonl"
+  pfile_refused "is not ISO-8601 UTC or YYYY-MM-DD" --id PR-2 --due "B3+30"
+  pfile_refused "a wave this filing does not name" --id PR-2 --due "B9+30d"
+  run pfile --id PR-2 --due "B3+30d"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"due B3+30d"* ]] || { echo "$output"; false; }
+  [ "$(fold residual.jsonl R-NYT-PR-2 due)" = '"B3+30d"' ]
+  [ "$(rowstat 4)" = "FILED" ]
+  rowtext 4 | grep -q "due B3+30d (pending: B3 has not started), closing probe P-9"
+  # the owner wave started 40 days ago: the keyed due resolved 10 days ago, so row 4 fails it
+  printf '%s\n' '{"wave":"B3","event":"started","at":"2020-01-01T00:00:00Z"}' > "$REC/waves.jsonl"
+  [ "$(rowstat 4)" = "FAIL" ]
+  rowtext 4 | grep -q "PR-2: filed not-yet-true, but due 'B3+30d' (B3 started 2020-01-01T00:00:00Z) resolved to 2020-01-31T00:00:00Z, already past"
+  # a start inside the window: FILED again, and the line names the resolved date
+  start="$(/usr/bin/python3 -c "import time; print(time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() - 5 * 86400)))")"
+  printf '%s\n' "{\"wave\":\"B3\",\"event\":\"started\",\"at\":\"$start\"}" > "$REC/waves.jsonl"
+  [ "$(rowstat 4)" = "FILED" ]
+  rowtext 4 | grep -q "due B3+30d (B3 started $start)"
+  # cert+<N>d keys on the certificate's issue: pending while no certificate exists
+  run pfile --id PR-2 --refile --due "cert+14d" --why "keyed to the certificate"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  rowtext 4 | grep -q "due cert+14d (pending: no certificate issued)"
+}
+
 @test "decision: no --conviction flag exists; rule is refused below 90 naming the packet route, accepted at 90; show prints the derived value" {
   run "$CR" decision add --program demo --id DR-2 --question "q" --option do-nothing --option use-what-exists --option x
   [ "$status" -eq 0 ]
