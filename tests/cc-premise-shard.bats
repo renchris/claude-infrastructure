@@ -310,6 +310,9 @@ probed_ids() {
   # filesystem answers the question the report cannot (memory: claimed-outcome-vs-checked-outcome).
   probe_row "touches a file" "touch '$BATS_TEST_TMPDIR/ran-a'; exit 1" >/dev/null
   probe_row "touches another" "touch '$BATS_TEST_TMPDIR/ran-b'; exit 1" >/dev/null
+  # `add` RUNS each probe once at filing (its exit-0 screen), so the marks from filing are cleared:
+  # this test counts only what the SWEEP executed.
+  rm -f "$BATS_TEST_TMPDIR/ran-a" "$BATS_TEST_TMPDIR/ran-b"
   python3 "$CP" sweep --limit 1 --json >/dev/null
   local n=0
   [ -f "$BATS_TEST_TMPDIR/ran-a" ] && n=$((n + 1))

@@ -1101,7 +1101,7 @@ SH
   export CC_PREMISE_READINGS_REQUIRED=1
   # One row carrying a probe that PASSES, so the pass has something real to record and retire.
   local id; id="$("$CC_BACKLOG_BIN" add --title "w1 currency fixture" --project probe \
-                    --source test --falsifier "true")"
+                    --source test --falsifier "true" --force-falsifier)"
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   [ "$status" -eq 0 ]
   grep -q '"premise_pass_rc":"0"' "$CC_IDL"
@@ -1154,7 +1154,7 @@ SH
   : > "$CC_IDL"; rm -f "$CC_PREMISE_PASS_STAMP"
   unset CC_PREMISE_BACKLOG_BIN
   "$CC_BACKLOG_BIN" add --title "c4 fail-open control" --project probe --source test \
-    --falsifier "true" >/dev/null
+    --falsifier "true" --force-falsifier >/dev/null
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   grep -q '"premise_pass_note":"ok"' "$CC_IDL"
 }
@@ -1167,7 +1167,7 @@ SH
   export CC_PREMISE_PASS_EVERY_S=99999
   export CC_PREMISE_REPO="$REPO"
   local id; id="$("$CC_BACKLOG_BIN" add --title "w1 gate fixture" --project probe --source test \
-    --falsifier "true")"
+    --falsifier "true" --force-falsifier)"
   : > "$CC_PREMISE_PASS_STAMP"                          # a pass just ran
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   [ "$status" -eq 0 ]

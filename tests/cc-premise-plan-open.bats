@@ -53,7 +53,7 @@ teardown() { rm -rf "$TMP"; }
 # real record shape (id = hash of project+title+source) rather than a hand-written approximation.
 add() {
   "$BACKLOG_BIN" add --project p --title "$1" --source "$2" \
-    ${3:+--dod-ref "$3"} ${4:+--falsifier "$4"} 2>/dev/null
+    ${3:+--dod-ref "$3"} ${4:+--falsifier "$4" --force-falsifier} 2>/dev/null
 }
 
 # plan <name> <status> [extra heading lines…] → prints the path
