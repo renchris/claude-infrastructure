@@ -29,32 +29,67 @@ from pathlib import Path
 from typing import List, Optional
 
 HERE = Path(__file__).resolve().parent
-for p in (HERE, HERE.parents[1] / "lib", HERE.parent):  # kit libs · scripts/lib · kit scripts
+for p in (
+    HERE,
+    HERE.parents[1] / "lib",
+    HERE.parent,
+):  # kit libs · scripts/lib · kit scripts
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
 import kit  # noqa: E402
 
-MODULES = ("cli_core", "cli_records", "cli_probe", "cli_cert", "cli_jobs",
-           "cli_refclass", "lease", "cli_built", "cli_yield")
+MODULES = (
+    "cli_core",
+    "cli_records",
+    "cli_probe",
+    "cli_cert",
+    "cli_jobs",
+    "cli_refclass",
+    "lease",
+    "cli_built",
+    "cli_yield",
+    "scheduled_read",
+)
 
 # Verbs (or "verb sub-verb") that never check the program lease: they only read, or, for gate,
 # lease and job, the callee checks for itself or must run whoever holds it (the scheduled passes
 # fire deadlines and mint ids under the kit's lock). Every other verb naming a program writes.
 LEASE_EXEMPT = {
-    "verdict", "pending", "doctor", "lint", "trace", "forecast", "menu", "ceiling", "slots",
-    "check-round", "index", "estimate", "decision show", "concern list",
-    "reference-class show", "reference-class check", "gate", "lease", "job",
-    "yield show", "built show", "built signoff",
+    "verdict",
+    "pending",
+    "doctor",
+    "lint",
+    "trace",
+    "forecast",
+    "menu",
+    "ceiling",
+    "slots",
+    "check-round",
+    "index",
+    "estimate",
+    "decision show",
+    "concern list",
+    "reference-class show",
+    "reference-class check",
+    "gate",
+    "lease",
+    "job",
+    "yield show",
+    "built show",
+    "built signoff",
     # rehearse frames reads; rehearse trial writes only its own evidence file, and 20 trials under
     # the lease would hold the scheduled writers off for an hour. rehearse record takes the lease.
-    "rehearse frames", "rehearse trial",
+    "rehearse frames",
+    "rehearse trial",
 }
 
 
 def lease_target(a: argparse.Namespace) -> Optional[str]:
     """The program a writing verb names, or None (a read verb, or no program named)."""
-    sub = next((str(v) for k, v in sorted(vars(a).items()) if k.endswith("_verb") and v), "")
+    sub = next(
+        (str(v) for k, v in sorted(vars(a).items()) if k.endswith("_verb") and v), ""
+    )
     if a.verb in LEASE_EXEMPT or f"{a.verb} {sub}" in LEASE_EXEMPT:
         return None
     if a.verb == "budget" and not getattr(a, "action", None):

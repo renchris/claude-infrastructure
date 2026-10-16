@@ -650,6 +650,11 @@ def lines_for(
         )
     if sched:
         out.append("Scheduled checks: " + " · ".join(sched))
+    import scheduled_read  # method v1.3 (REPORT.md §13.1): row 15 filed as a scheduled read
+
+    sr = scheduled_read.render_line(kit.records_dir(cert["program"]))
+    if sr:
+        out.append(sr)
     cal = live["calibration"]
     fp = cert["fingerprint"]
     out += [

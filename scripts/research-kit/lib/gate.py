@@ -287,10 +287,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     gate_sweep.add_verbs(sub)  # sweep, file-packet
     gate_requires.add_verbs(sub)  # requires
     gate_built.add_verbs(sub)  # built-freeze, built-run (REPORT.md §11)
+    import scheduled_read
+
+    scheduled_read.add_gate_verbs(sub)  # read (method v1.3, REPORT.md §13.1)
 
     a = ap.parse_args(argv)
     try:
-        if a.verb not in ("render", "requires"):  # every other gate verb writes
+        practice = a.verb == "read" and getattr(a, "practice", False)  # writes nothing
+        if (
+            a.verb not in ("render", "requires") and not practice
+        ):  # every other gate verb writes
             kit.lease_check(kit.check_slug(a.program))
         return int(a.fn(a))
     except kit.KitError as e:

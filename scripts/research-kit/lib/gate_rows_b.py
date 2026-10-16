@@ -479,7 +479,14 @@ def row15(ctx: Ctx) -> Row:
     heldout.evaluate refuses the rest before it decrypts anything or writes the reads ledger."""
     import gate
     import heldout
+    import scheduled_read
 
+    # Method v1.3 (REPORT.md §13.1): a stratum awaiting a fresh set is not in grasp, so a filed
+    # scheduled read carries the row FILED and the certificate issues; the read is spent later by
+    # `gate.sh read`, under the same evaluate call and guards.
+    filed = scheduled_read.row15_filed(ctx)
+    if filed is not None:
+        return filed
     if ctx.prior is None:
         return Row(
             15,

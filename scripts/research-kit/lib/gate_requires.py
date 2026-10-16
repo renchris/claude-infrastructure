@@ -188,6 +188,12 @@ def blockers(
                     f"{', '.join(todo)} before {', '.join(ws)} fire"
                 )
 
+    # Method v1.3 (REPORT.md §13.1): row 15 filed as a scheduled read holds only the waves its
+    # filing names, until the read passes; a FAIL keeps them held.
+    import scheduled_read
+
+    reasons += scheduled_read.blocks(ctx.records, wave)
+
     if wave is None and reasons:
         reasons.append(
             "no --wave given, so every block counts: pass the wave id to scope to its closure"
