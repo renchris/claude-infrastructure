@@ -1,6 +1,7 @@
 # kitty crash 2026-10-15 00:01:27 — root-cause investigation
 
 Status: investigation complete (workflow `wf_496e7f13-644`, 6 angles + synthesis + adversarial skeptic); fix NOT yet implemented.
+Status (2026-10-16): both kitty defects reported upstream (kovidgoyal/kitty#10671, #10672); the staged patched build now leaves fullscreen before every destroy (14/14 patched, 8/8 unpatched control closed in fullscreen) and fixes `action --match`; swap armed for the next capacity-alarm reboot — see § "Kitty patch and upstream reports".
 Status (2026-10-15, phase 2): the guard and every caller landed at `fb3edd4ff` and are live (converged; `~/.claude/bin/kitty-fullscreen-guard` linked); post-land repro (10:37, unlocked screen) 21 trials, 0 crashed, every trial left fullscreen before close — see § "Phase 2 landed".
 Status (2026-10-15, phase 1): precondition reproduced (32/32 unguarded fullscreen destroys close the window while still in fullscreen; the segfault itself 0/32); fix chosen and corrected by a 4-lens adversarial review — see § "Repro and chosen fix" at the end. Phase 2 implements it.
 Evidence copies (outside the repo, survive the /tmp boot wipe): `~/.claude/autonomy/incidents/kitty-crash-2026-10-15/`
@@ -475,3 +476,77 @@ Refocus (landed menu, real osascript, 03:34): from a process reparented to launc
 - `lead-crash-watchdog.sh`: a deliberate ⌘Q / kitty restart HUPs every pane at once and reads `terminal-died`; any `kitty-*.ips` within 6 min corroborates, including a throwaway repro kitty's.
 - `scripts/handoff-fire.sh` `hf_close_pane` discards it2's stderr, so a deliberate fullscreen refusal looks like a transient failure to its retry loop.
 - The converge's `install.sh` pass did not create the new `bin/kitty-fullscreen-guard` link (it silences `kitty-setup.sh`); running `scripts/kitty-setup.sh` from the canonical tree did. A brand-new `bin/kitty-*` file needs that until the install pass is fixed.
+
+# Kitty patch and upstream reports (2026-10-16)
+
+**Result.** Both kitty defects are reported upstream, the staged patched build now carries a fix for both, and its swap is armed for the next capacity-alarm reboot. This carries out the operator's 2026-10-16 rulings: decision `a41897063971` ("Report both and patch the staged build") and decision `0a8ffe58562a` ("patched"). Standing authorization for the reports: memory `feedback-file-upstream-bug-reports-proactively`. Patched, every destroy path left fullscreen before the window closed: 14 of 14 trials, 0 crashes. The unpatched control closed in fullscreen 8 of 8 times. The live kitty (pid 44163) and `/Applications/kitty.app` were not touched.
+
+## Upstream reports
+
+- **Bug 1 (fullscreen destroy):** [kovidgoyal/kitty#10671](https://github.com/kovidgoyal/kitty/issues/10671), a new issue. The searches (issues, plus discussions over GraphQL) found only #1761, a 2019 crash after closing the last fullscreen window with a different stack and no fix. The report carries the crash stack from the `.ips` and a `--config NONE` repro. That repro was run verbatim against the unpatched and patched builds before posting (`finishing close` +20 ms before the toolbar teardown unpatched, 0.9 s after it patched).
+- **Bug 2 (`action --match`):** [kovidgoyal/kitty#10672](https://github.com/kovidgoyal/kitty/issues/10672), a new issue citing #7438. #7438 (closed 2024-05-17) reported the same symptom. Its fix, `eb2221b`, routed actions through `window_for_dispatch`, but the key mismatch has been there since `action` was added (2024-02-10) and is still on master. So `window_for_dispatch` is always the active window, and a new report is clearer than a comment on a closed issue. Verified on 0.48.2 before posting: `--match id:1` retitled the active window 2, and `--match id:999` did too, at rc 0.
+- Scrubbed before posting: no local paths, session titles, account or client names. No pull request was opened.
+
+## The patch
+
+`docs/patches/kitty-fullscreen-destroy-v0.48.2.patch` is the third patch `scripts/kitty-build-swap.sh build --no-band` applies, after the upstream-defects and talk-thread patches. All three apply cleanly to pristine v0.48.2, checked with `git apply --cached --check` against a scratch index.
+
+- **`glfw/cocoa_window.m` `_glfwPlatformDestroyWindow`:** when the window is in native fullscreen or mid-transition, it tears down the GLFW side as before, but does not order the NSWindow out or close it. A new `GLFWDeferredClose` delegate takes it over:
+  - it retains the window, gives it a plain content view and makes it ignore the mouse;
+  - it leaves fullscreen through `-[GLFWWindow leaveFullScreenDetached]`, which calls super's `toggleFullScreen:`, because the override dereferences the now-NULL `glfw_window`;
+  - it closes the window 0.3 s after `windowDidExitFullScreen:`, never inside the callback, or at once on a failed enter or exit;
+  - a 5 s timeout starts the exit itself once, then closes.
+
+  `canBecomeMainWindow` gains the NULL check that `canBecomeKeyWindow` already had. Traditional fullscreen is unchanged.
+- **`kitty/rc/action.py`:** a one-line change re-keys the payload, so `windows_for_match_payload` sees the client's `match_window` as `match`. With no match, the action still defaults to the active window. Patched: `--match id:1` retitles window 1, and `--match id:999` fails with "No matching windows" at rc 1.
+- **Build:** `~/ktb-noband`, the tree the 2026-10-04 restage (`35979ed78`) moved to. The band build in `~/ktb` was set aside then and does not carry this patch. Built with `make app` per `docs/research/kitty-build-recipe-2026-09-16.md`, without `./autoformat`. A local format hook rewrote all of `action.py` on edit, and the file was restored so the patch stays one line.
+- **`kitty-build-swap.sh`:**
+  - `status` tags a bundle `+fullscreen-fix` when its `glfw-cocoa.so` has the class;
+  - `build --no-band` calls a build without it `BUILD-UNVERIFIED`;
+  - `arm` refuses a staged bundle without it, because the adoption chosen is of the build that carries the fix. `tests/kitty-build-swap.bats` pins all three.
+
+## Proof against a throwaway kitty
+
+Harness: [`repro/patched-build.sh`](repro/patched-build.sh) `<kitty.app> [reps]` drives `repro/run.sh` with no guard in front, so it exercises kitty's own destroy path. `run.sh` gained a `KCR_KITTY` binary override and a `closeos` action, which runs `close_os_window` on A via `--self` and is the red button's path. There is no `close-os-window` rc command; the first control row hit that error, and the cell was re-run with `--self`. Each run used its own `--listen-on` socket under `~/Development/.worktrees/kitty-repro`. Load averaged 457–518 throughout.
+
+Control, the previously staged unpatched build (00:33–00:37):
+
+| Cell (action/ctx/delay/post/panes) | Trials | Crashed | A fullscreen before | Close order of A |
+|---|---|---|---|---|
+| move/idle | 1 | 0 | 1 | CLOSED-IN-FULLSCREEN +21 |
+| close/idle | 1 | 0 | 1 | CLOSED-IN-FULLSCREEN +21 |
+| exit/idle | 1 | 0 | 1 | CLOSED-IN-FULLSCREEN +22 |
+| closeos/idle | 1 | 0 | 1 | CLOSED-IN-FULLSCREEN +19 |
+| move/helper/0/menu | 1 | 0 | 1 | CLOSED-IN-FULLSCREEN +21 |
+| close/autofs/200 | 1 | 0 | auto | CLOSED-IN-FULLSCREEN +24 |
+| exit/autofs/700 | 1 | 0 | auto | CLOSED-IN-FULLSCREEN +22 |
+
+Patched build `~/ktb-noband/kitty.app` (00:38–00:43):
+
+| Cell (action/ctx/delay/post/panes) | Trials | Crashed | A fullscreen before | Close order of A |
+|---|---|---|---|---|
+| move/idle | 2 | 0 | 1,1 | LEFT-FULLSCREEN-FIRST −903; −901 ms |
+| close/idle | 2 | 0 | 1,1 | LEFT-FULLSCREEN-FIRST −910; −906 ms |
+| exit/idle (child exit) | 2 | 0 | 1,1 | LEFT-FULLSCREEN-FIRST −903; −908 ms |
+| closeos/idle (`close_os_window`) | 2 | 0 | 1,1 | LEFT-FULLSCREEN-FIRST −909; −926 ms |
+| move/helper/0/menu (the incident's shape) | 2 | 0 | 1,1 | LEFT-FULLSCREEN-FIRST −909; −941 ms |
+| close/autofs/200 (mid-transition) | 2 | 0 | auto,auto | LEFT-FULLSCREEN-FIRST −944; −911 ms |
+| exit/autofs/700 (mid-transition) | 2 | 0 | auto,auto | LEFT-FULLSCREEN-FIRST −911; −907 ms |
+
+The roughly 0.9 s margin is the exit animation plus the 0.3 s settle. No trial left A behind (no `A-still-present` note), and the deferred close never needed its timeout.
+
+## The swap, armed
+
+`bash scripts/kitty-build-swap.sh stage --no-band` replaced `/Applications/kitty.app.staged` with this build. The previous staged copy went to `~/.Trash/kitty.app.staged-20261016004755`, not deleted. `arm` then wrote `~/.claude/autonomy/kitty-restart-pending`, which `scripts/alarm-reboot-prep.sh` prints at the next capacity-alarm reboot. `status` now reads `staged … patched-noband +fullscreen-fix`, and `swap --confirm /Applications/kitty.app --dry-run` reads `DRY-RUN-OK`. The swap is the operator's last step before that reboot and is renames only:
+
+```
+bash ~/.claude/scripts/kitty-build-swap.sh swap --confirm /Applications/kitty.app       # before the reboot
+bash ~/.claude/scripts/kitty-build-swap.sh verify --clear-marker                         # after login
+bash ~/.claude/scripts/kitty-build-swap.sh rollback --confirm /Applications/kitty.app   # the one-command undo
+```
+
+## Residuals
+
+- A fullscreen window on a background Space that loses its last pane now runs its exit transition there. Whether macOS switches the operator to that Space was not measured. The guard's refuse mode still keeps our autonomous closers away from that case.
+- The `ask` choosers' move (Residuals above) is covered by the patch once the swap is adopted, because the destroy happens inside kitty. Until then the guard's toggle-first path stands.
+- The band build (`~/ktb`) does not carry the patch. If the band is ever adopted, rebuild it with this patch; `arm` refuses it otherwise.

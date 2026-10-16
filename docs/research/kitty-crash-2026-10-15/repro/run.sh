@@ -11,9 +11,12 @@
 #        KCR_ENV="K=V …" extra environment for the throwaway kitty, e.g. NSZombieEnabled=YES
 #                       MallocScribble=1 — a use-after-free then fails on EVERY occurrence instead
 #                       of only when the freed memory happens to be reused
+#        KCR_KITTY=PATH the throwaway's kitty binary (default the installed app's), e.g. a patched
+#                       build's <bundle>/Contents/MacOS/kitty; `kitty @` runs that bundle's kitten
 #     action  move   detach-window --target-tab   (kitty-pane-menu "Move to <window>")
 #             close  close-window                 (kitty-confirm-close's close)
 #             exit   the pane's child process exits
+#             closeos the close_os_window action on A (--self; kitty's own OS-window close, the red button's path)
 #             fsoff-move | fsoff-close  the CANDIDATE GUARD: toggle A's fullscreen off, poll the
 #                    probe until A's window is no longer on a type-4 Space, settle 1 s, then act
 #     ctx     idle   throwaway kitty is the front app, nothing in flight for >= 1.5 s
@@ -39,7 +42,7 @@ set -u
 RUN="${KCR_RUN:-$HOME/Development/.worktrees/kitty-repro}"
 PROBE="$RUN/probe"
 CONF="$RUN/conf/kitty.conf"
-K=/Applications/kitty.app/Contents/MacOS/kitty
+K="${KCR_KITTY:-/Applications/kitty.app/Contents/MacOS/kitty}"
 SOCK="$RUN/k.sock"
 RES="${KCR_RES:-$RUN/results.tsv}"
 LOG="$RUN/logs/run-$$.log"
@@ -62,7 +65,7 @@ py() { /usr/bin/python3 -c "$@"; }
 KPID=""
 
 mine() { [ -n "$KPID" ] && [ "$(ps -o ppid= -p "$KPID" 2>/dev/null | tr -d ' ')" = "$$" ] &&
-         ps -o comm= -p "$KPID" 2>/dev/null | grep -q '/kitty.app/Contents/MacOS/kitty$'; }
+         ps -o comm= -p "$KPID" 2>/dev/null | grep -q '/kitty\.app[^/]*/Contents/MacOS/kitty$'; }
 
 launch_kitty() {
   local kenv=()
@@ -243,6 +246,7 @@ trial() { # rep action ctx delay post panes
   case "$action" in
     move)  KR detach-window --match "id:$A" --target-tab "id:$TABB" >>"$LOG" 2>&1 ;;
     close) KR close-window --match "id:$A" >>"$LOG" 2>&1 ;;
+    closeos) KSELF "$A" close_os_window >>"$LOG" 2>&1 ;;
     exit)  if [ -n "$CHILD" ] && [ "$(ps -o ppid= -p "$CHILD" | tr -d ' ')" = "$KPID" ]; then kill -TERM "$CHILD"; else nt="child-not-ours"; fi ;;
     menu-*) run_menu "${action#menu-}"; grc=$?; nt="${nt}menu-rc=$grc;" ;;
     refused) ;;
