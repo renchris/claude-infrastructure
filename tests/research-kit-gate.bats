@@ -538,6 +538,38 @@ ceiling() { "$REPO/bin/cc-research" ceiling --program demo --json | /usr/bin/pyt
   [[ "$(rowtext 8)" == *"holes.jsonl: cites a path under /tmp"* ]]
 }
 
+# A relay trial records what the observed session said and ran, and `rehearse record` quotes it in its
+# fails (truememory-2-0 trial 20, 2026-10-16: the session ran `ls -t /tmp/*handoff*` on its own). That
+# text is behavior under test, not a path the program cites; every other field is still scanned.
+@test "row 8: /tmp in a relay trial's reply or tools, or a fails line quoting them, passes" {
+  [ "$(rowstat 8)" = "PASS" ]
+  mkdir -p "$REC/evidence/rehearsal"
+  for f in trials-1.jsonl practice.jsonl; do
+    printf '%s\n' '{"prompt":"which decisions moved?","reply":"merged in /tmp/dr13-merge.X7Mj","replies":["see /tmp/a/"],"tools":["ls -t /tmp/*handoff*","Read"],"trial":1}' \
+      >> "$REC/evidence/rehearsal/$f"
+  done
+  printf '%s\n' '{"event":"record","trials":3,"passed":false,"fails":["trial 1: it called ls -t /tmp/*handoff*, which reads no certificate"],"frames_typed":true}' \
+    >> "$REC/rehearsal.jsonl"
+  [ "$(rowstat 8)" = "PASS" ]
+}
+
+@test "row 8: /tmp in a relay trial's lead-written field, or a fails line that is not a trial's, still fails" {
+  mkdir -p "$REC/evidence/rehearsal"
+  printf '%s\n' '{"prompt":"read /tmp/brief.md","reply":"ok","tools":[],"trial":1}' >> "$REC/evidence/rehearsal/trials-1.jsonl"
+  [[ "$(rowtext 8)" == *"trials-1.jsonl: cites a path under /tmp"* ]] || false
+  rsync -a --delete "$BATS_FILE_TMPDIR/golden/" "$W/"
+  mkdir -p "$REC/evidence/rehearsal"
+  printf '%s\n' '{"prompt":"p","reply":"ok","transcript":"/tmp/t.jsonl","practice":true}' >> "$REC/evidence/rehearsal/practice.jsonl"
+  [[ "$(rowtext 8)" == *"practice.jsonl: cites a path under /tmp"* ]] || false
+  rsync -a --delete "$BATS_FILE_TMPDIR/golden/" "$W/"
+  printf '%s\n' '{"event":"record","trials":3,"passed":false,"fails":["see /tmp/why.txt"],"frames_typed":true}' >> "$REC/rehearsal.jsonl"
+  [[ "$(rowtext 8)" == *"rehearsal.jsonl: cites a path under /tmp"* ]] || false
+  rsync -a --delete "$BATS_FILE_TMPDIR/golden/" "$W/"
+  mkdir -p "$REC/evidence/rehearsal"
+  printf '%s\n' '{"prompt":"p","reply":"/tmp/x/","tools":[]}' >> "$REC/evidence/rehearsal/findings-1.jsonl"
+  [[ "$(rowtext 8)" == *"findings-1.jsonl: cites a path under /tmp"* ]]
+}
+
 @test "row 8: a research heading with no trace fails" {
   printf '\n## Untraced claim\n' >> "$REC/research.md"
   [[ "$(rowtext 8)" == *"untraced-claim"* ]]

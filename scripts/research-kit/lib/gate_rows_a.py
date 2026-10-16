@@ -535,6 +535,35 @@ def hole_lead_text(line: str) -> str:
     return json.dumps(d)
 
 
+# a relay trial row (evidence/rehearsal/trials-<n>.jsonl, practice.jsonl) records what the observed
+# session said and ran, and `rehearse record` quotes it in rehearsal.jsonl's "trial <n>: ..." fails
+# (truememory-2-0 trial 20: the session ran `ls -t /tmp/*handoff*` on its own). That is behavior under
+# test, not a path the program cites; the prompt, cwd, transcript and every other field are still read.
+TRIAL_OBSERVED_TEXT = ("reply", "replies", "tools")
+TRIAL_FILE = re.compile(r"^(trials-\d+|practice)\.jsonl$")
+
+
+def rehearsal_lead_text(ctx: Ctx, f: Path, line: str) -> str:
+    """One relay-trial or rehearsal.jsonl line less the observed session's text (else the line whole)."""
+    trial = f.parent == ctx.records / "evidence" / "rehearsal" and TRIAL_FILE.match(
+        f.name
+    )
+    if not trial and f != ctx.path("rehearsal.jsonl"):
+        return line
+    try:
+        d = json.loads(line)
+    except ValueError:
+        return line
+    if not isinstance(d, dict):
+        return line
+    if trial:
+        for k in TRIAL_OBSERVED_TEXT:
+            d.pop(k, None)
+    elif isinstance(d.get("fails"), list):
+        d["fails"] = [x for x in d["fails"] if not re.match(r"^trial \S+: ", str(x))]
+    return json.dumps(d)
+
+
 @row(8, "Trace and persistence")
 def row8(ctx: Ctx) -> Row:
     fails: List[str] = []
@@ -563,6 +592,10 @@ def row8(ctx: Ctx) -> Row:
         text = f.read_text(errors="replace")
         if f == ctx.path("holes.jsonl"):
             text = "\n".join(hole_lead_text(ln) for ln in text.splitlines())
+        else:
+            text = "\n".join(
+                rehearsal_lead_text(ctx, f, ln) for ln in text.splitlines()
+            )
         if re.search(r"(?<![\w.])/(private/)?tmp/", text):
             fails.append(
                 f"{f.relative_to(ctx.records)}: cites a path under /tmp (wiped on reboot)"

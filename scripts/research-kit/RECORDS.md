@@ -379,7 +379,10 @@ trial from a pane outside the program's directory), so gate row 14 can pass with
   risk the skeptic named for "if more research moves your conviction, do it now") or one that timed out, on top of
   the checks above. A research-order trial is judged as a completeness relay: the lines unchanged, no relay
   violation, every tool a certificate read.
-  It closes the rehearsal activity on a pass or a failed re-test. It still takes the lease.
+  It closes the rehearsal activity on a pass or a failed re-test. It still takes the lease. Gate row 8's `/tmp`
+  scan skips a trial row's `reply`, `replies` and `tools` in `trials-<n>.jsonl` and `practice.jsonl`, and the
+  `trial <n>: …` lines of `rehearsal.jsonl`'s `fails` that quote them (`gate_rows_a.py` `TRIAL_OBSERVED_TEXT`):
+  they record what the observed session said and ran, and every other field is still scanned.
 - **`rehearse trial … --practice` (added 2026-10-16, before truememory-2-0's re-test).** The same trial (pane,
   launcher, `trial_mark` with `practice: true`, router, Stop relay check, transcript read), appended with `practice:
   true` to `<records>/evidence/rehearsal/practice.jsonl`, uncapped, and printing its own verdict as `fails`
