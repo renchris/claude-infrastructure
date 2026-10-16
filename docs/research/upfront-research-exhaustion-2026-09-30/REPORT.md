@@ -971,7 +971,9 @@ never waits on you, and re-finds of a queued omission are not new findings for t
 certificate as a named known row, and `--requires-gate` refuses every build wave whose dependency closure contains the
 frame rows it names (§3.10). All omissions found in one certification share **one frame-delta cycle**, run after the
 certificate:
-1. You add the missing rows and re-sign the frame as its next version.
+1. You add the missing rows and re-sign the frame as its next version. The kit writes the rows with
+   `intake.py delta-apply`, which bumps the version and records the delta (scripts/research-kit/RECORDS.md, "Frame
+   deltas"); the frame is never edited by hand.
 2. Stages 2–5 run for the delta only, timeboxed at 2 days for lite and 3 for standard and full (an assumed figure the
    calibration run measures), and priced in the after-signoff ceiling (§6.1).
 3. The edited plan units are re-frozen and get at most 2 delta rounds, the last one verification-only, with a shadow

@@ -17,6 +17,9 @@ tracked records (`docs/research/<slug>/` in the deliverable repo) and registers 
   intake.py set      --program P [--escape-cost-days N] [--release-gap-days N] [--reference-days N]
                      [--plan <path under the records dir>] [--topic-owner "<who>"]
   intake.py contract-page --program P
+  intake.py delta-apply --program P --file <delta.json> [--dry-run]
+                     the frame-delta cycle's rows (§5.4 step 1): add or rewrite frame rows and
+                     acceptance rows, bump the version, record the delta (lib/frame_delta.py)
   intake.py lint     --program P      gate row 1 minus the signature: what still blocks the frame
   intake.py status   --program P      the intake steps, done or not
 
@@ -45,6 +48,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "lib"))
 sys.path.insert(0, str(HERE.parents[1] / "scripts" / "lib"))
 import kit  # noqa: E402
+import frame_delta  # noqa: E402
 from courier import REVIEWER_EFFORT  # noqa: E402
 
 SKILL = HERE.parents[1] / "skills" / "research-program"
@@ -380,17 +384,12 @@ def cmd_set(a: argparse.Namespace) -> int:
         # operator's re-signature pins that list. It is the one evidence the sweep and the gate run
         # accept that a row's delta reached a signed frame (gate.delta_signature); a signature's date
         # alone is none. Editing the frame voids its signature until he re-signs.
-        rows = {str(r.get("id")): r for r in kit.known_rows(a.program)}
-        applied = list(fr.get("known_rows_applied") or [])
-        for kid in a.applies_known_row:
-            r = rows.get(kid) or {}
-            if r.get("kind") != "frame-omission" or r.get("status", "open") != "open":
-                raise Refused(
-                    f"--applies-known-row {kid}: {kid} is not an open frame-omission known row"
-                )
-            if kid not in applied:
-                applied.append(kid)
-        fr["known_rows_applied"] = applied
+        # delta-apply lists its known rows through the same two calls.
+        try:
+            frame_delta.check_known_rows(a.program, a.applies_known_row)
+        except frame_delta.Refused as e:
+            raise Refused(f"--applies-known-row: {e}")
+        frame_delta.add_known_rows(fr, a.applies_known_row)
     save_frame(a.program, fr)
     print("set")
     return 0
@@ -719,11 +718,11 @@ def cmd_contract_page(a: argparse.Namespace) -> int:
     return 0
 
 
-def lint_fails(slug: str) -> List[str]:
+def lint_fails(slug: str, ctx: Any = None) -> List[str]:
     from gate import make_ctx
     import gate_rows_a
 
-    row = gate_rows_a.row1(make_ctx(slug))
+    row = gate_rows_a.row1(ctx if ctx is not None else make_ctx(slug))
     return [
         e
         for e in row.evidence
@@ -743,6 +742,13 @@ def cmd_lint(a: argparse.Namespace) -> int:
         + ("clean (sign it next)" if not fails else f"{len(fails)} to fix")
     )
     return 1 if fails else 0
+
+
+def cmd_delta_apply(a: argparse.Namespace) -> int:
+    kit.check_slug(a.program)
+    return frame_delta.apply(
+        a.program, a.file, a.dry_run, lambda ctx: lint_fails(a.program, ctx)
+    )
 
 
 def cmd_status(a: argparse.Namespace) -> int:
@@ -831,6 +837,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         "the operator's re-signature of it is what spares and closes the row",
     )
     p.set_defaults(fn=cmd_set)
+    p = sub.add_parser(
+        "delta-apply",
+        help="apply a frame delta (§5.4 step 1); RECORDS.md 'Frame deltas' has the file format",
+    )
+    p.add_argument("--program", required=True)
+    p.add_argument("--file", required=True, help="the delta, JSON")
+    p.add_argument(
+        "--dry-run", action="store_true", help="print the diff, write nothing"
+    )
+    p.set_defaults(fn=cmd_delta_apply)
     for verb, fn in (
         ("contract-page", cmd_contract_page),
         ("lint", cmd_lint),

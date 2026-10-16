@@ -763,7 +763,8 @@ and KR-07, while `--wave Day0`, the id the plan's fire recipe passes, listed onl
   stands) and pins another frame than the newest non-void signature at or before the hold did. No signature at or
   before the hold, or a listing nobody re-signed, is no evidence. `intake.py set --program P --applies-known-row KR-n`
   (repeatable) writes the list, refusing an id that is not an open frame-omission known row; editing the frame voids
-  its signature until the operator re-signs the delta.
+  its signature until the operator re-signs the delta. `intake.py delta-apply` writes the same list through the same
+  check ("Frame deltas", below).
 - **A class-b row's packets hold and then descope its waves.** On b2ed965e3 nothing read a known row's `packets`: once
   the sweep closed a class-b row, its waves were admitted at once and the packets' "descope" default fired over
   nothing. Now `requires` refuses a wave in `blocks_waves` of a row with `packets` and no `packets_resolved` ("closed
@@ -773,3 +774,52 @@ and KR-07, while `--wave Day0`, the id the plan's fire recipe passes, listed onl
   research:<P>/veto/<KR>`) on a vetoed or fired packet appends `{id, packets_resolved: "vetoed-by-operator",
   vetoed_by_operator: <at_iso>}` and the waves fire; a cc-decide veto with no signature prints `UNSIGNED VETO` and
   exits 1, the waves still held. `packet_problems` checks a known row's packets like a decision's.
+
+## Frame deltas (added 2026-10-16; REPORT.md §5.4 step 1)
+
+§5.4 step 1 reads "You add the missing rows and re-sign the frame as its next version", and until now no verb wrote a
+frame ROW: `intake.py set` writes scalars and `known_rows_applied`, and a program's own generator (truememory-2-0's
+`build_frame.py`) rewrites the records whole from its module tables, over every decision and premise event since.
+Hand-editing `frame.json` is a rail. `intake.py delta-apply --program P --file <delta.json> [--dry-run]`
+(`lib/frame_delta.py`) is the sanctioned writer.
+
+- **What a delta can touch.** The frame's row lists `am`, `dr`, `populations`, `components`, `exclusions`,
+  `sources_required`, and the rows of `acceptance.json`. `frame.json` holds `am` and `dr` as bare ids (the row text is in
+  `acceptance.json` and `decisions.jsonl`), so a rewrite of an acceptance row's predicate is an `acceptance` op, and
+  `am`, `dr` and `sources_required` take adds only. Any other key, at the top level or in `frame` (rulings, `fac_map`,
+  `reask_map`, reviewer pins, the contract page's hash, `version`, signatures), is refused. Decisions, premises,
+  sources and censuses keep their own writers; a delta never writes them.
+- **The file.** `{program, base_version, known_rows: [KR-n…], why, frame: {<list>: [op…]}, acceptance: [op…]}`. Frame
+  ops: `{op: "add", value}` (the value's id new to the list) and `{op: "replace", id, value}` (id present; the value
+  keeps it). Acceptance ops: `{op: "add", row}` (id new; `id`, `predicate`, `check_cmd`, `threshold`,
+  `negative_branch` present) and `{op: "replace", id, fields}` (merged over the row; `id` not among them). An item's id:
+  a bare-id string is its own (`AM-18`, `DR-13a`); a string opening with an id token has that token (`P2 the 157 build
+  units` is `P2`); another string is its own; an object has its `id`, else `name`, else `what`.
+- **Refusals (exit 2, nothing written):** `program` is another slug; `base_version` is not the frame's `version` (a delta
+  drafted against an older frame is re-drafted, never merged); `known_rows` names a row that is not an open
+  frame-omission known row (the `set --applies-known-row` check); an add whose id exists, a replace whose id does not or
+  whose value changes it or changes nothing; an `am` add with no `acceptance.json` row (in the file or the delta); a
+  `dr` add with no `decisions.jsonl` record; an acceptance add the frame's `am` list (when it has one) does not name, so
+  the signature would not cover it; any gate row 1 frame-lint failure (`intake.py lint`) the proposed records have and
+  the records on disk do not; another owner's fresh program lease.
+- **When (the choice, and why).** The registry state must be `certifying` or `certified`, or the program must have an
+  open `frame-delta` activity (`lib/activities.py`; triage opens one for a frame-defect or intent-never-asked concern).
+  A held frame omission exists only from the first certification round on (the hold-g verb), and its re-sign due can
+  fall before the certificate, which §13.7 counts ("before or after its due"), so `certifying` is allowed beside
+  §5.4's "after the certificate". `registered` is refused: before the freeze the frame is still being built, and no
+  row is held. The build states and `closed` are refused unless triage opened the activity. `known_rows` may be empty
+  only under that activity. The verb does not count cycles: §5.4's bound is the timebox and the delta rounds.
+- **What an apply writes.** `acceptance.json` (when the delta has acceptance ops) and `frame.json`, each serialised in
+  the form the file already had (truememory-2-0's `acceptance.json` is indent 1, unsorted, raw UTF-8), so the diff is
+  the rows alone. The frame's `version` goes up by one, the named rows join `known_rows_applied` (the same code as
+  `set --applies-known-row`), and `frame_deltas` gains `{id: "FD-n", version, sha256, acceptance_sha256}`: the frame
+  signature pins `frame.json` alone, so carrying the delta's hash and the rewritten `acceptance.json`'s hash puts the
+  row text under the operator's re-sign too. `frame-deltas.jsonl` (append-only, beside `frame.json`) gains `{id,
+  program, file, sha256, base_version, version, known_rows, why, registry_state, activity, ops: [{list, op, id, before,
+  after}], rows_before, rows_after, delta, by, at, ts}`, so every replaced row's old value is kept; `intake.jsonl` gains
+  `{event: "delta-apply", id, version, sha256}`. A population or `sources_required` add with no census file or source
+  record prints a WARNING, not a refusal: those records come from the delta's own Stages 2–5, after the re-sign.
+- **What it is not.** The apply voids the frame signature (gate row 1 reads STALE) and is no evidence for any row:
+  `gate.delta_signature` still needs the operator's VALID re-sign of the new frame (`cc-signoff research:<P>/frame`),
+  and until then the sweep closes a past-due row by its default. `tests/research-program-frame-delta.bats` holds each
+  refusal and that negative control.

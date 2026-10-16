@@ -353,6 +353,12 @@ Updated 2026-10-16 (wave ids; scripts/research-kit/RECORDS.md "Wave ids, the re-
 - **A frame re-sign spares a held row only if its delta is in that frame.** List each row the delta carries with
   `intake.py set --program <slug> --applies-known-row KR-n`, then ask the operator to re-sign the frame; a
   re-sign for any other reason spares nothing.
+- **Apply the frame delta with its verb, never by hand.** Write the delta as a JSON file of ops (frame row
+  lists, acceptance rows, the `known_rows` it carries; format in RECORDS.md "Frame deltas"), check it with
+  `scripts/research-kit/intake.py delta-apply --program <slug> --file <delta.json> --dry-run`, then run it
+  without `--dry-run`: it bumps the frame's version, lists the rows in `known_rows_applied`, and appends the
+  delta with every replaced row to `frame-deltas.jsonl`. Never edit `frame.json` or re-run a program's own
+  frame generator for it. The operator's re-sign of the new frame is still what spares and closes the rows.
 - **A class-b row's packets.** After the sweep closes a class-b row, its waves wait while its packets are
   pending, and are descoped when the default fires unless the operator signs `cc-signoff
   research:<slug>/veto/<KR-n>`.
