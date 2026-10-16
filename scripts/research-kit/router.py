@@ -418,6 +418,13 @@ def render_cert(slug: str) -> Tuple[str, str]:
     return p.stdout.strip(), ""
 
 
+def cert_cmd(slug: str) -> str:
+    """The certificate read a relay turn is told to run, by this kit's absolute path. A program's root
+    is usually another repo with no scripts/research-kit/ of its own, so the relative spelling exits
+    127 there (truememory-2-0 rehearsal run 1, trials 3, 10, 11 and 14). cert_read allows it."""
+    return f"{HERE / 'gate.sh'} --render --program {slug}"
+
+
 # ── the classifier ──────────────────────────────────────────────────────────────────────────────
 
 
@@ -995,10 +1002,11 @@ def context_for(
         return (
             f"{head} {what} "
             "(REPORT.md §4.1). Relay the certificate state lines below VERBATIM, plus at most 3 lines "
-            "explaining them. Name no item, location or row the lines do not carry, whether you open "
+            "explaining them. Open the reply with the certificate state lines: its first line is read "
+            "as its verdict. Name no item, location or row the lines do not carry, whether you open "
             "yes or no; a 'no' must cite a triaged escape, a scheduled freshness flip or a change the "
-            "operator accepted. Every tool except `scripts/research-kit/gate.sh --render --program "
-            f"{slug}` is blocked this turn.{extra}\n--- certificate state lines ---\n{lines}\n---"
+            f"operator accepted. Every tool except `{cert_cmd(slug)}` is blocked this turn."
+            f"{extra}\n--- certificate state lines ---\n{lines}\n---"
         )
     if label == UNAVAILABLE:
         return (
@@ -1580,13 +1588,18 @@ def research_clause(
 
 
 def cert_read(cmd: str, slug: str) -> bool:
-    """The ONE whitelisted tool of a completeness or pushback turn: a bare certificate read."""
+    """The ONE whitelisted tool of a completeness or pushback turn: a bare certificate read. gate.sh
+    is a bash script, so `bash <gate.sh> --render …` is the same read run through its interpreter
+    (truememory-2-0 rehearsal run 1, trial 2, was denied for it); no other prefix is."""
     s = cmd.strip()
     if SEPARATORS.search(s) or re.search(r"[<>]", s):
         return False
     s_slug = re.escape(slug)
     return bool(
-        re.fullmatch(rf"(\S*/)?gate\.sh\s+(--render|render)\s+--program\s+{s_slug}", s)
+        re.fullmatch(
+            rf"((/bin/)?bash\s+)?(\S*/)?gate\.sh\s+(--render|render)\s+--program\s+{s_slug}",
+            s,
+        )
         or re.fullmatch(rf"(\S*/)?cc-research\s+verdict(\s+--program)?\s+{s_slug}", s)
     )
 
@@ -1640,7 +1653,7 @@ def cmd_tool(a: argparse.Namespace) -> int:
         )
         return deny(
             f"research block (REPORT.md §4.2): {where} and {why}, so every tool is blocked except "
-            f"the certificate read `scripts/research-kit/gate.sh --render --program {slug}`. "
+            f"the certificate read `{cert_cmd(slug)}`. "
             "Relay its state lines verbatim, plus at most 3 lines; add no item. Operator kill switch: "
             "launch with CC_RESEARCH_BLOCK=0."
         )
@@ -1791,11 +1804,8 @@ def cmd_relay_check(a: argparse.Namespace) -> int:
     label = (route or {}).get("label")
     override = (route or {}).get("by") == "override"
     slug = (route or {}).get("program") or ""
-    if not route or (
-        not relays(label, is_trial(a.session, slug))
-        and label != UNAVAILABLE
-        and not override
-    ):
+    relay_turn = bool(route) and relays(label, is_trial(a.session, slug))
+    if not route or (not relay_turn and label != UNAVAILABLE and not override):
         return 0
     if program_state(slug) not in BLOCKING_STATES:
         return 0
@@ -1818,13 +1828,18 @@ def cmd_relay_check(a: argparse.Namespace) -> int:
             )
     v = relay_violations(reply, cert, str(label))
     if not v:
-        return 0
+        # --relayed-rc: completion-assert's arm R asks to tell a relay turn whose reply relays from a
+        # turn that is not a relay at all (both pass). Every tool but the certificate read is blocked
+        # in a relay turn, so no other Stop arm's demand can be met there, and any answer to one names
+        # what the certificate does not carry (truememory-2-0 rehearsal run 1, trials 7, 10, 11, 15
+        # and 19). An UNAVAILABLE or overridden turn keeps its tools, so it is not one.
+        return a.relayed_rc if relay_turn else 0
     print(
         f"Research relay check (REPORT.md §4.4): this turn's prompt was routed as {routed} "
         f"in research program {slug} ({route.get('state')}), and your reply adds to the certificate: "
         + "; ".join(v)
-        + ". Re-answer with the certificate state lines verbatim (gate.sh --render --program "
-        f"{slug}) plus at most {MAX_EXTRA_LINES} lines explaining them, naming nothing they do not "
+        + f". Re-answer with the certificate state lines verbatim ({cert_cmd(slug)}"
+        f") plus at most {MAX_EXTRA_LINES} lines explaining them, naming nothing they do not "
         "carry. Only a triaged escape, a scheduled freshness flip or an accepted change moves the "
         "answer, and none happens inside a re-ask turn."
     )
@@ -1845,6 +1860,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--program", default="")
     p = sub.add_parser("relay-check")
     p.add_argument("--session", required=True)
+    p.add_argument(
+        "--relayed-rc",
+        type=int,
+        default=0,
+        help="exit code when a relay turn's reply passes (default 0, the same as no relay turn)",
+    )
     p = sub.add_parser("status")
     p.add_argument("--session", required=True)
     a = ap.parse_args(argv)

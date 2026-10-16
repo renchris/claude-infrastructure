@@ -319,8 +319,14 @@ if [ "${CC_RESEARCH_RELAY_CHECK:-1}" != 0 ] && ! _ca_no_route "$SID"; then
     [ -f "$_ca_rr" ] || _ca_rr="$HOME/.claude/scripts/research-kit/router.py"
   fi
   if [ -f "$_ca_rr" ] && [ "$SID" != "?" ]; then
-    _ca_rreason="$(printf '%s' "$MSG" | /usr/bin/env python3 "$_ca_rr" relay-check --session "$SID" 2>/dev/null)"
+    _ca_rreason="$(printf '%s' "$MSG" | /usr/bin/env python3 "$_ca_rr" relay-check --session "$SID" --relayed-rc 3 2>/dev/null)"
     _ca_rrc=$?
+    # rc 3: a relay turn whose reply relays the certificate. Every tool but the certificate read is
+    # blocked in that turn, so no arm below can be obeyed there, and any answer to one names what the
+    # certificate does not carry, which this arm then blocks: the two contradicted each other in
+    # truememory-2-0 rehearsal run 1 (trials 7, 10, 11, 15, 19: "not certified" convicted as a
+    # done-claim over the branch's unlanded commits). The ledger binds again on the next non-relay turn.
+    [ "$_ca_rrc" -eq 3 ] && abstain "relay-turn-relayed"
     if [ "$_ca_rrc" -eq 1 ] && [ -n "$_ca_rreason" ]; then
       mkdir -p "$STATE_DIR" 2>/dev/null || true
       _ca_rkey="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | shasum 2>/dev/null)"; _ca_rkey="${_ca_rkey:0:16}"   # sliced here; was `| cut -c1-16`

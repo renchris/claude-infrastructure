@@ -1080,3 +1080,47 @@ nspy() { # <prompt> <cwd> <sid>
   run nspy "hello" "$BATS_TEST_TMPDIR/elsewhere" "x/y z"
   [ "${output##*$'\n'}" = "py=1" ]
 }
+
+# ── the certificate read a relay turn is told to run (truememory-2-0 rehearsal run 1, 2026-10-16) ──
+# A program's root is usually another repo with no scripts/research-kit/ of its own ($PROG/src here,
+# tm2-plan there): run 1's trials 3, 10, 11 and 14 ran the read the instruction named and got exit
+# 127, then explained the missing path in the reply, which the relay check counts as an added item.
+
+# deny_reason <command> [cwd] [sid] — the research block's reason text for one Bash call.
+deny_reason() {
+  jq -nc --arg c "$1" --arg d "${2:-$PROG/src}" --arg s "${3:-s1}" \
+    '{session_id:$s,cwd:$d,tool_name:"Bash",tool_input:{command:$c}}' \
+    | bash "$BLOCK" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty'
+}
+
+@test "a relay turn names the certificate read by an absolute path that runs from the program's root, the block allows it, and the reply is told to open with the lines" {
+  state certifying
+  run prompt "are we done?"
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  want="$REPO/scripts/research-kit/gate.sh --render --program demo"
+  [[ "$ctx" == *"Every tool except \`$want\` is blocked"* ]] || false
+  [[ "$ctx" == *"Open the reply with the certificate state lines"* ]] || false
+  [ -x "$REPO/scripts/research-kit/gate.sh" ] && [ ! -e "$PROG/src/scripts/research-kit/gate.sh" ]
+  [ "$(tool Bash "$want")" = allow ]
+  [[ "$(deny_reason 'git log --oneline')" == *"the certificate read \`$want\`"* ]] || false
+  # a research-order relay trial gets the same read
+  trial_mark t1
+  run prompt "do exhaustive research on the open rows" "$PROG/src" t1
+  [[ "$output" == *"Every tool except \`$want\` is blocked"* ]] || false
+}
+
+@test "the certificate read is allowed through the bash interpreter too; nothing else rides on it" {
+  state certifying
+  prompt "are you sure?" >/dev/null
+  [ "$(label)" = pushback ]
+  [ "$(tool Bash "bash $REPO/scripts/research-kit/gate.sh --render --program demo")" = allow ]
+  [ "$(tool Bash 'bash scripts/research-kit/gate.sh --render --program demo')" = allow ]
+  [ "$(tool Bash '/bin/bash scripts/research-kit/gate.sh --render --program demo')" = allow ]
+  [ "$(tool Bash 'bash scripts/research-kit/gate.sh --render --program other')" = deny ]
+  [ "$(tool Bash 'bash scripts/research-kit/gate.sh run --program demo')" = deny ]
+  [ "$(tool Bash 'bash scripts/research-kit/round.sh --render --program demo')" = deny ]
+  [ "$(tool Bash 'bash -c "scripts/research-kit/gate.sh --render --program demo"')" = deny ]
+  [ "$(tool Bash 'bash scripts/research-kit/gate.sh --render --program demo; ls')" = deny ]
+  [ "$(tool Bash 'sh scripts/research-kit/gate.sh --render --program demo')" = deny ]
+  [ "$(tool Bash 'bash bash scripts/research-kit/gate.sh --render --program demo')" = deny ]
+}

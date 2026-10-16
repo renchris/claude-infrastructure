@@ -177,3 +177,59 @@ stop_with() {
   CC_RESEARCH_RELAY_CHECK=0 run stop_with '✅ Done: cli.sh has a `--limit` flag.'
   [ "$(printf '%s' "$output" | grep -c 'Research relay check')" -eq 0 ]
 }
+
+# truememory-2-0 rehearsal run 1 (2026-10-16), trials 7, 10, 11, 15 and 19: a relay reply the arm
+# passed ("…not certified…", "…isn't done…") fell through to the ledger arm, which read it as a
+# done-claim over the branch's unlanded commits and ordered the session to settle and land them. In
+# a relay turn every tool but the certificate read is blocked, so that order cannot be obeyed, and
+# every answer to it names what the certificate does not carry.
+mkledger() { # <tag> KEY=VAL… → a stub wrap-ledger path
+  local p="$BATS_TEST_TMPDIR/wl-$1.sh" f; shift
+  { printf '%s\n' '#!/usr/bin/env bash'
+    for f in "$@"; do printf 'printf "%%s\\n" %s\n' "'$f'"; done
+  } > "$p"
+  printf '%s' "$p"
+}
+RELAYED_DONE="$(printf '%s\n%s\n%s\n\nThe program is certified, so the research is complete.' \
+  'Research: demo version 3. CERTIFIED Oct 16 (standard profile; stopped after 3 quiet rounds)' \
+  'Signed frame: 100.00% closed. 14/14 decisions · 12/12 populations enumerated two ways' \
+  'Decisions: 13 ruled at 90%+ · 1 decided by default at 84% (sync retry; reversible)')"
+
+@test "completion-assert: a relay turn whose reply passes the relay check abstains from the ledger arm" {
+  ca_setup
+  WRAP_LEDGER_BIN="$(mkledger blk DIRTY=0 DIRTY_N=0 UNLANDED=0 AHEAD=0 REMAINDER=0 TRUNK=origin/main BLOCKED=1 RUNG=⛔)"
+  export WRAP_LEDGER_BIN
+  route "are we done?"
+  run check "$RELAYED_DONE"
+  [[ "$status" -eq 0 && -z "$output" ]] || false
+  run stop_with "$RELAYED_DONE"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  grep -q 'relay-turn-relayed' "$COMPLETION_IDL"
+  # CONTROL: the same reply after a prompt routed as `other` is still convicted by the ledger.
+  route "thanks, now explain the frame"
+  [ "$(python3 "$ROUTER" status --session s1 | jq -r .label)" = other ]
+  run stop_with "$RELAYED_DONE"
+  printf '%s' "$output" | jq -e '.decision == "block" and (.reason | test("Completion-assert"))' >/dev/null
+}
+
+@test "relay-check: only a relay turn's passing reply exits --relayed-rc; a block, an UNAVAILABLE turn and a non-relay turn keep their codes" {
+  route "are we done?"
+  run bash -c "printf '%s' \"\$1\" | python3 '$ROUTER' relay-check --session s1 --relayed-rc 3" _ "$RELAYED_DONE"
+  [[ "$status" -eq 3 && -z "$output" ]] || false
+  run bash -c "printf 'Yes. One more thing: sync.py.' | python3 '$ROUTER' relay-check --session s1 --relayed-rc 3"
+  [ "$status" -eq 1 ]
+  route "STUB-ERROR are we done?"
+  run bash -c "printf '%s' \"\$1\" | python3 '$ROUTER' relay-check --session s1 --relayed-rc 3" _ "$RELAYED_DONE"
+  [ "$status" -eq 0 ]
+  route "build the importer"
+  run bash -c "printf '%s' \"\$1\" | python3 '$ROUTER' relay-check --session s1 --relayed-rc 3" _ "$RELAYED_DONE"
+  [ "$status" -eq 0 ]
+}
+
+@test "relay-check's block names the certificate read by the absolute path that runs from the program's root" {
+  route "are we done?"
+  run check "$(printf 'Yes. One more thing: sync.py.')"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"($REPO/scripts/research-kit/gate.sh --render --program demo)"* ]] || false
+}
