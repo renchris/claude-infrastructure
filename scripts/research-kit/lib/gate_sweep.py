@@ -22,10 +22,14 @@
          (until `cc-research decision rule|carry|reopen|affirm` answers it:
          lib/cli_records.answer_conversion). Only an open or reopened decision converts; one already
          ruled or carried has its overdue packet actioned as superseded, with no class B and no descope;
-      3. a frame-omission known row past its re-sign due date with no newer frame signature applies its
-         default (descope, or class-B packets for the omitted rows) and closes, so --requires-gate
-         stops refusing without a reopen;
-      4. every program packet is checked for --project and (class B) --default-effect no-change.
+      3. a frame-omission known row past its re-sign due date whose delta no re-signed frame carries
+         (gate.delta_signature) applies its default (descope, or class-B packets for the omitted
+         rows) and closes, so --requires-gate stops refusing without a reopen;
+      3b. a row closed by class-b packets keeps its waves held while they are pending (gate_requires);
+         when every packet's "descope" default has fired the waves are descoped, and an operator-
+         SIGNED veto (cc-signoff research:<P>/veto/<KR>) releases them instead;
+      4. every program packet, a known row's included, is checked for --project and (class B)
+         --default-effect no-change.
 Every action is a new appended event; nothing is edited in place. Exit 1 on any unsigned veto,
 malformed packet or unconvertible decision.
 """
@@ -81,6 +85,9 @@ def program_packets(ctx: Any, decisions: Dict[str, Dict[str, Any]]) -> Dict[str,
         (ctx.json("budget.json") or {}).get("overrun_packets") or {}
     ).items():
         out[str(pid)] = f"stage {st} overrun"
+    for ev in ctx.jsonl("known_rows.jsonl"):  # step 3's class-b packets
+        for pid in ev.get("packets") or []:
+            out[str(pid)] = ev["id"]
     return out
 
 
@@ -318,6 +325,71 @@ def answered_after_conversion(ctx: Any, did: str, pid: str) -> Optional[str]:
     return answered
 
 
+def resolve_row_packets(ctx: Any, allp: Dict[str, Dict[str, Any]]) -> int:
+    """Step 3b: a known row closed by its class-b default holds its waves while its packets are
+    pending (gate_requires), so its "descope" default must land when it fires. Each row with packets
+    and no `packets_resolved` is resolved once: an operator-SIGNED veto (cc-signoff
+    research:<P>/veto/<KR>) on a vetoed or fired packet releases the waves; every packet fired with
+    default descope and no signed veto descopes them; a cc-decide veto with no signature is UNSIGNED
+    and fails the sweep, the waves still held. A packet missing from cc-decide is left to
+    packet_problems. Returns the count of failures."""
+    import operator_sign
+    from gate_rows_a import known_rows
+
+    bad = 0
+    for kr in known_rows(ctx):
+        pids = [str(p) for p in kr.get("packets") or []]
+        if not pids or kr.get("packets_resolved"):
+            continue
+        ps = [allp.get(pid) for pid in pids]
+        if any(p is None for p in ps):
+            continue
+        kid, waves = kr["id"], list(kr.get("blocks_waves") or [])
+        signed = operator_sign.latest_valid(ctx.slug, "veto", kid)
+        sts = {p.get("status") for p in ps}
+        if signed and sts <= {"vetoed", "expired-actioned"}:
+            kit.append_jsonl(
+                ctx.records / "known_rows.jsonl",
+                {
+                    "id": kid,
+                    "packets_resolved": "vetoed-by-operator",
+                    "vetoed_by_operator": signed.get("at_iso"),
+                },
+            )
+            print(
+                f"vetoed-by-operator {kid}: default of {', '.join(pids)} not applied; "
+                f"{', '.join(waves) or 'no wave'} released"
+            )
+        elif "vetoed" in sts and not signed:
+            print(
+                f"UNSIGNED VETO {', '.join(pids)} on {kid}: a cc-decide veto counts only with "
+                f"`cc-signoff research:{ctx.slug}/veto/{kid}` in the operator's terminal"
+            )
+            bad += 1
+        elif sts == {"expired-actioned"}:
+            defaults = {p.get("default_if_no_veto") for p in ps}
+            if defaults != {"descope"}:
+                print(
+                    f"CANNOT APPLY default of {', '.join(pids)} to {kid}: it reads "
+                    f"{sorted(map(str, defaults))}, and a known row's packet defaults to descope"
+                )
+                bad += 1
+                continue
+            kit.append_jsonl(
+                ctx.records / "known_rows.jsonl",
+                {
+                    "id": kid,
+                    "packets_resolved": "default",
+                    "descoped_waves": waves,
+                    "receipt": f"cc-decide {', '.join(pids)} expired-actioned",
+                },
+            )
+            print(
+                f"applied default of {', '.join(pids)} to {kid}: descope; descoped waves {waves}"
+            )
+    return bad
+
+
 def cmd_sweep(a: argparse.Namespace) -> int:
     import operator_sign
     from gate import make_ctx
@@ -448,13 +520,10 @@ def cmd_sweep(a: argparse.Namespace) -> int:
                 f"converted {did}: class C {p['id']} past due -> class B {new} (default {rev}); "
                 f"descoped waves {d.get('blocks_waves') or []}"
             )
-    frame_sigs = [
-        r
-        for r in operator_sign.research_records(ctx.slug, "frame")
-        if r["_verdict"] == "valid"
-    ]
-    from gate_rows_a import known_rows
+    from gate import delta_signature
+    from gate_rows_a import held_at, known_rows
 
+    held_map = held_at(ctx)
     for kr in known_rows(ctx):
         if (
             kr.get("kind") != "frame-omission"
@@ -462,14 +531,13 @@ def cmd_sweep(a: argparse.Namespace) -> int:
             or not kr.get("resign_due")
         ):
             continue
-        # Method v1.3 (REPORT.md §13): a frame re-signed after the row was HELD is the frame-delta
-        # cycle under way, whether or not its due has passed; keying on the due made an on-time
-        # re-sign count for nothing, so the operator had to wait past the due to sign. A row with no
-        # held time keeps the old reading.
-        held = str(kr.get("ts") or "") or kr["resign_due"]
-        if kr["resign_due"] >= now or any(
-            r.get("at_iso", "") > held for r in frame_sigs
-        ):
+        # Method v1.3 (REPORT.md §13): a frame re-signed after the row was HELD spares it, whether or
+        # not its due has passed; keying on the due made an on-time re-sign count for nothing. The
+        # re-sign must carry THIS row's delta (gate.delta_signature): a signature's date alone spared
+        # truememory-2-0's KR-06..09 under a frame that added none of their rows. A row with no held
+        # time is read as held at its due.
+        held = held_map.get(kr["id"]) or kr["resign_due"]
+        if kr["resign_due"] >= now or delta_signature(ctx, kr["id"], held):
             continue
         ev: Dict[str, Any] = {
             "id": kr["id"],
@@ -503,6 +571,7 @@ def cmd_sweep(a: argparse.Namespace) -> int:
         print(
             f"closed known row {kr['id']} by its default ({kr.get('default', 'descope')})"
         )
+    bad += resolve_row_packets(ctx, allp)
     for prob in packet_problems(ctx):
         print(prob)
         bad += 1

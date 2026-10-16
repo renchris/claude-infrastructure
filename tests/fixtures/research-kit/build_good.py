@@ -112,6 +112,9 @@ def main() -> None:
         "contract_page_at": NOW,
         "credentials": [],
         "known_rows": [],
+        # the waves `gate.sh requires --wave` resolves against (RECORDS.md "Wave ids"); suites that
+        # gate a wave no record names name it here
+        "build_waves": ["B1", "B2", "B3", "B4", "B5", "B6", "B7", "W1"],
     }
     w(rec / "frame.json", frame)
     w(rec / "PLAN.md", "# Design\n\nThe daemon retries a failed write 3 times (P-1).\n")

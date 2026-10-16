@@ -37,19 +37,233 @@ marks a wave that FOLLOWS implementation signoff: it is refused in every other s
 Without --wave there is no dependency closure to scope to, so ANY block for ANY wave refuses
 (fail closed) and the refusal says to pass --wave.
 
+Wave ids (RECORDS.md "Wave ids"). Every block above matches a wave by its exact string, so a row
+that spells the wave another way blocks nothing for it: on 2026-10-16 `--wave D0` listed truememory-
+2-0's open KR-06 and KR-07 while `--wave Day0`, the id its fire recipe passes, read CLEAR. So W is
+resolved first against the program's ONE set of wave ids (vocabulary(): every id its frame and live
+records name): an id outside it exits 2 before any side effect, naming the near-miss; and while two
+ids in the set are one wave spelled twice (kit.wave_near_miss: `D0`/`Day0`, `rel`/`release`), or a
+blocking row names text that is no wave id at all, the wave is refused until `gate.sh rekey-wave`
+re-spells the rows. A row the sweep closed by class-B packets holds its waves while they are
+pending, and the sweep descopes them when the default fires (gate_sweep step 3b).
+
+  gate.sh waves --program P [--json]
+      the set, with where each id is named, its twins and stray text; exit 1 while not canonical.
+  gate.sh rekey-wave --program P --row KR-n|DR-n --from X --to Y --reason T
+      re-spell X as Y in one known row's or decision's wave fields, by an appended event that keeps
+      the earlier row and records {from, to, fields, at, by, reason}; under the program lease. Refused,
+      writing nothing, unless Y is a spelling of X (kit.wave_respells; moving a block to another wave
+      changes what the row gates), the row names X, Y is a wave id, and X has not started.
+
 Exit 0 the wave may fire · 1 refused (each reason printed) · 2 the program cannot be read
-(unregistered, bad slug): the caller refuses on both and says which.
+(unregistered, bad slug) or W is not one of its wave ids: the caller refuses on both and says which.
 """
 
 from __future__ import annotations
 
+import difflib
 import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import kit
 
 BLOCKING_DECISION_STATES = ("open", "carried", "reopened")
+
+# Which store's spelling a twin should converge on, best first: the operator-signed frame, a wave that
+# has started (its dues count from that spelling), an operator- or packet-ruled decision, then rows.
+AUTHORITY = {
+    "frame": 0,
+    "started": 1,
+    "decision": 2,
+    "known-row": 3,
+    "premise": 4,
+    "read": 4,
+}
+REKEYABLE = ("decision", "known-row")
+
+
+def vocabulary(ctx: Any) -> Dict[str, Any]:
+    """The program's one set of wave ids, read from its frame and LIVE records:
+      frame.json build_waves; per folded decision blocks_waves, descoped_waves, restored_waves and
+      set.narrowing_probe.wave; per folded known row blocks_waves, descoped_waves, applied_in_wave;
+      per live not-yet-true filing blocks_waves, owner_wave; the live scheduled-read filing's
+      blocks_waves; every wave started in waves.jsonl.
+    -> {"ids": {wave: [(where, field, kind)]}, "twins": [[a, b]], "stray": [{where, field, value,
+    blocking}]}. A stray value is no wave id at all (free text, a number); it is `blocking` when the
+    field it sits in can refuse a wave now, since such a row may then block any wave."""
+    import scheduled_read
+    from gate_rows_a import known_rows
+
+    hits: List[
+        Tuple[str, str, str, Any, bool]
+    ] = []  # where, field, kind, value, blocking
+
+    def add(where: str, field: str, kind: str, vals: Any, blocking: bool) -> None:
+        for v in vals if isinstance(vals, list) else [vals]:
+            if v is not None and v != "":
+                hits.append((where, field, kind, v, blocking))
+
+    add("frame.json", "build_waves", "frame", ctx.frame.get("build_waves") or [], False)
+    for did, d in kit.fold(ctx.jsonl("decisions.jsonl")).items():
+        add(
+            str(did),
+            "blocks_waves",
+            "decision",
+            d.get("blocks_waves") or [],
+            d.get("status") in BLOCKING_DECISION_STATES,
+        )
+        add(str(did), "descoped_waves", "decision", d.get("descoped_waves") or [], True)
+        add(
+            str(did), "restored_waves", "decision", d.get("restored_waves") or [], False
+        )
+        npb = (
+            (d.get("set") or {}).get("narrowing_probe")
+            if isinstance(d.get("set"), dict)
+            else None
+        )
+        if isinstance(npb, dict):
+            add(
+                str(did), "set.narrowing_probe.wave", "decision", npb.get("wave"), False
+            )
+    for kr in known_rows(ctx):
+        live = kr.get("status", "open") == "open" or (
+            bool(kr.get("packets")) and not kr.get("packets_resolved")
+        )
+        add(
+            str(kr["id"]),
+            "blocks_waves",
+            "known-row",
+            kr.get("blocks_waves") or [],
+            live,
+        )
+        add(
+            str(kr["id"]),
+            "descoped_waves",
+            "known-row",
+            kr.get("descoped_waves") or [],
+            True,
+        )
+        add(
+            str(kr["id"]),
+            "applied_in_wave",
+            "known-row",
+            kr.get("applied_in_wave"),
+            False,
+        )
+    for row in kit.not_yet_rows(ctx.jsonl("residual.jsonl")).values():
+        add(
+            str(row.get("id")),
+            "blocks_waves",
+            "premise",
+            row.get("blocks_waves") or [],
+            True,
+        )
+        add(str(row.get("id")), "owner_wave", "premise", row.get("owner_wave"), False)
+    sr = scheduled_read.live_filing(ctx.records)
+    if sr:
+        passed = (sr.get("read") or {}).get("verdict") == "PASS"
+        add(
+            str(sr.get("id")),
+            "blocks_waves",
+            "read",
+            sr.get("blocks_waves") or [],
+            not passed,
+        )
+    for w in kit.wave_starts(ctx.records):
+        add("waves.jsonl", "started", "started", w, False)
+
+    ids: Dict[str, List[Tuple[str, str, str]]] = {}
+    stray: List[Dict[str, Any]] = []
+    for where, field, kind, v, blocking in hits:
+        if isinstance(v, str) and kit.WAVE_ID_RE.match(v):
+            if (where, field, kind) not in ids.setdefault(v, []):
+                ids[v].append((where, field, kind))
+        else:
+            stray.append(
+                {"where": where, "field": field, "value": v, "blocking": blocking}
+            )
+    names = sorted(ids)
+    twins = [
+        [a, b]
+        for i, a in enumerate(names)
+        for b in names[i + 1 :]
+        if kit.wave_near_miss(a, b)
+    ]
+    return {"ids": ids, "twins": twins, "stray": stray}
+
+
+def _rows(src: List[Tuple[str, str, str]]) -> List[str]:
+    out: List[str] = []
+    for where, _, _ in src:
+        if where not in out:
+            out.append(where)
+    return out
+
+
+def twin_reason(slug: str, v: Dict[str, Any], a: str, b: str) -> str:
+    """Why neither spelling of one wave fires, and the re-key that converges them: the rows of the
+    spelling the less authoritative stores use (AUTHORITY) move to the other's."""
+    sa, sb = v["ids"][a], v["ids"][b]
+
+    def rank(src: List[Tuple[str, str, str]]) -> int:
+        return min(AUTHORITY.get(k, 9) for _, _, k in src)
+
+    dst, src_w = (a, b) if rank(sa) <= rank(sb) else (b, a)
+    movable = [w for w, _, k in v["ids"][src_w] if k in REKEYABLE]
+    if not movable:  # the other direction, if that side is re-keyable
+        dst, src_w = src_w, dst
+        movable = [w for w, _, k in v["ids"][src_w] if k in REKEYABLE]
+    head = (
+        f"wave ids {a} and {b} spell one wave two ways ({a}: {', '.join(_rows(sa))}; {b}: "
+        f"{', '.join(_rows(sb))}): a row keyed on one is not counted for the other, so neither "
+        "fires until the records agree"
+    )
+    if not movable:
+        return (
+            f"{head}; no row on either side is one rekey-wave re-spells (a decision or known row): "
+            "correct the frame's build_waves by a re-signed frame, or refile the row"
+        )
+    rows = sorted(set(movable), key=movable.index)
+    return (
+        f"{head}; re-key {', '.join(rows)}: `gate.sh rekey-wave --program {slug} --row {rows[0]} "
+        f"--from {src_w} --to {dst} --reason …`"
+        + (" (once per row)" if len(rows) > 1 else "")
+        + ", or the reverse"
+    )
+
+
+def stray_reason(slug: str, s: Dict[str, Any]) -> str:
+    return (
+        f"{s['where']} {s['field']} names {s['value']!r}, which is not a wave id: it may block any "
+        f"wave, so every wave waits until it is re-keyed (`gate.sh rekey-wave --program {slug} --row "
+        f"{s['where']} --from {str(s['value'])!r} --to <wave> --reason …`)"
+    )
+
+
+def resolve_wave(slug: str, wave: str) -> None:
+    """Raise KitError (exit 2, before any side effect) unless `wave` is one of the program's ids."""
+    import gate
+
+    if kit.registry_get(slug) is None:
+        raise kit.KitError(f"program {slug!r} is not registered")
+    ids = vocabulary(gate.make_ctx(slug))["ids"]
+    if wave in ids:
+        return
+    near = sorted(w for w in ids if kit.wave_near_miss(wave, w))
+    close = [
+        w
+        for w in difflib.get_close_matches(wave, list(ids), n=3, cutoff=0.6)
+        if w not in near
+    ]
+    raise kit.KitError(
+        f"unknown wave id {wave!r} for {slug}"
+        + (f"; near-miss: {', '.join(near)}" if near else "")
+        + (f"; did you mean {', '.join(close)}?" if close and not near else "")
+        + f"; its wave ids: {', '.join(sorted(ids)) or 'none'} (gate.sh waves --program {slug}). "
+        "A wave no record names cannot be gated: the frame's build_waves or the row that gates it "
+        "must name it"
+    )
 
 
 def _names(wave: Optional[str], waves: Any) -> bool:
@@ -119,6 +333,12 @@ def blockers(
     if gate.reopened(ctx):
         reasons.append("an operator reopen is signed after the newest certificate")
 
+    voc = vocabulary(ctx)
+    for a, b in voc["twins"]:
+        if wave is None or wave in (a, b):
+            reasons.append(twin_reason(slug, voc, a, b))
+    reasons += [stray_reason(slug, s) for s in voc["stray"] if s["blocking"]]
+
     for d in kit.fold(ctx.jsonl("decisions.jsonl")).values():
         did = d.get("id")
         if wave is not None and wave in (d.get("descoped_waves") or []):
@@ -155,6 +375,19 @@ def blockers(
         if wave is not None and wave in (kr.get("descoped_waves") or []):
             reasons.append(
                 f"{kid}: descoped wave {wave} (closed by its default; it does not build)"
+            )
+            continue
+        pids = [str(p) for p in kr.get("packets") or []]
+        if (
+            pids
+            and not kr.get("packets_resolved")
+            and _names(wave, kr.get("blocks_waves"))
+        ):
+            ws = list(kr.get("blocks_waves") or [])
+            reasons.append(
+                f"{kid}: closed by its default; class-B packet {', '.join(pids)} (default descope) is "
+                f"pending, so {', '.join(ws)} {'waits' if len(ws) == 1 else 'wait'} until it fires "
+                f"(descoped) or the operator vetoes it (cc-signoff research:{slug}/veto/{kid})"
             )
             continue
         if kr.get("status", "open") != "open" or not _names(
@@ -235,6 +468,8 @@ def cmd_requires(a: Any) -> int:
         raise kit.KitError(
             "--start needs --wave: a start is recorded for one admitted wave"
         )
+    if a.wave is not None:
+        resolve_wave(a.program, a.wave)
     r = blockers(a.program, a.wave, a.after_signoff)
     ok = not r["reasons"]
     if ok and a.start:
@@ -267,7 +502,141 @@ def cmd_requires(a: Any) -> int:
     return 0 if ok else 1
 
 
+def cmd_waves(a: Any) -> int:
+    import gate
+
+    slug = kit.check_slug(a.program)
+    if kit.registry_get(slug) is None:
+        raise kit.KitError(f"program {slug!r} is not registered")
+    v = vocabulary(gate.make_ctx(slug))
+    ok = not v["twins"] and not any(s["blocking"] for s in v["stray"])
+    labels = {
+        w: [f"{where} {field}" for where, field, _ in src]
+        for w, src in v["ids"].items()
+    }
+    if a.json:
+        print(
+            json.dumps(
+                {
+                    "program": slug,
+                    "canonical": ok,
+                    "ids": labels,
+                    "twins": v["twins"],
+                    "stray": v["stray"],
+                },
+                sort_keys=True,
+            )
+        )
+        return 0 if ok else 1
+    print(f"{slug}: {len(labels)} wave id(s){'' if ok else ', NOT canonical'}")
+    for w in sorted(labels):
+        print(f"  {w}: {', '.join(labels[w])}")
+    for x, y in v["twins"]:
+        print(f"TWINS {x} / {y}: {twin_reason(slug, v, x, y)}")
+    for s in v["stray"]:
+        print(
+            f"STRAY {s['where']} {s['field']}: {s['value']!r} "
+            + (
+                "(it blocks now: every wave waits)"
+                if s["blocking"]
+                else "(blocks nothing now)"
+            )
+        )
+    return 0 if ok else 1
+
+
+def cmd_rekey(a: Any) -> int:
+    import gate
+    from gate_rows_a import known_rows
+
+    slug = kit.check_slug(a.program)
+    if kit.registry_get(slug) is None:
+        raise kit.KitError(f"program {slug!r} is not registered")
+    src, dst = a.src, a.dst
+    if not kit.WAVE_ID_RE.match(dst):
+        raise kit.KitError(f"bad wave id {dst!r} for --to")
+    if src == dst:
+        raise kit.KitError(f"--from and --to are both {src!r}: nothing to re-key")
+    ctx = gate.make_ctx(slug)
+    krs = {str(r["id"]): r for r in known_rows(ctx)}
+    decs = kit.fold(ctx.jsonl("decisions.jsonl"))
+    if a.row in krs and a.row in decs:
+        raise kit.KitError(
+            f"{a.row} is both a known row and a decision; re-key refused"
+        )
+    if a.row in krs:
+        store, rec = "known_rows.jsonl", krs[a.row]
+        fields = ("blocks_waves", "descoped_waves", "applied_in_wave")
+    elif a.row in decs:
+        store, rec = "decisions.jsonl", decs[a.row]
+        fields = ("blocks_waves", "descoped_waves", "restored_waves", "set")
+    else:
+        raise kit.KitError(f"no known row or decision {a.row} in {slug}'s records")
+    ev: Dict[str, Any] = {"id": a.row}
+    changed: List[str] = []
+    for f in fields:
+        val = rec.get(f)
+        if f == "set":
+            npb = val.get("narrowing_probe") if isinstance(val, dict) else None
+            if isinstance(npb, dict) and npb.get("wave") == src:
+                new = json.loads(json.dumps(val))
+                new["narrowing_probe"]["wave"] = dst
+                ev["set"] = new
+                changed.append("set.narrowing_probe.wave")
+        elif isinstance(val, list) and src in val:
+            out: List[Any] = []
+            for w in val:
+                w2 = dst if w == src else w
+                if w2 not in out:
+                    out.append(w2)
+            ev[f] = out
+            changed.append(f)
+        elif val == src:
+            ev[f] = dst
+            changed.append(f)
+    if not changed:
+        raise kit.KitError(f"{a.row} names no wave {src}")
+    if not kit.wave_respells(src, dst):
+        raise kit.KitError(
+            f"{dst} is not a spelling of {src}: a re-key moves a row to the same wave spelled another "
+            "way, never to another wave, which would change what the row gates"
+        )
+    started = kit.wave_starts(ctx.records)
+    if src in started:
+        raise kit.KitError(
+            f"wave {src} started at {started[src]}: its keyed dues count from that start, so the "
+            "spelling it started under stays"
+        )
+    ev["rekeyed"] = {
+        "from": src,
+        "to": dst,
+        "fields": changed,
+        "at": kit.now_iso(),
+        "by": kit.lease_owner(),
+        "reason": a.reason,
+    }
+    kit.append_jsonl(ctx.records / store, ev)
+    print(
+        f"REKEYED {a.row}: {src} -> {dst} in {', '.join(changed)} (an event appended to {store}; "
+        "the earlier row is kept)"
+    )
+    return 0
+
+
 def add_verbs(sub: Any) -> None:
+    p = sub.add_parser("waves")
+    p.add_argument("--program", required=True)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_waves)
+    p = sub.add_parser("rekey-wave")
+    p.add_argument("--program", required=True)
+    p.add_argument(
+        "--row", required=True, help="the known row (KR-n) or decision (DR-n) to re-key"
+    )
+    p.add_argument("--from", dest="src", required=True)
+    p.add_argument("--to", dest="dst", required=True)
+    p.add_argument("--reason", required=True)
+    p.set_defaults(fn=cmd_rekey)
     p = sub.add_parser("requires")
     p.add_argument("--program", required=True)
     p.add_argument("--wave")

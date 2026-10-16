@@ -248,9 +248,35 @@ budget_pkt() { /usr/bin/python3 -c "import json; print((json.load(open('$REC/bud
   tail -n 1 "$REC/known_rows.jsonl" | grep -q '"B2"'
 }
 
-@test "§10 item 9: a known row whose frame was re-signed after its due date stays open" {
-  printf '{"id":"KR-1","kind":"frame-omission","status":"open","resign_due":"2026-09-29T00:00:00Z","default":"descope","blocks_waves":["B2"]}\n' \
+# kr_st <id>: a known row's folded status
+kr_st() { /usr/bin/python3 -c "
+import json; s = {}
+for l in open('$REC/known_rows.jsonl'):
+    if l.strip(): r = json.loads(l); s.setdefault(r['id'], {}).update(r)
+print(s['$1'].get('status'))"; }
+# frame_sig <at_iso>: a VALID operator frame signature at that time, pinning frame.json as it is now
+frame_sig() {
+  /usr/bin/python3 - "$1" "$REC/frame.json" "$CC_RESEARCH_HOME/demo/signoff.jsonl" "$REPO/scripts/lib" <<'PY'
+import calendar, json, sys, time
+at_iso, frame, log, lib = sys.argv[1:5]
+sys.path.insert(0, lib)
+import operator_sign
+from pathlib import Path
+rec = {"row": "research:demo/frame", "action": "frame", "target": None,
+       "at": calendar.timegm(time.strptime(at_iso, "%Y-%m-%dT%H:%M:%SZ")), "at_iso": at_iso,
+       "evidence": "fixture re-sign", "pins": {"frame.json": operator_sign.file_pin(Path(frame))},
+       "provenance": {"claude_ancestor": False, "chain": ["zsh", "kitty"]}}
+open(log, "a").write(json.dumps(rec) + "\n")
+PY
+}
+applies() { /usr/bin/env python3 "$REPO/scripts/research-kit/intake.py" set --program demo --applies-known-row "$1"; }
+
+@test "§10 item 9: a known row whose re-signed frame lists it stays open past its due date" {
+  # held after the fixture's frame signature (2026-09-30T00:00Z); the delta lists it and is re-signed
+  printf '{"id":"KR-1","kind":"frame-omission","status":"open","resign_due":"2026-10-01T00:00:00Z","default":"descope","blocks_waves":["B2"],"ts":"2026-09-30T01:00:00Z"}\n' \
     >> "$REC/known_rows.jsonl"
+  applies KR-1
+  frame_sig 2026-10-02T00:00:00Z
   "$G" sweep --program demo
   [ "$(grep -c '"closed"' "$REC/known_rows.jsonl")" -eq 0 ]
 }
@@ -259,25 +285,64 @@ budget_pkt() { /usr/bin/python3 -c "import json; print((json.load(open('$REC/bud
 # its re-sign DUE, so an operator who re-signed on time saw the row closed by its default and its
 # waves descoped, and the only way to keep them was to wait past the due to sign. Nothing closed the
 # row when the frame-delta cycle re-issued the certificate (§5.4 step 4), so its waves never fired.
-@test "v1.3: a frame re-signed after the row was held, even before its due, spares it; the re-issued certificate closes it" {
-  # held 2026-09-29T12:00Z, frame re-signed 2026-09-30T00:00Z (the fixture's), due 2026-09-30T06:00Z
-  printf '{"id":"KR-3","kind":"frame-omission","status":"open","resign_due":"2026-09-30T06:00:00Z","default":"descope","blocks_waves":["B2"],"ts":"2026-09-29T12:00:00Z"}\n' \
+@test "v1.3: a frame re-signed after the row was held, even before its due, spares it when it carries the row's delta" {
+  # both held 2026-09-30T01:00Z, after the fixture's frame signature; due 2026-09-30T06:00Z
+  printf '{"id":"KR-3","kind":"frame-omission","status":"open","resign_due":"2026-09-30T06:00:00Z","default":"descope","blocks_waves":["B2"],"ts":"2026-09-30T01:00:00Z"}\n' \
     >> "$REC/known_rows.jsonl"
-  # held after the re-sign: nothing has re-signed for it, so its default applies
   printf '{"id":"KR-4","kind":"frame-omission","status":"open","resign_due":"2026-09-30T06:00:00Z","default":"descope","blocks_waves":["B3"],"ts":"2026-09-30T01:00:00Z"}\n' \
     >> "$REC/known_rows.jsonl"
+  # the delta carries KR-3 only, re-signed on time (before the due)
+  applies KR-3
+  frame_sig 2026-09-30T03:00:00Z
   run "$G" sweep --program demo
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  st() { /usr/bin/python3 -c "
-import json; s = {}
-for l in open('$REC/known_rows.jsonl'):
-    if l.strip(): r = json.loads(l); s.setdefault(r['id'], {}).update(r)
-print(s['$1'].get('status'))"; }
-  [ "$(st KR-3)" = open ] || { cat "$REC/known_rows.jsonl"; false; }
-  [ "$(st KR-4)" = closed ]
+  [ "$(kr_st KR-3)" = open ] || { cat "$REC/known_rows.jsonl"; false; }
+  [ "$(kr_st KR-4)" = closed ]
   [[ "$output" == *"closed known row KR-4 by its default"* ]] || { echo "$output"; false; }
   [[ "$output" != *"KR-3"* ]] || { echo "$output"; false; }
   # the re-issue that closes it: tests/research-kit-gate.bats, whose fixture certifies cleanly
+}
+
+# RED-proof (pane 194 / the lead, 2026-10-16): truememory-2-0's valid frame signature of
+# 2026-10-12T17:07:28Z postdates KR-06..09's hold but carries none of their rows, and the sweep spared
+# them on the signature's date alone. On that kit each row below stays open.
+@test "the KR-06 shape: a frame signed after the hold that does not carry the row's delta spares nothing" {
+  # re-signed after the hold with the frame unchanged
+  printf '{"id":"KR-5","kind":"frame-omission","status":"open","resign_due":"2026-09-30T06:00:00Z","default":"descope","blocks_waves":["B2"],"ts":"2026-09-30T01:00:00Z"}\n' \
+    >> "$REC/known_rows.jsonl"
+  frame_sig 2026-09-30T03:00:00Z
+  run "$G" sweep --program demo
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(kr_st KR-5)" = closed ] || { cat "$REC/known_rows.jsonl"; false; }
+  # the frame changed and was re-signed, but its change lists another row
+  printf '{"id":"KR-6","kind":"frame-omission","status":"open","resign_due":"2026-09-30T06:00:00Z","default":"descope","blocks_waves":["B3"],"ts":"2026-09-30T01:00:00Z"}\n' \
+    >> "$REC/known_rows.jsonl"
+  printf '{"id":"KR-7","kind":"frame-omission","status":"open","resign_due":"2099-01-01T00:00:00Z","default":"descope","blocks_waves":["B4"],"ts":"2026-09-30T01:00:00Z"}\n' \
+    >> "$REC/known_rows.jsonl"
+  applies KR-7
+  frame_sig 2026-09-30T04:00:00Z
+  run "$G" sweep --program demo
+  [ "$(kr_st KR-6)" = closed ] || { cat "$REC/known_rows.jsonl"; false; }
+  # listed by the agent but never re-signed: the listing alone is no evidence
+  printf '{"id":"KR-8","kind":"frame-omission","status":"open","resign_due":"2026-09-30T06:00:00Z","default":"descope","blocks_waves":["B5"],"ts":"2026-09-30T05:00:00Z"}\n' \
+    >> "$REC/known_rows.jsonl"
+  applies KR-8
+  run "$G" sweep --program demo
+  [ "$(kr_st KR-8)" = closed ] || { cat "$REC/known_rows.jsonl"; false; }
+}
+
+@test "intake.py set --applies-known-row lists an open frame-omission row once, and refuses any other id" {
+  printf '{"id":"KR-3","kind":"frame-omission","status":"open","resign_due":"2099-01-01T00:00:00Z","default":"descope","blocks_waves":["B2"]}\n' \
+    >> "$REC/known_rows.jsonl"
+  printf '{"id":"KR-9","kind":"cap-round","status":"open","blocks_waves":[]}\n' >> "$REC/known_rows.jsonl"
+  applies KR-3
+  applies KR-3
+  [ "$(/usr/bin/python3 -c "import json; print(json.load(open('$REC/frame.json'))['known_rows_applied'])")" = "['KR-3']" ]
+  run applies KR-9
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"KR-9 is not an open frame-omission known row"* ]] || { echo "$output"; false; }
+  run applies KR-77
+  [ "$status" -ne 0 ]
 }
 
 @test "§10 item 9: a class-b known-row default files a no-change class-B packet and closes the row" {
@@ -287,6 +352,64 @@ print(s['$1'].get('status'))"; }
   [ "$status" -eq 0 ]
   id="$(tail -n 1 "$REC/known_rows.jsonl" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["packets"][0])')"
   [ "$(pkt "$id" '["default_effect"]')" = "no-change" ]
+}
+
+# RED-proof (2026-10-16): on b2ed965e3 nothing read a known row's `packets`, so once the sweep closed
+# a class-b row its waves were admitted at once, the packet's "descope" default fired over nothing,
+# and B2 stayed CLEAR throughout; the first refusal below fails there.
+# close_kr2: plant a class-b row and close it by its default with the clock at 2026-10-01, so its
+# packet's 48-hour veto deadline is already past when cc-decide's expire-sweep runs at the real time.
+close_kr2() {
+  printf '{"id":"KR-2","kind":"frame-omission","status":"open","resign_due":"2026-09-30T06:00:00Z","default":"class-b","names_rows":["AM-9"],"blocks_waves":["B2"],"ts":"2026-09-30T01:00:00Z"}\n' \
+    >> "$REC/known_rows.jsonl"
+  CC_NOW=2026-10-01T00:00:00Z "$G" sweep --program demo > /dev/null
+  kpk="$(tail -n 1 "$REC/known_rows.jsonl" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["packets"][0])')"
+  certify
+}
+
+@test "a class-b known-row default holds its waves while its packet is pending, and descopes them when the default fires" {
+  close_kr2
+  run "$G" requires --program demo --wave B3
+  [ "$status" -eq 0 ] || { echo "$output"; false; } # a wave the row does not name
+  run "$G" requires --program demo --wave B2
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"KR-2: closed by its default; class-B packet $kpk (default descope) is pending, so B2 waits"* ]] || { echo "$output"; false; }
+  /bin/bash "$D" expire-sweep > /dev/null
+  [ "$(pkt "$kpk" '["status"]')" = "expired-actioned" ]
+  run "$G" sweep --program demo
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"applied default of $kpk to KR-2: descope; descoped waves ['B2']"* ]] || { echo "$output"; false; }
+  run "$G" requires --program demo --wave B2
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"KR-2: descoped wave B2"* ]] || { echo "$output"; false; }
+  # applied once: a second sweep appends nothing
+  n="$(wc -l < "$REC/known_rows.jsonl")"
+  "$G" sweep --program demo > /dev/null
+  [ "$(wc -l < "$REC/known_rows.jsonl")" -eq "$n" ]
+}
+
+@test "a signed veto of a class-b known-row packet releases its waves; an unsigned cc-decide veto fails the sweep and keeps them held" {
+  close_kr2
+  /bin/bash "$D" veto "$kpk" > /dev/null
+  run "$G" sweep --program demo
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"UNSIGNED VETO $kpk on KR-2"* ]] || { echo "$output"; false; }
+  run "$G" requires --program demo --wave B2
+  [ "$status" -eq 1 ]
+  sig veto '"KR-2"'
+  run "$G" sweep --program demo
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"vetoed-by-operator KR-2: default of $kpk not applied; B2 released"* ]] || { echo "$output"; false; }
+  run "$G" requires --program demo --wave B2
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "sweep checks a known row's packets like a decision's: one missing from cc-decide is MALFORMED" {
+  printf '{"id":"KR-2","kind":"frame-omission","status":"closed","closed_by":"default","packets":["feedfacecafe"],"blocks_waves":["B2"]}\n' \
+    >> "$REC/known_rows.jsonl"
+  run "$G" sweep --program demo
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"MALFORMED PACKET feedfacecafe (KR-2): not in cc-decide"* ]] || { echo "$output"; false; }
 }
 
 # ── an answer after a sweep conversion (RECORDS.md "An answer after a sweep conversion") ─────────

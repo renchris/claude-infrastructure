@@ -980,18 +980,30 @@ reads() { cat "$CC_RESEARCH_HOME/router-heldout/reads.jsonl" 2>/dev/null | wc -l
 
 # RED-proof (method v1.3, 2026-10-16): before close_delta_rows nothing closed a frame-omission known
 # row when the frame-delta cycle re-issued the certificate (§5.4 step 4), so `requires` held its waves.
-@test "v1.3: a passing gate run closes each open frame-omission row held before a valid frame signature, and no other" {
-  # the fixture's frame is signed 2026-09-30T00:00:00Z: KR-3 was held before it, KR-4 after it
+# RED-proof (pane 194 / the lead, 2026-10-16): the closing rule read "any valid frame signature newer
+# than the hold", so a re-sign that carried none of a row's delta (truememory-2-0's 2026-10-12 one over
+# KR-06..09) closed it on the next passing run. On that kit the first run below closes KR-3 and KR-4.
+@test "v1.3: a passing gate run closes an open frame-omission row only when a frame re-signed after its hold carries its delta" {
+  # the fixture's frame is signed 2026-09-30T00:00:00Z; both rows are held after it
   printf '%s\n' \
-    '{"id":"KR-3","kind":"frame-omission","status":"open","resign_due":"2099-01-01T00:00:00Z","default":"descope","blocks_waves":["B2"],"ts":"2026-09-29T12:00:00Z"}' \
+    '{"id":"KR-3","kind":"frame-omission","status":"open","resign_due":"2099-01-01T00:00:00Z","default":"descope","blocks_waves":["B2"],"ts":"2026-09-30T01:00:00Z"}' \
     '{"id":"KR-4","kind":"frame-omission","status":"open","resign_due":"2099-01-01T00:00:00Z","default":"descope","blocks_waves":["B3"],"ts":"2026-09-30T01:00:00Z"}' \
     >> "$REC/known_rows.jsonl"
+  # the KR-06 shape: re-signed after the hold, frame unchanged, so no delta reached it
+  "$REPO/tests/fixtures/research-kit/fixture_signer.py" research:demo/frame --evidence "re-read, nothing added" > /dev/null
   git -C "$REC" add -A && git -C "$REC" commit -qm "plant known rows"
   run "$G" run --program demo --consent-sealed-read
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [[ "$output" == *"closed known row KR-3 (frame-delta cycle: frame re-signed 2026-09-30T00:00:00Z, certificate re-issued as CERT-v1)"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"closed known row"* ]] || { echo "$output"; false; }
+  # the delta lists KR-3, and the operator re-signs that frame
+  /usr/bin/env python3 "$REPO/scripts/research-kit/intake.py" set --program demo --applies-known-row KR-3 > /dev/null
+  "$REPO/tests/fixtures/research-kit/fixture_signer.py" research:demo/frame --evidence "FRAME v2 carries KR-3" > /dev/null
+  git -C "$REC" add -A && git -C "$REC" commit -qm "frame delta for KR-3"
+  run "$G" run --program demo --consent-sealed-read
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"closed known row KR-3 (frame-delta cycle: frame re-signed "*" carries KR-3, certificate re-issued as CERT-v2)"* ]] || { echo "$output"; false; }
   [[ "$output" != *"closed known row KR-4"* ]] || { echo "$output"; false; }
-  [ "$(grep -c '"closed_by": "CERT-v1"' "$REC/known_rows.jsonl")" -eq 1 ]
+  [ "$(grep -c '"closed_by": "CERT-v2"' "$REC/known_rows.jsonl")" -eq 1 ]
 }
 
 @test "row 16: more rounds than R_max fails" {

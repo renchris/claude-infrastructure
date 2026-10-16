@@ -344,6 +344,19 @@ Updated 2026-10-16 (v1.3, REPORT §13):
 - **The frame-delta cycle closes its rows.** The sweep spares a frame-omission known row once the operator
   re-signs the frame after it was held, before or after its due, and the re-issued certificate closes it.
 
+Updated 2026-10-16 (wave ids; scripts/research-kit/RECORDS.md "Wave ids, the re-key, and a class-b row's packets"):
+- **One spelling per wave.** `--gate-wave W` must be an id the program's frame or records name; any other is
+  refused (exit 2) naming the near-miss. While the records spell one wave two ways (`D0`/`Day0`), both are
+  refused. Run `gate.sh waves --program <slug>` before the first fire and converge each twin with `gate.sh
+  rekey-wave --program <slug> --row <KR-n|DR-n> --from <X> --to <Y> --reason "<why>"`, one row at a time,
+  toward the spelling the fire recipe passes. Never edit a record by hand to do it.
+- **A frame re-sign spares a held row only if its delta is in that frame.** List each row the delta carries with
+  `intake.py set --program <slug> --applies-known-row KR-n`, then ask the operator to re-sign the frame; a
+  re-sign for any other reason spares nothing.
+- **A class-b row's packets.** After the sweep closes a class-b row, its waves wait while its packets are
+  pending, and are descoped when the default fires unless the operator signs `cc-signoff
+  research:<slug>/veto/<KR-n>`.
+
 ## Stage 9 — certify the built artifact (§11, method v1.2)
 
 Updated 2026-10-04 (v1.2). Stages 1–8 certify the plan; Stage 9 certifies what was built from it, after

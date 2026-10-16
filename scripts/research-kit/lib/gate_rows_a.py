@@ -89,6 +89,21 @@ def known_rows(ctx: Ctx) -> List[Dict[str, Any]]:
     return list(rows.values())
 
 
+def held_at(ctx: Ctx) -> Dict[str, str]:
+    """Per known row, when it was held: its `held.at`, else the ts of the FIRST event naming it. The
+    folded ts is the newest event's, so a later event (a `rekey-wave`, a packet resolution) would move
+    the hold and change which frame signatures count as after it (gate_sweep step 3, gate.py
+    close_delta_rows). A row only frame.json carries has no hold time."""
+    out: Dict[str, str] = {}
+    for ev in ctx.jsonl("known_rows.jsonl"):
+        kid = ev.get("id")
+        if kid and kid not in out:
+            at = (ev.get("held") or {}).get("at") or ev.get("ts")
+            if at:
+                out[str(kid)] = str(at)
+    return out
+
+
 def probes(ctx: Ctx) -> Dict[str, Dict[str, Any]]:
     return folded(ctx, "probes.jsonl")
 

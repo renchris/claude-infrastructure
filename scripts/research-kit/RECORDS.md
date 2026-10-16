@@ -193,9 +193,11 @@ failed, 2 usage or refusal, 3 a dead vendor lane, 4 a voided slot. Python is 3.9
   `cc-research decision rule` does, so gate row 5 passes the ruled reversible row. A decision the sweep converted and
   the operator then answered gets its waves back and no default ("An answer after a sweep conversion", below).
 - `gate.sh requires --program P [--wave W] [--json]` (`lib/gate_requires.py`) → exit 0 the build wave may fire, 1
-  refused with each reason, 2 the program cannot be read. Reads the newest certificate and the LIVE decision and
-  known-row records (the sweep and the frame-delta cycle clear blocks after the certificate). The reader behind
-  `handoff-fire.sh --requires-gate P --gate-wave W`.
+  refused with each reason, 2 the program cannot be read or W is not one of its wave ids ("Wave ids", below). Reads
+  the newest certificate and the LIVE decision and known-row records (the sweep and the frame-delta cycle clear
+  blocks after the certificate). The reader behind `handoff-fire.sh --requires-gate P --gate-wave W`.
+  `gate.sh waves --program P [--json]` prints the wave-id set and `gate.sh rekey-wave` re-spells a row's waves
+  (same section).
 
 ## Settling a round (`lib/settle.py`, verbs on `round.sh`; added 2026-10-11)
 
@@ -705,6 +707,64 @@ Every v1.3 path applies to every frame; only FAC-34..FAC-38 are keyed on the 1.3
 - **Known rows, the frame-delta close.** A frame-omission known row carries the `ts` it was held at. The sweep spares
   it once a VALID frame signature is newer than that `ts` (a row with no `ts` keeps the old reading, newer than its
   `resign_due`). A passing `gate.sh run` then appends `{id, status: "closed", closed_by: "CERT-v<n>", why}` for each
-  open one held before a valid frame signature.
+  open one held before a valid frame signature. **Tightened 2026-10-16:** a newer signature counts only when the
+  frame it pins carries the row's delta ("The delta's evidence", below); the hold time is the row's FIRST event's
+  `ts` (or `held.at`), not the folded one.
 - **The certificate's late count.** `Scheduled checks:` counts the not-yet-true filings and scheduled reads whose `ts`
   is after `freeze.json` `at`: the waits the intake did not front-load.
+
+## Wave ids, the re-key, and a class-b row's packets (added 2026-10-16)
+
+Every block `gate.sh requires` reads matches a wave by its exact string, so a row that spells the wave another way
+blocks nothing for it. Measured on truememory-2-0 at b2ed965e3: `--wave D0` listed the open frame-omission rows KR-06
+and KR-07, while `--wave Day0`, the id the plan's fire recipe passes, listed only the certificate's reasons.
+
+- **The source of truth is the records themselves, one set per program** (`gate_requires.vocabulary`): `frame.json`
+  `build_waves` (the declared list, signed with the frame), and every wave id the live records name where a block is
+  read: per folded decision `blocks_waves`, `descoped_waves`, `restored_waves`, `set.narrowing_probe.wave`; per
+  folded known row `blocks_waves`, `descoped_waves`, `applied_in_wave`; per live not-yet-true filing `blocks_waves`,
+  `owner_wave`; the live scheduled-read filing's `blocks_waves`; every wave started in `waves.jsonl`. There is no
+  separate declaration store, and deliberately no verb that adds an id: a wave no record names cannot be gated, so a
+  typo that resolved to "nothing blocks it" would be the same fail-open. Closed rows count, so a wave stays in the
+  set after its blocks clear. `gate.sh waves --program P [--json]` prints the set, where each id is named, its twins
+  and stray text; exit 0 canonical, 1 not, 2 unreadable.
+- **Unknown id.** `requires --wave W` (so `handoff-fire.sh --gate-wave W`) exits 2 before any side effect, `--start`
+  included, when W is not in the set, naming each near-miss and listing the set.
+- **Twins.** Two ids in the set are one wave spelled twice when `kit.wave_near_miss` holds: the same key (case and
+  `-_.` dropped), or the same runs of letters and numbers with each number equal and each letter run a prefix of the
+  other's (`D0`/`Day0`, `rel`/`release`). It is narrow on purpose, because a twin refuses both ids: `W1`/`W10`,
+  `W1`/`W1a` and `pres-seg`/`pres-ask` are distinct. While a twin stands, `requires` refuses either spelling (and
+  every wave without `--wave`), naming the rows on each side and the re-key that converges them, toward the spelling
+  the more authoritative store uses (frame, then a started wave, then a decision, then a row).
+- **Stray text.** A value in a wave field that is no wave id (`"Day 0 (p1 filing)"`) may block any wave, so while the
+  field can refuse a wave now (an open/carried/reopened decision's `blocks_waves`, an open or packet-pending known
+  row's, any `descoped_waves`, a not-yet-true filing, an unpassed scheduled read) `requires` refuses every wave.
+- **`gate.sh rekey-wave --program P --row KR-n|DR-n --from X --to Y --reason T`** appends to `known_rows.jsonl` or
+  `decisions.jsonl` `{id, <each wave field naming X, with X replaced by Y and duplicates dropped>, rekeyed: {from, to,
+  fields, at, by: kit.lease_owner(), reason}}`; the earlier row stays, and the event carries no `status`, so nothing
+  else the row says changes. It runs under the program lease like every gate writing verb, and refuses, writing
+  nothing, when Y is not a wave id, X equals Y, no known row or decision has the id (or both do), the row names no X,
+  Y is not a spelling of X (`kit.wave_respells`: a near-miss of a well-formed X, or, for stray text, the id the text
+  opens with; moving a block to another wave changes what the row gates and is not a re-key), or X has started (its
+  keyed dues count from that spelling). A not-yet-true filing or scheduled read is re-spelled by refiling it.
+- **A known row's hold time** is its `held.at`, else the `ts` of the FIRST `known_rows.jsonl` event naming it
+  (`gate_rows_a.held_at`). The folded `ts` is the newest event's, so a re-key or a packet resolution would otherwise
+  move the hold.
+- **The delta's evidence** (pane 194's find, verified by the lead): truememory-2-0's VALID frame signature of
+  2026-10-12T17:07:28Z postdates KR-06..09's hold yet its frame carries none of their rows, and "any valid signature
+  newer than the hold" spared them and would have closed them at the next passing run. Now the sweep spares, and
+  `gate.sh run` closes, a held frame-omission row only on `gate.delta_signature`: a VALID frame signature dated after
+  the hold whose pinned `frame.json` lists the row in `known_rows_applied` (VALID means the pin is the frame as it
+  stands) and pins another frame than the newest non-void signature at or before the hold did. No signature at or
+  before the hold, or a listing nobody re-signed, is no evidence. `intake.py set --program P --applies-known-row KR-n`
+  (repeatable) writes the list, refusing an id that is not an open frame-omission known row; editing the frame voids
+  its signature until the operator re-signs the delta.
+- **A class-b row's packets hold and then descope its waves.** On b2ed965e3 nothing read a known row's `packets`: once
+  the sweep closed a class-b row, its waves were admitted at once and the packets' "descope" default fired over
+  nothing. Now `requires` refuses a wave in `blocks_waves` of a row with `packets` and no `packets_resolved` ("closed
+  by its default; class-B packet … is pending"), as it refuses a wave of a pending class-B decision, and sweep step
+  3b resolves the row once: every packet `expired-actioned` with default `descope` and no signed veto appends `{id,
+  packets_resolved: "default", descoped_waves: <blocks_waves>, receipt}`; an operator-SIGNED veto (`cc-signoff
+  research:<P>/veto/<KR>`) on a vetoed or fired packet appends `{id, packets_resolved: "vetoed-by-operator",
+  vetoed_by_operator: <at_iso>}` and the waves fire; a cc-decide veto with no signature prints `UNSIGNED VETO` and
+  exits 1, the waves still held. `packet_problems` checks a known row's packets like a decision's.

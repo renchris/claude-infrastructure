@@ -375,6 +375,22 @@ def cmd_set(a: argparse.Namespace) -> int:
         fr["topic_owner"] = a.topic_owner
     if a.degraded is not None:
         fr.update(degraded_terms(a))
+    if a.applies_known_row:
+        # §5.4 step 1: the frame-delta cycle's frame names the held rows it carries, and the
+        # operator's re-signature pins that list. It is the one evidence the sweep and the gate run
+        # accept that a row's delta reached a signed frame (gate.delta_signature); a signature's date
+        # alone is none. Editing the frame voids its signature until he re-signs.
+        rows = {str(r.get("id")): r for r in kit.known_rows(a.program)}
+        applied = list(fr.get("known_rows_applied") or [])
+        for kid in a.applies_known_row:
+            r = rows.get(kid) or {}
+            if r.get("kind") != "frame-omission" or r.get("status", "open") != "open":
+                raise Refused(
+                    f"--applies-known-row {kid}: {kid} is not an open frame-omission known row"
+                )
+            if kid not in applied:
+                applied.append(kid)
+        fr["known_rows_applied"] = applied
     save_frame(a.program, fr)
     print("set")
     return 0
@@ -807,6 +823,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument(
         "--topic-owner",
         help="who owns the topic, confirmed by the operator (gate row 8)",
+    )
+    p.add_argument(
+        "--applies-known-row",
+        action="append",
+        help="this frame carries the held frame-omission row's delta (repeatable; §5.4 step 1); "
+        "the operator's re-signature of it is what spares and closes the row",
     )
     p.set_defaults(fn=cmd_set)
     for verb, fn in (

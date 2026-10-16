@@ -41,7 +41,14 @@ Invoked through scripts/research-kit/gate.sh. Verbs:
                                                             build-certified program until the
                                                             operator signs the implementation (§11)
   requires  --program P [--wave W] [--json]                 may build wave W fire? exit 0 clear,
-                                                            1 refused (handoff-fire --requires-gate)
+                                                            1 refused (handoff-fire --requires-gate),
+                                                            2 a wave id outside the program's set
+  waves     --program P [--json]                            the program's wave ids, where each is
+                                                            named, twins and stray text; exit 1
+                                                            while the set is not canonical
+  rekey-wave --program P --row ID --from X --to Y --reason T
+                                                            re-spell a known row's or decision's
+                                                            wave by an appended event
   built-freeze --program P --artifact <abs dir>             pin the built snapshot; state ->
                                                             build-certifying (REPORT.md §11)
   built-run --program P [--json]                            rows 20-25; all pass -> built
@@ -253,32 +260,64 @@ def cmd_run(a: argparse.Namespace) -> int:
     return 0
 
 
+def delta_signature(ctx: Ctx, kid: str, held: str) -> Optional[Dict[str, Any]]:
+    """The operator frame signature that carries known row `kid`'s delta, or None (RECORDS.md "Held
+    frame omissions and re-finds", "The delta's evidence"). Positive evidence only: a VALID signature
+    dated after the hold whose pinned frame.json lists `kid` in `known_rows_applied` (VALID means the
+    pin is the frame as it stands, so reading the frame now reads what was signed), pinning another
+    frame than the newest non-void signature at or before the hold did. A re-sign that changes
+    nothing, or carries another row's delta, is no evidence for this one: reading "any valid frame
+    signature newer than the hold" let truememory-2-0's 2026-10-12 re-sign, which added none of their
+    rows, spare KR-06..09 and stand ready to close them. No signature at or before the hold: none."""
+    import operator_sign
+
+    if not held or kid not in (ctx.frame.get("known_rows_applied") or []):
+        return None
+    sigs = [
+        r
+        for r in operator_sign.research_records(ctx.slug, "frame")
+        if r["_verdict"] != operator_sign.VOID
+    ]
+
+    def at(r: Dict[str, Any]) -> str:
+        return str(r.get("at_iso") or "")
+
+    before = [r for r in sigs if at(r) <= held]
+    if not before:
+        return None
+    base = (max(before, key=at).get("pins") or {}).get("frame.json")
+    after = [r for r in sigs if r["_verdict"] == operator_sign.VALID and at(r) > held]
+    for r in sorted(after, key=at, reverse=True):
+        pin = (r.get("pins") or {}).get("frame.json")
+        if pin and pin != base:
+            return r
+    return None
+
+
 def close_delta_rows(ctx: Ctx, cert: str) -> List[str]:
     """§5.4 step 4, given its actuator by method v1.3 (REPORT.md §13): a certificate issued after the
-    operator re-signed the frame closes each open frame-omission known row held before that
-    signature, so `requires` stops holding its waves. This run passed every row, row 1 included, so
-    the re-signed frame is the one certified. A row with no held time is left to the sweep."""
-    import operator_sign
-    from gate_rows_a import known_rows
+    operator re-signed a frame that carries a held row's delta (delta_signature) closes that open
+    frame-omission known row, so `requires` stops holding its waves. This run passed every row, row 1
+    included, so the re-signed frame is the one certified. A row with no held time is left to the
+    sweep."""
+    from gate_rows_a import held_at, known_rows
 
-    sigs = [
-        str(r.get("at_iso") or "")
-        for r in operator_sign.research_records(ctx.slug, "frame")
-        if r["_verdict"] == operator_sign.VALID
-    ]
+    held = held_at(ctx)
     out: List[str] = []
     for kr in known_rows(ctx):
-        held = str(kr.get("ts") or "")
         if (
             kr.get("kind") != "frame-omission"
             or kr.get("status", "open") != "open"
-            or not held
+            or not held.get(kr["id"])
         ):
             continue
-        newer = sorted(s for s in sigs if s > held)
-        if not newer:
+        sig = delta_signature(ctx, kr["id"], held[kr["id"]])
+        if not sig:
             continue
-        why = f"frame-delta cycle: frame re-signed {newer[-1]}, certificate re-issued as {cert}"
+        why = (
+            f"frame-delta cycle: frame re-signed {sig.get('at_iso')} carries {kr['id']}, "
+            f"certificate re-issued as {cert}"
+        )
         kit.append_jsonl(
             ctx.records / "known_rows.jsonl",
             {"id": kr["id"], "status": "closed", "closed_by": cert, "why": why},
@@ -332,7 +371,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         practice = a.verb == "read" and getattr(a, "practice", False)  # writes nothing
         if (
-            a.verb not in ("render", "requires") and not practice
+            a.verb not in ("render", "requires", "waves") and not practice
         ):  # every other gate verb writes
             kit.lease_check(kit.check_slug(a.program))
         return int(a.fn(a))

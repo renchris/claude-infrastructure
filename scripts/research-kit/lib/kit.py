@@ -965,6 +965,49 @@ def wave_starts(records: Optional[Path]) -> Dict[str, str]:
     return out
 
 
+# Wave ids (RECORDS.md "Wave ids"): a gate keyed on a string misses every row that spells the same
+# wave another way (`D0` for `Day0`, `release` for `rel`), and refuses nothing for it. These say when
+# two ids are one wave spelled twice, which `gate.sh requires` refuses until `rekey-wave` fixes it.
+WAVE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def wave_key(w: str) -> str:
+    """The id with case and separators dropped: `Pres-Seg` and `presseg` share one."""
+    return re.sub(r"[^a-z0-9]", "", str(w).lower())
+
+
+def wave_near_miss(a: str, b: str) -> bool:
+    """True when a and b are one wave spelled two ways: the same key, or the same runs of letters and
+    numbers with each number equal and each letter run a prefix of the other's (`D0`/`Day0`,
+    `rel`/`release`). Deliberately narrow, because a twin refuses both ids: `W1`/`W10` (numbers
+    differ), `W1`/`W1a` (another run) and `pres-seg`/`pres-ask` are distinct waves."""
+    if a == b:
+        return False
+    if wave_key(a) == wave_key(b):
+        return True
+    ra = re.findall(r"[a-z]+|[0-9]+", a.lower())
+    rb = re.findall(r"[a-z]+|[0-9]+", b.lower())
+    if not ra or len(ra) != len(rb):
+        return False
+    for x, y in zip(ra, rb):
+        if x.isdigit() != y.isdigit():
+            return False
+        if x.isdigit() and int(x) != int(y):
+            return False
+        if not x.isdigit() and not (x.startswith(y) or y.startswith(x)):
+            return False
+    return True
+
+
+def wave_respells(old: str, new: str) -> bool:
+    """May a re-key move `old` to `new`? Only a spelling of the same wave: a near-miss of a
+    well-formed id, or, for text that is no wave id at all (`Day 0 (p1 filing)`), the id it opens
+    with. Moving a block to another wave changes what the row gates and is not a re-key."""
+    if WAVE_ID_RE.match(old):
+        return wave_near_miss(old, new)
+    return bool(wave_key(new)) and wave_key(old).startswith(wave_key(new))
+
+
 def cert_issued(records: Optional[Path]) -> Optional[str]:
     """The first certificate's issue time (ISO), or None: everything else the program needed was
     ready then, which is the event a `cert+<N>d` due counts from."""
