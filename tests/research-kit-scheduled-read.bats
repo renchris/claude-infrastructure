@@ -98,7 +98,7 @@ sfile() {
 @test "with a filing, row 15 is FILED and decrypts nothing; the gate certifies with row 15 carried" {
   pin null null
   # filed an hour after the fixture's freeze, so the certificate counts it as a late wait
-  CC_NOW="$(/usr/bin/python3 -c "import calendar, time; t = calendar.timegm(time.strptime('$CC_NOW', '%Y-%m-%dT%H:%M:%SZ')); print(time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(t + 3600)))")" sfile > /dev/null
+  CC_NOW="$(/usr/bin/python3 -c "import calendar, time; t = calendar.timegm(time.strptime('$CC_NOW', '%Y-%m-%dT%H:%M:%SZ')); print(time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(t + 3600)))")" sfile --owner lead > /dev/null
   git -C "$REC" add -A && git -C "$REC" commit -qm "file the scheduled read"
   run "$G" run --program demo # no read consent: none is needed, nothing is read
   [ "$status" -eq 0 ] || { echo "$output"; false; }
@@ -124,7 +124,7 @@ sfile() {
 
 @test "a filing that does not cover every awaiting stratum, or is past due, fails row 15" {
   pin null '"v1"'
-  sfile > /dev/null
+  sfile --owner lead > /dev/null
   pin null null
   out="$(rowjson 15)"
   [ "$(printf '%s\n' "$out" | head -1)" = FAIL ]
@@ -139,7 +139,7 @@ open(p,'w').write(''.join(json.dumps(r)+'\n' for r in rows))"
 
 @test "gate.sh read: practice writes nothing; the read refuses before the certificate, spends once after it, and clears the waves on PASS" {
   pin null null
-  sfile > /dev/null
+  sfile --owner lead > /dev/null
   run "$G" read --program demo --row 15 --practice
   [ "$status" -eq 1 ]
   [[ "$output" == *"NOT  stratum regex-missed, pushback awaits a fresh set"* ]] || { echo "$output"; false; }
@@ -174,7 +174,7 @@ open(p,'w').write(''.join(json.dumps(r)+'\n' for r in rows))"
 
 @test "gate.sh read: a FAIL is recorded, final, keeps the waves refused, and fails row 15 on a later run" {
   pin null null
-  sfile > /dev/null
+  sfile --owner lead > /dev/null
   git -C "$REC" add -A && git -C "$REC" commit -qm "file the scheduled read"
   "$G" run --program demo > /dev/null
   "$REPO/tests/fixtures/research-kit/fixture_signer.py" research:demo/cert --evidence fixture > /dev/null
