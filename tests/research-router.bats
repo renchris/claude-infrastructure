@@ -1100,6 +1100,11 @@ deny_reason() {
   want="$REPO/scripts/research-kit/gate.sh --render --program demo"
   [[ "$ctx" == *"Every tool except \`$want\` is blocked"* ]] || false
   [[ "$ctx" == *"Open the reply with the certificate state lines"* ]] || false
+  # …and names the phrases the Stop check reads as an added item (practice trials 4 and 8 of
+  # 2026-10-16 called the program "still open"); a reply that obeys it passes the check.
+  for p in "'still open'" "'except'" "'not yet run'" "'one more thing'" "'worth noting'" "'follow-on:'"; do
+    [[ "$ctx" == *"$p"* ]] || false
+  done
   [ -x "$REPO/scripts/research-kit/gate.sh" ] && [ ! -e "$PROG/src/scripts/research-kit/gate.sh" ] || false
   [ "$(tool Bash "$want")" = allow ]
   [[ "$(deny_reason 'git log --oneline')" == *"the certificate read \`$want\`"* ]] || false

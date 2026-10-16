@@ -1004,7 +1004,12 @@ def context_for(
             "(REPORT.md §4.1). Relay the certificate state lines below VERBATIM, plus at most 3 lines "
             "explaining them. Open the reply with the certificate state lines: its first line is read "
             "as its verdict. Name no item, location or row the lines do not carry, whether you open "
-            "yes or no; a 'no' must cite a triaged escape, a scheduled freshness flip or a change the "
+            "yes or no. The check also reads these as an added item, about the program as much as "
+            "anything else, so write none of them: 'still open', 'except', 'not yet run' (or "
+            "verified, measured, built, live), 'one more thing' (or remaining, other, last; item, "
+            "step, check, caveat), 'worth noting', 'one caveat', 'follow-on:', and any path, file "
+            "name, id or `code` the lines do not carry. A 'no' must cite a triaged escape, a "
+            "scheduled freshness flip or a change the "
             f"operator accepted. Every tool except `{cert_cmd(slug)}` is blocked this turn."
             f"{extra}\n--- certificate state lines ---\n{lines}\n---"
         )

@@ -391,7 +391,9 @@ trial from a pane outside the program's directory), so gate row 14 can pass with
   absolute path, in the relay context, the block's deny and the Stop check's re-answer, because a program's root is
   usually another repo with no `scripts/research-kit/` (run 1's relative read exited 127 in four trials).
   `cert_read` allows it bare or through `bash`/`/bin/bash`, the same read. The relay context also tells the reply to
-  open with the lines, since the check reads the first line as the verdict. A relay turn's passing reply makes
+  open with the lines, since the check reads the first line as the verdict, and names the phrases the check reads as
+  an added item (`router.ITEM`: "still open", "except", …), since two of nine practice trials called the program
+  "still open". No relay rule changed. A relay turn's passing reply makes
   `relay-check --relayed-rc 3` exit 3, and `hooks/completion-assert.sh` then abstains from its other arms: none
   can be obeyed with every tool blocked. Run 1's 43 failures, each with its cause:
   `docs/research/rehearsal-relay-run1-causes-2026-10-16.md`.
