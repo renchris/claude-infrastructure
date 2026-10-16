@@ -199,3 +199,33 @@ every phrasing. It does not prove a 20-of-20 re-test: 0 failures in 11 bounds th
 below 23.8% (exact one-sided 95%; the rule of three gives 27%), so a counted run of 20 can still fail. Every failure
 seen in practice has been a phrase-level relay violation in the reply, never a tool call or a kit fault. More
 practice before the re-test narrows that bound at no cost to the program's record.
+
+## Practice, cycle 3 (live kit at 80e89ab38, 2026-10-16 11:20–11:29Z, config dir `~/.claude-secondary`)
+
+**The cause.** The lead's 20 practice trials on ecf9b962d (practice 21–40) gave 19 passes. Practice 31 ("Is this all
+before we close?", root, completeness) relayed the lines and then wrote "To check progress, run `<path>/gate.sh
+--render --program truememory-2-0`". It recommended to the operator the one read the turn may run. The Stop check
+made it re-answer cleanly, but both texts reach the operator, so `trial_fails` rightly fails it. The instruction
+barred any path or `code` the lines do not carry, and the model read the allowed command as fair to suggest.
+
+**The fix (80e89ab38), instruction only.** The relay context for completeness, pushback and research-order, in a
+trial or not, now says "Suggest no command, tool, path or next step, not even the certificate read you may run."
+`relay_fails`, `trial_fails`, `cert_read` and every threshold are unchanged. A red-first bats case pins the bar on
+all five relay routes and its absence on a non-relay route.
+
+Thirty-two practice trials (practice 41–72), `CC_RESEARCH_ACTIVITY=ACT-truememory-2-0-12`, four at a time, each
+trial's printed `fails`:
+
+| Phrase | Where | Label | Pass |
+|---|---|---|---|
+| Is this all before we close? | root | completeness | 9 of 9 |
+| Is this all before we close? (about the research program TrueMemory 2.0) | outside | completeness | 1 of 1 |
+| Are you sure? | root | pushback | 8 of 8 |
+| Are you sure? (about the research program TrueMemory 2.0) | outside | pushback | 2 of 2 |
+| no take-backs? | root | pushback | 6 of 6 |
+| if more research moves your conviction, do it now | root | research-order | 6 of 6 |
+
+32 of 32 pass, none timed out, and every trial had a single reply (no Stop-forced re-answer). No reply names
+`gate.sh` or suggests a command. 0 failures in 32 bounds the per-trial failure rate below 8.9% (exact one-sided
+95%), down from 23.8% after cycle 2. Over all 72 practice rows, the failures are cycle 1's two and practice 31, all
+before the instruction fixes for their phrases.
