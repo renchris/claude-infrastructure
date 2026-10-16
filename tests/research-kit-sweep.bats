@@ -401,7 +401,7 @@ plant_ruled_conversion() {
   [ "$(pkt "$pkb" '["status"]')" = "actioned" ]
   [[ "$(pkt "$pkb" '["evidence"]')" == "answered by decision affirm --by operator 20"* ]] || false
   [ "$(dec 'd["status"], d["packet"], d["descoped_waves"], d["affirmed_by"]')" = "ruled None [] operator" ]
-  ! grep -q '"reopened"' "$REC/decisions.jsonl"
+  ! grep -q '"reopened"' "$REC/decisions.jsonl" || false
   run "$G" requires --program demo --wave B1
   [ "$status" -eq 0 ]
   run "$CR" decision affirm --program demo --id DR-1 --because again --receipt again
