@@ -8,6 +8,10 @@
 # patch and docs/patches/kitty-talk-thread-survives-v0.48.2.patch (accept() errors no longer kill
 # remote control; signals work again) to a clean v0.48.2 tree, default ~/ktb-noband, WITHOUT the
 # title band, so a no on the band never drops the talk-thread fix. It probes "patched-noband".
+# THE FULLSCREEN FIX (2026-10-16, decision a41897063971): `build --no-band` also applies
+# docs/patches/kitty-fullscreen-destroy-v0.48.2.patch (leave native fullscreen before destroying a
+# window; `@ action --match` honors its match), and `arm` refuses a staged bundle without it, because
+# the adoption the operator chose (0a8ffe58562a) is of the build that carries it.
 #
 # THE ADOPTION ORDER (2026-09-30 backlog master plan, tickets kitty.3-kitty.5):
 #   build     agent    (no-band variant only) patch a clean v0.48.2 tree and run `make app`
@@ -75,6 +79,9 @@ probe() {
   esac
 }
 is_patched() { [ "$1" = patched ] || [ "$1" = patched-noband ]; }
+# has_fsfix <bundle>: the fullscreen-destroy patch's class name is in the bundle's GLFW backend.
+has_fsfix() { LC_ALL=C grep -qa GLFWDeferredClose "$1/Contents/Resources/kitty/kitty/glfw-cocoa.so" 2>/dev/null; }
+fsfix_tag() { has_fsfix "$1" && echo " +fullscreen-fix"; }
 
 version() { /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$1/Contents/Info.plist" 2>/dev/null || echo '?'; }
 
@@ -87,8 +94,8 @@ need_confirm() {  # need_confirm <given>
 cmd_status() {
   local pl link
   pl="$(probe "$LIVE")"; link="$(readlink "$TITLE_ON" 2>/dev/null)"
-  say "live     $LIVE  $pl  v$(version "$LIVE")"
-  say "staged   $STAGED  $(probe "$STAGED")"
+  say "live     $LIVE  $pl$(fsfix_tag "$LIVE")  v$(version "$LIVE")"
+  say "staged   $STAGED  $(probe "$STAGED")$(fsfix_tag "$STAGED")"
   say "stock    $STOCK  $(probe "$STOCK")"
   say "⌘⇧B ON   ${link:-(not a link: $TITLE_ON)}"
   say "marker   $([ -s "$MARKER" ] && head -1 "$MARKER" || echo none)"
@@ -111,7 +118,8 @@ cmd_build() {
     --no-band) band=0; shift ;; --src) src="${2:-}"; shift 2 ;; --dry-run) dry=1; shift ;;
     --list-patches) list=1; shift ;; *) exit 2 ;; esac; done
   [ "$band" = 0 ] || { say "refused: only 'build --no-band' is scripted; the band build is made by hand in ~/ktb"; exit 2; }
-  local patches=("$REPO/docs/patches/kitty-upstream-defects.patch" "$REPO/docs/patches/kitty-talk-thread-survives-v0.48.2.patch")
+  local patches=("$REPO/docs/patches/kitty-upstream-defects.patch" "$REPO/docs/patches/kitty-talk-thread-survives-v0.48.2.patch"
+                 "$REPO/docs/patches/kitty-fullscreen-destroy-v0.48.2.patch")
   if [ "$list" = 1 ]; then printf '%s\n' "${patches[@]}"; return 0; fi
   head="$(git -C "$src" rev-parse HEAD 2>/dev/null)"; tag="$(git -C "$src" rev-parse 'v0.48.2^{commit}' 2>/dev/null)"
   [ -n "$head" ] && [ "$head" = "$tag" ] || { say "refused: $src is not a git tree at v0.48.2"; exit 1; }
@@ -131,7 +139,7 @@ cmd_build() {
   PATH="/opt/homebrew/bin:$PATH" make -C "$src" app || { say "make app failed in $src (patches stay applied)"; exit 1; }
   p="$(probe "$src/kitty.app")"
   say "built $src/kitty.app probes '$p'"
-  [ "$p" = patched-noband ] || { say "verdict=BUILD-UNVERIFIED"; exit 1; }
+  if [ "$p" != patched-noband ] || ! has_fsfix "$src/kitty.app"; then say "verdict=BUILD-UNVERIFIED"; exit 1; fi
   say "verdict=BUILT (next: stage --no-band)"
 }
 
@@ -156,6 +164,7 @@ cmd_stage() {
 
 cmd_arm() {
   is_patched "$(probe "$STAGED")" || { say "refused: nothing patched is staged at $STAGED (run: stage)"; exit 1; }
+  has_fsfix "$STAGED" || { say "refused: $STAGED lacks the fullscreen-destroy fix (run: build --no-band, then stage --no-band)"; exit 1; }
   mkdir -p "$STATE"
   printf '%s\n' "kitty -> patched build: as the LAST step before rebooting run \`bash $SELF swap --confirm $LIVE\`; after login run \`bash $SELF verify --clear-marker\`; undo with \`bash $SELF rollback --confirm $LIVE\`." > "$MARKER"
   say "armed: $MARKER"

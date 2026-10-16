@@ -21,6 +21,11 @@ mkbundle() {  # mkbundle <dir> <probe answer>
   printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>CFBundleShortVersionString</key><string>0.48.2</string></dict></plist>\n' > "$1/Contents/Info.plist"
 }
 
+fsfix() {  # fsfix <bundle>: give a fixture the fullscreen-destroy patch's marker, as a real build has
+  mkdir -p "$1/Contents/Resources/kitty/kitty"
+  printf 'GLFWDeferredClose\n' > "$1/Contents/Resources/kitty/kitty/glfw-cocoa.so"
+}
+
 setup() {
   T="$BATS_TEST_TMPDIR"
   export HOME="$T/home"; mkdir -p "$HOME"
@@ -57,10 +62,28 @@ setup() {
   run bash "$SCRIPT" arm
   [ "$status" -eq 1 ]
   [ ! -e "$T/state/kitty-restart-pending" ]
+  fsfix "$T/build/kitty.app"
   bash "$SCRIPT" stage >/dev/null
   run bash "$SCRIPT" arm
   [ "$status" -eq 0 ]
   grep -q "swap --confirm $LIVE" "$T/state/kitty-restart-pending"
+}
+
+# 2026-10-16 (decision a41897063971): the adoption chosen is of the build carrying the
+# leave-fullscreen-before-destroy fix, so a patched bundle without it must not be armed.
+@test "arm refuses a patched staged bundle without the fullscreen-destroy fix" {
+  bash "$SCRIPT" stage >/dev/null
+  run bash "$SCRIPT" arm
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"lacks the fullscreen-destroy fix"* ]] || false
+  [ ! -e "$T/state/kitty-restart-pending" ]
+  run bash "$SCRIPT" status
+  [[ "$output" != *"+fullscreen-fix"* ]] || false
+  fsfix "$T/Applications/kitty.app.staged"
+  run bash "$SCRIPT" status
+  [[ "$output" == *"patched +fullscreen-fix"* ]] || false
+  run bash "$SCRIPT" arm
+  [ "$status" -eq 0 ]
 }
 
 @test "swap refuses without --confirm naming the live bundle" {
@@ -138,19 +161,20 @@ mksrc() {  # mksrc <dir> <tag>: a tiny git tree standing in for the kitty checko
   mkdir -p "$1" && printf 'x\n' > "$1/f" && git -C "$1" init -q &&
     git -C "$1" add f && git -C "$1" -c user.name=t -c user.email=t@t commit -qm base && git -C "$1" tag "$2"
   mkdir -p "$T/repo/docs/patches"
-  cp "$BATS_TEST_DIRNAME"/../docs/patches/kitty-{upstream-defects,talk-thread-survives-v0.48.2,window-title-band}.patch "$T/repo/docs/patches/"
+  cp "$BATS_TEST_DIRNAME"/../docs/patches/kitty-{upstream-defects,talk-thread-survives-v0.48.2,fullscreen-destroy-v0.48.2,window-title-band}.patch "$T/repo/docs/patches/"
 }
 
-@test "build --no-band lists exactly the two fix patches, in order, never the title band" {
+@test "build --no-band lists exactly the three fix patches, in order, never the title band" {
   run bash "$SCRIPT" build --no-band --list-patches
   [ "$status" -eq 0 ]
   [ "$output" = "$T/repo/docs/patches/kitty-upstream-defects.patch
-$T/repo/docs/patches/kitty-talk-thread-survives-v0.48.2.patch" ]
+$T/repo/docs/patches/kitty-talk-thread-survives-v0.48.2.patch
+$T/repo/docs/patches/kitty-fullscreen-destroy-v0.48.2.patch" ]
   mksrc "$T/src" v0.48.2
   run bash "$SCRIPT" build --no-band --src "$T/src" --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"verdict=DRY-RUN-OK"* ]] || false
-  [ "$(grep -c '^patch: ' <<<"$output")" -eq 2 ]
+  [ "$(grep -c '^patch: ' <<<"$output")" -eq 3 ]
   [[ "$output" != *title-band* ]] || false
   [ -z "$(git -C "$T/src" status --porcelain)" ]
   run bash "$SCRIPT" build --src "$T/src" --dry-run
