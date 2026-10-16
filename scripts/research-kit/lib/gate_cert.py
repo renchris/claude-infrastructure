@@ -30,7 +30,7 @@ REPO = Path(__file__).resolve().parents[3]
 # The causes triage writes for §5.2's counted buckets (cli_records.CAUSE). A parked row is a
 # next-version idea, not a change to the certified answer, so it is not a material change.
 COUNTED_CAUSES = ("escape", "frame_defect", "operator_unelicited", "reality_moved")
-SCHEDULED_RESIDUAL = ("production-traffic", "elapsed-time")
+SCHEDULED_RESIDUAL = ("production-traffic", "elapsed-time", "not-yet-true")
 # The §11 forecast split a v1.2 certificate carries (RECORDS.md "Stage 9 records", last bullet).
 SPLIT_KEYS = (
     "build_findable_share",
@@ -489,6 +489,7 @@ def live_state(rec: Path, cert: Dict[str, Any]) -> Dict[str, Any]:
         ),
         "residual": classes,
         "scheduled": len(sched),
+        "not_yet": sum(1 for r in sched if r.get("why_unreachable") == kit.NOT_YET),
         "next_due": min((str(r["due"]) for r in sched), default=None),
         "fresh_at": max(fresh, default=None),
         "flipped": sum(
@@ -592,9 +593,17 @@ def lines_for(
         )
     sched: List[str] = []
     if live["scheduled"]:
-        k = live["scheduled"]
+        k, nyt = live["scheduled"], live.get("not_yet") or 0
+        kinds = [
+            f"{n} {what} {'check' if n == 1 else 'checks'}"
+            for n, what in (
+                (k - nyt, "production or elapsed-time"),
+                (nyt, "filed not-yet-true premise"),
+            )
+            if n
+        ]
         sched.append(
-            f"{k} production or elapsed-time {'check' if k == 1 else 'checks'} with "
+            f"{' and '.join(kinds)} with "
             f"{'owner and date' if k == 1 else 'owners and dates'} (next due {live['next_due']})"
         )
     if live["fresh_at"]:

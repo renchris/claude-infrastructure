@@ -31,6 +31,7 @@ METHOD_RESIDUAL = (
     "depth-cap",
     "stage-budget-exhausted",
     "stub-validated",
+    kit.NOT_YET,  # decision 55e7da1e7311: a premise only the build or a third party can raise
 )  # §10 item 7
 DAY = 86400.0
 
@@ -183,21 +184,59 @@ def row10(ctx: Ctx) -> Row:
 # ── row 11 ──────────────────────────────────────────────────────────────────────────────────────
 
 
+def not_yet_residual_problems(
+    r: Dict[str, Any],
+    prem: Dict[str, Dict[str, Any]],
+    prem_events: List[Dict[str, Any]],
+) -> List[str]:
+    """A not-yet-true row's own record checks; whether it carries its premise is gate row 4's. A
+    refuted premise is never fileable: a row filed at or after its refutation fails. A premise refuted
+    after it was filed is row 4's refuted-dependent rule, not this row's."""
+    from gate_rows_a import refuted_at
+
+    rid, pid = r.get("id"), str(r.get("premise"))
+    if pid not in prem:
+        return [f"{rid}: premise {pid} is not in premises.jsonl"]
+    if r.get("awaits") not in kit.NOT_YET_AWAITS:
+        return [f"{rid}: awaits {r.get('awaits')!r} is not an allowed event"]
+    at = refuted_at(prem_events).get(pid)
+    if (
+        at is not None
+        and prem[pid].get("verdict") == "refuted"
+        and str(r.get("ts") or "9999") >= at  # an undated row counts as filed now
+    ):
+        return [f"{rid}: premise {pid} was refuted when filed; revise its dependents"]
+    return []
+
+
 @row(11, "Residual")
 def row11(ctx: Ctx) -> Row:
     fails: List[str] = []
     filed: List[str] = []
     pr = probes(ctx)
+    prem_events = ctx.jsonl("premises.jsonl")
+    prem = kit.fold(prem_events)
     capped = 0
     for r in folded(ctx, "residual.jsonl").values():
         why, rid = r.get("why_unreachable"), r.get("id")
         if why in METHOD_RESIDUAL:
             capped += 1
-            miss = [k for k in ("owner_wave", "due", "closing_probe") if not r.get(k)]
+            need = ["owner_wave", "due", "closing_probe"]
+            if why == kit.NOT_YET:
+                need += ["premise", "owner", "awaits"]
+            miss = [k for k in need if not r.get(k)]
             if miss:
                 fails.append(f"{rid}: {why} residual missing {', '.join(miss)}")
-            else:
+            elif why != kit.NOT_YET:
                 filed.append(f"{rid}: {why}, owner {r['owner_wave']}, due {r['due']}")
+            else:
+                probs = not_yet_residual_problems(r, prem, prem_events)
+                fails += probs
+                if not probs:
+                    filed.append(
+                        f"{rid}: {why}, premise {r['premise']} awaits {r['awaits']}, owner "
+                        f"{r['owner_wave']}, due {r['due']}"
+                    )
             continue
         if why not in ALLOWED_RESIDUAL:
             fails.append(f"{rid}: {why!r} is not an allowed reason")

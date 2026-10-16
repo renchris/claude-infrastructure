@@ -44,6 +44,10 @@ Added 2026-10-05 (wave E3d): between `build-certified` and `closed` sits `implem
 - `premises.jsonl`, `sources.jsonl`, `census/<pop>.json`, `contact_matrix.json`, `residual.jsonl`, `trace.jsonl`,
   `holes.jsonl`, `changes.jsonl`: SYNTHESIS shapes. `residual.jsonl` `why_unreachable` adds the method-created classes
   `depth-cap`, `stage-budget-exhausted`, `stub-validated` (§10 item 7), each needing `owner_wave`, `due`, `closing_probe`.
+  Decision `55e7da1e7311` (2026-10-16) adds `not-yet-true`, written only by `cc-research premise file`:
+  `{id:"R-NYT-PR-n", why_unreachable:"not-yet-true", premise, awaits:"build|upstream-merge|third-party-answer",
+  owner_wave, owner, due, closing_probe, blocks_waves:[..], why, ts}`. Gate row 11 also needs `premise`, `owner` and
+  `awaits` on it, and fails a row filed at or after its premise was refuted.
 - `premises.jsonl` later events (the fold reads the last value of each field):
   - `cc-research job freshness` appends `{id, probes:[..., "P-fresh-<id>[-rN]"], rechecked_by, recheck_verdict:
     "holds|refuted"}`, plus `carried: true` on a premise's first re-check. It never writes `verdict`. While the
@@ -61,6 +65,25 @@ Added 2026-10-05 (wave E3d): between `build-certified` and `closed` sits `implem
   - Gate row 4 asks that a refuted premise's `DR` dependents be revised (ruled, reopened, carried or descoped) at or
     after the ts of the event that set `verdict` to `refuted`, not the folded ts, so a later re-check or revision
     event does not re-open them.
+  - `cc-research premise file --id PR-n --awaits build|upstream-merge|third-party-answer --owner-wave W --owner <who>
+    --due <ISO|YYYY-MM-DD> --closing-probe P-.. --why "<reason>"` (optionally `--blocks-wave W` repeated) files a
+    load-bearing premise below its required level as not-yet-true (decision `55e7da1e7311`): it appends the
+    `residual.jsonl` row above and `reconcile.jsonl` `{id:"residual:R-NYT-PR-n", disposition:"filed", ref}` (gate row
+    12). It writes nothing to `premises.jsonl`. It refuses whatever gate row 4 would fail, with the same reasons
+    (`gate_rows_a.not_yet_problems`): a premise id absent from `premises.jsonl`; a refuted, already-at-level or
+    non-load-bearing premise; a verdict other
+    than `partial` or `holds`; an `awaits` that cannot raise the premise's `truth_lives_in` (`build` raises `behavior`
+    and `target-env`; `upstream-merge` adds `live-state`; `third-party-answer` adds `operator`; `code` and `document`
+    are read now and never filed); a due date that is unparseable or past; a prose `recheck_cmd`; a dependent that is
+    not a `DR` decision carried (a well-formed set or a class-C packet) or ruled by the operator or a packet default;
+    an owner wave, a dependent's narrowing wave or a dependent's `blocks_waves` member that any decision or known row
+    descoped; no wave resting on it (the filing's `--blocks-wave` plus its dependents' `blocks_waves`, less the owner
+    wave); and a second filing for the same premise.
+  - Gate row 4 reports such a premise FILED, naming its level, owner wave, awaited event, owner, due date and closing
+    probe, while every guard above still holds now; the moment one breaks, the filing FAILs naming why. `gate.sh
+    requires --wave W` refuses each wave resting on a filed premise until its closing probe has run with exit 0 and is
+    joined (`premise revise --id PR-n --probe P-..`); the owner wave, which runs that probe, is never refused by it. If
+    the joined probe refuted the premise, those waves also wait until its dependents are revised.
 - `census/<pop>.json` additions (written only by `cc-research census repin`): a method may carry
   `superseded_by: <agent>`, `superseded_at: ISO`, `superseded_why: <text>`; it stays in `methods`, and gate row 2
   neither re-runs it nor counts it toward the 2 independent methods. `retired_members: [{id, at, why}]` holds members

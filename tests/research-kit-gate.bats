@@ -488,6 +488,113 @@ ceiling() { "$REPO/bin/cc-research" ceiling --program demo --json | /usr/bin/pyt
   [[ "$(rowtext 4)" == *"PR-1 refuted but dependent DR-1 was never revised"* ]]
 }
 
+# ── decision 55e7da1e7311 (2026-10-16): a premise only the build or a third party can raise ─────────
+# nyt_premise [verdict] [truth] [DR-2 blocks_waves json]: PR-2, load-bearing for DR-2 and below its
+# level (E0), with DR-2 a well-formed operator-carried set narrowing in B3, and a fresh re-check
+# probe P-5 that closes PR-2 but is not joined (row 10 reads it; row 4's level does not).
+nyt_premise() {
+  printf '{"id":"PR-2","truth_lives_in":"%s","verdict":"%s","probes":[],"load_bearing_for":["DR-2"],"recheck_cmd":"true","origin":{"tier":"E0"}}\n' \
+    "${2:-target-env}" "${1:-partial}" >> "$REC/premises.jsonl"
+  printf '{"id":"DR-2","question":"store","status":"carried","ruled_by":"operator","options":[{"label":"do-nothing"},{"label":"use-what-exists"},{"label":"k2c"}],"set":{"members":[{"id":"a","feasibility_probe":"P-1"},{"id":"b","feasibility_probe":"P-2"}],"narrowing_probe":{"wave":"B3","owner":"lead","due":"2099-01-01"},"revision_budget_h":4},"blocks_waves":%s}\n' \
+    "${3:-[\"B4\"]}" >> "$REC/decisions.jsonl"
+  printf '{"id":"P-5","kind":"read","env":{"id":"agent-shell"},"closes":["PR-2"],"exit":0,"n":1,"stdin":"/dev/null","negative_control":{"ran":true,"reported_refutation":true},"raw":"evidence/P-5/","at":"%s"}\n' \
+    "$CC_NOW" >> "$REC/probes.jsonl"
+  mkdir -p "$REC/evidence/P-5" && echo ok > "$REC/evidence/P-5/stdout"
+}
+# nyt_file [python statements over r]: the residual and reconcile rows `cc-research premise file`
+# writes for PR-2 (owner wave B3, awaits build), edited by $1 before they are written.
+nyt_file() {
+  /usr/bin/python3 -c "
+import json
+r = {'id': 'R-NYT-PR-2', 'why_unreachable': 'not-yet-true', 'premise': 'PR-2', 'awaits': 'build',
+     'owner_wave': 'B3', 'owner': 'lead', 'due': '2099-01-01T00:00:00Z', 'closing_probe': 'P-9',
+     'blocks_waves': [], 'why': 'K2c is built in B3', 'ts': '$CC_NOW'}
+${1:-pass}
+open('$REC/residual.jsonl', 'a').write(json.dumps(r) + '\n')
+open('$REC/reconcile.jsonl', 'a').write(json.dumps({'id': 'residual:' + r['id'], 'disposition': 'filed', 'ref': r['id']}) + '\n')"
+}
+# row_now <n>: row n's status then its evidence, by calling the row itself (no whole gate run).
+row_now() {
+  /usr/bin/python3 -c "
+import sys
+sys.path[:0] = ['$REPO/scripts/research-kit/lib', '$REPO/scripts/lib', '$REPO/scripts/research-kit']
+import gate, gate_rows_a, gate_rows_b
+fn = getattr(gate_rows_a, 'row$1', None) or getattr(gate_rows_b, 'row$1')
+r = fn(gate.make_ctx('demo'))
+print(r.status); print('\n'.join(r.evidence))"
+}
+
+# RED-proof (2026-10-16): on the base kit row 4 has no FILED path and row 11 refuses 'not-yet-true'
+# as a reason, so the filed premise below still FAILs both rows and the gate cannot certify.
+@test "row 4 / decision 55e7da1e7311: a below-level premise fails until filed not-yet-true, then renders FILED; the gate certifies and schedules it" {
+  nyt_premise
+  [ "$(rowstat 4)" = "FAIL" ]
+  nyt_file
+  out="$(row_now 4)"
+  [ "$(head -1 <<<"$out")" = "FILED" ] || { echo "$out"; false; }
+  [[ "$out" == *"FILED PR-2: at E0, needs E5; not yet true until B3 (build), owner lead, due 2099-01-01T00:00:00Z, closing probe P-9"* ]] || false
+  [[ "$out" == *"1 premise(s) filed not-yet-true"* ]] || false
+  out="$(row_now 11)"
+  [ "$(head -1 <<<"$out")" = "FILED" ] || { echo "$out"; false; }
+  [[ "$out" == *"R-NYT-PR-2: not-yet-true, premise PR-2 awaits build, owner B3"* ]] || false
+  git -C "$W/repo" add -A
+  git -C "$W/repo" commit -qm "filed premise"
+  run "$G" run --program demo --consent-sealed-read
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(state)" = "certified" ]
+  run "$G" --render --program demo
+  [[ "$output" == *"Scheduled checks: 1 production or elapsed-time check and 1 filed not-yet-true premise check with owners and dates"* ]] || { echo "$output"; false; }
+}
+
+# RED-proof: the base kit prints none of these reasons (it fails every case as plain "below level").
+@test "row 4: a filing that cannot carry its premise fails, naming why (each guard of decision 55e7da1e7311)" {
+  check() { # check <reason> <setup...>: restore, plant, expect row 4 FAIL naming <reason>
+    local want="$1"; shift
+    rsync -a --delete "$BATS_FILE_TMPDIR/golden/" "$W/"
+    "$@"
+    out="$(row_now 4)"
+    [ "$(head -1 <<<"$out")" = "FAIL" ] || { echo "[$want] $out"; return 1; }
+    [[ "$out" == *"PR-2: filed not-yet-true, but "*"$want"* ]] || { echo "[$want] $out"; return 1; }
+  }
+  base() { nyt_premise "$@"; nyt_file; }
+  check "the filing is missing owner" eval 'nyt_premise; nyt_file "r.pop(\"owner\")"'
+  check "the filing is missing closing_probe" eval 'nyt_premise; nyt_file "r.pop(\"closing_probe\")"'
+  check "is unparseable or already past" eval 'nyt_premise; nyt_file "r[\"due\"] = \"2020-01-01T00:00:00Z\""'
+  check "a live-state premise is not raised by build" base partial live-state
+  check "a code premise is not raised by build" base partial code
+  check "verdict 'unknown'" base unknown
+  check "dependent DR-2 is ruled by agent" eval 'base; printf "%s\n" "{\"id\":\"DR-2\",\"status\":\"ruled\",\"ruled_by\":\"agent\"}" >> "$REC/decisions.jsonl"'
+  check "dependent DR-2 is open" eval 'base; printf "%s\n" "{\"id\":\"DR-2\",\"status\":\"open\"}" >> "$REC/decisions.jsonl"'
+  check "dependent AM-1 is not a recorded decision" eval 'base; printf "%s\n" "{\"id\":\"PR-2\",\"load_bearing_for\":[\"DR-2\",\"AM-1\"]}" >> "$REC/premises.jsonl"'
+  check "its recheck_cmd is missing or a prose note" eval 'base; printf "%s\n" "{\"id\":\"PR-2\",\"recheck_cmd\":\"Note: run it in B3\"}" >> "$REC/premises.jsonl"'
+  check "owner wave B3 is descoped" eval 'base; printf "%s\n" "{\"id\":\"DR-9\",\"status\":\"descoped\",\"descoped_waves\":[\"B3\"]}" >> "$REC/decisions.jsonl"'
+  # the skeptic's correction: a live owner wave is not enough when the dependent's waves are gone
+  check "DR-2 narrowing wave B3 is descoped" eval 'nyt_premise; nyt_file "r[\"owner_wave\"] = \"B6\""; printf "%s\n" "{\"id\":\"KR-9\",\"status\":\"closed\",\"descoped_waves\":[\"B3\"]}" >> "$REC/known_rows.jsonl"'
+  check "DR-2 blocks_waves B4 is descoped" eval 'base; printf "%s\n" "{\"id\":\"DR-9\",\"status\":\"descoped\",\"descoped_waves\":[\"B4\"]}" >> "$REC/decisions.jsonl"'
+  check "no wave depends on it" base partial target-env '[]'
+}
+
+# RED-proof: the base kit's row 11 refuses 'not-yet-true' as a reason, so neither message appears.
+@test "row 11: a not-yet-true row needs premise, owner and awaits; a premise refuted when filed is never fileable; a holding premise below level is" {
+  nyt_premise
+  nyt_file "r.pop('premise'); r.pop('owner'); r.pop('awaits')"
+  out="$(row_now 11)"
+  [ "$(head -1 <<<"$out")" = "FAIL" ]
+  [[ "$out" == *"R-NYT-PR-2: not-yet-true residual missing premise, owner, awaits"* ]] || { echo "$out"; false; }
+  rsync -a --delete "$BATS_FILE_TMPDIR/golden/" "$W/"
+  nyt_premise
+  printf '{"id":"PR-2","verdict":"refuted","refuted_by":"P-5","ts":"2026-01-01T00:00:00Z"}\n' >> "$REC/premises.jsonl"
+  nyt_file
+  out="$(row_now 11)"
+  [ "$(head -1 <<<"$out")" = "FAIL" ]
+  [[ "$out" == *"R-NYT-PR-2: premise PR-2 was refuted when filed"* ]] || { echo "$out"; false; }
+  # a premise that holds but below its level is the same bet as a partial one, and is filed
+  rsync -a --delete "$BATS_FILE_TMPDIR/golden/" "$W/"
+  nyt_premise holds
+  nyt_file
+  [ "$(row_now 4 | head -1)" = "FILED" ]
+}
+
 @test "row 5: an agent-ruled decision whose flip probe never ran computes 89 and fails" {
   printf '{"id":"DR-1","tally":{"premises":["PR-1"]}}\n' >> "$REC/decisions.jsonl"
   [[ "$(rowtext 5)" == *"agent-ruled at 89%"* ]]

@@ -143,6 +143,49 @@ kr()  { printf '%s\n' "$1" >> "$REC/known_rows.jsonl"; }
   [[ "$output" == *"KR-2: descoped wave B7"* ]]
 }
 
+# RED-proof (decision 55e7da1e7311, 2026-10-16): the base kit never reads a not-yet-true filing, so
+# B4 and B5 read CLEAR while the premise is still only a bet, and the first assertion fails.
+@test "a premise filed not-yet-true refuses the waves resting on it until its closing probe runs and joins; its owner wave is exempt" {
+  certify
+  printf '%s\n' '{"id":"PR-2","truth_lives_in":"target-env","verdict":"partial","probes":[],"load_bearing_for":["DR-2"],"recheck_cmd":"true"}' >> "$REC/premises.jsonl"
+  dec '{"id":"DR-2","status":"ruled","ruled_by":"operator","blocks_waves":["B4"],"ts":"2026-01-01T00:00:00Z"}'
+  printf '%s\n' '{"id":"R-NYT-PR-2","why_unreachable":"not-yet-true","premise":"PR-2","awaits":"build","owner_wave":"B3","owner":"lead","due":"2099-01-01","closing_probe":"P-9","blocks_waves":["B5"]}' >> "$REC/residual.jsonl"
+  for w in B4 B5; do # the dependent's wave and the filing's own
+    run "$G" requires --program demo --wave "$w"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"PR-2: filed not-yet-true until B3 (build); its closing probe P-9 has not run and joined it, so B4, B5 wait"* ]] || { echo "$output"; false; }
+  done
+  run "$G" requires --program demo --wave B3 # the owner wave runs the closing probe
+  [ "$status" -eq 0 ]
+  run "$G" requires --program demo --wave B1 # a wave that does not rest on it
+  [ "$status" -eq 0 ]
+  run "$G" requires --program demo
+  [ "$status" -eq 1 ]
+  # run but not joined, and joined but failed: still a bet
+  printf '%s\n' '{"id":"P-9","kind":"skeleton","closes":["PR-2"],"exit":1}' >> "$REC/probes.jsonl"
+  printf '%s\n' '{"id":"PR-2","probes":["P-9"]}' >> "$REC/premises.jsonl"
+  run "$G" requires --program demo --wave B5
+  [ "$status" -eq 1 ]
+  printf '%s\n' '{"id":"P-9","exit":0}' >> "$REC/probes.jsonl"
+  printf '%s\n' '{"id":"PR-2","probes":[]}' >> "$REC/premises.jsonl"
+  run "$G" requires --program demo --wave B5
+  [ "$status" -eq 1 ]
+  # run and joined: the build-time re-check is met, and both waves fire
+  printf '%s\n' '{"id":"PR-2","probes":["P-9"],"verdict":"holds"}' >> "$REC/premises.jsonl"
+  for w in B4 B5; do
+    run "$G" requires --program demo --wave "$w"
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+  done
+  # joined and it refuted the premise: the waves wait for the dependent's revision
+  printf '%s\n' '{"id":"PR-2","verdict":"refuted","refuted_by":"P-9","ts":"2026-02-01T00:00:00Z"}' >> "$REC/premises.jsonl"
+  run "$G" requires --program demo --wave B4
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"PR-2: its closing probe P-9 joined and the premise is refuted; revise DR-2 before B4, B5 fire"* ]] || { echo "$output"; false; }
+  dec '{"id":"DR-2","status":"ruled","ruled_by":"operator","ts":"2026-02-02T00:00:00Z"}'
+  run "$G" requires --program demo --wave B4
+  [ "$status" -eq 0 ]
+}
+
 @test "without --wave there is no closure to scope to, so a block on ANY wave refuses (fail closed)" {
   certify
   dec '{"id":"DR-9","status":"carried","packet":{"id":"p","class":"C","due":"2099-01-01T00:00:00Z"},"blocks_waves":["B2"]}'

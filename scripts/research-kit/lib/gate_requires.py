@@ -18,7 +18,10 @@ A wave fires only when ALL of these hold:
        - any other open or carried decision whose `blocks_waves` names W;
        - an open frame-omission known row whose `blocks_waves` names W (§5.4);
        - W in any decision's or known row's `descoped_waves`: the sweep descoped it, so it does not
-         build (a descoped wave is not a refused wave that will clear; it is a wave that is gone).
+         build (a descoped wave is not a refused wave that will clear; it is a wave that is gone);
+       - a premise filed not-yet-true (`cc-research premise file`) whose waves name W (the filing's
+         `blocks_waves` plus its dependent decisions', less its owner wave), until its closing probe
+         has run and joined the premise (the build-time re-check of decision 55e7da1e7311).
 
 The records are read LIVE, not from the certificate's snapshot, because the things that clear a block
 all happen after the certificate: the sweep converts a class-C row and closes an overdue known row by
@@ -142,6 +145,38 @@ def blockers(slug: str, wave: Optional[str], after_signoff: bool = False) -> Dic
             f"{kid}: open {kr.get('kind') or 'known'} row (rows {', '.join(kr.get('names_rows') or []) or '-'}) "
             f"blocks {', '.join(kr.get('blocks_waves') or [])} until its frame-delta cycle closes it"
         )
+
+    # A premise filed not-yet-true (decision 55e7da1e7311) is a bet the certificate placed on the
+    # build. The build-time re-check: every wave resting on it waits until its closing probe has run
+    # and joined the premise; the owner wave, which runs that probe, is never refused by it. If the
+    # probe refuted the premise, the waves also wait for its dependents to be revised (gate row 4).
+    from gate_rows_a import refuted_at, unrevised_dependents
+
+    prem_events = ctx.jsonl("premises.jsonl")
+    prem = kit.fold(prem_events)
+    dec_events = ctx.jsonl("decisions.jsonl")
+    decs = kit.fold(dec_events)
+    probes = kit.fold(ctx.jsonl("probes.jsonl"))
+    for pid, row in sorted(kit.not_yet_rows(ctx.jsonl("residual.jsonl")).items()):
+        p = prem.get(pid) or {"id": pid}
+        ws = kit.not_yet_waves(row, p, decs)
+        if not _names(wave, ws):
+            continue
+        cp = row.get("closing_probe") or "?"
+        if not kit.not_yet_closed(row, p, probes):
+            reasons.append(
+                f"{pid}: filed not-yet-true until {row.get('owner_wave') or '?'} "
+                f"({row.get('awaits') or '?'}); its closing probe {cp} has not run and joined it, "
+                f"so {', '.join(ws)} wait (run {cp} with --closes {pid}, then "
+                f"`cc-research premise revise --id {pid} --probe {cp}`)"
+            )
+        elif p.get("verdict") == "refuted":
+            todo = unrevised_dependents(p, dec_events, refuted_at(prem_events))
+            if todo:
+                reasons.append(
+                    f"{pid}: its closing probe {cp} joined and the premise is refuted; revise "
+                    f"{', '.join(todo)} before {', '.join(ws)} fire"
+                )
 
     if wave is None and reasons:
         reasons.append(

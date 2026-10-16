@@ -1,7 +1,7 @@
 """cli_records.py — the record verbs of bin/cc-research (REPORT.md §8 item 9) and concern triage
 (§5.1, §5.2, §10 item 8); see cli.py for the verb table.
 
-  census add|repin|critic · premise add|revise · source add · decision add|tally|rule|reopen|carry|show
+  census add|repin|critic · premise add|revise|file · source add · decision add|tally|rule|reopen|carry|show
   concern add|list · park · triage
 
 Every record here is append-only (kit.append_jsonl); a census is one JSON file per population,
@@ -419,6 +419,84 @@ def premise_revise(a: argparse.Namespace) -> int:
     kit.append_jsonl(r / "premises.jsonl", event)
     fields = [k for k in event if k not in ("id", "revised", "why")]
     print(f"{a.id}: revised ({', '.join(fields)}) in premises.jsonl")
+    return 0
+
+
+WAVE_ID = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
+
+
+def premise_file(a: argparse.Namespace) -> int:
+    """File a load-bearing premise below its required level as not-yet-true (decision 55e7da1e7311):
+    only the build, an upstream merge or a third party's answer can raise it, so gate row 4 reports it
+    FILED, and `gate.sh requires` refuses every wave resting on it until --closing-probe has run and
+    joined it. Appends one residual.jsonl row R-NYT-<id> and its reconcile.jsonl line (gate row 12).
+    Refuses whatever gate row 4 would fail, with the same reasons (gate_rows_a.not_yet_problems)."""
+    import re
+
+    import gate
+    from gate_rows_a import descoped_waves, not_yet_problems
+
+    r = recs(a)
+    premise = folded(r, "premises.jsonl").get(a.id)
+    if premise is None:
+        raise kit.KitError(f"{a.id} is not in premises.jsonl")
+    for flag, v in (("--why", a.why), ("--owner", a.owner)):
+        if not (v or "").strip():
+            raise kit.KitError(f"{flag} is required and may not be empty")
+    for w in [a.owner_wave] + list(a.blocks_wave or []):
+        if not re.match(WAVE_ID, w or ""):
+            raise kit.KitError(f"bad wave id {w!r}")
+    if not re.match(r"^P-[A-Za-z0-9._-]+$", a.closing_probe or ""):
+        raise kit.KitError(
+            f"--closing-probe {a.closing_probe!r} is not a probe id (P-...): the probe the "
+            f"owner wave runs with --closes {a.id}"
+        )
+    if premise.get("verdict") == "refuted":
+        raise kit.KitError(
+            f"{a.id} is refuted; a refuted premise is never filed: revise its dependents (gate row 4)"
+        )
+    if not premise.get("load_bearing_for"):
+        raise kit.KitError(f"{a.id} bears no load; gate row 4 asks nothing of it")
+    pr = folded(r, "probes.jsonl")
+    if kit.premise_at_level(premise, pr):
+        raise kit.KitError(f"{a.id} is already at its required level; nothing to file")
+    if kit.parse_due(a.due) is None:
+        raise kit.KitError(f"--due {a.due!r} is not ISO-8601 UTC or YYYY-MM-DD")
+    if a.id in kit.not_yet_rows(kit.read_jsonl(r / "residual.jsonl")):
+        raise kit.KitError(f"{a.id} is already filed not-yet-true")
+    row: Dict[str, Any] = {
+        "id": f"R-NYT-{a.id}",
+        "why_unreachable": kit.NOT_YET,
+        "premise": a.id,
+        "awaits": a.awaits,
+        "owner_wave": a.owner_wave,
+        "owner": a.owner.strip(),
+        "due": a.due,
+        "closing_probe": a.closing_probe,
+        "blocks_waves": sorted(set(a.blocks_wave or [])),
+        "why": a.why.strip(),
+    }
+    ctx = gate.make_ctx(a.program)
+    decisions = kit.fold(ctx.jsonl("decisions.jsonl"))
+    problems = not_yet_problems(
+        premise, row, decisions, descoped_waves(ctx, decisions), kit.parse_iso(kit.now_iso())
+    )
+    if problems:
+        raise kit.KitError(
+            f"{a.id} cannot be filed not-yet-true: " + "; ".join(problems)
+        )
+    if row["id"] in folded(r, "residual.jsonl"):
+        raise kit.KitError(f"{row['id']} already in residual.jsonl")
+    kit.append_jsonl(r / "residual.jsonl", row)
+    kit.append_jsonl(
+        r / "reconcile.jsonl",
+        {"id": f"residual:{row['id']}", "disposition": "filed", "ref": row["id"]},
+    )
+    waves = kit.not_yet_waves(row, premise, decisions)
+    print(
+        f"{row['id']}: filed {a.id} not-yet-true until {a.owner_wave} ({a.awaits}), due {a.due}; "
+        f"waves {', '.join(waves)} wait for {a.closing_probe} to join it"
+    )
     return 0
 
 
@@ -1106,6 +1184,31 @@ def add_verbs(sub: Any) -> None:
         help="repeat; a recorded probe whose closes names this premise joins its probes "
         "(the level gate row 4 reads); never sets the verdict",
     )
+    p = verb(
+        g,
+        "file",
+        premise_file,
+        "file a below-level premise not-yet-true: gate row 4 FILED, its waves wait for its "
+        "closing probe",
+    )
+    p.add_argument("--id", required=True)
+    p.add_argument("--awaits", required=True, choices=sorted(kit.NOT_YET_AWAITS))
+    p.add_argument(
+        "--owner-wave", required=True, help="the wave that runs the closing probe"
+    )
+    p.add_argument("--owner", required=True, help="who runs it and joins it")
+    p.add_argument("--due", required=True, help="ISO-8601 UTC or YYYY-MM-DD, future")
+    p.add_argument(
+        "--closing-probe",
+        required=True,
+        help="the probe id the owner wave records with --closes <id>",
+    )
+    p.add_argument(
+        "--blocks-wave",
+        action="append",
+        help="repeat; a wave that rests on the premise, beyond its dependents' blocks_waves",
+    )
+    p.add_argument("--why", required=True, help="why only that event can raise it")
     p = verb(g, "add", premise_add, "append one premise")
     p.add_argument("--id", required=True)
     p.add_argument("--claim", required=True)

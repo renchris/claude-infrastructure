@@ -807,6 +807,66 @@ def carried_set_ok(s: Any) -> bool:
     )
 
 
+# A load-bearing premise only the build, an upstream merge or a third party can raise is filed
+# not-yet-true (decision 55e7da1e7311, 2026-10-16): a residual.jsonl row naming the premise, what it
+# awaits, an owner wave, an owner, a due date and the closing probe. Gate row 4 reports it FILED and
+# `gate.sh requires` refuses every wave that depends on it until the closing probe has joined.
+# What each awaited event can raise; a code or document premise is read now and is never fileable.
+NOT_YET_AWAITS = {
+    "build": ("behavior", "target-env"),
+    "upstream-merge": ("live-state", "behavior", "target-env"),
+    "third-party-answer": ("operator", "live-state", "behavior", "target-env"),
+}
+NOT_YET = "not-yet-true"
+
+
+def not_yet_rows(residual_events: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """premise id -> its folded not-yet-true residual row (the last one filed, if several)."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for r in fold(residual_events).values():
+        if r.get("why_unreachable") == NOT_YET and r.get("premise"):
+            out[str(r["premise"])] = r
+    return out
+
+
+def parse_due(s: Any) -> Optional[float]:
+    """A residual due date, ISO-8601 UTC or a bare YYYY-MM-DD (end of that day), or None."""
+    s = str(s or "")
+    for fmt, pad in (("%Y-%m-%dT%H:%M:%SZ", 0.0), ("%Y-%m-%d", 86399.0)):
+        try:
+            import calendar
+
+            return float(calendar.timegm(time.strptime(s, fmt))) + pad
+        except ValueError:
+            continue
+    return None
+
+
+def not_yet_waves(
+    row: Dict[str, Any], premise: Dict[str, Any], decisions: Dict[str, Dict[str, Any]]
+) -> List[str]:
+    """The waves that depend on a filed premise: the filing's own blocks_waves plus every dependent
+    decision's, less the owner wave, which runs the closing probe and so is never refused by it."""
+    ws: List[str] = list(row.get("blocks_waves") or [])
+    for dep in premise.get("load_bearing_for") or []:
+        ws += list((decisions.get(dep) or {}).get("blocks_waves") or [])
+    return sorted(
+        {w for w in ws if isinstance(w, str) and w and w != row.get("owner_wave")}
+    )
+
+
+def not_yet_closed(
+    row: Dict[str, Any], premise: Dict[str, Any], probes: Dict[str, Dict[str, Any]]
+) -> bool:
+    """The filing's closing probe ran (exit 0) and is joined to the premise (`premise revise --probe`)."""
+    cp = row.get("closing_probe")
+    return (
+        bool(cp)
+        and (probes.get(cp) or {}).get("exit") == 0
+        and cp in (premise.get("probes") or [])
+    )
+
+
 def conviction(decision: Dict[str, Any], premises: Dict[str, Dict[str, Any]],
                probes: Dict[str, Dict[str, Any]], now: Optional[float] = None) -> Optional[int]:
     """The §3.5 rule, from the decision's stored tally. None = no load-bearing factual premise, so a

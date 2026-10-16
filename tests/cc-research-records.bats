@@ -283,6 +283,60 @@ refused() {
   [ "$(rowstat 4)" = "PASS" ]
 }
 
+# pfile <premise file args>: the verb with the program and every required flag but --id (args after
+# these override nothing; argparse takes the last of a repeated single flag).
+pfile() {
+  "$CR" premise file --program demo --awaits build --owner-wave B3 --owner lead \
+    --due 2099-01-01T00:00:00Z --closing-probe P-9 --why "K2c is built in B3" "$@"
+}
+# pfile_refused <reason> <args>: refused with exit 2 and the reason on stderr.
+pfile_refused() {
+  local want="$1"; shift
+  run pfile "$@"
+  [ "$status" -eq 2 ] || { echo "accepted (exit $status): $*"; return 1; }
+  [[ "$output" == *"$want"* ]] || { echo "[$want] $output"; return 1; }
+}
+
+# RED-proof (decision 55e7da1e7311, 2026-10-16): before `premise file` existed the first call exits 2
+# (invalid choice 'file'), nothing is written, and row 4 stays FAIL.
+@test "premise file: writes the not-yet-true row and its reconcile line, and row 4 files the premise; refusals write nothing" {
+  printf '%s\n' '{"id":"PR-2","truth_lives_in":"target-env","verdict":"partial","probes":[],"load_bearing_for":["DR-2"],"recheck_cmd":"true"}' >> "$REC/premises.jsonl"
+  printf '%s\n' '{"id":"DR-2","status":"carried","ruled_by":"operator","options":[{"label":"do-nothing"},{"label":"use-what-exists"}],"set":{"members":[{"id":"a","feasibility_probe":"P-1"},{"id":"b","feasibility_probe":"P-2"}],"narrowing_probe":{"wave":"B3","owner":"lead","due":"2099-01-01"},"revision_budget_h":4},"blocks_waves":["B4"]}' >> "$REC/decisions.jsonl"
+  rowtext 4 | grep -q "PR-2: at E0, needs E5"
+  run pfile --id PR-2 --blocks-wave B5
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == "R-NYT-PR-2: filed PR-2 not-yet-true until B3 (build), due 2099-01-01T00:00:00Z; waves B4, B5 wait for P-9 to join it" ]] || { echo "$output"; false; }
+  [ "$(fold residual.jsonl R-NYT-PR-2 why_unreachable)" = '"not-yet-true"' ]
+  [ "$(fold residual.jsonl R-NYT-PR-2 premise)" = '"PR-2"' ]
+  [ "$(fold residual.jsonl R-NYT-PR-2 owner)" = '"lead"' ]
+  [ "$(fold residual.jsonl R-NYT-PR-2 closing_probe)" = '"P-9"' ]
+  [ "$(fold residual.jsonl R-NYT-PR-2 blocks_waves)" = '["B5"]' ]
+  [ "$(fold reconcile.jsonl residual:R-NYT-PR-2 disposition)" = '"filed"' ]
+  [ "$(fold reconcile.jsonl residual:R-NYT-PR-2 ref)" = '"R-NYT-PR-2"' ]
+  out="$(rowtext 4)"
+  [[ "$out" == *"FILED PR-2: at E0, needs E5; not yet true until B3 (build), owner lead"* ]] || { echo "$out"; false; }
+  [[ "$out" != *"PR-2: at E0, needs E5 ("* ]] || { echo "$out"; false; }
+  # refusals: each writes nothing to either store
+  printf '%s\n' '{"id":"PR-3","truth_lives_in":"target-env","verdict":"refuted","refuted_by":"P-1","load_bearing_for":["DR-2"],"recheck_cmd":"true"}' >> "$REC/premises.jsonl"
+  printf '%s\n' '{"id":"PR-4","truth_lives_in":"code","verdict":"partial","probes":[],"load_bearing_for":["DR-2"],"recheck_cmd":"true"}' >> "$REC/premises.jsonl"
+  printf '%s\n' '{"id":"PR-5","truth_lives_in":"target-env","verdict":"partial","probes":[],"load_bearing_for":["DR-1"],"recheck_cmd":"true"}' >> "$REC/premises.jsonl"
+  before="$(cat "$REC/residual.jsonl" "$REC/reconcile.jsonl" | cksum)"
+  pfile_refused "PR-404 is not in premises.jsonl" --id PR-404
+  pfile_refused "a refuted premise is never filed" --id PR-3
+  pfile_refused "PR-1 is already at its required level" --id PR-1
+  pfile_refused "a code premise is not raised by build" --id PR-4
+  pfile_refused "a code premise is not raised by upstream-merge" --id PR-4 --awaits upstream-merge
+  pfile_refused "dependent DR-1 is ruled by agent" --id PR-5
+  pfile_refused "is unparseable or already past" --id PR-5 --due 2020-01-01T00:00:00Z
+  pfile_refused "is not ISO-8601 UTC or YYYY-MM-DD" --id PR-5 --due "next week"
+  pfile_refused "not a probe id" --id PR-5 --closing-probe "after the build"
+  pfile_refused "--why is required" --id PR-5 --why " "
+  pfile_refused "argument --owner: expected one argument" --id PR-5 --owner
+  pfile_refused "invalid choice" --id PR-5 --awaits someday
+  pfile_refused "PR-2 is already filed not-yet-true" --id PR-2
+  [ "$(cat "$REC/residual.jsonl" "$REC/reconcile.jsonl" | cksum)" = "$before" ]
+}
+
 @test "decision: no --conviction flag exists; rule is refused below 90 naming the packet route, accepted at 90; show prints the derived value" {
   run "$CR" decision add --program demo --id DR-2 --question "q" --option do-nothing --option use-what-exists --option x
   [ "$status" -eq 0 ]

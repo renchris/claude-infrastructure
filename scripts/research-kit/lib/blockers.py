@@ -14,7 +14,8 @@ import kit
 
 DAY = 86400.0
 FLIP = "flip-probe"  # the pseudo-gap: the "what would flip it" probe has not come back negative
-PRODUCTION = ("production-traffic", "external-tenant-not-held", "elapsed-time")
+PRODUCTION = ("production-traffic", "external-tenant-not-held", "elapsed-time",
+              "not-yet-true")  # a filed premise only the build or a third party raises
 OPERATOR = ("operator-eye",)
 TAGS = ("research", "production", "operator")  # precedence: the first tag any gap carries wins
 

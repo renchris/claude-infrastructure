@@ -267,14 +267,125 @@ def refuted_at(events: List[Dict[str, Any]]) -> Dict[str, str]:
     return out
 
 
+def unrevised_dependents(
+    p: Dict[str, Any], events: List[Dict[str, Any]], since: Dict[str, str]
+) -> List[str]:
+    """A refuted premise's DR dependents with no ruled, reopened, carried or descoped event at or after
+    the event that refuted it (refuted_at)."""
+    at = since.get(p["id"], str(p.get("ts", "")))
+    return [
+        dep
+        for dep in p.get("load_bearing_for") or []
+        if dep.startswith("DR")
+        and not any(
+            e.get("id") == dep
+            and str(e.get("ts", "")) >= at
+            and e.get("status") in ("ruled", "reopened", "carried", "descoped")
+            for e in events
+        )
+    ]
+
+
+def descoped_waves(ctx: Ctx, decisions: Dict[str, Dict[str, Any]]) -> Set[str]:
+    """Every wave a decision or known row descoped (the same reading as gate_requires)."""
+    out: Set[str] = set()
+    for x in list(decisions.values()) + known_rows(ctx):
+        out |= {w for w in x.get("descoped_waves") or [] if isinstance(w, str)}
+    return out
+
+
+def not_yet_problems(
+    p: Dict[str, Any],
+    row: Dict[str, Any],
+    decisions: Dict[str, Dict[str, Any]],
+    descoped: Set[str],
+    now: float,
+) -> List[str]:
+    """Why a not-yet-true filing does not carry its below-level premise, or [] when it does (decision
+    55e7da1e7311). One implementation for gate row 4 and `cc-research premise file`."""
+    import cli_jobs
+
+    out: List[str] = []
+    truth, awaits = p.get("truth_lives_in"), row.get("awaits")
+    if p.get("verdict") not in ("partial", "holds"):
+        out.append(
+            f"verdict {p.get('verdict')!r}; only a partial or holding premise is filed"
+        )
+    if awaits not in kit.NOT_YET_AWAITS:
+        out.append(f"awaits {awaits!r} is not one of {', '.join(kit.NOT_YET_AWAITS)}")
+    elif truth not in kit.NOT_YET_AWAITS[awaits]:
+        out.append(
+            f"a {truth} premise is not raised by {awaits} "
+            f"({awaits} raises {', '.join(kit.NOT_YET_AWAITS[awaits])})"
+        )
+    miss = [
+        k for k in ("owner_wave", "owner", "due", "closing_probe") if not row.get(k)
+    ]
+    if miss:
+        out.append(f"the filing is missing {', '.join(miss)}")
+    due = kit.parse_due(row.get("due"))
+    if row.get("due") and (due is None or due <= now):
+        out.append(f"due {row.get('due')!r} is unparseable or already past")
+    rc = str(p.get("recheck_cmd") or "")
+    if not rc.strip() or cli_jobs.PROSE_RE.match(rc):
+        out.append("its recheck_cmd is missing or a prose note, not a command")
+    deps = p.get("load_bearing_for") or []
+    for dep in deps:
+        d = decisions.get(dep)
+        if not dep.startswith("DR") or d is None:
+            out.append(f"dependent {dep} is not a recorded decision")
+            continue
+        st, by = d.get("status"), d.get("ruled_by")
+        carried = st == "carried" and (
+            kit.carried_set_ok(d.get("set"))
+            or (d.get("packet") or {}).get("class") == "C"
+        )
+        if not (carried or (st == "ruled" and by in ("operator", "packet-default"))):
+            out.append(
+                f"dependent {dep} is {st} by {by or '-'}; a filed premise needs dependents "
+                "carried, or ruled by the operator or a packet default"
+            )
+    # skeptic correction: the closing event must have a live wave, so read the dependents' narrowing
+    # and blocked waves, not only the filed owner wave
+    waves = {"owner wave": [row.get("owner_wave")]}
+    for dep in deps:
+        d = decisions.get(dep) or {}
+        npb = (d.get("set") or {}).get("narrowing_probe") or {}
+        waves[f"{dep} narrowing wave"] = [npb.get("wave")]
+        waves[f"{dep} blocks_waves"] = list(d.get("blocks_waves") or [])
+    for what, ws in waves.items():
+        gone = sorted(w for w in ws if w in descoped)
+        if gone:
+            out.append(f"{what} {', '.join(gone)} is descoped, so it never runs")
+    if not kit.not_yet_waves(row, p, decisions):
+        out.append(
+            "no wave depends on it (the filing names no --blocks-wave and no dependent blocks "
+            "one), so nothing re-checks it at build time"
+        )
+    return out
+
+
+def not_yet_line(p: Dict[str, Any], row: Dict[str, Any], need: Any) -> str:
+    return (
+        f"{p['id']}: at E{need[0]}, needs E{need[1]}; not yet true until {row.get('owner_wave')} "
+        f"({row.get('awaits')}), owner {row.get('owner')}, due {row.get('due')}, closing probe "
+        f"{row.get('closing_probe')}"
+    )
+
+
 @row(4, "Premises")
 def row4(ctx: Ctx) -> Row:
     fails: List[str] = []
+    filed: List[str] = []
     prem_events = ctx.jsonl("premises.jsonl")
     prem = kit.fold(prem_events)
     since = refuted_at(prem_events)
     pr = probes(ctx)
     events = ctx.jsonl("decisions.jsonl")
+    decisions = kit.fold(events)
+    nyt = kit.not_yet_rows(ctx.jsonl("residual.jsonl"))
+    descoped = descoped_waves(ctx, decisions)
+    now = kit.parse_iso(kit.now_iso())
     refuted = 0
     for p in prem.values():
         if p.get("verdict") == "unknown":
@@ -284,28 +395,33 @@ def row4(ctx: Ctx) -> Row:
             and p.get("verdict") != "refuted"
             and not kit.premise_at_level(p, pr)
         ):
-            fails.append(
-                f"{p['id']}: at E{kit.premise_level(p, pr)}, needs "
-                f"E{kit.REQUIRED_LEVEL.get(p.get('truth_lives_in', ''), '?')} ({p.get('truth_lives_in')})"
+            need = (
+                kit.premise_level(p, pr),
+                kit.REQUIRED_LEVEL.get(p.get("truth_lives_in", ""), "?"),
             )
+            row_ = nyt.get(p["id"])
+            why = (
+                not_yet_problems(p, row_, decisions, descoped, now)
+                if row_
+                else ["not filed"]
+            )
+            if not why:
+                filed.append(not_yet_line(p, row_, need))
+            else:
+                if row_:
+                    fails += [f"{p['id']}: filed not-yet-true, but {w}" for w in why]
+                fails.append(
+                    f"{p['id']}: at E{need[0]}, needs E{need[1]} ({p.get('truth_lives_in')})"
+                )
         if p.get("verdict") == "refuted":
             refuted += 1
-            for dep in p.get("load_bearing_for") or []:
-                if not dep.startswith("DR"):
-                    continue
-                later = [
-                    e
-                    for e in events
-                    if e.get("id") == dep
-                    and str(e.get("ts", "")) >= since.get(p["id"], str(p.get("ts", "")))
-                    and e.get("status") in ("ruled", "reopened", "carried", "descoped")
-                ]
-                if not later:
-                    fails.append(
-                        f"{p['id']} refuted but dependent {dep} was never revised"
-                    )
+            fails += [
+                f"{p['id']} refuted but dependent {dep} was never revised"
+                for dep in unrevised_dependents(p, events, since)
+            ]
     rate = f"refutation rate {refuted}/{len(prem)}" if prem else "no premises recorded"
-    return verdict(4, "Premises", fails, [], [rate])
+    notes = [rate] + ([f"{len(filed)} premise(s) filed not-yet-true"] if filed else [])
+    return verdict(4, "Premises", fails, filed, notes)
 
 
 # ── row 5 ───────────────────────────────────────────────────────────────────────────────────────
