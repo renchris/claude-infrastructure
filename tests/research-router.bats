@@ -1114,6 +1114,23 @@ deny_reason() {
   [[ "$output" == *"Every tool except \`$want\` is blocked"* ]] || false
 }
 
+# Practice row 31 of 2026-10-16 relayed the lines, then wrote "To check progress, run `<path>/gate.sh
+# --render ...`": the one read it may run, recommended to the operator, which the check reads as an
+# added item. Every relay label, trial or not, bars suggesting a command or next step by name.
+@test "every relay context bars suggesting a command, tool, path or next step, the allowed certificate read included" {
+  state certifying
+  bar="Suggest no command, tool, path or next step, not even the certificate read you may run"
+  trial_mark t1; trial_mark t2
+  for c in "are we done?|s1" "are you sure?|s1" "are we done?|t2" "are you sure?|t2" \
+    "do exhaustive research on the open rows|t1"; do
+    run prompt "${c%|*}" "$PROG/src" "${c#*|}"
+    [[ "$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')" == *"$bar"* ]] || false
+  done
+  # a non-relay route carries no such bar
+  run prompt "do exhaustive research on the open rows" "$PROG/src" s9
+  [[ "$output" != *"$bar"* ]] || false
+}
+
 @test "the certificate read is allowed through the bash interpreter too; nothing else rides on it" {
   state certifying
   prompt "are you sure?" >/dev/null
