@@ -496,12 +496,13 @@ for r in ("r1", "r2"):
   run "$H" --set v5 status --counted
   [ "$status" -eq 0 ]
   [[ "$output" != *"fifth prompt"* ]] || false
-  [ "$(printf '%s' "$output" | jq -c '."regex-missed"')" = '{"agreed":4,"counted":3,"items":6}' ]
-  [ "$(printf '%s' "$output" | jq -c '.pushback')" = '{"agreed":6,"counted":6,"items":6}' ]
-  [ "$(printf '%s' "$output" | jq -c '.other')" = '{"agreed":6,"counted":2,"items":6}' ]
+  # the JSON is stdout alone (stderr names the set)
+  js="$("$H" --set v5 status --counted 2>/dev/null)"
+  [ "$(printf '%s' "$js" | jq -c '."regex-missed"')" = '{"agreed":4,"counted":3,"items":6}' ]
+  [ "$(printf '%s' "$js" | jq -c '.pushback')" = '{"agreed":6,"counted":6,"items":6}' ]
+  [ "$(printf '%s' "$js" | jq -c '.other')" = '{"agreed":6,"counted":2,"items":6}' ]
   # plain status is unchanged: no counted key, the raters still listed
-  run "$H" --set v5 status
-  [ "$(printf '%s' "$output" | jq -c '[(."regex-missed" | has("counted")), ."regex-missed".raters.r2]')" = '[false,5]' ]
+  [ "$("$H" --set v5 status 2>/dev/null | jq -c '[(."regex-missed" | has("counted")), ."regex-missed".raters.r2]')" = '[false,5]' ]
 }
 
 @test "pooled pin: STRATUM=v5+v3 scores the stratum on the union of both sets and writes one ledger row per set and stratum" {
