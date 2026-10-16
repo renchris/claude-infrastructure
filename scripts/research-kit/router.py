@@ -290,6 +290,7 @@ def route_save(sid: str, rec: Dict[str, Any]) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     kit.write_json_atomic(p, rec)
     route_reap(p.parent)
+    route_reap(p.parent / "trials")
 
 
 def route_reap(d: Path) -> None:
@@ -311,6 +312,39 @@ def route_clear(sid: str) -> None:
         route_path(sid).unlink()
     except OSError:
         pass
+
+
+# A relay trial's session (lib/rehearse_trial.py): `rehearse trial` mints the uuid it passes to
+# `claude --session-id` and marks it here BEFORE the pane starts, so the router knows the session by
+# the id the harness hands every hook, not by anything the prompt or the pane's environment says.
+# A marked session routes a research order as a relay (relays()), whatever the registry state: the
+# relay test (REPORT.md §3.8) asks "if more research moves your conviction, do it now" while the
+# program is still certifying, and gate row 14 must pass before the certificate exists. The mark
+# only ever NARROWS a session's rights (the certifying research-order allowance becomes the
+# certificate-read whitelist), so a session that marked itself would gain nothing.
+def trial_path(sid: str) -> Path:
+    return route_path(sid).parent / "trials" / route_path(sid).name
+
+
+def trial_mark(sid: str, slug: str, **extra: Any) -> None:
+    p = trial_path(sid)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    kit.write_json_atomic(p, dict(extra, program=slug, at=kit.now_iso()))
+    route_reap(p.parent)
+
+
+def is_trial(sid: str, slug: str) -> bool:
+    try:
+        r = json.loads(trial_path(sid).read_text())
+    except (OSError, ValueError):
+        return False
+    return isinstance(r, dict) and bool(slug) and r.get("program") == slug
+
+
+def relays(label: Optional[str], trial: bool) -> bool:
+    """Whether a turn relays the certificate: completeness and pushback always, and a research order
+    in a relay trial's session (the certified branch for a research order, held to the relay)."""
+    return label in RELAYED or (trial and label == "research-order")
 
 
 def program_state(slug: str) -> Optional[str]:
@@ -942,17 +976,24 @@ def envelope_label(prompt: str, slug: str, sid: str) -> Tuple[str, str]:
     return "other", "machine envelope naming no routed predecessor session"
 
 
-def context_for(slug: str, state: str, label: str, cert: str, reason: str) -> str:
+def context_for(
+    slug: str, state: str, label: str, cert: str, reason: str, trial: bool = False
+) -> str:
     head = f"RESEARCH PROGRAM {slug} ({state}) — this prompt is routed as"
     lines = cert or "(the certificate read failed; say so in one line and add nothing)"
-    if label in RELAYED:
+    if relays(label, trial):
         extra = (
             f'\nThen this one fixed line, verbatim: "{PUSHBACK_LINE}"'
             if label == "pushback"
             else ""
         )
+        what = {
+            "pushback": "PUSHBACK",
+            "research-order": "an ORDER TO RESEARCH THE CERTIFIED SCOPE, in a rehearsal relay trial "
+            "(REPORT.md §3.8): no research this turn, answer from the certificate",
+        }.get(label, "a COMPLETENESS question")
         return (
-            f"{head} {'PUSHBACK' if label == 'pushback' else 'a COMPLETENESS question'} "
+            f"{head} {what} "
             "(REPORT.md §4.1). Relay the certificate state lines below VERBATIM, plus at most 3 lines "
             "explaining them. Name no item, location or row the lines do not carry, whether you open "
             "yes or no; a 'no' must cite a triaged escape, a scheduled freshness flip or a change the "
@@ -1040,18 +1081,21 @@ def cmd_prompt(a: argparse.Namespace) -> int:
     label, reason = classify(prompt, cert, a.program)
     fallbacks = 0 if label else int(prev.get("fallbacks") or 0) + 1
     label = label or UNAVAILABLE
+    trial = is_trial(sid, a.program)
+    if trial:
+        base["trial"] = True
     route_save(
         sid,
         dict(base, label=label, cert=cert, reason=err or reason, fallbacks=fallbacks),
     )
     out: Dict[str, Any] = {}
-    ctx = context_for(a.program, a.state, label, cert, reason)
+    ctx = context_for(a.program, a.state, label, cert, reason, trial)
     if ctx:
         out["hookSpecificOutput"] = {
             "hookEventName": "UserPromptSubmit",
             "additionalContext": ctx,
         }
-    if label in RELAYED:
+    if relays(label, trial):
         # Only the model sees additionalContext; this line is the operator's view of the route.
         out["systemMessage"] = (
             f"research-program router: this prompt was routed as {label} ({reason}), so every tool "
@@ -1585,7 +1629,7 @@ def cmd_tool(a: argparse.Namespace) -> int:
         return 0
     cmd = str(tin.get("command") or "") if tool == "Bash" else ""
     where = f"research program {slug} is {state}"
-    if label in RELAYED:
+    if relays(label, is_trial(sid, slug)):
         if tool == "Bash" and cert_read(cmd, slug):
             return 0
         why = (
@@ -1746,9 +1790,13 @@ def cmd_relay_check(a: argparse.Namespace) -> int:
     route = route_load(a.session)
     label = (route or {}).get("label")
     override = (route or {}).get("by") == "override"
-    if not route or (label not in RELAYED and label != UNAVAILABLE and not override):
+    slug = (route or {}).get("program") or ""
+    if not route or (
+        not relays(label, is_trial(a.session, slug))
+        and label != UNAVAILABLE
+        and not override
+    ):
         return 0
-    slug = route.get("program") or ""
     if program_state(slug) not in BLOCKING_STATES:
         return 0
     reply = sys.stdin.read()

@@ -240,6 +240,9 @@ rehearsal activity and the relay trials). Tag every call `CC_RESEARCH_ACTIVITY=<
    at least one with `--where outside`. Each opens a bare kitty tab whose only prompt is the phrase (no
    HANDOFF-ENGAGE), reads its reply, tools and route label from the pane's transcript, and closes the pane.
    Never fire a trial through `handoff-fire.sh`: it stays denied, and its envelope bypasses the relay path.
+   The verb marks the trial's session id for the router before the pane starts, so even while certifying a
+   trial routes a research order like a certified program would, as a relay: certificate lines only, no tool
+   but the certificate read. `rehearse record` accepts such a research-order trial on the relay's terms.
 4. Read `evidence/rehearsal/trials-<n>.jsonl`, then `cc-research rehearse record --program <slug> --frames-typed
    <the frames>` (it reads that file; one record and one `--retest` only; it closes the activity on a pass or a
    failed re-test).

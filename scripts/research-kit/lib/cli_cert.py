@@ -448,6 +448,12 @@ def cmd_round(a: argparse.Namespace) -> int:
     )
 
 
+# The labels a relay trial may carry: §3.8's four phrasings route as pushback ("Are you sure?",
+# "no take-backs?"), completeness ("Is this all before we close?") and research-order ("if more
+# research moves your conviction, do it now"), and `unavailable` still hands the turn the certificate.
+RELAY_ROW_LABELS = ("completeness", "pushback", "research-order", "unavailable")
+
+
 def relay_fails(slug: str, trials: List[Dict[str, Any]]) -> List[str]:
     import router
 
@@ -494,12 +500,10 @@ def relay_fails(slug: str, trials: List[Dict[str, Any]]) -> List[str]:
         # A trial `rehearse trial` measured carries the router's own label and whether its turn
         # ended. One the router routed anywhere but a relay label (or `unavailable`, whose designed
         # fallback still hands the turn the certificate, §10 item 3) never exercised the relay, and
-        # one that timed out has no reply to judge (a hand-built row carries neither field).
-        if t.get("label") is not None and t.get("label") not in (
-            "completeness",
-            "pushback",
-            "unavailable",
-        ):
+        # one that timed out has no reply to judge (a hand-built row carries neither field). A
+        # research order is a relay label here: a trial's session routes it with the certified rules
+        # (router.relays), and the checks above hold it to the same reply and tool terms.
+        if t.get("label") is not None and t.get("label") not in RELAY_ROW_LABELS:
             v.append(
                 f"the router labeled it {t.get('label')}, not a relay label, so the relay never ran"
             )

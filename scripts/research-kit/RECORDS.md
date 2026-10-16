@@ -357,14 +357,26 @@ trial from a pane outside the program's directory), so gate row 14 can pass with
   transcript quiet for `CC_RESEARCH_TRIAL_SETTLE_S`, default 20 s, so a Stop-check block extends it), reads the
   transcript from `<CLAUDE_CONFIG_DIR>/projects/*/<uuid>.jsonl` and the label from `route-state/<uuid>.json`, closes
   the pane from outside, and appends `{trial, prompt, phrase, where, cwd, reply, replies, tools, label, session_id,
-  config_dir, transcript, window_id, closed, timed_out, attempt, at}` to
+  config_dir, transcript, window_id, closed, timed_out, attempt, at, trial_routed}` to
   `<records>/evidence/rehearsal/trials-<attempt>.jsonl` (refused past 20). `reply` is every reply text of the turn
   joined, so a repaired second reply counts against the line budget. Refused without an open rehearsal activity,
   outside `certifying`, or when the pane's account has not trusted the cwd. Exit 1 on a timed-out trial. Exempt from
   the lease (`lib/cli.py` `LEASE_EXEMPT`, with `rehearse frames`): it writes no record.
+- **How the router knows a trial (added 2026-10-16).** Before the pane starts, `rehearse trial` marks the uuid it
+  passes to `--session-id` in `<research home>/route-state/trials/<uuid>.json` (`router.trial_mark`: `{program,
+  attempt, phrase, where, at}`, reaped with the route records after a week). The router reads the session id every
+  hook receives, never the prompt or the pane's environment. A marked session routes a research order ("if more
+  research moves your conviction, do it now") with the certified rules plus the relay, whatever the registry state:
+  the certificate state lines in its context, every tool blocked but the certificate read (`cert_read`), and the
+  Stop relay check (`router.relays`). Without it a certifying program lets a research order run the kit's rounds and
+  any other non-research tool, so the relay could not pass before certification while row 14 must pass for it. The
+  mark only narrows a session's rights; nothing changes for an unmarked session. The route record carries `trial:
+  true`, and the trial row `trial_routed`.
 - **`rehearse record`** without `--trials` reads that attempt's file, and fails a trial the router labeled anything
-  but `completeness`, `pushback` or `unavailable` (the relay never ran: an allow-all label is the risk the skeptic
-  named for "if more research moves your conviction, do it now") or one that timed out, on top of the checks above.
+  but `completeness`, `pushback`, `research-order` or `unavailable` (the relay never ran: an allow-all label is the
+  risk the skeptic named for "if more research moves your conviction, do it now") or one that timed out, on top of
+  the checks above. A research-order trial is judged as a completeness relay: the lines unchanged, no relay
+  violation, every tool a certificate read.
   It closes the rehearsal activity on a pass or a failed re-test. It still takes the lease.
 - **The orchestrator's sequence:** `gate.sh rehearsal-activity` → the lens sessions (`[activity:<id>]` Agents or the
   rehearsal Workflow, one per `rehearse frames` frame) → 20 `rehearse trial`s, one `--where outside` → read the rows

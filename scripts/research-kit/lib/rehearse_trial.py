@@ -288,9 +288,8 @@ def wait(
         time.sleep(poll)
 
 
-def label_of(sid: str) -> Optional[str]:
-    rec = kit.read_json(kit.research_home() / "route-state" / f"{sid}.json", {}) or {}
-    return rec.get("label")
+def route_of(sid: str) -> Dict[str, Any]:
+    return kit.read_json(kit.research_home() / "route-state" / f"{sid}.json", {}) or {}
 
 
 def close(b: str, to: List[str], wid: str) -> bool:
@@ -373,6 +372,10 @@ def cmd_trial(a: argparse.Namespace) -> int:
         )
     b, to = kitty()
     sid = str(uuid.uuid4())
+    import router
+
+    # Before the pane starts, so its first prompt is already routed as a trial (router.trial_mark).
+    router.trial_mark(sid, slug, attempt=attempt, phrase=phrase, where=a.where)
     argv = launch_argv(b, to, cwd, cfg, sid, prompt, f"relay-trial {slug} {sid[:8]}")
     try:
         p = subprocess.run(
@@ -387,7 +390,7 @@ def cmd_trial(a: argparse.Namespace) -> int:
         )
     try:
         path, got, timed_out = wait(cfg, sid, prompt, float(a.timeout))
-        label = label_of(sid)
+        route = route_of(sid)
     finally:
         closed = close(b, to, wid)
     row = {
@@ -398,7 +401,8 @@ def cmd_trial(a: argparse.Namespace) -> int:
         "reply": "\n".join(got["replies"]),
         "replies": got["replies"],
         "tools": got["tools"],
-        "label": label,
+        "label": route.get("label"),
+        "trial_routed": bool(route.get("trial")),
         "session_id": sid,
         "config_dir": str(cfg),
         "transcript": str(path) if path else None,
@@ -414,7 +418,7 @@ def cmd_trial(a: argparse.Namespace) -> int:
             {
                 "trial": n,
                 "file": str(out),
-                "label": label,
+                "label": route.get("label"),
                 "timed_out": timed_out,
                 "closed": closed,
                 "session_id": sid,

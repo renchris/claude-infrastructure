@@ -416,6 +416,81 @@ label() { python3 "$ROUTER" status --session "${1:-s1}" | jq -r '.label // "none
   [ "$(tool Bash 'scripts/research-kit/courier.sh run --program demo')" = deny ]
 }
 
+# trial_mark <sid> [program] — what `cc-research rehearse trial` does before its pane starts.
+trial_mark() {
+  python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import router; router.trial_mark(sys.argv[2], sys.argv[3])" \
+    "$REPO/scripts/research-kit" "$1" "${2:-demo}"
+}
+
+@test "a relay trial's session routes a research order as a relay while certifying; any other session keeps the certifying allowance" {
+  state certifying
+  trial_mark t1
+  run prompt "do exhaustive research on the open rows" "$PROG/src" t1
+  [ "$(label t1)" = research-order ]
+  [ "$(python3 "$ROUTER" status --session t1 | jq -r .trial)" = true ]
+  [[ "$output" == *"rehearsal relay trial"* && "$output" == *"VERBATIM"* ]] || false
+  [[ "$output" == *"Signed frame: 100.00% closed"* ]] || false
+  [[ "$output" == *"misrouted"* ]] || false   # the operator's view of a relay route
+  [ "$(tool Bash 'git log --oneline' "$PROG/src" t1)" = deny ]
+  [ "$(tool Bash 'scripts/research-kit/round.sh run --program demo --kind certification --round 3' "$PROG/src" t1)" = deny ]
+  [ "$(tool Agent 'x' "$PROG/src" t1)" = deny ]
+  [ "$(tool Read 'x' "$PROG/src" t1)" = deny ]
+  [ "$(tool Bash 'scripts/research-kit/gate.sh --render --program demo' "$PROG/src" t1)" = allow ]
+  [ "$(tool Bash 'cc-research verdict demo' "$PROG/src" t1)" = allow ]
+  # the same phrase in an unmarked session, and in one marked for another program: unchanged
+  for s in s1 t2; do
+    if [ "$s" = t2 ]; then trial_mark t2 other-program; fi
+    run prompt "do exhaustive research on the open rows" "$PROG/src" "$s"
+    [ "$(label "$s")" = research-order ]
+    [[ "$output" == *"RESEARCH ORDER while certification runs"* ]] || false
+    [ "$(tool Bash 'scripts/research-kit/round.sh run --program demo --kind certification --round 3' "$PROG/src" "$s")" = allow ]
+    [ "$(tool Bash 'git log --oneline' "$PROG/src" "$s")" = allow ]
+    [ "$(tool Agent 'x' "$PROG/src" "$s")" = deny ]
+  done
+}
+
+@test "a relay trial outside every root, naming the program, routes a research order as a relay too; completeness and pushback are unchanged" {
+  state certifying
+  trial_mark t3
+  prompt "do exhaustive research (about the research program the demo)" "$BATS_TEST_TMPDIR/elsewhere" t3 >/dev/null
+  [ "$(label t3)" = research-order ]
+  [ "$(tool Bash 'git log' "$BATS_TEST_TMPDIR/elsewhere" t3)" = deny ]
+  [ "$(tool Bash 'cc-research verdict demo' "$BATS_TEST_TMPDIR/elsewhere" t3)" = allow ]
+  trial_mark t4
+  prompt "are you sure?" "$PROG/src" t4 >/dev/null
+  [ "$(label t4)" = pushback ]
+  [ "$(tool Bash 'ls' "$PROG/src" t4)" = deny ]
+}
+
+@test "relay-check holds a trial's research-order reply to the relay; an unmarked session's research-order reply is not checked" {
+  state certifying
+  trial_mark t1
+  prompt "do exhaustive research on the open rows" "$PROG/src" t1 >/dev/null
+  prompt "do exhaustive research on the open rows" "$PROG/src" s1 >/dev/null
+  for s in t1 s1; do
+    run bash -c "printf 'Research: demo — CERTIFIED Oct 16\nOne more thing: the retry path in sync.py.\n' \
+      | python3 '$ROUTER' relay-check --session $s"
+    if [ "$s" = t1 ]; then
+      [ "$status" -eq 1 ]
+      [[ "$output" == *"routed as research-order"* && "$output" == *"sync.py"* ]] || false
+    else
+      [[ "$status" -eq 0 && -z "$output" ]] || false
+    fi
+  done
+  run bash -c "printf 'Research: demo — CERTIFIED Oct 16\nSigned frame: 100.00%% closed. 14/14 decisions\n' \
+    | python3 '$ROUTER' relay-check --session t1"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "trial marks are reaped with the route records (growth-coverage.conf route-state row)" {
+  state certifying
+  trial_mark old
+  touch -t 202609010000 "$CC_RESEARCH_HOME/route-state/trials/old.json"
+  prompt "hello" >/dev/null
+  [ ! -e "$CC_RESEARCH_HOME/route-state/trials/old.json" ]
+}
+
 @test "§10 item 8: an OPEN contract-listed activity lets its tagged delta round, courier and Agent through" {
   state certified
   printf '{"activities":[{"program":"demo","id":"esc-7","kind":"escape","state":"open"},{"program":"demo","id":"esc-1","kind":"escape","state":"closed"}]}\n' \

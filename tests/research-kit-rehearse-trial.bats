@@ -62,7 +62,7 @@ recs = [{"type": "user", "message": {"role": "user", "content": prompt}, "sessio
 if not os.environ.get("FAKE_SILENT"):
     recs += [
         {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Bash",
-                                                       "input": {"command": "cc-research verdict demo"}}]}},
+                                                       "input": {"command": os.environ.get("FAKE_TOOL", "cc-research verdict demo")}}]}},
         {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "x"}]}},
         {"type": "assistant", "message": {"content": [{"type": "text",
                                                        "text": os.environ.get("FAKE_REPLY", "demo: certified on snapshot abc")}]}},
@@ -71,7 +71,9 @@ with open(os.path.join(d, sid + ".jsonl"), "w") as fh:
     fh.write("".join(json.dumps(r) + "\n" for r in recs))
 rs = os.path.join(os.environ["CC_RESEARCH_HOME"], "route-state")
 os.makedirs(rs, exist_ok=True)
-json.dump({"program": "demo", "label": label}, open(os.path.join(rs, sid + ".json"), "w"))
+# the router's route record carries `trial` when the launcher marked the session before the pane
+marked = os.path.exists(os.path.join(rs, "trials", sid + ".json"))
+json.dump({"program": "demo", "label": label, "trial": marked}, open(os.path.join(rs, sid + ".json"), "w"))
 print(40 + n)
 EOF
   chmod +x "$B/kitty"
@@ -289,4 +291,47 @@ print('ok')"
   [ "$status" -eq 1 ]
   [ "$(acts)" = "ACT-demo-1:rehearsal:closed" ]
   [ "$(/usr/bin/python3 -c "import json; print(json.load(open('$REC/rehearsal.json'))['relay']['unstable'])")" = True ]
+}
+
+# §3.8's four phrasings, five times each: the fourth routes research-order (router.relays).
+four() { # [FAKE_TOOL for the research-order trials]
+  local i
+  trial --phrase "Are you sure?" --where outside >/dev/null
+  for i in 1 2 3 4 5; do
+    [ "$i" = 1 ] || trial --phrase "Are you sure?" >/dev/null
+    trial --phrase "Is this all before we close?" >/dev/null
+    trial --phrase "no take-backs?" >/dev/null
+    FAKE_LABEL=research-order FAKE_TOOL="${1:-cc-research verdict demo}" \
+      trial --phrase "if more research moves your conviction, do it now" >/dev/null
+  done
+}
+
+@test "rehearse trial marks its session for the router before the pane starts, and records that the route saw it" {
+  opened >/dev/null
+  run trial --phrase "if more research moves your conviction, do it now"
+  [ "$status" -eq 0 ]
+  sid="$(row 1 "r['session_id']")"
+  [ "$(/usr/bin/python3 -c "import json; print(json.load(open('$CC_RESEARCH_HOME/route-state/trials/$sid.json'))['program'])")" = demo ]
+  [ "$(row 1 "r['trial_routed']")" = True ]
+}
+
+@test "end to end: 20 trials of the four phrasings, five of them research-order relays, pass record and row 14" {
+  opened >/dev/null
+  four
+  [ "$(launches)" = 20 ]
+  [ "$(/usr/bin/python3 -c "import json; print(sum(json.loads(l)['label'] == 'research-order' for l in open('$REC/evidence/rehearsal/trials-1.jsonl')))")" = 5 ]
+  run "$CR" rehearse record --program demo --frames-typed "deployed and live" "nothing can beat it" "no loose ends"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"relay test passed: 20 trials"* ]] || false
+  [ "$(row14)" = "PASS | " ]
+}
+
+@test "a research-order trial that calls a tool other than the certificate read fails the record" {
+  opened >/dev/null
+  four "git log --oneline"
+  run "$CR" rehearse record --program demo --frames-typed "deployed and live" "nothing can beat it" "no loose ends"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"trial 4: it called git log --oneline (only the certificate read is allowed)"* ]] || false
+  [[ "$output" != *"not a relay label"* ]] || false
+  [ "$(row14 | cut -d' ' -f1)" = FAIL ]
 }
