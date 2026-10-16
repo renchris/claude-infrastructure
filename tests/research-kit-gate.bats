@@ -978,6 +978,22 @@ reads() { cat "$CC_RESEARCH_HOME/router-heldout/reads.jsonl" 2>/dev/null | wc -l
   grep -qF "Row 15, stated condition: load bound (ruling 17aff7158fa6)" "$REC/cert/CERT-v1.md"
 }
 
+# RED-proof (method v1.3, 2026-10-16): before close_delta_rows nothing closed a frame-omission known
+# row when the frame-delta cycle re-issued the certificate (§5.4 step 4), so `requires` held its waves.
+@test "v1.3: a passing gate run closes each open frame-omission row held before a valid frame signature, and no other" {
+  # the fixture's frame is signed 2026-09-30T00:00:00Z: KR-3 was held before it, KR-4 after it
+  printf '%s\n' \
+    '{"id":"KR-3","kind":"frame-omission","status":"open","resign_due":"2099-01-01T00:00:00Z","default":"descope","blocks_waves":["B2"],"ts":"2026-09-29T12:00:00Z"}' \
+    '{"id":"KR-4","kind":"frame-omission","status":"open","resign_due":"2099-01-01T00:00:00Z","default":"descope","blocks_waves":["B3"],"ts":"2026-09-30T01:00:00Z"}' \
+    >> "$REC/known_rows.jsonl"
+  git -C "$REC" add -A && git -C "$REC" commit -qm "plant known rows"
+  run "$G" run --program demo --consent-sealed-read
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"closed known row KR-3 (frame-delta cycle: frame re-signed 2026-09-30T00:00:00Z, certificate re-issued as CERT-v1)"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"closed known row KR-4"* ]] || { echo "$output"; false; }
+  [ "$(grep -c '"closed_by": "CERT-v1"' "$REC/known_rows.jsonl")" -eq 1 ]
+}
+
 @test "row 16: more rounds than R_max fails" {
   jedit rounds/1/matrix.json 'd["forecast"]["p90"] = -2'
   [[ "$(rowtext 16)" == *"R_max is 2"* ]]

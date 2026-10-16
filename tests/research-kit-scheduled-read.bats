@@ -97,7 +97,8 @@ sfile() {
 
 @test "with a filing, row 15 is FILED and decrypts nothing; the gate certifies with row 15 carried" {
   pin null null
-  sfile > /dev/null
+  # filed an hour after the fixture's freeze, so the certificate counts it as a late wait
+  CC_NOW="$(/usr/bin/python3 -c "import calendar, time; t = calendar.timegm(time.strptime('$CC_NOW', '%Y-%m-%dT%H:%M:%SZ')); print(time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(t + 3600)))")" sfile > /dev/null
   git -C "$REC" add -A && git -C "$REC" commit -qm "file the scheduled read"
   run "$G" run --program demo # no read consent: none is needed, nothing is read
   [ "$status" -eq 0 ] || { echo "$output"; false; }

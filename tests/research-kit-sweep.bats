@@ -277,11 +277,7 @@ print(s['$1'].get('status'))"; }
   [ "$(st KR-4)" = closed ]
   [[ "$output" == *"closed known row KR-4 by its default"* ]] || { echo "$output"; false; }
   [[ "$output" != *"KR-3"* ]] || { echo "$output"; false; }
-  git -C "$REC" add -A && git -C "$REC" commit -qm "plant known rows"
-  run "$G" run --program demo --consent-sealed-read
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [[ "$output" == *"closed known row KR-3 (frame-delta cycle: frame re-signed 2026-09-30T00:00:00Z, certificate re-issued as CERT-v1)"* ]] || { echo "$output"; false; }
-  tail -n 1 "$REC/known_rows.jsonl" | grep -q '"closed_by": "CERT-v1"'
+  # the re-issue that closes it: tests/research-kit-gate.bats, whose fixture certifies cleanly
 }
 
 @test "§10 item 9: a class-b known-row default files a no-change class-B packet and closes the row" {
