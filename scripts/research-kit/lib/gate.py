@@ -245,9 +245,46 @@ def cmd_run(a: argparse.Namespace) -> int:
         return 1
     cert = gate_cert.write_certificate(ctx, rows)
     kit.registry_set(a.program, "certified")
+    closed = close_delta_rows(ctx, Path(cert).stem)
     if not a.json:
         print(f"CERTIFIED {a.program}: {cert}")
+        for line in closed:
+            print(line)
     return 0
+
+
+def close_delta_rows(ctx: Ctx, cert: str) -> List[str]:
+    """§5.4 step 4, given its actuator by method v1.3 (REPORT.md §13): a certificate issued after the
+    operator re-signed the frame closes each open frame-omission known row held before that
+    signature, so `requires` stops holding its waves. This run passed every row, row 1 included, so
+    the re-signed frame is the one certified. A row with no held time is left to the sweep."""
+    import operator_sign
+    from gate_rows_a import known_rows
+
+    sigs = [
+        str(r.get("at_iso") or "")
+        for r in operator_sign.research_records(ctx.slug, "frame")
+        if r["_verdict"] == operator_sign.VALID
+    ]
+    out: List[str] = []
+    for kr in known_rows(ctx):
+        held = str(kr.get("ts") or "")
+        if (
+            kr.get("kind") != "frame-omission"
+            or kr.get("status", "open") != "open"
+            or not held
+        ):
+            continue
+        newer = sorted(s for s in sigs if s > held)
+        if not newer:
+            continue
+        why = f"frame-delta cycle: frame re-signed {newer[-1]}, certificate re-issued as {cert}"
+        kit.append_jsonl(
+            ctx.records / "known_rows.jsonl",
+            {"id": kr["id"], "status": "closed", "closed_by": cert, "why": why},
+        )
+        out.append(f"closed known row {kr['id']} ({why})")
+    return out
 
 
 def main(argv: Optional[List[str]] = None) -> int:

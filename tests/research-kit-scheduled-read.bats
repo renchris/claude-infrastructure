@@ -109,7 +109,11 @@ sfile() {
   [ "$(reads)" = 0 ]
   run "$G" --render --program demo
   [[ "$output" == *"Router read SR-15-1: scheduled, awaits v5: 40 labeled subtle re-asks; due cert+30d (cert issued "* ]] || { echo "$output"; false; }
-  # the filing's wave waits for the read; a wave that does not rest on the router fires
+  # filed after the freeze: a wait the intake did not front-load, counted on the certificate (§13.6)
+  [[ "$output" == *"1 filed after the freeze (a wait the intake did not front-load, §13.6)"* ]] || { echo "$output"; false; }
+  # the operator signs the certificate that carries row 15 FILED; then the filing's wave waits for
+  # the read, and a wave that does not rest on the router fires
+  "$REPO/tests/fixtures/research-kit/fixture_signer.py" research:demo/cert --evidence fixture > /dev/null
   run "$G" requires --program demo --wave B2
   [ "$status" -eq 1 ]
   [[ "$output" == *"row 15: scheduled read SR-15-1 has not run"* ]] || { echo "$output"; false; }
@@ -144,6 +148,7 @@ open(p,'w').write(''.join(json.dumps(r)+'\n' for r in rows))"
   [[ "$output" == *"a scheduled read runs after the certificate issues"* ]] || { echo "$output"; false; }
   git -C "$REC" add -A && git -C "$REC" commit -qm "file the scheduled read"
   "$G" run --program demo > /dev/null
+  "$REPO/tests/fixtures/research-kit/fixture_signer.py" research:demo/cert --evidence fixture > /dev/null
   run "$G" read --program demo --row 15
   [ "$status" -eq 2 ]
   [[ "$output" == *"no read consent"* ]] || { echo "$output"; false; }
@@ -171,6 +176,7 @@ open(p,'w').write(''.join(json.dumps(r)+'\n' for r in rows))"
   sfile > /dev/null
   git -C "$REC" add -A && git -C "$REC" commit -qm "file the scheduled read"
   "$G" run --program demo > /dev/null
+  "$REPO/tests/fixtures/research-kit/fixture_signer.py" research:demo/cert --evidence fixture > /dev/null
   pin '"v1"' '"v1"'
   printf '#!/bin/bash\ncat >/dev/null\necho work-order\n' > "$W/router.sh"
   run "$G" read --program demo --row 15 --consent-sealed-read
@@ -182,4 +188,16 @@ open(p,'w').write(''.join(json.dumps(r)+'\n' for r in rows))"
   out="$(rowjson 15)"
   [ "$(printf '%s\n' "$out" | head -1)" = FAIL ]
   [[ "$out" == *"the scheduled read FAILED at"* ]] || { echo "$out"; false; }
+  # The two views agree (REPORT.md §13.1): the ISSUED certificate keeps row 15 FILED and a FAIL holds
+  # only the filing's waves (above), while a RE-ISSUE may not carry a pending read that already
+  # failed, so it prints FAIL until the strata await a fresh set and a new read is filed.
+  run "$G" requires --program demo --wave B1
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  pin null null
+  run sfile
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == "SR-15-2: filed row 15 as a scheduled read"* ]] || { echo "$output"; false; }
+  out="$(rowjson 15)"
+  [ "$(printf '%s\n' "$out" | head -1)" = FILED ] || { echo "$out"; false; }
+  [[ "$out" == *"FILED scheduled read SR-15-2"* ]] || { echo "$out"; false; }
 }

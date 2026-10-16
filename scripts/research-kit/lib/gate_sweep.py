@@ -462,8 +462,13 @@ def cmd_sweep(a: argparse.Namespace) -> int:
             or not kr.get("resign_due")
         ):
             continue
+        # Method v1.3 (REPORT.md §13): a frame re-signed after the row was HELD is the frame-delta
+        # cycle under way, whether or not its due has passed; keying on the due made an on-time
+        # re-sign count for nothing, so the operator had to wait past the due to sign. A row with no
+        # held time keeps the old reading.
+        held = str(kr.get("ts") or "") or kr["resign_due"]
         if kr["resign_due"] >= now or any(
-            r.get("at_iso", "") > kr["resign_due"] for r in frame_sigs
+            r.get("at_iso", "") > held for r in frame_sigs
         ):
             continue
         ev: Dict[str, Any] = {

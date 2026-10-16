@@ -255,6 +255,35 @@ budget_pkt() { /usr/bin/python3 -c "import json; print((json.load(open('$REC/bud
   [ "$(grep -c '"closed"' "$REC/known_rows.jsonl")" -eq 0 ]
 }
 
+# RED-proof (method v1.3, 2026-10-16): the sweep spared a row only for a frame signature dated after
+# its re-sign DUE, so an operator who re-signed on time saw the row closed by its default and its
+# waves descoped, and the only way to keep them was to wait past the due to sign. Nothing closed the
+# row when the frame-delta cycle re-issued the certificate (§5.4 step 4), so its waves never fired.
+@test "v1.3: a frame re-signed after the row was held, even before its due, spares it; the re-issued certificate closes it" {
+  # held 2026-09-29T12:00Z, frame re-signed 2026-09-30T00:00Z (the fixture's), due 2026-09-30T06:00Z
+  printf '{"id":"KR-3","kind":"frame-omission","status":"open","resign_due":"2026-09-30T06:00:00Z","default":"descope","blocks_waves":["B2"],"ts":"2026-09-29T12:00:00Z"}\n' \
+    >> "$REC/known_rows.jsonl"
+  # held after the re-sign: nothing has re-signed for it, so its default applies
+  printf '{"id":"KR-4","kind":"frame-omission","status":"open","resign_due":"2026-09-30T06:00:00Z","default":"descope","blocks_waves":["B3"],"ts":"2026-09-30T01:00:00Z"}\n' \
+    >> "$REC/known_rows.jsonl"
+  run "$G" sweep --program demo
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  st() { /usr/bin/python3 -c "
+import json; s = {}
+for l in open('$REC/known_rows.jsonl'):
+    if l.strip(): r = json.loads(l); s.setdefault(r['id'], {}).update(r)
+print(s['$1'].get('status'))"; }
+  [ "$(st KR-3)" = open ] || { cat "$REC/known_rows.jsonl"; false; }
+  [ "$(st KR-4)" = closed ]
+  [[ "$output" == *"closed known row KR-4 by its default"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"KR-3"* ]] || { echo "$output"; false; }
+  git -C "$REC" add -A && git -C "$REC" commit -qm "plant known rows"
+  run "$G" run --program demo --consent-sealed-read
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"closed known row KR-3 (frame-delta cycle: frame re-signed 2026-09-30T00:00:00Z, certificate re-issued as CERT-v1)"* ]] || { echo "$output"; false; }
+  tail -n 1 "$REC/known_rows.jsonl" | grep -q '"closed_by": "CERT-v1"'
+}
+
 @test "§10 item 9: a class-b known-row default files a no-change class-B packet and closes the row" {
   printf '{"id":"KR-2","kind":"frame-omission","status":"open","resign_due":"2026-09-30T06:00:00Z","default":"class-b","names_rows":["AM-9"]}\n' \
     >> "$REC/known_rows.jsonl"
@@ -282,6 +311,8 @@ for p in d['programs']:
     if p['slug'] == 'demo':
         p['state'] = 'certified'
 json.dump(d, open(reg, 'w'))"
+  # method v1.3: a wave fires only on a certificate the operator signed
+  "$REPO/tests/fixtures/research-kit/fixture_signer.py" research:demo/cert --evidence fixture > /dev/null
 }
 convert() {
   reopen_dr1

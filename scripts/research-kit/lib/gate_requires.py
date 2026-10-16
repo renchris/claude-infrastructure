@@ -106,6 +106,16 @@ def blockers(
             reasons.append(f"{cert.get('cert')}: FAIL row(s) {', '.join(failed)}")
         if not cert.get("rows"):
             reasons.append(f"{certs[-1].name} carries no rows — unknown fails (§3.10)")
+        # Method v1.3 (REPORT.md §13): the certificate carries FILED rows (a scheduled read, keyed
+        # dues), so no wave builds on it until the operator has accepted it by signing THIS
+        # certificate; an agent-written or stale signature, or one on an earlier version, is none.
+        import operator_sign
+
+        sig = operator_sign.latest_valid(slug, "cert")
+        if not sig or f"cert/{certs[-1].name}" not in (sig.get("pins") or {}):
+            reasons.append(
+                f"{certs[-1].stem} is not signed by the operator (cc-signoff research:{slug}/cert)"
+            )
     if gate.reopened(ctx):
         reasons.append("an operator reopen is signed after the newest certificate")
 

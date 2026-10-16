@@ -53,6 +53,8 @@ for p in d["programs"]:
         p["state"] = "certified"
 json.dump(d, open(reg, "w"))
 PY
+  # method v1.3: a wave fires only on a certificate the operator signed (NOSIGN=1 leaves it unsigned)
+  [ -n "${NOSIGN:-}" ] || "$REPO/tests/fixtures/research-kit/fixture_signer.py" research:demo/cert --evidence fixture > /dev/null
 }
 dec() { printf '%s\n' "$1" >> "$REC/decisions.jsonl"; }
 kr()  { printf '%s\n' "$1" >> "$REC/known_rows.jsonl"; }
@@ -211,6 +213,28 @@ kr()  { printf '%s\n' "$1" >> "$REC/known_rows.jsonl"; }
   dec '{"id":"DR-2","status":"ruled","ruled_by":"operator","ts":"2026-02-02T00:00:00Z"}'
   run "$G" requires --program demo --wave B4
   [ "$status" -eq 0 ]
+}
+
+# RED-proof (method v1.3, 2026-10-16): before this check `requires` admitted every wave of an
+# unsigned certificate (registry certified, no FAIL row), so v1.3's FILED rows could be built on
+# before the operator accepted them; Stage 9's built-freeze was the only reader of the signature.
+@test "v1.3: no wave fires on a certificate the operator has not signed; an agent-written signature does not count; a re-issue needs its own" {
+  NOSIGN=1 certify
+  run "$G" requires --program demo --wave B1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"CERT-v1 is not signed by the operator (cc-signoff research:demo/cert)"* ]] || { echo "$output"; false; }
+  pin="$(/usr/bin/python3 -c "import sys; sys.path.insert(0, '$REPO/scripts/lib'); import operator_sign; from pathlib import Path; print(operator_sign.file_pin(Path('$REC/cert/CERT-v1.json')))")"
+  printf '{"row":"research:demo/cert","action":"cert","target":null,"at":%s,"evidence":"x","pins":{"cert/CERT-v1.json":"%s"},"provenance":{"claude_ancestor":true,"chain":["claude"]}}\n' "$(date +%s)" "$pin" >> "$CC_RESEARCH_HOME/demo/signoff.jsonl"
+  run "$G" requires --program demo --wave B1
+  [ "$status" -eq 1 ]
+  "$REPO/tests/fixtures/research-kit/fixture_signer.py" research:demo/cert --evidence fixture > /dev/null
+  run "$G" requires --program demo --wave B1
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # a re-issued certificate is a new claim: the signature on v1 does not cover v2
+  cp "$REC/cert/CERT-v1.json" "$REC/cert/CERT-v2.json"
+  run "$G" requires --program demo --wave B1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"CERT-v2 is not signed by the operator"* ]] || { echo "$output"; false; }
 }
 
 # RED-proof (method v1.3, 2026-10-16): before `--start` existed every call with it exits 2
