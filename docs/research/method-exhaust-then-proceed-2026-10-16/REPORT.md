@@ -94,6 +94,15 @@ Kinds: accrual, elapsed time, calendar due, third party, all-or-nothing row, one
 | W-16 | The rehearsal relay: one record and one re-test | one-shot spend | `lib/gate_rows_b.py:450-474` ("relay unstable" still passes) | Yes, with practice | Kept |
 | W-17 | A third read of a stratum, a reopen, an extension, the implementation | signature | `scripts/lib/operator_sign.py:56-69` | Signature stays the operator's | Kept |
 
+Added from the program lead's five-axis critic of this branch (2026-10-16 10:04, verified here in code):
+
+| ID | Wait | Kind | Receipt | Proceeds today? | v1.3 disposition |
+|---|---|---|---|---|---|
+| W-18 | `requires` never reads the operator's certificate signature, so a wave can build on an unsigned certificate; with v1.3 a certificate carries more FILED rows | safety, not a wait | `lib/gate_requires.py` (only reopen and implementation checks); before v1.3 only `lib/gate_built.py:37-66` read it | n/a | Waves need the signature on the newest certificate (§3.7) |
+| W-19 | The sweep spares an overdue frame-omission row only for a frame signature dated after its re-sign DUE, so an on-time re-sign counts for nothing and the operator must wait past the due (TM2: 2026-11-02T03:11Z) | future date | `lib/gate_sweep.py:465-466` | No | Spare on a re-sign after the row was held (§3.7) |
+| W-20 | Nothing closes a frame-omission known row when the frame-delta cycle re-issues the certificate (§5.4 step 4), so its waves stay held | no actuator | `lib/gate_requires.py` reads `status`; no writer but the sweep's default | No | The passing gate run closes it (§3.7) |
+| W-21 | After a scheduled read FAILs, a later gate run prints row 15 FAIL while `requires` holds only the filing's waves | consistency | `lib/scheduled_read.py` `row15_filed` | n/a | Both stated: the issued certificate keeps row 15 FILED; a re-issue fails it until a fresh set is awaited and a new read filed (§3.1), tested |
+
 Two TM2 waits are not method defects: the operator's open class-C packets (§5.6 already bounds them), and the 1-min
 load above 400 on 2026-10-16 (`uptime` at 09:09), which W-02's bound already handles.
 
@@ -195,6 +204,13 @@ A frame stamped 1.3 must map five more checklist rows (gate row 1), so every wai
 The certificate prints how many FILED rows were filed after the freeze: each is a wait the intake missed, and the
 count is the front-loading's own measure.
 
+### 3.7 The signed certificate gates the build; the frame-delta cycle closes its rows
+
+Because a certificate may now carry a scheduled read and keyed dues, `gate.sh requires` admits no wave until the
+operator's valid `cc-signoff research:<slug>/cert` pins the newest certificate (W-18). The sweep spares a
+frame-omission known row once the frame is re-signed after the row was held, before its due as well as after (W-19),
+and a passing gate run closes every open one held before a valid frame signature (W-20), as §5.4 step 4 always said.
+
 ## 4. Not changed in v1.3, and why
 
 - **W-09, the soak.** Converting it into a FILED row would let `close` follow a soak that has not finished; keeping
@@ -204,3 +220,21 @@ count is the front-loading's own measure.
   count a two-vendor round under a three-vendor signature, which only the operator can accept.
 - **W-15, the block on method work.** Changing which sessions the research block covers is a change to a guard. It is
   filed as an operator decision with the options measured.
+
+## 5. Decisions filed for the operator, and the course taken meanwhile
+
+| Packet | Question | Recommended, and built that way | Conviction |
+|---|---|---|---|
+| `afc121ffd9a3` | Should a session a program lead fires to improve the method or kit be exempt from that program's research block? | Keep as is (no change built) | 60 |
+| `1d192ef8961e` | Should build waves wait for the operator's signature on the newest certificate? | Require it (built; reversible by reverting one check) | 88 |
+
+## 6. Where it was built
+
+The method change is `docs/research/upfront-research-exhaustion-2026-09-30/REPORT.md` §9 ("Ruled 2026-10-16") and
+§13, with rows 34–38 in §3.2 step 5's table; the skill is `skills/research-program/SKILL.md` (v1.3 paragraphs); the
+records contract is `scripts/research-kit/RECORDS.md` ("Method v1.3 records"). Each kit change landed red-first with
+its suite: `tests/cc-research-records.bats` and `tests/research-kit-requires.bats` (keyed dues, wave starts, the
+signed certificate), `tests/research-kit-scheduled-read.bats` (row 15), `tests/research-kit-built-states.bats`
+(adoption), `tests/research-program-intake.bats` and `tests/research-program-briefs.bats` (FAC-34..38, the
+dead-lane degrade), `tests/research-kit-sweep.bats` (the frame-delta close). What truememory-2-0 runs under v1.3 is
+`TM2-HANDOFF.md` beside this report.
