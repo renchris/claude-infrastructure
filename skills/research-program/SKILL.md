@@ -359,6 +359,15 @@ Updated 2026-10-16 (wave ids; scripts/research-kit/RECORDS.md "Wave ids, the re-
   without `--dry-run`: it bumps the frame's version, lists the rows in `known_rows_applied`, and appends the
   delta with every replaced row to `frame-deltas.jsonl`. Never edit `frame.json` or re-run a program's own
   frame generator for it. The operator's re-sign of the new frame is still what spares and closes the rows.
+  The deliverable sentence and `locks` (a locked rule's path and sha256) are delta ops too (`set`; `add` or
+  `replace`), never `intake.py set`.
+- **Annotate decisions before the apply, never by hand.** A ruled or carried decision's display fields
+  (`affects`, `group`, `premises`, `revisit_trigger`, `default_if_unanswered`, a named ruling record) go in with
+  `cc-research decision annotate --program <slug> --id DR-n … --why "<KR-n>"`, inside the same window as
+  `delta-apply`. It refuses any change to the decision's status, choice, tally, conviction or gate row 5 (re-tally
+  or re-rule through the verb that owns it). Gate row 1 fails until a delta pins the annotation, so annotate
+  first, then apply: the new frame carries the decisions log's hash and the annotation ids, and the re-sign
+  covers their text. Format: RECORDS.md "Decision annotations".
 - **A class-b row's packets.** After the sweep closes a class-b row, its waves wait while its packets are
   pending, and are descoped when the default fires unless the operator signs `cc-signoff
   research:<slug>/veto/<KR-n>`.

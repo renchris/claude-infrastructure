@@ -220,6 +220,9 @@ def row1(ctx: Ctx) -> Row:
     ]
     if open_changes:
         fails.append(f"open changes to this version: {', '.join(open_changes)}")
+    import frame_delta
+
+    fails += frame_delta.pin_fails(ctx.records, fr)
     rulings = fr.get("rulings") or {}
     for k in ("definition_of_complete", "exemption"):
         if not (rulings.get(k) or {}).get("at"):
@@ -534,63 +537,76 @@ def row5(ctx: Ctx) -> Row:
     prem = folded(ctx, "premises.jsonl")
     pr = probes(ctx)
     for d in folded(ctx, "decisions.jsonl").values():
-        did = d.get("id")
-        c = kit.conviction(d, prem, pr)
-        if "conviction" in d and d["conviction"] is not None and d["conviction"] != c:
-            fails.append(
-                f"{did}: conviction typed, not computed ({d['conviction']} stored, {c} by the §3.5 rule)"
-            )
-        st, by = d.get("status"), d.get("ruled_by")
-        pk = d.get("packet") or {}
-        if d.get("reversibility") == "irreversible" and pk.get("class") == "B":
-            fails.append(f"{did}: a class-B default sits on an irreversible decision")
-        if d.get("reversibility") == "reversible" and st == "ruled":
-            if int(d.get("runs_used") or 0) > kit.CAPS["reversible_runs"] or not d.get(
-                "revisit_trigger"
-            ):
-                fails.append(
-                    f"{did}: reversible row used {d.get('runs_used')} runs or has no revisit trigger"
-                )
-        if st == "open":
-            fails.append(f"{did}: open")
-        elif st == "descoped":
-            notes.append(
-                f"{did}: descoped ({', '.join(d.get('descoped_waves') or [])})"
-            )
-        elif st == "carried":
-            s = d.get("set") or {}
-            members = s.get("members") or []
-            npb = s.get("narrowing_probe") or {}
-            if pk.get("class") == "C" and pk.get("due"):
-                filed.append(
-                    f"{did}: class C, due {pk['due']}, blocks {d.get('blocks_waves') or []}"
-                )
-            elif kit.carried_set_ok(s):
-                filed.append(
-                    f"{did}: carried set of {len(members)}, narrows in {npb['wave']} by {npb['due']}"
-                )
-            else:
-                fails.append(
-                    f"{did}: carried without a well-formed set or a dated class-C packet"
-                )
-        elif st == "ruled":
-            if c is None and by != "operator":
-                fails.append(
-                    f"{did}: rests on no factual premise, so it is a value call the operator rules"
-                )
-            elif by == "agent" and (c is None or c < 90):
-                fails.append(f"{did}: agent-ruled at {c}%; the §3.5 rule needs 90")
-            elif by in ("operator", "ladder") and not d.get("receipt"):
-                fails.append(f"{did}: ruled by {by} with no receipt")
-            elif by == "packet-default":
-                notes.append(
-                    f"{did}: decided by default at {d.get('decided_by_default_at', c)}%"
-                )
-            elif by not in ("agent", "operator", "ladder", "packet-default"):
-                fails.append(f"{did}: ruled_by {by!r}")
-        else:
-            fails.append(f"{did}: status {st!r}")
+        f, fi, n = decision_findings(d, prem, pr)
+        fails += f
+        filed += fi
+        notes += n
     return verdict(5, "Decisions", fails, filed, notes)
+
+
+def decision_findings(
+    d: Dict[str, Any], prem: Dict[str, Dict[str, Any]], pr: Dict[str, Dict[str, Any]]
+) -> Tuple[List[str], List[str], List[str]]:
+    """Row 5's (fails, filed, notes) for one folded decision. `decision annotate` compares it before
+    and after its event, so an annotation can never move this row."""
+    fails: List[str] = []
+    filed: List[str] = []
+    notes: List[str] = []
+    did = d.get("id")
+    c = kit.conviction(d, prem, pr)
+    if "conviction" in d and d["conviction"] is not None and d["conviction"] != c:
+        fails.append(
+            f"{did}: conviction typed, not computed ({d['conviction']} stored, {c} by the §3.5 rule)"
+        )
+    st, by = d.get("status"), d.get("ruled_by")
+    pk = d.get("packet") or {}
+    if d.get("reversibility") == "irreversible" and pk.get("class") == "B":
+        fails.append(f"{did}: a class-B default sits on an irreversible decision")
+    if d.get("reversibility") == "reversible" and st == "ruled":
+        if int(d.get("runs_used") or 0) > kit.CAPS["reversible_runs"] or not d.get(
+            "revisit_trigger"
+        ):
+            fails.append(
+                f"{did}: reversible row used {d.get('runs_used')} runs or has no revisit trigger"
+            )
+    if st == "open":
+        fails.append(f"{did}: open")
+    elif st == "descoped":
+        notes.append(f"{did}: descoped ({', '.join(d.get('descoped_waves') or [])})")
+    elif st == "carried":
+        s = d.get("set") or {}
+        members = s.get("members") or []
+        npb = s.get("narrowing_probe") or {}
+        if pk.get("class") == "C" and pk.get("due"):
+            filed.append(
+                f"{did}: class C, due {pk['due']}, blocks {d.get('blocks_waves') or []}"
+            )
+        elif kit.carried_set_ok(s):
+            filed.append(
+                f"{did}: carried set of {len(members)}, narrows in {npb['wave']} by {npb['due']}"
+            )
+        else:
+            fails.append(
+                f"{did}: carried without a well-formed set or a dated class-C packet"
+            )
+    elif st == "ruled":
+        if c is None and by != "operator":
+            fails.append(
+                f"{did}: rests on no factual premise, so it is a value call the operator rules"
+            )
+        elif by == "agent" and (c is None or c < 90):
+            fails.append(f"{did}: agent-ruled at {c}%; the §3.5 rule needs 90")
+        elif by in ("operator", "ladder") and not d.get("receipt"):
+            fails.append(f"{did}: ruled by {by} with no receipt")
+        elif by == "packet-default":
+            notes.append(
+                f"{did}: decided by default at {d.get('decided_by_default_at', c)}%"
+            )
+        elif by not in ("agent", "operator", "ladder", "packet-default"):
+            fails.append(f"{did}: ruled_by {by!r}")
+    else:
+        fails.append(f"{did}: status {st!r}")
+    return fails, filed, notes
 
 
 # ── row 6 ───────────────────────────────────────────────────────────────────────────────────────

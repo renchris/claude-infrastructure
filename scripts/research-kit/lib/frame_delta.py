@@ -14,11 +14,14 @@ The delta file (JSON):
   {"program": "<slug>", "base_version": <the frame's version now>,
    "known_rows": ["KR-n", ...],          held frame-omission rows the delta carries (required)
    "why": "<one line>",
-   "frame": {"<list>": [op, ...], ...},  list one of FRAME_LISTS
+   "frame": {"<list>": [op, ...], ...},  list one of FRAME_LISTS, or a scalar of FRAME_SCALARS
    "acceptance": [op, ...]}              rows of acceptance.json, keyed by id
 
   frame op       {"op": "add", "value": V}              V's id must be new to the list
                  {"op": "replace", "id": X, "value": V} X must exist; V keeps id X
+  deliverable    {"op": "set", "value": "<sentence>"}   the frame's one-sentence deliverable
+  locks          {"op": "add"|"replace", "id": NAME, "value": {"path", "sha256", ...}}
+                                                        a hash the signed frame carries (frame.locks)
   acceptance op  {"op": "add", "row": {...}}            id new; ACCEPTANCE_REQUIRED present
                  {"op": "replace", "id": X, "fields": {...}}  merged over row X; id unchanged
 
@@ -55,6 +58,11 @@ FRAME_LISTS = (
     "sources_required",
 )
 BARE_ID_LISTS = ("am", "dr", "sources_required")
+# The frame's scalars a delta may write: the deliverable sentence (a count in it can be what a held
+# row corrects) and `locks`, the hashes the signed frame must carry (a locked rule's sha256). Each is
+# signed with frame.json, so it changes only through a delta and the operator's re-sign.
+FRAME_SCALARS = ("deliverable", "locks")
+SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 DELTA_KEYS = ("program", "base_version", "known_rows", "why", "frame", "acceptance")
 # gate row 1 fails a row missing any of the last three (gate_rows_a.row1); predicate is what it lints
 ACCEPTANCE_REQUIRED = ("id", "predicate", "check_cmd", "threshold", "negative_branch")
@@ -131,8 +139,9 @@ def load_delta(path: str) -> Tuple[Dict[str, Any], bytes]:
     return d, raw
 
 
-def authorize(slug: str, known: List[str]) -> Tuple[str, Optional[str]]:
-    """(registry state, open frame-delta activity id or None), or Refused."""
+def window(slug: str, what: str = "a frame delta applies") -> Tuple[str, Optional[str]]:
+    """(registry state, open frame-delta activity id or None) inside the frame-delta window, or
+    Refused. `decision annotate` shares it: an annotation is carried by the next delta's pin."""
     import activities
 
     state = str((kit.registry_get(slug) or {}).get("state"))
@@ -140,10 +149,16 @@ def authorize(slug: str, known: List[str]) -> Tuple[str, Optional[str]]:
     act = acts[0] if acts else None
     if state not in DELTA_STATES and not act:
         raise Refused(
-            f"{slug} is {state}: a frame delta applies while the program is "
+            f"{slug} is {state}: {what} while the program is "
             f"{' or '.join(DELTA_STATES)} (a held frame omission's cycle, §5.4), or under an open "
             "frame-delta activity (cc-research triage, frame-defect)"
         )
+    return state, act
+
+
+def authorize(slug: str, known: List[str]) -> Tuple[str, Optional[str]]:
+    """(registry state, open frame-delta activity id or None), or Refused."""
+    state, act = window(slug)
     if not known and not act:
         raise Refused(
             "known_rows is empty: name the held frame-omission rows the delta carries (§5.4 step 1); "
@@ -174,14 +189,14 @@ def apply_frame_ops(
     """Apply the frame ops to fr in place: (op records with before/after, ids added to am and dr)."""
     if not isinstance(frame_ops, dict):
         raise Refused("the delta's frame is an object of row lists")
-    stray = sorted(set(frame_ops) - set(FRAME_LISTS))
+    stray = sorted(set(frame_ops) - set(FRAME_LISTS) - set(FRAME_SCALARS))
     if stray:
         raise Refused(
             f"the delta's frame names {', '.join(stray)}: a delta edits the row lists "
-            f"{', '.join(FRAME_LISTS)} only; rulings, maps, pins, the contract page and signatures "
-            "are not a delta's"
+            f"{', '.join(FRAME_LISTS)} and the scalars {', '.join(FRAME_SCALARS)} only; rulings, "
+            "maps, pins, the contract page and signatures are not a delta's"
         )
-    done: List[Dict[str, Any]] = []
+    done: List[Dict[str, Any]] = apply_scalar_ops(fr, frame_ops)
     for name in FRAME_LISTS:
         ops = frame_ops.get(name)
         if ops is None:
@@ -238,6 +253,113 @@ def apply_frame_ops(
         fr[name] = cur
     added = [d["id"] for d in done if d["op"] == "add" and d["list"] in ("am", "dr")]
     return done, added
+
+
+def apply_scalar_ops(
+    fr: Dict[str, Any], frame_ops: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    """The deliverable and locks ops, applied to fr in place: their op records with before/after."""
+    done: List[Dict[str, Any]] = []
+    for name in FRAME_SCALARS:
+        ops = frame_ops.get(name)
+        if ops is None:
+            continue
+        if not isinstance(ops, list) or not ops:
+            raise Refused(f"frame.{name}: a non-empty list of ops")
+        for n, op in enumerate(ops, 1):
+            where = f"frame.{name} op {n}"
+            kind = op.get("op") if isinstance(op, dict) else None
+            v = op.get("value") if isinstance(op, dict) else None
+            if name == "deliverable":
+                if kind != "set":
+                    raise Refused(
+                        f"{where}: the deliverable takes op set, got {kind!r}"
+                    )
+                if not isinstance(v, str) or not v.strip():
+                    raise Refused(f"{where}: the deliverable is a non-empty sentence")
+                if fr.get(name) == v:
+                    raise Refused(f"{where}: the new deliverable equals the old one")
+                done.append(
+                    dict(list=name, op="set", id=name, before=fr.get(name), after=v)
+                )
+                fr[name] = v
+                continue
+            locks = dict(fr.get("locks") or {})
+            xid = op.get("id") if isinstance(op, dict) else None
+            if not isinstance(xid, str) or not xid.strip():
+                raise Refused(f"{where}: a lock op names its lock by id")
+            if not isinstance(v, dict) or not str(v.get("path") or "").strip():
+                raise Refused(f"{where}: a lock is an object with a path and a sha256")
+            if not SHA256_HEX.match(str(v.get("sha256") or "")):
+                raise Refused(
+                    f"{where}: {xid}'s sha256 is not 64 lowercase hex digits; a lock carries the hash"
+                )
+            if kind == "add":
+                if xid in locks:
+                    raise Refused(f"{where}: {xid} is already in frame.locks")
+            elif kind == "replace":
+                if xid not in locks:
+                    raise Refused(f"{where}: {xid!r} is not in frame.locks")
+                if locks[xid] == v:
+                    raise Refused(f"{where}: the new value of {xid} equals the old one")
+            else:
+                raise Refused(f"{where}: op is add or replace, got {kind!r}")
+            done.append(
+                dict(list=name, op=kind, id=xid, before=locks.get(xid), after=v)
+            )
+            locks[xid] = v
+            fr["locks"] = locks
+    return done
+
+
+def annotations(decisions: List[Dict[str, Any]]) -> List[str]:
+    """Every `decision annotate` event's id (DA-n), in file order."""
+    return [str(e["annotation"]) for e in decisions if e.get("annotation")]
+
+
+def pinned_annotations(fr: Dict[str, Any]) -> List[str]:
+    return [a for p in fr.get("frame_deltas") or [] for a in p.get("annotations") or []]
+
+
+def decisions_pin(rec: Path, fr: Dict[str, Any]) -> Dict[str, Any]:
+    """The new frame's pin on decisions.jsonl: the sha256 of its bytes now, how many there are, and
+    the annotation events no earlier delta pinned. The frame signature pins frame.json alone, so this
+    is what puts a decision's annotated text under the operator's re-sign (RECORDS.md "Decision
+    annotations"); the byte count lets gate row 1 re-hash the prefix as the log grows."""
+    path = rec / "decisions.jsonl"
+    data = path.read_bytes() if path.is_file() else b""
+    old = set(pinned_annotations(fr))
+    return {
+        "decisions_sha256": sha256(data),
+        "decisions_bytes": len(data),
+        "annotations": [a for a in annotations(kit.read_jsonl(path)) if a not in old],
+    }
+
+
+def pin_fails(rec: Path, fr: Dict[str, Any]) -> List[str]:
+    """Gate row 1's decisions-pin lint: an annotation event no delta pinned (its text shows in the
+    frame's render but is under no re-sign), and a pinned prefix of decisions.jsonl that no longer
+    hashes as pinned (an append-only log rewritten under the frame)."""
+    path = rec / "decisions.jsonl"
+    data = path.read_bytes() if path.is_file() else b""
+    fails: List[str] = []
+    for p in fr.get("frame_deltas") or []:
+        if "decisions_sha256" not in p:
+            continue
+        n = int(p.get("decisions_bytes") or 0)
+        if len(data) < n or sha256(data[:n]) != p["decisions_sha256"]:
+            fails.append(
+                f"decisions.jsonl no longer holds the {n} bytes {p.get('id')} pinned: the log was "
+                "rewritten under the frame, and an append-only record is never rewritten"
+            )
+    pinned = set(pinned_annotations(fr))
+    loose = [a for a in annotations(kit.read_jsonl(path)) if a not in pinned]
+    if loose:
+        fails.append(
+            f"decision annotation(s) {', '.join(loose)} carried by no frame delta: apply a delta "
+            "(intake.py delta-apply) so the operator's frame re-sign covers their text"
+        )
+    return fails
 
 
 def apply_acceptance_ops(acc: Dict[str, Any], acc_ops: Any) -> List[Dict[str, Any]]:
@@ -338,8 +460,16 @@ def plan(slug: str, path: str, lint: Lint) -> Dict[str, Any]:
         )
     if not str(d.get("why") or "").strip():
         raise Refused("the delta needs a one-line why")
-    if d.get("frame") is None and d.get("acceptance") is None:
-        raise Refused("the delta has no ops: give frame, acceptance or both")
+    dpin = decisions_pin(rec, fr)
+    if (
+        d.get("frame") is None
+        and d.get("acceptance") is None
+        and not dpin["annotations"]
+    ):
+        raise Refused(
+            "the delta has no ops: give frame, acceptance or both (a delta with neither only pins "
+            "pending decision annotations, and there are none)"
+        )
     state, act = authorize(slug, known)
     check_known_rows(slug, known)
 
@@ -406,6 +536,7 @@ def plan(slug: str, path: str, lint: Lint) -> Dict[str, Any]:
             "version": new["version"],
             "sha256": sha256(raw),
             "acceptance_sha256": sha256(acc_out.encode()) if acc_out else None,
+            **dpin,
         }
     )
     fails = lint_new(slug, new, acc_new, lint)
@@ -428,6 +559,7 @@ def plan(slug: str, path: str, lint: Lint) -> Dict[str, Any]:
         "ops": ops,
         "rows_before": {n: _ids(fr, acc_text, n) for n in lists},
         "rows_after": {n: _ids(new, acc_out, n) for n in lists},
+        **dpin,
         "delta": d,
         "by": kit.lease_owner(),
         "at": kit.now_iso(),
@@ -443,6 +575,10 @@ def plan(slug: str, path: str, lint: Lint) -> Dict[str, Any]:
 
 
 def _ids(fr: Dict[str, Any], acc_text: Optional[str], name: str) -> List[Optional[str]]:
+    if name == "deliverable":
+        return [fr.get(name)]
+    if name == "locks":
+        return sorted(fr.get(name) or {})
     if name == "acceptance":
         return [
             r.get("id")
@@ -493,7 +629,10 @@ def apply(slug: str, path: str, dry_run: bool, lint: Lint) -> int:
         )
     for w in p["warnings"]:
         print(f"WARNING {w}", file=sys.stderr)
-    counts = ", ".join(f"{o['op']} {o['list']} {o['id']}" for o in r["ops"])
+    counts = ", ".join(
+        [f"{o['op']} {o['list']} {o['id']}" for o in r["ops"]]
+        + [f"pin {a}" for a in r["annotations"]]
+    )
     print(
         f"{'DRY RUN, nothing written: ' if dry_run else ''}{r['id']} frame "
         f"v{r['base_version']} -> v{r['version']} ({counts}); known_rows_applied += "

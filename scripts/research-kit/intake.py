@@ -18,8 +18,9 @@ tracked records (`docs/research/<slug>/` in the deliverable repo) and registers 
                      [--plan <path under the records dir>] [--topic-owner "<who>"]
   intake.py contract-page --program P
   intake.py delta-apply --program P --file <delta.json> [--dry-run]
-                     the frame-delta cycle's rows (§5.4 step 1): add or rewrite frame rows and
-                     acceptance rows, bump the version, record the delta (lib/frame_delta.py)
+                     the frame-delta cycle's rows (§5.4 step 1): add or rewrite frame rows,
+                     acceptance rows, the deliverable and locks; pin pending decision
+                     annotations; bump the version, record the delta (lib/frame_delta.py)
   intake.py lint     --program P      gate row 1 minus the signature: what still blocks the frame
   intake.py status   --program P      the intake steps, done or not
 

@@ -1,7 +1,8 @@
 """cli_records.py — the record verbs of bin/cc-research (REPORT.md §8 item 9) and concern triage
 (§5.1, §5.2, §10 item 8); see cli.py for the verb table.
 
-  census add|repin|critic · premise add|revise|file · source add · decision add|tally|rule|reopen|carry|show
+  census add|repin|critic · premise add|revise|file · source add
+  decision add|tally|rule|reopen|carry|affirm|annotate|show
   concern add|list · park · triage
 
 Every record here is append-only (kit.append_jsonl); a census is one JSON file per population,
@@ -901,6 +902,186 @@ def decision_affirm(a: argparse.Namespace) -> int:
     return 0
 
 
+# The display and plan fields `decision annotate` writes (RECORDS.md "Decision annotations"): what a
+# frame renders beside a ruling, never what rules it.
+ANNOTATE_FIELDS = (
+    "affects",
+    "group",
+    "premises",
+    "revisit_trigger",
+    "default_if_unanswered",
+)
+# Fields a --ruling name may never take: what the decision verbs, the sweep and the gate write or
+# read, and an annotation's own bookkeeping. A name the decision already carries is refused too,
+# unless an earlier annotation wrote it.
+DECISION_RESERVED = frozenset(
+    ANNOTATE_FIELDS
+    + (
+        "id",
+        "ts",
+        "event",
+        "question",
+        "type",
+        "options",
+        "reversibility",
+        "runs_used",
+        "status",
+        "chosen",
+        "tally",
+        "conviction",
+        "ruled_by",
+        "receipt",
+        "packet",
+        "set",
+        "blocks_waves",
+        "descoped_waves",
+        "restored_waves",
+        "converted_from",
+        "conversion_default",
+        "decided_by_default_at",
+        "timebox_days",
+        "timebox_d",
+        "research_started",
+        "carried_by",
+        "carried_because",
+        "carry_receipt",
+        "carried_at",
+        "reopened_by",
+        "reopened_because",
+        "reopen_receipt",
+        "reopened_at",
+        "reopens",
+        "affirmed_by",
+        "affirmed_because",
+        "affirm_receipt",
+        "affirmed_at",
+        "operator_ruling",
+        "annotation",
+        "annotated_by",
+        "annotated_because",
+        "annotated_at",
+        "annotated_fields",
+    )
+)
+RULING_NAME = r"^[a-z][a-z0-9_]{1,40}$"
+
+
+def annotate_fields(
+    r: Path, a: argparse.Namespace, d: Dict[str, Any]
+) -> Dict[str, Any]:
+    """The fields an annotate event sets, each checked; refuses an empty or no-op annotation."""
+    import re
+
+    out: Dict[str, Any] = {}
+    if a.affects:
+        out["affects"] = list(a.affects)
+    if a.group is not None:
+        out["group"] = a.group
+    if a.premise:
+        prem = folded(r, "premises.jsonl")
+        unknown = [p for p in a.premise if p not in prem]
+        if unknown:
+            raise kit.KitError(
+                f"{a.id}: --premise {', '.join(unknown)} is not in premises.jsonl (`premise add` first)"
+            )
+        out["premises"] = list(a.premise)
+    if a.revisit_trigger is not None:
+        out["revisit_trigger"] = a.revisit_trigger
+    if a.default_if_unanswered is not None:
+        out["default_if_unanswered"] = a.default_if_unanswered
+    for k, v in out.items():
+        if isinstance(v, str) and not v.strip() or v == []:
+            raise kit.KitError(f"{a.id}: --{k.replace('_', '-')} is empty")
+    mine = {
+        f
+        for e in kit.read_jsonl(r / "decisions.jsonl")
+        if e.get("id") == a.id and e.get("annotation")
+        for f in e.get("annotated_fields") or []
+    }
+    for spec in a.ruling or []:
+        name, eq, raw = spec.partition("=")
+        if not eq or not re.match(RULING_NAME, name):
+            raise kit.KitError(
+                f"{a.id}: --ruling {spec!r} is NAME=VALUE, NAME lowercase [a-z0-9_]"
+            )
+        if name in DECISION_RESERVED or (name in d and name not in mine):
+            raise kit.KitError(
+                f"{a.id}: --ruling {name} names a field the kit or another verb owns; an "
+                "annotation adds its own named field and never rewrites a ruling's own"
+            )
+        try:
+            val: Any = json.loads(raw) if raw.lstrip().startswith("{") else raw
+        except ValueError as e:
+            raise kit.KitError(f"{a.id}: --ruling {name}: not a JSON object ({e})")
+        if not val:
+            raise kit.KitError(f"{a.id}: --ruling {name} is empty")
+        out[name] = val
+    if not out:
+        raise kit.KitError(
+            f"{a.id}: nothing to annotate: give --affects, --group, --premise, --revisit-trigger, "
+            "--default-if-unanswered or --ruling"
+        )
+    if all(d.get(k) == v for k, v in out.items()):
+        raise kit.KitError(f"{a.id}: the annotation changes nothing")
+    return out
+
+
+def decision_annotate(a: argparse.Namespace) -> int:
+    """Append a decision's display and plan fields (where the plan uses it, its group, the premises it
+    names, its revisit trigger, its no-answer default, a named ruling record) as one event, in the
+    frame-delta window only: the next `intake.py delta-apply` pins it in the new frame, and the
+    operator's re-sign of that frame is what covers the text. It never moves the decision: status,
+    choice, tally, conviction and gate row 5 must read the same after it, or nothing is written."""
+    import frame_delta
+    from gate_rows_a import decision_findings
+
+    r = recs(a)
+    frame_delta.window(a.program, "a decision annotation is written")
+    d = decision_get(r, a.id)
+    if d.get("status") not in ("ruled", "carried"):
+        raise kit.KitError(
+            f"{a.id}: status {d.get('status')!r}; an annotation is written on a ruled or carried "
+            "decision (an open one is ruled or carried first)"
+        )
+    if not a.why.strip():
+        raise kit.KitError(f"{a.id}: --why is empty")
+    fields = annotate_fields(r, a, d)
+    after = dict(d, **fields)
+    prem, pr = folded(r, "premises.jsonl"), folded(r, "probes.jsonl")
+    moved = [
+        k for k in ("status", "chosen", "tally", "ruled_by") if d.get(k) != after.get(k)
+    ]
+    if kit.conviction(d, prem, pr) != kit.conviction(after, prem, pr):
+        moved.append(
+            f"conviction ({kit.conviction(d, prem, pr)} -> {kit.conviction(after, prem, pr)})"
+        )
+    if decision_findings(d, prem, pr) != decision_findings(after, prem, pr):
+        moved.append("gate row 5")
+    if moved:
+        raise kit.KitError(
+            f"{a.id}: the annotation would move {', '.join(moved)}; an annotation changes no "
+            "ruling. Re-tally, re-rule or carry it through its own verb"
+        )
+    n = len(frame_delta.annotations(kit.read_jsonl(r / "decisions.jsonl"))) + 1
+    kit.append_jsonl(
+        r / "decisions.jsonl",
+        {
+            "id": a.id,
+            **fields,
+            "annotation": f"DA-{n}",
+            "annotated_fields": sorted(fields),
+            "annotated_because": a.why,
+            "annotated_by": kit.lease_owner(),
+            "annotated_at": kit.now_iso(),
+        },
+    )
+    print(
+        f"{a.id}: annotated {', '.join(sorted(fields))} as DA-{n}. The next intake.py delta-apply "
+        "pins it in the frame; until then gate row 1 fails, and the operator's re-sign covers it"
+    )
+    return 0
+
+
 def decision_show(a: argparse.Namespace) -> int:
     r = recs(a)
     d = decision_get(r, a.id)
@@ -1358,6 +1539,34 @@ def add_verbs(sub: Any) -> None:
     p.add_argument("--id", required=True)
     p.add_argument("--because", required=True, help="why it stands as it is")
     p.add_argument("--receipt", required=True, help="the operator's words")
+    p = verb(
+        g,
+        "annotate",
+        decision_annotate,
+        "append a ruled or carried decision's display and plan fields (frame-delta window only)",
+    )
+    p.add_argument("--id", required=True)
+    p.add_argument(
+        "--affects", action="append", help="repeat; a plan anchor the decision governs"
+    )
+    p.add_argument("--group", help="the decision group the frame renders it under")
+    p.add_argument(
+        "--premise",
+        action="append",
+        help="repeat; the premises the frame names (replaces the list; the tally is untouched)",
+    )
+    p.add_argument("--revisit-trigger")
+    p.add_argument("--default-if-unanswered")
+    p.add_argument(
+        "--ruling",
+        action="append",
+        metavar="NAME=VALUE",
+        help="repeat; a named ruling record (VALUE a JSON object or text), e.g. "
+        'ghsa2=\'{"ruling": "Hold for the talk", "packet": "25f7e77b65ce"}\'',
+    )
+    p.add_argument(
+        "--why", required=True, help="why (the known row or ruling it records)"
+    )
     p = verb(g, "show", decision_show, "print a decision with its derived conviction")
     p.add_argument("--id", required=True)
     p.add_argument("--json", action="store_true")

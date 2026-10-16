@@ -784,7 +784,7 @@ Hand-editing `frame.json` is a rail. `intake.py delta-apply --program P --file <
 (`lib/frame_delta.py`) is the sanctioned writer.
 
 - **What a delta can touch.** The frame's row lists `am`, `dr`, `populations`, `components`, `exclusions`,
-  `sources_required`, and the rows of `acceptance.json`. `frame.json` holds `am` and `dr` as bare ids (the row text is in
+  `sources_required`, the scalars `deliverable` and `locks` (below), and the rows of `acceptance.json`. `frame.json` holds `am` and `dr` as bare ids (the row text is in
   `acceptance.json` and `decisions.jsonl`), so a rewrite of an acceptance row's predicate is an `acceptance` op, and
   `am`, `dr` and `sources_required` take adds only. Any other key, at the top level or in `frame` (rulings, `fac_map`,
   `reask_map`, reviewer pins, the contract page's hash, `version`, signatures), is refused. Decisions, premises,
@@ -823,3 +823,41 @@ Hand-editing `frame.json` is a rail. `intake.py delta-apply --program P --file <
   `gate.delta_signature` still needs the operator's VALID re-sign of the new frame (`cc-signoff research:<P>/frame`),
   and until then the sweep closes a past-due row by its default. `tests/research-program-frame-delta.bats` holds each
   refusal and that negative control.
+- **The frame's two scalars (added 2026-10-16).** `frame.deliverable` takes `{op: "set", value: "<sentence>"}` (a
+  new, non-empty sentence; gate row 1's superlative lint applies) and `frame.locks` takes `{op: "add"|"replace",
+  id: <name>, value: {path, sha256, …}}` (sha256 64 lowercase hex). They are signed with `frame.json`, so a count in
+  the deliverable or a locked rule's hash changes only through a delta and the re-sign; `intake.py set` writes
+  neither. The op record keeps the old value in `before`.
+
+## Decision annotations (added 2026-10-16; REPORT.md §5.4 step 1)
+
+A frame renders each decision with fields no ruling verb writes: where the plan uses it (`affects`), its `group`,
+the `premises` it names, its `revisit_trigger`, its `default_if_unanswered`, and named ruling records (a packet's
+ruling, say). A frame delta that adds a `dr` row or corrects one needs them, and hand-editing `decisions.jsonl` is
+a rail. `cc-research decision annotate --program P --id DR-n [--affects A]… [--group G] [--premise PR-n]…
+[--revisit-trigger T] [--default-if-unanswered T] [--ruling NAME=VALUE]… --why W` is the writer
+(`lib/cli_records.py`).
+
+- **What it appends.** One `decisions.jsonl` event `{id, <fields>, annotation: "DA-n", annotated_fields,
+  annotated_because, annotated_by, annotated_at, ts}`, folded last-writer-wins like every decision event. `--affects`
+  and `--premise` are lists and replace the folded ones; `--ruling NAME=VALUE` adds a top-level field NAME whose
+  VALUE is a JSON object (when it opens with `{`) or text.
+- **Refusals (exit 2, nothing written).** Outside the frame-delta window (`frame_delta.window`: `certifying`,
+  `certified`, or an open `frame-delta` activity, the delta's own rule); a decision that is not `ruled` or `carried`;
+  no field, an empty one, or one that changes nothing; a `--premise` not in `premises.jsonl`; a `--ruling` NAME the
+  kit or another verb owns (`DECISION_RESERVED`: status, chosen, tally, receipt, packet, set, operator_ruling, the
+  annotate fields themselves, …) or one the decision already carries that no earlier annotation wrote; and **any
+  annotation that would move the decision**: its `status`, `chosen`, `tally` or `ruled_by`, its `kit.conviction`
+  (a `--premise` on a decision whose tally names no premises feeds the §3.5 rule), or gate row 5's findings for it
+  (`gate_rows_a.decision_findings`, compared before and after; a revisit trigger on a reversible ruling that had
+  none is refused here). A ruling change goes through `decision tally|rule|carry|reopen`.
+- **How the re-sign covers it.** The frame signature pins `frame.json` alone, so `delta-apply` adds to the new
+  frame's `frame_deltas` entry `decisions_sha256` and `decisions_bytes` (the log's hash and length at the apply)
+  and `annotations` (the DA ids no earlier entry pinned); `frame-deltas.jsonl` records the same. A delta with no
+  row ops is allowed only to pin pending annotations. Gate row 1 then fails (a) on any annotation no entry pins:
+  its text shows in the frame but is under no re-sign, so annotate first, then apply; and (b) on a pinned prefix
+  of `decisions.jsonl` that no longer hashes as pinned: the log was rewritten under a signed frame. Entries from
+  before this pin carry no `decisions_sha256` and are not re-hashed.
+- **Order in a cycle.** Annotate the decisions the delta's rows need, dry-run the delta, apply it (the output
+  lists `pin DA-n`), render and lint, then the operator re-signs. `tests/research-program-frame-delta.bats` holds
+  each refusal, the unchanged fold and row 5, and the pin.
