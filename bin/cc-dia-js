@@ -1,0 +1,114 @@
+#!/bin/bash
+# cc-dia-js — is Dia's in-page JavaScript switch on? Read-only; any caller may run it.
+#
+#   cc-dia-js status [--rc]
+#
+# Prints one line:
+#   DIA_JS=ON|OFF|NOT_RUNNING|UNKNOWN pid=<n> since=<UTC start> age=<s> reason=<text>
+# Exit: 0 for any definite state (the state is in the line, so OFF is not a failed call), 3 for
+# UNKNOWN. With --rc: 0 ON, 1 OFF, 2 NOT_RUNNING, 3 UNKNOWN, for scripts.
+#
+# The switch is Dia's launch argument --enable-applescript-javascript and nothing else: no plist,
+# defaults key, Local State entry or environment variable stands in for it, and every Dock, login,
+# link, Spotlight or Sparkle-update launch drops it (research/browser-operator-2026-10-16 W1, B3).
+# While it is on, any program allowed to send Apple Events to Dia can run JS in every tab of every
+# Space with nothing on screen. Policy (decision 2026-10-16): off by default, never reapplied
+# after an update; see skills/dia-agent/SKILL.md § ZERO-PROMPT RAIL.
+#
+# Read off Dia's OWN pid, never a `ps | grep` census (that matches its own shell). It never runs
+# osascript: `tell application "Dia"` cold-starts a stopped Dia WITHOUT the flag. It sends nothing
+# to Dia and reads no Dia file. Fails closed: any doubt about which process is the operator's Dia
+# reports UNKNOWN, never OFF.
+set -u
+
+PS=${DIA_JS_PS:-/bin/ps}
+PGREP=${DIA_JS_PGREP:-/usr/bin/pgrep}
+EXE=/Applications/Dia.app/Contents/MacOS/Dia
+FLAG=--enable-applescript-javascript
+STALE_S=${DIA_JS_STALE_S:-43200}   # an ON older than 12 h is reported as stale
+
+usage() { printf 'usage: cc-dia-js status [--rc]\n' >&2; exit 64; }
+
+[ "${1:-}" = status ] || usage
+RC_MODE=0
+case "${2:-}" in
+  "") ;;
+  --rc) RC_MODE=1 ;;
+  *) usage ;;
+esac
+
+# finish STATE PID SINCE AGE REASON — print the line and exit by mode.
+finish() {
+  printf 'DIA_JS=%s pid=%s since=%s age=%s reason=%s\n' "$1" "$2" "$3" "$4" "$5"
+  if [ "$1" = UNKNOWN ]; then exit 3; fi
+  if [ "$RC_MODE" -eq 0 ]; then exit 0; fi
+  case "$1" in
+    ON) exit 0 ;;
+    OFF) exit 1 ;;
+    NOT_RUNNING) exit 2 ;;
+  esac
+  exit 3
+}
+
+# etime_secs "[[dd-]hh:]mm:ss" — elapsed seconds, or empty when unparseable.
+etime_secs() {
+  local t=$1 d=0 h=0 m=0 s=0 rest
+  case "$t" in
+    *-*) d=${t%%-*}; t=${t#*-} ;;
+  esac
+  rest=$t
+  case "$rest" in
+    *:*:*) h=${rest%%:*}; rest=${rest#*:} ;;
+  esac
+  m=${rest%%:*}; s=${rest#*:}
+  case "$d$h$m$s" in
+    *[!0-9]*|"") return 0 ;;
+  esac
+  printf "%s" "$(( 10#$d * 86400 + 10#$h * 3600 + 10#$m * 60 + 10#$s ))"
+}
+
+pids=$("$PGREP" -x Dia 2>/dev/null) || pids=""
+[ -n "$pids" ] || finish NOT_RUNNING - - - "no Dia process"
+
+personal=""
+count=0
+excluded=0
+for p in $pids; do
+  cmd=$("$PS" -ww -o command= -p "$p" 2>/dev/null) || { excluded=$((excluded + 1)); continue; }
+  case "$cmd" in
+    "$EXE"|"$EXE "*) ;;
+    *) excluded=$((excluded + 1)); continue ;;
+  esac
+  # The clean-profile launcher (~/bin/dia-cdp-launch.sh) always passes --user-data-dir.
+  case " $cmd " in
+    *" --user-data-dir"*) excluded=$((excluded + 1)); continue ;;
+  esac
+  personal=$p
+  count=$((count + 1))
+done
+
+[ "$count" -gt 1 ] && finish UNKNOWN - - - "more than one personal-looking Dia process"
+[ "$count" -eq 1 ] || finish UNKNOWN - - - "$excluded Dia process(es), none is the personal Dia"
+
+ucomm=$("$PS" -o ucomm= -p "$personal" 2>/dev/null) || ucomm=""
+ucomm=${ucomm%"${ucomm##*[![:space:]]}"}
+[ "$ucomm" = Dia ] || finish UNKNOWN "$personal" - - "ucomm '$ucomm' is not Dia"
+
+# One canonical rendering of the start time, whatever the caller's locale and zone.
+since=$(LC_ALL=C TZ=UTC "$PS" -o lstart= -p "$personal" 2>/dev/null) || since=""
+since=${since#"${since%%[![:space:]]*}"}
+since=${since%"${since##*[![:space:]]}"}
+since=${since// /_}
+etime=$("$PS" -o etime= -p "$personal" 2>/dev/null) || etime=""
+etime=${etime//[[:space:]]/}
+age=$(etime_secs "$etime")
+
+cmd=$("$PS" -ww -o command= -p "$personal" 2>/dev/null) || finish UNKNOWN "$personal" - - "argv unreadable"
+case " $cmd " in
+  *" $FLAG "*)
+    if [ -n "$age" ] && [ "$age" -gt "$STALE_S" ]; then
+      finish ON "$personal" "${since:--}" "$age" "stale: on for more than $((STALE_S / 3600)) h; tell the operator"
+    fi
+    finish ON "$personal" "${since:--}" "${age:--}" "flag in argv" ;;
+esac
+finish OFF "$personal" "${since:--}" "${age:--}" "flag absent from argv"
