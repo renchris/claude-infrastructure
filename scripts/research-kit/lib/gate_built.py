@@ -88,17 +88,22 @@ def artifact_head(artifact: str) -> Tuple[str, str]:
 
 def cmd_built_freeze(a: Any) -> int:
     ctx = make_ctx(a.program)
-    if not kit.is_v12(ctx.frame):
+    if not kit.stage9_applies(a.program, ctx.frame):
         raise kit.KitError(
-            f"built-freeze refused: {a.program}'s frame is not method 1.2 (Stage 9 is a v1.2 stage)"
+            f"built-freeze refused: {a.program}'s frame is not method 1.2 (Stage 9 is a v1.2 stage) "
+            f"and Stage 9 is not adopted for it: the operator runs `cc-signoff "
+            f'research:{a.program}/adopt/stage9 --because "<why>"` (method v1.3, §13.3)'
         )
     state = (kit.registry_get(a.program) or {}).get("state")
     if state in ("build-certified", kit.IMPL_SIGNED) and not a.refreeze:
         raise kit.KitError(
             f"built-freeze refused: {a.program} is {state}; pass --refreeze to pin a new "
             "snapshot and certify the built artifact again"
-            + (" (the new certificate needs a new implementation signature)"
-               if state == kit.IMPL_SIGNED else "")
+            + (
+                " (the new certificate needs a new implementation signature)"
+                if state == kit.IMPL_SIGNED
+                else ""
+            )
         )
     if state not in ("certified",) + kit.STAGE9_STATES:
         raise kit.KitError(
@@ -162,7 +167,10 @@ def implementation_gate(slug: str) -> Tuple[bool, str]:
         why = f"{cert} carries no operator signature"
     else:
         why = f"{cert}: implementation {operator_sign.implementation_words(slug, st)}"
-    return False, f"{why}. The operator signs it in their own terminal: {sign_cmd(slug)}"
+    return (
+        False,
+        f"{why}. The operator signs it in their own terminal: {sign_cmd(slug)}",
+    )
 
 
 def cmd_built_signed(a: Any) -> int:
@@ -180,7 +188,9 @@ def cmd_built_signed(a: Any) -> int:
     if not ok:
         raise kit.KitError(f"built-signed refused: {why}")
     kit.registry_set(a.program, kit.IMPL_SIGNED)
-    print(f"IMPLEMENTATION-SIGNED {a.program}: {why}; registry -> implementation-signed")
+    print(
+        f"IMPLEMENTATION-SIGNED {a.program}: {why}; registry -> implementation-signed"
+    )
     return 0
 
 

@@ -228,6 +228,22 @@ def is_v12(frame: Dict[str, Any]) -> bool:
     return method_version(frame) >= (1, 2)
 
 
+def stage9_applies(slug: str, frame: Dict[str, Any]) -> bool:
+    """Stage 9 (REPORT.md §11) runs for a 1.2 frame, or (method v1.3, §13.3) for an earlier one the
+    operator adopted it for with a VALID `cc-signoff research:<slug>/adopt/stage9`. Rows 18 and 19
+    stay keyed on is_v12: they judge stages 3 and 5 as they ran."""
+    if is_v12(frame):
+        return True
+    import sys
+
+    lib = str(Path(__file__).resolve().parents[2] / "lib")
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    import operator_sign
+
+    return operator_sign.latest_valid(slug, "adopt", "stage9") is not None
+
+
 def profile(name: str) -> Dict[str, Any]:
     if name not in PROFILES:
         raise KitError(f"unknown profile {name!r}: one of {', '.join(PROFILES)}")

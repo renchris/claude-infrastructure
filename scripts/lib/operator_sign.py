@@ -33,6 +33,9 @@ the program's sealed log `$CC_RESEARCH_HOME/<slug>/signoff.jsonl`:
                certification rounds, once per program (kit.profile_switch; round.sh, estimate.py
                and gate row 16 honour it). The record carries `from` and `after_round`; frame.json,
                the signed stage budgets, the ceiling and the seeds are untouched.
+  adopt/stage9  method v1.3 (REPORT.md §13.3): a program whose frame predates method 1.2 runs Stage
+               9 (built-freeze, built-run, the implementation signature) without editing frame.json,
+               which would void the frame signature. Rows 18 and 19 stay 1.2-only. Once per program.
 
 Python 3.9-safe, standard library only.
 """
@@ -63,10 +66,12 @@ ACTIONS = (
     "implementation",
     "third-read",
     "profile",
+    "adopt",
 )
 # the actions that name a target: a decision id, for third-read a held-out <set>.<stratum>, for
-# profile the profile's name
-TARGETED = ("veto", "extend-decision", "third-read", "profile")
+# profile the profile's name, for adopt the adopted part of a later method
+TARGETED = ("veto", "extend-decision", "third-read", "profile", "adopt")
+ADOPT_TARGETS = ("stage9",)  # method v1.3 (REPORT.md §13.3)
 THIRD_READ_TARGET = re.compile(
     r"^v[0-9]+\.(regex-matched|regex-missed|pushback|other)$"
 )
@@ -178,7 +183,7 @@ def verdict(
 
 ROW_RE = re.compile(
     r"^research:([a-z0-9][a-z0-9-]{0,63})/"
-    r"(frame|cert|extra-round|reopen|veto|extend-decision|implementation|third-read|profile)"
+    r"(frame|cert|extra-round|reopen|veto|extend-decision|implementation|third-read|profile|adopt)"
     r"(?:/([A-Za-z0-9._-]+))?$"
 )
 
@@ -191,6 +196,8 @@ def parse_row(row: str) -> Optional[Dict[str, Optional[str]]]:
     slug, action, target = m.group(1), m.group(2), m.group(3)
     if (action in TARGETED) != (target is not None):
         return None  # the TARGETED actions need a target; nothing else takes one
+    if action == "adopt" and target not in ADOPT_TARGETS:
+        return None  # only a named, built part of a later method is adoptable
     return {"slug": slug, "action": action, "target": target}
 
 
@@ -316,7 +323,15 @@ def sign_research(
         )
     if (
         action
-        in ("extra-round", "reopen", "veto", "extend-decision", "third-read", "profile")
+        in (
+            "extra-round",
+            "reopen",
+            "veto",
+            "extend-decision",
+            "third-read",
+            "profile",
+            "adopt",
+        )
         and not because
     ):
         raise Refused(
@@ -369,6 +384,17 @@ def sign_research(
                 f"REFUSED — the one research extension per decision (REPORT.md §12.3) is "
                 f"already bought for {target}."
             )
+    if action == "adopt":
+        fr = kit.read_json(kit.records_dir(slug) / "frame.json") or {}
+        if not fr:
+            raise Refused(f"REFUSED — {slug} has no frame.json to adopt {target} for.")
+        if kit.is_v12(fr):
+            raise Refused(
+                f"REFUSED — {slug}'s frame is method {fr.get('method_version')}: {target} already "
+                "applies, so there is nothing to adopt."
+            )
+        if any(verdict(r) == VALID for r in research_records(slug, "adopt", target)):
+            raise Refused(f"REFUSED — {target} is already adopted for {slug}.")
     terms = profile_switch_terms(slug, target) if action == "profile" else {}
     now = time.time()
     rec = {

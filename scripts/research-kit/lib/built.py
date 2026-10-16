@@ -34,9 +34,10 @@ CLEAN_PATH = kit.AS_BUILT_ENV["path"]
 
 def freeze(ctx: Any) -> Dict[str, Any]:
     """built/freeze.json, or a refusal: Stage 9 needs a 1.2 frame and a pinned built snapshot."""
-    if not kit.is_v12(ctx.frame):
+    if not kit.stage9_applies(ctx.slug, ctx.frame):
         raise kit.KitError(
-            "Stage 9 applies to a frame signed under method 1.2 or later (REPORT.md §11)"
+            "Stage 9 applies to a frame signed under method 1.2 or later (REPORT.md §11), or one "
+            f"the operator adopted it for (cc-signoff research:{ctx.slug}/adopt/stage9, §13.3)"
         )
     fz = ctx.json("built/freeze.json")
     if not fz or not fz.get("artifact_root") or not fz.get("snapshot_sha"):
@@ -49,7 +50,9 @@ def freeze(ctx: Any) -> Dict[str, Any]:
 
 
 def head_sha(root: str) -> Optional[str]:
-    p = subprocess.run(["git", "-C", root, "rev-parse", "HEAD"], capture_output=True, text=True)
+    p = subprocess.run(
+        ["git", "-C", root, "rev-parse", "HEAD"], capture_output=True, text=True
+    )
     return p.stdout.strip() if p.returncode == 0 else None
 
 
@@ -59,8 +62,12 @@ def run(cmd: str, cwd: str, env: Optional[Dict[str, str]] = None) -> int:
 
     try:
         return subprocess.run(
-            [BASH, "-c", cmd], cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True,
-            timeout=TIMEOUT, env=dict(os.environ, **(env or {})),
+            [BASH, "-c", cmd],
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=TIMEOUT,
+            env=dict(os.environ, **(env or {})),
         ).returncode
     except subprocess.TimeoutExpired:
         return 124
@@ -74,27 +81,41 @@ def clean_run(cmd: str, root: str) -> Tuple[int, Dict[str, Any]]:
     with tempfile.TemporaryDirectory(prefix="cc-built-home.") as home:
         empty = not any(Path(home).iterdir())
         base = ["/usr/bin/env", "-i", f"HOME={home}", f"PATH={CLEAN_PATH}"]
-        ver = subprocess.run(base + [BASH, "-c", "echo $BASH_VERSION"], capture_output=True,
-                             text=True).stdout.strip()
+        ver = subprocess.run(
+            base + [BASH, "-c", "echo $BASH_VERSION"], capture_output=True, text=True
+        ).stdout.strip()
         try:
             rc = subprocess.run(
-                base + [f"ARTIFACT={root}", BASH, "-c", cmd], cwd=root,
-                stdin=subprocess.DEVNULL, capture_output=True, timeout=TIMEOUT,
+                base + [f"ARTIFACT={root}", BASH, "-c", cmd],
+                cwd=root,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                timeout=TIMEOUT,
             ).returncode
         except subprocess.TimeoutExpired:
             rc = 124
         except OSError:
             rc = 127
-        env = {"home": home, "home_clean": empty, "path": CLEAN_PATH, "interpreter": BASH,
-               "interpreter_version": ver}
+        env = {
+            "home": home,
+            "home_clean": empty,
+            "path": CLEAN_PATH,
+            "interpreter": BASH,
+            "interpreter_version": ver,
+        }
     return rc, env
 
 
 def acceptance_rows(ctx: Any) -> List[Dict[str, Any]]:
-    rows = [r for r in (ctx.json("acceptance.json", {}) or {}).get("rows") or []
-            if r.get("id") and r.get("check_cmd")]
+    rows = [
+        r
+        for r in (ctx.json("acceptance.json", {}) or {}).get("rows") or []
+        if r.get("id") and r.get("check_cmd")
+    ]
     if not rows:
-        raise kit.KitError("acceptance.json has no row with a check_cmd: there is no harness")
+        raise kit.KitError(
+            "acceptance.json has no row with a check_cmd: there is no harness"
+        )
     return rows
 
 
@@ -109,16 +130,32 @@ def findings(ctx: Any) -> Dict[str, Dict[str, Any]]:
     return kit.fold(ctx.jsonl("built/findings.jsonl"))
 
 
-def add_finding(ctx: Any, source: str, claim: str, severity: str,
-                test_cmd: Optional[str] = None, mutant: Optional[str] = None) -> Dict[str, Any]:
+def add_finding(
+    ctx: Any,
+    source: str,
+    claim: str,
+    severity: str,
+    test_cmd: Optional[str] = None,
+    mutant: Optional[str] = None,
+) -> Dict[str, Any]:
     """Append one finding. A material finding is `open` only when its test command failed here,
     or it names a surviving mutant (the mutant is then its repro); otherwise rejected-no-repro."""
     fz = freeze(ctx)
-    rec: Dict[str, Any] = {"source": source, "claim": claim, "severity": severity,
-                           "status": "open", "repro": None, "mutant": mutant}
+    rec: Dict[str, Any] = {
+        "source": source,
+        "claim": claim,
+        "severity": severity,
+        "status": "open",
+        "repro": None,
+        "mutant": mutant,
+    }
     if test_cmd:
         rc = run(test_cmd, fz["artifact_root"])
-        red = {"sha": fz["snapshot_sha"], "exit": rc, "at": kit.now_iso()} if rc != 0 else None
+        red = (
+            {"sha": fz["snapshot_sha"], "exit": rc, "at": kit.now_iso()}
+            if rc != 0
+            else None
+        )
         rec["repro"] = {"test_cmd": test_cmd, "red": red, "green": None}
         if severity == "material" and red is None:
             rec["status"] = "rejected-no-repro"
@@ -186,19 +223,26 @@ def mutant_record(ctx: Any, mid: str) -> Dict[str, Any]:
 
 def harness(ctx: Any, tree: str) -> List[str]:
     """The ids of the acceptance rows that FAIL against this tree."""
-    return [r["id"] for r in acceptance_rows(ctx)
-            if run(r["check_cmd"], tree, {"ARTIFACT": tree}) != 0]
+    return [
+        r["id"]
+        for r in acceptance_rows(ctx)
+        if run(r["check_cmd"], tree, {"ARTIFACT": tree}) != 0
+    ]
 
 
 def run_mutant(ctx: Any, root: str, m: Dict[str, Any]) -> Tuple[str, List[str]]:
     """Apply one mutant to a fresh copy and run the harness: (status, killed_by)."""
     with tempfile.TemporaryDirectory(prefix="cc-built-mutant.") as tmp:
         tree = str(Path(tmp) / "artifact")
-        shutil.copytree(root, tree, ignore=shutil.ignore_patterns(".git"), symlinks=True)
+        shutil.copytree(
+            root, tree, ignore=shutil.ignore_patterns(".git"), symlinks=True
+        )
         target = Path(tree) / str(m.get("file"))
         if not target.is_file() or str(m.get("search")) not in target.read_text():
             return "invalid", []
-        target.write_text(target.read_text().replace(str(m["search"]), str(m["replace"]), 1))
+        target.write_text(
+            target.read_text().replace(str(m["search"]), str(m["replace"]), 1)
+        )
         failing = harness(ctx, tree)
     return ("killed" if failing else "survived"), failing
 
@@ -206,8 +250,11 @@ def run_mutant(ctx: Any, root: str, m: Dict[str, Any]) -> Tuple[str, List[str]]:
 def tally(rec: Dict[str, Any]) -> Dict[str, Any]:
     killed = sum(1 for m in rec["mutants"] if m["status"] == "killed")
     survived = sum(1 for m in rec["mutants"] if m["status"] == "survived")
-    rec.update(killed=killed, survived=survived,
-               kill_rate=round(killed / (killed + survived), 4) if killed + survived else None)
+    rec.update(
+        killed=killed,
+        survived=survived,
+        kill_rate=round(killed / (killed + survived), 4) if killed + survived else None,
+    )
     return rec
 
 
@@ -217,15 +264,20 @@ def mutate(ctx: Any) -> Dict[str, Any]:
     root = fz["artifact_root"]
     with tempfile.TemporaryDirectory(prefix="cc-built-base.") as tmp:
         base = str(Path(tmp) / "artifact")
-        shutil.copytree(root, base, ignore=shutil.ignore_patterns(".git"), symlinks=True)
+        shutil.copytree(
+            root, base, ignore=shutil.ignore_patterns(".git"), symlinks=True
+        )
         failing = harness(ctx, base)
     if failing:
         raise kit.KitError(
             f"the harness fails on the unmutated artifact (rows {', '.join(failing)}): a "
             "mutation run needs a passing baseline"
         )
-    prior = {m["id"]: m for m in mutation(ctx).get("mutants") or []
-             if mutation(ctx).get("snapshot_sha") == fz["snapshot_sha"]}
+    prior = {
+        m["id"]: m
+        for m in mutation(ctx).get("mutants") or []
+        if mutation(ctx).get("snapshot_sha") == fz["snapshot_sha"]
+    }
     out: List[Dict[str, Any]] = []
     for m in load_mutants(ctx):
         old = prior.get(m["id"], {})
@@ -233,16 +285,35 @@ def mutate(ctx: Any) -> Dict[str, Any]:
             out.append(old)
             continue
         status, by = run_mutant(ctx, root, m)
-        out.append({"id": m["id"], "status": status, "killed_by": by, "equivalent": None,
-                    "rerun": int(old.get("rerun") or 0)})
-    rec = tally({"snapshot_sha": fz["snapshot_sha"], "at": kit.now_iso(), "baseline_exit": 0,
-                 "rows": [r["id"] for r in acceptance_rows(ctx)], "mutants": out})
+        out.append(
+            {
+                "id": m["id"],
+                "status": status,
+                "killed_by": by,
+                "equivalent": None,
+                "rerun": int(old.get("rerun") or 0),
+            }
+        )
+    rec = tally(
+        {
+            "snapshot_sha": fz["snapshot_sha"],
+            "at": kit.now_iso(),
+            "baseline_exit": 0,
+            "rows": [r["id"] for r in acceptance_rows(ctx)],
+            "mutants": out,
+        }
+    )
     kit.write_json_atomic(ctx.path("built/mutation.json"), rec)
     have = {f.get("mutant") for f in findings(ctx).values()}
     for m in out:
         if m["status"] == "survived" and m["id"] not in have:
-            add_finding(ctx, "mutation", f"the acceptance harness does not fail on mutant {m['id']}",
-                        "material", mutant=m["id"])
+            add_finding(
+                ctx,
+                "mutation",
+                f"the acceptance harness does not fail on mutant {m['id']}",
+                "material",
+                mutant=m["id"],
+            )
     return rec
 
 
@@ -272,16 +343,24 @@ def mark_equivalent(ctx: Any, mid: str, reason: str, rater: str) -> Dict[str, An
     """A surviving mutant no test can tell from the original: needs a reason and a rater."""
     freeze(ctx)
     if not reason or not rater:
-        raise kit.KitError("an equivalent mutant needs both --reason and --rater (§11 row 22)")
+        raise kit.KitError(
+            "an equivalent mutant needs both --reason and --rater (§11 row 22)"
+        )
     rec = mutation(ctx)
     cur = in_record(rec, mid)
     if cur.get("status") != "survived":
-        raise kit.KitError(f"mutant {mid} is {cur.get('status')!r}: only a survivor can be equivalent")
+        raise kit.KitError(
+            f"mutant {mid} is {cur.get('status')!r}: only a survivor can be equivalent"
+        )
     cur.update(status="equivalent", equivalent={"reason": reason, "rater": rater})
     kit.write_json_atomic(ctx.path("built/mutation.json"), tally(rec))
-    for f in findings(ctx).values():  # no failing test can exist for an equivalent mutant
+    for f in findings(
+        ctx
+    ).values():  # no failing test can exist for an equivalent mutant
         if f.get("mutant") == mid and f.get("status") == "open":
-            kit.append_jsonl(findings_path(ctx), {"id": f["id"], "status": "rejected-no-repro"})
+            kit.append_jsonl(
+                findings_path(ctx), {"id": f["id"], "status": "rejected-no-repro"}
+            )
     return cur
 
 
@@ -297,12 +376,18 @@ def target_cmd(ctx: Any, target: str) -> str:
         return cmd if isinstance(cmd, str) else shlex.join(str(c) for c in cmd)
     row = next((r for r in acceptance_rows(ctx) if r["id"] == target), None)
     if row is None:
-        raise kit.KitError(f"{target} is neither a probe nor an acceptance row of {ctx.slug}")
+        raise kit.KitError(
+            f"{target} is neither a probe nor an acceptance row of {ctx.slug}"
+        )
     return str(row["check_cmd"])
 
 
-def contact(ctx: Any, target: str, negative_control: Optional[str],
-            no_negative_control: Optional[str]) -> Dict[str, Any]:
+def contact(
+    ctx: Any,
+    target: str,
+    negative_control: Optional[str],
+    no_negative_control: Optional[str],
+) -> Dict[str, Any]:
     fz = freeze(ctx)
     if not negative_control and not no_negative_control:
         raise kit.KitError(
@@ -312,15 +397,32 @@ def contact(ctx: Any, target: str, negative_control: Optional[str],
     cmd = target_cmd(ctx, target)
     root = fz["artifact_root"]
     rc, env = clean_run(cmd, root)
-    nc: Dict[str, Any] = {"ran": False, "exit": None, "reported_refutation": None,
-                          "reason_if_not_run": no_negative_control}
+    nc: Dict[str, Any] = {
+        "ran": False,
+        "exit": None,
+        "reported_refutation": None,
+        "reason_if_not_run": no_negative_control,
+    }
     if negative_control:
         nrc, _ = clean_run(negative_control, root)
-        nc = {"ran": True, "exit": nrc, "reported_refutation": nrc != 0,
-              "reason_if_not_run": None, "against": negative_control}
+        nc = {
+            "ran": True,
+            "exit": nrc,
+            "reported_refutation": nrc != 0,
+            "reason_if_not_run": None,
+            "against": negative_control,
+        }
     path = ctx.path("built/contact.jsonl")
-    rec = {"id": kit.mint_id(path, "BC"), "target": target, "snapshot_sha": fz["snapshot_sha"],
-           "cmd": cmd, "env": env, "exit": rc, "negative_control": nc, "at": kit.now_iso()}
+    rec = {
+        "id": kit.mint_id(path, "BC"),
+        "target": target,
+        "snapshot_sha": fz["snapshot_sha"],
+        "cmd": cmd,
+        "env": env,
+        "exit": rc,
+        "negative_control": nc,
+        "at": kit.now_iso(),
+    }
     kit.append_jsonl(path, rec)
     return rec
 
@@ -335,8 +437,12 @@ def soak_sample(ctx: Any) -> List[Dict[str, Any]]:
     out = []
     for r in acceptance_rows(ctx):
         rc, _ = clean_run(str(r["check_cmd"]), fz["artifact_root"])
-        rec = {"at": kit.now_iso(), "check": r["id"], "exit": rc,
-               "snapshot_sha": fz["snapshot_sha"]}
+        rec = {
+            "at": kit.now_iso(),
+            "check": r["id"],
+            "exit": rc,
+            "snapshot_sha": fz["snapshot_sha"],
+        }
         kit.append_jsonl(ctx.path("built/soak.jsonl"), rec)
         out.append(rec)
     return out
@@ -345,7 +451,9 @@ def soak_sample(ctx: Any) -> List[Dict[str, Any]]:
 def soak_restart(ctx: Any, finding: str) -> Dict[str, Any]:
     freeze(ctx)
     if finding not in findings(ctx):
-        raise kit.KitError(f"no built finding {finding}: a soak restarts after a fix on record")
+        raise kit.KitError(
+            f"no built finding {finding}: a soak restarts after a fix on record"
+        )
     plan = ctx.json("built/soak.json") or {}
     restarts = list(plan.get("restarts") or [])
     cap = kit.CAPS["soak_restarts"]
@@ -367,9 +475,12 @@ def summary(ctx: Any) -> Dict[str, Any]:
     mat = [f for f in fs if f.get("severity") == "material"]
     mu = mutation(ctx)
     return {
-        "program": ctx.slug, "snapshot_sha": fz["snapshot_sha"],
-        "findings": {s: sum(1 for f in mat if f.get("status") == s)
-                     for s in ("open", "fixed", "rejected-no-repro")},
+        "program": ctx.slug,
+        "snapshot_sha": fz["snapshot_sha"],
+        "findings": {
+            s: sum(1 for f in mat if f.get("status") == s)
+            for s in ("open", "fixed", "rejected-no-repro")
+        },
         "mutants": {k: mu.get(k) for k in ("killed", "survived", "kill_rate")},
         "contact_runs": len(ctx.jsonl("built/contact.jsonl")),
         "soak_samples": len(ctx.jsonl("built/soak.jsonl")),

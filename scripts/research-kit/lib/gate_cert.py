@@ -394,7 +394,9 @@ def write_certificate(ctx: Ctx, rows: List[Row]) -> str:
         # the change ids already on record, so a change after signoff is known even if undated
         "changes_at_issue": sorted(folded_changes(ctx.records)),
     }
-    if kit.is_v12(ctx.frame):
+    if kit.stage9_applies(
+        ctx.slug, ctx.frame
+    ):  # v1.3 §13.3: an adopted Stage 9 splits it too
         cert["forecast"].update(impl_split(cert["forecast"]))
     # Wave E1l (ruling 17aff7158fa6 item 4): row 15 was measured under the load bound, a stated
     # condition of the certificate, with RULE E1k's real-load figures beside it.

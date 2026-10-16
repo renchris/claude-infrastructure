@@ -140,6 +140,37 @@ tool() {
   [ ! -e "$REC/built/freeze.json" ]
 }
 
+# RED-proof (method v1.3, 2026-10-16): before `adopt` existed operator_sign parses no
+# research:<slug>/adopt/stage9 row and built-freeze refuses every pre-1.2 frame, so a program signed
+# under 1.1 (truememory-2-0) could never certify what it built.
+@test "v1.3: a pre-1.2 frame runs Stage 9 on the operator's adopt/stage9 signature; an agent-written one is void and refused; frame.json is untouched" {
+  jedit frame.json "d.pop('method_version', None)"
+  before="$(cksum < "$REC/frame.json")"
+  run freeze --wave W1
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"cc-signoff research:demo/adopt/stage9"* ]] || { echo "$output"; false; }
+  out="$(/usr/bin/python3 -c "
+import sys; sys.path[:0] = ['$REPO/scripts/research-kit/lib', '$REPO/scripts/lib']; import operator_sign as o
+print(o.parse_row('research:demo/adopt/stage9') is not None, o.parse_row('research:demo/adopt/1.3') is None,
+      o.parse_row('research:demo/adopt') is None)")"
+  [ "$out" = "True True True" ] || { echo "$out"; false; }
+  # written under an agent: VOID, so it adopts nothing
+  signoff "{\"row\":\"research:demo/adopt/stage9\",\"action\":\"adopt\",\"target\":\"stage9\",\"at\":$(date +%s),\"because\":\"x\",\"pins\":{},\"provenance\":{\"claude_ancestor\":true,\"chain\":[\"claude\"]}}"
+  run freeze --wave W1
+  [ "$status" -eq 2 ]
+  [ ! -e "$REC/built/freeze.json" ]
+  signoff "{\"row\":\"research:demo/adopt/stage9\",\"action\":\"adopt\",\"target\":\"stage9\",\"at\":$(date +%s),\"because\":\"certify the build\",\"pins\":{},\"provenance\":{\"claude_ancestor\":false,\"chain\":[\"zsh\",\"kitty\"]}}"
+  run freeze --wave W1
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(state)" = "build-certifying" ]
+  [ "$(cksum < "$REC/frame.json")" = "$before" ]
+  # rows 18 and 19 judge stages 3 and 5 as they ran: still not applicable to a pre-1.2 frame
+  out="$(/usr/bin/python3 -c "
+import sys; sys.path[:0] = ['$REPO/scripts/research-kit/lib', '$REPO/scripts/lib']; import kit
+print(kit.is_v12(kit.read_json(__import__('pathlib').Path('$REC') / 'frame.json')), kit.stage9_applies('demo', {}))")"
+  [ "$out" = "False True" ] || { echo "$out"; false; }
+}
+
 @test "built-freeze refuses a program whose registry state is not certified" {
   setstate certifying
   run freeze --wave W1

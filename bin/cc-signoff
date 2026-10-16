@@ -63,6 +63,7 @@ USAGE = """usage: cc-signoff <row-id> --evidence <live-url|sha> [--note <text>]
        cc-signoff research:<slug>/implementation --evidence <what you read>
        cc-signoff research:<slug>/third-read/<set>.<stratum> --because "<why>"
        cc-signoff research:<slug>/profile/<lite|standard> --because "<why>"
+       cc-signoff research:<slug>/adopt/stage9 --because "<why>"
        run this in YOUR OWN terminal; an agent cannot."""
 
 
