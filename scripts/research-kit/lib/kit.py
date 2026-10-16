@@ -820,11 +820,23 @@ NOT_YET_AWAITS = {
 NOT_YET = "not-yet-true"
 
 
+def superseded_residuals(rows: Iterable[Dict[str, Any]]) -> Set[str]:
+    """Residual ids a refile (`premise file --refile`) superseded: marked `superseded_by`, or named
+    by a newer row's `supersedes`, so a store whose marker event was lost still reads right."""
+    rows = list(rows)
+    return {str(r["id"]) for r in rows if r.get("superseded_by")} | {
+        str(r["supersedes"]) for r in rows if r.get("supersedes")
+    }
+
+
 def not_yet_rows(residual_events: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """premise id -> its folded not-yet-true residual row (the last one filed, if several)."""
+    """premise id -> its live folded not-yet-true residual row: never a superseded one, and the last
+    one filed if several are live."""
+    rows = list(fold(residual_events).values())
+    gone = superseded_residuals(rows)
     out: Dict[str, Dict[str, Any]] = {}
-    for r in fold(residual_events).values():
-        if r.get("why_unreachable") == NOT_YET and r.get("premise"):
+    for r in rows:
+        if r.get("why_unreachable") == NOT_YET and r.get("premise") and r["id"] not in gone:
             out[str(r["premise"])] = r
     return out
 

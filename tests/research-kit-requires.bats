@@ -143,6 +143,33 @@ kr()  { printf '%s\n' "$1" >> "$REC/known_rows.jsonl"; }
   [[ "$output" == *"KR-2: descoped wave B7"* ]]
 }
 
+# RED-proof (2026-10-16): the base kit reads whichever filing for the premise the fold met last and
+# ignores `superseded_by`, so after a refile written in the other order it names P-9, and the old
+# probe joining clears the waves.
+@test "a refiled premise: requires reads the newest live filing's closing probe, never the superseded one's" {
+  certify
+  printf '%s\n' '{"id":"PR-2","truth_lives_in":"target-env","verdict":"partial","probes":[],"load_bearing_for":["DR-2"],"recheck_cmd":"true"}' >> "$REC/premises.jsonl"
+  dec '{"id":"DR-2","status":"ruled","ruled_by":"operator","blocks_waves":["B4"],"ts":"2026-01-01T00:00:00Z"}'
+  # the refile's rows, the new one first in the file, as a hand-merged store may hold them
+  printf '%s\n' \
+    '{"id":"R-NYT-PR-2-r2","why_unreachable":"not-yet-true","premise":"PR-2","awaits":"build","owner_wave":"B3","owner":"lead","due":"2099-06-01","closing_probe":"P-10","blocks_waves":["B5"],"supersedes":"R-NYT-PR-2"}' \
+    '{"id":"R-NYT-PR-2","why_unreachable":"not-yet-true","premise":"PR-2","awaits":"build","owner_wave":"B3","owner":"lead","due":"2020-01-01","closing_probe":"P-9","blocks_waves":["B5"],"superseded_by":"R-NYT-PR-2-r2"}' \
+    >> "$REC/residual.jsonl"
+  run "$G" requires --program demo --wave B5
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"PR-2: filed not-yet-true until B3 (build); its closing probe P-10 has not run and joined it"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"P-9"* ]] || { echo "$output"; false; }
+  # the superseded filing's probe joining clears nothing
+  printf '%s\n' '{"id":"P-9","kind":"skeleton","closes":["PR-2"],"exit":0}' >> "$REC/probes.jsonl"
+  printf '%s\n' '{"id":"PR-2","probes":["P-9"]}' >> "$REC/premises.jsonl"
+  run "$G" requires --program demo --wave B5
+  [ "$status" -eq 1 ]
+  printf '%s\n' '{"id":"P-10","kind":"skeleton","closes":["PR-2"],"exit":0}' >> "$REC/probes.jsonl"
+  printf '%s\n' '{"id":"PR-2","probes":["P-9","P-10"],"verdict":"holds"}' >> "$REC/premises.jsonl"
+  run "$G" requires --program demo --wave B5
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
 # RED-proof (decision 55e7da1e7311, 2026-10-16): the base kit never reads a not-yet-true filing, so
 # B4 and B5 read CLEAR while the premise is still only a bet, and the first assertion fails.
 @test "a premise filed not-yet-true refuses the waves resting on it until its closing probe runs and joins; its owner wave is exempt" {

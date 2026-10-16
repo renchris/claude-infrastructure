@@ -546,6 +546,32 @@ print(r.status); print('\n'.join(r.evidence))"
   [[ "$output" == *"Scheduled checks: 1 production or elapsed-time check and 1 filed not-yet-true premise check with owners and dates"* ]] || { echo "$output"; false; }
 }
 
+# RED-proof (2026-10-16): the base kit reads the superseded filing too, so row 4 fails its past due,
+# row 11 fails nothing but lists it as live, and the certificate counts 2 not-yet checks.
+@test "a refiled premise (premise file --refile): rows 4 and 11 read the newest filing, the superseded one is history, and the certificate schedules one check; a broken chain fails row 11" {
+  nyt_premise
+  nyt_file "r['due'] = '2020-01-01'"
+  nyt_file "r.update(id='R-NYT-PR-2-r2', supersedes='R-NYT-PR-2', due='2099-06-01')"
+  printf '%s\n' '{"id":"R-NYT-PR-2","superseded_by":"R-NYT-PR-2-r2"}' >> "$REC/residual.jsonl"
+  out="$(row_now 4)"
+  [ "$(head -1 <<<"$out")" = "FILED" ] || { echo "$out"; false; }
+  [[ "$out" == *"due 2099-06-01, closing probe P-9"* ]] || { echo "$out"; false; }
+  out="$(row_now 11)"
+  [ "$(head -1 <<<"$out")" = "FILED" ] || { echo "$out"; false; }
+  [[ "$out" == *"R-NYT-PR-2: superseded by R-NYT-PR-2-r2 (history)"* ]] || { echo "$out"; false; }
+  git -C "$W/repo" add -A
+  git -C "$W/repo" commit -qm "refiled premise"
+  run "$G" run --program demo --consent-sealed-read
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  run "$G" --render --program demo
+  [[ "$output" == *"1 production or elapsed-time check and 1 filed not-yet-true premise check"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"2020-01-01"* ]] || { echo "$output"; false; }
+  # a marker naming a row that does not refile it is a broken chain
+  printf '%s\n' '{"id":"R-NYT-PR-2-r2","superseded_by":"R-NYT-PR-404"}' >> "$REC/residual.jsonl"
+  out="$(row_now 11)"
+  [[ "$out" == *"R-NYT-PR-2-r2: superseded, but R-NYT-PR-404 is not a refile of it for premise PR-2"* ]] || { echo "$out"; false; }
+}
+
 # RED-proof: the base kit prints none of these reasons (it fails every case as plain "below level").
 @test "row 4: a filing that cannot carry its premise fails, naming why (each guard of decision 55e7da1e7311)" {
   check() { # check <reason> <setup...>: restore, plant, expect row 4 FAIL naming <reason>

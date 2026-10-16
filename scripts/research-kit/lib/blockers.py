@@ -21,9 +21,14 @@ TAGS = ("research", "production", "operator")  # precedence: the first tag any g
 
 
 def residual_reasons(ctx: Any) -> Dict[str, Set[str]]:
-    """premise id -> the why_unreachable of every residual row naming it (`premise`/`premises`)."""
+    """premise id -> the why_unreachable of every live residual row naming it (`premise`/`premises`);
+    a row a refile superseded is history."""
     out: Dict[str, Set[str]] = {}
-    for r in kit.fold(ctx.jsonl("residual.jsonl")).values():
+    rows = list(kit.fold(ctx.jsonl("residual.jsonl")).values())
+    gone = kit.superseded_residuals(rows)
+    for r in rows:
+        if r.get("id") in gone:
+            continue
         named = list(r.get("premises") or []) + ([r["premise"]] if r.get("premise") else [])
         for pid in named:
             out.setdefault(str(pid), set()).add(str(r.get("why_unreachable")))

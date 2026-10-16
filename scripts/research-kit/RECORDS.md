@@ -47,7 +47,12 @@ Added 2026-10-05 (wave E3d): between `build-certified` and `closed` sits `implem
   Decision `55e7da1e7311` (2026-10-16) adds `not-yet-true`, written only by `cc-research premise file`:
   `{id:"R-NYT-PR-n", why_unreachable:"not-yet-true", premise, awaits:"build|upstream-merge|third-party-answer",
   owner_wave, owner, due, closing_probe, blocks_waves:[..], why, ts}`. Gate row 11 also needs `premise`, `owner` and
-  `awaits` on it, and fails a row filed at or after its premise was refuted.
+  `awaits` on it, and fails a row filed at or after its premise was refuted. A refile (`premise file --refile`) writes
+  the k-th filing of a premise as `R-NYT-PR-n-rk` (`-r2` for the first refile) with `supersedes:"<old id>"` and appends `{id:<old id>, superseded_by:<new id>,
+  superseded_why, ts}` to the old one, which stays as history. Every reader (`kit.not_yet_rows`; gate rows 4 and 11,
+  `gate.sh requires`, the certificate's scheduled checks) takes the newest live filing and skips a superseded one;
+  row 11 lists it `superseded by <new id> (history)` and fails it only when that id is not a refile of it for the same
+  premise.
 - `premises.jsonl` later events (the fold reads the last value of each field):
   - `cc-research job freshness` appends `{id, probes:[..., "P-fresh-<id>[-rN]"], rechecked_by, recheck_verdict:
     "holds|refuted"}`, plus `carried: true` on a premise's first re-check. It never writes `verdict`. While the
@@ -78,7 +83,12 @@ Added 2026-10-05 (wave E3d): between `build-certified` and `closed` sits `implem
     not a `DR` decision carried (a well-formed set or a class-C packet) or ruled by the operator or a packet default;
     an owner wave, a dependent's narrowing wave or a dependent's `blocks_waves` member that any decision or known row
     descoped; no wave resting on it (the filing's `--blocks-wave` plus its dependents' `blocks_waves`, less the owner
-    wave); and a second filing for the same premise.
+    wave); and a second filing for the same premise unless `--refile` is given.
+  - `cc-research premise file ... --refile --why "<reason>"` (the same flags, every one re-stated) supersedes the
+    premise's live filing, to re-date it before its due date passes or to move its owner, owner wave, closing probe,
+    awaited event or blocked waves. It writes the new row and the old row's `superseded_by` event (shapes above) and the
+    new row's reconcile line, and it refuses everything a first filing refuses, judged on the new row (a past `--due`
+    included; the old row's own state does not matter), plus `--refile` for a premise with no live filing.
   - Gate row 4 reports such a premise FILED, naming its level, owner wave, awaited event, owner, due date and closing
     probe, while every guard above still holds now; the moment one breaks, the filing FAILs naming why. `gate.sh
     requires --wave W` refuses each wave resting on a filed premise until its closing probe has run with exit 0 and is

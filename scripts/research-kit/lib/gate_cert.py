@@ -464,6 +464,8 @@ def live_state(rec: Path, cert: Dict[str, Any]) -> Dict[str, Any]:
         if c.get("cause") in COUNTED_CAUSES and c.get("status") != "parked" and after(c)
     ]
     res = list(kit.fold(kit.read_jsonl(rec / "residual.jsonl")).values())
+    gone = kit.superseded_residuals(res)  # a refiled filing is history, never a scheduled check
+    res = [r for r in res if r.get("id") not in gone]
     classes: Dict[str, int] = {}
     for r in res:
         why = str(r.get("why_unreachable"))

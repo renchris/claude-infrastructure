@@ -430,7 +430,10 @@ def premise_file(a: argparse.Namespace) -> int:
     only the build, an upstream merge or a third party's answer can raise it, so gate row 4 reports it
     FILED, and `gate.sh requires` refuses every wave resting on it until --closing-probe has run and
     joined it. Appends one residual.jsonl row R-NYT-<id> and its reconcile.jsonl line (gate row 12).
-    Refuses whatever gate row 4 would fail, with the same reasons (gate_rows_a.not_yet_problems)."""
+    Refuses whatever gate row 4 would fail, with the same reasons (gate_rows_a.not_yet_problems).
+    --refile supersedes the live filing instead of refusing a second one: the new row R-NYT-<id>-r<n>
+    carries `supersedes`, the old one is marked `superseded_by` and stays as history, and every
+    reader (kit.not_yet_rows) takes the newest live filing."""
     import re
 
     import gate
@@ -462,10 +465,28 @@ def premise_file(a: argparse.Namespace) -> int:
         raise kit.KitError(f"{a.id} is already at its required level; nothing to file")
     if kit.parse_due(a.due) is None:
         raise kit.KitError(f"--due {a.due!r} is not ISO-8601 UTC or YYYY-MM-DD")
-    if a.id in kit.not_yet_rows(kit.read_jsonl(r / "residual.jsonl")):
-        raise kit.KitError(f"{a.id} is already filed not-yet-true")
+    residual = kit.read_jsonl(r / "residual.jsonl")
+    old = kit.not_yet_rows(residual).get(a.id)
+    if old is not None and not a.refile:
+        raise kit.KitError(
+            f"{a.id} is already filed not-yet-true ({old['id']}, due {old.get('due')}); "
+            "--refile supersedes it"
+        )
+    if old is None and a.refile:
+        raise kit.KitError(
+            f"{a.id} has no not-yet-true filing to refile; file it without --refile"
+        )
+    rid = f"R-NYT-{a.id}"
+    if old is not None:
+        # The n-th filing of a premise is R-NYT-<id>-r<n>; the superseded rows stay as history.
+        n = 1 + sum(
+            1
+            for x in kit.fold(residual).values()
+            if x.get("why_unreachable") == kit.NOT_YET and x.get("premise") == a.id
+        )
+        rid = f"{rid}-r{n}"
     row: Dict[str, Any] = {
-        "id": f"R-NYT-{a.id}",
+        "id": rid,
         "why_unreachable": kit.NOT_YET,
         "premise": a.id,
         "awaits": a.awaits,
@@ -476,6 +497,8 @@ def premise_file(a: argparse.Namespace) -> int:
         "blocks_waves": sorted(set(a.blocks_wave or [])),
         "why": a.why.strip(),
     }
+    if old is not None:
+        row["supersedes"] = old["id"]
     ctx = gate.make_ctx(a.program)
     decisions = kit.fold(ctx.jsonl("decisions.jsonl"))
     problems = not_yet_problems(
@@ -488,14 +511,20 @@ def premise_file(a: argparse.Namespace) -> int:
     if row["id"] in folded(r, "residual.jsonl"):
         raise kit.KitError(f"{row['id']} already in residual.jsonl")
     kit.append_jsonl(r / "residual.jsonl", row)
+    if old is not None:
+        kit.append_jsonl(
+            r / "residual.jsonl",
+            {"id": old["id"], "superseded_by": row["id"], "superseded_why": row["why"]},
+        )
     kit.append_jsonl(
         r / "reconcile.jsonl",
         {"id": f"residual:{row['id']}", "disposition": "filed", "ref": row["id"]},
     )
     waves = kit.not_yet_waves(row, premise, decisions)
+    verb, sup = ("refiled", f", superseding {old['id']}") if old else ("filed", "")
     print(
-        f"{row['id']}: filed {a.id} not-yet-true until {a.owner_wave} ({a.awaits}), due {a.due}; "
-        f"waves {', '.join(waves)} wait for {a.closing_probe} to join it"
+        f"{row['id']}: {verb} {a.id} not-yet-true until {a.owner_wave} ({a.awaits}), due {a.due}"
+        f"{sup}; waves {', '.join(waves)} wait for {a.closing_probe} to join it"
     )
     return 0
 
@@ -1209,6 +1238,13 @@ def add_verbs(sub: Any) -> None:
         help="repeat; a wave that rests on the premise, beyond its dependents' blocks_waves",
     )
     p.add_argument("--why", required=True, help="why only that event can raise it")
+    p.add_argument(
+        "--refile",
+        action="store_true",
+        help="supersede the premise's live filing with this one (a new due, owner, owner wave, "
+        "closing probe or blocks-waves; every guard of a first filing applies); the old row "
+        "stays in residual.jsonl marked superseded_by",
+    )
     p = verb(g, "add", premise_add, "append one premise")
     p.add_argument("--id", required=True)
     p.add_argument("--claim", required=True)

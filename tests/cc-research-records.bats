@@ -339,6 +339,57 @@ pfile_refused() {
   [ "$(cat "$REC/residual.jsonl" "$REC/reconcile.jsonl" | cksum)" = "$before" ]
 }
 
+# RED-proof (2026-10-16): before `--refile` existed every call with it exits 2 (unrecognized
+# argument), so the past-due filing below can never be re-dated and row 4 stays FAIL.
+@test "premise file --refile: supersedes the live filing under every first-filing guard; row 4 and row 11 read the newest; without --refile a second filing is still refused" {
+  printf '%s\n' '{"id":"PR-2","truth_lives_in":"target-env","verdict":"partial","probes":[],"load_bearing_for":["DR-2"],"recheck_cmd":"true"}' >> "$REC/premises.jsonl"
+  printf '%s\n' '{"id":"DR-2","status":"carried","ruled_by":"operator","options":[{"label":"do-nothing"},{"label":"use-what-exists"}],"set":{"members":[{"id":"a","feasibility_probe":"P-1"},{"id":"b","feasibility_probe":"P-2"}],"narrowing_probe":{"wave":"B3","owner":"lead","due":"2099-01-01"},"revision_budget_h":4},"blocks_waves":["B4"]}' >> "$REC/decisions.jsonl"
+  before="$(cat "$REC/residual.jsonl" "$REC/reconcile.jsonl" | cksum)"
+  pfile_refused "PR-2 has no not-yet-true filing to refile" --id PR-2 --refile   # (a) nothing filed yet
+  [ "$(cat "$REC/residual.jsonl" "$REC/reconcile.jsonl" | cksum)" = "$before" ]
+  run pfile --id PR-2 --blocks-wave B5
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # the due date passes: row 4 now fails the filing, as it will on 2026-11-01
+  printf '%s\n' '{"id":"R-NYT-PR-2","due":"2020-01-01"}' >> "$REC/residual.jsonl"
+  rowtext 4 | grep -q "PR-2: filed not-yet-true, but due '2020-01-01' is unparseable or already past"
+  before="$(cat "$REC/residual.jsonl" "$REC/reconcile.jsonl" | cksum)"
+  pfile_refused "PR-2 is already filed not-yet-true" --id PR-2 --due 2099-06-01   # (e) no --refile
+  pfile_refused "is unparseable or already past" --id PR-2 --refile --due 2020-02-01T00:00:00Z   # (b)
+  [ "$(cat "$REC/residual.jsonl" "$REC/reconcile.jsonl" | cksum)" = "$before" ]
+  # the first-filing guards bind the refile: a now-agent-ruled dependent refuses it
+  printf '%s\n' '{"id":"DR-2","status":"ruled","ruled_by":"agent"}' >> "$REC/decisions.jsonl"
+  pfile_refused "dependent DR-2 is ruled by agent" --id PR-2 --refile --due 2099-06-01
+  printf '%s\n' '{"id":"DR-2","status":"carried","ruled_by":"operator"}' >> "$REC/decisions.jsonl"
+  [ "$(cat "$REC/residual.jsonl" "$REC/reconcile.jsonl" | cksum)" = "$before" ]
+  pfile_refused "--why is required" --id PR-2 --refile --due 2099-06-01 --why " "
+  # (c) the refile: a new row superseding the old, which stays as history
+  run pfile --id PR-2 --refile --due 2099-06-01 --closing-probe P-10 --blocks-wave B5 --why "W1 waits for the v5 held-out set"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == "R-NYT-PR-2-r2: refiled PR-2 not-yet-true until B3 (build), due 2099-06-01, superseding R-NYT-PR-2; waves B4, B5 wait for P-10 to join it" ]] || { echo "$output"; false; }
+  [ "$(fold residual.jsonl R-NYT-PR-2-r2 supersedes)" = '"R-NYT-PR-2"' ]
+  [ "$(fold residual.jsonl R-NYT-PR-2-r2 due)" = '"2099-06-01"' ]
+  [ "$(fold residual.jsonl R-NYT-PR-2-r2 closing_probe)" = '"P-10"' ]
+  [ "$(fold residual.jsonl R-NYT-PR-2-r2 why)" = '"W1 waits for the v5 held-out set"' ]
+  [ "$(fold residual.jsonl R-NYT-PR-2 superseded_by)" = '"R-NYT-PR-2-r2"' ]
+  [ "$(fold residual.jsonl R-NYT-PR-2 closing_probe)" = '"P-9"' ]   # history is kept
+  [ "$(fold reconcile.jsonl residual:R-NYT-PR-2-r2 disposition)" = '"filed"' ]
+  out="$(rowtext 4)"
+  [[ "$out" == *"FILED PR-2: at E0, needs E5; not yet true until B3 (build), owner lead, due 2099-06-01, closing probe P-10"* ]] || { echo "$out"; false; }
+  [[ "$out" != *"already past"* ]] || { echo "$out"; false; }
+  [ "$(rowstat 4)" != "FAIL" ]
+  out="$(rowtext 11)"
+  [[ "$out" == *"R-NYT-PR-2-r2: not-yet-true, premise PR-2 awaits build, owner B3, due 2099-06-01"* ]] || { echo "$out"; false; }
+  [[ "$out" == *"R-NYT-PR-2: superseded by R-NYT-PR-2-r2"* ]] || { echo "$out"; false; }
+  [ "$(rowstat 11)" != "FAIL" ]
+  # a third filing supersedes the second, still never without --refile
+  pfile_refused "PR-2 is already filed not-yet-true" --id PR-2
+  run pfile --id PR-2 --refile --due 2099-07-01 --closing-probe P-10 --why "again"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(fold residual.jsonl R-NYT-PR-2-r3 supersedes)" = '"R-NYT-PR-2-r2"' ]
+  [ "$(fold residual.jsonl R-NYT-PR-2-r2 superseded_by)" = '"R-NYT-PR-2-r3"' ]
+  rowtext 4 | grep -q "due 2099-07-01, closing probe P-10"
+}
+
 @test "decision: no --conviction flag exists; rule is refused below 90 naming the packet route, accepted at 90; show prints the derived value" {
   run "$CR" decision add --program demo --id DR-2 --question "q" --option do-nothing --option use-what-exists --option x
   [ "$status" -eq 0 ]

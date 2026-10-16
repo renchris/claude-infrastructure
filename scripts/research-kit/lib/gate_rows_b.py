@@ -217,8 +217,27 @@ def row11(ctx: Ctx) -> Row:
     prem_events = ctx.jsonl("premises.jsonl")
     prem = kit.fold(prem_events)
     capped = 0
-    for r in folded(ctx, "residual.jsonl").values():
+    res = folded(ctx, "residual.jsonl")
+    gone = kit.superseded_residuals(res.values())
+    for r in res.values():
         why, rid = r.get("why_unreachable"), r.get("id")
+        if why == kit.NOT_YET and rid in gone:
+            # A refiled filing (`premise file --refile`) is history: its successor carries the
+            # premise, so only the chain is checked, never its fields or its due date.
+            heir = r.get("superseded_by")
+            nxt = res.get(heir) if heir else None
+            if (
+                nxt is None
+                or nxt.get("supersedes") != rid
+                or nxt.get("premise") != r.get("premise")
+            ):
+                fails.append(
+                    f"{rid}: superseded, but {heir or 'no row'} is not a refile of it for premise "
+                    f"{r.get('premise')}"
+                )
+            else:
+                filed.append(f"{rid}: superseded by {heir} (history)")
+            continue
         if why in METHOD_RESIDUAL:
             capped += 1
             need = ["owner_wave", "due", "closing_probe"]
