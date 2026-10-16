@@ -1,6 +1,6 @@
-kitty leaves native fullscreen before destroying a window, and `@ action --match` honors its match —
+kitty leaves native fullscreen before destroying a window —
 applies to v0.48.2 (2cb1d95c3a) with `git apply`, after kitty-upstream-defects.patch and
-kitty-talk-thread-survives-v0.48.2.patch.
+kitty-talk-thread-survives-v0.48.2.patch; kitty-upstream-backport-v0.48.2.patch applies after it.
 (git apply ignores every line above the first diff header, so this block is commentary only.)
 
 Why (2026-10-16, operator ruling on decision a41897063971): kitty 0.48.2 SIGSEGV'd on 2026-10-15 in
@@ -15,16 +15,25 @@ GLFWDeferredClose takes it (retained, plain content view, ignores mouse), leaves
 dereferences the now-NULL glfw_window), and closes it 0.3 s after windowDidExitFullScreen:, or at
 once on a failed enter/exit; a 5 s timeout starts the exit itself once, then closes. canBecomeMainWindow
 gains the NULL check canBecomeKeyWindow already had. Traditional fullscreen is unchanged.
+2026-10-16, after upstream review: -[GLFWDeferredClose finish] skips the Tahoe zero-size frame while
+the window still carries the fullscreen style mask (the timeout and failed-exit paths can reach it
+before the exit finished), as upstream 7e88f51ed7 does in _glfwPlatformDestroyWindow. orderOut stays
+unconditional, as it does there.
 
-Part 2, kitty/rc/action.py: the client sends the match as `match_window` (its protocol spec), the
-server's windows_for_match_payload reads `match`, so `@ action --match` ran on the active window and a
-non-matching spec never failed. One line re-keys the payload; no match keeps the active-window default.
+Part 2, kitty/rc/action.py (REMOVED 2026-10-16): the client sends the match as `match_window` (its
+protocol spec), the server's windows_for_match_payload reads `match`, so `@ action --match` ran on
+the active window and a non-matching spec never failed. One line re-keyed the payload; no match kept
+the active-window default. Upstream fixed
+the same bug in 0ea80af638 (kovidgoyal/kitty#10672) by letting windows_for_match_payload read
+'match_window', which behaves the same; kitty-upstream-backport-v0.48.2.patch carries that fix now,
+so this patch no longer touches kitty/rc.
 
 Reported upstream: see the README section "Kitty patch and upstream reports (2026-10-16)".
-Built by: scripts/kitty-build-swap.sh build --no-band (applies the three patches in order).
+Built by: scripts/kitty-build-swap.sh build --no-band (applies the four patches in order; this is
+the third).
 
 diff --git a/glfw/cocoa_window.m b/glfw/cocoa_window.m
-index c48a13a4d..ee0a02b69 100644
+index c48a13a4d..db3915574 100644
 --- a/glfw/cocoa_window.m
 +++ b/glfw/cocoa_window.m
 @@ -2244,6 +2244,7 @@ - (instancetype)initWithGlfwWindow:(NSRect)contentRect
@@ -57,7 +66,7 @@ index c48a13a4d..ee0a02b69 100644
  - (void)zoom:(id)sender
  {
      if (![self isZoomed]) {
-@@ -2540,9 +2549,92 @@ int _glfwPlatformCreateWindow(_GLFWwindow* window, const _GLFWwndconfig* wndconf
+@@ -2540,9 +2549,97 @@ int _glfwPlatformCreateWindow(_GLFWwindow* window, const _GLFWwndconfig* wndconf
      return true;
  }
  
@@ -124,9 +133,14 @@ index c48a13a4d..ee0a02b69 100644
 +    [w setDelegate:nil];
 +    if (!closed) {
 +        [w orderOut:nil];
-+        NSRect frame = w.frame; frame.size.width = 0; frame.size.height = 0;
-+        [w setFrame:frame display:NO];
-+        [w setHasShadow:NO];
++        // The Tahoe zero-size frame workaround (see _glfwPlatformDestroyWindow), never on a window
++        // that is still fullscreen: the timeout and failed-exit paths can get here before it left,
++        // and a degenerate frame fed to the exit transition is what upstream 7e88f51ed7 removed.
++        if (!([w styleMask] & NSWindowStyleMaskFullScreen)) {
++            NSRect frame = w.frame; frame.size.width = 0; frame.size.height = 0;
++            [w setFrame:frame display:NO];
++            [w setHasShadow:NO];
++        }
 +        [w close];  // releases the reference GLFW created the window with
 +    }
 +    [w release];
@@ -150,7 +164,7 @@ index c48a13a4d..ee0a02b69 100644
      if (_glfw.ns.disabledCursorWindow == window)
          _glfw.ns.disabledCursorWindow = NULL;
      free_drop_data(window);
-@@ -2553,7 +2645,8 @@ void _glfwPlatformDestroyWindow(_GLFWwindow* window)
+@@ -2553,7 +2650,8 @@ void _glfwPlatformDestroyWindow(_GLFWwindow* window)
          window->ns.notch_cover_window = nil;
      }
  
@@ -160,7 +174,7 @@ index c48a13a4d..ee0a02b69 100644
  
      if (window->monitor)
          releaseMonitor(window);
-@@ -2571,6 +2664,15 @@ void _glfwPlatformDestroyWindow(_GLFWwindow* window)
+@@ -2571,6 +2669,15 @@ void _glfwPlatformDestroyWindow(_GLFWwindow* window)
      window->ns.view = nil;
  
      [w removeGLFWWindow];
@@ -176,16 +190,3 @@ index c48a13a4d..ee0a02b69 100644
      // Workaround for macOS Tahoe where if the frame is not set to zero size
      // even after NSWindow::close the window remains on screen as an invisible
      // rectangle that intercepts mouse events and takes up space in mission
-diff --git a/kitty/rc/action.py b/kitty/rc/action.py
-index 8f55db1b5..66d5de40a 100644
---- a/kitty/rc/action.py
-+++ b/kitty/rc/action.py
-@@ -58,7 +58,7 @@ def message_to_kitty(self, global_opts: RCOptions, opts: 'CLIOptions', args: Arg
-         return {'action': ' '.join(args), 'self': opts.self, 'match_window': opts.match}
- 
-     def response_from_kitty(self, boss: Boss, window: Window | None, payload_get: PayloadGetType) -> ResponseType:
--        w = self.windows_for_match_payload(boss, window, payload_get)
-+        w = self.windows_for_match_payload(boss, window, PayloadGetType(self, {**payload_get.payload, 'match': payload_get('match_window')}))
-         if w:
-             window = w[0]
-         ac = payload_get('action')

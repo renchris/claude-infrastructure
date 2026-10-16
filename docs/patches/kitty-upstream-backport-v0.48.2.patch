@@ -1,0 +1,137 @@
+kitty upstream fixes 7e88f51ed7 and 0ea80af638, backported — applies to v0.48.2 (2cb1d95c3a) with
+`git apply`, after kitty-upstream-defects.patch, kitty-talk-thread-survives-v0.48.2.patch and
+kitty-fullscreen-destroy-v0.48.2.patch (its context includes that patch's code, so it applies only
+after it).
+(git apply ignores every line above the first diff header, so this block is commentary only.)
+
+Why (2026-10-16, after upstream review of our crash reports): the maintainer answered
+kovidgoyal/kitty#10671 (the fullscreen-close SIGSEGV of 2026-10-15) with 7e88f51ed7 and #10672
+(`@ action --match` ignoring its match) with 0ea80af638. Neither is in a kitty release yet (latest
+v0.49.2, 2026-10-01), and upstream declined a deferred close, so our fullscreen-destroy patch stays
+and this one carries upstream's fixes on top of it. Upstream's hunks do not apply to 0.48.2's brace
+style, so they were rebased by hand onto v0.48.2 plus the three patches before this one.
+Evidence: docs/research/kitty-crash-2026-10-15/README.md.
+
+From 7e88f51ed7, glfw/cocoa_window.m, three of its four hunks:
+- hunk 1, -[GLFWWindow removeGLFWWindow]: remove only the screen-parameters observation GLFWWindow
+  added, not every observation with the window as observer (our deferred close runs this before the
+  exit transition, so the blanket removeObserver: also dropped Cocoa's own).
+- hunk 3, -[GLFWWindow toggleFullScreen:]: skip update_titlebar_button_visibility_after_fullscreen_transition
+  when glfw_window is NULL, a NULL dereference reachable during our deferred close.
+- hunk 4, _glfwPlatformDestroyWindow: skip the Tahoe zero-size frame for a window still in
+  fullscreen (here, traditional fullscreen, the one case our patch still closes in place).
+- hunk 2 (canBecomeMainWindow NULL check) is DROPPED: kitty-fullscreen-destroy-v0.48.2.patch already
+  adds the same `if (!glfw_window) return NO;`, and applying upstream's hunk by fuzz duplicates it.
+
+From 0ea80af638, kitty/rc/action.py and kitty/rc/base.py: windows_for_match_payload takes the payload
+key to read, and `@ action` passes 'match_window', the key its client sends. This replaces Part 2 of
+kitty-fullscreen-destroy-v0.48.2.patch, removed the same day. Its docs/changelog.rst hunk is dropped.
+
+Build marker (local, not upstream): an empty ObjC class GLFWFsFixV2 in glfw/cocoa_window.m. It exists
+only so scripts/kitty-build-swap.sh (`has_fsfix`, a grep of glfw-cocoa.so) and the fullscreen guard's
+kitten (objc_getClass in the running kitty) can tell a build carrying this backport from the earlier
+build that has only GLFWDeferredClose; `arm` refuses a staged bundle without it.
+
+Built by: scripts/kitty-build-swap.sh build --no-band (applies the four patches in order; this is
+the fourth).
+
+diff --git a/glfw/cocoa_window.m b/glfw/cocoa_window.m
+index db39155..6be5779 100644
+--- a/glfw/cocoa_window.m
++++ b/glfw/cocoa_window.m
+@@ -2272,7 +2272,10 @@ - (void)screenParametersDidChange:(NSNotification *)notification {
+ - (void) removeGLFWWindow
+ {
+     glfw_window = NULL;
+-    [[NSNotificationCenter defaultCenter] removeObserver:self];
++    // Remove only our own observation, a blanket removeObserver: would also
++    // remove any observations Cocoa has registered with this window as the
++    // observer.
++    [[NSNotificationCenter defaultCenter] removeObserver:self name:NSApplicationDidChangeScreenParametersNotification object:nil];
+ }
+ 
+ - (BOOL)validateMenuItem:(NSMenuItem *)item {
+@@ -2358,7 +2361,7 @@ - (void)toggleFullScreen:(nullable id)sender
+     // When the window decoration is hidden, toggling fullscreen causes the style mask to be changed,
+     // and causes the first responder to be cleared.
+     if (glfw_window && !glfw_window->decorated && glfw_window->ns.view) [self makeFirstResponder:glfw_window->ns.view];
+-    update_titlebar_button_visibility_after_fullscreen_transition(glfw_window, false, !is_fullscreen_already);
++    if (glfw_window) update_titlebar_button_visibility_after_fullscreen_transition(glfw_window, false, !is_fullscreen_already);
+ }
+ 
+ // Used only by GLFWDeferredClose after the GLFW window is gone, when toggleFullScreen: above
+@@ -2635,6 +2638,14 @@ - (void)windowDidFailToExitFullScreen:(NSWindow *)w { (void)w; [self after:0 run
+ - (void)windowWillClose:(NSNotification *)notification { (void)notification; closed = true; }
+ @end
+ 
++// Build marker, no behavior. It exists only so that scripts/kitty-build-swap.sh (a grep of
++// glfw-cocoa.so) and the fullscreen guard's kitten (objc_getClass in the running kitty) can tell a
++// build carrying the upstream backport from one that has only GLFWDeferredClose.
++@interface GLFWFsFixV2 : NSObject
++@end
++@implementation GLFWFsFixV2
++@end
++
+ void _glfwPlatformDestroyWindow(_GLFWwindow* window)
+ {
+     GLFWWindow *w = window->ns.object;
+@@ -2681,10 +2692,15 @@ void _glfwPlatformDestroyWindow(_GLFWwindow* window)
+     // Workaround for macOS Tahoe where if the frame is not set to zero size
+     // even after NSWindow::close the window remains on screen as an invisible
+     // rectangle that intercepts mouse events and takes up space in mission
+-    // control. Sigh.
+-    NSRect frame = w.frame; frame.size.width = 0; frame.size.height = 0;
+-    [w setFrame:frame display:NO];
+-    [w setHasShadow:NO];
++    // control. Sigh. Not done for full screen windows as there -close starts
++    // the exit full screen transition which restores the pre-full screen frame
++    // anyway, and feeding a degenerate frame to that transition is asking for
++    // trouble.
++    if (!([w styleMask] & NSWindowStyleMaskFullScreen)) {
++        NSRect frame = w.frame; frame.size.width = 0; frame.size.height = 0;
++        [w setFrame:frame display:NO];
++        [w setHasShadow:NO];
++    }
+     [w close];  // sends a release to NSWindow so we dont release it
+     window->ns.object = nil;
+ }
+diff --git a/kitty/rc/action.py b/kitty/rc/action.py
+index 8f55db1..c034bb7 100644
+--- a/kitty/rc/action.py
++++ b/kitty/rc/action.py
+@@ -58,7 +58,7 @@ def message_to_kitty(self, global_opts: RCOptions, opts: 'CLIOptions', args: Arg
+         return {'action': ' '.join(args), 'self': opts.self, 'match_window': opts.match}
+ 
+     def response_from_kitty(self, boss: Boss, window: Window | None, payload_get: PayloadGetType) -> ResponseType:
+-        w = self.windows_for_match_payload(boss, window, payload_get)
++        w = self.windows_for_match_payload(boss, window, payload_get, 'match_window')
+         if w:
+             window = w[0]
+         ac = payload_get('action')
+diff --git a/kitty/rc/base.py b/kitty/rc/base.py
+index d475729..14e5287 100644
+--- a/kitty/rc/base.py
++++ b/kitty/rc/base.py
+@@ -368,7 +368,7 @@ def get_default(self, name: str, missing: Any = None) -> Any:
+             return self.defaults.get(name, missing)
+         return missing
+ 
+-    def windows_for_match_payload(self, boss: 'Boss', window: Optional['Window'], payload_get: PayloadGetType) -> list['Window']:
++    def windows_for_match_payload(self, boss: 'Boss', window: Optional['Window'], payload_get: PayloadGetType, match_name: str = 'match') -> list['Window']:
+         if payload_get('all'):
+             windows = list(boss.all_windows)
+         else:
+@@ -378,10 +378,10 @@ def windows_for_match_payload(self, boss: 'Boss', window: Optional['Window'], pa
+             else:
+                 window = boss.active_window or window
+             windows = [window] if window else []
+-            if payload_get('match'):
+-                windows = list(boss.match_windows(payload_get('match'), self_window))
++            if match := payload_get(match_name):
++                windows = list(boss.match_windows(match, self_window))
+                 if not windows:
+-                    raise MatchError(payload_get('match'))
++                    raise MatchError(match)
+         return windows
+ 
+     def tabs_for_match_payload(self, boss: 'Boss', window: Optional['Window'], payload_get: PayloadGetType) -> list['Tab']:

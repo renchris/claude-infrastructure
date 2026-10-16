@@ -12,6 +12,12 @@
 # docs/patches/kitty-fullscreen-destroy-v0.48.2.patch (leave native fullscreen before destroying a
 # window; `@ action --match` honors its match), and `arm` refuses a staged bundle without it, because
 # the adoption the operator chose (0a8ffe58562a) is of the build that carries it.
+# THE UPSTREAM BACKPORT (2026-10-16, after upstream review): `build --no-band` also applies
+# docs/patches/kitty-upstream-backport-v0.48.2.patch after the fullscreen fix (upstream 7e88f51ed7
+# hunks 1/3/4 and 0ea80af638, which replaces the fullscreen patch's `@ action --match` part). That
+# patch adds an empty ObjC class GLFWFsFixV2 as a build marker, and build-verify and `arm` require it
+# as well as GLFWDeferredClose: a bundle with only GLFWDeferredClose predates the backport, lacks its
+# NULL-dereference and removeObserver fixes, and must be rebuilt before it is armed.
 #
 # THE ADOPTION ORDER (2026-09-30 backlog master plan, tickets kitty.3-kitty.5):
 #   build     agent    (no-band variant only) patch a clean v0.48.2 tree and run `make app`
@@ -80,8 +86,15 @@ probe() {
 }
 is_patched() { [ "$1" = patched ] || [ "$1" = patched-noband ]; }
 # has_fsfix <bundle>: the fullscreen-destroy patch's class name is in the bundle's GLFW backend.
-has_fsfix() { LC_ALL=C grep -qa GLFWDeferredClose "$1/Contents/Resources/kitty/kitty/glfw-cocoa.so" 2>/dev/null; }
-fsfix_tag() { has_fsfix "$1" && echo " +fullscreen-fix"; }
+# 2026-10-16: AND the upstream backport's marker class GLFWFsFixV2 is too; a bundle with only
+# GLFWDeferredClose is the pre-backport build (has_fsfix_v1), which arm refuses.
+GLFW_SO="Contents/Resources/kitty/kitty/glfw-cocoa.so"
+has_fsfix_v1() { LC_ALL=C grep -qa GLFWDeferredClose "$1/$GLFW_SO" 2>/dev/null; }
+has_fsfix() { has_fsfix_v1 "$1" && LC_ALL=C grep -qa GLFWFsFixV2 "$1/$GLFW_SO" 2>/dev/null; }
+fsfix_tag() {
+  if has_fsfix "$1"; then echo " +fullscreen-fix"
+  elif has_fsfix_v1 "$1"; then echo " +fullscreen-fix(pre-backport, rebuild)"; fi
+}
 
 version() { /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$1/Contents/Info.plist" 2>/dev/null || echo '?'; }
 
@@ -112,6 +125,13 @@ cmd_status() {
 # build --no-band (2026-10-02, P6): the band and the talk-thread fix are separate decisions, so this
 # build carries the fixes and never the band. One `git apply` of both patches is atomic: a patch
 # that does not apply leaves the tree untouched. Only a clean tree at v0.48.2 is accepted.
+# CORRECTED (2026-10-16): `git apply p1 p2 ...` is NOT atomic across patch files; it writes each in
+# turn, so a failing fourth patch left the earlier patches' other files applied (measured on a
+# scratch v0.48.2 tree: cocoa_init.m, child-monitor.c, loop-utils.c, state.c modified, rc=1).
+# The series is now fed as ONE concatenated stream, which git applies in memory and writes only if
+# every hunk succeeds (measured: a corrupted fourth patch leaves the tree clean; a good series gives
+# the same bytes as four sequential applies). It also lets the backport patch anchor on the
+# fullscreen patch's GLFWDeferredClose, which a multi-file `--check` cannot see (F6).
 cmd_build() {
   local band=1 src="$NOBAND_SRC" dry=0 list=0 head tag
   while [ $# -gt 0 ]; do case "$1" in
@@ -119,7 +139,8 @@ cmd_build() {
     --list-patches) list=1; shift ;; *) exit 2 ;; esac; done
   [ "$band" = 0 ] || { say "refused: only 'build --no-band' is scripted; the band build is made by hand in ~/ktb"; exit 2; }
   local patches=("$REPO/docs/patches/kitty-upstream-defects.patch" "$REPO/docs/patches/kitty-talk-thread-survives-v0.48.2.patch"
-                 "$REPO/docs/patches/kitty-fullscreen-destroy-v0.48.2.patch")
+                 "$REPO/docs/patches/kitty-fullscreen-destroy-v0.48.2.patch"
+                 "$REPO/docs/patches/kitty-upstream-backport-v0.48.2.patch")
   if [ "$list" = 1 ]; then printf '%s\n' "${patches[@]}"; return 0; fi
   head="$(git -C "$src" rev-parse HEAD 2>/dev/null)"; tag="$(git -C "$src" rev-parse 'v0.48.2^{commit}' 2>/dev/null)"
   [ -n "$head" ] && [ "$head" = "$tag" ] || { say "refused: $src is not a git tree at v0.48.2"; exit 1; }
@@ -129,11 +150,11 @@ cmd_build() {
   # here is 3.11 and kitty needs >= 3.12; `make app` SystemExits without docs/_build; the builtin
   # font is seeded from the installed app so the build never downloads it. All three are gitignored.
   local font="SymbolsNerdFontMono-Regular.ttf"
-  say "plan: git -C $src apply ${patches[*]}"
+  say "plan: cat ${patches[*]} | git -C $src apply"
   say "plan: mkdir -p $src/docs/_build/{man,html}; seed $src/fonts/$font from $LIVE if missing"
   say "plan: PATH=/opt/homebrew/bin:\$PATH make -C $src app"
   if [ "$dry" = 1 ]; then say "verdict=DRY-RUN-OK (nothing changed)"; return 0; fi
-  git -C "$src" apply "${patches[@]}" || { say "a patch did not apply; $src is unchanged"; exit 1; }
+  cat "${patches[@]}" | git -C "$src" apply || { say "a patch did not apply; $src is unchanged (the series applies as one stream)"; exit 1; }
   mkdir -p "$src/docs/_build/man" "$src/docs/_build/html" "$src/fonts"
   [ -e "$src/fonts/$font" ] || cp "$LIVE/Contents/Resources/kitty/fonts/$font" "$src/fonts/" 2>/dev/null || :
   PATH="/opt/homebrew/bin:$PATH" make -C "$src" app || { say "make app failed in $src (patches stay applied)"; exit 1; }
@@ -164,6 +185,9 @@ cmd_stage() {
 
 cmd_arm() {
   is_patched "$(probe "$STAGED")" || { say "refused: nothing patched is staged at $STAGED (run: stage)"; exit 1; }
+  if has_fsfix_v1 "$STAGED" && ! has_fsfix "$STAGED"; then
+    say "refused: $STAGED has the fullscreen-destroy fix but predates the upstream backport (no GLFWFsFixV2 marker); rebuild it (run: build --no-band, then stage --no-band)"; exit 1
+  fi
   has_fsfix "$STAGED" || { say "refused: $STAGED lacks the fullscreen-destroy fix (run: build --no-band, then stage --no-band)"; exit 1; }
   mkdir -p "$STATE"
   printf '%s\n' "kitty -> patched build: as the LAST step before rebooting run \`bash $SELF swap --confirm $LIVE\`; after login run \`bash $SELF verify --clear-marker\`; undo with \`bash $SELF rollback --confirm $LIVE\`." > "$MARKER"
@@ -253,6 +277,6 @@ case "${1:-}" in
   swap)     shift; cmd_swap "$@" ;;
   rollback) shift; cmd_rollback "$@" ;;
   verify)   shift; cmd_verify "$@" ;;
-  -h|--help) sed -n '2,44p' "$0" ;;
+  -h|--help) sed -n '2,/^set -uo pipefail$/p' "$0" | sed '$d' ;;
   *) echo "usage: ${0##*/} status|build|stage|arm|swap|rollback|verify  (see --help)" >&2; exit 2 ;;
 esac

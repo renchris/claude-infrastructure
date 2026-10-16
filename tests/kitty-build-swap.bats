@@ -22,6 +22,12 @@ mkbundle() {  # mkbundle <dir> <probe answer>
 }
 
 fsfix() {  # fsfix <bundle>: give a fixture the fullscreen-destroy patch's marker, as a real build has
+  # 2026-10-16: plus the upstream backport's GLFWFsFixV2 marker, which has_fsfix now also requires.
+  mkdir -p "$1/Contents/Resources/kitty/kitty"
+  printf 'GLFWDeferredClose\nGLFWFsFixV2\n' > "$1/Contents/Resources/kitty/kitty/glfw-cocoa.so"
+}
+
+fsfix_v1() {  # fsfix_v1 <bundle>: the pre-backport build — GLFWDeferredClose without GLFWFsFixV2
   mkdir -p "$1/Contents/Resources/kitty/kitty"
   printf 'GLFWDeferredClose\n' > "$1/Contents/Resources/kitty/kitty/glfw-cocoa.so"
 }
@@ -84,6 +90,28 @@ setup() {
   [[ "$output" == *"patched +fullscreen-fix"* ]] || false
   run bash "$SCRIPT" arm
   [ "$status" -eq 0 ]
+}
+
+# 2026-10-16 (upstream backport, skeptic correction F2): the bundle staged before the backport has
+# GLFWDeferredClose but lacks 7e88f51ed7's NULL-dereference and removeObserver fixes, so arm requires
+# the backport's GLFWFsFixV2 marker too and tells the operator to rebuild.
+@test "arm refuses a staged bundle with GLFWDeferredClose but no GLFWFsFixV2, accepts one with both" {
+  bash "$SCRIPT" stage >/dev/null
+  fsfix_v1 "$T/Applications/kitty.app.staged"
+  run bash "$SCRIPT" arm
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"predates the upstream backport"* ]] || false
+  [[ "$output" == *"rebuild"* ]] || false
+  [ ! -e "$T/state/kitty-restart-pending" ]
+  run bash "$SCRIPT" status
+  [[ "$output" == *"+fullscreen-fix(pre-backport, rebuild)"* ]] || false
+  fsfix "$T/Applications/kitty.app.staged"
+  run bash "$SCRIPT" status
+  [[ "$output" == *"+fullscreen-fix"* && "$output" != *pre-backport* ]] || false
+  run bash "$SCRIPT" arm
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=ARMED"* ]] || false
+  [ -s "$T/state/kitty-restart-pending" ]
 }
 
 @test "swap refuses without --confirm naming the live bundle" {
@@ -161,20 +189,21 @@ mksrc() {  # mksrc <dir> <tag>: a tiny git tree standing in for the kitty checko
   mkdir -p "$1" && printf 'x\n' > "$1/f" && git -C "$1" init -q &&
     git -C "$1" add f && git -C "$1" -c user.name=t -c user.email=t@t commit -qm base && git -C "$1" tag "$2"
   mkdir -p "$T/repo/docs/patches"
-  cp "$BATS_TEST_DIRNAME"/../docs/patches/kitty-{upstream-defects,talk-thread-survives-v0.48.2,fullscreen-destroy-v0.48.2,window-title-band}.patch "$T/repo/docs/patches/"
+  cp "$BATS_TEST_DIRNAME"/../docs/patches/kitty-{upstream-defects,talk-thread-survives-v0.48.2,fullscreen-destroy-v0.48.2,upstream-backport-v0.48.2,window-title-band}.patch "$T/repo/docs/patches/"
 }
 
-@test "build --no-band lists exactly the three fix patches, in order, never the title band" {
+@test "build --no-band lists exactly the four fix patches, in order, never the title band" {
   run bash "$SCRIPT" build --no-band --list-patches
   [ "$status" -eq 0 ]
   [ "$output" = "$T/repo/docs/patches/kitty-upstream-defects.patch
 $T/repo/docs/patches/kitty-talk-thread-survives-v0.48.2.patch
-$T/repo/docs/patches/kitty-fullscreen-destroy-v0.48.2.patch" ]
+$T/repo/docs/patches/kitty-fullscreen-destroy-v0.48.2.patch
+$T/repo/docs/patches/kitty-upstream-backport-v0.48.2.patch" ]
   mksrc "$T/src" v0.48.2
   run bash "$SCRIPT" build --no-band --src "$T/src" --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"verdict=DRY-RUN-OK"* ]] || false
-  [ "$(grep -c '^patch: ' <<<"$output")" -eq 3 ]
+  [ "$(grep -c '^patch: ' <<<"$output")" -eq 4 ]
   [[ "$output" != *title-band* ]] || false
   [ -z "$(git -C "$T/src" status --porcelain)" ]
   run bash "$SCRIPT" build --src "$T/src" --dry-run
