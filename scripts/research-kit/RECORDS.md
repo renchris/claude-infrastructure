@@ -550,6 +550,17 @@ class-B packet in cc-decide if it is still open (evidence `answered by <verb> --
 fire over the answer, and refuses with nothing appended when cc-decide cannot be read or refuses. If the fold's
 `descoped_waves` is non-empty, its event also writes `descoped_waves: []` and `restored_waves: [<the waves>]` and the
 verb prints the waves it restored, so `gate.sh requires` stops refusing them as descoped (the decision's own status
-still governs them). A decision the sweep never converted gets neither field and no cc-decide call. Defense in depth:
-sweep step 1 does not apply an expired class-B default when a rule, carry or reopen event follows that packet's
-conversion event, and prints `default of <pkt> not applied: <D> answered at <ts> after conversion`.
+still governs them). While the fold still names the converted packet, the event also writes `packet: null`, since gate
+row 5 reads the folded packet and fails a class-B one on an irreversible decision. A decision the sweep never converted
+gets none of these fields and no cc-decide call. Defense in depth: sweep step 1 does not apply an expired class-B
+default when a rule, carry, reopen or affirm event follows that packet's conversion event, and prints
+`default of <pkt> not applied: <D> answered at <ts> after conversion`.
+
+- `cc-research decision affirm --program P --id D --because "<why it stands>" --receipt "<the operator's words>"`
+  keeps a converted decision that is `ruled` or `carried` as it stands, without spending a reopen: it appends
+  `{affirmed_by: "operator", affirmed_because, affirm_receipt, affirmed_at}` plus the fields above, and changes no
+  status, choice or set. Refused, appending nothing, for an `open` or `reopened` decision (`decision rule` or
+  `decision carry` answers those) and when there is no conversion left to take back.
+- Sweep step 2 converts only an `open` or `reopened` decision. An overdue class-C packet on one already `ruled` or
+  `carried` is actioned in cc-decide with evidence `decision already <status>; packet superseded`: no class-B packet,
+  no descope, no record event.

@@ -282,7 +282,8 @@ Build waves fire only through `scripts/handoff-fire.sh --requires-gate <slug> --
 the newest certificate has a FAIL row, a reopen is signed after it, or the wave's closure holds an
 unresolved class-C row, a carried set it does not own the narrowing probe of, an open frame-omission
 known row, or a wave the sweep descoped (answering the converted decision with `cc-research decision
-rule|carry|reopen` restores its waves and closes its class-B packet). `gate.sh requires --program <slug> --wave <W>` prints the same
+rule|carry|reopen`, or `decision affirm` to keep a ruled or carried one as it stands, restores its waves and
+closes its class-B packet). `gate.sh requires --program <slug> --wave <W>` prints the same
 verdict without firing. An admitted fire carries the `--requires-gate` work-order marker in its brief.
 
 ## Stage 9 — certify the built artifact (§11, method v1.2)

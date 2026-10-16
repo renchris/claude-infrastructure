@@ -521,7 +521,9 @@ def answer_conversion(r: Path, did: str, verb: str, who: str) -> Dict[str, Any]:
     """An answer to a decision `gate.sh sweep` converted (class C past due -> class B on its
     reversible option, waves descoped) restores those waves and closes the class-B packet, whose
     default would otherwise fire over the answer at its deadline. Returns the fields the verb's event
-    adds. Raises, so the verb appends nothing, when cc-decide cannot be read or refuses the action."""
+    adds: `packet: null` while the fold still names the converted packet (gate row 5 reads the folded
+    packet, and fails a class-B one on an irreversible decision), and the restored waves. Raises, so
+    the verb appends nothing, when cc-decide cannot be read or refuses the action."""
     conv: Optional[Dict[str, Any]] = None
     for ev in kit.read_jsonl(r / "decisions.jsonl"):
         if ev.get("id") == did and ev.get("converted_from"):
@@ -530,7 +532,12 @@ def answer_conversion(r: Path, did: str, verb: str, who: str) -> Dict[str, Any]:
         return {}
     import gate_sweep
 
+    d = decision_get(r, did)
     pid = str((conv.get("packet") or {}).get("id") or "")
+    holds = str((d.get("packet") or {}).get("id") or "") == pid
+    waves = d.get("descoped_waves") or []
+    if not holds and not waves:
+        return {}  # an earlier answer already took this conversion back
     try:
         p = gate_sweep.packets().get(pid)
     except (kit.KitError, OSError, ValueError) as e:
@@ -551,14 +558,14 @@ def answer_conversion(r: Path, did: str, verb: str, who: str) -> Dict[str, Any]:
                 "default would fire over this answer"
             )
         print(f"{did}: closed converted class-B packet {pid} (answered by {verb})")
-    waves = decision_get(r, did).get("descoped_waves") or []
-    if not waves:
-        return {}
-    print(
-        f"{did}: restored waves {', '.join(waves)} "
-        f"(descoped when the sweep converted {conv['converted_from']})"
-    )
-    return {"descoped_waves": [], "restored_waves": waves}
+    out: Dict[str, Any] = {"packet": None} if holds else {}
+    if waves:
+        print(
+            f"{did}: restored waves {', '.join(waves)} "
+            f"(descoped when the sweep converted {conv['converted_from']})"
+        )
+        out.update(descoped_waves=[], restored_waves=waves)
+    return out
 
 
 def decision_rule(a: argparse.Namespace) -> int:
@@ -588,10 +595,11 @@ def decision_rule(a: argparse.Namespace) -> int:
         "receipt": a.receipt,
         "revisit_trigger": a.revisit_trigger,
     }
-    row.update(answer_conversion(r, a.id, "decision rule", "agent"))
-    kit.append_jsonl(
-        r / "decisions.jsonl", {k: v for k, v in row.items() if v is not None}
-    )
+    row = {k: v for k, v in row.items() if v is not None}
+    row.update(
+        answer_conversion(r, a.id, "decision rule", "agent")
+    )  # its packet: null stays
+    kit.append_jsonl(r / "decisions.jsonl", row)
     print(f"{a.id}: ruled {a.chosen} by agent at a derived {c}%")
     return 0
 
@@ -737,6 +745,43 @@ def decision_carry(a: argparse.Namespace) -> int:
         else f"set of {len(s['members'])} {'replaced' if a.set else 're-affirmed'}"
     )
     print(f"{a.id}: carried by operator ({how})")
+    return 0
+
+
+def decision_affirm(a: argparse.Namespace) -> int:
+    """Keep a decision `gate.sh sweep` converted as it stands, ruled or carried, on the operator's
+    words: its waves come back and its class-B packet closes without spending a reopen (§6.5 caps
+    those) or re-stating the ruling. It changes no status, choice or set."""
+    r = recs(a)
+    d = decision_get(r, a.id)
+    st = d.get("status")
+    if st not in ("ruled", "carried"):
+        raise kit.KitError(
+            f"{a.id}: status {st!r}; affirm keeps a ruled or carried decision. An open or "
+            "reopened one is answered by `decision rule` or `decision carry`"
+        )
+    if not a.because.strip() or not a.receipt.strip():
+        raise kit.KitError(
+            f"{a.id}: an affirm needs --because (why it stands) and --receipt (the operator's words)"
+        )
+    taken_back = answer_conversion(r, a.id, "decision affirm", "operator")
+    if not taken_back:
+        raise kit.KitError(
+            f"{a.id}: no sweep conversion to take back (no `converted_from` still holding its "
+            "class-B packet or descoped waves); affirm answers only that"
+        )
+    kit.append_jsonl(
+        r / "decisions.jsonl",
+        {
+            "id": a.id,
+            "affirmed_by": "operator",
+            "affirmed_because": a.because,
+            "affirm_receipt": a.receipt,
+            "affirmed_at": kit.now_iso(),
+            **taken_back,
+        },
+    )
+    print(f"{a.id}: affirmed {st} by operator")
     return 0
 
 
@@ -1156,6 +1201,15 @@ def add_verbs(sub: Any) -> None:
         help="JSON set replacing the carried one: {members, narrowing_probe, revision_budget_h}; "
         "omitted, the current set is re-affirmed unchanged",
     )
+    p = verb(
+        g,
+        "affirm",
+        decision_affirm,
+        "keep a sweep-converted ruled or carried decision as it stands, on the operator's words",
+    )
+    p.add_argument("--id", required=True)
+    p.add_argument("--because", required=True, help="why it stands as it is")
+    p.add_argument("--receipt", required=True, help="the operator's words")
     p = verb(g, "show", decision_show, "print a decision with its derived conviction")
     p.add_argument("--id", required=True)
     p.add_argument("--json", action="store_true")

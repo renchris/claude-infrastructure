@@ -13,13 +13,15 @@
       decisions that are closed, at most cc-decide's ask ceiling, with the derivation as the receipt.
   gate.sh sweep --program P
       1. a class-B packet cc-decide has expired-actioned applies its default to the decision record,
-         unless the decision was answered (rule, carry, reopen) after step 2 converted it, or
+         unless the decision was answered (rule, carry, reopen, affirm) after step 2 converted it, or
          the operator SIGNED a veto for that decision (cc-signoff research:<P>/veto/<D>);
          a cc-decide veto with no valid signature is UNSIGNED and fails the sweep (cc-decide has no
          agent guard, so only a signed veto counts);
       2. a class-C decision past its due date converts: a class-B replacement whose default is the
          reversible option is opened, the old packet is actioned, and the dependent waves are descoped
-         (until `cc-research decision rule|carry|reopen` answers it: lib/cli_records.answer_conversion);
+         (until `cc-research decision rule|carry|reopen|affirm` answers it:
+         lib/cli_records.answer_conversion). Only an open or reopened decision converts; one already
+         ruled or carried has its overdue packet actioned as superseded, with no class B and no descope;
       3. a frame-omission known row past its re-sign due date with no newer frame signature applies its
          default (descope, or class-B packets for the omitted rows) and closes, so --requires-gate
          stops refusing without a reopen;
@@ -306,7 +308,10 @@ def answered_after_conversion(ctx: Any, did: str, pid: str) -> Optional[str]:
         elif (
             converted
             and answered is None
-            and ev.get("status") in ("ruled", "carried", "reopened")
+            and (
+                ev.get("status") in ("ruled", "carried", "reopened")
+                or ev.get("affirmed_by")
+            )
             and ev.get("ruled_by") != "packet-default"
         ):
             answered = str(ev.get("ts") or "?")
@@ -378,6 +383,25 @@ def cmd_sweep(a: argparse.Namespace) -> int:
             and pk.get("due")
             and pk["due"] < now
         ):
+            if d.get("status") not in ("open", "reopened"):
+                # already answered: no class-B default may stand over it, and no wave goes
+                rc, _, err = cc_decide(
+                    "action",
+                    p["id"],
+                    "--evidence",
+                    f"decision already {d.get('status')}; packet superseded",
+                )
+                if rc != 0:
+                    print(
+                        f"CANNOT SUPERSEDE {p['id']} on {did}: cc-decide action refused ({err})"
+                    )
+                    bad += 1
+                    continue
+                print(
+                    f"superseded {p['id']} on {did}: class C past due {pk['due']}, decision "
+                    f"already {d.get('status')}; not converted"
+                )
+                continue
             rev = reversible_option(d)
             if rev is None:
                 print(

@@ -52,6 +52,8 @@ file_b() {
 }
 last_dec() { tail -n 1 "$REC/decisions.jsonl" | /usr/bin/python3 -c "import json,sys; print(json.load(sys.stdin).get('$1'))"; }
 no_trigger() { printf '{"id":"DR-1","revisit_trigger":null}\n' >> "$REC/decisions.jsonl"; }
+# step 2 converts only an open or reopened decision; the setup's DR-1 is carried
+reopen_dr1() { printf '{"id":"DR-1","status":"reopened","reopened_by":"operator"}\n' >> "$REC/decisions.jsonl"; }
 n_packets() { find "$CC_DECISIONS_DIR" -name '*.json' 2>/dev/null | wc -l | tr -d ' '; }
 file_c() {
   "$G" file-packet --program demo --decision DR-1 --class C --what "storage backend" --option "a::x" --option "b::y" \
@@ -208,6 +210,7 @@ budget_pkt() { /usr/bin/python3 -c "import json; print((json.load(open('$REC/bud
 }
 
 @test "a class-C row past its due date converts to class B on its reversible option and descopes its waves" {
+  reopen_dr1
   old="$(file_c)"
   run "$G" sweep --program demo
   [ "$status" -eq 0 ]
@@ -228,6 +231,7 @@ budget_pkt() { /usr/bin/python3 -c "import json; print((json.load(open('$REC/bud
 }
 
 @test "a class-C row past due with no reversible option cannot convert and fails the sweep" {
+  reopen_dr1
   printf '{"id":"DR-1","options":[{"label":"a"},{"label":"b"}]}\n' >> "$REC/decisions.jsonl"
   file_c >/dev/null
   run "$G" sweep --program demo
@@ -280,6 +284,7 @@ for p in d['programs']:
 json.dump(d, open(reg, 'w'))"
 }
 convert() {
+  reopen_dr1
   file_c >/dev/null
   "$G" sweep --program demo >/dev/null
   [ "$(dec 'd["descoped_waves"]')" = "['B1']" ]
@@ -302,7 +307,6 @@ stub_decide() {
 }
 
 @test "a ruling after a sweep conversion restores its waves, closes the class-B packet, and requires admits the wave" {
-  printf '{"id":"DR-1","status":"reopened","reopened_by":"operator"}\n' >> "$REC/decisions.jsonl"
   convert
   new="$(dec 'd["packet"]["id"]')"
   certify
@@ -314,7 +318,7 @@ stub_decide() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"DR-1: restored waves B1"* ]] || false
   [ "$(last_dec restored_waves)" = "['B1']" ]
-  [ "$(dec 'd["descoped_waves"]')" = "[]" ]
+  [ "$(dec 'd["descoped_waves"], d["packet"]')" = "[] None" ]
   [ "$(pkt "$new" '["status"]')" = "actioned" ]
   run "$G" requires --program demo --wave B1
   [ "$status" -eq 0 ]
@@ -373,4 +377,61 @@ stub_decide() {
   [ ! -e "$STUB_LOG" ]
   [ "$(last_dec descoped_waves)" = "None" ]
   [ "$(last_dec restored_waves)" = "None" ]
+}
+
+# ── affirm, and step 2 on an answered decision (lead's grown scope, 2026-10-16) ──────────────────
+# RED-proof: on af46ca131 `decision affirm` does not exist (argparse exit 2), the answer event left
+# the converted class-B packet in the fold (row 5's irreversible check reads it), and step 2
+# converted a carried decision (class B opened, waves descoped).
+
+# plant_ruled_conversion: DR-1 ruled, then converted by the sweep onto a real open class-B packet
+plant_ruled_conversion() {
+  pkb="$(file_b "$(date -u -v+96H +%Y-%m-%dT%H:%M:%SZ)")"
+  printf '{"id":"DR-1","status":"ruled","packet":{"id":"%s","class":"B","due":"2099-01-01T00:00:00Z"},"converted_from":"pkC","descoped_waves":["B1"]}\n' \
+    "$pkb" >> "$REC/decisions.jsonl"
+}
+
+@test "affirm keeps a converted ruled decision ruled: waves restored, class-B packet actioned and out of the fold, no reopen spent" {
+  plant_ruled_conversion
+  certify
+  run "$CR" decision affirm --program demo --id DR-1 --because "the ruling stands" --receipt "operator: keep it"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"DR-1: closed converted class-B packet $pkb"* ]] || false
+  [[ "$output" == *"DR-1: restored waves B1"* ]] || false
+  [ "$(pkt "$pkb" '["status"]')" = "actioned" ]
+  [[ "$(pkt "$pkb" '["evidence"]')" == "answered by decision affirm --by operator 20"* ]] || false
+  [ "$(dec 'd["status"], d["packet"], d["descoped_waves"], d["affirmed_by"]')" = "ruled None [] operator" ]
+  ! grep -q '"reopened"' "$REC/decisions.jsonl"
+  run "$G" requires --program demo --wave B1
+  [ "$status" -eq 0 ]
+  run "$CR" decision affirm --program demo --id DR-1 --because again --receipt again
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no sweep conversion to take back"* ]] || false
+}
+
+@test "affirm refuses a never-converted decision and a reopened one, appending nothing" {
+  before="$(cksum < "$REC/decisions.jsonl")"
+  run "$CR" decision affirm --program demo --id DR-1 --because x --receipt y
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no sweep conversion to take back"* ]] || false
+  [ "$(cksum < "$REC/decisions.jsonl")" = "$before" ]
+  plant_ruled_conversion
+  reopen_dr1
+  before="$(cksum < "$REC/decisions.jsonl")"
+  run "$CR" decision affirm --program demo --id DR-1 --because x --receipt y
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"status 'reopened'; affirm keeps a ruled or carried decision"* ]] || false
+  [ "$(cksum < "$REC/decisions.jsonl")" = "$before" ]
+  [ "$(pkt "$pkb" '["status"]')" = "open" ]
+}
+
+@test "step 2 supersedes an overdue class-C packet on an already carried decision: no class B, no descope" {
+  old="$(file_c)"
+  run "$G" sweep --program demo
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"superseded $old on DR-1"* ]] || false
+  [ "$(pkt "$old" '["status"]')" = "actioned" ]
+  [ "$(pkt "$old" '["evidence"]')" = "decision already carried; packet superseded" ]
+  [ "$(n_packets)" = 1 ]
+  [ "$(dec 'd["packet"]["id"], d.get("descoped_waves"), d.get("converted_from")')" = "$old None None" ]
 }
