@@ -13,11 +13,13 @@
       decisions that are closed, at most cc-decide's ask ceiling, with the derivation as the receipt.
   gate.sh sweep --program P
       1. a class-B packet cc-decide has expired-actioned applies its default to the decision record,
-         unless the operator SIGNED a veto for that decision (cc-signoff research:<P>/veto/<D>);
+         unless the decision was answered (rule, carry, reopen) after step 2 converted it, or
+         the operator SIGNED a veto for that decision (cc-signoff research:<P>/veto/<D>);
          a cc-decide veto with no valid signature is UNSIGNED and fails the sweep (cc-decide has no
          agent guard, so only a signed veto counts);
       2. a class-C decision past its due date converts: a class-B replacement whose default is the
-         reversible option is opened, the old packet is actioned, and the dependent waves are descoped;
+         reversible option is opened, the old packet is actioned, and the dependent waves are descoped
+         (until `cc-research decision rule|carry|reopen` answers it: lib/cli_records.answer_conversion);
       3. a frame-omission known row past its re-sign due date with no newer frame signature applies its
          default (descope, or class-B packets for the omitted rows) and closes, so --requires-gate
          stops refusing without a reopen;
@@ -291,6 +293,26 @@ def reversible_option(d: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def answered_after_conversion(ctx: Any, did: str, pid: str) -> Optional[str]:
+    """The ts of the first rule, carry or reopen event on `did` appended after step 2 converted it
+    to class-B packet `pid`, else None. Such an answer outranks the packet's default (RECORDS.md
+    "An answer after a sweep conversion"), even when the verb could not close the packet."""
+    converted, answered = False, None
+    for ev in ctx.jsonl("decisions.jsonl"):
+        if ev.get("id") != did:
+            continue
+        if ev.get("converted_from") and (ev.get("packet") or {}).get("id") == pid:
+            converted = True
+        elif (
+            converted
+            and answered is None
+            and ev.get("status") in ("ruled", "carried", "reopened")
+            and ev.get("ruled_by") != "packet-default"
+        ):
+            answered = str(ev.get("ts") or "?")
+    return answered
+
+
 def cmd_sweep(a: argparse.Namespace) -> int:
     import operator_sign
     from gate import make_ctx
@@ -321,6 +343,12 @@ def cmd_sweep(a: argparse.Namespace) -> int:
             and p.get("status") == "expired-actioned"
             and d.get("status") != "ruled"
         ):
+            answered = answered_after_conversion(ctx, did, p["id"])
+            if answered:
+                print(
+                    f"default of {p['id']} not applied: {did} answered at {answered} after conversion"
+                )
+                continue
             if signed_veto:
                 print(f"vetoed-by-operator {did}: default of {p['id']} not applied")
                 if not d.get("vetoed_by_operator"):

@@ -517,6 +517,50 @@ def decision_tally(a: argparse.Namespace) -> int:
     return 0
 
 
+def answer_conversion(r: Path, did: str, verb: str, who: str) -> Dict[str, Any]:
+    """An answer to a decision `gate.sh sweep` converted (class C past due -> class B on its
+    reversible option, waves descoped) restores those waves and closes the class-B packet, whose
+    default would otherwise fire over the answer at its deadline. Returns the fields the verb's event
+    adds. Raises, so the verb appends nothing, when cc-decide cannot be read or refuses the action."""
+    conv: Optional[Dict[str, Any]] = None
+    for ev in kit.read_jsonl(r / "decisions.jsonl"):
+        if ev.get("id") == did and ev.get("converted_from"):
+            conv = ev
+    if conv is None:
+        return {}
+    import gate_sweep
+
+    pid = str((conv.get("packet") or {}).get("id") or "")
+    try:
+        p = gate_sweep.packets().get(pid)
+    except (kit.KitError, OSError, ValueError) as e:
+        raise kit.KitError(
+            f"{did}: cannot read converted packet {pid} ({e}); nothing recorded, since its "
+            "default would fire over this answer"
+        )
+    if p and p.get("status") == "open":
+        rc, _, err = gate_sweep.cc_decide(
+            "action",
+            pid,
+            "--evidence",
+            f"answered by {verb} --by {who} {kit.now_iso()}",
+        )
+        if rc != 0:
+            raise kit.KitError(
+                f"{did}: cc-decide action {pid} refused ({err}); nothing recorded, since its "
+                "default would fire over this answer"
+            )
+        print(f"{did}: closed converted class-B packet {pid} (answered by {verb})")
+    waves = decision_get(r, did).get("descoped_waves") or []
+    if not waves:
+        return {}
+    print(
+        f"{did}: restored waves {', '.join(waves)} "
+        f"(descoped when the sweep converted {conv['converted_from']})"
+    )
+    return {"descoped_waves": [], "restored_waves": waves}
+
+
 def decision_rule(a: argparse.Namespace) -> int:
     r = recs(a)
     d = decision_get(r, a.id)
@@ -544,6 +588,7 @@ def decision_rule(a: argparse.Namespace) -> int:
         "receipt": a.receipt,
         "revisit_trigger": a.revisit_trigger,
     }
+    row.update(answer_conversion(r, a.id, "decision rule", "agent"))
     kit.append_jsonl(
         r / "decisions.jsonl", {k: v for k, v in row.items() if v is not None}
     )
@@ -574,6 +619,7 @@ def rule_by_operator(
             "chosen": a.chosen,
             "receipt": a.receipt,
             "revisit_trigger": a.revisit_trigger,
+            **answer_conversion(r, a.id, "decision rule", "operator"),
         },
     )
     print(f"{a.id}: ruled {a.chosen} by operator (derived {c}%)")
@@ -616,6 +662,7 @@ def decision_reopen(a: argparse.Namespace) -> int:
             "reopen_receipt": a.receipt,
             "reopened_at": kit.now_iso(),
             "reopens": used + 1,
+            **answer_conversion(r, a.id, "decision reopen", "operator"),
         },
     )
     print(f"{a.id}: reopened by operator ({used + 1} of {cap})")
@@ -682,6 +729,7 @@ def decision_carry(a: argparse.Namespace) -> int:
     if st != "carried":
         # the earlier ruling is withdrawn, so the fold must not keep reading it as the choice
         row.update(chosen=None, ruled_by=None)
+    row.update(answer_conversion(r, a.id, "decision carry", "operator"))
     kit.append_jsonl(r / "decisions.jsonl", row)
     how = (
         "on its class-C packet"

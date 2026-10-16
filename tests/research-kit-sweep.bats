@@ -26,6 +26,7 @@ setup() {
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   G="$REPO/scripts/research-kit/gate.sh"
   D="$REPO/bin/cc-decide"
+  CR="$REPO/bin/cc-research"
   export W="$BATS_FILE_TMPDIR/w"
   export CC_RESEARCH_HOME="$W/home" CC_RESEARCH_REGISTRY="$W/home/programs.json"
   CC_NOW="$(cat "$BATS_FILE_TMPDIR/now")"
@@ -257,4 +258,119 @@ budget_pkt() { /usr/bin/python3 -c "import json; print((json.load(open('$REC/bud
   [ "$status" -eq 0 ]
   id="$(tail -n 1 "$REC/known_rows.jsonl" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["packets"][0])')"
   [ "$(pkt "$id" '["default_effect"]')" = "no-change" ]
+}
+
+# ── an answer after a sweep conversion (RECORDS.md "An answer after a sweep conversion") ─────────
+# RED-proof (2026-10-16): on ef35bed4e the decision verbs left `descoped_waves` in place and the
+# converted class-B packet open, so `requires` refused the wave, the stub saw no `action`, and step 1
+# ruled the answered decision by its default. The never-converted CONTROL passes on both.
+
+certify() {
+  /usr/bin/python3 -c "
+import json, os
+rec, reg = '$REC', '$CC_RESEARCH_REGISTRY'
+os.makedirs(os.path.join(rec, 'cert'), exist_ok=True)
+rows = {str(n): 'PASS' for n in range(1, 18)}
+json.dump({'cert': 'CERT-v1', 'program': 'demo', 'version': 1, 'rows': rows},
+          open(os.path.join(rec, 'cert', 'CERT-v1.json'), 'w'))
+d = json.load(open(reg))
+for p in d['programs']:
+    if p['slug'] == 'demo':
+        p['state'] = 'certified'
+json.dump(d, open(reg, 'w'))"
+}
+convert() {
+  file_c >/dev/null
+  "$G" sweep --program demo >/dev/null
+  [ "$(dec 'd["descoped_waves"]')" = "['B1']" ]
+}
+set_file() {
+  printf '%s\n' '{"members":[{"label":"a","feasibility_probe":"P-1"},{"label":"b","feasibility_probe":"P-2"}],"narrowing_probe":{"wave":"B1","owner":"lead","due":"2099-01-01T00:00:00Z"},"revision_budget_h":4}' \
+    > "$BATS_TEST_TMPDIR/set.json"
+  echo "$BATS_TEST_TMPDIR/set.json"
+}
+# stub_decide <list-json|FAIL>: the kit's cc-decide seam pointed at a stub that logs its argv
+stub_decide() {
+  export CC_RESEARCH_CC_DECIDE="$BATS_TEST_TMPDIR/cc-decide-stub"
+  export STUB_LOG="$BATS_TEST_TMPDIR/stub.log" STUB_LIST="$BATS_TEST_TMPDIR/stub-list"
+  printf '%s\n' "$1" > "$STUB_LIST"
+  printf '%s\n' '#!/bin/bash' \
+    'printf "%s\n" "$*" >> "$STUB_LOG"' \
+    '[ "$1" = list ] || exit 0' \
+    'grep -qx FAIL "$STUB_LIST" && { echo "cc-decide: store unreadable" >&2; exit 1; }' \
+    'cat "$STUB_LIST"' > "$CC_RESEARCH_CC_DECIDE"
+}
+
+@test "a ruling after a sweep conversion restores its waves, closes the class-B packet, and requires admits the wave" {
+  printf '{"id":"DR-1","status":"reopened","reopened_by":"operator"}\n' >> "$REC/decisions.jsonl"
+  convert
+  new="$(dec 'd["packet"]["id"]')"
+  certify
+  run "$G" requires --program demo --wave B1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"DR-1: descoped wave B1"* ]] || false
+  run "$CR" decision rule --program demo --id DR-1 --chosen retry --by operator \
+    --receipt "operator: retry" --revisit-trigger "a retry storm"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"DR-1: restored waves B1"* ]] || false
+  [ "$(last_dec restored_waves)" = "['B1']" ]
+  [ "$(dec 'd["descoped_waves"]')" = "[]" ]
+  [ "$(pkt "$new" '["status"]')" = "actioned" ]
+  run "$G" requires --program demo --wave B1
+  [ "$status" -eq 0 ]
+}
+
+@test "a carry after a sweep conversion restores its waves, and requires admits the wave owning the set's narrowing probe" {
+  convert
+  certify
+  run "$CR" decision carry --program demo --id DR-1 --because "converted by the sweep" \
+    --receipt "operator: carry it" --set "$(set_file)"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"DR-1: restored waves B1"* ]] || false
+  [ "$(dec 'd["descoped_waves"]')" = "[]" ]
+  run "$G" requires --program demo --wave B1
+  [ "$status" -eq 0 ]
+}
+
+@test "the verb actions the converted packet in cc-decide, and with cc-decide unreachable refuses and appends nothing (hermetic stub)" {
+  printf '{"id":"DR-1","packet":{"id":"pkB","class":"B","due":"2099-01-01T00:00:00Z"},"converted_from":"pkC","descoped_waves":["B1"]}\n' \
+    >> "$REC/decisions.jsonl"
+  stub_decide FAIL
+  before="$(cksum < "$REC/decisions.jsonl")"
+  run env PATH=/usr/bin:/bin "$CR" decision carry --program demo --id DR-1 --because x \
+    --receipt "operator: carry" --set "$(set_file)"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"nothing recorded"* ]] || false
+  [ "$(cksum < "$REC/decisions.jsonl")" = "$before" ]
+  stub_decide '[{"id":"pkB","class":"B","status":"open"}]'
+  run env PATH=/usr/bin:/bin "$CR" decision carry --program demo --id DR-1 --because x \
+    --receipt "operator: carry" --set "$(set_file)"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"closed converted class-B packet pkB"* ]] || false
+  grep -q '^action pkB --evidence answered by decision carry --by operator 20' "$STUB_LOG"
+}
+
+@test "sweep step 1 does not apply a fired default whose decision was answered after the conversion" {
+  convert
+  new="$(dec 'd["packet"]["id"]')"
+  # an answer whose verb did not close the packet, so cc-decide still fires its default
+  printf '{"id":"DR-1","status":"carried","carried_by":"operator","ts":"%s"}\n' "$CC_NOW" >> "$REC/decisions.jsonl"
+  CC_NOW="$(date -u -v+100H +%Y-%m-%dT%H:%M:%SZ)" /bin/bash "$D" expire-sweep >/dev/null
+  [ "$(pkt "$new" '["status"]')" = "expired-actioned" ]
+  run "$G" sweep --program demo
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"default of $new not applied: DR-1 answered at $CC_NOW after conversion"* ]] || false
+  [ "$(dec 'd["status"], d.get("ruled_by")')" = "carried agent" ]
+  ! grep -q packet-default "$REC/decisions.jsonl"
+}
+
+@test "CONTROL: an answer to a decision the sweep never converted writes no wave fields and never calls cc-decide" {
+  printf '{"id":"DR-1","status":"reopened","reopened_by":"operator"}\n' >> "$REC/decisions.jsonl"
+  stub_decide FAIL
+  run env PATH=/usr/bin:/bin "$CR" decision rule --program demo --id DR-1 --chosen retry --by operator \
+    --receipt "operator: retry" --revisit-trigger t
+  [ "$status" -eq 0 ]
+  [ ! -e "$STUB_LOG" ]
+  [ "$(last_dec descoped_waves)" = "None" ]
+  [ "$(last_dec restored_waves)" = "None" ]
 }

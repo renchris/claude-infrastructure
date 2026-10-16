@@ -157,7 +157,8 @@ failed, 2 usage or refusal, 3 a dead vendor lane, 4 a voided slot. Python is 3.9
   passed as `--revisit-trigger`), or when its `--option` labels are not exactly the decision's `options` labels (none
   invented, none dropped). `--revisit-trigger` is written onto the decision with the `packet` field. When `sweep`
   applies a fired class-B default, the `ruled_by: packet-default` line carries the decision's `revisit_trigger`, as
-  `cc-research decision rule` does, so gate row 5 passes the ruled reversible row.
+  `cc-research decision rule` does, so gate row 5 passes the ruled reversible row. A decision the sweep converted and
+  the operator then answered gets its waves back and no default ("An answer after a sweep conversion", below).
 - `gate.sh requires --program P [--wave W] [--json]` (`lib/gate_requires.py`) → exit 0 the build wave may fire, 1
   refused with each reason, 2 the program cannot be read. Reads the newest certificate and the LIVE decision and
   known-row records (the sweep and the frame-delta cycle clear blocks after the certificate). The reader behind
@@ -539,3 +540,16 @@ descoped dated at or after the refutation. For a carried decision whose set stil
   `ruled_by`.
 - No gate row changed its verdict for this verb: row 4 already counted a `carried` event, and row 5 reads the set as
   before.
+
+### An answer after a sweep conversion (added 2026-10-16)
+
+When `gate.sh sweep` step 2 has converted a decision (an overdue class-C packet replaced by a class-B one on the
+reversible option, the event carrying `converted_from` and `descoped_waves`), `decision rule` (either `--by`),
+`decision carry` and `decision reopen` answer it (`cli_records.answer_conversion`). The verb first actions the converted
+class-B packet in cc-decide if it is still open (evidence `answered by <verb> --by <who> <ts>`), so its default can never
+fire over the answer, and refuses with nothing appended when cc-decide cannot be read or refuses. If the fold's
+`descoped_waves` is non-empty, its event also writes `descoped_waves: []` and `restored_waves: [<the waves>]` and the
+verb prints the waves it restored, so `gate.sh requires` stops refusing them as descoped (the decision's own status
+still governs them). A decision the sweep never converted gets neither field and no cc-decide call. Defense in depth:
+sweep step 1 does not apply an expired class-B default when a rule, carry or reopen event follows that packet's
+conversion event, and prints `default of <pkt> not applied: <D> answered at <ts> after conversion`.

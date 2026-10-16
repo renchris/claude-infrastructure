@@ -281,7 +281,8 @@ Build waves fire only through `scripts/handoff-fire.sh --requires-gate <slug> --
 "Carried rows at build time"). It refuses before any side effect while the registry is not `certified`,
 the newest certificate has a FAIL row, a reopen is signed after it, or the wave's closure holds an
 unresolved class-C row, a carried set it does not own the narrowing probe of, an open frame-omission
-known row, or a wave the sweep descoped. `gate.sh requires --program <slug> --wave <W>` prints the same
+known row, or a wave the sweep descoped (answering the converted decision with `cc-research decision
+rule|carry|reopen` restores its waves and closes its class-B packet). `gate.sh requires --program <slug> --wave <W>` prints the same
 verdict without firing. An admitted fire carries the `--requires-gate` work-order marker in its brief.
 
 ## Stage 9 — certify the built artifact (§11, method v1.2)
