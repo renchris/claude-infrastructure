@@ -207,11 +207,19 @@ def brief(slug: str, name: str, role: str, item: Dict[str, Any]) -> Path:
     return bf
 
 
-def item(h: Dict[str, Any]) -> Dict[str, Any]:
+def item(h: Dict[str, Any], plan: Path) -> Dict[str, Any]:
+    """The find as the briefs carry it. Its path is the plan's in the bundle (courier.sh bundle copies
+    the plan to the bundle's root under its file name, as a certification round's items cite it), never
+    the path the raise recorded: that is the operator's absolute path, which a sandboxed rater (agy) is
+    denied, and then it replies empty. The raise record keeps it, as provenance."""
     loc = h.get("locus") or {}
     return {
         "fid": FID,
-        "locus": {k: loc.get(k) for k in ("path", "lines", "quote")},
+        "locus": {
+            "path": plan.name,
+            "lines": loc.get("lines"),
+            "quote": loc.get("quote"),
+        },
         "claim": h.get("claim"),
         "names": h.get("names") or [],
     }
@@ -330,7 +338,7 @@ def cmd_verify(a: argparse.Namespace) -> int:
     pid = f"{a.hole}-verifier"
     run_courier(
         a.program,
-        [(pid, a.vendor, "verifier", brief(a.program, pid, "verifier", item(h)))],
+        [(pid, a.vendor, "verifier", brief(a.program, pid, "verifier", item(h, plan)))],
     )
     why = lost(a.program, pid, {})
     v = (
@@ -436,7 +444,7 @@ def cmd_rate(a: argparse.Namespace) -> int:
     todo = [k for k in sorted(by_slot) if read(k)[1] is None]
     if todo:
         it = dict(
-            item(h),
+            item(h, plan),
             verification={
                 "read": ver.get("read"),
                 "consequence": ver.get("consequence"),

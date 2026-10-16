@@ -155,6 +155,29 @@ evidence() { mkdir -p "$REC/evidence"; printf '%s\n' "$2" > "$REC/evidence/$1"; 
   [ ! -e "$REC/rounds/rehearsal/matrix.json" ]
 }
 
+# RED-proof: item() copied the raise's locus.path verbatim, so a find raised with the operator's absolute
+# path sent the raters a path outside the bundle; agy's sandbox denied the read and it replied empty (dead).
+@test "rehearsal-verify and rehearsal-rate: the briefs cite the plan by its path in the bundle, never the absolute path the raise recorded" {
+  stopped
+  run "$R" rehearsal-raise --program demo --frame "deployed and live" --path "$REC/PLAN.md" --lines 3 \
+    --quote "retries three times with no backoff" --claim "no backoff: a retry storm"
+  [ "$status" -eq 0 ]
+  # the raise record keeps the absolute path as provenance
+  [ "$(hole H-RH-1 'h["locus"]["path"]')" = "$REC/PLAN.md" ]
+  FAKE_REPLY_ANTHROPIC="$VERDICT" run "$R" rehearsal-verify --program demo --hole H-RH-1 --vendor anthropic
+  [ "$status" -eq 0 ]
+  FAKE_REPLY_OPENAI="$(rating M '"b"')" FAKE_REPLY_GOOGLE="$(rating M '"c"')" FAKE_REPLY_ANTHROPIC="$(rating R null)" \
+    run "$R" rehearsal-rate --program demo --hole H-RH-1
+  [ "$status" -eq 0 ]
+  [ -f "$CC_RESEARCH_HOME/demo/rounds/rehearsal/bundle/PLAN.md" ]
+  local bf
+  for bf in "$REC/rounds/rehearsal/briefs/H-RH-1-verifier.txt" "$REC/rounds/rehearsal/briefs/H-RH-1-rater.txt"; do
+    # the item is the brief's last json block (the frozen verifier brief has a "path": "PLAN.md" example of its own)
+    [ "$(/usr/bin/python3 -c 'import json,sys; print(json.loads(open(sys.argv[1]).read().rsplit("```json", 1)[1].split("```")[0])["locus"]["path"])' "$bf")" = "PLAN.md" ]
+    ! grep -qF "$REC" "$bf" || false
+  done
+}
+
 @test "rehearsal-rate: below two material calls the level is the median call; a lost rater records nothing and its re-run runs only that rater" {
   verified
   FAKE_FAIL_GOOGLE=1 FAKE_REPLY_OPENAI="$(rating M '"b"')" FAKE_REPLY_ANTHROPIC="$(rating C null)" \
