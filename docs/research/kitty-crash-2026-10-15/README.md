@@ -2,17 +2,25 @@
 
 Status: investigation complete (workflow `wf_496e7f13-644`, 6 angles + synthesis + adversarial skeptic); fix NOT yet implemented.
 Status (2026-10-16): both kitty defects reported upstream (kovidgoyal/kitty#10671, #10672); the staged patched build now leaves fullscreen before every destroy (14/14 patched, 8/8 unpatched control closed in fullscreen) and fixes `action --match`; swap armed for the next capacity-alarm reboot — see § "Kitty patch and upstream reports".
+  - CORRECTED (2026-10-16): the control is 7 trials; "8/8" counts the first run, which errored and was re-run. 14/14 shows the ordering changed, not that the crash is fixed. #10672 is fixed upstream (0ea80af638); #10671 was closed after 7e88f51ed7, which is in no release as of v0.49.2. A fourth patch backports both. See § "Corrections after upstream review (2026-10-16)".
+
 Status (2026-10-15, phase 2): the guard and every caller landed at `fb3edd4ff` and are live (converged; `~/.claude/bin/kitty-fullscreen-guard` linked); post-land repro (10:37, unlocked screen) 21 trials, 0 crashed, every trial left fullscreen before close — see § "Phase 2 landed".
+  - CORRECTED (2026-10-16): 0 crashed has no power against a base rate of 0 crashes in 39 unguarded closes; the 21 trials show the ordering, not a fix. See § "Corrections after upstream review (2026-10-16)", R4.
+
 Status (2026-10-15, phase 1): precondition reproduced (32/32 unguarded fullscreen destroys close the window while still in fullscreen; the segfault itself 0/32); fix chosen and corrected by a 4-lens adversarial review — see § "Repro and chosen fix" at the end. Phase 2 implements it.
+  - CORRECTED (2026-10-16): the 32/32 ordering is AppKit's normal close-from-fullscreen sequence, not a hazardous precondition. See § "Corrections after upstream review (2026-10-16)", R1.
+
 Evidence copies (outside the repo, survive the /tmp boot wipe): `~/.claude/autonomy/incidents/kitty-crash-2026-10-15/`
 (`.ips`, `unilog-0127.txt` = unified log 23:58–00:02:30, `log.txt` = kitty-script log, `cocoa_window_v0.48.2.m`, `hb.kitty-ls.json`, `workflow-raw-findings.json`).
 
 ## Verdict (lead's reading of synthesis + skeptic)
 
 - kitty 0.48.2 (pid 64211, one process holding every pane) segfaulted in AppKit while freeing a native-fullscreen NSWindow whose last pane had just been removed: `_NSExitFullScreenTransitionController dealloc → NSWindow dealloc → _removeForwardedObserver → objc_retain` on a dead object (registers point at AppKit's NSCGSWindow proxy).
+  - CORRECTED (2026-10-16): which NSWindow was freed (kitty's or the NSToolbarFullScreenWindow) is undetermined on 15.7.9. See § "Corrections after upstream review (2026-10-16)", S2.
 - Trigger (~75-85%): the operator's right-click pane menu (`bin/kitty-pane-menu`), choice "Move to <other window>" (`detach-window --target-tab`) on the LAST pane of a native-fullscreen OS window. Pick at 00:01:27.124, window ordered out .462, crash .587. No autonomous script acted.
 - Co-factor (~40%, untested): the window was destroyed 5–15 ms after kitty was re-activated by the menu helper app quitting. A close while kitty is idle and active may not crash; this would explain one crash in ~2 weeks of fullscreen layouts.
 - `_glfwPlatformDestroyWindow` never exits fullscreen or checks `in_fullscreen_transition`, and does a zero-size `setFrame` on every macOS version (`cocoa_window_v0.48.2.m:2543-2583`). Unchanged on master, so upgrading to 0.49.x is not expected to fix it.
+  - CORRECTED (2026-10-16): true as code, but not a defect: `-close` starts the exit transition itself. The zero-size `setFrame` may have contributed but was not sufficient. Master changed on 2026-10-16 (7e88f51ed7 skips the zero frame on fullscreen windows), but no release carries it as of v0.49.2. See § "Corrections after upstream review (2026-10-16)", R2, S5 and S8.
 - Relaunch at 00:01:28 came from our own menu's `refocus()` (`osascript … activate` on a dead kitty), not a watchdog.
 - 18 sessions died of SIGHUP (close-records `sig_reached_wrapper=HUP`), 05:01:34–36Z.
 
@@ -22,6 +30,11 @@ Evidence copies (outside the repo, survive the /tmp boot wipe): `~/.claude/auton
 - "1b1eb844 surviving until the SIGHUP proves it was moved." `ended_at` measures claude's 4–9 s shutdown lag.
 - "Fix #1: toggle fullscreen off, wait, then act." Toggling off STARTS the very exit transition whose controller is in the crash stack; fullscreen read-back is unreliable on this Mac (`docs/research/session-durability-2026-10.md:72`) and load is ~70.
   - CORRECTED (2026-10-15, phase 1 repro): refuted as written (a fixed wait, a blind read-back), adopted in a corrected form. The CGS Space type reads native fullscreen reliably for a window at rest, and a deliberate toggle-off runs its exit transition on a LIVE window. The guard therefore waits for a stable windowed read longer than any transition, and only then acts. See § "Repro and chosen fix".
+- "Closing a native-fullscreen window while still in fullscreen is the crash's precondition." CORRECTED (2026-10-16): it is AppKit's normal close-from-fullscreen sequence, seen in every non-crashing close. See § "Corrections after upstream review (2026-10-16)", R1.
+- "`_glfwPlatformDestroyWindow` not exiting fullscreen is a kitty defect." CORRECTED (2026-10-16): `-close` starts the exit itself. See R2 there.
+- "The window was freed before the transition controller released it." CORRECTED (2026-10-16): AppKit retains it across the exit transition. See R3 there.
+- "Left fullscreen first in every patched and post-land trial, so the crash is fixed." CORRECTED (2026-10-16): with 0 crashes in 39 unguarded closes, those trials show only the changed ordering. See R4 there.
+- "The freed window was kitty's GLFWWindow." CORRECTED (2026-10-16): undetermined on 15.7.9, because neither candidate class overrides `-dealloc`. See S2 there.
 
 ## Fix candidates, after the skeptic
 
@@ -259,6 +272,7 @@ Evidence: `~/Library/Logs/DiagnosticReports/kitty-2026-10-15-000214.ips`, `/tmp/
 # Repro and chosen fix (2026-10-15, phase 1)
 
 **Result.** Destroying a native-fullscreen kitty window by any path closes the window while it is still in fullscreen: AppKit's fullscreen teardown (the toolbar window's removal) runs after the window has closed. This held in 32 of 32 unguarded trials, through move, close-window and child exit, and in the same order as the incident. The segfault itself did not reproduce: 0 of 32, and 0 of 8 under NSZombieEnabled + MallocScribble. A guard that leaves fullscreen, waits until the window is stably windowed, and only then acts removes the precondition. The fix is that guard, placed at every chokepoint our tools own. An adversarial review (4 lenses, below) found three defects in the first guard design, and they are corrected in the spec here.
+- CORRECTED (2026-10-16): "closes the window while it is still in fullscreen" is AppKit's normal close-from-fullscreen sequence, so the guard removes an ordering, not a proven hazard. Its protection is an argument, not a measurement. See § "Corrections after upstream review (2026-10-16)", R1 and S7.
 
 ## How it was run
 
@@ -314,6 +328,7 @@ Totals:
 ## What the repro settles, and what it does not
 
 1. **The precondition is deterministic and path-independent.** Every destroy of a native-fullscreen window closes the window while AppKit still holds it in fullscreen. The crash stack is in exactly that state: `_NSExitFullScreenTransitionController dealloc` drops the last reference to a window that has already closed. Move, close-window and child exit behave identically, so guarding the menu's move alone would leave two thirds of the trigger class open.
+   - CORRECTED (2026-10-16): deterministic and path-independent, yes, but it is AppKit's normal close-from-fullscreen sequence, not a hazardous precondition. "Already closed" does not mean freed: AppKit retains the window across the exit transition. Which window the controller released (kitty's or the toolbar window) is undetermined on 15.7.9. See § "Corrections after upstream review (2026-10-16)", R1, R3 and S2.
 2. **The repro did not reach the crash phase. It shows the precondition, not the fault.**
    - The kitty-side sequence differs from the incident in two ways. In every repro close, an `_NSFullScreenMouseDetectionWindow` closes 5–17 ms after the window; the incident has none. In the incident, kitty also reordered its other fullscreen window a87e relative to 8471 in the same millisecond, which happened in 0 of 32 repro closes.
    - WindowServer kept the incident's 33905 past its close (still not removed at the crash). Its SkyBridge log never recorded the repro windows, so that hold cannot be compared.
@@ -335,6 +350,8 @@ Totals:
 | The crash is a race; the helper co-factor is not needed | WEAKENED; "not needed" REFUTED | Restated as "untested". The co-factor arms are listed in point 3. |
 | Guard: toggle, poll until not 4, settle 1 s, act | WEAKENED | Wrong target (`action --match` ignored), an early signal (Space type flips before the transition ends), and it fails open (an unknown read counts as windowed). All three are corrected below. |
 | Placement: menu, confirm-close, it2 close, runners | WEAKENED | Must be the LAST gate before the destroy. The autonomous closers' 8–10 s outer timeouts cannot fit a toggle and wait. Native kitty bindings, ⌃⇧Q, `lr-fleet.sh:2109`, `cc-pane-close`'s SIGHUP fallback and typed `exit` / Ctrl-D were uncovered. |
+
+Note (2026-10-16) on the first row ("Unguarded destroys always close in fullscreen"): CORRECTED. The measurement holds, but it is AppKit's normal close-from-fullscreen sequence, not a precondition kitty creates. See § "Corrections after upstream review (2026-10-16)", R1.
 
 ## Chosen fix (implemented in phase 2)
 
@@ -452,6 +469,7 @@ The harness's own quit also left fullscreen first once `quit_kitty` targeted wit
 Post-land (03:28, landed code): **not measurable — the screen was locked** (`CGSSessionScreenIsLocked = 1` since 02:43). On a locked screen `toggle_fullscreen` does not take and every window reads offscreen, so all 14 trials ran with A windowed (`fs=0`). What that run does show: 0 crashes, and the guard refused every last-pane trial `refused-unknown` (fail-closed when it cannot read the state). `repro/post-land.sh` runs the full post-land matrix with the review's arms (unfocused / background-Space target, a second display, a destroy during AppKit's automatic fullscreen of a new window, probe rows timestamped, load per trial, `.ips` restricted to the throwaway's pid) and prints the table; it refuses with exit 3 while the screen is locked.
 
 Post-land (10:37–10:40, landed code `fb3edd4ff`, screen unlocked, load 10–14; `repro/post-land.sh` as committed): **21 trials, 0 crashed; every trial left fullscreen before A closed.** The two `unfocus` cells are the guard refusing (rc 3) after focus moved off the target during the wait: A left fullscreen and was **not** closed, which is the fail-closed outcome. The live kitty (pid 44163) was untouched (same pid, uptime unbroken).
+- CORRECTED (2026-10-16): these 21 trials show the guard changes the ordering, not that it prevents the crash. Unguarded closes crashed 0 times in 39, so 0 crashes here carries no power. The table below has no background-Space cell. See § "Corrections after upstream review (2026-10-16)", R4.
 
 | Cell (action/ctx/delay/post/panes) | Display | Trials | Crashed | A fullscreen before | Guard rc | Close order of A |
 |---|---|---|---|---|---|---|
@@ -475,21 +493,25 @@ Refocus (landed menu, real osascript, 03:34): from a process reparented to launc
 - The `ask` choosers (⌘⇧O, ⌘⌥⇧O) are asynchronous: the guard leaves fullscreen before the chooser opens, so a cancelled chooser leaves the window windowed, and the move itself happens in kitty's callback after the guard returned. Closing it needs the kitty patch (decision `a41897063971`).
 - `lead-crash-watchdog.sh`: a deliberate ⌘Q / kitty restart HUPs every pane at once and reads `terminal-died`; any `kitty-*.ips` within 6 min corroborates, including a throwaway repro kitty's.
 - `scripts/handoff-fire.sh` `hf_close_pane` discards it2's stderr, so a deliberate fullscreen refusal looks like a transient failure to its retry loop.
+  - CORRECTED (2026-10-16): fixed. `it2-kitty` now exits 70 on a `refused-fs` verdict and `hf_close_pane` stops retrying on it. See § "What changed in the tooling (2026-10-16)", Close path.
 - The converge's `install.sh` pass did not create the new `bin/kitty-fullscreen-guard` link (it silences `kitty-setup.sh`); running `scripts/kitty-setup.sh` from the canonical tree did. A brand-new `bin/kitty-*` file needs that until the install pass is fixed.
 
 # Kitty patch and upstream reports (2026-10-16)
 
 **Result.** Both kitty defects are reported upstream, the staged patched build now carries a fix for both, and its swap is armed for the next capacity-alarm reboot. This carries out the operator's 2026-10-16 rulings: decision `a41897063971` ("Report both and patch the staged build") and decision `0a8ffe58562a` ("patched"). Standing authorization for the reports: memory `feedback-file-upstream-bug-reports-proactively`. Patched, every destroy path left fullscreen before the window closed: 14 of 14 trials, 0 crashes. The unpatched control closed in fullscreen 8 of 8 times. The live kitty (pid 44163) and `/Applications/kitty.app` were not touched.
+- CORRECTED (2026-10-16): the control is 7 trials; "8 of 8" counts the first run, which errored and was re-run. The 14 of 14 shows the ordering changed, not that the crash is fixed (0 crashes in 39 unguarded closes is the base rate). See § "Corrections after upstream review (2026-10-16)", R1 and R4.
 
 ## Upstream reports
 
 - **Bug 1 (fullscreen destroy):** [kovidgoyal/kitty#10671](https://github.com/kovidgoyal/kitty/issues/10671), a new issue. The searches (issues, plus discussions over GraphQL) found only #1761, a 2019 crash after closing the last fullscreen window with a different stack and no fix. The report carries the crash stack from the `.ips` and a `--config NONE` repro. That repro was run verbatim against the unpatched and patched builds before posting (`finishing close` +20 ms before the toolbar teardown unpatched, 0.9 s after it patched).
+  - CORRECTED (2026-10-16): the +20 ms ordering the report presents as the defect is AppKit's normal close-from-fullscreen sequence (maintainer's trace). The report's body lines 3, 41 and 74 rest on that reading. #10671 was closed after upstream 7e88f51ed7, which is in no release as of v0.49.2; the maintainer declined a deferred close. See § "Corrections after upstream review (2026-10-16)", R1 and S8.
 - **Bug 2 (`action --match`):** [kovidgoyal/kitty#10672](https://github.com/kovidgoyal/kitty/issues/10672), a new issue citing #7438. #7438 (closed 2024-05-17) reported the same symptom. Its fix, `eb2221b`, routed actions through `window_for_dispatch`, but the key mismatch has been there since `action` was added (2024-02-10) and is still on master. So `window_for_dispatch` is always the active window, and a new report is clearer than a comment on a closed issue. Verified on 0.48.2 before posting: `--match id:1` retitled the active window 2, and `--match id:999` did too, at rc 0.
 - Scrubbed before posting: no local paths, session titles, account or client names. No pull request was opened.
 
 ## The patch
 
 `docs/patches/kitty-fullscreen-destroy-v0.48.2.patch` is the third patch `scripts/kitty-build-swap.sh build --no-band` applies, after the upstream-defects and talk-thread patches. All three apply cleanly to pristine v0.48.2, checked with `git apply --cached --check` against a scratch index.
+- CORRECTED (2026-10-16): there are now four patches; the fourth, `kitty-upstream-backport-v0.48.2.patch`, applies after this one. See § "What changed in the tooling (2026-10-16)", Patch 4.
 
 - **`glfw/cocoa_window.m` `_glfwPlatformDestroyWindow`:** when the window is in native fullscreen or mid-transition, it tears down the GLFW side as before, but does not order the NSWindow out or close it. A new `GLFWDeferredClose` delegate takes it over:
   - it retains the window, gives it a plain content view and makes it ignore the mouse;
@@ -499,9 +521,11 @@ Refocus (landed menu, real osascript, 03:34): from a process reparented to launc
 
   `canBecomeMainWindow` gains the NULL check that `canBecomeKeyWindow` already had. Traditional fullscreen is unchanged.
 - **`kitty/rc/action.py`:** a one-line change re-keys the payload, so `windows_for_match_payload` sees the client's `match_window` as `match`. With no match, the action still defaults to the active window. Patched: `--match id:1` retitles window 1, and `--match id:999` fails with "No matching windows" at rc 1.
+  - CORRECTED (2026-10-16): removed from the patch in favor of upstream's fix (0ea80af638), which patch 4 backports. See § "What changed in the tooling (2026-10-16)", Part 2 reverted.
 - **Build:** `~/ktb-noband`, the tree the 2026-10-04 restage (`35979ed78`) moved to. The band build in `~/ktb` was set aside then and does not carry this patch. Built with `make app` per `docs/research/kitty-build-recipe-2026-09-16.md`, without `./autoformat`. A local format hook rewrote all of `action.py` on edit, and the file was restored so the patch stays one line.
 - **`kitty-build-swap.sh`:**
   - `status` tags a bundle `+fullscreen-fix` when its `glfw-cocoa.so` has the class;
+    - CORRECTED (2026-10-16): `+fullscreen-fix` now also requires the `GLFWFsFixV2` marker. A bundle with only `GLFWDeferredClose` reads `+fullscreen-fix(pre-backport, rebuild)`; `build` calls it `BUILD-UNVERIFIED` and `arm` refuses it. See § "What changed in the tooling (2026-10-16)", Patch 4.
   - `build --no-band` calls a build without it `BUILD-UNVERIFIED`;
   - `arm` refuses a staged bundle without it, because the adoption chosen is of the build that carries the fix. `tests/kitty-build-swap.bats` pins all three.
 
@@ -545,8 +569,47 @@ bash ~/.claude/scripts/kitty-build-swap.sh verify --clear-marker                
 bash ~/.claude/scripts/kitty-build-swap.sh rollback --confirm /Applications/kitty.app   # the one-command undo
 ```
 
+- CORRECTED (2026-10-16): this staged bundle predates patch 4, so `status` now reads `+fullscreen-fix(pre-backport, rebuild)` instead of `+fullscreen-fix`. It needs a rebuild, re-stage and re-arm before the guard relaxes on it. See § "What changed in the tooling (2026-10-16)", Patch 4.
+
 ## Residuals
 
 - A fullscreen window on a background Space that loses its last pane now runs its exit transition there. Whether macOS switches the operator to that Space was not measured. The guard's refuse mode still keeps our autonomous closers away from that case.
 - The `ask` choosers' move (Residuals above) is covered by the patch once the swap is adopted, because the destroy happens inside kitty. Until then the guard's toggle-first path stands.
 - The band build (`~/ktb`) does not carry the patch. If the band is ever adopted, rebuild it with this patch; `arm` refuses it otherwise.
+
+# Corrections after upstream review (2026-10-16)
+
+The maintainer answered #10671 (`gh issue view 10671 -R kovidgoyal/kitty --comments`) with an AppKit trace of a normal close from fullscreen. A verifier wave and an adversarial skeptic then re-checked this README against that trace and our own logs. The measurements above stand. Several readings of them do not. Evidence for this section is outside the repo, in `~/.claude/autonomy/incidents/kitty-crash-2026-10-15/upstream-2026-10-16/` (`verifier-findings.json`, `brief-synthesis.md`, `brief-skeptic-corrections.md`).
+
+## Refuted
+
+- **R1 (90%). "Closes while still in fullscreen" is not a hazardous precondition.** Affects the phase 1 status line, the § "Repro and chosen fix" Result paragraph, point 1 of "What the repro settles", the first row of the adversarial-review table, and #10671 body lines 3, 41 and 74. It is AppKit's normal close-from-fullscreen sequence: WillClose, WillExitFullScreen, `-close` returns, the toolbar window closes, DidExitFullScreen, dealloc. The same ordering holds on 15.7.9: 32 of 32 unguarded closes at +16..+30 ms (`repro-2026-10-15/close-order-*.tsv`; the verdict rule is `close-order.py:48-56`), and the unpatched control at +19..+24 ms. That control is 7 trials (the table under "Control, the previously staged unpatched build"). The "8/8" in the 2026-10-16 status line and in the patch section's result paragraph counts the first run, which errored (no `close-os-window` rc command) and was re-run.
+- **R2 (85%). "`_glfwPlatformDestroyWindow` never exits fullscreen" is true as code but is not a defect.** Affects the Verdict's `_glfwPlatformDestroyWindow` bullet and L5 in the synthesis. `-close` starts the exit transition itself (`window-1228.log:174-179`: `.855` finishing close, `.876` toolbar window closed). L5 loses its causal role.
+- **R3 (90%). "A window that has already closed" does not mean a freed window.** AppKit retains the window across the exit transition (maintainer).
+- **R4 (85%). The "left fullscreen first" results show that the ordering changed, not that the crash is fixed.** Affects 14/14 patched (the 2026-10-16 status line and the "Patched build" table) and 21/21 post-land (the phase 2 status line and the 10:37 post-land paragraph). The base rate is 0 crashes in 39 unguarded closes (32 in the phase 1 matrix plus 7 control), so a 0-crash arm has no power.
+
+## Survives
+
+- **S1 (80%). The fault is in AppKit's own KVO bookkeeping (NSCGSWindow).** The `.ips` frames 0-11 are `objc_retain`, then `_removeForwardedObserver`, `-[NSWindow _setWindowNumber:]+412`, `_termWindowIfOwner`, `-[NSWindow dealloc]+1140`, `NSKVODeallocate`, `-[_NSExitFullScreenTransitionController dealloc]+44`. x14/x15 point to the NSCGSWindow class; x0 = 0x600000793101; FAR 0x20c6898; ESR 0x92000006. The maintainer's observationInfo dump shows only AppKit key paths.
+- **S2. Undetermined (~50%): which window was freed.** On 15.7.9 neither GLFWWindow nor NSToolbarFullScreenWindow overrides `-dealloc` (`class_copyMethodList` on NSToolbarFullScreenWindow: 67 methods, no dealloc), so frames 8-11 cannot separate them. The maintainer's subclass frame (`-[NSToolbarFullScreenWindow dealloc]`) is from macOS 27. The earlier reading, "kitty's GLFWWindow, because there is no subclass dealloc frame", is withdrawn.
+- **S3 (90%). The crash was not reproduced.** 0 of 32, 8 of which ran under Zombies and MallocScribble (`results-zombie.tsv`). The per-destroy rate is at most about 9%.
+- **S4 (80%). Only four n=1 correlates separate the crash run from normal closes, and none is shown to be causal:**
+  - the toolbar window closed +40 ms after the window (`unilog-0127.txt:465` against `:522`/`:524`), outside the normal +16..+30 ms;
+  - kitty closed no mouse-detection window (`grep -c MouseDetection unilog-0127.txt` reads 2, both from other apps; the repro's `window-1228.log:176` has one);
+  - a87e was reordered in the same millisecond (`unilog:458-459`);
+  - the main loop was stalled from `.121` to `.447`, and kitty was re-activated 5-15 ms before the close (`unilog:374`, `:417`).
+- **S5 (30-65%; the verifiers split). The zero-size `setFrame` on a fullscreen window may have contributed but was not sufficient.** Upstream 7e88f51ed7 removes it for fullscreen windows ("asking for trouble"), and 39 of 39 unguarded runs of the old code (32 phase 1 plus 7 control; the review brief's "40" counted the errored control run) did not crash.
+- **S6 (85%). The repro metric could not have shown a kitty defect.** It reads one ordering bit (`close-order.py:20-25`; `run.sh:261`, `:265`).
+- **S7 (argument, not measurement). The guard's toggle and our patch end the transition on a window kitty still retains, so the transition controller no longer drops the last reference (frame 11).** This rests on S2, which is now undetermined, so S7 is weaker than first stated.
+- **S8. Upstream status.** #10672 was fixed in 0ea80af638 (2026-10-16T07:33:15Z). #10671 was closed at 08:33:59Z, after 7e88f51ed7 at 08:32:01Z (`gh api`). 7e88f51ed7 is in no release as of v0.49.2 (2026-10-01; `compare v0.49.2...7e88f51ed7` reports ahead_by 238). The maintainer declined a deferred close.
+
+Why we keep our deferred-close patch: the earlier rationale ("7e88f51ed7 still lets the transition controller drop the last reference, frame 11") rests on S2 and no longer stands on its own. The surviving basis is that the patch turns close-from-fullscreen into exit-then-close, which is the sequence the guard already runs and the one every guarded and patched trial measured.
+
+## What changed in the tooling (2026-10-16)
+
+- **Guard relax.** `bin/kitty-fullscreen-guard` stops refusing only when the running kitty carries the `GLFWFsFixV2` marker (an empty ObjC class that only the rebuilt bundle with patch 4 has) AND the target window reads fullscreen and onscreen. The kitten reports the marker; a missing or unreadable answer enforces. The marker is not `GLFWDeferredClose`, because the bundle armed on 2026-10-16 has that class but lacks the 7e88f51ed7 hunks.
+- **Background Space stays refused.** A fullscreen window on a background Space still gets rc 3 even on the patched build, because the first bullet of the patch section's Residuals (whether macOS switches the operator to that Space) is unmeasured. It lifts after a patched-build trial pair with the target on a background Space (`repro/post-land.sh` has the arm) shows no Space switch and a completed deferred close.
+- **Stock kitty keeps refusing.** Operator decision `e3920969aba9` (should agents close the last pane of a fullscreen window before the patched kitty runs?) is open. The code implements "keep blocking", and the other answer is one file flag: `~/.claude/state/kitty-fs-guard/policy` (absent = keep blocking; `relax-stock-refuse` = option B; `relax-stock` = option C; `enforce` = never relax, not even on the patched build). The onscreen requirement holds under every value. The guard's docstring § POLICY has the one-line flip.
+- **Patch 4.** `docs/patches/kitty-upstream-backport-v0.48.2.patch` applies after the fullscreen-destroy patch. It backports 7e88f51ed7 hunks 1, 3 and 4 (the scoped `removeObserver`, the `glfw_window` NULL check in `toggleFullScreen`, and no zero-size frame on a window with the fullscreen style mask) and the code hunks of 0ea80af638. 7e88f51ed7 hunk 2 is dropped because our patch already has that NULL check. `arm` requires the marker, so it refuses the earlier bundle. `swap` does not check the marker, so if the reboot comes before the rebuild, the pre-backport bundle armed on 2026-10-16 swaps in, and the guard keeps refusing on it because it lacks `GLFWFsFixV2`.
+- **Part 2 reverted.** Our `kitty/rc/action.py` re-key is removed from `kitty-fullscreen-destroy-v0.48.2.patch` in favor of upstream's `match_window` handling (0ea80af638), which behaves the same. Every `cocoa_window.m` hunk of our patch stays. `-[GLFWDeferredClose finish]`'s zero-frame lines now sit behind the same style-mask check.
+- **Close path.** `bin/it2-kitty session close` exits 70 when the guard refuses with `refused-fs`. Other guard refusals keep exit 1 and are retried, because they can be transient under load. Exit 3 was not reused because it already means "not inside kitty". `scripts/handoff-fire.sh` stops its self-close retries on that code and pages a new `husk-fs` alarm class, which tells the operator to close the pane with ⌘W. This replaces the 4 identical retries per husk measured in the 2026-10-16 guard log (`~/.claude/logs/kitty-pane-actions.jsonl`), the failure the Phase 2 Residual about `hf_close_pane` predicted.
