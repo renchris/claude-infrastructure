@@ -1100,7 +1100,7 @@ deny_reason() {
   want="$REPO/scripts/research-kit/gate.sh --render --program demo"
   [[ "$ctx" == *"Every tool except \`$want\` is blocked"* ]] || false
   [[ "$ctx" == *"Open the reply with the certificate state lines"* ]] || false
-  [ -x "$REPO/scripts/research-kit/gate.sh" ] && [ ! -e "$PROG/src/scripts/research-kit/gate.sh" ]
+  [ -x "$REPO/scripts/research-kit/gate.sh" ] && [ ! -e "$PROG/src/scripts/research-kit/gate.sh" ] || false
   [ "$(tool Bash "$want")" = allow ]
   [[ "$(deny_reason 'git log --oneline')" == *"the certificate read \`$want\`"* ]] || false
   # a research-order relay trial gets the same read
