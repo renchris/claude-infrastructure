@@ -317,9 +317,11 @@ pfile_refused() {
   [[ "$out" == *"FILED PR-2: at E0, needs E5; not yet true until B3 (build), owner lead"* ]] || { echo "$out"; false; }
   [[ "$out" != *"PR-2: at E0, needs E5 ("* ]] || { echo "$out"; false; }
   # refusals: each writes nothing to either store
-  printf '%s\n' '{"id":"PR-3","truth_lives_in":"target-env","verdict":"refuted","refuted_by":"P-1","load_bearing_for":["DR-2"],"recheck_cmd":"true"}' >> "$REC/premises.jsonl"
-  printf '%s\n' '{"id":"PR-4","truth_lives_in":"code","verdict":"partial","probes":[],"load_bearing_for":["DR-2"],"recheck_cmd":"true"}' >> "$REC/premises.jsonl"
-  printf '%s\n' '{"id":"PR-5","truth_lives_in":"target-env","verdict":"partial","probes":[],"load_bearing_for":["DR-1"],"recheck_cmd":"true"}' >> "$REC/premises.jsonl"
+  printf '%s\n' \
+    '{"id":"PR-3","truth_lives_in":"target-env","verdict":"refuted","refuted_by":"P-1","load_bearing_for":["DR-2"],"recheck_cmd":"true"}' \
+    '{"id":"PR-4","truth_lives_in":"code","verdict":"partial","probes":[],"load_bearing_for":["DR-2"],"recheck_cmd":"true"}' \
+    '{"id":"PR-5","truth_lives_in":"target-env","verdict":"partial","probes":[],"load_bearing_for":["DR-1"],"recheck_cmd":"true"}' \
+    >> "$REC/premises.jsonl"
   before="$(cat "$REC/residual.jsonl" "$REC/reconcile.jsonl" | cksum)"
   pfile_refused "PR-404 is not in premises.jsonl" --id PR-404
   pfile_refused "a refuted premise is never filed" --id PR-3
