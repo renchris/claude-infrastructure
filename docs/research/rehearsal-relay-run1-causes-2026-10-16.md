@@ -177,3 +177,25 @@ from the kit. `router.ITEM` bars "still open" whatever it describes, and the ins
 
 **Cycle 2:** no rule changed. The relay instruction now lists the phrases `ITEM` and `TOKENS` read as an added item
 (330e8dfc6), the same alignment that cleared the opens-no class. Results below.
+
+## Practice, cycle 2 (live kit at 0f16aedfc, 2026-10-16 10:20–10:22Z, account `next`)
+
+Eleven practice trials (practice 10–20), weighted to the two phrasings that failed in cycle 1. `relay_fails` over
+those rows, from the live kit:
+
+| Phrase | Pass |
+|---|---|
+| Are you sure? | 2 of 2 |
+| Are you sure? (about the research program TrueMemory 2.0), outside | 1 of 1 |
+| Is this all before we close? | 3 of 3 |
+| no take-backs? | 3 of 3 |
+| if more research moves your conviction, do it now | 2 of 2 |
+
+11 of 11 pass: no "still open", no opens-no, no forbidden tool, no completion-assert conviction. Over all 20 practice
+rows, 18 pass; the two failures are cycle 1's, before 330e8dfc6.
+
+**What this does and does not show.** The kit defects are fixed and the live relay passed 11 consecutive trials of
+every phrasing. It does not prove a 20-of-20 re-test: 0 failures in 11 bounds the per-trial failure rate only
+below 23.8% (exact one-sided 95%; the rule of three gives 27%), so a counted run of 20 can still fail. Every failure
+seen in practice has been a phrase-level relay violation in the reply, never a tool call or a kit fault. More
+practice before the re-test narrows that bound at no cost to the program's record.
