@@ -160,12 +160,12 @@ def census_cwd(r: Path) -> Path:
 
 def method_items(r: Path, a: argparse.Namespace) -> List[str]:
     """Run --cmd as gate row 2 will, and return the member ids --count is checked against."""
-    from gate_rows_a import run_cmd  # the same invocation gate row 2 re-runs
+    from gate_rows_a import ran, run_cmd  # the same invocation gate row 2 re-runs
 
     rc, out = run_cmd(a.cmd, census_cwd(r))
     if rc != 0:
         raise kit.KitError(
-            f"{a.pop}: --cmd exited {rc}; gate row 2 re-runs it and needs exit 0"
+            f"{a.pop}: --cmd {ran(rc, out)}; gate row 2 re-runs it and needs exit 0"
         )
     src = Path(a.items_file).read_text() if a.items_file else out
     items = sorted({ln.strip() for ln in src.splitlines() if ln.strip()})
@@ -184,7 +184,7 @@ def census_repin(a: argparse.Namespace) -> int:
     stale method left behind. Nothing is deleted: each OLD stays in `methods` marked superseded,
     and a member no active method lists moves to `retired_members`. All-or-nothing: any refusal
     leaves the census file untouched."""
-    from gate_rows_a import active_methods, run_cmd
+    from gate_rows_a import active_methods, ran, run_cmd
 
     r = recs(a)
     f = census_file(r, a.pop)
@@ -241,7 +241,7 @@ def census_repin(a: argparse.Namespace) -> int:
         rc, out = run_cmd(str(m.get("cmd") or "false"), census_cwd(r))
         if rc != 0:
             raise kit.KitError(
-                f"{a.pop}: active method {m.get('agent')!r} exited {rc} on re-run"
+                f"{a.pop}: active method {m.get('agent')!r} {ran(rc, out)} on re-run"
             )
         lists[str(m.get("agent"))] = {
             ln.strip() for ln in out.splitlines() if ln.strip()

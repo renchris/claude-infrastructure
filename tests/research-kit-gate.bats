@@ -458,6 +458,31 @@ ceiling() { "$REPO/bin/cc-research" ceiling --program demo --json | /usr/bin/pyt
   [ "$(rowstat 2)" = "FAIL" ]
 }
 
+# The command bound (gate_rows_a.run_cmd): a timeout is no verdict, never the check's exit.
+# RED-proof (2026-10-16): on ecbaf8ba4 run_cmd timed out at a fixed bound and returned 124, so the slow
+# method below failed row 2 as "exited 124", the hung one read "exited 124" with no "gave no verdict",
+# and a known-bad fixture that hung counted as failing as it should, leaving row 6 PASS.
+@test "row 2: a census method slower than the base bound but inside the cap passes on the larger bound" {
+  jedit census/callers.json 'd["methods"][1]["cmd"] = "sleep 2; " + d["methods"][1]["cmd"]'
+  export CC_RESEARCH_GATE_TIMEOUT=1 CC_RESEARCH_GATE_TIMEOUT_CAP=15
+  [ "$(rowstat 2)" = "PASS" ]
+}
+
+@test "row 2: a census method that never finishes fails as no verdict, not as an exit" {
+  jedit census/callers.json 'd["methods"][1]["cmd"] = "sleep 60; " + d["methods"][1]["cmd"]'
+  export CC_RESEARCH_GATE_TIMEOUT=1 CC_RESEARCH_GATE_TIMEOUT_CAP=2
+  out="$(rowtext 2)"
+  [[ "$out" == *"method y \`sleep 60; printf"*"gave no verdict: timed out after 2 s at load1 "* ]] || false
+  [[ "$out" != *"exited"* ]] || false
+}
+
+@test "row 6: a known-bad fixture that times out is no verdict, not a correct failure" {
+  jedit acceptance.json 'd["rows"][0]["check_cmd"] = "grep -q ok \"$FIXTURE\" || sleep 60"'
+  export CC_RESEARCH_GATE_TIMEOUT=1 CC_RESEARCH_GATE_TIMEOUT_CAP=2
+  [ "$(rowstat 6)" = "FAIL" ]
+  [[ "$(rowtext 6)" == *"on its known-bad fixture, \`grep -q ok"*"gave no verdict"* ]] || false
+}
+
 @test "row 2: an empty grid cell fails" {
   jedit census/callers.json 'd["grid"] = {"cells": [{"row": "write", "col": "wrong-duration"}]}'
   [ "$(rowstat 2)" = "FAIL" ]

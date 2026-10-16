@@ -28,7 +28,16 @@ FAC_IDS = [f"FAC-{i:02d}" for i in range(1, 34)]
 # Method v1.3 (REPORT.md §13.6): five rows that front-load every wait (accrual, third party, one-shot
 # spend, elapsed-time or scheduled check, event-keyed due), required of a frame stamped 1.3 or later.
 FAC_V13_IDS = [f"FAC-{i:02d}" for i in range(34, 39)]
+# The command bound for every command a gate row re-runs (row 2's census methods, row 6's acceptance
+# fixtures, rows 20-21's artifact checks): TIMEOUT s scaled by the 1-min load per CPU, capped at
+# TIMEOUT_CAP. A bound sized on an idle machine convicts a healthy check in the background band
+# (2026-10-16, load1 ~330 on 10 CPUs: census methods that exit 0 in 39 s and 54 s, and an acceptance
+# check that exits 0 in 131 s, all hit the old fixed 60 s and failed rows 2 and 6). So a timeout is
+# never the check's exit: run_cmd retries once at the cap and, if that expires too, returns rc
+# None with a "gave no verdict" message, which every caller turns into a FAIL that says so.
+# CC_RESEARCH_GATE_TIMEOUT and CC_RESEARCH_GATE_TIMEOUT_CAP override the two figures.
 TIMEOUT = 60
+TIMEOUT_CAP = 900
 
 
 def row(n: int, name: str) -> Callable[[Callable[[Ctx], Row]], Callable[[Ctx], Row]]:
@@ -46,24 +55,66 @@ def verdict(
     return Row(n, name, status, fails + [f"FILED {f}" for f in filed] + notes)
 
 
+def bound_s(name: str, default: float) -> float:
+    try:
+        v = float(os.environ.get(name) or default)
+    except ValueError:
+        raise kit.KitError(f"{name} must be a number of seconds")
+    if v <= 0:
+        raise kit.KitError(f"{name} must be a positive number of seconds")
+    return v
+
+
+def load_bound(base: float, cap: float) -> Tuple[float, float]:
+    """(bound, load1): `base` scaled by the 1-min load per CPU, never below base, never above cap."""
+    load = os.getloadavg()[0]
+    return min(cap, base * max(1.0, load / (os.cpu_count() or 1))), load
+
+
 def run_cmd(
     cmd: str, cwd: Path, env: Optional[Dict[str, str]] = None
-) -> Tuple[int, str]:
-    try:
-        p = subprocess.run(
-            ["/bin/bash", "-c", cmd],
-            cwd=str(cwd),
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=TIMEOUT,
-            env=dict(os.environ, **(env or {})),
-        )
-        return p.returncode, p.stdout
-    except subprocess.TimeoutExpired:
-        return 124, ""
-    except OSError as e:
-        return 127, str(e)
+) -> Tuple[Optional[int], str]:
+    """(exit, stdout) of `cmd`, or (None, a "gave no verdict" message) when it outlives the bound
+    (TIMEOUT above): an attempt at the load-scaled bound and, if that expires short of the cap, one
+    retry at the cap. The whole process group is killed on expiry, so a grandchild holding the
+    output pipe cannot outlive the bound."""
+    base = bound_s("CC_RESEARCH_GATE_TIMEOUT", TIMEOUT)
+    cap = max(base, bound_s("CC_RESEARCH_GATE_TIMEOUT_CAP", TIMEOUT_CAP))
+    bound, load = load_bound(base, cap)
+    while True:
+        try:
+            p = subprocess.Popen(
+                ["/bin/bash", "-c", cmd],
+                cwd=str(cwd),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                env=dict(os.environ, **(env or {})),
+                start_new_session=True,
+            )
+        except OSError as e:
+            return 127, str(e)
+        try:
+            out, _ = p.communicate(timeout=bound)
+            return p.returncode, out
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(p.pid, 9)
+            except OSError:
+                pass
+            p.communicate()
+        if bound >= cap:
+            short = cmd if len(cmd) <= 80 else cmd[:77] + "..."
+            return None, (
+                f"`{short}` gave no verdict: timed out after {bound:g} s at load1 {load:.1f}"
+            )
+        bound, load = cap, os.getloadavg()[0]
+
+
+def ran(rc: Optional[int], out: str) -> str:
+    """How a run_cmd call ended, for a FAIL line: its exit, or the no-verdict message."""
+    return out if rc is None else f"exited {rc}"
 
 
 def active_methods(census: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -211,7 +262,7 @@ def row2(ctx: Ctx) -> Row:
             got = {ln.strip() for ln in out.splitlines() if ln.strip()}
             if rc != 0:
                 fails.append(
-                    f"{pop}: method {m.get('agent', '?')} exited {rc} on re-run"
+                    f"{pop}: method {m.get('agent', '?')} {ran(rc, out)} on re-run"
                 )
             elif not stored <= got or (got - stored and not c.get("as_of")):
                 fails.append(
@@ -561,19 +612,25 @@ def row6(ctx: Ctx) -> Row:
         if not ctl.get("known_bad") or not ctl.get("known_good"):
             fails.append(f"{rid}: no known-bad and known-good fixtures")
             continue
-        bad, _ = run_cmd(
+        bad, bad_out = run_cmd(
             r["check_cmd"],
             ctx.records,
             {"FIXTURE": str(ctx.records / ctl["known_bad"])},
         )
-        good, _ = run_cmd(
+        good, good_out = run_cmd(
             r["check_cmd"],
             ctx.records,
             {"FIXTURE": str(ctx.records / ctl["known_good"])},
         )
-        if bad == 0:
+        # A timeout is no verdict on either side: a known-bad run that never finished has not
+        # shown the check can fail.
+        if bad is None:
+            fails.append(f"{rid}: on its known-bad fixture, {bad_out}")
+        elif bad == 0:
             fails.append(f"{rid}: passes on its known-bad fixture, so it cannot fail")
-        if good != 0:
+        if good is None:
+            fails.append(f"{rid}: on its known-good fixture, {good_out}")
+        elif good != 0:
             fails.append(f"{rid}: fails on its known-good fixture (exit {good})")
         if r.get("timing") and (int(r.get("n") or 0) < 5 or not r.get("load_control")):
             fails.append(f"{rid}: timing row with n<5 or no load control")

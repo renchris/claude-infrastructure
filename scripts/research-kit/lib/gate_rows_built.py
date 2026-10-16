@@ -13,7 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import kit
 from gate import FAIL, FILED, PASS, Ctx, Row, reopened
-from gate_rows_a import folded, probes, row, run_cmd, verdict
+from gate_rows_a import folded, probes, ran, row, run_cmd, verdict
 from gate_rows_b import cert_rounds
 
 BUILT_ROWS = {20: "Built snapshot", 21: "Repro", 22: "Harness mutation", 23: "As-built contact",
@@ -102,14 +102,16 @@ def artifact_fails(fz: Dict[str, Any]) -> List[str]:
         ]
     rc, head = run_cmd("git rev-parse HEAD", root)
     if rc != 0:
-        return [f"cannot read the artifact's HEAD in {root} (git exit {rc})"]
+        return [f"cannot read the artifact's HEAD in {root} (git {ran(rc, head)})"]
     fails = []
     if head.strip() != sha:
         fails.append(
             f"artifact HEAD {head.strip()[:12]} is not the built snapshot {sha[:12]}"
         )
     rc, dirty = run_cmd("git status --porcelain", root)
-    if rc != 0 or dirty.strip():
+    if rc is None:
+        fails.append(f"cannot read the artifact tree's status in {root}: {dirty}")
+    elif rc != 0 or dirty.strip():
         fails.append(
             f"artifact tree is dirty ({len(dirty.splitlines())} path(s), git exit {rc})"
         )
@@ -153,7 +155,9 @@ def repro_fails(fid: str, repro: Dict[str, Any], root: Optional[Path]) -> List[s
         return [
             f"{fid}: its test command cannot be re-run (no command, or no artifact_root)"
         ]
-    rc, _ = run_cmd(str(repro["test_cmd"]), root)
+    rc, out = run_cmd(str(repro["test_cmd"]), root)
+    if rc is None:
+        return [f"{fid}: test command on the snapshot {out}"]
     return [] if rc == 0 else [f"{fid}: test command exits {rc} now on the snapshot"]
 
 

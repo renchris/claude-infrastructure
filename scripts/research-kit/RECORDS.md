@@ -98,6 +98,11 @@ Added 2026-10-05 (wave E3d): between `build-certified` and `closed` sits `implem
   `superseded_by: <agent>`, `superseded_at: ISO`, `superseded_why: <text>`; it stays in `methods`, and gate row 2
   neither re-runs it nor counts it toward the 2 independent methods. `retired_members: [{id, at, why}]` holds members
   no active method lists any more; they left `members` and gate row 2 does not expect them in a re-run.
+- The command bound for every command a gate row re-runs (row 2's census methods, row 6's acceptance fixtures, rows
+  20-21's artifact checks, and `census add`/`repin`): 60 s scaled by the 1-min load per CPU, capped at 900 s; one
+  that expires short of the cap is re-run once at the cap (`CC_RESEARCH_GATE_TIMEOUT`, `CC_RESEARCH_GATE_TIMEOUT_CAP`
+  override both). A timeout is never the check's exit: the row FAILs with "<cmd> gave no verdict: timed out after N s
+  at load1 L", and a known-bad fixture that times out has not shown its check can fail.
 - `probes.jsonl` (written only by `lib/probe_run.py`, through `cc-research probe|self-test|doctor` or the `probe-run.sh` shim): SYNTHESIS shape; `evidence/<probe-id>/{cmd,stdout,stderr,env.json}`.
 - `budget.json`: `{"stages":{"1":{"started":ISO,"ended":ISO|null}, …}, "overrun_packets":{"<stage>":"<packet id>"}}`.
 - `rounds/<k>/matrix.json` (written by `round.sh`): `{round, kind:"frame-critique|certification|delta",
