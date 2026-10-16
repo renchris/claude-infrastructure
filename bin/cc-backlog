@@ -15,6 +15,9 @@
 #
 # Verbs:
 #   add     --title T [--project P] [--dod-ref R] [--source S] [--condition SLUG]  → echoes the id
+#           [--falsifier "<cmd>" [--force-falsifier]]  on a NEW row the probe is RUN first, exactly as
+#                      `falsify` runs it, and one that exits 0 at filing is REFUSED (rc 5) unless
+#                      --force-falsifier. Never on a not-yet-true row: park that one dated instead.
 #           [--run C]  the EXACT runnable command for an OPEN row (2026-09-06): the same `run` field
 #                      `needs --run` stores, carried by the fold to `list --json`, so a machine producer
 #                      can file agent work as OPEN and still hand the drain link the command. Before
@@ -2362,7 +2365,7 @@ EOF
 
 cmd_add() {
   local project="" title="" dod="" source="" condition="" falsifier="" why_not_now="" session="" run=""
-  local conviction="" receipt="" born_blocked=0
+  local conviction="" receipt="" born_blocked=0 force_falsifier=0
   while [ $# -gt 0 ]; do
     local key="$1"; shift
     case "$key" in
@@ -2392,6 +2395,8 @@ cmd_add() {
       # someone improved the probe — precisely the per-measurement re-keying that --condition
       # exists to kill (see the CONDITION KEY note above).
       --falsifier) falsifier="${1:-}"; [ $# -gt 0 ] && shift ;;
+      # Stores a --falsifier that exits 0 at filing anyway (see THE EXIT-0 SCREEN AT FILING below).
+      --force-falsifier) force_falsifier=1 ;;
       *) printf 'cc-backlog add: unknown arg %s\n' "$key" >&2; return 2 ;;
     esac
   done
@@ -2425,7 +2430,12 @@ cmd_add() {
       printf '  with one of these four, optionally followed by ": <detail>":\n'
       printf '    needs-credential  a secret or login this agent does not hold\n'
       printf '    needs-human       sudo, physical, GUI-only, or a value call that is the operator'"'"'s\n'
-      printf '    not-yet-true      an external precondition has not happened yet (pair --falsifier)\n'
+      printf '    not-yet-true      an external precondition has not happened yet. PARK it DATED:\n'
+      printf '                      cc-backlog block <id> --needs "On or after YYYY-MM-DD: <what>".\n'
+      printf '                      Never pair it with --falsifier: exit 0 CLOSES the row, so a probe\n'
+      printf '                      that detects the precondition ARRIVING closes it the moment it\n'
+      printf '                      becomes workable (docs/lessons/arming-and-mootness-cannot-share-\n'
+      printf '                      one-falsifier.md)\n'
       printf '    no-capacity       MEASURED: `claude-accounts --rank general` routes nowhere AND\n'
       printf '                      the machine admission gate refuses the spawn\n'
       printf '  Anything else means you could have driven it — here, or by firing a session with\n'
@@ -2763,6 +2773,34 @@ cmd_add() {
   # ONE ROW PER ACTIVATION, NO DEAD RUN SCRIPT (ledger-admission.6). Only a NEW row is judged: an
   # idempotent re-add of a known id returned above.
   activation_refusal add "$id" "$title" "$run" || return $?
+  # THE EXIT-0 SCREEN AT FILING (2026-10-16, backlog 0d23b9078952). `falsify` RUNS a probe before it
+  # stores it and refuses one that exits 0 against a live row; `add --falsifier` stored the string
+  # unscreened, so the guard had a second door with nothing in it. Incident 94b300217934: its probe
+  # was PROSE ("npm view bun dist-tags.latest reports >=1.4.4 …"), which /bin/sh ran as `npm view`
+  # plus a redirect into a file named `=1.4.4` — exit 0 on every run, including the one that filed
+  # it — and cc-premise then told a worker to close the row as done while npm still said 1.4.3.
+  # Same runner and same contract as `falsify`: exit 0 now is refused (rc 5), "could not ask" stores
+  # with a warning. Only a NEW row is screened (a re-add of a known id never stores a probe, above).
+  # The bypass is a NAMED flag, not `--force`, so overriding one gate never silently overrides another.
+  # shellcheck disable=SC2016  # backticks below are markdown code spans in a message, not substitutions.
+  if [ -n "$falsifier" ]; then
+    local frc; frc="$(probe_screen_rc "$falsifier")"
+    if [ "$frc" = "0" ] && [ "$force_falsifier" -eq 0 ]; then
+      { printf 'cc-backlog add: REFUSED — the --falsifier exits 0 RIGHT NOW, on the day it is filed.\n'
+        printf '  probe: %s\n' "$falsifier"
+        printf '  Exit 0 means "the condition is GONE", so stored as-is it RETRACTS this row on the\n'
+        printf '  first claim. Exactly one of these is true, and none of them is "store it":\n'
+        printf '    (a) it is not a command — prose runs under /bin/sh too (`>=1.4.4` is a redirect).\n'
+        printf '    (b) it is AMBIGUOUS — it also exits 0 for "not applicable" / "nothing to do".\n'
+        printf '    (c) it tests the precondition ARRIVING (a not-yet-true row): that is an arming\n'
+        printf '        signal, not mootness — park it "On or after YYYY-MM-DD: …" instead.\n'
+        printf '    (d) the work is already done — then do not file it.\n'
+        printf '  To store it deliberately anyway:  cc-backlog add … --force-falsifier\n'
+      } >&2
+      return 5
+    fi
+    [ -n "$frc" ] || printf 'cc-backlog add: WARNING — --falsifier stored WITHOUT screening; the probe could not be run (no timeout binary, or the bound expired).\n' >&2
+  fi
   # FILING IS ATTRIBUTED (2026-09-05). Before this, an `add` recorded no author at all — `by` was
   # null on every one of the 108 adds in the 7 days to 2026-09-04 (inflow.md §7.6) — while `needs`
   # stamped its session and `done` its lane. So the store could say who FILED an operator step and
@@ -4143,6 +4181,22 @@ timeout_bin() {
   printf ''
 }
 
+# probe_screen_rc <probe> — THE EXIT-0 SCREEN's runner, shared by `falsify` and `add` so the two
+# doors into the falsifier store ask one question one way. Runs the probe from the repo root under
+# /bin/sh, bounded exactly as run_falsifier bounds it, and prints its exit code — or NOTHING when it
+# could not be asked (no timeout binary, the bound expired): "could not ask" is never an answer.
+probe_screen_rc() {
+  local probe="$1" to root rc
+  to="$(timeout_bin)"
+  [ -n "$to" ] || return 0
+  root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  ( cd "$root" 2>/dev/null && "$to" "${CC_PREMISE_FALSIFIER_TIMEOUT:-20}" /bin/sh -c "$probe" ) \
+    >/dev/null 2>&1 </dev/null
+  rc=$?
+  # 124 is the bound expiring, not a verdict — the probe never answered.
+  [ "$rc" -eq 124 ] || printf '%s' "$rc"
+}
+
 # filing_day_warn <id> <probe> — print the ANTI-COVERAGE warning if the second screen says so.
 #
 # ALWAYS rc 0, and it writes NOTHING to the ledger: this reports, the caller stores regardless. See
@@ -4931,14 +4985,7 @@ cmd_falsify() {
   local rc="" to=""
   if [ "$norun" -eq 0 ]; then
     to="$(timeout_bin)"
-    if [ -n "$to" ]; then
-      local root; root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-      ( cd "$root" 2>/dev/null && "$to" "${CC_PREMISE_FALSIFIER_TIMEOUT:-20}" /bin/sh -c "$probe" ) \
-        >/dev/null 2>&1
-      rc=$?
-      # 124 is the bound expiring, not a verdict — the probe never answered.
-      [ "$rc" -eq 124 ] && rc=""
-    fi
+    rc="$(probe_screen_rc "$probe")"
   fi
 
   if [ -n "$rc" ] && [ "$rc" -eq 0 ] && [ "$force" -eq 0 ]; then

@@ -90,7 +90,7 @@ fixcommit() {
 add_row() {
   local title="$1" fals="${2:-}" id
   if [ -n "$fals" ]; then
-    id="$("$CB" add --title "$title" --project probe --source test --falsifier "$fals")"
+    id="$("$CB" add --title "$title" --project probe --source test --falsifier "$fals" --force-falsifier)"
   else
     id="$("$CB" add --title "$title" --project probe --source test)"
   fi

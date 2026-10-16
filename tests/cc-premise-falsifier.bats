@@ -38,7 +38,7 @@ setup() {
 
 teardown() { rm -rf "$TMP"; }
 
-add() { "$BACKLOG_BIN" add --project p --title "$1" ${2:+--falsifier "$2"} 2>/dev/null; }
+add() { "$BACKLOG_BIN" add --project p --title "$1" ${2:+--falsifier "$2" --force-falsifier} 2>/dev/null; }
 
 @test "falsifier exits 0 (condition gone) -> REFUSES with verdict=falsified" {
   id="$(add 'a condition that has since been fixed' 'true')"

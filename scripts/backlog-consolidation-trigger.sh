@@ -388,10 +388,13 @@ case "$MODE" in
     biggest_res="$(printf '%s' "$residue" | jq -r 'map(.unanswered) | max' 2>/dev/null)"
     # ONE condition-keyed row. Without --condition this would mint a fresh item per run (the title
     # carries a live count), reproducing one layer down the exact defect it reports.
+    # The falsifier is `--assert`, never the bare report: report mode exits 0 WITH clusters present
+    # (EXIT CODES above), so the bare form retracted this row on every claim. cc-backlog's add-time
+    # exit-0 screen (backlog 0d23b9078952) is what refused it.
     "$BACKLOG_BIN" add --project claude-infrastructure \
       --source backlog-consolidation-trigger \
       --condition backlog-duplicate-cluster-over-threshold \
-      --falsifier "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/backlog-consolidation-trigger.sh --threshold $THRESHOLD" \
+      --falsifier "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/backlog-consolidation-trigger.sh --assert --threshold $THRESHOLD" \
       --title "$n_escalate cluster(s) at/above $THRESHOLD rows that the mechanical key REFUSED (largest ${biggest_res} unanswered rows; $n_answered further cluster(s) fold without judgment and are not your problem). These rows are not the same sentence about the same subject, so joining them is a decision: either they are one effort worded differently — consolidate — or the generator keys its ids per measurement — fix that. Detected by backlog-consolidation-trigger.sh; the falsifier on this row IS that detector, so this item closes itself when the clusters are gone." \
       >/dev/null 2>&1 && printf 'filed/updated the condition-keyed consolidation item.\n'
     exit 0

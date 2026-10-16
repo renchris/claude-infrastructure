@@ -54,7 +54,7 @@ setup() {
 
 # probe_row <title> <probe> → id of a row carrying a STORED falsifier (i.e. probe-CAPABLE).
 probe_row() {
-  "$CB" add --title "$1" --project probe --source test --falsifier "$2"
+  "$CB" add --title "$1" --project probe --source test --falsifier "$2" --force-falsifier
 }
 
 # probed_ids → the ids this pass actually ran a probe against, one per line.

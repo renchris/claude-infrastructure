@@ -326,3 +326,41 @@ fixture_repo() {
   [ "$(fals_of "$ID")" = "grep -q ALREADY_HERE screen-fixture.txt" ]
   printf '%s' "$output" | grep -q "ANTI-COVERAGE"
 }
+
+# ── THE EXIT-0 SCREEN AT FILING (backlog 0d23b9078952) ───────────────────────────────────────────
+# `add --falsifier` on a NEW row was a second door into the falsifier store with no screen in it.
+# Replayed on the incident's own artifact (94b300217934): a PROSE probe whose `>=` is a redirect, so
+# /bin/sh exits 0 on the day it is filed. Asserted in both directions, as the falsify screen is.
+
+@test "add --falsifier: a probe that exits 0 at filing is REFUSED (rc 5) and stores no row" {
+  before="$(wc -l < "$CC_BACKLOG_FILE")"
+  run bash "$CB" add --project P --title "re-evaluate when X ships" --source s1 --falsifier "test -e $PRESENT"
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"REFUSED"* ]] || false
+  [ "$(wc -l < "$CC_BACKLOG_FILE")" -eq "$before" ]
+}
+
+@test "add --falsifier: the incident's PROSE probe (a redirect, exit 0) is refused" {
+  d="$BATS_TEST_TMPDIR/prose"; mkdir -p "$d"
+  run bash -c "cd '$d' && bash '$CB' add --project P --title 'bun lint' --source s1 --falsifier 'true reports >=1.4.4 and that release has a lint command'"
+  [ "$status" -eq 5 ]
+}
+
+@test "add --falsifier: a probe that exits non-zero at filing is stored" {
+  run bash "$CB" add --project P --title "still live" --source s1 --falsifier "test -e $MISSING"
+  [ "$status" -eq 0 ]
+  [ "$(fals_of "$output")" = "test -e $MISSING" ]
+}
+
+@test "add --falsifier --force-falsifier stores an exit-0 probe deliberately" {
+  id="$(bash "$CB" add --project P --title "forced" --source s1 --falsifier "test -e $PRESENT" --force-falsifier 2>/dev/null)"
+  [ -n "$id" ]
+  [ "$(fals_of "$id")" = "test -e $PRESENT" ]
+}
+
+@test "the not-yet-true help no longer pairs it with --falsifier; it points at a dated park" {
+  run bash "$CB" add --project P --title "x" --source s1 --why-not-now "a reason, not a class"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"On or after YYYY-MM-DD"* ]] || false
+  if printf '%s' "$output" | grep -q '(pair --falsifier)'; then false; fi
+}

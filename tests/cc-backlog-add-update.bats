@@ -164,7 +164,7 @@ n_lines() { grep -c '' "$CC_BACKLOG_FILE"; }
 }
 
 @test "CONTROL — ANY ONE of the three silences it (falsifier / condition / dod-ref)" {
-  run bash "$CB" add --project P --title "probed" --falsifier "true"
+  run bash "$CB" add --project P --title "probed" --falsifier "false"
   [ "$status" -eq 0 ]
   if printf '%s' "$output" | grep -q 'cannot retract itself'; then echo "falsifier did not silence" >&2; false; fi
 
