@@ -1226,7 +1226,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="STRATUM[,STRATUM]: unpin these so they wait for a fresh set; opens no sealed set",
     )
     p.add_argument(
-        "--pin", help="STRATUM=SET for each of the four strata, comma-separated"
+        "--pin", help="STRATUM=SET, or STRATUM=SET+SET to pool two sets, for each of the four strata, comma-separated"
     )
     p = sub.add_parser("reads")
     p.add_argument(
