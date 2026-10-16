@@ -21,6 +21,12 @@
 # its OWN boot and its own LIVE kitty pids, so neither a reboot (new uuid) nor a kitty restart (new
 # pid) ever overwrites the record of the fleet that died. A dead kitty's directory is never written
 # again: its last tick is the evidence. Every file is written to a temp name and moved into place.
+# "Live" means the pid is PROVEN to be that same kitty (_hb_kitty_proven), never just kill -0: a pid
+# only names a process slot, and on 2026-10-15 a short-lived process that drew a crashed kitty's pid
+# passed kill -0 and the directory loop below rewrote that kitty's roster to [] (its fleet vanished
+# from cc-relayout). A pid that cannot be proven is dead, and its directory is not written.
+#   hb.kitty-start     the kitty's own process start epoch (ps lstart), one line; written FIRST, and
+#                      every later tick must read the same value from ps or it writes nothing here
 #   hb.roster.json     the `cc-sessions --json` rows whose kitty_pid is this kitty (an array)
 #   hb.start           the tick epoch, one line, one field; written LAST
 #   hb.session.tsv     sid  account  model  effort  permission_mode  branch  pid
@@ -51,7 +57,7 @@
 # kitty (1deb094d2).
 #
 # /bin/bash 3.2 safe: launchd runs it. Sourced: defines functions only.
-# Seams: CC_HEARTBEAT_DIR · CC_HB_SESSIONS_BIN · CC_HB_KITTEN_BIN · CC_HB_PS_BIN · CC_HB_LSOF_BIN ·
+# Seams: CC_HEARTBEAT_DIR · CC_HB_SESSIONS_BIN · CC_HB_KITTEN_BIN · CC_HB_PS_BIN (also asked -p <pid>) · CC_HB_LSOF_BIN ·
 #   CC_HB_NOW · CC_HB_RETAIN_DAYS · CC_HB_LS_TIMEOUT (5 s; the reboot prep asks with 15) · CC_HB_SWIFT_BIN · CC_HB_TIMEOUT_BIN ("" forces the perl bound) · CC_BOOTUUID_OVERRIDE ·
 #   CC_ROLES_DIR · CC_HB_MAILBOX_DIR · CC_HB_AGENT_BROWSER_DIR
 
@@ -82,12 +88,47 @@ _hb_to() {
 # _hb_mv <tmp> <dest> — atomic replace; a failed move leaves the last good file and drops the temp.
 _hb_mv() { mv -f "$1" "$2" 2>/dev/null || { rm -f "$1" 2>/dev/null; return 1; }; }
 
-# _hb_start_of <dir> — the first field of the first line of <dir>/hb.start, digits only, else "".
+# _hb_start_of <dir> [file] — the first field of the first line of <dir>/<file> (hb.start), digits only, else "".
 _hb_start_of() {
   local s
-  s="$(head -n 1 "$1/hb.start" 2>/dev/null | awk '{ print $1 }')"
+  s="$(head -n 1 "$1/${2:-hb.start}" 2>/dev/null | awk '{ print $1 }')"
   case "$s" in ''|*[!0-9]*) return 0 ;; esac
   printf '%s' "$s"
+}
+
+# _hb_kitty_ident <pid> — the start epoch of <pid> when its executable is kitty.app's kitty; else
+# nothing and rc 1 (no such process, another executable, or a ps or date that did not answer).
+_hb_kitty_ident() {
+  local line st
+  line="$(_hb_to 5 /usr/bin/env LC_ALL=C "${CC_HB_PS_BIN:-/bin/ps}" -p "$1" -o lstart=,comm= 2>/dev/null | head -n 1)"
+  case "$(printf '%s\n' "$line" | awk '{ $1 = $2 = $3 = $4 = $5 = ""; sub(/^ +/, ""); print }')" in
+    */kitty.app/Contents/MacOS/kitty) ;;
+    *) return 1 ;;
+  esac
+  st="$(printf '%s\n' "$line" | awk '{ print $1, $2, $3, $4, $5 }')"
+  st="$(LC_ALL=C /bin/date -j -f '%a %b %d %T %Y' "$st" +%s 2>/dev/null)"
+  case "$st" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$st"
+}
+
+# _hb_kitty_proven <pid> <dir> — rc 0 only when <pid> is the kitty <dir> records; prints its start.
+# hb.kitty-start, when present, must equal it. A directory from before that file holds only hb.start,
+# the epoch of its last tick: the kitty that wrote it was already running, while a process that drew
+# its pid after it died started later. A directory with a roster and neither file proves nothing.
+_hb_kitty_proven() {
+  local st rec last
+  kill -0 "$1" 2>/dev/null || return 1
+  st="$(_hb_kitty_ident "$1")" || return 1
+  if [ -e "$2/hb.kitty-start" ]; then
+    rec="$(_hb_start_of "$2" hb.kitty-start)"
+    [ -n "$rec" ] && [ "$st" = "$rec" ] || return 1
+  else
+    last="$(_hb_start_of "$2")"
+    if [ -n "$last" ]; then [ "$st" -le "$last" ] || return 1
+    elif [ -e "$2/hb.roster.json" ]; then return 1
+    fi
+  fi
+  printf '%s' "$st"
 }
 
 _hb_sessions_bin() {
@@ -296,7 +337,7 @@ _hb_roles_tsv() {
 }
 
 hb_tick() {
-  local root now uuid sb kb tmpd kps kp dir sock pw ok=0 failed=0
+  local root now uuid sb kb tmpd kps kp kst dir sock pw ok=0 failed=0
   root="$(hb_root)"; now="${CC_HB_NOW:-$(date +%s)}"
   uuid="$(_hb_bootuuid)"; [ -n "$uuid" ] || uuid=nouuid
   sb="$(_hb_sessions_bin)"
@@ -317,14 +358,27 @@ hb_tick() {
             for dir in "$root/$uuid"/*; do [ -d "$dir" ] && printf '%s\n' "${dir##*/}"; done; } \
           | grep -E '^[0-9]+$' | sort -u)"
   for kp in $kps; do
-    # A dead kitty's last heartbeat is the evidence of its fleet: never overwrite it.
-    if [ "$kp" != 0 ]; then kill -0 "$kp" 2>/dev/null || continue; fi
+    # A dead kitty's last heartbeat is the evidence of its fleet: never overwrite it. Dead includes
+    # a live pid that is not provably the same kitty (a reused pid, or a kitty restarted onto it).
     dir="$root/$uuid/$kp"
+    if [ "$kp" != 0 ]; then kst="$(_hb_kitty_proven "$kp" "$dir")" || continue; fi
     ( umask 077; mkdir -p "$dir" ) 2>/dev/null || { failed=$((failed + 1)); continue; }
+    if [ "$kp" != 0 ] && [ "$(_hb_start_of "$dir" hb.kitty-start)" != "$kst" ]; then
+      { printf '%s\n' "$kst" > "$dir/.hb.kitty-start.tmp" && _hb_mv "$dir/.hb.kitty-start.tmp" "$dir/hb.kitty-start"; } 2>/dev/null \
+        || { failed=$((failed + 1)); continue; }
+    fi
     if ! jq --argjson k "$kp" '[.[] | select(((.kitty_pid // 0) | tonumber? // 0) == $k)]' "$tmpd/all.json" \
-           > "$dir/.hb.roster.json.tmp" 2>/dev/null || ! _hb_mv "$dir/.hb.roster.json.tmp" "$dir/hb.roster.json"; then
+           > "$dir/.hb.roster.json.tmp" 2>/dev/null; then
+      rm -f "$dir/.hb.roster.json.tmp"
       failed=$((failed + 1)); continue
     fi
+    # Emptying a roster erases a fleet, so it needs the identity proven again at the write itself.
+    if [ "$kp" != 0 ] && jq -e 'length == 0' "$dir/.hb.roster.json.tmp" >/dev/null 2>&1 \
+       && jq -e 'type == "array" and length > 0' "$dir/hb.roster.json" >/dev/null 2>&1 \
+       && ! _hb_kitty_proven "$kp" "$dir" >/dev/null; then
+      rm -f "$dir/.hb.roster.json.tmp"; continue
+    fi
+    if ! _hb_mv "$dir/.hb.roster.json.tmp" "$dir/hb.roster.json"; then failed=$((failed + 1)); continue; fi
     _hb_session_tsv "$dir/hb.roster.json" "$tmpd/ps.txt" > "$dir/.hb.session.tsv.tmp" 2>/dev/null \
       && _hb_mv "$dir/.hb.session.tsv.tmp" "$dir/hb.session.tsv"
     if [ "$kp" != 0 ] && [ -n "$kb" ] && [ -x "$kb" ]; then
@@ -388,7 +442,7 @@ hb_pick() {
     st="$(_hb_start_of "$d")"; [ -n "$st" ] || continue
     [ "$st" -gt "$lo" ] && [ "$st" -le "$hi" ] || continue
     if [ "$dead" = --dead-kitty ]; then
-      case "${d##*/}" in 0|''|*[!0-9]*) continue ;; *) kill -0 "${d##*/}" 2>/dev/null && continue ;; esac
+      case "${d##*/}" in 0|''|*[!0-9]*) continue ;; *) _hb_kitty_proven "${d##*/}" "$d" >/dev/null && continue ;; esac
     fi
     cands="${cands}${st}	${d}
 "

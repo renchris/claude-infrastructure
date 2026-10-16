@@ -116,7 +116,7 @@ SH
   chmod +x "$CC_HB_SESSIONS_BIN"
   export CC_HB_KITTEN_BIN="$BATS_TEST_TMPDIR/stub-kitten"
   printf '#!/bin/bash\necho "[]"\n' > "$CC_HB_KITTEN_BIN"; chmod +x "$CC_HB_KITTEN_BIN"
-  export CC_HB_PS_BIN=/usr/bin/true CC_HB_LSOF_BIN=/usr/bin/true
+  export CC_HB_PS_BIN="$BATS_TEST_DIRNAME/fixtures/hb-kitty-ps" CC_HB_LSOF_BIN=/usr/bin/true
   export CC_KITTY_SOCKET_BIN="$BATS_TEST_TMPDIR/stub-ksock"
   printf '#!/bin/bash\necho unix:/tmp/kitty-test\n' > "$CC_KITTY_SOCKET_BIN"; chmod +x "$CC_KITTY_SOCKET_BIN"
   # classifier stub: append a verdict per row — the sid's line in .verdicts, else INTERRUPTED — and

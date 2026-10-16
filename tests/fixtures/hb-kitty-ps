@@ -1,0 +1,7 @@
+#!/bin/sh
+# ps stand-in for suites that tick scripts/lib/restore-heartbeat.sh against a live pid that is not
+# really kitty. Asked `-p <pid> -o lstart=,comm=` (the heartbeat's identity check), it says that pid
+# is a kitty started 2026-01-01, before any tick a suite stamps; the fleet listing (-axo) is empty,
+# as /usr/bin/true left it.
+[ "$1" = -p ] && printf '%s\n' 'Thu Jan  1 00:00:00 2026     /Applications/kitty.app/Contents/MacOS/kitty'
+exit 0

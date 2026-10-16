@@ -3,6 +3,9 @@
 # reads (W3 P3a-i). Every case drives the library under /bin/bash 3.2, because launchd runs it there
 # (lesson: the deployment interpreter is not the one on your PATH). HOME is a fixture, and
 # cc-sessions, kitten, ps and lsof are stubs: nothing here reads the live registry or the live kitty.
+# RED-proof (pid reuse, 2026-10-15): against the kill -0-only liveness check, "a live pid that is not
+# provably the dead kitty..." fails on its first scenario (the dead kitty's roster is rewritten to []),
+# and the restart case of "a genuinely live kitty..." fails at its third tick.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd -P)"
@@ -17,13 +20,21 @@ setup() {
   export CC_HB_PS_BIN="$D/stub-ps" CC_HB_LSOF_BIN="$D/stub-lsof"
   printf '#!/bin/sh\n[ -f "$0.fail" ] && exit 1\ncat "%s/sessions.json"\n' "$D" > "$CC_HB_SESSIONS_BIN"
   printf '#!/bin/sh\necho "$*" >> "$0.log"\n[ -f "$0.fail" ] && exit 1\necho "[{\\"id\\": 1, \\"tabs\\": []}]"\n' > "$CC_HB_KITTEN_BIN"
-  printf '#!/bin/sh\ncat "%s/ps.txt"\n' "$D" > "$CC_HB_PS_BIN"
+  # `ps -p <pid>` (the identity check) answers from ident.<pid>, or ident.<pid>.once exactly once;
+  # with neither it fails, as ps does for a pid it cannot see. Anything else is the fleet listing.
+  printf '#!/bin/sh\nif [ "$1" = -p ]; then\n  f="%s/ident.$2"\n  [ -f "$f.once" ] && { cat "$f.once"; rm -f "$f.once"; exit 0; }\n  [ -f "$f" ] && { cat "$f"; exit 0; }\n  exit 1\nfi\ncat "%s/ps.txt"\n' "$D" "$D" > "$CC_HB_PS_BIN"
   printf '#!/bin/sh\ncat "%s/lsof.txt"\n' "$D" > "$CC_HB_LSOF_BIN"
   chmod +x "$CC_HB_SESSIONS_BIN" "$CC_HB_KITTEN_BIN" "$CC_HB_PS_BIN" "$CC_HB_LSOF_BIN"
   : > "$D/ps.txt"; : > "$D/lsof.txt"
   KP=$$                                   # a LIVE kitty pid: this test's own process
   sleep 0 & DEADP=$!; wait "$DEADP"       # a pid that is certainly not alive any more
   echo '[]' > "$D/sessions.json"
+  KSTART=1784700000                       # when the live kittys started: before every tick here
+  ident "$KP" "$KSTART"; ident "$PPID" "$KSTART"
+}
+
+ident() { # <pid> <start-epoch> [executable] — what `ps -p <pid> -o lstart=,comm=` reports
+  printf '%s     %s\n' "$(date -r "$2" '+%a %b %e %T %Y')" "${3:-/Applications/kitty.app/Contents/MacOS/kitty}" > "$D/ident.$1"
 }
 
 hb() { run /bin/bash -c '. "$1"; shift; "$@"' _ "$LIB" "$@"; }
@@ -67,6 +78,65 @@ dir() { printf '%s/%s/%s' "$CC_HEARTBEAT_DIR" "$1" "$2"; }
   [ "$(cat "$(dir UUID-A "$DEADP")/hb.start")" = 1784799000 ] || false
   [ "$(jq -c . "$(dir UUID-A "$KP")/hb.roster.json")" = '[]' ] || false
   [ "$(cat "$(dir UUID-A "$KP")/hb.start")" = 1784800000 ] || false
+}
+
+# The 2026-10-15 loss: a crashed kitty's directory stays in this boot's dir, the loop re-adds its pid
+# every tick, and a process that drew that pid passed kill -0, so its roster became [].
+dead_fleet() { # <pid> — a dead kitty's full last heartbeat (start 1784799000), no registry row naming it
+  local d; d="$(dir UUID-A "$1")"; mkdir -p "$d"
+  echo "[$(sess lost1 "$1"),$(sess lost2 "$1")]" > "$d/hb.roster.json"
+  printf 's1\tclaude-next\tm\te\tauto\tmain\t1\n' > "$d/hb.session.tsv"
+  echo '[{"id": 7, "tabs": []}]' > "$d/hb.kitty-ls.json"; echo 'bg' > "$d/hb.bg.tsv"; echo 'roles' > "$d/hb.roles.tsv"
+  echo 1784799000 > "$d/hb.start"
+}
+snap() { (cd "$(dir UUID-A "$1")" && ls -A && shasum ./*); }
+
+@test "a live pid that is not provably the dead kitty leaves its heartbeat byte-identical" {
+  while read -r why; do
+    rm -rf "$CC_HEARTBEAT_DIR"; dead_fleet "$KP"
+    case "$why" in
+      not-kitty)     ident "$KP" "$KSTART" /bin/zsh ;;
+      started-later) ident "$KP" 1784799500 ;;                       # after the dead kitty's last tick
+      ps-silent)     rm -f "$D/ident.$KP" ;;
+      start-differs) ident "$KP" "$KSTART"; echo 1784600000 > "$(dir UUID-A "$KP")/hb.kitty-start" ;;
+    esac
+    before="$(snap "$KP")"
+    hb hb_tick
+    [ "$(snap "$KP")" = "$before" ] || { echo "rewritten: $why"; false; }
+    [ "$status" -eq 1 ] || { echo "rc $status: $why"; false; }
+  done <<WHY
+not-kitty
+started-later
+ps-silent
+start-differs
+WHY
+}
+
+@test "a genuinely live kitty still updates, records its start, and stops when another kitty takes its pid" {
+  dead_fleet "$KP"                                       # a legacy dir: hb.start only, kitty older
+  hb hb_tick
+  [ "$status" -eq 0 ] || false
+  [ "$(cat "$(dir UUID-A "$KP")/hb.start")" = 1784800000 ] || false
+  [ "$(jq -c . "$(dir UUID-A "$KP")/hb.roster.json")" = '[]' ] || false
+  [ "$(cat "$(dir UUID-A "$KP")/hb.kitty-start")" = "$KSTART" ] || false
+  echo "[$(sess s1 "$KP")]" > "$D/sessions.json"
+  CC_HB_NOW=1784800300 hb hb_tick
+  [ "$(jq -r '.[0].session_id' "$(dir UUID-A "$KP")/hb.roster.json")" = s1 ] || false
+  ident "$KP" 1784800400                                 # that kitty died; a new kitty drew its pid
+  echo '[]' > "$D/sessions.json"
+  CC_HB_NOW=1784800600 hb hb_tick
+  [ "$status" -eq 1 ] || false
+  [ "$(cat "$(dir UUID-A "$KP")/hb.start")" = 1784800300 ] || false
+  [ "$(jq -r '.[0].session_id' "$(dir UUID-A "$KP")/hb.roster.json")" = s1 ] || false
+}
+
+@test "emptying a non-empty roster re-proves the kitty at the write: a pid reused mid-tick keeps the roster" {
+  dead_fleet "$KP"
+  echo "$KSTART" > "$(dir UUID-A "$KP")/hb.kitty-start"
+  mv "$D/ident.$KP" "$D/ident.$KP.once"                  # ps proves the kitty once, then not again
+  hb hb_tick
+  [ "$(jq -r '.[0].session_id' "$(dir UUID-A "$KP")/hb.roster.json")" = lost1 ] || false
+  [ "$(cat "$(dir UUID-A "$KP")/hb.start")" = 1784799000 ] || false
 }
 
 @test "cc-sessions failing or not parsing writes nothing and keeps the last good heartbeat (rc 2)" {
@@ -123,6 +193,8 @@ EOF
 }
 
 @test "hb_pick --dead-kitty skips a kitty that is still alive (a crash restores the fleet that died)" {
+  ident "$PPID" "$KSTART" /bin/zsh                       # alive, but a reused pid: counts as dead
+  mkdir -p "$(dir A "$PPID")"; echo '[]' > "$(dir A "$PPID")/hb.roster.json"; echo 1784799500 > "$(dir A "$PPID")/hb.start"
   mkdir -p "$(dir A "$DEADP")" "$(dir A "$KP")"
   while read -r k st; do
     echo '[]' > "$(dir A "$k")/hb.roster.json"; echo "$st" > "$(dir A "$k")/hb.start"
@@ -131,7 +203,8 @@ $DEADP 1784799000
 $KP 1784799900
 EOF
   hb hb_pick "$CC_HEARTBEAT_DIR" 0 1784800000 --dead-kitty
-  [ "$output" = "1784799000	$(dir A "$DEADP")" ] || false
+  [ "$output" = "1784799000	$(dir A "$DEADP")
+1784799500	$(dir A "$PPID")" ] || false
 }
 
 @test "hb.session.tsv: account from the NEWEST transcript, model/effort/permission from its records" {

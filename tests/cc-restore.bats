@@ -136,7 +136,7 @@ SH
     "$S1" "$KP" "$S2" "$KP" > "$CC_HB_SESSIONS_BIN.json"
   export CC_HB_KITTEN_BIN="$T/hb-kitten"; printf '#!/bin/bash\necho "[]"\n' > "$CC_HB_KITTEN_BIN"
   chmod +x "$CC_HB_SESSIONS_BIN" "$CC_HB_KITTEN_BIN"
-  export CC_HB_PS_BIN=/usr/bin/true CC_HB_LSOF_BIN=/usr/bin/true CC_ROLES_DIR="$T/roles"
+  export CC_HB_PS_BIN="$BATS_TEST_DIRNAME/fixtures/hb-kitty-ps" CC_HB_LSOF_BIN=/usr/bin/true CC_ROLES_DIR="$T/roles"
   unset KITTY_PID KITTY_LISTEN_ON
   export KITTY_WINDOW_ID=99                    # the operator runs it from a kitty pane: must not be inherited
   EVENTS="$CC_BOOT_RESUME_STATE_DIR/events"

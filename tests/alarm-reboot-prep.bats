@@ -95,7 +95,7 @@ setup() {
       CC_IDL="$B/idl.jsonl" CC_NOTIFY_BIN="$B/notify" CC_BACKLOG_BIN=/usr/bin/false \
       CC_RESUME_LAUNCH_BIN=/usr/bin/false CC_RESUME_LAYOUT_BIN="$B/none" CC_LAUNCHCTL_BIN=/usr/bin/true \
       CC_HEARTBEAT_DIR="$B/hb" CC_HB_SESSIONS_BIN="$B/hbsess" CC_HB_KITTEN_BIN=/usr/bin/false \
-      CC_HB_PS_BIN=/usr/bin/true CC_HB_LSOF_BIN=/usr/bin/true \
+      CC_HB_PS_BIN="$BATS_TEST_DIRNAME/fixtures/hb-kitty-ps" CC_HB_LSOF_BIN=/usr/bin/true \
       /bin/bash "$REPO/scripts/boot-resume.sh"
   [ "$status" -eq 0 ] || false
   grep -q 'PAIRED-ONE' "$B/notify.log" || false

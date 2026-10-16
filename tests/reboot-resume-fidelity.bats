@@ -18,7 +18,7 @@ setup() {
   export CC_REBOOT_PREP_DIR="$D/autonomy" CC_REBOOT_PREP_DATE=2020-01-01
   export CC_REBOOT_PREP_PS=/usr/bin/true CC_REBOOT_PREP_ZPRINT=/usr/bin/true
   export CC_REBOOT_PREP_SESSIONS="$D/sessions"
-  export CC_BOOTUUID_OVERRIDE=UUID-T CC_HB_PS_BIN=/usr/bin/true CC_HB_LSOF_BIN=/usr/bin/true
+  export CC_BOOTUUID_OVERRIDE=UUID-T CC_HB_PS_BIN="$BATS_TEST_DIRNAME/fixtures/hb-kitty-ps" CC_HB_LSOF_BIN=/usr/bin/true
   export CC_ROLES_DIR="$D/roles" CC_HB_MAILBOX_DIR="$D/mailbox" CC_HB_AGENT_BROWSER_DIR="$D/ab"
   mkdir -p "$CC_ROLES_DIR" "$CC_HB_MAILBOX_DIR" "$CC_HB_AGENT_BROWSER_DIR"
   export CC_CARRY_SETTLE_S=0 CC_TUI_RPC_TIMEOUT=5
