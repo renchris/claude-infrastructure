@@ -1,0 +1,157 @@
+{
+  "documentType": "codex-security.scan-manifest",
+  "scan": {
+    "artifacts": [
+      {
+        "mediaType": "application/json",
+        "path": "findings.json",
+        "sha256": "6acc5801de7365230ffb97f34a386e654097424a0829bf35af82b98e8a3ce5be"
+      },
+      {
+        "mediaType": "application/json",
+        "path": "coverage.json",
+        "sha256": "cbd4e09ae8f693fc68ce0fb8f944da22c7f2650c3053f3a0b758d32ecd2d66ab"
+      },
+      {
+        "mediaType": "application/octet-stream",
+        "path": "artifacts/02_discovery/candidate_ledger.jsonl",
+        "sha256": "cdb6bfcb6fa8ae99f0779c4efa857cff67bb4fec1683e343d58c3f76c4ba2816"
+      },
+      {
+        "mediaType": "application/octet-stream",
+        "path": "artifacts/02_discovery/validation_artifacts/candidate-27894790d5bbed1b/action_meta_results.txt",
+        "sha256": "fd763cbb29e2e0bf55feefe05ca9567aecbdc1a59d7bb6c69278817cea86c90e"
+      },
+      {
+        "mediaType": "application/octet-stream",
+        "path": "artifacts/02_discovery/validation_artifacts/candidate-27894790d5bbed1b/login_form_render.txt",
+        "sha256": "a586ae8d34a61121719f8ff2910c7400f9c3c36b3b9d312115000ef968d73b20"
+      },
+      {
+        "mediaType": "application/octet-stream",
+        "path": "artifacts/02_discovery/validation_artifacts/candidate-27894790d5bbed1b/next_action_handler_excerpt_396_420.txt",
+        "sha256": "0e6c7e32258ce3d3bea16d8d7d3244e58a9f5ec6cc5bdb67f6f32ff1ff5f19ff"
+      },
+      {
+        "mediaType": "application/octet-stream",
+        "path": "artifacts/02_discovery/validation_artifacts/candidate-27894790d5bbed1b/server_reference_manifest_actions.txt",
+        "sha256": "ebd5524de2cba728b316fa24afb07887387cefa438479384b70bd83d3a69fa53"
+      },
+      {
+        "mediaType": "application/octet-stream",
+        "path": "artifacts/02_discovery/validation_artifacts/candidate-847925d58617afa4/outbound_anchor_attrs.txt",
+        "sha256": "b6a4afed8295a4798d940a5e8a559e0e2113607bb16189cc7de079bbfbccb8a7"
+      },
+      {
+        "mediaType": "application/octet-stream",
+        "path": "artifacts/02_discovery/validation_artifacts/candidate-a4f467a486d58c3c/image_params_harness.js",
+        "sha256": "2c8bb78b77436247cf5de93c0a9f5ed7d3daa4ad118495ea25b5228392d3d843"
+      },
+      {
+        "mediaType": "application/octet-stream",
+        "path": "artifacts/02_discovery/validation_artifacts/candidate-a4f467a486d58c3c/image_params_results.txt",
+        "sha256": "2e18a333da58f81df6471b99cbe2fb05ded638e06f4df6cfadfb82f7e19be3ca"
+      },
+      {
+        "mediaType": "application/octet-stream",
+        "path": "artifacts/02_discovery/validation_artifacts/candidate-c2cde6d450e560cc/pricing_tier_results.txt",
+        "sha256": "4bc5b1da4dd8d3d4b2ce5c957e86e084aedc417da8d538a094145b7f8c119c66"
+      },
+      {
+        "mediaType": "application/octet-stream",
+        "path": "artifacts/02_discovery/validation_artifacts/candidate-c2cde6d450e560cc/render_harness.js",
+        "sha256": "71e0078fec0bf4db1d6074ad39dc3da57f9775c643402ff3f6f9b1e1e8747bc9"
+      },
+      {
+        "mediaType": "application/octet-stream",
+        "path": "artifacts/02_discovery/work_ledger.jsonl",
+        "sha256": "3b27d39e5c69c29ab824573561b99e2949d6e474c97c4a10c71c7c6e2b73e64f"
+      },
+      {
+        "mediaType": "application/octet-stream",
+        "path": "artifacts/03_coverage/history_secret_scan.txt",
+        "sha256": "f886d6820874392c5c7a0b62e28ef1534d064f6fed324909d1a568b0cd598a1c"
+      },
+      {
+        "mediaType": "application/octet-stream",
+        "path": "artifacts/03_coverage/negative_searches.txt",
+        "sha256": "5e08fb5bae1582e6120f327d6293bdc35428f8f3bde38f7b31769a3bfbf0b1ed"
+      }
+    ],
+    "completedAt": "2026-10-16T16:15:46Z",
+    "coverageRef": "coverage.json",
+    "findingsRef": "findings.json",
+    "id": "d3ebdcee_20261016T160016Z",
+    "producer": {
+      "name": "codex-security-plugin (Claude Code port, prompt-only host)",
+      "version": "0.1.14"
+    },
+    "scope": {
+      "artifactsReviewed": [
+        "107 tracked files (git ls-files): 31 runtime source under src/, 24 public SVGs, 29 raster images (metadata only), 13 build/config files, 10 docs and agent-tooling files",
+        "Untracked local .next build manifests (routes, images, server-reference, required-server-files) as framework-behaviour evidence",
+        "Installed next@16.4.1 internals: image-config defaults, image-optimizer validateParams and fetchInternalImage, server-action request classifier, action handler, next/link",
+        "Git history across 80 commits on all refs (secret sweep)"
+      ],
+      "context": "Threat model generated during Phase 1 of this scan (no SECURITY.md, AGENTS.md or prior model). snapshotDigest = sha256 over sorted (path NUL sha256(file) LF) for every git ls-files path of the clean worktree. Dedup source docs/plans/DEPENDENCY_UPGRADE_PLAN.md read before reporting; production image-optimizer exposure is decision 58f292806fd7 (context only). No subagent fan-out was available: inventory, file review, validation and attack-path steps ran sequentially in the parent.",
+      "excludePaths": [],
+      "includePaths": [
+        "."
+      ],
+      "limitations": [
+        "Raster images and favicon.ico are binary: inspected for EXIF/XMP/GPS metadata only, not as code.",
+        "keyboard.tsx (99 KB of SVG paths) was reviewed through a structural filter that printed every non-path line plus a sink-token grep.",
+        "Advisories for the pinned dependency versions published after June 2026 were not checked (no network by rule).",
+        "Amplify console settings (custom headers, WAF, cache scoping) are outside the repository and were not queried (no AWS calls by rule).",
+        "The inventory follows git ls-files rather than the raw rg listing: rg listed the worktree .git pointer file and omitted the tracked but gitignored next-env.d.ts."
+      ],
+      "runtimeStatus": "No server was started and no network or AWS call was made. Four harmless local harnesses ran under Node with mocked I/O: the real pricing and login pages transpiled with the repo TypeScript and rendered with the repo react-dom/server, Next server-action request classification, and Next image-optimizer parameter validation against the branch runtime config.",
+      "summary": "First Codex Security full repository scan (P1, no prior bundle) of reso-landing-app at d3ebdcee, the deps-upgrade-2026-10 branch (Next 16.4.1, React 19.3.1) that is not yet on production main. All 107 tracked files were inventoried and reviewed sequentially by one agent; 8 candidates were discovered, validated and run through the policy pass; none survived as a finding.",
+      "validationMode": "Compact standard-scan validation and attack-path passes over one candidate ledger; interface-level harnesses for 4 candidates, static code, config and metadata evidence for the rest; final policy-adjustment matrix applied mechanically."
+    },
+    "sealedAt": "2026-10-16T16:15:46Z",
+    "startedAt": "2026-10-16T16:00:16Z",
+    "status": "completed",
+    "target": {
+      "displayName": "renchris/reso-landing-app (branch deps-upgrade-2026-10, worktree landing-review-w3)",
+      "kind": "git_worktree",
+      "remote": "https://github.com/renchris/reso-landing-app",
+      "revision": "d3ebdcee6c0fa80d2efb68196e05c1bad85a3998",
+      "snapshotDigest": "codex-security-snapshot/v1:sha256:3f10a1c4be6b257c14c5e50fb0cd929c794a68f859a81b173957e78e9c884d97",
+      "targetId": "target_sha256_475223fe15647e8ebfe2b63883183108"
+    },
+    "threatModel": {
+      "assets": [
+        "Brand integrity and visitor trust of join.reso.gl",
+        "Integrity of the pricing CTAs to Stripe Payment Links and zcal",
+        "Credentials visitors might type into the /login template form",
+        "Amplify build and deploy pipeline for production main",
+        "Availability and compute cost of server-rendered and image-optimizer endpoints"
+      ],
+      "assumptions": [
+        "Every route is public; there is no session to protect",
+        "Amplify console headers and WAF are not visible from the repository",
+        "Production main still runs an older tree; its image-optimizer exposure is tracked separately"
+      ],
+      "attackerCapabilities": [
+        "Send arbitrary GET/POST requests with any query, body and headers to every route and framework endpoint",
+        "Frame the site from a third-party page",
+        "Not assumed: repository write, Amplify console access, or compromise of npm, Fontshare, Stripe or zcal"
+      ],
+      "securityObjectives": [
+        "No attacker-controlled data reaches HTML, script or URL contexts",
+        "Pricing CTAs always point to the genuine payment and booking pages",
+        "Framework endpoints cannot be turned into SSRF, file read or code execution",
+        "Production builds only ship integrity-pinned dependencies"
+      ],
+      "summary": "Public, unauthenticated Next.js marketing site on AWS Amplify with seven routes, no API routes, server actions, middleware, database, sessions or secrets. The realistic attacker is an anonymous internet visitor controlling URL, query string, method, body and headers; the meaningful outcomes are script or content injection on join.reso.gl, tampering with the pricing CTAs, framework-level RCE/SSRF on the Amplify compute, and build-pipeline integrity.",
+      "trustBoundaries": [
+        "Anonymous internet visitor -> Amplify/CloudFront -> Next.js server (query string, method, body, headers, /_next/image params)",
+        "Visitor browser -> third-party origins (api.fontshare.com stylesheet, buy.stripe.com, zcal.co)",
+        "Repository writers and Amplify owner -> build spec, lockfile and config",
+        "npm registry -> build box"
+      ]
+    }
+  },
+  "schemaVersion": "1.0"
+}

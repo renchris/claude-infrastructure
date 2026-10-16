@@ -1,0 +1,240 @@
+{
+  "completeness": "complete",
+  "deferred": [],
+  "documentType": "codex-security.coverage",
+  "excludePaths": [],
+  "explicitExclusions": [
+    {
+      "pattern": "node_modules/**",
+      "reason": "Untracked installed third-party packages; reviewed only where needed to confirm framework behaviour (image optimizer, server-action classifier, next/link)."
+    },
+    {
+      "pattern": ".next/**",
+      "reason": "Untracked local build output from another lens; read only as build-manifest evidence (routes, images, server-reference manifests), not as source."
+    },
+    {
+      "pattern": ".claude/tmp/**",
+      "reason": "Untracked, gitignored scratch output of other review lenses; not repository content."
+    }
+  ],
+  "includePaths": [
+    "."
+  ],
+  "inventoryStrategy": "repository",
+  "mode": "repository",
+  "openQuestions": [
+    {
+      "followUpPrompt": "On branch deps-upgrade-2026-10 (d3ebdcee), check GitHub advisories for next@16.4.1, react@19.3.1, react-dom@19.3.1 and sharp@0.35.5 published 2026-06-01 to today, and say whether any affects the image optimizer, RSC decoding or static serving paths this site exposes.",
+      "question": "Do any Next.js 16.4.1 or React 19.3.1 security advisories published after June 2026 apply to this branch? This scan had no network by rule and its model knowledge ends June 2026."
+    },
+    {
+      "followUpPrompt": "Read-only: list the custom headers, WAF association and branch auto-build settings for Amplify app d3ce74t8uneoh0 and compare them with the header hardening backlog in surface http-security-headers.",
+      "question": "Which response headers, WAF rules and build-cache scoping does the Amplify app d3ce74t8uneoh0 apply outside the repository?"
+    },
+    {
+      "question": "Should the branch disable the unused image optimizer (images.unoptimized: true) before the production merge? This is already tracked (decision 58f292806fd7 and the separate images.unoptimized item); listed here only so the merge checklist does not lose it."
+    },
+    {
+      "question": "Should /login keep a non-functional credential form, or link to the real Reso app sign-in? Users who type real credentials there cannot sign in; the values are discarded first-party."
+    }
+  ],
+  "scanId": "d3ebdcee_20261016T160016Z",
+  "schemaVersion": "1.0",
+  "surfaces": [
+    {
+      "disposition": "rejected",
+      "id": "pricing-tier-query-param",
+      "label": "GET /pricing ?tier query parameter (src/app/pricing/page.tsx:537-544)",
+      "notes": "candidate-c2cde6d450e560cc: validation=suppressed. Strict-equality allowlist over three constant slugs with tiers[0] fallback; nine crafted values rendered through the real page: none reflected, none altered a link, none threw.",
+      "receiptRefs": [
+        "artifacts/02_discovery/candidate_ledger.jsonl",
+        "artifacts/02_discovery/validation_artifacts/candidate-c2cde6d450e560cc/pricing_tier_results.txt",
+        "artifacts/02_discovery/validation_artifacts/candidate-c2cde6d450e560cc/render_harness.js"
+      ],
+      "riskArea": "Reflected XSS / content injection / link tampering"
+    },
+    {
+      "disposition": "rejected",
+      "id": "login-template-form",
+      "label": "/login credential form (src/app/login/page.tsx:21)",
+      "notes": "candidate-27894790d5bbed1b: validation=suppressed. Non-functional template form: POSTs to the same first-party route over HTTPS; Next classifies it as an unsupported URL-encoded MPA action and renders the page; no code reads or stores the body. Product follow-up: link to the real app login or remove the form.",
+      "receiptRefs": [
+        "artifacts/02_discovery/candidate_ledger.jsonl",
+        "artifacts/02_discovery/validation_artifacts/candidate-27894790d5bbed1b/action_meta_results.txt",
+        "artifacts/02_discovery/validation_artifacts/candidate-27894790d5bbed1b/login_form_render.txt",
+        "artifacts/02_discovery/validation_artifacts/candidate-27894790d5bbed1b/next_action_handler_excerpt_396_420.txt"
+      ],
+      "riskArea": "Credential handling"
+    },
+    {
+      "disposition": "rejected",
+      "id": "http-security-headers",
+      "label": "HTTP response headers and CSP (next.config.mjs:8-11)",
+      "notes": "candidate-d997de2ed46e4ca6: validation=reportable, attack_path=ignore (impact ignore, likelihood high, severity ignore). No headers() and no middleware; built routes-manifest headers []. Nothing state-changing to frame and no injection sink for CSP to backstop, so policy ignore. Hardening backlog: frame-ancestors none, X-Content-Type-Options nosniff, Referrer-Policy, HSTS, CSP allowing self plus api.fontshare.com.",
+      "receiptRefs": [
+        "artifacts/02_discovery/candidate_ledger.jsonl",
+        "artifacts/03_coverage/negative_searches.txt"
+      ],
+      "riskArea": "Clickjacking / missing CSP and transport headers"
+    },
+    {
+      "disposition": "rejected",
+      "id": "third-party-stylesheet",
+      "label": "Fontshare stylesheet in the root layout (src/app/layout.tsx:19-22)",
+      "notes": "candidate-a8440707cf39bd09: validation=reportable, attack_path=ignore (impact low, likelihood ignore, severity ignore). CSS-only capability, needs a Fontshare compromise; SRI impossible on dynamic font CSS. Self-hosting Switzer would also stop sending every visitor IP to a third party.",
+      "receiptRefs": [
+        "artifacts/02_discovery/candidate_ledger.jsonl"
+      ],
+      "riskArea": "Third-party resource integrity / privacy"
+    },
+    {
+      "disposition": "rejected",
+      "id": "outbound-links-target-blank",
+      "label": "Pricing CTAs to Stripe/zcal with target=_blank (src/app/pricing/page.tsx:203)",
+      "notes": "candidate-847925d58617afa4: validation=suppressed. Anchors render target=_blank without rel (next/link adds none), but browsers imply noopener for target=_blank and the destinations are constant Stripe/zcal URLs. The job modal mailto uses noopener,noreferrer explicitly.",
+      "receiptRefs": [
+        "artifacts/02_discovery/candidate_ledger.jsonl",
+        "artifacts/02_discovery/validation_artifacts/candidate-847925d58617afa4/outbound_anchor_attrs.txt"
+      ],
+      "riskArea": "Reverse tabnabbing"
+    },
+    {
+      "disposition": "rejected",
+      "id": "image-optimizer-branch",
+      "label": "Default-enabled /_next/image on this branch (next.config.mjs, Next 16.4.1)",
+      "notes": "candidate-a4f467a486d58c3c: validation=suppressed. DEDUP: production main (Next 14.2.11) optimizer exposure is decision 58f292806fd7, and the images.unoptimized mitigation is tracked separately; this row checks the branch only. Real validator: remote/metadata URLs rejected (remotePatterns []), SVG disallowed, 15 widths x q75 x webp, cached 4 h; local hrefs re-enter Next routing as a mocked GET.",
+      "receiptRefs": [
+        "artifacts/02_discovery/candidate_ledger.jsonl",
+        "artifacts/02_discovery/validation_artifacts/candidate-a4f467a486d58c3c/image_params_results.txt",
+        "artifacts/02_discovery/validation_artifacts/candidate-a4f467a486d58c3c/image_params_harness.js"
+      ],
+      "riskArea": "SSRF / framework RCE / resource use"
+    },
+    {
+      "disposition": "rejected",
+      "id": "public-image-metadata",
+      "label": "EXIF/XMP metadata in served images under public/",
+      "notes": "candidate-081c3af2ede93d08: validation=reportable, attack_path=ignore (impact ignore, likelihood high, severity ignore). No GPS in any of 29 rasters; camera model, capture dates, and one photographer name plus camera serial (harriet-chan.jpg). Strip on export as hygiene.",
+      "receiptRefs": [
+        "artifacts/02_discovery/candidate_ledger.jsonl",
+        "artifacts/02_discovery/work_ledger.jsonl"
+      ],
+      "riskArea": "Information disclosure"
+    },
+    {
+      "disposition": "rejected",
+      "id": "amplify-build-pipeline",
+      "label": "Amplify build spec and dependency install (amplify.yml, pnpm-lock.yaml)",
+      "notes": "candidate-2744ce1791fbece2: validation=reportable, attack_path=ignore (impact high, likelihood ignore, severity ignore). Exact pins, 224/224 sha512 lockfile entries, registry-only sources, no allowlisted lifecycle scripts. Residual gaps (global pnpm without repo-pinned hash, cached node_modules) need repo/Amplify control or registry compromise. Hardening: packageManager +sha512 via corepack; cache the pnpm store, not node_modules.",
+      "receiptRefs": [
+        "artifacts/02_discovery/candidate_ledger.jsonl",
+        "artifacts/02_discovery/work_ledger.jsonl"
+      ],
+      "riskArea": "Build / supply-chain integrity"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "public-svg-assets",
+      "label": "Same-origin SVG assets under public/ (24 files)",
+      "notes": "Affirmative review: every SVG parsed with xml.etree and its full element/attribute inventory checked; only inert shapes, no script/foreignObject/on* handlers/external href or url(). adobe-creative-cloud.svg embeds an inert data:image/png.",
+      "receiptRefs": [
+        "artifacts/02_discovery/work_ledger.jsonl"
+      ],
+      "riskArea": "Stored XSS via active SVG content"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "runtime-render-paths",
+      "label": "All runtime source under src/ (31 files: 8 app routes, 22 components, 1 stylesheet)",
+      "notes": "Affirmative review: every file read in full (keyboard.tsx via a structural filter that printed all non-SVG-path lines). All rendered data is constant; client components handle only UI state. Corroborated by the sink searches in negative_searches.txt.",
+      "receiptRefs": [
+        "artifacts/02_discovery/work_ledger.jsonl",
+        "artifacts/03_coverage/negative_searches.txt"
+      ],
+      "riskArea": "XSS / DOM sinks / unsafe client logic"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "dependency-lockfile",
+      "label": "Dependency manifest, lockfile and package-manager config",
+      "notes": "Structural review of all 224 lockfile package entries (sha512 on every one, registry sources only); .npmrc and pnpm-workspace.yaml carry no registry override or token. Advisory currency of the pinned versions is not judged here (see open questions; owned by the dependency lens).",
+      "receiptRefs": [
+        "artifacts/02_discovery/work_ledger.jsonl",
+        "artifacts/03_coverage/negative_searches.txt"
+      ],
+      "riskArea": "Dependency source integrity"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "docs-and-agent-tooling",
+      "label": "docs/, README, CHANGELOG, LICENSE, .claude/ agent tooling",
+      "notes": "Affirmative review: read in full. Not served by Next. Agent tooling instructs read-only git and aws list/get commands under developer control.",
+      "receiptRefs": [
+        "artifacts/02_discovery/work_ledger.jsonl"
+      ],
+      "riskArea": "Secret leakage / unsafe automation instructions"
+    },
+    {
+      "disposition": "not_applicable",
+      "id": "api-routes-middleware-server-actions",
+      "label": "Route handlers, API routes, middleware/proxy, server actions, RSC action decoding",
+      "notes": "NEGATIVE SEARCH: no route/middleware/proxy files, no \"use server\"; built server-reference manifest is empty, so Next rejects multipart and fetch action requests before decoding (action-handler.js:415-419).",
+      "receiptRefs": [
+        "artifacts/03_coverage/negative_searches.txt",
+        "artifacts/02_discovery/validation_artifacts/candidate-27894790d5bbed1b/server_reference_manifest_actions.txt"
+      ],
+      "riskArea": "Auth bypass / injection / RSC deserialization"
+    },
+    {
+      "disposition": "not_applicable",
+      "id": "auth-session-csrf",
+      "label": "Authentication, sessions, cookies, authorization, CSRF",
+      "notes": "NEGATIVE SEARCH: no cookies(), headers(), session, or auth code in src/; the only form is the non-functional /login template.",
+      "receiptRefs": [
+        "artifacts/03_coverage/negative_searches.txt"
+      ],
+      "riskArea": "Account takeover / CSRF / IDOR"
+    },
+    {
+      "disposition": "not_applicable",
+      "id": "server-side-io",
+      "label": "Server-side fetch, filesystem, process, env, database access in application code",
+      "notes": "NEGATIVE SEARCH: no fetch/axios/http, fs, child_process, process.env or DB client in src/ or package.json dependencies.",
+      "receiptRefs": [
+        "artifacts/03_coverage/negative_searches.txt"
+      ],
+      "riskArea": "SSRF / path traversal / command and query injection"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "redirect-and-navigation-sinks",
+      "label": "Redirects and navigation sinks",
+      "notes": "NEGATIVE SEARCH plus review of the single hit: not-found.tsx:4 redirect(\"/\") with a constant target; no window.location or router.push with input.",
+      "receiptRefs": [
+        "artifacts/03_coverage/negative_searches.txt"
+      ],
+      "riskArea": "Open redirect"
+    },
+    {
+      "disposition": "not_applicable",
+      "id": "browser-storage-and-third-party-scripts",
+      "label": "Browser storage, postMessage, third-party scripts and embeds",
+      "notes": "NEGATIVE SEARCH: no localStorage/sessionStorage/postMessage/cookie access, no next/script, script, iframe, embed or analytics tags in src/.",
+      "receiptRefs": [
+        "artifacts/03_coverage/negative_searches.txt"
+      ],
+      "riskArea": "Client-side data exposure / script supply chain"
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "secrets-tree-and-history",
+      "label": "Secrets in the tracked tree and in git history (all refs)",
+      "notes": "NEGATIVE SEARCH: secret patterns 0 hits in tracked text; history sweep over 80 commits found 0 literal secrets (the removed Sanity blog read env vars only). A node_modules snapshot exists only on local refs/original filter-branch backups and was not scanned (third-party code).",
+      "receiptRefs": [
+        "artifacts/03_coverage/negative_searches.txt",
+        "artifacts/03_coverage/history_secret_scan.txt"
+      ],
+      "riskArea": "Credential exposure"
+    }
+  ]
+}

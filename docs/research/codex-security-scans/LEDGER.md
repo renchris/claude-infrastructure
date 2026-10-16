@@ -86,6 +86,71 @@ secret). `debug/vapid` returns only a boolean for the private key.
 - `/api/replicache-pull` — recorded as `deferred_replicache_pull`; read path, so CORS blocks
   reading the response, but its tenant-scoping was never traced.
 
+### reso-landing-app
+
+| Scan | Revision | Scope | Completeness | Findings |
+|---|---|---|---|---|
+| `d3ebdcee_20261016T160016Z` | `d3ebdcee` (branch `deps-upgrade-2026-10`, Next 16.4.1; **not** production `main`) | whole repo, 107 tracked files | **complete** | 0 |
+
+First codex scan of this repo (P1 full enumeration), run as lens H of `/exhaust-improvements
+--plan-only` (reso-management-app `1fcd7827e`), prompt-only and single-agent (no fan-out; recorded in
+`scan-manifest.json` `scope.context`). Sealed 2026-10-16T16:15:46Z, 15 artifacts hashed.
+
+**Covered:** all 31 `src/` files read in full; 24 SVGs parsed by element; 13 build/config files;
+`pnpm-lock.yaml` structurally (224 entries, all sha512, registry-only). 8 candidates, all rejected at
+the policy pass (pricing `?tier`, the dead `/login` form, headers/CSP, Fontshare CSS without SRI,
+`target=_blank`, the branch's image optimizer, raster metadata, the Amplify build pipeline).
+**As lens G's confirmer** it reproduced Cloudflare's one lead locally (in-process harness, network
+guard, 0 connection attempts): `/_next/image` keys its cache on the URL `#fragment`, so anonymous GETs
+force a fresh sharp transform each time (~380 ms CPU vs 3.6 ms on a hit); rated **low**. Fix:
+`images: { unoptimized: true }`, the same change as decision `58f292806fd7`. Report:
+`/tmp/sibling-deps-2026-10-16/exhaust/reso-landing-app/h-validate/VALIDATION.md` (swept; its verdict is
+in the repo's `docs/plans/EXHAUST_IMPROVEMENTS_2026-10-16.md` as LND-01).
+
+**P2 — these surfaces rest on a NEGATIVE search and suppress nothing next run:**
+`api-routes-middleware-server-actions`, `auth-session-csrf`, `server-side-io`,
+`browser-storage-and-third-party-scripts` (all `not_applicable`), plus `redirect-and-navigation-sinks`
+and `secrets-tree-and-history` (`no_issue_found`, search-derived).
+
+**NOT covered:** advisories for next 16.4.1 / react 19.3.1 / sharp 0.35.5 published after June 2026 (no
+network); Amplify console state for app `d3ce74t8uneoh0` (custom headers, WAF, body logging, build
+cache); raster images beyond metadata; production `main` (Next 14.2.11), which is a different tree.
+
+### reso-web-app
+
+| Scan | Revision | Scope | Completeness | Findings |
+|---|---|---|---|---|
+| `f0f3b89_20261016T155948Z` | `f0f3b89` (`main`, Next 15.5.28) | whole repo, 600 tracked files | **complete** | 4 (all **low**) |
+
+First codex scan of this repo (P1), lens H of the same `/exhaust-improvements --plan-only` pass,
+single-agent; sealed 2026-10-16T16:20:18Z (re-sealed once to correct a count in `validationMode`).
+Validation harness: a copy of `src/` with the AWS SDK mocked and the endpoint at `127.0.0.1:9`, 10/10;
+nothing contacted, nothing written.
+
+**Findings, by class only (all open at the time of writing):** two unauthenticated write endpoints
+accept a client-chosen partition key with no overwrite condition, one accepts staff-owned fields from
+the public, and the API rate limiter keys on a client-writable header. Detail, line numbers and the
+proof-of-concept live in the private repo's backlog (`docs/plans/EXHAUST_IMPROVEMENTS_2026-10-16.md`,
+WEB-01/02/04/07). **The sealed bundle is NOT committed here**, unlike the other rows: this repo is public
+and the findings are unfixed on a live site, so it sits in the private store at
+`$CC_PRIVATE_DIR/docs/research/codex-security-scans/reso-web-app/f0f3b89_20261016T155948Z/`.
+
+**As lens G's confirmer** it re-checked Cloudflare's 8 leads: 7 reproduced, 1 confirmed statically (a
+credential committed in the private repo's old history; the scan itself missed it because it reads
+the tree, not history — WEB-13 in that backlog). **Process lesson:** a tree-only secret search marked
+`surface_secrets_in_tree` clean while the history held a key; give the next scan a history sweep.
+
+**P2 — resting on a NEGATIVE search, suppress nothing next run:** `surface_server_injection_classes`,
+`surface_csrf_session` (`not_applicable`); `surface_html_pages_client` (most of 53 component files were
+searched, not read), `surface_public_static_assets`, `surface_dev_scripts`, `surface_tests`,
+`surface_secrets_in_tree` (tree only — **history was not scanned, which is exactly where the key was**),
+and the missing-framing-headers sub-claim.
+
+**NOT covered:** yarn.lock advisory matching (dep-audit's lens); sibling consumers of the guestlist table
+(GuestlistProcessor, GuestlistProcessor-Python, sevenrooms-bridge, the door app); production facts
+(legacy ids, the real XFF chain, whether `scripts/cloudfront/normalise-accept.js` is deployed); 112
+`docs/**/*.md` regex-scanned only; 264 binaries and 6 `.gz` baselines; branch `next16`.
+
 ---
 
 ## Findings — 6 total: 3 landed, 1 fixed-but-parked, 2 open
@@ -325,3 +390,42 @@ instrument artifact rather than a fact.
 
 **`enumeration_complete[cloudflare, reso]` is unchanged by this row.** Enumerating uncovered units is
 not auditing them, and nothing here may be counted as absence of a defect.
+
+### reso-landing-app
+
+| Scan | Revision | Scope | Profile | Enumeration | Confirmed | Needs validation |
+|---|---|---|---|---|---|---|
+| `reso-landing-app/run-1` | `d3ebdcee` (branch `deps-upgrade-2026-10`) | whole repo | `quick` | **complete** (first run, P1) | 0 | 1 |
+
+`enumeration_complete[cloudflare, reso-landing-app]` is now **true** at `d3ebdcee`. 22 ledger units: 16
+`covered`, 1 `candidate` (the lead), 3 `blocked`, 2 `deferred`; 3 hunters and 1 verifier, 6 companion
+files. Both validators PASS (`1 findings valid`, `22 coverage units valid`). No target code ran (no
+OS-enforced sandbox). The run's phase-6 markdown was refused to the workflow's subagents and rendered
+afterwards from the final JSON; `run-metadata.json` records it as `phase6_rendered_by`.
+
+**The one lead is the codex-reproduced `/_next/image` fragment cache-key miss** (codex row above). It
+stays `needs_validation` in this run's own records: codex's harness is not the OS sandbox this skill
+requires, so the verdict was not promoted. **Blocked/deferred units** wait on facts outside source:
+how Amplify WEB_COMPUTE serves `/_next/image` (minimal mode or not), its CloudFront query-string policy
+and WAF, console custom headers, request-body logging for the dead `/login` POST, and build-cache
+scoping for previews. Artifacts: `~/security-audit-skill/reso-landing-app/run-1/` (outside every repo).
+
+### reso-web-app
+
+| Scan | Revision | Scope | Profile | Enumeration | Confirmed | Needs validation |
+|---|---|---|---|---|---|---|
+| `reso-web-app/run-1` | `f0f3b89` (`main`) | whole repo | `standard` | **partial** (first run, P1; `coverage_complete: false`) | 0 | 8 |
+
+43 ledger units: 18 `covered`, 17 `candidate`, 3 `deferred`, 1 `blocked`, 4 `out_of_scope`; 7 hunters
+over two waves plus a post-wave and a final critic; 17 candidates folded to 15 records (0 confirmed, 8
+needs_validation, 7 rejected). Both validators PASS (`15 findings valid`, `43 coverage units valid`). No
+target code ran. Codex then reproduced 7 of the 8 leads and confirmed the eighth statically (codex row
+above), and two of Cloudflare's 7 rejections were overruled by the repo's other lenses (the guestlist
+field-allowlist gap, backlog WEB-01). **`enumeration_complete[cloudflare, reso-web-app]` stays false.**
+
+**NOT covered — the next run's work:** 3 units deferred at the wave-2 stop (`early_stop_after_wave_2`):
+the paid downstream work an anonymous guestlist row triggers (email/SNS stream fan-out), value injection
+into the `/api/agent-content` `Link` header from the raw `?path=`, and the distinct `422
+email_reservation_cap` as an email-enumeration oracle; 1 blocked unit: the live IAM policy of the Amplify
+SSR compute role , readable only by the operator. Artifacts:
+`~/security-audit-skill/reso-web-app/run-1/` (outside every repo).
