@@ -192,6 +192,42 @@ evidence() { mkdir -p "$REC/evidence"; printf '%s\n' "$2" > "$REC/evidence/$1"; 
   [ "$(hole H-RH-1 'h["materiality"]["level"], h["materiality"]["clause"]')" = "REFINEMENT None" ]
 }
 
+# RED-proof: cmd_rate recorded nothing unless all three calls were valid, and run_courier refused the lost
+# slot past its re-run cap, so a hole whose rater 2 died three times stayed unrated forever even when the
+# other two had fixed the median (H-RH-2, 2026-10-16: openai M, anthropic M, google dead 3 of 3).
+@test "rehearsal-rate: a slot lost past its re-run cap records the level when no call of it could change it, and refuses when one could" {
+  verified
+  local i
+  for i in 1 2 3; do
+    FAKE_FAIL_GOOGLE=1 FAKE_REPLY_OPENAI="$(rating M '"b"')" FAKE_REPLY_ANTHROPIC="$(rating M '"b"')" \
+      run "$R" rehearsal-rate --program demo --hole H-RH-1
+    [ "$status" -eq 3 ]
+  done
+  [ "$(hole H-RH-1 '"materiality" in h')" = False ]
+  : > "$FAKE_ARGV_LOG"
+  FAKE_FAIL_GOOGLE=1 run "$R" rehearsal-rate --program demo --hole H-RH-1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"H-RH-1: MATERIAL (clause b)"*"rater2"*"google"* ]] || false
+  # the spent slot is not re-run, and the two valid calls were not either
+  [ ! -s "$FAKE_ARGV_LOG" ]
+  [ "$(hole H-RH-1 'h["materiality"]["level"], h["materiality"]["clause"], sorted(h["materiality"]["raters"]), h["materiality"]["lost"]["slot"], h["materiality"]["lost"]["vendor"], h["materiality"]["lost"]["why"].startswith("dead")')" \
+    = "MATERIAL b ['1', '3'] 2 google True" ]
+}
+
+@test "rehearsal-rate: a slot lost past its re-run cap still records nothing when its call could move the median" {
+  verified
+  local i
+  for i in 1 2 3; do
+    FAKE_FAIL_GOOGLE=1 FAKE_REPLY_OPENAI="$(rating M '"b"')" FAKE_REPLY_ANTHROPIC="$(rating C null)" \
+      run "$R" rehearsal-rate --program demo --hole H-RH-1
+    [ "$status" -eq 3 ]
+  done
+  FAKE_FAIL_GOOGLE=1 run "$R" rehearsal-rate --program demo --hole H-RH-1
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"H-RH-1-rater2 ran 3 times"*"could change the level"* ]] || false
+  [ "$(hole H-RH-1 '"materiality" in h')" = False ]
+}
+
 @test "rehearsal-name: names a CONFIRMED MATERIAL rehearsal find as an open rehearsal known row applied in a build wave, blocking none" {
   stopped
   hr() { /usr/bin/python3 -c 'import json, sys

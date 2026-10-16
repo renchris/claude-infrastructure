@@ -14,6 +14,8 @@ known row"; RECORDS.md "Rehearsal finds"). Verbs on round.sh, each under the pro
       rater 2 another family, rater 3 the third) on the frozen briefs/rater.md (RUBRIC.md), through
       `courier.sh run --round rehearsal --role rater`; only a CONFIRMED hole. The level is the median of
       the three calls, so MATERIAL is 2 of 3 M; a lost rater records nothing, and the re-run runs only it.
+      Once a lost rater is past its re-run cap it never runs again: if the other two agree, no call of it
+      moves the median, so their level is recorded with materiality.lost {slot, vendor, why}; else refused.
   round.sh rehearsal-name   --program P --hole H-RH-<n> --known-row KR-<n> --wave W --reason T --evidence F…
       Name a CONFIRMED MATERIAL non-(g) rehearsal find as an open `rehearsal` known row applied in build
       wave W, blocking none (like name-cap's cap-round row). A clause-(g) find is hold-g's. Gate row 9
@@ -408,6 +410,22 @@ def level_of(calls: List[Dict[str, Any]]) -> Tuple[str, Optional[str]]:
     return CALLS[lvl], max(ms, key=lambda c: (ms.count(c), -ms.index(c)))
 
 
+def fixed_level(calls: List[Dict[str, Any]]) -> Optional[Tuple[str, Optional[str]]]:
+    """The level (and clause) these two calls give whatever the lost third rater would have said, or
+    None when one of its calls moves the median. The clause comes from the calls actually made."""
+    lvls = {
+        level_of(calls + [{"rating": r, "clause": "?" if r == "M" else None}])[0]
+        for r in CALLS
+    }
+    if len(calls) != 2 or len(lvls) != 1:
+        return None
+    lvl = lvls.pop()
+    if lvl != CALLS["M"]:
+        return lvl, None
+    ms = [c["clause"] for c in calls if c["rating"] == "M"]
+    return lvl, max(ms, key=lambda c: (ms.count(c), -ms.index(c)))
+
+
 def cmd_rate(a: argparse.Namespace) -> int:
     import cli_cert
 
@@ -441,7 +459,10 @@ def cmd_rate(a: argparse.Namespace) -> int:
         return (None, c) if c else ("no rating in the reply", None)
 
     ensure_bundle(a.program, plan)
-    todo = [k for k in sorted(by_slot) if read(k)[1] is None]
+    tries = cli_cert.attempts(a.program, ROUND)
+    cap = 1 + kit.CAPS["slot_reruns"]
+    spent = {k for k in by_slot if tries.get(pids[k], 0) >= cap}
+    todo = [k for k in sorted(by_slot) if read(k)[1] is None and k not in spent]
     if todo:
         it = dict(
             item(h, plan),
@@ -456,7 +477,23 @@ def cmd_rate(a: argparse.Namespace) -> int:
         )
     got = {k: read(k) for k in sorted(by_slot)}
     bad = {k: why for k, (why, c) in got.items() if c is None}
-    if bad:
+    gone: Optional[Dict[str, Any]] = None
+    fixed: Optional[Tuple[str, Optional[str]]] = None
+    if bad and set(bad) <= spent:
+        # Every lost slot is past its re-run cap, so it can never be read: the hole is rated only if
+        # no call it could have made moves the median (one lost slot, the other two agreeing).
+        if len(bad) == 1:
+            fixed = fixed_level([c for _, c in got.values() if c])
+        if fixed is None:
+            raise rounds.Refused(
+                f"{', '.join(pids[j] for j in sorted(bad))} ran {cap} times; a slot is re-run at most "
+                f"{kit.CAPS['slot_reruns']} times, and a call of the lost slot could change the level; "
+                "nothing recorded"
+            )
+        k = next(iter(bad))
+        gone = {"slot": k, "vendor": by_slot[k]["vendor"], "why": bad[k]}
+        got = {j: v for j, v in got.items() if j != k}
+    elif bad:
         print(
             "; ".join(
                 f"{pids[k]} ({by_slot[k]['vendor']}): {why}" for k, why in bad.items()
@@ -467,23 +504,32 @@ def cmd_rate(a: argparse.Namespace) -> int:
     calls = [
         dict(got[k][1], vendor=by_slot[k]["vendor"], panel=pids[k]) for k in sorted(got)
     ]
-    lvl, clause = level_of(calls)
+    lvl, clause = fixed or level_of(calls)
     kit.append_jsonl(
         settle.holes_path(a.program),
         {
             "id": a.hole,
             "event": "rate",
-            "materiality": {
-                "level": lvl,
-                "clause": clause,
-                "raters": {str(k): c for k, c in zip(sorted(got), calls)},
-                "at": kit.now_iso(),
-            },
+            "materiality": dict(
+                {
+                    "level": lvl,
+                    "clause": clause,
+                    "raters": {str(k): c for k, c in zip(sorted(got), calls)},
+                    "at": kit.now_iso(),
+                },
+                **({"lost": gone} if gone else {}),
+            ),
         },
     )
     print(
         f"{a.hole}: {lvl}{' (clause ' + clause + ')' if clause else ''} from "
         + ", ".join(f"{c['vendor']} {c['rating']}" for c in calls)
+        + (
+            f"; rater{gone['slot']} ({gone['vendor']}) lost past its re-run cap ({gone['why']}), "
+            "and no call of it changes the level"
+            if gone
+            else ""
+        )
         + (
             ". Name it: round.sh rehearsal-name (clause g: round.sh hold-g)"
             if lvl == "MATERIAL"

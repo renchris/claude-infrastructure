@@ -50,6 +50,10 @@ case " $* " in *" --sandbox "*) ;; *) echo "not sandboxed" >&2; exit 1 ;; esac
 # the real CLI auto-denies the shell command its model reaches for to read files, and answers empty
 case "$*" in *"built-in file viewing"*) ;; *)
   echo '{"status":"SUCCESS","response":"","denied_actions":[{"action":"command","display_name":"RunCommand"}]}'; exit 0 ;; esac
+# agy 1.4.0 soft-denies its own file viewer on a path outside the workspace, and that also ends the run
+# empty; its model opens one when a file the brief cites is not in the bundle, unless told not to
+case "$*" in *"outside your working directory"*) ;; *)
+  echo '{"status":"SUCCESS","response":"","denied_actions":[{"action":"read_file","display_name":"ViewFile"}]}'; exit 0 ;; esac
 m=""; while [ $# -gt 0 ]; do [ "$1" = "--model" ] && m="$2"; shift; done
 if [ -n "${FAKE_AUTH_FAIL:-}" ]; then
   echo '{"status":"ERROR","response":"","error":"authentication failed or timed out"}'; exit 1
@@ -287,6 +291,16 @@ effort_frame() {
   run "$C" run --program demo --round 1 --pid r1p4 --vendor google --strategy full-context --role reviewer --brief "$BRIEF"
   [ "$status" -eq 0 ]
   [ "$(panel r1p4 'd["status"]')" = "complete" ]
+}
+
+# RED-proof: the note named only the built-in viewer, so a rater whose frozen brief cites REPORT.md and
+# skills/research-program/RUBRIC.md (neither is in the bundle) went looking for them by absolute path;
+# agy 1.4.0 soft-denied that ViewFile outside the workspace and the slot died empty (H-RH-2, 2026-10-16).
+@test "run: google's note keeps agy's reads inside the bundle, so a rater citing a file the bundle lacks still replies" {
+  "$C" bundle --program demo --round 1 --plan "$BATS_TEST_TMPDIR/PLAN.md"
+  run "$C" run --program demo --round 1 --pid r1rater2 --vendor google --strategy rater --role rater --brief "$BRIEF"
+  [ "$(panel r1rater2 'd["status"]')" != "dead" ]
+  ! grep -qF 'ViewFile' "$CC_RESEARCH_RECORDS/rounds/1/panels/r1rater2.raw" || false
 }
 
 @test "integrity: a raw output that shows the real records path is voided; a clean one is not" {

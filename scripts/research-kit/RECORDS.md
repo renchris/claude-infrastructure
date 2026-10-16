@@ -306,7 +306,9 @@ the gate's round rows select rounds by matrix or by round number). No verb here 
   1 non-Anthropic, rater 2 another family, rater 3 the third; the two-vendor default's fresh-process rater 3 too) on
   the frozen `briefs/rater.md` (RUBRIC.md), pids `H-RH-<n>-rater<k>`, in parallel through `courier.sh run --role
   rater`. Only a CONFIRMED hole, once. A lost rater records nothing and the re-run runs only the raters without a
-  valid call. Appends `{id, event: "rate", materiality:{level, clause, raters:{"1"|"2"|"3": {rating, clause, vendor,
+  valid call. A rater lost past its re-run cap never runs again: when it is the only one lost and the other two
+  agree, no call of it moves the median, so their level is recorded with `materiality.lost: {slot, vendor, why}`
+  and only their two calls in `raters`; otherwise the rate is refused. Appends `{id, event: "rate", materiality:{level, clause, raters:{"1"|"2"|"3": {rating, clause, vendor,
   panel}}, at}}`: the level is the median call (M > R > C > G), so MATERIAL is 2 of 3 M, the rule `round.sh repass`
   checks; the clause is the one most material calls gave, the earlier rater on a tie. The verifier already
   reproduced the consequence, so a material level is MATERIAL, never MATERIAL-DISPUTED. Rater notes stay in the

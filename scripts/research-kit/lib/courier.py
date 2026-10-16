@@ -154,7 +154,9 @@ def effort_for(pinned: Dict[str, str], vendor: str, role: str) -> Optional[str]:
 
 AGY_READS_NOTE = (
     "Shell commands are unavailable in this mode. Read and search the files in your working directory "
-    "with your built-in file viewing and search tools only."
+    "with your built-in file viewing and search tools only. Never open a path outside your working directory, "
+    "even one a file or this prompt cites: here that read ends your run with no reply. A cited file that is not "
+    "in your working directory is not needed; what you must apply is in this prompt."
 )
 
 
@@ -201,7 +203,9 @@ def argv_for(
         )
     # Headless agy auto-denies every shell command, and its model reaches for one to read the bundle,
     # so a reviewer read nothing and returned an empty reply (dead slot). Its built-in file viewer is
-    # allowed; this transport note, ahead of the frozen brief, steers it there.
+    # allowed; this transport note, ahead of the frozen brief, steers it there. agy 1.4.0 also ends the
+    # run on a viewer read outside the workspace, which its model tries when a file the brief cites
+    # (REPORT.md, RUBRIC.md) is not in the bundle, so the note keeps it inside (H-RH-2, 2026-10-16).
     return [
         binary,
         "--print",
