@@ -677,3 +677,34 @@ default when a rule, carry, reopen or affirm event follows that packet's convers
 - Sweep step 2 converts only an `open` or `reopened` decision. An overdue class-C packet on one already `ruled` or
   `carried` is actioned in cc-decide with evidence `decision already <status>; packet superseded`: no class-B packet,
   no descope, no record event.
+
+## Method v1.3 records: exhaust, then proceed (added 2026-10-16; REPORT.md §13)
+
+Every v1.3 path applies to every frame; only FAC-34..FAC-38 are keyed on the 1.3 stamp.
+
+- **Event-keyed dues.** Any filed `due` may be a date (ISO-8601 UTC or `YYYY-MM-DD`) or `<event>+<N>d`, where the
+  event is a build wave (`W1+30d`) or the certificate's issue (`cert+7d`, the first `CERT-v*.json` carrying `issued`).
+  `kit.resolve_due` reads it as `date`, `event` (resolved), `pending` (the event has not happened: never past) or `bad`.
+  A not-yet-true filing may key only on its owner wave, a wave resting on it, or `cert` (gate row 4).
+- **`waves.jsonl`**, one row per started wave: `{wave, event: "started", at, cert}`, appended by `gate.sh requires
+  --program P --wave W --start` only when W is admitted, and only the first time (a later one prints `already
+  started`). `handoff-fire.sh --requires-gate P --gate-wave W` calls it on a real fire, never a dry run.
+- **`scheduled-reads.jsonl`**, row 15 as a scheduled read: a filing `{id: SR-15-<n>, event: "filed", row: 15, awaits,
+  strata, owner, due, closing_probe, falsifier, blocks_waves, why[, supersedes]}` from `cc-research read file`, and its
+  read `{id, event: "read", row: 15, verdict: PASS|FAIL, at, fails, notes}` from `gate.sh read --consent-sealed-read`.
+  The live filing is the newest one no later filing superseded. Row 15 is FILED while the instrument's awaiting
+  strata are covered by a live unread filing whose due has not passed; FAIL when it is past due, does not cover them,
+  or its read FAILed; otherwise row 15 reads under its own rules. `gate.sh requires` holds `blocks_waves` until a PASS.
+- **The certificate signature gates the build.** `gate.sh requires` refuses every wave until a VALID `cc-signoff
+  research:<slug>/cert` pins the newest `CERT-v<n>.json`.
+- **`adopt/stage9`**, an operator signature in the sealed `signoff.jsonl` (`action: "adopt"`, `target: "stage9"`, no
+  pins), lets `kit.stage9_applies` run Stage 9 for a pre-1.2 frame; `frame.json` is untouched.
+- **`frame.json` `degraded` and `degraded_terms`** `{dead, restore_probes, at}`, written by `intake.py set --degraded
+  "two vendors" --restore-probe P-…` before the frame is signed, only with exactly one dead lane in the newest
+  preflight and each restore probe present in `probes.jsonl`.
+- **Known rows, the frame-delta close.** A frame-omission known row carries the `ts` it was held at. The sweep spares
+  it once a VALID frame signature is newer than that `ts` (a row with no `ts` keeps the old reading, newer than its
+  `resign_due`). A passing `gate.sh run` then appends `{id, status: "closed", closed_by: "CERT-v<n>", why}` for each
+  open one held before a valid frame signature.
+- **The certificate's late count.** `Scheduled checks:` counts the not-yet-true filings and scheduled reads whose `ts`
+  is after `freeze.json` `at`: the waits the intake did not front-load.

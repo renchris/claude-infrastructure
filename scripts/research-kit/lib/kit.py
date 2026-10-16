@@ -228,6 +228,12 @@ def is_v12(frame: Dict[str, Any]) -> bool:
     return method_version(frame) >= (1, 2)
 
 
+def is_v13(frame: Dict[str, Any]) -> bool:
+    """True for a frame stamped 1.3 or later: it owes the five front-loading checklist rows
+    (REPORT.md §13.6). Every v1.3 proceed path (§13.1-§13.5) applies to every frame."""
+    return method_version(frame) >= (1, 3)
+
+
 def stage9_applies(slug: str, frame: Dict[str, Any]) -> bool:
     """Stage 9 (REPORT.md §11) runs for a 1.2 frame, or (method v1.3, §13.3) for an earlier one the
     operator adopted it for with a VALID `cc-signoff research:<slug>/adopt/stage9`. Rows 18 and 19

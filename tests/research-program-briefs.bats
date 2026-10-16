@@ -76,14 +76,16 @@ assert str(seed.MIN_ANCHOR) in text
 PY
 }
 
-@test "checklist.jsonl is gate row 1's FAC-01..FAC-33, worded as REPORT.md §3.2 step 5" {
+@test "checklist.jsonl is gate row 1's FAC-01..FAC-33 plus v1.3's FAC-34..FAC-38, worded as REPORT.md §3.2 step 5" {
   python3 - "$REPO" <<'PY'
 import json, re, sys
 root = sys.argv[1]
 sys.path[:0] = [root + "/scripts/research-kit/lib", root + "/scripts/lib"]
 import gate_rows_a
 rows = [json.loads(l) for l in open(root + "/skills/research-program/checklist.jsonl")]
-assert [r["id"] for r in rows] == gate_rows_a.FAC_IDS
+assert [r["id"] for r in rows] == gate_rows_a.FAC_IDS + gate_rows_a.FAC_V13_IDS
+# method v1.3 (§13.6): the five front-loading rows carry their version, the first 33 none
+assert [r.get("since") for r in rows] == [None] * 33 + ["1.3"] * 5
 report = open(root + "/docs/research/upfront-research-exhaustion-2026-09-30/REPORT.md").read()
 table = dict(re.findall(r"^   \| (\d+) \| (.+?) \|$", report, re.M))
 for r in rows:

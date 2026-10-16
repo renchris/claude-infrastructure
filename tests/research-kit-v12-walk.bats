@@ -28,8 +28,8 @@ setup() {
   grep -qx '## Walk end: demo is closed, by way of implementation-signed' "$OUT"
 }
 
-@test "stage 1: a fresh program is stamped 1.2 and its contract page carries the v1.2 ceiling" {
-  grep -qx 'frame.json method_version: 1.2' "$OUT"
+@test "stage 1: a fresh program is stamped 1.3 (method v1.3 keeps every v1.2 row) and its contract page carries the v1.2 ceiling" {
+  grep -qx 'frame.json method_version: 1.3' "$OUT"
   grep -q 'ceiling with the v1.2 additions about 18.75 days (12 + 5.25 + 1.5)' "$OUT"
   grep -q 'about 18.75 days (lite profile, §6.1, plus the v1.2 yield ceiling 5.25 d and Stage 9 1.5 d)' "$OUT"
 }

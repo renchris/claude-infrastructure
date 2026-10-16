@@ -483,9 +483,25 @@ def live_state(rec: Path, cert: Dict[str, Any]) -> Dict[str, Any]:
     ]
     # Method v1.3 (REPORT.md §13.2): a keyed due sorts by what it resolved to; one whose event has
     # not happened is pending and is counted, never compared as text with a date.
-    due_at: List[
-        Tuple[float, str]
-    ] = []  # (when, as printed): a date as filed, an event resolved
+    # Method v1.3 (REPORT.md §13.6): a wait filed after the freeze is one the intake did not
+    # front-load; the count is the front-loading's own measure.
+    frozen = str((kit.read_json(rec / "freeze.json", {}) or {}).get("at") or "")
+    import scheduled_read
+
+    late = 0
+    if frozen:
+        late = sum(
+            1
+            for r in res
+            if r.get("why_unreachable") == kit.NOT_YET
+            and str(r.get("ts") or "") > frozen
+        ) + sum(
+            1
+            for e in scheduled_read.events(rec)
+            if e.get("event") == "filed" and str(e.get("ts") or "") > frozen
+        )
+    # (when, as printed): a date as filed, an event resolved
+    due_at: List[Tuple[float, str]] = []
     pending = 0
     for r in sched:
         kind, t = kit.resolve_due(r["due"], rec)
@@ -512,6 +528,7 @@ def live_state(rec: Path, cert: Dict[str, Any]) -> Dict[str, Any]:
         ),
         "residual": classes,
         "scheduled": len(sched),
+        "filed_after_freeze": late,
         "not_yet": sum(1 for r in sched if r.get("why_unreachable") == kit.NOT_YET),
         "next_due": min(due_at)[1] if due_at else None,
         "due_pending": pending,
@@ -649,6 +666,12 @@ def lines_for(
         sched.append(
             f"last freshness run {when}, "
             + ("no verdict changed" if not f else f"{plural(f, 'verdict')} changed")
+        )
+    if live.get("filed_after_freeze"):
+        n = live["filed_after_freeze"]
+        sched.append(
+            f"{n} filed after the freeze ({'a wait' if n == 1 else 'waits'} the intake did not "
+            "front-load, §13.6)"
         )
     if sched:
         out.append("Scheduled checks: " + " · ".join(sched))

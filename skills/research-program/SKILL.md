@@ -17,6 +17,15 @@ tagged by what blocks them (§12), and Stage 9 certifies the built artifact befo
 apply only to a frame stamped `method_version` 1.2, which `intake.py init` writes; a frame without the
 stamp reads as 1.1 and keeps the eight-stage walk.
 
+Updated 2026-10-16 (v1.3, "exhaust, then proceed"; REPORT §13, ruled in the operator's words of that day):
+a program never parks on a future date. Work every route in physical grasp until none is left, then
+**proceed**, carrying what only time, accrual or a third party can settle as a FILED row with an owner, a
+due keyed to an event (`<wave>+<N>d`, `cert+<N>d`), a closing probe, a re-check at build (`gate.sh
+requires` holds only the waves resting on it) and a falsifier. A FILED row never prints as PASS, and no
+evidence standard moves. The proceed paths apply to every frame: row 15 as a scheduled read, event-keyed
+dues, Stage 9 adoption, the dead-lane degrade, the sealed read's practice run. `intake.py init` now stamps
+1.3, whose frame also maps FAC-34..FAC-38, the waits front-loaded at intake.
+
 **Use it** when the operator starts a greenfield effort and wants research that ends: "100.00/100.00",
 "no take-backs", "research everything before we build". **Do not use it** for ordinary research,
 for a case-sized question answerable in a day, or when the operator declines either §3.1 ruling.
@@ -40,6 +49,8 @@ for a case-sized question answerable in a day, or when the operator declines eit
   - `cc-signoff research:<slug>/profile/lite` — added 2026-10-12: move a certifying program's remaining
     rounds to a narrower profile, between two rounds, once per program; the ceiling, the stage budgets
     and the seeds stay as signed.
+  - `cc-signoff research:<slug>/adopt/stage9` — v1.3 (§13.3): a program whose frame predates 1.2 runs
+    Stage 9 without editing `frame.json`; rows 18 and 19 stay 1.2-only. Once per program.
 - **Program packets only through `gate.sh file-packet`**, never a bare `cc-decide open`: it adds the
   deliverable repo as `--project` and, for class B, `--default-effect no-change`, and gate row 12 fails
   any program packet without them (§10 item 4). Run `gate.sh sweep --program <slug>` daily in the pilot.
@@ -99,9 +110,12 @@ and finish the Google sign-in. Park it before anything else, because the preflig
    and a negative branch; the lint refuses `perfect|100th|maximal|best|exhaustive|absolute|flawless`
    without a number. Every decision's options include `do-nothing` and `use-what-exists`. Keep 7–10
    decision groups at the top level.
-6. **Map the checklist** (`checklist.jsonl` beside this file, FAC-01..FAC-33): each row to a frame row or
-   not-applicable with a reason, and each historical frame to a certificate axis or excluded in the
-   operator's words:
+6. **Map the checklist** (`checklist.jsonl` beside this file, FAC-01..FAC-33, and under a 1.3 frame
+   FAC-34..FAC-38): each row to a frame row or not-applicable with a reason, and each historical frame to
+   a certificate axis or excluded in the operator's words. FAC-34..38 are the waits, found now rather than
+   at the gate (v1.3, §13.6): every data accrual (a sealed set's date), every third party with the routes
+   tried, every one-shot spend with its practice path, every elapsed-time or scheduled check with its
+   wave, and every due keyed to an event. File each as its row the moment it is known:
    ```
    scripts/research-kit/intake.py map --program <slug> --fac FAC-06 --row K-03
    scripts/research-kit/intake.py map --program <slug> --fac FAC-24 --na "no live subject"
@@ -113,8 +127,10 @@ and finish the Google sign-in. Park it before anything else, because the preflig
    `briefs/reviewer.md` scoped to the frame rows. This is the only open-ended "what is missing?" in the
    whole protocol.
 8. **Contract page.** `scripts/research-kit/intake.py contract-page --program <slug>` refuses until both
-   rulings, the escape cost and a strictly earlier, all-live preflight exist (a dead lane exits 3: pause
-   on the operator step, class-B default "continue on two vendors" after 48 h). It writes `CONTRACT.md`,
+   rulings, the escape cost and a strictly earlier, all-live preflight exist (a dead lane exits 3; v1.3,
+   §13.4: exhaust the routes that restore it, each try a recorded probe, then `intake.py set --program
+   <slug> --degraded "two vendors" --restore-probe P-…` and the page renders degraded for the operator's
+   frame signature, with no 48-hour pause). It writes `CONTRACT.md`,
    pins the responding model ids and the reviewer effort (`reviewer_effort`: Opus xhigh, Fable high,
    OpenAI xhigh), and stores the page's hash in `frame.json`, so the frame signature covers the page.
    Every later preflight (each certification round needs a fresh one) is appended to the sealed
@@ -310,10 +326,29 @@ rule|carry|reopen`, or `decision affirm` to keep a ruled or carried one as it st
 closes its class-B packet). `gate.sh requires --program <slug> --wave <W>` prints the same
 verdict without firing. An admitted fire carries the `--requires-gate` work-order marker in its brief.
 
+Updated 2026-10-16 (v1.3, REPORT §13):
+- **Row 15 as a scheduled read.** When a stratum of the router's instrument awaits a fresh set, the read is
+  not in grasp. File it: `cc-research read file --program <slug> --row 15 --awaits "<what accrues>" --owner
+  <who> --due <date|cert+Nd> --falsifier "<cmd>" [--blocks-wave W] --why "<why>"` (refused while every
+  stratum is pinned: then read it). Row 15 prints FILED, decrypts nothing, and the certificate issues.
+  `scripts/research-kit/gate.sh read --program <slug> --row 15 --practice` runs every precondition of the
+  read and the router on canned prompts, writing nothing; run it until it prints PRACTICE READY. Then,
+  detached, `gate.sh read --program <slug> --row 15 --consent-sealed-read` spends the read under every guard
+  row 15 has. `requires` holds the filing's waves until a PASS; a FAIL is final, and a later gate run prints
+  row 15 FAIL until the strata await a fresh set and a new read is filed.
+- **A wave builds only on a signed certificate.** `requires` refuses every wave until the operator's VALID
+  `cc-signoff research:<slug>/cert` pins the newest certificate: the signature is what accepts its FILED rows.
+- **Wave starts and keyed dues.** A real gated fire records the wave's start (`requires --wave W --start`,
+  `waves.jsonl`). File dues as `<owner wave>+<N>d` or `cert+<N>d`: pending until the event, never re-dated
+  when the program's own waits move the wave (`cc-research premise file --due W1+30d`).
+- **The frame-delta cycle closes its rows.** The sweep spares a frame-omission known row once the operator
+  re-signs the frame after it was held, before or after its due, and the re-issued certificate closes it.
+
 ## Stage 9 — certify the built artifact (§11, method v1.2)
 
 Updated 2026-10-04 (v1.2). Stages 1–8 certify the plan; Stage 9 certifies what was built from it, after
-the last build wave and before the operator signs the implementation. It runs only under a 1.2 frame.
+the last build wave and before the operator signs the implementation. It runs only under a 1.2 frame,
+or (v1.3, §13.3) an earlier one the operator adopted it for with `cc-signoff research:<slug>/adopt/stage9`.
 The registry goes `certified → build-certifying → build-certified → closed`; both build states are active
 for the §3.1 exemption and the §4.2 research block, and the scheduled jobs still visit the program.
 

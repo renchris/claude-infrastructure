@@ -25,6 +25,9 @@ SUPERLATIVE = re.compile(
     r"\b(perfect|100th|maximal|best|exhaustive|absolute|flawless)\b", re.I
 )
 FAC_IDS = [f"FAC-{i:02d}" for i in range(1, 34)]
+# Method v1.3 (REPORT.md §13.6): five rows that front-load every wait (accrual, third party, one-shot
+# spend, elapsed-time or scheduled check, event-keyed due), required of a frame stamped 1.3 or later.
+FAC_V13_IDS = [f"FAC-{i:02d}" for i in range(34, 39)]
 TIMEOUT = 60
 
 
@@ -133,7 +136,7 @@ def row1(ctx: Ctx) -> Row:
     fac = {m.get("fac"): m for m in fr.get("fac_map") or []}
     unmapped = [
         f
-        for f in FAC_IDS
+        for f in FAC_IDS + (FAC_V13_IDS if kit.is_v13(fr) else [])
         if not (fac.get(f, {}).get("row") or fac.get(f, {}).get("na_reason"))
     ]
     if unmapped:

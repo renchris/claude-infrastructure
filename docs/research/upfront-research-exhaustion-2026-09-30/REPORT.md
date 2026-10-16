@@ -307,6 +307,15 @@ no-take-backs claim, and you can run ordinary research as today.
    | 31 | Decisions settled silently by default (freeze clauses, features shipped off) registered and ruled |
    | 32 | Cost and quota of building and running the deliverable measured, not estimated |
    | 33 | Every census of an outside population (models, libraries, vendors) carries an as-of date and an admission rule |
+   | 34 | Every data accrual a gate row or build wave needs (a sealed set, samples, trials) named with its expected date and its filed row |
+   | 35 | Every third party whose act a row needs (an operator signature or answer, an upstream merge or release, a counterparty, a vendor lane) named with the routes tried and its filed row |
+   | 36 | Every one-shot spend (a sealed read, a counted record, a re-test, an attempt budget) named with its uncounted practice path |
+   | 37 | Every elapsed-time check or scheduled component (a soak, a freshness window, a scheduler-started run) named with the wave that runs it |
+   | 38 | Every filed due keyed to an event (a wave start or the certificate's issue), not a calendar guess |
+
+   **Added 2026-10-16 (method v1.3, §13.6):** rows 34–38 front-load every wait the program will meet, so each is
+   found at intake with its filing instead of at the gate. Gate row 1 requires them of a frame stamped 1.3 or later;
+   an earlier frame maps rows 1–33 only.
 
 6. **Bounded frame critique: the only open-ended "what is missing?" in the protocol.** It is the first step that
    needs all three vendors, so it opens with a **vendor preflight**: one real call to each vendor's CLI, resolved by
@@ -1338,6 +1347,31 @@ classifier configuration are unchanged. Built in wave E1l of `docs/plans/RESEARC
   reading. Reason: a session launched with the kill switch would have run `/bin/bash -c off` on every item and still
   spent the read.
 
+**Ruled 2026-10-16: method v1.3, "exhaust, then proceed".** The operator's words that day are the ruling, quoted in
+full in `docs/research/method-exhaust-then-proceed-2026-10-16/REPORT.md`: "In-action and non-decisions and
+non-movement and idling is not an option. We have to research exhaustive perfection for what is in our physical
+grasp and then proceed. Do not wait on hypotheticals of impossible reach"; "we have to research exhaustively until
+we cant no more and then instead of stopping we need to proceed"; "Can't forever keep moving goal posts"; "we really
+want upfront exhaustive research and work rather than iterative research, move goal post, repeat, and never
+complete". It overrides ruling 8's freeze for the changes named in §13, each from a measured instance on
+truememory-2-0 (that report's §2 census, 17 waits with receipts). Earlier text is kept and each edit is marked
+where it sits (§3.2 step 5's table, rows 34–38). The changes and their price:
+
+- **Row 15 as a scheduled read** (§13.1). Price: no added research time; the certificate can issue up to the set's
+  accrual time sooner (on truememory-2-0, about 3–6 weeks). Residual, stated: until the read, the router's recall on
+  the awaiting strata is unmeasured on fresh data, and the certificate prints the row FILED.
+- **Event-keyed dues and recorded wave starts** (§13.2). Price: none; one row per started wave.
+- **A build wave needs the operator's signature on the newest certificate** (§13.1). Price: one operator command per
+  certificate, which §3.10's signoff already asks for; it is the acceptance of the rows v1.3 lets a certificate carry.
+- **Stage 9 adoption by a running program** (§13.3). Price: Stage 9's own (§11: 1–3 agent-days plus the soak), paid
+  only by a program the operator adopts it for.
+- **The pre-signature dead-lane degrade** (§13.4). Price: rounds on two vendors instead of three; the 48-hour pause
+  it replaces had no actuator.
+- **An uncounted practice run for every one-shot spend** (§13.5). Price: one practice run per read, writing nothing.
+- **FAC-34..FAC-38 at intake, and the late count on the certificate** (§13.6). Price: five checklist rows per
+  program, under a 1.3 frame only.
+- **The frame-delta cycle closes its own rows** (§13.7). Price: none; a frame re-sign before the due now counts.
+
 ---
 
 ## Appendix A. Every hole class: mechanism, gate row, declared residual
@@ -1657,3 +1691,81 @@ find records are the data the pilot needs to fit them.
 
 **Not changed.** Rows 1–17 and their thresholds. Row 16 still requires the overrun packet past 1.5 ×. §3.5's routes
 are unchanged for a decision tagged production or operator.
+
+---
+
+## 13. Method v1.3: exhaust, then proceed
+
+Ruled 2026-10-16 (§9, "Ruled 2026-10-16"). The research behind it, with every wait found and its receipt, is
+`docs/research/method-exhaust-then-proceed-2026-10-16/REPORT.md`.
+
+**The rule.** Before a stage ends, work every route in physical grasp until none is left. What only time, accrual or a
+third party can settle becomes a FILED row with five parts: an owner; a due keyed to an event (§13.2); a closing
+probe; a re-check at build, by which `gate.sh requires` holds only the waves resting on it; and a falsifier, the
+command whose exit 0 makes the row moot. A FILED row prints as FILED, never PASS, and is carried on the certificate.
+A wait that cannot become such a row without weakening an evidence standard stays a wait, but is found and scheduled
+at intake (§13.6). No evidence standard changes: a sealed read keeps every guard, every signature stays the
+operator's, nothing measured is claimed before it is measured. §13.1–§13.5 and §13.7 apply to every frame; §13.6
+applies to a frame stamped 1.3, which `intake.py init` now writes.
+
+### 13.1 Row 15 as a scheduled read; the build needs a signed certificate
+
+Row 15 measures the shared router on sealed sets. When a stratum of its instrument awaits a fresh set
+(`heldout.py instrument --await`), no route makes that data exist sooner. The lead files the read (`cc-research read
+file --program P --row 15 --awaits … --owner … --due … --falsifier … [--blocks-wave W] --why …`; refused while every
+stratum is pinned, since then the read is in grasp). Row 15 then prints FILED and decrypts nothing, and the
+certificate issues. `gate.sh read --program P --row 15 --consent-sealed-read` spends the read later through the same
+`heldout.evaluate` call. Its guards are row 15's, with one restated by its purpose: "every other row passed in this
+run" becomes "the newest certificate carries no FAIL row and row 15 FILED, and no reopen is signed after it", so a
+read is still never spent while the certificate cannot issue. `requires` holds the filing's waves until a PASS. A
+FAIL is final for the items read and keeps them held; a later gate run, a re-issue, prints row 15 FAIL until the
+strata await a fresh set and a new read is filed, because a certificate may not carry a pending read that already
+failed. A filing past its due fails row 15 the same way until it is refiled.
+
+Because a certificate may now carry FILED rows it did not before, `requires` admits no wave until the operator's
+valid `cc-signoff research:<slug>/cert` pins the newest certificate: the signature is the acceptance of what the
+certificate carries. Before v1.3 only Stage 9 read it.
+
+### 13.2 Dues keyed to events
+
+A filed due is a date or `<event>+<N>d`, the event a build wave's start (`W1+30d`) or the certificate's issue
+(`cert+7d`). A wave starts when `gate.sh requires --wave W --start` admits it (`handoff-fire.sh --requires-gate`
+passes `--start` on a real fire). Until its event happens a keyed due is pending and never past; then it resolves to
+the event plus N days. A not-yet-true filing keys only on its owner wave, a wave resting on it, or `cert`.
+
+### 13.3 Stage 9 for a running program
+
+`cc-signoff research:<slug>/adopt/stage9 --because "<why>"` (operator only, once, refused for a 1.2 frame) lets a
+program signed before 1.2 run Stage 9 without editing `frame.json`, which would void the frame signature. Rows 18 and
+19 stay 1.2-only: they judge stages 3 and 5 as they ran. A Stage 9 finding is then a counted change, not a take-back.
+
+### 13.4 A dead lane before the frame signature
+
+Exhaust the routes that restore it, recording each as a probe; then `intake.py set --program P --degraded "two
+vendors" --restore-probe P-…` (exactly one dead lane, the probes on record, the frame not yet signed). The contract
+page renders "degraded: two vendors" and the operator's frame signature accepts it. The 48-hour class-B pause it
+replaces had no actuator. A lane that dies after the signature still voids the rounds it touches (row 13).
+
+### 13.5 Every one-shot spend has an uncounted practice path
+
+The relay record and re-test: `cc-research rehearse trial --practice`. The sealed read: `gate.sh read --program P
+--row 15 --practice`, every precondition of the read as it stands and the router on canned prompts under the read's
+own call and time limit, decrypting nothing and writing nothing. Reviewer and rater slots: the vendor preflight, and
+the lost-slot rule. A new one-shot spend ships with its practice path.
+
+### 13.6 Front-load the waits at intake
+
+A 1.3 frame maps FAC-34..FAC-38 (§3.2 step 5): every data accrual with its date and filing, every third party with
+the routes tried, every one-shot spend with its practice path, every elapsed-time or scheduled check with the wave
+that runs it, every due keyed to an event. The certificate's `Scheduled checks:` line counts the filings made after
+the freeze, the waits the intake did not front-load.
+
+### 13.7 The frame-delta cycle closes its own rows
+
+The sweep spares a frame-omission known row once the operator re-signs the frame after the row was held, before or
+after its due (keying on the due made an on-time re-sign count for nothing). A passing gate run then closes each open
+one held before a valid frame signature, as §5.4 step 4 says, so `requires` stops holding its waves.
+
+**Not changed in v1.3.** Stage 9's 24-hour soak (closing it on a soak still running would claim an unmeasured
+result); a lane that dies after the frame signature (only the operator can accept a two-vendor round under a
+three-vendor signature); which sessions the research block covers (an operator decision, filed).

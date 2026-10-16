@@ -90,11 +90,19 @@ HISTORICAL_FRAMES = ["deployed and live", "nothing can beat it", "no loose ends"
 # the report's; it is copied, not re-derived, so the contract page and the report cannot disagree.
 # Method v1.2 (ruling 1bf69e5c1775): a frame stamped 1.2 takes the v1.2 gate rows; a frame with no
 # stamp reads as 1.1, so programs that began before it keep the gate they signed.
-METHOD_VERSION = "1.2"
+# Method v1.3 ("exhaust, then proceed", 2026-10-16, REPORT.md §13): a frame stamped 1.3 also owes
+# the five front-loading checklist rows FAC-34..FAC-38; every v1.2 row still applies to it.
+METHOD_VERSION = "1.3"
 # Registry states of a program that is past intake and not closed; build-certifying and
 # build-certified are v1.2's built-artifact certification stage.
-LIVE_STATES = ("registered", "certifying", "certified", "build-certifying", "build-certified",
-               "implementation-signed")
+LIVE_STATES = (
+    "registered",
+    "certifying",
+    "certified",
+    "build-certifying",
+    "build-certified",
+    "implementation-signed",
+)
 PROFILE_DAYS = {"lite": (6.5, 12.0), "standard": (14.0, 28.0), "full": (20.0, 39.0)}
 REFERENCE_FACTOR = 3.0  # §6.3
 
@@ -170,7 +178,9 @@ def cmd_init(a: argparse.Namespace) -> int:
         text=True,
     )
     if g.returncode != 0:
-        raise Refused(f"gate.sh register refused: {g.stderr.strip() or g.stdout.strip()}")
+        raise Refused(
+            f"gate.sh register refused: {g.stderr.strip() or g.stdout.strip()}"
+        )
     frame = {
         "program": a.program,
         "version": 1,
@@ -181,8 +191,13 @@ def cmd_init(a: argparse.Namespace) -> int:
         "intent_verbatim": a.intent,
         "reviewer_pins": {},
         "rulings": {},
-        "fac_map": [{"fac": c["id"], "row": None, "na_reason": None} for c in checklist()],
-        "reask_map": [{"frame": f, "axis": None, "excluded_quote": None} for f in HISTORICAL_FRAMES],
+        "fac_map": [
+            {"fac": c["id"], "row": None, "na_reason": None} for c in checklist()
+        ],
+        "reask_map": [
+            {"frame": f, "axis": None, "excluded_quote": None}
+            for f in HISTORICAL_FRAMES
+        ],
         "sources_required": [],
         "populations": [],
         "known_rows": [],
@@ -193,7 +208,10 @@ def cmd_init(a: argparse.Namespace) -> int:
     kit.write_json_atomic(rec / "frame.json", frame)
     kit.write_json_atomic(
         rec / "budget.json",
-        {"stages": {"1": {"started": kit.now_iso(), "ended": None}}, "overrun_packets": {}},
+        {
+            "stages": {"1": {"started": kit.now_iso(), "ended": None}},
+            "overrun_packets": {},
+        },
     )
     log(a.program, "init", profile=a.profile, index_fresh=index_fresh)
     print(f"{g.stdout.strip()}\nframe skeleton: {rec / 'frame.json'}")
@@ -215,9 +233,13 @@ def cmd_ruling(a: argparse.Namespace) -> int:
             print(f"[{k}]\n{text}\n")
         return 0
     if not (a.program and a.which and (a.adopt or a.decline)):
-        raise Refused("ruling needs --program, --which and --adopt or --decline (or --show)")
+        raise Refused(
+            "ruling needs --program, --which and --adopt or --decline (or --show)"
+        )
     if not (a.quote or "").strip():
-        raise Refused("a ruling records the operator's own words: --quote may not be empty")
+        raise Refused(
+            "a ruling records the operator's own words: --quote may not be empty"
+        )
     key = a.which.replace("-", "_")
     fr = load_frame(a.program)
     if a.decline:
@@ -238,7 +260,9 @@ def cmd_ruling(a: argparse.Namespace) -> int:
         )
         return 0
     if fr.get("declined"):
-        raise Refused(f"{a.program} was declined ({fr['declined']['which']}); start a new program")
+        raise Refused(
+            f"{a.program} was declined ({fr['declined']['which']}); start a new program"
+        )
     fr.setdefault("rulings", {})[key] = {"at": kit.now_iso(), "quote": a.quote}
     save_frame(a.program, fr)
     log(a.program, "ruling", which=key, quote=a.quote)
@@ -253,7 +277,9 @@ def cmd_map(a: argparse.Namespace) -> int:
             raise Refused("map --fac needs exactly one of --row or --na")
         hit = next((m for m in fr["fac_map"] if m.get("fac") == a.fac), None)
         if hit is None:
-            raise Refused(f"{a.fac} is not a checklist row (FAC-01..FAC-{len(checklist()):02d})")
+            raise Refused(
+                f"{a.fac} is not a checklist row (FAC-01..FAC-{len(checklist()):02d})"
+            )
         hit.update(row=a.row or None, na_reason=a.na or None)
     elif a.frame:
         if bool(a.axis) == bool(a.excluded):
@@ -283,6 +309,44 @@ def finite_positive(v: Optional[str], what: str) -> Optional[float]:
     return x
 
 
+def degraded_terms(a: argparse.Namespace) -> Dict[str, Any]:
+    """Method v1.3 (REPORT.md §13.4): one dead lane at the preflight proceeds on two vendors once the
+    routes that restore it are exhausted, each try a recorded probe. Before the frame signature
+    only: the contract page then renders "degraded: two vendors" and the operator's signature
+    accepts it, which replaces the 48-hour class-B pause nothing actuated."""
+    import operator_sign
+
+    pf = kit.read_json(kit.sealed_dir(a.program) / "preflight.json") or {}
+    dead = sorted(v for v, r in pf.items() if not r.get("ok"))
+    if len(dead) != 1:
+        raise Refused(
+            f"--degraded needs exactly one dead lane in the newest preflight; it shows "
+            f"{len(dead)} ({', '.join(dead) or 'none'})"
+        )
+    if not a.restore_probe:
+        raise Refused(
+            "--degraded needs --restore-probe P-… (repeatable): a recorded probe that tried to "
+            f"restore {dead[0]}; exhaust those routes before proceeding on two vendors"
+        )
+    known = kit.fold(kit.read_jsonl(records(a.program) / "probes.jsonl"))
+    for pid in a.restore_probe:
+        if pid not in known:
+            raise Refused(f"--restore-probe {pid} is not in probes.jsonl")
+    if operator_sign.research_records(a.program, "frame"):
+        raise Refused(
+            "the frame is already signed: degrading it now voids that signature, and a lane that dies "
+            "after it voids the rounds it touches (gate row 13); the operator re-signs"
+        )
+    return {
+        "degraded": a.degraded,
+        "degraded_terms": {
+            "dead": dead[0],
+            "restore_probes": list(a.restore_probe),
+            "at": kit.now_iso(),
+        },
+    }
+
+
 def cmd_set(a: argparse.Namespace) -> int:
     fr = load_frame(a.program)
     for attr, key in (
@@ -298,25 +362,41 @@ def cmd_set(a: argparse.Namespace) -> int:
     if a.plan is not None:
         path = records(a.program) / a.plan
         if not path.is_file():
-            raise Refused(f"--plan {a.plan!r} resolves to {path}, which is not an existing file")
+            raise Refused(
+                f"--plan {a.plan!r} resolves to {path}, which is not an existing file"
+            )
         fr["plan"] = a.plan
     if a.topic_owner is not None:
         if not a.topic_owner.strip():
-            raise Refused("--topic-owner may not be empty: name who owns the topic (gate row 8)")
+            raise Refused(
+                "--topic-owner may not be empty: name who owns the topic (gate row 8)"
+            )
         superlative_check(a.topic_owner, "the topic owner")
         fr["topic_owner"] = a.topic_owner
+    if a.degraded is not None:
+        fr.update(degraded_terms(a))
     save_frame(a.program, fr)
     print("set")
     return 0
 
 
-def forecast(profile_name: str, n0: Optional[int] = None, base: bool = False) -> Dict[str, Any]:
+def forecast(
+    profile_name: str, n0: Optional[int] = None, base: bool = False
+) -> Dict[str, Any]:
     """estimate.py simulate at the measured inputs (method v1.2); base=True is the assumed contrast."""
     if n0 is None:
         n0 = kit.profile(profile_name)["design_holes"]
     p = subprocess.run(
-        [sys.executable, str(HERE / "estimate.py"), "simulate", "--profile", profile_name,
-         "--n0", str(n0)] + (["--base"] if base else []),
+        [
+            sys.executable,
+            str(HERE / "estimate.py"),
+            "simulate",
+            "--profile",
+            profile_name,
+            "--n0",
+            str(n0),
+        ]
+        + (["--base"] if base else []),
         capture_output=True,
         text=True,
     )
@@ -352,8 +432,12 @@ def v12_ceiling(prof: Dict[str, Any], ceiling: float) -> Dict[str, float]:
     extra = kit.CAPS["yield_ceiling_factor"] - 1
     yield_days = extra * sum(prof["stage_days"][s] for s in kit.YIELD_STAGES)
     built_cap = kit.CAPS["overrun_factor"] * prof["built_stage_days"]
-    return {"extra": extra, "yield_days": yield_days, "stage9_days": built_cap,
-            "total": ceiling + yield_days + built_cap}
+    return {
+        "extra": extra,
+        "yield_days": yield_days,
+        "stage9_days": built_cap,
+        "total": ceiling + yield_days + built_cap,
+    }
 
 
 def v12_ceiling_lines(prof: Dict[str, Any], ceiling: float) -> List[str]:
@@ -363,7 +447,12 @@ def v12_ceiling_lines(prof: Dict[str, Any], ceiling: float) -> List[str]:
     standard 12) and says the contract page's ceiling must include it. §11 budgets Stage 9 at 1, 2 or
     3 agent-days; it is counted here at the §6.5 overrun line, as §6.1 counts stages 1-6 at 1.5 x."""
     c = v12_ceiling(prof, ceiling)
-    extra, yield_days, built_cap, total = c["extra"], c["yield_days"], c["stage9_days"], c["total"]
+    extra, yield_days, built_cap, total = (
+        c["extra"],
+        c["yield_days"],
+        c["stage9_days"],
+        c["total"],
+    )
     built = prof["built_stage_days"]
     return [
         f"- Method v1.2 yield ceiling: up to {extra:g} extra stage budgets on each of stages "
@@ -390,36 +479,48 @@ def measured_forecast(slug: str) -> Optional[Dict[str, Any]]:
     return estimate.forecast(slug)
 
 
-def design_profile_lines(fr: Dict[str, Any], prof: Dict[str, Any], typical: float,
-                         ceiling: float) -> List[str]:
+def design_profile_lines(
+    fr: Dict[str, Any], prof: Dict[str, Any], typical: float, ceiling: float
+) -> List[str]:
     """The profile section before any round is counted: the forecast at the profile's design point."""
     f = forecast(fr["profile"])
     f_base = forecast(fr["profile"], base=True)
     wider = wider_profile_note(fr["profile"])
-    return [
-        f"## Profile: {prof['name']}",
-        "",
-        f"- Reviewers per round {prof['reviewers_per_round']} ({prof['per_slot_set']} per slot set), "
-        f"quiet rounds to stop {prof['quiet_to_stop']}, hard cap {prof['hard_cap']} rounds, "
-        f"original seeds {prof['seeds_original']}.",
-        f"- Stages 1–6 budget {prof['stage_budget_days']:g} agent-days; typical total about "
-        f"{typical:g} days; ceiling (every loop at its cap) about {ceiling:g} days (§6.1). Only you "
-        "can exceed it, through the signing tool.",
-    ] + (v12_ceiling_lines(prof, ceiling) if kit.is_v12(fr) else []) + [
-        f"- Forecast at the design point ({prof['design_holes']} holes at freeze), at the measured "
-        f"inputs (method v1.2; research-calibration REPORT §3): rounds {f['rounds_p50']} typical / "
-        f"{f['rounds_p90']} at the 90th percentile, the round cap reached in {f['cap_pct']}% of "
-        f"simulated programs; desk-detectable left {f['desk_left']}, invisible left "
-        f"{f['invisible_left']}; chance of at least one material change after signoff {f['p_any']}; "
-        f"chance the 95% bound is exceeded {f['take_back_pct']}%. Model output.",
-        f"- Contrast, the pre-calibration assumed inputs (what this page stated before v1.2): desk-detectable "
-        f"left {f_base['desk_left']}, invisible left {f_base['invisible_left']}, chance of at least one "
-        f"material change after signoff {f_base['p_any']}.",
-    ] + ([f"- **{wider}**"] if wider else [])
+    return (
+        [
+            f"## Profile: {prof['name']}",
+            "",
+            f"- Reviewers per round {prof['reviewers_per_round']} ({prof['per_slot_set']} per slot set), "
+            f"quiet rounds to stop {prof['quiet_to_stop']}, hard cap {prof['hard_cap']} rounds, "
+            f"original seeds {prof['seeds_original']}.",
+            f"- Stages 1–6 budget {prof['stage_budget_days']:g} agent-days; typical total about "
+            f"{typical:g} days; ceiling (every loop at its cap) about {ceiling:g} days (§6.1). Only you "
+            "can exceed it, through the signing tool.",
+        ]
+        + (v12_ceiling_lines(prof, ceiling) if kit.is_v12(fr) else [])
+        + [
+            f"- Forecast at the design point ({prof['design_holes']} holes at freeze), at the measured "
+            f"inputs (method v1.2; research-calibration REPORT §3): rounds {f['rounds_p50']} typical / "
+            f"{f['rounds_p90']} at the 90th percentile, the round cap reached in {f['cap_pct']}% of "
+            f"simulated programs; desk-detectable left {f['desk_left']}, invisible left "
+            f"{f['invisible_left']}; chance of at least one material change after signoff {f['p_any']}; "
+            f"chance the 95% bound is exceeded {f['take_back_pct']}%. Model output.",
+            f"- Contrast, the pre-calibration assumed inputs (what this page stated before v1.2): desk-detectable "
+            f"left {f_base['desk_left']}, invisible left {f_base['invisible_left']}, chance of at least one "
+            f"material change after signoff {f_base['p_any']}.",
+        ]
+        + ([f"- **{wider}**"] if wider else [])
+    )
 
 
-def measured_profile_lines(slug: str, fr: Dict[str, Any], prof: Dict[str, Any], f: Dict[str, Any],
-                           typical: float, ceiling: float) -> List[str]:
+def measured_profile_lines(
+    slug: str,
+    fr: Dict[str, Any],
+    prof: Dict[str, Any],
+    f: Dict[str, Any],
+    typical: float,
+    ceiling: float,
+) -> List[str]:
     """The profile section once a certification round is counted: the profile the remaining rounds
     run on (a signed switch included) and this program's own forecast, in place of the design point.
     What was signed in days and seeds (stage budgets, the ceiling, original seeds) stays on the
@@ -428,51 +529,69 @@ def measured_profile_lines(slug: str, fr: Dict[str, Any], prof: Dict[str, Any], 
     rprof = kit.profile(kit.round_profile(slug, fr))
     name = rprof["name"]
     if sw:
-        name += (f" from round {sw['after_round'] + 1} ({sw['from']} through round "
-                 f"{sw['after_round']}; switched by your signature of {sw['at_iso']})")
+        name += (
+            f" from round {sw['after_round'] + 1} ({sw['from']} through round "
+            f"{sw['after_round']}; switched by your signature of {sw['at_iso']})"
+        )
     n95 = f["found"] + f["desk_n95"]
-    return [
-        f"## Profile: {name}",
-        "",
-        f"- Reviewers per round {rprof['reviewers_per_round']} ({rprof['per_slot_set']} per slot set), "
-        f"quiet rounds to stop {rprof['quiet_to_stop']}, round cap {f['r_max']} counted rounds "
-        f"({f['rounds_counted']} counted so far), original seeds {prof['seeds_original']}.",
-        f"- Stages 1–6 budget {prof['stage_budget_days']:g} agent-days; typical total about "
-        f"{typical:g} days; ceiling (every loop at its cap) about {ceiling:g} days (§6.1), as signed on "
-        f"the {prof['name']} profile" + (" and kept through the switch" if sw else "") + ". Only you "
-        "can exceed it, through the signing tool.",
-    ] + (v12_ceiling_lines(prof, ceiling) if kit.is_v12(fr) else []) + [
-        f"- Forecast from this program's own {f['rounds_counted']} counted certification round(s) "
-        f"(estimate.py forecast, {f['inputs']} inputs), in place of the design point of "
-        f"{prof['design_holes']} holes at freeze: {f['found_raw']} material holes found so far, "
-        f"estimated holes at freeze {f['n_hat']:g} (at most {n95:g} at 95%; false material share "
-        f"{f['false_material_share']:g}, from the {f['false_material_source']}). After signoff: "
-        f"desk-detectable about {f['desk_mean']:g} (at most {f['desk_n95']} at 95%), invisible to any "
-        f"reviewer about {f['invisible_mean']:g} (at most {f['invisible_bound95']} at 95%, share "
-        f"assumed); chance of at least one material change after signoff {f['p_any']:g}. Model output.",
-    ]
+    return (
+        [
+            f"## Profile: {name}",
+            "",
+            f"- Reviewers per round {rprof['reviewers_per_round']} ({rprof['per_slot_set']} per slot set), "
+            f"quiet rounds to stop {rprof['quiet_to_stop']}, round cap {f['r_max']} counted rounds "
+            f"({f['rounds_counted']} counted so far), original seeds {prof['seeds_original']}.",
+            f"- Stages 1–6 budget {prof['stage_budget_days']:g} agent-days; typical total about "
+            f"{typical:g} days; ceiling (every loop at its cap) about {ceiling:g} days (§6.1), as signed on "
+            f"the {prof['name']} profile"
+            + (" and kept through the switch" if sw else "")
+            + ". Only you "
+            "can exceed it, through the signing tool.",
+        ]
+        + (v12_ceiling_lines(prof, ceiling) if kit.is_v12(fr) else [])
+        + [
+            f"- Forecast from this program's own {f['rounds_counted']} counted certification round(s) "
+            f"(estimate.py forecast, {f['inputs']} inputs), in place of the design point of "
+            f"{prof['design_holes']} holes at freeze: {f['found_raw']} material holes found so far, "
+            f"estimated holes at freeze {f['n_hat']:g} (at most {n95:g} at 95%; false material share "
+            f"{f['false_material_share']:g}, from the {f['false_material_source']}). After signoff: "
+            f"desk-detectable about {f['desk_mean']:g} (at most {f['desk_n95']} at 95%), invisible to any "
+            f"reviewer about {f['invisible_mean']:g} (at most {f['invisible_bound95']} at 95%, share "
+            f"assumed); chance of at least one material change after signoff {f['p_any']:g}. Model output.",
+        ]
+    )
 
 
 def cmd_contract_page(a: argparse.Namespace) -> int:
     fr = load_frame(a.program)
     missing = [k for k in RULINGS if not (fr.get("rulings", {}).get(k) or {}).get("at")]
     if missing:
-        raise Refused(f"both §3.1 rulings come first; not recorded: {', '.join(missing)}")
+        raise Refused(
+            f"both §3.1 rulings come first; not recorded: {', '.join(missing)}"
+        )
     if not fr.get("escape_cost_days"):
-        raise Refused("the escape cost (question 10) is not set: intake.py set --escape-cost-days N")
+        raise Refused(
+            "the escape cost (question 10) is not set: intake.py set --escape-cost-days N"
+        )
     pf = kit.read_json(kit.sealed_dir(a.program) / "preflight.json")
     if not pf:
-        raise Refused("the vendor preflight has not run: scripts/research-kit/courier.sh preflight "
-                      f"--program {a.program} (§3.2 step 6)")
+        raise Refused(
+            "the vendor preflight has not run: scripts/research-kit/courier.sh preflight "
+            f"--program {a.program} (§3.2 step 6)"
+        )
     now = kit.now_iso()
     if not all(str(v.get("at") or "9") < now for v in pf.values()):
-        raise Refused("the vendor preflight must run strictly before the contract page (gate row 13)")
+        raise Refused(
+            "the vendor preflight must run strictly before the contract page (gate row 13)"
+        )
     dead = sorted(v for v, r in pf.items() if not r.get("ok"))
     if dead and fr.get("degraded") != "two vendors":
         print(
-            f"DEAD LANE {', '.join(dead)}: the program pauses on one operator step to restore it "
-            "(for Google, one interactive sign-in to the Antigravity CLI, `agy`); the class-B default 'continue on two vendors' "
-            "fires after 48 h (§3.8)",
+            f"DEAD LANE {', '.join(dead)}: exhaust the routes that restore it (for Google, one "
+            "interactive sign-in to the Antigravity CLI, `agy`), recording each try as a probe, then "
+            f'proceed: `intake.py set --program {a.program} --degraded "two vendors" '
+            "--restore-probe P-…`; the page renders degraded and the operator's frame signature "
+            "accepts it. No 48-hour pause (method v1.3, §13.4; §3.8)",
             file=sys.stderr,
         )
         return DEAD
@@ -486,10 +605,14 @@ def cmd_contract_page(a: argparse.Namespace) -> int:
     # carries and adds no field to it.
     measured = measured_forecast(a.program)
     if measured is not None and not all(k in fr for k in RERENDER_KEYS):
-        raise Refused("a counted certification round exists but frame.json carries no contract page "
-                      f"({', '.join(RERENDER_KEYS)}): there is no signed page to re-render")
+        raise Refused(
+            "a counted certification round exists but frame.json carries no contract page "
+            f"({', '.join(RERENDER_KEYS)}): there is no signed page to re-render"
+        )
     if measured is None:
-        effort = dict(fr["reviewer_effort"] if "reviewer_effort" in fr else REVIEWER_EFFORT)
+        effort = dict(
+            fr["reviewer_effort"] if "reviewer_effort" in fr else REVIEWER_EFFORT
+        )
     else:
         effort = dict(fr.get("reviewer_effort") or {})
     prof = kit.profile(fr["profile"])
@@ -497,51 +620,74 @@ def cmd_contract_page(a: argparse.Namespace) -> int:
     if measured is None:
         profile_lines = design_profile_lines(fr, prof, typical, ceiling)
     else:
-        profile_lines = measured_profile_lines(a.program, fr, prof, measured, typical, ceiling)
-    lines = [
-        f"# Contract page — {a.program} (frame v{fr.get('version')})",
-        "",
-        f"Rendered {now} by scripts/research-kit/intake.py. The frame signature "
-        f"(`cc-signoff research:{a.program}/frame`) pins this page through its hash in frame.json.",
-        "",
-        "## Definition of complete (§3.1, ruling 1)",
-        "",
-        RULINGS["definition_of_complete"],
-        "",
-        f"Recorded {fr['rulings']['definition_of_complete']['at']}: "
-        f"\"{fr['rulings']['definition_of_complete']['quote']}\"",
-        "",
-        "## Post-certificate activities you sign are not research",
-        "",
-    ] + [f"- {x}" for x in POST_CERT_ACTIVITIES] + [
-        "",
-    ] + profile_lines + [
-        "",
-        "## Your escape cost",
-        "",
-        f"{fr['escape_cost_days']:g} research days per decision-changing hole found after build.",
-        "",
-        "## Vendor preflight (responding model ids, pinned for the program)",
-        "",
-    ] + [
-        f"- {v}: {'live' if r.get('ok') else 'DEAD'} {r.get('model_id') or '-'} at {r.get('at')}"
-        for v, r in sorted(pf.items())
-    ] + [
-        "",
-        "Reviewer effort (certification reviewers only; verifiers and raters run at their CLI's "
-        "default): " + (", ".join(f"{v} {e}" for v, e in sorted(effort.items())) or "none pinned"),
-    ]
+        profile_lines = measured_profile_lines(
+            a.program, fr, prof, measured, typical, ceiling
+        )
+    lines = (
+        [
+            f"# Contract page — {a.program} (frame v{fr.get('version')})",
+            "",
+            f"Rendered {now} by scripts/research-kit/intake.py. The frame signature "
+            f"(`cc-signoff research:{a.program}/frame`) pins this page through its hash in frame.json.",
+            "",
+            "## Definition of complete (§3.1, ruling 1)",
+            "",
+            RULINGS["definition_of_complete"],
+            "",
+            f"Recorded {fr['rulings']['definition_of_complete']['at']}: "
+            f'"{fr["rulings"]["definition_of_complete"]["quote"]}"',
+            "",
+            "## Post-certificate activities you sign are not research",
+            "",
+        ]
+        + [f"- {x}" for x in POST_CERT_ACTIVITIES]
+        + [
+            "",
+        ]
+        + profile_lines
+        + [
+            "",
+            "## Your escape cost",
+            "",
+            f"{fr['escape_cost_days']:g} research days per decision-changing hole found after build.",
+            "",
+            "## Vendor preflight (responding model ids, pinned for the program)",
+            "",
+        ]
+        + [
+            f"- {v}: {'live' if r.get('ok') else 'DEAD'} {r.get('model_id') or '-'} at {r.get('at')}"
+            for v, r in sorted(pf.items())
+        ]
+        + [
+            "",
+            "Reviewer effort (certification reviewers only; verifiers and raters run at their CLI's "
+            "default): "
+            + (
+                ", ".join(f"{v} {e}" for v, e in sorted(effort.items()))
+                or "none pinned"
+            ),
+        ]
+    )
     if fr.get("degraded"):
         lines += ["", f"**degraded: {fr['degraded']}**"]
     if fr.get("release_gap_days"):
         p_rel = 1 - math.exp(-typical / fr["release_gap_days"])
-        lines += ["", f"Chance an upstream release lands during the program: {p_rel:.2f} "
-                  f"(mean gap {fr['release_gap_days']:g} days, §6.2)."]
-    override = bool(fr.get("reference_days")) and typical > REFERENCE_FACTOR * fr["reference_days"]
+        lines += [
+            "",
+            f"Chance an upstream release lands during the program: {p_rel:.2f} "
+            f"(mean gap {fr['release_gap_days']:g} days, §6.2).",
+        ]
+    override = (
+        bool(fr.get("reference_days"))
+        and typical > REFERENCE_FACTOR * fr["reference_days"]
+    )
     if override:
-        lines += ["", f"**Override required (§6.3):** the typical total {typical:g} days exceeds "
-                  f"{REFERENCE_FACTOR:g} × the measured {fr['reference_days']:g} days for this "
-                  "project type. Signing the frame signs this override."]
+        lines += [
+            "",
+            f"**Override required (§6.3):** the typical total {typical:g} days exceeds "
+            f"{REFERENCE_FACTOR:g} × the measured {fr['reference_days']:g} days for this "
+            "project type. Signing the frame signs this override.",
+        ]
     page = "\n".join(lines) + "\n"
     out = records(a.program) / "CONTRACT.md"
     out.write_text(page)
@@ -562,15 +708,24 @@ def lint_fails(slug: str) -> List[str]:
     import gate_rows_a
 
     row = gate_rows_a.row1(make_ctx(slug))
-    return [e for e in row.evidence if "signature" not in e and "signed" not in e
-            and not e.startswith("frame pin") and not e.startswith("open known rows")]
+    return [
+        e
+        for e in row.evidence
+        if "signature" not in e
+        and "signed" not in e
+        and not e.startswith("frame pin")
+        and not e.startswith("open known rows")
+    ]
 
 
 def cmd_lint(a: argparse.Namespace) -> int:
     fails = lint_fails(a.program)
     for e in fails:
         print(f"FAIL {e}")
-    print("frame lint: " + ("clean (sign it next)" if not fails else f"{len(fails)} to fix"))
+    print(
+        "frame lint: "
+        + ("clean (sign it next)" if not fails else f"{len(fails)} to fix")
+    )
     return 1 if fails else 0
 
 
@@ -580,14 +735,20 @@ def cmd_status(a: argparse.Namespace) -> int:
     pf = kit.read_json(kit.sealed_dir(a.program) / "preflight.json")
     steps = [
         ("registered", reg.get("state") in LIVE_STATES),
-        ("ruling: definition of complete", bool(fr.get("rulings", {}).get("definition_of_complete"))),
+        (
+            "ruling: definition of complete",
+            bool(fr.get("rulings", {}).get("definition_of_complete")),
+        ),
         ("ruling: exemption", bool(fr.get("rulings", {}).get("exemption"))),
         ("escape cost set", bool(fr.get("escape_cost_days"))),
         ("vendor preflight", bool(pf)),
         ("contract page", bool(fr.get("contract_page_at"))),
         ("frame lint clean", not lint_fails(a.program)),
         ("topic owner confirmed", bool((fr.get("topic_owner") or "").strip())),
-        ("plan named", bool(fr.get("plan")) and (records(a.program) / fr["plan"]).is_file()),
+        (
+            "plan named",
+            bool(fr.get("plan")) and (records(a.program) / fr["plan"]).is_file(),
+        ),
     ]
     for name, ok in steps:
         print(f"{'done' if ok else 'TODO'}  {name}")
@@ -626,14 +787,33 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.set_defaults(fn=cmd_map)
     p = sub.add_parser("set")
     p.add_argument("--program", required=True)
+    p.add_argument(
+        "--degraded",
+        choices=["two vendors"],
+        help="method v1.3 §13.4: proceed on two vendors past one dead lane, before the frame signature",
+    )
+    p.add_argument(
+        "--restore-probe",
+        action="append",
+        help="a recorded probe that tried to restore the dead lane (repeatable; --degraded needs one)",
+    )
     p.add_argument("--escape-cost-days")
     p.add_argument("--release-gap-days")
     p.add_argument("--reference-days")
-    p.add_argument("--plan", help="the plan file, relative to the program's records dir (gate row 9)")
-    p.add_argument("--topic-owner", help="who owns the topic, confirmed by the operator (gate row 8)")
+    p.add_argument(
+        "--plan",
+        help="the plan file, relative to the program's records dir (gate row 9)",
+    )
+    p.add_argument(
+        "--topic-owner",
+        help="who owns the topic, confirmed by the operator (gate row 8)",
+    )
     p.set_defaults(fn=cmd_set)
-    for verb, fn in (("contract-page", cmd_contract_page), ("lint", cmd_lint),
-                     ("status", cmd_status)):
+    for verb, fn in (
+        ("contract-page", cmd_contract_page),
+        ("lint", cmd_lint),
+        ("status", cmd_status),
+    ):
         p = sub.add_parser(verb)
         p.add_argument("--program", required=True)
         p.set_defaults(fn=fn)

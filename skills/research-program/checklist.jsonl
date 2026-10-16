@@ -31,3 +31,8 @@
 {"id": "FAC-31", "carries": "Decisions settled silently by default (freeze clauses, features shipped off) registered and ruled"}
 {"id": "FAC-32", "carries": "Cost and quota of building and running the deliverable measured, not estimated"}
 {"id": "FAC-33", "carries": "Every census of an outside population (models, libraries, vendors) carries an as-of date and an admission rule"}
+{"id": "FAC-34", "carries": "Every data accrual a gate row or build wave needs (a sealed set, samples, trials) named with its expected date and its filed row", "since": "1.3"}
+{"id": "FAC-35", "carries": "Every third party whose act a row needs (an operator signature or answer, an upstream merge or release, a counterparty, a vendor lane) named with the routes tried and its filed row", "since": "1.3"}
+{"id": "FAC-36", "carries": "Every one-shot spend (a sealed read, a counted record, a re-test, an attempt budget) named with its uncounted practice path", "since": "1.3"}
+{"id": "FAC-37", "carries": "Every elapsed-time check or scheduled component (a soak, a freshness window, a scheduler-started run) named with the wave that runs it", "since": "1.3"}
+{"id": "FAC-38", "carries": "Every filed due keyed to an event (a wave start or the certificate's issue), not a calendar guess", "since": "1.3"}

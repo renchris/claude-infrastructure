@@ -70,7 +70,7 @@ import json, sys
 sys.path[:0] = [sys.argv[2] + "/scripts/research-kit/lib", sys.argv[2] + "/scripts/lib"]
 import gate_rows_a
 fr = json.load(open(sys.argv[1]))
-assert [m["fac"] for m in fr["fac_map"]] == gate_rows_a.FAC_IDS, fr["fac_map"]
+assert [m["fac"] for m in fr["fac_map"]] == gate_rows_a.FAC_IDS + gate_rows_a.FAC_V13_IDS, fr["fac_map"]
 assert all(m["row"] is None and m["na_reason"] is None for m in fr["fac_map"])
 assert {m["frame"] for m in fr["reask_map"]} == {"deployed and live", "nothing can beat it", "no loose ends"}
 PY
@@ -181,6 +181,31 @@ print('\n'.join(next(r for r in json.load(sys.stdin) if r['num'] == 9)['evidence
   [ ! -e "$REC/CONTRACT.md" ]
 }
 
+# RED-proof (method v1.3, 2026-10-16): before `set --degraded` existed nothing in the kit wrote the
+# frame's `degraded`, so the "class-B default after 48 h" had no actuator and the page stayed DEAD.
+@test "v1.3 §13.4: a dead lane proceeds on two vendors once a recorded probe tried to restore it; the page renders degraded for the operator's signature" {
+  init_ok; rulings_ok
+  "$I" set --program demo --escape-cost-days 3
+  preflight "2026-10-01T11:00:00Z" False
+  run "$I" contract-page --program demo
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"--degraded"* ]] || { echo "$output"; false; }
+  run "$I" set --program demo --degraded "two vendors"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--restore-probe"* ]] || { echo "$output"; false; }
+  run "$I" set --program demo --degraded "two vendors" --restore-probe P-nope
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"P-nope is not in probes.jsonl"* ]] || { echo "$output"; false; }
+  [ "$(frame_field degraded)" = null ]
+  printf '%s\n' '{"id":"P-restore-1","kind":"handed-cmd","cmd":["agy"],"exit":1,"stdin":"/dev/null"}' >> "$REC/probes.jsonl"
+  run "$I" set --program demo --degraded "two vendors" --restore-probe P-restore-1
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(frame_field degraded)" = '"two vendors"' ]
+  run "$I" contract-page --program demo
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -q "degraded: two vendors" "$REC/CONTRACT.md"
+}
+
 @test "the contract page, once its inputs exist, pins the responding models and is hashed into the frame" {
   init_ok; rulings_ok
   "$I" set --program demo --escape-cost-days 3 --release-gap-days 15
@@ -247,7 +272,7 @@ PY
   run "$I" lint --program demo
   [ "$status" -eq 1 ]
   [[ "$output" == *"checklist rows unmapped: FAC-01"* ]] || false
-  for n in $(seq -w 1 33); do "$I" map --program demo --fac "FAC-$n" --na "fixture" > /dev/null; done
+  for n in $(seq -w 1 38); do "$I" map --program demo --fac "FAC-$n" --na "fixture" > /dev/null; done
   "$I" map --program demo --frame "deployed and live" --axis V7
   "$I" map --program demo --frame "nothing can beat it" --excluded "not this one"
   "$I" map --program demo --frame "no loose ends" --excluded "covered by the gate"
@@ -297,8 +322,32 @@ init_wide() { # <profile>: init with a wider profile; stdout and stderr both cap
 }
 
 @test "v1.2: the frame is stamped method_version 1.2, which the v1.2 gate rows key on" {
+  # Updated 2026-10-16 (method v1.3): intake now stamps 1.3, which every v1.2 row still keys on.
   init_ok
-  [ "$(frame_field method_version)" = '"1.2"' ]
+  [ "$(frame_field method_version)" = '"1.3"' ]
+  /usr/bin/python3 -c "import sys; sys.path.insert(0, '$REPO/scripts/research-kit/lib'); import kit; assert kit.is_v12({'method_version': '1.3'})"
+}
+
+# RED-proof (method v1.3, 2026-10-16): before FAC-34..38 existed a fresh frame was stamped 1.2 and
+# lint passed with rows 1-33 mapped, so nothing at intake asked for a single wait of the program.
+@test "v1.3: a 1.3 frame must map FAC-34..FAC-38 (the waits, front-loaded); a 1.2 frame maps FAC-01..FAC-33 only" {
+  init_ok; rulings_ok
+  for n in $(seq -w 1 33); do "$I" map --program demo --fac "FAC-$n" --na "fixture" > /dev/null; done
+  "$I" map --program demo --frame "deployed and live" --axis V7
+  "$I" map --program demo --frame "nothing can beat it" --excluded "not this one"
+  "$I" map --program demo --frame "no loose ends" --excluded "covered by the gate"
+  run "$I" lint --program demo
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"checklist rows unmapped: FAC-34, FAC-35, FAC-36, FAC-37, FAC-38"* ]] || { echo "$output"; false; }
+  # the same frame stamped 1.2 owes rows 1-33 only
+  /usr/bin/python3 -c "import json; p='$REC/frame.json'; d=json.load(open(p)); d['method_version']='1.2'; json.dump(d, open(p, 'w'))"
+  run "$I" lint --program demo
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  /usr/bin/python3 -c "import json; p='$REC/frame.json'; d=json.load(open(p)); d['method_version']='1.3'; json.dump(d, open(p, 'w'))"
+  "$I" map --program demo --fac FAC-34 --row K-03 > /dev/null
+  for n in 35 36 37 38; do "$I" map --program demo --fac "FAC-$n" --na "fixture" > /dev/null; done
+  run "$I" lint --program demo
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
 
 @test "v1.2: the contract page prints the measured forecast and labels the assumed one a contrast" {
