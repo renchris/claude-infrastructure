@@ -125,6 +125,13 @@ def trials_path(slug: str, attempt: int) -> Path:
     return kit.records_dir(slug) / "evidence" / "rehearsal" / f"trials-{attempt}.jsonl"
 
 
+def practice_path(slug: str) -> Path:
+    """`--practice` trials: the counted trial's pane, mark, router and transcript read, written here
+    instead. `rehearse record` refuses this file and any practice row, and gate row 14 reads only the
+    record, so practice can measure the relay before the re-test without spending it."""
+    return kit.records_dir(slug) / "evidence" / "rehearsal" / "practice.jsonl"
+
+
 def config_dir() -> Path:
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude"))
 
@@ -305,14 +312,14 @@ def close(b: str, to: List[str], wid: str) -> bool:
     return p.returncode == 0
 
 
-def append(path: Path, row: Dict[str, Any]) -> int:
+def append(path: Path, row: Dict[str, Any], cap: bool = True) -> int:
     """Number and append the row under a lock, so parallel trials never share a number; refused past
-    the relay test's 20."""
+    the relay test's 20 (a practice file has no cap)."""
     with kit.mkdir_lock(
         path.with_name(path.name + ".lock"), "trials", "rehearse trial"
     ):
         n = len(kit.read_jsonl(path))
-        if n >= RELAY_TRIALS:
+        if cap and n >= RELAY_TRIALS:
             raise kit.KitError(
                 f"{path} already holds {n} trials; the relay test is {RELAY_TRIALS}"
             )
@@ -357,9 +364,12 @@ def cmd_trial(a: argparse.Namespace) -> int:
                 f"rehearse trial refused: --name {name!r} is not {slug}'s slug or a registered alias"
             )
         prompt = f"{phrase} (about the research program {name})"
-    attempt = attempt_of(slug)
-    out = trials_path(slug, attempt)
-    if len(kit.read_jsonl(out)) >= RELAY_TRIALS:
+    practice = bool(getattr(a, "practice", False))
+    attempt = attempt_of(
+        slug
+    )  # a practice trial is refused once the relay test is settled, too
+    out = practice_path(slug) if practice else trials_path(slug, attempt)
+    if not practice and len(kit.read_jsonl(out)) >= RELAY_TRIALS:
         raise kit.KitError(
             f"{out} already holds {RELAY_TRIALS} trials; run rehearse record"
         )
@@ -375,7 +385,9 @@ def cmd_trial(a: argparse.Namespace) -> int:
     import router
 
     # Before the pane starts, so its first prompt is already routed as a trial (router.trial_mark).
-    router.trial_mark(sid, slug, attempt=attempt, phrase=phrase, where=a.where)
+    router.trial_mark(
+        sid, slug, attempt=attempt, phrase=phrase, where=a.where, practice=practice
+    )
     argv = launch_argv(b, to, cwd, cfg, sid, prompt, f"relay-trial {slug} {sid[:8]}")
     try:
         p = subprocess.run(
@@ -412,19 +424,29 @@ def cmd_trial(a: argparse.Namespace) -> int:
         "attempt": attempt,
         "at": kit.now_iso(),
     }
-    n = append(out, row)
-    print(
-        json.dumps(
-            {
-                "trial": n,
-                "file": str(out),
-                "label": route.get("label"),
-                "timed_out": timed_out,
-                "closed": closed,
-                "session_id": sid,
-            }
-        )
-    )
+    if practice:
+        row["practice"] = True
+    n = append(out, row, cap=not practice)
+    res: Dict[str, Any] = {
+        "trial": n,
+        "file": str(out),
+        "label": route.get("label"),
+        "timed_out": timed_out,
+        "closed": closed,
+        "session_id": sid,
+    }
+    if practice:
+        import cli_cert
+
+        # the record's own per-trial judgement, so a practice run reads exactly as the re-test would
+        res["practice"] = True
+        try:
+            res["fails"] = cli_cert.trial_fails(
+                slug, cli_cert.relay_cert(slug), dict(row, trial=n), n
+            )
+        except kit.KitError as e:
+            res["fails"], res["judge_error"] = None, str(e)
+    print(json.dumps(res))
     if timed_out:
         print(
             f"rehearse trial {n}: the turn did not end within {a.timeout} s",

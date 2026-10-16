@@ -454,12 +454,17 @@ def cmd_round(a: argparse.Namespace) -> int:
 RELAY_ROW_LABELS = ("completeness", "pushback", "research-order", "unavailable")
 
 
-def relay_fails(slug: str, trials: List[Dict[str, Any]]) -> List[str]:
+def relay_cert(slug: str) -> str:
     import router
 
     cert, err = router.render_cert(slug)
     if err:
         raise kit.KitError(err)
+    return cert
+
+
+def relay_fails(slug: str, trials: List[Dict[str, Any]]) -> List[str]:
+    cert = relay_cert(slug)
     roots = [
         os.path.realpath(r)
         for r in (kit.registry_get(slug) or {}).get("cwd_roots") or []
@@ -475,41 +480,7 @@ def relay_fails(slug: str, trials: List[Dict[str, Any]]) -> List[str]:
     )
     outside = False
     for i, t in enumerate(trials, 1):
-        reply = str(t.get("reply") or "")
-        label = (
-            t.get("label")
-            if t.get("label") in ("completeness", "pushback")
-            else "completeness"
-        )
-        v = router.relay_violations(reply, cert, label)
-        if any(
-            router.norm(ln) not in router.norm(reply)
-            for ln in cert.splitlines()
-            if ln.strip()
-        ):
-            v.append("it does not relay the certificate lines unchanged")
-        bad = [
-            str(c) for c in t.get("tools") or [] if not router.cert_read(str(c), slug)
-        ]
-        if bad:
-            v.append(
-                "it called "
-                + ", ".join(bad)
-                + " (only the certificate read is allowed)"
-            )
-        # A trial `rehearse trial` measured carries the router's own label and whether its turn
-        # ended. One the router routed anywhere but a relay label (or `unavailable`, whose designed
-        # fallback still hands the turn the certificate, §10 item 3) never exercised the relay, and
-        # one that timed out has no reply to judge (a hand-built row carries neither field). A
-        # research order is a relay label here: a trial's session routes it with the certified rules
-        # (router.relays), and the checks above hold it to the same reply and tool terms.
-        if t.get("label") is not None and t.get("label") not in RELAY_ROW_LABELS:
-            v.append(
-                f"the router labeled it {t.get('label')}, not a relay label, so the relay never ran"
-            )
-        if t.get("timed_out"):
-            v.append("its turn did not end before the trial's timeout")
-        fails += [f"trial {t.get('trial', i)}: {x}" for x in v]
+        fails += trial_fails(slug, cert, t, i)
         cwd = os.path.realpath(str(t.get("cwd") or ""))
         if t.get("cwd") and not any(
             cwd == r or cwd.startswith(r + os.sep) for r in roots
@@ -520,12 +491,54 @@ def relay_fails(slug: str, trials: List[Dict[str, Any]]) -> List[str]:
     return fails
 
 
+def trial_fails(slug: str, cert: str, t: Dict[str, Any], i: int) -> List[str]:
+    """One trial's relay violations, each `trial N: …`: what relay_fails holds every trial to, and
+    what a practice trial (`rehearse trial --practice`) prints about itself."""
+    import router
+
+    reply = str(t.get("reply") or "")
+    label = (
+        t.get("label")
+        if t.get("label") in ("completeness", "pushback")
+        else "completeness"
+    )
+    v = router.relay_violations(reply, cert, label)
+    if any(
+        router.norm(ln) not in router.norm(reply)
+        for ln in cert.splitlines()
+        if ln.strip()
+    ):
+        v.append("it does not relay the certificate lines unchanged")
+    bad = [str(c) for c in t.get("tools") or [] if not router.cert_read(str(c), slug)]
+    if bad:
+        v.append(
+            "it called " + ", ".join(bad) + " (only the certificate read is allowed)"
+        )
+    # A trial `rehearse trial` measured carries the router's own label and whether its turn
+    # ended. One the router routed anywhere but a relay label (or `unavailable`, whose designed
+    # fallback still hands the turn the certificate, §10 item 3) never exercised the relay, and
+    # one that timed out has no reply to judge (a hand-built row carries neither field). A
+    # research order is a relay label here: a trial's session routes it with the certified rules
+    # (router.relays), and the checks above hold it to the same reply and tool terms.
+    if t.get("label") is not None and t.get("label") not in RELAY_ROW_LABELS:
+        v.append(
+            f"the router labeled it {t.get('label')}, not a relay label, so the relay never ran"
+        )
+    if t.get("timed_out"):
+        v.append("its turn did not end before the trial's timeout")
+    return [f"trial {t.get('trial', i)}: {x}" for x in v]
+
+
 def cmd_rehearse(a: argparse.Namespace) -> int:
     rec = kit.records_dir(a.program)
     if a.rehearse_verb == "trial":
         import rehearse_trial
 
         return rehearse_trial.cmd_trial(a)
+    if a.practice:
+        raise kit.KitError(
+            "--practice is a rehearse trial flag: practice trials are never recorded"
+        )
     if a.rehearse_verb == "frames":
         frames = [
             m["frame"]
@@ -556,7 +569,16 @@ def cmd_rehearse(a: argparse.Namespace) -> int:
             raise kit.KitError(
                 f"rehearse record needs --trials FILE (no {a.trials} from rehearse trial)"
             )
+    import rehearse_trial
+
     trials = kit.read_jsonl(Path(a.trials))
+    if os.path.realpath(a.trials) == os.path.realpath(
+        rehearse_trial.practice_path(a.program)
+    ) or any(t.get("practice") for t in trials):
+        raise kit.KitError(
+            f"{a.trials} holds practice trials (rehearse trial --practice), which the relay test "
+            "never reads"
+        )
     fails = relay_fails(a.program, trials)
     passed, n = not fails, len(trials)
     kit.append_jsonl(
@@ -637,7 +659,14 @@ def add_verbs(sub: Any) -> None:
     p.add_argument("--trials")
     p.add_argument("--phrase", help="trial: one fixed phrasing, verbatim")
     p.add_argument("--where", choices=("root", "outside"), default="root")
-    p.add_argument("--name", help="trial --where outside: the slug or a registered alias")
+    p.add_argument(
+        "--name", help="trial --where outside: the slug or a registered alias"
+    )
     p.add_argument("--timeout", type=float, default=900.0, help="trial: seconds")
+    p.add_argument(
+        "--practice",
+        action="store_true",
+        help="trial: a real trial written to evidence/rehearsal/practice.jsonl, never recorded",
+    )
     p.add_argument("--retest", action="store_true")
     p.add_argument("--json", action="store_true")

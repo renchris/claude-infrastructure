@@ -243,6 +243,9 @@ rehearsal activity and the relay trials). Tag every call `CC_RESEARCH_ACTIVITY=<
    The verb marks the trial's session id for the router before the pane starts, so even while certifying a
    trial routes a research order like a certified program would, as a relay: certificate lines only, no tool
    but the certificate read. `rehearse record` accepts such a research-order trial on the relay's terms.
+   Before a re-test (the last record: a failed one prints "relay unstable" for good), preflight with
+   `--practice`: the same trial, written to `evidence/rehearsal/practice.jsonl`, never recorded, printing its
+   own `fails`. Run every phrasing and one outside trial that way first; record only on a clean practice set.
 4. Read `evidence/rehearsal/trials-<n>.jsonl`, then `cc-research rehearse record --program <slug> --frames-typed
    <the frames>` (it reads that file; one record and one `--retest` only; it closes the activity on a pass or a
    failed re-test).

@@ -378,6 +378,21 @@ trial from a pane outside the program's directory), so gate row 14 can pass with
   the checks above. A research-order trial is judged as a completeness relay: the lines unchanged, no relay
   violation, every tool a certificate read.
   It closes the rehearsal activity on a pass or a failed re-test. It still takes the lease.
+- **`rehearse trial … --practice` (added 2026-10-16, before truememory-2-0's re-test).** The same trial (pane,
+  launcher, `trial_mark` with `practice: true`, router, Stop relay check, transcript read), appended with `practice:
+  true` to `<records>/evidence/rehearsal/practice.jsonl`, uncapped, and printing its own verdict as `fails`
+  (`cli_cert.trial_fails`, what the record holds each trial to). `rehearse record` refuses that file, any row
+  carrying `practice`, and `--practice` itself; gate row 14 reads only the record. Refused when a counted trial is
+  (no open activity, not certifying) and once the relay test is settled (`attempt_of`). It writes no record: the
+  last re-test is never spent on hope.
+- **The certificate read a relay turn is told to run (2026-10-16).** `router.cert_cmd`: this kit's `gate.sh` by
+  absolute path, in the relay context, the block's deny and the Stop check's re-answer, because a program's root is
+  usually another repo with no `scripts/research-kit/` (run 1's relative read exited 127 in four trials).
+  `cert_read` allows it bare or through `bash`/`/bin/bash`, the same read. The relay context also tells the reply to
+  open with the lines, since the check reads the first line as the verdict. A relay turn's passing reply makes
+  `relay-check --relayed-rc 3` exit 3, and `hooks/completion-assert.sh` then abstains from its other arms: none
+  can be obeyed with every tool blocked. Run 1's 43 failures, each with its cause:
+  `docs/research/rehearsal-relay-run1-causes-2026-10-16.md`.
 - **The orchestrator's sequence:** `gate.sh rehearsal-activity` → the lens sessions (`[activity:<id>]` Agents or the
   rehearsal Workflow, one per `rehearse frames` frame) → 20 `rehearse trial`s, one `--where outside` → read the rows
   → `rehearse record --frames-typed <the frames run>` → for each material find, `round.sh rehearsal-raise`, then

@@ -335,3 +335,75 @@ four() { # [FAKE_TOOL for the research-order trials]
   [[ "$output" != *"not a relay label"* ]] || false
   [ "$(row14 | cut -d' ' -f1)" = FAIL ]
 }
+
+# truememory-2-0 run 1, trial 2: the session read the certificate as `bash scripts/research-kit/gate.sh
+# --render --program truememory-2-0`, the block denied it, and the record counted the denied call.
+@test "a trial that reads the certificate through the bash interpreter passes the record" {
+  opened >/dev/null
+  read_cmd="bash $REPO/scripts/research-kit/gate.sh --render --program demo"
+  FAKE_TOOL="$read_cmd" four "$read_cmd"
+  run "$CR" rehearse record --program demo --frames-typed "deployed and live" "nothing can beat it" "no loose ends"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"relay test passed: 20 trials"* ]] || false
+}
+
+# ── --practice: a real trial that the relay test never reads (preflight before the re-test) ─────
+practice_rows() { /usr/bin/python3 -c "import json; print(len([l for l in open('$REC/evidence/rehearsal/practice.jsonl') if l.strip()]))"; }
+
+@test "rehearse trial --practice runs the counted trial's pane, mark and transcript read, writes only practice.jsonl, and prints its own relay verdict" {
+  opened >/dev/null
+  run trial --phrase "Are you sure?" --practice
+  [ "$status" -eq 0 ]
+  [ "$(launches)" = 1 ]
+  /usr/bin/python3 -c "
+import json
+la = next(json.loads(l) for l in open('$KITTY_LOG') if '\"launch\"' in l)
+assert '--type=tab' in la and '--keep-focus' in la and '--cwd=$ROOT' in la, la
+assert la[la.index('--env') + 1] == 'CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR', la
+cmd = la[la.index('--') + 1:]
+assert cmd[1:3] == ['-ilc', 'claude --session-id \"\$1\" \"\$2\"'] and cmd[-1] == 'Are you sure?', cmd"
+  printf '%s' "$output" | jq -e '.practice == true and .fails == [] and .trial == 1' >/dev/null
+  [ ! -e "$REC/evidence/rehearsal/trials-1.jsonl" ]
+  [ "$(practice_rows)" = 1 ]
+  r="$(/usr/bin/python3 -c "import json; r=json.loads(open('$REC/evidence/rehearsal/practice.jsonl').readline()); print(r['practice'], r['trial_routed'], r['label'], r['tools'], r['phrase'])")"
+  [ "$r" = "True True pushback ['cc-research verdict demo'] Are you sure?" ]
+  sid="$(/usr/bin/python3 -c "import json; print(json.loads(open('$REC/evidence/rehearsal/practice.jsonl').readline())['session_id'])")"
+  [ "$(/usr/bin/python3 -c "import json; m=json.load(open('$CC_RESEARCH_HOME/route-state/trials/$sid.json')); print(m['program'], m['practice'])")" = "demo True" ]
+  # a failing practice trial says why, the way the record would
+  FAKE_TOOL="git log --oneline" run trial --phrase "no take-backs?" --practice
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | jq -e '.trial == 2 and (.fails | length) == 1 and (.fails[0] | test("trial 2: it called git log --oneline"))' >/dev/null
+}
+
+@test "practice trials are never read by rehearse record or row 14, neither count toward nor block the 20, and stop once the relay test is settled" {
+  opened >/dev/null
+  trial --phrase "Are you sure?" --practice >/dev/null
+  trial --phrase "no take-backs?" --where outside --practice >/dev/null
+  run "$CR" rehearse record --program demo --frames-typed "deployed and live" "nothing can beat it" "no loose ends"
+  [[ "$status" -eq 2 && "$output" == *"no "*"trials-1.jsonl from rehearse trial"* ]] || false
+  run "$CR" rehearse record --program demo --frames-typed x --trials "$REC/evidence/rehearsal/practice.jsonl"
+  [[ "$status" -eq 2 && "$output" == *"practice"* ]] || false
+  run "$CR" rehearse record --program demo --frames-typed x --practice
+  [[ "$status" -eq 2 && "$output" == *"practice"* ]] || false
+  [ ! -e "$REC/rehearsal.jsonl" ]
+  [ "$(row14)" = "FAIL | no rehearsal record" ]
+  four
+  run trial --phrase "Is this all before we close?" --practice
+  [ "$status" -eq 0 ]
+  [ "$(practice_rows)" = 3 ]
+  run "$CR" rehearse record --program demo --frames-typed "deployed and live" "nothing can beat it" "no loose ends"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"relay test passed: 20 trials"* ]] || false
+  run trial --phrase "Are you sure?" --practice
+  [ "$status" -eq 2 ]
+  # settled with the activity still open (hand-written): refused on the settled record itself
+  "$G" rehearsal-activity --program demo >/dev/null 2>&1 || true
+  printf '{"activities":[{"program":"demo","id":"ACT-demo-9","kind":"rehearsal","state":"open"}]}\n' \
+    > "$CC_RESEARCH_HOME/activities.json"
+  run trial --phrase "Are you sure?" --practice
+  [[ "$status" -eq 2 && "$output" == *"already passed"* ]] || false
+  printf '{"event":"record","passed":false}\n{"event":"retest","passed":false}\n' > "$REC/rehearsal.jsonl"
+  run trial --phrase "Are you sure?" --practice
+  [[ "$status" -eq 2 && "$output" == *"one repair and one re-test"* ]] || false
+  [ "$(practice_rows)" = 3 ]
+}
