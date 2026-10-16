@@ -385,6 +385,33 @@ osa_posts() { [ -f "$OSA_LOG" ] && wc -l < "$OSA_LOG" | tr -d ' ' || echo 0; }
   [[ "$msg" == "/pk/recycle-failed/SID-44.json · recycle-dead · pane 44 is stranded" ]] || { echo "$msg"; false; }
 }
 
+# husk-fs (2026-10-16): the self-close husk the fullscreen guard kept open. Nothing is stranded, but
+# the push reached nobody on all 3 episodes (refused-rc3), and the remedy (⌘W) is not guessable.
+@test "STRAND PAGE husk-fs: ONE page, its own wording, handle first, under 200 chars, record says paged" {
+  local d="pane 181 is the last pane of a fullscreen kitty window; the fullscreen guard kept it open (kitty crash 2026-10-15). Close it with ⌘W, which leaves fullscreen first. No work at risk."
+  # The production record dir (~/.claude/handoff-alarms, rendered with `~`), not the suite's long
+  # $BATS_TEST_TMPDIR one: the 200-char claim is about the handle a real page carries.
+  local adir="$HOME/.claude/handoff-alarms" r
+  CC_HANDOFF_ALARM_DIR="$adir" alarm husk-fs 181 SID-181 "" "$d"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *CALLER-CONTINUED* ]] || { echo "$output"; false; }
+  [ "$(osa_posts)" -eq 1 ] || { cat "$OSA_LOG"; false; }
+  r="$(ls "$adir"/alarm-*.json)"
+  local msg; msg="$(cat "$OSA_LOG")"
+  [ "${#msg}" -lt 200 ] || { echo "page is ${#msg} chars: $msg"; false; }
+  [[ "${msg%% · *}" == *"$(basename "$r")" ]] || { echo "handle not first: $msg"; false; }
+  [[ "$msg" == \~/.claude/handoff-alarms/* ]] || { echo "$msg"; false; }
+  [[ "$msg" == *" · husk-fs · pane 181: "*"No work at risk." ]] || { echo "truncated or reworded: $msg"; false; }
+  [[ "$msg" == *"⌘W"* ]] || { echo "$msg"; false; }
+  [[ "$msg" != *stranded* ]] || { echo "a husk is not stranded: $msg"; false; }
+  [ "$(jq -r .class "$r")" = husk-fs ] || { cat "$r"; false; }
+  [ "$(jq -r .paged "$r")" = os-banner ] || { cat "$r"; false; }
+  [ "$(jq -r .detail "$r")" = "$d" ] || { cat "$r"; false; }
+  # the plain husk-pane class stays unpaged (the control: the gate is the class, not "any husk")
+  alarm husk-pane 181 SID-181 "" "HANDOFF-HUSK-PANE: x"
+  [ "$(osa_posts)" -eq 1 ] || { cat "$OSA_LOG"; false; }
+}
+
 @test "STRAND PAGE: the OS leg FAILS ⇒ the record says paged=failed:<rc>, and the caller still returns 0" {
   OSA_RC=1 alarm recycle-relaunch-failed 44 DEAD-SID "" "HANDOFF-RECYCLE-RELAUNCH-FAILED: x"
   [ "$status" -eq 0 ]

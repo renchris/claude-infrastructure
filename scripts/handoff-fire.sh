@@ -1634,7 +1634,13 @@ sys.exit(0)' 2>/dev/null
 #   self   the pane IS the caller (the self-close watcher). A session retiring itself is always
 #          authorized; an operator pane has no marker and must still be able to close itself.
 #   peer   (default) closing SOMEONE ELSE's pane. Full guard: refuse unless provably agent-owned.
-hf_close_pane() { # $1=pane id  $2=site label  $3=spawn|self|peer  → 0 closed / 1 close failed / 2 REFUSED
+#
+# RETURN 3 = FS-GUARD (kitty crash 2026-10-15; incident follow-up 2026-10-16). bin/it2-kitty exits 70
+# when the fullscreen guard refused the close as refused-fs: the pane is the last one of a
+# native-fullscreen OS window, and closing it is the crash precondition. That is a fixed fact, not a
+# transient, so it is reported apart from 1: a retry re-runs the identical verdict (each 2026-10-16
+# husk episode ran 4 of them), and the caller should raise husk-fs instead.
+hf_close_pane() { # $1=pane id  $2=site label  $3=spawn|self|peer  → 0 closed / 1 failed / 2 REFUSED / 3 FS-GUARD
   local _id="${1##*:}" _site="${2:-unknown}" _mode="${3:-peer}"
   local _term _owner _verdict _rc=0 _still _shim
   _shim="${IT2_SHIM:-$HOME/.claude/bin/it2}"
@@ -1685,7 +1691,11 @@ hf_close_pane() { # $1=pane id  $2=site label  $3=spawn|self|peer  → 0 closed 
   case "$_verdict" in
     closed)     return 0 ;;
     unverified) return 0 ;;   # shim said 0 and nothing contradicted it
-    *)          return 1 ;;   # STILL-PRESENT, or any *-rc<n> suffix
+    # The fullscreen guard refused (refused-fs): no retry can change it. NOT `closed-rc70`: that is a
+    # refusal whose window was gone by the post-read (the operator's ⌘W, or cc-pane-runner, closed it
+    # in between), so it stays 1 and the caller's next pass reads the pane as absent and ends cleanly.
+    STILL-PRESENT-rc70|unverified-rc70) return 3 ;;
+    *)          return 1 ;;   # STILL-PRESENT, closed-rc70, or any other *-rc<n> suffix
   esac
 }
 
@@ -9127,13 +9137,24 @@ hf_alarm() { # $1=class  $2=pane  $3=sid  $4=successor  $5=detail  [$6=refire_cm
   # outcome is spliced into the record as `paged`, so the record says whether a human was reached;
   # autonomy-sweep's strand rung re-pages any record whose `paged` is not a success.
   # HF_ALARM_STRAND_PAGE=off skips the page (the record then says paged=off).
+  #
+  # husk-fs (2026-10-16) pages too, though nothing is stranded: it is the one husk whose remedy the
+  # operator cannot guess (⌘W, which leaves fullscreen first, never an autonomous close), and the
+  # push below reached nobody on all 3 husk episodes that day (refused-rc3, no desk role). Its _msg
+  # is its own, handle first and under 200 chars. Deliberately NOT added to autonomy-sweep's re-page
+  # rung (recycle-* only): no work is at risk, so one banner is enough.
   case "$_class" in
-    recycle-relaunch-failed|recycle-relaunch-refused|recycle-dead)
+    recycle-relaunch-failed|recycle-relaunch-refused|recycle-dead|husk-fs)
       _hd="$_dir"; case "$_hd" in "$HOME"/*) _hd="~${_hd#"$HOME"}" ;; esac
       _hd="${_packet:-$_hd/$_file}"
-      _state="is stranded"
-      case "$_raw" in *"nothing is stranded"*|*"STILL RUNNING"*|*"claude is alive"*) _state="needs attention" ;; esac
-      _msg="$_hd · $_class · pane $_pane $_state"
+      if [ "$_class" = husk-fs ]; then
+        _state="is a husk"
+        _msg="$_hd · husk-fs · pane $_pane: last pane of a fullscreen kitty window. Close it with ⌘W. No work at risk."
+      else
+        _state="is stranded"
+        case "$_raw" in *"nothing is stranded"*|*"STILL RUNNING"*|*"claude is alive"*) _state="needs attention" ;; esac
+        _msg="$_hd · $_class · pane $_pane $_state"
+      fi
       if [ "${HF_ALARM_STRAND_PAGE:-on}" = off ]; then
         _paged=off
       elif _lrp="$(hf_lr_script lr-page.sh HF_ALARM_LR_PAGE_BIN)"; then
@@ -10528,7 +10549,16 @@ if [ "${1:-}" = "__selfclose" ]; then
   # crash-watchdog false-absolution class (see hooks/lead-crash-watchdog.sh marker_owns_sid).
   # 4 attempts, 2s apart. Exhausted ⇒ LOUD: log line + a durable alarm record (hf_alarm; the desk
   # page rides along best-effort), never a silent husk.
-  _close_ok=0
+  #
+  # NOT EVERY FAILED CLOSE IS A BLIP (2026-10-16). The connection failure above is the iTerm2 case the
+  # retry was built for, and only that case. Under kitty, the fullscreen guard (kitty crash
+  # 2026-10-15) refuses to close the last pane of a native-fullscreen window, and that refusal is a
+  # fixed fact: all 3 husk episodes of 2026-10-15/16 re-ran the identical verdict 4 times and then
+  # paged "failed 4/4" with nothing to say about why. hf_close_pane now returns 3 for exactly that
+  # refusal (it2-kitty exit 70, refused-fs only), and the loop stops on it; the arm after the loop
+  # raises husk-fs, which names the cause and the remedy (⌘W leaves fullscreen first). Any other
+  # guard refusal still returns 1 and is retried, because under load it can be transient.
+  _close_ok=0 _close_rc=0
   for _try in 1 2 3 4; do
     # CLOSED FROM INSIDE IS CLOSED (husk panes 2026-09-30, fix F-a). bin/cc-pane-runner now exits
     # its pane when claude exits 0 with no recycle pending, so by the time this loop runs the window
@@ -10546,8 +10576,14 @@ if [ "${1:-}" = "__selfclose" ]; then
     # The attribution row is written either way, which is the half that was missing.
     # The success line is the log's verdict: without it a log that closed the pane and one that
     # died mid-loop end on the same last line, and only close-attrib.jsonl could tell them apart.
-    if hf_close_pane "$SID" self-close self; then
+    _close_rc=0
+    hf_close_pane "$SID" self-close self || _close_rc=$?
+    if [ "$_close_rc" = 0 ]; then
       _close_ok=1; echo "→ closed pane $SID (attempt $_try/4)"; break
+    fi
+    if [ "$_close_rc" = 3 ]; then
+      echo "⚠ it2 session close attempt $_try/4 for $SID was REFUSED by the fullscreen guard (last pane of a fullscreen kitty window) — not retrying, a retry re-runs the same verdict" >&2
+      break
     fi
     echo "⚠ it2 session close attempt $_try/4 failed for $SID — retrying in 2s" >&2
     sleep 2
@@ -10574,22 +10610,36 @@ if [ "${1:-}" = "__selfclose" ]; then
     # claims, but it is now CAPTURED BEFORE it is pushed (hf_alarm writes the record first, then
     # pushes and keeps the verdict). The class travels with the state, so a drained record says
     # which of the three this was — the whole point of the tri-state survives into the ledger.
+    #
+    # husk-fs (2026-10-16) is a FOURTH claim, and only for `shell` + a refused-fs guard (close rc 3):
+    # the guard proved this is the last pane of a fullscreen window, so the page can name the cause
+    # and the one safe remedy. With a live or unreadable session the cc/unknown arms keep their
+    # wording (their remedy is "look first" either way) and gain one clause naming the guard. The
+    # attempt counts are $_try, not a literal 4: a guard refusal stops after the first.
     _final="$(pane_cc_state "${TTY_PATH:-}")"
+    _fsnote=""
+    [ "$_close_rc" != 3 ] || _fsnote=" The close was refused by the fullscreen guard (last pane of a fullscreen kitty window), so it was not retried."
     case "$_final" in
       cc)
         _cls=close-failed-live
-        _hk="!! PANE CLOSE FAILED after 4 attempts — and the session is NOT gone: claude is STILL RUNNING in pane $SID (re-checked at the failure instant on ${TTY_PATH:-?}). The /exit did not take. Do NOT close this pane blind; it has a live session in it."
-        _pg="HANDOFF-CLOSE-FAILED-LIVE: self-close of $SID failed 4/4 AND claude is still running there — this is NOT a husk. The session did not exit and no work is lost, but it also did not retire: it is holding a pane and a worktree. Look at the pane before closing anything."
+        _hk="!! PANE CLOSE FAILED after $_try attempt(s) — and the session is NOT gone: claude is STILL RUNNING in pane $SID (re-checked at the failure instant on ${TTY_PATH:-?}). The /exit did not take. Do NOT close this pane blind; it has a live session in it.$_fsnote"
+        _pg="HANDOFF-CLOSE-FAILED-LIVE: self-close of $SID failed $_try/4 AND claude is still running there — this is NOT a husk. The session did not exit and no work is lost, but it also did not retire: it is holding a pane and a worktree. Look at the pane before closing anything.$_fsnote"
         ;;
       shell)
-        _cls=husk-pane
-        _hk="!! PANE CLOSE FAILED after 4 attempts — pane $SID is a HUSK (claude confirmed gone, pane still open at a shell prompt). Close it by hand; the session is already gone."
-        _pg="HANDOFF-HUSK-PANE: self-close of $SID typed /exit successfully (claude CONFIRMED gone on ${TTY_PATH:-?}) but 'it2 session close' failed 4/4 — the pane is still open at a shell prompt. It reads to the operator as an abrupt crash. Close the pane; no work is at risk."
+        if [ "$_close_rc" = 3 ]; then
+          _cls=husk-fs
+          _hk="!! PANE CLOSE REFUSED by the fullscreen guard — pane $SID is a HUSK (claude confirmed gone) and the last pane of a fullscreen kitty window. Close it with ⌘W, which leaves fullscreen first."
+          _pg="pane $SID is the last pane of a fullscreen kitty window; the fullscreen guard kept it open (kitty crash 2026-10-15). Close it with ⌘W, which leaves fullscreen first. No work at risk."
+        else
+          _cls=husk-pane
+          _hk="!! PANE CLOSE FAILED after 4 attempts — pane $SID is a HUSK (claude confirmed gone, pane still open at a shell prompt). Close it by hand; the session is already gone."
+          _pg="HANDOFF-HUSK-PANE: self-close of $SID typed /exit successfully (claude CONFIRMED gone on ${TTY_PATH:-?}) but 'it2 session close' failed 4/4 — the pane is still open at a shell prompt. It reads to the operator as an abrupt crash. Close the pane; no work is at risk."
+        fi
         ;;
       *)
         _cls=close-failed-unknown
-        _hk="!! PANE CLOSE FAILED after 4 attempts for pane $SID — and whether the session exited is UNKNOWN (its tty '${TTY_PATH:-none}' could not be read). Look at the pane before closing it: it may still hold a live session."
-        _pg="HANDOFF-CLOSE-FAILED-UNKNOWN: self-close of $SID failed 4/4 and its liveness could not be determined (tty '${TTY_PATH:-none}' unreadable). It may be a husk or it may be a live session — this page cannot tell you which, and neither could the close. Look before closing."
+        _hk="!! PANE CLOSE FAILED after $_try attempt(s) for pane $SID — and whether the session exited is UNKNOWN (its tty '${TTY_PATH:-none}' could not be read). Look at the pane before closing it: it may still hold a live session.$_fsnote"
+        _pg="HANDOFF-CLOSE-FAILED-UNKNOWN: self-close of $SID failed $_try/4 and its liveness could not be determined (tty '${TTY_PATH:-none}' unreadable). It may be a husk or it may be a live session — this page cannot tell you which, and neither could the close. Look before closing.$_fsnote"
         ;;
     esac
     echo "$_hk" >&2

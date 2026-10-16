@@ -45,8 +45,11 @@ setup() {
   # answers $STUB_RC (default 0 = safe), so no close here reaches the real guard's kitten/CGS reads.
   GUARD_LOG="$BATS_TEST_TMPDIR/fs-guard.log"
   export CC_KITTY_FS_GUARD="$BATS_TEST_TMPDIR/fs-guard"
-  # shellcheck disable=SC2016  # the stub's $* / ${STUB_RC} expand when the STUB runs
-  printf '#!/bin/bash\necho "$*" >> "%s"\nexit "${STUB_RC:-0}"\n' "$GUARD_LOG" > "$CC_KITTY_FS_GUARD"
+  # $STUB_ERR, when set, goes to the stub's stderr: the shim tells refused-fs (exit 70) from every
+  # other refusal (exit 1) by the guard's stderr wording, because the guard exits 3 for all of them.
+  # shellcheck disable=SC2016  # the stub's $* / ${STUB_RC} / ${STUB_ERR} expand when the STUB runs
+  printf '#!/bin/bash\necho "$*" >> "%s"\n[ -z "${STUB_ERR:-}" ] || echo "$STUB_ERR" >&2\nexit "${STUB_RC:-0}"\n' \
+    "$GUARD_LOG" > "$CC_KITTY_FS_GUARD"
   chmod +x "$CC_KITTY_FS_GUARD"
 }
 
@@ -459,12 +462,30 @@ JSON
 # gate. The guard is a stub (setup); these pin the shim's half of the contract.
 # RED-proof: against `git show HEAD:bin/it2-kitty` the rc 3, refuse-mode and missing-guard cases
 # fail (close-window is sent, the guard is never called).
-@test "fullscreen guard rc 3: exit 1, NO close-window, stderr names fullscreen" {
+# 2026-10-16: a refused-fs refusal exits 70 (a fixed fact: handoff-fire stops retrying and pages
+# husk-fs); every other guard refusal keeps exit 1 (retried, it can be transient under load). The
+# stub's stderr below is the real guard's wording (bin/kitty-fullscreen-guard, main()).
+@test "fullscreen guard refused-fs: exit 70, NO close-window, guard stderr passed through" {
   fake_kitty_identity
   id_payload 15 4242 '["claude","--agent-name","m"]'
-  STUB_RC=3 run "$K" session close -f -s 15
-  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  STUB_RC=3 STUB_ERR='kitty-fullscreen-guard: refused (refused-fs) kitty window 15 scope=pane mode=refuse: state=FS types=[4] onscreen=True' \
+    run "$K" session close -f -s 15
+  [ "$status" -eq 70 ] || { echo "$output"; false; }
   [[ "$output" == *"native fullscreen"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"refused (refused-fs)"* ]] || { echo "$output"; false; }
+  if grep -q -- 'close-window' "$CALLS"; then echo "close sent despite the guard" >&2; false; fi
+}
+
+@test "fullscreen guard refusing for any other reason (kitten-failed, refused-unknown, no stderr): exit 1" {
+  fake_kitty_identity
+  id_payload 15 4242 '["claude","--agent-name","m"]'
+  local e
+  for e in 'kitty-fullscreen-guard: refused (kitten-failed) kitty window 15 scope=pane mode=refuse: state=None types=None onscreen=None' \
+           'kitty-fullscreen-guard: refused (refused-unknown) kitty window 15 scope=pane mode=refuse: state=UNKNOWN types=[] onscreen=False' \
+           ''; do
+    STUB_RC=3 STUB_ERR="$e" run "$K" session close -f -s 15
+    [ "$status" -eq 1 ] || { echo "stderr=[$e]: $output"; false; }
+  done
   if grep -q -- 'close-window' "$CALLS"; then echo "close sent despite the guard" >&2; false; fi
 }
 

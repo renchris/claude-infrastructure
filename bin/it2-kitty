@@ -84,7 +84,9 @@
 #
 # Exit codes: 1 kitty failed · 3 not inside kitty · 4 no control socket · 5 pinned binary unusable ·
 #             64 unsupported command/verb · 65 bad or missing window id · 66 identity pin
-#             unsatisfied or unverifiable (above).
+#             unsatisfied or unverifiable (above) · 70 close refused by the fullscreen guard as
+#             refused-fs: the last pane of a native-fullscreen window, a fixed fact no retry changes
+#             (any OTHER guard refusal stays 1 and may be retried; see the `close` arm).
 #
 # Seams: CC_TERM_KITTY (kitty binary) · CC_TERM_KITTY_TO (socket) · IT2_KITTY_TIMEOUT_S
 #        · CC_TERM_KITTY_PID (optional: the kitty pid a delivery target must live in — prove_target
@@ -1494,14 +1496,25 @@ else:
         err "Without it nothing can prove this close does not empty a native-fullscreen window."
         exit 1
       fi
-      CC_TERM_KITTY="$KITTY_BIN" "$_fsg" --window "$SESSION" \
-        --to "${CC_TERM_KITTY_TO:-${KITTY_LISTEN_ON:-}}" --mode refuse --scope pane --tool it2-kitty
-      _fsrc=$?
+      # The guard's stderr is captured (and re-emitted unchanged) because its rc alone cannot say WHY
+      # it refused: kitten-failed, refused-unknown and refused-fs all exit 3. Only refused-fs is a
+      # fixed fact (this IS the last pane of a fullscreen window), so only it gets its own code, 70:
+      # retrying cannot change it, and handoff-fire's self-close stops on it and pages husk-fs instead
+      # of re-running the same verdict 4 times (incident 2026-10-16, 3 husk episodes x 4 retries).
+      # The other refusals keep exit 1 and are retried, because under load they can be transient.
+      # Not 3 (that is "not inside kitty", above) and not 64-69 (taken).
+      { _fserr="$(CC_TERM_KITTY="$KITTY_BIN" "$_fsg" --window "$SESSION" \
+          --to "${CC_TERM_KITTY_TO:-${KITTY_LISTEN_ON:-}}" --mode refuse --scope pane --tool it2-kitty \
+          2>&1 1>&3 3>&-)"; _fsrc=$?; } 3>&1
+      [ -z "$_fserr" ] || printf '%s\n' "$_fserr" >&2
       if [ "$_fsrc" -ne 0 ]; then
         err "refusing to close window $SESSION — fullscreen guard rc $_fsrc: it is the last pane of a"
         err "kitty window in native fullscreen (or the window's state could not be read). An autonomous"
         err "close would destroy that window while still in fullscreen, the 2026-10-15 crash"
         err "precondition, so the pane stays open. Close it by hand (⌘W or the pane menu, both guarded)."
+        case "$_fserr" in
+          *"refused (refused-fs)"*) exit 70 ;;
+        esac
         exit 1
       fi
     fi

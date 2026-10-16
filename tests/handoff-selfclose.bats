@@ -222,7 +222,8 @@ fi
 # $IT2_CLOSE_FAIL models the iTerm2 python-API socket refusing the CLOSE while every other verb
 # still answers — the real 2026-07-26 failure (1 of 16 self-closes), and the only way to reach the
 # post-close diagnosis branch. Inert unless a test sets it, so every existing case is unchanged.
-if [ -n "${IT2_CLOSE_FAIL:-}" ] && [ "${1:-}" = session ] && [ "${2:-}" = close ]; then exit 1; fi
+# $IT2_CLOSE_RC picks the failing code (default 1): 70 is it2-kitty's refused-fs fullscreen-guard exit.
+if [ -n "${IT2_CLOSE_FAIL:-}" ] && [ "${1:-}" = session ] && [ "${2:-}" = close ]; then exit "${IT2_CLOSE_RC:-1}"; fi
 exit 0
 SH
   cat > "$h/.claude/bin/cc-notify" <<'SH'
@@ -498,6 +499,104 @@ SH
   [[ "$output" == *"the session is already gone"* ]] || false
   grep -q "HANDOFF-HUSK-PANE" "$H/ccnotify-calls.log"
   grep -q "CONFIRMED gone" "$H/ccnotify-calls.log"
+}
+
+@test "close REFUSED by the fullscreen guard (rc 70) + CC gone → ONE attempt, class husk-fs, paged" {
+  # 2026-10-16: every husk episode re-ran the guard's fixed refused-fs verdict 4 times, then paged
+  # "failed 4/4" with no cause. it2-kitty now exits 70 for refused-fs only; hf_close_pane returns 3;
+  # the loop stops on it and the record names the cause and the remedy.
+  H="$BATS_TEST_TMPDIR/home-huskfs"; mk_home "$H"
+  : > "$PS_DEAD_DIR/TTY-A"                              # CC exited → pane_cc_state(TTY-A)=shell
+  local pagelog="$BATS_TEST_TMPDIR/lr-page.log"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> %q\necho os=posted\n' "$pagelog" > "$BATS_TEST_TMPDIR/lr-page"
+  chmod +x "$BATS_TEST_TMPDIR/lr-page"
+  run env HOME="$H" IT2_CLOSE_FAIL=1 IT2_CLOSE_RC=70 HF_ALARM_LR_PAGE_BIN="$BATS_TEST_TMPDIR/lr-page" \
+      bash "$HF" __selfclose PREDSID TTY-A
+  [ "$(grep -c 'session close' "$H/it2-calls.log")" -eq 1 ] || { cat "$H/it2-calls.log"; false; }
+  [[ "$output" == *"REFUSED by the fullscreen guard"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"retrying in 2s"* ]] || { echo "$output"; false; }
+  local rec; rec="$(ls "$H"/.claude/handoff-alarms/alarm-*.json)"
+  [ "$(jq -r .class "$rec")" = husk-fs ] || { cat "$rec"; false; }
+  [ "$(jq -r .paged "$rec")" = os-banner ] || { cat "$rec"; false; }
+  jq -r .detail "$rec" | grep -qF 'last pane of a fullscreen kitty window' || { cat "$rec"; false; }
+  jq -r .detail "$rec" | grep -qF 'Close it with ⌘W' || { cat "$rec"; false; }
+  [ "$(wc -l < "$pagelog" | tr -d ' ')" -eq 1 ] || { cat "$pagelog"; false; }
+  grep -qF 'husk-fs · pane PREDSID' "$pagelog" || { cat "$pagelog"; false; }
+  ! grep -q "HANDOFF-HUSK-PANE" "$H/ccnotify-calls.log" || false
+}
+
+@test "close fails with a NON-fs code (rc 1) + CC gone → still 4 attempts and husk-pane (control for rc 70)" {
+  H="$BATS_TEST_TMPDIR/home-husk1"; mk_home "$H"
+  : > "$PS_DEAD_DIR/TTY-A"
+  run env HOME="$H" IT2_CLOSE_FAIL=1 IT2_CLOSE_RC=1 bash "$HF" __selfclose PREDSID TTY-A
+  [ "$(grep -c 'session close' "$H/it2-calls.log")" -eq 4 ] || { cat "$H/it2-calls.log"; false; }
+  [ "$(jq -r .class "$(ls "$H"/.claude/handoff-alarms/alarm-*.json)")" = husk-pane ]
+}
+
+@test "close REFUSED by the fullscreen guard (rc 70) + CC STILL RUNNING → ONE attempt, close-failed-live naming the guard, NOT paged" {
+  # The guard refuses on a live session too. husk-fs is only for `shell`; here the live arm keeps its
+  # "look first" wording, reports the real attempt count (1, not a literal 4) and gains the guard
+  # clause. It is not a strand/husk-fs class, so the OS banner must not fire.
+  H="$BATS_TEST_TMPDIR/home-live-fs"; mk_home "$H"
+  local pagelog="$BATS_TEST_TMPDIR/lr-page.log"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> %q\necho os=posted\n' "$pagelog" > "$BATS_TEST_TMPDIR/lr-page"
+  chmod +x "$BATS_TEST_TMPDIR/lr-page"
+  # no dead-marker for TTY-A → CC alive throughout
+  run env HOME="$H" IT2_CLOSE_FAIL=1 IT2_CLOSE_RC=70 HF_SELFCLOSE_GRACE_S=1 HF_SELFCLOSE_GRACE_STEP_S=1 \
+      HF_ALARM_LR_PAGE_BIN="$BATS_TEST_TMPDIR/lr-page" bash "$HF" __selfclose PREDSID TTY-A
+  [ "$(grep -c 'session close' "$H/it2-calls.log")" -eq 1 ] || { cat "$H/it2-calls.log"; false; }
+  [[ "$output" == *"STILL RUNNING"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"after 1 attempt(s)"* ]] || { echo "$output"; false; }
+  local rec; rec="$(ls "$H"/.claude/handoff-alarms/alarm-*.json)"
+  [ "$(jq -r .class "$rec")" = close-failed-live ] || { cat "$rec"; false; }
+  jq -r .detail "$rec" | grep -qF 'failed 1/4' || { cat "$rec"; false; }
+  jq -r .detail "$rec" | grep -qF 'refused by the fullscreen guard' || { cat "$rec"; false; }
+  [ "$(jq -r '.paged // "absent"' "$rec")" = absent ] || { cat "$rec"; false; }
+  [ ! -e "$pagelog" ] || { cat "$pagelog"; false; }
+}
+
+@test "close REFUSED by the fullscreen guard (rc 70) + tty UNREADABLE → ONE attempt, close-failed-unknown naming the guard" {
+  H="$BATS_TEST_TMPDIR/home-unk-fs"; mk_home "$H"
+  : > "$PS_BLIND_DIR/TTY-A"                             # tty readable by nobody → unknown
+  run env HOME="$H" IT2_CLOSE_FAIL=1 IT2_CLOSE_RC=70 HF_SELFCLOSE_GRACE_S=1 HF_SELFCLOSE_GRACE_STEP_S=1 \
+      bash "$HF" __selfclose PREDSID TTY-A
+  [ "$(grep -c 'session close' "$H/it2-calls.log")" -eq 1 ] || { cat "$H/it2-calls.log"; false; }
+  [[ "$output" == *"is UNKNOWN"* ]] || { echo "$output"; false; }
+  local rec; rec="$(ls "$H"/.claude/handoff-alarms/alarm-*.json)"
+  [ "$(jq -r .class "$rec")" = close-failed-unknown ] || { cat "$rec"; false; }
+  jq -r .detail "$rec" | grep -qF 'failed 1/4' || { cat "$rec"; false; }
+  jq -r .detail "$rec" | grep -qF 'refused by the fullscreen guard' || { cat "$rec"; false; }
+}
+
+@test "hf_close_pane: rc 70 is FS-GUARD (3) only while the pane is there or unreadable; closed-rc70 stays 1" {
+  # closed-rc70 = the guard refused but the window was gone by the post-read (⌘W or cc-pane-runner
+  # closed it in between). It must stay retryable so the loop's next pane_enumerated pass ends it as
+  # "already gone", instead of breaking and paging a husk over a pane that no longer exists.
+  local lib="$BATS_TEST_TMPDIR/hfcp.sh"
+  {
+    sed -n '/^hf_pane_agent_owned()/,/^}/p' "$HF"
+    sed -n '/^hf_close_pane()/,/^}/p'      "$HF"
+    sed -n '/^hf_close_attrib()/,/^}/p'    "$HF"
+  } > "$lib"
+  grep -q '^hf_close_pane()' "$lib" || { echo "could not extract hf_close_pane"; false; }
+  export CC_CLOSE_ATTRIB_LOG="$BATS_TEST_TMPDIR/close-attrib.jsonl"
+  local still want
+  for still in present absent unreadable; do
+    case "$still" in
+      present)    want=3 ;;
+      absent)     want=1 ;;
+      unreadable) want=3 ;;
+    esac
+    run env STILL="$still" bash -c ". '$lib'
+      in_kitty() { return 0; }
+      hf_bounded() { return 70; }
+      kt_window_field() { case \"\$STILL\" in present) echo 400 ;; absent) : ;; *) return 1 ;; esac; }
+      hf_close_pane 400 self-close self"
+    [ "$status" -eq "$want" ] || { echo "still=$still want=$want got=$status"; false; }
+  done
+  grep -q '"verdict":"STILL-PRESENT-rc70"' "$CC_CLOSE_ATTRIB_LOG"
+  grep -q '"verdict":"closed-rc70"'        "$CC_CLOSE_ATTRIB_LOG"
+  grep -q '"verdict":"unverified-rc70"'    "$CC_CLOSE_ATTRIB_LOG"
 }
 
 @test "close fails + CC STILL RUNNING → says NOT gone, and the page says NOT a husk" {
