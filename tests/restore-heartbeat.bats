@@ -3,9 +3,10 @@
 # reads (W3 P3a-i). Every case drives the library under /bin/bash 3.2, because launchd runs it there
 # (lesson: the deployment interpreter is not the one on your PATH). HOME is a fixture, and
 # cc-sessions, kitten, ps and lsof are stubs: nothing here reads the live registry or the live kitty.
-# RED-proof (pid reuse, 2026-10-15): against the kill -0-only liveness check, "a live pid that is not
-# provably the dead kitty..." fails on its first scenario (the dead kitty's roster is rewritten to []),
-# and the restart case of "a genuinely live kitty..." fails at its third tick.
+# RED-proof (pid reuse, 2026-10-15), run against origin/main's library: all four pid-reuse cases fail —
+# "not provably the dead kitty" at its not-kitty scenario (the dead roster is rewritten), "genuinely
+# live" on the missing hb.kitty-start, "re-proves" with the roster emptied, hb_pick --dead-kitty
+# dropping the reused pid's fleet.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd -P)"
@@ -192,9 +193,9 @@ EOF
   [ "$status" -eq 1 ] || false
 }
 
-@test "hb_pick --dead-kitty skips a kitty that is still alive (a crash restores the fleet that died)" {
+@test "hb_pick --dead-kitty skips a kitty that is still alive, never a reused pid (a crash restores the fleet that died)" {
   ident "$PPID" "$KSTART" /bin/zsh                       # alive, but a reused pid: counts as dead
-  mkdir -p "$(dir A "$PPID")"; echo '[]' > "$(dir A "$PPID")/hb.roster.json"; echo 1784799500 > "$(dir A "$PPID")/hb.start"
+  mkdir -p "$(dir A "$PPID")"; echo '[]' > "$(dir A "$PPID")/hb.roster.json"; echo 1784799000 > "$(dir A "$PPID")/hb.start"
   mkdir -p "$(dir A "$DEADP")" "$(dir A "$KP")"
   while read -r k st; do
     echo '[]' > "$(dir A "$k")/hb.roster.json"; echo "$st" > "$(dir A "$k")/hb.start"
@@ -203,8 +204,9 @@ $DEADP 1784799000
 $KP 1784799900
 EOF
   hb hb_pick "$CC_HEARTBEAT_DIR" 0 1784800000 --dead-kitty
-  [ "$output" = "1784799000	$(dir A "$DEADP")
-1784799500	$(dir A "$PPID")" ] || false
+  [ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" -eq 2 ] || false
+  printf '%s\n' "$output" | grep -qxF "1784799000	$(dir A "$DEADP")" || false
+  printf '%s\n' "$output" | grep -qxF "1784799000	$(dir A "$PPID")" || false
 }
 
 @test "hb.session.tsv: account from the NEWEST transcript, model/effort/permission from its records" {
