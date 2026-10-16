@@ -386,3 +386,219 @@ STUB
   run python3 "$RATE" --vendor anthropic --allow-short 1
   [ "$status" -eq 2 ]
 }
+
+# ── sets v5 and v6, a pooled stratum pin, status --counted (fixtures only; the live store is never read) ──
+
+# pmk <word> <n> <strata…> — n candidates per stratum whose prompts read "<word> prompt <stratum> <i>".
+pmk() {
+  local w="$1" n="$2" s i; shift 2
+  for s in "$@"; do for i in $(seq 1 "$n"); do
+    printf '{"prompt":"%s prompt %s %s","stratum":"%s"}\n' "$w" "$s" "$i" "$s"
+  done; done
+}
+# plabel <set> — two raters agree on every item: work-order in `other`, completeness elsewhere.
+plabel() {
+  "$H" --set "$1" rater-sheet --out "$BATS_TEST_TMPDIR/sheet.jsonl" >/dev/null
+  jq -c '{id, label: (if (.prompt | test(" other ")) then "work-order" else "completeness" end)}' \
+    "$BATS_TEST_TMPDIR/sheet.jsonl" > "$BATS_TEST_TMPDIR/l.jsonl"
+  "$H" --set "$1" label --rater r1 --labels "$BATS_TEST_TMPDIR/l.jsonl" >/dev/null
+  "$H" --set "$1" label --rater r2 --labels "$BATS_TEST_TMPDIR/l.jsonl" >/dev/null
+}
+# psealed <set> <candidates> <min> [strata] — seal a set whole (no tuning split).
+psealed() {
+  "$H" --set "$1" seal --candidates "$2" --tuning-out "$BATS_TEST_TMPDIR/t-$1.jsonl" --fraction 1.0 \
+    --min-sealed "$3" ${4:+--strata "$4"} >/dev/null
+}
+# pooled — v3 whole (12 a stratum), v4 other + regex-matched (20 each), v5 regex-missed + pushback (6
+# each), every set labeled by plabel.
+pooled() {
+  pmk third 12 regex-matched regex-missed pushback other > "$BATS_TEST_TMPDIR/c3.jsonl"
+  psealed v3 "$BATS_TEST_TMPDIR/c3.jsonl" 40
+  plabel v3
+  pmk fourth 20 other regex-matched > "$BATS_TEST_TMPDIR/c4.jsonl"
+  psealed v4 "$BATS_TEST_TMPDIR/c4.jsonl" 40 other,regex-matched
+  plabel v4
+  pmk fifth 6 regex-missed pushback > "$BATS_TEST_TMPDIR/c5.jsonl"
+  psealed v5 "$BATS_TEST_TMPDIR/c5.jsonl" 12 regex-missed,pushback
+  plabel v5
+}
+POOL_PIN=regex-missed=v5+v3,pushback=v5+v3,regex-matched=v4,other=v4
+# a router that relays everything but `other`, which it calls a work order; MISS names one prompt it
+# answers `concern` instead
+prouter() {
+  printf '#!/bin/bash\np="$(cat)"\n[ -n "${MISS:-}" ] && [ "$p" = "$MISS" ] && { echo concern; exit 0; }\ncase "$p" in *" other "*) echo work-order ;; *) echo completeness ;; esac\n' \
+    > "$BATS_TEST_TMPDIR/prouter"
+  chmod +x "$BATS_TEST_TMPDIR/prouter"
+}
+reads_rows() { jq -r 'select(.event=="read" and (.before_ledger | not)) | "\(.set) \(.stratum) \(.pool // "-")"' \
+  "$CC_RESEARCH_HOME/router-heldout/reads.jsonl" 2>/dev/null | sort | tr '\n' ';'; }
+# psig <set>.<stratum> — a third-read signature as the operator's own terminal leaves it
+psig() {
+  mkdir -p "$CC_RESEARCH_HOME/demo"
+  printf '{"action":"third-read","target":"%s","at":%s,"at_iso":"2026-10-16T00:00:00Z","because":"fixture","pins":{},"provenance":{"claude_ancestor":false,"chain":["zsh","kitty"]}}\n' \
+    "$1" "$(date +%s)" >> "$CC_RESEARCH_HOME/demo/signoff.jsonl"
+}
+
+@test "sets v5 and v6: each seals once beside v1-v4 without an earlier set's prompt, and every verb and the rater take them" {
+  pmk first 12 regex-matched regex-missed pushback other > "$BATS_TEST_TMPDIR/c1.jsonl"
+  psealed v1 "$BATS_TEST_TMPDIR/c1.jsonl" 40
+  # v5 is a set the kit knows before it is sealed: not sealed yet, rather than an invalid choice
+  run "$H" --set v5 status
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"no sealed held-out set v5"* ]] || false
+  { pmk first 12 regex-missed; pmk fifth 30 regex-missed pushback regex-matched; } > "$BATS_TEST_TMPDIR/c5.jsonl"
+  run "$H" --set v5 seal --candidates "$BATS_TEST_TMPDIR/c5.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t5.jsonl" \
+    --fraction 1.0 --strata regex-missed,pushback,regex-matched
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"sealed 90 prompt(s) as set v5"*"12 candidate(s) dropped as already used"* ]] || false
+  [ -s "$CC_RESEARCH_HOME/router-heldout/sealed-v5.enc" ]
+  [ "$("$H" --set v5 status 2>/dev/null | jq -c '[."regex-missed".items, .pushback.items, (has("other"))]')" = '[30,30,false]' ]
+  run "$H" --set v5 seal --candidates "$BATS_TEST_TMPDIR/c5.jsonl" --tuning-out "$BATS_TEST_TMPDIR/t5.jsonl" --fraction 1.0
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"v5 is already sealed; it is sealed once (a new set is \`--set v6\`)"* ]] || false
+  pmk sixth 12 regex-matched regex-missed pushback other > "$BATS_TEST_TMPDIR/c6.jsonl"
+  psealed v6 "$BATS_TEST_TMPDIR/c6.jsonl" 40
+  run "$H" status
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"set v6"* ]] || false
+  # the rater takes the new sets too (heldout-rate.py reads heldout.SETS)
+  run python3 "$REPO/scripts/research-kit/heldout-rate.py" --vendor anthropic --set v5 --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"would send 90 prompt(s) of set v5"* ]] || false
+  run "$H" --set v7 status
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"invalid choice"* ]] || false
+}
+
+@test "status --counted prints per stratum the items row 15's floors count (agreed, a relay label from both raters) and never a prompt" {
+  pmk fifth 6 regex-missed pushback other > "$BATS_TEST_TMPDIR/c5.jsonl"
+  psealed v5 "$BATS_TEST_TMPDIR/c5.jsonl" 18 regex-missed,pushback,other
+  "$H" --set v5 rater-sheet --out "$BATS_TEST_TMPDIR/sheet.jsonl" >/dev/null
+  # regex-missed: 1-3 completeness from both (counted); 4 completeness vs pushback (two relay labels,
+  # not agreed); 5 concern from both (agreed, not a relay); 6 one rater only. pushback: all pushback.
+  # other: 1-2 completeness from both (counted), 3-6 work-order.
+  python3 -c '
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1])]
+def lab(p, r):
+    s, n = p.split()[2], int(p.split()[3])
+    if s == "regex-missed":
+        return {4: "completeness" if r == "r1" else "pushback", 5: "concern", 6: "completeness" if r == "r1" else None}.get(n, "completeness")
+    if s == "pushback":
+        return "pushback"
+    return "completeness" if n <= 2 else "work-order"
+for r in ("r1", "r2"):
+    with open(sys.argv[2] + "-" + r + ".jsonl", "w") as f:
+        f.writelines(json.dumps({"id": x["id"], "label": lab(x["prompt"], r)}) + "\n" for x in rows if lab(x["prompt"], r))
+' "$BATS_TEST_TMPDIR/sheet.jsonl" "$BATS_TEST_TMPDIR/lab"
+  "$H" --set v5 label --rater r1 --labels "$BATS_TEST_TMPDIR/lab-r1.jsonl" >/dev/null
+  "$H" --set v5 label --rater r2 --labels "$BATS_TEST_TMPDIR/lab-r2.jsonl" >/dev/null
+  run "$H" --set v5 status --counted
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"fifth prompt"* ]] || false
+  [ "$(printf '%s' "$output" | jq -c '."regex-missed"')" = '{"agreed":4,"counted":3,"items":6}' ]
+  [ "$(printf '%s' "$output" | jq -c '.pushback')" = '{"agreed":6,"counted":6,"items":6}' ]
+  [ "$(printf '%s' "$output" | jq -c '.other')" = '{"agreed":6,"counted":2,"items":6}' ]
+  # plain status is unchanged: no counted key, the raters still listed
+  run "$H" --set v5 status
+  [ "$(printf '%s' "$output" | jq -c '[(."regex-missed" | has("counted")), ."regex-missed".raters.r2]')" = '[false,5]' ]
+}
+
+@test "pooled pin: STRATUM=v5+v3 scores the stratum on the union of both sets and writes one ledger row per set and stratum" {
+  pooled
+  run "$H" instrument --pin "$POOL_PIN"
+  [ "$status" -eq 0 ]
+  [ "$(jq -c .strata "$CC_RESEARCH_HOME/router-heldout/instrument.json")" = '{"other":"v4","pushback":"v5+v3","regex-matched":"v4","regex-missed":"v5+v3"}' ]
+  run "$H" instrument
+  [[ "$output" == *'"regex-missed": "v5+v3"'* ]] || false
+  prouter
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/prouter" run "$H" evaluate --consent-sealed-read --record "$BATS_TEST_TMPDIR/rec.jsonl"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"regex-missed from v5+v3"*"pushback from v5+v3"* ]] || false
+  [[ "$output" == *"stratum regex-missed: 18/18"* ]] || false
+  [[ "$output" == *"stratum pushback: 18/18"* ]] || false
+  [[ "$output" == *"stratum regex-missed, pooled over v5+v3: v5 6/6 · v3 12/12"* ]] || false
+  [[ "$output" == *"0 of 76 routed item(s) fell back"* ]] || false
+  [ "$(jq -r '"\(.stratum) \(.set)"' "$BATS_TEST_TMPDIR/rec.jsonl" | sort | uniq -c | tr -s ' ' | tr '\n' ';')" = " 20 other v4; 12 pushback v3; 6 pushback v5; 20 regex-matched v4; 12 regex-missed v3; 6 regex-missed v5;" ]
+  # one read per set and stratum, a pooled row naming its pool; v3's other and regex-matched are not read
+  [ "$(reads_rows)" = "v3 pushback v5+v3;v3 regex-missed v5+v3;v4 other -;v4 regex-matched -;v5 pushback v5+v3;v5 regex-missed v5+v3;" ]
+  # one miss in v3's part fails the pooled stratum on the union (17/18 = 0.94), and the split says where
+  MISS="third prompt regex-missed 4" CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/prouter" run "$H" evaluate --consent-sealed-read
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"stratum regex-missed: recall 17/18 = 0.94, below 0.95"* ]] || false
+  [[ "$output" == *"stratum regex-missed, pooled over v5+v3: v5 6/6 · v3 11/12"* ]] || false
+  [[ "$output" == *"stratum regex-missed of set v3: read 1 time(s) before"*"stratum regex-missed of set v5: read 1 time(s) before"* ]] || false
+}
+
+@test "pooled pin: a pool is refused when a set does not hold the stratum, repeats, is unsealed or retired, or shares a prompt with its partner" {
+  # v6 sealed first with what v5 will seal (v5's seal excludes only the sets before it, v1-v4)
+  { pmk fifth 6 regex-missed; pmk sixth 40 regex-missed; } > "$BATS_TEST_TMPDIR/c6.jsonl"
+  psealed v6 "$BATS_TEST_TMPDIR/c6.jsonl" 40 regex-missed
+  pooled
+  run "$H" instrument --pin regex-missed=v5+v4,pushback=v5+v3,regex-matched=v4,other=v4
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"v4 does not hold regex-missed"* ]] || false
+  run "$H" instrument --pin regex-missed=v5+v5,pushback=v5+v3,regex-matched=v4,other=v4
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"names set v5 twice"* ]] || false
+  run "$H" instrument --pin regex-missed=v5+v2,pushback=v5+v3,regex-matched=v4,other=v4
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"no sealed held-out set v2"* ]] || false
+  run "$H" instrument --pin regex-missed=v5+v9,pushback=v5+v3,regex-matched=v4,other=v4
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unknown held-out set 'v9'"* ]] || false
+  [ ! -e "$CC_RESEARCH_HOME/router-heldout/instrument.json" ]
+  # v5 and v6 hold the same 6 regex-missed prompts: pooled, they would count each twice
+  run "$H" instrument --pin regex-missed=v6+v5,pushback=v5+v3,regex-matched=v4,other=v4
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"pool v6+v5 for regex-missed: the sets share 6 prompt(s)"* ]] || false
+  # pinned, then one of the pool's sets retired: evaluate refuses the whole read
+  "$H" instrument --pin "$POOL_PIN" >/dev/null
+  "$H" --set v3 retire --out "$BATS_TEST_TMPDIR/retired-v3.jsonl" >/dev/null
+  prouter
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/prouter" run "$H" evaluate --consent-sealed-read
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"set v3 is retired"* ]] || false
+  [ "$(reads_rows)" = "" ]
+  run "$H" instrument --pin "$POOL_PIN"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"set v3 is retired"* ]] || false
+}
+
+@test "pooled pin: the third-read check applies per set and stratum, and a signature buys only the read it names" {
+  pooled
+  "$H" instrument --pin "$POOL_PIN" >/dev/null
+  "$H" reads --before-ledger v3=2 >/dev/null   # v3 read twice before, as the live v3 was
+  export CC_RESEARCH_RECORDS="$BATS_TEST_TMPDIR/records"; mkdir -p "$CC_RESEARCH_RECORDS"
+  prouter
+  # refused before any decrypt: a spoiled v5 reads the same, and no read is logged
+  cp "$CC_RESEARCH_HOME/router-heldout/sealed-v5.enc" "$BATS_TEST_TMPDIR/v5.bak"
+  printf 'not a sealed set' > "$CC_RESEARCH_HOME/router-heldout/sealed-v5.enc"
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/prouter" run "$H" evaluate --consent-sealed-read --program demo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"regex-missed of v3 (read 2 times, 0 signed)"*"pushback of v3 (read 2 times, 0 signed)"* ]] || false
+  [[ "$output" != *"of v5"* && "$output" != *"of v4"* ]] || false
+  [ "$(reads_rows)" = "" ]
+  mv "$BATS_TEST_TMPDIR/v5.bak" "$CC_RESEARCH_HOME/router-heldout/sealed-v5.enc"
+  # a signature for v5's part buys nothing for v3's; one for v3's regex-missed leaves its pushback refused
+  psig v5.regex-missed
+  psig v5.pushback
+  psig v3.regex-missed
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/prouter" run "$H" evaluate --consent-sealed-read --program demo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"pushback of v3 (read 2 times, 0 signed)"* ]] || false
+  [[ "$output" != *"regex-missed of v3"* ]] || false
+  psig v3.pushback
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/prouter" run "$H" evaluate --consent-sealed-read --program demo
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"stratum regex-missed of set v3: read 3, beyond the second, a disclosed cost under operator signature 2026-10-16T00:00:00Z (fixture)"* ]] || false
+  [[ "$output" == *"stratum pushback of set v3: read 3, beyond the second, a disclosed cost"* ]] || false
+  [[ "$output" != *"of set v5: read 1, beyond"* ]] || false
+  [[ "$output" == *"stratum regex-missed of set v5: read 0 time(s) before"* ]] || false
+  [ "$(reads_rows)" = "v3 pushback v5+v3;v3 regex-missed v5+v3;v4 other -;v4 regex-matched -;v5 pushback v5+v3;v5 regex-missed v5+v3;" ]
+  # each signature bought one read: the next is refused for v3 again, and v5's part alone is free
+  CC_RESEARCH_ROUTER="$BATS_TEST_TMPDIR/prouter" run "$H" evaluate --consent-sealed-read --program demo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"regex-missed of v3 (read 3 times, 1 signed)"* ]] || false
+  [[ "$output" != *"of v5"* ]] || false
+}

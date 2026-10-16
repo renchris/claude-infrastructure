@@ -24,7 +24,7 @@ packet `83adb541ea19` actioned. Method version 1.1 is frozen; it changes only fr
 | B2 | S | Item 8: `research-program` skill, `/research-program` command, intake script, briefs, rubric | A2 |
 | C | S | Wave 2: items 9–13, 15, in parallel with the pilot | B1, B2 |
 | D | S (fired `fire-rp-audit-bugfix`), T inside | Audit fixes: `docs/research/upfront-method-audit-2026-10-04/REPORT.md` §3 rows 4–6 | C |
-| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E1d S (fired `fire-rp-v12-e1d`); E1e S (fired `fire-rp-v12-e1e`); E1g S (fired `fire-rp-v12-e1g`); E1h S (fired `fire-rp-v12-e1h`, T inside for track A); E1i S (fired `fire-rp-v12-e1i`, L inside); E1j S (fired `fire-rp-v12-e1j`, L inside: one small code change, a harness edit and two ordered measurements around a pre-committed rule, nothing to fan out); E1k S (fired `fire-rp-v12-e1k`, L inside: one change in one function, one job-script line, docs, and a measurement run behind a pre-committed bar, nothing to fan out); E1l S (fired `fire-rp-v12-e1l`, L inside: the guards, the third-read refusal and the load bound all sit in `heldout.evaluate` and row 15, so the changes interlock and nothing fans out); E1m S (fired `fire-rp-v12-e1m`, L inside: a brief paragraph, harness and scorer edits behind a pre-committed rule, two load-gated tuning runs and an A/B that run as background processes, then one pin in router.py; nothing to fan out); E2 Workflow in session d8964eb2; E3 S (E3a fired `fire-rp-v12-e3a`, E3b fired `fire-rp-v12-e3b` with T inside: six teammates; E3c fired `fire-rp-v12-e3c`, L inside; E3d fired `fire-rp-v12-e3d`, L inside); E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
+| E | E1 S (fired `fire-rp-v12-step1`); E1b S (fired `fire-rp-v12-e1b`); E1c S (fired `fire-rp-v12-e1c`); E1d S (fired `fire-rp-v12-e1d`); E1e S (fired `fire-rp-v12-e1e`); E1g S (fired `fire-rp-v12-e1g`); E1h S (fired `fire-rp-v12-e1h`, T inside for track A); E1i S (fired `fire-rp-v12-e1i`, L inside); E1j S (fired `fire-rp-v12-e1j`, L inside: one small code change, a harness edit and two ordered measurements around a pre-committed rule, nothing to fan out); E1k S (fired `fire-rp-v12-e1k`, L inside: one change in one function, one job-script line, docs, and a measurement run behind a pre-committed bar, nothing to fan out); E1l S (fired `fire-rp-v12-e1l`, L inside: the guards, the third-read refusal and the load bound all sit in `heldout.evaluate` and row 15, so the changes interlock and nothing fans out); E1m S (fired `fire-rp-v12-e1m`, L inside: a brief paragraph, harness and scorer edits behind a pre-committed rule, two load-gated tuning runs and an A/B that run as background processes, then one pin in router.py; nothing to fan out); E1n S (fired `fire-kit-heldout-v5`, L inside: three interlocking changes to one module and its suite, nothing to fan out); E2 Workflow in session d8964eb2; E3 S (E3a fired `fire-rp-v12-e3a`, E3b fired `fire-rp-v12-e3b` with T inside: six teammates; E3c fired `fire-rp-v12-e3c`, L inside; E3d fired `fire-rp-v12-e3d`, L inside); E4 operator | Method v1.2 (ruling `1bf69e5c1775`): audit REPORT §3 rows 1, 2, 3, 7, plus the 9 s classifier limit (ruling `4bf73c4e55d5`) | D |
 
 A1, A2 and A3 touch disjoint files and fire concurrently. B1 and B2 fire when A2 lands. Each dispatched session leads
 its own Agent Team where it has 2+ code-writing tasks.
@@ -2094,6 +2094,38 @@ items"), and the third-read rule (signed override, disclosed cost); (5) the data
   hold 2 reads, so the gate now refuses that third read instead of spending it silently. The agent's re-point
   (`instrument --await regex-missed,pushback`, which opens no set) was refused by the auto-mode classifier as a
   write to a shared store, so it is the operator's step, filed as backlog `b349790e26d3`.
+
+#### E1n — the kit can seal v5 and v6, pool a stratum over two sets, and count a set's items — DONE: landed (2026-10-16)
+Scope (frozen): scripts/research-kit/heldout.py (and its tests) gains (1) sets v5 and v6 in SETS; (2) `instrument
+--pin STRATUM=v5+v3`, a pooled stratum scored on the union of two sets, where `evaluate` refuses unless every set in
+the pool may be read (the third-read check per set and stratum, with a valid `cc-signoff
+research:<slug>/third-read/<set>.<stratum>` for any third read) and writes one reads.jsonl row per set and stratum;
+(3) `status --counted`, per stratum the counted items (agreed, under a relay label from both raters), never a
+prompt; red-first bats in `tests/research-router-heldout.bats`; landed and live. Locus S (fired
+`fire-kit-heldout-v5` by the TrueMemory 2.0 lead), lead-inline.
+- **Why.** The lead's drive-to-100 journal (axis A-row15-now, `~/Development/claude-private/tm2-plan/
+  drive-to-100-journal-2026-10-16.jsonl`) found that row 15 can reach a verdict within hours: seal v5 from the
+  ~116-123 unused subtle re-asks that exist now, and pool them with v3 under signed, disclosed third reads. That is
+  ruling `915d7fb98b7f`'s own below-20 branch (pre-registered in E1l above, item (2)) and its top-up rule (item
+  (1), "seal a top-up ... and pool it before any read"). The kit could do neither: `SETS` stopped at v4, a pin
+  mapped a stratum to ONE set, and `status` printed items and agreed only, not the count the rulings' 20/40 floors
+  use. Both candidate certificate routes (method v1.3's scheduled read, or v1.1 route 2) need all three.
+- **As built.** `SETS` runs v1-v6, so `heldout-rate.py --set v5|v6` works unchanged (it reads `heldout.SETS`).
+  `instrument --pin regex-missed=v5+v3,...` stores the pool as `"v5+v3"` in instrument.json, and a single set as
+  before. The pin refuses a pool that names a set twice, names an unsealed or retired set, names a set that does
+  not hold the stratum, or whose sets share a prompt in that stratum. The last can happen only when a later set
+  was sealed first, because a seal drops only the prompts of the sets before it. `evaluate` scores a pooled
+  stratum on the union. Its retired check, third-read refusal and disclosed-cost lines run per set and stratum, so
+  a v3 third read needs `third-read/v3.<stratum>` whatever v5 has been read, and a v5 signature buys nothing for
+  v3. Each read writes one ledger row per set and stratum; a pooled row also carries `pool`. A shown-only note
+  says what each set gave the pooled score (`stratum regex-missed, pooled over v5+v3: v5 6/6 · v3 11/12`). `status
+  --counted` prints `{stratum: {items, agreed, counted}}`. For `other`, row 15 scores every agreed item (the relay
+  decision), so `agreed` is that stratum's denominator.
+- **Not in this wave.** No sealed set was sealed, labeled, decrypted, evaluated or re-pinned; the live store
+  `~/.claude/autonomy/research/router-heldout` was not touched (fixtures under a temp `CC_RESEARCH_HOME` only).
+  The live map, the v5 seal, its two raters and any third-read signature are the lead's and operator's steps.
+- **Red then green.** 5 new cases in `research-router-heldout`, all 5 failing on a `git archive` of the pre-change
+  tree (`argument --set: invalid choice: 'v5'`). Green results are in the commit body.
 
 #### E2 — triage precision study (v1.2 (a), measurement half) — RUNNING
 - Locus: a Workflow in session d8964eb2, started 2026-10-04. Results: `docs/research/triage-precision-study-2026-10-04/`.

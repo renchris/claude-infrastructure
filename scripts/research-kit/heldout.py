@@ -8,12 +8,13 @@ keychain key (`cc-research-router-heldout/sealed`) so the builder does not read 
 raters label the sealed set; gate.sh reads it at run time. Same-uid processes can still read the
 keychain, so this keeps the set out of the builder's way; it does not lock it (§7).
 
-  heldout.py [--set v1|v2|v3] seal --candidates C.jsonl --tuning-out T.jsonl [--min-sealed 40]
+  heldout.py [--set v1..v6] seal --candidates C.jsonl --tuning-out T.jsonl [--min-sealed 40]
                                                [--exclude F.jsonl]... [--dry-run]
       C.jsonl rows: {prompt, stratum: regex-matched|regex-missed|pushback|other, source}
   heldout.py rater-sheet --out F.jsonl        the sealed prompts by id, for a rater to label
   heldout.py label --rater NAME --labels L.jsonl   L.jsonl rows: {id, label}
-  heldout.py status                            counts per stratum and rater; never a prompt
+  heldout.py status [--counted]                counts per stratum and rater; never a prompt. --counted:
+                                               items, agreed, and counted (agreed under a relay label)
   heldout.py evaluate --consent-sealed-read [--program P] [--record F.jsonl]
                                                what gate row 15 runs (router in CC_RESEARCH_ROUTER);
                                                --record keeps one row per routed item {id, set, stratum,
@@ -45,9 +46,10 @@ tuning base that looks like the sealed sets, and row 15 is then read once over a
   heldout.py --set vN retire --out F          a set that may carry no further verdict is written out,
       labels and all, as tuning data (F outside any repo); the sealed file is not touched and
       `evaluate` refuses the set from then on
-  heldout.py instrument [--pin S=vN,...]       router-heldout/instrument.json: which set each stratum
+  heldout.py instrument [--pin S=vN[+vM],...]  router-heldout/instrument.json: which set each stratum
       is scored from. With it pinned, `evaluate` without --set (gate row 15's call) scores each
-      stratum from its own set and pools the item floor and the fallback share across them
+      stratum from its own set and pools the item floor and the fallback share across them. S=vN+vM
+      pools a stratum (see v5 AND v6 below)
   heldout.py reads [--before-ledger vN=K,...]  router-heldout/reads.jsonl, one row per stratum of a
       set per `evaluate`; the notes say how often each was read before. --before-ledger records, once
       per set, the reads made before the ledger existed
@@ -77,6 +79,20 @@ figures, so the certificate carries both.
 A read takes about 73 minutes plus its load waits, so launch the gate DETACHED, never under a tool
 call's timeout or the job reaper (`nohup` is not enough; scripts/lib/detach.sh):
   . scripts/lib/detach.sh; detach "$LOG" scripts/research-kit/gate.sh run --program P --consent-sealed-read
+
+v5 AND v6 (ruling 915d7fb98b7f (1)-(3); 2026-10-16). v5 is the fresh set for subtle re-asks and
+pushback, v6 its top-up; each is sealed once, without a prompt of any earlier set, like v2-v4.
+  heldout.py instrument --pin regex-missed=v5+v3,pushback=v5+v3,regex-matched=v4,other=v4
+      a POOLED stratum, scored on the union of both sets' items of it (the ruling's top-up, and its
+      below-20 branch: v5 pooled with v3 as a disclosed third read). The pin refuses a set that does
+      not hold the stratum, is retired, or shares a prompt with its partner. `evaluate` applies the
+      third-read check to every set in the pool, per set and stratum (a third read of v3's part needs
+      `cc-signoff research:<slug>/third-read/v3.<stratum>`, whatever v5's part has been read), writes
+      one ledger row per set and stratum, each naming its `pool`, and adds a shown-only note of
+      what each set gave the pooled score.
+  heldout.py --set v5 status --counted
+      per stratum the items, the agreed items, and the COUNTED ones (agreed, under a relay label from
+      both raters), the count the ruling's 20 and 40 floors are stated in; never a prompt
 """
 
 from __future__ import annotations
@@ -92,7 +108,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 import kit  # noqa: E402
@@ -138,6 +154,8 @@ SETS = (
     "v2",
     "v3",
     "v4",
+    "v5",
+    "v6",
 )  # oldest first; v1 keeps the file and keychain account it was sealed under
 
 
@@ -145,6 +163,23 @@ def check_set(name: str) -> str:
     if name not in SETS:
         raise kit.KitError(f"unknown held-out set {name!r} ({', '.join(SETS)})")
     return name
+
+
+def parse_pool(spec: str) -> List[str]:
+    """The sets a stratum is scored from: one set (`v4`), or a pool (`v5+v3`) scored on the union of
+    its sets' items of that stratum."""
+    names = spec.split("+")
+    for n in names:
+        check_set(n)
+    twice = sorted({n for n in names if names.count(n) > 1}, key=SETS.index)
+    if twice:
+        raise kit.KitError(f"pool {spec!r} names set {', '.join(twice)} twice")
+    return names
+
+
+def plan_spec(plan: Mapping[str, Optional[List[str]]]) -> Dict[str, Optional[str]]:
+    """A pinned map as instrument.json spells it: `v4`, `v5+v3`, or null for a stratum that waits."""
+    return {s: None if v is None else "+".join(v) for s, v in plan.items()}
 
 
 def sealed_path(name: str = "v1") -> Path:
@@ -207,21 +242,26 @@ def set_strata(data: Dict[str, Any]) -> List[str]:
     return [s for s in STRATA if s in (data.get("strata") or STRATA)]
 
 
-def instrument() -> Optional[Dict[str, Optional[str]]]:
-    """{stratum: set} when a composition is pinned, None when none is. A file that is there and
-    cannot be read as one is an error: the gate must not fall back to some other set in silence.
-    A stratum mapped to null waits for a fresh set (`instrument --await`, wave E1l)."""
+def instrument() -> Optional[Dict[str, Optional[List[str]]]]:
+    """{stratum: [set, ...]} when a composition is pinned, None when none is. A file that is there
+    and cannot be read as one is an error: the gate must not fall back to some other set in silence.
+    A stratum mapped to null waits for a fresh set (`instrument --await`, wave E1l); one mapped to
+    `vA+vB` is a pool, scored on the union of both sets' items of that stratum."""
     p = heldout_dir() / "instrument.json"
     if not p.exists():
         return None
     try:
         plan = json.loads(p.read_text())["strata"]
-        ok = isinstance(plan, dict) and sorted(plan) == sorted(STRATA)
+        ok = (
+            isinstance(plan, dict)
+            and sorted(plan) == sorted(STRATA)
+            and all(v is None or isinstance(v, str) for v in plan.values())
+        )
     except (OSError, ValueError, KeyError, TypeError):
         ok = False
     if not ok:
         raise kit.KitError(f"{p} does not pin one set to each of {', '.join(STRATA)}")
-    return {s: None if plan[s] is None else check_set(plan[s]) for s in STRATA}
+    return {s: None if plan[s] is None else parse_pool(plan[s]) for s in STRATA}
 
 
 def parse_strata(spec: Optional[str]) -> List[str]:
@@ -497,28 +537,54 @@ def cmd_instrument(a: argparse.Namespace) -> int:
     if a.await_:
         return cmd_instrument_await(p, a.await_)
     if not a.pin:
-        plan = instrument()
-        print(json.dumps(plan, sort_keys=True) if plan else "no instrument pinned")
+        shown = instrument()
+        print(
+            json.dumps(plan_spec(shown), sort_keys=True)
+            if shown
+            else "no instrument pinned"
+        )
         return 0
-    plan = {}
+    plan: Dict[str, List[str]] = {}
     for part in a.pin.split(","):
-        s, _, name = part.partition("=")
+        s, _, spec = part.partition("=")
         if s not in STRATA:
-            raise kit.KitError(f"--pin {part!r}: expected STRATUM=SET")
-        plan[s] = check_set(name)
+            raise kit.KitError(
+                f"--pin {part!r}: expected STRATUM=SET or STRATUM=SET+SET"
+            )
+        plan[s] = parse_pool(spec)
     if sorted(plan) != sorted(STRATA):
         raise kit.KitError(f"--pin must name each of {', '.join(STRATA)} once")
-    for s, name in plan.items():
-        if retired(name):
-            raise kit.KitError(f"set {name} is retired; it carries no further verdict")
-        if s not in set_strata(load(name)):
-            raise kit.KitError(f"set {name} does not hold {s}")
+    datas: Dict[str, Dict[str, Any]] = {}
+    for s, names in plan.items():
+        for name in names:
+            if retired(name):
+                raise kit.KitError(
+                    f"set {name} is retired; it carries no further verdict"
+                )
+            if name not in datas:
+                datas[name] = load(name)
+            if s not in set_strata(datas[name]):
+                raise kit.KitError(f"set {name} does not hold {s}")
+        # A pool is a union: a prompt two of its sets hold would be counted twice. A set's seal drops
+        # the prompts of the sets BEFORE it, so this happens only when a later set was sealed first.
+        keys = [
+            seen_key(i["prompt"])
+            for name in names
+            for i in datas[name]["items"]
+            if i["stratum"] == s
+        ]
+        if len(keys) != len(set(keys)):
+            raise kit.KitError(
+                f"pool {'+'.join(names)} for {s}: the sets share {len(keys) - len(set(keys))} "
+                "prompt(s); a pooled stratum counts each prompt once, so pool sets that share none"
+            )
     p.parent.mkdir(parents=True, exist_ok=True)
+    spec = plan_spec(plan)
     p.write_text(
-        json.dumps({"strata": plan, "pinned_at": kit.now_iso()}, sort_keys=True) + "\n"
+        json.dumps({"strata": spec, "pinned_at": kit.now_iso()}, sort_keys=True) + "\n"
     )
     p.chmod(0o600)
-    print(f"instrument pinned: {json.dumps(plan, sort_keys=True)}")
+    print(f"instrument pinned: {json.dumps(spec, sort_keys=True)}")
     return 0
 
 
@@ -534,15 +600,16 @@ def cmd_instrument_await(p: Path, spec: str) -> int:
     plan = instrument()
     if plan is None:
         raise kit.KitError("no instrument pinned; --await edits a pinned one")
-    was = {s: plan[s] for s in want}
+    was = plan_spec({s: plan[s] for s in want})
     plan.update({s: None for s in want})
+    spec = plan_spec(plan)
     p.write_text(
-        json.dumps({"strata": plan, "pinned_at": kit.now_iso()}, sort_keys=True) + "\n"
+        json.dumps({"strata": spec, "pinned_at": kit.now_iso()}, sort_keys=True) + "\n"
     )
     p.chmod(0o600)
     print(
         f"instrument: {', '.join(f'{s} (was {was[s]})' for s in want)} now await a fresh set; "
-        f"pinned: {json.dumps(plan, sort_keys=True)}"
+        f"pinned: {json.dumps(spec, sort_keys=True)}"
     )
     return 0
 
@@ -636,6 +703,22 @@ def counts(data: Dict[str, Any]) -> Dict[str, Any]:
         c["agreed"] += 1 if len(labs) >= 2 and len(set(labs)) == 1 else 0
         for r in i["labels"]:
             c["raters"][r] = c["raters"].get(r, 0) + 1
+    return out
+
+
+def counted(data: Dict[str, Any]) -> Dict[str, Dict[str, int]]:
+    """Per stratum: items, agreed, and COUNTED, the items the raters agreed on under a relay label.
+    That is the count rulings 915d7fb98b7f and 0ccbcf9fd49b floor (20 and 40 subtle re-asks, 93 plain
+    ones) and the denominator of a completeness stratum's recall. Row 15 scores `other` on every
+    agreed item (its relay decision), so there `agreed` is the denominator."""
+    out: Dict[str, Dict[str, int]] = {}
+    for i in data["items"]:
+        c = out.setdefault(i["stratum"], {"items": 0, "agreed": 0, "counted": 0})
+        labs = list(i["labels"].values())
+        agreed = len(labs) >= 2 and len(set(labs)) == 1
+        c["items"] += 1
+        c["agreed"] += 1 if agreed else 0
+        c["counted"] += 1 if agreed and labs[0] in RELAYED else 0
     return out
 
 
@@ -827,30 +910,33 @@ def evaluate(
                 f"stratum {', '.join(waiting)}: no set pinned, it awaits a fresh set (heldout.py "
                 "instrument --await; ruling 915d7fb98b7f); no read logged"
             )
-        plan: Dict[str, str] = {s: str(pinned[s]) for s in STRATA}
+        plan: Dict[str, List[str]] = {s: list(pinned[s] or []) for s in STRATA}
     else:
         name = check_set(name or current_set())
-        plan = {s: name for s in STRATA}
-    for n in sorted(set(plan.values())):
+        plan = {s: [name] for s in STRATA}
+    every = sorted({n for names in plan.values() for n in names}, key=SETS.index)
+    for n in every:
         if retired(n):
             raise kit.KitError(
                 f"set {n} is retired to tuning data (heldout.py retire); it carries no further verdict"
             )
     # A stratum of a set is read at most FREE_READS times; each read beyond needs its own operator
-    # signature, and is said in the notes as a disclosed cost (ruling 915d7fb98b7f item 5).
+    # signature, and is said in the notes as a disclosed cost (ruling 915d7fb98b7f item 5). A pooled
+    # stratum reads every set in its pool, so the count and the signature are per set and stratum.
     sigs = third_read_signatures(program)
     before = reads_before()
     over, disclosed = [], []
     for s in STRATA:
-        k, signed = before.get((plan[s], s), 0), sigs.get(f"{plan[s]}.{s}", [])
-        if k >= FREE_READS + len(signed):
-            over.append(f"{s} of {plan[s]} (read {k} times, {len(signed)} signed)")
-        elif k >= FREE_READS:
-            last = max(signed, key=lambda r: r.get("at", 0))
-            disclosed.append(
-                f"stratum {s} of set {plan[s]}: read {k + 1}, beyond the second, a disclosed cost "
-                f"under operator signature {last.get('at_iso')} ({last.get('because')})"
-            )
+        for n in plan[s]:
+            k, signed = before.get((n, s), 0), sigs.get(f"{n}.{s}", [])
+            if k >= FREE_READS + len(signed):
+                over.append(f"{s} of {n} (read {k} times, {len(signed)} signed)")
+            elif k >= FREE_READS:
+                last = max(signed, key=lambda r: r.get("at", 0))
+                disclosed.append(
+                    f"stratum {s} of set {n}: read {k + 1}, beyond the second, a disclosed cost "
+                    f"under operator signature {last.get('at_iso')} ({last.get('because')})"
+                )
     if over:
         raise kit.KitError(
             "a read beyond the second is refused without a signed override: "
@@ -867,13 +953,13 @@ def evaluate(
             f"1-min load stayed above {LOAD_BOUND:g} for the start cap ({cap:g} s; last {now:.1f}): "
             "nothing decrypted, no read logged (ruling 17aff7158fa6)"
         )
-    datas: Dict[str, Dict[str, Any]] = {n: load(n) for n in sorted(set(plan.values()))}
-    # (set, item) for every item of a stratum in the set that stratum is scored from
+    datas: Dict[str, Dict[str, Any]] = {n: load(n) for n in every}
+    # (set, item) for every item of a stratum in a set that stratum is scored from
     pool = [
         (n, i)
-        for n in sorted(datas, key=SETS.index)
+        for n in every
         for i in datas[n]["items"]
-        if plan.get(i["stratum"]) == n and i["stratum"] in set_strata(datas[n])
+        if n in plan.get(i["stratum"], []) and i["stratum"] in set_strata(datas[n])
     ]
     valid = [
         (n, i)
@@ -884,7 +970,7 @@ def evaluate(
     notes = [
         (
             "held-out instrument, each stratum from its own set: "
-            + " · ".join(f"{s} from {plan[s]}" for s in STRATA)
+            + " · ".join(f"{s} from {'+'.join(plan[s])}" for s in STRATA)
             + f"; {len(pool)} sealed item(s)"
         )
         if pinned
@@ -908,6 +994,7 @@ def evaluate(
         f"stratum {s} of set {n}: read {before.get((n, s), 0)} time(s) before"
         for n, s in held
     ] + disclosed
+    # one row per set and stratum; a pooled stratum's rows also name the pool they were read in
     ledger_add(
         [
             {
@@ -916,11 +1003,14 @@ def evaluate(
                 "stratum": s,
                 "at": kit.now_iso(),
                 "instrument": bool(pinned),
+                **({"pool": "+".join(plan[s])} if len(plan[s]) > 1 else {}),
             }
             for n, s in held
         ]
     )
     hits: Dict[str, List[int]] = {s: [0, 0] for s in STRATA}
+    # (set, stratum): [right, counted], shown for a pooled stratum
+    by_set: Dict[Any, List[int]] = {}
     exact = [0, 0]  # `other`'s exact-label rate: shown only since wave E1i
     fell: Dict[str, int] = {
         s: 0 for s in STRATA
@@ -967,15 +1057,12 @@ def evaluate(
             fr = false_relay[i["stratum"]]
             fr[0] += 1 if got in RELAYED else 0
             fr[1] += 1
-        h = hits[i["stratum"]]
-        h[1] += 1
         if i["stratum"] in COMPLETENESS_STRATA and gold in RELAYED:
-            h[0] += 1 if got in RELAYED else 0
+            right = got in RELAYED
         elif i["stratum"] == "other":
             # Wave E1i (decision 1f3b8f2d01b7, REPORT gate row 15): right when the router relays exactly
             # when the agreed label relays; a fallback relays nothing but is still a miss.
             right = got is not None and (got in RELAYED) == (gold in RELAYED)
-            h[0] += 1 if right else 0
             exact[0] += 1 if got == gold else 0
             exact[1] += 1
             st = store[
@@ -986,10 +1073,10 @@ def evaluate(
             st[0] += 1 if right else 0
             st[1] += 1
         else:
-            h[1] -= (
-                1  # a completeness-stratum prompt whose agreed label is not a re-ask
-            )
-            continue
+            continue  # a completeness-stratum prompt whose agreed label is not a re-ask
+        for c in (hits[i["stratum"]], by_set.setdefault((n, i["stratum"]), [0, 0])):
+            c[0] += 1 if right else 0
+            c[1] += 1
         fell[i["stratum"]] += 1 if got is None else 0
     for s in STRATA:
         ok, n_items = hits[s]
@@ -1005,6 +1092,14 @@ def evaluate(
             notes.append(
                 f"stratum {s}: {ok}/{n_items}"
                 + (" (relay decision)" if s == "other" else "")
+            )
+    # Shown only: a pooled stratum is scored on the union above; this says what each set gave it.
+    for s in STRATA:
+        if len(plan[s]) > 1:
+            parts = [(n, by_set.get((n, s), [0, 0])) for n in plan[s]]
+            notes.append(
+                f"stratum {s}, pooled over {'+'.join(plan[s])}: "
+                + " · ".join(f"{n} {c[0]}/{c[1]}" for n, c in parts)
             )
     if exact[1]:
         notes.append(
@@ -1142,7 +1237,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = sub.add_parser("label")
     p.add_argument("--rater", required=True)
     p.add_argument("--labels", required=True)
-    sub.add_parser("status")
+    p = sub.add_parser("status")
+    p.add_argument(
+        "--counted",
+        action="store_true",
+        help="per stratum: items, agreed, and counted (agreed under a relay label); never a prompt",
+    )
     p = sub.add_parser("real-load")
     p.add_argument("--run", type=int)
     p.add_argument("--source", help="the run's own report")
@@ -1180,7 +1280,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_label(a)
         if a.verb == "status":
             name = check_set(a.set or current_set())
-            print(json.dumps(counts(load(name)), sort_keys=True))
+            data = load(name)
+            print(
+                json.dumps(counted(data) if a.counted else counts(data), sort_keys=True)
+            )
             print(f"heldout.py: set {name}", file=sys.stderr)
             return 0
         res = evaluate(
