@@ -880,6 +880,90 @@ wf() {
   [ "$(tool Bash 'CC_RESEARCH_ACTIVITY=fer-1 codex exec -s read-only p')" = deny ]
 }
 
+# ── the rehearsal activity (method packet beb0f1a6de53, "agent-run", 2026-10-16) ─────────────────
+reh_open() {
+  printf '{"activities":[{"program":"demo","id":"cr-1","kind":"certification-round","state":"closed"},{"program":"demo","id":"reh-0","kind":"rehearsal","state":"closed"},{"program":"demo","id":"reh-1","kind":"rehearsal","state":"open"}]}\n' \
+    > "$CC_RESEARCH_HOME/activities.json"
+}
+
+# RED-proof: on the base commit the router knew no rehearsal kind, so every tagged rehearse trial,
+# record and round.sh rehearsal-* below answers deny, and `rehearse frames` (a read) answers deny too.
+@test "a rehearsal activity lets a fired orchestrator (label other) run the rehearsal's verbs and nothing else" {
+  state certifying
+  reh_open
+  prompt "Run the rehearsal of demo. HANDOFF-ENGAGE-1-2-3" >/dev/null
+  [ "$(label)" = other ]
+  K=scripts/research-kit
+  T="CC_RESEARCH_ACTIVITY=reh-1"
+  [ "$(tool Bash "$T bin/cc-research rehearse trial --program demo --phrase 'Are you sure?'")" = allow ]
+  [ "$(tool Bash "$T bin/cc-research rehearse trial --program demo --phrase 'no take-backs?' --where outside")" = allow ]
+  [ "$(tool Bash "$T ~/.claude/bin/cc-research rehearse record --program demo --frames-typed a b")" = allow ]
+  [ "$(tool Bash "bin/cc-research rehearse frames --program demo --json")" = allow ]
+  for v in rehearsal-raise rehearsal-verify rehearsal-rate rehearsal-name; do
+    [ "$(tool Bash "$T $K/round.sh $v --program demo --hole H-RH-1")" = allow ]
+    [ "$(tool Bash "$K/round.sh $v --program demo --hole H-RH-1")" = deny ]
+  done
+  [ "$(tool Bash "$T $K/courier.sh run --program demo --round rehearsal --pid H-RH-1-verifier --role verifier --brief b")" = allow ]
+  [ "$(tool Agent '[activity:reh-1] blind lens: no loose ends')" = allow ]
+  [ "$(wf '{"script":"rehearsal.workflow.js","args":{"activity":"reh-1","note":"[activity:reh-1]"}}')" = allow ]
+  # untagged, a closed or another kind's id, and every other research verb stay denied under the tag
+  [ "$(tool Bash "bin/cc-research rehearse trial --program demo --phrase 'Are you sure?'")" = deny ]
+  [ "$(tool Bash "bin/cc-research rehearse record --program demo")" = deny ]
+  [ "$(tool Bash "CC_RESEARCH_ACTIVITY=reh-0 bin/cc-research rehearse trial --program demo --phrase x")" = deny ]
+  [ "$(tool Bash "CC_RESEARCH_ACTIVITY=cr-1 bin/cc-research rehearse trial --program demo --phrase x")" = deny ]
+  [ "$(tool Bash "$T bin/cc-research rehearse trial record --program demo")" = deny ]
+  [ "$(tool Bash "$T bin/cc-research reopen --program demo")" = deny ]
+  [ "$(tool Bash "$T bin/cc-research round --program demo --round 6")" = deny ]
+  [ "$(tool Bash "$T $K/courier.sh run --program demo --round 5 --role rater --brief b")" = deny ]
+  [ "$(tool Bash "$T $K/courier.sh bundle --program demo --round 6 --plan p")" = deny ]
+  [ "$(tool Bash "$T $K/round.sh run --program demo --kind certification --round 6")" = deny ]
+  [ "$(tool Bash "$T $K/round.sh name-cap --program demo --hole H-5-001")" = deny ]
+  [ "$(tool Bash "$T codex exec -s read-only p")" = deny ]
+  [ "$(tool Bash "$T claude -p hi")" = deny ]
+  [ "$(tool Agent '[activity:reh-0] lens')" = deny ]
+  [ "$(tool Agent 'lens')" = deny ]
+  # handoff-fire.sh stays denied under the rehearsal tag (operator ruling 2026-10-11), self-close passes
+  [ "$(tool Bash "$T handoff-fire.sh --prompt-file trial.txt --cwd /elsewhere")" = deny ]
+  [ "$(tool Bash "$T bash scripts/handoff-fire.sh --relay-trial --prompt-file t.txt")" = deny ]
+  [ "$(tool Bash "$T handoff-fire.sh self-close --terminal")" = allow ]
+  # …and so does a bare terminal launch of claude, the other door to an unrouted worker
+  [ "$(tool Bash "$T kitty @ launch --type=tab -- zsh -ilc 'claude --session-id x \"Are you sure?\"'")" = deny ]
+  [ "$(tool Bash "$T it2 session split -c claude")" = deny ]
+}
+
+@test "a rehearsal activity unlocks nothing once certified, nor on a completeness turn" {
+  state certified
+  reh_open
+  prompt "hello there" >/dev/null
+  [ "$(label)" = other ]
+  T="CC_RESEARCH_ACTIVITY=reh-1"
+  [ "$(tool Bash "$T bin/cc-research rehearse trial --program demo --phrase 'Are you sure?'")" = deny ]
+  [ "$(tool Bash "$T scripts/research-kit/round.sh rehearsal-raise --program demo")" = deny ]
+  [ "$(tool Agent '[activity:reh-1] lens')" = deny ]
+  state certifying
+  prompt "are we done?" >/dev/null
+  [ "$(label)" = completeness ]
+  [ "$(tool Bash "$T bin/cc-research rehearse trial --program demo --phrase 'Are you sure?'")" = deny ]
+  [ "$(tool Bash "bin/cc-research rehearse frames --program demo")" = deny ]
+  [ "$(tool Agent '[activity:reh-1] lens')" = deny ]
+}
+
+@test "outside every activity a bare terminal launch of claude is denied as a fire is; other terminal calls pass" {
+  state certifying
+  prompt "hello there" >/dev/null
+  [ "$(label)" = other ]
+  [ "$(tool Bash "kitty @ launch --type=os-window --cwd /x -- /bin/zsh -ilc 'claude --session-id u hi'")" = deny ]
+  [ "$(tool Bash "/Applications/kitty.app/Contents/MacOS/kitty @ launch --type=tab claude")" = deny ]
+  [ "$(tool Bash "it2-kitty session split -v -c '/usr/local/bin/claude --resume u'")" = deny ]
+  [ "$(tool Bash "kitty @ ls")" = allow ]
+  [ "$(tool Bash "kitty @ launch --type=tab --cwd ~/.claude/x zsh")" = allow ]
+  [ "$(tool Bash "it2 session list")" = allow ]
+  # an allow-all turn is untouched: the skeptic's no-kit-change fallback stays open to it
+  prompt "build the fix" >/dev/null
+  [ "$(label)" = work-order ]
+  [ "$(tool Bash "kitty @ launch --type=tab -- zsh -ilc 'claude --session-id u hi'")" = allow ]
+}
+
 # ── the re-ask router's fast exit (docs/research/load-hook-timeouts-2026-10-11 item 7) ───────────
 # With no program resolved, router.py `prompt` only ever clears the session's route record, so a
 # session with no record makes it a no-op; the hook skips the python start. Same spy as pyspy, on

@@ -46,6 +46,9 @@ LEASE_EXEMPT = {
     "check-round", "index", "estimate", "decision show", "concern list",
     "reference-class show", "reference-class check", "gate", "lease", "job",
     "yield show", "built show", "built signoff",
+    # rehearse frames reads; rehearse trial writes only its own evidence file, and 20 trials under
+    # the lease would hold the scheduled writers off for an hour. rehearse record takes the lease.
+    "rehearse frames", "rehearse trial",
 }
 
 

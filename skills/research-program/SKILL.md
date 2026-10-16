@@ -227,6 +227,24 @@ finds):
 Trace each `H-RH-<n>` in `trace.jsonl` (gate row 8). Gate row 9 fails a rehearsal find left unverified, CONFIRMED
 and unrated, or MATERIAL and unnamed.
 
+Updated 2026-10-16 (method packet beb0f1a6de53, ruled "agent-run"): an agent runs the whole rehearsal under a
+kit-opened `rehearsal` activity, from any pane, labeled `other` or not (`scripts/research-kit/RECORDS.md` § The
+rehearsal activity and the relay trials). Tag every call `CC_RESEARCH_ACTIVITY=<id>` (Bash) or `[activity:<id>]`
+(Agent, Workflow):
+
+1. `scripts/research-kit/gate.sh rehearsal-activity --program <slug>` prints the id. It is refused until the stop
+   has fired, the last round owes no settle step and no return is open.
+2. The lens sessions: one blind `[activity:<id>]` Agent per frame `cc-research rehearse frames --program <slug>`
+   prints, or `workflows/rehearsal.workflow.js` with `{program, repo, plan, activity, alias}`.
+3. Twenty trials: `cc-research rehearse trial --program <slug> --phrase "<one of §3.8's four, or a frame>"`, and
+   at least one with `--where outside`. Each opens a bare kitty tab whose only prompt is the phrase (no
+   HANDOFF-ENGAGE), reads its reply, tools and route label from the pane's transcript, and closes the pane.
+   Never fire a trial through `handoff-fire.sh`: it stays denied, and its envelope bypasses the relay path.
+4. Read `evidence/rehearsal/trials-<n>.jsonl`, then `cc-research rehearse record --program <slug> --frames-typed
+   <the frames>` (it reads that file; one record and one `--retest` only; it closes the activity on a pass or a
+   failed re-test).
+5. Each material lens find: steps 1-4 above, under the same tag.
+
 Updated 2026-10-11: certification rounds run under a kit-opened `certification-round` activity, so a
 lead-dispatched round session runs unattended while every other research verb stays blocked. `gate.sh
 freeze` opens it when a round is due, `gate.sh cert-activity --program <slug>` prints (or opens) its id,

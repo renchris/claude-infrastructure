@@ -207,6 +207,71 @@ def cmd_cert_activity(a: Any) -> int:
     return 0
 
 
+def cmd_rehearsal_activity(a: Any) -> int:
+    """Open, or name, the program's rehearsal activity (REPORT.md §3.8: "once, after the stop, before
+    issue"). Refused unless the registry reads certifying, freeze.json exists, a certification round
+    has run and closed, no certification round is due (the stop rule or R_max), that last round owes
+    no settle step, no front-end return is open, and the relay test has neither passed nor used its
+    one re-test. Idempotent: a second call prints the same id."""
+    import activities
+    import round as rnd
+
+    slug = a.program
+    state = (kit.registry_get(slug) or {}).get("state")
+    if state != "certifying":
+        raise kit.KitError(
+            f"rehearsal-activity refused: {slug} is {state!r}, not certifying"
+        )
+    rec = kit.records_dir(slug)
+    if not (rec / "freeze.json").is_file():
+        raise kit.KitError(f"rehearsal-activity refused: {slug} has no freeze.json")
+    done = rnd.all_matrices(slug, "certification")
+    if not done or not done[-1].get("closed"):
+        raise kit.KitError(
+            "rehearsal-activity refused: the rehearsal runs after the stop, and "
+            + (
+                f"certification round {done[-1].get('round')} is not closed"
+                if done
+                else "no certification round has run"
+            )
+        )
+    if rnd.certification_due(slug) is None:
+        raise kit.KitError(
+            f"rehearsal-activity refused: certification round {len(done) + 1} is still due; the "
+            "rehearsal runs after the stop (the stop rule fired or R_max is spent)"
+        )
+    rid, owed = rnd.settle_owed(slug)
+    if owed:
+        raise kit.KitError(
+            f"rehearsal-activity refused: round {rid} still owes {', '.join(owed)} "
+            f"(gate.sh cert-activity --program {slug} opens its settle-only activity)"
+        )
+    if activities.open_ids(slug, activities.FRONT_END_RETURN):
+        raise kit.KitError(
+            "rehearsal-activity refused: a front-end return is open; the rehearsal reads the plan "
+            "certification froze"
+        )
+    hist = kit.read_jsonl(rec / "rehearsal.jsonl")
+    if any(h.get("passed") for h in hist):
+        raise kit.KitError("rehearsal-activity refused: the relay test already passed")
+    if len(hist) >= 2:
+        raise kit.KitError(
+            "rehearsal-activity refused: the relay test used its one repair and one re-test"
+        )
+    aid = activities.ensure_open(
+        slug,
+        activities.REHEARSAL,
+        fields={"opened_at": kit.now_iso(), "attempt": len(hist) + 1},
+    )
+    print(
+        f"rehearsal activity: tag CC_RESEARCH_ACTIVITY={aid} (cc-research rehearse, round.sh "
+        f"rehearsal-*) and [activity:{aid}] (Agent and Workflow inputs)",
+        file=sys.stderr,
+    )
+    print(aid)
+    return 0
+
+
 def fingerprint() -> Dict[str, str]:
     home = Path.home() / ".claude"
     h = hashlib.sha256()
@@ -429,7 +494,8 @@ def live_state(rec: Path, cert: Dict[str, Any]) -> Dict[str, Any]:
         "flipped": sum(
             1
             for c in kit.fold(kit.read_jsonl(rec / "challenges.jsonl")).values()
-            if c.get("kind") == "drift" and c.get("raised_by") == "sweep"
+            if c.get("kind") == "drift"
+            and c.get("raised_by") == "sweep"
             # a flip triaged refuted was never observed (e.g. raised from a crashed re-check)
             and c.get("triage") != "refuted"
         ),
@@ -663,6 +729,20 @@ def add_verbs(sub: Any) -> None:
         help="the recorded course and areas decisions this return follows",
     )
     p.set_defaults(fn=cmd_return_activity)
+    p = sub.add_parser(
+        "rehearsal-activity",
+        help="open (or name) the rehearsal activity once the stop has fired (REPORT.md §3.8)",
+        description="Print the id of the program's open rehearsal activity, opening one if none is "
+        "open. Refused unless the registry reads certifying, freeze.json exists, the last "
+        "certification round is closed and none is due, it owes no settle step, no front-end return "
+        "is open, and the relay test has neither passed nor used its re-test. Tag the rehearsal's "
+        "calls with CC_RESEARCH_ACTIVITY=<id> (cc-research rehearse frames|trial|record, round.sh "
+        "rehearsal-*, courier.sh --round rehearsal) and [activity:<id>] (the lens sessions' Agent "
+        "and Workflow inputs). handoff-fire.sh stays denied: `rehearse trial` launches the trial "
+        "panes. `rehearse record` closes it on a pass or a failed re-test.",
+    )
+    p.add_argument("--program", required=True)
+    p.set_defaults(fn=cmd_rehearsal_activity)
     p = sub.add_parser("render")
     p.add_argument("--program", required=True)
     p.set_defaults(fn=cmd_render)

@@ -23,7 +23,13 @@ Invoked through scripts/research-kit/gate.sh. Verbs:
                                                             only between two certification rounds,
                                                             once per area, capped per profile;
                                                             freeze closes it
-  run       --program P [--json]                            every row PASS/FAIL/FILED with
+  rehearsal-activity --program P                            print (opening if none) the rehearsal
+                                                            activity id (§3.8); only after the
+                                                            stop, with no settle step owed and no
+                                                            return open, while the relay test has
+                                                            not passed or used its re-test;
+                                                            rehearse record closes it
+  run       --program P [--json]                           every row PASS/FAIL/FILED with
                                                             evidence; all pass -> certificate
                                                             written, state -> certified
   render    --program P                                     the certificate's state lines (§4.3),
@@ -275,7 +281,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     import gate_requires
     import gate_sweep
 
-    gate_cert.add_verbs(sub)  # freeze, render
+    gate_cert.add_verbs(
+        sub
+    )  # freeze, cert-activity, return-activity, rehearsal-activity, render
     gate_sweep.add_verbs(sub)  # sweep, file-packet
     gate_requires.add_verbs(sub)  # requires
     gate_built.add_verbs(sub)  # built-freeze, built-run (REPORT.md §11)

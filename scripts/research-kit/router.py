@@ -61,10 +61,13 @@ OPEN ACTIVITIES (§10 item 8), read here and written by triage or the kit (wave 
 A Bash clause carrying `CC_RESEARCH_ACTIVITY=<open id>` that runs round.sh --delta or courier.sh,
 or an Agent, Task or Workflow call whose input carries `[activity:<open id>]` anywhere, is allowed
 through the research-verb deny. The registry cannot hold these: kit.registry_set keeps only its four
-keys. Two kinds are kit-opened and count only while the program is certifying: certification-round
-(its round's own verbs) and front-end-return (gate.sh return-activity: tagged Agent/Task/Workflow
-and a read-only `codex exec`, never a round verb). handoff-fire.sh stays denied under every activity
-tag except `self-close`; a return's area workers are fired by the lead from its own turn.
+keys. Three kinds are kit-opened and count only while the program is certifying: certification-round
+(its round's own verbs), front-end-return (gate.sh return-activity: tagged Agent/Task/Workflow
+and a read-only `codex exec`, never a round verb) and rehearsal (gate.sh rehearsal-activity: tagged
+Agent/Task/Workflow for the lens sessions, `cc-research rehearse trial|record`, round.sh rehearsal-*
+and `courier.sh --round rehearsal`). handoff-fire.sh, and a bare terminal launch of claude, stay
+denied under every activity tag except handoff-fire's `self-close`; a return's area workers are
+fired by the lead from its own turn, and the rehearsal's trial panes by `rehearse trial`.
 
 KILL SWITCHES (operator, set in the environment Claude Code is launched with, which no tool call of
 the session can change): CC_RESEARCH_BLOCK=0 turns the tool deny off; CC_RESEARCH_ROUTER=off
@@ -1230,7 +1233,7 @@ KIT_ROUND = {"round.sh", "courier.sh"}
 # stays open carrying `settle_round`: SETTLE-ONLY. Its tag runs these verbs, that round's re-close
 # and its rater or verifier slots, and nothing else: no round, no bundle, no reviewer, no Agent.
 # The rehearsal's verbs (round.sh rehearsal-raise|verify|rate|name, lib/rehearsal.py) are deliberately
-# NOT here: the rehearsal runs from outside the program root, so a session inside it gains nothing.
+# NOT here: no certification-round tag runs them; the rehearsal activity's tag does (REHEARSAL_ROUND).
 ROUND_SETTLE = {
     "artifact",
     "split",
@@ -1248,7 +1251,25 @@ ROUND_SETTLE = {
 # `claude -p`, no cc-research buying verb, and no handoff-fire.sh (the lead fires the area's workers
 # from its own turn; under every activity tag only `self-close` passes, operator ruling 2026-10-11).
 FRONT_END_RETURN = "front-end-return"
+# The rehearsal (REPORT.md §3.8; gate.sh rehearsal-activity opens it after the stop, `rehearse record`
+# closes it). While certifying, its tag carries exactly the rehearsal: `cc-research rehearse
+# trial|record` (frames is a read and passes untagged), the four round.sh rehearsal-* verbs,
+# `courier.sh` on the reserved round `rehearsal` only, and [activity:<id>] Agent/Task/Workflow calls
+# for the blind lens sessions. Its trial panes are launched by `rehearse trial`, which takes only fixed
+# phrasings and fixed cwds and types no HANDOFF-ENGAGE envelope, so handoff-fire.sh stays denied
+# under this tag as under every other (operator ruling 2026-10-11).
+REHEARSAL = "rehearsal"
+REHEARSAL_ROUND = {
+    "rehearsal-raise",
+    "rehearsal-verify",
+    "rehearsal-rate",
+    "rehearsal-name",
+}
+REHEARSE_SUBS = {"frames", "trial", "record"}
 CC_RESEARCH_BUYING = {"reopen", "extra-round", "round", "frame-critique", "rehearse"}
+# A bare pane running claude, launched straight through the terminal: the same unrouted or allow-all
+# worker a handoff-fire.sh fire can mint, by another door. Denied wherever handoff-fire.sh fires are.
+PANE_LAUNCHERS = {"kitty", "kitten", "it2", "it2-kitty"}
 ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 
@@ -1364,6 +1385,22 @@ def codex_read_only(rest: List[str]) -> bool:
     return bool(modes) and all(m == "read-only" for m in modes)
 
 
+def rehearse_sub(rest: List[str]) -> Optional[str]:
+    """The one `cc-research rehearse` sub-verb a command names, or None when it names none or more
+    than one (read as the buying verb: an ambiguous command is never admitted)."""
+    subs = {t for t in rest[1:] if t in REHEARSE_SUBS}
+    return next(iter(subs)) if len(subs) == 1 else None
+
+
+def pane_claude(base: str, rest: List[str]) -> bool:
+    """`kitty @ launch … claude …`, `it2 session split … claude`: a terminal launch whose argv runs
+    claude (a token that is claude, or a shell string that runs it)."""
+    return base in PANE_LAUNCHERS and any(
+        os.path.basename(t) == "claude" or re.search(r"(^|[\s;&|/])claude(\s|$)", t)
+        for t in rest
+    )
+
+
 def research_clause(
     toks: List[str],
     slug: str,
@@ -1373,6 +1410,7 @@ def research_clause(
     cert_acts: Optional[List[str]] = None,
     fer_acts: Optional[List[str]] = None,
     settle: Optional[Dict[str, str]] = None,
+    reh_acts: Optional[List[str]] = None,
 ) -> Optional[str]:
     """The research verb a clause runs, or None. Activity-tagged and allowed kit calls are None.
 
@@ -1384,9 +1422,13 @@ def research_clause(
     runs that round's ROUND_SETTLE verbs, its `round.sh close --reclose`, its `courier.sh run` rater
     or verifier slots and a read-only `codex exec`, and no round, bundle or reviewer slot.
     fer_acts: the program's open front-end-return activities (gate.sh return-activity). While
-    certifying, a clause tagged with one runs a read-only `codex exec` and no other research verb."""
+    certifying, a clause tagged with one runs a read-only `codex exec` and no other research verb.
+    reh_acts: the program's open rehearsal activities (gate.sh rehearsal-activity). While certifying,
+    a clause tagged with one runs `cc-research rehearse trial|record`, round.sh rehearsal-* and
+    `courier.sh` on round `rehearsal`, and no other research verb."""
     cert_acts = cert_acts or []
     fer_acts = fer_acts or []
+    reh_acts = reh_acts or []
     env, argv = head(toks)
     if not argv:
         return None
@@ -1403,6 +1445,7 @@ def research_clause(
                 cert_acts=cert_acts,
                 fer_acts=fer_acts,
                 settle=settle,
+                reh_acts=reh_acts,
             )
             if hit:
                 return hit
@@ -1412,6 +1455,7 @@ def research_clause(
     act = env.get("CC_RESEARCH_ACTIVITY")
     cert_round = bool(certifying and act and act in cert_acts)
     fer = bool(certifying and act and act in fer_acts)
+    reh = bool(certifying and act and act in reh_acts)
     settle_rid = (settle or {}).get(act or "") if cert_round else None
     if base == "handoff-fire.sh":
         # self-close spawns nothing: it only retires the calling pane, so a fired peer in a
@@ -1419,6 +1463,8 @@ def research_clause(
         # under every activity tag: a fire can mint an unrouted or allow-all worker (--extra,
         # --cwd, recycle inheritance, the CC_RESEARCH_GATE seam), and no flag list closes that.
         return None if rest[:1] == ["self-close"] else "handoff-fire.sh"
+    if pane_claude(base, rest):
+        return f"{base} … claude"
     if base in VENDOR:
         if base == "codex" and (cert_round or fer) and codex_read_only(rest):
             return None  # a round's read-only reviewer, or a return's read-only census critic
@@ -1428,8 +1474,19 @@ def research_clause(
     ):
         return "claude -p"
     if base == "cc-research" and rest and rest[0] in CC_RESEARCH_BUYING:
+        sub = rehearse_sub(rest) if rest[0] == "rehearse" else None
+        if sub == "frames" or (reh and sub in ("trial", "record")):
+            return (
+                None  # frames is a read; trial and record are the rehearsal activity's
+            )
         return f"cc-research {rest[0]}"
     if base in KIT_ROUND:
+        if reh:
+            if base == "round.sh" and rest[:1] and rest[0] in REHEARSAL_ROUND:
+                return None  # a rehearsal find: raise, verify, rate, name
+            if base == "courier.sh" and flag_value(rest, "--round") == "rehearsal":
+                return None  # the reserved round's own slots, and only those
+            return None if certifying and label == "research-order" else base
         if settle_rid is not None:
             rnd = flag_value(rest, "--round")
             if (
@@ -1548,9 +1605,15 @@ def cmd_tool(a: argparse.Namespace) -> int:
     cert_acts = [x for x, k in kinds.items() if k == "certification-round"]
     # …and so does a front-end return: both are kit-opened stages of certification.
     fer_acts = [x for x, k in kinds.items() if k == FRONT_END_RETURN]
+    # …and so does the rehearsal: it runs once, after the stop and before issue.
+    reh_acts = [x for x, k in kinds.items() if k == REHEARSAL]
     # …and a settle-only one lets through only the last round's settle steps (no Agent or Workflow).
     settle = {x: r for x, r in open_settle_rounds(slug).items() if x in cert_acts}
-    acts = [x for x in kinds if state == "certifying" or x not in cert_acts + fer_acts]
+    acts = [
+        x
+        for x in kinds
+        if state == "certifying" or x not in cert_acts + fer_acts + reh_acts
+    ]
     hit: Optional[str] = None
     if tool in ("Agent", "Task", "Workflow"):
         # The whole input, so a Workflow call (whose input is a script and its args, not a
@@ -1569,6 +1632,7 @@ def cmd_tool(a: argparse.Namespace) -> int:
                 cert_acts=cert_acts,
                 fer_acts=fer_acts,
                 settle=settle,
+                reh_acts=reh_acts,
             )
             if hit:
                 break
@@ -1587,8 +1651,13 @@ def cmd_tool(a: argparse.Namespace) -> int:
         f"--program {slug} prints it) on round.sh, courier.sh and read-only codex exec. A front-end "
         "return runs while certifying with CC_RESEARCH_ACTIVITY=<front-end-return id> (gate.sh "
         f"return-activity --program {slug} --area <A> prints it) on read-only codex exec, and "
-        "[activity:<id>] on Agent and Workflow; handoff-fire.sh stays blocked under every activity "
-        "tag except self-close. Operator kill switch: launch with CC_RESEARCH_BLOCK=0."
+        "[activity:<id>] on Agent and Workflow. The rehearsal runs after the stop with "
+        f"CC_RESEARCH_ACTIVITY=<rehearsal id> (gate.sh rehearsal-activity --program {slug} prints "
+        "it) on cc-research rehearse trial|record, round.sh rehearsal-* and courier.sh --round "
+        "rehearsal, and [activity:<id>] on its lens sessions' Agent and Workflow calls; its trial "
+        "panes come from `cc-research rehearse trial`. handoff-fire.sh, and a bare terminal launch "
+        "of claude, stay blocked under every activity tag; only self-close passes. Operator kill "
+        "switch: launch with CC_RESEARCH_BLOCK=0."
     )
 
 

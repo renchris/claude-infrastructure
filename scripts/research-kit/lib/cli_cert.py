@@ -6,7 +6,10 @@
   raters      --program P --round RID [--json]                       the rater assignment (§3.8 step 2)
   check-round --program P --round RID [--json]                       voids breaches, lists every non-complete slot
   round | frame-critique --program P --round N --plan F --brief F    round.py run with the kind fixed
-  rehearse frames --program P [--json] | rehearse record --program P --frames-typed F.. --trials FILE [--retest]
+  rehearse frames --program P [--json] | rehearse record --program P --frames-typed F.. [--trials FILE] [--retest]
+  rehearse trial --program P --phrase TEXT [--where root|outside] [--name N] [--timeout S]
+              one relay trial in a bare kitty tab (lib/rehearse_trial.py), appended to the attempt's
+              evidence/rehearsal/trials-<n>.jsonl, which record reads when --trials is not given
 
 The Workflows in ../workflows/ only call these. What is enforced HERE, in code: the slot plan and its
 caps (round.py), a fresh all-live vendor preflight before a round opens, the vendor/strategy/role
@@ -284,9 +287,7 @@ def panel_breaches(
     # Effort is part of the detector the round was calibrated against: a reviewer that ran at any
     # other effort than the frame pins (or a verifier/rater that ran pinned) is a different read.
     # None on both sides — a frame without reviewer_effort, a panel without `effort` — is today's.
-    want_e = courier.effort_for(
-        efforts or {}, str(p.get("vendor")), str(p.get("role"))
-    )
+    want_e = courier.effort_for(efforts or {}, str(p.get("vendor")), str(p.get("role")))
     if p.get("effort") != want_e:
         why.append(
             f"ran at effort {p.get('effort') or 'CLI default'}, pinned {want_e or 'CLI default'}"
@@ -490,6 +491,20 @@ def relay_fails(slug: str, trials: List[Dict[str, Any]]) -> List[str]:
                 + ", ".join(bad)
                 + " (only the certificate read is allowed)"
             )
+        # A trial `rehearse trial` measured carries the router's own label and whether its turn
+        # ended. One the router routed anywhere but a relay label (or `unavailable`, whose designed
+        # fallback still hands the turn the certificate, §10 item 3) never exercised the relay, and
+        # one that timed out has no reply to judge (a hand-built row carries neither field).
+        if t.get("label") is not None and t.get("label") not in (
+            "completeness",
+            "pushback",
+            "unavailable",
+        ):
+            v.append(
+                f"the router labeled it {t.get('label')}, not a relay label, so the relay never ran"
+            )
+        if t.get("timed_out"):
+            v.append("its turn did not end before the trial's timeout")
         fails += [f"trial {t.get('trial', i)}: {x}" for x in v]
         cwd = os.path.realpath(str(t.get("cwd") or ""))
         if t.get("cwd") and not any(
@@ -503,7 +518,11 @@ def relay_fails(slug: str, trials: List[Dict[str, Any]]) -> List[str]:
 
 def cmd_rehearse(a: argparse.Namespace) -> int:
     rec = kit.records_dir(a.program)
-    if a.sub == "frames":
+    if a.rehearse_verb == "trial":
+        import rehearse_trial
+
+        return rehearse_trial.cmd_trial(a)
+    if a.rehearse_verb == "frames":
         frames = [
             m["frame"]
             for m in rnd.frame(a.program).get("reask_map") or []
@@ -525,7 +544,14 @@ def cmd_rehearse(a: argparse.Namespace) -> int:
     if hist and hist[-1].get("passed"):
         raise kit.KitError("the relay test already passed; there is nothing to re-test")
     if not a.trials:
-        raise kit.KitError("rehearse record needs --trials FILE")
+        import rehearse_trial
+
+        # the file `rehearse trial` wrote for this attempt
+        a.trials = str(rehearse_trial.trials_path(a.program, len(hist) + 1))
+        if not Path(a.trials).is_file():
+            raise kit.KitError(
+                f"rehearse record needs --trials FILE (no {a.trials} from rehearse trial)"
+            )
     trials = kit.read_jsonl(Path(a.trials))
     fails = relay_fails(a.program, trials)
     passed, n = not fails, len(trials)
@@ -552,6 +578,12 @@ def cmd_rehearse(a: argparse.Namespace) -> int:
         },
     )
     print("\n".join(fails) or f"relay test passed: {n} trials")
+    if passed or hist:
+        import activities
+
+        # the relay test is settled (a pass, or the re-test spent): the rehearsal's tag ends here
+        for aid in activities.close_kind(a.program, activities.REHEARSAL):
+            print(f"rehearsal activity closed: {aid}")
     return 0 if passed else 1
 
 
@@ -596,8 +628,12 @@ def add_verbs(sub: Any) -> None:
         p.add_argument("--plan", required=True)
         p.add_argument("--brief", required=True)
     p = P("rehearse", cmd_rehearse)
-    p.add_argument("sub", choices=("frames", "record"))
+    p.add_argument("rehearse_verb", choices=("frames", "trial", "record"))
     p.add_argument("--frames-typed", nargs="*", default=[])
     p.add_argument("--trials")
+    p.add_argument("--phrase", help="trial: one fixed phrasing, verbatim")
+    p.add_argument("--where", choices=("root", "outside"), default="root")
+    p.add_argument("--name", help="trial --where outside: the slug or a registered alias")
+    p.add_argument("--timeout", type=float, default=900.0, help="trial: seconds")
     p.add_argument("--retest", action="store_true")
     p.add_argument("--json", action="store_true")

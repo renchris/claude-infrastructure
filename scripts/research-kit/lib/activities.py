@@ -7,7 +7,8 @@ state to "closed", so the file is the history of what was let through.
 
   {"activities": [{"program", "id": "ACT-<program>-<n>", "kind", "state": "open|closed"}]}
 
-A front-end-return row also carries area, n_hat, design_holes, opened_at and because.
+A front-end-return row also carries area, n_hat, design_holes, opened_at and because; a rehearsal
+row carries opened_at and attempt (1, or 2 for the re-test).
 
 Python 3.9-safe, standard library only.
 """
@@ -34,12 +35,22 @@ import kit
 # read-only `codex exec` only: the lead fires the area's workers itself, and handoff-fire.sh stays
 # denied under every activity tag (operator ruling 2026-10-11).
 FRONT_END_RETURN = "front-end-return"
+# rehearsal: opened by the kit (gate.sh rehearsal-activity) once the stop has fired (no certification
+# round due, the last one closed and owing no settle step) and no front-end return is open, while the
+# relay test has neither passed nor used its re-test (REPORT.md §3.8). Its tag carries the rehearsal and
+# nothing else: [activity:<id>] Agent/Workflow calls for the blind lens sessions, `cc-research rehearse
+# frames|trial|record`, `round.sh rehearsal-raise|verify|rate|name` and `courier.sh` on the reserved
+# round `rehearsal` only. Its trial panes are launched by `rehearse trial` (lib/rehearse_trial.py),
+# never by handoff-fire.sh, which stays denied here too. `rehearse record` closes it on a pass or on a
+# failed re-test.
+REHEARSAL = "rehearsal"
 KINDS = (
     "escape",
     "frame-delta",
     "triage-batch",
     "certification-round",
     FRONT_END_RETURN,
+    REHEARSAL,
 )
 
 
@@ -166,19 +177,23 @@ def open_activity(program: str, kind: str) -> str:
 
 
 def ensure_open(
-    program: str, kind: str, settle_round: Optional[str] = None, create: bool = True
+    program: str,
+    kind: str,
+    settle_round: Optional[str] = None,
+    create: bool = True,
+    fields: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
-    """The id of the program's first open row of this kind, appending one when none is open (None,
-    and nothing written, when create is False). Every open row of the kind is left carrying
-    `settle_round` (a settle-only certification-round row, round.py settle_owed) or, when it is
-    None, none: a plain row."""
+    """The id of the program's first open row of this kind, appending one (carrying `fields`) when
+    none is open (None, and nothing written, when create is False). Every open row of the kind is
+    left carrying `settle_round` (a settle-only certification-round row, round.py settle_owed) or,
+    when it is None, none: a plain row."""
     _check(program, kind)
     with _Lock():
         data = load()
         hit = _open_of(data, program, kind)
         if not hit and not create:
             return None
-        aid = str(hit[0]["id"]) if hit else _append(data, program, kind)
+        aid = str(hit[0]["id"]) if hit else _append(data, program, kind, fields)
         changed = not hit
         for a in _open_of(data, program, kind):
             if a.get("settle_round") != settle_round:

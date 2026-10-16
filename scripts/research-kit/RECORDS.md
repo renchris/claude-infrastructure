@@ -324,8 +324,53 @@ the gate's round rows select rounds by matrix or by round number). No verb here 
   passes. Each `H-RH-<n>` still needs its `trace.jsonl` row (gate row 8), to its known row or a recorded rejection.
 - **Where they run.** None of the four is in router.py `ROUND_SETTLE`, and `courier.sh run --round rehearsal` is
   no settle round's slot, so a session inside the program root gains nothing under a certification-round or
-  settle-only tag: the rehearsal orchestrator runs them from outside the root. `cc-research rehearse record` (the
-  relay test) is unchanged.
+  settle-only tag. They run under the rehearsal activity's tag (next section; added 2026-10-16), or from an
+  allow-all turn outside the root.
+
+### The rehearsal activity and the relay trials (added 2026-10-16; method packet beb0f1a6de53, "agent-run")
+
+An agent runs the whole rehearsal (REPORT.md §3.8: the blind lens sessions, the 20-trial relay test, at least one
+trial from a pane outside the program's directory), so gate row 14 can pass without the operator typing.
+
+- **`gate.sh rehearsal-activity --program P`** prints the open `rehearsal` activity's id, opening one if none is
+  open (`lib/gate_cert.py` `cmd_rehearsal_activity`; the row carries `opened_at` and `attempt`). Refused unless the
+  registry reads `certifying`, `freeze.json` exists, the newest certification round is closed and none is due (the
+  stop rule or R_max), that round owes no settle step (`round.py` `settle_owed`), no front-end return is open, and
+  `rehearsal.jsonl` holds no pass and fewer than 2 records. `round.sh close` prints it as the next step when it
+  closes the certification-round activity on the stop.
+- **What the tag unlocks, while `certifying` only** (`router.py` `REHEARSAL`): `CC_RESEARCH_ACTIVITY=<id>` on
+  `cc-research rehearse trial|record`, on `round.sh rehearsal-raise|rehearsal-verify|rehearsal-rate|rehearsal-name`
+  and on `courier.sh` with `--round rehearsal` only; `[activity:<id>]` in an Agent, Task or Workflow input (the
+  lens sessions). Nothing else: no other round verb or round, no vendor CLI, no `claude -p`, no other buying verb,
+  and nothing once `certified` or on a relay turn. `handoff-fire.sh` stays denied under this tag as under every
+  other (operator ruling 2026-10-11), and so does a bare terminal launch of `claude` (`kitty @ launch … claude`,
+  `it2 session split … claude`) on every turn that is not allow-all. `cc-research rehearse frames` is a read and
+  passes on any non-relay turn.
+- **`cc-research rehearse trial --program P --phrase TEXT [--where root|outside] [--name N] [--timeout S]`**
+  (`lib/rehearse_trial.py`) runs ONE trial. The phrase must be one of §3.8's four, verbatim (`RELAY_PHRASES`), or
+  a `reask_map` frame with an axis; the cwd is the program's first `cwd_root`, or (`outside`) this kit's own
+  checkout, refused if it lies inside any root; only an outside trial carries the suffix ` (about the research
+  program <N>)`, N the slug or a registered alias (default: the first alias). It opens a kitty tab (`--keep-focus`)
+  running `zsh -ilc 'claude --session-id <uuid> <prompt>'` with `CLAUDE_CONFIG_DIR` pinned by `--env`, so the
+  phrase is the pane's first and only prompt: no `HANDOFF-ENGAGE`, back-channel block or `Goal set:` line, and the
+  router classifies it as a genuine prompt. It waits for the turn to end (a reply, no unanswered tool call, the
+  transcript quiet for `CC_RESEARCH_TRIAL_SETTLE_S`, default 20 s, so a Stop-check block extends it), reads the
+  transcript from `<CLAUDE_CONFIG_DIR>/projects/*/<uuid>.jsonl` and the label from `route-state/<uuid>.json`, closes
+  the pane from outside, and appends `{trial, prompt, phrase, where, cwd, reply, replies, tools, label, session_id,
+  config_dir, transcript, window_id, closed, timed_out, attempt, at}` to
+  `<records>/evidence/rehearsal/trials-<attempt>.jsonl` (refused past 20). `reply` is every reply text of the turn
+  joined, so a repaired second reply counts against the line budget. Refused without an open rehearsal activity,
+  outside `certifying`, or when the pane's account has not trusted the cwd. Exit 1 on a timed-out trial. Exempt from
+  the lease (`lib/cli.py` `LEASE_EXEMPT`, with `rehearse frames`): it writes no record.
+- **`rehearse record`** without `--trials` reads that attempt's file, and fails a trial the router labeled anything
+  but `completeness`, `pushback` or `unavailable` (the relay never ran: an allow-all label is the risk the skeptic
+  named for "if more research moves your conviction, do it now") or one that timed out, on top of the checks above.
+  It closes the rehearsal activity on a pass or a failed re-test. It still takes the lease.
+- **The orchestrator's sequence:** `gate.sh rehearsal-activity` → the lens sessions (`[activity:<id>]` Agents or the
+  rehearsal Workflow, one per `rehearse frames` frame) → 20 `rehearse trial`s, one `--where outside` → read the rows
+  → `rehearse record --frames-typed <the frames run>` → for each material find, `round.sh rehearsal-raise`, then
+  `-verify`, `-rate`, `-name`, all under the tag. `workflows/rehearsal.workflow.js` (args `activity`, `record`)
+  runs the first three steps, and the record with `record: true`.
 
 ## Method v1.2 records (REPORT.md §11 and §12; wave E3b)
 
@@ -395,7 +440,8 @@ certificate), `unsigned`, `void` (agent-written or no chain), `stale` (the pinne
 above and nothing else; the kit scripts stay as thin compatibility entry points over the same modules. Verbs that
 read one program take `--program P` (`verdict` also takes the slug positionally: `cc-research verdict <slug>` is the
 certificate read the research block whitelists, `router.py` `cert_read`). Names the block treats as buying verbs
-(`router.py` `CC_RESEARCH_BUYING`): `reopen`, `extra-round`, `round`, `frame-critique`, `rehearse`.
+(`router.py` `CC_RESEARCH_BUYING`): `reopen`, `extra-round`, `round`, `frame-critique`, `rehearse` (`rehearse
+frames` is a read and passes; `rehearse trial|record` pass under the rehearsal activity's tag).
 
 Cross-module contracts (a consumer depends on exactly these shapes):
 

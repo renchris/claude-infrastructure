@@ -846,6 +846,9 @@ def activity_tail(slug: str, m: Dict[str, Any]) -> None:
     if not owed:
         if activities.close_kind(slug, kind):
             print(f"certification activity closed: {why}")
+            print(
+                f"the rehearsal runs next (REPORT.md §3.8): gate.sh rehearsal-activity --program {slug}"
+            )
         return
     aid = activities.ensure_open(slug, kind, settle_round=rid, create=False)
     print(

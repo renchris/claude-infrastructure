@@ -24,8 +24,9 @@ the hole ledger, the courier, the rater assignment, the panel checks (cli_cert.p
 effort, rater vendor, integrity) and known_rows.jsonl exactly as a certification round's, and every
 reader that counts rounds skips them for free: `rounds/rehearsal/` never holds a matrix.json, and
 `round` "rehearsal" matches no certification, built or delta id. The rehearsal never edits the plan, so
-nothing here opens a fix cycle or a freeze. None of these verbs is in router.py ROUND_SETTLE: the
-rehearsal runs from outside the program root, and a session inside it gains nothing.
+nothing here opens a fix cycle or a freeze. None of these verbs is in router.py ROUND_SETTLE: no
+certification-round tag runs them. The rehearsal activity's tag does (gate.sh rehearsal-activity,
+router.py REHEARSAL_ROUND), and so does any allow-all turn outside the program root.
 
 Python 3.9-safe.
 """

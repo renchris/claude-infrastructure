@@ -44,7 +44,7 @@ const pipeline = async (items, ...stages) => Promise.all(items.map(async (it, i)
   return v
 }))
 const args = { program: 'demo', round: 1, plan: `${REPO}/PLAN.md`, brief: `${REPO}/brief.txt`, repo: REPO,
-  outside_cwd: '/elsewhere', trials_file: '/tmp/trials.jsonl' }
+  outside_cwd: '/elsewhere', trials_file: '/tmp/trials.jsonl', activity: 'ACT-demo-1', record: true }
 const budget = { total: null, spent: () => 0, remaining: () => Infinity }
 const exec = (code, a, depth) => new AsyncFunction(...PARAMS, code)(a, agent, parallel, pipeline, () => {}, () => {},
   budget, async (ref, childArgs) => { // one nesting level, as the runtime allows; /REPO maps to this checkout
@@ -72,8 +72,9 @@ if (checks) {
 }
 const bad = []
 for (const c of calls) {
+  // an activity's tag (CC_RESEARCH_ACTIVITY=<id>, the rehearsal's) may lead the command
   for (const m of c.prompt.matchAll(/`([^`]+)`/g))
-    if (!m[1].startsWith(`${REPO}/bin/cc-research `)) bad.push(m[1])
+    if (!m[1].replace(/^CC_RESEARCH_ACTIVITY=\S+ /, '').startsWith(`${REPO}/bin/cc-research `)) bad.push(m[1])
   for (const m of c.prompt.matchAll(/\b(courier\.sh|round\.sh|gate\.sh|probe-run\.sh|codex|gemini)\b/g)) bad.push(m[1])
 }
 console.log(`commands ${bad.length ? 'bad: ' + bad.join(' | ') : 'ok'}`)
