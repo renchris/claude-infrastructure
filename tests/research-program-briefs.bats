@@ -101,7 +101,8 @@ sys.path[:0] = [root + "/scripts/research-kit/lib", root + "/scripts/lib"]
 import operator_sign
 text = open(root + "/skills/research-program/SKILL.md").read()
 # third-read names a <set>.<stratum> target, so one inner dot is part of the action
-named = re.findall(r"cc-signoff (research:<slug>/[A-Za-z<>/_-]+(?:\.[A-Za-z<>_-]+)?)", text)
+# v1.3: an action target may carry a digit (adopt/stage9)
+named = re.findall(r"cc-signoff (research:<slug>/[A-Za-z0-9<>/_-]+(?:\.[A-Za-z<>_-]+)?)", text)
 seen = set()
 for n in named:
     p = operator_sign.parse_row(n.replace("<slug>", "demo").replace("<DECISION-ID>", "DR-01")
