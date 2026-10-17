@@ -135,4 +135,7 @@ if [[ ! -r "$_CORE" ]] || ! command -v python3 >/dev/null 2>&1; then
   cat >/dev/null 2>&1 || true   # drain stdin so the harness never sees a broken pipe
   exit 0
 fi
-exec python3 "$_CORE"
+# -S: no site import (no .pth scan, no site-packages on sys.path). The core and its sibling
+# imports are stdlib-only, which tests/bash-hook-trims-forks.bats pins. Not -I: that also drops
+# the script's own dir from sys.path, and the core imports curl_ssrf from there.
+exec python3 -S "$_CORE"
