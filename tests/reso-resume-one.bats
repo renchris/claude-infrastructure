@@ -280,18 +280,27 @@ mk_reaped_worktree() { # <repo-name> <branch> <wtpath>
   # ECHO on, so kitty's replies to the 2.1.293 boot probes (XTVERSION, CSI ? u, DA1) were painted
   # onto the composer as ^[P>|kitty(0.48.2)^[\^[[?5u^[[?62;52;c. lr-fire-resume.sh had the cure;
   # this launcher never did. The whole script runs on a pty here, so its stdin IS a tty, and the
-  # mode is read off that pty 1 s in, while the stub (no menu, 3 s of life) is still booting.
+  # mode is read off that pty once per quiet second until the stub (no menu, 3 s of life, never
+  # reaches interact) exits. ONE sample 1 s in was a flake: under load the bash prelude can still
+  # be running at 1 s (measured 2026-10-17, red in a full run, green alone). The old code never
+  # turns echo off before exit, so "some sample reads -echo" still fails on it.
   # shellcheck disable=SC2016  # the expect program reads $env(...) and $spawn_out itself
   run env RRO="$RRO" WT="$WT" CC_RR_STUB_NO_MENU=1 timeout 90 expect -c '
     spawn -noecho $env(RRO) next $env(WT) SID-QUIET
-    set timeout 1; expect { -re {.+} { exp_continue } timeout {} }
-    set m [exec /bin/stty -a < $spawn_out(slave,name)]
-    puts "\nMODE:[regexp -inline {[-]*echo } $m]"
-    set timeout 30; expect { -re {.+} { exp_continue } timeout {} eof {} }
+    set modes {}
+    for {set i 0} {$i < 20} {incr i} {
+      set timeout 1; set done 0
+      expect { -re {.+} { exp_continue } timeout {} eof { set done 1 } }
+      if {$done} break
+      if {[catch {exec /bin/stty -a < $spawn_out(slave,name)} m]} break
+      lappend modes [regexp -inline {[-]*echo } $m]
+    }
+    puts "\nMODES:$modes:END"
     catch close; catch wait; exit 0'
-  local mode; mode="$(printf '%s' "$output" | grep -a -o 'MODE:[^}]*' | head -1)"
-  [ -n "$mode" ] || { echo "no MODE sample"; echo "$output" | tail -c 400; false; }
-  [[ "$mode" == *"-echo"* ]] || { echo "pre-interact the pane tty still ECHOES: $mode"; false; }
+  local modes; modes="$(printf '%s' "$output" | grep -a -o 'MODES:.*:END' | head -1)"
+  [ -n "$modes" ] || { echo "no MODES line"; echo "$output" | tail -c 400; false; }
+  [ "$modes" != "MODES::END" ] || { echo "no MODE sample before exit"; echo "$output" | tail -c 400; false; }
+  [[ "$modes" == *"-echo"* ]] || { echo "pre-interact the pane tty ECHOED at every sample: $modes"; false; }
 }
 
 # ── 4. a NON-reso repo's reaped worktree is recreated ────────────────────────────────────────────
