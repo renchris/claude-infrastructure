@@ -94,6 +94,10 @@
 #                              SET-BUT-EMPTY ⇒ ancestry UNKNOWABLE ⇒ admit, LOUDLY (R4: the one
 #                              path on which this bound is inert says so, rather than reading as a
 #                              quiet admit indistinguishable from a healthy one).
+#   CC_BATS_ADMISSION_MODE_FILE=<p>
+#                            → [value] pin the operator's admission-mode file (X27). Unreadable or
+#                              unknown content ⇒ refuse, today's default; `record` ⇒ admit + record.
+#   CC_BATS_WOULD_REFUSE_LOG=<p> → [value] pin where `record` mode appends (beside the waiver log).
 #   xcrun_db=<path>          → [value, not ours] Apple's xcrun cache path. Exported set-default to a
 #                              per-day warm db (X3); a value already set is honoured verbatim.
 #
@@ -484,6 +488,14 @@ MAX_ROOTS="${CC_BATS_MAX_ROOTS:-2}"
 MAX_LPC="${CC_BATS_MAX_LOAD_PER_CORE:-2.0}"
 ROOT_TTL="${CC_BATS_ROOT_TTL:-21600}"          # 6 h — 2x the verifier's own 3 h SUITE_TO backstop
 case "$ROOT_TTL" in ''|*[!0-9]*) ROOT_TTL=21600 ;; esac
+# The admission MODE (X27, 2026-10-17), read ONLY on the refusal path, so an admit pays nothing. The
+# file is the operator's alone, written after a ruling; a machine fact, hence $HOME/.claude like the
+# registry. Missing, unreadable, empty, `refuse` or ANY unknown word ⇒ today's refusal, byte for byte.
+# `record` ⇒ admit instead, mint the slot, and append one would-refuse line beside the waiver log, so
+# the ceiling's real refusal rate can be measured before anyone rules on loosening it.
+if [ -n "${CC_BATS_ADMISSION_MODE_FILE+set}" ]; then ADMISSION_MODE_FILE="$CC_BATS_ADMISSION_MODE_FILE"
+else ADMISSION_MODE_FILE="$HOME/.claude/autonomy/cc-bats-admission.mode"; fi
+ADMIT_LOAD1="unknown"; ADMIT_NCPU="unknown"
 
 # ── why this invocation may not even be a candidate ────────────────────────────────────────────
 ADMIT_SKIP=""
@@ -622,6 +634,7 @@ load_term_true() { # 0 = load/core >= ceiling. 1 = below it OR UNREADABLE — th
   n="$("$SYSCTL_BIN" -n hw.ncpu 2>/dev/null | tr -d '[:space:]')"
   case "$l" in ''|*[!0-9.]*) return 1 ;; esac
   case "$n" in ''|0|*[!0-9]*) return 1 ;; esac
+  ADMIT_LOAD1="$l"; ADMIT_NCPU="$n"                       # for the would-refuse record, fork-free
   "$AWK_BIN" -v l="$l" -v n="$n" -v c="$MAX_LPC" 'BEGIN{ exit ((l/n) >= c) ? 0 : 1 }'
 }
 
@@ -661,6 +674,22 @@ if [ -z "$ADMIT_SKIP" ]; then
         echo "cc-bats: NOTICE — $N_ROOTS live bats root(s) at or above CC_BATS_MAX_ROOTS=$MAX_ROOTS and load/core over $MAX_LPC, but ps(1) is unavailable so nesting cannot be ruled out; ADMITTING rather than risk refusing a nested run. Admission bound INERT for this invocation." >&2
       elif [ "$ANC" = "1" ]; then
         REFUSE=1
+      fi
+    fi
+    if [ "$REFUSE" = "1" ]; then
+      _mode=""
+      { read -r _mode < "$ADMISSION_MODE_FILE"; } 2>/dev/null || true   # builtin: no fork
+      if [ "$_mode" = "record" ]; then
+        REFUSE=0
+        # Fails OPEN like the waiver log it sits beside: an unwritable record never refuses the run.
+        _wrl="${CC_BATS_WOULD_REFUSE_LOG:-${WAIVER_LOG%/*}/bats-would-refuse.jsonl}"
+        mkdir -p "${_wrl%/*}" 2>/dev/null || true
+        printf '{"ts":"%s","pid":%s,"cwd":"%s","n_roots":%s,"max_roots":%s,"load1":"%s","ncpu":"%s","max_lpc":"%s","argv1":"%s"}\n' \
+          "$("$DATE_BIN" -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" "$$" \
+          "$(printf '%s' "$PWD" | tr -d '\042\134')" "$N_ROOTS" "$MAX_ROOTS" "$ADMIT_LOAD1" \
+          "$ADMIT_NCPU" "$MAX_LPC" "$(printf '%s' "${1:-}" | tr -d '\042\134')" \
+          >> "$_wrl" 2>/dev/null || true
+        echo "cc-bats: NOTICE — admission mode 'record' ($ADMISSION_MODE_FILE): would have REFUSED ($N_ROOTS root(s) >= CC_BATS_MAX_ROOTS=$MAX_ROOTS, load/core >= $MAX_LPC); ADMITTING, recorded to $_wrl." >&2
       fi
     fi
     if [ "$REFUSE" = "1" ]; then

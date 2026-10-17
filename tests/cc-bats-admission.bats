@@ -41,7 +41,8 @@ setup() {
   unset CC_BATS_ACTIVE CC_BATS_QOS CC_BATS_QOS_MODE CC_BATS_QOS_BAND CC_BATS_QUIET \
         CC_BATS_REAL CC_BATS_BAND CC_BATS_TASKPOLICY \
         CC_BATS_MAX_ROOTS CC_BATS_MAX_LOAD_PER_CORE CC_BATS_ROOTS_DIR CC_BATS_ROOT_TTL \
-        CC_BATS_SYSCTL_BIN CC_BATS_PS_BIN CC_BATS_ADMIT_SKIP
+        CC_BATS_SYSCTL_BIN CC_BATS_PS_BIN CC_BATS_ADMIT_SKIP \
+        CC_BATS_ADMISSION_MODE_FILE CC_BATS_WOULD_REFUSE_LOG CC_BATS_WAIVER_LOG
   ROOTS="$TMP/roots"
   mkdir -p "$ROOTS"
   # A stub standing in for the real bats. The subject here is the ADMISSION DECISION, not bats; a
@@ -391,4 +392,72 @@ entries() { find "$ROOTS" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l | tr -d ' 
     [ "$output" = "0" ]
     run grep -c "CC_BATS_WAIVER_REASON=" "$SHIM"
     [ "$output" -ge 1 ]
+}
+
+# ── the admission MODE file (X27, 2026-10-17) ──────────────────────────────────────────────────
+# ~/.claude/autonomy/cc-bats-admission.mode is read on the refusal path only. Its default — missing,
+# unreadable, empty, `refuse` or anything unknown — is today's refusal, byte for byte. `record` turns
+# the refusal into an admit plus one would-refuse record, so the ceiling can be measured before anyone
+# rules on loosening it. Only the operator writes the file; HOME is the fixture here.
+
+@test "mode: a MISSING mode file refuses with output byte-identical to no mode seam at all" {
+  hold 2
+  shim CC_BATS_MAX_ROOTS=2 CC_BATS_MAX_LOAD_PER_CORE=0
+  [ "$status" -eq 75 ] || false
+  local base="$output"
+  shim CC_BATS_MAX_ROOTS=2 CC_BATS_MAX_LOAD_PER_CORE=0 CC_BATS_ADMISSION_MODE_FILE="$TMP/absent.mode"
+  [ "$status" -eq 75 ] || false
+  [ "$output" = "$base" ] || false
+}
+
+@test "mode: 'record' at the default path admits, mints, records the would-refuse and says so" {
+  hold 2
+  mkdir -p "$HOME/.claude/autonomy"
+  echo record > "$HOME/.claude/autonomy/cc-bats-admission.mode"
+  shim CC_BATS_MAX_ROOTS=2 CC_BATS_MAX_LOAD_PER_CORE=0
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *STUB-RAN* ]] || false
+  [[ "$output" == *"would have REFUSED"* ]] || false
+  [[ "$output" != *"REFUSED —"* ]] || false
+  [ "$(entries)" -eq 3 ] || false                     # the 2 holders + this run's minted slot
+  local log="$HOME/.claude/state/bats-would-refuse.jsonl"
+  [ "$(wc -l < "$log" | tr -d ' ')" -eq 1 ] || false
+  grep -q '"n_roots":2' "$log"
+  grep -q '"argv1":"tests/does-not-need-to-exist.bats"' "$log"
+  grep -q "\"cwd\":\"$PWD\"" "$log"
+  grep -q '"load1":"[0-9.]*"' "$log"
+}
+
+@test "mode: 'record' on an ADMIT path writes nothing — the file is read only when refusing" {
+  hold 1
+  printf 'record\n' > "$TMP/m.mode"
+  shim CC_BATS_MAX_ROOTS=2 CC_BATS_MAX_LOAD_PER_CORE=0 CC_BATS_ADMISSION_MODE_FILE="$TMP/m.mode" \
+       CC_BATS_WOULD_REFUSE_LOG="$TMP/wr.jsonl"
+  [ "$status" -eq 0 ] || false
+  [ ! -e "$TMP/wr.jsonl" ] || false
+  [[ "$output" != *"would have REFUSED"* ]] || false
+}
+
+@test "mode: garbage, empty, 'refuse' and an UNREADABLE file all keep today's refusal (rc 75)" {
+  hold 2
+  local m
+  for m in garbage '' refuse; do
+    printf '%s\n' "$m" > "$TMP/m.mode"
+    shim CC_BATS_MAX_ROOTS=2 CC_BATS_MAX_LOAD_PER_CORE=0 CC_BATS_ADMISSION_MODE_FILE="$TMP/m.mode"
+    [ "$status" -eq 75 ] || false
+    [[ "$output" != *STUB-RAN* ]] || false
+  done
+  printf 'record\n' > "$TMP/m.mode"; chmod 000 "$TMP/m.mode"
+  shim CC_BATS_MAX_ROOTS=2 CC_BATS_MAX_LOAD_PER_CORE=0 CC_BATS_ADMISSION_MODE_FILE="$TMP/m.mode"
+  chmod 600 "$TMP/m.mode"
+  [ "$status" -eq 75 ] || false
+}
+
+@test "mode: an unwritable would-refuse log never blocks a 'record' admit (fails OPEN)" {
+  hold 2
+  printf 'record\n' > "$TMP/m.mode"
+  shim CC_BATS_MAX_ROOTS=2 CC_BATS_MAX_LOAD_PER_CORE=0 CC_BATS_ADMISSION_MODE_FILE="$TMP/m.mode" \
+       CC_BATS_WOULD_REFUSE_LOG=/proc/nonexistent/nope.jsonl
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *STUB-RAN* ]] || false
 }
