@@ -1,6 +1,6 @@
 #!/bin/bash
 # migration-class: c10
-# migration-step: install the root watchdog that restarts fseventsd when its footprint passes 16 GB (2026-10-04: it reached 64 GB, 56 GB of it compressed, filled swap to 40.7 of 42 GB and got every land gate on the machine SIGKILLed by the compressor sentinel). It copies scripts/fseventsd-watch.sh to a root-owned /usr/local/libexec/claude-fseventsd-watch.sh and loads the system LaunchDaemon com.claude.fseventsd-watchdog; macOS asks for an administrator password or Touch ID. A root LaunchDaemon is C10.
+# migration-step: install the root watchdog that restarts fseventsd when its footprint passes 1 GB (early floor, 2026-10-17 DESIGN X2) or 16 GB (2026-10-04: it reached 64 GB, 56 GB of it compressed, filled swap to 40.7 of 42 GB and got every land gate on the machine SIGKILLed by the compressor sentinel). It copies scripts/fseventsd-watch.sh to a root-owned /usr/local/libexec/claude-fseventsd-watch.sh and loads the system LaunchDaemon com.claude.fseventsd-watchdog; macOS asks for an administrator password or Touch ID. A root LaunchDaemon is C10.
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0057-fseventsd-watchdog.sh --confirm com.claude.fseventsd-watchdog
 # migration-batch-hold: manual — it needs the macOS administrator dialog (osascript with administrator privileges), which the batch's scratch-HOME rehearsal cannot answer or sandbox; run its migration-run line by hand
 # migration-subject: launchd/system/com.claude.fseventsd-watchdog.plist
@@ -30,8 +30,9 @@
 #                           root copy is not the watchdog the repo describes.
 #
 # WHAT IT CANNOT UNDO BY ITSELF: once loaded, the daemon SIGTERMs (then SIGKILLs) fseventsd when its
-#   footprint is >= 16 GB on 2 consecutive 300 s runs, at most every 30 min. Spotlight, Time Machine
-#   and file watchers then rescan what they watch. Uninstall:
+#   footprint is >= 1 GB (the early floor) or >= 16 GB on 2 consecutive 300 s runs, at most every
+#   30 min. Spotlight, Time Machine and file watchers then rescan what they watch; a SIGKILL restart
+#   can force one Time Machine deep scan. Uninstall:
 #     sudo launchctl bootout system/com.claude.fseventsd-watchdog
 #     sudo rm /Library/LaunchDaemons/com.claude.fseventsd-watchdog.plist /usr/local/libexec/claude-fseventsd-watch.sh
 set -uo pipefail
@@ -60,6 +61,7 @@ verify() {
   "$LAUNCHCTL" print "system/$LABEL" >/dev/null 2>&1 || { echo "0057: $LABEL is not loaded"; return 1; }
   [ -f "$DST" ] || { echo "0057: $DST is missing"; return 1; }
   [ "$(/usr/bin/stat -f %Su "$DST" 2>/dev/null)" = root ] || { echo "0057: $DST is not root-owned"; return 1; }
+  # A copy installed before the 1 GB early floor (DESIGN X2) differs here, so --confirm re-installs it.
   cmp -s "$SRC" "$DST" || { echo "0057: $DST differs from $SRC (re-run --confirm to refresh the root copy)"; return 1; }
   cmp -s "$SRC_PLIST" "$DST_PLIST" || { echo "0057: $DST_PLIST differs from $SRC_PLIST"; return 1; }
   echo "0057: $LABEL loaded; $DST root-owned and current"

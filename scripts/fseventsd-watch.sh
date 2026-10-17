@@ -9,40 +9,60 @@
 # took swap to 5.1 of 6 GB; the fresh daemon read 3.5 MB. An earlier incident had it at 40 GB
 # before a crash. Nothing on the box said so in either case.
 #
-# THE INSTRUMENT is the daemon's physical footprint (top's MEM column, which counts its compressed
-# pages) plus the compressed part on its own (CMPRS). fseventsd runs as root, so libproc's
-# proc_pid_rusage refuses it from uid 501 (the pass in scripts/lib/capacity-attrib.py cannot see
-# it); `top -l 1 -pid` can, for ~0.8 CPU-s per read (measured 2026-10-04). RSS is no instrument here:
-# it leaves the compressed bulk out (the fresh daemon read RSS 14 MB, footprint 3.5 MB).
+# THE INSTRUMENT is the daemon's physical footprint, which counts its compressed pages, plus the
+# compressed part on its own. Primary read: `footprint --pid <pid> -f bytes --swapped`, exact bytes
+# (Footprint: header) and the TOTAL row's (Swapped) column, ~0.04 s (measured 2026-10-17). It needs
+# root for a root pid, so the root watchdog gets it; a uid-501 run falls back to `top -l 1 -pid`
+# (MEM / CMPRS, rounded to G past ~1 GB, ~0.8 CPU-s per read, 2026-10-04). libproc's proc_pid_rusage
+# refuses a root pid from uid 501 (scripts/lib/capacity-attrib.py cannot see it). RSS is no
+# instrument here: it leaves the compressed bulk out (the fresh daemon read RSS 14 MB, footprint 3.5 MB).
+#
+# THE EARLY FLOOR (docs/research/load-root-cause-2026-10-17/DESIGN.md X2). Healthy maximum over 12 d
+# was 92 MB; both later episodes ramped past 1 GB hours before 16 GB (a replay of the root log fires
+# at 2026-10-09 15:09 and 2026-10-16 18:11 instead of ~06:40 on 10-17). At or past EARLY_MB the verdict
+# is `act` and feeds the same restart path, cooldown and ledger as the 16 GB floor; each row names the
+# floor that fired (`"trigger":"early"|"act"|"none"`). With it on, the warn rung only shows when
+# EARLY_MB is 0 (off) or set above WARN_MB.
+#
+# THE CPU ARM IS LOG-ONLY (>= 7 d of rows first). One `ps -o pcpu= -p <pid>` read per run; the row
+# records cpu_pct and cpu_would_fire (pcpu >= CPU_PCT on a daemon at least CPU_MIN_AGE_S old). It
+# never acts, pages or moves the verdict. Before it may ever act it needs ALL of: main-thread UTIME
+# delta (`ps -M`) >= 90% of the interval, user:sys >= 20:1, other threads near 0, 3 runs, daemon age
+# >= 2 h (so the post-restart rescan cannot re-fire it), a cooldown longer than the footprint arm's,
+# and a week of rows with zero firings on healthy intervals (freeze-convoy PLAN.md:113,142, F8c).
 #
 # MODES
 #   fseventsd-watch.sh              measure, print one line + verdict=, append the JSONL log
 #   fseventsd-watch.sh --notify     + page (cc-desk-page: the desk, else the operator's banner and
 #                                    phone) when the verdict rises (ok -> warn -> act), re-asserted
 #                                    every RENOTIFY_S while it stays above ok
-#   fseventsd-watch.sh --restart    ROOT ONLY: at or past ACT_MB on ACT_RUNS consecutive runs of one
-#                                    pid, and past the cooldown, sample the daemon's stack, SIGTERM
-#                                    it (SIGKILL after TERM_WAIT_S), confirm launchd brought it back
-#                                    under a NEW pid, and append one ledger row per restart.
+#   fseventsd-watch.sh --restart    ROOT ONLY: at `act` (EARLY_MB or ACT_MB) on ACT_RUNS consecutive
+#                                    runs of one pid, and past the cooldown, sample the daemon's stack,
+#                                    SIGTERM it (SIGKILL after TERM_WAIT_S), confirm launchd brought it
+#                                    back under a NEW pid, and append one ledger row per restart.
 #
-# VERDICTS: ok | warn (footprint >= WARN_MB) | act (footprint >= ACT_MB) | absent | unknown
+# VERDICTS: ok | warn (footprint >= WARN_MB) | act (footprint >= EARLY_MB or >= ACT_MB) | absent | unknown
 #
 # WHAT A RESTART COSTS: fseventsd's clients (Spotlight, Time Machine, file watchers) see an event-id
 # discontinuity and rescan the volumes they watch. That is what the operator's manual kill cost too,
-# and it is cheaper than a full compressor; the cooldown keeps it rare.
+# and it is cheaper than a full compressor; the cooldown keeps it rare. A SIGKILL restart (the daemon
+# ignored SIGTERM) can force one Time Machine deep scan of each backed-up volume on the next backup.
 #
-# ENV (thresholds; fresh daemon 3.5 MB, incidents 40 GB and 64 GB)
+# ENV (thresholds; fresh daemon 3.5 MB, healthy max 92 MB, incidents 12-16 GB, 40 GB and 64 GB)
 #   FSE_WATCH=0                     kill switch: prints verdict=ok, touches nothing
+#   FSE_WATCH_EARLY_MB=1024         early floor: verdict act, trigger early; 0 turns it off
 #   FSE_WATCH_WARN_MB=8192          warn floor (page once)
 #   FSE_WATCH_ACT_MB=16384          act floor (page again; the root watchdog restarts at it)
-#   FSE_WATCH_ACT_RUNS=2            consecutive runs of the same pid at/over ACT_MB before a restart
+#   FSE_WATCH_ACT_RUNS=2            consecutive `act` runs of the same pid before a restart
+#   FSE_WATCH_CPU_PCT=90            cpu arm (log-only): would fire at/over this ps pcpu ...
+#   FSE_WATCH_CPU_MIN_AGE_S=7200    ... on a daemon at least this old
 #   FSE_WATCH_RESTART_GAP_S=1800    minimum spacing between restarts
 #   FSE_WATCH_TERM_WAIT_S=10        SIGTERM grace before SIGKILL
 #   FSE_WATCH_RESPAWN_WAIT_S=20     how long to wait for launchd's new pid before reporting none
 #   FSE_WATCH_RENOTIFY_S=21600      re-page interval while still above ok
 #   FSE_WATCH_SAMPLE_DIR=/var/log/claude-fseventsd-samples   a 3 s stack sample of the daemon is
 #   FSE_WATCH_SAMPLE_KEEP=5         written here just before each restart; newest N kept
-# SEAMS: FSE_WATCH_PS FSE_WATCH_TOP FSE_WATCH_SYSCTL FSE_WATCH_KILL FSE_WATCH_SLEEP FSE_WATCH_PAGE
+# SEAMS: FSE_WATCH_PS FSE_WATCH_FOOTPRINT FSE_WATCH_TOP FSE_WATCH_SYSCTL FSE_WATCH_KILL FSE_WATCH_SLEEP FSE_WATCH_PAGE
 #        FSE_WATCH_SAMPLE (sampler binary; 0 = no sample) FSE_WATCH_STATE FSE_WATCH_LOG
 #        FSE_WATCH_LEDGER FSE_WATCH_NOW FSE_WATCH_ROOT_OK (tests: allow --restart without EUID 0)
 set -uo pipefail
@@ -52,7 +72,7 @@ for a in "$@"; do
   case "$a" in
     --notify) NOTIFY=1 ;;
     --restart) RESTART=1 ;;
-    -h|--help) sed -n 2,47p "$0"; exit 0 ;;
+    -h|--help) sed -n 2,67p "$0"; exit 0 ;;
     *) echo "fseventsd-watch: unknown argument: $a" >&2; exit 2 ;;
   esac
 done
@@ -61,14 +81,18 @@ if [ "${FSE_WATCH:-1}" = 0 ]; then
   printf 'fseventsd-watch: disabled (FSE_WATCH=0)\nverdict=ok\n'; exit 0
 fi
 
+EARLY_MB="${FSE_WATCH_EARLY_MB:-1024}"
 WARN_MB="${FSE_WATCH_WARN_MB:-8192}"
 ACT_MB="${FSE_WATCH_ACT_MB:-16384}"
 ACT_RUNS="${FSE_WATCH_ACT_RUNS:-2}"
+CPU_PCT="${FSE_WATCH_CPU_PCT:-90}"
+CPU_MIN_AGE_S="${FSE_WATCH_CPU_MIN_AGE_S:-7200}"
 RESTART_GAP_S="${FSE_WATCH_RESTART_GAP_S:-1800}"
 TERM_WAIT_S="${FSE_WATCH_TERM_WAIT_S:-10}"
 RESPAWN_WAIT_S="${FSE_WATCH_RESPAWN_WAIT_S:-20}"
 RENOTIFY_S="${FSE_WATCH_RENOTIFY_S:-21600}"
 PS_BIN="${FSE_WATCH_PS:-/bin/ps}"
+FOOTPRINT_BIN="${FSE_WATCH_FOOTPRINT:-/usr/bin/footprint}"
 TOP_BIN="${FSE_WATCH_TOP:-/usr/bin/top}"
 SYSCTL_BIN="${FSE_WATCH_SYSCTL:-/usr/sbin/sysctl}"
 KILL_BIN="${FSE_WATCH_KILL:-/bin/kill}"
@@ -110,9 +134,22 @@ fi
 read -r PID ETIME <<<"$row"
 AGE_S="$(to_s "$ETIME")"
 
+# footprint's exact bytes for that pid, in MB: the "<name> [<pid>]: ... Footprint: <n> B" header,
+# and the TOTAL row's (Swapped) column as the compressed part. --pid, never -p: given a pid it cannot
+# analyze, -p falls back to a NAME match and reports some other process (measured 2026-10-17). Exits
+# 1 unless the header names THIS pid, and footprint exits 0 even when it refuses, so a refusal, a
+# failure and a foreign report all fall through to top.
+FP_SRC=footprint
+read -r FP_MB CMPRS_MB <<<"$("$FOOTPRINT_BIN" --pid "$PID" -f bytes --swapped 2>/dev/null | /usr/bin/awk -v pid="$PID" '
+  !hdr && index($0, "[" pid "]:") && match($0, /Footprint: [0-9]+ B/) {
+    f = substr($0, RSTART + 11, RLENGTH - 13); hdr = 1; next }
+  hdr && $NF == "TOTAL" && $4 == "B" && $3 ~ /^[0-9]+$/ { c = $3 }
+  END { if (!hdr) exit 1; printf "%d %d\n", f / 1048576, c / 1048576 }')"
+case "$FP_MB" in ''|*[!0-9]*)
 # top's MEM and CMPRS for that pid, in MB. Units are B/K/M/G/T with an optional +/- trend suffix
 # ("3553K", "64G", "1024M+"). Exits 1 when the pid's row is missing or a field does not parse, so an
 # unreadable instrument reads `unknown`, never a fabricated healthy 0.
+FP_SRC=top
 read -r FP_MB CMPRS_MB <<<"$("$TOP_BIN" -l 1 -pid "$PID" -stats pid,mem,cmprs 2>/dev/null | /usr/bin/awk -v pid="$PID" '
   function mb(v,  n, u) {
     sub(/[+-]$/, "", v)
@@ -124,7 +161,8 @@ read -r FP_MB CMPRS_MB <<<"$("$TOP_BIN" -l 1 -pid "$PID" -stats pid,mem,cmprs 2>
     if (u == "G") return n * 1024
     return n * 1048576 }
   $1 == pid { f = mb($2); c = mb($3); if (f < 0 || c < 0) exit 1; printf "%d %d\n", f, c; found = 1; exit }
-  END { if (!found) exit 1 }')"
+  END { if (!found) exit 1 }')" ;;
+esac
 case "$FP_MB" in ''|*[!0-9]*)
   printf 'fseventsd-watch: pid=%s footprint unreadable (top -l 1 -pid) — cannot judge\nverdict=unknown\n' "$PID"; exit 0 ;;
 esac
@@ -150,9 +188,20 @@ if [ "$prev_pid" = "$PID" ] && [ -n "$prev_ts" ] && [ "$NOW" -gt "$prev_ts" ] 2>
   GROWTH=$(( (FP_MB - prev_fp) * 3600 / (NOW - prev_ts) ))
 fi
 
-if [ "$FP_MB" -ge "$ACT_MB" ]; then VERDICT=act
+# TRIGGER names the floor behind an `act`: the 16 GB floor wins when both are past.
+TRIGGER=none
+if [ "$FP_MB" -ge "$ACT_MB" ]; then VERDICT=act; TRIGGER=act
+elif [ "$EARLY_MB" -gt 0 ] 2>/dev/null && [ "$FP_MB" -ge "$EARLY_MB" ]; then VERDICT=act; TRIGGER=early
 elif [ "$FP_MB" -ge "$WARN_MB" ]; then VERDICT=warn
 else VERDICT=ok; fi
+
+# The CPU arm, LOG-ONLY: nothing below reads CPU_FIRE except the JSONL row (header: THE CPU ARM).
+CPU=null; CPU_FIRE=false
+_c="$("$PS_BIN" -o pcpu= -p "$PID" 2>/dev/null | /usr/bin/awk 'NR == 1 && $1 ~ /^[0-9.]+$/ { printf "%d", $1 }')"
+case "$_c" in ''|*[!0-9]*) ;; *)
+  CPU="$_c"
+  if [ "$CPU" -ge "$CPU_PCT" ] && [ "$AGE_S" -ge "$CPU_MIN_AGE_S" ] 2>/dev/null; then CPU_FIRE=true; fi ;;
+esac
 
 # Consecutive runs of THIS pid at or past the act floor; a new daemon starts the count from zero.
 if [ "$VERDICT" != act ]; then act_runs=0
@@ -201,8 +250,8 @@ if [ "$RESTART" = 1 ]; then
         ACTION=restart-failed
       fi
       (umask 022; /bin/mkdir -p "$(dirname "$LEDGER")") 2>/dev/null
-      printf '{"ts":%s,"old_pid":%s,"new_pid":%s,"fp_mb":%s,"cmprs_mb":%s,"age_s":%s,"swap_mb":%s,"signal":"%s","action":"%s","sample":"%s"}\n' \
-        "$NOW" "$PID" "${NEW_PID:-null}" "$FP_MB" "$CMPRS_MB" "$AGE_S" "$SWAP_MB" "$SIGNAL" "$ACTION" "$SAMPLE_FILE" >> "$LEDGER" 2>/dev/null
+      printf '{"ts":%s,"old_pid":%s,"new_pid":%s,"fp_mb":%s,"cmprs_mb":%s,"age_s":%s,"swap_mb":%s,"signal":"%s","action":"%s","sample":"%s","verdict":"%s","trigger":"%s"}\n' \
+        "$NOW" "$PID" "${NEW_PID:-null}" "$FP_MB" "$CMPRS_MB" "$AGE_S" "$SWAP_MB" "$SIGNAL" "$ACTION" "$SAMPLE_FILE" "$VERDICT" "$TRIGGER" >> "$LEDGER" 2>/dev/null
     fi
   fi
 elif [ "$NOTIFY" = 1 ] && [ "$VERDICT" != ok ]; then
@@ -230,8 +279,9 @@ case "$ACTION" in page-undelivered-*|page-no-transport) STATE_VERDICT="$prev_ver
 
 (umask 022; /bin/mkdir -p "$(dirname "$STATE")" "$(dirname "$LOG")") 2>/dev/null
 printf '%s %s %s %s %s %s %s\n' "$PID" "$FP_MB" "$NOW" "$STATE_VERDICT" "$last_notify" "$last_restart" "$act_runs" > "$STATE" 2>/dev/null
-printf '{"ts":%s,"pid":%s,"fp_mb":%s,"cmprs_mb":%s,"growth_mb_h":%s,"age_s":%s,"swap_mb":%s,"verdict":"%s","action":"%s"%s}\n' \
-  "$NOW" "$PID" "$FP_MB" "$CMPRS_MB" "$GROWTH" "$AGE_S" "$SWAP_MB" "$VERDICT" "$ACTION" "${NEW_PID:+,\"new_pid\":$NEW_PID}" >> "$LOG" 2>/dev/null
+printf '{"ts":%s,"pid":%s,"fp_mb":%s,"cmprs_mb":%s,"growth_mb_h":%s,"age_s":%s,"swap_mb":%s,"verdict":"%s","action":"%s"%s,"trigger":"%s","cpu_pct":%s,"cpu_would_fire":%s,"fp_src":"%s"}\n' \
+  "$NOW" "$PID" "$FP_MB" "$CMPRS_MB" "$GROWTH" "$AGE_S" "$SWAP_MB" "$VERDICT" "$ACTION" "${NEW_PID:+,\"new_pid\":$NEW_PID}" \
+  "$TRIGGER" "$CPU" "$CPU_FIRE" "$FP_SRC" >> "$LOG" 2>/dev/null
 printf 'fseventsd-watch: pid=%s fp=%sMB cmprs=%sMB growth=%sMB/h age=%ss swap=%sMB action=%s%s\nverdict=%s\n' \
   "$PID" "$FP_MB" "$CMPRS_MB" "$GROWTH" "$AGE_S" "$SWAP_MB" "$ACTION" "${NEW_PID:+ new_pid=$NEW_PID}" "$VERDICT"
 exit 0

@@ -17,8 +17,12 @@ setup() {
   export FSE_WATCH_NOW=1790000000
   daemon 317 4-00:00:00
   mem 317 3553K 0B
-  printf '#!/bin/bash\ncat "%s/ps.out"\n' "$F" > "$F/ps"
-  printf '#!/bin/bash\ncat "%s/top.out"\n' "$F" > "$F/top"
+  # ps: `-o pcpu= -p <pid>` (the CPU arm's one-pid read) answers cpu.out; anything else is the table
+  printf '#!/bin/bash\nif [ "$1" = -o ]; then cat "%s/cpu.out" 2>/dev/null; else cat "%s/ps.out"; fi\n' "$F" "$F" > "$F/ps"
+  printf '#!/bin/bash\necho "$*" >> "%s/top.argv"; cat "%s/top.out"\n' "$F" "$F" > "$F/top"
+  # footprint: answers fp.out when a test wrote one, else refuses the way a non-root run on a root pid
+  # does (message, rc 0), so every test that does not opt in exercises the top fallback.
+  printf '#!/bin/bash\nif [ -s "%s/fp.out" ]; then cat "%s/fp.out"; else echo "footprint: Unable to analyze process with pid $2 (try as root?)" >&2; fi\n' "$F" "$F" > "$F/footprint"
   printf '#!/bin/bash\necho "total = 43008.00M  used = 41676.50M  free = 1331.50M  (encrypted)"\n' > "$F/sysctl"
   printf '#!/bin/bash\necho "$*" >> "%s/page.argv"\n' "$F" > "$F/page"
   printf '#!/bin/bash\nexit 0\n' > "$F/sleep"
@@ -37,8 +41,9 @@ exit 0
 EOF
   # shellcheck disable=SC2016  # $*, $3, $4 are the stub's own args, expanded when it runs
   printf '#!/bin/bash\necho "$*" >> "%s/sample.argv"; [ "$3" = -file ] && echo stack > "$4"\n' "$F" > "$F/sample"
-  chmod +x "$F/ps" "$F/top" "$F/sysctl" "$F/page" "$F/sleep" "$F/kill" "$F/sample"
+  chmod +x "$F/ps" "$F/top" "$F/sysctl" "$F/page" "$F/sleep" "$F/kill" "$F/sample" "$F/footprint"
   export FSE_WATCH_PS="$F/ps" FSE_WATCH_TOP="$F/top" FSE_WATCH_SYSCTL="$F/sysctl" FSE_WATCH_PAGE="$F/page"
+  export FSE_WATCH_FOOTPRINT="$F/footprint"
   export FSE_WATCH_SLEEP="$F/sleep" FSE_WATCH_KILL="$F/kill" FSE_WATCH_SAMPLE="$F/sample" FSE_WATCH_SAMPLE_DIR="$F/samples"
 }
 
@@ -52,6 +57,18 @@ mem() {
   printf '%s\n' "Processes: 812 total, 4 running, 808 sleeping, 5021 threads" \
     "PhysMem: 63G used (8G wired, 30G compressor), 600M unused." "" \
     "PID    MEM   CMPRS COMMAND" "$1  $2 $3 fseventsd" > "$F/top.out"
+}
+# fpb <pid> <bytes> <swapped bytes> — `footprint --pid <pid> -f bytes --swapped`, in the layout
+# /usr/bin/footprint printed on 2026-10-17 (Darwin 24.6), one category row and the TOTAL row
+fpb() {
+  printf '%s\n' "================================================================================" \
+    "fseventsd [$1]: 64-bit    Footprint: $2 B (16384 bytes per page)" \
+    "================================================================================" "" \
+    "      Dirty     (Swapped)         Clean   Reclaimable    Regions    Category" \
+    "        ---           ---           ---           ---        ---    ---" \
+    "   $2 B   $3 B      589824 B           0 B        200    MALLOC_SMALL" \
+    "   $2 B   $3 B      589824 B           0 B        384    TOTAL" "" \
+    "Auxiliary data:" "    phys_footprint: $2 B" > "$F/fp.out"
 }
 run_at() { FSE_WATCH_NOW="$1" run "$W" "${@:2}"; }
 root_at() { FSE_WATCH_ROOT_OK=1 FSE_WATCH_NOW="$1" run "$W" --restart; }
@@ -72,13 +89,14 @@ field() { printf '%s\n' "$output" | grep -o "$1=[^ ]*" | head -1 | cut -d= -f2; 
   [ "$(field fp)" = 65536MB ]
   [ "$(field cmprs)" = 57344MB ]
   [[ "$output" == *"verdict=act"* ]] || false
-  mem 317 1024M+ 512M-
+  mem 317 1023M+ 512M-
   run "$W"
-  [ "$(field fp)" = 1024MB ]
+  [ "$(field fp)" = 1023MB ]
   [[ "$output" == *"verdict=ok"* ]] || false
 }
 
-@test "thresholds: 8 GB is warn, 16 GB is act, and both are env knobs" {
+@test "thresholds (early floor off): 8 GB is warn, 16 GB is act, and both are env knobs" {
+  export FSE_WATCH_EARLY_MB=0
   mem 317 8192M 0B;  run "$W"; [[ "$output" == *"verdict=warn"* ]] || false
   mem 317 8191M 0B;  run "$W"; [[ "$output" == *"verdict=ok"* ]] || false
   mem 317 16G 0B;    run "$W"; [[ "$output" == *"verdict=act"* ]] || false
@@ -96,6 +114,7 @@ field() { printf '%s\n' "$output" | grep -o "$1=[^ ]*" | head -1 | cut -d= -f2; 
 }
 
 @test "--notify pages on each RISE (ok→warn, warn→act), is damped while level, re-pages after the interval" {
+  export FSE_WATCH_EARLY_MB=0                         # the warn rung exists only with the early floor off
   mem 317 9G 0B;  run_at 1790000000 --notify
   [[ "$output" == *"action=paged"*"verdict=warn"* ]] || false
   [[ "$(cat "$F/page.argv")" == "--source fseventsd-watch -- fseventsd warn: footprint 9216 MB"*"sudo killall fseventsd"*"0057-fseventsd-watchdog.sh --confirm com.claude.fseventsd-watchdog" ]] || false
@@ -175,10 +194,89 @@ field() { printf '%s\n' "$output" | grep -o "$1=[^ ]*" | head -1 | cut -d= -f2; 
 }
 
 @test "--restart below act does nothing, however long it lasts" {
-  mem 317 12G 1G
+  mem 317 1023M 1G
   root_at 1790000000; root_at 1790000300; root_at 1790000600
+  [[ "$output" == *"action=none"*"verdict=ok"* ]] || false
+  mem 317 12G 1G                                        # with the early floor off, warn never acts
+  FSE_WATCH_EARLY_MB=0 FSE_WATCH_ROOT_OK=1 FSE_WATCH_NOW=1790001200 run "$W" --restart
+  FSE_WATCH_EARLY_MB=0 FSE_WATCH_ROOT_OK=1 FSE_WATCH_NOW=1790001500 run "$W" --restart
   [[ "$output" == *"action=none"*"verdict=warn"* ]] || false
   [ ! -e "$F/kill.argv" ]
+}
+
+@test "early floor: 1100 MB on ONE run waits; the 2nd consecutive run of that pid restarts, trigger=early" {
+  mem 317 1100M 0B
+  root_at 1790000000
+  [[ "$output" == *"action=none"*"verdict=act"* ]] || false
+  [ ! -e "$F/kill.argv" ]
+  root_at 1790000300
+  [[ "$output" == *"action=restarted new_pid=9001"*"verdict=act"* ]] || false
+  [ "$(head -1 "$F/kill.argv")" = "-TERM 317" ]
+  grep -q '"old_pid":317,"new_pid":9001,"fp_mb":1100,.*"action":"restarted","sample":"[^"]*","verdict":"act","trigger":"early"}$' "$FSE_WATCH_LEDGER"
+  grep -q '"verdict":"act","action":"restarted","new_pid":9001,"trigger":"early",' "$FSE_WATCH_LOG"
+  daemon 317 4-00:00:00                                 # the kill stub respawned 9001; back to 317
+  mem 317 20G 0B; FSE_WATCH_NOW=1790000600 run "$W"
+  run tail -1 "$FSE_WATCH_LOG"
+  [[ "$output" == *'"trigger":"act"'* ]] || false
+  mem 317 3553K 0B; FSE_WATCH_NOW=1790000900 run "$W"
+  run tail -1 "$FSE_WATCH_LOG"
+  [[ "$output" == *'"trigger":"none"'* ]] || false
+}
+
+@test "footprint: exact bytes from footprint --pid, Swapped as cmprs; top is never run when it answers" {
+  fpb 317 1153433600 104857600                         # 1100 MiB exactly, 100 MiB swapped
+  mem 317 1G 0B                                         # top would round it to 1024
+  run "$W"
+  [ "$(field fp)" = 1100MB ]
+  [ "$(field cmprs)" = 100MB ]
+  [ ! -e "$F/top.argv" ]
+  grep -q '"fp_src":"footprint"' "$FSE_WATCH_LOG"
+  printf '#!/bin/bash\necho "$*" > "%s/fp.argv"; cat "%s/fp.out"\n' "$F" "$F" > "$F/footprint"
+  run "$W"
+  [ "$(cat "$F/fp.argv")" = "--pid 317 -f bytes --swapped" ]
+}
+
+@test "footprint refuses, fails or answers for another pid ⇒ top fallback, and the row says so" {
+  mem 317 2048M 1G
+  run "$W"                                              # default stub: the non-root refusal, rc 0
+  [ "$(field fp)" = 2048MB ]
+  grep -q "^-l 1 -pid 317 " "$F/top.argv"
+  run tail -1 "$FSE_WATCH_LOG"; [[ "$output" == *'"fp_src":"top"'* ]] || false
+  fpb 999 1153433600 0; run "$W"                        # a different process's report is not ours
+  [ "$(field fp)" = 2048MB ]
+  printf '#!/bin/bash\nexit 1\n' > "$F/footprint"; run "$W"
+  [ "$(field fp)" = 2048MB ]
+}
+
+@test "cpu arm is LOG-ONLY: 48 MB at 100% CPU reads ok, records would-fire, pages and signals nothing" {
+  mem 317 48M 0B; echo '100.0' > "$F/cpu.out"
+  run "$W" --notify
+  [[ "$output" == *"action=none"*"verdict=ok"* ]] || false
+  [ ! -e "$F/page.argv" ]
+  grep -q '"cpu_pct":100,"cpu_would_fire":true' "$FSE_WATCH_LOG"
+  root_at 1790000300; root_at 1790000600
+  [[ "$output" == *"action=none"*"verdict=ok"* ]] || false
+  [ ! -e "$F/kill.argv" ]
+}
+
+@test "cpu arm: a fresh pid at 95% CPU, 40 MB, 10 min old reads ok and would not fire" {
+  daemon 9001 10:00; mem 9001 40M 0B; echo ' 95.3' > "$F/cpu.out"
+  run "$W" --notify
+  [[ "$output" == *"verdict=ok"* ]] || false
+  grep -q '"cpu_pct":95,"cpu_would_fire":false' "$FSE_WATCH_LOG"
+  : > "$F/cpu.out"; run "$W"                            # unreadable cpu is null, never a 0
+  run tail -1 "$FSE_WATCH_LOG"; [[ "$output" == *'"cpu_pct":null,"cpu_would_fire":false'* ]] || false
+}
+
+@test "replay 2026-10-16 (pid 19766, /var/log/claude-fseventsd-watchdog.jsonl): early floor restarts at 18:11:43 CDT" {
+  daemon 19766 6-19:00:00
+  for r in 1792189567:85 1792189869:406 1792191390:909 1792191694:1009 1792192000:1072; do
+    mem 19766 "${r#*:}M" 0B; root_at "${r%%:*}"
+    [[ "$output" == *"action=none"* ]] || false
+  done
+  mem 19766 1161M 0B; root_at 1792192303
+  [[ "$output" == *"action=restarted new_pid=9001"* ]] || false
+  grep -q '^{"ts":1792192303,"old_pid":19766,.*"trigger":"early"}$' "$FSE_WATCH_LEDGER"
 }
 
 @test "--restart refuses to run without root" {
@@ -219,4 +317,10 @@ field() { printf '%s\n' "$output" | grep -o "$1=[^ ]*" | head -1 | cut -d= -f2; 
   [[ "$output" == *"verdict=act"* ]] || false
   FSE_WATCH_ROOT_OK=1 FSE_WATCH_ACT_RUNS=1 run /bin/bash "$W" --restart
   [[ "$output" == *"action=restarted new_pid=9001"* ]] || false
+  # the footprint parser, the early trigger and the cpu arm under 3.2 too
+  daemon 317 4-00:00:00; fpb 317 1153433600 0; echo '99.9' > "$F/cpu.out"
+  FSE_WATCH_ROOT_OK=1 FSE_WATCH_ACT_RUNS=1 FSE_WATCH_NOW=1790009000 run /bin/bash "$W" --restart
+  [[ "$output" == *"fp=1100MB"*"action=restarted new_pid=9001"* ]] || false
+  grep -q '"cpu_pct":99,"cpu_would_fire":true,"fp_src":"footprint"' "$FSE_WATCH_LOG"
+  tail -1 "$FSE_WATCH_LEDGER" | grep -q '"trigger":"early"}$'
 }
