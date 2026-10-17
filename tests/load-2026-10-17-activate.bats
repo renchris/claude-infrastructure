@@ -44,7 +44,10 @@ case "\$1" in
     # A loaded job is a LIVE daemon: it rewrites its heartbeat every 5 s, which a loaded box can stretch
     # past any fixed wait, so the stub refreshes it whenever launchd is asked about the job.
     [ -f "$STUB/loaded" ] || exit 113
-    printf '{"v": 1, "pid": %s, "start": "1.000000"}\n' "\${STUB_HB_PID:-4242}" > "$HOME/.claude/logs/attrib-latest.json"
+    # \$STUB/det, when present, is the daemon's detector-counter object (leg 3); live() writes it.
+    det="\$(cat "$STUB/det" 2>/dev/null)"
+    printf '{"v": 1, "pid": %s, "start": "1.000000"%s}\n' "\${STUB_HB_PID:-4242}" "\${det:+, \"detectors\": \$det}" \
+      > "$HOME/.claude/logs/attrib-latest.json"
     printf '\tstate = running\n\tpid = 4242\n' ;;
   print-disabled) cat "$STUB/disabled" 2>/dev/null; exit 0 ;;
   enable) exit 0 ;;
@@ -96,7 +99,15 @@ old_plist() {
   touch -t "$(date -r $(( $(date +%s) - 700000 )) +%Y%m%d%H%M.%S)" "$LA"
 }
 # D2 gate leg 2b: launchd runs pid 4242 and the heartbeat, fresh, names it.
-live() { touch "$STUB/loaded"; printf '{"v": 1, "pid": 4242}\n' > "$LOGS/attrib-latest.json"; }
+# Leg 3: the daemon's detector counters. Default: first evaluated tick 700000 s ago (8.1 d) at 5 s,
+# every tick present. live <since_age_s> <ticks> overrides either.
+live() {
+  local age="${1:-700000}" ticks="${2:-140000}"
+  touch "$STUB/loaded"
+  printf '{"live": true, "since": %s, "ticks": %s, "interval": 5.0, "err": null}' \
+    "$(( $(date +%s) - age ))" "$ticks" > "$STUB/det"
+  printf '{"v": 1, "pid": 4242, "detectors": %s}\n' "$(cat "$STUB/det")" > "$LOGS/attrib-latest.json"
+}
 
 @test "a bare run reports every step and writes nothing" {
   seed_observe; seed_d2 900000
@@ -194,6 +205,25 @@ live() { touch "$STUB/loaded"; printf '{"v": 1, "pid": 4242}\n' > "$LOGS/attrib-
   [ ! -e "$AUTO/capacity-alarm-load-rung.mode" ]
 }
 
+@test "--confirm capacity-alarm-load-rung is refused when the detectors did not run continuously, however old the install" {
+  wire_d2; old_plist
+  live 700000 70000            # 8.1 d since the first evaluated tick, but ticks cover only 50% of it
+  run bash "$SCRIPT" --confirm capacity-alarm-load-rung </dev/null
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"have not run continuously for 7 d"* ]]
+  [ ! -e "$AUTO/capacity-alarm-load-rung.mode" ]
+  live 300000 60000            # every tick present, but only 3.5 d of them
+  run bash "$SCRIPT" --confirm capacity-alarm-load-rung </dev/null
+  [ "$status" -eq 1 ]
+  [ ! -e "$AUTO/capacity-alarm-load-rung.mode" ]
+  : > "$STUB/det"                                                   # a pre-wiring daemon: no counters
+  printf '{"v": 1, "pid": 4242}\n' > "$LOGS/attrib-latest.json"
+  run bash "$SCRIPT" --confirm capacity-alarm-load-rung </dev/null
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no counters"* ]]
+  [ ! -e "$AUTO/capacity-alarm-load-rung.mode" ]
+}
+
 @test "--confirm capacity-alarm-load-rung with both legs holding writes only its mode file, with no D2 rows at all" {
   wire_d2; old_plist; live
   files > "$BATS_TEST_TMPDIR/before"
@@ -226,6 +256,9 @@ live() { touch "$STUB/loaded"; printf '{"v": 1, "pid": 4242}\n' > "$LOGS/attrib-
 
 @test "no invocation creates the OP-5 promoted file or runs the ms365 migration; all three switches mark .done" {
   seed_observe; seed_d2 700000; wire_d2; old_plist
+  # the daemon this run bootstraps reports 8.1 d of continuous detector ticks (leg 3)
+  printf '{"live": true, "since": %s, "ticks": 140000, "interval": 5.0, "err": null}' \
+    "$(( $(date +%s) - 700000 ))" > "$STUB/det"
   for args in "" "--confirm capacity-attrib" "--confirm worktree-gc-events" "--archive-floor-gb 40" \
               "--confirm capacity-attrib --confirm worktree-gc-events --confirm capacity-alarm-load-rung --archive-floor-gb 40"; do
     # shellcheck disable=SC2086

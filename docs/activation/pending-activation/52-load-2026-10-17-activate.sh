@@ -36,17 +36,19 @@
 # D2 GATE (program lead's ruling 2026-10-17, leg 2 amended): "7 d of D2 record-only" is proven by two
 #   legs, never by D2's own rows. (1) The DEPLOYED ~/.claude/scripts/lib/capacity-attrib.py calls the
 #   detectors (a static grep for capacity-detect / Detectors) AND trunk has a commit that wired them
-#   (`git log -1 -S capacity-detect origin/main -- scripts/lib/capacity-attrib.py`); at time of writing
-#   neither holds, so this step refuses today, and says so. (2) A 7 d clock that starts at the LATER of
+#   (`git log -1 -S capacity-detect origin/main -- scripts/lib/capacity-attrib.py`; W3 landed that
+#   wiring). (2) A 7 d clock that starts at the LATER of
 #   the installed capacity-attrib plist's mtime (this script's cp sets it, and a reinstall resets it)
 #   and that wiring commit's time, AND the daemon is live now: attrib-latest.json under 15 s old,
 #   naming launchd's running pid. D2's rows in ~/.claude/logs/capacity-detect.jsonl are
 #   printed as information only: they are event-sparse (a calm D2 writes none), and `--replay` stamps
 #   them with SERIES time, so neither their count nor their age can prove the detector ran. The
 #   daemon's own series cannot carry the 7 d either: it keeps two 4 MiB generations, ~10 h.
-#   WEAKNESS, stated: leg 2 proves activation (of both the plist and the wiring) 7 d ago plus liveness
-#   now, NOT 7 d of continuous ticks; a daemon that was down for six of those days passes. The sound
-#   measure would be a counter the daemon itself persists per tick. No override flag.
+#   Leg 2 alone proves activation 7 d ago plus liveness now, not continuity: a daemon down for six of
+#   those days would pass it. (3) closes that: the daemon persists its detector counters across
+#   restarts (capacity-attrib.py LiveDetectors: `since` = first evaluated tick, `ticks`), reported in
+#   attrib-latest.json as `detectors`; ticks x interval must cover >= 90% of the >= 7 d since `since`.
+#   No override flag.
 #
 # MIGRATION NUMBERING (WP-16 is the single numbering owner, checked 2026-10-17): origin/main's highest is
 #   0066-hook-if-filters; WP-8's is 0067-ms365-shared on load-w1-ci, so the numbers are distinct. Both
@@ -314,6 +316,19 @@ live_pid="$(lc_pid || true)"; hb_pid="$(latest_pid || true)"; hb_age=999999
 d2_live=0
 [ -n "$live_pid" ] && [ "$hb_pid" = "$live_pid" ] && [ "$hb_age" -le 15 ] && d2_live=1
 echo "   leg 2, $((clock_age / 86400)) d since the later of sampler install and wiring (7 required), live now: $([ "$d2_live" = 1 ] && echo yes || echo no)"
+# Leg 3, continuity: the daemon's own detector counters (capacity-attrib.py LiveDetectors), persisted
+# across restarts. ticks x interval over the time since `since` is the share of that time the detectors
+# actually ran, so a sampler that was installed 7 d ago but down for three of them does not pass.
+det_since="$(/usr/bin/plutil -extract detectors.since raw -o - "$LATEST" 2>/dev/null || true)"
+det_ticks="$(/usr/bin/plutil -extract detectors.ticks raw -o - "$LATEST" 2>/dev/null || true)"
+det_iv="$(/usr/bin/plutil -extract detectors.interval raw -o - "$LATEST" 2>/dev/null || true)"
+det_cov="$(awk -v s="$det_since" -v t="$det_ticks" -v i="$det_iv" -v now="$(date +%s)" '
+  BEGIN { if (s !~ /^[0-9.]+$/ || t !~ /^[0-9]+$/ || i !~ /^[0-9.]+$/ || now - s <= 0) { print "-"; exit }
+          printf "%d %d", (now - s) / 86400, 100 * t * i / (now - s) }')"
+det_days="${det_cov%% *}"; det_pct="${det_cov#* }"
+d2_cont=0
+[ "$det_cov" != "-" ] && [ "$det_days" -ge 7 ] && [ "$det_pct" -ge 90 ] && d2_cont=1
+echo "   leg 3, detectors continuous: $([ "$det_cov" = "-" ] && echo "no counters in $LATEST" || echo "${det_days} d since the first evaluated tick, ran ${det_pct}% of it (7 d and 90% required)")"
 if [ "$do_rung" = 1 ]; then
   if [ "$d2_wired" = 0 ]; then
     refuse "D2 is not running live; capacity-attrib does not call the detectors"
@@ -321,6 +336,8 @@ if [ "$do_rung" = 1 ]; then
     refuse "D2 has run live for $((clock_age / 86400)) d (from the later of the sampler install and the wiring commit); 7 d are required"
   elif [ "$d2_live" = 0 ]; then
     refuse "the capacity-attrib sampler is not live now (launchd pid '${live_pid}', heartbeat pid '${hb_pid}', ${hb_age} s old)"
+  elif [ "$d2_cont" = 0 ]; then
+    refuse "the detectors have not run continuously for 7 d ($([ "$det_cov" = "-" ] && echo "no detector counters" || echo "${det_days} d since the first evaluated tick, ${det_pct}% of it evaluated"))"
   elif write_switch "$RUNG_MODE" record-only; then
     echo "   VERIFIED: $RUNG_MODE reads back 'record-only'"
   else
