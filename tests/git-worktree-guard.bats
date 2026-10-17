@@ -11,7 +11,18 @@ setup() {
   # HERMETICITY (run_gate's blocking test-hermeticity ratchet): fixture $HOME FIRST so every test
   # inherits it. The git commands below already pass -c user.email/-c user.name explicitly, so they
   # do not depend on the real ~/.gitconfig this hides.
-  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude/projects"
+  # The guard now writes a tombstone for every idle linked worktree it lets through (2b), so every
+  # store it can reach points inside this test — the idle-path tests below would otherwise record
+  # into whatever the library's defaults resolve to.
+  export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+  unset WT_TRUNK WT_NOW CC_WTGC_DISPOSAL_LOG CC_WTG_TOMBSTONE CC_WTG_TOMB_TIMEOUT
+  export WT_LEDGER="$BATS_TEST_TMPDIR/ledger.jsonl" WT_TOMB_DIR="$BATS_TEST_TMPDIR/tombs" \
+         WT_STATE_DIR="$BATS_TEST_TMPDIR/state" WT_CONFIG_ROOTS="$HOME/.claude"
+  export WT_EVENTS_FILE="$WT_STATE_DIR/wt-events.jsonl" WT_WAKE_FILE="$WT_STATE_DIR/worktree-gc.wake" \
+         WT_PARK_INDEX="$WT_STATE_DIR/wt-parked" WT_PARK_ROOT="$BATS_TEST_TMPDIR/parked"
+  export CC_WTG_TOMBSTONE_LIB="$BATS_TEST_DIRNAME/../scripts/lib/wt-tombstone.sh"
+  OUT="$BATS_TEST_TMPDIR/hook.out"; ERR="$BATS_TEST_TMPDIR/hook.err"   # guard_split's two streams
   export TDIR="$(mktemp -d)"
   export REPO="$TDIR/repo"
   git init -q "$REPO"
@@ -234,4 +245,172 @@ STUB
   [ "$(printf '%s\n' "$output" | grep -c '^hooks/git-worktree-guard\.sh:')" -eq 0 ] \
     || { echo "detector still names $(printf '%s\n' "$output" | grep -c '^hooks/git-worktree-guard\.sh:') site(s) in this hook"; false; }
   true
+}
+
+# ── the tombstone arm (2b) and the prune arm (3) — DESIGN load-root-cause-2026-10-17 §3.7 item 8 ──
+# WHAT IS LOAD-BEARING. The guard records INSIDE the hook and must stay invisible on success: any byte
+# on stdout or stderr is a change to what the permission flow sees, which is the fault the second
+# revision exists to remove. So every success case asserts BOTH streams empty, and every case asserts
+# the tree is byte-identical afterwards — a PreToolUse hook runs before the permission decision, and a
+# removal that is then denied must find the tree exactly as it was. The RED control at the end runs
+# the pre-change hook on the residue case and pins that it recorded nothing.
+
+lab() { # a bare origin + clone (trunk origin/main) with the X6 ignore list; sets L to the clone
+  L="$BATS_TEST_TMPDIR/lab/main"
+  git init -q --bare -b main "$BATS_TEST_TMPDIR/lab/origin.git"
+  git init -q -b main "$L"
+  printf 'node_modules/\n.next/\nbrag-output/\nasset-workspace/\n' > "$L/.gitignore"
+  echo base > "$L/f.txt"
+  git -C "$L" add -A && git -C "$L" commit -qm base
+  git -C "$L" remote add origin "$BATS_TEST_TMPDIR/lab/origin.git" && git -C "$L" push -q -u origin main
+  git -C "$L" remote set-head origin main
+}
+
+lwt() { # <name> → a linked worktree of $L on branch <name>; prints its physical path
+  git -C "$L" worktree add -q -b "$1" "$BATS_TEST_TMPDIR/lab/wts/$1" main
+  (cd "$BATS_TEST_TMPDIR/lab/wts/$1" && pwd -P)
+}
+
+# stdout → $OUT, stderr → $ERR, both set in setup(). Not assigned inside the helper: `run` executes it
+# in a subshell, so anything it assigned would read EMPTY here and `[ ! -s "" ]` would pass vacuously.
+guard_split() { # <command> [hook] → runs the hook with its two streams split into files; returns its rc
+  printf '{"tool_input":{"command":%s}}' "$(printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" \
+    | bash "${2:-$GUARD}" >"$BATS_TEST_TMPDIR/hook.out" 2>"$BATS_TEST_TMPDIR/hook.err"
+}
+
+nrows() { if [ -f "$WT_LEDGER" ]; then grep -c . "$WT_LEDGER"; else echo 0; fi; }
+lastrow() { tail -1 "$WT_LEDGER"; }
+tree_sums() { (cd "$1" && find . -path ./.git -prune -o -type f -print | LC_ALL=C sort | xargs shasum); }
+dfree_kb() { df -k "$BATS_TEST_TMPDIR" | awk 'NR==2{print $4}'; }
+
+@test "TOMBSTONE: idle tree with ignored residue → exit 0, both streams empty, one guard-snapshot row, residue cloned, tree untouched" {
+  lab; w="$(lwt res)"
+  mkdir -p "$w/brag-output"; echo '{"run":1}' > "$w/brag-output/x.json"
+  before="$(tree_sums "$w")"
+  run guard_split "git -C $L worktree remove $w"
+  [ "$status" -eq 0 ] || { echo "exit $status: $(cat "$ERR")"; false; }
+  [ ! -s "$OUT" ] || { echo "stdout not empty: $(cat "$OUT")"; false; }
+  [ ! -s "$ERR" ] || { echo "stderr not empty: $(cat "$ERR")"; false; }
+  [ "$(nrows)" -eq 1 ]
+  row="$(lastrow)"
+  [ "$(printf '%s' "$row" | jq -r .event)" = guard-snapshot ]
+  [ "$(printf '%s' "$row" | jq -r .mode)" = clone ]
+  [ "$(printf '%s' "$row" | jq -r .actor)" = guard-raw ]
+  [ "$(printf '%s' "$row" | jq -r .path)" = "$w" ]
+  [ "$(printf '%s' "$row" | jq -c .preserved_list)" = '["brag-output"]' ]
+  cmp "$w/brag-output/x.json" "$WT_TOMB_DIR/$(printf '%s' "$row" | jq -r .id)/residue/brag-output/x.json"
+  [ "$(tree_sums "$w")" = "$before" ] || { echo "the tree changed under the hook"; false; }
+  git -C "$L" worktree list --porcelain | grep -Fx "worktree $w" >/dev/null
+}
+
+@test "TOMBSTONE: only a node_modules matching its pnpm lock → a row with an empty preserved_list" {
+  lab; w="$(lwt nm)"
+  echo 'lockfileVersion: 9' > "$w/pnpm-lock.yaml"
+  git -C "$w" add pnpm-lock.yaml && git -C "$w" commit -qm lock
+  mkdir -p "$w/node_modules/.pnpm" && cp "$w/pnpm-lock.yaml" "$w/node_modules/.pnpm/lock.yaml"
+  run guard_split "git -C $L worktree remove $w"
+  [ "$status" -eq 0 ] && [ ! -s "$OUT" ] && [ ! -s "$ERR" ] || { echo "exit $status: $(cat "$ERR")"; false; }
+  [ "$(nrows)" -eq 1 ]
+  [ "$(lastrow | jq -c .preserved_list)" = '[]' ]
+  [ "$(lastrow | jq -c .caches_skipped)" = '["node_modules"]' ]
+}
+
+@test "TOMBSTONE: --force on a dirty tree → the wip ref holds tracked + untracked at working content; tree untouched and still intact after a later deny" {
+  lab
+  for flags in "--force" "-f -f"; do
+    name="dirty$(printf '%s' "$flags" | tr -dc 'a-z')"
+    w="$(lwt "$name")"
+    echo modified > "$w/f.txt"; echo fresh > "$w/new.txt"
+    before="$(tree_sums "$w")"
+    run guard_split "git -C $L worktree remove $flags $w"
+    [ "$status" -eq 0 ] && [ ! -s "$OUT" ] && [ ! -s "$ERR" ] || { echo "[$flags] exit $status: $(cat "$ERR")"; false; }
+    wip="$(lastrow | jq -r .wip_ref)"
+    [ "$wip" != null ] || { echo "[$flags] no wip_ref in $(lastrow)"; false; }
+    [ "$(git -C "$L" show "$wip:f.txt")" = modified ]
+    [ "$(git -C "$L" show "$wip:new.txt")" = fresh ]
+    # A later hook denies: the removal never runs, and the tree must be exactly as the session left it.
+    [ "$(tree_sums "$w")" = "$before" ] || { echo "[$flags] the tree changed under the hook"; false; }
+    [ "$(git -C "$w" status --porcelain | LC_ALL=C sort | tr '\n' ' ')" = " M f.txt ?? new.txt " ]
+  done
+  # a NON-forced removal of a dirty tree gets no wip snapshot (git refuses it on its own)
+  w="$(lwt dirtyplain)"; echo modified > "$w/f.txt"
+  run guard_split "git -C $L worktree remove $w"
+  [ "$status" -eq 0 ]
+  [ "$(lastrow | jq -r .wip_ref)" = null ]
+}
+
+@test "TOMBSTONE: 120 MB .next and 120 MB asset-workspace both pass; .next skipped, asset-workspace cloned at ~0 free-space cost" {
+  lab
+  w1="$(lwt nextjs)"; mkdir -p "$w1/.next/cache"; mkfile -n 120m "$w1/.next/cache/big.pack"
+  w2="$(lwt assets)"; mkdir -p "$w2/asset-workspace"; mkfile -n 120m "$w2/asset-workspace/big.bin"
+  f0="$(dfree_kb)"
+  run guard_split "git -C $L worktree remove $w1"
+  [ "$status" -eq 0 ] && [ ! -s "$OUT" ] && [ ! -s "$ERR" ] || { echo "next: exit $status: $(cat "$ERR")"; false; }
+  [ "$(lastrow | jq -c .preserved_list)" = '[]' ]
+  [ "$(lastrow | jq -c .caches_skipped)" = '[".next"]' ]
+  [ ! -e "$WT_TOMB_DIR/$(lastrow | jq -r .id)/residue/.next" ]
+  run guard_split "git -C $L worktree remove $w2"
+  [ "$status" -eq 0 ] && [ ! -s "$OUT" ] && [ ! -s "$ERR" ] || { echo "assets: exit $status: $(cat "$ERR")"; false; }
+  f1="$(dfree_kb)"
+  [ "$(lastrow | jq -c .preserved_list)" = '["asset-workspace"]' ]
+  cmp "$w2/asset-workspace/big.bin" "$WT_TOMB_DIR/$(lastrow | jq -r .id)/residue/asset-workspace/big.bin"
+  d=$(( f0 - f1 )); [ "$d" -lt 0 ] && d=$(( -d ))
+  [ "$d" -le 10240 ] || { echo "free space moved ${d} KB across the clones (cap 10240)"; false; }
+}
+
+@test "FAIL-CLOSED: missing library, failed tombstone and an overrun bound each exit 2 naming the step, tree untouched" {
+  lab; w="$(lwt failing)"
+  mkdir -p "$w/brag-output"; echo keep > "$w/brag-output/x.json"
+  before="$(tree_sums "$w")"
+  run env CC_WTG_TOMBSTONE_LIB=/nonexistent/wt-tombstone.sh bash -c "$(declare -f guard_split); GUARD='$GUARD' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' guard_split 'git -C $L worktree remove $w'"
+  [ "$status" -eq 2 ] || { echo "missing lib: exit $status"; false; }
+  grep -F "step 'locate library'" "$BATS_TEST_TMPDIR/hook.err" >/dev/null
+  [ "$(grep -c . "$BATS_TEST_TMPDIR/hook.err")" -eq 1 ]
+  run env WT_LEDGER=/dev/null/ledger.jsonl bash -c "$(declare -f guard_split); GUARD='$GUARD' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' guard_split 'git -C $L worktree remove $w'"
+  [ "$status" -eq 2 ] || { echo "unwritable ledger: exit $status"; false; }
+  grep -F "step 'tombstone' failed" "$BATS_TEST_TMPDIR/hook.err" >/dev/null
+  stub="$BATS_TEST_TMPDIR/stub-lib.sh"
+  printf 'wt_tombstone() { sleep 30; }\n' > "$stub"
+  t0="$(date +%s)"
+  run env CC_WTG_TOMBSTONE_LIB="$stub" CC_WTG_TOMB_TIMEOUT=1 bash -c "$(declare -f guard_split); GUARD='$GUARD' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' guard_split 'git -C $L worktree remove $w'"
+  el=$(( $(date +%s) - t0 ))
+  [ "$status" -eq 2 ] || { echo "overrun: exit $status"; false; }
+  [ "$el" -le 3 ] || { echo "overrun took ${el}s, bound 1s (+1s kill grace)"; false; }
+  grep -F "timed out after 1s" "$BATS_TEST_TMPDIR/hook.err" >/dev/null
+  [ "$(tree_sums "$w")" = "$before" ]
+}
+
+@test "PRUNE: a raw prune of a deleted tree's admin entry → exit 0 silent, one admin-pruned row, admin dir left for the command; --dry-run and -n record nothing" {
+  lab; w="$(lwt gone)"
+  rm -rf "$w"
+  run guard_split "git -C $L worktree prune"
+  [ "$status" -eq 0 ] && [ ! -s "$OUT" ] && [ ! -s "$ERR" ] || { echo "exit $status: $(cat "$ERR")"; false; }
+  [ "$(nrows)" -eq 1 ]
+  [ "$(lastrow | jq -r .event)" = admin-pruned ]
+  [ "$(lastrow | jq -r .branch)" = gone ]
+  [ -d "$L/.git/worktrees/gone" ] || { echo "the hook pruned — only the command may"; false; }
+  for dry in "--dry-run" "-n" "-nv"; do
+    run guard_split "git -C $L worktree prune $dry"
+    [ "$status" -eq 0 ] && [ ! -s "$OUT" ] && [ ! -s "$ERR" ]
+    [ "$(nrows)" -eq 1 ] || { echo "[$dry] recorded a row"; false; }
+  done
+}
+
+@test "SEAM + SCOPE: CC_WTG_TOMBSTONE=off and a non-worktree directory both pass and record nothing" {
+  lab; w="$(lwt seam)"; mkdir -p "$BATS_TEST_TMPDIR/plain"
+  run env CC_WTG_TOMBSTONE=off bash -c "$(declare -f guard_split); GUARD='$GUARD' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' guard_split 'git -C $L worktree remove $w'"
+  [ "$status" -eq 0 ]
+  run guard_split "git -C $L worktree remove $BATS_TEST_TMPDIR/plain"
+  [ "$status" -eq 0 ] && [ ! -s "$OUT" ] && [ ! -s "$ERR" ]
+  [ "$(nrows)" -eq 0 ]
+}
+
+@test "RED CONTROL: the pre-change hook lets the residue case through and records NOTHING" {
+  lab; w="$(lwt red)"
+  mkdir -p "$w/brag-output"; echo '{"run":1}' > "$w/brag-output/x.json"
+  old="$BATS_TEST_TMPDIR/guard-pre.sh"
+  git -C "$BATS_TEST_DIRNAME/.." show 7fa90e0c2:hooks/git-worktree-guard.sh > "$old"
+  run guard_split "git -C $L worktree remove $w" "$old"
+  [ "$status" -eq 0 ]
+  [ "$(nrows)" -eq 0 ] || { echo "the pre-change hook recorded a row — this control no longer discriminates"; false; }
 }

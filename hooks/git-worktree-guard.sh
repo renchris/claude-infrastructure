@@ -13,6 +13,13 @@
 #   (2) `git worktree remove [<flags>] <path>` and a live `claude` is cwd'd in <path>, OR any
 #       process has files open under it (lsof). Idle worktrees pass → teammate lifecycle +
 #       janitor are unaffected (a finished teammate's worktree is idle).
+# Records (DESIGN load-root-cause-2026-10-17 note X6, second revision) — and NEVER rewrites the command:
+#   (2b) an idle linked worktree that (2) lets through gets a tombstone written INSIDE this hook first
+#        (residue cloned, durable refs, a wip snapshot for a forced dirty removal). A tombstone that
+#        fails or overruns its bound BLOCKS (exit 2): a blocked removal is recoverable, an unrecorded
+#        one is not.
+#   (3)  `git worktree prune` gets one admin-pruned row per entry it would remove; the command itself
+#        does the pruning.
 # Fail-OPEN on parse failure / non-matching command. Kill switch: WT_GUARD_DISABLED=1.
 set -uo pipefail
 [ "${WT_GUARD_DISABLED:-0}" = "1" ] && exit 0
@@ -40,9 +47,62 @@ ncmd="$(printf '%s' "$cmd" | sed -E 's/git([[:space:]]+-C[[:space:]]+[^[:space:]
 
 # Fast pass-through: only inspect branch-delete / worktree-remove.
 case "$ncmd" in
-  *"git worktree remove"*|*"git branch -d"*|*"git branch -D"*|*"git branch --delete"*) ;;
+  *"git worktree remove"*|*"git worktree prune"*|*"git branch -d"*|*"git branch -D"*|*"git branch --delete"*) ;;
   *) exit 0 ;;
 esac
+
+# ── the recording half (2b, 3) ────────────────────────────────────────────────────────────────────
+# WHY INSIDE THE HOOK AND SILENT. The first design rewrote the command through updatedInput to
+# `wt-tombstone … && <original>`, and a rewrite with no permissionDecision leaves the permission flow
+# to judge the REWRITTEN compound: a new binary no allow rule names, so a fired session or subagent
+# meets a prompt nobody can answer and hangs. Recording here and exiting 0 with NO output means the
+# permission flow sees exactly the command the session typed. Never emit JSON from these arms.
+# WHY A BOUND OF OUR OWN. Settings give this hook `"timeout": 10`; a hook killed by that outer timeout
+# is a non-blocking error, so the removal would run UNRECORDED. gtimeout 6 fires first and we block.
+# Test seam CC_WTG_TOMBSTONE=off skips both arms (the permission-parity lab needs a guard-on/off pair).
+wtg_lib() { # → path of scripts/lib/wt-tombstone.sh; rc 1 if none. An explicit override is honoured verbatim.
+  if [ -n "${CC_WTG_TOMBSTONE_LIB+set}" ]; then printf '%s' "$CC_WTG_TOMBSTONE_LIB"; [ -f "$CC_WTG_TOMBSTONE_LIB" ]; return; fi
+  local c
+  for c in "$(dirname "$0")/../scripts/lib/wt-tombstone.sh" "$HOME/.claude/scripts/lib/wt-tombstone.sh"; do
+    [ -f "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  return 1
+}
+
+wtg_err=""
+wtg_run() { # <lib> <fn> <args…> → runs fn from a fresh source of lib under the bound; its stderr lands in $wtg_err
+  # A child bash, not a source into this shell: the bound has to be able to kill the whole thing,
+  # and gtimeout signals its own process group, so `cp` grandchildren die with it.
+  local lib="$1" gt rc
+  shift
+  gt="$(command -v gtimeout 2>/dev/null || true)"
+  [ -n "$gt" ] || { [ -x /opt/homebrew/bin/gtimeout ] && gt=/opt/homebrew/bin/gtimeout; }
+  if [ -z "$gt" ]; then wtg_err="gtimeout is not resolvable (PATH=$PATH), so the record cannot be bounded"; return 3; fi
+  # shellcheck disable=SC2016  # $1/$@ are the CHILD's positional args, expanded there on purpose
+  wtg_err="$("$gt" -k 1 "${CC_WTG_TOMB_TIMEOUT:-6}" env -u _WT_TOMBSTONE_SH -u _WT_PARK_SH WT_LOCKCHECK_TIMEOUT=2 \
+    bash -c '. "$1" || exit 3; shift; "$@"' wtg-record "$lib" "$@" 2>&1 >/dev/null)"
+  rc=$?
+  case "$rc" in 124|137) wtg_err="timed out after ${CC_WTG_TOMB_TIMEOUT:-6}s${wtg_err:+ ($wtg_err)}" ;; esac
+  return "$rc"
+}
+
+wtg_seg_tokens() { # <verb> → the tokens of the `git worktree <verb>` segment, one per line, quotes dropped
+  # The segment ends at the first ; & or |, so `remove X && git branch -D y` reads X, never y.
+  printf '%s\n' "$ncmd" | sed -E "s/.*git worktree $1//; s/[;&|].*//" | tr -d "\"'" | tr -s '[:blank:]' '\n' | sed '/^$/d'
+}
+
+wtg_linked_top() { # <path> <repo|""> → prints the path's physical top when it IS a linked worktree of that repo
+  local p="$1" r="${2:-.}" top gd cd rcd
+  [ -d "$p" ] || return 1
+  top="$(git -C "$p" rev-parse --show-toplevel 2>/dev/null)" && top="$(cd "$top" && pwd -P)" || return 1
+  [ "$top" = "$(cd "$p" && pwd -P)" ] || return 1
+  gd="$(git -C "$p" rev-parse --path-format=absolute --git-dir 2>/dev/null)" || return 1
+  cd="$(git -C "$p" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  [ "$gd" != "$cd" ] || return 1   # the main worktree: git refuses to remove it, nothing to record
+  rcd="$(git -C "$r" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  [ "$(cd "$cd" && pwd -P)" = "$(cd "$rcd" && pwd -P)" ] || return 1
+  printf '%s' "$top"
+}
 
 # (1) branch -d/-D guard — refuse to delete a branch that has a worktree.
 # DRAINED, never `grep -q`: this guard's inversion PERMITS the branch delete it exists to refuse —
@@ -140,6 +200,56 @@ if printf '%s' "$ncmd" | grep -E 'git worktree remove([[:space:]]|$)' >/dev/null
   if [ "$live" = "0" ] && "$LSOF" -- "$wtabs" 2>/dev/null | grep . >/dev/null; then live=1; fi
   if [ "$live" = "1" ]; then
     echo "git-worktree-guard: BLOCKED 'git worktree remove $wt' — a live process (likely a Claude session) is cwd'd in / has files open under it. Removing it now yanks the worktree out from under active work (clean tree != idle session). Let 'bash scripts/worktree-gc.sh --prune' handle reaping — it KEEPS anything live and only removes clean+merged+idle>30m worktrees, preserving the branch. Or wait for that session to finish." >&2
+    exit 2
+  fi
+
+  # (2b) The tree is idle, so the removal may proceed — once a tombstone holds what it would destroy.
+  # CLONE, not mv: a PreToolUse hook runs BEFORE the permission decision and before later hooks, so
+  # the removal may still be denied or never run, and then the tree must be exactly as it was. The
+  # row says `guard-snapshot`; the janitor marks it superseded if the path is still a worktree later.
+  if [ "${CC_WTG_TOMBSTONE:-on}" != "off" ]; then
+    rmpath=""; force=0
+    while IFS= read -r t; do
+      case "$t" in --force|-f|-ff) force=1 ;; -*) ;; *) [ -n "$rmpath" ] || rmpath="$t" ;; esac
+    done < <(wtg_seg_tokens remove)
+    # git -C resolves a relative <worktree> against the -C directory, so this must too.
+    case "$rmpath" in /*|'') rmdir_="$rmpath" ;; *) rmdir_="${crepo:+$crepo/}$rmpath" ;; esac
+    # Not a directory, or not a linked worktree of the repo the command names: today's behaviour —
+    # git will refuse it itself, and there is nothing to record.
+    if [ -n "$rmdir_" ] && rmtop="$(wtg_linked_top "$rmdir_" "$crepo")"; then
+      if ! lib="$(wtg_lib)"; then
+        echo "git-worktree-guard: BLOCKED '$cmd' — step 'locate library' failed: scripts/lib/wt-tombstone.sh not found (${lib:-beside this hook or under \$HOME/.claude}), so this removal cannot be recorded. A blocked removal is recoverable, an unrecorded one is not. Retry once the library is deployed: $cmd" >&2
+        exit 2
+      fi
+      set -- "$rmtop" guard-raw "$cmd" --mode clone --event guard-snapshot
+      # The wip snapshot only where it can matter: --force is what lets git delete modified and
+      # untracked files, and only a dirty tree has any.
+      if [ "$force" = 1 ] && [ -n "$(git -C "$rmtop" status --porcelain 2>/dev/null)" ]; then set -- "$@" --wip; fi
+      if ! wtg_run "$lib" wt_tombstone "$@"; then
+        echo "git-worktree-guard: BLOCKED '$cmd' — step 'tombstone' failed: ${wtg_err:-no diagnostic} (tree left untouched). A blocked removal is recoverable, an unrecorded one is not. Retry the same command: $cmd" >&2
+        exit 2
+      fi
+    fi
+  fi
+fi
+
+# (3) worktree prune — record every admin entry it would drop, then let the command prune unchanged.
+# The admin dir holds the only copy of a removed tree's logs/HEAD and its head/branch; prune deletes
+# it, so a hand `rm -rf <tree> && git worktree prune` used to leave nothing to restore from.
+if [ "${CC_WTG_TOMBSTONE:-on}" != "off" ] && printf '%s' "$ncmd" | grep -E 'git worktree prune([[:space:]]|$)' >/dev/null; then
+  dry=0
+  while IFS= read -r t; do
+    case "$t" in --dry-run) dry=1 ;; --*) ;; -*n*) dry=1 ;; esac
+  done < <(wtg_seg_tokens prune)
+  [ "$dry" = 1 ] && exit 0   # a dry run removes nothing
+  prepo="${crepo:-.}"
+  git -C "$prepo" rev-parse --git-common-dir >/dev/null 2>&1 || exit 0   # not a repo: the prune fails itself
+  if ! lib="$(wtg_lib)"; then
+    echo "git-worktree-guard: BLOCKED '$cmd' — step 'locate library' failed: scripts/lib/wt-tombstone.sh not found (${lib:-beside this hook or under \$HOME/.claude}), so the entries this prune drops cannot be recorded. Retry once the library is deployed: $cmd" >&2
+    exit 2
+  fi
+  if ! wtg_run "$lib" wt__prune_record "$(cd "$prepo" && pwd -P)" guard-raw prune; then
+    echo "git-worktree-guard: BLOCKED '$cmd' — step 'admin-pruned record' failed: ${wtg_err:-no diagnostic} (nothing pruned). Retry the same command: $cmd" >&2
     exit 2
   fi
 fi
