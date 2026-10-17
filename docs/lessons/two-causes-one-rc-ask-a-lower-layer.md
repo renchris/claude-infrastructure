@@ -72,3 +72,27 @@ Two corollaries the fix turns on:
 `hf_remote_pane_term_say`. Red-proofed in `tests/handoff-remote-pane-term.bats`; the fixture that
 carries the whole lesson is one syscall wide — `mksock` binds without `listen()`, `mklistener`
 listens and never `accept()`s.
+
+## Addendum 2026-10-17: accepting-but-silent has two causes as well
+
+The incident above resolved to a load spike, and a retry beat it. On 2026-10-17 the same signature,
+`read unix ->/tmp/kitty-44163: i/o timeout` with `connect(2)` succeeding, was **not** load. kitty
+pid 44163 (0.48.2, alive 2d14h) sat at **0.0% CPU** while load was ~237. A raw `connect` + `ls`
+payload over the socket was accepted in 0.00 s and drew **no reply in 30 s**, and three spaced
+`kitty @ ls` retries all failed. That is the 0.48.2 talk-thread death (the thread answering remote
+control has exited; the kernel still queues connections into the listen backlog), the class that
+wedged kitty 610 on 10-01. Retrying never cures it; only a kitty restart does
+(`docs/patches/kitty-talk-thread-survives-v0.48.2.patch`; operator step `0024e31a9dd7`).
+
+So the accepting-but-silent sub-state splits once more, and again by a lower-layer read rather than
+the message text:
+
+| state | `connect(2)` | reply | kitty's own CPU | remedy |
+|---|---|---|---|---|
+| saturated | accepts | none in the client's window | busy (main loop pegged) | retry later |
+| talk thread dead | accepts | none, however long you wait | idle (~0%) | restart kitty |
+
+Read `ps -o pcpu= -p <kitty pid>` and hold one raw connection open for ~30 s before calling it a
+spike. An idle kitty that will not answer is not "too busy"; telling the operator to come back later
+leaves every remote-control consumer (handoff-fire splits, cc-wake, pane retirement, recycles) dead
+for as long as they wait.
