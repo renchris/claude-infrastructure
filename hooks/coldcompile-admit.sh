@@ -39,6 +39,8 @@
 #
 #   · any command carrying a `bats` token          — qos transform (a)'s exact trigger
 #   · any SIMPLE command with no leading `VAR=`    — the only shape qos transforms (b)/(c) accept
+#   · any command LED by `[g]timeout N git … grep` — qos transform (d)'s pre-filter; (d) rewrites
+#     compounds too (0 of the 1,490 git-grep-led commands in the 30 days to 2026-10-17 ignite)
 #
 # Measured cost of that rule on the same corpus: ZERO of the 232 ignition entries (the single
 # SIMPLE one, `PW_BASE_URL=… pnpm design:gate`, carries a leading assignment, which qos-rewrite
@@ -114,6 +116,12 @@ if [ "$_simple" -eq 1 ]; then
   # A leading `VAR=value` is what makes qos DECLINE a simple command, so such a command is ours.
   printf '%s' "$CMD" | grep -qE '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=' 2>/dev/null || exit 0
 fi
+
+# (iii) a command led by `git grep` ⇒ qos transform (d) may swap its engine flag, compound or not.
+# This is (d)'s own pre-filter, glob for glob, so it declines a superset of what (d) rewrites.
+case "$CMD" in
+  git\ *grep*|timeout\ *git\ *grep*|gtimeout\ *git\ *grep*) exit 0 ;;
+esac
 
 # ── resolve the CHECKOUT directory, THROUGH SYMLINKS FIRST ────────────────────────────────────
 # ~/.claude/hooks/<name> is a per-file symlink into the checkout, so a naive dirname yields

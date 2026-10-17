@@ -283,6 +283,149 @@ if [ -n "$CC_BATS_TARGET" ] && [ -x "$CC_BATS_TARGET" ]; then
   fi
 fi
 
+# ══ TRANSFORM (d) — `git grep -E '<pattern>'` → `git grep -P '<pattern>'`, ONE TOKEN ═══════════
+# WHY. git's ERE path runs the platform regex, which is the slow engine here: one measured agent
+# `git grep -E` over this repo cost 80.5G instructions and 1.38 s; the same search through PCRE cost
+# 2.0G and 0.13 s. Same work, ~40x less machine work.
+#
+# WHY IT IS SAFE, and what bounds it. Only a pattern that BRE, ERE and PCRE all read identically is
+# touched: single-quoted, printable ASCII, no backslash, no `{`, no POSIX class (`[:`, `[=`, `[.`),
+# balanced brackets and groups, every quantifier after an atom, no empty alternative. A BRE pattern
+# additionally has none of `+ ? | ( ) { }` and keeps `^`/`$` at its ends. Flags come from an
+# allowlist that excludes everything whose output depends on match EXTENT or on non-matching lines
+# (`-o`, `--column`, `--color`, `-w`, `-x`, `-v`, `-L`) and every other engine (`-F`, `-G`, `-P`,
+# long spellings), plus `-a`. On text files the selected lines are then identical; on binary files
+# the ERE path under-reports (the platform regex stops at a NUL) and PCRE finds the true matches.
+# tests/qos-rewrite-git-grep.bats is the differential lab that pins both claims.
+#
+# A one-token swap, not a wrap: every other byte of the command — pipeline tail included — is kept,
+# so §11.3 M7's "never wrap compounds by string surgery" holds and this may act on a pipeline's
+# LEADING segment. For a compound command the rewrite is emitted here; a simple one continues into
+# (b)/(c), whose prefixes still apply. Residual: the BRE arm assumes no `grep.patternType` config,
+# which would give the un-flagged pattern a different engine (unset on this machine, 2026-10-17).
+#   CC_QOS_GITGREP=off      → transform (d) off.
+D_REWROTE=""
+# gitgrep_pattern_ok <pattern> <E|B> — rc 0 when every engine reads <pattern> the same way.
+gitgrep_pattern_ok() {
+  local LC_ALL=C
+  local p="$1" mode="$2" n i=0 c nx atom=0 depth=0 inb=0 bpos=0 pc="" last=""
+  n=${#p}
+  [ "$n" -gt 0 ] || return 1
+  case "$p" in -*|*[!\ -~]*|*\\*|*'{'*) return 1 ;; esac
+  if [ "$mode" = B ]; then
+    case "$p" in *[+?\|\(\)\}]*) return 1 ;; esac
+  fi
+  while [ "$i" -lt "$n" ]; do
+    c=${p:$i:1}; nx=${p:$((i + 1)):1}
+    if [ "$inb" -eq 1 ]; then
+      # Inside a bracket expression: `]` first (after an optional `^`) is a literal in both engines.
+      if [ "$c" = '^' ] && [ "$bpos" -eq 0 ] && [ -z "$pc" ]; then i=$((i + 1)); continue; fi
+      if [ "$c" = ']' ] && [ "$bpos" -gt 0 ]; then inb=0; atom=1; last=""; i=$((i + 1)); continue; fi
+      if [ "$c" = '[' ]; then
+        case "$nx" in :|=|.) return 1 ;; esac
+      fi
+      if [ "$c" = '-' ] && [ "$bpos" -gt 0 ] && [ "$nx" != ']' ]; then
+        # A range: both ends plain, ascending in byte order, and not chained onto another range.
+        [ -n "$pc" ] && [ "$pc" != '-' ] || return 1
+        [ -n "$nx" ] && [ "$nx" != '[' ] || return 1
+        [[ $pc > $nx ]] && return 1
+        pc='-'; bpos=$((bpos + 2)); i=$((i + 2)); continue
+      fi
+      pc="$c"; bpos=$((bpos + 1)); i=$((i + 1)); continue
+    fi
+    case "$c" in
+      '[') inb=1; bpos=0; pc=""; atom=0 ;;
+      '(') depth=$((depth + 1)); atom=0 ;;
+      ')') [ "$depth" -gt 0 ] || return 1
+           case "$last" in '('|'|') return 1 ;; esac
+           depth=$((depth - 1)); atom=1 ;;
+      '|') case "$last" in ''|'('|'|') return 1 ;; esac
+           atom=0 ;;
+      '*'|'+'|'?') [ "$atom" -eq 1 ] || return 1
+           atom=0 ;;
+      '^') [ "$mode" = E ] || [ "$i" -eq 0 ] || return 1
+           atom=0 ;;
+      '$') [ "$mode" = E ] || [ "$i" -eq $((n - 1)) ] || return 1
+           atom=0 ;;
+      *) atom=1 ;;
+    esac
+    last="$c"; i=$((i + 1))
+  done
+  [ "$inb" -eq 0 ] && [ "$depth" -eq 0 ] && [ "$last" != '|' ]
+}
+# gitgrep_rewrite — sets NEWCMD to CMD with its leading `git grep` read through PCRE; rc 1 = decline.
+gitgrep_rewrite() {
+  local q="'" rest tok body noe off eoff=-1 etok="" ne=0 laste="" pat mode new after
+  local re_head='^((g?timeout +[0-9]+[smhd]? +)?git +(-C +[A-Za-z0-9_./~@%+=:,-]+ +)?grep +)'
+  local re_tok='^([^ ]+)( +)'
+  local re_pat="^${q}([^${q}]*)${q}( |\$)"
+  [[ $CMD =~ $re_head ]] || return 1
+  off=${#BASH_REMATCH[1]}
+  rest=${CMD:$off}
+  while :; do
+    case "$rest" in "$q"*) break ;; esac
+    [ -z "$laste" ] || return 1                       # `-e` must be the flag just before the pattern
+    [[ $rest =~ $re_tok ]] || return 1
+    tok=${BASH_REMATCH[1]}
+    case "$tok" in
+      --line-number|--count|--files-with-matches|--name-only|--ignore-case|--no-index|--untracked|\
+      --cached|--full-name|--heading|--break|--no-color|--null|--quiet|--recurse-submodules) ;;
+      --max-depth=*|--threads=*|--max-count=*|--context=*|--after-context=*|--before-context=*)
+        case "${tok#*=}" in ''|*[!0-9]*) return 1 ;; esac ;;
+      -[ABCm]*)
+        case "${tok#-?}" in ''|*[!0-9]*) return 1 ;; esac ;;
+      --*) return 1 ;;
+      -?*)
+        body=${tok#-}
+        case "$body" in *e) laste=1; body=${body%e} ;; esac
+        case "$body" in *[!cHhIilnqE]*) return 1 ;; esac
+        noe=${body//E/}
+        if [ "${#noe}" -ne "${#body}" ]; then
+          ne=$((ne + ${#body} - ${#noe})); eoff=$off; etok=$tok
+        fi ;;
+      *) return 1 ;;
+    esac
+    off=$((off + ${#BASH_REMATCH[0]}))
+    rest=${CMD:$off}
+  done
+  [[ $rest =~ $re_pat ]] || return 1
+  pat=${BASH_REMATCH[1]}
+  if [ -n "$laste" ]; then
+    # After a bare pattern git stops reading options; after an `-e` ARGUMENT it keeps going, so a
+    # further option (a second `-e '\w'`, an `-o`) would be read under the new engine. Only an end,
+    # `--`, or a plainly non-option word may follow.
+    after=${rest:${#BASH_REMATCH[0]}}
+    while :; do case "$after" in ' '*) after=${after# } ;; *) break ;; esac; done
+    case "$after" in
+      ''|'--'|'-- '*) ;;
+      [A-Za-z0-9_./~\|\;\&\)]*) ;;
+      *) return 1 ;;
+    esac
+  fi
+  case "$ne" in 0) mode=B ;; 1) mode=E ;; *) return 1 ;; esac
+  gitgrep_pattern_ok "$pat" "$mode" || return 1
+  if [ "$mode" = E ]; then
+    new=${etok/E/P}
+    NEWCMD="${CMD:0:$eoff}${new}${CMD:$((eoff + ${#etok}))}"
+  else
+    [[ $CMD =~ $re_head ]] || return 1
+    off=${#BASH_REMATCH[1]}
+    NEWCMD="${CMD:0:$off}-P ${CMD:$off}"
+  fi
+  [ "$NEWCMD" != "$CMD" ]
+}
+if [ "${CC_QOS_GITGREP-on}" != off ]; then
+  case "$CMD" in
+    git\ *grep*|timeout\ *git\ *grep*|gtimeout\ *git\ *grep*)
+      if gitgrep_rewrite; then
+        case "$CMD" in
+          *';'*|*'&'*|*'|'*|*'<'*|*'>'*|*'('*|*')'*|*'`'*|*$'\n'*) emit "$NEWCMD" ;;
+        esac
+        CMD="$NEWCMD"; D_REWROTE=1
+      fi ;;
+  esac
+fi
+
 # ══ TRANSFORMS (b) and (c) — PREFIXING transforms, shared pre-conditions first ════════════════
 # Both prepend a wrapper to the command, so both are governed by the same two refusals. They are
 # hoisted ABOVE table resolution because they are properties of the COMMAND, not of any table: a
@@ -463,7 +606,8 @@ fi
 
 # ── emit once, or not at all ──────────────────────────────────────────────────────────────────
 # Neither prefix, no rewrite: silence means the command runs verbatim. Either or both, one emit —
-# so a command in both tables gets both wrappers instead of whichever table was read first.
-[ -n "$BOUND_PREFIX" ] || [ -n "$TP_PREFIX" ] || exit 0
+# so a command in both tables gets both wrappers instead of whichever table was read first. A
+# transform-(d) rewrite with no prefix is still a rewrite, so it emits too.
+[ -n "$BOUND_PREFIX" ] || [ -n "$TP_PREFIX" ] || [ -n "$D_REWROTE" ] || exit 0
 
 emit "${BOUND_PREFIX}${TP_PREFIX}${CMD}"
