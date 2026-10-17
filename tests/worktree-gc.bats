@@ -85,6 +85,20 @@ SH
   # silently. (memory: hermetic-in-stubs-not-in-interpreter — an environment hypothesis is only
   # tested at an environment you actually cleaned.)
   unset CC_BATS_ACTIVE CC_BATS_SEEN CC_BATS_QOS CC_BATS_QOS_MODE CC_BATS_QOS_BAND CC_BATS_QUIET
+  # The tombstone library's own seams (W2-CONTRACT "Lab rule"): an ambient WT_* from the runner's
+  # shell would point the subject's tombstones and pins at a real store. Defaults resolve under the
+  # fixtured $HOME, so unsetting them is enough.
+  unset WT_LEDGER WT_TOMB_DIR WT_STATE_DIR WT_CRASH_LOG WT_CONFIG_ROOTS WT_TRUNK WT_GIT WT_BACKLOG \
+        WT_RESUME_DEBT_DIR WT_LR_DIR WT_RECYCLE_FAILED_DIR WT_BOOT_RESUME_DIR CC_WTGC_TOMBSTONE_LIB \
+        CC_WTGC_TRUNK
+  # THE LAB CLOCK, two hours ahead. wt_pinned's `owner` pin holds any tree whose logs/HEAD moved in
+  # the last hour, and every fixture here wrote its logs/HEAD seconds ago — so on the real clock the
+  # whole REMOVE half of this suite would read "pinned (owner …)" and pass its KEEP halves vacuously.
+  # The pin tests below set their own clock-relative fixtures against this same WT_NOW.
+  WT_NOW="$(( $(date +%s) + 7200 ))"; export WT_NOW
+  # Per-test extras appended to run_gc's env (last assignment wins), and the script under test.
+  GCENV=()
+  GCX=""
 }
 
 # team <dir> <member> — record a team at <dir> (relative to TEAMS) whose roster names <member>.
@@ -141,7 +155,7 @@ run_gc() {
       CC_WTGC_TEAMS_DIR="${TEAMSDIR:-$TEAMS}" CC_WTGC_WARRANTS="${WARRANTS:-$WTS}" \
       CC_WTGC_EXCLUDE="${EXCLUDE:-}" \
       CC_WTGC_SESSION_REGISTRY="${SESSREG:-$BATS_TEST_TMPDIR/no-session-registry}" \
-      CC_WTGC_ACTIVE_MIN="${ACTIVEMIN:-0}" bash "$GC" "$@"
+      CC_WTGC_ACTIVE_MIN="${ACTIVEMIN:-0}" ${GCENV[@]+"${GCENV[@]}"} bash "${GCX:-$GC}" "$@"
 }
 # The two seams above are the 2026-08-17 occupancy signals (backlog 63484cfeab2a), and both are
 # NEUTRALISED by default here — deliberately, and this needs its reason on the record.
@@ -237,7 +251,11 @@ has_br() { git -C "$R" rev-parse --verify --quiet "refs/heads/$1" >/dev/null; }
   grep -q '"unlanded_patches":0' "$DLOG"
   # preserved_at names the TRUNK, never the branch: --prune-branches may delete this now-landed,
   # worktree-less ref later in the same run, and a record pointing at nothing is worse than none.
-  ! grep -q '"preserved_at":"refs/heads/feat/blast"' "$DLOG" || false
+  # Scoped to the OUTCOME row: since WP-10 the same removal also writes a `worktree-tombstoned` row
+  # (the library's, W2-CONTRACT "one removal, one disposal row"), whose preserved_at is its own.
+  disposed="$(grep '"event":"worktree-disposed"' "$DLOG")"
+  [ -n "$disposed" ]
+  case "$disposed" in *'"preserved_at":"refs/heads/feat/blast"'*) false ;; esac
 }
 
 @test "dirty tree → KEPT (removal would need --force ⇒ data loss)" {
@@ -516,8 +534,25 @@ blind_lsof() {
   # cc-notify by design (its registry is derived from these same processes) and the sessions it
   # exists to catch are exactly the UNREGISTERED ones — so a blind process probe there leaves the
   # last gate before `worktree remove` with nothing but a record's silence. It must fail CLOSED.
+  #
+  # Since AC-5 (WP-10) an lsof that is blind at PASS START refuses the whole pass (exit 3, its own
+  # test below), so this case needs an lsof that answers its control once — at classify time — and
+  # goes blind afterwards: the act-time recheck is the only gate left to catch it.
   p="$(wt wt-actblind feat/actblind)"
-  run env CC_WTGC_REPO="$R" CC_WTGC_CC_NOTIFY="$SHIM" CC_WTGC_LSOF="$(blind_lsof)" \
+  local once="$BATS_TEST_TMPDIR/lsof-once" cnt="$BATS_TEST_TMPDIR/lsof-once.n"
+  cat > "$once" <<SH
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [ "\$a" = cwd ]; then
+    n="\$(cat '$cnt' 2>/dev/null || echo 0)"; echo \$((n + 1)) > '$cnt'
+    [ "\$n" = 0 ] && printf 'p%s\nn/\n' "\$\$"
+    exit 0
+  fi
+done
+exit 1
+SH
+  chmod +x "$once"
+  run env CC_WTGC_REPO="$R" CC_WTGC_CC_NOTIFY="$SHIM" CC_WTGC_LSOF="$once" \
       CC_WTGC_PGREP="$STUB" CC_WTGC_REGISTRY_DIR="$REG" CC_WTGC_LOCK="$LOCK" \
       CC_WTGC_BACKLOG="$BL" CC_WTGC_DISPOSAL_LOG="$DLOG" bash "$GC"
   [ "$status" -eq 0 ]
@@ -526,8 +561,6 @@ blind_lsof() {
   echo "$output" | grep -q "LIVE at act time (occupancy UNPROVEN"
   echo "$output" | grep -q "lsof cannot read the cwd of this very process"
   ! echo "$output" | grep -q "a session started inside the classify window" || false
-  # ...and the degraded oracle is announced at the top, not only per-worktree.
-  echo "$output" | grep -q "process-cwd oracle UNAVAILABLE"
 }
 
 @test "RED PROOF: with cc-notify unchanged, an ANSWERING lsof removes that same worktree" {
@@ -1889,4 +1922,279 @@ run_gc_lsof() {
   # ...and the rc-destroying spelling is gone from the file entirely.
   n="$(/usr/bin/grep -c -e 'grep -qxF' "$REPO/scripts/worktree-gc.sh" | head -1)"
   [ "${n:-0}" -eq 1 ] || { echo "expected exactly the one surviving grep -qxF (a FILE read, not a pipeline), got ${n:-0}" >&2; return 1; }
+}
+
+# ── WP-10 (docs/research/load-root-cause-2026-10-17, W2-CONTRACT.md) ─────────────────────────────
+# Tombstone before every removal, a logged prune, pins as a KEEP gate, the trunk per repo, AC-4,
+# AC-5 and F-9. The RED controls replay the PRE-CHANGE script from git (7fa90e0c2, the last commit
+# before WP-10 touched the file) on the same fixture, never a re-implementation of it.
+
+old_gc() { # → the pre-WP-10 worktree-gc.sh, written into this test's tmpdir
+  local f="$BATS_TEST_TMPDIR/old-worktree-gc.sh"
+  [ -s "$f" ] || git -C "$REPO" show 7fa90e0c2:scripts/worktree-gc.sh > "$f"
+  echo "$f"
+}
+# The two per-run numbers in the counts line (wall time, loose objects) are not verdicts.
+norm() { printf '%s\n' "$1" | sed -E 's/elapsed=[0-9]+s/elapsed=Ns/; s/loose_objects=[0-9]+/loose_objects=N/'; }
+# brag <wt> — gitignored, un-recreatable residue: exactly what `worktree remove` destroys unrecorded.
+brag() {
+  grep -qxF 'brag-output/' "$R/.git/info/exclude" 2>/dev/null || printf 'brag-output/\n' >> "$R/.git/info/exclude"
+  mkdir -p "$1/brag-output"
+  printf '{"run":1,"score":0.93}\n' > "$1/brag-output/x.json"
+  cp "$1/brag-output/x.json" "$BATS_TEST_TMPDIR/x.json.orig"
+}
+tomb_id() { jq -r 'select(.event=="worktree-tombstoned") | .id' "$DLOG"; }
+
+@test "WP-10: landed-clean removal tombstones the residue first — one tombstoned + one disposed row, one id, stdout unchanged" {
+  p="$(wt wt-brag feat/brag)"
+  brag "$p"
+  # RED control: the pre-change script on this fixture writes no tombstone and the residue is gone.
+  GCX="$(old_gc)"; run_gc; GCX=""
+  [ "$status" -eq 0 ]
+  [ ! -d "$p" ]
+  ! grep -qs '"event":"worktree-tombstoned"' "$DLOG" || false
+  [ -z "$(find "$BATS_TEST_TMPDIR" -name x.json)" ]
+  old_out="$(norm "$output")"
+  # The same tree, at the same path, for the patched script.
+  git -C "$R" worktree add -q "$p" feat/brag
+  brag "$p"
+  : > "$DLOG"
+  run_gc
+  [ "$status" -eq 0 ]
+  [ ! -d "$p" ]
+  new_out="$(norm "$output")"
+  [ "$new_out" = "$old_out" ] || { diff <(printf '%s\n' "$old_out") <(printf '%s\n' "$new_out") >&2; false; }
+  [ "$(grep -c '"event":"worktree-tombstoned"' "$DLOG")" -eq 1 ]
+  [ "$(grep -c '"event":"worktree-disposed"' "$DLOG")" -eq 1 ]
+  tid="$(tomb_id)"
+  [ -n "$tid" ]
+  [ "$(jq -r 'select(.event=="worktree-disposed") | .tombstone_id' "$DLOG")" = "$tid" ]
+  jq -e 'select(.event=="worktree-tombstoned")
+         | .actor=="worktree-gc" and .reason=="landed-clean" and (.preserved_list|any(.=="brag-output"))' "$DLOG" >/dev/null
+  cmp "$HOME/.claude/autonomy/worktree-tombstones/$tid/residue/brag-output/x.json" "$BATS_TEST_TMPDIR/x.json.orig"
+}
+
+@test "WP-10: the dispose and landed-dirt removals tombstone first too — reason per class, ids joined" {
+  a="$(abandoned_wt wt-abc123456789 feat/abandoned)"
+  brag "$a"
+  owns abc123456789 done
+  trunk_add x.md hello
+  d="$(dirt_wt wt-dirtgo feat/dirtgo x.md hello)"
+  run_gc --dispose-abandoned --dispose-landed-dirt
+  [ "$status" -eq 0 ]
+  [ ! -d "$a" ]
+  [ ! -d "$d" ]
+  [ "$(grep -c '"event":"worktree-tombstoned"' "$DLOG")" -eq 2 ]
+  [ "$(grep -c '"event":"worktree-disposed"' "$DLOG")" -eq 2 ]
+  local reason tid
+  for reason in abandoned-unlanded landed-dirt; do
+    tid="$(jq -r --arg r "$reason" 'select(.event=="worktree-tombstoned" and .reason==$r) | .id' "$DLOG")"
+    [ -n "$tid" ]
+    [ "$(jq -r --arg t "$tid" 'select(.event=="worktree-disposed" and .tombstone_id==$t) | .event' "$DLOG")" = worktree-disposed ]
+  done
+  tid="$(jq -r 'select(.event=="worktree-tombstoned" and .reason=="abandoned-unlanded") | .id' "$DLOG")"
+  cmp "$HOME/.claude/autonomy/worktree-tombstones/$tid/residue/brag-output/x.json" "$BATS_TEST_TMPDIR/x.json.orig"
+}
+
+@test "WP-10: a tombstone that cannot be written KEEPS the tree, with its residue back in place" {
+  p="$(wt wt-tfail feat/tfail)"
+  brag "$p"
+  : > "$BATS_TEST_TMPDIR/not-a-dir"                 # the ledger's parent is a FILE: every append fails
+  GCENV=(WT_LEDGER="$BATS_TEST_TMPDIR/not-a-dir/ledger.jsonl")
+  run_gc
+  [ "$status" -eq 0 ]
+  [ -d "$p" ]
+  cmp "$p/brag-output/x.json" "$BATS_TEST_TMPDIR/x.json.orig"
+  echo "$output" | grep -qF "[feat/tfail] — tombstone failed (tree kept)"
+  ! grep -qs '"event":"worktree-disposed"' "$DLOG" || false
+}
+
+@test "WP-10: no tombstone library ⇒ nothing is removed and the KEEP says why; --dry-run's plan is unchanged" {
+  p="$(wt wt-nolib feat/nolib)"
+  GCENV=(CC_WTGC_TOMBSTONE_LIB="$BATS_TEST_TMPDIR/absent/wt-tombstone.sh")
+  run_gc --dry-run
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "remove  .*\[feat/nolib\] — clean · idle · landed"
+  run_gc
+  [ "$status" -eq 0 ]
+  [ -d "$p" ]
+  echo "$output" | grep -qF "[feat/nolib] — tombstone library unavailable"
+}
+
+@test "WP-10: git refusing the remove puts the moved residue back and supersedes the tombstone row" {
+  p="$(wt wt-refuse feat/refuse)"
+  brag "$p"
+  local g="$BATS_TEST_TMPDIR/git-refuse" real
+  real="$(command -v git)"
+  printf '#!/usr/bin/env bash\nprev=\nfor a in "$@"; do [ "$prev" = worktree ] && [ "$a" = remove ] && { echo "fatal: refused (test)" >&2; exit 128; }; prev="$a"; done\nexec %s "$@"\n' "$real" > "$g"
+  chmod +x "$g"
+  GCENV=(CC_WTGC_GIT="$g")
+  run_gc
+  [ "$status" -eq 0 ]
+  [ -d "$p" ]
+  cmp "$p/brag-output/x.json" "$BATS_TEST_TMPDIR/x.json.orig"
+  echo "$output" | grep -qF "[feat/refuse] — git REFUSED 'worktree remove'"
+  tid="$(tomb_id)"
+  [ -n "$tid" ]
+  [ "$(jq -r 'select(.event=="superseded") | .id' "$DLOG")" = "$tid" ]
+  ! grep -q '"event":"worktree-disposed"' "$DLOG" || false
+}
+
+@test "WP-10: the real prune logs one admin-pruned row per dropped record; stdout unchanged" {
+  p="$(wt wt-gone feat/gone)"
+  mv "$p" "$BATS_TEST_TMPDIR/gone-1"                # the admin record now points at nothing
+  GCX="$(old_gc)"; run_gc; GCX=""
+  [ "$status" -eq 0 ]
+  ! has_wt "$p" || false
+  ! grep -qs '"event":"admin-pruned"' "$DLOG" || false   # RED: the old prune recorded nothing
+  old_out="$(norm "$output")"
+  git -C "$R" worktree add -q "$p" feat/gone
+  mv "$p" "$BATS_TEST_TMPDIR/gone-2"
+  run_gc
+  [ "$status" -eq 0 ]
+  ! has_wt "$p" || false
+  [ "$(norm "$output")" = "$old_out" ]
+  [ "$(grep -c '"event":"admin-pruned"' "$DLOG")" -eq 1 ]
+  jq -e --arg p "$(cd "$BATS_TEST_TMPDIR" && pwd -P)/wt-gone" \
+    'select(.event=="admin-pruned") | select(.path==$p and .branch=="feat/gone" and .actor=="worktree-gc")' "$DLOG" >/dev/null
+}
+
+@test "WP-10: a pinned tree (a recent CRASH of a session cwd'd there) is KEPT and named; unpinned it goes" {
+  p="$(wt wt-pin feat/pin)"
+  local cp root slug sid=0b7e0c3e-1111-4222-8333-944445555666 crash="$BATS_TEST_TMPDIR/crashes.jsonl"
+  cp="$(cd "$p" && pwd -P)"
+  root="$HOME/.claude"
+  slug="$(printf '%s' "$cp" | sed 's#[/.]#-#g')"
+  mkdir -p "$root/projects/$slug"
+  printf '{"cwd":"%s","sessionId":"%s"}\n' "$cp" "$sid" > "$root/projects/$slug/$sid.jsonl"
+  printf '{"ts":"%s","class":"CRASH","sid":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$sid" > "$crash"
+  GCENV=(WT_CRASH_LOG="$crash" WT_CONFIG_ROOTS="$root")
+  run_gc
+  [ "$status" -eq 0 ]
+  [ -d "$p" ]
+  echo "$output" | grep -qF "[feat/pin] — pinned (crash sid=$sid until="
+  ! grep -qs '"event":"worktree-tombstoned"' "$DLOG" || false
+  # Discriminator: the same tree with the crash row gone is an ordinary landed-clean removal.
+  : > "$crash"
+  run_gc
+  [ "$status" -eq 0 ]
+  [ ! -d "$p" ]
+}
+
+@test "WP-10: the trunk is resolved per repo — origin/HEAD's target, not a hardcoded origin/main" {
+  p="$(wt wt-trunk feat/trunk)"
+  git -C "$R" update-ref refs/remotes/origin/trunk refs/remotes/origin/main
+  git -C "$R" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/trunk
+  git -C "$R" update-ref -d refs/remotes/origin/main
+  run_gc
+  [ "$status" -eq 0 ]
+  [ ! -d "$p" ]
+  echo "$output" | grep -qF "[feat/trunk] — clean · idle · landed on origin/trunk"
+}
+
+@test "AC-4: an unresolvable trunk is its own verdict — every landed and dispose candidate KEPT with the token" {
+  p="$(wt wt-ac4 feat/ac4)"
+  a="$(abandoned_wt wt-abc123456789 feat/abandoned)"
+  owns abc123456789 done
+  git -C "$R" update-ref -d refs/remotes/origin/main  # no origin/HEAD either: nothing resolves
+  run_gc --dispose-abandoned
+  [ "$status" -eq 0 ]
+  [ -d "$p" ]
+  [ -d "$a" ]
+  echo "$output" | grep -q "verdict=trunk-unresolvable"
+  echo "$output" | grep -q "KEEP .*\[feat/ac4\] — trunk unresolvable (AC-4) — trunk-unresolvable"
+  echo "$output" | grep -q "KEEP .*\[feat/abandoned\] — trunk unresolvable (AC-4) — trunk-unresolvable"
+  # RED control: the pre-change script reads the missing trunk as UNLANDED and disposes the tree.
+  GCX="$(old_gc)"; run_gc --dispose-abandoned; GCX=""
+  [ ! -d "$a" ]
+}
+
+@test "AC-5: a present oracle that fails its own control refuses the whole pass — exit 3 + which oracle" {
+  p="$(wt wt-ac5 feat/ac5)"
+  # cc-notify answers, so the ORACLES floor is met; only the degraded-oracle verdict can refuse.
+  GCENV=(CC_WTGC_LSOF="$(blind_lsof)")
+  run_gc
+  [ "$status" -eq 3 ]
+  [ -d "$p" ]
+  echo "$output" | grep -q "verdict=oracle-degraded lsof"
+  local pg="$BATS_TEST_TMPDIR/pgrep-err"
+  printf '#!/usr/bin/env bash\nexit 2\n' > "$pg"; chmod +x "$pg"
+  GCENV=(CC_WTGC_PGREP="$pg")
+  run_gc
+  [ "$status" -eq 3 ]
+  [ -d "$p" ]
+  echo "$output" | grep -q "verdict=oracle-degraded pgrep"
+  # --dry-run removes nothing by construction, so it still prints its plan.
+  GCENV=(CC_WTGC_LSOF="$(blind_lsof)")
+  run_gc --dry-run
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "remove  .*\[feat/ac5\]"
+  # Discriminator: answering oracles, same tree, removed.
+  GCENV=()
+  run_gc
+  [ "$status" -eq 0 ]
+  [ ! -d "$p" ]
+}
+
+@test "F-9: a lock held by a LIVE pass is never broken however old its mtime; a dead holder's is" {
+  p="$(wt wt-f9 feat/f9)"
+  local old_stamp; old_stamp="$(date -r $(( $(date +%s) - 7200 )) +%Y%m%d%H%M.%S)"
+  mkdir -p "$LOCK"
+  printf '%s\n' "$$" > "$LOCK/pid"
+  LC_ALL=C ps -o lstart= -p "$$" | tr -s ' ' | sed 's/^ *//;s/ *$//' > "$LOCK/lstart"
+  touch -t "$old_stamp" "$LOCK"
+  run_gc
+  [ "$status" -eq 0 ]
+  [ -d "$p" ]
+  echo "$output" | grep -q "another pass holds"
+  [ -f "$LOCK/pid" ]
+  # A RECYCLED pid — alive, but not the process that took the lock — is a dead holder.
+  printf 'Thu Jan 1 00:00:00 1970\n' > "$LOCK/lstart"
+  touch -t "$old_stamp" "$LOCK"
+  run_gc
+  [ "$status" -eq 0 ]
+  [ ! -d "$p" ]
+  [ ! -d "$LOCK" ]
+  # A dead pid, same.
+  p="$(wt wt-f9b feat/f9b)"
+  sh -c 'exit 0' & local dead=$!
+  wait "$dead" || true
+  mkdir -p "$LOCK"
+  printf '%s\n' "$dead" > "$LOCK/pid"
+  touch -t "$old_stamp" "$LOCK"
+  run_gc
+  [ "$status" -eq 0 ]
+  [ ! -d "$p" ]
+}
+
+@test "WP-10 equivalence: a 21-tree lab's --dry-run plan is byte-identical to the pre-change script's" {
+  local i p
+  eqc() { echo "$2" > "$1/u"; git -C "$1" add u; GIT_AUTHOR_DATE="$3 +0000" GIT_COMMITTER_DATE="$3 +0000" git -C "$1" commit -qm u; }
+  for i in 1 2 3 4 5 6; do wt "wt-eq-l$i" "feat/eq-l$i" >/dev/null; done                 # landed clean
+  for i in 1 2 3; do p="$(wt "wt-eq-u$i" "feat/eq-u$i")"; eqc "$p" "u$i" "$OLD"; done      # unlanded
+  for i in 1 2 3; do p="$(wt "wt-eq-d$i" "feat/eq-d$i")"; echo dirt >> "$p/f"; done      # dirty
+  for i in 1 2; do p="$(wt "wt-eq-y$i" "feat/eq-y$i")"; eqc "$p" "y$i" "$(date +%s)"; done # young tip
+  p="$(wt wt-eq-busy feat/eq-busy)"; touch "$p/.teammate-busy"
+  p="$(wt wt-eq-det feat/eq-det)"; git -C "$p" checkout -q --detach
+  abandoned_wt wt-abc123456789 feat/eq-ab1 >/dev/null; owns abc123456789 done              # disposable
+  abandoned_wt wt-def123456789 feat/eq-ab2 >/dev/null                                      # no owner
+  p="$(wt wt-eq-ex feat/eq-ex)"; EXCLUDE="$(cd "$p" && pwd -P)"
+  p="$(wt wt-eq-lock feat/eq-lock)"; git -C "$R" worktree lock "$p"
+  p="$(wt wt-eq-gone feat/eq-gone)"; mv "$p" "$BATS_TEST_TMPDIR/eq-gone-away"
+  [ "$(git -C "$R" worktree list --porcelain | grep -c '^worktree ')" -eq 22 ]          # 21 + main
+  for args in "--dry-run" "--dry-run --dispose-abandoned"; do
+    # shellcheck disable=SC2086
+    GCX="$(old_gc)"; run_gc $args; GCX=""
+    [ "$status" -eq 0 ]
+    old_out="$(norm "$output")"
+    # shellcheck disable=SC2086
+    run_gc $args
+    [ "$status" -eq 0 ]
+    new_out="$(norm "$output")"
+    [ "$new_out" = "$old_out" ] || { diff <(printf '%s\n' "$old_out") <(printf '%s\n' "$new_out") >&2; false; }
+  done
+  # …and the lab really spans the classes (a plan of 21 identical KEEPs would prove nothing).
+  echo "$new_out" | grep -q "remove  "
+  echo "$new_out" | grep -q "dispose"
+  echo "$new_out" | grep -q "detached HEAD"
 }
