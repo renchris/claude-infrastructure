@@ -78,3 +78,14 @@ fixes X1-X27, §3 worktree lifecycle, §4 instrument, §5 WP table with file own
   is the DNS-rebinding guard.
 - W1-ACS (2026-10-17): measured — native pandoc output byte-identical to the wheel's on 175/175 corpus conversions (`--version` 0.040 s vs 0.077 s); with_progress sleep forks 26→2 per 5 s wait and 148→8 per 31 s, orphan sleeps per with_timeout/ticker stop 1→0, output byte-identical; collection union 4649 = 201 + 4448. Found in passing: install.sh's `ticker()` leaked its sleep too (fixed in WP-4), and pytest's `--deselect` matches by prefix, so the gate journal resumes through an exact-nodeid file (`GATE_DESELECT`) instead. The capacity gate refused 3 of 5 spawns at first ("8 sessions mid-turn"); those WPs went later, unforced. A fired session's `rm -r` sat ~1 h at a hook prompt, so use fresh scratch dirs instead.
 - W5 (2026-10-17): a reso janitor run forks `ps` for every `pgrep -f claude` match (~350) plus an `lsof` per claude process (~20 s), so its test runs the janitor 3 times (one stub run decides five trees by basename), not once per case: 163 s → 43 s inside every reso land gate. With the real library a fresh tree is kept `:pinned` (janitors keep the `owner` pin), so the reap path is tested on a backdated reflog. The Hammerspoon bench refuses outright below 180 s of HID idle (it does not wait unless the display sleeps), so it ran from a background idle-waiter. `top -stats idlew` read a flat 85 before and 0 after and is not a wakeup-rate instrument here; the 200 → 100 idle wakeups/s stands on the code (one 10 ms timer while idle). Both teammates were in-process (`pgrep -f "agent-id …"` is empty for them); one went silent after its report and the lead finished its follow-up.
+- W3 (2026-10-17): nothing activates on land. The capacity-attrib plist lives in `launchd/staged/`, not
+  `launchd/`, because install.sh copies every `launchd/*.plist` into LaunchAgents and a RunAtLoad KeepAlive
+  plist there starts at the next login with no decision. The worktree-gc-infra plist (`run`) gains WatchPaths
+  + StartInterval 600 + `--auto` and goes live on deploy, safe only because `scripts/lib/wtgc-scope.sh` reads
+  observe unless the operator's 52-load-2026-10-17-activate.sh wrote `act`. Gap found between WP-7 and WP-14:
+  `capacity-attrib.py --daemon` never called `capacity-detect.py`, so no detector ran live and D2's 7 d
+  record-only window could not start. Scope grown (origin lead, 2026-10-17): W3 wires it, and script 52
+  refuses the X17 load-rung flip until the daemon has evaluated the detectors for 7 d. The daemon series rotates at 4 MiB (~10 h kept), so "7 d of series" is unmeasurable;
+  the gate keys on install/wiring age plus liveness now. 0066 and 0067 both write settings.json
+  `.hooks.PreToolUse` but each preserves entries it does not own: either order converges, never concurrently.
+  Under load ~250 the bats slot gate (2 roots) serialized four teammates' suites; size waves for that.
