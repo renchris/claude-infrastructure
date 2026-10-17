@@ -38,7 +38,7 @@ now_ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time*1000'; }
   ( sleep 0.3; echo b >>"$F" ) &
   run "$T" --file "$F" --timeout 10
   [ "$status" -eq 0 ]
-  [[ "${lines[0]}" == "vnode $F "*extend* ]]
+  [[ "${lines[0]}" == "vnode $F "*extend* ]] || false
   [[ "${lines[1]}" =~ ^baseline\ "$F"\ @4:[0-9]+$ ]]
 }
 
