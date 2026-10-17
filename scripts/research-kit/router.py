@@ -35,7 +35,8 @@ answered outside the list (§10 item 3: that is NOT a completeness label — it 
 research verbs, and the next genuine prompt is classified afresh). A typed prompt carrying the
 `--requires-gate <program>` work-order marker is labeled work-order without calling the classifier
 only when <program> is the routed program's slug; with any other slug it is classified like any
-prompt. A machine-envelope prompt (a fired or recycled successor's brief) is never classified: it
+prompt. A machine-envelope prompt (a fired or recycled successor's brief, a subagent hand-back, a
+peer-wake, a background-task notification, Stop-hook feedback: MACHINE_ENVELOPE) is never classified: it
 keeps the session's last label unless that label is a relay one, which becomes `other`, `by:
 envelope` (a relay label governs one re-ask turn and is not carried into a continuation); as the
 session's FIRST prompt it gets a deterministic `by: envelope` label (envelope_label) so a successor
@@ -159,9 +160,17 @@ SESSION_UUID = re.compile(
 # gets a label from it (envelope_label).
 # `Goal set: ` is how the /goal handoff-fire.sh types into every fired pane arrives, and
 # `<\agent-message` a subagent's hand-back: neither is a genuine prompt, so neither relabels a turn.
+# The rest are the harness's own framings, as measured in a lead's transcript (truememory-2-0,
+# 2026-10-17): an Agent-tool hand-back and a cc-wake peer-wake both arrive as `Another Claude session
+# sent a message:` (then `<agent-message from=…>` / `[Subagent hand-back]`, or `📬 peer-wake:`); a
+# background-task event as `[SYSTEM NOTIFICATION - NOT USER INPUT]`, bare or inside a leading
+# `<system-reminder>`; a blocked Stop as `Stop hook feedback:`. Before they were listed a hand-back
+# reading "should now clear" was classified completeness, and every tool stayed denied for two hours.
 MACHINE_ENVELOPE = re.compile(
     r"^\s*(\[handoff |<teammate-message|<task-notification|<local-command-stdout>|<command-name>"
-    r"|<\\agent-message|Goal set: )"
+    r"|<\\?agent-message[\s>]|Goal set: |Another Claude session sent a message:"
+    r"|\[Subagent hand-back\]|📬 peer-wake: |Stop hook feedback:"
+    r"|(?:<system-reminder>\s*)?\[SYSTEM NOTIFICATION - NOT USER INPUT\])"
     r"|HANDOFF-ENGAGE-[A-Za-z0-9._-]+"
 )
 # A fired session's own first prompt, the two envelopes da9da7a18's first-prompt label was meant for:

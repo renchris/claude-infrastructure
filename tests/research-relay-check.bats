@@ -171,6 +171,17 @@ stop_with() {
   grep -q 'capped:relay:1>=1' "$COMPLETION_IDL"
 }
 
+# truememory-2-0 lead (2026-10-17): a subagent hand-back routed completeness forced a verbatim
+# certificate relay on every later turn. RED-proof: on 8fd2a38dd the reply below was blocked.
+@test "completion-assert: a subagent hand-back after a completeness turn demands no certificate relay" {
+  ca_setup
+  route "are we done?"
+  route "$(printf 'Another Claude session sent a message:\n<agent-message from="a1">\n[Subagent hand-back] The census failure should now clear; are we done?</agent-message>')"
+  run stop_with 'Read the hand-back: cli.sh now has a `--limit` flag; one more thing is still open.'
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | grep -c 'Research relay check')" -eq 0 ]
+}
+
 @test "completion-assert: CC_RESEARCH_RELAY_CHECK=0 turns the arm off" {
   ca_setup
   route "are we done?"

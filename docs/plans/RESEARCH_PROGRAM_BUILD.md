@@ -177,6 +177,15 @@ Owns §10 items 1 (deny half), 2, 3, 8, 11, 12, 13 (populating the set). Reads, 
     prompt that does not, and a machine envelope naming it (peer mail, a notify-back, a `Goal set:` echo) does not
     make it a program session again; only a fired session's own brief (HANDOFF-ENGAGE-, a leading `[handoff `)
     does (2026-10-11, operator ruling on the lead's re-route by peer mail; router.py FIRE_BRIEF).
+  - 2026-10-17 (truememory-2-0 lead, measured in its transcript): the harness's own framings are machine
+    envelopes too, so a hand-back never takes the operator's label. An Agent-tool hand-back and a cc-wake
+    peer-wake arrive as `Another Claude session sent a message:` (then `<agent-message …>` / `[Subagent
+    hand-back]`, or `📬 peer-wake:`), a background-task event as `[SYSTEM NOTIFICATION - NOT USER INPUT]`
+    (bare or in a leading `<system-reminder>`), a blocked Stop as `Stop hook feedback:`. None matched the
+    old start-anchored `<\agent-message`, so a hand-back reading "should now clear" routed completeness and
+    denied every tool for two hours; another routed concern. The Stop relay check reads the same route
+    record, so it no longer demands a relay on those turns. A typed prompt merely quoting a framing mid-text
+    is still classified.
   - Kill switches, all launch-environment only (no tool call can set them): `CC_RESEARCH_BLOCK=0`,
     `CC_RESEARCH_ROUTER=off`, `CC_RESEARCH_RELAY_CHECK=0`.
   - The router was written from the route table in REPORT.md §4.1, never from candidate prompts: the evidence

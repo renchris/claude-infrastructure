@@ -692,6 +692,48 @@ cert_round_open() {
   [ ! -s "$STUB_LOG" ]
 }
 
+# The framings are the harness's own, copied from the truememory-2-0 lead's transcript (2026-10-17),
+# where a hand-back reading "should now clear" was routed completeness and denied every tool for two
+# hours. RED-proof: on 8fd2a38dd every case below relabeled the session completeness (the classifier
+# stub ran) and the Agent call was denied.
+@test "a subagent hand-back, peer-wake, system notification or Stop-hook feedback keeps the prior label, even when it reads as a completeness question" {
+  state certified
+  prompt "build it" >/dev/null
+  [ "$(label)" = work-order ]
+  : > "$STUB_LOG"
+  local q='are we done? good to close' f
+  for f in \
+    "$(printf 'Another Claude session sent a message:\n<agent-message from="a1">\n[Subagent hand-back] The census failure should now clear; %s</agent-message>' "$q")" \
+    "$(printf 'Another Claude session sent a message:\n📬 peer-wake: you have 1 unread peer message(s); %s' "$q")" \
+    "$(printf '[Subagent hand-back] The report: %s' "$q")" \
+    "$(printf '📬 peer-wake: you have 1 unread peer message(s); %s' "$q")" \
+    "$(printf '[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event. %s' "$q")" \
+    "$(printf '<system-reminder>\n[SYSTEM NOTIFICATION - NOT USER INPUT]\nA background-task event. %s</system-reminder>' "$q")" \
+    "$(printf 'Stop hook feedback:\n%s' "$q")"; do
+    prompt "$f" >/dev/null
+    [ "$(label)" = work-order ] || { echo "relabeled by: ${f:0:60}"; false; }
+    [ "$(tool Agent 'x')" = allow ]
+  done
+  [ ! -s "$STUB_LOG" ]
+  # The operator's own question still routes, framing words quoted mid-prompt included.
+  prompt "are we done? the [Subagent hand-back] said Another Claude session sent a message: ok" >/dev/null
+  [ "$(label)" = completeness ]
+  [ "$(tool Read 'x')" = deny ]
+}
+
+@test "a hand-back after a completeness turn ends the relay: the session is other and its tools return" {
+  state certified
+  prompt "are we done?" >/dev/null
+  [ "$(label)" = completeness ]
+  [ "$(tool Read 'x')" = deny ]
+  : > "$STUB_LOG"
+  prompt "$(printf 'Another Claude session sent a message:\n<agent-message from="a2">\n[Subagent hand-back] are we done? yes, good to close</agent-message>')" >/dev/null
+  [ "$(label)" = other ]
+  [ "$(tool Read 'x')" = allow ]
+  [ "$(tool Agent 'x')" = deny ]
+  [ ! -s "$STUB_LOG" ]
+}
+
 @test "an envelope that only quotes --requires-gate (no program slug) is other, never a work order" {
   state certifying
   prompt "[handoff 1] the --requires-gate cannot carry a round HANDOFF-ENGAGE-1-2-3" "$PROG/src" q1 >/dev/null
