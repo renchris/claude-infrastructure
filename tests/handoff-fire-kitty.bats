@@ -551,6 +551,15 @@ pin_kitty()  { export KITTY_WINDOW_ID=25; unset IT2_WRAPPER_NO_KITTY; }
   [ "$status" -eq 1 ]
 }
 
+@test "it2py bgtab passes a launch EXPIRY through as rc 13 (UNKNOWN), never the retryable rc 1" {
+  # Item 2891c7ba7dd9: kitty queues a launch it could not answer and runs it later, so flattening the
+  # expiry to 1 licensed a retry that became a second session (panes 321-326).
+  pin_kitty
+  export KFAKE_LAUNCH_RC=124
+  run it2py bgtab 25
+  [ "$status" -eq 13 ]
+}
+
 @test "it2py bgtab refuses a non-integer launch result (rc 1), never a phantom pane id" {
   pin_kitty
   export KFAKE_LAUNCH_ID="Error: no matching window"

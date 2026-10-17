@@ -1516,8 +1516,15 @@ kt() { hf_bounded "${CC_KITTY_BIN:-${CC_TERM_KITTY:-kitty}}" @ ${CC_TERM_KITTY_T
 # this fire's own $CMD (hf_adopt_split_pane — kitty + argv delivery only, else it finds nothing), so a
 # launch that happened is never reported as one that did not. HF_TIMEOUT_S is rebound for this call only.
 kt_launch() {
-  local id
-  id="$(HF_TIMEOUT_S="${HF_SPLIT_TIMEOUT_S:-${HF_TIMEOUT_S:-}}" kt launch "$@" 2>/dev/null | tr -d '[:space:]')" || id=""
+  # stderr is CAPTURED, not discarded (2026-10-17, item 2891c7ba7dd9): kitty's own "Timed out waiting
+  # for a response from kitty" arrives there, and it is one of the two shapes of a bound EXPIRY (the
+  # other is timeout(1)'s 124/137). The id is the last all-digit line, so a warning cannot become one.
+  local id out lrc=0 expired=0
+  out="$(HF_TIMEOUT_S="${HF_SPLIT_TIMEOUT_S:-${HF_TIMEOUT_S:-}}" kt launch "$@" 2>&1)" || lrc=$?
+  id="$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*\([0-9][0-9]*\)[[:space:]]*$/\1/p' | tail -1)"
+  [ "$lrc" = 0 ] || id=""
+  case "$lrc" in 124|137) expired=1 ;; esac
+  case "$out" in *'Timed out waiting for a response from kitty'*) expired=1 ;; esac
   case "$id" in
     ''|*[!0-9]*)
       id=""
@@ -1525,6 +1532,13 @@ kt_launch() {
       if command -v hf_adopt_split_pane >/dev/null 2>&1; then arc=0; id="$(hf_adopt_split_pane)" || arc=$?; fi
       if [ "$arc" = 0 ] && [ -n "$id" ]; then
         echo "→ kitty launch returned no window id, but window $id already runs this fire's command — ADOPTED it (a re-fire would have launched a duplicate session)." >&2
+      elif [ "$expired" = 1 ]; then
+        # AN EXPIRY IS UNKNOWN EVEN OVER A READABLE, EMPTY LIST. kitty QUEUES a launch it could not
+        # answer and runs it when it catches up — measured 2026-10-17 with kitty App-Napped (screen
+        # locked): three --tab fires each read as refused, and six sessions started ~40 min later. So
+        # "no pane carries the command YET" licenses nothing; only an adoption settles an expiry.
+        echo "!! kitty launch did not answer within its bound (rc=$lrc) — outcome UNKNOWN: kitty may still run the queued launch, so a window MAY start this fire's command later; look before re-firing." >&2
+        return 13
       else
         # rc 2 = kitty's list was unreadable (2026-09-30): the caller still fails loud, but must not be
         # the only voice — a window MAY be running this brief, and a blind re-fire would duplicate it.
@@ -17385,7 +17399,12 @@ print("%s %d" % hit)
         # ${HF_ARGV[@]+…} pre-delivers $CMD as this tab's ARGV (see hf_argv_launch). Unset/empty ⇒
         # expands to NOTHING and the caller types, exactly as before — which is also what an
         # extracted-function test sees, so this line's old behaviour is preserved there verbatim.
-        bnew="$(kt_launch --type=tab --keep-focus --cwd=current --match "id:$bsid" ${HF_ARGV[@]+"${HF_ARGV[@]}"})" || return 1
+        # rc 13 (UNKNOWN: an expiry or an unreadable list) is PASSED THROUGH, never flattened to 1 —
+        # 1 is the refusal the caller retries, and a retry after an expiry is a second queued session.
+        local blrc=0
+        bnew="$(kt_launch --type=tab --keep-focus --cwd=current --match "id:$bsid" ${HF_ARGV[@]+"${HF_ARGV[@]}"})" || blrc=$?
+        [ "$blrc" != 13 ] || return 13
+        [ "$blrc" = 0 ] || return 1
         case "$bnew" in ''|*[!0-9]*) return 1 ;; esac
         command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn bg-tab kitty "$bnew" "${LAUNCH_DIR:-$PWD}" "it2py bgtab --match id:$bsid"
         # EXACT format it2_bgtab parses (:3712 area): /^Created new pane: /.
@@ -17616,9 +17635,17 @@ PY
 # it2_bgtab FIRING — mirrors it2_split's contract (echoes the new session id | returns 1). A BACKGROUND
 # tab in FIRING's window; it2py bgtab captures + restores + asserts the operator's focus atomically, so
 # no split/raise of the operator's pane survives the fire (and a genuine steal self-cleans + returns 1).
+# THREE return states (2026-10-17, item 2891c7ba7dd9): 0 created · 1 REFUSED (provably nothing created,
+# safe to retry) · 13 UNKNOWN — the kitty launch expired or its list was unreadable (it2py's rc 13), or
+# the bound around the iTerm2 driver fired (124/137) after it may already have created the tab.
 it2_bgtab() {
-  local out
-  out="$(it2py bgtab "$1" 2>/dev/null)" || return 1
+  local out rc=0
+  out="$(it2py bgtab "$1" 2>/dev/null)" || rc=$?
+  case "$rc" in
+    0) ;;
+    13|124|137) return 13 ;;
+    *) return 1 ;;
+  esac
   case "$out" in
     "Created new pane: "*) printf '%s' "${out#Created new pane: }"; return 0 ;;
     *) return 1 ;;
@@ -17886,9 +17913,13 @@ as_tab() { # $1=session-uuid  → echoes "OK <new-session-id>" | "NOTFOUND"
     # whatever os-window is ACTIVE — i.e. the exact "handoff fired into another window" drift the
     # iTerm2 branch's foundWin walk exists to prevent. A dead anchor makes launch exit non-zero,
     # which is what NOTFOUND means.
-    local tnew
+    local tnew trc=0
     # Same pre-delivery as the bg-tab and split surfaces; unset/empty ⇒ nothing, and the caller types.
-    tnew="$(kt_launch --type=tab --cwd=current --match "id:${1##*:}" ${HF_ARGV[@]+"${HF_ARGV[@]}"})" || tnew=""
+    tnew="$(kt_launch --type=tab --cwd=current --match "id:${1##*:}" ${HF_ARGV[@]+"${HF_ARGV[@]}"})" || trc=$?
+    # kt_launch's UNKNOWN (rc 13) is a third stdout state, not a NOTFOUND: NOTFOUND is retried, and a
+    # retry after an expiry queues a second session (item 2891c7ba7dd9, the bg-tab arm's same defect).
+    if [ "$trc" = 13 ]; then printf 'UNKNOWN\n'; return 0; fi
+    [ "$trc" = 0 ] || tnew=""
     case "$tnew" in ''|*[!0-9]*) printf 'NOTFOUND\n' ;; *) command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn tab kitty "$tnew" "${LAUNCH_DIR:-$PWD}" "as_tab --match id:${1##*:}"; printf 'OK %s\n' "$tnew" ;; esac
     return 0
   fi
@@ -18108,12 +18139,27 @@ spawn() {
       # AUTONOMOUS DEFAULT — a BACKGROUND tab in the firing pane's window: never splits the operator's
       # active pane, never raises. it2_bgtab captures + restores + asserts the operator's focus
       # atomically (self-cleans + returns 1 on a genuine steal), so nothing here can move focus.
-      local newid
-      newid="$(it2_bgtab "$FIRING_SID")" \
-        || { /bin/sleep 0.8; newid="$(it2_bgtab "$FIRING_SID")"; } \
-        || { echo "!! firing window for $FIRING_SID not found in iTerm2 (settled + retried) — anchor gone; NOT firing into a random window." >&2
-             echo "   Nothing was launched. Re-fire from a live pane, or pass --window for a deliberate fresh window." >&2
-             return 1; }
+      # A RETRY IS LICENSED ONLY BY A REFUSAL (rc 1), NEVER BY AN EXPIRY (rc 13) — 2026-10-17, item
+      # 2891c7ba7dd9. The old `bgtab || { sleep; bgtab; } || "Nothing was launched"` read a kitty RC
+      # timeout as a refusal: kitty queued BOTH launches and ran them ~40 min later, so three fires
+      # that each said "Nothing was launched" (rc 1) started SIX sessions (panes 321-326). An UNKNOWN
+      # is said as one, keeps the worktree (FIRE_SPAWN_UNKNOWN), and exits 124 — the bound expired.
+      local newid="" brc=0
+      newid="$(it2_bgtab "$FIRING_SID")" || brc=$?
+      if [ "$brc" = 1 ]; then
+        /bin/sleep 0.8; brc=0; newid="$(it2_bgtab "$FIRING_SID")" || brc=$?
+      fi
+      if [ "$brc" = 13 ]; then
+        FIRE_SPAWN_UNKNOWN=1
+        echo "!! bgtab-outcome-unknown: the background-tab launch in $FIRING_SID's window did not answer within its bound — a session MAY have launched or may still launch; NOT retrying, NOT reporting 'nothing launched'." >&2
+        echo "   The terminal queues a launch it could not answer and runs it when it catches up — measured 2026-10-17, ~40 min late. Wait at least 40 min, or until \`timeout 15 kitty @ ls\` answers and lists no pane running this brief, before re-firing; do not fire at all while that read fails. The worktree is KEPT." >&2
+        return 124
+      fi
+      if [ "$brc" != 0 ] || [ -z "$newid" ]; then
+        echo "!! firing window for $FIRING_SID not found in iTerm2 (settled + retried) — anchor gone; NOT firing into a random window." >&2
+        echo "   Nothing was launched. Re-fire from a live pane, or pass --window for a deliberate fresh window." >&2
+        return 1
+      fi
       it2_land "$newid" || return 1
       SPAWNED_PANE="$newid"                          # the fired pane — engagement verify + registry
       ;;
@@ -18194,19 +18240,26 @@ spawn() {
       # Reached only WITH --follow (autonomous --tab was normalized to bg-tab). as_tab CREATES a
       # background tab in the firing window and echoes its id; it2_land then lands the launch command
       # via it2_type_verified (bracketed-paste + echo-verify) and raises the tab (--follow).
-      local out newid
-      out="$(as_tab "$FIRING_SID" 2>/dev/null)" || out="ERR($?)"
-      case "$out" in
-        OK\ *) newid="${out#OK }" ;;
-        *) /bin/sleep 0.8                            # settle + retry once, then fail loud
-           out="$(as_tab "$FIRING_SID" 2>/dev/null)" || out="ERR($?)"
-           case "$out" in
-             OK\ *) newid="${out#OK }" ;;
-             *) echo "!! firing window for $FIRING_SID not found ($out) — NOT firing a tab into a random window." >&2
-                echo "   Nothing was launched. Re-fire from a live pane, or use --window for a deliberate fresh window." >&2
-                return 1 ;;
-           esac ;;
-      esac
+      # UNKNOWN (kitty expiry / unreadable list) or ERR(124|137) (the bound around osascript fired) is
+      # never retried and never "Nothing was launched" — the bg-tab arm's verdict, for the same reason.
+      local out newid="" try
+      for try in 1 2; do
+        out="$(as_tab "$FIRING_SID" 2>/dev/null)" || out="ERR($?)"
+        case "$out" in
+          OK\ *) newid="${out#OK }"; break ;;
+          UNKNOWN|'ERR(124)'|'ERR(137)')
+            FIRE_SPAWN_UNKNOWN=1
+            echo "!! bgtab-outcome-unknown: the tab launch in $FIRING_SID's window did not answer within its bound ($out) — a session MAY have launched or may still launch; NOT retrying, NOT reporting 'nothing launched'." >&2
+            echo "   The terminal queues a launch it could not answer and runs it when it catches up — measured 2026-10-17, ~40 min late. Wait at least 40 min, or until \`timeout 15 kitty @ ls\` answers and lists no pane running this brief, before re-firing; do not fire at all while that read fails. The worktree is KEPT." >&2
+            return 124 ;;
+        esac
+        [ "$try" = 2 ] || /bin/sleep 0.8             # settle + retry once on a refusal, then fail loud
+      done
+      if [ -z "$newid" ]; then
+        echo "!! firing window for $FIRING_SID not found ($out) — NOT firing a tab into a random window." >&2
+        echo "   Nothing was launched. Re-fire from a live pane, or use --window for a deliberate fresh window." >&2
+        return 1
+      fi
       it2_land "$newid" || return 1
       SPAWNED_PANE="$newid"                          # the fired pane — engagement verify + registry
       ;;
