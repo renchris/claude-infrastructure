@@ -278,10 +278,10 @@ drive_watcher() {
 }
 
 @test "[RED] watcher: every type-attempt row names its line, so the disarm line never reads as a second relaunch" {
-  # Pane 7, 2026-10-17 (tests/fixtures/move-lane-2026-10-17/pane7/recycle-watcher.log): the disarm
+  # Pane 7, 2026-10-17 (tests/fixtures/move-lane-2026-10-17/pane7/recycle-watcher.txt): the disarm
   # line's "attempt=2 … verdict=submitted" followed by the relaunch's "attempt=1 … verdict=submitted"
   # was read as the relaunch typed twice. The record itself carries no label:
-  [ "$(grep -c ' type-attempt .* line=' "$REPO/tests/fixtures/move-lane-2026-10-17/pane7/recycle-watcher.log")" = 0 ]
+  [ "$(grep -c ' type-attempt .* line=' "$REPO/tests/fixtures/move-lane-2026-10-17/pane7/recycle-watcher.txt")" = 0 ]
   watcher_setup
   drive_watcher 0
   [ "$status" -eq 1 ] || { echo "$output"; false; }

@@ -1,0 +1,16 @@
+→ armed: __recycle pid=27976 pgid=27976 sid=7 tty=/dev/ttys011 caller=none
+→ pane-probe: __recycle pane=7 it2=/Users/op/.claude/bin/it2 CC_TERM=kitty KITTY_WINDOW_ID=unset identity=kitty bound=10s
+→ pane-probe: __recycle listing rc=0 in 1s shape=json ids=26
+→ pane-reachable: 7 enumerated by '/Users/op/.claude/bin/it2 session list --json' (shape=json, CC_TERM=kitty)
+→ pane 7 CONFIRMED at a shell prompt after 70s — typing relaunch
+→ folded a re-created source stub (9f6593c5-fa6d-45eb-babd-5f3be41cd18f.jsonl) via lr-transplant --phase fold-stub — appended to both copies, the retired store holds no live-looking copy
+2026-10-17T07:57:00Z type-attempt pane=7 attempt=1 mode=paste send_rc=0 send_ms=12000 read_rc=1 read_bytes=0 nonce_seen=0 suffix_ok=0 fused=0 focused=0 load_per_core=5.74 echo_deadline_ms=7740 bound_s=40 verdict=echo-unverified
+2026-10-17T07:57:34Z type-attempt pane=7 attempt=2 mode=paste send_rc=0 send_ms=4000 read_rc=0 read_bytes=904 nonce_seen=1 suffix_ok=1 fused=0 focused=0 load_per_core=5.74 echo_deadline_ms=7740 bound_s=40 cr_rc=0 verdict=submitted
+2026-10-17T07:57:45Z type-attempt pane=7 attempt=1 mode=paste send_rc=0 send_ms=1000 read_rc=0 read_bytes=1337 nonce_seen=1 suffix_ok=1 fused=0 focused=0 load_per_core=6.66 echo_deadline_ms=8660 bound_s=40 cr_rc=0 verdict=submitted
+→ relaunch typed into 7: cd /Users/op/Development/.worktrees/wt-cc-141442-81738 && nocorrect env LR_LAUNCH_LOCK=/Users/op/.reso/limit-recover/locks/9f6593c5-fa6d-45eb-babd-5f3be41cd18f.launch LR_RECORD_ID=move-20261017T073813Z-next2-next-26358-9f6593c5 LR_ATTEMPT=1 bash /Users/op/.reso/limit-recover/9f6593c5-fa6d-45eb-babd-5f3be41cd18f/bundle-20261017T074535Z/lr-launch-9f6593c5-fP2Mrn.sh
+⚠ INDETERMINATE:boot — no claude on /dev/ttys011, no relaunch.rc and no launcher refusal 111s after the relaunch was typed; NOT retyping (a second identical command cannot clear a real refusal). Reading on to 295s.
+hf_alarm class=recycle-boot-indeterminate record=alarm-20261017T075746Z-27976-13286.json push=refused-rc124
+→ relaunch process up in 7 (claude on tty) — verifying ENGAGEMENT
+→ relaunched + ENGAGEMENT CONFIRMED BY PROCESS in 7 (--resume 9f6593c5 alive 15s past boot; no prompt by design)
+cc-resume-debt: debt for 9f6593c5-fa6d-45eb-babd-5f3be41cd18f is already proven — nothing to discharge
+→ resume-debt discharge: rc 0

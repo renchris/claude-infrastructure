@@ -152,7 +152,7 @@ assert_yielded() { # $1=where
   [[ "$e65" < "$t_type" && "$t_type" < "$t_debt" && "$t_debt" < "$e79" ]] || { echo "$e65 $t_type $t_debt $e79"; false; }
   [ "$n_spawn" = 1 ]
   [ "$(jq -r .why "$FX/resume-debt.json")" = "recycle of pane 7 (resume-launcher, same sid) about to type /exit" ]
-  grep -q 'ENGAGEMENT CONFIRMED BY PROCESS' "$FX/recycle-watcher.log"
+  grep -q 'ENGAGEMENT CONFIRMED BY PROCESS' "$FX/recycle-watcher.txt"
 
   subject_exit
   run recycle_fire_commit "$SESS"
