@@ -49,15 +49,21 @@ _bo_deref() { # <path> → the real file behind any symlink chain (readlink -f, 
   readlink -f "$p" 2>/dev/null && return 0
   while [ -L "$p" ] && [ "$n" -lt 20 ]; do
     t="$(readlink "$p")"
-    case "$t" in /*) p="$t" ;; *) p="$(dirname "$p")/$t" ;; esac
+    case "$t" in /*) p="$t" ;; *) _bo_dirof "$p"; p="$_bo_d/$t" ;; esac
     n=$(( n + 1 ))
   done
   printf '%s\n' "$p"
 }
+# dirname(1) by parameter expansion: no process start. The guards give dirname's answer for the
+# two shapes `${p%/*}` gets wrong (`b.sh` → `.`, `/b.sh` → `/`).
+_bo_dirof() { case "$1" in */*) _bo_d="${1%/*}"; [ -n "$_bo_d" ] || _bo_d=/ ;; *) _bo_d=. ;; esac; }
+_bo_dirof "$(_bo_deref "${BASH_SOURCE[0]}")"
+# python3 -S: no site import (no .pth scan, no site-packages on sys.path) — the body and
+# lib/lesson_recall.py import only stdlib, which tests/bash-hook-trims-forks.bats pins.
 printf '%s' "$INPUT" | CC_BO_CHARS="${CC_BASH_OFFLOAD_CHARS:-8000}" \
   CC_BO_DIR="${CC_BASH_OFFLOAD_DIR:-${TMPDIR:-/tmp}/claude-bash-output}" \
-  CC_BO_OFF="${CC_BASH_OFFLOAD:-1}" CC_BO_LIB="$(dirname "$(_bo_deref "${BASH_SOURCE[0]}")")/lib" \
-  PYTHONDONTWRITEBYTECODE=1 python3 -c '
+  CC_BO_OFF="${CC_BASH_OFFLOAD:-1}" CC_BO_LIB="$_bo_d/lib" \
+  PYTHONDONTWRITEBYTECODE=1 python3 -S -c '
 import hashlib, json, os, re, sys, time
 LRH = "bash-output-offload:lesson"
 def lr_blind(d, reason):
