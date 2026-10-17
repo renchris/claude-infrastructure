@@ -345,6 +345,38 @@ alias_pane_to_session() {
   [[ "$output" != *"NEW occupant"* ]] || false
 }
 
+# ── W4 R3: the keyset is re-read on EVERY poll, never memoised across polls ─────────────────────
+# A cache keyed on the alias file's mtime cannot see a re-point inside the same second (`-nt` has
+# one-second resolution), so the mtime is pinned back here: only a per-poll re-read passes.
+@test "W4 R3: an alias re-pointed within the SAME second is followed by the very next poll" {
+  local next="dddddddd-4444-3333-2222-111111111111"
+  alias_pane_to_session
+  ITERM_SESSION_ID="w0t0p0:$UUID" "$AWAIT" --interval 1 --timeout 20 \
+    > "$BATS_TEST_TMPDIR/out" 2> "$BATS_TEST_TMPDIR/err" & local watcher=$!
+  await_file "$CC_MAILBOX_DIR/$SESSKEY.watching" || false
+  touch -r "$CC_MAILBOX_DIR/.alias/$UUID" "$BATS_TEST_TMPDIR/stamp"
+  printf '2026-07-31T00:00:01+0000 %s\n' "$next" >> "$CC_MAILBOX_DIR/.alias/$UUID"
+  touch -r "$BATS_TEST_TMPDIR/stamp" "$CC_MAILBOX_DIR/.alias/$UUID"   # same mtime as before
+  printf '2026-07-31T10:00:00+0000 [peer] for the new occupant\n' > "$CC_MAILBOX_DIR/$next.md"
+  local rc=0; wait "$watcher" || rc=$?
+  [ "$rc" -eq 0 ]
+  grep -qF 'for the new occupant' "$BATS_TEST_TMPDIR/out"
+}
+
+@test "W4 R3: a reverse edge that APPEARS mid-watch pings on mail already pending, with no append" {
+  # Armed on the SESSION id with no alias yet: the pane box's line is invisible. Creating the alias
+  # writes nothing to any box, so only a poll that re-reads the keyset (and seeds the new key from
+  # .seen) can deliver it — an append-driven wake never would.
+  printf '2026-07-31T10:00:00+0000 [peer] waiting in the pane box\n' > "$CC_MAILBOX_DIR/$UUID.md"
+  "$AWAIT" "$SESSKEY" --interval 1 --timeout 20 \
+    > "$BATS_TEST_TMPDIR/out" 2> "$BATS_TEST_TMPDIR/err" & local watcher=$!
+  await_file "$CC_MAILBOX_DIR/$SESSKEY.watching" || false
+  alias_pane_to_session
+  local rc=0; wait "$watcher" || rc=$?
+  [ "$rc" -eq 0 ]
+  grep -qF 'waiting in the pane box' "$BATS_TEST_TMPDIR/out"
+}
+
 @test "keyset: the .watching marker is written under EVERY key (either hook's check answers true)" {
   alias_pane_to_session
   ( await_armed; sleep 1; printf '2026-07-31T10:00:00+0000 [peer] ping\n' >> "$MB" ) & local writer=$!   # after the arm, as above

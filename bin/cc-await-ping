@@ -293,11 +293,74 @@ _banner="cc-await-ping: watching $CUR_UUID inbox ($([ "$_have_lib" = 1 ] && echo
 # single-key marker answers one of them and not the other, and the hook that misses re-nudges a
 # session that is in fact armed. One marker per key makes the question key-agnostic.
 _keys() {   # every physical key of this logical inbox (see the lib's mailbox_keyset)
-  if [ "$_have_lib" = 1 ] && command -v mailbox_keyset >/dev/null 2>&1; then
-    mailbox_keyset "$CUR_UUID" 2>/dev/null || printf '%s\n' "$CUR_UUID"
-  else
-    printf '%s\n' "$CUR_UUID"   # no lib ⇒ no alias to resolve ⇒ exactly the single-key behaviour
+  _keyset
+  printf '%s\n' "$_KEYS"
+}
+# FORK-FREE KEYSET (W4 R3, 2026-10-17). The poll asked for the keyset twice and each ask cost ~8
+# processes: a subshell into mailbox_keyset → mailbox_alias_of → `tail -n1 | awk` over the alias file.
+# _keyset reproduces mailbox_keyset's answer in-process and sets _KEYS; the poll computes it ONCE and
+# reuses it for the heartbeat and the take. No memo ACROSS polls: an alias re-pointed within the same
+# second is invisible to any `-nt` freshness test, so every poll re-reads the file.
+_alias_tip() {   # <alias file> → _ALIAS_TIP = `tail -n1 <file> | awk '{print $2}'`, without the forks
+  local line="" last="" n=0 b=$' \t'   # awk's default FS: runs of space/tab (not the locale's blanks)
+  _ALIAS_TIP=""
+  [ -f "$1" ] || return 0
+  # `|| [ -n "$line" ]` keeps a last line that has no trailing newline, which tail -n1 also prints.
+  { while IFS= read -r line || [ -n "$line" ]; do
+      last="$line"; n=$((n + 1)); [ "$n" -lt 64 ] || break
+    done < "$1"; } 2>/dev/null
+  # A LONG trail goes back to tail|awk: the builtin pays per line, and at 1,658 lines (a real pane's
+  # trail) it cost 23 ms against the two forks' 4 ms. Typical trails are a few lines (8 of 1,532 > 64).
+  if [ "$n" -ge 64 ]; then _ALIAS_TIP="$(tail -n1 "$1" 2>/dev/null | awk '{print $2}')"; return 0; fi
+  last="${last#"${last%%[!"$b"]*}"}"                  # awk drops leading blanks
+  case "$last" in *["$b"]*) ;; *) return 0 ;; esac    # one field (or none) ⇒ $2 is empty
+  last="${last#*["$b"]}"
+  last="${last#"${last%%[!"$b"]*}"}"
+  _ALIAS_TIP="${last%%["$b"]*}"
+}
+_keyset() {   # → _KEYS: newline-separated, exactly what `mailbox_keyset "$CUR_UUID"` would print
+  local k="$CUR_UUID" ad="$MAILBOX_DIR/.alias" shortlist rest f
+  _KEYS="$k"
+  # no lib ⇒ no alias to resolve ⇒ exactly the single-key behaviour
+  { [ "$_have_lib" = 1 ] && command -v mailbox_keyset >/dev/null 2>&1; } || return 0
+  if ! command -v _mbx_valid_uuid >/dev/null 2>&1; then  # a lib shaped unlike today's: ask it directly
+    _KEYS="$(mailbox_keyset "$k" 2>/dev/null)" || _KEYS="${_KEYS:+$_KEYS
+}$k"
+    return 0
   fi
+  _mbx_valid_uuid "$k" || return 0                      # keyset rc 1 ⇒ the caller's bare-key fallback
+  [ "${CC_MBX_SESSION_KEY:-1}" = 0 ] && return 0
+  _alias_tip "$ad/$k"                                   # FORWARD edge (mailbox_alias_of)
+  if [ -n "$_ALIAS_TIP" ] && _mbx_valid_uuid "$_ALIAS_TIP" && [ "$_ALIAS_TIP" != "$k" ]; then
+    _KEYS="$k
+$_ALIAS_TIP"
+    return 0
+  fi
+  # REVERSE edge (session → its pane): grep shortlists in one fork, each candidate's TIP adjudicates.
+  shortlist="$(grep -lF " $k" "$ad"/* 2>/dev/null)"
+  [ -n "$shortlist" ] || return 0
+  rest="$shortlist
+"
+  while [ -n "$rest" ]; do
+    f="${rest%%
+*}"; rest="${rest#*
+}"
+    [ -n "$f" ] || continue
+    _alias_tip "$f"
+    [ "$_ALIAS_TIP" = "$k" ] && _KEYS="$_KEYS
+${f##*/}"
+  done
+  return 0
+}
+# mailbox_lines <key> without its three nested subshells: one grep, path by expansion. Same answer,
+# 0 for an invalid key or a missing box (the lib's _mbx_valid_uuid rule, inlined for older libs).
+_mlines() {   # <key> → _ML_N
+  local f="$MAILBOX_DIR/$1.md" n
+  _ML_N=0
+  case "$1" in ''|.|..|.*|*[!A-Za-z0-9._-]*) return 0 ;; esac
+  [ -f "$f" ] || return 0
+  n="$(grep -c '' "$f" 2>/dev/null)"
+  case "$n" in ''|*[!0-9]*) ;; *) _ML_N="$n" ;; esac
 }
 BEAT_KEYS="$CUR_UUID"
 #
@@ -408,8 +471,8 @@ _claim_body() {
 }
 _beat() {
   local k
-  BEAT_KEYS="$(_keys)"
-  mkdir -p "$WATCH_CLAIM_DIR" 2>/dev/null || true
+  _keyset; BEAT_KEYS="$_KEYS"   # the poll's ONE keyset read; the take below iterates this same set
+  [ -d "$WATCH_CLAIM_DIR" ] || mkdir -p "$WATCH_CLAIM_DIR" 2>/dev/null || true
   for k in $BEAT_KEYS; do
     if [ "$IDLE_SCOPED" = 1 ]; then
       printf 'pid=%s\nmode=idle-scoped\n' "$$" > "$MAILBOX_DIR/$k.watching" 2>/dev/null || true
@@ -1308,28 +1371,35 @@ _owner_dead() {  # 0 iff the watched pane is PROVABLY gone — pid oracle AND an
 #
 # bash 3.2 (macOS /bin/bash) has no associative arrays, so this is a newline-delimited "<key> <cursor>"
 # string with a linear scan. The set is at most a couple of keys (lib → mailbox_keyset) and a mailbox
-# key is validated to [A-Za-z0-9._-], so a space is an unambiguous separator. `while … done <<HEREDOC`
-# does NOT subshell in bash, so _woke_set really does mutate the caller's WOKE_MAP.
+# key is validated to [A-Za-z0-9._-], so a space is an unambiguous separator. Both helpers run in the
+# caller's shell (no `$( )`), so _woke_set really does mutate the caller's WOKE_MAP.
 WOKE_MAP=""
-_woke_get() {   # <key> → print its cursor on stdout; rc 1 = not yet seeded
-  local k="$1" line
-  while IFS= read -r line; do
-    case "$line" in "$k "*) printf '%s' "${line#* }"; return 0 ;; esac
-  done <<WOKEEOF
-$WOKE_MAP
-WOKEEOF
+# The scan walks WOKE_MAP by parameter expansion (W4 R3): a `<<HEREDOC` costs bash a temp file per
+# call, and the getter used to run inside `$( )`, a fork per key per poll. Same lines, same order.
+_woke_get() {   # <key> → _WOKE_V = its cursor; rc 1 = not yet seeded (_WOKE_V empty)
+  local k="$1" line rest="$WOKE_MAP
+"
+  _WOKE_V=""
+  while [ -n "$rest" ]; do
+    line="${rest%%
+*}"; rest="${rest#*
+}"
+    case "$line" in "$k "*) _WOKE_V="${line#* }"; return 0 ;; esac
+  done
   return 1
 }
 _woke_set() {   # <key> <cursor>
-  local k="$1" v="$2" line out=""
-  while IFS= read -r line; do
+  local k="$1" v="$2" line out="" rest="$WOKE_MAP
+"
+  while [ -n "$rest" ]; do
+    line="${rest%%
+*}"; rest="${rest#*
+}"
     [ -n "$line" ] || continue
     case "$line" in "$k "*) continue ;; esac
     out="$out$line
 "
-  done <<WOKEEOF
-$WOKE_MAP
-WOKEEOF
+  done
   WOKE_MAP="$out$k $v"
 }
 
@@ -1575,7 +1645,7 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
     WOKE_MAP=""
     echo "cc-await-ping: role re-pointed → now watching $CUR_UUID" >&2
   fi
-  mkdir -p "$MAILBOX_DIR" 2>/dev/null || true; _beat                                     # heartbeat
+  [ -d "$MAILBOX_DIR" ] || mkdir -p "$MAILBOX_DIR" 2>/dev/null || true; _beat            # heartbeat
 
   # BEFORE any take: consuming is irreversible, so the orphan check has to gate it, not follow it.
   if _owner_dead; then
@@ -1589,17 +1659,18 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
     # ends up deaf to a delivery sitting one filename away.
     _HIT=""; _FROM=0
     _owner_birth
-    for _k in $(_keys); do
+    for _k in $BEAT_KEYS; do   # the keyset _beat just read — one read per poll, never one per use
       # Seed this key's PRIVATE cursor from .seen the first time we see it — that is the F6a
       # behaviour (already-pending mail fires at once) and it is the ONLY time .seen is consulted.
       # A predecessor's WAKE RECORD raises the seed: those lines already woke this session once.
-      if ! _woke_get "$_k" >/dev/null 2>&1; then
+      if ! _woke_get "$_k"; then
         _sd="$(mailbox_seen "$_k")"; _wr="$(_wakerec_read "$_k")"
         [ "$_wr" -gt "$_sd" ] && _sd="$_wr"
         _woke_set "$_k" "$_sd"
       fi
-      _w="$(_woke_get "$_k")"; case "$_w" in ''|*[!0-9]*) _w=0 ;; esac
-      if [ "$(mailbox_lines "$_k")" -gt "$_w" ]; then
+      _woke_get "$_k"; _w="$_WOKE_V"; case "$_w" in ''|*[!0-9]*) _w=0 ;; esac
+      _mlines "$_k"
+      if [ "$_ML_N" -gt "$_w" ]; then
         # F12: a window holding ONLY our own WAKE-PATH-DOWN corpse-notice is not a ping. Advance our
         # PRIVATE cursor past it (so we do not re-test it every poll) and keep watching. `.seen` is
         # deliberately untouched: the notice stays pending for hooks/mailbox-drain.sh, which is the
@@ -1611,14 +1682,16 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
           # still delivers these, and the next WAKING line takes from this same cursor so they print
           # with it. Deferred into the next wake, never dropped. The note is emitted only when the
           # damped count CHANGES — a per-poll line would rebuild the noise this flag exists to remove.
-          _cd_n="$(mailbox_lines "$_k")"
-          if [ "$_cd_n" != "$(_woke_get "damped:$_k" 2>/dev/null || echo '')" ]; then
+          _mlines "$_k"; _cd_n="$_ML_N"
+          _woke_get "damped:$_k"
+          if [ "$_cd_n" != "$_WOKE_V" ]; then
             _woke_set "damped:$_k" "$_cd_n"
             echo "cc-await-ping: holding $(( _cd_n - _w )) line(s) on [$_k] — no waking class among them (${ONLY_CLASS:+--only-class $ONLY_CLASS}${EXCEPT_CLASS:+--except-class $EXCEPT_CLASS}); still watching. They are NOT dropped: your boundary drain delivers them, and they print with the next waking line." >&2
           fi
         else
-          _woke_set "$_k" "$(mailbox_lines "$_k")"
-          echo "cc-await-ping: skipped $(( $(mailbox_lines "$_k") - _w )) WAKE-PATH-DOWN control line(s) of our own, mail older than this session's birth, or forwarded copies of mail a predecessor watcher already woke you for, on [$_k] — not a ping, still watching (they stay unseen for the boundary drain)" >&2
+          _mlines "$_k"; _woke_set "$_k" "$_ML_N"
+          _mlines "$_k"
+          echo "cc-await-ping: skipped $(( _ML_N - _w )) WAKE-PATH-DOWN control line(s) of our own, mail older than this session's birth, or forwarded copies of mail a predecessor watcher already woke you for, on [$_k] — not a ping, still watching (they stay unseen for the boundary drain)" >&2
         fi
       fi
     done
@@ -1635,7 +1708,7 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
       # it once more; that is cheap, and the alternative was a silent, unrecoverable loss.
       # The window is pinned to an END read BEFORE the print, so the wake record names exactly the
       # lines this wake carried; a line appended mid-print is outside both and wakes the successor.
-      _END="$(mailbox_lines "$_HIT")"
+      _mlines "$_HIT"; _END="$_ML_N"
       if command -v mailbox_peek_range >/dev/null 2>&1; then
         _pb="$(mailbox_peek_range "$_HIT" "$_FROM" "$_END")" && printf '%s' "$_pb"   # same bytes as peek_from
         _wakerec_write "$_HIT" "$_END"
@@ -1650,7 +1723,7 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
       fi
       # Our PRIVATE cursor still advances — that is what stops us re-testing this window — and it is
       # deliberately the ONLY cursor this path writes (the wake record above is not one: no reader delivers from it).
-      _woke_set "$_HIT" "$(mailbox_lines "$_HIT")"
+      _mlines "$_HIT"; _woke_set "$_HIT" "$_ML_N"
       # The F9 rc-2 escalation that stood here (verdict=ping-cursorfail / exit 4) is gone WITH its
       # subject: it alarmed when the take printed a body but could not advance `.seen`. This path
       # writes no shared cursor at all, so there is no write left to fail and no escalation to
