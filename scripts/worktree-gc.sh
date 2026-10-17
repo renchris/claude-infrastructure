@@ -121,7 +121,10 @@
 #                         ~/.claude/autonomy/worktree-gc.disabled). Set it EMPTY to ignore the file.
 #   CC_WTGC_EXCLUDE       colon-separated paths never touched (also covers nested worktrees)
 #   CC_WTGC_REPO          repo to sweep (default: the repo containing $PWD)
-#   CC_WTGC_TRUNK         landedness base (default: origin/main)
+#   CC_WTGC_TRUNK         landedness base (default: origin/HEAD's target, else origin/main; an
+#                         unresolvable trunk KEEPs everything as `trunk-unresolvable`, AC-4)
+#   CC_WTGC_TOMBSTONE_LIB the tombstone library (default: lib/wt-tombstone.sh beside the real
+#                         script, else ~/.claude/scripts/lib/). Absent ⇒ nothing is removed.
 #   CC_WTGC_IDLE_MIN      idle floor in minutes (default: 30)
 #   CC_WTGC_ABANDON_HOURS DISPOSE-class age floor in hours (default: 72)
 #   CC_WTGC_BACKLOG       ownership oracle 1 — backlog ledger (default: ~/.claude/bin/cc-backlog)
@@ -255,7 +258,7 @@ REGISTRY_DIR="${CC_WTGC_REGISTRY_DIR:-$HOME/.reso/live-sessions}"
 # session-occupancy read to go silently empty on a box that is still being swept.
 SESSION_REG_DIR="${CC_WTGC_SESSION_REGISTRY:-${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}}"
 ACTIVE_MIN="${CC_WTGC_ACTIVE_MIN:-30}"
-TRUNK="${CC_WTGC_TRUNK:-origin/main}"
+# TRUNK is resolved PER REPO once MAIN is known (below): origin/main is only this repo's answer.
 IDLE_MIN="${CC_WTGC_IDLE_MIN:-30}"
 LOCK_DIR="${CC_WTGC_LOCK:-$HOME/.claude/state/worktree-gc.lock}"
 ABANDON_HOURS="${CC_WTGC_ABANDON_HOURS:-72}"
@@ -272,6 +275,57 @@ fi
 # Always drive off the MAIN checkout, even when invoked from a linked worktree.
 MAIN="$("$GIT_BIN" -C "$MAIN" rev-parse --path-format=absolute --git-common-dir 2>/dev/null | sed 's#/\.git$##')"
 [ -d "$MAIN" ] || MAIN="$("$GIT_BIN" -C "${CC_WTGC_REPO:-$PWD}" rev-parse --show-toplevel)"
+
+# ── The trunk, PER REPO (WP-10). A hardcoded origin/main is right for this repo and wrong for any
+#    repo whose default branch is not `main`: there `landed()` asked `git cherry` about a ref that
+#    does not exist, got rc≠0, and called EVERY branch unlanded — which is the DISPOSE class's entry
+#    door, not a KEEP. So origin/HEAD names the trunk when the clone recorded one, origin/main is the
+#    fallback, and an explicit CC_WTGC_TRUNK still wins.
+#    AC-4: when the chosen ref does not resolve, landedness is UNPROVABLE in both directions, and
+#    that is its own verdict (`trunk-unresolvable`), never folded into "unlanded" or "landed".
+if [ -n "${CC_WTGC_TRUNK:-}" ]; then
+  TRUNK="$CC_WTGC_TRUNK"
+else
+  TRUNK="$("$GIT_BIN" -C "$MAIN" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)"
+  [ -n "$TRUNK" ] || TRUNK="origin/main"
+fi
+TRUNK_OK=0
+"$GIT_BIN" -C "$MAIN" rev-parse --verify --quiet "$TRUNK" >/dev/null 2>&1 && TRUNK_OK=1
+
+# ── The tombstone library (W2-CONTRACT.md). Every removal below writes a reversible record FIRST:
+#    `git worktree remove` exits 0 while deleting gitignored content git records nowhere, and the
+#    disposal row's `destroyed_ignored` only ever NAMED what went. The library moves that residue
+#    aside and pins any head trunk lacks, so a removal becomes undoable.
+#    Found beside the REAL script (~/.claude/scripts/worktree-gc.sh is a per-file symlink into the
+#    checkout, so dirname "$0" alone would look in the symlink farm), else in the live layer.
+#    CC_WTGC_TOMBSTONE_LIB, when set, is the ONLY place looked — so a test can make it absent.
+#    No library ⇒ nothing is removed (TOMB_OK=0 KEEPs at every removal site); KEEP-only gates that
+#    need it (pins) are skipped, which can only fail toward a removal the missing record then blocks.
+if [ -n "${CC_WTGC_TOMBSTONE_LIB:-}" ]; then
+  TOMB_LIB="$CC_WTGC_TOMBSTONE_LIB"
+else
+  _self="$0"
+  while [ -L "$_self" ]; do
+    _lnk="$(readlink "$_self")"
+    case "$_lnk" in /*) _self="$_lnk" ;; *) _self="$(dirname "$_self")/$_lnk" ;; esac
+  done
+  TOMB_LIB="$(dirname "$_self")/lib/wt-tombstone.sh"
+  [ -f "$TOMB_LIB" ] || TOMB_LIB="$HOME/.claude/scripts/lib/wt-tombstone.sh"
+  unset _self _lnk
+fi
+TOMB_OK=0
+# The library takes its git and its ledger from THIS script's seams, so the tombstone row and the
+# disposal row land in one file and a fixtured git stays fixtured.
+WT_GIT="${WT_GIT:-$GIT_BIN}"
+WT_LEDGER="${WT_LEDGER:-$DISPOSAL_LOG}"
+[ "$TRUNK_OK" = "1" ] && WT_TRUNK="${WT_TRUNK:-$TRUNK}"
+if [ -f "$TOMB_LIB" ]; then
+  # shellcheck source=/dev/null
+  . "$TOMB_LIB" && [ "$(type -t wt_tombstone 2>/dev/null)" = "function" ] && TOMB_OK=1
+fi
+# The pin predicate lives in wt-park.sh, which the library sources at its tail when present.
+PIN_OK=0
+[ "$TOMB_OK" = "1" ] && [ "$(type -t wt_pinned 2>/dev/null)" = "function" ] && PIN_OK=1
 
 # canon <path> — resolve symlinks and fold /private/tmp → /tmp so cc-notify cwds, lsof output
 # and the worktree registry compare on one canonical form (macOS /tmp is a symlink).
@@ -397,11 +451,19 @@ fi
 # command substitution and a subshell cannot assign to its parent. A refusal nobody can attribute
 # is the same defect one layer up — it would put "occupancy unknown" and "occupied" on one line.
 CWDS_WHY_FILE="${TMPDIR:-/tmp}/worktree-gc.cwdswhy.$$"
+# The KIND beside the reason (AC-5): an ABSENT binary is a missing oracle, which the ORACLES floor
+# below already rules on; a PRESENT binary that fails its own control is a DEGRADED one, named in
+# the .kind file (`lsof` / `pgrep`) so the top-level gate can refuse the pass and say which went blind.
 cwds_why() { cat "$CWDS_WHY_FILE" 2>/dev/null; }
-_cwds_unanswerable() { printf '%s\n' "$1" > "$CWDS_WHY_FILE" 2>/dev/null; return 2; }
+cwds_degraded() { cat "$CWDS_WHY_FILE.kind" 2>/dev/null; }
+_cwds_unanswerable() {
+  printf '%s\n' "$1" > "$CWDS_WHY_FILE" 2>/dev/null
+  [ -n "${2:-}" ] && printf '%s\n' "$2" > "$CWDS_WHY_FILE.kind" 2>/dev/null
+  return 2
+}
 claude_cwds() {
   local cpid pids rc ctl
-  : > "$CWDS_WHY_FILE" 2>/dev/null
+  : > "$CWDS_WHY_FILE" 2>/dev/null; rm -f "$CWDS_WHY_FILE.kind" 2>/dev/null
   command -v "$PGREP_BIN" >/dev/null 2>&1 \
     || _cwds_unanswerable "pgrep ($PGREP_BIN) is not executable here" || return 2
   command -v "$LSOF_BIN" >/dev/null 2>&1 \
@@ -412,11 +474,11 @@ claude_cwds() {
   # fails precisely when it passes is worse than none at all.
   ctl="$("$LSOF_BIN" -a -p "$$" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')"
   [ -n "$ctl" ] \
-    || _cwds_unanswerable "lsof cannot read the cwd of this very process (pid $$) — it cannot see any process's cwd, so its silence about claude is not evidence" \
+    || _cwds_unanswerable "lsof cannot read the cwd of this very process (pid $$) — it cannot see any process's cwd, so its silence about claude is not evidence" lsof \
     || return 2
   pids="$("$PGREP_BIN" -f claude 2>/dev/null)"; rc=$?
   [ "$rc" -le 1 ] \
-    || _cwds_unanswerable "pgrep exited $rc — the process table was not read" || return 2
+    || _cwds_unanswerable "pgrep exited $rc — the process table was not read" pgrep || return 2
   for cpid in $(printf '%s\n' "$pids" | sort -u); do
     case "$cpid" in ''|*[!0-9]*) continue ;; esac
     "$LSOF_BIN" -a -p "$cpid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p'
@@ -427,18 +489,49 @@ claude_cwds() {
 # ── Mutex: serialize every MUTATING pass (audit §8-D — cc-reaper:267, desk-land.sh,
 #    lr-fire-resume.sh, teammate-auto-shutdown.sh and the guard hook all remove/prune too;
 #    concurrent worktree mutation is the GH #34645/#48927 data-loss class). ────────────
+#
+# F-9 — WHO HOLDS IT, not how old it is. The break rule used to be "the dir's mtime is over 60 min",
+# and nothing ever refreshed that mtime, so a pass running longer than an hour had its lock declared
+# stale while it was still removing worktrees (a 116-tree lab sweep measured 1128 s, and that is a
+# floor: real trees carry node_modules). The holder now writes its pid + start time into the dir
+# (`ps -o lstart=`; kill -0 alone convicts nothing once the OS recycles a dead holder's pid — the
+# design tests/session-end-gc-lock.bats pins), and the dir's mtime is touched once per record.
+# A lock with a token is broken only when its holder is provably gone; a lock with NO token is a
+# pre-F-9 pass (or one between its mkdir and its token write) and keeps the old 60-min rule, which
+# the heartbeat now makes safe against this version too. `kill -0` is a liveness PROBE; nothing here
+# ever signals a process.
 LOCK_HELD=0
 # shellcheck disable=SC2329  # invoked indirectly via `trap cleanup EXIT` (shellcheck can't see traps)
-cleanup() { [ "$LOCK_HELD" = "1" ] && rmdir "$LOCK_DIR" 2>/dev/null; rm -f "$REMOVED_BR" "$CWDS_WHY_FILE" 2>/dev/null; }
+cleanup() {
+  [ "$LOCK_HELD" = "1" ] && { rm -f "$LOCK_DIR/pid" "$LOCK_DIR/lstart" 2>/dev/null; rmdir "$LOCK_DIR" 2>/dev/null; }
+  rm -f "$REMOVED_BR" "$CWDS_WHY_FILE" "$CWDS_WHY_FILE.kind" 2>/dev/null
+}
 REMOVED_BR="${TMPDIR:-/tmp}/worktree-gc.removed.$$"
 trap cleanup EXIT
+proc_lstart() { LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//'; }
+lock_holder() { # → live | dead | untokened — read off the lock dir's own token, never its age
+  local pid rec cur
+  pid="$(cat "$LOCK_DIR/pid" 2>/dev/null)"
+  case "$pid" in ''|*[!0-9]*) echo untokened; return 0 ;; esac
+  kill -0 "$pid" 2>/dev/null || { echo dead; return 0; }
+  rec="$(cat "$LOCK_DIR/lstart" 2>/dev/null)"
+  cur="$(proc_lstart "$pid")"
+  # A recorded start time that no longer matches is a RECYCLED pid: the holder is gone. A missing
+  # reading on either side cannot convict, so it stays live.
+  if [ -n "$rec" ] && [ -n "$cur" ] && [ "$rec" != "$cur" ]; then echo dead; else echo live; fi
+}
+lock_heartbeat() { [ "$LOCK_HELD" = "1" ] && touch "$LOCK_DIR" 2>/dev/null; return 0; }
 if [ "$DRY_RUN" = "0" ]; then
   mkdir -p "$(dirname "$LOCK_DIR")" 2>/dev/null
   if mkdir "$LOCK_DIR" 2>/dev/null; then
     LOCK_HELD=1
   else
-    # Break a lock left behind by a crashed pass (>60 min), never a live one.
-    if [ -d "$LOCK_DIR" ] && [ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +60 2>/dev/null)" ]; then
+    # Break a lock whose holder is provably gone — a dead or recycled pid, or an untokened lock
+    # nobody has touched in 60 min — never a live one, however old its mtime.
+    _holder="$(lock_holder)"
+    if [ -d "$LOCK_DIR" ] && { [ "$_holder" = "dead" ] || { [ "$_holder" = "untokened" ] \
+         && [ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +60 2>/dev/null)" ]; }; }; then
+      rm -f "$LOCK_DIR/pid" "$LOCK_DIR/lstart" 2>/dev/null
       rmdir "$LOCK_DIR" 2>/dev/null
       mkdir "$LOCK_DIR" 2>/dev/null && LOCK_HELD=1
     fi
@@ -447,6 +540,9 @@ if [ "$DRY_RUN" = "0" ]; then
       exit 0
     fi
   fi
+  # The token: THIS shell's pid (it lives exactly as long as the pass) and its start time.
+  printf '%s\n' "$$" > "$LOCK_DIR/pid" 2>/dev/null
+  proc_lstart "$$" > "$LOCK_DIR/lstart" 2>/dev/null
 fi
 : > "$REMOVED_BR"
 
@@ -477,6 +573,18 @@ else
   CLAUDE_CWDS=""
   echo "worktree-gc: process-cwd oracle UNAVAILABLE — ${PROC_ORACLE_WHY:-it could not answer}."
   echo "worktree-gc: unregistered sessions are INVISIBLE this pass; every removal will be refused at act time."
+fi
+# AC-5 — a PRESENT oracle that fails its own positive control refuses the WHOLE mutating pass. The
+# act-time recheck would KEEP every candidate anyway, so a pass that goes on can only remove nothing
+# while printing a verdict per tree and exiting 0 — a nightly that reads healthy over a blind box.
+# Exit 3 and one parseable token say it once, where the wrapper reads. An ABSENT binary is not this
+# case (the ORACLES floor below rules on it), and --dry-run still prints its plan, which removes
+# nothing by construction.
+PROC_DEGRADED="$(cwds_degraded)"
+if [ -n "$PROC_DEGRADED" ] && [ "$DRY_RUN" = "0" ]; then
+  echo "worktree-gc: verdict=oracle-degraded $PROC_DEGRADED — ${PROC_ORACLE_WHY:-it could not answer its own control}."
+  echo "worktree-gc: a liveness oracle that answers nothing cannot prove a worktree idle ⇒ refusing the whole pass (AC-5). Re-run with --dry-run to inspect."
+  exit 3
 fi
 LIVE_CWDS="$(printf '%s\n%s\n' "$NOTIFY_CWDS" "$CLAUDE_CWDS" | while IFS= read -r c; do
   [ -n "$c" ] || continue
@@ -1010,13 +1118,53 @@ log_disposal() { # <path> <branch> <head> <n> <patch-shas> <item> <idle-h> <veri
   # disposal is the opposite case — its branch is landed and worktree-less, so the very same run
   # may legitimately `branch -d` it, and a record naming that ref would point at nothing. Recording
   # the pointer that CANNOT go stale is the whole purpose of the ledger, so the caller supplies it.
-  local dir; dir="$(dirname "$DISPOSAL_LOG")"
+  #
+  # `tombstone-id` (12th, optional) joins this outcome row to the `worktree-tombstoned` row the
+  # library wrote just before the removal (W2-CONTRACT "one removal, one disposal row"): that row
+  # holds what was preserved, this one holds why and whether it was verified. Absent ⇒ JSON null.
+  local dir tid="null"; dir="$(dirname "$DISPOSAL_LOG")"
   mkdir -p "$dir" 2>/dev/null || return 0
-  printf '{"ts":"%s","event":"worktree-disposed","path":"%s","branch":"%s","head":"%s","unlanded_patches":%s,"patch_shas":"%s","owner_item":"%s","owner_proof":"%s","idle_hours":%s,"preserved_at":"%s","verified":"%s","destroyed_ignored":"%s"}\n' \
+  [ -n "${12:-}" ] && tid="\"$(json_esc "${12}")\""
+  printf '{"ts":"%s","event":"worktree-disposed","path":"%s","branch":"%s","head":"%s","unlanded_patches":%s,"patch_shas":"%s","owner_item":"%s","owner_proof":"%s","idle_hours":%s,"preserved_at":"%s","verified":"%s","destroyed_ignored":"%s","tombstone_id":%s}\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(json_esc "$1")" "$(json_esc "$2")" "$3" "$4" \
     "$(json_esc "$5")" "$(json_esc "$6")" "$(json_esc "${9:-}")" "$7" "$(json_esc "${11:-refs/heads/$2}")" "$8" \
-    "$(json_esc "${10:-}")" \
+    "$(json_esc "${10:-}")" "$tid" \
     >> "$DISPOSAL_LOG" 2>/dev/null || true
+}
+
+# tombstone_first <path> <branch> <class> — the reversible record, written AFTER the act-time
+# recheck and BEFORE `git worktree remove`, at every removal site. 0 ⇒ TOMB_ID names the record.
+# 1 ⇒ the KEEP line is already printed and counted: no record, no removal — a tree whose residue
+# could not be moved aside is exactly the tree whose removal would lose it.
+TOMB_ID=""
+tombstone_first() {
+  local path="$1" branch="$2" class="$3"
+  TOMB_ID=""
+  if [ "$TOMB_OK" != "1" ]; then
+    echo "KEEP    $path [$branch] — tombstone library unavailable ($TOMB_LIB) — nothing is removed without a reversible record (tree kept)"
+    N_KEPT=$((N_KEPT + 1)); N_REFUSED=$((N_REFUSED + 1))
+    return 1
+  fi
+  if ! TOMB_ID="$(wt_tombstone "$path" worktree-gc "$class" --event worktree-tombstoned)" || [ -z "$TOMB_ID" ]; then
+    TOMB_ID=""
+    echo "KEEP    $path [$branch] — tombstone failed (tree kept)"
+    N_KEPT=$((N_KEPT + 1)); N_REFUSED=$((N_REFUSED + 1))
+    return 1
+  fi
+  return 0
+}
+
+# tombstone_undo <id> <path> — git refused the removal after the residue was moved aside: put it
+# back, and say so in the ledger (`superseded`), so the `worktree-tombstoned` row is never read as a
+# removal that happened.
+# shellcheck disable=SC2034  # WT_R_* are read by wt__row_emit through eval
+tombstone_undo() {
+  wt_residue_restore "$1" "$2" \
+    || echo "worktree-gc: residue of tombstone $1 could NOT all go back into $2 — what is left is in $WT_TOMB_DIR/$1/residue" >&2
+  wt__row_reset
+  WT_R_event=superseded; WT_R_id="$1"; WT_R_actor=worktree-gc; WT_R_path="$2"; WT_R_mode=none
+  WT_R_reason="git refused the removal; residue restored to the tree"
+  wt__row_emit || echo "worktree-gc: could not record tombstone $1 as superseded in $WT_LEDGER" >&2
 }
 
 excluded() { # <canon-path> → 0 iff hard-excluded by CC_WTGC_EXCLUDE (exact or ancestor)
@@ -1085,19 +1233,21 @@ dispose_record() { # <path> <canon> <branch> <base> <idle-hours> <n-unlanded> �
     N_KEPT=$((N_KEPT + 1))
     return 0
   fi
+  tombstone_first "$path" "$branch" abandoned-unlanded || return 0
   # NEVER --force, exactly as on the landed path: git's refusal is the second gate on our evidence.
   if ! "$GIT_BIN" -C "$MAIN" worktree remove "$path" 2>/dev/null; then
+    tombstone_undo "$TOMB_ID" "$path"
     echo "KEEP    $path [$branch] — git REFUSED 'worktree remove' (it changed since the gates ran)"
     N_KEPT=$((N_KEPT + 1)); N_REFUSED=$((N_REFUSED + 1))
     return 0
   fi
   if verify_preserved "$branch" "$head" "$before"; then
-    log_disposal "$path" "$branch" "$head" "$n" "$shas" "$ITEM_ID" "$idle_h" "points-at+cherry-set" "$OWNER_KIND" "$ignored"
+    log_disposal "$path" "$branch" "$head" "$n" "$shas" "$ITEM_ID" "$idle_h" "points-at+cherry-set" "$OWNER_KIND" "$ignored" "" "$TOMB_ID"
     echo "dispose $path [$branch] — $note · VERIFIED preserved (restore: git worktree add <path> $branch)"
     [ -n "$ignored" ] && echo "        └ gitignored content destroyed with it (git records this nowhere else): $ignored"
     N_DISPOSED=$((N_DISPOSED + 1))
   else
-    log_disposal "$path" "$branch" "$head" "$n" "$shas" "$ITEM_ID" "$idle_h" "FAILED" "$OWNER_KIND" "$ignored"
+    log_disposal "$path" "$branch" "$head" "$n" "$shas" "$ITEM_ID" "$idle_h" "FAILED" "$OWNER_KIND" "$ignored" "" "$TOMB_ID"
     echo "worktree-gc: PRESERVATION UNVERIFIED after removing $path [$branch] — the unlanded patch set at" >&2
     echo "worktree-gc: refs/heads/$branch no longer matches what was there. Recover from $head." >&2
     N_DISPOSED=$((N_DISPOSED + 1)); VERIFY_FAIL=$((VERIFY_FAIL + 1))
@@ -1108,24 +1258,43 @@ dispose_record() { # <path> <canon> <branch> <base> <idle-hours> <n-unlanded> �
 if [ "$DRY_RUN" = "1" ]; then
   PRUNABLE="$("$GIT_BIN" -C "$MAIN" worktree prune --dry-run -v 2>/dev/null)"
   [ -n "$PRUNABLE" ] && printf '%s\n' "$PRUNABLE" | sed 's/^/would prune  /'
+elif [ "$TOMB_OK" = "1" ]; then
+  # The same prune, through the library: one `admin-pruned` row per record it drops, with the
+  # admin dir's logs/HEAD copied and reflog-only commits pinned, because `prune` deletes the only
+  # reflog those commits had. A logging failure never blocks the prune, and stdout is unchanged.
+  WT_ACTOR=worktree-gc wt_prune_logged "$MAIN" -v 2>/dev/null | sed 's/^/prune  /'
 else
   "$GIT_BIN" -C "$MAIN" worktree prune -v 2>/dev/null | sed 's/^/prune  /'
+fi
+if [ "$TRUNK_OK" = "0" ]; then
+  echo "worktree-gc: verdict=trunk-unresolvable — '$TRUNK' does not resolve in $MAIN, so no branch can be proven landed OR unlanded; every landed and dispose verdict this pass is a KEEP (AC-4)."
 fi
 
 # ── 2. Per-worktree gates. Records come ONLY from git — never a directory listing. ───────
 wt=""; br=""; detached=0; locked=0
 process_record() {
-  local path="$wt" branch="$br" base reason="" dirty_porc=""
+  local path="$wt" branch="$br" base reason="" dirty_porc="" pin=""
   [ -n "$path" ] || return 0
   [ "$path" = "$MAIN" ] && return 0                       # never the primary checkout
+  lock_heartbeat                                          # F-9: a running pass's lock stays fresh
   local cpath; cpath="$(canon "$path")"
   base="$(basename "$path")"
 
+  # GATE ORDER (G-P1-6 amended): a gate may move ahead of the fork-heavy probes — `status`, the
+  # recent-write `find`, lsof — only if it is a pure KEEP: no side effect, nothing it skips could
+  # have removed. The pin read and the detached test qualify; nothing else was reordered, so every
+  # unpinned tree gets the same verdict and the same reason it always did.
   if   excluded "$cpath";                                    then reason="hard-excluded (CC_WTGC_EXCLUDE)"
   elif [ ! -d "$path" ] && [ "$locked" = "1" ];              then reason="directory is gone AND the record is LOCKED — 'git worktree prune' SKIPS locked records, so this one is PERMANENT until unlocked: git worktree unlock '$path' && git worktree prune"
   elif [ ! -d "$path" ];                                     then reason="directory is gone (admin record only — 'git worktree prune' handles it)"
   elif [ "$locked" = "1" ];                                  then reason="locked worktree"
   elif [ -f "$path/.teammate-busy" ];                        then reason=".teammate-busy marker present"
+  # A PIN is a session that is expected back (a crash, a resume debt, an open backlog row naming
+  # the path…; W2-CONTRACT wt_pinned). Its tree may look idle, clean and landed and still be the
+  # cwd a resume will reopen. No pin library ⇒ the gate is skipped: KEEP-only, so failing open here
+  # can only reach a removal site, and those refuse without the tombstone library anyway.
+  elif [ "$PIN_OK" = "1" ] && pin="$(wt_pinned "$path" 2>/dev/null)"; then
+                                                                  reason="pinned ($pin)"
   # Two commands, so the LAST one decides the branch: this keeps the `status` fork lazy (the four
   # rungs above still short-circuit it) while capturing its output for the removal path, which must
   # know whether it is removing a tree whose dirt was PROVEN redundant.
@@ -1136,10 +1305,10 @@ process_record() {
   elif is_live_cwd "$cpath";                                 then reason="LIVE — a registered session / running claude is cwd'd here"
   elif registry_live "$base" "$cpath";                       then reason="LIVE — live-session-registry PID still alive"
   elif session_occupancy_keep "$cpath";                      then reason="$SESSION_OCC_WHY"
+  elif [ "$detached" = "1" ] || [ -z "$branch" ];            then reason="detached HEAD (manual review — no branch records where the work went)"
   elif recently_active "$path";                              then reason="ACTIVE — an untracked file here was written within ${ACTIVE_MIN}m (a session holding a worktree through its Bash tool leaves no resident process between commands)"
   elif command -v "$LSOF_BIN" >/dev/null 2>&1 && "$LSOF_BIN" -- "$path" 2>/dev/null | grep . >/dev/null; then
                                                                   reason="open by a live process"
-  elif [ "$detached" = "1" ] || [ -z "$branch" ];            then reason="detached HEAD (manual review — no branch records where the work went)"
   else
     local tip now age
     tip="$("$GIT_BIN" -C "$MAIN" log -1 --format=%ct "$branch" 2>/dev/null)"
@@ -1151,6 +1320,10 @@ process_record() {
       age=$(( (now - tip) / 60 ))
       if [ "$age" -lt "$IDLE_MIN" ]; then
         reason="branch tip is ${age}m old (< ${IDLE_MIN}m idle floor)"
+      elif [ "$TRUNK_OK" = "0" ]; then
+        # AC-4. Without this rung `landed` returns 1 on a missing trunk, which reads as UNLANDED and
+        # walks the tree into the DISPOSE class: a vacuous proof steering a destructive path.
+        reason="trunk unresolvable (AC-4) — trunk-unresolvable: '$TRUNK' does not resolve, so landedness is unprovable either way"
       elif ! landed "$branch"; then
         # Unlanded. Live WIP or abandoned? Age alone cannot tell them apart — A2, the owner's
         # terminality, is the discriminator. Any miss falls through to the same permanent KEEP as
@@ -1241,6 +1414,7 @@ process_record() {
       N_KEPT=$((N_KEPT + 1)); N_REFUSED=$((N_REFUSED + 1))
       return 0
     fi
+    tombstone_first "$path" "$branch" landed-dirt || return 0
     if "$GIT_BIN" -C "$MAIN" worktree remove "$path" 2>/dev/null; then
       # THE DISPOSAL RECORD, which this path shipped without. `--dispose-abandoned` has always
       # written one and its own comment says why: that record is what later distinguishes
@@ -1256,12 +1430,13 @@ process_record() {
       # the one pointer that can be gone by the time anyone reads the record.
       log_disposal "$path" "$branch" "$_dirt_head" 0 "" "" "$((age / 60))" \
         "landed-on-$TRUNK (dirt re-proven byte-identical at act time)" \
-        "dirt redundant with $TRUNK · idle · landed" "$_dirt_ign" "$TRUNK"
+        "dirt redundant with $TRUNK · idle · landed" "$_dirt_ign" "$TRUNK" "$TOMB_ID"
       echo "dispose-dirt  $path [$branch] — dirt redundant with $TRUNK (re-proven at act time) · idle · landed"
       [ -n "$_dirt_ign" ] && echo "        └ gitignored content destroyed with it (git records this nowhere else): $_dirt_ign"
       N_DIRT_REMOVED=$((N_DIRT_REMOVED + 1))
       printf '%s\n' "$branch" >> "$REMOVED_BR"
     else
+      tombstone_undo "$TOMB_ID" "$path"
       echo "KEEP    $path [$branch] — git REFUSED the removal after the tree was restored"
       N_KEPT=$((N_KEPT + 1)); N_REFUSED=$((N_REFUSED + 1))
     fi
@@ -1294,6 +1469,7 @@ process_record() {
   # The recovery pointer, read BEFORE removal for the same reason the blast radius is:
   # `--prune-branches` may delete this now-landed, now-worktree-less ref later in this very run.
   _landed_head="$("$GIT_BIN" -C "$MAIN" rev-parse --verify --quiet "refs/heads/$branch" 2>/dev/null)"
+  tombstone_first "$path" "$branch" landed-clean || return 0
   # NEVER --force: git's refusal is the second gate on our evidence.
   if "$GIT_BIN" -C "$MAIN" worktree remove "$path" 2>/dev/null; then
     # Two fields are deliberately not the abandoned path's, set exactly as the dirt lane sets
@@ -1302,12 +1478,13 @@ process_record() {
     # TRUNK rather than the branch, because the branch is the one pointer that can be gone by the
     # time anyone reads the record.
     log_disposal "$path" "$branch" "$_landed_head" 0 "" "" "$((age / 60))" \
-      "landed-on-$TRUNK" "clean · idle · landed" "$_landed_ign" "$TRUNK"
+      "landed-on-$TRUNK" "clean · idle · landed" "$_landed_ign" "$TRUNK" "$TOMB_ID"
     echo "remove  $path [$branch] — clean · idle · landed on $TRUNK"
     [ -n "$_landed_ign" ] && echo "        └ gitignored content destroyed with it (git records this nowhere else): $_landed_ign"
     N_REMOVED=$((N_REMOVED + 1))
     printf '%s\n' "$branch" >> "$REMOVED_BR"
   else
+    tombstone_undo "$TOMB_ID" "$path"
     echo "KEEP    $path [$branch] — git REFUSED 'worktree remove' (it changed since the gates ran)"
     N_KEPT=$((N_KEPT + 1)); N_REFUSED=$((N_REFUSED + 1))
   fi
