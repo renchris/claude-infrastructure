@@ -58,7 +58,8 @@ for a case-sized question answerable in a day, or when the operator declines eit
   and ends it with `cc-signoff research:<slug|*>/revoke-delegation`. While it is in force, never stop
   to ask him to "read and sign":
   run `scripts/research-kit/gate.sh accept --program <slug> --action <A> [--because "<why>"]` (or
-  `--check` first) for cert, frame (after an `intake.py delta-apply` carrying held rows), implementation
+  `--check` first) for cert, frame (after an `intake.py delta-apply` carrying held rows, or carrying none
+  under the frame-delta activity `cc-research triage` opened for a frame-defect concern), implementation
   (it also runs `built-signed`), extra-round, reopen, `profile/<p>`, `adopt/stage9` and
   `extend-decision/<id>`. It writes only when every machine criterion holds (exit 1 names each FAIL), into
   `<sealed>/delegated.jsonl`, never `signoff.jsonl`; every reader honours it where it honours his signature

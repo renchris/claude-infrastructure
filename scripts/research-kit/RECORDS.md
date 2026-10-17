@@ -811,6 +811,12 @@ Hand-editing `frame.json` is a rail. `intake.py delta-apply --program P --file <
   §5.4's "after the certificate". `registered` is refused: before the freeze the frame is still being built, and no
   row is held. The build states and `closed` are refused unless triage opened the activity. `known_rows` may be empty
   only under that activity. The verb does not count cycles: §5.4's bound is the timebox and the delta rounds.
+  Such a delta (a frame defect: a row's text is wrong, and no hold-g row names it) is acceptable by delegation only
+  when the activity its `frame-deltas.jsonl` entry records (`activity`, the open `frame-delta` id the apply ran
+  under) is the one `cc-research triage` opened for a concern it bucketed `frame-defect`: the `challenges.jsonl`
+  triage event carrying that bucket names the same activity id (§ Delegated acceptance, known-rows-open). An
+  intent-never-asked concern's activity, `gate.sh delta-activity`'s, or a hand-opened row applies the delta, and the
+  operator re-signs it.
 - **What an apply writes.** `acceptance.json` (when the delta has acceptance ops) and `frame.json`, each serialised in
   the form the file already had (truememory-2-0's `acceptance.json` is indent 1, unsorted, raw UTF-8), so the diff is
   the rows alone. The frame's `version` goes up by one, the named rows join `known_rows_applied` (the same code as
@@ -931,7 +937,11 @@ reaches it once, through a standing delegation he signs. `operator_sign.py` hold
   delta's `base_frame_blob`, the frame it applied on, is the frame pinned by the newest non-void signature or
   acceptance of another frame: nothing reached the frame unsigned before the delta; a never-signed frame
   refuses, its first version being the operator's) · acceptance-unchanged (`acceptance.json` still hashes to the
-  delta's `acceptance_after_sha256`) · known-rows-open (the delta names rows, each an open frame-omission row) ·
+  delta's `acceptance_after_sha256`) · known-rows-open (the delta names rows, each an open frame-omission row;
+  or it names none and its `activity` is a `frame-delta` activity of this program that a `challenges.jsonl`
+  triage event bucketed `frame-defect` opened, the value then carrying `triage: {challenge, bucket, activity}`;
+  no activity, another kind, an unknown id, an activity no frame-defect triage opened, or one other than the
+  frame-defect triage's each refuse, the value naming which) ·
   annotations-pinned (`frame_delta.pin_fails` empty); pins `frame.json` AND `acceptance.json`, so an edit to the
   rows the frame's checks run makes it STALE. `implementation` state build-certified or implementation-signed ·
   newest-built-certificate (this program's) · rows-pass (rows 20-25 present, every one PASS) · freeze-snapshot

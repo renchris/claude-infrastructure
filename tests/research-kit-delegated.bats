@@ -29,6 +29,9 @@
 # 4 implementation criteria forced true (its criterion case); the `already` check removed (cert, a
 # second line written); delegated_line returning None (cert render); close_delta_rows' delegated
 # wording reverted (frame); profile_switch_terms' cap reading `verdict(r)` again (purchases).
+# The two no-known-row frame cases (2026-10-17): both red on 88268cec8 (known-rows-open required a
+# known row, so a triage frame-defect delta could never be accepted); frame_defect_triage without its
+# bucket check turns the refused case red (intent-never-asked's activity ACCEPTED).
 
 setup_file() {
   export HOME="$BATS_FILE_TMPDIR/home"
@@ -353,6 +356,62 @@ held_delta() {
     run acc --action frame
     [ "$status" -eq 1 ] || { echo "case $c: $output"; false; }
     [ "$(fails)" = "$want" ] || { echo "case $c: $output"; false; }
+    [ "$(lines "$ACC")" = 0 ] || { echo "case $c wrote"; false; }
+  done
+}
+
+# triaged_delta <marker>...: one concern per marker, bucketed by `cc-research triage` through a rater
+# keyed on it (ZZFD frame-defect, ZZINA intent-never-asked, ZZESC escape), then a delta with NO known
+# row applied under the frame-delta activity that left open (RECORDS.md § Frame deltas "When").
+triaged_delta() {
+  # shellcheck disable=SC2016 # the rater's own script text: its $p expands when the rater runs
+  printf '%s\n' '#!/bin/bash' 'p="$(cat)"' 'case "$p" in *ZZFD*) echo frame-defect ;; *ZZINA*) echo intent-never-asked ;; *ZZESC*) echo escape ;; *) echo generic ;; esac' > "$BATS_TEST_TMPDIR/rater.sh"
+  chmod +x "$BATS_TEST_TMPDIR/rater.sh"
+  for m in "$@"; do CC_RESEARCH_RECORDS="$REC" "$REPO/bin/cc-research" concern add --program demo --text "AM-1 axis $m" --raised-by build > /dev/null; done
+  CC_RESEARCH_RECORDS="$REC" CC_RESEARCH_TRIAGE_RATER="$BATS_TEST_TMPDIR/rater.sh" "$REPO/bin/cc-research" triage --program demo > /dev/null
+  printf '%s' '{"program":"demo","base_version":1,"known_rows":[],"why":"AM-1: the decimal does not match its hex","acceptance":[{"op":"replace","id":"AM-1","fields":{"predicate":"loses 0 writes in 2000 trials"}}]}' \
+    > "$BATS_TEST_TMPDIR/delta.json"
+  "$I" delta-apply --program demo --file "$BATS_TEST_TMPDIR/delta.json" > /dev/null
+}
+# the value the known-rows-open criterion printed
+krow() { printf '%s\n' "$1" | sed -n 's/^  [okFAIL ]\{4\} known-rows-open: //p'; }
+
+@test "frame: a no-known-row delta applied under a frame-defect triage's activity is accepted by delegation, naming the concern and the activity" {
+  triaged_delta ZZFD; delegate
+  aid="$(py 'import json; print([json.loads(l) for l in open("'"$REC"'/frame-deltas.jsonl")][-1]["activity"])')"
+  [[ "$aid" == ACT-demo-* ]] || { echo "delta activity: $aid"; false; }
+  run acc --action frame
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == "ACCEPTED research:demo/frame under delegation "* ]] || { echo "$output"; false; }
+  [[ "$(krow "$output")" == *'"challenge": "CH-1", "bucket": "frame-defect"'* ]] || { echo "$output"; false; }
+  [[ "$(krow "$output")" == *"\"activity\": \"$aid\""* ]] || { echo "$output"; false; }
+  [ "$(lines "$ACC")" = 1 ]
+  run py 'r = o.research_records("demo", "frame")[-1]; print(r["_verdict"], r.get("_delegated"))'
+  [ "$output" = "valid True" ] || { echo "$output"; false; }
+}
+
+@test "frame: a no-known-row delta is refused unless a frame-defect triage opened the very activity it records, each case naming why" {
+  for c in no-activity non-frame-delta unknown-activity intent-never-asked untriaged mismatch; do
+    rsync -a --delete "$BATS_FILE_TMPDIR/golden/" "$W/"
+    delegate
+    case "$c" in
+      no-activity) triaged_delta ZZFD; ledit "$REC/frame-deltas.jsonl" 'r["activity"] = None'; why="records no activity" ;;
+      # the delta names an escape activity (a forged or misfiled record): the activity id alone is no proof
+      non-frame-delta) triaged_delta ZZESC ZZFD; esc="$(py 'import activities; print(activities.open_ids("demo", "escape")[0])')"
+        ledit "$REC/frame-deltas.jsonl" "r['activity'] = '$esc'"; why="$esc is kind escape, not a frame-delta activity" ;;
+      unknown-activity) triaged_delta ZZFD; ledit "$REC/frame-deltas.jsonl" 'r["activity"] = "ACT-demo-99"'; why="ACT-demo-99 is not in activities.json" ;;
+      # triage opens a frame-delta activity for intent-never-asked too; only frame-defect lets a delta carry no row
+      intent-never-asked) triaged_delta ZZINA; why="was not opened by a frame-defect triage (triage of CH-1 bucketed it intent-never-asked)" ;;
+      # a frame-delta activity no triage opened (gate.sh delta-activity's, or a hand-opened row)
+      untriaged) py 'import activities; activities.open_activity("demo", "frame-delta")' > /dev/null; triaged_delta; why="was not opened by a frame-defect triage (no cc-research triage opened it)" ;;
+      # both bucketed in one batch: the delta applied under the first open activity, intent-never-asked's,
+      # while the frame-defect concern's activity is another
+      mismatch) triaged_delta ZZINA ZZFD; why="the frame-defect triage of CH-2 opened ACT-demo-" ;;
+    esac
+    run acc --action frame
+    [ "$status" -eq 1 ] || { echo "case $c: $output"; false; }
+    [ "$(fails)" = "known-rows-open" ] || { echo "case $c: $output"; false; }
+    [[ "$(krow "$output")" == *"$why"* ]] || { echo "case $c: want '$why' in: $output"; false; }
     [ "$(lines "$ACC")" = 0 ] || { echo "case $c wrote"; false; }
   done
 }

@@ -14,7 +14,8 @@ to $CC_RESEARCH_HOME/<P>/delegated.jsonl, a log apart from the operator's signof
                   each PASS or FILED · no reopen is signed or accepted after it. Pins it.
   frame           `intake.py lint` clean · the frame's newest change is the newest frame-deltas.jsonl
                   entry (same version, and frame.json still hashes to what that apply wrote) · the
-                  delta names known rows, each an open frame-omission row · no decision annotation
+                  delta names known rows, each an open frame-omission row, or names none and was
+                  applied under the frame-delta activity a frame-defect triage opened · no decision annotation
                   or decisions.jsonl prefix outside a delta's pin. Pins frame.json.
   implementation  state build-certified or implementation-signed · the newest BUILT-CERT-v<n> is
                   this program's · rows 20-25 present, every one PASS · its snapshot is the one
@@ -103,6 +104,57 @@ def cert_criteria(ctx: Any) -> Tuple[List[Crit], Dict[str, str]]:
     return out, ({f"cert/{newest.name}": osign.file_pin(newest)} if newest else {})
 
 
+def frame_defect_triage(
+    ctx: Any, aid: Optional[str]
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    """The triage that opened `aid`, the activity a delta carrying no known row was applied under:
+    ({challenge, bucket, activity}, "") when `cc-research triage` bucketed a concern frame-defect and
+    opened this frame-delta activity for it (its challenges.jsonl event links the two), else
+    (None, why not). Triage opens a frame-delta activity for intent-never-asked as well; that one,
+    gate.sh delta-activity's and a hand-opened row carry no row-less delta."""
+    import activities
+
+    if not aid:
+        return None, (
+            "the delta carries no known row and records no activity: only the frame-delta "
+            "activity a frame-defect triage opened applies one"
+        )
+    act = next(
+        (
+            x
+            for x in activities.load()["activities"]
+            if isinstance(x, dict)
+            and x.get("id") == aid
+            and x.get("program") == ctx.slug
+        ),
+        None,
+    )
+    if act is None:
+        return None, f"{aid} is not in activities.json for {ctx.slug}"
+    if act.get("kind") != "frame-delta":
+        return None, f"{aid} is kind {act.get('kind')}, not a frame-delta activity"
+    opened = [e for e in ctx.jsonl("challenges.jsonl") if e.get("activity")]
+    opener = next((e for e in opened if e.get("activity") == aid), None)
+    if opener is not None and opener.get("triage") == "frame-defect":
+        return {
+            "challenge": opener.get("id"),
+            "bucket": "frame-defect",
+            "activity": aid,
+        }, ""
+    fd = [e for e in opened if e.get("triage") == "frame-defect"]
+    if fd:
+        return None, (
+            "the frame-defect triage of "
+            + ", ".join(f"{e.get('id')} opened {e.get('activity')}" for e in fd)
+            + f", not {aid}, the activity the delta records"
+        )
+    return None, f"{aid} was not opened by a frame-defect triage (" + (
+        f"triage of {opener.get('id')} bucketed it {opener.get('triage')})"
+        if opener is not None
+        else "no cc-research triage opened it)"
+    )
+
+
 def frame_criteria(ctx: Any) -> Tuple[List[Crit], Dict[str, str]]:
     import frame_delta
     import intake
@@ -171,6 +223,16 @@ def frame_criteria(ctx: Any) -> Tuple[List[Crit], Dict[str, str]]:
         if (rows.get(k) or {}).get("kind") != "frame-omission"
         or (rows.get(k) or {}).get("status", "open") != "open"
     ]
+    carried: Dict[str, Any] = {"known_rows": known, "not_open": not_open}
+    # a delta carrying no known row: only a frame defect triage found carries it (RECORDS.md § Frame
+    # deltas, "When"), so the delta must have been applied under the activity that triage opened
+    triaged, triage_why = (
+        frame_defect_triage(ctx, last.get("activity"))
+        if last and not known
+        else (None, "")
+    )
+    if last and not known:
+        carried["triage"] = triaged or triage_why
     loose = frame_delta.pin_fails(ctx.records, fr) if fr else ["no frame"]
     out = [
         crit("lint", not lint, lint or "clean"),
@@ -186,8 +248,8 @@ def frame_criteria(ctx: Any) -> Tuple[List[Crit], Dict[str, str]]:
         ),
         crit(
             "known-rows-open",
-            bool(known) and not not_open,
-            {"known_rows": known, "not_open": not_open},
+            (bool(known) and not not_open) or (not known and triaged is not None),
+            carried,
         ),
         crit("annotations-pinned", not loose, loose or "every annotation pinned"),
     ]
