@@ -91,7 +91,8 @@ cleanup() {
   [ -n "$TMP_WT" ] || return 0
   git -C "$REPO" worktree remove --force "$TMP_WT" >/dev/null 2>&1 \
     || rm -rf "$TMP_WT" 2>/dev/null || true
-  git -C "$REPO" worktree prune >/dev/null 2>&1 || true
+  # shellcheck disable=SC1091  # runtime-resolved source; a missing library falls back to the plain prune
+  ( if . "$(dirname "$SELF")/lib/wt-tombstone.sh" 2>/dev/null; then WT_ACTOR=desk-land wt_prune_logged "$REPO"; else git -C "$REPO" worktree prune; fi ) >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 

@@ -1130,7 +1130,8 @@ wt_remove() { # <path> — git-aware removal, then belt-and-braces rm. Only ever
   [ "$p" != "/" ] || return 0
   bounded 60 git -C "$REPO" worktree remove --force "$p" >/dev/null 2>&1 || true
   [ -e "$p" ] && rm -rf "$p" 2>/dev/null
-  bounded 60 git -C "$REPO" worktree prune >/dev/null 2>&1 || true
+  # shellcheck disable=SC2016  # $1/$2 are the inner bash's positional args — single quotes are REQUIRED
+  bounded 60 bash -c 'if . "$1" 2>/dev/null; then WT_ACTOR=postland-verify wt_prune_logged "$2"; else git -C "$2" worktree prune; fi' _ "$(dirname "$SELF")/lib/wt-tombstone.sh" "$REPO" >/dev/null 2>&1 || true
   return 0
 }
 # shellcheck disable=SC2329  # invoked indirectly, from cleanup_exit (the EXIT trap)
@@ -1168,7 +1169,8 @@ prepare_worktree() { # <sha> — MINT a fresh detached cell at <sha>; any cell w
   # the load-bearing guard: never check in $REPO (its working tree is the LIVE ~/.claude layer)
   [ "$wtp" = "$repop" ] && { log "REFUSED: worktree resolves to the live repo ($repop)"; return 1; }
   rm -rf "$WORKTREE" 2>/dev/null || true        # residue at our own path (crashed predecessor)
-  bounded 60 git -C "$REPO" worktree prune >/dev/null 2>&1 || true
+  # shellcheck disable=SC2016  # $1/$2 are the inner bash's positional args — single quotes are REQUIRED
+  bounded 60 bash -c 'if . "$1" 2>/dev/null; then WT_ACTOR=postland-verify wt_prune_logged "$2"; else git -C "$2" worktree prune; fi' _ "$(dirname "$SELF")/lib/wt-tombstone.sh" "$REPO" >/dev/null 2>&1 || true
   bounded 120 git -C "$REPO" worktree add --detach "$WORKTREE" "$sha" >/dev/null 2>&1 || {
     log "worktree MINT failed at $WORKTREE for $(sha12 "$sha")"; return 1; }
   WT_MINTED="$WORKTREE"

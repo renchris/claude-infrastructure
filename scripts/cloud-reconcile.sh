@@ -356,7 +356,8 @@ reap_abandoned_land_sandbox() {
   fi
   "$GIT_BIN" -C "$repo" worktree remove --force "$wt" >/dev/null 2>&1 \
     || rm -rf "$wt" >/dev/null 2>&1 || true
-  "$GIT_BIN" -C "$repo" worktree prune >/dev/null 2>&1 || true
+  # shellcheck disable=SC1091  # runtime-resolved source; a missing library falls back to the plain prune
+  ( if . "$(dirname "$SELF")/lib/wt-tombstone.sh" 2>/dev/null; then WT_GIT="$GIT_BIN" WT_ACTOR=cloud-reconcile wt_prune_logged "$repo"; else "$GIT_BIN" -C "$repo" worktree prune; fi ) >/dev/null 2>&1 || true
   if [ -e "$wt" ]; then
     return 1                             # could not actually remove it ⇒ report no cure
   fi
