@@ -142,6 +142,32 @@ Every after-2 cancel falls in three Stops, none after 07:21Z (the last ~5 h clea
 
 Verdict against the frozen scope: each hook's own cost is now well inside its timeout at ordinary load, and completion-assert, the one hook the first pass did not move, went 2.83 → 0.33 cancels/h. NOT met: "p95 under half the timeout" for operator-readout (history p95 10.1 s from 2 cancels in 30 runs); for the three silent hooks history cannot give a p95 (it records only cancels and printing runs). What remains is correlated whole-Stop cancels at load spikes, whose shared dependency is the ledger's per-call fork cost (it scales ~3× from load 17 to 50) plus operator-readout's own BUSY-on ledger computed beside the shared one. Open, for a separate wave: cut the ledger's fork count under load (largest terms `cc-research verdict`, `cc-decide list`, `git cherry`), and let operator-readout reuse the shared BUSY-off ledger for the fields it has rather than computing a second one.
 
+### Wave 4c — one ledger per Stop (2026-10-16, dispatched session `load-wave-4c-stop-hook-ledger`)
+
+Scope (frozen): bring operator-readout.sh's p95 Stop runtime under 5 s at ordinary load (and keep session-continue / completion-assert / boundary-handoff under 2.5 s) by reducing the cost of the ledger they compute (scripts/wrap-ledger.sh and operator-readout's second, BUSY-on ledger), with byte-identical verdicts and rendered output; land via the project-local /ship and converge with `CC_DEPLOY_MAX_LAG_COMMITS=0 bash scripts/deploy-live.sh`.
+
+Baseline (history, `stop-hook-durations.py`, 2026-10-16T05:00Z → 10-17T04:51Z, 23.9 h, 1-min load median 31 / p95 375): operator-readout 634 runs, 293 cancels = 12.28/h, p50 7.4 s / p95 10.6 s; session-continue 10.22/h; completion-assert 3.65/h; boundary-handoff 3.48/h.
+
+The residual, re-measured before changing anything (replays of 53 distinct cancelled operator-readout Stops cut by `cutreplay.py`, sandboxed: state dir, IDL, ledger memo and TMPDIR pointed at copies; the live backlog-fold cache shared; three BUSY-off ledger asks started beside the hook as the sibling hooks make them; traced with `PS4=$EPOCHREALTIME`). The Wave 4b reading — "the ledger is fork-bound" — was half the story:
+
+| Stage (untraced unless marked, load ~280-310) | Cost | Finding |
+|---|---|---|
+| operator-readout waiting on its own ledger (traced) | 7.0-11.7 s of 12.7-18 s | the critical path |
+| its BUSY-on ledger vs the shared BUSY-off one | 6.9-12.4 s vs 2.3-5.9 s | a second full compute, on its own memo key (`--session` + BUSY) |
+| the BUSY probe alone (`session_busy_live`) | 3.3-8.1 s | at a Stop the beat reads `stop`, so it always falls to `sb_busy_jobs`: `ps` 0.4-0.8 · two awk walks 0.3-1.9 · filter 0.1-0.4 · one `lsof` over ~1,200 candidates 0.6-2.4 |
+| who reads the BUSY fields | one arm | only the ⏳ notice, under `[ -z "$BLOCK" ]` — and the standing operator pile (222 items) makes an empty block rare |
+| shared ledger, by stage (traced) | 3.1-5.8 s | `--all` backlog read 1.3-1.7 · `fired_peer_sids` 0.6-1.3 · goal liveness 0.2-0.9 · `cc-decide list` 0.4-0.7 · DoD reads 0.6-1.1 (`dod_filter_for` twice per file) · `git status` up to 1.1 (~/Development/personal) |
+| `cat` of the 8 MB `--all` cache hit into jq | 0.76-1.08 s vs 0.12-0.41 s for jq reading the file | the pipe, not the parse |
+
+Changes (`scripts/wrap-ledger.sh`, `hooks/operator-readout.sh`, `hooks/anti-deference-nudge.sh`):
+- operator-readout's render asks with `WRAP_BUSY=off` and drops `--session` when the environment already names the session (completion-assert's rule), so it is served the Stop's one shared ledger. The ⏳ arm fetches BUSY itself (`_or_busy_read`) only when it is reached; the close certificate and anti-deference-nudge read no BUSY field and ask BUSY-off too. Kill switch `CC_OR_SHARED_LEDGER=off`.
+- wrap-ledger § THE BUSY SPLICE, opt-in (`WRAP_BUSY_SPLICE=on`, used by the ⏳ arm): a BUSY ask is served the BUSY-off memo, runs the BUSY block and puts its eight lines in place (lines 10-17; any other body shape is a miss and computes), then publishes the finished ledger under the default BUSY key with an atomic no-clobber `ln`, so every BUSY reader of an event prints one sample.
+- § THE CONSUMER: a backlog-cache hit is parsed by jq from the entry (`<&9`), every other path is the same `list | jq` pipe. DoD: `dod_filter_for` once per file.
+
+Rejected, with the measurement: (1) starting the probe BESIDE the shared compute — its job scan reads a process as WORK when its cwd is in the worktree and an argv token is a path there, which the ledger's own `git -C <worktree>` children satisfy while they run; the probe stays after the ledger, and a test pins the order. (2) Splice ON by default — `tests/wrap-ledger-memo.bats` went red: six concurrent BUSY readers each probed and printed different BUSY lines where the shared key had served them one sample, and readers locate one memo file per event; hence opt-in plus the published sample. (3) Pruning `lsof` candidates by argv — 1,043 of 1,490 candidates carry a relative token (`sleep 25`, `bash …`, zombies) whose match depends on the very cwd `lsof` reads, so no prune is exact.
+
+Parity: old (trunk `ce336cae6`) vs new ledger on four real Stops × {backlog cache hit, miss→fill, off} × {BUSY on, off}, field by field — identical except wall-clock `*_AGE` fields and the live process sample (a 17 vs 20 job count between back-to-back runs); BUSY probe bound lifted to 90 s so neither arm crossed it. Replayed operator-readout output old vs new: identical except a wall-clock age and the research line, which comes and goes in both arms as `cc-research pending` crosses its 3 s bound under load. Tests: `tests/wrap-ledger-busy-splice.bats` 10/10 (eight mutants, each turning its case red), `tests/operator-readout-shared-ledger.bats` 5/5 (four mutants), unmutated scratch controls green first.
+
 ## Operator-only (file with cc-backlog / cc-decide; never edit settings.json or plists)
 
 O1 `timeout: 5` on `handed-off-session-guard.sh` + `PYTEST_XDIST_AUTO_NUM_WORKERS=3` (migration, c10) · O2 decision: `CC_SENTINEL_KILL=off` for compressor-sentinel (128 SIGKILLs since 10-07 conflict with "never kill work"; recommend off, 75%) · O3 plist throttles (session-index sweep 60 s → 300 s; public-publish daily) · O4 Claude Code upgrade via cc-upgrade + upstream report on the `ps -A` child leak · O5 30 s `eslogger exec` trace to attribute ~21k spawns/min · O6 optional cleanup of non-work orphans.
