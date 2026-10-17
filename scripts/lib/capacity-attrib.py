@@ -41,6 +41,7 @@ tick (no state) and a state older than CC_CAP_ATTRIB_MAX_GAP_S write a row marke
 deltas: a delta across an unknown gap is not a measurement.
 
 Usage: capacity-attrib.py [--no-write] [--top N]
+       capacity-attrib.py --daemon [--interval 5] [--max-ticks N] [--top N]   (see "--daemon" below)
 Env seams: CC_CAP_ATTRIB_LOG · CC_CAP_ATTRIB_STATE · CC_CAP_ATTRIB_MAX_GAP_S · CC_CAP_ATTRIB_ROOTS_GLOB
 """
 
@@ -237,8 +238,7 @@ def read_pid(pid):
 _ARGMAX = None
 
 
-def procargs(pid):
-    """-> (argv list, env-tag or None), via KERN_PROCARGS2. Same uid only; no sudo."""
+def argbuf():
     global _ARGMAX
     if _ARGMAX is None:
         v = ctypes.c_int(0)
@@ -246,12 +246,19 @@ def procargs(pid):
         mib = (ctypes.c_int * 2)(CTL_KERN, KERN_ARGMAX)
         libc.sysctl(mib, 2, ctypes.byref(v), ctypes.byref(sz), None, 0)
         _ARGMAX = v.value or 1048576
-    buf = ctypes.create_string_buffer(_ARGMAX)
-    sz = ctypes.c_size_t(_ARGMAX)
+    return ctypes.create_string_buffer(_ARGMAX)
+
+
+def procargs(pid, buf=None):
+    """-> (argv list, env-tag or None), via KERN_PROCARGS2. Same uid only; no sudo.
+    A caller reading many pids passes one argbuf() so each read does not zero ARG_MAX bytes."""
+    if buf is None:
+        buf = argbuf()
+    sz = ctypes.c_size_t(len(buf))
     mib = (ctypes.c_int * 3)(CTL_KERN, KERN_PROCARGS2, pid)
     if libc.sysctl(mib, 3, buf, ctypes.byref(sz), None, 0) != 0:
         return None, None
-    raw = buf.raw[: sz.value]
+    raw = ctypes.string_at(buf, sz.value)
     argc = int.from_bytes(raw[:4], "little")
     rest = raw[4:]
     nul = rest.find(b"\0")
@@ -435,13 +442,12 @@ def agents_live(root, now):
         return 0
 
 
-def main():
+def attrib_pass(write, top_n, emit, threaded=False):
+    """One full attribution row (the one-shot CLI's whole job). emit(lines) receives the rung-4 feed
+    as soon as it exists; returns the row. threaded: self_cpu_s counts this thread, not the process."""
     t_start = time.time()
-    write = "--no-write" not in sys.argv
-    top_n = 3
-    if "--top" in sys.argv:
-        top_n = int(sys.argv[sys.argv.index("--top") + 1])
-
+    cpu0 = time.thread_time() if threaded else 0.0
+    rc0 = resource.getrusage(resource.RUSAGE_CHILDREN) if threaded else None
     try:
         with open(STATE) as fh:
             prev = json.load(fh)
@@ -469,11 +475,12 @@ def main():
     cands = [(r["fp"] / 1048576.0, r["pid"], r["name"]) for r in snap.values()]
     cands += [(r["rss_kb"] / 1024.0, r["pid"], r["name"]) for r in other.values()]
     cands.sort(reverse=True)
-    for mb, pid, name in cands[:top_n]:
-        sys.stdout.write(
+    emit(
+        [
             "%d %.0f %s\n" % (pid, mb, name.replace('"', "").replace("\\", ""))
-        )
-    sys.stdout.flush()
+            for mb, pid, name in cands[:top_n]
+        ]
+    )
 
     # ── ownership ──
     roots = {
@@ -746,11 +753,16 @@ def main():
         resource.getrusage(resource.RUSAGE_SELF),
         resource.getrusage(resource.RUSAGE_CHILDREN),
     )
+    if threaded:  # a long-lived daemon: this pass's thread and the children it reaped, not the process
+        rs = resource.struct_rusage((time.thread_time() - cpu0, 0.0) + rs[2:])
+        rc = resource.struct_rusage(
+            (rc.ru_utime - rc0.ru_utime, rc.ru_stime - rc0.ru_stime) + rc[2:]
+        )
     row["self_cpu_s"] = round(rs.ru_utime + rs.ru_stime + rc.ru_utime + rc.ru_stime, 3)
     row["self_wall_s"] = round(time.time() - t_start, 3)
 
     if not write:
-        return
+        return row
     state = {
         "ts": now,
         "host": list(ht[0]) if ht else None,
@@ -779,6 +791,402 @@ def main():
     os.replace(tmp, STATE)
     with open(LOG, "a") as fh:
         fh.write(json.dumps(row, separators=(",", ":")) + "\n")
+    return row
+
+
+# ── --daemon: the fork-free 5 s sampler (docs/research/load-root-cause-2026-10-17/DESIGN.md §4.1) ──
+# Every 5 s: one sysctl(KERN_PROC_ALL) for every uid (no setuid ps), argv + cwd for NEW pids only, one
+# proc_pid_rusage pass over uid 501 (footprint and its lifetime max, so a transient alive at any tick is
+# caught), and the kernel counters. Every 60 s: the full attribution row above, unchanged, on a thread so
+# its setuid ps cannot stall the loop, plus the IOKit disk counters. Writes attrib-latest.json (atomic)
+# and attrib-series.jsonl beside CC_CAP_ATTRIB_LOG; the series rotates to .1 at SERIES_MAX, so it never
+# holds more than 2 x 4 MiB (~4-5 h of ticks per generation).
+SERIES_MAX = 4 << 20
+PASS_EVERY_S = 60.0
+KERN_PROC, KERN_PROC_ALL, PROC_PIDVNODEPATHINFO = 14, 0, 9
+P_, I_, U_ = ctypes.c_void_p, ctypes.c_int32, ctypes.c_uint32
+RATES = (  # monotone counters, reported per second
+    "vfs.vnstats.num_newvnode_calls",
+    "vfs.vnstats.num_recycledvnodes",
+    "security.mac.asp.stats.exec_hook_count",
+    "vm.compressor_input_bytes",
+    "vm.compressor_compressed_bytes",
+)
+GAUGES = (
+    "vm.page_free_count",
+    "vm.compressor_bytes_used",
+    "vm.compressor_segment_pages_compressed",
+)
+
+
+class Timeval(ctypes.Structure):
+    _fields_ = [("sec", ctypes.c_long), ("usec", I_)]
+
+
+class ExternProc(ctypes.Structure):  # struct extern_proc, <sys/proc.h>
+    _fields_ = [
+        ("starttime", Timeval), ("vmspace", P_), ("sigacts", P_), ("flag", I_),
+        ("stat", ctypes.c_uint8), ("pid", I_), ("oppid", I_), ("dupfd", I_),
+        ("user_stack", P_), ("exit_thread", P_), ("debugger", I_), ("sigwait", I_),
+        ("estcpu", U_), ("cpticks", I_), ("pctcpu", U_), ("wchan", P_), ("wmesg", P_),
+        ("swtime", U_), ("slptime", U_), ("realtimer", Timeval * 2), ("rtime", Timeval),
+        ("uticks", ctypes.c_uint64), ("sticks", ctypes.c_uint64), ("iticks", ctypes.c_uint64),
+        ("traceflag", I_), ("tracep", P_), ("siglist", I_), ("textvp", P_), ("holdcnt", I_),
+        ("sigmask", U_), ("sigignore", U_), ("sigcatch", U_), ("priority", ctypes.c_uint8),
+        ("usrpri", ctypes.c_uint8), ("nice", ctypes.c_int8), ("comm", ctypes.c_char * 17),
+        ("pgrp", P_), ("addr", P_), ("xstat", ctypes.c_uint16), ("acflag", ctypes.c_uint16),
+        ("ru", P_),
+    ]  # fmt: skip
+
+
+class Pcred(ctypes.Structure):
+    _fields_ = [("lock", ctypes.c_char * 72), ("ucred", P_), ("ruid", U_), ("svuid", U_),
+                ("rgid", U_), ("svgid", U_), ("refcnt", I_)]  # fmt: skip
+
+
+class Ucred(ctypes.Structure):
+    _fields_ = [
+        ("ref", I_),
+        ("uid", U_),
+        ("ngroups", ctypes.c_short),
+        ("groups", U_ * 16),
+    ]
+
+
+class Vmspace(ctypes.Structure):
+    _fields_ = [("refcnt", I_), ("shm", P_), ("seg", I_ * 5), ("taddr", P_), ("daddr", P_),
+                ("maxsaddr", P_)]  # fmt: skip
+
+
+class Eproc(ctypes.Structure):  # struct eproc, <sys/sysctl.h>
+    _fields_ = [
+        ("paddr", P_), ("sess", P_), ("pcred", Pcred), ("ucred", Ucred), ("vm", Vmspace),
+        ("ppid", I_), ("pgid", I_), ("jobc", ctypes.c_short), ("tdev", I_), ("tpgid", I_),
+        ("tsess", P_), ("wmesg", ctypes.c_char * 8), ("xsize", I_), ("xrssize", ctypes.c_short),
+        ("xccount", ctypes.c_short), ("xswrss", ctypes.c_short), ("eflag", I_),
+        ("login", ctypes.c_char * 12), ("spare", I_ * 4),
+    ]  # fmt: skip
+
+
+class KinfoProc(ctypes.Structure):  # 648 bytes on arm64 and x86_64
+    _fields_ = [("p", ExternProc), ("e", Eproc)]
+
+
+assert ctypes.sizeof(KinfoProc) == 648
+
+
+def proc_all():
+    """One sysctl(KERN_PROC_ALL), every uid, no fork. -> [(pid, ppid, uid, stat, comm, start)]."""
+    mib = (ctypes.c_int * 3)(CTL_KERN, KERN_PROC, KERN_PROC_ALL)
+    for _ in range(
+        4
+    ):  # the table can grow between the size probe and the read (ENOMEM)
+        sz = ctypes.c_size_t(0)
+        if libc.sysctl(mib, 3, None, ctypes.byref(sz), None, 0) != 0:
+            break
+        buf = ctypes.create_string_buffer(sz.value + 64 * ctypes.sizeof(KinfoProc))
+        sz = ctypes.c_size_t(len(buf))
+        if libc.sysctl(mib, 3, buf, ctypes.byref(sz), None, 0) == 0:
+            n = sz.value // ctypes.sizeof(KinfoProc)
+            return [
+                (k.p.pid, k.e.ppid, k.e.ucred.uid, k.p.stat, k.p.comm.decode("utf-8", "replace"),
+                 k.p.starttime.sec + k.p.starttime.usec / 1e6)
+                for k in (KinfoProc * n).from_buffer(buf)
+            ]  # fmt: skip
+    raise OSError(ctypes.get_errno(), "sysctl KERN_PROC_ALL")
+
+
+_VPI = ctypes.create_string_buffer(
+    2 * (152 + 1024)
+)  # struct proc_vnodepathinfo: cdir, then rdir
+
+
+def pid_cwd(pid):
+    if libc.proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, _VPI, len(_VPI)) <= 0:
+        return None
+    return ctypes.string_at(ctypes.addressof(_VPI) + 152).decode("utf-8", "replace")
+
+
+def sysctl_words(name, n):
+    v = (ctypes.c_uint64 * n)()
+    sz = ctypes.c_size_t(ctypes.sizeof(v))
+    if libc.sysctlbyname(name.encode(), v, ctypes.byref(sz), None, 0) != 0:
+        return None
+    return list(v)
+
+
+def read_disk():
+    """IOBlockStorageDriver Statistics summed over every driver, by IOKit, no fork (`ioreg -c
+    IOBlockStorageDriver` shows the same values). -> [bytes_w, ops_w, bytes_r, ops_r] or None."""
+    iokit = ctypes.CDLL(ctypes.util.find_library("IOKit"))
+    cf = ctypes.CDLL(ctypes.util.find_library("CoreFoundation"))
+    iokit.IOServiceMatching.restype = P_
+    iokit.IOServiceMatching.argtypes = [ctypes.c_char_p]
+    iokit.IOServiceGetMatchingServices.argtypes = [U_, P_, ctypes.POINTER(U_)]
+    iokit.IOIteratorNext.restype = U_
+    iokit.IOIteratorNext.argtypes = [U_]
+    iokit.IOObjectRelease.argtypes = [U_]
+    iokit.IORegistryEntryCreateCFProperty.restype = P_
+    iokit.IORegistryEntryCreateCFProperty.argtypes = [U_, P_, P_, U_]
+    cf.CFStringCreateWithCString.restype = P_
+    cf.CFStringCreateWithCString.argtypes = [P_, ctypes.c_char_p, U_]
+    cf.CFDictionaryGetValue.restype = P_
+    cf.CFDictionaryGetValue.argtypes = [P_, P_]
+    cf.CFNumberGetValue.argtypes = [P_, ctypes.c_int, P_]
+    cf.CFRelease.argtypes = [P_]
+    names = (
+        "Statistics",
+        "Bytes (Write)",
+        "Operations (Write)",
+        "Bytes (Read)",
+        "Operations (Read)",
+    )
+    keys = [cf.CFStringCreateWithCString(None, k.encode(), 0x08000100) for k in names]
+    it = U_(0)
+    tot = [0, 0, 0, 0]
+    try:
+        # the matching dictionary's reference is consumed by IOServiceGetMatchingServices
+        m = iokit.IOServiceMatching(b"IOBlockStorageDriver")
+        if iokit.IOServiceGetMatchingServices(0, m, ctypes.byref(it)) != 0:
+            return None
+        while True:
+            e = iokit.IOIteratorNext(it.value)
+            if not e:
+                break
+            d = iokit.IORegistryEntryCreateCFProperty(e, keys[0], None, 0)
+            if d:
+                for i, k in enumerate(keys[1:]):
+                    num, v = cf.CFDictionaryGetValue(d, k), ctypes.c_int64(0)
+                    if num and cf.CFNumberGetValue(
+                        num, 4, ctypes.byref(v)
+                    ):  # kCFNumberSInt64Type
+                        tot[i] += v.value
+                cf.CFRelease(d)
+            iokit.IOObjectRelease(e)
+        return tot
+    finally:
+        if it.value:
+            iokit.IOObjectRelease(it.value)
+        for k in keys:
+            cf.CFRelease(k)
+
+
+class Sampler:
+    def __init__(self):
+        self.prev = None  # (ts, keys, cursor, host ticks, rates)
+        self.fork_rate = None  # trailing valid reading
+        self.buf = argbuf()
+        self.disk = []  # (ts, [bytes_w, ops_w, bytes_r, ops_r]) over the last 24 h of passes
+
+    def tick(self):
+        cpu0 = time.thread_time()  # this thread: a pass may run beside it
+        procs = proc_all()
+        # stamped AFTER the read it dates: a tick starved between the two (12 s seen at load 60) would
+        # otherwise credit a 17 s cursor advance to a 5 s interval (one 9,530/s reading, 2026-10-17)
+        now = time.time()
+        keys = {(p[0], p[5]) for p in procs}
+        # the pid cursor: the pid of the most recently started process
+        cursor = max(procs, key=lambda p: (p[5], p[0]))[0]
+        ht = host_ticks()
+        rates = {k: sysctl_int(k) for k in RATES}
+        t = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+            "t": round(now, 3),
+        }
+        t["n_procs"] = len(procs)
+        la = sysctl_words("vm.loadavg", 3)
+        if la:
+            t["load1"] = round((la[0] & 0xFFFFFFFF) / float(la[2] or 2048), 2)
+        t["gauge"] = {k.split(".")[-1]: sysctl_int(k) for k in GAUGES}
+        sw = sysctl_words("vm.swapusage", 4)  # struct xsw_usage: total, avail, used
+        if sw:
+            t["swap_used_mb"] = round(sw[2] / 1048576.0)
+        new = []
+        if self.prev:
+            pts, pkeys, pcur, pht, prates = self.prev
+            el = now - pts
+            t["el_s"] = round(el, 2)
+            dp = cursor - pcur
+            # A negative delta is a wrap when the cursor fell back by more than half the pid space
+            # (at ~950 forks/s it laps every ~105 s, so most 5 s ticks see one sooner or later), or
+            # when the trailing rate makes one plausible. A small fall-back means the newest pid
+            # exited: no reading, and the cursor holds. Measured 2026-10-17: without the first arm a
+            # held cursor near 99,999 read every tick after the first wrap as no reading (117/119).
+            if dp < 0 and (
+                -dp > PID_SPAN // 2
+                or (self.fork_rate is not None and el * self.fork_rate > 50000)
+            ):
+                dp += PID_SPAN
+            if el * MAX_FORKS_S > PID_SPAN:  # the cursor may have lapped unseen
+                t["forks_per_s"] = None
+            elif dp < 0:  # the newest pid exited: no reading, and the cursor holds
+                t["forks_per_s"] = None
+                cursor = pcur
+            else:
+                t["forks_per_s"] = self.fork_rate = round(dp / el, 1)
+            t["rate"] = {
+                k.split(".")[-1]: round((v - prates[k]) / el, 1)
+                for k, v in rates.items()
+                if v is not None and prates.get(k) is not None
+            }
+            if ht and pht:
+                busy = sum(ht[0][i] - pht[i] for i in (0, 1, 3))
+                idle = ht[0][2] - pht[2]
+                t["cpu_busy_pct"] = round(100.0 * busy / max(busy + idle, 1), 1)
+            new = [p for p in procs if (p[0], p[5]) not in pkeys and p[2] == MY_UID]
+        # one proc_pid_rusage pass over uid 501: current footprint and its lifetime max
+        ru = RusageV6()
+        fp, tops = 0, []
+        for pid, _, uid, _, comm, _ in procs:
+            if (
+                uid == MY_UID
+                and libc.proc_pid_rusage(pid, RUSAGE_INFO_V6, ctypes.byref(ru)) == 0
+            ):
+                fp += ru.phys_footprint
+                tops.append(
+                    (ru.lifetime_max_phys_footprint, ru.phys_footprint, pid, comm)
+                )
+        tops.sort(reverse=True)
+        t["fp_501_mb"] = round(fp / 1048576.0)
+        t["top_fp"] = [
+            {"pid": pid, "name": comm, "phys_footprint_mb": round(cur / 1048576.0),
+             "lifetime_max_phys_footprint_mb": round(lmax / 1048576.0)}
+            for lmax, cur, pid, comm in tops[:5]
+        ]  # fmt: skip
+        t["new"] = []
+        for pid, ppid, _, _, comm, _ in new:
+            argv, tag = procargs(pid, self.buf)
+            t["new"].append({"pid": pid, "ppid": ppid, "comm": comm,
+                             "argv": " ".join(argv or [])[:300], "cwd": pid_cwd(pid), "sid": tag})  # fmt: skip
+        t["cursor"] = cursor
+        self.prev = (now, keys, cursor, list(ht[0]) if ht else None, rates)
+        t["self_cpu_ms"] = round((time.thread_time() - cpu0) * 1000, 1)
+        return t
+
+    def disk_rates(self):
+        now, d = time.time(), read_disk()
+        if d is None:
+            return None
+        self.disk = [x for x in self.disk if now - x[0] <= 86400] + [(now, d)]
+        if len(self.disk) < 2:
+            return None
+        (pt, p), (t0, d0) = self.disk[-2], self.disk[0]
+        el, dw, ow = now - pt, d[0] - p[0], d[1] - p[1]
+        return {
+            "disk_write_mb_s": round(dw / el / 1e6, 3),
+            "disk_write_ops_s": round(ow / el, 1),
+            "disk_kb_per_write": round(dw / 1024.0 / ow, 1) if ow > 0 else None,
+            "disk_read_mb_s": round((d[2] - p[2]) / el / 1e6, 3),
+            "disk_tb_written_per_day": round(
+                (d[0] - d0[0]) / (now - t0) * 86400 / 1e12, 3
+            ),
+            "disk_window_s": round(now - t0),
+        }
+
+
+def write_atomic(path, obj):
+    tmp = path + ".tmp.%d" % os.getpid()
+    with open(tmp, "w") as fh:
+        json.dump(obj, fh, separators=(",", ":"))
+    os.replace(tmp, path)
+
+
+def daemon(interval, max_ticks, top_n):
+    import threading
+    import traceback
+
+    out_dir = os.path.dirname(LOG)
+    os.makedirs(out_dir, exist_ok=True)
+    latest_p, series_p = (
+        out_dir + "/attrib-latest.json",
+        out_dir + "/attrib-series.jsonl",
+    )
+    me = read_pid(os.getpid())
+    # pid + start ("%d.%06d", the same key the rows use) let a reader prove the writer is still alive
+    latest = {"v": 1, "pid": os.getpid(), "start": me["start"] if me else None, "interval": interval,
+              "ticks": 0, "errors": 0, "err": None, "tick": None, "row": None, "row_t": None,
+              "top": None, "disk": None}  # fmt: skip
+    pas = {"thread": None}
+
+    def run_pass():
+        try:
+            row = attrib_pass(
+                True, top_n, lambda lines: latest.update(top=lines), threaded=True
+            )
+            latest.update(row=row, row_t=round(time.time(), 3))
+        except Exception:
+            sys.stderr.write(
+                "%s pass: %s"
+                % (time.strftime("%FT%TZ", time.gmtime()), traceback.format_exc())
+            )
+
+    sampler, last_pass, n, nxt = Sampler(), None, 0, time.time()
+    while not max_ticks or n < max_ticks:
+        n += 1
+        try:
+            t = sampler.tick()
+            if last_pass is None or time.time() - last_pass >= PASS_EVERY_S:
+                last_pass = time.time()
+                th = pas["thread"]
+                # one pass in flight at most; a slow one is skipped, not queued
+                if th is None or not th.is_alive():
+                    pas["thread"] = threading.Thread(target=run_pass, daemon=True)
+                    pas["thread"].start()
+                else:
+                    t["pass_skipped"] = True
+                t["disk"] = latest["disk"] = sampler.disk_rates()
+            latest.update(tick=t, err=None)
+            if os.path.exists(series_p) and os.path.getsize(series_p) > SERIES_MAX:
+                os.replace(series_p, series_p + ".1")
+            with open(series_p, "a") as fh:
+                fh.write(json.dumps(t, separators=(",", ":")) + "\n")
+        except Exception as e:
+            latest["errors"] += 1
+            latest["err"] = repr(e)[:300]
+            sys.stderr.write(
+                "%s tick %d: %s"
+                % (time.strftime("%FT%TZ", time.gmtime()), n, traceback.format_exc())
+            )
+        latest.update(
+            ticks=n,
+            hb=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            hb_t=round(time.time(), 3),
+        )
+        try:
+            write_atomic(latest_p, latest)
+        except Exception:
+            sys.stderr.write(
+                "%s heartbeat: %s"
+                % (time.strftime("%FT%TZ", time.gmtime()), traceback.format_exc())
+            )
+        if max_ticks and n >= max_ticks:
+            break
+        # a late tick is not made up with a burst
+        nxt = max(nxt + interval, time.time())
+        time.sleep(max(0.0, nxt - time.time()))
+    if pas["thread"] is not None:
+        # a bounded run ends with its pass's row in attrib-latest.json
+        pas["thread"].join(30)
+        write_atomic(latest_p, latest)
+
+
+def main():
+    argv = sys.argv
+    top_n = int(argv[argv.index("--top") + 1]) if "--top" in argv else 3
+    if "--daemon" in argv:
+        interval = (
+            float(argv[argv.index("--interval") + 1]) if "--interval" in argv else 5.0
+        )
+        max_ticks = (
+            int(argv[argv.index("--max-ticks") + 1]) if "--max-ticks" in argv else 0
+        )
+        return daemon(interval, max_ticks, top_n)
+
+    def emit(lines):
+        sys.stdout.write("".join(lines))
+        sys.stdout.flush()
+
+    attrib_pass("--no-write" not in argv, top_n, emit)
 
 
 if __name__ == "__main__":

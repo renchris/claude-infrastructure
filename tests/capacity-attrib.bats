@@ -158,6 +158,31 @@ print(m.eval_body(argv2))' "$PASS"
   [ "$output" = "echo 's" ]
 }
 
+# ── --daemon: the fork-free 5 s sampler (DESIGN load-root-cause-2026-10-17 §4.1) ─────────────────
+@test "--daemon writes attrib-latest.json with an advancing heartbeat, the 5 s series, and the 60 s row" {
+  run python3 "$PASS" --daemon --interval 0.2 --max-ticks 5
+  [ "$status" -eq 0 ]
+  run jq -e '.ticks == 5 and .errors == 0 and (.hb_t | type) == "number" and .pid > 0
+             and (.tick.top_fp[0] | has("lifetime_max_phys_footprint_mb"))
+             and (.tick.forks_per_s == null or (.tick.forks_per_s | type) == "number")
+             and .row.accounting == "baseline" and (.top | length) == 3' "$D/attrib-latest.json"
+  [ "$status" -eq 0 ]
+  # one series line per tick, each later than the last
+  [ "$(wc -l < "$D/attrib-series.jsonl")" -eq 5 ]
+  run jq -se '[.[].t] as $t | [range(1; 5) | select($t[.] > $t[. - 1])] | length == 4' "$D/attrib-series.jsonl"
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$CC_CAP_ATTRIB_LOG")" -eq 1 ]   # the full pass appended its row like a one-shot tick
+}
+
+@test "--daemon: a tick that raises is logged, the heartbeat still advances, and the loop runs on" {
+  mkdir "$D/attrib-series.jsonl"     # every tick's series append now fails
+  run python3 "$PASS" --daemon --interval 0.2 --max-ticks 5
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c '^[0-9TZ:-]* tick [1-5]: ')" -eq 5 ]
+  run jq -e '.ticks == 5 and .errors == 5 and (.err | test("IsADirectory"))' "$D/attrib-latest.json"
+  [ "$status" -eq 0 ]
+}
+
 # ── wiring into capacity-alarm.sh ───────────────────────────────────────────────────────────────
 @test "capacity-alarm feeds rung 4 from the pass, writes the attrib row, and says so (top_src)" {
   run env CC_CAP_LOG="$D/cap.jsonl" CC_CAP_KALLOC=off CC_CAP_COAL_FP=0 CC_CAP_PAGE=off \
