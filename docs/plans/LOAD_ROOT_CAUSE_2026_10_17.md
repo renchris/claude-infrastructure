@@ -59,3 +59,12 @@ fixes X1-X27, §3 worktree lifecycle, §4 instrument, §5 WP table with file own
 - W2: `wt_pinned`'s `owner` pin (reflog < 60 min) pins every fresh tree, so a self-owned teardown
   (teammate-auto-shutdown, a failed fire) passes `--self-owned`; janitors keep the pin. Git cannot hold
   `refs/wt-tombstone/<id>` beside `/<id>/wip`, so every tombstone ref is one level down (`/<id>/head`).
+- W2 resume state (2026-10-17 ~14:00Z, for a successor): branch `load-w2-worktree-lifecycle` holds 2
+  unlanded commits (plan update; 2933e9631 slug fix + teammate clone mode — suites wt-tombstone, wt-park,
+  teammate-auto-shutdown, cc-resume-resolve still to re-run, deferred by cc-bats). WP-10 phase B is on
+  teammate w2-gcpark, branch `w2-gcpark` off origin/main bfab48403 (spec = its brief: `--park-first`
+  opt-in, PARK arms i/ii, late DETACH, ARCHIVE behind CC_WTGC_ARCHIVE_FLOOR_GB, `--path`, pop split,
+  AC-6). Finish: cherry-pick its commits, run tests/worktree-gc.bats + the four above, /ship, ping
+  origin wt-cc-233108-87354-242 with DONE, self-close. Operator step filed: 678ee1ea5f12 (3 orphaned
+  teammate pids).
+
