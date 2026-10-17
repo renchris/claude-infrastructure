@@ -54,5 +54,25 @@
         "env": { "MS365_MCP_CLIENT_ID": "d5874d54-d502-491e-ab06-2ea21f50bc31", "MS365_MCP_TENANT_ID": "common" }
       }
     }
+  },
+
+  "shared": {
+    "ms365": {
+      "_why": [
+        "STAGED (DESIGN row X4, docs/research/load-root-cause-2026-10-17/DESIGN.md): one launchd-run",
+        "mcp-proxy wrapping ONE stdio server in place of a stdio child per session. `server` replaces",
+        "the mcpServers entry ONLY while `marker` exists, and only migrations/0066 writes the marker,",
+        "after scripts/mcp-ms365-proxy.sh gate passes. No marker = the stdio entry above, unchanged.",
+        "`headers_from_file` puts each file's contents in the header; an unreadable key file FAILS OPEN",
+        "to the stdio entry. The proxy reads its port from `server.url`."
+      ],
+      "marker": "~/.claude/state/ms365-shared.active",
+      "key_file": "~/.claude/state/ms365-proxy.key",
+      "label": "com.claude.mcp-ms365",
+      "proxy_package": "mcp-proxy",
+      "proxy_version": "6.7.20",
+      "server": { "type": "http", "url": "http://127.0.0.1:47365/mcp" },
+      "headers_from_file": { "X-API-Key": "~/.claude/state/ms365-proxy.key" }
+    }
   }
 }

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.mcp-ms365 — ONE shared ms365 MCP server for every session (DESIGN row X4,
+  docs/research/load-root-cause-2026-10-17/DESIGN.md): punkpeye mcp-proxy on 127.0.0.1:47365 wrapping
+  one unchanged stdio ms-365-mcp-server, in place of a stdio child per session (29 measured).
+  scripts/mcp-ms365-proxy.sh run is the body; its header has the key, Host-check and version rules.
+
+  🚨 STAGED, NOT LOADED. It lives in launchd/staged/, outside install.sh's launchd/*.plist glob,
+  because a copy into ~/Library/LaunchAgents is itself an activation at the next login. Loading it
+  is the operator's (C10): migrations/0066-ms365-shared.sh runs the cutover gate first and refuses
+  on a failure. Sessions keep their stdio server until 0066 writes ~/.claude/state/ms365-shared.active.
+
+  KeepAlive + RunAtLoad: launchd's job is to start it and restart it if it dies. ThrottleInterval 30
+  so a broken install (no key, no binary) costs 2 starts a minute, not 6. The PATH carries fnm's
+  default node, which both `#!/usr/bin/env node` packages need. Standard band: every session's mail
+  and calendar calls wait on it. Undo: launchctl bootout gui/$UID/com.claude.mcp-ms365; then
+  rm ~/.claude/state/ms365-shared.active and re-run scripts/mcp-ssot-wire.sh.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.mcp-ms365</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>export PATH="$HOME/Library/Application Support/fnm/aliases/default/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec "$HOME/.claude/scripts/mcp-ms365-proxy.sh" run</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>  <string>/Users/chrisren/.claude/logs/mcp-ms365.out.log</string>
+    <key>StandardErrorPath</key><string>/Users/chrisren/.claude/logs/mcp-ms365.err.log</string>
+</dict>
+</plist>

@@ -136,9 +136,23 @@ import json, os, sys, shutil
 ssot = json.load(open(sys.argv[1]))
 servers = ssot.get("mcpServers") or {}
 resolve = ssot.get("resolve") or {}
-out, notes = {}, []
+out, notes, active = {}, [], []
+x = lambda p: os.path.expanduser(os.path.expandvars(p))
 for name in sorted(servers):
     spec = json.loads(json.dumps(servers[name]))
+    # STAGED shared form (.shared.<name>): selected ONLY while its marker exists, which only a
+    # migration writes. No marker = the code below, byte for byte. A key file that cannot be read
+    # FAILS OPEN to the stdio entry: a per-session server beats one every session is refused by.
+    sh = (ssot.get("shared") or {}).get(name)
+    if sh and os.path.exists(x(sh["marker"])):
+        try:
+            hdr = {k: open(x(f)).read().strip() for k, f in (sh.get("headers_from_file") or {}).items()}
+            assert all(hdr.values())
+            out[name] = dict(sh["server"], headers=hdr)
+            active.append(name)
+            continue
+        except (OSError, AssertionError):
+            notes.append("SHARED_NOKEY\t" + name)
     cmd = spec.get("command")
     if isinstance(cmd, str):
         cmd = os.path.expanduser(os.path.expandvars(cmd))
@@ -158,7 +172,7 @@ for name in sorted(servers):
         notes.append("\t".join(_cell(x) for x in (
             "NEEDS_INSTALL", name, cmd, r.get("npm_package", ""), r.get("npm_version", ""))))
     out[name] = spec
-print(json.dumps({"servers": out, "notes": notes}))
+print(json.dumps({"servers": out, "notes": notes, "shared": active}))
 PY
   )" || rc_res=$?
   [[ $rc_res -eq 0 && -n "$resolved" ]] || { echo "  ⚠ mcp-servers.json unreadable" >&2; return 1; }
@@ -167,6 +181,7 @@ PY
   # Every cell is padded by the emitter above (tab is IFS-whitespace, so an empty cell would shift
   # the later columns left). Strip the placeholder back to empty here — this is the only reader.
   while IFS=$'\t' read -r tag name cmd pkg ver; do
+    [[ "$tag" == "SHARED_NOKEY" ]] && echo "  ⚠ $name: shared marker set but no key in its key file — rendering the stdio form" >&2
     [[ "$tag" == "NEEDS_INSTALL" ]] || continue
     for _v in name cmd pkg ver; do
       [[ "${!_v}" == $'\x1e' ]] && printf -v "$_v" '%s' ""
@@ -187,6 +202,13 @@ print(json.dumps(cur))
 ')"
     fi
   done < <(RES="$resolved" python3 -c 'import json,os;[print(n) for n in json.loads(os.environ["RES"])["notes"]]')
+
+  # A shared ms365 server keeps running across a package upgrade; restart it here, on the converge
+  # that installs packages, when either version moved (scripts/mcp-ms365-proxy.sh header).
+  if ! $CHECK_ONLY && RES="$resolved" python3 -c \
+       'import json,os,sys;sys.exit("ms365" not in json.loads(os.environ["RES"])["shared"])'; then
+    "$REPO_ROOT/scripts/mcp-ms365-proxy.sh" restart-if-stale || true
+  fi
 
   # THE POPULATION. Every account config dir from accounts.json, plus ~/.claude (read when
   # CLAUDE_CONFIG_DIR points at it explicitly — `claude-prev` defaults to it), plus $HOME/.claude.json

@@ -455,6 +455,13 @@ com.claude.accounts-keepwarm        | staged | 180  | ~/.claude/logs/accounts-ke
 # `run` since 2026-10-12: the operator ran 0063 and the job read back `run interval = 20`; over the
 # next 30 min it ran ~2/min with last exit 0 (DoD 12-15 in the plan). activate still names 0063.
 com.claude.accounts-local           | run    | 20   | ~/.claude/logs/accounts-local.stamp | -  | 0063-accounts-local-job.sh
+# ── com.claude.mcp-ms365 (2026-10-17, docs/research/load-root-cause-2026-10-17/DESIGN.md row X4) ───
+# One shared ms365 MCP server (mcp-proxy on 127.0.0.1 over one stdio ms-365-mcp-server) in place of a
+# stdio child per session. KeepAlive server with NO tick, so there is no per-tick product: evidence
+# `-` (launchd's counters still give S1-S4, and a crash-looping KeepAlive job is an S4 row), and
+# interval_s 0, which `-` never reads. `staged` until the operator runs, after its gate passes:
+#   bash ~/Development/claude-infrastructure/migrations/0066-ms365-shared.sh --confirm ms365-shared
+com.claude.mcp-ms365                | staged | 0    | -    | -  | 0066-ms365-shared.sh
 # ── com.claude.permission-harvest (2026-09-08, docs/plans/PERMISSION_HARVEST.md §5) ────────────────
 # THE ONLY WEEKLY ROW IN THIS FILE, and the reason interval_s above now says what `0` means. `0` is
 # the DAILY sentinel (86400 x 3 = 72 h), so declaring it here would report a job that ran on Sunday

@@ -703,8 +703,11 @@ STUB
   # 53 since 2026-10-11: com.claude.accounts-local (ACCOUNTS_BOARD_FRESHNESS D9, the 20 s local auth +
   # live-session refresh), `staged` in launchd/staged/ until the operator runs migrations/0063;
   # row, plist and count in one land.
-  if [ "$n" != 53 ]; then
-    echo "manifest declares $n labels, expected 53 — if a plist was legitimately added or retired,"
+  # 54 since 2026-10-17: com.claude.mcp-ms365 (load-root-cause DESIGN row X4, the one shared ms365
+  # server), `staged` in launchd/staged/ until the operator runs migrations/0066; row, plist and count
+  # in one land.
+  if [ "$n" != 54 ]; then
+    echo "manifest declares $n labels, expected 54 — if a plist was legitimately added or retired,"
     echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
     grep -vE '^[[:space:]]*(#|$)' "$M" | cut -d'|' -f1 | sed 's/[[:space:]]//g; s/^/  /'
     return 1
