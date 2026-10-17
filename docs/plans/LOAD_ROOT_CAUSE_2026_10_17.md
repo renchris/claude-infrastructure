@@ -37,7 +37,7 @@ fixes X1-X27, §3 worktree lifecycle, §4 instrument, §5 WP table with file own
 | W0 | — | OP-1, OP-2, OP-2b, OP-2c | X1 fseventsd restart, X24 cleanups, wired + fs_usage capture | X1 **done by another actor** (fseventsd pid 96656, 14 MB at 2026-10-17 ~10:00Z; was 12-13 GB). Spotlight Privacy entry, OP-2* pending → operator script |
 | W1-CI | claude-infrastructure | WP-1, WP-5, WP-6, WP-7, WP-8 | X2, X3 (bats), X8, X5, X4 | pending |
 | W1-ACS | agent-context-sync | WP-2, WP-3, WP-4, WP-22, WP-30 | X3, X11, X20, X10, X26 | pending |
-| W2 | claude-infrastructure | WP-9, WP-10, WP-11, WP-12, WP-13, WP-14 | X6, X7, PARK tier, §4.2 detectors | **in progress** (branch `load-w2-worktree-lifecycle`; API contract `docs/research/load-root-cause-2026-10-17/W2-CONTRACT.md`). WP-9 core + WP-11 committed lead-inline; WP-9 park/pins, WP-10, WP-12, WP-13, WP-14 on teammates |
+| W2 | claude-infrastructure | WP-9, WP-10, WP-11, WP-12, WP-13, WP-14 | X6, X7, PARK tier, §4.2 detectors | **landed except WP-10 phase B** — 55d01fcd4 (WP-9 core, WP-11), bfab48403 (WP-9 park/pins, WP-10 phase A, WP-12, WP-13, WP-14), content-verified; contract `docs/research/load-root-cause-2026-10-17/W2-CONTRACT.md`. WP-10 phase B (PARK tiers, `--path`, late DETACH, ARCHIVE behind `--park-first`) in progress |
 | W3 | claude-infrastructure | WP-15, WP-16, WP-17 | X9 event queue, activation (staged), X17 | blocked on W1-CI + W2 |
 | W4 | claude-infrastructure | WP-18-21, WP-23, WP-24, WP-25, WP-26, WP-28 | X12, X13, X25, X16, X15, X14 gate, X20, X18 | pending |
 | W5 | hammerspoon-config, reso | WP-27, WP-31 | X22, X6 for reso's janitor | owner repos; fire with W4's session if their CLAUDE.md permits |
@@ -50,3 +50,12 @@ fixes X1-X27, §3 worktree lifecycle, §4 instrument, §5 WP table with file own
   wedged fseventsd (4th episode). Claude sessions themselves were 9-13%. DESIGN §1.
 - A shared gate pool is **not** supported by today's numbers (X-POOL: back-to-back is 21% slower); remove
   the waste first, then re-measure.
+- W2 (2026-10-17): teammate permission asks route to the LEAD's pane and freeze the teammate, and while
+  one waits no team mail reaches the lead (three finished reports sat undelivered ~1 h). Triggers were
+  content, not shape: multi-line `git commit -m` naming destructive verbs, and `rm -r`. Every brief now
+  commits with `git commit -F <file written by the Write tool>`, bans `rm -r` (`mv d d.gone` instead) and
+  `cd … &&` chains. The live pre-W2 teammate-auto-shutdown also removed each idle teammate's clean
+  worktree (work survived on branches) — the defect W2 itself fixes.
+- W2: `wt_pinned`'s `owner` pin (reflog < 60 min) pins every fresh tree, so a self-owned teardown
+  (teammate-auto-shutdown, a failed fire) passes `--self-owned`; janitors keep the pin. Git cannot hold
+  `refs/wt-tombstone/<id>` beside `/<id>/wip`, so every tombstone ref is one level down (`/<id>/head`).
