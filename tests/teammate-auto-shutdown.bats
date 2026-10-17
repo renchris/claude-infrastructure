@@ -584,6 +584,7 @@ tomb_run() { # <member> <sid> → the idle event for the fixture's member; a dir
   row="$(jq -c 'select(.actor=="teammate-auto-shutdown")' "$WT_LEDGER")"
   [ "$(jq -r .event <<<"$row")" = worktree-disposed ]
   [ "$(jq -r .checkpoint_ref <<<"$row")" = "refs/wip/$member/LAST" ]
+  [ "$(jq -r .mode <<<"$row")" = clone ]   # a bound firing mid-capture can strand nothing: the tree is untouched until git removes it
   id="$(jq -r .id <<<"$row")"
   [ "$(git -C "$TREPO" rev-parse "refs/wt-tombstone/$id/head")" = "$CKPT" ]   # the head ref IS the checkpoint
   cmp "$D/x.json.orig" "$WT_TOMB_DIR/$id/residue/brag-output/x.json"         # residue byte-identical

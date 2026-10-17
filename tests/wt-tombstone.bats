@@ -284,3 +284,13 @@ tree_sums() { (cd "$1" && find . -path ./.git -prune -o -type f -print | LC_ALL=
   [ ! -e "$w/brag-output/render.json" ]
   [ -z "$(find "$T" -name render.json -path '*brag-output*' 2>/dev/null)" ]
 }
+
+@test "sids: a path with _ and a space maps to Claude Code's slug (every non-alphanumeric is -)" {
+  git -C "$T/main" worktree add -q -b odd1 "$T/wts/odd_name with space" main
+  w="$(cd "$T/wts/odd_name with space" && pwd -P)"
+  slug="$(printf '%s' "$w" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  mkdir -p "$HOME/.claude/projects/$slug"; echo '{}' > "$HOME/.claude/projects/$slug/sid-odd.jsonl"
+  run wt__sids_of "$w"
+  [ "$output" = sid-odd ]
+}
+

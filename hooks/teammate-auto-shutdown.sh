@@ -1570,7 +1570,7 @@ pin_term_verdict
 # THE TOMBSTONE COMES BEFORE THE REMOVE (W2 note X6; API: docs/research/load-root-cause-2026-10-17/
 # W2-CONTRACT.md). The checkpoint ref holds only NON-ignored content, so an ignored brag-output/ or
 # .env went with the tree and no record said it had ever existed — 247 such removals in
-# teammate-lifecycle.log. wt_tombstone moves that residue aside, points refs/wt-tombstone/<id>/head at
+# teammate-lifecycle.log. wt_tombstone CLONES that residue aside, points refs/wt-tombstone/<id>/head at
 # the checkpoint commit and appends the ledger row, all before git touches the tree. Every way it can
 # fail KEEPS the tree — no library, a pin, a failed or timed-out write — because a kept tree costs disk
 # and a removed one without its record costs the work. The 300 s bound keeps the write clear of
@@ -1600,7 +1600,10 @@ reap_owned_worktree() { # <main-repo> → tombstone, then `remove --force`; any 
     *) log "  ~ worktree kept (pin check failed, rc=$rc): $WORKTREE"; return 0 ;;
   esac
   to="$(command -v gtimeout || command -v timeout)" || { log "  ~ worktree kept (no gtimeout to bound the tombstone): $WORKTREE"; return 0; }
-  local args=("$WORKTREE" teammate-auto-shutdown checkpointed)
+  # --mode clone (DESIGN note X6, teammate bullet): the write runs under a 300 s bound, and a bound that
+  # fires half-way through a MOVE would strand residue in the tombstone dir with no row and no id to
+  # restore it from. A clone (clonefile, O(entries)) leaves the tree untouched until git removes it.
+  local args=("$WORKTREE" teammate-auto-shutdown checkpointed --mode clone)
   # The ref teammate-checkpoint.sh writes (its LAST_REF). No checkpoint ⇒ the head ref falls back to HEAD.
   git -C "$WORKTREE" rev-parse --verify -q "$ckref^{commit}" >/dev/null 2>&1 && args+=(--checkpoint-ref "$ckref")
   # shellcheck disable=SC2016  # $1 / $@ are the CHILD's positional args, expanded there on purpose
@@ -1612,9 +1615,9 @@ reap_owned_worktree() { # <main-repo> → tombstone, then `remove --force`; any 
   if git -C "$repo" worktree remove "$WORKTREE" --force 2>/dev/null; then
     log "  ✓ worktree removed: $WORKTREE (tombstone $id)"
   else
-    # git refused, so the tree stays — and it gets its moved residue back, or it would stay HALF-emptied.
-    wt_residue_restore "$id" "$WORKTREE" 2>/dev/null
-    log "  ~ worktree kept (remove refused; residue restored from tombstone $id): $WORKTREE"
+    # git refused, so the tree stays whole (the residue was cloned); the record says it was superseded.
+    wt_superseded "$id" teammate-auto-shutdown "remove refused" "$WORKTREE" 2>/dev/null
+    log "  ~ worktree kept (remove refused; tombstone $id superseded): $WORKTREE"
   fi
 }
 

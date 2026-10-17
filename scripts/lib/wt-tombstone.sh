@@ -77,7 +77,7 @@ wt__config_roots() { # → one config root per line (env list, else every ~/.cla
   done
 }
 
-wt__slug() { printf '%s' "$1" | sed 's#[/.]#-#g'; }   # Claude Code's projects/<slug> naming
+wt__slug() { printf '%s' "$1" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g'; }   # Claude Code's projects/<slug>: every non-alphanumeric → -
 
 wt__err() { printf 'wt-tombstone: %s\n' "$*" >&2; }
 
@@ -423,6 +423,12 @@ wt_prune_logged() { # <repo> [prune-args…] → records admin-pruned rows, then
   wt__prune_record "$repo" "${WT_ACTOR:-wt_prune_logged}" "prune" \
     || wt__err "admin-pruned logging incomplete for $repo (the prune still runs)"
   "$WT_GIT" -C "$repo" worktree prune "$@"
+}
+
+wt_superseded() { # <id> <actor> <reason> [path] → marks a tombstone whose tree was NOT removed after all
+  wt__row_reset
+  WT_R_event="superseded"; WT_R_id="$1"; WT_R_actor="$2"; WT_R_reason="$3"; WT_R_path="${4:-}"; WT_R_mode=none
+  wt__row_emit
 }
 
 wt_branch_deleted_row() { # <repo> <branch> <sha> <actor> [reason]
