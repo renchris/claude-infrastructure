@@ -503,7 +503,9 @@ if [ "$ship_hold" -eq 1 ] || [ "$has_done" -eq 1 ]; then
     done
   fi
   if [ -n "$WRAP" ] && [ -f "$WRAP" ]; then
-    LED="$( cd "$CWD" 2>/dev/null && bash "$WRAP" --machine 2>/dev/null || true )"
+    # WRAP_BUSY=off (2026-10-16, Wave 4c): the four fields read below are never BUSY fields, so this
+    # skips the process-table probe and is served the Stop's shared ledger (session-continue's key).
+    LED="$( cd "$CWD" 2>/dev/null && WRAP_BUSY=off bash "$WRAP" --machine 2>/dev/null || true )"
     lf() { printf '%s' "$LED" | grep -E "^$1=" | head -1 | cut -d= -f2- || true; }
     ld_dirty="$(lf DIRTY)"; ld_unl="$(lf UNLANDED)"; ld_rem="$(lf REMAINDER)"
     # The rung is read but not USED for the fire decision — this hook is deliberately

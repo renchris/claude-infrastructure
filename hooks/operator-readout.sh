@@ -472,6 +472,25 @@ scope_of() {
   elif [ "$r" -gt 0 ]; then printf 'open'
   else printf 'met'; fi
 }
+
+# _or_busy_read — publish the ⏳ fields (OR_BUSY_* / OR_PERMPEND*) from a BUSY-on ledger ask, made
+# with the binary, cwd and session argument render_block's read used. Only when that read succeeded:
+# that was the condition the fields were published under when render_block read them itself.
+OR_LED_OK=0; OR_LED_WRAP=""; OR_LED_SID=""; OR_LED_CWD=""
+_or_busy_read() {
+  local bl
+  [ "$OR_LED_OK" = 1 ] && [ -n "$OR_LED_WRAP" ] || return 0
+  if [ -n "$OR_LED_SID" ]; then
+    bl="$( cd "$OR_LED_CWD" 2>/dev/null && bash "$OR_LED_WRAP" --machine --session "$OR_LED_SID" 2>/dev/null )"
+  else
+    bl="$( cd "$OR_LED_CWD" 2>/dev/null && bash "$OR_LED_WRAP" --machine 2>/dev/null )"
+  fi
+  [ -n "$bl" ] || return 0
+  OR_BUSY_STATE="$(kv_first "$bl" BUSY_STATE)"; OR_BUSY_SUSPECT="$(kv_first "$bl" BUSY_SUSPECT)"
+  OR_BUSY_AGE="$(kv_first "$bl" BUSY_AGE)";     OR_BUSY_SAMPLE="$(kv_first "$bl" BUSY_SAMPLE)"
+  OR_BUSY_SRC="$(kv_first "$bl" BUSY_SRC)"
+  OR_PERMPEND="$(kv_first "$bl" PERMPEND)";     OR_PERMPEND_AGE="$(kv_first "$bl" PERMPEND_AGE)"
+}
 epoch_to_iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
                  || date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo ''; }
 
@@ -815,7 +834,7 @@ render_block() {
   # are collected by `wait` where those sites were — the output is the same bytes, only the wall
   # time overlaps. The files ride on $steps_file's name (no new mktemp fork, C19) and are removed
   # with it. No `return` lies between here and the collection points, so nothing is orphaned.
-  local wrap="" _wl_sid="" _or_wf _or_led_pid=""
+  local wrap="" _wl_sid="" _or_wf _or_led_pid="" _or_envsid=""
   _or_research_prefetch "$steps_file.rp"
   if [ -n "$cwd" ] && [ -d "$cwd" ]; then
     wrap="${WRAP_LEDGER_BIN:-}"
@@ -826,11 +845,33 @@ render_block() {
     fi
     # Why the session id is passed: see the ledger read site below.
     _wl_sid=""; case "${SID:-}" in ''|'?') ;; *) _wl_sid="$SID" ;; esac
+    # THE SHARED LEDGER (2026-10-16, Wave 4c; completion-assert's 2026-10-15 rule). The ledger resolves
+    # the session as --session > WRAP_SESSION_ID > CLAUDE_SESSION_ID > CLAUDE_CODE_SESSION_ID, and its
+    # memo key carries the flag. Claude Code exports CLAUDE_CODE_SESSION_ID to its hooks, so when the
+    # environment already names $SID the flag only moved this ask onto a key of its own — a second
+    # full ledger beside the one session-continue, boundary-handoff and completion-assert share. The
+    # two differ only in the *_SRC labels, and this hook reads none but BUSY_SRC, which the probe sets.
+    # With the flag dropped, the ledger serves this ask from that shared computation and adds BUSY
+    # (wrap-ledger.sh § THE BUSY SPLICE). Any other environment keeps the flag. Kill switch:
+    # CC_OR_SHARED_LEDGER=off.
+    if [ -n "$_wl_sid" ] && [ "${CC_OR_SHARED_LEDGER:-on}" != off ]; then
+      _or_envsid="${WRAP_SESSION_ID:-}"
+      [ -n "$_or_envsid" ] || _or_envsid="${CLAUDE_SESSION_ID:-}"
+      [ -n "$_or_envsid" ] || _or_envsid="${CLAUDE_CODE_SESSION_ID:-}"
+      [ "$_or_envsid" = "$_wl_sid" ] && _wl_sid=""
+    fi
+    # WRAP_BUSY=off (2026-10-16, Wave 4c). The BUSY fields feed ONE reader in this hook — the ⏳
+    # notice, under `[ -z "$BLOCK" ]` — so asking for them here ran the process-table probe (3-8 s
+    # at a load of ~280) on every Stop to fill values that are read only when the block is empty,
+    # which the standing operator pile makes rare. This read is now the Stop's shared BUSY-off
+    # ledger, and the notice arm asks for BUSY itself (_or_busy_read), from the same memo, only
+    # when it is reached. The three values it needs to repeat this ask are kept as globals.
+    OR_LED_WRAP="$wrap"; OR_LED_SID="$_wl_sid"; OR_LED_CWD="$cwd"
     if [ -n "$wrap" ]; then
       if [ -n "$_wl_sid" ]; then
-        ( cd "$cwd" 2>/dev/null && bash "$wrap" --machine --session "$_wl_sid" ) > "$steps_file.led" 2>/dev/null &
+        ( cd "$cwd" 2>/dev/null && WRAP_BUSY=off bash "$wrap" --machine --session "$_wl_sid" ) > "$steps_file.led" 2>/dev/null &
       else
-        ( cd "$cwd" 2>/dev/null && bash "$wrap" --machine ) > "$steps_file.led" 2>/dev/null &
+        ( cd "$cwd" 2>/dev/null && WRAP_BUSY=off bash "$wrap" --machine ) > "$steps_file.led" 2>/dev/null &
       fi
       _or_led_pid=$!
     fi
@@ -1183,14 +1224,12 @@ render_block() {
   if [ -n "$led" ]; then
     lf() { kv_first "$led" "$1"; }
     RUNG="$(lf RUNG)"; [ -n "$RUNG" ] || RUNG="?"
-    # ⏳ working-vs-idling (D8 / A10 §6.3), published as globals from the ledger read that ALREADY
-    # happens here — the same trick RUNG/TOTAL use, and the reason this costs zero extra forks.
-    # Deliberately NOT rendered into the block: busy-ness is orthogonal to the rung ladder, so it
-    # speaks only where this renderer is silent today (the arm below the block).
-    OR_BUSY_STATE="$(lf BUSY_STATE)"; OR_BUSY_SUSPECT="$(lf BUSY_SUSPECT)"
-    OR_BUSY_AGE="$(lf BUSY_AGE)";     OR_BUSY_SAMPLE="$(lf BUSY_SAMPLE)"
-    OR_BUSY_SRC="$(lf BUSY_SRC)"
-    OR_PERMPEND="$(lf PERMPEND)";     OR_PERMPEND_AGE="$(lf PERMPEND_AGE)"
+    # ⏳ working-vs-idling (D8 / A10 §6.3). Deliberately NOT rendered into the block: busy-ness is
+    # orthogonal to the rung ladder, so it speaks only where this renderer is silent today (the arm
+    # below the block). Its fields are no longer read here (this ledger is BUSY-off, § PREFETCH):
+    # OR_LED_OK records that this read succeeded — the condition under which they used to be
+    # published — and the arm below the block fetches them (_or_busy_read) when it is reached.
+    OR_LED_OK=1
     branch="$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
     case "$RUNG" in
       "📦")
@@ -2039,6 +2078,10 @@ if [ -z "$BLOCK" ]; then
   _bz_lib="${SESSION_BUSY_LIB:-$SCRIPT_DIR/lib/session-busy.sh}"
   [ -f "$_bz_lib" ] || _bz_lib="$CFG/hooks/lib/session-busy.sh"
   [ -f "$_bz_lib" ] || _bz_lib="$HOME/.claude/hooks/lib/session-busy.sh"
+  # The BUSY fields, fetched here and only here (render_block § PREFETCH says why): the same ledger
+  # ask render_block made before 2026-10-16 — same binary, cwd and session argument, BUSY on — now
+  # served from this Stop's shared memo plus the probe. Skipped where nothing below would read them.
+  if [ -f "$_bz_lib" ] && [ "${CC_BUSY_NOTICE:-1}" != "0" ]; then _or_busy_read; fi
   if [ -f "$_bz_lib" ] && [ -n "${OR_BUSY_STATE:-}" ]; then
     # shellcheck disable=SC1090
     _bz_line="$( . "$_bz_lib" 2>/dev/null && sb_render_line "${OR_BUSY_STATE:-UNKNOWN}" \
@@ -2082,7 +2125,10 @@ if [ -z "$BLOCK" ]; then
     done
   fi
   [ -n "$_cwrap" ] && [ -f "$_cwrap" ] || abstain "nothing-to-surface"
-  _cled="$( cd "${CWD:-}" 2>/dev/null && bash "$_cwrap" --machine 2>/dev/null || true )"
+  # WRAP_BUSY=off (Wave 4c): this read cites RUNG, TRUNK, DOD, REMAINDER and SCOPE, never a BUSY
+  # field, so it skips the probe and is served the Stop's shared ledger (the same per-event memo a
+  # BUSY-on ask here was already served from whenever anti-deference-nudge had asked first).
+  _cled="$( cd "${CWD:-}" 2>/dev/null && WRAP_BUSY=off bash "$_cwrap" --machine 2>/dev/null || true )"
   [ -n "$_cled" ] || abstain "nothing-to-surface"
   _clf() { kv_first "$_cled" "$1"; }
   # Re-confirm the rung from THIS read: between render_block and here a sibling could have landed or
