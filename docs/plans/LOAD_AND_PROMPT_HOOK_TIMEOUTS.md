@@ -177,6 +177,7 @@ Replay p95, operator-readout, real cancelled Stops (`replay-operator-readout.sh`
 | pre-land (the landed code, worktree) | 46-73 | 22 | 3.4 / 4.1 / 4.3 s | 1.7 / **2.1** / 2.1 s |
 | post-converge (the live checkout) | 120-175 | 24 | 6.3 / 14.4 / 38.2 s | 4.5 / **5.9** / 9.4 s |
 | post-converge (the live checkout), 07:50Z | 53-92 | 24 | 4.3 / 7.3 / 14.8 s | 2.1 / **4.96** / 5.14 s |
+| post-converge (the live checkout), 08:37Z — ordinary load | 36-42 | 24 | 3.07 / 4.54 / 5.32 s | 1.64 / **2.93** / 2.97 s |
 
 The target holds on every round at or below load ~90 — 2.1 s at 46-73, 4.96 s on the converged tree at 53-92 (the two slowest Stops, 4.96 and 5.14 s, are long-lived sessions at load 66-68), so its margin is thin by load ~90. At 4-5× the 24 h median it does not hold (5.9 s); what remains there is mostly not the ledger: the shared BUSY-off ledger is 0.6-1.3 s untraced at load ~125 (was 3.1-5.8 s at ~300), operator-readout waits 1.7-2.6 s on it under three-sibling contention, and the rest is the hook's own reads (escalation count, steps, stranded, `cc-research pending` bounded at 3 s). Next lever, not taken (outside this scope's "cost of the ledger"): operator-readout's own non-ledger reads. REFUTED as a lever: `fired_peer_sids` — its 0.6-1.3 s came from traced runs at load ~300; untraced at load ~65 over 583 real (session, pane, start) triples it is 84 ms, and an exact prefilter (sid, plus the `"firedBy": <pane>` pair — a bare pane substring matches every stamp's `firedAt`) gave 0 differences and no gain (90 ms), so it was not landed.
 
