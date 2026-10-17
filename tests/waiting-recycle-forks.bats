@@ -29,6 +29,9 @@ setup() {
   OLD="$BATS_TEST_TMPDIR/old"
   export HOME="$BATS_TEST_TMPDIR/home"
   export SHF_OUT_DIR="$BATS_TEST_TMPDIR/out"; mkdir -p "$SHF_OUT_DIR"
+  # disarm_age_s is wall-clock age: the old and new arms run one after the other, so under load
+  # the pair can straddle a second and read 0 vs 1 with identical decisions.
+  export SHF_IDL_DEL=".ts, .disarm_age_s"
   export CC_WR_STATE_DIR="$BATS_TEST_TMPDIR/state"
   export CC_WR_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
   export CC_TELEMETRY_DIR="$BATS_TEST_TMPDIR/tel"
