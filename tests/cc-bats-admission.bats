@@ -42,7 +42,8 @@ setup() {
         CC_BATS_REAL CC_BATS_BAND CC_BATS_TASKPOLICY \
         CC_BATS_MAX_ROOTS CC_BATS_MAX_LOAD_PER_CORE CC_BATS_ROOTS_DIR CC_BATS_ROOT_TTL \
         CC_BATS_SYSCTL_BIN CC_BATS_PS_BIN CC_BATS_ADMIT_SKIP \
-        CC_BATS_ADMISSION_MODE_FILE CC_BATS_WOULD_REFUSE_LOG CC_BATS_WAIVER_LOG
+        CC_BATS_ADMISSION_MODE_FILE CC_BATS_WOULD_REFUSE_LOG CC_BATS_WAIVER_LOG \
+        CC_BATS_WAIVER_REASON   # a suite run under the recorded waiver exports its own reason
   ROOTS="$TMP/roots"
   mkdir -p "$ROOTS"
   # A stub standing in for the real bats. The subject here is the ADMISSION DECISION, not bats; a
