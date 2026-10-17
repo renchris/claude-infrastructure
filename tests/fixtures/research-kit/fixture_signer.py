@@ -43,9 +43,10 @@ def fixture_only() -> None:
             )
             sys.exit(2)
     # every file cc-signoff may write under the fixture home, resolved: a symlink into the live store
-    # (a linked delegations.jsonl, a linked program dir) would sign a real program
+    # (a linked delegations.jsonl, a linked program dir) would sign a real program. Every entry of the
+    # home is listed, dangling links included; a log not there yet is created as a plain file
     home = Path(os.environ["CC_RESEARCH_HOME"])
-    paths = [home / "delegations.jsonl"]
+    paths = []
     for d in sorted(home.glob("*")) if home.is_dir() else []:
         paths += [d, d / "signoff.jsonl", d / "delegated.jsonl"]
     for p in paths:
