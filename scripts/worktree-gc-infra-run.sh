@@ -350,9 +350,8 @@ verdict() { # <verdict> <exit-code> [k=v ...]
 # Every write here goes to $FOREIGN_LOG, never to $LOG or $LAST: the home row is the fleet's
 # staleness sensor and must stay one row per run, byte-for-byte what it was.
 POST_DUE=0
-_bounded() { # <cmd...> — under timeout(1) when present; rc 124 is the bound firing
+_bounded() { # <cmd...> — under timeout(1) when present (the fetch block's idiom); rc 124 is the bound firing
   if command -v timeout >/dev/null 2>&1; then timeout "$FOREIGN_BOUND" "$@"
-  elif command -v gtimeout >/dev/null 2>&1; then gtimeout "$FOREIGN_BOUND" "$@"
   else "$@"; fi
 }
 _flog() { printf '%s\n' "$*" >> "$FOREIGN_LOG" 2>/dev/null; }
