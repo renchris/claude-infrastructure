@@ -1538,7 +1538,7 @@ pf_detach() {
   if [ "$PF_WLOCK" = "1" ] && ! "$GIT_BIN" -C "$MAIN" worktree unlock "$path" 2>/dev/null; then
     pf_keep "$path" "$label" "PARKED from $orig; unlock failed (stays PARKED)"; N_REFUSED=$((N_REFUSED + 1)); return 1
   fi
-  if ! tid="$(wt_tombstone "$path" worktree-gc "late-$mode" --event worktree-tombstoned 2>"$PARK_ERR")" || [ -z "$tid" ]; then
+  if ! tid="$(wt_tombstone "$path" worktree-gc "late-$mode" --event worktree-tombstoned --path-as "$orig" 2>"$PARK_ERR")" || [ -z "$tid" ]; then
     pf_relock
     pf_keep "$path" "$label" "PARKED from $orig; tombstone failed — $(sed -n '1s/^wt-tombstone: //p' "$PARK_ERR" 2>/dev/null) (stays PARKED)"
     N_REFUSED=$((N_REFUSED + 1)); return 1

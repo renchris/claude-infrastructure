@@ -306,21 +306,23 @@ wt__undo() { # <mode> <id> <path> → puts an mv-ed residue back; always rc 2
   return 2
 }
 
-wt_tombstone() { # <path> <actor> <reason> [--mode mv|clone] [--wip] [--checkpoint-ref R] [--event E] → prints id
+wt_tombstone() { # <path> <actor> <reason> [--mode mv|clone] [--wip] [--checkpoint-ref R] [--event E] [--path-as P] → prints id
   # Writes everything a later restore needs BEFORE the caller removes the tree: the residue (moved or
   # cloned on one volume, no cap), a durable ref for a head trunk does not contain, refs for reflog-only
   # work, a copy of logs/HEAD and, for a forced dirty removal, a wip snapshot. The row goes last, so a
   # row always means a complete record; any failure undoes the move and returns 2 (KEEP the tree).
   [ $# -ge 3 ] || { wt__err "usage: wt_tombstone <path> <actor> <reason> [opts]"; return 2; }
-  local path="$1" actor="$2" reason="$3" mode=mv wip=0 ckref="" event=worktree-disposed
+  local path="$1" actor="$2" reason="$3" mode=mv wip=0 ckref="" event=worktree-disposed path_as=""
   shift 3
   while [ $# -gt 0 ]; do
     case "$1" in
       --wip) wip=1; shift; continue ;;
-      --mode|--checkpoint-ref|--event) [ $# -ge 2 ] || { wt__err "$1 needs a value"; return 2; } ;;
+      --mode|--checkpoint-ref|--event|--path-as) [ $# -ge 2 ] || { wt__err "$1 needs a value"; return 2; } ;;
       *) wt__err "unknown option $1"; return 2 ;;
     esac
-    case "$1" in --mode) mode="$2" ;; --checkpoint-ref) ckref="$2" ;; --event) event="$2" ;; esac
+    # --path-as: the path the tree is KNOWN by, when it is being removed from elsewhere (a parked tree's
+    # late DETACH): the row and its sids are keyed on it, so a restore by the original path finds it.
+    case "$1" in --mode) mode="$2" ;; --checkpoint-ref) ckref="$2" ;; --event) event="$2" ;; --path-as) path_as="$2" ;; esac
     shift 2
   done
   case "$mode" in mv|clone) ;; *) wt__err "bad --mode $mode"; return 2 ;; esac
@@ -376,8 +378,8 @@ wt_tombstone() { # <path> <actor> <reason> [--mode mv|clone] [--wip] [--checkpoi
 
   wt__row_reset
   WT_R_event="$event"; WT_R_id="$id"; WT_R_actor="$actor"; WT_R_reason="$reason"; WT_R_repo="$repo"
-  WT_R_path="$path"; WT_R_branch="$branch"; WT_R_head="$head"; WT_R_trunk="$trunk"; WT_R_mode="$mode"
-  WT_R_landed="$(wt__landed "$repo" "$trunk" "$head")"; WT_R_sids="$(wt__sids_of "$path")"
+  WT_R_path="${path_as:-$path}"; WT_R_branch="$branch"; WT_R_head="$head"; WT_R_trunk="$trunk"; WT_R_mode="$mode"
+  WT_R_landed="$(wt__landed "$repo" "$trunk" "$head")"; WT_R_sids="$(wt__sids_of "${path_as:-$path}")"
   WT_R_preserved="$preserved"; WT_R_preserved_list="$residue"; WT_R_caches_skipped="$caches"
   WT_R_identical_skipped="$ident"; WT_R_lockfiles="$lockf"; WT_R_tomb_ref="$tomb_ref"; WT_R_reflog_refs="$refs"
   WT_R_logs_head="$logs_head"; WT_R_wip_ref="$wip_ref"; WT_R_checkpoint_ref="$ckref"

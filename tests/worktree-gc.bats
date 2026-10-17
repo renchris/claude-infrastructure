@@ -2403,6 +2403,9 @@ DAY=86400
   tid="$(jq -r 'select(.event=="worktree-disposed") | .tombstone_id' "$DLOG")"
   [ -n "$tid" ]
   [ "$(jq -r --arg t "$tid" 'select(.event=="worktree-tombstoned" and .id==$t) | .reason' "$DLOG")" = late-detach ]
+  # The record is keyed on the path the tree was KNOWN by, not .parked/<id>, so restore-by-path finds it.
+  dpath="$(jq -r --arg t "$tid" 'select(.event=="worktree-disposed" and .tombstone_id==$t) | .path' "$DLOG")"
+  [ "$(jq -r --arg t "$tid" 'select(.event=="worktree-tombstoned" and .id==$t) | .path' "$DLOG")" = "$dpath" ]
   cmp "$HOME/.claude/autonomy/worktree-tombstones/$tid/residue/brag-output/x.json" "$BATS_TEST_TMPDIR/x.json.orig"
   [ -z "$(ls -A "$PARK_IDX")" ]                             # no index entry left to chase a gone tree
   git -C "$R" branch -D -q feat/dt
