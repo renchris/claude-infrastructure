@@ -343,6 +343,9 @@ Updated 2026-10-16 (v1.3, REPORT §13):
   when the program's own waits move the wave (`cc-research premise file --due W1+30d`).
 - **The frame-delta cycle closes its rows.** The sweep spares a frame-omission known row once the operator
   re-signs the frame after it was held, before or after its due, and the re-issued certificate closes it.
+  After the re-sign, `gate.sh delta-activity --program <slug>` prints the cycle's activity id: tag its census
+  critic's and delta rounds' `courier.sh` / `round.sh` calls `CC_RESEARCH_ACTIVITY=<id>` and its Agents
+  `[activity:<id>]`. It refuses while no re-signed frame carries an open held row; `gate.sh run` closes it.
 
 Updated 2026-10-16 (wave ids; scripts/research-kit/RECORDS.md "Wave ids, the re-key, and a class-b row's packets"):
 - **One spelling per wave.** `--gate-wave W` must be an id the program's frame or records name; any other is

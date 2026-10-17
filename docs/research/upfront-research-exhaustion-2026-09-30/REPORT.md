@@ -975,7 +975,8 @@ certificate:
    `intake.py delta-apply`, which bumps the version and records the delta (scripts/research-kit/RECORDS.md, "Frame
    deltas"); the frame is never edited by hand.
 2. Stages 2–5 run for the delta only, timeboxed at 2 days for lite and 3 for standard and full (an assumed figure the
-   calibration run measures), and priced in the after-signoff ceiling (§6.1).
+   calibration run measures), and priced in the after-signoff ceiling (§6.1). Their calls carry the activity
+   `gate.sh delta-activity` opens once the re-signed frame carries the delta; step 4's re-issue closes it.
 3. The edited plan units are re-frozen and get at most 2 delta rounds, the last one verification-only, with a shadow
    seed in every edited span, as for an escape (§5.3, step 3).
 4. The certificate is re-issued as the next version, and the known row closes.

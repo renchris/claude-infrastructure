@@ -818,3 +818,6 @@ def add_verbs(sub: Any) -> None:
     p = sub.add_parser("render")
     p.add_argument("--program", required=True)
     p.set_defaults(fn=cmd_render)
+    import gate_delta
+
+    gate_delta.add_verbs(sub)  # delta-activity (REPORT.md §5.4)

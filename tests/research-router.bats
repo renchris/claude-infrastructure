@@ -880,6 +880,39 @@ pyspy() {
   [ "$output" = "deny"$'\n'"py=1" ]
 }
 
+# RED-proof (2026-10-17): before router.py's FRAME_DELTA arm a frame-delta tag took the generic §10
+# item 8 arm, so the other program's courier.sh, the reserved rehearsal round, and round.sh's
+# certification run (any token "delta" in it) all read allow, and a delta round's close read deny.
+@test "a frame-delta activity (gate.sh delta-activity) lets its program's census critic and delta rounds through while certified, and nothing else" {
+  state certified
+  printf '{"activities":[{"program":"demo","id":"fd-0","kind":"frame-delta","state":"closed"},{"program":"demo","id":"fd-1","kind":"frame-delta","state":"open","opened_by":"gate.sh delta-activity"}]}\n' \
+    > "$CC_RESEARCH_HOME/activities.json"
+  prompt "hello there" >/dev/null
+  [ "$(label)" = other ]
+  K=scripts/research-kit
+  T="CC_RESEARCH_ACTIVITY=fd-1"
+  [ "$(tool Bash "$T $K/courier.sh run --program demo --round census-review --pid c1 --vendor openai --strategy census --role reviewer --brief b.md")" = allow ]
+  [ "$(tool Bash "$T $K/courier.sh bundle --program=demo --round delta-H-2-001-1 --plan p")" = allow ]
+  [ "$(tool Bash "$T $K/round.sh run --program demo --kind delta --round 1 --escape H-2-001")" = allow ]
+  [ "$(tool Bash "$T $K/round.sh close --program demo --round delta-H-2-001-1")" = allow ]
+  [ "$(tool Agent '[activity:fd-1] census KR-3')" = allow ]
+  # another program, the rehearsal's reserved round, a certification round, untagged and closed tags
+  [ "$(tool Bash "$T $K/courier.sh run --program other --round census-review --role reviewer")" = deny ]
+  [ "$(tool Bash "$T $K/courier.sh run --round census-review --role reviewer")" = deny ]
+  [ "$(tool Bash "$T $K/courier.sh run --program demo --round rehearsal --role reviewer")" = deny ]
+  [ "$(tool Bash "$T $K/round.sh run --program demo --kind certification --round 7 --note delta")" = deny ]
+  [ "$(tool Bash "$T $K/round.sh close --program demo --round 7")" = deny ]
+  [ "$(tool Bash "$T $K/round.sh run --program other --kind delta --round 1")" = deny ]
+  [ "$(tool Bash "$K/courier.sh run --program demo --round census-review --role reviewer")" = deny ]
+  [ "$(tool Bash "CC_RESEARCH_ACTIVITY=fd-0 $K/courier.sh run --program demo --round census-review")" = deny ]
+  [ "$(tool Agent '[activity:fd-0] census KR-3')" = deny ]
+  # every other research verb stays blocked under the tag
+  [ "$(tool Bash "$T codex exec -s read-only p")" = deny ]
+  [ "$(tool Bash "$T claude -p hi")" = deny ]
+  [ "$(tool Bash "$T cc-research reopen --program demo")" = deny ]
+  [ "$(tool Bash "$T handoff-fire.sh --prompt-file b.md")" = deny ]
+}
+
 # fer_open: an open kit-opened front-end-return activity fer-1 (gate.sh return-activity) beside a
 # closed one, fer-0, and the certification-round activity that opening the return closed.
 fer_open() {

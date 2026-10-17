@@ -861,3 +861,29 @@ a rail. `cc-research decision annotate --program P --id DR-n [--affects A]… [-
 - **Order in a cycle.** Annotate the decisions the delta's rows need, dry-run the delta, apply it (the output
   lists `pin DA-n`), render and lint, then the operator re-signs. `tests/research-program-frame-delta.bats` holds
   each refusal, the unchanged fold and row 5, and the pin.
+
+## The frame-delta cycle's activity: `gate.sh delta-activity --program P` (added 2026-10-17; REPORT.md §5.4 steps 2-4)
+
+Once the operator re-signs the frame carrying a held omission's delta, the cycle's Stages 2–5 (census methods and
+critic, the delta rounds) run on a certified program, where the research block refuses `courier.sh` and `round.sh`
+to every prompt but a work order or a new idea. Before this verb the only door was triage's blind rater bucketing a
+concern frame-defect; measured 2026-10-17 on truememory-2-0, the census critic was refused after frame v4's re-sign.
+`gate.sh delta-activity` (`lib/gate_delta.py`) prints the program's `frame-delta` activity id, opening one if none
+is open.
+
+- **Refusals (exit 2, nothing written).** The registry reads neither `certified` nor `certifying`; no
+  `cert/CERT-v<n>.json` exists; no open frame-omission known row has `gate.delta_signature` (a VALID frame signature
+  after its hold whose pinned frame lists it in `known_rows_applied`, the same evidence `gate.sh run` closes it on);
+  `certifying` and that re-sign is not newer than the newest certificate's `issued` (the certification under way is
+  not a post-certificate cycle); another `frame-delta` row is open (triage's: tag the cycle with it).
+- **The row** in `$CC_RESEARCH_HOME/activities.json` carries `opened_by: "gate.sh delta-activity"`, `opened_at`,
+  `known_rows` (the rows the re-sign carries), `signed_at` and `after_cert`. A second call while it is open prints
+  the same id.
+- **Close.** A passing `gate.sh run`, after `close_delta_rows`, closes every open row this verb opened whose
+  `known_rows` are all closed, printing `closed frame-delta activity <id> (CERT-v<n> closed KR-…)`.
+- **What the tag unlocks, in every blocking state** (`router.py` `FRAME_DELTA`, also for triage's rows): with
+  `CC_RESEARCH_ACTIVITY=<id>`, `courier.sh` (any verb, not round `rehearsal`), `round.sh run --kind delta` and any
+  `round.sh` verb on a `delta-…` round, each only with `--program` naming this program; `[activity:<id>]` in an
+  Agent, Task or Workflow input. `cc-research census add|repin|critic` and `probe-run.sh` are not research verbs and
+  need no tag. Nothing else: no other program, no certification round, no vendor CLI, no `claude -p`, no buying verb,
+  and no `handoff-fire.sh` fire. `tests/research-kit-gate.bats` holds the verb, `tests/research-router.bats` the tag.

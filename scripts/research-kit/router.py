@@ -1324,6 +1324,14 @@ REHEARSAL_ROUND = {
     "rehearsal-name",
 }
 REHEARSE_SUBS = {"frames", "trial", "record"}
+# The frame-delta cycle (REPORT.md §5.4; gate.sh delta-activity opens it once the operator re-signs a
+# frame carrying a held omission's delta, and gate.sh run closes it with those rows; triage opens one
+# for a frame-defect concern). Unlike the kit-opened kinds above it counts while certified, since the
+# cycle runs after the certificate. Its tag carries exactly the delta's Stages 2-5 for ITS program:
+# courier.sh (the census critic's and the delta rounds' slots, never the reserved round `rehearsal`),
+# `round.sh run --kind delta` and any round.sh verb on a `delta-…` round, and [activity:<id>]
+# Agent/Task/Workflow calls. The census verbs and probe-run.sh are not research verbs and need no tag.
+FRAME_DELTA = "frame-delta"
 CC_RESEARCH_BUYING = {"reopen", "extra-round", "round", "frame-critique", "rehearse"}
 # A bare pane running claude, launched straight through the terminal: the same unrouted or allow-all
 # worker a handoff-fire.sh fire can mint, by another door. Denied wherever handoff-fire.sh fires are.
@@ -1469,6 +1477,7 @@ def research_clause(
     fer_acts: Optional[List[str]] = None,
     settle: Optional[Dict[str, str]] = None,
     reh_acts: Optional[List[str]] = None,
+    fd_acts: Optional[List[str]] = None,
 ) -> Optional[str]:
     """The research verb a clause runs, or None. Activity-tagged and allowed kit calls are None.
 
@@ -1483,10 +1492,14 @@ def research_clause(
     certifying, a clause tagged with one runs a read-only `codex exec` and no other research verb.
     reh_acts: the program's open rehearsal activities (gate.sh rehearsal-activity). While certifying,
     a clause tagged with one runs `cc-research rehearse trial|record`, round.sh rehearsal-* and
-    `courier.sh` on round `rehearsal`, and no other research verb."""
+    `courier.sh` on round `rehearsal`, and no other research verb.
+    fd_acts: the program's open frame-delta activities (gate.sh delta-activity, triage). In any
+    blocking state, a clause tagged with one runs courier.sh (not on round `rehearsal`), `round.sh
+    run --kind delta` and round.sh on a `delta-…` round, each for this program only (FRAME_DELTA)."""
     cert_acts = cert_acts or []
     fer_acts = fer_acts or []
     reh_acts = reh_acts or []
+    fd_acts = fd_acts or []
     env, argv = head(toks)
     if not argv:
         return None
@@ -1504,6 +1517,7 @@ def research_clause(
                 fer_acts=fer_acts,
                 settle=settle,
                 reh_acts=reh_acts,
+                fd_acts=fd_acts,
             )
             if hit:
                 return hit
@@ -1544,6 +1558,20 @@ def research_clause(
                 return None  # a rehearsal find: raise, verify, rate, name
             if base == "courier.sh" and flag_value(rest, "--round") == "rehearsal":
                 return None  # the reserved round's own slots, and only those
+            return None if certifying and label == "research-order" else base
+        if act and act in fd_acts:
+            rnd = flag_value(rest, "--round") or ""
+            if flag_value(rest, "--program") == slug and (
+                (base == "courier.sh" and rnd != "rehearsal")
+                or (
+                    base == "round.sh"
+                    and (
+                        (rest[:1] == ["run"] and flag_value(rest, "--kind") == "delta")
+                        or (rest[:1] != ["run"] and rnd.startswith("delta-"))
+                    )
+                )
+            ):
+                return None  # the frame-delta cycle's census critic, delta rounds and their close
             return None if certifying and label == "research-order" else base
         if settle_rid is not None:
             rnd = flag_value(rest, "--round")
@@ -1670,6 +1698,8 @@ def cmd_tool(a: argparse.Namespace) -> int:
     fer_acts = [x for x, k in kinds.items() if k == FRONT_END_RETURN]
     # …and so does the rehearsal: it runs once, after the stop and before issue.
     reh_acts = [x for x, k in kinds.items() if k == REHEARSAL]
+    # A frame-delta activity counts in every blocking state: its cycle runs after the certificate.
+    fd_acts = [x for x, k in kinds.items() if k == FRAME_DELTA]
     # …and a settle-only one lets through only the last round's settle steps (no Agent or Workflow).
     settle = {x: r for x, r in open_settle_rounds(slug).items() if x in cert_acts}
     acts = [
@@ -1696,6 +1726,7 @@ def cmd_tool(a: argparse.Namespace) -> int:
                 fer_acts=fer_acts,
                 settle=settle,
                 reh_acts=reh_acts,
+                fd_acts=fd_acts,
             )
             if hit:
                 break
@@ -1718,7 +1749,11 @@ def cmd_tool(a: argparse.Namespace) -> int:
         f"CC_RESEARCH_ACTIVITY=<rehearsal id> (gate.sh rehearsal-activity --program {slug} prints "
         "it) on cc-research rehearse trial|record, round.sh rehearsal-* and courier.sh --round "
         "rehearsal, and [activity:<id>] on its lens sessions' Agent and Workflow calls; its trial "
-        "panes come from `cc-research rehearse trial`. handoff-fire.sh, and a bare terminal launch "
+        "panes come from `cc-research rehearse trial`. A post-certificate frame-delta cycle runs with "
+        f"CC_RESEARCH_ACTIVITY=<frame-delta id> (gate.sh delta-activity --program {slug} prints it "
+        "once the operator re-signs a frame carrying a held omission's delta) on courier.sh and the "
+        "delta's round.sh verbs, and [activity:<id>] on Agent and Workflow. "
+        "handoff-fire.sh, and a bare terminal launch "
         "of claude, stay blocked under every activity tag; only self-close passes. Operator kill "
         "switch: launch with CC_RESEARCH_BLOCK=0."
     )

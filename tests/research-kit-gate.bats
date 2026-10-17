@@ -1031,6 +1031,99 @@ reads() { cat "$CC_RESEARCH_HOME/router-heldout/reads.jsonl" 2>/dev/null | wc -l
   [ "$(grep -c '"closed_by": "CERT-v2"' "$REC/known_rows.jsonl")" -eq 1 ]
 }
 
+# ── gate.sh delta-activity (REPORT.md §5.4: the post-certificate frame-delta cycle) ───────────────
+# fd_rows: the program's frame-delta activity rows, one `id state known_rows` line each.
+fd_rows() {
+  /usr/bin/python3 -c "
+import json, os
+p = os.path.join('$CC_RESEARCH_HOME', 'activities.json')
+for a in (json.load(open(p))['activities'] if os.path.exists(p) else []):
+    if a.get('kind') == 'frame-delta': print(a['id'], a['state'], ','.join(a.get('known_rows') or []))"
+}
+set_state() {
+  /usr/bin/python3 -c "import json; p='$CC_RESEARCH_REGISTRY'; d=json.load(open(p)); d['programs'][0]['state']='$1'; json.dump(d, open(p, 'w'))"
+}
+# held_and_certified: KR-3 and KR-4 held after the fixture's frame signature, then CERT-v1 issued.
+held_and_certified() {
+  printf '%s\n' \
+    '{"id":"KR-3","kind":"frame-omission","status":"open","resign_due":"2099-01-01T00:00:00Z","default":"descope","blocks_waves":["B2"],"ts":"2026-09-30T01:00:00Z"}' \
+    '{"id":"KR-4","kind":"frame-omission","status":"open","resign_due":"2099-01-01T00:00:00Z","default":"descope","blocks_waves":["B3"],"ts":"2026-09-30T01:00:00Z"}' \
+    >> "$REC/known_rows.jsonl"
+  git -C "$REC" add -A && git -C "$REC" commit -qm "plant known rows"
+  "$G" run --program demo --consent-sealed-read > /dev/null
+  [ "$(state)" = certified ]
+}
+carry_kr3() {
+  /usr/bin/env python3 "$REPO/scripts/research-kit/intake.py" set --program demo --applies-known-row KR-3 > /dev/null
+  "$REPO/tests/fixtures/research-kit/fixture_signer.py" research:demo/frame --evidence "FRAME v2 carries KR-3" > /dev/null
+  git -C "$REC" add -A && git -C "$REC" commit -qm "frame delta for KR-3"
+}
+
+# RED-proof (2026-10-17): before gate_delta.py the verb did not exist (argparse exit 2, "invalid
+# choice"), and the only path to a frame-delta activity was triage's blind rater, so truememory-2-0's
+# census critic was refused by the research block after the operator re-signed frame v4.
+@test "delta-activity: refused with no pending cycle, opens once a re-signed frame carries a held row, prints the same id again, and the re-issued certificate closes it" {
+  run "$G" delta-activity --program demo
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"is 'registered'"* ]] || { echo "$output"; false; }
+  held_and_certified
+  # certified, but no frame re-signed with a delta: no cycle is pending
+  run "$G" delta-activity --program demo
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"no frame-delta cycle is pending"*"KR-3, KR-4"* ]] || { echo "$output"; false; }
+  # the KR-06 shape: re-signed after the hold, frame unchanged, so no delta reached either row
+  "$REPO/tests/fixtures/research-kit/fixture_signer.py" research:demo/frame --evidence "re-read, nothing added" > /dev/null
+  run "$G" delta-activity --program demo
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [ -z "$(fd_rows)" ]
+  carry_kr3
+  run "$G" delta-activity --program demo
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  aid="${lines[${#lines[@]}-1]}"
+  [[ "$aid" == ACT-demo-* ]] || { echo "$output"; false; }
+  [ "$(fd_rows)" = "$aid open KR-3" ]
+  run "$G" delta-activity --program demo
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "${lines[${#lines[@]}-1]}" = "$aid" ] || { echo "$output"; false; }
+  [ "$(fd_rows)" = "$aid open KR-3" ]
+  run "$G" run --program demo --consent-sealed-read
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"closed frame-delta activity $aid (CERT-v2 closed KR-3)"* ]] || { echo "$output"; false; }
+  [ "$(fd_rows)" = "$aid closed KR-3" ]
+  # KR-3 closed and KR-4 carried by no re-sign: nothing is pending, and nothing re-opens
+  run "$G" delta-activity --program demo
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"open frame-omission rows: KR-4)"* ]] || { echo "$output"; false; }
+  [ "$(fd_rows)" = "$aid closed KR-3" ]
+}
+
+@test "delta-activity: refused beside triage's open frame-delta row, and while certifying unless the re-sign is newer than the newest certificate" {
+  held_and_certified
+  carry_kr3
+  printf '{"activities":[{"program":"demo","id":"tri-1","kind":"frame-delta","state":"open"}]}\n' > "$CC_RESEARCH_HOME/activities.json"
+  run "$G" delta-activity --program demo
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"tri-1 is already open"* ]] || { echo "$output"; false; }
+  [ "$(fd_rows)" = "tri-1 open " ]
+  rm "$CC_RESEARCH_HOME/activities.json"
+  set_state certifying
+  jedit cert/CERT-v1.json "d['issued']='2099-01-01T00:00:00Z'"
+  run "$G" delta-activity --program demo
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"is certifying and the newest re-sign"*"not newer than CERT-v1"* ]] || { echo "$output"; false; }
+  [ -z "$(fd_rows)" ]
+  jedit cert/CERT-v1.json "d['issued']='2000-01-01T00:00:00Z'"
+  run "$G" delta-activity --program demo
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$(fd_rows)" == "ACT-demo-"*" open KR-3" ]] || { fd_rows; false; }
+}
+
+@test "delta-activity --help names the verb's preconditions and its tag" {
+  run "$G" delta-activity --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"known_rows_applied"*"CC_RESEARCH_ACTIVITY=<id>"* ]] || { echo "$output"; false; }
+}
+
 @test "row 16: more rounds than R_max fails" {
   jedit rounds/1/matrix.json 'd["forecast"]["p90"] = -2'
   [[ "$(rowtext 16)" == *"R_max is 2"* ]]

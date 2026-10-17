@@ -29,6 +29,11 @@ Invoked through scripts/research-kit/gate.sh. Verbs:
                                                             return open, while the relay test has
                                                             not passed or used its re-test;
                                                             rehearse record closes it
+  delta-activity --program P                                print (opening if none) the frame-delta
+                                                            activity id (§5.4); only while a
+                                                            re-signed frame carries an open held
+                                                            omission's delta (gate_delta.py); run
+                                                            closes it with those rows
   run       --program P [--json]                           every row PASS/FAIL/FILED with
                                                             evidence; all pass -> certificate
                                                             written, state -> certified
@@ -253,6 +258,9 @@ def cmd_run(a: argparse.Namespace) -> int:
     cert = gate_cert.write_certificate(ctx, rows)
     kit.registry_set(a.program, "certified")
     closed = close_delta_rows(ctx, Path(cert).stem)
+    import gate_delta
+
+    closed += gate_delta.close_cycle(ctx, Path(cert).stem)
     if not a.json:
         print(f"CERTIFIED {a.program}: {cert}")
         for line in closed:
@@ -359,7 +367,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     gate_cert.add_verbs(
         sub
-    )  # freeze, cert-activity, return-activity, rehearsal-activity, render
+    )  # freeze, cert-activity, return-activity, rehearsal-activity, render, delta-activity
     gate_sweep.add_verbs(sub)  # sweep, file-packet
     gate_requires.add_verbs(sub)  # requires
     gate_built.add_verbs(sub)  # built-freeze, built-run (REPORT.md §11)
