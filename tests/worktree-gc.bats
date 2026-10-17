@@ -616,7 +616,9 @@ SH
       CC_WTGC_BACKLOG="$BL" CC_WTGC_DISPOSAL_LOG="$DLOG" ANSWER_FOR=1 bash "$GC"
   [ -d "$p" ]
   echo "$output" | grep -q "process-cwd oracle UNAVAILABLE"
-  echo "$output" | grep -q "LIVE at act time (occupancy UNPROVEN"
+  # Since AC-5 a control failed at pass start refuses the whole pass, rather than KEEPing per tree.
+  [ "$status" -eq 3 ]
+  echo "$output" | grep -q "verdict=oracle-degraded lsof"
   # Discriminator: make the SAME shim answer every pid — including the caller's — and the same
   # worktree is removed. Only the control's subject changed; nothing else about the run did.
   run env CC_WTGC_REPO="$R" CC_WTGC_CC_NOTIFY="$SHIM" CC_WTGC_LSOF="$SEL" \
@@ -769,15 +771,17 @@ SH
   head="$(git -C "$R" rev-parse refs/heads/feat/abandoned)"
   run_gc --dispose-abandoned
   [ -f "$DLOG" ]
-  [ "$(grep -c . "$DLOG")" -eq 1 ]
-  grep -q '"event":"worktree-disposed"' "$DLOG"
+  # Two rows for one removal since WP-10: the library's `worktree-tombstoned` record, then this
+  # outcome row carrying its id (W2-CONTRACT "one removal, one disposal row").
+  [ "$(grep -c . "$DLOG")" -eq 2 ]
+  [ "$(grep -c '"event":"worktree-disposed"' "$DLOG")" -eq 1 ]
   grep -q "\"branch\":\"feat/abandoned\"" "$DLOG"
   grep -q "\"head\":\"$head\"" "$DLOG"
   grep -q "\"patch_shas\":\"$head\"" "$DLOG"          # the recoverable evidence, not just a count
   grep -q '"owner_item":"abc123456789"' "$DLOG"
   grep -q '"verified":"points-at+cherry-set"' "$DLOG"
   # A KEPT worktree must never appear in the ledger.
-  [ "$(grep -c . "$DLOG")" -eq 1 ]
+  [ "$(grep -c . "$DLOG")" -eq 2 ]
 }
 
 @test "--dispose-abandoned + --prune-branches still never deletes the disposed branch" {
@@ -975,7 +979,8 @@ SH
   # The load-bearing half: the owned line must NOT prescribe marking the item done, and the
   # silent line must offer the warrant. Swapped remedies are the defect this test exists for.
   echo "$output" | grep -q "do NOT mark an item done to reap a directory"
-  echo "$output" | grep -q -- "--warrant <path> --reason"
+  # 939b7a7ff replaced the literal `<path>` with the first REAL path (a remedy must paste as typed).
+  echo "$output" | grep -q -- "--warrant '.*wt-board-commands' --reason"
 }
 
 # ── A2 oracle 3: the EXPLICIT DISPOSE WARRANT ────────────────────────────────────────────────
@@ -1726,6 +1731,9 @@ says() {
 # lsof_stub <mode> — replace the shared STUB for one test.
 #   holder  answers the cwd positive control AND reports an open fd on any maintenance.lock
 #   blind   answers NOTHING, not even the control — the probe that must never certify an absence
+#   late-blind  answers the control ONCE (the pass-start oracle) and nothing after. Since AC-5 a
+#           blind control at pass start refuses the whole pass (exit 3), so a probe that runs later
+#           in the pass can only be reached blind by an lsof that degrades mid-pass.
 lsof_stub() {
   local f="$BATS_TEST_TMPDIR/lsof-$1"
   if [ "$1" = holder ]; then
@@ -1733,6 +1741,17 @@ lsof_stub() {
 #!/usr/bin/env bash
 for a in "$@"; do [ "$a" = cwd ] && { printf 'p%s\nn/\n' "$$"; exit 0; }; done
 case "$*" in *maintenance.lock*) printf 'git 999 t 5w %s\n' "$*"; exit 0 ;; esac
+exit 1
+SH
+  elif [ "$1" = late-blind ]; then
+    cat > "$f" <<SH
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [ "\$a" = cwd ]; then
+    [ -e '$f.used' ] && exit 1
+    : > '$f.used'; printf 'p%s\nn/\n' "\$\$"; exit 0
+  fi
+done
 exit 1
 SH
   else
@@ -1797,7 +1816,7 @@ run_gc_lsof() {
   # Fail-closed, the same rule gate 4 applies. A probe that answers nothing must never be able to
   # certify an absence — that inversion is what let this suite prove 33 removals over a blind lsof.
   lk="$(mk_maint_lock ancient)"
-  run_gc_lsof "$(lsof_stub blind)"
+  run_gc_lsof "$(lsof_stub late-blind)"
   [ "$status" -eq 0 ] || false
   [ -e "$lk" ] || false
   [ "$(maint_field maint_lock)" = unprovable ]
