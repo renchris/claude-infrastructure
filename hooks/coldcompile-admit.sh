@@ -122,15 +122,19 @@ fi
 # CHECKOUT, where ../config/ and ../bin/ are real, which also makes this hook work the moment it
 # lands instead of leaving a window where the table matches and nothing is gated.
 # bash 3.2-safe: macOS has no `readlink -f`.
+# The parent directory comes from parameter expansion, not dirname(1): one process start fewer per
+# hop on every Bash call. Same directory dirname names (`a/b` → `a`, `b` → `.`, `/b` → `/`).
 _self="${BASH_SOURCE[0]:-$0}"
 _hops=0
 while [ -L "$_self" ] && [ "$_hops" -lt 20 ]; do
-  _d=$(cd -P "$(dirname "$_self")" 2>/dev/null && pwd) || break
+  case "$_self" in */*) _d="${_self%/*}"; [ -n "$_d" ] || _d=/ ;; *) _d=. ;; esac
+  _d=$(cd -P "$_d" 2>/dev/null && pwd) || break
   _self=$(readlink "$_self") || break
   case "$_self" in /*) ;; *) _self="$_d/$_self" ;; esac
   _hops=$((_hops + 1))
 done
-_dir=$(cd -P "$(dirname "$_self")" 2>/dev/null && pwd) || _dir=""
+case "$_self" in */*) _dir="${_self%/*}"; [ -n "$_dir" ] || _dir=/ ;; *) _dir=. ;; esac
+_dir=$(cd -P "$_dir" 2>/dev/null && pwd) || _dir=""
 
 # ── the ignition table: `<class><TAB><ERE>`, first match wins ─────────────────────────────────
 if [ -n "${CC_COLDCOMPILE_PATTERNS+set}" ]; then
@@ -141,7 +145,9 @@ else
 fi
 [ -n "$TABLE" ] && [ -r "$TABLE" ] || exit 0
 
-CLASS=""
+# The rows are parsed once into arrays; the walk below reads the arrays, so it and the union grep
+# cannot disagree about which rows exist.
+_f1s=(); _eres=(); _uargs=(); _union=1
 while IFS= read -r line || [ -n "$line" ]; do
   line=${line%$'\r'}                                   # tolerate a CRLF table
   case "$line" in ''|'#'*) continue ;; esac
@@ -149,8 +155,28 @@ while IFS= read -r line || [ -n "$line" ]; do
   _ere=${line#*$'\t'}
   [ "$_f1" != "$line" ] || continue                    # no TAB on this line ⇒ malformed, skip
   [ -n "$_f1" ] && [ -n "$_ere" ] || continue
-  if printf '%s' "$CMD" | grep -qE "$_ere" 2>/dev/null; then CLASS="$_f1"; break; fi
+  _f1s[${#_f1s[@]}]="$_f1"; _eres[${#_eres[@]}]="$_ere"
+  _uargs[${#_uargs[@]}]=-e; _uargs[${#_uargs[@]}]="$_ere"
+  # The walk passes a row as grep's first operand, where a leading `-` is read as an option; under
+  # `-e` it would be a pattern, so such a table skips the union and keeps the walk's own reading.
+  case "$_ere" in -*) _union=0 ;; esac
 done < "$TABLE"
+[ "${#_eres[@]}" -gt 0 ] || exit 0
+
+# ONE grep for every row before the walk: a miss — nearly every call — then costs one process
+# instead of one per row. Drained, not `-q` (the pipefail note above). Only rc 1 is a miss; rc 0, a
+# bad ERE in some row (rc 2) or a signal falls through to the walk, which decides exactly as before.
+if [ "$_union" -eq 1 ]; then
+  printf '%s' "$CMD" | grep -E "${_uargs[@]}" >/dev/null 2>&1
+  [ "$?" -ne 1 ] || exit 0
+fi
+
+CLASS=""
+_i=0
+while [ "$_i" -lt "${#_eres[@]}" ]; do
+  if printf '%s' "$CMD" | grep -qE "${_eres[$_i]}" 2>/dev/null; then CLASS="${_f1s[$_i]}"; break; fi
+  _i=$((_i + 1))
+done
 [ -n "$CLASS" ] || exit 0
 
 # CLASS ALLOWLIST — the class is interpolated into the emitted command line, so a config file must

@@ -332,15 +332,20 @@ printf '%s' "$CMD" | grep -qE '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=' && exit 0
 # (which is how transform (a) finds cc-bats): a NEW file has no symlink in the live layer until the
 # next converge tick, so pointing at the checkout makes transform (c) work the moment it lands
 # instead of leaving a silent up-to-10-minute window where the table matches and nothing is bounded.
+#
+# The parent directory comes from parameter expansion, not dirname(1): one process start fewer per
+# hop on every Bash call. Same directory dirname names (`a/b` → `a`, `b` → `.`, `/b` → `/`).
 _self="${BASH_SOURCE[0]:-$0}"
 _hops=0
 while [ -L "$_self" ] && [ "$_hops" -lt 20 ]; do
-  _d=$(cd -P "$(dirname "$_self")" 2>/dev/null && pwd) || break
+  case "$_self" in */*) _d="${_self%/*}"; [ -n "$_d" ] || _d=/ ;; *) _d=. ;; esac
+  _d=$(cd -P "$_d" 2>/dev/null && pwd) || break
   _self=$(readlink "$_self") || break
   case "$_self" in /*) ;; *) _self="$_d/$_self" ;; esac
   _hops=$((_hops + 1))
 done
-_dir=$(cd -P "$(dirname "$_self")" 2>/dev/null && pwd) || _dir=""
+case "$_self" in */*) _dir="${_self%/*}"; [ -n "$_dir" ] || _dir=/ ;; *) _dir=. ;; esac
+_dir=$(cd -P "$_dir" 2>/dev/null && pwd) || _dir=""
 
 # ── walk a table: `<field1><TAB><ERE>`, first match wins ───────────────────────────────────────
 # Shared by (b) and (c) — one reader, so the two tables cannot drift in how they parse.
@@ -349,8 +354,15 @@ _dir=$(cd -P "$(dirname "$_self")" 2>/dev/null && pwd) || _dir=""
 # out by parameter expansion, which cannot silently no-op. Prints field 1 of the first matching row
 # and returns 0; returns 1 on an unreadable table or no match, so "no table" and "no match" are the
 # same fail-open outcome for the caller.
+#
+# ONE grep for every row before the walk: a miss — nearly every call — then costs one process
+# instead of one per row. The rows are parsed once into arrays that both the union and the walk read.
+# Drained, not `-q`, so pipefail cannot turn a SIGPIPE into a false miss. Only rc 1 is a miss; rc 0,
+# a bad ERE in some row (rc 2) or a signal falls through to the walk, which decides exactly as before.
 table_match() { # <table path>
-  local _t="$1" line _f1 _ere
+  local _t="$1" line _f1 _ere _i=0 _union=1
+  local _f1s _eres _uargs
+  _f1s=(); _eres=(); _uargs=()
   [ -n "$_t" ] && [ -r "$_t" ] || return 1
   while IFS= read -r line || [ -n "$line" ]; do
     line=${line%$'\r'}                                 # tolerate a CRLF table
@@ -359,8 +371,23 @@ table_match() { # <table path>
     _ere=${line#*$'\t'}
     [ "$_f1" != "$line" ] || continue                  # no TAB on this line ⇒ malformed, skip
     [ -n "$_f1" ] && [ -n "$_ere" ] || continue
-    if printf '%s' "$CMD" | grep -qE "$_ere" 2>/dev/null; then printf '%s' "$_f1"; return 0; fi
+    _f1s[${#_f1s[@]}]="$_f1"; _eres[${#_eres[@]}]="$_ere"
+    _uargs[${#_uargs[@]}]=-e; _uargs[${#_uargs[@]}]="$_ere"
+    # The walk passes a row as grep's first operand, where a leading `-` is read as an option;
+    # under `-e` it would be a pattern, so such a table skips the union and keeps the walk's reading.
+    case "$_ere" in -*) _union=0 ;; esac
   done < "$_t"
+  [ "${#_eres[@]}" -gt 0 ] || return 1
+  if [ "$_union" -eq 1 ]; then
+    printf '%s' "$CMD" | grep -E "${_uargs[@]}" >/dev/null 2>&1
+    [ "$?" -ne 1 ] || return 1
+  fi
+  while [ "$_i" -lt "${#_eres[@]}" ]; do
+    if printf '%s' "$CMD" | grep -qE "${_eres[$_i]}" 2>/dev/null; then
+      printf '%s' "${_f1s[$_i]}"; return 0
+    fi
+    _i=$((_i + 1))
+  done
   return 1
 }
 
