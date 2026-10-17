@@ -333,7 +333,7 @@ def blockers(
                 f"nor accepted by delegation (gate.sh accept --program {slug} --action cert)"
             )
     if gate.reopened(ctx):
-        reasons.append("an operator reopen is signed after the newest certificate")
+        reasons.append(f"{gate.reopen_phrase(ctx)} after the newest certificate")
 
     voc = vocabulary(ctx)
     for a, b in voc["twins"]:

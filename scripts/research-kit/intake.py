@@ -545,9 +545,17 @@ def measured_profile_lines(
     rprof = kit.profile(kit.round_profile(slug, fr))
     name = rprof["name"]
     if sw:
+        import operator_sign
+
+        # REPORT.md §14: a switch accepted under the standing delegation was not his signature
+        how = (
+            f"switch {operator_sign.DELEGATED_WORDS} {sw['at_iso']}"
+            if sw.get("delegated")
+            else f"switched by your signature of {sw['at_iso']}"
+        )
         name += (
             f" from round {sw['after_round'] + 1} ({sw['from']} through round "
-            f"{sw['after_round']}; switched by your signature of {sw['at_iso']})"
+            f"{sw['after_round']}; {how})"
         )
     n95 = f["found"] + f["desk_n95"]
     return (

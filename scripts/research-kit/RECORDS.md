@@ -907,13 +907,19 @@ reaches it once, through a standing delegation he signs. `operator_sign.py` hold
 - **In force** (`operator_sign.in_force`, `delegation_for`): a VALID delegation covering the program (its slug or
   `*`), given at or before the time asked, with no VALID revoke covering the program between the two. The newest
   of a delegation and a revoke wins, so a per-program revoke under `*` ends that program alone, and a later
-  delegation restores it.
+  delegation restores it. A per-program revoke needs no registry entry.
+- **Revoke markers.** A revoke also appends `{kind: "revoke-marker", program, revoke: {id, sha256}, at, at_iso}` to
+  each covered program's `<sealed>/delegated.jsonl` (every registered program for `*`). An acceptance's `at` is
+  self-reported; its position is not: an acceptance appended below a marker whose revoke postdates its delegation
+  is VOID whatever time it carries. Readers skip marker lines.
 - **`gate.sh accept --program P --action A [--target T] [--because W] [--check] [--json]`** writes one line of
   `<sealed>/delegated.jsonl` only while a delegation is in force for P and every criterion of A holds; exit 1 lists
   each criterion with `ok`/`FAIL` and its value and writes nothing; exit 2 for no delegation, a non-delegable
   action (`third-read`, `veto`, `delegate`, `revoke-delegation`, refused naming why), a wrong target, or a purchase
   without `--because`. `--check` writes nothing and needs no lease. A VALID record already pinning the same bytes
   prints `ALREADY` and writes nothing (for an implementation it still runs `built-signed` if the registry lags).
+  After the write the verb reads the record back as every reader will; one that reads void (a revoke landed
+  between its check and its write) prints `VOID`, exits 1, and nothing follows from it.
   The record: `{kind: "delegated", row, program, action, target, at, at_iso, because, pins, delegation: {id,
   sha256, program, at_iso, because}, criteria: [{name, ok, value}], words, by, provenance}` plus, for a profile
   switch, `from` and `after_round` (the shape `kit.profile_switch` reads).
@@ -921,15 +927,22 @@ reaches it once, through a standing delegation he signs. `operator_sign.py` hold
   `cert` state certified or Stage 9 · newest-certificate · rows-pass (rows present, each PASS or FILED) ·
   no-reopen; pins `cert/CERT-v<n>.json`. `frame` lint (`intake.py lint`) · newest-change-is-delta (the newest
   `frame-deltas.jsonl` entry has the frame's version, is the frame's last `frame_deltas` entry, and its
-  `frame_sha256` is frame.json's sha256 now; an entry from before that field refuses) · known-rows-open (the
-  delta names rows, each an open frame-omission row) · annotations-pinned (`frame_delta.pin_fails` empty); pins
-  `frame.json`. `implementation` state build-certified or implementation-signed · newest-built-certificate (this
-  program's) · rows-pass (rows 20-25 present, every one PASS) · freeze-snapshot (its `snapshot_sha` is
-  `built/freeze.json`'s); pins `built/BUILT-CERT-v<n>.json`. `extra-round` state certifying · once-per-program.
-  `profile` switch-terms (`operator_sign.profile_switch_terms`). `adopt` frame-predates-1.2 · once-per-program.
-  `extend-decision` decision-on-record (not descoped) · research-can-raise-it (`blockers.tag` reads research, as
-  the menu offers it) · once-per-decision. `reopen` state certified or Stage 9 · certificate · not-reopened.
-  Every cap counts VALID records of both kinds.
+  `frame_sha256` is frame.json's sha256 now; an entry from before that field refuses) · base-is-signed (the
+  delta's `base_frame_blob`, the frame it applied on, is the frame pinned by the newest non-void signature or
+  acceptance of another frame: nothing reached the frame unsigned before the delta; a never-signed frame
+  refuses, its first version being the operator's) · acceptance-unchanged (`acceptance.json` still hashes to the
+  delta's `acceptance_after_sha256`) · known-rows-open (the delta names rows, each an open frame-omission row) ·
+  annotations-pinned (`frame_delta.pin_fails` empty); pins `frame.json` AND `acceptance.json`, so an edit to the
+  rows the frame's checks run makes it STALE. `implementation` state build-certified or implementation-signed ·
+  newest-built-certificate (this program's) · rows-pass (rows 20-25 present, every one PASS) · freeze-snapshot
+  (its `snapshot_sha` is `built/freeze.json`'s) · research-certificate (row 20's check re-read: the research
+  certificate signed or accepted, every row passed, no reopen after it); pins `built/BUILT-CERT-v<n>.json`.
+  `extra-round` state certifying · once-per-program. `profile` switch-terms (`operator_sign.profile_switch_terms`).
+  `adopt` frame-predates-1.2 · once-per-program. `extend-decision` frame-1.2 (the menu offers extensions only
+  under a 1.2 frame) · decision-on-record (not descoped) · research-can-raise-it (`blockers.tag` reads research,
+  as the menu offers it) · once-per-decision. `reopen` state certified or Stage 9 · certificate · not-reopened.
+  Every cap counts VALID records of both kinds. A reopen counts against the newest certificate's own `issued`
+  time (`gate.reopen_record`), never its file's mtime, which a touch or a re-checkout moves.
 - **The readers.** `operator_sign.research_records` returns the acceptances after the signatures, each with
   `_delegated` and `_why`; `acceptance_verdict` reads one VOID unless it is a delegated record of a delegable action
   for this program whose delegation is on record, VALID and in force at its `at`, showing every required criterion
@@ -943,5 +956,10 @@ reaches it once, through a standing delegation he signs. `operator_sign.py` hold
   the built line reads `implementation accepted by delegation (not read by the operator) <at>`; the accepted
   certificate's `.md` (cert or built) gains one line naming the delegation and the criteria; row 1's note, the
   close of a held row and `REOPENED` say the same words.
-- **The frame delta's hash.** `frame-deltas.jsonl` entries now carry `frame_sha256`, the sha256 of the frame.json
-  the apply wrote; the frame criterion reads it.
+- **The frame delta's hashes.** `frame-deltas.jsonl` entries now carry `frame_sha256` (the sha256 of the
+  frame.json the apply wrote), `base_frame_blob` (the git blob id of the frame it applied on, the form a frame
+  signature pins) and `acceptance_after_sha256` (acceptance.json as the apply left it, or null with no file);
+  the frame criteria read all three.
+- **Wording.** `kit.profile_switch` carries `delegated`, and the contract page then says "switch accepted by
+  delegation (not read by the operator)", never "your signature"; `gate.reopen_phrase` names a delegated
+  reopen in `requires`, `built-freeze`, row 20 and the scheduled read's refusals.

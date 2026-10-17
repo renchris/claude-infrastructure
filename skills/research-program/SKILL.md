@@ -54,8 +54,9 @@ for a case-sized question answerable in a day, or when the operator declines eit
 - **…or accepted under the operator's standing delegation** (REPORT.md §14, ruled 2026-10-16: the
   operator reads no signoff content, so a signature he does not read carries no information; the machine
   gate is the evidence). He signs it once, in his own terminal: `cc-signoff research:<slug|*>/delegate
-  --because "<words>"` (`*` = every program), and ends it with `cc-signoff
-  research:<slug|*>/revoke-delegation`. While it is in force, never stop to ask him to "read and sign":
+  --because "<words>"` (`*` = every program; quote it, `'research:*/delegate'`, or zsh globs it away),
+  and ends it with `cc-signoff research:<slug|*>/revoke-delegation`. While it is in force, never stop
+  to ask him to "read and sign":
   run `scripts/research-kit/gate.sh accept --program <slug> --action <A> [--because "<why>"]` (or
   `--check` first) for cert, frame (after an `intake.py delta-apply` carrying held rows), implementation
   (it also runs `built-signed`), extra-round, reopen, `profile/<p>`, `adopt/stage9` and

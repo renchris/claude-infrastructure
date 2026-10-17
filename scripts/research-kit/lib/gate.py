@@ -240,15 +240,40 @@ def cmd_close(a: argparse.Namespace) -> int:
     return 0
 
 
-def reopened(ctx: Ctx) -> bool:
-    """A VALID operator reopen (or delegated acceptance of one) after the newest certificate (§5.1)."""
+def reopen_record(ctx: Ctx) -> Optional[Dict[str, Any]]:
+    """The VALID reopen (the operator's, or a delegated acceptance of one) dated after the newest
+    certificate was issued (§5.1), or None. The certificate's own `issued` is the clock: a file's
+    mtime moves on a touch or a re-checkout and would hide a reopen; mtime is read only for a
+    certificate that records no issue time."""
     import operator_sign
+    from gate_requires import _cert_no
 
     rec = operator_sign.latest_valid(ctx.slug, "reopen")
-    certs = sorted(
-        ctx.records.glob("cert/CERT-v*.json"), key=lambda p: p.stat().st_mtime
-    )
-    return bool(rec) and (not certs or rec["at"] > certs[-1].stat().st_mtime)
+    if not rec:
+        return None
+    certs = sorted(ctx.records.glob("cert/CERT-v*.json"), key=_cert_no)
+    if not certs:
+        return rec
+    try:
+        issued = kit.parse_iso(str((kit.read_json(certs[-1]) or {}).get("issued")))
+    except ValueError:
+        issued = certs[-1].stat().st_mtime
+    return rec if float(rec.get("at") or 0) > issued else None
+
+
+def reopened(ctx: Ctx) -> bool:
+    """A VALID operator reopen (or delegated acceptance of one) after the newest certificate (§5.1)."""
+    return reopen_record(ctx) is not None
+
+
+def reopen_phrase(ctx: Ctx) -> str:
+    """Who reopened, for a refusal: '<subject> is signed|recorded', said as delegated where it is."""
+    import operator_sign
+
+    rec = reopen_record(ctx) or {}
+    if rec.get("_delegated"):
+        return f"a reopen {operator_sign.DELEGATED_WORDS} is recorded"
+    return "an operator reopen is signed"
 
 
 def cmd_run(a: argparse.Namespace) -> int:

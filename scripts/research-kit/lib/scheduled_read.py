@@ -385,7 +385,7 @@ def cmd_read(a: argparse.Namespace) -> int:
         )
     if gate.reopened(ctx):
         raise kit.KitError(
-            "an operator reopen is signed after the newest certificate; nothing read"
+            f"{gate.reopen_phrase(ctx)} after the newest certificate; nothing read"
         )
     f = live_filing(ctx.records)
     if f is None:

@@ -1793,10 +1793,13 @@ The delegable actions and their criteria, each derived from the code that reads 
 - the certificate (§3.10, §13.1): the registry is certified or in Stage 9, the newest certificate carries rows, each
   PASS or FILED, and no reopen follows it; the acceptance pins its bytes as his signature would;
 - the frame, after a frame-delta cycle (§5.4, §13.7): the frame lints clean, its newest change is a `delta-apply`
-  whose recorded frame hash still matches, the delta carries held frame-omission rows that are still open, and every
-  decision annotation sits under a delta's pin; it pins `frame.json`. The first frame stays the operator's intake;
+  whose recorded frame hash still matches, that delta applied on the very frame last signed or accepted (so nothing
+  reached the frame unsigned before it), `acceptance.json` is as the delta left it, the delta carries held
+  frame-omission rows that are still open, and every decision annotation sits under a delta's pin; it pins
+  `frame.json` and `acceptance.json`. The first frame stays the operator's intake;
 - the implementation (§11): build-certified, the newest built certificate is this program's, rows 20–25 all PASS,
-  on the snapshot `built/freeze.json` pins;
+  on the snapshot `built/freeze.json` pins, and row 20's own check re-read (the research certificate signed or
+  accepted, no reopen after it);
 - the extra round set (§6.4), a profile switch, Stage 9's adoption (§13.3), a decision's research extension (§12.3)
   and a reopen (§5.1): the conditions the kit already checked before letting the operator sign each, and its caps
   (once per program, once per decision, one reopen per certificate), counted over signatures and acceptances alike.
@@ -1813,8 +1816,11 @@ the built line, the certificate's own page and the closing lines.
 
 **Control.** `cc-signoff research:<slug|*>/revoke-delegation` ends it: acceptances dated after a revoke are void,
 earlier ones stand, and every operator signature works as before, his vetoes included. The newest of a delegation and
-a revoke covering a program decides, so a per-program revoke under `*` ends that program alone. An acceptance is VOID
-unless its delegation is his signature, still byte-identical to what he signed, and in force at the acceptance's time.
+a revoke covering a program decides, so a per-program revoke under `*` ends that program alone. A revoke is also
+written into each covered program's own acceptance log, so an acceptance appended after it is void whatever time it
+claims. An acceptance is VOID unless its delegation is his signature, still byte-identical to what he signed, and in
+force at the acceptance's time and place in the log; the verb reads its own record back and claims nothing a void
+one does not carry.
 The same-uid limit of §8 item 4's third arm applies: a process running as him could hand-write a record; what is
 achievable is that a record which does not show every criterion its action requires, each true, counts for nothing.
 Records: `scripts/research-kit/RECORDS.md` "Delegated acceptance".

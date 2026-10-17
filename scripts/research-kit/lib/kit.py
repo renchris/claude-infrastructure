@@ -276,7 +276,8 @@ def r_max(
 
 
 def profile_switch(slug: str) -> Optional[Dict[str, Any]]:
-    """The program's operator-signed profile switch, or None: {"to", "from", "after_round", "at_iso"}.
+    """The program's profile switch (signed, or accepted by delegation), or None: {"to", "from",
+    "after_round", "at_iso", "delegated"}.
 
     `cc-signoff research:<slug>/profile/<name>` writes it between two certification rounds
     (operator_sign.sign_research); after_round is the counted certification rounds at signing. A void
@@ -297,6 +298,8 @@ def profile_switch(slug: str) -> Optional[Dict[str, Any]]:
         "from": rec.get("from"),
         "after_round": int(rec.get("after_round") or 0),
         "at_iso": rec.get("at_iso"),
+        # an acceptance under the standing delegation (REPORT.md §14) is no operator signature
+        "delegated": bool(rec.get("_delegated")),
     }
 
 

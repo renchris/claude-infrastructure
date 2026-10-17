@@ -95,6 +95,11 @@ def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def git_blob(data: bytes) -> str:
+    """git's blob id for these bytes: the form operator_sign pins a signed frame in."""
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
 def dump_like(obj: Any, original: Optional[str]) -> str:
     """obj serialised the way the file already is, so an apply's diff is its rows and not a
     re-format (truememory-2-0's acceptance.json is indent 1, unsorted, raw UTF-8); a file in no form
@@ -554,6 +559,15 @@ def plan(slug: str, path: str, lint: Lint) -> Dict[str, Any]:
         # the frame.json this apply writes: while it still hashes to this, the delta is the frame's
         # newest change (gate.sh accept --action frame, REPORT.md §14)
         "frame_sha256": sha256(frame_text.encode()),
+        # the frame it applied ON, as a git blob id (the pin a frame signature records), so an
+        # acceptance can require that base to be the frame last signed or accepted
+        "base_frame_blob": git_blob(fr_path.read_bytes()),
+        # acceptance.json as this apply leaves it: the rows the frame's checks run
+        "acceptance_after_sha256": (
+            sha256(acc_out.encode())
+            if acc_out is not None
+            else (sha256(acc_text.encode()) if acc_text is not None else None)
+        ),
         "base_version": fr.get("version"),
         "version": new["version"],
         "known_rows": known,

@@ -131,6 +131,38 @@ def frame_criteria(ctx: Any) -> Tuple[List[Crit], Dict[str, str]]:
         else f"frame.json changed after {last.get('id')} (version {fr.get('version')}, "
         f"delta v{last.get('version')})"
     )
+    # the base: the frame the delta applied ON must be the frame last signed or accepted (the newest
+    # record that is not void), so nothing reached the frame between that and the delta unsigned
+    # (a record pinning the frame as it is now is this frame's own signature or acceptance, not
+    # its base)
+    cur_pin = osign.file_pin(fr_path) if fr_path.is_file() else None
+    held = [
+        r
+        for r in osign.research_records(ctx.slug, "frame")
+        if r["_verdict"] != osign.VOID
+        and (r.get("pins") or {}).get("frame.json") != cur_pin
+    ]
+    base_rec = max(held, key=lambda r: float(r.get("at") or 0)) if held else None
+    base_pin = ((base_rec or {}).get("pins") or {}).get("frame.json")
+    base_ok = (
+        bool(last.get("base_frame_blob")) and last.get("base_frame_blob") == base_pin
+    )
+    base_why = (
+        f"{last.get('id')} applied on frame {str(base_pin)[:12]}, the one last "
+        f"{'accepted' if (base_rec or {}).get('_delegated') else 'signed'} {base_rec.get('at_iso')}"
+        if base_ok and base_rec
+        else "the frame was never signed or accepted: its first version is the operator's"
+        if base_rec is None
+        else f"{last.get('id') or 'no delta'} records no base frame: the operator signs this frame"
+        if not last.get("base_frame_blob")
+        else f"{last.get('id')} applied on frame {str(last.get('base_frame_blob'))[:12]}, not on "
+        f"{str(base_pin)[:12]}, the one last signed or accepted: the frame changed unsigned between"
+    )
+    acc_path = ctx.records / "acceptance.json"
+    acc_now = frame_delta.sha256(acc_path.read_bytes()) if acc_path.is_file() else None
+    acc_ok = (
+        "acceptance_after_sha256" in last and last["acceptance_after_sha256"] == acc_now
+    )
     rows = {str(r.get("id")): r for r in kit.known_rows(ctx.slug)}
     known = [str(k) for k in last.get("known_rows") or []]
     not_open = [
@@ -143,6 +175,15 @@ def frame_criteria(ctx: Any) -> Tuple[List[Crit], Dict[str, str]]:
     out = [
         crit("lint", not lint, lint or "clean"),
         crit("newest-change-is-delta", newest, why),
+        crit("base-is-signed", base_ok, base_why),
+        crit(
+            "acceptance-unchanged",
+            acc_ok,
+            "acceptance.json is as the delta left it"
+            if acc_ok
+            else f"acceptance.json changed after {last.get('id') or 'no delta'}, or the delta "
+            "predates its acceptance hash",
+        ),
         crit(
             "known-rows-open",
             bool(known) and not not_open,
@@ -150,12 +191,20 @@ def frame_criteria(ctx: Any) -> Tuple[List[Crit], Dict[str, str]]:
         ),
         crit("annotations-pinned", not loose, loose or "every annotation pinned"),
     ]
-    return out, ({"frame.json": osign.file_pin(fr_path)} if fr_path.is_file() else {})
+    # the acceptance pins the rows the frame's checks run as well as the frame, so a later edit to
+    # either makes it STALE (a frame signature pins frame.json alone)
+    pins = {
+        rel: osign.file_pin(p)
+        for rel, p in (("frame.json", fr_path), ("acceptance.json", acc_path))
+        if p.is_file()
+    }
+    return out, pins
 
 
 def implementation_criteria(ctx: Any) -> Tuple[List[Crit], Dict[str, str]]:
-    from gate_rows_built import BUILT_ROWS
+    from gate_rows_built import BUILT_ROWS, research_cert_fails
 
+    research = research_cert_fails(ctx)
     st = _state(ctx.slug)
     newest = osign.newest_built_cert(ctx.slug)
     bc = (kit.read_json(newest) or {}) if newest else {}
@@ -180,6 +229,13 @@ def implementation_criteria(ctx: Any) -> Tuple[List[Crit], Dict[str, str]]:
             bool(bc.get("snapshot_sha"))
             and bc.get("snapshot_sha") == fz.get("snapshot_sha"),
             {"certificate": bc.get("snapshot_sha"), "freeze": fz.get("snapshot_sha")},
+        ),
+        # row 20's own check, re-read now: the research certificate signed or accepted, every
+        # row passed, no reopen after it
+        crit(
+            "research-certificate",
+            not research,
+            research or "signed, passed, not reopened",
         ),
     ]
     return out, ({f"built/{newest.name}": osign.file_pin(newest)} if newest else {})
@@ -236,6 +292,8 @@ def purchase_criteria(
     tag = blockers.tag(ctx, d) if on_record else {}
     n = blockers.extensions(slug, str(target))
     return [
+        # the menu offers an extension only under a method 1.2 frame (cli_core.extension_items)
+        crit("frame-1.2", kit.is_v12(ctx.frame), ctx.frame.get("method_version")),
         crit(
             "decision-on-record", on_record, (d or {}).get("status") or "not on record"
         ),
@@ -346,7 +404,7 @@ def cmd_accept(a: argparse.Namespace) -> int:
         raise kit.KitError(
             f"accept refused: no delegation is in force for {slug}. The operator gives one once, in "
             f'his own terminal: cc-signoff research:{slug}/delegate --because "<words>" (or '
-            "research:*/delegate for every program)"
+            "'research:*/delegate', quoted, for every program)"
         )
     ctx = gate.make_ctx(slug)
     crits, pins, terms = criteria(ctx, action, target)
@@ -382,6 +440,22 @@ def cmd_accept(a: argparse.Namespace) -> int:
         kit.sealed_dir(slug, create=True)
         with osign.acceptance_log(slug).open("a") as fh:
             fh.write(json.dumps(rec, sort_keys=True) + "\n")
+        # a revoke can land between delegation_for above and this write: read the record back as
+        # every reader will, and claim nothing a void record does not carry
+        back = next(
+            (
+                r
+                for r in osign.research_records(slug, action, target)
+                if r.get("_delegated") and r.get("at") == now
+            ),
+            None,
+        )
+        if back is None or back["_verdict"] != osign.VALID:
+            why = (back or {}).get("_why") or "it cannot be read back"
+            print(
+                f"VOID {row}: written, but every reader reads it void ({why}); nothing follows"
+            )
+            return 1
     if a.json:
         print(
             json.dumps(

@@ -11,8 +11,16 @@
 #     honours it exactly where it honours the operator's signature: requires (cert), row 1, the sweep's
 #     spare and the passing run's close (frame), built-signed, close and render (implementation),
 #     round cap, Stage 9 adoption, profile switch, decision extension, reopen;
-#   - a revoke voids acceptances dated after it, keeps earlier ones, and a per-program revoke under
+#   - a revoke voids acceptances dated after it AND any line appended after it in the program's own
+#     log (an acceptance's `at` is self-reported), keeps earlier ones, and a per-program revoke under
 #     `*` ends only that program; renders say "accepted by delegation (not read by the operator)".
+# Lead review of 58620fce6 (decision afc1; /tmp/tm2-review-224/FINDINGS-to-224.md), each case red on
+# 58620fce6 for its finding: M1 frame `unsigned-base`/`never-signed` (no base pin: ACCEPTED); M2
+# `acceptance-edited` and the frame's STALE on an acceptance.json edit (never verified); M3 the line
+# copied below the revoke (read VALID by its `at`); M4 the contract page's profile line ("your
+# signature"); m1 implementation `research-certificate`; m2 `frame-1.2`; m3 the reopen hidden by a
+# touched certificate; m4 the quoted revoke line; m5 the unregistered per-program revoke; m6 the
+# linked delegations log; m7 the delegated reopen and profile wording; m8 the race (ACCEPTED, exit 0).
 # RED-proof (2026-10-16): on f6b1fbff2 every case fails: `gate.sh accept` is an invalid choice (argparse
 # exit 2, no case's message) and cc-signoff refuses research:*/delegate as no research row.
 # Per-site mutants (each on a scratch copy, each turned the named case red): research_records without
@@ -118,9 +126,26 @@ print(s['$1'].get('status'))"; }
   run SIGNER 'research:*/delegate' --because "zero human in loop"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"is in force for every program"* ]] || { echo "$output"; false; }
+  # the revoke line it prints is quoted: unquoted, zsh globs research:*/… to "no matches found"
+  [[ "$output" == *"cc-signoff 'research:*/revoke-delegation'"* ]] || { echo "$output"; false; }
   [ "$(lines "$CC_RESEARCH_HOME/delegations.jsonl")" = 1 ]
   run py 'd = o.delegation_records()[0]; print(d["_verdict"], d["provenance"]["chain"][0], d["id"] == d["sha256"][:12], o.delegation_for("demo")["id"] == d["id"])'
   [ "$output" = "valid fixture-signer True True" ] || { echo "$output"; false; }
+  # a per-program revoke needs no registry entry: under `*` it ends that one program, registered or not
+  run SIGNER research:nosuch/revoke-delegation
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  run py 'print(o.delegation_for("nosuch"), o.delegation_for("demo") is not None)'
+  [ "$output" = "None True" ] || { echo "$output"; false; }
+  # the fixture signer resolves every file it may write: a delegations log linked into the live store
+  # is refused before cc-signoff runs (the row is one cc-signoff would refuse anyway, so a broken guard
+  # fails this test without writing anything)
+  live="$(/usr/bin/python3 -c "import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)")/.claude/autonomy/research"
+  mkdir -p "$BATS_TEST_TMPDIR/linked"
+  ln -s "$live/delegations.jsonl" "$BATS_TEST_TMPDIR/linked/delegations.jsonl"
+  CC_RESEARCH_HOME="$BATS_TEST_TMPDIR/linked" run SIGNER 'research:*/delegate'
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"resolves into the live research store"* ]] || { echo "$output"; false; }
+  [ "$(lines "$CC_RESEARCH_HOME/delegations.jsonl")" = 2 ]
   # one edited byte of what was signed voids it: the hash no longer matches, so nothing is in force
   ledit "$CC_RESEARCH_HOME/delegations.jsonl" 'r["because"] = "anything at all"'
   run py 'print(o.delegation_records()[0]["_verdict"], o.delegation_for("demo"))'
@@ -181,7 +206,10 @@ print(r["kind"], sorted(r["pins"]), [c["name"] for c in r["criteria"]], r["deleg
       state) setstate registered; want="state" ;;
       newest-certificate) mv "$REC/cert/CERT-v1.json" "$BATS_TEST_TMPDIR/"; want="newest-certificate rows-pass" ;;
       rows-pass) jedit "$REC/cert/CERT-v1.json" 'd["rows"]["3"] = "FAIL"'; want="rows-pass" ;;
-      no-reopen) SIGNER research:demo/reopen --because "the operator reopened it" > /dev/null; want="no-reopen" ;;
+      # the reopen still counts after the certificate's file is touched to the future: the clock is
+      # the certificate's own `issued`, not an mtime a re-checkout moves
+      no-reopen) SIGNER research:demo/reopen --because "the operator reopened it" > /dev/null
+                 touch -t 209901010000 "$REC/cert/CERT-v1.json"; want="no-reopen" ;;
     esac
     run acc --action cert
     [ "$status" -eq 1 ] || { echo "case $c: $output"; false; }
@@ -235,6 +263,24 @@ import heldout; print(heldout.third_read_signatures("demo"))'
   [ "$output" = "None True" ] || { echo "$output"; false; }
   run "$G" requires --program demo --wave B1
   [ "$status" -eq 0 ] || { echo "the acceptance made before the revoke no longer stands: $output"; false; }
+  # the revoke also landed in demo's own log, so a line appended after it is void whatever time it
+  # claims: here the earlier acceptance, copied below the revoke with its earlier `at` unchanged
+  head -1 "$ACC" > "$BATS_TEST_TMPDIR/orig"
+  grep -q '"kind": "revoke-marker"' "$ACC"
+  cat "$BATS_TEST_TMPDIR/orig" >> "$ACC"
+  run py 'r = o.research_records("demo", "cert"); print(r[0]["_verdict"], r[1]["_verdict"], r[1]["_why"].split(":")[0])'
+  [[ "$output" == "valid void revoke "*" of its delegation "*" precedes it in the log" ]] || { echo "$output"; false; }
+  head -2 "$ACC" > "$BATS_TEST_TMPDIR/two" && cp "$BATS_TEST_TMPDIR/two" "$ACC"
+  # a revoke landing between the verb's delegation check and its write: the record it wrote reads
+  # void, so the verb says VOID, exits 1, and nothing follows from it
+  run py 'import gate; d = [x for x in o.delegation_records() if x["action"] == "delegate"][0]
+o.delegation_for = lambda slug, at=None: d
+sys.exit(gate.main(["accept", "--program", "demo", "--action", "reopen", "--because", "race"]))'
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == "VOID research:demo/reopen: written, but every reader reads it void"* ]] || { echo "$output"; false; }
+  run py 'import gate; print(gate.reopened(gate.make_ctx("demo")))'
+  [ "$output" = False ] || { echo "$output"; false; }
+  head -2 "$ACC" > "$BATS_TEST_TMPDIR/two" && cp "$BATS_TEST_TMPDIR/two" "$ACC"
   # an acceptance dated after the revoke (hand-written: the verb refuses) is void, so it covers nothing
   ledit "$ACC" 'r["at"] = r["at"] + 3600; r["at_iso"] = "after the revoke"'
   run py 'r = o.research_records("demo", "cert")[0]; print(r["_verdict"], r["_why"])'
@@ -268,6 +314,12 @@ held_delta() {
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == "ACCEPTED research:demo/frame under delegation "* ]] || { echo "$output"; false; }
   [[ "$output" == *"FD-1 wrote frame v2"* ]] || { echo "$output"; false; }
+  # it pins the acceptance rows as well as the frame: an edit to either makes it STALE
+  cp "$REC/acceptance.json" "$BATS_TEST_TMPDIR/acceptance.json"
+  jedit "$REC/acceptance.json" 'd["rows"][0]["check_cmd"] = "true"'
+  run py 'r = o.research_records("demo", "frame")[-1]; print(sorted(r["pins"]), r["_verdict"])'
+  [ "$output" = "['acceptance.json', 'frame.json'] stale" ] || { echo "$output"; false; }
+  cp "$BATS_TEST_TMPDIR/acceptance.json" "$REC/acceptance.json"
   run "$G" sweep --program demo
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ "$(kr_st KR-1)" = open ] || { cat "$REC/known_rows.jsonl"; false; }
@@ -282,11 +334,16 @@ held_delta() {
 }
 
 @test "frame: each criterion refuses alone when false, exit 1, nothing written" {
-  for c in no-delta changed-after legacy-delta row-closed lint annotation; do
+  for c in no-delta changed-after unsigned-base never-signed acceptance-edited legacy-delta row-closed lint annotation; do
     rsync -a --delete "$BATS_FILE_TMPDIR/golden/" "$W/"
     delegate
     case "$c" in
-      no-delta) want="known-rows-open newest-change-is-delta" ;;
+      no-delta) want="acceptance-unchanged base-is-signed known-rows-open newest-change-is-delta" ;;
+      # the frame changed unsigned BEFORE the delta: the delta's base is not the frame last signed
+      unsigned-base) "$I" set --program demo --escape-cost-days 9 > /dev/null; held_delta; want="base-is-signed" ;;
+      never-signed) held_delta; : > "$SIG"; want="base-is-signed" ;;
+      # the rows the frame's checks run, edited after the delta (a check_cmd that can no longer fail)
+      acceptance-edited) held_delta; jedit "$REC/acceptance.json" 'd["rows"][0]["check_cmd"] = "true"'; want="acceptance-unchanged" ;;
       changed-after) held_delta; "$I" set --program demo --escape-cost-days 9 > /dev/null; want="newest-change-is-delta" ;;
       legacy-delta) held_delta; ledit "$REC/frame-deltas.jsonl" 'r.pop("frame_sha256")'; want="newest-change-is-delta" ;;
       row-closed) held_delta; printf '{"id":"KR-1","status":"closed","closed_by":"default"}\n' >> "$REC/known_rows.jsonl"; want="known-rows-open" ;;
@@ -319,19 +376,23 @@ built_certified() {
 @test "implementation: each criterion refuses alone; then the acceptance moves the registry, close admits it and render says it" {
   built_certified
   cp "$REC/built/BUILT-CERT-v1.json" "$BATS_TEST_TMPDIR/bc.json"
-  for c in state newest-built-certificate rows-pass freeze-snapshot; do
+  cp "$SIG" "$BATS_TEST_TMPDIR/sig"
+  for c in state newest-built-certificate rows-pass freeze-snapshot research-certificate; do
     cp "$BATS_TEST_TMPDIR/bc.json" "$REC/built/BUILT-CERT-v1.json"; setstate build-certified
     case "$c" in
       state) setstate build-certifying ;;
       newest-built-certificate) jedit "$REC/built/BUILT-CERT-v1.json" 'd["program"] = "other"' ;;
       rows-pass) jedit "$REC/built/BUILT-CERT-v1.json" 'd["rows"]["22"] = "FAIL"' ;;
       freeze-snapshot) jedit "$REC/built/BUILT-CERT-v1.json" 'd["snapshot_sha"] = "0" * 40' ;;
+      # row 20 re-read at the acceptance: a reopen after the research certificate refuses it
+      research-certificate) SIGNER research:demo/reopen --because "the operator reopened it" > /dev/null ;;
     esac
     run acc --action implementation
     [ "$status" -eq 1 ] || { echo "case $c: $output"; false; }
     [ "$(fails)" = "$c" ] || { echo "case $c: $output"; false; }
   done
   cp "$BATS_TEST_TMPDIR/bc.json" "$REC/built/BUILT-CERT-v1.json"; setstate build-certified
+  cp "$BATS_TEST_TMPDIR/sig" "$SIG"
   run "$G" close --program demo
   [ "$status" -eq 2 ] || { echo "$output"; false; }
   [[ "$output" == *"carries no operator signature or delegated acceptance"* ]] || { echo "$output"; false; }
@@ -374,9 +435,16 @@ built_certified() {
   acc --action profile/lite --because "narrow the remaining rounds" > /dev/null
   run py 'print(kit.profile_switch("demo")["to"], kit.profile_switch("demo")["from"])'
   [ "$output" = "lite standard" ] || { echo "$output"; false; }
+  # the contract page's profile line says the switch was accepted by delegation, never "your signature"
+  run py 'import json, intake
+fr = json.load(open(str(kit.records_dir("demo") / "frame.json")))
+f = dict(found=1, desk_n95=1, r_max=6, rounds_counted=3, inputs=3, found_raw=1, n_hat=1, false_material_share=0,
+         false_material_source="fixture", desk_mean=0.1, invisible_mean=0.1, invisible_bound95=1, p_any=0.1)
+print(intake.measured_profile_lines("demo", fr, kit.profile(fr["profile"]), f, 14.0, 28.0)[0])'
+  [[ "$output" == "## Profile: lite from round 4 (standard through round 3; switch accepted by delegation (not read by the operator) 20"*"Z)" ]] || { echo "$output"; false; }
   run acc --action profile/lite --because "again"
   [ "$status" -eq 1 ] || { echo "$output"; false; }
-  [[ "$output" == *"one profile switch per program is already signed"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"one profile switch per program is already accepted by delegation (not read by the operator)"* ]] || { echo "$output"; false; }
   # Stage 9 adoption: a pre-1.2 frame, once; stage9_applies reads it
   run py 'print(kit.stage9_applies("demo", {}))'
   [ "$output" = False ]
@@ -386,10 +454,12 @@ built_certified() {
   run acc --action adopt/stage9 --because again
   [ "$status" -eq 1 ] || { echo "$output"; false; }
   [ "$(fails)" = once-per-program ] || { echo "$output"; false; }
-  # decision extension: only where the menu offers one (research can still raise it), once per decision
+  # decision extension: only where the menu offers one (a 1.2 frame, research can still raise it),
+  # once per decision
   run acc --action extend-decision/DR-1 --because "more probes"
   [ "$status" -eq 1 ] || { echo "$output"; false; }
-  [ "$(fails)" = research-can-raise-it ] || { echo "$output"; false; }
+  [ "$(fails)" = "frame-1.2 research-can-raise-it" ] || { echo "$output"; false; }
+  jedit "$REC/frame.json" 'd["method_version"] = "1.2"'
   printf '%s\n' '{"id":"DR-2","question":"cache size","status":"open","options":[{"label":"a"},{"label":"b"}],"tally":{"premises":["PR-9"]},"timebox_days":1,"research_started":"2026-10-01T00:00:00Z"}' >> "$REC/decisions.jsonl"
   acc --action extend-decision/DR-2 --because "more probes" > /dev/null
   run py 'import blockers; print(blockers.extensions("demo", "DR-2"))'
@@ -403,6 +473,8 @@ built_certified() {
   run acc --action reopen --because again
   [ "$status" -eq 1 ] || { echo "$output"; false; }
   [ "$(fails)" = not-reopened ] || { echo "$output"; false; }
+  run "$G" requires --program demo --wave B1
+  [[ "$output" == *"a reopen accepted by delegation (not read by the operator) is recorded after the newest certificate"* ]] || { echo "$output"; false; }
   run "$G" run --program demo
   [[ "$output" == *"REOPENED demo by a reopen accepted by delegation (not read by the operator); registry -> registered"* ]] || { echo "$output"; false; }
   [ "$(state)" = registered ]

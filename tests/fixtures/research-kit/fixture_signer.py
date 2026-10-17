@@ -22,17 +22,40 @@ REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "scripts" / "lib"))
 import operator_sign  # noqa: E402
 
-CHAIN = [{"pid": 0, "comm": c, "depth": i} for i, c in enumerate(("fixture-signer", "zsh", "kitty"))]
+CHAIN = [
+    {"pid": 0, "comm": c, "depth": i}
+    for i, c in enumerate(("fixture-signer", "zsh", "kitty"))
+]
 
 
 def fixture_only() -> None:
-    live = os.path.realpath(Path(pwd.getpwuid(os.getuid()).pw_dir) / ".claude" / "autonomy" / "research")
+    live = os.path.realpath(
+        Path(pwd.getpwuid(os.getuid()).pw_dir) / ".claude" / "autonomy" / "research"
+    )
     for var in ("CC_RESEARCH_HOME", "CC_RESEARCH_REGISTRY"):
         val = os.environ.get(var)
         real = os.path.realpath(val) if val else ""
         if not val or real == live or real.startswith(live + os.sep):
-            print(f"fixture_signer: REFUSED — {var} is unset or points at the live research store; "
-                  "this signer is for fixtures only", file=sys.stderr)
+            print(
+                f"fixture_signer: REFUSED — {var} is unset or points at the live research store; "
+                "this signer is for fixtures only",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+    # every file cc-signoff may write under the fixture home, resolved: a symlink into the live store
+    # (a linked delegations.jsonl, a linked program dir) would sign a real program
+    home = Path(os.environ["CC_RESEARCH_HOME"])
+    paths = [home / "delegations.jsonl"]
+    for d in sorted(home.glob("*")) if home.is_dir() else []:
+        paths += [d, d / "signoff.jsonl", d / "delegated.jsonl"]
+    for p in paths:
+        real = os.path.realpath(p)
+        if real == live or real.startswith(live + os.sep):
+            print(
+                f"fixture_signer: REFUSED — {p} resolves into the live research store ({real}); "
+                "this signer is for fixtures only",
+                file=sys.stderr,
+            )
             sys.exit(2)
 
 

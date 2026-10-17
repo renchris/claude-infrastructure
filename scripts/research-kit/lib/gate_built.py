@@ -30,7 +30,7 @@ import os
 from typing import Any, Tuple
 
 import kit
-from gate import FAIL, FILED, PASS, Ctx, make_ctx, print_rows, reopened
+from gate import FAIL, FILED, PASS, Ctx, make_ctx, print_rows, reopen_phrase, reopened
 from gate_cert import git
 
 
@@ -63,7 +63,7 @@ def signed_cert(ctx: Ctx) -> str:
         )
     if reopened(ctx):
         raise kit.KitError(
-            f"built-freeze refused: an operator reopen is signed after {name}; "
+            f"built-freeze refused: {reopen_phrase(ctx)} after {name}; "
             "the research gate runs again first"
         )
     return name

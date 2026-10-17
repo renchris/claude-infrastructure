@@ -73,7 +73,9 @@ The delegation (REPORT.md §14) is signed once: while it is in force, an agent's
 `scripts/research-kit/gate.sh accept --program P --action <action>` accepts cert, frame,
 implementation, extra-round, profile, adopt, extend-decision and reopen when that action's
 machine criteria hold, and every reader shows it as "accepted by delegation (not read by the
-operator)". `*` covers every program. Third reads and vetoes stay yours."""
+operator)". `*` covers every program; quote that form, or zsh globs it away:
+       cc-signoff 'research:*/delegate' --because "<words>"
+Third reads and vetoes stay yours."""
 
 
 def sign_research(rid: str, evidence: str | None, because: str | None) -> int:
@@ -92,7 +94,7 @@ def sign_research(rid: str, evidence: str | None, because: str | None) -> int:
               "  now accepts each phase whose machine criteria hold, and every acceptance\n"
               f"  names this delegation (sha256 {rec['sha256']}).\n"
               "  End it any time:\n"
-              f"    cc-signoff research:{rec['program']}/revoke-delegation")
+              f"    cc-signoff 'research:{rec['program']}/revoke-delegation'")
     elif rec["action"] == "revoke-delegation":
         print("  acceptances dated after this are void; earlier ones and every operator\n"
               "  signature stand.")

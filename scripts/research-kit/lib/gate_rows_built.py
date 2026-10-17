@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import kit
-from gate import FAIL, FILED, PASS, Ctx, Row, reopened
+from gate import FAIL, FILED, PASS, Ctx, Row, reopen_phrase, reopened
 from gate_rows_a import folded, probes, ran, row, run_cmd, verdict
 from gate_rows_b import cert_rounds
 
@@ -91,7 +91,7 @@ def research_cert_fails(ctx: Ctx) -> List[str]:
             f"research certificate {cert.stem} has row(s) not passed: {', '.join(bad) or 'no rows'}"
         )
     if reopened(ctx):
-        fails.append(f"a reopen is signed after research certificate {cert.stem}")
+        fails.append(f"{reopen_phrase(ctx)} after research certificate {cert.stem}")
     return fails
 
 

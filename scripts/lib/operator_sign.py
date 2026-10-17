@@ -102,6 +102,9 @@ IMPLEMENTATION_STATES = ("build-certified", "implementation-signed")
 # ── delegated acceptance (REPORT.md §14) ──
 DELEGATION_ACTIONS = ("delegate", "revoke-delegation")
 DELEGATED = "delegated"  # an acceptance record's kind
+REVOKE_MARKER = (
+    "revoke-marker"  # a revoke's line in each covered program's acceptance log
+)
 DELEGATED_WORDS = "accepted by delegation (not read by the operator)"
 # The actions an agent may accept under a delegation, each with the machine criteria its record must
 # show, every one true, or every reader reads it VOID. gate_accept.py computes them (the names are
@@ -111,6 +114,8 @@ DELEGATED_CRITERIA: Dict[str, Tuple[str, ...]] = {
     "frame": (
         "lint",
         "newest-change-is-delta",
+        "base-is-signed",
+        "acceptance-unchanged",
         "known-rows-open",
         "annotations-pinned",
     ),
@@ -119,11 +124,13 @@ DELEGATED_CRITERIA: Dict[str, Tuple[str, ...]] = {
         "newest-built-certificate",
         "rows-pass",
         "freeze-snapshot",
+        "research-certificate",
     ),
     "extra-round": ("state", "once-per-program"),
     "profile": ("switch-terms",),
     "adopt": ("frame-predates-1.2", "once-per-program"),
     "extend-decision": (
+        "frame-1.2",
         "decision-on-record",
         "research-can-raise-it",
         "once-per-decision",
@@ -287,8 +294,10 @@ def profile_switch_terms(slug: str, target: Optional[str]) -> Dict[str, Any]:
         raise Refused(
             f"REFUSED — {rec / 'frame.json'} names no profile to switch from."
         )
-    if any(r["_verdict"] == VALID for r in research_records(slug, "profile")):
-        raise Refused("REFUSED — the one profile switch per program is already signed.")
+    taken = [r for r in research_records(slug, "profile") if r["_verdict"] == VALID]
+    if taken:
+        how = DELEGATED_WORDS if all(r.get("_delegated") for r in taken) else "signed"
+        raise Refused(f"REFUSED — the one profile switch per program is already {how}.")
     cap = kit.PROFILES[target]["hard_cap"]
     if cap >= kit.PROFILES[cur]["hard_cap"]:
         raise Refused(
@@ -563,11 +572,16 @@ def delegation_for(slug: str, at: Optional[float] = None) -> Optional[Dict[str, 
 
 
 def acceptance_verdict(
-    slug: str, rec: Dict[str, Any], dels: List[Dict[str, Any]]
+    slug: str,
+    rec: Dict[str, Any],
+    dels: List[Dict[str, Any]],
+    revoked_before: Tuple[str, ...] = (),
 ) -> Tuple[str, str]:
     """(VALID|VOID|STALE, why) for one delegated acceptance. VOID unless it is a delegated record of
     a delegable action for this program, its delegation is on record, VALID and in force at its time,
-    and it shows every criterion its action requires, each true; STALE if a pinned artifact changed."""
+    no revoke of that delegation precedes it in the program's log (`revoked_before`: the revoke
+    markers above its line; an acceptance's own `at` is self-reported, its position is not), and it
+    shows every criterion its action requires, each true; STALE if a pinned artifact changed."""
     action = str(rec.get("action"))
     if rec.get("kind") != DELEGATED or rec.get("program") != slug:
         return VOID, "not a delegated acceptance of this program"
@@ -590,6 +604,19 @@ def acceptance_verdict(
             f"its delegation {d.get('id')} was not in force for {slug} at {rec.get('at_iso')} "
             "(revoked before it, or given after it)"
         )
+    for sha in revoked_before:
+        r = next((x for x in dels if x.get("sha256") == sha), None)
+        if (
+            r is not None
+            and r.get("_verdict") == VALID
+            and r.get("action") == "revoke-delegation"
+            and covers(r.get("program"), slug)
+            and float(r.get("at") or 0) > float(d.get("at") or 0)
+        ):
+            return VOID, (
+                f"revoke {r.get('id')} of its delegation {d.get('id')} precedes it in the log: it "
+                "was appended after the revoke, whatever time it carries"
+            )
     shown = {
         str(c.get("name")): c.get("ok")
         for c in rec.get("criteria") or []
@@ -620,14 +647,20 @@ def research_records(
         rec["_verdict"] = verdict(rec, current_pins(slug, rec))
         out.append(rec)
     dels: Optional[List[Dict[str, Any]]] = None
+    markers: List[str] = []  # the revoke markers read so far, in log order
     for rec in kit.read_jsonl(acceptance_log(slug)):
+        if rec.get("kind") == REVOKE_MARKER:
+            markers.append(str((rec.get("revoke") or {}).get("sha256")))
+            continue
         if action and rec.get("action") != action:
             continue
         if target is not None and rec.get("target") != target:
             continue
         if dels is None:
             dels = delegation_records()
-        rec["_verdict"], rec["_why"] = acceptance_verdict(slug, rec, dels)
+        rec["_verdict"], rec["_why"] = acceptance_verdict(
+            slug, rec, dels, tuple(markers)
+        )
         rec["_delegated"] = True
         out.append(rec)
     return out
@@ -654,9 +687,9 @@ def sign_delegation(
         raise Refused(
             'REFUSED — delegate needs --because "<words>": every acceptance made under it quotes them.'
         )
-    if scope != "*" and kit.registry_get(scope) is None:
+    if action == "delegate" and scope != "*" and kit.registry_get(scope) is None:
         raise Refused(
-            f"REFUSED — {scope} is not a registered program; research:*/{action} covers every "
+            f"REFUSED — {scope} is not a registered program; 'research:*/{action}' covers every "
             "program, or register it first (a delegation for a misspelt slug would cover nothing)."
         )
     if action == "revoke-delegation" and not any(
@@ -688,6 +721,32 @@ def sign_delegation(
     log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("a") as fh:
         fh.write(json.dumps(rec, sort_keys=True) + "\n")
+    if action == "revoke-delegation":
+        # A revoke also lands IN each covered program's acceptance log, so a reader judges an
+        # acceptance by its position after the revoke, not by the time the acceptance claims.
+        slugs = (
+            [str(p.get("slug")) for p in kit.registry_load().get("programs") or []]
+            if scope == "*"
+            else [scope]
+        )
+        for s in slugs:
+            if not kit.SLUG_RE.match(s):
+                continue
+            kit.sealed_dir(s, create=True)
+            with acceptance_log(s).open("a") as fh:
+                fh.write(
+                    json.dumps(
+                        {
+                            "kind": REVOKE_MARKER,
+                            "program": s,
+                            "revoke": {"id": rec["id"], "sha256": rec["sha256"]},
+                            "at": rec["at"],
+                            "at_iso": rec["at_iso"],
+                        },
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
     return rec
 
 
@@ -743,7 +802,8 @@ def implementation_words(slug: str, state: Optional[Dict[str, Any]] = None) -> s
     if st["status"] == VOID:
         return "signature VOID (agent-written): not signed"
     if st["status"] == STALE:
-        return "signature STALE (the built certificate changed after it): not signed"
+        what = "delegated acceptance" if rec.get("_delegated") else "signature"
+        return f"{what} STALE (the built certificate changed after it): not signed"
     if st["status"] == SUPERSEDED:
         old = (
             ", ".join(Path(p).stem for p in sorted(rec.get("pins") or {}))
