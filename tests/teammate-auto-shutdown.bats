@@ -402,8 +402,13 @@ mkrepo() {
   git -C "$1" config user.email t@t; git -C "$1" config user.name t
   echo x > "$1/f"; git -C "$1" add f; git -C "$1" commit -qm init
 }
-# a real LINKED worktree of <repo> at <path> on a new branch
-mkwt() { git -C "$1" worktree add -q -b "$3" "$2" >/dev/null 2>&1; }
+# a real LINKED worktree of <repo> at <path> on a new branch. Its logs/HEAD is aged a day: wt_pinned's
+# `owner` pin reads a reflog touched in the last hour as a live owner and KEEPS the tree, and a fixture
+# born a second ago would otherwise pin every removal case in this file.
+mkwt() {
+  git -C "$1" worktree add -q -b "$3" "$2" >/dev/null 2>&1 || return
+  touch -t "$(date -v-1d +%Y%m%d%H%M)" "$(git -C "$2" rev-parse --path-format=absolute --git-dir)/logs/HEAD"
+}
 # team config.json with a per-member cwd (the implicit-team shape); args: team member pane cwd [extra-member]
 teamcfg_cwd() {
   mkdir -p "$HOME/.claude/teams/$1"
@@ -532,6 +537,113 @@ wait_log() { grep -qF "$1" "$LOGF"; }
   [ "$status" -eq 0 ]
   wait_log "worktree removed: $wt"
   gone "$wt"
+}
+
+# ══ W2 X6: THE TOMBSTONE BEFORE THE REMOVE (docs/research/load-root-cause-2026-10-17/W2-CONTRACT.md) ══
+# `--force` stays because the tree is still dirty; what changes is that the IGNORED residue the checkpoint
+# ref cannot hold (brag-output/, .env) is moved into a tombstone and a ledger row written first, and that
+# every failure of that write keeps the tree. All stores live under $D; the library is the repo's own.
+tomb_env() {
+  export WT_LEDGER="$D/wt/ledger.jsonl" WT_TOMB_DIR="$D/wt/tomb" WT_STATE_DIR="$D/wt/state" \
+    WT_EVENTS_FILE="$D/wt/state/events.jsonl" WT_WAKE_FILE="$D/wt/state/wake" WT_PARK_INDEX="$D/wt/park-index" \
+    WT_PARK_ROOT="$D/wt/parked" WT_CONFIG_ROOTS="$HOME/.claude" WT_TRUNK=main WT_CRASH_LOG="$D/wt/crashes.jsonl" \
+    WT_RESUME_DEBT_DIR="$D/wt/rdebt" WT_LR_DIR="$D/wt/lr" WT_RECYCLE_FAILED_DIR="$D/wt/rfail" \
+    WT_BOOT_RESUME_DIR="$D/wt/boot" WT_BACKLOG="$D/wt/backlog.jsonl"
+  mkdir -p "$D/wt"
+}
+# <member> → TREPO, TWT (a member-named linked worktree, resolved by the name leg) holding a dirty tracked
+# file and an ignored brag-output/x.json, and CKPT = refs/wip/<member>/LAST over that dirty tree.
+tomb_fixture() {
+  local member="$1" idx="$D/ckidx" tree
+  TREPO="$D/trepo"; TWT="$D/twts/$member"
+  mkrepo "$TREPO"; git -C "$TREPO" branch -M main
+  printf 'brag-output/\n' > "$TREPO/.gitignore"; git -C "$TREPO" add .gitignore; git -C "$TREPO" commit -qm ignore
+  mkdir -p "$D/twts"; mkwt "$TREPO" "$TWT" "b-$member"
+  echo dirty >> "$TWT/f"
+  mkdir -p "$TWT/brag-output"; printf '{"brag":%s}\n' "$RANDOM" > "$TWT/brag-output/x.json"
+  cp "$TWT/brag-output/x.json" "$D/x.json.orig"
+  GIT_INDEX_FILE="$idx" git -C "$TWT" read-tree HEAD
+  GIT_INDEX_FILE="$idx" git -C "$TWT" add -A
+  tree="$(GIT_INDEX_FILE="$idx" git -C "$TWT" write-tree)"
+  CKPT="$(git -C "$TWT" commit-tree "$tree" -p HEAD -m checkpoint)"
+  git -C "$TWT" update-ref "refs/wip/$member/LAST" "$CKPT"
+}
+tomb_run() { # <member> <sid> → the idle event for the fixture's member; a dirty tree acts at defer cap 1
+  export TEAMMATE_MAX_DEFERS=1
+  teamcfg "teamT$2" "$1" "%6$RANDOM"; reg "$2" "PANE-$2" "$TWT" 3600; tx "$2" 9000
+  run hookrun "$1" "teamT$2" "$2" "$TREPO"
+  [ "$status" -eq 0 ]
+}
+
+@test "tombstone: a dirty, checkpointed tree with ignored residue is recorded, THEN removed" {
+  tomb_env; local member=tomb-wkr; tomb_fixture "$member"
+  tomb_run "$member" sidTB
+  wait_log "worktree removed: $TWT"
+  gone "$TWT"
+  local row id
+  row="$(jq -c 'select(.actor=="teammate-auto-shutdown")' "$WT_LEDGER")"
+  [ "$(jq -r .event <<<"$row")" = worktree-disposed ]
+  [ "$(jq -r .checkpoint_ref <<<"$row")" = "refs/wip/$member/LAST" ]
+  id="$(jq -r .id <<<"$row")"
+  [ "$(git -C "$TREPO" rev-parse "refs/wt-tombstone/$id/head")" = "$CKPT" ]   # the head ref IS the checkpoint
+  cmp "$D/x.json.orig" "$WT_TOMB_DIR/$id/residue/brag-output/x.json"         # residue byte-identical
+}
+
+@test "tombstone: an unwritable ledger KEEPS the tree, residue back in place, nothing removed" {
+  tomb_env; local member=tomb-ro; tomb_fixture "$member"
+  mkdir -p "$D/ro"; chmod 555 "$D/ro"; export WT_LEDGER="$D/ro/ledger.jsonl"
+  tomb_run "$member" sidRO
+  chmod 755 "$D/ro"
+  [ -d "$TWT" ]
+  cmp "$D/x.json.orig" "$TWT/brag-output/x.json"
+  grep -q "worktree kept (tombstone failed, rc=2): $TWT" "$LOGF"
+  ! grep -q "worktree removed: $TWT" "$LOGF" || false
+}
+
+@test "tombstone: a missing library KEEPS the tree (a remove site never runs unrecorded)" {
+  tomb_env; local member=tomb-nolib; tomb_fixture "$member"
+  export CC_TAS_TOMBSTONE_LIB="$D/absent-lib.sh"
+  tomb_run "$member" sidNL
+  [ -d "$TWT" ]
+  grep -q "worktree kept (no wt-tombstone library): $TWT" "$LOGF"
+  [ ! -e "$WT_LEDGER" ]
+}
+
+# The tombstone runs in the DETACHED child, after the hook body has returned its verdict — never inside the
+# 5 s hook budget. Ordered, not timed: the stub tombstone waits for a marker the test writes only once the
+# hook's main process has exited, so a tombstone run in the body would never see it and record so.
+@test "tombstone: runs after the hook has returned, inside the detached subshell" {
+  tomb_env; local member=tomb-order; tomb_fixture "$member"
+  cat > "$D/order-lib.sh" <<EOF
+wt_pinned() { return 1; }
+wt_residue_restore() { :; }
+wt_tombstone() {
+  local i=0
+  while [ ! -e "$D/main-returned" ] && [ \$i -lt 300 ]; do sleep 0.1; i=\$((i+1)); done
+  if [ -e "$D/main-returned" ]; then echo after-main > "$D/order"; else echo inside-main > "$D/order"; fi
+  echo stub-id
+}
+EOF
+  export CC_TAS_TOMBSTONE_LIB="$D/order-lib.sh"
+  export TEAMMATE_MAX_DEFERS=1; teamcfg teamOR "$member" %71; reg sidOR PANE-OR "$TWT" 3600; tx sidOR 9000
+  printf '%s' "$(mkinput "$member" teamOR sidOR "$TREPO")" \
+    | { "$H" 9>&1 >/dev/null; touch "$D/main-returned"; } | cat
+  [ "$(cat "$D/order")" = after-main ]
+  wait_log "worktree removed: $TWT (tombstone stub-id)"
+}
+
+@test "RED control: the pre-tombstone hook removes the same tree with NO row and the residue lost" {
+  tomb_env; local member=tomb-red; tomb_fixture "$member"
+  mkdir -p "$D/ctl/hooks"
+  git -C "$REPO" show 7fa90e0c2:hooks/teammate-auto-shutdown.sh > "$D/ctl/hooks/teammate-auto-shutdown.sh"
+  chmod +x "$D/ctl/hooks/teammate-auto-shutdown.sh"
+  ln -s "$REPO/hooks/lib" "$D/ctl/hooks/lib"; ln -s "$REPO/scripts" "$D/ctl/scripts"
+  H="$D/ctl/hooks/teammate-auto-shutdown.sh"
+  tomb_run "$member" sidRED
+  wait_log "worktree removed: $TWT"
+  gone "$TWT"
+  [ ! -e "$WT_LEDGER" ]                                                    # no row
+  [ -z "$(git -C "$TREPO" for-each-ref refs/wt-tombstone/)" ]             # no durable ref
 }
 
 # (C) TOOL-IN-FLIGHT — a teammate mid-tool_use is LIVE. Observed 2026-07-29: a teammate actively

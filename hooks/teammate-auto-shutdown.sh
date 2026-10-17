@@ -1567,10 +1567,60 @@ pin_term_verdict() {
 }
 pin_term_verdict
 
+# THE TOMBSTONE COMES BEFORE THE REMOVE (W2 note X6; API: docs/research/load-root-cause-2026-10-17/
+# W2-CONTRACT.md). The checkpoint ref holds only NON-ignored content, so an ignored brag-output/ or
+# .env went with the tree and no record said it had ever existed — 247 such removals in
+# teammate-lifecycle.log. wt_tombstone moves that residue aside, points refs/wt-tombstone/<id>/head at
+# the checkpoint commit and appends the ledger row, all before git touches the tree. Every way it can
+# fail KEEPS the tree — no library, a pin, a failed or timed-out write — because a kept tree costs disk
+# and a removed one without its record costs the work. The 300 s bound keeps the write clear of
+# cc-reaper's 600 s orphan-bash reap. CC_TAS_TOMBSTONE_LIB, when set, is the ONLY library looked at.
+_tas_tombstone_lib() {
+  local c
+  if [[ -n "${CC_TAS_TOMBSTONE_LIB:-}" ]]; then
+    [[ -f "$CC_TAS_TOMBSTONE_LIB" ]] && printf '%s' "$CC_TAS_TOMBSTONE_LIB"
+    return
+  fi
+  for c in "$HOOK_DIR/../scripts/lib/wt-tombstone.sh" "$HOME/.claude/scripts/lib/wt-tombstone.sh"; do
+    [[ -f "$c" ]] && { printf '%s' "$c"; return 0; }
+  done
+  return 1
+}
+reap_owned_worktree() { # <main-repo> → tombstone, then `remove --force`; any doubt KEEPS the tree
+  local repo="$1" lib pin id to rc ckref="refs/wip/$TEAMMATE_NAME/LAST"
+  lib="$(_tas_tombstone_lib)" || { log "  ~ worktree kept (no wt-tombstone library): $WORKTREE"; return 0; }
+  # shellcheck source=/dev/null
+  . "$lib" || { log "  ~ worktree kept (wt-tombstone library failed to load): $WORKTREE"; return 0; }
+  # rc 1 is the only "no pin"; an undefined wt_pinned (127) is a missing library, so it keeps too.
+  pin="$(wt_pinned "$WORKTREE" 2>/dev/null)"; rc=$?
+  case "$rc" in
+    0) log "  ~ worktree kept (pinned: ${pin:-?}): $WORKTREE"; return 0 ;;
+    1) ;;
+    *) log "  ~ worktree kept (pin check failed, rc=$rc): $WORKTREE"; return 0 ;;
+  esac
+  to="$(command -v gtimeout || command -v timeout)" || { log "  ~ worktree kept (no gtimeout to bound the tombstone): $WORKTREE"; return 0; }
+  local args=("$WORKTREE" teammate-auto-shutdown checkpointed)
+  # The ref teammate-checkpoint.sh writes (its LAST_REF). No checkpoint ⇒ the head ref falls back to HEAD.
+  git -C "$WORKTREE" rev-parse --verify -q "$ckref^{commit}" >/dev/null 2>&1 && args+=(--checkpoint-ref "$ckref")
+  # shellcheck disable=SC2016  # $1 / $@ are the CHILD's positional args, expanded there on purpose
+  id="$("$to" 300 bash -c '. "$1"; shift; wt_tombstone "$@"' _ "$lib" "${args[@]}" 2>>"$LOG_DIR/teammate-lifecycle.log")"; rc=$?
+  if [[ $rc -ne 0 || -z "$id" ]]; then
+    log "  ~ worktree kept (tombstone failed, rc=$rc$([[ $rc -eq 124 ]] && printf ' timeout')): $WORKTREE"
+    return 0
+  fi
+  if git -C "$repo" worktree remove "$WORKTREE" --force 2>/dev/null; then
+    log "  ✓ worktree removed: $WORKTREE (tombstone $id)"
+  else
+    # git refused, so the tree stays — and it gets its moved residue back, or it would stay HALF-emptied.
+    wt_residue_restore "$id" "$WORKTREE" 2>/dev/null
+    log "  ~ worktree kept (remove refused; residue restored from tombstone $id): $WORKTREE"
+  fi
+}
+
 # Detached close so the hook itself returns within its 5s timeout. Ordering:
 #   brief grace for CC to flush the {"continue":false} response → close the EXACT
-#   pane → remove the worktree. Work is already checkpointed above, so removing
-#   the worktree here cannot lose work.
+#   pane → tombstone, then remove the worktree. Tracked work is checkpointed above
+#   and ignored residue is preserved by the tombstone, so the remove cannot lose work.
 (
   sleep "$CLOSE_GRACE_S"
   if [[ -n "$PANEID" ]]; then
@@ -1596,8 +1646,7 @@ pin_term_verdict
   if [[ -n "$WORKTREE" ]] && $WORKTREE_OWNED; then
     MAIN_REPO=$(git -C "$WORKTREE" rev-parse --git-common-dir 2>/dev/null | sed 's|/\.git$||')
     if [[ -n "$MAIN_REPO" && -d "$MAIN_REPO" ]]; then
-      git -C "$MAIN_REPO" worktree remove "$WORKTREE" --force 2>/dev/null \
-        && log "  ✓ worktree removed: $WORKTREE"
+      reap_owned_worktree "$MAIN_REPO"
     fi
   elif [[ -n "$WORKTREE" ]]; then
     log "  ~ worktree kept (shared, not owned by $MEMBER_NAME): $WORKTREE"
