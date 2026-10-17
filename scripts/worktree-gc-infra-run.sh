@@ -30,6 +30,33 @@ LOCK="$HOME/.claude/state/worktree-gc-infra.lock"
 OBSERVE="${WTGC_OBSERVE:-0}"
 FETCH_BOUND="${CC_WTGC_INFRA_FETCH_BOUND:-300}"
 
+# ── Where the sibling scripts live. launchd runs this through the ~/.claude/scripts per-file symlink,
+#    so dirname "$0" is the symlink farm; one readlink hop reaches the checkout, where lib/ and the
+#    wake evaluator always sit beside this file (the farm gains a new file only on install.sh). ─────
+_self="$0"
+if [ -L "$_self" ]; then
+  _lnk="$(readlink "$_self" 2>/dev/null)" || _lnk=""
+  case "$_lnk" in /*) _self="$_lnk" ;; ?*) _self="$(dirname "$_self")/$_lnk" ;; esac
+fi
+SELF_DIR="$(cd "$(dirname "$_self")" 2>/dev/null && pwd)" || SELF_DIR="$(dirname "$_self")"
+WAKE_SH="${CC_WTGC_WAKE_SH:-$SELF_DIR/worktree-gc-wake.sh}"
+TOMB_LIB="${CC_WTGC_TOMBSTONE_LIB:-$SELF_DIR/lib/wt-tombstone.sh}"
+SCOPE_LIB="$SELF_DIR/lib/wtgc-scope.sh"
+DEV_ROOT="${CC_WTGC_INFRA_DEV_ROOT:-$HOME/Development}"
+FOREIGN_LOG="${CC_WTGC_FOREIGN_LOG:-$HOME/.claude/logs/worktree-gc-foreign.log}"
+FOREIGN_BOUND="${CC_WTGC_FOREIGN_BOUND:-900}"
+ARCHIVE_FLOOR_FILE="${CC_WTGC_ARCHIVE_FLOOR_FILE:-$HOME/.claude/autonomy/worktree-gc-archive-floor.gb}"
+case "$FOREIGN_BOUND" in ''|*[!0-9]*) FOREIGN_BOUND=900 ;; esac
+
+# The event-mode switch and the repo-scope table (DESIGN §3.4, X9) are shared with the wake run, so
+# both read ONE copy of the rule. A missing library is not a reason to act: the mode reads observe
+# and the foreign pass is skipped (SCOPE_OK=0), which leaves today's home sweep exactly as it was.
+SCOPE_OK=0
+# shellcheck source=/dev/null
+[ -f "$SCOPE_LIB" ] && . "$SCOPE_LIB" && SCOPE_OK=1
+EVENTS_MODE=observe
+[ "$SCOPE_OK" = 1 ] && EVENTS_MODE="$(wtgc_events_mode)"
+
 # ── EFFECT, NOT EXIT CODE (master 66ef300dd0b4 — fleet footprint) ────────────────────────────────
 # This wrapper already refuses to call lock contention a success, which is the right instinct
 # applied to the wrong quantity: `verdict=ok removed=65 kept=126` reports what the JANITOR SAID,
@@ -195,6 +222,44 @@ last_row_age_h() {
   echo $(( (now - m) / 3600 ))
 }
 
+# ── ARGUMENT DISPATCH (DESIGN §3.4, "Wake actuator"). One plist, three triggers: the 04:15 calendar,
+#    WatchPaths on ~/.claude/state/worktree-gc.wake, and StartInterval 600 — all of them run
+#    `--auto`, because launchd cannot say WHICH trigger fired. So "is the backstop due?" is decided
+#    here from the log, not from the trigger: due = it is past today's 04:15 AND the last backstop
+#    row predates today's 04:15. A calendar fire missed in sleep therefore runs on the first tick
+#    after wake, and every tick after that one falls through to the cheap wake evaluator.
+#    No argument is today's backstop, unchanged; `--assert` is handled below, unchanged.
+#    Timestamps compare as STRINGS: '%Y-%m-%d %H:%M:%S' sorts lexically, so no epoch parse of a
+#    log row is needed (and none can fail differently on BSD and GNU date).
+_fmt_epoch() { # <epoch> <strftime> — BSD `date -r <epoch>`, else GNU `date -d @<epoch>`
+  date -r "$1" "+$2" 2>/dev/null || date -d "@$1" "+$2" 2>/dev/null
+}
+backstop_due() {
+  local now day cut now_s last_s
+  now="${CC_WTGC_INFRA_NOW:-$(date +%s)}"
+  case "$now" in ''|*[!0-9]*) now="$(date +%s)" ;; esac
+  day="$(_fmt_epoch "$now" '%Y-%m-%d')"; now_s="$(_fmt_epoch "$now" '%Y-%m-%d %H:%M:%S')"
+  [ -n "$day" ] && [ -n "$now_s" ] || return 1       # an unreadable clock never starts a sweep
+  cut="$day 04:15:00"
+  [[ "$now_s" < "$cut" ]] && return 1
+  # The verdict row is the only line in $LOG shaped `<ts>  verdict=`; the janitor's own output and
+  # the ===== headers never are.
+  last_s="$(grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:]{8}  verdict=' "$LOG" 2>/dev/null | tail -n 1 | cut -c1-19)"
+  [ -z "$last_s" ] && return 0
+  [[ "$last_s" < "$cut" ]]
+}
+run_wake() {
+  if [ ! -f "$WAKE_SH" ]; then
+    echo "worktree-gc-infra: wake evaluator missing ($WAKE_SH)" >&2
+    exit 1
+  fi
+  exec bash "$WAKE_SH"
+}
+case "${1:-}" in
+  --wake) run_wake ;;
+  --auto) backstop_due || run_wake ;;
+esac
+
 mkdir -p "$STATE" "$(dirname "$LOG")" "$(dirname "$LOCK")" 2>/dev/null
 ts="$(date '+%Y-%m-%d %H:%M:%S')"
 
@@ -273,7 +338,92 @@ verdict() { # <verdict> <exit-code> [k=v ...]
   if [ "$(wc -l < "$LOG" 2>/dev/null || echo 0)" -gt 2000 ]; then
     tail -n 1000 "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG"
   fi
+  # The pins and the foreign repos run AFTER the home row is written, so nothing they do — a
+  # failure, a timeout, a foreign removal moving `pop` — can reach the home verdict or its exit code.
+  # POST_DUE is set only once the home sweep has actually run (never on a kill-switch, preflight,
+  # lock or no-oracle exit), and cleared on the janitor-disabled path.
+  [ "$POST_DUE" = 1 ] && post_sweep
   exit "$rc"
+}
+
+# ── PINS AND THE FOREIGN BACKSTOP (DESIGN §3.4 "Backstop", WP-15) ────────────────────────────────
+# Every write here goes to $FOREIGN_LOG, never to $LOG or $LAST: the home row is the fleet's
+# staleness sensor and must stay one row per run, byte-for-byte what it was.
+POST_DUE=0
+_bounded() { # <cmd...> — under timeout(1) when present; rc 124 is the bound firing
+  if command -v timeout >/dev/null 2>&1; then timeout "$FOREIGN_BOUND" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then gtimeout "$FOREIGN_BOUND" "$@"
+  else "$@"; fi
+}
+_flog() { printf '%s\n' "$*" >> "$FOREIGN_LOG" 2>/dev/null; }
+_kv() { # <key> <text> → the value of key= on the first line carrying it, or n-a
+  local v
+  v="$(printf '%s\n' "$2" | sed -n "s/.*[[:space:]]$1=\([^[:space:]]*\).*/\1/p" | head -1)"
+  printf '%s' "${v:-n-a}"
+}
+# pin_sync <repo-root> <observe|act> → the library's stderr (would_lock / would_unlock / failures).
+# A subshell under the bound: the tombstone library is sourced into a child, never into this file,
+# so none of its names or seams leak into the home sweep's shell.
+pin_sync() {
+  local obs=""
+  [ "$2" = act ] || obs="--observe"
+  [ -f "$TOMB_LIB" ] || { echo "wt-tombstone: library unavailable ($TOMB_LIB) — no pins synced"; return 0; }
+  # SC2016: the single quotes are the point ($1/$@ are the child's). SC2069: stderr is the payload
+  # and stdout is discarded, so `2>&1 >/dev/null` is the order meant.
+  # shellcheck disable=SC2016,SC2069
+  _bounded env WT_GIT="${WT_GIT:-$GIT_BIN}" bash -c '. "$1" && shift && wt_pin_lock_sync "$@"' _ \
+    "$TOMB_LIB" "$1" ${obs:+"$obs"} 2>&1 >/dev/null
+}
+_pin_rc_note() { [ "$1" = 124 ] && printf ' pins=timeout'; return 0; }
+post_sweep() {
+  local mode pins prc home_mode
+  ts="$(date '+%Y-%m-%d %H:%M:%S')"
+  mkdir -p "$(dirname "$FOREIGN_LOG")" 2>/dev/null
+  # WTGC_OBSERVE=1 is the whole run's dry-run, so it pins every repo to observe whatever the switch.
+  home_mode="$EVENTS_MODE"; [ "$OBSERVE" = 1 ] && home_mode=observe
+  pins="$(pin_sync "$REPO" "$home_mode")"; prc=$?
+  _flog "$ts  repo=$(basename "$REPO") scope=home mode=$home_mode pins would_lock=$(printf '%s\n' "$pins" | grep -c 'would_lock ') would_unlock=$(printf '%s\n' "$pins" | grep -c 'would_unlock ')$(_pin_rc_note "$prc")"
+  [ -n "$pins" ] && printf '%s\n' "$pins" | sed 's/^/    /' >> "$FOREIGN_LOG" 2>/dev/null
+  if [ "$SCOPE_OK" != 1 ]; then
+    _flog "$ts  foreign=skipped reason=scope-library-missing lib=$SCOPE_LIB"
+    return 0
+  fi
+  local g root base scope trunk out rc gc_rc dry counts pf home_c
+  home_c="$(cd -P "$REPO" 2>/dev/null && pwd -P)" || home_c="$REPO"
+  for g in "$DEV_ROOT"/*/.git; do
+    # A .git DIRECTORY is a main checkout; a .git FILE is somebody's linked worktree, which its own
+    # repo's porcelain lists — never glob worktrees (worktree-gc.sh:13-15).
+    [ -d "$g" ] || continue
+    root="${g%/.git}"; base="$(basename "$root")"
+    [ "$(cd -P "$root" 2>/dev/null && pwd -P)" = "$home_c" ] && continue
+    scope="$(wtgc_scope "$root" "$REPO")"
+    if [ "$scope" = excluded ]; then _flog "$ts  repo=$base scope=excluded"; continue; fi
+    if ! trunk="$(wtgc_trunk_of "$root")"; then _flog "$ts  repo=$base scope=no-trunk"; continue; fi
+    mode="$scope"; [ "$OBSERVE" = 1 ] && mode=observe
+    pins="$(pin_sync "$root" "$mode")"; prc=$?
+    # NEVER --prune-branches, NEVER --dispose-landed-dirt, and NO fetch: a foreign trunk that is a
+    # day stale can only turn a remove into a keep (the home fetch block's argument), whereas a
+    # fetch is a network write into a repo this job does not own.
+    dry="--dry-run"; [ "$mode" = act ] && dry=""
+    out="$(_bounded env CC_WTGC_REPO="$root" CC_WTGC_TRUNK="$trunk" CC_WTGC_EXCLUDE="$root" \
+           bash "$GC_SH" --park-first ${dry:+"$dry"} 2>&1)"; gc_rc=$?
+    rc="$gc_rc"; [ "$gc_rc" = 124 ] && rc=timeout
+    counts="$(printf '%s\n' "$out" | grep -m1 '^worktree-gc: counts ')"
+    pf="$(printf '%s\n' "$out" | grep -m1 '^worktree-gc: park-first ')"
+    if [ "$mode" = act ]; then
+      _flog "$ts  repo=$base mode=act trunk=$trunk rc=$rc parked=$(_kv parked "$pf") detached=$(_kv detached "$pf") kept=$(_kv kept "$counts") pin_errors=$(printf '%s\n' "$pins" | grep -c 'failed')$(_pin_rc_note "$prc")"
+    else
+      _flog "$ts  repo=$base mode=observe trunk=$trunk rc=$rc would_park=$(_kv parked "$pf") would_detach=$(_kv detached "$pf") would_keep=$(_kv kept "$counts") would_lock=$(printf '%s\n' "$pins" | grep -c 'would_lock ')$(_pin_rc_note "$prc")"
+    fi
+    # The reasons, indented under their row, so a repo can be reviewed before the operator promotes it.
+    { printf '%s\n' "$out" | grep -E '^(KEEP|would|park|detach|archive|remove) '
+      [ -n "$pins" ] && printf '%s\n' "$pins"
+    } | sed 's/^/    /' >> "$FOREIGN_LOG" 2>/dev/null
+  done
+  if [ "$(wc -l < "$FOREIGN_LOG" 2>/dev/null || echo 0)" -gt 8000 ]; then
+    tail -n 4000 "$FOREIGN_LOG" > "$FOREIGN_LOG.tmp" 2>/dev/null && mv "$FOREIGN_LOG.tmp" "$FOREIGN_LOG"
+  fi
+  return 0
 }
 
 # ── `--assert`: READ THE EFFECT, ON DEMAND, WITHOUT SWEEPING. ────────────────────────────────────
@@ -481,6 +631,19 @@ export CC_WTGC_TRUNK="origin/main"
 #     idle-looking while genuinely in use.
 export CC_WTGC_EXCLUDE="$REPO:$HOME/.claude/autonomy/postland"
 
+# EVENT MODE (DESIGN §3.4 "Wake actuator"; observe unless the operator's activation script wrote
+# `act`). Observe adds NOTHING — the janitor's argv and environment are exactly what they were, so
+# the nightly's verdicts cannot move until the switch is flipped. Act turns on PARK-first, and the
+# disk-pressure ARCHIVE floor only if the operator also wrote a whole number of GB for it: the
+# janitor archives nothing while that env var is unset, and this file never invents a floor.
+GC_PARK_FLAG=""
+if [ "$EVENTS_MODE" = act ]; then
+  GC_PARK_FLAG="--park-first"
+  _floor=""
+  [ -r "$ARCHIVE_FLOOR_FILE" ] && read -r _floor _ < "$ARCHIVE_FLOOR_FILE" 2>/dev/null
+  case "${_floor:-}" in ''|*[!0-9]*) : ;; *) export CC_WTGC_ARCHIVE_FLOOR_GB="$_floor" ;; esac
+fi
+
 # RETRY THE JANITOR LOCK RATHER THAN SURRENDERING FOR A DAY. reso's sweep owns 03:15 and this one
 # owns 04:15; they share worktree-gc.sh's own CC_WTGC_LOCK by design, so an hour of separation is
 # the entire margin. When reso's sweep runs long, this one exits `skipped` and the NEXT chance is
@@ -493,9 +656,9 @@ while : ; do
   # string, which worktree-gc.sh's own flag loop would reject as `unknown flag ''` and turn the
   # whole nightly sweep into an exit-2 no-op.
   if [ "$OBSERVE" = "1" ]; then
-    out="$(bash "$GC_SH" --dry-run --prune-branches ${GC_DIRT_FLAG:+"$GC_DIRT_FLAG"} 2>&1)"; rc=$?
+    out="$(bash "$GC_SH" --dry-run --prune-branches ${GC_DIRT_FLAG:+"$GC_DIRT_FLAG"} ${GC_PARK_FLAG:+"$GC_PARK_FLAG"} 2>&1)"; rc=$?
   else
-    out="$(bash "$GC_SH" --prune-branches ${GC_DIRT_FLAG:+"$GC_DIRT_FLAG"} 2>&1)"; rc=$?
+    out="$(bash "$GC_SH" --prune-branches ${GC_DIRT_FLAG:+"$GC_DIRT_FLAG"} ${GC_PARK_FLAG:+"$GC_PARK_FLAG"} 2>&1)"; rc=$?
   fi
   # Only the contention case is retryable. Every other rc is a real verdict and falls straight
   # through — a retry loop over a genuine error is how a bounded gate becomes a storm.
@@ -506,6 +669,7 @@ while : ; do
   ts="$(date '+%Y-%m-%d %H:%M:%S')"
 done
 [ "$_attempt" -gt 0 ] && PREV_NOTE="${PREV_NOTE:+$PREV_NOTE }lock_attempts=$_attempt"
+POST_DUE=1   # the home sweep ran: pins and foreign repos follow the home row (see verdict())
 
 {
   echo "===== $ts  worktree-gc-infra (observe=$OBSERVE repo=$REPO) ====="
@@ -530,6 +694,7 @@ case "$rc" in
       if printf '%s\n' "$out" | grep -q '^worktree-gc: verdict=disabled'; then
         _jsw="$(printf '%s\n' "$out" \
           | sed -n 's/^worktree-gc: verdict=disabled[[:space:]]*\([^[:space:]]*\).*/\1/p' | head -1)"
+        POST_DUE=0   # a disabled janitor means no pins and no foreign repos either
         verdict disabled 0 "switch=janitor ${_jsw:-unknown}"
       fi
       if printf '%s\n' "$out" | grep -q 'another pass holds'; then

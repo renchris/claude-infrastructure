@@ -20,7 +20,8 @@
 setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-  SUT="$REPO_ROOT/scripts/worktree-gc-infra-run.sh"
+  # WTGC_INFRA_SUT points the suite at another copy (the RED proof runs it against the pre-change file).
+  SUT="${WTGC_INFRA_SUT:-$REPO_ROOT/scripts/worktree-gc-infra-run.sh}"
 
   # A stand-in repo directory — the wrapper only needs it to EXIST (the janitor, which is stubbed,
   # is what would need it to be a git checkout).
@@ -749,4 +750,270 @@ worktree-gc: counts removed=7 disposed=3 landed_dirt=5 kept=11 branches_deleted=
 worktree-gc: counts removed=0 disposed=0 landed_dirt=0 kept=0 branches_deleted=0 refusals=0 dry_run=0'
   run bash "$SUT"
   [ "$(field elapsed)" = "n-a" ]      # unknown must not read as instantaneous
+}
+
+# ── WP-15: --auto / --wake, event mode, pins, and the foreign backstop (DESIGN §3.4) ─────────────
+# The plist runs `--auto` from three triggers (04:15 calendar, WatchPaths on the wake file,
+# StartInterval 600), so "is the backstop due?" is decided from the log. Event mode is observe unless
+# the operator's activation script wrote `act`; in observe the home janitor's argv must be exactly
+# what it was before WP-15. Foreign repos are dry-run until promoted (OP-5), park first, and never
+# get --prune-branches, --dispose-landed-dirt or a fetch. Each case below stubs the janitor, the
+# wake evaluator and the pin library, and builds throwaway foreign repos under $BATS_TEST_TMPDIR.
+
+wp15_setup() {
+  unset WTGC_EVENTS
+  CALLS="$BATS_TEST_TMPDIR/gc.calls"
+  WAKECALLS="$BATS_TEST_TMPDIR/wake.calls"
+  PINCALLS="$BATS_TEST_TMPDIR/pins.calls"
+  FLOG="$HOME/.claude/logs/worktree-gc-foreign.log"
+  export DEV="$BATS_TEST_TMPDIR/dev"; mkdir -p "$DEV" "$HOME/.claude/autonomy"
+  export CC_WTGC_INFRA_DEV_ROOT="$DEV"
+  export CC_WTGC_EVENTS_MODE_FILE="$HOME/.claude/autonomy/worktree-gc-events.mode"
+  export CC_WTGC_PROMOTED_FILE="$HOME/.claude/autonomy/worktree-gc-repos.promoted"
+  export CC_WTGC_ARCHIVE_FLOOR_FILE="$HOME/.claude/autonomy/worktree-gc-archive-floor.gb"
+  REAL_GIT="$(PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin command -v git)"
+
+  export CC_WTGC_WAKE_SH="$BIN/wake-stub.sh"
+  cat > "$CC_WTGC_WAKE_SH" <<EOF
+#!/bin/bash
+echo "wake \$*" >> "$WAKECALLS"
+exit 0
+EOF
+
+  export CC_WTGC_TOMBSTONE_LIB="$BIN/tomb-stub.sh"
+  cat > "$CC_WTGC_TOMBSTONE_LIB" <<EOF
+wt_pin_lock_sync() {
+  printf '%s\n' "\$*" >> "$PINCALLS"
+  [ "\${2:-}" = --observe ] && echo "wt-tombstone: would_lock \$1/wt-pinned crash" >&2
+  return 0
+}
+EOF
+
+  # One record per janitor call: repo|trunk|exclude|archive-floor|argv. GC_FAIL_REPO, GC_SLEEP_REPO
+  # and GC_DISABLED_REPO make one run fail, hang, or report the janitor's own kill switch.
+  cat > "$CC_WTGC_INFRA_GC" <<EOF
+#!/bin/bash
+printf '%s|%s|%s|%s|%s\n' "\$CC_WTGC_REPO" "\$CC_WTGC_TRUNK" "\$CC_WTGC_EXCLUDE" "\${CC_WTGC_ARCHIVE_FLOOR_GB:-}" "\$*" >> "$CALLS"
+printf '%s\n' "\$*" >> "$ARGV"
+if [ "\$CC_WTGC_REPO" = "\${GC_FAIL_REPO:-none}" ]; then echo 'boom'; exit 7; fi
+if [ "\$CC_WTGC_REPO" = "\${GC_SLEEP_REPO:-none}" ]; then sleep 5; fi
+if [ "\$CC_WTGC_REPO" = "\${GC_DISABLED_REPO:-none}" ]; then echo 'worktree-gc: verdict=disabled env=CC_WTGC_DISABLE'; exit 0; fi
+echo 'worktree-gc: removed 3 worktree(s) · disposed 0 abandoned · 5 landed-dirt · kept 7 · deleted 41 branch(es) · 2 refusal(s)'
+echo 'worktree-gc: counts removed=3 disposed=0 landed_dirt=5 kept=7 branches_deleted=41 refusals=2 elapsed=12s lock_staleness_window=3600s dry_run=0'
+case " \$* " in *" --park-first "*)
+  echo 'KEEP    /x/wt1 [b1] — dirty and young'
+  echo 'would park    /x/wt2 [b2] — arm-i (clean, quiet 2d)'
+  echo 'worktree-gc: park-first parked=1 detached=0 archived=0 pop_active=4 pop_parked=1 dry_run=1' ;;
+esac
+exit 0
+EOF
+  chmod +x "$CC_WTGC_WAKE_SH" "$CC_WTGC_INFRA_GC"
+}
+
+# Real git for the foreign repos (the scope table reads origin/HEAD), every call logged, and every
+# fetch a logged no-op success, so "never fetched a foreign repo" is assertable from GITARGV.
+stub_git_real() {
+  cat > "$BIN/git" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$GITARGV"
+case " \$* " in *" fetch "*) exit 0 ;; esac
+exec "$REAL_GIT" "\$@"
+EOF
+  chmod +x "$BIN/git"
+}
+
+mk_repo() { # <name> [--no-trunk] — a throwaway main checkout under $DEV, origin/HEAD → origin/main
+  local r="$DEV/$1"; mkdir -p "$r"
+  "$REAL_GIT" -C "$r" init -q
+  "$REAL_GIT" -C "$r" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+  if [ "${2:-}" != --no-trunk ]; then
+    "$REAL_GIT" -C "$r" update-ref refs/remotes/origin/main HEAD
+    "$REAL_GIT" -C "$r" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+  fi
+}
+
+calls_for() { grep "^$1|" "$CALLS" 2>/dev/null; }   # <repo-root> → that repo's janitor records
+
+epoch_at() { date -j -f '%Y-%m-%d %H:%M:%S' "$1" +%s; }   # <local 'Y-m-d H:M:S'> → epoch (BSD date)
+backstop_row() { mkdir -p "$(dirname "$LOG")"; printf '%s  verdict=ok observe=0 rc=0\n' "$1" >> "$LOG"; }
+
+@test "--auto before 04:15 runs the wake evaluator and sweeps nothing" {
+  wp15_setup
+  backstop_row '2026-10-16 04:15:30'
+  CC_WTGC_INFRA_NOW="$(epoch_at '2026-10-17 03:00:00')" run bash "$SUT" --auto </dev/null
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^wake' "$WAKECALLS")" -eq 1 ]
+  [ ! -f "$ARGV" ]
+  [ ! -f "$GITARGV" ]          # a tick decides from the log alone: no git, no fetch
+}
+
+@test "--auto after 04:15 when today's backstop already ran is a wake tick, not a second sweep" {
+  wp15_setup
+  backstop_row '2026-10-17 04:15:10'
+  CC_WTGC_INFRA_NOW="$(epoch_at '2026-10-17 05:00:00')" run bash "$SUT" --auto </dev/null
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^wake' "$WAKECALLS")" -eq 1 ]
+  [ ! -f "$ARGV" ]
+}
+
+@test "--auto after 04:15 with only yesterday's row runs the backstop (a calendar fire missed in sleep)" {
+  wp15_setup
+  backstop_row '2026-10-16 04:15:30'
+  CC_WTGC_INFRA_NOW="$(epoch_at '2026-10-17 09:40:00')" run bash "$SUT" --auto </dev/null
+  [ "$status" -eq 0 ]
+  [ ! -f "$WAKECALLS" ]
+  [ "$(calls_for "$CC_WTGC_INFRA_REPO" | wc -l | tr -d ' ')" -eq 1 ]
+  [ "$(field verdict)" = "ok" ]
+  [ "$(grep -c '  verdict=' "$LOG")" -eq 2 ]
+}
+
+@test "--auto after 04:15 with no backstop row at all runs the backstop" {
+  wp15_setup
+  CC_WTGC_INFRA_NOW="$(epoch_at '2026-10-17 04:15:00')" run bash "$SUT" --auto </dev/null
+  [ "$status" -eq 0 ]
+  [ ! -f "$WAKECALLS" ]
+  [ -f "$ARGV" ]
+}
+
+@test "--wake runs only the wake evaluator, even when a backstop would be due" {
+  wp15_setup
+  CC_WTGC_INFRA_NOW="$(epoch_at '2026-10-17 05:00:00')" run bash "$SUT" --wake </dev/null
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^wake' "$WAKECALLS")" -eq 1 ]
+  [ ! -f "$ARGV" ]
+  [ ! -f "$LAST" ]
+}
+
+@test "event mode observe: the home janitor's argv and env are exactly today's, no --park-first" {
+  wp15_setup
+  echo 40 > "$CC_WTGC_ARCHIVE_FLOOR_FILE"     # present, but only act may read it
+  run bash "$SUT" </dev/null
+  [ "$status" -eq 0 ]
+  [ "$(calls_for "$CC_WTGC_INFRA_REPO")" = "$CC_WTGC_INFRA_REPO|origin/main|$CC_WTGC_INFRA_REPO:$HOME/.claude/autonomy/postland||--prune-branches --dispose-landed-dirt" ]
+}
+
+@test "event mode act (from the operator's mode file): --park-first and the archive floor reach the home janitor" {
+  wp15_setup
+  echo act > "$CC_WTGC_EVENTS_MODE_FILE"
+  echo 40 > "$CC_WTGC_ARCHIVE_FLOOR_FILE"
+  run bash "$SUT" </dev/null
+  [ "$status" -eq 0 ]
+  [ "$(calls_for "$CC_WTGC_INFRA_REPO")" = "$CC_WTGC_INFRA_REPO|origin/main|$CC_WTGC_INFRA_REPO:$HOME/.claude/autonomy/postland|40|--prune-branches --dispose-landed-dirt --park-first" ]
+}
+
+@test "event mode act with a malformed floor file parks first but exports no floor" {
+  wp15_setup
+  export WTGC_EVENTS=act
+  echo 'forty GB' > "$CC_WTGC_ARCHIVE_FLOOR_FILE"
+  run bash "$SUT" </dev/null
+  calls_for "$CC_WTGC_INFRA_REPO" | grep -q -- '--park-first'
+  [ "$(calls_for "$CC_WTGC_INFRA_REPO" | cut -d'|' -f4)" = "" ]
+}
+
+@test "pins: the home repo is synced --observe in observe mode, for real in act mode" {
+  wp15_setup
+  run bash "$SUT" </dev/null
+  [ "$(cat "$PINCALLS")" = "$CC_WTGC_INFRA_REPO --observe" ]
+  grep -q "repo=repo scope=home mode=observe pins would_lock=1 would_unlock=0" "$FLOG"
+  grep -q "^    wt-tombstone: would_lock $CC_WTGC_INFRA_REPO/wt-pinned crash" "$FLOG"
+
+  : > "$PINCALLS"
+  WTGC_EVENTS=act run bash "$SUT" </dev/null
+  [ "$(cat "$PINCALLS")" = "$CC_WTGC_INFRA_REPO" ]
+}
+
+@test "foreign repo, observe: --park-first --dry-run only — no --prune-branches, no landed-dirt, no fetch" {
+  wp15_setup; stub_git_real
+  mk_repo foo
+  run bash "$SUT" </dev/null
+  [ "$status" -eq 0 ]
+  [ "$(calls_for "$DEV/foo")" = "$DEV/foo|origin/main|$DEV/foo||--park-first --dry-run" ]
+  ! grep -E -- "-C $DEV/foo .*fetch|fetch.*$DEV/foo" "$GITARGV" || false
+  grep -q "$DEV/foo --observe" "$PINCALLS"
+  grep -q "repo=foo mode=observe trunk=origin/main rc=0 would_park=1 would_detach=0 would_keep=7 would_lock=1" "$FLOG"
+  grep -q '^    KEEP    /x/wt1 \[b1\] — dirty and young' "$FLOG"
+  grep -q '^    would park    /x/wt2' "$FLOG"
+}
+
+@test "foreign repo, act but NOT promoted: still a dry run" {
+  wp15_setup; stub_git_real
+  mk_repo foo
+  WTGC_EVENTS=act run bash "$SUT" </dev/null
+  [ "$(calls_for "$DEV/foo" | cut -d'|' -f5)" = "--park-first --dry-run" ]
+  grep -q "$DEV/foo --observe" "$PINCALLS"
+}
+
+@test "foreign repo, promoted AND act: parks first for real, pins for real, still no branch prune" {
+  wp15_setup; stub_git_real
+  mk_repo foo
+  echo "$DEV/foo/.git" > "$CC_WTGC_PROMOTED_FILE"
+  WTGC_EVENTS=act run bash "$SUT" </dev/null
+  [ "$status" -eq 0 ]
+  [ "$(calls_for "$DEV/foo" | cut -d'|' -f5)" = "--park-first" ]
+  grep -qx "$DEV/foo" "$PINCALLS"
+  grep -q "repo=foo mode=act trunk=origin/main rc=0 parked=1 detached=0 kept=7" "$FLOG"
+}
+
+@test "reso-management-app is skipped (its own janitor owns it), logged scope=excluded" {
+  wp15_setup; stub_git_real
+  mk_repo reso-management-app
+  run bash "$SUT" </dev/null
+  [ -z "$(calls_for "$DEV/reso-management-app")" ]
+  ! grep -q "$DEV/reso-management-app" "$PINCALLS" || false
+  grep -q 'repo=reso-management-app scope=excluded' "$FLOG"
+}
+
+@test "a repo with no origin/HEAD is skipped, logged scope=no-trunk; a worktree's .git FILE is never a repo" {
+  wp15_setup; stub_git_real
+  mk_repo bar --no-trunk
+  mkdir -p "$DEV/linked"; echo "gitdir: $DEV/bar/.git/worktrees/linked" > "$DEV/linked/.git"
+  run bash "$SUT" </dev/null
+  [ -z "$(calls_for "$DEV/bar")" ]
+  [ -z "$(calls_for "$DEV/linked")" ]
+  grep -q 'repo=bar scope=no-trunk' "$FLOG"
+  ! grep -q 'repo=linked' "$FLOG" || false
+}
+
+@test "the home repo is never swept a second time as a foreign one" {
+  wp15_setup; stub_git_real
+  mk_repo home
+  export CC_WTGC_INFRA_REPO="$DEV/home"
+  run bash "$SUT" </dev/null
+  [ "$(calls_for "$DEV/home" | wc -l | tr -d ' ')" -eq 1 ]
+  ! grep -q 'repo=home mode=' "$FLOG" || false
+}
+
+@test "a FAILED foreign run leaves the home verdict line and exit code byte-identical" {
+  wp15_setup; stub_git_real
+  run bash "$SUT" </dev/null
+  base_status="$status"; base_line="$(cut -c20- "$LAST")"
+  mk_repo foo
+  GC_FAIL_REPO="$DEV/foo" run bash "$SUT" </dev/null
+  [ "$status" -eq "$base_status" ]
+  [ "$(cut -c20- "$LAST")" = "$base_line" ]
+  grep -q 'repo=foo mode=observe trunk=origin/main rc=7 would_park=n-a' "$FLOG"
+}
+
+@test "a HUNG foreign run is bounded and logged rc=timeout; the home verdict is untouched" {
+  command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1 || skip "no timeout(1)"
+  wp15_setup; stub_git_real
+  mk_repo foo
+  CC_WTGC_FOREIGN_BOUND=1 GC_SLEEP_REPO="$DEV/foo" run bash "$SUT" </dev/null
+  [ "$status" -eq 0 ]
+  [ "$(field verdict)" = "ok" ]
+  grep -q 'repo=foo mode=observe trunk=origin/main rc=timeout' "$FLOG"
+}
+
+@test "the kill switch and the janitor's own switch both skip the pins and the foreign pass" {
+  wp15_setup; stub_git_real
+  mk_repo foo
+  mkdir -p "$(dirname "$DISABLED")"; : > "$DISABLED"
+  run bash "$SUT" </dev/null
+  [ "$(field verdict)" = "disabled" ]
+  [ ! -f "$CALLS" ]; [ ! -f "$PINCALLS" ]; [ ! -f "$FLOG" ]
+
+  rm -f "$DISABLED"
+  GC_DISABLED_REPO="$CC_WTGC_INFRA_REPO" run bash "$SUT" </dev/null
+  [ "$(field verdict)" = "disabled" ]
+  [ -z "$(calls_for "$DEV/foo")" ]; [ ! -f "$PINCALLS" ]; [ ! -f "$FLOG" ]
 }
