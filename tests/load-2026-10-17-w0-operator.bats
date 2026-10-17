@@ -67,10 +67,10 @@ calls() { cat "$STUB/calls" 2>/dev/null; }
   before="$(files)"
   run "$SCRIPT"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"== 1. OP-1 precondition"* ]]
-  [[ "$output" == *"pid 500, footprint 14 MB"* ]]
-  [[ "$output" == *"render\.mjs: 1 node render.mjs"* ]]
-  [[ "$output" == *"kern.maxvnodes now 263168; NOT run here"* ]]
+  [[ "$output" == *"== 1. OP-1 precondition"* ]] || false
+  [[ "$output" == *"pid 500, footprint 14 MB"* ]] || false
+  [[ "$output" == *"render\.mjs: 1 node render.mjs"* ]] || false
+  [[ "$output" == *"kern.maxvnodes now 263168; NOT run here"* ]] || false
   [ "$(files)" = "$before" ]
   [ -z "$(calls)" ]
 }
@@ -80,7 +80,7 @@ calls() { cat "$STUB/calls" 2>/dev/null; }
   [ "$status" -eq 2 ]
   run "$SCRIPT" --confirm wired-capture
   [ "$status" -eq 2 ]
-  [[ "$output" == *"need --window"* ]]
+  [[ "$output" == *"need --window"* ]] || false
   run "$SCRIPT" --confirm xcrun-cache --window noon
   [ "$status" -eq 2 ]
   run "$SCRIPT" --confirm
@@ -93,7 +93,7 @@ calls() { cat "$STUB/calls" 2>/dev/null; }
   echo "$HOME/Development" > "$CC_W0_SPOT_PLIST"
   run "$SCRIPT" --confirm fseventsd-restart
   [ "$status" -eq 1 ]
-  [[ "$output" == *"14 MB is not wedged"* ]]
+  [[ "$output" == *"14 MB is not wedged"* ]] || false
   [ -z "$(calls | grep '^kill')" ]
 }
 
@@ -101,7 +101,7 @@ calls() { cat "$STUB/calls" 2>/dev/null; }
   echo 11G > "$STUB/mem"
   run "$SCRIPT" --confirm fseventsd-restart
   [ "$status" -eq 1 ]
-  [[ "$output" == *"not in Spotlight Exclusions"* ]]
+  [[ "$output" == *"not in Spotlight Exclusions"* ]] || false
   [ -z "$(calls | grep '^kill')" ]
 }
 
@@ -109,7 +109,7 @@ calls() { cat "$STUB/calls" 2>/dev/null; }
   echo 11G > "$STUB/mem"; echo "$HOME/Development" > "$CC_W0_SPOT_PLIST"
   run "$SCRIPT" --confirm fseventsd-restart
   [ "$status" -eq 0 ]
-  [[ "$output" == *"VERIFIED: fseventsd 500 → 501"* ]]
+  [[ "$output" == *"VERIFIED: fseventsd 500 → 501"* ]] || false
   calls | grep -qx 'kill -TERM 500'
   [ -z "$(calls | grep 'kill -KILL')" ]
   calls | grep -q '^sample 500 5 -file '
@@ -127,11 +127,11 @@ calls() { cat "$STUB/calls" 2>/dev/null; }
 @test "spotlight-privacy backs the plist up, adds the entry, reads it back, and is idempotent" {
   run "$SCRIPT" --confirm spotlight-privacy
   [ "$status" -eq 0 ]
-  [[ "$output" == *"VERIFIED: $HOME/Development is in Exclusions"* ]]
+  [[ "$output" == *"VERIFIED: $HOME/Development is in Exclusions"* ]] || false
   compgen -G "$OUT/*-VolumeConfiguration.plist.bak" >/dev/null
   run "$SCRIPT" --confirm spotlight-privacy
   [ "$status" -eq 0 ]
-  [[ "$output" == *"already excluded"* ]]
+  [[ "$output" == *"already excluded"* ]] || false
   [ "$(grep -c . "$CC_W0_SPOT_PLIST")" -eq 1 ]
 }
 
@@ -151,7 +151,7 @@ calls() { cat "$STUB/calls" 2>/dev/null; }
   echo db > "$STUB/T/xcrun_db"; touch "$STUB/db-returns"
   run "$SCRIPT" --confirm xcrun-cache
   [ "$status" -eq 1 ]
-  [[ "$output" == *"xcrun_db is back"* ]]
+  [[ "$output" == *"xcrun_db is back"* ]] || false
   [ ! -f "$OUT/xcrun-cache.cleaned" ]
 }
 
@@ -159,7 +159,7 @@ calls() { cat "$STUB/calls" 2>/dev/null; }
   echo "11 pytest -n 4" > "$STUB/gates"
   run "$SCRIPT" --confirm wired-capture --window peak
   [ "$status" -eq 1 ]
-  [[ "$output" == *"needs >= 2 gates running (have 1)"* ]]
+  [[ "$output" == *"needs >= 2 gates running (have 1)"* ]] || false
   run "$SCRIPT" --confirm fsusage-capture --window idle
   [ "$status" -eq 1 ]
   : > "$STUB/gates"
