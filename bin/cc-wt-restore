@@ -1,0 +1,194 @@
+#!/bin/bash
+# cc-wt-restore — bring a REMOVED (DETACHED) worktree back from its tombstone, so a resumed session gets
+# its working tree and not an empty directory (DESIGN load-root-cause-2026-10-17 §3.5, the DETACHED
+# row's Reversal; WP-13a).
+#
+# THE DEFECT THIS CLOSES. When a worktree is removed, `claude --resume` still finds the transcript, but
+# the launcher (lib/cc-resume-shell.sh) could only `mkdir -p` the path: the conversation came back and
+# the tree did not, even though wt_tombstone had recorded everything a restore needs — the head (kept
+# alive by refs/wt-tombstone/<id>/head when trunk holds it only by patch-id), the ignored residue
+# (.env*, out/, …) moved into the tombstone dir, and a copy of the tree's reflog. This puts all three
+# back.
+#
+# WHAT IT NEVER DOES. It never re-creates a branch (`worktree add --detach`, never `-b`): a pruned
+# branch was pruned because it landed, and silently reviving it would resurrect landed work under its
+# old name. It never deletes anything at the path: an occupied path is refused (rc 2), except a NOGIT
+# husk (only `.claude-*` / `.next` entries), which is moved aside to `<path>.husk-<epoch>`.
+#
+# LEGACY ROWS (no `repo`, written before the W2 schema): the repo is inferred by
+# `git cat-file -e <head>^{commit}` over ~/Development/*/ and must match exactly one repository. Only the
+# tracked tree comes back; such rows recorded no residue, and this says so rather than implying it.
+#
+# Usage:
+#   cc-wt-restore <path> [--sid S] [--branch B] [--id ID] [--yes]
+#       Finds the newest removal row for <path> (sid OR branch match when given; --id picks one row),
+#       restores it and prints the restored path. Without --yes, asks once when stdin is a terminal.
+#   cc-wt-restore --log-reaped <launcher> <cwd> <sid> <outcome>
+#       One row in resume-reaped.jsonl (X7 phase 1) for a launcher that cannot source the bash library
+#       (lib/cc-resume-shell.sh runs inside the operator's zsh). Always rc 0.
+#   cc-wt-restore -h
+#
+# Exit codes: 0 restored · 1 no matching tombstone · 2 refused or failed (nothing at the path removed).
+# Env: the library's WT_* overrides; CC_WT_RESTORE_REPOS_GLOB (default "$HOME/Development/*/") is the
+# legacy-row repo search.
+
+set -u
+_self="$0"
+while [ -L "$_self" ]; do
+  _l="$(readlink "$_self")"
+  case "$_l" in /*) _self="$_l" ;; *) _self="$(dirname "$_self")/$_l" ;; esac
+done
+_lib="$(cd "$(dirname "$_self")/.." 2>/dev/null && pwd)/scripts/lib/wt-tombstone.sh"
+[ -f "$_lib" ] || _lib="$HOME/.claude/scripts/lib/wt-tombstone.sh"
+# shellcheck source=../scripts/lib/wt-tombstone.sh disable=SC1091
+. "$_lib" || { echo "cc-wt-restore: cannot load $_lib" >&2; exit 2; }
+
+say() { printf 'cc-wt-restore: %s\n' "$*" >&2; }
+# non_husk_entries <dir> → every entry that is not `.claude-*` or `.next`. A function, not inline in `$( )`:
+# /bin/bash 3.2 cannot parse a `case` arm's `)` inside a command substitution.
+non_husk_entries() {
+  local e
+  for e in "$1"/.* "$1"/*; do
+    case "${e##*/}" in .|..|.claude-*|.next) continue ;; esac
+    if [ -e "$e" ] || [ -L "$e" ]; then printf '%s\n' "${e##*/}"; fi
+  done
+}
+usage() { sed -n '/^# Usage:/,/^#   cc-wt-restore -h/p' "$_self" | sed 's/^# \{0,1\}//'; }
+
+if [ "${1:-}" = --log-reaped ]; then
+  shift
+  wt_resume_reaped "${1:-}" "${2:-}" "${3:-}" "${4:-}"
+  exit 0
+fi
+
+path="" sid="" br="" id="" yes=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --sid|--branch|--id) [ $# -ge 2 ] || { say "$1 needs a value"; exit 2; } ;;
+  esac
+  case "$1" in
+    --sid) sid="$2"; shift ;;
+    --branch) br="$2"; shift ;;
+    --id) id="$2"; shift ;;
+    --yes|-y) yes=1 ;;
+    -h|--help) usage; exit 0 ;;
+    -*) say "unknown option '$1'"; usage >&2; exit 2 ;;
+    *) [ -z "$path" ] || { say "one path at a time"; exit 2; }; path="${1%/}" ;;
+  esac
+  shift
+done
+[ -n "$path" ] || { usage >&2; exit 2; }
+case "$path" in /*) ;; *) say "path must be absolute: $path"; exit 2 ;; esac
+
+# The ledger records the PHYSICAL path (wt__canon). The tree is gone, so canonicalise its parent.
+canon_path="$path"
+_parent="$(cd -P -- "$(dirname "$path")" 2>/dev/null && pwd -P)" && canon_path="$_parent/$(basename "$path")"
+
+# ── the row ──────────────────────────────────────────────────────────────────────────────────
+row=""
+if [ -n "$id" ]; then
+  [ -f "$WT_LEDGER" ] && row="$(jq -cR --arg i "$id" '
+    fromjson? | select(.id == $i and ((.event // "") | IN("worktree-disposed","guard-snapshot","admin-pruned")))
+  ' "$WT_LEDGER" 2>/dev/null | tail -1)"
+else
+  set --
+  [ -n "$sid" ] && set -- "$@" --sid "$sid"
+  [ -n "$br" ] && set -- "$@" --branch "$br"
+  row="$(wt_tomb_find "$canon_path" "$@")"
+  if [ -z "$row" ] && [ "$canon_path" != "$path" ]; then row="$(wt_tomb_find "$path" "$@")"; fi
+fi
+[ -n "$row" ] || { say "no tombstone for $path${id:+ (id $id)}${sid:+ (sid $sid)}${br:+ (branch $br)}"; exit 1; }
+
+field() { printf '%s' "$row" | jq -r --arg k "$1" '.[$k] // empty | if type == "array" then .[] else . end' 2>/dev/null; }
+t_id="$(field id)"; repo="$(field repo)"; head="$(field head)"; branch="$(field branch)"
+tomb_ref="$(field tomb_ref)"; preserved="$(field preserved)"; logs_head="$(field logs_head)"
+[ -n "$head" ] || { say "tombstone ${t_id:-?} records no head — nothing to restore"; exit 2; }
+
+# ── the repo (legacy rows carry none) ───────────────────────────────────────────────────────────
+legacy=0
+if [ -z "$repo" ]; then
+  legacy=1
+  hits="" seen=""
+  for d in ${CC_WT_RESTORE_REPOS_GLOB:-$HOME/Development/*/}; do
+    [ -d "$d" ] || continue
+    cd_abs="$("$WT_GIT" -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || continue
+    case " $seen " in *" $cd_abs "*) continue ;; esac   # two worktrees of one repo are one repo
+    seen="$seen $cd_abs"
+    "$WT_GIT" -C "$d" cat-file -e "$head^{commit}" 2>/dev/null || continue
+    hits="$hits${hits:+
+}${d%/}"
+  done
+  n="$(printf '%s' "$hits" | grep -c .)"
+  [ "$n" = 1 ] || { say "legacy tombstone ${t_id:-?}: head ${head:0:7} is in $n repositories, need exactly 1 — not restoring"; exit 2; }
+  repo="$hits"
+fi
+"$WT_GIT" -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || { say "repository $repo is gone — not restoring"; exit 2; }
+
+commit=""
+if [ -n "$tomb_ref" ] && "$WT_GIT" -C "$repo" rev-parse -q --verify "$tomb_ref^{commit}" >/dev/null 2>&1; then
+  commit="$("$WT_GIT" -C "$repo" rev-parse -q --verify "$tomb_ref^{commit}")"
+elif "$WT_GIT" -C "$repo" rev-parse -q --verify "$head^{commit}" >/dev/null 2>&1; then
+  commit="$head"
+else
+  say "head ${head:0:7} is no longer in $repo (and no live tombstone ref) — not restoring"; exit 2
+fi
+
+# ── the path: empty or absent, or a husk moved aside; anything else is refused ──────────────────
+if [ -e "$path" ] || [ -L "$path" ]; then
+  if [ -L "$path" ] || [ ! -d "$path" ]; then say "$path exists and is not a directory — not restoring"; exit 2; fi
+  other="$(non_husk_entries "$path")"
+  [ -z "$other" ] || { say "$path is occupied ($(printf '%s' "$other" | head -3 | paste -sd, -)…) — not restoring"; exit 2; }
+  if [ -n "$(ls -A "$path" 2>/dev/null)" ]; then
+    husk="$path.husk-$(date +%s)"
+    mv "$path" "$husk" || { say "could not move the husk at $path aside"; exit 2; }
+    say "moved the husk at $path to $husk"
+  fi
+fi
+
+if [ "$yes" != 1 ] && [ -t 0 ]; then
+  printf 'restore %s@%s into %s? [Y/n] ' "${branch:-(detached)}" "${commit:0:7}" "$path" >&2
+  read -r ans || ans=n
+  case "$ans" in n|N|no|NO) say "not restored"; exit 2 ;; esac
+fi
+
+# ── the tracked tree ──────────────────────────────────────────────────────────────────────────
+mkdir -p "$(dirname "$path")" || { say "cannot create $(dirname "$path")"; exit 2; }
+"$WT_GIT" -C "$repo" worktree add -q --detach "$path" "$commit" >&2 || { say "git worktree add failed for $path"; exit 2; }
+
+# ── the residue ───────────────────────────────────────────────────────────────────────────────
+put_back=""
+if [ "$legacy" = 1 ]; then
+  say "legacy tombstone: restored the tracked tree only — its ignored files (residue) were never recorded and do not come back"
+elif [ -n "$t_id" ] && [ -n "$preserved" ]; then
+  tdir="$WT_TOMB_DIR/$t_id"
+  case "$preserved" in
+    */residue.tar)
+      if (cd "$path" && tar -xpf "$tdir/residue.tar") 2>/dev/null; then put_back="$(cat "$tdir/residue.list" 2>/dev/null)"
+      else say "residue.tar of $t_id did not extract — the tree is back, its residue is still in $tdir"; fi ;;
+    *)
+      if wt_residue_restore "$t_id" "$path"; then put_back="$(cat "$tdir/residue.list" 2>/dev/null)"
+      else say "some residue of $t_id did not move back — what is left is in $tdir/residue"; fi ;;
+  esac
+fi
+
+# ── the reflog: the old entries first, then the add's own ───────────────────────────────────────
+if [ -n "$logs_head" ] && [ -f "$WT_TOMB_DIR/$logs_head" ]; then
+  gd="$("$WT_GIT" -C "$path" rev-parse --absolute-git-dir 2>/dev/null)"
+  if [ -n "$gd" ] && mkdir -p "$gd/logs"; then
+    { cat "$WT_TOMB_DIR/$logs_head"; cat "$gd/logs/HEAD" 2>/dev/null; } > "$gd/logs/HEAD.restore" \
+      && mv "$gd/logs/HEAD.restore" "$gd/logs/HEAD" || say "could not reinstate the reflog from $logs_head"
+  fi
+fi
+
+# The row restarts the tree's grace clock and tells wt_ref_expire this tombstone was used.
+wt__row_reset
+# shellcheck disable=SC2034  # WT_R_* row fields are read by wt__row_emit through eval
+{
+  WT_R_event=restored; WT_R_id="$t_id"; WT_R_actor=cc-wt-restore; WT_R_reason="${sid:+resume $sid}"
+  WT_R_repo="$repo"; WT_R_path="$(wt__canon "$path")"; WT_R_branch="$branch"; WT_R_head="$commit"; WT_R_mode=none
+  WT_R_tomb_ref="$tomb_ref"; WT_R_preserved_list="$put_back"; WT_R_sids="$sid"
+}
+wt__row_emit || say "restored, but the restored row was not written ($WT_LEDGER)"
+
+printf '%s\n' "$path"
+exit 0
