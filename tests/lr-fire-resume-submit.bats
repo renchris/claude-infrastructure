@@ -1216,14 +1216,17 @@ arm_over() { # $1 = launcher path — runs the REAL arming block and prints what
   local -a argv; mapfile -t argv < <(watcher_argv "$TOK")
   # RCY_ENGAGE_INTERVAL is UNSET here, deliberately — that is the whole subject of the case.
   run env -u RCY_ENGAGE_INTERVAL HOME="$HOME" PATH="$SHIM:$PATH" IT2_BIN="$HOME/.claude/bin/it2" \
-      PS_DEAD_CALLS=2 RCY_ENGAGE_TIMEOUT=4 \
+      PS_DEAD_CALLS=2 RCY_ENGAGE_TIMEOUT=10 \
       RCY_BOOT_PANE_EVERY=1 RCY_BOOT_IVL_S=0.2 RCY_BOOT_WAIT_S=20 \
       bash "$HFLINK/handoff-fire.sh" "${argv[@]}"
   [ "$status" -eq 1 ] || { echo "$output"; false; }   # never engaged — the dead path, as intended
   [ -s "$POLLS" ] || { echo "the probe was never resolved through the symlinked \$0 — the seam is stale"; false; }
   local n; n="$(wc -l < "$POLLS" | tr -d ' ')"
-  # 4 s of window at one poll a second = 4 polls; at five seconds a poll it is exactly 1.
-  [ "$n" -ge 4 ] || { echo "the 4s engagement window was polled $n time(s) — the default interval is coarser than 1s"; false; }
+  # The loop is bounded by WALL time (rcy_t), so each poll costs its interval PLUS its own scan:
+  # measured 2026-10-17, a 4 s window gave 3 polls even at 1.7 load/core, so `>= 4` in 4 s was red
+  # on trunk at any load. A 10 s window separates the two defaults with room for that scan cost:
+  # at five seconds a poll it is at most 3 (t=0, 5, 10); at one a second it is 4 or more.
+  [ "$n" -ge 4 ] || { echo "the 10s engagement window was polled $n time(s) — the default interval is coarser than 1s"; false; }
 }
 
 # ── deviation 3, executed: the re-Enter is gated on OUR draft, never on "a draft" ─────────────────
