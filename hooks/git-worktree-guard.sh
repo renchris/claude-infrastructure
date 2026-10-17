@@ -130,9 +130,15 @@ fi
 # (2) worktree remove guard — refuse if a live claude is cwd'd in the path (or it's open).
 # DRAINED, never `grep -q`: this guard's inversion PERMITS the worktree removal it exists to refuse.
 if printf '%s' "$ncmd" | grep -E 'git worktree remove([[:space:]]|$)' >/dev/null; then
-  wt="$(printf '%s' "$ncmd" | sed -E 's/.*git worktree remove//' | tr ' ' '\n' | grep -vE '^-' | tail -1)"
+  # The path is the first non-flag token of the `remove` SEGMENT, resolved against -C — the same
+  # reading as arm (2b) below. It used to be the LAST non-flag token of the whole rest of the line,
+  # so `remove X && git branch -D y` checked the liveness of "y", not X: fail-OPEN on a compound
+  # command, and a relative X was resolved against the hook's cwd instead of the -C directory.
+  wt=""
+  while IFS= read -r t; do case "$t" in -*) ;; *) [ -n "$wt" ] || wt="$t" ;; esac; done < <(wtg_seg_tokens remove)
   [ -n "${wt:-}" ] || exit 0
-  wtabs="$(cd "$wt" 2>/dev/null && pwd -P || echo "$wt")"
+  case "$wt" in /*) wtres="$wt" ;; *) wtres="${crepo:+$crepo/}$wt" ;; esac
+  wtabs="$(cd "$wtres" 2>/dev/null && pwd -P || echo "$wtres")"
   live=0
   # ONE lsof over the whole candidate set — never one per pid. `pgrep -f claude` matches the FULL
   # argv, so it returns every process whose command line merely CONTAINS the string: measured 73-78

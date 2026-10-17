@@ -94,6 +94,23 @@ run_guard() {  # $1 = the bash command string
   [ "$status" -eq 2 ]
 }
 
+@test "A2: a LIVE worktree is still BLOCKED when the remove is followed by another command" {
+  # The live check read the LAST non-flag token of the whole line, so `remove X && git branch -D y`
+  # checked "y" and let X go (fail-open). It now reads the remove segment only.
+  cd "$REPO"
+  spawn_live_probe "$TDIR/wt-held"
+  run run_guard "git worktree remove $TDIR/wt-held && git branch -d some-other-branch"
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q 'live process'
+}
+
+@test "A3: a relative LIVE path under git -C is resolved against the -C directory and BLOCKED" {
+  cd "$BATS_TEST_TMPDIR"
+  spawn_live_probe "$TDIR/wt-held"
+  run run_guard "git -C $TDIR worktree remove wt-held"
+  [ "$status" -eq 2 ]
+}
+
 @test "B: worktree remove of a real IDLE worktree passes despite claude processes elsewhere" {
   cd "$REPO"
   git -C "$REPO" worktree add -q "$TDIR/wt-idle" -b idle-branch
@@ -355,7 +372,10 @@ dfree_kb() { df -k "$BATS_TEST_TMPDIR" | awk 'NR==2{print $4}'; }
   [ "$(lastrow | jq -c .preserved_list)" = '["asset-workspace"]' ]
   cmp "$w2/asset-workspace/big.bin" "$WT_TOMB_DIR/$(lastrow | jq -r .id)/residue/asset-workspace/big.bin"
   d=$(( f0 - f1 )); [ "$d" -lt 0 ] && d=$(( -d ))
-  [ "$d" -le 10240 ] || { echo "free space moved ${d} KB across the clones (cap 10240)"; false; }
+  # The volume is shared with every other process on the box, so free space moves on its own (33 MB
+  # measured during one run). A data copy of the 120 MB file would move ~120 MB; a clone moves ~0.
+  # Half the file size separates the two with room for that background churn.
+  [ "$d" -le 61440 ] || { echo "free space moved ${d} KB across the clones (cap 61440 = half a real copy)"; false; }
 }
 
 @test "FAIL-CLOSED: missing library, failed tombstone and an overrun bound each exit 2 naming the step, tree untouched" {
