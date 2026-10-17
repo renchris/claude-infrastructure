@@ -35,7 +35,7 @@ fixes X1-X27, §3 worktree lifecycle, §4 instrument, §5 WP table with file own
 | Wave | Repo | WPs (DESIGN §5) | Fixes | Status |
 |---|---|---|---|---|
 | W0 | — | OP-1, OP-2, OP-2b, OP-2c | X1 fseventsd restart, X24 cleanups, wired + fs_usage capture | X1 **done by another actor** (fseventsd pid 96656, 14 MB at 2026-10-17 ~10:00Z; was 12-13 GB). Spotlight Privacy entry, OP-2* pending → operator script |
-| W1-CI | claude-infrastructure | WP-1, WP-5, WP-6, WP-7, WP-8 | X2, X3 (bats), X8, X5, X4 | pending |
+| W1-CI | claude-infrastructure | WP-1, WP-5, WP-6, WP-7, WP-8 | X2, X3 (bats), X8, X5, X4 | **landed 2026-10-17**: WP-6 adfb09b6c · WP-5 542d44d8b, 8bb8430fd · WP-1 250ff0a72 · WP-7 9d6cbcc5c, b9bc84e1a · WP-8 (ms365, staged) in the land after these. Operator: 0057 root re-install (backlog f433e92713c8), 0066 ms365 cutover (f7483bbc2acb) |
 | W1-ACS | agent-context-sync | WP-2, WP-3, WP-4, WP-22, WP-30 | X3, X11, X20, X10, X26 | pending |
 | W2 | claude-infrastructure | WP-9, WP-10, WP-11, WP-12, WP-13, WP-14 | X6, X7, PARK tier, §4.2 detectors | **landed** — 55d01fcd4, bfab48403, 47970f271 + the WP-10 phase B land (PARK tiers, `--path`, late DETACH, ARCHIVE, all behind `--park-first`; AC-6 always on), content-verified; contract `docs/research/load-root-cause-2026-10-17/W2-CONTRACT.md`. Activation (`--park-first` in the nightly / wake run) is W3 |
 | W3 | claude-infrastructure | WP-15, WP-16, WP-17 | X9 event queue, activation (staged), X17 | blocked on W1-CI + W2 |
@@ -68,3 +68,11 @@ fixes X1-X27, §3 worktree lifecycle, §4 instrument, §5 WP table with file own
   origin wt-cc-233108-87354-242 with DONE, self-close. Operator step filed: 678ee1ea5f12 (3 orphaned
   teammate pids).
 - W4 (2026-10-17): every trim was proven byte-identical by replaying the W4 base hook from git (`tests/*-forks.bats`). Exec cuts: qos-rewrite 17→6, sentinel tick 23→6, statusline 9→5, cc-await-ping idle poll 8→2 plus a kqueue wait (mail wakes in ~0.1 s, steady state 16→3 per 30 s). Two traps cost an hour each: a named teammate's chat text never reaches the lead (checkpoints must go via SendMessage), and teammates stall on unanswerable prompts (`sed -i`, `rm -rf`, a hung bats reading stdin). Auto mode refuses an agent-run headless claude with scratch settings, so the `if` probe moved into the operator's apply. A test that replays a slow old arm must time the parity run, not repeat it (log-bash's 240 KB case cost ~70 s of CPU per gate).
+- W1-CI: the fork-rate ceiling was 1,567/s in DESIGN X5 but the new 5 s sampler measured 2,000-3,400/s
+  sustained (0.6% from a pid-delta probe), so `MAX_FORKS_S` is 3,400 and a window over ~29 s reads
+  aliased. The design's negative-delta wrap rule never passes on a 5 s tick; a fall-back of more than
+  half the pid space now counts as a wrap. `footprint -p` falls back to a NAME match for a pid it cannot
+  read, so the watchdog uses `--pid` and requires the header to name that pid. The ms365 tools/list gate
+  passed live (188 tools, direct == proxy); `parse-teams-url` is the one Graph-free tool with no
+  `account` and is exempted by name. mcp-proxy 6.7.20 has no Host check: the 127.0.0.1 bind plus the key
+  is the DNS-rebinding guard.
