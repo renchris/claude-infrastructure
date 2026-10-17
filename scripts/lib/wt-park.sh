@@ -268,10 +268,16 @@ EOF
   return 1
 }
 
-wt_pinned() { # <path> → rc 0 + "<kind> sid=<sid|-> until=<epoch>[ …]" for the first pin; rc 1 = no pin
+wt_pinned() { # <path> [--self-owned] → rc 0 + "<kind> sid=<sid|-> until=<epoch>[ …]" for the first pin; rc 1 = no pin
   # Every pin is DERIVED from its source store and expires (crash 7 d, others by cleanupPeriodDays), so a
   # pin can never outlive its reason or freeze collection (§3.2 Pins). Bounded reads only.
-  local path sids ttl d gd m
+  # --self-owned: the caller IS the tree's owner tearing down its own tree (teammate-auto-shutdown for
+  # its member, handoff-fire for the worktree its failed fire minted). The `owner` pin exists so a
+  # JANITOR cannot reap a tree some other session holds (a-cwd-census-cannot-see-a-worktrees-owner);
+  # read by the owner itself it would pin every fresh tree, since `worktree add` and every commit write
+  # logs/HEAD. Every other pin kind still applies.
+  local path sids ttl d gd m self=0
+  [ "${2:-}" = --self-owned ] && self=1
   path="$(wt__park_path "$1")"
   sids="$(wt__sids_of "$path")" || :
   ttl=$(( $(wt_cleanup_period_days) * 86400 ))
@@ -283,7 +289,7 @@ wt_pinned() { # <path> → rc 0 + "<kind> sid=<sid|-> until=<epoch>[ …]" for t
   if d="$(wt__pin_backlog "$path" "$ttl")"; then printf 'backlog %s\n' "$d"; return 0; fi
   gd="$("$WT_GIT" -C "$path" rev-parse --absolute-git-dir 2>/dev/null)" || gd=""
   m="$(wt__mtime "$gd/logs/HEAD")" || m=""
-  if [ -n "$gd" ] && [ -n "$m" ] && [ $(( $(wt__now) - m )) -lt 3600 ]; then
+  if [ "$self" = 0 ] && [ -n "$gd" ] && [ -n "$m" ] && [ $(( $(wt__now) - m )) -lt 3600 ]; then
     printf 'owner sid=- until=%s\n' $((m + 3600)); return 0
   fi
   return 1

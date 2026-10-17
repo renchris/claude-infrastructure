@@ -237,6 +237,17 @@ iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ; }
   run wt_pinned "$W"; [ "$status" -eq 0 ]; [[ "$output" == "owner sid=- until="* ]]
 }
 
+@test "--self-owned: the owner pin does not bind the tree's own owner; every other pin still does" {
+  mkwt a feat; W="$T/wt/a"
+  touch "$(git -C "$W" rev-parse --absolute-git-dir)/logs/HEAD"
+  run wt_pinned "$W" --self-owned; [ "$status" -eq 1 ]
+  sid=self-owned-sid; slug="$(printf '%s' "$(cd "$W" && pwd -P)" | sed 's#[/.]#-#g')"
+  mkdir -p "$T/cfg1/projects/$slug"; echo "{}" > "$T/cfg1/projects/$slug/$sid.jsonl"
+  touch -t 202001010000 "$T/cfg1/projects/$slug/$sid.jsonl"
+  printf '{"ts":"%s","sid":"%s","class":"CRASH"}\n' "$(date -u -r "$(wt__now)" +%Y-%m-%dT%H:%M:%SZ)" "$sid" >> "$WT_CRASH_LOG"
+  run wt_pinned "$W" --self-owned; [ "$status" -eq 0 ]; [[ "$output" == "crash sid=$sid "* ]]
+}
+
 # ---- activity legs ------------------------------------------------------------------------------
 
 @test "newest transcript mtime: none is rc 1 and empty; subagent transcripts and a fifth config root count" {

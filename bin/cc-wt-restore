@@ -88,7 +88,7 @@ _parent="$(cd -P -- "$(dirname "$path")" 2>/dev/null && pwd -P)" && canon_path="
 row=""
 if [ -n "$id" ]; then
   [ -f "$WT_LEDGER" ] && row="$(jq -cR --arg i "$id" '
-    fromjson? | select(.id == $i and ((.event // "") | IN("worktree-disposed","guard-snapshot","admin-pruned")))
+    fromjson? | select(.id == $i and ((.event // "") | IN("worktree-disposed","worktree-tombstoned","guard-snapshot","admin-pruned")))
   ' "$WT_LEDGER" 2>/dev/null | tail -1)"
 else
   set --
