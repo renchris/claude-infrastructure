@@ -22,6 +22,23 @@
   RunAtLoad false: unlike deploy-live, a stale sweep costs nothing and a login is a moment when
   worktrees are MOST likely to be in use. There is no urgency that justifies reaping at boot.
 
+  THREE TRIGGERS SINCE 2026-10-17 (DESIGN docs/research/load-root-cause-2026-10-17 §3.4 "Wake actuator",
+  WP-16), and the script is invoked with `auto` (its double-hyphen flag; see ProgramArguments) on all of them:
+    04:15 calendar   the backstop sweep, unchanged.
+    WatchPaths       ~/.claude/state/worktree-gc.wake, touched by cc-reaper and branch-prune-landed when they
+                     ENQUEUE a tree instead of removing it, and by SessionEnd (hooks/live-session-registry.sh,
+                     through wt_emit_event) when a session leaves its worktree. The run takes the queued entries only, O(1) in the
+                     population, so the reaper's removals stop being a second janitor racing this one.
+    StartInterval    600 s: fires entries whose wake was debounced, and is the fallback if WatchPaths stops
+                     delivering during an fseventsd fault. With nothing due it exits in O(1).
+  `auto` picks between them: the full backstop when it is due, else the wake run.
+  WHY THIS IS SAFE TO GO LIVE ON DEPLOY: this label is `run`, so install.sh reloads the changed plist on the
+  next converge with no operator step. What keeps that harmless is in code, not here: the event mode
+  defaults to observe (scripts/lib/wtgc-scope.sh), which evaluates and logs would_park / would_detach /
+  would_keep with reasons and touches nothing, until the operator's
+  docs/activation/pending-activation/52-load-2026-10-17-activate.sh writes `act` to
+  ~/.claude/autonomy/worktree-gc-events.mode.
+
   C10: the OPERATOR loads this, via docs/activation/pending-activation/27-worktree-gc-infra-activate.sh.
   Kill switch (no unload needed): touch ~/.claude/autonomy/worktree-gc-infra.disabled
   Full stop:                      launchctl bootout gui/$(id -u)/com.claude.worktree-gc-infra
@@ -35,8 +52,16 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>if [ -x /usr/sbin/taskpolicy ]; then exec /usr/sbin/taskpolicy -c utility "$HOME/.claude/scripts/worktree-gc-infra-run.sh"; fi; exec "$HOME/.claude/scripts/worktree-gc-infra-run.sh"</string>
+        <string>if [ -x /usr/sbin/taskpolicy ]; then exec /usr/sbin/taskpolicy -c utility "$HOME/.claude/scripts/worktree-gc-infra-run.sh" --auto; fi; exec "$HOME/.claude/scripts/worktree-gc-infra-run.sh" --auto</string>
     </array>
+
+    <key>WatchPaths</key>
+    <array>
+        <string>/Users/chrisren/.claude/state/worktree-gc.wake</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>600</integer>
 
     <key>StartCalendarInterval</key>
     <dict>

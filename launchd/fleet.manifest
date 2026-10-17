@@ -207,6 +207,18 @@ com.claude.nightly-regression     | staged | 0    | auto | 1  | 18-fleet-activat
 # vm_stat unreadable) is deliberately NOT ok — "cannot measure capacity" must row, exactly as
 # com.claude.relogin's exit 3 (DETECTION-UNAVAILABLE) does.
 com.claude.capacity-alarm         | run    | 600  | ~/.claude/logs/capacity-alarm.jsonl | 13 | 19-capacity-alarm-activate.sh | 0,1,2
+# ── com.claude.capacity-attrib (2026-10-17, load-root-cause DESIGN §4.1, X5 / WP-16) ─────────────────
+# The 5 s attribution sampler capacity-alarm above consumes. KeepAlive internal-loop daemon, like the
+# sentinel below: no StartInterval, so interval_s is its INTERNAL tick (`--interval 5`).
+# EVIDENCE IS attrib-latest.json, AN EXPLICIT PATH: the daemon rewrites it atomically on EVERY tick
+# (heartbeat, pid, start), and stdout is not a per-tick product, so `auto` would read a file that never
+# ages. The bound this yields, 5 x CC_FLEET_STALE_FACTOR(3) = 15 s, is deliberately the same 15 s past
+# which capacity-alarm stops trusting the file and falls back to its one-shot path, so S5 STALLED here
+# means exactly "the consumer has already stopped reading it", never a stricter or looser line.
+# `staged` until the operator runs 52-load-2026-10-17-activate.sh with its capacity-attrib confirm; the
+# plist lives in launchd/staged/ (RunAtLoad + KeepAlive in launchd/ would start at the next login with
+# no decision, the chime-player reason). Flip to `run` once that script's read-back has passed.
+com.claude.capacity-attrib        | staged | 5    | ~/.claude/logs/attrib-latest.json | 13 | 52-load-2026-10-17-activate.sh
 # ── com.claude.compressor-sentinel (2026-08-05, panic-compressor-2026-08-05.md §7.1) ───────────────
 # The un-starvable guard for the axis that panicked the box 3x in 6 days. KeepAlive internal-loop
 # daemon (no StartInterval — interval_s below is its INTERNAL tick), evidence = its own JSONL, which

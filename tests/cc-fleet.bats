@@ -706,8 +706,11 @@ STUB
   # 54 since 2026-10-17: com.claude.mcp-ms365 (load-root-cause DESIGN row X4, the one shared ms365
   # server), `staged` in launchd/staged/ until the operator runs migrations/0066; row, plist and count
   # in one land.
-  if [ "$n" != 54 ]; then
-    echo "manifest declares $n labels, expected 54 — if a plist was legitimately added or retired,"
+  # 55 since 2026-10-17: com.claude.capacity-attrib (load-root-cause DESIGN §4.1, the 5 s sampler),
+  # `staged` in launchd/staged/ until the operator runs 52-load-2026-10-17-activate.sh; row, plist
+  # and count in one land.
+  if [ "$n" != 55 ]; then
+    echo "manifest declares $n labels, expected 55 — if a plist was legitimately added or retired,"
     echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
     grep -vE '^[[:space:]]*(#|$)' "$M" | cut -d'|' -f1 | sed 's/[[:space:]]//g; s/^/  /'
     return 1

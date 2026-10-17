@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.capacity-attrib — the 5 s attribution sampler (DESIGN docs/research/load-root-cause-2026-10-17
+  §4.1, row X5, WP-16). A KeepAlive daemon running capacity-attrib.py in daemon mode at a 5 s interval
+  (the arguments are below; an XML comment cannot carry a double hyphen).
+
+  WHY A DAEMON AND NOT ANOTHER StartInterval JOB: the attribution pass today runs inside capacity-alarm's
+  60 s tick, so every reading is a one-shot with no previous sample to delta against, and a transient that
+  lives between two ticks is invisible. The daemon keeps its pid cursor and counters in memory, reads them
+  fork-free every 5 s, and writes ~/.claude/logs/attrib-latest.json atomically on every tick. capacity-alarm
+  reads that file only when it is under 15 s old and its `pid`/`start` name a live writer; otherwise it runs
+  its own one-shot path unchanged, so this job's absence or death degrades to today and never to a gap.
+
+  STANDARD BAND, ON PURPOSE: no Nice, no LowPriorityIO, no ProcessType Background. The sampler's own tick
+  stretch is a measured signal (D7 reads el_s), and a demoted band stretches it for reasons that are about
+  the band, not the box: the Standard-band sentinel stretches 2x at p90 against capacity-alarm's 4x under
+  Nice 10 + LowPriorityIO. A sensor that runs late exactly when the box is loaded is the failure capacity-alarm
+  already ate (its plist carries the 6 h 24 m silence). ProcessType Standard is stated rather than omitted so
+  the choice reads as a choice.
+
+  KeepAlive + RunAtLoad true: unlike capacity-alarm, a sampler that starts only on its first interval leaves
+  the first minutes after a boot or a load unsampled, and those are when the box is busiest. ThrottleInterval
+  30 bounds a crash loop to two starts a minute.
+
+  `bash -c` so $HOME expands (launchd expands neither ~ nor $HOME in ProgramArguments); Standard*Path cannot
+  take $HOME at all, hence the literals. PATH is capacity-alarm's, /usr/sbin included, so python3 resolves the
+  same interpreter the alarm's one-shot pass uses.
+
+  WHY launchd/staged/ AND NOT launchd/: install.sh copies every launchd/*.plist into ~/Library/LaunchAgents on
+  each converge, and launchd loads that directory at the next login, so a RunAtLoad KeepAlive plist there
+  would start with no operator decision. staged/ is outside that glob; the only way in is the operator's
+  docs/activation/pending-activation/52-load-2026-10-17-activate.sh `confirm capacity-attrib` step.
+
+  Stop: launchctl bootout gui/$(id -u)/com.claude.capacity-attrib (capacity-alarm falls back on its own once
+  attrib-latest.json is 15 s stale).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.capacity-attrib</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec python3 "$HOME/.claude/scripts/lib/capacity-attrib.py" --daemon --interval 5</string>
+    </array>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>ProcessType</key>      <string>Standard</string>
+
+    <key>StandardOutPath</key>  <string>/Users/chrisren/.claude/logs/capacity-attrib.out.log</string>
+    <key>StandardErrorPath</key><string>/Users/chrisren/.claude/logs/capacity-attrib.err.log</string>
+</dict>
+</plist>
