@@ -11,8 +11,13 @@
 # the same paths from the same blank state. Exec counts come from PATH stubs; FORKS that never exec
 # (a `$( )` running a function) are invisible to a stub, so they are counted from an xtrace whose PS4
 # prints $BASH_SUBSHELL: a trace line at depth >= 1 is a command run inside a forked subshell.
-# Per-poll figures are the difference between a 3-poll and a 1-poll run (startup cancels out); the
-# poll count is exact because `elapsed` advances by --interval per pass.
+# Per-poll figures are the difference between a 3-poll and a 1-poll run (startup cancels out). They
+# are taken with the kqueue helper UNAVAILABLE, the plain poll, where the poll count is exact because
+# `elapsed` advances by --interval per pass.
+#
+# W4 R2 replaced the poll's sleep with bin/cc-kqwait. The watcher finds the helper beside its own
+# physical path, so each arm runs from a copied tree: $NEW has a call-logging wrapper around the real
+# helper (the production shape), and $NEWU has one that answers `unavailable` (rc 4).
 
 load stop-hook-forks-helpers
 SHF_BASE=55d01fcd4fca631650df1dbae16e91cfa30821c5   # W4_BASE — set AFTER the load, which sets its own
@@ -21,11 +26,30 @@ setup_file() {
   STUB="$BATS_FILE_TMPDIR/stub"
   shf_build_stubs "$STUB"
   export STUB
+  # One warm build cache for the file, so no arm's count includes compiling the helper.
+  export CC_KQWAIT_CACHE="$BATS_FILE_TMPDIR/kqcache"
+  "$BATS_TEST_DIRNAME/../bin/cc-kqwait" --timeout 0 > /dev/null 2>&1 || true
 }
+
+# new_tree <dir> real|unavailable — the watcher copied (not linked: its physical path picks the
+# helper) beside a helper wrapper that logs one line per call to <dir>/kq.log.
+new_tree() {
+  mkdir -p "$1/bin"
+  ln -s "$REPO/hooks" "$1/hooks"
+  cp "$REPO/bin/cc-await-ping" "$1/bin/cc-await-ping"
+  if [ "$2" = real ]; then
+    printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\nexec %q "$@"\n' "$1/kq.log" "$REPO/bin/cc-kqwait" > "$1/bin/cc-kqwait"
+  else
+    printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\necho "unavailable test"\nexit 4\n' "$1/kq.log" > "$1/bin/cc-kqwait"
+  fi
+  chmod +x "$1/bin/cc-kqwait"
+}
+kq_calls() { if [ -f "$1/kq.log" ]; then grep -c '' "$1/kq.log"; else echo 0; fi; }
 
 setup() {
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
-  NEW="$REPO/bin/cc-await-ping"
+  new_tree "$BATS_TEST_TMPDIR/newk" real;        NEW="$BATS_TEST_TMPDIR/newk/bin/cc-await-ping"
+  new_tree "$BATS_TEST_TMPDIR/newu" unavailable; NEWU="$BATS_TEST_TMPDIR/newu/bin/cc-await-ping"
   OLD="$BATS_TEST_TMPDIR/old"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export SHF_OUT_DIR="$BATS_TEST_TMPDIR/out"; mkdir -p "$SHF_OUT_DIR"
@@ -139,7 +163,7 @@ subshell_lines() {
     for t in 1 3; do
       blank
       if [ "$a" = old ]; then arm "$a$t" "$OLD/bin/cc-await-ping" "$PANE" --interval 1 --timeout "$t"
-      else arm "$a$t" "$NEW" "$PANE" --interval 1 --timeout "$t"; fi
+      else arm "$a$t" "$NEWU" "$PANE" --interval 1 --timeout "$t"; fi
     done
   done
   echo "per poll: old $(per_poll old1 old3) new $(per_poll new1 new3) | old: $(shf_census old3) | new: $(shf_census new3)"
@@ -157,7 +181,7 @@ subshell_lines() {
     for t in 1 3; do
       blank 70
       if [ "$a" = old ]; then arm "$a$t" "$OLD/bin/cc-await-ping" "$PANE" --interval 1 --timeout "$t"
-      else arm "$a$t" "$NEW" "$PANE" --interval 1 --timeout "$t"; fi
+      else arm "$a$t" "$NEWU" "$PANE" --interval 1 --timeout "$t"; fi
     done
   done
   echo "per poll: old $(per_poll old1 old3) new $(per_poll new1 new3)"
@@ -172,9 +196,39 @@ subshell_lines() {
   local o1 o3 n1 n3
   blank; o1="$(subshell_lines "$OLD/bin/cc-await-ping" 1)"
   blank; o3="$(subshell_lines "$OLD/bin/cc-await-ping" 3)"
-  blank; n1="$(subshell_lines "$NEW" 1)"
-  blank; n3="$(subshell_lines "$NEW" 3)"
+  blank; n1="$(subshell_lines "$NEWU" 1)"
+  blank; n3="$(subshell_lines "$NEWU" 3)"
   echo "subshell trace lines per poll: old $(( (o3 - o1) / 2 )) new $(( (n3 - n1) / 2 ))"
   [ "$(( (o3 - o1) / 2 ))" -gt 20 ]          # control: the instrument sees the old chains
   [ "$(( (n3 - n1) / 2 ))" -le 3 ]           # $(_woke_get), $(mailbox_lines), $(_keys) are gone
+}
+
+# ── W4 R2: the kqueue wait ───────────────────────────────────────────────────────────────────────
+@test "kqueue: an idle 6 s watch wakes twice (one --interval-capped first wait, then the rest), not six times" {
+  have_old
+  local a
+  for a in old new; do
+    blank
+    if [ "$a" = old ]; then arm "$a" "$OLD/bin/cc-await-ping" "$PANE" --interval 1 --timeout 6
+    else arm "$a" "$NEW" "$PANE" --interval 1 --timeout 6; fi
+  done
+  echo "execs: old $(shf_total old) new $(shf_total new) | helper calls $(kq_calls "$BATS_TEST_TMPDIR/newk") | old: $(shf_census old) | new: $(shf_census new)"
+  [ "$(shf_calls old sleep)" -eq 6 ]                        # control: the plain poll looked six times
+  [ "$(shf_calls new sleep)" -eq 0 ]
+  [ "$(kq_calls "$BATS_TEST_TMPDIR/newk")" -eq 2 ]
+  [ "$(shf_total new)" -lt "$(shf_total old)" ]
+  same old new
+}
+
+@test "kqueue unavailable (rc 4): the plain poll, called once and never again" {
+  have_old
+  local a
+  for a in old new; do
+    blank
+    if [ "$a" = old ]; then arm "$a" "$OLD/bin/cc-await-ping" "$PANE" --interval 1 --timeout 3
+    else arm "$a" "$NEWU" "$PANE" --interval 1 --timeout 3; fi
+  done
+  [ "$(kq_calls "$BATS_TEST_TMPDIR/newu")" -eq 1 ]
+  [ "$(shf_calls new sleep)" -eq 3 ]                        # every --interval, exactly as before
+  same old new
 }

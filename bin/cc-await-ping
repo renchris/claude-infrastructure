@@ -833,7 +833,104 @@ _sigrecord_sender() {
   return 0
 }
 
-trap '_unbeat; _sigrecord_disarm' EXIT
+# ── KQUEUE WAIT (W4 R2, 2026-10-17) ───────────────────────────────────────────────────────────────
+# The poll used to `sleep "$INTERVAL"` and look again whether or not anything had changed. bin/cc-kqwait
+# lets the kernel wait instead: it returns the moment a watched file changes or the owner's pid exits,
+# else after a 30 s heartbeat, and the FULL poll body runs on every return, the heartbeat included.
+# The heartbeat is what finds a REVERSE-edge alias key: a pane whose trail now ends in this session is
+# one append among ~1,500 alias files, and nothing watchable says it concerns us.
+# WHAT IS WATCHED, and what deliberately is not: each key's box, the forward alias file (a re-point is
+# an APPEND, which never touches the .alias directory), the .alias and registry directories, the role
+# file and the beat file when those modes read them, and the owner pid. NOT the mailbox directory: every
+# session's cursor writes rename into it (12 of 30 two-second samples changed it, 2026-10-17), so a
+# watch there would wake every watcher more often than the 15 s poll it replaces. A box that does not
+# exist yet is still covered: the helper watches its parent and returns only when THAT path changes.
+# Each call feeds back the previous call's `baseline` stats, so a change that landed while the body
+# ran returns at once. A path with no baseline yet (the first wait, a newly joined key) caps that wait
+# at --interval: the old worst case, never a longer one.
+# No helper, no build (rc 4), or no wall clock ⇒ the plain poll, exactly as before.
+KQ_BIN=""
+if [ -n "${_ca_root:-}" ] && [ -x "$_ca_root/bin/cc-kqwait" ]; then KQ_BIN="$_ca_root/bin/cc-kqwait"
+else KQ_BIN="$(command -v cc-kqwait 2>/dev/null || true)"; fi
+[ "$T0" -gt 0 ] || KQ_BIN=""          # elapsed must come from the clock once waits stop being INTERVAL long
+KQ_HEARTBEAT_S=30                     # well inside CC_WATCH_FRESH_S (90 s): the claim stays fresh
+KQ_OUT="${TMPDIR:-/tmp}"; KQ_OUT="${KQ_OUT%/}/cc-await-ping-kq.$$"
+KQ_PID=""; KQ_BASE=""; KQ_DROP=" "; _OWNER_PID=""
+# shellcheck disable=SC2329  # invoked from the EXIT trap below and from _sig_verdict
+_kq_reap() {   # the helper must not outlive us, and neither may its output file
+  [ -n "$KQ_PID" ] && kill "$KQ_PID" 2>/dev/null
+  KQ_PID=""
+  [ -e "$KQ_OUT" ] && rm -f "$KQ_OUT" 2>/dev/null
+  return 0
+}
+_kq_parent() {   # <path> → _KQ_PAR, its directory (`${p%/*}` alone is wrong for "x" and "/x")
+  case "$1" in */*) _KQ_PAR="${1%/*}"; [ -n "$_KQ_PAR" ] || _KQ_PAR=/ ;; *) _KQ_PAR=. ;; esac
+}
+# _kq_wait <seconds> → 0 = waited (an event, or the full wait); 1 = no wait happened, sleep instead
+_kq_wait() {
+  local to="$1" k p d b line t0 rc nobase=0 rest
+  local -a args
+  [ -n "$KQ_BIN" ] || return 1
+  args=()
+  # A directory not created yet is watched as a path: its parent wakes the helper, which returns
+  # only once THIS name appears (a first alias is the reverse edge arriving).
+  rest=""
+  for d in "$MAILBOX_DIR/.alias" "$REG_DIR"; do
+    if [ -d "$d" ]; then args+=(--dir "$d"); else rest="$rest$d
+"; fi
+  done
+  for k in $BEAT_KEYS; do rest="$rest$MAILBOX_DIR/$k.md
+"; done
+  rest="$rest$MAILBOX_DIR/.alias/$CUR_UUID
+"
+  [ -n "$ROLE" ] && rest="$rest$ROLES_DIR/$ROLE
+"
+  [ "$IDLE_SCOPED" = 1 ] && [ -n "$SID" ] && rest="$rest$BEAT_DIR/$SID.json
+"
+  while [ -n "$rest" ]; do
+    p="${rest%%
+*}"; rest="${rest#*
+}"
+    [ -n "$p" ] || continue
+    _kq_parent "$p"; [ -d "$_KQ_PAR" ] || continue      # the helper cannot watch under a missing dir
+    b=""
+    line="
+$KQ_BASE"                                             # anchored at a line start: no suffix matches
+    case "$line" in *"
+$p @"*) b="${line#*"
+$p @"}"; b="${b%%
+*}" ;; esac
+    if [ -n "$b" ]; then args+=(--file "$p@$b"); else args+=(--file "$p"); nobase=1; fi
+  done
+  if [ -n "$_OWNER_PID" ]; then
+    case "$KQ_DROP" in *" $_OWNER_PID "*) ;; *) args+=(--pid "$_OWNER_PID") ;; esac
+  fi
+  [ "${#args[@]}" -gt 0 ] || return 1                   # bash 3.2 + set -u: an empty "${args[@]}" aborts
+  [ "$nobase" = 1 ] && [ "$INTERVAL" -lt "$to" ] && to="$INTERVAL"
+  t0=$SECONDS
+  # `& wait`, never a foreground call or `$( )`: bash runs a trap only between commands, so a TERM
+  # would otherwise wait out the helper's whole timeout before the verdict could print.
+  "$KQ_BIN" "${args[@]}" --timeout "$to" > "$KQ_OUT" 2>/dev/null &
+  KQ_PID=$!
+  wait "$KQ_PID"; rc=$?
+  KQ_PID=""
+  if [ "$rc" -ne 0 ]; then
+    [ "$rc" -eq 4 ] && { KQ_BIN=""; return 1; }       # cannot build or run here: plain poll from now on
+    [ "$(( SECONDS - t0 ))" -lt 1 ] && return 1        # a fast failure must not become a spin
+    return 0
+  fi
+  KQ_BASE=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      "baseline "*) KQ_BASE="$KQ_BASE${line#baseline }
+" ;;
+      "gone "*|"exit "*) KQ_DROP="$KQ_DROP${line#* } " ;;   # said once; a dead pid would return at once forever
+    esac
+  done < "$KQ_OUT"
+  return 0
+}
+
+trap '_unbeat; _sigrecord_disarm; _kq_reap' EXIT
 _sigrecord_arm
 
 # ── A KILLED WATCHER MUST NOT DIE SILENT (G10, backlog 5b77e20d9db6) ──────────────────────────────
@@ -1155,6 +1252,7 @@ _term_expired() {   # 0 = the budget was already spent when the signal arrived
 _sig_verdict() {   # <signame> <signum>
   local sender
   trap - TERM HUP INT EXIT
+  _kq_reap
   _unbeat
   if [ -e "$WATCH_CLAIM_DIR/stand-down.$$" ]; then
     # Stamped by THIS inbox's own `--stand-down` (§ STAND-DOWN) an instant before the TERM: a
@@ -1325,6 +1423,7 @@ _owner_dead() {  # 0 iff the watched pane is PROVABLY gone — pid oracle AND an
   [ -f "$rf" ] || return 1
   p="$(jq -r '.pid // empty' "$rf" 2>/dev/null)"
   case "$p" in ''|*[!0-9]*) return 1 ;; esac
+  _OWNER_PID="$p"                                       # the kqueue wait watches it exit
   kill -0 "$p" 2>/dev/null && return 1
   # ORACLE A has fired. It is necessary, not sufficient — corroborate or keep watching.
   now="$(date +%s 2>/dev/null || echo 0)"
@@ -1755,6 +1854,12 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
     exit 0
   fi
 
+  _kq_to=$(( TIMEOUT - elapsed )); [ "$_kq_to" -gt "$KQ_HEARTBEAT_S" ] && _kq_to=$KQ_HEARTBEAT_S
+  if _kq_wait "$_kq_to"; then
+    _e="$(_elapsed_s)"                                  # waits end on events, so count the clock
+    if [ "$_e" -ge 0 ]; then elapsed=$_e; else elapsed=$((elapsed + _kq_to)); fi
+    continue
+  fi
   sleep "$INTERVAL"
   elapsed=$((elapsed + INTERVAL))
 done

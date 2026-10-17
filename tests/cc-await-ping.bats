@@ -377,6 +377,52 @@ alias_pane_to_session() {
   grep -qF 'waiting in the pane box' "$BATS_TEST_TMPDIR/out"
 }
 
+# ── W4 R2: the kqueue wait (bin/cc-kqwait beside this script, 30 s heartbeat) ────────────────────
+hires() { perl -MTime::HiRes=time -e 'printf "%.3f", time'; }
+@test "W4 R2: a mailbox append mid-wait wakes the watcher in under 1 s" {
+  local t0 t1
+  "$AWAIT" "$UUID" --interval 25 --timeout 60 > "$BATS_TEST_TMPDIR/out" 2> "$BATS_TEST_TMPDIR/err" & local watcher=$!
+  await_armed || false
+  sleep 2                                                 # inside the wait, not before it
+  t0="$(hires)"
+  printf '2026-10-17T10:00:00+0000 [peer] wake now\n' >> "$MB"
+  local rc=0; wait "$watcher" || rc=$?
+  t1="$(hires)"
+  echo "wake latency: $(perl -e "printf '%.3f', $t1 - $t0") s"
+  [ "$rc" -eq 0 ]
+  grep -qF 'wake now' "$BATS_TEST_TMPDIR/out"
+  perl -e "exit(($t1 - $t0) < 1 ? 0 : 1)"
+}
+
+# kq_tree <dir> [unavailable] — this watcher copied beside a call-logging wrapper around the real
+# helper (the helper is found beside the watcher's PHYSICAL path, so a symlink would bypass the
+# wrapper). `unavailable` makes the wrapper answer rc 4, which leaves the watcher on the plain poll.
+kq_tree() {
+  mkdir -p "$1/bin"; ln -s "$REPO/hooks" "$1/hooks"
+  cp "$AWAIT" "$1/bin/cc-await-ping"
+  if [ "${2:-}" = unavailable ]; then
+    printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\necho "unavailable test"\nexit 4\n' "$1/kq.log" > "$1/bin/cc-kqwait"
+  else
+    printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\nexec %q "$@"\n' "$1/kq.log" "$REPO/bin/cc-kqwait" > "$1/bin/cc-kqwait"
+  fi
+  chmod +x "$1/bin/cc-kqwait"
+}
+
+@test "W4 R2: a VETOED dead owner does not spin the helper (its pid is reported once, then dropped)" {
+  # The registry pid is dead, but the pane is live, so the owner guard vetoes exit 5 and keeps
+  # watching. A dead --pid makes the helper return `gone` at once, so passing it again on every wait
+  # would loop with no sleep at all.
+  local d t="$BATS_TEST_TMPDIR/kq"
+  kq_tree "$t"
+  sleep 0.1 & d=$!; wait "$d" 2>/dev/null || true
+  printf '{"paneUUID":"%s","name":"peer","pid":%s,"startedAt":1}' "$UUID" "$d" > "$BATS_TEST_TMPDIR/reg/$UUID.json"
+  run env CC_AWAIT_IT2_BIN="$(it2_stub "$UUID")" "$t/bin/cc-await-ping" "$UUID" --interval 1 --timeout 8
+  echo "helper calls:"; cat "$t/kq.log"
+  [ "$status" -eq 2 ]                                     # watched its whole term, never exit 5
+  [ "$(grep -c '' "$t/kq.log")" -le 3 ]                   # a spin is hundreds in 8 s
+  [ "$(grep -c -- "--pid $d" "$t/kq.log")" -eq 1 ]        # the dead pid was passed exactly once
+}
+
 @test "keyset: the .watching marker is written under EVERY key (either hook's check answers true)" {
   alias_pane_to_session
   ( await_armed; sleep 1; printf '2026-07-31T10:00:00+0000 [peer] ping\n' >> "$MB" ) & local writer=$!   # after the arm, as above
@@ -780,7 +826,10 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
   # --interval 3 with --timeout 2: the tick accumulator clears the budget after ONE sleep, so a
   # truthful measurement necessarily OVERSHOOTS what was configured. The pre-fix line could only ever
   # print 2 — so this asserts the two numbers are now separately sourced, not one value twice.
-  run "$AWAIT" "$UUID" --interval 3 --timeout 2
+  # The accumulator lives on the PLAIN poll (kqueue helper unavailable); a kqueue wait reads the
+  # clock and ends at the budget itself, so it has no overshoot to measure.
+  kq_tree "$BATS_TEST_TMPDIR/poll" unavailable
+  run "$BATS_TEST_TMPDIR/poll/bin/cc-await-ping" "$UUID" --interval 3 --timeout 2
   [ "$status" -eq 2 ]
   # Ordered so the RED lands on the CLAIM, not on a new field's absence: pre-fix this reads 2.
   local e; e="$(printf '%s\n' "$output" | _verdict_elapsed)"
@@ -796,10 +845,12 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
   # ~0 — a watcher that armed and retired in the same second, with the wake path down for the whole
   # 60s its caller believed it was covered. That is backlog #127's class, and the pre-fix line
   # reported it as `elapsed=60s`: character-for-character identical to a watch that held for a minute.
+  # The plain poll (kqueue helper unavailable) is the path that sleeps and accumulates ticks.
   local shim="$BATS_TEST_TMPDIR/nosleep"; mkdir -p "$shim"
   printf '#!/bin/bash\nexit 0\n' > "$shim/sleep"; chmod +x "$shim/sleep"
+  kq_tree "$BATS_TEST_TMPDIR/poll" unavailable
   local t0; t0="$(date +%s)"
-  run env PATH="$shim:$PATH" "$AWAIT" "$UUID" --interval 30 --timeout 60
+  run env PATH="$shim:$PATH" "$BATS_TEST_TMPDIR/poll/bin/cc-await-ping" "$UUID" --interval 30 --timeout 60
   local wall=$(( $(date +%s) - t0 ))
   [ "$status" -eq 2 ]
   [ "$wall" -lt 10 ]                                  # positive control: it really did collapse
