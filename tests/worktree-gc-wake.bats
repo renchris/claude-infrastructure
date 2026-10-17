@@ -191,7 +191,8 @@ wake() { run /bin/bash "$WAKE" </dev/null; }   # launchd runs /bin/bash 3.2
   local rows; rows="$(grep -c . "$CC_WTGC_WAKE_LOG")"
   emit "$b"
   WT_NOW=$((WT_NOW + 30)) wake
-  [ "$status" -eq 0 ] && [ "$(calls)" = 1 ] || { echo "debounced run still evaluated"; false; }
+  [ "$status" -eq 0 ]
+  [ "$(calls)" = 1 ] || { echo "debounced run still evaluated"; false; }
   [ "$(grep -c . "$CC_WTGC_WAKE_LOG")" = "$rows" ] || { echo "debounced run logged"; false; }
   WT_NOW=$((WT_NOW + 61)) wake
   [ "$(calls)" = 2 ] || { echo "a run past the debounce did not evaluate"; false; }

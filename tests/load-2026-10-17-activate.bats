@@ -116,8 +116,8 @@ live() {
   [ "$status" -eq 0 ]
   snap > "$BATS_TEST_TMPDIR/after"
   diff "$BATS_TEST_TMPDIR/before" "$BATS_TEST_TMPDIR/after"
-  [[ "$output" == *"report only — nothing written"* ]]
-  [[ "$output" == *"would_park 2"* ]]
+  [[ "$output" == *"report only — nothing written"* ]] || false
+  [[ "$output" == *"would_park 2"* ]] || false
   [ ! -e "$STUB/loaded" ]
   if grep -q bootstrap "$STUB/calls" 2>/dev/null; then echo "a bare run bootstrapped"; return 1; fi
 }
@@ -126,8 +126,8 @@ live() {
   files > "$BATS_TEST_TMPDIR/before"
   run bash "$SCRIPT" --confirm capacity-attrib </dev/null
   [ "$status" -eq 0 ]
-  [[ "$output" == *"VERIFIED: running, pid 4242"* ]]
-  [[ "$output" == *"staged -> run"* ]]
+  [[ "$output" == *"VERIFIED: running, pid 4242"* ]] || false
+  [[ "$output" == *"staged -> run"* ]] || false
   cmp -s "$FAKE/launchd/staged/com.claude.capacity-attrib.plist" "$LA"
   [ "$(new_files "$BATS_TEST_TMPDIR/before")" = "$(printf '%s\n' ./.claude/logs/attrib-latest.json ./Library/LaunchAgents/com.claude.capacity-attrib.plist)" ]
 }
@@ -143,7 +143,7 @@ live() {
 @test "--confirm capacity-attrib fails closed when the heartbeat names another pid" {
   STUB_HB_PID=999 run bash "$SCRIPT" --confirm capacity-attrib </dev/null
   [ "$status" -eq 1 ]
-  [[ "$output" == *"names pid '999', launchd runs 4242"* ]]
+  [[ "$output" == *"names pid '999', launchd runs 4242"* ]] || false
   [[ "$output" != *"staged -> run"* ]]
 }
 
@@ -151,7 +151,7 @@ live() {
   files > "$BATS_TEST_TMPDIR/before"
   run bash "$SCRIPT" --confirm worktree-gc-events </dev/null
   [ "$status" -eq 1 ]
-  [[ "$output" == *"neither observe log has a row"* ]]
+  [[ "$output" == *"neither observe log has a row"* ]] || false
   [ -z "$(new_files "$BATS_TEST_TMPDIR/before")" ]
 }
 
@@ -160,11 +160,11 @@ live() {
   files > "$BATS_TEST_TMPDIR/before"
   run bash "$SCRIPT" --confirm worktree-gc-events </dev/null
   [ "$status" -eq 0 ]
-  [[ "$output" == *"worktree-gc-wake.log: 3 row(s) · would_park 2 · would_detach 0 · would_lock 0 · would_keep 1"* ]]
-  [[ "$output" == *"first row 2026-10-10 · last row 2026-10-12"* ]]
+  [[ "$output" == *"worktree-gc-wake.log: 3 row(s) · would_park 2 · would_detach 0 · would_lock 0 · would_keep 1"* ]] || false
+  [[ "$output" == *"first row 2026-10-10 · last row 2026-10-12"* ]] || false
   # summed, not row-counted: two rows that both say would_park=0 are zero parks
-  [[ "$output" == *"worktree-gc-foreign.log: 2 row(s) · would_park 0 · would_detach 1 · would_lock 0 · would_keep 9"* ]]
-  [[ "$output" == *"first row 2026-10-13 · last row 2026-10-14"* ]]
+  [[ "$output" == *"worktree-gc-foreign.log: 2 row(s) · would_park 0 · would_detach 1 · would_lock 0 · would_keep 9"* ]] || false
+  [[ "$output" == *"first row 2026-10-13 · last row 2026-10-14"* ]] || false
   [ "$(new_files "$BATS_TEST_TMPDIR/before")" = ./.claude/autonomy/worktree-gc-events.mode ]
   [ "$(cat "$AUTO/worktree-gc-events.mode")" = act ]
 }
@@ -174,8 +174,8 @@ live() {
   mkdir -p "$HOME/.claude/scripts/lib"; echo 'def daemon(): pass' > "$HOME/.claude/scripts/lib/capacity-attrib.py"
   run bash "$SCRIPT" --confirm capacity-alarm-load-rung </dev/null
   [ "$status" -eq 1 ]
-  [[ "$output" == *"D2 is not running live; capacity-attrib does not call the detectors"* ]]
-  [[ "$output" == *"D2 rows (information only): 2, 1 raise(s)"* ]]
+  [[ "$output" == *"D2 is not running live; capacity-attrib does not call the detectors"* ]] || false
+  [[ "$output" == *"D2 rows (information only): 2, 1 raise(s)"* ]] || false
   [ ! -e "$AUTO/capacity-alarm-load-rung.mode" ]
 }
 
@@ -190,7 +190,8 @@ live() {
 @test "--confirm capacity-alarm-load-rung: the 7 d clock starts at the LATER of the install and the wiring commit" {
   wire_d2 86400; old_plist; live
   run bash "$SCRIPT" --confirm capacity-alarm-load-rung </dev/null
-  [ "$status" -eq 1 ]; [[ "$output" == *"D2 has run live for 1 d"*"7 d are required"* ]]
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"D2 has run live for 1 d"*"7 d are required"* ]] || false
   [ ! -e "$AUTO/capacity-alarm-load-rung.mode" ]
 }
 
@@ -198,10 +199,12 @@ live() {
   wire_d2; live
   mkdir -p "$(dirname "$LA")"; cp "$FAKE/launchd/staged/com.claude.capacity-attrib.plist" "$LA"
   run bash "$SCRIPT" --confirm capacity-alarm-load-rung </dev/null
-  [ "$status" -eq 1 ]; [[ "$output" == *"D2 has run live for 0 d"* ]]
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"D2 has run live for 0 d"* ]] || false
   old_plist; rm "$STUB/loaded"
   run bash "$SCRIPT" --confirm capacity-alarm-load-rung </dev/null
-  [ "$status" -eq 1 ]; [[ "$output" == *"sampler is not live now"* ]]
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"sampler is not live now"* ]] || false
   [ ! -e "$AUTO/capacity-alarm-load-rung.mode" ]
 }
 
@@ -210,7 +213,7 @@ live() {
   live 700000 70000            # 8.1 d since the first evaluated tick, but ticks cover only 50% of it
   run bash "$SCRIPT" --confirm capacity-alarm-load-rung </dev/null
   [ "$status" -eq 1 ]
-  [[ "$output" == *"have not run continuously for 7 d"* ]]
+  [[ "$output" == *"have not run continuously for 7 d"* ]] || false
   [ ! -e "$AUTO/capacity-alarm-load-rung.mode" ]
   live 300000 60000            # every tick present, but only 3.5 d of them
   run bash "$SCRIPT" --confirm capacity-alarm-load-rung </dev/null
@@ -220,7 +223,7 @@ live() {
   printf '{"v": 1, "pid": 4242}\n' > "$LOGS/attrib-latest.json"
   run bash "$SCRIPT" --confirm capacity-alarm-load-rung </dev/null
   [ "$status" -eq 1 ]
-  [[ "$output" == *"no counters"* ]]
+  [[ "$output" == *"no counters"* ]] || false
   [ ! -e "$AUTO/capacity-alarm-load-rung.mode" ]
 }
 
@@ -267,8 +270,8 @@ live() {
     [ ! -e "$AUTO/worktree-gc-repos.promoted" ]
     [ ! -e "$STUB/ms365-ran" ]
   done
-  [[ "$output" == *"OP-5"* ]]
-  [[ "$output" == *"0067-ms365-shared.sh --confirm ms365-shared"* ]]
+  [[ "$output" == *"OP-5"* ]] || false
+  [[ "$output" == *"0067-ms365-shared.sh --confirm ms365-shared"* ]] || false
   [ -f "$AUTO/pending-activation/52-load-2026-10-17-activate.sh.done" ]
 }
 
@@ -283,7 +286,7 @@ live() {
   [ "$(x KeepAlive)" = true ]; [ "$(x RunAtLoad)" = true ]
   [ "$(x ProcessType)" = Standard ]
   if x Nice >/dev/null 2>&1 || x LowPriorityIO >/dev/null 2>&1; then echo "a demotion key is set"; return 1; fi
-  [[ "$(x ProgramArguments.2)" == *'capacity-attrib.py" --daemon --interval 5'* ]]
+  [[ "$(x ProgramArguments.2)" == *'capacity-attrib.py" --daemon --interval 5'* ]] || false
 }
 
 @test "worktree-gc-infra plist: 04:15 calendar kept, WatchPaths on the wake file, StartInterval 600, --auto" {
@@ -298,7 +301,7 @@ live() {
   row="$(grep -E '^com\.claude\.capacity-attrib[[:space:]]*\|' "$MANIFEST")"
   [ "$(printf '%s\n' "$row" | wc -l | tr -d ' ')" = 1 ]
   nf="$(printf '%s' "$row" | awk -F'|' '{print NF}')"
-  [ "$nf" -ge 6 ] && [ "$nf" -le 7 ]
+  [ "$nf" -ge 6 ] && [ "$nf" -le 7 ] || false
   f() { printf '%s' "$row" | cut -d'|' -f"$1" | tr -d '[:space:]'; }
   [ "$(f 1)" = "$(/usr/bin/plutil -extract Label raw -o - "$ATTRIB_PLIST")" ]
   [ "$(f 2)" = staged ]
