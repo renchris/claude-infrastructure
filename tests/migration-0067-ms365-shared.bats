@@ -64,7 +64,7 @@ guard_entries() {
   run /bin/bash "$MIG"
   [ "$status" -eq 0 ]
   [[ "$output" == *"dry run — nothing changed"* ]] || false
-  [ ! -e "$MARKER" ] && [ ! -e "$KEY" ] && [ ! -e "$CALLS" ]
+  [ ! -e "$MARKER" ] && [ ! -e "$KEY" ] && [ ! -e "$CALLS" ] || false
   cmp -s "$HOME/.claude/settings.json" "$T/settings.before"
 }
 
@@ -106,10 +106,10 @@ guard_entries() {
   [ "$(jq -S 'del(.hooks.PreToolUse)' "$HOME/.claude/settings.json")" = "$(jq -S 'del(.hooks.PreToolUse)' "$T/settings.before")" ]
   [ "$(jq -c '.hooks.PreToolUse[0]' "$HOME/.claude/settings.json")" = "$(jq -c '.hooks.PreToolUse[0]' "$T/settings.before")" ]
   [ -e "$MARKER" ]
-  [ "$(stat -f %Lp "$KEY")" = 600 ] && [ -s "$KEY" ]
+  [ "$(stat -f %Lp "$KEY")" = 600 ] && [ -s "$KEY" ] || false
   # the marker comes after the gate and the load, and the re-render is followed by --check
   [ "$(grep -n '^gate' "$CALLS" | cut -d: -f1)" -lt "$(grep -n '^launchctl bootstrap' "$CALLS" | cut -d: -f1)" ]
-  grep -qx 'wire ' "$CALLS" && grep -qx 'wire --check' "$CALLS"
+  grep -qx 'wire ' "$CALLS" && grep -qx 'wire --check' "$CALLS" || false
   ! grep -q '^npm' "$CALLS" || false
 }
 
