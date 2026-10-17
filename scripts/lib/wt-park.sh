@@ -36,8 +36,8 @@ wt__idx_get() { sed -n "s/^$2=//p" "$1" 2>/dev/null | head -1; }   # <index-file
 # ---- PARK / unpark -------------------------------------------------------------------------------
 
 wt__park_undo() { # <repo> <parked> <path> <branch> → best-effort return of a half-parked tree; always rc 2
-  [ -n "$4" ] && "$WT_GIT" -C "$2" checkout -q "$4" 2>/dev/null
-  "$WT_GIT" -C "$1" worktree unlock "$2" 2>/dev/null
+  if [ -n "$4" ]; then "$WT_GIT" -C "$2" checkout -q "$4" 2>/dev/null || :; fi
+  "$WT_GIT" -C "$1" worktree unlock "$2" 2>/dev/null || :
   "$WT_GIT" -C "$1" worktree move "$2" "$3" 2>/dev/null || wt__err "UNDO FAILED: tree left at $2 (was $3)"
   return 2
 }
@@ -47,7 +47,7 @@ wt_park() { # <path> <actor> <reason> --arm i|ii → prints the parked path
   # Nothing is deleted. Arm (i) detaches HEAD so a landed branch stays deletable; arm (ii) stays attached
   # so git keeps refusing `branch -D` of unlanded work. Any failure after the move moves it back.
   [ $# -ge 5 ] && [ "$4" = --arm ] || { wt__err "usage: wt_park <path> <actor> <reason> --arm i|ii"; return 2; }
-  local path actor="$2" reason="$3" arm="$5" repo id parked head branch="" sids ts key idx tmp lb="" lp=""
+  local path actor="$2" reason="$3" arm="$5" repo id parked head cur branch="" sids ts key idx tmp lb="" lp=""
   case "$arm" in i|ii) ;; *) wt__err "bad --arm $arm"; return 2 ;; esac
   [ -d "$1" ] || { wt__err "$1 is not a directory"; return 2; }
   path="$(wt__park_path "$1")"
@@ -58,9 +58,10 @@ wt_park() { # <path> <actor> <reason> --arm i|ii → prints the parked path
     || { wt__err "$path and $WT_PARK_ROOT are on different volumes; PARK is a rename only"; return 2; }
   id="$(wt__id_new "$path")"; parked="$WT_PARK_ROOT/$id"
   [ ! -e "$parked" ] || { wt__err "park target $parked already exists"; return 2; }
-  head="$("$WT_GIT" -C "$path" rev-parse --verify -q HEAD 2>/dev/null)"
-  [ "$arm" = i ] && branch="$("$WT_GIT" -C "$path" symbolic-ref -q --short HEAD 2>/dev/null)"
-  sids="$(wt__sids_of "$path")"; ts="$(wt__ts)"
+  head="$("$WT_GIT" -C "$path" rev-parse --verify -q HEAD 2>/dev/null)" || head=""
+  cur="$("$WT_GIT" -C "$path" symbolic-ref -q --short HEAD 2>/dev/null)" || cur=""
+  [ "$arm" = i ] && branch="$cur"
+  sids="$(wt__sids_of "$path")" || :; ts="$(wt__ts)"
   "$WT_GIT" -C "$repo" worktree move "$path" "$parked" 2>/dev/null || { wt__err "worktree move $path failed — tree kept"; return 2; }
   "$WT_GIT" -C "$repo" worktree lock --reason "parked $ts from $path sids=$(printf '%s\n' "$sids" | paste -sd, -)" "$parked" 2>/dev/null \
     || { wt__err "lock of $parked failed"; wt__park_undo "$repo" "$parked" "$path" ""; return 2; }
@@ -78,8 +79,8 @@ wt_park() { # <path> <actor> <reason> --arm i|ii → prints the parked path
     || { rm -f "$tmp"; wt__err "index write failed"; wt__park_undo "$repo" "$parked" "$path" "$branch"; return 2; }
   wt__row_reset
   WT_R_event=worktree-parked; WT_R_id="$id"; WT_R_actor="$actor"; WT_R_reason="$reason"; WT_R_repo="$repo"
-  WT_R_path="$path"; WT_R_branch="$("$WT_GIT" -C "$parked" symbolic-ref -q --short HEAD 2>/dev/null)"
-  WT_R_branch="${WT_R_branch:-$branch}"; WT_R_head="$head"; WT_R_mode=none; WT_R_parked_path="$parked"
+  WT_R_path="$path"; WT_R_branch="$cur"
+  WT_R_head="$head"; WT_R_mode=none; WT_R_parked_path="$parked"
   WT_R_branch_tip="${branch:+$head}"; WT_R_sids="$sids"; WT_R_preserved_at="$parked"
   wt__row_emit || { rm -f "$idx"; wt__err "ledger write failed — park undone"; wt__park_undo "$repo" "$parked" "$path" "$branch"; return 2; }
   printf '%s\n' "$parked"
@@ -115,15 +116,15 @@ wt_unpark() { # <path> → moves a parked tree back to its exact path; rc 1 not 
     husk="$path.husk-$(wt__now)"
     mv "$path" "$husk" || { wt__err "cannot move husk $path aside"; return 2; }
   fi
-  "$WT_GIT" -C "$repo" worktree unlock "$parked" 2>/dev/null
+  "$WT_GIT" -C "$repo" worktree unlock "$parked" 2>/dev/null || :
   if ! "$WT_GIT" -C "$repo" worktree move "$parked" "$path" 2>/dev/null; then
     "$WT_GIT" -C "$repo" worktree lock --reason "parked $(wt__idx_get "$idx" ts) from $path sids=$(wt__idx_get "$idx" sids)" "$parked" 2>/dev/null
     [ -n "$husk" ] && mv "$husk" "$path"
     wt__err "worktree move $parked → $path failed; still parked"; return 2
   fi
-  head="$("$WT_GIT" -C "$path" rev-parse --verify -q HEAD 2>/dev/null)"
+  head="$("$WT_GIT" -C "$path" rev-parse --verify -q HEAD 2>/dev/null)" || head=""
   if [ -n "$branch" ]; then
-    gd="$("$WT_GIT" -C "$path" rev-parse --absolute-git-dir 2>/dev/null)"
+    gd="$("$WT_GIT" -C "$path" rev-parse --absolute-git-dir 2>/dev/null)" || gd=""
     if ! "$WT_GIT" -C "$path" rev-parse --verify -q "refs/heads/$branch" >/dev/null 2>&1; then why="branch-gone"
     elif "$WT_GIT" -C "$repo" worktree list --porcelain 2>/dev/null | grep -qxF "branch refs/heads/$branch"; then why="checked-out-elsewhere"
     elif [ "$("$WT_GIT" -C "$path" rev-parse "refs/heads/$branch")" != "$head" ]; then why="tip-moved"
@@ -272,7 +273,7 @@ wt_pinned() { # <path> → rc 0 + "<kind> sid=<sid|-> until=<epoch>[ …]" for t
   # pin can never outlive its reason or freeze collection (§3.2 Pins). Bounded reads only.
   local path sids ttl d gd m
   path="$(wt__park_path "$1")"
-  sids="$(wt__sids_of "$path")"
+  sids="$(wt__sids_of "$path")" || :
   ttl=$(( $(wt_cleanup_period_days) * 86400 ))
   if d="$(wt__pin_crash "$path" "$sids")"; then printf 'crash %s\n' "$d"; return 0; fi
   if d="$(wt__pin_resume_debt "$path" "$ttl")"; then printf 'resume-debt %s\n' "$d"; return 0; fi
@@ -280,8 +281,8 @@ wt_pinned() { # <path> → rc 0 + "<kind> sid=<sid|-> until=<epoch>[ …]" for t
   if d="$(wt__pin_recycle_failed "$sids" "$ttl")"; then printf 'recycle-failed %s\n' "$d"; return 0; fi
   if d="$(wt__pin_boot_resume "$path" "$ttl")"; then printf 'boot-resume %s\n' "$d"; return 0; fi
   if d="$(wt__pin_backlog "$path" "$ttl")"; then printf 'backlog %s\n' "$d"; return 0; fi
-  gd="$("$WT_GIT" -C "$path" rev-parse --absolute-git-dir 2>/dev/null)"
-  m="$(wt__mtime "$gd/logs/HEAD")"
+  gd="$("$WT_GIT" -C "$path" rev-parse --absolute-git-dir 2>/dev/null)" || gd=""
+  m="$(wt__mtime "$gd/logs/HEAD")" || m=""
   if [ -n "$gd" ] && [ -n "$m" ] && [ $(( $(wt__now) - m )) -lt 3600 ]; then
     printf 'owner sid=- until=%s\n' $((m + 3600)); return 0
   fi
