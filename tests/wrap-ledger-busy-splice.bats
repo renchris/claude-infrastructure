@@ -34,7 +34,9 @@ setup() {
   export WRAP_PROJECT_ROOTS="$D/projects"
   export CC_WF_TEAM_ROOTS="$D/teams"; mkdir -p "$CC_WF_TEAM_ROOTS"
   unset WRAP_SESSION_ID CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID WRAP_TRANSCRIPT WRAP_CACHE WRAP_BUSY
-  unset WRAP_BUSY_SPLICE CC_PANE_ID ITERM_SESSION_ID CC_CUSTODY_BIN
+  unset CC_PANE_ID ITERM_SESSION_ID CC_CUSTODY_BIN
+  # The splice is opt-in; the BUSY asks below opt in, as operator-readout's ⏳ arm does.
+  export WRAP_BUSY_SPLICE=on
   SID="sess-11111111-2222-3333-4444-555555555555"
   export WRAP_SESSION_ID="$SID"
 
@@ -103,10 +105,31 @@ probes() { grep -c '^probe' "$SB_LOG" | tr -d ' '; }
   [ "$status" -eq 0 ]
   [ "$(field "$output" BUSY_STATE)" = "UNKNOWN" ]
   [ "$(cached_n)" -eq 1 ]
+  : > "$FORK_LOG"
   run bash "$LEDGER" --machine --transcript "$TP"
   [ "$status" -eq 0 ]
   [ "$output" = "$want" ]
-  [ "$(cached_n)" -eq 1 ]                    # served from the BUSY-off ledger's memo, not a second key
+  [ "$(forks git)" -eq 0 ]                   # served from the BUSY-off ledger's memo, not recomputed
+  [ "$(cached_n)" -eq 2 ]                    # + the event's published BUSY ledger
+}
+
+@test "a second BUSY reader in the same event is served the first one's sample, no probe" {
+  # Both kinds: the spliced first reader publishes under the key a DEFAULT BUSY ask reads.
+  run bash "$LEDGER" --machine --transcript "$TP"
+  [ "$status" -eq 0 ]; first="$output"
+  # A probe that would now answer differently: the second reader must not run it.
+  printf 'session_busy_live() { printf "probe\\n" >> "$SB_LOG"; printf "IDLE-DEAF 0 9 none other\\n"; }\nsb_permpend() { return 1; }\n' \
+    > "$WRAP_SESSION_BUSY_LIB"
+  : > "$SB_LOG"; : > "$FORK_LOG"
+  run bash "$LEDGER" --machine --transcript "$TP"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$first" ]
+  [ "$(probes)" -eq 0 ]
+  [ "$(forks git)" -eq 0 ]
+  run env -u WRAP_BUSY_SPLICE bash "$LEDGER" --machine --transcript "$TP"
+  [ "$output" = "$first" ]
+  [ "$(probes)" -eq 0 ]
+  [ "$(forks git)" -eq 0 ]
 }
 
 @test "a BUSY ask that computes stores the BUSY-off ledger, which a BUSY-off ask is then served unchanged" {
@@ -118,7 +141,7 @@ probes() { grep -c '^probe' "$SB_LOG" | tr -d ' '; }
   run bash "$LEDGER" --machine --transcript "$TP"
   [ "$status" -eq 0 ]
   [ "$output" = "$want_on" ]
-  [ "$(cached_n)" -eq 1 ]
+  [ "$(cached_n)" -eq 2 ]                    # the shared BUSY-off ledger + the event's BUSY ledger
   run env WRAP_BUSY=off bash "$LEDGER" --machine --transcript "$TP"
   [ "$status" -eq 0 ]
   [ "$output" = "$want_off" ]
@@ -135,10 +158,10 @@ probes() { grep -c '^probe' "$SB_LOG" | tr -d ' '; }
   [ "$(probes)" -eq 1 ]
 }
 
-@test "WRAP_BUSY_SPLICE=off keeps the BUSY ask on its own key and its own computation" {
+@test "without WRAP_BUSY_SPLICE=on a BUSY ask keeps its own key and its own computation" {
   run env WRAP_BUSY=off bash "$LEDGER" --machine --transcript "$TP"
   : > "$FORK_LOG"
-  run env WRAP_BUSY_SPLICE=off bash "$LEDGER" --machine --transcript "$TP"
+  run env -u WRAP_BUSY_SPLICE bash "$LEDGER" --machine --transcript "$TP"
   [ "$status" -eq 0 ]
   [ "$(field "$output" BUSY_STATE)" = "BUSY" ]
   [ "$(cached_n)" -eq 2 ]

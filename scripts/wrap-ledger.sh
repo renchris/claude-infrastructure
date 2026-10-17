@@ -343,7 +343,7 @@ _bounded() { local s="$1"; shift
 #
 # Kill switch: WRAP_CACHE=off|0|no ⇒ never read, never write (the benchmark's control arm).
 WL_KEY=""; WL_FILE=""; WL_LOCK=""; WL_DIR=""; WL_LOCK_HELD=0
-WL_SPLICE=0; _wl_sbo=""; _wl_sbl=""
+WL_SPLICE=0; _wl_sbo=""; _wl_sbl=""; WL_KEY_ON=""; WL_FILE_ON=""; WL_BODY=""
 WL_TRANSCRIPT="${TRANSCRIPT_FLAG:-${WRAP_TRANSCRIPT:-}}"
 # The transcript as an INPUT, kept out of the cache kill-switch's reach. $WL_TRANSCRIPT is a
 # CACHE-KEY variable and `WRAP_CACHE=off` BLANKS it (below) — so a term that read the transcript
@@ -393,20 +393,32 @@ _wl_digest() {
 # Read in pure bash — a `cat` here would spend a fork on the path whose entire point is not
 # spending them.
 _wl_cache_serve() {
+  # A BUSY reader is served this event's published BUSY ledger when one exists; else the shared
+  # BUSY-off body with its own BUSY lines put in (§ THE BUSY SPLICE). A body of any other shape is a
+  # miss: the caller then computes, which is never wrong.
+  if [ "$WL_SPLICE" = 1 ]; then
+    if [ -n "$WL_FILE_ON" ] && _wl_memo_read "$WL_FILE_ON" "$WL_KEY_ON"; then printf '%s' "$WL_BODY"; return 0; fi
+    _wl_memo_read "$WL_FILE" "$WL_KEY" || return 1
+    _wl_splice_print "$WL_BODY"; return $?
+  fi
+  _wl_memo_read "$WL_FILE" "$WL_KEY" || return 1
+  printf '%s' "$WL_BODY"
+}
+# $1 = memo file · $2 = its key → rc 0 with the body in WL_BODY IFF the file exists, its stored key
+# is byte-equal to $2, and it has a body.
+_wl_memo_read() {
   local first line body="" got=0
-  [ -n "$WL_FILE" ] && [ -s "$WL_FILE" ] || return 1
+  WL_BODY=""
+  [ -n "$1" ] && [ -s "$1" ] || return 1
   while IFS= read -r line || [ -n "$line" ]; do
     if [ "$got" -eq 0 ]; then first="$line"; got=1; continue; fi
     body="${body}${line}
 "
-  done < "$WL_FILE"
+  done < "$1"
   [ "${got:-0}" -eq 1 ] || return 1
-  [ "${first:-}" = "#WLKEY $WL_KEY" ] || return 1
+  [ "${first:-}" = "#WLKEY $2" ] || return 1
   [ -n "$body" ] || return 1
-  # A BUSY reader is served the shared BUSY-off body with its own BUSY lines put in (§ THE BUSY
-  # SPLICE). A body of any other shape is a miss: the caller then computes, which is never wrong.
-  if [ "$WL_SPLICE" = 1 ]; then _wl_splice_print "$body"; return $?; fi
-  printf '%s' "$body"
+  WL_BODY="$body"
 }
 
 # Store: write-to-temp + atomic `mv`, so a reader can never see a half-written ledger. Every
@@ -472,8 +484,11 @@ _wl_lock_stale() {
 # there — which the ledger's own children (`git -C <worktree> …` in dod-path.sh) satisfy while they
 # run. Overlapped with the compute, the probe would report the ledger as a backgrounded job.
 # The served body must be the shape emit_machine prints — lines 10-17 the BUSY-off defaults, with
-# LANDING_PID before and LIVE after — or it is a miss, and the caller computes. Kill switch:
-# WRAP_BUSY_SPLICE=off.
+# LANDING_PID before and LIVE after — or it is a miss, and the caller computes. The finished BUSY
+# ledger is then published under the key the ask had before the splice, first writer wins
+# (_wl_on_publish) — the key a DEFAULT BUSY ask uses — so every BUSY reader of one event, spliced or
+# not, prints the same sample, and a spliced ask is served a default ask's ledger when one exists.
+# Opt-in: WRAP_BUSY_SPLICE=on (operator-readout's ⏳ arm); every other BUSY ask is as before.
 
 # Session id, in order: --session > $WRAP_SESSION_ID > $CLAUDE_SESSION_ID > $CLAUDE_CODE_SESSION_ID
 # > unresolvable (""). One function, called by the 👤 block below and by the splice, so the probe
@@ -577,10 +592,29 @@ _wl_splice_print() {
   _resolve_bound_bin; _wl_resolve_sid; GOAL_TP="$GOAL_TRANSCRIPT"
   CUSTODY_OPEN="$co"
   _wl_busy_set
-  printf '%s' "$head"
-  _wl_emit_busy
-  printf '%s' "$tail"
+  _wl_on_publish "$head$(_wl_emit_busy)$nl$tail"
   return 0
+}
+
+# ONE BUSY SAMPLE PER EVENT. The probe reads the live process table, so two BUSY readers of one Stop
+# would print two different samples — where under their old key the second was served the first's
+# ledger whole. $1 = this caller's BUSY ledger (every line newline-terminated). It is published under
+# the BUSY key with an atomic no-clobber `ln`; a caller that loses that race prints the ledger that
+# won, so every BUSY reader of the event prints the same bytes. Any failure prints the caller's own.
+_wl_on_publish() {
+  local tmp
+  if [ -n "$WL_FILE_ON" ] && tmp="$(mktemp "$WL_DIR/.w.XXXXXX" 2>/dev/null)"; then
+    if { printf '#WLKEY %s\n' "$WL_KEY_ON"; printf '%s' "$1"; } > "$tmp" 2>/dev/null; then
+      if ln "$tmp" "$WL_FILE_ON" 2>/dev/null; then
+        rm -f "$tmp" 2>/dev/null; printf '%s' "$1"; return 0
+      fi
+      rm -f "$tmp" 2>/dev/null
+      if _wl_memo_read "$WL_FILE_ON" "$WL_KEY_ON"; then printf '%s' "$WL_BODY"; return 0; fi
+    else
+      rm -f "$tmp" 2>/dev/null
+    fi
+  fi
+  printf '%s' "$1"
 }
 
 case "${WRAP_CACHE:-on}" in off|0|no|OFF|NO) WL_TRANSCRIPT="" ;; esac
@@ -607,17 +641,19 @@ if [ "$MODE" = "machine" ] && [ -n "$WL_TRANSCRIPT" ]; then
     # WRAP_BUSY joins the key (2026-10-04): session-continue asks with WRAP_BUSY=off to skip the
     # process-table scan, and a BUSY-less ledger served to a BUSY reader (operator-readout, notify,
     # cc-classify) would read BUSY_STATE=UNKNOWN for a session that is working.
-    # THE BUSY SPLICE (2026-10-16, docs/plans/LOAD_AND_PROMPT_HOOK_TIMEOUTS.md Wave 4c). A BUSY
-    # reader now asks under the BUSY-off key and adds the eight BUSY lines itself (§ THE BUSY SPLICE
-    # below), so one Stop computes ONE ledger. Under its own key, operator-readout computed a second,
-    # full ledger beside the siblings' shared one and ran the probe after it: measured on replayed
-    # cancelled Stops at load ~280, probe 3.3-8.1 s, BUSY-off ledger 2.3-5.9 s, BUSY-on 6.9-12.4 s.
-    # BUSY is computed after the rung ladder and no other field reads it, so the shared ledger with
-    # the probe's lines put in their place is the BUSY-on ledger, byte for byte. Kill switch:
-    # WRAP_BUSY_SPLICE=off (own key, probe inline, as before).
-    _wl_spl=0
-    if [ "${WRAP_BUSY:-on}" != "off" ] && [ "${WRAP_BUSY_SPLICE:-on}" != "off" ]; then
-      _wl_spl=1; _wl_k="$_wl_k|off"
+    # THE BUSY SPLICE (2026-10-16, docs/plans/LOAD_AND_PROMPT_HOOK_TIMEOUTS.md Wave 4c), OPT-IN with
+    # WRAP_BUSY_SPLICE=on. Such a BUSY reader asks under the BUSY-off key and adds the eight BUSY lines
+    # itself (§ THE BUSY SPLICE below), so it is served the ledger its Stop's BUSY-off hooks share
+    # instead of computing a second one. Measured on replayed cancelled Stops at load ~280: probe
+    # 3.3-8.1 s, BUSY-off ledger 2.3-5.9 s, BUSY-on 6.9-12.4 s. BUSY is computed after the rung ladder
+    # and no other field reads it, so the shared ledger with the probe's lines put in their place is
+    # the BUSY-on ledger, byte for byte. Opt-in because a default BUSY ask is a contract other
+    # readers hold (one memo file per event, tests/wrap-ledger-memo.bats); its key is unchanged.
+    _wl_spl=0; _wl_kon=""
+    if [ "${WRAP_BUSY:-on}" != "off" ] && [ "${WRAP_BUSY_SPLICE:-off}" = "on" ]; then
+      # _wl_kon is the key this ask had before the splice: it now names the event's BUSY ledger,
+      # published once and served to every later BUSY reader (_wl_on_publish).
+      _wl_spl=1; _wl_kon="$_wl_k|${WRAP_BUSY:-}"; _wl_k="$_wl_k|off"
     else
       _wl_k="$_wl_k|${WRAP_BUSY:-}"
     fi
@@ -633,6 +669,9 @@ if [ "$MODE" = "machine" ] && [ -n "$WL_TRANSCRIPT" ]; then
         WL_FILE="$WL_DIR/m-$_wl_d"
         WL_LOCK="$WL_FILE.lock"
         WL_SPLICE="$_wl_spl"
+        if [ "$_wl_spl" = 1 ] && _wl_d="$(_wl_digest "$_wl_kon")"; then
+          WL_KEY_ON="$_wl_kon"; WL_FILE_ON="$WL_DIR/m-$_wl_d"
+        fi
       fi
     fi
   fi
@@ -1372,6 +1411,7 @@ count_filed_undriven() {
   # The list and its jq pass run as _backlog_list's consumer (§ THE CONSUMER): a cache hit is parsed
   # straight from the entry, every other path is the same `list | jq` pipe as before.
   _wl_blc_arm
+  # shellcheck disable=SC2016  # a jq program: $sid/$epoch are jq variables, not shell ones
   res="$(set -o pipefail
         _WL_BLC_JQ=(-r --arg sid "$SID" --arg epoch "$CONVICTION_EPOCH" '
           (try ([ .[] | select(.status == "open" and (.filedBy // "") == $sid
@@ -2979,9 +3019,11 @@ case "$MODE" in
       _wl_cache_store "$WL_OUT"
       if [ "$WL_SPLICE" = 1 ]; then
         # Stored as the shared BUSY-off ledger; this caller asked for BUSY, so run the block now —
-        # after the compute, as before — and print what the uncached path prints.
+        # after the compute, as before — and print what the uncached path prints, or the event's
+        # BUSY ledger if another BUSY reader published first (_wl_on_publish).
         _wl_busy_set
-        emit_machine
+        _wl_on_publish "$(emit_machine)
+"
       else
         printf '%s\n' "$WL_OUT"
       fi
