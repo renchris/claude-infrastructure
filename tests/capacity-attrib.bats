@@ -97,8 +97,41 @@ session_field() { # <sid> <field> — fails (prints nothing, rc 1) when the sess
   tick; sleep 1; tick
   run jq -e '(.host.busy_s | type) == "number" and (.unseen_s | type) == "number"
              and (.accounting == "ok" or .accounting == "overflow") and (.el_s > 0)
-             and (.forks_per_s | type) == "number" and (.self_cpu_s | type) == "number"' \
+             and ((.forks_per_s | type) == "number" and .forks_alias == false
+                  or .forks_per_s == null and .forks_alias == true)
+             and (.self_cpu_s | type) == "number" and (.neg_session | type) == "boolean"
+             and (.reap_unabsorbed_s | type) == "number"' \
     <(tail -1 "$CC_CAP_ATTRIB_LOG")
+  [ "$status" -eq 0 ]
+}
+
+@test "an interval long enough for the pid cursor to wrap reports no fork rate, flagged as aliased" {
+  # 101 s x 3,400 forks/s (the measured max) > the 99,899-pid wrap span: a delta can no longer be read
+  tick
+  jq -c '.ts -= 100' "$CC_CAP_ATTRIB_STATE" > "$D/s" && mv "$D/s" "$CC_CAP_ATTRIB_STATE"
+  tick
+  run jq -e '.el_s > 29.4 and .forks_per_s == null and .forks_alias == true' <(tail -1 "$CC_CAP_ATTRIB_LOG")
+  [ "$status" -eq 0 ]
+}
+
+@test "a negative attributed total is marked underflow, never ok, and its negativity is counted" {
+  # every uid-501 pid alive at both ticks reads 1,000 s LESS cumulative CPU than state A claims
+  tick
+  jq -c '.pids |= map_values(.[1] += 1000)' "$CC_CAP_ATTRIB_STATE" > "$D/s" && mv "$D/s" "$CC_CAP_ATTRIB_STATE"
+  tick
+  run jq -e '.accounting == "underflow" and .uid501_s < 0 and .neg_s > 0' <(tail -1 "$CC_CAP_ATTRIB_LOG")
+  [ "$status" -eq 0 ]
+}
+
+@test "the reap correction never drives an ancestor below zero; the excess is reported unabsorbed" {
+  bash -c 'sleep 300; true' &
+  ROOT_PID=$!
+  tick
+  # a pid gone at B whose parent survives: it claims 1,000 s its parent never reaped
+  jq -c --argjson pp "$ROOT_PID" '.pids["99998@1.000000"] = [$pp, 600, 400, 0, 0, 0, 0, 0]' \
+    "$CC_CAP_ATTRIB_STATE" > "$D/s" && mv "$D/s" "$CC_CAP_ATTRIB_STATE"
+  tick
+  run jq -e '.reap_unabsorbed_s >= 999 and .uid501_s > -1' <(tail -1 "$CC_CAP_ATTRIB_LOG")
   [ "$status" -eq 0 ]
 }
 

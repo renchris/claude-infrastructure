@@ -65,6 +65,12 @@ ROOTS_GLOB = os.environ.get(
 MY_UID = os.getuid()
 MAX_BUCKETS = 25  # keeps a row near 4-5 KB; the remainder is summed into "rest"
 TAG = b"CLAUDE_CODE_SESSION_ID="
+PID_SPAN = 99999 - 100  # the pid cursor wraps at 99,999 back to ~100
+# The measured maximum fork rate on this box. DESIGN X5 said 1,567/s; the --daemon sampler measured
+# 2,000-3,400/s sustained on 2026-10-17 (agreeing with a 20 s pid-delta probe to 0.6%), so the old
+# figure let a lapped 30-63 s window through unflagged. A maximum that measurement exceeds is wrong
+# by definition: raising it only marks more windows unreadable, it never fabricates a rate.
+MAX_FORKS_S = 3400
 
 libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
 
@@ -597,8 +603,11 @@ def main():
             else:
                 du[key] = r["ou"] + r["cu"]
                 ds[key] = r["os"] + r["cs"]
-        # reap correction: nearest ancestor alive at BOTH ticks absorbs -cum_A(gone), per counter
+        # reap correction: nearest ancestor alive at BOTH ticks absorbs -cum_A(gone), per counter.
+        # Clamped at 0: an ancestor that never reaped the child (it was reparented, or an exec reset
+        # the counter) cannot give back what it never received; that excess is reap_unabsorbed_s.
         prev_by_pid = {int(k.split("@")[0]): k for k in pa}
+        unabsorbed = 0.0
         for gk, a in pa.items():
             if gk in snap:
                 continue
@@ -609,8 +618,10 @@ def main():
                 if ak is None:
                     break
                 if ak in snap:
-                    du[ak] -= a[1] + a[3]
-                    ds[ak] -= a[2] + a[4]
+                    for dd, x in ((du, a[1] + a[3]), (ds, a[2] + a[4])):
+                        take = min(x, max(dd[ak], 0.0))
+                        dd[ak] -= take
+                        unabsorbed += x - take
                     break
                 p = pa[ak][0]
                 d += 1
@@ -679,8 +690,11 @@ def main():
         if fp_prev:
             dp = ps_pid - fp_prev
             if dp < 0:
-                dp += 99999 - 100  # pids wrap at 99,999 back to ~100
-            row["forks_per_s"] = round(dp / el, 1)
+                dp += PID_SPAN  # pids wrap at 99,999 back to ~100
+            # past ~29 s (PID_SPAN / MAX_FORKS_S) the cursor can have lapped the pid space unseen:
+            # no reading, flagged
+            row["forks_alias"] = el * MAX_FORKS_S > PID_SPAN
+            row["forks_per_s"] = None if row["forks_alias"] else round(dp / el, 1)
         if exec_hook is not None and prev.get("exec_hook") is not None:
             row["exec_hook_dt"] = (
                 exec_hook - prev["exec_hook"]
@@ -689,13 +703,23 @@ def main():
         row["uid501_s"] = round(uid501, 1)
         row["other_uid_s"] = round(other_s, 1)
         row["unseen_s"] = round(busy - attrib, 1)
-        row["neg_s"] = round(neg, 2)
-        row["accounting"] = "overflow" if busy > 0 and attrib > busy * 1.05 else "ok"
         top = sorted(buckets.items(), key=lambda kv: -kv[1])
         bk = {k: round(v, 2) for k, v in top[:MAX_BUCKETS] if round(v, 2) != 0}
         rest = sum(v for _, v in top[MAX_BUCKETS:])
         if rest:
             bk["rest"] = round(rest, 2)
+        neg += sum(
+            -v for _, v in top if v < 0
+        )  # negative buckets too, those folded into rest included
+        row["neg_s"] = round(neg, 2)
+        row["neg_session"] = neg > 0
+        row["reap_unabsorbed_s"] = round(unabsorbed, 2)
+        if attrib < 0 or uid501 < 0:
+            row["accounting"] = "underflow"
+        else:
+            row["accounting"] = (
+                "overflow" if busy > 0 and attrib > busy * 1.05 else "ok"
+            )
         row["buckets"] = bk
 
     out_sessions = []
