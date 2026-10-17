@@ -16,7 +16,9 @@
 #   FAN-OUT   one lr-move-worker.sh per claimed row; the claim is re-stamped to the worker.
 #   WATCH     while any worker waits for its session to go idle, ONE census per LR_MOVE_SNAP_S is
 #             written to snap.tsv for all of them; a worker that died is given its verdict from disk.
-#   CLOSE     two checks that CAN fail (critic 12), then summary.json and at most ONE mail:
+#   CLOSE     two checks that CAN fail (critic 12), then summary.json and ONE mail (a worker still
+#             running is counted RUNNING; its late verdict rewrites the summary and mails again only
+#             for a casualty or the settled batch — lr_move_summary_late):
 #             a fresh router read (did the target stay ranked through the batch's own boots?), and
 #             the prompt guard run against every moved session's real transcript (can it take a
 #             prompt? this is the check a SWITCHED verdict lacked on 762a6daa).
@@ -56,7 +58,7 @@ T0="$(date +%s)"
 [ -s "$PLAN" ] || { say "no plan at $PLAN; nothing to do"; exit 2; }
 FROM="$(jq -r '.from // empty' "$PLAN")"; TO="$(jq -r '.to // empty' "$PLAN")"
 TO_CFG="$(jq -r '.to_config_dir // empty' "$PLAN")"; UNTIL="$(jq -r '.until_idle_s // 0' "$PLAN")"
-BY="$(jq -r '.requested_by // empty' "$PLAN")"; UNVERIFIED_OK="$(jq -r '.target_unverified // false' "$PLAN")"
+UNVERIFIED_OK="$(jq -r '.target_unverified // false' "$PLAN")"
 # The rows this batch drives: sid<TAB>pane<TAB>cwd, for every row whose act is move or wait.
 # Padded at the emitter: tab is IFS whitespace, so an empty pane or cwd would shift the next column
 # into its place on read.
@@ -75,46 +77,19 @@ admit_json() { # $1=admitted true|false $2=target_auth $3=reason
         '{admitted:$ok, target:$to, target_auth:$auth, reason:$why, ts:$ts}' > "$BDIR/admit.json.$$.tmp" 2>/dev/null \
     && mv -f "$BDIR/admit.json.$$.tmp" "$BDIR/admit.json" 2>/dev/null
 }
-summary() { # $1=batch verdict (done|refused) $2=note — an operator abort overrides it to `aborted`
-  local rows counts classes acts st="$1" auth_after="${AUTH_AFTER:-unchecked}"
-  # AN ABORT IS ITS OWN STATUS (D9, 2026-10-11). Batch 20261011T032613Z was aborted 18 s before it
-  # was admitted and its summary and mail still read "done: NOTMOVED=7", the same words a failure
-  # earns; the operator could not tell that the stop they asked for was the stop they got.
-  [ ! -e "$BDIR/abort" ] || st=aborted
-  # ONE jq per row: verdict, reason class, and the row's own instruction. The class is the reason's
-  # leading `word:` tag (became-limited, claim-held, worker-died ...) or `aborted`; a MOVED row gets
-  # none. The instruction is the first `cc-lr <verb> ...` the reason names — the "Recover it: cc-lr
-  # recover <sid8>" a became-limited row carries, which the summary used to drop.
-  # LEADING-PAREN PATTERNS, AND THEY ARE LOAD-BEARING: launchd runs this file under /bin/bash 3.2,
-  # which ends a `$( )` at the first unbalanced `)` — the one closing a bare `a|b)` pattern. The
-  # 2026-10-06 batch (7 of 7 MOVED) logged a syntax error here and mailed "done: no rows".
-  rows="$(for f in "$BDIR"/*.json; do
-            case "${f##*/}" in (plan.json|admit.json|summary.json|request*.json|*.watcher.json) continue ;; esac
-            jq -r '(.verdict // "") as $v | (.reason // "") as $r | select($v != "")
-                   | [$v,
-                      (if ($v | startswith("MOVED")) then ""
-                       elif ($r | test("^[a-z][a-z-]*:")) then ($r | sub(":.*$"; ""))
-                       elif ($r | test("abort")) then "aborted"
-                       elif ($r | startswith("batch refused")) then "refused"
-                       else "" end),
-                      (($r | [match("cc-lr [a-z][a-z-]*[^;)]*"; "g").string] | first // "") | sub("[ .]+$"; "")),
-                      ((.sid // "") | .[0:8])] | @tsv' "$f" 2>/dev/null
-          done)"
-  counts="$(printf '%s\n' "$rows" | awk -F'\t' '$1 != "" { print $1 }' | sort | uniq -c \
-            | awk '{ printf "%s%s=%s", (NR > 1 ? " " : ""), $2, $1 }')"
-  classes="$(printf '%s\n' "$rows" | awk -F'\t' '$1 != "" && $2 != "" { print $1 "/" $2 }' | sort | uniq -c \
-             | awk '{ printf "%s%s=%s", (NR > 1 ? " " : ""), $2, $1 }')"
-  acts="$(printf '%s\n' "$rows" | awk -F'\t' '$3 != "" { printf "%s%s: %s", (n++ ? "; " : ""), $4, $3 }')"
-  jq -nc --arg b "$BATCH" --arg st "$st" --arg note "$2" --arg c "${counts:-none}" --arg a "$auth_after" \
-        --arg cls "$classes" --arg acts "$acts" \
-        --argjson wall "$(( $(date +%s) - T0 ))" --arg from "$FROM" --arg to "$TO" \
-        '{batch:$b, status:$st, note:$note, verdicts:$c, reasons:$cls, actions:$acts, target_auth_after:$a, wall_s:$wall, from:$from, to:$to}' \
-        > "$BDIR/summary.json.$$.tmp" 2>/dev/null && mv -f "$BDIR/summary.json.$$.tmp" "$BDIR/summary.json" 2>/dev/null
-  say "$st: ${counts:-no rows}${classes:+ ($classes)} (target auth after: $auth_after) $2${acts:+ Still to do: $acts.}"
-  # ONE mail, to the requester only, never to a moved pane (a mailed no-prompt resume takes a turn).
-  local notify="${CC_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}"
-  if [ "${CC_LR_MOVE_MAIL:-on}" != off ] && [ -n "$BY" ] && [ "$BY" != "?" ] && [ -x "$notify" ]; then
-    "$notify" "$BY" "cc-lr move $BATCH ($FROM -> $TO) $st: ${counts:-no rows}${classes:+ ($classes)}; target auth after the batch: $auth_after. $2${acts:+ Still to do: $acts.} Details: cc-lr move --status $BATCH" >/dev/null 2>&1 || true
+summary() { # $1=batch verdict (done|refused) $2=note — an abort overrides it to `aborted`, a member still running to `running`
+  # The roll-up is lr_move_summary (lr-move-lib.sh), shared with the worker whose verdict lands after
+  # this close: it counts every member, RUNNING included, and puts a STRANDED one first.
+  lr_move_summary "$BDIR" "$BATCH" "$1" "$2" "${AUTH_AFTER:-unchecked}" "$T0"
+  say "$LR_MOVE_SUMMARY_LINE"
+  # ONE mail here, to the requester only, never to a moved pane (a mailed no-prompt resume takes a turn).
+  lr_move_summary_mail
+  if [ "$LR_MOVE_SUMMARY_RUNNING" = 0 ]; then
+    mkdir "$BDIR/summary.settled" 2>/dev/null || true
+  else
+    # A worker that wrote its result between the scan above and summary.json found no summary to
+    # rewrite. Re-read once, now that summary.json exists for every later one to find.
+    lr_move_summary_late "$BDIR" "$BATCH"
   fi
 }
 refuse() { # $1=reason — the whole batch: every driven row NOTMOVED, nothing claimed or started

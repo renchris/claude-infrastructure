@@ -59,6 +59,9 @@ finish() { # $1=verdict $2=reason [$3=verdict flags]  → the result file, then 
         '{sid:$sid, pane:$pane, verdict:$v, reason:$r, conjuncts:$f, from:$from, to:$to, batch:$batch, ts:$ts, wall_s:$wall}' \
         > "$tmp" 2>/dev/null && mv -f "$tmp" "$RESULT" 2>/dev/null
   ev "result" "$1: $2"
+  # A verdict that lands after the batch closed rewrites its summary, and mails a casualty or the
+  # settled batch (lr_move_summary_late; 9f6593c5's STRANDED, 2026-10-17, reached no summary).
+  lr_move_summary_late "$BDIR" "$BATCH"
   lr_swap_slot_release
   rm -f "$BDIR/$SID.waiting" 2>/dev/null || true
   lr_claim_release "$CLAIMS" "$SID" "$$"

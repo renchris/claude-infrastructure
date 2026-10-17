@@ -223,6 +223,125 @@ lr_swap_slots_held() { # → the number of slots whose holder is alive
   printf '%s' "$n"
 }
 
+# ── THE BATCH SUMMARY: EVERY MEMBER, A CASUALTY FIRST ─────────────────────────────────────────────
+# Moved here from lr-move-batch.sh so a worker whose verdict lands AFTER its batch closed can
+# rewrite the summary. Batch 20261017T073813Z-next2-next-26358 had 6 members: its watch bound
+# passed at 08:04:43 with 9f6593c5's worker still running, the summary and its one mail at 08:06:37
+# read "done: NOTMOVED=5", and that worker wrote STRANDED at 08:07:08, to a summary nobody re-read.
+# Three rules now (record: tests/fixtures/move-lane-2026-10-17/batch):
+#   · a driven member with no result is COUNTED, as RUNNING, and a batch holding one is `running`,
+#     never `done`;
+#   · STRANDED leads: the verdicts are ranked STRANDED, FAILED, RUNNING, then the rest, and each
+#     stranded member is named with its reason ahead of the counts, in the summary and the mail;
+#   · a late verdict rewrites the summary (lr_move_summary_late), and mails when it is a casualty or
+#     settles the batch (no member left running; that mail is sent once).
+# LEADING-PAREN CASE PATTERNS inside `$( )`, as everywhere in the lane: launchd runs the batch under
+# /bin/bash 3.2, which ends a command substitution at a bare pattern's `)`.
+lr_move_summary() { # $1=batch dir $2=batch $3=status $4=note $5=target auth after $6=batch start epoch → summary.json; LR_MOVE_SUMMARY_* set
+  local bdir="$1" batch="$2" st="$3" note="$4" auth_after="${5:-unchecked}" t0="${6:-}" plan rows pend counts classes acts lead running stranded f sid
+  plan="$bdir/plan.json"
+  LR_MOVE_SUMMARY_FROM="$(jq -r '.from // empty' "$plan" 2>/dev/null)"
+  LR_MOVE_SUMMARY_TO="$(jq -r '.to // empty' "$plan" 2>/dev/null)"
+  LR_MOVE_SUMMARY_BY="$(jq -r '.requested_by // empty' "$plan" 2>/dev/null)"
+  [ -n "$t0" ] || t0="$(jq -r '.ts // empty' "$plan" 2>/dev/null)"
+  case "$t0" in (''|*[!0-9]*) t0="$(date +%s)" ;; esac
+  # AN ABORT IS ITS OWN STATUS (D9, 2026-10-11). Batch 20261011T032613Z was aborted 18 s before it
+  # was admitted and its summary and mail still read "done: NOTMOVED=7", the same words a failure
+  # earns; the operator could not tell that the stop they asked for was the stop they got.
+  [ ! -e "$bdir/abort" ] || st=aborted
+  # ONE jq per row: verdict, reason class, the row's own instruction, sid8, and a stranded row's reason
+  # up to its first `;`. The class is the reason's leading `word:` tag (became-limited, claim-held,
+  # worker-died ...) or `aborted`; a MOVED row gets none. The instruction is the first `cc-lr <verb>
+  # ...` the reason names — the "Recover it: cc-lr recover <sid8>" a became-limited row carries.
+  rows="$(for f in "$bdir"/*.json; do
+            case "${f##*/}" in (plan.json|admit.json|summary.json|request*.json|*.watcher.json) continue ;; esac
+            jq -r '(.verdict // "") as $v | (.reason // "") as $r | select($v != "")
+                   | [$v,
+                      (if ($v | startswith("MOVED")) then ""
+                       elif ($r | test("^[a-z][a-z-]*:")) then ($r | sub(":.*$"; ""))
+                       elif ($r | test("abort")) then "aborted"
+                       elif ($r | startswith("batch refused")) then "refused"
+                       else "" end),
+                      (($r | [match("cc-lr [a-z][a-z-]*[^;)]*"; "g").string] | first // "") | sub("[ .]+$"; "")),
+                      ((.sid // "") | .[0:8]),
+                      (if $v == "STRANDED" then ($r | sub(";.*$"; "") | .[0:160]) else "" end)] | @tsv' "$f" 2>/dev/null
+          done)"
+  # Every driven member (act move|wait) with no result yet is RUNNING: its worker outlived the watch.
+  pend="$(jq -r '.rows[]? | select(.act == "move" or .act == "wait") | .sid // empty' "$plan" 2>/dev/null \
+          | while IFS= read -r sid; do
+              [ -n "$sid" ] && [ ! -e "$bdir/$sid.json" ] && printf 'RUNNING\t\t\t%s\t\n' "${sid:0:8}"
+            done)"
+  [ -z "$pend" ] || rows="$rows${rows:+$'\n'}$pend"
+  counts="$(printf '%s\n' "$rows" | awk -F'\t' '$1 != "" { print $1 }' | sort | uniq -c \
+            | awk '{ r = 3; if ($2 == "STRANDED") r = 0; else if ($2 == "FAILED") r = 1; else if ($2 == "RUNNING") r = 2
+                     printf "%d\t%s=%s\n", r, $2, $1 }' \
+            | sort -t "$(printf '\t')" -k1,1n -k2,2 | cut -f2 | awk '{ printf "%s%s", (NR > 1 ? " " : ""), $0 }')"
+  classes="$(printf '%s\n' "$rows" | awk -F'\t' '$1 != "" && $2 != "" { print $1 "/" $2 }' | sort | uniq -c \
+             | awk '{ printf "%s%s=%s", (NR > 1 ? " " : ""), $2, $1 }')"
+  acts="$(printf '%s\n' "$rows" | awk -F'\t' '$3 != "" { printf "%s%s: %s", (n++ ? "; " : ""), $4, $3 }')"
+  lead="$(printf '%s\n' "$rows" | awk -F'\t' '$1 == "STRANDED" { printf "%sSTRANDED %s%s", (n++ ? "; " : ""), $4, ($5 != "" ? ": " $5 : "") }')"
+  stranded="$(printf '%s\n' "$rows" | awk -F'\t' '$1 == "STRANDED" { printf "%s%s", (n++ ? " " : ""), $4 }')"
+  running="$(printf '%s\n' "$rows" | awk -F'\t' '$1 == "RUNNING" { printf "%s%s", (n++ ? " " : ""), $4 }')"
+  LR_MOVE_SUMMARY_RUNNING="$(printf '%s' "$running" | awk '{ print NF }')"
+  : "${LR_MOVE_SUMMARY_RUNNING:=0}"
+  if [ "$LR_MOVE_SUMMARY_RUNNING" -gt 0 ]; then
+    [ "$st" != "done" ] || st=running
+    note="${note:+$note }$LR_MOVE_SUMMARY_RUNNING member(s) had no verdict yet ($running): each worker writes its own, and this summary is rewritten and mailed again when the last one lands."
+  fi
+  jq -nc --arg b "$batch" --arg st "$st" --arg note "$note" --arg c "${counts:-none}" --arg a "$auth_after" \
+        --arg cls "$classes" --arg acts "$acts" --arg lead "$lead" --arg str "$stranded" --arg run "$running" \
+        --argjson wall "$(( $(date +%s) - t0 ))" --arg from "$LR_MOVE_SUMMARY_FROM" --arg to "$LR_MOVE_SUMMARY_TO" \
+        '{batch:$b, status:$st, note:$note, lead:$lead, verdicts:$c, reasons:$cls, actions:$acts,
+          stranded:($str | split(" ") | map(select(. != ""))), running:($run | split(" ") | map(select(. != ""))),
+          target_auth_after:$a, wall_s:$wall, from:$from, to:$to}' \
+        > "$bdir/summary.json.$$.tmp" 2>/dev/null && mv -f "$bdir/summary.json.$$.tmp" "$bdir/summary.json" 2>/dev/null
+  LR_MOVE_SUMMARY_TEXT="$st: ${lead:+$lead — }${counts:-no rows}${classes:+ ($classes)}"
+  # shellcheck disable=SC2034  # read by lr-move-batch.sh's summary(), the caller that says it
+  LR_MOVE_SUMMARY_LINE="$LR_MOVE_SUMMARY_TEXT (target auth after: $auth_after) $note${acts:+ Still to do: $acts.}"
+  LR_MOVE_SUMMARY_MAIL="cc-lr move $batch ($LR_MOVE_SUMMARY_FROM -> $LR_MOVE_SUMMARY_TO) $LR_MOVE_SUMMARY_TEXT; target auth after the batch: $auth_after. $note${acts:+ Still to do: $acts.} Details: cc-lr move --status $batch"
+  return 0
+}
+
+lr_move_summary_mail() { # → mails LR_MOVE_SUMMARY_MAIL to the requester only, never to a moved pane (a mailed no-prompt resume takes a turn)
+  local notify="${CC_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}" by="${LR_MOVE_SUMMARY_BY:-}"
+  if [ "${CC_LR_MOVE_MAIL:-on}" != off ] && [ -n "$by" ] && [ "$by" != "?" ] && [ -x "$notify" ]; then
+    "$notify" "$by" "$LR_MOVE_SUMMARY_MAIL" >/dev/null 2>&1 || true
+  fi
+  return 0
+}
+
+# A VERDICT THAT LANDS AFTER ITS BATCH CLOSED (the 9f6593c5 row above). Called by the worker after its
+# result is written, and by the batch itself after a `running` close, for a row that landed between
+# its scan and its summary. Rewrites the summary from disk (status `running` becomes `done` once no
+# member is left), and mails when a member that was running is now STRANDED or FAILED, or when the
+# batch settles; the settle mail is claimed once (summary.settled), so two last workers send one.
+# A batch not yet closed (no summary.json) is left alone: its own close counts this row.
+lr_move_summary_late() { # $1=batch dir $2=batch → rc 0 always
+  local bdir="$1" batch="$2" st auth was v s f n=0 casualty="" mail=0
+  [ -s "$bdir/summary.json" ] || return 0
+  until mkdir "$bdir/summary.lock" 2>/dev/null; do
+    n=$((n + 1)); [ "$n" -lt 50 ] || break        # a wedged holder costs a possible duplicate mail, never the mail
+    sleep 0.2
+  done
+  st="$(jq -r '.status // "done"' "$bdir/summary.json" 2>/dev/null)"; [ "$st" != running ] || st="done"
+  auth="$(jq -r '.target_auth_after // "unchecked"' "$bdir/summary.json" 2>/dev/null)"
+  was="$(jq -r '(.running // [])[]' "$bdir/summary.json" 2>/dev/null)"
+  for s in $was; do
+    for f in "$bdir/$s"*.json; do
+      case "${f##*/}" in (*.watcher.json) continue ;; esac
+      [ -f "$f" ] || continue
+      v="$(jq -r '.verdict // empty' "$f" 2>/dev/null)"
+      case "$v" in (STRANDED|FAILED) casualty="${casualty:+$casualty, }$s $v" ;; esac
+    done
+  done
+  lr_move_summary "$bdir" "$batch" "$st" "${casualty:+Late verdict: $casualty.}" "$auth" ""
+  [ -z "$casualty" ] || mail=1
+  if [ "$LR_MOVE_SUMMARY_RUNNING" = 0 ] && mkdir "$bdir/summary.settled" 2>/dev/null; then mail=1; fi
+  if [ -n "$was" ] && [ "$mail" = 1 ]; then lr_move_summary_mail; fi
+  rmdir "$bdir/summary.lock" 2>/dev/null || true
+  return 0
+}
+
 lr_move_event() { # $1=batch dir $2=sid $3=stage [$4=detail] → one {stage,t_ms,detail} line; always rc 0
   local ms
   ms="$(/usr/bin/python3 -c 'import time; print(int(time.time()*1000))' 2>/dev/null || echo "$(date +%s)000")"
