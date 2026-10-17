@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # shellcheck disable=SC2016  # stub bodies carry literal $ on purpose
-# Migration 0066 — one shared ms365 server (docs/research/load-root-cause-2026-10-17/DESIGN.md X4).
+# Migration 0067 — one shared ms365 server (docs/research/load-root-cause-2026-10-17/DESIGN.md X4).
 #
 # Pinned: a bare run is a dry run that changes nothing; --confirm must name its target; a live layer
 # without the guard or launcher refuses; a FAILING gate stops before launchctl, settings.json and the
@@ -14,10 +14,10 @@
 
 setup() {
   REAL="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-  MIG="$REAL/migrations/0066-ms365-shared.sh"
+  MIG="$REAL/migrations/0067-ms365-shared.sh"
   T="$BATS_TEST_TMPDIR"
   export HOME="$T/home" CC_MIGRATION_REPO="$T/repo" CC_MIGRATION_LA_DIR="$T/LaunchAgents"
-  export CC_0066_LAUNCHCTL="$T/launchctl" CC_SETTINGS_PARITY_BIN="$T/parity" LC_DIR="$T/lc" CALLS="$T/calls"
+  export CC_0067_LAUNCHCTL="$T/launchctl" CC_SETTINGS_PARITY_BIN="$T/parity" LC_DIR="$T/lc" CALLS="$T/calls"
   mkdir -p "$LC_DIR" "$CC_MIGRATION_LA_DIR" "$HOME/.claude/hooks" "$HOME/.claude/scripts" \
            "$CC_MIGRATION_REPO/launchd/staged" "$CC_MIGRATION_REPO/scripts" "$T/bin"
   cp "$REAL/launchd/staged/com.claude.mcp-ms365.plist" "$CC_MIGRATION_REPO/launchd/staged/"
@@ -38,7 +38,7 @@ setup() {
   printf '#!/bin/bash\necho "wire $*" >> "%s"\nexit 0\n' "$CALLS" > "$CC_MIGRATION_REPO/scripts/mcp-ssot-wire.sh"
   printf '#!/bin/bash\necho "parity $*" >> "%s"\nexit 0\n' "$CALLS" > "$CC_SETTINGS_PARITY_BIN"
   printf '#!/bin/bash\necho "npm $*" >> "%s"\nexit 1\n' "$CALLS" > "$T/bin/npm"
-  cat > "$CC_0066_LAUNCHCTL" <<'STUB'
+  cat > "$CC_0067_LAUNCHCTL" <<'STUB'
 #!/bin/bash
 verb="$1"; shift
 echo "launchctl $verb $*" >> "$CALLS"
@@ -49,7 +49,7 @@ case "$verb" in
 esac
 exit 0
 STUB
-  chmod +x "$CC_MIGRATION_REPO/scripts/"*.sh "$CC_SETTINGS_PARITY_BIN" "$T/bin/npm" "$CC_0066_LAUNCHCTL"
+  chmod +x "$CC_MIGRATION_REPO/scripts/"*.sh "$CC_SETTINGS_PARITY_BIN" "$T/bin/npm" "$CC_0067_LAUNCHCTL"
   export PATH="$T/bin:$PATH"
   MARKER="$HOME/.claude/state/ms365-shared.active"
   KEY="$HOME/.claude/state/ms365-proxy.key"

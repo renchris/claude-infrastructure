@@ -1,32 +1,32 @@
 #!/bin/bash
 # migration-class: c10
 # migration-step: cut every session over to ONE shared ms365 MCP server (com.claude.mcp-ms365: mcp-proxy on 127.0.0.1 over one stdio ms-365-mcp-server) — installs mcp-proxy, writes a 0600 key, runs the tools/list cutover gate and refuses on a failure, loads the launchd job, registers hooks/ms365-shared-guard.sh in ~/.claude/settings.json, writes the activation marker and re-renders every account config. launchctl and settings.json are machine-wide, so this is yours
-# migration-run: bash ~/Development/claude-infrastructure/migrations/0066-ms365-shared.sh --confirm ms365-shared
+# migration-run: bash ~/Development/claude-infrastructure/migrations/0067-ms365-shared.sh --confirm ms365-shared
 # migration-subject: ~/Development/claude-infrastructure/launchd/staged/com.claude.mcp-ms365.plist
-# migration-verify: bash ~/Development/claude-infrastructure/migrations/0066-ms365-shared.sh --verify
+# migration-verify: bash ~/Development/claude-infrastructure/migrations/0067-ms365-shared.sh --verify
 # migration-batch-hold: manual — the gate needs a multi-account MSAL cache and spawns a live server; launchctl is machine-wide
 #
-# ══ 0066 — one shared ms365 server (docs/research/load-root-cause-2026-10-17/DESIGN.md row X4) ══
+# ══ 0067 — one shared ms365 server (docs/research/load-root-cause-2026-10-17/DESIGN.md row X4) ══
 # 29 stdio children (~857 MB RSS, p99 12.4 s connect) become 1-2 processes. The gate is the whole
 # point: `scripts/mcp-ms365-proxy.sh gate` must show tools/list through the proxy byte-equal to a
 # direct stdio spawn (names and inputSchema, 188 tools incl. download-bytes-to-file and
 # verify-login) with `account` on every Graph tool. A single-account start fails it. If it fails,
 # NOTHING session-facing changes: the fallback is per-account children (row note X4), never a deny.
 #
-#   0066-ms365-shared.sh [--dry-run | --verify | --confirm ms365-shared]
+#   0067-ms365-shared.sh [--dry-run | --verify | --confirm ms365-shared]
 #
 # Order, so every failure leaves sessions on stdio: 1 install mcp-proxy · 2 key file (0600, kept if
 # present) · 3 gate · 4 load the job and read it back · 5 register the guard (backup, verify by
 # content) · 6 marker · 7 re-render + --check. Idempotent; re-run after any refusal.
 # Undo: rm ~/.claude/state/ms365-shared.active; bash ~/.claude/scripts/mcp-ssot-wire.sh;
 #       launchctl bootout gui/$(id -u)/com.claude.mcp-ms365 (the guard is inert without the marker).
-# Seams: CC_0066_LAUNCHCTL · CC_MIGRATION_LA_DIR · CC_MIGRATION_REPO · CC_SETTINGS_PARITY_BIN · HOME.
+# Seams: CC_0067_LAUNCHCTL · CC_MIGRATION_LA_DIR · CC_MIGRATION_REPO · CC_SETTINGS_PARITY_BIN · HOME.
 set -uo pipefail
 
-N=0066
+N=0067
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${CC_MIGRATION_REPO:-$(cd "$here/.." && pwd)}"
-LC="${CC_0066_LAUNCHCTL:-launchctl}"
+LC="${CC_0067_LAUNCHCTL:-launchctl}"
 LA="${CC_MIGRATION_LA_DIR:-$HOME/Library/LaunchAgents}"
 parity="${CC_SETTINGS_PARITY_BIN:-$HOME/.claude/bin/cc-settings-parity}"
 LABEL="com.claude.mcp-ms365"; DOMAIN="gui/$(id -u)"
@@ -65,7 +65,7 @@ done
 if [ "$mode" = dry ]; then
   say "would: npm install -g mcp-proxy@$PVER · write $KEY (0600) if absent · run the gate (refuse on FAIL)"
   say "would: install $dst + bootstrap $DOMAIN · append $CMD to .hooks.PreToolUse ($MATCHER) · touch $MARKER · re-render"
-  say "dry run — nothing changed; act with: bash $REPO/migrations/0066-ms365-shared.sh --confirm ms365-shared"
+  say "dry run — nothing changed; act with: bash $REPO/migrations/0067-ms365-shared.sh --confirm ms365-shared"
   exit 0
 fi
 "$parity" check >/dev/null 2>&1 || die "REFUSED — accounts do not all share $f ($parity check failed); converge with 0037 first" 3

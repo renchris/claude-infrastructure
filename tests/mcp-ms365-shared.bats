@@ -3,7 +3,7 @@
 #
 # 🚨 STAGING IS THE SAFETY PROPERTY UNDER TEST. mcp-servers.json is rendered into every live account
 # config at every converge, so the DEFAULT render must stay today's stdio entry. The http form exists
-# only behind ~/.claude/state/ms365-shared.active, which migrations/0066 alone writes, after the gate.
+# only behind ~/.claude/state/ms365-shared.active, which migrations/0067 alone writes, after the gate.
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"

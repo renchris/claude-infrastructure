@@ -8,8 +8,8 @@
 
   🚨 STAGED, NOT LOADED. It lives in launchd/staged/, outside install.sh's launchd/*.plist glob,
   because a copy into ~/Library/LaunchAgents is itself an activation at the next login. Loading it
-  is the operator's (C10): migrations/0066-ms365-shared.sh runs the cutover gate first and refuses
-  on a failure. Sessions keep their stdio server until 0066 writes ~/.claude/state/ms365-shared.active.
+  is the operator's (C10): migrations/0067-ms365-shared.sh runs the cutover gate first and refuses
+  on a failure. Sessions keep their stdio server until 0067 writes ~/.claude/state/ms365-shared.active.
 
   KeepAlive + RunAtLoad: launchd's job is to start it and restart it if it dies. ThrottleInterval 30
   so a broken install (no key, no binary) costs 2 starts a minute, not 6. The PATH carries fnm's

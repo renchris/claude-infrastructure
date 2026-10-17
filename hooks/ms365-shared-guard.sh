@@ -13,7 +13,7 @@
 #     cache is already one identity shared by every config dir, so their reach is unchanged.
 # No deny anywhere else.
 #
-# INERT unless ~/.claude/state/ms365-shared.active exists. Only migrations/0066 writes that marker,
+# INERT unless ~/.claude/state/ms365-shared.active exists. Only migrations/0067 writes that marker,
 # after the cutover gate passes, and the same marker switches mcp-ssot-wire.sh to the http form.
 # Fails open: any doubt prints nothing, and no output means the call runs exactly as issued.
 [ -e "$HOME/.claude/state/ms365-shared.active" ] || exit 0

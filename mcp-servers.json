@@ -61,7 +61,7 @@
       "_why": [
         "STAGED (DESIGN row X4, docs/research/load-root-cause-2026-10-17/DESIGN.md): one launchd-run",
         "mcp-proxy wrapping ONE stdio server in place of a stdio child per session. `server` replaces",
-        "the mcpServers entry ONLY while `marker` exists, and only migrations/0066 writes the marker,",
+        "the mcpServers entry ONLY while `marker` exists, and only migrations/0067 writes the marker,",
         "after scripts/mcp-ms365-proxy.sh gate passes. No marker = the stdio entry above, unchanged.",
         "`headers_from_file` puts each file's contents in the header; an unreadable key file FAILS OPEN",
         "to the stdio entry. The proxy reads its port from `server.url`."

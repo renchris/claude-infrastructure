@@ -80,7 +80,7 @@ versions() { echo "ms365=$(pkg_version "$BIN") mcp-proxy=$(pkg_version "$PROXY_B
 
 cmd_run() {
   load_cfg || exit 1
-  [ -x "$PROXY_BIN" ] || { echo "mcp-ms365-proxy: no mcp-proxy at $PROXY_BIN (migrations/0066 installs it)" >&2; exit 1; }
+  [ -x "$PROXY_BIN" ] || { echo "mcp-ms365-proxy: no mcp-proxy at $PROXY_BIN (migrations/0067 installs it)" >&2; exit 1; }
   [ -x "$BIN" ] || { echo "mcp-ms365-proxy: no ms-365-mcp-server at $BIN" >&2; exit 1; }
   local mode; mode="$(stat -f %Lp "$KEYFILE" 2>/dev/null)"
   [ "$mode" = 600 ] || { echo "mcp-ms365-proxy: $KEYFILE must exist with mode 600 (is: ${mode:-absent})" >&2; exit 1; }

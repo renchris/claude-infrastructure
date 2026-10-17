@@ -35,7 +35,7 @@ fixes X1-X27, §3 worktree lifecycle, §4 instrument, §5 WP table with file own
 | Wave | Repo | WPs (DESIGN §5) | Fixes | Status |
 |---|---|---|---|---|
 | W0 | — | OP-1, OP-2, OP-2b, OP-2c | X1 fseventsd restart, X24 cleanups, wired + fs_usage capture | X1 **done by another actor** (fseventsd pid 96656, 14 MB at 2026-10-17 ~10:00Z; was 12-13 GB). Spotlight Privacy entry, OP-2* pending → operator script |
-| W1-CI | claude-infrastructure | WP-1, WP-5, WP-6, WP-7, WP-8 | X2, X3 (bats), X8, X5, X4 | **landed 2026-10-17**: WP-6 adfb09b6c · WP-5 542d44d8b, 8bb8430fd · WP-1 250ff0a72 · WP-7 9d6cbcc5c, b9bc84e1a · WP-8 (ms365, staged) in the land after these. Operator: 0057 root re-install (backlog f433e92713c8), 0066 ms365 cutover (f7483bbc2acb) |
+| W1-CI | claude-infrastructure | WP-1, WP-5, WP-6, WP-7, WP-8 | X2, X3 (bats), X8, X5, X4 | **landed 2026-10-17**: WP-6 adfb09b6c · WP-5 542d44d8b, 8bb8430fd · WP-1 250ff0a72 · WP-7 9d6cbcc5c, b9bc84e1a · WP-8 (ms365, staged) in the land after these. Operator: 0057 root re-install (backlog f433e92713c8), 0067 ms365 cutover (f7483bbc2acb) |
 | W1-ACS | agent-context-sync | WP-2, WP-3, WP-4, WP-22, WP-30 | X3, X11, X20, X10, X26 | pending |
 | W2 | claude-infrastructure | WP-9, WP-10, WP-11, WP-12, WP-13, WP-14 | X6, X7, PARK tier, §4.2 detectors | **landed** — 55d01fcd4, bfab48403, 47970f271 + the WP-10 phase B land (PARK tiers, `--path`, late DETACH, ARCHIVE, all behind `--park-first`; AC-6 always on), content-verified; contract `docs/research/load-root-cause-2026-10-17/W2-CONTRACT.md`. Activation (`--park-first` in the nightly / wake run) is W3 |
 | W3 | claude-infrastructure | WP-15, WP-16, WP-17 | X9 event queue, activation (staged), X17 | blocked on W1-CI + W2 |
