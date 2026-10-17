@@ -46,17 +46,6 @@
 # ───────────────────────────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
 
-# Resolve the real gate relative to THIS file's PHYSICAL location, so a symlinked live layer
-# (~/.claude/hooks/* are per-file symlinks into the checkout) still finds its sibling in the
-# checkout rather than in the live dir. Same ladder the other hooks use.
-_self="${BASH_SOURCE[0]}"
-while [ -L "$_self" ]; do
-  _link="$(readlink "$_self")"
-  case "$_link" in /*) _self="$_link" ;; *) _self="$(dirname "$_self")/$_link" ;; esac
-done
-HOOK_DIR="$(cd "$(dirname "$_self")" && pwd)"
-GATE="${CC_CURL_GATE_BIN:-$HOOK_DIR/curl-gate.py}"
-
 # PROJECT_ROOT is duplicated from curl-gate.py:36 BY NECESSITY (we must decide before paying for
 # python). tests/curl-gate-scope.bats asserts the two spellings are identical, so a change to the
 # .py that this shim did not follow goes RED instead of silently narrowing the gate's reach.
@@ -68,6 +57,19 @@ input=""
 IFS= read -r -d '' input || true
 
 delegate() {
+  # Resolve the real gate relative to THIS file's PHYSICAL location, so a symlinked live layer
+  # (~/.claude/hooks/* are per-file symlinks into the checkout) still finds its sibling in the
+  # checkout rather than in the live dir. Same ladder the other hooks use. Resolved here, not at
+  # the top: only a delegating call reads it, and the walk's readlink/dirname forks used to run
+  # on every out-of-scope Bash call, which is nearly all of them.
+  local _self _link HOOK_DIR GATE
+  _self="${BASH_SOURCE[0]}"
+  while [ -L "$_self" ]; do
+    _link="$(readlink "$_self")"
+    case "$_link" in /*) _self="$_link" ;; *) _self="$(dirname "$_self")/$_link" ;; esac
+  done
+  HOOK_DIR="$(cd "$(dirname "$_self")" && pwd)"
+  GATE="${CC_CURL_GATE_BIN:-$HOOK_DIR/curl-gate.py}"
   [ -r "$GATE" ] || exit 0            # nothing to delegate to ⇒ incumbent no-op posture
   printf '%s' "$input" | python3 "$GATE"
   exit $?
