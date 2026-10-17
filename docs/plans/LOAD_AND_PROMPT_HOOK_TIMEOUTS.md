@@ -181,7 +181,16 @@ Replay p95, operator-readout, real cancelled Stops (`replay-operator-readout.sh`
 
 The target holds on every round at or below load ~90 — 2.1 s at 46-73, 4.96 s on the converged tree at 53-92 (the two slowest Stops, 4.96 and 5.14 s, are long-lived sessions at load 66-68), so its margin is thin by load ~90. At 4-5× the 24 h median it does not hold (5.9 s); what remains there is mostly not the ledger: the shared BUSY-off ledger is 0.6-1.3 s untraced at load ~125 (was 3.1-5.8 s at ~300), operator-readout waits 1.7-2.6 s on it under three-sibling contention, and the rest is the hook's own reads (escalation count, steps, stranded, `cc-research pending` bounded at 3 s). Next lever, not taken (outside this scope's "cost of the ledger"): operator-readout's own non-ledger reads. REFUTED as a lever: `fired_peer_sids` — its 0.6-1.3 s came from traced runs at load ~300; untraced at load ~65 over 583 real (session, pane, start) triples it is 84 ms, and an exact prefilter (sid, plus the `"firedBy": <pane>` pair — a bare pane substring matches every stamp's `firedAt`) gave 0 differences and no gain (90 ms), so it was not landed.
 
-Cancels/hour after converge: owed — the ≥ 6 h window opens 2026-10-17T07:31Z (`python3 -I docs/research/load-hook-timeouts-2026-10-11/stop-hook-durations.py 2026-10-17T07:31:17Z`).
+Cancels/hour after converge (`stop-hook-durations.py <since> <until>`; the load-matched columns count only cancels in minutes with 1-min load ≤ 40, over the hours of such minutes, from `capacity-alarm.jsonl` `load_1m`):
+
+| hook (Stop timeout) | baseline 10-16 05:00Z → 10-17 04:51Z, 23.85 h, load 31 / 375 | before: 6 h to the converge, 01:31Z → 07:31Z, load 44 / 434 | after: 07:31:17Z → 13:31:17Z, 6.00 h, load 18 / 68 | load ≤ 40 only: baseline 9.27 h · before 1.28 h → after 4.63 h |
+|---|---|---|---|---|
+| operator-readout (10 s) | 293 / 634 runs = 12.29/h; p50 7.4 s | 107 / 156 = 17.83/h; p50 10.1 s | 16 / 132 = **2.67/h**; p50 2.6 s | 1.94/h · 2.34/h → 1.73/h |
+| session-continue (5 s) | 244 = 10.23/h | 98 = 16.33/h | 9 = 1.50/h | 0.22/h · 0.78/h → 1.29/h |
+| completion-assert (5 s) | 87 = 3.65/h | 39 = 6.50/h | 3 = 0.50/h | 0.22/h · 1.56/h → 0.00/h |
+| boundary-handoff (5 s) | 83 = 3.48/h | 29 = 4.83/h | 6 = 1.00/h | 0.00/h · 0.78/h → 0.65/h |
+
+The after window ran at much lower load than either before window, so the raw rates overstate the gain; the load-matched column is the fairer one, and its denominators are small (1.28 h before). operator-readout's history p95 is still ~10 s, because history records only printing runs and cancels (memory: stop-hook-history-durations-are-biased-to-printers); its p50 fell 7.4 → 2.6 s. The sibling hooks' low-load cancels after the converge are NOT the ledger: they fall in four Stops in two sessions (`load-w2-worktree-lifecycle` 10:59Z and 11:08Z, `load-w1-ci` 12:07Z and 12:10Z), where every hook cancelled at once — the correlated whole-Stop shape Wave 4b recorded. Re-timed in those cwds at load ~12, the shared BUSY-off ledger takes 0.42-1.05 s live, against 0.46-3.85 s on the pre-change tree. The other low-load operator-readout cancels are single Stops in four different cwds. Open: the correlated whole-Stop cancels (a stall the 1-min load sampler does not see), and operator-readout's own non-ledger reads at load ≥ 120.
 
 ## Operator-only (file with cc-backlog / cc-decide; never edit settings.json or plists)
 
