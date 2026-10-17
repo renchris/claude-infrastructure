@@ -91,7 +91,7 @@ stop() { # $1 = session id in the Stop payload
   export STUB_RUNG="🔧" STUB_DIRTY=1 CC_BUSY_NOTICE=0
   run stop "t-$BATS_TEST_NUMBER"
   [ "$status" -eq 0 ]
-  [[ "$output" != *"⏳"* ]]
+  [[ "$output" != *"⏳"* ]] || false
   [ "$(wc -l < "$ASKS" | tr -d ' ')" -eq 1 ] || { cat "$ASKS"; false; }
 }
 
