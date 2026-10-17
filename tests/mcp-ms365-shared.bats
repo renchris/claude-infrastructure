@@ -58,6 +58,7 @@ activate() { touch "$HOME/.claude/state/ms365-shared.active"; printf 'k3y\n' > "
 
 @test "the guard, the renderer and the SSOT name one marker path" {
   m="$(python3 -c "import json;print(json.load(open('$REPO/mcp-servers.json'))['shared']['ms365']['marker'])")"
+  # shellcheck disable=SC2088  # the SSOT stores the literal unexpanded "~/"; that string is the subject
   [ "$m" = "~/.claude/state/ms365-shared.active" ]
   grep -qF '.claude/state/ms365-shared.active' "$GUARD"
 }
