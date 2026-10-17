@@ -3,6 +3,7 @@ the §4.5 write order, and every kill switch in the gate on its safe side."""
 
 import os
 import subprocess
+import shutil
 import tempfile
 import time
 import unittest
@@ -15,8 +16,17 @@ L = "Tue Sep 29 11:19:17 2026"
 NOW = 1_790_000_000.0
 
 
+_TMPS = []  # every _paths() root, removed once the module's tests finish
+
+
+def tearDownModule():
+    for tmp in _TMPS:
+        shutil.rmtree(tmp, True)
+
+
 def _paths():
     tmp = tempfile.mkdtemp()
+    _TMPS.append(tmp)
     p = T.Paths(lr_root=tmp, root=os.path.join(tmp, "recon"))
     store.ensure_dirs(p)
     return p
@@ -150,6 +160,7 @@ class ActTests(unittest.TestCase):
         """D4.9 + resolution 1: cmd_wake runs lr_focus_gate first; held ⇒ rc 6, nothing typed; no
         gate at all ⇒ rc 8, nothing typed; otherwise cc_tui_submit's own rc comes back."""
         tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
         lr, lib = os.path.join(tmp, "lr"), os.path.join(tmp, "lib")
         os.makedirs(lr)
         os.makedirs(lib)

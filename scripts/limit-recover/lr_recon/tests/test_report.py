@@ -549,6 +549,7 @@ class DodLine(unittest.TestCase):
         import tempfile
 
         self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root, True)
         self.paths = T.Paths(lr_root=self.root, root=self.root)
 
     def _rec(self, i, via="ENGAGED", outcome="CLOSED", sub=None, seen=()):

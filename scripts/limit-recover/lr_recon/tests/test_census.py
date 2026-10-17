@@ -3,6 +3,7 @@
 import dataclasses
 import json
 import os
+import shutil
 import tempfile
 import unittest
 
@@ -30,6 +31,7 @@ def _fact(scope="7d", resets=NOW + 7200, contradicted=False):
 class CensusBuckets(unittest.TestCase):
     def setUp(self):
         self.cwd = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.cwd, True)
         self.pane = T.PaneObs(
             kitty_pid=5,
             window_id=7,
@@ -365,6 +367,7 @@ class CensusRecords(unittest.TestCase):
 
     def test_stale_reconcile(self):
         tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
         tp = os.path.join(tmp, "s.jsonl")
         open(tp + ".handed-off", "w").close()
         snap = T.Snapshot(wall=NOW, uptime_raw=0.0)
@@ -409,6 +412,7 @@ class CensusRecords(unittest.TestCase):
     def _stores(self):
         """cfg-a holds only the source tombstone, cfg-b the target copy (a confirmed move)."""
         tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
         a, b = os.path.join(tmp, "cfg-a"), os.path.join(tmp, "cfg-b")
         for cfg, name in ((a, "m.jsonl.handed-off"), (b, "m.jsonl")):
             os.makedirs(os.path.join(cfg, "projects", "-w"))
@@ -436,7 +440,9 @@ class CensusRecords(unittest.TestCase):
 
     def _dead(self):
         """A holderless session as observe returns it, its limit death in cfg-a."""
-        cfg = os.path.join(tempfile.mkdtemp(), "cfg-a")
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        cfg = os.path.join(tmp, "cfg-a")
         os.makedirs(os.path.join(cfg, "projects", "-w"))
         fix = os.path.join(
             os.path.dirname(os.path.realpath(__file__)),
@@ -491,6 +497,7 @@ class StrandedHusk(unittest.TestCase):
 
     def setUp(self):
         tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
         self.src = os.path.join(tmp, ".claude-secondary")
         self.tgt = os.path.join(tmp, ".claude-quaternary")
         self.tp = os.path.join(self.src, "projects", "-p", self.SID + ".jsonl")
@@ -643,6 +650,7 @@ class StaleParity(unittest.TestCase):
         for i, case in enumerate(cases):
             with self.subTest(case=case["name"]):
                 home = tempfile.mkdtemp()
+                self.addCleanup(shutil.rmtree, home, True)
                 st = {k: os.path.join(home, ".claude-" + v) for k, v in names}
                 for d in st.values():
                     os.makedirs(os.path.join(d, "projects", "-p"))

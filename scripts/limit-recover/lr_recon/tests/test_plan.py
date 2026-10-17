@@ -3,6 +3,7 @@
 import json
 import os
 import subprocess
+import shutil
 import tempfile
 import unittest
 
@@ -48,6 +49,7 @@ class PlanTests(unittest.TestCase):
 
     def test_kwork_counts_fresh_transcripts(self):
         tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
         tx = os.path.join(tmp, "s1.jsonl")
         open(tx, "w").close()
         sub = os.path.join(tmp, "s1", "subagents", "workflows", "w")
@@ -61,6 +63,7 @@ class PlanTests(unittest.TestCase):
     def test_mover_weight_counts_the_window_before_death_not_before_now(self):
         """D3.6(d): a record that has waited an hour keeps its subagents' weight."""
         tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
         tx = os.path.join(tmp, "s1.jsonl")
         open(tx, "w").close()
         sub = os.path.join(tmp, "s1", "subagents")
@@ -301,6 +304,7 @@ class PlanTests(unittest.TestCase):
 
     def test_admit_lock(self):
         tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
         paths = T.Paths(lr_root=tmp, root=os.path.join(tmp, "recon"))
         h = T.LockHolder(
             record_id="r1", attempt=1, role="plan", pid=os.getpid(), lstart="x", at=NOW

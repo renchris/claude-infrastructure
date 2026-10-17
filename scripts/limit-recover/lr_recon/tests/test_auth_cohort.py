@@ -6,6 +6,7 @@ of them PRE-MOVE/None and paging RECON-DEFECT every pass."""
 
 import json
 import os
+import shutil
 import tempfile
 import time
 import unittest
@@ -48,6 +49,7 @@ def _healthy(snap, now, holders=2, registry_name="p"):
 class _Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
         self.home = os.path.join(self.tmp, "home")
         os.makedirs(self.home)
         self.env = mock.patch.dict(

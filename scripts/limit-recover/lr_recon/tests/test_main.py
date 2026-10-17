@@ -4,6 +4,7 @@ claims without recon.on + mode act (the W3 'daemon NOT loaded, 0 actuations' gua
 import io
 import json
 import os
+import shutil
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -82,6 +83,7 @@ def _snap(now, cwd):
 class MainTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
         self.home = os.path.join(self.tmp, "home")
         os.makedirs(self.home)
         self.env = mock.patch.dict(

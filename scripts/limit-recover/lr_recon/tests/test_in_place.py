@@ -9,6 +9,7 @@ act.may_actuate -> _invariant."""
 
 import json
 import os
+import shutil
 import tempfile
 import unittest
 from unittest import mock
@@ -26,6 +27,7 @@ ANSWER = 1790890183.0  # 21:29:43Z, the fresh turn after the in-place nudge
 class InPlaceTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
         self.env = mock.patch.dict(
             os.environ, {"LR_STATE_DIR": os.path.join(self.tmp, "lr"), "HOME": self.tmp}
         )

@@ -6,6 +6,7 @@ on every pass (about 1,400 an hour)."""
 
 import json
 import os
+import shutil
 import tempfile
 import time
 import unittest
@@ -23,6 +24,7 @@ SID = "abcdef01-0000-0000-0000-000000000001"
 class HolderGone(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
         self.home = os.path.join(self.tmp, "home")
         os.makedirs(self.home)
         self.env = mock.patch.dict(

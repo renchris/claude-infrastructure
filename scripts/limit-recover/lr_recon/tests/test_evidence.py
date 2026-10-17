@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import tempfile
 import unittest
 
@@ -25,6 +26,7 @@ def _snap(procs=(), panes=None, sessions=None, degraded=(), wall=1000.0):
 class EvidenceTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
         self.src = os.path.join(self.tmp, "src")
         self.tgt = os.path.join(self.tmp, "tgt")
         self.cwd = "/w/x"
