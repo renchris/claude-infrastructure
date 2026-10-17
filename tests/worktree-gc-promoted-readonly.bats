@@ -12,6 +12,8 @@
 
 setup() {
   REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+  # hermetic even though nothing here reads ~: a grep over the repo must never see the live layer
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
 }
 
 # The target token: the file's name, or the variables that hold its path.
