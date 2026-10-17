@@ -480,10 +480,12 @@ OR_LED_OK=0; OR_LED_WRAP=""; OR_LED_SID=""; OR_LED_CWD=""
 _or_busy_read() {
   local bl
   [ "$OR_LED_OK" = 1 ] && [ -n "$OR_LED_WRAP" ] || return 0
+  # WRAP_BUSY_SPLICE=on: served the Stop's shared BUSY-off ledger plus the probe, rather than a
+  # second full computation (wrap-ledger.sh § THE BUSY SPLICE).
   if [ -n "$OR_LED_SID" ]; then
-    bl="$( cd "$OR_LED_CWD" 2>/dev/null && bash "$OR_LED_WRAP" --machine --session "$OR_LED_SID" 2>/dev/null )"
+    bl="$( cd "$OR_LED_CWD" 2>/dev/null && WRAP_BUSY_SPLICE=on bash "$OR_LED_WRAP" --machine --session "$OR_LED_SID" 2>/dev/null )"
   else
-    bl="$( cd "$OR_LED_CWD" 2>/dev/null && bash "$OR_LED_WRAP" --machine 2>/dev/null )"
+    bl="$( cd "$OR_LED_CWD" 2>/dev/null && WRAP_BUSY_SPLICE=on bash "$OR_LED_WRAP" --machine 2>/dev/null )"
   fi
   [ -n "$bl" ] || return 0
   OR_BUSY_STATE="$(kv_first "$bl" BUSY_STATE)"; OR_BUSY_SUSPECT="$(kv_first "$bl" BUSY_SUSPECT)"

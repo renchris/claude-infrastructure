@@ -48,7 +48,7 @@ setup() {
   export WRAP_LEDGER_BIN="$BATS_TEST_TMPDIR/stub-ledger.sh"
   cat > "$WRAP_LEDGER_BIN" <<'STUB'
 #!/bin/bash
-printf 'busy=%s args=%s\n' "${WRAP_BUSY:-on}" "$*" >> "$ASKS"
+printf 'busy=%s%s args=%s\n' "${WRAP_BUSY:-on}" "${WRAP_BUSY_SPLICE:+ splice=$WRAP_BUSY_SPLICE}" "$*" >> "$ASKS"
 case "${1:-}" in --machine) ;; *) printf 'stub\n'; exit 0 ;; esac
 printf 'RUNG=%s\nAHEAD=%s\nSHAS=%s\nDIRTY_N=%s\nGATE=green\nREMAINDER=0\nUNLANDED=0\nDOD=present\nSCOPE=met\n' \
   "$STUB_RUNG" "${STUB_AHEAD:-0}" "${STUB_SHAS:-}" "${STUB_DIRTY:-0}"
@@ -83,7 +83,7 @@ stop() { # $1 = session id in the Stop payload
   [[ "$output" == *"no wake path armed"* ]] || { echo "$output"; cat "$ASKS"; false; }
   [ "$(wc -l < "$ASKS" | tr -d ' ')" -eq 2 ] || { cat "$ASKS"; false; }
   [ "$(sed -n 1p "$ASKS")" = "busy=off args=--machine --session t-$BATS_TEST_NUMBER" ]
-  [ "$(sed -n 2p "$ASKS")" = "busy=on args=--machine --session t-$BATS_TEST_NUMBER" ]
+  [ "$(sed -n 2p "$ASKS")" = "busy=on splice=on args=--machine --session t-$BATS_TEST_NUMBER" ]
 }
 
 @test "CC_BUSY_NOTICE=0: the empty-block path makes no BUSY ask" {
@@ -113,5 +113,5 @@ stop() { # $1 = session id in the Stop payload
   CLAUDE_CODE_SESSION_ID="t-same" run stop "t-same"
   [[ "$output" == *"no wake path armed"* ]] || { echo "$output"; false; }
   [ "$(sed -n 1p "$ASKS")" = "busy=off args=--machine" ]
-  [ "$(sed -n 2p "$ASKS")" = "busy=on args=--machine" ]
+  [ "$(sed -n 2p "$ASKS")" = "busy=on splice=on args=--machine" ]
 }
