@@ -180,7 +180,7 @@
 # silently dead rungs (see the plist's own /usr/sbin paragraph). Rung 7 resolved /usr/sbin/sysctl
 # directly from the start, falling back to the bare name only when that file is absent.
 #
-# THE INCUMBENT SITES WERE CONVERTED 2026-08-08 (backlog 2c1388d063bf), closing the deferral this
+# THE INCUMBENT SITES WERE CONVERTED 2026-08-08 (backlog 2c1388d063bf), retiring the deferral this
 # paragraph used to record. What made it a deferral: converting them is an edit to a LANDED GUARD,
 # because tests/capacity-alarm-launchd-path.bats induced "sysctl is unreachable" by stripping
 # /usr/sbin from PATH, and an absolutely-resolved rung is by construction immune to that. The first
@@ -205,7 +205,7 @@
 #
 # THEY PAGE, AND THEY NEVER RAISE THE VERDICT — D1 applied to a level that cannot decay. Max-combined,
 # rung 8 would hold the verdict at ALARM for the rest of the boot: the combined page would sit up for
-# weeks advising "shed by closing sessions" (not the lever for a zone leak), every acute crossing on
+# weeks advising session reduction (not the lever for a zone leak), every acute crossing on
 # it would be inaudible, and scripts/pool-floor.sh — which counts only verdict=OK rows as healthy —
 # would starve. That is not hypothetical: this box read 10.34 GB after 16.0 days up on 2026-09-10,
 # already past the alarm floor, so the latch would have begun at deploy. Each ratchet therefore owns
@@ -256,7 +256,10 @@
 #        CC_CAP_KALLOC_TIMEOUT_S (default 5) · CC_CAP_ZPRINT (zprint binary; ABSOLUTE for rung 8) ·
 #        CC_CAP_BOOTTIME (boot epoch, for stubbing the carry's reboot guard) ·
 #        CC_CAP_CONVOY (auto | on | off — the convoy-gauge tick; auto = only on this job's own
-#          launchd tick) · CC_CAP_CONVOY_GAUGE (the gauge script) · CC_CAP_CONVOY_TIMEOUT_S (45)
+#          launchd tick) · CC_CAP_CONVOY_GAUGE (the gauge script) · CC_CAP_CONVOY_TIMEOUT_S (45) ·
+#        CC_CAP_ATTRIB_LATEST (the daemon's attrib-latest.json; default beside CC_CAP_ATTRIB_LOG) ·
+#        CC_CAP_ATTRIB_FRESH_S (default 15) · CC_CAP_LATEST_PY (its reader; default /usr/bin/python3) ·
+#        CC_CAP_LOAD_RUNG_MODE_FILE (rung 7's switch; default ~/.claude/autonomy/capacity-alarm-load-rung.mode)
 #
 # bash 3.2 safe. Ships to launchd ⇒ tested under /bin/bash.
 
@@ -331,6 +334,15 @@ PRIOR_ROWS="${CC_CAP_PRIOR_ROWS:-15}"
 # them, and read the selftest's 5.98 probe before believing an ALARM here means the box is dying.
 LOAD_WARN_PER_CORE="${CC_CAP_LOAD_WARN_PER_CORE:-1.5}"
 LOAD_ALARM_PER_CORE="${CC_CAP_LOAD_ALARM_PER_CORE:-2.5}"
+# Rung 7's switch (X17, docs/research/load-root-cause-2026-10-17/DESIGN.md). Exactly `record-only`
+# makes load a chronic, record-only rung: still read, still on the row, never in the verdict, and its
+# page reads SKIPPED, so the per-rung loop retracts it. Load alone drove 97.6% of ALARM rows while
+# never once separating fatal from survived (D4 (1)). Absent or any other word ⇒ today's behaviour.
+# Nothing here writes the file; the operator's activation script does, after D2's record-only week.
+# `read`, not a fork: it also trims the whitespace, so `record-only\n` is the one word.
+LOAD_RUNG_MODE=""
+_lrm_f="${CC_CAP_LOAD_RUNG_MODE_FILE:-$HOME/.claude/autonomy/capacity-alarm-load-rung.mode}"
+if [ -r "$_lrm_f" ]; then read -r LOAD_RUNG_MODE < "$_lrm_f" 2>/dev/null || true; fi
 # Chronic-pressure ratchets (rung 8, D5). The floors are the item's, set against ONE fatal boot
 # (panic #5: 73 swapfiles, 9.89 GB on day 10.9) and one clean one (0, 0.08 GB) — orderings, not a
 # calibrated population, which is one more reason nothing gates on them.
@@ -837,13 +849,52 @@ read_argv0() { # $1 = comma-separated pids → lines "<pid> <argv0-basename>"
 # change), then the ps rss fallback below. `top_src` on the row says which instrument spoke.
 # --no-append runs pass --no-write: a manual run must not advance the live delta state, or the next
 # launchd tick would attribute only the seconds since the manual run. Kill-switch CC_CAP_ATTRIB=off.
+#
+# THE DAEMON'S FEED FIRST (X5, docs/research/load-root-cause-2026-10-17/DESIGN.md §4.1). When
+# `capacity-attrib.py --daemon` runs, it owns the delta state and rewrites attrib-latest.json every
+# ~5 s with the same top lines the one-shot prints. The file is used only when it is under
+# CC_CAP_ATTRIB_FRESH_S old AND its writer is provably alive: the pid's start, read by the producer's
+# own read_pid, must equal the file's `start` — a recycled pid is a different process. One python
+# fork does the stat, the parse and the liveness check, on /usr/bin/python3 -I (no ambient path).
+# Exit 3 means "alive and fresh, but no pass has finished yet": the one-shot then runs --no-write, so
+# a second writer never advances the daemon's delta state. Anything else is today's one-shot path.
+ATTRIB_LOG="${CC_CAP_ATTRIB_LOG:-$HOME/.claude/logs/attrib.jsonl}"
+ATTRIB_LATEST="${CC_CAP_ATTRIB_LATEST:-${ATTRIB_LOG%/*}/attrib-latest.json}"
+read_attrib_latest() { # <capacity-attrib.py> → the daemon's "pid rss_mb cmd" lines; rc 3 = alive, no top yet
+  [ -r "$ATTRIB_LATEST" ] || return 1
+  "${CC_CAP_LATEST_PY:-/usr/bin/python3}" -I -B -c '
+import importlib.util, json, os, sys, time
+mod, path, fresh = sys.argv[1], sys.argv[2], float(sys.argv[3])
+if time.time() - os.stat(path).st_mtime >= fresh:
+    sys.exit(1)
+with open(path) as fh:
+    d = json.load(fh)
+spec = importlib.util.spec_from_file_location("capacity_attrib", mod)
+ca = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ca)
+me = ca.read_pid(int(d["pid"]))
+if not me or not d.get("start") or me["start"] != d["start"]:
+    sys.exit(1)
+top = d.get("top") or []
+if not top:
+    sys.exit(3)
+sys.stdout.write("".join(top))
+' "$1" "$ATTRIB_LATEST" "${CC_CAP_ATTRIB_FRESH_S:-15}" 2>/dev/null
+}
 TOP_PROCS=""; TOP_SRC="ps"
 if [ "${CC_CAP_ATTRIB:-on}" != "off" ]; then
   _attrib_py="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/capacity-attrib.py"
   if [ -r "$_attrib_py" ]; then
     if [ "$APPEND" = 1 ]; then _attrib_w=(); else _attrib_w=(--no-write); fi
-    TOP_PROCS="$("${CC_CAP_PYTHON:-python3}" "$_attrib_py" "${_attrib_w[@]+"${_attrib_w[@]}"}" 2>/dev/null \
-                 | awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && NF >= 3' || true)"
+    _latest="$(read_attrib_latest "$_attrib_py")"; _latest_rc=$?
+    if [ "$_latest_rc" = 0 ]; then
+      TOP_PROCS="$(printf '%s\n' "$_latest" | awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && NF >= 3' || true)"
+    fi
+    if [ -z "$TOP_PROCS" ]; then
+      [ "$_latest_rc" = 3 ] && _attrib_w=(--no-write)
+      TOP_PROCS="$("${CC_CAP_PYTHON:-python3}" "$_attrib_py" "${_attrib_w[@]+"${_attrib_w[@]}"}" 2>/dev/null \
+                   | awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && NF >= 3' || true)"
+    fi
     [ -n "$TOP_PROCS" ] && TOP_SRC="attrib"
   fi
 fi
@@ -1508,12 +1559,18 @@ classify() { # <headroom_gb> <swap_delta_mb> [pressure] [max_proc_gb] [seg_pct] 
   # and on 2026-08-05 it stood at 2.53/core while every rung above it read healthy. Absent
   # instrument ⇒ SKIPPED (rung 3's policy), never a fabricated OK — a dead sysctl reading as load 0
   # would be the launchd-PATH failure shape exactly, on the one rung whose sensor is a daemon read.
+  # In record-only mode (X17) the state is still computed and reported here, but never raises `v`.
   case "$lp" in
     ''|*[!0-9.]*) : ;;
-    *) if awk -v a="$lp" -v b="$LOAD_ALARM_PER_CORE" 'BEGIN{exit !(a+0 >= b+0)}'; then r7=ALARM; v=2
-       elif awk -v a="$lp" -v b="$LOAD_WARN_PER_CORE" 'BEGIN{exit !(a+0 >= b+0)}'; then
-         r7=WARN; if [ "$v" -lt 1 ]; then v=1; fi
+    *) if awk -v a="$lp" -v b="$LOAD_ALARM_PER_CORE" 'BEGIN{exit !(a+0 >= b+0)}'; then r7=ALARM
+       elif awk -v a="$lp" -v b="$LOAD_WARN_PER_CORE" 'BEGIN{exit !(a+0 >= b+0)}'; then r7=WARN
        else r7=OK
+       fi
+       if [ "$LOAD_RUNG_MODE" != record-only ]; then
+         case "$r7" in
+           ALARM) v=2 ;;
+           WARN)  if [ "$v" -lt 1 ]; then v=1; fi ;;
+         esac
        fi ;;
   esac
 
@@ -1574,7 +1631,9 @@ if [ "${CC_CAP_SELFTEST:-0}" = "1" ]; then
     sg="${r%%:*}";     r="${r#*:}"
     cp="${r%%:*}";     r="${r#*:}"
     lp="${r%%:*}";     want="${r#*:}"
-    got="$(classify "$h" "$s" "$pl" "$mp" "$sg" "$cp" "$lp")"
+    # pinned to the default mode: the rung-7 probes below are verdict claims, and a record-only box
+    # must not turn its own control RED (record-only has its own probes after the load controls)
+    got="$(LOAD_RUNG_MODE='' classify "$h" "$s" "$pl" "$mp" "$sg" "$cp" "$lp")"
     if [ "$got" = "$want" ]; then
       echo "  control OK   headroom='$h' swap_delta='$s' pressure='$pl' maxproc='$mp' seg='$sg' coal='$cp' load='$lp' → $got"
     else
@@ -1640,6 +1699,20 @@ if [ "${CC_CAP_SELFTEST:-0}" = "1" ]; then
     echo "  control FAIL load instrument needs /usr/sbin on PATH — it goes SKIPPED under launchd"
     fails=$((fails+1))
   fi
+  # Record-only (X17). probe = load_per_core:want_load_state — every probe must leave the verdict
+  # OK while the rung still READS its state: `5.98` is the survived ALARM, `2.53` the fatal one, and
+  # `?` proves an unreadable instrument still SKIPs rather than reading as a healthy OK.
+  for probe in "5.98:ALARM" "2.53:ALARM" "1.5:WARN" "0.62:OK" "?:SKIPPED"; do
+    lp="${probe%%:*}"; wl="${probe#*:}"
+    got="$(LOAD_RUNG_MODE=record-only CC_CAP_RUNG_DETAIL=1 classify 99 0 1 0 "" "" "$lp")"
+    gv="${got%% *}"; gl="${got#* load=}"; gl="${gl%% *}"
+    if [ "$gv" = OK ] && [ "$gl" = "$wl" ]; then
+      echo "  control OK   record-only load='$lp' → $gv load=$gl"
+    else
+      echo "  control FAIL record-only load='$lp' → $gv load=$gl (want OK load=$wl)"
+      fails=$((fails+1))
+    fi
+  done
   # Rung 8 (D5). probe = swapfiles:kalloc_gb:want_swapfiles:want_kalloc — and EVERY probe must leave
   # the verdict OK: the ratchets report beside the verdict and never raise it, so a row turning
   # OK→ALARM here is D1's latch re-introduced. `73:9.89` is panic #5's own chronic state, `0:0.08` the
@@ -1940,7 +2013,8 @@ if [ "${CC_CAP_PAGE:-on}" != "off" ] && [ "$APPEND" = 1 ]; then
           | awk '{ cmd = $3; for (i = 4; i <= NF; i++) cmd = cmd " " $i
                    printf "%s%s %s MB", (NR > 1 ? " · " : ""), cmd, $2 } END { print "" }')"
       fi
-      printf 'shed by CLOSING idle sessions (/handoff them). Do NOT add a load-based spawn gate —\n'
+      printf 'streamline: find the lineage behind it in %s or the attrib rows (%s)\n' "$ATTRIB_LATEST" "$ATTRIB_LOG"
+      printf 'and apply its fix row. This alarm never refuses a spawn. Do NOT add a load-based spawn gate —\n'
       printf 'measured REFUSE 10/10 against real load; see docs/plans/MACHINE_CAPACITY_V2.md §8.5.7.\n'
       printf 're-run:  %s\n' "$0"
     } > "$PAGE" 2>/dev/null || true
@@ -1970,6 +2044,9 @@ if [ "${CC_CAP_PAGE:-on}" != "off" ] && [ "$APPEND" = 1 ]; then
   for _rung in swap headroom pressure maxproc segments coalition load swapfiles kalloc; do
     _now_state="$(rung_state "$RUNG_STATES" "$_rung")"
     _prev_state="$(rung_state "$PREV_STATES" "$_rung")"
+    # Record-only (X17): the load rung asserts nothing, so it takes the retract arm below, and a
+    # load page raised before the switch flipped is removed on the first run after it.
+    if [ "$_rung" = load ] && [ "$LOAD_RUNG_MODE" = record-only ]; then _now_state=SKIPPED; fi
     _rung_page="$PAGES_DIR/capacity-alarm-$_rung.page"
     case "$_now_state" in
       WARN|ALARM)
@@ -1984,7 +2061,7 @@ if [ "${CC_CAP_PAGE:-on}" != "off" ] && [ "$APPEND" = 1 ]; then
           coalition) _detail="${COAL_PROCS:-?} procs in the ${COAL_APP:-?} coalition (warn >=${COAL_WARN} · alarm >=${COAL_ALARM})" ;;
           # NAME the survived counter-example in the page itself. This rung's floors are not
           # calibrated (D4), and an operator who reads "ALARM" without knowing the box has lived
-          # above this number for 42 h will shed sessions it did not need to shed.
+          # above this number for 42 h will act on a reading that did not need acting on.
           load)      _detail="load ${LOAD_1M:-?} (1-min) on ${NCPU:-?} cores = ${LOAD_PER_CORE:-?}/core (warn >=${LOAD_WARN_PER_CORE} · alarm >=${LOAD_ALARM_PER_CORE}) · 5/15-min ${LOAD_5M:-?}/${LOAD_15M:-?} · UNCALIBRATED: 2.53/core was fatal 2026-08-05, 5.98/core survived" ;;
           swapfiles) _detail="${SWAPFILES:-?} swapfiles at ${SWAPFILE_PREFIX:-?}* (warn >=${SWAPFILE_WARN} · alarm >=${SWAPFILE_ALARM}) · ${SWAP_MB:-?} MB of swap in use · panic #5 died holding 73" ;;
           kalloc)    _detail="kernel zone data.kalloc.1024 holds ${KALLOC_GB:-?} GB (warn >=${KALLOC_WARN_GB} · alarm >=${KALLOC_ALARM_GB}) · ${KALLOC_SRC} · panic #5 died at 9.89 GB" ;;
@@ -2001,7 +2078,8 @@ if [ "${CC_CAP_PAGE:-on}" != "off" ] && [ "$APPEND" = 1 ]; then
               chronic_advice
               printf 'chronic (rung 8): reported beside the verdict, never folded into it (D5).\n' ;;
             *)
-              printf 'shed by CLOSING idle sessions (/handoff them). This alarm never refuses a spawn.\n' ;;
+              printf 'streamline: find the lineage behind it in %s or the attrib rows (%s) and apply its fix row. This alarm never refuses a spawn.\n' \
+                "$ATTRIB_LATEST" "$ATTRIB_LOG" ;;
           esac
           printf 're-run:  %s\n' "$0"
         } > "$_rung_page" 2>/dev/null || true ;;
@@ -2032,6 +2110,7 @@ if [ "$QUIET" != 1 ] && [ "$WANT_JSON" != 1 ]; then
   # the shape the launchd-PATH regression put on three other rungs).
   echo "  load per core:          ${LOAD_PER_CORE:-SKIPPED (sysctl unreadable)}${LOAD_PER_CORE:+/core   (${LOAD_1M} 1-min on ${NCPU} cores · warn >=${LOAD_WARN_PER_CORE} / alarm >=${LOAD_ALARM_PER_CORE})}"
   echo "  load 1/5/15-min:        ${LOAD_1M:-?} / ${LOAD_5M:-?} / ${LOAD_15M:-?}   (1-min gates; the other two say burst-vs-plateau — UNCALIBRATED, see D4)"
+  [ "$LOAD_RUNG_MODE" = record-only ] && echo "  load rung mode:         record-only — logged, never in the verdict, no page (X17)"
   if [ -n "$TOP_PROCS" ]; then
     printf '%s\n' "$TOP_PROCS" | awk '{ cmd = $3; for (i = 4; i <= NF; i++) cmd = cmd " " $i
                                         printf "      pid %-7s %6s MB  %s\n", $1, $2, cmd }'
@@ -2049,7 +2128,8 @@ if [ "$QUIET" != 1 ] && [ "$WANT_JSON" != 1 ]; then
     echo "  $(chronic_advice)"
   fi
   if [ "$VERDICT" = "WARN" ] || [ "$VERDICT" = "ALARM" ]; then
-    echo "  This alarm never refuses a spawn. Shed by CLOSING sessions (/handoff the idle ones);"
+    echo "  This alarm never refuses a spawn. Streamline: find the lineage behind it in"
+    echo "  ${ATTRIB_LATEST} or the attrib rows and apply its fix row;"
     echo "  do NOT add a load-based spawn gate — see MACHINE_CAPACITY_V2.md §8.5.7."
   fi
 fi
