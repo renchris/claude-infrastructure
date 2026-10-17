@@ -822,6 +822,10 @@ export CC_RR_WRAP CC_RR_CERT_STORE="${CLAUDE_CODE_CERT_STORE:-bundled}"
 # non-login non-interactive shell yields a pane that is alive and unaddressable. The launcher names
 # a recycle relaunches with (`claude3`, `nocorrect claude3 …`) are zsh FUNCTIONS defined only in the
 # interactive rc, so without `-i` the relaunch would land as `command not found`.
+# The expect program turns echo OFF before spawn (the lr-tty-quiet span); every exit path it can take
+# must not hand the fall-through shell a terminal that no longer echoes, so the state is restored here.
+rr_tty_saved=""
+[ -t 0 ] && rr_tty_saved="$(stty -g 2>/dev/null)"
 # shellcheck disable=SC2016  # single quotes REQUIRED: this is an expect(1) program and its
 #   $env(...) / $spawn_out references must reach expect uninterpreted.
 expect -c '
@@ -856,6 +860,19 @@ expect -c '
   # submitted as an empty prompt), and one element keeps a multi-line text a single argument.
   set prompt [list]
   if {$env(CC_RR_PROMPT) ne ""} { lappend prompt $env(CC_RR_PROMPT) }
+  # >>> lr-tty-quiet  (byte-identical in lr-fire-resume.sh AND bin/reso-resume-one; tests/lr-fire-resume-reply-drain.bats diffs it)
+  # NO ECHO BEFORE interact (2026-09-24, pane 405; 2026-10-16 in reso-resume-one). Until interact
+  # the pane tty stays cooked with ECHO on, so the terminal replies to the TUI boot queries
+  # (XTVERSION, kitty keyboard flags, DA1) were painted across the composer row as
+  # ^[P>|kitty(0.48.2)^[\^[[?5u^[[?62;52;c, junk that also breaks any read of the screen. The call
+  # site before the drain restores THIS original state, and the bash caller restores it on any exit.
+  set lr_tty_orig ""
+  if {[catch {exec /bin/stty -g <@ stdin 2>/dev/null} lr_tty_orig]} {
+    set lr_tty_orig ""
+  } else {
+    catch {exec /bin/stty -echo <@ stdin 2>/dev/null}
+  }
+  # <<< lr-tty-quiet
   spawn -noecho env {*}$envpfx {*}$wrap $bin --permission-mode $pmode --model $model --effort $effort {*}$mcplist --resume $sid {*}$prompt
   # THE RELAY IS BYTE-TRANSPARENT (2026-09-28), as in scripts/limit-recover/lr-fire-resume.sh, which
   # carries the measurement. Tcl 8.5 cannot hold a 4-byte UTF-8 character, so a utf-8 channel turned
@@ -989,6 +1006,7 @@ expect -c '
     return [encoding convertfrom utf-8 [lr_reply_filter $buf]]
   }
   # <<< lr-reply-drain
+  if {$lr_tty_orig ne ""} { catch {exec /bin/stty $lr_tty_orig <@ stdin 2>/dev/null} }
   set lr_keep [lr_drain_user]
   if {$lr_keep ne ""} { send -- [lr_b_utf8 $lr_keep] }
   interact
@@ -1002,6 +1020,7 @@ expect -c '
   exit [lindex $rr_w 3]
 '
 rr_rc=$?
+[ -z "$rr_tty_saved" ] || stty "$rr_tty_saved" 2>/dev/null || true
 # The session has ended, so the launch lock goes now: before every exit below and, above all, before
 # `exec $SHELL`, which would keep this pid and lstart and so hold the lock for the pane's whole life.
 rr_fence_release

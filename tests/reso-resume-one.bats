@@ -275,6 +275,25 @@ mk_reaped_worktree() { # <repo-name> <branch> <wtpath>
   [[ "$(spawn_argv)" == *"--resume SID-NOMENU"* ]]
 }
 
+@test "RED-PROOF no echo before interact: the pane tty stops echoing while the session boots" {
+  # The port of the lr-fire-resume-submit.bats case. Until interact the pane tty stayed cooked with
+  # ECHO on, so kitty's replies to the 2.1.293 boot probes (XTVERSION, CSI ? u, DA1) were painted
+  # onto the composer as ^[P>|kitty(0.48.2)^[\^[[?5u^[[?62;52;c. lr-fire-resume.sh had the cure;
+  # this launcher never did. The whole script runs on a pty here, so its stdin IS a tty, and the
+  # mode is read off that pty 1 s in, while the stub (no menu, 3 s of life) is still booting.
+  # shellcheck disable=SC2016  # the expect program reads $env(...) and $spawn_out itself
+  run env RRO="$RRO" WT="$WT" CC_RR_STUB_NO_MENU=1 timeout 90 expect -c '
+    spawn -noecho $env(RRO) next $env(WT) SID-QUIET
+    set timeout 1; expect { -re {.+} { exp_continue } timeout {} }
+    set m [exec /bin/stty -a < $spawn_out(slave,name)]
+    puts "\nMODE:[regexp -inline {[-]*echo } $m]"
+    set timeout 30; expect { -re {.+} { exp_continue } timeout {} eof {} }
+    catch close; catch wait; exit 0'
+  local mode; mode="$(printf '%s' "$output" | grep -a -o 'MODE:[^}]*' | head -1)"
+  [ -n "$mode" ] || { echo "no MODE sample"; echo "$output" | tail -c 400; false; }
+  [[ "$mode" == *"-echo"* ]] || { echo "pre-interact the pane tty still ECHOES: $mode"; false; }
+}
+
 # ── 4. a NON-reso repo's reaped worktree is recreated ────────────────────────────────────────────
 
 @test "a reaped worktree is recreated in whatever repo actually owns it" {

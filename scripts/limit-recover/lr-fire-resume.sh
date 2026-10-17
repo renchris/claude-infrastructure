@@ -1155,17 +1155,19 @@ expect -c '
   set ready_noted 0
   set asis $env(LR_ASIS)
   set menu_answered 0
-  # NO ECHO BEFORE interact (2026-09-24, pane 405). Until interact the pane tty stays cooked with
-  # ECHO on, so the terminal replies to the TUI boot queries (XTVERSION, kitty keyboard flags, DA1)
-  # were painted across the composer row as ^[P>|kitty(0.48.2)^[\^[[?5u^[[?62;52;c, and that paint
-  # broke the composer border parse, so lr_screen read UNKNOWN and the submit wait ran to its
-  # deadline. The call site below restores THIS original state before the drain and interact.
+  # >>> lr-tty-quiet  (byte-identical in lr-fire-resume.sh AND bin/reso-resume-one; tests/lr-fire-resume-reply-drain.bats diffs it)
+  # NO ECHO BEFORE interact (2026-09-24, pane 405; 2026-10-16 in reso-resume-one). Until interact
+  # the pane tty stays cooked with ECHO on, so the terminal replies to the TUI boot queries
+  # (XTVERSION, kitty keyboard flags, DA1) were painted across the composer row as
+  # ^[P>|kitty(0.48.2)^[\^[[?5u^[[?62;52;c, junk that also breaks any read of the screen. The call
+  # site before the drain restores THIS original state, and the bash caller restores it on any exit.
   set lr_tty_orig ""
   if {[catch {exec /bin/stty -g <@ stdin 2>/dev/null} lr_tty_orig]} {
     set lr_tty_orig ""
   } else {
     catch {exec /bin/stty -echo <@ stdin 2>/dev/null}
   }
+  # <<< lr-tty-quiet
   # THE QUIET BUDGET. `timeout` in expect means "no new output for N seconds", and a booting TUI
   # paints continuously — so silence is the positive fact that the frame has settled. 8 s replaces
   # the old 300 s `timeout {}`, which was not a wait but a silent give-up: a READY phrase the binary

@@ -101,6 +101,32 @@ incident_bytes() {
   done
 }
 
+# The echo guard, by its marker lines. reso-resume-one went without it for weeks while
+# lr-fire-resume.sh had it, because the case above diffs only the drain span.
+quiet_span() { sed -n '/^  # >>> lr-tty-quiet/,/^  # <<< lr-tty-quiet$/p' "$1"; }
+
+@test "the lr-tty-quiet echo guard is identical in both launchers, set before spawn, restored before the drain" {
+  local a b f
+  a="$(quiet_span "$FIRE")"; b="$(quiet_span "$RRO")"
+  [ -n "$a" ] || { echo "no lr-tty-quiet span in $FIRE"; false; }
+  [ -n "$b" ] || { echo "no lr-tty-quiet span in $RRO"; false; }
+  [ "$a" = "$b" ] || { diff <(printf '%s\n' "$a") <(printf '%s\n' "$b"); false; }
+  for f in "$FIRE" "$RRO"; do
+    # Echo must be off before the TUI exists to query the terminal, so the span precedes the first spawn.
+    local q s
+    q="$(grep -n '^  # >>> lr-tty-quiet' "$f" | head -1 | cut -d: -f1)"
+    s="$(grep -n -E '^ +spawn ' "$f" | head -1 | cut -d: -f1)"
+    if [ -z "$q" ] || [ -z "$s" ] || [ "$q" -ge "$s" ]; then
+      echo "$f: span at line $q, first spawn at line $s"; false
+    fi
+    # The original mode comes back before the drain, which saves and restores whatever it finds.
+    # shellcheck disable=SC2016  # the expected text is literal Tcl source, never a shell expansion
+    [ "$(grep -B1 '^  set lr_keep \[lr_drain_user\]$' "$f" | head -1)" = \
+      '  if {$lr_tty_orig ne ""} { catch {exec /bin/stty $lr_tty_orig <@ stdin 2>/dev/null} }' ] \
+      || { echo "$f: the restore does not immediately precede the drain call"; grep -B2 'set lr_keep \[lr_drain_user\]' "$f"; false; }
+  done
+}
+
 @test "EXECUTED: reports queued before interact never reach the spawned session; the keystroke does" {
   EXP="$BATS_TEST_TMPDIR/resume.exp"
   sed -n "/^expect -c '\$/,/^' ||/p" "$FIRE" | sed '1d;$d' > "$EXP"
