@@ -90,7 +90,8 @@ SH
   # fixtured $HOME, so unsetting them is enough.
   unset WT_LEDGER WT_TOMB_DIR WT_STATE_DIR WT_CRASH_LOG WT_CONFIG_ROOTS WT_TRUNK WT_GIT WT_BACKLOG \
         WT_RESUME_DEBT_DIR WT_LR_DIR WT_RECYCLE_FAILED_DIR WT_BOOT_RESUME_DIR CC_WTGC_TOMBSTONE_LIB \
-        CC_WTGC_TRUNK
+        CC_WTGC_TRUNK WT_PARK_ROOT WT_PARK_INDEX WT_EVENTS_FILE WT_WAKE_FILE \
+        CC_WTGC_PARK_FIRST CC_WTGC_GRACE_PARK_S CC_WTGC_ARCHIVE_FLOOR_GB GIT_OPTIONAL_LOCKS
   # THE LAB CLOCK, two hours ahead. wt_pinned's `owner` pin holds any tree whose logs/HEAD moved in
   # the last hour, and every fixture here wrote its logs/HEAD seconds ago — so on the real clock the
   # whole REMOVE half of this suite would read "pinned (owner …)" and pass its KEEP halves vacuously.
@@ -2218,4 +2219,303 @@ tomb_id() { jq -r 'select(.event=="worktree-tombstoned") | .id' "$DLOG"; }
   echo "$new_out" | grep -q "remove  "
   echo "$new_out" | grep -q "dispose"
   echo "$new_out" | grep -q "detached HEAD"
+  # Phase B is opt-in: nothing above parks, and the same lab under --park-first plans no removal at all.
+  ! echo "$new_out" | grep -q "park" || false
+  run_gc --dry-run --park-first
+  [ "$status" -eq 0 ]
+  ! echo "$output" | grep -qE "^(would )?(remove|dispose)" || false
+  echo "$output" | grep -q "park-first parked=.* pop_active="
+}
+
+# ── WP-10 phase B: the PARK-first lifecycle (DESIGN §3.2 PARKED/DETACHED/ARCHIVED, §3.7 lab) ──────
+# Every case runs with --park-first; the park stores live in the lab. The RED control is the pre-W2
+# script (old_gc, 7fa90e0c2) on the same fixture.
+
+pf_env() { # [extra env…] → GCENV with the park stores in the lab
+  PARK_ROOT="$BATS_TEST_TMPDIR/parked"; PARK_IDX="$BATS_TEST_TMPDIR/park-index"
+  GCENV=(WT_PARK_ROOT="$PARK_ROOT" WT_PARK_INDEX="$PARK_IDX" WT_CONFIG_ROOTS="$HOME/.claude" "$@")
+}
+stamp_ago() { date -r $(( $(date +%s) - $1 )) +%Y%m%d%H%M.%S; }   # <seconds> → touch -t stamp
+age_tree() { # <tree> <seconds> — every working file and dir, plus <gitdir>/logs/HEAD and index
+  local st gd; st="$(stamp_ago "$2")"
+  find "$1" -name .git -prune -o -exec touch -h -t "$st" {} +
+  gd="$(git -C "$1" rev-parse --absolute-git-dir)"
+  touch -t "$st" "$gd/logs/HEAD" "$gd/index"
+}
+nm() { # <tree> — an installed node_modules, gitignored, with no lockfile and no provisioning hook
+  grep -qxF 'node_modules/' "$R/.git/info/exclude" 2>/dev/null || printf 'node_modules/\n' >> "$R/.git/info/exclude"
+  mkdir -p "$1/node_modules/pkg"; printf 'module.exports = 1\n' > "$1/node_modules/pkg/index.js"
+}
+parked_of() { printf '%s\n' "$output" | sed -n 's/^park    .* → //p' | head -1; }
+unpark() { # <path> → wt_unpark through the real library, on the lab stores
+  run env WT_PARK_ROOT="$PARK_ROOT" WT_PARK_INDEX="$PARK_IDX" WT_LEDGER="$DLOG" \
+    bash -c '. "$1" && wt_unpark "$2"' _ "$REPO/scripts/lib/wt-tombstone.sh" "$1"
+}
+DAY=86400
+
+@test "PARK: landed-clean past the 24 h grace is PARKED (node_modules kept, HEAD detached) and unparks identical; RED: pre-W2 removes it" {
+  p="$(wt wt-pk feat/pk)"
+  nm "$p"
+  # RED control: the pre-W2 script removes the tree, and node_modules goes with it, recorded nowhere.
+  GCX="$(old_gc)"; run_gc; GCX=""
+  [ "$status" -eq 0 ]
+  [ ! -d "$p" ]
+  [ -z "$(find "$BATS_TEST_TMPDIR" -path '*node_modules/pkg/index.js' 2>/dev/null)" ]
+  git -C "$R" worktree add -q "$p" feat/pk
+  nm "$p"
+  : > "$DLOG"
+  st0="$(git -C "$p" status --porcelain --ignored)"; rl0="$(git -C "$p" reflog)"
+  pf_env WT_NOW="$(( $(date +%s) + 2 * DAY ))"
+  run_gc --park-first
+  [ "$status" -eq 0 ]
+  [ ! -e "$p" ]
+  echo "$output" | grep -q "^park    .*\[feat/pk\] — arm-i (landed-clean, quiet "
+  echo "$output" | grep -q "park-first parked=1 detached=0 archived=0 pop_active=0 pop_parked=1 dry_run=0"
+  parked="$(parked_of)"
+  [ -f "$parked/node_modules/pkg/index.js" ]
+  ! git -C "$parked" symbolic-ref -q HEAD || false        # detached, so a branch prune may delete feat/pk
+  has_br feat/pk
+  jq -e 'select(.event=="worktree-parked") | .actor=="worktree-gc" and .reason=="landed-clean"' "$DLOG" >/dev/null
+  ! grep -q '"event":"worktree-tombstoned"' "$DLOG" || false   # a park removes nothing, so no tombstone
+  unpark "$p"
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$p" status --porcelain --ignored)" = "$st0" ]
+  [ "$(git -C "$p" reflog)" = "$rl0" ]
+  [ "$(git -C "$p" symbolic-ref --short HEAD)" = feat/pk ]
+}
+
+@test "PARK: landed-clean inside the 24 h grace is KEPT; the transcript leg, not git activity, sets the grace when one exists" {
+  p="$(wt wt-grace feat/grace)"
+  pf_env
+  run_gc --park-first
+  [ "$status" -eq 0 ]
+  [ -d "$p" ]
+  echo "$output" | grep -q "KEEP .*\[feat/grace\] — landed-clean, inside the PARK grace — no transcript, so the tree's own git activity 2h old (< 24h)"
+  # A transcript written an hour before the lab clock holds it, though git activity is 2 d old.
+  local cp slug now2=$(( $(date +%s) + 2 * DAY ))
+  cp="$(cd "$p" && pwd -P)"; slug="$(printf '%s' "$cp" | sed 's#[/.]#-#g')"
+  mkdir -p "$HOME/.claude/projects/$slug"
+  printf '{"cwd":"%s"}\n' "$cp" > "$HOME/.claude/projects/$slug/s1.jsonl"
+  touch -t "$(date -r $((now2 - 3600)) +%Y%m%d%H%M.%S)" "$HOME/.claude/projects/$slug/s1.jsonl"
+  pf_env WT_NOW="$now2"
+  run_gc --park-first
+  [ "$status" -eq 0 ]
+  [ -d "$p" ]
+  echo "$output" | grep -q "KEEP .*\[feat/grace\] — landed-clean, inside the PARK grace — newest transcript 1h old"
+  touch -t "$(date -r $((now2 - 30 * 3600)) +%Y%m%d%H%M.%S)" "$HOME/.claude/projects/$slug/s1.jsonl"
+  run_gc --park-first
+  [ "$status" -eq 0 ]
+  [ ! -e "$p" ]
+  echo "$output" | grep -q "^park    .*\[feat/grace\] — arm-i (landed-clean, quiet 30h)"
+}
+
+@test "PARK: an unlanded tree is parked by arm (ii) with its branch still attached" {
+  p="$(abandoned_wt wt-un feat/un)"
+  age_tree "$p" $((10 * DAY))
+  pf_env
+  run_gc --park-first
+  [ "$status" -eq 0 ]
+  [ ! -e "$p" ]
+  echo "$output" | grep -q "^park    .*\[feat/un\] — arm-ii (unlanded, quiet 10d)"
+  [ "$(git -C "$(parked_of)" symbolic-ref --short HEAD)" = feat/un ]
+  ! echo "$output" | grep -qE "^(dispose|DISPOSE)" || false   # park replaces the DISPOSE class, never adds to it
+}
+
+@test "PARK floors: a 2 d-old file or a 2 d-old logs/HEAD with no transcript KEEPS an old unlanded tree; aged out, it parks" {
+  p="$(abandoned_wt wt-floor feat/floor)"
+  age_tree "$p" $((10 * DAY))
+  touch -t "$(stamp_ago $((2 * DAY)))" "$p/g"
+  pf_env
+  run_gc --park-first --dry-run
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "KEEP .*\[feat/floor\] — unlanded, arm-ii floor: a working-tree file changed within 7d"
+  touch -t "$(stamp_ago $((10 * DAY)))" "$p/g"
+  touch -t "$(stamp_ago $((2 * DAY)))" "$(git -C "$p" rev-parse --absolute-git-dir)/logs/HEAD"
+  run_gc --park-first --dry-run
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "KEEP .*\[feat/floor\] — unlanded, arm-ii floor: no transcript (unknown, not old) and the tree's own git activity (logs/HEAD, index) is 2d old (< 7d)"
+  age_tree "$p" $((10 * DAY))
+  run_gc --park-first --dry-run
+  [ "$status" -eq 0 ]
+  [ -d "$p" ]
+  echo "$output" | grep -q "^would park    .*\[feat/floor\] — arm-ii (unlanded, quiet 10d)"
+}
+
+@test "PARK floors: a transcript under a SUBDIRECTORY-cwd slug in a fifth config root counts" {
+  p="$(abandoned_wt wt-five feat/five)"
+  age_tree "$p" $((10 * DAY))
+  local cp slug r roots="" t
+  cp="$(cd "$p" && pwd -P)"; slug="$(printf '%s' "$cp/sub" | sed 's#[/.]#-#g')"
+  for r in 1 2 3 4 5; do mkdir -p "$BATS_TEST_TMPDIR/root$r/projects"; roots="$roots${roots:+:}$BATS_TEST_TMPDIR/root$r"; done
+  mkdir -p "$BATS_TEST_TMPDIR/root5/projects/$slug"
+  t="$BATS_TEST_TMPDIR/root5/projects/$slug/s5.jsonl"
+  printf '{"cwd":"%s/sub"}\n' "$cp" > "$t"
+  touch -t "$(stamp_ago $((2 * DAY)))" "$t"
+  pf_env WT_CONFIG_ROOTS="$roots"
+  run_gc --park-first --dry-run
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "KEEP .*\[feat/five\] — unlanded, arm-ii floor: newest transcript is 2d old (< 7d)"
+  touch -t "$(stamp_ago $((10 * DAY)))" "$t"
+  run_gc --park-first --dry-run
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "^would park    .*\[feat/five\] — arm-ii (unlanded, quiet 10d)"
+}
+
+@test "PARK: pool slots and submodule trees are KEPT, past every floor" {
+  p="$(wt wt-pool-3 feat/pool)"
+  q="$(wt wt-subm feat/subm)"
+  : > "$q/.gitmodules"
+  pf_env WT_NOW="$(( $(date +%s) + 2 * DAY ))"
+  run_gc --park-first
+  [ "$status" -eq 0 ]
+  [ -d "$p" ]
+  [ -d "$q" ]
+  echo "$output" | grep -q "KEEP .*\[feat/pool\] — pool slot (wt-pool-3)"
+  echo "$output" | grep -q "KEEP .*\[feat/subm\] — holds submodules"
+}
+
+@test "late DETACH: a parked arm-(i) tree past cleanupPeriodDays is tombstoned and removed; a reflog-only commit survives gc" {
+  p="$(wt wt-dt feat/dt)"
+  echo A > "$p/a"; git -C "$p" add a; git -C "$p" commit -qm A
+  local A B; A="$(git -C "$p" rev-parse HEAD)"
+  git -C "$p" reset -q --hard HEAD~1
+  echo B > "$p/b"; git -C "$p" add b; git -C "$p" commit -qm B
+  B="$(git -C "$p" rev-parse HEAD)"
+  git -C "$R" update-ref refs/remotes/origin/main "$B"     # B lands; A lives only in the tree's reflog
+  brag "$p"
+  pf_env WT_NOW="$(( $(date +%s) + 2 * DAY ))"
+  run_gc --park-first
+  [ "$status" -eq 0 ]
+  parked="$(parked_of)"
+  [ -d "$parked" ]
+  # Inside cleanupPeriodDays (30 d with no settings.json): it stays PARKED, and says when it goes.
+  pf_env WT_NOW="$(( $(date +%s) + 10 * DAY ))"
+  run_gc --park-first
+  [ "$status" -eq 0 ]
+  [ -d "$parked" ]
+  echo "$output" | grep -q "KEEP .*\[feat/dt\] — PARKED from .*wt-dt (arm-i; no transcript, so the tree's own git activity 10d old, DETACH after 30d)"
+  pf_env WT_NOW="$(( $(date +%s) + 31 * DAY ))"
+  run_gc --park-first
+  [ "$status" -eq 0 ]
+  [ ! -d "$parked" ]
+  echo "$output" | grep -q "^detach  .*wt-dt \[feat/dt\] — parked arm-i tree, no transcript, so the tree's own git activity 31d old > cleanupPeriodDays 30d · tombstone "
+  echo "$output" | grep -q "parked=0 detached=1 archived=0 pop_active=0 pop_parked=0"
+  tid="$(jq -r 'select(.event=="worktree-disposed") | .tombstone_id' "$DLOG")"
+  [ -n "$tid" ]
+  [ "$(jq -r --arg t "$tid" 'select(.event=="worktree-tombstoned" and .id==$t) | .reason' "$DLOG")" = late-detach ]
+  cmp "$HOME/.claude/autonomy/worktree-tombstones/$tid/residue/brag-output/x.json" "$BATS_TEST_TMPDIR/x.json.orig"
+  [ -z "$(ls -A "$PARK_IDX")" ]                             # no index entry left to chase a gone tree
+  git -C "$R" branch -D -q feat/dt
+  git -C "$R" reflog expire --expire=now --all
+  git -C "$R" gc -q --prune=now
+  git -C "$R" cat-file -e "$A^{commit}"
+  git -C "$R" for-each-ref --points-at "$A" --format='%(refname)' "refs/wt-tombstone/$tid/" | grep -q "/reflog-"
+  ! git -C "$R" for-each-ref --points-at "$B" --format='%(refname)' "refs/wt-tombstone/$tid/" | grep -q "/reflog-" || false
+}
+
+@test "late DETACH: a tombstone that cannot be written leaves the tree PARKED, still locked, residue in place" {
+  p="$(wt wt-dtf feat/dtf)"
+  brag "$p"
+  pf_env WT_NOW="$(( $(date +%s) + 2 * DAY ))"
+  run_gc --park-first
+  [ "$status" -eq 0 ]
+  parked="$(parked_of)"
+  [ -d "$parked" ]
+  : > "$BATS_TEST_TMPDIR/not-a-dir"                       # the ledger's parent is a FILE: the row cannot land
+  pf_env WT_NOW="$(( $(date +%s) + 31 * DAY ))" WT_LEDGER="$BATS_TEST_TMPDIR/not-a-dir/ledger.jsonl"
+  run_gc --park-first
+  [ "$status" -eq 0 ]
+  [ -d "$parked" ]
+  echo "$output" | grep -q "KEEP .*\[feat/dtf\] — PARKED from .*wt-dtf; tombstone failed — .* (stays PARKED)"
+  cmp "$parked/brag-output/x.json" "$BATS_TEST_TMPDIR/x.json.orig"
+  git -C "$R" worktree list --porcelain | grep -q "^locked parked "
+  [ -n "$(ls -A "$PARK_IDX")" ]
+}
+
+@test "ARCHIVE: below the free-space floor a parked tree is bundled, tombstoned and removed; no floor ⇒ never" {
+  p="$(abandoned_wt wt-ar feat/ar)"
+  age_tree "$p" $((10 * DAY))
+  pf_env
+  run_gc --park-first
+  [ "$status" -eq 0 ]
+  parked="$(parked_of)"
+  [ -d "$parked" ]
+  run_gc --park-first                                       # no floor: it stays, and says why
+  [ "$status" -eq 0 ]
+  [ -d "$parked" ]
+  echo "$output" | grep -q "KEEP .*\[feat/ar\] — PARKED from .*wt-ar (arm-ii — stays parked; only disk pressure archives it)"
+  pf_env CC_WTGC_ARCHIVE_FLOOR_GB=0                         # a floor no volume is under
+  run_gc --park-first
+  [ -d "$parked" ]
+  pf_env CC_WTGC_ARCHIVE_FLOOR_GB=999999999
+  run_gc --park-first --dry-run
+  [ "$status" -eq 0 ]
+  [ -d "$parked" ]
+  echo "$output" | grep -q "^would archive  .*wt-ar \[feat/ar\] — disk pressure: "
+  run_gc --park-first
+  [ "$status" -eq 0 ]
+  [ ! -d "$parked" ]
+  echo "$output" | grep -q "^archive  .*wt-ar \[feat/ar\] — disk pressure: .* < floor 999999999 GB"
+  echo "$output" | grep -q "archived=1 pop_active=0 pop_parked=0"
+  tid="$(jq -r 'select(.event=="worktree-disposed") | .tombstone_id' "$DLOG")"
+  [ -s "$HOME/.claude/autonomy/worktree-tombstones/$tid/feat/ar.bundle" ]
+  git -C "$R" bundle verify -q "$HOME/.claude/autonomy/worktree-tombstones/$tid/feat/ar.bundle"
+  has_br feat/ar                                           # the branch itself is never deleted here
+}
+
+@test "--path evaluates only the named trees, skips the prune, drops what is not a worktree, and spans repos" {
+  p="$(wt wt-pa feat/pa)"
+  q="$(wt wt-pb feat/pb)"
+  g="$(wt wt-pgone feat/pgone)"; mv "$g" "$BATS_TEST_TMPDIR/pgone-away"
+  pf_env WT_NOW="$(( $(date +%s) + 2 * DAY ))"
+  run_gc --park-first --dry-run --path "$p"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "^would park    .*\[feat/pa\]"
+  ! echo "$output" | grep -qE "feat/pb|^(would )?prune " || false
+  run_gc --park-first --path "$p" --path "$R" --path "$BATS_TEST_TMPDIR/nowhere"
+  [ "$status" -eq 0 ]
+  [ ! -e "$p" ]
+  [ -d "$q" ]
+  has_wt "$(cd "$BATS_TEST_TMPDIR" && pwd -P)/wt-pgone"      # the broken record was not pruned
+  echo "$output" | grep -q -- "--path $BATS_TEST_TMPDIR/nowhere — not a worktree of any repository, and not parked; dropped"
+  echo "$output" | grep -q -- "--path .*/main — not a linked worktree of .*; dropped"
+  echo "$output" | grep -q "pop_active=0 pop_parked=1"
+  # The default (no --park-first) plan for one path, and the refused combination.
+  run_gc --dry-run --path "$q"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "^would remove  .*\[feat/pb\]"
+  run_gc --path "$q" --prune-branches
+  [ "$status" -eq 2 ]
+  # Paths in two repos: one pass per repo, each with its own plan.
+  local R2="$BATS_TEST_TMPDIR/main2" s
+  git init -q -b main "$R2"; git -C "$R2" config user.email t@t; git -C "$R2" config user.name t
+  echo a > "$R2/f"; git -C "$R2" add f
+  GIT_AUTHOR_DATE="$OLD +0000" GIT_COMMITTER_DATE="$OLD +0000" git -C "$R2" commit -qm c1
+  git -C "$R2" update-ref refs/remotes/origin/main HEAD
+  s="$BATS_TEST_TMPDIR/wt-r2"; git -C "$R2" worktree add -q -b feat/r2 "$s" HEAD
+  run_gc --dry-run --path "$q" --path "$s"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "^would remove  .*\[feat/pb\]"
+  echo "$output" | grep -q "^would remove  .*\[feat/r2\]"
+  [ "$(echo "$output" | grep -c '^worktree-gc: counts ')" -eq 2 ]
+}
+
+@test "AC-6: a live session cwd'd in a SUBDIRECTORY keeps the tree; a sibling prefix does not; RED: pre-W2 removes it" {
+  p="$(wt wt-ac6 feat/ac6)"
+  mkdir -p "$p/sub/deep"
+  printf '[{"cwd":"%s/sub/deep"}]\n' "$p" > "$SHIMOUT"
+  GCX="$(old_gc)"; run_gc; GCX=""
+  [ "$status" -eq 0 ]
+  [ ! -d "$p" ]
+  git -C "$R" worktree add -q "$p" feat/ac6
+  mkdir -p "$p/sub/deep"
+  run_gc
+  [ "$status" -eq 0 ]
+  [ -d "$p" ]
+  echo "$output" | grep -q "KEEP .*\[feat/ac6\] — LIVE — a registered session / running claude is cwd'd here"
+  mkdir -p "${p}-sib"
+  printf '[{"cwd":"%s-sib"}]\n' "$p" > "$SHIMOUT"
+  run_gc
+  [ "$status" -eq 0 ]
+  [ ! -d "$p" ]
 }
