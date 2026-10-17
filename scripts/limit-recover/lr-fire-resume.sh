@@ -579,6 +579,76 @@ lr_member_guard() {
   return 0
 }
 
+# ── A PARKED TREE IS UNPARKED, A REMOVED ONE RESTORED ONLY FOR ITS OWN SESSION (2026-10-17) ─────
+# docs/research/load-root-cause-2026-10-17/DESIGN.md §3.5 item 4a, the same two steps as
+# bin/reso-resume-one. A PARKED tree is moved back on a path match alone (lossless; pool slots are never
+# parked); without it the add below fails, because the branch is checked out at the parked path. The
+# unpark runs inside the per-repo git lock, since `git worktree move` writes .git/worktrees as an add
+# does. A REMOVED tree is restored through cc-wt-restore ONLY when its tombstone names this sid, and only
+# where the exit-2 refusal stood; a prompted unattended resume must never revive landed work. Every
+# missing-cwd outcome is one resume-reaped row (X7 phase 1). A missing library keeps the behaviour from
+# before this block exactly. CC_RESUME_TOMBSTONE_LIB, when set, is the only library looked at.
+_lrf_s="${BASH_SOURCE[0]}"
+while [ -L "$_lrf_s" ]; do
+  _lrf_t="$(readlink "$_lrf_s" 2>/dev/null)" || break
+  case "$_lrf_t" in /*) _lrf_s="$_lrf_t" ;; *) _lrf_s="$(dirname "$_lrf_s")/$_lrf_t" ;; esac
+done
+_lrf_sd="$(cd "$(dirname "$_lrf_s")" 2>/dev/null && pwd)" || _lrf_sd=""
+_LRF_WTL=""
+if [ -n "${CC_RESUME_TOMBSTONE_LIB+set}" ]; then
+  [ -f "${CC_RESUME_TOMBSTONE_LIB}" ] && _LRF_WTL="${CC_RESUME_TOMBSTONE_LIB}"
+else
+  for _lrf_d in "${_lrf_sd:+$_lrf_sd/../lib/wt-tombstone.sh}" "$HOME/.claude/scripts/lib/wt-tombstone.sh"; do
+    [ -n "$_lrf_d" ] && [ -f "$_lrf_d" ] && { _LRF_WTL="$_lrf_d"; break; }
+  done
+fi
+if [ -n "$_LRF_WTL" ]; then
+  # shellcheck disable=SC1090  # runtime-resolved library
+  { . "$_LRF_WTL" 2>/dev/null && command -v wt_unpark >/dev/null 2>&1; } || _LRF_WTL=""
+fi
+_LRF_WTR=""
+for _lrf_d in "${_lrf_sd:+$_lrf_sd/../../bin/cc-wt-restore}" "$HOME/.claude/bin/cc-wt-restore"; do
+  [ -n "$_lrf_d" ] && [ -x "$_lrf_d" ] && { _LRF_WTR="$_lrf_d"; break; }
+done
+lr_reaped() { # $1=outcome → one resume-reaped row; never fails
+  [ -z "$_LRF_WTL" ] || wt_resume_reaped lr-fire-resume "$WT" "$SID" "$1"
+  return 0
+}
+lr_wt_glock() { # $1=repo → the per-repo git lock dir, keyed on the common dir as the add below keys it
+  local gcd
+  gcd="$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  printf '%s\n' "${LR_STATE_DIR:-$HOME/.reso/limit-recover}/locks/git-$(printf '%s' "$gcd" | shasum | cut -c1-40)"
+}
+lr_restore_sid() { # → rc 0 iff a tombstone names $SID and cc-wt-restore brought $WT back
+  local canon row repo gl="" rc=0
+  [ -n "$_LRF_WTL" ] && [ -n "$_LRF_WTR" ] || return 1
+  canon="$(cd "$(dirname "$WT")" 2>/dev/null && pwd -P)/$(basename "$WT")" || canon="$WT"
+  row="$(wt_tomb_find "$canon" --sid "$SID" 2>/dev/null)" || row="$(wt_tomb_find "$WT" --sid "$SID" 2>/dev/null)" || return 1
+  repo="$(printf '%s' "$row" | jq -r '.repo // empty' 2>/dev/null)" || repo=""
+  if [ -n "$repo" ] && gl="$(lr_wt_glock "$repo")"; then
+    lr_git_lock "$gl" || { echo "✗ lr-fire-resume: git lock $gl still held — $WT not restored" >&2; return 1; }
+  else
+    gl=""
+  fi
+  "$_LRF_WTR" "$WT" --sid "$SID" --yes >/dev/null || rc=$?
+  [ -z "$gl" ] || rm -rf "$gl"
+  [ "$rc" -eq 0 ] || return 1
+  echo "-- lr-fire-resume: restored $WT from its tombstone (sid $SID matched), detached at the recorded head" >&2
+}
+if [ -n "$_LRF_WTL" ] && _lrf_pk="$(wt_parked_lookup "$WT" 2>/dev/null)"; then
+  _lrf_gl="$(lr_wt_glock "${_lrf_pk%%	*}")" || _lrf_gl=""
+  if [ -z "$_lrf_gl" ] || ! lr_git_lock "$_lrf_gl"; then
+    echo "✗ lr-fire-resume: $WT is parked, but the git lock for its repo (${_lrf_gl:-unresolvable}) was not taken — not unparked" >&2
+    lr_reaped exit-1; exit 1
+  fi
+  _lrf_up=0; WT_ACTOR=lr-fire-resume wt_unpark "$WT" || _lrf_up=$?
+  rm -rf "$_lrf_gl"
+  case "$_lrf_up" in
+    0) echo "-- lr-fire-resume: unparked $WT — the parked tree is back at its own path" >&2; lr_reaped unparked ;;
+    2) echo "✗ lr-fire-resume: $WT is parked and could not be unparked (reason above)" >&2; lr_reaped exit-1; exit 1 ;;
+  esac
+fi
+
 # Recreate a reaped worktree when a branch is known (reso-resume-one logic).
 if [[ ! -d "$WT" ]]; then
   if [[ -n "$BR" ]] && git -C "$REPO" show-ref --verify --quiet "refs/heads/$BR"; then
@@ -586,11 +656,11 @@ if [[ ! -d "$WT" ]]; then
     # sibling's that is missing only for a moment, and that sibling then cannot be re-added as itself.
     # The add is serialised on one lock per repository (keyed on the common dir), so two launchers
     # recreating two worktrees of one repo cannot race on .git/worktrees either.
-    _lr_gcd="$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+    _lr_gcd="$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)" || { lr_reaped exit-1; exit 1; }
     _lr_glock="${LR_STATE_DIR:-$HOME/.reso/limit-recover}/locks/git-$(printf '%s' "$_lr_gcd" | shasum | cut -c1-40)"
     if ! lr_git_lock "$_lr_glock"; then
       echo "✗ lr-fire-resume: git lock $_lr_glock still held after ${LR_GIT_LOCK_WAIT_S:-30}s (holder: $(cat "$_lr_glock/holder" 2>/dev/null || echo none))" >&2
-      exit 2
+      lr_reaped exit-2; exit 2
     fi
     _lr_wt_rc=0; _lr_wt_out="$(git -C "$REPO" worktree add "$WT" "$BR" 2>&1)" || _lr_wt_rc=$?
     [ -z "$_lr_wt_out" ] || printf '%s\n' "$_lr_wt_out" >&2
@@ -609,9 +679,12 @@ if [[ ! -d "$WT" ]]; then
       fi
     fi
     rm -rf "$_lr_glock"
-    [ "$_lr_wt_rc" -eq 0 ] || exit 1
+    [ "$_lr_wt_rc" -eq 0 ] || { lr_reaped exit-1; exit 1; }
+    lr_reaped recreated-branch
+  elif lr_restore_sid; then
+    lr_reaped restored
   else
-    echo "lr-fire-resume: worktree $WT missing and no --branch to recreate it" >&2; exit 2
+    echo "lr-fire-resume: worktree $WT missing and no --branch to recreate it" >&2; lr_reaped exit-2; exit 2
   fi
 fi
 cd "$WT"
