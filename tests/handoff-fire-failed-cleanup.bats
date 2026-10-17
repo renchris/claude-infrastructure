@@ -364,6 +364,7 @@ tomb_env() {
 @test "tombstone: a crash-pinned cold tree is KEPT with the hand-cleanup line, no row" {
   tomb_env
   eval "$(sed -n '/^fire_cleanup() {/,/^}/p' "$HF")"
+  # shellcheck disable=SC2034  # read by the eval-loaded fire_cleanup
   HF_DIR="$REPO_SRC/scripts"
   local wt="$WTROOT/wt-tomb-pin" sid=sidCRASH d slug now
   git -C "$REPO" worktree add -q "$wt" -b wt-tomb-pin origin/main
@@ -376,7 +377,8 @@ tomb_env() {
   done
   printf '{"ts":"%s","class":"CRASH","sid":"%s"}\n' "$(date -u -r $((now - 3600)) +%Y-%m-%dT%H:%M:%SZ)" "$sid" \
     > "$WT_CRASH_LOG"
-  FIRE_CLEAN_DONE=0; FIRE_CLEAN_POOL=""; FIRE_CLEAN_WT="$wt"; FIRE_CLEAN_BRANCH="wt-tomb-pin"; SPAWNED_PANE=""
+  # shellcheck disable=SC2034  # read by the eval-loaded fire_cleanup
+  FIRE_CLEAN_DONE=0 FIRE_CLEAN_POOL="" FIRE_CLEAN_WT="$wt" FIRE_CLEAN_BRANCH="wt-tomb-pin" SPAWNED_PANE=""
   run_cleanup "$BATS_TEST_TMPDIR/pin.out"
   [ -d "$wt" ] || { cat "$BATS_TEST_TMPDIR/pin.out"; false; }
   grep -qF "cold worktree $wt KEPT (pinned: crash sid=$sid" "$BATS_TEST_TMPDIR/pin.out"

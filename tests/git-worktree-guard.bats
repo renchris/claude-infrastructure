@@ -335,7 +335,7 @@ dfree_kb() { df -k "$BATS_TEST_TMPDIR" | awk 'NR==2{print $4}'; }
 @test "TOMBSTONE: --force on a dirty tree → the wip ref holds tracked + untracked at working content; tree untouched and still intact after a later deny" {
   lab
   for flags in "--force" "-f -f"; do
-    name="dirty$(printf '%s' "$flags" | tr -dc 'a-z')"
+    name="dirty$(printf '%s' "$flags" | tr -dc '[:lower:]')"
     w="$(lwt "$name")"
     echo modified > "$w/f.txt"; echo fresh > "$w/new.txt"
     before="$(tree_sums "$w")"

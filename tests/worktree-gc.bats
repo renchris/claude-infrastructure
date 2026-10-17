@@ -1996,7 +1996,7 @@ tomb_id() { jq -r 'select(.event=="worktree-tombstoned") | .id' "$DLOG"; }
 @test "WP-10: the dispose and landed-dirt removals tombstone first too — reason per class, ids joined" {
   a="$(abandoned_wt wt-abc123456789 feat/abandoned)"
   brag "$a"
-  owns abc123456789 done
+  owns abc123456789 "done"
   trunk_add x.md hello
   d="$(dirt_wt wt-dirtgo feat/dirtgo x.md hello)"
   run_gc --dispose-abandoned --dispose-landed-dirt
@@ -2114,7 +2114,7 @@ tomb_id() { jq -r 'select(.event=="worktree-tombstoned") | .id' "$DLOG"; }
 @test "AC-4: an unresolvable trunk is its own verdict — every landed and dispose candidate KEPT with the token" {
   p="$(wt wt-ac4 feat/ac4)"
   a="$(abandoned_wt wt-abc123456789 feat/abandoned)"
-  owns abc123456789 done
+  owns abc123456789 "done"
   git -C "$R" update-ref -d refs/remotes/origin/main  # no origin/HEAD either: nothing resolves
   run_gc --dispose-abandoned
   [ "$status" -eq 0 ]
@@ -2195,15 +2195,17 @@ tomb_id() { jq -r 'select(.event=="worktree-tombstoned") | .id' "$DLOG"; }
   for i in 1 2; do p="$(wt "wt-eq-y$i" "feat/eq-y$i")"; eqc "$p" "y$i" "$(date +%s)"; done # young tip
   p="$(wt wt-eq-busy feat/eq-busy)"; touch "$p/.teammate-busy"
   p="$(wt wt-eq-det feat/eq-det)"; git -C "$p" checkout -q --detach
-  abandoned_wt wt-abc123456789 feat/eq-ab1 >/dev/null; owns abc123456789 done              # disposable
+  abandoned_wt wt-abc123456789 feat/eq-ab1 >/dev/null; owns abc123456789 "done"              # disposable
   abandoned_wt wt-def123456789 feat/eq-ab2 >/dev/null                                      # no owner
   p="$(wt wt-eq-ex feat/eq-ex)"; EXCLUDE="$(cd "$p" && pwd -P)"
   p="$(wt wt-eq-lock feat/eq-lock)"; git -C "$R" worktree lock "$p"
   p="$(wt wt-eq-gone feat/eq-gone)"; mv "$p" "$BATS_TEST_TMPDIR/eq-gone-away"
   [ "$(git -C "$R" worktree list --porcelain | grep -c '^worktree ')" -eq 22 ]          # 21 + main
   for args in "--dry-run" "--dry-run --dispose-abandoned"; do
-    # shellcheck disable=SC2086
-    GCX="$(old_gc)"; run_gc $args; GCX=""
+    GCX="$(old_gc)"
+    # shellcheck disable=SC2086  # $args is a flag list, split on purpose
+    run_gc $args
+    GCX=""
     [ "$status" -eq 0 ]
     old_out="$(norm "$output")"
     # shellcheck disable=SC2086
