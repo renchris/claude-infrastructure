@@ -129,27 +129,23 @@ big() { # a 240 KB PostToolUse payload
   grep -q '\[sidL\] echo first | Exit: 0$' "$HOME/.claude/logs/bash-execution.log"
 }
 
-@test "a 240 KB payload logs as before, with one jq and no slower (median of 5 interleaved runs, within 10%)" {
+@test "a 240 KB payload logs as before, with one jq and no slower" {
   have_old
-  local p k t0 t1 os=() ns=() om nm
+  local p t0 t1 om nm
   p="$(big)"
   [ "${#p}" -ge 240000 ]
-  printf '%s' "$p" | arm old o1; printf '%s' "$p" | arm new n1; same o1 n1
-  [ "$(shf_calls n1 jq)" -eq 1 ]
   [ -n "${EPOCHREALTIME:-}" ] || skip "this bats runs under a bash without EPOCHREALTIME"
-  # On a pipe, as the harness sends it; printf is a builtin, so the feeder costs both arms the same.
-  for k in 1 2 3 4 5; do
-    t0=${EPOCHREALTIME/./}; printf '%s' "$p" | /bin/bash "$OLD/hooks/log-bash.sh" >/dev/null 2>&1; t1=${EPOCHREALTIME/./}
-    os+=($((t1 - t0)))
-    t0=${EPOCHREALTIME/./}; printf '%s' "$p" | /bin/bash "$REPO/hooks/log-bash.sh" >/dev/null 2>&1; t1=${EPOCHREALTIME/./}
-    ns+=($((t1 - t0)))
-  done
-  om="$(printf '%s\n' "${os[@]}" | sort -n | sed -n 3p)"
-  nm="$(printf '%s\n' "${ns[@]}" | sort -n | sed -n 3p)"
-  echo "# 240 KB payload, median µs: before $om, after $nm" >&3
-  [ $((nm * 10)) -le $((om * 11)) ] || { echo "slower: $om -> $nm µs (${os[*]} / ${ns[*]})"; false; }
+  # The parity runs ARE the timed runs. The old arm costs 11-16 s of CPU on this payload, so a loop
+  # of repeats would put a minute of work into every gate run to measure a ~200x gap that one pair
+  # already shows; the stub PATH costs both arms the same three or four execs.
+  t0=${EPOCHREALTIME/./}; printf '%s' "$p" | arm old o1; t1=${EPOCHREALTIME/./}; om=$((t1 - t0))
+  t0=${EPOCHREALTIME/./}; printf '%s' "$p" | arm new n1; t1=${EPOCHREALTIME/./}; nm=$((t1 - t0))
+  same o1 n1
+  [ "$(shf_calls n1 jq)" -eq 1 ]
+  echo "# 240 KB payload, µs: before $om, after $nm" >&3
+  [ $((nm * 10)) -le $((om * 11)) ] || { echo "slower: $om -> $nm µs"; false; }
   # The old read stripped trailing newlines with `${INPUT%$'\n'}`, quadratic under bash 3.2 in a
   # UTF-8 locale: measured 11-16 s here against ~0.05-0.1 s for `$(</dev/stdin)`. A 4x margin
   # pins the fix without riding the load.
-  [ $((nm * 4)) -le "$om" ] || { echo "the quadratic read is back? $om -> $nm µs (${os[*]} / ${ns[*]})"; false; }
+  [ $((nm * 4)) -le "$om" ] || { echo "the quadratic read is back? $om -> $nm µs"; false; }
 }
