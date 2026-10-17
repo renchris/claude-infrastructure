@@ -53,7 +53,7 @@ iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ; }
   [ "$status" -eq 0 ]; P="$output"
   [ ! -e "$W" ]; [ -f "$P/node_modules/x/i.js" ]; [ -f "$P/debug.log" ]
   git -C "$R" worktree list --porcelain | grep -q "^locked parked .* from $W sids="
-  ! git -C "$P" symbolic-ref -q HEAD
+  ! git -C "$P" symbolic-ref -q HEAD || false
   [ "$(git -C "$P" rev-parse HEAD)" = "$tip" ]
   idx="$WT_PARK_INDEX/$(wt__sha1 "$W")"
   grep -qx "parked=$P" "$idx"; grep -qx "branch=feat" "$idx"; grep -qx "branch_tip=$tip" "$idx"
@@ -68,7 +68,7 @@ iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ; }
   [ "$(git -C "$W" symbolic-ref HEAD)" = refs/heads/feat ]
   [ "$(git -C "$W" status --porcelain --ignored)" = "$st0" ]
   [ "$(git -C "$W" reflog)" = "$rl0" ]
-  ! git -C "$R" worktree list --porcelain | grep -q '^locked'
+  ! git -C "$R" worktree list --porcelain | grep -q '^locked' || false
   jq -e 'select(.event=="worktree-unparked")' "$WT_LEDGER" >/dev/null
   run wt_unpark "$W"; [ "$status" -eq 1 ]
 }
@@ -79,7 +79,7 @@ iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ; }
   git -C "$R" branch -D feat >/dev/null
   wt_unpark "$W" 2>"$T/err"
   grep -q 'reattach=skipped:branch-gone' "$T/err"
-  ! git -C "$W" symbolic-ref -q HEAD
+  ! git -C "$W" symbolic-ref -q HEAD || false
   [ "$(git -C "$W" rev-parse HEAD)" = "$tip" ]; [ ! -e "$P" ]
 }
 
@@ -140,7 +140,7 @@ iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ; }
   chmod 700 "$WT_PARK_INDEX"
   [ "$status" -eq 2 ]
   [ -d "$W" ]; [ "$(git -C "$W" symbolic-ref HEAD)" = refs/heads/feat ]
-  ! git -C "$R" worktree list --porcelain | grep -q '^locked'
+  ! git -C "$R" worktree list --porcelain | grep -q '^locked' || false
   [ -z "$(ls "$WT_PARK_ROOT")" ]; [ ! -s "$WT_LEDGER" ]
 }
 
@@ -149,7 +149,7 @@ iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ; }
   wt_park "$W" test x --arm ii >/dev/null
   run git -C "$R" worktree add "$W" feat2          # the unpatched launcher's recreate
   [ "$status" -ne 0 ]
-  [[ "$output" == *"feat2"* ]]
+  [[ "$output" == *"feat2"* ]] || false
   run wt_unpark "$W"                                 # the fix
   [ "$status" -eq 0 ]; [ "$(git -C "$W" symbolic-ref HEAD)" = refs/heads/feat2 ]
 }
@@ -157,7 +157,7 @@ iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ; }
 @test "park and unpark run under /bin/bash 3.2" {
   mkwt a feat; W="$T/wt/a"
   run /bin/bash -c '. "$1" && p="$(wt_park "$2" t x --arm i)" && [ -d "$p" ] && wt_unpark "$2" && wt_pinned "$2"; echo "rc=$?"' _ "$LIB" "$W"
-  [[ "$output" == "owner sid=- until="*"rc=0" ]]   # a just-unparked tree is owner-pinned for 60 min
+  [[ "$output" == "owner sid=- until="*"rc=0" ]] || false # a just-unparked tree is owner-pinned for 60 min
   [ "$(git -C "$W" symbolic-ref HEAD)" = refs/heads/feat ]
 }
 
@@ -189,7 +189,7 @@ iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ; }
 @test "resume-debt pin: open row with this cwd pins; a discharged one does not" {
   X="$T/x/wt-a"; mkdir -p "$X" "$WT_RESUME_DEBT_DIR"; D="$WT_RESUME_DEBT_DIR/abc.jsonl"
   printf '{"ts":"%s","kind":"open","cwd":"%s","marker":"resume:s1:1","slug":"s1"}\n' "$(iso $((WT_NOW - 60)))" "$X" > "$D"
-  run wt_pinned "$X"; [ "$status" -eq 0 ]; [[ "$output" == "resume-debt sid=s1 until="* ]]
+  run wt_pinned "$X"; [ "$status" -eq 0 ]; [[ "$output" == "resume-debt sid=s1 until="* ]] || false
   run wt_pinned "$T/x/wt-a-b"; [ "$status" -eq 1 ]
   printf '{"ts":"%s","kind":"return","cwd":"%s","marker":"resume:s1:1","slug":"s1"}\n' "$(iso $((WT_NOW - 30)))" "$X" >> "$D"
   run wt_pinned "$X"; [ "$status" -eq 1 ]
@@ -199,7 +199,7 @@ iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ; }
   X="$T/x/wt-a"; mkdir -p "$X"; S=33333333-cccc
   transcript "$T/cfg2" "$X" "$S" $((WT_NOW - 7200))
   mkdir -p "$WT_LR_DIR/$S/bundle-1"
-  run wt_pinned "$X"; [ "$status" -eq 0 ]; [[ "$output" == "limit-recover sid=$S until="* ]]
+  run wt_pinned "$X"; [ "$status" -eq 0 ]; [[ "$output" == "limit-recover sid=$S until="* ]] || false
   printf 'checks\nResumed in place on next4 — same pane\n' > "$WT_LR_DIR/$S/bundle-1/INGEST-VERIFIED.txt"
   run wt_pinned "$X"; [ "$status" -eq 1 ]
 }
@@ -216,7 +216,7 @@ iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ; }
 @test "boot-resume pin: an event naming the path pins until its .done appears" {
   X="$T/x/wt-a"; mkdir -p "$X" "$WT_BOOT_RESUME_DIR/1791247401"
   printf 'pane\t%s\tsid\n' "$X" > "$WT_BOOT_RESUME_DIR/1791247401/rows.tsv"
-  run wt_pinned "$X"; [ "$status" -eq 0 ]; [[ "$output" == "boot-resume sid=- until="* ]]
+  run wt_pinned "$X"; [ "$status" -eq 0 ]; [[ "$output" == "boot-resume sid=- until="* ]] || false
   echo 1 > "$WT_BOOT_RESUME_DIR/1791247401.done"
   run wt_pinned "$X"; [ "$status" -eq 1 ]
 }
@@ -225,7 +225,7 @@ iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ; }
   X="$T/x/wt-a"; mkdir -p "$X"
   printf '{"id":"b1","ts":"%s","event":"add","title":"finish %s"}\n' "$(iso $((WT_NOW - 60)))" "$X" > "$WT_BACKLOG"
   printf '{"id":"b2","ts":"%s","event":"add","title":"finish %s-b"}\n' "$(iso $((WT_NOW - 60)))" "$X" >> "$WT_BACKLOG"
-  run wt_pinned "$X"; [ "$status" -eq 0 ]; [[ "$output" == "backlog sid=- until="*" id=b1" ]]
+  run wt_pinned "$X"; [ "$status" -eq 0 ]; [[ "$output" == "backlog sid=- until="*" id=b1" ]] || false
   printf '{"id":"b1","ts":"%s","event":"done"}\n' "$(iso $((WT_NOW - 30)))" >> "$WT_BACKLOG"
   run wt_pinned "$X"; [ "$status" -eq 1 ]
 }
@@ -283,7 +283,7 @@ iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ; }
   P="$(wt_park "$T/wt/p" test x --arm i)"
   wt_pin_lock_sync "$R" --observe 2>"$T/obs"
   grep -qx "wt-tombstone: would_lock $A recycle-failed" "$T/obs"
-  ! git -C "$R" worktree list --porcelain | grep -q 'cc-pin:'
+  ! git -C "$R" worktree list --porcelain | grep -q 'cc-pin:' || false
   wt_pin_lock_sync "$R"
   git -C "$R" worktree list --porcelain | grep -qx "locked cc-pin:recycle-failed sid=$S until=[0-9]*"
   run git -C "$R" worktree remove --force "$A"
@@ -293,7 +293,7 @@ iso() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ; }
   grep -qx "wt-tombstone: would_unlock $A" "$T/obs"
   git -C "$R" worktree list --porcelain | grep -q 'cc-pin:'
   wt_pin_lock_sync "$R"
-  ! git -C "$R" worktree list --porcelain | grep -q 'cc-pin:'
+  ! git -C "$R" worktree list --porcelain | grep -q 'cc-pin:' || false
   git -C "$R" worktree list --porcelain | grep -qx 'locked human hold'
   git -C "$R" worktree list --porcelain | grep -q "^locked parked .* from $T/wt/p "
 }

@@ -65,7 +65,7 @@ reaped() { jq -r --arg o "$1" 'select(.launcher == "lr-fire-resume" and .outcome
   "$WTT" park "$w" lab test --arm ii >/dev/null
   [ ! -e "$w" ]
   fire "$w" "$SID_OTHER" feat
-  [ "$status" -eq 1 ] && [[ "$output" == *"cannot resolve the claude binary"* ]] || { echo "status $status: $output"; false; }
+  if ! { [ "$status" -eq 1 ] && [[ "$output" == *"cannot resolve the claude binary"* ]]; }; then echo "status $status: $output"; false; fi
   [[ "$output" == *"unparked $w"* ]] || { echo "$output"; false; }
   [ "$(snap "$w")" = "$before" ] || { diff <(echo "$before") <(snap "$w"); false; }
   [ "$(git -C "$w" symbolic-ref --short HEAD)" = feat ]
@@ -89,7 +89,7 @@ reaped() { jq -r --arg o "$1" 'select(.launcher == "lr-fire-resume" and .outcome
   "$WTT" park "$w" lab test --arm ii >/dev/null
   mkdir -p "$w/.claude-tasks"
   fire "$w" "$SID_OTHER" feat
-  [ "$status" -eq 1 ] && [[ "$output" == *"cannot resolve the claude binary"* ]] || { echo "status $status: $output"; false; }
+  if ! { [ "$status" -eq 1 ] && [[ "$output" == *"cannot resolve the claude binary"* ]]; }; then echo "status $status: $output"; false; fi
   [ "$(snap "$w")" = "$before" ]
   compgen -G "$w.husk-*/.claude-tasks" >/dev/null || { ls -la "$T/wts"; false; }
 }
@@ -99,8 +99,8 @@ reaped() { jq -r --arg o "$1" 'select(.launcher == "lr-fire-resume" and .outcome
   "$WTT" park "$w" lab test --arm ii >/dev/null
   mkdir -p "$w/.claude-tasks"; echo mine > "$w/notes.txt"
   fire "$w" "$SID_OTHER" feat
-  [ "$status" -eq 1 ] && [[ "$output" == *"could not be unparked"* ]] || { echo "status $status: $output"; false; }
-  [ "$(cat "$w/notes.txt")" = mine ] && [ ! -e "$w/.git" ]
+  if ! { [ "$status" -eq 1 ] && [[ "$output" == *"could not be unparked"* ]]; }; then echo "status $status: $output"; false; fi
+  [ "$(cat "$w/notes.txt")" = mine ] && [ ! -e "$w/.git" ] || false
   "$WTT" parked "$w" >/dev/null
   [ "$(reaped exit-1)" = "$w" ] || { cat "$WT_RESUME_REAPED"; false; }
 }
@@ -116,9 +116,9 @@ reap() {
   w="$(mkwt feat)"; head="$(git -C "$w" rev-parse HEAD)"
   reap "$w" feat
   fire "$w" "$SID_ROW" feat
-  [ "$status" -eq 1 ] && [[ "$output" == *"cannot resolve the claude binary"* ]] || { echo "status $status: $output"; false; }
+  if ! { [ "$status" -eq 1 ] && [[ "$output" == *"cannot resolve the claude binary"* ]]; }; then echo "status $status: $output"; false; fi
   [ "$(git -C "$w" rev-parse HEAD)" = "$head" ]
-  [ "$(cat "$w/.env.local")" = 'SECRET=edited' ] && [ "$(cat "$w/out/data.bin")" = data ]
+  [ "$(cat "$w/.env.local")" = 'SECRET=edited' ] && [ "$(cat "$w/out/data.bin")" = data ] || false
   [ "$(reaped restored)" = "$w" ] || { cat "$WT_RESUME_REAPED"; false; }
   [ -z "$(ls -A "$LR_STATE_DIR/locks" 2>/dev/null)" ] || { echo "a git lock was left behind"; ls "$LR_STATE_DIR/locks"; false; }
 }
@@ -127,7 +127,7 @@ reap() {
   w="$(mkwt feat)"
   reap "$w" feat
   fire "$w" "$SID_OTHER" feat
-  [ "$status" -eq 2 ] && [[ "$output" == *"missing and no --branch to recreate it"* ]] || { echo "status $status: $output"; false; }
+  if ! { [ "$status" -eq 2 ] && [[ "$output" == *"missing and no --branch to recreate it"* ]]; }; then echo "status $status: $output"; false; fi
   [ ! -e "$w" ]
   [ "$(reaped exit-2)" = "$w" ] || { cat "$WT_RESUME_REAPED"; false; }
 }
@@ -137,6 +137,6 @@ reap() {
   "$WTT" park "$w" lab test --arm ii >/dev/null
   export CC_RESUME_TOMBSTONE_LIB="$T/none.sh"
   fire "$w" "$SID_OTHER" feat
-  [ "$status" -eq 1 ] && [[ "$output" != *"cannot resolve the claude binary"* ]] || { echo "status $status: $output"; false; }
+  if ! { [ "$status" -eq 1 ] && [[ "$output" != *"cannot resolve the claude binary"* ]]; }; then echo "status $status: $output"; false; fi
   [ ! -e "$WT_RESUME_REAPED" ]
 }

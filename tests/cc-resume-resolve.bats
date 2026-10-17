@@ -306,7 +306,7 @@ key() { printf '%s\n' "$output" | sed -n "s/^$1=//p"; }
   run "$RESOLVE" "$SID1"
   [ "$status" -eq 0 ]
   [ "$(key cwd_exists)" = 0 ]
-  [ -z "$(key tomb_state)" ] && [ -z "$(key tomb_id)" ]
+  [ -z "$(key tomb_state)" ] && [ -z "$(key tomb_id)" ] || false
   run "$RESOLVE" "$SID2"                 # control: the row is there for its own session
   [ "$(key tomb_state)" = detached ]
 }
@@ -315,7 +315,7 @@ key() { printf '%s\n' "$output" | sed -n "s/^$1=//p"; }
   lab
   w="$(labwt pk)"
   parked="$(wt-tombstone park "$w" lab test --arm ii)"
-  [ ! -e "$w" ] && [ -d "$parked" ]
+  [ ! -e "$w" ] && [ -d "$parked" ] || false
   labses "$w" "$SID1" unrelated          # written after the park: the index has never heard of this sid
   run "$RESOLVE" "$SID1"
   [ "$status" -eq 0 ]
@@ -380,7 +380,7 @@ ZSH
   run --separate-stderr pin "$A" --resume "$SID1" < /dev/null
   [ "$status" -eq 0 ]
   [[ "$output" == *"CWD=[$w]"* ]] || return 1
-  [ -d "$w" ] && [ -z "$(ls -A "$w")" ]
+  [ -d "$w" ] && [ -z "$(ls -A "$w")" ] || false
   [[ "$stderr" == *"cc-wt-restore $w --sid $SID1"* ]] || return 1
   [ "$(jq -r .outcome "$WT_RESUME_REAPED")" = recreated-empty ]
 }

@@ -78,12 +78,12 @@ reap() {
   w="$(mkwt feat)"
   land_by_rebase feat
   head="$(git -C "$w" rev-parse HEAD)"
-  ! git -C "$T/main" merge-base --is-ancestor "$head" origin/main   # premise: trunk has it by patch-id only
+  ! git -C "$T/main" merge-base --is-ancestor "$head" origin/main || false # premise: trunk has it by patch-id only
   sums="$(residue_sums "$w")"
   git -C "$w" reflog --format='%H %gs' | LC_ALL=C sort > "$T/reflog.before"
   reap "$w" feat
   [ ! -e "$w" ]
-  ! git -C "$T/main" rev-parse -q --verify refs/heads/feat
+  ! git -C "$T/main" rev-parse -q --verify refs/heads/feat || false
   [ "$(git -C "$T/main" for-each-ref --format='%(objectname)' "refs/wt-tombstone/$TOMB_ID/head")" = "$head" ]
 
   run --separate-stderr cc-wt-restore "$w" --sid "$SID"
@@ -91,7 +91,7 @@ reap() {
   [ "$output" = "$w" ]
   [ "$(git -C "$w" rev-parse HEAD)" = "$head" ]
   [ -z "$(git -C "$w" symbolic-ref -q HEAD)" ]               # detached: no branch was re-created
-  ! git -C "$T/main" rev-parse -q --verify refs/heads/feat
+  ! git -C "$T/main" rev-parse -q --verify refs/heads/feat || false
   [ "$(residue_sums "$w")" = "$sums" ]
   [ -x "$w/out/run.sh" ]
   [ ! -e "$WT_TOMB_DIR/$TOMB_ID/residue/out/data.bin" ]       # moved back, not copied

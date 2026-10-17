@@ -326,7 +326,7 @@ dfree_kb() { df -k "$BATS_TEST_TMPDIR" | awk 'NR==2{print $4}'; }
   git -C "$w" add pnpm-lock.yaml && git -C "$w" commit -qm lock
   mkdir -p "$w/node_modules/.pnpm" && cp "$w/pnpm-lock.yaml" "$w/node_modules/.pnpm/lock.yaml"
   run guard_split "git -C $L worktree remove $w"
-  [ "$status" -eq 0 ] && [ ! -s "$OUT" ] && [ ! -s "$ERR" ] || { echo "exit $status: $(cat "$ERR")"; false; }
+  if ! { [ "$status" -eq 0 ] && [ ! -s "$OUT" ] && [ ! -s "$ERR" ]; }; then echo "exit $status: $(cat "$ERR")"; false; fi
   [ "$(nrows)" -eq 1 ]
   [ "$(lastrow | jq -c .preserved_list)" = '[]' ]
   [ "$(lastrow | jq -c .caches_skipped)" = '["node_modules"]' ]
@@ -340,7 +340,7 @@ dfree_kb() { df -k "$BATS_TEST_TMPDIR" | awk 'NR==2{print $4}'; }
     echo modified > "$w/f.txt"; echo fresh > "$w/new.txt"
     before="$(tree_sums "$w")"
     run guard_split "git -C $L worktree remove $flags $w"
-    [ "$status" -eq 0 ] && [ ! -s "$OUT" ] && [ ! -s "$ERR" ] || { echo "[$flags] exit $status: $(cat "$ERR")"; false; }
+    if ! { [ "$status" -eq 0 ] && [ ! -s "$OUT" ] && [ ! -s "$ERR" ]; }; then echo "[$flags] exit $status: $(cat "$ERR")"; false; fi
     wip="$(lastrow | jq -r .wip_ref)"
     [ "$wip" != null ] || { echo "[$flags] no wip_ref in $(lastrow)"; false; }
     [ "$(git -C "$L" show "$wip:f.txt")" = modified ]
@@ -362,12 +362,12 @@ dfree_kb() { df -k "$BATS_TEST_TMPDIR" | awk 'NR==2{print $4}'; }
   w2="$(lwt assets)"; mkdir -p "$w2/asset-workspace"; mkfile -n 120m "$w2/asset-workspace/big.bin"
   f0="$(dfree_kb)"
   run guard_split "git -C $L worktree remove $w1"
-  [ "$status" -eq 0 ] && [ ! -s "$OUT" ] && [ ! -s "$ERR" ] || { echo "next: exit $status: $(cat "$ERR")"; false; }
+  if ! { [ "$status" -eq 0 ] && [ ! -s "$OUT" ] && [ ! -s "$ERR" ]; }; then echo "next: exit $status: $(cat "$ERR")"; false; fi
   [ "$(lastrow | jq -c .preserved_list)" = '[]' ]
   [ "$(lastrow | jq -c .caches_skipped)" = '[".next"]' ]
   [ ! -e "$WT_TOMB_DIR/$(lastrow | jq -r .id)/residue/.next" ]
   run guard_split "git -C $L worktree remove $w2"
-  [ "$status" -eq 0 ] && [ ! -s "$OUT" ] && [ ! -s "$ERR" ] || { echo "assets: exit $status: $(cat "$ERR")"; false; }
+  if ! { [ "$status" -eq 0 ] && [ ! -s "$OUT" ] && [ ! -s "$ERR" ]; }; then echo "assets: exit $status: $(cat "$ERR")"; false; fi
   f1="$(dfree_kb)"
   [ "$(lastrow | jq -c .preserved_list)" = '["asset-workspace"]' ]
   cmp "$w2/asset-workspace/big.bin" "$WT_TOMB_DIR/$(lastrow | jq -r .id)/residue/asset-workspace/big.bin"
@@ -404,14 +404,14 @@ dfree_kb() { df -k "$BATS_TEST_TMPDIR" | awk 'NR==2{print $4}'; }
   lab; w="$(lwt gone)"
   rm -rf "$w"
   run guard_split "git -C $L worktree prune"
-  [ "$status" -eq 0 ] && [ ! -s "$OUT" ] && [ ! -s "$ERR" ] || { echo "exit $status: $(cat "$ERR")"; false; }
+  if ! { [ "$status" -eq 0 ] && [ ! -s "$OUT" ] && [ ! -s "$ERR" ]; }; then echo "exit $status: $(cat "$ERR")"; false; fi
   [ "$(nrows)" -eq 1 ]
   [ "$(lastrow | jq -r .event)" = admin-pruned ]
   [ "$(lastrow | jq -r .branch)" = gone ]
   [ -d "$L/.git/worktrees/gone" ] || { echo "the hook pruned — only the command may"; false; }
   for dry in "--dry-run" "-n" "-nv"; do
     run guard_split "git -C $L worktree prune $dry"
-    [ "$status" -eq 0 ] && [ ! -s "$OUT" ] && [ ! -s "$ERR" ]
+    [ "$status" -eq 0 ] && [ ! -s "$OUT" ] && [ ! -s "$ERR" ] || false
     [ "$(nrows)" -eq 1 ] || { echo "[$dry] recorded a row"; false; }
   done
 }
@@ -421,7 +421,7 @@ dfree_kb() { df -k "$BATS_TEST_TMPDIR" | awk 'NR==2{print $4}'; }
   run env CC_WTG_TOMBSTONE=off bash -c "$(declare -f guard_split); GUARD='$GUARD' BATS_TEST_TMPDIR='$BATS_TEST_TMPDIR' guard_split 'git -C $L worktree remove $w'"
   [ "$status" -eq 0 ]
   run guard_split "git -C $L worktree remove $BATS_TEST_TMPDIR/plain"
-  [ "$status" -eq 0 ] && [ ! -s "$OUT" ] && [ ! -s "$ERR" ]
+  [ "$status" -eq 0 ] && [ ! -s "$OUT" ] && [ ! -s "$ERR" ] || false
   [ "$(nrows)" -eq 0 ]
 }
 

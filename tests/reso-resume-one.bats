@@ -1307,7 +1307,7 @@ w2_reap() { # <path> <branch> → tombstone, remove, delete the branch
   git -C "$REPO_ROOT" show 7fa90e0c2:bin/reso-resume-one > "$T/old/bin/reso-resume-one"
   chmod +x "$T/old/bin/reso-resume-one"
   run env CC_RESUME_DRYRUN=1 timeout 60 "$T/old/bin/reso-resume-one" next "$w" "$W2_SID_OTHER" feat
-  [ "$status" -eq 1 ] && [[ "$output" == *"worktree add failed"* ]] || { echo "status $status: $output"; false; }
+  if ! { [ "$status" -eq 1 ] && [[ "$output" == *"worktree add failed"* ]]; }; then echo "status $status: $output"; false; fi
   [ ! -e "$w" ]
 }
 
@@ -1326,8 +1326,8 @@ w2_reap() { # <path> <branch> → tombstone, remove, delete the branch
   "$WTT" park "$w" lab test --arm ii >/dev/null
   mkdir -p "$w/.claude-tasks"; echo mine > "$w/notes.txt"
   run env CC_RESUME_DRYRUN=1 timeout 60 "$RRO" next "$w" "$W2_SID_OTHER" feat
-  [ "$status" -eq 1 ] && [[ "$output" == *"could not be unparked"* ]] || { echo "status $status: $output"; false; }
-  [ "$(cat "$w/notes.txt")" = mine ] && [ ! -e "$w/.git" ]
+  if ! { [ "$status" -eq 1 ] && [[ "$output" == *"could not be unparked"* ]]; }; then echo "status $status: $output"; false; fi
+  [ "$(cat "$w/notes.txt")" = mine ] && [ ! -e "$w/.git" ] || false
   "$WTT" parked "$w" >/dev/null
   [ "$(w2_reaped refused)" = "$w" ] || { cat "$WT_RESUME_REAPED"; false; }
 }
@@ -1338,7 +1338,7 @@ w2_reap() { # <path> <branch> → tombstone, remove, delete the branch
   run env CC_RESUME_DRYRUN=1 timeout 60 "$RRO" next "$w" "$W2_SID_ROW" feat --repo "$M"
   [ "$status" -eq 0 ] || { echo "status $status: $output"; false; }
   [ "$(git -C "$w" rev-parse HEAD)" = "$head" ]
-  [ "$(cat "$w/.env.local")" = 'SECRET=edited' ] && [ "$(cat "$w/out/data.bin")" = data ]
+  [ "$(cat "$w/.env.local")" = 'SECRET=edited' ] && [ "$(cat "$w/out/data.bin")" = data ] || false
   [ "$(w2_reaped restored)" = "$w" ] || { cat "$WT_RESUME_REAPED"; false; }
 }
 
@@ -1346,7 +1346,7 @@ w2_reap() { # <path> <branch> → tombstone, remove, delete the branch
   w2_lab; w="$(w2_mkwt feat)"
   w2_reap "$w" feat
   run env CC_RESUME_DRYRUN=1 timeout 60 "$RRO" next "$w" "$W2_SID_OTHER" feat --repo "$M"
-  [ "$status" -eq 1 ] && [[ "$output" == *"branch 'feat' does not exist"* ]] || { echo "status $status: $output"; false; }
+  if ! { [ "$status" -eq 1 ] && [[ "$output" == *"branch 'feat' does not exist"* ]]; }; then echo "status $status: $output"; false; fi
   [ ! -e "$w" ]
   [ "$(w2_reaped refused)" = "$w" ] || { cat "$WT_RESUME_REAPED"; false; }
 }
