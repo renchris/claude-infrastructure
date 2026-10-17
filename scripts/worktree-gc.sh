@@ -110,7 +110,19 @@
 #   worktree-gc.sh --prune-branches     # also delete landed worktree-less branches (-d only)
 #   worktree-gc.sh --dispose-abandoned  # also reap the DISPOSE class (branch always preserved)
 #   worktree-gc.sh --warrant <path> --reason '<why>'   # record oracle 3 for ONE path, then exit
+#   worktree-gc.sh --park-first         # PARK quiescent trees instead of removing them (below)
+#   worktree-gc.sh --path <p> [--path <q>]   # evaluate only these trees: no prune, no branch pass
 #   CC_WTGC_DISABLE=1 worktree-gc.sh    # KILL SWITCH: exits 0 having inspected and mutated nothing
+#
+# PARK-FIRST (--park-first / CC_WTGC_PARK_FIRST=1; DESIGN load-root-cause-2026-10-17 §3.2). Off by
+# default. Every KEEP gate above still runs first; then the quiescent action is `wt_park` (a same-volume
+# rename + lock, nothing deleted), never a removal: arm (i) landed-clean past CC_WTGC_GRACE_PARK_S
+# (24 h) since the newest transcript (none ⇒ the tree's own logs/HEAD + index), HEAD detached; arm (ii)
+# everything else once tip, transcript, working files and — with no transcript — git activity are all
+# ≥7 d old, branch left attached. A parked arm-(i) tree whose newest transcript is older than the
+# effective cleanupPeriodDays is DETACHED late (tombstone, then `worktree remove`). With
+# CC_WTGC_ARCHIVE_FLOOR_GB set and free space on the park volume under it, parked trees are ARCHIVED
+# oldest first (a bundle of any unlanded branch, then as DETACH). Pool slots and submodule trees KEEP.
 #
 # Env seams (all optional; the CC_WTGC_* bins exist so bats can fixture the oracles):
 #   CC_WTGC_DISABLE       KILL SWITCH. Unset or `0` is the only ENABLED reading; any other value
@@ -126,6 +138,8 @@
 #   CC_WTGC_TOMBSTONE_LIB the tombstone library (default: lib/wt-tombstone.sh beside the real
 #                         script, else ~/.claude/scripts/lib/). Absent ⇒ nothing is removed.
 #   CC_WTGC_IDLE_MIN      idle floor in minutes (default: 30)
+#   CC_WTGC_GRACE_PARK_S  PARK arm (i) grace in seconds since the newest transcript (default: 86400)
+#   CC_WTGC_ARCHIVE_FLOOR_GB  free-space floor (whole GB) on the park volume; unset ⇒ never archive
 #   CC_WTGC_ABANDON_HOURS DISPOSE-class age floor in hours (default: 72)
 #   CC_WTGC_BACKLOG       ownership oracle 1 — backlog ledger (default: ~/.claude/bin/cc-backlog)
 #   CC_WTGC_TEAMS_DIR     ownership oracle 2 — team registry (default: ~/.claude/teams)
@@ -158,7 +172,17 @@ DISPOSE_ABANDONED=0
 DISPOSE_LANDED_DIRT=0
 WARRANT_PATH=""
 WARRANT_REASON=""
+# PARK-first lifecycle (DESIGN load-root-cause-2026-10-17 §3.2, WP-10 phase B). OFF unless asked for:
+# only `--park-first` or CC_WTGC_PARK_FIRST=1 turns it on, so the nightly's verdicts stay what they were
+# until a later wave activates it. Any other env value is OFF (the ambiguous reading must not move trees).
+PARK_FIRST=0
+[ "${CC_WTGC_PARK_FIRST:-}" = "1" ] && PARK_FIRST=1
+# `--path` targets, newline-separated, and every OTHER argument, kept so a multi-repo --path run can
+# re-invoke this script once per repo with the same flags.
+PATHS=""
+PASS_ARGS=()
 USAGE="usage: worktree-gc.sh [--prune-branches] [--dispose-abandoned] [--dispose-landed-dirt] [--dry-run]
+                      [--park-first] [--path <worktree-path>]...
        worktree-gc.sh --warrant <worktree-path> --reason '<why this is abandoned>'"
 # `--warrant` and `--reason` take a VALUE, so the loop carries a one-slot latch: a flag sets WANT,
 # and the next argument is consumed as that flag's value instead of being parsed as a flag. A
@@ -169,10 +193,14 @@ for arg in "$@"; do
     case "$WANT" in
       warrant) WARRANT_PATH="$arg" ;;
       reason)  WARRANT_REASON="$arg" ;;
+      path)    PATHS="${PATHS}${arg}
+" ;;
     esac
+    [ "$WANT" = path ] || PASS_ARGS+=("$arg")
     WANT=""
     continue
   fi
+  [ "$arg" = --path ] || PASS_ARGS+=("$arg")
   case "$arg" in
     --dry-run|-n)         DRY_RUN=1 ;;
     --prune-branches)     PRUNE_BRANCHES=1 ;;
@@ -180,6 +208,8 @@ for arg in "$@"; do
     --dispose-landed-dirt) DISPOSE_LANDED_DIRT=1 ;;
     --warrant)            WANT=warrant ;;
     --reason)             WANT=reason ;;
+    --park-first)         PARK_FIRST=1 ;;
+    --path)               WANT=path ;;
     --prune)              : ;;   # compat alias: the guard hook's advertised invocation == default
     -h|--help)
       sed -n '2,/^# bash 3\.2-safe/p' "$0" | sed 's/^# \{0,1\}//'
@@ -196,6 +226,18 @@ if [ -n "$WANT" ]; then
 fi
 if [ -z "$WARRANT_PATH" ] && [ -n "$WARRANT_REASON" ]; then
   echo "worktree-gc: --reason is only meaningful with --warrant" >&2
+  echo "$USAGE" >&2
+  exit 2
+fi
+# `--path` evaluates named trees only; a branch prune is a whole-repo act, so the pair is refused
+# rather than one half silently ignored.
+if [ -n "$PATHS" ] && [ "$PRUNE_BRANCHES" = "1" ]; then
+  echo "worktree-gc: --prune-branches is a whole-repo action and does not combine with --path" >&2
+  echo "$USAGE" >&2
+  exit 2
+fi
+if [ -n "$PATHS" ] && [ -n "$WARRANT_PATH" ]; then
+  echo "worktree-gc: --path does not combine with --warrant" >&2
   echo "$USAGE" >&2
   exit 2
 fi
@@ -266,31 +308,27 @@ BACKLOG_BIN="${CC_WTGC_BACKLOG:-$HOME/.claude/bin/cc-backlog}"
 TEAMS_DIR="${CC_WTGC_TEAMS_DIR:-$HOME/.claude/teams}"
 DISPOSAL_LOG="${CC_WTGC_DISPOSAL_LOG:-$HOME/.claude/autonomy/worktree-disposals.jsonl}"
 WARRANTS_FILE="${CC_WTGC_WARRANTS:-$HOME/.claude/autonomy/worktree-warrants.tsv}"
+# PARK-first knobs. A malformed grace falls back to the 24 h default rather than to 0 (which would
+# park a tree the moment its session ended).
+GRACE_PARK_S="${CC_WTGC_GRACE_PARK_S:-86400}"
+case "$GRACE_PARK_S" in ''|*[!0-9]*) GRACE_PARK_S=86400 ;; esac
+PARK_FLOOR_S=604800                                # arm (ii): tip, transcript, files, git activity ≥ 7 d
+ARCHIVE_FLOOR_GB="${CC_WTGC_ARCHIVE_FLOOR_GB:-}"
+# The arm (ii) "no transcript" leg reads the tree's own <gitdir>/index mtime, and an opportunistic
+# `git status` refresh REWRITES that file (audit §8-B), so this pass's own status call would reset the
+# very clock it is about to read. Optional locks off makes every git read here leave the index alone.
+[ "$PARK_FIRST" = "1" ] && export GIT_OPTIONAL_LOCKS=0
 
-MAIN="$("$GIT_BIN" -C "${CC_WTGC_REPO:-$PWD}" rev-parse --show-toplevel 2>/dev/null)"
-if [ -z "$MAIN" ]; then
-  echo "worktree-gc: not inside a git repository (set CC_WTGC_REPO)" >&2
-  exit 2
-fi
-# Always drive off the MAIN checkout, even when invoked from a linked worktree.
-MAIN="$("$GIT_BIN" -C "$MAIN" rev-parse --path-format=absolute --git-common-dir 2>/dev/null | sed 's#/\.git$##')"
-[ -d "$MAIN" ] || MAIN="$("$GIT_BIN" -C "${CC_WTGC_REPO:-$PWD}" rev-parse --show-toplevel)"
-
-# ── The trunk, PER REPO (WP-10). A hardcoded origin/main is right for this repo and wrong for any
-#    repo whose default branch is not `main`: there `landed()` asked `git cherry` about a ref that
-#    does not exist, got rc≠0, and called EVERY branch unlanded — which is the DISPOSE class's entry
-#    door, not a KEEP. So origin/HEAD names the trunk when the clone recorded one, origin/main is the
-#    fallback, and an explicit CC_WTGC_TRUNK still wins.
-#    AC-4: when the chosen ref does not resolve, landedness is UNPROVABLE in both directions, and
-#    that is its own verdict (`trunk-unresolvable`), never folded into "unlanded" or "landed".
-if [ -n "${CC_WTGC_TRUNK:-}" ]; then
-  TRUNK="$CC_WTGC_TRUNK"
-else
-  TRUNK="$("$GIT_BIN" -C "$MAIN" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)"
-  [ -n "$TRUNK" ] || TRUNK="origin/main"
-fi
-TRUNK_OK=0
-"$GIT_BIN" -C "$MAIN" rev-parse --verify --quiet "$TRUNK" >/dev/null 2>&1 && TRUNK_OK=1
+# canon <path> — resolve symlinks and fold /private/tmp → /tmp so cc-notify cwds, lsof output
+# and the worktree registry compare on one canonical form (macOS /tmp is a symlink).
+canon() {
+  local p="${1:-}" r
+  [ -n "$p" ] || return 0
+  r="$(cd "$p" 2>/dev/null && pwd -P)" || r=""
+  [ -n "$r" ] && p="$r"
+  case "$p" in /private/tmp/*) p="/tmp/${p#/private/tmp/}" ;; esac
+  printf '%s' "$p"
+}
 
 # ── The tombstone library (W2-CONTRACT.md). Every removal below writes a reversible record FIRST:
 #    `git worktree remove` exits 0 while deleting gitignored content git records nowhere, and the
@@ -318,7 +356,6 @@ TOMB_OK=0
 # disposal row land in one file and a fixtured git stays fixtured.
 WT_GIT="${WT_GIT:-$GIT_BIN}"
 WT_LEDGER="${WT_LEDGER:-$DISPOSAL_LOG}"
-[ "$TRUNK_OK" = "1" ] && WT_TRUNK="${WT_TRUNK:-$TRUNK}"
 if [ -f "$TOMB_LIB" ]; then
   # shellcheck source=/dev/null
   . "$TOMB_LIB" && [ "$(type -t wt_tombstone 2>/dev/null)" = "function" ] && TOMB_OK=1
@@ -327,16 +364,88 @@ fi
 PIN_OK=0
 [ "$TOMB_OK" = "1" ] && [ "$(type -t wt_pinned 2>/dev/null)" = "function" ] && PIN_OK=1
 
-# canon <path> — resolve symlinks and fold /private/tmp → /tmp so cc-notify cwds, lsof output
-# and the worktree registry compare on one canonical form (macOS /tmp is a symlink).
-canon() {
-  local p="${1:-}" r
-  [ -n "$p" ] || return 0
-  r="$(cd "$p" 2>/dev/null && pwd -P)" || r=""
-  [ -n "$r" ] && p="$r"
-  case "$p" in /private/tmp/*) p="/tmp/${p#/private/tmp/}" ;; esac
-  printf '%s' "$p"
-}
+# ── `--path` (WP-10 phase B): evaluate ONLY the named trees, each in the repo its own common dir
+#    names (CC_WTGC_REPO does not apply). A path that is gone but PARKED resolves through the park
+#    index. Anything else is dropped, said on stdout. Paths spanning several repos re-run this script
+#    once per repo, serially, so each pass takes the mutex and reads its own trunk.
+#    PATHSET holds the comparison key per target: canon() for a live dir (what process_record compares
+#    against), the park index's own path form for a parked one.
+PATH_REPO=""
+PATHSET=""
+if [ -n "$PATHS" ]; then
+  _pairs=""
+  while IFS= read -r _p; do
+    [ -n "$_p" ] || continue
+    _key=""; _repo=""
+    if [ -d "$_p" ]; then
+      _key="$(canon "$_p")"
+      _repo="$("$GIT_BIN" -C "$_p" rev-parse --path-format=absolute --git-common-dir 2>/dev/null | sed 's#/\.git$##')"
+    elif [ "$TOMB_OK" = "1" ] && _lk="$(wt_parked_lookup "$_p" 2>/dev/null)"; then
+      _key="$(wt__park_path "$_p")"; _repo="${_lk%%	*}"
+    fi
+    if [ -z "$_repo" ] || [ ! -d "$_repo" ]; then
+      echo "worktree-gc: --path $_p — not a worktree of any repository, and not parked; dropped"
+      continue
+    fi
+    _pairs="${_pairs}$(canon "$_repo")	${_p}	${_key}
+"
+  done <<EOF
+$PATHS
+EOF
+  _repos="$(printf '%s' "$_pairs" | cut -f1 | sed '/^$/d' | sort -u)"
+  if [ -z "$_repos" ]; then
+    echo "worktree-gc: verdict=no-paths — every --path was dropped; nothing evaluated, nothing mutated."
+    exit 0
+  fi
+  if [ "$(printf '%s\n' "$_repos" | grep -c .)" -gt 1 ]; then
+    _rc=0
+    while IFS= read -r _r; do
+      [ -n "$_r" ] || continue
+      _pargs=()
+      while IFS='	' read -r _rr _pp _kk; do
+        [ "$_rr" = "$_r" ] && _pargs+=(--path "$_pp")
+      done <<EOF
+$_pairs
+EOF
+      "${BASH:-bash}" "$0" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} "${_pargs[@]}"; _c=$?
+      [ "$_c" -gt "$_rc" ] && _rc="$_c"
+    done <<EOF
+$_repos
+EOF
+    exit "$_rc"
+  fi
+  PATH_REPO="$_repos"
+  PATHSET="$(printf '%s' "$_pairs" | cut -f3)"
+  unset _pairs _repos _p _key _repo _lk
+fi
+
+MAIN="$("$GIT_BIN" -C "${PATH_REPO:-${CC_WTGC_REPO:-$PWD}}" rev-parse --show-toplevel 2>/dev/null)"
+if [ -z "$MAIN" ]; then
+  echo "worktree-gc: not inside a git repository (set CC_WTGC_REPO)" >&2
+  exit 2
+fi
+# Always drive off the MAIN checkout, even when invoked from a linked worktree.
+MAIN="$("$GIT_BIN" -C "$MAIN" rev-parse --path-format=absolute --git-common-dir 2>/dev/null | sed 's#/\.git$##')"
+[ -d "$MAIN" ] || MAIN="$("$GIT_BIN" -C "${PATH_REPO:-${CC_WTGC_REPO:-$PWD}}" rev-parse --show-toplevel)"
+
+# ── The trunk, PER REPO (WP-10). A hardcoded origin/main is right for this repo and wrong for any
+#    repo whose default branch is not `main`: there `landed()` asked `git cherry` about a ref that
+#    does not exist, got rc≠0, and called EVERY branch unlanded — which is the DISPOSE class's entry
+#    door, not a KEEP. So origin/HEAD names the trunk when the clone recorded one, origin/main is the
+#    fallback, and an explicit CC_WTGC_TRUNK still wins.
+#    AC-4: when the chosen ref does not resolve, landedness is UNPROVABLE in both directions, and
+#    that is its own verdict (`trunk-unresolvable`), never folded into "unlanded" or "landed".
+if [ -n "${CC_WTGC_TRUNK:-}" ]; then
+  TRUNK="$CC_WTGC_TRUNK"
+else
+  TRUNK="$("$GIT_BIN" -C "$MAIN" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)"
+  [ -n "$TRUNK" ] || TRUNK="origin/main"
+fi
+TRUNK_OK=0
+"$GIT_BIN" -C "$MAIN" rev-parse --verify --quiet "$TRUNK" >/dev/null 2>&1 && TRUNK_OK=1
+
+# The library (sourced above, before the repo was known) compares against THIS repo's trunk.
+[ "$TRUNK_OK" = "1" ] && WT_TRUNK="${WT_TRUNK:-$TRUNK}"
 
 # ── Oracle 3 WRITER: `--warrant <path> --reason '<why>'` records ONE abandon decision. ───
 # Runs before the mutex and before every oracle — it appends a text line and exits, it never
@@ -504,9 +613,10 @@ LOCK_HELD=0
 # shellcheck disable=SC2329  # invoked indirectly via `trap cleanup EXIT` (shellcheck can't see traps)
 cleanup() {
   [ "$LOCK_HELD" = "1" ] && { rm -f "$LOCK_DIR/pid" "$LOCK_DIR/lstart" 2>/dev/null; rmdir "$LOCK_DIR" 2>/dev/null; }
-  rm -f "$REMOVED_BR" "$CWDS_WHY_FILE" "$CWDS_WHY_FILE.kind" 2>/dev/null
+  rm -f "$REMOVED_BR" "$CWDS_WHY_FILE" "$CWDS_WHY_FILE.kind" "$PARK_ERR" 2>/dev/null
 }
 REMOVED_BR="${TMPDIR:-/tmp}/worktree-gc.removed.$$"
+PARK_ERR="${TMPDIR:-/tmp}/worktree-gc.parkerr.$$"   # the library's one-line stderr reason, for the KEEP line
 trap cleanup EXIT
 proc_lstart() { LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//'; }
 lock_holder() { # → live | dead | untokened — read off the lock dir's own token, never its age
@@ -606,7 +716,12 @@ fi
 # The feed is small today (the registered-session cwd list measured 545 B on 2026-08-26) and four
 # further keep-arms sit under this rung, so this is LATENT — but the feed only grows and nothing
 # announces the crossing. tests/worktree-gc.bats pins it behaviourally, past the measured floor.
-is_live_cwd() { printf '%s\n' "$LIVE_CWDS" | grep -xF "$1" >/dev/null; }
+#
+# AC-6: a live cwd UNDER the path occupies it too (a session that cd'd into a subdirectory), so the
+# match is "equal, or equal up to a /", never a bare prefix (`wt-a` must not claim `wt-ab`). awk reads
+# its whole input, so the rc rule above still holds; the path travels through the environment, not
+# `-v`, which would interpret backslashes in it.
+is_live_cwd() { printf '%s\n' "$LIVE_CWDS" | P="$1" awk 'BEGIN { p = ENVIRON["P"]; n = length(p) } $0 == p || (substr($0, 1, n + 1) == p "/") { f = 1 } END { exit !f }'; }
 
 registry_live() { # <basename> <canon-path> → 0 iff ANY registered session PID is still alive here
   local base="$1" path="$2" f row pid rcwd
@@ -1084,7 +1199,7 @@ recheck_live() { # <path> <canon-path> → 0 iff something looks live HERE, righ
   fi
   while IFS= read -r c; do
     [ -n "$c" ] || continue
-    [ "$(canon "$c")" = "$cpath" ] && return 0
+    case "$(canon "$c")" in "$cpath"|"$cpath"/*) return 0 ;; esac   # AC-6: a subdirectory cwd is here too
   done <<EOF
 $cwds
 EOF
@@ -1254,8 +1369,269 @@ dispose_record() { # <path> <canon> <branch> <base> <idle-hours> <n-unlanded> �
   fi
 }
 
+# ── PARK-FIRST (WP-10 phase B; DESIGN §3.2 PARKED / DETACHED / ARCHIVED). ─────────────────────────
+# Reached only with --park-first, and only once every KEEP gate of process_record has passed. The
+# quiescent action is wt_park — one same-volume rename, a lock, an index entry and a row; nothing is
+# deleted — so the two arms differ in how sure they must be that nobody is coming back, not in what
+# they risk. Removal happens only late (DETACH: a parked arm-(i) tree nobody can `--resume` any more,
+# its newest transcript older than cleanupPeriodDays) or under disk pressure (ARCHIVE), and both go
+# through the tombstone first, exactly like every other removal in this file.
+N_PARKED=0; N_DETACHED=0; N_ARCHIVED=0; POP_ACTIVE=0; POP_PARKED=0; REC_POP=""
+PARK_OK=0
+[ "$TOMB_OK" = "1" ] && [ "$(type -t wt_park 2>/dev/null)" = "function" ] && PARK_OK=1
+US="$(printf '\037')"   # field separator for the tables below: a TAB would collapse an empty field
+ARCH_CANDS=""           # parked trees an ARCHIVE may take, one US-separated row each (see parked_record)
+
+pf_keep() { # <path> <branch> <reason>
+  echo "KEEP    $1 [${2:-detached}] — $3"
+  N_KEPT=$((N_KEPT + 1))
+}
+
+pf_age() { # <seconds> → "Nh" under two days, else "Nd"
+  if [ "$1" -lt 172800 ]; then printf '%sh' $(($1 / 3600)); else printf '%sd' $(($1 / 86400)); fi
+}
+
+pf_git_activity() { # <tree> → newest of <gitdir>/logs/HEAD and <gitdir>/index mtimes (epoch); rc 1 if neither reads
+  local gd a b
+  gd="$("$GIT_BIN" -C "$1" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+  a="$(stat -f %m "$gd/logs/HEAD" 2>/dev/null)"; b="$(stat -f %m "$gd/index" 2>/dev/null)"
+  case "$a" in ''|*[!0-9]*) a="" ;; esac
+  case "$b" in ''|*[!0-9]*) b="" ;; esac
+  [ -n "$a$b" ] || return 1
+  if [ -n "$a" ] && { [ -z "$b" ] || [ "$a" -ge "$b" ]; }; then printf '%s\n' "$a"; else printf '%s\n' "$b"; fi
+}
+
+park_record() { # <path> <canon-path> <branch> <dirty-porcelain> <detached 0|1> — classify, then PARK or KEEP
+  local path="$1" cpath="$2" branch="$3" porc="$4" det="$5" base now tip act newest ref src quiet arm cls parked m
+  base="$(basename "$path")"
+  case "$base" in
+    wt-pool-[0-9]*) pf_keep "$path" "$branch" "pool slot ($base) — the pool re-lets it, so it is never parked"; return 0 ;;
+  esac
+  if [ -f "$path/.gitmodules" ]; then
+    pf_keep "$path" "$branch" "holds submodules — git refuses to move such a tree, and PARK is a move"; return 0
+  fi
+  if [ "$PARK_OK" != "1" ]; then
+    pf_keep "$path" "$branch" "park library unavailable ($TOMB_LIB) — PARK-first never falls back to removal"; return 0
+  fi
+  if [ "$TRUNK_OK" = "0" ]; then
+    pf_keep "$path" "$branch" "trunk unresolvable (AC-4) — trunk-unresolvable: '$TRUNK' does not resolve, so landedness is unprovable either way"
+    return 0
+  fi
+  now="$(wt__now)"
+  tip="$("$GIT_BIN" -C "$path" log -1 --format=%ct HEAD 2>/dev/null)"
+  case "${tip:-}" in ''|*[!0-9]*) pf_keep "$path" "$branch" "tip date unreadable"; return 0 ;; esac
+  act="$(pf_git_activity "$path")" || act=""
+  newest="$(wt_newest_transcript_mtime "$path" 2>/dev/null)" || newest=""
+
+  # The arm. (i) needs a landed branch and a tree holding nothing the trunk lacks; the first miss names
+  # the class of (ii), which only ever leaves the branch attached.
+  arm=ii
+  if [ "$det" = "1" ] || [ -z "$branch" ]; then                 cls=detached
+  elif ! landed "$branch"; then                                  cls=unlanded
+  elif printf '%s\n' "$porc" | grep '^?? ' >/dev/null; then      cls=untracked
+  elif [ -n "$porc" ] && ! dirt_landed "$path"; then             cls=dirty
+  elif [ -n "$porc" ]; then                                      arm=i; cls=landed-dirt
+  else                                                           arm=i; cls=landed-clean
+  fi
+
+  if [ "$arm" = "i" ]; then
+    m=$(( (now - tip) / 60 ))
+    if [ "$m" -lt "$IDLE_MIN" ]; then pf_keep "$path" "$branch" "branch tip is ${m}m old (< ${IDLE_MIN}m idle floor)"; return 0; fi
+    if [ -n "$newest" ]; then ref="$newest"; src="newest transcript"
+    elif [ -n "$act" ]; then ref="$act"; src="no transcript, so the tree's own git activity"
+    else pf_keep "$path" "$branch" "$cls, grace unprovable — no transcript and <gitdir>/logs/HEAD + index unreadable"; return 0
+    fi
+    quiet=$((now - ref))
+    if [ "$quiet" -lt "$GRACE_PARK_S" ]; then
+      pf_keep "$path" "$branch" "$cls, inside the PARK grace — $src $(pf_age "$quiet") old (< $(pf_age "$GRACE_PARK_S"))"
+      return 0
+    fi
+  else
+    # Arm (ii)'s four floors (DESIGN §3.2 "PARK's activity and transcript legs"). Tip age does not move
+    # with uncommitted edits, so the working files and — with no transcript, which means UNKNOWN, not
+    # old — the tree's own git activity must be as quiet as the tip.
+    if [ $((now - tip)) -lt "$PARK_FLOOR_S" ]; then
+      pf_keep "$path" "$branch" "$cls, arm-ii floor: tip is $(pf_age $((now - tip))) old (< 7d)"; return 0
+    fi
+    if [ -n "$newest" ] && [ $((now - newest)) -lt "$PARK_FLOOR_S" ]; then
+      pf_keep "$path" "$branch" "$cls, arm-ii floor: newest transcript is $(pf_age $((now - newest))) old (< 7d)"; return 0
+    fi
+    if wt_recent_file "$path" 7; then
+      pf_keep "$path" "$branch" "$cls, arm-ii floor: a working-tree file changed within 7d"; return 0
+    fi
+    if [ -z "$newest" ]; then
+      if [ -z "$act" ]; then
+        pf_keep "$path" "$branch" "$cls, arm-ii floor: no transcript (unknown, not old) and <gitdir>/logs/HEAD + index unreadable"; return 0
+      fi
+      if [ $((now - act)) -lt "$PARK_FLOOR_S" ]; then
+        pf_keep "$path" "$branch" "$cls, arm-ii floor: no transcript (unknown, not old) and the tree's own git activity (logs/HEAD, index) is $(pf_age $((now - act))) old (< 7d)"
+        return 0
+      fi
+    fi
+    ref="${newest:-$act}"; quiet=$((now - ref))
+  fi
+
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "would park    $path [${branch:-detached}] — arm-$arm ($cls, quiet $(pf_age "$quiet"))"
+    N_PARKED=$((N_PARKED + 1)); REC_POP=parked
+    return 0
+  fi
+  if recheck_live "$path" "$cpath"; then
+    pf_keep "$path" "$branch" "LIVE at act time ($RECHECK_WHY)"; return 0
+  fi
+  if ! parked="$(wt_park "$path" worktree-gc "$cls" --arm "$arm" 2>"$PARK_ERR")"; then
+    pf_keep "$path" "$branch" "PARK refused — $(sed -n '1s/^wt-tombstone: //p' "$PARK_ERR" 2>/dev/null) (tree kept at its path)"
+    N_REFUSED=$((N_REFUSED + 1))
+    return 0
+  fi
+  echo "park    $path [${branch:-detached}] — arm-$arm ($cls, quiet $(pf_age "$quiet")) → $parked"
+  N_PARKED=$((N_PARKED + 1)); REC_POP=parked
+}
+
+# park_lookup <canon-parked-path> — the park index entry for a parked tree of THIS repo. Sets PK_ORIG
+# (the path it was parked from), PK_BRANCH (non-empty only for arm (i), which wt_park records) and
+# PK_IDX (the index file). rc 1 = no entry.
+PK_ORIG=""; PK_BRANCH=""; PK_IDX=""
+park_lookup() {
+  local c o b f
+  PK_ORIG=""; PK_BRANCH=""; PK_IDX=""
+  while IFS="$US" read -r c o b f; do
+    [ -n "$c" ] && [ "$c" = "$1" ] || continue
+    PK_ORIG="$o"; PK_BRANCH="$b"; PK_IDX="$f"
+    return 0
+  done <<EOF
+$PARK_IDX
+EOF
+  return 1
+}
+
+# pf_relock — put back the lock pf_detach lifted (PF_* are its arguments; a failed step must leave
+# the tree PARKED exactly as it found it).
+PF_PATH=""; PF_WLOCK=0; PF_LREASON=""
+pf_relock() {
+  [ "$PF_WLOCK" = "1" ] || return 0
+  if [ -n "$PF_LREASON" ]; then "$GIT_BIN" -C "$MAIN" worktree lock --reason "$PF_LREASON" "$PF_PATH" 2>/dev/null
+  else "$GIT_BIN" -C "$MAIN" worktree lock "$PF_PATH" 2>/dev/null; fi
+}
+
+# pf_detach <detach|archive> <parked> <canon> <orig> <idx> <branch> <locked 0|1> <lock-reason> <quiet-s> <why>
+# The late removal of a PARKED tree: tombstone (residue moved aside, head + reflog refs), for an
+# archive a bundle of every unlanded branch into the tombstone dir, then `git worktree remove` — never
+# --force. Any failed step puts the tree back as it was: PARKED, locked, residue in place.
+# rc 0 = removed (or would be, under --dry-run); rc 1 = kept, its KEEP line already printed.
+pf_detach() {
+  local mode="$1" path="$2" cpath="$3" orig="$4" idx="$5" label="$6" quiet="$9" why="${10}"
+  local head tid cur b bf ign at
+  PF_PATH="$path"; PF_WLOCK="$7"; PF_LREASON="$8"
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "would $mode  $orig [$label] — $why"
+    return 0
+  fi
+  if recheck_live "$path" "$cpath"; then
+    pf_keep "$path" "$label" "PARKED from $orig, LIVE at act time ($RECHECK_WHY)"; return 1
+  fi
+  if [ -n "$("$GIT_BIN" -C "$path" status --porcelain 2>/dev/null)" ]; then
+    pf_keep "$path" "$label" "PARKED from $orig and dirty — a $mode needs a clean tree, never --force (stays PARKED)"; return 1
+  fi
+  head="$("$GIT_BIN" -C "$path" rev-parse --verify --quiet HEAD 2>/dev/null)"
+  cur="$("$GIT_BIN" -C "$path" symbolic-ref -q --short HEAD 2>/dev/null)"
+  if [ "$PF_WLOCK" = "1" ] && ! "$GIT_BIN" -C "$MAIN" worktree unlock "$path" 2>/dev/null; then
+    pf_keep "$path" "$label" "PARKED from $orig; unlock failed (stays PARKED)"; N_REFUSED=$((N_REFUSED + 1)); return 1
+  fi
+  if ! tid="$(wt_tombstone "$path" worktree-gc "late-$mode" --event worktree-tombstoned 2>"$PARK_ERR")" || [ -z "$tid" ]; then
+    pf_relock
+    pf_keep "$path" "$label" "PARKED from $orig; tombstone failed — $(sed -n '1s/^wt-tombstone: //p' "$PARK_ERR" 2>/dev/null) (stays PARKED)"
+    N_REFUSED=$((N_REFUSED + 1)); return 1
+  fi
+  if [ "$mode" = "archive" ]; then
+    # Every branch the tree carries, attached (arm ii) or recorded at park (arm i), whose patches are
+    # not all on the trunk. The branch ref itself is never deleted here; the bundle is the copy that
+    # survives a later prune of it.
+    for b in $(printf '%s\n%s\n' "$cur" "$label" | sed '/^$/d; /^detached$/d' | sort -u); do
+      "$GIT_BIN" -C "$MAIN" rev-parse --verify --quiet "refs/heads/$b" >/dev/null 2>&1 || continue
+      [ -n "$(unlanded_set "$b")" ] || continue
+      bf="$WT_TOMB_DIR/$tid/$b.bundle"
+      if ! { ( umask 077; mkdir -p "$(dirname "$bf")" ) && ( umask 077; "$GIT_BIN" -C "$MAIN" bundle create -q "$bf" "refs/heads/$b" ) 2>/dev/null && [ -s "$bf" ]; }; then
+        tombstone_undo "$tid" "$path"; pf_relock
+        pf_keep "$path" "$label" "PARKED from $orig; bundle of $b failed (stays PARKED)"
+        N_REFUSED=$((N_REFUSED + 1)); return 1
+      fi
+    done
+  fi
+  ign="$(ignored_inventory "$path")"   # what the tombstone left in place (caches), which the removal takes
+  if ! "$GIT_BIN" -C "$MAIN" worktree remove "$path" 2>/dev/null; then
+    tombstone_undo "$tid" "$path"; pf_relock
+    pf_keep "$path" "$label" "PARKED from $orig; git REFUSED 'worktree remove' (stays PARKED)"
+    N_REFUSED=$((N_REFUSED + 1)); return 1
+  fi
+  rm -f "$idx"   # no longer parked: an unpark must not chase a tree that is gone (restore is by tombstone)
+  at="$TRUNK"
+  "$GIT_BIN" -C "$MAIN" rev-parse --verify --quiet "refs/wt-tombstone/$tid/head" >/dev/null 2>&1 && at="refs/wt-tombstone/$tid/head"
+  log_disposal "$orig" "$label" "$head" 0 "" "" "$((quiet / 3600))" "late-$mode (parked at $path)" "$why" "$ign" "$at" "$tid"
+  echo "$mode  $orig [$label] — $why · tombstone $tid"
+  return 0
+}
+
+# parked_record <parked> <canon> <porcelain-branch> <locked 0|1> <lock-reason> — a PARKED tree of this
+# repo, its index entry already in PK_*. G-live and the pins run first, on the parked dir and on the
+# path it came from. Then arm (i) past cleanupPeriodDays is DETACHED now; anything else stays PARKED,
+# or — with an archive floor set — is queued for the disk-pressure pass after the loop, which prints
+# its verdict.
+parked_record() {
+  local path="$1" cpath="$2" pbr="$3" wlock="$4" lreason="$5" orig="$PK_ORIG" idx="$PK_IDX" ibr="$PK_BRANCH"
+  local label now newest act ref src cpd quiet pin armtxt
+  REC_POP=parked
+  label="${ibr:-${pbr:-detached}}"
+  if [ -z "$idx" ]; then
+    pf_keep "$path" "$label" "PARKED${orig:+ from $orig} with no park-index entry — never detached or archived without one (left for a human)"
+    return 0
+  fi
+  if is_live_cwd "$cpath"; then pf_keep "$path" "$label" "PARKED from $orig and LIVE — a registered session / running claude is cwd'd here"; return 0; fi
+  if registry_live "$(basename "$path")" "$cpath"; then pf_keep "$path" "$label" "PARKED from $orig and LIVE — live-session-registry PID still alive"; return 0; fi
+  if session_occupancy_keep "$cpath"; then pf_keep "$path" "$label" "PARKED from $orig — $SESSION_OCC_WHY"; return 0; fi
+  if recently_active "$path"; then pf_keep "$path" "$label" "PARKED from $orig and ACTIVE — an untracked file here was written within ${ACTIVE_MIN}m"; return 0; fi
+  if command -v "$LSOF_BIN" >/dev/null 2>&1 && "$LSOF_BIN" -- "$path" 2>/dev/null | grep . >/dev/null; then
+    pf_keep "$path" "$label" "PARKED from $orig and open by a live process"; return 0
+  fi
+  if [ "$PIN_OK" = "1" ] && pin="$(wt_pinned "$orig" 2>/dev/null)"; then
+    pf_keep "$path" "$label" "PARKED from $orig; pinned ($pin)"; return 0
+  fi
+  now="$(wt__now)"
+  newest="$(wt_newest_transcript_mtime "$orig" 2>/dev/null)" || newest=""
+  act="$(pf_git_activity "$path")" || act=""
+  if [ -n "$newest" ]; then ref="$newest"; src="newest transcript"
+  elif [ -n "$act" ]; then ref="$act"; src="no transcript, so the tree's own git activity"
+  else pf_keep "$path" "$label" "PARKED from $orig; quiet time unprovable (no transcript, git activity unreadable)"; return 0
+  fi
+  quiet=$((now - ref))
+  cpd="$(wt_cleanup_period_days)"
+  case "$cpd" in ''|*[!0-9]*) cpd=30 ;; esac
+  if [ -n "$ibr" ] && [ "$quiet" -gt $((cpd * 86400)) ]; then
+    if pf_detach detach "$path" "$cpath" "$orig" "$idx" "$label" "$wlock" "$lreason" "$quiet" \
+         "parked arm-i tree, $src $(pf_age "$quiet") old > cleanupPeriodDays ${cpd}d"; then
+      N_DETACHED=$((N_DETACHED + 1)); REC_POP=gone
+    fi
+    return 0
+  fi
+  if [ -n "$ibr" ]; then armtxt="arm-i; $src $(pf_age "$quiet") old, DETACH after ${cpd}d"
+  else                   armtxt="arm-ii — stays parked; only disk pressure archives it"; fi
+  if [ -n "$ARCHIVE_FLOOR_GB" ]; then
+    ARCH_CANDS="${ARCH_CANDS}${ref}${US}${path}${US}${cpath}${US}${orig}${US}${idx}${US}${label}${US}${wlock}${US}${lreason}${US}${quiet}${US}${armtxt}
+"
+    return 0
+  fi
+  pf_keep "$path" "$label" "PARKED from $orig ($armtxt)"
+}
+
+# in_pathset <key> → 0 iff --path named it
+in_pathset() { [ -n "$1" ] && printf '%s\n' "$PATHSET" | grep -xF -- "$1" >/dev/null; }
+PATH_MATCHED=""
+
 # ── 1. Broken admin records (dir gone, .git link gone) — pure bookkeeping, zero content. ──
-if [ "$DRY_RUN" = "1" ]; then
+# A --path pass touches only the trees it names, and a prune is a whole-repo act, so it is skipped.
+if [ -n "$PATHSET" ]; then
+  :
+elif [ "$DRY_RUN" = "1" ]; then
   PRUNABLE="$("$GIT_BIN" -C "$MAIN" worktree prune --dry-run -v 2>/dev/null)"
   [ -n "$PRUNABLE" ] && printf '%s\n' "$PRUNABLE" | sed 's/^/would prune  /'
 elif [ "$TOMB_OK" = "1" ]; then
@@ -1271,14 +1647,53 @@ if [ "$TRUNK_OK" = "0" ]; then
 fi
 
 # ── 2. Per-worktree gates. Records come ONLY from git — never a directory listing. ───────
-wt=""; br=""; detached=0; locked=0
+# The park index, read once: "<canon parked path> US <path it came from> US <branch> US <index file>"
+# for every entry of THIS repo. It names parked trees whose lock was lost, and it is the only record of
+# where a parked tree came from and whether it was parked by arm (i). Read only when something uses it.
+PARK_IDX=""; PARK_ROOT_C=""
+if [ "$PARK_OK" = "1" ] && { [ "$PARK_FIRST" = "1" ] || [ -n "$PATHSET" ]; }; then
+  PARK_ROOT_C="$(canon "$WT_PARK_ROOT")"
+  _mainc="$(canon "$MAIN")"
+  for _f in "$WT_PARK_INDEX"/*; do
+    [ -f "$_f" ] || continue
+    [ "$(canon "$(sed -n 's/^repo=//p' "$_f" | head -1)")" = "$_mainc" ] || continue
+    PARK_IDX="${PARK_IDX}$(canon "$(sed -n 's/^parked=//p' "$_f" | head -1)")${US}$(sed -n 's/^path=//p' "$_f" | head -1)${US}$(sed -n 's/^branch=//p' "$_f" | head -1)${US}${_f}
+"
+  done
+  unset _f _mainc
+fi
+wt=""; br=""; detached=0; locked=0; lockreason=""
 process_record() {
   local path="$wt" branch="$br" base reason="" dirty_porc="" pin=""
   [ -n "$path" ] || return 0
   [ "$path" = "$MAIN" ] && return 0                       # never the primary checkout
-  lock_heartbeat                                          # F-9: a running pass's lock stays fresh
   local cpath; cpath="$(canon "$path")"
+  # --path: only the named trees, a parked one also by the path it was parked from.
+  if [ -n "$PATHSET" ]; then
+    if in_pathset "$cpath"; then PATH_MATCHED="${PATH_MATCHED}${cpath}
+"
+    elif park_lookup "$cpath" && in_pathset "$PK_ORIG"; then PATH_MATCHED="${PATH_MATCHED}${PK_ORIG}
+"
+    else return 0
+    fi
+  fi
+  lock_heartbeat                                          # F-9: a running pass's lock stays fresh
   base="$(basename "$path")"
+  [ "$PARK_FIRST" = "1" ] && [ -d "$path" ] && REC_POP=active
+
+  # PARK-FIRST: a parked tree is never classified as a candidate again. Parked = a `parked …` lock, an
+  # index entry, or a home under the park root; parked_record rules on it (late DETACH / ARCHIVE).
+  if [ "$PARK_FIRST" = "1" ] && [ -d "$path" ] && ! excluded "$cpath"; then
+    local isp=0
+    case "$lockreason" in "parked "*) isp=1 ;; esac
+    park_lookup "$cpath" && isp=1
+    if [ -n "$PARK_ROOT_C" ]; then case "$cpath" in "$PARK_ROOT_C"/*) isp=1 ;; esac; fi
+    if [ "$isp" = "1" ]; then
+      [ -n "$PK_ORIG" ] || PK_ORIG="$(printf '%s' "$lockreason" | sed -n 's/^parked [^ ]* from \(.*\) sids=.*/\1/p')"
+      parked_record "$path" "$cpath" "$branch" "$locked" "$lockreason"
+      return 0
+    fi
+  fi
 
   # GATE ORDER (G-P1-6 amended): a gate may move ahead of the fork-heavy probes — `status`, the
   # recent-write `find`, lsof — only if it is a pure KEEP: no side effect, nothing it skips could
@@ -1299,16 +1714,21 @@ process_record() {
   # rungs above still short-circuit it) while capturing its output for the removal path, which must
   # know whether it is removing a tree whose dirt was PROVEN redundant.
   elif dirty_porc="$("$GIT_BIN" -C "$path" status --porcelain 2>/dev/null)"
-       [ -n "$dirty_porc" ] && ! dirt_landed "$path"; then
+       [ -n "$dirty_porc" ] && [ "$PARK_FIRST" = "0" ] && ! dirt_landed "$path"; then
                                                                   reason="dirty tree, $DIRT_BLOCKER (removal would need --force ⇒ data loss)"
   elif op_in_progress "$path";                               then reason="a git operation is parked here ($OP_KIND) — removal would discard it"
   elif is_live_cwd "$cpath";                                 then reason="LIVE — a registered session / running claude is cwd'd here"
   elif registry_live "$base" "$cpath";                       then reason="LIVE — live-session-registry PID still alive"
   elif session_occupancy_keep "$cpath";                      then reason="$SESSION_OCC_WHY"
-  elif [ "$detached" = "1" ] || [ -z "$branch" ];            then reason="detached HEAD (manual review — no branch records where the work went)"
+  elif [ "$PARK_FIRST" = "0" ] && { [ "$detached" = "1" ] || [ -z "$branch" ]; }; then
+                                                                  reason="detached HEAD (manual review — no branch records where the work went)"
   elif recently_active "$path";                              then reason="ACTIVE — an untracked file here was written within ${ACTIVE_MIN}m (a session holding a worktree through its Bash tool leaves no resident process between commands)"
   elif command -v "$LSOF_BIN" >/dev/null 2>&1 && "$LSOF_BIN" -- "$path" 2>/dev/null | grep . >/dev/null; then
                                                                   reason="open by a live process"
+  # PARK-FIRST: every KEEP gate above has passed; dirty and detached trees reach here too, as arm (ii).
+  elif [ "$PARK_FIRST" = "1" ]; then
+    park_record "$path" "$cpath" "$branch" "$dirty_porc" "$detached"
+    return 0
   else
     local tip now age
     tip="$("$GIT_BIN" -C "$MAIN" log -1 --format=%ct "$branch" 2>/dev/null)"
@@ -1492,13 +1912,50 @@ process_record() {
 
 while IFS= read -r line; do
   case "$line" in
-    "worktree "*) wt="${line#worktree }"; br=""; detached=0; locked=0 ;;
+    "worktree "*) wt="${line#worktree }"; br=""; detached=0; locked=0; lockreason="" ;;
     "branch refs/heads/"*) br="${line#branch refs/heads/}" ;;
     "detached") detached=1 ;;
-    "locked"|"locked "*) locked=1 ;;
-    "") process_record; wt=""; br=""; detached=0; locked=0 ;;
+    "locked") locked=1 ;;
+    "locked "*) locked=1; lockreason="${line#locked }" ;;
+    "") REC_POP=""; process_record
+        case "$REC_POP" in active) POP_ACTIVE=$((POP_ACTIVE + 1)) ;; parked) POP_PARKED=$((POP_PARKED + 1)) ;; esac
+        wt=""; br=""; detached=0; locked=0; lockreason="" ;;
   esac
 done < <({ "$GIT_BIN" -C "$MAIN" worktree list --porcelain 2>/dev/null; echo; })
+
+# ── 2b. ARCHIVE (PARK-first + CC_WTGC_ARCHIVE_FLOOR_GB only). Disk pressure is the one reason a parked
+#    tree goes before cleanupPeriodDays: below the floor, oldest newest-transcript first, each one
+#    bundled + tombstoned + removed, until free space is back over the floor. No floor ⇒ this never runs.
+if [ "$PARK_FIRST" = "1" ] && [ -n "$ARCHIVE_FLOOR_GB" ] && [ -n "$ARCH_CANDS" ]; then
+  arch_free_kb() { df -Pk "$WT_PARK_ROOT" 2>/dev/null | awk 'NR == 2 { print $4 }'; }
+  ARCH_PRESSURE=0; ARCH_FLOOR_KB=""; ARCH_FREE_KB=""
+  case "$ARCHIVE_FLOOR_GB" in
+    *[!0-9]*) echo "worktree-gc: CC_WTGC_ARCHIVE_FLOOR_GB='$ARCHIVE_FLOOR_GB' is not a whole number of GB — no archive this pass" ;;
+    *) ARCH_FLOOR_KB=$((ARCHIVE_FLOOR_GB * 1048576)); ARCH_FREE_KB="$(arch_free_kb)" ;;
+  esac
+  case "$ARCH_FREE_KB" in
+    '') [ -n "$ARCH_FLOOR_KB" ] && echo "worktree-gc: free space on $WT_PARK_ROOT unreadable — no archive this pass" ;;
+    *[!0-9]*) echo "worktree-gc: free space on $WT_PARK_ROOT unreadable ($ARCH_FREE_KB) — no archive this pass" ;;
+    *) [ "$ARCH_FREE_KB" -lt "$ARCH_FLOOR_KB" ] && ARCH_PRESSURE=1 ;;
+  esac
+  while IFS="$US" read -r _ref _p _cp _orig _idx _lbl _wl _lr _q _armtxt; do
+    [ -n "$_p" ] || continue
+    if [ "$ARCH_PRESSURE" = "1" ]; then
+      if pf_detach archive "$_p" "$_cp" "$_orig" "$_idx" "$_lbl" "$_wl" "$_lr" "$_q" \
+           "disk pressure: $((ARCH_FREE_KB / 1048576)) GB free on the park volume < floor ${ARCHIVE_FLOOR_GB} GB (quiet $(pf_age "$_q"))"; then
+        N_ARCHIVED=$((N_ARCHIVED + 1)); POP_PARKED=$((POP_PARKED - 1))
+        if [ "$DRY_RUN" = "0" ]; then
+          ARCH_FREE_KB="$(arch_free_kb)"
+          case "$ARCH_FREE_KB" in ''|*[!0-9]*) ARCH_PRESSURE=0 ;; *) [ "$ARCH_FREE_KB" -lt "$ARCH_FLOOR_KB" ] || ARCH_PRESSURE=0 ;; esac
+        fi
+      fi
+      continue
+    fi
+    pf_keep "$_p" "$_lbl" "PARKED from $_orig ($_armtxt)"
+  done <<EOF
+$(printf '%s' "$ARCH_CANDS" | sort -n)
+EOF
+fi
 
 # THE THIRD MEMBER OF is_live_cwd's CLASS, and the only one in this file on a DESTRUCTIVE path
 # (drain recycle #243). Same shape as is_live_cwd above — a whole-line fixed-string membership test
@@ -1597,7 +2054,10 @@ LOOSE_OBJECTS="$("$GIT_BIN" -C "$MAIN" count-objects -v 2>/dev/null | sed -n 's/
 case "$LOOSE_OBJECTS" in ''|*[!0-9]*) LOOSE_OBJECTS=-1 ;; esac
 MAINT_GIT_COMMON="$("$GIT_BIN" -C "$MAIN" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
 MAINT_LOCK="${MAINT_GIT_COMMON:-$MAIN/.git}/objects/maintenance.lock"
-if [ -e "$MAINT_LOCK" ]; then
+# A --path pass is scoped to its trees; the shared store's lock is a whole-repo concern.
+if [ -n "$PATHSET" ]; then
+  MAINT_LOCK_STATE=skipped-path-mode
+elif [ -e "$MAINT_LOCK" ]; then
   MAINT_LOCK_MTIME="$(stat -f %m "$MAINT_LOCK" 2>/dev/null || stat -c %Y "$MAINT_LOCK" 2>/dev/null || echo 0)"
   case "$MAINT_LOCK_MTIME" in ''|*[!0-9]*) MAINT_LOCK_MTIME=0 ;; esac
   [ "$MAINT_LOCK_MTIME" -gt 0 ] && MAINT_LOCK_AGE_MIN=$(( ( $(date +%s) - MAINT_LOCK_MTIME ) / 60 ))
@@ -1656,6 +2116,20 @@ GC_ELAPSED_S=$(( $(date +%s) - GC_T0 ))
 # ADDING A FIELD a breaking change to history, which is the defect, not the symptom.
 # Every value is ASCII and whitespace-free so `k=v` splitting is total.
 echo "worktree-gc: counts removed=$N_REMOVED disposed=$N_DISPOSED landed_dirt=$N_DIRT_REMOVED kept=$N_KEPT branches_deleted=$N_BR_DELETED refusals=$N_REFUSED elapsed=${GC_ELAPSED_S}s lock_staleness_window=3600s dry_run=$DRY_RUN maint_lock=$MAINT_LOCK_STATE maint_lock_age_min=$MAINT_LOCK_AGE_MIN loose_objects=$LOOSE_OBJECTS unowned=$N_UNOWNED owner_active=$N_OWNER_ACTIVE"
+# PARK-first's own line, printed only with the flag so the default stdout is unchanged. pop_active is
+# what the population ceiling applies to; parked trees cost a lock and a directory, not a session.
+if [ "$PARK_FIRST" = "1" ]; then
+  echo "worktree-gc: park-first parked=$N_PARKED detached=$N_DETACHED archived=$N_ARCHIVED pop_active=$POP_ACTIVE pop_parked=$POP_PARKED dry_run=$DRY_RUN"
+fi
+# A --path target that matched no linked worktree record of this repo (the main checkout, a stray
+# directory) was not evaluated, and says so.
+if [ -n "$PATHSET" ]; then
+  printf '%s\n' "$PATHSET" | while IFS= read -r _k; do
+    [ -n "$_k" ] || continue
+    printf '%s\n' "$PATH_MATCHED" | grep -xF -- "$_k" >/dev/null && continue
+    echo "worktree-gc: --path $_k — not a linked worktree of $MAIN; dropped"
+  done
+fi
 [ "$PRUNE_BRANCHES" = "0" ] && echo "worktree-gc: branches preserved (pass --prune-branches to delete landed, worktree-less ones)"
 # Absence must be LOUD: a dispose plan that cites this script has to see the class it asked about,
 # whether or not it passed the flag that acts on it.
