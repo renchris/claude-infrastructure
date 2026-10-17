@@ -146,6 +146,44 @@ setup() {
   [[ "$output" == *"verdict=ALREADY"* ]]
 }
 
+# 2026-10-17 (load-root-cause DESIGN X14): TCC grants are tied to the Developer-ID signature, so an
+# ad-hoc staged bundle must never be armed or swapped. codesign is stubbed: the fixtures are unsigned.
+codesign_says() {  # codesign_says <Signature= value>: what `codesign -dv` reports for any bundle
+  mkdir -p "$T/bin"
+  # shellcheck disable=SC2016  # $2 belongs to the generated stub, expanded when codesign runs
+  printf '#!/bin/bash\necho "Executable=$2/Contents/MacOS/kitty" >&2\necho "Signature=%s" >&2\n' "$1" > "$T/bin/codesign"
+  chmod +x "$T/bin/codesign"
+  export KITTY_SWAP_CODESIGN="$T/bin/codesign"
+}
+
+@test "arm refuses an ad-hoc signed staged bundle and writes no marker" {
+  fsfix "$T/build/kitty.app"
+  bash "$SCRIPT" stage >/dev/null
+  codesign_says adhoc
+  run bash "$SCRIPT" arm
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"refused:"*"ad-hoc signed"* ]] || false
+  [ ! -e "$T/state/kitty-restart-pending" ]
+  codesign_says 'Developer ID Application: Kovid Goyal (LMV7VX7TBB)'
+  run bash "$SCRIPT" arm
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=ARMED"* ]] || false
+}
+
+@test "swap and swap --dry-run refuse an ad-hoc signed staged bundle and change nothing" {
+  bash "$SCRIPT" stage >/dev/null
+  codesign_says adhoc
+  run bash "$SCRIPT" swap --confirm "$LIVE" --dry-run
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"ad-hoc signed"* ]] || false
+  run bash "$SCRIPT" swap --confirm "$LIVE"
+  [ "$status" -eq 1 ]
+  [ "$("$LIVE/Contents/MacOS/kitty")" = STOCK ]
+  [ -d "$T/Applications/kitty.app.staged" ]
+  [ ! -e "$T/Applications/kitty.app.stock" ]
+  [ "$(readlink "$T/conf/kitty-title-on.conf")" = "$T/repo/config/kitty-title-on.conf" ]
+}
+
 @test "rollback after a swap restores stock and the ⌘⇧B link by content" {
   bash "$SCRIPT" stage >/dev/null
   bash "$SCRIPT" swap --confirm "$LIVE" >/dev/null

@@ -96,6 +96,22 @@ fsfix_tag() {
   elif has_fsfix_v1 "$1"; then echo " +fullscreen-fix(pre-backport, rebuild)"; fi
 }
 
+# adhoc_refuse <bundle> (2026-10-17, load-root-cause DESIGN X14): refuse a bundle whose code signature
+# is ad-hoc. macOS keys every TCC grant (31 user + 4 system on this box) to the Developer-ID csreq, so
+# an ad-hoc bundle put live would start with none of them: every Documents, Automation and
+# Accessibility consent gone at a reboot with nobody there to re-grant. `codesign -dv` prints
+# `Signature=adhoc` on stderr for exactly that case; an unreadable or unsigned bundle is left to the
+# checks that already run. KITTY_SWAP_CODESIGN is the test seam.
+adhoc_refuse() {
+  local out
+  out="$("${KITTY_SWAP_CODESIGN:-/usr/bin/codesign}" -dv "$1" 2>&1)"
+  case "$out" in
+    *Signature=adhoc*)
+      say "refused: $1 is ad-hoc signed (Signature=adhoc); it would lose every TCC grant kitty holds under its Developer-ID signature. Re-sign it under one stable identity first"
+      exit 1 ;;
+  esac
+}
+
 version() { /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$1/Contents/Info.plist" 2>/dev/null || echo '?'; }
 
 need_confirm() {  # need_confirm <given>
@@ -189,6 +205,7 @@ cmd_arm() {
     say "refused: $STAGED has the fullscreen-destroy fix but predates the upstream backport (no GLFWFsFixV2 marker); rebuild it (run: build --no-band, then stage --no-band)"; exit 1
   fi
   has_fsfix "$STAGED" || { say "refused: $STAGED lacks the fullscreen-destroy fix (run: build --no-band, then stage --no-band)"; exit 1; }
+  adhoc_refuse "$STAGED"
   mkdir -p "$STATE"
   printf '%s\n' "kitty -> patched build: as the LAST step before rebooting run \`bash $SELF swap --confirm $LIVE\`; after login run \`bash $SELF verify --clear-marker\`; undo with \`bash $SELF rollback --confirm $LIVE\`." > "$MARKER"
   say "armed: $MARKER"
@@ -204,6 +221,7 @@ cmd_swap() {
   if is_patched "$pl" && [ "$(probe "$STOCK")" = stock ]; then say "already swapped: $LIVE is $pl, stock kept at $STOCK"; say "verdict=ALREADY"; return 0; fi
   [ "$pl" = stock ]     || { say "refused: live $LIVE probes '$pl', expected stock"; exit 1; }
   is_patched "$ps"      || { say "refused: staged $STAGED probes '$ps', expected patched"; exit 1; }
+  adhoc_refuse "$STAGED"
   [ ! -e "$STOCK" ]     || { say "refused: $STOCK already exists; resolve it first (status)"; exit 1; }
   # A no-band build has no band to point ⌘⇧B at, so it leaves the link alone (2026-10-02, P6).
   [ "$ps" = patched-noband ] || [ -r "$BAND_ON" ] || { say "refused: the ⌘⇧B band drop-in $BAND_ON is missing"; exit 1; }
