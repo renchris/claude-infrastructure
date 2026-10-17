@@ -296,3 +296,55 @@ verdict() { awk -F'\t' -v b="$1" '$1==b {print $6}' "$MANIFEST"; }
   [ "$status" -eq 1 ]
   [ ! -s "$CC_PRUNE_JOURNAL" ] || [ "$(grep -vc '^#' "$CC_PRUNE_JOURNAL")" -eq 0 ]
 }
+
+# ── cases 19-22: the branch-deleted row in the worktree-disposal ledger (W2 note X6) ──────────────
+# A tombstoned tree whose branch this script later deletes can only be restored from its sha; the row
+# says so. Every store is inside $TDIR, and the library is the repo's own.
+tomb_env() {
+  export WT_LEDGER="$TDIR/wt/ledger.jsonl" WT_TOMB_DIR="$TDIR/wt/tomb" WT_STATE_DIR="$TDIR/wt/state" \
+    WT_EVENTS_FILE="$TDIR/wt/state/events.jsonl" WT_WAKE_FILE="$TDIR/wt/state/wake"
+  mkdir -p "$TDIR/wt"
+}
+
+@test "19. a pruned branch writes one branch-deleted row carrying the sha the manifest recorded" {
+  tomb_env
+  bash "$SCRIPT" --manifest "$MANIFEST" >/dev/null
+  ! on_origin landed-rewritten || { echo "nothing was deleted" >&2; return 1; }
+  local sha row; sha="$(awk -F'\t' '$1=="landed-rewritten" {print $2}' "$MANIFEST")"
+  row="$(jq -c 'select(.event=="branch-deleted" and .branch=="landed-rewritten")' "$WT_LEDGER")"
+  [ "$(printf '%s\n' "$row" | grep -c .)" -eq 1 ]
+  [ "$(jq -r .head <<<"$row")" = "$sha" ]
+  [ "$(jq -r .actor <<<"$row")" = branch-prune-landed ]
+  [ "$(jq -r .repo <<<"$row")" = "$(cd "$TDIR/repo" && pwd -P)" ]
+  [ ! -e "$WT_EVENTS_FILE" ]                       # no local worktree held it, so nothing is queued
+}
+
+@test "20. a pruned branch still checked out in a local worktree queues exactly one branch-deleted event" {
+  tomb_env
+  git worktree add -q "$TDIR/wt-landed" landed-rewritten
+  bash "$SCRIPT" --manifest "$MANIFEST" >/dev/null
+  ! on_origin landed-rewritten || { echo "nothing was deleted" >&2; return 1; }
+  [ "$(grep -c . "$WT_EVENTS_FILE")" -eq 1 ]
+  [ "$(jq -r .ev "$WT_EVENTS_FILE")" = branch-deleted ]
+  [ "$(jq -r .path "$WT_EVENTS_FILE")" = "$(cd "$TDIR/wt-landed" && pwd -P)" ]
+  [ -e "$WT_WAKE_FILE" ]
+}
+
+@test "21. an unwritable ledger never fails the prune: the branch is deleted, the gap is reported" {
+  tomb_env
+  mkdir -p "$TDIR/ro"; chmod 555 "$TDIR/ro"; export WT_LEDGER="$TDIR/ro/ledger.jsonl"
+  run bash "$SCRIPT" --manifest "$MANIFEST"
+  chmod 755 "$TDIR/ro"
+  [ "$status" -eq 0 ]
+  ! on_origin landed-rewritten || { echo "the prune was blocked by its own logging" >&2; return 1; }
+  [ "$(verdict landed-rewritten)" = "DELETED" ]
+  [[ "$output" == *"branch-deleted row NOT written for landed-rewritten"* ]] || false
+}
+
+@test "22. RED control: the pre-ledger script deletes the same branch and writes no row" {
+  tomb_env
+  git -C "$BATS_TEST_DIRNAME/.." show 7fa90e0c2:scripts/branch-prune-landed.sh > "$TDIR/pre.sh"
+  bash "$TDIR/pre.sh" --manifest "$MANIFEST" >/dev/null
+  ! on_origin landed-rewritten || { echo "the control deleted nothing, so it proves nothing" >&2; return 1; }
+  [ ! -e "$WT_LEDGER" ]
+}

@@ -53,6 +53,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"   # before the cd below, which would break a relative $0
+
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
   echo "branch-prune-landed: not in a git repo" >&2; exit 2; }
 cd "$repo_root" || exit 2
@@ -74,6 +76,38 @@ journal_deleted() {
     echo "  WARNING: deletion journal $JOURNAL NOT written for $# branch(es) — cloud-lane-liveness" >&2
     echo "           will read their absence as an unaccounted deletion (UNKNOWN)" >&2
   fi
+  return 0
+}
+
+# ledger_deleted <branch>... — one `branch-deleted` row per branch in the worktree-disposal ledger
+# (W2 note X6; API: docs/research/load-root-cause-2026-10-17/W2-CONTRACT.md). A tree tombstoned on a
+# branch that is later pruned here can then only be restored from its SHA, and the row is what tells
+# the restore so. A LOCAL linked worktree still on the branch is queued for the worktree-gc wake run
+# (a `branch-deleted` event), since its upstream just vanished. The sha comes from the manifest, as in
+# journal_deleted. FAIL-OPEN like the journal: no library or an unwritable ledger is reported on
+# stderr and never fails the prune. CC_PRUNE_TOMBSTONE_LIB, when set, is the only library looked at.
+ledger_deleted() {
+  local lib="${CC_PRUNE_TOMBSTONE_LIB:-}" c b sha main wl
+  if [ -z "$lib" ]; then
+    for c in "$SELF_DIR/lib/wt-tombstone.sh" "$HOME/.claude/scripts/lib/wt-tombstone.sh"; do
+      [ -f "$c" ] && { lib="$c"; break; }
+    done
+  fi
+  # shellcheck source=/dev/null
+  if [ -z "$lib" ] || [ ! -f "$lib" ] || ! . "$lib" 2>/dev/null; then
+    echo "  WARNING: wt-tombstone library not found — no branch-deleted rows for $# branch(es)" >&2
+    return 0
+  fi
+  main="$(wt__repo_of "$repo_root" 2>/dev/null)" || main="$repo_root"
+  wl="$(git worktree list --porcelain 2>/dev/null)"
+  for b in "$@"; do
+    sha="$(awk -F'\t' -v b="$b" '$1==b {print $2; exit}' "$MANIFEST" 2>/dev/null)"
+    wt_branch_deleted_row "$main" "$b" "$sha" branch-prune-landed landed 2>/dev/null \
+      || echo "  WARNING: branch-deleted row NOT written for $b ($WT_LEDGER)" >&2
+    # The first porcelain entry is the main checkout, which is never a gc candidate; skip it.
+    printf '%s\n' "$wl" | awk -v ref="refs/heads/$b" '/^worktree /{n++; p=substr($0,10)} n>1 && $0=="branch " ref {print p}' \
+      | while IFS= read -r p; do wt_emit_event branch-deleted "$p"; done
+  done
   return 0
 }
 
@@ -229,6 +263,7 @@ while [ "$i" -lt "${#safe[@]}" ]; do
     echo "  deleted ${#batch[@]}"
     printf '%s\n' "${batch[@]}" >> "$deleted_list"
     journal_deleted "${batch[@]}"   # per batch, so a run killed mid-loop still journals what it did
+    ledger_deleted "${batch[@]}"
   else
     echo "  BATCH FAILED (${#batch[@]} branches) — see manifest to retry" >&2; rc=1
     printf '%s\n' "${batch[@]}" >> "$failed_list"
