@@ -12,6 +12,9 @@
 #
 #   reap-guard.sh decide --worktree <wt> --spawn-time <epoch> --member <id> [--grace-s <secs>]
 #                        [--tree-scope owned|shared] [--tree-verdict clean|dirty-mine|unknown]
+#                        [--session-id <sid>] [--transcript <path to <sid>.jsonl>]
+#       --transcript: the caller's own copy of the member's transcript path (the hook payload carries it),
+#                     used only when its basename is <sid>.jsonl and it exists — otherwise the root scan runs.
 #       exit 0  = REAP   (safe to reap: past grace, produced work, clean, no marker)
 #       exit 10 = DEFER  (hold: within birth grace / dirty / busy-marker / no-products-yet /
 #                         operator-adopted — a WHO/WHEN cause, or the owned-scope dirty tree)
@@ -73,7 +76,7 @@ for _c in "$(cd "$(dirname "$0")" && pwd)/../hooks/lib/context-econ.sh" \
   [ -f "$_c" ] && { . "$_c" 2>/dev/null || true; break; }
 done
 
-usage() { sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,49p' "$0" | sed 's/^# \{0,1\}//'; }
 die()   { echo "reap-guard: $*" >&2; exit 2; }
 iso()   { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
@@ -117,7 +120,8 @@ rg_find_transcript() { # <sid> → path or empty
   [ -n "$sid" ] || return 1
   for r in $PROJECT_ROOTS; do
     [ -d "$r" ] || continue
-    f="$(find "$r" -maxdepth 2 -name "$sid.jsonl" 2>/dev/null | head -1)"
+    # -print -quit, not `| head -1`: head does not stop find, so every miss walked the whole store.
+    f="$(find "$r" -maxdepth 2 -name "$sid.jsonl" -print -quit 2>/dev/null)"
     [ -n "$f" ] && { printf '%s' "$f"; return 0; }
   done
   return 1
@@ -146,7 +150,7 @@ rg_finished_turn() { # <transcript>
 }
 
 cmd_decide() {
-  local wt="" spawn="" member="" grace="$DEFAULT_GRACE" sid="" scope="owned" verdict="unknown"
+  local wt="" spawn="" member="" grace="$DEFAULT_GRACE" sid="" scope="owned" verdict="unknown" tp=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --worktree)   wt="${2:?}"; shift 2 ;;
@@ -156,6 +160,7 @@ cmd_decide() {
       --session-id) sid="${2:?}"; shift 2 ;;   # R-d: the teammate's own sid → its transcript (operator-adoption read)
       --tree-scope)   scope="${2:?}";   shift 2 ;;   # owned (default) | shared — see § TREE SCOPE
       --tree-verdict) verdict="${2:?}"; shift 2 ;;   # clean | dirty-mine | unknown (default)
+      --transcript)   tp="${2:?}";      shift 2 ;;   # the caller's path to <sid>.jsonl (skips the root scan)
       *)            die "unknown argument '$1'" ;;
     esac
   done
@@ -171,6 +176,11 @@ cmd_decide() {
 
   local now age; now="$(date +%s)"; age=$((now - spawn))
   local tj="" grace_skipped=0   # tj: the member's transcript, resolved at most once (R-a' and R-d share it)
+  # A handed path is trusted only if it names THIS sid's file: a path for another session would answer
+  # R-a' and R-d about the wrong member. Anything else falls through to the root scan.
+  if [ -n "$tp" ] && [ -n "$sid" ] && [ "$(basename "$tp")" = "$sid.jsonl" ] && [ -f "$tp" ]; then
+    tj="$tp"
+  fi
 
   # R-a' — on a SHARED cwd with no footprint of its own (verdict clean), the clock is the only thing
   # R-a has — tree state cannot tell just-born from finished there, and a read-only member writes no
@@ -179,7 +189,7 @@ cmd_decide() {
   # the clock with positive evidence of a FINISHED turn. Evidence absent/unreadable ⇒ R-a unchanged.
   # Owned scope and every other verdict keep the clock: there the tree still has something to say.
   if [ "$age" -lt "$grace" ] && [ "$scope" = shared ] && [ "$verdict" = clean ] && [ -n "$sid" ]; then
-    tj="$(rg_find_transcript "$sid" 2>/dev/null || true)"
+    [ -n "$tj" ] || tj="$(rg_find_transcript "$sid" 2>/dev/null || true)"
     rg_finished_turn "$tj" && grace_skipped=1
   fi
 

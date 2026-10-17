@@ -36,6 +36,9 @@ setup() {
   export CC_NOTIFY_BIN="$D/bin/cc-notify"
   export TEAMMATE_CHECKPOINT_DISABLED=1   # the checkpoint is not a gate; skip its git plumbing in tests
   export TEAMMATE_CLOSE_GRACE_S=0         # detached pane close fires immediately (no 3s wait)
+  # The in-body run budget is a wall clock, so on a loaded box every close arm below would defer on
+  # BUDGET instead of answering the question it pins. Pinned out here; the budget arm sets its own.
+  export TAS_BUDGET_S=600
   # RC-5c's survivor check reads the PROCESS TABLE, and unfixtured that is the operator's live box —
   # ~20-40 concurrent sessions, several of them real teammates. A close arm here would then be a
   # function of who else is running (HERMETIC: the suite must not be a function of who runs it). The
@@ -78,7 +81,10 @@ EOF
 
 # ── fixtures ─────────────────────────────────────────────────────────────────────────────────────
 iso() { TZ=UTC date -j -f %s "$((NOW-$1))" +%Y-%m-%dT%H:%M:%S 2>/dev/null; }   # <ago> → UTC iso (no Z)
-mkinput() { printf '{"teammate_name":"%s","team_name":"%s","session_id":"%s","cwd":"%s"}' "$1" "$2" "$3" "$4"; }
+mkinput() { # <member> <team> <sid> <cwd> [transcript_path]
+  printf '{"teammate_name":"%s","team_name":"%s","session_id":"%s","cwd":"%s"%s}' "$1" "$2" "$3" "$4" \
+    "${5:+,\"transcript_path\":\"$5\"}"
+}
 # Pipe the payload to the hook — and return only once the hook's DETACHED child has EXITED,
 # ordered on that child's own lifetime rather than on a clock.
 #
@@ -101,7 +107,7 @@ mkinput() { printf '{"teammate_name":"%s","team_name":"%s","session_id":"%s","cw
 # errexit off the failing arm, so a non-zero hook still records its own code.
 hookrun()  {
   local _rcf="$D/.hookrun.rc"; rm -f "$_rcf"
-  printf '%s' "$(mkinput "$1" "$2" "$3" "$4")" \
+  printf '%s' "$(mkinput "$1" "$2" "$3" "$4" "${5:-}")" \
     | { if "$H" 9>&1; then printf 0 > "$_rcf"; else printf '%s' "$?" > "$_rcf"; fi; } \
     | cat
   return "$(cat "$_rcf" 2>/dev/null || printf 127)"
@@ -1599,4 +1605,71 @@ txtasknotif(){ printf '{"type":"queue-operation","operation":"enqueue","timestam
   run hookrun "$member" "$team" "$sid" "$wt"
   [ "$status" -eq 0 ]
   ! grep -q "process survived pane close" "$LOGF" || false
+}
+
+# ── HOOK-TIMEOUT (2026-10-16, docs/research/teammate-resurrection-2026-10-16/REPORT.md § 3 E) ─────
+# The hook has a 5 s timeout and each transcript lookup walked ~18k project dirs per account store
+# (22-27 s under load) for a path the payload already carries as `transcript_path`, so the run was
+# killed before it could close anything and a kill writes no retry row. A PATH-stub `find` records
+# its argv so the lookup cost is counted, not inferred from a clock.
+find_recorder() {
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\nexec /usr/bin/find "$@"\n' "$D/find-calls.log" > "$D/bin/find"
+  chmod +x "$D/bin/find"
+}
+sid_finds() { # no log ⇒ find never ran at all ⇒ 0 (grep -c on a missing file prints nothing)
+  [ -f "$D/find-calls.log" ] || { echo 0; return; }
+  grep -c -- "-name $1.jsonl" "$D/find-calls.log" || true
+}
+
+@test "TIMEOUT: the payload transcript_path is read, so no root scan runs for the member's own sid" {
+  local sid=sidTP1 team=teamTP1 member=wkrTP1 pane=%301 wt="$D/wtTP1"
+  mkdir -p "$wt" "$D/elsewhere"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  reg "$sid" PANE-TP1 "$wt" 3600
+  txtool "$sid" 30 tu-tp1                       # mid-call, and OUTSIDE CC_CLASSIFY_PROJECT_ROOTS:
+  mv "$D/proj/slug/$sid.jsonl" "$D/elsewhere/$sid.jsonl"   # only the payload path can find it
+  find_recorder
+  run hookrun "$member" "$team" "$sid" "$wt" "$D/elsewhere/$sid.jsonl"
+  [ "$status" -eq 0 ]
+  grep -q "tool in flight" "$LOGF" || { echo "payload transcript not used:"; cat "$LOGF"; false; }
+  [ "$(sid_finds "$sid")" -eq 0 ] || { echo "root scan still ran:"; cat "$D/find-calls.log"; false; }
+}
+
+@test "TIMEOUT CONTROL: a transcript_path naming ANOTHER sid is ignored and the root search runs" {
+  local sid=sidTP2 team=teamTP2 member=wkrTP2 pane=%302 wt="$D/wtTP2"
+  mkdir -p "$wt" "$D/elsewhere"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  reg "$sid" PANE-TP2 "$wt" 3600
+  txtool other-sid 30 tu-other; mv "$D/proj/slug/other-sid.jsonl" "$D/elsewhere/other-sid.jsonl"
+  tx "$sid" 9000                                # the member's OWN transcript: finished, in the roots
+  find_recorder
+  run hookrun "$member" "$team" "$sid" "$wt" "$D/elsewhere/other-sid.jsonl"
+  [ "$status" -eq 0 ]
+  ! grep -q "tool in flight" "$LOGF" || { echo "another session's transcript was trusted"; false; }
+  [ "$(sid_finds "$sid")" -ge 1 ]
+  grep -q "Auto-shutdown idle teammate: $member" "$LOGF"
+}
+
+@test "TIMEOUT: a spent budget DEFERS with a retry row — no turn-stop, no close, exit 0" {
+  local sid=sidTB team=teamTB member=wkrTB pane=PANE-TB wt="$D/wtTB"
+  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  reg "$sid" PANE-TB "$wt" 3600
+  tx "$sid" 9000
+  export TAS_BUDGET_S=0
+  # The retry row's pane comes from the member's OWN process, never the config (see
+  # _queue_member_retry), so the hook runs as the child of a stand-in claude.exe carrying a kitty
+  # window id. Its interpreter must not be an Apple platform binary: macOS hides a platform
+  # process's environment from `ps eww` (tests/pane-close-queue.bats `_as_member`).
+  local sh=""
+  for sh in /opt/homebrew/bin/bash /usr/local/bin/bash ""; do [ -n "$sh" ] && [ -x "$sh" ] && break; done
+  [ -n "$sh" ] || skip "no non-platform bash to stand in for claude.exe"
+  mkinput "$member" "$team" "$sid" "$wt" > "$D/in-tb.json"
+  printf '#!%s\n"%s" < "%s"\n' "$sh" "$H" "$D/in-tb.json" > "$D/claude.exe"
+  chmod +x "$D/claude.exe"
+  KITTY_WINDOW_ID=4343 run "$D/claude.exe" --agent-id "$member@$team" --agent-name "$member" --team-name "$team"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *'"continue": false'* ]] || false
+  grep -q "BUDGET exhausted at" "$LOGF" || { cat "$LOGF"; false; }
+  [ ! -e "$D/tmux-calls.log" ] && [ ! -e "$D/it2-calls.log" ] || false
+  local row="$HOME/.claude/state/pane-close-queue/teammate-4343.json"
+  [ -f "$row" ] || { echo "no retry row:"; ls -la "$HOME/.claude/state/pane-close-queue" 2>&1; false; }
+  grep -q 'budget-exhausted:' "$row"
 }

@@ -372,6 +372,44 @@ _queue_close_retry() { # <pane> <who> <reason> <rc> [agent-id, default <who>@<te
   fi
 }
 
+# Retry row for a member this run DEFERS without closing (F-b): TeammateIdle often never fires again
+# after a defer — panes 33 and 60 of docs/research/husk-panes-2026-09-30.md were deferred and outlived
+# their members as husks. The pane is the one this run already resolved, else the member's OWN
+# claude.exe (this hook is its descendant): kitty window id first, then CC_PANE_ID / ITERM_SESSION_ID.
+# Never the team config's raw tmuxPaneId: it is unverified at this point (a kitty window id restarts
+# with every kitty, so a stale one can name an unrelated window), and tests/pane-close-queue.bats
+# pins "no pane from the member's process ⇒ NOT queued" with that id present. The agent id is read from
+# that process's argv rather than composed, so the drainer's liveness check asks about the exact
+# process. Safe to queue a LIVE member: the drainer closes only once that process is gone and the pane
+# holds nothing but a shell.
+_queue_member_retry() { # <reason>
+  type -t pcq_add >/dev/null 2>&1 || return 0
+  local pane="${PANEID:-}" pid aid=""
+  pid="${TEAMMATE_PID:-}"; [[ -n "$pid" ]] || pid="$(_find_teammate_pid || true)"
+  if [[ -n "$pid" ]]; then
+    [[ -n "$pane" ]] || pane="$(_kitty_pane_from_env "$pid" || true)"
+    [[ -n "$pane" ]] || pane="$(_pane_from_env "$pid" || true)"
+    aid="$(ps -p "$pid" -o command= 2>/dev/null \
+           | awk '{ for (i = 1; i < NF; i++) if ($i == "--agent-id") { print $(i + 1); exit } }')"
+  fi
+  if [[ -n "$pane" ]]; then
+    _queue_close_retry "$pane" "$TEAMMATE_NAME" "$1" "" "$aid"
+  else
+    log "  defer NOT queued for retry: no pane resolvable from the member's process (pid ${pid:-none})"
+  fi
+}
+
+# The TeammateIdle hook is killed at its 5 s timeout, and a kill closes nothing and queues nothing.
+# So each costly gate first asks whether the run still has time: if not, it DEFERS on purpose — a
+# retry row instead of a silent death. Never `{"continue": false}`: nothing was decided. Calibrate
+# TAS_BUDGET_S from the `t=Ns` stamps on the gate log lines.
+_budget_or_defer() { # <gate>
+  (( SECONDS >= ${TAS_BUDGET_S:-4} )) || return 0
+  log "defer $TEAMMATE_NAME (team=$TEAM_NAME): BUDGET exhausted at $1 after ${SECONDS}s - nothing closed"
+  _queue_member_retry "budget-exhausted:$1"
+  exit 0
+}
+
 # Close + log one pane (shared by the config-resolved AND implicit-team paths).
 close_and_log() {
   local pane="$1" who="$2"
@@ -581,12 +619,23 @@ PY
 
 # ── operator-adoption helpers (2026-07-24) ──────────────────────────────────────────────────────
 # Transcript .jsonl for a session id — first match across the account project roots (mirror cc-classify).
+# Each root holds ~18k project dirs, and a scan measured 22-27 s under load against a 5 s hook timeout
+# (docs/research/teammate-resurrection-2026-10-16/REPORT.md § 3 E). So: the payload's transcript_path
+# first, when it is THIS sid's file; else this account's own root first, and stop at the first hit
+# (`| head -1` never stopped find, so every miss walked the whole store).
 _find_transcript() {
-  local sid="${1:-}" r f
+  local sid="${1:-}" r f own roots=""
   [[ -n "$sid" ]] || return 1
-  for r in $PROJECT_ROOTS; do
+  if [[ "$sid" == "${SESSION_ID:-}" && -n "${TRANSCRIPT_PATH:-}" && "${TRANSCRIPT_PATH##*/}" == "$sid.jsonl" \
+        && -f "$TRANSCRIPT_PATH" ]]; then
+    printf '%s' "$TRANSCRIPT_PATH"; return 0
+  fi
+  own="${CLAUDE_CONFIG_DIR:+${CLAUDE_CONFIG_DIR%/}/projects}"
+  for r in $PROJECT_ROOTS; do [[ -n "$own" && "$r" == "$own" ]] && roots="$r"; done
+  for r in $PROJECT_ROOTS; do [[ -n "$own" && "$r" == "$own" ]] || roots="$roots $r"; done
+  for r in $roots; do
     [[ -d "$r" ]] || continue
-    f="$(find "$r" -maxdepth 2 -name "$sid.jsonl" 2>/dev/null | head -1)"
+    f="$(find "$r" -maxdepth 2 -name "$sid.jsonl" -print -quit 2>/dev/null)"
     [[ -n "$f" ]] && { printf '%s' "$f"; return 0; }
   done
   return 1
@@ -789,6 +838,8 @@ INPUT=$(cat)
 TEAMMATE_NAME=$(echo "$INPUT" | jq -r '.teammate_name // "unknown"' 2>/dev/null)
 TEAM_NAME=$(echo "$INPUT" | jq -r '.team_name // "unknown"' 2>/dev/null)
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // "unknown"' 2>/dev/null)
+# The payload already names this member's transcript; _find_transcript prefers it over a root scan.
+TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
 
 # Resolve the worktree. Conventions + edge cases:
 #   /tmp/wt-<team>-<member>        newer
@@ -1004,7 +1055,7 @@ if [[ -z "$WORKTREE" && -n "$TEAM_CONFIG" ]]; then
     if [[ "$_occupants" == "1" ]]; then
       WORKTREE_OWNED=true
     else
-      log "  ↳ $TEAMMATE_NAME: worktree $WORKTREE is SHARED by ${_occupants:-?} members — gating on it, removal refused"
+      log "  ↳ $TEAMMATE_NAME: worktree $WORKTREE is SHARED by ${_occupants:-?} members — gating on it, removal refused t=${SECONDS}s"
     fi
     break
   done
@@ -1125,30 +1176,11 @@ fi
 # through. Neither tree-state nor turn-silence can see a running tool; only the transcript can.
 # UNBOUNDED by design (not charged to MAX_DEFERS): a tool that is still running is a fact, not a
 # stall, and it clears itself the moment the tool_result lands.
+_budget_or_defer tool-in-flight
 if _tool_in_flight "$SESSION_ID"; then
-  log "defer $TEAMMATE_NAME (team=$TEAM_NAME): tool in flight — teammate is live, not idle"
-  # F-b: TeammateIdle often never fires again after this defer — panes 33 and 60 of
-  # docs/research/husk-panes-2026-09-30.md were deferred here and outlived their members as husks.
-  # So the defer also leaves a retry row. PANEID is not resolved yet and the gate stays where it
-  # is, so the pane comes from the member's OWN claude.exe (this hook is its descendant): kitty
-  # window id first, then CC_PANE_ID / ITERM_SESSION_ID. The agent id is read from that process's
-  # argv rather than composed, so the drainer's liveness check asks about the exact process. Safe
-  # to queue a LIVE member: the drainer closes only once that process is gone and the pane holds
-  # nothing but a shell.
-  if type -t pcq_add >/dev/null 2>&1; then
-    _dq_pid="$(_find_teammate_pid || true)"; _dq_pane=""; _dq_aid=""
-    if [[ -n "$_dq_pid" ]]; then
-      _dq_pane="$(_kitty_pane_from_env "$_dq_pid" || true)"
-      [[ -n "$_dq_pane" ]] || _dq_pane="$(_pane_from_env "$_dq_pid" || true)"
-      _dq_aid="$(ps -p "$_dq_pid" -o command= 2>/dev/null \
-                 | awk '{ for (i = 1; i < NF; i++) if ($i == "--agent-id") { print $(i + 1); exit } }')"
-    fi
-    if [[ -n "$_dq_pane" ]]; then
-      _queue_close_retry "$_dq_pane" "$TEAMMATE_NAME" deferred-tool-in-flight "" "$_dq_aid"
-    else
-      log "  defer NOT queued for retry: no pane resolvable from the member's process (pid ${_dq_pid:-none})"
-    fi
-  fi
+  log "defer $TEAMMATE_NAME (team=$TEAM_NAME): tool in flight — teammate is live, not idle t=${SECONDS}s"
+  # F-b: the defer also leaves a retry row — see _queue_member_retry.
+  _queue_member_retry deferred-tool-in-flight
   # Do NOT emit {"continue": false}; the teammate is mid-call.
   exit 0
 fi
@@ -1202,8 +1234,11 @@ if [[ -n "$WORKTREE" && -x "$REAP_GUARD" ]]; then
   # where it remains this member's own answer.
   _tree_scope=owned; $WORKTREE_OWNED || _tree_scope=shared
   _rg_rc=0
+  _budget_or_defer reap-guard
+  # --transcript: reap-guard trusts it only when it names this sid's file, else it scans the roots.
   "$REAP_GUARD" decide --worktree "$WORKTREE" --member "$TEAMMATE_NAME" --spawn-time "$_spawn_s" --session-id "$SESSION_ID" \
-      --tree-scope "$_tree_scope" --tree-verdict "$TREE_VERDICT" >/dev/null 2>&1 || _rg_rc=$?
+      --tree-scope "$_tree_scope" --tree-verdict "$TREE_VERDICT" ${TRANSCRIPT_PATH:+--transcript "$TRANSCRIPT_PATH"} \
+      >/dev/null 2>&1 || _rg_rc=$?
   if (( _rg_rc != 0 )); then
     # ── A REFUSAL ON A SHARED CWD NOW HAS A CAUSE, AND THE CAUSES ARE NOT ALIKE ──────────────────
     # Until 2026-08-04 this arm swallowed EVERY non-zero into one bounded defer whose SURFACE said
@@ -1229,7 +1264,7 @@ if [[ -n "$WORKTREE" && -x "$REAP_GUARD" ]]; then
       if (( DEFER_COUNT + 1 < MAX_DEFERS )); then
         DEFER_COUNT=$((DEFER_COUNT + 1))
         echo "$DEFER_COUNT" > "$DEFER_COUNTER"
-        log "defer $TEAMMATE_NAME ($DEFER_COUNT/$MAX_DEFERS): reap-guard DEFER (rc $_rg_rc) on a SHARED cwd ($WORKTREE) — $_sc_cause"
+        log "defer $TEAMMATE_NAME ($DEFER_COUNT/$MAX_DEFERS): reap-guard DEFER (rc $_rg_rc) on a SHARED cwd ($WORKTREE) — $_sc_cause t=${SECONDS}s"
         exit 0
       fi
       # ⚠ THE REMEDY LINE IS LOAD-BEARING AND IT USED TO BE FALSE. It read "Fix at spawn (give the
@@ -1243,7 +1278,7 @@ if [[ -n "$WORKTREE" && -x "$REAP_GUARD" ]]; then
         "teammate-auto-shutdown SURFACE: $TEAMMATE_NAME (team $TEAM_NAME) held $MAX_DEFERS times on a shared cwd — $_sc_cause. Pane left open deliberately; commit/discard its own dirt or confirm-close manually."
       exit 0
     fi
-    log "defer $TEAMMATE_NAME (team=$TEAM_NAME): reap-guard DEFER (birth-grace / no-products / operator-adopted)"
+    log "defer $TEAMMATE_NAME (team=$TEAM_NAME): reap-guard DEFER (birth-grace / no-products / operator-adopted) t=${SECONDS}s"
     # Do NOT emit {"continue": false}; let the just-born teammate keep working.
     exit 0
   fi
@@ -1269,7 +1304,7 @@ if [[ -z "$WORKTREE" ]]; then
   if (( DEFER_COUNT + 1 < MAX_DEFERS )); then
     DEFER_COUNT=$((DEFER_COUNT + 1))
     echo "$DEFER_COUNT" > "$DEFER_COUNTER"
-    log "defer $TEAMMATE_NAME ($DEFER_COUNT/$MAX_DEFERS): WORKTREE unresolved — no safety gate could run, refusing ungated close"
+    log "defer $TEAMMATE_NAME ($DEFER_COUNT/$MAX_DEFERS): WORKTREE unresolved — no safety gate could run, refusing ungated close t=${SECONDS}s"
     # Do NOT emit {"continue": false}; leave the teammate's turn untouched.
     exit 0
   fi
@@ -1284,10 +1319,11 @@ if [[ -z "$WORKTREE" ]]; then
   exit 0
 fi
 
+_budget_or_defer checkpoint
 # Clear defer counter — we're proceeding to reap
 rm -f "$DEFER_COUNTER" 2>/dev/null || true
 
-log "Auto-shutdown idle teammate: $TEAMMATE_NAME (team: $TEAM_NAME)"
+log "Auto-shutdown idle teammate: $TEAMMATE_NAME (team: $TEAM_NAME) t=${SECONDS}s"
 
 # Rule 1 + 2 — CHECKPOINT FIRST, then fallback patch if checkpoint failed.
 # This must happen BEFORE git worktree remove.
@@ -1396,6 +1432,7 @@ fi
 # "unreadable" — corrupt/truncated/empty/no-jq). rc 2 HOLDS + pages, exactly like adoption: absence of
 # evidence is not evidence of absence on an actuator that force-closes a pane.
 # Kill switch: CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE=1.
+_budget_or_defer adoption-hold
 _hold_on=1
 [[ "${CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE:-0}" == "1" ]] && _hold_on=0
 { [[ "$INTERACTIVE_HOLD_S" =~ ^[0-9]+$ ]] && (( INTERACTIVE_HOLD_S > 0 )); } || _hold_on=0

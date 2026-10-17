@@ -93,6 +93,17 @@ closes()   { local i; for i in $(seq 1 "$1"); do
   echo "$output" | grep -q "NOT-EXERCISED"
 }
 
+# The hook stamps each gate line with its elapsed seconds (` t=<N>s`, for budget calibration). The
+# stamp varies run to run, so it must not split one reason into many in the ranking.
+@test "the hook's t=<N>s elapsed stamp does not fragment the refusal ranking" {
+  local i; for i in $(seq 1 30); do
+    echo "[$TODAY 09:00:00] defer m$i (1/3): WORKTREE unresolved — no safety gate could run t=$((i % 7))s" >> "$LOG"
+  done
+  run "$S" --log "$LOG"
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -qF "30× WORKTREE unresolved — no safety gate could run" || { echo "$output"; false; }
+}
+
 @test "the window bounds: old closes cannot rescue a dead window" {
   local old i; old=$(date -v-30d +%Y-%m-%d)
   for i in $(seq 1 20); do echo "[$old 09:00:01]   ✓ closed pane U$i (c$i)" >> "$LOG"; done

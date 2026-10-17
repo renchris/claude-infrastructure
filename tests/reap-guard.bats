@@ -266,3 +266,41 @@ kind_of() { jq -r '.reason_kind' "$(find "$CC_REAP_RECORDS_DIR" -name "reap-$1-*
   [ "$status" -eq 10 ]
   [ "$(kind_of ftadopt)" = "operator-adopted" ]
 }
+
+# ── --transcript (2026-10-16, docs/research/teammate-resurrection-2026-10-16/REPORT.md § 3 E): the hook
+#    hands down the payload's transcript_path, so R-a' and R-d need no root scan. The scan walked ~18k
+#    dirs per store (22-27 s under load) inside a 5 s hook. A PATH-stub `find` counts the scans. ──
+find_recorder() {
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\nexec /usr/bin/find "$@"\n' "$BATS_TEST_TMPDIR/find-calls.log" \
+    > "$BATS_TEST_TMPDIR/bin/find"
+  chmod +x "$BATS_TEST_TMPDIR/bin/find"
+  export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+}
+sid_finds() { # no log ⇒ find never ran at all ⇒ 0 (grep -c on a missing file prints nothing)
+  [ -f "$BATS_TEST_TMPDIR/find-calls.log" ] || { echo 0; return; }
+  grep -c -- "-name $1.jsonl" "$BATS_TEST_TMPDIR/find-calls.log" || true
+}
+
+@test "--transcript: R-a' and R-d resolve from the handed path with NO root scan" {
+  ft_setup fttp; mkdir -p "$BATS_TEST_TMPDIR/elsewhere"
+  TP="$BATS_TEST_TMPDIR/elsewhere/sid-fttp.jsonl"; tbrief "$TP" 1000; tdone "$TP"   # outside every root
+  find_recorder
+  run "$G" decide --worktree "$BATS_TEST_TMPDIR/fttp" --member fttp --spawn-time "$((NOW-1000))" --grace-s 3600 \
+      --tree-scope shared --tree-verdict clean --session-id sid-fttp --transcript "$TP"
+  [ "$status" -eq 0 ]
+  [ "$(kind_of fttp)" = "shared-finished-turn" ]
+  [ "$(sid_finds sid-fttp)" -eq 0 ] || { cat "$BATS_TEST_TMPDIR/find-calls.log"; false; }
+}
+
+@test "--transcript CONTROL: a path naming ANOTHER sid is ignored and the root search decides" {
+  ft_setup ftother; mkdir -p "$BATS_TEST_TMPDIR/elsewhere"
+  TP="$BATS_TEST_TMPDIR/elsewhere/sid-someone-else.jsonl"; tbrief "$TP" 1000; tdone "$TP"
+  tbrief "$TX" 1000                              # the member's own transcript: only the brief
+  find_recorder
+  run "$G" decide --worktree "$BATS_TEST_TMPDIR/ftother" --member ftother --spawn-time "$((NOW-1000))" --grace-s 3600 \
+      --tree-scope shared --tree-verdict clean --session-id sid-ftother --transcript "$TP"
+  [ "$status" -eq 10 ]
+  [ "$(kind_of ftother)" = "grace-held" ]
+  [ "$(sid_finds sid-ftother)" -ge 1 ]
+}

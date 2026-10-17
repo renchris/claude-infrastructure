@@ -216,9 +216,10 @@ measure() {
 
   # Name the reason, so the alarm is actionable rather than merely true. Paths are collapsed —
   # otherwise every distinct worktree reads as a distinct reason and the ranking is meaningless.
+  # The hook's trailing ` t=<N>s` elapsed stamp is dropped for the same reason.
   TOP_REASONS=$(printf '%s\n' "$win" \
     | grep -oE "defer [a-zA-Z0-9_-]+ \([0-9]+/[0-9]+\): .*" 2>/dev/null \
-    | sed -E 's|^defer [a-zA-Z0-9_-]+ \([0-9]+/[0-9]+\): ||; s|/[^ ]*|<path>|g' \
+    | sed -E 's|^defer [a-zA-Z0-9_-]+ \([0-9]+/[0-9]+\): ||; s| t=[0-9]+s$||; s|/[^ ]*|<path>|g' \
     | sort | uniq -c | sort -rn | head -3 \
     | awk '{ n=$1; $1=""; sub(/^ /,""); printf "%s× %s\n", n, $0 }')
 
