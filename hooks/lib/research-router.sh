@@ -13,10 +13,12 @@
 # completion-assert.sh _ca_rp_active pattern, same cause). Bash 3.2-safe.
 
 rr_init() {
-  local t base
+  local t base d
   t="${1:-$0}"
   [ -L "$t" ] && t="$(readlink "$t")"
-  base="$(cd "$(dirname "$t")/.." 2>/dev/null && pwd)"
+  # dirname(1) by parameter expansion, guarded for its two shapes (`b.sh` → `.`, `/b.sh` → `/`).
+  case "$t" in */*) d="${t%/*}"; [ -n "$d" ] || d=/ ;; *) d=. ;; esac
+  base="$(cd "$d/.." 2>/dev/null && pwd)"
   RR_LIB="${CC_RESEARCH_PROGRAM_LIB:-$base/scripts/lib/research-program.sh}"
   [ -f "$RR_LIB" ] || RR_LIB="$HOME/.claude/scripts/lib/research-program.sh"
   RR_ROUTER="${CC_RESEARCH_ROUTER_PY:-$base/scripts/research-kit/router.py}"

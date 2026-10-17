@@ -78,12 +78,16 @@ _mid_deref() {
   readlink -f "$p" 2>/dev/null && return 0
   while [ -L "$p" ] && [ "$n" -lt 20 ]; do
     t="$(readlink "$p")"
-    case "$t" in /*) p="$t" ;; *) p="$(dirname "$p")/$t" ;; esac
+    case "$t" in /*) p="$t" ;; *) _mid_dirof "$p"; p="$_mid_d/$t" ;; esac
     n=$(( n + 1 ))
   done
   printf '%s\n' "$p"
 }
-_MID_DIR="$(dirname "$(_mid_deref "${BASH_SOURCE[0]}")")"
+# dirname(1) by parameter expansion: no process start. The guards give dirname's answer for the
+# two shapes `${p%/*}` gets wrong (`b.sh` → `.`, `/b.sh` → `/`).
+_mid_dirof() { case "$1" in */*) _mid_d="${1%/*}"; [ -n "$_mid_d" ] || _mid_d=/ ;; *) _mid_d=. ;; esac; }
+_mid_dirof "$(_mid_deref "${BASH_SOURCE[0]}")"
+_MID_DIR="$_mid_d"
 
 # Test readability FIRST. `.` is a POSIX special builtin: one that fails terminates a
 # non-interactive shell BEFORE any `||` is consulted, so `. <missing> || fallback` is not a

@@ -18,9 +18,13 @@ set -uo pipefail
 [ "${CC_RESEARCH_BLOCK:-1}" = 0 ] && exit 0
 [ -n "${CC_RESEARCH_ROUTER_INNER:-}" ] && exit 0
 command -v jq >/dev/null 2>&1 || exit 0
-_here="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+# dirname(1) by parameter expansion: one fewer process start per tool call. The guards give
+# dirname's answer for the two shapes `${p%/*}` gets wrong (`b.sh` → `.`, `/b.sh` → `/`).
+_rb_dirof() { case "$1" in */*) _rb_d="${1%/*}"; [ -n "$_rb_d" ] || _rb_d=/ ;; *) _rb_d=. ;; esac; }
+_rb_dirof "$0"
+_here="$(cd "$_rb_d" 2>/dev/null && pwd)"
 _rl="$_here/lib/research-router.sh"
-[ -f "$_rl" ] || { _t="$0"; [ -L "$_t" ] && _t="$(readlink "$_t")"; _rl="$(cd "$(dirname "$_t")" 2>/dev/null && pwd)/lib/research-router.sh"; }
+[ -f "$_rl" ] || { _t="$0"; [ -L "$_t" ] && _t="$(readlink "$_t")"; _rb_dirof "$_t"; _rl="$(cd "$_rb_d" 2>/dev/null && pwd)/lib/research-router.sh"; }
 [ -f "$_rl" ] || _rl="$HOME/.claude/hooks/lib/research-router.sh"
 # shellcheck source=lib/research-router.sh
 # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
