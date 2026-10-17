@@ -192,7 +192,10 @@ beat() {
   cat > "$BATS_TEST_TMPDIR/extract.awk" <<'AWK'
 index($0, fn "() {") == 1, index($0, "}") == 1
 AWK
+  # The two wrappers splice in sentinel_awk (the one awk text the tick also runs, 6e6ddc22f), so it
+  # is extracted with them; without it they call an undefined awk function and print nothing.
   segs_ref="$(
+    eval "$(awk -v fn=sentinel_awk -f "$BATS_TEST_TMPDIR/extract.awk" "$SENTINEL")"
     eval "$(awk -v fn=segs_in_core -f "$BATS_TEST_TMPDIR/extract.awk" "$SENTINEL")"
     eval "$(awk -v fn=segs_swapped -f "$BATS_TEST_TMPDIR/extract.awk" "$SENTINEL")"
     i=$(segs_in_core 800000 16384 65536); s=$(segs_swapped 268435456 65536)
