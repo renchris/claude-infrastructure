@@ -46,6 +46,10 @@ command -v jq >/dev/null 2>&1 || abstain_unclear "jq unavailable on PATH"
 CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null) \
   || abstain_unclear "unparseable PreToolUse payload on stdin"
 [[ -z "$CMD" ]] && exit 0
+# Must be exactly an `rm ...` invocation (optionally leading whitespace). Tested FIRST: it is a
+# builtin, and the two checks below also end in a silent exit 0 on this path, so a non-rm
+# command (nearly every Bash call) no longer pays the danger grep's fork to reach the same answer.
+[[ "$CMD" =~ ^[[:space:]]*rm[[:space:]] ]] || exit 0
 
 # ── Catastrophic danger re-check: on match, DEFER (exit 0, no allow) ───────────────────────
 # rm -rf / (system damage), sudo rm, fork bomb. (Belt-and-suspenders; the whitelist below
@@ -62,8 +66,6 @@ fi
 case "$CMD" in
   *';'*|*'&'*|*'|'*|*'$('*|*'`'*|*'>'*|*'<'*|*$'\n'*) exit 0 ;;
 esac
-# Must be exactly an `rm ...` invocation (optionally leading whitespace).
-[[ "$CMD" =~ ^[[:space:]]*rm[[:space:]] ]] || exit 0
 
 # Regenerable directory names (exact path components). Deleting anything WITHIN such a tree is
 # safe because the tree is reproducible from source (build output / caches / test artifacts).
