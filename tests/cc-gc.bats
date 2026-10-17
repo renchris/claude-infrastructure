@@ -34,19 +34,30 @@ setup() {
   export CC_IDL="$TMP/idl.jsonl"
   # delegates are exercised by their own suites; stub them so this one tests the driver
   export CC_GC_SCRATCHPAD_BIN="$TMP/stub-scratchpad"
-  export CC_GC_WORKTREE_BIN="$TMP/stub-worktree"
   printf '#!/bin/sh\necho "stub-scratchpad $*"\n' > "$TMP/stub-scratchpad"
-  printf '#!/bin/sh\necho "stub-worktree $*"\n' > "$TMP/stub-worktree"
+  # worktrees is an ASSERT on the janitor's own stamp. The stub is a TRIPWIRE, not a fixture: it
+  # records its argv and exits 2 on an unknown flag, exactly as worktree-gc.sh rejects `--apply`.
+  export CC_GC_WORKTREE_BIN="$TMP/stub-worktree" WT_ARGV="$TMP/worktree-argv"
+  printf '#!/bin/sh\necho "$*" >> "%s"\nfor a; do case "$a" in --dry-run) ;; -*) exit 2 ;; esac; done\n' \
+    "$WT_ARGV" > "$TMP/stub-worktree"
   chmod +x "$TMP/stub-scratchpad" "$TMP/stub-worktree"
+  export CC_GC_WORKTREE_LAST="$TMP/worktree-gc-infra.last"
   mkdir -p "$CC_MAILBOX_DIR" "$CC_WATCHDOG_DIR" "$CC_REGISTRY_DIR" "$CC_ROLES_DIR" \
            "$CC_PAGES_DIR" "$CC_COMMS_ALARM_DIR" "$CC_PUSH_RECORDS_DIR" "$TMP/root1/projects"
   date +%s > "$CC_GC_SESSION_INDEX_STAMP"
+  wt_last ok 0
   PIDS=""
 }
 
 teardown() {
   for p in $PIDS; do kill "$p" 2>/dev/null || true; done
   rm -rf "$TMP"
+}
+
+# the janitor's one-line stamp, in worktree-gc-infra-run.sh's own shape
+wt_last() { # <verdict> <rc>
+  printf '%s  verdict=%s observe=0 removed=0 kept=1 rc=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" "$2" \
+    > "$CC_GC_WORKTREE_LAST"
 }
 
 # a live registry row for <paneUUID>/<sid> pinned to a real running pid
@@ -461,10 +472,60 @@ dead_pid() { sleep 300 >/dev/null 2>&1 & DEADPID=$!; kill "$DEADPID" 2>/dev/null
 }
 
 @test "a missing delegate is reported, never silently skipped" {
-  export CC_GC_WORKTREE_BIN="$TMP/nope"
-  run bash "$GC" --store worktrees
+  export CC_GC_SCRATCHPAD_BIN="$TMP/nope"
+  run bash "$GC" --store scratchpad
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "missing"
+}
+
+# ── worktrees: ASSERT on the janitor's own stamp, never an exec ───────────────────────────────
+# worktree-gc.sh rejects `--apply` with rc 2 (171/171 red runs), and its bare default is
+# DESTRUCTIVE — so a dry-run cc-gc used to delete worktrees. The owner is worktree-gc-infra-run.sh;
+# this store only READS the `.last` line it writes.
+
+@test "worktrees: the janitor is NEVER executed, in dry-run or --apply" {
+  run bash "$GC" --store worktrees
+  [ "$status" -eq 0 ]
+  run bash "$GC" --store worktrees --apply
+  [ "$status" -eq 0 ]
+  run bash "$GC"
+  [ ! -e "$WT_ARGV" ]
+  echo "$output" | grep -q "worktrees *ASSERT"
+}
+
+@test "worktrees: a fresh verdict=ok rc=0 stamp is ASSERT ok, and so is verdict=disabled rc=0" {
+  run bash "$GC" --store worktrees --strict
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -Eq "worktrees +ASSERT +ok"
+  wt_last disabled 0
+  run bash "$GC" --store worktrees --strict
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -Eq "worktrees +ASSERT +ok"
+}
+
+@test "worktrees: a stamp older than 26 h is inert (stale), a missing one is inert" {
+  touch -t "$(date -v-27H +%Y%m%d%H%M 2>/dev/null || date -d '-27 hours' +%Y%m%d%H%M)" "$CC_GC_WORKTREE_LAST"
+  run bash "$GC" --store worktrees --strict
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -Eq "worktrees +ASSERT +inert .*stale"
+  rm -f "$CC_GC_WORKTREE_LAST"
+  run bash "$GC" --store worktrees --strict
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -Eq "worktrees +ASSERT +inert .*no stamp"
+}
+
+@test "worktrees: today's real line (verdict=stranded-over-ceiling rc=3) reads non-green" {
+  printf '%s\n' '2026-10-17 04:15:05  verdict=stranded-over-ceiling observe=0 removed=35 disposed=0 kept=113 branches=35 refusals=137 pop_before=329 pop_after=295 pop_delta=34 elapsed=856s dirt=0 unowned=32 owner_active=0 pop=295 pop_owned=107 pop_foreign=188 ceiling=150 stranded_patches=456 stranded_branches=60 stranded_ceiling=40 rc=3' \
+    > "$CC_GC_WORKTREE_LAST"
+  run bash "$GC" --store worktrees --strict
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -Eq "worktrees +ASSERT +inert .*verdict=stranded-over-ceiling rc=3"
+  echo "$output" | grep -q "inert-owners=1"
+  wt_last ok 3                                           # a green verdict with a red rc is still red
+  run bash "$GC" --store worktrees --strict
+  [ "$status" -eq 1 ]
+  run bash "$GC" --store worktrees --json
+  echo "$output" | jq -e '.inert == 1 and .stores[0].store == "worktrees" and .stores[0].kind == "ASSERT"' >/dev/null
 }
 
 @test "an idle dry-run writes no IDL line; a real reap does" {

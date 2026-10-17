@@ -3,8 +3,9 @@
 # 40-cc-gc  —  activate the GC franchise sweep
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 # WHAT LANDED: scripts/cc-gc.sh, the one sweeping reaper the infra-reliability audit asked for
-#   (roadmap item 4). The two per-store reapers it delegates to — scratchpad-reaper.sh and
-#   worktree-gc.sh — landed separately (2026-07-25 / 2026-08-11) and are ALREADY live symlinks in
+#   (roadmap item 4). The per-store reaper it delegates to (scratchpad-reaper.sh) and the janitor
+#   whose stamp its worktrees ASSERT reads (worktree-gc.sh, never executed by cc-gc since
+#   2026-10-17) landed separately (2026-07-25 / 2026-08-11) and are ALREADY live symlinks in
 #   ~/.claude/scripts, verified 2026-08-12, so Step 1 below covers cc-gc.sh only. The session-index
 #   retention leg is NOT here: it is parked whole on branch park/gc-session-index (see Step 2).
 #
@@ -37,7 +38,8 @@ for s in $NEW_SCRIPTS; do
   echo "    ln -sfn $REPO/scripts/$s ~/.claude/scripts/$s"
 done
 echo
-echo "Step 2 (rehearse — deletes NOTHING; cc-gc is dry-run by default):"
+echo "Step 2 (rehearse — deletes NOTHING; cc-gc is dry-run by default, and its worktrees row only"
+echo "        READS worktree-gc-infra.last — it never runs worktree-gc.sh in any mode):"
 echo "    ~/.claude/scripts/cc-gc.sh --verbose"
 echo "    Read the table before Step 3. Two things are worth checking by eye:"
 echo "      · scratchpad reaped=N — this is the 11 GB store; confirm the kept_live count looks sane."

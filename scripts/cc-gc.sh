@@ -12,7 +12,7 @@
 #
 #   EXEC   — this franchise reaps the store, because nothing else does.
 #            mailbox · watchdog       (native, below)
-#            scratchpad · worktrees   (delegated to the store's own dedicated reaper)
+#            scratchpad               (delegated to the store's own dedicated reaper)
 #
 #   ASSERT — the store ALREADY has an owner, so a second reaper here would be a duplicate
 #            deleter racing the first. What is missing is not a reaper but a READER: root
@@ -22,7 +22,12 @@
 #            actually RUNNING by looking for its effect — residue older than the owner's own
 #            horizon means the owner is inert, and that is reported (and under `--strict`,
 #            failed) instead of silently papered over by a redundant delete.
-#            events · transcripts · session-index
+#            events · transcripts · session-index · worktrees
+#
+# `worktrees` was an EXEC delegate until 2026-10-17 and that was a bug twice over: worktree-gc.sh
+# rejects `--apply` with rc 2 (171/171 red runs), and its BARE default is the destructive sweep, so
+# a cc-gc DRY-RUN deleted worktrees. Its owner is worktree-gc-infra-run.sh; this adapter only reads
+# the `.last` line that owner writes, and never executes worktree-gc.sh in any mode.
 #
 # `transcripts` is the sharpest case and worth stating plainly: the audit recorded "1.8 GB, no
 # retention". MEASURED 2026-07-25 across all four config roots: 0 transcripts older than 30 d in
@@ -52,7 +57,8 @@
 #   CC_GC_CONFIG_ROOTS · CC_GC_TRANSCRIPT_DAYS (30) · CC_GC_TRANSCRIPT_GRACE_DAYS (15)
 #   CC_PAGES_DIR · CC_COMMS_ALARM_DIR · CC_PUSH_RECORDS_DIR · CC_EVENT_TTL_DAYS (7)
 #   CC_GC_SESSION_INDEX_STAMP · CC_GC_SESSION_INDEX_MAX_STALE_H (24)
-#   CC_REGISTRY_DIR · CC_ROLES_DIR · CC_GC_SCRATCHPAD_BIN · CC_GC_WORKTREE_BIN · CC_IDL
+#   CC_GC_WORKTREE_LAST · CC_GC_WORKTREE_MAX_STALE_H (26)
+#   CC_REGISTRY_DIR · CC_ROLES_DIR · CC_GC_SCRATCHPAD_BIN · CC_IDL
 #
 # Exit: 0 ok · 1 --strict with an inert owner · 2 usage · 3 fail-closed (oracle unreadable).
 set -uo pipefail
@@ -78,6 +84,10 @@ TRANSCRIPT_DAYS="${CC_GC_TRANSCRIPT_DAYS:-30}"
 TRANSCRIPT_GRACE="${CC_GC_TRANSCRIPT_GRACE_DAYS:-15}"
 SI_STAMP="${CC_GC_SESSION_INDEX_STAMP:-$HOME/.claude/state/session-index-sweep.last}"
 SI_MAX_STALE_H="${CC_GC_SESSION_INDEX_MAX_STALE_H:-24}"
+# 26 h, not 24: the owner runs daily at 04:15 and a long sweep (elapsed=856s measured) must not
+# flap the row red for the minutes between one stamp turning 24 h old and the next being written.
+WT_LAST="${CC_GC_WORKTREE_LAST:-$HOME/.claude/autonomy/worktree-gc-infra.last}"
+WT_MAX_STALE_H="${CC_GC_WORKTREE_MAX_STALE_H:-26}"
 IDL="${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 
 ALL_STORES='mailbox watchdog scratchpad worktrees events transcripts session-index'
@@ -371,7 +381,7 @@ gc_watchdog() {
 }
 
 # ══ EXEC · delegates ══════════════════════════════════════════════════════════════════════════
-# The store's own reaper is the adapter. Both already default to dry-run and take --apply, so the
+# The store's own reaper is the adapter. It already defaults to dry-run and takes --apply, so the
 # franchise flag passes straight through and there is exactly one implementation per store.
 run_delegate() { # <store> <bin> <extra-arg...>
   local store="$1" bin="$2"; shift 2
@@ -441,11 +451,41 @@ assert_session_index() {
   row session-index ASSERT ok 0 0 "session-index-sweep.sh ran within ${SI_MAX_STALE_H}h (retention+VACUUM live)"
 }
 
+# The owner OVERWRITES its one-line stamp every run, so the file's mtime IS the last run — the same
+# clock the owner reads itself (worktree-gc-infra-run.sh last_row_age_h) and the same `find -mmin`
+# idiom as session-index above. The leading timestamp is zone-less local time and would cost a
+# BSD/GNU-split `date` parse for no extra truth. Green needs a fresh stamp AND verdict ∈ {ok,
+# disabled} AND rc=0: `rc=3` beside a removed=35 is a sweep that ran and still left the store red.
+assert_worktrees() {
+  if [ ! -f "$WT_LAST" ]; then
+    INERT=$((INERT + 1))
+    row worktrees ASSERT inert 0 0 "no stamp at $WT_LAST — worktree-gc-infra-run.sh never ran"
+    return 0
+  fi
+  if [ -n "$(find "$WT_LAST" -maxdepth 0 -mmin +"$((WT_MAX_STALE_H * 60))" 2>/dev/null)" ]; then
+    local m age='?'   # the age forks only on this (already red) path
+    m=$(stat -f %m "$WT_LAST" 2>/dev/null || stat -c %Y "$WT_LAST" 2>/dev/null)
+    [ -n "$m" ] && age="$(( ($(date +%s) - m) / 3600 ))h"
+    INERT=$((INERT + 1))
+    row worktrees ASSERT inert 0 0 "stamp stale: age=$age > ${WT_MAX_STALE_H}h — worktree-gc-infra-run.sh not running"
+    return 0
+  fi
+  local l line='' v='' rc='' re_v=' verdict=([^ ]*) ' re_rc=' rc=([^ ]*) '
+  while IFS= read -r l || [ -n "$l" ]; do [ -n "$l" ] && line="$l"; done < "$WT_LAST"
+  [[ " $line " =~ $re_v ]] && v="${BASH_REMATCH[1]}"
+  [[ " $line " =~ $re_rc ]] && rc="${BASH_REMATCH[1]}"
+  case "$v:$rc" in
+    ok:0|disabled:0) row worktrees ASSERT ok 0 0 "worktree-gc-infra-run.sh ran within ${WT_MAX_STALE_H}h: verdict=$v rc=$rc" ;;
+    *) INERT=$((INERT + 1))
+       row worktrees ASSERT inert 0 0 "worktree-gc-infra-run.sh last run not green: verdict=${v:-?} rc=${rc:-?}" ;;
+  esac
+}
+
 # ── run the wanted stores ─────────────────────────────────────────────────────────────────────
 wanted mailbox        && gc_mailbox
 wanted watchdog       && gc_watchdog
 wanted scratchpad     && run_delegate scratchpad "${CC_GC_SCRATCHPAD_BIN:-$SCRIPT_DIR/scratchpad-reaper.sh}"
-wanted worktrees      && run_delegate worktrees  "${CC_GC_WORKTREE_BIN:-$SCRIPT_DIR/worktree-gc.sh}"
+wanted worktrees      && assert_worktrees
 wanted events         && assert_events
 wanted transcripts    && assert_transcripts
 wanted session-index  && assert_session_index

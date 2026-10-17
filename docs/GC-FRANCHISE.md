@@ -14,7 +14,7 @@ enumerate the stores**, so each leak was discovered by incident. This file is th
 | mailbox | `cc-gc.sh` | EXEC | 7 d fully-acked · 30 d stranded → **archived** | registry row w/ live pid, role pointer, name-keyed box |
 | watchdog `.pid`/`.id` | `cc-gc.sh` | EXEC | 2 d, behind an identity pin | registry row; process start-time vs pidfile mtime |
 | `/tmp/claude-501` scratchpads | `scratchpad-reaper.sh` (delegated) | EXEC | 48 h | live pid **or** transcript touched in-window |
-| merged worktrees | `worktree-gc.sh` (delegated) | EXEC | 30 min idle + landed by patch-equivalence | live cwd, lsof, `.teammate-busy`, dirty tree |
+| merged worktrees | `worktree-gc.sh`, run daily by `worktree-gc-infra-run.sh` | ASSERT | evidence: `~/.claude/autonomy/worktree-gc-infra.last` newer than 26 h with `verdict` ok/disabled and `rc=0` | n/a — cc-gc never executes the janitor (EXEC until 2026-10-17: `--apply` was rejected rc 2, and a dry-run ran its destructive default) |
 | `.page` + 5 sibling event dirs | `autonomy-sweep.sh` | ASSERT | 7 d (`CC_EVENT_TTL_DAYS`) | drained by the same 300 s sweep ~2,000× first |
 | session-index rows | `session-index-sweep.sh` | ASSERT | rows whose transcript is gone, + VACUUM | staleness-aware trylock |
 
