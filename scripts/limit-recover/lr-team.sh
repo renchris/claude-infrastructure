@@ -12,6 +12,7 @@
 #
 #   source lr-team.sh; lr_has_live_teammate <lead sid> [snapshot]   rc 0 = a member is live
 #   source lr-team.sh; lr_team_members <lead sid> [snapshot]        prints the live member count
+#   source lr-team.sh; lr_agent_id_holders <id> [snapshot] [pids]   live holders of `--agent-id <id>`
 #   lr-team.sh has|count <lead sid>                                 the same, as a command
 #
 # Snapshot: "<pid> <stat> <args…>" per line, from ONE ps taken before any filtering, so the filter
@@ -52,6 +53,31 @@ lr_has_live_teammate() { # $1=lead sid [$2=snapshot] → rc 0 when a member proc
   local n
   n="$(lr_team_members "$@")"
   [ "${n:-0}" -gt 0 ]
+}
+
+# The same discipline keyed on the MEMBER: a live claude carrying `--agent-id <id>` other than the
+# pids we already know are ours is a SUCCESSOR, so the member is no longer ours to relaunch
+# (teammate resurrection 2026-10-16, REPORT.md § 4.2 step 2). The argv[0] rule is what keeps
+# cc-close-attrib, expect and `bash lr-fire-resume.sh … --extra-args --agent-id …` out of the count.
+# shellcheck disable=SC2016  # an awk program, deliberately unexpanded by the shell
+_LR_AGENT_ID_AWK='
+BEGIN { m = split(ENVIRON["LR_TEAM_EXCL"], xs, /[ \t\n]+/); for (k = 1; k <= m; k++) if (xs[k] != "") ex[xs[k]] = 1 }
+$1 ~ /^[0-9]+$/ && $2 ~ /^[DIRSTUZ][A-Za-z<>+]*$/ && $2 !~ /^Z/ {
+  if ($1 in ex) next
+  a0 = $3; sub(/^.*\//, "", a0)
+  if (a0 != "claude" && a0 != "claude.exe") next
+  for (i = 4; i < NF; i++) if ($i == "--agent-id" && $(i + 1) == ENVIRON["LR_TEAM_AID"]) { n++; next }
+}
+END { print n + 0 }'
+
+lr_agent_id_holders() { # $1=agent id [$2=snapshot] [$3=exclude pids, space-separated] → prints the count of live holders
+  local id="${1:-}" snap
+  [ -n "$id" ] || {
+    echo 0
+    return 0
+  }
+  if [ -n "${2:-}" ]; then snap="$2"; else snap="$(lr_team_snapshot)"; fi
+  printf '%s\n' "$snap" | LR_TEAM_AID="$id" LR_TEAM_EXCL="${3:-}" awk "$_LR_AGENT_ID_AWK"
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then

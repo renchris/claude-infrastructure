@@ -653,6 +653,89 @@ lr_holder_count() { # $1=sid → number of DISTINCT live holders (registry panes
   printf '%s\n' "$total"
 }
 
+# ── TEAM MEMBERSHIP: an Agent Teams member belongs to its LEAD (teammate resurrection, 2026-10-16) ─
+# On 2026-10-16 a member (5423f92a) approved its lead's shutdown_request, and a relaunch path that
+# cannot carry team flags brought it back in a new window outside its team, where it idles forever
+# (docs/research/teammate-resurrection-2026-10-16/REPORT.md § 4.2 step 1). Every relaunch actor asks
+# these, so they live here once: membership from the transcript head, the lead's member row, and
+# the crash watchdog's verdict on a death.
+
+lr_team_member() { # $1=sid [$2=cfg] [$3=cwd] → rc 0 member (prints the transcript) / 1 not a member or no transcript / 2 undecided
+  local sid="${1:-}" cfg="${2:-}" cwd="${3:-}" t="" slug stores c f hd v
+  [ -n "$sid" ] || return 1
+  if [ -n "$cfg" ]; then stores="${cfg%/}"; else stores="$(lr_config_dirs)"; fi
+  # THE EXACT PATH FIRST. A `projects/*/` glob walks ~18k dirs per store on this box (measured
+  # 2026-10-16), so the launch cwd's slug — Claude Code's encoder, hooks/lib/peer-owned.sh — is
+  # tried before any glob, and the glob stays inside ONE store when the caller named one.
+  if [ -n "$cwd" ]; then
+    slug="$(printf %s "$cwd" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g')"
+    while IFS= read -r c; do
+      [ -n "$c" ] && [ -f "$c/projects/$slug/$sid.jsonl" ] && { t="$c/projects/$slug/$sid.jsonl"; break; }
+    done <<EOF
+$stores
+EOF
+  fi
+  if [ -z "$t" ]; then
+    while IFS= read -r c; do
+      [ -n "$c" ] || continue
+      for f in "$c"/projects/*/"$sid".jsonl; do
+        [ -f "$f" ] && { t="$f"; break 2; }
+      done
+    done <<EOF
+$stores
+EOF
+  fi
+  [ -n "$t" ] || return 1
+  # 32 KB, not the predicate's 8 KB default: on 2.1.293 the first user record runs past 8 KB.
+  hd="$(head -c "${LR_TEAM_HEAD_BYTES:-32768}" "$t" 2>/dev/null)"
+  case "$hd" in *'"agentName"'*) ;; *) return 1 ;; esac
+  # The key alone is not membership (`"agentName":null`, a quoted mention); the one teammate test
+  # decides. It could not run ⇒ UNDECIDED, never "not a member": a broken install must not read
+  # as a fleet of ordinary sessions that are safe to resume.
+  v="$(LR_HEAD_BYTES="${LR_TEAM_HEAD_BYTES:-32768}" /bin/bash "$LR_LIB_DIR/lr-predicate.sh" is-teammate-head "$t" 2>/dev/null)" || return 2
+  case "$v" in *'"teammate":true'* | *'"teammate": true'*) printf '%s\n' "$t"; return 0 ;; esac
+  return 1
+}
+
+lr_member_row() { # $1=cfg $2=team $3=name → rc 0 the lead's team file lists the member / 1 file or row absent / 2 jq missing
+  local f="${1%/}/teams/${2:-}/config.json"
+  [ -n "${2:-}" ] && [ -n "${3:-}" ] && [ -f "$f" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 2
+  # The name rides in the environment, never in the program text.
+  LRU_N="$3" jq -e '[.members[]? | select(.name == env.LRU_N)] | length > 0' "$f" >/dev/null 2>&1 || return 1
+}
+
+lr_death_after() { # $1=sid $2=since (ISO-8601 Z) → "<ts> <pid> <class> <cause>" per watchdog row at/after since, oldest first; rc 1 none / 2 unreadable
+  local sid="${1:-}" since="${2:-}" log="${CC_CRASH_LOG:-$HOME/.claude/logs/claude-crashes.jsonl}" out
+  [ -n "$sid" ] || return 1
+  [ -r "$log" ] || return 2
+  command -v jq >/dev/null 2>&1 || return 2
+  # `fromjson?` per line: one torn row in an append-only log must not blank the whole answer.
+  out="$(tail -n "${LR_CRASH_TAIL:-4000}" "$log" 2>/dev/null | jq -Rr --arg s "$sid" --arg t "$since" \
+    'fromjson? // empty | select(.sid == $s and ((.ts // "") >= $t)) | "\(.ts) \(.pid) \(.class) \(.cause)"' 2>/dev/null)" || return 2
+  [ -n "$out" ] || return 1
+  printf '%s\n' "$out"
+}
+
+lr_death_wait() { # $1=sid $2=since $3=old pid $4=run dir → bounded wait for the watchdog's verdict on OUR launch's death; always rc 0
+  # Waits ONLY when our launcher spawned a claude in this move (a `relaunch-typed`/`expect` row at or
+  # after since) and the watchdog has not yet classified any death but the old pid's. The watchdog
+  # polls every 30 s (lead-crash-watchdog.sh); its row for 80169 landed 15 s after the death.
+  local sid="${1:-}" since="${2:-}" old="${3:-}" run="${4:-}" waited=0 step
+  local max="${LR_DEATH_VERDICT_WAIT_S:-45}" poll="${LR_DEATH_POLL_S:-5}"
+  [ -n "$sid" ] && [ -n "$run" ] && [ -s "$run/events.jsonl" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  jq -Rne --arg t "$since" '[inputs | fromjson? // empty | select(.state == "relaunch-typed" and .stage == "expect" and ((.ts // "") >= $t))] | length > 0' \
+    "$run/events.jsonl" >/dev/null 2>&1 || return 0
+  while :; do
+    lr_death_after "$sid" "$since" 2>/dev/null | LR_DW_OLD="$old" awk '$2 != ENVIRON["LR_DW_OLD"] { f = 1 } END { exit !f }' && return 0
+    [ "$waited" -lt "$max" ] || return 0
+    step="$poll"; [ $((max - waited)) -lt "$step" ] && step=$((max - waited))
+    sleep "$step"
+    waited=$((waited + step))
+  done
+}
+
 # ── THE PER-SID RUN CLAIM: ONE FORMAT, ONE TAKER, ONE STEAL RULE (D2, 2026-09-28) ─────────────────
 # `<root>/<sid>.active` is the one-actuator-per-session mutex, and three writers take it: cc-lr
 # recover, lr-fleet's pool and the reset poller. Until 2026-09-28 each had its own copy, and the

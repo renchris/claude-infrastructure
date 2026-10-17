@@ -53,6 +53,7 @@ SH
   cat > "$S/relaunch" <<'SH'
 #!/usr/bin/env bash
 printf '%s SETTLING=%s\n' "$*" "${CC_RESUME_DEBT_SETTLING:-}" >> "$T/relaunch.log"
+printf '%s\n' "${CC_RESUME_MEMBER_HINT-<unset>}" >> "$T/hint.log"
 exit "${RELAUNCH_RC:-0}"
 SH
   cat > "$S/backlog" <<'SH'
@@ -637,4 +638,97 @@ pending_marker() { # <launched_at>
   [ "$(meta .relaunch_rc)" = 0 ]
   [ "$(lines "$T/relaunch.log" "$SID")" = 2 ]
   [ ! -f "$T/backlog.log" ]
+}
+
+# ── TEAMMATE RESURRECTION (docs/research/teammate-resurrection-2026-10-16/REPORT.md § 4.2 step 4) ──
+# Launcher exit 7 = "an Agent Teams member: a new window cannot carry its team identity". A closer
+# that SAW the member's argv (--member yes) makes that a terminal abandon; with no such record the
+# head test alone is not enough to drop a session silently, so it escalates with a runnable override.
+open_member() { "$BIN" open --sid "$SID" --cwd "$WT" --account next3 --cfg /fx/.claude-next3 --pane 42 --by lr-upgrade --why "upgrade mover" "$@"; }
+
+@test "TEAMMATE: launcher exit 7 on a member=yes debt abandons it - settle rc 4, no backlog row, no mail" {
+  open_member --member yes
+  [ "$(meta .member)" = yes ]
+  RELAUNCH_RC=7 run "$BIN" settle --sid "$SID" --wait "$SETTLE_WAIT"
+  [ "$status" -eq 4 ] || { echo "$output"; cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }
+  [ "$(state)" = abandoned ]
+  meta '.events[-1].note' | grep -q 'not relaunched: an Agent Teams member - its lead owns it'
+  [ ! -f "$T/backlog.log" ]
+  [ ! -f "$T/notify.log" ]
+  [ "$(custody_open)" = 0 ]
+}
+
+@test "TEAMMATE: launcher exit 7 with no member record escalates ONCE with a CC_RESUME_TEAMMATE_GUARD=off run line" {
+  open_debt
+  RELAUNCH_RC=7 run "$BIN" settle --sid "$SID" --wait "$SETTLE_WAIT"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ "$(state)" = escalated ]
+  grep -q -- "--run CC_RESUME_TEAMMATE_GUARD=off bash $HOME/.claude/scripts/boot-resume-launch.sh next3 $WT $SID\$" "$T/backlog.log" \
+    || { cat "$T/backlog.log"; false; }
+  grep -q 'its transcript reads as an Agent Teams member and no closer recorded how it last ran' "$T/backlog.log"
+  "$BIN" sweep
+  [ "$(lines "$T/backlog.log" '^needs')" = 1 ]
+}
+
+@test "TEAMMATE: settle --since on a debt proven at/after since returns 5 and relaunches nothing" {
+  open_member --member yes
+  printf 'LIVE\n' > "$T/find.seq"
+  "$BIN" step --sid "$SID"
+  [ "$(state)" = proven ]
+  printf 'DEAD\n' > "$T/find.seq"
+  run "$BIN" settle --sid "$SID" --since 1000 --wait "$SETTLE_WAIT"
+  [ "$status" -eq 5 ] || { echo "$output"; false; }
+  [ "$(state)" = proven ]
+  [ ! -f "$T/relaunch.log" ]
+  # abandoned at/after since reads as abandoned (4), still with no relaunch
+  "$BIN" open --sid "${SID%5}6" --cwd "$WT" --account next3 --by x >/dev/null
+  "$BIN" abandon --sid "${SID%5}6" --why "lead retired it"
+  run "$BIN" settle --sid "${SID%5}6" --since 1000 --wait "$SETTLE_WAIT"
+  [ "$status" -eq 4 ] || { echo "$output"; false; }
+  [ ! -f "$T/relaunch.log" ]
+}
+
+@test "TEAMMATE: settle --since AFTER the proof is the old behaviour - it reopens and relaunches (control)" {
+  open_debt
+  printf 'LIVE\n' > "$T/find.seq"
+  "$BIN" step --sid "$SID"
+  [ "$(state)" = proven ]
+  printf 'DEAD\n' > "$T/find.seq"
+  run "$BIN" settle --sid "$SID" --since 1001 --wait "$SETTLE_WAIT"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ "$(lines "$T/relaunch.log" "$SID")" = 1 ]
+}
+
+@test "TEAMMATE: member is carried across a reopen, the prior events are kept, and its rc 7 abandons" {
+  open_member --member yes
+  printf 'LIVE\n' > "$T/find.seq"
+  "$BIN" step --sid "$SID"
+  [ "$(state)" = proven ]
+  printf 'DEAD\n' > "$T/find.seq"
+  RELAUNCH_RC=7 run "$BIN" settle --sid "$SID" --wait "$SETTLE_WAIT"   # the 2026-10-16 call: no --since, no --member
+  [ "$status" -eq 4 ] || { echo "$output"; cat "$CC_RESUME_DEBT_DIR/meta/$SID.json"; false; }
+  [ "$(meta .member)" = yes ]
+  meta '.prior_events | map(.state) | index("proven") != null' | grep -qx true
+  meta '.events[0].note' | grep -q 'settle (no prior debt)'
+  [ "$(cat "$T/hint.log")" = yes ]
+}
+
+@test "TEAMMATE: the launcher sees CC_RESUME_MEMBER_HINT - no, and empty when no closer recorded it" {
+  open_member --member no
+  run "$BIN" settle --sid "$SID" --wait "$SETTLE_WAIT"
+  [ "$(sed -n 1p "$T/hint.log")" = no ] || { cat "$T/hint.log"; false; }
+  "$BIN" open --sid "${SID%5}7" --cwd "$WT" --account next3 --by x >/dev/null
+  run "$BIN" settle --sid "${SID%5}7" --wait "$SETTLE_WAIT"
+  [ "$(sed -n 2p "$T/hint.log")" = "" ] || { cat "$T/hint.log"; false; }
+}
+
+@test "TEAMMATE: a bad --member or --since value is a usage error (rc 2)" {
+  run "$BIN" open --sid "$SID" --cwd "$WT" --account next3 --member maybe
+  [ "$status" -eq 2 ]
+  [ ! -f "$CC_RESUME_DEBT_DIR/meta/$SID.json" ]
+  run "$BIN" settle --sid "$SID" --member ""
+  [ "$status" -eq 2 ]
+  run "$BIN" settle --sid "$SID" --since 12ab
+  [ "$status" -eq 2 ]
+  [ ! -f "$T/relaunch.log" ]
 }

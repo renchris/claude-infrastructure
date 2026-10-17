@@ -562,8 +562,10 @@ RCY_RECOVERY_OF=""
 # session did NOT move; it is relaunched into its OWN uuid on its OWN account (a new binary/model).
 # There is no tombstone to prove anything with, so the evidence is the row, the pin, the account and
 # a transcript AT REST — see hf_same_account_evidence. HF_SA_TX is the transcript that proved it,
-# re-read immediately before the /exit.
-RCY_SAME_ACCOUNT=0 HF_SA_TX=""
+# re-read immediately before the /exit. HF_SA_MEMBER is yes|no from that process's argv (--agent-id),
+# handed to the resume debt so its relaunch decides membership from what the closer saw; empty (a
+# self-recycle) passes nothing.
+RCY_SAME_ACCOUNT=0 HF_SA_TX="" HF_SA_MEMBER=""
 # 1 only once recycle_fire's LAST rest read proved the transcript at rest; the signal exit actuator
 # (hf_exit_signal) needs it. Initialised here so no environment value can stand in for that read.
 RCY_REST_PROVEN=0
@@ -3770,6 +3772,9 @@ hf_same_account_evidence() { # $1=pane $2=sid $3=resume cfg $4=row pid $5=mode �
     return 2
   done
   args="$(ps -o args= -p "$pid" 2>/dev/null || true)"
+  # Membership as the closer saw it (teammate resurrection 2026-10-16, REPORT.md § 4.2 step 9): the
+  # debt opened before the /exit carries it, so no later relaunch has to guess from a transcript head.
+  case " $args " in *" --agent-id "* | *" --agent-id="*) HF_SA_MEMBER=yes ;; *) HF_SA_MEMBER=no ;; esac
   # A TEAMMATE IS RELAUNCHED ONLY BY THE TEAM PROCEDURE, NEVER BY ACCIDENT (2026-09-23,
   # docs/research/team-inplace-upgrade-2026-09-23/). Relaunching one WITHOUT its identity flags
   # detaches it from the team for good, so the old blanket refusal stays the default. The procedure
@@ -18229,7 +18234,7 @@ recycle_fire_commit() {
   if [ -n "$rcy_debt_sid" ]; then
     if [ -n "$RESUME_LAUNCHER" ]; then rcy_debt_cwd="$LAUNCH_DIR"; else rcy_debt_cwd="$PWD"; fi
     _hf_resume_debt open --sid "$rcy_debt_sid" --cfg "${RESUME_CFG:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}" \
-      --cwd "$rcy_debt_cwd" --pane "$SID" --by "handoff-fire --recycle" \
+      --cwd "$rcy_debt_cwd" --pane "$SID" --by "handoff-fire --recycle" ${HF_SA_MEMBER:+--member "$HF_SA_MEMBER"} \
       --mode "$(if [ -n "$RESUME_LAUNCHER" ]; then printf resume; else printf fresh; fi)" \
       --why "recycle of pane $SID ($(if [ -n "$RESUME_LAUNCHER" ]; then printf 'resume-launcher, same sid'; else printf 'fresh brief'; fi)) about to type /exit"
   else

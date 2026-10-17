@@ -993,3 +993,102 @@ par_leaf() { # $1=sid → a live pid THIS SUITE owns whose argv is `claude --res
   done
   [ -z "$fails" ] || { echo "parity broken:$fails"; false; }
 }
+
+# ── team membership (teammate resurrection 2026-10-16, REPORT.md § 4.2 step 1) ───────────────────
+member_fixture() { # → $MSID, $MCWD, $MTX (exact-slug member transcript under $CFG)
+  # shellcheck disable=SC1091  # resolved from $REPO at run time
+  . "$REPO/tests/helpers/member-transcript.sh"
+  MSID="5423f92a-9089-4690-8c85-28ffc4018768"; MCWD="/Users/x/wt-pool-5"
+  MTX="$CFG/projects/-Users-x-wt-pool-5/$MSID.jsonl"
+  mk_member_transcript "$MTX" "$MSID" session-3cbb68e5 web-next16
+}
+
+@test "lr_team_member: the 2.1.293 head is a member, found through the EXACT slug before any glob" {
+  member_fixture
+  # A decoy under an earlier-sorting project dir: a glob would hit it first and read "not a member".
+  mk_plain_transcript "$CFG/projects/-A-decoy/$MSID.jsonl" "$MSID"
+  run lr_team_member "$MSID" "$CFG" "$MCWD"
+  [ "$status" -eq 0 ]; [ "$output" = "$MTX" ]
+  # the first user record is past 8 KB, so the 32 KB head is what reaches the member records
+  [ "$(head -c 8192 "$MTX" | grep -c '"type":"user"')" = 0 ]
+}
+
+@test "lr_team_member: a lead head and a plain head are not members; no transcript is 1" {
+  member_fixture
+  mk_lead_transcript "$CFG/projects/$SLUG/lead1.jsonl" lead1
+  mk_plain_transcript "$CFG/projects/$SLUG/plain1.jsonl" plain1
+  run lr_team_member lead1 "$CFG" /Users/x/thing;  [ "$status" -eq 1 ]
+  run lr_team_member plain1 "$CFG" /Users/x/thing; [ "$status" -eq 1 ]
+  run lr_team_member nosuch "$CFG" /Users/x/thing; [ "$status" -eq 1 ]
+}
+
+@test "lr_team_member: a named store is globbed alone; an empty cfg walks every store" {
+  member_fixture
+  run lr_team_member "$MSID" "$OTHER" "/Users/x/elsewhere"; [ "$status" -eq 1 ]
+  LR_CONFIG_DIRS="$OTHER:$CFG" run lr_team_member "$MSID" "" "/Users/x/elsewhere"
+  [ "$status" -eq 0 ]; [ "$output" = "$MTX" ]
+}
+
+@test "lr_team_member: the key present but the predicate unrunnable is UNDECIDED (2), never 'not a member'" {
+  member_fixture
+  mkdir -p "$BATS_TEST_TMPDIR/nolib"
+  LR_LIB_DIR="$BATS_TEST_TMPDIR/nolib" run lr_team_member "$MSID" "$CFG" "$MCWD"
+  [ "$status" -eq 2 ]
+}
+
+@test "lr_team_member: runs under /bin/bash 3.2" {
+  [ -x /bin/bash ] || skip "no /bin/bash"
+  member_fixture
+  run /bin/bash -c '. "$1"; lr_team_member "$2" "$3" "$4"' _ "$LIB" "$MSID" "$CFG" "$MCWD"
+  [ "$status" -eq 0 ]; [ "$output" = "$MTX" ]
+}
+
+@test "lr_member_row: present, absent row, absent file" {
+  mkdir -p "$CFG/teams/t1"
+  printf '{"members":[{"name":"team-lead"},{"name":"web-next16"}]}\n' > "$CFG/teams/t1/config.json"
+  run lr_member_row "$CFG" t1 web-next16; [ "$status" -eq 0 ]
+  run lr_member_row "$CFG" t1 web-small;  [ "$status" -eq 1 ]
+  run lr_member_row "$CFG" t2 web-next16; [ "$status" -eq 1 ]
+}
+
+@test "lr_death_after: the since filter, the sid filter and the pid column" {
+  export CC_CRASH_LOG="$BATS_TEST_TMPDIR/crashes.jsonl"
+  {
+    printf '{"ts":"2026-10-16T23:24:48Z","sid":"S1","pid":15617,"class":"RECYCLE","cause":"deliberate-teardown"}\n'
+    printf 'torn{\n'
+    printf '{"ts":"2026-10-16T23:26:00Z","sid":"S1","pid":80169,"class":"RECYCLE","cause":"retired-teammate"}\n'
+    printf '{"ts":"2026-10-16T23:26:05Z","sid":"S2","pid":9,"class":"CRASH","cause":"x"}\n'
+  } > "$CC_CRASH_LOG"
+  run lr_death_after S1 2026-10-16T23:25:00Z
+  [ "$status" -eq 0 ]; [ "$output" = "2026-10-16T23:26:00Z 80169 RECYCLE retired-teammate" ]
+  run lr_death_after S1 2026-10-16T23:00:00Z
+  [ "${#lines[@]}" -eq 2 ]
+  [[ "${lines[0]}" == *" 15617 "* ]] || false
+  run lr_death_after S1 2026-10-17T00:00:00Z; [ "$status" -eq 1 ]
+  CC_CRASH_LOG="$BATS_TEST_TMPDIR/absent" run lr_death_after S1 x; [ "$status" -eq 2 ]
+}
+
+@test "lr_death_wait: returns at once when our launcher spawned nothing in this move" {
+  export CC_CRASH_LOG="$BATS_TEST_TMPDIR/crashes.jsonl"; : > "$CC_CRASH_LOG"
+  run_dir="$BATS_TEST_TMPDIR/run"; mkdir -p "$run_dir"
+  printf '{"ts":"2026-10-16T23:24:05Z","state":"lru-step","stage":"claim"}\n' > "$run_dir/events.jsonl"
+  s=$SECONDS
+  LR_DEATH_VERDICT_WAIT_S=30 run lr_death_wait S1 2026-10-16T23:24:00Z 15617 "$run_dir"
+  [ "$status" -eq 0 ]; [ $((SECONDS - s)) -lt 5 ]
+}
+
+@test "lr_death_wait: waits for a verdict on a pid other than the old one, and is bounded" {
+  export CC_CRASH_LOG="$BATS_TEST_TMPDIR/crashes.jsonl"
+  printf '{"ts":"2026-10-16T23:24:48Z","sid":"S1","pid":15617,"class":"RECYCLE","cause":"deliberate-teardown"}\n' > "$CC_CRASH_LOG"
+  run_dir="$BATS_TEST_TMPDIR/run"; mkdir -p "$run_dir"
+  printf '{"ts":"2026-10-16T23:24:52Z","state":"relaunch-typed","stage":"expect"}\n' > "$run_dir/events.jsonl"
+  # only the old pid's row exists ⇒ the full (1 s) bound is spent
+  s=$SECONDS
+  LR_DEATH_VERDICT_WAIT_S=1 LR_DEATH_POLL_S=1 run lr_death_wait S1 2026-10-16T23:24:00Z 15617 "$run_dir"
+  [ "$status" -eq 0 ]; [ $((SECONDS - s)) -ge 1 ]
+  # a row for the relaunched pid ⇒ no wait at all
+  printf '{"ts":"2026-10-16T23:26:00Z","sid":"S1","pid":80169,"class":"RECYCLE","cause":"retired-teammate"}\n' >> "$CC_CRASH_LOG"
+  s=$SECONDS
+  LR_DEATH_VERDICT_WAIT_S=30 run lr_death_wait S1 2026-10-16T23:24:00Z 15617 "$run_dir"
+  [ "$status" -eq 0 ]; [ $((SECONDS - s)) -lt 5 ]
+}

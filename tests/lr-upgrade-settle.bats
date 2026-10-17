@@ -222,7 +222,7 @@ nothing_typed() {
   run /bin/bash "$LRU" --drain
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ "$(cnt '--relaunch-at-shell' "$T/hf.log")" = 1 ] || { cat "$T/hf.log"; false; }
-  [ "$(cnt "^settle --sid $SID\$" "$T/rd.log")" = 1 ] || { cat "$T/rd.log"; false; }
+  [ "$(cnt "^settle --sid $SID --member no\$" "$T/rd.log")" = 1 ] || { cat "$T/rd.log"; false; }
   [ "$(jq -r .verdict "$(result "$SID")")" = failed ] || { cat "$(result "$SID")"; false; }
   [[ "$(jq -r .reason "$(result "$SID")")" == *"REFUSED:pane:claude"* ]] || false
   [ "$(st "$SID" .disposition)" = terminal ]
@@ -242,7 +242,7 @@ nothing_typed() {
   run /bin/bash "$LRU" --drain
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ "$(cnt '--relaunch-at-shell' "$T/hf.log")" = 1 ]
-  [ "$(cnt "^settle --sid $SID\$" "$T/rd.log")" = 1 ]
+  [ "$(cnt "^settle --sid $SID --member no\$" "$T/rd.log")" = 1 ]
   [ "$(jq -r .verdict "$(result "$SID")")" = upgraded ] || { cat "$(result "$SID")"; false; }
   [[ "$(jq -r .reason "$(result "$SID")")" == *"NEW window"* ]] || { cat "$(result "$SID")"; false; }
   [ "$(st "$SID" .terminal)" = upgraded ]
@@ -261,6 +261,198 @@ nothing_typed() {
   grep -q '^op-x CC-LR-UPGRADE pane 705' "$T/notify.log" || { cat "$T/notify.log" 2>/dev/null; false; }
 }
 
+# ── S3d-S3k: TEAMMATE RESURRECTION (2026-10-16; docs/research/teammate-resurrection-2026-10-16/) ──
+# A member's move is never settled by the ledger: cc-resume-debt relaunches in a NEW window, which
+# cannot carry the team identity, and on 2026-10-16 that turned a member its lead had just retired
+# into an orphan. A plain session's settle that answers 5 (proven after this move) is a death AFTER
+# the proof, and the crash watchdog's verdict decides whether it is reopened.
+LEAD=abcd1234-0000-4000-8000-000000000001
+TARGS="--agent-id m@session-abcd1234 --agent-name m --team-name session-abcd1234 --agent-color cyan --parent-session-id $LEAD --agent-type general-purpose"
+FIRE_TS=2026-10-16T05:00:00Z
+team_lib() { # the stub lr-lib above plus the REAL membership helpers; the crash log is a fixture
+  { printf '. %q\n' "$REPO/scripts/limit-recover/lr-lib.sh"; cat "$T/lr-lib.sh"; } > "$T/lr-lib-team.sh"
+  export LRU_LR_LIB="$T/lr-lib-team.sh"
+  export CC_CRASH_LOG="$T/crashes.jsonl"; : > "$CC_CRASH_LOG"
+  export LR_DEATH_VERDICT_WAIT_S=0 LR_DEATH_POLL_S=1
+}
+mate_team() { # the lead's team file, member m present unless $1=nomember
+  local td="$CFG/teams/session-abcd1234"; mkdir -p "$td/inboxes"
+  if [ "${1:-}" = nomember ]; then printf '{"members":[{"name":"team-lead"}]}\n' > "$td/config.json"
+  else printf '{"members":[{"name":"team-lead"},{"name":"m","agentId":"m@session-abcd1234"}]}\n' > "$td/config.json"; fi
+  printf '[]\n' > "$td/inboxes/m.json"
+}
+mate_rec() { # mate_rec <sid> <pane> — a member's record left by a drainer killed after /exit
+  rec "$1" "$2" ".role = \"teammate\" | .launch_role = \"teammate\" | .team_args = \"$TARGS\" | .fire_ts = \"$FIRE_TS\" | .fire_epoch = 1791499900"
+  printf '%s\n' "$OPEN_LINE" > "$RUN/handoff-fire.log"
+}
+lead_pane() { # cc-find binds the lead to pane 701 in state $1 (LIVE unless told otherwise)
+  echo "$1" > "$T/lead-state"
+  cat > "$LRU_CCFIND_BIN" <<EOF
+#!/bin/bash
+echo "\$*" >> "$T/ccfind.log"
+[ "\$1" = "$LEAD" ] && printf '%s\t701\tx\tx\tx\t%s\n' "\$1" "\$(cat "$T/lead-state")"
+exit 0
+EOF
+}
+crash_row() { # crash_row <sid> <ts> <pid> <class> <cause>
+  jq -cn --arg s "$1" --arg t "$2" --arg p "$3" --arg c "$4" --arg k "$5" '{ts: $t, sid: $s, pid: ($p | tonumber), class: $c, cause: $k}' >> "$CC_CRASH_LOG"
+}
+retired_by_lead() { # the shared teammate assertions: nothing re-typed, no settle, abandoned, not-live
+  [ "$(cnt '--relaunch-at-shell' "$T/hf.log")" = 0 ] || { echo "re-typed a member its lead let go"; cat "$T/hf.log"; false; }
+  [ "$(cnt '^settle ' "$T/rd.log")" = 0 ] || { echo "settled a member into a new window"; cat "$T/rd.log"; false; }
+  [ "$(cnt "^abandon --sid $SID" "$T/rd.log")" = 1 ] || { cat "$T/rd.log"; false; }
+  [[ "$(jq -r .reason "$(result "$SID")")" == "not live: teammate m@session-abcd1234 retired by its lead during the upgrade ($1)"* ]] || { cat "$(result "$SID")"; false; }
+  [ "$(st "$SID" .terminal)" = not-live ] || { cat "$LRU_STATE/upgrade-state/$SID.json"; false; }
+  [ "$(cnt '^701 ' "$T/notify.log")" = 0 ] || { echo "the lead was told about a member it retired"; cat "$T/notify.log"; false; }
+  nothing_typed
+}
+
+@test "S3d plain session, settle rc 4 (abandoned by the ledger): not live, terminal not-live, never stranded" {
+  team_lib
+  SID=53535353-0000-4000-8000-0000000000d1
+  rec "$SID" 706
+  printf '%s\n' "$OPEN_LINE" > "$RUN/handoff-fire.log"
+  echo "verdict: REFUSED:pane:claude" > "$T/hf-ras.out"
+  echo 4 > "$T/settle-rc"
+  run /bin/bash "$LRU" --drain
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(jq -r .verdict "$(result "$SID")")" = skipped ] || { cat "$(result "$SID")"; false; }
+  [[ "$(jq -r .reason "$(result "$SID")")" == "not live: not relaunched ("*"cc-resume-debt abandoned the debt"* ]] || { cat "$(result "$SID")"; false; }
+  [ "$(st "$SID" .terminal)" = not-live ] || { cat "$LRU_STATE/upgrade-state/$SID.json"; false; }
+}
+
+@test "S3e [RED] a member whose row its lead removed: no --relaunch-at-shell, no settle, abandoned, retired by its lead" {
+  team_lib; mate_team nomember; lead_pane LIVE
+  SID=53535353-0000-4000-8000-0000000000e1
+  mate_rec "$SID" 702
+  echo "verdict: OK" > "$T/hf-ras.out"
+  run /bin/bash "$LRU" --drain
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  retired_by_lead teammate-no-team
+}
+
+@test "S3f an owned member with no process left: one informational line to its LIVE lead, none when the lead is not LIVE" {
+  team_lib; mate_team; lead_pane LIVE
+  SID=53535353-0000-4000-8000-0000000000f1
+  mate_rec "$SID" 702
+  echo "verdict: REFUSED:pane:claude" > "$T/hf-ras.out"
+  run /bin/bash "$LRU" --drain
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(cnt '--relaunch-at-shell' "$T/hf.log")" = 1 ] || { echo "an owned member must still get its in-pane team relaunch"; cat "$T/hf.log"; false; }
+  [ "$(cnt '^settle ' "$T/rd.log")" = 0 ] || { cat "$T/rd.log"; false; }
+  [ "$(cnt "^abandon --sid $SID" "$T/rd.log")" = 1 ] || { cat "$T/rd.log"; false; }
+  [[ "$(jq -r .reason "$(result "$SID")")" == "not live: teammate m@session-abcd1234 ended during the upgrade and was not relaunched ("*"its lead owns its recovery" ]] || { cat "$(result "$SID")"; false; }
+  [ "$(cnt '^701 ' "$T/notify.log")" = 1 ] || { cat "$T/notify.log"; false; }
+  line="$(grep '^701 ' "$T/notify.log")"
+  [[ "$line" != *launch.sh* && "$line" != *re-spawn* ]] || { echo "the notice carries a command: $line"; false; }
+  [[ "$line" == *"m@session-abcd1234"* ]] || { echo "$line"; false; }
+  # the lead is not LIVE: nothing is sent
+  : > "$T/notify.log"; lead_pane STALE
+  SID=53535353-0000-4000-8000-0000000000f2
+  mate_rec "$SID" 702
+  run /bin/bash "$LRU" --drain
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(jq -r .verdict "$(result "$SID")")" = skipped ] || { cat "$(result "$SID")"; false; }
+  [ "$(cnt '^701 ' "$T/notify.log")" = 0 ] || { cat "$T/notify.log"; false; }
+  nothing_typed
+}
+
+@test "S3g [RED] row present, inbox drained, the watchdog filed retired-teammate after fire: retired, no notice, no re-type" {
+  team_lib; mate_team; lead_pane LIVE
+  SID=53535353-0000-4000-8000-0000000000a1
+  mate_rec "$SID" 702
+  crash_row "$SID" 2026-10-16T05:00:20Z "$DEAD3" RECYCLE retired-teammate
+  echo "verdict: OK" > "$T/hf-ras.out"
+  run /bin/bash "$LRU" --drain
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  retired_by_lead teammate-retired
+}
+
+@test "S3g2 [RED] the watchdog's retired-teammate row lands late: the bounded wait catches it before anything is typed" {
+  team_lib; mate_team; lead_pane LIVE
+  export LR_DEATH_VERDICT_WAIT_S=30
+  SID=53535353-0000-4000-8000-0000000000a2
+  mate_rec "$SID" 702
+  # our launcher spawned a claude in this move (the row lr_death_wait waits on), and it died
+  printf '{"state":"relaunch-typed","stage":"expect","ts":"2026-10-16T05:00:05Z"}\n' > "$RUN/events.jsonl"
+  echo "verdict: OK" > "$T/hf-ras.out"
+  # the row is written only once the belt has started (relaunch_attempts is stamped just before it)
+  ( i=0; while [ "$i" -lt 600 ] && [ "$(st "$SID" '.relaunch_attempts // 0')" != 1 ]; do sleep 0.1; i=$((i + 1)); done
+    sleep 2; crash_row "$SID" 2026-10-16T05:00:10Z 77001 RECYCLE retired-teammate ) &
+  LIVE_PID=$!
+  run /bin/bash "$LRU" --drain
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  retired_by_lead teammate-retired
+}
+
+@test "S3h a live successor carrying the member's --agent-id: superseded, treated as retired, no re-type" {
+  team_lib; mate_team; lead_pane LIVE
+  SID=53535353-0000-4000-8000-0000000000b1
+  mate_rec "$SID" 702
+  printf '88001 1 %s %s %s --model claude-opus-5-5\n' "$LST" "$NEW" "$TARGS" >> "$LRU_PS_SNAPSHOT"
+  echo "verdict: OK" > "$T/hf-ras.out"
+  run /bin/bash "$LRU" --drain
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  retired_by_lead teammate-superseded
+}
+
+rd5_stub() { # cc-resume-debt whose settle answers 5 (proven after --since) whenever --since is passed
+  cat > "$CC_RESUME_DEBT_BIN" <<EOF
+#!/bin/bash
+echo "\$*" >> "$T/rd.log"
+case "\$1" in
+  settle) case " \$* " in *" --since "*) exit 5 ;; esac; exit "\$(cat "$T/settle-rc" 2>/dev/null || echo 0)" ;;
+  surface|prove) exit "\$(cat "$T/\$1-rc" 2>/dev/null || echo 0)" ;;
+esac
+exit 0
+EOF
+}
+plain5_rec() { # plain5_rec <sid> <pane> — a plain move whose relaunch was proven, then died
+  rec "$1" "$2" ".fire_ts = \"$FIRE_TS\" | .fire_epoch = 1791499900"
+  printf '%s\n' "$OPEN_LINE" > "$RUN/handoff-fire.log"
+  printf '{"state":"relaunch-typed","stage":"expect","ts":"2026-10-16T05:00:05Z"}\n' > "$RUN/events.jsonl"
+  echo "verdict: REFUSED:pane:claude" > "$T/hf-ras.out"
+}
+
+@test "S3i settle rc 5, then the watchdog says RECYCLE/clean-exit: not live, never reopened" {
+  team_lib; rd5_stub
+  SID=53535353-0000-4000-8000-0000000000c1
+  plain5_rec "$SID" 707
+  crash_row "$SID" 2026-10-16T05:01:00Z 77001 RECYCLE clean-exit
+  run /bin/bash "$LRU" --drain
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(cnt "^settle --sid $SID --member no --since 1791499900\$" "$T/rd.log")" = 1 ] || { cat "$T/rd.log"; false; }
+  [ "$(cnt '^settle ' "$T/rd.log")" = 1 ] || { echo "a death after its proof was reopened"; cat "$T/rd.log"; false; }
+  [[ "$(jq -r .reason "$(result "$SID")")" == "not live: relaunched on the target and proven by cc-resume-debt, then ended RECYCLE/clean-exit at 2026-10-16T05:01:00Z"*"not reopened" ]] || { cat "$(result "$SID")"; false; }
+  [ "$(st "$SID" .terminal)" = not-live ] || false
+  nothing_typed
+}
+
+@test "S3j settle rc 5, then the watchdog says CRASH: a second settle WITHOUT --since reopens it" {
+  team_lib; rd5_stub
+  SID=53535353-0000-4000-8000-0000000000c2
+  plain5_rec "$SID" 708
+  crash_row "$SID" 2026-10-16T05:01:00Z 77001 CRASH external-sigterm
+  echo 0 > "$T/settle-rc"
+  run /bin/bash "$LRU" --drain
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(cnt '^settle ' "$T/rd.log")" = 2 ] || { cat "$T/rd.log"; false; }
+  [ "$(cnt "^settle --sid $SID --member no\$" "$T/rd.log")" = 1 ] || { cat "$T/rd.log"; false; }
+  [ "$(jq -r .verdict "$(result "$SID")")" = upgraded ] || { cat "$(result "$SID")"; false; }
+}
+
+@test "S3k settle rc 5 and no watchdog row within LR_DEATH_VERDICT_WAIT_S: a second settle, noted unclassified" {
+  team_lib; rd5_stub
+  export LR_DEATH_VERDICT_WAIT_S=1
+  SID=53535353-0000-4000-8000-0000000000c3
+  plain5_rec "$SID" 709
+  echo 1 > "$T/settle-rc"
+  run /bin/bash "$LRU" --drain
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(cnt "^settle --sid $SID --member no\$" "$T/rd.log")" = 1 ] || { cat "$T/rd.log"; false; }
+  [[ "$(jq -r .reason "$(result "$SID")")" == *"death unclassified after 1 s"* ]] || { cat "$(result "$SID")"; false; }
+}
+
 @test "S4a an identity older than LRU_SETTLE_TYPE_MAX_AGE_S is never typed into: straight to cc-resume-debt" {
   SID=54545454-0000-4000-8000-000000000001
   rec "$SID" 706 '.last_alive_ts = ($now - 901)'
@@ -269,7 +461,7 @@ nothing_typed() {
   LRU_SETTLE_TYPE_MAX_AGE_S=900 run /bin/bash "$LRU" --drain
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ "$(cnt '--relaunch-at-shell' "$T/hf.log")" = 0 ] || { cat "$T/hf.log"; false; }
-  [ "$(cnt "^settle --sid $SID\$" "$T/rd.log")" = 1 ] || { cat "$T/rd.log"; false; }
+  [ "$(cnt "^settle --sid $SID --member no\$" "$T/rd.log")" = 1 ] || { cat "$T/rd.log"; false; }
   [[ "$(jq -r .reason "$(result "$SID")")" == *"NEW window"*"901 s old"* ]] || { cat "$(result "$SID")"; false; }
   nothing_typed
 }
@@ -282,7 +474,7 @@ nothing_typed() {
   run /bin/bash "$LRU" --drain
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ "$(cnt '--relaunch-at-shell' "$T/hf.log")" = 0 ] || { cat "$T/hf.log"; false; }
-  [ "$(cnt "^settle --sid $SID\$" "$T/rd.log")" = 1 ] || { cat "$T/rd.log"; false; }
+  [ "$(cnt "^settle --sid $SID --member no\$" "$T/rd.log")" = 1 ] || { cat "$T/rd.log"; false; }
   [[ "$(jq -r .reason "$(result "$SID")")" == *"identity was never read"* ]] || { cat "$(result "$SID")"; false; }
   nothing_typed
 }

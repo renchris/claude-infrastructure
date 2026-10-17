@@ -395,10 +395,90 @@ launch_token() { sed -n 's/^CC_LAUNCH_TOKEN=//p' "$BATS_TEST_TMPDIR/kitty.launch
 @test "D4: --prompt-file rides into the reso-resume-one command, quoted, after the branch" {
   run bash "$LAUNCH" --dry-run next4 /tmp sid-pf-1 br-x --prompt-file "/tmp/it's here.md"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  echo "$output" | grep -qF "CMD: 'env' 'CC_ADMIT_DONE=1' '/Users/x/.reso/bin/reso-resume-one' 'next4' '/tmp' 'sid-pf-1' 'br-x' '--prompt-file' '/tmp/it'\\''s here.md'"
+  echo "$output" | grep -qF "CMD: 'env' 'CC_ADMIT_DONE=1' 'CC_RESUME_TEAMMATE_GUARD=checked' '/Users/x/.reso/bin/reso-resume-one' 'next4' '/tmp' 'sid-pf-1' 'br-x' '--prompt-file' '/tmp/it'\\''s here.md'"
   # without a branch the option is the 4th word, and is not swallowed as a branch
   run bash "$LAUNCH" --dry-run next4 /tmp sid-pf-2 --prompt-file /tmp/p.md
   echo "$output" | grep -qF "'sid-pf-2' '--prompt-file' '/tmp/p.md'"
   run bash "$LAUNCH" --dry-run next4 /tmp sid-pf-3 --bogus
   [ "$status" -eq 2 ]
+}
+
+# ── QUESTION 4: NOT AN AGENT TEAMS MEMBER (teammate resurrection, REPORT.md § 4.2 step 5) ──────────
+# A member belongs to its lead, and this launcher's window cannot carry its team flags. The REAL
+# fence and lr-lib (with lr-predicate) run here; kitty records whether a window was asked for.
+q4_env() {
+  kitty_ok_env
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/kitty.argv"\nexit 0\n' "$BATS_TEST_TMPDIR" > "$BATS_TEST_TMPDIR/kitty"
+  unset CC_RESUME_TEAMMATE_GUARD CC_RESUME_MEMBER_HINT LR_PREDICATE_PY
+  # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+  . "$BATS_TEST_DIRNAME/helpers/member-transcript.sh"
+  Q4WT="$BATS_TEST_TMPDIR/wt-pool-5"; mkdir -p "$Q4WT"
+  # NOT the incident's real sid: H(sid) reads the live `ps`, and that session's orphan still holds
+  # `--resume 5423f92a-…` on the box, so the real id read "1 live holder" and exited 5 for the wrong reason.
+  Q4SID=fx5423f92a-9089-4690-8c85-28ffc4018768
+  Q4TX="$HOME/.claude-tertiary/projects/$(printf %s "$Q4WT" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g')/$Q4SID.jsonl"
+}
+q4_lock() { printf '%s/.reso/limit-recover/locks/%s.launch' "$HOME" "$Q4SID"; }
+q4_launched() { [ -s "$BATS_TEST_TMPDIR/kitty.argv" ] && grep -q -- "launch" "$BATS_TEST_TMPDIR/kitty.argv"; }
+
+@test "Q4: hint=yes exits 7 on the closer's record alone, opens nothing, and gives the launch lock back" {
+  q4_env; mk_plain_transcript "$Q4TX" "$Q4SID"      # the head says plain: only the hint can refuse
+  CC_RESUME_MEMBER_HINT=yes run bash "$LAUNCH" next3 "$Q4WT" "$Q4SID"
+  [ "$status" -eq 7 ] || { echo "$output"; false; }
+  [[ "$output" == *"closed as an Agent Teams member"* ]] || false
+  [[ "$output" == *"lock=taken"* ]] || { echo "$output"; false; }   # the lock WAS held when it refused
+  ! q4_launched || false
+  [ ! -e "$(q4_lock)" ]
+  [ ! -e "$BATS_TEST_TMPDIR/debt.log" ]
+}
+
+@test "Q4: hint=no launches even a member head (the closer saw a plain argv)" {
+  q4_env; mk_member_transcript "$Q4TX" "$Q4SID" session-3cbb68e5 web-next16
+  CC_RESUME_MEMBER_HINT=no run bash "$LAUNCH" next3 "$Q4WT" "$Q4SID"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  q4_launched
+}
+
+@test "Q4: no hint + a member head exits 7 naming the transcript, and --check-only exits 7 too" {
+  q4_env; mk_member_transcript "$Q4TX" "$Q4SID" session-3cbb68e5 web-next16
+  run bash "$LAUNCH" next3 "$Q4WT" "$Q4SID"
+  [ "$status" -eq 7 ] || { echo "$output"; false; }
+  [[ "$output" == *"an Agent Teams member ($Q4TX)"* ]] || { echo "$output"; false; }
+  ! q4_launched || false
+  [ ! -e "$(q4_lock)" ]
+  run bash "$LAUNCH" --check-only next3 "$Q4WT" "$Q4SID"
+  [ "$status" -eq 7 ] || { echo "$output"; false; }
+  [ ! -e "$(q4_lock)" ]
+}
+
+@test "Q4: a member head whose teammate test cannot run is undecided - exit 5, nothing opened" {
+  q4_env; mk_member_transcript "$Q4TX" "$Q4SID" session-3cbb68e5 web-next16
+  LR_PREDICATE_PY="$BATS_TEST_TMPDIR/no-such-predicate.py" run bash "$LAUNCH" next3 "$Q4WT" "$Q4SID"
+  [ "$status" -eq 5 ] || { echo "$output"; false; }
+  [[ "$output" == *"membership of $Q4SID undecided"* ]] || { echo "$output"; false; }
+  ! q4_launched || false
+}
+
+@test "Q4: CC_RESUME_TEAMMATE_GUARD=off and =checked launch a member head" {
+  q4_env; mk_member_transcript "$Q4TX" "$Q4SID" session-3cbb68e5 web-next16
+  CC_RESUME_TEAMMATE_GUARD=off run bash "$LAUNCH" next3 "$Q4WT" "$Q4SID"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  q4_launched
+  : > "$BATS_TEST_TMPDIR/kitty.argv"
+  CC_RESUME_TEAMMATE_GUARD=checked run bash "$LAUNCH" next3 "$Q4WT" "$Q4SID"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  q4_launched
+}
+
+@test "Q4: a plain head with no hint launches (control)" {
+  q4_env; mk_plain_transcript "$Q4TX" "$Q4SID"
+  run bash "$LAUNCH" next3 "$Q4WT" "$Q4SID"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  q4_launched
+}
+
+@test "Q4: the dry-run CMD carries CC_RESUME_TEAMMATE_GUARD=checked next to the admission mark" {
+  run bash "$LAUNCH" --dry-run next4 /tmp sid-q4
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qF "CMD: 'env' 'CC_ADMIT_DONE=1' 'CC_RESUME_TEAMMATE_GUARD=checked' '/Users/x/.reso/bin/reso-resume-one' 'next4'"
 }

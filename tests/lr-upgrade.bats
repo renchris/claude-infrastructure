@@ -37,7 +37,11 @@ setup() {
   export LRU_PS_SNAPSHOT="$BATS_TEST_TMPDIR/ps.txt"; : > "$LRU_PS_SNAPSHOT"
   export LRU_COMPOSER=off
   export LRU_SELF_SID=""
-  export LRU_LR_LIB="$BATS_TEST_TMPDIR/absent-lr-lib.sh"
+  # The REAL lr-lib: the member test (lr_member_row, lr_death_after) lives there since 2026-10-16, and
+  # without it the census fails closed and calls every member `teammate-test-unavailable`.
+  export LRU_LR_LIB="$REPO/scripts/limit-recover/lr-lib.sh"
+  export CC_CRASH_LOG="$BATS_TEST_TMPDIR/crashes.jsonl"
+  export CC_KITTY_SOCKET_BIN="$BATS_TEST_TMPDIR/absent-kitty-socket"   # lr_kitty_socket: no live kitty
   export LRU_NOTIFY_BIN="$BATS_TEST_TMPDIR/absent-cc-notify"
   # The resume-debt ledger is tests/lr-upgrade-custody.bats's subject; here it is absent, so every
   # case keeps the pre-ledger behaviour and never reaches a real cc-resume-debt.
@@ -862,6 +866,98 @@ STUB
   run bash "$LRU" --drive abcd1234-0000-4000-8000-000000000030 703
   kill "$LIVE_PID" 2>/dev/null || true
   grep -qx 'bgwork=on' "$BATS_TEST_TMPDIR/bg.log" || { cat "$BATS_TEST_TMPDIR/bg.log"; false; }
+}
+
+# ── TEAMMATE RESURRECTION (2026-10-16; docs/research/teammate-resurrection-2026-10-16/REPORT.md) ───
+# The drainer claimed member web-next16 although it already ran the target: the vendor starts members
+# through the RESOLVED claude.exe while the target is the .bin/claude symlink to it. A member belongs
+# to its lead, so it is queued only under a waiting lead and re-asked right before anything is typed.
+
+v293() { # a 2.1.293-shaped install under the tmp dir: the real claude.exe and the .bin/claude link to it
+  local nm="$BATS_TEST_TMPDIR/cc/.claude-${1:-293}/node_modules"
+  mkdir -p "$nm/@anthropic-ai/claude-code/bin" "$nm/.bin"
+  printf '#!/bin/sh\n' > "$nm/@anthropic-ai/claude-code/bin/claude.exe"; chmod +x "$nm/@anthropic-ai/claude-code/bin/claude.exe"
+  [ -e "$nm/.bin/claude" ] || ln -s ../@anthropic-ai/claude-code/bin/claude.exe "$nm/.bin/claude"
+}
+
+@test "T12 [RED] binary identity: a member on the claude.exe the target symlink resolves to is CURRENT" {
+  v293 293; v293 260
+  LINK="$BATS_TEST_TMPDIR/cc/.claude-293/node_modules/.bin/claude"
+  EXE="$BATS_TEST_TMPDIR/cc/.claude-293/node_modules/@anthropic-ai/claude-code/bin/claude.exe"
+  printf '#!/bin/bash\necho %s\n' "$LINK" > "$STUBS/cc-claude-bin"
+  team_file
+  sess 701 "$LEAD_SID" "$LINK --permission-mode auto --model claude-opus-5 --effort high"
+  sess 702 "$MATE_SID" "$(mate_argv "$EXE" claude-opus-5-5)"
+  census
+  [ "$(disp_of 702)" = current ] || { echo "a member on the resolved target binary was not current: $output"; false; }
+  # its lead (off-target model) no longer waits on a member that is already current
+  [ "$(disp_of 701)" = upgrade-lead ] || { echo "$output"; false; }
+  # a member on ANOTHER version dir's claude.exe is still upgradable, and its lead still waits
+  : > "$LRU_PS_SNAPSHOT"; rm -f "$LRU_REG_DIR"/*.json
+  sess 701 "$LEAD_SID" "$LINK --permission-mode auto --model claude-opus-5 --effort high"
+  sess 702 "$MATE_SID" "$(mate_argv "$BATS_TEST_TMPDIR/cc/.claude-260/node_modules/@anthropic-ai/claude-code/bin/claude.exe" claude-opus-5-5)"
+  census
+  [ "$(disp_of 702)" = upgrade-teammate ] || { echo "$output"; false; }
+  [ "$(disp_of 701)" = lead-awaits-teammates ] || { echo "$output"; false; }
+}
+
+@test "T13 [RED] ownership: --auto-enqueue and refill queue a member only under a lead-awaits-teammates parent" {
+  Q="$LRU_STATE/upgrade-queue"
+  PLAIN=abcd1234-0000-4000-8000-000000000040
+  team_file
+  sess 701 "$LEAD_SID" "$OLD --permission-mode auto --model claude-opus-5 --effort high"
+  sess 702 "$MATE_SID" "$(mate_argv)"
+  sess 740 "$PLAIN" "$OLD --permission-mode auto --model claude-opus-5 --effort high"
+  run bash "$LRU" --auto-enqueue
+  [ -f "$Q/auto-upgrade-$MATE_SID.json" ] || { echo "a member under its waiting lead was not queued: $output"; false; }
+  [ -f "$Q/auto-upgrade-$PLAIN.json" ] || { echo "$output"; false; }
+  rm -f "$Q"/*.json
+  # the lead is gone: the member still reads upgrade-teammate, and no lead waits on it
+  : > "$LRU_PS_SNAPSHOT"; rm -f "$LRU_REG_DIR"/*.json
+  sess 702 "$MATE_SID" "$(mate_argv)"
+  sess 740 "$PLAIN" "$OLD --permission-mode auto --model claude-opus-5 --effort high"
+  census
+  [ "$(disp_of 702)" = upgrade-teammate ] || { echo "$output"; false; }
+  run bash "$LRU" --auto-enqueue
+  [ ! -e "$Q/auto-upgrade-$MATE_SID.json" ] || { echo "--auto-enqueue queued a member no waiting lead owns: $output"; false; }
+  [ -f "$Q/auto-upgrade-$PLAIN.json" ] || { echo "the plain control was not queued: $output"; false; }
+  rm -f "$Q"/*.json
+  # the refill as the drain calls it: LRU_DRIVEN is the drain's own "already driven" list
+  run bash -c '. "$1"; lru_load_libs; LRU_DRIVEN=" "; lru_refill' _ "$LRU"
+  [ ! -e "$Q/auto-upgrade-$MATE_SID.json" ] || { echo "refill queued a member no waiting lead owns: $output"; false; }
+  [ -f "$Q/auto-upgrade-$PLAIN.json" ] || { echo "refill did not queue the plain control: $output"; false; }
+}
+
+@test "T14 a member row removed between census and fire: skipped before fire, nothing typed, class wait" {
+  gate_env 0
+  team_file
+  # the capacity probe runs after the drive's census and before fire: the lead drops the member there
+  cat >> "$LRU_CA_LIB" <<EOF
+cc_capacity_probe() { echo "probe \$*" >> "$BATS_TEST_TMPDIR/order.log"
+  printf '{"name":"session-abcd1234","members":[{"name":"team-lead"}]}\n' > "$CFG/teams/session-abcd1234/config.json"; return 0; }
+EOF
+  sess 701 "$LEAD_SID" "$OLD --permission-mode auto --model claude-opus-5 --effort high"
+  sleep 300 & LIVE_PID=$!
+  SESS_PID="$LIVE_PID" sess 702 "$MATE_SID" "$(mate_argv)"
+  run bash "$LRU" --drive "$MATE_SID" 702
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  grep -q '^probe ' "$BATS_TEST_TMPDIR/order.log" || { echo "the drive never reached the probe: $output"; false; }
+  ! grep -q '^hf ' "$BATS_TEST_TMPDIR/order.log" || { echo "handoff-fire ran for a dropped member"; cat "$BATS_TEST_TMPDIR/order.log"; false; }
+  r="$LRU_STATE/results/upgrade-$MATE_SID.json"
+  [ "$(jq -r .verdict "$r")" = skipped ] || { cat "$r"; false; }
+  [ "$(jq -r .reason "$r")" = "teammate-no-team (re-checked before fire) - nothing typed" ] || { cat "$r"; false; }
+  [ "$(jq -r .last_class "$LRU_STATE/upgrade-state/$MATE_SID.json")" = wait ] || { cat "$LRU_STATE/upgrade-state/$MATE_SID.json"; false; }
+}
+
+@test "T15 a second live claude carrying the same --agent-id makes the member TEAMMATE-SUPERSEDED" {
+  team_file
+  sess 701 "$LEAD_SID" "$OLD --permission-mode auto --model claude-opus-5 --effort high"
+  sess 702 "$MATE_SID" "$(mate_argv)"
+  census
+  [ "$(disp_of 702)" = upgrade-teammate ] || { echo "control: $output"; false; }
+  proc 61099 1 "$(mate_argv)"
+  census
+  [ "$(disp_of 702)" = teammate-superseded ] || { echo "$output"; false; }
 }
 
 # ── D4.3 (LIMIT_RECOVER_FLEET_V2 W6b): a rate-limited session is never "idle" ──────────────────────

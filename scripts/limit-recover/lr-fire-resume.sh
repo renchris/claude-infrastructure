@@ -23,10 +23,17 @@
 #   --no-prompt    Resume and type NOTHING once the session is ready: the pre-ready menus are
 #                  still answered, then the composer is left alone and a READY / READY-QUIET note
 #                  is recorded instead. Refused together with a non-empty --prompt.
+#   --extra-args "TOKENS" / --extra-env "NAME=v ..."  identity a relaunch must carry (a teammate's
+#                  --agent-id/--agent-name/--team-name/...; see the note after the arg loop).
+#
+# Exit codes before the TUI starts, each also written to $LR_RUN_DIR/relaunch.rc: 2 usage ·
+# 10 the launch lock is held · 11 a live holder of <sid> · 12 the member guard (a teammate its lead
+# dropped or a same-id successor holds, or a team-blind resume of an Agent Teams member).
 #
 # Environment seams: LR_CLAUDE_BIN (a binary to run instead of cc-claude-bin's answer),
 # LR_PRESEED_DONE (skip lr-preseed-env.sh), LR_RECR_SCHEDULE (re-send look offsets, default 5,15,30,45),
-# LR_LAUNCH_GUARD=off (no launch lock, no holder re-check).
+# LR_LAUNCH_GUARD=off (no launch lock, no holder re-check), CC_RESUME_TEAMMATE_GUARD=off|checked
+# (skip the team-blind member test: the caller already read the closed argv), LR_TEAM_PS_SNAPSHOT.
 set -euo pipefail
 
 ACCT="${1:?account}"; WT="${2:?worktree}"; SID="${3:?session-id}"; shift 3
@@ -90,6 +97,14 @@ for _lrf_lib in "$_LRF_DIR/lr-lib.sh" \
                 "$HOME/.claude/scripts/limit-recover/lr-lib.sh"; do
   # shellcheck disable=SC1090  # runtime-resolved library ladder
   [ -f "$_lrf_lib" ] && { . "$_lrf_lib" 2>/dev/null || true; break; }
+done
+# lr-team.sh: the successor census the member guard asks (lr_agent_id_holders). Its own loop
+# variable, because LR_LIB_PATH below is read off $_lrf_lib.
+for _lrf_team in "$_LRF_DIR/lr-team.sh" \
+                 "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-team.sh" \
+                 "$HOME/.claude/scripts/limit-recover/lr-team.sh"; do
+  # shellcheck disable=SC1090  # runtime-resolved library ladder
+  [ -f "$_lrf_team" ] && { . "$_lrf_team" 2>/dev/null || true; break; }
 done
 lr_state() { # $1=state $2=stage $3=detail — always rc 0; the writer itself is loud on failure
   [ -n "${LR_RUN_DIR:-}" ] || return 0
@@ -487,6 +502,82 @@ lr_launch_guard() { # (a) take or re-take the launch lock, (b) refuse over any l
   fi
 }
 # <<< lr-launch-lock
+
+# ── THE MEMBER GUARD: AN AGENT TEAMS MEMBER BELONGS TO ITS LEAD (2026-10-16) ───────────────────────
+# On 2026-10-16 a member approved its lead's shutdown_request and a relaunch path brought it back
+# outside its team, where it idles forever (docs/research/teammate-resurrection-2026-10-16/REPORT.md
+# § 4.2 step 8). Every in-place relaunch types THIS script (the watcher's re-type,
+# --relaunch-at-shell, a hand run of launch.sh), so it is the one door where that is refused:
+#   (a) a team relaunch (--agent-id in --extra-args) whose lead's team file no longer lists the
+#       member, or whose --agent-id a live claude already carries (a successor);
+#   (b) a resume with NO --agent-id of a session whose transcript head says it is a member, unless
+#       the caller already read the closed argv (CC_RESUME_TEAMMATE_GUARD=checked) or opted out (off).
+# rc 12 in both. Nothing it cannot read refuses: no jq, no library, or a predicate that could not run
+# proceeds with a loud line, because the guard exists to stop a known member, not to strand a resume.
+# The launch lock it runs under is left as rc 10/11 leave it: holder = this pid, stale once it exits.
+lr_member_guard() {
+  local tok prev="" id="" name="" team="" rc=0 n=""
+  set -f   # EXTRA_ARGS is split on spaces here exactly as expect splits it, and must never glob
+  for tok in $EXTRA_ARGS; do
+    case "$prev" in
+      --agent-id) id="$tok" ;;
+      --agent-name) name="$tok" ;;
+      --team-name) team="$tok" ;;
+    esac
+    case "$tok" in
+      --agent-id=*) id="${tok#--agent-id=}" ;;
+      --agent-name=*) name="${tok#--agent-name=}" ;;
+      --team-name=*) team="${tok#--team-name=}" ;;
+    esac
+    prev="$tok"
+  done
+  set +f
+  if [ -n "$id" ]; then
+    # The id is <name>@<team>; explicit flags win, the id fills what they left out.
+    [ -n "$name" ] || name="${id%%@*}"
+    [ -n "$team" ] || team="${id#*@}"
+    if ! command -v lr_member_row >/dev/null 2>&1 || ! command -v lr_agent_id_holders >/dev/null 2>&1; then
+      echo "!! lr-fire-resume: member guard UNDECIDED for teammate $id — lr-lib.sh/lr-team.sh unreachable; relaunching it unchecked" >&2
+      return 0
+    fi
+    lr_member_row "$cfg" "$team" "$name" || rc=$?
+    case "$rc" in
+      0) ;;
+      2) echo "!! lr-fire-resume: member row of teammate $id UNREAD (no jq) — relaunching it without the member-row check" >&2 ;;
+      *)
+        echo "REFUSED — teammate $id: no member row in ${cfg%/}/teams/$team/config.json; its lead dropped it, so relaunching it would resurrect a retired member" >&2
+        lr_relaunch_rc 12 "teammate $id: no member row - its lead dropped it"
+        exit 12
+        ;;
+    esac
+    n="$(lr_agent_id_holders "$id" 2>/dev/null)" || n=""
+    case "$n" in
+      '' | *[!0-9]*) echo "!! lr-fire-resume: successor census for teammate $id UNREAD — relaunching it unchecked" >&2 ;;
+      0) ;;
+      *)
+        echo "REFUSED — teammate $id is superseded: $n live claude process(es) already carry --agent-id $id" >&2
+        lr_relaunch_rc 12 "teammate $id: superseded - $n live holder(s) of its --agent-id"
+        exit 12
+        ;;
+    esac
+    return 0
+  fi
+  case "${CC_RESUME_TEAMMATE_GUARD:-}" in off | checked) return 0 ;; esac
+  if ! command -v lr_team_member >/dev/null 2>&1; then
+    echo "!! lr-fire-resume: team membership of $SID UNDECIDED — lr-lib.sh unreachable; resuming it unchecked" >&2
+    return 0
+  fi
+  lr_team_member "$SID" "$cfg" "$WT" >/dev/null || rc=$?
+  case "$rc" in
+    0)
+      echo "REFUSED — team-blind resume of an Agent Teams member: $SID's transcript head names its team and this resume carries no --agent-id, so it would come back outside its team. A caller that read the closed argv and found no --agent-id sets CC_RESUME_TEAMMATE_GUARD=checked." >&2
+      lr_relaunch_rc 12 "team-blind resume of an Agent Teams member"
+      exit 12
+      ;;
+    2) echo "!! lr-fire-resume: team membership of $SID UNDECIDED (the teammate predicate could not run) — resuming it unchecked" >&2 ;;
+  esac
+  return 0
+}
 
 # Recreate a reaped worktree when a branch is known (reso-resume-one logic).
 if [[ ! -d "$WT" ]]; then
@@ -1034,6 +1125,7 @@ export LR_SAY_LOG LR_NOTIFY
 # A refusal here is a launcher failure before the TUI exists, so it runs before the trap is disarmed
 # and before relaunch-typed; still as late as possible, so the holder census is fresh (rc 10 / 11).
 lr_launch_guard
+lr_member_guard
 lr_rc=0
 # THE RELAUNCH-RC TRAP IS DISARMED HERE, and this line is the whole of its scope rule: everything
 # above is "the launcher failed before the TUI existed" (a relaunch failure the watcher must see);

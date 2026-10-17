@@ -24,6 +24,8 @@
 #   plus, when present: recovery (packet path), deferrals + first_defer_epoch (H(sid)>0 deferrals),
 #   mailed_epoch (packet prompt mailed to a live original), recycle_wait_epoch (first deferral to a
 #   live recycle watcher), and the closer's kitty_to / kitty_listen_on / kitty_pid.
+#   member (yes|no|"" — what the CLOSER saw in the closed process's argv: --agent-id or not) and,
+#   on a reopen, prior_events (the last 20 events of the debt it replaced).
 #   state ∈ open | retrying | escalated | proven | abandoned
 #
 # STATE MACHINE (one transition per `step`, under a per-sid mkdir lock):
@@ -33,13 +35,22 @@
 #   open, a recycle watcher alive on its pane  → nothing, sweep only (the recycle is not over)
 #   open, age ≥ GRACE (or settle's --now)      → relaunch, retrying
 #   retrying, relaunch rc≠0 or WAIT elapsed    → escalate (backlog row + mailbox), escalated
+#   open, launcher exit 7 + member=yes         → abandoned (an Agent Teams member: its lead owns it)
+#   open, launcher exit 7 otherwise            → retrying, and the next step escalates it
 #   escalated                                  → nothing new (latched); a later proof still discharges
 # PROOF is `cc-find <sid>` reporting LIVE (registry pid + lstart) on two reads HOLD s apart. A
 # point-in-time argv/ps match is NOT proof — that was the incident's false positive. A recovery
 # debt's proof is stricter still (see _prove_debt).
 #
 # EXIT CODES: 0 ok · 1 not proven / escalated (prove, settle, surface-absent) · 2 usage ·
-#   3 undecided / store or enumerator failure · 4 settle ended on an abandoned debt.
+#   3 undecided / store or enumerator failure · 4 settle ended on an abandoned debt ·
+#   5 settle: already proven after --since (a death after the proof is not the mover's close).
+#
+# TEAMMATES (docs/research/teammate-resurrection-2026-10-16/REPORT.md § 4.2 step 4). On 2026-10-16
+# settle reopened an Agent Teams member's PROVEN debt as "no prior debt" and relaunched it in a new
+# window, outside its team. So the launcher is told what the closer saw (CC_RESUME_MEMBER_HINT) and
+# refuses a member with exit 7, and `settle --since <move epoch>` leaves a debt proven after the move
+# alone.
 #
 # Env seams: CC_RESUME_DEBT_{DIR,CUSTODY_BIN,RESOLVE_BIN,FIND_BIN,PANE_BIN,BACKLOG_BIN,NOTIFY_BIN,
 #   RELAUNCH,NOW,HOLD_S,GRACE_S,WAIT_S,POLL_S,LOCK_STALE_S,MAX_DEFER,DEFER_SPAN_S,MAIL_WAIT_S,
@@ -275,7 +286,7 @@ _prove_debt() { # <sid> <hold> — the proof a debt's mode admits
 
 # ── verbs ───────────────────────────────────────────────────────────────────────────────────────
 _open() {
-  local cur marker now ccwd key val kpid
+  local cur marker now ccwd key val kpid member pev
   [ -n "$SID" ] || _die "open needs --sid"
   if [ -f "$(_meta "$SID")" ] && _active "$(_get "$SID" state)"; then
     _get "$SID" marker; return 0
@@ -302,13 +313,25 @@ EOF
      && [ "$(jq -r '.session_id // ""' "$REG_DIR/$PANE_ID.json" 2>/dev/null)" = "$SID" ]; then
     kpid="$(jq -r '.kitty_pid // "" | tostring' "$REG_DIR/$PANE_ID.json" 2>/dev/null)"
   fi
+  # A REOPEN MUST NOT FORGET (2026-10-16). Reopening a proven or abandoned debt rewrote it from
+  # nothing, so the closer's membership record and the proof that had paid it were gone by the time
+  # the relaunch ran. What the closer saw is carried unless this open says otherwise, and the old
+  # debt's last 20 events are kept beside the new history.
+  member="$MEMBER"; pev='[]'
+  if [ -f "$cur" ]; then
+    [ -n "$member" ] || member="$(_get "$SID" member)"
+    pev="$(jq -c '((.prior_events // []) + (.events // []))[-20:]' "$cur" 2>/dev/null)" || pev='[]'
+    [ -n "$pev" ] || pev='[]'
+  fi
   jq -n --arg sid "$SID" --arg marker "$marker" --arg pane "$PANE_ID" --arg cfg "$CFG" \
     --arg account "$ACCOUNT" --arg cwd "$CWD" --arg by "$BY" --arg why "$WHY" --arg e "$now" \
     --arg mode "$MODE" --arg kto "${CC_TERM_KITTY_TO:-}" --arg klo "${KITTY_LISTEN_ON:-}" --arg kpid "$kpid" \
+    --arg member "$member" --argjson pev "$pev" \
     '{sid:$sid, marker:$marker, pane:$pane, mode:$mode, cfg:$cfg, account:$account, cwd:$cwd, by:$by, why:$why,
-      kitty_to:$kto, kitty_listen_on:$klo, kitty_pid:$kpid,
+      kitty_to:$kto, kitty_listen_on:$klo, kitty_pid:$kpid, member:$member,
       opened_epoch:($e|tonumber), state:"open", attempts:0, attempt_epoch:0, relaunch_rc:null,
-      backlog_id:"", page_verdict:"", events:[{epoch:($e|tonumber), state:"open", note:("opened by "+$by)}]}' \
+      backlog_id:"", page_verdict:"", events:[{epoch:($e|tonumber), state:"open", note:("opened by "+$by)}]}
+     + (if ($pev | length) > 0 then {prior_events: $pev} else {} end)' \
     > "$cur.tmp.$$" && mv -f "$cur.tmp.$$" "$cur" || _die "meta write failed" 3
   # custody --cwd must resolve to an existing dir; a vanished worktree keys the row on $HOME.
   ccwd="$CWD"; [ -n "$ccwd" ] && [ -d "$ccwd" ] || ccwd="$HOME"
@@ -505,15 +528,27 @@ _relaunch() { # <sid> — the retry: a NEW window with the SAME sid.
   if [ -z "$acct" ] || [ -z "$cwd" ]; then
     rc=64   # unresolvable subject: counts as a failed attempt, so the next step escalates
   else
+    # The closer's membership record rides to the launcher, which refuses a member with exit 7: only
+    # the closer saw the closed process's argv, and the launcher's own head test is the fallback.
     # shellcheck disable=SC2086  # RELAUNCH is a command PREFIX, word-split on purpose (header)
-    CC_RESUME_DEBT_SETTLING=1 $RELAUNCH "$acct" "$cwd" "$1" ${extra[@]+"${extra[@]}"} </dev/null >>"$LOGS/$1.log" 2>&1
+    CC_RESUME_DEBT_SETTLING=1 CC_RESUME_MEMBER_HINT="$(_get "$1" member)" \
+      $RELAUNCH "$acct" "$cwd" "$1" ${extra[@]+"${extra[@]}"} </dev/null >>"$LOGS/$1.log" 2>&1
     rc=$?
   fi
   lr_recon_act_done
+  # Exit 7 on a debt whose closer recorded a member is final: its lead owns its recovery, and no
+  # retry here can carry its team flags. Without that record the head test alone decided, so it is
+  # not dropped silently — it falls through, and the next step escalates it (_escalate, rc 7).
+  if [ "$rc" = 7 ] && [ "$(_get "$1" member)" = yes ]; then
+    # shellcheck disable=SC2016  # jq variables
+    _set "$1" '.attempts += 1 | .attempt_epoch = ($e|tonumber) | .relaunch_rc = 7' --arg e "$(_now)"
+    _abandon "$1" "not relaunched: an Agent Teams member - its lead owns it; a new-window resume cannot carry its team identity (launcher exit 7)"
+    return 1
+  fi
   # shellcheck disable=SC2016  # jq variables
   _set "$1" '.attempts += 1 | .attempt_epoch = ($e|tonumber) | .relaunch_rc = ($rc|tonumber)' \
     --arg e "$(_now)" --arg rc "$rc"
-  _ev "$1" retrying "relaunch rc=$rc$([ "$rc" = 9 ] && printf ' (capacity deferred)')$([ "$rc" = 6 ] && printf ' (launch indeterminate, reconciling)')"
+  _ev "$1" retrying "relaunch rc=$rc$([ "$rc" = 9 ] && printf ' (capacity deferred)')$([ "$rc" = 6 ] && printf ' (launch indeterminate, reconciling)')$([ "$rc" = 7 ] && printf ' (reads as an Agent Teams member, no member record - escalating)')"
 }
 
 # ── ORDERING (review must-fix (a)): a recycle still in flight owns the pane ────────────────────────
@@ -608,17 +643,25 @@ _pending_launch() { # <sid> → rc 0 = still indeterminate (defer); 1 = no marke
 # mailbox-only and the other cc-notify verdicts as said, or refused-rc<N>. A recovery debt names the fix
 # itself: the packet's refire_cmd is the row's --run, and the packet path rides in title and --run.
 _escalate() { # <sid>
-  local acct cwd by opened run title out rc id prc msg pkt refire err verdict
+  local acct cwd by opened run title out rc id prc msg pkt refire err verdict member7=""
   acct="$(_get "$1" account)"; cwd="$(_get "$1" cwd)"; by="$(_get "$1" by)"
   opened="$(_get "$1" opened_epoch)"; pkt="$(_get "$1" recovery)"; refire=""
   [ -n "$pkt" ] && refire="$(jq -r '.refire_cmd // ""' "$pkt" 2>/dev/null)"
   run="$(printf 'bash %s %q %q %q' "$HOME/.claude/scripts/boot-resume-launch.sh" "$acct" "$cwd" "$1")"
+  # Launcher exit 7 with no member record: the head test read "member", which is also how an adopted
+  # ex-member reads. The operator decides; the row's command carries the override, since without it
+  # the same launcher would refuse the same way.
+  if [ "$(_get "$1" relaunch_rc)" = 7 ]; then
+    run="CC_RESUME_TEAMMATE_GUARD=off $run"
+    member7="; its transcript reads as an Agent Teams member and no closer recorded how it last ran; resume by hand only if it was adopted outside its team"
+  fi
   title="Resume stranded session $1 ($(basename "${cwd:-?}"), account ${acct:-?}) — ${by:-a mover} closed it and the relaunch failed (debt opened $(_utc "$opened"))"
   if [ -n "$pkt" ]; then
     # bash -c runs a --run (bin/cc-do), so the trailing packet path is a comment, never an argument.
     [ -n "$refire" ] && run="$refire  # recovery packet: $pkt"
     title="Re-fire the failed recycle of session $1 ($(basename "${cwd:-?}"), account ${acct:-?}) — its recovery relaunch was not proven (debt opened $(_utc "$opened")); packet $pkt; re-fire: ${refire:-<packet has no refire_cmd>}"
   fi
+  title="$title$member7"
   out="$(env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_SESSION_ID -u CC_SESSION_ID \
            "$BACKLOG" needs "$title" --class needs-human --project claude-infrastructure --run "$run" </dev/null 2>/dev/null)"
   rc=$?
@@ -673,14 +716,38 @@ _step() { # <sid> <now-flag 0|1> — ONE transition; a held lock makes it a no-o
   return 0
 }
 
-_settle() { # <sid> <wait> — rc 0 proven · 1 escalated · 3 undecided · 4 abandoned
-  local deadline st
+_last_epoch() { # <sid> <state> → epoch of the newest event in <state>, or nothing
+  # shellcheck disable=SC2016  # jq variables
+  jq -r --arg s "$2" '[.events[]? | select(.state == $s) | .epoch] | last // "" | tostring' "$(_meta "$1")" 2>/dev/null
+}
+
+_settle() { # <sid> <wait> — rc 0 proven · 1 escalated · 3 undecided · 4 abandoned · 5 proven after --since
+  local deadline st e
+  # PAID AFTER THE MOVE (2026-10-16). `--since <epoch>` is the mover saying when its move began. A
+  # debt proven at or after it was paid by THIS move, so the session's later death is not the
+  # mover's close and is not reopened here (the caller reads the watchdog's verdict instead); one
+  # abandoned at or after it was dropped on purpose. Without --since, the old rule stands.
+  if [ -n "$SINCE" ] && [ -f "$(_meta "$1")" ]; then
+    st="$(_get "$1" state)"
+    if [ "$st" = proven ] || [ "$st" = abandoned ]; then
+      e="$(_num "$(_last_epoch "$1" "$st")" "")"
+      if [ -n "$e" ] && [ "$e" -ge "$SINCE" ]; then
+        _note "debt for $1 was $st at $(_utc "$e"), at/after --since $(_utc "$SINCE") - not reopened"
+        [ "$st" = proven ] && return 5
+        return 4
+      fi
+    fi
+  fi
   # A settle IS the caller saying "I closed this session and could not bring it back". No debt on
   # file (an older mover closed it, or its open failed) must not turn that into a silent no-op:
   # open one now from what cc-resume-resolve knows, then settle it like any other.
   if [ ! -f "$(_meta "$1")" ] || ! _active "$(_get "$1" state)"; then
     [ "$BY" = unknown ] && BY="settle (no prior debt)"
     _open >/dev/null || [ -f "$(_meta "$1")" ] || { _note "no debt for $1 and none could be opened"; return 3; }
+  elif [ -n "$MEMBER" ] && [ -z "$(_get "$1" member)" ]; then
+    # An open debt keeps the membership its closer recorded; settle's --member only fills a gap.
+    # shellcheck disable=SC2016  # jq variables
+    _set "$1" '.member = $m' --arg m "$MEMBER" || _note "could not record member for $1"
   fi
   # --recovery <packet>: stored on the debt whether it was just opened or already on file, so the
   # retry, the proof and the escalation below all see it.
@@ -753,12 +820,14 @@ usage() {
   cat <<'U'
 usage: cc-resume-debt open   --sid S [--cfg CFG] [--cwd C] [--pane P] [--account A] [--by WHO] [--why TEXT]
                              [--mode resume|fresh]   fresh = a successor with a NEW sid in --pane also proves
+                             [--member yes|no]       what the closer saw: the closed argv had --agent-id or not
        cc-resume-debt prove  --sid S [--hold N]
        cc-resume-debt discharge --sid S --why TEXT
        cc-resume-debt abandon   --sid S --why TEXT
        cc-resume-debt step   --sid S
-       cc-resume-debt settle --sid S [--wait N] [--recovery PACKET]
+       cc-resume-debt settle --sid S [--wait N] [--recovery PACKET] [--member yes|no] [--since EPOCH]
                              PACKET = a failed recycle's recycle-failed/<sid>.json
+                             EPOCH  = when the caller's move began: proven since then ⇒ rc 5, abandoned ⇒ rc 4
        cc-resume-debt sweep
        cc-resume-debt surface --pane P
        cc-resume-debt list [--open] [--escalated] [--json]
@@ -768,6 +837,7 @@ U
 # ── args ────────────────────────────────────────────────────────────────────────────────────────
 cmd="${1:-}"; shift 2>/dev/null || true
 SID="" CFG="" CWD="" PANE_ID="" ACCOUNT="" BY="unknown" WHY="" HOLD="" WAIT="" MODE="resume" RECOVERY=""
+MEMBER="" MEMBER_GIVEN=0 SINCE="" SINCE_GIVEN=0
 WANT_OPEN=0 WANT_ESC=0 WANT_JSON=0
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -782,6 +852,8 @@ while [ $# -gt 0 ]; do
     --hold) shift; HOLD="${1:-}" ;;
     --wait) shift; WAIT="${1:-}" ;;
     --recovery) shift; RECOVERY="${1:-}" ;;
+    --member) shift; MEMBER="${1:-}"; MEMBER_GIVEN=1 ;;
+    --since) shift; SINCE="${1:-}"; SINCE_GIVEN=1 ;;
     --open) WANT_OPEN=1 ;;
     --escalated) WANT_ESC=1 ;;
     --json) WANT_JSON=1 ;;
@@ -794,6 +866,9 @@ done
 case "$SID" in ''|[A-Za-z0-9]*) ;; *) _die "bad --sid: $SID" ;; esac
 case "$SID" in *[!A-Za-z0-9._-]*) _die "bad --sid: $SID" ;; esac
 case "$MODE" in resume|fresh) ;; *) _die "bad --mode: $MODE (resume|fresh)" ;; esac
+# A membership record decides an abandon, so a value that is neither is refused, never guessed.
+[ "$MEMBER_GIVEN" = 1 ] && case "$MEMBER" in yes|no) ;; *) _die "bad --member: '$MEMBER' (yes|no)" ;; esac
+[ "$SINCE_GIVEN" = 1 ] && case "$SINCE" in ''|*[!0-9]*) _die "bad --since: '$SINCE' (an epoch, digits only)" ;; esac
 # A missing packet costs the recovery handling, never the settle: the debt still runs as a plain one.
 if [ -n "$RECOVERY" ] && [ ! -f "$RECOVERY" ]; then
   _note "--recovery: no such packet: $RECOVERY - settling as a plain resume debt"; RECOVERY=""

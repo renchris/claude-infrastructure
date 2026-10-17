@@ -912,6 +912,61 @@ fence_hold() { # <sid> <pid> — a launch lock held by <pid>, stamped as lr_reco
   [[ "$(spawn_argv)" == *"--resume SID-HANDOVER"* ]]
 }
 
+# ── TEAMMATE (teammate resurrection, REPORT.md § 4.2 step 6) ─────────────────────────────────────
+# The belt under boot-resume-launch's question 4: a resume of an Agent Teams member comes back with
+# no team flags, outside its team, so the engine refuses it with 7 by the real lr_team_member.
+# Account `next` resolves to $HOME/.claude-next; the transcript sits at the exact slug of $WT.
+mk_member() { # <sid> [plain]
+  # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+  . "$BATS_TEST_DIRNAME/helpers/member-transcript.sh"
+  local tx; tx="$HOME/.claude-next/projects/$(printf %s "$WT" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g')/$1.jsonl"
+  if [ "${2:-}" = plain ]; then mk_plain_transcript "$tx" "$1"; else mk_member_transcript "$tx" "$1" session-3cbb68e5 web-next16; fi
+  printf '%s' "$tx"
+}
+
+@test "TEAMMATE: a member head exits 7, spawns nothing, and leaves no launch lock" {
+  tx="$(mk_member SID-TEAM)"
+  run env -u CC_RESUME_TEAMMATE_GUARD CC_RR_STUB_NO_MENU=1 timeout 60 "$RRO" next "$WT" SID-TEAM
+  [ "$status" -eq 7 ] || { echo "status $status: $output"; false; }
+  [[ "$output" == *"NOT LAUNCHING SID-TEAM - an Agent Teams member ($tx)"* ]] || false
+  [[ "$output" == *"lock=taken"* ]] || false   # the fence lock WAS taken, and is given back
+  [ -z "$(spawn_argv)" ]
+  [ ! -e "$(fence_dir SID-TEAM)" ]
+}
+
+@test "TEAMMATE: CC_RESUME_FENCE=off still refuses a member head" {
+  mk_member SID-TEAM-NOFENCE >/dev/null
+  run env -u CC_RESUME_TEAMMATE_GUARD CC_RESUME_FENCE=off CC_RR_STUB_NO_MENU=1 timeout 60 "$RRO" next "$WT" SID-TEAM-NOFENCE
+  [ "$status" -eq 7 ] || { echo "status $status: $output"; false; }
+  [ -z "$(spawn_argv)" ]
+}
+
+@test "TEAMMATE: CC_RESUME_TEAMMATE_GUARD=checked and =off spawn a member head; a plain head spawns (control)" {
+  mk_member SID-TEAM-OK >/dev/null
+  run env CC_RESUME_TEAMMATE_GUARD=checked CC_RR_STUB_NO_MENU=1 timeout 60 "$RRO" next "$WT" SID-TEAM-OK
+  [ "$status" -eq 0 ] || { echo "status $status: $output"; false; }
+  [[ "$(spawn_argv)" == *"--resume SID-TEAM-OK"* ]] || false
+  rm -f "$CC_RR_STUB_ARGV"
+  run env CC_RESUME_TEAMMATE_GUARD=off CC_RR_STUB_NO_MENU=1 timeout 60 "$RRO" next "$WT" SID-TEAM-OK
+  [ "$status" -eq 0 ] || { echo "status $status: $output"; false; }
+  [[ "$(spawn_argv)" == *"--resume SID-TEAM-OK"* ]] || false
+  rm -f "$CC_RR_STUB_ARGV"
+  mk_member SID-PLAIN plain >/dev/null
+  run env -u CC_RESUME_TEAMMATE_GUARD CC_RR_STUB_NO_MENU=1 timeout 60 "$RRO" next "$WT" SID-PLAIN
+  [ "$status" -eq 0 ] || { echo "status $status: $output"; false; }
+  [[ "$(spawn_argv)" == *"--resume SID-PLAIN"* ]] || false
+}
+
+@test "TEAMMATE: a member head whose teammate test cannot run is undecided - exit 5, nothing spawned, lock given back" {
+  mk_member SID-TEAM-UND >/dev/null
+  run env -u CC_RESUME_TEAMMATE_GUARD LR_PREDICATE_PY="$BATS_TEST_TMPDIR/no-such.py" CC_RR_STUB_NO_MENU=1 \
+    timeout 60 "$RRO" next "$WT" SID-TEAM-UND
+  [ "$status" -eq 5 ] || { echo "status $status: $output"; false; }
+  [[ "$output" == *"membership is undecided"* ]] || false
+  [ -z "$(spawn_argv)" ]
+  [ ! -e "$(fence_dir SID-TEAM-UND)" ]
+}
+
 @test "SPAWN: through cc-close-attrib when it is installed, with CLAUDE_CODE_CERT_STORE=bundled" {
   mkdir -p "$HOME/.claude/bin"
   cat > "$HOME/.claude/bin/cc-close-attrib" <<'W'

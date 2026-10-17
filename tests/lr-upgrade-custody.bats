@@ -133,7 +133,7 @@ STUB
   LRU_RETYPE_MAX=2 run bash "$LRU" --drive "$SID" 603
   [ "$status" -eq 0 ] || { echo "$output"; cat "$(result "$SID")"; false; }
   [ ! -s "$BATS_TEST_TMPDIR/it2.log" ] || { echo "retyped into a pane the terminal no longer enumerates"; cat "$BATS_TEST_TMPDIR/it2.log"; false; }
-  grep -qx "settle --sid $SID" "$BATS_TEST_TMPDIR/rd.log" || { cat "$BATS_TEST_TMPDIR/rd.log"; false; }
+  grep -qxE "settle --sid $SID --member no --since [0-9]+" "$BATS_TEST_TMPDIR/rd.log" || { cat "$BATS_TEST_TMPDIR/rd.log"; false; }
   [ "$(jq -r .verdict "$(result "$SID")")" = upgraded ] || { cat "$(result "$SID")"; false; }
   # The in-pane relaunch is --relaunch-at-shell's alone now (2026-10-08); with no pane identity it is
   # never attempted, and the session goes to the ledger's new window.
@@ -174,7 +174,7 @@ STUB
   [ "$(jq -r .verdict "$(result "$SID")")" = failed ]
   [[ "$(jq -r .reason "$(result "$SID")")" == *"resume-debt undecided"* ]] || { cat "$(result "$SID")"; false; }
   grep -q "^prove --sid $SID" "$BATS_TEST_TMPDIR/rd.log"
-  grep -qx "settle --sid $SID" "$BATS_TEST_TMPDIR/rd.log"
+  grep -qxE "settle --sid $SID --member no --since [0-9]+" "$BATS_TEST_TMPDIR/rd.log"
 }
 
 @test "poller-auto results mail --role desk, never the literal requester name" {
@@ -194,4 +194,44 @@ STUB
   run bash "$LRU" --drive "$SID" 607 --requested-by some-gone-pane
   grep -q '^some-gone-pane CC-LR-UPGRADE' "$BATS_TEST_TMPDIR/notify.log"
   grep -q '^--role desk CC-LR-UPGRADE pane 607' "$BATS_TEST_TMPDIR/notify.log" || { cat "$BATS_TEST_TMPDIR/notify.log"; false; }
+}
+
+# THE 2026-10-16 INCIDENT (docs/research/teammate-resurrection-2026-10-16/REPORT.md § 2): the lead's
+# shutdown_request landed inside the drainer's fire window, member web-next16 approved and closed (its
+# lead removed its row), and step 6 read that death as a failed relaunch: it settled, and
+# cc-resume-debt relaunched the member team-blind in a new window, as an orphan.
+@test "REPLAY web-next16 [RED]: a member retired inside the fire window ends not-live; nothing re-types or settles it" {
+  export LRU_LR_LIB="$REPO/scripts/limit-recover/lr-lib.sh"
+  export CC_CRASH_LOG="$BATS_TEST_TMPDIR/crashes.jsonl"; : > "$CC_CRASH_LOG"
+  export LR_DEATH_VERDICT_WAIT_S=0
+  LEAD=abcd1234-0000-4000-8000-000000000001; SID=abcd1234-0000-4000-8000-000000000002
+  CFG="$LRU_CFG_ROOT/.claude-t"; TD="$CFG/teams/session-abcd1234"; mkdir -p "$TD/inboxes"
+  printf '{"members":[{"name":"team-lead"},{"name":"m","agentId":"m@session-abcd1234"}]}\n' > "$TD/config.json"
+  printf '[]\n' > "$TD/inboxes/m.json"
+  sess 701 "$LEAD" "$OLD --permission-mode auto --model claude-opus-5 --effort high"
+  sleep 300 & LIVE_PID=$!
+  SESS_PID="$LIVE_PID" sess 702 "$SID" "/opt/cc/.claude-260/node_modules/@anthropic-ai/claude-code/bin/claude.exe --agent-id m@session-abcd1234 --agent-name m --team-name session-abcd1234 --agent-color cyan --parent-session-id $LEAD --agent-type general-purpose --permission-mode auto --effort high --model claude-opus-5"
+  # the pane's identity is readable (a kitty socket), so the pre-fix drive would type at its shell
+  jq -c '.kitty_listen_on = "unix:/tmp/kitty-4242"' "$LRU_REG_DIR/702.json" > "$BATS_TEST_TMPDIR/r.json" && mv "$BATS_TEST_TMPDIR/r.json" "$LRU_REG_DIR/702.json"
+  # handoff-fire as the incident saw it: during its window the lead drops the member, which exits
+  cat > "$LRU_HF_BIN" <<STUB
+#!/bin/bash
+echo "hf \$*" >> "$BATS_TEST_TMPDIR/hf.log"
+case "\$1" in
+  --recycle)
+    printf '{"members":[{"name":"team-lead"}]}\n' > "$TD/config.json"
+    kill $LIVE_PID
+    grep -v "^$LIVE_PID " "$LRU_PS_SNAPSHOT" > "$BATS_TEST_TMPDIR/ps.new"; mv "$BATS_TEST_TMPDIR/ps.new" "$LRU_PS_SNAPSHOT" ;;
+esac
+exit 0
+STUB
+  chmod +x "$LRU_HF_BIN"
+  run bash "$LRU" --drive "$SID" 702
+  grep -q -- '--recycle --same-account' "$BATS_TEST_TMPDIR/hf.log" || { echo "the drive never fired: $output"; false; }
+  ! grep -q -- '--relaunch-at-shell' "$BATS_TEST_TMPDIR/hf.log" || { echo "re-typed a retired member at its shell"; cat "$BATS_TEST_TMPDIR/hf.log"; false; }
+  ! grep -q '^settle ' "$BATS_TEST_TMPDIR/rd.log" || { echo "settled a retired member into a new window"; cat "$BATS_TEST_TMPDIR/rd.log"; false; }
+  grep -q "^abandon --sid $SID" "$BATS_TEST_TMPDIR/rd.log" || { cat "$BATS_TEST_TMPDIR/rd.log"; false; }
+  [ "$(jq -r .verdict "$(result "$SID")")" = skipped ] || { cat "$(result "$SID")"; false; }
+  [[ "$(jq -r .reason "$(result "$SID")")" == "not live: teammate m@session-abcd1234 retired by its lead"* ]] || { cat "$(result "$SID")"; false; }
+  [ "$(jq -r .terminal "$LRU_STATE/upgrade-state/$SID.json")" = not-live ] || { cat "$LRU_STATE/upgrade-state/$SID.json"; false; }
 }

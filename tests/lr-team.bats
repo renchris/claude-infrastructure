@@ -5,6 +5,9 @@
 setup() {
   export HOME="$BATS_TEST_TMPDIR/home"
   mkdir -p "$HOME"
+  # The agent-id fixture names lr-fire-resume.sh (a capacity-admit caller) in a ps line, which puts
+  # this suite in the hermeticity lint's rule-7 scope; nothing here runs the gate, so pin it shut.
+  export CC_ADMIT_GATE=off
   REPO="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
   TEAM="$REPO/scripts/limit-recover/lr-team.sh"
   FIX="$REPO/tests/fixtures/lr-team/members.tsv"
@@ -87,4 +90,30 @@ EOF
   cut -f3 "$FIX" >"$BATS_TEST_TMPDIR/snap"
   LR_TEAM_PS_SNAPSHOT="$BATS_TEST_TMPDIR/snap" run /bin/bash "$TEAM" count "$SID"
   [ "$output" = "2" ]
+}
+
+# ── lr_agent_id_holders (teammate resurrection 2026-10-16, REPORT.md § 4.2 step 2) ───────────────
+@test "lr_agent_id_holders: counts only live claude/claude.exe argv[0] carrying the adjacent --agent-id" {
+  id="web-next16@session-3cbb68e5"
+  snap="$(printf '%s\n' \
+    "101 S /Users/x/.claude-293/node_modules/@anthropic-ai/claude-code/bin/claude.exe --agent-id $id --agent-name web-next16" \
+    "102 S claude --resume s1 --agent-id $id" \
+    "103 Z claude.exe --agent-id $id" \
+    "104 S /bin/bash /x/scripts/limit-recover/lr-fire-resume.sh --extra-args --agent-id $id" \
+    "105 S expect -c spawn claude --agent-id $id" \
+    "106 S /x/bin/cc-close-attrib claude --agent-id $id" \
+    "107 S claude --agent-id other@session-3cbb68e5" \
+    "108 S claude --agent-id")"
+  run bash -c "source '$TEAM'; lr_agent_id_holders '$id' \"\$1\"" _ "$snap"
+  [ "$output" = "2" ]
+  run bash -c "source '$TEAM'; lr_agent_id_holders '$id' \"\$1\" '101 999'" _ "$snap"
+  [ "$output" = "1" ]
+  run bash -c "source '$TEAM'; lr_agent_id_holders '' \"\$1\"" _ "$snap"
+  [ "$output" = "0" ]
+}
+
+@test "lr_agent_id_holders: the live census is not matched by itself (the id rides in ENVIRON)" {
+  id="probe-$$@session-nobody"
+  run /bin/bash -c "source '$TEAM'; lr_agent_id_holders '$id'"
+  [ "$status" -eq 0 ]; [ "$output" = "0" ]
 }

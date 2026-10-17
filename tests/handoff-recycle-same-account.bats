@@ -195,6 +195,58 @@ teammate_argv() { export PS_ARGS_OUT="/x/claude.exe --agent-id $TM_ID --agent-na
   [[ "$output" == *"does not carry that --agent-id"* ]] || { echo "$output"; false; }
 }
 
+# ── MEMBERSHIP AS THE CLOSER SAW IT (teammate resurrection 2026-10-16, REPORT.md § 4.2 step 9) ──
+# The resume debt opened before the /exit records whether the closed process was a team member, read
+# off its argv, so the relaunch that settles the debt never guesses from a transcript head. --dry-run
+# stops before the debt, and a full recycle needs a real tty holding a real claude, so the evidence
+# function and the debt-open stanza of recycle_fire_commit are extracted from the subject and run in
+# order, in one shell, as the recycle runs them.
+load_sa_debt() {
+  FN="$BATS_TEST_TMPDIR/sa-debt.sh"
+  {
+    awk '/^hf_transcript_at_rest\(\) \{/,/^\}/' "$HF"
+    awk '/^hf_same_account_evidence\(\) \{/,/^\}/' "$HF"
+    echo 'sa_debt_open() {'
+    awk '/^  rcy_debt_sid="\$rcy_old_sid"$/ { on = 1 } on { print } on && /^  fi$/ { exit }' "$HF"
+    echo '}'
+  } > "$FN"
+  grep -q '_hf_resume_debt open' "$FN" || { echo "the debt open was not extracted from $HF"; false; }
+  bash -n "$FN"
+  # shellcheck disable=SC1090
+  . "$FN"
+  DEBT_CALLS="$BATS_TEST_TMPDIR/debt.calls"; : > "$DEBT_CALLS"
+  _hf_resume_debt() { printf '%s\n' "$*" >> "$DEBT_CALLS"; }
+  # shellcheck disable=SC2034  # globals read by the extracted handoff-fire code
+  REG_DIR="$CC_REGISTRY_DIR" RESUME_LAUNCHER="$LAUNCHER" RESUME_CFG="$SRC_CFG" RCY_SOURCE_SESSION="$SESS" \
+    LAUNCH_DIR="$CWD_DIR" SID="$SRC_PANE" rcy_old_sid="$SESS" HF_SA_MEMBER="" HF_TEAM_MEMBER_ID=""
+}
+
+@test "[RED] the debt open carries --member yes for a teammate admitted with --team-member-id" {
+  at_rest_tx; row; teammate_argv
+  printf '#!/bin/bash\nexec /bin/echo resume --extra-args --agent-id\\ %s\\ --agent-name\\ w\n' "$TM_ID" > "$LAUNCHER"
+  load_sa_debt
+  # shellcheck disable=SC2034  # read by the extracted hf_same_account_evidence
+  HF_TEAM_MEMBER_ID="$TM_ID"
+  hf_same_account_evidence "$SRC_PANE" "$SESS" "$SRC_CFG" "$$" --recycle
+  [ "$HF_SA_MEMBER" = yes ] || { echo "HF_SA_MEMBER='$HF_SA_MEMBER'"; false; }
+  sa_debt_open
+  grep -q -- "^open --sid $SESS .* --member yes " "$DEBT_CALLS" || { cat "$DEBT_CALLS"; false; }
+}
+
+@test "[RED] the debt open carries --member no for a plain remote pid, and nothing for a self-recycle" {
+  at_rest_tx; row
+  load_sa_debt
+  hf_same_account_evidence "$SRC_PANE" "$SESS" "$SRC_CFG" "$$" --recycle
+  [ "$HF_SA_MEMBER" = no ] || { echo "HF_SA_MEMBER='$HF_SA_MEMBER'"; false; }
+  sa_debt_open
+  grep -q -- "^open --sid $SESS .* --member no " "$DEBT_CALLS" || { cat "$DEBT_CALLS"; false; }
+  # A self-recycle never runs the evidence function, so it states no membership at all.
+  : > "$DEBT_CALLS"; HF_SA_MEMBER=""
+  sa_debt_open
+  grep -q '^open ' "$DEBT_CALLS" || { echo "no debt opened"; false; }
+  ! grep -q -- '--member' "$DEBT_CALLS" || { cat "$DEBT_CALLS"; false; }
+}
+
 @test "REFUSED: no transcript on the account (nothing to resume)" {
   row
   recycle_sa

@@ -80,11 +80,13 @@ SH
 if [ "$1" = --check-only ]; then
   shift; printf '%s\n' "$*" >> "$0.checks"
   grep -qx "$3" "$0.held" 2>/dev/null && exit 5
+  grep -qx "$3" "$0.member" 2>/dev/null && exit 7   # an Agent Teams member (teammate resurrection)
   exit 0
 fi
 printf '%s\n' "$*" >> "$0.log"
 grep -qx "$3" "$0.indet" 2>/dev/null && exit 6   # an indeterminate kitty launch (review item 2)
 grep -qx "$3" "$0.held" 2>/dev/null && exit 5
+grep -qx "$3" "$0.member-at-launch" 2>/dev/null && exit 7   # passed --check-only, refused at launch
 exit 0
 SH
   chmod +x "$CC_RESUME_LAUNCH_BIN"
@@ -691,6 +693,32 @@ SUM_OK2='cc-resume-layout: verdict=ok launched=2 shed=0 failed=0 windows=1 fulls
   [ ! -f "$CC_KEEPALIVE_BIN.log" ]
   grep -q '"interrupted":0' "$CC_IDL"
   grep -q '"resumed":2' "$CC_IDL"                                     # still restored
+}
+
+@test "TEAMMATE: a --check-only rc 7 (an Agent Teams member) is counted held, never failed, and never laid out" {
+  roster r 1784799900 "[$(rrow a claude-next /x/a A),$(rrow b claude-next /x/b B)]"
+  echo b > "$CC_RESUME_LAUNCH_BIN.member"
+  stub_layout 'cc-resume-layout: verdict=ok launched=1 shed=0 failed=0 windows=1 fullscreen_ok=1 fullscreen_failed=0'
+  export CC_BOOT_RESUME_MODE=resume
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -q '	a	' "$CC_RESUME_LAYOUT_BIN.rows"
+  ! grep -q '	b	' "$CC_RESUME_LAYOUT_BIN.rows" || false
+  grep -q '"resume_held":1' "$CC_IDL" || { cat "$CC_IDL"; false; }
+  grep -q '"resume_failed":0' "$CC_IDL"
+  grep -q 'or an Agent Teams member its lead owns' "$CC_NOTIFY_BIN.log"
+}
+
+@test "TEAMMATE: a launcher rc 7 on the window path is counted held, never failed" {
+  reg_entry g1 1784700000000 claude-quaternary /Users/x/wt-a aaa
+  reg_entry g2 1784600000000 claude-secondary  /Users/x/wt-b bbb
+  echo g2 > "$CC_RESUME_LAUNCH_BIN.member-at-launch"
+  export CC_BOOT_RESUME_MODE=resume
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -q '"resumed":1' "$CC_IDL" || { cat "$CC_IDL"; false; }
+  grep -q '"resume_held":1' "$CC_IDL"
+  grep -q '"resume_failed":0' "$CC_IDL"
 }
 
 @test "resume: a session the ownership check holds (rc 5) is never handed to the layout" {

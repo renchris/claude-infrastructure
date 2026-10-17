@@ -237,6 +237,11 @@ lru_flag() { # $1=argv $2=flag $3=value ERE → the value of the LAST well-forme
     }
     print v }'
 }
+# ONE BINARY, TWO SPELLINGS (teammate resurrection, 2026-10-16). The vendor starts a member through
+# the RESOLVED .../bin/claude.exe while cc-claude-bin names the .bin/claude symlink to it, so a string
+# compare called a member already on the target `upgrade-teammate` and the drainer claimed it. `-ef`
+# is false for a missing path, so the string compare still decides fixtures that name no real file.
+lru_same_bin() { [ "$1" = "$2" ] || [ "$1" -ef "$2" ]; } # $1 $2=binary paths → 0 the same file
 LRU_RE_MODEL='claude-[a-z0-9][a-z0-9.-]*(\[1m\])?'
 LRU_RE_EFFORT='low|medium|high|xhigh|max'
 LRU_RE_PERM='default|acceptEdits|plan|bypassPermissions|auto|dontAsk'
@@ -359,9 +364,12 @@ lru_snap_lstart() { # $1=snapshot $2=pid → "Tue Sep 22 06:47:13 2026"
 # ppid are read from it too), re-shaped into lr-team's "<pid> <stat> <args>" so the test runs over
 # the same instant rather than a second ps. No lr-team.sh ⇒ the census refuses to call anyone idle
 # (LRU_TEAM_MISSING, read by lru_census), never a silent "no members".
+lru_team_snap() { # $1=snapshot → the same processes in lr-team.sh's "<pid> <stat> <args>" shape
+  printf '%s\n' "$1" | awk "$LRU_PROC_LINE"' { printf "%s S", $1; for (i = 8; i <= NF; i++) printf " %s", $i; print "" }'
+}
 lru_has_live_teammate() { # $1=snapshot $2=lead sid → 0 when a live CLAUDE process names it as parent
   command -v lr_has_live_teammate >/dev/null 2>&1 || { LRU_TEAM_MISSING=1; return 0; }
-  lr_has_live_teammate "$2" "$(printf '%s\n' "$1" | awk "$LRU_PROC_LINE"' { printf "%s S", $1; for (i = 8; i <= NF; i++) printf " %s", $i; print "" }')"
+  lr_has_live_teammate "$2" "$(lru_team_snap "$1")"
 }
 lru_teammate_argvs() { # $1=snapshot $2=lead sid → "<pid> <argv>" of every live claude naming it as parent
   printf '%s\n' "$1" | LRU_PAT="--parent-session-id $2" awk "$LRU_PROC_LINE"' && $8 ~ /(^|\/)claude(\.exe)?$/ && index($0, ENVIRON["LRU_PAT"]) {
@@ -395,7 +403,9 @@ lru_sid_of_pid() { # $1=pid → the session id its registry row records, or noth
 # So: TEAMMATES FIRST (the lead waits as `lead-awaits-teammates` until every live teammate is
 # current), then the LEAD with its team dir held aside across the exit — the launcher itself puts it
 # back in the instant before the new process starts, so there is no window where a new lead can see
-# an absent file — and the adopt variable set.
+# an absent file — and the adopt variable set. The AUTO path (refill, --auto-enqueue) queues a
+# teammate only while its lead's row reads `lead-awaits-teammates` (lru_auto_admits): the procedure
+# is the lead's, and a member whose lead is not waiting on it is not the drainer's to move.
 # KNOWN VENDOR LIMIT, NOT CURED HERE: a resumed lead's in-memory roster holds only itself (the
 # vendor restores in-process teammates only), and its inbox poller runs only when that roster holds
 # someone else — so replies from pane members land UNREAD in teams/<team>/inboxes/team-lead.json.
@@ -416,17 +426,21 @@ lru_team_args() { # $1=teammate argv → its identity flags, in canonical order;
 lru_team_dir() { # $1=cfg $2=team → path (no existence claim)
   printf '%s/teams/%s' "${1%/}" "$2"
 }
-# Why a teammate row is NOT fit to relaunch now — empty when it is.
-lru_teammate_block() { # $1=argv $2=cfg → disposition or ""
-  local team name td inbox n
+# Why a teammate row is NOT fit to relaunch now — empty when it is. Asked at the census, again right
+# before fire, in the relaunch belt and when a teammate's move is settled (teammate resurrection,
+# 2026-10-16): a member belongs to its LEAD, and the lead can drop, retire or replace it at any of
+# those instants. Every value starts `teammate-`, which lru_class_of files in the uncharged wait class.
+lru_teammate_block() { # $1=argv $2=cfg [$3=sid] [$4=since, ISO-8601 Z] [$5=our pids] → disposition or ""
+  local team name id td inbox n deaths
   lru_team_args "$1" >/dev/null || { printf 'teammate-unidentified'; return 0; }
   team="$(lru_flag "$1" --team-name "$LRU_RE_TEAMTOK")"; name="$(lru_flag "$1" --agent-name "$LRU_RE_TEAMTOK")"
+  id="$(lru_flag "$1" --agent-id "$LRU_RE_TEAMTOK")"
   td="$(lru_team_dir "$2" "$team")"
+  # No lr-lib.sh, no member test: nothing is proven ours to relaunch, so nothing is (fail closed).
+  command -v lr_member_row >/dev/null 2>&1 || { printf 'teammate-test-unavailable'; return 0; }
   # The member row must be in the file: a relaunched teammate re-reads it to find itself, and the
   # lead's SendMessage resolves the name there. A team whose file is gone has no one to rejoin.
-  if [ ! -f "$td/config.json" ] || ! LRU_N="$name" jq -e '[.members[]? | select(.name == env.LRU_N)] | length > 0' "$td/config.json" >/dev/null 2>&1; then
-    printf 'teammate-no-team'; return 0
-  fi
+  lr_member_row "$2" "$team" "$name" || { printf 'teammate-no-team'; return 0; }
   # An UNREAD shutdown_request is acted on the moment the relaunched process polls its inbox: the
   # upgrade would be a slow way to end the member. Let its lead's decision land first.
   inbox="$td/inboxes/$name.json"
@@ -434,6 +448,19 @@ lru_teammate_block() { # $1=argv $2=cfg → disposition or ""
     n="$(jq '[.[]? | select((.read // false) | not) | select(((.text // "") | tostring | test("\"type\" *: *\"shutdown_request\"")) or (.type == "shutdown_request"))] | length' "$inbox" 2>/dev/null || echo 0)"
     case "$n" in ''|*[!0-9]*) n=0 ;; esac
     [ "$n" -gt 0 ] && { printf 'teammate-shutdown-pending'; return 0; }
+  fi
+  # A live claude other than ours carrying the same --agent-id is the lead's REPLACEMENT: the row
+  # above is matched by name only, so it reads as still owned. Our own pids ride in $5.
+  if command -v lr_agent_id_holders >/dev/null 2>&1 \
+     && [ "$(lr_agent_id_holders "$id" "$(lru_team_snap "$(lru_snapshot)")" "${5:-}")" -gt 0 ]; then
+    printf 'teammate-superseded'; return 0
+  fi
+  # Once the inbox is drained a retirement is invisible above; the crash watchdog's verdict is not.
+  # Any pid counts: the OLD process approving its lead's shutdown_request is the retirement.
+  # Captured, then matched: a pipe into an early-exit test reads FALSE on a match under pipefail.
+  if [ -n "${4:-}" ] && [ -n "${3:-}" ] && command -v lr_death_after >/dev/null 2>&1; then
+    deaths="$(lr_death_after "$3" "$4" 2>/dev/null || true)"
+    case "$deaths" in *" retired-teammate"*) printf 'teammate-retired'; return 0 ;; esac
   fi
   return 0
 }
@@ -445,7 +472,7 @@ lru_lead_block() { # $1=snapshot $2=lead sid $3=cfg $4=target binary → disposi
     p="${l%% *}"; a="${l#* }"
     # The member's OWN target, per-session pin included — the same resolution its census row gets.
     b="${a%% *}"; m="$(lru_flag "$a" --model "$LRU_RE_MODEL")"; t="$(lru_target_model "$m" "$(lru_sid_of_pid "$p")" || true)"
-    if [ "$b" != "$4" ] || [ -z "$t" ] || [ "$m" != "$t" ]; then printf 'lead-awaits-teammates'; return 0; fi
+    if ! lru_same_bin "$b" "$4" || [ -z "$t" ] || [ "$m" != "$t" ]; then printf 'lead-awaits-teammates'; return 0; fi
   done <<EOF
 $(lru_teammate_argvs "$1" "$2")
 EOF
@@ -683,7 +710,7 @@ EOF2
     tgt="$(lru_target_model "$model" "$sid" || true)"
     cfg="$(lru_cfg_of "$acct")"
     if [ -z "$tgt" ]; then disp="no-target-model"
-    elif [ "$bin" = "$target_bin" ] && [ "$model" = "$tgt" ]; then disp=current
+    elif lru_same_bin "$bin" "$target_bin" && [ "$model" = "$tgt" ]; then disp=current
     elif [ "$LRU_TEAM_MISSING" = 1 ]; then disp="team-test-unavailable"
     elif [ -n "$LRU_SELF_SID" ] && [ "$sid" = "$LRU_SELF_SID" ]; then disp=self
     else
@@ -696,7 +723,7 @@ EOF2
       case "$dupsids" in *" $sid "*) disp=duplicate ;; esac
       if [ -z "$disp" ] && lru_headless "$args"; then disp=headless; fi
       if [ -z "$disp" ] && [ "$role" = teammate ]; then
-        if [ "${LRU_TEAM_PROC:-on}" = off ]; then disp=teammate; else disp="$(lru_teammate_block "$args" "$cfg")"; fi
+        if [ "${LRU_TEAM_PROC:-on}" = off ]; then disp=teammate; else disp="$(lru_teammate_block "$args" "$cfg" "$sid" "" "$pid")"; fi
       fi
       if [ -z "$disp" ] && [ -z "$role" ] && lru_has_live_teammate "$snap" "$sid"; then
         role=lead
@@ -1885,6 +1912,9 @@ lru_mint_launcher() { # $1=run dir $2=cfg $3=cwd $4=sid $5=model $6=effort $7=pe
     # lr-handoff's launcher already carries it. Kill switch LRU_SEGMENT_EXPORT=off.
     [ "${LRU_SEGMENT_EXPORT:-on}" = off ] || printf 'export LR_SEGMENT_PCT=%q\n' "${LR_SEGMENT_PCT:-90}"
     printf 'export LR_SUBMIT_TOKEN=%q\n' "$sub"
+    # The census read this argv and found no --agent-id, so the launch path's own teammate test (the
+    # transcript head, which an ADOPTED ex-member still carries) is already answered for it.
+    [ "$role" = teammate ] || printf 'export CC_RESUME_TEAMMATE_GUARD=checked\n'
     if [ "$role" = lead ]; then
       # The old process has exited (this line only runs at a shell prompt) and the new one has not
       # started: the ONE instant the held team dir can go back without either process seeing a gap.
@@ -1962,7 +1992,7 @@ lru_resumed_on() { # $1=sid $2=binary $3=model → 0 when a live --resume <sid> 
   for p in $(lr_resume_procs "$1" 2>/dev/null); do
     a="$(lru_snap_args "$snap" "$p")"
     [ -n "$a" ] || a="$(ps -o args= -p "$p" 2>/dev/null || true)"   # started after the snapshot
-    [ "${a%% *}" = "$2" ] || continue
+    lru_same_bin "${a%% *}" "$2" || continue
     [ -z "${3:-}" ] || [ "$(lru_flag "$a" --model "$LRU_RE_MODEL")" = "$3" ] || continue
     return 0
   done
@@ -1988,15 +2018,19 @@ lru_proven() { # $1=sid $2=binary $3=model → 0 when proven LIVE (tool absent: 
 lru_surface() { lru_rd surface --pane "$1"; }
 # A stranded close, handed to the ledger: relaunch in a NEW window with the same sid, else ONE
 # backlog row + page. Sets LRU_SETTLE_WHY to the verdict clause; rc 0 proven · 1 escalated/undecided
-# · 127 no tool.
+# · 4 abandoned by the ledger · 5 already proven after $4 (the move's fire) · 127 no tool.
+# Only plain sessions and leads reach it — a teammate's move is settled by lru_teammate_settle, never
+# here — so the closer's membership is `no`, read from the argv the census judged.
 LRU_SETTLE_WHY=""
-lru_settle() { # $1=sid $2=pane $3=how the pane was left
+lru_settle() { # $1=sid $2=pane $3=how the pane was left [$4=since: the move's fire epoch]
   local rc=0
   LRU_SETTLE_WHY=""
-  lru_rd settle --sid "$1" || rc=$?
+  lru_rd settle --sid "$1" --member no ${4:+--since "$4"} || rc=$?
   case "$rc" in
     0) LRU_SETTLE_WHY="relaunched in a NEW window by cc-resume-debt ($3)"; return 0 ;;
     1) LRU_SETTLE_WHY="stranded ($3); escalated to cc-backlog needs by cc-resume-debt (find the row: cc-resume-debt list --escalated; run it: cc-do <id>)" ;;
+    4) LRU_SETTLE_WHY="not live: not relaunched ($3); cc-resume-debt abandoned the debt (see $LRU_RD_LOG)"; return 4 ;;
+    5) LRU_SETTLE_WHY="proven after this move"; return 5 ;;
     127) return 127 ;;
     *) LRU_SETTLE_WHY="stranded ($3); resume-debt undecided (settle rc $rc; cc-resume-debt sweep keeps it open)" ;;
   esac
@@ -2008,12 +2042,76 @@ lru_submit_state() { # $1=run dir → last state line's state, empty when none
   jq -r 'select(.state != "lru-step") | .state // empty' "$1/events.jsonl" 2>/dev/null | tail -n 1
 }
 
+# THE LEAD HEARS IT, AS INFORMATION. One line to the lead's LIVE pane (cc-find, the read
+# lru_pane_bound makes), no command in it: whether to bring the member back is the lead's call, and a
+# lead told to re-spawn a member it had just retired would resurrect it by hand. Nothing is sent
+# when the lead is not LIVE or cc-notify does not know the pane (rc 3).
+lru_notify_lead() { # $1=sid $2=team args $3=member name $4=team
+  local lsid out lpane rc=0
+  lsid="$(lru_flag "$2" --parent-session-id "$LRU_RE_TEAMTOK")"
+  [ -n "$lsid" ] && [ -x "$LRU_CCFIND_BIN" ] && [ -x "$LRU_NOTIFY_BIN" ] || return 0
+  out="$("$LRU_CCFIND_BIN" "$lsid" 2>/dev/null)" || true
+  lpane="$(printf '%s\n' "$out" | LRU_S="$lsid" awk -F'\t' '$1 == ENVIRON["LRU_S"] && $6 == "LIVE" { print $2; exit }')"
+  [ -n "$lpane" ] || return 0
+  "$LRU_NOTIFY_BIN" "$lpane" "cc-lr upgrade: your teammate $3@$4 (${1:0:8}) ended during an in-place upgrade and was not relaunched; a new-window resume cannot carry its team identity, so it stays down unless you bring it back." >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 3 ] && lru_say "lead notice for ${1:0:8}: cc-notify does not know pane $lpane - nothing sent"
+  return 0
+}
+# A TEAMMATE'S MOVE IS NEVER SETTLED BY THE LEDGER (teammate resurrection, 2026-10-16). cc-resume-debt
+# can only relaunch in a NEW window, which cannot carry --agent-id or the team env, so a settle turns a
+# member into an orphan outside its team — the 2026-10-16 incident, after the member had approved its
+# lead's shutdown_request. Ask the member questions again (since = fire), then: retired or replaced →
+# abandon, said as not-live · our --resume runs unproven → keep the debt (fault, bounded) · otherwise
+# abandon and tell the lead. rc 1 always (the verdict is a skip).
+lru_teammate_settle() { # the lru_settle_verdict arguments
+  local sid="$1" targs cfg run fts old name team tblock ours=""
+  targs="$(lru_st_get "$sid" .team_args)"; cfg="$(lru_st_get "$sid" .cfg)"; run="$(lru_st_get "$sid" .run)"
+  fts="$(lru_st_get "$sid" .fire_ts)"; old="$(lru_st_get "$sid" .old.pid)"
+  name="$(lru_flag "$targs" --agent-name "$LRU_RE_TEAMTOK")"; team="$(lru_flag "$targs" --team-name "$LRU_RE_TEAMTOK")"
+  command -v lr_death_wait >/dev/null 2>&1 && lr_death_wait "$sid" "$fts" "$old" "$run"
+  command -v lr_resume_procs >/dev/null 2>&1 && ours="$(lr_resume_procs "$sid" 2>/dev/null | tr '\n' ' ')"
+  tblock="$(lru_teammate_block "$targs" "$cfg" "$sid" "$fts" "$ours")"
+  if [ -n "$tblock" ]; then
+    lru_rd abandon --sid "$sid" --why "teammate retired during the upgrade ($tblock)" || true
+    lru_result "$sid" "$2" skipped "not live: teammate $name@$team retired by its lead during the upgrade ($tblock); nothing relaunched" "" "$6" "$7"
+    return 1
+  fi
+  if [ -n "${ours// /}" ]; then
+    lru_result "$sid" "$2" skipped "teammate $name@$team: --resume process runs but was never proven LIVE ($3); not settled" "" "$6" "$7"
+    return 1
+  fi
+  lru_rd abandon --sid "$sid" --why "teammate ended during the upgrade and was not relaunched; its lead owns its recovery" || true
+  lru_notify_lead "$sid" "$targs" "$name" "$team"
+  lru_result "$sid" "$2" skipped "not live: teammate $name@$team ended during the upgrade and was not relaunched ($3); a new-window resume cannot carry its team identity - its lead owns its recovery" "" "$6" "$7"
+  return 1
+}
 # The verdict of a stranded or unproven relaunch, from the ledger's settle. rc 0 upgraded · 1 failed.
+# A settle that answers 5 (proven after this move's fire, then dead again) is a death AFTER the proof:
+# the watchdog decides it — CRASH reopens (the recovery this ledger exists for), RECYCLE is the
+# session ending on purpose and is not undone, and no verdict within the wait reopens as before.
 lru_settle_verdict() { # $1=sid $2=pane $3=how the pane was left $4=no-tool reason $5=command $6=req $7=by
-  local rc=0
-  lru_settle "$1" "$2" "$3" || rc=$?
+  [ "$(lru_st_get "$1" .role)" = teammate ] && { lru_teammate_settle "$@"; return; }
+  local rc=0 fts old row dts cls cause
+  lru_settle "$1" "$2" "$3" "$(lru_st_get "$1" .fire_epoch)" || rc=$?
+  if [ "$rc" = 5 ]; then
+    fts="$(lru_st_get "$1" .fire_ts)"; old="$(lru_st_get "$1" .old.pid)"
+    command -v lr_death_wait >/dev/null 2>&1 && lr_death_wait "$1" "$fts" "$old" "$(lru_st_get "$1" .run)"
+    command -v lr_death_after >/dev/null 2>&1 \
+      && row="$(lr_death_after "$1" "$fts" 2>/dev/null | LRU_O="$old" awk '$2 != ENVIRON["LRU_O"]' | tail -n 1)"
+    read -r dts _ cls cause <<EOF
+${row:-}
+EOF
+    case "$cls" in
+      RECYCLE)
+        lru_result "$1" "$2" skipped "not live: relaunched on the target and proven by cc-resume-debt, then ended $cls/$cause at $dts; a death after its proof is not this move's close - not reopened" "" "$6" "$7"
+        return 1 ;;
+      CRASH) rc=0; lru_settle "$1" "$2" "$3" || rc=$? ;;
+      *) rc=0; lru_settle "$1" "$2" "$3; death unclassified after ${LR_DEATH_VERDICT_WAIT_S:-45} s" || rc=$? ;;
+    esac
+  fi
   case "$rc" in
     0) lru_result "$1" "$2" upgraded "$LRU_SETTLE_WHY; proven LIVE by cc-resume-debt" "" "$6" "$7"; return 0 ;;
+    4) lru_result "$1" "$2" skipped "$LRU_SETTLE_WHY" "" "$6" "$7"; return 1 ;;
     127) lru_result "$1" "$2" failed "$4" "$5" "$6" "$7"; return 1 ;;
     *) lru_result "$1" "$2" failed "$LRU_SETTLE_WHY; log $LRU_RD_LOG" "$5" "$6" "$7"; return 1 ;;
   esac
@@ -2239,6 +2337,17 @@ EOF
   if [ "$n" -gt "$LRU_RELAUNCH_MAX" ]; then LRU_RELAUNCH_WHY="relaunch attempts spent ($((n - 1)) of $LRU_RELAUNCH_MAX)"
   elif [ "${strong:-0}" != 1 ]; then LRU_RELAUNCH_WHY="the pane's identity was never read (no tty, no kitty pid)"
   elif [ $((now - ${alive:-0})) -gt "$LRU_SETTLE_TYPE_MAX_AGE_S" ]; then LRU_RELAUNCH_WHY="the pane's identity is $((now - alive)) s old (> ${LRU_SETTLE_TYPE_MAX_AGE_S} s)"
+  fi
+  # THE BELT (teammate resurrection, 2026-10-16): a member that died inside our fire window may have
+  # died because its LEAD ended it. Let the watchdog classify the death first, then ask the member
+  # questions again with that window as `since` and our own --resume pids as the exclusions.
+  if [ -z "$LRU_RELAUNCH_WHY" ] && [ "$role" = teammate ]; then
+    local fts tblock ours=""
+    fts="$(lru_st_get "$sid" .fire_ts)"
+    command -v lr_death_wait >/dev/null 2>&1 && lr_death_wait "$sid" "$fts" "$(lru_st_get "$sid" .old.pid)" "$run"
+    command -v lr_resume_procs >/dev/null 2>&1 && ours="$(lr_resume_procs "$sid" 2>/dev/null | tr '\n' ' ')"
+    tblock="$(lru_teammate_block "$targs" "$cfg" "$sid" "$fts" "$ours")"
+    [ -n "$tblock" ] && LRU_RELAUNCH_WHY="teammate not fit to relaunch ($tblock) - nothing typed"
   fi
   if [ -z "$LRU_RELAUNCH_WHY" ] && [ -z "$L" ]; then
     # SETTLE: the crashed run's token is past its TTL — decide capacity again BEFORE anything is typed,
@@ -2651,6 +2760,17 @@ EOF
   # 5. FIRE. The identity --relaunch-at-shell will need, the rail receipt, then handoff-fire's remote
   # same-account recycle — in the background with its pid recorded, so a drainer killed while it runs
   # leaves a record that names the process still owning the pane.
+  # The fire instant is what every later read of a teammate's fate keys on (the watchdog's verdict,
+  # cc-resume-debt's proof), and a MEMBER is re-asked right here: its lead may have dropped, retired
+  # or replaced it since the census (2026-10-16: the shutdown_request landed inside this window).
+  lru_st_put "$sid" '.fire_ts = $ft | .fire_epoch = ($fe | tonumber)' --arg ft "$(date -u +%FT%TZ)" --arg fe "$(date +%s)" || true
+  if [ "$role" = teammate ]; then
+    local tblock; tblock="$(lru_teammate_block "$targs" "$cfg" "$sid" "" "$pid")"
+    if [ -n "$tblock" ]; then
+      [ "$held" = 1 ] && lru_team_restore "$cfg" "$team"
+      lru_result "$sid" "$pane" skipped "$tblock (re-checked before fire) - nothing typed" "" "$req" "$by"; return 3
+    fi
+  fi
   lru_step "$sid" fire
   strong="$(lru_identity_write "$run" "$pid" "$pane" "$sock")"
   lru_st_put "$sid" '.identity = $i | .identity_strong = ($s | tonumber) | .last_alive_ts = $now' \
@@ -3106,8 +3226,23 @@ lru_drain() {
 # REFILL (2026-10-08): the drainer's own census replaces the poller's in-tick one, which a shared
 # 60 s bound killed on 27 of 78 ticks and left drain gaps of 60-98 min. One bounded fleet census,
 # cached for --status; each eligible upgrade row is queued once per drain.
+# WHICH CENSUS ROWS THE AUTO PATH MAY QUEUE (teammate resurrection, 2026-10-16). A plain or lead row
+# by its disposition alone; a teammate only while the row of the session its --parent-session-id
+# names reads `lead-awaits-teammates` — the team procedure is the lead's, and on 2026-10-16 the
+# drainer claimed a member no waiting lead had asked for, then settled its retirement into an orphan.
+lru_auto_admits() { # $1=disposition $2=pid $3=census rows $4=snapshot → 0 may be queued
+  local lsid
+  case "$1" in
+    upgrade|upgrade-lead) return 0 ;;
+    upgrade-teammate) ;;
+    *) return 1 ;;
+  esac
+  lsid="$(lru_flag "$(lru_snap_args "$4" "$2")" --parent-session-id "$LRU_RE_TEAMTOK")"
+  [ -n "$lsid" ] || return 1
+  printf '%s\n' "$3" | LRU_S="$lsid" awk -F'\t' '$2 == ENVIRON["LRU_S"] && $11 == "lead-awaits-teammates" { f = 1 } END { exit !f }'
+}
 lru_refill() { # → 0 when it queued ≥ 1 request
-  local rows t crc=0 p s tgt d n=0 target_bin binlabel
+  local rows t crc=0 p s tgt d n=0 target_bin binlabel pid snap=""
   [ "${LR_UPGRADE_AUTO:-on}" = off ] && return 1
   [ -e "$LRU_STATE/upgrade-auto.off" ] && return 1
   [ "${LRU_REFILLED:-0}" -ge "${LRU_REFILL_MAX:-3}" ] && return 1
@@ -3119,8 +3254,9 @@ lru_refill() { # → 0 when it queued ≥ 1 request
   [ "$crc" = 0 ] || { lru_say "refill: census rc $crc - nothing queued"; return 1; }
   target_bin="$("$LRU_CLAUDE_BIN_CMD" 2>/dev/null || true)"
   binlabel="$(printf '%s\n' "$target_bin" | awk -F/ '{ for (i = 1; i <= NF; i++) if ($i ~ /^\.claude-/) { print $i; exit } ; print $NF }')"
-  while IFS=$'\t' read -r p s _ _ tgt _ _ _ _ _ d; do
-    case "$d" in upgrade|upgrade-teammate|upgrade-lead) ;; *) continue ;; esac
+  case "$rows" in *$'\t'upgrade-teammate*) snap="$(lru_snapshot)" ;; esac
+  while IFS=$'\t' read -r p s _ _ tgt _ _ _ _ pid d; do
+    lru_auto_admits "$d" "$pid" "$rows" "$snap" || continue
     case "$LRU_DRIVEN" in *" $s "*) continue ;; esac
     lru_st_eligible "$s" "$binlabel" "$tgt" || continue
     lru_write_auto_request "$p" "$s" && n=$((n + 1))
@@ -3144,12 +3280,13 @@ lru_write_auto_request() { # $1=pane $2=sid → the auto-enqueue file shape
 # launcher pin + SSOT, it is queued like any `cc-lr upgrade` request; the ONE serial drainer then
 # re-judges it, probes capacity and relaunches it — one at a time. A model activation therefore
 # converges the fleet as sessions go idle, with no invocation at all; a session skipped this tick
-# (mid-turn, a lead whose teammate is live) is simply re-judged on the next.
+# (mid-turn, a lead whose teammate is live) is simply re-judged on the next. A teammate is queued
+# only under a parent that reads `lead-awaits-teammates` (lru_auto_admits, shared with the refill).
 # QUEUE-EMPTY ONLY: nothing is added while the queue holds work or a drainer runs, so a slow drain
 # can never stack duplicate requests behind itself.
 # KILL SWITCHES (either): LR_UPGRADE_AUTO=off · the file $LRU_STATE/upgrade-auto.off
 lru_auto_enqueue() { # → prints one line per queued sid; rc 0 always
-  local census hp q n=0 p s d
+  local census hp q n=0 p s d pid snap=""
   [ "${LR_UPGRADE_AUTO:-on}" = off ] && { lru_say "auto: off (LR_UPGRADE_AUTO=off)"; return 0; }
   [ -e "$LRU_STATE/upgrade-auto.off" ] && { lru_say "auto: off ($LRU_STATE/upgrade-auto.off)"; return 0; }
   for q in "$UPG_QUEUE"/*.json; do [ -f "$q" ] && { lru_say "auto: queue not empty - nothing added"; return 0; }; done
@@ -3160,8 +3297,9 @@ lru_auto_enqueue() { # → prints one line per queued sid; rc 0 always
   local tgt target_bin binlabel
   target_bin="$("$LRU_CLAUDE_BIN_CMD" 2>/dev/null || true)"
   binlabel="$(printf '%s\n' "$target_bin" | awk -F/ '{ for (i = 1; i <= NF; i++) if ($i ~ /^\.claude-/) { print $i; exit } ; print $NF }')"
-  while IFS=$'\t' read -r p s _ _ tgt _ _ _ _ _ d; do
-    case "$d" in upgrade|upgrade-teammate|upgrade-lead) ;; *) continue ;; esac
+  case "$census" in *$'\t'upgrade-teammate*) snap="$(lru_snapshot)" ;; esac
+  while IFS=$'\t' read -r p s _ _ tgt _ _ _ _ pid d; do
+    lru_auto_admits "$d" "$pid" "$census" "$snap" || continue
     # Read-only on the record: a terminal, in-flight, exit-pending or backing-off session is not queued.
     lru_st_eligible "$s" "$binlabel" "$tgt" || continue
     lru_write_auto_request "$p" "$s" && { printf '%s\t%s\n' "$p" "$s"; n=$((n + 1)); }

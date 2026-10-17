@@ -632,17 +632,19 @@ fi
 # capacity gate: a missing library must cost the check, never the recovery. Kill switch
 # CC_RESUME_FENCE=off.
 rr_fence_release() { command -v lr_recon_act_done >/dev/null 2>&1 && lr_recon_act_done; return 0; }
+# The limit-recover libraries, resolved ONCE and outside the fence: the Agent Teams member check
+# after the fence block needs lr-lib.sh even when CC_RESUME_FENCE=off.
+_rro_s="$0"
+while [ -L "$_rro_s" ]; do
+  _rro_t="$(readlink "$_rro_s" 2>/dev/null)" || break
+  case "$_rro_t" in /*) _rro_s="$_rro_t" ;; *) _rro_s="$(dirname "$_rro_s")/$_rro_t" ;; esac
+done
+_RRO_LR=""
+for _rro_d in "$(cd "$(dirname "$_rro_s")" 2>/dev/null && pwd)/../scripts/limit-recover" \
+              "${HOME:-}/.claude/scripts/limit-recover"; do
+  [ -f "$_rro_d/lr-recon-fence.sh" ] && [ -f "$_rro_d/lr-lib.sh" ] && { _RRO_LR="$_rro_d"; break; }
+done
 if [ "${CC_RESUME_FENCE:-on}" != off ]; then
-  _rro_s="$0"
-  while [ -L "$_rro_s" ]; do
-    _rro_t="$(readlink "$_rro_s" 2>/dev/null)" || break
-    case "$_rro_t" in /*) _rro_s="$_rro_t" ;; *) _rro_s="$(dirname "$_rro_s")/$_rro_t" ;; esac
-  done
-  _RRO_LR=""
-  for _rro_d in "$(cd "$(dirname "$_rro_s")" 2>/dev/null && pwd)/../scripts/limit-recover" \
-                "${HOME:-}/.claude/scripts/limit-recover"; do
-    [ -f "$_rro_d/lr-recon-fence.sh" ] && [ -f "$_rro_d/lr-lib.sh" ] && { _RRO_LR="$_rro_d"; break; }
-  done
   # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
   if [ -n "$_RRO_LR" ] && . "$_RRO_LR/lr-recon-fence.sh" 2>/dev/null && . "$_RRO_LR/lr-lib.sh" 2>/dev/null \
      && command -v lr_recon_may_act >/dev/null 2>&1 && command -v lr_holder_count >/dev/null 2>&1; then
@@ -677,6 +679,33 @@ if [ "${CC_RESUME_FENCE:-on}" != off ]; then
     printf '%s\n' "reso-resume-one: recon fence / lr-lib.sh unreachable — launching UNFENCED (no second-writer check)" >&2
   fi
 fi
+
+# ── NOT AN AGENT TEAMS MEMBER (docs/research/teammate-resurrection-2026-10-16/REPORT.md § 4.2 step 6)
+# The belt under boot-resume-launch's question 4, for every other way in (a hand run, the runbook, a
+# layout). A member resumed here has no team flags, so it comes back outside its team and idles
+# forever: 5423f92a did exactly that on 2026-10-16. Outside the fence block so CC_RESUME_FENCE=off
+# cannot skip it. `checked` = a launcher already asked; `off` = the operator's override.
+# rr_refused_exit may `exec` the pane's shell, which skips the EXIT trap, so the fence lock is given
+# back first; undecided (the teammate test could not run) is held as 5, like a held lock.
+case "${CC_RESUME_TEAMMATE_GUARD:-}" in
+  off|checked) ;;
+  *)
+    # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+    command -v lr_team_member >/dev/null 2>&1 || { [ -n "$_RRO_LR" ] && . "$_RRO_LR/lr-lib.sh" 2>/dev/null; }
+    if command -v lr_team_member >/dev/null 2>&1; then
+      _rro_tm="$(lr_team_member "$sid" "$cfg" "$wt" 2>/dev/null)"
+      case $? in
+        0) rr_fence_release
+           printf '%s\n' "reso-resume-one: NOT LAUNCHING $sid - an Agent Teams member ($_rro_tm); a new-window resume cannot carry its team identity - its lead owns it (CC_RESUME_TEAMMATE_GUARD=off to resume it anyway)" >&2
+           rr_refused_exit 7 ;;
+        2) rr_fence_release
+           printf '%s\n' "reso-resume-one: NOT LAUNCHING $sid - its Agent Teams membership is undecided (the teammate test could not run)" >&2
+           exit 5 ;;
+      esac
+    else
+      printf '%s\n' "reso-resume-one: lr-lib.sh unreachable — Agent Teams membership NOT CHECKED, launching" >&2
+    fi ;;
+esac
 
 # reset mouse reporting so leftover escape sequences from a crashed session don't leak as input
 printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l\033[?1015l'

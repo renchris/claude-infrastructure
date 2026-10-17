@@ -1392,3 +1392,89 @@ nonce_screen() { # $1=composer row → prints the LR_SCREEN_SH verdict
   run env LR_RUN_DIR= LR_CAP_TAG=x bash -c "$sh"            # no bundle: inert, writes nowhere
   [ "$status" -eq 0 ] && [ -z "$output" ]
 }
+
+# ── THE MEMBER GUARD (teammate resurrection 2026-10-16, REPORT.md § 4.2 step 8) ──────────────────
+# An Agent Teams member belongs to its lead. Every in-place relaunch types this launcher (the
+# watcher's re-type, --relaunch-at-shell, a hand run of launch.sh), so it is where a member whose lead
+# dropped it, a member a same-id successor already holds, and a team-blind resume of a member head
+# are refused: rc 12, written to relaunch.rc before the exit, and nothing spawned. Each case runs the
+# WHOLE script with the stubs tests/lr-launch-lock.bats uses, because the guard's position (after the
+# launch lock, before the spawn) is the subject.
+member_fire_setup() {
+  command -v expect >/dev/null || skip "expect(1) not installed"
+  command -v jq >/dev/null || skip "jq required"
+  export LR_PRESEED_DONE=bats LR_QUIET_S=1
+  export LR_STATE_DIR="$BATS_TEST_TMPDIR/state" LR_RUN_DIR="$BATS_TEST_TMPDIR/run"
+  export LR_REGISTRY_DIR="$BATS_TEST_TMPDIR/registry" LR_CFG_DIRS="$BATS_TEST_TMPDIR/cfgs"
+  export CC_CRASH_LOG="$BATS_TEST_TMPDIR/absent-crashes.jsonl"
+  mkdir -p "$LR_REGISTRY_DIR" "$LR_CFG_DIRS/sessions"
+  unset LR_RUN LR_RECORD_ID LR_ATTEMPT LR_SUBMIT_TOKEN LR_ADMIT_TOKEN CC_PANE_ID ITERM_SESSION_ID \
+        LR_LAUNCH_LOCK LR_LAUNCH_GUARD LR_RECR_SCHEDULE LR_PS_BIN CC_RESUME_TEAMMATE_GUARD
+  # One ps snapshot for the successor census: a lone launchd unless a case adds a holder.
+  export LR_TEAM_PS_SNAPSHOT="$BATS_TEST_TMPDIR/team-ps.txt"; printf '1 Ss /sbin/launchd\n' > "$LR_TEAM_PS_SNAPSHOT"
+  M_ACCT="$BATS_TEST_TMPDIR/acct"; M_WT="$BATS_TEST_TMPDIR/wt"; mkdir -p "$M_ACCT" "$M_WT"
+  # Unique on this box, so the launch guard's live ps census can only find what this file starts.
+  M_SID="c0ffee12-mg-$$-$RANDOM"
+  M_TEAM="session-7b3f9c10"; M_ID="w@$M_TEAM"
+  local trip="$BATS_TEST_TMPDIR/tripwire"   # the real claude must never run
+  printf '#!/bin/bash\necho TRIPPED >> "%s.hit"\nexit 97\n' "$trip" > "$trip"; chmod +x "$trip"
+  export CC_CLAUDE_BIN="$trip"
+  local stub="$BATS_TEST_TMPDIR/claude-stub"; export STUB_OUT="$BATS_TEST_TMPDIR/out"
+  printf '#!/bin/bash\necho $$ > "$STUB_OUT.pid"\nprintf "booted\\r\\n"\nsleep 1\n' > "$stub"; chmod +x "$stub"
+  export LR_CLAUDE_BIN="$stub"
+}
+member_row() { # $@ = member names in the lead's team file
+  local n j='[]'
+  mkdir -p "$M_ACCT/teams/$M_TEAM"
+  for n in "$@"; do j="$(jq -c --arg n "$n" '. + [{name:$n}]' <<<"$j")"; done
+  jq -cn --argjson m "$j" '{name:"x",members:$m}' > "$M_ACCT/teams/$M_TEAM/config.json"
+}
+member_fire() { bash "$FIRE" "$M_ACCT" "$M_WT" "$M_SID" --model m --effort high --no-prompt "$@" </dev/null; }
+team_args() { printf -- '--agent-id %s --agent-name w --team-name %s' "$M_ID" "$M_TEAM"; }
+
+@test "RED-PROOF member guard: a team relaunch whose lead dropped its member row is refused, rc 12, nothing spawned" {
+  member_fire_setup
+  member_row other
+  run member_fire --extra-args "$(team_args)"
+  [ "$status" -eq 12 ] || { echo "rc=$status"; echo "$output"; false; }
+  [ "$(cat "$LR_RUN_DIR/relaunch.rc")" = 12 ] || { cat "$LR_RUN_DIR/relaunch.rc"; false; }
+  [[ "$output" == *"teammate $M_ID: no member row"* ]] || { echo "$output"; false; }
+  [ ! -e "$STUB_OUT.pid" ] || { echo "the stub was spawned for a member its lead dropped"; false; }
+}
+
+@test "member guard: a team relaunch whose member row is present and unheld spawns" {
+  member_fire_setup
+  member_row w
+  run member_fire --extra-args "$(team_args)"
+  [ "$status" -eq 0 ] || { echo "rc=$status"; echo "$output"; false; }
+  [ -s "$STUB_OUT.pid" ] || { echo "the stub never ran: $output"; false; }
+  [ ! -e "$LR_RUN_DIR/relaunch.rc" ] || { echo "relaunch.rc on a spawn: $(cat "$LR_RUN_DIR/relaunch.rc")"; false; }
+}
+
+@test "RED-PROOF member guard: a live claude already holding the same --agent-id is a successor, rc 12" {
+  member_fire_setup
+  member_row w
+  printf '4242 S /x/claude.exe --agent-id %s --agent-name w --team-name %s\n' "$M_ID" "$M_TEAM" >> "$LR_TEAM_PS_SNAPSHOT"
+  run member_fire --extra-args "$(team_args)"
+  [ "$status" -eq 12 ] || { echo "rc=$status"; echo "$output"; false; }
+  [ "$(cat "$LR_RUN_DIR/relaunch.rc")" = 12 ]
+  [[ "$output" == *"superseded"* ]] || { echo "$output"; false; }
+  [ ! -e "$STUB_OUT.pid" ] || { echo "the stub was spawned over a live successor"; false; }
+}
+
+@test "RED-PROOF member guard: a team-blind resume of a member head is refused, rc 12; CC_RESUME_TEAMMATE_GUARD=checked spawns" {
+  member_fire_setup
+  # shellcheck source=/dev/null
+  . "$REPO/tests/helpers/member-transcript.sh"
+  mk_member_transcript "$M_ACCT/projects/$(printf %s "$M_WT" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g')/$M_SID.jsonl" "$M_SID" "$M_TEAM" w
+  run member_fire
+  [ "$status" -eq 12 ] || { echo "rc=$status"; echo "$output"; false; }
+  [ "$(cat "$LR_RUN_DIR/relaunch.rc")" = 12 ]
+  [[ "$output" == *"team-blind resume of an Agent Teams member"* ]] || { echo "$output"; false; }
+  [ ! -e "$STUB_OUT.pid" ] || { echo "the stub was spawned team-blind"; false; }
+  # The caller that already read the closed argv and found no --agent-id says so, and is believed.
+  rm -f "$LR_RUN_DIR/relaunch.rc"
+  CC_RESUME_TEAMMATE_GUARD=checked run member_fire
+  [ "$status" -eq 0 ] || { echo "rc=$status"; echo "$output"; false; }
+  [ -s "$STUB_OUT.pid" ] || { echo "the stub never ran under checked: $output"; false; }
+}

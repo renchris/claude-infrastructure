@@ -13,8 +13,9 @@
 #   --prompt-file F: handed to reso-resume-one, which submits it as the resumed session's first prompt.
 #   --next-to PANE: kitty only — open the resume as a window beside kitty window PANE, not an os-window.
 #   --dry-run (or CC_LAUNCH_DRYRUN=1): print the reso-resume-one command + the osascript, run nothing.
-#   --check-only: run only the ownership checks (PARKED-REBOOT, recon fence, live holder) and exit
-#     0 (may launch) or 5 (not ours); opens nothing. boot-resume.sh's --desktops batch path uses it.
+#   --check-only: run only the ownership checks (PARKED-REBOOT, recon fence, live holder, Agent
+#     Teams member) and exit 0 (may launch), 5 (not ours) or 7 (a member); opens nothing.
+#     boot-resume.sh's --desktops batch path uses it.
 #
 # Env: CC_RESUME_ONE_BIN (default ~/.reso/bin/reso-resume-one) · CC_OSASCRIPT_BIN (default osascript)
 #      · CC_TERM_KITTY (kitty binary) · CC_TERM_KITTY_TO (kitty control socket) · IT2_WRAPPER_NO_KITTY=1
@@ -22,11 +23,12 @@
 #      fence's stores) · CC_BOOT_RESUME_MODE / CC_BOOT_RESUME_STATE_DIR (the posture for PARKED-REBOOT).
 # Exit: 0 launched · 1 verified typing unavailable · 2 usage · 3 driver or reso-resume-one missing
 #      · 4 launch failed · 5 not ours to launch (reconciler owns it, launch lock held, H(sid) not
-#      empty, or PARKED-REBOOT outside `resume` mode) · 6 launch INDETERMINATE: a kitty launch whose
+#      empty, PARKED-REBOOT outside `resume` mode, or membership undecided) · 6 launch INDETERMINATE: a kitty launch whose
 #      client timed out and whose CC_LAUNCH_TOKEN no window carries yet — never launched twice from
 #      here; the token is left in ${CC_PENDING_LAUNCH_DIR:-~/.claude/autonomy/pending-launch}/<sid>.json
 #      and cc-resume-debt's sweep reconciles it (window appears ⇒ launched; none in 15 min ⇒ relaunch)
-#      · 9 capacity shed.
+#      · 7 never ours: an Agent Teams member (its lead owns it; a new window cannot carry its team
+#      identity) · 9 capacity shed.
 # Never reuses the current pane (resume-sessions off-by-one rule); always a new window. Fail-loud.
 set -uo pipefail
 
@@ -200,7 +202,9 @@ shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 # process's environment (`kitty @ launch` builds it from KITTY's env; the iTerm2 arm types into a
 # fresh login shell), so the exported CC_ADMIT_DONE below never reached the engine, which re-gated
 # INSIDE the window after this launcher had returned 0. Every word stays single-quoted.
-CMD="'env' 'CC_ADMIT_DONE=1' $(shq "$RESUME_ONE") $(shq "$acct") $(shq "$cwd") $(shq "$sid")"
+# CC_RESUME_TEAMMATE_GUARD=checked rides the same way: question 4 below has already been asked (or
+# overridden with `off`), so the engine does not ask it a second time.
+CMD="'env' 'CC_ADMIT_DONE=1' 'CC_RESUME_TEAMMATE_GUARD=checked' $(shq "$RESUME_ONE") $(shq "$acct") $(shq "$cwd") $(shq "$sid")"
 [ -n "$branch" ] && CMD="$CMD $(shq "$branch")"
 # The recovery prompt reaches reso-resume-one as its --prompt-file, a LAUNCH argument (§D4):
 # cc-resume-debt's retry of a failed recycle passes the packet's prompt, so the resumed original
@@ -286,14 +290,26 @@ if [ ! -x "$RESUME_ONE" ]; then
   exit 3
 fi
 
+brl_cfg_for() { # account alias → config dir, mirroring bin/reso-resume-one's alias table
+  case "$1" in
+    next|claude-next|fable|claude-fable)       printf '%s' "$HOME/.claude-next" ;;
+    next2|claude-next2|fable2|claude-fable2)   printf '%s' "$HOME/.claude-secondary" ;;
+    next3|claude-next3|fable3|claude-fable3)   printf '%s' "$HOME/.claude-tertiary" ;;
+    next4|claude-next4|fable4|claude-fable4)   printf '%s' "$HOME/.claude-quaternary" ;;
+  esac
+}
+
 # ── ONE TYPER PER SESSION (LIMIT_RECOVER_FLEET_V2_ARCHITECTURE.md §C10 "Relaunch", §C7 locks) ─────
-# A launch is a relaunch like any other, so it asks three things before a window opens, and any NO
-# exits 5 (distinct from 2 usage, 3 missing dep, 4 launch failed, 9 capacity shed):
+# A launch is a relaunch like any other, so it asks four things before a window opens, and any NO
+# exits 5 (distinct from 2 usage, 3 missing dep, 4 launch failed, 9 capacity shed) — 7 for the 4th:
 #   1. PARKED-REBOOT: the reconciler parked this sid because its plan predates the boot. It is
 #      resumed only under the boot-resume posture `resume` (boot-resume.sh resolve_mode, mirrored).
 #   2. the fence: lr_recon_may_act … always — the reconciler may own the sid; otherwise this
 #      process takes locks/<sid>.launch (or inherits a live parent's, e.g. cc-resume-debt's).
 #   3. H(sid) empty: a live holder of the session means a second resume would be a second writer.
+#   4. not an Agent Teams member: a member belongs to its lead, and this window cannot carry its
+#      team flags, so it would come back outside its team and idle forever (2026-10-16, 5423f92a).
+#      Exit 7, never 5: "never ours" is final for the caller, "not ours yet" is not.
 # The lock this process took is released on its exit; an inherited one is left to its taker.
 brl_rec_root="${LR_RECON_ROOT:-${LR_STATE_DIR:-$HOME/.reso/limit-recover}/recon}"
 for _brl_rec in "$brl_rec_root/sessions/$sid.json" "$brl_rec_root/records/$sid.json"; do
@@ -330,8 +346,35 @@ case "$_brl_h" in
   ''|*[!0-9]*) echo "boot-resume-launch: H($sid) unknown (lr-lib.sh unreachable) - treated as held, not launching" >&2; exit 5 ;;
   *) echo "boot-resume-launch: $sid already has $_brl_h live holder(s) - a second resume would be a second writer, not launching" >&2; exit 5 ;;
 esac
+# 4. The closer's record (CC_RESUME_MEMBER_HINT, from cc-resume-debt) outranks the transcript head:
+#    only the closer saw the closed process's argv, and an adopted ex-member's head still reads
+#    "member". With no record, the repo's one teammate test (lr_team_member) decides; undecided is
+#    held (5), never launched. CC_RESUME_TEAMMATE_GUARD=off is the operator's override; `checked`
+#    says a caller already asked. The EXIT trap above releases the launch lock on every exit here.
+case "${CC_RESUME_TEAMMATE_GUARD:-}" in
+  off|checked) ;;
+  *)
+    case "${CC_RESUME_MEMBER_HINT:-}" in
+      no) ;;
+      yes)
+        echo "boot-resume-launch: NOT LAUNCHING $sid - its closer recorded it as an Agent Teams member (it was closed as an Agent Teams member); a new window cannot carry its team identity - its lead owns it" >&2
+        exit 7 ;;
+      *)
+        if command -v lr_team_member >/dev/null 2>&1; then
+          _brl_tm="$(lr_team_member "$sid" "$(brl_cfg_for "$acct")" "$cwd" 2>/dev/null)"; _brl_tmrc=$?
+          case "$_brl_tmrc" in
+            0) echo "boot-resume-launch: NOT LAUNCHING $sid - an Agent Teams member ($_brl_tm); a new window cannot carry its team identity - its lead owns it (CC_RESUME_TEAMMATE_GUARD=off to resume it anyway)" >&2
+               exit 7 ;;
+            2) echo "boot-resume-launch: Agent Teams membership of $sid undecided (the teammate test could not run) - treated as held, not launching" >&2
+               exit 5 ;;
+          esac
+        else
+          echo "boot-resume-launch: lr_team_member unavailable at $_brl_lr/lr-lib.sh - Agent Teams membership NOT CHECKED, launching" >&2
+        fi ;;
+    esac ;;
+esac
 
-# --check-only: the three questions above, and nothing else. boot-resume.sh asks them per session
+# --check-only: the four questions above, and nothing else. boot-resume.sh asks them per session
 # before handing the batch to cc-resume-layout.sh --desktops, which opens the windows itself (2x2
 # per fullscreen Desktop) and so never runs this file's terminal arms. Without this exit the batch
 # path would skip the fence, the PARKED-REBOOT rule and the second-writer check. Capacity is NOT
@@ -409,14 +452,7 @@ export CC_ADMIT_DONE=1
 # CC_RESUME_DEBT_SETTLING=1 — cc-resume-debt calls this launcher for its own retry and already
 # holds the debt. Best-effort by contract: a missing or failing binary never changes our exit code.
 # Seam CC_RESUME_DEBT_BIN; else the repo bin beside this script (symlink-resolved first), else ~/.claude.
-brl_cfg_for() { # account alias → config dir, mirroring bin/reso-resume-one's alias table
-  case "$1" in
-    next|claude-next|fable|claude-fable)       printf '%s' "$HOME/.claude-next" ;;
-    next2|claude-next2|fable2|claude-fable2)   printf '%s' "$HOME/.claude-secondary" ;;
-    next3|claude-next3|fable3|claude-fable3)   printf '%s' "$HOME/.claude-tertiary" ;;
-    next4|claude-next4|fable4|claude-fable4)   printf '%s' "$HOME/.claude-quaternary" ;;
-  esac
-}
+# (brl_cfg_for, the account → config dir map it uses, is defined above the ownership questions.)
 brl_open_debt() {
   [ "${CC_RESUME_DEBT_SETTLING:-0}" = 1 ] && return 0
   local rd="${CC_RESUME_DEBT_BIN:-}" c cfg
