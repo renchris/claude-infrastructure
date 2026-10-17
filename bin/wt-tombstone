@@ -1,0 +1,56 @@
+#!/bin/bash
+# wt-tombstone — operator and lab CLI over scripts/lib/wt-tombstone.sh (DESIGN load-root-cause-2026-10-17
+# §3, WP-9). Nothing rewrites a command to call this: hooks and janitors source the library directly.
+#
+#   wt-tombstone tombstone <path> <actor> <reason> [--mode mv|clone] [--wip] [--checkpoint-ref R] [--event E]
+#   wt-tombstone residue-restore <id> <path>
+#   wt-tombstone prune <repo> [git-worktree-prune-args…]
+#   wt-tombstone branch-deleted <repo> <branch> <sha> <actor> [reason]
+#   wt-tombstone emit <ev> <path> [sid]
+#   wt-tombstone find <path> [--sid S] [--branch B]
+#   wt-tombstone cleanup-days
+#   wt-tombstone expire-refs <repo>
+#   wt-tombstone purge <id> --operator          (removes paid residue for good; never run by an agent)
+#   wt-tombstone park <path> <actor> <reason> --arm i|ii
+#   wt-tombstone unpark <path>
+#   wt-tombstone parked <path>
+#   wt-tombstone pinned <path>
+#   wt-tombstone pin-lock-sync <repo> [--observe]
+#
+# Exit codes are the library's: 0 done, 1 no / not applicable, 2 refused or failed.
+
+set -u
+_self="$0"
+while [ -L "$_self" ]; do
+  _l="$(readlink "$_self")"
+  case "$_l" in /*) _self="$_l" ;; *) _self="$(dirname "$_self")/$_l" ;; esac
+done
+_lib="$(cd "$(dirname "$_self")/.." 2>/dev/null && pwd)/scripts/lib/wt-tombstone.sh"
+[ -f "$_lib" ] || _lib="$HOME/.claude/scripts/lib/wt-tombstone.sh"
+# shellcheck source=../scripts/lib/wt-tombstone.sh disable=SC1091
+. "$_lib" || { echo "wt-tombstone: cannot load $_lib" >&2; exit 2; }
+
+_need() { # <function> → exits 2 when the library half that defines it is absent
+  declare -F "$1" >/dev/null 2>&1 || { echo "wt-tombstone: $1 not available (wt-park.sh missing?)" >&2; exit 2; }
+}
+
+cmd="${1:-}"
+[ $# -gt 0 ] && shift
+case "$cmd" in
+  tombstone)       wt_tombstone "$@" ;;
+  residue-restore) wt_residue_restore "$@" ;;
+  prune)           wt_prune_logged "$@" ;;
+  branch-deleted)  wt_branch_deleted_row "$@" ;;
+  emit)            wt_emit_event "$@" ;;
+  find)            wt_tomb_find "$@" ;;
+  cleanup-days)    wt_cleanup_period_days ;;
+  expire-refs)     wt_ref_expire "$@" ;;
+  purge)           wt_purge "$@" ;;
+  park)            _need wt_park; wt_park "$@" ;;
+  unpark)          _need wt_unpark; wt_unpark "$@" ;;
+  parked)          _need wt_parked_lookup; wt_parked_lookup "$@" ;;
+  pinned)          _need wt_pinned; wt_pinned "$@" ;;
+  pin-lock-sync)   _need wt_pin_lock_sync; wt_pin_lock_sync "$@" ;;
+  ''|-h|--help)    sed -n '2,20p' "$_self" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  *)               echo "wt-tombstone: unknown subcommand '$cmd' (--help)" >&2; exit 2 ;;
+esac

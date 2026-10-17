@@ -219,7 +219,7 @@ wt__classify() { # <tree> <repo> → lines "C <rel>" cache, "I <rel>" identical 
         fi ;;
     esac
     printf 'R %s\n' "$rel"
-  done < <("$WT_GIT" -C "$tree" status --porcelain --ignored -z 2>/dev/null)
+  done < <("$WT_GIT" -C "$tree" status --porcelain --ignored=matching -z 2>/dev/null)
 }
 
 wt__wip_snapshot() { # <tree> → prints a commit holding tracked + untracked working content (nothing written to the tree)

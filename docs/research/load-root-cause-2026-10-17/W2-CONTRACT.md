@@ -12,6 +12,12 @@ wins and says why.
 2. **Park split.** WP-9 is two files so two teammates can write it in parallel: `wt-tombstone.sh` (core) sources
    `wt-park.sh` (PARK, unpark, pins) at its tail. Callers source only `wt-tombstone.sh`.
 
+3. **Residue modes.** DESIGN says tombstone files are 0600. Files the tombstone writes (`residue.list`,
+   `logs-HEAD`, rows' dirs) are; a moved or cloned residue file keeps its own mode, so a restore gives back an
+   executable script as executable. The 0700 tombstone dir already keeps every other user out.
+4. **`git status --ignored=matching`**, not the traditional mode: the traditional mode collapses `pkg/__pycache__`
+   into `pkg/` when `pkg/` has no tracked file, which would turn a cache into residue.
+
 ## Conventions
 
 - Source with `. "$HOME/.claude/scripts/lib/wt-tombstone.sh"` (or the repo-relative path in tests). bash 3.2 safe.
