@@ -303,3 +303,61 @@ load_registry_live() {
   run bash -c "ls -A '$REG' | grep -c '^wt-testbed-' || true"
   [ "$output" = "0" ] || { echo "a sid-suffixed row appeared with no sid in the input: $(ls -A "$REG")"; false; }
 }
+
+# ── SessionEnd → the worktree-gc wake queue (DESIGN load-root-cause-2026-10-17 §3.4, WP-15). ─────
+# A linked worktree is a dir whose `.git` is a FILE; that is the hook's whole test, so a gitdir-link
+# file is enough fixture. The library is this checkout's, and its queue + wake file are fixtured.
+wake_env() {
+  export CC_WT_TOMBSTONE_LIB="$REPO/scripts/lib/wt-tombstone.sh"
+  export WT_EVENTS_FILE="$BATS_TEST_TMPDIR/state/wt-events.jsonl"
+  export WT_WAKE_FILE="$BATS_TEST_TMPDIR/state/worktree-gc.wake"
+}
+fire_end() { # $1=cwd $2=sid
+  printf '{"hook_event_name":"SessionEnd","cwd":"%s","session_id":"%s","reason":"exit"}' "$1" "$2" \
+    | bash "$HOOK"
+}
+
+@test "16: SessionEnd in a LINKED worktree appends one session-end event and touches the wake file" {
+  wake_env
+  printf 'gitdir: %s\n' "$BATS_TEST_TMPDIR/nowhere/.git/worktrees/wt-testbed" > "$WT/.git"
+  run fire_end "$WT" "sid-end-1"
+  [ "$status" -eq 0 ] || { echo "hook exited $status: $output"; false; }
+  [ -f "$WT_EVENTS_FILE" ] || { echo "no events file at $WT_EVENTS_FILE"; false; }
+  run grep -c . "$WT_EVENTS_FILE"
+  [ "$output" = "1" ] || { echo "expected 1 event row, got $output: $(cat "$WT_EVENTS_FILE")"; false; }
+  run jq -r '[.ev, .path, .sid] | @tsv' "$WT_EVENTS_FILE"
+  [ "$output" = "session-end	$WT	sid-end-1" ] || { echo "event row: '$output'"; false; }
+  [ -f "$WT_WAKE_FILE" ] || { echo "wake file not touched"; false; }
+}
+
+@test "17: a linked worktree OUTSIDE the reapable domain is still enqueued (the wake run owns scope)" {
+  wake_env
+  local other="$BATS_TEST_TMPDIR/elsewhere/wt-x"
+  mkdir -p "$other"
+  printf 'gitdir: %s\n' "$BATS_TEST_TMPDIR/nowhere/.git/worktrees/wt-x" > "$other/.git"
+  run fire_end "$other" "sid-end-2"
+  [ "$status" -eq 0 ] || { echo "hook exited $status: $output"; false; }
+  run jq -r '.path' "$WT_EVENTS_FILE"
+  [ "$output" = "$other" ] || { echo "expected an event for $other, got '$output'"; false; }
+}
+
+@test "18: SessionEnd in a MAIN checkout (.git is a directory) appends nothing" {
+  wake_env
+  mkdir -p "$WT/.git"
+  run fire_end "$WT" "sid-end-3"
+  [ "$status" -eq 0 ] || { echo "hook exited $status: $output"; false; }
+  [ ! -s "$WT_EVENTS_FILE" ] || { echo "a main checkout was enqueued: $(cat "$WT_EVENTS_FILE")"; false; }
+  [ ! -e "$WT_WAKE_FILE" ] || { echo "wake file touched for a main checkout"; false; }
+}
+
+@test "19: a MISSING library is skipped: exit 0 and the registry row is still removed" {
+  wake_env
+  export CC_WT_TOMBSTONE_LIB="$BATS_TEST_TMPDIR/no-such-lib.sh"
+  printf 'gitdir: %s\n' "$BATS_TEST_TMPDIR/nowhere/.git/worktrees/wt-testbed" > "$WT/.git"
+  fire "sid-end-4"
+  [ -f "$REG/$(key sid-end-4)" ] || { echo "precondition: no row registered"; false; }
+  run fire_end "$WT" "sid-end-4"
+  [ "$status" -eq 0 ] || { echo "hook exited $status: $output"; false; }
+  [ ! -f "$REG/$(key sid-end-4)" ] || { echo "SessionEnd left the registry row behind"; false; }
+  [ ! -e "$WT_EVENTS_FILE" ] || { echo "an event was written with no library: $(cat "$WT_EVENTS_FILE")"; false; }
+}

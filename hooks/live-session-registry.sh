@@ -22,6 +22,20 @@ cwd=$(printf '%s' "$input" | jq -r '.cwd // empty'            2>/dev/null)
 sid=$(printf '%s' "$input" | jq -r '.session_id // empty'     2>/dev/null)
 [ -z "$cwd" ] && cwd="$PWD"
 
+# ── SessionEnd → the worktree-gc wake queue (DESIGN load-root-cause-2026-10-17 §3.4, WP-15). ─────
+# Every linked worktree's SessionEnd is enqueued, in ANY repo and ANY directory: the wake run
+# (scripts/worktree-gc-wake.sh), not this hook, applies the repo scope and drops what is out of it,
+# so the scope table lives in one place. This therefore sits ABOVE the reapable-domain gate below,
+# which governs only the liveness registry. `-f .git` is the O(1) linked-worktree test (a main
+# checkout's .git is a directory), so a main-checkout session pays one stat and no fork. The library
+# is sourced in a subshell so none of its globals reach the registry code below; a missing library
+# is skipped, and wt_emit_event never fails its caller, so this can neither fail nor block the hook.
+if [ "$ev" = "SessionEnd" ] && [ -f "$cwd/.git" ]; then
+  _wt_lib="${CC_WT_TOMBSTONE_LIB:-$HOME/.claude/scripts/lib/wt-tombstone.sh}"
+  # shellcheck source=/dev/null
+  [ -f "$_wt_lib" ] && ( . "$_wt_lib" && wt_emit_event session-end "$cwd" "$sid" ) >/dev/null 2>&1
+fi
+
 # Only sessions sitting in a reapable worktree matter.
 case "$cwd" in
   "$HOME/Development/.worktrees/"*) ;;
