@@ -695,8 +695,10 @@ cert_round_open() {
 # The framings are the harness's own, copied from the truememory-2-0 lead's transcript (2026-10-17),
 # where a hand-back reading "should now clear" was routed completeness and denied every tool for two
 # hours. RED-proof: on 8fd2a38dd every case below relabeled the session completeness (the classifier
-# stub ran) and the Agent call was denied.
-@test "a subagent hand-back, peer-wake, system notification or Stop-hook feedback keeps the prior label, even when it reads as a completeness question" {
+# stub ran) and the Agent call was denied. The two `<pasted_content …>\n/goal` cases are the form a
+# /goal paste over CC's placeholder threshold arrives in (truememory-2-0 Day0 fire, 2026-10-17); on
+# bb58b60f9 they relabeled the session completeness.
+@test "a subagent hand-back, peer-wake, system notification, Stop-hook feedback or pasted /goal keeps the prior label, even when it reads as a completeness question" {
   state certified
   prompt "build it" >/dev/null
   [ "$(label)" = work-order ]
@@ -709,12 +711,17 @@ cert_round_open() {
     "$(printf '📬 peer-wake: you have 1 unread peer message(s); %s' "$q")" \
     "$(printf '[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event. %s' "$q")" \
     "$(printf '<system-reminder>\n[SYSTEM NOTIFICATION - NOT USER INPUT]\nA background-task event. %s</system-reminder>' "$q")" \
-    "$(printf 'Stop hook feedback:\n%s' "$q")"; do
+    "$(printf 'Stop hook feedback:\n%s' "$q")" \
+    "$(printf '<pasted_content id="4b2b">\n/goal tm2/2.0 is complete and good to close; %s' "$q")" \
+    "$(printf '<\\pasted_content id="4b2b">\n/goal %s' "$q")"; do
     prompt "$f" >/dev/null
     [ "$(label)" = work-order ] || { echo "relabeled by: ${f:0:60}"; false; }
     [ "$(tool Agent 'x')" = allow ]
   done
   [ ! -s "$STUB_LOG" ]
+  # An operator's own paste is a genuine prompt: only a paste that IS a /goal is an envelope.
+  prompt "$(printf '<pasted_content id="9a1c">\nare we done? good to close\n</pasted_content id="9a1c">')" >/dev/null
+  [ "$(label)" = completeness ]
   # The operator's own question still routes, framing words quoted mid-prompt included.
   prompt "are we done? the [Subagent hand-back] said Another Claude session sent a message: ok" >/dev/null
   [ "$(label)" = completeness ]

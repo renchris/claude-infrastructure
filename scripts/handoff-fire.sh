@@ -23,8 +23,13 @@
 #                       engagement is proven, as a SEPARATE submission — never as the payload's
 #                       head. This is the supported way to get a goal into a fire: the payload gate
 #                       (check_slash_head) still refuses a slash-headed brief, because one message
-#                       cannot be both. COND is ONE line, <=4000 chars, and must not itself start
-#                       with '/' — all three are refused pre-fire. Also re-armed across --recycle
+#                       cannot be both. COND is ONE line and must not itself start with '/' (both
+#                       refused pre-fire, exit 1), and is at most 794 chars, so that its `/goal COND`
+#                       paste stays within Claude Code's 800-char paste-placeholder threshold: past
+#                       it the composer shows [Pasted text #1] and submits a PROMPT, and /goal never
+#                       runs. Refused pre-fire with exit 2; put the full proof list in a file and
+#                       name the file in COND. (The harness's own 4000-char cap still applies under
+#                       GOAL_PASTE_MAX_CHARS overrides.) Also re-armed across --recycle
 #                       (a goal is session-scoped and dies with its session — measured 2026-08-08).
 #                       NEVER fails the fire: the brief has already landed and been proven to
 #                       engage, so a failed arming leaves a working session that simply has no goal.
@@ -9385,7 +9390,7 @@ check_slash_head() { # $1=prompt-file → 0 ok, 1 (loud) if the first non-blank 
 
 # Pre-fire validation of a --goal condition. Runs beside the payload gates, BEFORE any side effect,
 # so a malformed goal costs a refusal rather than a half-fired pane.
-check_goal_arm() { # → 0 ok (or no --goal), 1 (loud) refuse
+check_goal_arm() { # → 0 ok (or no --goal), 1 (loud) refuse, 2 (loud) refuse: over the paste cap
   local cond="${FIRE_GOAL:-}" limit="${GOAL_MAX_CHARS:-4000}" chars nl
   [ -n "$cond" ] || return 0
   # A newline would submit the condition's first line and leave the rest in the composer as an
@@ -9416,6 +9421,26 @@ check_goal_arm() { # → 0 ok (or no --goal), 1 (loud) refuse
     echo "   Fix: the goal is a POINTER, not the brief — '<one-line objective> — full brief in the prompt above; DoD at <path>'. The detail is already in message 1, which has no cap." >&2
     emit_fire_refusal payload-goal-arm-cap "--goal condition is ${chars} chars > ${limit}"
     return 1
+  fi
+  # THE PASTE CAP, far below the /goal cap (2026-10-17). The arming line `/goal $cond` reaches the
+  # composer as a bracketed PASTE, and past the PASTE READ-BACK table's threshold (above: >800 chars,
+  # or >2 newlines, which the single-line rule already refuses) Claude Code swaps it for a
+  # `[Pasted text #1]` placeholder and submits it as a PROMPT, never running /goal. Measured on the
+  # truememory-2-0 Day0 fire: a 1293-char condition printed `goal-arm verdict=unverified`, the
+  # transcript held `<pasted_content id="4b2b">\n/goal …` as a user prompt, and the research router
+  # read it as a completeness question, so the session relayed its certificate and stopped. The
+  # read-back cannot tell "not yet" from "never", so this refusal is the guard.
+  # Counted in UTF-16 units, which is what CC's String.length counts (an em-dash is 1, an emoji 2);
+  # the code-point count is the fallback for text iconv will not convert. Exit 2: an argument error.
+  local paste_max="${GOAL_PASTE_MAX_CHARS:-800}" units paste
+  units=$(printf '%s' "$cond" | iconv -f UTF-8 -t UTF-16LE 2>/dev/null | wc -c | tr -d ' ')
+  if [ -n "$units" ] && [ "$units" -gt 0 ] 2>/dev/null; then units=$((units / 2)); else units=$chars; fi
+  paste=$((units + 6))   # "/goal " + the condition
+  if [ "$paste" -gt "$paste_max" ]; then
+    echo "!! --goal condition is ${units} chars, so its arming paste '/goal <condition>' is ${paste} chars — over Claude Code's ${paste_max}-char paste-placeholder threshold. The composer would show [Pasted text #1] and submit it as a PROMPT, not run /goal: the goal is never armed (measured 2026-10-17)." >&2
+    echo "   Fix: a condition of at most $((paste_max - 6)) chars that names a FILE for the full proof list — '<one-line end state> — proven by the checks listed in <path>; DoD at <path>'." >&2
+    emit_fire_refusal payload-goal-arm-paste-cap "--goal arming paste is ${paste} chars > ${paste_max} (paste placeholder)"
+    return 2
   fi
   return 0
 }
@@ -14487,7 +14512,7 @@ check_slash_head  "$PROMPT_FILE" || exit 1
 fi   # end of the non-resume payload checks (resume mode carries no brief)
 # …and validate --goal (MESSAGE 2) here too, so a malformed condition costs a refusal rather than a
 # pane that fired, engaged, and then could not be armed.
-check_goal_arm || exit 1
+check_goal_arm || exit $?
 # P0-17: refuse a NET-NEW fire onto an already-saturated box, BEFORE any side effect. A recycle
 # REPLACES a session (net-zero panes) and is exempt — see capacity_gate().
 if [ "$RECYCLE" = 0 ]; then capacity_gate || exit 9; fi

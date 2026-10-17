@@ -205,7 +205,9 @@ shell (verified) — metacharacters and newlines arrive literally; only trailing
   and the goal are TWO SUBMISSIONS, and `handoff-fire.sh` sends both: message 1 is the payload exactly
   as always (plain-text-headed, no cap), message 2 is a short `/goal <condition>` bracketed-pasted into
   the pane once engagement is PROVEN. It re-arms across `--recycle`, refuses a multi-line / slash-headed
-  / over-4000-char condition BEFORE firing, and prints `goal-arm verdict=set|unverified|abstained|held|mangled|unreachable`
+  / over-794-char condition BEFORE firing (past 794 the `/goal` paste exceeds Claude Code's 800-char
+  paste-placeholder threshold and arrives as a PROMPT, never armed — name a file for the full proof
+  list instead), and prints `goal-arm verdict=set|unverified|abstained|held|mangled|unreachable`
   read back from the fired session's own transcript — never a claim. A failed arming leaves a
   session that has its brief and is working; it can never leave a goal with no brief.
   **Never fold a time-critical op (sessions to recover, a reset-timed action) into a research or fix

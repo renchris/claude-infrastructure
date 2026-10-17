@@ -36,7 +36,8 @@ research verbs, and the next genuine prompt is classified afresh). A typed promp
 `--requires-gate <program>` work-order marker is labeled work-order without calling the classifier
 only when <program> is the routed program's slug; with any other slug it is classified like any
 prompt. A machine-envelope prompt (a fired or recycled successor's brief, a subagent hand-back, a
-peer-wake, a background-task notification, Stop-hook feedback: MACHINE_ENVELOPE) is never classified: it
+peer-wake, a background-task notification, Stop-hook feedback, a `/goal` delivered as a paste
+placeholder: MACHINE_ENVELOPE) is never classified: it
 keeps the session's last label unless that label is a relay one, which becomes `other`, `by:
 envelope` (a relay label governs one re-ask turn and is not carried into a continuation); as the
 session's FIRST prompt it gets a deterministic `by: envelope` label (envelope_label) so a successor
@@ -166,8 +167,13 @@ SESSION_UUID = re.compile(
 # background-task event as `[SYSTEM NOTIFICATION - NOT USER INPUT]`, bare or inside a leading
 # `<system-reminder>`; a blocked Stop as `Stop hook feedback:`. Before they were listed a hand-back
 # reading "should now clear" was classified completeness, and every tool stayed denied for two hours.
+# A `/goal` handoff-fire.sh pasted past Claude Code's paste-placeholder threshold (>800 chars or >2
+# newlines) is never run as the command: it arrives as a PROMPT, `<pasted_content id="…">\n/goal …`
+# (measured 2026-10-17, truememory-2-0 Day0 fire), and a goal condition reads like a completeness
+# question. handoff-fire refuses that length pre-fire now; this keeps any that still arrives inert.
 MACHINE_ENVELOPE = re.compile(
     r"^\s*(\[handoff |<teammate-message|<task-notification|<local-command-stdout>|<command-name>"
+    r"|<\\?pasted_content\b[^>]*>\s*/goal\b"
     r"|<\\?agent-message[\s>]|Goal set: |Another Claude session sent a message:"
     r"|\[Subagent hand-back\]|📬 peer-wake: |Stop hook feedback:"
     r"|(?:<system-reminder>\s*)?\[SYSTEM NOTIFICATION - NOT USER INPUT\])"

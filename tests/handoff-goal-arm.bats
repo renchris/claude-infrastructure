@@ -10,7 +10,8 @@
 # that safe, each of which this repo has already been burned by the absence of:
 #
 #   1. VALIDATED PRE-FIRE. A condition that cannot work is refused before any side effect, with a
-#      distinct `payload-goal-arm-*` reason per authoring mistake (multi-line / slash / over-cap).
+#      distinct `payload-goal-arm-*` reason per authoring mistake (multi-line / slash / over-cap /
+#      over the 800-char paste-placeholder threshold, which would submit the /goal as a prompt).
 #   2. READ BACK, NEVER CLAIMED (memory claimed-outcome-vs-checked-outcome). The oracle is the
 #      harness's OWN goal_status attachment, keyed on the condition — and case "oracle is not
 #      satisfied by the echo of its own paste" is the load-bearing one: the pasted user message
@@ -29,6 +30,7 @@ setup() {
   # does NOT redirect an absolute /tmp default or a bare name resolved off the operator's PATH — so
   # these are pinned to ABSENT paths, where the sensors that read them fail open.
   export CC_FIRE_CAPACITY_GATE=off
+  export CC_FIRE_HEADROOM_GATE=off   # M11 pin: the E2E case below executes the fire
   export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/account-sweep.json"
   export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/no-such-claude-accounts"
   export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-"
@@ -115,11 +117,61 @@ cc_sid_for_pane() { printf '%s' "${STUB_SID:-}"; }
 
 # The boundary is the whole content of the cap rule, so it is pinned on BOTH sides. A cap test that
 # only ever asserts the refusing side passes just as well against a guard that refuses everything.
+# GOAL_PASTE_MAX_CHARS is lifted so the paste cap below cannot answer for the /goal cap.
 @test "cap BOUNDARY: exactly at the limit is admitted, one over is refused" {
-  FIRE_GOAL="$(head -c 4000 < /dev/zero | tr '\0' 'x')" GOAL_MAX_CHARS=4000 run check_goal_arm
+  FIRE_GOAL="$(head -c 4000 < /dev/zero | tr '\0' 'x')" GOAL_MAX_CHARS=4000 GOAL_PASTE_MAX_CHARS=99999 run check_goal_arm
   [ "$status" -eq 0 ]
-  FIRE_GOAL="$(head -c 4001 < /dev/zero | tr '\0' 'x')" GOAL_MAX_CHARS=4000 run check_goal_arm
+  FIRE_GOAL="$(head -c 4001 < /dev/zero | tr '\0' 'x')" GOAL_MAX_CHARS=4000 GOAL_PASTE_MAX_CHARS=99999 run check_goal_arm
   [ "$status" -eq 1 ]
+}
+
+# THE PASTE CAP (2026-10-17). The arming paste is `/goal <condition>`; past 800 chars Claude Code
+# submits it as a [Pasted text #1] PROMPT and /goal never runs (truememory-2-0 Day0 fire: a 1293-char
+# condition, verdict=unverified, the router read the goal as a completeness question). The cap is
+# on the PASTE, so the condition boundary is 794. RED-proof: on bb58b60f9 the 795 case returned 0.
+@test "paste BOUNDARY: an 800-char /goal paste is admitted, an 801-char one is refused with rc 2" {
+  command -v jq >/dev/null 2>&1 || skip "refusal rows need jq"
+  FIRE_GOAL="$(head -c 794 < /dev/zero | tr '\0' 'x')" run check_goal_arm
+  [ "$status" -eq 0 ]
+  [ ! -s "$LOG" ]
+  FIRE_GOAL="$(head -c 795 < /dev/zero | tr '\0' 'x')" run check_goal_arm
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"795 chars"*"801 chars"*"800-char paste-placeholder"* ]] || false
+  [[ "$output" == *"at most 794 chars that names a FILE"* ]] || false
+  run jq -r '[.refuse_reason,.gate]|@tsv' "$LOG"
+  [ "$output" = "$(printf 'payload-goal-arm-paste-cap\tpayload')" ]
+}
+
+# CC counts String.length (UTF-16 units). Byte counting would refuse an ordinary em-dash goal at a
+# third of the cap; code-point counting would admit an astral-character goal past it.
+@test "paste cap counts UTF-16 units: 794 em-dashes pass, 397 emoji pass, 398 emoji are refused" {
+  local d e
+  d="$(printf '\342\200\224')"; e="$(printf '\360\237\216\257')"
+  FIRE_GOAL="$(for _ in $(seq 794); do printf '%s' "$d"; done)" run check_goal_arm
+  [ "$status" -eq 0 ]
+  FIRE_GOAL="$(for _ in $(seq 397); do printf '%s' "$e"; done)" run check_goal_arm
+  [ "$status" -eq 0 ]
+  FIRE_GOAL="$(for _ in $(seq 398); do printf '%s' "$e"; done)" run check_goal_arm
+  [ "$status" -eq 2 ]
+}
+
+# The same refusal through the whole script: exit 2, and nothing reaches the launch command.
+@test "E2E: an over-paste-cap --goal is refused pre-fire with exit 2; at the cap it fires; a 3-newline goal is refused" {
+  printf 'TASK — do the thing.\n' > "$BATS_TEST_TMPDIR/p.txt"
+  run bash "$HF" --prompt-file "$BATS_TEST_TMPDIR/p.txt" --goal "$(head -c 795 < /dev/zero | tr '\0' 'x')" \
+    --launcher claude-test --cwd "$BATS_TEST_TMPDIR" --dry-run
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"paste-placeholder threshold"* ]] || false
+  [[ "$output" != *"command:"* ]] || false
+  run bash "$HF" --prompt-file "$BATS_TEST_TMPDIR/p.txt" --goal "$(head -c 794 < /dev/zero | tr '\0' 'x')" \
+    --launcher claude-test --cwd "$BATS_TEST_TMPDIR" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"command:"* ]] || false
+  run bash "$HF" --prompt-file "$BATS_TEST_TMPDIR/p.txt" --goal "$(printf 'a\nb\nc\nd')" \
+    --launcher claude-test --cwd "$BATS_TEST_TMPDIR" --dry-run
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"contains a NEWLINE"* ]] || false
+  [[ "$output" != *"command:"* ]]
 }
 
 # ── 2 · THE READ-BACK ORACLE ───────────────────────────────────────────────────────────────────
@@ -388,6 +440,16 @@ _write_terminal_goal_transcript() { # $1=sid — armed then ACHIEVED: nothing li
   printf '%s' "$output" | grep -q 'NOT inherited' || false
   # and the mutation direction: FIRE_GOAL must be EMPTY afterwards in the calling shell too
   inherit_recycle_goal "sid-inh-5"
+  [ -z "$FIRE_GOAL" ]
+}
+
+@test "inherit: a predecessor goal over the paste cap is NOT inherited — its paste would arrive as a prompt" {
+  _write_goal_transcript "sid-inh-6" "$(head -c 795 < /dev/zero | tr '\0' 'x')"
+  FIRE_GOAL=""
+  run inherit_recycle_goal "sid-inh-6"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"paste-placeholder"*"NOT inherited"* ]] || false
+  inherit_recycle_goal "sid-inh-6" 2>/dev/null
   [ -z "$FIRE_GOAL" ]
 }
 
