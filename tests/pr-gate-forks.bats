@@ -54,8 +54,8 @@ big() { # a 240 KB PostToolUse payload; $1 lands inside its stdout
     tool_input:{command:"cat big.log"},tool_response:{stdout:$s,stderr:"",interrupted:false}}' | head -c 245760
 }
 solo_repo() {
-  git init -q "$W"
-  ( cd "$W" && git config user.email solo@e.com && git config user.name solo \
+  git init -q "${W:?repo path required}"
+  ( cd "${W:?repo path required}" && git config user.email solo@e.com && git config user.name solo \
       && echo a > a && git add a && git commit -qm a ) >/dev/null 2>&1
 }
 
