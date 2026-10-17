@@ -1,0 +1,41 @@
+{
+  "sid": "9f6593c5-fa6d-45eb-babd-5f3be41cd18f",
+  "marker": "resume:9f6593c5-fa6d-45eb-babd-5f3be41cd18f:1792223988",
+  "pane": "7",
+  "mode": "resume",
+  "cfg": "/Users/op/.claude-next",
+  "account": "next",
+  "cwd": "/Users/op/Development/.worktrees/wt-cc-141442-81738",
+  "by": "handoff-fire --recycle",
+  "why": "recycle of pane 7 (resume-launcher, same sid) about to type /exit",
+  "kitty_to": "unix:/tmp/kitty-44163",
+  "kitty_listen_on": "",
+  "kitty_pid": "44163",
+  "member": "",
+  "opened_epoch": 1792223988,
+  "state": "open",
+  "attempts": 0,
+  "attempt_epoch": 0,
+  "relaunch_rc": null,
+  "backlog_id": "",
+  "page_verdict": "",
+  "events": [
+    {
+      "epoch": 1792223988,
+      "state": "open",
+      "note": "opened by handoff-fire --recycle"
+    }
+  ],
+  "prior_events": [
+    {
+      "epoch": 1791856265,
+      "state": "open",
+      "note": "opened by handoff-fire --recycle"
+    },
+    {
+      "epoch": 1791856342,
+      "state": "proven",
+      "note": "recycle engaged in pane 2"
+    }
+  ]
+}

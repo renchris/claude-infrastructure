@@ -277,6 +277,20 @@ drive_watcher() {
     || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
 }
 
+@test "[RED] watcher: every type-attempt row names its line, so the disarm line never reads as a second relaunch" {
+  # Pane 7, 2026-10-17 (tests/fixtures/move-lane-2026-10-17/pane7/recycle-watcher.log): the disarm
+  # line's "attempt=2 … verdict=submitted" followed by the relaunch's "attempt=1 … verdict=submitted"
+  # was read as the relaunch typed twice. The record itself carries no label:
+  [ "$(grep -c ' type-attempt .* line=' "$REPO/tests/fixtures/move-lane-2026-10-17/pane7/recycle-watcher.log")" = 0 ]
+  watcher_setup
+  drive_watcher 0
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  # 2 rounds × 2 attempts of each line. RED before the fix: no row carries line=.
+  [ "$(printf '%s\n' "$output" | grep 'type-attempt pane=TYPED-PANE' | grep -c ' line=disarm ')" = 4 ] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep 'type-attempt pane=TYPED-PANE' | grep -c ' line=cmd ')" = 4 ] || { echo "$output"; false; }
+  [ "$(grep '"class":"recycle-type-attempt"' "$HOME/.claude/logs/handoffs.jsonl" | grep -c 'line=disarm ')" = 4 ]
+}
+
 @test "watcher: a deadline keeps typing past two rounds while the pane sits at a bare shell" {
   watcher_setup
   # 30 s against rounds of a few seconds plus the 3 s gap: a third round needs only round 2 to END

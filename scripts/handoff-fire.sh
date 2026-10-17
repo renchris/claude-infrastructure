@@ -3704,6 +3704,43 @@ hf_exit_signal() { # $1=pane $2=pane tty $3=session id → 0 claude exited on SI
   done
 }
 
+# THE SUBJECT, PINNED AT ARM (move-lane-double-submit, the 2026-10-17 pane-7 strand). The watcher is
+# armed BEFORE the commit tail, and that tail (confirm, last read, load gate, debt) ran 5.5 minutes
+# at load ~6/core. Pane 7's claude (pid 65405) exited at 07:55:26 inside that stretch; the watcher saw
+# the shell, typed the relaunch, and claude 79475 was up by 07:57:48. The tail then opened the debt
+# at 07:59:48 and typed /exit into the pane, which by then held 79475: it ended at 07:59:55, and
+# the move closed STRANDED. Nothing in the tail asked whether the claude it was about to exit was
+# still the one the watcher was armed against. Records: tests/fixtures/move-lane-2026-10-17/pane7.
+# So the subject is pinned by (pid, start time) before the watcher detaches, and the tail re-reads it
+# at each step that would act on the pane. A subject gone or replaced means the pane is the watcher's:
+# the tail types nothing and opens no debt (the watcher's own failure arms settle one if they need
+# it, since `cc-resume-debt settle` opens a missing debt itself). An unpinnable subject is never
+# "gone", so a recycle that cannot pin behaves exactly as before.
+hf_recycle_subject_pin() { # $1=pane tty $2=session id → RCY_SUBJECT_PID / RCY_SUBJECT_LSTART (both empty: unpinned)
+  local pid=""
+  RCY_SUBJECT_PID="" RCY_SUBJECT_LSTART=""
+  if [ "${RCY_REMOTE:-0}" = 1 ]; then
+    case "${HF_REMOTE_ROW_PID:-}" in ''|*[!0-9]*) ;; *) pid="$HF_REMOTE_ROW_PID" ;; esac
+  fi
+  if [ -z "$pid" ] && hf_exit_signal_pin "${1:-}" "${2:-}" 2>/dev/null; then pid="$HF_EXIT_SIG_PID"; fi
+  HF_EXIT_SIG_PID="" HF_EXIT_SIG_LSTART="" HF_EXIT_SIG_WHY=""
+  [ -n "$pid" ] || return 0
+  RCY_SUBJECT_LSTART="$(_hf_lstart "$pid")"
+  [ -n "$RCY_SUBJECT_LSTART" ] && RCY_SUBJECT_PID="$pid"
+  return 0
+}
+
+hf_recycle_subject_gone() { # → 0 the pinned claude has exited (or its pid now names another process) · 1 still there, or never pinned
+  [ -n "${RCY_SUBJECT_PID:-}" ] && [ -n "${RCY_SUBJECT_LSTART:-}" ] || return 1
+  [ "$(_hf_lstart "$RCY_SUBJECT_PID")" != "$RCY_SUBJECT_LSTART" ]
+}
+
+hf_recycle_subject_yield() { # $1=where the tail noticed → 0 always: one row, one line; the caller returns 0
+  emit_recycle_event recycle-subject-exited "" "$SID" "claude pid $RCY_SUBJECT_PID (lstart $RCY_SUBJECT_LSTART) exited on its own $1; the watcher owns the relaunch — nothing typed, no exit actuator run${2:+, $2}" || true
+  echo "→ exit: NOT typed — claude pid $RCY_SUBJECT_PID exited on its own $1, after the watcher armed. The watcher (pid ${WATCHER_PID:-?}) relaunches the session, and a /exit now could land in that relaunch.${2:+ ($2)}"
+  return 0
+}
+
 # THE LOAD HOLD (docs/research/recycle-failures-kitty-2026-10-10/REPORT.md fix 8b). F1 (pane 44,
 # 2026-10-09) typed /exit at ~45 runnable per core; the post-exit path then had to TYPE the relaunch
 # through a kitty RC transport running at its 10 s bound, failed 16 times and stranded the pane. A
@@ -4199,6 +4236,11 @@ _it2_type_line() { # $1=it2-bin $2=session-id $3=line → 0 verified+submitted /
   local attempts="${FIRE_TYPE_ATTEMPTS:-4}" settle="${FIRE_TYPE_SETTLE:-0.5}" nlines="${FIRE_TYPE_READLINES:-500}"
   local presettle="${FIRE_TYPE_PRESETTLE:-0.12}" bound="${HF_SEND_TIMEOUT_S:-${HF_TIMEOUT_S:-}}"
   local lstrip lpc echo_ms t_end srx s_ms rrx tail seen fused crx body
+  # WHICH LINE, in every telemetry row: it2_type_verified types TWO lines (the spell-correction disarm,
+  # then the command), each with its own attempt counter. Unlabelled, pane 7's disarm row "attempt=2
+  # submitted" followed by the relaunch row "attempt=1 submitted" read as one line typed twice
+  # (2026-10-17, tests/fixtures/move-lane-2026-10-17/pane7/recycle-watcher.log).
+  local kind="${HF_TYPE_LINE_KIND:-cmd}"
   lstrip="$(printf '%s' "$line" | tr -d '[:space:]')"
   [ -n "$lstrip" ] || return 1
   # Every send and read runs under HF_SEND_TIMEOUT_S, passed as `HF_TIMEOUT_S=… hf_bounded` (the
@@ -4216,7 +4258,7 @@ _it2_type_line() { # $1=it2-bin $2=session-id $3=line → 0 verified+submitted /
     # Typing now would put the wire into it. Only a caller that knows the pane's tty can ask.
     if [ -n "${HF_TYPE_TTY:-}" ] && command -v pane_cc_state >/dev/null 2>&1 \
        && [ "$(pane_cc_state "$HF_TYPE_TTY")" = cc ]; then
-      _hf_type_emit "$id" "attempt=$attempt verdict=foreground-cc focused=$focused load_per_core=${lpc:-?}"
+      _hf_type_emit "$id" "attempt=$attempt line=$kind verdict=foreground-cc focused=$focused load_per_core=${lpc:-?}"
       echo "→ pane $id already holds a claude — an earlier typed line landed late; nothing more typed" >&2
       return 0
     fi
@@ -4248,7 +4290,7 @@ _it2_type_line() { # $1=it2-bin $2=session-id $3=line → 0 verified+submitted /
     done
     seen=0; case "$reread" in *"$nonce"*) seen=1 ;; esac
     fused=0; [ "$tail" = 2 ] && fused=1
-    body="attempt=$attempt mode=$mode send_rc=$srx send_ms=$s_ms read_rc=$rrx read_bytes=${#reread} nonce_seen=$seen suffix_ok=$([ "$tail" = 0 ] && echo 1 || echo 0) fused=$fused focused=$focused load_per_core=${lpc:-?} echo_deadline_ms=$echo_ms bound_s=${bound:-none}"
+    body="attempt=$attempt line=$kind mode=$mode send_rc=$srx send_ms=$s_ms read_rc=$rrx read_bytes=${#reread} nonce_seen=$seen suffix_ok=$([ "$tail" = 0 ] && echo 1 || echo 0) fused=$fused focused=$focused load_per_core=${lpc:-?} echo_deadline_ms=$echo_ms bound_s=${bound:-none}"
     if [ "$tail" = 0 ]; then
       crx=0; HF_TIMEOUT_S="$bound" hf_bounded "$it2" session send -s "$id" $'\r' >/dev/null 2>&1 || crx=$?   # verified → submit
       if [ "$crx" = 0 ]; then _hf_type_emit "$id" "$body cr_rc=0 verdict=submitted"; return 0; fi
@@ -4287,7 +4329,7 @@ it2_type_verified() { # $1=it2-bin $2=session-id $3=command → 0 verified+submi
   # wire non-empty for every input, so checking that instead would silently submit an empty command.
   [ -n "$(printf '%s' "$cmd" | tr -d '[:space:]')" ] || return 1
   if [ "${FIRE_NOCORRECT:-1}" = 1 ]; then
-    _it2_type_line "$it2" "$id" "$FIRE_NOCORRECT_LINE" \
+    HF_TYPE_LINE_KIND=disarm _it2_type_line "$it2" "$id" "$FIRE_NOCORRECT_LINE" \
       || echo "⚠ could not disarm zsh spell-correction in pane $id — proceeding (the launch line is still echo-verified)" >&2
   fi
   _it2_type_line "$it2" "$id" "$cmd"
@@ -18209,6 +18251,10 @@ recycle_fire_commit() {
     RCY_CONFIRM_RAN=1
     hf_canary_hook after-confirm "$SID" "$RCY_TS_SID"
   fi
+  # THE SUBJECT, RE-READ (1 of 3; hf_recycle_subject_pin). Before the last read: a pane the watcher
+  # already relaunched into must not be read as a draft or a busy turn and held, since a hold disarms
+  # the watcher and unconfirms the source under the relaunch.
+  if hf_recycle_subject_gone; then hf_recycle_subject_yield "before the last read"; return 0; fi
   # The /exit's wake guard sits BEFORE the last read, not between it and the keystroke: a guard that
   # slept after the read would re-open exactly the window the read exists to close.
   hf_wake_guard "the /exit"
@@ -18231,6 +18277,10 @@ recycle_fire_commit() {
   # Same subject sid the watcher is handed: the resumed sid in resume mode, else the closed one.
   rcy_debt_sid="$rcy_old_sid"
   if [ -n "$RESUME_LAUNCHER" ] && [ -n "$RCY_SOURCE_SESSION" ]; then rcy_debt_sid="$RCY_SOURCE_SESSION"; fi
+  # THE SUBJECT, RE-READ (2 of 3). Before the debt: the last read and the load gate can take minutes
+  # under load, and a debt opened after the watcher has relaunched and discharged stays open forever
+  # (pane 7: discharged 07:58:15, re-opened 07:59:48, so the move read STRANDED).
+  if hf_recycle_subject_gone; then hf_recycle_subject_yield "before the resume debt"; return 0; fi
   if [ -n "$rcy_debt_sid" ]; then
     if [ -n "$RESUME_LAUNCHER" ]; then rcy_debt_cwd="$LAUNCH_DIR"; else rcy_debt_cwd="$PWD"; fi
     _hf_resume_debt open --sid "$rcy_debt_sid" --cfg "${RESUME_CFG:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}" \
@@ -18250,7 +18300,11 @@ recycle_fire_commit() {
     2) [ -n "$rcy_debt_sid" ] && _hf_resume_debt abandon --sid "$rcy_debt_sid" --why "exit signal ignored: SIGTERM sent to claude pid $HF_EXIT_SIG_PID, still running after $(hf_exit_signal_grace)s, no KILL sent, nothing typed; session alive"
        hf_recycle_hold exit-signal-ignored "SIGTERM to claude pid $HF_EXIT_SIG_PID (lstart $HF_EXIT_SIG_LSTART) ignored for $(hf_exit_signal_grace)s, no KILL sent" \
          "claude pid $HF_EXIT_SIG_PID is still running $(hf_exit_signal_grace)s after SIGTERM; no KILL was sent and nothing was typed, so the session is alive. Should it exit later, its pane returns to a shell with no relaunch" ;;
-    *) echo "→ exit: typed /exit — $HF_EXIT_SIG_WHY" ;;
+    *) # THE SUBJECT, RE-READ (3 of 3), the last moment before the keystroke. The debt just opened
+       # stays: the watcher has not relaunched yet (check 2 saw the subject alive), so its engagement
+       # discharges the debt.
+       if hf_recycle_subject_gone; then hf_recycle_subject_yield "before the typed /exit" "the resume debt opened above stays for the watcher to discharge"; return 0; fi
+       echo "→ exit: typed /exit — $HF_EXIT_SIG_WHY" ;;
   esac
   # ── /exit, READ BACK (W2b) — see hf_exit_readback. Kill switch HF_EXIT_READBACK=off restores the
   # as_write loop. The blind anti-strand Enter that used to follow it is GONE on both paths: an Enter
@@ -18743,6 +18797,9 @@ recycle_fire_armed() {
   # shellcheck disable=SC2031  # read inside that same subshell, where the tail runs
   if [ "${RCY_DEFERRED:-0}" = 1 ]; then RCY_CALLER_PID_ARG="${RCY_DEFER_CALLER_PID:-}"
   else RCY_CALLER_PID_ARG="$(hf_invoking_call_pid "$tty")" || RCY_CALLER_PID_ARG=""; fi
+  # The claude the commit tail will exit, pinned while it is still certainly there: once the watcher
+  # is armed it may exit at any moment and be relaunched (hf_recycle_subject_pin).
+  hf_recycle_subject_pin "$tty" "${RCY_SOURCE_SESSION:-$rcy_old_sid}"
   hf_phase detach
   # The watcher's outcome rows keep this recycle's clock (item 4b): exported here, at its detach only.
   export HF_T0_EPOCH HF_RCY_PHASES
