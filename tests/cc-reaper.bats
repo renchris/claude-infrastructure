@@ -211,6 +211,11 @@ EOF
   # unpinned ledger would append the operator's real disposal record from a test fixture.
   export CC_REAPER_WT_REMOVE_MAX=4
   export CC_WTGC_DISPOSAL_LOG="$D/worktree-disposals.jsonl"
+  # worktree_cleanup enqueues through the tombstone library (WP-11); the queue and wake file land under
+  # the fixtured $HOME through the library's defaults, and the library is the one in this tree.
+  export CC_WT_TOMBSTONE_LIB="$BATS_TEST_DIRNAME/../scripts/lib/wt-tombstone.sh"
+  unset WT_STATE_DIR WT_EVENTS_FILE WT_WAKE_FILE
+  WT_EVENTS="$HOME/.claude/state/wt-events.jsonl"
 }
 # Pane UUIDs must be UUID-SHAPED ([0-9A-Fa-f-]) — cc-reaper's fired_peer refuses anything else as a
 # path fragment, so the legacy "PANE-A" labels deliberately cannot carry a marker.
@@ -677,26 +682,52 @@ mkworktree() { # <main-repo> <wt-path> — a real LINKED worktree under a */.wor
   git -C "$m" worktree add -q "$w" -b wt-branch >/dev/null 2>&1
 }
 
-@test "worktree_cleanup REMOVES a fully clean linked worktree after a reap" {
+@test "worktree_cleanup QUEUES a clean linked worktree after a reap and leaves it on disk (WP-11)" {
+  # DESIGN load-root-cause-2026-10-17 §3.7 item 8 "Teardown keeps the tree": a landed-clean tree whose
+  # transcript is minutes old must survive the sweep; the wake run applies grace and pins to it.
   mkworktree "$D/main" "$D/.worktrees/wt-clean"
   mark_fired
   mock_classify finished-teammate "$D/.worktrees/wt-clean" 999 yes "$WPANE"
   run "$R" sweep --reap
   td_called
-  echo "$output" | grep -q 'worktree removed'
+  echo "$output" | grep -q 'worktree QUEUED'
+  [ -d "$D/.worktrees/wt-clean" ]
+  [ "$(grep -c . "$WT_EVENTS")" = 1 ]
+  jq -e --arg p "$D/.worktrees/wt-clean" '.ev == "pane-teardown" and .path == $p' "$WT_EVENTS" >/dev/null
+  [ -f "$HOME/.claude/state/worktree-gc.wake" ]
+  [ ! -s "$CC_WTGC_DISPOSAL_LOG" ]
+}
+
+@test "RED control: the pre-WP-11 reaper REMOVES the same tree at teardown" {
+  git -C "$BATS_TEST_DIRNAME/.." show 7fa90e0c2:bin/cc-reaper > "$D/cc-reaper.pre-wp11" || skip "pre-change blob unavailable"
+  chmod +x "$D/cc-reaper.pre-wp11"
+  mkworktree "$D/main" "$D/.worktrees/wt-clean"
+  mark_fired
+  mock_classify finished-teammate "$D/.worktrees/wt-clean" 999 yes "$WPANE"
+  run "$D/cc-reaper.pre-wp11" sweep --reap
+  td_called
   [ ! -d "$D/.worktrees/wt-clean" ]
 }
 
-@test "worktree_cleanup LEAVES a worktree holding untracked files (--force would delete them)" {
-  # The pane is still reaped — only the on-disk tree is preserved. Without this guard the relaxed
-  # work_landed would let an uncommitted research report be deleted by `worktree remove --force`.
+@test "worktree_cleanup with no tombstone library queues nothing and leaves the tree" {
+  mkworktree "$D/main" "$D/.worktrees/wt-nolib"
+  mark_fired
+  mock_classify finished-teammate "$D/.worktrees/wt-nolib" 999 yes "$WPANE"
+  CC_WT_TOMBSTONE_LIB="$D/absent.sh" run "$R" sweep --reap
+  td_called
+  echo "$output" | grep -q 'tombstone library unavailable'
+  [ -d "$D/.worktrees/wt-nolib" ]
+  [ ! -e "$WT_EVENTS" ]
+}
+
+@test "worktree_cleanup LEAVES a worktree holding untracked files" {
+  # The pane is still reaped — only the on-disk tree is preserved.
   mkworktree "$D/main2" "$D/.worktrees/wt-litter"
   echo "uncommitted research report" > "$D/.worktrees/wt-litter/REPORT.md"
   mark_fired
   mock_classify finished-teammate "$D/.worktrees/wt-litter" 999 yes "$WPANE"
   run "$R" sweep --reap
   td_called                                          # pane reaped
-  echo "$output" | grep -q 'LEFT INTACT'
   [ -f "$D/.worktrees/wt-litter/REPORT.md" ]         # the work survives
 }
 
@@ -823,66 +854,32 @@ EOF
   ! echo "$output" | grep -q 'reap commands' || false
 }
 
-@test "RUNAWAY BOUND: past CC_REAPER_WT_REMOVE_MAX the sweep stops REMOVING and says so" {
-  # Every gate above this one judges ONE worktree. The failure class P3 exists for is a sweep whose
-  # judgment is systematically wrong — a moved trunk, stale classify evidence — and per-item
-  # correctness cannot bound that. Only a count can.
+@test "every torn-down tree is QUEUED and none removed — two teardowns, two events, both trees on disk" {
+  # The runaway bound braked REMOVALS; teardown no longer removes, so there is nothing to brake. Both
+  # panes are still torn down.
   mkworktree "$D/main-b" "$D/.worktrees/wt-b1"
   git -C "$D/main-b" worktree add -q "$D/.worktrees/wt-b2" -b wt-branch2 >/dev/null 2>&1
   mock_classify_handoffs "$D/.worktrees/wt-b1" "$D/.worktrees/wt-b2"
   CC_REAPER_WT_REMOVE_MAX=1 run "$R" sweep --reap
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q 'worktree removal BOUND HIT'
-  echo "$output" | grep -q 'removal bound 1 reached this sweep'
-  # Exactly one survives — and BOTH panes were still torn down: this is a brake on destruction,
-  # never a stop on the reap. A directory left on disk is recoverable; that is the whole trade.
-  n=0
-  [ -d "$D/.worktrees/wt-b1" ] && n=$((n+1))
-  [ -d "$D/.worktrees/wt-b2" ] && n=$((n+1))
-  [ "$n" -eq 1 ]
+  ! echo "$output" | grep -q 'BOUND HIT' || false
+  [ -d "$D/.worktrees/wt-b1" ] && [ -d "$D/.worktrees/wt-b2" ]
+  [ "$(grep -c pane-teardown "$WT_EVENTS")" = 2 ]
   [ "$(grep -c . "$D/td-calls")" -ge 2 ]
 }
 
-@test "RUNAWAY BOUND RED-PROOF: raise it by one and BOTH of the same worktrees go" {
-  mkworktree "$D/main-b" "$D/.worktrees/wt-b1"
-  git -C "$D/main-b" worktree add -q "$D/.worktrees/wt-b2" -b wt-branch2 >/dev/null 2>&1
-  mock_classify_handoffs "$D/.worktrees/wt-b1" "$D/.worktrees/wt-b2"
-  CC_REAPER_WT_REMOVE_MAX=2 run "$R" sweep --reap
-  ! echo "$output" | grep -q 'BOUND HIT' || false
-  [ ! -d "$D/.worktrees/wt-b1" ]
-  [ ! -d "$D/.worktrees/wt-b2" ]
-}
-
-@test "RUNAWAY BOUND: an unparseable value falls back to the DEFAULT, never to unbounded" {
-  # A typo must not widen a destructive budget. `-1` is the one accepted opt-out and it is spelled
-  # out; `abc` is not a request for unlimited removals.
-  mkworktree "$D/main-bv" "$D/.worktrees/wt-bv"
-  mock_classify_handoffs "$D/.worktrees/wt-bv"
-  CC_REAPER_WT_REMOVE_MAX=abc run "$R" sweep --reap
-  [ ! -d "$D/.worktrees/wt-bv" ]                     # default 4 > 1 removal ⇒ this one still goes
-  ! echo "$output" | grep -q 'BOUND HIT' || false
-}
-
-@test "the DISPOSAL LEDGER records every removal, and the gitignored bytes it destroyed" {
-  # `git status --porcelain` — the untracked guard above — cannot see ignored content, and
-  # `git worktree remove` deletes it anyway at exit 0. Nothing refuses on it (the live population is
-  # dominated by node_modules), so the record is the ONLY trace those bytes ever existed.
+@test "a teardown writes no disposal row and destroys no gitignored bytes — the wake run tombstones" {
   mkworktree "$D/main-l" "$D/.worktrees/wt-l"
   printf 'secrets.env\n' > "$D/.worktrees/wt-l/.gitignore"
   git -C "$D/.worktrees/wt-l" add .gitignore
   git -C "$D/.worktrees/wt-l" commit -qm ignore
-  echo 'TOKEN=live' > "$D/.worktrees/wt-l/secrets.env"     # invisible to --porcelain, deleted anyway
-  # The worktree is now 1 commit ahead of trunk; land it so work_landed still holds.
+  echo 'TOKEN=live' > "$D/.worktrees/wt-l/secrets.env"
   git -C "$D/main-l" update-ref refs/remotes/origin/main "$(git -C "$D/.worktrees/wt-l" rev-parse HEAD)"
   mock_classify_handoffs "$D/.worktrees/wt-l"
   run "$R" sweep --reap
-  [ ! -d "$D/.worktrees/wt-l" ]
-  echo "$output" | grep -q 'gitignored content destroyed with it'
-  # One JSON line, in the SAME ledger scripts/worktree-gc.sh writes — the operator's question is
-  # "what was in that directory", never "which of my two reapers removed it". `actor` separates them.
-  [ -s "$CC_WTGC_DISPOSAL_LOG" ]
-  run jq -r '.actor + " " + .event + " " + .destroyed_ignored' "$CC_WTGC_DISPOSAL_LOG"
-  [ "$output" = "cc-reaper worktree-disposed secrets.env" ]
+  [ "$(cat "$D/.worktrees/wt-l/secrets.env")" = 'TOKEN=live' ]
+  [ ! -s "$CC_WTGC_DISPOSAL_LOG" ]
+  grep -q pane-teardown "$WT_EVENTS"
 }
 
 @test "a REFUSED removal writes no disposal record — the ledger states facts, not intentions" {

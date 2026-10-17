@@ -225,6 +225,12 @@ WT_REMOVE_MAX="${CC_REAPER_WT_REMOVE_MAX:-4}"
 case "$WT_REMOVE_MAX" in -1) ;; ''|*[!0-9]*) WT_REMOVE_MAX=4 ;; esac
 WT_REMOVED_THIS_SWEEP=0
 WT_DISPOSAL_LOG="${CC_WTGC_DISPOSAL_LOG:-$HOME/.claude/autonomy/worktree-disposals.jsonl}"
+# The tombstone library owns the event queue (wt_emit_event). Resolved beside this script through its
+# per-file symlink, else the live layer; CC_WT_TOMBSTONE_LIB pins it for tests.
+_reaper_self="$0"; [ -L "$_reaper_self" ] && _reaper_self="$(readlink "$_reaper_self")"
+WT_LIB="${CC_WT_TOMBSTONE_LIB:-$(cd "$(dirname "$_reaper_self")/.." 2>/dev/null && pwd)/scripts/lib/wt-tombstone.sh}"
+[ -f "$WT_LIB" ] || WT_LIB="$HOME/.claude/scripts/lib/wt-tombstone.sh"
+unset _reaper_self
 
 command -v jq >/dev/null || { echo "cc-reaper: jq required" >&2; exit 2; }
 mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
@@ -722,7 +728,7 @@ _gs_escalation_alive() { # <pid> — did this pid survive the TERM? rc 0 = still
 # by its --drain argv only (`[.]` is the same class in awk -v and grep -E): an orphaned `--census` is still reaped.
 # boot-resume / cc-restore (2026-10-02, W3 P2): the launchd session restore relaunches every pane in
 # turn and can run past 600 s; an orphan-bash TERM mid-restore leaves half the fleet unlaunched.
-GARBAGE_WL="lead-supervisor|cc-dispatch|cc-discover|cc-reaper|qos-census|compressor-sentinel|postland-verify|session-search|devserver-gc|deploy-live|cc-relogin|lr-reset-poller|teammate-reap|capacity-alarm|power-policy|log-rotation|restic|worktree-gc|caffeinate|cc-await-ping|mailbox-wake-arm|ship-land|desk-land|cloud-return|cloud-reconcile|nightly-regression|public-publish|reso-keepalive|boot-resume|cc-restore|lr-upgrade[.]sh --drain|kitty|tmux|iTerm|launchd"
+GARBAGE_WL="lead-supervisor|cc-dispatch|cc-discover|cc-reaper|qos-census|compressor-sentinel|postland-verify|session-search|devserver-gc|deploy-live|cc-relogin|lr-reset-poller|teammate-reap|capacity-alarm|power-policy|log-rotation|restic|worktree-gc|wt-tombstone|caffeinate|cc-await-ping|mailbox-wake-arm|ship-land|desk-land|cloud-return|cloud-reconcile|nightly-regression|public-publish|reso-keepalive|boot-resume|cc-restore|lr-upgrade[.]sh --drain|kitty|tmux|iTerm|launchd"
 _gs_argv_reread() { # <pid> → that pid's argv on stdout, "" when unreadable. Under the fixture seam it
                     # reads CC_REAPER_GARBAGE_PS_B2 (else PS_B again), never the live process table.
   local pid="$1" f
@@ -1753,72 +1759,47 @@ checkpoint_first() { # <cwd> <name> <sid> — snapshot WIP to refs/wip/<name>/LA
   return 0
 }
 
-worktree_cleanup() { # <cwd> — remove a LINKED worktree after a confirmed teardown (never the main tree)
-  local cwd="$1"
+worktree_cleanup() { # <cwd> [sid] — ENQUEUE a linked worktree after a confirmed teardown (never removes)
+  # PANE TEARDOWN IS AN EVENT, NOT A VERDICT (DESIGN load-root-cause-2026-10-17 §3.4, note X6, WP-11).
+  # This used to `git worktree remove` any clean linked tree within one 300 s sweep of its pane going
+  # away: no grace, no pin, no repo scope. Pane teardown is the usual end of a fired session, so this
+  # was the remover most likely to meet a cwd a transcript can still resume (15 removals since
+  # 2026-08-22, 13 of those paths still gone). Idle trees cost ~0 and disk is not binding, so the
+  # sweep now only records the event: one append to wt-events.jsonl plus a touch of the wake file.
+  # The worktree-gc wake run applies the 24 h grace, wt_pinned, the repo scope and PARK-first to it,
+  # exactly as to every other event. The pane is still reaped; the tree is never touched here.
+  local cwd="$1" sid="${2:-}"
   case "$cwd" in /tmp/wt-*|/private/tmp/wt-*|/tmp/worktree-*|*/.worktrees/*) ;; *) return 0 ;; esac
-  # Only a LINKED worktree (git-dir != <cwd>/.git). Removing must run from the MAIN worktree.
-  local gitdir main
+  # Only a LINKED worktree (git-dir != <cwd>/.git); the main tree is never an event.
+  local gitdir
   gitdir="$("$GIT_BIN" -C "$cwd" rev-parse --git-dir 2>/dev/null)" || return 0
-  case "$gitdir" in */worktrees/*) ;; *) return 0 ;; esac      # not a linked worktree → leave it
-  main="$("$GIT_BIN" -C "$cwd" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2; exit}')"
-  [ -n "$main" ] && [ "$main" != "$cwd" ] || return 0
-  # UNTRACKED GUARD (2026-07-20, paired with the --untracked-files=no relaxation in work_landed):
-  # `worktree remove --force` DELETES untracked files. work_landed now (correctly) ignores them, so
-  # without this check a reap could reach here and destroy an uncommitted research report / scratch
-  # output nothing ever committed. HERE — and only here, where deletion is real — untracked counts
-  # as dirty: leave the tree on disk and say so. The PANE is still reaped either way.
-  if [ -n "$("$GIT_BIN" -C "$cwd" status --porcelain 2>/dev/null)" ]; then
-    say "    worktree LEFT INTACT (untracked files present — removal would delete them): $cwd"
-    log "worktree left intact (untracked present): $cwd"; return 0
+  case "$gitdir" in */worktrees/*) ;; *) return 0 ;; esac
+  # shellcheck source=/dev/null
+  if [ -f "$WT_LIB" ] && ( . "$WT_LIB" && wt_emit_event pane-teardown "$cwd" "$sid" ); then
+    say "    worktree QUEUED for the wake run (pane-teardown; grace + pins apply there): $cwd"
+    log "worktree queued (pane-teardown): $cwd sid=${sid:-none}"
+  else
+    say "    worktree LEFT INTACT (tombstone library unavailable — nothing queued): $cwd"
+    log "worktree left intact (no wt-tombstone library at $WT_LIB): $cwd"
   fi
-  # ── RUNAWAY BOUND (P3, 2026-08-15) ───────────────────────────────────────────────────────────
-  # The per-sweep cap is what makes an unattended destructive actuator survivable. Every gate
-  # above is a judgment about ONE worktree, and the whole class of failure that put this file in
-  # MASTER_FLEET_FOOTPRINT §P3 is a sweep in which that judgment is systematically wrong — a
-  # trunk that moved, a classify verdict built on stale evidence, a `$TRUNK` that resolves
-  # somewhere unexpected. Per-item correctness cannot bound a systematic error; only a count can.
-  # Past the cap the reaper stops REMOVING and says so, loudly, once. Panes are still torn down:
-  # a directory left on disk is recoverable by definition, and this is a brake, not a stop.
+}
+
+wt_removal_within_bound() { # <cwd> → 0 while this sweep is under CC_REAPER_WT_REMOVE_MAX removals
+  # ── RUNAWAY BOUND (P3, 2026-08-15) — kept for any later removing caller; none since WP-11 ─────
+  # The per-sweep cap is what makes an unattended destructive actuator survivable: per-item
+  # correctness cannot bound a systematic error; only a count can. Past the cap, stop REMOVING and
+  # say so, loudly, once. worktree_cleanup no longer removes, so nothing calls this today.
   WT_REMOVED_THIS_SWEEP=$((WT_REMOVED_THIS_SWEEP + 1))
   if [ "$WT_REMOVE_MAX" -ge 0 ] && [ "$WT_REMOVED_THIS_SWEEP" -gt "$WT_REMOVE_MAX" ]; then
     if [ "$WT_REMOVED_THIS_SWEEP" = "$((WT_REMOVE_MAX + 1))" ]; then
       say "    ⚠️ worktree removal BOUND HIT ($WT_REMOVE_MAX this sweep) — every further tree is LEFT INTACT."
-      say "       A sweep that wants to remove more than $WT_REMOVE_MAX worktrees is making a systematic"
-      say "       judgment, not $WT_REMOVE_MAX individual ones. Inspect before raising CC_REAPER_WT_REMOVE_MAX."
       log "worktree removal bound hit: max=$WT_REMOVE_MAX — refusing further removals this sweep"
     fi
-    say "    worktree LEFT INTACT (removal bound $WT_REMOVE_MAX reached this sweep): $cwd"
-    log "worktree left intact (bound $WT_REMOVE_MAX): $cwd"
-    return 0
+    say "    worktree LEFT INTACT (removal bound $WT_REMOVE_MAX reached this sweep): $1"
+    log "worktree left intact (bound $WT_REMOVE_MAX): $1"
+    return 1
   fi
-  # ── THE BLAST RADIUS, READ BEFORE THE REMOVAL ────────────────────────────────────────────────
-  # `git status --porcelain` — the guard directly above — is BLIND to ignored content, and
-  # `git worktree remove` deletes it anyway, at exit 0, with no --force and no warning (measured
-  # 2026-07-30 in scripts/worktree-gc.sh:ignored_inventory — a worktree holding only `secrets.env`
-  # removes clean and the file is gone). It is not refused on, for the reason recorded there: the
-  # live population is dominated by `node_modules`/`__pycache__`/`.claude-plans`, so refusing
-  # would make this arm inert by construction. It is NAMED instead — read here, before removal,
-  # because afterwards the answer is unrecoverable, which is exactly why nothing has ever
-  # accounted for it. This is the ONE trace that these bytes existed.
-  local ignored head branch
-  ignored="$("$GIT_BIN" -C "$cwd" status --porcelain --ignored 2>/dev/null \
-             | sed -n 's/^!! //p' | sort | tr '\n' ',' | sed 's/,$//')"
-  head="$("$GIT_BIN" -C "$cwd" rev-parse HEAD 2>/dev/null)"
-  branch="$("$GIT_BIN" -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null)"
-  # NO --force (P3, 2026-08-15). It shipped here and nowhere else: scripts/worktree-gc.sh removes
-  # on three separate paths and never forces, its test suite guards the SOURCE against forcing
-  # (tests/worktree-gc.bats "the no-force / no-D discipline is in the source"), and audit §8-H is
-  # the ruling — git's refusal is a second gate on OUR evidence, and forcing discards it. The tree
-  # is proven clean four lines up, so --force overrode nothing here except git's own opinion, on
-  # the one actuator that runs unattended and therefore has nobody to ask.
-  if "$GIT_BIN" -C "$main" worktree remove "$cwd" 2>/dev/null; then
-    say "    worktree removed: $cwd"; log "worktree removed: $cwd"
-    [ -n "$ignored" ] && say "      └ gitignored content destroyed with it (git records this nowhere else): $ignored"
-    log_worktree_disposal "$cwd" "$branch" "$head" "$ignored"
-  else
-    say "    worktree remove REFUSED by git (left intact — it changed since the gates ran): $cwd"
-    log "worktree remove refused: $cwd"
-  fi
+  return 0
 }
 
 log_worktree_disposal() { # <path> <branch> <head> <ignored-csv>
@@ -2669,7 +2650,7 @@ sweep() {
     if [ "$trc" = 0 ]; then
       reaped=$((reaped+1)); say "    torn down + effect-verified (cc-teardown exit 0)"; log "reaped $name [$cause] pane=$pane decided_age=${decided_age}s sweep_age=${sweep_age}s"
       clear_fired_marker "$pane"        # the pane is gone — retire its fired-peer marker (T-P3-4)
-      worktree_cleanup "$cwd"
+      worktree_cleanup "$cwd" "$rt_sid"
     elif [ "$trc" = 6 ]; then
       # INDETERMINATE (cc-teardown exit 6): the process is gone but the pane's fate was UNREADABLE.
       # NOT "its gate refused" — nothing refused, and NOT a survival claim (that is rc 5). Reported in
