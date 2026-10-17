@@ -28,6 +28,11 @@
 #      hatch for deliberately resuming a transplanted transcript on another account.
 #      CC_RESUME_MKDIR=0 refuses to recreate a reaped worktree path (default: recreate + warn).
 #      CC_RESUME_RESOLVE_BIN overrides the resolver path (tests).
+#
+# A MISSING CWD (resolver cwd_exists=0) is, in order: unparked when the park index holds the path
+# (`wt-tombstone unpark`, no prompt); offered a default-yes restore when a tombstone matched the sid or
+# branch and stdin is a terminal (`cc-wt-restore`); else recreated empty as before, plus a printed
+# `cc-wt-restore` line when a tombstone exists. Each outcome is one resume-reaped.jsonl row.
 
 # shellcheck disable=SC2034  # CC_RESUME_CFG/CWD/ARGS are the RETURN VALUES — read by the caller.
 _cc_resume_pin() {
@@ -85,6 +90,7 @@ _cc_resume_pin() {
   fi
 
   local _sid="" _account="" _cfg="" _cwd="" _cwd_exists=1 _k _v
+  local _parked="" _tomb_state="" _tomb_branch="" _tomb_head="" _tomb_files="" _ans="" _restored=0 _wtt="" _wtr=""
   while IFS='=' read -r _k _v; do
     case "$_k" in
       sid)        _sid="$_v" ;;
@@ -92,6 +98,11 @@ _cc_resume_pin() {
       config_dir) _cfg="$_v" ;;
       cwd)        _cwd="$_v" ;;
       cwd_exists) _cwd_exists="$_v" ;;
+      parked)     _parked="$_v" ;;
+      tomb_state) _tomb_state="$_v" ;;
+      tomb_branch) _tomb_branch="$_v" ;;
+      tomb_head)  _tomb_head="$_v" ;;
+      tomb_files) _tomb_files="$_v" ;;
     esac
   done <<EOF
 $_out
@@ -135,6 +146,21 @@ EOF
   local _there; _there="$(cd "$_cwd" 2>/dev/null && pwd -P)"
   [ -n "$_there" ] && [ "$_there" = "$_here" ] && return 0
 
+  # ── a missing cwd: unpark it, offer a restore from its tombstone, else recreate it empty ──
+  # The bash library (scripts/lib/wt-tombstone.sh) is never sourced here: this file runs inside the
+  # operator's zsh. Its CLIs run as subprocesses instead. Every outcome is one resume-reaped.jsonl
+  # row, so the demand for restores is measured rather than guessed (DESIGN §3.5 phase 1).
+  if [ "$_cwd_exists" != "1" ]; then
+    _wtt="$(command -v wt-tombstone 2>/dev/null)"; [ -n "$_wtt" ] || _wtt="$HOME/.claude/bin/wt-tombstone"
+    _wtr="$(command -v cc-wt-restore 2>/dev/null)"; [ -n "$_wtr" ] || _wtr="$HOME/.claude/bin/cc-wt-restore"
+  fi
+  # PARKED: the very tree that stood here, moved back. Lossless, so no prompt and no sid.
+  if [ "$_cwd_exists" != "1" ] && [ "$_parked" = "1" ] && "$_wtt" unpark "$_cwd" >/dev/null; then
+    _cwd_exists=1
+    "$_wtr" --log-reaped cc-resume-shell "$_cwd" "$_sid" unparked >/dev/null 2>&1
+    [ -t 2 ] && printf '↩︎ worktree %s was parked — moved it back.\n' "$_cwd" >&2
+  fi
+
   if [ "$_cwd_exists" != "1" ]; then
     # The worktree was reaped. The transcript is intact and is the whole value, but Claude can
     # only find it from a cwd that hashes to its project dir — so the path has to exist. An
@@ -142,15 +168,43 @@ EOF
     if [ "${CC_RESUME_MKDIR:-1}" = "0" ]; then
       [ -t 2 ] && printf '⚠️  %s no longer exists — cannot resume %s from here (CC_RESUME_MKDIR=0).\n' \
         "$_cwd" "${_sid%%-*}" >&2
+      "$_wtr" --log-reaped cc-resume-shell "$_cwd" "$_sid" refused >/dev/null 2>&1
       return 0
     fi
     case "$_cwd" in
       /*) ;;
       *) return 0 ;;
     esac
-    mkdir -p "$_cwd" 2>/dev/null || { [ -t 2 ] && printf '⚠️  could not recreate %s\n' "$_cwd" >&2; return 0; }
-    [ -t 2 ] && printf '⚠️  worktree %s was reaped — recreated it EMPTY so the transcript can load.\n   The conversation resumes; the working tree does not. For a real restore use limit-recover.\n' \
-      "$_cwd" >&2
+    # DETACHED: removed, with a tombstone that matched this sid or branch. Default yes, but only
+    # with a terminal to answer it; an unattended launch never revives a tree on its own.
+    if [ "$_tomb_state" = "detached" ] && [ -t 0 ]; then
+      printf 'restore worktree %s@%s (~%s files)? [Y/n] ' "${_tomb_branch:-(detached)}" \
+        "$(printf '%s' "$_tomb_head" | cut -c1-7)" "${_tomb_files:-?}" >&2
+      read -r _ans || _ans=n
+      case "$_ans" in
+        n|N|no|NO) ;;
+        # Two spelled-out calls, not ${x:+--branch "$x"}: zsh does not word-split that into two args.
+        *) if [ -n "$_tomb_branch" ]; then
+             "$_wtr" "$_cwd" --sid "$_sid" --branch "$_tomb_branch" --yes >/dev/null && _restored=1
+           else
+             "$_wtr" "$_cwd" --sid "$_sid" --yes >/dev/null && _restored=1
+           fi ;;
+      esac
+    fi
+    if [ "$_restored" = "1" ]; then
+      "$_wtr" --log-reaped cc-resume-shell "$_cwd" "$_sid" restored >/dev/null 2>&1
+      [ -t 2 ] && printf '↩︎ worktree %s restored from its tombstone.\n' "$_cwd" >&2
+    else
+      mkdir -p "$_cwd" 2>/dev/null || {
+        [ -t 2 ] && printf '⚠️  could not recreate %s\n' "$_cwd" >&2
+        "$_wtr" --log-reaped cc-resume-shell "$_cwd" "$_sid" refused >/dev/null 2>&1
+        return 0
+      }
+      [ -t 2 ] && printf '⚠️  worktree %s was reaped — recreated it EMPTY so the transcript can load.\n   The conversation resumes; the working tree does not. For a real restore use limit-recover.\n' \
+        "$_cwd" >&2
+      [ "$_tomb_state" = "detached" ] && printf '   restore its tree: cc-wt-restore %s --sid %s\n' "$_cwd" "$_sid" >&2
+      "$_wtr" --log-reaped cc-resume-shell "$_cwd" "$_sid" recreated-empty >/dev/null 2>&1
+    fi
   fi
 
   CC_RESUME_CWD="$_cwd"
