@@ -442,6 +442,25 @@ wt_emit_event() { # <ev> <path> [sid] → one append to the queue + a touch of t
   return 0
 }
 
+wt_resume_reaped() { # <launcher> <cwd> <sid> <outcome> → one row in resume-reaped.jsonl; never fails the caller
+  # X7 phase 1: every resume that met a missing cwd is counted, with how long that cwd had been quiet,
+  # so the PARK grace and the late-DETACH age can later be set from measured demand, not guessed.
+  local f="${WT_RESUME_REAPED:-$HOME/.claude/autonomy/resume-reaped.jsonl}" newest="" d t age="null"
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    t="$(find "$d" -name '*.jsonl' -type f -exec stat -f %m {} + 2>/dev/null | sort -n | tail -1)"
+    [ -n "$t" ] && { [ -z "$newest" ] || [ "$t" -gt "$newest" ]; } && newest="$t"
+  done <<EOF
+$(wt__transcript_dirs_of "$2")
+EOF
+  [ -n "$newest" ] && age=$(( $(wt__now) - newest ))
+  { mkdir -p "$(dirname "$f")" \
+    && printf '{"ts":"%s","launcher":%s,"cwd":%s,"sid":%s,"outcome":%s,"quiet_s":%s}\n' "$(wt__ts)" \
+         "$(wt__jstr "$1")" "$(wt__jstr "$2")" "$(wt__jstr "$3")" "$(wt__jstr "$4")" "$age" >> "$f"; } 2>/dev/null \
+    || wt__err "resume-reaped row not written for $2"
+  return 0
+}
+
 wt_tomb_find() { # <path> [--sid S] [--branch B] → newest removal row for path (sid OR branch match when given); rc 1 none
   local path="$1" sid="" br="" row
   shift

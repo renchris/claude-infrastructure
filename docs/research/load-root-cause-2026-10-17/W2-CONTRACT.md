@@ -53,6 +53,7 @@ restored | ref-expired | residue-purged | superseded`.
 | `wt_branch_deleted_row <repo> <branch> <sha> <actor> [reason]` | One `branch-deleted` row. |
 | `wt_emit_event <ev> <path> [sid]` | One `printf >>` of `{"ev","path","sid","repo","ts"}` to `$WT_EVENTS_FILE` plus `touch $WT_WAKE_FILE`. Never fails the caller (rc 0 always; stderr on error). |
 | `wt_tomb_find <path> [--sid S] [--branch B]` | Prints the newest ledger row (JSON) for `path` with event ∈ worktree-disposed/guard-snapshot/admin-pruned whose `sids` contains S or `branch` equals B; with neither flag, path match only. rc 1 if none. Uses `jq` (/usr/bin/jq). |
+| `wt_resume_reaped <launcher> <cwd> <sid> <outcome>` | X7 phase 1: one row `{ts,launcher,cwd,sid,outcome,quiet_s}` to `${WT_RESUME_REAPED:-~/.claude/autonomy/resume-reaped.jsonl}`; `quiet_s` = now − newest transcript write for the cwd (null if none). Outcomes: `recreated-empty`, `refused`, `unparked`, `restored`, `exit-1`, `exit-2`. Never fails the caller. |
 | `wt_cleanup_period_days` | Max of `.cleanupPeriodDays` over `wt__config_roots` settings.json; a root with no file or key counts 30. |
 | `wt_ref_expire <repo>` | Deletes `refs/wt-tombstone/<id>/*` whose row is older than `wt_cleanup_period_days` and has no later `restored` row; writes `ref-expired`. **Never touches residue.** |
 | `wt_purge <id> --operator` | Removes `$WT_TOMB_DIR/<id>`; refuses (rc 2) without `--operator`. Writes `residue-purged`. |
