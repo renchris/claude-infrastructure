@@ -1237,3 +1237,129 @@ cc_pane_successor_exec() { echo EXEC > "'"$BATS_TEST_TMPDIR"'/exec.log"; }'
   rr_successor 'true'
   [ "$status" -eq 1 ] && [ ! -e "$BATS_TEST_TMPDIR/exec.log" ] || false
 }
+
+# ── 9. a PARKED tree is unparked, a REMOVED one restored only for its own sid (2026-10-17) ──────────
+# DESIGN load-root-cause-2026-10-17 §3.5 item 4, §3.7 item 7 "Unpark on resume" (WP-13b). Once worktree-gc
+# PARKS an idle tree (`git worktree move` to .parked/<id>, the branch still checked out there), the
+# recreate's `git worktree add "$wt" "$br"` fails and the resume is refused on a tree sitting intact one
+# rename away; the RED control runs the pre-change file (7fa90e0c2) and records exactly that. A REMOVED
+# tree comes back only when its tombstone names the resumed sid; any other sid keeps today's refusal.
+# Lab only: a bare origin, a clone and linked worktrees under the tmpdir, every WT_* store inside it.
+
+W2_SID_ROW=11111111-aaaa-4bbb-8ccc-111111111111     # the session the park / tombstone row names
+W2_SID_OTHER=99999999-ffff-4eee-8ddd-999999999999   # a session it does not
+
+w2_lab() {
+  T="$(cd -P "$BATS_TEST_TMPDIR" && pwd -P)"
+  export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+  unset WT_TRUNK WT_NOW CC_WTGC_DISPOSAL_LOG _WT_TOMBSTONE_SH _WT_PARK_SH CC_RESUME_TOMBSTONE_LIB
+  export WT_LEDGER="$T/ledger.jsonl" WT_TOMB_DIR="$T/tombs" WT_STATE_DIR="$T/state" \
+         WT_CONFIG_ROOTS="$T/cfgroot" WT_RESUME_REAPED="$T/resume-reaped.jsonl"
+  export WT_EVENTS_FILE="$WT_STATE_DIR/wt-events.jsonl" WT_WAKE_FILE="$WT_STATE_DIR/worktree-gc.wake" \
+         WT_PARK_INDEX="$WT_STATE_DIR/wt-parked" WT_PARK_ROOT="$T/parked"
+  export CC_RESUME_REPO_ROOTS="$T/dev"
+  WTT="$REPO_ROOT/bin/wt-tombstone"; M="$T/dev/main"
+  git init -q --bare -b main "$T/origin.git"
+  git init -q -b main "$M"
+  printf '.env*\nout/\n' > "$M/.gitignore"
+  echo base > "$M/f.txt"
+  git -C "$M" add -A && git -C "$M" commit -qm base
+  git -C "$M" remote add origin "$T/origin.git" && git -C "$M" push -q -u origin main
+  git -C "$M" remote set-head origin main
+}
+
+w2_mkwt() { # <branch> → a linked worktree with a commit, ignored residue and a transcript for W2_SID_ROW
+  local w="$T/wts/$1" slug
+  git -C "$M" worktree add -q -b "$1" "$w" main
+  echo one > "$w/one.txt"; git -C "$w" add one.txt; git -C "$w" commit -qm one
+  echo 'SECRET=edited' > "$w/.env.local"
+  mkdir -p "$w/out"; echo data > "$w/out/data.bin"
+  slug="$(printf '%s' "$w" | sed 's#[/.]#-#g')"
+  mkdir -p "$T/cfgroot/projects/$slug"
+  printf '{"type":"user","cwd":"%s","gitBranch":"%s","sessionId":"%s"}\n' "$w" "$1" "$W2_SID_ROW" \
+    > "$T/cfgroot/projects/$slug/$W2_SID_ROW.jsonl"
+  printf '%s' "$w"
+}
+w2_snap() { git -C "$1" status --porcelain --ignored; echo ---; git -C "$1" reflog; }
+w2_reaped() { jq -r --arg o "$1" 'select(.launcher == "reso-resume-one" and .outcome == $o) | .cwd' "$WT_RESUME_REAPED" 2>/dev/null; }
+w2_reap() { # <path> <branch> → tombstone, remove, delete the branch
+  "$WTT" tombstone "$1" lab test >/dev/null || return 1
+  git -C "$M" worktree remove "$1" || return 1
+  git -C "$M" branch -q -D "$2"
+}
+
+@test "UNPARK: a parked tree comes back on a path match with a sid the park row does not name — status and reflog unchanged" {
+  w2_lab; w="$(w2_mkwt feat)"; before="$(w2_snap "$w")"
+  "$WTT" park "$w" lab test --arm ii >/dev/null
+  [ ! -e "$w" ]
+  run env CC_RESUME_DRYRUN=1 timeout 60 "$RRO" next "$w" "$W2_SID_OTHER" feat
+  [ "$status" -eq 0 ] || { echo "status $status: $output"; false; }
+  [[ "$output" == *"unparked $w"* ]] || { echo "$output"; false; }
+  [ "$(w2_snap "$w")" = "$before" ] || { diff <(echo "$before") <(w2_snap "$w"); false; }
+  [ "$(git -C "$w" symbolic-ref --short HEAD)" = feat ]
+  [ "$(w2_reaped unparked)" = "$w" ] || { cat "$WT_RESUME_REAPED"; false; }
+}
+
+@test "UNPARK RED control: the pre-change file refuses the same parked tree — worktree add fails" {
+  w2_lab; w="$(w2_mkwt feat)"
+  "$WTT" park "$w" lab test --arm ii >/dev/null
+  mkdir -p "$T/old/bin"
+  git -C "$REPO_ROOT" show 7fa90e0c2:bin/reso-resume-one > "$T/old/bin/reso-resume-one"
+  chmod +x "$T/old/bin/reso-resume-one"
+  run env CC_RESUME_DRYRUN=1 timeout 60 "$T/old/bin/reso-resume-one" next "$w" "$W2_SID_OTHER" feat
+  [ "$status" -eq 1 ] && [[ "$output" == *"worktree add failed"* ]] || { echo "status $status: $output"; false; }
+  [ ! -e "$w" ]
+}
+
+@test "UNPARK: a .claude-* husk at the path is moved aside and the unpark proceeds" {
+  w2_lab; w="$(w2_mkwt feat)"; before="$(w2_snap "$w")"
+  "$WTT" park "$w" lab test --arm ii >/dev/null
+  mkdir -p "$w/.claude-tasks"
+  run env CC_RESUME_DRYRUN=1 timeout 60 "$RRO" next "$w" "$W2_SID_OTHER" feat
+  [ "$status" -eq 0 ] || { echo "status $status: $output"; false; }
+  [ "$(w2_snap "$w")" = "$before" ]
+  compgen -G "$w.husk-*/.claude-tasks" >/dev/null || { ls -la "$T/wts"; false; }
+}
+
+@test "UNPARK: a husk holding any other file is refused — rc 1, the tree stays parked, the outcome is logged" {
+  w2_lab; w="$(w2_mkwt feat)"
+  "$WTT" park "$w" lab test --arm ii >/dev/null
+  mkdir -p "$w/.claude-tasks"; echo mine > "$w/notes.txt"
+  run env CC_RESUME_DRYRUN=1 timeout 60 "$RRO" next "$w" "$W2_SID_OTHER" feat
+  [ "$status" -eq 1 ] && [[ "$output" == *"could not be unparked"* ]] || { echo "status $status: $output"; false; }
+  [ "$(cat "$w/notes.txt")" = mine ] && [ ! -e "$w/.git" ]
+  "$WTT" parked "$w" >/dev/null
+  [ "$(w2_reaped refused)" = "$w" ] || { cat "$WT_RESUME_REAPED"; false; }
+}
+
+@test "RESTORE: a removed tree whose tombstone names this sid comes back at the recorded head, residue included" {
+  w2_lab; w="$(w2_mkwt feat)"; head="$(git -C "$w" rev-parse HEAD)"
+  w2_reap "$w" feat
+  run env CC_RESUME_DRYRUN=1 timeout 60 "$RRO" next "$w" "$W2_SID_ROW" feat --repo "$M"
+  [ "$status" -eq 0 ] || { echo "status $status: $output"; false; }
+  [ "$(git -C "$w" rev-parse HEAD)" = "$head" ]
+  [ "$(cat "$w/.env.local")" = 'SECRET=edited' ] && [ "$(cat "$w/out/data.bin")" = data ]
+  [ "$(w2_reaped restored)" = "$w" ] || { cat "$WT_RESUME_REAPED"; false; }
+}
+
+@test "RESTORE: a removed tree whose tombstone names another sid keeps today's refusal" {
+  w2_lab; w="$(w2_mkwt feat)"
+  w2_reap "$w" feat
+  run env CC_RESUME_DRYRUN=1 timeout 60 "$RRO" next "$w" "$W2_SID_OTHER" feat --repo "$M"
+  [ "$status" -eq 1 ] && [[ "$output" == *"branch 'feat' does not exist"* ]] || { echo "status $status: $output"; false; }
+  [ ! -e "$w" ]
+  [ "$(w2_reaped refused)" = "$w" ] || { cat "$WT_RESUME_REAPED"; false; }
+}
+
+@test "PRUNE: the recreate's prune records an admin-pruned row for a separately deleted worktree" {
+  w2_lab
+  git -C "$M" branch keep; git -C "$M" worktree add -q "$T/wts/keep" keep; rm -rf "$T/wts/keep"
+  git -C "$M" branch gone; git -C "$M" worktree add -q "$T/wts/gone" gone; rm -rf "$T/wts/gone"
+  run env CC_RESUME_DRYRUN=1 timeout 60 "$RRO" next "$T/wts/keep" "$W2_SID_OTHER" keep
+  [ "$status" -eq 0 ] || { echo "status $status: $output"; false; }
+  [ "$(git -C "$T/wts/keep" symbolic-ref --short HEAD)" = keep ]
+  run jq -r 'select(.event == "admin-pruned" and .actor == "reso-resume-one") | .path' "$WT_LEDGER"
+  [[ "$output" == *"/wts/gone"* ]] || { cat "$WT_LEDGER"; false; }
+  [ ! -d "$M/.git/worktrees/gone" ]
+  [ "$(w2_reaped recreated-branch)" = "$T/wts/keep" ] || { cat "$WT_RESUME_REAPED"; false; }
+}

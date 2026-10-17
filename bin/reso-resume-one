@@ -472,25 +472,93 @@ resolve_repo() { # <worktree> <branch> → repo root on stdout, or 1
   printf '%s\n' "${matches[0]}"
 }
 
+# ── A PARKED TREE IS UNPARKED, A REMOVED ONE RESTORED ONLY FOR ITS OWN SESSION (2026-10-17) ─────
+# docs/research/load-root-cause-2026-10-17/DESIGN.md §3.5 item 4. A PARKED tree is moved back on a path
+# match alone: it is the very tree that stood here, so it is lossless, and pool slots are never parked.
+# Without this the recreate below fails — the branch is checked out at the parked path — and the resume
+# is refused. A REMOVED tree is restored through cc-wt-restore ONLY when its tombstone names this sid;
+# every other case keeps the refusal it had, because a prompted unattended resume must never revive
+# work that has already landed. Every missing-cwd outcome is one resume-reaped row (X7 phase 1).
+# A missing library keeps the behaviour from before this block exactly. CC_RESUME_TOMBSTONE_LIB, when
+# set, is the only library looked at.
+_rro_s="$0"
+while [ -L "$_rro_s" ]; do
+  _rro_t="$(readlink "$_rro_s" 2>/dev/null)" || break
+  case "$_rro_t" in /*) _rro_s="$_rro_t" ;; *) _rro_s="$(dirname "$_rro_s")/$_rro_t" ;; esac
+done
+_rro_bd="$(cd "$(dirname "$_rro_s")" 2>/dev/null && pwd)" || _rro_bd=""
+_RRO_WTL=""
+if [ -n "${CC_RESUME_TOMBSTONE_LIB+set}" ]; then
+  [ -f "${CC_RESUME_TOMBSTONE_LIB}" ] && _RRO_WTL="${CC_RESUME_TOMBSTONE_LIB}"
+else
+  for _rro_d in "${_rro_bd:+$_rro_bd/../scripts/lib/wt-tombstone.sh}" "${HOME:-}/.claude/scripts/lib/wt-tombstone.sh"; do
+    [ -n "$_rro_d" ] && [ -f "$_rro_d" ] && { _RRO_WTL="$_rro_d"; break; }
+  done
+fi
+if [ -n "$_RRO_WTL" ]; then
+  # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+  { . "$_RRO_WTL" 2>/dev/null && command -v wt_unpark >/dev/null 2>&1; } || _RRO_WTL=""
+fi
+_RRO_WTR=""
+for _rro_d in "${_rro_bd:+$_rro_bd/cc-wt-restore}" "${HOME:-}/.claude/bin/cc-wt-restore"; do
+  [ -n "$_rro_d" ] && [ -x "$_rro_d" ] && { _RRO_WTR="$_rro_d"; break; }
+done
+rr_reaped() { # $1=outcome → one resume-reaped row; never fails
+  [ -n "$_RRO_WTL" ] && wt_resume_reaped reso-resume-one "$wt" "$sid" "$1"
+  return 0
+}
+rr_restore_sid() { # → rc 0 iff a tombstone names this sid and cc-wt-restore brought the tree back
+  local canon
+  [ -n "$_RRO_WTL" ] && [ -n "$_RRO_WTR" ] && [ -n "$sid" ] || return 1
+  canon=$(abspath "$wt") || canon="$wt"
+  wt_tomb_find "$canon" --sid "$sid" >/dev/null 2>&1 || wt_tomb_find "$wt" --sid "$sid" >/dev/null 2>&1 || return 1
+  "$_RRO_WTR" "$wt" --sid "$sid" --yes >/dev/null || return 1
+  printf '%s\n' "reso-resume-one: restored $wt from its tombstone (sid $sid matched), detached at the recorded head" >&2
+}
+if [ -n "$_RRO_WTL" ]; then
+  _rro_up=0; WT_ACTOR=reso-resume-one wt_unpark "$wt" || _rro_up=$?
+  case "$_rro_up" in
+    0) printf '%s\n' "reso-resume-one: unparked $wt — the parked tree is back at its own path" >&2; rr_reaped unparked ;;
+    2) printf '%s\n' "reso-resume-one: REFUSING — $wt is parked and could not be unparked (reason above)" >&2
+       rr_reaped refused; rr_refused_exit 1 ;;
+  esac
+fi
+
 wt_existed=0; [[ -d "$wt" ]] && wt_existed=1
 if [[ ! -d "$wt" ]]; then
-  if [[ -z "$br" ]]; then
-    printf '%s\n' "reso-resume-one: worktree $wt missing and no branch given to recreate it" >&2; rr_refused_exit 1
+  _rro_why=""
+  if [[ -z "$br" ]]; then _rro_why=no-branch
+  elif ! REPO=$(resolve_repo "$wt" "$br"); then _rro_why=no-repo
+  elif ! git -C "$REPO" show-ref --verify --quiet "refs/heads/$br"; then _rro_why=branch-gone
   fi
-  REPO=$(resolve_repo "$wt" "$br") || {
-    printf '%s\n' "reso-resume-one: REFUSING — cannot tell which repo owns the reaped worktree $wt." >&2
-    printf '%s\n' "  No .git/worktrees back-reference to it under ${CC_RESUME_REPO_ROOTS:-$HOME/Development}," >&2
-    printf '%s\n' "  and branch '$br' does not resolve to exactly one repo there." >&2
-    printf '%s\n' "  Name it explicitly:  reso-resume-one $acct $wt $sid $br --repo /path/to/repo" >&2
-    rr_refused_exit 3
-  }
-  if ! git -C "$REPO" show-ref --verify --quiet "refs/heads/$br"; then
-    printf '%s\n' "reso-resume-one: branch '$br' does not exist in $REPO — nothing to recreate $wt from" >&2; rr_refused_exit 1
+  # A restore answers only the three refusals; a branch that still exists is recreated as before.
+  if [[ -n "$_rro_why" ]] && rr_restore_sid; then
+    rr_reaped restored
+  else
+    case "$_rro_why" in
+      no-branch)
+        printf '%s\n' "reso-resume-one: worktree $wt missing and no branch given to recreate it" >&2
+        rr_reaped refused; rr_refused_exit 1 ;;
+      no-repo)
+        printf '%s\n' "reso-resume-one: REFUSING — cannot tell which repo owns the reaped worktree $wt." >&2
+        printf '%s\n' "  No .git/worktrees back-reference to it under ${CC_RESUME_REPO_ROOTS:-$HOME/Development}," >&2
+        printf '%s\n' "  and branch '$br' does not resolve to exactly one repo there." >&2
+        printf '%s\n' "  Name it explicitly:  reso-resume-one $acct $wt $sid $br --repo /path/to/repo" >&2
+        rr_reaped refused; rr_refused_exit 3 ;;
+      branch-gone)
+        printf '%s\n' "reso-resume-one: branch '$br' does not exist in $REPO — nothing to recreate $wt from" >&2
+        rr_reaped refused; rr_refused_exit 1 ;;
+    esac
+    if [ -n "$_RRO_WTL" ]; then
+      WT_ACTOR=reso-resume-one wt_prune_logged "$REPO" 2>/dev/null
+    else
+      git -C "$REPO" worktree prune 2>/dev/null
+    fi
+    git -C "$REPO" worktree add "$wt" "$br" || {
+      printf '%s\n' "reso-resume-one: worktree add failed ($REPO → $wt @ $br)" >&2; rr_reaped refused; rr_refused_exit 1
+    }
+    rr_reaped recreated-branch
   fi
-  git -C "$REPO" worktree prune 2>/dev/null
-  git -C "$REPO" worktree add "$wt" "$br" || {
-    printf '%s\n' "reso-resume-one: worktree add failed ($REPO → $wt @ $br)" >&2; rr_refused_exit 1
-  }
 fi
 
 # ── THE DIRECTORY MAY SURVIVE WHILE THE WORKTREE IT NAMED DOES NOT ──────────────────────────────
