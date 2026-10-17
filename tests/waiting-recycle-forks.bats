@@ -146,7 +146,7 @@ twice() {
   [ -n "$f" ]
   [ "$(head -1 "$f")" = "$k" ]
   [ "$(tail -1 "$f")" = "$k" ]
-  [ -n "$(grep -l '|role:desk' "$CC_WR_STATE_DIR"/keymemo/*)" ]
+  grep -q -- '|role:desk' "$CC_WR_STATE_DIR"/keymemo/*
   # A memo whose stored string is another cwd's (a name collision) must not be believed.
   printf '%s\n%s\n%s' 0123456789abcdef "$CLAUDE_CONFIG_DIR|/elsewhere" 0123456789abcdef > "$f"
   printf '2026-01-01T00:00:00Z x\n' > "$CC_WR_STATE_DIR/disarm-$k"

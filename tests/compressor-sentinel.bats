@@ -3240,6 +3240,7 @@ diff_setup() {
   if [ ! -d "$SHFSTUB" ]; then
     # shellcheck source=tests/stop-hook-forks-helpers.bash
     . "$REPO/tests/stop-hook-forks-helpers.bash"
+    # shellcheck disable=SC2034  # read by the sourced helper's shf_old_tree
     SHF_BASE="$W4_BASE"
     mkdir -p "$BATS_RUN_TMPDIR/sentinel-jq"; ln -sf "$(command -v jq)" "$BATS_RUN_TMPDIR/sentinel-jq/jq"
     PATH="/usr/bin:/bin:/usr/sbin:/sbin:$BATS_RUN_TMPDIR/sentinel-jq" shf_build_stubs "$SHFSTUB.tmp"
@@ -3411,6 +3412,7 @@ diff_arms() { # <ticks> — both arms over one fixture; rows, stdout and stderr 
     echo '. "$1"; shift'
     echo 'occ=$1 tok=$2 CBU=$3 SEG_LIMIT=$4 E=$5 PREV_SEG=$6 PREV_CBU=$7 PREV_SWAP=$8'
     echo 'SEG_I="$(segs_in_core "$occ" 16384 65536)"'
+    # shellcheck disable=SC2028  # the \n is meant to reach the generated script's printf verbatim
     echo 'SWAP_B="$(printf "total = 0.00M  used = %s  free = 0.00M\n" "$tok" | parse_swap_used_bytes)"'
     echo 'SEG_S="$(segs_swapped "$SWAP_B" 65536)"; SEG_EST=$((SEG_I + SEG_S))'
     printf '%s\n' "$l_pct" 'CLIFF=0; if [ -n "$SEG_PCT" ]; then' "$l_cliff" 'fi'
@@ -3424,6 +3426,7 @@ diff_arms() { # <ticks> — both arms over one fixture; rows, stdout and stderr 
   } > "$D/old-derive.sh"
   {
     echo '. "$1"; shift'
+    # shellcheck disable=SC2028  # the \n is meant to reach the generated script's printf verbatim
     echo 'VMS_RAW="$(printf "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages occupied by compressor: %s.\nCompressions: 1.\nDecompressions: 1.\n" "$1")"'
     echo 'TF=($(VMS_RAW="$VMS_RAW" SWAP_RAW="total = 0.00M  used = $2  free = 0.00M" tick_derive 1 "$4" 65536 "$3" "$5" "$6" "$7" "$8"))'
     echo 'echo "${TF[*]:5}"'
