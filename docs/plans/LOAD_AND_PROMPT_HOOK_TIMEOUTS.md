@@ -168,6 +168,19 @@ Rejected, with the measurement: (1) starting the probe BESIDE the shared compute
 
 Parity: old (trunk `ce336cae6`) vs new ledger on four real Stops × {backlog cache hit, miss→fill, off} × {BUSY on, off}, field by field — identical except wall-clock `*_AGE` fields and the live process sample (a 17 vs 20 job count between back-to-back runs); BUSY probe bound lifted to 90 s so neither arm crossed it. Replayed operator-readout output old vs new: identical except a wall-clock age and the research line, which comes and goes in both arms as `cc-research pending` crosses its 3 s bound under load. Tests: `tests/wrap-ledger-busy-splice.bats` 10/10 (eight mutants, each turning its case red), `tests/operator-readout-shared-ledger.bats` 5/5 (four mutants), unmutated scratch controls green first.
 
+Landed `d67fb0483` (gate green: statics, ratchets, bounded smoke; two first attempts refused on the new suites — an unfixtured `$HOME`, two errexit-dead assertions — both fixed); content-verified on origin/main; the live checkout fast-forwarded to it at 2026-10-17T07:31:17Z (`CC_DEPLOY_MAX_LAG_COMMITS=0 bash scripts/deploy-live.sh`: at trunk tip). Direct suites on the landed code, all green: the 24 ledger / operator-readout / anti-deference / sibling-hook suites (`wrap-ledger` 140/140, `operator-readout` 121/121, `wrap-ledger-memo` 29/29, …).
+
+Replay p95, operator-readout, real cancelled Stops (`replay-operator-readout.sh`, committed beside `cutreplay.py`; nearest-rank over n distinct Stops; old = trunk `ce336cae6` extracted, run alternately with new on the same case):
+
+| Round | 1-min load | n | old p50 / p95 / max | new p50 / p95 / max |
+|---|---|---|---|---|
+| pre-land (the landed code, worktree) | 46-73 | 22 | 3.4 / 4.1 / 4.3 s | 1.7 / **2.1** / 2.1 s |
+| post-converge (the live checkout) | 120-175 | 24 | 6.3 / 14.4 / 38.2 s | 4.5 / **5.9** / 9.4 s |
+
+At ordinary load the target holds with room (2.1 s against 5 s). At 4-5× the 24 h median it does not (5.9 s); what remains there is mostly not the ledger: the shared BUSY-off ledger is 0.6-1.3 s untraced at load ~125 (was 3.1-5.8 s at ~300), operator-readout waits 1.7-2.6 s on it under three-sibling contention, and the rest is the hook's own reads (escalation count, steps, stranded, `cc-research pending` bounded at 3 s). Next levers, not taken (outside this scope's "cost of the ledger" or below its bar): `fired_peer_sids` jq-parses every stamp in the session's age window (0.6 s for a long-lived session; a `grep -l -F` prefilter on the sid and pane is an exact superset) and operator-readout's own non-ledger reads.
+
+Cancels/hour after converge: owed — the ≥ 6 h window opens 2026-10-17T07:31Z (`python3 -I docs/research/load-hook-timeouts-2026-10-11/stop-hook-durations.py 2026-10-17T07:31:17Z`).
+
 ## Operator-only (file with cc-backlog / cc-decide; never edit settings.json or plists)
 
 O1 `timeout: 5` on `handed-off-session-guard.sh` + `PYTEST_XDIST_AUTO_NUM_WORKERS=3` (migration, c10) · O2 decision: `CC_SENTINEL_KILL=off` for compressor-sentinel (128 SIGKILLs since 10-07 conflict with "never kill work"; recommend off, 75%) · O3 plist throttles (session-index sweep 60 s → 300 s; public-publish daily) · O4 Claude Code upgrade via cc-upgrade + upstream report on the `ps -A` child leak · O5 30 s `eslogger exec` trace to attribute ~21k spawns/min · O6 optional cleanup of non-work orphans.
