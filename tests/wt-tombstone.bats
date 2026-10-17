@@ -92,8 +92,8 @@ tree_sums() { (cd "$1" && find . -path ./.git -prune -o -type f -print | LC_ALL=
   cmp "$WT_TOMB_DIR/$id/residue/brag-output/x.json" "$T/x.json.orig"
   cmp "$WT_TOMB_DIR/$id/residue/asset-workspace/render.png" "$T/render.orig"
   cmp "$WT_TOMB_DIR/$id/residue/.claude/settings.local.json" "$T/sl.orig"
-  [ ! -e "$w/brag-output" ] && [ ! -e "$w/.claude/settings.local.json" ]   # mv: gone from the tree
-  [ -d "$w/node_modules" ] && [ -f "$w/.env.local" ]                       # caches and identical copies stay
+  [ ! -e "$w/brag-output" ] && [ ! -e "$w/.claude/settings.local.json" ] || false # mv: gone from the tree
+  [ -d "$w/node_modules" ] && [ -f "$w/.env.local" ] || false              # caches and identical copies stay
   [ "$(stat -f %Lp "$WT_TOMB_DIR/$id")" = 700 ]
   [ "$(stat -f %Lp "$WT_TOMB_DIR/$id/residue.list")" = 600 ]       # what the tombstone writes is 0600;
   [ "$(stat -f %Lp "$WT_TOMB_DIR/$id/logs-HEAD")" = 600 ]          # residue keeps its own mode for an exact restore
@@ -234,7 +234,7 @@ tree_sums() { (cd "$1" && find . -path ./.git -prune -o -type f -print | LC_ALL=
   id2="$(wt_tombstone "$w2" lab two)"
   printf '{"ts":"%s","event":"restored","id":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$id2" >> "$WT_LEDGER"
   WT_NOW=$(( $(date +%s) + 400 * 86400 )) wt_ref_expire "$T/main"
-  ! git -C "$T/main" rev-parse -q --verify "refs/wt-tombstone/$id1/head"
+  ! git -C "$T/main" rev-parse -q --verify "refs/wt-tombstone/$id1/head" || false
   git -C "$T/main" rev-parse -q --verify "refs/wt-tombstone/$id2/head"
   [ -f "$WT_TOMB_DIR/$id1/residue/brag-output/r" ]
   jq -e --arg i "$id1" 'select(.event == "ref-expired" and .id == $i)' "$WT_LEDGER" >/dev/null
