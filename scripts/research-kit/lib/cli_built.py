@@ -119,6 +119,10 @@ def cmd_signoff(a: argparse.Namespace) -> int:
         return 0
     print("Operator, to sign this in your own terminal (an agent is refused):")
     print(f"  {gate_built.sign_cmd(a.program)}")
+    d = operator_sign.delegation_for(a.program)
+    if d:  # REPORT.md §14: under the standing delegation the agent accepts it on its criteria
+        print(f"Or, under delegation {d.get('id')} (given {d.get('at_iso')}), an agent accepts it:")
+        print(f"  scripts/research-kit/gate.sh accept --program {a.program} --action implementation")
     return 0
 
 

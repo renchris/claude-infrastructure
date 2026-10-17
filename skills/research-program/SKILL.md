@@ -51,6 +51,19 @@ for a case-sized question answerable in a day, or when the operator declines eit
     and the seeds stay as signed.
   - `cc-signoff research:<slug>/adopt/stage9` — v1.3 (§13.3): a program whose frame predates 1.2 runs
     Stage 9 without editing `frame.json`; rows 18 and 19 stay 1.2-only. Once per program.
+- **…or accepted under the operator's standing delegation** (REPORT.md §14, ruled 2026-10-16: the
+  operator reads no signoff content, so a signature he does not read carries no information; the machine
+  gate is the evidence). He signs it once, in his own terminal: `cc-signoff research:<slug|*>/delegate
+  --because "<words>"` (`*` = every program), and ends it with `cc-signoff
+  research:<slug|*>/revoke-delegation`. While it is in force, never stop to ask him to "read and sign":
+  run `scripts/research-kit/gate.sh accept --program <slug> --action <A> [--because "<why>"]` (or
+  `--check` first) for cert, frame (after an `intake.py delta-apply` carrying held rows), implementation
+  (it also runs `built-signed`), extra-round, reopen, `profile/<p>`, `adopt/stage9` and
+  `extend-decision/<id>`. It writes only when every machine criterion holds (exit 1 names each FAIL), into
+  `<sealed>/delegated.jsonl`, never `signoff.jsonl`; every reader honours it where it honours his signature
+  and prints "accepted by delegation (not read by the operator)". Third reads, vetoes, and anything that
+  spends money or publishes stay his and are refused by name. With no delegation in force, hand him the
+  delegate line once, then accept.
 - **Program packets only through `gate.sh file-packet`**, never a bare `cc-decide open`: it adds the
   deliverable repo as `--project` and, for class B, `--default-effect no-change`, and gate row 12 fails
   any program packet without them (§10 item 4). Run `gate.sh sweep --program <slug>` daily in the pilot.
@@ -301,8 +314,9 @@ wave 1 that blocks no wave (`scripts/research-kit/RECORDS.md` § Settling the la
 
 `scripts/research-kit/gate.sh run --program <slug>` prints all 16 rows PASS/FAIL/FILED. Every row passes
 or is FILED, the certificate is written and the registry goes to `certified`. Hand the operator
-`cc-signoff research:<slug>/cert`. From then on a completeness or pushback question is answered by
-relaying `gate.sh --render --program <slug>` unchanged, and nothing else.
+`cc-signoff research:<slug>/cert`; under a standing delegation (REPORT §14) run `gate.sh accept --program
+<slug> --action cert` instead, and do not stop. From then on a completeness or pushback question is
+answered by relaying `gate.sh --render --program <slug>` unchanged, and nothing else.
 
 Updated 2026-10-08 (wave E1l, row-15 rulings): a plain `gate.sh run` never spends a sealed read; row 15
 fails without reading, which is the right way to look at the other rows. The certifying run is
@@ -443,8 +457,13 @@ for the §3.1 exemption and the §4.2 research block, and the scheduled jobs sti
    `handoff-fire.sh --requires-gate <slug> --gate-after-signoff` (`gate.sh requires --after-signoff`),
    which refuses. `gate.sh render` states the signature on the built line. A fix after signoff goes back
    through `built-freeze --refreeze` and `built-run`; the new built certificate needs a new signature.
+   Under a standing delegation (REPORT §14, added 2026-10-16) `cc-research built signoff` also prints the
+   agent's line: run `scripts/research-kit/gate.sh accept --program <slug> --action implementation`. It
+   accepts only when rows 20-25 all PASS on the snapshot `built/freeze.json` pins, then runs
+   `built-signed` itself; the built line reads "accepted by delegation (not read by the operator)".
 
-Then hand the operator the built certificate; signing the implementation is theirs.
+Then hand the operator the built certificate; signing the implementation is theirs, unless a delegation
+is in force, in which case the acceptance above is the close of Stage 9.
 
 ## Files beside this one
 

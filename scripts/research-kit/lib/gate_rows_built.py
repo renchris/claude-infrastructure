@@ -79,9 +79,11 @@ def research_cert_fails(ctx: Ctx) -> List[str]:
     if not certs:
         return ["no research certificate (cert/CERT-v*.json)"]
     cert, fails = certs[-1], []
+    # a delegated acceptance counts exactly as the operator's signature (REPORT.md §14)
     sig = operator_sign.latest_valid(ctx.slug, "cert")
     if not sig or f"cert/{cert.name}" not in (sig.get("pins") or {}):
-        fails.append(f"no valid operator signature on research certificate {cert.stem}")
+        fails.append(f"no valid operator signature or delegated acceptance on research "
+                     f"certificate {cert.stem}")
     rows = (kit.read_json(cert) or {}).get("rows") or {}
     bad = sorted((n for n, s in rows.items() if s not in (PASS, FILED)), key=int)
     if bad or not rows:

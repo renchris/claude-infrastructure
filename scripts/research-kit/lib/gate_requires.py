@@ -323,12 +323,14 @@ def blockers(
         # Method v1.3 (REPORT.md §13): the certificate carries FILED rows (a scheduled read, keyed
         # dues), so no wave builds on it until the operator has accepted it by signing THIS
         # certificate; an agent-written or stale signature, or one on an earlier version, is none.
+        # §14: an acceptance under the operator's standing delegation counts exactly as his signature.
         import operator_sign
 
         sig = operator_sign.latest_valid(slug, "cert")
         if not sig or f"cert/{certs[-1].name}" not in (sig.get("pins") or {}):
             reasons.append(
-                f"{certs[-1].stem} is not signed by the operator (cc-signoff research:{slug}/cert)"
+                f"{certs[-1].stem} is not signed by the operator (cc-signoff research:{slug}/cert) "
+                f"nor accepted by delegation (gate.sh accept --program {slug} --action cert)"
             )
     if gate.reopened(ctx):
         reasons.append("an operator reopen is signed after the newest certificate")

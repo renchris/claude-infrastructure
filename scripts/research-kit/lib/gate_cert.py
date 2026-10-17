@@ -618,6 +618,9 @@ def lines_for(
             f"{fc['after_impl_bound95']} at 95%); build-findable share {fc['build_findable_share']}, "
             "share assumed",
         )
+    dl = delegated_line(slug, cert)
+    if dl:  # REPORT.md §14: second, so no reader takes an acceptance for the operator's reading
+        out.insert(1, dl)
     if cert.get("known_rows"):
         out.append(
             "Known rows: "
@@ -696,6 +699,52 @@ def lines_for(
         ),
     ]
     return out
+
+
+DELEGATED_LABELS = {
+    "frame": "frame",
+    "extra-round": "extra round set",
+    "profile": "profile switch to {}",
+    "adopt": "{} adoption",
+    "extend-decision": "research extension on {}",
+}
+
+
+def delegated_line(slug: str, cert: Dict[str, Any]) -> Optional[str]:
+    """REPORT.md §14: what this certificate stands on that was accepted under the operator's standing
+    delegation rather than read and signed by him — the certificate itself, the frame in force, and
+    the purchases — or None. Per action (and target) the newest VALID record is the one in force; it is
+    listed only when it is an acceptance. A reopen is left to the state it moves; the implementation
+    to the built line."""
+    import operator_sign as osign
+
+    parts: List[str] = []
+    for action in osign.DELEGABLE:
+        if action in ("implementation", "reopen"):
+            continue
+        newest: Dict[Any, Dict[str, Any]] = {}
+        for r in osign.research_records(slug, action):
+            if r["_verdict"] != osign.VALID:
+                continue
+            t = r.get("target")
+            if t not in newest or r.get("at", 0) > newest[t].get("at", 0):
+                newest[t] = r
+        for t, r in sorted(newest.items(), key=lambda kv: str(kv[0])):
+            if not r.get("_delegated"):
+                continue
+            if action == "cert":
+                if f"cert/{cert.get('cert')}.json" not in (r.get("pins") or {}):
+                    continue
+                label = f"certificate {cert.get('cert')}"
+            else:
+                label = DELEGATED_LABELS[action].format(t)
+            parts.append(f"{label} {r.get('at_iso')}")
+    if not parts:
+        return None
+    return (
+        f"{osign.DELEGATED_WORDS[0].upper()}{osign.DELEGATED_WORDS[1:]}: "
+        + " · ".join(parts)
+    )
 
 
 def built_line(slug: str, rec: Path, state: str) -> str:

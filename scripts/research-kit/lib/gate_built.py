@@ -53,11 +53,13 @@ def signed_cert(ctx: Ctx) -> str:
         raise kit.KitError(
             f"built-freeze refused: {name} has FAIL row(s) {', '.join(failed)}"
         )
+    # a delegated acceptance counts exactly as the operator's signature (REPORT.md §14)
     sig = operator_sign.latest_valid(ctx.slug, "cert")
     if not sig or f"cert/{certs[-1].name}" not in (sig.get("pins") or {}):
         raise kit.KitError(
             f"built-freeze refused: no valid operator signature on {name} "
-            f"(cc-signoff research:{ctx.slug}/cert)"
+            f"(cc-signoff research:{ctx.slug}/cert) nor delegated acceptance "
+            f"(gate.sh accept --program {ctx.slug} --action cert)"
         )
     if reopened(ctx):
         raise kit.KitError(
@@ -156,7 +158,8 @@ def sign_cmd(slug: str) -> str:
 
 
 def implementation_gate(slug: str) -> Tuple[bool, str]:
-    """(signed?, one sentence) for the newest built certificate. Only a VALID signature passes."""
+    """(signed?, one sentence) for the newest built certificate. Only a VALID signature, or a VALID
+    acceptance under the operator's standing delegation (REPORT.md §14), passes."""
     import operator_sign
 
     st = operator_sign.implementation_state(slug)
@@ -164,12 +167,14 @@ def implementation_gate(slug: str) -> Tuple[bool, str]:
     if st["status"] == operator_sign.SIGNED:
         return True, f"{cert} {operator_sign.implementation_words(slug, st)}"
     if st["status"] == operator_sign.UNSIGNED:
-        why = f"{cert} carries no operator signature"
+        why = f"{cert} carries no operator signature or delegated acceptance"
     else:
         why = f"{cert}: implementation {operator_sign.implementation_words(slug, st)}"
     return (
         False,
-        f"{why}. The operator signs it in their own terminal: {sign_cmd(slug)}",
+        f"{why}. The operator signs it in their own terminal: {sign_cmd(slug)}; under a "
+        f"standing delegation an agent accepts it: gate.sh accept --program {slug} --action "
+        "implementation",
     )
 
 

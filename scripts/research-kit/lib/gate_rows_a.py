@@ -177,16 +177,28 @@ def row1(ctx: Ctx) -> Row:
             "the frame has never been signed (cc-signoff research:<slug>/frame, operator only)"
         )
     else:
+        # a delegated acceptance (REPORT.md §14) counts exactly as a signature does, and says so;
+        # every line keeps "signature" or "frame pin", which `intake.py lint` reads past
         newest = max(sigs, key=lambda r: r.get("at", 0))
-        if newest["_verdict"] == operator_sign.VOID:
+        if newest["_verdict"] == operator_sign.VOID and newest.get("_delegated"):
+            fails.append(
+                f"the newest frame signature is VOID: delegated acceptance ({newest.get('_why')})"
+            )
+        elif newest["_verdict"] == operator_sign.VOID:
             fails.append("the newest frame signature is VOID: agent-written signature")
         elif newest["_verdict"] == operator_sign.STALE:
             fails.append(
                 "the newest frame signature is STALE: frame.json changed since it was signed"
+                + (" (a delegated acceptance)" if newest.get("_delegated") else "")
             )
         else:
             notes.append(
-                f"frame pin {newest['pins'].get('frame.json', '?')[:12]} signed {newest.get('at_iso', '')}"
+                f"frame pin {newest['pins'].get('frame.json', '?')[:12]} "
+                + (
+                    operator_sign.signed_words(newest)
+                    if newest.get("_delegated")
+                    else f"signed {newest.get('at_iso', '')}"
+                )
             )
     acc = (ctx.json("acceptance.json", {}) or {}).get("rows") or []
     for r in acc:

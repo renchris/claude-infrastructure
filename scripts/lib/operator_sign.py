@@ -37,6 +37,20 @@ the program's sealed log `$CC_RESEARCH_HOME/<slug>/signoff.jsonl`:
                9 (built-freeze, built-run, the implementation signature) without editing frame.json,
                which would void the frame signature. Rows 18 and 19 stay 1.2-only. Once per program.
 
+DELEGATED ACCEPTANCE (REPORT.md §14, ruled 2026-10-16: "I WILL NOT look at any of the contenet for said
+sign off"). The operator signs ONE standing delegation, `research:<slug|*>/delegate --because "<words>"`
+(`*` covers every program), and may end it with `research:<slug|*>/revoke-delegation`; both are
+operator signatures under the three arms above, appended to `$CC_RESEARCH_HOME/delegations.jsonl`.
+While one is in force, an agent's `gate.sh accept` (scripts/research-kit/lib/gate_accept.py) writes an
+acceptance of a DELEGABLE action to the program's `$CC_RESEARCH_HOME/<slug>/delegated.jsonl`, a log
+apart from signoff.jsonl, only when that action's machine criteria (DELEGATED_CRITERIA) all hold.
+`research_records` returns those acceptances beside the signatures, `_delegated` set and their
+verdict computed by `acceptance_verdict`, so every reader that honours a signature honours an
+acceptance exactly there, and prints it as DELEGATED_WORDS. An acceptance is VOID unless the
+delegation it names is an operator signature still byte-identical to what was signed, covers the
+program, and was in force at the acceptance's time (the newest of a delegation and a revoke covering
+the program wins); third reads and vetoes are never delegable, so an acceptance of one is VOID.
+
 Python 3.9-safe, standard library only.
 """
 
@@ -50,7 +64,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "research-kit" / "lib"))
 import kit  # noqa: E402
@@ -84,6 +98,47 @@ VALID, VOID, STALE = "valid", "void", "stale"
 # implementation_state()'s statuses, beyond the three verdicts' names
 SIGNED, UNSIGNED, SUPERSEDED = "signed", "unsigned", "superseded"
 IMPLEMENTATION_STATES = ("build-certified", "implementation-signed")
+
+# ── delegated acceptance (REPORT.md §14) ──
+DELEGATION_ACTIONS = ("delegate", "revoke-delegation")
+DELEGATED = "delegated"  # an acceptance record's kind
+DELEGATED_WORDS = "accepted by delegation (not read by the operator)"
+# The actions an agent may accept under a delegation, each with the machine criteria its record must
+# show, every one true, or every reader reads it VOID. gate_accept.py computes them (the names are
+# the contract between the writer and the readers here).
+DELEGATED_CRITERIA: Dict[str, Tuple[str, ...]] = {
+    "cert": ("state", "newest-certificate", "rows-pass", "no-reopen"),
+    "frame": (
+        "lint",
+        "newest-change-is-delta",
+        "known-rows-open",
+        "annotations-pinned",
+    ),
+    "implementation": (
+        "state",
+        "newest-built-certificate",
+        "rows-pass",
+        "freeze-snapshot",
+    ),
+    "extra-round": ("state", "once-per-program"),
+    "profile": ("switch-terms",),
+    "adopt": ("frame-predates-1.2", "once-per-program"),
+    "extend-decision": (
+        "decision-on-record",
+        "research-can-raise-it",
+        "once-per-decision",
+    ),
+    "reopen": ("state", "certificate", "not-reopened"),
+}
+DELEGABLE = tuple(DELEGATED_CRITERIA)
+NOT_DELEGABLE = {
+    "third-read": "a third read spends a sealed held-out stratum that can never be re-sealed "
+    "(ruling 915d7fb98b7f item 5), a disclosed cost only the operator accepts",
+    "veto": "a veto overrules a default the operator's own packet set; it is his voice, and the "
+    "sweep counts only his signature",
+    "delegate": "the delegation is the operator's own grant of authority; an agent cannot extend it",
+    "revoke-delegation": "the delegation is the operator's to end",
+}
 
 
 class Refused(Exception):
@@ -188,8 +243,17 @@ ROW_RE = re.compile(
 )
 
 
+DELEGATION_ROW_RE = re.compile(
+    r"^research:([a-z0-9][a-z0-9-]{0,63}|\*)/(delegate|revoke-delegation)$"
+)
+
+
 def parse_row(row: str) -> Optional[Dict[str, Optional[str]]]:
-    """'research:<slug>/<action>[/<target>]' -> {slug, action, target}; None if not that namespace."""
+    """'research:<slug>/<action>[/<target>]' -> {slug, action, target}; None if not that namespace.
+    The delegation rows alone take `*` (every program) for the slug, and no target."""
+    m = DELEGATION_ROW_RE.match(row or "")
+    if m:
+        return {"slug": m.group(1), "action": m.group(2), "target": None}
     m = ROW_RE.match(row or "")
     if not m:
         return None
@@ -223,7 +287,7 @@ def profile_switch_terms(slug: str, target: Optional[str]) -> Dict[str, Any]:
         raise Refused(
             f"REFUSED — {rec / 'frame.json'} names no profile to switch from."
         )
-    if any(verdict(r) == VALID for r in research_records(slug, "profile")):
+    if any(r["_verdict"] == VALID for r in research_records(slug, "profile")):
         raise Refused("REFUSED — the one profile switch per program is already signed.")
     cap = kit.PROFILES[target]["hard_cap"]
     if cap >= kit.PROFILES[cur]["hard_cap"]:
@@ -301,8 +365,11 @@ def sign_research(
     if parsed is None:
         raise Refused(
             f"REFUSED — {row!r} is not research:<slug>/<{'|'.join(ACTIONS)}>[/<decision-id>]"
+            " or research:<slug|*>/<delegate|revoke-delegation>"
         )
     slug, action, target = parsed["slug"], parsed["action"], parsed["target"]
+    if action in DELEGATION_ACTIONS:
+        return sign_delegation(row, str(slug), str(action), because)
     chain = ancestry()
     refuse_if_agent(
         chain,
@@ -364,7 +431,7 @@ def sign_research(
             f"REFUSED — no {action} artifact exists under {kit.records_dir(slug)} to pin."
         )
     if action == "extra-round" and any(
-        verdict(r) == VALID for r in research_records(slug, "extra-round")
+        r["_verdict"] == VALID for r in research_records(slug, "extra-round")
     ):
         raise Refused(
             "REFUSED — the one extra round set per program (REPORT.md §6.4) is already bought."
@@ -377,7 +444,7 @@ def sign_research(
                 "one decision on record."
             )
         if any(
-            verdict(r) == VALID
+            r["_verdict"] == VALID
             for r in research_records(slug, "extend-decision", target)
         ):
             raise Refused(
@@ -393,7 +460,7 @@ def sign_research(
                 f"REFUSED — {slug}'s frame is method {fr.get('method_version')}: {target} already "
                 "applies, so there is nothing to adopt."
             )
-        if any(verdict(r) == VALID for r in research_records(slug, "adopt", target)):
+        if any(r["_verdict"] == VALID for r in research_records(slug, "adopt", target)):
             raise Refused(f"REFUSED — {target} is already adopted for {slug}.")
     terms = profile_switch_terms(slug, target) if action == "profile" else {}
     now = time.time()
@@ -420,10 +487,130 @@ def sign_research(
     return rec
 
 
+# ── delegated acceptance (REPORT.md §14) ─────────────────────────────────────────────────────────
+
+
+def delegations_log() -> Path:
+    """Every delegation and revoke, for every program: one log, since `*` names no program."""
+    return kit.research_home() / "delegations.jsonl"
+
+
+def acceptance_log(slug: str) -> Path:
+    """The program's delegated acceptances, apart from the operator's signoff.jsonl."""
+    return kit.sealed_dir(slug) / "delegated.jsonl"
+
+
+def record_sha(rec: Dict[str, Any]) -> str:
+    """sha256 of a delegation record as signed: canonical JSON without its own id and hash."""
+    body = {
+        k: v
+        for k, v in rec.items()
+        if k not in ("id", "sha256") and not k.startswith("_")
+    }
+    return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+
+
+def covers(scope: Any, slug: str) -> bool:
+    return scope == "*" or scope == slug
+
+
+def delegation_records() -> List[Dict[str, Any]]:
+    """Every delegation and revoke, each with `_verdict`: VOID when written under an agent or with no
+    chain (arm 3), or when its bytes no longer hash to the sha256 it was signed with."""
+    out = []
+    for rec in kit.read_jsonl(delegations_log()):
+        v = verdict(rec)
+        if v == VALID and (
+            rec.get("action") not in DELEGATION_ACTIONS
+            or rec.get("sha256") != record_sha(rec)
+        ):
+            v = VOID
+        rec["_verdict"] = v
+        out.append(rec)
+    return out
+
+
+def in_force(
+    d: Dict[str, Any], slug: str, at: float, recs: List[Dict[str, Any]]
+) -> bool:
+    """Was delegation `d` in force for `slug` at time `at`? A VALID delegate record covering the
+    program, given at or before `at`, with no VALID revoke covering the program between the two:
+    the newest of a delegation and a revoke wins."""
+    if (
+        d.get("_verdict") != VALID
+        or d.get("action") != "delegate"
+        or not covers(d.get("program"), slug)
+    ):
+        return False
+    given = float(d.get("at") or 0)
+    if given > at:
+        return False
+    return not any(
+        r.get("_verdict") == VALID
+        and r.get("action") == "revoke-delegation"
+        and covers(r.get("program"), slug)
+        and given < float(r.get("at") or 0) <= at
+        for r in recs
+    )
+
+
+def delegation_for(slug: str, at: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """The newest delegation in force for `slug` at `at` (now by default), or None."""
+    recs = delegation_records()
+    when = time.time() if at is None else at
+    live = [d for d in recs if in_force(d, slug, when, recs)]
+    return max(live, key=lambda d: float(d.get("at") or 0)) if live else None
+
+
+def acceptance_verdict(
+    slug: str, rec: Dict[str, Any], dels: List[Dict[str, Any]]
+) -> Tuple[str, str]:
+    """(VALID|VOID|STALE, why) for one delegated acceptance. VOID unless it is a delegated record of
+    a delegable action for this program, its delegation is on record, VALID and in force at its time,
+    and it shows every criterion its action requires, each true; STALE if a pinned artifact changed."""
+    action = str(rec.get("action"))
+    if rec.get("kind") != DELEGATED or rec.get("program") != slug:
+        return VOID, "not a delegated acceptance of this program"
+    if action not in DELEGABLE:
+        return (
+            VOID,
+            f"{action} is never delegable: {NOT_DELEGABLE.get(action, 'unknown action')}",
+        )
+    ref = (rec.get("delegation") or {}).get("sha256")
+    d = next((x for x in dels if ref and x.get("sha256") == ref), None)
+    if d is None:
+        return VOID, "it names no delegation on record"
+    if d["_verdict"] != VALID:
+        return (
+            VOID,
+            f"its delegation {d.get('id')} is void (agent-written, or edited after signing)",
+        )
+    if not in_force(d, slug, float(rec.get("at") or 0), dels):
+        return VOID, (
+            f"its delegation {d.get('id')} was not in force for {slug} at {rec.get('at_iso')} "
+            "(revoked before it, or given after it)"
+        )
+    shown = {
+        str(c.get("name")): c.get("ok")
+        for c in rec.get("criteria") or []
+        if isinstance(c, dict)
+    }
+    unmet = [n for n in DELEGATED_CRITERIA[action] if shown.get(n) is not True]
+    if unmet:
+        return VOID, f"its record does not show criteria {', '.join(unmet)} holding"
+    if action in EVIDENCED and not rec.get("pins"):
+        return VOID, "it pins no artifact"
+    now = current_pins(slug, rec)
+    if any(now.get(p) != sha for p, sha in (rec.get("pins") or {}).items()):
+        return STALE, "a pinned artifact changed after it"
+    return VALID, ""
+
+
 def research_records(
     slug: str, action: Optional[str] = None, target: Optional[str] = None
 ) -> List[Dict[str, Any]]:
-    """Every record in the program's log (optionally filtered), each with `_verdict` set."""
+    """Every record in the program's log (optionally filtered), each with `_verdict` set, then every
+    delegated acceptance (`_delegated` True, `_why` naming why one is not VALID)."""
     out = []
     for rec in kit.read_jsonl(research_log(slug)):
         if action and rec.get("action") != action:
@@ -432,7 +619,76 @@ def research_records(
             continue
         rec["_verdict"] = verdict(rec, current_pins(slug, rec))
         out.append(rec)
+    dels: Optional[List[Dict[str, Any]]] = None
+    for rec in kit.read_jsonl(acceptance_log(slug)):
+        if action and rec.get("action") != action:
+            continue
+        if target is not None and rec.get("target") != target:
+            continue
+        if dels is None:
+            dels = delegation_records()
+        rec["_verdict"], rec["_why"] = acceptance_verdict(slug, rec, dels)
+        rec["_delegated"] = True
+        out.append(rec)
     return out
+
+
+def signed_words(rec: Dict[str, Any]) -> str:
+    """How a reader names a VALID record: the operator's signature, or a delegated acceptance."""
+    when = rec.get("at_iso") or "at an unrecorded time"
+    if rec.get("_delegated"):
+        return f"{DELEGATED_WORDS} {when}"
+    return f"signed by the operator {when}"
+
+
+def sign_delegation(
+    row: str, scope: str, action: str, because: Optional[str]
+) -> Dict[str, Any]:
+    """Append one delegation or revoke, an operator signature (arms 1 and 3), to delegations_log()."""
+    chain = ancestry()
+    refuse_if_agent(
+        chain,
+        f"cc-signoff {row} " + ('--because "<words>"' if action == "delegate" else ""),
+    )
+    if action == "delegate" and not (because or "").strip():
+        raise Refused(
+            'REFUSED — delegate needs --because "<words>": every acceptance made under it quotes them.'
+        )
+    if scope != "*" and kit.registry_get(scope) is None:
+        raise Refused(
+            f"REFUSED — {scope} is not a registered program; research:*/{action} covers every "
+            "program, or register it first (a delegation for a misspelt slug would cover nothing)."
+        )
+    if action == "revoke-delegation" and not any(
+        covers(d.get("program"), scope) or scope == "*"
+        for d in delegation_records()
+        if d["_verdict"] == VALID and d.get("action") == "delegate"
+    ):
+        raise Refused(
+            f"REFUSED — no delegation on record covers {scope}: nothing to revoke."
+        )
+    now = time.time()
+    rec: Dict[str, Any] = {
+        "row": row,
+        "program": scope,
+        "action": action,
+        "target": None,
+        "at": now,
+        "at_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+        "because": because,
+        "pins": {},
+        "provenance": {
+            "claude_ancestor": False,
+            "chain": [c["comm"] if isinstance(c, dict) else str(c) for c in chain],
+        },
+    }
+    rec["sha256"] = record_sha(rec)
+    rec["id"] = rec["sha256"][:12]
+    log = delegations_log()
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("a") as fh:
+        fh.write(json.dumps(rec, sort_keys=True) + "\n")
+    return rec
 
 
 def latest_valid(
@@ -481,7 +737,9 @@ def implementation_words(slug: str, state: Optional[Dict[str, Any]] = None) -> s
     st = state or implementation_state(slug)
     rec = st["record"] or {}
     if st["status"] == SIGNED:
-        return f"signed by the operator {rec.get('at_iso') or 'at an unrecorded time'}"
+        return signed_words(rec)
+    if st["status"] == VOID and rec.get("_delegated"):
+        return f"delegated acceptance VOID ({rec.get('_why')}): not signed"
     if st["status"] == VOID:
         return "signature VOID (agent-written): not signed"
     if st["status"] == STALE:

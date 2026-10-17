@@ -1772,3 +1772,49 @@ one held before a valid frame signature, as §5.4 step 4 says, so `requires` sto
 **Not changed in v1.3.** Stage 9's 24-hour soak (closing it on a soak still running would claim an unmeasured
 result); a lane that dies after the frame signature (only the operator can accept a two-vendor round under a
 three-vendor signature); which sessions the research block covers (an operator decision, filed).
+
+## 14. Delegated acceptance: zero human in the loop (ruled 2026-10-16)
+
+**The ruling, verbatim.** Asked about the signoffs that kept stopping a running program, the operator wrote on
+2026-10-16 (chat to the truememory-2-0 lead): "Can we not have these manual signoffs blocking you each time?" and,
+later the same day: "What is a signature exactly? Because I WILL NOT look at any of the contenet for said sign off as
+this has to be exhaustive research into exhaustive plan into exhaustive implementation, zero human in loop, for 100th
+percentile quality at each phase before moving on." To replacing the signatures with a standing delegated
+acceptance: "Do it".
+
+**What it changes.** A signature the operator will not read carries no information, only latency; this method's
+quality evidence was always the machine gate (blind multi-vendor rounds, verifiers, raters, the gate's rows). So his
+authority reaches that path once, honestly: he signs one standing delegation, `cc-signoff research:<slug|*>/delegate
+--because "<words>"` (`*` covers every program), in his own terminal, under the same three arms as every signature
+(§8 item 4). While it is in force, an agent runs `gate.sh accept --program P --action A`, which writes an acceptance
+only when A's machine criteria hold, and only into its own log: an acceptance is never written as if he had signed.
+The delegable actions and their criteria, each derived from the code that reads the matching signature:
+
+- the certificate (§3.10, §13.1): the registry is certified or in Stage 9, the newest certificate carries rows, each
+  PASS or FILED, and no reopen follows it; the acceptance pins its bytes as his signature would;
+- the frame, after a frame-delta cycle (§5.4, §13.7): the frame lints clean, its newest change is a `delta-apply`
+  whose recorded frame hash still matches, the delta carries held frame-omission rows that are still open, and every
+  decision annotation sits under a delta's pin; it pins `frame.json`. The first frame stays the operator's intake;
+- the implementation (§11): build-certified, the newest built certificate is this program's, rows 20–25 all PASS,
+  on the snapshot `built/freeze.json` pins;
+- the extra round set (§6.4), a profile switch, Stage 9's adoption (§13.3), a decision's research extension (§12.3)
+  and a reopen (§5.1): the conditions the kit already checked before letting the operator sign each, and its caps
+  (once per program, once per decision, one reopen per certificate), counted over signatures and acceptances alike.
+
+Never delegable, and refused by name: a third read of a sealed held-out stratum (a spend no re-seal can undo), a veto
+(the operator's voice over his own packet's default), the delegation itself, and anything that spends money or
+publishes.
+
+**What every reader does.** Each reader of a signature — `requires`, gate row 1, the sweep's spare and the passing
+run's close of a held row, `built-freeze`, `built-signed`, `close`, the round cap, the profile switch, Stage 9's
+adoption, a decision's extensions, a reopen — honours a valid acceptance exactly where it honours his signature, and
+every render says which it was: "accepted by delegation (not read by the operator)", on the certificate's state lines,
+the built line, the certificate's own page and the closing lines.
+
+**Control.** `cc-signoff research:<slug|*>/revoke-delegation` ends it: acceptances dated after a revoke are void,
+earlier ones stand, and every operator signature works as before, his vetoes included. The newest of a delegation and
+a revoke covering a program decides, so a per-program revoke under `*` ends that program alone. An acceptance is VOID
+unless its delegation is his signature, still byte-identical to what he signed, and in force at the acceptance's time.
+The same-uid limit of §8 item 4's third arm applies: a process running as him could hand-write a record; what is
+achievable is that a record which does not show every criterion its action requires, each true, counts for nothing.
+Records: `scripts/research-kit/RECORDS.md` "Delegated acceptance".

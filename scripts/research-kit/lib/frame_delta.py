@@ -545,11 +545,15 @@ def plan(slug: str, path: str, lint: Lint) -> Dict[str, Any]:
             "the delta leaves gate row 1 failing where it passed: " + "; ".join(fails)
         )
     lists = sorted({o["list"] for o in ops})
+    frame_text = dump_like(new, fr_text)
     record = {
         "id": fd_id,
         "program": slug,
         "file": str(Path(path).resolve()),
         "sha256": sha256(raw),
+        # the frame.json this apply writes: while it still hashes to this, the delta is the frame's
+        # newest change (gate.sh accept --action frame, REPORT.md §14)
+        "frame_sha256": sha256(frame_text.encode()),
         "base_version": fr.get("version"),
         "version": new["version"],
         "known_rows": known,
@@ -566,7 +570,7 @@ def plan(slug: str, path: str, lint: Lint) -> Dict[str, Any]:
     }
     return {
         "record": record,
-        "frame_text": dump_like(new, fr_text),
+        "frame_text": frame_text,
         "frame_old": fr_text,
         "acc_text": acc_out,
         "acc_old": acc_text,
@@ -638,6 +642,7 @@ def apply(slug: str, path: str, dry_run: bool, lint: Lint) -> int:
         f"v{r['base_version']} -> v{r['version']} ({counts}); known_rows_applied += "
         f"{', '.join(r['known_rows']) or 'none'}. The frame signature is "
         f"{'about to go' if dry_run else 'now'} STALE: the operator re-signs it "
-        f"(cc-signoff research:{slug}/frame), and only that re-sign spares and closes the rows"
+        f"(cc-signoff research:{slug}/frame), or under a standing delegation an agent accepts it "
+        f"(gate.sh accept --program {slug} --action frame), and only that spares and closes the rows"
     )
     return 0

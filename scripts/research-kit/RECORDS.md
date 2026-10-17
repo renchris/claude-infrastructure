@@ -13,6 +13,8 @@ from SYNTHESIS. Profile names and caps come from REPORT.md §6, and live in code
 | Sealed, mode 0700 | `$CC_RESEARCH_HOME/<slug>/` (`kit.sealed_dir`), default `~/.claude/autonomy/research/<slug>/` | courier, round, seed, signoff |
 | Program registry | `$CC_RESEARCH_REGISTRY`, default `~/.claude/autonomy/research/programs.json` | `gate.sh` only, via `kit.registry_set` |
 | Operator signatures | `<sealed>/signoff.jsonl` | `cc-signoff research:<slug>/…` only |
+| Standing delegations and revokes | `$CC_RESEARCH_HOME/delegations.jsonl` (every program) | `cc-signoff research:<slug\|*>/delegate\|revoke-delegation` only |
+| Delegated acceptances | `<sealed>/delegated.jsonl` | `gate.sh accept` only (REPORT.md §14) |
 | Research index | `docs/research/INDEX.jsonl` in claude-infrastructure | `research-index.py` only |
 
 Registry entry (wave A1's contract, never extended): `{"slug","aliases","cwd_roots","state"}`, state one of
@@ -887,3 +889,59 @@ is open.
   Agent, Task or Workflow input. `cc-research census add|repin|critic` and `probe-run.sh` are not research verbs and
   need no tag. Nothing else: no other program, no certification round, no vendor CLI, no `claude -p`, no buying verb,
   and no `handoff-fire.sh` fire. `tests/research-kit-gate.bats` holds the verb, `tests/research-router.bats` the tag.
+
+## Delegated acceptance (added 2026-10-16; REPORT.md §14)
+
+The operator ruled that he will not read signoff content ("I WILL NOT look at any of the contenet for said sign off").
+A signature nobody reads adds no information, so the method's quality evidence is the machine gate, and his authority
+reaches it once, through a standing delegation he signs. `operator_sign.py` holds the records and readers;
+`lib/gate_accept.py` is the agent's verb; `tests/research-kit-delegated.bats` holds every contract below.
+
+- **The delegation** (`cc-signoff research:<slug|*>/delegate --because "<words>"`, operator, own terminal, refused
+  under a claude ancestor like every signature) is one line of `$CC_RESEARCH_HOME/delegations.jsonl`: `{row, program
+  (a slug or "*"), action: "delegate", target: null, at, at_iso, because, pins: {}, provenance, sha256, id}`.
+  `sha256` hashes the record as signed (canonical JSON without `id` and `sha256`), `id` is its first 12 hex digits.
+  A per-program delegation needs a registered slug. `research:<slug|*>/revoke-delegation` appends the same shape
+  with `action: "revoke-delegation"` (no `--because` needed; refused when no delegation covers the scope). A record
+  that is agent-written, chainless (arm 3) or no longer hashes to its `sha256` is VOID.
+- **In force** (`operator_sign.in_force`, `delegation_for`): a VALID delegation covering the program (its slug or
+  `*`), given at or before the time asked, with no VALID revoke covering the program between the two. The newest
+  of a delegation and a revoke wins, so a per-program revoke under `*` ends that program alone, and a later
+  delegation restores it.
+- **`gate.sh accept --program P --action A [--target T] [--because W] [--check] [--json]`** writes one line of
+  `<sealed>/delegated.jsonl` only while a delegation is in force for P and every criterion of A holds; exit 1 lists
+  each criterion with `ok`/`FAIL` and its value and writes nothing; exit 2 for no delegation, a non-delegable
+  action (`third-read`, `veto`, `delegate`, `revoke-delegation`, refused naming why), a wrong target, or a purchase
+  without `--because`. `--check` writes nothing and needs no lease. A VALID record already pinning the same bytes
+  prints `ALREADY` and writes nothing (for an implementation it still runs `built-signed` if the registry lags).
+  The record: `{kind: "delegated", row, program, action, target, at, at_iso, because, pins, delegation: {id,
+  sha256, program, at_iso, because}, criteria: [{name, ok, value}], words, by, provenance}` plus, for a profile
+  switch, `from` and `after_round` (the shape `kit.profile_switch` reads).
+- **The criteria** (`operator_sign.DELEGATED_CRITERIA` names them; the reader requires each, true):
+  `cert` state certified or Stage 9 · newest-certificate · rows-pass (rows present, each PASS or FILED) ·
+  no-reopen; pins `cert/CERT-v<n>.json`. `frame` lint (`intake.py lint`) · newest-change-is-delta (the newest
+  `frame-deltas.jsonl` entry has the frame's version, is the frame's last `frame_deltas` entry, and its
+  `frame_sha256` is frame.json's sha256 now; an entry from before that field refuses) · known-rows-open (the
+  delta names rows, each an open frame-omission row) · annotations-pinned (`frame_delta.pin_fails` empty); pins
+  `frame.json`. `implementation` state build-certified or implementation-signed · newest-built-certificate (this
+  program's) · rows-pass (rows 20-25 present, every one PASS) · freeze-snapshot (its `snapshot_sha` is
+  `built/freeze.json`'s); pins `built/BUILT-CERT-v<n>.json`. `extra-round` state certifying · once-per-program.
+  `profile` switch-terms (`operator_sign.profile_switch_terms`). `adopt` frame-predates-1.2 · once-per-program.
+  `extend-decision` decision-on-record (not descoped) · research-can-raise-it (`blockers.tag` reads research, as
+  the menu offers it) · once-per-decision. `reopen` state certified or Stage 9 · certificate · not-reopened.
+  Every cap counts VALID records of both kinds.
+- **The readers.** `operator_sign.research_records` returns the acceptances after the signatures, each with
+  `_delegated` and `_why`; `acceptance_verdict` reads one VOID unless it is a delegated record of a delegable action
+  for this program whose delegation is on record, VALID and in force at its `at`, showing every required criterion
+  true (and a pin for cert, frame, implementation); STALE if a pinned byte changed. So `latest_valid`,
+  `implementation_state`, `requires`, gate row 1, `delta_signature` (the sweep's spare and the run's close),
+  `built-freeze`, row 20, `built-signed`, `close`, the round cap, row 16, `stage9_applies`, `profile_switch`,
+  `blockers.extensions` and `reopened` honour an acceptance exactly where they honour the operator's signature.
+  An acceptance is never written to `signoff.jsonl`.
+- **What it says.** `gate.sh render` (and so `cc-research verdict`) prints, second, `Accepted by delegation (not read
+  by the operator): certificate CERT-v<n> <at> · frame <at> · …` for each record in force that is an acceptance;
+  the built line reads `implementation accepted by delegation (not read by the operator) <at>`; the accepted
+  certificate's `.md` (cert or built) gains one line naming the delegation and the criteria; row 1's note, the
+  close of a held row and `REOPENED` say the same words.
+- **The frame delta's hash.** `frame-deltas.jsonl` entries now carry `frame_sha256`, the sha256 of the frame.json
+  the apply wrote; the frame criterion reads it.

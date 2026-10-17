@@ -58,8 +58,16 @@ Invoked through scripts/research-kit/gate.sh. Verbs:
                                                             build-certifying (REPORT.md §11)
   built-run --program P [--json]                            rows 20-25; all pass -> built
                                                             certificate, state -> build-certified
-  built-signed --program P                                  a VALID operator signature on the built
-                                                            certificate -> implementation-signed
+  built-signed --program P                                  a VALID operator signature (or delegated
+                                                            acceptance) on the built certificate ->
+                                                            implementation-signed
+  accept    --program P --action A [--target T] [--because W] [--check] [--json]
+                                                            under the operator's standing delegation,
+                                                            accept A (cert, frame, implementation,
+                                                            extra-round, reopen, profile/<p>,
+                                                            adopt/stage9, extend-decision/<id>) when
+                                                            its machine criteria hold (gate_accept.py,
+                                                            REPORT.md §14)
 
 Rows 1-8 live in gate_rows_a.py; rows 9-17 and the plan lint in gate_rows_b.py; the sweep and
 file-packet verbs in gate_sweep.py; requires in gate_requires.py; freeze, render and the certificate in gate_cert.py. Each row function takes a Ctx and returns a Row. A row that cannot
@@ -233,7 +241,7 @@ def cmd_close(a: argparse.Namespace) -> int:
 
 
 def reopened(ctx: Ctx) -> bool:
-    """A VALID operator reopen signed after the newest certificate (§5.1)."""
+    """A VALID operator reopen (or delegated acceptance of one) after the newest certificate (§5.1)."""
     import operator_sign
 
     rec = operator_sign.latest_valid(ctx.slug, "reopen")
@@ -249,8 +257,16 @@ def cmd_run(a: argparse.Namespace) -> int:
     ctx = make_ctx(a.program)
     ctx.read_consent = a.consent_sealed_read
     if reopened(ctx):
+        import operator_sign
+
+        rec = operator_sign.latest_valid(a.program, "reopen") or {}
+        how = (
+            f"a reopen {operator_sign.DELEGATED_WORDS}"
+            if rec.get("_delegated")
+            else "operator signature"
+        )
         kit.registry_set(a.program, "registered")
-        print(f"REOPENED {a.program} by operator signature; registry -> registered")
+        print(f"REOPENED {a.program} by {how}; registry -> registered")
     rows = run_rows(ctx)
     print_rows(rows, a.json)
     if any(r.status not in (PASS, FILED) for r in rows):
@@ -269,7 +285,8 @@ def cmd_run(a: argparse.Namespace) -> int:
 
 
 def delta_signature(ctx: Ctx, kid: str, held: str) -> Optional[Dict[str, Any]]:
-    """The operator frame signature that carries known row `kid`'s delta, or None (RECORDS.md "Held
+    """The operator frame signature (or delegated acceptance, REPORT.md §14: research_records returns
+    both) that carries known row `kid`'s delta, or None (RECORDS.md "Held
     frame omissions and re-finds", "The delta's evidence"). Positive evidence only: a VALID signature
     dated after the hold whose pinned frame.json lists `kid` in `known_rows_applied` (VALID means the
     pin is the frame as it stands, so reading the frame now reads what was signed), pinning another
@@ -322,8 +339,15 @@ def close_delta_rows(ctx: Ctx, cert: str) -> List[str]:
         sig = delta_signature(ctx, kr["id"], held[kr["id"]])
         if not sig:
             continue
+        import operator_sign
+
+        how = (
+            operator_sign.signed_words(sig)
+            if sig.get("_delegated")
+            else f"re-signed {sig.get('at_iso')}"
+        )
         why = (
-            f"frame-delta cycle: frame re-signed {sig.get('at_iso')} carries {kr['id']}, "
+            f"frame-delta cycle: frame {how} carries {kr['id']}, "
             f"certificate re-issued as {cert}"
         )
         kit.append_jsonl(
@@ -360,10 +384,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     p.set_defaults(fn=cmd_run)
 
+    import gate_accept
     import gate_built
     import gate_cert
     import gate_requires
     import gate_sweep
+
+    gate_accept.add_verbs(sub)  # accept (REPORT.md §14)
 
     gate_cert.add_verbs(
         sub
@@ -377,7 +404,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     a = ap.parse_args(argv)
     try:
-        practice = a.verb == "read" and getattr(a, "practice", False)  # writes nothing
+        practice = (a.verb == "read" and getattr(a, "practice", False)) or (
+            a.verb == "accept" and getattr(a, "check", False)
+        )  # writes nothing
         if (
             a.verb not in ("render", "requires", "waves") and not practice
         ):  # every other gate verb writes
