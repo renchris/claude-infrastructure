@@ -183,6 +183,34 @@ print(m.eval_body(argv2))' "$PASS"
   [ "$status" -eq 0 ]
 }
 
+# ── --daemon runs the detectors live (DESIGN §4.2; before this nothing called Detectors.step) ──────
+@test "--daemon: D1-D9 evaluate every tick, write record-only rows beside the log, and keep since/ticks across a restart" {
+  run python3 "$PASS" --daemon --interval 0.2 --max-ticks 3
+  [ "$status" -eq 0 ]
+  run jq -e '.detectors.live == true and .detectors.ticks == 3 and .detectors.err == null' "$D/attrib-latest.json"
+  [ "$status" -eq 0 ]
+  # a detector row is written: tick 1 has no fork-rate yet, so D2 abstains (absent ≠ zero)
+  run jq -se 'length > 0 and all(.[]; .mode == "record-only") and any(.[]; .det == "D2")' "$D/capacity-detect.jsonl"
+  [ "$status" -eq 0 ]
+  since="$(jq -r .since "$D/capacity-detect.state.json")"
+  run python3 "$PASS" --daemon --interval 0.2 --max-ticks 2
+  [ "$status" -eq 0 ]
+  run jq -e --argjson s "$since" '.detectors.ticks == 5 and .detectors.since == $s' "$D/attrib-latest.json"
+  [ "$status" -eq 0 ]
+}
+
+@test "--daemon: a detector module that will not load costs the detectors, never the tick" {
+  mkdir -p "$D/lib"
+  cp "$PASS" "$D/lib/capacity-attrib.py"
+  printf 'raise RuntimeError("broken")\n' > "$D/lib/capacity-detect.py"
+  run python3 "$D/lib/capacity-attrib.py" --daemon --interval 0.2 --max-ticks 3
+  [ "$status" -eq 0 ]
+  run jq -e '.ticks == 3 and .errors == 0 and .detectors.live == false
+             and (.detectors.err | test("broken"))' "$D/attrib-latest.json"
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$D/attrib-series.jsonl")" -eq 3 ] && [ ! -e "$D/capacity-detect.jsonl" ]
+}
+
 # ── wiring into capacity-alarm.sh ───────────────────────────────────────────────────────────────
 @test "capacity-alarm feeds rung 4 from the pass, writes the attrib row, and says so (top_src)" {
   run env CC_CAP_LOG="$D/cap.jsonl" CC_CAP_KALLOC=off CC_CAP_COAL_FP=0 CC_CAP_PAGE=off \

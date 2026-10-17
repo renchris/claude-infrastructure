@@ -1091,6 +1091,85 @@ def write_atomic(path, obj):
     os.replace(tmp, path)
 
 
+class LiveDetectors:
+    """D1-D9 (scripts/lib/capacity-detect.py, DESIGN §4.2) evaluated over every tick this daemon writes.
+
+    Until this existed nothing called Detectors.step(): only `capacity-detect.py --replay` ran them, so
+    no detector had ever seen a live tick and D2's 7 d record-only window, which X17's load-rung flip
+    waits on, could not start. Record-only is the detectors' own contract; this only feeds them.
+
+    Fail-open, as the sampler is: a module that will not load, or a step that throws, costs that tick's
+    detector pass and is reported in attrib-latest.json, never the tick itself. The records go beside
+    CC_CAP_ATTRIB_LOG (CC_CAP_DETECT_OUT overrides), so a test's scratch log keeps its detector rows too.
+    The state is saved on the 60 s pass and at exit, and carries `since` and `ticks` across restarts:
+    ticks x interval over the time since `since` is the evidence that the detectors ran CONTINUOUSLY,
+    which the operator's activation script (52) reads before it flips the load rung."""
+
+    def __init__(self, out_dir, interval):
+        self.interval, self.det, self.err = interval, None, None
+        self.out = (
+            os.environ.get("CC_CAP_DETECT_OUT") or out_dir + "/capacity-detect.jsonl"
+        )
+        self.state_p = (
+            os.environ.get("CC_CAP_DETECT_STATE")
+            or out_dir + "/capacity-detect.state.json"
+        )
+        self.since, self.ticks = time.time(), 0
+        try:
+            import importlib.util
+
+            p = os.path.join(
+                os.path.dirname(os.path.realpath(__file__)), "capacity-detect.py"
+            )
+            spec = importlib.util.spec_from_file_location("capacity_detect", p)
+            mod = importlib.util.module_from_spec(spec)
+            # @dataclass resolves its annotations through sys.modules[cls.__module__], so the module
+            # must be registered before it executes (an unregistered load fails on AttributeError).
+            sys.modules[spec.name] = mod
+            spec.loader.exec_module(mod)
+            saved = {}
+            try:
+                with open(self.state_p) as fh:
+                    saved = json.load(fh)
+            except (OSError, ValueError):
+                saved = {}
+            if not isinstance(saved, dict):
+                saved = {}
+            if isinstance(saved.get("since"), (int, float)):
+                self.since = float(saved["since"])
+            if isinstance(saved.get("ticks"), int):
+                self.ticks = saved["ticks"]
+            self.det = mod.Detectors(saved.get("det"))
+        except Exception as e:
+            self.err = "load: " + repr(e)[:280]
+
+    def step(self, row):
+        if self.det is None:
+            return
+        try:
+            recs = self.det.step(row, time.time())
+            self.ticks += 1
+            if recs:
+                with open(self.out, "a") as fh:
+                    fh.writelines(json.dumps(r, sort_keys=True) + "\n" for r in recs)
+            self.err = None
+        except Exception as e:
+            self.err = "step: " + repr(e)[:280]
+
+    def save(self):
+        if self.det is None:
+            return
+        try:
+            write_atomic(self.state_p, {"v": 1, "since": round(self.since, 3), "ticks": self.ticks,
+                                        "det": self.det.state()})  # fmt: skip
+        except Exception as e:
+            self.err = "save: " + repr(e)[:280]
+
+    def summary(self):
+        return {"live": self.det is not None, "since": round(self.since, 3), "ticks": self.ticks,
+                "interval": self.interval, "err": self.err}  # fmt: skip
+
+
 def daemon(interval, max_ticks, top_n):
     import threading
     import traceback
@@ -1121,12 +1200,14 @@ def daemon(interval, max_ticks, top_n):
             )
 
     sampler, last_pass, n, nxt = Sampler(), None, 0, time.time()
+    dets = LiveDetectors(out_dir, interval)
     while not max_ticks or n < max_ticks:
         n += 1
         try:
             t = sampler.tick()
             if last_pass is None or time.time() - last_pass >= PASS_EVERY_S:
                 last_pass = time.time()
+                dets.save()
                 th = pas["thread"]
                 # one pass in flight at most; a slow one is skipped, not queued
                 if th is None or not th.is_alive():
@@ -1140,6 +1221,9 @@ def daemon(interval, max_ticks, top_n):
                 os.replace(series_p, series_p + ".1")
             with open(series_p, "a") as fh:
                 fh.write(json.dumps(t, separators=(",", ":")) + "\n")
+            dets.step(
+                t
+            )  # over the row just written, so a --replay of the series sees the same input
         except Exception as e:
             latest["errors"] += 1
             latest["err"] = repr(e)[:300]
@@ -1149,6 +1233,7 @@ def daemon(interval, max_ticks, top_n):
             )
         latest.update(
             ticks=n,
+            detectors=dets.summary(),
             hb=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             hb_t=round(time.time(), 3),
         )
@@ -1164,6 +1249,7 @@ def daemon(interval, max_ticks, top_n):
         # a late tick is not made up with a burst
         nxt = max(nxt + interval, time.time())
         time.sleep(max(0.0, nxt - time.time()))
+    dets.save()
     if pas["thread"] is not None:
         # a bounded run ends with its pass's row in attrib-latest.json
         pas["thread"].join(30)
