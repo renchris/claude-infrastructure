@@ -470,7 +470,7 @@ wt_tomb_find() { # <path> [--sid S] [--branch B] → newest removal row for path
   done
   [ -f "$WT_LEDGER" ] || return 1
   row="$(jq -cR --arg p "$path" --arg s "$sid" --arg b "$br" '
-    fromjson? | select(.path == $p and ((.event // "") | IN("worktree-disposed","guard-snapshot","admin-pruned")))
+    fromjson? | select(.path == $p and ((.event // "") | IN("worktree-disposed","worktree-tombstoned","guard-snapshot","admin-pruned")))
     | select(($s == "" and $b == "") or ($s != "" and ((.sids // []) | index($s)) != null) or ($b != "" and .branch == $b))
   ' "$WT_LEDGER" 2>/dev/null | tail -1)"   # -R + fromjson?: one torn legacy line never hides later rows
   [ -n "$row" ] || return 1

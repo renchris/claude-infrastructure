@@ -39,8 +39,14 @@ Existing keys stay (`ts event path branch head preserved_at destroyed_ignored`);
 `id actor reason repo trunk landed (true|false|null) sids [] mode (mv|clone|none) preserved ("<id>/residue"|null)
 preserved_list [] caches_skipped [] identical_skipped [] lockfiles {name: sha256} tomb_ref reflog_refs [] logs_head ("<id>/logs-HEAD"|null)
 wip_ref checkpoint_ref parked_path branch_tip`. Absent values are JSON `null`, never omitted.
-`event` ∈ `worktree-disposed | guard-snapshot | admin-pruned | branch-deleted | worktree-parked | worktree-unparked |
+`event` ∈ `worktree-disposed | worktree-tombstoned | guard-snapshot | admin-pruned | branch-deleted | worktree-parked | worktree-unparked |
 restored | ref-expired | residue-purged | superseded`.
+
+**One removal, one disposal row.** A caller that already writes its own post-removal outcome row (worktree-gc's
+`log_disposal`, which records `verified`, `owner_proof`, `unlanded_patches`) passes `--event worktree-tombstoned` and
+adds the returned id to its own row as `tombstone_id`. A caller with no outcome row (teammate-auto-shutdown,
+handoff-fire) keeps the default `worktree-disposed`, and if git then refuses the removal it restores the residue and
+appends a `superseded` row naming the id (`wt__row_reset; WT_R_event=superseded; WT_R_id=<id>; …; wt__row_emit`).
 
 ## Core (WP-9a, wt-tombstone.sh)
 
@@ -52,7 +58,7 @@ restored | ref-expired | residue-purged | superseded`.
 | `wt_prune_logged <repo> [prune-args…]` | `git worktree prune --dry-run -v`; per entry: an `admin-pruned` row (path, repo, head + branch from the admin dir's `HEAD`), copy of its `logs/HEAD`, reflog refs; then runs `git -C <repo> worktree prune <args>` unchanged and returns ITS rc. A logging failure never blocks the prune (logged to stderr). |
 | `wt_branch_deleted_row <repo> <branch> <sha> <actor> [reason]` | One `branch-deleted` row. |
 | `wt_emit_event <ev> <path> [sid]` | One `printf >>` of `{"ev","path","sid","repo","ts"}` to `$WT_EVENTS_FILE` plus `touch $WT_WAKE_FILE`. Never fails the caller (rc 0 always; stderr on error). |
-| `wt_tomb_find <path> [--sid S] [--branch B]` | Prints the newest ledger row (JSON) for `path` with event ∈ worktree-disposed/guard-snapshot/admin-pruned whose `sids` contains S or `branch` equals B; with neither flag, path match only. rc 1 if none. Uses `jq` (/usr/bin/jq). |
+| `wt_tomb_find <path> [--sid S] [--branch B]` | Prints the newest ledger row (JSON) for `path` with event ∈ worktree-disposed/worktree-tombstoned/guard-snapshot/admin-pruned whose `sids` contains S or `branch` equals B; with neither flag, path match only. rc 1 if none. Uses `jq` (/usr/bin/jq). |
 | `wt_resume_reaped <launcher> <cwd> <sid> <outcome>` | X7 phase 1: one row `{ts,launcher,cwd,sid,outcome,quiet_s}` to `${WT_RESUME_REAPED:-~/.claude/autonomy/resume-reaped.jsonl}`; `quiet_s` = now − newest transcript write for the cwd (null if none). Outcomes: `recreated-empty`, `refused`, `unparked`, `restored`, `exit-1`, `exit-2`. Never fails the caller. |
 | `wt_cleanup_period_days` | Max of `.cleanupPeriodDays` over `wt__config_roots` settings.json; a root with no file or key counts 30. |
 | `wt_ref_expire <repo>` | Deletes `refs/wt-tombstone/<id>/*` whose row is older than `wt_cleanup_period_days` and has no later `restored` row; writes `ref-expired`. **Never touches residue.** |
