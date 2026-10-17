@@ -288,3 +288,71 @@ SH
   HOME="$h" run_cleanup /dev/null
   grep -q "session close -f -s $SPAWNED_PANE" "$h/it2-calls.log"
 }
+
+# ── W2 X6: the TOMBSTONE before the cold-worktree remove (docs/research/load-root-cause-2026-10-17/
+#    W2-CONTRACT.md). Every store is under $BATS_TEST_TMPDIR; the library is the repo's own. ─────────
+tomb_env() {
+  local t="$BATS_TEST_TMPDIR/wtstore"
+  export WT_LEDGER="$t/ledger.jsonl" WT_TOMB_DIR="$t/tomb" WT_STATE_DIR="$t/state" \
+    WT_EVENTS_FILE="$t/state/events.jsonl" WT_WAKE_FILE="$t/state/wake" WT_PARK_INDEX="$t/park-index" \
+    WT_PARK_ROOT="$t/parked" WT_CONFIG_ROOTS="$HOMEDIR/.claude" WT_CRASH_LOG="$t/crashes.jsonl" \
+    WT_RESUME_DEBT_DIR="$t/rdebt" WT_LR_DIR="$t/lr" WT_RECYCLE_FAILED_DIR="$t/rfail" \
+    WT_BOOT_RESUME_DIR="$t/boot" WT_BACKLOG="$t/backlog.jsonl"
+  mkdir -p "$t"
+}
+
+@test "tombstone: no pane landed → a handoff-fire row is written, THEN the cold worktree removed" {
+  tomb_env
+  fire_that_fails wt-tomb-cold
+  [ "$status" -eq 4 ] || { echo "expected the payload-lint abort (4), got $status: $output"; false; }
+  [ ! -d "$WTROOT/wt-tomb-cold" ] || { echo "worktree STRANDED: $output"; false; }
+  local row
+  row="$(jq -c 'select(.actor=="handoff-fire")' "$WT_LEDGER")"
+  [ "$(jq -r .event <<<"$row")" = worktree-disposed ]
+  [ "$(jq -r .reason <<<"$row")" = failed-fire ]
+  [[ "$(jq -r .path <<<"$row")" == */wt-tomb-cold ]] || false
+  [[ "$output" == *"cold worktree REMOVED ($WTROOT/wt-tomb-cold, tombstone $(jq -r .id <<<"$row"))"* ]] || false
+}
+
+@test "tombstone: an unwritable ledger KEEPS the cold worktree, with the hand-cleanup line" {
+  tomb_env
+  mkdir -p "$BATS_TEST_TMPDIR/ro"; chmod 555 "$BATS_TEST_TMPDIR/ro"
+  export WT_LEDGER="$BATS_TEST_TMPDIR/ro/ledger.jsonl"
+  fire_that_fails wt-tomb-ro
+  chmod 755 "$BATS_TEST_TMPDIR/ro"
+  [ "$status" -eq 4 ] || { echo "expected the payload-lint abort (4), got $status: $output"; false; }
+  [ -d "$WTROOT/wt-tomb-ro" ] || { echo "removed WITHOUT its record"; false; }
+  [[ "$output" == *"cold worktree $WTROOT/wt-tomb-ro KEPT (tombstone failed) — clean up by hand"* ]] || false
+}
+
+@test "tombstone: ignored residue in a failed fire's cold tree is moved into the tombstone, not deleted" {
+  tomb_env
+  eval "$(sed -n '/^fire_cleanup() {/,/^}/p' "$HF")"
+  HF_DIR="$REPO_SRC/scripts"
+  local wt="$WTROOT/wt-tomb-residue"
+  git -C "$REPO" worktree add -q "$wt" -b wt-tomb-residue origin/main
+  mkdir -p "$(git -C "$wt" rev-parse --path-format=absolute --git-common-dir)/info"
+  printf 'out/\n' >> "$(git -C "$wt" rev-parse --path-format=absolute --git-common-dir)/info/exclude"
+  mkdir -p "$wt/out"; printf 'made by the dead session\n' > "$wt/out/report.txt"
+  FIRE_CLEAN_DONE=0; FIRE_CLEAN_POOL=""; FIRE_CLEAN_WT="$wt"; FIRE_CLEAN_BRANCH="wt-tomb-residue"; SPAWNED_PANE=""
+  run_cleanup "$BATS_TEST_TMPDIR/residue.out"
+  [ ! -d "$wt" ] || { cat "$BATS_TEST_TMPDIR/residue.out"; false; }
+  local id
+  id="$(jq -r 'select(.actor=="handoff-fire") | .id' "$WT_LEDGER")"
+  [ "$(cat "$WT_TOMB_DIR/$id/residue/out/report.txt")" = 'made by the dead session' ]
+}
+
+@test "RED control: the pre-tombstone fire_cleanup removes the same cold worktree with NO row" {
+  tomb_env
+  local old="$BATS_TEST_TMPDIR/handoff-fire-pretomb.sh"
+  git -C "$REPO_SRC" show 7fa90e0c2:scripts/handoff-fire.sh > "$old"
+  local bad="$BATS_TEST_TMPDIR/bad-payload.md"
+  printf 'do the thing\n\n## BACK-CHANNEL — ping the originator\n  cc-notify  "HANDOFF-PING: x"\n' > "$bad"
+  run env HOME="$HOMEDIR" HANDOFF_ACCOUNT_SWEEP=off CC_FIRE_CAPACITY_GATE=off \
+      CC_PAYLOAD_LINT_BIN="$REPO_SRC/scripts/payload-lint.sh" \
+      bash "$old" --prompt-file "$bad" --launcher claude --worktree wt-tomb-red \
+      --repo "$REPO" --wtroot "$WTROOT"
+  [ "$status" -eq 4 ] || { echo "control aborted at $status, not the payload-lint gate: $output"; false; }
+  [ ! -d "$WTROOT/wt-tomb-red" ]                          # removed…
+  [ ! -e "$WT_LEDGER" ]                                   # …with no record of it
+}

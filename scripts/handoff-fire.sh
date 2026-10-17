@@ -16610,7 +16610,7 @@ fi
 # path, not wt-pool-N); that one is an ordinary cold worktree and is removed like one.
 FIRE_CLEAN_WT="" FIRE_CLEAN_BRANCH="" FIRE_CLEAN_POOL="" FIRE_CLEAN_DONE=0
 fire_cleanup() {
-  local _rc=$? _slot="" _pane=""
+  local _rc=$? _slot="" _pane="" _tlib="" _c="" _pin="" _prc=0 _tid="" _keep=""
   [ "$FIRE_CLEAN_DONE" = 1 ] && return 0
   FIRE_CLEAN_DONE=1
   [ "$_rc" = 0 ] && return 0                     # a successful fire owns everything it claimed
@@ -16653,13 +16653,40 @@ fire_cleanup() {
       fi
     fi
     if [ -n "$FIRE_CLEAN_WT" ] && [ -d "$FIRE_CLEAN_WT" ]; then
-      if git -C "${REPO:-.}" worktree remove --force "$FIRE_CLEAN_WT" >/dev/null 2>&1; then
-        echo "→ fire-cleanup: cold worktree REMOVED ($FIRE_CLEAN_WT) — the fire never landed a pane" >&2
+      # THE TOMBSTONE COMES BEFORE THE REMOVE (W2 note X6; API: docs/research/load-root-cause-2026-10-17/
+      # W2-CONTRACT.md). A cold tree is normally empty of residue — its ignored files are provisioning
+      # copies the tombstone skips as byte-identical — but "normally" is not a reason to delete unrecorded,
+      # and a pinned path (a crash, a resume debt, an owner minutes old) is not this fire's to delete at
+      # all. So a missing library, a pin or a failed tombstone KEEPS the tree with the hand-cleanup line;
+      # a refused remove gets its moved residue back. Inline, not a helper: the suite extracts this
+      # function alone. CC_FIRE_TOMBSTONE_LIB, when set, is the ONLY library looked at.
+      _tlib="${CC_FIRE_TOMBSTONE_LIB:-}"
+      if [ -z "$_tlib" ]; then
+        for _c in "${HF_DIR:-}/lib/wt-tombstone.sh" "${HOME:-}/.claude/scripts/lib/wt-tombstone.sh"; do
+          [ -f "$_c" ] && { _tlib="$_c"; break; }
+        done
+      fi
+      # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+      if [ -z "$_tlib" ] || [ ! -f "$_tlib" ] || ! . "$_tlib" 2>/dev/null; then
+        _keep="no wt-tombstone library"
+      else
+        # rc 1 is the only "no pin"; an undefined wt_pinned (127) is a missing library, so it keeps too.
+        _pin="$(wt_pinned "$FIRE_CLEAN_WT" 2>/dev/null)" || _prc=$?
+        if [ "$_prc" = 0 ]; then _keep="pinned: ${_pin:-?}"
+        elif [ "$_prc" != 1 ]; then _keep="pin check failed, rc $_prc"
+        else _tid="$(wt_tombstone "$FIRE_CLEAN_WT" handoff-fire failed-fire)" && [ -n "$_tid" ] || _keep="tombstone failed"
+        fi
+      fi
+      if [ -n "$_keep" ]; then
+        echo "⚠ fire-cleanup: cold worktree $FIRE_CLEAN_WT KEPT ($_keep) — clean up by hand: git -C ${REPO:-.} worktree remove --force $FIRE_CLEAN_WT && git -C ${REPO:-.} branch -D ${FIRE_CLEAN_BRANCH:-<branch>}" >&2
+      elif git -C "${REPO:-.}" worktree remove --force "$FIRE_CLEAN_WT" >/dev/null 2>&1; then
+        echo "→ fire-cleanup: cold worktree REMOVED ($FIRE_CLEAN_WT, tombstone $_tid) — the fire never landed a pane" >&2
         if [ -n "$FIRE_CLEAN_BRANCH" ]; then
           git -C "${REPO:-.}" branch -D "$FIRE_CLEAN_BRANCH" >/dev/null 2>&1 \
             && echo "→ fire-cleanup: branch DELETED ($FIRE_CLEAN_BRANCH)" >&2 || true
         fi
       else
+        wt_residue_restore "$_tid" "$FIRE_CLEAN_WT" >/dev/null 2>&1 || true
         echo "⚠ fire-cleanup: could NOT remove $FIRE_CLEAN_WT — clean up by hand: git -C ${REPO:-.} worktree remove --force $FIRE_CLEAN_WT && git -C ${REPO:-.} branch -D ${FIRE_CLEAN_BRANCH:-<branch>}" >&2
       fi
     fi
