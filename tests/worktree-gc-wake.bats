@@ -30,9 +30,10 @@ setup() {
   export CC_WTGC_PROMOTED_FILE="$BATS_TEST_TMPDIR/promoted"
   export CC_WTGC_WAKE_DEBOUNCE_S=0
   unset WTGC_EVENTS CC_WTGC_GRACE_S CC_WTGC_SCOPE_EXCLUDE
-  export WT_NOW=2000000000                 # 2033-05-18T03:33:20Z
-  OLD_TS="2026-10-01T00:00:00Z"            # well past a 24 h grace at WT_NOW
-  NOW_TS="2033-05-18T03:33:20Z"            # == WT_NOW: not due for another 24 h
+  # Relative to the real clock (an absolute stamp drifts in meaning as the calendar advances).
+  export WT_NOW; WT_NOW="$(date +%s)"
+  OLD_TS="$(date -u -r $((WT_NOW - 30 * 86400)) +%Y-%m-%dT%H:%M:%SZ)"   # well past a 24 h grace at WT_NOW
+  NOW_TS="$(date -u -r "$WT_NOW" +%Y-%m-%dT%H:%M:%SZ)"                  # == WT_NOW: not due for another 24 h
 
   # The stub janitor: argv one per line, then its env, then "---"; one decision line per --path.
   STUB_LOG="$BATS_TEST_TMPDIR/stub.calls"
@@ -215,6 +216,7 @@ wake() { run /bin/bash "$WAKE" </dev/null; }   # launchd runs /bin/bash 3.2
   export CC_WTGC_INFRA_GC="$REPO/scripts/worktree-gc.sh"
   local shim="$BATS_TEST_TMPDIR/cc-notify" null="$BATS_TEST_TMPDIR/nullbin"
   printf '#!/bin/bash\necho "[]"\n' > "$shim"; chmod +x "$shim"
+  # shellcheck disable=SC2016  # the stub's own program: $@ and $$ are the stub's, not this shell's
   printf '#!/bin/bash\nfor a in "$@"; do [ "$a" = cwd ] && { printf "p%%s\\nn/\\n" "$$"; exit 0; }; done\nexit 1\n' > "$null"
   chmod +x "$null"
   export CC_WTGC_CC_NOTIFY="$shim" CC_WTGC_LSOF="$null" CC_WTGC_PGREP="$null"
