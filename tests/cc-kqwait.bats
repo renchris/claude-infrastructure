@@ -15,6 +15,7 @@ setup_file() {
 }
 
 setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   T="$BATS_TEST_DIRNAME/../bin/cc-kqwait"
   D="$BATS_TEST_TMPDIR"
   F="$D/f"; echo a >"$F"

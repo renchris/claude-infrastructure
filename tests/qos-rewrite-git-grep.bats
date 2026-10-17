@@ -57,6 +57,11 @@ setup_file() {
   done < "$cands"
 }
 
+# setup_file read the live log above as a read-only corpus source; every test body runs hermetic.
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+}
+
 # Hand cases: always in the corpus, so the lab never depends on the log alone.
 hand_cases() {
   cat <<'EOF'

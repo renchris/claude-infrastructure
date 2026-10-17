@@ -21,6 +21,7 @@ setup_file() {
 }
 
 setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   OLD="$BATS_TEST_TMPDIR/old"
   shf_old_tree "$OLD" "$REPO" hooks/coldcompile-admit.sh \

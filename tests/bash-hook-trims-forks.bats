@@ -46,6 +46,12 @@ setup() {
   OLD="$BATS_TEST_TMPDIR/old"
   ROOT="$BATS_TEST_TMPDIR/root"
   export HOME="$ROOT/home"
+  # The corpus quotes real commands that name handoff-fire and claude-accounts; pin their seams so
+  # no hook under test can reach the live capacity gate, account sweep or heal lock.
+  export CC_FIRE_CAPACITY_GATE=off
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/account-sweep.json"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/no-claude-accounts"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-"
   export CLAUDE_CONFIG_DIR="$ROOT/cfg"
   export TMPDIR="$ROOT/tmp/"
   export CC_IDL="$ROOT/idl.jsonl"
