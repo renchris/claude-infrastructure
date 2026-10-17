@@ -13,6 +13,7 @@ setup() {
   export CC_BACKLOG_PROJECT_WARN=off
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HOOK="$REPO/hooks/operator-readout.sh"
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export CC_OPREADOUT_STATE_DIR="$BATS_TEST_TMPDIR/state"
   export CC_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
   export CC_ACTIVATION_DIR="$BATS_TEST_TMPDIR/activation"
