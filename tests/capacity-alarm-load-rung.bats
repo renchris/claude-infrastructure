@@ -121,8 +121,8 @@ mk_latest() { # <pid> <start> [top-json] — the daemon's file, written now
 
 @test "selftest: record-only probes read the rung and leave the verdict OK" {
   run env -u CC_CAP_LOAD_WARN_PER_CORE -u CC_CAP_LOAD_ALARM_PER_CORE /bin/bash "$A" --selftest </dev/null
-  [[ "$output" =~ "control OK   record-only load='5.98' → OK load=ALARM" ]] || false
-  [[ "$output" =~ "control OK   record-only load='?' → OK load=SKIPPED" ]] || false
+  [[ "$output" == *"control OK   record-only load='5.98' → OK load=ALARM"* ]] || false
+  [[ "$output" == *"control OK   record-only load='?' → OK load=SKIPPED"* ]] || false
   ! [[ "$output" =~ "control FAIL record-only" ]] || false
 }
 

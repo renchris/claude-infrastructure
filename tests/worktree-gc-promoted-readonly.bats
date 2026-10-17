@@ -24,7 +24,7 @@ promoted_writers() {
   grep -rnE \
     -e ">>?[[:space:]]*[\"']?[^[:space:]\"']*$_T" \
     -e "(^|[^[:alnum:]_])tee([[:space:]]+-[a-z]+)*[[:space:]]+[^|;&]*$_T" \
-    -e "(^|[^[:alnum:]_])(mv|cp|install|ln)[[:space:]][^|;&]*$_T[\"']?[[:space:]]*(\$|[;&|)#])" \
+    -e "(^|[^[:alnum:]_])(mv|cp|install|ln)[[:space:]][^|;&]*${_T}[\"']?[[:space:]]*(\$|[;&|)#])" \
     -e "open\(.*$_T.*,[[:space:]]*[\"'][^\"']*[wax+]" \
     -e "open\(.*$_T.*\)\.write" \
     -e "(write_text|write_bytes)\(" \
