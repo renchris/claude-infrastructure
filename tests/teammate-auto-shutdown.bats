@@ -609,6 +609,28 @@ tomb_run() { # <member> <sid> → the idle event for the fixture's member; a dir
   [ ! -e "$WT_LEDGER" ]
 }
 
+# A session that crashed in this tree and never resumed pins it: the real wt_pinned reads a CRASH row for
+# a sid whose transcript (under the config root's projects/<slug>) was last written before the crash.
+@test "tombstone: a crash-pinned tree is KEPT — no tombstone, no row, residue in place" {
+  tomb_env; local member=tomb-pin sid=sidCRASH slug d now
+  tomb_fixture "$member"
+  now="$(date +%s)"
+  for d in "$TWT" "$(cd "$TWT" && pwd -P)"; do
+    slug="$(printf '%s' "$d" | sed 's#[/.]#-#g')"
+    mkdir -p "$HOME/.claude/projects/$slug"
+    printf '{"type":"user","cwd":"%s"}\n' "$d" > "$HOME/.claude/projects/$slug/$sid.jsonl"
+    touch -t "$(date -r $((now - 7200)) +%Y%m%d%H%M)" "$HOME/.claude/projects/$slug/$sid.jsonl"
+  done
+  printf '{"ts":"%s","class":"CRASH","sid":"%s"}\n' "$(date -u -r $((now - 3600)) +%Y-%m-%dT%H:%M:%SZ)" "$sid" \
+    > "$WT_CRASH_LOG"
+  tomb_run "$member" sidPN
+  [ -d "$TWT" ]
+  cmp "$D/x.json.orig" "$TWT/brag-output/x.json"
+  grep -q "worktree kept (pinned: crash sid=$sid" "$LOGF"
+  [ ! -e "$WT_LEDGER" ]
+  [ -z "$(git -C "$TREPO" for-each-ref refs/wt-tombstone/)" ]
+}
+
 # The tombstone runs in the DETACHED child, after the hook body has returned its verdict — never inside the
 # 5 s hook budget. Ordered, not timed: the stub tombstone waits for a marker the test writes only once the
 # hook's main process has exited, so a tombstone run in the body would never see it and record so.
