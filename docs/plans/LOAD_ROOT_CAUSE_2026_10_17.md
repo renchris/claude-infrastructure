@@ -37,7 +37,7 @@ fixes X1-X27, §3 worktree lifecycle, §4 instrument, §5 WP table with file own
 | W0 | — | OP-1, OP-2, OP-2b, OP-2c | X1 fseventsd restart, X24 cleanups, wired + fs_usage capture | X1 **done by another actor** (fseventsd pid 96656, 14 MB at 2026-10-17 ~10:00Z; was 12-13 GB). Spotlight Privacy entry, OP-2* pending → operator script |
 | W1-CI | claude-infrastructure | WP-1, WP-5, WP-6, WP-7, WP-8 | X2, X3 (bats), X8, X5, X4 | pending |
 | W1-ACS | agent-context-sync | WP-2, WP-3, WP-4, WP-22, WP-30 | X3, X11, X20, X10, X26 | pending |
-| W2 | claude-infrastructure | WP-9, WP-10, WP-11, WP-12, WP-13, WP-14 | X6, X7, PARK tier, §4.2 detectors | **landed except WP-10 phase B** — 55d01fcd4 (WP-9 core, WP-11), bfab48403 (WP-9 park/pins, WP-10 phase A, WP-12, WP-13, WP-14), content-verified; contract `docs/research/load-root-cause-2026-10-17/W2-CONTRACT.md`. WP-10 phase B (PARK tiers, `--path`, late DETACH, ARCHIVE behind `--park-first`) in progress |
+| W2 | claude-infrastructure | WP-9, WP-10, WP-11, WP-12, WP-13, WP-14 | X6, X7, PARK tier, §4.2 detectors | **landed** — 55d01fcd4, bfab48403, 47970f271 + the WP-10 phase B land (PARK tiers, `--path`, late DETACH, ARCHIVE, all behind `--park-first`; AC-6 always on), content-verified; contract `docs/research/load-root-cause-2026-10-17/W2-CONTRACT.md`. Activation (`--park-first` in the nightly / wake run) is W3 |
 | W3 | claude-infrastructure | WP-15, WP-16, WP-17 | X9 event queue, activation (staged), X17 | blocked on W1-CI + W2 |
 | W4 | claude-infrastructure | WP-18-21, WP-23, WP-24, WP-25, WP-26, WP-28 | X12, X13, X25, X16, X15, X14 gate, X20, X18 | pending |
 | W5 | hammerspoon-config, reso | WP-27, WP-31 | X22, X6 for reso's janitor | owner repos; fire with W4's session if their CLAUDE.md permits |
