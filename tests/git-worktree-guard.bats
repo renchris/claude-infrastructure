@@ -358,8 +358,8 @@ dfree_kb() { df -k "$BATS_TEST_TMPDIR" | awk 'NR==2{print $4}'; }
 
 @test "TOMBSTONE: 120 MB .next and 120 MB asset-workspace both pass; .next skipped, asset-workspace cloned at ~0 free-space cost" {
   lab
-  w1="$(lwt nextjs)"; mkdir -p "$w1/.next/cache"; mkfile -n 120m "$w1/.next/cache/big.pack"
-  w2="$(lwt assets)"; mkdir -p "$w2/asset-workspace"; mkfile -n 120m "$w2/asset-workspace/big.bin"
+  w1="$(lwt nextjs)"; mkdir -p "$w1/.next/cache"; /usr/sbin/mkfile -n 120m "$w1/.next/cache/big.pack"
+  w2="$(lwt assets)"; mkdir -p "$w2/asset-workspace"; /usr/sbin/mkfile -n 120m "$w2/asset-workspace/big.bin"
   f0="$(dfree_kb)"
   run guard_split "git -C $L worktree remove $w1"
   if ! { [ "$status" -eq 0 ] && [ ! -s "$OUT" ] && [ ! -s "$ERR" ]; }; then echo "next: exit $status: $(cat "$ERR")"; false; fi

@@ -312,6 +312,11 @@ PLIST_TARGET_ALT="${PLIST_TARGET_LAYERS// /|}"
 #    bare name, and per this header's own rule a `command -v`-guarded site KEEPS the bare name.
 #    PAIRED, per the 2026-08-29 note above: one source line names both binaries and the ratchet
 #    counts them separately, so an unpaired row would re-open that exact defect.
+# ── ADDED 2026-10-17: `hooks/git-worktree-guard.sh:gtimeout` — the guard now records a tombstone
+#    inside the hook under an internal bound (DESIGN load-root-cause-2026-10-17 note X6, WP-12). Its
+#    resolver is the same guarded ladder as hooks/notify.sh: `command -v gtimeout` screened by
+#    `[ -n ] && [ -x ]`, with /opt/homebrew and /usr/local absolute candidates in the SAME loop, and an
+#    empty result blocks the removal with a reason rather than running unbounded. One binary, one row.
 EMBEDDED_ALLOWLIST="$(cat <<'ALLOW'
 bin/cc-dispatch:bun
 bin/cc-dispatch:cargo
@@ -320,6 +325,7 @@ bin/cc-reaper:gtimeout
 bin/cc-reaper:timeout
 hooks/anti-deference-nudge.sh:cc-decide
 hooks/completion-assert.sh:timeout
+hooks/git-worktree-guard.sh:gtimeout
 hooks/lead-crash-watchdog.sh:cc-teardown
 hooks/lead-crash-watchdog.sh:gtimeout
 hooks/lead-crash-watchdog.sh:timeout

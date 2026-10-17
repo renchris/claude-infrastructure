@@ -75,8 +75,11 @@ wtg_run() { # <lib> <fn> <args…> → runs fn from a fresh source of lib under 
   # and gtimeout signals its own process group, so `cp` grandchildren die with it.
   local lib="$1" gt rc
   shift
-  gt="$(command -v gtimeout 2>/dev/null || true)"
-  [ -n "$gt" ] || { [ -x /opt/homebrew/bin/gtimeout ] && gt=/opt/homebrew/bin/gtimeout; }
+  # Absolute candidates too: a hook may inherit a stock PATH without /opt/homebrew/bin.
+  gt=""
+  for _c in "$(command -v gtimeout 2>/dev/null || true)" /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { gt="$_c"; break; }
+  done
   if [ -z "$gt" ]; then wtg_err="gtimeout is not resolvable (PATH=$PATH), so the record cannot be bounded"; return 3; fi
   # shellcheck disable=SC2016  # $1/$@ are the CHILD's positional args, expanded there on purpose
   wtg_err="$("$gt" -k 1 "${CC_WTG_TOMB_TIMEOUT:-6}" env -u _WT_TOMBSTONE_SH -u _WT_PARK_SH WT_LOCKCHECK_TIMEOUT=2 \
