@@ -61,10 +61,17 @@ new_files() { LC_ALL=C comm -13 "$1" <(files); }
 iso_ago() { date -u -r $(( $(date +%s) - $1 )) +%Y-%m-%dT%H:%M:%SZ; }
 
 seed_observe() {
-  printf '%s\n' "2026-10-10T04:15:00Z repo=a verdict=would_park reason=landed-clean" \
-    "2026-10-11T04:15:00Z repo=a verdict=would_park reason=landed-clean" \
-    "2026-10-12T04:15:00Z repo=a verdict=would_keep reason=dirty" > "$LOGS/worktree-gc-wake.log"
-  printf '%s\n' "2026-10-13T04:15:00Z repo=b verdict=would_detach reason=gone" > "$LOGS/worktree-gc-foreign.log"
+  # The wake log's real shape (scripts/worktree-gc-wake.sh): one row per path, plus summary rows.
+  printf '%s\n' "2026-10-10T04:15:00Z mode=observe repo=a decision=would_park path=/w/1 reason=arm-i" \
+    "2026-10-11T04:15:00Z mode=observe repo=a decision=would_park path=/w/2 reason=arm-i" \
+    "2026-10-11T04:15:01Z verdict=ok due=2 evaluated=2 dequeued=2 requeued=0 mode=observe" \
+    "2026-10-12T04:15:00Z mode=observe repo=a decision=would_keep path=/w/3 reason=dirty" > "$LOGS/worktree-gc-wake.log"
+  # The foreign log's real shape (worktree-gc-infra-run.sh post_sweep): one row per repo carrying
+  # COUNTS, reasons indented under it. A quiet night's would_park=0 must add nothing.
+  printf '%s\n' "2026-10-13 04:20:00  repo=b mode=observe trunk=origin/main rc=0 would_park=0 would_detach=1 would_keep=4 would_lock=0" \
+    "    would park    /w/b1 [x] — arm-ii" \
+    "2026-10-14 04:20:00  repo=b mode=observe trunk=origin/main rc=0 would_park=0 would_detach=0 would_keep=5 would_lock=0" \
+    > "$LOGS/worktree-gc-foreign.log"
 }
 seed_d2() {   # <age of first row in s> — information only; the gate never reads these rows
   printf '{"det":"D2","event":"raise","mode":"record-only","ts":"%s"}\n' "$(iso_ago "$1")" > "$LOGS/capacity-detect.jsonl"
@@ -142,9 +149,11 @@ live() { touch "$STUB/loaded"; printf '{"v": 1, "pid": 4242}\n' > "$LOGS/attrib-
   files > "$BATS_TEST_TMPDIR/before"
   run bash "$SCRIPT" --confirm worktree-gc-events </dev/null
   [ "$status" -eq 0 ]
-  [[ "$output" == *"would_park 2 · would_detach 0 · would_lock 0 · would_keep 1"* ]]
+  [[ "$output" == *"worktree-gc-wake.log: 3 row(s) · would_park 2 · would_detach 0 · would_lock 0 · would_keep 1"* ]]
   [[ "$output" == *"first row 2026-10-10 · last row 2026-10-12"* ]]
-  [[ "$output" == *"would_detach 1"* ]]
+  # summed, not row-counted: two rows that both say would_park=0 are zero parks
+  [[ "$output" == *"worktree-gc-foreign.log: 2 row(s) · would_park 0 · would_detach 1 · would_lock 0 · would_keep 9"* ]]
+  [[ "$output" == *"first row 2026-10-13 · last row 2026-10-14"* ]]
   [ "$(new_files "$BATS_TEST_TMPDIR/before")" = ./.claude/autonomy/worktree-gc-events.mode ]
   [ "$(cat "$AUTO/worktree-gc-events.mode")" = act ]
 }

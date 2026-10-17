@@ -200,29 +200,47 @@ else
 fi
 
 # ── 2. worktree-gc event mode ──────────────────────────────────────────────────────────────────
-# Evidence is counted by token, whatever the row layout: a line counts toward would_park if it carries
-# that word (grep -w; `verdict=would_park` matches, `would_parked` does not).
+# The two logs have different shapes, so each is read in its own:
+#   path  scripts/worktree-gc-wake.sh — one row per evaluated path, `… decision=would_park path=… reason=…`;
+#         a decision is COUNTED.
+#   repo  scripts/worktree-gc-infra-run.sh's foreign pass — one row per repo per night carrying counts,
+#         `… repo=<r> mode=observe … would_park=<N> would_detach=<N> would_keep=<N> would_lock=<N>`, with the
+#         janitor's reasons indented below it; the counts are SUMMED over the unindented rows. Counting
+#         rows that merely carry the word would read every quiet night's `would_park=0` as one park.
 ev_rows_total=0
-ev_report() {
-  local f="$1" rows t c first last line=""
+ev_report() { # <file> <path|repo>
+  local f="$1" shape="$2" out
   if [ ! -s "$f" ]; then echo "   $f: no rows"; return; fi
-  rows="$(grep -c . "$f" 2>/dev/null || true)"; rows="${rows:-0}"
-  ev_rows_total=$((ev_rows_total + rows))
-  line="   $f: $rows row(s)"
-  for t in would_park would_detach would_lock would_keep; do
-    c="$(grep -cw -- "$t" "$f" 2>/dev/null || true)"
-    line="$line · $t ${c:-0}"
-  done
-  first="$(grep -m1 . "$f" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -1)"
-  last="$(grep . "$f" | tail -1 | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -1)"
-  echo "$line"
-  echo "      first row ${first:-undated} · last row ${last:-undated}"
+  out="$(awk -v shape="$shape" -v f="$f" '
+    BEGIN { split("would_park would_detach would_lock would_keep", T, " ") }
+    /^[[:space:]]/ || !NF { next }
+    {
+      d = ""; if (match($0, /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/)) d = substr($0, RSTART, RLENGTH)
+      if (shape == "path") {
+        if ($0 !~ / decision=/) next
+        for (i = 1; i <= NF; i++) if ($i ~ /^decision=/) c[substr($i, 10)]++
+      } else {
+        if ($0 !~ / repo=/) next
+        for (i = 1; i <= NF; i++) for (k in T) if (index($i, T[k] "=") == 1) {
+          v = substr($i, length(T[k]) + 2); if (v ~ /^[0-9]+$/) c[T[k]] += v
+        }
+      }
+      rows++; if (first == "") first = d; last = d
+    }
+    END {
+      line = "   " f ": " rows + 0 " row(s)"
+      for (k = 1; k <= 4; k++) line = line " · " T[k] " " c[T[k]] + 0
+      print rows + 0; print line
+      print "      first row " (first == "" ? "undated" : first) " · last row " (last == "" ? "undated" : last)
+    }' "$f" 2>/dev/null)"
+  ev_rows_total=$((ev_rows_total + ${out%%$'\n'*}))
+  printf '%s\n' "${out#*$'\n'}"
 }
 echo "== 2. worktree-gc event mode (DESIGN §3.4; read by scripts/lib/wtgc-scope.sh)"
 cur="$(read_word "$EV_MODE")"
 echo "   mode: ${cur:-absent} ⇒ $([ "$cur" = act ] && echo act || echo observe)"
-ev_report "$WAKE_LOG"
-ev_report "$FOREIGN_LOG"
+ev_report "$WAKE_LOG" path
+ev_report "$FOREIGN_LOG" repo
 if [ "$do_events" = 1 ]; then
   if [ "$ev_rows_total" -eq 0 ]; then
     refuse "neither observe log has a row: there is no evidence to activate on"
