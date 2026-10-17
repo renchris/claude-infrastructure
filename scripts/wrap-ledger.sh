@@ -232,6 +232,51 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+# Bound the fork: this runs from a Stop hook on every turn close, and a wedged backlog read must
+# never hold the close open. No bounder anywhere ⇒ run unbounded rather than lose the signal.
+#
+# `command -v timeout` WAS THE WRONG QUESTION (A01-skeptic + CRITIC M6, 2026-09-08). GNU coreutils'
+# `timeout` has no macOS system copy — on this box it exists only at /opt/homebrew/bin/timeout (and
+# as gtimeout; /usr/local/bin on Intel) — and 7 of 25 live claude processes, INCLUDING the wave
+# lead, run with a PATH carrying no /opt/homebrew/bin at all (kitty- and aftman-launched panes
+# inherit a login PATH nothing extended). For those sessions EVERY `_bounded` call here silently
+# degraded to an unbounded fork: 17 call sites, each a store read or a git call, on the Stop path
+# of every close — which is exactly the class of wedge the 5 s budgets exist to survive. The
+# unbounded fallback stays (a read we cannot bound still beats a signal we cannot get), but it is
+# now the LAST resort rather than the first thing a missing PATH entry reaches.
+#
+# Resolved ONCE — the probe is a handful of `[ -x ]` tests — and REPORTED as BOUND_SRC, because a
+# fail-open default that mimics the healthy state is unfalsifiable by its own output (MEMORY.md
+# fail-safe-default-mimics-the-healthy-state): before this, a bounded run and an unbounded one were
+# byte-identical in every surface this script emits, which is why the degradation ran unseen.
+# Seam: WRAP_TIMEOUT_BIN — an explicit path, and a NON-executable value pins "no bounder", which is
+# what makes the unbounded fallback testable at all.
+# Defined here, above THE MEMO, because the BUSY splice's serve path calls `_bounded` before the
+# script reaches the resolution site below the backlog helpers. `_WRAP_BOUND_DONE` makes the second
+# call a no-op, so a path that resolves early does not pay the two `command -v` substitutions twice.
+_WRAP_BOUND_BIN=""; _WRAP_BOUND_SRC="none"; _WRAP_BOUND_DONE=0
+_resolve_bound_bin() {
+  local c
+  [ "$_WRAP_BOUND_DONE" = 1 ] && return 0
+  _WRAP_BOUND_DONE=1
+  if [ -n "${WRAP_TIMEOUT_BIN:-}" ]; then
+    if [ -x "$WRAP_TIMEOUT_BIN" ]; then _WRAP_BOUND_BIN="$WRAP_TIMEOUT_BIN"; _WRAP_BOUND_SRC="$WRAP_TIMEOUT_BIN"; fi
+    return 0
+  fi
+  # PATH first (it is the operator's own answer where it has one), then the two locations a macOS
+  # coreutils install actually uses, under both names.
+  for c in "$(command -v timeout 2>/dev/null || true)" \
+           "$(command -v gtimeout 2>/dev/null || true)" \
+           /opt/homebrew/bin/timeout /opt/homebrew/bin/gtimeout \
+           /usr/local/bin/timeout /usr/local/bin/gtimeout; do
+    if [ -n "$c" ] && [ -x "$c" ]; then _WRAP_BOUND_BIN="$c"; _WRAP_BOUND_SRC="$c"; return 0; fi
+  done
+  return 0
+}
+_bounded() { local s="$1"; shift
+  if [ -n "$_WRAP_BOUND_BIN" ]; then "$_WRAP_BOUND_BIN" "$s" "$@"; else "$@"; fi
+}
+
 # ══ THE MEMO — one ledger per Stop EVENT, keyed on the transcript ═══════════════════════════════
 # (scaling-bottlenecks-2026-08-09 §5 P0-4; design docs/research/scaling-bottlenecks-2026-08-09/
 #  04-occupancy-b.md §6. Backlog 9414dfb87233.)
@@ -298,6 +343,7 @@ done
 #
 # Kill switch: WRAP_CACHE=off|0|no ⇒ never read, never write (the benchmark's control arm).
 WL_KEY=""; WL_FILE=""; WL_LOCK=""; WL_DIR=""; WL_LOCK_HELD=0
+WL_SPLICE=0; _wl_sbo=""; _wl_sbl=""
 WL_TRANSCRIPT="${TRANSCRIPT_FLAG:-${WRAP_TRANSCRIPT:-}}"
 # The transcript as an INPUT, kept out of the cache kill-switch's reach. $WL_TRANSCRIPT is a
 # CACHE-KEY variable and `WRAP_CACHE=off` BLANKS it (below) — so a term that read the transcript
@@ -357,6 +403,9 @@ _wl_cache_serve() {
   [ "${got:-0}" -eq 1 ] || return 1
   [ "${first:-}" = "#WLKEY $WL_KEY" ] || return 1
   [ -n "$body" ] || return 1
+  # A BUSY reader is served the shared BUSY-off body with its own BUSY lines put in (§ THE BUSY
+  # SPLICE). A body of any other shape is a miss: the caller then computes, which is never wrong.
+  if [ "$WL_SPLICE" = 1 ]; then _wl_splice_print "$body"; return $?; fi
   printf '%s' "$body"
 }
 
@@ -412,6 +461,128 @@ _wl_lock_stale() {
   [ $((now - lm)) -gt "${WRAP_CACHE_LOCK_STALE_S:-30}" ]
 }
 
+# ══ THE BUSY SPLICE (2026-10-16, docs/plans/LOAD_AND_PROMPT_HOOK_TIMEOUTS.md Wave 4c) ════════════
+# A BUSY reader (no WRAP_BUSY=off) with a memo key is served, or computes, the SAME ledger as the
+# BUSY-off callers of its Stop — one key, one single-flight computation — and then runs the BUSY
+# block and puts its eight lines in place. That is exact, not approximate: BUSY is computed AFTER the
+# rung ladder and no field but its own eight reads it (the block's header below), and its one input
+# from the ledger, CUSTODY_OPEN, is read back from the served body.
+# THE PROBE RUNS AFTER THE LEDGER, NEVER BESIDE IT, and that order is the one thing not to optimize.
+# Its job scan reads a process as WORK when its cwd is in the worktree and an argv token is a path
+# there — which the ledger's own children (`git -C <worktree> …` in dod-path.sh) satisfy while they
+# run. Overlapped with the compute, the probe would report the ledger as a backgrounded job.
+# The served body must be the shape emit_machine prints — lines 10-17 the BUSY-off defaults, with
+# LANDING_PID before and LIVE after — or it is a miss, and the caller computes. Kill switch:
+# WRAP_BUSY_SPLICE=off.
+
+# Session id, in order: --session > $WRAP_SESSION_ID > $CLAUDE_SESSION_ID > $CLAUDE_CODE_SESSION_ID
+# > unresolvable (""). One function, called by the 👤 block below and by the splice, so the probe
+# and the ledger cannot resolve different sessions. (Why the fourth arm exists: at its call site.)
+_wl_resolve_sid() {
+  SID="$SESSION_FLAG"
+  SID_SRC="flag"
+  [ -n "$SID" ] || { SID="${WRAP_SESSION_ID:-}"; SID_SRC="WRAP_SESSION_ID"; }
+  [ -n "$SID" ] || { SID="${CLAUDE_SESSION_ID:-}"; SID_SRC="CLAUDE_SESSION_ID"; }
+  [ -n "$SID" ] || { SID="${CLAUDE_CODE_SESSION_ID:-}"; SID_SRC="CLAUDE_CODE_SESSION_ID"; }
+  [ -n "$SID" ] || SID_SRC=""
+}
+
+_wl_busy_lib() {
+  _wl_sbl="${WRAP_SESSION_BUSY_LIB:-$WL_SELF_DIR/../hooks/lib/session-busy.sh}"
+  [ -f "$_wl_sbl" ] || _wl_sbl="$HOME/.claude/hooks/lib/session-busy.sh"
+}
+
+# The probe, as the BUSY block has always run it. $1 = the custody count it is told.
+_wl_busy_probe() {
+  # shellcheck disable=SC2016   # single quotes deliberate: this is the CHILD shell's script,
+  # and $1..$4 are its positional parameters, passed after the `_` argv0 placeholder below.
+  CC_BUSY_CUSTODY_OPEN="$1" \
+    _bounded "${WRAP_BUSY_TIMEOUT_S:-8}" bash -c '. "$1"; session_busy_live "$2" "$3" "$4"' \
+    _ "$_wl_sbl" "${SID:-}" "$PWD" "${GOAL_TP:-}" 2>/dev/null || true
+}
+
+# THE BUSY BLOCK — every path computes BUSY here. Fail-open like YOURS/BLOCKED: any failure ⇒
+# BUSY_SRC=error and BUSY_STATE=UNKNOWN, never a manufactured state (the call site's header says why).
+_wl_busy_set() {
+  BUSY=0; BUSY_STATE="UNKNOWN"; BUSY_SRC="none"; BUSY_AGE=0; BUSY_SAMPLE=""; BUSY_SUSPECT=0
+  PERMPEND=0; PERMPEND_AGE=0
+  _wl_busy_lib
+  if [ "${WRAP_BUSY:-on}" != "off" ] && [ -f "$_wl_sbl" ]; then
+    # shellcheck source=../hooks/lib/session-busy.sh
+    # shellcheck disable=SC1091
+    if . "$_wl_sbl" 2>/dev/null && command -v session_busy_live >/dev/null 2>&1; then
+      _wl_sbo="$(_wl_busy_probe "${CUSTODY_OPEN:-0}")"
+      if [ -n "$_wl_sbo" ]; then
+        BUSY_STATE="$(printf '%s' "$_wl_sbo" | awk '{print $1}')"
+        BUSY_SUSPECT="$(printf '%s' "$_wl_sbo" | awk '{print $2}')"
+        BUSY_AGE="$(printf '%s' "$_wl_sbo" | awk '{print $3}')"
+        BUSY_SRC="$(printf '%s' "$_wl_sbo" | awk '{print $4}')"
+        BUSY_SAMPLE="$(printf '%s' "$_wl_sbo" | cut -d' ' -f5- | tr -d '\n')"
+        [ "$BUSY_STATE" = "BUSY" ] && BUSY=1
+        case "$BUSY_SUSPECT" in ''|*[!0-9]*) BUSY_SUSPECT=0 ;; esac
+        case "$BUSY_AGE"     in ''|*[!0-9]*) BUSY_AGE=0     ;; esac
+      else
+        BUSY_STATE="UNKNOWN"; BUSY_SRC="error"
+      fi
+      _wl_pp="$(sb_permpend "${SID:-}" 2>/dev/null || true)"
+      if [ -n "$_wl_pp" ]; then PERMPEND=1; PERMPEND_AGE="${_wl_pp%% *}"
+        case "$PERMPEND_AGE" in ''|*[!0-9]*) PERMPEND_AGE=0 ;; esac
+      fi
+    else
+      BUSY_STATE="UNKNOWN"; BUSY_SRC="error"
+    fi
+  fi
+  return 0
+}
+
+# The eight BUSY lines, in emit_machine's order and format (emit_machine prints them through this).
+_wl_emit_busy() {
+  printf 'BUSY=%s\n' "$BUSY"
+  printf 'BUSY_STATE=%s\n' "$BUSY_STATE"
+  printf 'BUSY_SRC=%s\n' "$BUSY_SRC"
+  printf 'BUSY_AGE=%s\n' "$BUSY_AGE"
+  printf 'BUSY_SUSPECT=%s\n' "$BUSY_SUSPECT"
+  printf 'BUSY_SAMPLE=%s\n' "$BUSY_SAMPLE"
+  printf 'PERMPEND=%s\n' "$PERMPEND"
+  printf 'PERMPEND_AGE=%s\n' "$PERMPEND_AGE"
+}
+
+# $1 = a served body (every line newline-terminated). Prints it with lines 10-17 replaced by this
+# caller's BUSY lines; rc 1, printing NOTHING, when the body is not emit_machine's BUSY-off shape.
+_wl_splice_print() {
+  local rest="$1" line n=0 head="" mid="" tail="" co="" coset=0 nl='
+'
+  local want="BUSY=0${nl}BUSY_STATE=UNKNOWN${nl}BUSY_SRC=none${nl}BUSY_AGE=0${nl}BUSY_SUSPECT=0${nl}BUSY_SAMPLE=${nl}PERMPEND=0${nl}PERMPEND_AGE=0${nl}"
+  while [ -n "$rest" ]; do
+    case "$rest" in
+      *"$nl"*) line="${rest%%"$nl"*}"; rest="${rest#*"$nl"}" ;;
+      *) return 1 ;;   # an unterminated last line: not what the store writes
+    esac
+    n=$((n + 1))
+    if [ "$n" -le 9 ]; then
+      [ "$n" -eq 9 ] && { case "$line" in LANDING_PID=*) ;; *) return 1 ;; esac; }
+      head="$head$line$nl"
+    elif [ "$n" -le 17 ]; then mid="$mid$line$nl"
+    else
+      [ "$n" -eq 18 ] && { case "$line" in LIVE=*) ;; *) return 1 ;; esac; }
+      if [ "$coset" -eq 0 ]; then
+        case "$line" in CUSTODY_OPEN=*) co="${line#CUSTODY_OPEN=}"; coset=1 ;; esac
+      fi
+      tail="$tail$line$nl"
+    fi
+  done
+  [ "$n" -ge 18 ] && [ "$mid" = "$want" ] && [ "$coset" -eq 1 ] || return 1
+  # The probe's inputs, as a compute would have them: the bounder, the session, and the transcript
+  # (in machine mode compute_goal_liveness sets GOAL_TP to exactly GOAL_TRANSCRIPT, first thing).
+  _resolve_bound_bin; _wl_resolve_sid; GOAL_TP="$GOAL_TRANSCRIPT"
+  CUSTODY_OPEN="$co"
+  _wl_busy_set
+  printf '%s' "$head"
+  _wl_emit_busy
+  printf '%s' "$tail"
+  return 0
+}
+
 case "${WRAP_CACHE:-on}" in off|0|no|OFF|NO) WL_TRANSCRIPT="" ;; esac
 if [ "$MODE" = "machine" ] && [ -n "$WL_TRANSCRIPT" ]; then
   _wl_ms="$(_wl_stat_ms "$WL_TRANSCRIPT")" || _wl_ms=""
@@ -436,7 +607,20 @@ if [ "$MODE" = "machine" ] && [ -n "$WL_TRANSCRIPT" ]; then
     # WRAP_BUSY joins the key (2026-10-04): session-continue asks with WRAP_BUSY=off to skip the
     # process-table scan, and a BUSY-less ledger served to a BUSY reader (operator-readout, notify,
     # cc-classify) would read BUSY_STATE=UNKNOWN for a session that is working.
-    _wl_k="$_wl_k|${WRAP_BUSY:-}"
+    # THE BUSY SPLICE (2026-10-16, docs/plans/LOAD_AND_PROMPT_HOOK_TIMEOUTS.md Wave 4c). A BUSY
+    # reader now asks under the BUSY-off key and adds the eight BUSY lines itself (§ THE BUSY SPLICE
+    # below), so one Stop computes ONE ledger. Under its own key, operator-readout computed a second,
+    # full ledger beside the siblings' shared one and ran the probe after it: measured on replayed
+    # cancelled Stops at load ~280, probe 3.3-8.1 s, BUSY-off ledger 2.3-5.9 s, BUSY-on 6.9-12.4 s.
+    # BUSY is computed after the rung ladder and no other field reads it, so the shared ledger with
+    # the probe's lines put in their place is the BUSY-on ledger, byte for byte. Kill switch:
+    # WRAP_BUSY_SPLICE=off (own key, probe inline, as before).
+    _wl_spl=0
+    if [ "${WRAP_BUSY:-on}" != "off" ] && [ "${WRAP_BUSY_SPLICE:-on}" != "off" ]; then
+      _wl_spl=1; _wl_k="$_wl_k|off"
+    else
+      _wl_k="$_wl_k|${WRAP_BUSY:-}"
+    fi
     if _wl_d="$(_wl_digest "$_wl_k")"; then
       WL_DIR="${WRAP_CACHE_DIR:-${TMPDIR:-/tmp}/cc-wrap-ledger.${UID:-0}}"
       # The dir must exist BEFORE the single-flight `mkdir` lock, or the lock cannot be taken and
@@ -448,6 +632,7 @@ if [ "$MODE" = "machine" ] && [ -n "$WL_TRANSCRIPT" ]; then
         WL_KEY="$_wl_k"
         WL_FILE="$WL_DIR/m-$_wl_d"
         WL_LOCK="$WL_FILE.lock"
+        WL_SPLICE="$_wl_spl"
       fi
     fi
   fi
@@ -679,8 +864,15 @@ DOD_SCOPE=""; DRAIN_SCOPE=0
 while IFS= read -r _wl_df; do
   [ -n "$_wl_df" ] && [ -f "$_wl_df" ] || continue
   DOD="present"
+  # ONE filter pass per file (2026-10-16, Wave 4c). dod_filter_for re-derives the lineage — an awk
+  # pass over dod/lineage.tsv (~390 KB) — on every call, and this loop called it twice per file, once
+  # for the Scope line and once for the count: 0.13-0.27 s each at a load of ~300. Its output is kept
+  # here and both greps read it. It always returns 0, and `$(…)` drops only trailing newlines, which
+  # neither pattern can match, so the two answers are the ones the two pipes gave.
+  _wl_ff=""
   if command -v dod_filter_for >/dev/null 2>&1; then
-    _wl_s="$(dod_filter_for "$PWD" "$_wl_df" | grep 'Scope (frozen):' 2>/dev/null | tail -1 || true)"
+    _wl_ff="$(dod_filter_for "$PWD" "$_wl_df")"
+    _wl_s="$(printf '%s\n' "$_wl_ff" | grep 'Scope (frozen):' 2>/dev/null | tail -1 || true)"
   else
     _wl_s="$(grep 'Scope (frozen):' "$_wl_df" 2>/dev/null | tail -1 || true)"
   fi
@@ -691,7 +883,7 @@ while IFS= read -r _wl_df; do
   # blocks and its recorded predecessors', and keeps unattributable ones — so the count can only
   # ever fail toward "too many", never toward hiding an item this wave actually owns.
   if command -v dod_filter_for >/dev/null 2>&1; then
-    _wl_r="$(dod_filter_for "$PWD" "$_wl_df" \
+    _wl_r="$(printf '%s\n' "$_wl_ff" \
              | grep -cE '^[[:space:]]*[-*][[:space:]]+\[[[:space:]]\]' 2>/dev/null || echo 0)"
   else
     _wl_r="$(grep -cE '^[[:space:]]*[-*][[:space:]]+\[[[:space:]]\]' "$_wl_df" 2>/dev/null || echo 0)"
@@ -715,12 +907,8 @@ else SCOPE="met"; fi
 # that is never set), and it is the SAME uuid the Stop hook feeds as --session — so without this arm
 # an agent's own `/wrap` computed every session-scoped term (YOURS, FILED_MINE, CLOSED_MINE, the
 # floor below) as unresolvable, and only the hook ever saw them. Store and ledger now resolve alike.
-SID="$SESSION_FLAG"
-SID_SRC="flag"
-[ -n "$SID" ] || { SID="${WRAP_SESSION_ID:-}"; SID_SRC="WRAP_SESSION_ID"; }
-[ -n "$SID" ] || { SID="${CLAUDE_SESSION_ID:-}"; SID_SRC="CLAUDE_SESSION_ID"; }
-[ -n "$SID" ] || { SID="${CLAUDE_CODE_SESSION_ID:-}"; SID_SRC="CLAUDE_CODE_SESSION_ID"; }
-[ -n "$SID" ] || SID_SRC=""
+# The ladder itself is _wl_resolve_sid (§ THE BUSY SPLICE), shared with the probe.
+_wl_resolve_sid
 
 # ── ◎ GOAL LIVENESS — is the armed /goal being EVALUATED? (E5; §9 B5) ───────────────────────────
 # REPORTED, NEVER A RUNG. See the header's § GOAL for why, what each field means, and the fail
@@ -872,46 +1060,10 @@ _resolve_backlog_bin() {
   return 1
 }
 
-# Bound the fork: this runs from a Stop hook on every turn close, and a wedged backlog read must
-# never hold the close open. No bounder anywhere ⇒ run unbounded rather than lose the signal.
-#
-# `command -v timeout` WAS THE WRONG QUESTION (A01-skeptic + CRITIC M6, 2026-09-08). GNU coreutils'
-# `timeout` has no macOS system copy — on this box it exists only at /opt/homebrew/bin/timeout (and
-# as gtimeout; /usr/local/bin on Intel) — and 7 of 25 live claude processes, INCLUDING the wave
-# lead, run with a PATH carrying no /opt/homebrew/bin at all (kitty- and aftman-launched panes
-# inherit a login PATH nothing extended). For those sessions EVERY `_bounded` call here silently
-# degraded to an unbounded fork: 17 call sites, each a store read or a git call, on the Stop path
-# of every close — which is exactly the class of wedge the 5 s budgets exist to survive. The
-# unbounded fallback stays (a read we cannot bound still beats a signal we cannot get), but it is
-# now the LAST resort rather than the first thing a missing PATH entry reaches.
-#
-# Resolved ONCE — the probe is a handful of `[ -x ]` tests — and REPORTED as BOUND_SRC, because a
-# fail-open default that mimics the healthy state is unfalsifiable by its own output (MEMORY.md
-# fail-safe-default-mimics-the-healthy-state): before this, a bounded run and an unbounded one were
-# byte-identical in every surface this script emits, which is why the degradation ran unseen.
-# Seam: WRAP_TIMEOUT_BIN — an explicit path, and a NON-executable value pins "no bounder", which is
-# what makes the unbounded fallback testable at all.
-_WRAP_BOUND_BIN=""; _WRAP_BOUND_SRC="none"
-_resolve_bound_bin() {
-  local c
-  if [ -n "${WRAP_TIMEOUT_BIN:-}" ]; then
-    if [ -x "$WRAP_TIMEOUT_BIN" ]; then _WRAP_BOUND_BIN="$WRAP_TIMEOUT_BIN"; _WRAP_BOUND_SRC="$WRAP_TIMEOUT_BIN"; fi
-    return 0
-  fi
-  # PATH first (it is the operator's own answer where it has one), then the two locations a macOS
-  # coreutils install actually uses, under both names.
-  for c in "$(command -v timeout 2>/dev/null || true)" \
-           "$(command -v gtimeout 2>/dev/null || true)" \
-           /opt/homebrew/bin/timeout /opt/homebrew/bin/gtimeout \
-           /usr/local/bin/timeout /usr/local/bin/gtimeout; do
-    if [ -n "$c" ] && [ -x "$c" ]; then _WRAP_BOUND_BIN="$c"; _WRAP_BOUND_SRC="$c"; return 0; fi
-  done
-  return 0
-}
+# The bounder (`_resolve_bound_bin`, `_bounded`) is defined above THE MEMO, because the BUSY splice
+# runs a bounded probe on the memo's serve path, which exits before this line. It is still RESOLVED
+# here, once, for every compute (the splice path resolves it earlier and this call is then a no-op).
 _resolve_bound_bin
-_bounded() { local s="$1"; shift
-  if [ -n "$_WRAP_BOUND_BIN" ]; then "$_WRAP_BOUND_BIN" "$s" "$@"; else "$@"; fi
-}
 
 # ── backlog-fold cache (2026-09-24, fix/stop-hook-latency) ────────────────────────────────────────
 # `cc-backlog list --json` re-folds the whole append-only store (9 MB today) on every call: ~2.2 s
@@ -1007,26 +1159,41 @@ _wl_blc_arm() {
   local w="${WRAP_BACKLOG_WAIT_S:-3}"; case "$w" in ''|*[!0-9]*) w=3 ;; esac
   _WL_BLC_END=$(( SECONDS + w ))
 }
+# THE CONSUMER (2026-10-16, Wave 4c). A caller that only pipes the list into jq sets _WL_BLC_JQ to
+# the jq arguments, in the substitution that calls _backlog_list, and gets `_backlog_list … | jq …`:
+# the same bytes and, under the caller's pipefail, the same rc, on every path. The one difference is
+# where jq reads a cache HIT from: the entry itself (`<&9`), not a `cat` through a pipe. Measured at a
+# load of ~310 on the 8 MB `--all` fold: 117-414 ms from the file against 756-1,081 ms through the
+# pipe, every Stop. The entry is opened before jq runs, so a hit that cannot be opened falls through
+# to the fill exactly as a failed `cat` did.
+_WL_BLC_JQ=()
+_wl_blc_pipe() { # "$@" = the list command → its output, through the consumer when one is set
+  if [ "${#_WL_BLC_JQ[@]}" -gt 0 ]; then "$@" | jq "${_WL_BLC_JQ[@]}"; else "$@"; fi
+}
 _backlog_list() { # $1 = timeout s · $2 = resolved cc-backlog · $3.. = `list` args; rc = list's rc
   local t="$1" bin="$2"; shift 2
-  local skey bkey dir out lset end cbin
+  local skey bkey dir out lset end cbin rc
   case "${WRAP_BACKLOG_CACHE:-auto}" in
-    off|0|no) _bounded "$t" "$bin" list "$@"; return $? ;;
+    off|0|no) _wl_blc_pipe _bounded "$t" "$bin" list "$@"; return $? ;;
     on|1|yes) ;;
-    *) [ -z "${CC_BACKLOG_BIN:-}" ] || { _bounded "$t" "$bin" list "$@"; return $?; } ;;
+    *) [ -z "${CC_BACKLOG_BIN:-}" ] || { _wl_blc_pipe _bounded "$t" "$bin" list "$@"; return $?; } ;;
   esac
   skey="$(_wl_lstat_key "${CC_BACKLOG_FILE:-$HOME/.claude/autonomy/backlog.jsonl}")"
   bkey="$(_wl_lstat_key "$bin")"
-  if [ -z "$skey" ] || [ -z "$bkey" ]; then _bounded "$t" "$bin" list "$@"; return $?; fi
+  if [ -z "$skey" ] || [ -z "$bkey" ]; then _wl_blc_pipe _bounded "$t" "$bin" list "$@"; return $?; fi
   dir="${WRAP_BACKLOG_CACHE_DIR:-${CC_ORB_BLG_CACHE_DIR:-${TMPDIR:-/tmp}/cc-orb-blg-cache.${UID:-0}}}"
   # Key on the binary's PHYSICAL directory, not on how the caller spelled it: the hooks reach this
   # script as ~/.claude/hooks/../scripts/ and the CLI as ~/.claude/scripts/, so the same cc-backlog
   # arrived under two spellings and every backlog append paid two cold folds (measured live).
   if cbin="$(cd "${bin%/*}" 2>/dev/null && pwd -P)"; then cbin="$cbin/${bin##*/}"; else cbin="$bin"; fi
   out="$dir/$(_wl_blc_entry "$skey" "$bkey" "$cbin" "$*")"
-  if [ -s "$out" ] && cat "$out" 2>/dev/null; then return 0; fi
-  mkdir -p "$dir" 2>/dev/null || { _bounded "$t" "$bin" list "$@"; return $?; }
-  _wl_blc_fill "$out" "$bin" "$@" || { _bounded "$t" "$bin" list "$@"; return $?; }
+  if [ "${#_WL_BLC_JQ[@]}" -gt 0 ]; then
+    if [ -s "$out" ] && { exec 9<"$out"; } 2>/dev/null; then
+      jq "${_WL_BLC_JQ[@]}" <&9; rc=$?; exec 9<&-; return "$rc"
+    fi
+  elif [ -s "$out" ] && cat "$out" 2>/dev/null; then return 0; fi
+  mkdir -p "$dir" 2>/dev/null || { _wl_blc_pipe _bounded "$t" "$bin" list "$@"; return $?; }
+  _wl_blc_fill "$out" "$bin" "$@" || { _wl_blc_pipe _bounded "$t" "$bin" list "$@"; return $?; }
   for lset in "--blocked --json" "--all --json"; do
     [ "$lset" = "$*" ] && continue
     # shellcheck disable=SC2086  # a constant word list, split on purpose
@@ -1043,7 +1210,7 @@ _backlog_list() { # $1 = timeout s · $2 = resolved cc-backlog · $3.. = `list` 
     [ "$SECONDS" -lt "$end" ] || return 124
     sleep 0.2
   done
-  cat "$out"
+  _wl_blc_pipe cat "$out"
 }
 
 # YOURS = blocked backlog items whose .session == $SID — OR whose .session is a session THIS session
@@ -1202,10 +1369,11 @@ count_filed_undriven() {
   # rows of mine carry no number or no receipt. Open OR blocked: a legacy-binary add leaves the row
   # open, the current binary blocks it at birth, and neither shape is the operator's without the
   # fields. Fail toward 0 like CLOSED_MINE — this term must never manufacture a 🔧 from a read error.
+  # The list and its jq pass run as _backlog_list's consumer (§ THE CONSUMER): a cache hit is parsed
+  # straight from the entry, every other path is the same `list | jq` pipe as before.
   _wl_blc_arm
   res="$(set -o pipefail
-        _backlog_list "${WRAP_BACKLOG_TIMEOUT_S:-5}" "$bin" --all --json 2>/dev/null \
-        | jq -r --arg sid "$SID" --arg epoch "$CONVICTION_EPOCH" '
+        _WL_BLC_JQ=(-r --arg sid "$SID" --arg epoch "$CONVICTION_EPOCH" '
           (try ([ .[] | select(.status == "open" and (.filedBy // "") == $sid
                         and (.whyNotNow // "") == "" and (.condition // "") == "") ] | length)
            catch "E") as $f
@@ -1216,7 +1384,8 @@ count_filed_undriven() {
                         and ((.ts // "") >= $epoch)
                         and ((.conviction == null) or ((.receipt // "") == ""))) ] | length)
              catch "E") as $u
-          | "\($f) \($c) \($u)"' 2>/dev/null)" \
+          | "\($f) \($c) \($u)"')
+        _backlog_list "${WRAP_BACKLOG_TIMEOUT_S:-5}" "$bin" --all --json 2>/dev/null)" \
     || { FILED_SRC="error"; return 0; }
   read -r f c u <<WLFILED
 $res
@@ -2464,37 +2633,10 @@ fi
 # manufactured state. "IDLE" asserted by a blind instrument is the one answer that misleads.
 BUSY=0; BUSY_STATE="UNKNOWN"; BUSY_SRC="none"; BUSY_AGE=0; BUSY_SAMPLE=""; BUSY_SUSPECT=0
 PERMPEND=0; PERMPEND_AGE=0
-_wl_sbl="${WRAP_SESSION_BUSY_LIB:-$WL_SELF_DIR/../hooks/lib/session-busy.sh}"
-[ -f "$_wl_sbl" ] || _wl_sbl="$HOME/.claude/hooks/lib/session-busy.sh"
-if [ "${WRAP_BUSY:-on}" != "off" ] && [ -f "$_wl_sbl" ]; then
-  # shellcheck source=../hooks/lib/session-busy.sh
-  # shellcheck disable=SC1091
-  if . "$_wl_sbl" 2>/dev/null && command -v session_busy_live >/dev/null 2>&1; then
-    # shellcheck disable=SC2016   # single quotes deliberate: this is the CHILD shell's script,
-    # and $1..$4 are its positional parameters, passed after the `_` argv0 placeholder below.
-    _wl_sbo="$(CC_BUSY_CUSTODY_OPEN="${CUSTODY_OPEN:-0}" \
-               _bounded "${WRAP_BUSY_TIMEOUT_S:-8}" bash -c '. "$1"; session_busy_live "$2" "$3" "$4"' \
-               _ "$_wl_sbl" "${SID:-}" "$PWD" "${GOAL_TP:-}" 2>/dev/null || true)"
-    if [ -n "$_wl_sbo" ]; then
-      BUSY_STATE="$(printf '%s' "$_wl_sbo" | awk '{print $1}')"
-      BUSY_SUSPECT="$(printf '%s' "$_wl_sbo" | awk '{print $2}')"
-      BUSY_AGE="$(printf '%s' "$_wl_sbo" | awk '{print $3}')"
-      BUSY_SRC="$(printf '%s' "$_wl_sbo" | awk '{print $4}')"
-      BUSY_SAMPLE="$(printf '%s' "$_wl_sbo" | cut -d' ' -f5- | tr -d '\n')"
-      [ "$BUSY_STATE" = "BUSY" ] && BUSY=1
-      case "$BUSY_SUSPECT" in ''|*[!0-9]*) BUSY_SUSPECT=0 ;; esac
-      case "$BUSY_AGE"     in ''|*[!0-9]*) BUSY_AGE=0     ;; esac
-    else
-      BUSY_STATE="UNKNOWN"; BUSY_SRC="error"
-    fi
-    _wl_pp="$(sb_permpend "${SID:-}" 2>/dev/null || true)"
-    if [ -n "$_wl_pp" ]; then PERMPEND=1; PERMPEND_AGE="${_wl_pp%% *}"
-      case "$PERMPEND_AGE" in ''|*[!0-9]*) PERMPEND_AGE=0 ;; esac
-    fi
-  else
-    BUSY_STATE="UNKNOWN"; BUSY_SRC="error"
-  fi
-fi
+# The block is _wl_busy_set (§ THE BUSY SPLICE), shared with the memo's serve path. On the splice
+# path it is NOT run here: this compute is the shared BUSY-off ledger, stored as such, and the block
+# runs after the store, at the machine emit below.
+[ "$WL_SPLICE" = 1 ] || _wl_busy_set
 
 # ── LINK_STRAY: an ADVISORY field, never a rung (2026-09-30, backlog a4eec664b579) ────────────────
 # deploy-link-parity.sh's STRAY leg — a live REAL file, executable or a skill, in NO checkout — is the
@@ -2562,14 +2704,8 @@ emit_machine() {
   printf 'LANDING=%s\n' "$LANDING"
   printf 'LANDING_PID=%s\n' "$LANDING_PID"
   # ── ⏳ working-vs-idling (D8 / A10 §6.2). Reported fields, never a rung — see the block above.
-  printf 'BUSY=%s\n' "$BUSY"
-  printf 'BUSY_STATE=%s\n' "$BUSY_STATE"
-  printf 'BUSY_SRC=%s\n' "$BUSY_SRC"
-  printf 'BUSY_AGE=%s\n' "$BUSY_AGE"
-  printf 'BUSY_SUSPECT=%s\n' "$BUSY_SUSPECT"
-  printf 'BUSY_SAMPLE=%s\n' "$BUSY_SAMPLE"
-  printf 'PERMPEND=%s\n' "$PERMPEND"
-  printf 'PERMPEND_AGE=%s\n' "$PERMPEND_AGE"
+  # Lines 10-17; the BUSY splice relies on that position (_wl_splice_print).
+  _wl_emit_busy
   printf 'LIVE=%s\n' "$LIVE"
   printf 'LIVE_SRC=%s\n' "$LIVE_SRC"
   printf 'LIVE_SHA=%s\n' "$LIVE_SHA"
@@ -2841,7 +2977,14 @@ case "$MODE" in
       # this caller has computed a true ledger and must emit it whether or not the memo takes.
       WL_OUT="$(emit_machine)"
       _wl_cache_store "$WL_OUT"
-      printf '%s\n' "$WL_OUT"
+      if [ "$WL_SPLICE" = 1 ]; then
+        # Stored as the shared BUSY-off ledger; this caller asked for BUSY, so run the block now —
+        # after the compute, as before — and print what the uncached path prints.
+        _wl_busy_set
+        emit_machine
+      else
+        printf '%s\n' "$WL_OUT"
+      fi
     else
       emit_machine
     fi
