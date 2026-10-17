@@ -46,7 +46,13 @@ readonly GC_DAYS="${TEAMMATE_CHECKPOINT_RETAIN_DAYS:-14}"   # age rule
 readonly GC_KEEP="${TEAMMATE_CHECKPOINT_KEEP:-50}"          # rank cap, per member
 readonly GC_FLOOR=3                                         # newest-per-member, always immortal
 
-mkdir -p "$WATCHDOG_DIR" "$(dirname "$LOG_FILE")" 2>/dev/null || true
+# Tested before created: this line runs on every tool call, ahead of the subagent skip, and both
+# directories nearly always exist. `${LOG_FILE%/*}` is dirname without a process, guarded for the
+# two paths where they differ (no slash: dirname says `.`; `/x`: dirname says `/`).
+_TC_LOG_DIR="${LOG_FILE%/*}"
+case "$LOG_FILE" in */*) ;; *) _TC_LOG_DIR=. ;; esac
+[ -n "$_TC_LOG_DIR" ] || _TC_LOG_DIR=/
+{ [ -d "$WATCHDOG_DIR" ] && [ -d "$_TC_LOG_DIR" ]; } || mkdir -p "$WATCHDOG_DIR" "$_TC_LOG_DIR" 2>/dev/null || true
 
 log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE" 2>/dev/null || true

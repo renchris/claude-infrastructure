@@ -12,8 +12,14 @@
 # ~18% of the 163 ms PreToolUse/Bash chain across the five hooks that did this. `read -d ''`
 # returns non-zero at EOF -- the normal case here -- hence `|| true`; it also PRESERVES the
 # trailing newline that `$(cat)` strips, so strip it back off for byte-parity with the old value.
-IFS= read -r -d '' INPUT || true
-while [ "${INPUT%$'\n'}" != "${INPUT}" ]; do INPUT="${INPUT%$'\n'}"; done
+# 2026-10-17: now `$(</dev/stdin)`, which forks but execs nothing, reads in blocks, and strips the
+# trailing newlines itself. The strip loop it replaces was QUADRATIC: `${INPUT%$'\n'}` under
+# /bin/bash 3.2 in a UTF-8 locale tries every suffix, so one test of a 240 KB payload cost 9.7 s
+# of CPU (0.72 s under LC_ALL=C); `read -d ''` itself also reads a pipe one byte per syscall.
+# Guarded on fd 0 being open: with stdin CLOSED the substitution's own pipe lands on fd 0, so
+# /dev/stdin would name that pipe and the read would wait on itself forever.
+INPUT=""
+if [ -e /dev/fd/0 ]; then { INPUT="$(</dev/stdin)"; } 2>/dev/null || INPUT=""; fi
 # Lean hook profile (lib/hook-profile.sh): advisory — skipped for bulk agents, in pure bash, before any fork.
 # shellcheck source=/dev/null  # sibling lib; resolved at run time, not by the linter
 . "${BASH_SOURCE[0]%/*}/lib/hook-profile.sh" 2>/dev/null && cc_hook_skip advisory "$INPUT" && exit 0
@@ -34,14 +40,43 @@ while [ "${INPUT%$'\n'}" != "${INPUT}" ]; do INPUT="${INPUT%$'\n'}"; done
 # encodes ("if a payload carries an exitCode, honour it") is still worth keeping — some other
 # binary version may yet send one. So this reads the field WHEN PRESENT and derives it otherwise,
 # which satisfies both the sibling suite and reality instead of trading one for the other.
-CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
-SID=$(printf '%s' "$INPUT" | jq -r '.session_id // "-"' 2>/dev/null)
-EVT=$(printf '%s' "$INPUT" | jq -r '.hook_event_name // empty' 2>/dev/null)
-# `// empty` (never `// 0`): absent must be distinguishable from a real 0, or the default wins again.
-EXIT=$(printf '%s' "$INPUT" | jq -r '.tool_response.exitCode // empty' 2>/dev/null)
+#
+# ONE jq for the five fields (it was four to five, each over a payload that can be 240 KB). jq drops
+# each field's trailing newlines, as `$(jq -r …)` did, and joins them with \037, which the fast path
+# refuses to carry; `read -d ''` splits on it, so a multi-line command or error arrives whole. Both
+# are linear: bash 3.2's `${v%…}` / `${v#*…}` are quadratic on a long value in a UTF-8 locale. Each
+# field keeps its own fallback inside the jq (`// "-"` for the session id, `// ""` where the old read
+# was `// empty`), so an absent exitCode is still distinguishable from a real 0. Anything but an
+# absent, false or string field (a numeric exitCode, an object, two documents, malformed JSON, a NUL)
+# leaves the fast path untaken and the original per-field reads run, so an odd payload is logged
+# exactly as it always was (docs/plans/LOAD_AND_PROMPT_HOOK_TIMEOUTS.md, learning 1).
+_lb_us=$'\037'; _lb_fast=0; _lb_err=""
+if _lb_in=$(printf '%s' "$INPUT" | jq -r --arg us "$_lb_us" '
+     def chomp: if endswith("\n") then rtrimstr("\n") | chomp else . end;
+     [.tool_input.command, .session_id, .hook_event_name, .tool_response.exitCode, .error] as $f
+     | if ($f | all(. == null or . == false
+                    or (type == "string" and ((contains($us) or contains("\u0000")) | not))))
+       then [$f[0] // "", $f[1] // "-", $f[2] // "", $f[3] // "", $f[4] // ""] | map(chomp)
+            | "ok" + $us + join($us) + $us + "end"
+       else "legacy" end' 2>/dev/null); then
+  IFS="$_lb_us" read -r -d '' _lb_ok _lb_c _lb_s _lb_v _lb_x _lb_e _lb_end <<< "$_lb_in"
+  if [ "$_lb_ok" = ok ]; then
+    case "$_lb_end" in                                         # a second document lands in _lb_end
+      end|end$'\n') CMD="$_lb_c" SID="$_lb_s" EVT="$_lb_v" EXIT="$_lb_x" _lb_err="$_lb_e"; _lb_fast=1 ;;
+    esac
+  fi
+fi
+if [ "$_lb_fast" != 1 ]; then
+  CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
+  SID=$(printf '%s' "$INPUT" | jq -r '.session_id // "-"' 2>/dev/null)
+  EVT=$(printf '%s' "$INPUT" | jq -r '.hook_event_name // empty' 2>/dev/null)
+  # `// empty` (never `// 0`): absent must be distinguishable from a real 0, or the default wins again.
+  EXIT=$(printf '%s' "$INPUT" | jq -r '.tool_response.exitCode // empty' 2>/dev/null)
+fi
 if [ -z "$EXIT" ]; then
   if [ "$EVT" = "PostToolUseFailure" ]; then
-    ERR=$(printf '%s' "$INPUT" | jq -r '.error // empty' 2>/dev/null)
+    if [ "$_lb_fast" = 1 ]; then ERR="$_lb_err"
+    else ERR=$(printf '%s' "$INPUT" | jq -r '.error // empty' 2>/dev/null); fi
     ERR=${ERR//$'\n'/ }                          # the audit line must stay single-line
     case "$ERR" in
       'Exit code '*) EXIT="${ERR#Exit code }" ;;
@@ -54,7 +89,7 @@ if [ -z "$EXIT" ]; then
 fi
 [ -n "$SID" ] || SID="-"
 [ -n "$EXIT" ] || EXIT="fail"
-mkdir -p ~/.claude/logs
+[ -d ~/.claude/logs ] || mkdir -p ~/.claude/logs   # tested first: it nearly always exists
 echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [$SID] $CMD | Exit: $EXIT" >> ~/.claude/logs/bash-execution.log
 # THE LESSON ARM (truememory-2026-09-27.md §3.6, #6) — PostToolUseFailure ONLY, after the audit line
 # (which it never touches). A failing command never reaches PostToolUse, so bash-output-offload.sh

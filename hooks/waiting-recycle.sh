@@ -635,7 +635,11 @@ case "${1:-}" in
 esac
 
 # ---- PostToolUse actuation mode (no recognized arg; JSON on stdin) --------------------------------
-input="$(cat 2>/dev/null || printf '{}')"
+# `$(</dev/stdin)`, not `$(cat)`: this runs on every Bash call, and the builtin read starts no
+# process. Guarded on fd 0 being open: with stdin CLOSED the substitution's own pipe lands on fd 0,
+# so /dev/stdin would name that pipe and the read would wait on itself forever (`$(cat)` did).
+input='{}'
+if [ -e /dev/fd/0 ]; then { input="$(</dev/stdin)"; } 2>/dev/null || input='{}'; fi
 # Lean hook profile (lib/hook-profile.sh): lead-only. Inside an in-process subagent this payload carries
 # the PARENT's session_id and transcript_path, so a subagent's Bash call could advise — or fire — a
 # recycle of the lead desk, into a context that cannot run /handoff. Skip in pure bash before any work.
@@ -731,9 +735,33 @@ gc_bats_pollution() {
 
 command -v jq >/dev/null 2>&1 || { SID="?"; abstain "no-jq"; }
 
-SID="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null || true)"
-TP="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
-CWD="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
+# ONE jq for the three stdin fields (it was three, each over the whole payload). jq drops each
+# field's trailing newlines, as `$(jq -r …)` did, and joins them with \037, which the fast path
+# refuses to carry; `read -d ''` splits on it, so a value with spaces or newlines arrives whole. Both
+# are linear: bash 3.2's `${v%…}` / `${v#*…}` are quadratic on a long value in a UTF-8 locale.
+# Anything but an absent, false or string field (a number, an object, two documents, malformed JSON,
+# a NUL) leaves the fast path untaken and the original per-field reads run, so an odd payload parses
+# exactly as it always did (docs/plans/LOAD_AND_PROMPT_HOOK_TIMEOUTS.md, learning 1).
+_wr_us=$'\037'; _wr_fast=0
+if _wr_in="$(printf '%s' "$input" | jq -r --arg us "$_wr_us" '
+     def chomp: if endswith("\n") then rtrimstr("\n") | chomp else . end;
+     [.session_id, .transcript_path, .cwd] as $f
+     | if ($f | all(. == null or . == false
+                    or (type == "string" and ((contains($us) or contains("\u0000")) | not))))
+       then [$f[] | . // ""] | map(chomp) | "ok" + $us + join($us) + $us + "end"
+       else "legacy" end' 2>/dev/null)"; then
+  IFS="$_wr_us" read -r -d '' _wr_ok _wr_s _wr_t _wr_c _wr_end <<< "$_wr_in"
+  if [ "$_wr_ok" = ok ]; then
+    case "$_wr_end" in                                         # a second document lands in _wr_end
+      end|end$'\n') SID="$_wr_s" TP="$_wr_t" CWD="$_wr_c"; _wr_fast=1 ;;
+    esac
+  fi
+fi
+if [ "$_wr_fast" != 1 ]; then
+  SID="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null || true)"
+  TP="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
+  CWD="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
+fi
 # CMD is extracted LAZILY at its ONE use site (the recycle-machinery guard below): on the abstain
 # paths that precede it — `disarmed`, `not-armed`, the overwhelmingly common case — the value is
 # never read, so the incumbent paid a jq fork (~9 ms) for a variable it discarded. Nothing between
@@ -750,17 +778,38 @@ CWD="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
 # because the two below depend on it.
 [ -f "$COORD/cc-roles/$DESK_ROLE" ] && \
   _WR_ROLE_V="$(head -1 "$COORD/cc-roles/$DESK_ROLE" 2>/dev/null | tr -d '[:space:]')"
+# _wr_key16 <string> — sets _WR_K16 to what `printf '%s' <string> | shasum | cut -c1-16` prints.
+# The key is a pure function of the string and shasum is a perl start, paid on every poll, so it is
+# memoized in $STATE_DIR/keymemo/. The memo NAME is a fork-free sanitised copy of the string, which
+# two strings can share, so the file carries the string itself between two copies of the key: a
+# different string, or a torn write, reads as a miss. A miss computes exactly as before, and writes a
+# memo only for a 16-hex key and only into a state dir that already exists (no abstain path made one).
+_wr_key16() {
+  local in="$1" f m="" k
+  f="${in//[!A-Za-z0-9._-]/_}"; f="$STATE_DIR/keymemo/k-${f:0:200}"
+  IFS= read -r -d '' m 2>/dev/null < "$f"
+  k="${m%%$'\n'*}"
+  case "$k" in
+    *[!0-9a-f]*) ;;
+    ????????????????) [ "$m" = "$k"$'\n'"$in"$'\n'"$k" ] && { _WR_K16="$k"; return 0; } ;;
+  esac
+  _WR_K16="$(printf '%s' "$in" | shasum 2>/dev/null | cut -c1-16)"
+  case "$_WR_K16" in *[!0-9a-f]*|'') return 0 ;; ????????????????) ;; *) return 0 ;; esac
+  [ -d "$STATE_DIR" ] || return 0
+  [ -d "$STATE_DIR/keymemo" ] || mkdir "$STATE_DIR/keymemo" 2>/dev/null
+  printf '%s\n%s\n%s' "$_WR_K16" "$in" "$_WR_K16" 2>/dev/null > "$f"
+  return 0
+}
 if [ -n "$CWD" ]; then
   _WR_KC_ARG="$CWD"
-  _WR_KC_KEY="$(printf '%s|%s' "$CFG" "$CWD" | shasum 2>/dev/null | cut -c1-16)"
+  _wr_key16 "$CFG|$CWD"; _WR_KC_KEY="$_WR_K16"
 fi
 # The role key is precomputed ONLY for an actual role-holder. A builder never calls key_role (
 # sentinel_for returns the cwd-keyed path before reaching it), so precomputing it unconditionally
 # would ADD a shasum+cut to the common path to serve a branch it never takes — paying for the
 # optimization on exactly the sessions it cannot help. The test is free now that the role value
 # above is memoized.
-is_monitoring_desk && \
-  _WR_KR_KEY="$(printf '%s|role:%s' "$CFG" "$DESK_ROLE" | shasum 2>/dev/null | cut -c1-16)"
+is_monitoring_desk && { _wr_key16 "$CFG|role:$DESK_ROLE"; _WR_KR_KEY="$_WR_K16"; }
 
 [ -n "$SID" ] || abstain "no-session-id"
 

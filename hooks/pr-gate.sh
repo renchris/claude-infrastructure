@@ -38,7 +38,11 @@
 
 [ "$CC_PR_PYRAMID" = "off" ] && exit 0
 
-INPUT=$(cat 2>/dev/null) || exit 0
+# `$(</dev/stdin)`, not `$(cat)`: this runs on every Bash call, and the builtin read starts no
+# process. Guarded on fd 0 being open: with stdin CLOSED the substitution's own pipe lands on fd 0,
+# so /dev/stdin would name that pipe and the read would wait on itself forever (`$(cat)` did).
+INPUT=""
+if [ -e /dev/fd/0 ]; then { INPUT="$(</dev/stdin)"; } 2>/dev/null || exit 0; fi
 [ -n "$INPUT" ] || exit 0
 
 # ── FAST PATH ────────────────────────────────────────────────────────────────────────────────

@@ -63,7 +63,11 @@ ARCHDIR="${CC_PERMARCHIVE_DIR:-${HOME:-/tmp}/.claude/autonomy/permission-archive
 ARCH_MAXLEN="${CC_PERMARCHIVE_MAXLEN:-12000}"
 
 # Read the harness payload once (fail-open on empty/malformed — never block the prompt).
-INPUT="$(cat 2>/dev/null || true)"
+# `$(</dev/stdin)`, not `$(cat)`: this fires on EVERY tool call, and the builtin read starts no
+# process. Guarded on fd 0 being open: with stdin CLOSED the substitution's own pipe lands on fd 0,
+# so /dev/stdin would name that pipe and the read would wait on itself forever.
+INPUT=""
+if [ -e /dev/fd/0 ]; then { INPUT="$(</dev/stdin)"; } 2>/dev/null || true; fi
 SID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)"
 [[ -z "$SID" ]] && exit 0                       # no session id ⇒ nothing to key a beacon on
 # Defense-in-depth: a session id is a uuid; reject anything that isn't a safe basename so the
