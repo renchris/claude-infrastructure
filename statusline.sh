@@ -67,15 +67,33 @@ fi
 # untouched, so the rendered line is byte-identical (tests/statusline-identity.bats
 # diffs this script's output against the pre-slim version on fixture payloads).
 # The remaining jq calls are the two that genuinely need jq: the telemetry EMIT (it
-# writes JSON) and the memoized pid read from the prior telemetry file.
+# writes JSON) and the memoized pid read from the prior telemetry file. Since W4 both are
+# fallbacks only: the emit is pre-rendered by this one call and the pid is read with builtins,
+# so a steady-state render starts jq once.
 # The separator is US (0x1f), NOT a tab. `read` COLLAPSES runs of IFS *whitespace*, so with
 # IFS=$'\t' an absent middle field silently shifts every later field left by one — a payload
 # with no `used_percentage` then read remaining_percentage AS used_percentage and rendered 70%
 # where the real answer was 78%. A non-whitespace IFS keeps empty fields positional.
+#
+# The same call also pre-renders the telemetry row (W4): PAY_TEL1..3 are the row's JSON with its
+# three bash-side fields (config_dir, pane, pid) cut out, so the per-render emit below is a
+# builtin printf instead of a second jq. They come FIRST because tojson can never contain a raw
+# US or newline, so they cannot shift the scalars after them; and they sit inside a `try`, so a
+# payload the old emit failed on (e.g. a string `.model`) yields three empty fields — the emit
+# then takes its old jq path and fails exactly as before — while the scalars still render.
 PAY_SID=""; PAY_TPATH=""; PAY_EFFORT=""; PAY_USED=""; PAY_REMAINING=""; PAY_WINDOW=""
+PAY_TEL1=""; PAY_TEL2=""; PAY_TEL3=""
 if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
-    IFS=$'\x1f' read -r PAY_SID PAY_TPATH PAY_EFFORT PAY_USED PAY_REMAINING PAY_WINDOW <<< "$(
-        printf '%s' "$INPUT" | jq -r '[
+    IFS=$'\x1f' read -r PAY_TEL1 PAY_TEL2 PAY_TEL3 PAY_SID PAY_TPATH PAY_EFFORT PAY_USED PAY_REMAINING PAY_WINDOW <<< "$(
+        printf '%s' "$INPUT" | jq -r '(try [
+            ({ts: (now|floor), session_id, cwd} | tojson | .[:-1]),
+            ({model: .model.id, effort: .effort.level} | tojson | .[1:-1]),
+            ({window: .context_window.context_window_size,
+              used_pct: .context_window.used_percentage,
+              remaining_pct: .context_window.remaining_percentage,
+              input_tokens: .context_window.total_input_tokens,
+              exceeds_200k: .exceeds_200k_tokens} | tojson | .[1:])
+        ] catch ["", "", ""]) + [
             (.session_id // ""),
             (.transcript_path // ""),
             (.effort.level // ""),
@@ -219,7 +237,22 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
         # process — the proven recipe from hooks/session-register.sh:43-47. MEMOIZED: reuse the
         # prior file's pid while it is still alive, so the ps-walk runs once per session and not
         # on every render (this is a hot path).
-        _pid=$(jq -r '.pid // empty' "$TDIR/${_sid}.json" 2>/dev/null)
+        #
+        # The memo is read with builtins (W4): this writer emits one compact line whose pid is a
+        # bare integer or null, and a `"pid":` inside any string value is escaped to `\"pid\":`, so
+        # the match cannot land anywhere but the key. Any other shape keeps the jq read.
+        _pf="$TDIR/${_sid}.json"; _pid=""
+        if [ -f "$_pf" ]; then
+            _pl=""; IFS= read -r _pl < "$_pf" 2>/dev/null
+            _pre='"pid":([0-9]+)[,}]'
+            if [[ $_pl =~ $_pre ]]; then
+                _pid="${BASH_REMATCH[1]}"
+            elif [[ $_pl == *'"pid":null,'* || $_pl == *'"pid":null}'* ]]; then
+                :
+            elif [ -s "$_pf" ]; then
+                _pid=$(jq -r '.pid // empty' "$_pf" 2>/dev/null)
+            fi
+        fi
         if [ -z "$_pid" ] || ! kill -0 "$_pid" 2>/dev/null; then
             _walk="$PPID"; _pid=""; _i=0
             while [ -n "$_walk" ] && [ "$_walk" -gt 1 ] 2>/dev/null && [ "$_i" -lt 10 ]; do
@@ -234,7 +267,29 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
         # one from a sid was to walk the registry directory or the process table. It rides the jq
         # call that already runs — no extra fork — and is NULL, never "", when no pane env is set,
         # so a reader can tell "no pane" from "a pane called nothing".
-        if echo "$INPUT" | jq -c --arg cfg "$_cfg" --arg pid "$_pid" --arg pane "$ID_PANE" '{ts: (now|floor), session_id, cwd,
+        #
+        # FAST PATH (W4): splice the three bash-side fields into the row the extraction already
+        # rendered. Exact only where bash's bytes ARE the JSON: a cfg and pane of plain characters
+        # (no quote, backslash, control or invalid-UTF-8 byte, which jq would escape or replace)
+        # and a canonical integer pid. Anything else takes the original jq emit below, unchanged.
+        _tjson=""
+        if [ -n "$PAY_TEL1" ]; then
+            case "$_cfg$ID_PANE" in
+                *[!-[:alnum:]/._~+@,:\ ]*) : ;;
+                *) case "$_pid" in
+                       *[!0-9]*|0?*) : ;;
+                       *) _pj=null; [ -z "$ID_PANE" ] || _pj="\"$ID_PANE\""
+                          _tjson="$PAY_TEL1,\"config_dir\":\"$_cfg\",$PAY_TEL2,\"pane\":$_pj,\"pid\":${_pid:-null},$PAY_TEL3" ;;
+                   esac ;;
+            esac
+        fi
+        if [ -n "$_tjson" ]; then
+            if printf '%s\n' "$_tjson" > "$_tmp" 2>/dev/null; then
+                mv -f "$_tmp" "$TDIR/${_sid}.json" 2>/dev/null || rm -f "$_tmp" 2>/dev/null
+            else
+                rm -f "$_tmp" 2>/dev/null
+            fi
+        elif echo "$INPUT" | jq -c --arg cfg "$_cfg" --arg pid "$_pid" --arg pane "$ID_PANE" '{ts: (now|floor), session_id, cwd,
             config_dir: $cfg, model: .model.id, effort: .effort.level,
             pane: (if $pane == "" then null else $pane end),
             pid: (if $pid == "" then null else ($pid|tonumber) end),
@@ -296,12 +351,29 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
             # is the only one that needs to record it. The grep is what bounds the store — an
             # append per render would grow without limit on a hot path. Fail-soft at every seam;
             # this must never break a render.
-            if ! grep -q "\"sid\":\"$_wsid\"" "$_wstore" 2>/dev/null; then
+            #
+            # The grep reads the whole store (439 KB measured) on every render, so a per-sid
+            # MARKER beside the store answers "already recorded" with one builtin test. It is
+            # written only when the grep itself FINDS the row (the render after the append), so it
+            # caches exactly the grep's verdict: a sid the grep can never match (a non-string
+            # session_id) never earns one, and a missing marker falls through to the grep. Only a
+            # filename-safe sid gets a marker; anything else always takes the grep.
+            _wmark=""
+            case "$_wsid" in
+                *[!A-Za-z0-9_-]*) : ;;
+                *) _wmark="${_wstore%/*}/.session-window.d/$_wsid" ;;
+            esac
+            if [ -n "$_wmark" ] && [ -e "$_wmark" ]; then
+                :
+            elif ! grep -q "\"sid\":\"$_wsid\"" "$_wstore" 2>/dev/null; then
                 if mkdir -p "${_wstore%/*}" 2>/dev/null; then
                     printf '%s' "$INPUT" | jq -c '{sid: .session_id,
                         window: .context_window.context_window_size,
                         model: .model.id, ts: (now|floor)}' >> "$_wstore" 2>/dev/null || true
                 fi
+            elif [ -n "$_wmark" ]; then
+                # the dir exists after the first session ever, so the mkdir fork is paid once
+                { : > "$_wmark" || { mkdir -p "${_wmark%/*}" && : > "$_wmark"; }; } 2>/dev/null || true
             fi
         fi
     fi
@@ -339,8 +411,18 @@ PCT_SEG=""
 # `git rev-parse --short HEAD` STAYS a separate call on purpose: porcelain v2's
 # `# branch.oid` is the full 40-hex, and abbreviating it here would hardcode a length that
 # core.abbrev is free to change — which is exactly the byte-identity this refactor promises.
-# It is also the cheap one: no index walk.
-DIR=$(basename "$(pwd)")
+# It is also the cheap one: no index walk. Its length is git's auto-abbrev (scaled to the
+# object count, then grown until unique), so no string cut of branch.oid can reproduce it.
+#
+# GIT_OPTIONAL_LOCKS=0: this is a display-only reader, and without it every `git status` may
+# refresh the index — rewriting .git/index and taking index.lock under a session that is
+# committing in the same checkout. Exported (not a per-call prefix) so it covers every git call
+# below; no other tool reads it.
+export GIT_OPTIONAL_LOCKS=0
+# Parameter expansion, not `basename "$(pwd)"` (two forks per render). bash keeps $PWD equal to
+# what the pwd builtin prints; `/` (and `//`) expand to empty here where basename gives `/`.
+DIR="${PWD##*/}"
+[ -n "$DIR" ] || DIR="/"
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null)
 
 BRANCH=""

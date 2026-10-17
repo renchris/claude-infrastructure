@@ -1042,3 +1042,132 @@ mbox_seed() { # <key> <lines> [seen]
   head=$(marker_of "$(render payload_full "$WORK/live-mail4" CC_PANE_ID=aaaa-bbbb-cccc LC_ALL=en_US.UTF-8)" live-mail4)
   [[ "$head" == *"📬2 "* ]] || { printf 'head: [%s]\n' "$head" >&2; false; }
 }
+
+# ═══ W4 fork trims (WP-23) — the same display from fewer processes ═════════════════════════════
+# Parity is against the REAL pre-change statusline.sh, rebuilt from git at the W4 base
+# (stop-hook-forks-helpers.bash), not against a remembered expectation. Each arm keeps its OWN
+# telemetry dir and window store across a sequence of renders, so the pid memo and the window
+# marker evolve in each arm exactly as they would in one pane, and neither arm warms the other.
+load stop-hook-forks-helpers
+SHF_BASE=55d01fcd4fca631650df1dbae16e91cfa30821c5
+
+w4_setup() {
+  W4="$BATS_TEST_TMPDIR/w4"; mkdir -p "$W4"
+  export SHF_OUT_DIR="$W4/out"; mkdir -p "$SHF_OUT_DIR"
+  STUB="$W4/stub"
+  # stubs only over the dirs the script's tools live in: wrapping the whole developer PATH costs
+  # thousands of files, and a tool absent from both arms is absent from both arms equally.
+  PATH="/usr/bin:/bin:$(dirname "$(command -v jq)"):$(dirname "$(command -v git)")" shf_build_stubs "$STUB"
+  export STUB
+  W4OLD="$W4/old-tree"
+  shf_old_tree "$W4OLD" "$REPO" statusline.sh || skip "the W4 base $SHF_BASE is not in this clone"
+}
+
+# w4_arm <arm old|new> <label> <repo dir> <payload json> — one render under /bin/bash and the
+# stub PATH; stdout/stderr/forks land in $SHF_OUT_DIR/<label>.*, state persists per ARM.
+w4_arm() {
+  local arm="$1" label="$2" dir="$3" payload="$4" script st rc=0
+  if [ "$arm" = old ]; then script="$W4OLD/statusline.sh"; else script="$NEW"; fi
+  st="$W4/state-$arm"; mkdir -p "$st/tel" "$st/bt"
+  export SHF_FORK_LOG="$SHF_OUT_DIR/$label.forks"; : > "$SHF_FORK_LOG"
+  ( cd "$dir" && printf '%s' "$payload" \
+      | env -u CLAUDE_INSTANCE_N -u ITERM_SESSION_ID -u CC_PANE_ID -u CC_MAILBOX_DIR \
+            CLAUDE_CONFIG_DIR= TERM_PROGRAM=not-iterm TERM=xterm-256color KITTY_WINDOW_ID=41 \
+            CC_TELEMETRY_DIR="$st/tel" BATS_TEST_TMPDIR="$st/bt" PATH="$STUB" \
+            /bin/bash "$script" ) > "$SHF_OUT_DIR/$label.out" 2> "$SHF_OUT_DIR/$label.err" || rc=$?
+  printf '%s\n' "$rc" > "$SHF_OUT_DIR/$label.rc"
+}
+# w4_state <arm> — every file the arm wrote, RAW bytes with only the wall-clock `ts` cut out (two
+# arms run seconds apart). Not `jq del(.ts)`: re-serialising would hide the very byte drift a
+# spliced row could carry (number spelling, key order, escaping).
+w4_state() {
+  local st="$W4/state-$1" f
+  for f in "$st"/tel/*.json "$st"/bt/session-window.jsonl; do
+    [ -f "$f" ] || continue
+    printf '== %s\n' "${f#"$st"/}"; sed -E -e 's/^\{"ts":[0-9]+,/{/' -e 's/,"ts":[0-9]+\}$/}/' "$f"
+  done
+}
+# w4_step <label> <repo> <payload> [le] — render both arms, demand byte-identity, new strictly
+# cheaper. `le` (not-more) is for the ONE render that creates the window marker's directory: its
+# mkdir is paid once per machine, never per render.
+w4_step() {
+  local k
+  w4_arm old "old-$1" "$2" "$3"; w4_arm new "new-$1" "$2" "$3"
+  for k in out err rc; do
+    cmp "$SHF_OUT_DIR/old-$1.$k" "$SHF_OUT_DIR/new-$1.$k" \
+      || { echo "step $1: $k differs"; cat "$SHF_OUT_DIR/old-$1.$k" "$SHF_OUT_DIR/new-$1.$k"; return 1; }
+  done
+  [ "$(w4_state old)" = "$(w4_state new)" ] || { echo "step $1: state differs"; w4_state old; w4_state new; return 1; }
+  if [ "${4:-}" = le ]; then
+    [ "$(shf_total "new-$1")" -le "$(shf_total "old-$1")" ] || { echo "step $1: costlier"; return 1; }
+  else [ "$(shf_total "new-$1")" -lt "$(shf_total "old-$1")" ]; fi \
+    || { echo "step $1: old $(shf_census "old-$1") / new $(shf_census "new-$1")"; return 1; }
+  printf 'step %s: execs %s -> %s\n' "$1" "$(shf_total "old-$1")" "$(shf_total "new-$1")" >> "$W4/counts"
+}
+
+@test "W4: old vs new render byte-identically across edit, add, commit, switch, unborn and detached" {
+  w4_setup
+  local r="$WORK/w4-seq" p
+  mk_repo "$r" some-branch
+  p=$(payload_full)
+  w4_step clean "$r" "$p"
+  w4_step clean-again "$r" "$p" le                    # the memo, and the marker's one-time mkdir
+  w4_step clean-third "$r" "$p"                       # the marker answers: no grep
+  # PER SITE, because a strictly-lower total credits no one trim: steady state starts jq ONCE (the
+  # builtin pid read and the spliced emit each remove one), no basename, and no store grep.
+  [ "$(shf_calls old-clean-third jq)" -eq 3 ]
+  [ "$(shf_calls new-clean-third jq)" -eq 1 ]
+  [ "$(shf_calls old-clean-third basename)" -eq 1 ]
+  [ "$(shf_calls new-clean-third basename)" -eq 0 ]
+  [ "$(shf_calls old-clean-third grep)" -eq 1 ]
+  [ "$(shf_calls new-clean-third grep)" -eq 0 ]
+  [ "$(shf_calls new-clean-third git)" -eq 2 ]          # status + the exact --short rev-parse
+  printf 'changed\n' > "$r/f";      w4_step edited "$r" "$p"
+  git -C "$r" add -A;               w4_step staged "$r" "$p"
+  git -C "$r" commit -qm second;    w4_step committed "$r" "$p"
+  git -C "$r" checkout -q -b other; w4_step switched "$r" "$p"
+  git -C "$r" checkout -q --orphan unborn; git -C "$r" rm -rq --cached .
+  # really unborn (no commit to abbreviate), or the step proves nothing
+  run git -C "$r" rev-parse -q --verify HEAD
+  [ "$status" -ne 0 ]
+  w4_step unborn "$r" "$p"
+  git -C "$r" checkout -q -f some-branch; git -C "$r" checkout -q --detach; w4_step detached "$r" "$p"
+  w4_step legacy-payload "$r" "$(payload_legacy)"
+  w4_step empty-payload "$r" ""
+  cat "$W4/counts" >&3 2>/dev/null || true
+}
+
+@test "W4: 100 renders leave the index untouched (GIT_OPTIONAL_LOCKS=0), and the old script did not" {
+  local r="$WORK/w4-idx" sig0 i
+  mk_repo "$r" some-branch
+  idx_sig() { stat -f '%i %Fm' "$r/.git/index"; }
+  stale() { touch -t 203001010000 "$r/f"; }           # stat-dirty, content-clean: status wants a refresh
+  stale; sig0=$(idx_sig)
+  for i in $(seq 1 100); do render payload_full "$r" >/dev/null; done
+  [ "$(idx_sig)" = "$sig0" ] || { echo "index rewritten: $sig0 -> $(idx_sig)"; false; }
+  [ ! -e "$r/.git/index.lock" ]
+  # POSITIVE CONTROL — the fixture provokes a refresh, so the old script rewrote this index.
+  w4_setup
+  stale; sig0=$(idx_sig)
+  w4_arm old idx-old "$r" "$(payload_full)"
+  [ "$(idx_sig)" != "$sig0" ] || { echo "control: the old script did not refresh the index"; false; }
+}
+
+@test "W4: the spliced telemetry row is byte-identical to the jq emit, and odd shapes keep the jq path" {
+  w4_setup
+  local r="$WORK/w4-tel"
+  mk_repo "$r" some-branch
+  # number spellings jq preserves verbatim, a quote and non-ASCII in cwd, a bool
+  w4_step numbers "$r" '{"session_id":"t-num","transcript_path":"/u/.claude-x/projects/p/a.jsonl","model":{"id":"m"},"effort":{"level":"max"},"context_window":{"context_window_size":200000,"used_percentage":12.50,"remaining_percentage":1e1,"total_input_tokens":100000000000000000000001},"exceeds_200k_tokens":false,"cwd":"/x/\u00e9\"q"}'
+  w4_step numbers-again "$r" '{"session_id":"t-num","transcript_path":"/u/.claude-x/projects/p/a.jsonl","model":{"id":"m"},"effort":{"level":"max"},"context_window":{"context_window_size":200000,"used_percentage":12.50,"remaining_percentage":1e1,"total_input_tokens":100000000000000000000001},"exceeds_200k_tokens":false,"cwd":"/x/\u00e9\"q"}'
+  [ "$(shf_calls new-numbers-again jq)" -eq 1 ]        # the splice, not the jq fallback
+  # a string .model: the old emit FAILED (no row); the try leaves the scalars rendering and the
+  # emit falls back to jq, which fails the same way
+  w4_step string-model "$r" '{"session_id":"t-str","model":"opus","cwd":"/x","context_window":{"context_window_size":200000,"used_percentage":3}}' le
+  [ ! -e "$W4/state-new/tel/t-str.json" ]
+  [ "$(shf_calls new-string-model jq)" -eq 3 ]   # extraction + fallback emit + the window row
+  # a quote in the config root, and no transcript at all (env fallback, empty)
+  w4_step quoted-cfg "$r" '{"session_id":"t-q","transcript_path":"/a\"b/projects/x","cwd":"/x"}' le
+  w4_step no-transcript "$r" '{"session_id":"t-nt","cwd":"/x"}'
+  [ "$(grep -c '"config_dir":"/a\\"b"' "$W4/state-new/tel/t-q.json")" -eq 1 ]
+}
