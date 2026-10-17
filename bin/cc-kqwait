@@ -1,0 +1,300 @@
+#!/usr/bin/env bash
+# cc-kqwait — block until something a caller cares about happens, then say what it was.
+#
+# A polling loop's `sleep "$INTERVAL"` both wastes wakes (nothing changed) and adds latency (the
+# change landed just after the last look). kqueue lets the kernel do the waiting instead: this tool
+# arms every watch named on the command line, sleeps in ONE kevent(2) call, and prints exactly one
+# event line the moment any of them fires (or the timeout passes).
+#
+#   cc-kqwait [--pid PID[@START_EPOCH]]... [--file PATH[@SIZE:MTIME_NS]]... [--appear PATH]...
+#             [--dir PATH]... --timeout S
+#
+# Event line (exactly one), then one `baseline PATH @SIZE:MTIME_NS` line per --file (its stat at
+# exit, `@-` when missing — the caller feeds it back as the next call's baseline):
+#   exit <pid>             NOTE_EXIT fired
+#   gone <pid>             not running at arm time, or its start time is not START_EPOCH (pid reuse)
+#   vnode <path> <flags>   --file: write,extend,delete,rename (any subset) · --dir: write
+#   vnode <path> changed   --file's stat differs from the baseline given (the lost-event guard: a
+#                          change that landed while the caller was busy is reported at once)
+#   appear <path>          --appear: PATH exists (checked inside the helper on each parent-dir
+#                          wake, so a busy directory costs no spurious return)
+#   timeout                nothing fired within S seconds (S may be fractional)
+# Exit: 0 an event line printed · 2 usage · 3 kqueue/system failure · 4 `unavailable <reason>` on
+# stdout: the helper could not be built or run, so the caller falls back to its plain sleep.
+# SIGTERM/SIGINT keep their default (die): callers run `cc-kqwait … & wait $!` so their traps fire.
+#
+# THE HOT PATH FORKS NOTHING. The C source is embedded below, so a cache key derived from it would
+# mean hashing it on every call (shasum + uname, plus their subshells). Instead the binary carries
+# its own source's SHA-256 (compiled in) and this wrapper hands it the source via the environment;
+# the binary re-hashes it in-process (microseconds) and, on a mismatch, re-execs this wrapper with
+# CC_KQWAIT_REBUILD=1 to take the slow path. So a warm call is: bash, then one exec of
+# `current-$HOSTTYPE` — and a changed source can still never run a stale binary.
+# The slow path keys the build cache like bin/cc-jetsam-exec: first 16 hex of sha256(src) +
+# `uname -m`, stock-floor tool lookup, build to `<file>.$$` then `mv -f`, smoke-test before use.
+
+_kq_root="${CC_KQWAIT_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/cc-kqwait}"
+_kq_cur="$_kq_root/current-$HOSTTYPE"
+
+read -r -d '' CC_KQWAIT_SRC <<'CSRC'
+#include <sys/types.h>
+#include <sys/event.h>
+#include <sys/stat.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <libproc.h>
+#include <limits.h>
+#include <math.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
+#include <CommonCrypto/CommonDigest.h>
+
+#define MAXW 64
+enum { K_FILE = 1, K_FILEPARENT, K_APPEAR, K_DIR };
+struct st { int missing; long long size, mtime; };
+struct fw { const char *path; int has_want; struct st want, armed; };
+
+static struct fw files[MAXW]; static int nfiles;
+static const char *appears[MAXW]; static int nappears;
+static const char *dirs[MAXW]; static int ndirs;
+static pid_t pids[MAXW]; static long long starts[MAXW]; static int npids;
+static int kq;
+
+static void usage(const char *why) {
+    fprintf(stderr, "cc-kqwait: %s\nusage: cc-kqwait [--pid PID[@START_EPOCH]]... "
+            "[--file PATH[@SIZE:MTIME_NS]]... [--appear PATH]... [--dir PATH]... --timeout S\n", why);
+    exit(2);
+}
+static void sysfail(const char *what, const char *path) {
+    fprintf(stderr, "cc-kqwait: %s %s: %s\n", what, path, strerror(errno));
+    exit(3);
+}
+static void stat_of(const char *p, struct st *s) {
+    struct stat b;
+    memset(s, 0, sizeof *s);
+    if (stat(p, &b) != 0) { s->missing = 1; return; }
+    s->size = (long long)b.st_size;
+    s->mtime = (long long)b.st_mtimespec.tv_sec * 1000000000LL + b.st_mtimespec.tv_nsec;
+}
+static int same(const struct st *a, const struct st *b) {
+    if (a->missing || b->missing) return a->missing == b->missing;
+    return a->size == b->size && a->mtime == b->mtime;
+}
+static void emit(const char *fmt, const char *a, const char *b) {
+    printf(fmt, a, b);
+    for (int i = 0; i < nfiles; i++) {
+        struct st s; stat_of(files[i].path, &s);
+        if (s.missing) printf("baseline %s @-\n", files[i].path);
+        else printf("baseline %s @%lld:%lld\n", files[i].path, s.size, s.mtime);
+    }
+    fflush(stdout);
+    exit(0);
+}
+static void emit_pid(const char *what, pid_t p) {
+    char buf[32]; snprintf(buf, sizeof buf, "%d", (int)p);
+    emit("%s %s\n", what, buf);
+}
+static int all_digits(const char *s, const char *end) {
+    if (s == end) return 0;
+    for (; s < end; s++) if (*s < 48 || *s > 57) return 0;
+    return 1;
+}
+/* PATH[@SIZE:MTIME_NS] — a path may itself contain an at-sign, so only a well-formed LAST suffix
+   counts as a baseline; anything else is part of the path. */
+static void parse_file(char *arg, struct fw *f) {
+    char *at = strrchr(arg, 64);
+    f->path = arg; f->has_want = 0;
+    if (!at) return;
+    char *v = at + 1, *colon = strchr(v, 58);
+    if (strcmp(v, "-") == 0) { f->want.missing = 1; }
+    else if (colon && all_digits(v, colon) && all_digits(colon + 1, colon + strlen(colon))) {
+        f->want.missing = 0; f->want.size = atoll(v); f->want.mtime = atoll(colon + 1);
+    } else return;
+    *at = 0; f->has_want = 1;
+}
+static void parent_of(const char *p, char *out, size_t n) {
+    snprintf(out, n, "%s", p);
+    char *slash = strrchr(out, 47);
+    if (!slash) snprintf(out, n, ".");
+    else if (slash == out) out[1] = 0;
+    else *slash = 0;
+}
+static void watch(const char *path, int kind, int idx, unsigned fflags) {
+    int fd = open(path, O_EVTONLY);
+    if (fd < 0) sysfail("cannot open", path);
+    struct kevent ch;
+    EV_SET(&ch, fd, EVFILT_VNODE, EV_ADD | EV_CLEAR, fflags, 0, (void *)(intptr_t)((kind << 16) | idx));
+    if (kevent(kq, &ch, 1, NULL, 0, NULL) < 0) sysfail("cannot watch", path);
+}
+/* The binary carries the hash of the source it was built from; the wrapper passes the source it
+   embeds now. A mismatch means the wrapper changed, so re-exec it to rebuild — never run stale. */
+static void self_check(int argc, char **argv) {
+    const char *src = getenv("CC_KQWAIT_SRC");
+    if (!src) return;
+    unsigned char d[CC_SHA256_DIGEST_LENGTH]; char hex[2 * CC_SHA256_DIGEST_LENGTH + 1];
+    CC_SHA256(src, (CC_LONG)strlen(src), d);
+    for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) snprintf(hex + 2 * i, 3, "%02x", d[i]);
+    if (strcmp(hex, CC_KQWAIT_HASH) == 0) return;
+    const char *self = getenv("CC_KQWAIT_SELF"), *sh = getenv("CC_KQWAIT_BASH");
+    if (getenv("CC_KQWAIT_REBUILD") || !self || !*self) { puts("unavailable stale-binary"); exit(4); }
+    if (!sh || !*sh) sh = "/bin/bash";
+    char **nv = calloc((size_t)argc + 2, sizeof *nv);
+    if (!nv) { puts("unavailable stale-binary"); exit(4); }
+    nv[0] = (char *)sh; nv[1] = (char *)self;
+    for (int i = 1; i < argc; i++) nv[i + 1] = argv[i];
+    setenv("CC_KQWAIT_REBUILD", "1", 1);
+    execv(sh, nv);
+    puts("unavailable reexec-failed"); exit(4);
+}
+static double now_s(void) {
+    struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+    return (double)t.tv_sec + (double)t.tv_nsec / 1e9;
+}
+
+int main(int argc, char **argv) {
+    self_check(argc, argv);
+    double timeout = -1;
+    for (int i = 1; i < argc; i++) {
+        const char *o = argv[i];
+        if (i + 1 >= argc) usage("missing value");
+        char *v = argv[++i];
+        if (strcmp(o, "--timeout") == 0) {
+            char *end; timeout = strtod(v, &end);
+            if (end == v || *end || !isfinite(timeout) || timeout < 0) usage("bad --timeout");
+        } else if (nfiles >= MAXW || nappears >= MAXW || ndirs >= MAXW || npids >= MAXW) {
+            usage("too many watches");
+        } else if (strcmp(o, "--file") == 0) { parse_file(v, &files[nfiles++]);
+        } else if (strcmp(o, "--appear") == 0) { appears[nappears++] = v;
+        } else if (strcmp(o, "--dir") == 0) { dirs[ndirs++] = v;
+        } else if (strcmp(o, "--pid") == 0) {
+            char *at = strchr(v, 64), *end;
+            long p = strtol(v, &end, 10);
+            if (end == v || p <= 0 || (at ? end != at : *end != 0)) usage("bad --pid");
+            starts[npids] = -1;
+            if (at) {
+                if (!all_digits(at + 1, at + 1 + strlen(at + 1))) usage("bad --pid start epoch");
+                starts[npids] = atoll(at + 1);
+            }
+            pids[npids++] = (pid_t)p;
+        } else usage("unknown option");
+    }
+    if (timeout < 0) usage("--timeout is required");
+    if ((kq = kqueue()) < 0) sysfail("kqueue", "");
+
+    /* Arm FIRST, then look: anything after the arm raises an event, anything before it shows in
+       the look. That ordering is what makes every immediate return below race-free. */
+    for (int i = 0; i < npids; i++) {
+        struct kevent ch;
+        EV_SET(&ch, pids[i], EVFILT_PROC, EV_ADD | EV_CLEAR, NOTE_EXIT, 0, NULL);
+        if (kevent(kq, &ch, 1, NULL, 0, NULL) < 0) {
+            if (errno == ESRCH) emit_pid("gone", pids[i]);
+            char buf[32]; snprintf(buf, sizeof buf, "%d", (int)pids[i]); sysfail("cannot watch pid", buf);
+        }
+        struct proc_bsdinfo bi;
+        if (starts[i] >= 0 && proc_pidinfo(pids[i], PROC_PIDTBSDINFO, 0, &bi, sizeof bi) == (int)sizeof bi
+            && (long long)bi.pbi_start_tvsec != starts[i]) emit_pid("gone", pids[i]);
+    }
+    for (int i = 0; i < nfiles; i++) {
+        struct fw *f = &files[i];
+        int fd = open(f->path, O_EVTONLY);
+        if (fd >= 0) {
+            struct kevent ch;
+            EV_SET(&ch, fd, EVFILT_VNODE, EV_ADD | EV_CLEAR, NOTE_WRITE | NOTE_EXTEND | NOTE_DELETE | NOTE_RENAME,
+                   0, (void *)(intptr_t)((K_FILE << 16) | i));
+            if (kevent(kq, &ch, 1, NULL, 0, NULL) < 0) sysfail("cannot watch", f->path);
+        } else {
+            char par[PATH_MAX]; parent_of(f->path, par, sizeof par);
+            watch(par, K_FILEPARENT, i, NOTE_WRITE);   /* missing: wake when an entry is added */
+        }
+        stat_of(f->path, &f->armed);
+        if (f->has_want && !same(&f->want, &f->armed)) emit("vnode %s %s\n", f->path, "changed");
+    }
+    for (int i = 0; i < nappears; i++) {
+        char par[PATH_MAX]; parent_of(appears[i], par, sizeof par);
+        watch(par, K_APPEAR, i, NOTE_WRITE);
+        if (access(appears[i], F_OK) == 0) emit("appear %s%s\n", appears[i], "");
+    }
+    for (int i = 0; i < ndirs; i++) watch(dirs[i], K_DIR, i, NOTE_WRITE);
+
+    double deadline = now_s() + timeout;
+    for (;;) {
+        double left = deadline - now_s();
+        if (left < 0) left = 0;
+        struct timespec ts = { (time_t)left, (long)((left - floor(left)) * 1e9) };
+        struct kevent ev[16];
+        int n = kevent(kq, NULL, 0, ev, 16, &ts);
+        if (n < 0) { if (errno == EINTR) continue; sysfail("kevent", ""); }
+        if (n == 0) emit("timeout%s%s\n", "", "");
+        for (int j = 0; j < n; j++) {
+            if (ev[j].filter == EVFILT_PROC) emit_pid("exit", (pid_t)ev[j].ident);
+            int kind = (int)((intptr_t)ev[j].udata >> 16), idx = (int)((intptr_t)ev[j].udata & 0xffff);
+            unsigned fl = ev[j].fflags;
+            if (kind == K_FILE) {
+                char w[64] = "";
+                if (fl & NOTE_WRITE) strcat(w, ",write");
+                if (fl & NOTE_EXTEND) strcat(w, ",extend");
+                if (fl & NOTE_DELETE) strcat(w, ",delete");
+                if (fl & NOTE_RENAME) strcat(w, ",rename");
+                emit("vnode %s %s\n", files[idx].path, w[0] ? w + 1 : "changed");
+            } else if (kind == K_FILEPARENT) {
+                struct st s; stat_of(files[idx].path, &s);
+                if (!same(&s, &files[idx].armed)) emit("vnode %s %s\n", files[idx].path, "changed");
+            } else if (kind == K_APPEAR) {
+                /* one parent may serve several --appear paths: re-check them all */
+                for (int k = 0; k < nappears; k++)
+                    if (access(appears[k], F_OK) == 0) emit("appear %s%s\n", appears[k], "");
+            } else if (kind == K_DIR) {
+                emit("vnode %s %s\n", dirs[idx], "write");
+            }
+        }
+    }
+}
+CSRC
+
+export CC_KQWAIT_SRC CC_KQWAIT_SELF="$0" CC_KQWAIT_BASH="$BASH"
+# A failed exec (missing, corrupt or wrong-arch binary) must fall through to the rebuild, not end
+# the script with 126.
+shopt -s execfail
+if [ -z "${CC_KQWAIT_REBUILD:-}" ] && [ -x "$_kq_cur" ]; then exec "$_kq_cur" "$@"; fi
+
+# ── slow path: key, build, smoke, publish ────────────────────────────────────────────────────────
+unavailable() { printf 'unavailable %s\n' "$1"; exit 4; }
+# Resolved ABSOLUTELY, and the key ASSERTED: an empty key is a cache dir SHARED across source
+# versions (bin/cc-jetsam-exec carries the full incident).
+_cc_bin() { # $1=name → absolute path, stock floor first, then PATH
+  local n="$1" d
+  for d in /usr/bin /bin /usr/sbin /sbin; do [ -x "$d/$n" ] && { printf '%s' "$d/$n"; return 0; }; done
+  command -v "$n" 2>/dev/null && return 0
+  return 1
+}
+SHASUM=$(_cc_bin shasum) || unavailable no-shasum
+UNAME=$(_cc_bin uname)   || unavailable no-uname
+_kq_hash=$(printf '%s' "$CC_KQWAIT_SRC" | "$SHASUM" -a 256); _kq_hash=${_kq_hash%% *}
+case "$_kq_hash" in *[!0-9a-f]*|'') unavailable degenerate-key ;; esac
+[ "${#_kq_hash}" -eq 64 ] || unavailable degenerate-key
+_kq_arch=$("$UNAME" -m); [ -n "$_kq_arch" ] || unavailable no-arch
+_kq_dir="$_kq_root/${_kq_hash:0:16}-$_kq_arch"
+_kq_bin="$_kq_dir/cc-kqwait"
+
+# REBUILD=1 makes a hash mismatch print `unavailable` instead of re-execing, so the smoke test sees it.
+_kq_smoke() { [ "$(CC_KQWAIT_REBUILD=1 "$1" --timeout 0 2>/dev/null)" = timeout ]; }
+_kq_build() {
+  local cc="${CC:-}"
+  [ -n "$cc" ] || cc=$(command -v clang || command -v cc) || return 1
+  mkdir -p "$_kq_dir" 2>/dev/null || return 1
+  "$cc" -O2 "-DCC_KQWAIT_HASH=\"$_kq_hash\"" -x c -o "$_kq_bin.$$" - <<<"$CC_KQWAIT_SRC" \
+    2>"$_kq_dir/build.log" || { rm -f "$_kq_bin.$$"; return 1; }
+  _kq_smoke "$_kq_bin.$$" || { rm -f "$_kq_bin.$$"; return 1; }
+  mv -f "$_kq_bin.$$" "$_kq_bin"
+}
+if ! _kq_smoke "$_kq_bin"; then _kq_build || unavailable build-failed; fi
+# Publish for the hot path; best effort, since a miss only costs the next call this slow path.
+if ln -sf "$_kq_bin" "$_kq_cur.$$" 2>/dev/null; then
+  mv -f "$_kq_cur.$$" "$_kq_cur" 2>/dev/null || rm -f "$_kq_cur.$$"
+fi
+export CC_KQWAIT_REBUILD=1
+exec "$_kq_bin" "$@"
+unavailable exec-failed
