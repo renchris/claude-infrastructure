@@ -359,87 +359,91 @@ done
 # Every one of these returns NON-ZERO rather than a value when the instrument is unreadable. None of
 # them has a fallback. That is the whole contract.
 
+# Every sysctl a caller needs, in ONE named call: `sysctl a b c` prints one `name: value` line per
+# name it knows. Parsed by NAME, never by position — a missing OID prints no line, so a positional
+# read would shift every later value onto the wrong name. sysctl's rc is ignored for the same reason:
+# it is nonzero when ONE name is missing while the rest still print.
+# → SCV[i] = the value printed for the i-th name asked, EMPTY when sysctl printed none for it.
+read_sysctls() { # <name>…
+  local out line n i
+  SCV=()
+  for n in "$@"; do SCV[${#SCV[@]}]=""; done
+  out="$(sysctl "$@" 2>/dev/null)"$'\n'
+  while [ -n "$out" ]; do
+    line="${out%%$'\n'*}"; out="${out#*$'\n'}"
+    i=0
+    for n in "$@"; do
+      case "$line" in "$n: "*) SCV[i]="${line#"$n: "}"; break ;; esac
+      i=$((i + 1))
+    done
+  done
+}
+
+# The numeric test every sysctl value passes: rc 1 when empty or non-numeric — never a fabricated 0.
+is_num() { # <value>
+  case "$1" in ''|*[!0-9]*) return 1 ;; esac
+}
+
 # One numeric sysctl. rc 1 when absent, empty, or non-numeric — never a fabricated 0.
+# shellcheck disable=SC2329  # the suite's entry point; the tick runs the same text through tick_derive
 read_num_sysctl() { # <name>
-  local v
-  v="$(sysctl -n "$1" 2>/dev/null)" || return 1
-  case "$v" in ''|*[!0-9]*) return 1 ;; esac
-  printf '%s' "$v"
+  read_sysctls "$1"
+  is_num "${SCV[0]}" || return 1
+  printf '%s' "${SCV[0]}"
 }
 
-# vm.swapusage → USED BYTES. Parsed from the unit suffix, never assumed to be M: this is the exact
-# term §7.7 calls the swapped-segment count (used ÷ 65536), so a silent 1024x misread here would
-# understate the half of the pool that lives on disk.
-parse_swap_used_bytes() { # stdin: a vm.swapusage line
-  awk '
-    { for (i = 1; i < NF; i++) if ($i == "used") { v = $(i + 2); break } }
-    END {
-      if (v == "") exit 1
-      u = substr(v, length(v)); n = substr(v, 1, length(v) - 1) + 0
+# ── the shared awk text ───────────────────────────────────────────────────────────────────────────
+# ONE text for every parse and predicate the tick evaluates. The single-purpose wrappers below (which
+# the suite drives one at a time) and the tick's one awk both splice it in, so a wrapper can never
+# pass a parse or predicate the daemon no longer runs. A function, not a global, because the suite
+# sources only this file's functions. The text holds no single quote: it is spliced into
+# single-quoted awk programs. Thresholds arrive as the awk globals pct, rmin, cmb, smb, cliff, iv.
+sentinel_awk() {
+  SENTINEL_AWK='
+    # ONE vm_stat pass → "<pagesize> <pages_occupied_by_compressor> <compressions> <decompressions>",
+    # or "" when unreadable. Page size comes from vm_stat s OWN header and is never assumed to be 4096
+    # (it is 16384 on Apple silicon; assuming 4096 understates by 4x — capacity-alarm.sh:147 records
+    # the same trap).
+    function vms_parse(s,   L, n, i, f, k, v, t, pg, d) {
+      n = split(s, L, "\n"); pg = 0
+      if (n >= 1 && match(L[1], /page size of [0-9]+/)) { t = substr(L[1], RSTART, RLENGTH); gsub(/[^0-9]/, "", t); pg = t + 0 }
+      for (i = 2; i <= n; i++) {
+        split(L[i], f, ":"); k = f[1]; v = f[2]
+        gsub(/^[ \t]+|[ \t.]+$/, "", v); gsub(/"/, "", k)
+        if (v ~ /^[0-9]+$/) d[k] = v + 0
+      }
+      if (pg <= 0) return ""
+      if (!("Pages occupied by compressor" in d) || !("Compressions" in d) || !("Decompressions" in d)) return ""
+      return sprintf("%d %d %d %d", pg, d["Pages occupied by compressor"], d["Compressions"], d["Decompressions"])
+    }
+    # vm.swapusage → USED BYTES. Parsed from the unit suffix, never assumed to be M: this is the exact
+    # term §7.7 calls the swapped-segment count (used ÷ 65536), so a silent 1024x misread here would
+    # understate the half of the pool that lives on disk. swap_scan keeps the token after "used" in
+    # swap_v; swap_bytes converts it, "" when unreadable.
+    function swap_scan(line,   f, n, i) {
+      n = split(line, f)
+      for (i = 1; i < n; i++) if (f[i] == "used") { swap_v = f[i + 2]; return }
+    }
+    function swap_bytes(v,   u, x, m) {
+      if (v == "") return ""
+      u = substr(v, length(v)); x = substr(v, 1, length(v) - 1) + 0
       m = (u == "G") ? 1073741824 : (u == "M") ? 1048576 : (u == "K") ? 1024 : 0
-      if (m == 0) exit 1
-      printf "%.0f", n * m
-    }'
-}
-
-read_swap_used_bytes() {
-  local raw
-  raw="$(sysctl -n vm.swapusage 2>/dev/null)" || return 1
-  [ -n "$raw" ] || return 1
-  printf '%s\n' "$raw" | parse_swap_used_bytes
-}
-
-# ONE vm_stat pass → "<pagesize> <pages_occupied_by_compressor> <compressions> <decompressions>".
-# Page size comes from vm_stat's OWN header and is never assumed to be 4096 (it is 16384 on Apple
-# silicon; assuming 4096 understates by 4x — capacity-alarm.sh:147 records the same trap).
-read_vm_stat() {
-  vm_stat 2>/dev/null | awk -F: '
-    NR == 1 {
-      if (match($0, /page size of [0-9]+/)) { s = substr($0, RSTART, RLENGTH); gsub(/[^0-9]/, "", s); pg = s + 0 }
-      next
+      if (m == 0) return ""
+      return sprintf("%.0f", x * m)
     }
-    {
-      k = $1; v = $2
-      gsub(/^[ \t]+|[ \t.]+$/, "", v); gsub(/"/, "", k)
-      if (v ~ /^[0-9]+$/) d[k] = v + 0
+    # ── segment arithmetic (§7.7) ──
+    # The divisor is DERIVED (segment_buffer ÷ pagesize), not the literal 4. Four is only correct at
+    # a 16 KiB page size — true on this box (65536/16384), false on a 4 KiB one, where the right
+    # answer is 16 and the literal would understate in-core segments by 4x.
+    function segs_core(p, pg, buf) {
+      if (pg <= 0 || buf <= 0 || buf < pg) return ""
+      return sprintf("%d", p / (buf / pg))
     }
-    END {
-      if (pg <= 0) exit 1
-      if (!("Pages occupied by compressor" in d) || !("Compressions" in d) || !("Decompressions" in d)) exit 1
-      printf "%d %d %d %d", pg, d["Pages occupied by compressor"], d["Compressions"], d["Decompressions"]
-    }'
-}
-
-# ── segment arithmetic (§7.7) ─────────────────────────────────────────────────────────────────────
-# The divisor is DERIVED (segment_buffer ÷ pagesize), not the literal 4. Four is only correct at a
-# 16 KiB page size — true on this box (65536/16384), false on a 4 KiB one, where the right answer is
-# 16 and the literal would understate in-core segments by 4x.
-segs_in_core() { # <pages_occupied> <pagesize> <segment_buffer_size>
-  awk -v p="$1" -v pg="$2" -v buf="$3" 'BEGIN {
-    if (pg <= 0 || buf <= 0 || buf < pg) exit 1
-    printf "%d", p / (buf / pg)
-  }'
-}
-
-# EXACT, not an estimate: swap is allocated in one-segment (64 KiB) compressed chunks.
-segs_swapped() { # <swap_used_bytes> <segment_buffer_size>
-  awk -v b="$1" -v buf="$2" 'BEGIN { if (buf <= 0) exit 1; printf "%d", b / buf }'
-}
-
-# ── the trip predicate ────────────────────────────────────────────────────────────────────────────
-# Prints the breach reason and returns 0 when THIS SAMPLE breaches; rc 1 when clear. Pure: every
-# threshold arrives as a variable, so the suite can drive it without a machine.
-#
-# All three arms are RATES normalised to the configured interval. The brief's "640 MB/tick" and
-# "1 GB/tick" are 64 MB/s and 102.4 MB/s at the 10 s default — which is exactly how §7.1 states the
-# ramp ("on ramp (>64 MB/s sustained)"). Comparing raw per-tick deltas would let a tick stretched by
-# the storm manufacture a trip on an unchanged machine.
-classify_breach() { # <seg_est> <seg_limit> <seg_rate_per_s> <dcbu_bytes_per_s> <dswap_bytes_per_s>
-  awk -v seg="$1" -v lim="$2" -v rate="$3" -v dcbu="$4" -v dswap="$5" \
-      -v pct="$TRIP_SEG_PCT" -v rmin="$TRIP_SEG_RATE" -v cmb="$TRIP_CBU_MB" -v smb="$TRIP_SWAP_MB" \
-      -v cliff="$CLIFF_PCT" -v iv="$INTERVAL" '
-    BEGIN {
-      if (iv <= 0) exit 1
+    # EXACT, not an estimate: swap is allocated in one-segment (64 KiB) compressed chunks.
+    function segs_swap(b, buf) { if (buf <= 0) return ""; return sprintf("%d", b / buf) }
+    # ── the trip predicate ── the breach reason, or "" when THIS SAMPLE is clear.
+    function breach(seg, lim, rate, dcbu, dswap,   n, why) {
+      if (iv <= 0) return ""
       n = 0; why = ""
       # Level AND rate. Level alone is a standing state (this box idles well under 15%); rate alone
       # fires on every benign build. §6 discriminator 1+2: it is the conjunction that has no observed
@@ -455,8 +459,101 @@ classify_breach() { # <seg_est> <seg_limit> <seg_rate_per_s> <dcbu_bytes_per_s> 
       # chronic-pressure baseline never idled above ~8%), so level alone discriminates here in a
       # way it cannot at 15%. This is §7.7 s OR form, scoped to where OR is true.
       if (lim > 0 && cliff > 0 && seg >= lim * cliff / 100) { why = why (n ? "+" : "") "cliff"; n++ }
-      if (n == 0) exit 1
-      print why
+      return why
+    }
+  '
+}
+
+# shellcheck disable=SC2329  # the suite's entry point; the tick runs the same text through tick_derive
+parse_swap_used_bytes() { # stdin: a vm.swapusage line
+  sentinel_awk
+  awk "$SENTINEL_AWK"'
+    { swap_scan($0) }
+    END { r = swap_bytes(swap_v); if (r == "") exit 1; printf "%s", r }'
+}
+
+# shellcheck disable=SC2329  # the suite's entry point; the tick runs the same text through tick_derive
+read_swap_used_bytes() {
+  read_sysctls vm.swapusage
+  [ -n "${SCV[0]}" ] || return 1
+  printf '%s\n' "${SCV[0]}" | parse_swap_used_bytes
+}
+
+# shellcheck disable=SC2329  # the suite's entry point; the tick runs the same text through tick_derive
+read_vm_stat() {
+  local raw
+  raw="$(vm_stat 2>/dev/null)" || return 1
+  sentinel_awk
+  VMS_RAW="$raw" awk "$SENTINEL_AWK"'
+    BEGIN { r = vms_parse(ENVIRON["VMS_RAW"]); if (r == "") exit 1; printf "%s", r }'
+}
+
+# shellcheck disable=SC2329  # the suite's entry point; the tick runs the same text through tick_derive
+segs_in_core() { # <pages_occupied> <pagesize> <segment_buffer_size>
+  sentinel_awk
+  awk -v p="$1" -v pg="$2" -v buf="$3" "$SENTINEL_AWK"'
+    BEGIN { r = segs_core(p, pg, buf); if (r == "") exit 1; printf "%s", r }'
+}
+
+# shellcheck disable=SC2329  # the suite's entry point; the tick runs the same text through tick_derive
+segs_swapped() { # <swap_used_bytes> <segment_buffer_size>
+  sentinel_awk
+  awk -v b="$1" -v buf="$2" "$SENTINEL_AWK"'
+    BEGIN { r = segs_swap(b, buf); if (r == "") exit 1; printf "%s", r }'
+}
+
+# Prints the breach reason and returns 0 when THIS SAMPLE breaches; rc 1 when clear. Pure: every
+# threshold arrives as a variable, so the suite can drive it without a machine.
+#
+# All three arms are RATES normalised to the configured interval. The brief's "640 MB/tick" and
+# "1 GB/tick" are 64 MB/s and 102.4 MB/s at the 10 s default — which is exactly how §7.1 states the
+# ramp ("on ramp (>64 MB/s sustained)"). Comparing raw per-tick deltas would let a tick stretched by
+# the storm manufacture a trip on an unchanged machine.
+# shellcheck disable=SC2329  # the suite's entry point; the tick runs the same text through tick_derive
+classify_breach() { # <seg_est> <seg_limit> <seg_rate_per_s> <dcbu_bytes_per_s> <dswap_bytes_per_s>
+  sentinel_awk
+  awk -v seg="$1" -v lim="$2" -v rate="$3" -v dcbu="$4" -v dswap="$5" \
+      -v pct="$TRIP_SEG_PCT" -v rmin="$TRIP_SEG_RATE" -v cmb="$TRIP_CBU_MB" -v smb="$TRIP_SWAP_MB" \
+      -v cliff="$CLIFF_PCT" -v iv="$INTERVAL" "$SENTINEL_AWK"'
+    BEGIN { why = breach(seg, lim, rate, dcbu, dswap); if (why == "") exit 1; print why }'
+}
+
+# THE TICK'S ONE AWK. Every derived value of a tick from its raw reads, computed once, through the
+# same functions the wrappers above run. Prints one line of fields, "-" for an empty one:
+#   0-3 vm_stat (pagesize occupied compressions decompressions) · 4 swap used bytes — "-" there is
+#   the vm_stat / vm.swapusage SKIP, and nothing further prints, as it does not when the numeric
+#   sysctls are unreadable (ok=0) · 5-6 segs in core / swapped — "-" there is the segment-arithmetic
+#   SKIP · 7 seg pct · 8 cliff · 9-11 srate crate wrate (only with e > 0) · 12 why · 13 clear-and-calm.
+# Every comparison reads the ROUNDED value, as the per-step awks it replaces did: pct is compared as
+# its %.2f text and srate as its %.1f text (59.995 compares as whatever %.2f made of it, never as
+# the raw quotient). The rates reach breach() through split() so they arrive as numeric strings,
+# exactly as the -v values of the per-step classify_breach call did.
+tick_derive() { # env VMS_RAW SWAP_RAW · <ok> <lim> <buf> <cbu> <elapsed> <prev_seg> <prev_cbu> <prev_swap>
+  sentinel_awk
+  awk -v ok="$1" -v lim="$2" -v buf="$3" -v cbu="$4" -v e="$5" -v ps="$6" -v pc="$7" -v pw="$8" \
+      -v pct="$TRIP_SEG_PCT" -v rmin="$TRIP_SEG_RATE" -v cmb="$TRIP_CBU_MB" -v smb="$TRIP_SWAP_MB" \
+      -v cliff="$CLIFF_PCT" -v iv="$INTERVAL" -v rel="$REL_PARENT_PCT" "$SENTINEL_AWK"'
+    BEGIN {
+      vms = vms_parse(ENVIRON["VMS_RAW"]); swap_scan(ENVIRON["SWAP_RAW"]); sw = swap_bytes(swap_v)
+      out = (vms == "" ? "- - - -" : vms) " " (sw == "" ? "-" : sw)
+      if (vms == "" || sw == "" || ok != 1) { print out; exit }
+      split(vms, V, " ")
+      si = segs_core(V[2], V[1], buf); ss = segs_swap(sw, buf)
+      if (si == "" || ss == "") { print out " - -"; exit }
+      seg = si + ss
+      p = (lim > 0) ? sprintf("%.2f", 100 * seg / lim) : ""
+      cl = (p != "" && p + 0 >= cliff + 0) ? 1 : 0
+      if (e > 0) {
+        sr = sprintf("%.1f", (seg - ps) / e); cr = sprintf("%.0f", (cbu - pc) / e); wr = sprintf("%.0f", (sw - pw) / e)
+        split(sr " " cr " " wr, R, " ")
+      } else {
+        # No baseline ⇒ no rates — but the CLIFF arm is a LEVEL test and must not wait a tick for one.
+        # Zero rates keep every rate arm silent by construction.
+        sr = cr = wr = "-"; split("0 0 0", R, " ")
+      }
+      why = breach(seg, lim, R[1], R[2], R[3])
+      clr = (why == "" && p != "" && p + 0 < rel + 0) ? 1 : 0
+      print out, si, ss, (p == "" ? "-" : p), cl, sr, cr, wr, (why == "" ? "-" : why), clr
     }'
 }
 
@@ -1874,12 +1971,28 @@ while :; do
 
   # Required — the trip cannot be evaluated without any of these, so an unreadable one skips the
   # whole tick. No row. A row with a fabricated 0 in it is worse than no row, because it reads green.
+  # One vm_stat, ONE sysctl for every name below (required and diagnostic alike), ONE awk for every
+  # derived value — the same readers, parses and predicate as the wrappers above, just not one
+  # process apiece. The SKIP order and each field's failure mode are unchanged.
+  VMS_RAW="$(vm_stat 2>/dev/null)" || VMS_RAW=""
+  read_sysctls vm.swapusage vm.compressor_segment_limit vm.compressor_segment_buffer_size \
+    vm.compressor_bytes_used vm.compressor_input_bytes vm.compressor_compressed_bytes \
+    vm.wk_compression_failures vm.lz4_compression_failures
+  SEG_LIMIT="${SCV[1]}"; SEG_BUF="${SCV[2]}"; CBU="${SCV[3]}"
+  NUMS_OK=1
+  { is_num "$SEG_LIMIT" && is_num "$SEG_BUF" && is_num "$CBU"; } || NUMS_OK=0
+  E=0
+  if [ -n "$PREV_T" ] && [ "$NOW" -gt "$PREV_T" ]; then E=$((NOW - PREV_T)); fi
+  # shellcheck disable=SC2207  # the awk prints numbers, "-" and why-tokens joined by "+": no glob characters
+  TF=($(VMS_RAW="$VMS_RAW" SWAP_RAW="${SCV[0]}" \
+        tick_derive "$NUMS_OK" "$SEG_LIMIT" "$SEG_BUF" "$CBU" "$E" "$PREV_SEG" "$PREV_CBU" "$PREV_SWAP"))
+
   SKIP=""
-  VMS="$(read_vm_stat)"           || SKIP="vm_stat"
-  SWAP_B="$(read_swap_used_bytes)" || SKIP="${SKIP:-vm.swapusage}"
-  SEG_LIMIT="$(read_num_sysctl vm.compressor_segment_limit)" || SKIP="${SKIP:-vm.compressor_segment_limit}"
-  SEG_BUF="$(read_num_sysctl vm.compressor_segment_buffer_size)" || SKIP="${SKIP:-vm.compressor_segment_buffer_size}"
-  CBU="$(read_num_sysctl vm.compressor_bytes_used)" || SKIP="${SKIP:-vm.compressor_bytes_used}"
+  [ "${TF[0]:--}" = "-" ] && SKIP="vm_stat"
+  [ "${TF[4]:--}" = "-" ] && SKIP="${SKIP:-vm.swapusage}"
+  is_num "$SEG_LIMIT" || SKIP="${SKIP:-vm.compressor_segment_limit}"
+  is_num "$SEG_BUF"   || SKIP="${SKIP:-vm.compressor_segment_buffer_size}"
+  is_num "$CBU"       || SKIP="${SKIP:-vm.compressor_bytes_used}"
 
   if [ -n "$SKIP" ]; then
     printf '%s compressor-sentinel: SKIP tick %s — unreadable %s (no row emitted; not a 0)\n' \
@@ -1893,13 +2006,10 @@ while :; do
     continue
   fi
 
-  PAGESZ="${VMS%% *}"; VMS_R="${VMS#* }"
-  OCCUP="${VMS_R%% *}"; VMS_R="${VMS_R#* }"
-  COMPRESSIONS="${VMS_R%% *}"; DECOMPRESSIONS="${VMS_R##* }"
+  COMPRESSIONS="${TF[2]}"; DECOMPRESSIONS="${TF[3]}"; SWAP_B="${TF[4]}"
 
-  SEG_I="$(segs_in_core "$OCCUP" "$PAGESZ" "$SEG_BUF")" || SEG_I=""
-  SEG_S="$(segs_swapped "$SWAP_B" "$SEG_BUF")" || SEG_S=""
-  if [ -z "$SEG_I" ] || [ -z "$SEG_S" ]; then
+  SEG_I="${TF[5]:--}"; SEG_S="${TF[6]:--}"
+  if [ "$SEG_I" = "-" ] || [ "$SEG_S" = "-" ]; then
     printf '%s compressor-sentinel: SKIP tick %s — segment arithmetic unresolvable\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$TICK" >&2
     PREV_T=""; PREV_SEG=""; STREAK=0
@@ -1907,43 +2017,36 @@ while :; do
     sleep "$INTERVAL"; continue
   fi
   SEG_EST=$((SEG_I + SEG_S))
-  SEG_PCT="$(awk -v a="$SEG_EST" -v b="$SEG_LIMIT" 'BEGIN{ if (b <= 0) exit 1; printf "%.2f", 100*a/b }')" || SEG_PCT=""
+  SEG_PCT="${TF[7]}"; [ "$SEG_PCT" = "-" ] && SEG_PCT=""
 
   # THE CLIFF REGIME (panic #5). Above CLIFF_PCT every cost the instrument pays for its own
   # evidence comes out of the actuation window: census + full snapshot stretched ticks 10 s →
   # 121-146 s and TRIP 4's actuation never reached disk. In cliff: no census, minimal snapshot, no
   # follow-up spawn, no cooldown gate, one breach tick trips, and nothing is ever released.
-  CLIFF=0
-  if [ -n "$SEG_PCT" ]; then
-    awk -v p="$SEG_PCT" -v c="$CLIFF_PCT" 'BEGIN{ exit (p + 0 >= c + 0) ? 0 : 1 }' && CLIFF=1
-  fi
+  CLIFF="${TF[8]}"
 
   # Diagnostic-only sysctls. These do NOT gate the tick: they discriminate WHICH mechanism is running
   # (§4a — incompressible raw-store vs sparse-segment fragmentation), which decides the remedy but
   # not the trip. A build without them must still be guarded, so they render as JSON null — an
   # honest absence, not the fabricated 0 the required set refuses.
-  INB="$(read_num_sysctl vm.compressor_input_bytes)"      || INB=""
-  CPB="$(read_num_sysctl vm.compressor_compressed_bytes)" || CPB=""
-  WKF="$(read_num_sysctl vm.wk_compression_failures)"     || WKF=""
-  L4F="$(read_num_sysctl vm.lz4_compression_failures)"    || L4F=""
+  INB="${SCV[4]}"; is_num "$INB" || INB=""
+  CPB="${SCV[5]}"; is_num "$CPB" || CPB=""
+  WKF="${SCV[6]}"; is_num "$WKF" || WKF=""
+  L4F="${SCV[7]}"; is_num "$L4F" || L4F=""
   FAILS=""
   [ -n "$WKF" ] && [ -n "$L4F" ] && FAILS=$((WKF + L4F))
 
   # ── deltas, normalised by MEASURED elapsed seconds ──────────────────────────────────────────────
   D_SEG="null"; D_CBU="null"; D_SWAP="null"; D_CMP="null"; D_DCMP="null"
   SEG_RATE="null"; CBU_RATE="null"; SWAP_RATE="null"; ELAPSED="null"
-  HAVE_RATES=0
-  if [ -n "$PREV_T" ] && [ "$NOW" -gt "$PREV_T" ]; then
-    ELAPSED=$((NOW - PREV_T))
+  if [ "$E" -gt 0 ]; then
+    ELAPSED="$E"
     D_SEG=$((SEG_EST - PREV_SEG))
     D_CBU=$((CBU - PREV_CBU))
     D_SWAP=$((SWAP_B - PREV_SWAP))
     D_CMP=$((COMPRESSIONS - PREV_CMP))
     D_DCMP=$((DECOMPRESSIONS - PREV_DCMP))
-    SEG_RATE="$(awk -v d="$D_SEG" -v e="$ELAPSED" 'BEGIN{printf "%.1f", d/e}')"
-    CBU_RATE="$(awk -v d="$D_CBU" -v e="$ELAPSED" 'BEGIN{printf "%.0f", d/e}')"
-    SWAP_RATE="$(awk -v d="$D_SWAP" -v e="$ELAPSED" 'BEGIN{printf "%.0f", d/e}')"
-    HAVE_RATES=1
+    SEG_RATE="${TF[9]}"; CBU_RATE="${TF[10]}"; SWAP_RATE="${TF[11]}"
   fi
 
   # ── census every CENSUS_EVERY ticks — never in the cliff regime ─────────────────────────────────
@@ -1963,21 +2066,16 @@ while :; do
   # ── breach → streak, BEFORE the row so `strk` is THIS tick's verdict ────────────────────────────
   # (The pre-#5 shape wrote the row first, so every logged strk was the PREVIOUS sample's — the
   # off-by-one cost the postmortem an instrument-verification detour, synthesis open question 8.)
-  WHY=""
-  if [ "$HAVE_RATES" = 1 ]; then
-    WHY="$(classify_breach "$SEG_EST" "$SEG_LIMIT" "$SEG_RATE" "$CBU_RATE" "$SWAP_RATE")" || WHY=""
-  else
-    # No baseline ⇒ no rates — but the CLIFF arm is a LEVEL test and must not wait a tick for one:
-    # the first readable tick after a gap at 85% full is exactly the tick that cannot be spent
-    # rebuilding a baseline. Zero rates keep every rate arm silent by construction.
-    WHY="$(classify_breach "$SEG_EST" "$SEG_LIMIT" 0 0 0)" || WHY=""
-  fi
+  # (classify_breach's predicate, evaluated in the tick's one awk.) No baseline ⇒ no rates — but the
+  # CLIFF arm is a LEVEL test and must not wait a tick for one: the first readable tick after a gap at
+  # 85% full is exactly the tick that cannot be spent rebuilding a baseline, so tick_derive runs it
+  # with zero rates, which keep every rate arm silent by construction.
+  WHY="${TF[12]}"; [ "$WHY" = "-" ] && WHY=""
   if [ -n "$WHY" ]; then STREAK=$((STREAK + 1)); else STREAK=0; fi
   # The spawner-release certificate: consecutive ticks that are clear AND calm (level below
   # REL_PARENT_PCT). Distinct from mere !WHY — a rate-lull tick at 71.81% was "clear" by the old
   # test and is precisely what may never again certify a spawner release.
-  if [ -z "$WHY" ] && [ -n "$SEG_PCT" ] \
-     && awk -v p="$SEG_PCT" -v t="$REL_PARENT_PCT" 'BEGIN{ exit (p + 0 < t + 0) ? 0 : 1 }'; then
+  if [ "${TF[13]}" = 1 ]; then
     CLEAR_STREAK=$((CLEAR_STREAK + 1))
   else
     CLEAR_STREAK=0
@@ -1997,11 +2095,11 @@ while :; do
   fi
 
   # ── the row ─────────────────────────────────────────────────────────────────────────────────────
-  ROW="$(printf '{"ts":"%s","t":%s,"el":%s,"seg":%s,"segi":%s,"segs":%s,"lim":%s,"pct":%s,"dseg":%s,"srate":%s,"cbu":%s,"dcbu":%s,"crate":%s,"swap":%s,"dswap":%s,"wrate":%s,"dcmp":%s,"ddec":%s,"inb":%s,"cpb":%s,"fail":%s,"n":%s,"orph":%s,"nrss":%s,"strk":%s}' \
+  printf -v ROW '{"ts":"%s","t":%s,"el":%s,"seg":%s,"segi":%s,"segs":%s,"lim":%s,"pct":%s,"dseg":%s,"srate":%s,"cbu":%s,"dcbu":%s,"crate":%s,"swap":%s,"dswap":%s,"wrate":%s,"dcmp":%s,"ddec":%s,"inb":%s,"cpb":%s,"fail":%s,"n":%s,"orph":%s,"nrss":%s,"strk":%s}' \
     "$TS" "$TICK" "$ELAPSED" "$SEG_EST" "$SEG_I" "$SEG_S" "$SEG_LIMIT" "${SEG_PCT:-null}" \
     "$D_SEG" "$SEG_RATE" "$CBU" "$D_CBU" "$CBU_RATE" "$SWAP_B" "$D_SWAP" "$SWAP_RATE" \
     "$D_CMP" "$D_DCMP" "${INB:-null}" "${CPB:-null}" "${FAILS:-null}" \
-    "$CENSUS_N" "$CENSUS_ORPH" "$CENSUS_RSS" "$STREAK")"
+    "$CENSUS_N" "$CENSUS_ORPH" "$CENSUS_RSS" "$STREAK"
   printf '%s\n' "$ROW" >> "$LOG" 2>/dev/null || true
   ROWS=$((ROWS + 1))
 

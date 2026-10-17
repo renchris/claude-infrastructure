@@ -84,7 +84,7 @@ run_fn() { # <fn> <args...>
 
 # ── the stub machine ──────────────────────────────────────────────────────────────────────────────
 # Every reading comes from a per-tick SEQUENCE file, so each scenario is written out literally rather
-# than derived from a formula nobody can check. The tick counter advances on the LAST sysctl the
+# than derived from a formula nobody can check. The tick counter advances on the LAST sysctl name the
 # subject reads in a tick (vm.lz4_compression_failures) — never on vm_stat, because the trip snapshot
 # calls vm_stat again and a counter keyed on it would silently desynchronise the ramp it is measuring.
 mkstubs() { # <occ-seq> <swap-MB-seq> <cbu-bytes-seq>   (each: newline-separated, last value repeats)
@@ -111,22 +111,35 @@ echo "Compressions:                            $((n * 1000))."
 echo "Decompressions:                          $((n * 600))."
 SH
 
+  # Both shapes the subject uses: `sysctl -n <name>` (bare value) and the tick's ONE `sysctl <name>…`
+  # (a `name: value` line per known name; an unknown or failed one prints nothing and makes rc 1
+  # while the rest still print — the real tool's behaviour).
   cat > "$STUB/sysctl" <<'SH'
 #!/bin/bash
-name="$2"
-[ "$name" = "$FAIL_SYSCTL" ] && exit 1
-case "$name" in
-  vm.swapusage) printf 'total = 0.00M  used = %sM  free = 0.00M  (encrypted)\n' "$(pick "$SEQ_SWAP")" ;;
-  vm.compressor_segment_limit)       echo "$STUB_SEG_LIMIT" ;;
-  vm.compressor_segment_buffer_size) echo 65536 ;;
-  vm.compressor_bytes_used)          pick "$SEQ_CBU" ;;
-  vm.compressor_input_bytes)         echo 4000 ;;
-  vm.compressor_compressed_bytes)    echo 1000 ;;
-  vm.wk_compression_failures)        echo 7 ;;
-  # LAST read of a full tick — advance here so every reading within one tick is self-consistent.
-  vm.lz4_compression_failures)       echo 3; echo $(( $(cat "$TICKF") + 1 )) > "$TICKF" ;;
-  *) exit 1 ;;
-esac
+val() {
+  [ "$1" = "$FAIL_SYSCTL" ] && return 1
+  case "$1" in
+    vm.swapusage) printf 'total = 0.00M  used = %sM  free = 0.00M  (encrypted)\n' "$(pick "$SEQ_SWAP")" ;;
+    vm.compressor_segment_limit)       echo "$STUB_SEG_LIMIT" ;;
+    vm.compressor_segment_buffer_size) echo 65536 ;;
+    vm.compressor_bytes_used)          pick "$SEQ_CBU" ;;
+    vm.compressor_input_bytes)         echo 4000 ;;
+    vm.compressor_compressed_bytes)    echo 1000 ;;
+    vm.wk_compression_failures)        echo 7 ;;
+    vm.lz4_compression_failures)       echo 3 ;;
+    *) return 1 ;;
+  esac
+}
+bare=0; [ "$1" = "-n" ] && { bare=1; shift; }
+rc=0; adv=0
+for name in "$@"; do
+  v="$(val "$name")" || { rc=1; continue; }
+  if [ "$bare" = 1 ]; then printf '%s\n' "$v"; else printf '%s: %s\n' "$name" "$v"; fi
+  # The LAST name of a full tick — advance after it so every reading within one tick is self-consistent.
+  [ "$name" = vm.lz4_compression_failures ] && adv=1
+done
+[ "$adv" = 1 ] && echo $(( $(cat "$TICKF") + 1 )) > "$TICKF"
+exit "$rc"
 SH
 
   # ORDERING LAW — MOST SPECIFIC FIRST, and it is load-bearing rather than tidy. Each caller's
@@ -241,7 +254,7 @@ rows() { [ -f "$LOG" ] && wc -l < "$LOG" | tr -d ' ' || echo 0; }
 }
 
 @test "read_num_sysctl refuses empty and non-numeric — never a fabricated 0" {
-  printf '#!/bin/bash\ncase "$2" in ok) echo 4242 ;; junk) echo "not-a-number" ;; *) exit 1 ;; esac\n' > "$STUB/sysctl"
+  printf '#!/bin/bash\ncase "$1" in ok) echo "ok: 4242" ;; junk) echo "junk: not-a-number" ;; *) exit 1 ;; esac\n' > "$STUB/sysctl"
   chmod +x "$STUB/sysctl"
   run env PATH="$STUB:$PATH" bash -c '. "$1"; read_num_sysctl ok' _ "$D/lib.sh"
   [ "$output" = "4242" ] || false            # positive control
@@ -3196,4 +3209,285 @@ SH
   [ "$(grep -cF -- '-KILL 956506' "$KILLLOG")" -eq 0 ] || false
   [ "$(grep -cF -- '-CONT 956506' "$KILLLOG")" -eq 1 ] || false
   [ "$(grep -cF -- '-KILL 960001' "$KILLLOG")" -eq 1 ] || false
+}
+
+# ══ 6. ONE SYSCTL AND ONE AWK PER TICK — differential replay against W4_BASE ══════════════════════
+# The tick's reads were one process apiece (seven `sysctl -n`, a vm_stat, and up to eleven awks for
+# the arithmetic). They are now ONE named `sysctl a b c`, one vm_stat and ONE awk (tick_derive). The
+# bar is byte-identical rows, so the proof replays the REAL pre-change script from git beside the new
+# one over the same fixture and compares rows, stdout and stderr byte for byte (memory:
+# control-must-replay-the-real-artifact).
+#
+# THE FIXTURE MUST NOT KNOW THE CALL SHAPE. §1's stub advances its tick on the lz4 read, which the old
+# shape makes only on a readable tick and the new one makes every tick, so the arms would read
+# different values after the first SKIP. Here every stub keys on a counter that only `date +%s`
+# advances — the one read both shapes make once at the top of a tick — and date itself is fixtured,
+# so `el`, `ts` and every rate are the same in both arms by construction.
+W4_BASE=55d01fcd4fca631650df1dbae16e91cfa30821c5
+
+dseq() { local n="$1"; shift; printf '%s\n' "$@" > "$D/dseq.$n"; }   # <name> <one value per tick…>
+
+diff_setup() {
+  mkdir -p "$D/w4"
+  W4S="$D/w4/compressor-sentinel.sh"            # same basename: a message carrying $0 must not differ
+  git -C "$REPO" show "$W4_BASE:scripts/compressor-sentinel.sh" > "$W4S" 2>/dev/null || true
+  [ -s "$W4S" ] || skip "W4_BASE $W4_BASE unavailable (shallow clone?)"
+  ! grep -q 'tick_derive' "$W4S" || false       # the replayed artifact is provably the pre-change one
+  # Every external the daemon starts is logged by a wrapper that execs the real tool
+  # (tests/stop-hook-forks-helpers.bash), so an unstubbed call cannot slip past the census. Built
+  # once per run: it wraps every executable on the base PATH.
+  SHFSTUB="$BATS_RUN_TMPDIR/sentinel-shf"
+  if [ ! -d "$SHFSTUB" ]; then
+    # shellcheck source=tests/stop-hook-forks-helpers.bash
+    . "$REPO/tests/stop-hook-forks-helpers.bash"
+    SHF_BASE="$W4_BASE"
+    mkdir -p "$BATS_RUN_TMPDIR/sentinel-jq"; ln -sf "$(command -v jq)" "$BATS_RUN_TMPDIR/sentinel-jq/jq"
+    PATH="/usr/bin:/bin:/usr/sbin:/sbin:$BATS_RUN_TMPDIR/sentinel-jq" shf_build_stubs "$SHFSTUB.tmp"
+    mv "$SHFSTUB.tmp" "$SHFSTUB"
+  fi
+  dseq occ 800000; dseq swap 0.00M; dseq cbu 1000000; dseq lim 1000000; dseq buf 65536
+  dseq miss -;     dseq vm ok
+  DB="$D/dbin"; mkdir -p "$DB"
+  export CLK="$D/clk" CLK_STEP="${CLK_STEP:-10}" DSEQ="$D/dseq" STUB_PRE="$D/stub-pre.sh"
+  # Builtins only, so a stub's own work never reaches the exec log it writes.
+  cat > "$STUB_PRE" <<'SH'
+[ -n "${SHF_FORK_LOG:-}" ] && printf '%s\n' "${0##*/}" >> "$SHF_FORK_LOG"
+pick() { # <seq> → this tick's value (the last one repeats)
+  local n i=0 v last=""
+  n="$(< "$CLK")"
+  while IFS= read -r v; do i=$((i + 1)); last="$v"; [ "$i" -ge "$n" ] && break; done < "$DSEQ.$1"
+  printf '%s' "$last"
+}
+SH
+  cat > "$DB/date" <<'SH'
+#!/bin/bash
+. "$STUB_PRE"
+n="$(< "$CLK")"
+if [ "$*" = "+%s" ]; then n=$((n + 1)); echo "$n" > "$CLK"; echo $((1700000000 + n * CLK_STEP)); exit 0; fi
+case "$*" in
+  *"+%Y-%m-%dT%H:%M:%SZ") printf '2026-10-17T00:%02d:%02dZ\n' $((n / 60 % 60)) $((n % 60)) ;;
+  *) echo 1700000000 ;;
+esac
+SH
+  cat > "$DB/vm_stat" <<'SH'
+#!/bin/bash
+. "$STUB_PRE"
+mode="$(pick vm)"; n="$(< "$CLK")"
+[ "$mode" = fail ] && exit 1
+echo "Mach Virtual Memory Statistics: (page size of 16384 bytes)"
+echo "Pages free:                              884267."
+[ "$mode" = nocomp ] || echo "Pages occupied by compressor:            $(pick occ)."
+echo "Compressions:                            $((n * 1000))."
+echo "Decompressions:                          $((n * 600))."
+SH
+  # Both shapes: `sysctl -n <name>` (the old tick, and startup's kern.* reads) and `sysctl <name>…`.
+  # A name in this tick's `miss` list, or an unknown one, prints nothing and makes rc 1 while the
+  # rest still print — the real tool's behaviour.
+  cat > "$DB/sysctl" <<'SH'
+#!/bin/bash
+. "$STUB_PRE"
+val() {
+  case " $(pick miss) " in *" $1 "*) return 1 ;; esac
+  case "$1" in
+    vm.swapusage) echo "total = 0.00M  used = $(pick swap)  free = 0.00M  (encrypted)" ;;
+    vm.compressor_segment_limit)       pick lim ;;
+    vm.compressor_segment_buffer_size) pick buf ;;
+    vm.compressor_bytes_used)          pick cbu ;;
+    vm.compressor_input_bytes)         echo 4000 ;;
+    vm.compressor_compressed_bytes)    echo 1000 ;;
+    vm.wk_compression_failures)        echo 7 ;;
+    vm.lz4_compression_failures)       echo 3 ;;
+    *) return 1 ;;
+  esac
+}
+bare=0; [ "$1" = -n ] && { bare=1; shift; }
+rc=0
+for name in "$@"; do
+  v="$(val "$name")" || { rc=1; [ "$bare" = 1 ] || echo "sysctl: unknown oid '$name'" >&2; continue; }
+  if [ "$bare" = 1 ]; then echo "$v"; else echo "$name: $v"; fi
+done
+exit "$rc"
+SH
+  # One census row in every format, so a census tick renders n/orph/nrss and a CLIFF tick (which
+  # skips the census) is visible in the row.
+  cat > "$DB/ps" <<'SH'
+#!/bin/bash
+. "$STUB_PRE"
+case "$*" in *lstart=*) exit 0 ;; esac
+echo "4242 1 204800 /usr/local/bin/node"
+SH
+  printf '#!/bin/bash\n. "$STUB_PRE"\nexit 0\n' > "$DB/sleep"
+  chmod +x "$DB"/*
+}
+
+run_arm() { # <old|new> <ticks> [label] → $D/<label>.{jsonl,out,err,forks}
+  local s="$S" lab="${3:-$1}" rc=0
+  [ "$1" = old ] && s="$W4S"
+  echo 0 > "$CLK"
+  mkdir -p "$D/h-$lab/.claude/logs" "$D/h-$lab/.claude/autonomy/pages"
+  : > "$D/$lab.forks"; : > "$D/$lab.jsonl"
+  env HOME="$D/h-$lab" PATH="$DB:$SHFSTUB" SHF_FORK_LOG="$D/$lab.forks" \
+    CC_SENTINEL_LOG="$D/$lab.jsonl" CC_SENTINEL_INTERVAL="${IV:-10}" \
+    CC_SENTINEL_CENSUS_EVERY="${CENSUS_EVERY:-1}" CC_SENTINEL_FOLLOWUP_N=0 CC_SENTINEL_ACT=off \
+    /bin/bash "$s" --ticks "$2" > "$D/$lab.out" 2> "$D/$lab.err" < /dev/null || rc=$?
+  echo "rc=$rc" >> "$D/$lab.out"
+}
+
+diff_arms() { # <ticks> — both arms over one fixture; rows, stdout and stderr byte-identical
+  run_arm old "$1"; run_arm new "$1"
+  local f
+  for f in jsonl out err; do
+    touch "$D/old.$f" "$D/new.$f"
+    cmp -s "$D/old.$f" "$D/new.$f" || { diff "$D/old.$f" "$D/new.$f"; false; }
+  done
+}
+
+@test "differential: a ramp through the seg, cbu, swap and cliff arms — rows byte-identical to W4_BASE" {
+  diff_setup
+  dseq occ 400000 800000 880000 880000 2399984 2400000 2399960 3400000 2000000 600000 600000
+  dseq swap 0.00M 0.00M 512.00M 1.50G 1.50G 64.00K 0.00M 0.00M 2.00G 2.00G 2.00G
+  dseq cbu 1000000 1000000 900000000 900000000 900001000 910000000 910000000 910000000 0 0 0
+  export CC_SENTINEL_REL_PARENT_PCT=60
+  diff_arms 11
+  [ "$(wc -l < "$D/new.jsonl")" -eq 11 ] || false                    # positive control: rows exist
+  grep -q '"strk":[1-9]' "$D/new.jsonl" || false                     # …and some tick breached
+  grep -q 'TRIP' "$D/new.err" || false                               # …and tripped
+  grep -q '"pct":60.00' "$D/new.jsonl" || false                      # the rounding boundary was reached
+}
+
+@test "differential: missing OIDs, unreadable values and broken vm_stat skip exactly as W4_BASE did" {
+  diff_setup
+  dseq occ 800000 810000 820000 830000 840000 850000 860000 870000 880000 890000 900000 910000
+  dseq miss - vm.compressor_input_bytes vm.compressor_segment_limit "vm.swapusage vm.compressor_bytes_used" \
+            - vm.lz4_compression_failures - - - vm.compressor_segment_buffer_size - "vm.wk_compression_failures vm.compressor_compressed_bytes"
+  dseq vm ok ok ok ok fail ok nocomp ok ok ok ok ok
+  dseq swap 0.00M 0.00M 0.00M 0.00M 0.00M 0.00M 0.00M 2.00X 0.00M 0.00M 0.00M 0.00M
+  dseq cbu 1000000 1000000 1000000 1000000 1000000 1000000 1000000 1000000 junk 1000000 1000000 1000000
+  dseq buf 65536 65536 65536 65536 65536 65536 65536 65536 65536 65536 8192 0
+  diff_arms 12
+  grep -q 'unreadable vm_stat' "$D/new.err" || false                 # positive controls: each mode fired
+  grep -q 'unreadable vm.swapusage' "$D/new.err" || false
+  grep -q 'unreadable vm.compressor_segment_limit' "$D/new.err" || false
+  grep -q 'unreadable vm.compressor_bytes_used' "$D/new.err" || false
+  grep -q 'unreadable vm.compressor_segment_buffer_size' "$D/new.err" || false
+  grep -q 'segment arithmetic unresolvable' "$D/new.err" || false
+  grep -q '"inb":null' "$D/new.jsonl" || false
+  grep -q '"fail":null' "$D/new.jsonl" || false
+}
+
+@test "differential: srate == the floor, zero swap, absent swap — W4_BASE's rounding and SKIP" {
+  diff_setup
+  # 20% of the limit, so only the rate decides the seg arm. CLK_STEP 30: +18001 segments is
+  # 600.03 seg/s and rounds to 600.0 — NOT over the 600 floor — while +18002 is 600.07 → 600.1, over.
+  export CLK_STEP=30
+  dseq occ 800000 872004 944008 1016012 1088020 1160028
+  diff_arms 6
+  [ "$(wc -l < "$D/new.jsonl")" -eq 6 ] || false
+  grep -q '"srate":600.0,' "$D/new.jsonl" || false
+  grep -q '"srate":600.1,' "$D/new.jsonl" || false
+  dseq swap "0.00M"                                                  # zero swap: rows, swap 0
+  diff_arms 2
+  grep -q '"swap":0,' "$D/new.jsonl" || false
+  dseq miss vm.swapusage                                             # absent swap: SKIP, no row
+  diff_arms 2
+  [ ! -s "$D/new.jsonl" ] || false
+  grep -q 'unreadable vm.swapusage' "$D/new.err" || false
+}
+
+@test "tick_derive equals the W4_BASE per-step arithmetic at every rounding boundary" {
+  diff_setup
+  sed -n '/^[a-z_]*() {/,/^}/p' "$W4S" > "$D/w4lib.sh"
+  # The pre-change tick's own lines, replayed from git rather than re-typed.
+  local l_pct l_cliff l_sr l_cr l_wr l_clr
+  l_pct="$(grep -F 'SEG_PCT="$(awk -v a="$SEG_EST"' "$W4S")"
+  l_cliff="$(grep -F 'awk -v p="$SEG_PCT" -v c="$CLIFF_PCT"' "$W4S")"
+  l_sr="$(grep -F 'SEG_RATE="$(awk -v d="$D_SEG"' "$W4S")"
+  l_cr="$(grep -F 'CBU_RATE="$(awk -v d="$D_CBU"' "$W4S")"
+  l_wr="$(grep -F 'SWAP_RATE="$(awk -v d="$D_SWAP"' "$W4S")"
+  l_clr="$(grep -F 'awk -v p="$SEG_PCT" -v t="$REL_PARENT_PCT"' "$W4S")"
+  l_clr="${l_clr#*&& }"; l_clr="${l_clr%; then}"
+  for l in "$l_pct" "$l_cliff" "$l_sr" "$l_cr" "$l_wr" "$l_clr"; do [ -n "$l" ] || false; done
+  {
+    echo '. "$1"; shift'
+    echo 'occ=$1 tok=$2 CBU=$3 SEG_LIMIT=$4 E=$5 PREV_SEG=$6 PREV_CBU=$7 PREV_SWAP=$8'
+    echo 'SEG_I="$(segs_in_core "$occ" 16384 65536)"'
+    echo 'SWAP_B="$(printf "total = 0.00M  used = %s  free = 0.00M\n" "$tok" | parse_swap_used_bytes)"'
+    echo 'SEG_S="$(segs_swapped "$SWAP_B" 65536)"; SEG_EST=$((SEG_I + SEG_S))'
+    printf '%s\n' "$l_pct" 'CLIFF=0; if [ -n "$SEG_PCT" ]; then' "$l_cliff" 'fi'
+    printf '%s\n' 'SEG_RATE=-; CBU_RATE=-; SWAP_RATE=-; if [ "$E" -gt 0 ]; then ELAPSED=$E'
+    printf '%s\n' 'D_SEG=$((SEG_EST - PREV_SEG)); D_CBU=$((CBU - PREV_CBU)); D_SWAP=$((SWAP_B - PREV_SWAP))'
+    printf '%s\n' "$l_sr" "$l_cr" "$l_wr"
+    echo 'WHY="$(classify_breach "$SEG_EST" "$SEG_LIMIT" "$SEG_RATE" "$CBU_RATE" "$SWAP_RATE")" || WHY=""'
+    echo 'else WHY="$(classify_breach "$SEG_EST" "$SEG_LIMIT" 0 0 0)" || WHY=""; fi'
+    printf '%s\n' 'CLR=0; if [ -z "$WHY" ] && [ -n "$SEG_PCT" ] &&' "$l_clr" 'then CLR=1; fi'
+    echo 'echo "$SEG_I $SEG_S ${SEG_PCT:--} $CLIFF $SEG_RATE $CBU_RATE $SWAP_RATE ${WHY:--} $CLR"'
+  } > "$D/old-derive.sh"
+  {
+    echo '. "$1"; shift'
+    echo 'VMS_RAW="$(printf "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages occupied by compressor: %s.\nCompressions: 1.\nDecompressions: 1.\n" "$1")"'
+    echo 'TF=($(VMS_RAW="$VMS_RAW" SWAP_RAW="total = 0.00M  used = $2  free = 0.00M" tick_derive 1 "$4" 65536 "$3" "$5" "$6" "$7" "$8"))'
+    echo 'echo "${TF[*]:5}"'
+  } > "$D/new-derive.sh"
+  # occ swap cbu lim e prev_seg prev_cbu prev_swap — pct 59.995 / 59.9996 / 60.00 / 59.999 / 59.9995,
+  # srate 600.0 exactly, 600.03 → 600.0 and 600.07 → 600.1, crate on and half a byte over the cbu
+  # floor (banker's %.0f), a G-unit swap rate, a K-unit swap, lim 0, and an 85% cliff with no baseline.
+  local cases='479960 0.00M 1000 200000 0 0 0 0
+2399984 0.00M 1000 1000000 0 0 0 0
+2400000 0.00M 1000 1000000 0 0 0 0
+2399960 0.00M 1000 1000000 0 0 0 0
+2399980 0.00M 1000 1000000 0 0 0 0
+800000 0.00M 1000 1000000 10 194000 1000 0
+800000 0.00M 1000 1000000 30 181999 1000 0
+800000 0.00M 1000 1000000 30 181998 1000 0
+800000 0.00M 671089640 1000000 10 200000 1000 0
+800000 0.00M 671089645 1000000 10 200000 1000 0
+800000 0.00M 671089655 1000000 10 200000 1000 0
+800000 1.50G 1000 1000000 10 200000 1000 0
+800000 64.00K 1000 1000000 10 200000 1000 65536
+800000 0.00M 1000 0 10 200000 1000 0
+3400000 0.00M 1000 1000000 0 0 0 0
+2399984 0.00M 1000 1000000 10 599000 1000 0'
+  local rel row o n bad=0 seen=0
+  for rel in 60 15; do
+    while IFS= read -r row; do
+      # shellcheck disable=SC2086  # the row is the argument list
+      o="$(env TRIP_SEG_PCT=15 TRIP_SEG_RATE=600 TRIP_CBU_MB=640 TRIP_SWAP_MB=1024 CLIFF_PCT=60 INTERVAL=10 \
+             REL_PARENT_PCT=$rel bash "$D/old-derive.sh" "$D/w4lib.sh" $row)"
+      # shellcheck disable=SC2086
+      n="$(env TRIP_SEG_PCT=15 TRIP_SEG_RATE=600 TRIP_CBU_MB=640 TRIP_SWAP_MB=1024 CLIFF_PCT=60 INTERVAL=10 \
+             REL_PARENT_PCT=$rel bash "$D/new-derive.sh" "$D/lib.sh" $row)"
+      seen=$((seen + 1))
+      [ "$o" = "$n" ] || { echo "rel=$rel [$row] old=[$o] new=[$n]"; bad=1; }
+    done <<< "$cases"
+  done
+  [ "$seen" -eq 32 ] || false
+  [ "$bad" -eq 0 ] || false
+  # Positive controls: the boundaries were reached in both directions.
+  run env TRIP_SEG_PCT=15 TRIP_SEG_RATE=600 TRIP_CBU_MB=640 TRIP_SWAP_MB=1024 CLIFF_PCT=60 INTERVAL=10 \
+      REL_PARENT_PCT=60 bash "$D/new-derive.sh" "$D/lib.sh" 2399984 0.00M 1000 1000000 0 0 0 0
+  [ "$output" = "599996 0 60.00 1 - - - - 0" ] || { echo "$output"; false; }
+  run env TRIP_SEG_PCT=15 TRIP_SEG_RATE=600 TRIP_CBU_MB=640 TRIP_SWAP_MB=1024 CLIFF_PCT=60 INTERVAL=10 \
+      REL_PARENT_PCT=60 bash "$D/new-derive.sh" "$D/lib.sh" 800000 0.00M 1000 1000000 30 181998 1000 0
+  [ "$output" = "200000 0 20.00 0 600.1 0 0 seg 0" ] || { echo "$output"; false; }
+}
+
+@test "tick exec census: one sysctl, one vm_stat, one awk, two dates and the sleep per tick" {
+  diff_setup
+  CENSUS_EVERY=1000                       # census off, so a tick is only the tick
+  local arm k
+  for arm in old new; do run_arm "$arm" 3 "${arm}3"; run_arm "$arm" 5 "${arm}5"; done
+  per_tick() { # <arm> [name] → execs per tick, from the 5-tick minus the 3-tick run
+    local a b
+    if [ -n "${2:-}" ]; then a="$(grep -cx -- "$2" "$D/${1}5.forks" || true)"; b="$(grep -cx -- "$2" "$D/${1}3.forks" || true)"
+    else a="$(grep -c . "$D/${1}5.forks" || true)"; b="$(grep -c . "$D/${1}3.forks" || true)"; fi
+    echo $(( (a - b) / 2 ))
+  }
+  cmp -s "$D/old5.jsonl" "$D/new5.jsonl" || false                    # same rows while counting
+  [ "$(wc -l < "$D/new5.jsonl")" -eq 5 ] || false
+  for k in sysctl vm_stat awk sleep; do [ "$(per_tick new "$k")" -eq 1 ] || { echo "new $k=$(per_tick new "$k")"; false; }; done
+  [ "$(per_tick new date)" -eq 2 ] || false
+  [ "$(per_tick new)" -eq 6 ] || { echo "new total=$(per_tick new)"; false; }
+  [ "$(per_tick old sysctl)" -eq 8 ] || false                        # control: the old shape is what we left
+  [ "$(per_tick old)" -gt "$(per_tick new)" ] || false
+  echo "# per-tick execs: old=$(per_tick old) new=$(per_tick new) (awk $(per_tick old awk)→$(per_tick new awk), sysctl $(per_tick old sysctl)→$(per_tick new sysctl))" >&3
 }
