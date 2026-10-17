@@ -22,13 +22,16 @@ wins and says why.
   `WT_TRUNK`, plus the pin sources below. Tests set every one to a scratch dir.
 - `umask 077` inside any function that writes under `WT_TOMB_DIR`: dir 0700, files 0600.
 - Shared helpers already in the skeleton: `wt__now wt__ts wt__json_esc wt__sha1 wt__canon wt__id_new wt__repo_of
-  wt__common_dir_of wt__trunk_of wt__ledger_append wt__config_roots wt__slug`.
+  wt__common_dir_of wt__trunk_of wt__ledger_append wt__config_roots wt__slug`, plus (from WP-9a) `wt__err`,
+  `wt__row_reset` / `wt__row_emit` (set `WT_R_<key>` then emit: every row carries every key), `wt__transcript_dirs_of
+  <path>` (projects dirs for this cwd or a subdir, sibling-slug safe), `wt__sids_of <path>`, `wt__landed <repo> <trunk>
+  <commit>` (true|false|null), `wt__epoch_of_ts <iso>`. Write rows ONLY through `wt__row_emit`.
 
 ## Row schema (one JSONL object per line, appended to `$WT_LEDGER` = worktree-disposals.jsonl)
 
 Existing keys stay (`ts event path branch head preserved_at destroyed_ignored`); new keys:
 `id actor reason repo trunk landed (true|false|null) sids [] mode (mv|clone|none) preserved ("<id>/residue"|null)
-preserved_list [] caches_skipped [] lockfiles {name: sha256} tomb_ref reflog_refs [] logs_head ("<id>/logs-HEAD"|null)
+preserved_list [] caches_skipped [] identical_skipped [] lockfiles {name: sha256} tomb_ref reflog_refs [] logs_head ("<id>/logs-HEAD"|null)
 wip_ref checkpoint_ref parked_path branch_tip`. Absent values are JSON `null`, never omitted.
 `event` ∈ `worktree-disposed | guard-snapshot | admin-pruned | branch-deleted | worktree-parked | worktree-unparked |
 restored | ref-expired | residue-purged | superseded`.
