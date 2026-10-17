@@ -222,7 +222,7 @@ probes() { grep -c '^probe' "$SB_LOG" | tr -d ' '; }
   git rev-parse HEAD > "$(git rev-parse --git-common-dir)/gate-green"
   run env WRAP_BACKLOG_CACHE=off bash "$LEDGER" --machine
   want_f="$(field "$output" FILED_MINE)"; want_c="$(field "$output" CLOSED_MINE)"
-  [ "$want_f" = "1" ] && [ "$want_c" = "1" ]
+  [ "$want_f" = "1" ] && [ "$want_c" = "1" ] || false
   run bash "$LEDGER" --machine               # the miss: fills both entries
   [ "$(field "$output" FILED_MINE)" = "$want_f" ]
   : > "$FORK_LOG"
