@@ -793,7 +793,7 @@ EOF
   [ "$status" -eq 0 ]
   ! echo "$output" | grep -q 'verdict=disabled' || false
   td_called
-  [ ! -d "$D/.worktrees/wt-ks" ]
+  grep -q '"path":"'"$D"'/.worktrees/wt-ks"' "$WT_EVENTS"   # acted: queued (WP-11 enqueues, never removes)
 }
 
 @test "KILL SWITCH: the FILE half disables a run that exports nothing (the launchd path)" {
@@ -812,7 +812,7 @@ EOF
   rm -f "$HOME/.claude/autonomy/cc-reaper.disabled"
   run "$R" sweep --reap
   td_called
-  [ ! -d "$D/.worktrees/wt-ksf" ]
+  grep -q '"path":"'"$D"'/.worktrees/wt-ksf"' "$WT_EVENTS"   # acted: queued (WP-11 enqueues, never removes)
 }
 
 @test "KILL SWITCH: any value but unset/0 disables — a typo'd switch must never stay armed" {
@@ -829,7 +829,7 @@ EOF
   mkdir -p "$HOME/.claude/autonomy"; : > "$HOME/.claude/autonomy/cc-reaper.disabled"
   CC_REAPER_DISABLE_FILE='' run "$R" sweep --reap
   ! echo "$output" | grep -q 'verdict=disabled' || false
-  [ ! -d "$D/.worktrees/wt-ke" ]
+  grep -q '"path":"'"$D"'/.worktrees/wt-ke"' "$WT_EVENTS"   # acted: queued (WP-11 enqueues, never removes)
 }
 
 @test "KILL SWITCH does not launder a typo'd COMMAND — argv validation still wins" {
