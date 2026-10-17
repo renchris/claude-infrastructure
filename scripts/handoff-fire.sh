@@ -16671,7 +16671,8 @@ fire_cleanup() {
         _keep="no wt-tombstone library"
       else
         # rc 1 is the only "no pin"; an undefined wt_pinned (127) is a missing library, so it keeps too.
-        _pin="$(wt_pinned "$FIRE_CLEAN_WT" 2>/dev/null)" || _prc=$?
+        # --self-owned: this fire minted the tree seconds ago, so its fresh reflog is not a pin.
+        _pin="$(wt_pinned "$FIRE_CLEAN_WT" --self-owned 2>/dev/null)" || _prc=$?
         if [ "$_prc" = 0 ]; then _keep="pinned: ${_pin:-?}"
         elif [ "$_prc" != 1 ]; then _keep="pin check failed, rc $_prc"
         else _tid="$(wt_tombstone "$FIRE_CLEAN_WT" handoff-fire failed-fire)" && [ -n "$_tid" ] || _keep="tombstone failed"

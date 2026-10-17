@@ -1592,7 +1592,8 @@ reap_owned_worktree() { # <main-repo> → tombstone, then `remove --force`; any 
   # shellcheck source=/dev/null
   . "$lib" || { log "  ~ worktree kept (wt-tombstone library failed to load): $WORKTREE"; return 0; }
   # rc 1 is the only "no pin"; an undefined wt_pinned (127) is a missing library, so it keeps too.
-  pin="$(wt_pinned "$WORKTREE" 2>/dev/null)"; rc=$?
+  # --self-owned: this hook IS the member's owner, so the member's own fresh reflog is not a pin.
+  pin="$(wt_pinned "$WORKTREE" --self-owned 2>/dev/null)"; rc=$?
   case "$rc" in
     0) log "  ~ worktree kept (pinned: ${pin:-?}): $WORKTREE"; return 0 ;;
     1) ;;

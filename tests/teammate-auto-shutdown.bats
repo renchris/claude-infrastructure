@@ -631,6 +631,24 @@ tomb_run() { # <member> <sid> → the idle event for the fixture's member; a dir
   [ -z "$(git -C "$TREPO" for-each-ref refs/wt-tombstone/)" ]
 }
 
+# A member that committed minutes ago has a FRESH logs/HEAD — the real shape at auto-shutdown. The hook is
+# that member's owner, so the owner pin (logs/HEAD < 60 min) must not keep the tree (wt_pinned --self-owned).
+@test "tombstone: a FRESH logs/HEAD (member committed just now) is not a pin — tombstoned, then removed" {
+  tomb_env; local member=tomb-fresh gd row id
+  tomb_fixture "$member"
+  gd="$(git -C "$TWT" rev-parse --absolute-git-dir)"
+  touch "$gd/logs/HEAD"
+  [ $(( $(date +%s) - $(stat -f %m "$gd/logs/HEAD") )) -lt 60 ]           # fresh, not backdated
+  tomb_run "$member" sidFR
+  wait_log "worktree removed: $TWT"
+  gone "$TWT"
+  ! grep -q "worktree kept (pinned: owner" "$LOGF" || false
+  row="$(jq -c 'select(.actor=="teammate-auto-shutdown")' "$WT_LEDGER")"
+  id="$(jq -r .id <<<"$row")"
+  [ "$(git -C "$TREPO" rev-parse "refs/wt-tombstone/$id/head")" = "$CKPT" ]
+  cmp "$D/x.json.orig" "$WT_TOMB_DIR/$id/residue/brag-output/x.json"
+}
+
 # The tombstone runs in the DETACHED child, after the hook body has returned its verdict — never inside the
 # 5 s hook budget. Ordered, not timed: the stub tombstone waits for a marker the test writes only once the
 # hook's main process has exited, so a tombstone run in the body would never see it and record so.

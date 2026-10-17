@@ -342,6 +342,48 @@ tomb_env() {
   [ "$(cat "$WT_TOMB_DIR/$id/residue/out/report.txt")" = 'made by the dead session' ]
 }
 
+# `git worktree add` writes logs/HEAD at once, so the tree a fire minted seconds ago always reads as
+# owner-pinned (< 60 min). The fire IS that owner (wt_pinned --self-owned), so the tree is still removed.
+@test "tombstone: a just-minted cold tree (FRESH logs/HEAD, not backdated) is tombstoned and removed" {
+  tomb_env
+  eval "$(sed -n '/^fire_cleanup() {/,/^}/p' "$HF")"
+  HF_DIR="$REPO_SRC/scripts"
+  local wt="$WTROOT/wt-tomb-fresh" gd
+  git -C "$REPO" worktree add -q "$wt" -b wt-tomb-fresh origin/main
+  gd="$(git -C "$wt" rev-parse --absolute-git-dir)"
+  [ $(( $(date +%s) - $(stat -f %m "$gd/logs/HEAD") )) -lt 60 ]
+  FIRE_CLEAN_DONE=0; FIRE_CLEAN_POOL=""; FIRE_CLEAN_WT="$wt"; FIRE_CLEAN_BRANCH="wt-tomb-fresh"; SPAWNED_PANE=""
+  run_cleanup "$BATS_TEST_TMPDIR/fresh.out"
+  [ ! -d "$wt" ] || { cat "$BATS_TEST_TMPDIR/fresh.out"; false; }
+  [ "$(jq -r 'select(.actor=="handoff-fire") | .reason' "$WT_LEDGER")" = failed-fire ]
+  ! grep -q 'pinned: owner' "$BATS_TEST_TMPDIR/fresh.out" || false
+}
+
+# Any OTHER pin still binds: a session that crashed in the tree and never resumed keeps it, with the
+# hand-cleanup line, and no tombstone is written.
+@test "tombstone: a crash-pinned cold tree is KEPT with the hand-cleanup line, no row" {
+  tomb_env
+  eval "$(sed -n '/^fire_cleanup() {/,/^}/p' "$HF")"
+  HF_DIR="$REPO_SRC/scripts"
+  local wt="$WTROOT/wt-tomb-pin" sid=sidCRASH d slug now
+  git -C "$REPO" worktree add -q "$wt" -b wt-tomb-pin origin/main
+  now="$(date +%s)"
+  for d in "$wt" "$(cd "$wt" && pwd -P)"; do
+    slug="$(printf '%s' "$d" | sed 's#[/.]#-#g')"
+    mkdir -p "$HOMEDIR/.claude/projects/$slug"
+    printf '{"type":"user","cwd":"%s"}\n' "$d" > "$HOMEDIR/.claude/projects/$slug/$sid.jsonl"
+    touch -t "$(date -r $((now - 7200)) +%Y%m%d%H%M)" "$HOMEDIR/.claude/projects/$slug/$sid.jsonl"
+  done
+  printf '{"ts":"%s","class":"CRASH","sid":"%s"}\n' "$(date -u -r $((now - 3600)) +%Y-%m-%dT%H:%M:%SZ)" "$sid" \
+    > "$WT_CRASH_LOG"
+  FIRE_CLEAN_DONE=0; FIRE_CLEAN_POOL=""; FIRE_CLEAN_WT="$wt"; FIRE_CLEAN_BRANCH="wt-tomb-pin"; SPAWNED_PANE=""
+  run_cleanup "$BATS_TEST_TMPDIR/pin.out"
+  [ -d "$wt" ] || { cat "$BATS_TEST_TMPDIR/pin.out"; false; }
+  grep -qF "cold worktree $wt KEPT (pinned: crash sid=$sid" "$BATS_TEST_TMPDIR/pin.out"
+  grep -qF "clean up by hand: git -C $REPO worktree remove --force $wt" "$BATS_TEST_TMPDIR/pin.out"
+  [ ! -e "$WT_LEDGER" ]
+}
+
 @test "RED control: the pre-tombstone fire_cleanup removes the same cold worktree with NO row" {
   tomb_env
   local old="$BATS_TEST_TMPDIR/handoff-fire-pretomb.sh"
