@@ -863,7 +863,7 @@ EOF
   CC_REAPER_WT_REMOVE_MAX=1 run "$R" sweep --reap
   [ "$status" -eq 0 ]
   ! echo "$output" | grep -q 'BOUND HIT' || false
-  [ -d "$D/.worktrees/wt-b1" ] && [ -d "$D/.worktrees/wt-b2" ]
+  [ -d "$D/.worktrees/wt-b1" ] && [ -d "$D/.worktrees/wt-b2" ] || false
   [ "$(grep -c pane-teardown "$WT_EVENTS")" = 2 ]
   [ "$(grep -c . "$D/td-calls")" -ge 2 ]
 }
