@@ -595,6 +595,16 @@ open_round_2() { /usr/bin/python3 -c "import json; p='$CC_RESEARCH_RECORDS/round
   run "$R" close --program demo --round 2 --reclose --reason "KR-06 closed"
   [ "$status" -eq 0 ]
   [ "$(field 2 'm["new_material"], m["refinds"]')" = "2 []" ]
+  # a frame-delta cycle closing the row (gate.close_delta_rows: the frame carries it, a certificate
+  # names it) fixed the hole H-2-001 re-found, so H-2-001 is again no new material (RED-proof
+  # 2026-10-18: it read "2 []" and listed H-2-001 here)
+  echo '{"id":"KR-06","status":"closed","closed_by":"CERT-v1"}' >> "$CC_RESEARCH_RECORDS/known_rows.jsonl"
+  printf '{"profile":"lite","plan":"PLAN.md","known_rows_applied":["KR-06"]}\n' > "$CC_RESEARCH_RECORDS/frame.json"
+  mkdir -p "$CC_RESEARCH_RECORDS/cert" && echo '{"cert":"CERT-v1"}' > "$CC_RESEARCH_RECORDS/cert/CERT-v1.json"
+  run "$R" close --program demo --round 2 --reclose --reason "KR-06 closed by the frame delta"
+  [ "$status" -eq 0 ]
+  [ "$(field 2 'm["new_material"], m["refinds"]')" = "1 [{'hole': 'H-2-001', 'of': 'H-1-006'}]" ]
+  [ "$(counted)" = "['H-2-002 CONFIRMED']" ]
 }
 
 @test "reproduce: a split hole whose verdict was CONTACT gets ONE reproduction read on the real plan, and round close and the estimate count its CONFIRMED" {

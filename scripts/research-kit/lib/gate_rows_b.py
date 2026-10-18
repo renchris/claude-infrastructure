@@ -113,9 +113,10 @@ def row9(ctx: Ctx) -> Row:
         )
     vonly = {str(m["round"]) for m in cert_rounds(ctx) if m.get("verification_only")}
     named = {str(r.get("hole")) for r in known_rows(ctx)}
-    # a seed catch, an artifact or unverified split-off, and a re-find of a held hole are no find to
-    # name: the same selection as round close's new_material and estimate.counted_holes
-    held = kit.held_frame_omissions(ctx.slug)
+    # a seed catch, an artifact or unverified split-off, and a re-find of a hole held for or fixed by
+    # the frame-delta cycle (kit.refind_spared) are no find to name: the same selection as round
+    # close's new_material and estimate.counted_holes
+    held = kit.refind_spared(ctx.slug)
     for h in folded(ctx, "holes.jsonl").values():
         # a rehearsal find is adjudicated before it is named or dropped (round.sh rehearsal-verify,
         # rehearsal-rate): one raised and left there would pass the gate unread

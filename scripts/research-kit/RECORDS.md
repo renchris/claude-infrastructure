@@ -249,7 +249,8 @@ exit 2. `--evidence` files must sit inside the records dir (gate row 8 fails a r
 
 A clause-(g) frame-omission hole the operator sends to the post-certificate frame-delta cycle is HELD: an open
 `frame-omission` known row names it in `hole`. The row lives in `known_rows.jsonl`, not `frame.json`, so the frame
-signature stays valid. `kit.held_frame_omissions` is the one reader.
+signature stays valid. `kit.held_frame_omissions` is the one reader of what is held, and
+`kit.refind_spared` (held, plus delta-closed) the one reader of whose re-find is no new material.
 
 - **Hold** — `round.sh hold-g --program P --hole H --known-row KR-<n> --names-rows ROW… [--blocks-waves W…]
   --resign-due YYYY-MM-DDTHH:MM:SSZ [--default class-b|descope] --reason T --evidence F…` appends `{id: KR-<n>,
@@ -263,7 +264,16 @@ signature stays valid. `kit.held_frame_omissions` is the one reader.
   blind to round history). Refused unless H is held, NEW is from a later certification round, and NEW is neither
   seed-tagged nor settled. A re-find of any other hole, a fixed one included, gets no record and is new material.
 - While H's known row is open, round close and `estimate.counted_holes` leave NEW out of new material
-  (`kit.held_refind`), and close lists it in `m["refinds"]`. Once the row closes, a re-close counts NEW again.
+  (`kit.held_refind`), and close lists it in `m["refinds"]`. Once the sweep closes the row by its default
+  (`closed_by: "default"`), or it closes any other way that names no certificate, a re-close counts NEW again.
+- **Closed by the frame delta** (added 2026-10-18). When the frame-delta cycle closes H's row (`gate.sh run`'s
+  `close_delta_rows`: `{status: "closed", closed_by: "CERT-v<n>"}` once a re-signed or delegation-accepted frame
+  carries the row's delta), NEW stays out of new material: it was recorded while H was held, so it re-found the
+  omission the delta then fixed. `kit.delta_closed_frame_omissions` recognises such a row by positive evidence
+  only: the frame as it stands lists it in `known_rows_applied`, AND its `closed_by` is an issued certificate
+  (`cert/<closed_by>.json` exists). Status `closed` alone is not enough, since a sweep-descoped row is closed
+  too. Before this, closing truememory-2-0's KR-06..21 under CERT-v2 turned eight round-6 re-finds (H-6-013 and
+  seven more) back into unnamed cap-round finds, and gate row 9 could never pass again.
 - **Rating re-pass** (REPORT.md §6.5, "Rating re-pass when agreement is low — Once — 'Adjudication unstable'
   printed"). Close writes `m["kappa"]`: Cohen's kappa of rater 1 against rater 2 on MATERIAL-or-not over the
   round's holes both rated (`kit.materiality_kappa`; `materiality.raters` keyed `"1"` or `"r1"`, a code or
@@ -312,8 +322,8 @@ wave 1, and the plan is not edited." Closing the last round (R_max spent or the 
   would deadlock the fix, and blocking later waves would add a gate the method does not ask for. The certificate
   still lists it under "Known rows", and gate row 1 notes it as open.
 - **Gate row 9** fails a cap-round or rehearsal MATERIAL hole that no known row names, now less a seed catch, an
-  artifact or unverified split-off and a re-find of a held hole (`kit.not_new_material`): the same selection as
-  close's `new_material` and `estimate.counted_holes`.
+  artifact or unverified split-off and a re-find of a held or delta-closed hole (`kit.not_new_material` over
+  `kit.refind_spared`): the same selection as close's `new_material` and `estimate.counted_holes`.
 
 ### Rehearsal finds (added 2026-10-13; REPORT.md §3.8 "Rehearsal")
 

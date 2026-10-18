@@ -558,16 +558,51 @@ def held_frame_omissions(slug: str) -> Set[str]:
     }
 
 
+def delta_closed_frame_omissions(slug: str) -> Set[str]:
+    """Hole ids whose frame-omission known row a frame-delta cycle closed (REPORT.md §5.4 step 4):
+    the frame as it stands lists the row in `known_rows_applied`, and the row's `closed_by` names an
+    issued certificate (cert/<closed_by>.json), which only gate.close_delta_rows writes, after a
+    re-signed or delegation-accepted frame carried the row's delta. A row the sweep closed by its
+    default reads `closed_by: "default"`, and a row closed any other way names no certificate, so
+    neither is here, whatever `known_rows_applied` says."""
+    rec = records_dir(slug)
+    applied = {
+        str(k)
+        for k in (read_json(rec / "frame.json", {}) or {}).get("known_rows_applied")
+        or []
+    }
+    return {
+        str(r["hole"])
+        for r in known_rows(slug)
+        if r.get("kind") == "frame-omission"
+        and r.get("status") == "closed"
+        and r.get("hole")
+        and str(r.get("id")) in applied
+        and re.fullmatch(r"CERT-v\d+", str(r.get("closed_by") or ""))
+        and (rec / "cert" / f"{r['closed_by']}.json").is_file()
+    }
+
+
+def refind_spared(slug: str) -> Set[str]:
+    """Hole ids a re-find of which is no new material: held for the frame-delta cycle
+    (held_frame_omissions), or fixed by it (delta_closed_frame_omissions). `round.sh refind` records
+    a re-find only while its hole is held, so a re-find of a delta-closed row was found before the
+    fix that answered it. Round close, estimate.counted_holes and gate row 9 pass this to
+    not_new_material."""
+    return held_frame_omissions(slug) | delta_closed_frame_omissions(slug)
+
+
 def held_refind(h: Dict[str, Any], held: Set[str]) -> bool:
-    """A later round's re-find (`round.sh refind`) of a hole still held for the frame-delta cycle:
-    no round count takes it as new material. A re-find of anything else is new material."""
+    """A later round's re-find (`round.sh refind`) of a hole in `held`: no round count takes it as
+    new material. A re-find of anything else is new material."""
     return bool(h.get("refind_of")) and str(h["refind_of"]) in held
 
 
 def not_new_material(h: Dict[str, Any], held: Set[str]) -> bool:
     """A hole no count takes as new material whatever its rating: a seed catch (seed.py match tags it
     seed_match at round close), an artifact or an unverified split-off (settled_out), or a re-find of
-    a held hole (held_refind). Round close, estimate.counted_holes and gate row 9 all select with it."""
+    a held or delta-closed hole (held_refind over refind_spared). Round close, estimate.counted_holes
+    and gate row 9 all select with it."""
     return bool(h.get("seed_match")) or settled_out(h) or held_refind(h, held)
 
 

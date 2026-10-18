@@ -625,8 +625,9 @@ def tally(slug: str, rid: str, m: Dict[str, Any]) -> None:
     holes = kit.fold(kit.read_jsonl(kit.records_dir(slug) / "holes.jsonl")).values()
     # a built round is "b<n>": matching its seq would claim certification round n's holes
     mine = [h for h in holes if str(h.get("round")) in ids]
-    # §5.4: a re-find of a hole held for the post-certificate frame-delta cycle is not new material
-    held = kit.held_frame_omissions(slug)
+    # §5.4: a re-find of a hole held for the post-certificate frame-delta cycle, or fixed by it
+    # (kit.refind_spared), is not new material
+    held = kit.refind_spared(slug)
     real = [
         h
         for h in mine
@@ -805,7 +806,7 @@ def settle_owed(slug: str) -> Tuple[Optional[str], List[str]]:
     ):
         owed.append("rating re-pass (round.sh repass)")
     ids = (rid, str(m.get("seq")))
-    held = kit.held_frame_omissions(slug)
+    held = kit.refind_spared(slug)
     named = {str(r.get("hole")) for r in kit.known_rows(slug)}
     holes = kit.fold(kit.read_jsonl(kit.records_dir(slug) / "holes.jsonl")).values()
     for h in sorted(holes, key=lambda h: str(h["id"])):

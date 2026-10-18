@@ -776,6 +776,30 @@ print(r.status); print('\n'.join(r.evidence))"
   [[ "$t" != *"H-3-001"* && "$t" != *"H-3-002"* && "$t" != *"H-3-003"* ]] || false
 }
 
+# RED-proof (2026-10-18): kit.held_frame_omissions holds only OPEN rows, so once gate.sh run's
+# close_delta_rows closed truememory-2-0's KR-06..21 under CERT-v2, row 9 failed eight round-6 re-finds
+# of their holes (H-6-013 and seven more) and could never pass again; H-3-005 below failed the same way.
+@test "row 9: a cap-round re-find of a hole whose row a frame-delta closed needs no known row; one of a row closed any other way still fails" {
+  jedit rounds/3/matrix.json "d['verification_only']=True"
+  jedit frame.json "d['known_rows_applied']=['KR-5','KR-6','KR-8']"
+  mkdir -p "$REC/cert" && echo '{"cert":"CERT-v1"}' > "$REC/cert/CERT-v1.json"
+  kr() { printf '{"id":"%s","kind":"frame-omission","hole":"%s","status":"closed","closed_by":"%s"}\n' "$1" "$2" "$3" >> "$REC/known_rows.jsonl"; }
+  kr KR-5 H-5 CERT-v1   # the delta cycle closed it: its frame carries KR-5, CERT-v1 was issued
+  kr KR-6 H-6 default   # the sweep closed it by its default, though the frame lists it
+  kr KR-7 H-7 CERT-v1   # a certificate is named, but the frame never carried KR-7
+  kr KR-8 H-8 CERT-v9   # the frame carries KR-8, but no CERT-v9 was issued
+  hc() { printf '{"id":"%s","round":3,"verification":{"status":"CONFIRMED"},"materiality":{"level":"MATERIAL"},"refind_of":"%s"}\n' "$1" "$2" >> "$REC/holes.jsonl"; }
+  hc H-3-005 H-5
+  hc H-3-006 H-6
+  hc H-3-007 H-7
+  hc H-3-008 H-8
+  t="$(rowtext 9)"
+  [[ "$t" != *"H-3-005"* ]] || { echo "$t"; false; }
+  for h in H-3-006 H-3-007 H-3-008; do
+    [[ "$t" == *"$h: a cap-round or rehearsal find that is not a named known row"* ]] || { echo "$t"; false; }
+  done
+}
+
 # Rehearsal finds (round.sh rehearsal-*, lib/rehearsal.py). RED-proof: before it, row 9 read only a
 # rehearsal hole's level, so a find raised and never verified, or verified CONFIRMED and never rated,
 # passed the gate unadjudicated (H-RH-3 and H-RH-4 below).
