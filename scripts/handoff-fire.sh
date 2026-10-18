@@ -13189,6 +13189,39 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
     prp_verdict "REFUSED:pane:absent" 5
   fi
   pin_term_verdict_for_watcher
+  # 4-pre. THE TWO HOLDS THE RECYCLE WOULD MEET AFTER THE TRANSPLANT, ASKED BEFORE IT (lr-inplace-
+  #     immediacy 2026-10-18, K3). 43e6eb4b passed this probe, then spent 306 s on the transplant and
+  #     284 s on handoff-fire's start-up before ONE kitty probe held it, then 649 s standing down; later
+  #     moves transplanted and then held HELD:load at the /exit (load 28-40/core over the 8/core bound).
+  #     Both facts were readable here, in seconds. The late gates stay where they are; these only
+  #     move the first answer ahead of the irreversible step.
+  #   LOAD first, because it is free and a probe under that load is slow. Only when the caller says
+  #     the relaunch will be TYPED (lr-handoff's in-place path sets HF_PRECHECK_TYPED_RELAUNCH=1): that
+  #     is the condition the /exit-time gate holds on, and its own predicate decides here, handed the
+  #     one reading taken (its HF_LOAD_PER_CORE seam), so the line and the verdict cannot disagree.
+  if [ "${HF_PRECHECK_TYPED_RELAUNCH:-0}" = 1 ]; then
+    PRP_LB="$(hf_recycle_load_bound)"
+    if [ -z "$PRP_LB" ]; then
+      echo "load: not gated (the recycle's load hold is off)"
+    else
+      PRP_LPC="$(hf_load_per_core || true)"
+      if ! HF_LOAD_PER_CORE="$PRP_LPC" hf_recycle_load_gate ""; then
+        echo "load: ${PRP_LPC}/core is above the ${PRP_LB}/core bound, and this move types its relaunch — held before anything is transplanted"
+        prp_verdict "HELD:load" 3
+      fi
+      echo "load: ${PRP_LPC:-unreadable}/core (bound ${PRP_LB}/core)"
+    fi
+  fi
+  #   KITTY next: the recycle's own up-front probe, with its retry for a detached caller (the move
+  #     worker), so a deaf kitty costs ≤~145 s here instead of ~800 s of admit and start-up plus a
+  #     stand-down. A STUCK socket is HELD:wedged; filing its operator step stays the recycle's, since
+  #     this verb changes nothing.
+  PRP_KP_RC=0; hf_recycle_kitty_probe || PRP_KP_RC=$?
+  case "$PRP_KP_RC" in
+    0) [ -z "$HF_KPROBE_SOCK" ] || echo "kitty_probe: answers ($HF_KPROBE_SOCK, tries=${HF_KPROBE_TRIED:-1})" ;;
+    2) echo "kitty_probe: STUCK — $HF_KPROBE_WHY [$(hf_kprobe_detail)]"; prp_verdict "HELD:wedged" 3 ;;
+    *) echo "kitty_probe: not answering — $HF_KPROBE_WHY [$(hf_kprobe_detail)]"; prp_verdict "HELD:unreachable" 3 ;;
+  esac
   PRP_TTY="$(as_tty "$PRP_PANE")"
   PRP_STATE="$(pane_cc_state "$PRP_TTY")"
   if [ "$PRP_STATE" != cc ]; then

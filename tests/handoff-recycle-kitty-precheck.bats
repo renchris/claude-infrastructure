@@ -293,6 +293,53 @@ teardown() {
   [[ "$(jq -r .detail <<<"$r")" == *"after 5 attempt(s)"*"tries=5]"* ]] || { echo "$r"; false; }
 }
 
+# ── K3 (lr-inplace-immediacy 2026-10-18): the PRECHECK holds, before anything is transplanted ────────
+# 43e6eb4b passed the precheck, transplanted (306 s), started handoff-fire (284 s), held on the kitty
+# probe and stood down (649 s); later moves transplanted and held HELD:load at the /exit. Both facts were
+# readable in the precheck. The verb is driven to its terminal step: a registry row, a limited
+# transcript, an empty team census; CC_TERM=kitty (setup) resolves the terminal with no socket call.
+# RED on the unfixed tree: the probe went on to read the pane and answered REFUSED:pane:unknown.
+probe() { # $@=extra env
+  local cfg="$BATS_TEST_TMPDIR/cfg/projects/-some-repo" psid="a1b2c3d4-0000-4000-8000-000000000001"
+  mkdir -p "$BATS_TEST_TMPDIR/reg" "$cfg"
+  printf '{"session_id":"%s","pane":"900"}\n' "$psid" > "$BATS_TEST_TMPDIR/reg/900.json"
+  printf '%s\n' '{"type":"user","timestamp":"2026-09-20T00:00:00.000Z","message":{"role":"user","content":"go"}}' \
+    '{"type":"assistant","timestamp":"2026-09-20T00:00:01.000Z","isApiErrorMessage":true,"message":{"role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"You'"'"'ve hit your weekly limit · resets 4am (America/Chicago)"}]}}' \
+    > "$cfg/$psid.jsonl"
+  printf '1 Ss /sbin/launchd\n' > "$BATS_TEST_TMPDIR/team-ps.txt"
+  run env CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg" CC_PROJECTS_DIRS="$BATS_TEST_TMPDIR/cfg/projects" \
+      LR_TEAM_PS_SNAPSHOT="$BATS_TEST_TMPDIR/team-ps.txt" CC_ADMIT_GATE=off CC_KITTY_CONNECT_TIMEOUT_S=0 "$@" \
+      timeout 600 bash "$HF" --probe-recycle-preconditions --source-pane 900 --source-session "$psid"
+}
+
+@test "K3 a typed relaunch over the load bound: HELD:load at the precheck, rc 3, before kitty or the pane is read" {
+  netstat_capture 0
+  probe HF_PRECHECK_TYPED_RELAUNCH=1 CC_FIRE_CAPACITY_GATE=on HF_LOAD_PER_CORE=30
+  [ "$status" -eq 3 ] || { echo "status=$status $output"; false; }
+  [[ "$output" == *"load: 30/core is above the 8/core bound"* ]] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | sed -n 's/^verdict: //p')" = HELD:load ] || { echo "$output"; false; }
+  [[ "$output" != *"kitty_probe:"* && "$output" != *"pane_state:"* ]] || { echo "read past the hold: $output"; false; }
+}
+
+@test "K3 CONTROL: the same load without HF_PRECHECK_TYPED_RELAUNCH reads no load verdict; a deaf socket is HELD:unreachable there" {
+  netstat_capture 3
+  probe CC_FIRE_CAPACITY_GATE=on HF_LOAD_PER_CORE=30
+  [ "$status" -eq 3 ] || { echo "status=$status $output"; false; }
+  [[ "$output" != *"load:"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"kitty_probe: not answering"*"no such socket (rc 4)"*"tries=1]"* ]] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | sed -n 's/^verdict: //p')" = HELD:unreachable ] || { echo "$output"; false; }
+  [[ "$output" != *"pane_state:"* ]] || { echo "read the pane past the hold: $output"; false; }
+}
+
+@test "K3 a typed relaunch under the bound proceeds past load; a STUCK socket is HELD:wedged at the precheck" {
+  netstat_capture 128
+  probe HF_PRECHECK_TYPED_RELAUNCH=1 CC_FIRE_CAPACITY_GATE=on HF_LOAD_PER_CORE=3
+  [ "$status" -eq 3 ] || { echo "status=$status $output"; false; }
+  [[ "$output" == *"load: 3/core (bound 8/core)"* ]] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | sed -n 's/^verdict: //p')" = HELD:wedged ] || { echo "$output"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/backlog-calls.log" ] || { echo "the read-only precheck filed an operator step"; false; }
+}
+
 @test "a: the self tty is the tty of the ancestor whose parent is \$KITTY_PID, not the caller's" {
   load_units
   shim="$BATS_TEST_TMPDIR/psbin"; mkdir -p "$shim"

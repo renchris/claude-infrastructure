@@ -1427,7 +1427,12 @@ lrh_precheck() { # → 0 admitted (token minted) / 6 HELD|REFUSED|PARKED, nothin
         echo "lr-handoff: note — the live $hf does not parse --operator-intent; the probe is run without it and its limit gate will refuse a healthy pane" >&2
       fi
     fi
-    out="$("$hf" --probe-recycle-preconditions --source-pane "$SOURCE_PANE" --source-session "$SID" ${probe_extra[@]+"${probe_extra[@]}"} 2>&1)" || rc=$?
+    # THE RELAUNCH WILL BE TYPED (lr-inplace-immediacy 2026-10-18, K3): an in-place move transplants,
+    # so it never stages a successor, which is exactly when the recycle's /exit-time load gate holds.
+    # Saying so lets the probe hold HELD:load NOW, before the transplant, instead of after it.
+    local typed=0
+    if [[ $IN_PLACE -eq 1 ]]; then typed=1; fi
+    out="$(HF_PRECHECK_TYPED_RELAUNCH="$typed" "$hf" --probe-recycle-preconditions --source-pane "$SOURCE_PANE" --source-session "$SID" ${probe_extra[@]+"${probe_extra[@]}"} 2>&1)" || rc=$?
     printf '%s\n' "$out" | sed 's/^/lr-handoff: precheck /' >&2
     state="$(printf '%s\n' "$out" | sed -n 's/^verdict: //p' | tail -1)"
     # FOCUS AND OPERATOR IDLE TIME, ON EVERY DISPATCH (FLEET_V2 W6, D7.5): the later idle-time rule

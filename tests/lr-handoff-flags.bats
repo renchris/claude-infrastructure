@@ -575,3 +575,31 @@ mkpool() { # → $POOL: a repo on branch pool/x; $LOCKDIR: its lock path
   [ "$(git -C "$POOL" branch --show-current)" = "pool/x" ]
   [ -f "$LOCKDIR/holder" ]
 }
+
+# ── K3 (lr-inplace-immediacy 2026-10-18): the in-place precheck says its relaunch will be TYPED ───────
+# Later moves transplanted and THEN held HELD:load at the /exit. The probe can hold on load before the
+# transplant only if it is told the relaunch is typed; the probe's own side is pinned in
+# tests/handoff-recycle-kitty-precheck.bats (K3). RED on the unfixed tree: nothing set the env, so this
+# stub answered OK and the move transplanted.
+@test "K3 the in-place precheck tells the probe its relaunch is typed; HELD:load is PRECHECK, rc 6, nothing transplanted" {
+  cat > "$STUB/handoff-fire.sh" <<'STUB'
+#!/bin/bash
+printf '%s TYPED=%s\n' "$*" "${HF_PRECHECK_TYPED_RELAUNCH:-}" >> "${HF_LOG:?}"
+case " $* " in
+  *" --probe-recycle-preconditions "*)
+    if [ "${HF_PRECHECK_TYPED_RELAUNCH:-}" = 1 ]; then
+      echo "load: 30/core is above the 8/core bound, and this move types its relaunch"; echo "verdict: HELD:load"; exit 3
+    fi
+    echo "verdict: OK"; exit 0 ;;
+esac
+exit 0
+STUB
+  LRH_PRECHECK=on fire
+  [ "$status" -eq 6 ] || { echo "status=$status $output"; false; }
+  grep -q -- '--probe-recycle-preconditions .* TYPED=1$' "$HF_LOG" || { cat "$HF_LOG"; false; }
+  [[ "$output" == *"PRECHECK HELD:load — NOTHING has been transplanted"* ]] || { echo "$output"; false; }
+  [ ! -s "$TX_LOG" ] || { cat "$TX_LOG"; false; }
+  # The move worker names the hold from this output with this extraction (lr-move-worker.sh, `held=`).
+  held="$(printf '%s\n' "$output" | sed -n 's/.*\(HELD:[A-Za-z:-]*\).*/\1/p; s/.*\(REFUSED:[A-Za-z:-]*\).*/\1/p' | tail -1)"
+  [ "$held" = HELD:load ] || { echo "the worker would read '$held'"; false; }
+}
