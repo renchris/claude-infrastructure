@@ -721,10 +721,44 @@ _cc_admit_token_kind() { # $1=path → prints the kind, or nothing when the toke
   awk 'NR==2 { if (index($0, "kind=") == 1) print substr($0, 6); exit }' "$1" 2>/dev/null || true
 }
 
+# ── WHAT A TOKEN IS WAITING ON (lr-wake 2026-10-18, Wave B step 2) ─────────────────────────────
+# A token used to count in flight for its whole redeem TTL (1020 s) whether or not anything would
+# ever redeem it. MEASURED overnight 2026-10-18 (c2 §2.6): the in-flight term reached 10 while 5
+# sessions were mid-turn, and 9 of 13 active refusals between 07:20Z and 08:48Z had act ≤ 7, so the
+# orphans alone refused them. A token now names the RUN it admits (`run=<abs dir>`, an optional third
+# line, set by CC_ADMIT_TOKEN_RUN at mint), and counts only while that run is still pending: its dir
+# exists, it has no `relaunch.rc` (the launcher's own failure record), and its state log has not
+# reached a terminal no-relaunch state. An unbound token counts for CC_ADMIT_TOKEN_INFLIGHT_S
+# (default 180 s, handoff-fire's RCY_BOOT_STALE_S) and is still REDEEMABLE for the full TTL: this
+# bounds the COUNT, never the admission.
+_cc_admit_token_run() { # $1=path → prints the bound run dir, or nothing when the token is unbound
+  awk 'NR>=2 && index($0, "run=") == 1 { print substr($0, 5); exit }' "$1" 2>/dev/null || true
+}
+_cc_admit_token_pending() { # $1=token path $2=age (s) → 0 its spawn is plausibly pending / 1 not
+  local run lim
+  run="$(_cc_admit_token_run "$1")"
+  if [ -n "$run" ]; then
+    [ -d "$run" ] || return 1
+    [ ! -e "$run/relaunch.rc" ] || return 1
+    if [ -f "$run/events.jsonl" ] \
+       && grep -Eq '"state":"(STRANDED|FAILED|PARKED|NOTMOVED)"' "$run/events.jsonl" 2>/dev/null; then
+      return 1
+    fi
+    return 0
+  fi
+  lim="${CC_ADMIT_TOKEN_INFLIGHT_S:-180}"
+  cc_hw_is_int_operand "$lim" || CC_HW_INT_VALUE=180
+  [ "$2" -le "$CC_HW_INT_VALUE" ]
+}
+
 cc_capacity_token_mint() { # $1=sid [$2=explicit path] → prints the token path · rc 1 = not minted
-  local sid="${1:-}" path="${2:-}" dir uid kind="${CC_ADMIT_TOKEN_KIND:-turn}"
+  local sid="${1:-}" path="${2:-}" dir uid kind="${CC_ADMIT_TOKEN_KIND:-turn}" run="${CC_ADMIT_TOKEN_RUN:-}"
   case "$sid" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
   case "$kind" in turn|swap) ;; *) kind=turn ;; esac
+  # The binding is a path a reader will stat, so only an absolute, printable one is kept; anything
+  # else is dropped, which leaves the token on the 180 s cap rather than unbounded.
+  case "$run" in /*) ;; *) run="" ;; esac
+  case "$run" in *[![:print:]]*) run="" ;; esac
   uid="$(id -u 2>/dev/null || printf '?')"
   if [ -n "$path" ]; then
     dir="$(dirname "$path")"
@@ -748,7 +782,8 @@ cc_capacity_token_mint() { # $1=sid [$2=explicit path] → prints the token path
   # with. The terms are recorded because the T3 ratchet is about the pair agreeing: a token minted
   # under a different term set than the launcher would evaluate is still ONE decision, and the row
   # must be able to say which decision it was. The kind follows on its own line (see above).
-  printf '%s\t%s\t%s\t%s\nkind=%s\n' "$(date +%s)" "$sid" "$uid" "${CC_ADMIT_TERMS:-}" "$kind" > "$path" 2>/dev/null || return 1
+  { printf '%s\t%s\t%s\t%s\nkind=%s\n' "$(date +%s)" "$sid" "$uid" "${CC_ADMIT_TERMS:-}" "$kind"
+    [ -z "$run" ] || printf 'run=%s\n' "$run"; } > "$path" 2>/dev/null || return 1
   printf '%s' "$path"
 }
 
@@ -1118,6 +1153,9 @@ cc_capacity_tokens_inflight() { # → always 0 · prints an integer
     if [ "${CC_ADMIT_TOKEN_KIND_FILTER:-on}" != off ]; then
       case "$(_cc_admit_token_kind "$f")" in ''|turn) ;; *) continue ;; esac
     fi
+    # An orphan — its run ended without redeeming, or an unbound token past the short cap — is
+    # not an admission in flight (see _cc_admit_token_pending).
+    _cc_admit_token_pending "$f" "$(( now - issued ))" || continue
     n=$(( n + 1 ))
   done
   printf '%s' "$n"

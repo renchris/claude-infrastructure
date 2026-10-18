@@ -508,3 +508,49 @@ old_tok() { # $1=name $2=age in seconds — a record issued AND last written tha
   [ -f "$CC_ADMIT_STATE_DIR/tokens/sid-stale.AAAA1111" ]
   [ -f "$CC_ADMIT_STATE_DIR/tokens/sid-live.BBBB2222" ]
 }
+
+# ── ORPHAN EXPIRY (lr-wake 2026-10-18, Wave B step 2) ──────────────────────────────────────────
+# A token counted in flight for its whole 1020 s TTL whether or not anything would redeem it; the
+# overnight in-flight term reached 10 over 5 mid-turn sessions. It now counts only while its spawn
+# is pending: a run-bound token while its run is open, an unbound one for 180 s.
+@test "27 an UNBOUND token stops counting at CC_ADMIT_TOKEN_INFLIGHT_S, though still inside its TTL" {
+  unset CC_ADMIT_TOKEN_TTL_S CC_ADMIT_TOKEN_INFLIGHT_S
+  old_tok sid-young.AAAA1111 100
+  old_tok sid-orphan.BBBB2222 400      # < TTL 1020, > the 180 s cap
+  run tlib cc_capacity_tokens_inflight
+  [ "$output" = 1 ]
+  CC_ADMIT_TOKEN_INFLIGHT_S=600 run tlib cc_capacity_tokens_inflight
+  [ "$output" = 2 ]
+}
+
+@test "28 a RUN-BOUND token counts while its run is open, and stops on relaunch.rc, a STRANDED row, or a gone dir" {
+  unset CC_ADMIT_TOKEN_TTL_S CC_ADMIT_TOKEN_INFLIGHT_S
+  run_dir="$BATS_TEST_TMPDIR/bundle-1"; mkdir -p "$run_dir"
+  tok="$(CC_ADMIT_TOKEN_RUN="$run_dir" bash -c '. "$1"; cc_capacity_token_mint "$2"' _ "$LIB" sid-run)"
+  [ "$(sed -n 3p "$tok")" = "run=$run_dir" ]
+  [ "$(awk -F'\t' 'NR==1{print NF}' "$tok")" = 4 ]
+  run tlib cc_capacity_tokens_inflight
+  [ "$output" = 1 ]
+  printf '9\n' > "$run_dir/relaunch.rc"
+  run tlib cc_capacity_tokens_inflight
+  [ "$output" = 0 ]
+  rm -f "$run_dir/relaunch.rc"
+  printf '{"state":"STRANDED","stage":"verify"}\n' > "$run_dir/events.jsonl"
+  run tlib cc_capacity_tokens_inflight
+  [ "$output" = 0 ]
+  rm -f "$run_dir/events.jsonl"; rmdir "$run_dir"
+  run tlib cc_capacity_tokens_inflight
+  [ "$output" = 0 ]
+  # a relative or control-character binding is dropped at mint: the token is unbound, never unbounded
+  tok2="$(CC_ADMIT_TOKEN_RUN="rel/dir" bash -c '. "$1"; cc_capacity_token_mint "$2"' _ "$LIB" sid-rel)"
+  [ -z "$(sed -n 3p "$tok2")" ]
+}
+
+@test "29 a run-bound token is still REDEEMED by its own spawn (the binding bounds the count, never the admission)" {
+  unset CC_ADMIT_TOKEN_TTL_S
+  run_dir="$BATS_TEST_TMPDIR/bundle-2"; mkdir -p "$run_dir"
+  tok="$(CC_ADMIT_TOKEN_RUN="$run_dir" bash -c '. "$1"; cc_capacity_token_mint "$2"' _ "$LIB" sid-r29)"
+  CC_SP_ACTIVE_OVERRIDE=8 CC_ADMIT_TOKEN="$tok" CC_ADMIT_WANT_SID=sid-r29 run admit t29
+  [ "$status" -eq 0 ]
+  [ "$(jq -r 'select(.caller=="t29") | .basis' "$CC_ADMIT_IDL")" = token ]
+}
