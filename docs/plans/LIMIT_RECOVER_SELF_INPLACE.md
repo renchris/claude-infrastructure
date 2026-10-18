@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 ---
 
 # LIMIT_RECOVER_SELF_INPLACE — a session moves itself, in place, with no external help
@@ -81,5 +81,19 @@ Why T, not S: four small units (each tens of lines + tests) whose outputs must b
 ## W2 — Land + converge — DONE
 
 Landed via `scripts/ship-land.sh` in the range ending `51e3374e2` (land-verify: 10 paths content-identical; the smoke leg was shed for load, so the land itself is behaviourally ungated — the suites above are the behavioural evidence). Converged live on the degraded tier (`CC_DEPLOY_MAX_LAG_COMMITS=0 bash scripts/deploy-live.sh`, 2196228fc → 51e3374e2); live `~/.claude/bin/cc-lr` carries `wait:self`. Blocker met: a stale 0-byte shared-checkout `.git/index.lock` (04:41, no holder) failed the land's kicked converge; removed after confirming no holder.
+
+## W3 — Proof — DONE (2026-10-18)
+
+| proof | session · pane | result |
+|---|---|---|
+| (a) self-move from its own turn | `6f8d7bd2-90dc-4f9f-8b56-cf420ce86525` · 445, next3 → next2 | batch `20261018T184542Z-next3-next2-72712` MOVED in 266 s (conjuncts 1111111); pid 62874 `CLAUDE_CONFIG_DIR=~/.claude-secondary --resume <same sid>`; registry row 445 `account=claude-secondary`; next3 copy tombstoned `.jsonl.handed-off` |
+| (b) peer-requested (`cc-lr move --sid … --to next2 --until-idle 900` from the lead) | `be57feef-f8a3-43dc-a1fa-d429b68292b3` · 458, next3 → next2 | batch `20261018T185310Z-next3-next2-90217` MOVED; pid 11844 on `~/.claude-secondary`, same sid; one copy |
+| (c) 43e6eb4b → next | `43e6eb4b-…` · 8 | SUPERSEDED, not run: already moved in place next4 → next2 at 07:15Z by pane 344's batch `20261018T064955Z-next4-next2-7738` (MOVED, one copy), before this wave's recycle; its goal (off next4) is met and a second move of a live operator pane buys nothing (accounts differ only in quota). It can move itself now with `cc-lr move --sid "$CLAUDE_CODE_SESSION_ID" --to next`. |
+
+Defects the first run of (a) found, fixed, landed in the range ending `dc74a6c22`:
+- `11b063908` — the self-wait budget scales with load. Batch `20261018T131324Z-next3-next2-94791` went NOTMOVED `still-busy:move after 900s` with nothing touched: a self row needs two consecutive batch censuses calling it at rest, and one census took ~11 min at 13/core, so a flat 900 s could never hold two. Now 900 × min(4, 1 + load/core ÷ 5); `CC_LR_MOVE_SELF_WAIT_S` stays exact. Residual (theirs, lr-move-batch.sh): census time itself grows with load.
+- `dc74a6c22` — lr-handoff read the recycle's stderr before its asynchronous tee had drained (reported by lr-inplace-immediacy; lr-handoff-flags 28-30 intermittent). /bin/bash 3.2 builds a process substitution on an external command's redirect in the forked child, so neither `wait` nor `$!` reaches it, and `${!:-}` is indirect expansion that dies under `set -u`; the substitution drops a `.drained` marker the parent polls for, bounded 15 s.
+
+Learning: the 8/core recycle load hold was right to hold, and the proof only had to wait for a window (load fell from ~300 to ~40 by 13:50 local).
 
 Not doing (with reason): self-transplant deferral inside handoff-fire (a second self path; the move lane already defers honestly); live-holder check inside lr-transplant confirm/unconfirm (risks refusing every legitimate in-place move through the lr-handoff → handoff-fire ancestry; R2's handoff-fire pre-pass check closes the same entry); changing the load bound.
