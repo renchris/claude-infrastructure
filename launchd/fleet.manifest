@@ -574,6 +574,13 @@ com.claude.public-publish         | run    | 86400 | auto | 12 | 46-public-repo-
 com.reso.lr-reconciler            | staged | 10   | ~/.reso/limit-recover/recon/heartbeat | — | lr-recon-launchd.sh
 com.reso.lr-reconciler-watchdog   | staged | 30   | ~/.reso/limit-recover/recon/watchdog.state | — | lr-recon-launchd.sh
 com.reso.lr-reconciler-rig        | staged | 0    | - | — | lr-recon-launchd.sh
+# ── com.reso.lr-move-kick (2026-10-18, lr-inplace-immediacy REPORT §6 item 1) ──────────────────────────
+# Starts a queued `cc-lr move` batch in the Interactive band the moment its request lands (WatchPaths
+# on move/requests/), running only the poller's --move-kick mode. On demand, like the rig: no cadence
+# to be late against (`0`), and `-` evidence because it runs only when a request lands; its runs log
+# `MOVE-KICK pri N` to poller.log, which the activation script reads back. Its plist stays in
+# launchd/staged/ (a plist in launchd/ is loaded at the next login with no operator decision).
+com.reso.lr-move-kick             | staged | 0    | - | — | 53-lr-move-kick-activate.sh
 # ── com.claude.research-* (2026-10-01, RESEARCH_PROGRAM_BUILD wave C, REPORT.md §8 item 12) ──────────
 # The research program's scheduled passes, one runner (scripts/research-kit/jobs/research-job.sh).
 # `staged`: SSOT in launchd/staged/, loaded only by the operator's migrations/0051-research-jobs.sh.

@@ -36,7 +36,7 @@
 # poller opens a class-B cc-decide packet (default = cross-account continuation, operator
 # decision #3) so the strand is surfaced for an async early-veto decision, never left dead.
 #
-# Usage: lr-reset-poller.sh [--dry-run] [--once]   (launchd runs it bare every ~10 min)
+# Usage: lr-reset-poller.sh [--dry-run] [--once] [--move-kick]   (launchd runs it bare every ~10 min)
 set -uo pipefail
 
 # ---- PANE-SPAWN LOG (item 1467ea1dad4f) --------------------------------------------------------
@@ -195,14 +195,72 @@ mkdir -p "$REQUESTS" "$RESULTS" "$CLAIMED" "$RUN_CLAIMS"
 # --dry-run in a non-first position, which is exactly why it survived (found by LR-t).
 # Unknown args are REFUSED, not ignored: silence is what hid this. launchd runs the script bare, so
 # the loop is a no-op there.
-DRY=0
+DRY=0; KICK_ONLY=0
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY=1 ;;
     --once)    : ;;   # accepted no-op — this script is single-pass by construction (launchd re-runs it)
-    *) printf 'lr-reset-poller: unknown argument: %s\nusage: lr-reset-poller.sh [--dry-run] [--once]\n' "$arg" >&2; exit 2 ;;
+    --move-kick) KICK_ONLY=1 ;;
+    *) printf 'lr-reset-poller: unknown argument: %s\nusage: lr-reset-poller.sh [--dry-run] [--once] [--move-kick]\n' "$arg" >&2; exit 2 ;;
   esac
 done
+
+# ── THE MOVE LANE'S KICK (design-swap-v3 N5, 2026-10-04): the first work of the tick ────────────
+# `cc-lr move` writes <state>/move/<batch>/{plan.json,intent/} and one request, then kickstarts this
+# job. The batch runner must not be a child of the session that asked (auto mode refuses an agent
+# keying a live peer pane, and a tool call's children die with it), so THIS daemon starts it,
+# detached, and it outlives the tick. First in the tick because everything below can take minutes
+# (ticks ran 49-375 s that day) and an operator is waiting on this one.
+#   · THE CLAIM IS A LINK, AND THE RUNNER STARTS ONLY IF IT SUCCEEDED: `ln` refuses an existing
+#     name, so a request already claimed (by an earlier tick, or by a second poller) is never driven
+#     twice. The upgrade drain's `mv … || rm` drove a request it had failed to claim.
+#   · a runner that could not be started gives the request back, so the next tick retries.
+# Kill switch LR_MOVE_LANE=off: requests are left in place, untouched.
+lrp_move_kick() {
+  local root="${LR_STATE_DIR:-$STATE}/move" q b bdir det="" d pid runner="${LR_MOVE_BATCH_BIN:-$LR/lr-move-batch.sh}"
+  compgen -G "$root/requests/*.json" >/dev/null 2>&1 || return 0
+  if [[ "${LR_MOVE_LANE:-on}" == off ]]; then log "MOVE-SKIP LR_MOVE_LANE=off (move requests left in place)"; return 0; fi
+  for d in "$LR/../lib/detach.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/detach.sh" "$HOME/.claude/scripts/lib/detach.sh"; do
+    [[ -f "$d" ]] && { det="$d"; break; }
+  done
+  for q in "$root"/requests/*.json; do
+    [[ -f "$q" ]] || continue
+    b="$(basename "$q" .json)"; bdir="$root/$b"
+    if [[ ! -s "$bdir/plan.json" ]]; then log "MOVE-SKIP $b has no plan.json (request left in place)"; continue; fi
+    if [[ $DRY -eq 1 ]]; then log "DRY   move batch $b would start: $runner $b"; continue; fi
+    if [[ ! -f "$runner" || -z "$det" ]]; then log "MOVE-SKIP $b: lr-move-batch.sh or scripts/lib/detach.sh unreachable (request left in place)"; continue; fi
+    if [[ -e "$bdir/request.claimed.json" ]]; then
+      log "MOVE-SKIP $b was already claimed; dropping the repeated request"; rm -f "$q" 2>/dev/null || true; continue
+    fi
+    if ! ln "$q" "$bdir/request.claimed.json" 2>/dev/null; then log "MOVE-SKIP $b could not be claimed (not driven)"; continue; fi
+    rm -f "$q" 2>/dev/null || true
+    # shellcheck disable=SC1090  # runtime-resolved sibling
+    pid="$( . "$det" && detach "$bdir/batch.log" /bin/bash "$runner" "$b" 2>/dev/null )" || pid=""
+    if [[ "$pid" =~ ^[0-9]+$ ]]; then
+      log "MOVE-BATCH started pid $pid ($b)"
+    else
+      log "MOVE-BATCH $b could not be started; request given back for the next tick"
+      mv -f "$bdir/request.claimed.json" "$q" 2>/dev/null || true
+    fi
+  done
+}
+
+# ── --move-kick: THE KICK AND NOTHING ELSE (lr-inplace-immediacy §6 item 1, 2026-10-18) ──────────────
+# Every process the move lane runs sat at priority 20: its only starter was this job, which has no
+# ProcessType, so launchd gives it the default light limits, and a child cannot climb back to 31
+# (measured: `taskpolicy -a` from a utility-clamped parent stays at 20) while the load it competes with
+# runs at 31. A nominal 5 s wait took 41-50 s. The staged com.reso.lr-move-kick LaunchAgent
+# (launchd/staged/, ProcessType Interactive, WatchPaths on move/requests/) runs this script with
+# --move-kick: the same claim-by-link and detached start as the tick's kick, so the batch it starts —
+# and every worker and recycle under it — inherits the Interactive band. It takes NO tick lock and runs
+# no arm: the hard-link claim is what keeps a batch from starting twice, so it is safe beside a running
+# tick and its drainer, and a kick that waited for the tick would bring the queueing back. It logs its
+# own priority so the activation script can read the band back from a real run.
+if [[ $KICK_ONLY -eq 1 ]]; then
+  log "MOVE-KICK pri $(ps -o pri= -p $$ 2>/dev/null | tr -d ' ')"
+  lrp_move_kick
+  exit 0
+fi
 
 # ── SELF-OVERLAP LOCK (skip, never queue) ──────────────────────────────────────────────
 # launchd fires this every ~10 min, but a tick does per-session lr-audit subprocesses and
@@ -318,46 +376,6 @@ lrp_evidence_gc_kick() {
   return 0
 }
 lrp_evidence_gc_kick
-
-# ── THE MOVE LANE'S KICK (design-swap-v3 N5, 2026-10-04): the first work of the tick ────────────
-# `cc-lr move` writes <state>/move/<batch>/{plan.json,intent/} and one request, then kickstarts this
-# job. The batch runner must not be a child of the session that asked (auto mode refuses an agent
-# keying a live peer pane, and a tool call's children die with it), so THIS daemon starts it,
-# detached, and it outlives the tick. First in the tick because everything below can take minutes
-# (ticks ran 49-375 s that day) and an operator is waiting on this one.
-#   · THE CLAIM IS A LINK, AND THE RUNNER STARTS ONLY IF IT SUCCEEDED: `ln` refuses an existing
-#     name, so a request already claimed (by an earlier tick, or by a second poller) is never driven
-#     twice. The upgrade drain's `mv … || rm` drove a request it had failed to claim.
-#   · a runner that could not be started gives the request back, so the next tick retries.
-# Kill switch LR_MOVE_LANE=off: requests are left in place, untouched.
-lrp_move_kick() {
-  local root="${LR_STATE_DIR:-$STATE}/move" q b bdir det="" d pid runner="${LR_MOVE_BATCH_BIN:-$LR/lr-move-batch.sh}"
-  compgen -G "$root/requests/*.json" >/dev/null 2>&1 || return 0
-  if [[ "${LR_MOVE_LANE:-on}" == off ]]; then log "MOVE-SKIP LR_MOVE_LANE=off (move requests left in place)"; return 0; fi
-  for d in "$LR/../lib/detach.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/detach.sh" "$HOME/.claude/scripts/lib/detach.sh"; do
-    [[ -f "$d" ]] && { det="$d"; break; }
-  done
-  for q in "$root"/requests/*.json; do
-    [[ -f "$q" ]] || continue
-    b="$(basename "$q" .json)"; bdir="$root/$b"
-    if [[ ! -s "$bdir/plan.json" ]]; then log "MOVE-SKIP $b has no plan.json (request left in place)"; continue; fi
-    if [[ $DRY -eq 1 ]]; then log "DRY   move batch $b would start: $runner $b"; continue; fi
-    if [[ ! -f "$runner" || -z "$det" ]]; then log "MOVE-SKIP $b: lr-move-batch.sh or scripts/lib/detach.sh unreachable (request left in place)"; continue; fi
-    if [[ -e "$bdir/request.claimed.json" ]]; then
-      log "MOVE-SKIP $b was already claimed; dropping the repeated request"; rm -f "$q" 2>/dev/null || true; continue
-    fi
-    if ! ln "$q" "$bdir/request.claimed.json" 2>/dev/null; then log "MOVE-SKIP $b could not be claimed (not driven)"; continue; fi
-    rm -f "$q" 2>/dev/null || true
-    # shellcheck disable=SC1090  # runtime-resolved sibling
-    pid="$( . "$det" && detach "$bdir/batch.log" /bin/bash "$runner" "$b" 2>/dev/null )" || pid=""
-    if [[ "$pid" =~ ^[0-9]+$ ]]; then
-      log "MOVE-BATCH started pid $pid ($b)"
-    else
-      log "MOVE-BATCH $b could not be started; request given back for the next tick"
-      mv -f "$bdir/request.claimed.json" "$q" 2>/dev/null || true
-    fi
-  done
-}
 
 # ── THE MID-TICK DRAIN (lr-inplace-immediacy, 2026-10-18) ─────────────────────────────────────────
 # The two looks above (top of the tick, and lrp_tick_end) left every request written in between to

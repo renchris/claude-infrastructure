@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.reso.lr-move-kick — start a queued `cc-lr move` batch the moment its request lands, in the
+  Interactive band. Staged: outside install.sh's glob; only
+  docs/activation/pending-activation/53-lr-move-kick-activate.sh installs and loads it.
+  Why (docs/research/lr-inplace-immediacy-2026-10-18/REPORT.md §6 item 1): the move lane's only
+  starter was com.reso.lr-reset-poller (no ProcessType ⇒ launchd's default light limits), so every
+  batch, worker and recycle under it ran at priority 20 while the load it competes with ran at 31.
+  The poller's move-kick mode (its argument below) runs the claim-by-link and the detached start
+  only: no tick lock, no arms. The batch it starts inherits this band.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.reso.lr-move-kick</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>/Users/chrisren/.claude/scripts/limit-recover/lr-reset-poller.sh</string>
+		<string>--move-kick</string>
+	</array>
+	<key>ProcessType</key>
+	<string>Interactive</string>
+	<key>WatchPaths</key>
+	<array>
+		<string>/Users/chrisren/.reso/limit-recover/move/requests</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>2</integer>
+	<key>StandardErrorPath</key>
+	<string>/Users/chrisren/.reso/limit-recover/move-kick.launchd.err</string>
+	<key>StandardOutPath</key>
+	<string>/Users/chrisren/.reso/limit-recover/move-kick.launchd.out</string>
+</dict>
+</plist>

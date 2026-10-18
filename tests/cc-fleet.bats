@@ -709,8 +709,11 @@ STUB
   # 55 since 2026-10-17: com.claude.capacity-attrib (load-root-cause DESIGN §4.1, the 5 s sampler),
   # `staged` in launchd/staged/ until the operator runs 52-load-2026-10-17-activate.sh; row, plist
   # and count in one land.
-  if [ "$n" != 55 ]; then
-    echo "manifest declares $n labels, expected 55 — if a plist was legitimately added or retired,"
+  # 56 since 2026-10-18: com.reso.lr-move-kick (lr-inplace-immediacy REPORT §6 item 1, the move lane's
+  # Interactive-band starter), `staged` in launchd/staged/ until the operator runs
+  # 53-lr-move-kick-activate.sh; row, plist and count in one land.
+  if [ "$n" != 56 ]; then
+    echo "manifest declares $n labels, expected 56 — if a plist was legitimately added or retired,"
     echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
     grep -vE '^[[:space:]]*(#|$)' "$M" | cut -d'|' -f1 | sed 's/[[:space:]]//g; s/^/  /'
     return 1

@@ -102,3 +102,34 @@ tick_frag() { # $1=path → writes the preamble every case shares
   kick_at="$(printf '%s\n' "$body" | grep -n 'lrp_move_kick' | head -1 | cut -d: -f1)"
   [ -n "$stop_at" ] && [ -n "$kick_at" ] && [ "$stop_at" -lt "$kick_at" ]
 }
+
+# ── THE KICK-ONLY ENTRY (lr-inplace-immediacy §6 item 1, 2026-10-18) ─────────────────────────────────
+# Every process of the move lane ran at priority 20 because its only starter, com.reso.lr-reset-poller,
+# has no ProcessType, and a child cannot climb back to 31 from there. The staged com.reso.lr-move-kick
+# LaunchAgent (ProcessType Interactive, WatchPaths on move/requests/) runs `lr-reset-poller.sh
+# --move-kick`: the same hard-link claim and detached start, and nothing else — no tick lock, no arms —
+# so it runs while a tick holds the lock, and the batch it starts inherits the Interactive band.
+@test "5 [RED] --move-kick starts a queued batch while a live tick holds the lock, leaves the lock alone, and logs its priority" {
+  held="$BATS_TEST_TMPDIR/held.lock"; mkdir "$held"
+  echo $$ > "$held/pid"; ps -o lstart= -p $$ | tr -s ' ' > "$held/lstart"
+  echo '{"kind":"move-batch","batch":"c1"}' > "$LR_STATE_DIR/move/requests/c1.json"
+  LR_POLLER_LOCK_DIR="$held" run "$BASH_BIN" "$LRD/lr-reset-poller.sh" --move-kick
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$LR_STATE_DIR/poller.log" "$HOME/.reso/limit-recover/poller.log" 2>/dev/null; false; }
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -s "$BATS_TEST_TMPDIR/batch-rec.log" ] && break; sleep 0.25; done
+  [ "$(cat "$BATS_TEST_TMPDIR/batch-rec.log" 2>/dev/null)" = c1 ] || { cat "$HOME/.reso/limit-recover/poller.log" 2>/dev/null; false; }
+  [ -f "$LR_STATE_DIR/move/c1/request.claimed.json" ]
+  [ ! -e "$LR_STATE_DIR/move/requests/c1.json" ]
+  [ "$(cat "$held/pid")" = "$$" ]                                     # the tick's lock was not touched
+  grep -Eq 'MOVE-KICK pri [0-9]+' "$HOME/.reso/limit-recover/poller.log"
+  run grep -c 'TICK-SKIP' "$HOME/.reso/limit-recover/poller.log"
+  [ "$output" = 0 ]                                                   # it never went near the lock
+}
+
+@test "6 the staged com.reso.lr-move-kick job parses, runs --move-kick in the Interactive band, and watches move/requests/" {
+  p="$REPO/launchd/staged/com.reso.lr-move-kick.plist"
+  /usr/bin/plutil -lint "$p" >/dev/null
+  [ "$(/usr/libexec/PlistBuddy -c 'Print :ProcessType' "$p")" = Interactive ]
+  /usr/libexec/PlistBuddy -c 'Print :ProgramArguments' "$p" | grep -qx '[[:space:]]*--move-kick'
+  /usr/libexec/PlistBuddy -c 'Print :WatchPaths' "$p" | grep -q '/\.reso/limit-recover/move/requests$'
+  [ -x "$REPO/docs/activation/pending-activation/53-lr-move-kick-activate.sh" ]
+}
