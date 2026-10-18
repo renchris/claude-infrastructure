@@ -1398,3 +1398,36 @@ count_grep_stub() { # → $CG_BIN on PATH; env STUB_INBOX STUB_SEEN STUB_LOG [ST
   [[ "$ctx" == "🚨 YOUR /goal WAS SKIPPED"* ]] || false
   [[ "$ctx" != *"No inbox wake path armed"* ]] || false
 }
+
+# ── Crumb said once per (session, crumb mtime) (startup-hooks-2026-10-18 unit 4.3) ──────────────
+@test "4.3: a crumb is relayed once, silent on the next prompt, and told again after its mtime changes" {
+  sid="deadbeef-0000-0000-0000-00000000ab43"
+  _gi_crumb_setup "$sid"
+  run bash -c "printf '{\"session_id\":\"$sid\",\"transcript_path\":\"$GI_TP\"}' | '$DRAIN' prompt"
+  [[ "$output" == *"YOUR /goal WAS SKIPPED"* ]] || false
+  run bash -c "printf '{\"session_id\":\"$sid\",\"transcript_path\":\"$GI_TP\"}' | '$DRAIN' prompt"
+  [[ "$output" != *"YOUR /goal WAS SKIPPED"* ]] || false
+  touch -t 203001010000 "$HOME/.claude/autonomy/goal-inert/$sid.json"   # the detector fired again
+  run bash -c "printf '{\"session_id\":\"$sid\",\"transcript_path\":\"$GI_TP\"}' | '$DRAIN' prompt"
+  [[ "$output" == *"YOUR /goal WAS SKIPPED"* ]] || false
+}
+
+@test "4.3: a crumb that rides a post-tool delivery is not repeated at the next prompt" {
+  sid="deadbeef-0000-0000-0000-00000000ab44"
+  _gi_crumb_setup "$sid"
+  seed "2026-10-18T10:00:00+0000 [peer] mid-turn mail"
+  run bash -c "printf '{\"session_id\":\"$sid\",\"transcript_path\":\"$GI_TP\"}' | CC_POSTTOOL_DRAIN_MIN_S=0 CC_MBX_SESSION_KEY=0 '$DRAIN' post-tool"
+  [[ "$output" == *"YOUR /goal WAS SKIPPED"* ]] || false
+  run bash -c "printf '{\"session_id\":\"$sid\",\"transcript_path\":\"$GI_TP\"}' | CC_MBX_SESSION_KEY=0 '$DRAIN' prompt"
+  [[ "$output" != *"YOUR /goal WAS SKIPPED"* ]] || false
+}
+
+@test "4.3: the crumb's cause is cut to 120 chars" {
+  sid="deadbeef-0000-0000-0000-00000000ab45"
+  _gi_crumb_setup "$sid"
+  long="$(printf 'x%.0s' $(seq 1 400))"
+  jq -nc --arg c "$long" '{cause:$c,deferrers:1}' > "$HOME/.claude/autonomy/goal-inert/$sid.json"
+  run bash -c "printf '{\"session_id\":\"$sid\",\"transcript_path\":\"$GI_TP\"}' | '$DRAIN' prompt"
+  [[ "$output" == *"YOUR /goal WAS SKIPPED"* ]] || false
+  [[ "$output" != *"$(printf 'x%.0s' $(seq 1 121))"* ]] || false
+}

@@ -168,9 +168,14 @@ fi
 _gi_crumb_dir="${CC_GOAL_INERT_DIR:-$HOME/.claude/autonomy/goal-inert}"
 _gi_crumb_path() { [ -n "${SID:-}" ] || return 1; printf '%s/%s.json' "$_gi_crumb_dir" "$SID"; }
 _gi_crumb_clear() { _p="$(_gi_crumb_path)" 2>/dev/null || return 0; [ -n "${_p:-}" ] && rm -f "$_p" 2>/dev/null; return 0; }
-# Clear ONLY on `no-goal:*` — that is the one abstain reason that positively means the goal is not
-# live. Every other abstain is "could not tell", and a true warning must survive those.
-_gi_abstain() { case "${1:-}" in no-goal:*) _gi_crumb_clear ;; esac; log_idl abstained "${1:-unspecified}" "${2:-}"; exit 0; }
+# Clear on the two abstain reasons that POSITIVELY mean the crumb is no longer true: `no-goal:*` (the
+# goal is not live) and `below-turn-threshold:*` (the goal is live AND has evaluated within the last
+# turn — the crumb was written when the newest evaluation was ≥2 turns old, and that count only grows,
+# so a fresh one means it evaluated since). Every other abstain is "could not tell", and a true warning
+# must survive those. Clearing on truth is what stops the crumb from re-alarming for up to its 6 h TTL
+# after the deferrer ended (docs/research/startup-hooks-2026-10-18/A9-beyond-startup.md, "What this
+# axis missed" 1; README §2 #6).
+_gi_abstain() { case "${1:-}" in no-goal:*|below-turn-threshold:*) _gi_crumb_clear ;; esac; log_idl abstained "${1:-unspecified}" "${2:-}"; exit 0; }
 
 input="$(cat 2>/dev/null || true)"
 [ -n "$input" ] || _gi_abstain "no-stdin"
@@ -304,6 +309,12 @@ fi
 # than deferral.
 GI_ARM=named
 [ -n "$DEFERRERS" ] || GI_ARM=blind
+# A crumb written by the NAMED arm reported a visible deferrer; with none left, its cause is gone. The
+# blind arm below may still fire and write a fresh crumb of its own.
+if [ "$GI_ARM" = blind ] && _gi_cp="$(_gi_crumb_path)" && [ -f "${_gi_cp:-}" ] \
+   && [ "$(jq -r '.arm // ""' "$_gi_cp" 2>/dev/null)" = named ]; then
+  _gi_crumb_clear
+fi
 TURNS=0
 CHECKINS=0
 if [ "$GI_ARM" = "blind" ] || [ "$GI_LAST" != "arm" ]; then

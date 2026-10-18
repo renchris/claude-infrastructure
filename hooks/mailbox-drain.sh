@@ -589,9 +589,18 @@ if [ -n "${own_sid:-}" ]; then
     _gi_age=$(( $(date +%s) - $(stat -f %m "$_gi_crumb" 2>/dev/null || echo 0) ))
     # Stale marks are worse than none: the crumb is cleared on `no-goal:*`, but a session that simply
     # stopped stopping would keep an old one. 6h is well past any real idle window.
-    if [ "$_gi_age" -lt "${CC_GOAL_INERT_CRUMB_TTL_S:-21600}" ]; then
-      _gi_cause="$(jq -r '.cause // "unknown"' "$_gi_crumb" 2>/dev/null | head -3 | tr '\n' ' ')"
+    # SAID ONCE per (session, crumb mtime), in prompt AND post-tool mode (startup-hooks-2026-10-18
+    # README §2 #6): the same crumb was re-relayed on every prompt for up to its 6 h TTL, 763-839
+    # injections per 48 h. A NEW crumb (new mtime — the detector fired again) is told once more.
+    # The marker is stamped only after an emit carrying it printed (_gicrumb_stamp, below).
+    _gi_mt="$(stat -f %m "$_gi_crumb" 2>/dev/null || echo 0)"
+    _gi_mark="$_mdir/.goalnudge/$own_sid-crumb-$_gi_mt"
+    if [ -f "$_gi_mark" ]; then
+      :   # already told about THIS crumb
+    elif [ "$_gi_age" -lt "${CC_GOAL_INERT_CRUMB_TTL_S:-21600}" ]; then
+      _gi_cause="$(jq -r '.cause // "unknown"' "$_gi_crumb" 2>/dev/null | head -3 | tr '\n' ' ' | cut -c1-120)"
       _gi_n="$(jq -r '.deferrers // 0' "$_gi_crumb" 2>/dev/null)"
+      _gi_told=1
       nudge="${nudge}
 🚨 YOUR /goal WAS SKIPPED at a recent Stop and is NOT being evaluated (${_gi_n} deferring background task(s); cause: ${_gi_cause}). Claude Code deletes the goal's Stop hook at every Stop while a non-terminal background Bash exists, then restores it, so nothing ever looks wrong and the goal simply never fires. THIS IS ABOUT A TASK THAT IS ALREADY RUNNING — the PreToolUse guard cannot catch it, because it may have been backgrounded before the goal was armed. Fix it as your next action: list your background tasks, and kill the one that is a parker (an event-polling \`while … sleep\` loop, a \`tail -f\`, a long \`sleep\`, a cc-await-ping without --idle-scoped). Its death is the receipt — the harness renders the kill as exit 143/144. If you still need to wait on that work, poll it synchronously once per turn instead, or use ~/.claude/hooks/session-continue.sh set \"<next step>\" which is goal-safe. Detail: docs/research/goal-in-handoff-2026-08-08.md"
     else
@@ -600,11 +609,18 @@ if [ -n "${own_sid:-}" ]; then
   fi
 fi
 
+# The once-per-crumb stamp: any mode, only when the crumb text rode an emit that printed.
+_gicrumb_stamp() {
+  [ "${_gi_told:-0}" = 1 ] && [ -n "${_gi_mark:-}" ] || return 0
+  mkdir -p "${_gi_mark%/*}" 2>/dev/null && : > "$_gi_mark" 2>/dev/null || true
+}
+
 # The once-per-goal stamp, called only AFTER an emit that carried the live-goal nudge has printed.
 # post-tool never stamps (see the branch). GC rides the stamp — at most once per (session, goal) — and
 # drops markers older than 7 days: past that the session is long dead, and a resumed one is merely
 # told once more.
 _goalnudge_stamp() {
+  _gicrumb_stamp
   [ -n "${_gn_mark:-}" ] && [ "$MODE" != "post-tool" ] || return 0
   mkdir -p "${_gn_mark%/*}" 2>/dev/null && : > "$_gn_mark" 2>/dev/null || return 0
   find "${_gn_mark%/*}" -type f -mtime +7 -delete 2>/dev/null || true

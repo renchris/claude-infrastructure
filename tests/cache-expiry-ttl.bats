@@ -83,3 +83,20 @@ run_hook() { run env CLAUDE_CONFIG_DIR="$D" ${1:+CC_PROMPT_CACHE_TTL_S=$1} bash 
   msg="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
   printf '%s' "$msg" | grep -q '30m TTL'
 }
+
+# ── unit 4.3 (startup-hooks-2026-10-18): silent on a machine prompt ──────────────────────────────
+run_hook_in() { run env CLAUDE_CONFIG_DIR="$D" bash -c 'printf "%s" "$1" | bash "$0"' "$H" "$1"; }
+
+@test "4.3: an expired cache on a <task-notification> prompt is SILENT" {
+  idle_for 7200
+  run_hook_in '{"prompt":"<task-notification>\n<task-id>b1</task-id></task-notification>"}'
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "4.3: the same expiry on a typed prompt still warns" {
+  idle_for 7200
+  run_hook_in '{"prompt":"hi there <task-notification> later in the text"}'
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext' | grep -q 'PROMPT CACHE EXPIRED'
+}

@@ -70,6 +70,14 @@ EOF
   fi
 fi
 
+# A harness-injected <task-notification> is a machine prompt, not a human's intent: this nudge fired
+# on 60 of 90 machine prompts (docs/research/startup-hooks-2026-10-18/A9-beyond-startup.md, "What this
+# axis missed" 2), against the adopted rule "early exit on <task-notification> prompts for
+# human-intent nudges" (docs/research/load-hook-timeouts-2026-10-11/DESIGN.md). Placed AFTER the
+# router, which must still see machine envelopes. Anchored regex, as in handoff-intent-nudge.sh.
+_rp_tn='^[[:space:]]*<task-notification>'
+[[ $PROMPT =~ $_rp_tn ]] && exit 0
+
 # Strong breadth-first research-INTENT markers (multi-word; deliberately avoids firing on a generic
 # "find"/"check"/"look at"). Over-firing is cheap + self-scoping (the message says "IF a fan-out");
 # under-firing is the real risk this guards.

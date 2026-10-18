@@ -39,6 +39,12 @@ NOW_EPOCH=$(date +%s)
 ELAPSED=$((NOW_EPOCH - LAST_EPOCH))
 
 if [[ $ELAPSED -gt $CACHE_TTL ]]; then
+  # Human-intent nudge: silent on a harness-injected <task-notification> (36 of 60 firings were on
+  # machine prompts — docs/research/startup-hooks-2026-10-18/A9-beyond-startup.md). stdin is read only
+  # on this rare expired path, with the builtin `read`, so the common path costs nothing new.
+  _ce_in=""; IFS= read -r -d '' _ce_in || true
+  _ce_tn='"prompt"[[:space:]]*:[[:space:]]*"([[:space:]]|\\[nrt])*<task-notification>'
+  [[ $_ce_in =~ $_ce_tn ]] && exit 0
   MINUTES=$((ELAPSED / 60))
   cat <<EOF
 {

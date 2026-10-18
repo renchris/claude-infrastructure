@@ -613,6 +613,36 @@ LOOP_TASK='[{"id":"b9","type":"shell","status":"running","command":"while pgrep 
   [ -f "$CC_GOAL_INERT_DIR/sid-crumb3.json" ] || false
 }
 
+@test "4.3: a goal that has EVALUATED since the crumb clears it (below-turn-threshold)" {
+  export CC_GOAL_INERT_DIR="$BATS_TEST_TMPDIR/crumbs"
+  mkdir -p "$CC_GOAL_INERT_DIR"
+  echo '{"arm":"blind","cause":"stale"}' > "$CC_GOAL_INERT_DIR/sid-crumb43a.json"
+  t="$(mk_armed_stale 1)"          # live goal, newest evaluation one turn old ⇒ below threshold
+  run bash -c "printf '%s' '$(payload "$t" '[]' "sid-crumb43a")' | CC_GOAL_INERT_DIR='$CC_GOAL_INERT_DIR' '$H'"
+  [ "$status" -eq 0 ]
+  [ ! -f "$CC_GOAL_INERT_DIR/sid-crumb43a.json" ] || false
+}
+
+@test "4.3: a NAMED-arm crumb is cleared once no deferrer remains" {
+  export CC_GOAL_INERT_DIR="$BATS_TEST_TMPDIR/crumbs"
+  mkdir -p "$CC_GOAL_INERT_DIR"
+  echo '{"arm":"named","cause":"while pgrep x; do sleep 20; done"}' > "$CC_GOAL_INERT_DIR/sid-crumb43b.json"
+  t="$(mk_armed)"                  # live, never evaluated; background_tasks now EMPTY
+  run bash -c "printf '%s' '$(payload "$t" '[]' "sid-crumb43b")' | CC_GOAL_INERT_DIR='$CC_GOAL_INERT_DIR' '$H'"
+  [ "$status" -eq 0 ]
+  if [ -f "$CC_GOAL_INERT_DIR/sid-crumb43b.json" ]; then
+    # the blind arm may legitimately re-fire, but then the crumb is a NEW one from the blind arm
+    [ "$(jq -r .arm "$CC_GOAL_INERT_DIR/sid-crumb43b.json")" = blind ] || false
+  fi
+}
+
+@test "4.3: a named crumb survives while its deferrer is still running" {
+  export CC_GOAL_INERT_DIR="$BATS_TEST_TMPDIR/crumbs"
+  t="$(mk_armed)"
+  run bash -c "printf '%s' '$(payload "$t" "$LOOP_TASK" "sid-crumb43c")' | CC_GOAL_INERT_DIR='$CC_GOAL_INERT_DIR' '$H'"
+  [ "$(jq -r .arm "$CC_GOAL_INERT_DIR/sid-crumb43c.json")" = named ] || false
+}
+
 # ══ EMPTY-STREAK (token-efficiency rank 13) ═══════════════════════════════════════════════════════
 # The goal IS evaluating, keeps judging unmet, and each forced turn does nothing. After 3 in a row the
 # operator gets ONE notice recommending `/goal clear`.
