@@ -68,7 +68,7 @@ tick_frag() { # $1=path → writes the preamble every case shares
   [ -f "$LR_STATE_DIR/move/c1/request.claimed.json" ]
   [ ! -d "$BATS_TEST_TMPDIR/tick.lock" ]
   dp="$(cat "$LR_STATE_DIR/drain.pid")"
-  [[ "$dp" =~ ^[0-9]+$ ]]
+  [[ "$dp" =~ ^[0-9]+$ ]] || false
   if kill -0 "$dp" 2>/dev/null; then echo "drainer $dp outlived its tick"; false; fi
 }
 
