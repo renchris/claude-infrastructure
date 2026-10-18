@@ -652,9 +652,9 @@ print("OK")'
   # this commit — not by decision, but because the desk lane did not exist for another 11 days and
   # the machine lane was the only answer available. The lanes are different objectives over the
   # same eligibility and they diverge on ordinary fleets: "roomy" has almost its whole week left
-  # (general is headroom/T**2, so it wants that) but its 5h window sits at 70%, past the desk floor
-  # — the exact pathology the two-key rule exists to keep an operator out of. "sooner" is 5h-safe
-  # with 20% of its week left, so the desk takes it by a whole rung of the ladder.
+  # (general is headroom/T**2, so it wants that) but resets 10h LATER; "sooner" holds 20% of its
+  # week and resets first, so the desk — earliest weekly reset — takes it. (Until 2026-10-17 the
+  # divergence was a 70% 5h window past the 0.60 desk floor; the floor is now the projected wall.)
   # A ➤ on "roomy" is the bug this case exists to catch, so the fixture asserts BOTH picks.
   run python3 -c "$LOAD"'
 import io, contextlib, re
@@ -663,7 +663,7 @@ def rw(acct, wk, wrh, sp):
             "fable_pct": 10, "email": acct + "@x.com", "dia_profile": acct.upper(),
             "launcher": "claude-" + acct, "weekly_reset_h": wrh, "fable_reset_h": 40.0,
             "session_reset_h": 3.0, "credits_on": False}
-rows = [rw("roomy", 5, 20.0, 70), rw("sooner", 80, 20.0, 5)]
+rows = [rw("roomy", 5, 30.0, 10), rw("sooner", 80, 20.0, 5)]
 WIN = {"active": True, "end": "2099-12-31", "deadline": None, "permanent": True}
 # the lanes must genuinely disagree, or the assertion below is satisfied by a marker that never
 # moved — the control that makes this case a discriminator rather than a restatement
@@ -714,7 +714,9 @@ def rw(acct, wk, wrh, sp, fp, **kw):
 # bucket keeps the fable lane off it too — and its login expires inside the warn band (72h) but
 # OUTSIDE the cliff drain band (48h), i.e. the account is still fully routable. That gap is the
 # whole point: a drained account is excluded and needs no warning; a soft-band one is picked.
-rows = [rw("roomy", 5, 20.0, 70, 10),
+# roomy is projected to its 5h WALL (70% + 40%/h), the one 5h state that still drops the desk a rung
+# since the floor moved to the wall (2026-10-17); general keeps it on its huge, sooner week.
+rows = [rw("roomy", 5, 15.0, 70, 10, burn_5h_ewma_ph=40.0),
         rw("sooner", 80, 20.0, 5, 99, login_expires_h=60.0, login_expires_at=EXP)]
 WIN = {"active": True, "end": "2099-12-31", "deadline": None, "permanent": True}
 g, _ = ca.ranked(rows, cfg, WIN, "general")
@@ -2401,7 +2403,7 @@ for v in ("CC_ROUTE_DESK_5H_FLOOR", "CC_ROUTE_DESK_W_FLOOR", "CC_ROUTE_DESK_HYST
     os.environ.pop(v, None)
 safe = row(acct="safe", session_pct=10, weekly_pct=40, weekly_reset_h=150.0)
 thin = row(acct="thin", session_pct=10, weekly_pct=95, weekly_reset_h=10.0)   # 5h-safe, weekly-thin
-hot  = row(acct="hot",  session_pct=70, weekly_pct=40, weekly_reset_h=1.0)    # over the 5h floor
+hot  = row(acct="hot",  session_pct=70, burn_5h_ewma_ph=40.0, weekly_pct=40, weekly_reset_h=1.0)  # projected wall
 assert ca.desk_keys(safe, cfg)[2] == ca.DESK_TIER_SAFE
 assert ca.desk_keys(thin, cfg)[2] == ca.DESK_TIER_5H      # the WEEKLY key degrades first
 assert ca.desk_keys(hot, cfg)[2] == ca.DESK_TIER_ANY
@@ -2414,8 +2416,8 @@ assert ss > st > sh, (ss, st, sh)
 # ...AND THE SET IS NEVER EMPTIED. A fleet where every account fails BOTH keys still returns a
 # ranking — the failure mode most likely to ship is this one answering "none" and the launcher
 # silently falling back to the pinned account.
-allhot = [row(acct="h1", session_pct=70, weekly_pct=40, weekly_reset_h=100.0),
-          row(acct="h2", session_pct=80, weekly_pct=95, weekly_reset_h=20.0)]
+allhot = [row(acct="h1", session_pct=70, burn_5h_ewma_ph=40.0, weekly_pct=40, weekly_reset_h=100.0),
+          row(acct="h2", session_pct=80, burn_5h_ewma_ph=40.0, weekly_pct=95, weekly_reset_h=20.0)]
 out, reasons = ca.ranked(allhot, cfg, WIN_OPEN, "interactive")
 assert [r["acct"] for _s, r in out] == ["h2", "h1"], (out, reasons)   # earliest reset still wins
 assert reasons == {}, reasons
@@ -2432,18 +2434,20 @@ print("OK")'
 import os
 for v in ("CC_ROUTE_DESK_5H_FLOOR", "CC_ROUTE_DESK_W_FLOOR", "CC_ROUTE_PROJ"):
     os.environ.pop(v, None)
-hot  = row(session_pct=70, weekly_pct=40)      # over the 0.60 floor
+hot  = row(session_pct=70, burn_5h_ewma_ph=40.0, weekly_pct=40)   # projected to the 5h wall
+warm = row(session_pct=70, weekly_pct=40)      # 70% with no burn: below the 1.00 floor
 cool = row(session_pct=10, weekly_pct=40)
 thin = row(session_pct=10, weekly_pct=95)      # weekly headroom 0.05 < 0.15
 assert ca.desk_keys(hot, cfg)[2] == ca.DESK_TIER_ANY
+assert ca.desk_keys(warm, cfg)[2] == ca.DESK_TIER_SAFE         # 70% short of the wall: safe
 os.environ["CC_ROUTE_DESK_5H_FLOOR"] = "off"
 assert ca.desk_keys(hot, cfg)[2] == ca.DESK_TIER_SAFE          # key neutralised
 os.environ["CC_ROUTE_DESK_5H_FLOOR"] = "0"
 # POLARITY: 0 is not "no floor", it is "nothing is ever 5h-safe". _term_on would have read this
 # as off and inverted the switch — the reason these knobs do not use it.
 assert ca.desk_keys(cool, cfg)[2] == ca.DESK_TIER_ANY
-os.environ["CC_ROUTE_DESK_5H_FLOOR"] = "0.75"
-assert ca.desk_keys(hot, cfg)[2] == ca.DESK_TIER_SAFE          # a NUMBER moves the floor
+os.environ["CC_ROUTE_DESK_5H_FLOOR"] = "0.60"
+assert ca.desk_keys(warm, cfg)[2] == ca.DESK_TIER_ANY           # a NUMBER moves the floor
 os.environ["CC_ROUTE_DESK_5H_FLOOR"] = "not-a-number"
 assert ca.desk_keys(hot, cfg)[2] == ca.DESK_TIER_ANY           # malformed ⇒ the default stands
 os.environ.pop("CC_ROUTE_DESK_5H_FLOOR")
@@ -2532,7 +2536,7 @@ assert si > ca.score_interactive(near, cfg)[0], "incumbent lost inside the margi
 assert si < ca.score_interactive(far, cfg)[0], "incumbent held past the margin"
 # it is a WITHIN-TIER preference only: stickiness must never hold the desk on an account that has
 # fallen out of the safe set, which is exactly when it should move.
-hot_inc = row(acct="inc", session_pct=70, weekly_pct=40, weekly_reset_h=30.0, desk_incumbent=True)
+hot_inc = row(acct="inc", session_pct=70, burn_5h_ewma_ph=40.0, weekly_pct=40, weekly_reset_h=30.0, desk_incumbent=True)
 assert ca.score_interactive(hot_inc, cfg)[0] < ca.score_interactive(near, cfg)[0]
 os.environ["CC_ROUTE_DESK_HYST"] = "off"
 assert ca.score_interactive(inc, cfg)[0] < ca.score_interactive(near, cfg)[0]
@@ -2626,7 +2630,7 @@ assert ca.cliff_band(far) == "soft"
 assert ca.score_interactive(far, cfg)[0] == ca.score_interactive(clear, cfg)[0]
 assert ca.desk_keys(soft, cfg)[2] == ca.DESK_TIER_SAFE
 assert ca.score_interactive(soft, cfg)[0] > ca.score_interactive(
-    row(acct="hot", session_pct=70, weekly_pct=40, weekly_reset_h=1.0), cfg)[0]
+    row(acct="hot", session_pct=70, burn_5h_ewma_ph=40.0, weekly_pct=40, weekly_reset_h=1.0), cfg)[0]
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
@@ -2914,4 +2918,30 @@ PY
   [ "${out%%|*}" = "keychain-error" ]             # still the same state...
   run bash -c "printf '%s' \"\${1}\" | grep -c 'path=timeout'" _ "${out#*|}"
   [ "$output" = 0 ]                               # ...but the attribution is gone
+}
+
+@test "router desk 2026-10-17 regression: a 5h level short of the wall never costs the desk a stranding week" {
+  run python3 -c "$LOAD"'
+import os
+for v in ("CC_ROUTE_DESK_5H_FLOOR", "CC_ROUTE_DESK_W_FLOOR", "CC_ROUTE_DESK_HYST", "CC_ROUTE_PROJ"):
+    os.environ.pop(v, None)
+# live that night: next 46% 5h burning 14.4%/h, 5h window AND week both reset in 1.03h, 71% used;
+# next4 6% 5h, 89% used, reset 6.1h. The 0.60 floor projected next to 60.4% and gave the desk to next4.
+nx = row(acct="next", session_pct=46, session_reset_h=1.03, burn_5h_ewma_ph=14.43,
+         weekly_pct=71, weekly_reset_h=1.03, k=26)
+n4 = row(acct="next4", session_pct=6, session_reset_h=3.6, weekly_pct=89, weekly_reset_h=6.1, k=10)
+assert ca.desk_keys(nx, cfg)[2] == ca.DESK_TIER_SAFE
+out, _ = ca.ranked([n4, nx], cfg, WIN_OPEN, "interactive")
+assert [r["acct"] for _s, r in out][0] == "next", out
+os.environ["CC_ROUTE_DESK_5H_FLOOR"] = "0.60"                   # the old floor: the bug reproduces
+out, _ = ca.ranked([n4, nx], cfg, WIN_OPEN, "interactive")
+assert [r["acct"] for _s, r in out][0] == "next4", out
+os.environ.pop("CC_ROUTE_DESK_5H_FLOOR")
+# a projected WALL still demotes, and the shared S_CUT hard cut still excludes
+wall = row(acct="wall", session_pct=70, burn_5h_ewma_ph=40.0, weekly_pct=71, weekly_reset_h=1.03)
+assert ca.desk_keys(wall, cfg)[2] == ca.DESK_TIER_ANY
+assert ca.score_interactive(row(session_pct=86), cfg)[0] is None
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }

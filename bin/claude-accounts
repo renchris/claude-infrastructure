@@ -3576,7 +3576,15 @@ PROJ_LOOKAHEAD_H = 1.0     # how far ahead SF projects 5h burn (capped at the wi
 #                       300 min = one full 5-hour window: the bucket the desk's own burn lives in.
 #                       Longer would pin the desk to an account whose quota state no longer has
 #                       anything to do with the session the operator is sitting in.
-DESK_5H_FLOOR = 0.60
+# 1.00 = "projected to hit the 5h wall inside the lookahead" (_su_projected caps at 1.0, so su < 1.0
+# is exactly "will not wall"). Was 0.60, sized by argument and never measured (see score_interactive).
+# OPERATOR RULING 2026-10-17: the bottom line is exhausting the weekly limit before it resets (a week
+# of a $200/mo plan is ~$50; unused weekly quota is gone), and a 5h level short of the wall has zero
+# cost. Live that night: next at 46% 5h, burning 14%/h, projected 60.4% with BOTH its 5h window and
+# its week resetting in 1.0h (~27pp of the week forecast to strand) fell to tier 0, and bare `claude`
+# went to next4 (reset 6.1h). Below the wall the 5h level no longer decides the desk; the shared
+# S_CUT=0.85 hard exclusion in _excluded still applies to every lane.
+DESK_5H_FLOOR = 1.00
 DESK_W_FLOOR = 0.15
 DESK_W_FLOOR_FULL_H = 24.0
 DESK_HYST_MARGIN = 0.15
@@ -3618,7 +3626,7 @@ def urgency_exp(R):
 # rides the existing lanes (a `recovery` KIND would need a recovery-general and a recovery-fable
 # twin — the doubling is the tell).
 RECOVERY_W_FLOOR_DEFAULT = 0.10   # weekly headroom floor: excludes weekly >= 90
-RECOVERY_S_CEIL_DEFAULT = 0.60    # projected 5h ceiling: = DESK_5H_FLOOR, already argued
+RECOVERY_S_CEIL_DEFAULT = 0.60    # projected 5h ceiling: the desk floor's former 0.60 (desk moved to 1.00, 2026-10-17)
 RECOVERY_F_FLOOR_DEFAULT = 0.05   # f_eff floor: fable >= 90 at coupling 0.5
 
 
@@ -5915,6 +5923,8 @@ def score_interactive(r, cfg, cliff=True):
     weekly target is already in w_rem). Ties inside a tier fall to accounts.json order, which is
     deterministic — a desk must not flap between two equal accounts.
 
+    ⚠️ SUPERSEDED 2026-10-17: DESK_5H_FLOOR is now 1.00 (the projected wall) by operator ruling — see
+    the constant. The paragraph below is the 0.60 record, kept.
     ⚠️ DESK_5H_FLOOR = 0.60 is UNTESTED BY THIS DATA, NOT VALIDATED BY IT. The replay was flat at
     0.6% for every floor in {0.50, 0.60, 0.70} x every weekly floor in {0, 0.15, 0.30} — but that
     is because the fleet almost never approaches 60% 5h utilisation (3 of 4 accounts never exceeded
