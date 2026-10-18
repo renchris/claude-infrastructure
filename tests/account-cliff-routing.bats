@@ -32,6 +32,7 @@ setup() {
   # exported CC_ROUTE_CLIFF_TERM=off would turn every assertion below vacuous.
   unset CC_ROUTE_CLIFF_TERM CC_ROUTE_CLIFF_SOFT_H CC_ROUTE_CLIFF_DRAIN_H CC_ROUTE_CLIFF_SOFT_FACTOR
   unset CC_ROUTE_DESK_CLIFF_WINDOW CC_ROUTE_DESK_LIFE_H CC_ROUTE_DESK_CLIFF_STRAND_PP CC_ROUTE_DESK_HYST
+  unset CC_ROUTE_DISPATCH_CLIFF_WINDOW
 
   # Fixture $HOME before anything else. Overriding CLAUDE_ACCOUNTS_JSON / _LASTGOOD / cache_file is
   # not sufficient: bin/claude-accounts derives several other paths from $HOME (the relogin-poll
@@ -497,13 +498,61 @@ print("OK")'
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
-@test "desk gate leaves dispatch, fable and the drain band exactly as they were" {
+@test "with no strand forecast, dispatch and fable keep exactly x0.25, and the drain band is unchanged" {
   run python3 -c "$LOAD"'
 soft = row(weekly_reset_h=30.0, login_expires_h=128.0)
 base = row(weekly_reset_h=30.0, login_expires_h=500.0)
 assert abs(ca.score_general(soft, cfg)[0] - ca.score_general(base, cfg)[0] * ca.CLIFF_SOFT_FACTOR) < 1e-12
 assert abs(ca.score_fable(soft, cfg, WIN_OPEN)[0] - ca.score_fable(base, cfg, WIN_OPEN)[0] * ca.CLIFF_SOFT_FACTOR) < 1e-12
 assert ca.score_interactive(row(weekly_reset_h=5.0, login_expires_h=40.0), cfg) == (None, ca.CLIFF_DRAIN_REASON)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+# ── the dispatch lanes (general, fable): the desk's lift, so handoff spends the dying week first ──
+
+@test "dispatch 2026-10-17T07:25Z regression: a stranding soft account with the earliest reset leads general AND fable" {
+  run python3 -c "$LOAD"'
+import os
+# the live rows that night: next 44% used, reset 20.5h, login 116.7h, ~45pp forecast to strand;
+# next4 67% used, reset 25.5h, login 393h. handoff-fire --account auto took next4 18 times of 25.
+nx = row(acct="next", weekly_pct=44, weekly_reset_h=20.53, fable_pct=0, fable_reset_h=20.53,
+         k=7, login_expires_h=116.7, wk_strand_pp=45.3)
+n4 = row(acct="next4", weekly_pct=67, weekly_reset_h=25.53, fable_pct=0, fable_reset_h=25.53,
+         k=16, login_expires_h=393.3, wk_strand_pp=11.8)
+assert ca.cliff_band(nx) == "soft" and ca._dispatch_cliff_factor(nx) == 1.0
+def top(kind):
+    out, _ = ca.ranked([n4, nx], cfg, WIN_OPEN, kind)
+    return [r["acct"] for _s, r in out][0]
+assert top("general") == "next" and top("fable") == "next"
+os.environ["CC_ROUTE_DISPATCH_CLIFF_WINDOW"] = "off"
+assert top("general") == "next4" and top("fable") == "next4"     # the old pick: the bug reproduces
+assert ca._desk_cliff_factor(nx) == 1.0                             # and the desk is not switched
+del os.environ["CC_ROUTE_DISPATCH_CLIFF_WINDOW"]
+os.environ["CC_ROUTE_DESK_CLIFF_WINDOW"] = "off"
+assert top("general") == "next" and ca._desk_cliff_factor(nx) == ca.CLIFF_SOFT_FACTOR
+del os.environ["CC_ROUTE_DESK_CLIFF_WINDOW"]
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "dispatch keeps x0.25 when the week is not stranding or the drain is within DESK_LIFE_H" {
+  run python3 -c "$LOAD"'
+base = row(weekly_reset_h=30.0, login_expires_h=500.0)
+g0, f0 = ca.score_general(base, cfg)[0], ca.score_fable(base, cfg, WIN_OPEN)[0]
+def demoted(**kw):
+    r = row(weekly_reset_h=30.0, **kw)
+    return (abs(ca.score_general(r, cfg)[0] - g0 * ca.CLIFF_SOFT_FACTOR) < 1e-12 and
+            abs(ca.score_fable(r, cfg, WIN_OPEN)[0] - f0 * ca.CLIFF_SOFT_FACTOR) < 1e-12)
+for kw in ({}, {"wk_strand_pp": None}, {"wk_strand_pp": 3.99}):              # not stranding
+    assert demoted(login_expires_h=128.0, **kw), kw
+assert demoted(login_expires_h=108.0, wk_strand_pp=50.0)                     # drain_in == 60
+lifted = row(weekly_reset_h=30.0, login_expires_h=108.01, wk_strand_pp=50.0)
+assert ca.score_general(lifted, cfg)[0] == g0 and ca.score_fable(lifted, cfg, WIN_OPEN)[0] == f0
+assert ca.score_general(row(weekly_reset_h=5.0, login_expires_h=40.0, wk_strand_pp=50.0), cfg) \
+    == (None, ca.CLIFF_DRAIN_REASON)                                          # drain still excludes
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }

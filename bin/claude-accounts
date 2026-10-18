@@ -3320,9 +3320,9 @@ def _soft(r, R):
 #                    finally gets the k==0 window it has never once found (all 4 accounts sit at
 #                    k=5-6, so the autonomous path was 0-BY-CONSTRUCTION). Draining an account IS
 #                    a routing decision — that is why this belongs here and not in a new daemon.
-#   The DESK lane lifts SOFT (_desk_cliff_factor) only when the account's week is forecast to
-#   strand AND its drain point is beyond any desk's lifetime: a stranded pp is unrecoverable, a
-#   lost k==0 poll tick is one of ~168.
+#   Every lane lifts SOFT (_desk_cliff_factor, _dispatch_cliff_factor) only when the account's
+#   week is forecast to strand AND its drain point is beyond any session's lifetime: a stranded
+#   pp is unrecoverable, a lost k==0 poll tick is one of ~168.
 #
 # FAIL-OPEN on absence is not a nicety: login_expires_h is not on every build (see the
 # --relogin-status detection note), and reading a missing field as "cliff imminent" would exclude
@@ -3424,8 +3424,36 @@ def _desk_cliff_factor(r):
 
     Kill: CC_ROUTE_DESK_CLIFF_WINDOW=off restores x0.25 across the whole soft band.
     Knobs: CC_ROUTE_DESK_LIFE_H, CC_ROUTE_DESK_CLIFF_STRAND_PP (malformed or negative => default)."""
+    return _strand_cliff_factor(r, "CC_ROUTE_DESK_CLIFF_WINDOW")
+
+
+def _dispatch_cliff_factor(r):
+    """The SOFT-band factor as the DISPATCH lanes (general, fable) apply it: the desk's rule.
+
+    ── Why dispatch needed the same lift (measured 2026-10-17T07:25Z) ────────────────────────────
+    27987efa8 lifted the factor for the desk and left general/fable "unchanged" — a scope line, not
+    a reasoned exclusion. On the urgency law w_rem / T**2, x0.25 is T' = 2T, so it overrides the
+    earliest-reset objective whenever the reset gap is under 2x. Live: next (weekly 44% used,
+    reset 20.0h, login 116.7h, ~45pp forecast to strand) scored 0.000288 against next4 (67% used,
+    reset 25.0h, login 393h, ~12pp) at 0.000316 — every other term favoured next 3.64x — so
+    handoff-fire --account auto placed 18 fires on next4 against 7 on next in 19h, breaking its
+    own "soonest-expiring quota first" contract. The protection bought nothing either: the desk
+    kept next at k>0 all band long, and cc-relogin-poll logged no k==0 tick for it.
+
+    Same two conditions as the desk, same knobs (wk_strand_pp floor, DESK_LIFE_H): a fired session
+    recycles in place and keeps its account until a repick beats it by REPICK_RATIO, so its life is
+    unmeasured and the desk's 60h bound is the conservative one. An account on pace to use its week,
+    or whose drain point a session opened now could reach, keeps x0.25 exactly as before.
+
+    Kill: CC_ROUTE_DISPATCH_CLIFF_WINDOW=off restores x0.25 on general and fable only."""
+    return _strand_cliff_factor(r, "CC_ROUTE_DISPATCH_CLIFF_WINDOW")
+
+
+def _strand_cliff_factor(r, kill_env):
+    """The soft factor, lifted to 1.0 iff the week strands and the drain is past DESK_LIFE_H.
+    Shared body of _desk_cliff_factor and _dispatch_cliff_factor; kill_env is the lane's switch."""
     f = _cliff_factor(r)                    # 1.0 outside soft, with the term off, or cliff unknown
-    if f == 1.0 or not _term_on("CC_ROUTE_DESK_CLIFF_WINDOW"):
+    if f == 1.0 or not _term_on(kill_env):
         return f
     strand = r.get("wk_strand_pp")
     if not isinstance(strand, (int, float)) or \
@@ -5709,7 +5737,7 @@ def score_general(r, cfg, cliff=True, recovery=False):
     T = horizon(r.get("weekly_reset_h"), R)
     # T**γ (M7): deadline-dominant urgency — see the utilization-pressure block above. γ=1 is
     # the exact pre-M7 linear form.
-    return (w_rem / (T ** urgency_exp(R))) * _soft(r, R) * (_cliff_factor(r) if cliff else 1.0), None
+    return (w_rem / (T ** urgency_exp(R))) * _soft(r, R) * (_dispatch_cliff_factor(r) if cliff else 1.0), None
 
 
 DESK_TIER_SAFE = 2      # 5h-safe AND weekly-safe — the set the rule wants to pick from
@@ -5983,7 +6011,7 @@ def score_fable(r, cfg, win, cliff=True, recovery=False):
     H = max(min(T_fable, h_deadline), R["EPS_H"]) if h_deadline is not None else max(T_fable, R["EPS_H"])
     JB = R["JB_BONUS"] if (h_deadline is not None and T_fable > h_deadline) else 1.00
     # H**γ mirrors score_general — the scoped bucket strands at ITS reset by the same law.
-    return (f_eff / (H ** urgency_exp(R))) * JB * _soft(r, R) * (_cliff_factor(r) if cliff else 1.0), None
+    return (f_eff / (H ** urgency_exp(R))) * JB * _soft(r, R) * (_dispatch_cliff_factor(r) if cliff else 1.0), None
 
 
 def _rank_pass(rows, cfg, win, kind, cliff, recovery=False):
