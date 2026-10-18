@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2016,SC2034,SC2119,SC2120  # single-quoted text is literal on purpose; globals feed the sourced lr-handoff; fire() takes optional args
 # lr-handoff.sh — THE MOVE LANE SPENDS THE OWED RECYCLE ROW IT SETTLED ITSELF (R2,
 # docs/plans/LIMIT_RECOVER_SELF_INPLACE.md, incident 2026-10-18).
 #

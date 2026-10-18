@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2034,SC2119,SC2120  # globals are read by the eval-extracted functions under test; fire() takes optional args
 # handoff-fire.sh --recycle, remote form — the four narrow fixes of docs/plans/LIMIT_RECOVER_SELF_INPLACE.md
 # § W0 (root causes R1, R2, R3) that live in the recycle's admission and hold paths.
 #
