@@ -28,6 +28,9 @@ setup() {
   SID="bbbb2222-0000-4000-8000-000000000001"; PANE=41
   mvf_session "$PANE" "$SID"
   mvf_plan w1 move "$PANE:$SID"
+  # The batch runner's admission record, as tests/lr-move-worker.bats writes it: the verdict's P6 conjunct
+  # needs it, so without it every MOVED case here ended FAILED "P6 admission" (also on 69ed4dae1 itself).
+  printf '{"admitted":true,"target":"next3","target_auth":"ok"}\n' > "$BDIR/admit.json"
   CLAIMS="$LR_STATE_DIR/runs/by-sid"
   retry_stub
 }
