@@ -1432,24 +1432,49 @@ kitty_socket_answers() { # $1=kitty binary  $2=socket (unix:/path)
 # over a socket it had never actually reached, and the timeout sub-state this function exists to
 # name became unreachable there (item 8dc9ff906d4b, 4 tests). chdir + connect the basename spends
 # 10 bytes instead of 107 and changes nothing else: same socket, same address, same verdicts.
-kitty_socket_accepting() { # $1=socket (unix:/path) → 0 accepting / 1 not, or unprovable
+#
+# ONE rc FOR FIVE CAUSES, and that hid which one held a move (lr-inplace-immediacy 2026-10-18, raw/
+# C-actuate-kitty.md §4b). Every failure used to exit 1: ECONNREFUSED, ENOENT, any other OSError, a
+# chdir failure, and this probe's own 3 s bound firing (124/137). 43e6eb4b's actuate held
+# HELD:unreachable on one such 1, and the same kitty answered 48 s later; nothing recorded which of the
+# five it had been. A refusal is not even proof of a leftover here: a LIVE kitty whose accept backlog
+# (128) is full refuses at once too (husk-panes-2026-09-30.md:88). So the exit now names the cause,
+# and every caller that only asks 0-or-not still reads it the same way.
+kitty_socket_accepting() { # $1=socket (unix:/path) → 0 accepting · 3 refused · 4 no such socket · 5 other OSError · 124/137 the bound fired · 1 not probed (no AF_UNIX path)
   case "${1:-}" in unix:/*) ;; *) return 1 ;; esac
   hf_bounded_s "${CC_KITTY_CONNECT_TIMEOUT_S:-3}" /usr/bin/python3 -c '
 import os, socket, sys
+def code(e):
+    if isinstance(e, ConnectionRefusedError):
+        return 3
+    if isinstance(e, FileNotFoundError):
+        return 4
+    return 5
 d, b = os.path.split(os.path.abspath(sys.argv[1]))
 try:
     os.chdir(d)
-except Exception:
-    sys.exit(1)
+except Exception as e:
+    sys.exit(code(e))
 s = socket.socket(socket.AF_UNIX)
 s.settimeout(2.0)
 try:
     s.connect(b)
-except Exception:
-    sys.exit(1)
+except Exception as e:
+    sys.exit(code(e))
 finally:
     s.close()
 ' "${1#unix:}" >/dev/null 2>&1
+}
+
+hf_kprobe_connect_say() { # $1=kitty_socket_accepting's rc → that rc in words
+  case "${1:-}" in
+    3) printf 'connection refused (rc 3)' ;;
+    4) printf 'no such socket (rc 4)' ;;
+    5) printf 'the connect failed another way (rc 5)' ;;
+    124|137) printf "the probe's own %ss bound fired (rc %s), so it could not tell" "${CC_KITTY_CONNECT_TIMEOUT_S:-3}" "$1" ;;
+    1) printf 'not probed: the address is not an AF_UNIX path (rc 1)' ;;
+    *) printf 'the probe could not run (rc %s)' "${1:-?}" ;;
+  esac
 }
 
 # ── IS KITTY'S CONTROL SOCKET ANSWERING, SLOW, OR STUCK? (pane-lifecycle fixes item 4c, 2026-10-01) ──
@@ -1473,27 +1498,41 @@ finally:
 # shellcheck source=lib/kitty-queue.sh
 # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
 . "$HF_DIR/lib/kitty-queue.sh" 2>/dev/null || . "$HOME/.claude/scripts/lib/kitty-queue.sh" 2>/dev/null || true
-hf_recycle_kitty_precheck() { # → 0 answers (or not a kitty pane) · 1 not answering · 2 STUCK; sets HF_KPROBE_WHY/HF_KPROBE_SOCK
+# The raw readings stay beside the verdict (HF_KPROBE_CONNECT_RC, HF_KPROBE_LS_RC, HF_KPROBE_QUEUE), so a
+# held row says which failure it was: on 2026-10-18 the row read "did not accept a connection (0
+# queued)", and the 0 was a netstat that may never have answered (lib/kitty-queue.sh prints `?` now).
+hf_recycle_kitty_precheck() { # → 0 answers (or not a kitty pane) · 1 not answering · 2 STUCK; sets HF_KPROBE_WHY/HF_KPROBE_SOCK and the raw readings
   local sock q
-  HF_KPROBE_WHY="" HF_KPROBE_SOCK=""
+  HF_KPROBE_WHY="" HF_KPROBE_SOCK="" HF_KPROBE_CONNECT_RC="" HF_KPROBE_LS_RC="" HF_KPROBE_QUEUE=""
   [ "${CC_RECYCLE_KITTY_PRECHECK:-1}" != 0 ] || return 0
   kitty_identity || return 0
   sock="${CC_TERM_KITTY_TO:-${KITTY_LISTEN_ON:-}}"
   case "$sock" in unix:/*) ;; /*) sock="unix:$sock" ;; *) return 0 ;; esac
   HF_KPROBE_SOCK="${sock#unix:}"
-  if kitty_socket_accepting "$sock"; then
-    kt ls >/dev/null 2>&1 && return 0
+  HF_KPROBE_CONNECT_RC=0; kitty_socket_accepting "$sock" || HF_KPROBE_CONNECT_RC=$?
+  if [ "$HF_KPROBE_CONNECT_RC" = 0 ]; then
+    HF_KPROBE_LS_RC=0; kt ls >/dev/null 2>&1 || HF_KPROBE_LS_RC=$?
+    [ "$HF_KPROBE_LS_RC" = 0 ] && return 0
     HF_KPROBE_WHY="the socket $HF_KPROBE_SOCK accepted a connection, but 'kitty @ ls' did not answer within ${HF_TIMEOUT_S:-10}s"
   else
-    HF_KPROBE_WHY="the control socket $HF_KPROBE_SOCK did not accept a connection"
+    HF_KPROBE_WHY="the control socket $HF_KPROBE_SOCK did not accept a connection: $(hf_kprobe_connect_say "$HF_KPROBE_CONNECT_RC")"
   fi
   q="$(hf_kitty_queue_depth "$sock")"
-  if [ "${q:-0}" -ge "${CC_KITTY_WEDGED_QUEUE_N:-128}" ]; then
+  HF_KPROBE_QUEUE="${q:-?}"
+  # `?` is a netstat that failed or timed out: unknown, so never read as full (and never as 0).
+  case "$HF_KPROBE_QUEUE" in
+    *[!0-9]*) HF_KPROBE_WHY="$HF_KPROBE_WHY (queue unreadable: netstat failed)"; return 1 ;;
+  esac
+  if [ "$HF_KPROBE_QUEUE" -ge "${CC_KITTY_WEDGED_QUEUE_N:-128}" ]; then
     HF_KPROBE_WHY="$HF_KPROBE_WHY, and $q connections sit queued on it with their requests unread — the accept queue is full, so kitty's remote-control thread is gone"
     return 2
   fi
   HF_KPROBE_WHY="$HF_KPROBE_WHY ($q queued)"
   return 1
+}
+
+hf_kprobe_detail() { # → the probe's raw readings, for a held row's detail
+  printf 'connect_rc=%s ls_rc=%s queue=%s' "${HF_KPROBE_CONNECT_RC:--}" "${HF_KPROBE_LS_RC:--}" "${HF_KPROBE_QUEUE:--}"
 }
 
 # kitty control-socket call. BOUNDED through hf_bounded exactly like every osascript here — kitty's
@@ -15522,7 +15561,7 @@ if [ "$RECYCLE" = 1 ]; then
   if [ "$HF_KPROBE_RC" != 0 ] && [ "${DRY:-0}" = 1 ]; then
     echo "⚠ recycle (dry run): $HF_KPROBE_WHY — a real run would be HELD here, nothing typed" >&2
   elif [ "$HF_KPROBE_RC" = 2 ]; then
-    emit_recycle_event recycle-held-wedged "" "$SID" "kitty control socket STUCK: $HF_KPROBE_WHY" || true
+    emit_recycle_event recycle-held-wedged "" "$SID" "kitty control socket STUCK: $HF_KPROBE_WHY [$(hf_kprobe_detail)]" || true
     hf_recycle_owed_record "$SID" "kitty control socket stuck (accept queue full)"
     hf_backlog_needs "restart kitty (control socket stuck: queue full)" --class needs-human \
       --falsifier "test ! -S $HF_KPROBE_SOCK"
@@ -15532,7 +15571,7 @@ if [ "$RECYCLE" = 1 ]; then
     } >&2
     exit 1
   elif [ "$HF_KPROBE_RC" = 1 ]; then
-    emit_recycle_event recycle-held-unreachable "" "$SID" "kitty did not answer the up-front probe: $HF_KPROBE_WHY" || true
+    emit_recycle_event recycle-held-unreachable "" "$SID" "kitty did not answer the up-front probe: $HF_KPROBE_WHY [$(hf_kprobe_detail)]" || true
     hf_recycle_owed_record "$SID" "kitty remote control not answering"
     { echo "!! recycle HELD (kitty is not answering): $HF_KPROBE_WHY."
       echo "!!   Nothing was typed and nothing was closed; this session stays alive. Re-run the same command once 'kitten @ ls' answers in under 2 s — run it bare: an outer 'timeout' or a grep filter hides the verdict."

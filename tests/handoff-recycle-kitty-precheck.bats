@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2329  # every stub here is invoked by the functions extracted from handoff-fire.sh
 # Pane-lifecycle fixes 2026-10-01, item 4 (docs/plans/pane-lifecycle-fixes-2026-10-01.md; evidence
 # docs/research/recycle-unreachable-2026-10-01.md and the 2026-10-01 live capture in
 # docs/research/husk-panes-2026-09-30.md).
@@ -113,7 +114,35 @@ row_of() { jq -c --arg c "$1" 'select(.class == $c)' "$LOG" | tail -1; }
 load_units() {
   # hf_kitty_queue_depth moved to scripts/lib/kitty-queue.sh (W3 P5); the subject sources it from there.
   . "$REPO_SRC/scripts/lib/kitty-queue.sh"
-  eval "$(sed -n '/^hf_recycle_kitty_precheck() {/,/^}/p;/^hf_self_kitty_tty() {/,/^}/p;/^hf_phase() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^hf_recycle_kitty_precheck() {/,/^}/p;/^hf_self_kitty_tty() {/,/^}/p;/^hf_phase() {/,/^}/p;/^hf_kprobe_connect_say() {/,/^}/p;/^hf_kprobe_detail() {/,/^}/p;/^kitty_socket_accepting() {/,/^}/p;/^hf_bounded_s() {/,/^}/p' "$HF")"
+  export HF_TIMEOUT_BIN=""
+}
+
+# A real AF_UNIX socket at $1, bound RELATIVE (the test dir is past Darwin's 104-byte sun_path cap):
+# listening=1 keeps a listener alive in the background, listening=0 binds and exits (a leftover file).
+fixture_socket() { # $1=path $2=listening (1|0)
+  ( cd "$(dirname "$1")" && /usr/bin/python3 -c '
+import socket, sys, time
+s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])
+if sys.argv[2] == "1":
+    s.listen(5)
+open(sys.argv[1] + ".ready", "w").close()
+if sys.argv[2] == "1":
+    time.sleep(60)
+' "$(basename "$1")" "$2" ) >/dev/null 2>&1 3>&- &
+  [ "$2" = 1 ] && echo "$!" >> "$BATS_TEST_TMPDIR/listeners.pid"
+  # Wait for the marker written AFTER listen(): the socket file appears at bind(), and a connect in
+  # between is refused. Up to 60 s: a loaded box takes seconds just to start python (2026-10-18).
+  local n=0; while [ ! -e "$1.ready" ] && [ "$n" -lt 600 ]; do sleep 0.1; n=$((n + 1)); done
+  [ "$2" = 1 ] || wait "$!" 2>/dev/null || true
+  [ -S "$1" ]
+}
+teardown() {
+  local p
+  if [ -f "$BATS_TEST_TMPDIR/listeners.pid" ]; then
+    while read -r p; do kill "$p" 2>/dev/null || true; done < "$BATS_TEST_TMPDIR/listeners.pid"
+  fi
+  return 0
 }
 
 @test "queue depth counts only rows ON this socket that hold unread data" {
@@ -134,6 +163,76 @@ load_units() {
   netstat_capture 128
   ACC=0; rc=0; hf_recycle_kitty_precheck || rc=$?; [ "$rc" = 2 ] || false
   [[ "$HF_KPROBE_WHY" == *"accept queue is full"* ]] || false
+}
+
+# ── K2 (lr-inplace-immediacy 2026-10-18): the probe says WHICH failure it was ─────────────────────
+# 43e6eb4b held on "did not accept a connection (0 queued)": one rc for five causes, and a 0 that a
+# failed netstat would also have printed. RED on the unfixed tree: every failure exited 1, and a
+# failing netstat read 0.
+
+@test "K2 kitty_socket_accepting: 0 listening · 3 refused (a leftover file) · 4 no such socket · 5 another OSError" {
+  load_units
+  d="$BATS_TEST_TMPDIR/k"; mkdir -p "$d"
+  fixture_socket "$d/live" 1
+  fixture_socket "$d/dead" 0
+  rc=0; kitty_socket_accepting "unix:$d/live" || rc=$?; [ "$rc" = 0 ] || { echo "listening: rc=$rc"; false; }
+  rc=0; kitty_socket_accepting "unix:$d/dead" || rc=$?; [ "$rc" = 3 ] || { echo "refused: rc=$rc"; false; }
+  rc=0; kitty_socket_accepting "unix:$d/absent" || rc=$?; [ "$rc" = 4 ] || { echo "absent: rc=$rc"; false; }
+  # A basename past Darwin's 104-byte sun_path cap: connect raises a plain OSError, not a refusal.
+  long="$(printf 'x%.0s' $(seq 1 120))"
+  rc=0; kitty_socket_accepting "unix:$d/$long" || rc=$?; [ "$rc" = 5 ] || { echo "other: rc=$rc"; false; }
+  rc=0; kitty_socket_accepting "tcp:localhost:1" || rc=$?; [ "$rc" = 1 ] || { echo "not probed: rc=$rc"; false; }
+}
+
+@test "K2 the precheck names the connect failure, and its bound firing reads 'could not tell'" {
+  load_units
+  kitty_identity() { return 0; }
+  kt() { return 1; }
+  netstat_capture 2
+  for c in 3:"connection refused" 4:"no such socket" 5:"failed another way" 124:"bound fired (rc 124), so it could not tell" 137:"bound fired (rc 137)"; do
+    CRC="${c%%:*}"; kitty_socket_accepting() { return "$CRC"; }
+    rc=0; hf_recycle_kitty_precheck || rc=$?
+    [ "$rc" = 1 ] || { echo "rc $CRC: precheck rc=$rc"; false; }
+    [[ "$HF_KPROBE_WHY" == *"${c#*:}"* ]] || { echo "rc $CRC: $HF_KPROBE_WHY"; false; }
+    [ "$(hf_kprobe_detail)" = "connect_rc=$CRC ls_rc=- queue=2" ] || { echo "rc $CRC: $(hf_kprobe_detail)"; false; }
+  done
+  kitty_socket_accepting() { return 0; }
+  rc=0; hf_recycle_kitty_precheck || rc=$?
+  [ "$rc" = 1 ] && [ "$(hf_kprobe_detail)" = "connect_rc=0 ls_rc=1 queue=2" ] || { hf_kprobe_detail; false; }
+}
+
+@test "K2 a failing netstat reads '?', never 0, and '?' is never full" {
+  load_units
+  unset CC_HF_NETSTAT_FILE
+  shim="$BATS_TEST_TMPDIR/nsbin"; mkdir -p "$shim"
+  printf '#!/bin/bash\nexit 1\n' > "$shim/netstat"; chmod +x "$shim/netstat"
+  PATH="$shim:$PATH" run hf_kitty_queue_depth "unix:$SOCK"
+  [ "$output" = "?" ] || { echo "a failed netstat read '$output'"; false; }
+  # The precheck: unknown is not STUCK (rc 1, not 2) and says so.
+  kitty_identity() { return 0; }
+  kitty_socket_accepting() { return 3; }
+  rc=0; PATH="$shim:$PATH" hf_recycle_kitty_precheck || rc=$?
+  [ "$rc" = 1 ] || { echo "rc=$rc $HF_KPROBE_WHY"; false; }
+  [[ "$HF_KPROBE_WHY" == *"queue unreadable: netstat failed"* ]] || { echo "$HF_KPROBE_WHY"; false; }
+  [[ "$(hf_kprobe_detail)" == *"queue=?"* ]] || false
+  # kq_deaf: an unread queue is not provably deaf, so sample is never even asked.
+  printf '#!/bin/bash\necho called >> "%s/sample-calls"\necho "Thread_1 main"\n' "$BATS_TEST_TMPDIR" > "$shim/sample"; chmod +x "$shim/sample"
+  rc=0; out="$(PATH="$shim:$PATH" CC_KQ_SAMPLE_BIN="$shim/sample" kq_deaf "unix:$SOCK" 610)" || rc=$?
+  [ "$rc" = 1 ] || { echo "kq_deaf rc=$rc: $out"; false; }
+  [[ "$out" == *"unreadable (netstat failed): not provably deaf"* ]] || { echo "$out"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/sample-calls" ] || { echo "sampled kitty over an unread queue"; false; }
+}
+
+@test "K2 the held row names the connect rc, the ls rc and the queue reading" {
+  netstat_capture 3
+  # Unbounded connect: on a loaded box python's start-up alone outlasts the 3 s bound, and the row
+  # then honestly says rc 124 — measured while writing this case. The absent socket is what is pinned.
+  export CC_KITTY_CONNECT_TIMEOUT_S=0
+  # A longer outer bound than recycle()'s 90 s, for the same reason: at load ~57/core this run was killed.
+  run env timeout 300 bash "$HF" --prompt-file "$PF" --launcher claude-test --session-id 77 --recycle
+  [ "$status" -eq 1 ] || { echo "status=$status $output"; false; }
+  r="$(row_of recycle-held-unreachable)"
+  [[ "$(jq -r .detail <<<"$r")" == *"no such socket (rc 4)"*"[connect_rc=4 ls_rc=- queue=3]"* ]] || { echo "$r"; false; }
 }
 
 @test "a: the self tty is the tty of the ancestor whose parent is \$KITTY_PID, not the caller's" {

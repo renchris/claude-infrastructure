@@ -9,7 +9,8 @@
 # reading. A second detector would drift from the first (C3-skeptic-risk M1), so the function moved
 # here and both source it.
 #
-#   hf_kitty_queue_depth <socket>      connections queued on the socket that hold unread data
+#   hf_kitty_queue_depth <socket>      connections queued on the socket that hold unread data;
+#                                      `?` when netstat failed or timed out (unknown, never full)
 #   kq_main_kitty_pids                 pids of the main kitty (no --instance-group in its argv)
 #   kq_peer_thread <pid>               rc 0 the talk thread (KittyPeerMon) is running · 1 it is gone ·
 #                                      2 unknown (sample failed or printed nothing)
@@ -33,10 +34,15 @@ _kq_to() { # <secs> <cmd...>
     local $SIG{ALRM} = sub { kill "KILL", -$p; exit 124 }; alarm $s; waitpid($p, 0); exit($? >> 8)' "$s" "$@"
 }
 
-hf_kitty_queue_depth() { # $1=socket (unix:/path or /path) → connections queued on it holding unread data
-  local path="${1#unix:}" out=""
+# `?`, NOT 0, WHEN netstat DID NOT ANSWER (lr-inplace-immediacy 2026-10-18). The call used to end in
+# `|| true` and awk's `n + 0`, so a netstat that failed or hit its 3 s bound read as "0 queued", and the
+# held row of 2026-10-18 offered that 0 as evidence. A reading nobody took is unknown: callers treat `?`
+# as "not provably full", never as full and never as empty.
+hf_kitty_queue_depth() { # $1=socket (unix:/path or /path) → connections queued on it holding unread data · `?` when netstat failed or timed out
+  local path="${1#unix:}" out="" rc=0
   if [ -n "${CC_HF_NETSTAT_FILE:-}" ]; then out="$(cat "$CC_HF_NETSTAT_FILE" 2>/dev/null || true)"
-  else out="$(_kq_to 3 netstat -anv -f unix 2>/dev/null || true)"; fi
+  else out="$(_kq_to 3 netstat -anv -f unix 2>/dev/null)" || rc=$?; fi
+  if [ "$rc" != 0 ]; then printf '?\n'; return 0; fi
   printf '%s\n' "$out" | awk -v p="$path" '$NF == p && $3 ~ /^[0-9]+$/ && $3 > 0 { n++ } END { print n + 0 }'
 }
 
@@ -66,7 +72,8 @@ kq_deaf() { # <socket> <kitty pid>
   local sock="${1:-}" pid="${2:-}" q lim="${CC_KITTY_WEDGED_QUEUE_N:-128}" rc
   case "$lim" in ''|*[!0-9]*) lim=128 ;; esac
   q="$(hf_kitty_queue_depth "$sock")"
-  if [ "${q:-0}" -lt "$lim" ]; then printf 'queue=%s under %s' "${q:-0}" "$lim"; return 1; fi
+  case "$q" in ''|*[!0-9]*) printf 'queue=%s unreadable (netstat failed): not provably deaf' "${q:-?}"; return 1 ;; esac
+  if [ "$q" -lt "$lim" ]; then printf 'queue=%s under %s' "$q" "$lim"; return 1; fi
   rc=0; kq_peer_thread "$pid" || rc=$?
   case "$rc" in
     1) printf 'queue=%s full, and sample of kitty %s shows no KittyPeerMon thread' "$q" "$pid"; return 0 ;;
