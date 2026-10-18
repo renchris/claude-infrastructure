@@ -1562,7 +1562,9 @@ lrh_precheck() { # → 0 admitted (token minted) / 6 HELD|REFUSED|PARKED, nothin
       return 6
     fi
     if command -v cc_capacity_token_mint >/dev/null 2>&1; then
-      LRH_ADMIT_TOKEN="$(cc_capacity_token_mint "$SID" 2>/dev/null || true)"
+      # bound to this run's bundle: if the relaunch fails or strands, the token stops counting in
+      # flight at once instead of for its whole TTL (capacity-admit.sh _cc_admit_token_pending)
+      LRH_ADMIT_TOKEN="$(CC_ADMIT_TOKEN_RUN="$BUNDLE" cc_capacity_token_mint "$SID" 2>/dev/null || true)"
       if [[ -n "$LRH_ADMIT_TOKEN" ]]; then
         echo "lr-handoff: precheck admitted — admission token $LRH_ADMIT_TOKEN (one-shot, TTL $(if command -v cc_capacity_token_ttl_s >/dev/null 2>&1; then cc_capacity_token_ttl_s; else printf '%s' "${CC_ADMIT_TOKEN_TTL_S:-300}"; fi)s, sid ${SID:0:8})" >&2
         lrh_state admitted gate "token $LRH_ADMIT_TOKEN"

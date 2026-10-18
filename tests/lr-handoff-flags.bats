@@ -528,6 +528,15 @@ STUB
   [ "$(jq -r 'select(.caller=="lr-fire-resume") | .basis' "$CC_ADMIT_IDL" | tail -n 1)" = token ]
   [ "$(bash -c '. "$1" && cc_capacity_tokens_inflight' _ "$CA")" = 0 ]
 }
+@test "no caller token: lr-handoff's own mint is bound to its run's bundle, so a failed relaunch frees the count" {
+  LRH_PRECHECK=on fire
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"precheck admitted — admission token"* ]] || false
+  l="$(bundle_launcher)"
+  tok="$(sed -n 's/^export LR_ADMIT_TOKEN=//p' "$l")"
+  [ -f "$tok" ]
+  [ "$(sed -n 3p "$tok")" = "run=$(dirname "$l")" ]
+}
 @test "LR_ADMIT_TOKEN_PATH: a file that is NOT a token record still yields its first line (the legacy pointer form)" {
   printf '  tok-caller-42  \nsecond line\n' > "$BATS_TEST_TMPDIR/token"
   LRH_PRECHECK=on LR_ADMIT_TOKEN_PATH="$BATS_TEST_TMPDIR/token" fire
