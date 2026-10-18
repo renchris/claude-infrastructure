@@ -457,8 +457,69 @@ fi
 # every clock on it is days-scale), so skipping costs one render. Running unbounded costs a HUNG
 # SESSION START on every session on this machine — the failure this hook's own best-effort clause
 # exists to make impossible. Degrading toward the cheaper loss is the whole point of the clause.
-if [ -x "$HOME/.claude/bin/cc-mission" ] && [ -n "$_ss_mtb" ]; then
-  "$_ss_mtb" 20 "$HOME/.claude/bin/cc-mission" render >/dev/null 2>&1 || true
+#
+# FRESHNESS GATE (docs/research/startup-hooks-2026-10-18/README.md §2 #18). The render is python3
+# plus ~8 git calls in another repo — 0.4-0.5 s of child time typical, ~1.5 s near load 520 — and it
+# ran on EVERY start to rewrite a file whose bytes move only when an input does: the row files, the
+# origin/main it reads in each row's repo (path_state/blob_sha), or the DATE (cmd_render stamps
+# date-granular, and write_board skips unchanged bytes). So render only when an input is newer than
+# both the board and our last attempt, or the board's rendered date is not TODAY, and at most once
+# per 10 min. The skip path is builtins only (`-nt`, `read`, and the TODAY computed above); the one
+# `date` fork is paid only once an input has already moved. The stamp is needed beside the board
+# because an unchanged render leaves the board's mtime where it was, so "rows newer than the board"
+# alone would stay true and re-render every start.
+_ss_mboard="$HOME/.claude/rules/00-mission-board.md"
+_ss_mrows="$HOME/.claude/autonomy/customer/rows"
+_ss_mstamp="$HOME/.claude/state/mission-render.stamp"
+# A missing stamp counts as older than anything (`-nt` is true against an absent file).
+_ss_mnewer() { [ "$1" -nt "$_ss_mboard" ] && [ "$1" -nt "$_ss_mstamp" ]; }
+_ss_mission_stale() {
+  [ -f "$_ss_mboard" ] || return 0
+  local line d="" f repo g cdir r seen=" "
+  while IFS= read -r line; do
+    case "$line" in *'<sub>rendered '*) d="${line#*<sub>rendered }"; d="${d%%[!0-9-]*}"; break ;; esac
+  done < "$_ss_mboard"
+  [ "$d" = "$TODAY" ] || return 0
+  [ -d "$_ss_mrows" ] || return 1
+  _ss_mnewer "$_ss_mrows" && return 0      # a row added or replaced (save_row is tmp + rename)
+  for f in "$_ss_mrows"/*.json; do
+    [ -f "$f" ] || continue
+    _ss_mnewer "$f" && return 0            # a row edited in place
+    repo=""
+    while IFS= read -r line; do
+      case "$line" in *'"repo"'*) repo="${line#*\"repo\"}"; repo="${repo#*\"}"; repo="${repo%%\"*}"; break ;; esac
+    done < "$f"
+    [ -n "$repo" ] || continue
+    case "$seen" in *" $repo "*) continue ;; esac
+    seen="$seen$repo "
+    # origin/main lives in the COMMON git dir; a linked worktree's .git is a `gitdir:` file.
+    g="$repo/.git"
+    if [ -f "$g" ]; then
+      read -r line < "$g" || line=""
+      case "$line" in "gitdir: "*) g="${line#gitdir: }" ;; *) continue ;; esac
+      case "$g" in /*) ;; *) g="$repo/$g" ;; esac
+      if [ -f "$g/commondir" ]; then
+        read -r cdir < "$g/commondir" || cdir=""
+        case "$cdir" in /*) g="$cdir" ;; ?*) g="$g/$cdir" ;; esac
+      fi
+    fi
+    for r in "$g/refs/remotes/origin/main" "$g/packed-refs"; do
+      [ -e "$r" ] && _ss_mnewer "$r" && return 0
+    done
+  done
+  return 1
+}
+if [ -x "$HOME/.claude/bin/cc-mission" ] && [ -n "$_ss_mtb" ] && _ss_mission_stale; then
+  _ss_mnow=$(date +%s); _ss_mlast=0
+  [ -f "$_ss_mstamp" ] && { read -r _ss_mlast < "$_ss_mstamp" || true; }
+  case "$_ss_mlast" in ''|*[!0-9]*) _ss_mlast=0 ;; esac
+  # A clock that moved backwards renders rather than waiting out a stamp from the future.
+  if [ $(( _ss_mnow - _ss_mlast )) -ge 600 ] || [ "$_ss_mnow" -lt "$_ss_mlast" ]; then
+    # Stamp BEFORE rendering, so sessions starting together inside one render do not each run it.
+    mkdir -p "${_ss_mstamp%/*}" 2>/dev/null || true
+    printf '%s\n' "$_ss_mnow" > "$_ss_mstamp" 2>/dev/null || true
+    "$_ss_mtb" 20 "$HOME/.claude/bin/cc-mission" render >/dev/null 2>&1 || true
+  fi
 fi
 
 cat <<EOF
