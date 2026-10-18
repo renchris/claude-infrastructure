@@ -260,7 +260,18 @@ EOF2
     # A MIXED batch (`cc-lr move --sids` across accounts, 2026-10-17) has no one source: a --from
     # would keep one account's rows and starve every other waiting worker of its snapshot row.
     snap_from="$FROM"; [ "$snap_from" != mixed ] || snap_from=""
-    if /bin/bash "$UPGRADE" --switch-census ${snap_from:+--from "$snap_from"} --target "$TO" > "$BDIR/snap.tsv.tmp" 2>/dev/null; then
+    # ONLY THE WAITING ROWS (2026-10-18). A worker reads its own sid's row and nothing else, so a
+    # census of every row on the source paid the per-row forks (19-27 CPU-s a census, REPORT raw/F)
+    # for sessions nobody was waiting on. Each `<sid>.waiting` names one, passed as a repeated --sid,
+    # which the census drops before any per-row fork. Kill switch LR_MOVE_SNAP_SIDS=off: every row.
+    snap_sel=()
+    if [ "${LR_MOVE_SNAP_SIDS:-on}" != off ]; then
+      for _mb_w in "$BDIR"/*.waiting; do
+        [ -e "$_mb_w" ] || continue
+        _mb_w="${_mb_w##*/}"; snap_sel+=(--sid "${_mb_w%.waiting}")
+      done
+    fi
+    if /bin/bash "$UPGRADE" --switch-census ${snap_from:+--from "$snap_from"} --target "$TO" ${snap_sel[@]+"${snap_sel[@]}"} > "$BDIR/snap.tsv.tmp" 2>/dev/null; then
       mv -f "$BDIR/snap.tsv.tmp" "$BDIR/snap.tsv" && date +%s > "$BDIR/snap.ts"
     fi
     last_snap="$(date +%s)"

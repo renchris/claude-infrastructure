@@ -416,3 +416,40 @@ STUB
   grep -q -- '^--switch-census .*--target next2' "$BATS_TEST_TMPDIR/census.log" || { echo "$output"; false; }
   ! grep -q -- '--from' "$BATS_TEST_TMPDIR/census.log" || { cat "$BATS_TEST_TMPDIR/census.log"; false; }
 }
+
+# watchbatch <waiting-sid> — run the batch runner over the current batch with stub seams: the worker
+# for <waiting-sid> waits (until the WATCH census has run, bounded at 120 s); every other worker
+# settles MOVED at once. The census stub records `self=[$LRU_SELF_SID] <argv>` per call.
+watchbatch() {
+  local d; d="$(moved_dir)"
+  export CENSUS_LOG="$BATS_TEST_TMPDIR/census.log" WAIT_SID="$1"
+  cat > "$STUBS/worker" <<'STUB'
+#!/bin/bash
+d="$LR_STATE_DIR/move/$1"
+if [ "$2" = "$WAIT_SID" ]; then
+  : > "$d/$2.waiting"
+  i=0; while [ ! -s "$CENSUS_LOG" ] && [ "$i" -lt 600 ]; do sleep 0.2; i=$((i + 1)); done
+fi
+printf '{"sid":"%s","verdict":"MOVED","reason":"stub worker"}\n' "$2" > "$d/$2.json"; rm -f "$d/$2.waiting"
+STUB
+  printf '#!/bin/bash\nprintf "self=[%%s] %%s\\n" "${LRU_SELF_SID-unset}" "$*" >> "$CENSUS_LOG"\n' > "$STUBS/upgrade"
+  chmod +x "$STUBS/worker" "$STUBS/upgrade"
+  LR_MOVE_WORKER_BIN="$STUBS/worker" LR_MOVE_UPGRADE_BIN="$STUBS/upgrade" CC_NOTIFY_BIN="$LRU_NOTIFY_BIN" \
+    LR_MOVE_GUARD_CHECK=off LR_MOVE_AUTH_RECHECK=off LR_MOVE_KERNEL_CHECK=off LR_MOVE_PRESEED=off \
+    LR_MOVE_SNAP_S=1 LR_MOVE_WATCH_POLL_S=0.3 run /bin/bash "$REPO/scripts/limit-recover/lr-move-batch.sh" "$(basename "$d")"
+}
+
+@test "24 [RED] the WATCH census names only the waiting sids: 3 rows, 1 waits, the census asks for that one" {
+  [ -x /bin/bash ] || skip "/bin/bash absent"
+  sess 401 "$S1"
+  sess 402 "$S2"
+  sess 403 "$S3"
+  run bash "$CCLR" move --sids "$S1,$S2,$S3" --to next2 --wait 0
+  [ -n "$(moved_dir)" ] || { echo "rc $status: $output"; false; }
+  watchbatch "$S2"
+  [ -s "$CENSUS_LOG" ] || { echo "$output"; false; }
+  # RED before: `--switch-census --from next3 --target next2` — every row on the source, no --sid.
+  grep -q -- "--sid $S2" "$CENSUS_LOG" || { cat "$CENSUS_LOG"; false; }
+  ! grep -q -- "$S1\|$S3" "$CENSUS_LOG" || { cat "$CENSUS_LOG"; false; }
+  grep -q -- '--from next3 --target next2' "$CENSUS_LOG" || { cat "$CENSUS_LOG"; false; }
+}
