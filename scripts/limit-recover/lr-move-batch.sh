@@ -332,7 +332,12 @@ EOF2
     # LRU_SELF_SID PINNED EMPTY (2026-10-18, pane 374's ask): this runner inherits the requester's
     # env, and the census reads LRU_SELF_SID as "this row is me" (disp=self, a hold), so a batch moving
     # the requester's own session would wait on a `self` that never turns `move`. No row is the runner.
-    if LRU_SELF_SID='' /bin/bash "$UPGRADE" --switch-census ${snap_from:+--from "$snap_from"} --target "$TO" ${snap_sel[@]+"${snap_sel[@]}"} > "$BDIR/snap.tsv.tmp" 2>/dev/null; then
+    # THE CENSUS IS CLAMPED TO THE UTILITY BAND (2026-10-18, REPORT §6 item 1). The staged
+    # com.reso.lr-move-kick starts this runner in the Interactive band so the lane's waits run at 31;
+    # a census is 19-27 CPU-s (raw/F) and must not compete there. Kill switch LR_MOVE_CENSUS_CLAMP=off.
+    snap_tp=(); _mb_tp="${LR_MOVE_TASKPOLICY_BIN:-/usr/sbin/taskpolicy}"
+    if [ "${LR_MOVE_CENSUS_CLAMP:-on}" != off ] && [ -x "$_mb_tp" ]; then snap_tp=("$_mb_tp" -c utility); fi
+    if LRU_SELF_SID='' ${snap_tp[@]+"${snap_tp[@]}"} /bin/bash "$UPGRADE" --switch-census ${snap_from:+--from "$snap_from"} --target "$TO" ${snap_sel[@]+"${snap_sel[@]}"} > "$BDIR/snap.tsv.tmp" 2>/dev/null; then
       mv -f "$BDIR/snap.tsv.tmp" "$BDIR/snap.tsv" && date +%s > "$BDIR/snap.ts"
     fi
     last_snap="$(date +%s)"
