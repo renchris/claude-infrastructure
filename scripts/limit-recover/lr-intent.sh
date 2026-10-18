@@ -64,6 +64,41 @@ lr_intent_check() { # $1=file $2=sid $3=pane $4=from account name $5=to account 
   case "$exp" in
     ''|*[!0-9]*) LR_INTENT_WHY="expired: expires_epoch is '${exp:-absent}', not an integer"; return 1 ;;
   esac
-  if [ "$exp" -le "$now" ]; then LR_INTENT_WHY="expired: the intent expired $(( now - exp ))s ago; re-run cc-lr move"; return 1; fi
+  if [ "$exp" -le "$now" ]; then
+    lr_intent_admitted_ok "$dir" "$sid" "$exp" "$now" && return 0
+    LR_INTENT_WHY="expired: the intent expired $(( now - exp ))s ago${LR_INTENT_ACT_BY:+; $LR_INTENT_ACT_BY}; re-run cc-lr move"; return 1
+  fi
   return 0
+}
+# THE ACT-BY BOUND, MEASURED FROM ADMISSION (lr-inplace-immediacy G §1.2, 2026-10-17/18). expires_epoch
+# is a START-BY bound, set when the operator types `cc-lr move`: it says how long a QUEUED request
+# still reflects their will. Once the batch has admitted the row, the idle wait and the slot wait
+# that follow are the lane's own time, and 7 rows admitted with a valid intent were refused 48 s,
+# 88 s and 902-904 s late because those waits ran the typing clock out. So lr-move-batch.sh writes
+# intent/<sid>.admitted (its admission epoch, 0600, in the 0700 dir only the lane writes), and an
+# intent admitted BEFORE it expired stays valid until admitted + LR_MOVE_ADMITTED_GRACE_S — default
+# the plan's until_idle_s + 900, the same act budget cc-lr gave it at typing, re-anchored at
+# admission (measured: act − admit ≤ 606 s for all 23 actuated rows). The sidecar is trusted the way
+# the intent is: a regular file the user owns, mode 0600, holding an integer. Kill switch:
+# LR_MOVE_ADMITTED_GRACE_S=0.
+LR_INTENT_ACT_BY=""
+lr_intent_admitted_ok() { # $1=intent dir (resolved) $2=sid $3=expires_epoch $4=now → 0 inside the act-by bound
+  local a="$1/$2.admitted" at grace mode
+  LR_INTENT_ACT_BY=""
+  [ ! -L "$a" ] && [ -f "$a" ] && [ -O "$a" ] || return 1
+  mode="$(lr_intent_mode "$a")"
+  case "$mode" in [0-7]00) ;; *) return 1 ;; esac
+  at="$(sed -n '1p' "$a" 2>/dev/null | tr -d '[:space:]')"
+  case "$at" in ''|*[!0-9]*) return 1 ;; esac
+  # Admitted after the intent had already expired: the admission itself was wrong, extend nothing.
+  [ "$at" -lt "$3" ] || return 1
+  grace="${LR_MOVE_ADMITTED_GRACE_S:-}"
+  case "$grace" in
+    ''|*[!0-9]*) grace="$(jq -r '.until_idle_s // 0 | tostring' "$1/../plan.json" 2>/dev/null)"
+                 case "$grace" in ''|*[!0-9]*) grace=0 ;; esac
+                 grace=$(( grace + 900 )) ;;
+  esac
+  [ "$4" -lt $(( at + grace )) ] && return 0
+  LR_INTENT_ACT_BY="admitted $(( $4 - at ))s ago, past its act-by bound of ${grace}s from admission"
+  return 1
 }

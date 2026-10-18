@@ -129,3 +129,82 @@ edit() { jq -c "$1" "$F" > "$F.t"; mv "$F.t" "$F"; chmod 600 "$F"; }
   [ "$status" -eq 1 ]
   [[ "$output" == from-mismatch:* ]]
 }
+
+# ── THE ACT-BY BOUND, MEASURED FROM ADMISSION (lr-inplace-immediacy G §1.2, 2026-10-17/18) ──────────
+# expires_epoch is a START-BY bound: cc-lr sets it when the operator types the command. 7 rows whose
+# intent was valid when their batch admitted them were refused later (48 s / 88 s / 902-904 s late)
+# because the idle wait and the slot wait that FOLLOW admission ran the clock out. The batch now
+# writes intent/<sid>.admitted (its admission epoch, 0600); an intent admitted before it expired
+# stays valid for admitted + LR_MOVE_ADMITTED_GRACE_S (default: the plan's until_idle_s + 900).
+# A fake clock (a `date` stub on PATH) puts "now" where each case needs it.
+fake_clock() { # $1=epoch every `date +%s` returns
+  mkdir -p "$BATS_TEST_TMPDIR/clock"
+  printf '#!/bin/bash\nif [ "$1" = +%%s ]; then echo %s; else exec /bin/date "$@"; fi\n' "$1" > "$BATS_TEST_TMPDIR/clock/date"
+  chmod +x "$BATS_TEST_TMPDIR/clock/date"
+  export PATH="$BATS_TEST_TMPDIR/clock:$PATH"
+}
+admitted() { # $1=epoch — the sidecar as lr-move-batch.sh writes it
+  ( umask 077; printf '%s\n' "$1" > "$D/$SID.admitted" )
+}
+plan_until() { # $1=until_idle_s
+  jq -nc --argjson u "$1" '{batch:"b1", until_idle_s:$u, rows:[]}' > "$LR_STATE_DIR/move/b1/plan.json"
+}
+
+@test "[RED] act-by: an intent admitted before it expired is valid 60 s past its expiry; without the sidecar it is expired" {
+  T=2000000000
+  edit ".expires_epoch = $(( T + 5 ))"
+  plan_until 0
+  fake_clock $(( T + 65 ))
+  check "$F" "$SID" 31 next4 next3
+  [ "$status" -eq 1 ]
+  [[ "$output" == expired:* ]] || false
+  admitted "$T"
+  check "$F" "$SID" 31 next4 next3
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -z "$output" ]
+}
+
+@test "act-by: the grace is capped — the plan's until_idle_s + 900 by default, LR_MOVE_ADMITTED_GRACE_S when set" {
+  T=2000000000
+  edit ".expires_epoch = $(( T + 5 ))"
+  plan_until 100
+  admitted "$T"
+  fake_clock $(( T + 999 ))
+  check "$F" "$SID" 31 next4 next3
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  fake_clock $(( T + 1000 ))
+  check "$F" "$SID" 31 next4 next3
+  [ "$status" -eq 1 ]
+  [[ "$output" == "expired: "*"admitted "*"act-by"* ]] || { echo "$output"; false; }
+  export LR_MOVE_ADMITTED_GRACE_S=30
+  fake_clock $(( T + 31 ))
+  check "$F" "$SID" 31 next4 next3
+  [ "$status" -eq 1 ]
+  [[ "$output" == expired:* ]] || false
+  fake_clock $(( T + 29 ))
+  check "$F" "$SID" 31 next4 next3
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "act-by: a sidecar written after the intent had expired, a symlinked or group-readable one, or a non-integer, extends nothing" {
+  T=2000000000
+  edit ".expires_epoch = $(( T + 5 ))"
+  plan_until 0
+  fake_clock $(( T + 65 ))
+  admitted $(( T + 10 ))
+  check "$F" "$SID" 31 next4 next3
+  [ "$status" -eq 1 ]
+  [[ "$output" == expired:* ]] || false
+  admitted "$T"; chmod 644 "$D/$SID.admitted"
+  check "$F" "$SID" 31 next4 next3
+  [ "$status" -eq 1 ]
+  [[ "$output" == expired:* ]] || false
+  ( umask 077; printf '%s\n' "$T" > "$BATS_TEST_TMPDIR/adm" ); rm -f "$D/$SID.admitted"; ln -s "$BATS_TEST_TMPDIR/adm" "$D/$SID.admitted"
+  check "$F" "$SID" 31 next4 next3
+  [ "$status" -eq 1 ]
+  [[ "$output" == expired:* ]] || false
+  rm -f "$D/$SID.admitted"; admitted "soon"
+  check "$F" "$SID" 31 next4 next3
+  [ "$status" -eq 1 ]
+  [[ "$output" == expired:* ]]
+}

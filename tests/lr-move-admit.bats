@@ -66,3 +66,19 @@ intent_edit() { # $1=sid $2=jq filter — keeps the intent 0600, as cc-lr writes
   grep -q "^${SIDS[0]}"$'\t' "$BDIR/workers.tsv" || { cat "$BDIR/workers.tsv"; false; }
   [ "$(jq -r .verdict "$BDIR/${SIDS[0]}.json")" = MOVED ] || { cat "$BDIR/${SIDS[0]}.json"; false; }
 }
+
+@test "[RED] A2: an admitted row gets intent/<sid>.admitted (its admission epoch, 0600); a row refused at admission gets none" {
+  intent_edit "${SIDS[1]}" ".expires_epoch = $(( $(date +%s) - 60 ))"
+  t0="$(date +%s)"
+  batch
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  a="$BDIR/intent/${SIDS[0]}.admitted"
+  [ -f "$a" ] || { ls -la "$BDIR/intent"; false; }
+  [ ! -L "$a" ]
+  v="$(cat "$a")"
+  [ "$v" -ge "$t0" ] || { echo "admitted=$v t0=$t0"; false; }
+  [ "$v" -le "$(date +%s)" ] || { echo "admitted=$v"; false; }
+  m="$(stat -f %Lp "$a" 2>/dev/null || stat -c %a "$a")"
+  [ "$m" = 600 ] || { echo "mode $m"; false; }
+  [ ! -e "$BDIR/intent/${SIDS[1]}.admitted" ]
+}

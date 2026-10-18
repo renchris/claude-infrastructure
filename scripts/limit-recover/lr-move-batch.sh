@@ -191,6 +191,10 @@ while IFS=$'\t' read -r sid pane cwd acct; do
     continue
   fi
   if lr_claim_take "$CLAIMS" "$sid" cc-lr-move "$pane" "$$" >/dev/null 2>"$BDIR/$sid.claim.log"; then
+    # ADMITTED: the act-by clock starts here, not at typing (lr-intent.sh lr_intent_admitted_ok).
+    # Written once, 0600, beside the intent, so a later check finds the admission it extends.
+    [ -e "$BDIR/intent/$sid.admitted" ] || ( umask 077; date +%s > "$BDIR/intent/.$sid.admitted.$$" \
+      && mv -f "$BDIR/intent/.$sid.admitted.$$" "$BDIR/intent/$sid.admitted" ) 2>/dev/null || true
     CLAIMED="$CLAIMED$sid"$'\t'"$pane"$'\n'
     case $'\n'"$cwds" in *$'\n'"$cwd"$'\n'*) ;; *) cwds="$cwds$cwd"$'\n' ;; esac
   else
