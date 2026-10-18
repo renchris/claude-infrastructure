@@ -17,7 +17,7 @@ per core each one multiplied the next:
 
 | # | class | what it cost in this window | root cause | status |
 |---|---|---|---|---|
-| 1 | **Queue: requests waited for the poller's tick to END** | 17.4 session-hours of 39 session-rows' wait; 27 of 49 batches ever (p50 829 s, p90 4,533 s, max 5,124 s) | the poller looked at `move/requests/` only at its top and in its EXIT trap; launchd drops a kickstart while a tick runs; one tick ran 86 min | **fixed** (mid-tick drain, rank 1) |
+| 1 | **Queue: requests waited for the poller's tick to END** | 17.4 session-hours of 39 session-rows' wait; 27 of 49 batches ever (p50 829 s, p90 4,533 s, max 5,124 s) | the poller looked at `move/requests/` only at its top and in its EXIT trap; launchd drops a kickstart while a tick runs; one tick ran 86 min | **fixed and landed** (`cc74514df`) |
 | 2 | **Intents expired in the queue, and nothing checked them until the actuator** | 7 rows refused `intent-invalid` / `not-limited`; 10 rows whose intent had expired *before their batch started* still took 8 claims, 8 workers and all 4 slots, and won all 10 claim collisions | intent clock starts when `cc-lr move` is typed (`now + until + 900`), checked only at `lr-handoff.sh:649` | fixes A1/A2 (admission check, act-by from admission) + W1 (worker re-check) |
 | 3 | **The actuate stage ran at the wrong CPU band and stood down late** | actuate 194-1,910 s per row (7,989 s total); 1,027 s of 43e6eb4b's 1,477 s was non-kitty work; holds (`HELD:unreachable`, `HELD:load`) fired only after the transplant | every rail process inherits launchd's default clamp (**pri 20**) while the work loading the box ran at pri 31; the kitty probe was one unretried 3 s shot; the load hold sat after the transplant | K1-K4 (retry, honest verdict, fail-fast precheck, no subject nudge) in progress; the band is an operator activation (§6) |
 | 4 | **The load hold makes a loaded box unmovable** | 2 of 2 rows that reached `/exit` in the 01:50 pass held `HELD:load` at 28-40/core | handoff-fire's fix 8b holds any relaunch that must be typed above 8/core, and a resume recycle (every in-place move) is always typed | decision (§6.2) |
@@ -75,7 +75,11 @@ Two more classes the data source added (pane 344, 02:13-02:33Z): a **post-transp
 (e739e5b5, rc 4: transplanted, relaunch never verified, the pane left at a bare zsh; the rescue verb
 `lr-fleet --one` then refused to relaunch into its own husk shell) and **false STRANDED verdicts**
 (246a91b5 had self-recycled into 4fd71ecf and the verdict does not follow a recycle chain; e3dedc17 was
-alive with no registry row). Both are in §6.
+alive with no registry row; e739e5b5 was later live on `next` in pane 377 while batch 22836 still closed it
+STRANDED at 05:31Z, 4h09m after it was queued — the verdict does not see a successor in another pane). The
+rescue verbs (`cc-lr repair --mode relaunch`, `lr-fleet --one`) only prescribe a new-window relaunch for a
+transplanted session with no holder, and handoff-fire's capacity gate counted the rescue of a dead session
+as new load. All are in §6.
 
 ## 4. Before and after
 
@@ -90,7 +94,8 @@ moving a live session, which this work was not allowed to do.
 | intent expiry | 7 rows refused late; 10 doomed rows took claims, workers and all 4 slots | an expired intent is refused at admission with no claim; an admitted row's act-by covers its idle wait and slot wait | A1/A2/W1 suites |
 | admission | 2 of 5 batches refused after 599-600 s ("90 s"); two batches admitted at once | waits up to 900 wall-clock seconds; one admission for N named sessions | A3/A4 + `--sids` suites |
 | actuate, terminal or load hold | 194-1,910 s before `HELD:unreachable` / `HELD:load`, after a transplant | the precheck holds in seconds, before anything is transplanted; a refused-then-answering socket is retried for 120 s | K1-K3 suites |
-| actuate, success | 85-110 s, then 64-200 s to proof (all 9 successful moves on record: 175-215 s) | unchanged by this wave — see raw/I and §6 | — |
+| actuate, success | 85-110 s, then 64-200 s to proof (all 9 successful moves on record: 118-217 s) | unchanged by this wave — see raw/I and §6 item 4 | — |
+| end to end, live | the night's first MOVED (pane 344, 2e9ed9f2, batch 20261018T030847Z): queued 03:08:47Z, admitted 03:27:46Z (19 min queue), verdict 04:08:51Z (41 min admit to verdict), before any fix was deployed | the 19 min queue becomes ~1 s; the 41 min is the actuate and hold path above | the next real batch: `cc-lr move --status <batch>` |
 
 ## 5. Fixes, ranked
 
@@ -99,7 +104,7 @@ on origin/main; each row names the suite that was red before the fix and green a
 
 | rank | fix | removes | where | status |
 |---|---|---|---|---|
-| 1 | **Mid-tick move drain**: the tick runs a drainer beside its arms that starts a queued batch within 1 s, through the same hard-link claim | class 1 (70% of all stage time; p50 829 s → ~1 s for a request that lands mid-tick) | `scripts/limit-recover/lr-reset-poller.sh` (`lrp_move_drain_start/_stop`) · `tests/lr-move-drain.bats` | lands with this report |
+| 1 | **Mid-tick move drain**: the tick runs a drainer beside its arms that starts a queued batch within 1 s, through the same hard-link claim | class 1 (70% of all stage time; p50 829 s → ~1 s for a request that lands mid-tick) | `scripts/limit-recover/lr-reset-poller.sh` (`lrp_move_drain_start/_stop`) · `tests/lr-move-drain.bats` | **landed** `cc74514df` (+ `c88040cb6`), on origin/main at `b59a1b30f` |
 | 2 | **Intent checked at admission; act-by measured from admission** (an `intent/<sid>.admitted` sidecar the validator honours) | class 2: doomed rows never take a claim, a worker or a slot; an admitted row's budget covers its idle and slot waits | `lr-move-batch.sh`, `lr-intent.sh` · `tests/lr-move-admit.bats`, `tests/lr-intent.bats` | built by teammate `admit`, not yet landed |
 | 3 | **Fail fast in the precheck** on a deaf terminal or a load the late gate would hold, before anything is transplanted; retry a refused-then-answering socket for 120 s for detached callers; name the probe's real failure | class 3/4: a 10-25 min transplant-then-stand-down becomes a hold in the precheck; tonight's two post-hold strands (`unconfirm rc 2`) cannot happen when nothing was transplanted | `scripts/handoff-fire.sh`, `scripts/lib/kitty-queue.sh`, `lr-handoff.sh` · `tests/handoff-recycle-kitty-precheck.bats`, `tests/handoff-recycle-load-hold.bats` | built by teammate `handoff`, not yet landed |
 | 4 | **No "recycle owed" nudge for a driver-run recycle** | the subject re-ran the move's recycle itself and confirmed/unconfirmed the transplant under the driver (a live STRANDED race) | `scripts/handoff-fire.sh` · the pane-close-queue cases | built by teammate `handoff`, not yet landed |
@@ -120,8 +125,9 @@ These are measured, and each is either an operator call or a next wave; none is 
    `com.reso.lr-move-kick` LaunchAgent with `ProcessType Interactive` and `WatchPaths` on
    `move/requests/`, that runs only the kick (the census explicitly clamped back to `utility`). Every
    launchd job here is activated by an operator-run script, so this is the operator's step, and its
-   activation script must read the priority back. A positive control with throwaway launchd jobs was
-   refused by this session's removal safety check, so the gain at 31 is not measured.
+   activation script must read the priority back. The band itself is evidenced: on 2026-10-08 the same default starved
+   `com.claude.research-classifier-warm`, and `ProcessType Interactive` read back PRI 31/37 (memory
+   `darwin-qos-band-mechanics`). What is not measured is this lane's latency at 31.
 2. **The 8/core load hold (decision).** `raw/H`: the bound is ship-land's `CC_GATE_MAX_LOAD_PER_CORE`
    default, not typing data. The hardened typed relaunch has 0 failures in 11-18 recycles at 8-32/core
    and none measured above 24.6/core (rule of three: the 8-32 failure rate is below ~27%). Options:
@@ -132,8 +138,17 @@ These are measured, and each is either an operator call or a next wave; none is 
    for the pane's own shell to run; resume recycles (every in-place move) never stage, because the
    watcher's fold, launch-lock and holder rails must run first. A staged successor that waits for a
    go-file the watcher writes after those rails would keep that order and remove the typed step.
-4. **A successful move still costs ~3 minutes.** All 9 MOVED rows on record took 175-215 s from
-   actuation to proof (85-110 s lr-handoff, 64-200 s relaunch to proof). `raw/I` decomposes it.
+4. **A successful move still costs ~3 minutes, by design.** All 9 MOVED rows on record took 118-217 s
+   from actuation to proof (`raw/I`). The proof waits on the resume-debt discharge, not the registry
+   row. Medians: 78 s before `/exit` (lr-handoff + handoff-fire arming, load-sensitive), 35 s from
+   exit to the relaunch (SessionEnd hooks 6-11 s, a fixed 2 s settle, the typed relaunch, a launcher
+   that re-runs the preseed), 35 s from spawn to discharge (a fixed 15 s hold plus 9-22 s of boot
+   detection that misses claude under expect's nested pty). The best measured value of every phase
+   sums to ~67 s, so **no change in this wave can bring a move under 60 s**. A floor of ~25-30 s
+   (45-55 s at the slow end) needs four handoff-fire changes together: one survival check in place
+   of the 15 s hold plus the worker's 5 s re-check; boot detection by the `--resume` process; the
+   keystroke-free successor with a SIGTERM exit for resume recycles (item 3); and answering the
+   background-work dialog at once instead of on a 15 s poll.
 5. **Next wave, already specified** (`docs/plans/LR_INPLACE_IMMEDIACY.md` § W2): census filtered by
    session before its per-row forks (the plan-time census ran 3.0-3.4 min under load); the watch census
    limited to waiting rows; the router answer reused from `cc-lr move` (the admit read took 5-323 s); a
