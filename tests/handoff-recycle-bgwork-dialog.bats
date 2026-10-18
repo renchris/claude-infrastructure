@@ -314,6 +314,8 @@ case "$1 $2" in
       $'\r')
         case "$cm" in
           "/goal clear")
+            # The pane-23 shape: the paste read back, the CR never reached the composer.
+            [ "${STUB_CR_LOST:-0}" = 1 ] && exit 0
             [ "${STUB_CLEAR_WRITES:-1}" = 1 ] && printf '%s\n' '{"type":"attachment","attachment":{"type":"goal_status","met":true,"sentinel":true,"condition":"ship it"}}' >> "$GOAL_TX"
             printf '%s' "${STUB_AFTER_CLEAR:-}" > "$HOME/stub.composer" ;;
           "/exit") echo dialog > "$HOME/stub.state"; : > "$HOME/stub.composer" ;;
@@ -409,6 +411,45 @@ send_line() { grep -n "session send" "$H/it2-calls.log" | grep -F -- "$1" | head
   [ "$output" = 0 ]
   run alarms
   [[ "$output" == *'re-arm it in that pane: /goal ship it'* ]] || { echo "$output"; false; }
+}
+
+# h defect 4 (lr-wake 2026-10-18, docs/research/lr-wake-incident-2026-10-18/h-live-remediation-findings.md
+# §Defects 4). Pane 23 showed `❯ /goal clear` twice, and its goal read "paused · usage limit reached".
+# Two defects in rcy_bgwork_goal_clear, whatever made that screen: a goal paused by a usage limit is
+# operator intent and is not this rail's to clear, and a `/goal clear` whose CR never landed was left in
+# the box (only our /exit was scrubbed). RED on origin/main (2a636f1b8): both.
+@test "[RED] h4: a goal PAUSED by a usage limit is kept — no /goal clear is typed, and the answer proceeds" {
+  _goal_stub
+  printf '%s\n' '{"type":"system","subtype":"informational","content":"Goal paused · usage limit reached · send a message after it resets to continue","level":"notice"}' >> "$GOAL_TX"
+  drive_goal || true
+  run bash -c "grep -cF '/goal clear' '$H/it2-calls.log' || true"
+  [ "$output" = 0 ] || { cat "$H/it2-calls.log"; false; }
+  ! grep -q '"met":true' "$GOAL_TX" || { echo "the paused goal was cleared"; cat "$GOAL_TX"; false; }
+  [ -n "$(row recycle-bgwork-goal-paused)" ] || { cat "$H/.claude/logs/handoffs.jsonl"; false; }
+  run row recycle-bgwork-answered
+  [[ "$output" == *'predecessor goal=paused-kept'* ]] || { echo "$output"; false; }
+}
+
+@test "CONTROL h4: a paused goal that later RESUMED (a goal_status after the pause) is cleared as before" {
+  _goal_stub
+  printf '%s\n' '{"type":"system","subtype":"informational","content":"Goal paused · usage limit reached · send a message after it resets to continue","level":"notice"}' \
+    '{"type":"attachment","attachment":{"type":"goal_status","met":false,"condition":"ship it","reason":"Not satisfied."}}' >> "$GOAL_TX"
+  drive_goal || true
+  [ -n "$(send_line '/goal clear')" ] || { cat "$H/it2-calls.log"; false; }
+  [ -z "$(row recycle-bgwork-goal-paused)" ]
+}
+
+@test "[RED] h4: the /goal clear CR is lost ⇒ our paste is scrubbed (read back), never left in the box" {
+  _goal_stub
+  STUB_CR_LOST=1 CC_RECYCLE_GOAL_CLEAR_PREWAIT_S=0 drive_goal || true
+  gc="$(send_line '/goal clear')"
+  [ -n "$gc" ] || { cat "$H/it2-calls.log"; false; }
+  # A Ctrl-U after the paste, and the box no longer holds it.
+  awk -v n="$gc" 'NR > n && /session send/ && index($0, "\025") { f = 1 } END { exit !f }' "$H/it2-calls.log" \
+    || { echo "no scrub after the /goal clear paste"; cat -v "$H/it2-calls.log"; false; }
+  [ "$(cat "$H/stub.composer" 2>/dev/null)" != "/goal clear" ] || { echo "/goal clear left in the composer"; false; }
+  run row recycle-bgwork-goal-clear
+  [[ "$output" == *'composer scrubbed'* ]] || { echo "$output"; cat "$H/.claude/logs/handoffs.jsonl"; false; }
 }
 
 # ── a SELF-recycle under agent-view-off: the dialog is raised by the recycle's OWN tool call (W7c) ──

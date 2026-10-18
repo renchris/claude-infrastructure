@@ -11314,7 +11314,49 @@ if [ "${1:-}" = "__recycle" ]; then
     else
       RCY_GOAL_CLEAR="not-sent:rc$prc"
     fi
-    it2_paste_submit_verified "$IT2" "$RSID" "/exit" "$pre" >/dev/null
+    # OUR PASTE MUST NOT OUTLIVE ITS FAILURE (h defect 4, 2026-10-18). A paste that read back but whose
+    # CR never landed leaves exactly `/goal clear` in the box, and the paste helper still returns 0
+    # (its CR send succeeded), so this keys on the outcome, not the rc: whenever the clear is not
+    # proven, the box is read back and scrubbed the way our /exit is — cleared only when it reads
+    # exactly what we pasted, anything else left alone.
+    if [ "$RCY_GOAL_CLEAR" != cleared ]; then
+      rcy_scrub_own_paste "/goal clear"
+      case "$RCY_PASTE_SCRUB" in scrubbed|scrub-failed) RCY_GOAL_CLEAR="$RCY_GOAL_CLEAR; composer $RCY_PASTE_SCRUB" ;; esac
+    fi
+    if ! it2_paste_submit_verified "$IT2" "$RSID" "/exit" "$pre" >/dev/null; then
+      rcy_scrub_own_exit || true
+      return 1
+    fi
+  }
+  # A GOAL PAUSED BY A USAGE LIMIT IS OPERATOR INTENT (h defect 4, pane 23, 2026-10-18). Claude Code
+  # pauses a /goal when the account hits its limit and writes a system record, "Goal paused · usage
+  # limit reached · send a message after it resets to continue" (2.1.293, 3e929a81 lines 1219 and
+  # 2093), after the last goal_status; a later evaluation writes goal_status again. Clearing that goal
+  # to keep a background copy from driving destroys what the operator asked for, and a copy on a
+  # limited account cannot take a goal turn anyway. Paused = the newest of those two records is the
+  # pause, or the pane's own screen shows it. The successor inherits the condition either way ($8).
+  rcy_goal_paused() { # → 0 the predecessor's live goal reads paused by a usage limit · 1 not shown
+    local pdir hit last scr
+    if [ -n "${RCY_OLD_SID:-}" ] && command -v jq >/dev/null 2>&1; then
+      # shellcheck disable=SC2086  # CC_PROJECTS_DIRS is an intentional space-separated dir list
+      for pdir in $CC_PROJECTS_DIRS; do
+        [ -d "$pdir" ] || continue
+        while IFS= read -r hit; do
+          [ -n "$hit" ] || continue
+          last="$(grep -a -e '"goal_status"' -e 'Goal paused' "$hit" 2>/dev/null | jq -rs '
+            [ .[] | select((.type == "attachment" and .attachment.type == "goal_status")
+                           or (.type == "system" and ((.content // "") | test("^Goal paused")) and ((.content // "") | test("usage limit")))) ]
+            | last | if . == null then "" elif .type == "system" then "paused" else "status" end' 2>/dev/null)" || last=""
+          [ "$last" = paused ] && return 0
+          [ -n "$last" ] && return 1
+        done <<EOF
+$(find "$pdir" -name "$RCY_OLD_SID.jsonl" -type f 2>/dev/null)
+EOF
+      done
+    fi
+    scr="$(hf_bounded "$IT2" session read -s "$RSID" -n "${HF_SELFCLOSE_READLINES:-40}" 2>/dev/null || true)"
+    printf '%s\n' "$scr" | grep -iE 'goal paused.*usage limit' >/dev/null && return 0
+    return 1
   }
   # THE DIALOG WAS RAISED BY OUR OWN TOOL CALL (W7c). A self-recycle types /exit from inside a Bash
   # call of the session it closes, and Claude Code counts that in-flight call as background work (the
@@ -11364,22 +11406,31 @@ if [ "${1:-}" = "__recycle" ]; then
   # /exit he had not typed. Read up to CC_RECYCLE_EXIT_SCRUB_TRIES times, scrub only a composer that
   # reads exactly /exit, stop at the first other content (a human draft is never touched), and say
   # what was found, so the hold line shows whether anything was left behind.
-  RCY_EXIT_SCRUB=unread
-  rcy_scrub_own_exit() {
-    local i=0 max="${CC_RECYCLE_EXIT_SCRUB_TRIES:-3}" c=""
+  # rcy_scrub_own_paste is the same read-back scrub for any one line this watcher pasted (`/goal clear`,
+  # h defect 4); its verdict is RCY_PASTE_SCRUB.
+  RCY_EXIT_SCRUB=unread RCY_PASTE_SCRUB=unread
+  rcy_scrub_own_paste() { # $1=the exact text we pasted → always 0 (RCY_PASTE_SCRUB says what was found)
+    local i=0 max="${CC_RECYCLE_EXIT_SCRUB_TRIES:-3}" c="" want="${1:-/exit}" want_s
     case "$max" in ''|*[!0-9]*|0) max=3 ;; esac
-    RCY_EXIT_SCRUB=unread
+    # composer_content strips whitespace, so `/goal clear` reads back as `/goalclear`.
+    want_s="${want//[[:space:]]/}"
+    RCY_PASTE_SCRUB=unread
     while [ "$i" -lt "$max" ]; do
       i=$((i + 1))
       /bin/sleep "${FIRE_TYPE_SETTLE:-0.5}"
-      if ! c="$(composer_content "$IT2" "$RSID" 2>/dev/null)"; then RCY_EXIT_SCRUB=unread; continue; fi
-      if [ "$c" = "/exit" ]; then
-        if composer_scrub_verified "$IT2" "$RSID" >/dev/null 2>&1; then RCY_EXIT_SCRUB=scrubbed; return 0; fi
-        RCY_EXIT_SCRUB=scrub-failed; continue
+      if ! c="$(composer_content "$IT2" "$RSID" 2>/dev/null)"; then RCY_PASTE_SCRUB=unread; continue; fi
+      if [ "$c" = "$want" ] || [ "$c" = "$want_s" ]; then
+        if composer_scrub_verified "$IT2" "$RSID" >/dev/null 2>&1; then RCY_PASTE_SCRUB=scrubbed; return 0; fi
+        RCY_PASTE_SCRUB=scrub-failed; continue
       fi
-      if [ -n "$c" ]; then RCY_EXIT_SCRUB=other-content-left-alone; return 0; fi
-      RCY_EXIT_SCRUB=empty
+      if [ -n "$c" ]; then RCY_PASTE_SCRUB=other-content-left-alone; return 0; fi
+      RCY_PASTE_SCRUB=empty
     done
+    return 0
+  }
+  rcy_scrub_own_exit() {
+    rcy_scrub_own_paste "/exit"
+    RCY_EXIT_SCRUB="$RCY_PASTE_SCRUB"
     return 0
   }
   # AN ANSWER THAT NEVER REACHED THE DIALOG (lr-stranded-husk C1, 2026-10-10; ROOT-CAUSE.md). HARDENING,
@@ -11784,21 +11835,29 @@ if [ "${1:-}" = "__recycle" ]; then
              && [ "${CC_RECYCLE_BGWORK_GOAL_CLEAR:-on}" != off ] \
              && goal_live_for_sid "$RCY_OLD_SID" >/dev/null 2>&1; then
             rcy_goal_clear_tried=1
-            if rcy_bgwork_goal_clear; then
-              echo "→ bgwork@${waited}s: the predecessor held a live /goal — Esc, /goal clear (${RCY_GOAL_CLEAR}), /exit re-submitted; the keep-work answer follows on the dialog it raises"
-              emit_recycle_event recycle-bgwork-goal-clear "" "$RSID" "goal=${RCY_GOAL_CLEAR}; /exit re-submitted at ${waited}s" || true
-              rcy_bgwork_next=$((waited + 3))
-              continue
+            if rcy_goal_paused; then
+              # Kept: nothing is sent for the goal, and the answer below proceeds as for a pane with
+              # no goal. The row says so, so a kept pause is countable.
+              RCY_GOAL_CLEAR=paused-kept
+              echo "→ bgwork@${waited}s: the predecessor's /goal is PAUSED on a usage limit — kept as it is (operator intent), not cleared"
+              emit_recycle_event recycle-bgwork-goal-paused "" "$RSID" "goal paused by a usage limit at ${waited}s; not cleared; nothing typed for it" || true
+            else
+              if rcy_bgwork_goal_clear; then
+                echo "→ bgwork@${waited}s: the predecessor held a live /goal — Esc, /goal clear (${RCY_GOAL_CLEAR}), /exit re-submitted; the keep-work answer follows on the dialog it raises"
+                emit_recycle_event recycle-bgwork-goal-clear "" "$RSID" "goal=${RCY_GOAL_CLEAR}; /exit re-submitted at ${waited}s" || true
+                rcy_bgwork_next=$((waited + 3))
+                continue
+              fi
+              # The /exit did not go back in: the predecessor is alive IN THIS PANE at its composer,
+              # which is safe (nothing is orphaned, nothing is stranded) but is not a recycle. Hold
+              # loudly, as the cancel arm does, and name the goal so it can be re-armed by hand.
+              rcy_bgwork_unconfirm
+              echo "!! recycle HELD at ${waited}s: the background-work dialog was dismissed to clear the predecessor's /goal (${RCY_GOAL_CLEAR}), and /exit could not be re-submitted — the session in $RSID is alive at its composer and NO relaunch was typed.$([ "$RCY_GOAL_CLEAR" = cleared ] && [ -n "${FIRE_GOAL:-}" ] && printf ' Its goal was cleared; re-arm it there with: /goal %s' "$FIRE_GOAL") Re-run the recycle." >&2
+              emit_recycle_event recycle-held-bgwork "" "$RSID" "goal-clear dismissed the dialog at ${waited}s (goal=${RCY_GOAL_CLEAR}); /exit re-submit failed; nothing typed; $RCY_BG_UNCONFIRM" || true
+              rcy_retry_ticket "the dialog was dismissed to clear the /goal but /exit could not be re-submitted" - || true
+              hf_alarm recycle-held-bgwork "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-HELD: pane $RSID — the recycle dismissed the background-work dialog to clear the predecessor's /goal (${RCY_GOAL_CLEAR}) and could not re-submit /exit. The predecessor is alive at its composer; no relaunch was typed.$([ "$RCY_GOAL_CLEAR" = cleared ] && [ -n "${FIRE_GOAL:-}" ] && printf ' Its goal was CLEARED — re-arm it in that pane: /goal %s' "$FIRE_GOAL") Re-run the recycle." || true
+              exit 1
             fi
-            # The /exit did not go back in: the predecessor is alive IN THIS PANE at its composer,
-            # which is safe (nothing is orphaned, nothing is stranded) but is not a recycle. Hold
-            # loudly, as the cancel arm does, and name the goal so it can be re-armed by hand.
-            rcy_bgwork_unconfirm
-            echo "!! recycle HELD at ${waited}s: the background-work dialog was dismissed to clear the predecessor's /goal (${RCY_GOAL_CLEAR}), and /exit could not be re-submitted — the session in $RSID is alive at its composer and NO relaunch was typed.$([ "$RCY_GOAL_CLEAR" = cleared ] && [ -n "${FIRE_GOAL:-}" ] && printf ' Its goal was cleared; re-arm it there with: /goal %s' "$FIRE_GOAL") Re-run the recycle." >&2
-            emit_recycle_event recycle-held-bgwork "" "$RSID" "goal-clear dismissed the dialog at ${waited}s (goal=${RCY_GOAL_CLEAR}); /exit re-submit failed; nothing typed; $RCY_BG_UNCONFIRM" || true
-            rcy_retry_ticket "the dialog was dismissed to clear the /goal but /exit could not be re-submitted" - || true
-            hf_alarm recycle-held-bgwork "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-HELD: pane $RSID — the recycle dismissed the background-work dialog to clear the predecessor's /goal (${RCY_GOAL_CLEAR}) and could not re-submit /exit. The predecessor is alive at its composer; no relaunch was typed.$([ "$RCY_GOAL_CLEAR" = cleared ] && [ -n "${FIRE_GOAL:-}" ] && printf ' Its goal was CLEARED — re-arm it in that pane: /goal %s' "$FIRE_GOAL") Re-run the recycle." || true
-            exit 1
           fi
           # A goal still live here (kill switch, resume mode, a clear that did not land) is a
           # backgrounded copy that can keep driving — say so in the row, so the class is countable.
