@@ -1434,9 +1434,15 @@ def rd(rows, win=None, cached=False):
     with contextlib.redirect_stdout(buf):
         ca.render_readout(rows, cfg, win or WIN_OPEN, cached)
     return buf.getvalue()
+# The chat grid is a ```text fence (2026-10-18): a row is the fenced line whose name cell, past
+# the 3-cell mark column, is `name`.
 def acctrow(out, name):
+    inside = False
     for ln in out.splitlines():
-        if ln.startswith("| ") and re.match(r"^\| \**" + name + r"\b", ln):
+        if ln.startswith("```"):
+            inside = not inside
+            continue
+        if inside and ln[3:].split()[:1] == [name]:
             return ln
     raise AssertionError((name, out))
 '
@@ -1457,13 +1463,13 @@ g, _ = ca.ranked(rows, cfg, WIN_OPEN, "general")
 f, _ = ca.ranked(rows, cfg, WIN_OPEN, "fable")
 ip, gp, fp = i[0][1]["acct"], g[0][1]["acct"], f[0][1]["acct"]
 assert gp != fp, (gp, fp)                       # the case a single marker would collapse
-assert "➤" in acctrow(out, ip) and f"**{ip}**" in acctrow(out, ip), out
+assert acctrow(out, ip).startswith("➤ "), out
 assert "➤ᶠ" in acctrow(out, fp), out
 assert "➤ᶠ" not in acctrow(out, gp), out        # general pick is not also flagged as fable
 if gp != ip:
     assert "➤ᵍ" in acctrow(out, gp), out        # general keeps a mark — its own, never the desk s
     assert "➤ᵍ" not in acctrow(out, ip), out
-assert "← you" in acctrow(out, "rich"), out
+assert "rich ←" in acctrow(out, "rich"), out
 # the footer states the SAME answer as the marks — one router, not three opinions — and the DESK
 # line comes FIRST, because it is the one that answers what bare `claude` will do
 body = [ln for ln in out.splitlines() if ln.startswith("➤")]
@@ -1508,9 +1514,9 @@ def rd(rows):
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf): ca.render_readout(rows, cfg, WIN_OPEN, False)
     return buf.getvalue()
-# a routed row renders as "| **name** ➤" — match past the markers, never startswith
 def arow(out, name):
-    return [l for l in out.splitlines() if re.match(r"^\| \**" + name + r"\b", l)][0]
+    rows = out.split("```text")[1].split("```")[0].splitlines()
+    return [l for l in rows if l[3:].split()[:1] == [name]][0]
 warn = float(cfg["login_warn_h"])
 out = rd([row(acct="soon", auth="ok", launcher="claude-soon", email="s@x.com",
               dia_profile="S", login_expires_h=warn - 2, login_expires_at=at(warn - 2)),
@@ -1519,14 +1525,14 @@ out = rd([row(acct="soon", auth="ok", launcher="claude-soon", email="s@x.com",
           row(acct="dead", auth="login-required", launcher="claude-dead", email="d@x.com",
               dia_profile="D", login_expires_h=400.0, login_expires_at=at(400))])
 soon = arow(out, "soon")
-assert "⚠" in soon and "**" in soon, soon
+assert "⚠" in soon, soon
 far = arow(out, "far")
 assert "⚠" not in far, far                     # only the band is marked, not every row
 dead = arow(out, "dead")
 # a future date beside a REJECTED grant reads as "fine until then" — state instead
-assert "⊘ REQUIRED" in dead and "20" not in dead.split("|")[-2], dead
+assert dead.rstrip().endswith("⊘ REQUIRED"), dead
 # the cliff bullet carries the identity that makes it safe to act on
-cliff = [l for l in out.splitlines() if l.startswith("- ") and "login expires" in l][0]
+cliff = [l for l in out.splitlines() if l.startswith("⚠ ") and "login expires" in l][0]
 assert "claude-soon" in cliff and "s@x.com" in cliff and "Dia" in cliff, cliff
 # ...and login-required is NOT double-warned: its own auth bullet already says it
 assert not [l for l in out.splitlines() if "`dead` login expires" in l], out
@@ -1648,7 +1654,8 @@ def rd(rows, win):
     with contextlib.redirect_stdout(buf): ca.render_readout(rows, cfg, win, False)
     return buf.getvalue()
 def arow(out, name):
-    return [l for l in out.splitlines() if re.match(r"^\| \**" + name + r"\b", l)][0]
+    rows = out.split("```text")[1].split("```")[0].splitlines()
+    return [l for l in rows if l[3:].split()[:1] == [name]][0]
 out = rd([row(acct="a")], WIN_OPEN)
 assert "permanent" in out and "2099" not in out, out    # no sentinel-derived time remaining
 # a null stamp and an ELAPSED one both read as an em dash: a past absolute reads as a live
@@ -1671,7 +1678,7 @@ print("OK")'
   run python3 -c "$LOAD$READOUT"'
 # 72 minutes out; a stale countdown of 4.0 h beside it must lose to the stamp
 out = rd([row(acct="hot", session_pct=88, session_reset_at=at(1.2), session_reset_h=4.0)])
-tri = [l for l in out.splitlines() if l.startswith("- ▲ `hot`")]
+tri = [l for l in out.splitlines() if l.startswith("▲ `hot`")]
 assert tri, out
 assert re.search(r"routing cutoff; resets in 1h 1[12]m$", tri[0]), tri[0]
 print("OK")'
@@ -1695,7 +1702,7 @@ assert R.get("S_RESET_SHOW", ca.S_RESET_SHOW_DEFAULT) * 100 <= 82 < R["S_CUT"] *
 out = rd([row(acct="warm", session_pct=82, session_reset_at=at(2.5), session_reset_h=2.5)])
 lines = [l for l in out.splitlines() if "`warm`" in l and ("△" in l or "▲" in l)]
 assert len(lines) == 1, out                      # one line per account in the band, never two
-assert re.fullmatch(r"- △ `warm` — 5h at 82%; resets in 2h (29|30)m", lines[0]), lines[0]
+assert re.fullmatch(r"△ `warm` — 5h at 82%; resets in 2h (29|30)m", lines[0]), lines[0]
 # no reset known: the line would only repeat the 5h cell, so it is not drawn
 bare = rd([row(acct="warm", session_pct=82, session_reset_at=None, session_reset_h=None)])
 assert "△" not in bare, bare
@@ -1708,7 +1715,7 @@ print("OK")'
   run python3 -c "$LOAD$READOUT"'
 past = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
 out = rd([row(acct="old", session_pct=91, session_reset_at=past, session_reset_h=0.4)])
-tri = [l for l in out.splitlines() if l.startswith("- ▲ `old`")]
+tri = [l for l in out.splitlines() if l.startswith("▲ `old`")]
 assert tri and tri[0].endswith("; its 5-hour window has reset since this reading"), out
 assert "resets in" not in tri[0], tri[0]
 print("OK")'
@@ -1721,6 +1728,112 @@ print("OK")'
   run python3 -c "$LOAD$READOUT"'
 assert ca._reset5_clause({"session_reset_h": 0.5 / 60}) == "; resets in <1m"
 assert ca._reset5_clause({"session_reset_h": None}) == ""
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+# ---- the chat grid (2026-10-18) ----------------------------------------------------------------
+# /accounts became a fenced board-style grid. These pin the layout contract. MUTANTS: swap the
+# ww index back to c[10] (the login header drifts off its column), drop the notes sort (the
+# severity test fails), or route the drain line past routable_g (the not-routable test fails).
+
+@test "--readout grid: one plain-text fence, <=100 cells, header aligned with its cells" {
+  run python3 -c "$LOAD$READOUT"'
+import unicodedata
+def cells(s): return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in s)
+out = rd([row(acct="next-quaternary", is_self=True, weekly_reset_at=at(150), weekly_reset_h=150),
+          row(acct="dead1", auth="login-required", login_expires_h=400.0),
+          row(acct="ok", session_reset_at=at(1.5), weekly_reset_at=at(30), weekly_reset_h=30,
+              login_expires_h=900.0)])
+assert out.count("```text") == 1 and out.count("```") == 2, out
+assert "\x1b[" not in out, repr(out)
+grid = out.split("```text\n")[1].split("```")[0].splitlines()
+assert all(cells(l) <= 100 for l in grid), [cells(l) for l in grid]
+hdr = grid[1]
+for r in grid[2:]:
+    for col in ("used", "fable"):
+        i = hdr.index(col) + len(col)        # right-aligned: the cell ends where the label ends
+        assert r[i - 1] == "%" or r[i - 1] in "—*", (col, hdr, r)
+    assert len(r.rstrip()) >= hdr.index("login"), (hdr, r)
+assert grid[2][3:].startswith("next-quat… ←"), grid   # clipped to the budget, ← kept
+assert grid[3].rstrip().endswith("⊘ REQUIRED"), grid
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "--readout grid: reset countdowns come from the stamp; elapsed is —, under a minute is <1m" {
+  run python3 -c "$LOAD$READOUT"'
+r = acctrow(rd([row(acct="x", session_reset_at=at(1.2), session_reset_h=4.0)]), "x")
+assert re.search(r"\b1h 1[12]m \w{3} \d\d:\d\d", r), r       # stamp beats the stale 4.0h countdown
+assert "4h 0m" not in r, r
+assert ca._reset_pair({"session_reset_at": at(-0.3), "session_reset_h": -0.3},
+                      "session_reset_at", "session_reset_h") == ("—", "")
+assert ca._reset_pair({"session_reset_h": 0.5 / 60}, "session_reset_at", "session_reset_h")[0] == "<1m"
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "--readout flags: one glyph-led line each, in severity order (money first, staleness last)" {
+  run python3 -c "$LOAD$READOUT"'
+out = rd([row(acct="thr", stale_quota=True, error="poll throttled", poll_throttled=True),
+          row(acct="hot", session_pct=95, session_reset_at=at(1)),
+          row(acct="cliff", auth="ok", launcher="claude-c", email="c@x.com", dia_profile="C",
+              login_expires_h=10.0, login_expires_at=at(10)),
+          row(acct="auth", auth="logged-out"),
+          row(acct="money", credits_used=1240.0, credits_used_usd=12.40)])
+lead = [l.split()[0] for l in out.splitlines() if l[:1] in ("🚨", "○", "✖", "▲", "⚠", "↻")]
+order = ["🚨", "○", "▲", "⚠", "↻"]
+assert [g for g in lead if g in order] == order, lead
+assert not [l for l in out.splitlines() if l.startswith("- ")], out   # no markdown bullets
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "--readout drain: Heavy work names only routable accounts" {
+  run python3 -c "$LOAD$READOUT"'
+from unittest import mock
+rows = [row(acct="free", weekly_pct=10), row(acct="shut", weekly_pct=10)]
+with mock.patch.object(ca, "pace_need_ppd", lambda r: 1.0), \
+     mock.patch.object(ca, "wk_strand_pp", lambda r: 81.0):
+    line = ca._drain_line(rows, {"free"})
+assert line.startswith("Heavy work → **free**: ~81pp of 90 goes unused"), line
+assert "also shut ~81 of 90 (not routable)" in line, line
+assert "**shut**" not in line, line
+with mock.patch.object(ca, "pace_need_ppd", lambda r: 1.0), \
+     mock.patch.object(ca, "wk_strand_pp", lambda r: 0.0):
+    assert ca._drain_line(rows, {"free"}).startswith("Nothing goes unused"), "zero strand"
+# a strand under 20pp still rides beside the decision, never hidden by it
+three = rows + [row(acct="tiny", weekly_pct=50)]
+with mock.patch.object(ca, "pace_need_ppd", lambda r: 1.0), \
+     mock.patch.object(ca, "wk_strand_pp", lambda r: 15.0 if r["acct"] == "tiny" else 81.0):
+    assert "also tiny ~15pp of 50" in ca._drain_line(three, {"free", "tiny"})
+# NO account measured: say so, never "nothing goes unused"
+with mock.patch.object(ca, "pace_need_ppd", lambda r: 1.0), \
+     mock.patch.object(ca, "wk_strand_pp", lambda r: None):
+    u = ca._drain_line(rows, {"free"})
+assert u.startswith("Weekly drain unknown") and "Nothing" not in u, u
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "--readout providers: two lines — who is ready, and who bills outside a plan" {
+  run python3 -c "$LOAD"'
+P = [{"name": "codex", "label": "Codex CLI", "routable": True, "auth_state": "ok",
+      "bills_outside_plan": False},
+     {"name": "grok", "label": "Grok CLI", "routable": False, "bills_outside_plan": True}]
+out = ca.render_providers_brief(P)
+assert out[0] == "Other agents ready now: **Codex CLI** — all 2 in `claude-accounts --agents`", out
+assert out[1].startswith("🚨 Grok CLI bills OUTSIDE a plan we hold"), out
+assert len(ca.render_providers_brief(P[:1])) == 1                  # no 🚨 line without a biller
+assert ca.render_providers_brief([]) == []
+# an API key is a BILLING state: named as metered money, never as "auth not ok"
+k = ca.render_providers_brief([dict(P[0], auth_state="api-key")])
+assert "auth not ok" not in k[0] and k[1] == "🚨 Codex CLI is on a metered API key", k
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }

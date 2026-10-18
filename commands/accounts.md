@@ -25,7 +25,7 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
 2. **Render the canonical readout — run the renderer, do not rebuild it.**
 
    ```bash
-   claude-accounts --readout   # the finished markdown table + flag bullets + router footer
+   claude-accounts --readout   # router headline + fenced grid + flag lines + drain/Fable/provider lines
    ```
 
    🚨 **Paste that output VERBATIM into chat — every row and column, before any commentary.**
@@ -48,14 +48,15 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
 
    | Rule | Directive it encodes |
    |---|---|
-   | Fixed column set, both reset columns + `login expires` in every row | 2026-07-11, 2026-07-24 |
-   | Absolutes in LOCAL `EEE HH:MM`, dated past ~6 days; derived from `*_reset_at`, never `now + *_reset_h` | 2026-07-11 |
-   | Relatives past 24h as `Xd Yh` (never decimal days, never 25+ hours) | 2026-07-30 |
-   | `➤` + bold on the **desk** pick (what bare `claude` launches onto); `➤ᵍ`/`➤ᶠ` when the general / Fable pick differs; `← you` from `is_self` | 2026-07-30, re-pointed 2026-08-11 |
-   | `⚠` + bold on a `login expires` inside `login_warn_h`; `⊘ REQUIRED` on a `login-required` row | 2026-07-24, 2026-07-30 |
-   | `*` on every percent of an inherited row, + the age/exclusion bullet | 2026-07-19 |
+   | The desk / general / fable answer LEADS, above the grid, with desk_why's clause verbatim | 2026-10-18 |
+   | A ```text grid in the SessionStart board's visual language (mark column, weekly bar), fixed columns: live, 5h used + reset, weekly used + bar, fable, weekly reset, login | 2026-07-11, 2026-07-24, 2026-10-18 |
+   | Each reset is `countdown clock` (`3h 29m Sun 03:59`): countdown first, two units (`fmt_board_t`), re-derived from `*_reset_at`; clock in LOCAL `EEE HH:MM`, dated past ~6 days | 2026-07-11, 2026-07-30, 2026-10-18 |
+   | `➤` in the mark column on the **desk** pick (what bare `claude` launches onto); `➤ᵍ`/`➤ᶠ` when the general / Fable pick differs; `←` from `is_self` (spelled `← you` on the headline) | 2026-07-30, re-pointed 2026-08-11 |
+   | Login is a countdown; `⚠` inside `login_warn_h` (the date rides the ⚠ line); `⊘ REQUIRED` on a `login-required` row | 2026-07-24, 2026-07-30 |
+   | `*` on every percent of an inherited row, + the age/exclusion line | 2026-07-19 |
    | ONE weekly-resets column (tolerance compare, footnote a genuine split) | 2026-07-11 |
-   | Flags as bullets never columns; `¢` keyed on SPEND and rendered in DOLLARS | 2026-07-26 |
+   | Flags are glyph-led lines (never columns) in severity order: 🚨/⚠ money, ○/⊘ auth, ✖ out, △ near (weekly), ▲/△ 5h cutoff, ⚠ login cliff, ↻ stale, ○ Fable exhausted / ¢ authorized spend, · footnote; `¢` keyed on SPEND and rendered in DOLLARS | 2026-07-26, 2026-10-18 |
+   | The weekly-drain block is ONE line naming the routable accounts whose quota dies unused (`Heavy work → …`), strands under 20pp ride as `also …` tails, and no pace reading says so rather than "nothing"; ⚠ wall rows stay verbatim; the full block is plain `claude-accounts` | 2026-10-18 |
    | `—` for a null or elapsed stamp; `permanent` Fable window gets no countdown | 2026-07-20 |
    | Every `/login` line carries its mailbox + Dia profile | 2026-07-30 |
 
@@ -64,7 +65,7 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
      one.** A `*` row is inherited history AND router-excluded. `poll_throttled` is a 90s
      endpoint throttle — ALWAYS transient, NEVER a usage cap (a real cap is HTTP 200 with
      percent ≈ 100). Never report a throttle as a limit.
-   - 🚨 **Never re-derive the routed account yourself from `score_*`.** The footer is the
+   - 🚨 **Never re-derive the routed account yourself from `score_*`.** The headline (the `➤` lines above the grid) is the
      adversarially-verified router; report its answer. For wave spread use
      `claude-accounts --rank general|fable` and assign round-robin.
    - 🚨 **Three lanes, and they are NOT interchangeable — say which one you are answering.**
@@ -81,11 +82,11 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
      `next3` are slot numbers, not identities; a mis-paired credential works, so nothing
      errors, while the account you meant keeps expiring. The renderer already emits this —
      so if you paraphrase a cliff bullet, carry the identity with it.
-   - A row's `←`/`➤` markers and the footer are ONE answer from ONE ranking pass. If you
-     summarise, do not restate the pick in a way that could disagree with the footer.
+   - A row's `←`/`➤` markers and the headline are ONE answer from ONE ranking pass. If you
+     summarise, do not restate the pick in a way that could disagree with the headline.
 
 3. **Interpret** — report to the user, answer-first:
-   - **Routing**: the footer's `➤ desk → D` / `➤ general → X` / `➤ fable → Y` is the
+   - **Routing**: the headline's `➤ desk → D` / `➤ general → X` / `➤ fable → Y` is the
      adversarially-verified router (use-it-or-lose-it × Fable-sub-cap coupling ×
      5h-safety × concurrency-spread). Report its answer (step 2's rules apply).
      The **desk** line reads in its own lane's terms — the two-key rule: among accounts whose
@@ -194,8 +195,9 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
 has headroom"*. The provider section answers *"what else can I route to, and does using it cost
 money outside a plan I already hold"*.
 
-`claude-accounts --readout` **appends it automatically** — same single-renderer rule, so paste the
-whole thing verbatim exactly as before. `--agents` prints that section alone (add `--json` for the
+`claude-accounts --readout` **appends a two-line summary of it** (who is ready now, and which
+backends bill outside a plan we hold) — same single-renderer rule, so paste the whole thing
+verbatim. The full table below is `--agents`, which prints that section alone (add `--json` for the
 rows as data; `--no-agents` returns the historical Claude-only readout). `--agents` deliberately
 skips the keychain read and the usage sweep, so it costs nothing and cannot be blocked by a
 4-account sweep.

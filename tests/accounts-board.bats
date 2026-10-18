@@ -460,8 +460,11 @@ _t = lambda m: (datetime.now(timezone.utc) + timedelta(minutes=m)).isoformat()
   run bash -c "cd '$REPO' && $(declare -f render_narrow); NARROW_FIXTURE='$NARROW_FIXTURE' \
     render_narrow --readout --max-wait 0"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [[ "$output" == *"| account | live | 5h used |"* ]] \
-    || { echo "the markdown table header changed: $output"; false; }
+  # The chat grid (2026-10-18) is a fenced board-style grid with the 5-hour reset the board lacks.
+  [[ "$output" == *'```text'* ]] || { echo "no fenced grid: $output"; false; }
+  [[ "$output" == *"5-hour ─"* ]] || { echo "no 5-hour group rule: $output"; false; }
+  [[ "$output" == *"weekly ─"* ]] || { echo "no weekly group rule: $output"; false; }
+  [[ "$output" == *"live  used  resets"* ]] || { echo "the grid header changed: $output"; false; }
 }
 
 @test "19b --keepwarm dies at its wall-clock deadline instead of holding the lock forever" {
@@ -663,7 +666,7 @@ rows = [l for l in lines if l is not hdr and any(g in l for g in \"▁▄▆\")]
 assert rows, \"no data rows found\"
 for l in rows:
     cell = l[end-6:end]
-    assert re.fullmatch(r\"\\s*(—|[0-9]+[dhm]( [0-9]+[hm])?)\", cell), \"resets cell misaligned in %r: %r\" % (l, cell)
+    assert re.fullmatch(r\"\\s*(—|99d\\+|[0-9]+[dhm]( [0-9]+[hm])?)\", cell), \"resets cell misaligned in %r: %r\" % (l, cell)
 '"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }

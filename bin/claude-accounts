@@ -56,10 +56,12 @@ Usage:
       100% gets a sentence saying whether the server confirmed it is out.
       Cost: ONE `max_tokens: 1` call per account (~25 tokens; 1 weekly pp is ~500k). Un-forced it
       fires only at/above WIRE_NEAR_WALL, where the integer is ambiguous. Kill: CC_ACCOUNTS_WIRE=off.
-  claude-accounts --readout           the /accounts chat readout, as finished markdown.
+  claude-accounts --readout           the /accounts chat readout, as finished markdown: the router
+      headline, a fenced board-style grid, glyph-led flag lines, then a drain line, a Fable/clock/
+      cache line and a provider summary (unless --no-agents; --agents prints the full table).
       THE renderer for that surface — paste it, do not rebuild it. Every formatting rule
-      (column set, Xd Yh relatives, the ➤ route marker, ⚠ on a login inside login_warn_h,
-      `*` on inherited numbers, flags-as-bullets) lives here in code, so it can be tested
+      (column set, two-unit countdowns, the ➤ route marker, ⚠ on a login inside login_warn_h,
+      `*` on inherited numbers, flag severity order) lives here in code, so it can be tested
       and cannot drift from the CLI table. commands/accounts.md keeps only the judgment:
       how to INTERPRET a stale row, an exclusion, or a cliff.
   claude-accounts --readout --narrow  the same readout at <=76 cols, for the SessionStart board.
@@ -67,7 +69,6 @@ Usage:
       different pick, staleness or cliff than /accounts does. Written to disk (board_file, default
       alongside cache_file) by --keepwarm; read by hooks/accounts-board.sh, which never runs this
       program — --readout measured 5.33s, over a hook's 5s timeout.
-      Appends the provider section unless --no-agents.
   claude-accounts --agents            NON-Claude agent backends only (registry:
       ~/.claude/providers.json). Needs no keychain read, no usage sweep and no lock, so it
       answers "what else can I route to" without paying for a 4-account sweep. Add --json for
@@ -5341,19 +5342,23 @@ def soonest_reset_line(rows, cfg):
     accounts and blank on this one. The routing reason is here because the operator's question
     at startup was "why did this session not open on the account about to reset?", and the
     answer (`kmax-concurrency`) was on no surface they read. None when no account qualifies."""
+    # ONE countdown per row, re-derived from the stamp (`_until`), for the choice, the printed
+    # time and the rate alike — so this line agrees with the grid's `resets` column above it.
+    def _h(x):
+        return _until(x, "weekly_reset_at", "weekly_reset_h")
     cands = [r for r in rows
              if r.get("weekly_pct") is not None
-             and isinstance(r.get("weekly_reset_h"), (int, float)) and r["weekly_reset_h"] > 0
+             and (_h(r) or 0) > 0
              and r.get("auth") not in ("login-required", "logged-out", "keychain-error")
              and not r.get("auth_broken")]
     if not cands:
         return None
-    r = min(cands, key=lambda x: x["weekly_reset_h"])
+    r = min(cands, key=_h)
+    h = _h(r)
     left = max(0.0, 100.0 - r["weekly_pct"])
-    parts = [f"next reset: {r['acct']} in {fmt_h(r['weekly_reset_h'])}, "
-             f"{left:.0f}% of the week left"]
+    parts = [f"next reset: {r['acct']} in {fmt_board_t(h)}, {left:.0f}% of the week left"]
     if left > 0:
-        parts.append(f"needs {left / r['weekly_reset_h']:.1f}pp/h to use it")
+        parts.append(f"needs {left / h:.1f}pp/h to use it")
     s = wk_strand_pp(r)
     if s is not None and left > 0:     # at 0% left there is no pace to report
         parts.append("on pace to use it all" if s < 0.5 else f"~{s:.0f}pp dies at 48h pace")
@@ -8280,19 +8285,6 @@ def _md_when(iso):
     return dt.strftime("%a %H:%M") if near else dt.strftime("%a %b %d %H:%M")
 
 
-def _md_cell(iso, hours):
-    """One `absolute (in relative)` reset/expiry cell, or `—`.
-
-    An em dash covers BOTH null and already-elapsed: a past absolute reads as a deadline
-    that still stands, and a negative relative reads as nonsense. Which of the two it is
-    is a per-row fact the caller explains in a bullet (row not live vs bucket unused).
-    """
-    when = _md_when(iso)
-    if not when or hours is None or hours < 0:
-        return "—"
-    return f"{when} (in {fmt_h(hours)})"
-
-
 # The desk lane's rungs, in the words the footer prints. Keyed on the SAME constants desk_keys
 # returns, so a renamed rung cannot leave a renderer describing a ladder that no longer exists.
 DESK_TIER_LABEL = {DESK_TIER_SAFE: "safe set",
@@ -8313,7 +8305,7 @@ def desk_why(r, cfg):
     `sticky` names hysteresis (W1.4): this account kept the desk on incumbency, so the operator
     can tell "it is best" from "it is where you already are and nothing beat it by the margin"."""
     tier = desk_keys(r, cfg)[2]
-    return (f"weekly ↻ {fmt_h(r.get('weekly_reset_h'))}"
+    return (f"weekly ↻ {fmt_board_t(_until(r, 'weekly_reset_at', 'weekly_reset_h'))}"
             f" · 5h {(r.get('session_pct') or 0):.0f}%"
             f" · {DESK_TIER_LABEL.get(tier, '?')}"
             + (" · sticky" if r.get("desk_incumbent") else ""))
@@ -8522,20 +8514,25 @@ def _bpct(r, key, mute=False):
     because a reader scanning a column must not have to decide whether a floating asterisk
     belongs to the row above. Right-aligning the value-plus-suffix as ONE string is what keeps
     the digits in a column while the suffix comes and goes."""
+    t, rgb = _bpct_text(r, key)
+    # `mute`: the row is out of weekly quota, so this cell is context, not a reason to route.
+    # Same text and padding — only the colour steps down — so the colour-off board is unchanged.
+    return bc(t.rjust(_NW_PCT + 1), BOARD_MUTE if mute else rgb)
+
+
+def _bpct_text(r, key):
+    """A percent cell's TEXT (with its `*`) and colour — shared by the board cell and the chat grid,
+    so the two surfaces can never print different numbers for one meter."""
     v, ex = board_eff(r, key)
     if v is None:
-        return _cell("—", _NW_PCT + 1, ">", BOARD_MUTE)
+        return "—", BOARD_MUTE
     star = "*" if (r.get("stale_quota") or r.get("error")) else ""
     if key not in WIRE_FIELD:       # no server reading exists for it: plain percent, as before
         # Digits use num_rgb (quiet below 50%); the bar keeps usage_rgb/pct_rgb untouched.
         t = f"{v:.0f}%"
-        rgb = num_rgb(v, t, usage_rgb(v))
-    else:
-        t = pct_text(v, ex)
-        rgb = num_rgb(v, t, pct_rgb(v, ex))
-    # `mute`: the row is out of weekly quota, so this cell is context, not a reason to route.
-    # Same text and padding — only the colour steps down — so the colour-off board is unchanged.
-    return bc((t + star).rjust(_NW_PCT + 1), BOARD_MUTE if mute else rgb)
+        return t + star, num_rgb(v, t, usage_rgb(v))
+    t = pct_text(v, ex)
+    return t + star, num_rgb(v, t, pct_rgb(v, ex))
 
 
 def _nrow(mark, name, live, p5, bar, pwk, pfb, resets, login):
@@ -8553,6 +8550,131 @@ def _nrow(mark, name, live, p5, bar, pwk, pfb, resets, login):
     # shape, and a single space let "2d 15h 20d 19h" read as one string.
     return (" ".join([mark + name, live, p5, pwk, bar, pfb, resets])
             + "   " + login).rstrip()
+
+
+# ---- wide (chat) presentation ------------------------------------------------------------------
+# The /accounts chat readout is a fenced ```text grid in the BOARD's visual language (2026-10-18,
+# operator: "as beautiful, clear, clean, and concise as possible", after the board proved the look).
+# The old 8-column markdown table rendered as a heavy boxed grid with "Sun 03:59 (in 3.5h)" cells;
+# a monospace fence keeps the board's columns, its bar and its mark column, and has room for the
+# two things the board cannot carry: the 5-hour reset and the absolute clock beside each countdown.
+# Widths: live, a percent, the 5h countdown, the 5h clock (`Sun 03:59`), the weekly countdown.
+_CW_LIVE, _CW_PCT, _CW_CD5, _CW_ABS5, _CW_CDW = 4, 5, 6, 9, 7
+
+# Flag severity, the order the chat AND board print their one-line flags in: money first (it is
+# the standing guard), then anything that blocks an account, then the near-wall readings, then
+# staleness. A stable sort keeps accounts in row order within a level.
+(_SEV_MONEY, _SEV_AUTH, _SEV_OUT, _SEV_NEAR, _SEV_CUT5, _SEV_CLIFF, _SEV_STALE, _SEV_INFO,
+ _SEV_FOOT) = range(9)
+
+
+def _until(r, at_key, h_key):
+    """Hours until a row's reset, re-derived from the STAMP when there is one (`_reset5_clause`'s
+    precedence: `*_reset_h` is a countdown taken at the sweep, so on a cached row it is as stale as
+    the cache). None unless a finite, non-bool number results."""
+    h = hrs_until(r.get(at_key))
+    if h is None:
+        h = r.get(h_key)
+    if not isinstance(h, (int, float)) or isinstance(h, bool) or not math.isfinite(h):
+        return None
+    return h
+
+
+def _reset_pair(r, at_key, h_key):
+    """One reset as (countdown, clock): `("3h 29m", "Sun 03:59")`, countdown FIRST because it is
+    the half a reader acts on. Null or elapsed is `("—", "")`: a past clock reads as a deadline
+    that still stands. Under a minute is `<1m`, since fmt_board_t floors and `0m` reads elapsed."""
+    h = _until(r, at_key, h_key)
+    if h is None or h <= 0:
+        return "—", ""
+    clk = _md_when(r.get(at_key)).split()
+    # Dated (past ~6 days) drops the weekday — `Oct 24 23:00`, 12 cells, not 16: the date already
+    # disambiguates, and the 4 cells are what keeps a long-named fleet inside the 100-cell grid.
+    return ("<1m" if h < 1 / 60 else fmt_board_t(h)), " ".join(clk[1:] if len(clk) == 4 else clk)
+
+
+def _resetw_clause(r):
+    """The weekly twin of `_reset5_clause`, for the out-of-weekly-quota sentences."""
+    h = _until(r, "weekly_reset_at", "weekly_reset_h")
+    if h is None:
+        return ""
+    if h <= 0:
+        return "; its weekly window has reset since this reading"
+    if h < 1 / 60:
+        return "; resets in <1m"
+    return f"; resets in {fmt_board_t(h)}"
+
+
+def _login_cell(r, warn_h, narrow):
+    """The login cell, ONE builder for both surfaces: a countdown, `⚠ ` inside the warn band, and
+    the state instead of a stamp when a /login is already required (a future date there reads as
+    "fine until then" when the grant was in fact rejected)."""
+    if r.get("auth") == "login-required":
+        return "⊘ REQ" if narrow else "⊘ REQUIRED"
+    lxh = r.get("login_expires_h")
+    if lxh is None or lxh < 0:
+        return "—"
+    return ("⚠ " if lxh <= warn_h else "") + fmt_board_t(lxh)
+
+
+def _wrow(mark, name, live, p5, cd5, abs5, pwk, bar, pfb, cdw, absw, login, nw, ww):
+    """The ONE place the chat grid's column order and gaps live (header and rows alike, as `_nrow`
+    is for the board). Plain text only: no SGR reaches chat, and every glyph used in a cell is one
+    cell wide, so ljust/rjust are exact."""
+    return (mark.ljust(_NW_MARK) + name.ljust(nw) + " " + live.rjust(_CW_LIVE)
+            + " " + p5.rjust(_CW_PCT) + "  " + cd5.rjust(_CW_CD5) + " " + abs5.ljust(_CW_ABS5)
+            + "  " + pwk.rjust(_CW_PCT) + " " + bar.ljust(_NW_BAR) + " " + pfb.rjust(_CW_PCT)
+            + "  " + cdw.rjust(_CW_CDW) + " " + absw.ljust(ww) + "  " + login).rstrip()
+
+
+def _drain_line(rows, routable_g):
+    """The weekly-drain block as ONE decision: which routable accounts to give heavy work, because
+    their quota dies unused at reset. Same producer as pace_line (`wk_strand_pp`, same sort); it
+    names only accounts the general lane can already route to, so it is never a second ranking.
+    The full per-account block (burst percentiles, start-by clauses) stays in `claude-accounts`."""
+    def _key(x):
+        s = wk_strand_pp(x)
+        return -(s if s is not None else -1.0)
+    targets, tails, small = [], [], []
+    for r in sorted((x for x in rows if pace_need_ppd(x) is not None), key=_key):
+        left = max(0.0, 100.0 - r["weekly_pct"])
+        if left < 0.5:
+            continue
+        s = wk_strand_pp(r)
+        if s is None:
+            tails.append(f"{r['acct']} pace unknown")
+        elif s >= 20 and r["acct"] in routable_g:
+            targets.append((r["acct"], s, left))
+        elif s >= 20:
+            tails.append(f"also {r['acct']} ~{s:.0f} of {left:.0f} (not routable)")
+        elif s >= 0.5:
+            small.append(f"{r['acct']} ~{s:.0f}pp of {left:.0f}"
+                         + ("" if r["acct"] in routable_g else " (not routable)"))
+
+    def _join(xs, word):
+        return xs[0] if len(xs) == 1 else ", ".join(xs[:-1]) + f" {word} " + xs[-1]
+    unknown = [t for t in tails if t.endswith(" pace unknown")]
+    if targets:
+        # Smaller strands still ride the line: the decision names the big ones, never hides the rest.
+        tails = [t for t in tails if t.startswith("also ")] + ["also " + x for x in small] + unknown
+        names = _join([f"**{a}**" for a, _s, _l in targets], "or")
+        figs = _join([f"~{s:.0f}{'pp' if i == 0 else ''} of {l:.0f}"
+                      for i, (_a, s, l) in enumerate(targets)], "and")
+        line = (f"Heavy work → {names}: {figs} "
+                f"{'goes' if len(targets) == 1 else 'go'} unused at weekly reset (48h pace)")
+    elif small or any(t.startswith("also ") for t in tails):
+        line = "Unused at weekly reset (48h pace): " + " · ".join(
+            small + [t[5:] for t in tails if t.startswith("also ")])
+        tails = [t for t in tails if not t.startswith("also ")]
+    elif unknown and len(unknown) == len(tails) and not any(
+            wk_strand_pp(x) is not None for x in rows if pace_need_ppd(x) is not None):
+        # NO account was measured: a verdict here would be stated about nobody's data.
+        return ("Weekly drain unknown (no 48h pace yet): "
+                + ", ".join(t[:-len(" pace unknown")] for t in unknown))
+    else:
+        line = ("Nothing measured goes unused at weekly reset (48h pace)" if unknown
+                else "Nothing goes unused at weekly reset (48h pace)")
+    return " · ".join([line] + tails)
 
 
 def _disp_w(s):
@@ -8652,27 +8774,6 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None):
     pick_g = rank_g[0][1]["acct"] if rank_g else None
     pick_f = rank_f[0][1]["acct"] if rank_f else None
 
-    def pctc(r, key):
-        """A percent, `*`-suffixed when the row is inherited history rather than a reading.
-
-        Withheld (null) on a bucket whose window has ROLLED since that reading: reporting
-        the last-known number there would state a figure the reset has already voided.
-        """
-        # The server's own reading decides when present: the endpoint's integer rounds UP and
-        # clamps at 100, so "99% used, allowed" and "102% used, rejected" both read `100%`. A
-        # still-allowed window is floored and capped at 99 (board_eff), so the cell never shows
-        # 100% for an account the server is still serving; the per-account sentence says which.
-        wv = (r.get("wire") or {}).get(WIRE_FIELD.get(key))
-        if wv is not None:
-            bv, refused = board_eff(r, key)
-            if bv is not None:
-                return f"{wv * 100:.0f}%" if refused else pct_text(bv, refused)
-        v = r.get(key)
-        if v is None:
-            return "—"
-        return (pct_text(float(v), None) if key in WIRE_FIELD else f"{v:.0f}%") \
-            + ("*" if r.get("stale_quota") or r.get("error") else "")
-
     if narrow:
         # THE BOARD STATES ITS OWN AGE, on line 1, before any number it is about to print.
         # `cached`/`*` already say "this row is inherited"; neither says how old the sweep is,
@@ -8701,10 +8802,22 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None):
                      _cell("resets", _NW_WKR, ">", BOARD_LABEL),
                      bc("login", BOARD_LABEL))]
     else:
-        out = ["| account | live | 5h used | 5h resets | weekly used | Fable used "
-               "| weekly resets | login expires |",
-               "|---|---|---|---|---|---|---|---|"]
-    notes, footnotes = [], []
+        # THE ANSWER LEADS (2026-10-18). The desk line answers "which account do I use", so it is
+        # line 1, above the grid, where bold renders (it would not inside the fence). Its clause is
+        # desk_why VERBATIM — the tier word and `sticky` are the desk lane's own reasoning.
+        if rank_i:
+            out = [f"➤ desk (bare `claude`) → **{pick_i}**"
+                   + (" ← you" if rank_i[0][1].get("is_self") else "")
+                   + f" — {desk_why(rank_i[0][1], cfg)}"]
+        else:
+            # ABSTENTION IS AN ANSWER: printed as "none", never omitted (see the board branch).
+            out = ["➤ desk (bare `claude`) → **none** — no account routable; "
+                   "the launcher falls back to its pinned account"]
+        out += [f"➤ general → **{pick_g or 'none'}** · ➤ fable → **{pick_f or 'none'}**", ""]
+    notes, cells = [], []
+
+    def _note(sev, text):
+        notes.append((sev, text))
     for r in rows:
         acct, a = r["acct"], r.get("auth")
         # THE BARE ➤ IS THE DESK PICK, in both renderers (W2.1). It used to be the general pick
@@ -8721,7 +8834,6 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None):
             marks += " ➤ᵍ"
         if pick_f and acct == pick_f and pick_f not in (pick_i, pick_g):
             marks += " ➤ᶠ"
-        name = (f"**{acct}**" if marks else acct) + marks + (" ← you" if r.get("is_self") else "")
 
         # ONE weekly-resets column: both weekly buckets reset at the same instant, and the
         # CLI stamps them a fraction of a second apart — so compare with a TOLERANCE and
@@ -8732,19 +8844,17 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None):
         # "they differ" footnote on two of four accounts the first time it ran for real.
         wr, fr_ = r.get("weekly_reset_at"), r.get("fable_reset_at")
         if wr and fr_ and not _same_instant(wr, fr_):
-            footnotes.append(f"`{acct}` weekly and Fable reset at different minutes: "
-                             f"Fable {_md_cell(fr_, r.get('fable_reset_h'))}")
+            fh = _until(r, "fable_reset_at", "fable_reset_h")
+            fcd, fclk = _reset_pair(r, "fable_reset_at", "fable_reset_h")
+            # "passed" only when a countdown SAYS so; an unparseable stamp is unknown, not elapsed.
+            fwhen = ("Fable reset has passed" if fh is not None and fh <= 0
+                     else f"Fable resets {fclk} (in {fcd})" if fclk
+                     else f"Fable resets in {fcd}" if fh is not None else "Fable —")
+            notes.append((_SEV_FOOT, f"· `{acct}` weekly and Fable reset at different minutes: "
+                          + fwhen))
 
-        # login expires: never a quota, never a reset. A login-required row shows the state
-        # instead of a stamp — a future date there reads as "fine until then" when in fact
-        # the grant was already rejected.
+        # login expires: never a quota, never a reset (`_login_cell`, one builder for both).
         lxh = r.get("login_expires_h")
-        if a == "login-required":
-            login = "⊘ REQUIRED"
-        else:
-            login = _md_cell(r.get("login_expires_at"), lxh)
-            if lxh is not None and lxh <= warn_h and login != "—":
-                login = f"⚠ **{login}**"
 
         # ---- the row: ONE set of facts, laid out for the surface that asked for it.
         # Only the LAYOUT branches here. Every value — the marks, the `*` suffixes, the em dash
@@ -8755,13 +8865,10 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None):
             # glance is for. It renders both time columns as COUNTDOWNS rather than `absolute (in relative)` pairs: the
             # wide cell is ~20 cells and a board has ~14 to give it. The countdown is the half a
             # reader acts on; the absolute stamp stays one `claude-accounts` away.
-            login_n = "⊘ REQ" if a == "login-required" else (
-                fmt_board_t(lxh) if lxh is not None and lxh >= 0 else "—")   # same shape as `resets`
-            if a != "login-required" and lxh is not None and 0 <= lxh <= warn_h:
-                login_n = "⚠ " + login_n
+            login_n = _login_cell(r, warn_h, narrow=True)    # same shape as `resets`
             nm = _clip(acct + (" ←" if r.get("is_self") else ""), _NW_NAME)
             # Board-only two-unit form ("7h 24m", "2d 15h"): one shape for the whole column.
-            wk_n = fmt_board_t(r.get("weekly_reset_h"))
+            wk_n = fmt_board_t(_until(r, "weekly_reset_at", "weekly_reset_h"))
             # An account that cannot be routed to is MUTED rather than dropped: its row is still
             # a fact the reader needs (its quota is real, and stranding on it is the loudest
             # number on the board), but it must not read as a candidate.
@@ -8786,30 +8893,34 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None):
                 _cell(wk_n, _NW_WKR, ">", BOARD_TEXT if usable else BOARD_MUTE),
                 bc(login_n, RED if login_n.startswith(("⊘", "⚠")) else BOARD_LABEL)))
         else:
-            out.append("| " + " | ".join([
-                name, k_shown(r), pctc(r, "session_pct"),
-                _md_cell(r.get("session_reset_at"), r.get("session_reset_h")),
-                pctc(r, "weekly_pct"), pctc(r, "fable_pct"),
-                _md_cell(wr, r.get("weekly_reset_h")), login]) + " |")
+            # Laid out after the loop, once every name and clock width is known.
+            cells.append((marks.strip(), acct, bool(r.get("is_self")), k_shown(r),
+                          _bpct_text(r, "session_pct")[0],
+                          *_reset_pair(r, "session_reset_at", "session_reset_h"),
+                          _bpct_text(r, "weekly_pct")[0],
+                          _SGR_RE.sub("", board_bar(*board_eff(r, "weekly_pct"))),
+                          _bpct_text(r, "fable_pct")[0],
+                          *_reset_pair(r, "weekly_reset_at", "weekly_reset_h"),
+                          _login_cell(r, warn_h, narrow=False)))
 
         # ---- flags: bullets, never extra columns, and enumerated by SOURCE not by literal
         if PENDING_RE.match(str(r.get("error") or "")):
             # D8: a just-logged-in account, recovered by the local pass, not yet read
             _hm = time.strftime("%H:%M", time.localtime(_as_epoch(r.get("auth_recovered_at"))
                                                         or time.time()))
-            notes.append(f"↻ `{acct}` · logged in {_hm}; quota read pending, excluded from routing")
+            _note(_SEV_STALE, f"↻ `{acct}` · logged in {_hm}; quota read pending, excluded from routing")
         elif r.get("stale_quota") or r.get("error"):
             asof = _fmt_asof(r.get("quota_as_of"))
             if r.get("poll_throttled"):
-                notes.append(f"↻ `{acct}` — poll throttled (NOT a usage cap); numbers are "
+                _note(_SEV_STALE, f"↻ `{acct}` — poll throttled (NOT a usage cap); numbers are "
                              f"last-known" + (f" as of {asof}" if asof else "")
                              + _wire_note(r) + _retry_hint(r))
             else:
-                notes.append(f"↻ `{acct}` — last-known"
+                _note(_SEV_STALE, f"↻ `{acct}` — last-known"
                              + (f", as of {asof}" if asof else "")
                              + "; not polled this sweep, excluded from routing")
         if r.get("rolled_since"):
-            notes.append(f"↻ `{acct}` — {'/'.join(r['rolled_since'])} RESET since that reading"
+            _note(_SEV_STALE, f"↻ `{acct}` — {'/'.join(r['rolled_since'])} RESET since that reading"
                          + (f" ({'; '.join(r['reset_evidence'])})" if r.get("reset_evidence")
                             else "")
                          + "; pre-reset figures are withheld (`—`) until a read replaces them")
@@ -8824,10 +8935,10 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None):
         # without one it would repeat the 5h cell beside it. One line per account either way.
         r5 = _reset5_clause(r)
         if sp is not None and sp >= s_cut:
-            notes.append(f"▲ `{acct}` — 5h at {sp:.0f}%, at/over the {s_cut:.0f}% routing cutoff"
+            _note(_SEV_CUT5, f"▲ `{acct}` — 5h at {sp:.0f}%, at/over the {s_cut:.0f}% routing cutoff"
                          + r5)
         elif sp is not None and sp >= s_show and r5:
-            notes.append(f"△ `{acct}` — 5h at {sp:.0f}%" + r5)
+            _note(_SEV_CUT5, f"△ `{acct}` — 5h at {sp:.0f}%" + r5)
         # THE THREE-WAY SPLIT THIS BULLET USED TO COLLAPSE. `weekly_pct >= 100` is not a fact
         # about exhaustion — the endpoint rounds UP and clamps, so it covers "99% used and the
         # server says allowed", "exactly full", and "102% used and rejected". Saying **LIMITED**
@@ -8845,10 +8956,9 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None):
         # names itself, with who decided it: Anthropic's server, or our rounding.
         wire = r.get("wire") or {}
         w7, s7 = wire.get("7d_util"), wire.get("7d_status")
-        resets = (f"; resets in {fmt_h(r['weekly_reset_h'])}"
-                  if isinstance(r.get("weekly_reset_h"), (int, float)) else "")
+        resets = _resetw_clause(r)
         if s7 == "rejected":
-            notes.append(f"`{acct}` is **out of weekly quota**, confirmed by Anthropic's server"
+            _note(_SEV_OUT, "✖ " + f"`{acct}` is **out of weekly quota**, confirmed by Anthropic's server"
                          + (f" ({w7 * 100:.0f}% used)" if w7 is not None else "") + resets)
         elif w7 is not None and (r.get("weekly_pct") or 0) >= 100:
             # A SNAPSHOT, SAID AS ONE (2026-10-06): this sentence used to read "still accepts work
@@ -8865,22 +8975,22 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None):
             load = (f", with {k} live session{'' if k == 1 else 's'}"
                     + (f" ({kw} working)" if kw is not None else "") + " on it"
                     if isinstance(k, int) else "")
-            notes.append(f"`{acct}` was **not out of weekly quota**{at}: the meter showed 100%, "
+            _note(_SEV_NEAR, "△ " + f"`{acct}` was **not out of weekly quota**{at}: the meter showed 100%, "
                          f"but Anthropic's server read {pct_text(*board_eff(r, 'weekly_pct'))} used "
                          f"and was still accepting work{load}; that reading cannot say how much was "
                          f"left, and it may be none")
         elif (r.get("weekly_pct") or 0) >= 100:
-            notes.append(f"`{acct}` shows 100% weekly, **not confirmed**: the usage meter rounds "
+            _note(_SEV_NEAR, "△ " + f"`{acct}` shows 100% weekly, **not confirmed**: the usage meter rounds "
                          f"up, so a little may be left; `claude-accounts --wire` asks the server")
         if wire.get("5h_status") == "rejected":
-            notes.append(f"`{acct}` is **out of 5-hour quota**, confirmed by Anthropic's server"
+            _note(_SEV_OUT, "✖ " + f"`{acct}` is **out of 5-hour quota**, confirmed by Anthropic's server"
                          + (f" ({wire['5h_util'] * 100:.0f}% used"
                             + ("; a lower-priority lane is still open"
                                if wire.get("fallback") == "available" else "")
                             + ")" if wire.get("5h_util") is not None else "")
                          + r5)
         if (r.get("route_reasons") or {}).get("fable") == "fable-exhausted":
-            notes.append(f"○ `{acct}` — Fable exhausted")
+            _note(_SEV_INFO, f"○ `{acct}` — Fable exhausted")
         # ¢ keys on SPEND, not on the toggle: an account read credits_on=false with $176.91
         # already spent. And the dollar field, never credits_used — that one is in CENTS.
         #
@@ -8893,14 +9003,13 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None):
             authorized = bool((cfg.get("spend") or {}).get("usage_credits_authorized"))
             usd = r.get("credits_used_usd", 0.0)
             if authorized:
-                notes.append(f"¢ `{acct}` — ${usd:.2f} extra-usage spend "
+                _note(_SEV_INFO, f"¢ `{acct}` — ${usd:.2f} extra-usage spend "
                              f"(toggle currently {'on' if r.get('credits_on') else 'off'}) "
                              f"— authorized in accounts.json:spend")
             else:
-                notes.append(f"🚨 `{acct}` — **${usd:.2f} extra-usage spend and it is NOT "
-                             f"authorized** (accounts.json:spend.usage_credits_authorized=false; "
-                             f"toggle currently {'on' if r.get('credits_on') else 'off'}). This "
-                             f"is the four-subscription pool being spent past, as money.")
+                _note(_SEV_MONEY, f"🚨 `{acct}` — **${usd:.2f} extra-usage spend, NOT authorized** "
+                             f"(toggle currently {'on' if r.get('credits_on') else 'off'}; "
+                             f"accounts.json:spend.usage_credits_authorized=false)")
         # THE LEADING INDICATOR — the same guard one step earlier, and deliberately NOT a ¢ line.
         # ¢ keys on SPEND because spend is the reliable signal (an account read credits_on=false
         # with $176.91 already gone), and this readout is pinned silent at zero spend. But the
@@ -8911,19 +9020,19 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None):
         # `elif` so a spending account gets the louder 🚨 line and never both.
         elif r.get("credits_on") and not bool((cfg.get("spend") or {}).get(
                 "usage_credits_authorized")):
-            notes.append(f"⚠ `{acct}` — extra-usage toggle is **ON** and not authorized "
+            _note(_SEV_MONEY, f"⚠ `{acct}` — extra-usage toggle is **ON** and not authorized "
                          f"(accounts.json:spend.usage_credits_authorized=false). No spend yet: "
                          f"a plan limit will now BILL instead of stopping the session.")
         if a not in ("ok", None):
-            notes.append(f"○ `{acct}` — auth `{a}`"
+            _note(_SEV_AUTH, f"○ `{acct}` — auth `{a}`"
                          + (f" → {r['email']} · Dia “{r['dia_profile']}”" if r.get("email") else ""))
         # the login cliff, with the identity that makes it actionable
         if a != "login-required" and lxh is not None and lxh <= warn_h:
             gone = lxh <= 0
-            notes.append(("⊘ " if gone else "⚠ ")
+            _note(_SEV_AUTH if gone else _SEV_CLIFF, ("⊘ " if gone else "⚠ ")
                          + f"`{acct}` login {'EXPIRED' if gone else 'expires'} "
                          + (_md_when(r.get("login_expires_at")) or "?")
-                         + ("" if gone else f" (in {fmt_h(lxh)})")
+                         + ("" if gone else f" (in {fmt_board_t(lxh)})")
                          + " — a refresh does NOT renew it · run "
                          + f"`{r.get('launcher') or '?'}` → `/login`"
                          + (f" · {r['email']} · Dia “{r['dia_profile']}”" if r.get("email") else ""))
@@ -8932,19 +9041,45 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None):
     # and explain it in a footnote; even with the legend the operator could not read it at a
     # glance ("not intuitively clear"). Each account at the wall now carries its own sentence
     # above, so the cell is a plain percent and nothing on screen needs decoding.
-    for n in notes + footnotes:
-        # Same note text, both surfaces. Markdown is a list item in chat and plain wrapped prose
-        # on the board; the SENTENCE is identical, which is the property that matters — an
-        # operator who reads the board and then runs /accounts must not meet two different claims.
-        out.extend(_wrap_narrow(_demark(n)) if narrow else ["- " + n])
+    if not narrow:
+        # THE GRID, laid out now that every name and clock width is known. The name column fits
+        # the longest name (clipped at the board's cap, never the ← suffix); the weekly clock
+        # column fits `Sat Oct 24 22:59` only when some reset is past ~6 days out.
+        ww = max([_CW_ABS5] + [len(c[11]) for c in cells])
+        # The name column takes what the 100-cell budget leaves (66 fixed cells, the clock and
+        # the widest login cell), capped at the board's 13; `_clip` marks any shortened name.
+        budget = 100 - (66 + ww + max([5] + [len(c[12]) for c in cells]))
+        nw = min(_NW_NAME, budget, max([7] + [len(c[1]) + 2 * c[2] for c in cells]))
+        out.append("```text")
+        out.append((" " * (_NW_MARK + nw + 1 + _CW_LIVE + 1) + "5-hour "
+                    + "─" * (_CW_PCT + 2 + _CW_CD5 + 1 + _CW_ABS5 - 7) + "  weekly "
+                    + "─" * (_CW_PCT + 1 + _NW_BAR + 1 + _CW_PCT + 2 + _CW_CDW + 1 + ww - 7)
+                    ).rstrip())
+        out.append(_wrow("", "account", "live", "used", "resets", "", "used", "", "fable",
+                         "resets", "", "login", nw, ww))
+        for (mk, acct, me, live, p5, cd5, abs5, pwk, bar, pfb, cdw, absw, login) in cells:
+            nm = _clip(acct, nw - 2) + " ←" if me else _clip(acct, nw)
+            out.append(_wrow(mk, nm, live, p5, cd5, abs5, pwk, bar, pfb, cdw, absw, login,
+                             nw, ww))
+        out += ["```", ""]
+    # Severity order (money, auth, out, near, 5h cutoff, cliff, stale, info, footnote), stable.
+    notes.sort(key=lambda t: t[0])
+    for _sev, n in notes:
+        # Same note text, both surfaces: a glyph-led line in chat, plain wrapped prose on the
+        # board. The SENTENCE is identical, which is the property that matters — an operator who
+        # reads the board and then runs /accounts must not meet two different claims.
+        out.extend(_wrap_narrow(_demark(n)) if narrow else [n])
 
     # ---- footer: the router's own answer, never a re-rank of score_*
-    out.append("")
+    if notes or narrow:
+        out.append("")
     # THE DESK LINE COMES FIRST (W2.2). It answers "what will bare `claude` do" — the question the
     # operator actually asked, and the only one on this surface whose answer they act on by typing
     # a command. general/fable keep their own line, byte-identical, because they answer a different
     # question (what handoff-fire and the frontier lane will do) and are consumed programmatically.
-    if rank_i:
+    if not narrow:
+        pass            # chat already led with the desk/general/fable lines, above the grid
+    elif rank_i:
         # W3.6 REQUIRES the board carry this line: it is the only thing on the surface that says
         # what the next bare `claude` will actually DO, which is the question a startup banner is
         # read to answer. Narrow puts the clause on its own indented line rather than truncating
@@ -8959,27 +9094,18 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None):
                        + bc(pick_i, BOARD_TEXT, bold=True))
             out.extend(bc(x, BOARD_LABEL)
                        for x in _wrap_narrow(desk_why(rank_i[0][1], cfg), first="   "))
-        else:
-            out.append(f"➤ desk (bare `claude`) → **{pick_i}** — earliest weekly reset among "
-                       f"5h-safe accounts · {desk_why(rank_i[0][1], cfg)}")
     else:
         # ABSTENTION IS AN ANSWER: the desk lane never yields the login-cliff term, so it can
         # refuse where general routes — and the launcher then falls back to its PINNED account.
         # Printed as "none", never omitted: a missing line reads as "not computed".
-        if narrow:
-            out.extend(_wrap_narrow("desk (bare claude) → none — no account routable; the "
-                                    "launcher falls back to its pinned account", first="➤ "))
-        else:
-            out.append("➤ desk (bare `claude`) → **none** — no account routable; "
-                       "the launcher falls back to its pinned account")
+        out.extend(_wrap_narrow("desk (bare claude) → none — no account routable; the "
+                                "launcher falls back to its pinned account", first="➤ "))
     if narrow:
         out.append(bc(f"  general → {pick_g or 'none'} · fable → {pick_f or 'none'}",
                       BOARD_LABEL))
         sr = soonest_reset_line(rows, cfg)
         if sr:
             out.extend(bc(ln, BOARD_LABEL) for ln in _wrap_narrow(sr, first="· "))
-    else:
-        out.append(f"➤ general → **{pick_g or 'none'}** · ➤ fable → **{pick_f or 'none'}**")
     # The fleet's one pace conclusion, above the per-account drain rows it sums. AMBER on the
     # board — a warning, never the BOARD_LABEL grey the no-dim-text ruling forbids; plain here.
     fl = fleet_pace_line(rows)
@@ -9001,26 +9127,34 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None):
         # carry is the wall alarm, so an alarming row is kept verbatim and the rest become one
         # legend line. This is a PRESENTATION split of one producer's output — the same rule
         # `narrow` already follows everywhere else — never a second strand calculation.
-        _alarm = [x for x in pl.split("\n") if "⚠" in x] if narrow else []
-        if narrow:
-            for _pln in _alarm:
-                out.extend(_wrap_narrow(_demark(_pln)))
+        #
+        # CHAT COLLAPSES IT TOO (2026-10-18), into the one decision it supports: `_drain_line`
+        # names the routable accounts whose quota dies unused. Alarm rows stay verbatim on both
+        # surfaces; the full block (burst percentiles, start-by clauses) is plain `claude-accounts`.
+        _alarm = [x for x in pl.split("\n") if "⚠" in x]
+        for _pln in _alarm:
+            out.extend(_wrap_narrow(_demark(_pln)) if narrow else [_pln.strip()])
+        if not narrow:
+            out.append(_drain_line(rows, {r["acct"] for _s, r in rank_g}))
+    if narrow:
+        if win.get("permanent"):
+            # permanent means NO expiry — never quote a countdown off the sentinel `end` date
+            wl = "Fable window: **permanent** (no expiry)."
+        elif win.get("active"):
+            wl = f"Fable window: open through {win.get('end')}."
         else:
-            for _pln in pl.split("\n"):
-                out.append(_pln)
-    if win.get("permanent"):
-        # permanent means NO expiry — never quote a countdown off the sentinel `end` date
-        wl = "Fable window: **permanent** (no expiry)."
-    elif win.get("active"):
-        wl = f"Fable window: open through {win.get('end')}."
+            wl = "Fable window: **inactive** — router excluding Fable."
+        out.extend(_wrap_narrow(_demark(wl)))
     else:
-        wl = "Fable window: **inactive** — router excluding Fable."
-    out.extend(_wrap_narrow(_demark(wl)) if narrow else [wl])
-    # The narrow header already carries the cache age in seconds, which is strictly more than
-    # this line says — repeating the TTL under it would spend two of the board's scarce rows
-    # restating a bound the reader can already see the actual value of.
-    if cached and not narrow:
-        out.append(f"_Cache ≤{cfg.get('cache_ttl_s', 90)}s old; `--fresh` forces a live sweep._")
+        # ONE footer line in chat: the Fable state, the clock, and the sweep's ACTUAL age (the
+        # old `_Cache ≤90s old_` line stated only the TTL bound). `permanent` needs no gloss.
+        wl = ("Fable window: **permanent**" if win.get("permanent")
+              else f"Fable window: open through {win.get('end')}" if win.get("active")
+              else "Fable window: **inactive** — router excluding Fable")
+        age = _quota_age_s(cfg) if cached else None
+        out.append(f"{wl} · {datetime.now():%a %H:%M} · "
+                   + ((f"cached {age}s" if age is not None else "cached")
+                      + ", `--fresh` forces a live sweep" if cached else "live sweep"))
     if narrow:
         # D8 / C11: CLOCK times only — a relative age would rot inside the shared file.
         if quota_ts is None:
@@ -9817,6 +9951,40 @@ def render_providers(provs):
     return out
 
 
+def render_providers_brief(provs):
+    """The provider section as the chat readout's TWO footer lines (2026-10-18). The full 7-column
+    table stays one command away (`--agents`, same render_providers); what must stay on screen is
+    what is ready to take work now, and which backends bill OUTSIDE a plan we hold."""
+    if not provs:
+        return []
+    def _label(p):
+        return p.get("label") or p.get("name") or "?"
+    def _and(xs):
+        return xs[0] if len(xs) == 1 else ", ".join(xs[:-1]) + " and " + xs[-1]
+    routable = [p for p in provs if p.get("routable")]
+    ready = [p for p in routable if p.get("auth_state") == "ok"]
+    # An API key is a BILLING state, not a broken login (probe_provider): render_providers flags
+    # it 🚨 metered, so the brief names it as money too rather than as "auth not ok".
+    keyed = [p for p in provs if p.get("auth_state") == "api-key"]
+    other = [p for p in routable if p not in ready and p not in keyed]
+    head = (", ".join(f"**{_label(p)}**" for p in ready) if ready
+            else f"none of {len(routable)} routable")
+    if other and ready:
+        head += f" (+{len(other)} routable, auth not ok)"
+    out = [f"Other agents ready now: {head} — all {len(provs)} in `claude-accounts --agents`"]
+    bills = [_label(p) for p in provs if p.get("bills_outside_plan") is True]
+    money = []
+    if bills:
+        money.append(f"{_and(bills)} bill{'s' if len(bills) == 1 else ''} OUTSIDE a plan we hold"
+                     " — never wired, by policy")
+    if keyed:
+        money.append(f"{_and([_label(p) for p in keyed])} "
+                     f"{'is' if len(keyed) == 1 else 'are'} on a metered API key")
+    if money:
+        out.append("🚨 " + " · ".join(money))
+    return out
+
+
 def main():
     args = sys.argv[1:]
     if "-h" in args or "--help" in args:
@@ -10418,8 +10586,8 @@ def main():
         # Suppressed under --narrow: render_providers builds to its own ~82-col budget, so
         # appending it would breach the board's width on a surface that cannot scroll sideways.
         if "--no-agents" not in args and not narrow:
-            lines = render_providers([probe_provider(p, fresh="--fresh" in args)
-                                      for p in load_providers()])
+            lines = render_providers_brief([probe_provider(p, fresh="--fresh" in args)
+                                            for p in load_providers()])
             if lines:
                 print("\n".join(lines))
         return

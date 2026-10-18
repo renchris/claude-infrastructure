@@ -193,7 +193,7 @@ print("OK")'
 
 @test "W-6: the three 100%-states render as three different plain sentences, no coded marks" {
   run python3 -c "$LOAD"'
-import io, contextlib
+import io, contextlib, re
 WIN_OPEN = {"active": True, "end": "2099-12-31", "deadline": None, "permanent": True}
 def readout(wire):
     r = probe(limits(weekly=100), wire)
@@ -207,8 +207,8 @@ assert "was **not out of weekly quota**" in allowed and "server read 99% used" i
 assert "was still accepting work" in allowed and "still accepts work" not in allowed, allowed
 assert "of the week left" not in allowed and "5-hour window" not in allowed, \
     "no headroom figure off a two-decimal reading: %r" % allowed
-row = next(l for l in allowed.splitlines() if l.startswith("|") and "next3" in l)
-assert "| 99% |" in row, "a still-allowed weekly cell is the server s whole percent, never 100%%: %r" % row
+row = next(l for l in allowed.splitlines() if "next3" in l and "▆" in l)
+assert re.search(r"(^|\s)99%", row), "a still-allowed weekly cell is the server s whole percent, never 100%%: %r" % row
 rejected, _ = readout({"7d_util": 1.0, "7d_status": "rejected", "5h_util": 0.05,
                        "5h_status": "allowed", "status": "rejected", "http": 429})
 assert "is **out of weekly quota**, confirmed by Anthropic" in rejected, rejected
