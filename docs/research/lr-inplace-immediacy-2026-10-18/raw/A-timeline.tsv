@@ -1,0 +1,40 @@
+batch	sid	disp	until	queued	started	q_wait	admit	admit_s	admitted	spawned	wait_s	slot_s	actuate	act_s	act_rc	prove_s	result	total_s	intent_left_at_actuate	verdict	reason
+20261017T235745Z	6db28068	wait:background-job	3600	23:57:45	23:57:54	9	23:59:32	98	True	00:00:43	3566		-				01:00:35	3770		NOTMOVED	still-busy:background-job after 3600s; nothing touched
+20261017T235745Z	756b68c8	wait:subagents-in-flight	3600	23:57:45	23:57:55	10	00:07:54	599	False	-			-				00:07:55	610		NOTMOVED	batch refused: another batch held the admit section for 90s; nothing touched
+20261017T235745Z	7b50757e	move	0	23:57:45	23:57:56	11	00:07:56	600	False	-			-				00:07:56	611		NOTMOVED	batch refused: another batch held the admit section for 90s; nothing touched
+20261017T235745Z	509e3aad	wait:background-job	3600	23:57:45	23:58:04	19	00:08:08	604	True	00:08:55	3585		-				01:08:57	4272		NOTMOVED	still-busy:background-job after 3600s; nothing touched
+20261017T235746Z	4736324c	wait:background-job	3600	23:57:46	23:58:12	26	00:05:28	436	True	00:06:20	3570		-				01:06:15	4109		NOTMOVED	still-busy:background-job after 3600s; nothing touched
+20261018T000816Z	43e6eb4b	move	0	00:08:16	00:17:12	536	00:17:18	6	True	00:17:20		0	00:17:36	1476	rc 6	673	00:53:27	2711	339	NOTMOVED	HELD:unreachable — live in pane 8 on the source, one copy (lr-handoff rc 6)
+20261018T000922Z	7b50757e	move	3600	00:09:22	00:17:13	471	00:17:25	12	True	00:17:29		0	00:17:36	1558	rc 6	593	00:53:29	2647	4005	NOTMOVED	HELD:unreachable — live in pane 47 on the source, one copy (lr-handoff rc 6)
+20261018T002357Z	e739e5b5	move	0	00:23:57	00:24:20	23	00:25:29	69	True	00:25:40		1	00:26:57	1910	rc 6	943	01:14:31	3034	719	NOTMOVED	REFUSED:not-limited — live in pane 20 on the source, one copy (lr-handoff rc 6)
+20261018T002443Z	756b68c8	wait:subagents-in-flight	3600	00:24:43	01:50:07	5124	01:50:24	17	True	01:50:30			-				-			RUNNING	
+20261018T003928Z	381200c5	move	0	00:39:28	01:50:08	4240	01:52:10	122	True	-			-				01:52:13	4365		NOTMOVED	claim-held: verdict=held-live sid=381200c5 pid=42086 claim=/Users/chrisren/.reso/limit-recover/runs/by-sid/381200c5-eb16-4f62-bd18-5a880d91a40f.active
+20261018T004329Z	ab512c88	wait:background-job	900	00:43:29	01:50:10	4001	01:52:10	120	True	01:52:38	899		-				02:07:41	5052		NOTMOVED	still-busy:unread after 900s; nothing touched
+20261018T005330Z	246a91b5	move	1800	00:53:30	01:50:11	3401	01:50:50	39	True	01:51:51		1	01:53:25	8	rc 6	98	01:55:12	3702	-895	NOTMOVED	REFUSED:intent-invalid — live in pane 1 on the source, one copy (lr-handoff rc 6)
+20261018T005330Z	04b3cbc3	wait:background-job	1800	00:53:30	01:50:11	3401	01:50:50	39	True	01:51:55			-				-			RUNNING	
+20261018T005330Z	8db0e6f1	move	1800	00:53:30	01:50:11	3401	01:50:50	39	True	01:52:01		1	01:53:30	4	rc 6	87	01:55:03	3693	-900	NOTMOVED	REFUSED:intent-invalid — live in pane 24 on the source, one copy (lr-handoff rc 6)
+20261018T005330Z	381200c5	wait:mid-turn	1800	00:53:30	01:50:11	3401	01:50:50	39	True	01:52:06			-				-			RUNNING	
+20261018T005330Z	e3dedc17	move	1800	00:53:30	01:50:11	3401	01:50:50	39	True	01:52:07		1	01:53:29	5	rc 6	97	01:55:12	3702	-899	NOTMOVED	REFUSED:intent-invalid — live in pane 201 on the source, one copy (lr-handoff rc 6)
+20261018T005330Z	2e9ed9f2	move	1800	00:53:30	01:50:11	3401	01:50:50	39	True	01:52:08		1	01:53:29	5	rc 6	88	01:55:03	3693	-899	NOTMOVED	REFUSED:intent-invalid — live in pane 332 on the source, one copy (lr-handoff rc 6)
+20261018T005330Z	756b68c8	wait:subagents-in-flight	1800	00:53:30	01:50:11	3401	01:50:50	39	True	-			-				01:51:07	3457		NOTMOVED	claim-held: verdict=held-live sid=756b68c8 pid=99147 claim=/Users/chrisren/.reso/limit-recover/runs/by-sid/756b68c8-4532-481f-a2cc-1591c9dd4f5c.active
+20261018T012244Z	246a91b5	move	8134	01:22:44	01:50:14	1650	01:52:47	153	True	-			-				01:52:47	1803		NOTMOVED	claim-held: verdict=held-live sid=246a91b5 pid=38052 claim=/Users/chrisren/.reso/limit-recover/runs/by-sid/246a91b5-00fa-4183-85a9-02beab4f787d.active
+20261018T012244Z	43e6eb4b	move	8134	01:22:44	01:50:14	1650	01:52:47	153	True	01:53:19		82	01:55:24	627	rc 6	68	02:07:00	2656	7073	NOTMOVED	HELD:load — live in pane 8 on the source, one copy (lr-handoff rc 6)
+20261018T012244Z	04b3cbc3	wait:background-job	8134	01:22:44	01:50:14	1650	01:52:47	153	True	-			-				01:52:49	1805		NOTMOVED	claim-held: verdict=held-live sid=04b3cbc3 pid=38260 claim=/Users/chrisren/.reso/limit-recover/runs/by-sid/04b3cbc3-e464-427f-b35c-2bd9fb9e3a3d.active
+20261018T012244Z	e739e5b5	move	8134	01:22:44	01:50:14	1650	01:52:47	153	True	01:53:21		74	01:55:21	813	rc 4		-		7076	RUNNING	
+20261018T012244Z	4736324c	wait:background-job	8134	01:22:44	01:50:14	1650	01:52:47	153	True	01:53:23			-				-			RUNNING	
+20261018T012244Z	8db0e6f1	move	8134	01:22:44	01:50:14	1650	01:52:47	153	True	-			-				01:52:52	1808		NOTMOVED	claim-held: verdict=held-live sid=8db0e6f1 pid=38577 claim=/Users/chrisren/.reso/limit-recover/runs/by-sid/8db0e6f1-3fbe-48a1-92ff-4b15643eac8d.active
+20261018T012244Z	381200c5	move	8134	01:22:44	01:50:14	1650	01:52:47	153	True	-			-				01:52:52	1808		NOTMOVED	claim-held: verdict=held-live sid=381200c5 pid=42086 claim=/Users/chrisren/.reso/limit-recover/runs/by-sid/381200c5-eb16-4f62-bd18-5a880d91a40f.active
+20261018T012244Z	509e3aad	wait:background-job	8134	01:22:44	01:50:14	1650	01:52:47	153	True	01:53:24			-				-			RUNNING	
+20261018T012244Z	7b50757e	move	8134	01:22:44	01:50:14	1650	01:52:47	153	True	01:53:27		72	01:55:20	681	rc 6	119	02:08:42	2758	7077	NOTMOVED	HELD:load — live in pane 47 on the source, one copy (lr-handoff rc 6)
+20261018T012244Z	e3dedc17	move	8134	01:22:44	01:50:14	1650	01:52:47	153	True	-			-				01:52:53	1809		NOTMOVED	claim-held: verdict=held-live sid=e3dedc17 pid=45363 claim=/Users/chrisren/.reso/limit-recover/runs/by-sid/e3dedc17-0e2f-4003-8c8b-1eda21e2b8dc.active
+20261018T012244Z	2e9ed9f2	move	8134	01:22:44	01:50:14	1650	01:52:47	153	True	-			-				01:52:55	1811		NOTMOVED	claim-held: verdict=held-live sid=2e9ed9f2 pid=45965 claim=/Users/chrisren/.reso/limit-recover/runs/by-sid/2e9ed9f2-9e21-4161-a0f7-10b329ade8f0.active
+20261018T012244Z	756b68c8	wait:subagents-in-flight	8134	01:22:44	01:50:14	1650	01:52:47	153	True	-			-				01:52:58	1814		NOTMOVED	claim-held: verdict=held-live sid=756b68c8 pid=99147 claim=/Users/chrisren/.reso/limit-recover/runs/by-sid/756b68c8-4532-481f-a2cc-1591c9dd4f5c.active
+20261018T012244Z	6db28068	wait:background-job	8134	01:22:44	01:50:14	1650	01:52:47	153	True	01:53:30			-				-			RUNNING	
+20261018T014908Z	ab512c88	move	8134	01:49:08	01:50:16	68	01:53:49	213	True	-			-				01:53:50	282		NOTMOVED	claim-held: verdict=held-live sid=ab512c88 pid=61594 claim=/Users/chrisren/.reso/limit-recover/runs/by-sid/ab512c88-927f-496a-b279-f802fb9b449e.active
+20261018T014908Z	76033be2	move	8134	01:49:08	01:50:16	68	01:53:49	213	True	01:54:26			-				02:04:43	935		NOTMOVED	slot-wait: no move slot freed in 600s (width 4, a fixed count, not a memory limit); nothing touched. Run it again once the lane has drained
+20261018T014908Z	30c3a88d	move	8134	01:49:08	01:50:16	68	01:53:49	213	True	01:54:26		300	01:59:58	708	rc 1	10	02:11:58	1370	8383	NOTMOVED	HELD:unknown — live in pane 27 on the source, one copy (lr-handoff rc 1)
+20261018T014908Z	1bf14662	move	8134	01:49:08	01:50:16	68	01:53:49	213	True	01:54:31		32	01:55:31	194	rc 6	50	01:59:37	629	8650	NOTMOVED	HELD:draft — live in pane 33 on the source, one copy (lr-handoff rc 6)
+20261018T020022Z	246a91b5	move	5400	02:00:22	02:11:38	676	02:12:15	37	True	-			-				-			RUNNING	
+20261018T020022Z	8db0e6f1	move	5400	02:00:22	02:11:38	676	02:12:15	37	True	-			-				-			RUNNING	
+20261018T020022Z	e3dedc17	move	5400	02:00:22	02:11:38	676	02:12:15	37	True	-			-				-			RUNNING	
+20261018T020022Z	2e9ed9f2	move	5400	02:00:22	02:11:38	676	02:12:15	37	True	-			-				-			RUNNING	
