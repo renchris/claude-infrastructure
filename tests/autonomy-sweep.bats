@@ -204,6 +204,9 @@ echo "$@" >> "$0.log"
 printf '%s\n' "${CC_STUB_IT2_OUT:-}"
 SH
   chmod +x "$CC_IT2_BIN"
+  # HERMETIC strand-fill arm: unstubbed it reads the router's live cache through the real
+  # claude-accounts. Absent by default (the sweep journals a null decision); one case stubs it.
+  export CC_SWEEP_STRAND_FILL_BIN="$BATS_TEST_TMPDIR/no-strand-fill-arm"
 }
 notify_count() { [ -f "$CC_NOTIFY_BIN.log" ] && wc -l < "$CC_NOTIFY_BIN.log" | tr -d ' ' || echo 0; }
 osa_count()    { [ -f "$OSA_LOG" ] && wc -l < "$OSA_LOG" | tr -d ' ' || echo 0; }
@@ -2174,6 +2177,17 @@ dead_desk() {
   [ "$status" -eq 0 ]
   grep -q '"drain_autofire_mode":"would-fire"' "$CC_IDL"
   grep -q '"drain_revival":{"mode":"would-fire","decision":"would-fire"}' "$CC_IDL"
+}
+
+@test "strand-fill arm: every decision line is its own IDL row, and the default mode is would-fire" {
+  export CLAUDE_CONFIG_DIR="$HOME/.claude"
+  export CC_SWEEP_STRAND_FILL_BIN="$BATS_TEST_TMPDIR/sfa"
+  printf '#!/bin/bash\necho "{\\"mode\\":\\"${CC_STRAND_FILL:-would-fire}\\",\\"decision\\":\\"would-fire\\",\\"acct\\":\\"next\\"}"\necho "{\\"mode\\":\\"${CC_STRAND_FILL:-would-fire}\\",\\"decision\\":\\"on-pace\\",\\"acct\\":\\"next2\\"}"\n' > "$CC_SWEEP_STRAND_FILL_BIN"
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '"disposition":"strand-fill-arm"' "$CC_IDL")" -eq 2 ]
+  grep -q '"strand_fill_mode":"would-fire","strand_fill":{"mode":"would-fire","decision":"would-fire","acct":"next"}' "$CC_IDL"
+  grep -q '"strand_fill":{"mode":"would-fire","decision":"on-pace","acct":"next2"}' "$CC_IDL"
 }
 
 # ══ STRAND RUNG (docs/research/recycle-failures-kitty-2026-10-10/REPORT.md fix 7) ════════════════

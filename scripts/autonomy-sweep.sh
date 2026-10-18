@@ -2060,6 +2060,27 @@ _dra_out=""
 if [ -f "$_dra" ]; then _dra_out="$(CC_DRAIN_AUTOFIRE="$_dra_mode" _bounded bash "$_dra" --tick 2>/dev/null | tail -1)"; fi
 log_idl drain-revival-arm "$(jq -nc --arg o "${_dra_out:-}" --arg m "${_dra_mode:-}" '{drain_autofire_mode:$m, drain_revival:(try ($o|fromjson) catch null)}')"
 
+# ── 2b-v-c. THE STRAND-FILL ARM — turn a forecast weekly shortfall into work (post-mortem §4 item 1) ──
+# Week ending 2026-10-18: `next` stranded 21 points of its weekly limit while its forecast showed the
+# shortfall from Oct 12, because nothing acted on a forecast (docs/research/weekly-strand-next-2026-10-18/
+# REPORT.md §2). scripts/strand-fill-arm.sh decides per account on a pace rule, holds on a fresh
+# capacity ALARM, KMAX and cc_capacity_admit (caller strand-fill), and claims a cooldown before any
+# fire. CC_STRAND_FILL selects the mode exactly as CC_DRAIN_AUTOFIRE does above — off, would-fire (the
+# DEFAULT: decides and journals, launches nothing, spends nothing) or on. Turning it on is the
+# operator's ruling, not an agent's. Every decision is its own IDL line (count them:
+# grep '"strand-fill-arm"' ~/.claude/autonomy/idl.jsonl); the arm self-paces to one evaluation per
+# 30 min and journals a single `interval-held` line on the ticks between.
+# THE PRODUCTION DEFAULT LIVES ON THE NEXT LINE and nowhere else, as for the drain arm.
+_sfa_mode="${CC_STRAND_FILL:-would-fire}"
+_sfa="${CC_SWEEP_STRAND_FILL_BIN:-$_SWEEP_DIR/strand-fill-arm.sh}"
+_sfa_out=""
+if [ -f "$_sfa" ]; then _sfa_out="$(CC_STRAND_FILL="$_sfa_mode" _bounded bash "$_sfa" --tick 2>/dev/null)"; fi
+[ -n "$_sfa_out" ] || _sfa_out="null"
+while IFS= read -r _sfa_line; do
+  [ -n "$_sfa_line" ] || continue
+  log_idl strand-fill-arm "$(jq -nc --arg o "$_sfa_line" --arg m "$_sfa_mode" '{strand_fill_mode:$m, strand_fill:(try ($o|fromjson) catch null)}')"
+done <<<"$_sfa_out"
+
 # ── 2b-vi. THE FLOW REPORT (BACKLOG_DRAIN_24_7 §6) — is the draining WINNING? ─────────────────────
 # The arm above asks whether anything is draining; this asks whether the draining is winning, and a
 # chain can be perfectly alive while losing — which is exactly the stretch §1.3 measured (+426 rows
