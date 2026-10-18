@@ -373,6 +373,95 @@ run_hook() { run bash "$HOOK" <<< '{}'; }
   ! grep -q 'Session started in' "$HOME/.claude/logs/sessions.log" || false
 }
 
+# ─── (i) failed refreshes are stamped, backed off and counted ───────────────────────────────────
+# docs/research/startup-hooks-2026-10-18/README.md §2 #13. Before this, a failing refresher left no
+# trace: every start past the TTL spawned another CLI, and the cache aged silently to MAX_AGE.
+
+FAIL_STAMP() { printf '%s' "$CLAUDE_CONFIG_DIR/.mcp-probe-cache.refresh-fail"; }
+
+@test "(i) a failing refresh writes a stamp; a second failure counts up and keeps the first time" {
+  mk_ps "/bin/bash /some/harness"                   # nothing resolvable → the refresh fails
+  run bash "$HOOK" --refresh-mcp-cache
+  [ "$status" -eq 0 ] || false
+  [ -z "$output" ] || false
+  [ ! -f "$CLAUDE_CONFIG_DIR/.mcp-probe-cache" ] || false     # the failure is never cached
+  IFS=$'\t' read -r v n first last < "$(FAIL_STAMP)"
+  [ "$v" = v1 ] && [ "$n" = 1 ] && [ "$first" = "$last" ] || false
+  printf 'v1\t1\t1000\t1000\n' > "$(FAIL_STAMP)"
+  run bash "$HOOK" --refresh-mcp-cache
+  IFS=$'\t' read -r v n first last < "$(FAIL_STAMP)"
+  [ "$n" = 2 ] && [ "$first" = 1000 ] && [ "$last" -gt 1000 ] || false
+}
+
+@test "(i-b) the back-off suppresses an immediate re-spawn; past the window it spawns again" {
+  mk_hanging_claude "$TMP/running-claude"; mk_resolver "$TMP/running-claude"
+  mkdir -p "$CLAUDE_CONFIG_DIR"
+  local now; now=$(date +%s)
+  printf 'v1\t%s\tok\t1\t0\t\n' "$(( now - 400 ))" > "$CLAUDE_CONFIG_DIR/.mcp-probe-cache"  # past TTL
+  printf 'v1\t1\t%s\t%s\n' "$(( now - 10 ))" "$(( now - 10 ))" > "$(FAIL_STAMP)"         # wait 600 s
+  run_hook
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"MCP: 1 server(s) connected"* ]] || false
+  # The spawn takes its lock synchronously and the hanging child holds it, so lock = spawned.
+  [ ! -d "$CLAUDE_CONFIG_DIR/.mcp-probe-cache.refresh.lock" ] || false
+  # POSITIVE CONTROL — same fixture, last failure outside the 2 × TTL window.
+  printf 'v1\t1\t%s\t%s\n' "$(( now - 700 ))" "$(( now - 700 ))" > "$(FAIL_STAMP)"
+  run_hook
+  [ -d "$CLAUDE_CONFIG_DIR/.mcp-probe-cache.refresh.lock" ] || false
+}
+
+@test "(i-c) the window doubles per failure and caps at 1 h" {
+  mk_hanging_claude "$TMP/running-claude"; mk_resolver "$TMP/running-claude"
+  mkdir -p "$CLAUDE_CONFIG_DIR"
+  local now; now=$(date +%s)
+  printf 'v1\t%s\tok\t1\t0\t\n' "$(( now - 400 ))" > "$CLAUDE_CONFIG_DIR/.mcp-probe-cache"
+  printf 'v1\t3\t1\t%s\n' "$(( now - 2000 ))" > "$(FAIL_STAMP)"      # 3 failures → 2400 s
+  run_hook
+  [ ! -d "$CLAUDE_CONFIG_DIR/.mcp-probe-cache.refresh.lock" ] || false
+  printf 'v1\t40\t1\t%s\n' "$(( now - 3700 ))" > "$(FAIL_STAMP)"     # huge count, still ≤ 1 h
+  run_hook
+  [ -d "$CLAUDE_CONFIG_DIR/.mcp-probe-cache.refresh.lock" ] || false
+}
+
+@test "(i-d) the claim carries the failure count and its start time while N > 0" {
+  mkdir -p "$CLAUDE_CONFIG_DIR"
+  printf 'v1\t%s\tok\t1\t0\t\n' "$(date +%s)" > "$CLAUDE_CONFIG_DIR/.mcp-probe-cache"   # fresh
+  printf 'v1\t3\t1700000000\t%s\n' "$(date +%s)" > "$(FAIL_STAMP)"
+  run_hook
+  [ "$status" -eq 0 ] || false
+  local since; since=$(date -r 1700000000 '+%Y-%m-%d %H:%M')
+  [[ "$output" == *"MCP: 1 server(s) connected [cached "*"] [3 refresh attempt(s) failed since $since]. agent-browser"* ]] || false
+  printf '%s' "$output" | python3 -c 'import json,sys; json.load(sys.stdin)' || false
+}
+
+@test "(i-e) a successful refresh clears the stamp" {
+  printf 'a: u - %s Connected\n' '✔' > "$TMP/one.txt"
+  mk_claude "$TMP/running-claude" "$TMP/one.txt"; mk_resolver "$TMP/running-claude"
+  mkdir -p "$CLAUDE_CONFIG_DIR"
+  printf 'v1\t5\t1700000000\t1700000000\n' > "$(FAIL_STAMP)"
+  run bash "$HOOK" --refresh-mcp-cache
+  [ "$status" -eq 0 ] || false
+  grep -q '^v1	' "$CLAUDE_CONFIG_DIR/.mcp-probe-cache" || false
+  [ ! -f "$(FAIL_STAMP)" ] || false
+  run_hook
+  [[ "$output" != *"refresh attempt"* ]] || false
+}
+
+@test "(i-f) a healthy start's output is byte-identical to the pre-change hook" {
+  # Replays the REAL pre-change artifact at a PINNED sha (never a moving ref).
+  [ -n "$GIT_BIN" ] || skip "git not resolvable"
+  "$GIT_BIN" -C "$REPO" show fda64148a:hooks/session-start.sh > "$TMP/base-hook.sh" || false
+  mkdir -p "$CLAUDE_CONFIG_DIR"
+  # 150 s old: inside the TTL (no refresh) and stable as "[cached 2m ago]" across both runs.
+  printf 'v1\t%s\tok\t2\t1\t\n' "$(( $(date +%s) - 150 ))" > "$CLAUDE_CONFIG_DIR/.mcp-probe-cache"
+  export SS_MEMORY_SNAPSHOT=off
+  run bash "$TMP/base-hook.sh" <<< '{}'
+  local before="$output"
+  [[ "$before" == *"MCP: 2 server(s) connected (1 degraded) [cached 2m ago]"* ]] || false
+  run bash "$HOOK" <<< '{}'
+  [ "$output" = "$before" ] || false
+}
+
 # ─── (g) the hook's other duties are untouched ─────────────────────────────────────────────────
 
 @test "(g) the effort-env tripwire still rides the same single JSON object" {

@@ -143,8 +143,45 @@ MCP_CACHE_TTL=${CC_MCP_CACHE_TTL:-300}          # serve with no refresh
 MCP_CACHE_MAX_AGE=${CC_MCP_CACHE_MAX_AGE:-86400} # beyond this, refuse to serve; probe inline
 MCP_CACHE_LOCK="$MCP_CACHE_FILE.refresh.lock"
 MCP_CACHE_LOCK_STALE=${CC_MCP_CACHE_LOCK_STALE:-600}
+# FAILED-REFRESH STAMP (docs/research/startup-hooks-2026-10-18/README.md §2 #13). The cache above
+# records only successes, so a refresher that keeps failing left no trace: every start past the TTL
+# spawned another `claude mcp list` (137 probes for 63 answers on Oct 17-18), and the cache aged
+# silently toward the MAX_AGE cliff, where the 2.5-15 s probe returns INLINE. This stamp holds
+# `v1 <count> <first-failure epoch> <last-failure epoch>`; the next spawn waits min(2^count × TTL,
+# 1 h) after the last failure, the claim says "N refresh attempts failed since <time>" while
+# count > 0, and any successful probe deletes it. It never caches the failure as an answer.
+MCP_FAIL_FILE="$MCP_CACHE_FILE.refresh-fail"
+MCP_FAIL_N=0; MCP_FAIL_FIRST=0; MCP_FAIL_LAST=0
 
 _now() { date +%s; }
+
+# Reads the stamp into MCP_FAIL_*; an absent or malformed stamp reads as zero failures.
+_mcp_fail_read() {
+  MCP_FAIL_N=0; MCP_FAIL_FIRST=0; MCP_FAIL_LAST=0
+  [ -f "$MCP_FAIL_FILE" ] || return 1
+  local v n f l
+  IFS="$(printf '\t')" read -r v n f l < "$MCP_FAIL_FILE" 2>/dev/null || return 1
+  [ "$v" = "v1" ] || return 1
+  case "$n$f$l" in *[!0-9]*) return 1 ;; esac
+  [ -n "$n" ] && [ -n "$f" ] && [ -n "$l" ] || return 1
+  MCP_FAIL_N="$n"; MCP_FAIL_FIRST="$f"; MCP_FAIL_LAST="$l"
+  return 0
+}
+
+# Called by the refresher only, which runs single-flight under MCP_CACHE_LOCK, so the
+# read-increment-write cannot race a sibling refresher. Atomic like the cache.
+_mcp_fail_record() {
+  local now_s tmp="$MCP_FAIL_FILE.$$"
+  now_s=$(_now)
+  _mcp_fail_read || true
+  [ "$MCP_FAIL_N" -gt 0 ] || MCP_FAIL_FIRST="$now_s"
+  mkdir -p "$_MCP_CFG_DIR" 2>/dev/null || true
+  if printf 'v1\t%s\t%s\t%s\n' "$(( MCP_FAIL_N + 1 ))" "$MCP_FAIL_FIRST" "$now_s" > "$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$MCP_FAIL_FILE" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
+  else
+    rm -f "$tmp" 2>/dev/null || true
+  fi
+}
 
 # Reads the cache into CACHE_*; returns 1 on absent/unparseable/wrong-version/not-ok. A record that
 # fails any check is treated as absent, never as a partial answer.
@@ -168,7 +205,11 @@ _mcp_cache_write() {
   local tmp="$MCP_CACHE_FILE.$$"
   if printf 'v1\t%s\t%s\t%s\t%s\t%s\n' \
        "$(_now)" "$MCP_STATE" "$CONNECTED_COUNT" "$DEGRADED_COUNT" "$MCP_REASON" > "$tmp" 2>/dev/null; then
-    mv -f "$tmp" "$MCP_CACHE_FILE" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
+    if mv -f "$tmp" "$MCP_CACHE_FILE" 2>/dev/null; then
+      rm -f "$MCP_FAIL_FILE" 2>/dev/null || true   # a fresh answer ends the failure run
+    else
+      rm -f "$tmp" 2>/dev/null || true
+    fi
   else
     rm -f "$tmp" 2>/dev/null || true
   fi
@@ -178,10 +219,19 @@ _mcp_cache_write() {
 # must not each spawn a CLI. A lock left behind by a crash is reaped by age, otherwise refreshes
 # would stop forever and the cache would silently rot up to MAX_AGE.
 _mcp_spawn_refresh() {
+  local lock_m now_s wait_s i
+  now_s=$(_now)
+  # Back-off after failures (§2 #13): wait min(2^count × TTL, 1 h) from the last failure.
+  if [ "$MCP_FAIL_N" -gt 0 ]; then
+    wait_s="$MCP_CACHE_TTL"; i=0
+    while [ "$i" -lt "$MCP_FAIL_N" ] && [ "$wait_s" -lt 3600 ]; do
+      wait_s=$(( wait_s * 2 )); i=$(( i + 1 ))
+    done
+    [ "$wait_s" -gt 3600 ] && wait_s=3600
+    [ "$(( now_s - MCP_FAIL_LAST ))" -lt "$wait_s" ] && [ "$now_s" -ge "$MCP_FAIL_LAST" ] && return 0
+  fi
   if [ -d "$MCP_CACHE_LOCK" ]; then
-    local lock_m now_s
     lock_m=$(stat -f %m "$MCP_CACHE_LOCK" 2>/dev/null || echo 0)
-    now_s=$(_now)
     if [ "$(( now_s - lock_m ))" -gt "$MCP_CACHE_LOCK_STALE" ]; then
       rmdir "$MCP_CACHE_LOCK" 2>/dev/null || true
     fi
@@ -315,7 +365,7 @@ fi
 # Probe, cache, exit. No stdout JSON, no session log line, no daily prunes (guarded above).
 if [ "$MCP_MODE" = "--refresh-mcp-cache" ]; then
   _mcp_probe
-  _mcp_cache_write
+  if [ "$MCP_STATE" = ok ]; then _mcp_cache_write; else _mcp_fail_record; fi
   exit 0
 fi
 
@@ -372,6 +422,7 @@ fi
 
 # ── Serve: fresh cache → stale cache + refresh → inline probe ─────────────────────────────────
 _MCP_SERVED_FROM_CACHE=0
+_mcp_fail_read || true                 # absent on a healthy start: one `[ -f ]`, no fork
 if _mcp_cache_read; then
   _AGE=$(( $(_now) - CACHE_EPOCH ))
   [ "$_AGE" -lt 0 ] && _AGE=0          # clock moved backwards; treat as fresh, never negative
@@ -418,12 +469,19 @@ fi
 # look, so absence of an MCP claim here is not evidence of absence of MCP.
 _DEG=""
 [ "$DEGRADED_COUNT" -gt 0 ] && _DEG=" ($DEGRADED_COUNT degraded)"
+# A failing refresher is loud in the claim itself (§2 #13), so a cache served at hours of age says
+# WHY it is that old before MAX_AGE turns it into an inline probe. The `date` fork is paid only
+# while failures are on record.
+_FAIL_NOTE=""
+if [ "$MCP_FAIL_N" -gt 0 ]; then
+  _FAIL_NOTE=" [$MCP_FAIL_N refresh attempt(s) failed since $(date -r "$MCP_FAIL_FIRST" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "epoch $MCP_FAIL_FIRST")]"
+fi
 if [ "$MCP_STATE" = ok ] && [ "$CONNECTED_COUNT" -gt 0 ]; then
-  MCP_CLAIM="MCP: $CONNECTED_COUNT server(s) connected${_DEG}${_CACHE_NOTE}. agent-browser: $AGENT_BROWSER_STATUS."
+  MCP_CLAIM="MCP: $CONNECTED_COUNT server(s) connected${_DEG}${_CACHE_NOTE}${_FAIL_NOTE}. agent-browser: $AGENT_BROWSER_STATUS."
 elif [ "$MCP_STATE" = ok ]; then
-  MCP_CLAIM="MCP: 0 servers connected — the probe RAN and answered zero${_DEG}${_CACHE_NOTE}. agent-browser: $AGENT_BROWSER_STATUS. Use agent-browser skill for browser automation."
+  MCP_CLAIM="MCP: 0 servers connected — the probe RAN and answered zero${_DEG}${_CACHE_NOTE}${_FAIL_NOTE}. agent-browser: $AGENT_BROWSER_STATUS. Use agent-browser skill for browser automation."
 else
-  MCP_CLAIM="MCP: UNKNOWN — the probe could not ask ($MCP_REASON). This is NOT a report of zero connected servers; MCP tools may be present. agent-browser: $AGENT_BROWSER_STATUS."
+  MCP_CLAIM="MCP: UNKNOWN — the probe could not ask ($MCP_REASON)${_FAIL_NOTE}. This is NOT a report of zero connected servers; MCP tools may be present. agent-browser: $AGENT_BROWSER_STATUS."
 fi
 
 # === MISSION BOARD (2026-09-09) ===
