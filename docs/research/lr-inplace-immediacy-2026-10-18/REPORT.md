@@ -105,12 +105,31 @@ on origin/main; each row names the suite that was red before the fix and green a
 | rank | fix | removes | where | status |
 |---|---|---|---|---|
 | 1 | **Mid-tick move drain**: the tick runs a drainer beside its arms that starts a queued batch within 1 s, through the same hard-link claim | class 1 (70% of all stage time; p50 829 s → ~1 s for a request that lands mid-tick) | `scripts/limit-recover/lr-reset-poller.sh` (`lrp_move_drain_start/_stop`) · `tests/lr-move-drain.bats` | **landed** `cc74514df` (+ `c88040cb6`), on origin/main at `b59a1b30f` |
-| 2 | **Intent checked at admission; act-by measured from admission** (an `intent/<sid>.admitted` sidecar the validator honours) | class 2: doomed rows never take a claim, a worker or a slot; an admitted row's budget covers its idle and slot waits | `lr-move-batch.sh`, `lr-intent.sh` · `tests/lr-move-admit.bats`, `tests/lr-intent.bats` | built by teammate `admit`, not yet landed |
-| 3 | **Fail fast in the precheck** on a deaf terminal or a load the late gate would hold, before anything is transplanted; retry a refused-then-answering socket for 120 s for detached callers; name the probe's real failure | class 3/4: a 10-25 min transplant-then-stand-down becomes a hold in the precheck; tonight's two post-hold strands (`unconfirm rc 2`) cannot happen when nothing was transplanted | `scripts/handoff-fire.sh`, `scripts/lib/kitty-queue.sh`, `lr-handoff.sh` · `tests/handoff-recycle-kitty-precheck.bats`, `tests/handoff-recycle-load-hold.bats` | built by teammate `handoff`, not yet landed |
-| 4 | **No "recycle owed" nudge for a driver-run recycle** | the subject re-ran the move's recycle itself and confirmed/unconfirmed the transplant under the driver (a live STRANDED race) | `scripts/handoff-fire.sh` · the pane-close-queue cases | built by teammate `handoff`, not yet landed |
-| 5 | **Several named sessions in one batch, in priority order** (`--sid` repeated or `--sids a,b,c`, mixed source accounts) | class 5: one census, one router read, one admission instead of N; the operator's "highest-activity first" survives to the plan | `bin/cc-lr`, `lr-upgrade.sh` · `tests/lr-move-plan.bats` | built by teammate `cclr`, not yet landed |
-| 6 | **Admit wait by the wall clock (900 s), steal by rename-and-verify, router reason reset** | class 5: no batch refused for queueing; no double admission | `lr-move-batch.sh` · `tests/lr-move-admit.bats` | built by teammate `admit`, not yet landed |
-| 7 | **Worker re-checks its intent while it waits; takes the slot in plan order** | class 2/5: a lapsed intent releases claim and slot at once; priority holds at the slot | `lr-move-worker.sh` · `tests/lr-move-worker.bats` | built by teammate `worker`, not yet landed |
+| 2 | **Intent checked at admission; act-by measured from admission** (an `intent/<sid>.admitted` sidecar the validator honours) | class 2: doomed rows never take a claim, a worker or a slot; an admitted row's budget covers its idle and slot waits | `lr-move-batch.sh`, `lr-intent.sh` · `tests/lr-move-admit.bats`, `tests/lr-intent.bats` | intent at admission **landed** `4415cc793`; the act-by sidecar is built (W2, below) |
+| 3 | **Fail fast in the precheck** on a deaf terminal or a load the late gate would hold, before anything is transplanted; retry a refused-then-answering socket for 120 s for detached callers; name the probe's real failure | class 3/4: a 10-25 min transplant-then-stand-down becomes a hold in the precheck; tonight's two post-hold strands (`unconfirm rc 2`) cannot happen when nothing was transplanted | `scripts/handoff-fire.sh`, `scripts/lib/kitty-queue.sh`, `lr-handoff.sh` · `tests/handoff-recycle-kitty-precheck.bats`, `tests/handoff-recycle-load-hold.bats` | **landed**: probe verdict `50b370574`, detached retry `e37cb731a`, precheck holds `d58bb81d3` |
+| 4 | **No "recycle owed" nudge for a driver-run recycle** | the subject re-ran the move's recycle itself and confirmed/unconfirmed the transplant under the driver (a live STRANDED race) | `scripts/handoff-fire.sh`, `scripts/pane-close-retry.sh`, `lr-handoff.sh` · `tests/lr-handoff-owed-row.bats`, `tests/pane-close-queue.bats` | **landed by pane 374 instead** (`467c9c45c` the row carries form=remote, `52d4a9809` pane-close-retry drops a remote row, `08f8971f2` lr-handoff spends the row it settled); this wave's own version (no row at all) conflicted with that hunk, which pane 374 owns, and was dropped at the rebase |
+| 5 | **Several named sessions in one batch, in priority order** (`--sid` repeated or `--sids a,b,c`, mixed source accounts) | class 5: one census, one router read, one admission instead of N; the operator's "highest-activity first" survives to the plan | `bin/cc-lr`, `lr-upgrade.sh` · `tests/lr-move-plan.bats` | **landed** `0c04208fb` |
+| 6 | **Admit wait by the wall clock (900 s), steal by rename-and-verify, router reason reset** | class 5: no batch refused for queueing; no double admission | `lr-move-batch.sh` · `tests/lr-move-admit.bats` | built (W2, below) |
+| 7 | **Worker re-checks its intent while it waits; takes the slot in plan order; waits out the load holding no slot; retries a clean HELD:unreachable; releases its claim with the verdict** | class 2/5: a lapsed intent releases claim and slot at once; priority holds at the slot; a loaded box makes the move wait, not strand | `lr-move-worker.sh` · `tests/lr-move-worker.bats`, `tests/lr-move-worker-retry.bats` | **landed**: intent re-check `5e8d25ec3`, slot order `dae312b77`, pane 374's load wait / retry / early release `5d5743449` (cherry-picked from `69ed4dae1`), its suite's missing admission record `552b3129b` |
+| 8 | **An Interactive-band starter for move batches** (`lr-reset-poller.sh --move-kick`, staged `com.reso.lr-move-kick`: ProcessType Interactive, WatchPaths on `move/requests/`) | §6 item 1's priority-20 band, for the whole lane, once the operator loads it | `lr-reset-poller.sh`, `launchd/staged/`, `53-lr-move-kick-activate.sh` · `tests/lr-move-drain.bats` cases 5-6 | **landed** `17962edb6`; loading it is the operator's (backlog `074a5990b2cd`), and its script fails unless a real run reads priority ≥ 31 |
+
+All of the above landed together at `552b3129b` (2026-10-18), each sha checked with `git merge-base --is-ancestor`.
+Merge gate, run on the merged tree and re-run after the rebase onto pane 374's land. Each red was run at the same moment on the
+pre-merge control:
+
+| suite | plan | not ok | the red, attributed |
+|---|---|---|---|
+| lr-move-plan · cc-lr-move-self · cc-lr-request | 1..24 · 1..5 · 1..21 | 0 | |
+| cc-lr | 1..17 | 1 | case 15 (`cc-find --kw` 2 s budget): identical on trunk `8acb09e65` |
+| lr-switch-bg-attach · lr-switch-driver | 1..32 · 1..41 | 0 | |
+| lr-move-drain · lr-move-admit · lr-intent | 1..6 · 1..1 · 1..14 | 0 | |
+| lr-move-worker | 1..26 | 0 | case 11 was red in the first run (60 s idle budget at load ~200): green alone on the merged tree while red on the control at the same moment |
+| lr-move-worker-retry | 1..11 | 0 | 6 red before `552b3129b`, identical on `69ed4dae1` itself |
+| lr-move-verdict · summary-casualty · batch-abort · concurrency | 1..16 · 1..8 · 1..4 · 1..17 | 0 | |
+| handoff-recycle-kitty-precheck · load-hold · self-source | 1..20 · 1..5 · 1..13 | 0 | 20, not 21: the dropped K4 commit carried one case |
+| lr-handoff-flags · inplace-default · lr-handoff-owed-row | 1..51 · 1..8 · 1..4 | 0 | the first run's cases 28 and 30 were load flakes: green alone, and the full re-run beside the control was 0 on both |
+| pane-close-queue | 1..32 | 4 | the `teammate-auto-shutdown` cases (1, 2, 3, 5 of 5): identical on trunk |
+| cc-fleet | 1..26 | 0 | manifest 55 → 56 |
 
 ## 6. Not fixed here, and why
 
@@ -121,7 +140,7 @@ These are measured, and each is either an operator call or a next wave; none is 
    `com.reso.lr-reset-poller` (no `ProcessType`) its default light resource limits, and a child cannot
    climb back to 31 (measured here: `taskpolicy -a` from a utility-clamped parent stays at 20). The load
    it competes with ran at 31 (755 processes at 31 against 137 at 20, `ps -o pri`). That is why a
-   nominal 5 s wait took 41-50 s and the precheck 163 s. Remedy, not built: a separate
+   nominal 5 s wait took 41-50 s and the precheck 163 s. Remedy, built and staged (§5 row 8, `17962edb6`): a separate
    `com.reso.lr-move-kick` LaunchAgent with `ProcessType Interactive` and `WatchPaths` on
    `move/requests/`, that runs only the kick (the census explicitly clamped back to `utility`). Every
    launchd job here is activated by an operator-run script, so this is the operator's step, and its
