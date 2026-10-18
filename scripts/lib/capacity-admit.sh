@@ -61,6 +61,8 @@
 # seventh and is the only one NO gate can emit for itself: it means the library was unreachable, so
 # it is written by the CALLER (hooks/agent-teams-enforce.sh, and capacity_gate() since the terms
 # moved here) to keep an ungated spawn out of the admitted-and-measured population. §9.5.1's rule
+# `queued` (a refusal charged to no counter) and `queue-expired` (its clock release) are the
+# lr-wake 2026-10-18 additions for a request that waits in the durable queue (see _cc_admit_spend).
 # applies verbatim to all seven and is the whole reason
 # the field exists: this gate FAILS OPEN on an unreadable sysctl/vm_stat, so a dead probe otherwise
 # manufactures a 100%-admit population indistinguishable from a quiet box — the gate deleted,
@@ -427,8 +429,11 @@ cc_capacity_admit_reason() { printf '%s' "$CC_ADMIT_REASON"; }
 # Where the LAST refusal stands in its budget, as `<term> <n> <budget>` — empty unless that evaluation
 # was a budget-charged refusal (a probe, a token refusal and every admit leave it empty). A refused
 # caller that is not told it is at refusal 2 of 3 retries blind: measured 114 Agent-tool refusals in
-# 14 days, 13 contexts retrying 3+ times, max 12. The release is COUNT-based only; there is no clock.
+# 14 days, 13 contexts retrying 3+ times, max 12. The release is COUNT-based for a direct caller;
+# a QUEUED request (CC_ADMIT_QUEUED_SINCE set) is bounded by the clock instead — see _cc_admit_spend.
 CC_ADMIT_REFUSAL=""
+# The TERM of the last refusal of either kind (count-bounded or queued), for a caller naming a knob.
+CC_ADMIT_REFUSED_TERM=""
 cc_capacity_admit_refusal() { printf '%s' "$CC_ADMIT_REFUSAL"; }
 
 # ── record ONE row into the IDL ────────────────────────────────────────────────────────────────
@@ -573,12 +578,19 @@ CC_ADMIT_RESERVE_SLOTS=0
 # a page). An unusable key degrades to the caller-only file rather than to no file at all: an
 # untrackable bound is an UNBOUNDED gate (see _cc_admit_spend), which is the failure this must not
 # manufacture out of a bad key.
+#
+# THE KEY ALSO CARRIES THE ACTOR (lr-wake 2026-10-18, Wave B step 4). `direct-<sid>` was one key for
+# every process that resumed that sid, so MEASURED overnight a rescue agent's three refusals of
+# 5232121f (07:20, 08:00, 08:41Z) released the POLLER's spawn of the same sid at 10:04:24Z, into a box
+# still at 9 mid-turn (c2 Correction 1). CC_ADMIT_ACTOR names who is spawning (the poller sets
+# `poller`); unset ⇒ the key is exactly what it was, so the hand-run and fleet paths are unchanged.
 _cc_admit_state_file() { # $1=caller → path, or empty when the caller id is unusable
-  local dir="${CC_ADMIT_STATE_DIR:-$HOME/.claude/autonomy/capacity-admit}" key="${CC_ADMIT_BUDGET_KEY:-}"
+  local dir="${CC_ADMIT_STATE_DIR:-$HOME/.claude/autonomy/capacity-admit}" key="${CC_ADMIT_BUDGET_KEY:-}" actor="${CC_ADMIT_ACTOR:-}"
   case "$1" in ''|*[!A-Za-z0-9._-]*) return 0 ;; esac
   case "$key" in *[!A-Za-z0-9._-]*) key="" ;; esac
+  case "$actor" in *[!A-Za-z0-9._-]*) actor="" ;; esac
   mkdir -p "$dir" 2>/dev/null || return 0
-  printf '%s/%s%s.refusals' "$dir" "$1" "${key:+.$key}"
+  printf '%s/%s%s%s.refusals' "$dir" "$1" "${key:+.$key}" "${actor:+.by-$actor}"
 }
 
 _cc_admit_reset() { local f; [ "${_CC_ADMIT_PROBE:-0}" = 1 ] && return 0; f="$(_cc_admit_state_file "$1")"; [ -n "$f" ] && : > "$f" 2>/dev/null; return 0; }
@@ -1199,7 +1211,7 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   # The enabled-term list for THIS evaluation, rebuilt every call. See _cc_admit_emit's header: once
   # the gate carries four terms, `basis` (shared with capacity_gate, which has two) can no longer say
   # which were in force, and a ratio computed without that split is the §9.5.1 defect.
-  CC_ADMIT_TERMS=""; CC_ADMIT_BLIND=""; CC_ADMIT_REFUSAL=""
+  CC_ADMIT_TERMS=""; CC_ADMIT_BLIND=""; CC_ADMIT_REFUSAL=""; CC_ADMIT_REFUSED_TERM=""
   [ "${CC_ADMIT_LOAD_TERM:-on}"     = off ] || CC_ADMIT_TERMS="load"
   [ "${CC_ADMIT_HEADROOM_TERM:-on}" = off ] || CC_ADMIT_TERMS="${CC_ADMIT_TERMS:+$CC_ADMIT_TERMS,}headroom"
   [ "${CC_ADMIT_SEGMENT_TERM:-on}"  = off ] || CC_ADMIT_TERMS="${CC_ADMIT_TERMS:+$CC_ADMIT_TERMS,}segments"
@@ -1637,7 +1649,44 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
 # while budget remains. Past it the gate admits and pages, so a saturated box delays a spawn and
 # can never stand as a permanent refusal — the §12.2 outage, made structurally unreachable.
 _cc_admit_spend() { # $1=caller $2=what $3=budget $4=detail $5=term → 0 admit / 9 refuse
-  local caller="$1" what="$2" budget="$3" detail="$4" term="$5" sf n rc
+  local caller="$1" what="$2" budget="$3" detail="$4" term="$5" sf n rc since qmax now age
+  # ── A QUEUED REQUEST IS BOUNDED BY THE CLOCK, NOT BY RE-RUNS (lr-wake 2026-10-18, Wave B step 4) ──
+  # The count release can only be reached by running the spawn again, and overnight that is what an
+  # agent did: 25 fires, 12 refused panes, every admit a budget-expired release (c2 §2.5). A request
+  # that sits in a durable queue (requests/<sid>.cc-lr.json, retried by the poller) carries the epoch
+  # it was first refused as CC_ADMIT_QUEUED_SINCE; it charges NO counter, refuses until it has queued
+  # LR_CAPACITY_QUEUE_MAX_S (default 2700 s), and then admits and pages — §9's "no unbounded gate",
+  # met with nobody re-running anything. A probe gives the same verdict and never pages. An unusable
+  # value falls through to the count bound below, which is the bounded direction.
+  if [ -n "${CC_ADMIT_QUEUED_SINCE:-}" ] && cc_hw_is_int_operand "$CC_ADMIT_QUEUED_SINCE"; then
+    since="$CC_HW_INT_VALUE"
+    qmax="${LR_CAPACITY_QUEUE_MAX_S:-2700}"
+    cc_hw_is_int_operand "$qmax" || CC_HW_INT_VALUE=2700
+    qmax="$CC_HW_INT_VALUE"
+    now="$(date +%s 2>/dev/null || printf '')"
+    if cc_hw_is_int_operand "$now"; then
+      age=$(( CC_HW_INT_VALUE - since ))
+      [ "$age" -ge 0 ] || age=0
+      if [ "$age" -gt "$qmax" ]; then
+        CC_ADMIT_REASON="capacity-admit: ADMIT (queued ${age}s, past its ${qmax}s bound) — ${detail}"
+        _cc_admit_emit admit queue-expired "$caller" "$what" \
+          "${term} term over, but the request has queued ${age}s > LR_CAPACITY_QUEUE_MAX_S ${qmax}s — admitting: ${detail}" "$term"
+        if [ "${_CC_ADMIT_PROBE:-0}" != 1 ]; then
+          _cc_admit_page "⚠️ capacity-admit: ${caller} queued '${what}' for ${age}s (bound ${qmax}s) and is ADMITTING it into a saturated box — ${detail}. Shed load (close finished panes)."
+        fi
+        return 0
+      fi
+      if [ "${_CC_ADMIT_PROBE:-0}" = 1 ]; then
+        CC_ADMIT_REASON="capacity-admit: PROBE would REFUSE ${what} — ${detail} (queued ${age}s of ${qmax}s; nothing charged)"
+        _cc_admit_emit refuse probe "$caller" "$what" "${detail} (probe — queued ${age}s of ${qmax}s)" "$term"
+        return 9
+      fi
+      CC_ADMIT_REASON="capacity-admit: REFUSING ${what} — ${detail} (queued ${age}s of ${qmax}s; the queue retries it, nothing to re-run)"
+      CC_ADMIT_REFUSED_TERM="${term:-?}"
+      _cc_admit_emit refuse queued "$caller" "$what" "${detail} (queued ${age}s of ${qmax}s)" "$term"
+      return 9
+    fi
+  fi
   if [ "${_CC_ADMIT_PROBE:-0}" = 1 ]; then
     # A probe refusal is a MEASUREMENT, not a spend: no budget file touched, no page, no release.
     CC_ADMIT_REASON="capacity-admit: PROBE would REFUSE ${what} — ${detail} (nothing charged; the caller waits or parks)"
@@ -1672,8 +1721,12 @@ _cc_admit_spend() { # $1=caller $2=what $3=budget $4=detail $5=term → 0 admit 
   fi
   # The counter write and the reset both live in cc_hw_budget_charge — deliberately NOT repeated here.
   # Two writers over one state file is how a bound starts disagreeing with itself.
-  CC_ADMIT_REASON="capacity-admit: REFUSING ${what} — ${detail} (refusal ${n} of ${budget}; once the budget is spent the next evaluation ADMITS and pages)"
+  # NO INVITATION TO RE-RUN (lr-wake 2026-10-18). This line used to end "once the budget is spent
+  # the next evaluation ADMITS and pages", and an agent quoted it back as its reason to fire again
+  # (08:40Z, 09:19Z). The position stays, because a refused caller told nothing retries blind.
+  CC_ADMIT_REASON="capacity-admit: REFUSING ${what} — ${detail} (refusal ${n} of ${budget})"
   CC_ADMIT_REFUSAL="${term:-?} ${n} ${budget}"
+  CC_ADMIT_REFUSED_TERM="${term:-?}"
   # basis stays `measured` — BOTH instruments read fine; it is the box that is over, not the probe.
   # WHICH term refused is a separate field: folding it into `basis` would corrupt the one vocabulary
   # §9.5.1 requires you to split on before believing any ratio computed from these rows.
