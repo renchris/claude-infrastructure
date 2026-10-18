@@ -206,10 +206,71 @@ _resolve_timeout() {
 }
 TIMEOUT_BIN="$(_resolve_timeout || true)"
 
+# ── NO TABS, AT THE PRIMITIVE (lr-wake incident 2026-10-18, REPORT §4 Wave D) ──────────────────
+# The operator rule is NO kitty tabs, ever: every OS window fullscreen on its own Space, at most 4
+# vertical split panes. Overnight 22 agent fires became hidden tabs because nothing in code said
+# so. No verb here builds a tab today; this refusal is what keeps one from appearing if a caller or
+# a later edit regresses. CC_ALLOW_TAB=1 is the one exemption, for a restore that replays a
+# RECORDED layout (bin/cc-resume-layout.sh, scripts/checks/restore-tree-live-verify.py).
+_argv_has_tab() {
+  local prev="" a
+  for a in "$@"; do
+    [ "$a" = -- ] && return 1
+    case "$a" in --type=tab) return 0 ;; esac
+    [ "$prev" = --type ] && [ "$a" = tab ] && return 0
+    prev="$a"
+  done
+  return 1
+}
+
+# ── KEYSTROKE PROVENANCE (lr-wake incident 2026-10-18, RC1/RC5) ──────────────────────────────────
+# Four sessions recorded a submitted `/exit` that their own foreground never sent, and pane 430's
+# composer filled with paste chips nobody could attribute: nothing recorded WHO typed into a pane.
+# Every send-text this shim issues appends one row to ~/.claude/logs/pane-keys.jsonl:
+#   {ts, pane, caller, sid, sha256, head40, verb, ppid, rc}
+# caller = the spawn chain the caller exported (scripts/lib/pane-spawn-log.sh), else the parent's
+# command; sid = the SENDING session (CLAUDE_CODE_SESSION_ID); sha256/head40 = the bytes and their
+# first 40 characters. Never fatal, never on stdout. CC_PANE_KEYS_LOG=<path> moves it, =off stops it.
+_pane_keys_row() { # $1=rc $2=pane $3=text
+  local f="${CC_PANE_KEYS_LOG:-${HOME:-}/.claude/logs/pane-keys.jsonl}"
+  [ "$f" = off ] && return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  mkdir -p "$(dirname "$f")" 2>/dev/null || return 0
+  local sha="" caller="${CC_SPAWN_CHAIN:-}"
+  if command -v shasum >/dev/null 2>&1; then sha="$(printf '%s' "$3" | shasum -a 256 2>/dev/null)"
+  elif command -v openssl >/dev/null 2>&1; then sha="$(printf '%s' "$3" | openssl dgst -sha256 -r 2>/dev/null)"; fi
+  sha="${sha%% *}"
+  [ -n "$caller" ] || caller="$(ps -o command= -p "$PPID" 2>/dev/null | cut -c1-160)"
+  jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg pane "$2" --arg caller "$caller" \
+     --arg sid "${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}" --arg sha "$sha" --arg head "${3:0:40}" \
+     --arg verb "${verb:-}" --argjson ppid "${PPID:-0}" --argjson rc "${1:-0}" \
+     '{ts:$ts, pane:$pane, caller:$caller, sid:$sid, sha256:$sha, head40:$head, verb:$verb, ppid:$ppid, rc:$rc}' \
+     >> "$f" 2>/dev/null || true
+  return 0
+}
+_pane_keys_log() { # $1=rc, then the send-text argv
+  local rc="$1" pane="" text="" prev=""; shift
+  while [ $# -gt 0 ]; do
+    if [ "$1" = -- ]; then shift; text="$*"; break; fi
+    [ "$prev" = --match ] && case "$1" in id:*) pane="${1#id:}" ;; esac
+    prev="$1"; shift
+  done
+  _pane_keys_row "$rc" "$pane" "$text"
+}
+
 kt() {
-  if [[ -n "$TIMEOUT_BIN" ]]; then "$TIMEOUT_BIN" "$TIMEOUT_S" "$KITTY_BIN" @ ${CC_TERM_KITTY_TO:+--to "$CC_TERM_KITTY_TO"} "$@"
-  else "$KITTY_BIN" @ ${CC_TERM_KITTY_TO:+--to "$CC_TERM_KITTY_TO"} "$@"
+  if [ "${1:-}" = launch ] && [ "${CC_ALLOW_TAB:-0}" != 1 ] && _argv_has_tab "$@"; then
+    err "refusing a kitty launch with type tab: kitty tabs are retired (operator rule: no tabs, every OS"
+    err "window fullscreen on its own Space, at most 4 split panes). Place the pane with"
+    err "scripts/lib/pane-placement.sh (cc_place_pane) or handoff-fire, which split or open a fullscreen window."
+    return 2
   fi
+  local _kt_rc=0
+  if [[ -n "$TIMEOUT_BIN" ]]; then "$TIMEOUT_BIN" "$TIMEOUT_S" "$KITTY_BIN" @ ${CC_TERM_KITTY_TO:+--to "$CC_TERM_KITTY_TO"} "$@" || _kt_rc=$?
+  else "$KITTY_BIN" @ ${CC_TERM_KITTY_TO:+--to "$CC_TERM_KITTY_TO"} "$@" || _kt_rc=$?
+  fi
+  [ "${1:-}" = send-text ] && _pane_keys_log "$_kt_rc" "$@"
+  return "$_kt_rc"
 }
 
 # ── AM I ACTUALLY IN KITTY? ──────────────────────────────────────────────────────────────────────
@@ -1608,6 +1669,8 @@ else:
     # shellcheck source=/dev/null
     . "$_tui_lib" || { err "session tui-submit: could not source $_tui_lib"; exit 69; }
     _tui_rc=0; cc_tui_submit "$SESSION" "$FROM_FILE" || _tui_rc=$?
+    # cc-tui.sh types through its own bounded RPC, not kt(), so its keystrokes get their row here
+    _pane_keys_row "$_tui_rc" "$SESSION" "$(cat "$FROM_FILE" 2>/dev/null)"
     exit "$_tui_rc"
     ;;
 
