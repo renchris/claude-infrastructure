@@ -113,15 +113,65 @@ req_field() { python3 -c 'import json,sys; v=json.load(open(sys.argv[1]))[sys.ar
   python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "target" not in d, d' "$REQ"
 }
 
-@test "switch, reconciler LIVE: mode=switch is REFUSED rc 2 and nothing is written" {
+# The move lane's census, for the switch → move delegation (R4/R5): one row for this session, `self`
+# only when the caller pinned LRU_SELF_SID to it (a plain `move` here would move a session mid-call).
+move_lane_stubs() {
+  export CC_LR_UPGRADE_BIN="$BATS_TEST_TMPDIR/lr-upgrade.sh"
+  cat > "$CC_LR_UPGRADE_BIN" <<SH
+#!/usr/bin/env bash
+echo "\$* self=\${LRU_SELF_SID-unset}" >> "$BATS_TEST_TMPDIR/census.argv"
+d=move; [ "\${LRU_SELF_SID:-}" = "$SID" ] && d=self
+printf '417\t%s\tnext\t%s\t%s\t4242\t%s\n' "$SID" "$HOME/.claude-next" "$HOME/wt" "\$d"
+SH
+  printf '#!/usr/bin/env bash\necho "$*" >> "%s/ranker.argv"\nprintf "next3 0.9\\nnext2 0.4\\n"\n' "$BATS_TEST_TMPDIR" > "$CC_ACCOUNTS_BIN"
+  chmod +x "$CC_LR_UPGRADE_BIN" "$CC_ACCOUNTS_BIN"
+}
+nmovereq() { local f n=0; for f in "$LR_STATE_DIR"/move/requests/*.json; do [ -e "$f" ] && n=$((n + 1)); done; printf '%s' "$n"; }
+
+@test "[RED] switch, reconciler LIVE: the SELF verb hands the session to the move lane — a batch, no mode=switch request, no lr-handoff" {
+  # R4/R5: the reconciler has no switch lane, and the refusal that replaced the silent no-op pointed
+  # at `cc-lr move`, whose plan held the caller as hold:self. Now the move lane's worker waits for
+  # this turn to end and moves it from outside.
+  recon_on; heartbeat "$NOW"; move_lane_stubs
+  self_switch --target next3
+  [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
+  [[ "$output" == *"the reconciler is live and has no switch lane — handing this session to the move lane (cc-lr move)"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"queued THIS session (aaaaaaaa) in batch "*"end your turn now"* ]] || { echo "$output"; false; }
+  [ "$(nmovereq)" -eq 1 ]
+  grep -q -- "--target next3 --sid $SID self=$SID" "$BATS_TEST_TMPDIR/census.argv" || { cat "$BATS_TEST_TMPDIR/census.argv"; false; }
+  b="$(basename "$LR_STATE_DIR"/move/requests/*.json .json)"
+  [ "$(jq -r '.rows[0].disposition' "$LR_STATE_DIR/move/$b/plan.json")" = wait:self ]
+  [ "$(jq -r '.until_idle_s' "$LR_STATE_DIR/move/$b/plan.json")" -ge 900 ]
+  [ ! -e "$REQ" ]
+  [ ! -d "$LR_STATE_DIR/requests" ]
+  not_called lr-handoff.sh
+  [ ! -e "$MUTEX" ]
+}
+
+@test "[RED] switch --dry-run, reconciler LIVE: prints the move lane's dry run, the same disposition, and writes nothing" {
+  recon_on; heartbeat "$NOW"; move_lane_stubs
+  self_switch --target next3 --dry-run
+  [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
+  [[ "$output" == *"handing this session to the move lane"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"wait:self"*"DRY RUN: nothing was written or typed"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"would QUEUE"* ]] || { echo "$output"; false; }
+  [ ! -e "$LR_STATE_DIR/move" ]
+  [ ! -d "$LR_STATE_DIR/requests" ]
+  [ ! -e "$BATS_TEST_TMPDIR/launchctl.argv" ]
+  not_called lr-handoff.sh
+}
+
+@test "CONTROL — CC_LR_SWITCH_MOVE_LANE=off: switch, reconciler LIVE: mode=switch is REFUSED rc 2 and nothing is written" {
   # The reconciler has no switch lane, so the request this used to write was a silent no-op.
-  recon_on; heartbeat "$NOW"
+  recon_on; heartbeat "$NOW"; move_lane_stubs
+  export CC_LR_SWITCH_MOVE_LANE=off
   self_switch --target next3
   [ "$status" -eq 2 ] || { echo "rc $status: $output"; false; }
   [[ "$output" == *"cc-lr move --from A --to B"* ]] || { echo "$output"; false; }
   [[ "$output" != *"QUEUED"* ]] || { echo "$output"; false; }
   [ ! -e "$REQ" ]
   [ ! -d "$LR_STATE_DIR/requests" ]
+  [ ! -e "$LR_STATE_DIR/move" ]
   not_called lr-handoff.sh
   [ ! -e "$MUTEX" ]
 }

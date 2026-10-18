@@ -35,6 +35,7 @@
 #                                     rotate all of them in place, one verdict line per session
 #   cc-lr switch [--target A|auto] [--dry-run]
 #                                     move THIS pane's session to another account, in place
+#                                     (a session moves ITSELF with this, or `cc-lr move --sid <own> --to A`)
 #   cc-lr switch (--pane P | --sid S | --from A --all-idle) --target A [--dry-run] [--wait S|--no-wait]
 #                [--until-idle S]     ask ANOTHER idle session to move itself (the driver form);
 #                                     --until-idle waits out a busy one for up to S seconds (default off)
@@ -180,7 +181,10 @@ cc-lr — find · recover · status · repair, for a limit-blocked session.
                              --source-pane, no --detach; foreground. `auto` picks the
                              soonest-resetting account that is safe on BOTH the 5-hour and
                              weekly limits, never this one; if none is safe it stays put
-                             (verdict=NOTMOVED, rc 1).
+                             (verdict=NOTMOVED, rc 1). While the reconciler is live this
+                             hands the session to the move lane: it is queued, and moves once
+                             its turn has ended. A session moves ITSELF with this, or with
+                             `cc-lr move --sid <own sid> --to A`; then end the turn.
   cc-lr switch (--pane P | --sid S | --from A --all-idle) --target A [--dry-run] [--wait S | --no-wait]
                              the DRIVER form: move ANOTHER idle session. Judged by lr-upgrade's idle
                              oracle (--dry-run: one row per candidate + disposition); each `move`
@@ -1175,7 +1179,7 @@ cl_half_moved() { # <live transcript> → rc 0 and CL_HALF_TO (the store its tom
 # act ∈ move | wait | hold | none (on-target). rc 1 when no live session matched, 2 census failure.
 cl_move_rows() { # <from or ""> <to> <until_idle_s> <sel flag or ""> <sel value> <cold_only 0|1> [excluded sids]
   local from="$1" to="$2" until_s="$3" self="$4" selv="$5" cold="$6" excl="${7:-}" census rc=0
-  local p s ac cfg cwd pid d disp act action tx kind idle cache now hp
+  local p s ac cfg cwd pid d disp act action tx kind idle cache now hp isself
   if [ -n "$self" ]; then
     census="$(bash "$UPGRADE_BIN" --switch-census --target "$to" "$self" "$selv")" || rc=$?
   else
@@ -1186,7 +1190,7 @@ cl_move_rows() { # <from or ""> <to> <until_idle_s> <sel flag or ""> <sel value>
   cl_move_goal_lib || true
   while IFS=$'\t' read -r p s ac cfg cwd pid d; do
     [ -n "$s" ] || continue
-    disp="" act=hold action="" idle="-" cache="-"
+    disp="" act=hold action="" idle="-" cache="-" isself=0
     tx=""
     for tx in "$cfg"/projects/*/"$s".jsonl; do [ -f "$tx" ] && break; tx=""; done
     if [ -n "$tx" ]; then
@@ -1226,7 +1230,20 @@ cl_move_rows() { # <from or ""> <to> <until_idle_s> <sel flag or ""> <sel value>
           disp=hold:retired-source action="a stale handoff marker blocks its prompts; repair first: cc-lr repair-markers --sid $s"
         fi ;;
       bg-session) disp=hold:bg-session action="a background job moves only when named: cc-lr switch --sid $s --target $to" ;;
-      self) disp=hold:self action="the session that ran this command" ;;
+      self)
+        # THE CALLER WAITS FOR ITS OWN TURN, IT IS NOT HELD (R4/R5, docs/plans/LIMIT_RECOVER_SELF_INPLACE.md
+        # § W0). A terminal hold:self left a session no lane to move itself: `move` held it, `rotate`
+        # sent it to `switch`, and `switch` under a live reconciler sent it back to `move`. The batch
+        # worker already waits on a `wait:*` row until two censuses call it at rest, and a session
+        # that queued itself and then ends its turn is exactly that row. It stays `self` (never plain
+        # `move`): only the wait lets the turn that ran this command end first. Every hold below
+        # still applies. CC_LR_MOVE_SELF_WAIT=off restores the terminal hold.
+        isself=1
+        if [ "${CC_LR_MOVE_SELF_WAIT:-on}" != off ]; then
+          disp=wait:self act=wait action="restarts on $to once THIS session's turn has ended (it queued itself)"
+        else
+          disp=hold:self action="the session that ran this command"
+        fi ;;
       *) disp="hold:$d" action="not moved" ;;
     esac
     case " $excl " in *" $s "*) disp=hold:being-recovered act=hold action="already being recovered by this command" ;; esac
@@ -1252,6 +1269,8 @@ cl_move_rows() { # <from or ""> <to> <until_idle_s> <sel flag or ""> <sel value>
            && goal_live_condition "$tx" >/dev/null 2>&1 \
            && ! { command -v lr_source_dead >/dev/null 2>&1 && lr_source_dead "$ac" >/dev/null 2>&1; }; then
         disp=hold:goal-live act=hold action="a /goal is live; its goal would drive it on mid-move"
+        # A live goal re-drives the caller at every Stop, so it never comes to rest for the worker.
+        [ "$isself" -eq 0 ] || action="a /goal is live and re-drives THIS session, so it never rests: clear the goal first, or the move waits forever (held; nothing was queued)"
       elif [ "$cold" -eq 1 ] && [ "$cache" = warm ]; then
         disp=hold:warm-cache act=hold action="skipped by --cold-only (idle ${idle}s < 3600s: a move would cost its cache)"
       fi
@@ -1443,6 +1462,14 @@ cmd_move() {
   esac
   cl_move_sid_unique move "$self" "$selv" "$rows" || return 2
   [ -n "$from" ] || from="$(printf '%s\n' "$rows" | sed -n '1p' | cut -f3)"
+  # A SELF ROW NEEDS A WAIT BUDGET (R4/R5, docs/plans/LIMIT_RECOVER_SELF_INPLACE.md § W1). Its worker
+  # can see it at rest only after the turn that queued it has ended, so --until-idle 0 would expire
+  # its intent before that. Raised before plan.until_idle_s and the intent's expires_epoch are
+  # derived from it; the other rows were judged on the budget the caller asked for, so a busy one is
+  # still held, not silently waited on.
+  local selfsid
+  selfsid="$(printf '%s\n' "$rows" | awk -F'\t' '$7 == "wait:self" { print $2; exit }')"
+  if [ -n "$selfsid" ] && [ "$until_s" -lt "${CC_LR_MOVE_SELF_WAIT_S:-900}" ]; then until_s="${CC_LR_MOVE_SELF_WAIT_S:-900}"; fi
   # THE ROUTER, STRICT: an excluded target refuses; one the router cannot vouch for refuses unless
   # the operator said --target-unverified. The batch runner asks again at admit; this is the
   # early, cheap answer so nothing is written for a batch that cannot be admitted.
@@ -1502,8 +1529,17 @@ EOF
       || echo "cc-lr: the kick failed — the poller's own interval will start the batch" >&2
   fi
   cl_tick_note "$(lr_move_state)/move/requests/$batch.json"
-  # Bounded wait; the batch runner and its workers are detached and outlive this process.
+  # THE CALLER IS NOT WAITED ON (R4/R5). Its worker can see it at rest only once this tool call has
+  # returned and the turn has ended, so blocking here on its own row would hold it busy until the
+  # --wait bound, every time. It is marked seen; the other rows are waited on as before.
   local deadline seen=" " left f v last_kick
+  if [ -n "$selfsid" ]; then
+    printf 'cc-lr move: queued THIS session (%s) in batch %s — end your turn now and start no other work; the move fires once this session is at rest (<= %ss). Check: cc-lr move --status %s\n' \
+      "${selfsid:0:8}" "$batch" "$until_s" "$batch"
+    printf 'cc-lr move: if a Stop hook keeps you going, run ~/.claude/hooks/session-continue.sh clear first\n'
+    seen=" $selfsid "
+  fi
+  # Bounded wait; the batch runner and its workers are detached and outlive this process.
   deadline=$(( now + wait_s )); last_kick="$now"
   while :; do
     # THE KICK AGAIN WHILE THE REQUEST IS UNCLAIMED. launchd drops a kickstart sent while a tick is
@@ -1627,6 +1663,8 @@ cl_rotate_rows() { # <accounts, space-separated> <to|auto> <until_idle_s> <limit
       case "$disp" in
         hold:being-recovered) continue ;;
         hold:self) action="this session; move it last, from here: cc-lr switch --target $tgt" ;;
+        # R4/R5: the self row now waits for its own turn to end; the act is the move lane's.
+        wait:self) action="this session; it moves once its turn ends, from here: cc-lr move --sid $s --to $tgt" ;;
       esac
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$a" "$p" "$s" "$cap" "$disp" "$act" "$tgt" "$action"
     done <<EOF
@@ -1874,6 +1912,33 @@ cmd_switch() {
   # THE RECONCILER IS LIVE ⇒ it moves this session, not us. Before `auto` is resolved: the pick is
   # the reconciler's to make at act time, and an explicit target rides in the request.
   if lr_recon_live; then
+    # …EXCEPT IT HAS NO SWITCH LANE, so the self verb hands this session to the move lane (R4/R5,
+    # docs/plans/LIMIT_RECOVER_SELF_INPLACE.md § W1). Before this, the dry run said "would QUEUE" and
+    # the real run hit cl_recon_queue's refusal, which pointed at `cc-lr move`, whose plan held the
+    # caller as hold:self: no lane at all. The move lane's worker waits for this turn to end, then
+    # moves the session from outside with every gate. LRU_SELF_SID is pinned so the census calls
+    # this row `self` (a wait for its own turn), never a plain `move` of a session mid-tool-call.
+    # `auto` is resolved here because `move --to auto` needs --from. CC_LR_SWITCH_MOVE_LANE=off
+    # restores the refusal; CC_LR_RECON_SWITCH_REFUSE=off still restores the queue write below.
+    if [ "${CC_LR_SWITCH_MOVE_LANE:-on}" != off ] && [ "${CC_LR_RECON_SWITCH_REFUSE:-on}" != off ]; then
+      if [ "$target" = auto ]; then
+        local mpicked marc=0
+        mpicked="$(cl_switch_auto_target)" || marc=$?
+        if [ "$marc" -ne 0 ]; then
+          echo "cc-lr switch: staying put — ${mpicked:-no safe account}. Nothing was started; no mutex was created. Name an account with --target to move anyway." >&2
+          cl_verdict NOTMOVED auto "${mpicked:-no safe account}"
+          [ "$marc" -eq 1 ] && exit 1
+          exit 2
+        fi
+        target="$mpicked"
+        echo "cc-lr switch: auto picked $target (soonest weekly reset among accounts safe on both limits)" >&2
+      fi
+      echo "cc-lr switch: the reconciler is live and has no switch lane — handing this session to the move lane (cc-lr move), which waits for this turn to end"
+      local margs=(--sid "$sid" --to "$target" --until-idle "${CC_LR_MOVE_SELF_WAIT_S:-900}")
+      [ "$dry" -eq 1 ] && margs+=(--dry-run)
+      LRU_SELF_SID="$sid" cmd_move "${margs[@]}"
+      return $?
+    fi
     if [ "$dry" -eq 1 ]; then
       printf 'cc-lr: DRY RUN — the reconciler is live; a real run would QUEUE %s (pane %s) for it in %s. Nothing was written.\n' \
         "${sid:0:8}" "$pane" "$REQ_DIR/$sid.cc-lr.json"
