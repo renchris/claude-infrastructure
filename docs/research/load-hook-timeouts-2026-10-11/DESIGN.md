@@ -218,6 +218,7 @@ Wave 1 is six agent packages plus one sent to the branch owner, within the 6-tea
   - Sessions run 2.1.293 from `~/.claude-293`, while `claude --version` on PATH reports 2.1.291.
   - 2.1.296 adds per-hook durations to `--debug`, which replaces the cancel-only sampling.
   - File an upstream report: the killProcessTree `ps -A` path has no timeout and never kills the child.
+  - CORRECTED (2026-10-17): the code path is now confirmed in the 2.1.293 binary. The killProcessTree helper spawns `ps -A -o pid= -o ppid=` with no timeout and resolves only on `close`. A sibling `ps -A` call passes `{timeout}`. The report is drafted in `UPSTREAM_PS_A_REPORT_DRAFT.md` and is not yet posted, pending the operator's OK.
 - **O5.** The gating measurement: a 30 s root exec trace (`eslogger exec`) to attribute the roughly 21k unattributed spawns per minute.
 - **O6.** Optional cleanup of non-work leftovers: evidence-gc orphans, lead-crash-watchdogs 1–2 days old, the wedged `auth-timeseries` `ps` (pid 28973). Blender at 18 GB RSS is the largest memory consumer.
 
