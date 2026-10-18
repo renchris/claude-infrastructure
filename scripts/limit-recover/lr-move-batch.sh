@@ -33,6 +33,8 @@ LR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$LR/lr-lib.sh"
 # shellcheck source=/dev/null
 . "$LR/lr-move-lib.sh"
+# shellcheck source=/dev/null
+. "$LR/lr-intent.sh"
 for _mb_f in "$LR/../lib/capacity-admit.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/capacity-admit.sh"; do
   # shellcheck source=/dev/null
   [ -f "$_mb_f" ] && { . "$_mb_f"; break; }
@@ -59,11 +61,12 @@ T0="$(date +%s)"
 FROM="$(jq -r '.from // empty' "$PLAN")"; TO="$(jq -r '.to // empty' "$PLAN")"
 TO_CFG="$(jq -r '.to_config_dir // empty' "$PLAN")"; UNTIL="$(jq -r '.until_idle_s // 0' "$PLAN")"
 UNVERIFIED_OK="$(jq -r '.target_unverified // false' "$PLAN")"
-# The rows this batch drives: sid<TAB>pane<TAB>cwd, for every row whose act is move or wait.
-# Padded at the emitter: tab is IFS whitespace, so an empty pane or cwd would shift the next column
-# into its place on read.
+PLAN_TS="$(jq -r '.ts // empty | tostring' "$PLAN")"
+# The rows this batch drives: sid<TAB>pane<TAB>cwd<TAB>account, for every row whose act is move or
+# wait. Padded at the emitter: tab is IFS whitespace, so an empty pane or cwd would shift the next
+# column into its place on read.
 DRIVE="$(jq -r 'def cell(ph): (if . == null then "" else . end) | tostring | gsub("[\\t\\r\\n]"; " ") | if . == "" then ph else . end;
-  .rows[] | select(.act == "move" or .act == "wait") | [(.sid | cell("-")), (.pane | cell("-")), (.cwd | cell("-"))] | @tsv' "$PLAN")"
+  .rows[] | select(.act == "move" or .act == "wait") | [(.sid | cell("-")), (.pane | cell("-")), (.cwd | cell("-")), (.account | cell("-"))] | @tsv' "$PLAN")"
 
 result() { # $1=sid $2=pane $3=verdict $4=reason — written only when the row has no result yet
   [ -e "$BDIR/$1.json" ] && return 0
@@ -174,10 +177,19 @@ fi
 admit_json true "$AUTH" "router: ${ROUTE_WHY:-ranked}"
 
 CLAIMED="" seeded=1 cwds=""
-while IFS=$'\t' read -r sid pane cwd; do
+while IFS=$'\t' read -r sid pane cwd acct; do
   [ -n "$sid" ] || continue
   [ -e "$BDIR/$sid.json" ] && continue
   if [ ! -f "$BDIR/intent/$sid.json" ]; then result "$sid" "$pane" NOTMOVED "no operator intent was written for this row; nothing touched"; continue; fi
+  # THE INTENT IS CHECKED HERE, BEFORE THE CLAIM. Only lr-handoff read it, at W5, after the claim,
+  # the idle wait and a swap slot: on 2026-10-17/18, 10 rows whose intents had expired before their
+  # batch even started took 8 claims, 8 workers and all 4 swap slots, and won every claim collision
+  # (8 rows with a valid intent lost to them). A doomed row now costs nothing but its verdict.
+  if ! lr_intent_check "$BDIR/intent/$sid.json" "$sid" "$pane" "$acct" "$TO"; then
+    q="?"; case "$PLAN_TS" in ''|*[!0-9]*) ;; *) q=$(( $(date +%s) - PLAN_TS )) ;; esac
+    result "$sid" "$pane" NOTMOVED "intent-invalid: $LR_INTENT_WHY (checked at admission, queued ${q}s); nothing touched"
+    continue
+  fi
   if lr_claim_take "$CLAIMS" "$sid" cc-lr-move "$pane" "$$" >/dev/null 2>"$BDIR/$sid.claim.log"; then
     CLAIMED="$CLAIMED$sid"$'\t'"$pane"$'\n'
     case $'\n'"$cwds" in *$'\n'"$cwd"$'\n'*) ;; *) cwds="$cwds$cwd"$'\n' ;; esac
