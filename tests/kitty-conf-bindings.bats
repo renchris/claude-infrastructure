@@ -80,7 +80,7 @@ def main():
     for label, mods, key in (("cmd_d",8,100), ("cmd_shift_d",9,100), ("cmd_shift_b",9,98),
                              ("cmd_w",8,119), ("ctrl_shift_w",5,119), ("cmd_shift_w",9,119),
                              ("cmd_shift_o",9,111), ("cmd_opt_o",10,111), ("cmd_opt_shift_o",11,111),
-                             ("ctrl_shift_q",5,113),
+                             ("ctrl_shift_q",5,113), ("cmd_t",8,116), ("ctrl_shift_t",5,116),
                              ("cmd_opt_shift_left",11,57350), ("cmd_opt_b",10,98)):
         b = binds(mods, key)
         print("%s_n=%d" % (label, len(b)))
@@ -167,6 +167,24 @@ band_disarmed()  { grep -q '^# DISARMED-map cmd+' "$CONF"; }
   echo "$output" | grep -qE '^cmd_opt_b_n=0$' || {
     echo "⌘⌥B is still bound — the 22:45 ruling retired it so two titles cannot coexist"
     echo "$output"; false; }
+}
+
+@test "cmd+t and ctrl+shift+t open a FULLSCREEN OS window, never a tab (operator rule: no tabs, ever)" {
+  # lr-wake incident 2026-10-18, REPORT §5 Q4. kitty ships BOTH chords as new_tab (cmd+t on macOS,
+  # kitty_mod+t everywhere); ours must be the LAST definition of each, or a tab comes back.
+  run probe "$CONF"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  echo "$output" | grep -qxF 'cmd_t_last=launch --type=os-window --os-window-state=fullscreen --cwd=current' || { echo "$output"; false; }
+  echo "$output" | grep -qxF 'ctrl_shift_t_last=launch --type=os-window --os-window-state=fullscreen --cwd=current' || { echo "$output"; false; }
+}
+
+@test "MUTANT CONTROL: dropping our cmd+t line lets kitty's default new_tab win, and the pin sees it" {
+  M="$BATS_TEST_TMPDIR/mutant.conf"
+  grep -q '^map cmd+t ' "$CONF"
+  grep -v '^map cmd+t ' "$CONF" > "$M"
+  run probe "$M"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  echo "$output" | grep -qE '^cmd_t_last=new_tab' || { echo "$output"; false; }
 }
 
 @test "cmd+d splits vertically (pane to the RIGHT, iTerm2 Split Vertically)" {
