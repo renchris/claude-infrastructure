@@ -15,6 +15,10 @@ if [ -r "$_sis_lib" ]; then
     _SIS_SID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
     # shellcheck disable=SC2154  # both are assigned inside the trap string itself
     trap '_sis_rc=$?; _sis_d=failed; [ "$_sis_rc" -ne 0 ] || _sis_d=passed; log_idl "$_sis_d" "exit:$_sis_rc"' EXIT
+    # A harness kill is a TERM; without this trap bash 3.2 runs the EXIT trap with $?=0 and the kill
+    # is logged as `passed exit:0` (385-387 such rows per 48 h could not be told apart from a pass —
+    # docs/research/startup-hooks-2026-10-18/A5-silent-drops.md F7). Here, not in idl_init (§6).
+    trap 'exit 143' TERM
 fi
 
 # Resolve helpers
@@ -33,8 +37,14 @@ fi
 source "$HELPERS"
 [ -f "$SESSION_INDEX_DB" ] || exit 0
 
-# Generate context via Python (fast, <50ms with warm Python)
-CONTEXT=$(python3 "$HOME/.claude/bin/session-search.py" --context-inject "${CWD:-$HOME}" 2>/dev/null || echo "")
+# Generate context via Python — OFF by default (2026-10-18). Its line shipped 0 of 404-411 times
+# (every recent entry read "(no summary)", filtered below), at the cost of one python3 and a
+# 0.15-0.96 s sqlite scan per start (docs/research/startup-hooks-2026-10-18/README.md §2 #10).
+# CC_SIS_CONTEXT_INJECT=1 restores it once the generator writes summaries again.
+CONTEXT=""
+if [ "${CC_SIS_CONTEXT_INJECT:-0}" = 1 ]; then
+    CONTEXT=$(python3 "$HOME/.claude/bin/session-search.py" --context-inject "${CWD:-$HOME}" 2>/dev/null || echo "")
+fi
 
 # Say nothing when there is nothing to say. The line is "Session index: N sessions. Recent: [age]
 # <summary> | …", and in practice every recent entry read "(no summary)" — the sample session got

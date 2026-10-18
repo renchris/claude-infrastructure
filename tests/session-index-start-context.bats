@@ -15,8 +15,13 @@ setup() {
   : > "$HOME/.claude/session-index.db"
   cat > "$HOME/.claude/bin/session-search.py" <<'PY'
 import os, sys
+open(os.path.join(os.environ["HOME"], "py-called"), "a").write("1\n")
+if os.environ.get("STUB_SLEEP"):
+    import time; time.sleep(float(os.environ["STUB_SLEEP"]))
 sys.stdout.write(os.environ.get("STUB_CTX", ""))
 PY
+  # The context query is off by default (unit 1.4); these cases pin the filter, so they opt in.
+  export CC_SIS_CONTEXT_INJECT=1
 }
 
 run_hook() { run bash -c 'printf "{\"cwd\":\"/tmp/proj\"}" | bash "$0"' "$HOOK"; }
@@ -51,4 +56,27 @@ Search: claude-search "query"'
   run_hook
   [ "$status" -eq 0 ]
   printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext' | grep -qF '(#infra)'
+}
+
+# ── unit 1.4 (startup-hooks-2026-10-18): the query is gated, and a kill logs as a kill ──────────
+@test "1.4: default (flag unset) runs no python3 and injects nothing, even with a rich line" {
+  unset CC_SIS_CONTEXT_INJECT
+  export STUB_CTX='Session index: 5 sessions. Recent: [1d] real summary'
+  run_hook
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ ! -f "$HOME/py-called" ]
+}
+
+@test "1.4: a TERM during the hook logs failed exit:143, not passed exit:0" {
+  export STUB_SLEEP=3 STUB_CTX='' CC_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
+  printf '{"cwd":"/tmp/proj","session_id":""}' > "$BATS_TEST_TMPDIR/in.json"
+  bash "$HOOK" < "$BATS_TEST_TMPDIR/in.json" >/dev/null 2>&1 &
+  pid=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do [ -f "$HOME/py-called" ] && break; sleep 0.3; done
+  kill -TERM "$pid"
+  wait "$pid" || true
+  grep -q '"disposition":"failed"' "$CC_IDL"
+  grep -q 'exit:143' "$CC_IDL"
+  ! grep -q '"disposition":"passed"' "$CC_IDL" || false
 }
