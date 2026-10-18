@@ -36,8 +36,40 @@ Hard constraints: no safety gate weakened (at-rest checks, single-copy fences, c
 
 - E1: `scripts/handoff-fire.sh:15344` — any `--source-pane/--source-session` selects the REMOTE form (`RCY_REMOTE=1`) even when the named pane IS the caller's own; the remote form's last read (`hf_recycle_last_read`, ~:3489) then re-proves at-rest on the caller's own transcript, which is mid-turn by construction. The self form deliberately reads the composer only (comment at :3486-3488).
 - E3: `bin/cc-lr` cmd_switch (~:1873) returns the dry run BEFORE `cl_recon_queue` applies its switch-lane refusal (:253-258).
+- E1 origin: the ORIGINAL external move (batch 20261018T000816Z) reached `handoff-fire --recycle` remote form, which held because kitty's control socket `/tmp/kitty-44163` refused the connection (transient: it answers in 0.05–0.10 s at 2026-10-17 22:0x local); lr-handoff aborted the admit (rc 6, HELD:unreachable). The held recycle's pane-close row was then retried by `scripts/pane-close-retry.sh:260`, which `cc-notify`s **the pane's occupant — the subject session itself —** with "RECYCLE RETRY … re-run: handoff-fire.sh <argv>". The subject ran a REMOTE-form command about itself from inside its own turn ⇒ E1. A remote recycle's retry must be re-run by an external actuator (the move lane), never handed to its subject.
+- Self-turn deferral already exists for the plain self form (`hf_recycle_defer`, handoff-fire.sh ~:5095-5175: fork, wait for the caller's tool call to return and the transcript to settle, then run every gate) but `hf_recycle_defer_eligible` excludes `RCY_REMOTE=1` and any `RESUME_LAUNCHER` (~:5087) — i.e. exactly the transplant self-move.
+- E6 nuance: the move census already treats a cc-await-ping-only Bash shell as `watcher`, not `work` (`lr-upgrade.sh:540-556`), unless the watcher shell has a child other than cc-await-ping/tail; W0 to establish which classifier held.
 - E3/E4 loop: `cc-lr move` holds self (`bin/cc-lr:1229`) and points at `cc-lr switch` (:1629), which refuses while the reconciler is live and points at `cc-lr move`.
 
-## W0 — Research (Dynamic Workflow)
+## W0 — Research (Dynamic Workflow) — DONE (run wf_118bf2fb-7c0, 7 tracers + 2 skeptics per finding)
 
-_Pending — results integrated here._
+Verified root causes (skeptic verdicts in the run journal; file:line at b3ec7e5e8):
+
+| # | root cause | evidence | verdict |
+|---|---|---|---|
+| R1 | `--source-pane/--source-session` always selects the REMOTE recycle form, even for the caller's own pane; its post-confirm last read (`hf_recycle_last_read` :3489-3580) re-proves at-rest on the caller's mid-turn transcript ⇒ always `held: busy` from self | 1 | 2/2 upheld |
+| R2 | A remote recycle held on a deaf kitty files an owed `recycle` row with the WORKER's argv (`hf_recycle_owed_record` :2080), and `pane-close-retry.sh drain_recycle` :249-264 mails it to the pane's occupant, which is the SUBJECT ⇒ the subject ran a remote argv about itself, while worker 51575 still held the claim, lock and record id (two actuators; handoff-fire / lr-handoff / lr-transplant never read `runs/by-sid/<sid>.active`) | 1, 2, 5 | 2/2 upheld |
+| R3 | The hold's unconfirm correctly withdraws tombstone + lock + target copy (single-copy guard, KEEP), but the stand-down prints `Re-run: $CMD` = the resume LAUNCHER line, never a re-admit; the replayed argv can never pass again | 2 | 2/2 upheld; the `recycle ABORTED … (held: X) … unconfirm rc 0.` sentence is regex-parsed by lr-handoff.sh:1975 and lr_recon test_settle.py — append, never reword |
+| R4 | `cc-lr move` maps the caller to terminal `hold:self` (bin/cc-lr:1229) and `rotate` points it at `switch` (:1629); `switch` refuses while the reconciler is live (:253-258) and points at `move` ⇒ no self lane. The working lane (a detached poller worker that waits for idle, then acts as an outsider through every gate) exists but self rows are never routed to it | 3, 4 | 2/2 upheld |
+| R5 | `switch --dry-run` returns "would QUEUE" (:1877) before `cl_recon_queue`'s refusal ⇒ dry and real disagree | 3 | 2/2 upheld |
+| R6 | The first domino: the worker's remote recycle held at the kitty precheck ("did not accept a connection") on a box at load ~290; the probe's own bound timing out reads the same as a refusal (`kitty_socket_accepting` :1435), and the worker never retries a clean, fully-aborted `HELD:unreachable` (lr-move-worker.sh W5/W6) ⇒ the only retry left was the mail to the subject | 5 | upheld (65-80%) |
+| R7 | The load hold (:3763-3800, :18375; incident F1 2026-10-09, KEEP) fires AFTER the confirm for every resume recycle (they never stage), so on a loaded box every move pays admit + confirm + unconfirm and leaves a `locks/<sid>.unconfirmed-*` dir | 1, lock leftovers | forensic tracer, 85% |
+| R8 | The poller is the only move-request consumer; a 45+ min tick strands requests, and `cc-lr move` happily queues duplicate requests for one sid | 5 | forensic tracer, 65% |
+
+Refuted / not causes:
+- E6 (wake-floor watcher blocks a move): REFUTED 2/2. Both job classifiers already count a cc-await-ping-only shell as `watcher` (lr-upgrade.sh:540-556, handoff-fire.sh ~:2868); the move lane answers the /exit dialog with stop-if-watcher and the successor re-arms. Observed background-job holds were model-written poll loops (real work). No classifier change.
+- E5 "stale claim after a settled batch": REFUTED 2/2 as stated. Worker 51575 was genuinely live for ~36 min (lr-handoff 24.6 min to hold on the deaf socket, then ~11 min in one verdict read at load ~290); the hold was the guard working. The 33 s result-to-release gap in `finish()` is real but latent (fix anyway, cheap).
+- Live state 2026-10-18 03:24Z: load 316 on 10 cores (31/core vs the 8/core bound) — no in-place resume recycle can pass R7's gate on this box until load falls. Not a defect; the proof waits for it.
+
+## W1 — Implement (locus T: four teammates, disjoint files)
+
+Why T, not S: four small units (each tens of lines + tests) whose outputs must be merged and exercised together in this session's proof; combined output small; the lead's window is at ~10%.
+
+| teammate | files (sole owner) | changes |
+|---|---|---|
+| `sip-cclr` | bin/cc-lr, scripts/limit-recover/lr-move-batch.sh, tests/cc-lr*.bats, tests/lr-move-plan.bats | R4: self row ⇒ `wait:self` (act=wait, budget max(--until-idle, CC_LR_MOVE_SELF_WAIT_S=900)); cmd_move never blocks on a self row ("end your turn now"); `switch` self with the reconciler live ⇒ delegate to the move lane; R5: dry run shares the decision; rotate hint ⇒ `cc-lr move --sid`; R8: refuse a duplicate unclaimed request for the same sid; batch census pinned `LRU_SELF_SID=` |
+| `sip-hfire` | scripts/handoff-fire.sh, tests/handoff-recycle-*.bats, tests/handoff-fire-kitty.bats | R1: remote form naming the caller's own session/pane ⇒ REFUSED rc 2 before any transplant phase, naming the move-lane command; R2: `--transplanted-source` remote pre-pass refuses when a live foreign holder owns `runs/by-sid/<sid>.active`; owed row records `form=remote` + record id; R3: after an unconfirm on a transplanted source, an extra line names the re-drive (`cc-lr move --sid S --to A`), existing sentence bytes unchanged; R6: probe timeout = `unprovable`, re-probed with backoff (≤180 s) when the caller is detached |
+| `sip-pcq` | scripts/pane-close-retry.sh, scripts/limit-recover/lr-handoff.sh, tests/pane-close-queue.bats, tests/lr-handoff-*.bats | R2: drain_recycle never mails a remote row (argv has `--source-pane` or `form=remote`) to the pane; drops it; lr-handoff clears the pane's owed row after a clean abort |
+| `sip-worker` | scripts/limit-recover/lr-move-worker.sh, tests/lr-move-worker.bats | R6: bounded retry (2×, 45 s backoff) of a clean `HELD:unreachable` with abort rc 0, claim kept, guards re-checked; R7: before actuate, wait while load/core is over `hf_recycle_load_bound`, NOTMOVED `HELD:load` with nothing touched at the deadline; claim released right after the result write |
+
+Not doing (with reason): self-transplant deferral inside handoff-fire (a second self path; the move lane already defers honestly); live-holder check inside lr-transplant confirm/unconfirm (risks refusing every legitimate in-place move through the lr-handoff → handoff-fire ancestry; R2's handoff-fire pre-pass check closes the same entry); changing the load bound.
