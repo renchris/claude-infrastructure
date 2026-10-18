@@ -169,3 +169,27 @@ drain_home() {
   run grep -E 'spawn -noecho env .*-u (KITTY_WINDOW_ID|ITERM_SESSION_ID|CC_PANE_ID|KITTY_PID|KITTY_LISTEN_ON)( |$)' "$f"
   [ "$status" -eq 1 ] || { echo "a spawn line strips an address: $output"; false; }
 }
+
+# ── unit 5.5 (startup-hooks-2026-10-18): async hygiene ───────────────────────────────────────────
+@test "5.5: the wait+kill pair leaves no bash job notice on the hook's stderr, even when the race hits" {
+  # The notice ("line 614: <pid> Killed: 9 ( sleep … )", 32 records per 48 h) appears when the shell
+  # reaps the killed watchdog before `wait "$_k"` runs, and prints it at its NEXT notification point.
+  # Force that race deterministically: a BASH_ENV shim makes `wait` skip the watchdog's pid.
+  printf '%s\n' 'wait() { [ -n "${_k:-}" ] && [ "${1:-}" = "$_k" ] && return 0; builtin wait "$@"; }' \
+    > "$BATS_TEST_TMPDIR/race.env"
+  run env BASH_ENV="$BATS_TEST_TMPDIR/race.env" bash -c 'bg_fork() { :; }; true'   # shim parses
+  [ "$status" -eq 0 ]
+  export BASH_ENV="$BATS_TEST_TMPDIR/race.env"
+  run bg_fork bg
+  unset BASH_ENV
+  [[ "$output" != *"Killed"* ]] || { echo "job notice leaked into async stderr: $output"; false; }
+}
+
+@test "5.5: session-register writes a started row and a passed end row for the same pid" {
+  bg_fork bg
+  idl="$HOME/.claude/autonomy/idl.jsonl"
+  s="$(jq -r 'select(.hook=="session-register" and .disposition=="started") | .reason' "$idl")"
+  [ -n "$s" ]
+  pid="${s#pid:}"
+  jq -e --arg r "exit:0_pid:$pid" 'select(.hook=="session-register" and .disposition=="passed" and .reason==$r)' "$idl" >/dev/null
+}

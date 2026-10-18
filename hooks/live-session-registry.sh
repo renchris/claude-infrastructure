@@ -20,6 +20,10 @@ command -v jq >/dev/null 2>&1 || exit 0
 ev=$(printf '%s' "$input"  | jq -r '.hook_event_name // empty' 2>/dev/null)
 cwd=$(printf '%s' "$input" | jq -r '.cwd // empty'            2>/dev/null)
 sid=$(printf '%s' "$input" | jq -r '.session_id // empty'     2>/dev/null)
+# START/END IDL rows: an async hook has no visible channel, and a harness kill leaves no record
+# otherwise (docs/research/startup-hooks-2026-10-18/README.md §2 #22; hooks/lib/async-span.sh).
+# shellcheck source=lib/async-span.sh disable=SC1091  # runtime-resolved beside this file
+. "${BASH_SOURCE[0]%/*}/lib/async-span.sh" 2>/dev/null && async_span_begin live-session-registry "$sid"
 [ -z "$cwd" ] && cwd="$PWD"
 
 # ── SessionEnd → the worktree-gc wake queue (DESIGN load-root-cause-2026-10-17 §3.4, WP-15). ─────

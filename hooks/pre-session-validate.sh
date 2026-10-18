@@ -42,6 +42,10 @@ log() {
 
 # Consume stdin (SessionStart hook receives JSON but we don't need it)
 cat >/dev/null 2>&1 || true
+# START/END IDL rows: an async hook has no visible channel, and a harness kill leaves no record
+# otherwise (docs/research/startup-hooks-2026-10-18/README.md §2 #22; hooks/lib/async-span.sh).
+# shellcheck source=lib/async-span.sh disable=SC1091  # runtime-resolved beside this file
+. "${BASH_SOURCE[0]%/*}/lib/async-span.sh" 2>/dev/null && async_span_begin pre-session-validate
 
 # === SETTINGS MODEL PORTABILITY GUARD (2026-06-11) ===
 # `/model <X>` "saved as default" writes "model" into the LAUNCHING account's own

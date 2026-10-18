@@ -215,6 +215,10 @@ cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)
 # telemetry ever = a pane that came up and never rendered (D8 trigger 1), which the telemetry-spined
 # board renders as ABSENCE — and absence is silent.
 sid=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
+# START/END IDL rows: an async hook has no visible channel, and a harness kill leaves no record
+# otherwise (docs/research/startup-hooks-2026-10-18/README.md §2 #22; hooks/lib/async-span.sh).
+# shellcheck source=lib/async-span.sh disable=SC1091  # runtime-resolved beside this file
+. "${BASH_SOURCE[0]%/*}/lib/async-span.sh" 2>/dev/null && async_span_begin session-register "$sid"
 
 acct=$(basename "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" | sed 's/^\.//')
 short="${pane%%-*}"
@@ -605,13 +609,20 @@ reclaim_worker_item() {
 }
 
 # Hard timeout + unconditional exit 0. `wait` on a killed worker returns non-zero; we swallow it.
-register >/dev/null 2>&1 &
-_w=$!
-( sleep "$P8_TIMEOUT"; kill -9 "$_w" 2>/dev/null ) >/dev/null 2>&1 &
-_k=$!
-wait "$_w" >/dev/null 2>&1
-kill -9 "$_k" >/dev/null 2>&1
-wait "$_k" >/dev/null 2>&1
+# The whole pair runs in ONE subshell whose stderr is /dev/null: bash prints a "Killed: 9" job notice
+# for a SIGKILLed job at its NEXT notification point, which can fall outside any per-command
+# redirect, and that notice was 32 of the 53 never-rendered async stderr records per 48 h
+# (docs/research/startup-hooks-2026-10-18/A5-silent-drops.md F8). Inside the subshell the job table
+# dies with it, so no later point in this shell can report either job.
+(
+  register >/dev/null 2>&1 &
+  _w=$!
+  ( sleep "$P8_TIMEOUT"; kill -9 "$_w" 2>/dev/null ) >/dev/null 2>&1 &
+  _k=$!
+  wait "$_w" >/dev/null 2>&1
+  kill -9 "$_k" >/dev/null 2>&1
+  wait "$_k" >/dev/null 2>&1
+) 2>/dev/null
 
 # DETACHED, not waited on. The registration above is waited on because cc-sessions must be able to
 # address this pane immediately; the re-key has no such consumer — reap reads it minutes to hours
