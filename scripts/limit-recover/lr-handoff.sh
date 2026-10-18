@@ -1534,7 +1534,18 @@ lrh_precheck() { # → 0 admitted (token minted) / 6 HELD|REFUSED|PARKED, nothin
     echo "lr-handoff: precheck — LR_ADMIT_MODE=swap with --no-prompt: no capacity probe and no admission token (one claude out, one in; the placer admitted this move before /exit, and the relaunch runs no in-pane gate)" >&2
     lrh_state admitted gate "gate-exempt: swap (no probe, no token; placed_by=${LR_PLACED_BY:--})"
   elif [[ -n "${LR_ADMIT_TOKEN_PATH:-}" ]]; then
-    LRH_ADMIT_TOKEN="$(head -n 1 "$LR_ADMIT_TOKEN_PATH" 2>/dev/null | tr -d '[:space:]' || true)"
+    # THE PATH IS THE TOKEN (lr-wake 2026-10-18, Wave B step 1). The reconciler hands over what
+    # cc_capacity_token_mint PRINTS, which is the token file's own path; line 1 of that file is the
+    # record `issued<TAB>sid<TAB>uid<TAB>terms`. Reading line 1 as a pointer turned the record into
+    # a non-path, so the pane logged `token ABSENT (<record>)`, evaluated the box a second time, and
+    # the real token sat unredeemed and counted in flight for its whole TTL (c2 §2.4, 12+ IDL rows).
+    # The first-line read survives only for a file that is NOT a record of ours for this sid.
+    if command -v _cc_admit_token_shape >/dev/null 2>&1 \
+       && _cc_admit_token_shape "$LR_ADMIT_TOKEN_PATH" "$SID" "$(id -u 2>/dev/null || printf '?')"; then
+      LRH_ADMIT_TOKEN="$LR_ADMIT_TOKEN_PATH"
+    else
+      LRH_ADMIT_TOKEN="$(head -n 1 "$LR_ADMIT_TOKEN_PATH" 2>/dev/null | tr -d '[:space:]' || true)"
+    fi
     if [[ -n "$LRH_ADMIT_TOKEN" ]]; then
       echo "lr-handoff: precheck — admission owned by the caller: token $LRH_ADMIT_TOKEN read from $LR_ADMIT_TOKEN_PATH (no probe, no mint)" >&2
       lrh_state admitted gate "token $LRH_ADMIT_TOKEN (caller-owned, $LR_ADMIT_TOKEN_PATH)"

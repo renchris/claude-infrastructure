@@ -506,7 +506,29 @@ STUB
 }
 
 # ── LR_ADMIT_TOKEN_PATH ───────────────────────────────────────────────────────────────────────
-@test "LR_ADMIT_TOKEN_PATH: the caller's token reaches the launcher and no mint runs" {
+@test "LR_ADMIT_TOKEN_PATH: a REAL minted token IS the token — the pane redeems it (basis token) and in-flight drops to 0" {
+  # The reconciler hands over the path cc_capacity_token_mint PRINTS (lr_recon/admit.py), and the
+  # file at that path is the token record itself. The old fixture wrote a made-up string into the
+  # file, so the defect — reading line 1 of the record as if it held a path — passed for weeks
+  # (docs/research/lr-wake-incident-2026-10-18/c2 §2.4: 12+ `token ABSENT (<record>)` IDL rows).
+  CA="$REPO/scripts/lib/capacity-admit.sh"
+  tok="$(bash -c '. "$1" && cc_capacity_token_mint "$2"' _ "$CA" "$SID")"
+  [ -f "$tok" ]
+  [ "$(bash -c '. "$1" && cc_capacity_tokens_inflight' _ "$CA")" = 1 ]
+  LRH_PRECHECK=on LR_ADMIT_TOKEN_PATH="$tok" fire
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"admission owned by the caller: token $tok"* ]] || false
+  [[ "$output" != *"precheck admitted — admission token"* ]] || false
+  grep -qx "export LR_ADMIT_TOKEN=$(printf '%q' "$tok")" "$(bundle_launcher)"
+  # the pane's redeem, exactly as lr-fire-resume.sh calls it
+  ltok="$(sed -n 's/^export LR_ADMIT_TOKEN=//p' "$(bundle_launcher)")"
+  run env -u CC_ADMIT_GATE bash -c '. "$1" && CC_ADMIT_TOKEN="$2" CC_ADMIT_WANT_SID="$3" cc_capacity_admit lr-fire-resume "resume $3"' \
+    _ "$CA" "$ltok" "$SID"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r 'select(.caller=="lr-fire-resume") | .basis' "$CC_ADMIT_IDL" | tail -n 1)" = token ]
+  [ "$(bash -c '. "$1" && cc_capacity_tokens_inflight' _ "$CA")" = 0 ]
+}
+@test "LR_ADMIT_TOKEN_PATH: a file that is NOT a token record still yields its first line (the legacy pointer form)" {
   printf '  tok-caller-42  \nsecond line\n' > "$BATS_TEST_TMPDIR/token"
   LRH_PRECHECK=on LR_ADMIT_TOKEN_PATH="$BATS_TEST_TMPDIR/token" fire
   [ "$status" -eq 0 ]
