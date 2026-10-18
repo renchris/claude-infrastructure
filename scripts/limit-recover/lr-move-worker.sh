@@ -24,7 +24,8 @@
 # happens before lr-handoff is started. lr-handoff's own holds (probe, last read, dialog) all leave
 # the session alive in its pane and exit 6.
 #
-# Draft carry (W4/W7) is not built: a pane with a draft is held by the plan and by the probe.
+# Draft carry (W2d, 2026-10-18): a `draft` row's box is read; the recycle carries real text unsent
+# into the successor, and a pasted block keeps HELD:draft. LR_MOVE_CARRY_DRAFT=off holds them all.
 # Kill switch LR_MOVE_LANE=off: the worker writes NOTMOVED and touches nothing.
 set -uo pipefail
 
@@ -168,6 +169,37 @@ limited_now() { # → 0 when the session's last assistant record is a limit erro
 limited_stop() { finish NOTMOVED "became-limited: its last record is now a limit error, so it owes a turn this lane does not type; nothing touched. Recover it: cc-lr recover ${SID:0:8}"; }
 limited_now && limited_stop
 
+# W2d. A DRAFT IS CARRIED, NEVER HELD FOR BEING THERE (operator request 2026-10-18). The plan gives a
+# composer-occupied row disposition `draft` (bin/cc-lr) where it used to hold it forever, while
+# `cc-lr switch` and the transplanted recycle already carried drafts. Here, before any slot is held:
+# a [Pasted text #N] block cannot be carried (its content lives only in the session's memory, so a
+# clear destroys it: cc_carry_save rc 3) and keeps HELD:draft; real text is handed to the recycle's
+# own carry (handoff-fire hf_rcy_carry: save text + image bytes, clear with read-back, the watcher
+# retypes it UNSENT in the successor), which lr-handoff's precheck lets through on LRH_CARRY_DRAFT=1.
+# Only a `draft` row is read: no other row touches the terminal from here. Kill switch
+# LR_MOVE_CARRY_DRAFT=off (also in the plan): the precheck holds HELD:draft as before.
+DRAFT_CARRY="" DRAFT_TEXT=""
+MW_TUI_LIB="${LR_MOVE_TUI_LIB:-$LR/../lib/cc-tui.sh}"
+mw_composer() { # → the box, space-stripped (cc_tui_composer's form); rc 1 unreadable
+  local sock
+  [ -f "$MW_TUI_LIB" ] || return 1
+  sock="$(jq -r '.kitty_listen_on // empty' "${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}/$PANE.json" 2>/dev/null || true)"
+  # shellcheck source=/dev/null
+  ( [ -z "$sock" ] || export CC_TERM_KITTY_TO="$sock"; . "$MW_TUI_LIB" >/dev/null 2>&1 && cc_tui_composer "$PANE" )
+}
+draft_gate() { # → returns with DRAFT_CARRY set (or not); finishes HELD:draft for a pasted block
+  local c
+  c="$(mw_composer)" || { ev draft "the box could not be read; the recycle's probe decides"; return 0; }
+  [ -n "$c" ] || { ev draft "the box is empty now; a plain move"; return 0; }
+  case "$c" in
+    *'[Pastedtext#'[0-9]*)
+      finish NOTMOVED "HELD:draft — its box holds a pasted block ([Pasted text #N]) whose content lives only in the session's memory, so clearing it would destroy it; nothing touched" ;;
+  esac
+  DRAFT_CARRY=1 DRAFT_TEXT="$c"
+  ev draft-carry "${#c} chars; the recycle saves and clears it and retypes it unsent in the successor"
+}
+if [ "$DISP" = draft ] && [ "${LR_MOVE_CARRY_DRAFT:-on}" != off ]; then draft_gate; fi
+
 # W2c. THE LOAD PRECHECK (R7, docs/plans/LIMIT_RECOVER_SELF_INPLACE.md § W0). handoff-fire holds
 # every resume recycle, which a move always is, when load per core is above its bound (the F1 guard:
 # /exit typed at ~45 runnable per core stranded pane 44, 2026-10-09). That hold sits AFTER
@@ -294,6 +326,17 @@ done
 # Every other hold (busy, draft, load, wedged, anything after a confirm) is final as before.
 # LR_MOVE_UNREACHABLE_RETRIES=0 restores the old behaviour (one attempt).
 SOCK="$(jq -r '.kitty_listen_on // empty' "${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}/$PANE.json" 2>/dev/null || true)"
+# A carried draft (W2d) is read once more with the slot held: a box that changed while this row
+# queued is somebody typing, and it is never moved mid-typing. The recycle's carry re-checks the same
+# thing at its own save (hf_rcy_carry: saved ≠ held ⇒ refuse). The three variables: the precheck's
+# pass (LRH_CARRY_DRAFT), no 180 s draft wait at the recycle's composer gate for a box already read
+# stale (CC_RECYCLE_DRAFT_WAIT=0), and the stale vouch that lifts the carry's focus refusal
+# (HF_RCY_CARRY_STALE).
+if [ -n "$DRAFT_CARRY" ]; then
+  _mw_now="$(mw_composer)" || _mw_now=""
+  [ "$_mw_now" = "$DRAFT_TEXT" ] \
+    || finish NOTMOVED "HELD:draft — its box changed after it was read for the carry, so someone may be typing; nothing touched"
+fi
 attempt=1
 while :; do
   HLOG="$BDIR/$SID.handoff.log"; [ "$attempt" -eq 1 ] || HLOG="$BDIR/$SID.handoff.$attempt.log"
@@ -305,6 +348,7 @@ while :; do
       LR_WAKE_GUARD_S=30 LR_INPLACE_AWAIT=0 LR_PLACED_BY=cc-lr-move LR_ASSIGN_ID="$BATCH" \
       CLAUDE_CODE_DISABLE_AGENT_VIEW=1 HF_ENGAGE_BY_PROCESS=1 LR_ADMIT_MODE=swap LR_SEGMENT_PCT=90 \
       ${LR_MOVE_PRESEEDED:+LR_PRESEED_DONE=1} ${SOCK:+CC_TERM_KITTY_TO="$SOCK"} \
+      ${DRAFT_CARRY:+LRH_CARRY_DRAFT=1 CC_RECYCLE_DRAFT_WAIT=0 HF_RCY_CARRY_STALE=1} \
       /bin/bash "$HANDOFF" --sid "$SID" --config-dir "$SRC_CFG" --cwd "$CWD" --target "$TO" --launch --in-place \
         --source-pane "$PANE" --record-id "$REC" --attempt "$attempt" \
         --voluntary --operator-intent "$BDIR/intent/$SID.json" --no-prompt --no-replace \

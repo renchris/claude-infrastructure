@@ -4941,6 +4941,10 @@ hf_rcy_carry_eligible() { # → 0 this held composer may be carried · 1 not (HF
     || { HF_RCY_CARRY_WHY="only a transplanted remote recycle carries the prompt box, and this is not one"; return 1; }
   hf_rcy_carry_libs || { HF_RCY_CARRY_WHY="the carry library is not reachable ($HF_RCY_TUI, $HF_RCY_CARRY)"; return 1; }
   hf_rcy_carry_retired && return 0
+  # THE CALLER VOUCHES THE BOX IS STALE (2026-10-18): the move worker sets HF_RCY_CARRY_STALE=1 only
+  # after reading it unchanged for LR_MOVE_DRAFT_STALE_S (lr-move-worker.sh W2d), so focus no longer
+  # means mid-typing. hf_rcy_carry still refuses a box that changes while it is saved.
+  [ "${HF_RCY_CARRY_STALE:-0}" != 1 ] || return 0
   # A focused live source may be mid-typing: refuse as before.
   [ "$(hf_pane_focused "$SID")" != yes ] || { HF_RCY_CARRY_WHY="the source is live and focused, so someone may be typing in it"; return 1; }
 }

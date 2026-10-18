@@ -1256,7 +1256,16 @@ cl_move_rows() { # <from or ""> <to> <until_idle_s> <sel flag or ""> <sel value>
       mid-turn|subagents-in-flight|composer-unknown)
         if [ "$until_s" -gt 0 ]; then disp="wait:$d" act=wait action="waits until idle (<= ${until_s}s), then restarts on $to"
         else disp="hold:$d" action="busy now; --until-idle S waits for it"; fi ;;
-      composer-occupied) disp=hold:draft action="a draft is in its composer; drafts are not carried" ;;
+      composer-occupied)
+        # A DRAFT IS CARRIED, NOT HELD (operator request 2026-10-18): `switch` and the transplanted
+        # recycle already carried one while the move lane held it forever. The worker waits until the
+        # box has sat unchanged LR_MOVE_DRAFT_STALE_S, clears junk, and has the recycle save, clear and
+        # retype a real draft UNSENT in the successor. LR_MOVE_CARRY_DRAFT=off restores the hold.
+        if [ "${LR_MOVE_CARRY_DRAFT:-on}" != off ]; then
+          disp=draft act=move action="a draft is in its composer; moves once the box sits unchanged ${LR_MOVE_DRAFT_STALE_S:-120}s, the draft retyped unsent on $to"
+        else
+          disp=hold:draft action="a draft is in its composer; drafts are not carried (LR_MOVE_CARRY_DRAFT=off)"
+        fi ;;
       retired-source)
         # A FORWARD HUSK IS NOT A STALE MARKER (2026-10-10, 186452ed): repair-markers rightly KEEPs a
         # tombstone that names where the session went, so naming it here made a refusal loop.

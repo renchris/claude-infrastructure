@@ -102,6 +102,8 @@
 # claude, a session that died on something other than a limit, a teammate, or a box with no
 # capacity. On 6 nothing has moved: no lock, no tombstone, no keystroke, and the state is in the
 # run's events.jsonl. LRH_PRECHECK=off skips it (and restores the previous ordering verbatim).
+# A held draft is not refused when the caller set LRH_CARRY_DRAFT=1 on an --in-place move (the move
+# worker, after proving the box stale): the recycle carries it unsent into the successor instead.
 set -euo pipefail
 
 # ---- PANE-SPAWN LOG (item 1467ea1dad4f) --------------------------------------------------------
@@ -1441,6 +1443,17 @@ lrh_precheck() { # → 0 admitted (token minted) / 6 HELD|REFUSED|PARKED, nothin
     lrh_foc="$(printf '%s\n' "$out" | sed -n 's/^focused: //p' | tail -1)"
     lrh_idle="$(printf '%s\n' "$out" | sed -n 's/^hid_idle_s: //p' | tail -1)"
     lrh_state probed focus "focused=${lrh_foc:-unread} hid_idle_s=${lrh_idle:-unread} verdict=${state:-none}"
+    # A DRAFT THE CALLER WILL CARRY (operator request 2026-10-18). The move worker sets
+    # LRH_CARRY_DRAFT=1 only after it read the box unchanged for LR_MOVE_DRAFT_STALE_S and found no
+    # pasted block in it; the recycle's own carry arm then saves, clears (read-back) and retypes it
+    # unsent in the successor (handoff-fire hf_rcy_carry). HELD:draft is the probe's LAST read
+    # (step 5, after its bg-work, focus and shell-root lines), so nothing it would also have
+    # refused is skipped. Every other hold still refuses here.
+    if [[ $rc -ne 0 && "$state" == HELD:draft && "${LRH_CARRY_DRAFT:-0}" == 1 && $IN_PLACE -eq 1 ]]; then
+      echo "lr-handoff: precheck — HELD:draft, and the caller vouches the box is stale (LRH_CARRY_DRAFT=1): the recycle carries it into the successor's box, unsent" >&2
+      lrh_state probed precheck "draft carried: HELD:draft passed by LRH_CARRY_DRAFT=1"
+      rc=0
+    fi
     if [[ $rc -ne 0 ]]; then
       echo "lr-handoff: PRECHECK ${state:-REFUSED:unknown} — NOTHING has been transplanted, no lock and no tombstone were written, and the source session is untouched." >&2
       lrh_state "${state%%:*}" precheck "${state:-REFUSED:unknown}"
