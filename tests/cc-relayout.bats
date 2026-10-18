@@ -323,3 +323,37 @@ sys.exit(0 if got == want else 1)' "$KLOG.spec"
   [ "$status" -eq 0 ]
   echo "$output" | grep -qxF "cc-relayout: plan rec_os=3 rec_tab=0 -> tab 10 tree=H(11,V(13,14))"
 }
+
+@test "12. a recorded tab with no live tab to land in gets a NEW FULLSCREEN OS window, never a tab (operator rule: no tabs)" {
+  # Deliberate behaviour change (lr-wake incident 2026-10-18, REPORT §4 Wave D). Recorded: ONE OS
+  # window with TWO tabs, [A B] and [C]. Live: A and B in tab 10 of OS window 1, C in OS window 2.
+  # Before the change the second recorded tab came back as `launch --type=tab` into OS window 1: a
+  # hidden tab. Now it is a fullscreen OS window of its own, and C moves into it.
+  R="$BATS_TEST_TMPDIR/rec2tab"; mkdir -p "$R"
+  printf '%s\n' '[{"id": 7, "platform_window_id": 7007, "tabs": [{"id": 3, "layout": "splits", "layout_state": {"class": "Splits", "pairs": {"one": 40, "two": 50}, "all_windows": {"window_groups": [{"id": 40, "window_ids": [4]}, {"id": 50, "window_ids": [5]}]}}, "windows": [{"id": 4, "cwd": "/work/a"}, {"id": 5, "cwd": "/work/b"}]}, {"id": 4, "layout": "splits", "layout_state": {"class": "Splits", "pairs": {"one": 60}, "all_windows": {"window_groups": [{"id": 60, "window_ids": [6]}]}}, "windows": [{"id": 6, "cwd": "/work/c"}]}]}]' > "$R/hb.kitty-ls.json"
+  cp "$FIXD/hb.roster.json" "$R/hb.roster.json"
+  # this stub's launch makes the placeholder exist in the next `ls`, as kitty would
+  cat > "$CC_TERM_KITTY" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "$KLOG"
+case "$4" in
+  ls) cat "$KLS" ;;
+  launch) python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+d.append({"id": 3, "platform_window_id": 603, "tabs": [{"id": 30, "layout": "splits", "layout_state": {"class": "Splits", "pairs": {"one": 901}, "all_windows": {"window_groups": [{"id": 901, "window_ids": [901]}]}}, "windows": [{"id": 901, "pid": 1901, "cwd": "/", "cmdline": ["/bin/sleep", "600"]}]}]})
+json.dump(d, open(sys.argv[1], "w"))' "$KLS"; echo 901 ;;
+esac
+exit 0
+SH
+  run "$SUBJ" --to "$TO" --tree "$R/hb.kitty-ls.json"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qF "cc-relayout: plan rec_os=7 rec_tab=1 -> new-os-window tree=" || { echo "$output"; false; }
+  [ -z "$(changes)" ]
+  run "$SUBJ" --to "$TO" --tree "$R/hb.kitty-ls.json" --apply
+  grep -qxF "@ --to $TO launch --keep-focus --type=os-window --os-window-state=fullscreen /bin/sleep 600" "$KLOG" || { cat "$KLOG"; false; }
+  ! grep -q -- '--type=tab' "$KLOG" || false
+  grep -qxF "@ --to $TO detach-window --match id:21 --target-tab id:30" "$KLOG"
+  # the placeholder leaves an os-window spawn row, never a tab row
+  [ "$(jq -r 'select(.pane == "901") | .surface' "$CC_SPAWN_LOG_FILE")" = os-window ]
+}

@@ -21,8 +21,10 @@ HOW, in order:
      command line (the resume engine takes the sid as an argument);
   2. each recorded tab, its panes now live, gets a live tab: the one already holding most of them
      (in the live OS window holding most of that recorded window's panes); a tab with none of
-     them gets a new tab in that window, or a new OS window, opened on a placeholder pane this
-     tool closes again once the panes have arrived;
+     them gets a NEW FULLSCREEN OS WINDOW (its own Space), opened on a placeholder pane this tool
+     closes again once the panes have arrived. Never a new tab: the operator rule is no kitty tabs,
+     ever (lr-wake incident 2026-10-18, REPORT §4 Wave D) — before that change a recorded second tab
+     came back as a hidden tab;
   3. immediately before EACH pane it removes from a window (a move, or closing a placeholder) it asks
      bin/kitty-fullscreen-guard (--scope pane), and acts only on exit 0. Removing the last pane of a
      native-fullscreen window is what crashed kitty 0.48.2 on 2026-10-15
@@ -213,7 +215,8 @@ def guard(to, wid, mode):
 
 def plan(rec, data, sid_of_wid):
     """Each recorded tab with live panes → (tree of live window ids, target live tab id or a
-    ('new-tab', os window) / ('new-os-window',) marker)."""
+    ('new-os-window',) marker). There is no new-tab marker: a recorded tab that has no live tab
+    to land in gets its own fullscreen OS window."""
     wid_of = {s: w for w, s in sid_of_wid.items()}
     win = windows(data)
     used_os, used_tab, out = {}, set(), []
@@ -242,7 +245,7 @@ def plan(rec, data, sid_of_wid):
         if tcount:
             target = sorted(tcount, key=lambda t: (-tcount[t], t))[0]
         else:
-            target = ("new-tab", los) if los is not None else ("new-os-window",)
+            target = ("new-os-window",)
         if isinstance(target, int):
             used_tab.add(target)
             # A recorded shell pane is never moved, but one already in the target tab with the
@@ -356,15 +359,12 @@ def main(argv):
                 continue
             tgt = s["target"]
             if not isinstance(tgt, int):
-                # a tab to hold them, opened only now that one may move: a placeholder pane opens
-                # it, and is closed once they are in
-                if tgt[0] == "new-tab":
-                    anchor = next(x for x in sorted(now) if now[x][0] == tgt[1])
-                    rc, out, err = k("launch", "--keep-focus", "--type=tab", "--match", "window_id:%d" % anchor, "/bin/sleep", "600")
-                    surface = "tab"
-                else:
-                    rc, out, err = k("launch", "--keep-focus", "--type=os-window", "/bin/sleep", "600")
-                    surface = "os-window"
+                # a fullscreen OS window to hold them, opened only now that one may move: a
+                # placeholder pane opens it, and is closed once they are in (through the guard, so
+                # it is never closed as the last pane of a fullscreen window)
+                rc, out, err = k("launch", "--keep-focus", "--type=os-window", "--os-window-state=fullscreen",
+                                 "/bin/sleep", "600")
+                surface = "os-window"
                 if not out.strip().isdigit():
                     die("could not open a %s for rec_os=%s: %s" % (surface, s["rec_os"], err.strip()), 1)
                 ph = int(out.strip())
