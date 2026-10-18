@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """cc-relogin — unattended OAuth re-authentication for ONE Claude Max account.
 
-Re-auths an account that genuinely needs it, never racing a live Claude Code session (a
-relogin that rotates the token out from under a running CC has its rotation discarded —
-and a discarded rotation IS a logout). Two phases, cheapest first:
+Re-auths an account that genuinely needs it, preferring a moment with no live Claude Code
+session (a relogin that rotates the token out from under a running CC has its rotation
+discarded — and a discarded rotation IS a logout). The preference has a deadline: once the
+login is within relogin_live_ok_h (144h) of its wall, live sessions no longer defer it and the
+renewal runs browser-only, skipping phase 1's rotation (see LIVE_OK_H_DEFAULT). When ps fails,
+the row's native census (k_native) stands in. Two phases, cheapest first:
   phase 1  headless refresh grant via `claude auth login` (browser-free). Does NOT move
            the ~30-day login deadline, so it never substitutes for phase 2.
   phase 2  browser OAuth over CDP in the account's dedicated Chrome profile
@@ -117,6 +120,33 @@ ACCOUNTS_JSON = _env("CLAUDE_ACCOUNTS_JSON", os.path.join(HOME, ".claude", "acco
 # be the WIDER window, because the narrow one is the bug, and every real safety gate that follows
 # (k==0, the heal lock, verify-by-effect) is untouched by this number.
 RENEW_WINDOW_H_DEFAULT = 168.0
+
+
+# k==0 is a PREFERENCE WITH A DEADLINE, not a gate (weekly-strand post-mortem 2026-10-18 §4 item 4).
+# Inside the renewal window a live session still defers the attempt, but only until the login is
+# within LIVE_OK_H of its wall; past that the renewal runs with sessions live, browser leg only.
+# Measured that week on `next`: cc-relogin-poll logged 181 "SKIP next k=3 (>0)" rows from
+# 2026-10-15T05:02Z and its first ATTEMPT came ~27h later; all 8 automatic attempts failed (k never
+# reached 0, ps failed, or timed out). The renewal that finally landed, 2026-10-17T23:27:59Z, did
+# so with 15 sessions live (auth-timeseries.jsonl:62633) and logged nobody out — while the login
+# cliff kept the account's routing at x0.25 for ~67h. 144h leaves 24 hourly k==0 chances first.
+# Read from the SSOT (accounts.json relogin_live_ok_h) beside relogin_trigger_h, which
+# cc-relogin-poll reads too; CC_RELOGIN_LIVE_OK_H overrides. Malformed => the default.
+LIVE_OK_H_DEFAULT = 144.0
+
+
+def _live_ok_h() -> float:
+    """The login_expires_h at/below which live sessions no longer defer a renewal."""
+    raw = os.environ.get("CC_RELOGIN_LIVE_OK_H")
+    try:
+        if raw:
+            v = float(raw)
+        else:
+            with open(ACCOUNTS_JSON) as f:
+                v = float(json.load(f).get("relogin_live_ok_h", LIVE_OK_H_DEFAULT))
+        return v if v >= 0 else LIVE_OK_H_DEFAULT
+    except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
+        return LIVE_OK_H_DEFAULT
 
 
 def _ssot_renew_window_h() -> float:
@@ -287,6 +317,67 @@ def live_sessions(config_dir: str) -> int:
         if d == target or (mirrors_default and d == default_dir):
             n += 1
     return n
+
+
+def session_count(info: dict[str, Any], row: dict[str, Any]) -> tuple[int, str]:
+    """-> (k, source). ps first; when ps fails, the native census claude-accounts already put on
+    the row (`k_native`) — the count the router itself routes on. -1 only when both are blind.
+    The fallback can lag by one census pass, and it can only matter past the live-ok deadline or
+    when it reads 0; reading 0 it lets the k==0 path run exactly as a clean ps would."""
+    k = live_sessions(info.get("config_dir", ""))
+    if k >= 0:
+        return k, "ps"
+    n = row.get("k_native")
+    if isinstance(n, int) and not isinstance(n, bool) and n >= 0:
+        return n, "k_native (ps failed)"
+    return -1, "unknown (ps failed, no k_native on the row)"
+
+
+def live_deadline(row: dict[str, Any]) -> tuple[bool, str]:
+    """-> (live sessions may no longer defer the renewal, why). Unknown expiry keeps the
+    preference unless the login has already expired (nothing left for a live session to lose)."""
+    lim = _live_ok_h()
+    if row.get("login_expired") is True:
+        return True, "login already expired"
+    h = row.get("login_expires_h")
+    if isinstance(h, (int, float)) and not isinstance(h, bool):
+        if h <= lim:
+            return True, f"login_expires_h={h:g} <= live-ok deadline {lim:g}h"
+        return False, f"preferring a k==0 window until T-{lim:g}h (login_expires_h={h:g})"
+    return False, f"preferring a k==0 window (login_expires_h unknown; live-ok deadline {lim:g}h)"
+
+
+def refresh_router_cache(acct: str, want_at: Any) -> dict[str, Any]:
+    """After a PROVEN renewal, make the ROUTER see it now, and say whether it does.
+
+    The login cliff's x0.25 is computed from the shared cache's login_expires_at, and a renewal
+    the cache has not folded in keeps the penalty: on 2026-10-17 the keychain carried the new
+    stamp at 23:27:59Z (auth-timeseries) while desk routes at 23:37:50Z and 23:47:18Z still scored
+    next at 0.25 off cached rows (route.jsonl:5162, :5164). verify()'s --fresh sweep already
+    commits the cache; this adds the 20 s local pass (--local-refresh, the designed fold-in of a
+    keychain change) and then reads the cache back cache-only, as a router would, so the log says
+    which world routing is in. Best-effort: the renewal is proven either way."""
+    res: dict[str, Any] = {"want_login_expires_at": want_at}
+    try:
+        rc, _out, _err = accounts_run(["--local-refresh"], timeout=90.0)
+        res["local_refresh_rc"] = rc
+        rc, out, _err = accounts_run(["--json", "--no-heal", "--max-wait", "0",
+                                      "--max-age", "600"], timeout=60.0)
+        rows = json.loads(out).get("rows", [])
+        got = next((r.get("login_expires_at") for r in rows
+                    if isinstance(r, dict) and r.get("acct") == acct), None)
+    except (Bail, ValueError, AttributeError) as exc:
+        res["verdict"] = "unreadable"
+        log(f"{acct} router-cache UNREADABLE after renewal :: {getattr(exc, 'detail', exc)}")
+        return res
+    res["cache_login_expires_at"] = got
+    d = deadline_delta_h(want_at, got)
+    fresh = d is not None and abs(d) < 1.0
+    res["verdict"] = "fresh" if fresh else "stale"
+    log(f"{acct} router-cache {'FRESH' if fresh else 'STALE'} after renewal :: cache "
+        f"login_expires_at={got} renewed={want_at}"
+        + ("" if fresh else " — routing keeps the old cliff until the next sweep folds it in"))
+    return res
 
 
 def need_relogin(row: dict[str, Any], info: dict[str, Any]) -> tuple[bool, str]:
@@ -896,10 +987,14 @@ def run(acct: str, o: argparse.Namespace, state: dict[str, Any]) -> int:
     if not need:
         raise Bail(EXIT_REFUSED, f"no re-auth needed — {why}")
     dbg(f"need: {why}")
-    k = live_sessions(info.get("config_dir", ""))
-    if k != 0:
-        raise Bail(EXIT_REFUSED, f"{k} live session(s) — CC owns the token lifecycle" if k > 0
-                   else "live-session count UNKNOWN (ps failed) — refusing")
+    # k==0 is preferred, not required, once the login is inside LIVE_OK_H (see LIVE_OK_H_DEFAULT).
+    k, ksrc = session_count(info, row)
+    live_ok, lwhy = live_deadline(row)
+    state.update(k=k, k_src=ksrc, live_ok=live_ok)
+    if k != 0 and not live_ok:
+        raise Bail(EXIT_REFUSED, (f"{k} live session(s) [{ksrc}] — CC owns the token lifecycle; "
+                                  f"{lwhy}") if k > 0
+                   else f"live-session count UNKNOWN ({ksrc}) — refusing; {lwhy}")
     lock_path = os.path.join(TMP, f"claude-accounts-heal-{acct}.lock")
     lock = open(lock_path, "w")
     try:
@@ -911,11 +1006,19 @@ def run(acct: str, o: argparse.Namespace, state: dict[str, Any]) -> int:
         # Re-check liveness UNDER the lock: the snapshot above is already stale by the time we
         # hold the lock, and a relogin racing a running CC has its rotation discarded — which
         # IS a logout. Mirrors claude-accounts heal() (bin/claude-accounts:369-416).
-        k = live_sessions(info.get("config_dir", ""))
-        if k != 0:
-            raise Bail(EXIT_REFUSED, f"a session appeared under the lock (k={k}) — "
+        k, ksrc = session_count(info, row)
+        if k != 0 and not live_ok:
+            raise Bail(EXIT_REFUSED, f"a session appeared under the lock (k={k}, {ksrc}) — "
                                      "CC owns the token lifecycle")
+        state.update(k=k, k_src=ksrc)
         blocked = phase1_blocked(info, row)
+        if k != 0:
+            # The LIVE renewal: browser leg only. A phase-1 refresh grant rotates the very token
+            # the live sessions hold (a discarded rotation IS a logout) and cannot move the login
+            # wall anyway, so with sessions live it buys risk and nothing else.
+            log(f"{acct} LIVE-RENEW k={k} ({ksrc}) — {lwhy}; phase 1 skipped")
+            blocked = (f"k={k} live session(s): a refresh grant would rotate the token they hold "
+                       f"({lwhy})")
         state["plan"] = [f"phase1: SKIP ({blocked})" if blocked
                          else "phase1: headless refresh grant (claude auth login)",
                          "phase2: SKIP (--no-browser)" if o.no_browser
@@ -932,6 +1035,8 @@ def run(acct: str, o: argparse.Namespace, state: dict[str, Any]) -> int:
             if claimed:
                 ok, vdetail, state["after"] = verify(acct, before)
                 if ok:
+                    state["router_cache"] = refresh_router_cache(
+                        acct, state["after"].get("login_expires_at"))
                     return emit(state, EXIT_PROVEN,
                                 f"phase 1 headless refresh PROVEN — {vdetail}", "verify", as_json)
                 if o.no_browser:
@@ -951,6 +1056,8 @@ def run(acct: str, o: argparse.Namespace, state: dict[str, Any]) -> int:
         if code != EXIT_PROVEN:
             return emit(state, code, detail, "phase2", as_json)
         ok, vdetail, state["after"] = verify(acct, before)
+        if ok:
+            state["router_cache"] = refresh_router_cache(acct, state["after"].get("login_expires_at"))
         return emit(state, EXIT_PROVEN if ok else EXIT_UNVERIFIED,
                     (f"phase 2 browser OAuth PROVEN — {vdetail}" if ok else
                      f"phase 2 reported success but the effect check failed — {vdetail}"),

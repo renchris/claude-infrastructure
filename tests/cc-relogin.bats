@@ -74,6 +74,9 @@ fi
 if [[ "$*" == *--fresh* ]]; then
   n=$(bump fresh); p="$FIX/fresh.$n.json"; [ -f "$p" ] || p="$FIX/fresh.json"; cat "$p"; exit 0
 fi
+# The post-renewal router-cache fold-in: the local pass, then a cache-only read (cache.json).
+if [[ "$*" == *--local-refresh* ]]; then echo "local: ok"; exit 0; fi
+if [[ "$*" == *--max-wait* ]] && [ -f "$FIX/cache.json" ]; then cat "$FIX/cache.json"; exit 0; fi
 exit 1
 STUB
 
@@ -1003,4 +1006,74 @@ PY
 @test "exit 7 CONSENT-GATE is retained for consumers but no code path emits it" {
   [ "$(grep -c 'EXIT_CONSENT_GATE' "$C")" -eq 1 ]     # the definition only — never passed to emit()
   grep -q '7: "consent-gate"' "$C"
+}
+
+# ---- k==0 is a preference with a deadline (post-mortem 2026-10-18 §4 item 4) ---------------------
+# 2026-10-15/16 on next: 181 poller SKIPs at k=3, a first attempt ~27h in, 8 attempts all failed, and
+# the renewal that landed (2026-10-17T23:27:59Z) did so with 15 sessions live while the login cliff
+# held routing at x0.25. Past relogin_live_ok_h (144h) live sessions no longer defer the renewal.
+mk_fresh_k() { # <n|all> <login_expires_h> <k_native>
+  local f="$D/fresh.$1.json"; [ "$1" = all ] && f="$D/fresh.json"
+  cat > "$f" <<JSON
+{"window":{},"cached":false,"rows":[{"acct":"next3","email":"e@example.test","launcher":"claude3",
+ "k":null,"k_native":$3,"auth":"ok","login_expires_at":"2026-08-01T00:00:00Z","login_expires_h":$2}]}
+JSON
+}
+
+@test "live-ok: past the deadline k>0 passes the gate and plans the browser leg only, phase 1 skipped" {
+  mk_info all true; mk_creds; mk_fresh_k all 60 0; ps_live 1; ps_live 2
+  run "$C" next3 --dry-run --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq -r .result)" = "dry-run" ]
+  echo "$output" | jq -e '.k == 1 and .k_src == "ps" and .live_ok == true' >/dev/null
+  echo "$output" | jq -e '.plan[0] | test("^phase1: SKIP \\(k=1 live session")' >/dev/null
+  grep -q 'LIVE-RENEW k=1 (ps)' "$CC_RELOGIN_LOG"
+  [ ! -f "$D/claude-calls" ]
+}
+
+@test "live-ok: before the deadline k>0 still refuses, naming the preference and its deadline" {
+  mk_info all true; mk_creds; mk_fresh_k all 60 0; ps_live 1
+  run env CC_RELOGIN_LIVE_OK_H=40 "$C" next3
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q 'preferring a k==0 window until T-40h'
+  [ ! -f "$D/claude-calls" ]
+}
+
+@test "live-ok: with sessions live, --no-browser is HEADLESS-EXHAUSTED and never runs phase 1" {
+  mk_info all true; mk_creds; mk_fresh_k all 60 0; ps_live 1; ps_live 2
+  run "$C" next3 --no-browser
+  [ "$status" -eq 3 ]
+  echo "$output" | grep -q 'would rotate the token they hold'
+  [ ! -f "$D/claude-calls" ]
+}
+
+@test "ps failed: the row's k_native stands in — 0 opens the k==0 path, >0 is a counted refusal" {
+  mk_info all true; mk_creds; mk_fresh_k all 60 0
+  run env CC_RELOGIN_PS_BIN="$D/no-such-ps" CC_RELOGIN_LIVE_OK_H=40 "$C" next3 --dry-run --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.k == 0 and .k_src == "k_native (ps failed)"' >/dev/null
+  mk_fresh_k all 60 3
+  run env CC_RELOGIN_PS_BIN="$D/no-such-ps" CC_RELOGIN_LIVE_OK_H=40 "$C" next3
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q '3 live session(s) \[k_native (ps failed)\]'
+}
+
+@test "a PROVEN renewal folds into the router cache and logs which world routing is in" {
+  mk_info all true; mk_creds
+  mk_fresh 1 logged-out "2026-08-01T00:00:00Z"
+  mk_fresh 2 ok         "2026-09-01T00:00:00Z"
+  echo '{"rows":[{"acct":"next3","login_expires_at":"2026-09-01T00:00:00Z"}]}' > "$D/cache.json"
+  run "$C" next3 --json
+  [ "$status" -eq 0 ]
+  grep -q -- '--local-refresh' "$D/accounts-calls"
+  grep -q -- '--max-wait 0' "$D/accounts-calls"
+  echo "$output" | jq -e '.router_cache.verdict == "fresh"' >/dev/null
+  grep -q 'router-cache FRESH' "$CC_RELOGIN_LOG"
+  # control: a cache still holding the pre-renewal stamp is reported STALE, and the renewal stands
+  rm -f "$D"/n-* "$D/accounts-calls"
+  echo '{"rows":[{"acct":"next3","login_expires_at":"2026-08-01T00:00:00Z"}]}' > "$D/cache.json"
+  run "$C" next3 --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.router_cache.verdict == "stale"' >/dev/null
+  grep -q 'router-cache STALE' "$CC_RELOGIN_LOG"
 }

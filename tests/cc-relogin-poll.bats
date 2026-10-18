@@ -407,7 +407,7 @@ attempts() { jq -r '.attempts' "$CC_RELOGIN_POLL_STATE_DIR/relogin-poll-$1.json"
 }
 
 @test "k>0 skips the doomed invocation and does NOT burn an attempt" {
-  mk next3 100 3
+  mk next3 160 3        # inside the T-7d window, still before the T-144h live-ok deadline
   build json
   run "$P" --json
   [ "$status" -eq 0 ]
@@ -440,7 +440,7 @@ attempts() { jq -r '.attempts' "$CC_RELOGIN_POLL_STATE_DIR/relogin-poll-$1.json"
 }
 
 @test "ladder 1 — k for the pre-filter is resolved even though the TSV has no k column" {
-  mk next3 100 4
+  mk next3 160 4
   build ls
   run "$P" --json
   [ "$status" -eq 0 ]
@@ -1291,4 +1291,39 @@ hg_state() { jq -r "$1" "$CC_RELOGIN_POLL_STATE_DIR/relogin-poll-next3.json"; }
   local h; for h in 4 9 14 19; do hg_tick 6 "$h"; done
   [ "$(ncalls)" -eq 1 ] || false
   grep -q 'SKIP-HUMAN-GATED next3' "$CC_RELOGIN_POLL_LOG" || false   # gated, NOT merely busy-skipped
+}
+
+# ── k==0 is a preference with a deadline (post-mortem 2026-10-18 §4 item 4) ─────────────────────
+# 2026-10-15/16 on next: 181 "SKIP next k=3" rows, first ATTEMPT ~27h in, while the login cliff held
+# its routing at x0.25; the renewal that finally landed did so with 15 sessions live.
+
+@test "live-ok deadline: k>0 inside T-144h is ATTEMPTED and counted, and the log says LIVE" {
+  mk next3 100 3
+  build json
+  run "$P" --json
+  [ "$status" -eq 0 ]
+  [ "$(ncalls)" -eq 1 ] || false
+  [ "$(attempts next3)" -eq 1 ] || false
+  json | jq -e '.action=="invoked" and .k=="3"' >/dev/null || false
+  grep -q 'ATTEMPT #1 next3 .* k=3 LIVE' "$CC_RELOGIN_POLL_LOG" || false
+}
+
+@test "live-ok deadline is tunable: CC_RELOGIN_LIVE_OK_H=0 keeps the k==0 preference to the wall" {
+  mk next3 100 3
+  build json
+  run env CC_RELOGIN_LIVE_OK_H=0 "$P" --json
+  [ "$status" -eq 0 ]
+  [ "$(ncalls)" -eq 0 ] || false
+  json | jq -e '.action=="skipped-busy"' >/dev/null || false
+  grep -q 'SKIP next3 k=3 (>0) — preferring a k==0 window until T-0h' "$CC_RELOGIN_POLL_LOG" || false
+}
+
+@test "a failed ps census (k null) falls back to k_native rather than reading as unknown" {
+  build none
+  jq -nc '{window:{},cached:false,rows:[{acct:"next3",k:null,k_native:3,launcher:"claude3",
+           login_expires_at:"'"$(iso_in_h 160)"'",login_expired:false,login_fixable:true}]}' > "$D/fresh.json"
+  run "$P" --json
+  [ "$status" -eq 0 ]
+  [ "$(ncalls)" -eq 0 ] || false
+  json | jq -e '.action=="skipped-busy" and .k=="3"' >/dev/null || false
 }

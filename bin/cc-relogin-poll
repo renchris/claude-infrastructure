@@ -353,7 +353,7 @@ if [ "$DETECT" = unavailable ]; then
       # be a second copy of claude-accounts' classifier, free to rot against it.
       ROWS+="$a	$dl	$k	$launcher	$src	-	-"$'\n'
     done < <(printf '%s' "$JS" | jq -r '.rows[]? | select(type=="object") | [(.acct//""),(.login_expires_at//""),
-              ((.login_expires_h // "")|tostring),((.login_expired//false)|tostring),((.k // "")|tostring),(.launcher//"")]
+              ((.login_expires_h // "")|tostring),((.login_expired//false)|tostring),((.k // .k_native // "")|tostring),(.launcher//"")]
               | @tsv' 2>/dev/null | norm 6)
   else
     MISSING="$MISSING + claude-accounts --fresh --json login_expires_at/login_expires_h/login_expired"
@@ -488,10 +488,30 @@ fi
 # ── attempt: k is only a cheap pre-filter; cc-relogin owns the authoritative gate + the lock ──
 # (login-status has no k column, so resolve it from the CACHED sweep — never --fresh, an hourly
 # job must not force an endpoint sweep just to decide whether to skip.)
-[ -n "$K" ] || K="$("$ACCOUNTS_BIN" --no-heal --json 2>/dev/null | jq -r --arg a "$ACCT" '.rows[]? | select(.acct==$a) | (.k // "") | tostring' 2>/dev/null | head -1)"
+# `.k` is null when claude-accounts' ps census failed; the native census (`k_native`) is the count
+# the router itself routes on, so it stands in rather than reading as "unknown" (post-mortem
+# 2026-10-18 §4 item 4: the k=? attempts that week were ps failures with k_native on the row).
+[ -n "$K" ] || K="$("$ACCOUNTS_BIN" --no-heal --json 2>/dev/null | jq -r --arg a "$ACCT" '.rows[]? | select(.acct==$a) | (.k // .k_native // "") | tostring' 2>/dev/null | head -1)"
 # ONLY a positive integer counts as busy. Unknown/garbage k → attempt anyway and let cc-relogin's
 # authoritative gate refuse: an unreadable pre-filter must never become a silent permanent skip.
 case "$K" in ''|0|*[!0-9]*) K_BUSY=0 ;; *) K_BUSY=1 ;; esac
+# k==0 is a PREFERENCE WITH A DEADLINE — cc-relogin's own rule (LIVE_OK_H_DEFAULT there), mirrored
+# so this pre-filter never skips an attempt the executor would take. Inside LIVE_OK_H of a MEASURED
+# deadline, live sessions no longer defer the attempt; cc-relogin then renews browser-only. Measured
+# 2026-10-15/16: 181 "SKIP next k=3" rows and a first ATTEMPT ~27h into the window, while the login
+# cliff held next's routing at x0.25. A `required` row has no measured deadline and keeps the skip.
+# Read only on a busy tick: an idle one never consults it, so it costs that path nothing.
+LIVE_OK_H="${CC_RELOGIN_LIVE_OK_H:-}"
+LIVE_RENEW=0
+if [ "$K_BUSY" = 1 ]; then
+  [ -n "$LIVE_OK_H" ] || LIVE_OK_H="$(jq -r '(.relogin_live_ok_h // empty) | numbers | floor' \
+    "${CLAUDE_ACCOUNTS_JSON:-$HOME/.claude/accounts.json}" 2>/dev/null)"
+  LIVE_OK_H="${LIVE_OK_H%%.*}"
+  case "$LIVE_OK_H" in ''|*[!0-9]*) LIVE_OK_H=144 ;; esac
+  if [ "$DL_KNOWN" = 1 ] && [ "$SECS_LEFT" -le $((LIVE_OK_H * 3600)) ]; then
+    K_BUSY=0; LIVE_RENEW=1
+  fi
+fi
 # TIMED_OUT is declared HERE, not only where the watchdog sets it: every arm below (dry-run,
 # skipped-busy, the attempt) falls through to one --json emitter under `set -u`, so a variable
 # born inside one branch is an unbound-variable abort on the others.
@@ -523,11 +543,11 @@ elif [ "$HG_ACTIVE" = 1 ]; then
   write_state "$S_ATT" "$S_ESC" "skipped-human-gated" "$S_HGAT"
 elif [ "$K_BUSY" = 1 ]; then
   ACTION="skipped-busy"     # NOT an attempt: nothing was invoked, so the attempt cap must not move
-  log "SKIP $ACCT k=$K (>0) — cc-relogin would refuse; deadline=$DL_DISP $T_DISP attempts=$S_ATT"
+  log "SKIP $ACCT k=$K (>0) — preferring a k==0 window until T-${LIVE_OK_H}h; deadline=$DL_DISP $T_DISP attempts=$S_ATT"
   write_state "$S_ATT" "$S_ESC" "skipped-busy" "$S_HGAT"
 else
   S_ATT=$((S_ATT + 1))
-  log "ATTEMPT #$S_ATT $ACCT deadline=$DL_DISP $T_DISP k=${K:-?} → $RELOGIN_BIN $ACCT (child stdout+stderr below)"
+  log "ATTEMPT #$S_ATT $ACCT deadline=$DL_DISP $T_DISP k=${K:-?}$([ "$LIVE_RENEW" = 1 ] && echo " LIVE (inside the T-${LIVE_OK_H}h live-ok deadline; k==0 no longer required)") → $RELOGIN_BIN $ACCT (child stdout+stderr below)"
   # ── the watchdog is a BOUND, not a request ─────────────────────────────────────────────────
   # It used to send TERM and nothing else, while `wait "$cp"` below is unbounded — so TIMEOUT_S
   # bounded exactly one case: a child that dies on a plain TERM. TERM is by definition catchable
