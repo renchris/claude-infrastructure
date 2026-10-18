@@ -1370,3 +1370,31 @@ count_grep_stub() { # → $CG_BIN on PATH; env STUB_INBOX STUB_SEEN STUB_LOG [ST
   [ "$(mailbox_seen "$UUID" 2)" -eq 0 ] || false
   [ "$(mailbox_seen "$UUID")" -eq 0 ] || false
 }
+
+# ── SessionStart wake-nag gate (startup-hooks-2026-10-18 unit 1.5) ───────────────────────────────
+# No session has armed a watcher before its first prompt, so the no-watcher nag at SessionStart was
+# ~166 chars of context on every start that the first prompt repeats anyway. And a crumb that rides
+# alone must not ship under the "No inbox wake path armed." header, which it does not speak for.
+@test "1.5: session-start with an empty inbox and no watcher prints NO wake nag" {
+  run bash -c 'echo "{}" | "$0" session-start' "$DRAIN"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"no watcher armed"* ]] || false
+  [[ "$output" != *"No inbox wake path armed"* ]] || false
+}
+
+@test "1.5: prompt mode still nags when no watcher is armed (unchanged)" {
+  run bash -c 'echo "{}" | "$0" prompt' "$DRAIN"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext' | grep -qF 'No inbox wake path armed.'
+  printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext' | grep -qF 'no watcher armed'
+}
+
+@test "1.5: a crumb alone at session-start ships WITHOUT the no-wake-path header" {
+  sid="deadbeef-0000-0000-0000-00000000ab15"
+  _gi_crumb_setup "$sid"
+  run bash -c "printf '{\"session_id\":\"$sid\",\"transcript_path\":\"$GI_TP\"}' | '$DRAIN' session-start"
+  [ "$status" -eq 0 ]
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  [[ "$ctx" == "🚨 YOUR /goal WAS SKIPPED"* ]] || false
+  [[ "$ctx" != *"No inbox wake path armed"* ]] || false
+}

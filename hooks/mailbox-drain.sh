@@ -523,6 +523,7 @@ if command -v goal_live_condition >/dev/null 2>&1; then
   _goal_cond="$(goal_live_condition "$own_tp" 2>/dev/null)" || _goal_cond=""
 fi
 _hdr="🔔 No inbox wake path armed."
+_hdr_ok=0   # 1 once text the header speaks for was added; else the header is dropped (unit 1.5)
 if [ -n "$_goal_cond" ]; then
   if [ -n "$own_sid" ]; then
     _idlecmd="$HOME/.claude/bin/cc-await-ping --idle-scoped --sid $own_sid"
@@ -537,7 +538,7 @@ if [ -n "$_goal_cond" ]; then
       case "$_wpid" in ''|*[!0-9]*) _wpid="" ;; esac
     fi
     if [ -n "$_wpid" ]; then
-      _hdr="🚨 A parked watcher is holding your LIVE /goal inert."
+      _hdr="🚨 A parked watcher is holding your LIVE /goal inert."; _hdr_ok=1
       nudge="
 (pid $_wpid is a cc-await-ping parked in this session's task registry, and a /goal is LIVE (\"$(printf '%s' "$_goal_cond" | cut -c1-120)\"). Claude Code SKIPS /goal evaluation at every Stop where a non-terminal background Bash exists — restoring the hook afterwards, so nothing ever looks wrong — which means that watcher is silently making your goal inert. It was almost certainly armed BEFORE the goal. End the deferral as your next Bash tool call: cc-await-ping --stand-down
 Use THAT, not 'kill $_wpid'. Auto mode's classifier DENIES a kill aimed at a live session, so the bare-pid form is refused at the tool call and the session is left with a prescription it cannot execute — measured on two consecutive fired sessions, 2026-09-22, both of which reported the deny and correctly declined to re-spell it. '--stand-down' stops THIS inbox's own watchers by pid from their claim files, never by pattern (a pattern kill reaches siblings), and it is the same actuator validate-bash.sh already names when it denies a 'pkill -f cc-await-ping'.
@@ -557,13 +558,16 @@ You lose nothing by standing it down: the goal blocks your stops, so you keep ta
     if [ -n "$_gn_mark" ] && [ -f "$_gn_mark" ]; then
       _gn_mark=""   # already told under THIS goal — nothing to stamp, nothing to say
     else
-      [ "$_headless" = 1 ] || nudge="
-(a /goal is LIVE, so do NOT park the ordinary 4-hour watcher — Claude Code SKIPS /goal evaluation at any Stop where a non-terminal background Bash exists, and that arm would silently disable the goal driving this session. Peer mail still lands at every turn boundary the goal forces, so while you have work you need no watcher at all. If you have NOTHING actionable and are waiting on an external event, arm the idle-scoped awaiter instead — it stands itself down on your next turn, so it defers the goal for exactly as long as you are actually idle: $_idlecmd)"
+      [ "$_headless" = 1 ] || { _hdr_ok=1; nudge="
+(a /goal is LIVE, so do NOT park the ordinary 4-hour watcher — Claude Code SKIPS /goal evaluation at any Stop where a non-terminal background Bash exists, and that arm would silently disable the goal driving this session. Peer mail still lands at every turn boundary the goal forces, so while you have work you need no watcher at all. If you have NOTHING actionable and are waiting on an external event, arm the idle-scoped awaiter instead — it stands itself down on your next turn, so it defers the goal for exactly as long as you are actually idle: $_idlecmd)"; }
     fi
   fi
 else
-  [ "$_watched" = 1 ] || [ "$_headless" = 1 ] || nudge="
-(no watcher armed — before you go idle, run this as a Bash tool call with run_in_background=true, or peer mail will sit unread until someone types at you: $_armcmd)"
+  # Not at SessionStart: no session has armed a watcher before its first prompt, so the nag there is
+  # ~166 chars of certain-to-repeat context on every start; the first prompt says it if still true
+  # (startup-hooks-2026-10-18 §2 #15).
+  [ "$_watched" = 1 ] || [ "$_headless" = 1 ] || [ "$MODE" = session-start ] || { _hdr_ok=1; nudge="
+(no watcher armed — before you go idle, run this as a Bash tool call with run_in_background=true, or peer mail will sit unread until someone types at you: $_armcmd)"; }
 fi
 
 # ── INERT-GOAL BREADCRUMB (2026-09-14) ────────────────────────────────────────────────────────────
@@ -626,6 +630,8 @@ _goalnudge_stamp() {
 if [ -z "$body" ]; then
   [ -z "$nudge" ] && exit 0
   [ "$MODE" = "post-tool" ] && exit 0
+  # A crumb alone must not ship under the "no wake path" header it does not speak for.
+  [ "$_hdr_ok" = 1 ] || { _hdr=""; nudge="${nudge#"${nudge%%[!$'\n']*}"}"; }
   jq -nc --arg e "$EVENT" --arg c "${_hdr}${nudge}" \
     '{hookSpecificOutput:{hookEventName:$e, additionalContext:$c}}' && _goalnudge_stamp
   exit 0
