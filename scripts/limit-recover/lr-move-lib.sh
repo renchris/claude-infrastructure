@@ -35,8 +35,23 @@ lr_move_phys() { # $1=config dir → the physical path of its projects/ (the str
   (cd "$1/projects" 2>/dev/null && pwd -P) || printf '%s/projects' "${1%/}"
 }
 
-lr_session_location() { # $1=sid → one "<config dir>\t<transcript>" per LIVE <sid>.jsonl, one per physical store
-  local sid="$1" c f
+lr_session_location() { # $1=sid [$2=cwd] → one "<config dir>\t<transcript>" per LIVE <sid>.jsonl, one per physical store
+  local sid="$1" cwd="${2:-}" c f slug hits=""
+  # THE KNOWN PATH BEFORE THE GLOB. `projects/*/<sid>.jsonl` walks ~18,200 dirs in each of 4 stores:
+  # 1.0 CPU-s a verdict, and the prove step ran 604-685 s after rc 6 on 2026-10-18 (lr-inplace-
+  # immediacy raw/F § 4). Claude Code writes a transcript at projects/<slug(cwd)>/ — the encoder
+  # lr_team_member uses, every non-alphanumeric byte → `-` — and the move lane relaunches with the
+  # plan row's cwd, so a copy left in the source and the one in the target sit at the same slug.
+  # So with a cwd every store is stat'ed at that slug; any hit answers and NO store is globbed. Only
+  # when no store holds it there (a cwd that changed, a symlinked spelling) does the glob run, in
+  # every store. Kill switch: LR_MOVE_LOCATION_FAST=off globs always.
+  if [ -n "$cwd" ] && [ "$cwd" != - ] && [ "${LR_MOVE_LOCATION_FAST:-on}" != off ]; then
+    slug="$(printf %s "$cwd" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g')"
+    hits="$(lr_config_dirs | while IFS= read -r c; do
+      [ -n "$c" ] && [ -f "$c/projects/$slug/$sid.jsonl" ] && printf '%s\t%s\n' "$c" "$c/projects/$slug/$sid.jsonl"
+    done)"
+    [ -z "$hits" ] || { printf '%s\n' "$hits"; return 0; }
+  fi
   lr_config_dirs | while IFS= read -r c; do
     [ -n "$c" ] || continue
     for f in "$c"/projects/*/"$sid".jsonl; do
@@ -82,12 +97,17 @@ lr_move_holders() { # $1=sid → the DISTINCT live pids holding it (registry row
 lr_move_verdict() { # $1=sid $2=pane $3=source config dir $4=target config dir [$5=batch dir]
   local sid="$1" pane="$2" from="$3" to="$4" bdir="${5:-}" regdir rows holders nh=0 pid="" shape=""
   local r_pane r_pid r_acct row_lst locs nloc=0 lcfg="" ltx="" tomb tto dstate got
-  local p1=0 p2=0 p3=0 p4=0 p5=0 p6=0 p7=0 fto ffrom
+  local p1=0 p2=0 p3=0 p4=0 p5=0 p6=0 p7=0 fto ffrom pcwd="-"
   regdir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
   fto="$(lr_move_fold "$to")"; ffrom="$(lr_move_fold "$from")"
+  # The batch's plan row: its cwd is where the transcript sits (lr_session_location's known path).
+  if [ -n "$bdir" ] && [ -f "$bdir/plan.json" ]; then
+    pcwd="$(jq -r --arg s "$sid" 'first(.rows[] | select(.sid == $s)) | .cwd // empty' "$bdir/plan.json" 2>/dev/null)"
+    pcwd="${pcwd:--}"
+  fi
   holders="$(lr_move_holders "$sid")"
   [ -z "$holders" ] || nh="$(printf '%s\n' "$holders" | grep -c .)"
-  locs="$(lr_session_location "$sid")"
+  locs="$(lr_session_location "$sid" "$pcwd")"
   [ -z "$locs" ] || nloc="$(printf '%s\n' "$locs" | grep -c .)"
   if [ "$nloc" -ge 1 ]; then
     lcfg="$(printf '%s\n' "$locs" | sed -n '1p' | cut -f1)"; ltx="$(printf '%s\n' "$locs" | sed -n '1p' | cut -f2)"

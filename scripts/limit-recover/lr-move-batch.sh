@@ -293,7 +293,7 @@ if [ "${LR_MOVE_GUARD_CHECK:-on}" != off ] && [ -n "$GUARD" ]; then
     case "${f##*/}" in plan.json|admit.json|summary.json|request*.json) continue ;; esac
     case "$(jq -r '.verdict // empty' "$f" 2>/dev/null)" in MOVED|MOVED-NEW-PANE|MOVED-UNREGISTERED) ;; *) continue ;; esac
     sid="$(jq -r '.sid' "$f")"
-    tx="$(lr_session_location "$sid" | sed -n '1p' | cut -f2)"
+    tx="$(lr_session_location "$sid" "$(jq -r --arg s "$sid" 'first(.rows[] | select(.sid == $s)) | .cwd // empty' "$PLAN" 2>/dev/null)" | sed -n '1p' | cut -f2)"
     [ -n "$tx" ] || continue
     grc=0
     jq -nc --arg s "$sid" --arg t "$tx" '{session_id:$s, transcript_path:$t, hook_event_name:"UserPromptSubmit", prompt:"."}' \

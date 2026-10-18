@@ -28,7 +28,15 @@ setup() {
   mvf_plan b1 move "$PANE:$SID"
   printf '{"admitted":true,"target":"next3","target_auth":"ok"}\n' > "$BDIR/admit.json"
 }
-teardown() { mvf_teardown; }
+teardown() {
+  # the location cases make projects/ unlistable; bats cannot clean a tree it cannot list
+  [ -z "${UNLISTABLE:-}" ] || chmod 755 "$SRC/projects" "$DST/projects" 2>/dev/null || true
+  mvf_teardown
+}
+slug_of() { printf %s "$1" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g'; }
+location() { # $1=sid [$2=cwd]
+  run bash -c '. "$1/lr-lib.sh"; . "$1/lr-move-lib.sh"; lr_session_location "$2" "$3"' _ "$LRD" "$1" "${2:-}"
+}
 
 verdict() { # [from cfg] [to cfg] [batch dir or ""]
   run bash -c '. "$1/lr-lib.sh"; . "$1/lr-move-lib.sh"; lr_move_verdict "$2" "$3" "$4" "$5" "$6"' _ \
@@ -193,4 +201,42 @@ verdict() { # [from cfg] [to cfg] [batch dir or ""]
   verdict
   after="$(cd "$BATS_TEST_TMPDIR" && find home reg penv debt -type f -exec shasum {} + | sort | shasum)"
   [ "$before" = "$after" ]
+}
+
+# THE KNOWN PATH BEFORE THE GLOB (LR_INPLACE_IMMEDIACY W2 (b)). A `projects/*/<sid>.jsonl` glob
+# walks ~18,200 dirs in each of 4 stores, 1.0 CPU-s a verdict, and the prove step ran 604-685 s
+# after rc 6 (raw/F § 4). Claude Code writes the transcript at projects/<slug(cwd)>/, so a caller
+# that knows the cwd stats that path. An UNLISTABLE projects/ (mode 111) is the proof: a stat
+# through it works and a glob through it finds nothing, so a hit there came from the known path.
+
+@test "15 location: the transcript at the cwd's slug is found by its path, with every projects/ unlistable" {
+  slug="$(slug_of "$BATS_TEST_TMPDIR")"
+  mkdir -p "$DST/projects/$slug"; mv "$SRC/projects/-x/$SID.jsonl" "$DST/projects/$slug/$SID.jsonl"
+  UNLISTABLE=1; chmod 111 "$SRC/projects" "$DST/projects"
+  location "$SID" "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$DST"$'\t'"$DST/projects/$slug/$SID.jsonl" ]
+  # the verdict passes its plan row's cwd: MOVED, where a glob-only read sees no transcript (P3)
+  # the row and the process environment move to the target; the transcript is already there
+  jq -c '.account = "claude-tertiary"' "$CC_REGISTRY_DIR/$PANE.json" > "$CC_REGISTRY_DIR/$PANE.json.t"
+  mv "$CC_REGISTRY_DIR/$PANE.json.t" "$CC_REGISTRY_DIR/$PANE.json"
+  printf '%s' "$DST" > "$LR_MOVE_ENV_DIR/$MVF_PID"
+  verdict
+  [ "$V" = MOVED ]
+}
+
+@test "16 location: a slug hit in one store globs no store; no slug hit anywhere, or the switch off, globs them all" {
+  slug="$(slug_of "$BATS_TEST_TMPDIR")"
+  # a copy at the slug in the target, and a decoy at another dir in the source that only a glob sees
+  mkdir -p "$DST/projects/$slug"; cp "$SRC/projects/-x/$SID.jsonl" "$DST/projects/$slug/$SID.jsonl"
+  location "$SID" "$BATS_TEST_TMPDIR"
+  [ "$output" = "$DST"$'\t'"$DST/projects/$slug/$SID.jsonl" ]
+  # a cwd whose slug holds nothing: the glob runs and finds both copies (P3's two-copies read)
+  location "$SID" "/no/such/cwd"
+  [ "$(printf '%s\n' "$output" | grep -c .)" -eq 2 ]
+  location "$SID"
+  [ "$(printf '%s\n' "$output" | grep -c .)" -eq 2 ]
+  export LR_MOVE_LOCATION_FAST=off
+  location "$SID" "$BATS_TEST_TMPDIR"
+  [ "$(printf '%s\n' "$output" | grep -c .)" -eq 2 ]
 }
