@@ -1311,6 +1311,31 @@ lrh_state() { # $1=state $2=stage $3=detail — the run's own append-only log; l
   lr_state_append "$BUNDLE" "$1" "$2" "$3" || true
   return 0
 }
+# ── THE MOVE LANE SPENDS THE OWED ROW IT SETTLED ITSELF (R2, docs/plans/LIMIT_RECOVER_SELF_INPLACE.md) ─
+# A remote-form recycle (--source-pane P --source-session S) that handoff-fire HELD on a deaf kitty
+# files a pane-close-queue `recycle` row keyed on P holding THIS process's handoff-fire argv
+# (hf_recycle_owed_record). Once this run has settled the hold itself — unconfirm rc 0, or abort rc 0
+# withdrawing the admit — that argv is dead, and a surviving row was mailed to the SUBJECT as "re-run
+# it" (2026-10-18: two actuators on one admit). Mirrors handoff-fire's hf_recycle_owed_clear; only for
+# an in-place move with a source pane; best-effort, never fatal. CC_LRH_OWED_ROW_SPEND=off restores
+# the old behaviour (the row is left for the drainer).
+lrh_owed_recycle_spend() { # → always 0; one stderr line when a row was spent
+  [[ $IN_PLACE -eq 1 && -n "$SOURCE_PANE" && "${CC_LRH_OWED_ROW_SPEND:-on}" != off ]] || return 0
+  local _lib _row
+  for _lib in "$(cd "$(dirname "$0")" 2>/dev/null && pwd)/../lib/pane-close-queue.sh" \
+              "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/pane-close-queue.sh" \
+              "$HOME/.claude/scripts/lib/pane-close-queue.sh"; do
+    [[ -f "$_lib" ]] || continue
+    # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+    . "$_lib" 2>/dev/null && break
+  done
+  command -v pcq_list >/dev/null 2>&1 && command -v pcq_remove >/dev/null 2>&1 || return 0
+  _row="$(pcq_list 2>/dev/null | grep -F "/recycle-$(printf '%s' "$SOURCE_PANE" | tr -c 'A-Za-z0-9._-' '_').json" | head -1 || true)"
+  [[ -n "$_row" ]] || return 0
+  pcq_remove "$_row" >/dev/null 2>&1 \
+    && echo "lr-handoff: owed recycle row for pane $SOURCE_PANE spent (the move lane settled this hold itself)" >&2
+  return 0
+}
 LRH_ADMIT_TOKEN=""
 # ── IS THE NAMED TARGET ONE THE ROUTER WOULD ACTUALLY PICK? (2026-09-22) ────────────────────────
 # `--target auto` consults claude-accounts --route; an EXPLICIT --target consults nothing, so every
@@ -1981,6 +2006,7 @@ if [[ $IN_PLACE -eq 1 ]]; then
     _lrh_held="${_lrh_held##*held: }"; _lrh_held="${_lrh_held%)}"; [[ "$_lrh_held" == bgwork ]] && _lrh_held=bg-work
     echo "lr-handoff: verdict: HELD:$_lrh_held — held after the confirm; lr-transplant --phase unconfirm rc 0 restored the source" >&2
     lrh_verdict NOTMOVED no "HELD:$_lrh_held after the confirm — unconfirmed (rc 0): the source transcript is restored and the session is alive in pane ${SOURCE_PANE:-<this pane>}; nothing was typed, a retry is safe"
+    lrh_owed_recycle_spend   # unconfirm rc 0 settled the hold: the owed row's argv is dead (R2)
     rm -f "$LRH_RCY_ERR" 2>/dev/null || true
     echo "$BUNDLE"; exit 6
   elif ! lrh_source_retired; then
@@ -2011,6 +2037,7 @@ if [[ $IN_PLACE -eq 1 ]]; then
       echo "lr-handoff: verdict: HELD:$_lrh_reason — the recycle stood down before any confirm (handoff-fire rc=$LRH_RCY_RC); lr-transplant --phase abort rc 0 withdrew the admit" >&2
       lrh_state HELD recycle "HELD:$_lrh_reason before confirm; admit aborted"
       lrh_verdict NOTMOVED no "HELD:$_lrh_reason before the confirm — the admit is aborted (tombstone, lock and target copy withdrawn); the source was never retired and the session is alive in pane ${SOURCE_PANE:-<this pane>}; a retry is safe"
+      lrh_owed_recycle_spend   # abort rc 0 withdrew the admit: the owed row's argv is dead (R2)
       rm -f "$LRH_RCY_ERR" 2>/dev/null || true
       echo "$BUNDLE"; exit 6
     fi
