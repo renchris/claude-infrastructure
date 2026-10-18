@@ -188,6 +188,79 @@ case "$TP" in "~"*) TP="$HOME${TP#\~}" ;; esac
 [ -f "$TP" ] || abstain "transcript-missing"
 [ -n "$CWD" ] || abstain "no-cwd"
 
+# ── ARM O — OUTBOUND SOURCE READ (2026-10-18) ────────────────────────────────────────────────────
+# Operator ruling, verbatim: "It's a hard no for us drafting messages to people based off of some
+# medium when we havent read said medium." The incident:
+# a first text to a landlord was drafted from our own research dossier, asked "Is it still
+# available?" and then "from what date?", while the live Zillow listing said "Available now"; it was
+# read only after the operator objected twice. The skill's prose rule (outbound-drafting rule 2)
+# already existed and did not fire, because reading our dossier FELT like reading the source. So
+# this arm blocks a Stop whose turn hands over a drafted outbound message unless the SAME turn read
+# the live medium with a primary-source tool. The decision, and what counts as each half, is in
+# hooks/lib/outbound_source_read.py; this arm only finds the turn, latches and blocks.
+#   THE TURN starts at the last prompt a human typed (hooks/lib/cc-interactive.sh), never at
+# session-writes.sh's boundary: a Stop-hook feedback re-prompt must not open a fresh turn, or the
+# model's reply to this very block would be judged as a new, read-free turn. rc 2 (unreadable) is
+# "cannot tell" and falls through to the arms below; rc 1 (no human prompt at all) judges the whole
+# transcript.
+#   SITED ABOVE THE OPERATOR KILL-SWITCH on purpose. That switch suspends AUTO-CONTINUE of work
+# ("…and stop", "just do X"); this arm continues no work, it stops an unchecked message reaching a
+# third party, which the operator ruled a hard no without exception. It needs no close token, and
+# it runs before every other arm, which then judge the next Stop unchanged.
+#   COST: a fixed-string grep of the transcript gates everything else, so a session that never
+# loaded the skill and never wrote an ms365 draft pays one grep (the python start is ~65 ms).
+#   BOUNDS: once per TURN (latched on the turn's start epoch, class `outbound`), and at most
+# COMPLETION_OUTBOUND_MAX (default 4) per session. Kill switch: CC_OUTBOUND_SOURCE_READ=0.
+# Measured 2026-10-18 over the 104 transcripts that loaded the skill (676 human turns): 55 drafts
+# detected, every one a real outbound draft on review; 24 would have blocked, every one a turn that
+# drafted or revised with no live read of the medium (the incident's two turns among them).
+if [ "${CC_OUTBOUND_SOURCE_READ:-1}" != 0 ] \
+   && grep -qE 'outbound-drafting|mcp__ms365__create-(draft-email|reply-draft|reply-all-draft|forward-draft)' "$TP" 2>/dev/null
+then
+  _ca_ot="$0"; [ -L "$_ca_ot" ] && _ca_ot="$(readlink "$_ca_ot")"
+  _ca_od="$(cd "$(dirname "$_ca_ot")" 2>/dev/null && pwd)/lib"
+  _ca_ol="$_ca_od/cc-interactive.sh"
+  _ca_op="$_ca_od/outbound_source_read.py"
+  # shellcheck source=lib/cc-interactive.sh
+  # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+  if [ -f "$_ca_ol" ] && [ -f "$_ca_op" ] && . "$_ca_ol" 2>/dev/null; then
+    _ca_oep="$(ci_last_interactive_epoch "$TP")"; _ca_oerc=$?
+    if [ "$_ca_oerc" -ne 2 ]; then
+      case "$_ca_oep" in ''|*[!0-9]*) _ca_oep="" ;; esac
+      _ca_ov="$(/usr/bin/env python3 "$_ca_op" --transcript "$TP" --since "$_ca_oep" 2>/dev/null)"; _ca_orc=$?
+      if [ "$_ca_orc" -eq 1 ] && [ -n "$_ca_ov" ]; then
+        mkdir -p "$STATE_DIR" 2>/dev/null || true
+        _ca_okey="$(printf '%s|%s|%s' "$CFG" "$SID" "$CWD" | shasum 2>/dev/null)"; _ca_okey="${_ca_okey:0:16}"
+        _ca_ohash="$(printf 'outbound|%s' "${_ca_oep:-whole}" | shasum 2>/dev/null)"; _ca_ohash="${_ca_ohash:0:16}"
+        # Latched or capped FALLS THROUGH, never `abstain`: abstain exits the hook, and a second
+        # Stop in the same turn must still meet every arm below.
+        _ca_ofire=1
+        { [ -n "$_ca_okey" ] && [ -n "$_ca_ohash" ]; } || _ca_ofire=0
+        _ca_ofired="$STATE_DIR/$_ca_okey.fired"
+        if [ "$_ca_ofire" = 1 ] && [ -f "$_ca_ofired" ] \
+           && awk -v h="$_ca_ohash" '$1 == h { hit = 1 } END { exit(hit ? 0 : 1) }' "$_ca_ofired" 2>/dev/null
+        then _ca_ofire=0; fi
+        _ca_omax="${COMPLETION_OUTBOUND_MAX:-4}"
+        case "$_ca_omax" in ''|*[!0-9]*) _ca_omax=4 ;; esac
+        _ca_on=0
+        [ -f "$_ca_ofired" ] && _ca_on="$(awk '$2 == "outbound" { n++ } END { print n+0 }' "$_ca_ofired" 2>/dev/null || printf 0)"
+        case "$_ca_on" in ''|*[!0-9]*) _ca_on=0 ;; esac
+        [ "$_ca_on" -ge "$_ca_omax" ] && _ca_ofire=0
+      fi
+      if [ "$_ca_orc" -eq 1 ] && [ -n "$_ca_ov" ] && [ "${_ca_ofire:-0}" = 1 ]; then
+        printf '%s outbound\n' "$_ca_ohash" >> "$_ca_ofired" 2>/dev/null || true
+        _ca_odraft="$(printf '%s' "$_ca_ov" | jq -r '.draft // "a drafted message"' 2>/dev/null | cut -c1-90)"
+        log_idl fired "outbound-source-read" \
+          "$(jq -cn --arg arm outbound --arg class outbound --argjson count "$((_ca_on+1))" --argjson max "$_ca_omax" \
+              --arg draft "$_ca_odraft" '{arm:$arm,class:$class,count:$count,max:$max,draft:$draft}' 2>/dev/null)"
+        _ca_oreason="OUTBOUND SOURCE READ: this turn hands the operator a drafted message (\"${_ca_odraft}\") but read no live source for it. Our own notes, dossiers, STATE files and plans are NOT the source; that substitution is the failure this blocks (operator ruling 2026-10-18: a hard no). Before handing it over, read the live medium the message is about: the thread (msg with \"<phone>\" or msg sql on live.*, wa thread, tg thread, ms365 list-mail-messages), the listing (bin/zillow-listing, curl, agent-browser), or the post or page (WebFetch, agent-browser, cc-dia-act). Then re-check every question and factual claim in the draft against what came back, and cut any question the source already answers. A search that finds no thread is not a read; it means the medium is somewhere else. If the message truly answers no external medium (an original composition with no thread, listing, post or email behind it), say so in one sentence instead. Fires once per turn; kill switch CC_OUTBOUND_SOURCE_READ=0."
+        jq -nc --arg r "$_ca_oreason (completion-assert outbound $((_ca_on+1))/${_ca_omax})" '{decision:"block",reason:$r}'
+        exit 0
+      fi
+    fi
+  fi
+fi
+
 # ── OPERATOR KILL-SWITCH (2026-09-02) ────────────────────────────────────────────────────────────
 # The resident CLAUDE.md documents "…and stop" / "no auto-continue" / "just do X" as suspending
 # auto-continue for that turn. That was only ever HALF true: it clears session-continue's sentinel

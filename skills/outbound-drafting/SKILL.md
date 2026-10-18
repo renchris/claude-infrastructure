@@ -28,11 +28,29 @@ driving.
 *(This is the operator's own prior lesson — he once asked a compound "and/or" question and the
 counterparty answered only the easy half.)*
 
-## 2. Read the thread first, then cut every question the record already answers
+## 2. Read the medium first, then cut every question the record already answers
+
+**"The thread" means whatever medium the message is about: the text or email thread, and for a
+first message, the listing, post or page that prompted it.** Read it LIVE, with the tool that
+fetches it, in the same turn you hand over the draft.
+
+🚨 **OUR OWN NOTES ARE NOT THE MEDIUM.** A research dossier, a STATE file, a plan or a memory is what
+we wrote about the source, at the time we wrote it. Measured 2026-10-18: a first text to a landlord
+was drafted from our dossier of the night before and asked "Is it still available?", then "from
+what date?". The live Zillow listing said "Available now" the whole time. It was read only after
+the operator objected twice. Reading the dossier felt like reading the source; it is not.
+A `msg search` that finds no thread is not a read either: it tells you the medium is elsewhere.
+
+🔒 **Hook-enforced on every channel:** `hooks/completion-assert.sh` arm O (OUTBOUND SOURCE READ,
+decision in `hooks/lib/outbound_source_read.py`) blocks the end of a turn that hands over a draft
+unless the same turn read the medium live: `msg with`/`msg sql`, `wa thread`, `tg thread`, ms365
+received-mail reads, `bin/zillow-listing`, `curl`, `agent-browser`, `cc-dia-act`, WebFetch, or a
+screenshot the operator pasted this turn. It fires once per turn; kill switch
+`CC_OUTBOUND_SOURCE_READ=0`.
 
 🚨 **REFETCH IMMEDIATELY BEFORE EVERY DRAFT — not once at the top of the task.** Reading the thread
 when you START composing is not reading it when you FINISH. The ms365 recipe hook-enforces exactly
-this for email (R4, 10-minute freshness window); the message stores have no hook, so it is on you.
+this for email (R4, 10-minute freshness window), and arm O enforces it per turn on every channel.
 Re-read, then re-check every factual claim in the draft against what came back.
 
 **Read the thread before drafting:**
@@ -94,10 +112,10 @@ back:
   before he sends; do not let an unverifiable channel pass as a verified one.
 
 🔒 **On the email path only, this is hook-enforced** — the draft-write tools are DENIED unless an
-inbound read happened first (`hooks/enforce-email-formatting.py`). **On every other channel there is
-no chokepoint to enforce** — you hand him prose and he sends it from his phone, so no tool call
-exists to refuse. On those channels this rule is the only thing standing between him and a stale
-message. Treat it as binding, not advisory.
+inbound read happened first (`hooks/enforce-email-formatting.py`). **On every other channel no tool
+call exists to refuse** — you hand him prose and he sends it from his phone. The only chokepoint is
+the end of the turn, and arm O (above) stands there: it catches a draft with no live read in its
+turn. It cannot tell whether you read the RIGHT thread, so this rule stays binding, not advisory.
 
 *(Measured 2026-08-25. A high-stakes dispute letter was reviewed for 23 minutes — MIME parsed,
 indent markup and font sizes verified twice. The counterparty's automated acknowledgement, granting
