@@ -3,16 +3,19 @@
 # ~/.claude/projects/*(N/) and <dst>/projects/*(N/), then zstat -L each <dst>/projects/<slug>/memory
 # link and compare it with the canonical target. It never creates, moves or links anything: the
 # branches that would mutate are only COUNTED. Prints wall ms per phase.
-# Usage: zsh -f a2-memmirror-scan.zsh ~/.claude-quaternary
+# Usage: zsh -f a2-memmirror-scan.zsh ~/.claude-quaternary [--exclude]
+# --exclude replays the 1.1 form (temp slugs excluded inside both globs, lib/config-mirror.zsh).
 zmodload zsh/stat 2>/dev/null
 zmodload zsh/datetime
 dst="${1:?usage: a2-memmirror-scan.zsh <account dir>}"
 cano="$HOME/.claude/projects"
+setopt extendedglob
+if [[ "$2" == --exclude ]]; then pat='^(-private-var-folders-*|-private-tmp*)(N/)'; else pat='*(N/)'; fi
 typeset -A slugs
 t0=$EPOCHREALTIME
-for sp in "$cano"/*(N/); do slugs[${sp:t}]=1; done
+for sp in "$cano"/${~pat}; do slugs[${sp:t}]=1; done
 t1=$EPOCHREALTIME
-for sp in "$dst/projects"/*(N/); do slugs[${sp:t}]=1; done
+for sp in "$dst/projects"/${~pat}; do slugs[${sp:t}]=1; done
 t2=$EPOCHREALTIME
 ok=0 would_link=0 would_skip=0 other=0
 for slug in ${(k)slugs}; do
@@ -27,8 +30,8 @@ for slug in ${(k)slugs}; do
   else other=$((other+1)); fi
 done
 t3=$EPOCHREALTIME
-printf 'account=%s slugs=%d  glob(cano)=%.0fms glob(dst)=%.0fms link-check=%.0fms total=%.0fms\n' \
-  "${dst:t}" ${#slugs} $(( (t1-t0)*1000 )) $(( (t2-t1)*1000 )) $(( (t3-t2)*1000 )) $(( (t3-t0)*1000 ))
+printf 'mode=%s account=%s slugs=%d  glob(cano)=%.0fms glob(dst)=%.0fms link-check=%.0fms total=%.0fms\n' \
+  "${2:-full}" "${dst:t}" ${#slugs} $(( (t1-t0)*1000 )) $(( (t2-t1)*1000 )) $(( (t3-t2)*1000 )) $(( (t3-t0)*1000 ))
 printf '  already-linked=%d  would-mkdir+ln(fork x2 each)=%d  real-dir-skip=%d  no-canonical-memory=%d\n' \
   $ok $would_link $would_skip $other
 printf '  load: %s\n' "$(sysctl -n vm.loadavg)"

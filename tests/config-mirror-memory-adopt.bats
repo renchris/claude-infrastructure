@@ -182,3 +182,71 @@ setup() {
   [ ! -e "$c/memory" ]
   [ "$(cat "$d/note.md")" = "from-.claude-secondary" ]
 }
+
+# ── Temp-slug exclusion (startup-hooks-2026-10-18 unit 1.1) ──────────────────────────────────────
+# ~95% of projects/ are throwaway headless-run slugs (-private-var-folders-*, -private-tmp*). They
+# must be excluded INSIDE both globs: a per-slug skip in the loop still stats and hashes every entry
+# and keeps 50-86% of the walk (docs/research/startup-hooks-2026-10-18/gap-G1.md). Test (d) is the
+# form pin — the only assertion a loop-level `case` skip fails.
+temp_fixture() {
+  canonical -private-var-folders-ab-T-tmp.X1 note.md
+  canonical -private-tmp-claude-run-7 note.md
+  mkdir -p "$HOME/.claude-secondary/projects/-private-tmp-stranded/memory"
+  printf 'temp\n' > "$HOME/.claude-secondary/projects/-private-tmp-stranded/memory/t.md"
+  canonical proj-control note.md
+  canonical -Users-x-private-tmp-lookalike note.md
+}
+
+@test "TEMP SLUGS: (a) no memory link is created under a temp slug" {
+  command -v zsh >/dev/null 2>&1 || skip "zsh unavailable"
+  temp_fixture
+  run sync_safe .claude-secondary
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/.claude-secondary/projects/-private-var-folders-ab-T-tmp.X1/memory" ]
+  [ ! -e "$HOME/.claude-secondary/projects/-private-tmp-claude-run-7/memory" ]
+}
+
+@test "TEMP SLUGS: (b) a stranded real memory dir under a temp slug is not adopted" {
+  command -v zsh >/dev/null 2>&1 || skip "zsh unavailable"
+  temp_fixture
+  run sync_safe .claude-secondary
+  [ "$status" -eq 0 ]
+  d="$HOME/.claude-secondary/projects/-private-tmp-stranded/memory"
+  [ -d "$d" ]
+  [ ! -L "$d" ]
+  [ ! -e "$HOME/.claude/projects/-private-tmp-stranded" ]
+}
+
+@test "TEMP SLUGS: (c) the control slug is still linked" {
+  command -v zsh >/dev/null 2>&1 || skip "zsh unavailable"
+  temp_fixture
+  run sync_safe .claude-secondary
+  [ "$status" -eq 0 ]
+  [ -L "$HOME/.claude-secondary/projects/proj-control/memory" ]
+}
+
+@test "TEMP SLUGS: (d) form pin — temp slugs never enter the slug hash" {
+  command -v zsh >/dev/null 2>&1 || skip "zsh unavailable"
+  temp_fixture
+  run zsh -fxc "source '$MIRROR'; _cc_sync_memory_mirror \"\$HOME/.claude-secondary\""
+  [ "$status" -eq 0 ]
+  # zsh traces `slugs[${sp:t}]=1` with its subscript UNEXPANDED, so a grep for `slugs[-private-` is
+  # blind (it passes a loop-level `case` skip too — measured 2026-10-18 against that mutant). What the
+  # trace does expand is the loop variable: `sp=<path>`. A temp slug the glob let through shows up
+  # there, whatever the loop then does with it.
+  n=$(printf '%s\n' "$output" | grep -c '> sp=.*/-private-' || true)
+  if [ "$n" -ne 0 ]; then
+    echo "REGRESSION: $n temp slug(s) were globbed — the exclusion must live inside the glob, not the loop" >&2
+    return 1
+  fi
+  # Positive control: the same trace does show real slugs being globbed, so the 0 above is not blind.
+  printf '%s\n' "$output" | grep -q '> sp=.*/proj-control$'
+}
+
+@test "TEMP SLUGS: (e) a slug that merely contains -private-tmp is still linked" {
+  command -v zsh >/dev/null 2>&1 || skip "zsh unavailable"
+  temp_fixture
+  run sync_safe .claude-secondary
+  [ "$status" -eq 0 ]
+  [ -L "$HOME/.claude-secondary/projects/-Users-x-private-tmp-lookalike/memory" ]
+}
