@@ -1532,7 +1532,45 @@ hf_recycle_kitty_precheck() { # → 0 answers (or not a kitty pane) · 1 not ans
 }
 
 hf_kprobe_detail() { # → the probe's raw readings, for a held row's detail
-  printf 'connect_rc=%s ls_rc=%s queue=%s' "${HF_KPROBE_CONNECT_RC:--}" "${HF_KPROBE_LS_RC:--}" "${HF_KPROBE_QUEUE:--}"
+  printf 'connect_rc=%s ls_rc=%s queue=%s%s' "${HF_KPROBE_CONNECT_RC:--}" "${HF_KPROBE_LS_RC:--}" "${HF_KPROBE_QUEUE:--}" \
+    "${HF_KPROBE_TRIED:+ tries=$HF_KPROBE_TRIED}"
+}
+
+# ── A DETACHED CALLER ASKS AGAIN, ON A SCHEDULE (lr-inplace-immediacy 2026-10-18, K1) ───────────────
+# The one-shot rule above protects a caller inside a Bash tool call, which has 120 s and must not leak a
+# late /exit into a later turn. The move worker has no such clock: it runs detached, and says so by
+# setting LR_INPLACE_AWAIT=0. On 2026-10-18 its 43e6eb4b move held HELD:unreachable on ONE 3 s probe
+# after ~13 min of bundle, precheck, transplant and start-up, and the same kitty answered 48 s later.
+# So for such a caller a not-answering verdict (rc 1) is asked again after 5, 10, 20 and 40 s, at most
+# 5 attempts, and no attempt starts once its backoff would carry it past HF_KPROBE_BUDGET_S (120 s: two
+# of the ~60 s accept-burst cycles husk-panes-2026-09-30.md measured; a ~10 h outage still holds,
+# because the budget caps it). Worst case ≈145 s; a probe that answers costs what it did. STUCK (rc 2)
+# holds at once: only a kitty restart clears a full accept queue, so waiting cannot. HF_KPROBE_TRIES
+# sets the attempts outright (1 = one shot even when detached). Seam: HF_KPROBE_SLEEP_SCALE=0 sleeps
+# nothing; the budget is still charged the nominal backoff, so it bites in a test too.
+hf_recycle_kitty_probe() { # → as hf_recycle_kitty_precheck; sets HF_KPROBE_TRIED
+  local max=1 budget scale delay=5 t0 i=0 rc=0 charged=0 el
+  if [ "${LR_INPLACE_AWAIT:-1}" = 0 ]; then max=5; fi
+  case "${HF_KPROBE_TRIES:-}" in ''|*[!0-9]*) ;; *) max="$HF_KPROBE_TRIES" ;; esac
+  [ "$max" -ge 1 ] || max=1
+  [ "$max" -le 5 ] || max=5
+  budget="${HF_KPROBE_BUDGET_S:-120}"; case "$budget" in ''|*[!0-9]*) budget=120 ;; esac
+  scale="${HF_KPROBE_SLEEP_SCALE:-1}"; case "$scale" in ''|*[!0-9]*) scale=1 ;; esac
+  t0="$(date +%s)"
+  while :; do
+    i=$((i + 1)); HF_KPROBE_TRIED=$i
+    rc=0; hf_recycle_kitty_precheck || rc=$?
+    [ "$rc" = 1 ] || return "$rc"
+    [ "$i" -lt "$max" ] || break
+    # Elapsed is the wall clock, or the backoff charged so far when that is more (a scaled-away sleep).
+    el=$(( $(date +%s) - t0 )); [ "$el" -ge "$charged" ] || el="$charged"
+    [ $((el + delay)) -le "$budget" ] || break
+    echo "→ kitty probe $i/$max: $HF_KPROBE_WHY — asking again in ${delay}s (detached caller)" >&2
+    if [ $((delay * scale)) -gt 0 ]; then /bin/sleep $((delay * scale)); fi
+    charged=$((charged + delay)); delay=$((delay * 2))
+  done
+  HF_KPROBE_WHY="$HF_KPROBE_WHY — after $i attempt(s) over $(( $(date +%s) - t0 ))s"
+  return 1
 }
 
 # kitty control-socket call. BOUNDED through hf_bounded exactly like every osascript here — kitty's
@@ -15556,7 +15594,8 @@ if [ "$RECYCLE" = 1 ]; then
   # FAIL FAST ON A TERMINAL THAT IS NOT ANSWERING (pane-lifecycle fixes item 4c) — see
   # hf_recycle_kitty_precheck. Before the self-identity probe and before the intent row, so a deaf
   # kitty costs ~15 s and leaves one honest row, not 12 minutes and an abort. A dry run only reports.
-  HF_KPROBE_RC=0; hf_recycle_kitty_precheck || HF_KPROBE_RC=$?
+  # A detached caller (the move worker) asks again on a schedule first: hf_recycle_kitty_probe.
+  HF_KPROBE_RC=0; hf_recycle_kitty_probe || HF_KPROBE_RC=$?
   hf_phase kitty-probe
   if [ "$HF_KPROBE_RC" != 0 ] && [ "${DRY:-0}" = 1 ]; then
     echo "⚠ recycle (dry run): $HF_KPROBE_WHY — a real run would be HELD here, nothing typed" >&2

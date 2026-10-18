@@ -114,7 +114,7 @@ row_of() { jq -c --arg c "$1" 'select(.class == $c)' "$LOG" | tail -1; }
 load_units() {
   # hf_kitty_queue_depth moved to scripts/lib/kitty-queue.sh (W3 P5); the subject sources it from there.
   . "$REPO_SRC/scripts/lib/kitty-queue.sh"
-  eval "$(sed -n '/^hf_recycle_kitty_precheck() {/,/^}/p;/^hf_self_kitty_tty() {/,/^}/p;/^hf_phase() {/,/^}/p;/^hf_kprobe_connect_say() {/,/^}/p;/^hf_kprobe_detail() {/,/^}/p;/^kitty_socket_accepting() {/,/^}/p;/^hf_bounded_s() {/,/^}/p' "$HF")"
+  eval "$(sed -n '/^hf_recycle_kitty_precheck() {/,/^}/p;/^hf_recycle_kitty_probe() {/,/^}/p;/^hf_self_kitty_tty() {/,/^}/p;/^hf_phase() {/,/^}/p;/^hf_kprobe_connect_say() {/,/^}/p;/^hf_kprobe_detail() {/,/^}/p;/^kitty_socket_accepting() {/,/^}/p;/^hf_bounded_s() {/,/^}/p' "$HF")"
   export HF_TIMEOUT_BIN=""
 }
 
@@ -122,8 +122,9 @@ load_units() {
 # listening=1 keeps a listener alive in the background, listening=0 binds and exits (a leftover file).
 fixture_socket() { # $1=path $2=listening (1|0)
   ( cd "$(dirname "$1")" && /usr/bin/python3 -c '
-import socket, sys, time
-s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])
+import os, socket, sys, time
+d, b = os.path.split(os.path.abspath(sys.argv[1])); os.chdir(d)
+s = socket.socket(socket.AF_UNIX); s.bind(b)
 if sys.argv[2] == "1":
     s.listen(5)
 open(sys.argv[1] + ".ready", "w").close()
@@ -132,10 +133,10 @@ if sys.argv[2] == "1":
 ' "$(basename "$1")" "$2" ) >/dev/null 2>&1 3>&- &
   [ "$2" = 1 ] && echo "$!" >> "$BATS_TEST_TMPDIR/listeners.pid"
   # Wait for the marker written AFTER listen(): the socket file appears at bind(), and a connect in
-  # between is refused. Up to 60 s: a loaded box takes seconds just to start python (2026-10-18).
-  local n=0; while [ ! -e "$1.ready" ] && [ "$n" -lt 600 ]; do sleep 0.1; n=$((n + 1)); done
+  # between is refused. Up to 300 s: at load ~64/core one python start-up took ~130 s (2026-10-18).
+  local n=0; while [ ! -e "$1.ready" ] && [ "$n" -lt 3000 ]; do sleep 0.1; n=$((n + 1)); done
   [ "$2" = 1 ] || wait "$!" 2>/dev/null || true
-  [ -S "$1" ]
+  [ -e "$1.ready" ] || { echo "fixture socket $1 never became ready" >&2; return 1; }
 }
 teardown() {
   local p
@@ -227,12 +228,69 @@ teardown() {
   netstat_capture 3
   # Unbounded connect: on a loaded box python's start-up alone outlasts the 3 s bound, and the row
   # then honestly says rc 124 — measured while writing this case. The absent socket is what is pinned.
-  export CC_KITTY_CONNECT_TIMEOUT_S=0
   # A longer outer bound than recycle()'s 90 s, for the same reason: at load ~57/core this run was killed.
-  run env timeout 300 bash "$HF" --prompt-file "$PF" --launcher claude-test --session-id 77 --recycle
+  run env CC_KITTY_CONNECT_TIMEOUT_S=0 timeout 300 bash "$HF" --prompt-file "$PF" --launcher claude-test --session-id 77 --recycle
   [ "$status" -eq 1 ] || { echo "status=$status $output"; false; }
   r="$(row_of recycle-held-unreachable)"
-  [[ "$(jq -r .detail <<<"$r")" == *"no such socket (rc 4)"*"[connect_rc=4 ls_rc=- queue=3]"* ]] || { echo "$r"; false; }
+  [[ "$(jq -r .detail <<<"$r")" == *"no such socket (rc 4)"*"[connect_rc=4 ls_rc=- queue=3 tries=1]"* ]] || { echo "$r"; false; }
+}
+
+# ── K1 (lr-inplace-immediacy 2026-10-18): a DETACHED caller asks again before it holds ───────────────
+# 43e6eb4b held on one 3 s probe after ~13 min of work; the same kitty answered 48 s later. RED on the
+# unfixed tree: hf_recycle_kitty_probe does not exist, and the recycle asked exactly once.
+
+@test "K1 refused twice, then answering: a detached caller proceeds on the 3rd attempt; an interactive one holds after 1" {
+  load_units
+  kitty_identity() { return 0; }
+  kt() { return 0; }
+  netstat_capture 2
+  CNT="$BATS_TEST_TMPDIR/connects"; : > "$CNT"
+  kitty_socket_accepting() { echo x >> "$CNT"; [ "$(wc -l < "$CNT")" -ge 3 ] || return 3; }
+  rc=0; LR_INPLACE_AWAIT=0 HF_KPROBE_SLEEP_SCALE=0 hf_recycle_kitty_probe 2>"$BATS_TEST_TMPDIR/err" || rc=$?
+  [ "$rc" = 0 ] || { echo "rc=$rc $HF_KPROBE_WHY"; cat "$BATS_TEST_TMPDIR/err"; false; }
+  [ "$HF_KPROBE_TRIED" = 3 ] || { echo "tried=$HF_KPROBE_TRIED"; false; }
+  [ "$(grep -c 'asking again in' "$BATS_TEST_TMPDIR/err")" = 2 ] || { cat "$BATS_TEST_TMPDIR/err"; false; }
+  grep -q 'asking again in 10s' "$BATS_TEST_TMPDIR/err" || { cat "$BATS_TEST_TMPDIR/err"; false; }
+  : > "$CNT"
+  rc=0; hf_recycle_kitty_probe 2>/dev/null || rc=$?
+  [ "$rc" = 1 ] && [ "$HF_KPROBE_TRIED" = 1 ] && [ "$(wc -l < "$CNT" | tr -d ' ')" = 1 ] \
+    || { echo "interactive: rc=$rc tried=$HF_KPROBE_TRIED connects=$(wc -l < "$CNT")"; false; }
+}
+
+@test "K1 STUCK holds at once even when detached; 5 attempts, the budget and HF_KPROBE_TRIES bound the asking" {
+  load_units
+  kitty_identity() { return 0; }
+  kitty_socket_accepting() { return 3; }
+  # shellcheck disable=SC2034  # dynamic scope: the extracted probe reads both
+  local HF_KPROBE_SLEEP_SCALE=0 LR_INPLACE_AWAIT=0
+  netstat_capture 128
+  rc=0; hf_recycle_kitty_probe 2>/dev/null || rc=$?
+  [ "$rc" = 2 ] || { echo "stuck: rc=$rc tried=$HF_KPROBE_TRIED"; false; }
+  [ "$HF_KPROBE_TRIED" = 1 ] || { echo "stuck: rc=$rc tried=$HF_KPROBE_TRIED"; false; }
+  netstat_capture 2
+  rc=0; hf_recycle_kitty_probe 2>/dev/null || rc=$?
+  [ "$rc" = 1 ] || { echo "5 max: rc=$rc tried=$HF_KPROBE_TRIED"; false; }
+  [ "$HF_KPROBE_TRIED" = 5 ] || { echo "5 max: rc=$rc tried=$HF_KPROBE_TRIED"; false; }
+  [[ "$HF_KPROBE_WHY" == *"after 5 attempt(s) over"* ]] || { echo "$HF_KPROBE_WHY"; false; }
+  # Budget 12 s: attempt 2 starts at +5, attempt 3 at +15 would pass it, so 2 attempts.
+  rc=0; HF_KPROBE_BUDGET_S=12 hf_recycle_kitty_probe 2>/dev/null || rc=$?
+  [ "$HF_KPROBE_TRIED" = 2 ] || { echo "budget: tried=$HF_KPROBE_TRIED"; false; }
+  rc=0; HF_KPROBE_TRIES=1 hf_recycle_kitty_probe 2>/dev/null || rc=$?
+  [ "$HF_KPROBE_TRIED" = 1 ] || { echo "TRIES=1: tried=$HF_KPROBE_TRIED"; false; }
+  rc=0; LR_INPLACE_AWAIT=1 HF_KPROBE_TRIES=3 hf_recycle_kitty_probe 2>/dev/null || rc=$?
+  [ "$HF_KPROBE_TRIED" = 3 ] || { echo "TRIES=3 interactive: tried=$HF_KPROBE_TRIED"; false; }
+}
+
+@test "K1 end to end: a detached recycle asks 5 times before its held row; the row says so" {
+  netstat_capture 3
+  # The budget is lifted here because it measures the wall clock, and at load ~64/core it honestly
+  # stopped this run after 2 attempts (137 s); the budget itself is pinned by the unit case above.
+  run env HF_KPROBE_BUDGET_S=100000 HF_KPROBE_SLEEP_SCALE=0 LR_INPLACE_AWAIT=0 \
+    timeout 600 bash "$HF" --prompt-file "$PF" --launcher claude-test --session-id 77 --recycle
+  [ "$status" -eq 1 ] || { echo "status=$status $output"; false; }
+  [[ "$output" == *"kitty probe 4/5"*"asking again in 40s"* ]] || { echo "$output"; false; }
+  r="$(row_of recycle-held-unreachable)"
+  [[ "$(jq -r .detail <<<"$r")" == *"after 5 attempt(s)"*"tries=5]"* ]] || { echo "$r"; false; }
 }
 
 @test "a: the self tty is the tty of the ancestor whose parent is \$KITTY_PID, not the caller's" {
