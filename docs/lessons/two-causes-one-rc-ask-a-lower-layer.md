@@ -75,6 +75,16 @@ listens and never `accept()`s.
 
 ## Addendum 2026-10-17: accepting-but-silent has two causes as well
 
+**CORRECTED (2026-10-17): the conclusion of this addendum is refuted.** A few hours after it
+landed, the same kitty (pid 44163, never restarted) answered `kitty @ ls` with rc 0 at 9.4% CPU,
+under load ~332. So the idle, silent state below was **not** a permanent talk-thread death: it
+recovered on its own, and the "restart it, never retry" remedy was wrong. What still holds is the
+observation (idle kitty, connect accepted, no reply in 30 s) and that it can last hours. What does
+**not** hold is that kitty's idle CPU separates "transient" from "dead". Until a discriminator is
+measured that actually separates them, treat accepting-but-silent as unknown: retry on a schedule,
+and escalate to a restart only when remote-control loss is blocking work the operator needs now.
+The original text is kept below as the record of the error.
+
 The incident above resolved to a load spike, and a retry beat it. On 2026-10-17 the same signature,
 `read unix ->/tmp/kitty-44163: i/o timeout` with `connect(2)` succeeding, was **not** load. kitty
 pid 44163 (0.48.2, alive 2d14h) sat at **0.0% CPU** while load was ~237. A raw `connect` + `ls`
