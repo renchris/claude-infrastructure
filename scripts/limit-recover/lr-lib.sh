@@ -1278,8 +1278,10 @@ lr_launch_tail() { # $1=launcher path → fills LR_LAUNCH_TAIL[] and LR_SPAWN_SH
 }
 
 # ── A VISIBLE kitty window for a recovery, from any context ──────────────────────────────────────
-# os-window when there is no anchor; a vsplit BESIDE the anchor pane (never beside the caller) when
-# one is given — --source-window pins `current` to the anchor (without it kitty resolves against the
+# Placed by scripts/lib/pane-placement.sh (cc_place_pane): a vsplit BESIDE the anchor pane (never
+# beside the caller) when its OS window has room, else a split into another window with room, else
+# a new fullscreen OS window — never a tab, never a fifth pane. With an anchor the cwd is the
+# anchor's: --source-window pins `current` to the anchor (without it kitty resolves against the
 # operator's ACTIVE window: the 2026-08-07 pane-theft class, re-measured 2026-09-09). No --title (it
 # is sticky and would freeze the ✳/◐ liveness glyph); provenance rides in --var, which kitty @ ls
 # exposes as user_vars and no child can forge. Prints the new window id; rc 1 when nothing launched.
@@ -1293,10 +1295,35 @@ lr_kitty_spawn() { # $1=launcher $2=cwd $3=sid $4=target account [$5=anchor pane
   lr_launch_tail "$launcher"
   local to=(); [ -n "$sock" ] && to=(--to "$sock")
   local common=(--var "lr_continuation_of=$sid" --var "lr_source_pane=${anchor:-}" --var "lr_target_account=$acct")
+  # THE PLACEMENT POLICY (lr-wake incident 2026-10-18, REPORT §4 Wave D). This function used to pick
+  # the surface itself — a bare os-window whenever there was no anchor — which is what left panes
+  # 428, 429 and 398 alone in one-pane, non-fullscreen OS windows. scripts/lib/pane-placement.sh
+  # owns the choice now (split beside the anchor, else into a window with room, else a NEW
+  # fullscreen OS window; never a tab) and writes the pane-spawn row. The inline launch below is
+  # only the fallback for a live layer that has not linked that library yet.
+  local placer=""
+  if ! command -v cc_place_pane >/dev/null 2>&1; then
+    for placer in "$LR_LIB_DIR/../lib/pane-placement.sh" \
+                  "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/pane-placement.sh" "$HOME/.claude/scripts/lib/pane-placement.sh"; do
+      # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+      [ -f "$placer" ] && . "$placer" && break
+    done
+  fi
+  if command -v cc_place_pane >/dev/null 2>&1; then
+    local pcwd="$cwd"
+    case "$anchor" in ''|*[!0-9]*) ;; *) pcwd=current ;; esac
+    id="$(CC_PLACE_KITTY_BIN="$kb" CC_TERM_KITTY_TO="${sock:-${CC_TERM_KITTY_TO:-}}" \
+          CC_PLACE_REQUESTED="${anchor:+split}" \
+          CC_PLACE_DETAIL="lr_kitty_spawn ${LR_SPAWN_SHAPE:-?}-rooted continuation_of:${sid:0:8} target:$acct" \
+          cc_place_pane "$anchor" "$pcwd" -- "${common[@]}" "${LR_LAUNCH_TAIL[@]}")" || return 1
+    case "$id" in ''|*[!0-9]*) return 1 ;; esac
+    printf '%s' "$id"
+    return 0
+  fi
   local surface=os-window
   case "$anchor" in
     ''|*[!0-9]*)
-      id="$("$kb" @ ${to[@]+"${to[@]}"} launch --type=os-window --cwd="$cwd" "${common[@]}" "${LR_LAUNCH_TAIL[@]}" 2>/dev/null)" || return 1 ;;
+      id="$("$kb" @ ${to[@]+"${to[@]}"} launch --type=os-window --cwd="$cwd" --os-window-state=fullscreen "${common[@]}" "${LR_LAUNCH_TAIL[@]}" 2>/dev/null)" || return 1 ;;
     *)
       surface=window
       id="$("$kb" @ ${to[@]+"${to[@]}"} launch --type=window --location=vsplit --match "window_id:$anchor" --next-to "id:$anchor" \

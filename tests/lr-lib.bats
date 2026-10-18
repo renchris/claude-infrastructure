@@ -187,7 +187,11 @@ rc_row() { # $1=pane $2=account [$3=pid] — one registry row naming $SID
 # ── the kitty spawn: anchored beside the SOURCE, socket-addressed, provenance in --var ──────────
 @test "kitty spawn with an anchor: vsplit beside it, --source-window pinned, no focus steal, no --title, provenance in --var" {
   STUB="$BATS_TEST_TMPDIR/stub"; mkdir -p "$STUB"
-  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/kitty.log"; echo 777\n' "$BATS_TEST_TMPDIR" > "$STUB/kitty"; chmod +x "$STUB/kitty"
+  # `ls` answers a census (anchor 616 alone in its OS window), because placement now reads one
+  # before it splits (scripts/lib/pane-placement.sh): an unreadable census opens a fullscreen OS
+  # window instead, which tests/pane-placement.bats pins.
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/kitty.log"\ncase " $* " in *" ls "*) echo %s; exit 0 ;; esac\necho 777\n' \
+    "$BATS_TEST_TMPDIR" "'[{\"id\":1,\"tabs\":[{\"id\":2,\"layout\":\"splits\",\"windows\":[{\"id\":616}]}]}]'" > "$STUB/kitty"; chmod +x "$STUB/kitty"
   export CC_TERM_KITTY="$STUB/kitty" CC_TERM_KITTY_TO="unix:/tmp/fake-kitty"
   run lr_kitty_spawn /tmp/lr-launch-x.sh /tmp/wt "$SID" next3 616
   [ "$status" -eq 0 ]; [ "$output" = 777 ]
