@@ -50,6 +50,8 @@ PANE="$(row pane)"; FROM="$(jq -r '.from // empty' "$PLAN" 2>/dev/null)"; TO="$(
 SRC_CFG="$(row config_dir)"; TO_CFG="$(jq -r '.to_config_dir // empty' "$PLAN" 2>/dev/null)"
 CWD="$(row cwd)"; DISP="$(row disposition)"; UNTIL="$(jq -r '.until_idle_s // 0' "$PLAN" 2>/dev/null)"; ACCT="$(row account)"
 WIDTH="$(jq -r '.slots // empty' "$PLAN" 2>/dev/null)"; : "${WIDTH:=${LR_MOVE_SLOTS:-4}}"
+# The driven rows ahead of this one in the plan (act move or wait, plan order): W3 yields to them.
+AHEAD="$(jq -r --arg s "$SID" '[.rows[] | select(.act == "move" or .act == "wait") | .sid] | .[0:(index($s) // 0)][]' "$PLAN" 2>/dev/null | tr '\n' ' ')"
 REC="move-$BATCH-${SID:0:8}"
 
 ev() { lr_move_event "$BDIR" "$SID" "$@"; }
@@ -65,12 +67,12 @@ finish() { # $1=verdict $2=reason [$3=verdict flags]  → the result file, then 
   # settled batch (lr_move_summary_late; 9f6593c5's STRANDED, 2026-10-17, reached no summary).
   lr_move_summary_late "$BDIR" "$BATCH"
   lr_swap_slot_release
-  rm -f "$BDIR/$SID.waiting" 2>/dev/null || true
+  rm -f "$BDIR/$SID.waiting" "$BDIR/$SID.slotwait" 2>/dev/null || true
   lr_claim_release "$CLAIMS" "$SID" "$$"
   command -v lr_recon_act_done >/dev/null 2>&1 && lr_recon_act_done
   case "$1" in MOVED|MOVED-NEW-PANE|MOVED-UNREGISTERED) exit 0 ;; NOTMOVED) exit 3 ;; *) exit 1 ;; esac
 }
-trap 'lr_swap_slot_release' EXIT
+trap 'lr_swap_slot_release; rm -f "$BDIR/$SID.slotwait" 2>/dev/null' EXIT
 
 ev spawned "pid $$"
 [ -s "$PLAN" ] && [ -n "$PANE" ] && [ -n "$SRC_CFG" ] && [ -n "$TO_CFG" ] && [ -n "$TO" ] \
@@ -164,14 +166,51 @@ limited_now && limited_stop
 # W3. The slot, then the kernel-safety read, both while the session is still alive in its pane.
 # The width is a fixed count (terminal control streams and overlapping boots), not a memory
 # reading, and its timeout says so: `slot-wait:`, never the `capacity:` of the memory read below.
+#
+# THE ORDER WITHIN A BATCH. The plan lists its rows in the operator's priority (highest-activity
+# first), and the batch keeps that order for claims and spawns, but the slot was a free-for-all
+# poll: after a release, whichever waiter's tick reached `mkdir` first took it, so the order was
+# lost at the last step (docs/research/lr-inplace-immediacy-2026-10-18 G §4(b); the admit lock's
+# release order is the same race, measured there with two rows losing both releases and running
+# out). So each waiter here leaves <sid>.slotwait holding its pid, and a row yields while rows
+# ahead of it in the plan are waiting too, unless enough slots are free for all of them and it as
+# well (yielding then would only add a poll tick to every row behind). Only rows in W3 compete: a
+# row still waiting for idle holds nothing, and a marker whose worker is dead is ignored.
+slot_yield() { # → 0 when this row must leave the free slots to the rows ahead of it (_mw_ahead names the first)
+  local s p n=0 free=0 i=1 w="$WIDTH" root
+  _mw_ahead=""
+  for s in $AHEAD; do
+    p="$(cat "$BDIR/$s.slotwait" 2>/dev/null || true)"
+    case "$p" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$p" 2>/dev/null || continue
+    n=$((n + 1)); [ -n "$_mw_ahead" ] || _mw_ahead="$s"
+  done
+  [ "$n" -gt 0 ] || return 1
+  case "$w" in ''|*[!0-9]*) w=4 ;; esac
+  root="$(lr_swap_slot_dir)"
+  while [ "$i" -le "$w" ]; do
+    lr_pidlock_live "$root/slot-$i" || free=$((free + 1))
+    i=$((i + 1))
+  done
+  [ "$n" -ge "$free" ]
+}
+slot_try() { # → 0 with a slot held (LR_SWAP_SLOT); 1 while none is free or a row ahead has the first call on it
+  if slot_yield; then
+    [ -n "${_mw_yielded:-}" ] || { _mw_yielded=1; ev slot-yield "behind ${_mw_ahead:0:8}, ahead of this row in the plan and waiting too"; }
+    return 1
+  fi
+  lr_swap_slot_acquire "$WIDTH"
+}
+printf '%s\n' "$$" > "$BDIR/$SID.slotwait"
 ev slot-wait "width $WIDTH"
 slot_deadline=$(( $(date +%s) + ${LR_MOVE_SLOT_WAIT_S:-600} ))
-until lr_swap_slot_acquire "$WIDTH"; do
+until slot_try; do
   aborted && finish NOTMOVED "aborted while waiting for a slot; nothing touched"
   intent_recheck
-  [ "$(date +%s)" -lt "$slot_deadline" ] || finish NOTMOVED "slot-wait: no move slot freed in ${LR_MOVE_SLOT_WAIT_S:-600}s (width $WIDTH, a fixed count, not a memory limit); nothing touched. Run it again once the lane has drained"
+  [ "$(date +%s)" -lt "$slot_deadline" ] || finish NOTMOVED "slot-wait: no move slot freed in ${LR_MOVE_SLOT_WAIT_S:-600}s (width $WIDTH, a fixed count, not a memory limit)${_mw_yielded:+, and it yielded the free ones to rows ahead of it in the plan}; nothing touched. Run it again once the lane has drained"
   sleep "${LR_MOVE_SLOT_POLL_S:-2}"
 done
+rm -f "$BDIR/$SID.slotwait" 2>/dev/null || true
 ev slot "${LR_SWAP_SLOT##*/}"
 limited_now && limited_stop
 if [ "${LR_MOVE_KERNEL_CHECK:-on}" != off ] && command -v lr_capacity_probe_corrected >/dev/null 2>&1; then

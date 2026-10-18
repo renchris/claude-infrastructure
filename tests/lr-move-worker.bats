@@ -51,13 +51,13 @@ wstart() {
   mkdir -p "$CLAIMS/$1.active"
   bash -c '. "$1/lr-lib.sh"; lr_claim_stamp "$2" "$3" "$4" lr-move-worker "$5"' _ "$LRD" "$CLAIMS/$1.active" "$1" "$WPID" "$2"
 }
-# await_stage <sid> <stage> → 0 once that worker has logged the stage. Waits on the worker's own
-# event, never a fixed sleep: at load ~300 (2026-10-18) a worker took more than 1.5 s to reach its
-# idle wait, and case 11's `sleep 1.5` convicted a correct worker. Bounded at 120 s.
+# await_stage <sid> <stage> [bound s, default 120] → 0 once that worker has logged the stage. Waits
+# on the worker's own event, never a fixed sleep: at load ~300 (2026-10-18) a worker took more than
+# 1.5 s to reach its idle wait, and case 11's `sleep 1.5` convicted a correct worker.
 await_stage() {
-  local i=0
+  local i=0 n=$(( ${3:-120} * 5 ))
   until grep -q "\"stage\":\"$2\"" "$BDIR/$1.events.jsonl" 2>/dev/null; do
-    i=$((i + 1)); [ "$i" -lt 600 ] || { cat "$BDIR/$1.events.jsonl" 2>/dev/null; return 1; }
+    i=$((i + 1)); [ "$i" -lt "$n" ] || { cat "$BDIR/$1.events.jsonl" 2>/dev/null; return 1; }
     sleep 0.2
   done
 }
@@ -367,4 +367,69 @@ hold_slot() { # <slot index> — a live `sleep` holds that swap slot
   ! invoked || false
   [ ! -d "$CLAIMS/$SID.active" ]
   [ -z "$(ls -A "$LR_STATE_DIR/locks/swap-slots" 2>/dev/null)" ]
+}
+
+# ── THE SLOT IN PLAN ORDER (2026-10-18) ──────────────────────────────────────────────────────────
+# The plan lists its rows highest-activity first, but the slot was a free-for-all poll: whichever
+# waiter's tick reached `mkdir` first after a release took it. Case 24 makes that race certain
+# rather than likely: the rows ahead are frozen (SIGSTOP: alive, between two polls) at the instant
+# the slot frees, so a free-for-all hands it to the last row on every run. Poll rates cannot set it
+# up on a loaded box: at load ~390 an iteration's forks, not its sleep, set the pace, and a version
+# that gave the later rows faster polls passed on the unfixed worker.
+S1="bbbb2222-0000-4000-8000-000000000002"; S2="bbbb2222-0000-4000-8000-000000000003"
+verdict_of() { jq -r .verdict "$BDIR/$1.json" 2>/dev/null; }
+slot_free() { [ ! -d "$LR_STATE_DIR/locks/swap-slots/slot-1" ]; }
+
+@test "24 [RED] one slot, three rows queued in reverse plan order: the actuator runs them in plan order" {
+  [ -x /bin/bash ] || skip "/bin/bash absent"
+  mvf_session 42 "$S1"; mvf_session 43 "$S2"
+  MVF_SLOTS=1 mvf_plan w1 move "$PANE:$SID" "42:$S1" "43:$S2"
+  hold_slot 1
+  # the slot wait outlasts three worker starts and the frozen window on a loaded box
+  export WORKER_BASH=/bin/bash LR_MOVE_SLOT_WAIT_S=600
+  wstart "$S2" 43; P2=$WPID; await_stage "$S2" slot-wait
+  wstart "$S1" 42; P1=$WPID; await_stage "$S1" slot-wait
+  wstart "$SID" "$PANE"; P0=$WPID; await_stage "$SID" slot-wait
+  # the holder lets go (as lr_swap_slot_release does) while the rows ahead are between polls
+  kill -STOP "$P0" "$P1"
+  rm -f "$LR_STATE_DIR/locks/swap-slots/slot-1/pid" "$LR_STATE_DIR/locks/swap-slots/slot-1/lstart"
+  rmdir "$LR_STATE_DIR/locks/swap-slots/slot-1"
+  # a free-for-all gives the last row the slot at its next poll; a yielding one leaves it free
+  await_stage "$S2" slot 20 || true
+  slot_ok=0; slot_free || slot_ok=1
+  kill -CONT "$P0" "$P1"
+  # RED before the fix: $S2 took the freed slot while the rows ahead of it were frozen.
+  [ "$slot_ok" -eq 0 ] || { echo "the last row took the slot from the rows ahead"; cat "$BDIR/$S2.events.jsonl"; false; }
+  grep -q '"stage":"slot-yield"' "$BDIR/$S2.events.jsonl"
+  for p in "$P0" "$P1" "$P2"; do wait "$p" || true; done
+  for s in "$SID" "$S1" "$S2"; do
+    [ "$(verdict_of "$s")" = MOVED ] || { echo "$s: $(verdict_of "$s") $(jq -r .reason "$BDIR/$s.json" 2>/dev/null)"; false; }
+  done
+  [ "$(cut -d' ' -f1 "$STUB_LOG/typers.log" | tr '\n' ' ')" = "$SID $S1 $S2 " ] || { cat "$STUB_LOG/typers.log"; false; }
+  # one at a time: every actuator ran holding the only slot
+  [ "$(sort -u "$STUB_LOG/slots.log")" = 1 ]
+  for s in "$SID" "$S1" "$S2"; do [ ! -e "$BDIR/$s.slotwait" ]; done
+}
+
+@test "25 [RED] a row ahead that died in the queue, its marker left behind, holds no one back; a live one does" {
+  [ -x /bin/bash ] || skip "/bin/bash absent"
+  mvf_session 42 "$S1"
+  MVF_SLOTS=1 mvf_plan w1 move "$PANE:$SID" "42:$S1"
+  export WORKER_BASH=/bin/bash LR_MOVE_SLOT_WAIT_S=3
+  # control: the first row's worker is alive in the queue, so the second leaves the free slot to it
+  printf '%s\n' "$MVF_PID" > "$BDIR/$SID.slotwait"
+  wstart "$S1" 42; wait "$WPID" || true
+  # RED before the fix: the second row took the free slot and was MOVED.
+  [ "$(verdict_of "$S1")" = NOTMOVED ] || { verdict_of "$S1"; false; }
+  [[ "$(jq -r .reason "$BDIR/$S1.json")" == "slot-wait:"*", and it yielded the free ones to rows ahead of it in the plan;"* ]] \
+    || { jq -r .reason "$BDIR/$S1.json"; false; }
+  grep -q '"stage":"slot-yield"' "$BDIR/$S1.events.jsonl"
+  ! invoked || false
+  # the same marker naming a dead worker (SIGKILL runs neither finish() nor the EXIT trap)
+  sleep 0 3>&- & dead=$!; wait "$dead" || true
+  printf '%s\n' "$dead" > "$BDIR/$SID.slotwait"
+  rm -f "$BDIR/$S1.json" "$BDIR/$S1.events.jsonl"
+  wstart "$S1" 42; wait "$WPID" || true
+  [ "$(verdict_of "$S1")" = MOVED ] || { verdict_of "$S1"; jq -r .reason "$BDIR/$S1.json"; false; }
+  ! grep -q '"stage":"slot-yield"' "$BDIR/$S1.events.jsonl" || false
 }
