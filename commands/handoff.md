@@ -499,8 +499,14 @@ steering + `/exit`-interrupt semantics on CC version bumps.
 
 **5 · Surface.** Default = `--split-right`: splits the CURRENT pane like ⌘D (same view, same profile) —
 the new session appears right next to where the user is looking, exactly like an Agent Teams teammate
-pane. `--split-down` (⌘⇧D) · `--tab` (background tab, NOT in the current view) · `--window`. All fall
-back to a fresh window when none is open. Use `--dry-run` first when anything is unusual — it prints
+pane. `--split-down` (⌘⇧D) · `--window`. All fall back to a fresh window when none is open.
+**No tabs, ever** (operator rule): every OS window is fullscreen on its own Space with at most 4
+vertical split panes. `--tab` is retired — `hooks/validate-bash.sh` denies it, `bin/it2-kitty` refuses
+`--type=tab`, and the placement policy (`scripts/lib/pane-placement.sh`, `cc_place_pane`: split beside
+the anchor, else into a window with room, else a NEW fullscreen OS window) never chooses one. When
+your own OS window already holds 4 panes, fire `--window --surface-reason "operator rule: no tabs,
+<=4 panes"`. On 2026-10-18 the old `--tab` doctrine turned a rescue loop into 22 hidden tabs, 13 of
+them dead shells (`docs/research/lr-wake-incident-2026-10-18/REPORT.md` RC3). Use `--dry-run` first when anything is unusual — it prints
 the account ranking + the exact command it would type. Occasional flags: `--extra "--permission-mode
 plan"`, `--launcher` for an explicit tier (e.g. `claude-fable-x`; note it skips the probe),
 `--repo`/`--wtroot`/`--base` for non-default placement — full list in the script header.
@@ -508,9 +514,9 @@ plan"`, `--launcher` for an explicit tier (e.g. `claude-fable-x`; note it skips 
 > **`/handoff` fires pass `--follow` — you are watching.** `/handoff` is operator-initiated, so its
 > fires SHOULD raise + land your view on the continuation (the ⌘D split-right experience). `--follow`
 > is what turns the raise back on; **every `/handoff` fire below carries it.** WITHOUT `--follow` a
-> fire is AUTONOMOUS and never moves your focus (C1, 2026-07-19, the ttys018 mis-inject): the default
-> surface becomes a background tab, nothing is raised, and the operator-focused session is captured +
-> asserted unchanged. That background mode is for the DESK's own automation (`cc-dispatch`, `/goal`,
+> fire is AUTONOMOUS and never moves your focus (C1, 2026-07-19, the ttys018 mis-inject): the pane is
+> still placed by the no-tabs policy above (a split, or a new fullscreen OS window), nothing is
+> raised, and the operator-focused session is captured + asserted unchanged. That background mode is for the DESK's own automation (`cc-dispatch`, `/goal`,
 > `waiting-recycle`, wave fires) — none of which read this file — so it fires alongside a typing
 > operator without stealing focus. When YOU run `/handoff`, keep `--follow` on.
 
@@ -522,17 +528,20 @@ plan"`, `--launcher` for an explicit tier (e.g. `claude-fable-x`; note it skips 
 > caller that never named one (desk role pane → the active session → any live pane) and ⌘D-splits
 > it in place. **Do not "fix" a headless anchor problem by passing `--window` from a caller** — that
 > is the exact regression; the chokepoint owns the surface. A fresh window happens only when iTerm2
-> has no live pane at all, and an already-dense tab (≥ `CC_FIRE_MAX_PANES`, default 6) degrades to a
-> background tab in the *same* window. Kill-switch: `CC_FIRE_HEADLESS_ANCHOR=off`.
+> has no live pane at all, and an already-full window gets a new OS window, never a tab.
+> Kill-switch: `CC_FIRE_HEADLESS_ANCHOR=off`.
 >
-> **Split-right is the STICKY default — do NOT preemptively downgrade to `--tab`.** The window is
-> comfortable at **3-4 side panes** (⌘D-style), so a 2nd or 3rd concurrent handoff still fires
-> `--split-right`, NOT `--tab`. Reach for `--tab` ONLY when (a) the firing window already holds ~4+
-> panes, or (b) the user explicitly asks for a tab/background. One split + one tab is WORSE — the
-> "why did it open in a tab?" inconsistency (user-flagged 2026-07-10) — than a slightly busier pane
-> row; visible side-by-side is the whole point. If you catch yourself picking `--tab` to "avoid
-> crowding" at 2-3 panes, that IS the anti-pattern — choose `--split-right`. The model (surface is
-> the agent's judgment call, not the user's) never inherits a prior fire's `--tab`.
+> **Split-right is the STICKY default; `--window` is the only overflow.** The window holds up to **4
+> side panes** (⌘D-style), so a 2nd or 3rd concurrent handoff still fires `--split-right`. When the
+> firing OS window already holds 4 panes, fire `--window --surface-reason "operator rule: no tabs,
+> <=4 panes"` — a new fullscreen OS window on its own Space. There is no tab option to reach for: a
+> tab hides every pane but one, and "splits time out under load" is answered by the placement
+> policy's load-scaled split retries, not by a tab. Never copy `--tab` from an older brief or script.
+>
+> **Rescuing a stranded limit-recover session is never a hand fire.** Use `lr-fleet.sh --one <sid>`
+> or `cc-lr recover <sid>`: they admit before they spawn and queue on a refusal. A hand-written
+> launcher under `/tmp` passed as `--launcher` is denied by `hooks/validate-bash.sh` — that shape is
+> what minted the 2026-10-18 dead-shell tabs.
 
 ```bash
 # typical: fresh track, auto account, Opus@high (the SSOT default — no --effort), split pane in the current view (⌘D-style default).
@@ -540,13 +549,13 @@ plan"`, `--launcher` for an explicit tier (e.g. `claude-fable-x`; note it skips 
 # --goal is the DEFAULT (§ item 1): end state + the CHECK that proves it + what must not change.
 ~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --worktree <slug> --follow \
   --goal 'tests/<suite>.bats is green and the change is landed on origin/main — proven by printing the bats summary with 0 failures and `git ls-tree origin/main -- <path>`; do not weaken any existing gate; full brief in the prompt above, DoD at docs/plans/<PLAN>.md'
-# a 2nd/3rd concurrent handoff STILL splits (do NOT switch to --tab here) — ⌘D again, e.g. below.
+# a 2nd/3rd concurrent handoff STILL splits (up to 4 panes per OS window) — ⌘D again, e.g. below.
 # --probe liveness-probes the ACCOUNT before firing; it is not a throwaway, so it takes a goal too.
 ~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --cwd <wt> --model fable --probe --split-down --follow \
   --goal '<derivation question> answered with a named mechanism and a file:line for each claim — proven by pasting the verdict table into the transcript; do not edit any tracked file; full brief in the prompt above'
-# --tab is for OVERFLOW ONLY (window already ~4+ panes) or an explicit user "put it in a tab" —
+# OVERFLOW (your OS window already holds 4 panes): a new fullscreen OS window, never a tab —
 # a non-default surface, so record WHY with --surface-reason (silences the split-right advisory)
-~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --worktree <slug> --tab --follow --surface-reason "overflow: window already ~4+ panes" \
+~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-<slug>.txt --worktree <slug> --window --follow --surface-reason "operator rule: no tabs, <=4 panes" \
   --goal '<measurable end state> — proven by <the command the session runs and prints>; do not <constraint>; full brief in the prompt above, DoD at <plan path>'
 ```
 
@@ -567,24 +576,23 @@ and like a wave there is no track cap (practical ceiling ≈ 4 accounts × 2 con
   projected 5h burn). Explicit round-robin remains fine for pinning a wave's shape by hand, but
   it is no longer load-bearing. If a track rate-limits mid-flight, `/exit` and relaunch the SAME
   worktree on another account (no rework; the worktree is account-agnostic).
-- **Surfaces at wave scale:** every surface (`--split-right`/`--split-down`/`--tab`) anchors to the
-  pane you fired from (via `$ITERM_SESSION_ID`), so the whole wave lands in YOUR window. Consecutive
-  `--split-right` calls build a teammate-grid there — comfortable to ~3-4 panes; beyond that give each
-  overflow track `--tab` (background tabs in the same window). (The old "first `--window`, rest `--tab`"
-  trick to park a wave elsewhere no longer holds — `--tab` follows the firing pane now, not the
-  last-created window; give each track its own `--window` if you want them out of your working window.)
+- **Surfaces at wave scale:** every surface (`--split-right`/`--split-down`) anchors to the pane you
+  fired from (via `$ITERM_SESSION_ID`), so the whole wave lands in YOUR window. Consecutive
+  `--split-right` calls build a teammate-grid there — up to 4 panes per OS window; beyond that give
+  each overflow track `--window --surface-reason "operator rule: no tabs, <=4 panes"` (a new
+  fullscreen OS window on its own Space). Never `--tab`: tabs are retired.
 - Per-track model/effort still applies row-by-row from the §3 table — a wave can mix Opus tracks and
   a probed Fable track freely.
 
 ```bash
-# 3-track wave: rank once, spread explicitly, splits for the first two, tab for the third.
+# 3-track wave: rank once, spread explicitly, splits for all three (the firing window then holds 4).
 # --follow on each: an operator-initiated wave lands its grid in your view (drop it for a background wave).
 # Each track gets its OWN goal — one measurable end state per track, never one goal describing the wave.
 ~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-sec.txt   --worktree wsfa-sec   --account next4 --follow \
   --goal 'the auth path has no unauthenticated route left — proven by pasting the route audit output and `pnpm test auth` exiting 0; do not change the session schema; full brief in the prompt above, DoD at docs/plans/WSFA.md § sec'
 ~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-money.txt --worktree wsfa-money --account next3 --follow \
   --goal 'every price is read from one source and `pnpm typecheck` exits 0 — proven by pasting both command outputs; do not touch the auth path (another track owns it); full brief in the prompt above, DoD at docs/plans/WSFA.md § money'
-~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-fable.txt --worktree wsfa-fable --account next2 --model fable --probe --tab --follow --surface-reason "overflow: 3rd track" \
+~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-fable.txt --worktree wsfa-fable --account next2 --model fable --probe --follow \
   --goal 'the three rival designs are scored against the named criteria with a single recommendation — proven by pasting the scored table; do not implement anything; full brief in the prompt above, DoD at docs/plans/WSFA.md § design'
 ```
 
