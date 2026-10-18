@@ -48,6 +48,25 @@ lib()  { . "$REPO/hooks/lib/mailbox-pending.sh"; }
   [ "$(cat "$SEEN")" -eq 1 ]
 }
 
+@test "D5: a PostToolUseFailure payload is answered as PostToolUseFailure (never the constant)" {
+  # The post-tool mode is registered for BOTH events; a reply naming the other event is dropped by
+  # the harness after .seen has advanced, so the mail is lost (startup-hooks-2026-10-18 unit 1.2).
+  seed "2026-10-18T10:00:00+0000 [peer] mail after a failed tool"
+  run bash -c 'echo "{\"hook_event_name\":\"PostToolUseFailure\"}" | "$0" post-tool' "$DRAIN"
+  [ "$status" -eq 0 ]
+  ev="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.hookEventName')"
+  [ "$ev" = "PostToolUseFailure" ]
+  printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext' | grep -qF 'mail after a failed tool'
+}
+
+@test "D5: a PostToolUse payload with every field present still answers PostToolUse" {
+  seed "2026-10-18T10:00:00+0000 [peer] ordinary mid-turn page"
+  run bash -c 'echo "{\"session_id\":\"\",\"transcript_path\":\"\",\"agent_id\":\"\",\"cwd\":\"/tmp\",\"hook_event_name\":\"PostToolUse\"}" | "$0" post-tool' "$DRAIN"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.hookSpecificOutput.hookEventName')" = "PostToolUse" ]
+  printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext' | grep -qF 'ordinary mid-turn page'
+}
+
 @test "D5: no pending mail → post-tool exits 0 silently (the every-tool-call common path)" {
   run bash -c 'echo "{}" | "$0" post-tool' "$DRAIN"
   [ "$status" -eq 0 ]

@@ -99,12 +99,17 @@ own_pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; own_pane="${own_pane##*:}"
 # Not `@tsv` either, which would rewrite a backslash in a path as `\\`; a tab inside a value becomes
 # a space, which no session id, transcript path or cwd carries.
 _t=$'\t'
-_row="$(printf '%s' "$_stdin_json" | jq -r '[.session_id, .transcript_path, .agent_id, .cwd]
+# hook_event_name is the 5th field: one registration of the post-tool mode answers BOTH PostToolUse
+# and PostToolUseFailure, and the harness drops a reply whose hookEventName names the other event —
+# 12 peer messages in 48 h were committed to .seen and never reached the model that way
+# (docs/research/startup-hooks-2026-10-18/A9-beyond-startup.md F1).
+_row="$(printf '%s' "$_stdin_json" | jq -r '[.session_id, .transcript_path, .agent_id, .cwd, .hook_event_name]
   | map(. // "" | tostring | gsub("\t"; " ")) | join("\t")' 2>/dev/null || true)"
-case "$_row" in *"$_t"*"$_t"*"$_t"*) ;; *) _row="$_t$_t$_t" ;; esac   # not one well-formed row ⇒ no fields
+case "$_row" in *"$_t"*"$_t"*"$_t"*"$_t"*) ;; *) _row="$_t$_t$_t$_t" ;; esac   # not one well-formed row ⇒ no fields
 own_sid="${_row%%"$_t"*}"; _row="${_row#*"$_t"}"
 own_tp="${_row%%"$_t"*}"; _row="${_row#*"$_t"}"
-own_agent_id="${_row%%"$_t"*}"; own_cwd="${_row#*"$_t"}"
+own_agent_id="${_row%%"$_t"*}"; _row="${_row#*"$_t"}"
+own_cwd="${_row%%"$_t"*}"; own_event="${_row#*"$_t"}"
 case "$own_sid" in *[!0-9A-Fa-f-]*) own_sid="" ;; esac
 
 # SUBAGENTS NEVER DRAIN (2026-09-28). A subagent's PostToolUse payload carries its PARENT's
@@ -181,6 +186,7 @@ case "$MODE" in
   session-start) EVENT=SessionStart ;;
   prompt)        EVENT=UserPromptSubmit ;;
   post-tool)     EVENT=PostToolUse
+                 [ "$own_event" = PostToolUseFailure ] && EVENT=PostToolUseFailure
                  MAXLINES="${CC_POSTTOOL_DRAIN_MAX_LINES:-20}"
                  case "$MAXLINES" in ''|*[!0-9]*) MAXLINES=20 ;; esac ;;
   *)             exit 0 ;;   # Stop / unknown are not handled here (see fix B)
