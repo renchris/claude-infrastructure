@@ -20,7 +20,11 @@
 # can never resolve is still heard. A wrong-window close kills a live session; a held row costs a pane.
 #
 # recycle rows (pane-lifecycle fixes item 4d) are a record of a recycle handoff-fire held on a deaf
-# kitty: once kitty answers, the session is told once to re-run it; see drain_recycle below.
+# kitty: once kitty answers, the session is told once to re-run it; see drain_recycle below. A REMOTE
+# row (form=remote, or a legacy row whose argv names --source-pane/--source-session) is dropped, never
+# mailed: its argv is another actuator's, so telling the subject to run it put two actuators on one
+# admit after that actuator had already aborted it (docs/plans/LIMIT_RECOVER_SELF_INPLACE.md R2).
+# CC_PCQ_REMOTE_RECYCLE_DROP=off restores mailing.
 #
 # self-close rows belong to handoff-fire's own retrier: this never acts on them. If that retrier is
 # gone it pages the desk once, BEFORE the kitty gate (a dead retrier is news precisely while kitty is
@@ -255,6 +259,25 @@ drain_recycle() {
   fi
   if [[ "$id" =~ ^[0-9]+$ && -z "$(pane_window "$id")" ]]; then
     pcq_remove "$row"; log "recycle pane=$pane ✓ pane gone — row removed"; return
+  fi
+  # A REMOTE ROW IS NEVER HANDED TO ITS SUBJECT (R2, docs/plans/LIMIT_RECOVER_SELF_INPLACE.md). The
+  # remote form (a move-lane worker's handoff-fire --recycle --source-pane P --source-session S) files
+  # its row keyed on P, the SUBJECT's pane, holding the WORKER's argv. Mailing it told the subject to
+  # run, from inside its own turn, a remote-form command about itself — one that can never pass the
+  # at-rest proof — while the worker still held the claim and lr-handoff had already aborted the admit
+  # (tombstone, lock, target copy withdrawn), so the argv was dead and two actuators acted on one
+  # admit. The actuator that filed the row owns its retry. form=remote is the new key; a legacy row
+  # has no form, so its argv decides; an explicit form=self stays a self row. Checked before
+  # "already told" so a remote row mailed by the old code is cleaned up too.
+  # CC_PCQ_REMOTE_RECYCLE_DROP=off restores mailing.
+  local form argv record_id
+  form="$(pcq_get "$row" form)"; argv="$(pcq_get "$row" argv)"
+  if [[ "${CC_PCQ_REMOTE_RECYCLE_DROP:-on}" != off ]] \
+     && { [[ "$form" == remote ]] || { [[ "$form" != self ]] && [[ "$argv" == *--source-pane* || "$argv" == *--source-session* ]]; }; }; then
+    record_id="$(pcq_get "$row" record_id)"
+    pcq_remove "$row"
+    log "recycle pane=$pane remote form (its actuator owns the retry: record ${record_id:-?}) — row removed, the subject is never told to run another actuator's argv"
+    return
   fi
   if [[ "$(pcq_get "$row" notified)" == 1 ]]; then log "recycle pane=$pane already told — held until it recycles"; return; fi
   bounded "$NOTIFY_BIN" "$pane" "RECYCLE RETRY: your --recycle of pane $pane was held at $(pcq_get "$row" first_ts) because the terminal did not answer ($(pcq_get "$row" reason)); it answers now — re-run it as its own Bash call, bare (no outer timeout, no grep filter): handoff-fire.sh $(pcq_get "$row" argv)" \

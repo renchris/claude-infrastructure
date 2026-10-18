@@ -262,6 +262,46 @@ recycle_row() { q recycle 41 sid=s41 reason=unreachable argv="--prompt-file /tmp
   grep -q "1 owed recycle(s) held" "$D/pcq.log"
 }
 
+# ── remote recycle rows (R2, docs/plans/LIMIT_RECOVER_SELF_INPLACE.md, 2026-10-18) ────────────────
+# A move-lane worker's held remote recycle is keyed on the SUBJECT's pane but holds the WORKER's argv;
+# the subject must never be mailed it.
+@test "remote recycle row (form=remote), kitty answers, window present: removed, the subject is never told" {
+  q recycle 8 sid=s8 reason=unreachable form=remote record_id=rec-1 actor_pid=4242 \
+    argv="--prompt-file /tmp/b.md --recycle --source-pane 8 --source-session s8" kitty_sock="$D/kitty-610"
+  lsjson 8 ls.json claude
+  run "$DRAIN"
+  [ ! -e "$D/q/recycle-8.json" ]
+  [ ! -e "$D/pcqnotify-calls.log" ]
+  [ ! -e "$D/it2-calls.log" ]
+  grep -q "recycle pane=8 remote form (its actuator owns the retry: record rec-1) — row removed" "$D/pcq.log"
+}
+
+@test "legacy recycle row (no form key) whose argv names --source-pane: removed, never told" {
+  q recycle 8 sid=s8 reason=unreachable argv="--prompt-file /tmp/b.md --recycle --source-pane 8" kitty_sock="$D/kitty-610"
+  lsjson 8 ls.json claude
+  run "$DRAIN"
+  [ ! -e "$D/q/recycle-8.json" ]
+  [ ! -e "$D/pcqnotify-calls.log" ]
+  grep -q "recycle pane=8 remote form (its actuator owns the retry: record ?)" "$D/pcq.log"
+}
+
+@test "CONTROL: an explicit form=self recycle row is still told once" {
+  q recycle 41 sid=s41 reason=unreachable form=self argv="--prompt-file /tmp/b.md --recycle " kitty_sock="$D/kitty-610"
+  lsjson 41 ls.json claude
+  run "$DRAIN"
+  [ "$(grep -c '^notify 41 RECYCLE RETRY' "$D/pcqnotify-calls.log")" -eq 1 ]
+  [ -e "$D/q/recycle-41.json" ]
+}
+
+@test "CONTROL: CC_PCQ_REMOTE_RECYCLE_DROP=off mails a remote row as before" {
+  q recycle 8 sid=s8 reason=unreachable form=remote argv="--recycle --source-pane 8 --source-session s8" kitty_sock="$D/kitty-610"
+  lsjson 8 ls.json claude
+  CC_PCQ_REMOTE_RECYCLE_DROP=off run "$DRAIN"
+  [ "$(grep -c '^notify 8 RECYCLE RETRY' "$D/pcqnotify-calls.log")" -eq 1 ]
+  grep -q 'handoff-fire.sh --recycle --source-pane 8 --source-session s8' "$D/pcqnotify-calls.log"
+  [ "$(qget "$D/q/recycle-8.json" notified)" = 1 ]
+}
+
 @test "an empty queue never asks kitty anything" {
   run "$DRAIN"
   [ "$status" -eq 0 ]
