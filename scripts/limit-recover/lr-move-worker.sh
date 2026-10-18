@@ -33,6 +33,8 @@ LR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 . "$LR/lr-move-lib.sh"
 # shellcheck source=/dev/null
+[ -f "$LR/lr-intent.sh" ] && . "$LR/lr-intent.sh"
+# shellcheck source=/dev/null
 [ -f "$LR/lr-recon-fence.sh" ] && . "$LR/lr-recon-fence.sh"
 for _mw_ca in "$LR/../lib/capacity-admit.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/capacity-admit.sh"; do
   # shellcheck source=/dev/null
@@ -46,7 +48,7 @@ HANDOFF="${LR_MOVE_HANDOFF_BIN:-$LR/lr-handoff.sh}"
 row() { jq -r --arg s "$SID" --arg k "$1" '.rows[] | select(.sid == $s) | .[$k] // empty' "$PLAN" 2>/dev/null; }
 PANE="$(row pane)"; FROM="$(jq -r '.from // empty' "$PLAN" 2>/dev/null)"; TO="$(jq -r '.to // empty' "$PLAN" 2>/dev/null)"
 SRC_CFG="$(row config_dir)"; TO_CFG="$(jq -r '.to_config_dir // empty' "$PLAN" 2>/dev/null)"
-CWD="$(row cwd)"; DISP="$(row disposition)"; UNTIL="$(jq -r '.until_idle_s // 0' "$PLAN" 2>/dev/null)"
+CWD="$(row cwd)"; DISP="$(row disposition)"; UNTIL="$(jq -r '.until_idle_s // 0' "$PLAN" 2>/dev/null)"; ACCT="$(row account)"
 WIDTH="$(jq -r '.slots // empty' "$PLAN" 2>/dev/null)"; : "${WIDTH:=${LR_MOVE_SLOTS:-4}}"
 REC="move-$BATCH-${SID:0:8}"
 
@@ -87,6 +89,31 @@ until [ "$(lr_claim_holder_pid "$CLAIMS/$SID.active" 2>/dev/null || true)" = "$$
 done
 ev claimed
 
+# The operator's intent, re-checked at every hold rather than first at W5. lr-handoff refuses an
+# intent that has lapsed, but only once it runs, which is after the claim, the idle wait and the
+# slot: batch 69593's four rows held ALL 4 swap slots for 107-116 s, each then refused as
+# intent-invalid (expired 902-904 s before), while three valid rows of another batch sat in
+# slot-wait. The same call lr-handoff makes, so the worker and the actuator cannot disagree.
+# Read once at the claim and once right before the actuator, always; the idle-wait and slot polls
+# re-read it at most every LR_MOVE_INTENT_RECHECK_S (default 30 s). An intent expires minutes out
+# and one read is ~12 forks, so a read on every poll is pure fork cost on a box whose load ran
+# ~270-390 while this was built (2026-10-18).
+_mw_intent_at=0
+intent_ok() { # → 0 while the intent still admits this move (LR_INTENT_WHY says why not)
+  _mw_intent_at=$SECONDS
+  command -v lr_intent_check >/dev/null 2>&1 \
+    || { LR_INTENT_WHY="unavailable: lr-intent.sh is not beside the worker, so no intent can be checked"; return 1; }
+  lr_intent_check "$BDIR/intent/$SID.json" "$SID" "$PANE" "$ACCT" "$TO"
+}
+intent_stop() { finish NOTMOVED "intent-invalid: $LR_INTENT_WHY (re-checked by the worker before the move); nothing touched"; }
+intent_recheck() { # the polls' re-read, once LR_MOVE_INTENT_RECHECK_S have passed since the last one
+  local every="${LR_MOVE_INTENT_RECHECK_S:-30}"
+  case "$every" in ''|*[!0-9]*) every=30 ;; esac
+  [ $(( SECONDS - _mw_intent_at )) -ge "$every" ] || return 0
+  intent_ok || intent_stop
+}
+intent_ok || intent_stop
+
 # W1. The fence. A reconciler that owns the sid, or a live launch-lock holder, wins.
 if command -v lr_recon_may_act >/dev/null 2>&1; then
   lr_recon_may_act "$SID" cc-lr-move >"$BDIR/$SID.fence.log" 2>&1 \
@@ -106,6 +133,7 @@ case "$DISP" in
     deadline=$(( T0 + UNTIL )); calm=0; last_ts=""; d=""
     while :; do
       aborted && finish NOTMOVED "aborted while waiting for idle; nothing touched"
+      intent_recheck
       ts="$(sed -n '1p' "$BDIR/snap.ts" 2>/dev/null || true)"
       if [ -n "$ts" ] && [ "$ts" != "$last_ts" ]; then
         last_ts="$ts"
@@ -140,6 +168,7 @@ ev slot-wait "width $WIDTH"
 slot_deadline=$(( $(date +%s) + ${LR_MOVE_SLOT_WAIT_S:-600} ))
 until lr_swap_slot_acquire "$WIDTH"; do
   aborted && finish NOTMOVED "aborted while waiting for a slot; nothing touched"
+  intent_recheck
   [ "$(date +%s)" -lt "$slot_deadline" ] || finish NOTMOVED "slot-wait: no move slot freed in ${LR_MOVE_SLOT_WAIT_S:-600}s (width $WIDTH, a fixed count, not a memory limit); nothing touched. Run it again once the lane has drained"
   sleep "${LR_MOVE_SLOT_POLL_S:-2}"
 done
@@ -154,6 +183,7 @@ if [ "${LR_MOVE_KERNEL_CHECK:-on}" != off ] && command -v lr_capacity_probe_corr
   fi
 fi
 aborted && finish NOTMOVED "aborted before the move; nothing touched"
+intent_ok || intent_stop
 
 # W5. The actuator: the reconciler's idle-move argv with the operator's intent in place of an
 # account fact, and its environment with three differences (placer, swap admission, bgwork answer).

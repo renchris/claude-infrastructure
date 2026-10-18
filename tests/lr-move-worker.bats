@@ -44,6 +44,29 @@ worker() { # [claim: yes|no]   WORKER_BASH names the interpreter (default: PATH 
 }
 res() { jq -r ".$1" "$BDIR/$SID.json"; }
 invoked() { [ -s "$STUB_LOG/typers.log" ]; }
+# wstart <sid> <pane> → that sid's worker running in the background (WPID), its claim stamped to it
+wstart() {
+  "${WORKER_BASH:-bash}" "$LRD/lr-move-worker.sh" w1 "$1" > "$BATS_TEST_TMPDIR/worker.$1.out" 2>&1 3>&- &
+  WPID=$!
+  mkdir -p "$CLAIMS/$1.active"
+  bash -c '. "$1/lr-lib.sh"; lr_claim_stamp "$2" "$3" "$4" lr-move-worker "$5"' _ "$LRD" "$CLAIMS/$1.active" "$1" "$WPID" "$2"
+}
+# await_stage <sid> <stage> → 0 once that worker has logged the stage. Waits on the worker's own
+# event, never a fixed sleep: at load ~300 (2026-10-18) a worker took more than 1.5 s to reach its
+# idle wait, and case 11's `sleep 1.5` convicted a correct worker. Bounded at 120 s.
+await_stage() {
+  local i=0
+  until grep -q "\"stage\":\"$2\"" "$BDIR/$1.events.jsonl" 2>/dev/null; do
+    i=$((i + 1)); [ "$i" -lt 600 ] || { cat "$BDIR/$1.events.jsonl" 2>/dev/null; return 1; }
+    sleep 0.2
+  done
+}
+# ts_feed <worker pid> — a fresh census timestamp every 0.5 s while that worker lives, as the batch
+# runner's census keeps writing them. A single short-lived snapshot is missed by a worker whose poll
+# is slower than it.
+ts_feed() {
+  ( i=2; while kill -0 "$1" 2>/dev/null; do sleep 0.5; echo "feed-$i" > "$BDIR/snap.ts"; i=$((i + 1)); done ) 3>&- &
+}
 
 @test "1 [RED] an idle session is moved: MOVED from disk, claim and slot released, every stage timestamped" {
   worker
@@ -153,19 +176,16 @@ invoked() { [ -s "$STUB_LOG/typers.log" ]; }
 }
 
 @test "11 a wait row moves only after the shared census says move on two snapshots" {
-  MVF_UNTIL=20 mvf_plan w1 wait "$PANE:$SID"
+  MVF_UNTIL=60 mvf_plan w1 wait "$PANE:$SID"   # 20 s ran out at load ~270-390 (2026-10-18): still-busy:move
   snap() { printf '%s\t%s\tnext4\t%s\t/x\t1\t%s\n' "$PANE" "$SID" "$SRC" "$1" > "$BDIR/snap.tsv"; date +%s%N > "$BDIR/snap.ts"; }
   snap mid-turn
-  bash "$LRD/lr-move-worker.sh" w1 "$SID" > "$BATS_TEST_TMPDIR/worker.out" 2>&1 3>&- &
-  WPID=$!
-  mkdir -p "$CLAIMS/$SID.active"
-  bash -c '. "$1/lr-lib.sh"; lr_claim_stamp "$2" "$3" "$4" lr-move-worker "$5"' _ "$LRD" "$CLAIMS/$SID.active" "$SID" "$WPID" "$PANE"
-  sleep 1.5
+  wstart "$SID" "$PANE"
+  await_stage "$SID" waiting; sleep 1
   ! invoked || false
   [ -e "$BDIR/$SID.waiting" ]
-  snap move; sleep 1; snap move
+  snap move; ts_feed "$WPID"
   WRC=0; wait "$WPID" || WRC=$?
-  [ "$(res verdict)" = MOVED ]
+  [ "$(res verdict)" = MOVED ] || { res verdict; res reason; false; }
   [ ! -e "$BDIR/$SID.waiting" ]
 }
 
@@ -201,15 +221,12 @@ limit_tail() { # the last assistant record becomes a usage-limit error, as the c
 }
 
 @test "15 [RED] a wait row that hit its limit while waiting is NOTMOVED became-limited, never restarted without a prompt" {
-  MVF_UNTIL=20 mvf_plan w1 wait "$PANE:$SID"
+  MVF_UNTIL=60 mvf_plan w1 wait "$PANE:$SID"   # 20 s ran out at load ~270-390 (2026-10-18): still-busy:move
   limit_tail
   # the census, as it reads such a session: at rest, composer empty → `move`, twice
   printf '%s\t%s\tnext4\t%s\t/x\t1\tmove\n' "$PANE" "$SID" "$SRC" > "$BDIR/snap.tsv"; echo 1 > "$BDIR/snap.ts"
-  bash "$LRD/lr-move-worker.sh" w1 "$SID" > "$BATS_TEST_TMPDIR/worker.out" 2>&1 3>&- &
-  WPID=$!
-  mkdir -p "$CLAIMS/$SID.active"
-  bash -c '. "$1/lr-lib.sh"; lr_claim_stamp "$2" "$3" "$4" lr-move-worker "$5"' _ "$LRD" "$CLAIMS/$SID.active" "$SID" "$WPID" "$PANE"
-  sleep 1; echo 2 > "$BDIR/snap.ts"
+  wstart "$SID" "$PANE"
+  ts_feed "$WPID"
   WRC=0; wait "$WPID" || WRC=$?
   # RED before the fix: MOVED, and the actuator was invoked.
   [ "$(res verdict)" = NOTMOVED ] || { res verdict; res reason; false; }
@@ -281,4 +298,73 @@ kernel_on() { # <reclaimable GB> <segments %>
   [ "$WRC" -eq 0 ] || { cat "$BATS_TEST_TMPDIR/worker.out"; false; }
   [ "$(res verdict)" = MOVED ] || { res reason; false; }
   ! grep -qi 'syntax error\|bad substitution\|command not found' "$BATS_TEST_TMPDIR/worker.out" || { cat "$BATS_TEST_TMPDIR/worker.out"; false; }
+}
+
+# ── THE INTENT, RE-CHECKED WHILE THE WORKER WAITS (2026-10-18) ───────────────────────────────────
+# Batch 69593's four rows held all 4 swap slots for 107-116 s, then lr-handoff refused each as
+# intent-invalid (expired 902-904 s earlier); the worker had never looked. Each case below lets the
+# intent lapse at one hold and is RED on a worker that leaves the check to lr-handoff. The cases
+# run the worker under /bin/bash, the interpreter launchd gives it, and the polling ones set
+# LR_MOVE_INTENT_RECHECK_S=0 so every poll re-reads (the production default is every 30 s).
+expire_intent() { # <sid> <epoch> — the intent's act-by moved to <epoch>; still 0600, as the lane writes it
+  local f="$BDIR/intent/$1.json"
+  ( umask 077; jq -c --argjson e "$2" '.expires_epoch = $e' "$f" > "$f.t" ) && mv -f "$f.t" "$f"
+}
+hold_slot() { # <slot index> — a live `sleep` holds that swap slot
+  mkdir -p "$LR_STATE_DIR/locks/swap-slots/slot-$1"
+  bash -c '. "$1/lr-lib.sh"; lr_pidlock_stamp "$2" "$3"' _ "$LRD" "$LR_STATE_DIR/locks/swap-slots/slot-$1" "$MVF_PID"
+}
+
+@test "21 [RED] the intent lapses while the row waits for a slot: NOTMOVED intent-invalid in seconds, not at the slot timeout; never invoked" {
+  [ -x /bin/bash ] || skip "/bin/bash absent"
+  MVF_SLOTS=1 mvf_plan w1 move "$PANE:$SID"
+  hold_slot 1
+  export LR_MOVE_SLOT_WAIT_S=45 WORKER_BASH=/bin/bash LR_MOVE_INTENT_RECHECK_S=0
+  wstart "$SID" "$PANE"
+  await_stage "$SID" slot-wait
+  expire_intent "$SID" "$(( $(date +%s) + 2 ))"
+  WRC=0; wait "$WPID" || WRC=$?
+  # RED before the fix: the worker sat out the 45 s slot wait and said `slot-wait:`. The reason is
+  # the timing assertion: an intent-invalid verdict can only come from a re-check that beat the slot
+  # deadline, where a wall-clock bound would only convict a slow box (bound-must-fit-the-band).
+  [ "$(res verdict)" = NOTMOVED ] || { res verdict; res reason; false; }
+  [[ "$(res reason)" == "intent-invalid: expired:"*"(re-checked by the worker before the move); nothing touched" ]] || { res reason; false; }
+  ! invoked || false
+  [ ! -d "$CLAIMS/$SID.active" ]
+  # the worker holds no slot; the only one held is the `sleep`'s, untouched
+  [ "$(ls "$LR_STATE_DIR/locks/swap-slots")" = slot-1 ]
+  [ "$(cat "$LR_STATE_DIR/locks/swap-slots/slot-1/pid")" = "$MVF_PID" ]
+  ! grep -qi 'syntax error\|bad substitution\|command not found' "$BATS_TEST_TMPDIR/worker.$SID.out" || { cat "$BATS_TEST_TMPDIR/worker.$SID.out"; false; }
+}
+
+@test "22 [RED] the intent lapses while a wait row waits for idle: NOTMOVED intent-invalid, never reaches the slot, never invoked" {
+  [ -x /bin/bash ] || skip "/bin/bash absent"
+  MVF_UNTIL=60 mvf_plan w1 wait "$PANE:$SID"
+  printf '%s\t%s\tnext4\t%s\t/x\t1\tmid-turn\n' "$PANE" "$SID" "$SRC" > "$BDIR/snap.tsv"; echo 1 > "$BDIR/snap.ts"
+  export WORKER_BASH=/bin/bash LR_MOVE_INTENT_RECHECK_S=0
+  wstart "$SID" "$PANE"
+  await_stage "$SID" waiting
+  expire_intent "$SID" "$(( $(date +%s) - 1 ))"
+  WRC=0; wait "$WPID" || WRC=$?
+  # RED before the fix: still-busy:mid-turn after the whole 60 s budget.
+  [ "$(res verdict)" = NOTMOVED ] || { res verdict; res reason; false; }
+  [[ "$(res reason)" == "intent-invalid: expired:"* ]] || { res reason; false; }
+  ! grep -q '"stage":"slot-wait"' "$BDIR/$SID.events.jsonl" || false
+  ! invoked || false
+  [ ! -e "$BDIR/$SID.waiting" ]
+  [ ! -d "$CLAIMS/$SID.active" ]
+}
+
+@test "23 [RED] an intent already lapsed when the worker claims: NOTMOVED intent-invalid before the slot queue, never invoked" {
+  [ -x /bin/bash ] || skip "/bin/bash absent"
+  expire_intent "$SID" "$(( $(date +%s) - 900 ))"
+  WORKER_BASH=/bin/bash worker
+  # RED before the fix: the stub actuator (which checks nothing) ran, and the verdict was MOVED.
+  [ "$WRC" -eq 3 ] || { res verdict; res reason; false; }
+  [[ "$(res reason)" == "intent-invalid: expired: the intent expired "* ]] || { res reason; false; }
+  grep -q '"stage":"claimed"' "$BDIR/$SID.events.jsonl"
+  ! grep -q '"stage":"slot-wait"' "$BDIR/$SID.events.jsonl" || false
+  ! invoked || false
+  [ ! -d "$CLAIMS/$SID.active" ]
+  [ -z "$(ls -A "$LR_STATE_DIR/locks/swap-slots" 2>/dev/null)" ]
 }
