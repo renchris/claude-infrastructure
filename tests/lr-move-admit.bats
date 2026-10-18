@@ -112,3 +112,64 @@ intent_edit() { # $1=sid $2=jq filter — keeps the intent 0600, as cc-lr writes
   # The live holder's lock is untouched.
   [ "$(cat "$(ALOCK_T)/pid")" = "$HOLDER" ]
 }
+
+# A4. The dead-holder steal read the pid file TWICE (inside lr_pidlock_live, then `cat` for evidence)
+# and deleted whatever lock was there by then: on 2026-10-18 01:51:45Z two batches were inside the
+# admit section at once (G §2.3). It now reads the pid ONCE, steals by an atomic rename, and keeps the
+# renamed lock only when it still names the pid it judged dead; otherwise it puts it back and waits.
+dead_admit_lock() { # a lock whose holder is DEAD: the pid of a sleep that has already exited
+  /bin/sleep 0 3>&- & DEADPID=$!; wait "$DEADPID" 2>/dev/null || true
+  mkdir -p "$(ALOCK_T)"; printf '%s\n' "$DEADPID" > "$(ALOCK_T)/pid"
+}
+hold_admit_lock_quiet() { # a live holder that has NOT written the lock yet (it arrives mid-steal)
+  /bin/sleep 300 3>&- &
+  HOLDER=$!; MVF_PIDS="$MVF_PIDS $HOLDER"
+}
+
+@test "[RED] A4: a new holder that arrives between the two reads of a dead lock is not robbed (cat wrapper)" {
+  dead_admit_lock
+  hold_admit_lock_quiet
+  fast_clock
+  # The FIRST read of the lock's pid returns the dead pid, then a new live holder takes the section.
+  printf '#!/bin/bash\nfor a in "$@"; do case "$a" in */move-admit.lock/pid)\n  if [ ! -e "%s/fired" ]; then : > "%s/fired"; /bin/cat "$@"; printf "%%s\\n" %s > "$a"; exit 0; fi ;; esac; done\nexec /bin/cat "$@"\n' \
+    "$CLK" "$CLK" "$HOLDER" > "$CLK/cat"
+  chmod +x "$CLK/cat"
+  PATH="$CLK:$PATH" run /bin/bash "$LRD/lr-move-batch.sh" m1
+  [ -e "$CLK/fired" ]
+  [[ "$output" != *"taking it"* ]] || { echo "$output"; false; }
+  [ "$(jq -r .admitted "$BDIR/admit.json")" = false ] || { cat "$BDIR/admit.json"; false; }
+  [ "$(cat "$(ALOCK_T)/pid")" = "$HOLDER" ]
+}
+
+@test "A4: what the steal renamed is verified — a lock re-taken just before the rename is put back (mv wrapper)" {
+  dead_admit_lock
+  hold_admit_lock_quiet
+  fast_clock
+  # The rename of the lock: a new live holder's pid is in it by the time it moves.
+  printf '#!/bin/bash\ncase "$1|${2:-}" in *move-admit.lock\\|*.stale.*) printf "%%s\\n" %s > "$1/pid" ;; esac\nexec /bin/mv "$@"\n' \
+    "$HOLDER" > "$CLK/mv"
+  chmod +x "$CLK/mv"
+  PATH="$CLK:$PATH" run /bin/bash "$LRD/lr-move-batch.sh" m1
+  [[ "$output" != *"taking it"* ]] || { echo "$output"; false; }
+  [ "$(jq -r .admitted "$BDIR/admit.json")" = false ] || { cat "$BDIR/admit.json"; false; }
+  [ "$(cat "$(ALOCK_T)/pid")" = "$HOLDER" ]
+  [ -z "$(compgen -G "$(ALOCK_T).stale.*" || true)" ] || { ls -la "$(dirname "$(ALOCK_T)")"; false; }
+}
+
+@test "A4: a lock whose holder is dead is still taken, once, and the batch is admitted" {
+  dead_admit_lock
+  batch
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"move-admit lock held by a dead process"*"taking it"* ]] || { echo "$output"; false; }
+  [ "$(jq -r .admitted "$BDIR/admit.json")" = true ] || { cat "$BDIR/admit.json"; false; }
+  [ -z "$(compgen -G "$(ALOCK_T).stale.*" || true)" ] || { ls -la "$(dirname "$(ALOCK_T)")"; false; }
+}
+
+@test "[RED] A4: a router read that failed and then ranked on --fresh admits with the reason of the read that answered" {
+  export RANK_MODE=fail-first
+  batch
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(grep -c . "$RANK_LOG")" -ge 2 ] || { cat "$RANK_LOG"; false; }
+  run jq -r '"\(.admitted) \(.target_auth) \(.reason)"' "$BDIR/admit.json"
+  [ "$output" = "true ok router: ranked" ] || { echo "$output"; false; }
+}

@@ -136,10 +136,40 @@ ALOCK="$STATE/locks/move-admit.lock"; mkdir -p "$STATE/locks" "$CLAIMS" 2>/dev/n
 # 900 s because the section measured 97-354 s per holder that night, with three holders queued.
 AWAIT="${LR_MOVE_ADMIT_WAIT_S:-900}"; case "$AWAIT" in ''|*[!0-9]*) AWAIT=900 ;; esac
 adl=$(( $(date +%s) + AWAIT ))
+# THE STEAL READS THE HOLDER ONCE AND RENAMES BEFORE IT DELETES. It read the pid twice (inside
+# lr_pidlock_live, then `cat` for evidence) and then deleted whatever lock was there: a waiter that
+# saw no pid during a holder's unlock and then the NEXT holder's fresh pid "proved" a dead holder and
+# robbed a live one — two batches inside the section at once, 2026-10-18 01:51:45Z (G §2.3). Now the
+# judgment is on one read, the lock moves by an atomic rename (only one mv wins), and the renamed lock
+# is kept only if it still names the pid judged dead — otherwise it goes back and this waiter waits.
+# The same rename-and-verify lr_claim_take uses (lr-lib.sh).
+admit_holder_dead() { # $1=the holder pid, read ONCE → 0 dead (with evidence) · 1 live, or unnamed and young
+  local p="$1" l cur
+  case "$p" in
+    '') [ -n "$(find "$ALOCK" -maxdepth 0 -mmin +1 2>/dev/null)" ]; return ;;
+    *[!0-9]*) return 0 ;;
+  esac
+  kill -0 "$p" 2>/dev/null || return 0
+  [ "${LR_CLAIM_LSTART:-on}" = off ] && return 1
+  l="$(tr -s '[:blank:]' ' ' < "$ALOCK/lstart" 2>/dev/null | sed -e 's/^ //' -e 's/ $//')"
+  [ -n "$l" ] || return 1
+  cur="$(lr_pid_lstart "$p")"
+  [ -n "$cur" ] && [ "$cur" != "$l" ]
+}
 until mkdir "$ALOCK" 2>/dev/null; do
-  if ! lr_pidlock_live "$ALOCK" && [ -n "$(find "$ALOCK" -maxdepth 0 -mmin +1 2>/dev/null)$(cat "$ALOCK/pid" 2>/dev/null)" ]; then
-    say "move-admit lock held by a dead process; taking it"; rm -f "$ALOCK/pid" "$ALOCK/lstart" 2>/dev/null; rmdir "$ALOCK" 2>/dev/null || true
-    continue
+  hp="$(cat "$ALOCK/pid" 2>/dev/null || true)"
+  if admit_holder_dead "$hp"; then
+    tomb="$ALOCK.stale.$$"
+    if mv "$ALOCK" "$tomb" 2>/dev/null; then
+      if [ "$(cat "$tomb/pid" 2>/dev/null || true)" = "$hp" ]; then
+        say "move-admit lock held by a dead process${hp:+ (pid $hp)}; taking it"
+        rm -f "$tomb/pid" "$tomb/lstart" 2>/dev/null; rmdir "$tomb" 2>/dev/null || true
+        continue
+      fi
+      # What moved is not what was judged: a live holder took the section in between. Put it back.
+      [ -e "$ALOCK" ] || mv "$tomb" "$ALOCK" 2>/dev/null || true
+      say "move-admit lock changed hands while it was judged dead; left to its new holder"
+    fi
   fi
   [ "$(date +%s)" -lt "$adl" ] || refuse "another batch held the admit section for ${AWAIT}s (wall clock)"
   sleep 1
@@ -152,6 +182,9 @@ trap unlock EXIT
 ROUTE_WHY=""
 route_read() { # [$1=--fresh] → as above
   local out rc=0 errf
+  # Every read starts blank: a ranked --fresh retry returned 0 with the FIRST read's failure still in
+  # ROUTE_WHY, so admit.json said "router: the router could not answer (rc 3)" (69994, G §2.1).
+  ROUTE_WHY=""
   [ -x "$AB" ] || { ROUTE_WHY="the router is not executable at $AB"; return 3; }
   errf="$BDIR/router.err"
   out="$("$AB" --rank general ${1:+"$1"} 2>"$errf")" || rc=$?
