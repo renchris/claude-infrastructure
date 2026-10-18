@@ -1657,7 +1657,9 @@ def arow(out, name):
     rows = out.split("```text")[1].split("```")[0].splitlines()
     return [l for l in rows if l[3:].split()[:1] == [name]][0]
 out = rd([row(acct="a")], WIN_OPEN)
-assert "permanent" in out and "2099" not in out, out    # no sentinel-derived time remaining
+# no sentinel-derived time remaining — and since 2026-10-18 no Fable line at all: a permanent,
+# active window is the standing state, and chat prints the window only when it is news
+assert "2099" not in out and "Fable window" not in out, out
 # a null stamp and an ELAPSED one both read as an em dash: a past absolute reads as a live
 # deadline, and a negative relative reads as nonsense
 gone = rd([row(acct="b", weekly_reset_at=None, weekly_reset_h=None,
@@ -1793,29 +1795,31 @@ print("OK")'
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
-@test "--readout drain: Heavy work names only routable accounts" {
+@test "--readout drain: heavy work names only routable accounts, in plain words" {
   run python3 -c "$LOAD$READOUT"'
 from unittest import mock
 rows = [row(acct="free", weekly_pct=10), row(acct="shut", weekly_pct=10)]
 with mock.patch.object(ca, "pace_need_ppd", lambda r: 1.0), \
      mock.patch.object(ca, "wk_strand_pp", lambda r: 81.0):
     line = ca._drain_line(rows, {"free"})
-assert line.startswith("Heavy work → **free**: ~81pp of 90 goes unused"), line
-assert "also shut ~81 of 90 (not routable)" in line, line
+assert line.startswith("Give heavy work to **free**: at the last 2 days\x27 pace, 81% of its "
+                       "weekly limit goes unused at reset"), line
+assert "also shut 81% (not usable now)" in line, line
 assert "**shut**" not in line, line
+assert "pp" not in line and "48h" not in line and "→" not in line, line   # no jargon left
 with mock.patch.object(ca, "pace_need_ppd", lambda r: 1.0), \
      mock.patch.object(ca, "wk_strand_pp", lambda r: 0.0):
-    assert ca._drain_line(rows, {"free"}).startswith("Nothing goes unused"), "zero strand"
+    assert ca._drain_line(rows, {"free"}) == "At the last 2 days\x27 pace, no weekly quota goes unused"
 # a strand under 20pp still rides beside the decision, never hidden by it
 three = rows + [row(acct="tiny", weekly_pct=50)]
 with mock.patch.object(ca, "pace_need_ppd", lambda r: 1.0), \
      mock.patch.object(ca, "wk_strand_pp", lambda r: 15.0 if r["acct"] == "tiny" else 81.0):
-    assert "also tiny ~15pp of 50" in ca._drain_line(three, {"free", "tiny"})
+    assert "also tiny 15%" in ca._drain_line(three, {"free", "tiny"})
 # NO account measured: say so, never "nothing goes unused"
 with mock.patch.object(ca, "pace_need_ppd", lambda r: 1.0), \
      mock.patch.object(ca, "wk_strand_pp", lambda r: None):
     u = ca._drain_line(rows, {"free"})
-assert u.startswith("Weekly drain unknown") and "Nothing" not in u, u
+assert u == "Not enough recent readings to forecast unused weekly quota: free, shut", u
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
@@ -1828,13 +1832,235 @@ P = [{"name": "codex", "label": "Codex CLI", "routable": True, "auth_state": "ok
      {"name": "grok", "label": "Grok CLI", "routable": False, "bills_outside_plan": True}]
 out = ca.render_providers_brief(P)
 assert out[0] == "Other agents ready now: **Codex CLI** — all 2 in `claude-accounts --agents`", out
-assert out[1].startswith("🚨 Grok CLI bills OUTSIDE a plan we hold"), out
+# the standing not-wired set is a fact, not an alarm: no 🚨 on a line that prints every run
+assert out[1] == "Not wired, because it would bill outside our plans: **Grok CLI**", out
 assert len(ca.render_providers_brief(P[:1])) == 1                  # no 🚨 line without a biller
 assert ca.render_providers_brief([]) == []
 # an API key is a BILLING state: named as metered money, never as "auth not ok"
 k = ca.render_providers_brief([dict(P[0], auth_state="api-key")])
 assert "auth not ok" not in k[0] and k[1] == "🚨 Codex CLI is on a metered API key", k
 print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+# ---- polish of the chat grid (2026-10-18, review of the landed design) ----------------------------
+# Each case below names the mutant it was proven against.
+
+@test "--readout providers: ready means signed in, installed AND known to bill inside a plan" {
+  # MUTANT: drop the bills_outside_plan test from `ready` and the first two cases call a backend
+  # that bills outside a plan "ready now"; collapse missing/unauth and the third fails.
+  run python3 -c "$LOAD"'
+B = {"label": "Codex CLI", "routable": True, "auth_state": "ok", "installed": True}
+none_ = ca.render_providers_brief([dict(B, bills_outside_plan=None)])
+assert "**Codex CLI**" not in none_[0] and none_[0].startswith("Other agents ready now: none of 1"), none_
+assert none_[1] == "⚠ Codex CLI is routable, but whether it bills outside a plan is unknown", none_
+true_ = ca.render_providers_brief([dict(B, bills_outside_plan=True)])
+assert "**Codex CLI**" not in true_[0], true_
+assert true_[1] == "🚨 Codex CLI is ROUTABLE and bills OUTSIDE a plan we hold", true_
+assert not any("never wired" in l or l.startswith("Not wired") for l in true_), true_
+# the CAUSE of a not-ready routable backend: a missing binary is not a sign-in problem
+gem = dict(B, label="Gem", bills_outside_plan=False, installed=False, auth_state="absent")
+two = ca.render_providers_brief([dict(B, bills_outside_plan=False), gem])
+assert "(also routable: 1 not installed)" in two[0] and "auth not ok" not in two[0], two
+one = ca.render_providers_brief([dict(B, bills_outside_plan=False, auth_state="absent")])
+assert "none of 1 routable (1 not signed in)" in one[0], one
+# the standing set: bold names, so a label carrying its own " · " reads as one name
+st = ca.render_providers_brief([dict(B, bills_outside_plan=False),
+                                {"label": "Pi · Claude backend", "bills_outside_plan": True},
+                                {"label": "Grok CLI", "bills_outside_plan": True}])
+assert st[-1] == ("Not wired, because they would bill outside our plans: "
+                  "**Pi · Claude backend** and **Grok CLI**"), st
+assert not any("🚨" in l for l in st), st
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "--readout skipped: an exclusion with no line of its own is named, and only that one" {
+  # MUTANTS: drop the Skipped note (busy, blind, c98 vanish); add weekly-exhausted to `explained`
+  # unconditionally (c98 vanishes); drop the explained.add on the server-refusal sentence (wall
+  # is listed twice); add the cliff pair outside the login-line branch (c90 vanishes).
+  run python3 -c "$LOAD$READOUT"'
+import json
+def skipped(out):
+    s = [l for l in out.splitlines() if l.startswith("· Skipped by the general router: ")]
+    assert len(s) <= 1, out
+    return s[0] if s else ""
+out = rd([row(acct="busy", k=40, k_work=30), row(acct="blind", k=None), row(acct="ok")])
+sk = skipped(out)
+assert re.search(r"\*\*busy\*\* \(\d+ working, (at|over) its cap of \d+\)", sk), sk
+assert "**blind** (live sessions could not be counted)" in sk, sk
+assert "**ok**" not in sk, sk
+# weekly room under the floor with NO server refusal: listed, without claiming exhaustion
+auth = json.loads(json.dumps(cfg)); auth["spend"] = {"usage_credits_authorized": True}
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    ca.render_readout([row(acct="c98", weekly_pct=98, credits_on=True), row(acct="ok")], auth,
+                      WIN_OPEN, False)
+sk = skipped(buf.getvalue())
+assert "**c98** (weekly room under the router floor, counted against a 98% target" in sk, sk
+assert "out of weekly" not in sk and "no weekly room left" not in sk, sk
+# a SERVER refusal has its own sentence: never listed again
+wall = {"7d_util": 1.0, "7d_status": "rejected", "5h_util": 0.1, "5h_status": "allowed"}
+out = rd([row(acct="wall", weekly_pct=100, wire=wall), row(acct="ok")])
+assert "**out of weekly quota**" in out and "wall" not in skipped(out), out
+# 0.996 still allowed: the sentence itself says the router holds it back, so it is not listed
+w996 = {"7d_util": 0.996, "7d_status": "allowed_warning", "5h_util": 0.1, "5h_status": "allowed"}
+out = rd([row(acct="w", weekly_pct=100, k=5, k_work=2, wire=w996), row(acct="ok")])
+nl = [l for l in out.splitlines() if "not out of weekly quota" in l]
+assert nl and nl[0].endswith("; the router still holds it back from new work"), out
+assert "**w**" not in skipped(out), out
+# ...while 0.99 (routable) carries no such clause
+w99 = dict(w996, **{"7d_util": 0.99})
+assert "holds it back" not in rd([row(acct="w", weekly_pct=100, wire=w99), row(acct="ok")])
+# a 5h cutoff with its ▲ line is not listed
+assert "hot" not in skipped(rd([row(acct="hot", session_pct=95, session_reset_h=2.0),
+                                row(acct="ok")]))
+# a drain set past the warn band has no login line, so it is listed; inside the band it is not
+warn = float(cfg["login_warn_h"])
+os.environ["CC_ROUTE_CLIFF_DRAIN_H"] = str(warn + 28)
+far = rd([row(acct="c90", login_expires_h=warn + 18, login_expires_at=at(warn + 18)), row(acct="ok")])
+assert "**c90** (login expires in " in skipped(far) and "drain window" in skipped(far), far
+del os.environ["CC_ROUTE_CLIFF_DRAIN_H"]
+near = rd([row(acct="c40", login_expires_h=40.0, login_expires_at=at(40)), row(acct="ok")])
+assert "c40" not in skipped(near) and "`c40` login expires" in near, near
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "--readout login: an expiry passed since the sweep reads EXPIRED in chat, from the stamp" {
+  # MUTANT: pass the sweep countdown to the chat cell (drop `h=lxh`) and the cell reads ⚠ 6m.
+  run python3 -c "$LOAD$READOUT"'
+past = (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat()
+r = row(acct="lx", auth="ok", login_expires_at=past, login_expires_h=0.1)
+out = rd([dict(r), row(acct="ok")])
+assert acctrow(out, "lx").rstrip().endswith("⊘ EXPIRED"), acctrow(out, "lx")
+assert "`lx` login EXPIRED" in out and "(in " not in [l for l in out.splitlines() if "`lx`" in l][0], out
+# the BOARD keeps the sweep countdown, byte for byte (it is a different file, rendered earlier)
+board = "\n".join(ca.readout_lines([dict(r)], cfg, WIN_OPEN, False, narrow=True))
+assert "⚠ 6m" in board and "EXPIRED" not in board, board
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "--readout footer: the Fable window prints only when it is news; the time is the READ time" {
+  # MUTANTS: test permanent before active (PERM_OFF reads permanent); read `not active` before
+  # `is None` (UNK reads inactive); print datetime.now() instead of now minus the cache age.
+  run python3 -c "$LOAD$READOUT"'
+import json, time
+UNK = {"active": None, "end": None, "deadline": None, "permanent": False}
+POFF = {"active": False, "end": "2099-12-31", "deadline": None, "permanent": True}
+END = (datetime.now() + timedelta(days=40)).strftime("%Y-%m-%d")   # relative: never a calendar bomb
+DATED = {"active": True, "end": END, "deadline": None, "permanent": False}
+last = lambda out: [l for l in out.splitlines() if l.strip()][-1]
+assert last(rd([row(acct="x")], UNK)).startswith("Fable window: **unknown** — frontier_access"), rd([row()], UNK)
+assert last(rd([row(acct="x")], POFF)).startswith("Fable window: **inactive** — the Fable lane routes nowhere")
+assert last(rd([row(acct="x")], DATED)).startswith(f"Fable window: open through {END} · ")
+assert "Fable" not in last(rd([row(acct="x")], WIN_OPEN))
+assert last(rd([row(acct="x")])).startswith("Quota read live at "), last(rd([row(acct="x")]))
+json.dump({"ts": time.time() - 38, "rows": []}, open(cfg["cache_file"], "w"))
+c = last(rd([row(acct="x")], cached=True))
+clocks = {(datetime.now() - timedelta(seconds=s)).strftime("%H:%M") for s in (38, 39, 40)}
+m = re.fullmatch(r"Quota read at (\d\d:\d\d), (\d+) seconds ago · `claude-accounts --readout --fresh` reads it again now", c)
+assert m and m.group(1) in clocks and 38 <= int(m.group(2)) <= 40, c
+# ten minutes back, the read clock can never share a minute with the render clock
+json.dump({"ts": time.time() - 600, "rows": []}, open(cfg["cache_file"], "w"))
+c = last(rd([row(acct="x")], cached=True))
+clocks = {(datetime.now() - timedelta(seconds=s)).strftime("%H:%M") for s in (600, 601, 602)}
+m = re.match(r"Quota read at (\d\d:\d\d), 10 minutes ago · ", c)
+assert m and m.group(1) in clocks, (c, clocks)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "--readout desk line: the rung in plain words, never the board codes; incumbency is favored" {
+  # MUTANT: put desk_why back on line 1 and every assertion fails; desk_why itself is unchanged
+  # (render_table pins it at "safe set").
+  run python3 -c "$LOAD$READOUT"'
+from unittest import mock
+l1 = lambda out: out.splitlines()[0]
+s = l1(rd([row(acct="a", weekly_reset_at=at(30), weekly_reset_h=30)]))
+assert s.startswith("➤ desk (bare `claude`) → **a** — room in both its 5-hour and weekly limits; "
+                    "weekly resets in 1d 5h"), s
+for code in ("safe set", "5h-safe", "no floor", "sticky", "↻", " · 5h "):
+    assert code not in s, (code, s)
+inc = l1(rd([row(acct="a", desk_incumbent=True)]))
+assert inc.endswith("; favored because your last `claude` opened here"), inc
+with mock.patch.object(ca, "desk_keys", lambda r, c: (0.9, 0.5, ca.DESK_TIER_ANY)):
+    assert "every usable account is on pace to hit its 5-hour limit" in ca.desk_plain(row(), cfg)
+with mock.patch.object(ca, "desk_keys", lambda r, c: (0.5, 0.01, ca.DESK_TIER_5H)):
+    assert "weekly room is thin" in ca.desk_plain(row(), cfg)
+assert "safe set" in ca.desk_why(row(), cfg)          # the board/CLI clause is untouched
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "--readout drain: the general pick leads the names, or the line drops its directive" {
+  # MUTANT: ignore pick_g and the first case leads with far; drop the no-directive arm and the
+  # second case says "Give heavy work to far" while the router sends work to soon.
+  run python3 -c "$LOAD$READOUT"'
+from unittest import mock
+rows = [row(acct="far", weekly_pct=10), row(acct="soon", weekly_pct=50)]
+S = {"far": 76.0, "soon": 50.0}
+with mock.patch.object(ca, "pace_need_ppd", lambda r: 1.0), \
+     mock.patch.object(ca, "wk_strand_pp", lambda r: S[r["acct"]]):
+    both = ca._drain_line(rows, {"far", "soon"}, "soon")
+assert both.startswith("Give heavy work to **soon** or **far**: "), both
+assert "50% and 76% of their weekly limits go unused" in both, both
+S["soon"] = 15.0
+with mock.patch.object(ca, "pace_need_ppd", lambda r: 1.0), \
+     mock.patch.object(ca, "wk_strand_pp", lambda r: S[r["acct"]]):
+    fact = ca._drain_line(rows, {"far", "soon"}, "soon")
+assert fact == "At the last 2 days\x27 pace, unused at weekly reset: **far** 76% · soon 15%", fact
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "--readout pace: alarm rows and the fleet line count down the way the grid cells do" {
+  # MUTANT: call pace_line / fleet_pace_line without the chat formatter and the cached row reads
+  # "1d left" beside a 23h 56m cell, and the fleet line "7.4h" beside 7h 24m.
+  run python3 -c "$LOAD$READOUT"'
+from unittest import mock
+LATE = {"h": -3.0, "verdict": "LATE", "unrecoverable_pp": 4.0, "windows": 1, "t_needed_h": 23.0,
+        "freeze_h": 1.03, "need_spp": 26.0, "deficit_pp": 90.0}
+r = row(acct="late", weekly_pct=10, weekly_reset_h=25.0, weekly_reset_at=at(23.95),
+        burn_wk_ewma_ph=0.5, burst_start=LATE)
+out = rd([dict(r)])
+pl = [l for l in out.splitlines() if "LATE by" in l]
+assert pl and re.search(r"· 23h 5[56]m left$", pl[0]), out
+board = "\n".join(ca.readout_lines([dict(r)], cfg, WIN_OPEN, False, narrow=True))
+assert "1d left" in board, board                      # the board keeps its sweep countdown
+fake = {"by": "late", "by_h": 7.4, "pace": 1.0, "needed": 3.4, "short_pp": 75.0}
+with mock.patch.object(ca, "fleet_pace", lambda s, n, a: fake), \
+     mock.patch.object(ca, "_fleet_burn", lambda s, t: None), \
+     mock.patch.object(ca, "_util_tail", lambda hours: ([], None)):
+    rows = [row(acct="late", weekly_reset_h=7.4, weekly_reset_at=at(7.4))]
+    assert ca.fleet_pace_line(rows).endswith("reset in 7.4h")
+    assert re.search(r"reset in 7h 2[34]m$", ca.fleet_pace_line(rows, fmt=ca.fmt_board_t))
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "_md_when, _fmt_when, _fmt_asof: a NAIVE stamp is UTC, as hrs_until reads it" {
+  # MUTANT: restore `if dt.tzinfo is not None: dt = dt.astimezone()` and the naive clock is off
+  # by the UTC offset. The zone is pinned off UTC: on a UTC box the mutant would pass.
+  run python3 -c "$LOAD"'
+import time
+from datetime import datetime, timezone, timedelta
+os.environ["TZ"] = "America/Chicago"; time.tzset()
+assert datetime.now().astimezone().utcoffset() != timedelta(0)
+aware = datetime.now(timezone.utc) + timedelta(hours=5)
+naive = aware.replace(tzinfo=None).isoformat()
+for f in (ca._md_when, ca._fmt_when, ca._fmt_asof):
+    assert f(naive) == f(aware.isoformat()), (f.__name__, f(naive), f(aware.isoformat()))
+print("OK", datetime.now().astimezone().utcoffset())'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
