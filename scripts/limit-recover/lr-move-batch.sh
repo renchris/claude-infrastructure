@@ -271,7 +271,10 @@ EOF2
         _mb_w="${_mb_w##*/}"; snap_sel+=(--sid "${_mb_w%.waiting}")
       done
     fi
-    if /bin/bash "$UPGRADE" --switch-census ${snap_from:+--from "$snap_from"} --target "$TO" ${snap_sel[@]+"${snap_sel[@]}"} > "$BDIR/snap.tsv.tmp" 2>/dev/null; then
+    # LRU_SELF_SID PINNED EMPTY (2026-10-18, pane 374's ask): this runner inherits the requester's
+    # env, and the census reads LRU_SELF_SID as "this row is me" (disp=self, a hold), so a batch moving
+    # the requester's own session would wait on a `self` that never turns `move`. No row is the runner.
+    if LRU_SELF_SID='' /bin/bash "$UPGRADE" --switch-census ${snap_from:+--from "$snap_from"} --target "$TO" ${snap_sel[@]+"${snap_sel[@]}"} > "$BDIR/snap.tsv.tmp" 2>/dev/null; then
       mv -f "$BDIR/snap.tsv.tmp" "$BDIR/snap.tsv" && date +%s > "$BDIR/snap.ts"
     fi
     last_snap="$(date +%s)"

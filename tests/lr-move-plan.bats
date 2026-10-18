@@ -453,3 +453,19 @@ STUB
   ! grep -q -- "$S1\|$S3" "$CENSUS_LOG" || { cat "$CENSUS_LOG"; false; }
   grep -q -- '--from next3 --target next2' "$CENSUS_LOG" || { cat "$CENSUS_LOG"; false; }
 }
+
+@test "25 [RED] the WATCH census runs with LRU_SELF_SID empty, whatever the requester exported" {
+  [ -x /bin/bash ] || skip "/bin/bash absent"
+  # The runner inherits the requester's env, and the census reads LRU_SELF_SID as "this row is me"
+  # (disp=self, a hold): a batch moving the requester's own session would never see it `move`.
+  sess 401 "$S1"
+  sess 402 "$S2"
+  run bash "$CCLR" move --sids "$S1,$S2" --to next2 --wait 0
+  [ -n "$(moved_dir)" ] || { echo "rc $status: $output"; false; }
+  export LRU_SELF_SID="$S2"
+  watchbatch "$S2"
+  [ -s "$CENSUS_LOG" ] || { echo "$output"; false; }
+  # RED before: self=[<S2>].
+  grep -q -- '^self=\[\] --switch-census ' "$CENSUS_LOG" || { cat "$CENSUS_LOG"; false; }
+  ! grep -q -- "^self=\[$S2\]" "$CENSUS_LOG" || { cat "$CENSUS_LOG"; false; }
+}
