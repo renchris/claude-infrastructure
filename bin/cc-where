@@ -404,6 +404,35 @@ def panes(tree: list) -> list[dict]:
     return rows
 
 
+def max_panes() -> int:
+    try:
+        n = int(os.environ.get("CC_MAX_PANES_PER_SPACE", "4"))
+    except ValueError:
+        n = 4
+    return n if n > 0 else 4
+
+
+def layout_violations(tree: list, rows: list[dict]) -> list[str]:
+    """The operator rule, checked: NO kitty tabs, ever, and at most CC_MAX_PANES_PER_SPACE (4)
+    panes per OS window — every OS window fullscreen on its own Space (lr-wake incident 2026-10-18,
+    REPORT §4 Wave D). A second tab hides every pane in it, which is how 13 dead shells sat unseen
+    in OS window 18 overnight. One line per OS window that breaks the rule; overlays are not panes.
+    Fullscreen itself cannot be read here: kitty @ ls has no fullscreen field."""
+    cap = max_panes()
+    out = []
+    for osw in tree:
+        ntabs = len(osw.get("tabs") or [])
+        npanes = sum(1 for r in rows if r["oswin"] == osw["id"] and not r["is_overlay"])
+        why = []
+        if ntabs > 1:
+            why.append(f"{ntabs} tabs")
+        if npanes > cap:
+            why.append(f"{npanes} panes (max {cap})")
+        if why:
+            out.append(f"kitty window {osw['id']}: " + ", ".join(why))
+    return out
+
+
 def _state(r: dict) -> tuple[str, str]:
     if not r["on_screen"]:
         return C["off"], "off"
@@ -437,6 +466,12 @@ def render(
         print(
             f"{C['off']}{C['bold']}{n_cov} pane(s) BURIED UNDER A KITTEN OVERLAY{C['reset']} — "
             f"live, but the overlay holds the keyboard. Click the pane and press ESC."
+        )
+    # Answer-first as well: a second tab is the state that HIDES sessions wholesale.
+    for v in layout_violations(tree, rows):
+        print(
+            f"{C['off']}{C['bold']}LAYOUT RULE BROKEN{C['reset']} — {v}. "
+            f"Rule: no tabs, at most {max_panes()} panes per fullscreen OS window."
         )
     print()
 
@@ -582,6 +617,8 @@ USAGE = """cc-where — locate a Claude Code session on your physical screens
   cc-where --hidden        only panes that are off-screen right now
   cc-where --go <regex>    focus that pane (raises its window, switches to its tab)
   cc-where --json          machine-readable census (LOCAL PANES ONLY — see below)
+  cc-where --layout        check the layout rule: exit 1 when any OS window has more
+                           than 1 tab or more than 4 panes (CC_MAX_PANES_PER_SPACE)
 
   OFF-BOX sessions (declared with cc-cloud) are listed in their own block: they run
   in an Anthropic-managed VM, so they are on no screen this box owns, have no pid
@@ -617,6 +654,13 @@ def main(argv: list[str]) -> int:
     if args[0] == "--json":
         print(json.dumps(rows, indent=2))
         return 0
+    if args[0] == "--layout":
+        bad = layout_violations(tree, rows)
+        for v in bad:
+            print(f"cc-where: LAYOUT RULE BROKEN — {v}")
+        if not bad:
+            print(f"cc-where: layout ok — {len(tree)} OS window(s), each 1 tab and at most {max_panes()} panes")
+        return 1 if bad else 0
     if args[0] == "--go":
         if len(args) < 2:
             print("cc-where --go <regex>", file=sys.stderr)
