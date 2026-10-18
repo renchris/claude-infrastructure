@@ -94,7 +94,7 @@ calls() { cat "$STUB/calls" 2>/dev/null; }
   run "$SCRIPT" --confirm fseventsd-restart
   [ "$status" -eq 1 ]
   [[ "$output" == *"14 MB is not wedged"* ]] || false
-  [ -z "$(calls | grep '^kill')" ]
+  [ "$(calls | grep -c '^kill')" -eq 0 ]
 }
 
 @test "fseventsd-restart is refused when wedged but Spotlight would rescan Development" {
@@ -102,7 +102,7 @@ calls() { cat "$STUB/calls" 2>/dev/null; }
   run "$SCRIPT" --confirm fseventsd-restart
   [ "$status" -eq 1 ]
   [[ "$output" == *"not in Spotlight Exclusions"* ]] || false
-  [ -z "$(calls | grep '^kill')" ]
+  [ "$(calls | grep -c '^kill')" -eq 0 ]
 }
 
 @test "a wedged daemon gets mds recorded, a sample, TERM, and a verified new pid — no KILL" {
@@ -111,7 +111,7 @@ calls() { cat "$STUB/calls" 2>/dev/null; }
   [ "$status" -eq 0 ]
   [[ "$output" == *"VERIFIED: fseventsd 500 → 501"* ]] || false
   calls | grep -qx 'kill -TERM 500'
-  [ -z "$(calls | grep 'kill -KILL')" ]
+  [ "$(calls | grep -c 'kill -KILL')" -eq 0 ]
   calls | grep -q '^sample 500 5 -file '
   compgen -G "$OUT/*-mds.txt" >/dev/null
 }
