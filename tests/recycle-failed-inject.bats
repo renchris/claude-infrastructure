@@ -73,7 +73,7 @@ ctx() { printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext'; }
 
 @test "through the dispatcher: the shipped child reaches the merged additionalContext" {
   mk_packet
-  run /bin/bash -c 'printf "%s" "$1" | CC_SSD_HOOK_DIR="$2" CC_SSD_CHILDREN=recycle-failed-inject.sh CC_SSD_BOUND_S=5 /bin/bash "$3"' _ \
+  run /bin/bash -c 'printf "%s" "$1" | CC_SSD_HOOK_DIR="$2" CC_SSD_CHILDREN=recycle-failed-inject.sh CC_SSD_EMIT_S=5 /bin/bash "$3"' _ \
     "{\"session_id\":\"$SID\",\"hook_event_name\":\"SessionStart\"}" "$REPO/hooks" "$SSD"
   [ "$status" -eq 0 ]
   [[ "$(ctx)" == *"$TOK"* ]] || { echo "$output"; false; }

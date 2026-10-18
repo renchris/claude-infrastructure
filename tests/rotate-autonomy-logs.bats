@@ -184,7 +184,8 @@ DEFAULT_RELPATHS='.claude/autonomy/idl.jsonl
 .claude/logs/launch-stall.jsonl
 .claude/logs/attrib.jsonl
 .claude/logs/convoy-gauge.jsonl
-.claude/logs/convoy-gauge-transitions.log'
+.claude/logs/convoy-gauge-transitions.log
+.claude/logs/session-start-dispatch.jsonl'
 
 @test "DEFAULT_TARGETS covers every unbounded autonomy/log writer the audit named" {
   export HOME="$BATS_TEST_TMPDIR/home"
@@ -224,6 +225,8 @@ DEFAULT_RELPATHS='.claude/autonomy/idl.jsonl
   # writer (capacity-alarm's libproc attribution pass, scripts/lib/capacity-attrib.py).
   # 25th/26th (convoy-gauge.jsonl, convoy-gauge-transitions.log) joined 2026-10-10 WITH their
   # fixture lines, in the commit that created their writer (scripts/convoy-gauge.sh).
+  # 27th (session-start-dispatch.jsonl) joined 2026-10-18 WITH its fixture line, in the commit that
+  # created its writer (the per-child ledger of hooks/session-start-dispatch.sh v2).
   mkdir -p "$HOME/.claude/autonomy" "$HOME/.claude/logs" "$HOME/.claude/autonomy/postland"
   local rel n=0
   while IFS= read -r rel; do
@@ -231,7 +234,7 @@ DEFAULT_RELPATHS='.claude/autonomy/idl.jsonl
     mkbytes "$HOME/$rel" 250            # 250 >= ROTATE_MAX_BYTES(100) → must rotate
     n=$((n + 1))
   done <<< "$DEFAULT_RELPATHS"
-  [ "$n" -eq 26 ]
+  [ "$n" -eq 27 ]
   run bash "$ROT"                        # no args, no ROTATE_TARGETS → the default list
   [ "$status" -eq 0 ]
   while IFS= read -r rel; do
@@ -239,7 +242,7 @@ DEFAULT_RELPATHS='.claude/autonomy/idl.jsonl
     [ "$(rot_count "$HOME/$rel")" -eq 1 ]
     [ "$(wc -c < "$HOME/$rel" | tr -d ' ')" -eq 0 ]   # recreated empty in place
   done <<< "$DEFAULT_RELPATHS"
-  grep -q '"rotated":26' "$CC_IDL"
+  grep -q '"rotated":27' "$CC_IDL"
   grep -q '"skipped":0' "$CC_IDL"
 }
 

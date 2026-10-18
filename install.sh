@@ -337,7 +337,9 @@ done
 # live layer still had no link — this glob said `*.sh`, so a new .py helper was ADDED to trunk and
 # ABSENT from ~/.claude, and the hook that guards on `[ -f "$LIB_DIR/kill-selection.py" ]` was
 # silently inert on the very box it shipped for (CLAUDE.md § "an ADD gets no budget").
-for lib in "$REPO_DIR"/hooks/lib/*.sh "$REPO_DIR"/hooks/lib/*.py; do
+# *.jq too (2026-10-18): session-start-dispatch.sh runs `jq -f lib/ssd-merge.jq` beside its own
+# (symlinked) path, so an unlinked .jq would turn every live start into a loud notice.
+for lib in "$REPO_DIR"/hooks/lib/*.sh "$REPO_DIR"/hooks/lib/*.py "$REPO_DIR"/hooks/lib/*.jq; do
   [[ -f "$lib" ]] || continue
   link_file "$lib" "$CONFIG_DIR/hooks/lib/$(basename "$lib")"
 done
