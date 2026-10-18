@@ -2077,10 +2077,16 @@ sc_noanswer_giveup() { # $1=pane $2=proof rc $3=watcher log $4=queue row → alw
 # exact command to re-run. Nothing here waits or types: the row is the record, and whoever acts on it
 # (scripts/pane-close-retry.sh, once kitty answers) only tells the session to re-run its own recycle as
 # its own call. A later recycle of the same pane that arms its watcher spends the row.
+# THE ROW SAYS WHICH FORM IT IS (R2/R3, docs/plans/LIMIT_RECOVER_SELF_INPLACE.md § W0). A remote
+# row's argv belongs to the actuator that held it (a move-lane worker), never to the pane it names,
+# so its reader must not mail that pane "re-run your recycle": form=remote plus the record id and the
+# actor pid name the real owner. A self row only gains form=self; nothing else about it changes.
 hf_recycle_owed_record() { # $1=pane $2=why → always 0
+  local -a form=(form=self)
+  [ "${RCY_REMOTE:-0}" = 1 ] && form=(form=remote record_id="${LR_RECORD_ID:-}" actor_pid="$PPID")
   sc_pcq_load || { echo "⚠ recycle: pane-close queue lib unreachable — this held recycle is NOT durably recorded" >&2; return 0; }
   pcq_add recycle "$1" sid="$(cc_sid_for_pane "$1" 2>/dev/null || true)" cwd="$PWD" reason="$2" \
-    argv="${HF_INVOKED_ARGS:-}" kitty_sock="${HF_KPROBE_SOCK:-}" >/dev/null 2>&1 \
+    argv="${HF_INVOKED_ARGS:-}" kitty_sock="${HF_KPROBE_SOCK:-}" "${form[@]}" >/dev/null 2>&1 \
     && echo "→ recycle owed: a durable row now records it (pane-close queue, kind recycle); you will be told to re-run once the terminal answers" >&2
   return 0
 }
@@ -2417,6 +2423,80 @@ USAGE
 # The probe still goes over the REAL transport, unchanged in that respect: `session list` takes the
 # same shim the close/relaunch write will take, so it cannot be right about a route the write
 # resolves differently. Only the PARSE of its answer changed.
+
+# Is $1 this process or one of its ancestors? `ps -o ppid=` walked from $$, bounded at 40 hops (the
+# same walk hf_invoking_call_pid takes, without its claude-specific stop). rc 1 for a non-numeric $1.
+hf_pid_is_self_or_ancestor() { # $1=pid → 0 it is $$ or an ancestor of $$ · 1 not
+  local p="$$" n=0
+  case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac
+  while [ -n "$p" ] && [ "$p" != 0 ] && [ "$n" -lt 40 ]; do
+    [ "$p" = 1 ] && return 1
+    [ "$p" = "$1" ] && return 0
+    p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d '[:space:]' || true)"
+    case "$p" in *[!0-9]*) return 1 ;; esac
+    n=$((n + 1))
+  done
+  return 1
+}
+
+# ── A REMOTE RECYCLE THAT NAMES THE CALLER ITSELF (R1, docs/plans/LIMIT_RECOVER_SELF_INPLACE.md § W0) ──
+# --source-pane/--source-session select the REMOTE form, and its post-confirm last read
+# (hf_recycle_last_read) re-proves the subject AT REST. Named at the caller's own session, that
+# subject is mid-tool-call by construction — this very Bash call is its turn — so the read can only
+# ever say `held: busy`, and only AFTER a confirm the hold then unconfirms. Refusing up front, before
+# any side effect, closes no working path: a session that wants to move itself has the move lane
+# (cc-lr move), which waits for the turn to end and moves it from outside with every gate.
+# Two proofs, either sufficient: the harness's own id ($CLAUDE_CODE_SESSION_ID) equals the named
+# session; or, once hf_remote_source_bind/pin have named HF_REMOTE_ROW_PID, that process is an
+# ANCESTOR of this one (the operator's `!` prompt in that pane, or a caller with a stripped env).
+# A genuinely remote caller matches neither and takes the remote form byte-identically.
+# CC_RECYCLE_REMOTE_SELF_REFUSE=off restores the old behaviour.
+hf_remote_is_self() { # $1=named session $2=bound row pid ("" ⇒ the env proof only) → 0 self · 1 not
+  [ "${CC_RECYCLE_REMOTE_SELF_REFUSE:-on}" != off ] || return 1
+  [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] && [ "$CLAUDE_CODE_SESSION_ID" = "${1:-}" ] && return 0
+  [ -n "${2:-}" ] || return 1
+  hf_pid_is_self_or_ancestor "$2"
+}
+hf_remote_self_refuse() { # $1=session $2=pane → prints the refusal; always 0, the caller exits 2
+  local acct=""
+  if [ -n "${RESUME_CFG:-}" ]; then
+    acct="$(hf_tx_account "${RESUME_CFG%/}/projects/x" 2>/dev/null || true)"
+    [ -n "$acct" ] || acct="${RESUME_CFG%/}"
+  fi
+  echo "!! --recycle REFUSED: --source-pane/--source-session name THIS session (${1:0:8}, pane ${2:-?}). A session cannot be the remote subject of its own recycle: its own turn is in flight, so the remote form's at-rest proof can never pass, and a confirm made here would only be unconfirmed. Move yourself with: cc-lr move --sid ${1:-<sid>} --to ${acct:-<account>} — the move lane waits for this turn to end, then moves you from outside with every gate. Nothing was typed." >&2
+  return 0
+}
+
+# ── A TRANSPLANT ANOTHER ACTUATOR OWNS (R2, docs/plans/LIMIT_RECOVER_SELF_INPLACE.md § W0) ──────
+# The move lane claims a session at runs/by-sid/<sid>.active (lr-lib.sh lr_claim_*, bin/cc-lr), and
+# that claim's holder owns the transplant AND its retry. On 2026-10-18 the subject replayed worker
+# 51575's argv while 51575 still held that claim and lock: two actuators confirmed, unconfirmed and
+# aborted one admit. The legitimate chain is worker (holder) → lr-handoff → handoff-fire, so a holder
+# that is this process or an ancestor is ours; a LIVE holder anywhere else refuses. An unreadable
+# claim or an unreachable lr-lib proceeds as before — the lock and record-id checks still bind.
+# Read in a SUBSHELL, as hf_holder_count does, so sourcing lr-lib redefines nothing here.
+# CC_RECYCLE_CLAIM_CHECK=off restores the old behaviour.
+hf_recycle_claim_foreign() { # $1=sid → 0 a live foreign holder (sets HF_CLAIM_PID HF_CLAIM_BY) · 1 none, ours or unreadable
+  local d lib p
+  HF_CLAIM_PID="" HF_CLAIM_BY=""
+  [ "${CC_RECYCLE_CLAIM_CHECK:-on}" != off ] && [ -n "${1:-}" ] || return 1
+  d="${LR_STATE_DIR:-$HOME/.reso/limit-recover}/runs/by-sid/$1.active"
+  [ -d "$d" ] || return 1
+  lib="$(hf_lr_script lr-lib.sh HF_LR_LIB)" || return 1
+  p="$( (
+    # shellcheck disable=SC1090  # runtime-resolved library ladder
+    . "$lib" >/dev/null 2>&1 || exit 1
+    command -v lr_claim_holder_pid >/dev/null 2>&1 && command -v lr_claim_holder_state >/dev/null 2>&1 || exit 1
+    h="$(lr_claim_holder_pid "$d")" || exit 1
+    [ "$(lr_claim_holder_state "$d" "$h")" = live ] || exit 1
+    printf '%s' "$h"
+  ) 2>/dev/null)" || return 1
+  case "$p" in ''|*[!0-9]*) return 1 ;; esac
+  hf_pid_is_self_or_ancestor "$p" && return 1
+  HF_CLAIM_PID="$p"
+  HF_CLAIM_BY="$(sed -n 's/.*"by":"\([^"]*\)".*/\1/p' "$d/holder" 2>/dev/null | sed -n '1p')"
+  return 0
+}
 
 # ── REMOTE SOURCE EVIDENCE — ONE COPY FOR self-close AND --recycle (LIMIT_RECOVER_100P) ─────────
 # Two actuators may act on a pane the caller does not own, and both admit it on the SAME facts: the
@@ -3476,6 +3556,19 @@ hf_recycle_hold() { # $1=reason $2=detail $3=what the operator reads → exit 1
     echo "!! recycle HELD after SIGTERM (held: $1): $3 — watcher disarmed, pane lock released, unconfirm rc $RCY_UNCONFIRM_RC. Re-run: ${CMD:-<the recycle>}" >&2
   else
     echo "!! recycle ABORTED before /exit (held: $1): $3 — /exit NOT submitted, watcher disarmed, pane lock released, unconfirm rc $RCY_UNCONFIRM_RC. The session stays alive. Re-run: ${CMD:-<the recycle>}" >&2
+  fi
+  # The three sentences above are regex-parsed (lr-handoff.sh's `(held: X)` + `unconfirm rc 0.`, and
+  # lr_recon's settle tests), so they stay byte-identical; what they cannot say goes on its own line.
+  # After a transplanted-source unconfirm rc 0 the tombstone and lock are gone, so "Re-run" replays a
+  # command whose evidence no longer exists (R3, docs/plans/LIMIT_RECOVER_SELF_INPLACE.md § W0): name
+  # the re-drive that rebuilds it instead.
+  if [ "${RCY_TRANSPLANTED_SOURCE:-0}" = 1 ] && [ "$RCY_UNCONFIRM_RC" = 0 ]; then
+    local rsid="${RCY_TS_SID:-${RCY_SOURCE_SESSION:-}}" racct=""
+    if [ -n "${HF_TS_TO:-}" ]; then
+      racct="$(hf_tx_account "${HF_TS_TO%/}/projects/x" 2>/dev/null || true)"
+      [ -n "$racct" ] || racct="${HF_TS_TO%/}"
+    fi
+    echo "!! the transplant was withdrawn (unconfirm rc 0), so the command above cannot be replayed — its tombstone and lock are gone. Re-drive the whole move: cc-lr move --sid ${rsid:-<sid>} --to ${racct:-<account>}" >&2
   fi
   exit 1
 }
@@ -15351,6 +15444,11 @@ if [ "$RECYCLE" = 1 ]; then
     # evidence must ALREADY exist — the tombstone is what makes the session PROVABLY retired at this
     # pane, and it is written before the /exit, never after (plan §3 Q3, operator requirement
     # 2026-09-09). The self-identity gate is REPLACED by that binding, not skipped.
+    # FIRST, a remote form aimed at the caller ITSELF is refused before any read or side effect (R1,
+    # hf_remote_is_self): its at-rest proof can never pass, so it could only confirm, then unconfirm.
+    if hf_remote_is_self "$RCY_SOURCE_SESSION" ""; then
+      hf_remote_self_refuse "$RCY_SOURCE_SESSION" "$RCY_SOURCE_PANE"; exit 2
+    fi
     if [ "$RCY_SAME_ACCOUNT" = 1 ]; then
       # THE SAME-ACCOUNT CLASS (cc-lr upgrade). The session did not move, so there is no tombstone;
       # what makes typing /exit into another session's pane admissible instead is: the row binds the
@@ -15362,6 +15460,10 @@ if [ "$RECYCLE" = 1 ]; then
       [ -n "$RESUME_LAUNCHER" ] || { echo "!! --recycle REFUSED: --same-account needs --resume-launcher/--resume-cfg — the relaunch is the session's own uuid on its own account, and the launcher is what says so." >&2; exit 2; }
       hf_remote_source_bind "$RCY_SOURCE_PANE" "$RCY_SOURCE_SESSION" --recycle || exit 2
       hf_remote_source_pin  "$RCY_SOURCE_PANE" "$HF_REMOTE_ROW_PID" --recycle || exit 2
+      # …and by process truth, now that the row has named its pid (R1: a stripped env, an `!` prompt).
+      if hf_remote_is_self "$RCY_SOURCE_SESSION" "$HF_REMOTE_ROW_PID"; then
+        hf_remote_self_refuse "$RCY_SOURCE_SESSION" "$RCY_SOURCE_PANE"; exit 2
+      fi
       hf_same_account_evidence "$RCY_SOURCE_PANE" "$RCY_SOURCE_SESSION" "$RESUME_CFG" "$HF_REMOTE_ROW_PID" --recycle || exit 2
       SID="$RCY_SOURCE_PANE"; RCY_REMOTE=1
       echo "→ remote in-place SAME-ACCOUNT relaunch: pane $SID is PROVEN to hold session ${RCY_SOURCE_SESSION:0:8} by its registry row (pid $HF_REMOTE_ROW_PID on its tty); it lives on $(basename "$RESUME_CFG"), the account it relaunches on; no tombstone; transcript at rest ($HF_SA_TX) — the self-identity gate is REPLACED by that binding, not skipped" >&2
@@ -15370,7 +15472,16 @@ if [ "$RECYCLE" = 1 ]; then
     [ -n "$RESUME_LAUNCHER" ] || { echo "!! --recycle REFUSED: the remote form needs --resume-launcher/--resume-cfg — the only thing a transplanted source may be relaunched INTO is its own uuid on the transplant target." >&2; exit 2; }
     hf_remote_source_bind "$RCY_SOURCE_PANE" "$RCY_SOURCE_SESSION" --recycle || exit 2
     hf_remote_source_pin  "$RCY_SOURCE_PANE" "$HF_REMOTE_ROW_PID" --recycle || exit 2
+    if hf_remote_is_self "$RCY_SOURCE_SESSION" "$HF_REMOTE_ROW_PID"; then
+      hf_remote_self_refuse "$RCY_SOURCE_SESSION" "$RCY_SOURCE_PANE"; exit 2
+    fi
     hf_transplant_evidence "$RCY_SOURCE_SESSION" "$CC_PROJECTS_DIRS" --recycle "" || exit 2
+    # The move lane's per-sid claim names who owns this transplant and its retry (R2,
+    # hf_recycle_claim_foreign): a second actuator replaying the holder's argv is refused here.
+    if hf_recycle_claim_foreign "$RCY_SOURCE_SESSION"; then
+      echo "!! --recycle REFUSED: another actuator holds session ${RCY_SOURCE_SESSION:0:8}'s move claim (pid $HF_CLAIM_PID, ${HF_CLAIM_BY:-unnamed}) — it owns this transplant and its retry. Nothing was typed." >&2
+      exit 2
+    fi
     if [ "${HF_TS_TO%/}" != "${RESUME_CFG%/}" ]; then
       echo "!! --recycle REFUSED: the tombstone hands session ${RCY_SOURCE_SESSION:0:8} to $HF_TS_TO but --resume-cfg names $RESUME_CFG — a relaunch anywhere but the transplant target is a second live copy (lr-fire-resume would refuse it too). Nothing was typed." >&2
       exit 2
