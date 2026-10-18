@@ -279,9 +279,9 @@ mktx_grown() {  # $1 frozen  $2 grown1  [$3 grown2]
 # narrow scope or declare done until ALL of it is met" — so a session in any of 101 worktrees was
 # handed 15 waves' contracts as ITS OWN. That framing also contradicted this very script: `get` and
 # last_recorded_scope both return the NEWEST line only. These cases pin the injection to the same
-# newest-wins semantics the rest of the store already has. LOSSLESS within the injection budget
-# (cases under "INJECTION BUDGET" below) — the older captures are reframed as history rather than as
-# additional binding scope.
+# newest-wins semantics the rest of the store already has. The older captures are no longer injected
+# at all (docs/research/startup-hooks-2026-10-18/README.md §2 #5): a one-line pointer names how many
+# were left out, where they are and how to read them, framed as history, never as binding scope.
 # FAILS LOUD on an empty context. Without this an absent additionalContext makes every `! grep`
 # below pass vacuously — the empty-compares-equal trap — and a negative assertion that can only
 # ever pass is worse than no assertion at all.
@@ -290,11 +290,12 @@ ctx_of() {
   [ -n "$c" ] && [ "$c" != "null" ] || { echo "ctx_of: EMPTY/absent additionalContext" >&2; return 1; }
   printf '%s' "$c"
 }
-# The phrase that separates the binding contract from the history dump. Kept to the WORDING-STABLE
+# The phrase that separates the binding contract from the history. Kept to the WORDING-STABLE
 # core: it read 'full INTEGRATE-only history' until the lineage filter landed, at which point the
 # injected history stopped being "full" (a concurrent wave's captures are now dropped) and every
 # sed-range assertion below silently widened to the whole document — `sed -n '1,/nomatch/p'` prints
 # EVERYTHING, so a stale marker does not fail, it inverts. _hist_mark_live is what makes that loud.
+# Since the history became a pointer the phrase lives in that one line, still below the contract.
 HIST_MARK='INTEGRATE-only history'
 
 # A sed range over an ABSENT marker is vacuous — it selects the whole input, so every "…is NOT above
@@ -336,13 +337,21 @@ _hist_mark_live() {  # $1 = the injected context
   printf '%s' "$ctx" | grep -qF 'NOT additional binding scope'
 }
 
-@test "injection LOSSLESS under the budget: every prior capture still reaches the session as history" {
+@test "injection POINTER: the older captures become one line naming their count, the store and the read command" {
   ( cd "$CWD" && bash "$HOOK" set "wave ONE scope" >/dev/null )
   ( cd "$CWD" && bash "$HOOK" set "wave TWO scope" >/dev/null )
+  ( cd "$CWD" && bash "$HOOK" set "wave THREE scope" >/dev/null )
   run run_hook "$(sjson SessionStart)"
   local ctx; ctx="$(ctx_of "$output")"
-  printf '%s' "$ctx" | grep -q 'wave ONE scope'      # nothing is dropped …
-  printf '%s' "$ctx" | grep -q 'wave TWO scope'      # … and the newest is still there too
+  printf '%s' "$ctx" | grep -qF '    Scope (frozen): wave THREE scope'   # the contract is still quoted
+  # the older two are named by count, not injected: no capture body and no '## ' block reaches the session
+  printf '%s' "$ctx" | grep -qF 'History: 2 other capture(s)'
+  local n; n="$(printf '%s' "$ctx" | grep -cE 'wave (ONE|TWO) scope|^## ' || true)"
+  [ "${n:-0}" -eq 0 ]
+  printf '%s' "$ctx" | grep -qF "Read them in the store: $(dod_path)"
+  printf '%s' "$ctx" | grep -qF '`~/.claude/hooks/dod-persist.sh get`'
+  # … and the store still holds every one of them (only the injection shrank)
+  [ "$(grep -c '^Scope (frozen): wave' "$(dod_path)")" -eq 3 ]
 }
 
 @test "injection: gate-passed GROWN lines stay binding and pre-authorized (unchanged contract)" {
@@ -403,22 +412,45 @@ lo_lacks() { ! printf '%s' "$1" | grep -qF -- "$2"; }
   local c; c="$(lo_ctx "$output")"
   printf '%s' "$c" | grep -qF 'THE CURRENT CONTRACT'
   printf '%s' "$c" | grep -qF '    Scope (frozen): my contract'
-  printf '%s' "$c" | grep -qF '1 capture(s) written by this session, a session that held this pane before it, or a recorded predecessor'
-  printf '%s' "$c" | grep -qF 'The other 2 capture(s) this worktree would see'
+  printf '%s' "$c" | grep -qF 'History: 0 other capture(s) of this lineage (this session, a session that held this pane before it, or a recorded predecessor worktree) are not shown'
+  printf '%s' "$c" | grep -qF 'and 2 from this worktree'"'"'s other sessions or with no provenance are left out'
   lo_lacks "$c" 'other session contract'
   lo_lacks "$c" 'unattributed contract'
   lo_lacks "$c" 'predecessor contract'
 }
 
-@test "lineage-only: a recorded predecessor worktree's capture is inherited" {
+# PREDECESSOR CAPTURES NEVER BIND (docs/research/startup-hooks-2026-10-18/README.md §2 #5 interim
+# fix): the predecessor rule is transitive, and the newest contract it admitted was an unrelated
+# wave's in >=120 of 205 measured injections, shown under "this is what binds you".
+@test "lineage-only: a predecessor-only capture is prior context, never under the binds-you head" {
   lo_setup
   printf '2026-09-02T12:00:00Z\t/pred/wt\t%s\tfire\n' "$TOP" > "$WRAP_DOD_DIR/lineage.tsv"
   run bash -c 'printf "%s" "$1" | CC_DOD_LINEAGE_ONLY=1 bash "$0" 2>/dev/null' "$HOOK" "$(lo_json NEWSID)"
   [ "$status" -eq 0 ]
   local c; c="$(lo_ctx "$output")"
-  printf '%s' "$c" | grep -qF '    Scope (frozen): predecessor contract'
+  # still inherited, as context: the fired child sees what its parent was doing …
+  printf '%s' "$c" | grep -qF 'Prior context only, NOT binding — the newest contract of a recorded predecessor worktree'
+  printf '%s' "$c" | grep -qF 'Scope (frozen): predecessor contract'
+  # … but nothing binds: no binds-you head, and not the head's 4-space quote of a contract
+  printf '%s' "$c" | grep -qF 'THE CURRENT CONTRACT is not recorded'
+  [ "$(printf '%s' "$c" | grep -cF 'this is what binds you' || true)" -eq 0 ]
+  [ "$(printf '%s' "$c" | grep -cF '    Scope (frozen): predecessor contract' || true)" -eq 0 ]
   lo_lacks "$c" 'my contract'
   lo_lacks "$c" 'other session contract'
+}
+
+@test "lineage-only: a predecessor's NEWER contract never displaces this lineage's own as the head" {
+  lo_setup
+  printf '## 2026-09-05T00:00:00Z (PreCompact:auto) · toplevel=/pred/wt · session=PREDSID\nScope (frozen): newer predecessor contract\n\n' >> "$STORE"
+  printf '2026-09-02T12:00:00Z\t/pred/wt\t%s\tfire\n' "$TOP" > "$WRAP_DOD_DIR/lineage.tsv"
+  run bash -c 'printf "%s" "$1" | CC_DOD_LINEAGE_ONLY=1 bash "$0" 2>/dev/null' "$HOOK" "$(lo_json MESID)"
+  [ "$status" -eq 0 ]
+  local c; c="$(lo_ctx "$output")"
+  printf '%s' "$c" | grep -qF 'this is what binds you'
+  printf '%s' "$c" | grep -qF '    Scope (frozen): my contract'
+  # both predecessor captures are counted in the pointer, never shown: 3 admitted − 1 quoted
+  printf '%s' "$c" | grep -qF 'History: 2 other capture(s) of this lineage'
+  lo_lacks "$c" 'predecessor contract'
 }
 
 @test "lineage-only: no lineage in the store ⇒ a one-line pointer to the store, no contract text" {
@@ -427,11 +459,24 @@ lo_lacks() { ! printf '%s' "$1" | grep -qF -- "$2"; }
   [ "$status" -eq 0 ]
   local c; c="$(lo_ctx "$output")"
   [ "$(printf '%s\n' "$c" | grep -c '')" -eq 1 ]
-  printf '%s' "$c" | grep -qF 'no capture in the store belongs to this session'
-  printf '%s' "$c" | grep -qF '3 capture(s) from other sessions of this worktree or with no provenance'
-  printf '%s' "$c" | grep -qF "Store: $STORE"
+  [ "$c" = "No DoD of this lineage; 3 other capture(s) in $STORE" ]
   lo_lacks "$c" 'Scope (frozen)'
   lo_lacks "$c" 'THE CURRENT CONTRACT'
+}
+
+@test "lineage-only: the nothing-to-inject notice is ≤100 chars on the live store path shape" {
+  # live shape: the store under $HOME/.claude/autonomy/dod with a repo key, rendered as '~/…'
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export WRAP_DOD_DIR="$HOME/.claude/autonomy/dod"
+  git -C "$CWD" remote add origin https://example.invalid/notice-len.git
+  lo_setup
+  case "$STORE" in "$WRAP_DOD_DIR"/repo-*.md) ;; *) echo "not the live repo-key shape: $STORE" >&2; false ;; esac
+  run bash -c 'printf "%s" "$1" | CC_DOD_LINEAGE_ONLY=1 bash "$0" 2>/dev/null' "$HOOK" "$(lo_json NEWSID)"
+  [ "$status" -eq 0 ]
+  local c; c="$(lo_ctx "$output")"
+  [ "$c" = "No DoD of this lineage; 3 other capture(s) in ~/.claude/autonomy/dod/${STORE##*/}" ]
+  # +2: a three-digit count (the live store holds dozens) must still fit
+  [ $(( ${#c} + 2 )) -le 100 ] || { echo "notice is ${#c} chars: $c" >&2; false; }
 }
 
 @test "lineage-only: no session id at all ⇒ the pointer, never another session's contract" {
@@ -439,7 +484,7 @@ lo_lacks() { ! printf '%s' "$1" | grep -qF -- "$2"; }
   run bash -c 'printf "%s" "$1" | env -u CLAUDE_CODE_SESSION_ID CC_DOD_LINEAGE_ONLY=1 bash "$0" 2>/dev/null' "$HOOK" "$(lo_json '')"
   [ "$status" -eq 0 ]
   local c; c="$(lo_ctx "$output")"
-  printf '%s' "$c" | grep -qF 'no capture in the store belongs to this session'
+  printf '%s' "$c" | grep -qF 'No DoD of this lineage; '
   lo_lacks "$c" 'Scope (frozen)'
 }
 
@@ -491,7 +536,7 @@ lo_lacks() { ! printf '%s' "$1" | grep -qF -- "$2"; }
   # control: the same session on a pane whose trail does not hold SIDA gets the pointer
   run bash -c 'printf "%s" "$1" | CC_PANE_ID=PANE2 CC_DOD_LINEAGE_ONLY=1 bash "$0" 2>/dev/null' "$HOOK" "$(lo_json SIDB)"
   [ "$status" -eq 0 ]
-  lo_ctx "$output" | grep -qF 'no capture in the store belongs to this session'
+  lo_ctx "$output" | grep -qF 'No DoD of this lineage; '
   lo_lacks "$(lo_ctx "$output")" 'ship X'
 }
 
@@ -531,7 +576,7 @@ lo_lacks() { ! printf '%s' "$1" | grep -qF -- "$2"; }
   printf '## 2026-09-01T00:00:00Z (manual-set) · toplevel=%s · session=OLD1\nScope (frozen): oldest tenant\n\n' "$top" > "$f"
   lo_trail PANE3 OLD1 P2 P3 P4 ME
   run bash -c 'printf "%s" "$1" | CC_PANE_ID=PANE3 CC_DOD_LINEAGE_ONLY=1 bash "$0" 2>/dev/null' "$HOOK" "$(lo_json ME)"
-  lo_ctx "$output" | grep -qF 'no capture in the store belongs to this session'
+  lo_ctx "$output" | grep -qF 'No DoD of this lineage; '
   lo_lacks "$(lo_ctx "$output")" 'oldest tenant'
   run bash -c 'printf "%s" "$1" | CC_PANE_ID=PANE3 CC_DOD_LINEAGE_PANE_MAX=4 CC_DOD_LINEAGE_ONLY=1 bash "$0" 2>/dev/null' "$HOOK" "$(lo_json ME)"
   lo_ctx "$output" | grep -qF '    Scope (frozen): oldest tenant'
@@ -545,18 +590,19 @@ lo_lacks() { ! printf '%s' "$1" | grep -qF -- "$2"; }
   run bash -c 'printf "%s" "$1" | CC_DOD_LINEAGE_ONLY=1 bash "$0" 2>/dev/null' "$HOOK" "$(lo_json NEWSID)"
   [ "$status" -eq 0 ]
   local c; c="$(lo_ctx "$output")"
-  printf '%s' "$c" | grep -qF '0 capture(s) from other sessions'
-  printf '%s' "$c" | grep -qF '2 line(s) outside any capture block'
+  # the short notice counts them as one more capture (the unit _dod_newest_within makes of them)
+  [ "$c" = "No DoD of this lineage; 1 other capture(s) in $f" ]
   lo_lacks "$c" 'legacy box one'
 }
 
-# ── INJECTION BUDGET: the newest captures that fit, newest first ─────────────────────────────────
+# ── INJECTION SIZE: the always-kept captures in full, the rest a pointer ─────────────────────────
 # Past Claude Code's 10,000-char cap the injection is swapped for a 2,000-char preview of its head;
 # rendered oldest-first, that head never reached the newest captures (26 of 26 lineage injections
-# 2026-10-02..04 were over the cap). The injection now carries the newest captures that fit
-# CC_DOD_INJECT_MAX_CHARS (default 6000), newest first, always every capture after the newest frozen
-# one and at least the newest. Order assertions key on the '## <ts>' headers, because the newest
-# frozen line is also quoted in the contract lead above the history.
+# 2026-10-02..04 were over the cap). The budgeted history that fixed it is now a one-line pointer
+# (docs/research/startup-hooks-2026-10-18/README.md §2 #5): only every capture AFTER the newest
+# frozen one is injected, newest first, because 'Scope (grown)' extends the contract. The newest
+# frozen capture itself is the quoted contract and is not repeated. Order assertions key on the
+# '## <ts>' headers, because the newest frozen line is also quoted in the contract lead.
 bud_pad() { printf "%${1}s" '' | tr ' ' p; }
 bud_store() {  # $1=store  $2=session  $3...="frozen:<label>"|"grown:<label>", OLDEST first, ~1.5 KB each
   local store="$1" sid="$2" top i=0 c; shift 2
@@ -571,7 +617,7 @@ bud_store() {  # $1=store  $2=session  $3...="frozen:<label>"|"grown:<label>", O
 }
 bud_line() { printf '%s\n' "$1" | grep -nF -- "$2" | head -1 | cut -d: -f1; }   # first line holding $2
 
-@test "budget: six large captures ⇒ the newest that fit, newest first, under the 10,000-char cap" {
+@test "pointer: six large frozen captures ⇒ the newest is the contract, the other five one line" {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   lo_pane_env
   bud_store "$(dod_path)" MESID frozen:CAP1 frozen:CAP2 frozen:CAP3 frozen:CAP4 frozen:CAP5 frozen:CAP6
@@ -579,12 +625,14 @@ bud_line() { printf '%s\n' "$1" | grep -nF -- "$2" | head -1 | cut -d: -f1; }   
   [ "$status" -eq 0 ]
   local c; c="$(lo_ctx "$output")"
   [ "${#c}" -lt 10000 ]
-  printf '%s' "$c" | grep -qF '## 2026-09-06T'
-  lo_lacks "$c" 'CAP1 p'
-  [ "$(bud_line "$c" '## 2026-09-06T')" -lt "$(bud_line "$c" '## 2026-09-05T')" ]
-  local n; n="$(printf '%s\n' "$c" | grep -c '^## ')"
-  [ "$n" -ge 2 ] && [ "$n" -lt 6 ] || false
-  printf '%s' "$c" | grep -qF "the newest $n of 6 capture(s) written by this session"
+  printf '%s' "$c" | grep -qF '    Scope (frozen): CAP6 p'
+  # no capture block at all: the newest frozen is the quoted contract and is not repeated below it
+  [ "$(printf '%s\n' "$c" | grep -c '^## ' || true)" -eq 0 ]
+  local cap; for cap in CAP1 CAP2 CAP3 CAP4 CAP5; do lo_lacks "$c" "$cap p"; done
+  printf '%s' "$c" | grep -qF 'History: 5 other capture(s) of this lineage'
+  printf '%s' "$c" | grep -qF '`~/.claude/hooks/dod-persist.sh get`'
+  # the whole injection is the frame, the ~1.5 KB contract and the pointer
+  [ "${#c}" -lt 2600 ] || { echo "injection is ${#c} chars" >&2; false; }
 }
 
 @test "budget: every capture after the newest frozen one is kept, even past the budget" {
@@ -592,6 +640,7 @@ bud_line() { printf '%s\n' "$1" | grep -nF -- "$2" | head -1 | cut -d: -f1; }   
   lo_pane_env
   bud_store "$(dod_path)" MESID frozen:OLDBASE grown:+G1 frozen:BASE grown:+G2 grown:+G3 grown:+G4 grown:+G5
   local cap c g
+  # CC_DOD_INJECT_MAX_CHARS no longer sizes anything; the always-kept set is the same at any value
   for cap in 6000 0; do
     run bash -c 'printf "%s" "$1" | CC_DOD_INJECT_MAX_CHARS="$2" CC_DOD_LINEAGE_ONLY=1 bash "$0" 2>/dev/null' \
       "$HOOK" "$(lo_json MESID)" "$cap"
@@ -599,14 +648,16 @@ bud_line() { printf '%s\n' "$1" | grep -nF -- "$2" | head -1 | cut -d: -f1; }   
     c="$(lo_ctx "$output")"
     for g in G2 G3 G4 G5; do printf '%s' "$c" | grep -qF "Scope (grown): +$g p"; done
     printf '%s' "$c" | grep -qF '    Scope (frozen): BASE p'          # the contract lead still names it
+    printf '%s' "$c" | grep -qF 'Below, newest first, in full: 4 capture(s)'
+    printf '%s' "$c" | grep -qF 'History: 2 other capture(s)'     # OLDBASE and +G1, by count only
     lo_lacks "$c" 'OLDBASE'
     lo_lacks "$c" '+G1 p'
   done
-  # power: four ~1.5 KB grown captures cannot fit 6000 with the frame, so the budget alone would cut one
+  # power: four ~1.5 KB grown captures are past the old 6000 budget, so a budget would have cut one
   [ "${#c}" -gt 6000 ]
 }
 
-@test "budget: a store that fits keeps every capture, newest first, one blank line between blocks" {
+@test "always-kept: post-frozen captures arrive in full, newest first, one blank line between blocks" {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   lo_pane_env
   local f; f="$(dod_path)"; mkdir -p "$(dirname "$f")"
@@ -614,42 +665,44 @@ bud_line() { printf '%s\n' "$1" | grep -nF -- "$2" | head -1 | cut -d: -f1; }   
   {
     printf '## 2026-09-01T00:00:00Z (manual-set) · toplevel=%s · session=MESID\nScope (frozen): first small\n\n' "$top"
     printf '## 2026-09-02T00:00:00Z (manual-set) · toplevel=%s · session=MESID\nScope (grown): +second small\n\n' "$top"
-    printf '## 2026-09-03T00:00:00Z (manual-set) · toplevel=%s · session=MESID\nScope (frozen): third small\n\n' "$top"
+    printf '## 2026-09-03T00:00:00Z (manual-set) · toplevel=%s · session=MESID\nScope (grown): +third small\n\n' "$top"
   } > "$f"
   run bash -c 'printf "%s" "$1" | CC_DOD_LINEAGE_ONLY=1 bash "$0" 2>/dev/null' "$HOOK" "$(lo_json MESID)"
   [ "$status" -eq 0 ]
   local c; c="$(lo_ctx "$output")"
-  printf '%s' "$c" | grep -qF 'the newest 3 of 3 capture(s)'
+  printf '%s' "$c" | grep -qF '    Scope (frozen): first small'
+  printf '%s' "$c" | grep -qF 'Below, newest first, in full: 2 capture(s)'
+  printf '%s' "$c" | grep -qF 'History: 0 other capture(s)'
   local l1 l2 l3; l1="$(bud_line "$c" '## 2026-09-01T')"; l2="$(bud_line "$c" '## 2026-09-02T')"; l3="$(bud_line "$c" '## 2026-09-03T')"
-  [ -n "$l1" ] && [ -n "$l2" ] && [ -n "$l3" ] || false
-  [ "$l3" -lt "$l2" ] && [ "$l2" -lt "$l1" ] || false
+  [ -z "$l1" ] && [ -n "$l2" ] && [ -n "$l3" ] || false
+  [ "$l3" -lt "$l2" ] || false
   [ -z "$(printf '%s\n' "$c" | sed -n "$((l2 - 1))p")" ]
-  [ -z "$(printf '%s\n' "$c" | sed -n "$((l1 - 1))p")" ]
+  [ -z "$(printf '%s\n' "$c" | sed -n "$((l3 - 1))p")" ]
 }
 
-@test "budget =0 frame: six large captures ⇒ the newest that fit, newest first, under the cap" {
+@test "pointer =0 frame: six large frozen captures ⇒ the contract and one line, under the cap" {
   bud_store "$(dod_path)" MESID frozen:CAP1 frozen:CAP2 frozen:CAP3 frozen:CAP4 frozen:CAP5 frozen:CAP6
   run run_hook "$(sjson SessionStart)"
   [ "$status" -eq 0 ]
   local c; c="$(ctx_of "$output")"
   [ "${#c}" -lt 10000 ]
   _hist_mark_live "$c"
-  printf '%s' "$c" | grep -qF '## 2026-09-06T'
-  lo_lacks "$c" 'CAP1 p'
-  [ "$(bud_line "$c" '## 2026-09-06T')" -lt "$(bud_line "$c" '## 2026-09-05T')" ]
-  local n; n="$(printf '%s\n' "$c" | grep -c '^## ')"
-  [ "$n" -ge 2 ] && [ "$n" -lt 6 ] || false
-  printf '%s' "$c" | grep -qF "the newest $n of 6 capture(s) from its own worktree"
+  printf '%s' "$c" | grep -qF '    Scope (frozen): CAP6 p'
+  [ "$(printf '%s\n' "$c" | grep -c '^## ' || true)" -eq 0 ]
+  lo_lacks "$c" 'CAP5 p'
+  printf '%s' "$c" | grep -qF "History: 5 other capture(s) of this wave's INTEGRATE-only history"
+  [ "${#c}" -lt 2600 ] || { echo "injection is ${#c} chars" >&2; false; }
 }
 
-@test "budget =0 frame: newest is by timestamp across both stores, not by stream position" {
+@test "always-kept =0 frame: newest is by timestamp across both stores, not by stream position" {
   # dod_read_content emits the repo-key store BEFORE this toplevel's legacy file, so reversing the
-  # stream would rank the legacy store's older capture newest.
+  # stream would rank the legacy store's older FROZEN capture newest, and the strict always-kept set
+  # after it would then be empty instead of the two repo-store growths.
   local legacy repo top; legacy="$(dod_path)"
   git -C "$CWD" remote add origin https://example.invalid/budget-order.git
   repo="$(dod_path)"; [ "$repo" != "$legacy" ]
   top="$(git -C "$CWD" rev-parse --show-toplevel)"; mkdir -p "$(dirname "$repo")"
-  printf '## 2026-09-01T00:00:00Z (manual-set) · toplevel=%s\nScope (grown): +legacy older\n\n' "$top" > "$legacy"
+  printf '## 2026-09-01T00:00:00Z (manual-set) · toplevel=%s\nScope (frozen): legacy older base\n\n' "$top" > "$legacy"
   {
     printf '## 2026-09-03T00:00:00Z (manual-set) · toplevel=%s\nScope (grown): +repo middle\n\n' "$top"
     printf '## 2026-09-05T00:00:00Z (manual-set) · toplevel=%s\nScope (grown): +repo newest\n\n' "$top"
@@ -657,7 +710,8 @@ bud_line() { printf '%s\n' "$1" | grep -nF -- "$2" | head -1 | cut -d: -f1; }   
   run run_hook "$(sjson SessionStart)"
   [ "$status" -eq 0 ]
   local c; c="$(ctx_of "$output")"
+  printf '%s' "$c" | grep -qF '    Scope (frozen): legacy older base'
   local l1 l3 l5; l1="$(bud_line "$c" '## 2026-09-01T')"; l3="$(bud_line "$c" '## 2026-09-03T')"; l5="$(bud_line "$c" '## 2026-09-05T')"
-  [ -n "$l1" ] && [ -n "$l3" ] && [ -n "$l5" ] || false
-  [ "$l5" -lt "$l3" ] && [ "$l3" -lt "$l1" ] || false
+  [ -z "$l1" ] && [ -n "$l3" ] && [ -n "$l5" ] || false
+  [ "$l5" -lt "$l3" ] || false
 }

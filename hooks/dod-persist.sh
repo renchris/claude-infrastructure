@@ -258,9 +258,14 @@ _dod_dedup_stream() {  # $1=cwd  $2=file  $3=own sid
 # newer than the newest one holding a 'Scope (frozen):' line (its 'Scope (grown):' growth extends
 # the contract) and, at minimum, the newest capture. Older ones are added newest-first while they
 # fit, stopping at the first that does not. Lengths are BYTES (LC_ALL=C), never fewer than chars.
-_dod_newest_within() {  # $1=char budget for the history body; stdin → units, newest first, blank-separated
-  DOD_NW_MAX="${1:-0}" LC_ALL=C awk '
-    BEGIN { max = ENVIRON["DOD_NW_MAX"] + 0; n = 0; cur = 0; leg = ""; legfz = 0 }
+# STRICT ($2=1, what both injections now use, with budget 0): the always-kept set WITHOUT the
+# "at minimum the newest" floor when the newest capture is itself the newest frozen one. That capture
+# is the contract the head already quotes, so the floor only repeated it: the newest history block
+# restated THE CURRENT CONTRACT in 205 of 205 measured lineage injections
+# (docs/research/startup-hooks-2026-10-18/A4-tokens.md § Skeptic verdicts, A4-R1).
+_dod_newest_within() {  # $1=char budget for the history body  [$2=1 strict]; stdin → units, newest first, blank-separated
+  DOD_NW_MAX="${1:-0}" DOD_NW_STRICT="${2:-0}" LC_ALL=C awk '
+    BEGIN { max = ENVIRON["DOD_NW_MAX"] + 0; strict = (ENVIRON["DOD_NW_STRICT"] == "1"); n = 0; cur = 0; leg = ""; legfz = 0 }
     index($0, "## ") == 1 {
       n++; cur = n; key[n] = ($2 ~ /^[0-9]/) ? $2 : ""; txt[n] = $0; fz[n] = 0; next
     }
@@ -282,6 +287,7 @@ _dod_newest_within() {  # $1=char budget for the history body; stdin → units, 
       }
       fl = n
       for (i = n; i >= 1; i--) if (fz[ord[i]]) { fl = i + 1; break }
+      if (fl > n && strict) exit
       if (fl > n) fl = n
       used = 0
       for (i = n; i >= fl; i--) used += length(txt[ord[i]]) + 2
@@ -296,19 +302,42 @@ _dod_newest_within() {  # $1=char budget for the history body; stdin → units, 
   '
   return 0
 }
-# The frame is split around its shown-count so the history budget is what CC_DOD_INJECT_MAX_CHARS
-# (default 6000, well under the 10,000 cap) leaves once the frame itself is paid for.
-_dod_frame_budgeted() {  # $1=frame up to the shown count  $2=frame after it  $3=total captures; stdin → history
-  local max bud shown nshow
-  max="${CC_DOD_INJECT_MAX_CHARS:-6000}"; case "$max" in ''|*[!0-9]*) max=6000 ;; esac
-  bud=$(( max - ${#1} - ${#2} - ${#3} )); [ "$bud" -gt 0 ] || bud=0
-  shown="$(_dod_newest_within "$bud")"
+# HISTORY BECOMES A POINTER (docs/research/startup-hooks-2026-10-18/README.md §2 #5, A4-tokens.md R1).
+# The optional older captures this used to fit under CC_DOD_INJECT_MAX_CHARS were ~4,180 of a mean
+# 5,212 injected chars, re-read at every start, and only ever context: the binding part is the
+# contract head plus the always-kept captures after it, which still arrive in full. Everything else
+# is one line naming how many were left out and where to read them. The store keeps every capture,
+# and wrap-ledger and completion-assert read the store, never this injection.
+# $4 counts the captures the frame does not already quote: the one whose 'Scope (frozen):' line the
+# lead quotes is shown there, so callers leave it out of the total.
+_dod_frame_pointer() {  # $1=frame + lead  $2,$3=intro around the kept count  $4=total captures not quoted  $5=pointer after the omitted count; stdin → captures
+  local shown nshow omit
+  shown="$(_dod_newest_within 0 1)"
   nshow="$(printf '%s\n' "$shown" | grep -c '^## ' 2>/dev/null || true)"
   case "$nshow" in ''|*[!0-9]*) nshow=0 ;; esac
-  printf '%s%s%s%s' "$1" "$nshow" "$2" "$shown"
+  omit=$(( ${4:-0} - nshow )); [ "$omit" -gt 0 ] || omit=0
+  printf '%s\n\n' "$1"
+  [ -n "$shown" ] && printf '%s%s%s\n\n%s\n\n' "$2" "$nshow" "$3" "$shown"
+  printf 'History: %s%s' "$omit" "$5"
+}
+_dod_tilde() {  # $1=path → the same path with a leading $HOME shown as '~' (the pointer is read, not run)
+  case "$1" in "$HOME"/*) printf '~%s' "${1#"$HOME"}" ;; *) printf '%s' "$1" ;; esac
+}
+# newest frozen line among the blocks one lineage admits, per source with the repo-key store first, as
+# the default frame computes it
+_dod_lineage_scope() {  # $1=cwd  $2=lineage session ids  $3=predecessor toplevels (both newline-framed)
+  local f s=""
+  while IFS= read -r f; do
+    [ -n "$f" ] && [ -f "$f" ] || continue
+    s="$(dod_filter_for "$1" "$f" | _dod_lineage_blocks "$2" "$3" | last_recorded_scope)"
+    [ -n "$s" ] && break
+  done <<LOSCOPEEOF
+$(dod_read_files "$1")
+LOSCOPEEOF
+  printf '%s' "$s"
 }
 _dod_inject_lineage_only() {  # $1=cwd  $2=own sid  $3=content (already toplevel-filtered)
-  local pred sids kept cur f files nall ncap nun unote framed _lead _pre _post
+  local pred sids kept own cur pcur files f1 nall ncap nun unote framed _lead _pre
   pred="${_dod_nl}$(_dod_lineage_pred "$1")${_dod_nl}"
   sids="${_dod_nl}$(_dod_lineage_sids "$2")${_dod_nl}"
   kept="$(printf '%s\n' "$3" | _dod_lineage_blocks "$sids" "$pred")"
@@ -320,19 +349,26 @@ _dod_inject_lineage_only() {  # $1=cwd  $2=own sid  $3=content (already toplevel
   unote=""
   [ "$nun" -gt 0 ] && unote=" ${nun} line(s) outside any capture block (a legacy checklist or pre-provenance scope) are left out too."
   if [ -z "$kept" ]; then
-    jq -nc --arg c "Durable frozen DoD: no capture in the store belongs to this session, a session that held this pane before it, or a recorded predecessor worktree, so none is injected (CC_DOD_LINEAGE_ONLY=1; ${nall} capture(s) from other sessions of this worktree or with no provenance).${unote} Store: ${files}" \
+    # SHORT NOTICE (README §2 #5, A4 R2 option a): it was ~333 chars of explanation for "nothing is
+    # injected", read 111 times in two days. What the session can act on is the count and the store,
+    # so that is all it says: ≤100 chars on the live path. Lines outside any block (a legacy checklist)
+    # count as one more capture, the unit _dod_newest_within also makes of them; the first file is the
+    # repo-key store, where new captures go.
+    f1="$(dod_read_files "$1" | head -1)"
+    jq -nc --arg c "No DoD of this lineage; $(( nall + (nun > 0) )) other capture(s) in $(_dod_tilde "$f1")" \
       '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}' 2>/dev/null || true
     return 0
   fi
-  # newest frozen line, per source with the repo-key store first, as the default frame computes it
-  cur=""
-  while IFS= read -r f; do
-    [ -n "$f" ] && [ -f "$f" ] || continue
-    cur="$(dod_filter_for "$1" "$f" | _dod_lineage_blocks "$sids" "$pred" | last_recorded_scope)"
-    [ -n "$cur" ] && break
-  done <<LOCUREOF
-$(dod_read_files "$1")
-LOCUREOF
+  # PREDECESSOR CAPTURES NEVER BIND (README §2 #5 interim fix, A4-R1b skeptic verdict). The
+  # predecessor-worktree rule is TRANSITIVE (26 ancestor toplevels measured for one worktree), so the
+  # newest frozen line it admitted was, in >=120 of 205 lineage injections, an unrelated wave's
+  # contract presented as "this is what binds you". The contract head and the always-kept captures
+  # after it now come from this session's lineage alone (the session ids, no predecessor toplevels);
+  # a predecessor's newest contract is shown, when this lineage has none, as prior context only.
+  own="$(printf '%s\n' "$3" | _dod_lineage_blocks "$sids" "$_dod_nl")"
+  cur="$(_dod_lineage_scope "$1" "$sids" "$_dod_nl")"
+  pcur=""
+  [ -n "$cur" ] || pcur="$(_dod_lineage_scope "$1" "$sids" "$pred")"
   ncap="$(printf '%s\n' "$kept" | grep -c '^## ' 2>/dev/null || true)"
   case "$ncap" in ''|*[!0-9]*) ncap=0 ;; esac
   if [ -n "$cur" ]; then
@@ -340,17 +376,17 @@ LOCUREOF
 
     $cur"
   else
-    _lead="THE CURRENT CONTRACT is not recorded — this session's lineage has no 'Scope (frozen):' line yet. Treat the history below as context only, and freeze a scope before claiming completeness."
+    _lead="THE CURRENT CONTRACT is not recorded — this session's lineage has no 'Scope (frozen):' line yet. Treat anything below as context only, and freeze a scope before claiming completeness."
+    [ -z "$pcur" ] || _lead="${_lead}
+
+Prior context only, NOT binding — the newest contract of a recorded predecessor worktree (it is yours only if you freeze it as your own scope): ${pcur}"
   fi
   _pre="Durable frozen DoD for this session — re-injected across recycle and compaction as the completeness baseline.
 
-$_lead
-
-Below: the newest "
-  _post=" of ${ncap} capture(s) written by this session, a session that held this pane before it, or a recorded predecessor worktree, newest first; the older ones are in the store. The other $(( nall - ncap )) capture(s) this worktree would see, from its other sessions or with no provenance, are left out (CC_DOD_LINEAGE_ONLY=1).${unote} Store: ${files}
-
-"
-  framed="$(printf '%s\n' "$kept" | _dod_frame_budgeted "$_pre" "$_post" "$ncap")"
+$_lead"
+  framed="$(printf '%s\n' "$own" | _dod_frame_pointer "$_pre" \
+    "Below, newest first, in full: " " capture(s) of this session's lineage — every one newer than its newest 'Scope (frozen):' line, or the newest alone when it has none." \
+    "$(( ncap - (${#cur} + ${#pcur} > 0) ))" " other capture(s) of this lineage (this session, a session that held this pane before it, or a recorded predecessor worktree) are not shown, and $(( nall - ncap )) from this worktree's other sessions or with no provenance are left out (CC_DOD_LINEAGE_ONLY=1).${unote} Read them in the store: ${files} (\`~/.claude/hooks/dod-persist.sh get\` prints this worktree's newest frozen line).")"
   jq -nc --arg c "$framed" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}' 2>/dev/null || true
   return 0
 }
@@ -428,8 +464,9 @@ case "$event" in
     # It also contradicted THIS SCRIPT: `get` and last_recorded_scope both already return the
     # NEWEST frozen line only. The frame now says what the rest of the store has always meant.
     # The history is reframed as context rather than dropped, and the store keeps all of it; the
-    # injection carries the newest captures that fit CC_DOD_INJECT_MAX_CHARS, newest first, and
-    # always every capture after the newest frozen one (_dod_newest_within, same rule as above).
+    # injection carries every capture after the newest frozen one in full (_dod_newest_within strict,
+    # same rule as above) and names the rest in a one-line pointer (_dod_frame_pointer,
+    # docs/research/startup-hooks-2026-10-18/README.md §2 #5).
     cur=""
     while IFS= read -r _cf; do
       [ -n "$_cf" ] && [ -f "$_cf" ] || continue
@@ -446,18 +483,15 @@ CUREOF
     $cur"
     else
       # no frozen line anywhere (a grown-only store): name no contract rather than invent one
-      _lead="THE CURRENT CONTRACT is not recorded — no 'Scope (frozen):' line exists in this store yet. Treat the history below as context only, and freeze a scope before claiming completeness."
+      _lead="THE CURRENT CONTRACT is not recorded — no 'Scope (frozen):' line exists in this store yet. Treat anything below as context only, and freeze a scope before claiming completeness."
     fi
     _files="$(dod_read_files "$cwd" | paste -sd' ' - 2>/dev/null)"
     _pre="Durable frozen DoD for this worktree — re-injected across recycle and compaction as the completeness baseline.
 
-$_lead
-
-Everything below is this wave's INTEGRATE-only history — the newest "
-    _post=" of ${ncap} capture(s) from its own worktree and its RECORDED PREDECESSORS, newest first; the older ones are in the store (${_files}). A concurrent wave's captures are filtered out mechanically, so nothing below belongs to a sibling; captures written before this store recorded provenance carry no toplevel and are kept rather than guessed at. It is prior CONTEXT, NOT additional binding scope — a predecessor's finished contract is not yours to complete. Each '## ' block names the toplevel that wrote it.
-
-"
-    framed="$(printf '%s\n' "$content" | _dod_frame_budgeted "$_pre" "$_post" "$ncap")"
+$_lead"
+    framed="$(printf '%s\n' "$content" | _dod_frame_pointer "$_pre" \
+      "Below, newest first, in full: " " capture(s) of this worktree — every one newer than its newest 'Scope (frozen):' line, or the newest alone when it has none. Each '## ' block names the toplevel that wrote it." \
+      "$(( ncap - (${#cur} > 0) ))" " other capture(s) of this wave's INTEGRATE-only history, from its own worktree and its RECORDED PREDECESSORS, are not shown. They are prior CONTEXT, NOT additional binding scope — a predecessor's finished contract is not yours to complete. A concurrent wave's captures are filtered out mechanically. Read them in the store: ${_files} (\`~/.claude/hooks/dod-persist.sh get\` prints this worktree's newest frozen line).")"
     jq -nc --arg c "$framed" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}' 2>/dev/null || true
     exit 0 ;;
   PreCompact)
