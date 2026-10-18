@@ -245,7 +245,10 @@ EOF2
   [ "$left" -gt 0 ] || break
   [ "$(date +%s)" -lt "$deadline" ] || { say "the watch bound passed with $left worker(s) still running; they keep their claims and write their own results"; break; }
   if compgen -G "$BDIR/*.waiting" >/dev/null 2>&1 && [ $(( $(date +%s) - last_snap )) -ge "${LR_MOVE_SNAP_S:-20}" ]; then
-    if /bin/bash "$UPGRADE" --switch-census --from "$FROM" --target "$TO" > "$BDIR/snap.tsv.tmp" 2>/dev/null; then
+    # A MIXED batch (`cc-lr move --sids` across accounts, 2026-10-17) has no one source: a --from
+    # would keep one account's rows and starve every other waiting worker of its snapshot row.
+    snap_from="$FROM"; [ "$snap_from" != mixed ] || snap_from=""
+    if /bin/bash "$UPGRADE" --switch-census ${snap_from:+--from "$snap_from"} --target "$TO" > "$BDIR/snap.tsv.tmp" 2>/dev/null; then
       mv -f "$BDIR/snap.tsv.tmp" "$BDIR/snap.tsv" && date +%s > "$BDIR/snap.ts"
     fi
     last_snap="$(date +%s)"

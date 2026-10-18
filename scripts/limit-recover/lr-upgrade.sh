@@ -25,7 +25,7 @@
 #   lr-upgrade.sh --drive <sid> <pane> [--requested-by P] [--req-id ID]   one session, synchronous
 #   lr-upgrade.sh --drain                           the serial queue the poller hands requests to
 #                                                   (kind upgrade AND kind switch — one drainer)
-#   lr-upgrade.sh --switch-census [--from A] [--target A] [--pane P|--sid S]   the switch selection
+#   lr-upgrade.sh --switch-census [--from A] [--target A] [--pane P|--sid S...]   the switch selection
 #   lr-upgrade.sh --switch-drive <sid> <pane> <target> [--requested-by P] [--req-id ID]
 #   lr-upgrade.sh --stale-markers [sid]             TSV: stale cross-account handoff markers (read-only)
 #   lr-upgrade.sh --marker-drive <sid> [--requested-by P] [--req-id ID]   set one sid's aside, synchronous
@@ -1009,6 +1009,19 @@ lru_retired_source() { # $1=the row's live transcript $2=the row's config dir �
   if [ "$phase" = admit ] && [ ! -e "$1.handed-off" ]; then return 1; fi
   return 0
 }
+# SEVERAL NAMED SESSIONS IN ONE CENSUS (2026-10-17T23:57Z). `--sid` took one value, so "move every
+# session on next2/next3/next4, highest-activity first" ran five one-sid censuses and five batches.
+# A repeated --sid arrives as `sids:<p1>,<p2>,...` and a row is kept when its sid starts with ANY
+# listed prefix; an empty element selects nothing here (cc-lr refuses it before asking).
+lru_sel_sids_match() { # $1=sid $2=comma-separated prefixes → rc 0 when $1 starts with one of them
+  local p rest="$2,"
+  while [ -n "$rest" ]; do
+    p="${rest%%,*}"; rest="${rest#*,}"
+    [ -n "$p" ] || continue
+    case "$1" in "$p"*) return 0 ;; esac
+  done
+  return 1
+}
 lru_switch_census() {
   local from="${1:-}" target="${2:-}" sel="${3:-}" snap pass dups k f sid pane pid acct cwd cfg args tx disp out="" bgs hostpids=""
   snap="$(lru_snapshot)"
@@ -1022,6 +1035,7 @@ lru_switch_census() {
     case "$sel" in
       pane:*) [ "$pane" = "${sel#pane:}" ] || continue ;;
       sid:*)  case "$sid" in "${sel#sid:}"*) ;; *) continue ;; esac ;;
+      sids:*) lru_sel_sids_match "$sid" "${sel#sids:}" || continue ;;
     esac
     acct="$(lru_acct_name "$(jq -r '.account // empty' "$f" 2>/dev/null)")"
     [ -z "$from" ] || [ "$acct" = "$from" ] || continue
@@ -1094,6 +1108,7 @@ EOF
     case "$sel" in
       pane:*) [ "$hp" = "${sel#pane:}" ] || continue ;;
       sid:*)  case "$bsid" in "${sel#sid:}"*) ;; *) continue ;; esac ;;
+      sids:*) lru_sel_sids_match "$bsid" "${sel#sids:}" || continue ;;
     esac
     if [ -n "$(printf '%s\n' "$pass" | awk -F'\t' -v s="$bsid" '$1 == "LIVE" && $3 == s')" ]; then disp=bg-split
     elif [ -n "$target" ] && [ "$bacct" = "$target" ]; then disp=on-target
@@ -3343,13 +3358,16 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
               printf '%s\n' "$_m" > "$UPG_PINS/$2.tmp" && mv -f "$UPG_PINS/$2.tmp" "$UPG_PINS/$2" || exit 2
               lru_pinned_target "$2" >/dev/null || { rm -f "$UPG_PINS/$2"; lru_say "REFUSED: '$_m' is neither the SSOT opus_latest nor the frontier model"; exit 2; }
               lru_say "pinned ${2:0:8} → $_m for ${LRU_PIN_TTL_MIN:-1440} min; the poller's auto-enqueue moves it once idle"; exit 0 ;;
-    --switch-census) # [--from ACCT] [--target ACCT] [--pane P | --sid S] → the switch selection, read-only
+    --switch-census) # [--from ACCT] [--target ACCT] [--pane P | --sid S [--sid S2 ...]] → the switch selection, read-only
               shift; _f=""; _t=""; _sel=""
               while [ $# -gt 0 ]; do case "$1" in
                 --from) [ $# -ge 2 ] || exit 3; _f="$2"; shift 2 ;;
                 --target) [ $# -ge 2 ] || exit 3; _t="$2"; shift 2 ;;
                 --pane) [ $# -ge 2 ] || exit 3; _sel="pane:$2"; shift 2 ;;
-                --sid) [ $# -ge 2 ] || exit 3; _sel="sid:$2"; shift 2 ;;
+                # A second --sid turns the selector into a list (lru_sel_sids_match); one stays `sid:`.
+                --sid) [ $# -ge 2 ] || exit 3
+                       case "$_sel" in sid:*) _sel="sids:${_sel#sid:},$2" ;; sids:*) _sel="$_sel,$2" ;; *) _sel="sid:$2" ;; esac
+                       shift 2 ;;
                 *) lru_say "unknown arg $1"; exit 3 ;; esac; done
               lru_switch_census "$_f" "$_t" "$_sel"; exit $? ;;
     --switch-drive) # <sid> <pane> <target> [--requested-by P] [--req-id ID] — one switch, synchronous

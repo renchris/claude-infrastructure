@@ -321,3 +321,98 @@ STUB
   [[ "$output" == *"cc-lr recover ${S5:0:8}"* ]] || { echo "$output"; false; }
   [[ "$output" != *"repair-markers --sid $S5"* ]] || { echo "$output"; false; }
 }
+
+# ── SEVERAL NAMED SESSIONS, ONE BATCH (2026-10-17T23:57Z). Asked to "move every session on
+# next2/next3/next4 to next, highest-activity first", a session found that --sid took one value and
+# launched five one-sid batches in parallel: five census runs, three router reads (~550 s) serialized
+# on the admit lock, two batches refused. A repeated --sid, or --sids a,b,c, is one census and one
+# batch, in the order named, across source accounts.
+pane_order() { printf '%s\n' "$output" | awk '$1 ~ /^40[0-9]$/ { printf "%s ", $2 }'; }
+
+@test "19 [RED] plan --sid A --sid B and plan --sids B,A list exactly the named rows, in the order named" {
+  fleet
+  run bash "$CCLR" plan --sid "$S1" --sid "$S2" --to next2
+  # RED before the fix: the second --sid replaced the first, a one-row plan.
+  [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
+  [ "$(pane_order)" = "${S1:0:8} ${S2:0:8} " ] || { echo "$output"; false; }
+  run bash "$CCLR" plan --sids "${S2:0:8},${S1:0:8}" --to next2 --json
+  [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
+  [ "$(printf '%s' "$output" | jq -r '[.rows[].sid] | join(" ")')" = "$S2 $S1" ] || { echo "$output"; false; }
+}
+
+@test "20 [RED] move --sids A,B: ONE plan whose rows are A then B, ONE request, two intents" {
+  sess 401 "$S1"
+  sess 405 "$S5"
+  run bash "$CCLR" move --sids "$S5,$S1" --to next2 --wait 0
+  [ "$status" -eq 1 ] || { echo "rc $status: $output"; false; }
+  d="$(moved_dir)"
+  [ "$(nfiles "$LR_STATE_DIR/move")" -eq 2 ] || { ls "$LR_STATE_DIR/move"; false; }   # the batch and requests/
+  [ "$(jq -r '[.rows[].sid] | join(" ")' "$d/plan.json")" = "$S5 $S1" ] || { cat "$d/plan.json"; false; }
+  [ "$(jq -r .from "$d/plan.json")" = next3 ]
+  [ "$(nfiles "$d/intent")" -eq 2 ]
+  [ "$(nfiles "$LR_STATE_DIR/move/requests")" -eq 1 ]
+}
+
+@test "21 [RED] sessions on two accounts: .from is mixed, the batch id says so, each intent keeps its own source" {
+  sess 401 "$S1"
+  sess 407 "$S2" rest claude-quaternary
+  # control: with --from, a named session on another account is refused, and nothing is written
+  run bash "$CCLR" move --from next3 --sids "$S1,$S2" --to next2 --wait 0
+  [ "$status" -eq 2 ] || { echo "rc $status: $output"; false; }
+  [[ "$output" == *"no live session matched '$S2' on next3"* ]] || { echo "$output"; false; }
+  [ -z "$(moved_dir)" ]
+  run bash "$CCLR" move --sids "$S1,$S2" --to next2 --wait 0
+  [ "$status" -eq 1 ] || { echo "rc $status: $output"; false; }
+  d="$(moved_dir)"
+  [ "$(jq -r .from "$d/plan.json")" = mixed ] || { cat "$d/plan.json"; false; }
+  [[ "$(basename "$d")" == *-mixed-next2-* ]] || { echo "$d"; false; }
+  [ "$(jq -r .from "$d/intent/$S1.json")" = next3 ]
+  [ "$(jq -r .from "$d/intent/$S2.json")" = next4 ]
+}
+
+@test "22 [RED] a list with an ambiguous prefix, an empty element or a prefix matching nothing is refused rc 2, nothing written" {
+  sess 401 "$S1"
+  sess 402 "$S2"
+  sess 403 "$S3"
+  run bash "$CCLR" move --sids "$S3,aaaa000" --to next2 --wait 0
+  [ "$status" -eq 2 ] || { echo "rc $status: $output"; false; }
+  [[ "$output" == *"'aaaa000' matched more than one live session"* ]] || { echo "$output"; false; }
+  run bash "$CCLR" move --sids "$S1,,$S2" --to next2 --wait 0
+  [ "$status" -eq 2 ] || { echo "rc $status: $output"; false; }
+  [[ "$output" == *"element 2 is empty"* ]] || { echo "$output"; false; }
+  run bash "$CCLR" move --sid "$S1" --sid ffff0000 --to next2 --wait 0
+  [ "$status" -eq 2 ] || { echo "rc $status: $output"; false; }
+  [[ "$output" == *"no live session matched 'ffff0000'"* ]] || { echo "$output"; false; }
+  [ -z "$(moved_dir)" ]
+  [ ! -e "$BATS_TEST_TMPDIR/launchctl.log" ]
+  # --pane names one session and is not combined with a list
+  run bash "$CCLR" plan --pane 401 --sids "$S1,$S2" --to next2
+  [ "$status" -eq 3 ] || { echo "rc $status: $output"; false; }
+}
+
+@test "23 [RED] a mixed batch's WATCH census carries no --from, so every waiting worker finds its row" {
+  [ -x /bin/bash ] || skip "/bin/bash absent"
+  sess 401 "$S1"
+  sess 407 "$S2" rest claude-quaternary
+  run bash "$CCLR" move --sids "$S1,$S2" --to next2 --wait 0
+  d="$(moved_dir)"
+  [ "$(jq -r .from "$d/plan.json" 2>/dev/null)" = mixed ] || { echo "rc $status: $output"; false; }
+  # The runner's own seams: a worker that waits for its session to go idle until the WATCH census has
+  # run (bounded at 120 s), and a census recorder. A fixed 2 s wait ended before the watch loop's first
+  # sample at load ~700 (2026-10-18), and the census was never asked.
+  export CENSUS_LOG="$BATS_TEST_TMPDIR/census.log"
+  cat > "$STUBS/worker" <<'STUB'
+#!/bin/bash
+d="$LR_STATE_DIR/move/$1"; : > "$d/$2.waiting"
+i=0; while [ ! -s "$CENSUS_LOG" ] && [ "$i" -lt 600 ]; do sleep 0.2; i=$((i + 1)); done
+printf '{"sid":"%s","verdict":"MOVED","reason":"stub worker"}\n' "$2" > "$d/$2.json"; rm -f "$d/$2.waiting"
+STUB
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$CENSUS_LOG"\n' > "$STUBS/upgrade"
+  chmod +x "$STUBS/worker" "$STUBS/upgrade"
+  LR_MOVE_WORKER_BIN="$STUBS/worker" LR_MOVE_UPGRADE_BIN="$STUBS/upgrade" CC_NOTIFY_BIN="$LRU_NOTIFY_BIN" \
+    LR_MOVE_GUARD_CHECK=off LR_MOVE_AUTH_RECHECK=off LR_MOVE_KERNEL_CHECK=off LR_MOVE_PRESEED=off \
+    LR_MOVE_SNAP_S=1 LR_MOVE_WATCH_POLL_S=0.3 run /bin/bash "$REPO/scripts/limit-recover/lr-move-batch.sh" "$(basename "$d")"
+  # the census ran (the seam is live), for the target, and without a source filter
+  grep -q -- '^--switch-census .*--target next2' "$BATS_TEST_TMPDIR/census.log" || { echo "$output"; false; }
+  ! grep -q -- '--from' "$BATS_TEST_TMPDIR/census.log" || { cat "$BATS_TEST_TMPDIR/census.log"; false; }
+}

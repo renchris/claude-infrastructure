@@ -43,6 +43,7 @@
 #                                     READ-ONLY: every session on A and what `move` would do with it
 #   cc-lr move --from A --to B|auto [--until-idle S] [--cold-only] [--slots W] [--wait S] [--dry-run]
 #                                     restart A's idle sessions on B in place, no model turn (the lane)
+#   cc-lr plan|move (--sid S [--sid S2 ...] | --sids S1,S2,...) --to B   named sessions, any accounts, one batch, in that order
 #   cc-lr move --status <batch> · cc-lr move --abort <batch>
 #   cc-lr status [ref | --all]
 #   cc-lr status --cohort [cid]       the reconciler's cohorts, one line per member
@@ -211,6 +212,7 @@ cc-lr — find · recover · status · repair, for a limit-blocked session.
                              `move` would do with it. Writes and types nothing.
   cc-lr move --from A --to B|auto [--until-idle S] [--cold-only] [--slots W] [--wait S]
              [--dry-run] [--target-unverified]   (or --sid S / --pane P with --to B)
+                             --sid repeats and --sids S1,S2,... is the same list: one batch, any source accounts, in the order named
                              restart every idle, healthy session of A on B, each in its own
                              pane, with NO model turn: one intent file per session and one
                              batch request for the poller, whose batch runner admits once and
@@ -1161,6 +1163,38 @@ cl_move_goal_lib() {
   return 1
 }
 cl_move_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+# SEVERAL NAMED SESSIONS, ONE BATCH (2026-10-17T23:57Z). Asked to "move every session on
+# next2/next3/next4 to next, highest-activity first", a session found that --sid took one value and
+# launched five one-sid batches in parallel: five census runs, three router reads (~550 s) serialized
+# on the global admit lock, and two batches refused. --sid now repeats and --sids takes a comma list;
+# both build ONE list whose order is the batch's priority order. A single value is the old --sid
+# byte-for-byte. --pane still names one session, and as before the last of --pane/--sid wins; beside
+# a LIST it is refused, since nothing says where in the order that pane would go.
+cl_move_sel_arg() { # <verb> <flag> <value> → sets the CALLER's self, selv and saw_pane (bash scopes locals dynamically)
+  if [ "$2" = --pane ]; then
+    if [ "$self" = --sid ]; then case "$selv" in *,*) cl_move_sel_refuse "$1" ;; esac; fi
+    saw_pane=1; self=--pane; selv="$3"; return 0
+  fi
+  if [ "$self" = --sid ]; then selv="$selv,$3"; else selv="$3"; fi
+  self=--sid
+  if [ "$saw_pane" = 1 ]; then case "$selv" in *,*) cl_move_sel_refuse "$1" ;; esac; fi
+  return 0
+}
+cl_move_sel_refuse() { echo "cc-lr $1: --pane names one session and cannot be combined with a --sid list. Nothing was read or written." >&2; exit 3; }
+cl_move_list_census() { # <from or ""> <to> <p1,p2,...> → one lr-upgrade census, one --sid per prefix
+  local p rest="$3,"
+  local -a args
+  args=(--switch-census --target "$2")
+  [ -z "$1" ] || args+=(--from "$1")
+  while [ -n "$rest" ]; do p="${rest%%,*}"; rest="${rest#*,}"; args+=(--sid "$p"); done
+  bash "$UPGRADE_BIN" "${args[@]}"
+}
+cl_move_by_priority() { # <p1,p2,...>; stdin = census TSV (sid in column 2) → the rows in the order their prefix was named
+  # The census sorts by pane; the operator's order is the list's. A row no prefix names is dropped.
+  awk -F'\t' -v list="$1" 'BEGIN { n = split(list, P, ",") }
+    NF { for (i = 1; i <= n; i++) if (P[i] != "" && index($2, P[i]) == 1) { printf "%d\t%d\t%s\n", i, NR, $0; next } }' \
+    | LC_ALL=C sort -t$'\t' -k1,1n -k2,2n | cut -f3-
+}
 # A HALF-MOVED LIVE SESSION: confirm retired its transcript to .handed-off, the /exit was cancelled,
 # and the session's next write re-created <sid>.jsonl as a stub. Told apart from a round trip's
 # stale leftovers (repair-markers' case) by the bytes: there the retired copy is a strict prefix of
@@ -1180,7 +1214,13 @@ cl_half_moved() { # <live transcript> → rc 0 and CL_HALF_TO (the store its tom
 cl_move_rows() { # <from or ""> <to> <until_idle_s> <sel flag or ""> <sel value> <cold_only 0|1> [excluded sids]
   local from="$1" to="$2" until_s="$3" self="$4" selv="$5" cold="$6" excl="${7:-}" census rc=0
   local p s ac cfg cwd pid d disp act action tx kind idle cache now hp isself
-  if [ -n "$self" ]; then
+  if [ "$self" = --sid ] && case "$selv" in *,*) true ;; *) false ;; esac; then
+    # A LIST: one census for every named session, re-ordered to the order named. A --from given
+    # beside it scopes the census, so a named session on another account matches nothing and
+    # cl_move_sid_unique refuses it by name.
+    census="$(cl_move_list_census "$from" "$to" "$selv")" || rc=$?
+    [ "$rc" -ne 0 ] || census="$(printf '%s\n' "$census" | cl_move_by_priority "$selv")"
+  elif [ -n "$self" ]; then
     census="$(bash "$UPGRADE_BIN" --switch-census --target "$to" "$self" "$selv")" || rc=$?
   else
     census="$(bash "$UPGRADE_BIN" --switch-census --from "$from" --target "$to")" || rc=$?
@@ -1314,14 +1354,37 @@ cl_move_accounts() { # <from or ""> <to> <verb> → validates names; exits 3 on 
 # RULE 1 ON THE MOVE LANE. The census matches --sid by PREFIX, and with no --from the match is
 # fleet-wide, so a short prefix could plan (and move) two sessions where the operator named one.
 # `switch --sid` has refused that since it existed; `plan` and `move` did not (2026-10-06).
-cl_move_sid_unique() { # <verb> <sel flag> <sel value> <rows> → 0 unique or not a --sid ask · 1 refused
+cl_move_sid_unique() { # <verb> <sel flag> <sel value> <rows> [from] → 0 unique or not a --sid ask · 1 refused
   [ "$2" = --sid ] || return 0
+  case "$3" in *,*) cl_move_sids_unique "$@"; return $? ;; esac
   # An EMPTY sid is a prefix of every sid: it matched the whole fleet, and with one live session it
   # would even pass the count below.
   [ -n "$3" ] || { echo "cc-lr $1: REFUSED — --sid was given an empty value, which matches every session. Nothing was written." >&2; return 1; }
   [ "$(printf '%s\n' "$4" | grep -c .)" -gt 1 ] || return 0
   echo "cc-lr $1: REFUSED — sid '$3' matched more than one live session; pass the pane id (--pane). Nothing was written. Candidates:" >&2
   printf '%s\n' "$4" | cut -f1,2 >&2
+  return 1
+}
+# THE SAME RULE, FOR A LIST (2026-10-17): every prefix must name exactly one live row, and one bad
+# prefix refuses the whole command, each offender named, before anything is written. A prefix that
+# names nothing is refused as well: a batch quietly one session short would rewrite the operator's
+# priority list without saying so. With no rows (the call before the census) only empties are judged.
+cl_move_sids_unique() { # <verb> --sid <p1,p2,...> <rows> [from] → 0 · 1 refused
+  local p rest="$3," i=0 n bad=""
+  while [ -n "$rest" ]; do
+    p="${rest%%,*}"; rest="${rest#*,}"; i=$((i + 1))
+    if [ -z "$p" ]; then bad="$bad  element $i is empty, which matches every session"$'\n'; continue; fi
+    [ -n "$4" ] || continue
+    n="$(printf '%s\n' "$4" | awk -F'\t' -v p="$p" 'index($2, p) == 1' | grep -c . || true)"
+    case "$n" in
+      1) ;;
+      0) bad="$bad  no live session matched '$p'${5:+ on $5}"$'\n' ;;
+      *) bad="$bad  sid '$p' matched more than one live session; name more of it. Candidates:"$'\n'
+         bad="$bad$(printf '%s\n' "$4" | awk -F'\t' -v p="$p" 'index($2, p) == 1 { printf "    %s\t%s\n", $1, $2 }')"$'\n' ;;
+    esac
+  done
+  [ -n "$bad" ] || return 0
+  printf 'cc-lr %s: REFUSED — each sid in the list must name exactly one live session. Nothing was written.\n%s' "$1" "$bad" >&2
   return 1
 }
 # THE BOUNDS IN FORCE, SAID IN THE OUTPUT (2026-10-06). The operator read "one to a few at a time"
@@ -1333,13 +1396,12 @@ cl_bounds_line() { # [slots this batch was given]
     "${1:-${LR_MOVE_SLOTS:-4}}" "$([ -n "${1:-}" ] && printf -- '--slots' || printf 'LR_MOVE_SLOTS')" "${LR_ONE_MAX_CONCURRENT:-2}"
 }
 cmd_plan() {
-  local from="" to="" until_s=0 json=0 cold=0 self="" selv="" rows rc=0
+  local from="" to="" until_s=0 json=0 cold=0 self="" selv="" saw_pane=0 rows rc=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --from) [ $# -ge 2 ] || { usage; exit 3; }; from="$2"; shift 2 ;;
       --to|--target) [ $# -ge 2 ] || { usage; exit 3; }; to="$2"; shift 2 ;;
-      --sid) [ $# -ge 2 ] || { usage; exit 3; }; self=--sid; selv="$2"; shift 2 ;;
-      --pane) [ $# -ge 2 ] || { usage; exit 3; }; self=--pane; selv="$2"; shift 2 ;;
+      --sid|--sids|--pane) [ $# -ge 2 ] || { usage; exit 3; }; cl_move_sel_arg plan "$1" "$2"; shift 2 ;;
       --until-idle) [ $# -ge 2 ] || { usage; exit 3; }; until_s="$2"; shift 2 ;;
       --cold-only) cold=1; shift ;;
       --json) json=1; shift ;;
@@ -1359,7 +1421,7 @@ cmd_plan() {
     1) echo "cc-lr plan: no live session matched ${from:+on $from}${selv:+ $selv}" >&2; return 1 ;;
     *) cl_die "the session census failed; nothing was read" 2 ;;
   esac
-  cl_move_sid_unique plan "$self" "$selv" "$rows" || return 2
+  cl_move_sid_unique plan "$self" "$selv" "$rows" "$from" || return 2
   if [ "$json" -eq 1 ]; then
     printf '%s\n' "$rows" | cl_move_rows_json | jq -c --arg from "$from" --arg to "$to" '{from:$from, to:$to, rows:.}'
   else
@@ -1410,14 +1472,13 @@ EOF
 CL_MOVE_EXCL=""
 CL_MOVE_QUEUED_OUT=""   # a file path: a real run writes its batch id there once the request is on disk
 cmd_move() {
-  local from="" to="" until_s=0 wait_s="${CC_LR_MOVE_WAIT_S:-600}" cold=0 dry=0 slots="" unver=false self="" selv="" json=0
+  local from="" to="" until_s=0 wait_s="${CC_LR_MOVE_WAIT_S:-600}" cold=0 dry=0 slots="" unver=false self="" selv="" saw_pane=0 json=0
   local status_b="" abort_b="" rows rc=0 batch bdir by now nm s p ac cfg act tmp unroute="" urc hint=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --from) [ $# -ge 2 ] || { usage; exit 3; }; from="$2"; shift 2 ;;
       --to|--target) [ $# -ge 2 ] || { usage; exit 3; }; to="$2"; shift 2 ;;
-      --sid) [ $# -ge 2 ] || { usage; exit 3; }; self=--sid; selv="$2"; shift 2 ;;
-      --pane) [ $# -ge 2 ] || { usage; exit 3; }; self=--pane; selv="$2"; shift 2 ;;
+      --sid|--sids|--pane) [ $# -ge 2 ] || { usage; exit 3; }; cl_move_sel_arg move "$1" "$2"; shift 2 ;;
       --until-idle) [ $# -ge 2 ] || { usage; exit 3; }; until_s="$2"; shift 2 ;;
       --wait) [ $# -ge 2 ] || { usage; exit 3; }; wait_s="$2"; shift 2 ;;
       --slots) [ $# -ge 2 ] || { usage; exit 3; }; slots="$2"; shift 2 ;;
@@ -1460,8 +1521,18 @@ cmd_move() {
     1) echo "cc-lr move: no live session matched ${from:+on $from}${selv:+ $selv}" >&2; return 1 ;;
     *) cl_die "the session census failed; nothing was written" 2 ;;
   esac
-  cl_move_sid_unique move "$self" "$selv" "$rows" || return 2
-  [ -n "$from" ] || from="$(printf '%s\n' "$rows" | sed -n '1p' | cut -f3)"
+  cl_move_sid_unique move "$self" "$selv" "$rows" "$from" || return 2
+  # SEVERAL SOURCE ACCOUNTS IN ONE BATCH (2026-10-17): a list may name sessions on next2, next3 and
+  # next4 at once. Every row carries its own account and config dir, and the worker and the row's
+  # intent read those, so the plan's `from` is then only a label: "mixed", which the batch's WATCH
+  # census reads as "no --from" (lr-move-batch.sh). One source account, or no movable row, is as before.
+  if [ -z "$from" ]; then
+    from="$(printf '%s\n' "$rows" | awk -F'\t' '$8 == "move" || $8 == "wait" { print $3 }' | LC_ALL=C sort -u)"
+    case "$from" in
+      *$'\n'*) from=mixed ;;
+      '') from="$(printf '%s\n' "$rows" | sed -n '1p' | cut -f3)" ;;
+    esac
+  fi
   # A SELF ROW NEEDS A WAIT BUDGET (R4/R5, docs/plans/LIMIT_RECOVER_SELF_INPLACE.md § W1). Its worker
   # can see it at rest only after the turn that queued it has ended, so --until-idle 0 would expire
   # its intent before that. Raised before plan.until_idle_s and the intent's expires_epoch are
