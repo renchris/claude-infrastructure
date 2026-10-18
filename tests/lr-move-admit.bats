@@ -46,6 +46,19 @@ STUB
 teardown() { mvf_teardown; }
 
 batch() { run /bin/bash "$LRD/lr-move-batch.sh" m1; }
+ALOCK_T() { printf '%s' "$LR_STATE_DIR/locks/move-admit.lock"; }
+hold_admit_lock() { # a LIVE holder of the admit section: a sleep this test started, pid-only (no lstart)
+  /bin/sleep 300 3>&- &
+  HOLDER=$!; MVF_PIDS="$MVF_PIDS $HOLDER"
+  mkdir -p "$(ALOCK_T)"; printf '%s\n' "$HOLDER" > "$(ALOCK_T)/pid"
+}
+fast_clock() { # every `date +%s` is 100 s after the last; `sleep` returns at once and is counted
+  CLK="$BATS_TEST_TMPDIR/clk"; mkdir -p "$CLK"; : > "$CLK/n"; : > "$CLK/sleeps"
+  printf '#!/bin/bash\nif [ "$1" = +%%s ]; then n=$(( $(wc -l < "%s/n") )); echo x >> "%s/n"; echo $(( %s + n * 100 )); else exec /bin/date "$@"; fi\n' \
+    "$CLK" "$CLK" "$(date +%s)" > "$CLK/date"
+  printf '#!/bin/bash\necho "$*" >> "%s/sleeps"\n' "$CLK" > "$CLK/sleep"
+  chmod +x "$CLK/date" "$CLK/sleep"
+}
 intent_edit() { # $1=sid $2=jq filter — keeps the intent 0600, as cc-lr writes it
   local f="$BDIR/intent/$1.json"
   ( umask 077; jq -c "$2" "$f" > "$f.t" ) && mv "$f.t" "$f"
@@ -81,4 +94,21 @@ intent_edit() { # $1=sid $2=jq filter — keeps the intent 0600, as cc-lr writes
   m="$(stat -f %Lp "$a" 2>/dev/null || stat -c %a "$a")"
   [ "$m" = 600 ] || { echo "mode $m"; false; }
   [ ! -e "$BDIR/intent/${SIDS[1]}.admitted" ]
+}
+
+# A3. The admit wait counted ITERATIONS against LR_MOVE_ADMIT_WAIT_S: under load each took ~6.6 s,
+# so "90s" was 599-600 s of wall time and 2 of 5 parallel batches were refused (G §2.2). With a clock
+# that moves 100 s per read and a sleep that costs nothing, a wall-clock 900 s deadline refuses within
+# 10 iterations; an iteration count would sleep 89 times and say "90s".
+@test "[RED] A3: the admit wait is a wall-clock deadline (default 900 s), not an iteration count" {
+  hold_admit_lock
+  fast_clock
+  PATH="$CLK:$PATH" run /bin/bash "$LRD/lr-move-batch.sh" m1
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  n="$(grep -c . "$CLK/sleeps" || true)"
+  [ "$n" -le 10 ] || { echo "slept $n times"; false; }
+  run jq -r '"\(.admitted) \(.reason)"' "$BDIR/admit.json"
+  [[ "$output" == "false another batch held the admit section for 900s"* ]] || { echo "$output"; false; }
+  # The live holder's lock is untouched.
+  [ "$(cat "$(ALOCK_T)/pid")" = "$HOLDER" ]
 }

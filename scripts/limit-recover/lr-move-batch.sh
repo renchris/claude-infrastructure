@@ -130,13 +130,18 @@ EOF
 
 # ── ADMIT ────────────────────────────────────────────────────────────────────────────────────────
 ALOCK="$STATE/locks/move-admit.lock"; mkdir -p "$STATE/locks" "$CLAIMS" 2>/dev/null || true
-t=0
+# A WALL-CLOCK DEADLINE, NOT AN ITERATION COUNT. The wait counted iterations against this budget, and
+# each one forks mkdir, cat, tr|sed and ps|tr|sed: under load that was ~6.6 s, so "90s" was 599-600 s
+# of wall time and 2 of 5 parallel one-row batches were refused (G §2.2, 2026-10-17). The default is
+# 900 s because the section measured 97-354 s per holder that night, with three holders queued.
+AWAIT="${LR_MOVE_ADMIT_WAIT_S:-900}"; case "$AWAIT" in ''|*[!0-9]*) AWAIT=900 ;; esac
+adl=$(( $(date +%s) + AWAIT ))
 until mkdir "$ALOCK" 2>/dev/null; do
   if ! lr_pidlock_live "$ALOCK" && [ -n "$(find "$ALOCK" -maxdepth 0 -mmin +1 2>/dev/null)$(cat "$ALOCK/pid" 2>/dev/null)" ]; then
     say "move-admit lock held by a dead process; taking it"; rm -f "$ALOCK/pid" "$ALOCK/lstart" 2>/dev/null; rmdir "$ALOCK" 2>/dev/null || true
     continue
   fi
-  t=$((t + 1)); [ "$t" -lt "${LR_MOVE_ADMIT_WAIT_S:-90}" ] || refuse "another batch held the admit section for ${LR_MOVE_ADMIT_WAIT_S:-90}s"
+  [ "$(date +%s)" -lt "$adl" ] || refuse "another batch held the admit section for ${AWAIT}s (wall clock)"
   sleep 1
 done
 lr_pidlock_stamp "$ALOCK" "$$" || true
