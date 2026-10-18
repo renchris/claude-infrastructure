@@ -1029,8 +1029,18 @@ lru_switch_census() {
   dups="$(lru_dup_sids "$pass")"
   bgs="$(lru_bg_sessions "$snap")"
   [ -z "$bgs" ] || hostpids=" $(printf '%s\n' "$bgs" | awk -F'\t' '$8 != "" && $8 != "-" { printf "%s ", $8 }')"
+  # A SID SELECTOR DROPS ITS MISSES BEFORE ANY PER-ROW FORK (2026-10-18). The pass line already
+  # carries the sid, yet every unselected row paid two jq reads (and every bg row a pane lookup of one
+  # jq per LIVE row) before its sid test: the plan-time census of a `--sid` batch ran 3.0-3.4 min
+  # under load (docs/research/lr-inplace-immediacy-2026-10-18 raw/D §3d). The later sid tests stay,
+  # so the selected rows are judged exactly as before. Kill switch LRU_CENSUS_PREFILTER=off.
+  local pre=on; [ "${LRU_CENSUS_PREFILTER:-on}" != off ] || pre=off
   while IFS=$'\t' read -r k f sid; do
     [ -n "$k" ] || continue
+    if [ "$pre" = on ]; then case "$sel" in
+      sid:*)  case "$sid" in "${sel#sid:}"*) ;; *) continue ;; esac ;;
+      sids:*) lru_sel_sids_match "$sid" "${sel#sids:}" || continue ;;
+    esac; fi
     pane="$(jq -r '.paneUUID // empty' "$f" 2>/dev/null)"; pid="$(jq -r '.pid // empty' "$f" 2>/dev/null)"
     case "$sel" in
       pane:*) [ "$pane" = "${sel#pane:}" ] || continue ;;
@@ -1091,6 +1101,10 @@ EOF
   while IFS=$'\t' read -r bsid bpid bcfg bacct bcwd bst _ bhost battach; do
     [ -n "$bsid" ] || continue
     [ -z "$from" ] || [ "$bacct" = "$from" ] || continue
+    if [ "$pre" = on ]; then case "$sel" in
+      sid:*)  case "$bsid" in "${sel#sid:}"*) ;; *) continue ;; esac ;;
+      sids:*) lru_sel_sids_match "$bsid" "${sel#sids:}" || continue ;;
+    esac; fi
     hp="$(lru_live_pane_of_pid "$pass" "$bhost")"
     [ -n "$hp" ] || hp="-"
     adisp=""
