@@ -948,6 +948,14 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
           # `wl` is matched against the whole argv, so it reaches the wrapped command as intended.
           if (comm[p] ~ /^(awk|grep|egrep|tee|sed|cat|tail|wc|jq|sleep|gtimeout|timeout)$/ && args[p] !~ ("(" wl ")") && secs[p]>=120) { printf "orphan-tool\t%s\t^%s$\t%s\t%s\t-\n", p, comm[p], secs[p], asig(p); continue }
           if (comm[p]=="zsh" && args[p] ~ /^(-zsh|zsh|\/bin\/zsh)( |$)/ && secs[p]>=600) { printf "orphan-zsh\t%s\t^zsh$\t%s\t%s\t-\n", p, secs[p], asig(p); continue }
+          # ORPHANED AGENT-BROWSER CHROME (2026-10-17, docs/research/load-reinvestigate-2026-10-17).
+          # An agent-browser daemon owns its headless Chrome as a child and closes it after
+          # AGENT_BROWSER_IDLE_TIMEOUT_MS. When the daemon dies first, Chrome is reparented to launchd and
+          # nothing ever closes it: two such trees were 1 and 5.8 days old, and a nested Chrome main
+          # survived its parent being stopped. Selected by its temp profile, never by name alone: the
+          # operator real Chrome is launchd-parented too and carries no agent-browser-chrome profile.
+          # Helpers (--type=) die with their main; the 1 h floor is double the idle timeout.
+          if (comm[p]=="Google Chrome" && args[p] ~ /--user-data-dir=[^ ]*agent-browser-chrome-/ && args[p] !~ / --type=/ && secs[p]>=3600) { printf "orphan-agent-chrome\t%s\t^Google Chrome$\t%s\t%s\t-\n", p, secs[p], asig(p); continue }
           if (comm[p]=="bash" && args[p] !~ ("(" wl ")") && args[p] !~ /lead-crash-watchdog/ && secs[p]>=600) { printf "orphan-bash\t%s\t^bash$\t%s\t%s\t%s\n", p, secs[p], asig(p), substr(args[p],1,80); continue }
         }
         # ANCHORED ON ARGV POSITION, BECAUSE THE UNANCHORED FORM ATE THE VERIFIER (2026-09-02).

@@ -1911,6 +1911,33 @@ EOF
   [ "$got" = "90402 " ]
 }
 
+# ── ORPHANED AGENT-BROWSER CHROME (2026-10-17). A headless Chrome whose agent-browser daemon died is
+# reparented to launchd and lives for days. Only that shape dies: the operator real Chrome (also
+# launchd-parented, no agent-browser profile), a helper, a young orphan and a daemon-owned Chrome live.
+@test "garbage: an orphaned agent-browser Chrome dies; real Chrome, helpers, young and daemon-owned ones live" {
+  mk_garbage_fixtures
+  cat > "$GA" <<'EOF'
+90701 1 05-19:00:00 Google Chrome
+90702 1 05-19:00:00 Google Chrome
+90703 1 02:00:00 Google Chrome
+90704 1 30:00 Google Chrome
+90705 90799 02:00:00 Google Chrome
+90799 1 02:00:00 agent-browser-da
+EOF
+  cat > "$GB" <<'EOF'
+90701 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=0 --headless=new --user-data-dir=/var/folders/x/T/agent-browser-chrome-dc19
+90702 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+90703 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --type=renderer --user-data-dir=/var/folders/x/T/agent-browser-chrome-dc19
+90704 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --headless=new --user-data-dir=/var/folders/x/T/agent-browser-chrome-9d5d
+90705 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --headless=new --user-data-dir=/var/folders/x/T/agent-browser-chrome-35e7
+90799 /Users/x/node_modules/agent-browser/bin/agent-browser-darwin-arm64
+EOF
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  got="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
+  [ "$got" = "90701 " ]
+}
+
 # ── THE PUBLIC PUBLISHER WAS THE FIFTH (2026-09-28). launchd runs com.claude.public-publish as
 # public-publish-tick.sh, which re-projects the whole history; its first real run was TERMed as
 # orphan-bash at age 919 s and the public repo never advanced. Pair form: it survives, the orphan dies.

@@ -99,6 +99,22 @@ stops only agent-browser Chrome main processes that have no daemon (ppid 1) and 
 verifies by a fresh `ps` read that they are gone. Re-runnable; a second run reports `none-found`.
 Gain: ~371 MB RSS. Load effect: none (0% CPU).
 
+**Result (20:59 CDT):** the operator ran it — `verdict=stopped n=2`. A nested Chrome main (pid 19780,
+a child of 41102 with the same agent-browser profile) was not selected because its parent was still
+alive at selection time; it was then reparented to launchd and survived.
+
+**Follow-up — no human in the loop next time.** The operator asked that this not need a prompt again.
+Rather than allowlisting a `/tmp` script (any process can rewrite a world-writable path), the class
+moved into `bin/cc-reaper`'s garbage arm, which the loaded `com.chrisren.cc-reaper` launchd job runs
+every 300 s: `orphan-agent-chrome` = launchd-parented `Google Chrome` main (no `--type=`) carrying an
+`agent-browser-chrome-*` profile, older than 1 h (double the 30 min idle timeout). The operator's real
+Chrome is also launchd-parented but has no such profile, so it never matches. Pinned in
+`tests/cc-reaper.bats`. Pid 19780 is the first live candidate.
+
+Seen in passing, not pursued here: the reaper's self-check logs `live=35 enum=0` (572 persisted
+sweeps). That condition is chronic and already analyzed in `bin/cc-reaper` (R5e/R5f, 2026-08-25); it is
+unrelated to load, and the garbage arm reads `ps` directly, so it does not depend on that enumerator.
+
 ## If the load needs to come down further
 
 Only the TrueMemory team's own concurrency would move it materially (hostmatrix `--jobs`, mc
