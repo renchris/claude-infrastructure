@@ -402,3 +402,190 @@ session work.
   within 12 months is superseded: they shipped as mods in 2.1.287),
   `docs/research/load-root-cause-2026-10-17/D-hooks-statusline.md`
 - Helper scripts: `docs/research/startup-hooks-2026-10-18/a6_census.py`, `a6_firstturn.py`
+
+## Skeptic verdicts
+
+Adversarial review, 2026-10-18. No hook was executed. Re-checks used `rg -a` on
+`~/.claude-293/node_modules/@anthropic-ai/claude-code/bin/claude.exe`, live WebFetch of the hooks doc
+and the CHANGELOG, `jq`, and `python3 -I` over `/tmp/startup-hooks-census-files.txt`. Note: 9 of the 411
+listed transcripts were moved by limit-recover after the census. Only 402 still exist, so re-run counts
+come out slightly lower than the report's. The incident transcript now lives at
+`~/.claude-secondary/projects/-Users-chrisren-Development--worktrees-wt-cc-004752-67086/5759497b-….jsonl`.
+Deviation: the two script re-runs wrote scratch output to `/tmp/a6skeptic-{census,ft}.out` through
+shell redirects.
+
+| ID | Verdict | Severity | What changes |
+|---|---|---|---|
+| F1 | confirmed | minor | Count window only |
+| F2 | amended | minor | The span is an upper bound. The dispatcher is the critical path in 71-75% of batches, not "almost every" |
+| R1 | amended | minor | The kill count is not a lower bound (≈50-80 runs, not ≥107). Three more silent exits |
+| R2 | amended | **major** | Before the first prompt there is no transcript file and no statusline re-run. The motivating incident is not covered without a marker signal plus `refreshInterval` (c10) |
+| R3 | amended | minor | bash 3.2 implementation. TERM is not enough. SECONDS does not count harness spawn time |
+| R4 | amended | minor | Re-measured 28/47. Stuck hooks are not saved by 10 s. Prior "do not simply raise the timeout" applies |
+| R5 | amended | minor | The false alarms come from load (`timeout 2`). 204 MB, not 236 MB. asyncRewake would create an always-firing alarm |
+| R6 | amended | **major** | Dispatcher context is ~630 chars (~160 tokens), not ~900 tokens |
+| R7 | amended | minor | The prize is the dispatcher's lead over its siblings (p50 4.4 s), in 75% of batches only |
+| R8 | confirmed | none | — |
+| R9 | amended | minor | "Does not block the first turn" is unverified (open Q3) |
+| R10 | confirmed | none | — |
+| R11 | confirmed | none | — |
+
+**F1. Confirmed.**
+- Binary: there are 2 `case"hook_cancelled"` sites. The render site returns `null` unless
+  `hookEvent==="UserPromptSubmit"&&timedOut`. The other only classifies the record as kind "hook".
+- The mapper has `hook_cancelled:()=>[]`.
+- The debug line is generic: `Hook ${Ye} [${Fr}] … timed out after ${ii}ms`.
+- The live docs quote matches hooks.md Timeouts.
+- No SessionStart timeout notice appears through 2.1.302, checked against the local CHANGELOG and the
+  live fetch. 2.1.280 covers UserPromptSubmit only.
+- Incident re-read: dod 8323/5000, mailbox 10051/5000, dispatcher 13544/12000. All three started at
+  05:49:48.158-.159Z.
+- Counts: a6_census.py over the 402 surviving files gives 56. A dated tally shows 3 of them are older
+  than the window: 2026-10-01 setup-task-symlinks on 2.1.284 (the layout before 0056), plus 10-11 and
+  10-12 mailbox-drain. So "≈57 own timeouts dated in-window", not 60.
+
+**F2. Amended.**
+- Reproduced [M a6_firstturn.py, 402 files]: 372 sessions, 94 where the user record came first, 359
+  "near launch". Span p50 5.54 s, p90 9.71 s, max 23.14 s.
+- Inline check [M]: in 0 of 372 sessions did the first assistant record precede the batch end. For the
+  94 user-first sessions, a1 came min 1.158 s and p50 4.18 s after the batch end. Start-time spread
+  p50 2 ms, p90 40 ms over 390 batches.
+- Corrections:
+  1. The last-ending hook is the dispatcher in 265-279 of 372 batches (71-75%), dod-persist in 74 and
+     mailbox-drain in 28.
+  2. In the batches the dispatcher ends, it finishes p50 4.4 s, p75 6.45 s and p90 7.58 s after the
+     latest recorded sibling. That is the most that shortening the dispatcher can return, not the
+     5.6 s span.
+  3. The span is an upper bound on the penalty. Startup work overlaps it (`sleep 25` → +22.5 s,
+     `measure-sessionstart-hooks.md:30`).
+  4. Prompt arrival is not observable. Census §4 found 0 enqueue records before the batch end, and the
+     report omits that output. The user record is written when the held prompt is released, so
+     "96% at launch" comes from the `u1−ss_start<30 s` rule, not from an observed arrival time.
+
+**R1. Amended.**
+- Lines :55, :61-68, :70-72, :84 and :88 verified.
+- The rendered systemMessage is `<hookName> says: <content>`, and the mapper maps it to `[]`.
+- Correction: a run over 9 s does not prove a kill. The spawn loop runs before the watchdog, and the jq
+  merge runs after it.
+- Dispatcher duration histogram [M jq/awk, n=397]: 18 runs at 8.0-9.0 s, 76 at 9.0-10.0 s, 17 at
+  10.0-11.0 s. The excess at the bound is ≈50-80 runs [E: bin excess over a trend of ~15 per bin],
+  which agrees with A5's 50-65.
+- Add these silent exits: `:46` (mktemp fails), `:59` (no executable child), `:91` (jq fails, so
+  `OUT=""`).
+- The R1 lines are lost whenever the dispatcher itself is cancelled, so R1 depends on R3.
+- `tests/session-start-dispatch.bats` is not broken: it compares systemMessage to `S1\nS4` only in a
+  run with no kills. New tests are needed.
+
+**R2. Amended (major).**
+- Binary: `if(this.sessionFile===null&&e.some(Ne=>Ne.type==="user"||…"assistant"||…"system"))await
+  this.materializeSessionFile(w)`. Attachments, including `hook_cancelled`, wait in `pendingEntries`.
+  The transcript file does not exist until the first prompt is inserted, and that happens only after
+  the batch ends.
+- statusline.md "When the status line updates": the script runs once at session start and then on a new
+  assistant message and similar events.
+- `jq .statusLine ~/.claude/settings.json` shows no `refreshInterval`.
+- So in an idle operator pane, which is the 05:49Z incident (first input `/accounts` at 05:56:23), R2
+  shows nothing until after the first response.
+- Corrected recommendation:
+  - Each sync startup hook writes `/tmp/cc-ss/<sid>/<hook>.start` at entry and `.done` at exit. The
+    statusline flags "started, no done after timeout+2 s" with the hook's name. Keep the transcript
+    scan only for durations.
+  - Add `statusLine.refreshInterval` (**c10 settings edit**) to cover the time before the first prompt.
+  - `needs_settings_edit`: true for full coverage. Conviction 60.
+
+**R3. Amended.**
+- Direction confirmed: the docs say a cancelled hook's output is discarded.
+- Dispatcher cancels re-measured at n=4 [M a6_census.py]: overshoot p50 3.9 s, max 9.7 s. The sample is
+  small.
+- Corrections:
+  - The shebang is `/bin/bash`, which is 3.2 on macOS and has no `wait -n` and no timed wait. Implement
+    the deadline by having the existing watchdog signal the parent (`trap … USR1`, so `wait` returns
+    >128), not by `SECONDS` polling with forked `sleep`s.
+  - `SECONDS` starts at bash start, not at harness spawn. Leave margin for spawn delay plus the jq
+    merge under load.
+  - Escalate to SIGKILL and stop waiting on children that ignore TERM or sit in an uninterruptible `ps`
+    wave (`LOAD_AND_PROMPT_HOOK_TIMEOUTS.md:19`). That is the likely reason the incident dispatcher
+    ran 13.5 s despite its 9 s child bound.
+  - The ~10 s cap applies to the dispatcher only. Sibling overshoot (dod-persist up to +25.2 s) still
+    sets the first-turn tail.
+
+**R4. Amended.**
+- Re-measured [M inline python, 402 files]: 47 sibling cancels, 28 (60%) with the batch still running.
+  Slack p50 4.17 s, p90 5.41 s, max 6.19 s. In 19 the cancelled sibling was the last hook.
+- "0 extra ms" holds only for a sibling that would finish before 10 s. dod-persist's overshoot (p90
+  +16.9 s, max +25.2 s) points to stuck processes that a 10 s timeout would not save.
+- Precedent: `DESK_ROUTER_AND_STARTUP_V1.md:239` says "Do not simply raise the timeout". Pair R4 with
+  cost work on dod-persist, whose 5 s timeout history is at `dod-persist.sh:162`.
+- `mailbox-drain.sh` writes with printf at :924, commits `.seen` at :929, then exits. A cancel that
+  lands between the write and the exit discards output that is already committed, so "delays, never
+  loses" has a narrow exception.
+
+**R5. Amended.**
+- Reproduced [M]: 51 of 51 async responses on the 402 files carried stderr only (20 of them "failed
+  --version check").
+- Binary: the async mapper forwards only systemMessage and additionalContext. The render filter hides
+  SessionStart async rows unless verbose.
+- Corrections:
+  - The checked binary is 2.1.114 at 204,534,752 B, not 236 MB.
+  - `~/.claude/logs/pre-session-validate.log` has 31 "current version broken" lines on 2026-10-16..18
+    (~7-8% of starts). That fits `timeout 2 … --version` (:114-115) failing under load ≈52/core. The
+    alarm comes from load, not from a broken binary.
+  - A latent write exists: `ln -sfn` at :159 re-points `current` if any fallback passes. All fallbacks
+    are MANIFEST-skip today.
+  - Do not ship the asyncRewake exit-2 route while the check is load-flaky. It would wake ~10
+    sessions/day into model turns [E: 31 per 3 days], which is a new always-firing alarm that also
+    costs model tokens.
+  - Retire or retarget first.
+
+**R6. Amended (major).**
+- Confirmed: only `accounts-board.sh` reads `.source`.
+- The dispatcher's own additionalContext, from `hook_success.stdout` [M jq]: startup n=367 mean
+  617 chars, resume n=25 mean 634 chars. That is ≈160 tokens, not ~900.
+- The 3,657-char mean is the merged per-start record. It is dominated by dod-persist, desk-brief and
+  mailbox-drain. Those are separate registrations that re-inject on resume by design
+  (`desk-brief-inject.sh:12`, `dod-persist.sh:8`).
+- Corrected impact [E]: ≈160 tokens × ~18 resumes/day ≈ 2.9k tokens/day fleet-wide. Conviction ~25.
+
+**R7. Amended.**
+- The wait equals the dispatcher's slowest child in only ~71-75% of batches.
+- The prize is the dispatcher's lead over its siblings: p50 4.4 s, p90 7.6 s, in those batches only
+  [M].
+- Rendering detached output through R2 needs the `refreshInterval` edit (c10).
+- macOS has no `setsid(1)`. Use the existing `set -m` with disown.
+
+**R8. Confirmed.**
+- The drop path is latent. No SessionStart child emits these fields: `rg` finds them only in
+  `cwd-changed.sh` and `file-changed.sh`, which are not children.
+- CHANGELOG 2.1.152 confirmed.
+
+**R9. Amended.**
+- Docs confirmed:
+  - `mods-overview.md:97`.
+  - mods reference: `session.start` runs "before the first prompt… Not after `/clear`, `/resume`, or
+    `/branch`".
+  - The 10 s hook limit.
+  - `next.error.kind` is `timeout` in a failed hook's `.catch`.
+- The claim "without blocking the first turn" is stated as fact, but it is this report's own open
+  question 3. It is unverified.
+
+**R10. Confirmed.** Both entries are tagged 2.1.296. No SessionStart timeout render appears through
+2.1.302.
+
+**R11. Confirmed.** The schema string `Custom status message to display in spinner while hook runs` is
+present, and `statusMessage` flows into `hook_progress`. Whether it overrides the spinner is still
+unverified, as stated.
+
+**Missed by this axis:**
+1. The transcript is created lazily (`materializeSessionFile`). Any transcript-based detector is blind
+   before the first prompt.
+2. No `statusLine.refreshInterval` is set.
+3. Census §4 (0 pre-release enqueues) is unreported, so the prompt's arrival time is not observable.
+4. Why the dispatcher overruns its own 9 s bound is not analysed: no SIGKILL escalation, unbounded
+   `wait`, spawn and merge time under load.
+5. The pre-session-validate failures come from load, and the script holds a latent `ln -sfn` write.
+6. An async response is stamped at delivery (the next turn), not at completion. The incident's
+   pre-session-validate record has the same ms as the first prompt, 6.5 min later.
+7. Most per-start context comes from the three separate sync hooks, not the dispatcher.
+8. Dispatcher silent exits at :46, :59 and :91 are not inventoried.
+9. hooks.md, "Hooks that start a background process": "Claude Code finishes reading the hook's output
+   shortly after the hook's own process exits". This weakens the pipe-hold theory in open question 1.

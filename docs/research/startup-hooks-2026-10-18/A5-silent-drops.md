@@ -209,3 +209,118 @@ rg -a -o '.{0,300}"async_hook_response".{0,700}' "$B" | head -c 9000
 rg -c 'failed|broken' ~/.claude/logs/pre-session-validate.log
 timeout -s TERM 1 /bin/bash -c 'trap "echo trap-rc=\$?" EXIT; sleep 3'
 ```
+
+## Skeptic verdicts
+
+Adversarial re-check, 2026-10-18 ~13:20Z. Read-only: no hook was executed. Re-run: the binary `rg -a` reads, the census, the IDL, the logs and the trap probe.
+
+**Reproduction caveat (applies to every number above).** `/tmp/startup-hooks-census-files.txt` has gone stale. Since it was built, limit-recover moved sessions between config dirs. 9 of the 411 listed paths no longer exist, and other moved sessions left a stub at the old path. Example: `e52f1f63…jsonl` is 2,442 B in `.claude-quaternary` (0 cancels) and 497,376 B in `.claude-secondary` (9 `hook_cancelled`). Running §7 as written undercounts: 358 events, 47 cancels. Picking the largest copy of each basename across `~/.claude*/projects/<dir>/` and fixing the window to [2026-10-16T06:18Z, 2026-10-18T06:18Z) reproduces A5 exactly [M: inline python over the rebuilt list]: 370 events; 42 with a cancel; mailbox-drain 31, dod-persist 18, dispatcher 6, desk-brief 1; 364 dispatcher successes, 84 of them ≥ 9,000 ms; 53 async records (32 register, 21 validate); histogram bins 8.0/8.5/9.0/9.5 s = 6/9/38/29. The incident transcript is now at `~/.claude-secondary/projects/-Users-chrisren-Development--worktrees-wt-cc-004752-67086/5759497b-….jsonl`.
+
+**Deviation from the brief.** Scratch files were written under /tmp: `a5skeptic-files.txt`, `a5skeptic-files2.txt`, `a5skeptic-census.txt`, `a5skeptic-census2.txt`, and `a5sk_cancels.py`. The last was written with a heredoc, which the brief bans. None is tracked, and nothing else was written.
+
+| id | verdict | severity | the gist |
+|---|---|---|---|
+| A5-F1 | amended | minor | Render rule and incident confirmed. The reporter design has three flaws (below) |
+| A5-F2 | amended | major | "Unattributable" is wrong. 82 of the 84 bound runs are on the 3 isolated-projects accounts, so the victim is config-mirror-assert (as A2/A3 found). The kill estimate is about 80, not 50–65. The drop line would fire on ~45 % of starts on those accounts |
+| A5-F3 | amended | minor | Claim confirmed. Prevention (emit before the deadline) should come before recovery files. The board can be regenerated |
+| A5-F4 | amended | minor | Confirmed: 18 cancels. [E] about 15 of them actually owed a DoD. The UPS retry can read the transcript itself |
+| A5-F5 | amended | minor | Lines confirmed. "Closes" should read "narrows". The recycle path is live: 3 packets on 2026-10-18 |
+| A5-F6 | amended | minor | The rollback is currently unreachable (both fallbacks are MANIFEST-skip). Retiring the hook also drops the model guard, which has a latent symlink clobber |
+| A5-F7 | amended | minor | Mechanism reproduced. "Unknowable" is overstated. The fix belongs at the call site, not in `idl_init` |
+| A5-F8 | amended | minor | Routing confirmed. "No record for an async kill" is a static inference, not probed. Async records carry no `command` |
+| A5-F9 | amended | minor | Relative-only thresholds absorb the sustained load-era rate. The statusline clear is time-based |
+| A5-F10 | confirmed | none | Lines and counts as stated |
+
+### A5-F1 — amended (minor)
+- **Reproduced.** The 2.1.293 binary contains `case"hook_cancelled":{if(l.hookEvent!=="UserPromptSubmit"||!l.timedOut){return null}…`. The aborted branch yields only `hook_cancelled`, and stdout goes to `jc(...)` telemetry, not to context. The incident transcript has the 3 cancels (05:49:56/58, 05:50:01Z) and no SessionStart `hook_system_message` or `hook_additional_context` until the 13:17Z resume. Counts are exact on the stub-resolved list.
+- **What is wrong with the recommendation.**
+  1. A detached poller per start runs against the prior ruling in `docs/research/load-hook-timeouts-2026-10-11/DESIGN.md:231` ("every daemon is new load. Prefer lazy caches checked with builtin `-nt`") and `:173`, which replaces per-session pollers. `statusline.sh` already receives `transcript_path` and `session_id` (`statusline.sh:97-98`) and re-renders continuously. A once-per-sid scan of the transcript head for `hook_cancelled`, cached with `-nt`, needs no new process. So would the first UPS hook.
+  2. The END sentinel is written only before the final `printf`. Abstain paths would then read as kills. The one desk-brief cancel (54b18e51, cancel recorded 04:12:42Z at 13,368 ms) had already logged IDL `abstained no-role-file` at 04:12:37Z, so nothing was lost. Every exit path must write `END 0`, and a cancel must be classified as a loss only when something was owed.
+  3. The statusline flag clears itself after 15 min. That breaks the lesson "Clear must match occurrence" (`.claude/rules/agent-operating-lessons-situational.md:196`): a flag can die unread. Clear it on acknowledgment (running `cc-startup-health`) or at the session's next start.
+- The upstream request stands.
+
+### A5-F2 — amended (major)
+- **Reproduced.** Histogram exact. The kill is at `session-start-dispatch.sh:65`. Split by account [M: inline python, dispatcher `hook_success` ≥ 9,000 ms by transcript config dir]:
+
+  | account | runs | ≥ 9 s |
+  |---|---|---|
+  | `.claude` + next | 183 | 2 |
+  | quaternary | 62 | 30 |
+  | secondary | 71 | 38 |
+  | tertiary | 48 | 14 |
+
+- **The victim is attributable.** The pile-up sits on exactly the accounts whose isolate set runs `_cc_sync_memory_mirror` over ~18.9k slugs. A2 (M3/M4) and A3 (§2.3–2.5: mirror warning present in 190/284 runs under 8 s against 2/101 at ≥ 9 s; a read-only replica takes 7.6–8.8 s) both name `config-mirror-assert.sh`. So "nothing records which child" is true, but "unattributable" is false.
+- **The estimate.** Non-isolated runs reach the bound about 1 % of the time, so [E] about 80 of the 84 bound runs are kills, not 50–65.
+- **Partial output is not dropped.** A child killed mid-print leaves partial output in `$T/oNN`, and `:79-91` merges it. Malformed partial JSON then becomes plain context through `:82-85`.
+- **Alarm polarity.** The proposed drop line would name config-mirror-assert on about 45 % of starts on 3 accounts. That is the always-firing alarm A5 §4.4 warns against. Land A2-F1/A3-R1 (precompute config-mirror) first, or alongside it. Or adopt A3-R4 (late children continue and get a ledger row), so the expected victim becomes "late", not "dropped".
+- **Tests.** `tests/session-start-dispatch.bats:79` asserts a context of exactly 9,500 chars, so a child-boundary cut breaks it.
+
+### A5-F3 — amended (minor)
+- **Confirmed.** The single print is at `:92`, and the aborted branch discards stdout. 6 cancels: 12,261, 13,544, 15,622, 15,872 and 21,723 ms from my list, plus e52f1f63 at 12,352 per A3. The board was present in 364/364 successes.
+- **Amendments.**
+  - The board can be regenerated (`claude-accounts`) and re-renders at every start. The payload that cannot be regenerated is the recycle packet, and F5 plus next-boundary confirmation protects it better than a `.lost.json`.
+  - Prevention should come first: emit by a deadline measured from process start (A3-R4), so the dispatcher has printed and exited well before 12 s.
+  - Persist-on-kill depends on the harness signal, which is still unconfirmed. The value of R2 lies mostly in naming the loss.
+
+### A5-F4 — amended (minor)
+- **Confirmed.** `jq .hooks` shows `dod-persist.sh` only on SessionStart (5 s) and PreCompact (10 s). `mailbox-drain.sh prompt` is on UserPromptSubmit, so mail comes back at the first prompt. The `:922-930` order is as cited. 18 dod-persist cancels, all on `startup`.
+- **How many owed a DoD.** [E] dod-persist printed on about 85 % of non-cancelled starts (census rerun: 304 printing records over 357 non-cancelled starts), so about 15 of the 18 sessions lost a DoD. "18 sessions" is an upper bound.
+- **No reporter needed.** The retry does not need the F1 reporter's flag. A UPS hook already has `transcript_path` and can look for the session's own `hook_cancelled` (command `dod-persist.sh`) once.
+- **Settings.** The edit is needed only for a new UPS registration (c10). Folding the retry into `session-beat.sh prompt` needs none.
+- `dod-persist.sh get` exists (`:378-391`), so the recovery command is valid.
+
+### A5-F5 — amended (minor)
+- **Confirmed lines.**
+  - recycle-failed-inject: prints at `:52`, stamps at `:55-56`.
+  - accounts-board: the latch is written at `:122`. At `:123` the banner goes into the `DL_BANNER=$(…)` capture at `:134`. The real emit is `emit` at `:85`. The defect stands.
+  - mailbox-drain: `printf` at `:924`, stamp at `:925`, `find -delete` at `:600`.
+- **Live, not latent.** Three packets were injected on 2026-10-18 at 08:34:24, 12:50:07 and 13:17:38Z (b102f5af, 2ee922eb, 5759497b). All three reached the model (`hook_additional_context` contains "RECYCLE FAILED"). Each dispatcher ran 9,181–9,391 ms, 2.6–2.8 s under the harness kill [M: jq over the three transcripts].
+- **"Closes" overstated.** Running the commits after the dispatcher's own `printf` only narrows the window, because the harness discards stdout that was fully written if it aborts before exit. Only a next-boundary confirmation closes it: the transcript shows the attachment, or a `.seen`→`.acked`-style promotion.
+- **Same class.** `desk-brief-inject.sh:121-126` logs IDL `fired injected` after the print and before exit, a false-delivered ledger row if the harness cancels there.
+
+### A5-F6 — amended (minor)
+- **Reproduced.** The launcher is `~/.zshrc:502` `_bin="$HOME/.claude-293/node_modules/.bin/claude"`, and `~/.claude-versions/current` points to 2.1.114. 21/370 starts had the stderr [M]. The log holds 25 "no working fallback" lines in the 48 h window [M: awk on local timestamps]. `rg -c 'failed|broken'` now gives 585, over the whole log back to 2026-04-17, not the window.
+- **Rollback unreachable today.** The log at 2026-10-18 06:12:56 reads "fallback skip 2.1.183 (MANIFEST status=skip)" and "fallback skip 2.1.113". So every failed probe ends at `:152-155`, and `ln -sfn` (`:159`) is reachable only if a new non-skip version dir appears.
+- **Retiring the hook also retires the model-portability guard.** That guard is `:39-74`: a python3 spawn on every start, which fired 99 times, the last on 2026-09-27. It carries a latent silent hazard: `os.replace(tmp, p)` on `$CLAUDE_CONFIG_DIR/settings.json`, which is a symlink to `~/.claude/settings.json` on 4 of 5 config dirs. A replace there would silently de-link that account. Handle the guard explicitly, and do not delete it by accident.
+- "Under load" is inferred, not measured: no load join was done. The intermittent pass pattern is consistent with it.
+
+### A5-F7 — amended (minor)
+- **Reproduced.** `/bin/bash` 3.2.57: `trap-rc=0`, and with a TERM trap `exit-trap-rc=143`. 387 `passed exit:0` rows in the window [M: `gzip -dc idl.jsonl.20261016T081034Z.gz idl.jsonl.20261018T105203Z.gz | rg session-index-start`]. The live `idl.jsonl` was rotated at 10:52Z, so the reproduction needs the archives.
+- **Not unknowable.** A3 (§2.3, `a3_child_timing.py`) estimated it from IDL row timestamps against the dispatcher start: only 4 of 90 slow runs had session-index-start near the bound.
+- **Wrong fix site.** `idl_init` is documented as having no side effects (`hooks/lib/idl-log.sh:65-77`) and has 15 users. Only `session-index-start.sh:17` derives its disposition from `$?` in an EXIT trap. One user, `goal-inert-watch.sh`, has its own TERM/INT trap, which a library-installed trap would collide with. Fix the call site.
+- F2 does not depend on this: its drop list comes from the watchdog markers.
+
+### A5-F8 — amended (minor)
+- **Confirmed.**
+  - `case"async_hook_response"` pushes only `systemMessage` and `additionalContext`, as isMeta. The render filter `(Wo)=>h||M&&Wo.hookEvent!=="SessionStart"` holds.
+  - 53 records [M]. Lag p50 8.3 s, p90 54.2 s, max 387.1 s on the rerun.
+  - lead-crash-watchdog: 388 registered and 388 spawned in the window, 0 unpaired [M: awk].
+- **Not probed.** "An async kill produces no record type" is inferred from static reading only. The binary skips an attachment on an empty response ("produced no response payload — skipping attachment"), and its shutdown sweep reports `cancelled` only to `jc` telemetry. A5's own open question 4 still stands.
+- **Missed attribution gap.** No `async_hook_response` record carries a `command` field: 0 of 53 [M]. The keys are exitCode, hookEvent, hookName, processId, response, stderr, stdout and type. Attribution rests on stderr text.
+- **Unverified fix.** The `{ …; } 2>/dev/null` fix for session-register `:608-614` is untested. bash can print the job notice at a later notification point outside the group. Prove it in `tests/session-register-bg-fork.bats`.
+- **Small operator impact.** Removing the 32 notices is near zero for the operator (the records are never shown and never sent to the model).
+
+### A5-F9 — amended (minor)
+- **Confirmed.** The lesson citation (`docs/lessons/a-rubric-that-saturates-has-not-ranked-anything.md:54-55`) and `scripts/idl-abstain-alarm.sh` both exist.
+- **Amendments.**
+  1. Rule (ii) is relative only (≥ 2× the trailing 7-day share). A sustained load-era drop rate becomes its own baseline and goes quiet while about 23 % of starts still lose a child. Add an absolute floor per hook for owed payloads, beyond rule (i).
+  2. The per-start summary row should come from the lazy reader (statusline or first UPS), not a new detached process (DESIGN.md:231).
+  3. The "29 %" counts every ≥ 9 s run as a loss. It is an upper bound: a killed config-mirror-assert that had nothing to say loses only side effects.
+  4. The statusline clear must match the occurrence (F1 point 3).
+
+### A5-F10 — confirmed (none)
+- `setup-task-symlinks.sh:196` and `setup-plan-symlinks.sh:94` build JSON with `echo`. `session-start-dispatch.sh:82-85` sends unparseable output to plain context. `dod-persist.sh:257-259` always keeps the newest capture, so the 6,000 budget at `:303` is not a hard ceiling.
+- 0 leaks and 0 cap hits on the rerun.
+- A child killed mid-print (F2) is a live trigger for the same misroute.
+
+### Missed by this axis
+1. Attribution of the 9 s victim, which two sibling axes measured: config-mirror-assert on the isolated-projects accounts (82/84 [M]).
+2. A harness cancel is not a loss. The desk-brief cancel was an IDL abstain, and the IDL can already classify some cancels.
+3. Project-scope SessionStart hooks are killed silently too: a `bash -c '…unblock-sweep…'` one-liner, 3 cancels at a 20 s timeout (23–32 s), is missing from the §2.2 table.
+4. asyncRewake (`mailbox-wake-arm.sh`, 14,400 s) is not enumerated, though the brief named it. A spent or killed watcher is re-armed at Stop, and mailbox-drain detects the missing arm (`:411-519`), but only as model context, never shown to the operator.
+5. Async records carry no `command`.
+6. The pre-session-validate model guard: a python3 spawn every start and a latent symlink clobber.
+7. Partial output of a killed child is merged, not dropped.
+8. desk-brief's post-print IDL `fired` row.
+9. The recycle path is live: 3 packets on 2026-10-18.
+10. §7 Reproduce does not reproduce as written, because of moved transcripts and stubs. The IDL was rotated, so the 385/387 count needs the `.gz` archives.

@@ -616,3 +616,151 @@ net-context-stamp.sh (async) row ts minus event start: n=382 p50=0.4s p75=1.0s p
 
 Per-config-dir ">9 s" share (§0.2), from `python3 -I -c` over `/tmp/a1-events.json`:
 quaternary 48/90 (53 %), secondary 41/84 (49 %), tertiary 12/41 (29 %), `.claude` 6/195 (3 %).
+
+---
+
+## Skeptic verdicts
+
+Adversarial review, 2026-10-18, resumed after a usage-limit move. Read-only: I executed no hook. The checks were inline `python3 -I -c`
+over `/tmp/a1-events.json` (the per-event dump written at census time) and the census list, plus `rg`/`jq`, static reads, and one re-run
+of `a1_census.py`. That re-run sent stdout to two `/tmp` scratch files, which I have since deleted; it was a deviation from read-only.
+**Reproducibility caveat [M]:** 9 of the 411 listed transcripts are no longer at their listed paths, because limit-recover moved them
+(5759497b now lives under `~/.claude-secondary`). A re-run today gives 400 events and 56 cancels, and it **loses the 2026-10-18 05:49Z
+incident cluster** (window ends 05:28Z). So I checked the published numbers against the dump.
+
+| id | verdict | severity | one line |
+|---|---|---|---|
+| A1-F1 | amended | minor | Blocking reproduced. "Dispatcher last in 315" counts 41 tied firings by string order; strictly last is 285/410 (70 %) |
+| A1-R1 | amended | minor | The cause (memory walk) is right, but the "`.claude`" bucket is 95 % `.claude-next`, where the child runs and prints. The split is by isolated `projects/`, not default vs non-default |
+| A1-R2 | amended | minor | Sound. The loud line fires on about 46 % of isolated-account starts until R1 lands, and bash 3.2 has no ms clock |
+| A1-R3 | amended | major | "→ 0 whole-output losses" is overclaimed: 3 of 7 dispatcher runs over 12 s were harness starvation, which a dispatcher-side deadline cannot beat |
+| A1-R4 | amended | minor | Counts hold (one row mislabelled). operator-readout at Stop is itself cancelled under load, so it is the wrong host |
+| A1-R5 | amended | major | The dod-persist lines cited are the `CC_DOD_LINEAGE_ONLY=0` legacy path. The live render depends on the starting session's pane lineage, so a capture-time cache cannot be session-independent |
+| A1-R6 | amended | minor | Holds, and is worse than stated: the failure path re-points `~/.claude-versions/current` |
+| A1-R7 | confirmed | none | Measured: the nag is a race in 189 of 196 sessions |
+| A1-R8 | amended | major | The exit-trap pattern it copies logs a SIGTERM kill as `passed exit:0` under bash 3.2. A1's own "session-index-start never killed" rests on that |
+| A1-R9 | amended | minor | The facts hold. The reorder would drop the IDL dead-consumer row pinned by `tests/desk-brief-ssot.bats:145`, or save nothing |
+
+**A1-F1.**
+- Reproduced:
+  - Start spread p99 184 ms, max 810 ms.
+  - 94 queued prompts.
+  - 0 assistant records before the hooks finished.
+- Stronger blocking test [M, inline python over the 371 readable startup transcripts]:
+  - The first assistant record came 1.16 s at the earliest after the hooks ended (p10 1.8 s, p50 4.2 s).
+  - Prompts that were not queued got their first answer p10 1.9 s and p50 5.9 s after the prompt (n=277), the same floor.
+  - All 21 prompts that waited more than 8 s were answered 1.4 to 18.4 s after the hooks ended, never before.
+  - Blocking is real.
+- **Last finisher, with ties within 1.5 ms labelled [M]:**
+  - Strictly last: dispatcher 285, dod-persist 61, mailbox-drain 17, project hooks 6.
+  - **Ties: 41**. Of these, 21 are dispatcher with dod-persist, 10 dispatcher with mailbox-drain, 8 three-way and 2 dod-persist with
+    mailbox-drain.
+  - `a1_census.py:511-513` takes `max()` over `(t, command)` tuples, so a tie goes to the larger string, `session-start-dispatch` > `mailbox-drain` > `dod-persist`.
+  - Ties between independent processes at 1 ms resolution mean the harness records completions in batches. `durationMs` therefore
+    includes event-loop lateness.
+- Impact bound [E]:
+  - On the 101 isolated-account firings over 9 s, the next-slowest recorded sync hook is p50 2.4 s, p90 5.9 s.
+  - So a dispatcher at about 3 s saves p50 about 6.3 s of span (p10 4.2, p90 6.8).
+  - This is not "each second": the saving stops at dod-persist/mailbox-drain, and their silent durations are unrecorded.
+
+**A1-R1.**
+- File:lines confirmed:
+  - `config-mirror-assert.sh:10-12,17`
+  - `lib/config-mirror.zsh:298-302,456-471`
+  - `~/.zshrc:241,257` (also `:270` claude4)
+- Slug counts today: secondary 18,258, quaternary 18,177, tertiary 18,204 [M: `ls … | wc -l`].
+- **But the "`.claude`" bucket is not account 1.**
+  - `~/.claude-next/projects` is a symlink to `~/.claude/projects`.
+  - 183 of 193 `~/.claude/projects` transcripts contain `knowledge-layer mirror (.claude-next)` [M: `rg -l`].
+  - On `.claude-next`, config-mirror-assert is not a no-op. It runs `_cc_sync_account` and emits a FORKED systemMessage, while
+    `:298` skips only the memory walk. So the discriminator is "the isolate set keeps `projects/` real", i.e.
+    secondary/tertiary/quaternary.
+- The "incremental via mtime stamp" alternative as worded still pays the 18k-entry globs.
+  - Those globs are 9.0 of 13.8 s in A2's read-only replay (A2-child-cost.md:44).
+  - Use "own slug inline, full sweep detached and single-flight" instead (A8 R1).
+- `tests/config-mirror-assert.bats` pins synchronous FORKED output, so it needs rewriting.
+- Correction: "The 9 s bound is hit almost only on the three accounts whose `_CC_ISOLATE` keeps `projects/` real
+  (`lib/config-mirror.zsh:46-48,298`). `.claude-next`, which is most of the `~/.claude/projects` bucket, runs the same child fast."
+- The recommendation stands.
+
+**A1-R2.**
+- Confirmed: `session-start-dispatch.sh:33` (`exec 2>/dev/null`), `:56`, `:65-68` and `:88` (`$c[:$cap]`, no marker).
+- Amend:
+  - Until R1 lands, the named-kill line fires on about 46 % of isolated-account starts. Land R1 first or together, or it becomes
+    near-always-firing noise.
+  - `/bin/bash` 3.2 has no `$EPOCHREALTIME`. Per-child ms costs a fork, or accept 1 s resolution.
+  - The rc of a TERM-killed leader is 143 from `wait`, which is enough to set `killed_at_bound`.
+
+**A1-R3.**
+- Confirmed statically:
+  - The merge and print happen only at the end (`:70-92`).
+  - `recycle-failed-inject.sh:48-56` stamps after printing into the dispatcher's temp file.
+  - The 6 board-less firings are exactly the 6 dispatcher cancels [M].
+- **Overclaim.** The 7 dispatcher runs over 12 s split into two groups:
+  - 4 on quaternary (e52f1f63, 5759497b, dbc1098e, and the b70276b2 success). R1 or R3 would likely fix these.
+  - 3 on `~/.claude/projects` during 10-17 04:12-04:33Z (54b18e51, a86d22e3, 87e54489). In those, every sibling 5 s hook was
+    cancelled at 9.4-21.9 s. That is harness and process starvation (A3 §2.6).
+- `hook_cancelled` carries no stdout (A3 §2.7), and the dispatcher's own `sleep` deadline starves too. So "→ 0" is unsupported.
+- Amend:
+  - Pair R3 with an outbox: write the merged output to a file before printing, and have the next boundary deliver it when the
+    transcript shows the cancel (R4).
+  - Give stragglers a hard outer bound (a hung child would otherwise live forever).
+  - Write their output outside `$T`, which the `:47` EXIT trap deletes.
+
+**A1-R4.**
+- 64 cancels in 45 sessions reproduced from the dump. "Project hooks 5" is really 4 project hooks plus 1 pre-0056 `setup-task-symlinks` record.
+- Nothing in `hooks/ bin/ lib/ scripts/` reads SessionStart `hook_cancelled` [M: `rg`].
+- Host: `operator-readout.sh` at Stop was itself cancelled twice in the incident session (05:59:38Z 10,054 ms; 06:03:11Z 10,523 ms) [M].
+  A reporter inside a cancelled hook is a new silent drop.
+- Use mailbox-drain prompt mode instead. UserPromptSubmit cancels measured 0 at load 520-680 after WP4
+  (`docs/plans/LOAD_AND_PROMPT_HOOK_TIMEOUTS.md:33`).
+- First prove that a UserPromptSubmit top-level `systemMessage` renders; the R5b proof covers SessionStart only.
+
+**A1-R5.**
+- With `CC_DOD_LINEAGE_ONLY` defaulting to 1, SessionStart leaves at `hooks/dod-persist.sh:418-420` for `_dod_inject_lineage_only`
+  (`:310-356`). The cited `:422-461` is the opt-out legacy frame.
+- The live output is keyed on the starting session's sid plus its pane's alias trail (`_dod_lineage_sids`, `:206-230`), which
+  mailbox-drain appends to concurrently. A render made at `set`/PreCompact time cannot know the next session's lineage.
+- Correction: cache per (pane trail head, store mtime, predecessor toplevels), or cut the per-start work in `:310-356`.
+- mailbox-drain deadline: fine, and emit-then-commit (`mailbox-drain.sh:277-297`) already keeps mail pending on a reap.
+- But "removes about 52 cancels" is overclaimed. In 5 of the 6 dispatcher-cancel firings the 5 s hooks were cancelled 3-17 s late
+  by a starved harness, and an internal deadline cannot help with that.
+
+**A1-R6.**
+- Confirmed: `readlink ~/.claude-versions/current` gives `2.1.114`.
+- "broken" verdicts are now 13/10/8 for Oct 16/17/18 [M: `rg … | uniq -c`].
+- Missed: on a failed probe the hook **re-points `current`** (`pre-session-validate.sh:158-159`, `ln -sfn`).
+  - Today it is inert only because both alternatives are MANIFEST `skip` (log 06:12:56Z: "fallback skip 2.1.183", "fallback skip 2.1.113").
+  - The log holds 8 past rollbacks, including 2.1.114→2.1.80→2.1.114 within 2 min on 2026-07-21 [M].
+  - A load-induced false negative is therefore a latent write to shared state.
+- This raises R6's priority. Settings-edit flagging is correct (retirement is c10).
+
+**A1-R7.**
+- Confirmed and measured [M, inline python over 402 readable transcripts]:
+  - Of 196 sessions with a SessionStart nag and a UserPromptSubmit record, 189 had no nag at the first prompt. 7 got it again.
+  - The nag is gated by `nudge` (`mailbox-drain.sh:559,621`), so skipping it for session-start mode leaves the goal nudge (`:554`)
+    and breadcrumb (`:585`) intact.
+
+**A1-R8.**
+- Reproduced: `timeout -s TERM 1 /bin/bash -c 'trap "echo trap-rc=\$?" EXIT; sleep 3'` prints `trap-rc=0` on bash 3.2.57.
+- So `session-index-start.sh:17` logs a 9 s-bound kill as `passed exit:0` (A5 P13).
+- A1's §0.3 "session-index-start was never killed: 381/381 passed" is not evidence. Its completion offset reaches p99 8.4 s and
+  max 14.5 s (Appendix §2), past the 9 s bound.
+- Correction: add `trap 'exit 143' TERM` next to the EXIT trap, plus a START row so that SIGKILL (no trap) shows as start-without-end.
+
+**A1-R9.**
+- `desk-brief-inject.sh:70-107` loads the lib, reads stdin and runs jq in order to write the per-exit IDL disposition row with SID
+  (`:18-35`). That row was added because the consumer had been dead and silent since 2026-07-26, and `tests/desk-brief-ssot.bats:145`
+  pins it.
+- Testing the role file first either drops that row or still pays for the lib, stdin and jq. Its completion is p50 0.2 s.
+- Correction: drop the reorder. The real choice is to retire the dead consumer (c10) or leave it.
+
+**Missed by this axis.**
+1. The config-dir split mislabels account 1. "`.claude`" means `~/.claude/projects`, which is 95 % `.claude-next` sessions.
+2. config-mirror-assert's `.claude-next` FORKED warning (`mcp-needs-auth-cache.json statusline.sh`) is an always-firing operator
+   alarm. Its presence or absence by duration is a measured kill signature (A3 §2.2: present in 190/284 fast runs, 2/101 at 9 s or more), which A1 left as [E].
+3. 41/410 last-finisher ties show that durations are harness-observed.
+4. Re-running the census needs path resolution by session id, because limit-recover moves transcripts.
+5. A harness timeout of the dispatcher may orphan its children: `set -m` (`:32`) gives each its own group, and the `:47` trap deletes
+   their output dir. This is a static [E]; the harness's kill target is unverified.
+6. The merged systemMessage has no cap, while the harness swaps output over 10,000 chars for a preview (A3 §2.7). The current max is about 2.9k.

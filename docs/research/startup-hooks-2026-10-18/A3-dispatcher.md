@@ -574,3 +574,62 @@ All tests are hermetic and follow the file's current `setup()`: fixture children
 * `docs/research/startup-hooks-2026-10-18/a3_dispatch_census.py`: per-run child attribution (read-only).
 * `docs/research/startup-hooks-2026-10-18/a3_child_timing.py`: session-index-start exit offset join, and the 9 s pile overhead.
 * Intermediate tables (not committed): `/tmp/a3-dispatch-rows.tsv`, `/tmp/a3-ts.tsv`, `/tmp/a3-acct.tsv`.
+
+---
+
+## Skeptic verdicts
+
+Adversarial pass, 2026-10-18, read-only. No hook was executed. Re-runs used the brief's file list,
+`/tmp/startup-hooks-census-files.txt`. **9 of its 411 transcripts no longer exist at their listed
+path** [M: `while read f; do [ -e "$f" ] || c=$((c+1)); done`], because sessions moved accounts after
+limit-recover (the incident transcript is now under `~/.claude-secondary/...`). That is why the re-run
+counts are slightly lower than the report's.
+
+### What reproduced
+
+| claim | report | re-run | command |
+|---|---|---|---|
+| dispatcher runs / cancels | 410 / 6 | 397 / 4 in the list, plus the incident 5759497b and e52f1f63 found at their new paths: **6 confirmed** | `python3 -I a3_dispatch_census.py` (no `--rows`); `rg hook_cancelled` on the moved files |
+| success p50 / p90 / max | 5,728 / 9,692 / 15,603 | 5,581 / 9,638 / 15,603 | same |
+| always-printers present in runs ≥9 s | 100/101 | 94/95 | same |
+| merged ctx max / cap hits / sm max | 677 / 0 / 2,854 | 677 / 0 of 393 / 2,854 | same |
+| by account, share ≥9 s | next 1/187; the other three 97/213 | `.claude`(+next) 3/188, p50 2,976, p90 6,254 · quaternary 39/80 · secondary 41/84 · tertiary 12/41 | inline `python3 -I` over the list, keyed on the transcript's config dir |
+| 9.0-10.5 s pile, (dur − 9000) | p50 498, p90 977 (n=88) | p50 517, p90 977 (n=84) | inline `python3 -I` |
+| mailbox-drain success at 13,184 ms (5 s timeout); dod-persist cancelled at 21,913 | yes | yes (87e54489) | `rg SessionStart <file> \| jq` |
+| dispatcher success at 15,603 ms against 12 s | yes | yes: b70276b2, 2026-10-17T04:45:27Z | same |
+| 2.1.293 drops stdout on cancel; systemMessage and additionalContext pass through `mae()` with `ihs=1e4` | yes | yes, both strings found verbatim | `rg -a -o` over `~/.claude-293/.../claude.exe`. 2.1.293 is the version on 379 of 397 dispatcher rows [M] |
+| `stat -f '%Fm'` has ns precision, bash 3.2 has no EPOCHREALTIME | yes | `/etc/hosts` gives `1781135089.474479085`; `/bin/bash` 3.2.57 has `EPOCHREALTIME` unset | direct |
+| bash 3.2: a trapped signal interrupts `wait` | yes | documented in the 3.2 man page, `/usr/share/man/man1/bash.1` lines 2256-2258 | `man … \| rg` |
+| jq merge ≈10 ms | yes | real 0.00-0.01 s ×3 at load ~112 | `/usr/bin/time -p jq -nc --rawfile …` |
+
+### Per-finding verdicts
+
+| id | verdict | severity | why, and the correction |
+|---|---|---|---|
+| A3-R1 | **amended** | minor | The diagnosis holds. The account split and the 9 s pile reproduce, the isolate set lists `projects` only for secondary, tertiary and quaternary (`lib/config-mirror.zsh:45-48`), and the early return is at `:298`. **But the walk's cost depends on load.** The committed read-only replica `zsh -f a2-memmirror-scan.zsh ~/.claude-secondary` took **2.2 s at load ~112** [M] (slugs 18,965; 22 would-link). The report's 7.6-8.8 s was at load ~470. **Correction to the fix:** background only the memory walk, not "sync plus checks". The config-mirror FORKED scan, settings parity, hook drift and agent budget stay in the foreground, so alarms stay current with no 600 s lag. Link the current cwd's slug synchronously (O(1), A2 F1a). A delayed link lets Claude Code create a real `memory/` while canonical exists, and default mode then never heals it (`lib/config-mirror.zsh:342`, `(( convert )) \|\| continue`). Claim the throttle stamp atomically (mkdir or noclobber). The cited pattern `setup-task-symlinks.sh:175-178` is check-then-touch, and a burst of starts on one account would each spawn a walk. |
+| A3-R2 | **amended** | minor | All six cited lines say what is claimed (`:33,:46,:59,:65,:70,:91`). **Sequencing:** if the per-child "late/killed" notice ships before R1, it fires on ~46% of starts on three accounts (97/213 [M]). That is an always-firing alarm, which the repo's alarm-polarity rule forbids. Ship R1 first, or both together. The static `loud()` paths can ship at once. |
+| A3-R3 | confirmed | none | Format, location, rotation target (`rotate-autonomy-logs.sh:7-12, 429-454`) and volume arithmetic (205 × 1.2 KB ≈ 246 KB/day) check out. Caveats: (1) it needs R4's rc-file wrapper, because today's children write no rc file; (2) `printed` can only mean "print attempted", since the dispatcher cannot see whether the harness accepted the output; (3) the `harness-term` row assumes the harness sends a catchable TERM on timeout, which is unverified (report Q3). |
+| A3-R4 | **amended** | major | The mechanism is sound on bash 3.2 (man page :2256). **The default `CC_SSD_EMIT_S=7` is not "cuts almost nobody".** On the healthy account, **14/188 (7.4%) of runs took ≥7 s**, and 11 of them finished in 7-9 s with every child present [M: inline `python3 -I`, `.claude` dir]. Those runs deliver complete today and would become partial (Plans/Tasks/MCP lines missing from model context). **Existing test breaks:** `tests/session-start-dispatch.bats:48-58` asserts the hung child is *killed* at the bound ("not orphaned"), which contradicts late-continue. §6 T1 ("existing 6 tests still pass") is wrong; that test needs rewriting to "killed at LATE_S". **Correction:** EMIT ≈ 9 s from process start (today's de-facto bound, now made honest), paired with R5. Lower it only after the R3 ledger shows per-child finish times. |
+| A3-R5 | confirmed | none | The evidence is stronger than stated: harness lag reaches **~25 s**. b70276b2 has dod-persist (5 s) cancelled at 30,180 ms [M]. Caveat: 20 s is no guarantee. In the same window, project-level 20 s and 30 s SessionStart hooks (`pnpm exec tsx scripts/unblock-sweep.ts`) were cancelled at 20.4, 23.1, 31.9 and 33.2 s [M]. 0056's `registered()` (`migrations/0056…:78-84`) ignores `timeout`, so a later migration does not make 0056 re-fire. Correctly flagged c10. |
+| A3-R6 | **amended** | major | **The carrier fails under the same starvation that causes the SessionStart cancels.** `operator-readout.sh` (Stop, 10 s) has **822 timed-out cancels against 1,053 recorded successes** in the census window [M: `xargs -0 rg operator-readout.sh \| jq`; 794 of them at 10.x s]. A9 independently finds 46% killed. Its first recorded runs were cancelled in **3 of the 6 dispatcher-cancel sessions, including the incident**: 5759497b 4/4 cancelled, 87e54489 first 3 cancelled, e52f1f63 first Stop cancelled at 10,158 ms [M]. The ⏰ pattern also latches *at print* (`:1952,:1957`), before delivery is proven, and sits after the continue-armed abstain (`:1923`) and the interactive-only gate (`:1940`). **Correction:** run the sentinel as the FIRST, cheap, early-exit step of its carrier, or in the UserPromptSubmit path, or as a segment of the statusline (`~/.claude/statusline.sh` is configured: 0 tokens, operator-visible, re-run continuously, not affected by a hook cancel). Advance its latch only when a later run sees its own `hook_system_message` row (commit by proof). |
+| A3-R7 | **amended** | minor | The defect is real. The print at `recycle-failed-inject.sh:52` and the stamp at `:54-59` only protect against the *child* kill, so a dispatcher harness-cancel or jq failure loses the packet. Transcript `hook_additional_context` rows do carry `content` [M], so proof by token is feasible. **But "the next start injects again" can wait forever.** A live session may never reach another SessionStart, and the proposed host is the Stop hook that is cancelled ~44% of the time. **Correction:** add a UserPromptSubmit fallback that injects any unproven, unstamped packet at the first prompt, then stamps on proof. A failed-recycle resume sits idle until a prompt arrives anyway, so UPS is the first hook that can reach the model. |
+| A3-R8 | confirmed | none | `:88` `$c[:$cap]` is confirmed. The binary routes both systemMessage and additionalContext through `mae(…,{threshold:ihs=1e4})`, which persists the text and shows a preview. 0 cap hits of 393 [M], so this is insurance. |
+| A3-R9 | confirmed | none | The conclusion holds, but the cited evidence (`accounts-board.sh:164-166`) is a bracket-class pattern. Literal `${s//\\/\\\\}` and `${s//\"/\\\"}` on the 2 KB board take ~1 ms each [M: `/bin/bash -c 'time …'`]. The real cost is ESC→`\u001b` (118 matches): **37 ms at 2 KB and 2.1 s at 8 KB** [M]. That is superlinear and already slower than jq's ~10 ms. Keep jq. |
+| A3-R10 | **amended** | minor | The conclusion (do not split now) is acceptable at low conviction. The supporting argument is wrong: the 5 s siblings that died are multi-second hooks, mailbox-drain even succeeded at 13.2 s, and a ~10 ms `cat` hook with its own ≥12 s timeout would probably survive most of the 6 cancels. The honest reason to defer is a c10 edit plus a spawn per start against a 6/410 (1.5%) loss rate that R1, R5 and the corrected R6 address. A statusline segment is the cheaper survival channel for the board's headline. Conviction ~55. |
+
+### Missed
+
+1. The proposed sentinel host (`operator-readout.sh`) is itself the most-cancelled Stop hook, and it
+   fails in the same sessions (see R6). Nothing else in the report depends on it as heavily as R6 and R7 do.
+2. The launcher path: `~/.zshrc:485` and the `claude2/3/4` and `cc2/3/4` functions
+   (`:185-187, :241, :257-258, :270-271, :333`) run `_cc_sync_account` synchronously before every
+   launch on the three isolated accounts [S]. The same walk therefore also sits on the operator's
+   blank-prompt wait. The report left this as Q5, but the file is readable (A2 F1 covers it).
+3. The walk's cost depends on load (2.2 s at ~112 vs 7.6-8.8 s at ~470). The kill pile is a
+   high-load phenomenon, and the impact estimates should be stated per load band.
+4. The statusline as a 0-token, operator-visible, cancel-immune channel for drop notices and for
+   board survival. It was not considered.
+5. EMIT 7 regression and the bats break (R4).
+6. The R1 throttle needs an atomic claim, and the current-slug link must stay synchronous, to avoid
+   safe-mode stranding (`lib/config-mirror.zsh:342`).
+7. Harness lag is up to ~25 s, not ~17 s (b70276b2).

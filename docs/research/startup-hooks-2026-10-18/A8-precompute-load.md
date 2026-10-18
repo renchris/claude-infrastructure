@@ -489,3 +489,129 @@ components overlap in parallel, so this is an upper bound on the saving.
    (2.1.296+, per LOAD_AND_PROMPT_HOOK_TIMEOUTS O4).
 6. 48 lead-crash-watchdog.sh processes are alive, 4 older than a day [M, ps]. This is a startup-spawned
    resident cost outside this axis; flagged for whichever axis owns long-lived hook children.
+
+---
+
+## Skeptic verdicts
+
+Adversarial re-check, 2026-10-18 08:19–08:35 CDT, load 112–143 (well below the ~520 the axis ran at).
+Read-only. No hook was executed. What I ran: the axis's own helpers (`a8_account_load.py`, `a8_load_join.py`,
+`a8_burst_census.py`, and `a8_child_timing.py` fed the rotated IDL via `<(gzcat …; cat idl.jsonl)`,
+because idl.jsonl rotated at 10:52Z); read-only zsh walks (lstat/zstat only) over the four `projects/`
+trees; `cc-mission list` (the same `evaluate()` path as render, but it never writes: bin/cc-mission:407-419,
+:150-153); `sqlite3 -readonly` on the session index; `ps`, `stat`, `plutil`, `rg`.
+Deviation: `/usr/bin/time` output for the three `cc-mission list` runs went to `/tmp/a8sk-cm-{1,2,3}.txt`.
+
+| id | verdict | severity | one line |
+|---|---|---|---|
+| A8-1 | amended | major | The account effect holds. But 95 % of the walk's N is throwaway temp-dir slugs, so a one-line slug filter is the cheaper fix. The walk alone takes 1.7–3.7 s at load ~120. "Memory loss" is overstated. |
+| A8-2 | amended | minor | Real, but the line list is incomplete, and the cost is ~2–4 s at moderate load, not 5–13 s. |
+| A8-3 | amended | minor | Rows are already rendered at write time. The typical saving is ~0.5 s, not 1.5 s. |
+| A8-4 | amended | minor | Correct, and the cause is structural. But it breaks 2 bats tests the finding did not name. |
+| A8-5 | confirmed | none | Load attribution now measured: 53 of 55 "broken" verdicts came at load ≥ 100. |
+| A8-6 | amended | major | Mailbox timeouts defer delivery; the mail is not lost. Where the time goes is unmeasured. "Near 0" is unsupported. |
+| A8-7 | confirmed | none | Call counts and sizes re-verified. |
+| A8-8 | amended | minor | deploy-live carries LowPriorityIO=true and Nice=10. The ledger size depends on the rotation phase. |
+| A8-9 | amended | minor | The ~/.claude evidence is moot because no account-1 sessions run. Live inline probes: 3 of 393. The real risk is the refresh-failure cliff. |
+| A8-10 | confirmed | none | Staleness is even rarer than claimed: 1 of 383 transcripts. |
+| A8-11 | confirmed | none | PRI 31 / NI 0 re-measured. The load claim holds for the dispatcher only. |
+
+**A8-1 — amended (major).**
+- Reproduced:
+  - `a8_account_load.py` now gives ISOLATED < 100: n=164, p50 7,403, 34 % ≥ 9 s; ≥ 100: n=37, 86 %. SHARED: 0 % and 8 % [M]. 88 of the 93 runs ≥ 9 s are isolated [M].
+  - A same-hour control rules out time-of-day confounding: the isolated median beats the shared median in **23 of 24** hours that have both, by a median of **+5.3 s** [M, inline python over the census list].
+  - Isolated starts served the MCP line from cache in 204 of 205 runs, so session-start.sh is not the per-account driver [M].
+  - lib/config-mirror.zsh:45-48, :298, :300-302 and :330-342 say what the finding claims.
+- Corrections:
+  1. **N is mostly garbage.** 17,444 of 18,257 canonical slugs (95.5 %) are `-private-var-folders-*` / `-private-tmp-*` temp dirs. 17,353 of the 17,411 canonical `memory/` dirs belong to them, and they are empty [M, find/zsh glob]. The producer is com.claude.research-classifier-warm (`tempfile.mkdtemp(prefix="cc-research-warm-")`, scripts/research-kit/classifier-warm.py:124). It adds ~90 slugs/day; 108 temp slugs changed in 24 h and 886 in 7 days [M, `find -maxdepth 1 -mtime`]. So the cheapest fix is S effort, not M:
+     - In `_cc_sync_memory_mirror`, skip temp-dir slugs. This cuts the walk ~95 %, fixes the launchers (A8-2) in the same place, and needs no sweep, status file or bands.
+     - Give classifier-warm a stable cwd, which stops the growth.
+     - Pruning the existing stock deletes data, so it is an operator decision.
+     The detached sweep stays a valid second step.
+  2. **The walk alone does not explain the whole gap at moderate load.** The replica took **1.69 / 1.73 / 1.87 / 3.70 s** wall at load 112–125 [M, `/usr/bin/time -p /bin/zsh -fc …`]. The rest is likely per-start mutation work that never finishes:
+     - Secondary has 22 create/relink slugs plus 14 wrong-target links. Quaternary has 28 creates and 4 pending adopts. Tertiary has 0 creates and 0 wrong links [M, read-only branch classifier]. Each pending create forks mkdir/ln (and rm).
+     - That matches tertiary's much lower dispatcher p50 of **5.6 s**, against **8.8–9.0 s** on secondary and quaternary [M].
+     - So the "≈5.0 s saving" is an upper bound until a per-child ledger confirms it.
+  3. **"Silent memory loss" overstates it.** A kill between the mv and the ln moves the files into canonical. Nothing is deleted; that account just stops seeing that slug's memory through the link. The state already exists for 3 slugs (an empty real dst dir beside an existing canonical, skipped forever by :342). All 3 are empty, and a cross-account race reaches the same state without any kill.
+  4. **M3's attribution is wrong.** `knowledge-layer mirror (.claude-next): ⚠ 2 FORKED` is config-mirror-assert.sh:102's own output (.claude-next has a real `statusline.sh`), not accounts-board text. It fires on .claude-next starts and works as a completion detector there.
+- Corrected recommendation: (a) the temp-slug skip plus a stable classifier-warm cwd, effort S, conviction 85. (b) Then the finding's split, with the own slug taken from `transcript_path`'s parent directory rather than re-encoding cwd.
+
+**A8-2 — amended (minor).**
+- Reproduced: ~/.zshrc:185-187 and :241 match. Also present but not cited: claude3 at :257, cc3 :258, claude4 **:270**, cc4 :271, cc2 :333, and the generic `claude` path at :485 and :523.
+- Corrected impact: ~2–4 s per isolated launch at load ~120 [M, replica above]. 5–13 s applies only at load ~515.
+- The temp-slug skip in the lib (A8-1 correction 1) fixes all of these call sites without editing ~/.zshrc.
+
+**A8-3 — amended (minor).**
+- Reproduced: session-start.sh:460-462 renders before the output at :464-471; the cc-mission line cites hold.
+- Correction: rows already trigger a render. cmd_touch, cmd_add and cmd_seed call `cmd_render` right after `save_row` (bin/cc-mission:472-473, :537-538, :615-618), which answers open question 3. "Also render from save_row" adds nothing. The new triggers are only post-land and the date or time; day counts render as `{d:.0f}d`, so the text drifts within a day.
+- Measured cost: `cc-mission list` (the same evaluate and git path, no write) took **0.47 / 0.40 / 0.53 s** at load ~143 [M]. Most starts happen at load < 100, so the typical saving is ~0.3–0.5 s. The 1.5 s holds only near load 520.
+- The detached render must redirect fds on the enclosing subshell (session-start.sh:192-199). Without that it brings back the pipe-hold stall.
+- Conviction 75.
+
+**A8-4 — amended (minor).**
+- Reproduced:
+  - 0 of 411 census transcripts contain `Session index: ` at all [M, `xargs rg -l -F`].
+  - Child timing (rotated IDL): 389 of 397 rows, p50 0.8 / p90 2.9 / p99 6.8 / max 14.3 s [M].
+  - Root cause: sessions modified since 10-11 have **0 of 1,501** summaries and 0 tags; 22 of 14,236 have a summary ever [M, `sqlite3 -readonly ~/.claude/session-index.db`]. The line is structurally dead.
+- Missed constraint: tests/session-index-start-context.bats:39 and :48 pin the "inject when informative" path. They must be rewritten or removed in the same change.
+- Impact: the saving is CPU and child time. Session-start wall does not change unless this child is the slowest one.
+
+**A8-5 — confirmed.**
+- Reproduced:
+  - The log now holds 585 broken and 561 no-fallback lines; by day 13 / 10 / 8 on 10-16 / 10-17 / 10-18.
+  - The rollback pairs are as quoted.
+  - :115, :146 and :159 match. `current` points to 2.1.114, and live processes run `~/.claude-293` (41 + 4) [M].
+- New evidence: joined to capacity-alarm, **53 of 55** broken verdicts since 10-08 came at load ≥ 100, while only 15 % of load samples are ≥ 100 [M]. That makes the load cause measured, not inferred.
+- Notes:
+  - 2.1.183 is skipped as `MANIFEST status=skip` (log 06:12:56), not for a missing binary.
+  - The hook is async, so the gain is CPU plus a false alarm removed, not latency.
+  - Also consider re-targeting the check at the binary that actually launches, or retiring it.
+
+**A8-6 — amended (major).**
+- Reproduced:
+  - Spearman 0.55 (dod-persist) and 0.65 (mailbox-drain) [M].
+  - Timeouts at load < 100 vs ≥ 100: dod-persist 2/277 vs 11/60; mailbox-drain 4/234 vs 25/78 [M, `a8_load_join.py`].
+- Corrections:
+  1. **Mailbox mail is deferred, not lost.** With emit-then-commit (:277-311, :922-932), a SessionStart timeout leaves the window pending, and the next boundary re-delivers it; the hook also runs at UserPromptSubmit (:891). What is lost is the start-time delivery and the operator line. So "52 timeouts lose output" holds for dod-persist (18) only. There is a residual real-loss window: the commit at :929 lands after the printf but before exit, and a harness cancel in that gap discards stdout after the cursor has advanced. A self-deadline narrows that window, which is a better argument for it.
+  2. **The checkpoint placement is unproven.** The finding degrades at :859/:876 (the python renders). Adoption, up to 8 cc-custody forks and the lib loads all run earlier (:279), and no per-phase timing exists.
+  3. **Harness lag is outside $SECONDS.** In the incident the cancels landed at 8.3 s and 10.05 s against a 5 s timeout. "Near 0" is unsupported; give no number until phase timing exists.
+- Conviction 65.
+
+**A8-7 — confirmed.**
+- :312, :315, :331 and :334 plus dod_read_content give ≥ 3 ancestors computations and 3 `dod_read_files` calls.
+- `_dod_filter_file` is a bash read loop (dod-path.sh:158-174).
+- lineage.tsv is now 404,848 B / 3,581 lines; the store is 90,243 B [M ls].
+- Fork math [E, reading dod-path.sh:36-60]: each `dod_read_files` costs ~10–12 forks, and each ancestors call ~5. Memoizing saves ~30, which is consistent with the finding's halving.
+- Re-measured p50: 1,714 ms at load < 100 and 5,185 ms at 300–400.
+
+**A8-8 — amended (minor).**
+- The escalation-watch.sh:79 and :93-94 cites hold.
+- deploy-live's plist has **LowPriorityIO=true and Nice=10** [M plutil]. That throttles I/O under contention, which matters for a producer doing `diff -rq`. The bands must be sized for it, or the axis 2–3 producer should be autonomy-sweep (no ProcessType, which is Standard).
+- idl.jsonl is 424 KB right after the 10:52Z rotation, against ~25 MB before it. escalation-watch's tail cost therefore varies with the rotation phase, and the saving is [E] only.
+
+**A8-9 — amended (minor).**
+- Reproduced: the :116-119, :125-127, :143 and :389-392 cites hold.
+- Corrections:
+  - The 24-day ~/.claude cache only shows that no account-1 session has run lately: no live claude-293 process runs without CLAUDE_CONFIG_DIR, apart from 4 whose environment did not show [M, `ps -axwwE`].
+  - The census shows **3 of 393** dispatcher runs with an uncached MCP claim, none of them ≥ 9 s [M]. So "removes a 2.5–15 s probe" has little current impact.
+- The real hazard, re-measured now:
+  - The .claude-next cache is **11.4 h** old and quaternary's **12.7 h**, against a TTL of 300 s, with no refresh lock present. Secondary refreshed at 08:17 [M stat].
+  - Both hit MAX_AGE in ~11–12 h. After that they probe inline on every start until a probe succeeds.
+  - The failure stamp is the valuable part. Raise its priority.
+
+**A8-10 — confirmed.**
+- File-level re-count over the 383 dispatcher transcripts: `STALE by` 1; `numbers withheld`, `unavailable` and `EMPTY — the producer` 0 [M, `xargs rg -l -F`].
+- Caveat: this measures renders only. A killed accounts-board child or one of the 6 dispatcher timeouts leaves no phrase at all.
+
+**A8-11 — confirmed.**
+- `ps` now: every hook process is PRI 31 / NI 0 (43 lead-crash-watchdog, 14 mailbox-wake-arm, 7 cc-await-ping, 5 agent-teams-enforce). Only launchd's session-index-sweep sits at PRI 4 / NI 10 [M].
+- DESIGN.md:101, :181 and :228-229 say what is cited.
+- Nuance: "most slow starts are at low load" holds for the dispatcher (56 of 93 runs ≥ 9 s were at load < 100). It does not hold for the separate sync hooks, whose timeouts are 11 of 13 and 25 of 29 at load ≥ 100 [M]. The elapsed-time approach still covers both.
+
+**Missed by the axis.**
+1. Temp-dir slug inflation of the mirror walk and its growth engine (A8-1 correction 1). This is the highest-leverage startup fix found, and it is effort S.
+2. Pending per-slug mutations on secondary and quaternary but not tertiary, matching tertiary's faster starts (A8-1 correction 2).
+3. Misattributing config-mirror-assert's own `.claude-next` FORKED line to accounts-board, an always-firing warning on that account.
+4. The .claude-next and quaternary MCP refresh failures approaching the 24 h inline-probe cliff.
+5. Zero session summaries upstream, which makes the session-index line dead by construction, and the bats tests that pin it.
+6. Detached render and sweep subshells must close inherited fds (session-start.sh:192-199). This is stated for R1 and missing for R2.

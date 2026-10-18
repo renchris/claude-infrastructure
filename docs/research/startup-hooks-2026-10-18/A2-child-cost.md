@@ -307,3 +307,220 @@ Ranked by expected contribution to session-start wall time [E, combining M1-M4 w
 - Every helper script is read-only and lives beside this file: `a2-forkbench.sh`,
   `a2-hook-durations.py`, `a2-child-presence.py`, `a2-config-mirror-kill.py` and
   `a2-memmirror-scan.zsh`. The zsh replay only counts the mutating branches and never executes them.
+
+---
+
+## Skeptic verdicts
+
+Adversarial pass, 2026-10-18 about 08:20 local. Read-only throughout: no hook was executed. Load
+during my re-runs was 118-148 (12-15 per core) [M: `uptime`, `sysctl vm.loadavg`]. That is about a
+quarter of the load during A2's measurements, so my timings are lower bounds for A2's conditions.
+Transcript re-runs use the same `/tmp/startup-hooks-census-files.txt`. 9 of its 411 files have since
+vanished [M: `test -f` loop], so my counts run about 3 % below A2's.
+
+**What I re-ran**
+- **S1.** `zsh -f a2-memmirror-scan.zsh ~/.claude-quaternary`: 18,930 slugs in 5,924 ms.
+  `~/.claude-tertiary`: 18,935 slugs in 3,500 ms. CPU (user+sys) was 2.2 s and 2.0 s [M].
+- **S2.** `python3 -I a2-config-mirror-kill.py`, dispatcher by account [M]:
+
+  | account | p50 | share ≥ 9 s |
+  |---|---|---|
+  | default | 2,976 ms | 1.6 % |
+  | quaternary | 8,824 ms | 48.8 % |
+  | secondary | 8,822 ms | 47.7 % |
+  | tertiary | 5,611 ms | 29.3 % |
+
+- **S3.** `python3 -I /tmp/a2sk-runs.py list`: per dispatcher run, the timestamp, the duration and
+  the account *named inside* each `knowledge-layer mirror (<acct>)` warning.
+- **S4.** Histogram of isolated-account dispatcher durations [M: awk over S3]. Each 250 ms bin from
+  7.0 to 9.0 s holds 3-7 runs. The bins from 9.00 to 9.99 s hold 13, 29, 23 and 11. That pile-up
+  just above the bound is the signature of a kill.
+- **S5.** Census of canonical slugs [M: `zsh -fc` globs over `~/.claude/projects`]:
+  - 18,257 slugs in total. Temp-dir slugs are 17,445 of them (95.6 %): 14,390 `-private-var-folders-*`
+    and 3,055 `-private-tmp*`. Only 605 slugs match `*worktrees*`.
+  - 17,354 of the 17,411 `memory/` dirs (99.7 %) sit under `-private-*` slugs.
+  - The biggest families [M: awk prefix tally]: `…-T-e1h-call*` about 6.2k, `…-T-cc-research-warm*`
+    about 4.1k, `…-T-cc-research-router*` about 0.95k.
+- **S6.** `bash /tmp/a2sk-dodfilter.sh ~/.claude/autonomy/dod/repo-86523465733a9afe.md`, a replay of
+  `_dod_filter_file`. The 90 KB store is only 380 lines. The bash read loop took 17 ms, one awk pass
+  16-23 ms, and one `git rev-parse` 17-31 ms, at load about 148 [M].
+- **S7.** `a2-hook-durations.py` and `a2-child-presence.py` [M]:
+  - dod-persist: n=346, p50 1,934 ms, 16 cancels. Critical in 89 of 397 events.
+  - mailbox-drain: n=319, p50 1,838 ms, 30 cancels.
+  - dispatcher: n=397, 4 cancels.
+- **S8.** `bash a2-forkbench.sh 5` at load about 138: `true` 6 ms, `jq` 11 ms, `git --version` 12 ms,
+  `python3` 40 ms [M].
+- **S9.** `sqlite3 -readonly` replay of the context query: 0.72 s cold, 0.15 s warm. Of the 636
+  sessions modified in the last 2 days, 0 have a summary [M].
+- **S10.** pre-session-validate and the live binaries:
+  - `pre-session-validate.log`: the last 2,000 lines start on 2026-07-25. Oct 17-18 has 18 events [M: rg].
+  - Every event is the same sequence: broken, then `fallback skip 2.1.183 (MANIFEST status=skip)`,
+    then `fallback skip 2.1.113 (… skip)`, then "no working fallback".
+  - 0 "rolled back" lines in the last 2,000 [M].
+  - `ps -axo command=`: 45 of the 47 live claude processes run `~/.claude-293` binaries and 2 run
+    `/opt/homebrew/bin/claude`. None runs `~/.claude-versions/current` (→ 2.1.114) [M].
+- **S11.** The MCP probe in session-start.sh:
+  - `~/.claude/logs/sessions.log` is written only by session-start.sh [M: rg]. For Oct 17-18 it holds
+    232 "Session started", 137 "MCP probe binary" and 63 "MCP Status" lines [M: `rg -c`].
+  - The `MCP:` line in dispatcher stdout came from the cache in about 389 of 395 runs. Only 3 runs
+    probed live [M: `/tmp/a2sk-mcp.py`].
+
+### Per finding
+
+**A2-F1: amended (major).**
+- **Holds.** The isolated-account memory walk is the most likely cause of those accounts' dispatcher
+  tail, on three pieces of evidence:
+  - the large per-account gap at the same machine load (S2);
+  - the kill pile-up at 9.0-10.0 s (S4);
+  - the replay cost (S1).
+- **Does not hold, part 1: "the walk takes longer than 9 s".** That depends on load. At load about
+  133 it took 5.9 s on quaternary and 3.5 s on tertiary (S1). On quaternary, 41 of 80 runs still
+  finished under 9 s.
+- **Does not hold, part 2: the kill drops the FORKED warning (6/42 vs 0/45).** This is a time
+  confound:
+  - Commit `cb3e8d6b5` (2026-10-14, "isolate per-account caches") removed the forks behind that
+    warning.
+  - From Oct 15 on, the quaternary warning appears in 0 of 36 fast runs and 0 of 38 bound-hit runs (S3).
+  - 3 of A2's 6 "quaternary" warnings actually name `.claude-secondary` or `.claude-next`. Those are
+    transcripts that moved between account dirs.
+- **What the kill really drops today.** The walk at `config-mirror-assert.sh:17` runs *before* the
+  settings-parity check (:46-50), the hook-surface registration check (:65-87) and the agent-budget
+  check (:95-99). So on about half of isolated-account starts those three safety checks never run,
+  and nothing records it.
+- **Root cause is not worktrees.** A2 says one slug per worktree; worktrees are 605 slugs. 95.6 % of
+  slugs, and 99.7 % of the memory dirs the walk links, come from headless runs in `$TMPDIR` and
+  `/private/tmp` (S5). The mirror itself copies each of them into 3 accounts (`mkdir -p` and `ln` at
+  `lib/config-mirror.zsh:356`).
+- **Corrected recommendation, in priority order:**
+  1. In `_cc_sync_memory_mirror`, skip slugs matching `-private-var-folders-*` and `-private-tmp*`.
+     The walk falls from 18.9k to about 800 slugs [E: S5], the August scale. This is effort S and
+     needs no new mode.
+  2. GC those slugs' dst links and dirs, using a detached sweep throttled the way
+     `setup-task-symlinks.sh:173-181` throttles its own.
+  3. Add A2's current-slug mode for the hook and the launcher.
+  4. Move the walk to after the three checks, or detach it, so a slow walk cannot silence them.
+  - Drop the launchd-job option. "New precompute daemons" is on the plan's rejected list
+    (`docs/plans/LOAD_AND_PROMPT_HOOK_TIMEOUTS.md:207`).
+- **Impact and verdict.** The impact estimate toward about 3 s stands [E]. Effort S for step 1 and M
+  for the rest. No settings edit. Conviction 85.
+
+**A2-F2: amended (minor).**
+- **Holds.** The 3 jq calls (:397, :398, :403), the 3-4 ancestor walks and the 3 `dod_read_files`
+  calls are all verified.
+- **Line correction.** The first `dod_read_files` call is at `dod-path.sh:198`, not :200.
+- **The bash read loop is not slow.** Over 380 lines it costs 17 ms, the same as one awk spawn (S6).
+  Replacing it saves nothing at today's store size.
+- **Git target.** `cc.canonicalUrl` is set in this repo, so the git count is 9-10. The target can be
+  ≤ 2 git (rev-parse plus config), not 1.
+- **Corrected impact.** The saving comes entirely from spawns (about 50-80 fewer [E]). It is capped
+  by the hook's measured 3.2 s median when it is the critical hook.
+- **Corrected risk.** `scripts/wrap-ledger.sh` also sources `dod-path.sh` (dod-path.sh:28-29), so
+  `tests/dod-path.bats` must stay green alongside `tests/dod-persist.bats`. Any memo must be
+  in-process only: a cross-process DoD memo was reverted before for staling the ⛔ rung
+  (memory-econ-rearchitecture-2026-08-10/prior-art.md:166).
+
+**A2-F3: amended (major).**
+- **Holds.** The cited lines check out: :334-344, lib:177 and lib:730-731, :858, :876, :897-915.
+- **The lock recommendation is mis-specified.** `mailbox_migrate` ignores the result of `_mbx_lock`
+  (`|| true` at lib:730-731). Passing a 0 ms wait would therefore not *defer*. It would make every
+  contended migrate run lock-free at once, which is more risk of duplicates and concurrent cursor
+  writes, not less.
+  - A correct defer needs `_mbx_lock "$lo" 0 || { echo 0; return 1; }`, behind a SessionStart-only
+    parameter.
+  - `mailbox_migrate` is also the mandatory close-time path in `scripts/handoff-fire.sh:9008` and in
+    `bin/cc-restore-rebind:222`. Their semantics must not change.
+- **The second python3 is conditional.** The stale-forward python runs only when the body has
+  `[forwarded:` lines (:803).
+- **Contention is unmeasured.** No measurement shows lock contention happens, so "up to 4 s" is a
+  ceiling, not an observed cost.
+- **Cancel-rate bias.** Cancels are always recorded, but a success is recorded only when the hook
+  prints. The rate is therefore 30 of 397 events, about 7.6 %, not 10.3 %.
+- **Verdict.** The forward-loop and digest rewrites stand. Conviction 55.
+
+**A2-F4: amended (minor).**
+- **Holds.** The lines (:460-462, :437-439) and the `write_board` skip of unchanged bytes
+  (`bin/cc-mission:298-302`) are verified.
+- **Prefer a gate over detaching.** Detaching alone saves no CPU. The DESIGN rejects `async` for
+  heavy hooks for exactly that reason (load-hook-timeouts-2026-10-11/DESIGN.md:230). Render only
+  when a zero-fork builtin `-nt` test finds `~/.claude/autonomy/customer/rows` or reso's
+  origin/main ref newer than the board, and at most once per 10 min otherwise.
+- **The dispatcher-level gain is unproven.** It helps only if session-start.sh is the slowest child
+  on default/next, and nothing measures that (F6).
+- **A2 missed this child's bigger cost.** The MCP cache refresh starts a background
+  `claude mcp list` on about 59 % of starts (see Missed).
+
+**A2-F5: amended (major).**
+- **Holds.** The cost claims: python3 at :54, the claude binary at :115, once per start.
+- **The rollback path is unreachable today.** Both fallbacks are MANIFEST `skip`: 2.1.183 is a
+  deliberate stable HOLD and 2.1.113 is skipped. So the loop at :129-150 never runs `--version` and
+  never reaches :159. There were 0 rollbacks in the last 2,000 log lines (S10).
+- **The real harm is a false alarm.** On 18 starts in Oct 17-18 the hook printed "ERROR: no working
+  version … session will likely fail", and every one of those sessions ran.
+- **The checked binary is not the fleet's binary.** It validates `~/.claude-versions/current`
+  (2.1.114). None of the 47 live claude processes run it (S10).
+- **Exit 127.** A bare `timeout` is not on a launchd PATH (session-start.sh:440-443 says so), so
+  treat rc 127 as UNKNOWN as well as 124/137. Better: resolve `timeout` by absolute path.
+- **Recommendation.** Do the check once per install or upgrade (cc-upgrade), or cache it keyed on
+  link target, inode and mtime as A2 says. Never print "will likely fail" on a timeout.
+
+**A2-F6: amended (minor).**
+- **Holds.** The diagnosis is verified: `session-start-dispatch.sh:65-68` records nothing.
+- **Correction 1: per-child end times need a wrapper.** The parent `wait`s in launch order, not in
+  completion order. So a timestamp taken after `wait $p` is the maximum of the earlier children, not
+  this child's end. Use `( "$DIR/$c" … ; : > "$T/e$i" ) &` per child, then one
+  `stat -f '%N %Fm' "$T"/e*` after the wait: one extra exec in total, nanosecond resolution.
+- **Correction 2: write the kill record from the watchdog at kill time.** If it is written only after
+  the merge, it is lost when the harness cancels the whole dispatcher at 12 s, which happened in 4-6
+  runs and cost every child's output, including the accounts board.
+- **Correction 3: "≥ 9 s" is not "killed".** Spawn and merge overhead count too, so the number of
+  runs with a kill is at most 107, not exactly 107.
+- **The 9,500-char cap is also silent.** The cut at :88 should get the same loud note.
+
+**A2-F7: confirmed.**
+- Reproduced: 0 "Session index:" lines across all runs (S2). Of the 636 sessions modified in 2 days,
+  0 have a summary, so the query cannot print (S9). The query costs 0.15-0.72 s (S9), and the hook's
+  own header targets under 100 ms.
+- Caveat: `tests/session-index-start-context.bats:39,:48` pin the injection path. A flag that
+  defaults to off keeps them runnable; deleting the code means retiring those cases.
+
+**A2-F8: refuted (major).**
+- **It repeats a parked design.** The kqueue single watcher is DESIGN item 10
+  (`load-hook-timeouts-2026-10-11/DESIGN.md:172-178`). It is WP11, parked after O5 found hooks are
+  3-5 % of execs (`docs/plans/LOAD_AND_PROMPT_HOOK_TIMEOUTS.md:37`).
+- **The hub variant was rejected.** `load-root-cause-2026-10-17/C-session-daemons.md:190-199` and
+  `:286` cite the risks: a single point of failure, serialized `handle_crash`, and per-session state
+  captured at spawn.
+- **Consolidation was declined after measurement.** See
+  `memory-econ-rearchitecture-2026-08-10/prior-art.md:164`.
+- **Its premise is too small to matter.** The measured cost is 1.3-1.6 ms per poll, 0.3-0.6 % of the
+  fork rate (C-session-daemons.md:62, :99).
+- **The tool it proposes is a known anti-pattern.** A full-table `ps -A` per tick is what WP8
+  removed elsewhere.
+- **Not a startup item.** There are 44 live daemons now [M: `pgrep -f lead-crash-watchdog | wc -l`].
+
+### Missed by this axis
+1. **The MCP cache refresh in session-start.sh** (:180-201, :375-392).
+   - On a cache older than the 300 s TTL, the hook starts a background `bash session-start.sh
+     --refresh-mcp-cache`. That runs `claude mcp list` (the Claude Code binary plus every
+     configured stdio MCP server) with 2 attempts of up to 10 s each.
+   - Oct 17-18: 137 probes for 232 starts, and only 63 answers [M S11]. So most refreshes fail under
+     load and leave the cache stale; quaternary's was 12.6 h old [M: stat]. The next start then
+     launches another one.
+   - This is the biggest CPU competitor in the startup window that the static model left out.
+   - Fix: a TTL measured in hours, a failure back-off stamp, and an absolute-path `timeout`. No
+     settings edit.
+2. **Slug growth comes from temp-dir headless runs**, not worktrees (F1 correction, S5).
+3. **The 9 s kill of config-mirror-assert silently disables three safety checks**: settings parity,
+   hook-surface drift and agent budget (F1 correction).
+4. **pre-session-validate checks a binary the fleet does not run**, and fires a false "will likely
+   fail" alarm (F5 correction).
+5. **The cancel rates use a biased denominator.** Cancels are always recorded, successes only when
+   the hook prints. That gives mailbox-drain about 7.6 % and dod-persist about 4.0 % of events, not
+   10.3 % and 5.0 %.
+6. **The dispatcher's own 12 s cancel loses every child's output at once** (4-6 runs), and the
+   9,500-char merge cap truncates from the end without a word. Neither is in A2's fault list.
+
+**Skeptic deviation.** The brief allows writes to this one file only. I also wrote four read-only
+scratch helpers to `/tmp` with the Write tool: `a2sk-memlist.zsh`, `a2sk-runs.py`, `a2sk-mcp.py`
+and `a2sk-dodfilter.sh`. Each one only reads (globs, zstat, transcript JSON, one store file) and
+writes nothing except stdout. No hook, repository file or shared state was touched.

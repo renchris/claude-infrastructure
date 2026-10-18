@@ -331,3 +331,206 @@ sessions. "c10" means a settings.json edit that only the operator may apply.
 4. D7: which PostToolUse hooks are the 89 aborted runs? CC records no command. An upstream ask (include `command` on abort-cancel records) is the only attribution path.
 5. UPS chain latency for machine prompts cannot be read from timestamps (queued_command is written at enqueue). A per-hook start/end stamp written by the hooks themselves would give it.
 6. Durations of silent hooks (most Stop gates, most PreToolUse gates) are not measurable from transcripts. R5's ledger gives kill counts. A per-hook `EPOCHREALTIME` stamp in the IDL rows would give true percentiles.
+
+## Skeptic verdicts
+
+Adversarial pass, 2026-10-18, read-only. No hook was executed.
+
+**How the numbers were reproduced.**
+- The axis scripts have no upper time bound, so their totals grow as live transcripts grow. 9 of the 411 listed files no longer exist, including this session's own transcript, which moved config dir.
+- So every script was re-run in memory with the window fixed at `[2026-10-16T06:10Z, 2026-10-18T06:11Z)`, over the 402 files still present: `python3 -I -c '<read script; patch the since guard to add ts < "2026-10-18T06:11"; exec>'`. The script files on disk were not edited.
+- Small shortfalls against the axis's numbers (about 5-15%) are expected from the missing files and the window edge. Agent-chain numbers reproduce exactly.
+
+**Facts read from the binary** (`rg -a` on `~/.claude-293/.../claude.exe`, which the live sessions run):
+- `case"hook_cancelled"` returns null unless the event is a timed-out UserPromptSubmit.
+- `case"hook_non_blocking_error"` returns null on Stop and SubagentStop.
+- `case"hook_system_message"` renders unconditionally ("<hookName> says: …").
+- The event-name check throws `Hook returned incorrect event name … Full stdout`.
+- A PostToolUseFailure `hookSpecificOutput` accepts `additionalContext`.
+- CC re-yields any PostToolUse / PostToolUseFailure hook cancel as a *commandless* `hook_cancelled` record (telemetry `tengu_post_tool_hooks_cancelled`). So the axis's D7 records are real per-hook cancels whose attribution CC strips.
+
+**Every with-command cancel in the window is a real timeout.** All have `timedOut:true`, and the ratio durationMs / timeoutMs has p50 1.02-1.37 per hook [M, inline python over `hook_cancelled`]. They are not user aborts.
+
+| id | verdict | severity | one-line reason |
+|---|---|---|---|
+| A9-F1 | amended | minor | Mechanism confirmed end to end. The count is 12 in the 48 h window, not 13: one record is 2026-10-14. 7 of the drops are fan-outs of 2 broadcasts. |
+| A9-F2 | amended | minor | Reproduced (71% repeats). The root defect is a stale crumb, which the axis misread as "self-limiting". |
+| A9-F3 | amended | minor | Mechanism and 174 WAKE FLOOR blocks reproduced. Omits two prior unactioned recommendations, the watcher fork-load counterweight, and the migration script's stale premise. |
+| A9-F4 | amended | minor | Reproduced. The ≥80% budget gate saves nothing on the main repo index (97-99% full). The IDL denominator follows the counter by itself. Autonomous lanes would lose the check entirely. |
+| A9-F5 | amended | minor | Renderer facts confirmed. The Stop subtotal 1,595 contradicts its own parts (1,576). The recommended host (session-beat prompt) cannot print. |
+| A9-F6 | amended | minor | No generic deadline lib, confirmed. The latency gain at timeout − 1 s is about 1 s. Detached bodies are allowed by DESIGN.md:230 only for side-effect hooks. |
+| A9-F7 | amended | major | The latency premise is wrong: operator-readout dominates the Stop wall time and stays sync. The headless 30 s teardown and the synthesized-turn costs are unmentioned. |
+| A9-F8 | amended | major | The ≤15 s cache cannot hit a 60 s sampler. `@tsv` mangles the brief. A fast gate refuses more spawns, which is the throttle the operator banned. |
+| A9-F9 | amended | minor | Numbers reproduced. Neither proposed fix shortens typed-prompt latency. cutreplay.py is Stop-only. PostToolUse latency is unmeasured. |
+| A9-F10 | amended | minor | The router "other" line is not a no-op (it carries a block notice) and is worth only about 6.8 k chars / 48 h. The other trims are reproduced. |
+
+### A9-F1 — amended (minor), conviction stays high
+
+**Reproduced.**
+- `rg 'incorrect event name'` over the list gives 13 `hook_non_blocking_error` records, all `PostToolUseFailure:Bash` / `mailbox-drain.sh post-tool`. 12 fall in the 48 h window; b351c528 is 2026-10-14T04:09Z.
+- 3 records at 04:05:32-36Z (dfdeb01c, b02c91f3, a482dd6c) carry the same r13-RB message. 4 records at 23:37:38-47Z carry another single broadcast.
+- Code confirmed:
+  - `hooks/mailbox-drain.sh:179-186`: EVENT is hardcoded.
+  - `:922-929`: emit, then commit `.seen`.
+  - `jq .hooks.PostToolUseFailure`: `mailbox-drain.sh post-tool` is registered there with no timeout.
+- In dfdeb01c, the next assistant text (04:05:47Z) carries no 📬 acknowledgement line, so the model did not see the mail. The session learned the commit 18 s later from its own `git log` (04:05:50Z), so the loss was masked by luck.
+
+**Correction.**
+- 12 drops in 48 h (13 over the corpus), across about 7 distinct messages.
+- The fix has an in-repo precedent: `hooks/log-bash.sh:72,97` already echoes the payload's `hook_event_name` ("CC drops a mismatched one").
+- Adding a fifth field to the ONE-PARSE row means the shape check at `mailbox-drain.sh:104` (`*"$_t"*"$_t"*"$_t"*`) must become a 4-tab check, or a malformed row will shift fields.
+
+### A9-F2 — amended (minor)
+
+**Reproduced.**
+- Crumb: 763 injections, 1,125,788 chars, 573 repeats = 801,672 chars (71%); 759 of 763 on machine prompts.
+- Of these, 729 are nudge-only (1,032,302 chars), and the crumb part averages 1,365 chars (96% of those chars). 34 also carry mail.
+- The crumb also rides PostToolUse peer-mail deliveries: 27 / 76,684 chars. R2 as written covers only UserPromptSubmit.
+
+**Missed root cause.**
+- The crumb is deleted only on a `no-goal:*` abstain (`hooks/goal-inert-watch.sh:173`) or by mailbox-drain's 6 h TTL (`hooks/mailbox-drain.sh:586-590`).
+- It is never deleted when the deferring task ends or the goal evaluates again: every other abstain (`below-turn-threshold`, `damped`, …) leaves it in place. `rg` finds no other clearer.
+- So the "🚨 YOUR /goal WAS SKIPPED" text can keep repeating for up to 6 h after the condition is gone.
+- The "SELF-LIMITING" header the axis quotes (`:507-509`) describes the parked-watcher nudge, not the crumb.
+
+**Corrected recommendation.**
+1. First make the crumb truthful: goal-inert-watch deletes it when the goal is live and either has evaluated since the crumb's `ts` or the Stop payload names no deferrer.
+2. Then dedupe per (session, crumb mtime) as R2 says, in both prompt and post-tool modes.
+3. Cite the adopted rule `docs/research/load-hook-timeouts-2026-10-11/DESIGN.md:239` ("Early exit on `<task-notification>` prompts for human-intent nudges"). R2 and R4 are applications of it.
+
+The token estimate stands at about 100-155 k tokens/day [E: 801,672 chars ÷ 2 days ÷ 2.6-4].
+
+### A9-F3 — amended (minor), conviction 80 → 65
+
+**Reproduced.**
+- `wake_arm_on_stop_registered` and its abstain are at `hooks/session-continue.sh:656-662,688-692`.
+- The staged json is dated Aug 16.
+- `jq .hooks.Stop` shows no mailbox-wake-arm.
+- 174 WAKE FLOOR blocks, 257,742 chars [M, inline clustering of Stop `hook_blocking_error`].
+- P-W2a-d are at `migrations/0012-…sh:20-33`, as cited.
+
+**Omitted.**
+1. **Prior art.** The same instruction was already given twice and not acted on: `docs/research/claude-code-mods-2026-10-03/REPORT.md:35` ("Operator: run staged migration 0012") and `docs/research/oversight-at-scale-2026-08-19.md:194` (WIRE).
+2. **Load counterweight.**
+   - `docs/research/load-root-cause-2026-10-17/C-session-daemons.md:98` costs each cc-await-ping watcher at about 31 processes per 15 s poll, with 15 watchers live.
+   - A Stop-time arm tends toward one watcher per live lead session: about +60 forks/s [E: (46 − 15) × 31 / 15], at a time when load-root-cause work is counting forks.
+   - This does not block 0012, but the operator should weigh it.
+3. **The script's header premise is stale.**
+   - `0012…sh:58-62` says the five settings files are "separate REAL files". Four of them are symlinks to `~/.claude/settings.json` (`ls -la`).
+   - The loop survives this because its "already registered" check fires for the symlinks once `~/.claude` is edited.
+   - But if the `~/.claude` edit fails, the next iteration's `mv "$tmp" "$f"` replaces a symlink with a regular file, which splits the settings. Re-review the script before the operator runs it.
+4. **Headless teardown cost** of up to 30 s per pending rewake hook (blast radius #4 in the same header).
+
+Still a c10 settings edit, correctly flagged.
+
+### A9-F4 — amended (minor)
+
+**Reproduced.**
+- 117 firings, 466,223 chars, 49% repeats; 107 on machine prompts.
+- Sampled lengths: 3,780-3,818 chars at index 2,142 or 5,440 / 25,000, and 4,211-4,217 chars at 24,319-24,667 / 25,000 [M, rg + jq over the first 200 files].
+- Line refs are correct: `memory-nudge.sh:51-54,146-154,790,870`.
+
+**Corrections.**
+- The index of the busiest project sits at 97-99% of its cap, so the ≥80% gate on `BUDGET_CTX` removes about 1.2 k chars only on the small-index projects. In the sample that is about 70% of firings.
+- `denom_nudge_expected` (`scripts/idl-abstain-alarm.sh:271-290`) derives the expected count from the counter files, so it follows a typed-only counter without a TSV change. Verify, but do not assume a TSV edit is needed.
+- The risk is understated: a lane driven only by task-notifications would never get a memory check. Prefer a separate, longer interval for machine prompts (for example ×4) over zero.
+
+### A9-F5 — amended (minor), conviction stays about 80
+
+**Reproduced.**
+- The renderers are as stated, and the R5 channel (top-level systemMessage at UserPromptSubmit) does render.
+- Re-run cancels: Stop 1,357, PreToolUse 127, TeammateIdle 50, commandless PostToolUse / PostToolUseFailure 84; total 1,618.
+
+**Arithmetic.**
+- The Stop subtotal "1,595" (§0, F5) contradicts §4.2's own parts: D2 847 + D3 720 + D4 9 = 1,576.
+- The 1,842 grand total is the correct sum of the listed parts.
+
+**Design defect.**
+- `session-beat.sh prompt` forks its worker with stdout on /dev/null and exits (`hooks/session-beat.sh:285-290`). Folded in there, the relay cannot print anything.
+- The relay must be two-phase: a detached scan writes a per-session pending file, and a cheap synchronous read in a printing UserPromptSubmit hook emits it one boundary later. Alternatively, do a bounded synchronous byte-offset read.
+
+**Gaps.**
+- Kills on a session's final Stop are never relayed if no prompt follows. The SessionStart board must show the ledger's per-hook count, as R5's last bullet already hints.
+- The same reader also covers SessionStart cancels: the 05:49Z incident's dispatcher, dod-persist and mailbox-drain records sit in the same transcript. Say so, since it closes the startup axis's drop paths too.
+- Prior art: `docs/research/exhaustive-drive-2026-09-08/SYNTHESIS.md:103` (B15, a counted `hook_cancelled` reader in the wrap-ledger).
+
+### A9-F6 — amended (minor), conviction 70 → 60
+
+**Confirmed.** No hook-timeout helper exists. `hooks/lib/deadline-capture.sh` handles personal-deadline capture, not timers.
+
+**Corrections.**
+- Speaking at timeout − 1 s cuts at most about 1 s off the Stop critical path, so the "caps the critical path" impact is negligible.
+- The detached body saves no CPU. `DESIGN.md:230` accepts that pattern only for side-effect hooks with their own deadline. Renderers qualify; verdict gates do not.
+- If renderers are delivered late anyway, a short wrapper deadline (2-3 s) is what would actually lower Stop latency. That is a staleness trade-off the operator must choose [E].
+
+### A9-F7 — amended (major), conviction 55 → 35
+
+**Latency premise.**
+- The Stop wall time is dominated by operator-readout: 10 s timeout, 599 timeouts in the re-run window, p50 3.6 s on printing runs. R7 keeps it sync.
+- Moving five 5 s gates leaves the maximum unchanged on every Stop where operator-readout runs ≥5 s. The real gain is fault tolerance (late verdicts instead of 344 losses), not latency.
+
+**Unmentioned costs.**
+- Each async block arrives as a synthesized `<task-notification>` turn (P-W2b). That turn reruns the UserPromptSubmit chain (including the 1.3 k-char crumb) and another Stop chain, so a block is no cheaper than today.
+- `flushPendingAsyncRewakeHooks` makes headless streaming runs wait up to 30 s at exit (`0012…sh` blast radius #4).
+- The harness dedupes nothing (P-W2c).
+- P-W2b was proven only while idle; behaviour mid-turn is unprobed.
+
+This contradicts `DESIGN.md:230` for verdict hooks. c10 is flagged correctly.
+
+### A9-F8 — amended (major), conviction 60 → 35
+
+**Reproduced exactly.** Agent chain n=233, p50 4,104, p90 5,597, p99 9,269 ms. agent-teams-enforce: 149 printing runs at p50 2,775 ms, and 84 cancels, all `timedOut`.
+
+**Defects.**
+1. **The cache cannot hit.**
+   - `com.claude.capacity-alarm` runs on `StartInterval 60` (plist), and its log shows 70-140 s gaps at current load [M, `tail capacity-alarm.jsonl`].
+   - So a ≤15 s freshness window would almost never hit.
+   - Relaxing it to about 120 s is a policy-visible staleness change.
+2. **`@tsv` would mangle the brief.**
+   - There are 13 `$INPUT` parses, not about 10 (`rg -n 'jq ' hooks/agent-teams-enforce.sh`).
+   - `@tsv` rewrites newlines in `.tool_input.prompt`, which feeds the brief-line count.
+   - Keep the prompt out of the joined row, as `mailbox-drain.sh:98-101` explains.
+3. **Constraint.**
+   - Today 33-36% of Agent calls bypass the capacity term by timing out. A fast gate refuses those calls under the same terms, which is *more throttling of live spawn work*, the thing the operator banned.
+   - "No policy change" understates this. Either get an operator ruling first (§6 Q3), or have a slow or stale census admit-and-record loudly rather than deny.
+4. **The "<1 s" estimate has no profile** showing that the census dominates. 13 jq forks alone cost on the order of 1 s at this load [E].
+
+### A9-F9 — amended (minor), conviction stays 50
+
+**Reproduced.**
+- Typed prompts: n=356, p50 1,717, p90 4,802, p95 6,184 ms.
+- Bash: n=6,913, p50 118, p95 1,029, p99 4,880 ms.
+- UserPromptSubmit timeouts: mailbox-drain 32, memory-nudge 13, research-precognition 3.
+
+**Corrections.**
+- R2 suppresses output but does no less work, and R4 skips one counter write. Neither shortens typed-prompt latency, which is the headline here.
+- UserPromptSubmit hooks leave 0 `hook_success` rows, so per-hook attribution needs self-stamps first. That makes this a measurement item.
+- `cutreplay.py` reconstructs only Stop cancels (`docs/research/load-hook-timeouts-2026-10-11/cutreplay.py:37,89`). Replaying validate-bash PreToolUse kills needs an adapted script and a hermetic HOME, because validate-bash writes an audit log.
+- **PostToolUse latency was never measured.** `a9-chain-latency.py`'s PostToolUse proxy returns 0 for every tool, because CC writes those attachments at or before the tool_result record. Meanwhile post-file-edit runs at p99 7.4 s on Edit. §3 omits PostToolUse without saying why.
+
+### A9-F10 — amended (minor)
+
+**Reproduced.**
+- plan-agent-teams-default: 64 injections, 72,294 chars, 31% repeats.
+- backup-before-write: 46 injections, 30,651 chars, 9% repeats.
+- teammate-auto-shutdown: 58 successes, 50 timeouts.
+
+**Correction.**
+- The router "other" line is 144-145 chars × 47 ≈ 6.8 k chars / 48 h.
+- It is also not a no-op: it tells the model "research verbs stay blocked this turn (§4.2)" (`scripts/research-kit/router.py:1065`). Dropping it invites denied tool calls. Shorten it, do not delete it.
+- The TeammateIdle 5 → 20 s change is c10 (flagged). Note that more completed runs means more idle teammates get shut down. That is designed lifecycle, not live work.
+- The once-per-context acknowledgement instruction needs a compliance measurement, counting 📬 lines per delivery before and after.
+
+### What this axis missed
+1. **The goal-inert crumb is stale by construction.** It is cleared only on `no-goal:*` or the 6 h TTL, never when the deferrer ends or the goal evaluates again (F2 above). This is a correctness bug behind the single largest recurring token cost.
+2. **One adopted rule already covers R2 and R4 and more.** `DESIGN.md:239` says to exit early on `<task-notification>` for human-intent nudges. These violate it today:
+   - research-precognition: 60 of 90 firings on machine prompts, 68% repeats.
+   - cache-expiry-warning: 36 of 60 on machine prompts, 65% repeats.
+   - handoff-intent and memory-nudge also fire there.
+   
+   One rule fixes all of them.
+3. **PostToolUse chain latency is unmeasured** (the proxy is identically 0), and it is undisclosed. Every Bash call runs 8 PostToolUse hooks.
+4. **No recommendation lowers the Stop wall time.** Its dominant term, operator-readout, gets none: R6 caps it at 9 s and R7 leaves it.
+5. **0012 context**: the two prior recommendations, the watcher fork-load counterweight, and the stale symlink premise of the migration script (F3 above).
+6. **The cancel-ledger prior art** (`exhaustive-drive-2026-09-08/SYNTHESIS.md:103`, B15) and the reuse of R5 for SessionStart cancels, which closes the 05:49Z incident's drop paths.
+7. **Reproducibility.** The scripts have no upper time bound, and 9 of the 411 listed files are gone. Exact figures cannot be regenerated; the re-runs above use a fixed window.

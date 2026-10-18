@@ -417,8 +417,10 @@ The one-off jq/rg passes behind §2.3-§2.5 are quoted inline above, with their 
 ## Skeptic verdicts
 
 Adversarial review, 2026-10-18. Read-only: no hook was executed. Scratch scripts and outputs are under
-/tmp/skA4* (`skA4_grown*.py`, `skA4_nag.py`, `skA4_disp.py`, `skA4_anc.py`, `skA4-census.json`,
-`skA4-dod-lineage.jsonl`). The census script reproduced exactly: 413 events, mean 3,622, dod-persist
+/tmp/skA4* (`skA4_grown*.py`, `skA4_nag.py`, `skA4_disp.py`, `skA4_anc.py`, `skA4_cmtime.py`,
+`skA4-census.json`, `skA4-dod-lineage.jsonl`, `skA4-cmtime.tsv`, `skA4-reqs.txt`). This review was
+resumed after a usage-limit move. The resumed pass re-checked R1, R1b, R3 and R4 against the code and
+lineage.tsv, and re-ran the X1 split, which changed that verdict. The census script reproduced exactly: 413 events, mean 3,622, dod-persist
 2,676.6 chars/start, 205 lineage / 111 negative, 270 wake nags [M: `python3 -I a4_tokens_census.py`].
 Inside the 48 h window alone the mean is 3,722 chars/start, of which dod-persist is 2,813 [M: jq over
 `.ts>="2026-10-16T05:49"`]. So the 413-event averages slightly understate the current figures.
@@ -433,7 +435,7 @@ Inside the 48 h window alone the mean is 3,722 chars/start, of which dod-persist
 | A4-R5 | amended | minor | The Plans arithmetic is off: about 286 chars/start, not 308. The MCP-probe bats pin the healthy line |
 | A4-R6 | confirmed | minor | Reproduced. Only 14 resumes in 48 h, so it is worth about 1.7k tokens/day |
 | A4-O1 | amended | minor | The code facts hold. The impact is unmeasured: session-start.sh beat the bound in 403/404 runs |
-| A4-X1 | amended | minor | Reproduced, but the within-account data suggest config-mirror-assert is the killed child |
+| A4-X1 | amended | minor | Reproduced. config-mirror-assert is not silent when healthy in ~/.claude/projects sessions, and the evidence that it is the killed child is only n=3 |
 
 **A4-R1.**
 - **Reproduced:**
@@ -514,6 +516,10 @@ Inside the 48 h window alone the mean is 3,722 chars/start, of which dod-persist
   - So `[ "$MODE" = session-start ] && exit 0` in the empty-inbox block would silence both alarms too.
   - Correct change: gate only the no-watcher branch, `[ "$_watched" = 1 ] || [ "$_headless" = 1 ] || [ "$MODE" = session-start ] || nudge=…`
     at :558-560.
+  - Also make the header match the content. `_hdr` defaults to "🔔 No inbox wake path armed." (:519).
+    When `nudge` holds only the inert-goal breadcrumb, that header is false, because the watcher is
+    armed. The same mislabel already happens today whenever a watcher is armed under a live goal and a
+    crumb exists. Fix: set `_hdr=""` whenever the no-watcher text was not added.
 - **Tests:** the drain bats test the nag in `prompt` mode only, so none breaks.
 
 **A4-R4: confirmed.**
@@ -561,16 +567,49 @@ Inside the 48 h window alone the mean is 3,722 chars/start, of which dod-persist
   - Accounts board in 404/404 successes and 101/101 runs over 9 s.
   - Plans, Tasks and Frontier lines always present; MCP missing once.
   - Cancels: mailbox-drain 34, dod-persist 18, dispatcher 6 [M].
-- **Inference needs amending:** within an account, config-mirror-assert's operator-visible
-  `knowledge-layer mirror` systemMessage disappears in slow runs [M: `skA4_disp.py`]:
+- **Inference needs amending:** the finding lists config-mirror-assert among the children that are
+  "silent when healthy". It is not, for sessions that write to ~/.claude/projects (shared by ~/.claude
+  and ~/.claude-next through the projects symlink). Its operator-visible `knowledge-layer mirror …
+  FORKED` systemMessage stands there in 183 of 185 fast runs.
+- **Is it the killed child?** I re-ran the split by config dir and by date [M: `python3 -I
+  /tmp/skA4_cmtime.py > /tmp/skA4-cmtime.tsv`]. 393 dispatcher successes are readable now, because 9
+  of the 411 listed transcripts have since moved; 95 of the 393 ran over 9 s.
 
-  | account | warning in fast runs (≤7 s) | warning in slow runs (>9 s) |
+  | stratum | warning in fast runs (≤9 s) | warning in slow runs (>9 s) |
   |---|---:|---:|
-  | .claude-next | 186/189 | 1/3 |
-  | quaternary | 6/42 | 0/45 |
+  | ~/.claude/projects | 183/185 | 1/3 |
+  | secondary, tertiary, quaternary on 10-16 and 10-17 | 0/100 | 0/81 |
 
-  - Slow runs are concentrated off .claude-next: 98 of the 101 are secondary, tertiary or quaternary
-    transcripts.
-  - So the 9 s kill plausibly does drop an operator-visible child. config-mirror-assert is not "silent
-    when healthy" where a FORKED warning stands.
-  - Confirm with a per-child sentinel, as the finding says.
+  - An earlier draft of this verdict read quaternary's "6/41 fast vs 0/39 slow" as a kill signature.
+    That reading is **withdrawn: it is a date confound.** All 6 of those warnings fall on 10-09 to 10-13
+    or 10-18. On 10-16 and 10-17 the warning is absent from fast and slow runs alike.
+  - What remains: in the one stratum where the warning stands, 2 of 3 slow runs lack it (10-11T05:25
+    and 10-17T00:46), against 2 of 185 fast runs. A 10.9 s run (10-17T04:08) carries it. With n=3 this
+    is a lead, not a finding.
+  - The finding's own conclusion stands, and the data reinforce it: a run over 9 s does not by itself
+    mean a child was killed. Confirm with a per-child sentinel.
+
+### Missed by this axis
+
+1. **Lineage admission is transitive.** tm2-plan has 26 ancestor toplevels, including `/`, personal and
+   reso-management-app [M: `skA4_anc.py`, a replica of the lib/dod-path.sh:125 BFS]. lineage.tsv holds
+   44 claude-infrastructure→tm2-plan fire edges, the newest 2026-10-17T19:27:28Z [M:
+   `rg 'tm2-plan\t' lineage.tsv | rg -c claude-infrastructure`]. 29 of those edges are newer than both
+   FLEET_V2 captures (10-10T16:18, 10-11T12:07) [M: awk `$1 > "2026-10-11T12:07:50Z"`]. The axis
+   reasoned from 4 edges and a single hop.
+2. **The re-read multiplier was carried over, not measured.** This corpus has a mean of 65 distinct
+   main-thread requests per transcript, p50 30, p90 202 [M: unique `requestId` per file over the 402
+   readable transcripts → `/tmp/skA4-reqs.txt`]. The axis used ≈90.
+   - So the headline "≈20M cache-read tokens/day" is ≈14M at the measured mean [E].
+   - Cache reads bill at about 0.1× base input, so that is ≈1.4M input-token equivalents per day [E,
+     list-price ratio].
+   - The "tokens written" figures are cache writes, at about 1.25× [E].
+3. **No test-impact check for any recommendation.** dod-persist.bats pins the history body, the budget,
+   the frame and the negative notice. session-start-mcp-probe.bats pins the healthy MCP line. Both
+   change R1, R2 and R5 from effort S to M (detail under each verdict).
+4. **The MCP line carries more than MCP health.** It also reports `agent-browser: installed.`
+   (389/393 [M]). Silencing it when healthy (R5) needs that status moved or kept on its own terms.
+5. **The Frontier line is misdirection as well as cost.** "agent auto-escalates" contradicts
+   ~/.claude/CLAUDE.md:139, "it is not automatic". That strengthens R4 beyond tokens.
+6. **Pre-existing header mislabel in mailbox-drain** (:519 with :623). The inert-goal breadcrumb
+   can ship under "No inbox wake path armed." while a watcher is armed (see A4-R3).

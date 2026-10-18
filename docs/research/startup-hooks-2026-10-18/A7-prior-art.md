@@ -400,3 +400,278 @@ operator-only settings edit), and conviction from 0 to 100.
   before 0056 the drops were attributable but just as invisible to the operator as they are now.
 - **Q5.** Did the 902.6 s dispatcher record (2026-10-10T21:13Z, sid 8b2487a3) come from a suspended
   machine, or from a real wedge past the 12 s timeout? A wedge would be another cancel-path defect.
+
+---
+
+## Skeptic verdicts
+
+This was an adversarial review, done read-only. No hook was executed. Helper scripts are in `/tmp/a7skeptic/`
+and were all run with `python3 -I`. They read `/tmp/a7skeptic/all-files.txt`, which lists the 3,009 main
+transcripts with mtime on or after 2026-09-27 **[M]**
+(`find ~/.claude*/projects -maxdepth 2 -name '*.jsonl' -newermt 2026-09-27 | sort -u | wc -l`).
+
+| id | verdict | severity |
+|---|---|---|
+| A7-1 | **refuted** | major |
+| A7-2 | amended | major (R2 as worded breaks the operator constraint) |
+| A7-3 | amended (now has stronger evidence) | minor |
+| A7-4 | amended | major (the impact is 4x too high, and R3's main mechanism goes against prior art) |
+| A7-5 | confirmed | none |
+| A7-6 | amended | minor |
+| A7-7 | amended | minor |
+| A7-8 | **refuted** | major |
+| A7-9 | confirmed | none |
+
+### A7-1: refuted. The "printed" subset is really a stderr subset (sqlite lock errors), and silent runs did not pay ~6 s
+
+**The harness records `hook_success` with `durationMs` when a hook writes stdout OR stderr, not only
+when it prints.**
+
+- Every empty-stdout `hook_success` record in the 3,009 transcripts carries non-empty stderr **[M]**
+  (`xargs rg '"type":"hook_success"[^\n]*"stdout":""' | jq` gives 1,346 records, all with stderr). They
+  break down as session-continue 775, session-index-start 265, session-beat 156, pre-session-validate 87,
+  session-register 46, plus a few others.
+
+**session-index-start's pre-0056 records are almost all lock errors, not output.**
+
+- 265 of its 266 pre-0056 `hook_success` records have **empty stdout**. All 265 have stderr
+  `Error: stepping, database is locked (5)` **[M]** (`/tmp/a7skeptic/empty_success.py`, plus the
+  `jq '.attachment.stderr'` tally).
+- Only 1 record actually printed.
+- A7's "printed in 303 of 989" is these 265 records plus 38 cancels.
+
+**Where the ~6 s comes from.**
+
+- It is not the query at `:37`. It is the background stub-upsert subshell at `hooks/session-index-start.sh:69-107`.
+- That subshell redirects only stdout (`:107`), so it keeps the hook's **stderr** pipe open until
+  `SESSION_INDEX_BUSY_TIMEOUT` (5000 ms, default at `hooks/lib/session-index-helpers.sh:75`, used at `:79`) expires.
+  - The recorded minimum is 5,377 ms. That is the busy timeout plus overhead.
+- The hook's own registration was 5 s (`~/.claude/backups/session-start-dispatch-0056-20261004160641/settings.json`).
+  Even so, all 265 records have `durationMs` > 5,000 and are `hook_success`, not cancelled.
+  - So the harness timeout bounds when the process exits. It does not bound how long the pipes take to drain.
+
+**Silent runs measured directly.**
+
+- `/tmp/a7skeptic/sis_idl_leader.py` joins each pre-0056 group's start time with session-index-start's
+  EXIT-trap row in `~/.claude/autonomy/idl.jsonl*`.
+  - Start time = record ts − durationMs. Record ts is the completion time: the incident's three cancels
+    give the same start to within 1 ms.
+- How long the hook's main process ran:
+
+  | runs | n | p50 | p90 | p95 | runs ≥5 s |
+  |---|---|---|---|---|---|
+  | silent | 528 | **0.8 s** | 2.3 s | 3.1 s | 0.4% |
+  | lock-error (recorded) | 269 | 1.16 s | — | — | — |
+
+  **[M]**, at 1 s IDL resolution.
+- So the silent runs did **not** pay ~6 s. The pre-0056 load-banded p50s (2.47 s / 5.80 s) are a fair
+  baseline, and not a lower bound by ~3.5 s.
+
+**What the matched-load comparison actually says.**
+
+- The in-band mean load is the same in both eras: 26.3 against 27.6 at load 0-50, and 78.1 against 85.6
+  at 50-150 **[M]** (python over `/tmp/a7-era-rows.jsonl`).
+- At load 0-50, the post-0056 dispatcher p50 is **4.04 s**, against 2.47 s pre-0056.
+  - Against the 82% of pre-0056 starts without the lock error, it is 4.04 s against **2.12 s**,
+    counting only the hooks the dispatcher later absorbed.
+- At load 50-150 it is 7.0 s against 5.8 s (3.21 s for runs without the lock error).
+- 0056 did remove one cost. Its per-child `2>/dev/null` (`hooks/session-start-dispatch.sh:56`) took the
+  ~5 s stderr-hold off the critical path. That path hit 18% of starts at load under 50 and 48% at
+  load 50-150.
+- Even so, the span is **worse** at matched load after 0056. This axis has not found what caused it.
+  - The candidates are child growth, recycle-failed-inject (added 10-09), the dispatcher's own serial
+    fork and jq overhead, and calendar confounds.
+
+The numbers in the table do reproduce (6.28 / 2.13 / 10.06 s). Only the interpretation was wrong.
+
+**Correction.**
+
+- Keep the pre-0056 load-banded p50s as the baseline.
+- Report that the startup span got worse at matched load after 0056, with the cause not yet isolated.
+- State the bias as "only hooks that write stdout or stderr are timed".
+- Do not target session-index-start's query on this evidence: its foreground p50 is about 0.8-1.2 s.
+- Find the slow child with per-child timing that the dispatcher records itself.
+
+### A7-2: amended. The code claims are confirmed, R2 breaks the constraint, and "over 9 s" is an upper bound
+
+**Confirmed.**
+
+- `:33` and `:56` discard stderr. `:55` skips a missing child silently. `:65` TERMs the child's process
+  group. `:88` cuts with `$c[:$cap]`. `:46`, `:59` and `:70` exit with no output.
+- In the window starting 10-16T00:00Z, 98 of 385 runs were over 9 s, and 43 of 103 (42%) at load 50-150
+  **[M]**, from the rows file. That is close to A7's 95/375.
+- There are 23 dispatcher cancels after 0056 in A7's rows **[M]**.
+  - A7's input skipped 460 transcripts modified 10-12 → 10-16 **[M: find … -newermt 2026-10-12 ! -newermt 2026-10-16 | wc -l]**.
+  - Those files hold one more dispatcher cancel, so 23 is a lower bound.
+
+**Correct the evidence.**
+
+- A run over 9 s does not prove a child was killed. The watchdog starts only after the spawn loop, and
+  the merge runs after it.
+- Still, 72 of the 98 runs fall in the 9-10 s bin, against 17 in the 8-9 s bin **[M]**. That pile-up
+  is the watchdog's signature, so most are likely kills **[E]**.
+
+**R2 violates the operator constraint as worded.**
+
+- Lowering `CC_SSD_BOUND_S` to 7 s makes `:65` `kill -TERM -- "-$p"` kill children's **process groups**
+  2 s sooner. "Every child still runs" is false for that variant.
+- Only a deadline that reports without killing complies. At about 7 s the dispatcher merges and prints,
+  and stragglers keep running detached. Their late output is named and delivered later, for example at
+  the first UserPromptSubmit, and logged to jsonl.
+- That design has three traps:
+  - The EXIT trap `rm -rf "$T"` (`:47`) deletes the stragglers' output files. Output must go outside `$T`.
+  - It deliberately changes `tests/session-start-dispatch.bats:48-58` ("the hung child was killed, not orphaned").
+  - Even this variant cannot report anything when the harness cancels the dispatcher itself.
+
+**The drift guard exists at test time.** `tests/session-start-dispatch.bats:82-95` asserts that all
+10 listed children exist. Only the runtime gap is real: a missing live-layer symlink.
+
+**More silent paths A7 missed.**
+
+- `:91`: a failed merge `jq` sets `OUT=""` and drops everything.
+- A child killed mid-write has its partial output merged as **plain model context**, because
+  `try fromjson` fails on partial JSON.
+
+**About R1.** The line fires on about 25-42% of starts under load. Make it a single compact line with a
+prescribed automatic recovery (late delivery). "Re-run it by hand with the payload" asks for a payload
+the operator does not have.
+
+### A7-3: amended. The precondition is now measured, but no loss has been shown
+
+**Reproduced.**
+
+- In the incident transcript (now at `~/.claude-secondary/projects/…/5759497b-….jsonl`; it moved
+  accounts), the cancels are 8,323 / 10,051 / 13,544 ms on 2.1.293 **[M]**.
+- `hooks/mailbox-drain.sh:924` prints, and the commit is at `:928-930`.
+- `hooks/lib/mailbox-pending.sh:583-590` sets `acked=seen` unconditionally. Its caller is
+  `hooks/session-continue.sh:515`.
+- DESIGN.md says this at `:219-221`, where the report is drafted.
+
+**New direct evidence.**
+
+- Take the 38 pre-0056 session-index-start `hook_cancelled` records and look for an EXIT-trap row
+  between start and end + 5 s:
+  - 7 wrote `passed exit:0` **strictly after** the harness's 5 s timer had fired.
+  - 9 are ambiguous: the exit falls in the same second as the timer.
+  - 21 left no exit row.
+  - 1 shows exit 143.
+  - **[M]** `/tmp/a7skeptic/sis-cancels.jsonl` joined with `/tmp/a7skeptic/idl-sis.jsonl`.
+- So a hook the harness has "cancelled" can keep running to a normal exit while its output is thrown
+  away. That is exactly the precondition for mailbox-drain to commit `.seen` and lose the mail.
+
+**But no loss is demonstrated.**
+
+- The incident session's inbox holds no message older than 2026-10-18T10:33:48Z, which is 4.7 h after
+  the 05:49Z start **[M: timestamps in `~/.claude/mailbox/5759497b-….md`]**. That cancel probably cost no mail.
+
+R4 stands. It changes a contract covered by 98 tests (`tests/mailbox-drain.bats` 88 and
+`mailbox-emit-then-commit.bats` 10) **[M: rg -c @test]**.
+
+### A7-4: amended. One boot, not four, and "validate the running binary" goes against COLD_START:227
+
+**Boots per start: 1, not "up to 4".**
+
+- `~/.claude-versions` holds 2.1.113, 2.1.114 and 2.1.183, and `current` → 2.1.114.
+- Both fallbacks are MANIFEST `skip` (MANIFEST.jsonl:7 and :14). `pre-session-validate.log` shows each
+  of the 18 failures on 10-17 and 10-18 followed by "fallback skip 2.1.183" and "fallback skip 2.1.113"
+  **[M]**.
+- So each start boots one 195 MiB binary (204,534,752 bytes, **[M: stat]**). A failure adds 0 more boots.
+
+**Re-pointing `current` is not possible today, though it has happened before.**
+
+- With both fallbacks skip-flagged, the hook cannot re-point `current` now.
+- The log does show a past false revert: 2.1.114 → 2.1.80 at 2026-07-21 08:52:29, reverted again
+  2 min later **[M]**.
+
+**Line citation.** `:157` is a blank line. The re-point is at `:159`.
+
+**The alarm count reproduces.** 19 of the 402 census files that still exist carry an
+`async_hook_response` with "no working version"; 9 files have moved since the census **[M]**. That is
+consistent with 23/411.
+
+**"Reaches the model" is unverified.**
+
+- The record has `response:{}`, empty stdout, and the text only in stderr.
+- The text appears later in the session only through a tool read.
+
+**R3 should drop "validate the binary the session runs".**
+
+- COLD_START_100P.md:227 already says that the hook "can only ever fix the NEXT launch". A running
+  session has trivially passed its own boot.
+- MANIFEST.jsonl:44 lists 2.1.293 as `skip`. It escapes the hook's grep only because that line has
+  JSON spacing the grep does not match.
+
+**Correction.**
+
+- Keep validating `current`, which the next launches use (`bin/claude-versions`, `bin/claude-latest`).
+- Stamp it by (path, mtime).
+- Treat rc 124 as "unknown under load": no alarm and no re-point.
+- Impact: 1 boot saved per session start, and the false alarm removed (about 5% of transcripts).
+
+### A7-5: confirmed
+
+- All seven commits exist with matching subjects (`git log -1`).
+- `hooks.md:255` reads "Cache layout (checked, not a lever)".
+- `mailbox-drain.sh:799` sets the 24 h default.
+- `dod-persist.sh:303` sets the 6000-char default.
+
+### A7-6: amended. The list is missing recorded rejections
+
+- `load-hook-timeouts-2026-10-11/DESIGN.md:230` rejects **`async: true` for heavy hooks**: "saves no
+  CPU and has no enforced timeout, so runs pile up". That reason holds whatever R9's probe shows.
+- `:229` rejects **load-threshold early exits**.
+- `:227` rejects **a `ps` shim on PATH**.
+- Also add COLD_START:227 (see A7-4).
+- "D6 no longer applies" is half right. The "0 ms recovered" premise is gone, but its M1 argument
+  still applies (moving a hook off the critical path makes it a post-paint contender for turn 1).
+
+### A7-7: amended
+
+- The COLD_START §5 tools were never built **[M]**:
+  - `git log -S'boot-latency-probe'` finds only doc commits (346bc006b, 5094a913e).
+  - `rg 'T2 overdue'` finds nothing.
+- Two corrections:
+  - **CC ≥2.1.296 per-hook durations cannot time the 10 dispatcher children**, because they are not
+    harness hooks. Only the dispatcher can record their times.
+  - The bias is stdout-or-stderr (A7-1).
+- "Which is why 0056 went unmeasured" is **[E]**.
+- The guard has to show up somewhere the operator sees it. A wrap-ledger line alone would be "loud into
+  a dead log" (situational rules, line 7).
+
+### A7-8: refuted. O3 has landed
+
+- Backlog rows `73ea54aec513` and `629200b47a49` are **done** (`cc-backlog list --all`).
+- The plist (mtime 2026-10-12 11:11) and the loaded job both carry `SESSION_INDEX_SWEEP_MIN_INTERVAL_S => 300`
+  (`launchctl print gui/501/com.claude.session-search-sweep`).
+  - "run interval = 60 seconds" is only the launchd wake. The script gates itself to 300 s
+    (`hooks/session-index-sweep.sh:91-99`).
+- R7 is moot.
+- New fact: a single sweep pass, pid 25421, has been running for **5 h 37 min** since 02:54:48 **[M: ps -o lstart,etime]**.
+  The last stamp was written at 02:55:12.
+  - A multi-hour sweep is the contention source worth examining, not a 60 s cadence.
+- O4 (`c2aa7ab8be97`) is still blocked.
+
+### A7-9: confirmed
+
+- `DESK_ROUTER_AND_STARTUP_V1.md:194` checks out, and all 4 live groups have `matcher: null` **[M: jq]**.
+- In the 402 census transcripts **[M: rg -o hookName]**:
+  - startup 1,445, resume 104, fork 10, clear 4, compact 0.
+  - Only 1 transcript has any compaction marker.
+- The R6 settings edit is correctly flagged as c10.
+
+### What this axis missed
+
+1. The study-wide bias statement is wrong. The harness times hooks that write stdout **or stderr**.
+2. A hook whose background child inherits **stderr** can run past its timeout with no cancel recorded.
+   - Shown by 265 records at 5.4-9 s against a 5 s timeout.
+   - The f8c12fce1 lint covers stdout only.
+   - 0056's per-child `2>/dev/null` hid this class for its children only. It is unguarded for every
+     separately registered hook.
+3. The startup span got worse at matched load after 0056 (A7-1).
+4. O3 has landed, and a 5.6 h sweep pass is running (A7-8).
+5. More silent paths in the dispatcher:
+   - the `:91` merge failure;
+   - partial output from a killed child injected as context;
+   - the `:47` EXIT trap deleting the output of any detached straggler.
+6. Rejections A7-6 did not list: DESIGN.md:227/229/230 and COLD_START:227.
+7. A7's input skipped 460 transcripts from 10-12 to 10-16, so its post-0056 counts are lower bounds.
