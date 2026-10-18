@@ -45,3 +45,39 @@ Origin: fired by session 620db313 (pane 344) after 2h20m moved ~5% of 15 session
 - Supersede-not-collide is not built: every observed collision (10 rows) was a holder whose intent had
   expired before its batch started (G §3); A1 removes those holders. A newer request colliding with an
   older VALID waiter is redundant, not lost.
+## W2 — after W1 merges (succession point: recycle/hand off here if context > ~60%)
+
+Follow-ups to send to W1 teammates after their first report (each red-then-green):
+- cclr: (a) lru_switch_census: for a sid/sids selection, filter on the sid BEFORE the per-row jq forks
+  (lr-upgrade.sh :1012-1030, :1088-1100) — the plan-time census ran 3.0-3.4 min under load (raw/D §3d);
+  (b) lr-move-batch.sh :245-252 WATCH census narrowed to the waiting rows' sids (repeated --sid) —
+  one census is 19-27 CPU-s and 6-10 min wall under load (raw/F); (c) plan.json gains
+  `router_ranked_epoch` when cmd_move's strict router check ranked the target.
+- admit: reuse plan.json `router_ranked_epoch` at admission when younger than LR_MOVE_ROUTE_REUSE_S (120 s);
+  the router read was 5-132 s, 323 s with --fresh (raw/G §2.1). The close-time --fresh re-read stays.
+- worker Part 2: (a) load pre-gate before W3: while load/core > hf_recycle_load_bound's bound (same env
+  chain HF_RECYCLE_HOLD_LOAD_PER_CORE → CC_GATE_MAX_LOAD_PER_CORE → 8; CC_FIRE_CAPACITY_GATE=off bypass),
+  wait holding the claim but NO slot, poll 10 s, until the intent check fails → NOTMOVED "load: …";
+  (b) lr_session_location fast path: try <store>/projects/<slug(cwd)>/<sid>.jsonl per store first, glob only
+  on a miss (verdict = 1.0 CPU-s/call, globs ~18,200 dirs × 4 stores; prove ran 604-685 s after rc 6);
+  (c) W2 ends when the row is gone from two consecutive snapshots (raw/E R1: ghost waits 9-28 min);
+  (d) false STRANDED: a holder found by the plan row's pid (+ its CLAUDE_CONFIG_DIR) is not "no live process"
+  (e3dedc17 alive with no registry row).
+
+New work (not yet assigned):
+- Band: the whole move lane runs at pri 20 (launchd's default light limits on com.reso.lr-reset-poller;
+  no ProcessType) while the load runs at 31; a child cannot climb back to 31 (measured: taskpolicy -a
+  from a utility-clamped parent stays 20). Remedy candidates: (1) a staged com.reso.lr-move-kick
+  LaunchAgent (ProcessType Interactive, WatchPaths move/requests) that runs only the kick, with the
+  census explicitly clamped `taskpolicy -c utility`; operator activation script; (2) ProcessType on the
+  poller itself (lifts its heavy arms too — rejected). The positive-control probe (throwaway launchd
+  jobs) was refused by the removal safety check this session; the activation script must verify pri.
+- Load hold decision (operator, file with cc-decide): keep 8/core (+K3 fail-fast + worker wait) vs raise
+  to 24/core (raw/H: 0 failures in 11-18 hardened recycles at 8-32/core; none measured above 24.6;
+  rule-of-three bound <27%) vs build keystroke-free resume relaunch (makes the bound moot).
+- Keystroke-free resume relaunch design: stage a gated successor before /exit (the stage blocks on a
+  go-file the watcher writes after its fold/launch-lock/holder rails) — a design + skeptic wave.
+- Rescue verb gap: lr-fleet --one refuses to relaunch into its own husk shell (pane 344, e739e5b5).
+- Holds (out of the idle-session scope): E R2 (carry sleep-only jobs on a healthy source — operator
+  ruling, narrows 1b97389dd), R3 (goal hold keyed on goal activity), R4 (requester's own cc-lr move
+  as the holding job).
