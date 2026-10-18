@@ -1471,6 +1471,7 @@ rq_update() { # $1=request file, then jq args… $last=filter — atomic rewrite
   jq "$@" "$f" > "$t" 2>/dev/null && mv -f "$t" "$f" 2>/dev/null \
     || { rm -f "$t" 2>/dev/null; log "REQUEST-WARN could not update $f"; return 1; }
 }
+# shellcheck disable=SC2016  # the single-quoted $n/$k/$a/$r/$w are jq variables, bound by --arg/--argjson
 rq_capacity_lane() { # $1=request path $2=its name $3=sid → always 0
   local rq="$1" name="$2" sid="$3" f=() v now acct cwd model effort prompt first refusals next k spawned rsp att
   local holder backoff launch_dir launcher mech targs=()
