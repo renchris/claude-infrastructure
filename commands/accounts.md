@@ -25,7 +25,7 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
 2. **Render the canonical readout — run the renderer, do not rebuild it.**
 
    ```bash
-   claude-accounts --readout   # router headline + fenced grid + flag lines + drain/Fable/provider lines
+   claude-accounts --readout   # router headline + fenced grid + flag lines + drain line + read-time line + provider lines
    ```
 
    🚨 **Paste that output VERBATIM into chat — every row and column, before any commentary.**
@@ -68,7 +68,7 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
      endpoint throttle — ALWAYS transient, NEVER a usage cap (a real cap is HTTP 200 with
      percent ≈ 100). Never report a throttle as a limit.
    - 🚨 **Never re-derive the routed account yourself from `score_*`.** The headline (the `➤` lines above the grid) is the
-     adversarially-verified router; report its answer. For wave spread use
+     adversarially-verified router; point at it, never re-derive or restate it. For wave spread use
      `claude-accounts --rank general|fable` and assign round-robin.
    - 🚨 **Three lanes, and they are NOT interchangeable — say which one you are answering.**
      `desk` is what bare `claude` will do (the human's own next session); `general` is what

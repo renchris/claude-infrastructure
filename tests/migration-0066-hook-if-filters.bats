@@ -87,7 +87,7 @@ rest() { jq -c '.hooks.PreToolUse |= map(.hooks |= map(select(.command | test("p
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"probe PASSED"* ]] || false
   [ "$(ifs PreToolUse 'pr-gate')" = '["Bash(*gh pr create*)","Bash(*gh pr edit*)"]' ]
-  [ "$(ifs PostToolUse 'relay-verbatim')" = '["Bash(*cc-do --list*)","Bash(*claude-accounts --readout*)","Bash(*operator-readout.sh --render*)"]' ]
+  [ "$(ifs PostToolUse 'relay-verbatim')" = '["Bash(*cc-do --list*)","Bash(*claude-accounts*--readout*)","Bash(*operator-readout.sh --render*)"]' ]
   [ "$(ifs PreToolUse 'ship-rail')" = '[]' ]
   [ "$(rest)" = "$before" ]
   # The split copies keep the entry's own fields (relay-verbatim's timeout).

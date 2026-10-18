@@ -57,8 +57,8 @@ Usage:
       Cost: ONE `max_tokens: 1` call per account (~25 tokens; 1 weekly pp is ~500k). Un-forced it
       fires only at/above WIRE_NEAR_WALL, where the integer is ambiguous. Kill: CC_ACCOUNTS_WIRE=off.
   claude-accounts --readout           the /accounts chat readout, as finished markdown: the router
-      headline, a fenced board-style grid, glyph-led flag lines (a Skipped line names any router
-      exclusion no other line covers), then a drain line, a quota read-time line (with the Fable
+      headline, a fenced board-style grid, glyph-led flag lines (a Skipped line names any GENERAL-
+      router exclusion no other line covers), then a drain line, a quota read-time line (with the Fable
       window only when it is news) and a provider summary (unless --no-agents; --agents prints
       the full table).
       THE renderer for that surface — paste it, do not rebuild it. Every formatting rule
@@ -8356,8 +8356,12 @@ def desk_plain(r, cfg):
     asked "which account do I use", so it says the same rung and the same weekly countdown in
     words. Incumbency says FAVORED, never "kept because": the margin is set even when the
     incumbent would have won without it, so the clause cannot claim it was the cause."""
-    return (DESK_TIER_PLAIN.get(desk_keys(r, cfg)[2], "rung unknown")
-            + f"; weekly resets in {fmt_board_t(_until(r, 'weekly_reset_at', 'weekly_reset_h'))}"
+    # The desk lane picks the SOONEST weekly reset, so its pick is the row most likely to sit at
+    # that reset: the same cases as _resetw_clause, never "resets in now" / "in 0m" / "in —".
+    h = _until(r, "weekly_reset_at", "weekly_reset_h")
+    wk = ("" if h is None else "; its weekly window has reset since this reading" if h <= 0
+          else "; weekly resets in <1m" if h < 1 / 60 else f"; weekly resets in {fmt_board_t(h)}")
+    return (DESK_TIER_PLAIN.get(desk_keys(r, cfg)[2], "rung unknown") + wk
             + ("; favored because your last `claude` opened here"
                if r.get("desk_incumbent") else ""))
 
@@ -8368,8 +8372,8 @@ def desk_plain(r, cfg):
 # account; their words never claim a wall the server did not confirm.
 GENERAL_SKIP_PLAIN = {
     "concurrency-unmeasured": "live sessions could not be counted",
-    "no-session-data": "no quota reading",
-    "no-weekly-data": "no quota reading",
+    "no-session-data": "no 5-hour reading",
+    "no-weekly-data": "no weekly reading",
     "zero-score": "no usable headroom",
     "5h-cutoff": "no 5-hour room left",
     "weekly-exhausted": "weekly room under the router floor",
@@ -8399,7 +8403,8 @@ def general_skips_line(rows, reasons, cfg, explained=frozenset()):
             continue
         if why == "kmax-concurrency":
             n, cap = k_eff(r), k_cap(r, R)
-            plain = f"{n} working, {'over' if n > cap else 'at'} its cap of {cap}"
+            # "sessions", not "working": k_eff falls back to the LIVE count when k_work is unmeasured.
+            plain = f"{n} sessions, {'over' if n > cap else 'at'} its cap of {cap}"
         elif why == CLIFF_DRAIN_REASON:
             lx = _until(r, "login_expires_at", "login_expires_h")
             plain = ("login expires " + (f"in {fmt_board_t(lx)}, " if lx is not None else "")
@@ -8748,7 +8753,7 @@ def _read_time_line(cfg, cached):
     if age is None:
         return f"Quota read from cache, age unknown · {again}"
     ago = (f"{age} second{'' if age == 1 else 's'}" if age < 90
-           else f"{age // 60} minutes" if age < 90 * 60
+           else f"{age // 60} minute{'' if age // 60 == 1 else 's'}" if age < 90 * 60
            else fmt_board_t(age / 3600.0))
     return f"Quota read at {now - timedelta(seconds=age):%H:%M}, {ago} ago · {again}"
 
@@ -9322,6 +9327,8 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None):
               "so the Fable lane is refused" if wa is None
               else "Fable window: **inactive** — the Fable lane routes nowhere" if not wa
               else None if win.get("permanent")
+              # active with no parseable `end`: never "open through None"
+              else "Fable window: open, end date **unknown**" if not win.get("end")
               else f"Fable window: open through {win.get('end')}")
         out.append((f"{wl} · " if wl else "") + _read_time_line(cfg, cached))
     if narrow:

@@ -45,7 +45,7 @@ RAIL_RE='/ship-rail-push-allow\.sh$'
 PR_RE='/pr-gate\.sh$'
 RV_RE='/relay-verbatim\.sh$'
 PR_IFS='["Bash(*gh pr create*)","Bash(*gh pr edit*)"]'
-RV_IFS='["Bash(*claude-accounts --readout*)","Bash(*operator-readout.sh --render*)","Bash(*cc-do --list*)"]'
+RV_IFS='["Bash(*claude-accounts*--readout*)","Bash(*operator-readout.sh --render*)","Bash(*cc-do --list*)"]'
 f="$HOME/.claude/settings.json"
 parity="${CC_SETTINGS_PARITY_BIN:-$HOME/.claude/bin/cc-settings-parity}"
 command -v jq >/dev/null 2>&1 || { printf '%s: jq required — nothing written\n' "$N" >&2; exit 1; }
@@ -67,7 +67,7 @@ esac
 
 # ── the probe ─────────────────────────────────────────────────────────────────────────────────
 # Rows are `<label>\t<if pattern>\t<command numbers that must fire it>`; the commands are numbered
-# 1-9 in PROBE_CMDS. Over-firing is never a failure, except on `ls` (9), which no `if` may match.
+# 1-10 in PROBE_CMDS. Over-firing is never a failure, except on `ls` (10), which no `if` may match.
 # shellcheck disable=SC2088  # literal command text the probed session types; the ~ must stay unexpanded
 PROBE_CMDS=(
   "gh pr create --title if-probe --body x"
@@ -78,11 +78,12 @@ PROBE_CMDS=(
   "~/.claude/bin/claude-accounts --readout"
   "bash ~/.claude/hooks/operator-readout.sh --render"
   "~/.claude/bin/cc-do --list"
+  "~/.claude/bin/claude-accounts --fresh --readout"
   "ls"
 )
 PROBE_ROWS="pr-create	Bash(*gh pr create*)	1 2 4
 pr-edit	Bash(*gh pr edit*)	3 5
-rv-accounts	Bash(*claude-accounts --readout*)	6
+rv-accounts	Bash(*claude-accounts*--readout*)	6 9
 rv-readout	Bash(*operator-readout.sh --render*)	7
 rv-cc-do	Bash(*cc-do --list*)	8"
 

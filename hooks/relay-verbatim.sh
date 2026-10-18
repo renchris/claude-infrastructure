@@ -29,8 +29,8 @@ CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null) |
 # nothing unless" rule — on 2026-10-17 the model restated lines 1-2 and the drain line after the
 # paste. KEEP ITS TRIGGER LIST AND commands/accounts.md STEP 3 IN STEP: same cases, same words.
 # TAIL is assigned here, never inherited: an exported TAIL must not replace the fixed wording.
-# The matcher takes `--fresh --readout` too; the settings.json `if` filter (migration 0066) still
-# gates which commands reach this hook at all.
+# The matcher takes `--fresh --readout` too, and so does migration 0066's `if` filter
+# (`*claude-accounts*--readout*`), which is staged, not applied: today every Bash call reaches here.
 TAIL="then add at most 3 lines of interpretation."
 case "$CMD" in
   *claude-accounts*--readout*)        WHAT="the /accounts readout"

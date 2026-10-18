@@ -1889,7 +1889,7 @@ def skipped(out):
     return s[0] if s else ""
 out = rd([row(acct="busy", k=40, k_work=30), row(acct="blind", k=None), row(acct="ok")])
 sk = skipped(out)
-assert re.search(r"\*\*busy\*\* \(\d+ working, (at|over) its cap of \d+\)", sk), sk
+assert re.search(r"\*\*busy\*\* \(\d+ sessions, (at|over) its cap of \d+\)", sk), sk
 assert "**blind** (live sessions could not be counted)" in sk, sk
 assert "**ok**" not in sk, sk
 # weekly room under the floor with NO server refusal: listed, without claiming exhaustion
@@ -1959,6 +1959,8 @@ last = lambda out: [l for l in out.splitlines() if l.strip()][-1]
 assert last(rd([row(acct="x")], UNK)).startswith("Fable window: **unknown** — frontier_access"), rd([row()], UNK)
 assert last(rd([row(acct="x")], POFF)).startswith("Fable window: **inactive** — the Fable lane routes nowhere")
 assert last(rd([row(acct="x")], DATED)).startswith(f"Fable window: open through {END} · ")
+NOEND = {"active": True, "end": None, "deadline": None, "permanent": False}
+assert last(rd([row(acct="x")], NOEND)).startswith("Fable window: open, end date **unknown** · ")
 assert "Fable" not in last(rd([row(acct="x")], WIN_OPEN))
 assert last(rd([row(acct="x")])).startswith("Quota read live at "), last(rd([row(acct="x")]))
 json.dump({"ts": time.time() - 38, "rows": []}, open(cfg["cache_file"], "w"))
@@ -1972,6 +1974,9 @@ c = last(rd([row(acct="x")], cached=True))
 clocks = {(datetime.now() - timedelta(seconds=s)).strftime("%H:%M") for s in (600, 601, 602)}
 m = re.match(r"Quota read at (\d\d:\d\d), 10 minutes ago · ", c)
 assert m and m.group(1) in clocks, (c, clocks)
+json.dump({"ts": time.time() - 100, "rows": []}, open(cfg["cache_file"], "w"))
+c = last(rd([row(acct="x")], cached=True))
+assert ", 1 minute ago · " in c, c                     # never "1 minutes"
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
@@ -1995,6 +2000,13 @@ with mock.patch.object(ca, "desk_keys", lambda r, c: (0.9, 0.5, ca.DESK_TIER_ANY
 with mock.patch.object(ca, "desk_keys", lambda r, c: (0.5, 0.01, ca.DESK_TIER_5H)):
     assert "weekly room is thin" in ca.desk_plain(row(), cfg)
 assert "safe set" in ca.desk_why(row(), cfg)          # the board/CLI clause is untouched
+# the pick sits AT its reset more often than any other row: never "in now" / "in 0m" / "in —"
+for kw, want in ((dict(weekly_reset_at=at(-0.1), weekly_reset_h=-0.1), "; its weekly window has reset since this reading"),
+                 (dict(weekly_reset_at=at(0.5 / 60), weekly_reset_h=0.5 / 60), "; weekly resets in <1m")):
+    s = ca.desk_plain(row(**kw), cfg)
+    assert s.endswith(want), s
+s = ca.desk_plain(row(weekly_reset_at=None, weekly_reset_h=None), cfg)
+assert "resets in" not in s and "—" not in s, s
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
