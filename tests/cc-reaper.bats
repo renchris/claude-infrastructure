@@ -2024,6 +2024,26 @@ EOF
   [ "$got" = "90622 90623 " ]
 }
 
+# ── SCOPED ON-DEMAND RUN (2026-10-18). `garbage --reap --class <name>` acts on that class alone, so an
+# operator or agent can collect orphaned Chromes without also TERMing every orphan bash on the box.
+@test "garbage --class: a scoped reap TERMs only the named class; an unknown argument is refused" {
+  mk_garbage_fixtures
+  cat > "$GA" <<'EOF'
+90641 1 05-19:00:00 Google Chrome
+90642 1 45:00 bash
+EOF
+  cat > "$GB" <<'EOF'
+90641 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --headless=new --user-data-dir=/var/folders/x/T/agent-browser-chrome-dc19
+90642 /bin/bash /Users/x/some/unrelated/orphan.sh
+EOF
+  run "$R" garbage --reap --class orphan-agent-chrome
+  [ "$status" -eq 0 ]
+  got="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
+  [ "$got" = "90641 " ]
+  run "$R" garbage --reap --bogus
+  [ "$status" -eq 2 ]
+}
+
 # ── THE ACCOUNT-MOVE WORKERS (2026-10-18). lr-move-batch.sh and its detached lr-move-worker.sh wait for
 # a session to go idle and were live at 3000-4430 s; a TERM strands the session mid-move. Pair form,
 # the live argv verbatim: both survive, the orphan beside them dies.

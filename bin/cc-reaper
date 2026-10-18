@@ -11,6 +11,7 @@
 #                              ps/tools/shells, stuck cc-close-attrib wrappers, dead-lead watchdog
 #                              daemons). `--reap` to act. Never a claude binary, never a live
 #                              session's subtree, never a whitelisted daemon. Off: CC_REAPER_GARBAGE=0
+#                              `--class <name>` scopes a run to one class (e.g. orphan-agent-chrome)
 #   cc-reaper watchdog-census  CENSUS ONLY — classify the lead-crash-watchdog daemon population from
 #                              the PROCESS TABLE {tracked-live | tracked-orphan | UNTRACKED-orphan |
 #                              stale-file}, reconcile against the daemon's own log, PRINT the reap
@@ -1023,6 +1024,8 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
   while IFS="$(printf '\t')" read -r cls pid re age argsig desc; do
     [ -n "$pid" ] || continue
     case "$pid" in *[!0-9]*) continue ;; esac
+    # `garbage --class <name>`: an on-demand run scoped to one class. The scheduled sweep never sets it.
+    [ -z "${GARBAGE_ONLY_CLASS:-}" ] || [ "$cls" = "$GARBAGE_ONLY_CLASS" ] || continue
     nA=$((nA+1))
     pin="-"
     case "$age:$_GS_SNAP_T" in *[!0-9:]*|:*|*:) : ;; *) pin=$(( _GS_SNAP_T - age )) ;; esac
@@ -3435,7 +3438,17 @@ case "${1:-}" in
   # candidate set (orphans of DEAD parents, stuck wrappers, dead-lead watchdogs) is disjoint from
   # what a concurrent sweep classifies, its kills are per-pid re-verified, and it is exactly the
   # command an operator wants DURING the overload a locked sweep is stuck in.
-  garbage)      if [ "${2:-}" = "--reap" ]; then garbage_sweep 1; else garbage_sweep 0; fi ;;
+  garbage)      _g_reap=0; shift
+                while [ $# -gt 0 ]; do
+                  case "$1" in
+                    --reap) _g_reap=1 ;;
+                    --class) [ -n "${2:-}" ] || { echo "cc-reaper: --class needs a class name" >&2; exit 2; }
+                             GARBAGE_ONLY_CLASS="$2"; shift ;;
+                    *) echo "cc-reaper: garbage: unknown argument: $1" >&2; exit 2 ;;
+                  esac
+                  shift
+                done
+                garbage_sweep "$_g_reap" ;;
   selftest)     exec bats "$HERE/../tests/cc-reaper.bats" ;;
   # 2,29 — the command list plus the KILL SWITCH block, ending on its closing blank comment. The
   # window has been bumped by every header addition (2,25 → 2,30 for the garbage entry, before
