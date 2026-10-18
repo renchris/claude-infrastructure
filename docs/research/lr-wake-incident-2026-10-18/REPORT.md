@@ -211,6 +211,7 @@ The 18 husks named in h were closed by the lead before 13:35. The tabs are merge
   - It closes the pane only on rc 75, or when `claude_started=false` and an owed record exists.
   - It closes only a pane it created for this launch, and only through `kitty-fullscreen-guard --scope os-window`.
   - It never closes an in-place pane.
+  - CORRECTED (2026-10-18, Wave B finding, checked at `lib/kitty-fs-kitten.py:101-105`): the guard call is `kitty-fullscreen-guard --scope pane --mode refuse`, not `--scope os-window`. `last_for["os-window"]` is always true, so `os-window` would refuse every close in a fullscreen window. `pane` refuses exactly when the pane is the OS window's last one, which is the 2026-10-15 crash trigger. The same applies to h defect 7 and to every husk closer.
 - **K4, tokens.** The redeem fix and orphan expiry land before any new mint site.
 - **K5, poller spawn.** The order is: live-beat holder check, then probe, then mint, then spawn.
 - **K6, watchdog auto-close.** It closes only when `cc-find` shows a LIVE copy elsewhere. A tombstone alone gives a STRANDED banner plus an enqueue.
