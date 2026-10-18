@@ -39,7 +39,7 @@ from lr_recon import (
 from lr_recon import facts as F
 from lr_recon import types as T
 from lr_recon.admit import Admission, BootSlots, jitter_s
-from lr_recon.clock import Caffeinate, Clock, Heartbeat, shift_record
+from lr_recon.clock import Caffeinate, Clock, Heartbeat, bind_steps, shift_record, step
 
 MOVING = ("TRANSPLANTED", "EXITING", "HUSK-RETIRED", "EXITED", "RELAUNCHED")
 IN_FLIGHT_MAX_S = 600.0  # a relaunch gap longer than this is unowned (the watcher --await caps at 1200)
@@ -286,6 +286,7 @@ def _census(
                 )
     buckets: List[T.Bucket] = []
     for s in snap.sessions.values():
+        step()
         if not (
             census.in_scope(s, facts, now)
             or s.sid in req_by_sid
@@ -460,6 +461,7 @@ def _draft_snapshots(ctx: Ctx, snap: T.Snapshot) -> int:
     snapshot is the only record of the draft. A failed read records nothing and says so."""
     n = 0
     for rec in ctx.records.values():
+        step()
         if not rec.open or rec.substate != "HOLD-DRAFT" or not rec.pane:
             continue
         if rec.close.get("draft_snap_attempt") == rec.attempt:
@@ -615,6 +617,7 @@ def _derive(
 ) -> None:
     """Level-triggered confirm (§3 step 10): the derived phase replaces the cached one."""
     for rec in ctx.records.values():
+        step()
         if not rec.open:
             continue
         act.adopt(rec, snap)
@@ -852,6 +855,7 @@ def _plan(
     kw = plan.kwork(snap, _accounts(ctx.home), now)
     placed: Dict[str, T.Placement] = {}
     for lane in ("general", "fable"):
+        step()
         lane_mvs = [m for m in mvs if recs[m.sid].lane == lane]
         if not lane_mvs:
             continue
@@ -908,6 +912,7 @@ def _own_and_charge(ctx: Ctx, now: float) -> None:
         pid=os.getpid(), lstart=store.proc_lstart(os.getpid()), owner="lr-reconciler"
     )
     for rec in ctx.records.values():
+        step()
         if not rec.open or rec.plan_only or rec.substate != "PLANNED":
             continue
         fence = store.read_fence(ctx.paths, rec.sid)
@@ -924,6 +929,7 @@ def _own_and_charge(ctx: Ctx, now: float) -> None:
                 ctx.paths, rec, me, _alive, lambda pid: "", now
             )
             _event(ctx.paths, "own", rec.sid, rec.record_id, verdict)
+    step()
     plan.assign_many(plan.phantom_rows(list(ctx.records.values())))
 
 
@@ -1057,6 +1063,7 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
         ctx.records.values(),
         key=lambda r: (r.kind != "limited", r.timeline.detected or now),
     ):
+        step()
         res = T.PhaseResult(
             phase=rec.phase,
             substate=rec.substate,
@@ -1248,6 +1255,7 @@ def _report(ctx: Ctx, mode: str, now: float, snap: Optional[T.Snapshot] = None) 
     for r in ctx.records.values():
         by_cid.setdefault(r.cohort_id, []).append(r)
     for cid, recs in by_cid.items():
+        step()
         cohort = _cohort(ctx, cid, recs, now)
         try:
             rep.open_page(cohort, recs, {})
@@ -1256,6 +1264,7 @@ def _report(ctx: Ctx, mode: str, now: float, snap: Optional[T.Snapshot] = None) 
                 rep.close_page(cohort, recs)
             rep.unrecoverable_page(cohort, recs)
             for r in recs:
+                step()
                 rep.immediate_pages(cohort, r)
                 rep.max_age_page(cohort, r)
             report.write_cohort(ctx.paths, cohort, recs, now)
@@ -1470,6 +1479,7 @@ def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
         now=now,
         rig_keep=frozenset(ctx.records),
     )
+    step()
     ctx.degraded_streak = ctx.degraded_streak + 1 if snap.degraded else 0
     # W7a: the one gate between the census and every decision. It stands before facts, census,
     # derive, refire/abandon, wakes, plan, dispatch, release and the invariant, so an empty or
@@ -1492,6 +1502,7 @@ def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
                     paths, "rig-refuse", sid, detail="no registry row carries rig:true"
                 )
     facts = _facts(ctx, snap, now)
+    step()
     reqs = store.list_requests(paths)
     ctx.pre_census = {s: r.substate or "" for s, r in ctx.records.items()}
     buckets, stale = _census(ctx, snap, facts, reqs, mode, now)
@@ -1507,13 +1518,17 @@ def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
     _refire(ctx, now)
     _abandon(ctx, now)
     _wakes(ctx, snap, facts, now)
+    step()
     placed = _plan(ctx, snap, facts, mode, now)
+    step()
     spawned = 0
     if mode == "act" and os.path.exists(paths.recon_on):
         _own_and_charge(ctx, now)
         spawned = _dispatch(ctx, snap, mode, now)
         ctx.actuations += spawned
+    step()
     _report(ctx, mode, now, snap)
+    step()
     _release_terminal(ctx)
     defects = _invariant(ctx, snap, now)
     for rec in ctx.records.values():
@@ -1613,6 +1628,7 @@ def daemon(ctx: Ctx) -> int:
     )
     hb.write_now()
     hb.start()
+    bind_steps(hb)  # run_pass's step() calls advance hb, from this thread only
     caf = Caffeinate(os.getpid())
     try:
         while True:
@@ -1634,6 +1650,7 @@ def daemon(ctx: Ctx) -> int:
             else:
                 wait_for_change(paths, ctx.home, DORMANT_S, hb)
     finally:
+        bind_steps(None)
         caf.close()
         hb.stop()
 

@@ -202,7 +202,9 @@ def atomic_write(path: str, data: str) -> None:
 class Heartbeat:
     """Dedicated heartbeat thread (§C2). File freshness proves the process is alive; ``progress``
     moves only via ``advance()`` from the main loop, so a wedged loop shows a fresh file with a
-    frozen counter — the two failure modes stay distinguishable."""
+    frozen counter — the two failure modes stay distinguishable. Inside a pass the loop advances
+    through ``step()`` after each bounded unit, so a long pass made of bounded children reads as
+    working while one stuck unit still freezes the counter."""
 
     def __init__(
         self,
@@ -275,6 +277,34 @@ class Heartbeat:
         if self._thread is not None:
             self._thread.join(timeout)
             self._thread = None
+
+
+_LOOP: Optional[Tuple[Heartbeat, int]] = (
+    None  # (heartbeat, ident of the thread that may step it)
+)
+
+
+def bind_steps(hb: Optional[Heartbeat]) -> None:
+    """Make the calling thread the loop whose ``step()`` calls advance ``hb``; None unbinds."""
+    global _LOOP
+    _LOOP = None if hb is None else (hb, threading.get_ident())
+
+
+def step() -> None:
+    """One bounded unit of a pass finished (a stage, a record, a lane, a kitty socket): advance.
+
+    Progress used to move only once per whole pass, and at load 200-500 a pass of 12 records with
+    120 s --place probes, 30 s admission probes and kitty reads ran past the watchdog's 900 s
+    ceiling while blocked on LIVE children, whose CPU `ps -S` does not count — so the watchdog
+    killed a working reconciler three times in an hour on 2026-10-18, each restart mid-pass
+    (lr-recon-watchdog.sh condition 4). Every child the loop waits on is bounded (largest:
+    plan.PLACE_TIMEOUT_MAX_S), so the gap between two steps is bounded by one unit, below the
+    watchdog's STALL_AGE_S. A wedged unit never returns to call step(), so the counter freezes
+    exactly as before. Only the bound thread advances: a step from any other thread, or with
+    nothing bound (``--once``, tests), is a no-op."""
+    loop = _LOOP
+    if loop is not None and loop[1] == threading.get_ident():
+        loop[0].advance()
 
 
 class Caffeinate:

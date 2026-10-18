@@ -20,6 +20,7 @@ import time
 from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Tuple
 
 from lr_recon import types as T
+from lr_recon.clock import step
 from lr_recon.observe_rows import (
     SHELLS,
     GlobFn,
@@ -485,6 +486,7 @@ def observe(
         snap.degraded.append("ps")
         snap.degraded_why["ps"] = str(e)[:200] or type(e).__name__
         return snap
+    step()  # each unit below is bounded (ps: PS_BUDGET_S; kitty: 5 s per socket)
     procs = snap.procs
     try:
         snap.sockets = kitty_sockets(procs, glob_fn, lstat_fn)
@@ -492,6 +494,7 @@ def observe(
         snap.degraded.append("kitty-sockets")
     roots: Dict[int, Tuple[int, int]] = {}
     for sock in snap.sockets:
+        step()
         kpid = int(sock.rsplit("-", 1)[-1])
         data = kitty_ls(sock, run, kitten=kitten, degraded=snap.degraded)
         if data is None:
@@ -565,6 +568,7 @@ def _sessions(
         if s not in sids:
             sids.append(s)
     for sid in sids:
+        step()
         rrows = [r for r in reg if r["session_id"] == sid]
         # membership is a property of the SID: once the daemon holds a record for it (only rig sids
         # ever get one), a pane-keyed registry file another process overwrote must not hide it

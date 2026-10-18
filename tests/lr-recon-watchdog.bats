@@ -212,6 +212,34 @@ ticks_cpu() {  # $1=from $2=to $3=start cs $4=cs added per 30 s tick — progres
   [ ! -e "$KLOG" ]
 }
 
+@test "a pass blocked on live children past 900 s survives once progress steps per bounded unit" {
+  # 2026-10-18 pid 13671: progress moved once per pass, the pass sat on --place probes (120 s at
+  # load 265) whose CPU `ps -S` does not count, and the watchdog killed it at 1212 s frozen. The
+  # reconciler now steps progress after each bounded unit (lr_recon clock.step), at most 120 s
+  # apart: with the holder's own CPU frozen throughout, a 1860 s pass is never a kill.
+  fake_cpu
+  printf '  0:01.00\n' > "$CPUF"
+  p=7; now=$((T - 1860))
+  while [ "$now" -le "$T" ]; do
+    if [ $(((now - T + 1860) % 120)) -eq 0 ]; then
+      p=$((p + 1))
+      hb "$HOLDER" "$HOLDER_LSTART" "$p" "$now" "$now"
+    fi
+    tick "$now"
+    now=$((now + 30))
+  done
+  [ "$p" -eq 23 ]  # 16 steps landed across the 1860 s pass
+  [ ! -e "$KLOG" ]
+  [ ! -e "$LR_RECON_ROOT/watchdog.log" ] || [ "$(grep -c KILL "$LR_RECON_ROOT/watchdog.log")" = 0 ]
+  # the same holder whose unit wedges after its last step at T-60 (no step, CPU still frozen)
+  # dies at the 180 s floor
+  ticks_cpu $((T + 30)) $((T + 90)) 100 0
+  [ ! -e "$KLOG" ]
+  ticks_cpu $((T + 120)) $((T + 120)) 100 0
+  [ "$(sed -n 1p "$KLOG")" = "-TERM $HOLDER" ]
+  grep -q "KILL -TERM pid=$HOLDER: progress=$p unchanged 180s; CPU +0.00s" "$LR_RECON_ROOT/watchdog.log"
+}
+
 @test "a holder whose lstart mismatches (pid reuse) is not killed" {
   hb "$HOLDER" "$DEAD_LSTART" 7 $((T - 300)) $((T - 400))
   tick $((T - 300))
