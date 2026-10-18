@@ -91,6 +91,11 @@ fi
 
 # jq is required BOTH to emit the brief and to write the IDL row, so this abstain is necessarily
 # silent on the wire too. It is in idl-abstain-alarm's blind set for exactly that reason.
+# Start/done markers, so a harness cancel of this hook is reportable (hooks/lib/startup-sentinel.sh;
+# docs/research/startup-hooks-2026-10-18/README.md §5 unit 3.1). 5000 ms = its registration timeout.
+# shellcheck source=lib/startup-sentinel.sh disable=SC1091  # runtime-resolved beside this file
+[ -f "$SCRIPT_DIR/lib/startup-sentinel.sh" ] && . "$SCRIPT_DIR/lib/startup-sentinel.sh" 2>/dev/null \
+  && ss_begin desk-brief-inject 5000 "$SID"
 command -v jq >/dev/null 2>&1 || abstain "no-jq"
 
 # --- is THIS pane the desk? --------------------------------------------------------------------
@@ -118,8 +123,9 @@ framed="You hold the machine-wide DESK role (~/.claude/cc-roles/${ROLE} names TH
 
 ${content}"
 
-if jq -nc --arg c "$framed" \
-     '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}' 2>/dev/null
+if _out="$(jq -nc --arg c "$framed" \
+     '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}' 2>/dev/null)" \
+   && { command -v ss_owed >/dev/null 2>&1 && ss_owed $(( ${#_out} + 1 )); printf '%s\n' "$_out"; }
 then
   # The POSITIVE CONTROL for the whole record stream: without a `fired` row, an all-abstain table is
   # ambiguous between "the desk is elsewhere" and "this hook can no longer inject anything".
