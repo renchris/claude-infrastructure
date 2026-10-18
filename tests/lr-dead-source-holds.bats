@@ -154,6 +154,46 @@ load_fns() {
   [ "$(disp "$S297")" = hold:goal-live ] || { echo "the kill switch did not hold: $output"; false; }
 }
 
+# ── 2b1-3. THE GOAL HOLD KEYS ON GOAL ACTIVITY, NOT ON A GOAL BEING ARMED (operator, 2026-10-18) ─────
+# An actively looping goal reads at rest for ~3 s between turns (raw/E-holds.md §2.5), so activity is
+# a goal record or a transcript write inside the window. The hold cases pin a 600 s window so a
+# loaded box (load 100-600) cannot age a 10 s record past it before the census reads it.
+# goalage <secs> → re-base pane 297's goal_status records to <secs> old; txage <secs> → its last write
+goalage() {
+  jq -c --argjson t "$(( $(date +%s) - $1 ))" \
+    'if .type == "attachment" and .attachment.type == "goal_status" then .timestamp = ($t | todate) else . end' \
+    "$FX/block-cap-tail.2.1.293.jsonl" > "$BATS_TEST_TMPDIR/g.jsonl"
+  cp "$BATS_TEST_TMPDIR/g.jsonl" "$STORE/$S297.jsonl"
+}
+txage() { perl -e 'utime $ARGV[0], $ARGV[0], $ARGV[1] or die' "$(( $(date +%s) - $1 ))" "$STORE/$S297.jsonl"; }
+
+@test "2b1 [RED] an armed goal at rest (last evaluation and last turn 30 min old) does not hold an idle session; always restores the old rule" {
+  pane297; goalage 1800; txage 1800
+  run bash "$CCLR" plan --from next3 --to next2
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(disp "$S297")" = move ] || { echo "an at-rest goal held it: $output"; false; }
+  CC_LR_MOVE_GOAL_HOLD=always run bash "$CCLR" plan --from next3 --to next2
+  [ "$(disp "$S297")" = hold:goal-live ] || { echo "always did not hold an armed goal: $output"; false; }
+}
+
+@test "2b2 a goal evaluated 10 s ago holds even when the transcript's last write is 30 min old, and so does a turn inside the window" {
+  pane297; goalage 10; txage 1800
+  LR_MOVE_GOAL_ACTIVE_S=600 run bash "$CCLR" plan --from next3 --to next2
+  [ "$(disp "$S297")" = hold:goal-live ] || { echo "a just-evaluated goal did not hold: $output"; false; }
+  goalage 1800; txage 30
+  LR_MOVE_GOAL_ACTIVE_S=600 run bash "$CCLR" plan --from next3 --to next2
+  [ "$(disp "$S297")" = hold:goal-live ] || { echo "a turn 30 s ago did not hold: $output"; false; }
+  LR_MOVE_GOAL_ACTIVE_S=1 run bash "$CCLR" plan --from next3 --to next2
+  [ "$(disp "$S297")" = move ] || { echo "the window knob was not read: $output"; false; }
+}
+
+@test "2b3 CC_LR_MOVE_GOAL_HOLD=off never holds, even for an active goal" {
+  pane297; goalage 10
+  CC_LR_MOVE_GOAL_HOLD=off run bash "$CCLR" plan --from next3 --to next2
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(disp "$S297")" = move ] || { echo "off still held it: $output"; false; }
+}
+
 # gate <account dir basename> → run the recover lane's bg-work gate over the REAL pane-113 records,
 # the Workflow agent's notification re-based to the 87 s it was old when the recovery was held
 gate() {

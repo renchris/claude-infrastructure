@@ -217,7 +217,8 @@ cc-lr — find · recover · status · repair, for a limit-blocked session.
                              pane, with NO model turn: one intent file per session and one
                              batch request for the poller, whose batch runner admits once and
                              runs one worker per session. Held, never moved: mid-turn (unless
-                             --until-idle), a draft, a teammate or lead, a live /goal, a
+                             --until-idle), a draft, a teammate or lead, a /goal driving
+                             turns (evaluated or written in LR_MOVE_GOAL_ACTIVE_S, 120 s), a
                              limit-blocked session (use recover --limited), a background job.
                              Exit 0 all moved · 1 some not · 2 batch refused · 3 usage.
   cc-lr move --status <batch> [--json]
@@ -1162,6 +1163,21 @@ cl_move_goal_lib() {
   done
   return 1
 }
+# AN ARMED GOAL AT REST IS NOT DRIVING ANYTHING (operator, 2026-10-18). The hold keyed on a goal being
+# ARMED held healthy idle sessions whose goal had last been evaluated hours before (3e929a81: 19.5 h,
+# raw/E-holds.md §2.5), though --resume restores the goal on the successor and mid-turn is its own
+# hold. A looping goal reads at rest for ~3 s between turns, so ACTIVE = its newest goal_status record
+# or the transcript's last write is younger than LR_MOVE_GOAL_ACTIVE_S. Any unknown reads active.
+cl_move_goal_active() { # <transcript> <idle_s> <now> → rc 0 when the live goal is driving turns
+  local win="${LR_MOVE_GOAL_ACTIVE_S:-120}" ep
+  case "$win" in ''|*[!0-9]*) win=120 ;; esac
+  case "$2" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$2" -lt "$win" ] && return 0
+  command -v goal_liveness >/dev/null 2>&1 || return 0
+  ep="$(goal_liveness "$1" 2>/dev/null | cut -f4)"
+  case "$ep" in ''|0|*[!0-9]*) return 0 ;; esac
+  [ $(( $3 - ep )) -lt "$win" ]
+}
 cl_move_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
 # SEVERAL NAMED SESSIONS, ONE BATCH (2026-10-17T23:57Z). Asked to "move every session on
 # next2/next3/next4 to next, highest-activity first", a session found that --sid took one value and
@@ -1313,11 +1329,13 @@ cl_move_rows() { # <from or ""> <to> <until_idle_s> <sel flag or ""> <sel value>
       # THE GOAL HOLD GUARDS A TURN THE SOURCE COULD TAKE. On an account the fact ledger calls
       # rejected (lr_source_dead) no turn runs, so the goal drives nothing and the hold only kept the
       # session on the account that cannot serve it (pane 297, 2026-10-13). The goal moves with the
-      # transcript and drives the session again on the target.
+      # transcript and drives the session again on the target. It holds only while the goal is ACTIVE
+      # (cl_move_goal_active); CC_LR_MOVE_GOAL_HOLD=always holds whenever one is armed, off never.
       elif [ "${CC_LR_MOVE_GOAL_HOLD:-on}" != off ] && [ -n "$tx" ] && command -v goal_live_condition >/dev/null 2>&1 \
            && goal_live_condition "$tx" >/dev/null 2>&1 \
+           && { [ "${CC_LR_MOVE_GOAL_HOLD:-on}" = always ] || cl_move_goal_active "$tx" "$idle" "$now"; } \
            && ! { command -v lr_source_dead >/dev/null 2>&1 && lr_source_dead "$ac" >/dev/null 2>&1; }; then
-        disp=hold:goal-live act=hold action="a /goal is live; its goal would drive it on mid-move"
+        disp=hold:goal-live act=hold action="a /goal is driving turns; its goal would drive it on mid-move"
         # A live goal re-drives the caller at every Stop, so it never comes to rest for the worker.
         [ "$isself" -eq 0 ] || action="a /goal is live and re-drives THIS session, so it never rests: clear the goal first, or the move waits forever (held; nothing was queued)"
       elif [ "$cold" -eq 1 ] && [ "$cache" = warm ]; then
