@@ -134,19 +134,26 @@ aborted() { [ -e "$BDIR/abort" ]; }
 
 # W2. A row that was busy at plan time waits for the batch runner's shared census (one census for
 # every waiting worker, never one each: a census is ~7 CPU-seconds) to call it `move` on two
-# consecutive snapshots.
+# consecutive snapshots. A sid ABSENT from two consecutive snapshots has left the source's census —
+# moved elsewhere or ended — and no later snapshot will call it `move`: on 2026-10-18 such rows
+# waited out 9-28 min of budget as "not move yet" (lr-inplace-immediacy raw/E R1). Two, not one,
+# like `move`. The batch writes snap.tsv only from a census that exited 0, so absence is a read, not
+# a failed census. Kill switch: LR_MOVE_WAIT_GONE=off waits out the budget as before.
 case "$DISP" in
   wait:*)
     : > "$BDIR/$SID.waiting"
     ev waiting "$DISP, budget ${UNTIL}s"
-    deadline=$(( T0 + UNTIL )); calm=0; last_ts=""; d=""
+    deadline=$(( T0 + UNTIL )); calm=0; absent=0; last_ts=""; d=""
     while :; do
       aborted && finish NOTMOVED "aborted while waiting for idle; nothing touched"
       intent_recheck
       ts="$(sed -n '1p' "$BDIR/snap.ts" 2>/dev/null || true)"
-      if [ -n "$ts" ] && [ "$ts" != "$last_ts" ]; then
+      if [ -n "$ts" ] && [ "$ts" != "$last_ts" ] && [ -f "$BDIR/snap.tsv" ]; then
         last_ts="$ts"
-        d="$(awk -F'\t' -v s="$SID" '$2 == s { print $7 }' "$BDIR/snap.tsv" 2>/dev/null | sed -n '1p')"
+        d="$(awk -F'\t' -v s="$SID" '$2 == s && !f { print $7; f = 1 } END { if (!f) print "-absent-" }' "$BDIR/snap.tsv" 2>/dev/null)"
+        if [ "$d" = -absent- ]; then absent=$((absent + 1)); d=""; else absent=0; fi
+        [ "$absent" -lt 2 ] || [ "${LR_MOVE_WAIT_GONE:-on}" = off ] \
+          || finish NOTMOVED "gone: the session left the census on two consecutive snapshots (moved elsewhere or ended); nothing touched"
         if [ "$d" = move ]; then calm=$((calm + 1)); else calm=0; fi
         [ "$calm" -lt 2 ] || break
       fi

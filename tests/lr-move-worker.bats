@@ -30,7 +30,11 @@ setup() {
   printf '{"admitted":true,"target":"next3","target_auth":"ok"}\n' > "$BDIR/admit.json"
   CLAIMS="$LR_STATE_DIR/runs/by-sid"
 }
-teardown() { mvf_teardown; }
+teardown() {
+  # 11g/11h leave a worker inside a 900 s idle wait when they fail (or by design); end it here
+  [ -z "${WAIT_WPID:-}" ] || kill "$WAIT_WPID" 2>/dev/null || true
+  mvf_teardown
+}
 
 # The batch runner's two steps, in its order: spawn the worker, then re-stamp the claim to its pid.
 worker() { # [claim: yes|no]   WORKER_BASH names the interpreter (default: PATH bash)
@@ -187,6 +191,39 @@ ts_feed() {
   WRC=0; wait "$WPID" || WRC=$?
   [ "$(res verdict)" = MOVED ] || { res verdict; res reason; false; }
   [ ! -e "$BDIR/$SID.waiting" ]
+}
+
+@test "11g [RED] a wait row whose session left the census on two snapshots: NOTMOVED gone at once, not at the budget" {
+  # raw/E R1 (2026-10-18): rows whose session had moved or died waited out 9-28 min of budget,
+  # because only `move` ends the wait and a sid absent from snap.tsv reads as "not move yet".
+  MVF_UNTIL=900 mvf_plan w1 wait "$PANE:$SID"
+  printf '%s\t%s\tnext4\t%s\t/x\t1\tmid-turn\n' 99 "cccc3333-0000-4000-8000-000000000009" "$SRC" > "$BDIR/snap.tsv"
+  echo feed-1 > "$BDIR/snap.ts"
+  wstart "$SID" "$PANE"; WAIT_WPID="$WPID"
+  ts_feed "$WPID"
+  # a wall-clock bound on the result, a third of the 900 s budget: gone is two snapshots and a few
+  # polls; at load ~120 (2026-10-18) the worker took 42 s just to reach its wait, and a poll COUNT
+  # of sleeps stretched 4x, so the bound is in seconds, not iterations
+  end=$(( $(date +%s) + 300 ))
+  until [ -s "$BDIR/$SID.json" ] || [ "$(date +%s)" -ge "$end" ]; do sleep 0.2; done
+  [ -s "$BDIR/$SID.json" ]
+  [ "$(res verdict)" = NOTMOVED ]
+  [[ "$(res reason)" == gone:* ]] || { res reason; false; }
+  ! invoked || false
+}
+
+@test "11h a wait row absent from ONE snapshot and back in the next keeps waiting" {
+  MVF_UNTIL=900 mvf_plan w1 wait "$PANE:$SID"
+  : > "$BDIR/snap.tsv"; echo feed-1 > "$BDIR/snap.ts"
+  wstart "$SID" "$PANE"; WAIT_WPID="$WPID"
+  await_stage "$SID" waiting
+  # the worker has read the absent snapshot once it logs `waiting` and polls; then the row returns
+  i=0; until [ "$i" -ge 10 ]; do sleep 0.2; i=$((i + 1)); done
+  printf '%s\t%s\tnext4\t%s\t/x\t1\tmid-turn\n' "$PANE" "$SID" "$SRC" > "$BDIR/snap.tsv"
+  ts_feed "$WPID"
+  i=0; until [ "$i" -ge 25 ]; do sleep 0.2; i=$((i + 1)); done
+  [ ! -s "$BDIR/$SID.json" ] || { res verdict; res reason; false; }
+  kill -0 "$WPID"
 }
 
 @test "12 a wait row that stays busy past its budget: NOTMOVED still-busy, never invoked" {
