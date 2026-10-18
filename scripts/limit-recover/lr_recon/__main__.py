@@ -1023,7 +1023,10 @@ def _admit(
         if which in act.BOOTING:
             ctx.boots.release(rec.sid)
         return False, why
-    rec.admit_token = ctx.admission.mint_token(rec.sid) or ""
+    # an idle move relaunches with no prompt (act.cmd_move adds --no-prompt), so it owes no turn
+    rec.admit_token = (
+        ctx.admission.mint_token(rec.sid, owes_prompt=rec.kind != "idle") or ""
+    )
     return True, why
 
 

@@ -201,12 +201,21 @@ class Admission:
     def library_probe(self, restore_r: int) -> bool:
         return self.probe(restore_r)[0]
 
-    def mint_token(self, sid: str) -> Optional[str]:
-        """One-shot sid-bound admission token via ``cc_capacity_token_mint``; returns its path."""
+    def mint_token(self, sid: str, owes_prompt: bool = True) -> Optional[str]:
+        """One-shot sid-bound admission token via ``cc_capacity_token_mint``; returns its path.
+
+        The KIND is always passed, never inherited: a move that owes no prompt relaunches a session
+        that is already counted where it sits, so its token is ``swap`` and stays out of the
+        in-flight count (capacity-admit.sh, "WHAT A TOKEN IS AN ADMISSION OF"). Before 2026-10-18
+        every reconciler token minted as ``turn`` by default (lr-wake c2 §2.6)."""
         if not _SID_OK.match(sid):
             return None
-        cmd = 'source %s; cc_capacity_token_mint "$1"' % self._lib()
-        rc, out = self.runner(["bash", "-c", cmd, "lr-admit", sid])
+        kind = "turn" if owes_prompt else "swap"
+        cmd = (
+            'source %s; CC_ADMIT_TOKEN_KIND="$2" cc_capacity_token_mint "$1"'
+            % self._lib()
+        )
+        rc, out = self.runner(["bash", "-c", cmd, "lr-admit", sid, kind])
         lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
         if rc != 0 or not lines:
             return None

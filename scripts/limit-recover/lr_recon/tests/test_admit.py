@@ -154,7 +154,13 @@ class Library(unittest.TestCase):
         r = FakeRunner(rc=0, out="/tmp/tok/s1.abc\n")
         adm = A.Admission(runner=r, env={})
         self.assertEqual(adm.mint_token("s1"), "/tmp/tok/s1.abc")
-        self.assertEqual(r.calls[0][-1], "s1")
+        self.assertEqual(r.calls[0][-2:], ["s1", "turn"])
+        self.assertIn(
+            'CC_ADMIT_TOKEN_KIND="$2" cc_capacity_token_mint "$1"', r.calls[0][2]
+        )
+        # a move that owes no prompt mints a swap token, which the in-flight count leaves out
+        self.assertEqual(adm.mint_token("s1", owes_prompt=False), "/tmp/tok/s1.abc")
+        self.assertEqual(r.calls[1][-2:], ["s1", "swap"])
         self.assertIsNone(adm.mint_token("bad sid"))
         r.rc = 1
         self.assertIsNone(adm.mint_token("s1"))

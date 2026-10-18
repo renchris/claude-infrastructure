@@ -255,7 +255,8 @@ class MainTests(unittest.TestCase):
         # R frozen at 2 before this pass; L_open high so the CPU brake is not what binds
         ctx.admission.enter_active(0, 2, 0, load1=1e6, now=now)
         with mock.patch(
-            "lr_recon.admit.Admission.mint_token", side_effect=lambda sid: "/tok/" + sid
+            "lr_recon.admit.Admission.mint_token",
+            side_effect=lambda sid, owes_prompt=True: "/tok/" + sid,
         ):
             n, recs = self._spawned(ctx, snap, now)
         self.assertEqual(n, 2)
