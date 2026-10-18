@@ -413,6 +413,7 @@ The 18 husks named in h were closed by the lead before 13:35. The tabs are merge
 6. **Pane 258 (9f6593c5) has been idle for 7 days** (decision 56c6862291f2): close it, start a replacement beside it, or keep it. Conviction 65% that you should close it after a transcript check.
 7. **Was account 2 really capped before 09:00Z?** 5232121f hit "weekly limit" 5 s after it swapped onto next2, while utilization showed 0/0. If it was capped, every move to account 2 before 09:00Z was futile, and the router needs a per-account rejection fact. Conviction 50%. Your usage page settles it.
 8. **The class-B defaults were due at 05:00Z and never auto-fired.** They were actioned by hand at 17:13Z. Was that intended (the veto window is advisory), or is the actuator broken? Conviction 60% that it is broken.
+   - CORRECTED (2026-10-18): **broken, 95%, and nobody actioned them by hand** (`q8-classb-actuator.md`). The actuator is §2 of `scripts/autonomy-sweep.sh` (:1185-1233, launchd every 300 s). 39 of 40 runs between 05:00Z and 17:13Z hit the sweep's 400 s limit before §2. The 17:13Z run reached it at 399 s and fired all three, 12 h 13 min late, then stopped before notifying the desk. Fix (owned by Wave H): run §2 right after `strand_rung` (:536).
 9. **Agent autonomy.** Should lead sessions ever be allowed to install LaunchAgents or `/tmp` launchers? Recommended: deny both (Waves D and G), conviction 85%. The registry inversion (`cc-registry` rows exist for closed panes but not for live 19, 27 and 28) also needs an owner.
 
 **Confidence in this synthesis: 85%.**
