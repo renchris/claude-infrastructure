@@ -63,7 +63,7 @@ pane_admit() { CC_ADMIT_BUDGET_KEY="direct-$SID" cc_capacity_admit lr-fire-resum
   pane_admit || true
   [[ "$(cc_capacity_admit_reason)" == *"(refusal 2 of 3)" ]] || { cc_capacity_admit_reason; false; }
   [[ "$(cc_capacity_admit_reason)" != *ADMITS* ]] || false
-  [ "$CC_ADMIT_REFUSED_TERM" = load ]
+  [ "$(cc_capacity_admit_refused_term)" = load ]
 }
 
 @test "a QUEUED request charges nothing and is never released by re-runs inside its bound" {

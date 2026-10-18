@@ -434,6 +434,7 @@ cc_capacity_admit_reason() { printf '%s' "$CC_ADMIT_REASON"; }
 CC_ADMIT_REFUSAL=""
 # The TERM of the last refusal of either kind (count-bounded or queued), for a caller naming a knob.
 CC_ADMIT_REFUSED_TERM=""
+cc_capacity_admit_refused_term() { printf '%s' "$CC_ADMIT_REFUSED_TERM"; }
 cc_capacity_admit_refusal() { printf '%s' "$CC_ADMIT_REFUSAL"; }
 
 # ── record ONE row into the IDL ────────────────────────────────────────────────────────────────
