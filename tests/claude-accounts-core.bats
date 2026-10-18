@@ -2048,6 +2048,26 @@ print("OK")'
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
+@test "relay-verbatim: /accounts gets its own stop-unless tail, in step with the doc, and no env leak" {
+  # MUTANTS: `TAIL=${TAIL:-…}` (an exported TAIL replaces the fixed wording); the old literal
+  # matcher (`--fresh --readout` gets no reminder); a trigger phrase changed in only one file.
+  H="$REPO/hooks/relay-verbatim.sh"
+  ctx() { jq -n --arg c "$1" '{tool_input:{command:$c},tool_response:{stdout:"x"}}' \
+            | TAIL=LEAK CC_HOOK_PROFILE='' bash "$H" | jq -r '.hookSpecificOutput.additionalContext'; }
+  out="$(ctx 'claude-accounts --fresh --readout')"
+  [[ "$out" == *"the /accounts readout"*"then STOP: line 1 already answers"* ]] || { echo "$out"; false; }
+  other="$(ctx 'operator-readout.sh --render')"
+  [[ "$other" == *"then add at most 3 lines of interpretation."* ]] || { echo "$other"; false; }
+  [[ "$out$other" != *LEAK* ]] || { echo "exported TAIL leaked: $out $other"; false; }
+  for p in 'a ↻ line or a `Skipped by the general router:` line' 'login or ○ auth line' \
+           'spend or ⚠ extra-usage toggle line' 'a lane reading `→ none`' \
+           'line about another agent (a routable backend that bills outside a plan or might, or one on a metered API key)' \
+           'NOT triggers'; do
+    grep -qiF -- "$p" "$H" || { echo "hook lacks: $p"; false; }
+    grep -qiF -- "$p" "$REPO/commands/accounts.md" || { echo "doc lacks: $p"; false; }
+  done
+}
+
 @test "_md_when, _fmt_when, _fmt_asof: a NAIVE stamp is UTC, as hrs_until reads it" {
   # MUTANT: restore `if dt.tzinfo is not None: dt = dt.astimezone()` and the naive clock is off
   # by the UTC offset. The zone is pinned off UTC: on a UTC box the mutant would pass.

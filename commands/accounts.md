@@ -48,16 +48,18 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
 
    | Rule | Directive it encodes |
    |---|---|
-   | The desk / general / fable answer LEADS, above the grid, with desk_why's clause verbatim | 2026-10-18 |
+   | The desk / general / fable answer LEADS, above the grid; the desk clause is `desk_plain` — the rung in plain words plus the weekly countdown, and "favored because your last `claude` opened here" on incumbency (the board and `claude-accounts` keep `desk_why`'s codes) | 2026-10-18 |
    | A ```text grid in the SessionStart board's visual language (mark column, weekly bar), fixed columns: live, 5h used + reset, weekly used + bar, fable, weekly reset, login | 2026-07-11, 2026-07-24, 2026-10-18 |
    | Each reset is `countdown clock` (`3h 29m Sun 03:59`): countdown first, two units (`fmt_board_t`), re-derived from `*_reset_at`; clock in LOCAL `EEE HH:MM`, dated past ~6 days | 2026-07-11, 2026-07-30, 2026-10-18 |
    | `➤` in the mark column on the **desk** pick (what bare `claude` launches onto); `➤ᵍ`/`➤ᶠ` when the general / Fable pick differs; `←` from `is_self` (spelled `← you` on the headline) | 2026-07-30, re-pointed 2026-08-11 |
-   | Login is a countdown; `⚠` inside `login_warn_h` (the date rides the ⚠ line); `⊘ REQUIRED` on a `login-required` row | 2026-07-24, 2026-07-30 |
+   | Login is a countdown, re-derived from `login_expires_at`; `⚠` inside `login_warn_h` (the date rides the ⚠ line); `⊘ EXPIRED` once it has passed, even since the sweep; `⊘ REQUIRED` on a `login-required` row | 2026-07-24, 2026-07-30, 2026-10-18 |
    | `*` on every percent of an inherited row, + the age/exclusion line | 2026-07-19 |
    | ONE weekly-resets column (tolerance compare, footnote a genuine split) | 2026-07-11 |
-   | Flags are glyph-led lines (never columns) in severity order: 🚨/⚠ money, ○/⊘ auth, ✖ out, △ near (weekly), ▲/△ 5h cutoff, ⚠ login cliff, ↻ stale, ○ Fable exhausted / ¢ authorized spend, · footnote; `¢` keyed on SPEND and rendered in DOLLARS | 2026-07-26, 2026-10-18 |
-   | The weekly-drain block is ONE line naming the routable accounts whose quota dies unused (`Heavy work → …`), strands under 20pp ride as `also …` tails, and no pace reading says so rather than "nothing"; ⚠ wall rows stay verbatim; the full block is plain `claude-accounts` | 2026-10-18 |
-   | `—` for a null or elapsed stamp; `permanent` Fable window gets no countdown | 2026-07-20 |
+   | Flags are glyph-led lines (never columns) in severity order: 🚨/⚠ money, ○/⊘ auth, ✖ out and `· Skipped by the general router:`, △ near (weekly), ▲/△ 5h cutoff, ⚠ login cliff, ↻ stale, ○ Fable exhausted / ¢ authorized spend, · footnote; `¢` keyed on SPEND and rendered in DOLLARS | 2026-07-26, 2026-10-18 |
+   | Every general-lane exclusion is on screen: the ↻, ▲, ✖, ⊘/⚠ login and △ "the router still holds it back" lines cover theirs, and the Skipped line names the rest (live-session cap, uncountable sessions, weekly room under the router floor with no server refusal, a login drain past the warn band) | 2026-10-18 |
+   | The weekly-drain block is ONE line in plain words: "Give heavy work to **X** or **Y**: at the last 2 days' pace, 83% and 43% of their weekly limits go unused at reset", the general pick named first; when the general pick is not among them the line states the forecast with no directive; smaller strands ride as `also …`; no reading at all says so rather than "nothing"; ⚠ wall rows stay verbatim and count down like the grid | 2026-10-18 |
+   | `—` for a null or elapsed stamp; the last line says when the quota was READ (`Quota read at 07:49, 28 seconds ago`); the Fable window prints only when it is news (inactive, dated or unknown), never for a permanent, active one | 2026-07-20, 2026-10-18 |
+   | Other agents: line 1 names only backends that are signed in, installed and known to bill inside a plan, with the cause for the rest (not installed / not signed in); 🚨 or ⚠ only for a routable backend that bills outside a plan or might, or one on a metered API key; the standing not-wired set closes it with no alarm glyph | 2026-10-18 |
    | Every `/login` line carries its mailbox + Dia profile | 2026-07-30 |
 
    **What is still yours** — the renderer prints facts; these bind how you may USE them:
@@ -82,27 +84,70 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
      `next3` are slot numbers, not identities; a mis-paired credential works, so nothing
      errors, while the account you meant keeps expiring. The renderer already emits this —
      so if you paraphrase a cliff bullet, carry the identity with it.
-   - A row's `←`/`➤` markers and the headline are ONE answer from ONE ranking pass. If you
-     summarise, do not restate the pick in a way that could disagree with the headline.
+   - A row's `←`/`➤` markers and lines 1-2 are ONE answer from ONE ranking pass; do not restate
+     the pick at all (step 3).
 
-3. **Interpret** — report to the user, answer-first:
-   - **Routing**: the headline's `➤ desk → D` / `➤ general → X` / `➤ fable → Y` is the
+3. **After the paste: add nothing, unless one of the cases below is on screen.** The readout leads
+   with its own answer — line 1 is the desk pick (what bare `claude` opens on) and why, line 2 the
+   general and fable picks — and it prints what will go unused at the weekly reset, when the quota
+   was read, and which other agents are ready. Restating any of that is a second renderer in prose:
+   on 2026-10-17 the model followed the paste with two paragraphs ("For your own next session, use
+   next4 …", "Most of next3's and next2's weekly quota is on track to go unused …") that repeated
+   line 1 and the drain line. Never restate a pick (line 1's desk, line 2's general and fable), a
+   percent, a reset, the drain line (`Give heavy work to …` / `At the last 2 days' pace …`), the
+   Fable / `Quota read` line or the other-agents lines, and never re-explain the desk pick in
+   general's vocabulary.
+
+   Add at most 3 lines in total, answer first, and only for these cases — the same list, in the
+   same words, that `hooks/relay-verbatim.sh` repeats at the moment of the paste (change the two
+   together):
+   - **A ↻ line or a `Skipped by the general router:` line**: the picks are "best of what we could
+     see", not "best". Say so once, naming the accounts and whether the cause is data (we could not
+     see it) or policy (we saw it and it is unusable) — read `route_reason_class` in `--json`, not
+     the prose. Every general-lane exclusion has a line of its own (a ↻ line, a ▲ 5h line or an
+     "out of 5-hour quota" sentence, an "out of weekly quota" sentence, a △ sentence ending "the
+     router still holds it back from new work", a ⊘/⚠ login line, or the Skipped line), so with
+     none of those on screen the general router excluded no account.
+   - **A ⊘/⚠ login or ○ auth line**: hand over the one fix, `/relogin <acct>`, with the mailbox and
+     Dia profile on the same line (step 2's rule; operator directive 2026-07-30).
+   - **A 🚨 spend or ⚠ extra-usage toggle line**: say the spend is not authorized and name the
+     toggle to turn off; `accounts.json spend.usage_credits_authorized=false` is the standing answer.
+   - **A lane reading `→ none`**: say whether it is policy (`--route` exit 2: quota, 5h cutoff,
+     window) or data (exit 3: the fleet was not seen) — step 5's table — and never substitute a
+     remembered account.
+   - **A 🚨/⚠ line about another agent (a routable backend that bills outside a plan or might, or one on a metered API key)**:
+     it is metered money or may be; say it must be unwired or moved onto a plan.
+   - **A direct question from the operator** the readout does not answer outright (e.g. "can I
+     start a Fable wave now?"): one sentence, naming the lane (desk, general or fable) and quoting
+     the readout's own numbers. "Which account do I use" is line 1 — point at it, do not reword it.
+
+   NOT triggers: the standing `Not wired, because … would bill outside our plans` line, the ⚠ WALL /
+   LATE / START SOON pace rows and the ⚠ fleet-burn line. Each already says everything it has to
+   say, and they print often enough that commenting on them is the habit this rule removes.
+
+   The bullets below are reference for those cases, not prompts to narrate:
+   - **Routing**: lines 1-2 (`➤ desk → D` / `➤ general → X` / `➤ fable → Y`) are the
      adversarially-verified router (use-it-or-lose-it × Fable-sub-cap coupling ×
-     5h-safety × concurrency-spread). Report its answer (step 2's rules apply).
-     The **desk** line reads in its own lane's terms — the two-key rule: among accounts whose
-     projected 5h utilisation is under the floor and whose weekly headroom clears it
-     (`safe set`), take the **earliest weekly reset**; `5h-safe only` / `no floor met` name the
-     rung the ladder degraded to, and `sticky` means hysteresis kept the account the operator is
-     already on. Quote that clause; do not re-explain the pick in general's vocabulary.
+     5h-safety × concurrency-spread). The **desk** clause states the rung of the desk lane's
+     two-key ladder in words: "room in both its 5-hour and weekly limits" (both keys met), "on pace
+     to stay under its 5-hour limit, but weekly room is thin" (the weekly key degraded away), or
+     "every usable account is on pace to hit its 5-hour limit" (both degraded). It claims nothing
+     about the other accounts beyond that rung being the highest any eligible account reached:
+     inside a rung the order also carries the login soft band and the incumbent margin, so "the
+     soonest weekly reset" is not a safe paraphrase. "favored because your last `claude` opened
+     here" names the incumbent margin, which is applied whether or not it changed the pick. The
+     board and plain `claude-accounts` print the same rung as codes (`desk_why`): `safe set`,
+     `5h-safe only`, `no floor met`, and `sticky` for the incumbent.
    - **Excluded accounts — read them on EVERY invocation, not just when routing fails.**
-     `route_reasons` (per row, in `--json`) names why each account was dropped, and the
-     footer/stderr report the count. An account excluded for a TRANSIENT reason
+     `route_reasons` (per row, in `--json`) names why each account was dropped; the readout's
+     lines cover the general lane's (case 1 above), and the desk and fable lanes' reasons are in
+     `--json` only. An account excluded for a TRANSIENT reason
      (`poll throttled`, `no-*-data`) may well hold more headroom than the winner, so a bare
      "→ X" is "best of what we could see", not "best". Say which accounts were excluded and
      why whenever any were. `route_reason_class` classifies each as `data` (we could not see
      it) vs `policy` (we saw it and it is genuinely unusable) — that distinction, not the
      prose string, is what to reason from.
-   - **`auth` column**: `ok` fine · `healed` was stale, self-repaired via headless
+   - **auth state** (`auth` in `--json`; ○/⊘ lines in the readout): `ok` fine · `healed` was stale, self-repaired via headless
      `claude auth login` (logged to `~/.claude/logs/claude-accounts.log`) · `stale`
      expired access token, not healed (live sessions own the token lifecycle) ·
      `login-required` the refresh token is past its expiry, or the refresh grant was
@@ -123,14 +168,16 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
      as `login-required`; `stale` (even at `k=0`) stays benign only when a refresh token exists.
      **But read `heal_note` before calling any `stale` row benign.** That benign reading holds
      for a heal that was *skipped* (`heal_note` starts with `skipped:`). A heal that RAN and
-     FAILED is a different fact on an identical-looking row — the table now says `heal FAILED`
-     rather than `heal skipped`, and a rejected grant is promoted out of `stale` to
+     FAILED is a different fact on an identical-looking row — plain `claude-accounts` says
+     `heal FAILED` rather than `heal skipped`, and a rejected grant is promoted out of `stale` to
      `login-required` outright. A residual `stale` + `heal FAILED` (a timeout or a 5xx) is
      transient: say so, and that `--fresh` retries it. Never restate it as the designed state.
    - **Fable window** comes LIVE from `~/.claude/model-config.yaml frontier_access`
-     — if it reads `UNKNOWN`, fix the SSOT parse before trusting any Fable routing.
-     `window.permanent: true` means Fable is a standing plan inclusion with NO expiry —
-     report it as permanent and never quote a countdown or a remaining time. The `end` date
+     — if the readout says `Fable window: **unknown**`, fix the SSOT parse before trusting any
+     Fable routing. `window.permanent: true` means Fable is a standing plan inclusion with NO
+     expiry — the readout prints nothing about a permanent, active window (it is not news); never
+     quote a countdown or a remaining time for it. An inactive, dated or unknown window prints a
+     Fable clause in front of the `Quota read` line. The `end` date
      is a far-future sentinel kept only so date-based consumers never raise a false expiry;
      `permanent` is the truth. A null `window.deadline` with `permanent: false` means the
      SSOT date was unparseable — that is the UNKNOWN case, not an open one.
@@ -139,7 +186,7 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
      never fall back to a remembered static account order (both historical static
      lists went stale within 48h — endpoint data is the only SSOT).
 
-4. **Account needs a login?** The table prints its email + Dia profile. Get the full
+4. **Account needs a login?** The ⊘/⚠ login line prints its email + Dia profile. Get the full
    identity block and invoke the re-login runbook:
 
    ```bash
@@ -195,8 +242,10 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
 has headroom"*. The provider section answers *"what else can I route to, and does using it cost
 money outside a plan I already hold"*.
 
-`claude-accounts --readout` **appends a two-line summary of it** (who is ready now, and which
-backends bill outside a plan we hold) — same single-renderer rule, so paste the whole thing
+`claude-accounts --readout` **appends a short summary of it**: who is ready now (signed in,
+installed, and known to bill inside a plan we hold), a 🚨 or ⚠ line only for a routable backend
+that bills outside a plan or might, or one on a metered API key, and the standing set that is not
+wired because it would bill outside our plans — same single-renderer rule, so paste the whole thing
 verbatim. The full table below is `--agents`, which prints that section alone (add `--json` for the
 rows as data; `--no-agents` returns the historical Claude-only readout). `--agents` deliberately
 skips the keychain read and the usage sweep, so it costs nothing and cannot be blocked by a

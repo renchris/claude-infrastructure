@@ -24,8 +24,18 @@ CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null) |
 [ -n "$CMD" ] || exit 0
 
 # Renderers whose stdout IS the deliverable. Keep this list short and literal.
+# The /accounts readout gets its OWN tail (2026-10-18): it leads with its own answer, and the
+# generic "add at most 3 lines" arrived at the moment of the paste and outweighed the doc's "add
+# nothing unless" rule — on 2026-10-17 the model restated lines 1-2 and the drain line after the
+# paste. KEEP ITS TRIGGER LIST AND commands/accounts.md STEP 3 IN STEP: same cases, same words.
+# TAIL is assigned here, never inherited: an exported TAIL must not replace the fixed wording.
+# The matcher takes `--fresh --readout` too; the settings.json `if` filter (migration 0066) still
+# gates which commands reach this hook at all.
+TAIL="then add at most 3 lines of interpretation."
 case "$CMD" in
-  *"claude-accounts --readout"*)      WHAT="the /accounts table" ;;
+  *claude-accounts*--readout*)        WHAT="the /accounts readout"
+                                      # shellcheck disable=SC2016  # backticks are markdown code spans, kept literal
+                                      TAIL='then STOP: line 1 already answers which account to use. Add nothing unless the readout shows a ↻ line or a `Skipped by the general router:` line, a ⊘/⚠ login or ○ auth line, a 🚨 spend or ⚠ extra-usage toggle line, a lane reading `→ none`, a 🚨/⚠ line about another agent (a routable backend that bills outside a plan or might, or one on a metered API key), or the operator asked a direct question. NOT triggers: the standing "Not wired, because … would bill outside our plans" line, the ⚠ pace rows and the ⚠ fleet-burn line. Then at most 3 lines (commands/accounts.md step 3).' ;;
   *"operator-readout.sh --render"*)   WHAT="the operator close block" ;;
   *"cc-do --list"*)                   WHAT="the operator step list" ;;
   *)                                  exit 0 ;;
@@ -35,11 +45,11 @@ esac
 OUT=$(printf '%s' "$INPUT" | jq -r '.tool_response.stdout // .tool_response.output // empty' 2>/dev/null)
 [ -n "$OUT" ] || exit 0
 
-jq -n --arg w "$WHAT" '{
+jq -n --arg w "$WHAT" --arg t "$TAIL" '{
   hookSpecificOutput: {
     hookEventName: "PostToolUse",
     additionalContext: ("RELAY VERBATIM — you just rendered \($w). Paste that output into chat in
-full, every row and column, BEFORE any commentary; then add at most 3 lines of interpretation.
+full, every row and column, BEFORE any commentary; \($t)
 Summarising it is the defect the renderer exists to prevent — a paraphrase re-creates the second
 renderer the code was written to delete. CLAUDE.md conciseness governs YOUR prose, never a
 rendered artifact.")

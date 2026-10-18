@@ -474,7 +474,7 @@ as stuck; and **whole-file rewrites for small edits**, which makes § File Updat
 - 🚨 **Brevity governs YOUR prose, never a rendered artifact.** When a tool has already rendered a
   canonical output for the operator — `claude-accounts --readout`, `operator-readout.sh --render`,
   a `cc-do` command block, any generated table/diff/report — **reproduce it verbatim, in full**,
-  then add your ≤3 lines of interpretation. Summarising it into bullets is the *defect the renderer
+  then add your ≤3 lines of interpretation (for `/accounts`, only in the cases its step 3 lists). Summarising it into bullets is the *defect the renderer
   was built to prevent*: the rules live in code precisely so there is ONE renderer, and a paraphrase
   silently re-creates the second one. The operator asked for the table; a description of the table
   is a different, worse artifact. Length is not the cost here — a dropped column is.
