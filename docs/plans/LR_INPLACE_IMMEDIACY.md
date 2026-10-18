@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 ---
 
 # LR in-place immediacy — make an in-place account move take seconds, not hours
@@ -105,3 +105,23 @@ New work (not yet assigned):
   opt-in `HF_RCY_CARRY_STALE=1` inside hf_rcy_carry_eligible approved by the lead).
 - **Learnings:** under load ~200 a bats case can take minutes; gate the merged superset once and A/B each
   red on a detached control worktree run at the same moment, not branch by branch.
+
+## W1 + W2 — DONE (2026-10-18)
+
+- **W1 landed at `552b3129b`** (the shas in REPORT §5 rows 1-8). K4 dropped at the rebase: pane 374 landed
+  the same fix in its own hunk (`467c9c45c`, `52d4a9809`, `08f8971f2`).
+- **W2 landed at `033e972eb`** (REPORT §5 rows 9-15). `census` and `verdict` stopped answering mid-wave,
+  so the lead built census fix 4 (utility clamp, `8835fc9fc`) and V4 (limit read at the cwd slug,
+  `033e972eb`) inline.
+- **Live:** both converged with `CC_DEPLOY_MAX_LAG_COMMITS=0 bash scripts/deploy-live.sh`. The
+  Interactive-band starter is staged; its activation is the operator's (backlog `074a5990b2cd`).
+- **Filed, not built:** the load-hold decision `600709c5fe4b`; replacing launcher-started panes, decision
+  `56c6862291f2`; cap-triggered fan-out `bbf8b34403bb`. Reported to pane 374: the tee race at
+  `lr-handoff.sh:1981` (REPORT §6 item 7).
+- **Learnings:** four land attempts were red, each on a single text ratchet that a green suite run cannot
+  see (AF_UNIX bind, dead assertion, hermeticity seams, `.bats` shellcheck). Run those four lints on the
+  changed suites before the first `/ship` (docs/lessons/run-the-test-ratchets-before-the-land.md). An
+  idle in-process teammate can stop answering mail; after ~1 h of silence, harvest its commits from its
+  worktree and finish the item inline.
+- **Next (not this scope):** the keystroke-free resume relaunch (REPORT §6 item 3) and the ~3 min
+  successful-move floor (§6 item 4) are the remaining distance to a sub-minute move.

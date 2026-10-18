@@ -105,15 +105,22 @@ on origin/main; each row names the suite that was red before the fix and green a
 | rank | fix | removes | where | status |
 |---|---|---|---|---|
 | 1 | **Mid-tick move drain**: the tick runs a drainer beside its arms that starts a queued batch within 1 s, through the same hard-link claim | class 1 (70% of all stage time; p50 829 s → ~1 s for a request that lands mid-tick) | `scripts/limit-recover/lr-reset-poller.sh` (`lrp_move_drain_start/_stop`) · `tests/lr-move-drain.bats` | **landed** `cc74514df` (+ `c88040cb6`), on origin/main at `b59a1b30f` |
-| 2 | **Intent checked at admission; act-by measured from admission** (an `intent/<sid>.admitted` sidecar the validator honours) | class 2: doomed rows never take a claim, a worker or a slot; an admitted row's budget covers its idle and slot waits | `lr-move-batch.sh`, `lr-intent.sh` · `tests/lr-move-admit.bats`, `tests/lr-intent.bats` | intent at admission **landed** `4415cc793`; the act-by sidecar is built (W2, below) |
+| 2 | **Intent checked at admission; act-by measured from admission** (an `intent/<sid>.admitted` sidecar the validator honours) | class 2: doomed rows never take a claim, a worker or a slot; an admitted row's budget covers its idle and slot waits | `lr-move-batch.sh`, `lr-intent.sh` · `tests/lr-move-admit.bats`, `tests/lr-intent.bats` | **landed**: intent at admission `4415cc793`; act-by from admission `e808e7eba` (grace = the plan's `until_idle_s` + 900 s; `LR_MOVE_ADMITTED_GRACE_S=0` off) |
 | 3 | **Fail fast in the precheck** on a deaf terminal or a load the late gate would hold, before anything is transplanted; retry a refused-then-answering socket for 120 s for detached callers; name the probe's real failure | class 3/4: a 10-25 min transplant-then-stand-down becomes a hold in the precheck; tonight's two post-hold strands (`unconfirm rc 2`) cannot happen when nothing was transplanted | `scripts/handoff-fire.sh`, `scripts/lib/kitty-queue.sh`, `lr-handoff.sh` · `tests/handoff-recycle-kitty-precheck.bats`, `tests/handoff-recycle-load-hold.bats` | **landed**: probe verdict `50b370574`, detached retry `e37cb731a`, precheck holds `d58bb81d3` |
 | 4 | **No "recycle owed" nudge for a driver-run recycle** | the subject re-ran the move's recycle itself and confirmed/unconfirmed the transplant under the driver (a live STRANDED race) | `scripts/handoff-fire.sh`, `scripts/pane-close-retry.sh`, `lr-handoff.sh` · `tests/lr-handoff-owed-row.bats`, `tests/pane-close-queue.bats` | **landed by pane 374 instead** (`467c9c45c` the row carries form=remote, `52d4a9809` pane-close-retry drops a remote row, `08f8971f2` lr-handoff spends the row it settled); this wave's own version (no row at all) conflicted with that hunk, which pane 374 owns, and was dropped at the rebase |
 | 5 | **Several named sessions in one batch, in priority order** (`--sid` repeated or `--sids a,b,c`, mixed source accounts) | class 5: one census, one router read, one admission instead of N; the operator's "highest-activity first" survives to the plan | `bin/cc-lr`, `lr-upgrade.sh` · `tests/lr-move-plan.bats` | **landed** `0c04208fb` |
-| 6 | **Admit wait by the wall clock (900 s), steal by rename-and-verify, router reason reset** | class 5: no batch refused for queueing; no double admission | `lr-move-batch.sh` · `tests/lr-move-admit.bats` | built (W2, below) |
+| 6 | **Admit wait by the wall clock (900 s), steal by rename-and-verify, router reason reset** | class 5: no batch refused for queueing; no double admission | `lr-move-batch.sh` · `tests/lr-move-admit.bats` | **landed**: wall-clock wait `17035b65d`, rename-and-verify steal + ROUTE_WHY reset `09c4fd9b4` |
 | 7 | **Worker re-checks its intent while it waits; takes the slot in plan order; waits out the load holding no slot; retries a clean HELD:unreachable; releases its claim with the verdict** | class 2/5: a lapsed intent releases claim and slot at once; priority holds at the slot; a loaded box makes the move wait, not strand | `lr-move-worker.sh` · `tests/lr-move-worker.bats`, `tests/lr-move-worker-retry.bats` | **landed**: intent re-check `5e8d25ec3`, slot order `dae312b77`, pane 374's load wait / retry / early release `5d5743449` (cherry-picked from `69ed4dae1`), its suite's missing admission record `552b3129b` |
 | 8 | **An Interactive-band starter for move batches** (`lr-reset-poller.sh --move-kick`, staged `com.reso.lr-move-kick`: ProcessType Interactive, WatchPaths on `move/requests/`) | §6 item 1's priority-20 band, for the whole lane, once the operator loads it | `lr-reset-poller.sh`, `launchd/staged/`, `53-lr-move-kick-activate.sh` · `tests/lr-move-drain.bats` cases 5-6 | **landed** `17962edb6`; loading it is the operator's (backlog `074a5990b2cd`), and its script fails unless a real run reads priority ≥ 31 |
+| 9 | **The census pays only for the sessions asked about**: a `sid:`/`sids:` selector drops other rows before any per-row fork; the WATCH census names only the waiting sids; it runs with `LRU_SELF_SID` empty and under `taskpolicy -c utility` | class 5: the plan-time census ran 3.0-3.4 min under load, one WATCH census 19-27 CPU-s and 6-10 min wall (raw/D, raw/F) | `lr-upgrade.sh`, `lr-move-batch.sh` · `tests/lr-switch-census-prefilter.bats`, `tests/lr-move-plan.bats` 24-27 | **landed**: `6e4a57a63`, `1a99534ae`, `e6c26356a`, `8835fc9fc` |
+| 10 | **Admission reuses `cc-lr move`'s router answer** when it is under 120 s old (`router_ranked_epoch` in plan.json); the close-time fresh read stays | the admit router read took 5-132 s, 323 s with --fresh (raw/G §2.1) | `bin/cc-lr`, `lr-move-batch.sh` · `tests/lr-move-admit.bats`, `tests/lr-move-plan.bats` 5 | **landed** `caa33a897` |
+| 11 | **The transcript is read at its cwd slug before any glob**, in the verdict and in the worker's limit read | ~18,200 dirs globbed per store, 1.0 CPU-s a call; the prove step ran 604-685 s (§6 item 5) | `lr-move-lib.sh`, `lr-move-worker.sh` · `tests/lr-move-verdict.bats` 15-16, `tests/lr-move-worker.bats` 16b | **landed**: `edd953cd8`, `033e972eb` |
+| 12 | **A wait ends when its session leaves the census on two snapshots** | ghost waits of 9-28 min (raw/E R1) | `lr-move-worker.sh` · `tests/lr-move-worker.bats` 11g-11h | **landed** `3ddbd5604` |
+| 13 | **No false STRANDED over a live plan-row pid with no registry row** (alive, claude, started before the plan) | e3dedc17 read STRANDED while alive | `lr-move-lib.sh` · `tests/lr-move-verdict.bats` 17-17b | **landed** `f896a7e2a` |
+| 14 | **The /goal hold applies only while the goal is driving turns** (operator ask): a goal record or transcript write within `LR_MOVE_GOAL_ACTIVE_S` (120 s); an at-rest armed goal moves, and `--resume` restores it | the operator called the at-rest goal hold common | `bin/cc-lr` · `tests/lr-dead-source-holds.bats` 2b1-2b3 | **landed** `8bbf83b9c`; `CC_LR_MOVE_GOAL_HOLD=always` restores the old rule |
+| 15 | **A draft is carried, not held** (operator ask): a box unchanged for `LR_MOVE_DRAFT_STALE_S` (120 s) is stale; stale junk is cleared and the session moves; real text is saved, cleared, moved and retyped UNSENT by the recycle's carry; a box still changing waits holding no slot; a `[Pasted text #N]` block keeps HELD:draft | HELD:draft ended every move of a session with text in its box | `bin/cc-lr`, `lr-move-worker.sh`, `lr-handoff.sh`, `handoff-fire.sh` (`HF_RCY_CARRY_STALE`) · `tests/lr-move-draft-carry.bats` | **landed**: `78d47b174`, `05b8b0c42`; `LR_MOVE_CARRY_DRAFT=off` restores the hold |
 
-All of the above landed together at `552b3129b` (2026-10-18), each sha checked with `git merge-base --is-ancestor`.
+Rows 1-8 landed together at `552b3129b` (2026-10-18), rows 9-15 at `033e972eb`; each sha checked with `git merge-base --is-ancestor`.
 Merge gate, run on the merged tree and re-run after the rebase onto pane 374's land. Each red was run at the same moment on the
 pre-merge control:
 
@@ -130,6 +137,15 @@ pre-merge control:
 | lr-handoff-flags · inplace-default · lr-handoff-owed-row | 1..51 · 1..8 · 1..4 | 0 | the first run's cases 28 and 30 were load flakes: green alone, and the full re-run beside the control was 0 on both |
 | pane-close-queue | 1..32 | 4 | the `teammate-auto-shutdown` cases (1, 2, 3, 5 of 5): identical on trunk |
 | cc-fleet | 1..26 | 0 | manifest 55 → 56 |
+
+W2 gate (rows 9-15, on the merged tree before its land): lr-switch-census-prefilter 1..5, lr-upgrade 1..60,
+lr-move-plan 1..28, lr-move-drain 1..6, lr-dead-source-holds 1..13, cc-lr 1..17, lr-move-draft-carry 1..14,
+lr-move-worker 1..29, handoff-recycle-draft-carry 1..19, lr-move-verdict 1..20, lr-move-worker-retry 1..11,
+lr-move-admit 1..10, lr-intent 1..17, lr-move-batch-abort 1..4, lr-move-summary-casualty 1..8,
+lr-move-concurrency 1..17, cc-lr-move-self 1..5, lr-switch-driver 1..41, lr-switch-bg-attach 1..32,
+cc-lr-request 1..21, lr-handoff-inplace-default 1..8: all 0 not ok. lr-handoff-flags 1..51 had one red per
+full run (case 28, then 29), 0 of 6 in isolation on both trees, and trunk's full run beside it was 0. The cause is
+a pre-existing race in lines neither wave changed (§6 item 7), reported to pane 374, which owns them.
 
 ## 6. Not fixed here, and why
 
@@ -168,16 +184,30 @@ These are measured, and each is either an operator call or a next wave; none is 
    of the 15 s hold plus the worker's 5 s re-check; boot detection by the `--resume` process; the
    keystroke-free successor with a SIGTERM exit for resume recycles (item 3); and answering the
    background-work dialog at once instead of on a 15 s poll.
-5. **Next wave, already specified** (`docs/plans/LR_INPLACE_IMMEDIACY.md` § W2): census filtered by
-   session before its per-row forks (the plan-time census ran 3.0-3.4 min under load); the watch census
-   limited to waiting rows; the router answer reused from `cc-lr move` (the admit read took 5-323 s); a
-   worker that waits for a load dip without a slot; a verdict that reads the transcript by its known
-   path instead of globbing ~18,200 directories in each of 4 stores (1.0 CPU-s a call); false STRANDED
-   on a missing registry row or a recycle chain; and the rescue verb that will not relaunch into its own
-   husk shell (e739e5b5).
+5. **The W2 wave this item named has landed** (§5 rows 7 and 9-13). Still open from it: the rescue verb
+   that will not relaunch into its own husk shell (e739e5b5), and false STRANDED across a recycle chain.
+   The verdict's slug read skips the glob when ANY store holds the transcript at the slug, so a second
+   copy at a different slug in another store is not counted by its one-copy conjunct; the lane's own
+   copies share the slug and the live-holder conjunct still sees a second process.
 6. **Holds outside the idle-session scope** (`raw/E` §4): carry sleep-only background jobs on a healthy
-   source (an operator ruling, it narrows `1b97389dd`); key the goal hold on goal activity; do not let
-   the requester's own `cc-lr move` become the job that holds its subject.
+   source (an operator ruling, it narrows `1b97389dd`); do not let the requester's own `cc-lr move`
+   become the job that holds its subject. The goal hold keyed on goal activity has landed (§5 row 14).
+7. **A race in lr-handoff's read of handoff-fire's errors** (pane 374's lines, unchanged since
+   `109cfe4cf`, 2026-09-08). `lr-handoff.sh:1981` runs handoff-fire with `2> >(tee "$LRH_RCY_ERR" >&2)`,
+   and a process substitution is asynchronous, so the greps that classify the hold can read the file
+   before tee has written it. A recycle held after its confirm (`unconfirm rc 0`) is then reported
+   `HELD:unknown — stood down before any confirm`, and the abort runs on top. It is still NOTMOVED and
+   safe to retry. Seen as `tests/lr-handoff-flags.bats` 28/29/30 going red about once per full run
+   under load. Reported to pane 374 with a fix; not edited here.
+8. **A session in a launcher-started pane never moves (decision `56c6862291f2`).** The move lane always
+   passes `--no-replace` because it promises the same pane, so such a session ends HELD:no-shell on
+   every pass (9f6593c5 in pane 258, reported by pane 344). Replacing it in a new pane beside the source
+   is lr-handoff's existing path for other callers; whether the move lane should do that is the
+   operator's call (conviction 80).
+9. **Cap-triggered fan-out (filed `bbf8b34403bb`, operator suggestion).** "When an account hits its weekly
+   cap, move all its sessions to the soonest-resetting account": the reconciler can already move LIMITED
+   sessions, but `LR_IDLE_FANOUT` defaults off and no soonest-reset target policy exists. It is a new
+   policy outside this lane's scope, so it is filed for the operator's ruling, not built.
 
 ## 7. Evidence
 
