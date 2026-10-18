@@ -73,6 +73,28 @@ lr_move_holders() { # $1=sid → the DISTINCT live pids holding it (registry row
   { lr_registry_live_rows "$1" 2>/dev/null | cut -f2; lr_resume_procs "$1" 2>/dev/null; } | awk 'NF && !s[$1]++'
 }
 
+# THE PLAN ROW'S PID, the holder neither list above can see. On 2026-10-18 e3dedc17 was alive in
+# pane 201 with no registry row (session-register.sh loses rows under load) and no `--resume` in its
+# argv, so the verdict said STRANDED "no live process holds the session" over a live session
+# (lr-inplace-immediacy raw/C, batch 20261018T020022Z). The census that wrote the plan saw its pid.
+# That pid still names the session only if it is the SAME process: alive, a claude (argv[0], or a
+# wrapper's — cc-close-attrib runs `bash <wrapper> <claude> …` — within its first three words), and
+# started no later than the plan was written, so a pid reused since the census does not count. The
+# 2 s of slack covers etime's whole-second truncation against a plan written in the same second.
+lr_move_plan_holder() { # $1=pid $2=plan.json → 0 when that pid is still the process the plan's census saw
+  local pid="$1" plan="$2" et age mt
+  case "$pid" in ''|-|*[!0-9]*) return 1 ;; esac
+  [ -f "$plan" ] && kill -0 "$pid" 2>/dev/null || return 1
+  ps -o command= -p "$pid" 2>/dev/null \
+    | awk '{ for (i = 1; i <= 3 && i <= NF; i++) if ($i ~ /(^|\/)claude$/) f = 1 } END { exit !f }' || return 1
+  et="$(ps -o etime= -p "$pid" 2>/dev/null | tr -d ' ')"
+  age="$(printf '%s\n' "$et" | awk -F'[-:]' 'NF == 4 { print $1*86400 + $2*3600 + $3*60 + $4; next }
+    NF == 3 { print $1*3600 + $2*60 + $3; next } NF == 2 { print $1*60 + $2 }')"
+  mt="$(date -r "$plan" +%s 2>/dev/null)"
+  case "$age$mt" in ''|*[!0-9]*) return 1 ;; esac
+  [ $(( $(date +%s) - age )) -le $(( mt + 2 )) ]
+}
+
 # ── THE VERDICT ──────────────────────────────────────────────────────────────────────────────────
 #   P1  the registry row for the ORIGINAL pane names this session on the target account, and its
 #       (pid, lstart) is a live process;
@@ -97,16 +119,24 @@ lr_move_holders() { # $1=sid → the DISTINCT live pids holding it (registry row
 lr_move_verdict() { # $1=sid $2=pane $3=source config dir $4=target config dir [$5=batch dir]
   local sid="$1" pane="$2" from="$3" to="$4" bdir="${5:-}" regdir rows holders nh=0 pid="" shape=""
   local r_pane r_pid r_acct row_lst locs nloc=0 lcfg="" ltx="" tomb tto dstate got
-  local p1=0 p2=0 p3=0 p4=0 p5=0 p6=0 p7=0 fto ffrom pcwd="-"
+  local p1=0 p2=0 p3=0 p4=0 p5=0 p6=0 p7=0 fto ffrom pcwd="-" ppid="-"
   regdir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
   fto="$(lr_move_fold "$to")"; ffrom="$(lr_move_fold "$from")"
-  # The batch's plan row: its cwd is where the transcript sits (lr_session_location's known path).
+  # The batch's plan row: its cwd is where the transcript sits (lr_session_location's known path),
+  # its pid the holder its census saw (lr_move_plan_holder). Padded at the emitter: tab is IFS
+  # whitespace, so an empty cwd would shift the pid into it.
   if [ -n "$bdir" ] && [ -f "$bdir/plan.json" ]; then
-    pcwd="$(jq -r --arg s "$sid" 'first(.rows[] | select(.sid == $s)) | .cwd // empty' "$bdir/plan.json" 2>/dev/null)"
-    pcwd="${pcwd:--}"
+    IFS=$'\t' read -r pcwd ppid <<EOF
+$(jq -r --arg s "$sid" 'first(.rows[] | select(.sid == $s)) | [(if (.cwd // "") == "" then "-" else .cwd end), (if (.pid // "") == "" then "-" else (.pid | tostring) end)] | @tsv' "$bdir/plan.json" 2>/dev/null)
+EOF
+    pcwd="${pcwd:--}"; ppid="${ppid:--}"
   fi
   holders="$(lr_move_holders "$sid")"
   [ -z "$holders" ] || nh="$(printf '%s\n' "$holders" | grep -c .)"
+  # Kill switch: LR_MOVE_PLAN_PID_HOLDER=off reads only the registry and the --resume census.
+  if [ "$nh" -eq 0 ] && [ "${LR_MOVE_PLAN_PID_HOLDER:-on}" != off ] && lr_move_plan_holder "$ppid" "$bdir/plan.json"; then
+    holders="$ppid"; nh=1
+  fi
   locs="$(lr_session_location "$sid" "$pcwd")"
   [ -z "$locs" ] || nloc="$(printf '%s\n' "$locs" | grep -c .)"
   if [ "$nloc" -ge 1 ]; then
@@ -135,6 +165,12 @@ EOF
     # No registry row places it. One holder, running under the target, is a move whose row was lost.
     pid="$(printf '%s\n' "$holders" | sed -n '1p')"
     shape=unregistered
+    # ...and one holder running under the SOURCE, with its one transcript there, is a session the
+    # move never touched (e3dedc17: lr-handoff refused it for want of a row): NOTMOVED, as a row would say.
+    if [ "$nh" -eq 1 ] && [ "$nloc" -eq 1 ] && [ "$(lr_move_phys "$lcfg")" = "$(lr_move_phys "$from")" ] \
+       && [ "$(lr_move_phys "$(lr_move_pid_cfg "$pid")")" = "$(lr_move_phys "$from")" ]; then
+      printf 'NOTMOVED\tlive on the source, one copy, held by pid %s with no registry row\t%s\t0000000\n' "$pid" "$pid"; return 0
+    fi
   fi
   # P1: the row's process is the one that is alive (a row with no recorded lstart is judged by pid).
   if [ "$shape" != unregistered ]; then

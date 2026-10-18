@@ -240,3 +240,55 @@ verdict() { # [from cfg] [to cfg] [batch dir or ""]
   location "$SID" "$BATS_TEST_TMPDIR"
   [ "$(printf '%s\n' "$output" | grep -c .)" -eq 2 ]
 }
+
+# THE PLAN ROW'S PID IS A HOLDER (LR_INPLACE_IMMEDIACY W2 (d)). On 2026-10-18 e3dedc17 was alive in
+# pane 201 with no registry row and no `--resume` argv, so nothing named a holder and the verdict
+# said STRANDED "no live process holds the session" (raw/C row 20261018T020022Z·2123). The census
+# that wrote the plan saw its pid; that pid, still alive, a claude, and started no later than the
+# plan was written (so not a reused pid), is the holder.
+# claude_stub → a live process whose argv[0] is .../claude (how a real claude shows in ps); its pid is CP
+claude_stub() {
+  mkdir -p "$STUBS/.bin"
+  /bin/bash -c 'exec -a "$1" sleep 900' _ "$STUBS/.bin/claude" 3>&- &
+  CP=$!; MVF_PIDS="$MVF_PIDS $CP"
+  printf '%s' "${1:-$SRC}" > "$LR_MOVE_ENV_DIR/$CP"
+}
+plan_pid() { # $1=pid → the plan row's pid, as cc-lr's census writes it (a string)
+  jq -c --arg p "$1" '.rows[0].pid = $p' "$BDIR/plan.json" > "$BDIR/plan.json.t" && mv "$BDIR/plan.json.t" "$BDIR/plan.json"
+}
+
+@test "17 [RED] no registry row, no --resume argv, the plan's pid alive as claude on the source: NOTMOVED, not STRANDED" {
+  rm -f "$CC_REGISTRY_DIR/$PANE.json"
+  claude_stub "$SRC"
+  i=0; until [ -n "$(ps -o command= -p "$CP" 2>/dev/null)" ] || [ "$i" -ge 50 ]; do sleep 0.1; i=$((i + 1)); done
+  plan_pid "$CP"
+  verdict
+  [ "$V" = NOTMOVED ] || { echo "$output"; false; }
+  [ "$(printf '%s' "$output" | cut -f3)" = "$CP" ]
+  # the same process under the target, its transcript moved: the move happened, its row was lost
+  mv "$SRC/projects/-x/$SID.jsonl" "$DST/projects/-x/$SID.jsonl"
+  printf '%s' "$DST" > "$LR_MOVE_ENV_DIR/$CP"
+  verdict
+  [ "$V" = MOVED-UNREGISTERED ] || { echo "$output"; false; }
+}
+
+@test "17b the plan's pid dead, reused (started after the plan), or not a claude: still STRANDED" {
+  rm -f "$CC_REGISTRY_DIR/$PANE.json"
+  # not a claude: a live process with another argv[0]
+  sleep 900 3>&- &
+  other=$!; MVF_PIDS="$MVF_PIDS $other"
+  plan_pid "$other"
+  verdict
+  [ "$V" = STRANDED ]
+  # reused: a claude that started after the plan was written
+  claude_stub "$SRC"
+  plan_pid "$CP"
+  touch -t 202001010000 "$BDIR/plan.json"
+  verdict
+  [ "$V" = STRANDED ]
+  # dead
+  touch "$BDIR/plan.json"
+  kill "$CP"; wait "$CP" 2>/dev/null || true
+  verdict
+  [ "$V" = STRANDED ]
+}
