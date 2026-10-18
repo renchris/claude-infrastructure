@@ -3321,8 +3321,10 @@ def _soft(r, R):
 #                    k=5-6, so the autonomous path was 0-BY-CONSTRUCTION). Draining an account IS
 #                    a routing decision — that is why this belongs here and not in a new daemon.
 #   Every lane lifts SOFT (_desk_cliff_factor, _dispatch_cliff_factor) only when the account's
-#   week is forecast to strand AND its drain point is beyond any session's lifetime: a stranded
-#   pp is unrecoverable, a lost k==0 poll tick is one of ~168.
+#   week is forecast to strand AND (its weekly reset comes before its drain point, or its drain
+#   point is beyond any session's lifetime): a stranded pp is unrecoverable, a lost k==0 poll
+#   tick is one of ~168. (_strand_cliff_factor; recycle_repick and the recovery lane read the
+#   same general score, so they inherit it.)
 #
 # FAIL-OPEN on absence is not a nicety: login_expires_h is not on every build (see the
 # --relogin-status detection note), and reading a missing field as "cliff imminent" would exclude
@@ -3450,8 +3452,20 @@ def _dispatch_cliff_factor(r):
 
 
 def _strand_cliff_factor(r, kill_env):
-    """The soft factor, lifted to 1.0 iff the week strands and the drain is past DESK_LIFE_H.
-    Shared body of _desk_cliff_factor and _dispatch_cliff_factor; kill_env is the lane's switch."""
+    """The soft factor, lifted to 1.0 iff the week strands AND either the weekly reset comes before
+    the drain point or the drain is past DESK_LIFE_H.
+    Shared body of _desk_cliff_factor and _dispatch_cliff_factor; kill_env is the lane's switch.
+
+    ── The reset-first arm (weekly-strand post-mortem 2026-10-18 §4 item 3) ────────────────────────
+    DESK_LIFE_H alone LAPSES while the week is still stranding: next's login fell to 108h at
+    2026-10-17T16:12Z, its drain point moved inside the 60h desk life, and the factor came back
+    with ~38pp still forecast to strand and its weekly reset 5h away (route.jsonl 22:54Z: desk ->
+    next4, runner-up next at x0.25). The protection bought nothing there: the stranding quota
+    expires at the reset, which lands BEFORE the drain band opens, so a session placed now on the
+    dying week is on a fresh week — whose own wk_strand_pp decides afresh — by the time cc-relogin
+    needs its window. Hence: reset < login_expires_h - CLIFF_DRAIN_H lifts regardless of DESK_LIFE_H.
+    An unknown reset never lifts on this arm (fail toward the existing protection).
+    Kill: CC_ROUTE_CLIFF_RESET_FIRST=off restores the DESK_LIFE_H-only rule in every lane."""
     f = _cliff_factor(r)                    # 1.0 outside soft, with the term off, or cliff unknown
     if f == 1.0 or not _term_on(kill_env):
         return f
@@ -3461,6 +3475,9 @@ def _strand_cliff_factor(r, kill_env):
         return f
     # float() is safe: cliff_band already parsed this field to answer "soft"
     drain_in = float(r["login_expires_h"]) - _cliff_env("CC_ROUTE_CLIFF_DRAIN_H", CLIFF_DRAIN_H)
+    wrh = r.get("weekly_reset_h")
+    if _term_on("CC_ROUTE_CLIFF_RESET_FIRST") and _is_num(wrh) and 0 < wrh < drain_in:
+        return 1.0
     return 1.0 if drain_in > _cliff_env("CC_ROUTE_DESK_LIFE_H", DESK_LIFE_H) else f
 
 
@@ -6468,12 +6485,16 @@ def _dispatch_first(s, r, R, roomy):
       - CC_ROUTE_DISPATCH_STRAND_FIRST is on;
       - k_placed is on the row: the placement memory is what bounds a pile-on, so with it absent
         (CC_ROUTE_ASSIGN off, or a row that never went through apply_assignments) nothing would;
-      - no login cliff in play, and 5h-cold — promotion must not carry a row past the soft terms
-        that only its score expresses (10 of 258 rescued rows replayed above S_SOFT);
+      - no login cliff in play — no drain, and no soft factor left on its score after the strand
+        lift (_dispatch_cliff_factor: a stranding week whose reset precedes its drain point is
+        not "in play"; post-mortem 2026-10-18 §4 item 3) — and 5h-cold — promotion must not carry
+        a row past the soft terms that only its score expresses (10 of 258 rescued rows replayed
+        above S_SOFT);
       - no roomy row both outscores it AND resets sooner: that one is the more urgent strand."""
     if not _term_on("CC_ROUTE_DISPATCH_STRAND_FIRST") or not _is_num(r.get("k_placed")):
         return False
-    if cliff_band(r) != "none" or not _su_projected(r, R) < R["S_SOFT"]:
+    if cliff_band(r) == "drain" or _dispatch_cliff_factor(r) != 1.0 \
+            or not _su_projected(r, R) < R["S_SOFT"]:
         return False
     t = horizon(r.get("weekly_reset_h"), R)
     return not any(s2 > s and t2 < t for s2, t2 in roomy)

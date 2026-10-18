@@ -18,6 +18,12 @@
 #   · R3 NON-REGRESSION: missing live quota must still exclude a row. The cliff term is layered
 #     ON a design that already bars remembered quota from routing; that must survive.
 #
+# RED-proof (reset-first, post-mortem 2026-10-18 §4 item 3): with the reset-first arm of
+# _strand_cliff_factor replaced by `False`, the reset-first unit, the 2026-10-17T22:54Z replay and
+# the _dispatch_first case go red, and the 2026-10-16 replay stays green (at that instant next's
+# login was 144h out, so it pins the earlier DESK_LIFE_H lift; its in-test control reproduces the
+# logged last place). Reverting _dispatch_first to `cliff_band(r) != "none"` reds its own case.
+#
 # Hermetic, in the companion suites' style: scratch SSOT + cache in BATS_TEST_TMPDIR, unreachable
 # endpoints, a config_dir that hashes to a nonexistent keychain service. Router constants are
 # DERIVED from the repo accounts.json, never hand-copied.
@@ -32,7 +38,7 @@ setup() {
   # exported CC_ROUTE_CLIFF_TERM=off would turn every assertion below vacuous.
   unset CC_ROUTE_CLIFF_TERM CC_ROUTE_CLIFF_SOFT_H CC_ROUTE_CLIFF_DRAIN_H CC_ROUTE_CLIFF_SOFT_FACTOR
   unset CC_ROUTE_DESK_CLIFF_WINDOW CC_ROUTE_DESK_LIFE_H CC_ROUTE_DESK_CLIFF_STRAND_PP CC_ROUTE_DESK_HYST
-  unset CC_ROUTE_DISPATCH_CLIFF_WINDOW
+  unset CC_ROUTE_DISPATCH_CLIFF_WINDOW CC_ROUTE_CLIFF_RESET_FIRST
 
   # Fixture $HOME before anything else. Overriding CLAUDE_ACCOUNTS_JSON / _LASTGOOD / cache_file is
   # not sufficient: bin/claude-accounts derives several other paths from $HOME (the relogin-poll
@@ -436,19 +442,21 @@ print("OK")'
 
 @test "desk soft band still demotes by exactly CLIFF_SOFT_FACTOR once drain is within DESK_LIFE_H" {
   run python3 -c "$LOAD"'
-# a stranding week throughout, so this case isolates the drain-overlap condition
-clear = row(weekly_reset_h=30.0)
+# a stranding week throughout, so this case isolates the drain-overlap condition; the 125h reset
+# falls after every drain point below, so the reset-first arm stays out of it
+clear = row(weekly_reset_h=125.0)
 ck = ca.score_interactive(clear, cfg)[0] - ca.desk_keys(clear, cfg)[2]
 def key(lx):
-    r = row(weekly_reset_h=30.0, login_expires_h=lx, wk_strand_pp=50.0)
+    r = row(weekly_reset_h=125.0, login_expires_h=lx, wk_strand_pp=50.0)
     return ca.score_interactive(r, cfg)[0] - ca.desk_keys(r, cfg)[2]
 assert ca.DESK_LIFE_H == 60.0
 assert abs(key(80.0) - ck * ca.CLIFF_SOFT_FACTOR) < 1e-12
 assert abs(key(108.0) - ck * ca.CLIFF_SOFT_FACTOR) < 1e-12     # drain_in == 60: still demoted
 assert key(108.01) == ck                                        # just past: lifted
 assert key(168.0) == ck
-# a near-drain account loses the desk exactly as before, even with the earliest reset
-near = row(acct="near", weekly_reset_h=20.0, login_expires_h=90.0, wk_strand_pp=50.0)
+# a near-drain account whose reset falls after its drain point (60h > 90-48) loses the desk
+# exactly as before, even with the earlier reset
+near = row(acct="near", weekly_reset_h=60.0, login_expires_h=90.0, wk_strand_pp=50.0)
 rival = row(acct="rival", weekly_reset_h=81.0)
 out, _ = ca.ranked([near, rival], cfg, WIN_OPEN, "interactive")
 assert [r["acct"] for _s, r in out][0] == "rival", out
@@ -482,16 +490,18 @@ print("OK")'
   run python3 -c "$LOAD"'
 import os
 S = 50.0                                   # a stranding week, so only the life knob is under test
-r128 = row(login_expires_h=128.0, wk_strand_pp=S)
+W = 150.0                                  # reset after every drain point: reset-first stays out
+r128 = row(login_expires_h=128.0, wk_strand_pp=S, weekly_reset_h=W)
 assert ca._desk_cliff_factor(r128) == 1.0
 for bad in ("abc", "-1"):
     os.environ["CC_ROUTE_DESK_LIFE_H"] = bad
     assert ca._desk_cliff_factor(r128) == 1.0, bad
-    assert ca._desk_cliff_factor(row(login_expires_h=100.0, wk_strand_pp=S)) == ca.CLIFF_SOFT_FACTOR, bad
+    assert ca._desk_cliff_factor(row(login_expires_h=100.0, wk_strand_pp=S, weekly_reset_h=W)) \
+        == ca.CLIFF_SOFT_FACTOR, bad
 os.environ["CC_ROUTE_DESK_LIFE_H"] = "200"
 assert ca._desk_cliff_factor(r128) == ca.CLIFF_SOFT_FACTOR
 os.environ["CC_ROUTE_DESK_LIFE_H"] = "0"
-assert ca._desk_cliff_factor(row(login_expires_h=60.0, wk_strand_pp=S)) == 1.0
+assert ca._desk_cliff_factor(row(login_expires_h=60.0, wk_strand_pp=S, weekly_reset_h=W)) == 1.0
 del os.environ["CC_ROUTE_DESK_LIFE_H"]
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
@@ -540,19 +550,125 @@ print("OK")'
 
 @test "dispatch keeps x0.25 when the week is not stranding or the drain is within DESK_LIFE_H" {
   run python3 -c "$LOAD"'
-base = row(weekly_reset_h=30.0, login_expires_h=500.0)
+# the 80h reset falls after the drain point of a 108h login (60h), so reset-first stays out of it
+base = row(weekly_reset_h=80.0, login_expires_h=500.0)
 g0, f0 = ca.score_general(base, cfg)[0], ca.score_fable(base, cfg, WIN_OPEN)[0]
 def demoted(**kw):
-    r = row(weekly_reset_h=30.0, **kw)
+    r = row(weekly_reset_h=80.0, **kw)
     return (abs(ca.score_general(r, cfg)[0] - g0 * ca.CLIFF_SOFT_FACTOR) < 1e-12 and
             abs(ca.score_fable(r, cfg, WIN_OPEN)[0] - f0 * ca.CLIFF_SOFT_FACTOR) < 1e-12)
 for kw in ({}, {"wk_strand_pp": None}, {"wk_strand_pp": 3.99}):              # not stranding
     assert demoted(login_expires_h=128.0, **kw), kw
 assert demoted(login_expires_h=108.0, wk_strand_pp=50.0)                     # drain_in == 60
-lifted = row(weekly_reset_h=30.0, login_expires_h=108.01, wk_strand_pp=50.0)
+lifted = row(weekly_reset_h=80.0, login_expires_h=108.01, wk_strand_pp=50.0)
 assert ca.score_general(lifted, cfg)[0] == g0 and ca.score_fable(lifted, cfg, WIN_OPEN)[0] == f0
 assert ca.score_general(row(weekly_reset_h=5.0, login_expires_h=40.0, wk_strand_pp=50.0), cfg) \
     == (None, ca.CLIFF_DRAIN_REASON)                                          # drain still excludes
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+# ── reset-first: a stranding week whose reset precedes its drain point (post-mortem 2026-10-18 §4.3)
+
+@test "reset-first: a stranding week resetting before its drain point is lifted in every lane, whatever DESK_LIFE_H says" {
+  run python3 -c "$LOAD"'
+import os
+# login 100h: drain 52h out, INSIDE the 60h desk life, so the DESK_LIFE_H arm alone keeps x0.25
+def r(**kw):
+    base = dict(login_expires_h=100.0, wk_strand_pp=30.0, weekly_reset_h=20.0)
+    base.update(kw); return row(**base)
+F = ca.CLIFF_SOFT_FACTOR
+lanes = (ca._desk_cliff_factor, ca._dispatch_cliff_factor)
+assert all(f(r()) == 1.0 for f in lanes)
+assert all(f(r(weekly_reset_h=51.99)) == 1.0 for f in lanes)
+assert all(f(r(weekly_reset_h=52.0)) == F for f in lanes)              # reset AT the drain point
+for kw in ({"weekly_reset_h": None}, {"weekly_reset_h": 0.0},          # unknown reset: no lift
+           {"wk_strand_pp": None}, {"wk_strand_pp": 3.99}):            # not stranding: no lift
+    assert all(f(r(**kw)) == F for f in lanes), kw
+# the recovery lane scores through score_general, so it carries the same factor
+base = row(weekly_reset_h=20.0, login_expires_h=500.0, wk_strand_pp=30.0)
+assert ca.score_general(r(), cfg, recovery=True)[0] == ca.score_general(base, cfg, recovery=True)[0]
+os.environ["CC_ROUTE_CLIFF_RESET_FIRST"] = "off"
+assert all(f(r()) == F for f in lanes)                                 # kill: DESK_LIFE_H only
+assert all(f(r(login_expires_h=108.01, weekly_reset_h=200.0)) == 1.0 for f in lanes)
+del os.environ["CC_ROUTE_CLIFF_RESET_FIRST"]
+os.environ["CC_ROUTE_DISPATCH_CLIFF_WINDOW"] = "off"                   # a lane kill still wins
+assert ca._dispatch_cliff_factor(r()) == F and ca._desk_cliff_factor(r()) == 1.0
+del os.environ["CC_ROUTE_DISPATCH_CLIFF_WINDOW"]
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "replay 2026-10-16T04:11:41Z: next leads general and recovery; the pre-lift rule ranked it last, as handoffs.jsonl logged" {
+  # Inputs measured at that instant: weekly/session/k off account-utilization.jsonl (04:05:36Z),
+  # login off auth-timeseries.jsonl refreshTokenExpiresAt (04:08:20Z), wk_strand_pp recomputed
+  # with burn_wk_ewma_ph over the util history. handoffs.jsonl:149 logged
+  # "next4 0.000205 > next2 0.000145 > next3 0.000094 > next 0.000046" and fired on next4.
+  run python3 -c "$LOAD"'
+import os
+def rows():
+    return [row(acct="next", weekly_pct=30, weekly_reset_h=47.81, session_pct=2, session_reset_h=0.81,
+                k=3, fable_pct=0, fable_reset_h=47.81, login_expires_h=144.02, wk_strand_pp=65.05),
+            row(acct="next2", weekly_pct=68, weekly_reset_h=30.81, session_pct=19, session_reset_h=4.14,
+                k=12, fable_pct=14, fable_reset_h=30.81, login_expires_h=367.36, wk_strand_pp=12.81),
+            row(acct="next3", weekly_pct=0, weekly_reset_h=103.81, session_pct=0, session_reset_h=5.0,
+                k=0, fable_pct=0, fable_reset_h=103.81, login_expires_h=598.84, wk_strand_pp=100.0),
+            row(acct="next4", weekly_pct=44, weekly_reset_h=52.81, session_pct=0, session_reset_h=0.31,
+                k=4, fable_pct=0, fable_reset_h=52.81, login_expires_h=420.61, wk_strand_pp=48.13)]
+def order(**kw):
+    out, _ = ca.ranked(rows(), cfg, WIN_OPEN, "general", **kw)
+    return [r["acct"] for _s, r in out]
+assert order()[0] == "next", order()
+assert order(recovery=True)[0] == "next", order(recovery=True)
+os.environ["CC_ROUTE_DISPATCH_CLIFF_WINDOW"] = "off"
+assert order()[-1] == "next", order()                    # control: the logged ranking reproduces
+del os.environ["CC_ROUTE_DISPATCH_CLIFF_WINDOW"]
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "replay 2026-10-17T22:54Z: past the DESK_LIFE_H lapse next still leads the desk and general; reset-first off reproduces route.jsonl" {
+  # route.jsonl:5158 logged desk -> next4 2.094175, runner-up next 2.044496 at factor 0.25: next
+  # had ~38pp to strand and reset in 5.1h, login 101.3h (drain 53.3h, inside the 60h desk life).
+  run python3 -c "$LOAD"'
+import os
+def rows():
+    return [row(acct="next", weekly_pct=58, weekly_reset_h=5.1, session_pct=20, session_reset_h=0.1,
+                k=13, fable_pct=0, fable_reset_h=5.1, login_expires_h=101.31, wk_strand_pp=38.05),
+            row(acct="next2", weekly_pct=0, weekly_reset_h=156.1, session_pct=0, session_reset_h=3.77,
+                k=4, fable_pct=0, fable_reset_h=156.1, login_expires_h=324.65, wk_strand_pp=61.47),
+            row(acct="next3", weekly_pct=10, weekly_reset_h=61.1, session_pct=1, session_reset_h=2.6,
+                k=3, fable_pct=0, fable_reset_h=61.1, login_expires_h=556.14, wk_strand_pp=71.88),
+            row(acct="next4", weekly_pct=83, weekly_reset_h=10.1, session_pct=1, session_reset_h=2.6,
+                k=11, fable_pct=0, fable_reset_h=10.1, login_expires_h=377.91, wk_strand_pp=7.38)]
+def ranking(kind):
+    out, _ = ca.ranked(rows(), cfg, WIN_OPEN, kind)
+    return [(r["acct"], s) for s, r in out]
+assert ranking("interactive")[0][0] == "next" and ranking("general")[0][0] == "next"
+os.environ["CC_ROUTE_CLIFF_RESET_FIRST"] = "off"
+d = ranking("interactive")
+assert [a for a, _s in d][:2] == ["next4", "next"], d
+assert abs(d[0][1] - 2.094175) < 1e-3 and abs(d[1][1] - 2.044496) < 1e-3, d
+del os.environ["CC_ROUTE_CLIFF_RESET_FIRST"]
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "_dispatch_first: a soft-band row the reset-first arm lifted may be promoted; a still-demoted one may not" {
+  run python3 -c "$LOAD"'
+import os
+lifted = row(session_pct=0, k_placed=0, login_expires_h=100.0, wk_strand_pp=30.0, weekly_reset_h=20.0)
+assert ca.cliff_band(lifted) == "soft"
+assert ca._dispatch_first(1.0, lifted, R, []) is True
+assert ca._dispatch_first(1.0, dict(lifted, weekly_reset_h=60.0), R, []) is False
+assert ca._dispatch_first(1.0, dict(lifted, login_expires_h=40.0), R, []) is False   # drain
+os.environ["CC_ROUTE_CLIFF_RESET_FIRST"] = "off"
+assert ca._dispatch_first(1.0, lifted, R, []) is False
+del os.environ["CC_ROUTE_CLIFF_RESET_FIRST"]
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
