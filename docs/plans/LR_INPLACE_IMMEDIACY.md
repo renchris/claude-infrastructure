@@ -81,3 +81,27 @@ New work (not yet assigned):
 - Holds (out of the idle-session scope): E R2 (carry sleep-only jobs on a healthy source — operator
   ruling, narrows 1b97389dd), R3 (goal hold keyed on goal activity), R4 (requester's own cc-lr move
   as the holding job).
+
+## W1 merge + W2 execution (2026-10-18, successor lead, session 74ba67f2)
+
+- **Execution locus:** W1 merge **L** (lead-inline: a cherry-pick + gate of finished branches). W2 **T**:
+  five named teammates in worktrees `lri2-{census,batch,verdict,goal,drafts}` off the merged tree
+  `c54950eea`. Why T: one lane, five disjoint hunks, merged against each other. Lead context: kept the
+  merge, gate, A/B and report; succession point = after the W2 land.
+- **W1 merged** (cherry-picked, smallest first): cclr `d3e4c07e8` · worker W1+fixup autosquashed
+  `6095d2cd4`, W3 `cf4adc3d4` · pane 374's `69ed4dae1` as `825d5fc44` (-x; conflicts kept both: the
+  intent re-check and the load re-check after the kernel read; the claim released once, right after the
+  result mv; `intent_recheck` added inside the load wait) · admit A1 `05216bb90` · handoff K2/K1/K3/K4
+  `a21849eb1 46240c952 552b997b6 c54950eea`. Gate on the merged tree: see REPORT §5.
+- **Lead-built:** `6459508f5` the `--move-kick` mode + staged `com.reso.lr-move-kick` (Interactive band,
+  WatchPaths) + `53-lr-move-kick-activate.sh` (reads the priority back from a real run). Activation is the
+  operator's (filed). Load-hold decision filed `600709c5fe4b` (class C, conviction 70).
+- **W2 owners:** census = lr-upgrade census prefilter, watch census narrowed to waiting sids,
+  `LRU_SELF_SID=` pin + `taskpolicy -c utility` clamp on lr-move-batch.sh's census calls · admit2 = A2
+  act-by sidecar, A3 wall-clock admit wait (900 s), A4 rename-and-verify steal + ROUTE_WHY reset,
+  `router_ranked_epoch` reuse · verdict = known-path transcript read, ghost waits end on two absent
+  snapshots, no false STRANDED on a live pid · goal = goal hold keyed on goal activity (operator ask 6a,
+  `c6ebf58a8`) · drafts = stale drafts carried, junk discarded, live typing waits (operator ask 6b;
+  opt-in `HF_RCY_CARRY_STALE=1` inside hf_rcy_carry_eligible approved by the lead).
+- **Learnings:** under load ~200 a bats case can take minutes; gate the merged superset once and A/B each
+  red on a detached control worktree run at the same moment, not branch by branch.
