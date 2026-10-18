@@ -10,26 +10,33 @@
 // all-windows mode. Restoring the operator's focus afterwards raises his previously focused Dia
 // window by its identifier and reads nothing else from it.
 //
-// INPUT IS PLAIN. AXPress first; otherwise one mouse down/up at the control's centre after an AX
-// hit-test proves the point lands on that control. Typing is one key event per character at a
-// fixed rate. No movement paths, no jitter, no randomized timing — operator ruling 2026-10-17
-// (decision a9b998025419): never disguise input.
+// INPUT IS PLAIN. A click is AXPress, or with --mouse 1 one mouse down/up at the control's centre
+// after an AX hit-test proves the point lands on that control. AXPress on an AXLink can report
+// success and do nothing (a javascript:/__doPostBack anchor on Tyler Odyssey, measured 2026-10-17),
+// so on a link the page is watched for --settle seconds (floor 1 s) and, if nothing changed, exactly
+// one plain click follows; never a second AXPress, never a second fallback. Typing is one key event
+// per character at a fixed rate, with the US-layout key code (and shift) of each printable ASCII
+// character; only a character with no key on the layout is posted as a unicode string. No
+// movement paths, no jitter, no randomized timing — operator ruling 2026-10-17 (decision
+// a9b998025419): never disguise input.
 //
 // Subcommands (all print to stdout; exits: 0 ok, 4 no such app, 5 act failed, 6 window or element
 // not exactly one, 7 focus check failed before an event, 9 host differs from --expect-host,
 // 11 Accessibility not granted, 13 operator active or screen locked, 64 usage):
 //   trusted
 //   idle                                         -> idle_s=<n> locked=<0|1>
+//   keys    --value V [--layout <input source id>] -> what fill would type; sends nothing
 //   url     --pid P --ident I
 //   read    --pid P --ident I
 //   fields  --pid P --ident I
 //   focus-save    --pid P                        -> front_pid=<n> dia_window=<ident|->
 //   focus-restore --pid P --front N --dia-window I
-//   click   --pid P --ident I --expect-host H (--index N | --text T [--nth K]) [--min-idle S]
+//   click   --pid P --ident I --expect-host H (--index N | --text T [--nth K]) [--mouse 1] [--settle S] [--min-idle S]
 //   fill    --pid P --ident I --expect-host H --index N --value V [--min-idle S]
 //   press   --pid P --ident I --expect-host H --key K [--min-idle S]
 import Cocoa
 import ApplicationServices
+import Carbon
 
 let argv = Array(CommandLine.arguments.dropFirst())
 func die(_ code: Int32, _ msg: String) -> Never {
@@ -77,6 +84,82 @@ if sub == "idle" {
   print("idle_s=\(Int(idle)) locked=\(locked ? 1 : 0)")
   exit(0)
 }
+
+// US-layout virtual key codes (kVK_ANSI_*) for printable ASCII: character -> (code, shift).
+let usKeys: [Character: (CGKeyCode, Bool)] = {
+  let plain: [(Character, CGKeyCode)] = [
+    ("a", 0), ("s", 1), ("d", 2), ("f", 3), ("h", 4), ("g", 5), ("z", 6), ("x", 7), ("c", 8), ("v", 9),
+    ("b", 11), ("q", 12), ("w", 13), ("e", 14), ("r", 15), ("y", 16), ("t", 17), ("1", 18), ("2", 19),
+    ("3", 20), ("4", 21), ("6", 22), ("5", 23), ("=", 24), ("9", 25), ("7", 26), ("-", 27), ("8", 28),
+    ("0", 29), ("]", 30), ("o", 31), ("u", 32), ("[", 33), ("i", 34), ("p", 35), ("l", 37), ("j", 38),
+    ("'", 39), ("k", 40), (";", 41), ("\\", 42), (",", 43), ("/", 44), ("n", 45), ("m", 46), (".", 47),
+    ("`", 50), (" ", 49)]
+  let shifted: [(Character, Character)] = [
+    ("!", "1"), ("@", "2"), ("#", "3"), ("$", "4"), ("%", "5"), ("^", "6"), ("&", "7"), ("*", "8"),
+    ("(", "9"), (")", "0"), ("_", "-"), ("+", "="), ("{", "["), ("}", "]"), ("|", "\\"), (":", ";"),
+    ("\"", "'"), ("<", ","), (">", "."), ("?", "/"), ("~", "`")]
+  var m: [Character: (CGKeyCode, Bool)] = [:]
+  for (ch, code) in plain {
+    m[ch] = (code, false)
+    if ch.isLetter { m[Character(ch.uppercased())] = (code, true) }
+  }
+  for (ch, base) in shifted { m[ch] = (m[base]!.0, true) }
+  return m
+}()
+
+// The keyboard layout the key codes are checked against: the current one, or --layout for `keys`.
+// A US code whose key types something else on that layout is never posted as a key; that
+// character goes as a unicode string instead, so a non-US layout can never type the wrong letter.
+func layoutSource(_ named: String?) -> (String, Data?) {
+  var src: TISInputSource?
+  if let want = named {
+    let filter = [kTISPropertyInputSourceID as String: want] as CFDictionary
+    let list = TISCreateInputSourceList(filter, true)?.takeRetainedValue() as? [TISInputSource]
+    src = list?.first
+    if src == nil { die(64, "no installed input source \(want)") }
+  } else {
+    src = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue()
+  }
+  guard let s = src else { return ("?", nil) }
+  let id = TISGetInputSourceProperty(s, kTISPropertyInputSourceID)
+    .map { Unmanaged<CFString>.fromOpaque($0).takeUnretainedValue() as String } ?? "?"
+  let data = TISGetInputSourceProperty(s, kTISPropertyUnicodeKeyLayoutData)
+    .map { Unmanaged<CFData>.fromOpaque($0).takeUnretainedValue() as Data }
+  return (id, data)
+}
+func typed(_ layout: Data, _ code: CGKeyCode, _ shift: Bool) -> String {
+  layout.withUnsafeBytes { raw -> String in
+    guard let base = raw.baseAddress else { return "" }
+    var dead: UInt32 = 0, len = 0
+    var out = [UniChar](repeating: 0, count: 4)
+    let mods: UInt32 = shift ? UInt32(shiftKey >> 8) & 0xFF : 0
+    let rc = UCKeyTranslate(base.assumingMemoryBound(to: UCKeyboardLayout.self), UInt16(code),
+                            UInt16(kUCKeyActionDown), mods, UInt32(LMGetKbdType()),
+                            OptionBits(kUCKeyTranslateNoDeadKeysBit), &dead, 4, &len, &out)
+    return rc == noErr ? String(utf16CodeUnits: out, count: len) : ""
+  }
+}
+enum Stroke { case key(CGKeyCode, Bool), unicode([UniChar]) }
+func strokes(_ value: String, _ layout: Data?) -> [(Character, Stroke)] {
+  value.map { ch in
+    if let (code, shift) = usKeys[ch], layout.map({ typed($0, code, shift) == String(ch) }) ?? true {
+      return (ch, .key(code, shift))
+    }
+    return (ch, .unicode(Array(String(ch).utf16)))
+  }
+}
+if sub == "keys" {
+  let (id, layout) = layoutSource(opt["layout"])
+  print("layout=\(id)")
+  for (ch, s) in strokes(opt["value"] ?? "", layout) {
+    switch s {
+    case .key(let c, let sh): print("\(ch)\tkey \(c)\(sh ? " shift" : "")")
+    case .unicode: print("\(ch)\tunicode")
+    }
+  }
+  exit(0)
+}
+
 guard AXIsProcessTrusted() else { die(11, "NO_GRANT: this process's host app has no Accessibility grant") }
 
 guard let pid = Int32(need("pid")), let diaApp = NSRunningApplication(processIdentifier: pid) else {
@@ -177,20 +260,26 @@ func controls() -> [AXUIElement] {
   return found
 }
 
-if sub == "url" { print(currentURL()); exit(0) }
-if sub == "read" {
-  guard let web = webArea(win, 0) else { die(5, "no web area in the agent's window yet") }
+func staticTexts(_ web: AXUIElement) -> [String] {
+  var out: [String] = []
   var n = 0
   func walk(_ e: AXUIElement, _ d: Int) {
     if n > 30000 || d > 80 { return }
     n += 1
     if str(e, kAXRoleAttribute) == "AXStaticText" {
       let v = str(e, kAXValueAttribute)
-      if !v.isEmpty { print(v) }
+      if !v.isEmpty { out.append(v) }
     }
     for k in children(e) { walk(k, d + 1) }
   }
   walk(web, 0)
+  return out
+}
+
+if sub == "url" { print(currentURL()); exit(0) }
+if sub == "read" {
+  guard let web = webArea(win, 0) else { die(5, "no web area in the agent's window yet") }
+  for v in staticTexts(web) { print(v) }
   exit(0)
 }
 if sub == "fields" {
@@ -290,11 +379,55 @@ func focusedIs(_ e: AXUIElement) -> Bool {
   return CFEqual(f as! AXUIElement, e)
 }
 
+// What a click on a link should change: the web area's AXURL, the web area itself (a navigation
+// replaces it), its loading state, or the page text. Read only from the agent's own window.
+struct PageState { let url: String; let web: AXUIElement?; let text: [String] }
+func pageState() -> PageState {
+  let web = webArea(win, 0)
+  return PageState(url: web.flatMap { (attr($0, "AXURL") as? URL)?.absoluteString } ?? "", web: web,
+                   text: web.map(staticTexts) ?? [])
+}
+func changed(since b: PageState) -> Bool {
+  let web = webArea(win, 0)
+  if (web == nil) != (b.web == nil) { return true }
+  if let w = web, let bw = b.web {
+    if !CFEqual(w, bw) { return true }
+    if (attr(w, "AXURL") as? URL)?.absoluteString ?? "" != b.url { return true }
+    if let loaded = attr(w, "AXLoaded") as? Bool, !loaded { return true }
+    return staticTexts(w) != b.text
+  }
+  return false
+}
+func changedWithin(_ s: Double, since b: PageState) -> Bool {
+  let deadline = Date().addingTimeInterval(s)
+  repeat {
+    spin(0.2)
+    if changed(since: b) { return true }
+  } while Date() < deadline
+  return false
+}
+
 switch sub {
 case "click":
-  if AXUIElementPerformAction(el, kAXPressAction as CFString) == .success { finish(0, "clicked (AXPress): \(label(el).prefix(80))") }
+  let name = label(el).prefix(80)
+  if opt["mouse"] == "1" {
+    guard mouseClick(el) else { finish(7, "FOCUS_REFUSED: hit-test did not land on the control; nothing sent") }
+    finish(0, "clicked (mouse, as asked): \(name)")
+  }
+  let isLink = str(el, kAXRoleAttribute) == "AXLink"
+  let before = isLink ? pageState() : nil
+  if AXUIElementPerformAction(el, kAXPressAction as CFString) == .success {
+    guard let b = before else { finish(0, "clicked (AXPress): \(name)") }
+    let watch = max(Double(opt["settle"] ?? "2") ?? 2, 1)
+    if changedWithin(watch, since: b) { finish(0, "clicked (AXPress): \(name)") }
+    // AXPress said success on a link and the page did not move: exactly one plain click, no second AXPress.
+    guard mouseClick(el) else {
+      finish(5, "NO_EFFECT: AXPress on the link changed nothing in \(Int(watch)) s, and the one plain click could not be placed (focus or hit-test); no mouse event sent")
+    }
+    finish(0, "clicked (mouse fallback: AXPress changed nothing in \(Int(watch)) s): \(name)")
+  }
   guard mouseClick(el) else { finish(7, "FOCUS_REFUSED: hit-test did not land on the control; nothing sent") }
-  finish(0, "clicked (mouse): \(label(el).prefix(80))")
+  finish(0, "clicked (mouse): \(name)")
 case "fill":
   let value = opt["value"] ?? ""
   AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, kCFBooleanTrue)
@@ -306,14 +439,17 @@ case "fill":
   guard focusedIs(el) else { finish(7, "FOCUS_REFUSED: field did not take focus; nothing typed") }
   key(0, .maskCommand)   // select all
   key(51)                // delete
-  for ch in value.utf16 {
+  for (_, s) in strokes(value, layoutSource(nil).1) {
     guard focusedIs(el) else { finish(7, "FOCUS_REFUSED: focus left the field mid-fill; stopped") }
-    var c = ch
-    for down in [true, false] {
-      let ev = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: down)!
-      ev.keyboardSetUnicodeString(stringLength: 1, unicodeString: &c)
-      ev.post(tap: .cghidEventTap)
-      spin(down ? keyDown : keyGap)
+    switch s {
+    case .key(let code, let shift): key(code, shift ? .maskShift : [])
+    case .unicode(var u):   // no key for it on the layout: the one case that carries a string
+      for down in [true, false] {
+        let ev = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: down)!
+        ev.keyboardSetUnicodeString(stringLength: u.count, unicodeString: &u)
+        ev.post(tap: .cghidEventTap)
+        spin(down ? keyDown : keyGap)
+      }
     }
   }
   spin(settle)

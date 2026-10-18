@@ -25,7 +25,8 @@ W=$(cc-dia-act open "https://portal.example.gov/") # prints the window id; idle-
 cc-dia-act read   --window "$W"                   # page text, any host
 cc-dia-act fields --window "$W"                   # index | role | label | value
 cc-dia-act fill   --window "$W" --index 3 "DOE"   # listed hosts only
-cc-dia-act click  --window "$W" --text "Search"   # or --index N
+cc-dia-act click  --window "$W" --text "Search"   # or --index N; --mouse = one plain click, no AXPress
+cc-dia-act keys   "DOE"                           # what fill would type (key codes); sends nothing
 cc-dia-act wait-for --window "$W" "Case Number" --timeout 600   # slow result pages (~4 min) are normal
 cc-dia-act close  --window "$W"
 cc-dia-act status                                 # list, supervised records, cooldowns (read-only)
@@ -38,6 +39,14 @@ cc-dia-act status                                 # list, supervised records, co
   a supervised first run on record for the host (10) · no cooldown (12) · operator idle 5 s and
   screen unlocked (13) · the agent window holds focus before each event (7). It raises its own
   window first and restores his front app and Dia window afterwards.
+- **Input paths.** `click` uses AXPress. On Tyler Odyssey (2026-10-17) AXPress on a
+  `javascript:`/`__doPostBack` link returned success and did nothing, so on a link the helper
+  watches the page for `--settle` s (floor 1 s; URL, page and text) and, if nothing moved, sends
+  exactly one plain click; never a second AXPress or a second fallback. `--mouse` skips AXPress
+  for that plain click outright (hit-tested at the control's centre, focus-checked). The output
+  names the path: `(AXPress)`, `(mouse)`, `(mouse, as asked)` or `(mouse fallback: …)`. `fill`
+  posts one key event per character with its real US-layout key code (shift where needed);
+  only a character with no key on the current layout goes as a unicode string.
 - **Supervised first run.** Only when the operator asked for it and is watching: add
   `--supervised` to the first act on a host; success records it. Never pass it on your own.
 - **Bot wall** (F5 "The requested URL was rejected" / "Request Rejected" + support ID, Akamai

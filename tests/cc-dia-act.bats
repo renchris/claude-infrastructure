@@ -43,7 +43,7 @@ setup() {
     '  url) [ -f "$p.url" ] || exit 6; cat "$p.url" ;;' \
     '  read) [ -f "$p.txt" ] || exit 6; cat "$p.txt"; [ -f "$p.after" ] && mv "$p.after" "$p.txt"; exit 0 ;;' \
     '  fields) echo "0 | AXTextField | Last Name | " ;;' \
-    '  click|fill|press) [ -f "$p.acted" ] && mv "$p.acted" "$p.txt"; exit "$(cat "'"$S"'/act_rc")" ;;' \
+    '  click|fill|press) [ -f "$p.acted" ] && mv "$p.acted" "$p.txt"; [ -f "'"$S"'/act_out" ] && cat "'"$S"'/act_out"; exit "$(cat "'"$S"'/act_rc")" ;;' \
     'esac' > "$S/ax"
   chmod +x "$S/pgrep" "$S/ps" "$S/osascript" "$S/ax"
   echo 'idle_s=60 locked=0' > "$S/idle"
@@ -224,4 +224,44 @@ COURT=https://odysseypa.example.gov/Search
   [ "$(cat "$CFG/allow-hosts")" = "$(printf 'odysseypa.example.gov\nodysseyweb.example.gov')" ]
   run "$SUT" allow 'evil.gov/../x'
   [ "$status" -eq 64 ]
+}
+
+@test "click --mouse: the helper is told to skip AXPress and gets the settle window; --mouse on fill is refused" {
+  opened AAA "$COURT" "Party search"
+  list odysseypa.example.gov; supervised odysseypa.example.gov
+  echo 'clicked (mouse fallback: AXPress changed nothing in 3 s): Civil' > "$S/act_out"
+  run "$SUT" click --window AAA --text Civil --settle 3
+  [ "$status" -eq 0 ]
+  # the helper's path line is what the caller sees
+  [[ "$output" == *"clicked (mouse fallback: AXPress changed nothing in 3 s): Civil"* ]] || false
+  grep -q '^click .*--settle 3' "$S/ax.log"
+  [ "$(grep -c -- '--mouse' "$S/ax.log")" -eq 0 ]
+  run "$SUT" click --window AAA --text Civil --mouse --settle 0
+  [ "$status" -eq 0 ]
+  [ "$(grep -c -- '^click .*--mouse 1' "$S/ax.log")" -eq 1 ]
+  run "$SUT" fill --window AAA --index 0 "DOE" --mouse --settle 0
+  [ "$status" -eq 64 ]
+  [ "$(acts)" -eq 2 ]
+}
+
+# The real helper, compiled: `keys` prints the strokes fill posts (the same strokes() fill types
+# from). RED-proof: run against the pre-fix helper (no `keys`, every character virtualKey 0 plus a
+# unicode string) and with the layout check deleted (AZERTY 'a' then posts US key 0, which types 'q').
+@test "fill key codes: real US-layout codes with shift for ASCII; unicode only where the layout has no key" {
+  command -v swiftc >/dev/null || skip "swiftc unavailable"
+  bin="$BATS_TEST_TMPDIR/cc-dia-act-ax"
+  swiftc "$REPO/skills/dia-agent/cc-dia-act-ax.swift" -o "$bin" 2>"$BATS_TEST_TMPDIR/swiftc.log" \
+    || { cat "$BATS_TEST_TMPDIR/swiftc.log"; false; }
+  run "$bin" keys --layout com.apple.keylayout.US --value 'aZ1!_ ~"é'
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf 'layout=com.apple.keylayout.US\na\tkey 0\nZ\tkey 6 shift\n1\tkey 18\n!\tkey 18 shift\n_\tkey 27 shift\n \tkey 49\n~\tkey 50 shift\n"\tkey 39 shift\né\tunicode')" ]
+  # every printable ASCII character has a key on US: none falls back to a string
+  ascii=' !"#$%&'"'"'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~'
+  [ "${#ascii}" -eq 95 ]
+  run "$bin" keys --layout com.apple.keylayout.US --value "$ascii"
+  [ "$(grep -c $'\tkey ' <<<"$output")" -eq 95 ]
+  # a layout whose key 0 is not 'a' (French AZERTY): the US code is never posted for it
+  run "$bin" keys --layout com.apple.keylayout.French --value 'a'
+  [ "$status" -eq 0 ]
+  [ "${lines[1]}" = "$(printf 'a\tunicode')" ]
 }

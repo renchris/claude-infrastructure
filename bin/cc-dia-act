@@ -6,9 +6,10 @@
 #   cc-dia-act read     --window <id>                      page text (any host; read-only)
 #   cc-dia-act fields   --window <id>                      form controls, links, buttons: index | role | label | value
 #   cc-dia-act wait-for --window <id> "<text>" [--timeout S] [--interval S]
-#   cc-dia-act click    --window <id> (--index N | --text "<label>" [--nth K]) [--supervised] [--settle S]
+#   cc-dia-act click    --window <id> (--index N | --text "<label>" [--nth K]) [--mouse] [--supervised] [--settle S]
 #   cc-dia-act fill     --window <id> --index N "<value>"                       [--supervised] [--settle S]
 #   cc-dia-act press    --window <id> --index N <return|tab|escape|space|up|down|left|right> [...]
+#   cc-dia-act keys     "<value>"                              what fill would type (key codes); sends nothing
 #   cc-dia-act close    --window <id>
 #   cc-dia-act status                                      operator list, supervised records, cooldowns
 #   cc-dia-act build                                       compile the Accessibility helper
@@ -22,6 +23,14 @@
 #   proves it holds focus (7), acts with plain input, and restores the operator's front app and
 #   Dia window. After every act, read and wait-for, the page is checked for a bot wall: a match
 #   writes a 24 h per-host cooldown and exits 8. There is no retry anywhere.
+#
+# CLICK: AXPress by default. --mouse skips it for one plain mouse down/up at the control's centre
+# (hit-tested, focus-checked). On a link, an AXPress that reports success but changes nothing
+# (URL, page, text) within --settle seconds (floor 1 s) gets exactly ONE plain click as fallback;
+# never a second AXPress. The output line names the path that ran: (AXPress), (mouse),
+# (mouse, as asked) or (mouse fallback: ...).
+# FILL: one key event per character at a fixed rate, with the real US-layout key code (and shift)
+# for printable ASCII; a character with no key on the current layout goes as a unicode string.
 #
 # ~/.config/cc-dia-act/ is the OPERATOR's: the agent never writes it, and hooks/validate-bash.sh
 # plus hooks/check-edit-boundary.sh deny agent writes there. This tool writes only the supervised
@@ -49,7 +58,7 @@ DIA_ID=company.thebrowser.dia
 
 say() { printf 'cc-dia-act: %s\n' "$*" >&2; }
 fail() { local rc=$1; shift; say "$*"; exit "$rc"; }
-usage() { sed -n '4,15p' "$SELF" | sed 's/^# \{0,1\}//' >&2; exit 64; }
+usage() { sed -n '4,16p' "$SELF" | sed 's/^# \{0,1\}//' >&2; exit 64; }
 
 src_sha() { /usr/bin/shasum -a 256 "$SRC" | cut -c1-12; }
 helper_path() {
@@ -122,7 +131,7 @@ need_dia() {
 need_grant() { "$AX" trusted || fail 11 "NO_GRANT: the app hosting this session has no Accessibility grant"; }
 
 # Parse --window and the rest; the window must be one cc-dia-act opened.
-WIN=""; INDEX=""; TEXT=""; NTH=""; SUPERVISED=0; SETTLE=2; TIMEOUT=300; INTERVAL=10; POS=()
+WIN=""; INDEX=""; TEXT=""; NTH=""; MOUSE=0; SUPERVISED=0; SETTLE=2; TIMEOUT=300; INTERVAL=10; POS=()
 parse() {
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -131,6 +140,7 @@ parse() {
       --text) TEXT=${2:-}; shift ;;
       --nth) NTH=${2:-}; shift ;;
       --supervised) SUPERVISED=1 ;;
+      --mouse) MOUSE=1 ;;
       --settle) SETTLE=${2:-}; shift ;;
       --timeout) TIMEOUT=${2:-}; shift ;;
       --interval) INTERVAL=${2:-}; shift ;;
@@ -232,6 +242,7 @@ cmd_act() {   # click|fill|press
     fill)  [ -n "$INDEX" ] && [ "${#POS[@]}" -eq 1 ] || fail 64 'fill needs --index N "<value>"' ;;
     press) [ -n "$INDEX" ] && [ "${#POS[@]}" -eq 1 ] || fail 64 'press needs --index N <key>' ;;
   esac
+  [ "$MOUSE" -eq 0 ] || [ "$act" = click ] || fail 64 "--mouse is a click option"
   need_helper; need_dia; need_grant
   URL=$("$AX" url --pid "$DIA_PID" --ident "$(IDENT)") || { rc=$?; fail "$rc" "could not read the window's URL"; }
   h=$(host_of "$URL")
@@ -251,6 +262,7 @@ cmd_act() {   # click|fill|press
   [ -n "$TEXT" ] && args+=(--text "$TEXT")
   [ -n "$NTH" ] && args+=(--nth "$NTH")
   case "$act" in
+    click) args+=(--settle "$SETTLE"); [ "$MOUSE" -eq 1 ] && args+=(--mouse 1) ;;
     fill) args+=(--value "${POS[0]}") ;;
     press) args+=(--key "${POS[0]}") ;;
   esac
@@ -264,6 +276,12 @@ cmd_act() {   # click|fill|press
     printf 'at=%s act=%s url=%s ppid=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$act" "$URL" "$PPID" > "$SUP_DIR/$h"
     say "supervised first run recorded for $h"
   fi
+}
+
+cmd_keys() {   # no window, no Dia, no events: the strokes fill would post for this value
+  [ $# -eq 1 ] || fail 64 'keys needs one "<value>"'
+  need_helper
+  "$AX" keys --value "$1"
 }
 
 cmd_close() {
@@ -338,6 +356,7 @@ case "$sub" in
   fields) cmd_fields "$@" ;;
   wait-for) cmd_wait_for "$@" ;;
   click|fill|press) cmd_act "$sub" "$@" ;;
+  keys) cmd_keys "$@" ;;
   close) cmd_close "$@" ;;
   status) cmd_status ;;
   build) cmd_build ;;
