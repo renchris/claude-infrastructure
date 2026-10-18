@@ -79,6 +79,19 @@ parent_hook() {
   [ "$(decision 'git commit -m "never git reset --hard here"')" = "PASS" ]
 }
 
+@test "a MULTI-LINE commit message naming any of the three verbs is not an invocation (2026-10-18)" {
+  # The bash trigger spans newlines, the parser's own gate did not, so a message whose word sat on
+  # a later line got NO verdict line — and an empty verdict read as ASK. Measured on lrwake-D: an
+  # unattended session's `git add … && git commit -q -m "<multi-line>"` raised a confirm nobody
+  # could answer.
+  [ "$(decision $'git add a && git commit -q -m "feat: x\n\nthe recorded-layout restore exemption;\n- more" && git log -1')" = "PASS" ]
+  [ "$(decision $'git commit -m "docs: line one\nnever git reset --hard origin/main here"')" = "PASS" ]
+  [ "$(decision $'git commit -m "docs: line one\ndo not git stash drop blindly"')" = "PASS" ]
+  # CONTROL, one lever apart: the same verbs INVOKED on a later line still ask
+  [ "$(decision $'git status\ngit restore f')" = "ASK" ]
+  [ "$(decision $'git status\ngit stash drop')" = "ASK" ]
+}
+
 # ── stash drop ──────────────────────────────────────────────────────────────────────────────────
 
 @test "PERMITS dropping the entry this command re-found by its own tag; bare or indexed drops ASK" {

@@ -1856,7 +1856,7 @@ opaque = st is None or "<<" in cmd or "`" in cmd or any(
     any(p.startswith(("GIT_DIR=", "GIT_WORK_TREE=")) for p in pre) for pre, _ in (st or [])) or any(
     git_sub(a) == -1 for _, a in (st or []))   # `git -C x`, `git -c k=v`, `--git-dir` … re-aim the repo
 out = []
-if re.search(r"\bgit\b[^;&|\n]*\breset\b[^;&|\n]*--hard\b", cmd):
+if re.search(r"\bgit\b[^;&|]*\breset\b[^;&|]*--hard\b", cmd):  # no \n: as wide as the bash trigger, or a multi-line mention prints NO verdict, which reads as ask
     v = "ask"; tgt = "-"
     idx = [k for k, (_, a) in enumerate(st or []) if git_sub(a) == 1 and a[1] == "reset" and "--hard" in a]
     if not opaque and len(idx) == 1:
@@ -1871,7 +1871,7 @@ if re.search(r"\bgit\b[^;&|\n]*\breset\b[^;&|\n]*--hard\b", cmd):
     elif not opaque and not idx:
         v = "none"   # a mention — a commit message, an echo — is not an invocation
     out.append("RESET %s %s" % (v, tgt))
-if re.search(r"\bgit\b[^;&|\n]*\bstash\s+drop\b", cmd):
+if re.search(r"\bgit\b[^;&|]*\bstash\s+drop\b", cmd):  # no \n: see the reset gate above
     v = "ask"
     idx = [a for _, a in (st or []) if git_sub(a) == 1 and len(a) > 2 and a[1] == "stash" and a[2] == "drop"]
     if not opaque and idx:
@@ -1886,7 +1886,7 @@ if re.search(r"\bgit\b[^;&|\n]*\bstash\s+drop\b", cmd):
     elif not opaque and not idx:
         v = "none"
     out.append("DROP " + v)
-if re.search(r"\bgit\b[^;&|\n]*\brestore\b", cmd):
+if re.search(r"\bgit\b[^;&|]*\brestore\b", cmd):  # no \n: a multi-line commit message naming the word was asked about (2026-10-18)
     v = "ask"
     idx = [a for _, a in (st or []) if git_sub(a) == 1 and a[1] == "restore"]
     if not opaque:
@@ -2296,6 +2296,138 @@ elif [[ "$RM_PRESENT" == "1" ]]; then
       fi
     done <<<"$RM_OCCURRENCES"
   fi
+fi
+
+# ── SURFACES AND LAUNCHERS AGENTS MAY NOT CREATE (lr-wake incident 2026-10-18, REPORT §4 Wave D, §5 Q9)
+# Four denies, decided on TOKENS of VB_RULE_TEXT (so a quoted or heredoc MENTION is not the act), by
+# the COMMAND WORD of each segment, never by a substring anywhere in the line:
+#   tab       `kitty|kitten @ … launch --type=tab` or a `new_tab*` action. Operator rule: NO kitty
+#             tabs, ever — every OS window fullscreen on its own Space, at most 4 split panes.
+#             Overnight 22 agent fires became hidden tabs; 13 of them were dead shells.
+#   hf-tab    `handoff-fire … --tab`, the flag those 22 fires used (doctrine since retired from
+#             commands/handoff.md). handoff-fire's own placement replaces it.
+#   hf-tmp    `handoff-fire … --launcher <temp path>`: the hand-written /tmp/lr-rescue/resume-*.sh
+#             launchers that bypassed the lr rails and fed the rescue loop (REPORT RC7).
+#   plist     `launchctl load|bootstrap <plist>` where the plist is not one this repo SHIPS
+#             (launchd/, launchd/staged/, scripts/limit-recover/) sitting in ~/Library/LaunchAgents
+#             or in one of those repo dirs: the agent-installed com.reso.drain-to-next3 placed 11
+#             batches and 30+ rotates with nobody asking (REPORT §5 Q9, recommended deny).
+# What stays allowed, each pinned by an allow case in tests/validate-bash-surface-deny.bats:
+# `bash install.sh`, `bash scripts/deploy-live.sh`, `scripts/limit-recover/lr-recon-launchd.sh` and
+# the docs/activation scripts (their launchctl runs INSIDE the script, which this hook never sees),
+# `launchctl bootstrap gui/<uid> ~/Library/LaunchAgents/<shipped>.plist`, bootout/print/list, a
+# split or --window fire, a --launcher that is not a temp path, and every grep/cat that names these.
+if [[ "$CMD" == *launchctl* || ( "$CMD" == *handoff-fire* && ( "$CMD" == *--tab* || "$CMD" == *--launcher* ) ) \
+      || ( ( "$CMD" == *kitty* || "$CMD" == *kitten* ) && "$CMD" == *tab* ) ]]; then
+  vb_rule_text_init
+  _vss_self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
+  _vss_repo="$(cd "$(dirname "$_vss_self")/.." 2>/dev/null && pwd)"
+  _vss_shipped=""
+  for _vss_p in "$_vss_repo"/launchd/*.plist "$_vss_repo"/launchd/staged/*.plist "$_vss_repo"/scripts/limit-recover/*.plist; do
+    [[ -f "$_vss_p" ]] && _vss_shipped+="${_vss_p##*/}"$'\n'
+  done
+  # shellcheck disable=SC2016  # a python program: its $TMPDIR is a literal it matches, not an expansion
+  _vss_hit="$(printf '%s' "$VB_RULE_TEXT" | VSS_SHIPPED="$_vss_shipped" python3 -c '
+import os, re, shlex, sys
+shipped = set(filter(None, os.environ.get("VSS_SHIPPED", "").split("\n")))
+OK_DIRS = ("Library/LaunchAgents", "launchd", "launchd/staged", "scripts/limit-recover")
+TEMP = ("/tmp/", "/private/tmp/", "/var/folders/", "$TMPDIR", "${TMPDIR")
+text = re.sub(r"\\\n", " ", sys.stdin.read())
+def lift(s):
+    # `$( … )` → a placeholder word in place (so `gui/$(id -u)` stays ONE argument) plus the inner
+    # text, scanned as a command line of its own
+    out, inner, i = [], [], 0
+    while i < len(s):
+        if s.startswith("$(", i):
+            d, j = 1, i + 2
+            while j < len(s) and d:
+                d += {"(": 1, ")": -1}.get(s[j], 0); j += 1
+            inner.append(s[i + 2:j - 1]); out.append("SUBST"); i = j
+        else:
+            out.append(s[i]); i += 1
+    return "".join(out), inner
+def segments(text, depth=0):
+    text, inner = lift(text)
+    if depth < 3:
+        for t in inner:
+            yield from segments(t, depth + 1)
+    for line in text.split("\n"):
+        try:
+            lx = shlex.shlex(line, posix=True, punctuation_chars=";&|()")
+            lx.whitespace_split = True
+            toks = list(lx)
+        except ValueError:
+            toks = line.split()
+        seg = []
+        for t in toks + [";"]:
+            if t and set(t) <= set(";&|()"):
+                # `bash -c "<cmd>"` / `sh -c` / `zsh -c`: the string IS a command line
+                b = [os.path.basename(x) for x in seg[:2]]
+                if depth < 2 and len(seg) >= 3 and b[0] in ("bash", "sh", "zsh") and seg[1] == "-c":
+                    yield from segments(seg[2], depth + 1)
+                elif seg:
+                    yield seg
+                seg = []
+            else:
+                seg.append(t)
+def head(seg):
+    i = 0
+    while i < len(seg):
+        t, b = seg[i], os.path.basename(seg[i])
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t) or b in ("sudo", "nohup", "exec", "command", "time", "caffeinate") \
+                or t in ("do", "then", "else", "elif", "if", "while", "until", "!", "{"):
+            i += 1
+        elif b == "env":
+            i += 1
+            while i < len(seg) and (seg[i].startswith("-") or "=" in seg[i]): i += 1
+        elif b in ("timeout", "gtimeout"):
+            i += 2
+        elif b in ("bash", "sh", "zsh") and i + 1 < len(seg) and not seg[i + 1].startswith("-"):
+            i += 1
+        else:
+            return os.path.basename(t), seg[i + 1:]
+    return "", []
+def plist_ok(p):
+    if p.startswith("$") and "/" not in p: return False
+    base, d = os.path.basename(p), os.path.dirname(p).rstrip("/")
+    return base in shipped and any(d == x or d.endswith("/" + x) for x in OK_DIRS)
+for seg in segments(text):
+    cmd, args = head(seg)
+    if cmd in ("kitty", "kitten") and "@" in args:
+        opts = args[:args.index("--")] if "--" in args else args
+        if "launch" in opts and ("--type=tab" in opts or any(a == "--type" and b == "tab" for a, b in zip(opts, opts[1:]))):
+            print("tab"); sys.exit(0)
+        if any(a.startswith("new_tab") for a in opts):
+            print("tab"); sys.exit(0)
+    if cmd in ("handoff-fire.sh", "handoff-fire"):
+        if "--tab" in args:
+            print("hf-tab"); sys.exit(0)
+        for a, b in zip(args, args[1:] + [""]):
+            v = a.split("=", 1)[1] if a.startswith("--launcher=") else (b if a == "--launcher" else None)
+            if v is not None and v.startswith(TEMP):
+                print("hf-tmp " + v); sys.exit(0)
+    if cmd == "launchctl" and args and args[0] in ("load", "bootstrap"):
+        rest, paths, i = args[1:], [], 0
+        while i < len(rest):
+            a = rest[i]
+            if a in ("-S", "-D"): i += 2; continue
+            if a.startswith("-"): i += 1; continue
+            paths.append(a); i += 1
+        if args[0] == "bootstrap" and paths: paths = paths[1:]
+        for p in paths:
+            if not plist_ok(p):
+                print("plist " + p); sys.exit(0)
+' 2>/dev/null)"
+  case "$_vss_hit" in
+    tab)
+      deny "TABS ARE RETIRED — kitty tab launch refused. Operator rule: NO kitty tabs, ever; every OS window is fullscreen on its own Space, with at most 4 vertical split panes. On 2026-10-18, 22 agent fires became hidden tabs in one OS window and 13 of them were dead shells nobody could see (docs/research/lr-wake-incident-2026-10-18/REPORT.md RC3). Place a pane with handoff-fire (its default split) or scripts/lib/pane-placement.sh (cc_place_pane), which splits into a window with room or opens a new fullscreen OS window." ;;
+    hf-tab)
+      deny "handoff-fire --tab refused — kitty tabs are retired (operator rule: no tabs, every OS window fullscreen on its own Space, at most 4 panes). Fire with --split-right when your own OS window has fewer than 4 panes, else --window --surface-reason \"operator rule: no tabs, <=4 panes\". The --tab doctrine is what turned the 2026-10-18 rescue loop into 22 hidden tabs (docs/research/lr-wake-incident-2026-10-18/REPORT.md RC3)." ;;
+    hf-tmp\ *)
+      deny "handoff-fire --launcher ${_vss_hit#hf-tmp } refused — a launcher written to a temp directory is a hand-built recovery outside the rails. On 2026-10-18 hand-written /tmp/lr-rescue/resume-*.sh launchers fired 16 rescue panes that the capacity gate then refused, leaving 13 dead shells (REPORT RC2, RC7). Rescue a stranded session with \`lr-fleet.sh --one <sid>\` or \`cc-lr recover <sid>\`, which admit before they spawn and queue on a refusal." ;;
+    plist\ *)
+      deny "LaunchAgent load refused — ${_vss_hit#plist } is not a plist this repo ships (launchd/, launchd/staged/, scripts/limit-recover/, loaded from ~/Library/LaunchAgents or those dirs). On 2026-10-18 an agent-installed LaunchAgent (com.reso.drain-to-next3) placed 11 move batches and 30+ rotates that nobody requested (REPORT §5 Q9). Loading a LaunchAgent is an activation the operator owns: add the plist to the repo's launchd/ and hand the operator the load command." ;;
+  esac
 fi
 
 # (Layer-3 #9 writer-lock guard removed 2026-06-03 — always-worktree isolation makes it a
