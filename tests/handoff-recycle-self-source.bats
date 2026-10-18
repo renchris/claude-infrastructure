@@ -189,11 +189,13 @@ no_side_effects() {
 @test "R2 CONTROL: a DEAD holder, or no claim at all, proceeds exactly as before" {
   mk_transplant; src_row
   recycle
-  [ "$status" -eq 0 ] && admitted || { echo "no claim: $output"; false; }
+  [ "$status" -eq 0 ] || { echo "no claim: rc=$status $output"; false; }
+  admitted || { echo "no claim: $output"; false; }
   ( exit 0 ) & dead=$!; wait "$dead"
   mk_claim "$dead"
   recycle
-  [ "$status" -eq 0 ] && admitted || { echo "dead holder: $output"; false; }
+  [ "$status" -eq 0 ] || { echo "dead holder: rc=$status $output"; false; }
+  admitted || { echo "dead holder: $output"; false; }
 }
 
 @test "R2 kill switch: CC_RECYCLE_CLAIM_CHECK=off ignores a live foreign holder" {
