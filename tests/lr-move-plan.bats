@@ -143,6 +143,8 @@ nfiles() { local f n=0; for f in "$1"/*; do [ -e "$f" ] && n=$((n + 1)); done; p
   [ "$output" = "rc=0 " ]
   [ "$(nfiles "$LR_STATE_DIR/move/requests")" -eq 1 ]
   [ "$(jq -r .to_config_dir "$d/plan.json")" = "$HOME/.claude-secondary" ]
+  # The strict router check ranked the target, so admission may reuse that answer (LR_MOVE_ROUTE_REUSE_S).
+  jq -e '.router_ranked_epoch | type == "number"' "$d/plan.json" >/dev/null
   grep -q '^kickstart gui/' "$BATS_TEST_TMPDIR/launchctl.log"
   ! grep -q -- '-k' "$BATS_TEST_TMPDIR/launchctl.log"
 }

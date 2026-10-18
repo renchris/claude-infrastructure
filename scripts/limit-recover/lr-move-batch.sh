@@ -197,8 +197,24 @@ route_read() { # [$1=--fresh] → as above
   esac
   ROUTE_WHY="${ROUTE_WHY:-not ranked by the router}"; return 1
 }
-rrc=0; route_read || rrc=$?
-if [ "$rrc" -ne 0 ]; then rrc=0; route_read --fresh || rrc=$?; fi
+# REUSE cc-lr move's ANSWER. Its strict router check ranked the target moments before it wrote the plan
+# and recorded when (router_ranked_epoch). This read took 5-132 s, ~323 s with its --fresh retry
+# (G §2.1), inside the section every queued batch waits on. Within LR_MOVE_ROUTE_REUSE_S (120) the
+# answer stands; the CLOSE re-read below still asks afresh. Kill switch LR_MOVE_ROUTE_REUSE_S=0.
+rrc=-1
+rre="$(jq -r '.router_ranked_epoch // empty | tostring' "$PLAN" 2>/dev/null)"
+reuse="${LR_MOVE_ROUTE_REUSE_S:-120}"; case "$reuse" in ''|*[!0-9]*) reuse=120 ;; esac
+case "$rre" in
+  ''|*[!0-9]*) ;;
+  *) rage=$(( $(date +%s) - rre ))
+     if [ "$reuse" -gt 0 ] && [ "$rage" -ge 0 ] && [ "$rage" -lt "$reuse" ]; then
+       rrc=0; ROUTE_WHY="ranked by cc-lr move ${rage}s ago"
+     fi ;;
+esac
+if [ "$rrc" -lt 0 ]; then
+  rrc=0; route_read || rrc=$?
+  if [ "$rrc" -ne 0 ]; then rrc=0; route_read --fresh || rrc=$?; fi
+fi
 AUTH=ok
 case "$rrc" in
   0) ;;

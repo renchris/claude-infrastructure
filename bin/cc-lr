@@ -1571,8 +1571,14 @@ cmd_move() {
   # THE ROUTER, STRICT: an excluded target refuses; one the router cannot vouch for refuses unless
   # the operator said --target-unverified. The batch runner asks again at admit; this is the
   # early, cheap answer so nothing is written for a batch that cannot be admitted.
+  # The batch reuses this answer at admit (router_ranked_epoch, lr-move-batch.sh) instead of a second
+  # 5-323 s read. Recorded only where rc 1 can mean nothing but "ranked": the check strict and on.
+  # The epoch is taken BEFORE the read, so its age is never understated.
+  local rt0 ranked_at=null
+  rt0="$(date +%s)"
   urc=0; unroute="$(cl_target_unroutable "$to" --strict)" || urc=$?
   [ "$urc" -ne 0 ] || hint="$(cl_relogin_hint "$to" "$unroute")"
+  if [ "$urc" -eq 1 ] && [ "${CC_LR_TARGET_ROUTABLE:-on}" != off ] && [ "${CC_LR_STRICT_ROUTE:-on}" != off ]; then ranked_at="$rt0"; fi
   if [ "$dry" -eq 1 ]; then
     printf '%s\n' "$rows" | cl_move_table "$from" "$to" "DRY RUN: nothing was written or typed"
     cl_bounds_line "$slots"
@@ -1596,8 +1602,8 @@ cmd_move() {
   ( umask 077; mkdir -p "$bdir/intent" "$(lr_move_state)/move/requests" ) || cl_die "cannot create $bdir; nothing was written" 2
   printf '%s\n' "$rows" | cl_move_rows_json | jq -c --arg b "$batch" --arg from "$from" --arg to "$to" --arg tcfg "${CC_ACCT_DIR:-}" \
       --argjson until "$until_s" --arg slots "$slots" --arg by "${by:-?}" --argjson unver "$unver" --argjson ts "$now" \
-      --arg rqp "$by" --arg rqs "$(cl_requester_sid)" \
-      '{batch:$b, from:$from, to:$to, to_config_dir:$tcfg, until_idle_s:$until, requested_by:$by, requester_pane:$rqp, requester_sid:$rqs, target_unverified:$unver, ts:$ts, rows:.}
+      --arg rqp "$by" --arg rqs "$(cl_requester_sid)" --argjson rre "$ranked_at" \
+      '{batch:$b, from:$from, to:$to, to_config_dir:$tcfg, until_idle_s:$until, requested_by:$by, requester_pane:$rqp, requester_sid:$rqs, target_unverified:$unver, ts:$ts, router_ranked_epoch:$rre, rows:.}
        + (if $slots != "" then {slots:($slots | tonumber)} else {} end)' > "$bdir/plan.json.$$.tmp" \
     && mv -f "$bdir/plan.json.$$.tmp" "$bdir/plan.json" || cl_die "cannot write $bdir/plan.json; nothing was queued" 2
   # ONE INTENT PER SESSION, mode 0600 (lr-intent.sh checks owner, mode, path, binding and expiry).

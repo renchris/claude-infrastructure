@@ -173,3 +173,38 @@ hold_admit_lock_quiet() { # a live holder that has NOT written the lock yet (it 
   run jq -r '"\(.admitted) \(.target_auth) \(.reason)"' "$BDIR/admit.json"
   [ "$output" = "true ok router: ranked" ] || { echo "$output"; false; }
 }
+
+# R. `cc-lr move` has just ranked the target (its strict router check) and records when, as the plan's
+# router_ranked_epoch. The admit read took 5-132 s, 323 s with its --fresh retry (G §2.1): inside
+# LR_MOVE_ROUTE_REUSE_S (120) admission reuses the answer and asks nothing. The close-time --fresh
+# re-read is unchanged; LR_MOVE_AUTH_RECHECK=off here so the log counts admission alone.
+ranked_ago() { # $1=seconds since cc-lr move ranked the target
+  jq -c --argjson e "$(( $(date +%s) - $1 ))" '.router_ranked_epoch = $e' "$BDIR/plan.json" > "$BDIR/plan.json.t" && mv "$BDIR/plan.json.t" "$BDIR/plan.json"
+}
+
+@test "[RED] R: a plan ranked by cc-lr move 30 s ago is admitted without a router read, and says so" {
+  export LR_MOVE_AUTH_RECHECK=off
+  ranked_ago 30
+  batch
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(grep -c . "$RANK_LOG" || true)" -eq 0 ] || { cat "$RANK_LOG"; false; }
+  run jq -r '"\(.admitted) \(.target_auth) \(.reason)"' "$BDIR/admit.json"
+  [[ "$output" == "true ok router: ranked by cc-lr move "*"s ago" ]] || { echo "$output"; false; }
+}
+
+@test "R: a ranking 300 s old is stale: admission reads the router" {
+  export LR_MOVE_AUTH_RECHECK=off
+  ranked_ago 300
+  batch
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(grep -c . "$RANK_LOG" || true)" -eq 1 ] || { cat "$RANK_LOG"; false; }
+  [ "$(jq -r .reason "$BDIR/admit.json")" = "router: ranked" ] || { cat "$BDIR/admit.json"; false; }
+}
+
+@test "R: kill switch LR_MOVE_ROUTE_REUSE_S=0 reads the router even for a fresh ranking" {
+  export LR_MOVE_AUTH_RECHECK=off LR_MOVE_ROUTE_REUSE_S=0
+  ranked_ago 5
+  batch
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(grep -c . "$RANK_LOG" || true)" -eq 1 ] || { cat "$RANK_LOG"; false; }
+}
