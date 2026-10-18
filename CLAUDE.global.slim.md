@@ -53,7 +53,7 @@ Plan/design/roadmap docs accumulate decisions across sessions → INTEGRATE neve
 
 ## Browser automation
 
-Browser automation (navigate, click, fill, screenshot, extract) uses the `agent-browser` CLI (agent-browser skill), not Playwright. BrowserMCP is retired, and no `mcp__browsermcp__*` tools exist. When a task needs an MCP tool surface, attach `chrome-devtools-mcp --browserUrl` to a running Chrome (dia-agent and autonomous-authenticated-web-access skills) rather than starting a browser server for each session. For setup, troubleshooting, or a "No such tool available" error on a browser tool, see the browsermcp skill; it also indexes the react-best-practices and vercel-design-guidelines knowledge skills.
+Logged-in or bot-protected pages: read the agent's own window in the operator's Dia via Accessibility (`cc-dia-act`, dia-agent skill). Click and type only through it, on hosts he listed, each after a supervised first run, via normal pages; stop at the first rejection; other sites stay read-only. Never disguise input: no simulated mouse paths, no randomized typing, no hiding local listeners from a site's scan. Public no-login pages: `agent-browser` CLI (agent-browser skill), not Playwright; BrowserMCP is retired. MCP: `chrome-devtools-mcp --browserUrl`. Missing browser tool: browsermcp skill.
 
 ## Personal message history
 

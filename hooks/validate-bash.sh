@@ -1765,6 +1765,25 @@ PY
 fi
 # ── PERMHARVEST-APPLY END ───────────────────────────────────────────────────────────────────────
 
+# ── DIA-ACT-OPERATOR-FILES BEGIN ────────────────────────────────────────────────────────────────
+# ~/.config/cc-dia-act/ is the OPERATOR's: `allow-hosts` is his list of sites where agents may click
+# and type in his real Dia (decision a9b998025419, 2026-10-17), `supervised/` records the first run
+# he watched per host, `cooldown/` the 24 h bot-wall markers. bin/cc-dia-act reads all three and
+# writes only the last two, from inside its own process. So an agent's Bash call has no reason to
+# name that directory at all, and `cc-dia-act allow|disallow` is his command, run from `!` or a
+# terminal — a `!` command never reaches this PreToolUse hook, which is what lets the same line be
+# refused to the agent and work for him.
+# The predicate reads the quote-stripped copy (pha_flatten, above), so quoting cannot split the
+# literals; it over-blocks a mere MENTION (an echo, a commit -m), which is the safe direction.
+# RESIDUE, stated: a `cd` into ~/.config followed by a relative path, or a script written to disk and
+# then run, is out of reach of a text gate. The Write/Edit half is in hooks/check-edit-boundary.sh.
+pha_flatten "$CMD"
+if [[ "$PHA_FLAT" == *.config/cc-dia-act* || "$PHA_FLAT" == *.config//cc-dia-act* ]] \
+   || [[ "$PHA_FLAT" =~ cc-dia-act[[:space:]]+(allow|disallow)([[:space:]]|$) ]]; then
+  deny "cc-dia-act operator files blocked — ~/.config/cc-dia-act/ (the allow-hosts list, supervised-run records and bot-wall cooldowns) is the OPERATOR's, and 'cc-dia-act allow|disallow' is his command, not yours. To see the state, run 'cc-dia-act status' (read-only). To get a host listed, print the exact line for him to run from ! or a terminal, e.g. 'cc-dia-act allow example.gov', and stop; never edit, delete or recreate those files, and never clear a cooldown — a cooldown means the site rejected an agent, and the next request can extend the block. If you were only quoting the path, leave it out of the command line."
+fi
+# ── DIA-ACT-OPERATOR-FILES END ──────────────────────────────────────────────────────────────────
+
 # ── Warn (ask): destructive but sometimes intentional ────────────────
 
 # ── GIT-OWNERSHIP BEGIN ─────────────────────────────────────────────────────────────────────────

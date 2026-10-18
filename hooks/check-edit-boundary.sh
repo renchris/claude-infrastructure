@@ -117,6 +117,23 @@ if command -v cc_worker_claim_admit >/dev/null 2>&1; then
     }
 fi
 
+# ── OPERATOR-OWNED: ~/.config/cc-dia-act/ (decision a9b998025419, 2026-10-17) ────────────────
+# The operator's list of hosts where agents may click and type in his real Dia, plus the
+# supervised-run records and bot-wall cooldowns bin/cc-dia-act writes from inside its own process.
+# No agent Write/Edit may touch it, boundary or not. The Bash half is in hooks/validate-bash.sh.
+if command -v jq >/dev/null 2>&1; then
+  _ceb_fp="$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)"
+  case "$_ceb_fp" in \~/*) _ceb_fp="$HOME/${_ceb_fp#\~/}" ;; esac
+  _ceb_real="$(cd "$(dirname "$_ceb_fp")" 2>/dev/null && pwd -P)/$(basename "$_ceb_fp")"
+  _ceb_home_real="$(cd "$HOME" 2>/dev/null && pwd -P)"
+  case "$_ceb_fp|$_ceb_real" in
+    "$HOME/.config/cc-dia-act"*|*"|$_ceb_home_real/.config/cc-dia-act"*)
+      jq -n '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny",
+        permissionDecisionReason: "[operator-owned] ~/.config/cc-dia-act/ holds the operator'"'"'s allow-hosts list, supervised-run records and bot-wall cooldowns for cc-dia-act. Agents never write it. Read the state with `cc-dia-act status`; to get a host listed, print `cc-dia-act allow <host>` for the operator to run and stop."}}'
+      exit 0 ;;
+  esac
+fi
+
 # No state file = no boundary active, allow everything
 [ ! -f "$STATE_FILE" ] && exit 0
 

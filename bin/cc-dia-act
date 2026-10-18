@@ -1,0 +1,347 @@
+#!/bin/bash
+# cc-dia-act — the agent's OWN window in the operator's real Dia: read it on any site, act in it only
+# on hosts the operator listed. Operator ruling 2026-10-17 (decision a9b998025419, option B widened).
+#
+#   cc-dia-act open <url>                                  open the agent's own window; prints its id
+#   cc-dia-act read     --window <id>                      page text (any host; read-only)
+#   cc-dia-act fields   --window <id>                      form controls, links, buttons: index | role | label | value
+#   cc-dia-act wait-for --window <id> "<text>" [--timeout S] [--interval S]
+#   cc-dia-act click    --window <id> (--index N | --text "<label>" [--nth K]) [--supervised] [--settle S]
+#   cc-dia-act fill     --window <id> --index N "<value>"                       [--supervised] [--settle S]
+#   cc-dia-act press    --window <id> --index N <return|tab|escape|space|up|down|left|right> [...]
+#   cc-dia-act close    --window <id>
+#   cc-dia-act status                                      operator list, supervised records, cooldowns
+#   cc-dia-act build                                       compile the Accessibility helper
+#   cc-dia-act allow <host>... | disallow <host>...        OPERATOR ONLY (validate-bash.sh denies agents)
+#
+# GATES, in order, before any click, fill or press (each refusal sends nothing to the page):
+#   the window was opened by cc-dia-act (exit 6) · Dia is running, never launched (4) · Accessibility
+#   granted (11) · no cooldown on the host (12) · host on ~/.config/cc-dia-act/allow-hosts (9) · a
+#   supervised first run is on record for the host, or this run is --supervised (10) · the operator
+#   has been idle 5 s and the screen is unlocked (13). The helper then raises the agent's window,
+#   proves it holds focus (7), acts with plain input, and restores the operator's front app and
+#   Dia window. After every act, read and wait-for, the page is checked for a bot wall: a match
+#   writes a 24 h per-host cooldown and exits 8. There is no retry anywhere.
+#
+# ~/.config/cc-dia-act/ is the OPERATOR's: the agent never writes it, and hooks/validate-bash.sh
+# plus hooks/check-edit-boundary.sh deny agent writes there. This tool writes only the supervised
+# record (on a --supervised run the operator watches) and cooldown markers.
+#
+# Other exits: 0 ok, 3 helper not built (run `cc-dia-act build`), 5 act failed, 64 usage,
+# 124 wait-for timed out.
+set -u
+
+SELF=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
+SELF_DIR=$(cd "$(dirname "$SELF")" && pwd)
+REPO_DIR=$(cd "$SELF_DIR/.." && pwd)
+SRC="$REPO_DIR/skills/dia-agent/cc-dia-act-ax.swift"
+CFG_DIR="$HOME/.config/cc-dia-act"
+ALLOW="$CFG_DIR/allow-hosts"
+SUP_DIR="$CFG_DIR/supervised"
+COOL_DIR="$CFG_DIR/cooldown"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/cc-dia-act/windows"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cc-dia-act"
+OSA=${CC_DIA_ACT_OSASCRIPT:-/usr/bin/osascript}
+PGREP=${DIA_JS_PGREP:-/usr/bin/pgrep}
+COOLDOWN_S=86400
+MIN_IDLE=5
+DIA_ID=company.thebrowser.dia
+
+say() { printf 'cc-dia-act: %s\n' "$*" >&2; }
+fail() { local rc=$1; shift; say "$*"; exit "$rc"; }
+usage() { sed -n '4,15p' "$SELF" | sed 's/^# \{0,1\}//' >&2; exit 64; }
+
+src_sha() { /usr/bin/shasum -a 256 "$SRC" | cut -c1-12; }
+helper_path() {
+  if [ -n "${CC_DIA_ACT_AX:-}" ]; then printf '%s' "$CC_DIA_ACT_AX"; return; fi
+  printf '%s/%s/cc-dia-act-ax' "$CACHE_DIR" "$(src_sha)"
+}
+AX=""
+need_helper() {
+  AX=$(helper_path)
+  [ -x "$AX" ] || fail 3 "NOT_BUILT: no helper for the current source at $AX; run: cc-dia-act build"
+}
+
+# host_of URL — lowercase host; file:// URLs are the pseudo-host "file".
+host_of() {
+  local u=$1 h
+  case "$u" in
+    file:*) printf 'file'; return ;;
+    *://*) h=${u#*://} ;;
+    *) return ;;
+  esac
+  h=${h%%/*}; h=${h%%\?*}; h=${h%%#*}; h=${h##*@}; h=${h%%:*}
+  printf '%s' "$h" | tr '[:upper:]' '[:lower:]'
+}
+valid_host() { case "$1" in file) return 0 ;; ''|*[!a-z0-9.-]*|.*|*.) return 1 ;; esac; return 0; }
+
+# wall_line — reads page text (URL first) on stdin; prints the first bot-wall line, exit 0 if found.
+# F5 ASM ("The requested URL was rejected", "Request Rejected", support ID), Akamai ("Access
+# Denied" page), Cloudflare challenge, PerimeterX press-and-hold.
+wall_line() {
+  grep -m1 -E \
+    -e 'The requested URL was rejected' -e 'Request Rejected' -e '[Yy]our support ID is' \
+    -e '^[[:space:]]*Access Denied[[:space:]]*$' -e "You don't have permission to access" \
+    -e 'Just a moment\.\.\.' -e 'Checking your browser before accessing' -e 'Verify you are human' \
+    -e 'needs to review the security of your connection' -e 'Attention Required! \| Cloudflare' \
+    -e '/cdn-cgi/challenge-platform' -e '__cf_chl' -e 'Press & Hold'
+}
+
+cooldown_active() {   # host — exit 0 and print the marker while it is live
+  local f="$COOL_DIR/$1" until now
+  [ -f "$f" ] || return 1
+  until=$(sed -n 's/^until=\([0-9][0-9]*\).*/\1/p' "$f" | head -1)
+  now=$(date +%s)
+  [ -n "$until" ] && [ "$now" -lt "$until" ] || return 1
+  cat "$f"
+}
+write_cooldown() {    # host line
+  [ -n "$1" ] || return 0
+  mkdir -p "$COOL_DIR"
+  printf 'until=%s host=%s at=%s line=%s\n' "$(( $(date +%s) + COOLDOWN_S ))" "$1" \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2" > "$COOL_DIR/$1"
+}
+host_listed() {
+  [ -f "$ALLOW" ] || return 1
+  sed -e 's/#.*//' -e 's/[[:space:]]//g' "$ALLOW" | tr '[:upper:]' '[:lower:]' | grep -qxF "$1"
+}
+
+# The operator's Dia pid, through cc-dia-js (which excludes the clean-profile launcher). Refuse
+# when more than one Dia runs: AppleScript could address either.
+DIA_PID=""
+need_dia() {
+  local line n
+  n=$("$PGREP" -x Dia 2>/dev/null | wc -l | tr -d ' ')
+  [ "${n:-0}" -ge 1 ] || fail 4 "NOT_RUNNING: Dia is not running; cc-dia-act never launches it"
+  [ "$n" -eq 1 ] || fail 6 "TARGET_AMBIGUOUS: $n Dia processes; refusing while the clean-profile launcher runs"
+  line=$("$SELF_DIR/cc-dia-js" status)
+  case "$line" in DIA_JS=ON*|DIA_JS=OFF*) ;; *) fail 6 "TARGET_AMBIGUOUS: cc-dia-js says: $line" ;; esac
+  DIA_PID=$(printf '%s' "$line" | sed -n 's/.* pid=\([0-9][0-9]*\).*/\1/p')
+  [ -n "$DIA_PID" ] || fail 6 "TARGET_AMBIGUOUS: no pid in: $line"
+}
+need_grant() { "$AX" trusted || fail 11 "NO_GRANT: the app hosting this session has no Accessibility grant"; }
+
+# Parse --window and the rest; the window must be one cc-dia-act opened.
+WIN=""; INDEX=""; TEXT=""; NTH=""; SUPERVISED=0; SETTLE=2; TIMEOUT=300; INTERVAL=10; POS=()
+parse() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --window) WIN=${2:-}; shift ;;
+      --index) INDEX=${2:-}; shift ;;
+      --text) TEXT=${2:-}; shift ;;
+      --nth) NTH=${2:-}; shift ;;
+      --supervised) SUPERVISED=1 ;;
+      --settle) SETTLE=${2:-}; shift ;;
+      --timeout) TIMEOUT=${2:-}; shift ;;
+      --interval) INTERVAL=${2:-}; shift ;;
+      --*) usage ;;
+      *) POS+=("$1") ;;
+    esac
+    shift
+  done
+  case "$WIN" in ''|*[!A-Za-z0-9-]*) fail 64 "--window <id> is required (the id cc-dia-act open printed)" ;; esac
+  [ "${#WIN}" -le 64 ] || fail 64 "window id too long"
+  [ -f "$STATE_DIR/$WIN" ] || fail 6 "NOT_OURS: window $WIN was not opened by cc-dia-act; it never reads or touches another window"
+  for n in "$SETTLE" "$TIMEOUT" "$INTERVAL" ${INDEX:+"$INDEX"} ${NTH:+"$NTH"}; do
+    case "$n" in ''|*[!0-9]*) fail 64 "numeric option expected, got '$n'" ;; esac
+  done
+}
+IDENT() { printf 'bigBrowserWindow_%s' "$WIN"; }
+
+# read_page — page text with the URL as its first line; exits 8 (and writes the cooldown) on a wall.
+PAGE=""; URL=""
+read_page() {
+  local rc
+  URL=$("$AX" url --pid "$DIA_PID" --ident "$(IDENT)") || { rc=$?; fail "$rc" "could not read the window's URL"; }
+  PAGE=$("$AX" read --pid "$DIA_PID" --ident "$(IDENT)") || { rc=$?; fail "$rc" "could not read the window"; }
+}
+check_wall() {   # [extra host] — after reading
+  local line h
+  line=$(printf '%s\n%s\n' "$URL" "$PAGE" | wall_line) || return 0
+  h=$(host_of "$URL")
+  write_cooldown "$h" "$line"
+  [ -n "${1:-}" ] && [ "$1" != "$h" ] && write_cooldown "$1" "$line"
+  fail 8 "BOT_WALL on ${h:-?}: '$line' — stop here; acts on this host are refused for 24 h (marker $COOL_DIR/${h:-?}). Do not retry, reload or probe the site; tell the operator."
+}
+
+cmd_open() {
+  local url=${1:-} h idle saved front diawin id
+  [ $# -eq 1 ] || usage
+  case "$url" in http://*|https://*|file://*) ;; *) fail 64 "open needs an http(s):// or file:// URL" ;; esac
+  case "$url" in *\"*|*\\*) fail 64 "URL may not contain quotes or backslashes" ;; esac
+  h=$(host_of "$url")
+  cooldown_active "$h" >/dev/null && fail 12 "COOLDOWN: $h hit a bot wall; no navigation until $(cooldown_active "$h")"
+  need_helper; need_dia; need_grant
+  idle=$("$AX" idle)
+  case "$idle" in *locked=1*) fail 13 "OPERATOR_ACTIVE: screen is locked" ;; esac
+  [ "$(printf '%s' "$idle" | sed -n 's/^idle_s=\([0-9]*\).*/\1/p')" -ge "$MIN_IDLE" ] 2>/dev/null \
+    || fail 13 "OPERATOR_ACTIVE: operator input within ${MIN_IDLE}s ($idle); try again shortly"
+  saved=$("$AX" focus-save --pid "$DIA_PID")
+  front=$(printf '%s' "$saved" | sed -n 's/^front_pid=\([-0-9]*\).*/\1/p')
+  diawin=$(printf '%s' "$saved" | sed -n 's/.* dia_window=\(.*\)$/\1/p')
+  id=$("$OSA" -e "if application id \"$DIA_ID\" is running then
+tell application id \"$DIA_ID\"
+set w to make new window
+set URL of active tab of w to \"$url\"
+return id of w
+end tell
+end if" 2>&1) || fail 5 "open failed: $id"
+  "$AX" focus-restore --pid "$DIA_PID" --front "${front:--1}" --dia-window "${diawin:--}" || true
+  case "$id" in ''|*[!A-Za-z0-9-]*) fail 5 "open returned no usable window id: '$id'" ;; esac
+  mkdir -p "$STATE_DIR"
+  printf 'opened=%s url=%s ppid=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$url" "$PPID" > "$STATE_DIR/$id"
+  printf '%s\n' "$id"
+}
+
+cmd_read() {
+  parse "$@"; need_helper; need_dia; need_grant
+  read_page
+  printf '%s\n' "$PAGE"
+  check_wall
+}
+
+cmd_fields() {
+  parse "$@"; need_helper; need_dia; need_grant
+  read_page; check_wall
+  "$AX" fields --pid "$DIA_PID" --ident "$(IDENT)"
+}
+
+cmd_wait_for() {
+  local deadline
+  parse "$@"
+  [ "${#POS[@]}" -eq 1 ] && [ -n "${POS[0]}" ] || fail 64 'wait-for needs one "<text>"'
+  need_helper; need_dia; need_grant
+  deadline=$(( $(date +%s) + TIMEOUT ))
+  while :; do
+    read_page; check_wall
+    if printf '%s\n' "$PAGE" | grep -qF -- "${POS[0]}"; then
+      printf 'found: %s\n' "${POS[0]}"; return 0
+    fi
+    [ "$(date +%s)" -lt "$deadline" ] || fail 124 "TIMEOUT: '${POS[0]}' not on the page after ${TIMEOUT}s"
+    sleep "$INTERVAL"
+  done
+}
+
+cmd_act() {   # click|fill|press
+  local act=$1 h rc out
+  shift
+  parse "$@"
+  case "$act" in
+    click) [ -n "$INDEX" ] || [ -n "$TEXT" ] || fail 64 "click needs --index N or --text <label>"
+           [ "${#POS[@]}" -eq 0 ] || usage ;;
+    fill)  [ -n "$INDEX" ] && [ "${#POS[@]}" -eq 1 ] || fail 64 'fill needs --index N "<value>"' ;;
+    press) [ -n "$INDEX" ] && [ "${#POS[@]}" -eq 1 ] || fail 64 'press needs --index N <key>' ;;
+  esac
+  need_helper; need_dia; need_grant
+  URL=$("$AX" url --pid "$DIA_PID" --ident "$(IDENT)") || { rc=$?; fail "$rc" "could not read the window's URL"; }
+  h=$(host_of "$URL")
+  [ -n "$h" ] || fail 9 "HOST_NOT_LISTED: the window has no host yet ($URL)"
+  out=$(cooldown_active "$h") && fail 12 "COOLDOWN: $h is in a 24 h bot-wall cooldown ($out); no acts until it expires"
+  host_listed "$h" || fail 9 "HOST_NOT_LISTED: $h is not on the operator's list ($ALLOW); this site is read-only"
+  if [ ! -f "$SUP_DIR/$h" ] && [ "$SUPERVISED" -eq 0 ]; then
+    fail 10 "NO_SUPERVISED_RECORD: $h has no supervised first run; the operator must watch one run with --supervised first"
+  fi
+  local idle
+  idle=$("$AX" idle)
+  case "$idle" in *locked=1*) fail 13 "OPERATOR_ACTIVE: screen is locked" ;; esac
+  [ "$(printf '%s' "$idle" | sed -n 's/^idle_s=\([0-9]*\).*/\1/p')" -ge "$MIN_IDLE" ] 2>/dev/null \
+    || fail 13 "OPERATOR_ACTIVE: operator input within ${MIN_IDLE}s ($idle); nothing sent"
+  local args=(--pid "$DIA_PID" --ident "$(IDENT)" --expect-host "$h" --min-idle "$MIN_IDLE")
+  [ -n "$INDEX" ] && args+=(--index "$INDEX")
+  [ -n "$TEXT" ] && args+=(--text "$TEXT")
+  [ -n "$NTH" ] && args+=(--nth "$NTH")
+  case "$act" in
+    fill) args+=(--value "${POS[0]}") ;;
+    press) args+=(--key "${POS[0]}") ;;
+  esac
+  out=$("$AX" "$act" "${args[@]}"); rc=$?
+  [ -n "$out" ] && printf '%s\n' "$out"
+  sleep "$SETTLE"
+  read_page; check_wall "$h"
+  [ "$rc" -eq 0 ] || fail "$rc" "$act did not complete (helper exit $rc)"
+  if [ "$SUPERVISED" -eq 1 ] && [ ! -f "$SUP_DIR/$h" ]; then
+    mkdir -p "$SUP_DIR"
+    printf 'at=%s act=%s url=%s ppid=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$act" "$URL" "$PPID" > "$SUP_DIR/$h"
+    say "supervised first run recorded for $h"
+  fi
+}
+
+cmd_close() {
+  local out
+  parse "$@"
+  out=$("$OSA" -e "if application id \"$DIA_ID\" is running then
+tell application id \"$DIA_ID\"
+repeat with w in windows
+if id of w is \"$WIN\" then close w
+end repeat
+end tell
+end if" 2>&1) || fail 5 "close failed: $out"
+  rm -f "$STATE_DIR/$WIN"
+  printf 'closed %s\n' "$WIN"
+}
+
+cmd_status() {
+  local f
+  printf 'allow-hosts (%s):\n' "$ALLOW"
+  if [ -f "$ALLOW" ]; then sed -e 's/#.*//' -e '/^[[:space:]]*$/d' -e 's/^/  /' "$ALLOW"; else printf '  (none; every site is read-only)\n'; fi
+  printf 'supervised first runs:\n'
+  for f in "$SUP_DIR"/*; do [ -f "$f" ] && printf '  %s %s\n' "${f##*/}" "$(cat "$f")"; done
+  printf 'cooldowns:\n'
+  for f in "$COOL_DIR"/*; do
+    [ -f "$f" ] || continue
+    if cooldown_active "${f##*/}" >/dev/null; then printf '  ACTIVE %s\n' "$(cat "$f")"; else printf '  expired %s\n' "$(cat "$f")"; fi
+  done
+  return 0
+}
+
+cmd_build() {
+  local sha out tmp
+  [ -f "$SRC" ] || fail 3 "source missing: $SRC"
+  sha=$(src_sha); out="$CACHE_DIR/$sha/cc-dia-act-ax"
+  if [ -x "$out" ]; then printf 'built %s (up to date)\n' "$out"; return 0; fi
+  mkdir -p "$CACHE_DIR/$sha"
+  tmp=$(mktemp "$CACHE_DIR/$sha/.build.XXXXXX") || fail 3 "mktemp failed"
+  if ! /usr/bin/swiftc -O "$SRC" -o "$tmp" 2>"$tmp.log"; then
+    say "build failed; see $tmp.log"; rm -f "$tmp"; exit 3
+  fi
+  mv -f "$tmp" "$out"; rm -f "$tmp.log"
+  printf 'built %s\n' "$out"
+}
+
+cmd_allow() {   # allow|disallow host...
+  local mode=$1 h tmp
+  shift
+  [ $# -ge 1 ] || usage
+  mkdir -p "$CFG_DIR"; touch "$ALLOW"
+  for h in "$@"; do
+    h=$(printf '%s' "$h" | tr '[:upper:]' '[:lower:]')
+    valid_host "$h" || fail 64 "not a host name: '$h'"
+    if [ "$mode" = allow ]; then
+      host_listed "$h" || printf '%s\n' "$h" >> "$ALLOW"
+      printf 'listed %s (acts still need one supervised first run)\n' "$h"
+    else
+      tmp=$(mktemp "$CFG_DIR/.allow.XXXXXX")
+      grep -vxF "$h" "$ALLOW" > "$tmp" || true
+      mv -f "$tmp" "$ALLOW"
+      rm -f "$SUP_DIR/$h"
+      printf 'removed %s\n' "$h"
+    fi
+  done
+}
+
+sub=${1:-}
+[ -n "$sub" ] || usage
+shift
+case "$sub" in
+  open) cmd_open "$@" ;;
+  read) cmd_read "$@" ;;
+  fields) cmd_fields "$@" ;;
+  wait-for) cmd_wait_for "$@" ;;
+  click|fill|press) cmd_act "$sub" "$@" ;;
+  close) cmd_close "$@" ;;
+  status) cmd_status ;;
+  build) cmd_build ;;
+  allow|disallow) cmd_allow "$sub" "$@" ;;
+  -h|--help|help) usage ;;
+  *) usage ;;
+esac
