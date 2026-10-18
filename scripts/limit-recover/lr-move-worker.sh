@@ -24,8 +24,9 @@
 # happens before lr-handoff is started. lr-handoff's own holds (probe, last read, dialog) all leave
 # the session alive in its pane and exit 6.
 #
-# Draft carry (W2d, 2026-10-18): a `draft` row's box is read; the recycle carries real text unsent
-# into the successor, and a pasted block keeps HELD:draft. LR_MOVE_CARRY_DRAFT=off holds them all.
+# Draft carry (W2d, 2026-10-18): a `draft` row waits until its box sits unchanged, clears junk, has
+# the recycle carry real text unsent into the successor; a pasted block keeps HELD:draft.
+# LR_MOVE_CARRY_DRAFT=off holds them all.
 # Kill switch LR_MOVE_LANE=off: the worker writes NOTMOVED and touches nothing.
 set -uo pipefail
 
@@ -187,10 +188,52 @@ mw_composer() { # → the box, space-stripped (cc_tui_composer's form); rc 1 unr
   # shellcheck source=/dev/null
   ( [ -z "$sock" ] || export CC_TERM_KITTY_TO="$sock"; . "$MW_TUI_LIB" >/dev/null 2>&1 && cc_tui_composer "$PANE" )
 }
+MW_INTENT_LIB="${LR_MOVE_INTENT_LIB:-$LR/../lib/composer-intent.sh}"
+# STALE, NOT JUST PRESENT. A box that changed within LR_MOVE_DRAFT_STALE_S (default 120 s) may be
+# someone typing, so the row waits here, holding no slot, and re-reads every LR_MOVE_DRAFT_POLL_S.
+# Nothing records when a box last changed, so the first read starts the clock (<sid>.draft under
+# the batch dir), and any change restarts it. The operator's HID idle time (lr_hid_idle_s) at or
+# past the same bound proves no keystroke reached ANY pane, so the box is stale at once: most
+# moved drafts sat for hours on a rejected account. A box still changing at LR_MOVE_DRAFT_WAIT_S
+# (default the batch's --until-idle, at least 600 s) is HELD:draft.
+# Stale junk (composer-intent.sh's classes: rail prompts, tokens, terminal replies, a stray
+# keystroke) is cleared with read-back (cc_tui_clear) and logged (composer_discard_note), then the
+# row moves with no carry.
 draft_gate() { # → returns with DRAFT_CARRY set (or not); finishes HELD:draft for a pasted block
-  local c
-  c="$(mw_composer)" || { ev draft "the box could not be read; the recycle's probe decides"; return 0; }
-  [ -n "$c" ] || { ev draft "the box is empty now; a plain move"; return 0; }
+  local c prev="" seen=0 now hid said="" stale wait deadline cls crc
+  stale="${LR_MOVE_DRAFT_STALE_S:-120}"; case "$stale" in ''|*[!0-9]*) stale=120 ;; esac
+  wait="${LR_MOVE_DRAFT_WAIT_S:-$(( ${UNTIL:-0} > 600 ? ${UNTIL:-0} : 600 ))}"; case "$wait" in ''|*[!0-9]*) wait=600 ;; esac
+  deadline=$(( $(date +%s) + wait ))
+  while :; do
+    c="$(mw_composer)" || { ev draft "the box could not be read; the recycle's probe decides"; return 0; }
+    [ -n "$c" ] || { ev draft "the box is empty now; a plain move"; return 0; }
+    now="$(date +%s)"
+    if [ "$c" != "$prev" ]; then
+      prev="$c"; seen="$now"
+      printf '%s\t%s\n' "$seen" "$c" > "$BDIR/$SID.draft" 2>/dev/null || true
+    fi
+    [ $(( now - seen )) -lt "$stale" ] || break
+    hid="$(lr_hid_idle_s 2>/dev/null || echo unreadable)"
+    case "$hid" in ''|*[!0-9]*) ;; *) [ "$hid" -lt "$stale" ] || break ;; esac
+    [ -n "$said" ] || { said=1; ev draft-wait "its box changed within ${stale}s (input idle ${hid}s); waiting until it sits unchanged that long, up to ${wait}s"; }
+    aborted && finish NOTMOVED "aborted while its draft was still changing; nothing touched"
+    intent_recheck
+    [ "$now" -lt "$deadline" ] \
+      || finish NOTMOVED "HELD:draft — its box was still changing after ${wait}s, so someone is typing in it; nothing touched"
+    sleep "${LR_MOVE_DRAFT_POLL_S:-10}"
+  done
+  # shellcheck source=/dev/null
+  if [ -f "$MW_INTENT_LIB" ] && cls="$( . "$MW_INTENT_LIB" && composer_unintended_class "$c")"; then
+    crc=0
+    # shellcheck source=/dev/null
+    ( . "$MW_TUI_LIB" >/dev/null 2>&1 && cc_tui_clear "$PANE" ) >/dev/null 2>&1 || crc=$?
+    [ "$crc" -eq 0 ] \
+      || finish NOTMOVED "HELD:draft — its box holds stale $cls text that could not be cleared (cc_tui_clear rc $crc); nothing else touched"
+    # shellcheck source=/dev/null
+    ( . "$MW_INTENT_LIB" && composer_discard_note "$PANE" "$cls" "$c" )
+    ev draft-discarded "stale $cls (${#c} chars) cleared with read-back; a plain move"
+    return 0
+  fi
   case "$c" in
     *'[Pastedtext#'[0-9]*)
       finish NOTMOVED "HELD:draft — its box holds a pasted block ([Pasted text #N]) whose content lives only in the session's memory, so clearing it would destroy it; nothing touched" ;;

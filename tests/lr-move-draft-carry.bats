@@ -147,6 +147,74 @@ res() { jq -r ".$1" "$BDIR/$SID.json"; }
   [ -f "$SRC/projects/-x/$SID.jsonl" ]
 }
 
+@test "2 [RED] worker: stale junk (a leaked terminal reply) is cleared and the row moves with no carry" {
+  worker_world
+  printf '_Ga=d,d=I,i=7110,q=225h\n' > "$BATS_TEST_TMPDIR/composer-$PANE"
+  worker
+  [ "$(res verdict)" = MOVED ] || { cat "$BDIR/$SID.json" "$BATS_TEST_TMPDIR/worker.out"; false; }
+  [ "$(cat "$BATS_TEST_TMPDIR/cleared.log")" = "$PANE" ]
+  [ "$(cat "$STUB_LOG/carry.log")" = "carry= wait= stale=" ] || { cat "$STUB_LOG/carry.log"; false; }
+  grep -q '"stage":"draft-discarded"' "$BDIR/$SID.events.jsonl"
+  grep -q 'class=terminal-reply' "$HOME/.claude/logs/composer-discarded.log"
+}
+
+# A box somebody is typing into: rewritten every 0.3 s, by rename so no read sees it empty.
+typing() {
+  ( i=0; f="$BATS_TEST_TMPDIR/composer-$PANE"
+    while :; do i=$((i + 1)); printf 'still typing %s\n' "$i" > "$f.t"; mv -f "$f.t" "$f"; sleep 0.3; done ) 3>&- &
+  MVF_PIDS="$MVF_PIDS $!"
+}
+wstart() {
+  bash "$LRD/lr-move-worker.sh" w1 "$SID" > "$BATS_TEST_TMPDIR/worker.out" 2>&1 3>&- &
+  WPID=$!
+  mkdir -p "$CLAIMS/$SID.active"
+  bash -c '. "$1/lr-lib.sh"; lr_claim_stamp "$2" "$3" "$4" lr-move-worker "$5"' _ "$LRD" "$CLAIMS/$SID.active" "$SID" "$WPID" "$PANE"
+}
+await_stage() { # <stage> → 0 once the worker logged it (bounded poll, load-tolerant)
+  local i=0
+  until grep -q "\"stage\":\"$1\"" "$BDIR/$SID.events.jsonl" 2>/dev/null; do
+    i=$((i + 1)); [ "$i" -lt 600 ] || { cat "$BDIR/$SID.events.jsonl" 2>/dev/null; return 1; }
+    sleep 0.2
+  done
+}
+
+@test "3 [RED] worker: a box that changed seconds ago waits, never moved and never HELD while it is still changing" {
+  worker_world
+  export LR_HID_IDLE_S=10 LR_MOVE_DRAFT_POLL_S=0.2
+  typing
+  wstart
+  await_stage draft-wait
+  [ ! -e "$BDIR/$SID.json" ] || { cat "$BDIR/$SID.json"; false; }
+  [ ! -s "$STUB_LOG/typers.log" ]
+  : > "$BDIR/abort"
+  WRC=0; wait "$WPID" || WRC=$?
+  [ "$(res verdict)" = NOTMOVED ]
+  [[ "$(res reason)" == "aborted while its draft was still changing"* ]] || { res reason; false; }
+  [ ! -s "$STUB_LOG/typers.log" ]
+  [ ! -e "$BATS_TEST_TMPDIR/cleared.log" ]
+}
+
+@test "3b worker: a box still changing at LR_MOVE_DRAFT_WAIT_S is HELD:draft, nothing touched" {
+  worker_world
+  export LR_HID_IDLE_S=10 LR_MOVE_DRAFT_POLL_S=0.2 LR_MOVE_DRAFT_WAIT_S=2
+  typing
+  wstart
+  WRC=0; wait "$WPID" || WRC=$?
+  [ "$(res verdict)" = NOTMOVED ]
+  [[ "$(res reason)" == "HELD:draft — its box was still changing after 2s"* ]] || { res reason; false; }
+  [ ! -s "$STUB_LOG/typers.log" ]
+}
+
+@test "3c [RED] worker: input not idle, but the box sits unchanged LR_MOVE_DRAFT_STALE_S, so it moves with the carry" {
+  worker_world
+  export LR_HID_IDLE_S=0 LR_MOVE_DRAFT_POLL_S=0.2 LR_MOVE_DRAFT_STALE_S=1
+  printf 'please also check the reaper\n' > "$BATS_TEST_TMPDIR/composer-$PANE"
+  worker
+  [ "$(res verdict)" = MOVED ] || { cat "$BDIR/$SID.json" "$BATS_TEST_TMPDIR/worker.out"; false; }
+  grep -q '"stage":"draft-wait"' "$BDIR/$SID.events.jsonl"
+  [ "$(cat "$STUB_LOG/carry.log")" = "carry=1 wait=0 stale=1" ] || { cat "$STUB_LOG/carry.log"; false; }
+}
+
 @test "5b worker: LR_MOVE_CARRY_DRAFT=off passes no opt-in, so the precheck holds the draft as before" {
   worker_world
   printf 'please also check the reaper\n' > "$BATS_TEST_TMPDIR/composer-$PANE"
