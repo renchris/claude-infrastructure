@@ -323,6 +323,22 @@ cl_this_pane() {
 # these only for cc-lr-origin requests, never to mail the subject.
 cl_requester_sid() { printf '%s' "${CLAUDE_CODE_SESSION_ID:-}"; }
 
+# THE SELF-WAIT BUDGET SCALES WITH LOAD (W3 proof, docs/plans/LIMIT_RECOVER_SELF_INPLACE.md). A self
+# row moves only after two consecutive batch censuses call it at rest, and one census took ~11 min
+# at load 13/core (batch 20261018T131324Z-next3-next2-94791: NOTMOVED still-busy:move after 900s,
+# its one census had already said `move`). A flat 900 s therefore can never fit two of them on a
+# loaded box. 900 s × min(4, 1 + load/core ÷ 5): 900 on an idle box, 3240 at 13/core, 3600 at most.
+# CC_LR_MOVE_SELF_WAIT_S, when set, is the exact budget. Seam: CC_LR_LOAD_PER_CORE.
+cl_self_wait_s() {
+  if [ -n "${CC_LR_MOVE_SELF_WAIT_S:-}" ]; then printf '%s' "$CC_LR_MOVE_SELF_WAIT_S"; return 0; fi
+  local lpc="${CC_LR_LOAD_PER_CORE:-}"
+  if [ -z "$lpc" ]; then
+    lpc="$(awk -v l="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')" -v n="$(sysctl -n hw.ncpu 2>/dev/null)" \
+      'BEGIN { if (n + 0 > 0) printf "%.2f", l / n; else print 0 }')"
+  fi
+  awk -v l="$lpc" 'BEGIN { f = 1 + (l + 0) / 5; if (f > 4) f = 4; printf "%d", 900 * f }'
+}
+
 # ── what an "in flight" line owes its reader (lr-reliability D10, 2026-10-11) ────────────────────
 # "Verdicts arrive as mail; END THE TURN" promised mail that, for most daemon-run verdicts, reached
 # no inbox; and a request filed while a poller tick ran waited on that tick's exit, 25-48 min that
@@ -1567,7 +1583,10 @@ cmd_move() {
   # still held, not silently waited on.
   local selfsid
   selfsid="$(printf '%s\n' "$rows" | awk -F'\t' '$7 == "wait:self" { print $2; exit }')"
-  if [ -n "$selfsid" ] && [ "$until_s" -lt "${CC_LR_MOVE_SELF_WAIT_S:-900}" ]; then until_s="${CC_LR_MOVE_SELF_WAIT_S:-900}"; fi
+  if [ -n "$selfsid" ]; then
+    local selfwait; selfwait="$(cl_self_wait_s)"
+    [ "$until_s" -ge "$selfwait" ] || until_s="$selfwait"
+  fi
   # THE ROUTER, STRICT: an excluded target refuses; one the router cannot vouch for refuses unless
   # the operator said --target-unverified. The batch runner asks again at admit; this is the
   # early, cheap answer so nothing is written for a batch that cannot be admitted.
@@ -2038,7 +2057,7 @@ cmd_switch() {
         echo "cc-lr switch: auto picked $target (soonest weekly reset among accounts safe on both limits)" >&2
       fi
       echo "cc-lr switch: the reconciler is live and has no switch lane — handing this session to the move lane (cc-lr move), which waits for this turn to end"
-      local margs=(--sid "$sid" --to "$target" --until-idle "${CC_LR_MOVE_SELF_WAIT_S:-900}")
+      local margs=(--sid "$sid" --to "$target" --until-idle "$(cl_self_wait_s)")
       [ "$dry" -eq 1 ] && margs+=(--dry-run)
       LRU_SELF_SID="$sid" cmd_move "${margs[@]}"
       return $?

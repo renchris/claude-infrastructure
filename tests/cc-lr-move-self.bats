@@ -14,6 +14,8 @@
 #   · the holds still bind a self row: a live /goal is hold:goal-live, and the kill switch restores
 #     hold:self;
 #   · `rotate --list` shows the self row as a wait and names `cc-lr move --sid`.
+#   · the self-wait budget scales with load per core (two censuses must fit in it), and
+#     CC_LR_MOVE_SELF_WAIT_S stays the exact budget when set.
 #
 # Hermetic: the same seams as tests/lr-move-plan.bats (registry, stores, `ps` as fixtures);
 # launchctl and claude-accounts are recorders. Nothing can reach a live pane.
@@ -44,6 +46,7 @@ setup() {
   printf '#!/bin/bash\nprintf "next2 0.9\\nnext3 0.4\\n"\n' > "$CC_ACCOUNTS_BIN"; chmod +x "$CC_ACCOUNTS_BIN"
   export PATH="$STUBS:$PATH"
   export CC_LR_UPGRADE_BIN="$LRU" CC_PANE_ID=999 CC_LR_MOVE_POLL_S=0
+  export CC_LR_LOAD_PER_CORE=0   # the self-wait budget scales with load; pinned so this box's load never reaches it
   unset CLAUDE_CODE_SESSION_ID ITERM_SESSION_ID KITTY_WINDOW_ID CC_LR_MOVE_SELF_WAIT CC_LR_MOVE_SELF_WAIT_S CC_LR_MOVE_DEDUP
   BIN="/opt/cc/.claude-280/node_modules/.bin/claude"; LST="Tue Sep 22 06:47:13 2026"; N=0
   S1=aaaa0001-0000-4000-8000-000000000001
@@ -149,4 +152,21 @@ SH
   # RED before the fix: hold:self … cc-lr switch --target next2.
   [[ "$row" == *"wait:self"*"wait"*"next2"*"cc-lr move --sid $S1 --to next2"* ]] || { echo "$output"; false; }
   [ -z "$(moved_dir)" ]
+}
+
+@test "6 [RED] the self-wait budget scales with load: 3240 s at 13/core, capped at 3600, an explicit budget wins" {
+  sess 401 "$S1"
+  export LRU_SELF_SID="$S1"
+  # RED before the fix: a flat 900 s, which cannot hold two ~11 min censuses at 13/core
+  # (batch 20261018T131324Z-next3-next2-94791: NOTMOVED still-busy:move after 900s).
+  CC_LR_LOAD_PER_CORE=13 run bash "$CCLR" move --sid "$S1" --to next2 --wait 0
+  [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
+  [[ "$output" == *"(<= 3240s)"* ]] || { echo "$output"; false; }
+  CC_LR_LOAD_PER_CORE=40 run bash "$CCLR" move --sid "$S1" --to next2 --wait 0
+  [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
+  [[ "$output" == *"(<= 3600s)"* ]] || { echo "$output"; false; }
+  CC_LR_LOAD_PER_CORE=13 CC_LR_MOVE_SELF_WAIT_S=1200 run bash "$CCLR" move --sid "$S1" --to next2 --wait 0
+  [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
+  [[ "$output" == *"(<= 1200s)"* ]] || { echo "$output"; false; }
+  [ "$(jq -s -r '[.[].until_idle_s] | sort | map(tostring) | join(",")' "$LR_STATE_DIR"/move/*/plan.json)" = 1200,3240,3600 ]
 }
