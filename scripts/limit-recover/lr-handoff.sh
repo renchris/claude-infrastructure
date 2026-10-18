@@ -1978,8 +1978,24 @@ if [[ $IN_PLACE -eq 1 ]]; then
   LRH_RCY_ERR="$(mktemp "$(lrh_tmpdir)/lr-inplace-XXXXXX")" || LRH_RCY_ERR=/dev/null
   LRH_RCY_T0="$(date -u +%FT%TZ)"
   set +e
-  "$HF" "${RCY_ARGS[@]}" 2> >(tee "$LRH_RCY_ERR" >&2)
+  # THE TEE IS ASYNCHRONOUS, SO ITS FILE IS READ ONLY AFTER IT HAS DRAINED (race reported by
+  # lr-inplace-immediacy 2026-10-18: lr-handoff-flags cases 28-30 went red under load because the
+  # greps below read LRH_RCY_ERR before tee wrote the hold line, so a hold AFTER the confirm read
+  # as "stood down before any confirm" and an abort ran on top). Neither `wait` nor $! can reach the
+  # tee: /bin/bash 3.2 builds a substitution on an external command's redirect in the forked child,
+  # so the parent's $! is never set. The substitution therefore drops a marker once tee has exited,
+  # and the parent polls for it, bounded: the watcher's own output goes to its log (detach), so
+  # nothing else should hold the pipe, and the bound keeps a child that does from stalling this.
+  rm -f "$LRH_RCY_ERR.drained" 2>/dev/null || true
+  "$HF" "${RCY_ARGS[@]}" 2> >(tee "$LRH_RCY_ERR" >&2; : > "$LRH_RCY_ERR.drained")
   LRH_RCY_RC=$?
+  if [[ "$LRH_RCY_ERR" != /dev/null ]]; then
+    _lrh_n=0
+    while [[ ! -e "$LRH_RCY_ERR.drained" && $_lrh_n -lt $(( ${LRH_TEE_DRAIN_S:-15} * 10 )) ]]; do
+      /bin/sleep 0.1; _lrh_n=$((_lrh_n + 1))
+    done
+    rm -f "$LRH_RCY_ERR.drained" 2>/dev/null || true
+  fi
   set -e
   if [[ $LRH_RCY_RC -eq 0 ]]; then
     # THE SUCCESS LINE CLAIMS ONLY WHAT WAS AWAITED. Without --await (no source pane, or

@@ -341,6 +341,15 @@ ABORT='!! recycle ABORTED before /exit (held: draft): composer: operator draft t
   [[ "$output" == *"verdict=NOTMOVED"* ]] || { echo "$output"; false; }
   [[ "$output" != *"verdict=STRANDED"* ]] || { echo "$output"; false; }
 }
+@test "a SLOW tee still yields the hold verdict: the greps wait for the tee to drain, never read an empty file" {
+  # The tee runs in a process substitution, which the recycle call does not wait for. A tee that
+  # starts 2 s late reproduces, every time, what load did intermittently to the case above.
+  printf '#!/bin/bash\n/bin/sleep 2\nexec /usr/bin/tee "$@"\n' > "$STUB/tee"; chmod +x "$STUB/tee"
+  HF_RC=1 HF_ERR="$ABORT" fire
+  [ "$status" -eq 6 ] || { echo "status=$status $output"; false; }
+  [[ "$output" == *"verdict: HELD:draft"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"verdict=STRANDED"* ]] || { echo "$output"; false; }
+}
 # hf_recycle_hold's exit-readback form, held AFTER /exit was typed, says so instead of "ABORTED before
 # /exit" (recycle-failures-kitty REPORT.md fix 2); keyed on the old literal alone it fell to STRANDED.
 READBACK_HELD="!! recycle HELD after /exit was TYPED (held: exit-readback): the composer read back '<unreadable>', not '/exit' — no DELs sent: the composer could not be read, so the /exit we typed MAY STILL BE IN THE BOX — clear it before typing; residue receipt /r/31 lets the next recycle's composer gate scrub it — the /exit was NOT submitted (no Enter sent), watcher disarmed, pane lock released, unconfirm rc 0. The session stays alive. Re-run: x"
