@@ -237,8 +237,11 @@ echo $$ > "$LOCKD/pid"; _lstart_of $$ > "$LOCKD/lstart"
 # 2026-10-06, 629-820 s for 7 of 30 switch and upgrade requests. Ticks run p50 36 s, p90 256 s. So
 # every exit of the tick looks once more. lrp_move_kick claims by hard link, so a batch the first
 # look already started is never started twice. Signals keep the old handler: lock only.
+# The mid-tick drainer (lrp_move_drain_start, below) is stopped FIRST and waited for, so this last
+# look never races it and launchd's end-of-job cleanup never cuts it down between claim and start.
 # shellcheck disable=SC2329  # invoked by the EXIT trap two lines below
 lrp_tick_end() {
+  if declare -F lrp_move_drain_stop >/dev/null 2>&1; then lrp_move_drain_stop || true; fi
   if declare -F lrp_move_kick >/dev/null 2>&1; then lrp_move_kick || true; fi
   rm -rf "$LOCKD" 2>/dev/null || true
 }
@@ -355,7 +358,43 @@ lrp_move_kick() {
     fi
   done
 }
-lrp_move_kick
+
+# ── THE MID-TICK DRAIN (lr-inplace-immediacy, 2026-10-18) ─────────────────────────────────────────
+# The two looks above (top of the tick, and lrp_tick_end) left every request written in between to
+# wait for the END of the tick, and a tick is long exactly when the box is loaded and the operator is
+# moving sessions off a limit: 00:23:59Z → 01:50:07Z on 2026-10-18, six batches queued 68 s to 85 min,
+# four rows then refused intent-invalid because their intents expired in the queue
+# (docs/research/lr-inplace-immediacy-2026-10-18/REPORT.md). So the tick runs ONE drainer beside its
+# arms: every LR_MOVE_DRAIN_POLL_S (1 s) it looks at move/requests/ and, only when a request is there,
+# runs the same lrp_move_kick — the hard-link claim keeps a batch from ever starting twice.
+#   · it lives exactly as long as the tick's lock names this tick: a lock that was removed (the
+#     INT/TERM trap) or stolen ends it at its next look, and lrp_tick_end stops it and WAITS for it
+#     before its own last look, so nothing kills it between a claim and a start;
+#   · a background subshell of the tick, not a detached process: it carries the tick's launchd
+#     environment, it is never the requester's child, and it cannot outlive the job;
+#   · a dry-run tick starts none (its two DRY lines are what the dry run reports).
+# Kill switch LR_MOVE_DRAIN=off: the two looks only, as before.
+LRP_DRAIN_PID=""
+lrp_move_drain_start() {
+  [[ $DRY -eq 1 || "${LR_MOVE_DRAIN:-on}" == off ]] && return 0
+  local tick=$$ lockd="$LOCKD" q="${LR_STATE_DIR:-$STATE}/move/requests" every="${LR_MOVE_DRAIN_POLL_S:-1}"
+  (
+    trap - EXIT INT TERM
+    while [[ "$(cat "$lockd/pid" 2>/dev/null)" == "$tick" && ! -e "$lockd/drain.stop" ]]; do
+      if compgen -G "$q/*.json" >/dev/null 2>&1; then lrp_move_kick || true; fi
+      sleep "$every"
+    done
+  ) </dev/null &
+  LRP_DRAIN_PID=$!
+}
+# shellcheck disable=SC2329  # invoked from lrp_tick_end, the EXIT trap
+lrp_move_drain_stop() {
+  [[ -n "${LRP_DRAIN_PID:-}" ]] || return 0
+  : > "$LOCKD/drain.stop" 2>/dev/null || true
+  wait "$LRP_DRAIN_PID" 2>/dev/null || true
+  LRP_DRAIN_PID=""
+}
+lrp_move_kick; lrp_move_drain_start
 
 # ── FIRE CLAIM (closes the pgrep race) ─────────────────────────────────────────────────
 # The "already running" guard is `pgrep -f "resume <sid>"` — it looks for the claude CHILD.
