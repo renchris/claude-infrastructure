@@ -111,6 +111,18 @@ every 300 s: `orphan-agent-chrome` = launchd-parented `Google Chrome` main (no `
 Chrome is also launchd-parented but has no such profile, so it never matches. Pinned in
 `tests/cc-reaper.bats`. Pid 19780 is the first live candidate.
 
+**Allow rule (22:03 CDT).** The auto-mode classifier refused the agent editing `settings.json` itself
+([Self-Modification]), so the operator ran `/tmp/reaper-allow-rule.sh --confirm allow-reaper`, which
+added `Bash(cc-reaper garbage:*)` and its absolute-path form (backup beside the file).
+
+**The first dry run surfaced two things.** (1) Under this load the garbage arm mostly does not run: a
+sweep takes ~36 min, and at 02:10Z the arm's 30 s `ps` snapshot bound expired, so it was skipped (4
+such skips on record). Pid 19780 was therefore still alive. (2) Had it run, it would have TERMed
+`lr-move-batch.sh` and `lr-move-worker.sh` (live at 3000-4430 s): detached account-move workers that
+wait for a session to go idle, absent from `GARBAGE_WL`, the same hazard the `lr-upgrade` drainer had
+on 2026-10-08. Both are now whitelisted, with a fixture pair in `tests/cc-reaper.bats`, before the arm
+is run by hand.
+
 Seen in passing, not pursued here: the reaper's self-check logs `live=35 enum=0` (572 persisted
 sweeps). That condition is chronic and already analyzed in `bin/cc-reaper` (R5e/R5f, 2026-08-25); it is
 unrelated to load, and the garbage arm reads `ps` directly, so it does not depend on that enumerator.

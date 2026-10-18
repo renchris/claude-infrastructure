@@ -2024,6 +2024,28 @@ EOF
   [ "$got" = "90622 90623 " ]
 }
 
+# ── THE ACCOUNT-MOVE WORKERS (2026-10-18). lr-move-batch.sh and its detached lr-move-worker.sh wait for
+# a session to go idle and were live at 3000-4430 s; a TERM strands the session mid-move. Pair form,
+# the live argv verbatim: both survive, the orphan beside them dies.
+@test "garbage: lr-move batch and worker are never collected, and an unrelated orphan beside them still is" {
+  mk_garbage_fixtures
+  cat > "$GA" <<'EOF'
+90631 1 01:13:52 bash
+90632 1 50:00 bash
+90633 1 50:00 bash
+EOF
+  cat > "$GB" <<'EOF'
+90631 /bin/bash /Users/x/.claude/scripts/limit-recover/lr-move-batch.sh 20261018T002443Z-next4-next-84451
+90632 /bin/bash /Users/x/.claude/scripts/limit-recover/lr-move-worker.sh 20261018T021322Z-next4-next-22546 7b50757e
+90633 /bin/bash /Users/x/some/unrelated/orphan.sh
+EOF
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  got="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
+  # RED before the fix: 90631 and 90632 appear in this list too.
+  [ "$got" = "90633 " ]
+}
+
 # ── THE PID THAT CHANGED HANDS (2026-08-16). The kill-time re-verification checked `ucomm` only, and
 # orphan-bash / stuck-wrapper / dead-lead-watchdog all carry the ERE `^bash$` — so for the three
 # classes that dominate the candidate set it asked "is this a bash?" of a pid it had already decided
