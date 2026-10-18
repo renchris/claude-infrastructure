@@ -7,8 +7,10 @@
 #   W0 claim     the per-session claim the batch took is re-stamped to THIS process; not ours ⇒ stop
 #   W1 fence     lr_recon_may_act: the reconciler, or anything holding the launch lock, wins
 #   W2 wait      only `wait:*` rows: until the batch's shared census says `move` twice in a row
+#   W2c load     wait while load/core is above handoff-fire's recycle bound — no slot held (R7)
 #   W3 slot      the swap slot (lr-move-lib.sh), then the kernel-safety read — both BEFORE /exit
-#   W5 actuate   lr-handoff --in-place --voluntary --operator-intent --no-prompt --no-replace
+#   W5 actuate   lr-handoff --in-place --voluntary --operator-intent --no-prompt --no-replace;
+#                a clean HELD:unreachable (admit withdrawn, nothing confirmed) is re-driven (R6)
 #   W6 prove     lr_move_verdict until it is terminal; the slot is released at the first proof
 #   W8 result    <batch>/<sid>.json written atomically; the claim and the launch lock released
 #
@@ -62,14 +64,17 @@ finish() { # $1=verdict $2=reason [$3=verdict flags]  → the result file, then 
         --arg batch "$BATCH" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson wall "$(( $(date +%s) - T0 ))" \
         '{sid:$sid, pane:$pane, verdict:$v, reason:$r, conjuncts:$f, from:$from, to:$to, batch:$batch, ts:$ts, wall_s:$wall}' \
         > "$tmp" 2>/dev/null && mv -f "$tmp" "$RESULT" 2>/dev/null
+  # The claim and the fence go the moment the verdict exists: nothing below touches the pane, and
+  # lr_move_summary_late can spin on summary.lock and mail (33 s under load, 2026-10-18), which held
+  # the sid claimed after its move was decided (docs/plans/LIMIT_RECOVER_SELF_INPLACE.md § W1).
+  lr_claim_release "$CLAIMS" "$SID" "$$"
+  command -v lr_recon_act_done >/dev/null 2>&1 && lr_recon_act_done
   ev "result" "$1: $2"
   # A verdict that lands after the batch closed rewrites its summary, and mails a casualty or the
   # settled batch (lr_move_summary_late; 9f6593c5's STRANDED, 2026-10-17, reached no summary).
   lr_move_summary_late "$BDIR" "$BATCH"
   lr_swap_slot_release
   rm -f "$BDIR/$SID.waiting" "$BDIR/$SID.slotwait" 2>/dev/null || true
-  lr_claim_release "$CLAIMS" "$SID" "$$"
-  command -v lr_recon_act_done >/dev/null 2>&1 && lr_recon_act_done
   case "$1" in MOVED|MOVED-NEW-PANE|MOVED-UNREGISTERED) exit 0 ;; NOTMOVED) exit 3 ;; *) exit 1 ;; esac
 }
 trap 'lr_swap_slot_release; rm -f "$BDIR/$SID.slotwait" 2>/dev/null' EXIT
@@ -163,6 +168,55 @@ limited_now() { # → 0 when the session's last assistant record is a limit erro
 limited_stop() { finish NOTMOVED "became-limited: its last record is now a limit error, so it owes a turn this lane does not type; nothing touched. Recover it: cc-lr recover ${SID:0:8}"; }
 limited_now && limited_stop
 
+# W2c. THE LOAD PRECHECK (R7, docs/plans/LIMIT_RECOVER_SELF_INPLACE.md § W0). handoff-fire holds
+# every resume recycle, which a move always is, when load per core is above its bound (the F1 guard:
+# /exit typed at ~45 runnable per core stranded pane 44, 2026-10-09). That hold sits AFTER
+# lr-handoff's admit and handoff-fire's confirm, so on a loaded box every move paid admit + confirm
+# + unconfirm, left a locks/<sid>.unconfirmed-* dir and failed anyway. The same test is made here,
+# before the slot and before anything is touched; the bound itself is handoff-fire's, unchanged.
+# These two copies MUST stay in step with scripts/handoff-fire.sh's hf_load_per_core and
+# hf_recycle_load_bound (same seam HF_LOAD_PER_CORE, same knobs, same "unreadable ⇒ proceed").
+# LR_MOVE_LOAD_PRECHECK=off restores the old behaviour (actuate and let handoff-fire hold).
+mw_load_per_core() { # → 1-min load average / logical cpus, 2 decimals; "" if unreadable · seam HF_LOAD_PER_CORE
+  if [ -n "${HF_LOAD_PER_CORE+set}" ]; then printf '%s' "$HF_LOAD_PER_CORE"; return 0; fi
+  local la nc
+  la="$(/usr/sbin/sysctl -n vm.loadavg 2>/dev/null | tr -d '{}' | awk '{print $1}' || true)"
+  nc="$(/usr/sbin/sysctl -n hw.ncpu 2>/dev/null || true)"
+  awk -v l="$la" -v n="$nc" 'BEGIN { if (l == "" || n + 0 <= 0) exit; printf "%.2f", l / n }'
+}
+mw_load_bound() { # → the per-core bound; nothing when the hold is off
+  [ "${CC_FIRE_CAPACITY_GATE:-on}" != off ] || return 0
+  awk -v b="${HF_RECYCLE_HOLD_LOAD_PER_CORE:-${CC_GATE_MAX_LOAD_PER_CORE:-8}}" 'BEGIN {
+    if (b == "off") exit
+    if (b ~ /^[0-9]+(\.[0-9]+)?$/) { if (b + 0 > 0) printf "%s", b; exit }
+    printf "8" }'
+}
+LOAD_LPC=""; LOAD_BOUND=""
+load_over() { # → 0 when load per core is above the recycle bound (LOAD_LPC, LOAD_BOUND set)
+  [ "${LR_MOVE_LOAD_PRECHECK:-on}" != off ] || return 1
+  LOAD_BOUND="$(mw_load_bound)"; [ -n "$LOAD_BOUND" ] || return 1
+  LOAD_LPC="$(mw_load_per_core || true)"
+  awk -v l="$LOAD_LPC" -v b="$LOAD_BOUND" 'BEGIN { exit !(l + 0 > b + 0) }'
+}
+LOAD_WAIT_S="${LR_MOVE_LOAD_WAIT_S:-$(( ${UNTIL:-0} > 600 ? ${UNTIL:-0} : 600 ))}"
+load_t0="$(date +%s)"; load_deadline=$(( load_t0 + LOAD_WAIT_S )); load_said=""
+load_wait() { # returns once the load is under the bound; past the deadline finishes HELD:load
+  while load_over; do
+    aborted && finish NOTMOVED "aborted while waiting for the load to fall; nothing touched"
+    intent_recheck
+    [ -n "$load_said" ] || { load_said=1; ev load-wait "load ${LOAD_LPC}/core above the ${LOAD_BOUND}/core recycle bound; waiting up to ${LOAD_WAIT_S}s"; }
+    [ "$(date +%s)" -lt "$load_deadline" ] \
+      || finish NOTMOVED "HELD:load — load ${LOAD_LPC}/core stayed above the ${LOAD_BOUND}/core recycle bound for $(( $(date +%s) - load_t0 ))s; nothing touched (no admit, no copy)"
+    sleep "${LR_MOVE_LOAD_POLL_S:-15}"
+  done
+}
+
+# The load wait, then W3 (slot + kernel read), then one more load read right before the actuator:
+# a load that rose while this worker queued sends it back to waiting WITHOUT the slot, within the
+# same deadline, so no slot is held while waiting.
+while :; do
+load_wait
+
 # W3. The slot, then the kernel-safety read, both while the session is still alive in its pane.
 # The width is a fixed count (terminal control streams and overlapping boots), not a memory
 # reading, and its timeout says so: `slot-wait:`, never the `capacity:` of the memory read below.
@@ -223,30 +277,58 @@ if [ "${LR_MOVE_KERNEL_CHECK:-on}" != off ] && command -v lr_capacity_probe_corr
 fi
 aborted && finish NOTMOVED "aborted before the move; nothing touched"
 intent_ok || intent_stop
+load_over || break
+lr_swap_slot_release
+ev load-recheck "load ${LOAD_LPC}/core rose above the ${LOAD_BOUND}/core bound while queued; slot released, waiting again"
+done
 
 # W5. The actuator: the reconciler's idle-move argv with the operator's intent in place of an
 # account fact, and its environment with three differences (placer, swap admission, bgwork answer).
-ev actuate
+#
+# R6 (docs/plans/LIMIT_RECOVER_SELF_INPLACE.md § W0): a CLEAN HELD:unreachable — kitty's control
+# socket did not answer (load ~290, 2026-10-18), and lr-handoff's `lr-transplant --phase abort rc 0`
+# withdrew the admit before any confirm — left the source untouched and said "a retry is safe", but
+# the worker finished NOTMOVED after one attempt; the only retry left was a mail to the subject,
+# which put two actuators on one session. The worker now re-drives exactly that case itself, with
+# the claim and slot still held, at most LR_MOVE_UNREACHABLE_RETRIES (default 2) more times.
+# Every other hold (busy, draft, load, wedged, anything after a confirm) is final as before.
+# LR_MOVE_UNREACHABLE_RETRIES=0 restores the old behaviour (one attempt).
 SOCK="$(jq -r '.kitty_listen_on // empty' "${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}/$PANE.json" 2>/dev/null || true)"
-hrc=0
-env LR_RECORD_ID="$REC" LR_ATTEMPT=1 HF_RECYCLE_ATTEMPT="$REC:1" \
-    HF_WATCHER_RECORD="$BDIR/$SID.watcher.json" \
-    CC_RECYCLE_BGWORK_ANSWER="${LR_MOVE_BGWORK_ANSWER:-stop-if-watcher}" \
-    LR_WAKE_GUARD_S=30 LR_INPLACE_AWAIT=0 LR_PLACED_BY=cc-lr-move LR_ASSIGN_ID="$BATCH" \
-    CLAUDE_CODE_DISABLE_AGENT_VIEW=1 HF_ENGAGE_BY_PROCESS=1 LR_ADMIT_MODE=swap LR_SEGMENT_PCT=90 \
-    ${LR_MOVE_PRESEEDED:+LR_PRESEED_DONE=1} ${SOCK:+CC_TERM_KITTY_TO="$SOCK"} \
-    /bin/bash "$HANDOFF" --sid "$SID" --config-dir "$SRC_CFG" --cwd "$CWD" --target "$TO" --launch --in-place \
-      --source-pane "$PANE" --record-id "$REC" --attempt 1 \
-      --voluntary --operator-intent "$BDIR/intent/$SID.json" --no-prompt --no-replace \
-      >"$BDIR/$SID.handoff.log" 2>&1 || hrc=$?
-ev actuated "rc $hrc"
-held="$(sed -n 's/.*\(HELD:[A-Za-z:-]*\).*/\1/p; s/.*\(REFUSED:[A-Za-z:-]*\).*/\1/p' "$BDIR/$SID.handoff.log" 2>/dev/null | tail -1)"
+attempt=1
+while :; do
+  HLOG="$BDIR/$SID.handoff.log"; [ "$attempt" -eq 1 ] || HLOG="$BDIR/$SID.handoff.$attempt.log"
+  if [ "$attempt" -eq 1 ]; then ev actuate; else ev actuate "attempt $attempt"; fi
+  hrc=0
+  env LR_RECORD_ID="$REC" LR_ATTEMPT="$attempt" HF_RECYCLE_ATTEMPT="$REC:$attempt" \
+      HF_WATCHER_RECORD="$BDIR/$SID.watcher.json" \
+      CC_RECYCLE_BGWORK_ANSWER="${LR_MOVE_BGWORK_ANSWER:-stop-if-watcher}" \
+      LR_WAKE_GUARD_S=30 LR_INPLACE_AWAIT=0 LR_PLACED_BY=cc-lr-move LR_ASSIGN_ID="$BATCH" \
+      CLAUDE_CODE_DISABLE_AGENT_VIEW=1 HF_ENGAGE_BY_PROCESS=1 LR_ADMIT_MODE=swap LR_SEGMENT_PCT=90 \
+      ${LR_MOVE_PRESEEDED:+LR_PRESEED_DONE=1} ${SOCK:+CC_TERM_KITTY_TO="$SOCK"} \
+      /bin/bash "$HANDOFF" --sid "$SID" --config-dir "$SRC_CFG" --cwd "$CWD" --target "$TO" --launch --in-place \
+        --source-pane "$PANE" --record-id "$REC" --attempt "$attempt" \
+        --voluntary --operator-intent "$BDIR/intent/$SID.json" --no-prompt --no-replace \
+        >"$HLOG" 2>&1 || hrc=$?
+  ev actuated "rc $hrc"
+  held="$(sed -n 's/.*\(HELD:[A-Za-z:-]*\).*/\1/p; s/.*\(REFUSED:[A-Za-z:-]*\).*/\1/p' "$HLOG" 2>/dev/null | tail -1)"
+  if [ "$hrc" -ne 6 ] || [ "$held" != HELD:unreachable ] \
+     || ! grep -qE 'lr-transplant --phase abort rc 0([^0-9]|$)' "$HLOG" 2>/dev/null; then break; fi
+  [ $(( attempt - 1 )) -lt "${LR_MOVE_UNREACHABLE_RETRIES:-2}" ] || { ev retry-exhausted "$attempt attempt(s), each HELD:unreachable"; break; }
+  sleep "${LR_MOVE_UNREACHABLE_BACKOFF_S:-45}"
+  # The retry re-reads what the first attempt's holds read: the abort file, the limit tail, the claim.
+  aborted && finish NOTMOVED "aborted before retrying a clean HELD:unreachable (attempt $attempt, the admit withdrawn); nothing touched"
+  limited_now && limited_stop
+  [ "$(lr_claim_holder_pid "$CLAIMS/$SID.active" 2>/dev/null || true)" = "$$" ] \
+    || finish NOTMOVED "claim-lost: the per-session claim no longer names this worker after a clean HELD:unreachable (attempt $attempt); nothing touched"
+  attempt=$((attempt + 1))
+  ev retry "attempt $attempt after HELD:unreachable"
+done
 
 # W6. Prove it. A hold (rc 6) is read once: the source must be untouched. Anything else is polled,
 # because the relaunch is still booting when lr-handoff returns (LR_INPLACE_AWAIT=0).
 bound="${LR_MOVE_PROVE_S:-300}"; [ "$hrc" -eq 6 ] && bound="${LR_MOVE_HELD_PROVE_S:-20}"
 watcher_hold() { # → "HELD:<reason>" when this attempt's watcher row held after the confirm and unconfirmed, else empty
-  tail -n 2000 "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/null | jq -R -r --arg a "$REC:1" '
+  tail -n 2000 "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/null | jq -R -r --arg a "$REC:$attempt" '
     fromjson? | select(.attempt == $a and ((.class // "") | startswith("recycle-held-"))
       and ((.detail // "") | test("unconfirm rc 0($|;)")) and (((.detail // "") | contains("unconfirm=needed")) | not))
     | .class | sub("^recycle-held-"; "") | if . == "bgwork" then "HELD:bg-work" else "HELD:" + . end' 2>/dev/null | tail -1
@@ -278,6 +360,6 @@ EOF
 done
 case "$v" in
   NOTMOVED) finish NOTMOVED "the recycle returned rc $hrc and the session is still on the source: $why" "$flags" ;;
-  STRANDED) finish STRANDED "$why; lr-handoff rc $hrc, log $BDIR/$SID.handoff.log" "$flags" ;;
-  *)        finish FAILED "${why:-no verdict} after ${bound}s; lr-handoff rc $hrc${held:+, $held}, log $BDIR/$SID.handoff.log" "$flags" ;;
+  STRANDED) finish STRANDED "$why; lr-handoff rc $hrc, log $HLOG" "$flags" ;;
+  *)        finish FAILED "${why:-no verdict} after ${bound}s; lr-handoff rc $hrc${held:+, $held}, log $HLOG" "$flags" ;;
 esac
