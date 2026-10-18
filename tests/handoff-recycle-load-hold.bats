@@ -44,11 +44,12 @@ setup() {
     for f in _under_test emit_recycle_event hf_bounded hf_bounded_s kt_window_field composer_content \
              recycle_composer_gate hf_lr_script hf_recycle_fenced hf_recycle_lock_dir _hf_lstart \
              _hf_lock_raw _hf_lock_field _hf_lock_holder_alive hf_recycle_lock_write hf_recycle_lock_take \
-             hf_recycle_lock_release hf_recycle_lock_acquire hf_recycle_disarm hf_wake_guard \
+             hf_recycle_lock_release hf_recycle_lock_acquire hf_recycle_watcher_committed hf_recycle_disarm hf_wake_guard \
              hf_recycle_unconfirm hf_recycle_hold hf_recycle_last_read hf_exit_readback recycle_fire_commit \
              composer_residue_dir composer_residue_record pid_is_cc hf_succ_mode hf_succ_ours_staged \
              write_teardown_marker hf_exit_signal_pin hf_exit_signal hf_exit_signal_grace \
-             hf_load_per_core hf_recycle_load_bound hf_recycle_load_gate; do
+             hf_load_per_core hf_recycle_load_bound hf_recycle_load_gate \
+             hf_recycle_subject_pin hf_recycle_subject_gone hf_recycle_subject_yield; do
       sed -n "/^$f() {/,/^}/p" "$HF"
     done
   } > "$FUNCS"
@@ -103,6 +104,7 @@ SH
 
 teardown() {
   [ -f "$BATS_TEST_TMPDIR/watcher.pid" ] && { kill "$(cat "$BATS_TEST_TMPDIR/watcher.pid")" 2>/dev/null || true; }
+  [ -f "$BATS_TEST_TMPDIR/subject.pid" ] && { kill "$(cat "$BATS_TEST_TMPDIR/subject.pid")" 2>/dev/null || true; }
   return 0
 }
 
@@ -189,4 +191,30 @@ assert_proceeded() {
   setup
   HF_RECYCLE_HOLD_LOAD_PER_CORE=lots commit_at 45.00
   assert_held
+}
+
+# K2 (lr-wake 2026-10-18, docs/research/lr-wake-incident-2026-10-18/REPORT.md Wave A). Pane 332 at
+# 07:24:33Z: the move's claude had already exited (the watcher had typed the disarm line) when the
+# foreground reached this gate at 15.72/core and held, and the hold killed the watcher one line short
+# of the relaunch. The subject is a real process pinned as recycle_fire_armed pins it, killed inside a
+# stubbed last read, the step that took ~3 min at load 15-28/core. RED on origin/main (2a636f1b8): the
+# gate holds (recycle-held-load, watcher killed) because nothing re-reads the subject at its call site.
+@test "6 [RED] the subject exits inside the last read, then the load gate would hold: yields, the watcher lives" {
+  ( sleep 300 >/dev/null 2>&1 3>&- & echo $! > "$BATS_TEST_TMPDIR/subject.pid" )
+  SUBJ="$(cat "$BATS_TEST_TMPDIR/subject.pid")"
+  RCY_REMOTE=1 HF_REMOTE_ROW_PID="$SUBJ" hf_recycle_subject_pin "$tty" "$SESS"
+  [ "$RCY_SUBJECT_PID" = "$SUBJ" ] || { echo "subject not pinned"; false; }
+  # shellcheck disable=SC2329  # the stub that replaces the extracted last read, invoked by the tail
+  hf_recycle_last_read() {
+    kill "$SUBJ" 2>/dev/null || true
+    local n=0; while ps -p "$SUBJ" >/dev/null 2>&1 && [ "$n" -lt 40 ]; do sleep 0.05; n=$((n + 1)); done
+    return 0
+  }
+  CC_FIRE_CAPACITY_GATE=on HF_LOAD_PER_CORE=30 run recycle_fire_commit "$SESS"
+  [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
+  rows_of recycle-subject-exited | grep -q "exited before the commit, noticed at the load hold" \
+    || { cat "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/null; echo "$output"; false; }
+  [ -z "$(rows_of recycle-held-load)" ] || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+  ! grep -q '^send' "$CALLS" || { echo "a keystroke was sent:"; cat "$CALLS"; false; }
+  kill -0 "$WATCHER_PID" 2>/dev/null || { echo "the watcher was killed"; false; }
 }

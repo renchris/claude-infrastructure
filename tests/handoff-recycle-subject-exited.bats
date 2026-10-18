@@ -42,7 +42,7 @@ setup() {
     for f in _under_test emit_recycle_event hf_bounded hf_bounded_s kt_window_field composer_content \
              recycle_composer_gate hf_lr_script hf_recycle_fenced hf_recycle_lock_dir _hf_lstart \
              _hf_lock_raw _hf_lock_field _hf_lock_holder_alive hf_recycle_lock_write hf_recycle_lock_take \
-             hf_recycle_lock_release hf_recycle_lock_acquire hf_recycle_disarm hf_wake_guard \
+             hf_recycle_lock_release hf_recycle_lock_acquire hf_recycle_watcher_committed hf_recycle_disarm hf_wake_guard \
              hf_recycle_unconfirm hf_recycle_hold hf_recycle_last_read hf_exit_readback recycle_fire_commit \
              composer_residue_dir composer_residue_record pid_is_cc hf_succ_mode hf_succ_ours_staged \
              write_teardown_marker hf_exit_signal_pin hf_exit_signal hf_exit_signal_grace \
@@ -132,9 +132,9 @@ debts() { grep -c '^debt open' "$CALLS" || true; }
 # the row naming where it was noticed, the line, and no keystroke at all.
 assert_yielded() { # $1=where
   [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
-  rows_of recycle-subject-exited | grep -q "claude pid $SUBJ (lstart [^)]*) exited on its own $1" \
+  rows_of recycle-subject-exited | grep -q "claude pid $SUBJ (lstart [^)]*) exited before the commit, noticed $1" \
     || { cat "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/null; echo "$output"; false; }
-  [[ "$output" == *"→ exit: NOT typed — claude pid $SUBJ exited on its own $1"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"→ exit: NOT typed — claude pid $SUBJ exited before the commit (noticed $1)"* ]] || { echo "$output"; false; }
   ! grep -q '^send' "$CALLS" || { echo "a keystroke was sent:"; cat "$CALLS"; false; }
   [ -z "$(rows_of recycle-exit-signal)" ]
 }

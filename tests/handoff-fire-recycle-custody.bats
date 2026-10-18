@@ -470,7 +470,7 @@ load_tail_funcs() {
              recycle_composer_gate hf_transcript_at_rest hf_bg_work_kind hf_bg_work_gate hf_lr_script hf_team_live \
              hf_recycle_fenced hf_recycle_lock_dir _hf_lstart _hf_lock_raw _hf_lock_field \
              _hf_lock_holder_alive hf_recycle_lock_write hf_recycle_lock_take hf_recycle_lock_release \
-             hf_recycle_lock_acquire hf_recycle_disarm hf_wake_guard hf_pane_focused hf_lr_lib_load _hf_focus_composer hf_focus_gate \
+             hf_recycle_lock_acquire hf_recycle_watcher_committed hf_recycle_disarm hf_wake_guard hf_pane_focused hf_lr_lib_load _hf_focus_composer hf_focus_gate \
              hf_recycle_unconfirm hf_recycle_hold hf_recycle_last_read hf_exit_readback recycle_fire_commit \
              composer_residue_dir composer_residue_record \
              pid_is_cc hf_succ_ours_staged write_teardown_marker hf_exit_signal_pin hf_exit_signal \

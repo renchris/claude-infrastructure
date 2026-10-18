@@ -16,7 +16,7 @@
 setup() {
   command -v jq >/dev/null || skip "jq required"
   REPO_SRC="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-  HF="$REPO_SRC/scripts/handoff-fire.sh"
+  HF="${HF_OVERRIDE:-$REPO_SRC/scripts/handoff-fire.sh}"
   export CC_FIRE_CAPACITY_GATE=off
   export CC_FIRE_HEADROOM_GATE=off
   export HANDOFF_ACCOUNT_SWEEP=off
@@ -316,7 +316,7 @@ probe() { # $@=extra env
   netstat_capture 0
   probe HF_PRECHECK_TYPED_RELAUNCH=1 CC_FIRE_CAPACITY_GATE=on HF_LOAD_PER_CORE=30
   [ "$status" -eq 3 ] || { echo "status=$status $output"; false; }
-  [[ "$output" == *"load: 30/core is above the 8/core bound"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"load: 30/core is above the 6/core bound"* ]] || { echo "$output"; false; }
   [ "$(printf '%s\n' "$output" | sed -n 's/^verdict: //p')" = HELD:load ] || { echo "$output"; false; }
   [[ "$output" != *"kitty_probe:"* && "$output" != *"pane_state:"* ]] || { echo "read past the hold: $output"; false; }
 }
@@ -335,9 +335,25 @@ probe() { # $@=extra env
   netstat_capture 128
   probe HF_PRECHECK_TYPED_RELAUNCH=1 CC_FIRE_CAPACITY_GATE=on HF_LOAD_PER_CORE=3
   [ "$status" -eq 3 ] || { echo "status=$status $output"; false; }
-  [[ "$output" == *"load: 3/core (bound 8/core)"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"load: 3/core (bound 6/core)"* ]] || { echo "$output"; false; }
   [ "$(printf '%s\n' "$output" | sed -n 's/^verdict: //p')" = HELD:wedged ] || { echo "$output"; false; }
   [ ! -e "$BATS_TEST_TMPDIR/backlog-calls.log" ] || { echo "the read-only precheck filed an operator step"; false; }
+}
+
+# K7 HYSTERESIS (lr-wake 2026-10-18, docs/research/lr-wake-incident-2026-10-18/REPORT.md Wave A). The
+# precheck and the commit gate both held at 8/core, so pane 350 passed the precheck at 7.36/core and
+# held at the commit at 8.72/core, after the transplant and with the watcher armed: the RC1 race. The
+# precheck now holds at HF_PRECHECK_LOAD_PER_CORE (default 6), never looser than the commit bound.
+# RED on origin/main (2a636f1b8): 7.36/core passed the precheck there.
+@test "K7 [RED] pane 350's 7.36/core holds at the precheck (6/core); the precheck bound is tunable but never above the commit's" {
+  netstat_capture 128
+  probe HF_PRECHECK_TYPED_RELAUNCH=1 CC_FIRE_CAPACITY_GATE=on HF_LOAD_PER_CORE=7.36
+  [ "$status" -eq 3 ] || { echo "status=$status $output"; false; }
+  [[ "$output" == *"load: 7.36/core is above the 6/core bound"* ]] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | sed -n 's/^verdict: //p')" = HELD:load ] || { echo "$output"; false; }
+  probe HF_PRECHECK_TYPED_RELAUNCH=1 CC_FIRE_CAPACITY_GATE=on HF_LOAD_PER_CORE=7.36 HF_PRECHECK_LOAD_PER_CORE=20
+  [[ "$output" == *"load: 7.36/core (bound 8/core)"* ]] || { echo "a precheck bound above the commit's was not capped: $output"; false; }
+  [ "$(printf '%s\n' "$output" | sed -n 's/^verdict: //p')" = HELD:wedged ] || { echo "$output"; false; }
 }
 
 @test "a: the self tty is the tty of the ancestor whose parent is \$KITTY_PID, not the caller's" {

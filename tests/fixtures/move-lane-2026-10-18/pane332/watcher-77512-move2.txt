@@ -1,0 +1,7 @@
+→ armed: __recycle pid=77512 pgid=77512 sid=332 tty=/dev/ttys002 caller=none
+→ pane-probe: __recycle pane=332 it2=~/.claude/bin/it2 CC_TERM=kitty KITTY_WINDOW_ID=unset identity=kitty bound=10s
+→ pane-probe: __recycle listing rc=0 in 8s shape=json ids=47
+→ pane-reachable: 332 enumerated by '~/.claude/bin/it2 session list --json' (shape=json, CC_TERM=kitty)
+→ pane 332 CONFIRMED at a shell prompt after 125s — typing relaunch
+→ folded a re-created source stub (2e9ed9f2-9e21-4161-a0f7-10b329ade8f0.jsonl) via lr-transplant --phase fold-stub — appended to both copies, the retired store holds no live-looking copy
+2026-10-18T07:24:22Z type-attempt pane=332 attempt=1 line=disarm mode=paste send_rc=0 send_ms=8000 read_rc=0 read_bytes=1303 nonce_seen=1 suffix_ok=1 fused=0 focused=0 load_per_core=14.88 echo_deadline_ms=16880 bound_s=40 cr_rc=0 verdict=submitted

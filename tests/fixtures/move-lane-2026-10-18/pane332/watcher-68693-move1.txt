@@ -1,0 +1,13 @@
+→ armed: __recycle pid=68693 pgid=68693 sid=332 tty=/dev/ttys002 caller=none
+→ pane-probe: __recycle pane=332 it2=~/.claude/bin/it2 CC_TERM=kitty KITTY_WINDOW_ID=unset identity=kitty bound=10s
+→ pane-probe: __recycle listing rc=0 in 1s shape=json ids=45
+→ pane-reachable: 332 enumerated by '~/.claude/bin/it2 session list --json' (shape=json, CC_TERM=kitty)
+→ pane 332 CONFIRMED at a shell prompt after 97s — typing relaunch
+→ folded a re-created source stub (2e9ed9f2-9e21-4161-a0f7-10b329ade8f0.jsonl) via lr-transplant --phase fold-stub — appended to both copies, the retired store holds no live-looking copy
+2026-10-18T03:39:50Z type-attempt pane=332 attempt=1 line=disarm mode=paste send_rc=0 send_ms=1000 read_rc=0 read_bytes=262 nonce_seen=1 suffix_ok=1 fused=0 focused=0 load_per_core=26.44 echo_deadline_ms=28440 bound_s=40 cr_rc=0 verdict=submitted
+2026-10-18T03:39:54Z type-attempt pane=332 attempt=1 line=cmd mode=paste send_rc=0 send_ms=0 read_rc=0 read_bytes=635 nonce_seen=1 suffix_ok=1 fused=0 focused=0 load_per_core=26.28 echo_deadline_ms=28280 bound_s=40 cr_rc=0 verdict=submitted
+→ relaunch typed into 332: cd ~/Development/personal && nocorrect env LR_LAUNCH_LOCK=~/.reso/limit-recover/locks/2e9ed9f2-9e21-4161-a0f7-10b329ade8f0.launch LR_RECORD_ID=move-20261018T030847Z-next4-next-36292-2e9ed9f2 LR_ATTEMPT=1 bash ~/.reso/limit-recover/2e9ed9f2-9e21-4161-a0f7-10b329ade8f0/bundle-20261018T032852Z/lr-launch-2e9ed9f2-4yrxae.sh
+→ relaunch process up in 332 (claude on tty) — verifying ENGAGEMENT
+→ relaunched + ENGAGEMENT CONFIRMED BY PROCESS in 332 (--resume 2e9ed9f2 alive 15s past boot; no prompt by design)
+cc-resume-debt: no debt for 2e9ed9f2-9e21-4161-a0f7-10b329ade8f0 — nothing to discharge
+→ resume-debt discharge: rc 0

@@ -3338,7 +3338,26 @@ hf_recycle_lock_acquire() { # $1=pane → 0 held by us (or gate off) · 1 refuse
 }
 # Kill the watcher and give its lock back — the pair every post-arm abort needs, so no exit path can
 # do one and forget the other.
-hf_recycle_disarm() { # → always 0
+# NOT ONCE THE WATCHER HAS COMMITTED (lr-wake 2026-10-18, REPORT.md Wave A). Pane 332 at 07:24:33Z: the
+# watcher had seen claude exit and typed the disarm line when the foreground's load hold killed it,
+# one keystroke short of the relaunch, and left a bare shell; panes 20, 21, 22 and 24 the same. Once
+# the watcher's journal shows it past its point of no return — a confirmed shell, a typed line, or a
+# background-work dialog it is answering — killing it is what strands the session, so this refuses,
+# leaves the watcher its pane lock and writes the row. HF_DISARM_REFUSED holds the journal line that
+# refused it, for the caller's wording. Covers every bare disarm site, not only the hold.
+hf_recycle_watcher_committed() { # → 0 and the journal line when the watcher's log shows it past its point of no return · 1 not
+  local f="${HF_RCY_WATCHER_LOG:-}" hit
+  [ -n "$f" ] && [ -f "$f" ] || return 1
+  hit="$(grep -m1 -E 'CONFIRMED at a shell|type-attempt|bgwork@|already claimed the staged successor' "$f" 2>/dev/null)" || return 1
+  printf '%.160s' "$hit"
+}
+hf_recycle_disarm() { # → always 0 (HF_DISARM_REFUSED set when the watcher had committed and was left alone)
+  HF_DISARM_REFUSED=""
+  if [ -n "${WATCHER_PID:-}" ] && HF_DISARM_REFUSED="$(hf_recycle_watcher_committed)"; then
+    emit_recycle_event recycle-disarm-refused-committed "" "${SID:-}" "watcher pid $WATCHER_PID is past its point of no return (journal: $HF_DISARM_REFUSED); not killed, its pane lock left with it" || true
+    echo "⚠ recycle: watcher $WATCHER_PID NOT disarmed — its journal shows it already committed ('$HF_DISARM_REFUSED'); killing it now would strand the session mid-relaunch" >&2
+    return 0
+  fi
   if [ -n "${WATCHER_PID:-}" ]; then kill "$WATCHER_PID" 2>/dev/null || true; fi
   hf_recycle_lock_release "${HF_RECYCLE_LOCK:-}" "$$" "${WATCHER_PID:-}" || true
   return 0
@@ -3615,24 +3634,50 @@ rcy_jobs_mail() { # → 0 always; a no-op unless this watcher recorded jobs
 hf_recycle_hold() { # $1=reason $2=detail $3=what the operator reads → exit 1
   # The screen first, while it still shows what the read-back saw (REPORT.md fix 6, as at
   # hf_hold_screen_witness); only exit-readback, the hold whose box state the text can only guess.
-  local snap=""
+  local snap="" committed="" alive=""
   if [ "$1" = exit-readback ]; then
     HF_HOLD_SNAP="none (no witness taken)"; hf_hold_screen_witness "$SID" held-exit-readback 2>/dev/null || true
     snap="; screen $HF_HOLD_SNAP"
   fi
-  hf_recycle_unconfirm
+  # A WATCHER THAT HAS COMMITTED OWNS THE OUTCOME (lr-wake 2026-10-18, Wave A). Its journal shows it
+  # past the point of no return (hf_recycle_disarm's test), so this hold neither kills it nor hands
+  # the source back under the relaunch it is typing: one row, one line, and this process stands
+  # aside the way a subject yield does, exiting 0 rather than returning, because a return here
+  # would fall through to the exit actuators (REPORT.md K2). An --await caller still gets the
+  # watcher's own verdict.
+  if [ -n "${WATCHER_PID:-}" ] && committed="$(hf_recycle_watcher_committed)"; then
+    emit_recycle_event recycle-disarm-refused-committed "" "$SID" "held ($1: $2) after watcher pid $WATCHER_PID committed (journal: $committed); not disarmed, nothing unconfirmed" || true
+    echo "→ recycle NOT held ($1): $3 — but watcher pid $WATCHER_PID had already committed ('$committed'), so it was NOT disarmed and nothing was unconfirmed; the watcher owns the relaunch. Its log: ${HF_RCY_WATCHER_LOG:-<none>}" >&2
+    if [ "${RECYCLE_AWAIT:-0}" = 1 ] && [ "${RCY_REMOTE:-0}" = 1 ] && command -v recycle_await_verdict >/dev/null 2>&1; then
+      recycle_await_verdict "${HF_RCY_WATCHER_LOG:-}" && exit 0
+      exit $?
+    fi
+    exit 0
+  fi
+  # K1: the watcher stands down on this marker even if the kill below misses it. Then the disarm,
+  # BEFORE the unconfirm, which takes seconds: the window in which a live watcher acts on a recycle
+  # this process has already decided to hold is the window that stranded pane 332.
+  if [ -n "${cmdfile:-}" ]; then date +%s > "$cmdfile.exit-aborted" 2>/dev/null || true; fi
   hf_recycle_disarm
+  hf_recycle_unconfirm
   emit_recycle_event "recycle-held-$1" "" "$SID" "$2; unconfirm rc $RCY_UNCONFIRM_RC$snap" || true
+  # "The session stays alive" only when the pane says so: at 03:41Z on pane 332 it had been gone
+  # for 2.5 minutes when this line said it.
+  case "$(if command -v pane_cc_state >/dev/null 2>&1; then pane_cc_state "${tty:-}" 2>/dev/null; fi)" in
+    cc)    alive=" The session stays alive." ;;
+    shell) alive=" The session is NOT running: the pane is at a shell prompt, so claude exited before this hold." ;;
+    *)     alive=" Whether the session is still running could not be read from the pane; look at it before re-running." ;;
+  esac
   # exit-readback is the one class held AFTER /exit was typed (recycle_fire_commit), so "before
   # /exit" was false there, and on F2 it told the operator a box still holding /exit was clean
   # (docs/research/recycle-failures-kitty-2026-10-10/REPORT.md fix 2). $3 says what became of it.
   if [ "$1" = exit-readback ]; then
-    echo "!! recycle HELD after /exit was TYPED (held: $1): $3 — the /exit was NOT submitted (no Enter sent), watcher disarmed, pane lock released, unconfirm rc $RCY_UNCONFIRM_RC. The session stays alive. Re-run: ${CMD:-<the recycle>}" >&2
+    echo "!! recycle HELD after /exit was TYPED (held: $1): $3 — the /exit was NOT submitted (no Enter sent), watcher disarmed, pane lock released, unconfirm rc $RCY_UNCONFIRM_RC.$alive Re-run: ${CMD:-<the recycle>}" >&2
   elif [ "$1" = exit-signal-ignored ]; then
     # Held after the SIGTERM (hf_exit_signal), so "before /exit" would be as false here as above.
     echo "!! recycle HELD after SIGTERM (held: $1): $3 — watcher disarmed, pane lock released, unconfirm rc $RCY_UNCONFIRM_RC. Re-run: ${CMD:-<the recycle>}" >&2
   else
-    echo "!! recycle ABORTED before /exit (held: $1): $3 — /exit NOT submitted, watcher disarmed, pane lock released, unconfirm rc $RCY_UNCONFIRM_RC. The session stays alive. Re-run: ${CMD:-<the recycle>}" >&2
+    echo "!! recycle ABORTED before /exit (held: $1): $3 — /exit NOT submitted, watcher disarmed, pane lock released, unconfirm rc $RCY_UNCONFIRM_RC.$alive Re-run: ${CMD:-<the recycle>}" >&2
   fi
   # The three sentences above are regex-parsed (lr-handoff.sh's `(held: X)` + `unconfirm rc 0.`, and
   # lr_recon's settle tests), so they stay byte-identical; what they cannot say goes on its own line.
@@ -3924,9 +3969,15 @@ hf_recycle_subject_gone() { # → 0 the pinned claude has exited (or its pid now
   [ "$(_hf_lstart "$RCY_SUBJECT_PID")" != "$RCY_SUBJECT_LSTART" ]
 }
 
+# "Before the commit", not "on its own" (lr-wake 2026-10-18): the 5 rows of 2026-10-18 that said "on
+# its own" were most likely the watcher's own pre-commit nudge, and the wording hid that race. The
+# yield marker beside the cmdfile tells a watcher still waiting for the commit (K1) that this process
+# has handed it the outcome: it waits for the shell and relaunches, and never nudges, since no /exit
+# of ours exists for a nudge to finish.
 hf_recycle_subject_yield() { # $1=where the tail noticed → 0 always: one row, one line; the caller returns 0
-  emit_recycle_event recycle-subject-exited "" "$SID" "claude pid $RCY_SUBJECT_PID (lstart $RCY_SUBJECT_LSTART) exited on its own $1; the watcher owns the relaunch — nothing typed, no exit actuator run${2:+, $2}" || true
-  echo "→ exit: NOT typed — claude pid $RCY_SUBJECT_PID exited on its own $1, after the watcher armed. The watcher (pid ${WATCHER_PID:-?}) relaunches the session, and a /exit now could land in that relaunch.${2:+ ($2)}"
+  if [ -n "${cmdfile:-}" ]; then date +%s > "$cmdfile.exit-yielded" 2>/dev/null || true; fi
+  emit_recycle_event recycle-subject-exited "" "$SID" "claude pid $RCY_SUBJECT_PID (lstart $RCY_SUBJECT_LSTART) exited before the commit, noticed $1; the watcher owns the relaunch — nothing typed, no exit actuator run${2:+, $2}" || true
+  echo "→ exit: NOT typed — claude pid $RCY_SUBJECT_PID exited before the commit (noticed $1), after the watcher armed. The watcher (pid ${WATCHER_PID:-?}) relaunches the session, and a /exit now could land in that relaunch.${2:+ ($2)}"
   return 0
 }
 
@@ -3955,10 +4006,25 @@ hf_recycle_load_bound() { # → the per-core bound; nothing when the hold is off
     printf "8" }'
 }
 
-hf_recycle_load_gate() { # $1=pane tty → 0 proceed · 1 hold (HF_LOAD_HOLD_WHAT)
+# THE PRECHECK'S BOUND, STRICTER THAN THE COMMIT'S (K7 hysteresis, lr-wake 2026-10-18). Both used
+# the same 8/core, so a box hovering near it passed the precheck and held minutes later at the
+# commit, after the transplant and with the watcher armed: pane 350 passed at 7.36/core and held at
+# 8.72. HF_PRECHECK_LOAD_PER_CORE (default 6) applies to the precheck only; it is never looser than
+# the commit bound it guards, and a junk value takes 6. Nothing when the commit hold is off.
+hf_recycle_precheck_load_bound() { # → the precheck's per-core bound; nothing when the hold is off
+  local cb
+  cb="$(hf_recycle_load_bound)"
+  [ -n "$cb" ] || return 0
+  awk -v p="${HF_PRECHECK_LOAD_PER_CORE:-6}" -v c="$cb" 'BEGIN {
+    if (!(p ~ /^[0-9]+(\.[0-9]+)?$/) || p + 0 <= 0) p = 6
+    if (p + 0 > c + 0) p = c
+    printf "%s", p }'
+}
+
+hf_recycle_load_gate() { # $1=pane tty [$2=bound, the precheck's] → 0 proceed · 1 hold (HF_LOAD_HOLD_WHAT)
   local bound lpc
   HF_LOAD_HOLD_WHAT=""
-  bound="$(hf_recycle_load_bound)"
+  bound="${2:-$(hf_recycle_load_bound)}"
   [ -n "$bound" ] || return 0
   if [ -n "${WATCHER_PID:-}" ] && hf_succ_ours_staged "${1:-}" "$WATCHER_PID"; then return 0; fi
   # An unreadable load prints nothing, which compares as 0 below and proceeds.
@@ -11393,12 +11459,74 @@ if [ "${1:-}" = "__recycle" ]; then
   # and latch below (rcy_bgwork_next, rcy_vanish_next, rcy_nudge_left) and the bound now read the
   # clock, so "at 15s" in a row means fifteen seconds.
   rcy_wait_t0="$(date +%s)"
+  # ── K1, WAIT FOR THE COMMIT (lr-wake 2026-10-18, REPORT.md Wave A) ────────────────────────────────
+  # This watcher is detached before the confirm, so for the minutes the foreground spends on the
+  # confirm, the last read and the load gate there is no /exit of ours in the pane. Its 60 s nudge
+  # used to count from the arm and typed the FIRST /exit itself (panes 332, 22, 350, 384; history.jsonl
+  # has them as typed prompts), and the foreground then held and killed it mid-relaunch. Now nothing
+  # here acts on the session until the foreground writes `$CMDFILE.exit-committed` right before its
+  # exit actuator, and every clock below starts at that file. Until then each round only:
+  #   · sees the shell (claude exited without us: relaunch, as before),
+  #   · sees `exit-yielded` (the foreground saw that exit and handed it over: wait, never nudge),
+  #   · sees `exit-aborted` (the foreground held): stand down, nothing typed,
+  #   · sees the foreground gone without a marker for HF_RECYCLE_ORPHAN_GRACE_S (default 10): hand a
+  #     confirmed source back from `$CMDFILE.confirmed` and stand down, so a live claude is not left
+  #     behind the handed-off guard for the whole wait bound,
+  #   · and logs `recycle-nudge-precommit` at 60/150/300 s instead of typing.
+  # A watcher handed no foreground (HF_RCY_FG_PID unset: --relaunch-at-shell, whose pane is already
+  # at its shell, and suites driving the watcher alone) has no commit to wait for and starts committed.
+  rcy_fg_pid="${HF_RCY_FG_PID:-}" rcy_fg_ls="${HF_RCY_FG_LSTART:-}"
+  unset HF_RCY_FG_PID HF_RCY_FG_LSTART
+  case "$rcy_fg_pid" in ''|*[!0-9]*) rcy_fg_pid="" ;; esac
+  rcy_k1=committed; [ -z "$rcy_fg_pid" ] || rcy_k1=precommit
+  rcy_pre_t0="$rcy_wait_t0" rcy_pre_left="60 150 300" rcy_fg_gone_at="" rcy_retyped=0
+  rcy_orphan_grace="${HF_RECYCLE_ORPHAN_GRACE_S:-10}"
+  case "$rcy_orphan_grace" in ''|*[!0-9]*) rcy_orphan_grace=10 ;; esac
+  rcy_fg_alive() {
+    if [ -n "$rcy_fg_ls" ]; then [ "$(_hf_lstart "$rcy_fg_pid")" = "$rcy_fg_ls" ]; else kill -0 "$rcy_fg_pid" 2>/dev/null; fi
+  }
+  rcy_k1_start() { # $1=committed|yielded $2=the marker → the loop's clocks restart at it
+    rcy_k1="$1"; rcy_wait_t0="$(date +%s)"; waited=0
+    rcy_vanish_next=15; rcy_bgwork_next="$rcy_bgwork_every"; rcy_nudge_left="60 150 300"
+    [ "$1" = committed ] || rcy_nudge_left=""
+    echo "→ commit: the foreground wrote ${2##*.} after $(( rcy_wait_t0 - rcy_pre_t0 ))s — the watcher's clock starts here"
+  }
+  rcy_precommit() { # → 0 the round is skipped (still waiting) · 1 a marker is in (the round runs) · exits on a stand-down
+    local now pre at st
+    now="$(date +%s)"; pre=$(( now - rcy_pre_t0 ))
+    if [ -e "$CMDFILE.exit-committed" ]; then rcy_k1_start committed "$CMDFILE.exit-committed"; return 1; fi
+    if [ -e "$CMDFILE.exit-yielded" ]; then rcy_k1_start yielded "$CMDFILE.exit-yielded"; return 1; fi
+    if [ -e "$CMDFILE.exit-aborted" ]; then
+      echo "→ stand-down: the foreground held before its commit (exit-aborted after ${pre}s) — nothing typed"
+      emit_recycle_event recycle-watcher-stood-down "" "$RSID" "the foreground held before its commit; exit-aborted seen at ${pre}s; nothing typed" || true
+      exit 0
+    fi
+    if ! rcy_fg_alive; then
+      [ -n "$rcy_fg_gone_at" ] || rcy_fg_gone_at="$now"
+      if [ $(( now - rcy_fg_gone_at )) -ge "$rcy_orphan_grace" ]; then
+        if [ -s "$CMDFILE.confirmed" ]; then rcy_bgwork_unconfirm; else RCY_BG_UNCONFIRM="no confirm ran, nothing to hand back"; fi
+        st="$(pane_cc_state "$TTY_PATH")"
+        echo "!! recycle ORPHANED at ${pre}s: the foreground (pid $rcy_fg_pid) exited without writing its commit marker, so no /exit of ours exists — nothing typed, the session in $RSID was left as it is (pane: $st; $RCY_BG_UNCONFIRM). Re-run the recycle." >&2
+        emit_recycle_event recycle-watcher-orphaned "" "$RSID" "foreground pid $rcy_fg_pid gone without exit-committed at ${pre}s; nothing typed; pane $st; $RCY_BG_UNCONFIRM" || true
+        exit 1
+      fi
+    fi
+    if [ -n "$rcy_pre_left" ] && [ "$pre" -ge "${rcy_pre_left%% *}" ]; then
+      at="${rcy_pre_left%% *}"
+      case "$rcy_pre_left" in *" "*) rcy_pre_left="${rcy_pre_left#* }" ;; *) rcy_pre_left="" ;; esac
+      echo "→ nudge@${pre}s PRECOMMIT: the foreground has not written exit-committed — nothing typed"
+      emit_recycle_event recycle-nudge-precommit "" "$RSID" "decision=precommit at ${pre}s (checkpoint ${at}s): no exit-committed marker; nothing typed" || true
+    fi
+    return 0
+  }
   while [ "$waited" -lt "$rcy_wait_max" ]; do
     if at_shell; then rcy_shell_ok=1; break; fi
     # The pane's consumer can claim the staged successor and start claude before this loop ever
     # samples the bare shell between the two; the claim is then the proof that the predecessor exited.
     if [ "$rcy_succ_lib" = 1 ] && hf_succ_claim_epoch "$TTY_PATH" "$rcy_w_t0" >/dev/null; then rcy_shell_ok=1; break; fi
-    sleep "$rcy_poll"; waited=$(( $(date +%s) - rcy_wait_t0 ))
+    sleep "$rcy_poll"
+    if [ "$rcy_k1" = precommit ] && rcy_precommit; then continue; fi
+    waited=$(( $(date +%s) - rcy_wait_t0 ))
     # The nudge checkpoint due THIS round, consumed here — before the bgwork arm's `continue` — so a
     # round that answers the dialog skips its nudge exactly as the %-cadence did.
     rcy_nudge_at=""
@@ -11432,7 +11560,9 @@ if [ "${1:-}" = "__recycle" ]; then
     # that sentence is worth having even when the kill switch is off or the send is refused.
     # Bounded by CC_RECYCLE_BGWORK_MAX (default 2, against a dialog that is answered once): a
     # mis-detect can cost at most two stray keystrokes, never a keystroke storm.
-    if [ "$waited" -ge "$rcy_bgwork_next" ] && [ "$rcy_bgwork_sent" -lt "$rcy_bgwork_max" ]; then
+    # K1: only once our /exit exists — a dialog before the commit was not raised by this recycle, and
+    # an answer to it would stop or move work the foreground has not decided to touch.
+    if [ "$rcy_k1" = committed ] && [ "$waited" -ge "$rcy_bgwork_next" ] && [ "$rcy_bgwork_sent" -lt "$rcy_bgwork_max" ]; then
       rcy_bgwork_next=$(( (waited / rcy_bgwork_every + 1) * rcy_bgwork_every ))
       bgk="" rcy_bg_up=0
       if bgk="$(pane_bgwork_key "$IT2" "$RSID")" && [ -n "$bgk" ]; then
@@ -11724,24 +11854,31 @@ if [ "${1:-}" = "__recycle" ]; then
       # lost transport case), itself read back before its CR. Anything else — a draft, a merged
       # buffer, an unreadable box — HOLDS: the recycle then fails loudly at the 600s refusal with
       # the session alive and the operator's text intact, which is the recoverable outcome.
+      # Reached only in the committed state (K1): the checkpoints count from exit-committed, so
+      # "60 s" means sixty seconds after OUR /exit. Every arm writes a row (pane 7, 2026-10-17, and
+      # pane 332 were silent exits because the cr and retype arms wrote none).
       nd="$(recycle_nudge_decision "$IT2" "$RSID")"
       case "$nd" in
         cr)
-          hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true ;;
+          hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true
+          echo "→ nudge@${waited}s CR: the composer held exactly our /exit"
+          emit_recycle_event recycle-nudge-cr "" "$RSID" "decision=cr at ${waited}s after exit-committed: the composer read exactly /exit; CR sent" || true ;;
         retype)
-          if [ "$rcy_nudge_at" = 60 ]; then
-            # typed-send-lint:allow — the THREE LINES BELOW are this send's echo-verification, in
-            # the order the lint's own doctrine demands: type, read the composer back, submit the
-            # CR only if it reads back exactly the line that was typed. A mangled or dropped send
-            # leaves `nc` unequal to "/exit" and the CR is withheld, so no command line can be
-            # submitted unverified — the same discharge a sanctioned helper gives, written inline
-            # because it2_type_verified would also bring its 4-attempt retry to an arm that
-            # deliberately retypes ONCE, at the 60s checkpoint only. Per-LINE, so a NEW raw send
-            # anywhere else in this watcher is a violation again.
-            hf_bounded "$IT2" session send -s "$RSID" "/exit" >/dev/null 2>&1 || true
-            sleep 1
-            nc="$(composer_content "$IT2" "$RSID")" || nc=""
-            if [ "$nc" = "/exit" ]; then hf_bounded "$IT2" session send -s "$RSID" $'\r' >/dev/null 2>&1 || true; fi
+          if [ "$rcy_retyped" = 0 ]; then
+            # ONCE, after the commit, and through hf_exit_readback: type, read back, CR only on an
+            # exact /exit, take a trailing /exit of ours back out otherwise, and receipt what may be
+            # left — the self-close watcher's retype, the same undo and the same receipt.
+            rcy_retyped=1
+            if RCY_IT2="$IT2" hf_exit_readback "$RSID"; then
+              echo "→ nudge@${waited}s RETYPE: the composer was empty with claude alive — /exit retyped, read back, CR sent"
+              emit_recycle_event recycle-nudge-retype "" "$RSID" "decision=retype at ${waited}s after exit-committed: /exit retyped, read back exactly, CR sent" || true
+            else
+              echo "→ nudge@${waited}s RETYPE HELD: /exit retyped but read back '${HF_EXIT_RB_TEXT:-?}' — no CR; ${HF_EXIT_RB_UNDO:-no DELs sent}"
+              emit_recycle_event recycle-nudge-retype "" "$RSID" "decision=retype at ${waited}s after exit-committed: read back '${HF_EXIT_RB_TEXT:-?}', no CR; ${HF_EXIT_RB_UNDO:-no DELs sent}" || true
+            fi
+          else
+            echo "→ nudge@${waited}s HELD (retype-spent): the composer is empty and the one retype was already used"
+            emit_recycle_event recycle-nudge-held "" "$RSID" "decision=retype-spent at ${waited}s" || true
           fi ;;
         *)
           echo "→ nudge@${waited}s HELD ($nd): composer is not a stranded /exit — a CR here would submit someone else's buffer"
@@ -12962,6 +13099,9 @@ if [ "${1:-}" = "--relaunch-at-shell" ]; then
   printf '%s\n' "$CMD" > "$RAS_CMDFILE"
   echo "command: $CMD"
   echo "verdict: OK — handing to the watcher"
+  # No foreground commits here (the pane is already at its shell), so no commit identity rides along:
+  # one inherited from an enclosing recycle would make the watcher wait for a marker nobody writes.
+  unset HF_RCY_FG_PID HF_RCY_FG_LSTART
   exec "$0" __recycle "$RAS_PANE" "$RAS_TTY" "$RAS_CMDFILE" "$RCY_CWD" "$RAS_SESSION" "" "" "" \
     "$RAS_CFG" "$RAS_SESSION" "$(date -u +%FT%T)" "$RAS_SRC_TX" "$(dirname "$RAS_LAUNCHER")" ""
 fi
@@ -13204,12 +13344,12 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
   #     is the condition the /exit-time gate holds on, and its own predicate decides here, handed the
   #     one reading taken (its HF_LOAD_PER_CORE seam), so the line and the verdict cannot disagree.
   if [ "${HF_PRECHECK_TYPED_RELAUNCH:-0}" = 1 ]; then
-    PRP_LB="$(hf_recycle_load_bound)"
+    PRP_LB="$(hf_recycle_precheck_load_bound)"
     if [ -z "$PRP_LB" ]; then
       echo "load: not gated (the recycle's load hold is off)"
     else
       PRP_LPC="$(hf_load_per_core || true)"
-      if ! HF_LOAD_PER_CORE="$PRP_LPC" hf_recycle_load_gate ""; then
+      if ! HF_LOAD_PER_CORE="$PRP_LPC" hf_recycle_load_gate "" "$PRP_LB"; then
         echo "load: ${PRP_LPC}/core is above the ${PRP_LB}/core bound, and this move types its relaunch — held before anything is transplanted"
         prp_verdict "HELD:load" 3
       fi
@@ -18591,7 +18731,12 @@ recycle_fire_commit() {
   # slept after the read would re-open exactly the window the read exists to close.
   hf_wake_guard "the /exit"
   # ── THE LAST READ (W2b) — see hf_recycle_last_read. Any refusal unconfirms, disarms, holds. ────
+  # K2 (lr-wake 2026-10-18): each hold re-reads the subject at its own call site, because the last
+  # read takes minutes under load and a hold after the subject exited disarms the watcher that is
+  # relaunching it (pane 332, 07:24:33Z). The yield is here and never a `return 0` inside
+  # hf_recycle_hold, which would fall through to the exit actuators below.
   if ! hf_recycle_last_read; then
+    if hf_recycle_subject_gone; then hf_recycle_subject_yield "at the last-read hold"; return 0; fi
     hf_recycle_hold "$HF_LR_REASON" "last read after confirm: $HF_LR_WHAT" "$HF_LR_WHAT"
   fi
   # ── THE LOAD HOLD (REPORT.md fix 8b) — see hf_recycle_load_gate. Before the debt and before both
@@ -18600,6 +18745,7 @@ recycle_fire_commit() {
   # without the gate gets 127, and proceeds as it did before the gate existed.
   rcy_load_rc=0; hf_recycle_load_gate "${tty:-}" || rcy_load_rc=$?
   if [ "$rcy_load_rc" = 1 ]; then
+    if hf_recycle_subject_gone; then hf_recycle_subject_yield "at the load hold"; return 0; fi
     hf_recycle_hold load "$HF_LOAD_HOLD_WHAT" "$HF_LOAD_HOLD_WHAT; re-run once the load falls"
   fi
   # THE RESUME DEBT OPENS HERE, before the point of no return (CLOSE_RESUME_CUSTODY D4). From the
@@ -18621,6 +18767,17 @@ recycle_fire_commit() {
       --why "recycle of pane $SID ($(if [ -n "$RESUME_LAUNCHER" ]; then printf 'resume-launcher, same sid'; else printf 'fresh brief'; fi)) about to type /exit"
   else
     echo "⚠ resume-debt NOT opened: no session id resolved for pane $SID — this close is untracked" >&2
+  fi
+  # ── K1, THE COMMIT MARKER (lr-wake 2026-10-18, REPORT.md Wave A) ────────────────────────────────
+  # The watcher was detached before the confirm, and its 60 s nudge used to count from its arm: at
+  # 8-30 load per core the confirm, last read and load gate outlast it, so the nudge typed /exit into
+  # an idle composer before this process had decided to exit (history.jsonl records it as a typed
+  # prompt in four sessions, 2026-10-18). Written here, after the last hold and the debt and right
+  # before the first exit actuator, and from here only: the watcher's nudges, its retype and its
+  # background-work answers count from this file, and it never acts on our /exit before it exists.
+  if [ -n "${cmdfile:-}" ]; then
+    date +%s > "$cmdfile.exit-committed" 2>/dev/null \
+      || echo "⚠ recycle: could not write $cmdfile.exit-committed — the watcher waits for it, so it will neither nudge nor answer a dialog for this /exit" >&2
   fi
   # ── THE SIGNAL EXIT (REPORT.md fix 10) — see hf_exit_signal. Exited ⇒ the same return as a
   # submitted /exit, so the watcher's post-exit path is unchanged. Ignored ⇒ held with the debt
@@ -19142,6 +19299,13 @@ recycle_fire_armed() {
   if [ "${#HF_ORIG_ARGV[@]}" -gt 0 ]; then printf '%s\0' "${HF_ORIG_ARGV[@]}" > "$HF_RCY_ORIG_ARGV_FILE" 2>/dev/null || HF_RCY_ORIG_ARGV_FILE=""
   else : > "$HF_RCY_ORIG_ARGV_FILE" 2>/dev/null || HF_RCY_ORIG_ARGV_FILE=""; fi
   HF_RCY_ORIG_SELF="$HF_ORIG_SELF" HF_RCY_ORIG_PWD="$HF_ORIG_PWD" HF_RCY_WATCHER_LOG="$log"
+  # K1: the process that will write the commit marker, so the watcher can tell "still deciding" from
+  # "died without deciding" (pid + start time; a pid alone is reused). Its OWN pid: the deferred
+  # self-recycle runs in a subshell, where $$ names the parent that has already returned. BASHPID is
+  # bash 4+; under 3.2 an exec'd sh reports the shell that ran the substitution as its parent.
+  HF_RCY_FG_PID="${BASHPID:-$(exec sh -c 'echo "$PPID"')}"
+  HF_RCY_FG_LSTART="$(_hf_lstart "$HF_RCY_FG_PID")"
+  export HF_RCY_FG_PID HF_RCY_FG_LSTART
   # The transplant cause (lr-stranded-husk C1): the watcher's bgwork arm reads it, and the re-exec
   # resets RCY_TRANSPLANT_CAUSE at the top of the script. Set every detach, empty included, so a
   # nested recycle never inherits an outer one's cause.
