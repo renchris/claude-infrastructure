@@ -104,6 +104,9 @@ STUB
   # silence; now that it is FATAL the dependency has to be named. Cases that want NO usable map
   # override this.
   export CC_ACCOUNT_MAP="$REPO/lib/account-map.generated.sh"
+  # THE PROBE BEFORE EVERY SPAWN (lr-wake 2026-10-18, K5) reads the box; these cases choose its verdict
+  # instead, and the stub plays the launcher's "claude started" report (tests/fixtures/lr-poller-capacity-stub.sh).
+  export LR_POLLER_CAPACITY_LIB="$REPO/tests/fixtures/lr-poller-capacity-stub.sh"
 }
 
 # A REAL-shape lead transcript: first line carries cwd; last line is the verbatim limit
@@ -945,6 +948,74 @@ STUB
   LR_POLLER_AUTOFIRE=0 run bash "$POLLER" --once
   [ "$status" -eq 0 ] || { echo "$output"; cat "$STATE/poller.log"; false; }
   grep -q "CLAIMED-NOT-LIVE cccccccc" "$STATE/poller.log" || { cat "$STATE/poller.log"; false; }
+}
+
+# ══ K5: HOLDER, PROBE, MINT, SPAWN — AND RESUMED ONLY AFTER THE LAUNCHER REPORTS ══════════════════
+# lr-wake incident 2026-10-18 (REPORT §4 Wave B step 5): at 10:00:12Z this autofire opened pane 428
+# for 509e3aad while pid 7301 held it live in pane 28 (no --resume in its argv, no registry row), and
+# logged RESUMED in the same breath, so the in-pane refusal 2 s later was never retried (c2 §2.7).
+K5_SID="b5b5b5b5-1111-2222-3333-444444444444"
+k5_tick() { LR_POLLER_AUTOFIRE=1 LR_POLLER_SPAWN=tmux LR_POLLER_RC_WAIT_S=0 run bash "$POLLER" --once; }
+
+@test "K5: a LIVE beat holder means the autofire spawns nothing and leaves the record PARKED, said once" {
+  mk_parked "$K5_SID" "$(past_iso)"
+  export CC_BEAT_DIR="$BATS_TEST_TMPDIR/beats"; mkdir -p "$CC_BEAT_DIR"
+  jq -n --arg sid "$K5_SID" --argjson pid "$$" --arg ls "$(TZ=UTC ps -o lstart= -p $$ | tr -s ' ' | sed 's/^ *//; s/ *$//')" \
+    '{sid:$sid, pane:"28", pid:$pid, lstart:$ls, t:1, kind:"prompt"}' > "$CC_BEAT_DIR/$K5_SID.json"
+  export LR_FAKE_CA_LOG="$BATS_TEST_TMPDIR/ca.log"
+  k5_tick; k5_tick
+  [ "$status" -eq 0 ]
+  ! grep -q 'new-session' "$TMUX_LOG" || { cat "$TMUX_LOG"; false; }
+  [ "$(launcher_count b5b5b5b5)" -eq 0 ]
+  [ ! -s "$LR_FAKE_CA_LOG" ]                                         # the holder check runs before the probe
+  [ -f "$STATE/parked/$K5_SID.json" ]
+  [ "$(grep -c "LIVE-HOLDER $K5_SID — its last beat names a live process (pane 28, pid $$)" "$STATE/poller.log")" -eq 1 ]
+}
+
+@test "K5: the probe REFUSES — no launcher, no token, record PARKED (CAP-WAIT once), nothing spent" {
+  mk_parked "$K5_SID" "$(past_iso)"
+  export LR_FAKE_CA_LOG="$BATS_TEST_TMPDIR/ca.log"
+  LR_FAKE_PROBE=refuse k5_tick; LR_FAKE_PROBE=refuse k5_tick
+  ! grep -q 'new-session' "$TMUX_LOG" || false
+  [ "$(launcher_count b5b5b5b5)" -eq 0 ]
+  ! grep -q '^mint ' "$LR_FAKE_CA_LOG"
+  [ -f "$STATE/parked/$K5_SID.json" ]
+  [ "$(grep -c "CAP-WAIT $K5_SID" "$STATE/poller.log")" -eq 1 ]
+  [ ! -e "$STATE/fire-fail/$K5_SID" ]
+}
+
+@test "K5: admitted — the launcher carries the token, the actor and its run dir; RESUMED waits for the launcher's report" {
+  mk_parked "$K5_SID" "$(past_iso)"
+  export LR_FAKE_CA_LOG="$BATS_TEST_TMPDIR/ca.log"
+  LR_FAKE_LAUNCH=none k5_tick
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'new-session' "$TMUX_LOG")" -eq 1 ]
+  l="$(launcher_for b5b5b5b5)"
+  grep -q '^export CC_ADMIT_ACTOR=poller LR_ADMIT_TOKEN=.' "$l"
+  run_dir="$(sed -n 's/^export LR_RUN_DIR=//p' "$l")"
+  [ -n "$run_dir" ]
+  grep -q "^mint sid=$K5_SID kind=turn run=$run_dir\$" "$LR_FAKE_CA_LOG"
+  grep -q "SPAWNED $K5_SID on next4 (autofire, tmux)" "$STATE/poller.log"
+  ! grep -q "RESUMED $K5_SID" "$STATE/poller.log" || { cat "$STATE/poller.log"; false; }
+  [ -f "$STATE/parked/$K5_SID.json" ]                                 # nothing known yet ⇒ still parked
+  LR_FAKE_LAUNCH=none k5_tick                                        # pending: no second spawn
+  [ "$(grep -c 'new-session' "$TMUX_LOG")" -eq 1 ]
+  printf '{"state":"relaunch-typed","stage":"expect"}\n' >> "$run_dir/events.jsonl"
+  k5_tick
+  grep -q "RESUMED $K5_SID on next4 (autofire, tmux) — the launcher started claude" "$STATE/poller.log"
+  [ -f "$STATE/resumed/$K5_SID.json" ]
+  [ ! -e "$STATE/parked/$K5_SID.spawned" ]
+}
+
+@test "K5: the launcher reports rc 9 (the pane's gate refused) — RELAUNCH-FAILED, record LEFT PARKED, claim released, no strike" {
+  mk_parked "$K5_SID" "$(past_iso)"
+  LR_FAKE_LAUNCH=rc:9 k5_tick
+  [ "$status" -eq 0 ]
+  grep -q "RELAUNCH-FAILED $K5_SID on next4 (tmux) — the launcher exited 9 before claude started" "$STATE/poller.log" || { cat "$STATE/poller.log"; false; }
+  ! grep -q "RESUMED $K5_SID" "$STATE/poller.log" || false
+  [ -f "$STATE/parked/$K5_SID.json" ]
+  [ ! -e "$STATE/fire-claims/$K5_SID" ]
+  [ ! -e "$STATE/fire-fail/$K5_SID" ]
 }
 
 # ══════════════════════════════════════════════════════════════════════════════

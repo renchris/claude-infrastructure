@@ -337,3 +337,96 @@ repair_bundle() { mkdir -p "$LR_STATE_DIR/$SID/bundle-20261001T000000Z"; printf 
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ "$(req_field source_pane)" = "" ]
 }
+
+# ── THE POLLER'S CAPACITY LANE (lr-wake incident 2026-10-18, REPORT §4 Wave B step 5, K3/K5) ───
+# A launch the in-pane gate refused leaves ONE durable requests/<sid>.cc-lr.json (cause:capacity),
+# and the poller is the only thing that retries it: probe first, and open a pane only on an admit,
+# carrying the admission as LR_ADMIT_TOKEN. Overnight the alternative was 25 hand fires and 12
+# refusal husks (c2 §2.5), and the poller's own autofire opened 509e3aad a second time while pid
+# 7301 held it live in pane 28 (c2 Correction 3). The poller runs with the shared capacity stub
+# (tests/fixtures/lr-poller-capacity-stub.sh), so the verdict is the case's, never this box's.
+cap_lane_setup() {
+  POLLER="$REPO/scripts/limit-recover/lr-reset-poller.sh"
+  PSTATE="$HOME/.reso/limit-recover"
+  mkdir -p "$PSTATE/requests" "$PSTATE/parked" "$PSTATE/resumed" "$BATS_TEST_TMPDIR/wt" "$BATS_TEST_TMPDIR/launchers"
+  PREQ="$PSTATE/requests/$SID.cc-lr.json"
+  export LR_UPGRADE_AUTO=off LR_POLLER_NO_CENSUS=1 IT2_WRAPPER_NO_KITTY=1 LR_POLLER_SPAWN=tmux
+  export CC_ACCOUNT_MAP="$REPO/lib/account-map.generated.sh" CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"
+  export CC_KITTY_SOCKET_BIN="$BATS_TEST_TMPDIR/no-kitty-socket" CC_BEAT_DIR="$BATS_TEST_TMPDIR/beats"
+  export LR_POLLER_LAUNCH_DIR="$BATS_TEST_TMPDIR/launchers"
+  export LR_POLLER_CAPACITY_LIB="$REPO/tests/fixtures/lr-poller-capacity-stub.sh" LR_FAKE_CA_LOG="$BATS_TEST_TMPDIR/ca.log"
+  # spawn_resume's only effect in this lane is `tmux new-session … /bin/bash <launcher>`: the stub
+  # records it, so "spawn_resume was never called" is an empty tmux.argv
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %q\nexit 0\n' "$BATS_TEST_TMPDIR/tmux.argv" > "$STUBBIN/tmux"
+  printf '#!/bin/bash\nexit 1\n' > "$STUBBIN/osascript"
+  chmod +x "$STUBBIN/tmux" "$STUBBIN/osascript"
+  jq -n --arg sid "$SID" --arg cwd "$BATS_TEST_TMPDIR/wt" --argjson t "$(( $(date +%s) - 120 ))" \
+    '{sid:$sid, mode:"recover", cause:"capacity", account:"next2", target:"next2", cwd:$cwd,
+      prompt:"/limit-recover", first_refused_at:$t, refusals:1, requested_by:"lr-fire-resume"}' > "$PREQ"
+}
+poll() { run bash "$POLLER" --once; }
+plog() { cat "$PSTATE/poller.log" 2>/dev/null; }
+
+@test "capacity lane: the probe REFUSES — spawn_resume is never called, REQUEST-STAY backs off, no attempt is spent" {
+  cap_lane_setup
+  LR_FAKE_PROBE=refuse poll
+  [ "$status" -eq 0 ] || { echo "$output"; plog; false; }
+  [ ! -s "$BATS_TEST_TMPDIR/tmux.argv" ] || { cat "$BATS_TEST_TMPDIR/tmux.argv"; false; }
+  [ -z "$(ls "$BATS_TEST_TMPDIR/launchers")" ]
+  grep -q "REQUEST-STAY $SID (next2) — capacity: .*next probe in 60s, no attempt spent" "$PSTATE/poller.log" || { plog; false; }
+  [ "$(jq -r '.attempts // 0' "$PREQ")" = 0 ]
+  [ "$(jq -r .cap_k "$PREQ")" = 1 ]
+  [ "$(jq -r .next_at "$PREQ")" -gt "$(date +%s)" ]
+  # the probe ran on the QUEUE's clock, and no token was minted for a refusal
+  grep -q "probe caller=lr-reset-poller .*queued_since=$(jq -r .first_refused_at "$PREQ")" "$LR_FAKE_CA_LOG"
+  ! grep -q '^mint ' "$LR_FAKE_CA_LOG"
+  # the next tick is inside the backoff: nothing is probed again
+  LR_FAKE_PROBE=refuse poll
+  [ "$(grep -c '^probe ' "$LR_FAKE_CA_LOG")" -le 2 ]
+  [ ! -s "$BATS_TEST_TMPDIR/tmux.argv" ]
+}
+
+@test "capacity lane: the probe ADMITS — exactly one spawn, and its launcher carries LR_ADMIT_TOKEN" {
+  cap_lane_setup
+  poll
+  [ "$status" -eq 0 ] || { echo "$output"; plog; false; }
+  [ "$(grep -c 'new-session' "$BATS_TEST_TMPDIR/tmux.argv")" = 1 ] || { cat "$BATS_TEST_TMPDIR/tmux.argv"; plog; false; }
+  launcher="$(ls "$BATS_TEST_TMPDIR/launchers"/lr-poller-launch-*.sh)"
+  [ "$(printf '%s\n' "$launcher" | wc -l | tr -d ' ')" = 1 ]
+  tok="$(sed -n 's/^export CC_ADMIT_ACTOR=poller LR_ADMIT_TOKEN=//p' "$launcher")"
+  [ -f "$tok" ] || { cat "$launcher"; false; }
+  grep -q '^export CC_ADMIT_ACTOR=poller ' "$launcher"
+  ! grep -q 'LR_RUN_DIR' "$launcher"              # K3: no run-dir owner, so a pane refusal re-queues HERE
+  grep -q -- "--prompt /limit-recover" "$launcher"
+  grep -q "^mint sid=$SID kind=turn run=\$" "$LR_FAKE_CA_LOG"
+  grep -q "REQUEST-SPAWNED $SID on next2 (capacity queue, tmux)" "$PSTATE/poller.log" || { plog; false; }
+  [ "$(jq -r .spawned_at "$PREQ")" -gt 0 ]
+  # the request stays queued until a holder is seen, and a second tick does not spawn again
+  poll
+  [ "$(grep -c 'new-session' "$BATS_TEST_TMPDIR/tmux.argv")" = 1 ]
+}
+
+@test "capacity lane: a LIVE beat holder means nothing spawns (the 509e3aad replay) — the request retires" {
+  cap_lane_setup
+  # 509e3aad: pid 7301 held it live in pane 28, started WITHOUT --resume and with no registry row.
+  # Here the holder is this bats process: alive, under its own start time.
+  mkdir -p "$CC_BEAT_DIR"
+  jq -n --arg sid "$SID" --argjson pid "$$" --arg ls "$(TZ=UTC ps -o lstart= -p $$ | tr -s ' ' | sed 's/^ *//; s/ *$//')" \
+    '{sid:$sid, pane:"28", pid:$pid, lstart:$ls, t:1, kind:"prompt", who:"auto"}' > "$CC_BEAT_DIR/$SID.json"
+  poll
+  [ "$status" -eq 0 ] || { echo "$output"; plog; false; }
+  [ ! -s "$BATS_TEST_TMPDIR/tmux.argv" ] || { cat "$BATS_TEST_TMPDIR/tmux.argv"; false; }
+  [ ! -s "$LR_FAKE_CA_LOG" ]                      # not even probed: the holder check comes first (K5)
+  grep -q "REQUEST-RETIRED $SID — capacity queue: a live holder runs it (pane 28, pid $$)" "$PSTATE/poller.log" || { plog; false; }
+  [ ! -e "$PREQ" ]
+  [ -f "$PSTATE/claimed/$SID.cc-lr.recovered.json" ]
+}
+
+@test "capacity lane CONTROL: the same beat naming a DEAD pid is no holder — the lane goes on to probe" {
+  cap_lane_setup
+  mkdir -p "$CC_BEAT_DIR"
+  jq -n --arg sid "$SID" '{sid:$sid, pane:"28", pid:4194105, lstart:"Thu Jan  1 00:00:00 1970", t:1, kind:"prompt"}' > "$CC_BEAT_DIR/$SID.json"
+  LR_FAKE_PROBE=refuse poll
+  grep -q '^probe ' "$LR_FAKE_CA_LOG"
+  [ -e "$PREQ" ]
+}

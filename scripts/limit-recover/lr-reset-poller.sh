@@ -822,6 +822,158 @@ spawn_resume() {
   esac
 }
 
+# ══ ONE ADMISSION PER SPAWN (lr-wake incident 2026-10-18, REPORT §4 Wave B step 5, contract K5) ═══
+# Every pane this daemon opens follows ONE order: live-beat holder check, then probe, then mint, then
+# spawn. MEASURED 2026-10-18: the autofire opened pane 428 for 509e3aad at 10:00:12Z while pid 7301
+# held that session live in pane 28 — started WITHOUT --resume, so the argv census was blind, and with
+# no registry row either — and only the in-pane capacity refusal 2 s later stopped a split brain
+# (c2 §2.7 and its Correction 3). The same tick logged RESUMED and retired the parked record, so the
+# refusal was never retried.
+#
+# The capacity library is sourced on first use only: most ticks spawn nothing. A library that cannot
+# be reached is LOUD and does not block the recovery (lr-lib.sh's lr_capacity_probe_corrected rule).
+LRP_CA_LOADED=""
+lrp_capacity_lib() { # → 0 when cc_capacity_probe and cc_capacity_token_mint are defined
+  local c
+  [[ -n "$LRP_CA_LOADED" ]] && { [[ "$LRP_CA_LOADED" == yes ]]; return; }
+  LRP_CA_LOADED=no
+  for c in "${LR_POLLER_CAPACITY_LIB:-}" "$(dirname "$_LRP_SELF")/../lib/capacity-admit.sh" "$LR/../lib/capacity-admit.sh" \
+           "${HOME:-}/.claude/scripts/lib/capacity-admit.sh"; do
+    # shellcheck disable=SC1090  # runtime-resolved library ladder
+    [[ -n "$c" && -f "$c" ]] && { . "$c" 2>/dev/null || true; break; }
+  done
+  command -v cc_capacity_probe >/dev/null 2>&1 && command -v cc_capacity_token_mint >/dev/null 2>&1 && LRP_CA_LOADED=yes
+  [[ "$LRP_CA_LOADED" == yes ]]
+}
+# lrp_beat_holder <sid> → prints "<pane> <pid>" and returns 0 when the session's LAST BEAT names a
+# process that is alive under the same start time (identity is (pid, lstart), never a pid alone: this
+# box forks ~1,162 pids/s). The beat is the one store that saw 509e3aad: hooks/session-beat.sh writes
+# it on every turn whatever argv the claude was started with. lstart is compared in UTC and in the
+# ambient zone, as spawn-presence.sh's census does. A beat with no lstart is judged by its pid alone,
+# which errs toward HOLDING — the direction that cannot open a duplicate.
+lrp_beat_holder() {
+  local f row pid ls pane cur amb
+  f="${CC_BEAT_DIR:-${HOME:-}/.claude/cc-beats}/${1:?}.json"
+  [[ -f "$f" ]] || return 1
+  row="$(jq -r '[(.pid // "" | tostring), (.lstart // "" | tostring), (.pane // "" | tostring)] | @tsv' "$f" 2>/dev/null)" || return 1
+  IFS=$'\t' read -r pid ls pane <<< "$row"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  ls="$(printf '%s' "$ls" | tr -s '[:blank:]' ' ' | sed -e 's/^ //' -e 's/ $//')"
+  if [[ -n "$ls" ]]; then
+    cur="$(TZ=UTC ps -o lstart= -p "$pid" 2>/dev/null | tr -s '[:blank:]' ' ' | sed -e 's/^ //' -e 's/ $//')"
+    amb="$(ps -o lstart= -p "$pid" 2>/dev/null | tr -s '[:blank:]' ' ' | sed -e 's/^ //' -e 's/ $//')"
+    [[ -z "$cur" || "$ls" == "$cur" || "$ls" == "$amb" ]] || return 1
+  fi
+  printf '%s %s' "${pane:--}" "$pid"
+}
+# lrp_note_once <marker> <value> <line> — log <line> only when <value> differs from the marker's,
+# so a standing state is one line, not one per tick (this daemon's 1,800-identical-lines lesson).
+lrp_note_once() {
+  [[ "$(cat "$1" 2>/dev/null)" == "$2" ]] && return 0
+  printf '%s\n' "$2" > "$1" 2>/dev/null || true
+  log "$3"
+}
+# lrp_admit_spawn <sid> <acct> <what> [queued-since] → 0 admitted (LRP_ADMIT_TOKEN may hold a token
+# path) / 9 refused (LRP_ADMIT_WHY says why). The probe charges nothing; a refusal therefore costs
+# the session no attempt and no count, and the queue's own clock (CC_ADMIT_QUEUED_SINCE, see
+# capacity-admit.sh _cc_admit_spend) is what bounds it. The token is minted only AFTER an admit and
+# is bound to the run dir the launcher will report into, so an unredeemed one stops counting in
+# flight the moment that run fails (capacity-admit.sh _cc_admit_token_pending).
+LRP_ADMIT_TOKEN=""; LRP_ADMIT_WHY=""
+lrp_admit_spawn() {
+  local sid="$1" acct="$2" what="$3" since="${4:-}" run_dir="${5:-}" rc=0
+  LRP_ADMIT_TOKEN=""; LRP_ADMIT_WHY=""
+  if ! lrp_capacity_lib; then
+    log "CAP-UNGATED $sid — scripts/lib/capacity-admit.sh is unreachable from this layer; spawning with no probe and no token"
+    return 0
+  fi
+  # lr-lib's wrapper is the probe every limit-recover caller uses (load term off, swap segment
+  # ceiling, phantom-beat correction); the bare probe is the fallback when lr-lib is absent.
+  if command -v lr_capacity_probe_corrected >/dev/null 2>&1; then
+    CC_ADMIT_QUEUED_SINCE="$since" lr_capacity_probe_corrected lr-reset-poller "$what" 2>/dev/null || rc=$?
+  else
+    CC_ADMIT_QUEUED_SINCE="$since" CC_ADMIT_LOAD_TERM=off cc_capacity_probe lr-reset-poller "$what" 2>/dev/null || rc=$?
+  fi
+  if (( rc != 0 )); then
+    LRP_ADMIT_WHY="$(cc_capacity_admit_reason 2>/dev/null || true)"
+    return 9
+  fi
+  LRP_ADMIT_WHY="$(cc_capacity_admit_reason 2>/dev/null || true)"
+  LRP_ADMIT_TOKEN="$(CC_ADMIT_TOKEN_KIND=turn CC_ADMIT_TOKEN_RUN="$run_dir" cc_capacity_token_mint "$sid" 2>/dev/null || true)"
+  [[ -n "$LRP_ADMIT_TOKEN" ]] || log "CAP-NO-TOKEN $sid — the probe admitted but no token could be minted; the pane will evaluate the gate itself"
+  return 0
+}
+# lrp_admit_discard <run-dir> — an admission whose spawn never happened is dropped at once, so it
+# never sits in the in-flight count (the token file is ours; the run dir is empty at this point).
+lrp_admit_discard() {
+  [[ -z "$LRP_ADMIT_TOKEN" ]] || rm -f "$LRP_ADMIT_TOKEN" 2>/dev/null || true
+  LRP_ADMIT_TOKEN=""
+  [[ -z "${1:-}" ]] || rmdir "$1" 2>/dev/null || true
+}
+# lrp_write_launcher <launcher> <acct> <cwd> <sid> <run-dir> <token> [--model m] [--effort e] [--prompt p]
+# The pane's env names THIS daemon as the actor (its refusals and releases are its own, never the
+# rescue's or the operator's), carries the admission it was granted, and names the run dir the
+# launcher reports into — which also makes this daemon the run-dir owner that retries a refusal (K3:
+# rc 9, no request written). %q for every value: this file is bash SOURCE.
+lrp_write_launcher() {
+  local launcher="$1" acct="$2" cwd="$3" sid="$4" run_dir="$5" tok="$6"; shift 6
+  { echo '#!/bin/bash'
+    printf 'export CC_ADMIT_ACTOR=poller LR_ADMIT_TOKEN=%q\n' "$tok"
+    # no run dir ⇒ none exported: an empty LR_RUN_DIR must not read as an owner (K3)
+    [[ -z "$run_dir" ]] || printf 'export LR_RUN_DIR=%q\n' "$run_dir"
+    printf 'exec %q %q %q %q' "$LR/lr-fire-resume.sh" "$acct" "$cwd" "$sid"
+    while (( $# >= 2 )); do printf ' %s %q' "$1" "$2"; shift 2; done
+    printf '\n'
+  } > "$launcher" && chmod +x "$launcher"
+}
+# ── RESUMED IS LOGGED AFTER THE LAUNCHER REPORTS, NEVER AT THE SPAWN ──────────────────────────
+# A spawn only proves a pane opened. The launcher reports into its run dir (lr-fire-resume.sh):
+# `relaunch.rc` for any exit before the TUI, and a `relaunch-typed` state when it hands over to
+# claude. `$PARKED/<sid>.spawned` holds `<run dir>\t<mech>\t<epoch>` until one of them appears.
+LRP_RUNS="$STATE/poller-runs"
+lrp_spawn_verdict() { # $1=run dir → prints typed | rc:<n> | pending
+  local rc
+  if [[ -f "$1/relaunch.rc" ]]; then
+    rc="$(head -n 1 "$1/relaunch.rc" 2>/dev/null | tr -dc '0-9')"; printf 'rc:%s' "${rc:-?}"; return 0
+  fi
+  if [[ -f "$1/events.jsonl" ]] && grep -q '"state":"relaunch-typed"' "$1/events.jsonl" 2>/dev/null; then
+    printf typed; return 0
+  fi
+  printf pending
+}
+# lrp_spawn_settle <sid> <parked-record> <acct> → 0 settled (RESUMED, or released after a failure) ·
+# 1 still pending · 2 nothing in flight for this sid
+lrp_spawn_settle() {
+  local sid="$1" pf="$2" acct="$3" mark="$PARKED/$1.spawned" d="" mech="" at="" v age grace
+  [[ -f "$mark" ]] || return 2
+  IFS=$'\t' read -r d mech at < "$mark" || true
+  [[ "$at" =~ ^[0-9]+$ ]] || at=0
+  v="$(lrp_spawn_verdict "$d")"
+  case "$v" in
+    typed)
+      log "RESUMED $sid on $acct (autofire, $mech) — the launcher started claude (run $d)"
+      mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null
+      rm -f "$PARKED/$sid.notified" "$mark"
+      fire_fail_clear "$sid"
+      return 0 ;;
+    rc:*)
+      rm -f "$mark" "$CLAIMS/$sid" 2>/dev/null || true
+      # rc 9 is the in-pane capacity gate (the token was spent or refused): a full box, not a broken
+      # spawn, so it is not a strike toward the fire-failure latch. Every other rc is.
+      [[ "$v" == rc:9 ]] || fire_fail_note "$sid" "relaunch-${v}"
+      log "RELAUNCH-FAILED $sid on $acct ($mech) — the launcher exited ${v#rc:} before claude started (run $d); record LEFT PARKED and retried on a later tick"
+      return 0 ;;
+  esac
+  grace="${LR_POLLER_SPAWN_GRACE_S:-600}"; [[ "$grace" =~ ^[0-9]+$ ]] || grace=600
+  age=$(( $(date +%s) - at ))
+  (( age <= grace )) && return 1
+  rm -f "$mark" "$CLAIMS/$sid" 2>/dev/null || true
+  fire_fail_note "$sid" relaunch-unreported
+  log "RELAUNCH-UNREPORTED $sid on $acct ($mech) — no relaunch.rc and no start in ${age}s (run $d); record LEFT PARKED"
+  return 0
+}
+
 # ── monthly-spend → class-B decision packet (P0-8 / I-LIVE-1) ───────────────────────────
 SPEND_RE="(hit|reached) your monthly spend limit"     # billing-plane cap; distinct from session|weekly
 SPEND_VETO_HOURS="${LR_SPEND_VETO_HOURS:-1}"          # the class-B default fires this long after opening
@@ -1298,6 +1450,109 @@ rq_acct_bump() { # $1=counter variable name $2=acct → +1 for that account in t
   (( hit )) || out+="$2=1 "
   printf -v "$1" '%s' "$out"
 }
+# ══ THE CAPACITY QUEUE (lr-wake incident 2026-10-18, REPORT §4 Wave B step 5; contract K3) ══════
+# A launch the in-pane gate refused with no run-dir owner exits 75 and leaves ONE durable request,
+# requests/<sid>.cc-lr.json with cause:capacity (lr-fire-resume.sh writes it; a re-refusal updates
+# the same file, keeping first_refused_at). This lane is the only thing that retries it, and it
+# never opens a pane the box has not admitted. Overnight the alternative was an agent re-firing the
+# same launch 25 times into 12 refusal husks (c2 §2.5). Per tick, per request:
+#   1. a LIVE holder (beat or `--resume` argv) ⇒ the queue's work is done: REQUEST-RETIRED;
+#   2. a spawn of ours in flight ⇒ wait for it (a re-refusal shows up as `refusals` going up);
+#   3. the backoff clock (`next_at`) ⇒ wait;
+#   4. the probe, on the queue's own clock (CC_ADMIT_QUEUED_SINCE=first_refused_at, so the gate
+#      admits by itself once LR_CAPACITY_QUEUE_MAX_S has passed). A refusal is REQUEST-STAY with
+#      backoff min(60·2^k, 900) s and spends NO attempt;
+#   5. admitted ⇒ one token, one spawn, carrying LR_ADMIT_TOKEN. LR_RUN_DIR stays UNSET so a refusal
+#      in the pane comes back here as an updated request (K3), not as a second queue.
+# Fields this lane owns on the request: next_at, cap_k, spawned_at, refusals_at_spawn, attempts.
+RQ_CAP_GRACE_S="${LR_CAPACITY_SPAWN_GRACE_S:-600}"; [[ "$RQ_CAP_GRACE_S" =~ ^[0-9]+$ ]] || RQ_CAP_GRACE_S=600
+rq_update() { # $1=request file, then jq args… $last=filter — atomic rewrite; loud, never fatal
+  local f="$1" t="$1.tmp.$$"; shift
+  jq "$@" "$f" > "$t" 2>/dev/null && mv -f "$t" "$f" 2>/dev/null \
+    || { rm -f "$t" 2>/dev/null; log "REQUEST-WARN could not update $f"; return 1; }
+}
+rq_capacity_lane() { # $1=request path $2=its name $3=sid → always 0
+  local rq="$1" name="$2" sid="$3" f=() v now acct cwd model effort prompt first refusals next k spawned rsp att
+  local holder backoff launch_dir launcher mech targs=()
+  while IFS= read -r -d '' v; do f+=("$v"); done < <(python3 -c '
+import json,sys
+d=json.load(open(sys.argv[1]))
+def s(k): v=d.get(k); return "" if v is None else str(v)
+sys.stdout.write("".join(s(k)+"\0" for k in ("account","target","cwd","model","effort","prompt",
+  "first_refused_at","refusals","next_at","cap_k","spawned_at","refusals_at_spawn","attempts")))
+' "$rq" 2>/dev/null)
+  if (( ${#f[@]} != 13 )); then
+    log "REQUEST-SKIP $sid — capacity request unreadable; parked as malformed"
+    mv "$rq" "$RESULTS/${name%.json}.malformed.json" 2>/dev/null || true; return 0
+  fi
+  acct="${f[0]:-${f[1]}}"; cwd="${f[2]}"; model="${f[3]}"; effort="${f[4]}"; prompt="${f[5]}"
+  first="${f[6]}"; refusals="${f[7]}"; next="${f[8]}"; k="${f[9]}"; spawned="${f[10]}"; rsp="${f[11]}"; att="${f[12]}"
+  for v in first refusals next k spawned rsp att; do [[ "${!v}" =~ ^[0-9]+$ ]] || printf -v "$v" 0; done
+  now="$(date +%s)"
+  if [[ -z "$acct" || "$acct" == auto || "$cwd" != /* ]]; then
+    log "REQUEST-SKIP $sid — capacity request names no account or no absolute cwd; parked as malformed"
+    mv "$rq" "$RESULTS/${name%.json}.malformed.json" 2>/dev/null || true; return 0
+  fi
+  # 1 — somebody runs it: done, whoever that was
+  if holder="$(lrp_beat_holder "$sid")" || pgrep -f "resume $sid" >/dev/null 2>&1; then
+    log "REQUEST-RETIRED $sid — capacity queue: a live holder runs it${holder:+ (pane ${holder% *}, pid ${holder#* })}; filed to $CLAIMED"
+    mv "$rq" "$CLAIMED/${name%.json}.recovered.json" 2>/dev/null || true; return 0
+  fi
+  # 2 — our own spawn in flight
+  if (( spawned > 0 )); then
+    if (( refusals > rsp )); then
+      log "REQUEST-REQUEUED $sid — the pane spawned at $spawned was refused again (refusals $rsp → $refusals); back on the backoff clock"
+      rq_update "$rq" '.spawned_at = 0' || true
+    elif (( now - spawned <= RQ_CAP_GRACE_S )); then
+      return 0
+    else
+      att=$(( att + 1 ))
+      log "REQUEST-UNREPORTED $sid — no holder and no re-queue ${RQ_CAP_GRACE_S}s after the spawn; attempt $att/$RQ_MAX_ATTEMPTS"
+      rq_update "$rq" --argjson a "$att" '.spawned_at = 0 | .attempts = $a' || true
+      if (( att >= RQ_MAX_ATTEMPTS )); then
+        mv "$rq" "$RESULTS/${name%.json}.exhausted.json" 2>/dev/null || true
+        lrp_page "capacity queue exhausted" "Session ${sid:0:8} ($acct) was admitted and spawned $att times and never started. cc-lr recover ${sid:0:8} retries it."
+        return 0
+      fi
+    fi
+  fi
+  # 3 — the backoff clock
+  (( now < next )) && return 0
+  lrp_may_act "$sid" request || return 0
+  # 4 — the probe, on the queue's clock; the first sight of a request without a stamp starts it
+  if (( first == 0 )); then first="$now"; rq_update "$rq" --argjson n "$now" '.first_refused_at = $n' || true; fi
+  if ! lrp_admit_spawn "$sid" "$acct" "resume $sid on $acct (capacity queue)" "$first" ""; then
+    backoff=$(( 60 * (1 << (k > 4 ? 4 : k)) )); (( backoff > 900 )) && backoff=900
+    rq_update "$rq" --argjson n "$(( now + backoff ))" --argjson k "$(( k + 1 ))" --arg w "${LRP_ADMIT_WHY:-refused}" \
+      '.next_at = $n | .cap_k = $k | .last_probe = $w' || true
+    log "REQUEST-STAY $sid ($acct) — capacity: ${LRP_ADMIT_WHY:-the probe refused}; next probe in ${backoff}s, no attempt spent"
+    lrp_act_done; return 0
+  fi
+  [[ "$LRP_ADMIT_WHY" != *"ADMIT (queued "* ]] \
+    || lrp_page "capacity queue bound" "Session ${sid:0:8} ($acct) waited past LR_CAPACITY_QUEUE_MAX_S and is being admitted into a busy box: ${LRP_ADMIT_WHY}"
+  # 5 — one token, one spawn
+  launch_dir="${LR_POLLER_LAUNCH_DIR:-$(lrp_tmpdir)}"
+  if ! launcher="$(mktemp "$launch_dir/lr-poller-launch-${sid:0:8}-XXXXXX" 2>/dev/null)"; then
+    log "ERROR  $sid — could not mint a launcher under $launch_dir; the capacity request stays queued"
+    lrp_admit_discard ""; lrp_act_done; return 0
+  fi
+  mv "$launcher" "$launcher.sh" && launcher="$launcher.sh"
+  [[ -n "$model" ]] && targs+=(--model "$model")
+  [[ -n "$effort" ]] && targs+=(--effort "$effort")
+  [[ -n "$prompt" ]] && targs+=(--prompt "$prompt")
+  lrp_write_launcher "$launcher" "$acct" "$cwd" "$sid" "" "$LRP_ADMIT_TOKEN" ${targs[@]+"${targs[@]}"}
+  if mech="$(spawn_resume "$launcher" "$sid" "$cwd" "$acct")"; then
+    rq_update "$rq" --argjson n "$now" --argjson r "$refusals" --argjson a "$(( att + 1 ))" \
+      '.spawned_at = $n | .refusals_at_spawn = $r | .attempts = $a | .cap_k = 0' || true
+    log "REQUEST-SPAWNED $sid on $acct (capacity queue, $mech) — admitted with a token; the request stays queued until a live holder is seen"
+  else
+    lrp_admit_discard ""
+    rq_update "$rq" --argjson n "$(( now + 60 ))" '.next_at = $n' || true
+    log "ERROR  $sid — capacity-queue spawn failed (LR_POLLER_SPAWN=$SPAWN_MECH); the request stays queued"
+  fi
+  lrp_act_done
+  return 0
+}
 _rq_held=0; _rq_held_sids=""; _rq_recon=0
 for _rq in "$REQUESTS"/*.json; do
   [[ -e "$_rq" ]] || continue
@@ -1306,7 +1561,11 @@ for _rq in "$REQUESTS"/*.json; do
   # request is its to read, so it is left untouched here; when it is not live the request drains
   # through this loop exactly as a cc-lr-origin request always has, so none strands on a dead daemon.
   case "$_rq_name" in
-    *.cc-lr.json) if (( LRP_FENCE )) && lr_recon_live; then _rq_recon=$(( _rq_recon + 1 )); continue; fi ;;
+    # …EXCEPT a capacity-queue request (cause:capacity, K3): that one is a resume this daemon owns
+    # end to end, and lr_recon's request reader leaves it alone (lr_recon/store.py list_requests).
+    *.cc-lr.json) if (( LRP_FENCE )) && lr_recon_live && ! grep -Eq '"cause"[[:space:]]*:[[:space:]]*"capacity"' "$_rq" 2>/dev/null; then
+                    _rq_recon=$(( _rq_recon + 1 )); continue
+                  fi ;;
   esac
   if [[ $DRY -eq 1 ]]; then log "DRY   request $_rq_name would be executed via $FLEET"; continue; fi
   # ONE reader, NUL-delimited, no interpreter in the path — the same shape as the parked-record
@@ -1322,9 +1581,9 @@ if not isinstance(d,dict): raise SystemExit(1)
 sys.stdout.write("".join(str(d.get(k) or "")+"\0"
   for k in ("sid","kind","mode","target","source_pane","requested_by","prompt_file",
             "transcript_path","attempts","last_attempt_epoch","reset_at_epoch","account",
-            "pane","requester_pane","requester_sid","origin_class")))
+            "pane","requester_pane","requester_sid","origin_class","cause")))
 ' "$_rq" 2>/dev/null)
-  if (( ${#_rqf[@]} != 16 )) || [[ -z "${_rqf[0]}" ]]; then
+  if (( ${#_rqf[@]} != 17 )) || [[ -z "${_rqf[0]}" ]]; then
     log "REQUEST-SKIP $_rq_name — unreadable or no sid; parked as malformed"
     mv "$_rq" "$RESULTS/${_rq_name%.json}.malformed.json" 2>/dev/null || true; continue
   fi
@@ -1332,6 +1591,7 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
   _rq_pane="${_rqf[4]}"; _rq_by="${_rqf[5]}"; _rq_pfile="${_rqf[6]}"
   _rq_tp="${_rqf[7]}"; _rq_att="${_rqf[8]}"; _rq_last="${_rqf[9]}"
   _rq_reset="${_rqf[10]}"; _rq_acct="${_rqf[11]}"
+  _rq_cause="${_rqf[16]}"
   # bin/cc-lr's cl_recon_queue names the subject's pane `.pane`, never `.source_pane` (D1,
   # 2026-10-11): read either, the explicit `.source_pane` first. "-" is cc-lr's "no pane".
   [[ -n "$_rq_pane" ]] || _rq_pane="${_rqf[12]}"
@@ -1441,6 +1701,8 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
       continue ;;
   esac
 
+  # A capacity-queue request is a resume, not a recovery move: it has its own lane (above).
+  if [[ "$_rq_cause" == capacity ]]; then rq_capacity_lane "$_rq" "$_rq_name" "$_rq_sid"; continue; fi
   [[ -n "$_rq_mode" ]] || _rq_mode=relaunch
   # `cc-lr recover` queues mode "recover" (cl_recon_queue). The reconciler reads that name; this lane
   # parked it as unknown into a results/ file nothing reads — two live losses on 2026-10-11 (poller.log
@@ -2323,6 +2585,8 @@ husk_file_request() { # $1=sid $2=acct $3=cfg → files at most one request; nev
 }
 
 # ── 2. RESUME (or notify) parked sessions whose reset has passed ───────────────────────
+# A spawn's run dir is evidence for a week (the launcher's rc and state log), then swept.
+[[ -d "$LRP_RUNS" ]] && find "$LRP_RUNS" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
 for pf in "$PARKED"/*.json; do
   [[ -e "$pf" ]] || continue
   # Read the record's fields WITHOUT an interpreter in the path. The pre-2026-07-30 form was
@@ -2348,6 +2612,11 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
   sid="${_fields[0]}"; acct="${_fields[1]}"; cfg="${_fields[2]}"
   cwd="${_fields[3]}"; reset_at_utc="${_fields[4]}"
   reset_epoch=$(python3 -c "import sys,calendar,time; from datetime import datetime; print(int(calendar.timegm(datetime.fromisoformat(sys.argv[1].replace('Z','+00:00')).utctimetuple())))" "$reset_at_utc" 2>/dev/null || echo 0)
+  # AN AUTOFIRE SPAWN STILL IN FLIGHT IS SETTLED FIRST, before the claim test below can retire the
+  # record on the strength of its own claim (lr-wake 2026-10-18: RESUMED only after the launcher's
+  # report). Pending, or just settled either way ⇒ nothing more for this sid this tick.
+  _lrp_ss=0; lrp_spawn_settle "$sid" "$pf" "$acct" || _lrp_ss=$?
+  (( _lrp_ss == 2 )) || continue
   husk_file_request "$sid" "$acct" "$cfg"                    # a stranded husk is driven now, reset or not
   if (( now < reset_epoch )); then                           # reset not reached yet —
     reroute_parked "$sid" "$acct" "$cfg" "$reset_epoch"      # …but another account may route now
@@ -2561,6 +2830,24 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
   if [[ "$AUTOFIRE" == "1" && $DRY -eq 0 ]]; then
     # The fence before anything is minted or claimed: a deferred sid leaves no launcher behind.
     lrp_may_act "$sid" resume || continue
+    # K5 (1/4) — A LIVE HOLDER IS NEVER SPAWNED OVER. The registry arm above saw no row and the argv
+    # census saw no `--resume`, which is exactly what 509e3aad looked like from here. Left PARKED,
+    # said once per holder; it retires through the usual paths once its session is no longer limited.
+    if _lrp_holder="$(lrp_beat_holder "$sid")"; then
+      lrp_note_once "$PARKED/$sid.live-holder" "$_lrp_holder" \
+        "LIVE-HOLDER $sid — its last beat names a live process (pane ${_lrp_holder% *}, pid ${_lrp_holder#* }); NOTHING spawned, record LEFT PARKED"
+      lrp_act_done; continue
+    fi
+    # K5 (2/4, 3/4) — PROBE, THEN MINT. A refusal leaves the record PARKED and spends nothing.
+    # The run dir exists BEFORE the mint, so a token bound to it counts in flight from its first instant.
+    _lrp_run="$LRP_RUNS/$sid.$(date -u +%Y%m%dT%H%M%SZ).$$"
+    mkdir -p "$_lrp_run" 2>/dev/null || true
+    if ! lrp_admit_spawn "$sid" "$acct" "resume $sid on $acct (poller autofire)" "" "$_lrp_run"; then
+      rmdir "$_lrp_run" 2>/dev/null || true
+      lrp_note_once "$PARKED/$sid.cap-wait" "${LRP_ADMIT_WHY%% — *}" "CAP-WAIT $sid ($acct) — ${LRP_ADMIT_WHY:-the capacity probe refused}; nothing spawned, record LEFT PARKED"
+      lrp_act_done; continue
+    fi
+    rm -f "$PARKED/$sid.cap-wait" 2>/dev/null || true
     # MINT THE UNIQUE NAME FIRST, ADD THE SUFFIX AFTER — the same idiom (and for the same reason)
     # as handoff-fire.sh's WT_DEPS. BSD mktemp substitutes only a TRAILING `XXXXXX`; given
     # `…-XXXXXX.sh` it creates the file named LITERALLY that, so the name carries ZERO entropy and
@@ -2571,7 +2858,7 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
     launch_dir="${LR_POLLER_LAUNCH_DIR:-$(lrp_tmpdir)}"   # seam: tests redirect off the shared /tmp
     if ! launcher="$(mktemp "$launch_dir/lr-poller-launch-${sid:0:8}-XXXXXX" 2>/dev/null)"; then
       log "ERROR  $sid — could not mint a launcher under $launch_dir; skipping this tick"
-      lrp_act_done; continue
+      lrp_admit_discard "$_lrp_run"; lrp_act_done; continue
     fi
     mv "$launcher" "$launcher.sh" && launcher="$launcher.sh"
     # %q for EVERY interpolated value — this file is bash SOURCE, so each field is code until
@@ -2588,20 +2875,26 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
     # exactly the old behaviour.
     _lrp_tier=""; command -v lr_tier_from_transcript >/dev/null 2>&1 && _lrp_tier="$(lr_tier_from_transcript "$cfg" "$sid" 2>/dev/null || true)"
     _lrp_tm="${_lrp_tier%% *}"; _lrp_te="${_lrp_tier#* }"; [[ "$_lrp_te" == "$_lrp_tier" ]] && _lrp_te=""
-    { echo '#!/bin/bash'
-      printf 'exec %q %q %q %q' "$LR/lr-fire-resume.sh" "$acct" "$cwd" "$sid"
-      [[ -n "$_lrp_tm" ]] && printf ' --model %q' "$_lrp_tm"
-      [[ -n "$_lrp_te" ]] && printf ' --effort %q' "$_lrp_te"
-      printf ' --prompt %q\n' "/limit-recover"
-    } > "$launcher"; chmod +x "$launcher"
+    _lrp_targs=()
+    [[ -n "$_lrp_tm" ]] && _lrp_targs+=(--model "$_lrp_tm")
+    [[ -n "$_lrp_te" ]] && _lrp_targs+=(--effort "$_lrp_te")
+    lrp_write_launcher "$launcher" "$acct" "$cwd" "$sid" "$_lrp_run" "$LRP_ADMIT_TOKEN" \
+      ${_lrp_targs[@]+"${_lrp_targs[@]}"} --prompt "/limit-recover"
     # Claim BEFORE spawning: the claude child does not carry `--resume <sid>` until the
     # launcher→expect→claude chain completes, and until then pgrep cannot see it.
     claim_sid "$sid"
+    # K5 (4/4) — SPAWN. RESUMED waits for the launcher's own report (lrp_spawn_settle).
     if mech=$(spawn_resume "$launcher" "$sid" "$cwd" "$acct"); then
-      log "RESUMED $sid on $acct (autofire, $mech) — pane opened"
-      mv "$pf" "$RESUMED/$(basename "$pf")"; rm -f "$PARKED/$sid.notified"; fired=$((fired+1))
+      printf '%s\t%s\t%s\n' "$_lrp_run" "$mech" "$(date +%s)" > "$PARKED/$sid.spawned" 2>/dev/null || true
+      fired=$((fired+1))
+      log "SPAWNED $sid on $acct (autofire, $mech) — pane opened; RESUMED is logged once the launcher reports (run $_lrp_run)"
+      # A short wait inside this tick settles the common case; anything slower settles next tick.
+      _lrp_w="${LR_POLLER_RC_WAIT_S:-20}"; [[ "$_lrp_w" =~ ^[0-9]+$ ]] || _lrp_w=20
+      while (( _lrp_w > 0 )) && [[ "$(lrp_spawn_verdict "$_lrp_run")" == pending ]]; do sleep 1; _lrp_w=$(( _lrp_w - 1 )); done
+      lrp_spawn_settle "$sid" "$pf" "$acct" || true
     else
       rm -f "$CLAIMS/$sid" 2>/dev/null || true   # spawn failed ⇒ release immediately, don't wait out the TTL
+      lrp_admit_discard "$_lrp_run"               # …and its admission: nothing will redeem it
       fire_fail_note "$sid" spawn-failed          # …but COUNT it: releasing is what makes this re-fire next tick
       # THE LINE MUST DESCRIBE THE RESOLUTION, NOT ASSERT A FACT ABOUT THE BOX. Its predecessor read
       # "no GUI and no tmux" unconditionally, which was FALSE 1,797 times over 24 days — tmux was

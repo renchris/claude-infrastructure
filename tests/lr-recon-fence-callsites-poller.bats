@@ -33,6 +33,9 @@ setup() {
   export CC_KITTY_SOCKET_BIN="$BATS_TEST_TMPDIR/no-kitty-socket"
   export LR_CC_TUI_LIB="$BATS_TEST_TMPDIR/absent-cc-tui.sh"
   export LR_NUDGE_ENGAGE_S=4 LR_NUDGE_IVL=1
+  # THE PROBE BEFORE EVERY SPAWN (lr-wake 2026-10-18, K5) reads the box; these cases choose its verdict
+  # instead, and the stub plays the launcher's "claude started" report (tests/fixtures/lr-poller-capacity-stub.sh).
+  export LR_POLLER_CAPACITY_LIB="$REPO/tests/fixtures/lr-poller-capacity-stub.sh"
   export ACT_LOG="$BATS_TEST_TMPDIR/act.log" OSA_LOG="$BATS_TEST_TMPDIR/osa.log" LC_LOG="$BATS_TEST_TMPDIR/lc.log"
   : > "$ACT_LOG"; : > "$OSA_LOG"; : > "$LC_LOG"
 

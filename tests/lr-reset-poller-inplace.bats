@@ -78,6 +78,9 @@ STUB
   export OSA_LOG="$BATS_TEST_TMPDIR/osa.log" TMUX_LOG="$BATS_TEST_TMPDIR/tmux.log"; : > "$OSA_LOG"; : > "$TMUX_LOG"
   export PGREP_LOG="$BATS_TEST_TMPDIR/pgrep.log"; : > "$PGREP_LOG"
   export PATH="$BATS_TEST_TMPDIR/stubs:$PATH"
+  # THE PROBE BEFORE EVERY SPAWN (lr-wake 2026-10-18, K5) reads the box; these cases choose its verdict
+  # instead, and the stub plays the launcher's "claude started" report (tests/fixtures/lr-poller-capacity-stub.sh).
+  export LR_POLLER_CAPACITY_LIB="$REPO/tests/fixtures/lr-poller-capacity-stub.sh"
   cat > "$HOME/bin/claude-accounts" <<'STUB'
 echo '{"rows":[{"acct":"next4","session_pct":12,"weekly_pct":40}]}'
 STUB

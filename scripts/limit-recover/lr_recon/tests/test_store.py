@@ -458,6 +458,13 @@ class Requests(Base):
     def test_no_requests_dir(self) -> None:
         self.assertEqual(S.list_requests(self.paths), [])
 
+    def test_a_capacity_queue_request_is_the_pollers(self) -> None:
+        # lr-wake 2026-10-18 K3: the poller's capacity lane owns cause:capacity end to end
+        os.makedirs(self.paths.requests)
+        self.put(SID + ".cc-lr.json", {"sid": SID, "cause": "capacity"})
+        self.put(SID2 + ".cc-lr.json", {"sid": SID2, "mode": "recover"})
+        self.assertEqual([r.sid for r in S.list_requests(self.paths)], [SID2])
+
 
 if __name__ == "__main__":
     unittest.main()

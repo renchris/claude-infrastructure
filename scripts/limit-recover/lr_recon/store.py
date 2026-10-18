@@ -599,6 +599,10 @@ def list_requests(paths: T.Paths) -> List[T.Request]:
             continue
         if not isinstance(raw, dict) or raw.get("sid") != stem:
             continue
+        # a capacity-queue request (lr-wake 2026-10-18, K3) is a resume the poller's capacity lane
+        # owns end to end; reconciling it here would be a second driver on one session (RC6)
+        if raw.get("cause") == "capacity":
+            continue
         at = raw.get("at")
         when = float(at) if isinstance(at, (int, float)) else st.st_mtime
         out.append(T.Request(sid=stem, origin=origin, path=path, at=when, raw=raw))
