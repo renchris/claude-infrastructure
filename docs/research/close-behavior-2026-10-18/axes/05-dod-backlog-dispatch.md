@@ -327,3 +327,183 @@ rather than slow.
 | Six bare adds would have turned the close into 🔧 FILED_MINE | 85% |
 | The dispatcher drains open rows (73% of passes empty) but is slow for research-cited rows (p50 6.6 d [E]) and fired 0 in the last 22.5 h | 80% |
 | A README §5 in docs/research is invisible to cc-discover; only docs/plans plans auto-file | 80% |
+
+---
+
+## Skeptic verdicts
+
+This was a read-only skeptic pass on 2026-10-18. Scratch files are under `/tmp/skeptic05/`. **[M]** means
+measured with the named command. **[E]** means estimated. Rung names follow the ledger: done (the
+check-mark rung), loose-ends (the wrench rung), yours (the person rung) and blocked (the no-entry rung).
+
+### Root causes
+
+**RC1. No `Scope (frozen)` line was ever written.** CONFIRMED, 90%.
+- [M] A jq pass over the assistant text in both halves finds no `Scope (frozen|grown)` line before
+  20:03Z.
+- [M] The only `dod-persist.sh set` call in either transcript runs at 20:04:35Z, on the INCIDENT commit.
+- One thing the axis did not say: the study committed tracked files (`git add` at 13:18:07Z and
+  14:18:54Z). That means rule `:26` ("the first time a task will write tracked files") required a
+  freeze, and the agent skipped it. Nothing mechanical noticed (see RC4).
+
+**RC2. Growth into implementation can only come from the agent, and the wording leaves a gap.**
+WEAKENED, 70%.
+- The mechanical half holds, and it is worse than the axis reported. The transcript extractors
+  `extract_scope` and `extract_grown` run only in the `PreCompact` arm (`hooks/dod-persist.sh:463-493`).
+  [M] `~/.claude/settings.json` has `"autoCompactEnabled": false`, and the last "Auto-compact
+  triggered" line in `~/.claude/logs/sessions.log` is dated 2026-09-05. [M] Not one of the 351 block
+  headers in the 78 stores carries a PreCompact label; all of them are `manual-set` or `goal-set`. So
+  an inline `Scope (frozen)` or `Scope (grown)` line is never persisted. The "(`dod-persist.sh`
+  captures it)" in `:26` is false in practice.
+- The wording-gap half is contradicted by rule text that is already resident:
+  - `:99` (E0): "A read-only turn that names drivable work … drive the passes".
+  - `:189`: "every item at 90%+ conviction driven".
+  - `:191`: "Offering researched, in-scope remaining work … is a defect".
+- None of those needs the "out-of-scope discovery" trigger, and the agent itself conceded the rules
+  covered the case (20:03:29Z). The defect is in applying the rule, not in its wording.
+
+**RC3. REMAINDER sees only checkboxes, and the box channel is unusable.** CONFIRMED, 88%.
+- `wrap-ledger.sh:924-931` counts boxes only. [M] The 78 stores hold 0 unchecked and 38 checked boxes.
+- One correction: the box channel *is* read. `completion-assert.sh:1028` treats `REMAINDER>0` as a
+  done-claim contradiction, and `wrap-ledger.sh:2514` puts it on the loose-ends rung. What stops it is
+  that a box can never be ticked in an append-only store, not that nothing reads it.
+
+**RC4. The ledger certified SCOPE=met from a foreign contract.** WEAKENED, 85% for the corrected
+mechanism.
+- The conclusion holds. The arm at `:2627` that reports "completeness UNKNOWN" is unreachable. [M] The
+  transcript carries `READOUT=✅ Complete & landed — live layer converging (1 commit(s) behind…)`
+  twice.
+- The mechanism is wrong:
+  - `DOD="present"` is set at `:905` for any existing file `dod_read_files` returns, *before* any
+    filtering.
+  - `SCOPE` (`:938-940`) reads only `DOD` and `REMAINDER`.
+  - `DOD_SCOPE` feeds only `DRAIN_SCOPE` (`:935`; [M] grep finds no other consumer).
+- With zero unattributed blocks the result would be the same. The 16 blocks do exist ([M]
+  `bash /tmp/skeptic05/filt.sh`: 16 before the incident, 17 now), but they do not cause SCOPE=met.
+  The repo-key store simply existing does.
+
+**RC5. A bare filing would have caught the close.** CONFIRMED, 80%.
+- Confirmed at `:1418-1419` and `:2563-2566`. `completion-assert.sh:1042` also consumes `FILED_MINE` as
+  a contradiction, so six bare adds would have blocked the "yes" once.
+- This is a missing safety net, not a cause. The rules call filing "the exception" (`:183`), and the
+  agent believed nothing was open.
+
+**RC6. The dispatcher path is real but slow and unreliable.** WEAKENED, 65%.
+- These parts are confirmed:
+  - The plist has `StartInterval 300`, and `cc-dispatch:16-17` selects only open rows.
+  - [M] 2,601 distinct `passed: backlog empty` records, each paired with one of 3,555 summaries (73%).
+  - [M] The last fire was 2026-10-17T21:57:43Z.
+  - [M] pid 35337 still holds the lock: `ps` etime 01:53:55 at 20:47:49Z.
+- These parts need correcting:
+  - [M] `idl14.jsonl` has **130** distinct summaries since 2026-10-17T22:00Z, not 59. The 59 is the
+    count in the rotated live `idl.jsonl`, which starts at 2026-10-18T12:16:17Z. All of them show
+    `fired:0` either way.
+  - [M] The research-cited rows behind "p50 6.6 d" were filed in 2026-07 (32), 2026-08 (86) and
+    2026-09 (17), with **0 in October**. [E] The 3 such rows done since 09-18 have a p50 of 0.3 h. The
+    6.6 d figure describes the summer queue, not today's dispatcher.
+
+### Fixes
+
+**P1 (rule: a research ask freezes its consequence).** WEAKENED, 45%.
+1. The matching cut conflicts with the test suite. `tests/research-program-exemption-rules.bats:32-37`
+   pins "relaying the certificate" in `:86` and `:99`, and "is not an offer" in `:191`. That is
+   deliberate ("a pointer must live WITH its rule", REPORT §8 item 3). The cut requires changing the
+   test and the ruling behind it.
+2. The word arithmetic is off. [M] `wc -w` puts the three sentences at 25 + 31 + 33 = 89 words. The new
+   text is 60 words, 48 of them new once the kept sentence is excluded. With the pointers, the net
+   saving is about 26 words, not 35 (the summary) or 75 (§P1).
+3. The prescribed inline `Scope (grown)` line is never persisted (see RC2). It has to be written with
+   `dod-persist.sh set`.
+4. It has no carve-out for an active research program, and it strips the exemption pointers at those
+   three places.
+5. It repeats F2, `:189` and `:191`, which were already resident and went unapplied.
+
+Not always-firing, and it respects a quoted park.
+
+**P2 (ledger term `RESEARCH_UNDRIVEN_MINE`).** WEAKENED, 55%.
+- It can be built at `:2563`. The ledger has the transcript (`:227`, `:981`), and `session_writes_paths`
+  reads subagent transcripts (`session-writes.sh:197-238`). [M] This session's subagents wrote
+  `README.md` 31 times.
+- (a) As written it cannot block the close. completion-assert has no general loose-ends contradiction:
+  its terms are listed one by one (`:1028`, `:1042`), and arm D6 runs only when the rung is done or
+  yours. A new term therefore changes only the READOUT. A "Good to close: yes" would be blocked only
+  if `hooks/completion-assert.sh` also gains a `RESEARCH_UNDRIVEN_MINE` term, and that file is missing
+  from P2's file list.
+- (b) `dropped: <reason>` takes free text, so "dropped: research only" silences the term. The
+  incident's own words would pass.
+- (c) "Files this session wrote" over-attributes. [M] `grep -lErs` finds 49 files with 66 matching
+  headings under docs/research and docs/plans, and none uses the marker vocabulary, so a typo fix
+  makes the session own every old wave. Gate on headings this session's commits added.
+- (d) [M] The regex matches 18 headings in the incident's directory. 10 of them are superseded axis or
+  gap "Recommendations" sections, so the term would make the agent stamp markers on drafts.
+- (e) It must stay silent inside an active research program (`:74-80`).
+- The blocked rung (`:2505`) outranks it.
+
+**P3 (read SCOPE through the lineage filter).** REFUTED as specified, 20%.
+- Swapping the filter never reaches `SCOPE`, which derives from `DOD` (file existence, `:905`) and
+  `REMAINDER`.
+- Making it report unknown means redefining `DOD`. That conflicts with three tests:
+  - `tests/wrap-ledger-research.bats:103`: a boxes-only DoD gives `SCOPE=met`.
+  - `tests/dod-path.bats:80`: "DOD=present if either exists".
+  - `tests/dod-path.bats:178-186`: the pinned fail-open inheritance.
+- Its lever is weak. [M] "SAFE TO CLOSE" appears in the incident transcript only inside rule text, and
+  0 IDL records in the 14-day scratch or the live file have reason `close-certificate` or `cert-*`.
+- A different fix might work: key the READOUT arm on "this session wrote tracked files and has no
+  frozen line of its own".
+
+**P4 (fire, don't file).** WEAKENED, 60%.
+- The core is sound: no fifth class, and `cc-backlog:2428-2445` already refuses one.
+- It adds little:
+  - `:184` already says "drive it (here, or by firing a session with handoff-fire.sh)".
+  - `--notify-back` is already the default for every fire that is not a recycle (`handoff-fire.sh:248`).
+- Its 6.6 d rationale is stale (see RC6).
+- Firing can be refused too. At 20:05:35Z the post-incident fire was refused: "12 sessions are mid-turn
+  against a ceiling of 8". It succeeded on retry, so the rule needs a retry-once clause.
+- It inherits P1's budget problem.
+
+**P5 (cc-discover critic C5).** WEAKENED, 30%.
+- It depends on a dispatcher that has made 0 fires since 21:57Z and has a lock held for about 114 min.
+- It depends on P2's markers, which no doc carries yet.
+- The C2 critic is the precedent: [M] 387 of its 482 done rows are flood retractions.
+- The report and the summary disagree. §P5 says "operator-only activation"; the summary says
+  `operator_only:false`. The existing `com.claude.discovery` job would run a new critic with no
+  operator action.
+
+### Measurements
+
+Each was re-run unless marked otherwise.
+
+| Measurement | Verdict | Notes |
+|---|---|---|
+| 345 distinct frozen lines, 103 research verbs, ≥5 exclusions | Confirmed | ≥5 confirmed; 10 by a broader pattern |
+| "81 stores" | Corrected | [M] `ls ~/.claude/autonomy/dod/*.md` gives 78 stores |
+| 8 grown lines | Weakened | 7 distinct. One is a mention inside a frozen line (`repo-86523465733a9afe.md:117`), not a growth. The census counts only `set` calls (see RC2), so the near-zero growth rate is a capture artefact as much as a behaviour |
+| Box counts, the 16-block filter result | Confirmed | |
+| Backlog folds: 4502 rows, ages, classes, 14-day 323/250/67/6, p50 1.1 h / p90 14.4 h | Confirmed | p50 and p90 are [E] via `lastTs` |
+| 212 needs / 92 falsifier, 45 of 250, 423 claims on 57 rows, 265-claim thrash | Confirmed | |
+| 26 fires, 73% empty passes | Confirmed | |
+| 59 summaries | Corrected | 130 (see RC6) |
+| Lock time | Updated | Now about 114 min |
+| 1.3 min per item | Confirmed | 20:22:15 / 20:23:37 / 20:24:52 |
+| 135 research-cited rows | Confirmed | |
+| Research-cited p50 6.6 d | Weakened | The sample predates October (see RC6) |
+| plan-open 482 / 5 / 387 | Confirmed | |
+| launchd jobs loaded, `is-active` exits 1 | Confirmed | |
+
+### What the axis missed
+
+1. **The inline DoD capture path is dead.** `autoCompactEnabled=false`, and 0 of 351 blocks came from
+   PreCompact. No session's inline `Scope (frozen)` or `Scope (grown)` line has ever been stored or
+   re-injected. Conviction 85%.
+2. **SCOPE=met comes from the store file existing** (`:905`), not from the 16 blocks. Every repo with a
+   repo-key store reads "met" after any clean close. Conviction 90%.
+3. **completion-assert lists its contradiction terms one by one, and D6 runs only on the done and
+   yours rungs.** Any new ledger term needs a twin there to block a "yes". Conviction 85%.
+4. **Rule `:34` may have licensed the stop.** It is the only end-state row that names "research", and it
+   is paired with "no auto-continue" ("Read-only / advisory / research (no tracked writes)"). That is
+   a plausible lexical source for "this pass was research only"; the parenthetical excluded this
+   session, which committed docs. Conviction 50%.
+5. **Every fix here needs a research-program carve-out, and the existing suite pins the exemption at
+   each rule** (`tests/research-program-exemption-rules.bats`). Conviction 85%.
+6. **Firing has a capacity-refusal mode** (the 20:05:35Z refusal). "Fire it" needs "retry once" to be a
+   complete disposition. Conviction 70%.

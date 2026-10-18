@@ -377,3 +377,132 @@ budget a pure-prose fire draws on; the ledger arm's class, count and reason stay
 
 Evidence it matters: 8 prose-arm suppressions in about 2.5 days of IDL (§2). That is lower value for
 this incident than D8, because D1 aimed at the wrong object anyway. Conviction 70%.
+
+## Skeptic verdicts
+
+Skeptic pass, 2026-10-18. Read-only. I re-ran every claim I could re-run without writing anything: no
+scratch files, and pipes only. I did not re-run the hermetic replays, because `replay.sh` does
+`rm -rf` and writes under `/tmp`. I read their recorded outputs instead (`/tmp/ca-axis02/run-*/idl.jsonl`, `out.json`).
+I did not run bats.
+
+### Root causes
+
+| # | Verdict | Conviction | Why (re-checked evidence) |
+|---|---|---|---|
+| RC3 (cap starvation) | **confirmed** | 97 | Re-ran `grep 5759497b ~/.claude/autonomy/idl.jsonl \| grep completion-assert`. Fires at 13:18:34, 13:19:02 and 13:19:40Z, each `class:assert` with the identical fact "1 commit(s) YOU wrote are committed-but-unlanded". At 14:27:50Z: `capped:3>=3 suppressed_arm:handoff rung:✅`. I recomputed the latch key `sha(CFG\|SID\|CWD)[:16]` for `~/.claude-secondary`. It is `25fe0af89b86448c`, and its `.fired` file holds exactly 3 `assert` lines, mtime 13:19:40Z (measured: `cat`, `date -r`). Class table at `:1608-1615`: D1/D3/D4/D5 always fall to `assert`. |
+| RC1 (nothing reads the follow-on) | **confirmed** | 95 | Re-ran the lib on the extracted close: `close_shape_missing`=`[]`, polarity=`yes`, `close_verdict_not_first`=pass. Greps of the hook's own regexes: `CA_OFFER` 0, `CA_YES_HEDGE` 0, `GENUINE` 0, `CA_HANDOFF` only `13:needs your`. `grep -ni follow.\?on` in the hook and lib finds comments and the template only. Wider than this hook: `dispatch-assert.sh`, built for this defect, also abstained `no-naming-tell` at 14:27:48Z (IDL). |
+| RC5 (D1 aims at the wrong object) | **confirmed** | 88 | The `CA_HANDOFF` match is line 13 only (the 70% `settings.json` timeout). The replay-A reason is D1's "File each operator-only step" text (read from `run-A/out.json`). "Would not have driven a wave" is counterfactual. D1's reason does open with "If you can run it, run it now", but it names nothing in §5. |
+| RC2 (the contract licenses the pattern) | **weakened** | 65 | The template does **not** license it. `close-shape.sh:179` and slim `:22` restrict the value to `<filed ids…\|none>`, and the incident clause violates that. The licence comes only from slim `:146`, which is 10 words (measured `wc -w`, not 13), plus `CLAUDE.global.md:928`. **`:928` was not resident in the incident session.** `~/.claude-secondary/CLAUDE.md` symlinks to `~/.claude/CLAUDE.md`, the slim variant (`install.sh:1047-1054`), and `grep -c 'withdraw the assertion goes in'` on it returns 0. So the contract contradicts itself rather than licensing the pattern, and no measurement shows that `:146` caused the wording. |
+| RC4 (ledger terms are git/store facts only) | **weakened** | 80 | Right in substance: a research doc is invisible. Imprecise in one detail: `REMAINDER` counts unchecked `- [ ]` boxes in the frozen-DoD capture (`wrap-ledger.sh:924-931`), which is a text artifact the session writes. It read 0 because the scope was frozen as research only and the §5 waves never became DoD boxes. That is an existing seam the axis did not consider (see Missed). |
+| RC-early (earlier instances never reach this hook) | **confirmed** | 85 | The gz IDL shows `no-close-tell` at 05:59:29, 06:04:16 and 06:08:11Z for sid 5759497b. The "What I'd do, in order" reply (step 1 "over 90% sure") is in `~/.claude-quaternary/projects/-Users-chrisren-Development--worktrees-wt-cc-004752-67086/5759497b-….jsonl.handed-off`, in the 06:00-06:05Z window. |
+
+### Fix candidates
+
+**D8 `followon` — weakened, 50.** It is implementable at the cited points. I checked every line:
+`close-shape.sh:161/163/311`, `completion-assert.sh:1541/1543/1546-1547/1601/1612/1654`, with
+`_ca_assignee` at `:657`, `_ca_source_close_shape` at `:918` and `_ca_rp_active` at `:1324`, all
+defined above the insertion point. By reading, no existing fixture should flip: every `follow-on:`
+fixture in `tests/completion-assert*.bats` is `none`, an id, a `<placeholder>`, or has no verdict
+(grep). Re-running `proto/run.sh` gives 14/14 ok. But the matcher as specified breaks four of the
+brief's constraints.
+
+1. **The firing estimate is not an estimate of this matcher.** `refine2.py`'s OWNER regex adds
+   `pane|session|decisions?|below|above|tracked|owns`, and the proposed `_CS_FO_OWNED` has none of them.
+   `census2.py`'s id class also adds `packet|fired|firing|pane(s)`. I ran the **real prototype awk** on the 54
+   unique prose values in `census/out2.txt`. **14 fire, not 4** (measured). The 40 sampled id-class
+   values fire 0. I then mapped each of the 14 to its own Stop record (jq over `idl.jsonl.2026101*.gz` + `idl.jsonl`):
+   - 3 were gated off by contra=1, including 2 of the axis's named 4. Ryan (`e7659abe`) sat at 🔧, the owner's reply (`e7ed8439`) at 🔧, and `2328e32b` at ⛔.
+   - 4 were reachable at contra=0. One is the incident (✅). The other three:
+     - `f7351f3b` 10-16T23:51 at **👤**: "one test after the next reboot, below."
+     - `f7351f3b` 10-15T15:46 at ledger-clean: "two steps that need you, plus one decision (below)."
+     - `b18a0aed` 10-17T21:06 at ledger-clean: "the migration-corpus fixes go to a dedicated session the program lead fires before W1".
+   - 7 fall outside the retained IDL window. One is AM-31, a likely true positive. The others include "approve the three build items below when you're ready.", "the backlog rows below", "…is now tracked." and "the heartbeat-fix session (window 37) is still working".
+
+   Hand-read precision is about 2/14. **That includes blocking genuine operator steps and decisions at 👤**, which the brief forbids.
+2. **Its own cure re-fires, and so do honest nothing-drivable closes** (measured on the prototype):
+   - `follow-on: dropped the 70% timeout raise, not worth filing.` ⇒ FIRE, although D8's reason says "drop it in one line".
+   - `…the live layer catches up within its normal window.` ⇒ FIRE.
+   - `…the nightly launchd job applies it automatically.` ⇒ FIRE.
+   - `…Wave 1 is being driven by the session I fired (window 37).` ⇒ FIRE.
+
+   The cap of 2 bounds the damage, but these are fires where nothing drivable remains.
+3. **Mention vs use.** The matcher reads `$MSG`, not `MSG_UNQ`. A YES close with no follow-on on its verdict line
+   that later quotes the incident's clause in backticks or "quotes" ⇒ FIRE (measured, both forms). That is the
+   documented FP class at `completion-assert.sh:425-438` ("this hook firing on the very close that shipped
+   it"). This research program's own closes, and the D8 implementer's, will quote that clause. The
+   "D8 MENTION" test sketch covers only the template and fences.
+4. **The owned/park lists are a spelling denylist, and they leak in both directions** (measured, all pass):
+   - Owner phrasings: "…the operator's to prioritise", "your call when to start", "goes to a later session".
+   - Park and id phrasings: any 12-hex git-sha prefix, "blocked on nothing but time", "waiting for a free slot".
+   - Label variants: `Follow-ups:`, `Follow-on —` (no colon), `Next:`.
+   - Lead-token false exemptions:
+     - `none yet, the waves in §5 still need doing` and `n/a beyond the §5 waves…` pass on the `none`/`n/a` lead.
+     - `zero-downtime migration … (not started)` passes on `zero` in `_CS_FO_NONE`.
+     - `the operator-readout fix in §5 (Wave 3, not started)` passes on `operator` in `_CS_FO_OWNED`. This repo's own hook names (`operator-readout`, `OPERATOR ▸`) trip it.
+
+   The axis says "owned is D1's territory; D1 already checks the store". That is false for most of the list:
+   `CA_HANDOFF` (`:467`) has no bare `your`, `operator`, `for you` (only `for you to (run|do)`), `the lead`,
+   `goes to` or `owned by`, so those phrasings pass both arms. The repo's standing non-actions already rank
+   this shape: `docs/research/exhaustive-drive-2026-09-08/SYNTHESIS.md:139-141` says "Do **not** widen
+   dispatch-assert NAME_TELL (85; a denylist of spellings)" and "do **not** build a prose detector for the
+   un-filed … close (90; … never detect it)". The axis does not engage with either.
+5. **The cheapest compliance is a relabel, not a drive.** `❌ Good to close: no — the §5 waves haven't started`
+   passes D8 (polarity no) and every other arm. D6 `verdict-first` needs a done-reading line 1, and D4
+   needs an offer phrase. So D8 can fix the verdict's honesty, but not the operator's actual loss
+   ("no net positive if research is done but its not enacted on").
+6. **It drops D6's stated gates.** It has no origin gate and no positive-write gate, so it fires on
+   fired-peer notify-back pings and on write-free sessions, which D6 exempts by policy (`:1411-1415`).
+7. **It would be a second follow-on matcher.** `scripts/drain-peer-findings.py:92-110` already parses S2's
+   ledger (`_FOLLOW_ON`, `_NIL`, `_NIL_LEAD`, `MIN_CLAUSE`=40). `close-shape.sh:15-20` warns that two copies of a load-bearing matcher drift apart.
+
+A variant I would rate about 70: match only the `follow-on:` on the verdict line itself, on the
+quote-stripped view; limit RUNG to ✅ (dropping 👤 removes the measured operator-step FP, and the incident
+was ✅); exempt `dropped`; and replace the owned/park spelling lists with a store fact, namely any
+backlog row, registry fire or cc-decide packet this session wrote. That is `dispatch-assert.sh`'s
+mechanical discharge (`:26-31`), so that, in that hook's own words, "gaming the hook IS compliance".
+
+**Template and rule text — weakened, 55.** Not always-firing (text only). The template edit is safe: only
+`close_shape_ok` rejection pins it (`tests/completion-assert.bats:1657`), and the kept `<…>` holds that.
+The budget arithmetic is off:
+- The current `:146` sentence is 10 words; the replacement is 17, so +7 (measured `wc -w`).
+- The proposed `:22` cut leaves that bullet ungrammatical ("line 1 … or `❌ …`").
+- `:22` already says `<filed ids|none>`, so the defect is the contradicting `:146` sentence. Deleting it outright is −10 words and needs no new text.
+- The `CLAUDE.global.md:928` swap has no runtime effect under the default slim variant (see RC2).
+
+**`surface` cap class for D1/D3/D4/D5 — weakened, 40.**
+- **The existing suite contradicts it.** The test "D7 CLASS: a message that also fires D1 keeps class=assert" (`tests/completion-assert.bats:1894-1906`) runs under `CA_YOURS_LEDGER` (`:1750`: every contra term 0, RUNG=👤) and asserts `"class":"assert"`. This fix turns it red. That test's comment (`:1891-1893`) states the no-disturbance principle this fix reverses.
+- **The benefit is overstated.** Of the 8 prose-arm suppressions, 5 are `ledger+handoff`, i.e. contra=1, and the fix leaves those in `assert`. Only 3 had contra=0, and one of them is the incident, where D1 aims at the wrong object. Measured: the jq tally reproduces 4,065 records, 181 `false-done` fires and 344 `capped:assert`.
+- **An unconsidered alternative.** In **19 of 30** sessions that spent 3 or more fact-bearing `assert` fires, at least 3 were on one identical facts string (measured jq, IDL 10-16..10-18). The incident's three 📦 fires came 66 s apart on the same fact. Latching ledger convictions per fact would have left 2 slots with no new class. Whether repeating a conviction is itself useful is unmeasured.
+
+**Id hardening against `_ca_blg_cached` — refuted, 15.** D1 calls that cache only with
+`--blocked --json` (`:492-498`), so the fold holds blocked rows only. Correctly filed open agent rows
+(`add --why-not-now`), done rows and cc-decide packet ids are all absent, so the hardening would fire D8
+on legitimate ids. Fail-open covers read errors, not absence. A correct oracle needs an all-status fold
+(the 10 MB, 2.1-2.8 s read that `:416-423` moved off the hot path) plus a decisions read.
+
+### Measurements
+
+| Item | Verdict | Note |
+|---|---|---|
+| IDL incident record `capped:3>=3` | confirmed | re-ran grep; latch file read directly |
+| Replays A-D | confirmed | read `run-A..D/idl.jsonl`; not re-run (`replay.sh` writes) |
+| Lib calls and greps on the close | confirmed | re-ran |
+| jq tally of 4,065 records | confirmed | re-ran: same counts to 20:22:59Z; suppressions 📦 245, 🔧 77+3, ⛔ 14+2, ✅ handoff 2, 👤 handoff+act 1 |
+| Census 2,289 / 652 / 556 | weakened | not re-run; its classes are `census2.py`'s regexes, not the proposed matcher's |
+| "D8 fires on 4 of 556 (0.7%)" | **refuted** | the real awk fires on 14 of 54 unique prose values; `refine2.py`'s OWNER regex is wider than `_CS_FO_OWNED` |
+| Prototype 14/14 | confirmed | re-ran; the table has no owned-leak, quote, `dropped` or nothing-drivable rows, which are the cases that fail |
+| Patched replays E-I | confirmed | read outputs |
+| Bats not run | confirmed | I did not run them either. By reading, D8 flips no fixture and the `surface` class flips `:1894` |
+| `diff -q` rule copy | confirmed | re-ran: IDENTICAL |
+
+### Missed by the axis
+
+1. `hooks/dispatch-assert.sh` sits in the same Stop chain and was built for exactly this defect (header `:2-31`). It abstained `no-naming-tell` at 14:27:48Z. Its record-written-since-turn-start discharge is a better "driven" oracle than D8's spelling lists. Axis 08 covers it; this axis does not cross-reference it.
+2. `scripts/drain-peer-findings.py` is a working follow-on-clause parser and prior art. D8 would be a second, divergent one.
+3. The standing non-actions at `SYNTHESIS.md:139-141` (spelling denylists and prose detectors for the un-filed close).
+4. Budget burn on one repeated fact (19/30 sessions). The incident's 3 slots went in 66 s on one unchanged fact.
+5. The cheapest D8 cure is a ❌ relabel that drives nothing. Nothing downstream turns a ❌ verdict into continuation.
+6. `CLAUDE.global.md:928` was not loaded in the incident session; only slim `:146` was.
+7. The DoD seam: writing the §5 waves as `- [ ]` items under `Scope (grown):` makes `REMAINDER`>0, hence contra=1 and 🔧, with no new arm. The frozen "research only" line is what held it at 0.
+8. D8 has no origin or positive-write gate, unlike D6.
+9. D8 reads `$MSG`, not `MSG_UNQ`, so a quoted mention of the incident clause fires it.

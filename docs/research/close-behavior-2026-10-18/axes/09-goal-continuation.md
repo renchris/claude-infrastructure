@@ -262,3 +262,190 @@ Turning on `ProposeGoal` is upstream (a GrowthBook flag), not an operator step.
   admitted 397, refused 140.
 - `~/.claude/autonomy/dod/*.md`: 78 files, 0 unchecked boxes.
 - `.cachedGrowthBookFeatures.tengu_propose_goal`: absent in all 6 config caches.
+
+## Skeptic verdicts
+
+Every check below was re-run read-only on 2026-10-18 from this worktree. "Measured" names the
+command; line numbers are this worktree's (the deployed `~/.claude/rules/10-session-close.md` is
+byte-identical to `CLAUDE.rules.slim.10-session-close.md`; `diff` printed nothing).
+
+### Root causes
+
+**RC1. No producer for "landed research names undriven implementation" — CONFIRMED, 90%.**
+- `scripts/wrap-ledger.sh:871` and `:926-931`: REMAINDER counts only `- [ ]` lines.
+- `hooks/dod-persist.sh:101-104`: "readers grep the `Scope (frozen|grown):` lines (… REMAINDER
+  counts `- [ ]` boxes only)".
+- A grep of `hooks/`, `scripts/*.sh` and `bin/` for `Implementation waves|unfinished wave|followon`
+  finds no producer.
+- Memory `a-plan-is-not-a-queue.md:3,:13` says what the axis quotes.
+- Nuance (measured, `grep -hcE` over `~/.claude/autonomy/dod/*.md`): 78 files, 0 unchecked boxes,
+  but **38 checked** boxes. So "always zero" describes today's state, not a rule of the design. The
+  remainder can go non-zero; nothing feeds research follow-on into it.
+
+**RC2. The 🔧-only lever rule is the cause — WEAKENED, 55%.**
+- The text is real, at `:217` (not `:218`).
+- The "those MUST stop" wording is in `CLAUDE.global.md:1124-1128`, and that file is **not
+  resident**. It is 117,894 chars (`wc -c`). The resident `~/.claude/CLAUDE.md` is the 28.8K
+  slim copy.
+- The resident rules already order the drive the agent skipped:
+  - `:86`: "an open plan item is open work, so drive it or answer `Good to close: no`"
+  - `:99`: a read-only turn naming drivable work is not E0
+  - `:184`: "'Out of scope' … are reasons, not impossibilities: drive it (here, or by firing a
+    session with handoff-fire.sh)"
+  - `:191`: offering is a defect
+- `:217` governs the actuator (the sentinel), not whether work continues: "Within a turn, keep
+  working rather than stopping on 🔧". The agent broke four resident drive rules. The sentinel
+  line contributes; it is not the mechanism.
+- The census reproduces (`grep -ciE` on `/tmp/a09_steps.tsv`: 219 ship/land, 175 await).
+- "Never armed `set`" holds: no `armed cli-set` IDL row for 5759497b.
+- "Its only call was clear" holds for the transcript only. `session-continue.log` has **5**
+  cli-clears for this sid (10:33:27, 12:16:17, 12:49:59, 13:17:30, 13:27:55Z). The first four are
+  recovery-run clears (session-continue.sh:164, lr-ingest-verify clause D), not the agent's.
+
+**RC3. A session cannot arm a goal on itself — WEAKENED, 60%.**
+- The fact that no path is built is confirmed. Measured with
+  `jq '.cachedGrowthBookFeatures.tengu_propose_goal'`: absent in 7 files (6 config dirs plus
+  `~/.claude.json`). `.claude-next4` holds 0 cached features, so its "absent" tells us nothing.
+- "No keystroke channel into its own composer" is contradicted by this very session.
+  `handoffs.jsonl` 2026-10-18T20:10:54Z `recycle-bgwork-selfcall`, target_pane 398, prev_sid
+  5759497b: "Esc then /exit re-submitted". A detached watcher typed into the session's own composer.
+- `arm_goal() { # $1=it2-bin $2=pane $3=condition` (handoff-fire.sh:9726) is pane-generic.
+- So a context-preserving self-arm (a detached watcher that runs `arm_goal` on its own pane once
+  the session is idle) is unbuilt, not impossible.
+- The goldset quote (`goldset-raw.json:8`) is a label rationale about `/deploy` in another repo.
+  It is weak evidence.
+- As a cause it is weak: `handoff-fire --goal` to a peer was available all along, and it is what
+  the remediation used.
+
+**RC4. The close-time check was capped, and D1 targets the wrong object — CONFIRMED, 85%.**
+- IDL rows checked: 13:18:34, 13:19:02 and 13:19:40Z are `class:assert count 1/2/3 max 3`.
+  14:27:50Z is `capped:3>=3 suppressed_arm:handoff rung:✅ facts:""`.
+- The D1 text at `:1650` and the per-class split at `:1561-1615` are confirmed.
+- The cap was not causal for the waves. Uncapped, D1 would have demanded
+  `cc-backlog needs --class needs-human` for the 70% settings.json item. The close itself says:
+  "The one change that needs your hand is raising the dispatcher's timeout …".
+
+**RC5. Actuator timeouts (~20% of Stops) — WEAKENED as a cause, 35%; CONFIRMED as a design
+constraint.**
+- Re-measured with a structured grep of
+  `"attachment":{"type":"hook_cancelled","hookName":"Stop…"command":"…(session-continue|completion-assert).sh"`
+  across 1,570 transcripts (14 days): **2,434** for session-continue and **1,575** for
+  completion-assert, against **12,120** `stop_hook_summary`. Ratio 20%.
+- The incident cancels at 06:04:21Z and 06:08:19Z are confirmed.
+- Those were read-only turns. There was no sentinel, no 📦/🚀 work of the session's own and no own
+  dirty file, so no session-continue arm could fire. Uncancelled, it would have stayed silent. The
+  timeout is a constraint any new floor must respect; it did not cause this incident.
+
+### Fix candidates
+
+**F1. Enact floor (ship-land producer, session-continue consumer) — WEAKENED, 55%.**
+
+The right shape: it would have caught the incident.
+- The README has `## 5. Implementation waves` and 8 headings that match the regex.
+- The land.log row at 14:27:18Z carries sid 5759497b. The rung was ✅ at the 14:27:47Z Stop.
+- The cwd is not inside a research program (`research-program.sh is-active` rc=1).
+- ⛔ silence is real (wrap-ledger.sh:24, :2500-2506).
+
+As specified, it has six defects:
+
+1. **Discharge-by-fire cannot be built as written.**
+   - `handoffs.jsonl` `firing_sid` is a PANE: "FIRING_SID is a PANE" (handoff-fire.sh:17315-17318).
+   - Measured: 262 digit values and 0 uuids. `admitted` rows are null in 265 of 265. There are
+     **0** rows with `firing_sid` 5759497b, although that session fired at 20:05-20:09Z; its rows
+     carry `"398"`.
+   - The file also rotates (handoff-fire.sh:8176; the earliest row now is 2026-10-16T16:02:31Z).
+   - Key discharge on `scripts/lib/fired-peers.sh` `firedBySid` (or cc-custody) instead.
+2. **Pre-spent park budget.**
+   - `clear` writes the `.mech` budget unconditionally for the session (session-continue.sh:263).
+   - A per-session budget "as with `.mech`" would have been spent by the five clears that came
+     before the marker: four recovery clears, plus the agent's 13:27:55Z clear of the A4-tokens
+     mechanical arm. The README landed only at 14:27:18Z.
+   - **A literal mirror of `.mech` would have missed its own incident.** Only a clear issued after
+     the newest marker may park it.
+3. **One filed row discharges every wave.** "Any cc-backlog row with session==sid" lets the
+   incident's one operator item (Wave 6, settings.json), which is exactly what D1 asks the agent to
+   file, silence all six drivable waves. Discharge must be per section, or require a fire or a
+   drive.
+4. **It fires on the sessions that are enacting.**
+   - Measured: `git log origin/main --since=2026-10-04 --diff-filter=AM` gives 292 docs. 23 match
+     the headings (not 24), and **only 4** pass the producer's filename filter.
+   - **30 commits** touched those 4 docs in 14 days (about 2.1 a day, not 0.6). At least 13 are
+     progress records by implementers, for example b48bed1a8 "Wave 4c landed + converged" and
+     5d025053b "O3 applied". 29 of the 30 have 0 non-doc paths.
+   - Blob-sha markers combined with "a non-doc commit *after* the marker" therefore block the wave
+     leads who are doing the work.
+   - Amend: discharge if this sid landed any non-doc path in the session. The incident's
+     55f4d910b and 1e7461db7 are docs-only, so the incident is still caught.
+5. **Narrow coverage.** The regex misses `## 5. Fixes, ranked`, `## Ranked fixes`,
+   `## 7. Implementation brief`, `## Build now`, `## Waves` (three plans),
+   `### Tier 1: agent-landable` and lowercase `Ranked recommendations`. Only 4 of about 57 candidate
+   README/REPORT/DESIGN/plan docs match.
+6. **No fired-peer exemption.** The guards name assignees but not fired peers. A fired research
+   peer would be told to fire the implementation itself, duplicating its lead. D6 already exempts
+   fired peers through `hooks/lib/origin-identity.sh`.
+
+Tests: `tests/session-continue-forks.bats:96`, `:149` require idle-Stop output identical to
+origin/main's and at most 35 external calls on a memo hit. That is compatible only if the no-marker
+path is a builtin `-f` with no fork. They do not contradict the fix.
+
+**F2. completion-assert `followon` cap class — WEAKENED, 50%.**
+- It is implementable beside `act` at `:1608-1615`. It must be its own flag; folding it into
+  `contra=1` would draw from `assert` and starve again.
+- The double-block guard (`:1169-1190`) zeroes `contra` whenever session-continue's `.blocked`
+  marker exists. So it is redundant whenever F1 fires. Its unique value is Stops where
+  session-continue was cancelled (20%) or its budget is spent.
+- After a deliberate `clear` park, the marker is still "undischarged" under the stated rules, so
+  this leg blocks the park's close (up to 2 times). That violates the stated-park constraint
+  unless `clear` after the marker also discharges it.
+
+**F3. Budget-neutral rule edit — WEAKENED, 35%.**
+- The matching cut is **contradicted by the test suite**:
+  - `tests/research-program-exemption-rules.bats:35-37` greps `relaying the certificate` on the
+    close-question and E0 lines and `is not an offer` on the Offering line.
+  - It is deliberate: ":21 … a pointer must live WITH its rule".
+- Cut size measured with `wc -w`: 25 + 31 + 33 = 89 words, so the saving is about 77, not about 100.
+- Editing `CLAUDE.global.md` costs nothing and changes nothing, because the file is not resident.
+- The resident rules already demand the drive (RC2), so one more sentence is a weak lever.
+- The cited lines are off by one: `:217`, `:26`, `:86`, `:99` and `:191`.
+
+**F4. Enact step in research-subagents plus `enact-fire.sh` — WEAKENED, 30%.**
+- The insertion point misses the incident path.
+- The operator typed `ultracode research …` (06:04:35Z). The session loaded `workflow-authoring`
+  (a command-message at 06:04:36Z) and made 2 `Workflow` calls. Its only Skill call was `handoff`
+  (`jq` tool-use census of the transcript).
+- `workflow-authoring` is not in this repo (`~/.claude/skills/workflow-authoring` is absent).
+- The helper is harmless and optional.
+
+### Measurements
+
+- **session-continue.log (CONFIRMED).** Re-run: cli-set 272, continue 345, ship-floor 257,
+  wake-floor 838, mechanical-dirty 110; 104 of 719 sids. The drift is log growth.
+- **Transcript census (CONFIRMED).** 272 calls / 103 sessions and 219/175 reproduce. Research to
+  implementation is about 5-7 by my grep, against the axis's ~4.
+- **Incident transcript (WEAKENED).** "One clear" holds for the transcript only; the log has 5.
+- **IDL rows (CONFIRMED).**
+- **hook_cancelled (CONFIRMED).** 2,434 / 1,575 / 12,120.
+- **handoffs.jsonl "14 days" (WEAKENED).** The file rotates and now holds about 2 days. Today's
+  counts are goal-arm set 85 / unverified 1 / abstained 1, admitted 265, refused 101. The ratio
+  holds; the window label does not.
+- **DoD store (CONFIRMED).** 0 unchecked, with 38 checked.
+- **tengu flag (CONFIRMED).** One cache is empty.
+- **Follow-on census (CONFIRMED).** From `/tmp/a09_followon.out`.
+- **Doc population (WEAKENED).** The unit should be lands, not docs: 23 match, 4 pass the
+  producer filter, and 30 commits touched those 4.
+
+### What the axis missed
+
+1. The `firing_sid` field is a pane id.
+2. Recovery-run and unrelated clears spend floor budgets.
+3. D1's own demand discharges the marker.
+4. Implementers' plan-progress commits fire the floor.
+5. There is no fired-peer exemption.
+6. A self-goal through a detached `arm_goal` on the session's own pane is feasible.
+7. The incident's research path was `workflow-authoring` → Workflow, which no repo skill reaches.
+8. Rollout lag: "sessions run their OWN worktree copy of ship-land.sh ⇒ a fix reaches only newer
+   ones" (`.claude/rules/agent-operating-lessons-situational.md:105`).
+9. The floor's FILE exit uses `--why-not-now needs-human` with no `--conviction N --receipt R`,
+   which rule `:184` requires. Followed literally, that row is refused or lands as UNCONVICTED 🔧.
+10. The second "should we" reply said "Investigating the load now." and stopped with no tool call:
+    a narrated action that no Stop arm checks.

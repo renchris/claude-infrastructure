@@ -389,3 +389,160 @@ Two edits, both net cuts, measured as character counts of the replaced vs new ce
   (≈300 chars → ≈90).
 
 No settings.json edits are needed. All three arms live in an already-registered Stop hook.
+
+## Skeptic verdicts
+
+Skeptic pass, 2026-10-18. The study was read-only. The only repo write is this appended section.
+Scratch files are outside the repo: `/tmp/ax03_skeptic_pane.inc` (hook lines 263-297 and 311-313
+copied verbatim), and `/tmp/ax03sk/` (`pane.sh`, `f1audit.sh`, `fx/*.txt` synthetic fixtures,
+`antidef_cap.tsv`, `f6_files.txt`). The hook itself was never executed. Every fire or silence below
+comes from the axis's own `/tmp/ax03/scripts/bashform.sh` or from verbatim hook regexes.
+
+### Bottom line
+
+The diagnosis holds: neither hook could see the three incident shapes. The detectors' precision on
+the corpus also holds: I re-ran them and got the same 5 of 902, in a UTF-8 locale and with no
+locale. **The fix specs do not survive as written.** F1 and F3 have a wiring bug in the FIRE_KIND
+chain. F1 fires on a compliant ❌ close. F2 has no silencer, so it blocks a ⛔ decision close, a
+stated park, and the agent's own compliance with F2's reason text. All three share a cap that a
+single arm already exhausts in about 1 session in 10. The rule-text "net cut of ~240 chars" is
+mostly in a file that is not resident.
+
+### Root causes
+
+| # | Verdict | Adjusted | Re-check |
+|---|---|---|---|
+| RC1 lexical family covers asking, not describing | **confirmed** | 95% | `/tmp/ax03/match.sh` re-run: 0 of 4 messages match TELLS, DONE_TELLS, CATEGORY_TELLS, HARD_CORE or OPAQUE_ID. I also ran the pane and peer arms through `PANE_STRIP_AWK` (`/tmp/ax03sk/pane.sh`), which match.sh does not cover: 0 of 4. IDL `no-tell` at 05:59:29, 06:03:02, 06:04:17 and 14:27:47Z, re-grepped. Two count errors: `TELLS` (:168) has **14** alternations, not 15, and the corpus has 16 fixtures (`bats:109-124`) because `should i` covers three. |
+| RC2 Jev retired, nothing replaced it | **weakened** | 60% | The gap is real (`CLAUDE.global.md:721`; hook :333-335). The retirement is **not causal**, though. The hook's own retirement note (:356-365) says that over 160 real closes, not one p≥0.90 row was classed `drivable`. It also says every call returned 403 (372 calls in 25 h). An un-retired Jev would have abstained on m1-m4 too. |
+| RC3 session-continue is state-gated, and its one content lever is agent-armed | **confirmed** | 93% | `:4-10`, `:1103`, `:1108-1110`, `:1216`, `:883` and floor order `:1316-1325` all read as cited. The IDL has no session-continue row at the 4 Stops. Stronger than stated: the agent did use the lever, then cleared it as `rules:217` demands on ✅ (`cli-clear` at 10:33:27, 12:16:17, 12:49:59, 13:17:30 and 13:27:55Z). One nuance: the 14:19:10 `ship-floor-budget` is irrelevant at 14:27. At rung ✅, `ship_floor` returns at the rung gate (:1216) before any budget check. |
+| RC4 false-done is ledger-conditioned; ✅ reachable | **confirmed (mechanism made precise)** | 85% | `:519` and `:536` are as cited. The IDL row at 14:27:50Z is `capped:3>=3`, `rung:"✅"`. Precision: REMAINDER counts unchecked `- [ ]` DoD boxes (`scripts/wrap-ledger.sh:924-931`), and the `Scope (frozen):` wording is never read. ✅ was reachable because no §5 wave ever became a DoD box, not because of the words "research only". |
+| RC5 stated convictions never read on the fire path | **weakened** | 65% | Factually right, with a count fix. The four messages state **5** convictions, not 6 (m1 70; m2 90 and 70; m4 95 and 70; measured by `grep -oiE`), and the :123-125 reader reads 0 of 5. But it is not a cause: the reader runs only inside `open_packet_B` on the genuine path (:475-487), and no message reached it. "Rule F2 has no chokepoint" is the real point, and RC1 already covers it. |
+| RC6 genuine carve-out is message-level (latent) | **confirmed** | 75% | :470-475 as cited. match.sh: m1 has SOFTCALL `your call` and SHIPVERB ` merge` (from "merges"), so :471 leaves `hard=0`. Not causal here, as the axis says. |
+
+### Fix candidates
+
+**F1 `followon-undriven`: weakened, 88% → 62%.** The precision claim reproduces: `/tmp/ax03sk/f1audit.sh`
+found 69 corpus messages with a YES/✅, 49 with a follow-on clause, and 1 ownerless (c0451, the
+incident). The other 48 are honestly owned: 22 `none`, 13 by id, and the rest by you/yours, a
+session or "filed". Five defects:
+1. **Wiring bug (implementability).** The proposal adds `&& has_follow -eq 0` to :475 "the way
+   has_pane does", but puts the FIRE_KIND branch after peer (:538). `has_pane` escapes because it is
+   *first* in the chain (:525). The chain reaches `elif [ "$hard" -eq 1 ]` (:529) before the peer
+   slot. So a message with hard=1, has_follow=1 and has_id=0 gets `FIRE_KIND="opaque-identifier"`,
+   with an empty TRIGGER and the reason "you handed the operator 0 bare hex ids" (:626). An example
+   is a close that also says "raising the timeout requires your approval". The F1 branch must sit
+   before :529, or :529 must require `has_id -eq 1`.
+2. **Fires on a compliant ❌ close.** `FOLLOW_YES` includes `(^|[[:space:]])✅` anywhere. The contract
+   requires line 2 to relay the rung glyph (`CLAUDE.global.md:559-562`), and that glyph is often ✅
+   under a ❌ line 1. Fixture `fx/q1` ("❌ Good to close: no — … mine to drive next" / "✅ Complete
+   and landed" / "Follow-on: … haven't started") **fires F1**. The single-line variant `q2` is silent,
+   so the planned test "SILENT on ❌ … Follow-on: X" passes only in single-line form. Corpus: 8 of 65
+   NO-verdict closes carry a ✅ elsewhere (measured, head -1 plus grep). The cure is to anchor
+   FOLLOW_YES to line 1.
+3. **Evadable, and it punishes honesty.** These fixtures stay silent: dropping the clause (`p4`),
+   relabelling it `Next:` (`p5`), and incidental owner words common in this repo: `session-start`
+   (`p1`), `working-tree` (`p6`), `nothing driven yet` (`p2`), `the waves you saw` (`p3`). An arm
+   that fires only when the agent *names* the follow-on teaches the model to omit it. The hook's own
+   header warns of exactly this (:30-31, "a nagging hook trains the model to route around it").
+4. **Shared cap.** Across the IDL files from 2026-10-13 to 2026-10-18 plus the live file, the hook
+   logged 852 `capped` suppressions against 190 fires. 851 of the suppressed were `opaque-identifier`.
+   9 of the 96 sessions that fired at least once reached the cap, and one session holds 816 of the 852
+   (measured, jq over the IDL, `/tmp/ax03sk/antidef_cap.tsv`). A new arm inherits this silencing.
+   It is the same mechanism that silenced completion-assert at the incident close.
+5. **The reason text offers filing as an equal discharge** ("or file it with `cc-backlog add`").
+   That conflicts with `rules:68` ("Above 90% there is nothing to ask: implement") for the ≥85-95%
+   waves that are the incident's subject.
+Constraints: it does not block a ⛔ decision (a ⛔ close names its owner or id). A stated park is
+silent through `parked until`. The research-program exemption would not have silenced the incident:
+`~/.claude/autonomy/research/programs.json` holds only `truememory-2-0` (tm2-plan roots). No existing
+fixture in `tests/anti-deference-nudge.bats` or `tests/jev-anti-deference-arm.bats` matches its
+keywords (grep), so no test contradicts it.
+
+**F2 `plan-not-driven`: weakened, 85% → 45%. As written it violates the brief's constraints.**
+The corpus precision reproduces (2 of 902, c0449 and c0450). But it has **no silent path for a
+legitimate stop**, and synthetic fixtures run through the axis's own `bashform.sh` all **fire**:
+- `p8`: a ⛔ close on decision `0123456789ab (raise the timeout?)` plus "What I'd do once it is
+  answered: 1. 2." The glossed id gives has_id=0, and HARD_CORE does not match, so the :475 exit does
+  not save it. This blocks a genuine operator decision.
+- `p9`: "Parked: …, until tomorrow's load data lands (eb3d6f848add …)" plus a plan. This blocks a
+  deliberate stated park.
+- `p10`: "Step 1 is armed: session-continue.sh set …" plus a plan. That is the arm's **own
+  prescribed remedy** ("arm it with `session-continue.sh set` … and say which"), so it **fires on
+  compliance**. For m2 itself, step 2 waits on "a day of data", so after doing step 1 the agent's
+  restated plan re-fires (new hash) up to the cap.
+- `p11` plan-only on request, and `p12` "I'd suggest you do these in order: 1. Open the Fidelity
+  app" (operator-addressed under a first-person header).
+The FP note's "The kill-switch phrase 'just do X' already covers some of this" is **false**.
+`KILL_RE` exists only in `hooks/session-continue.sh:386`. anti-deference-nudge.sh reads no operator
+message and no `permission_mode` (grep: no match), so plan mode is not exempt either. Minor:
+`PLAN_MENU` puts the multibyte `“` inside a bracket expression, the locale trap documented at
+:216-227. I measured no difference on the corpus in either locale. Needed silencers: a ⛔ line 1, a
+12-hex id, `Parked:`, `armed`, `session-continue.sh set`, `fired`, and permission_mode=plan.
+
+**F3 `diagnosed-not-applied`: weakened, 75% → 45%.** The corpus result reproduces (2 of 902: c0448
+is m1, c0052 is the assignee message). Defects:
+- The spec contradicts itself. It says "gate it behind the :475 genuine exit" and also "apply the
+  genuine test to the fix sentence", but a per-sentence test requires bypassing the message-level
+  exit. That bypass hits the same :529 `opaque-identifier` mislabel as F1.
+- Fixture `p13` ("I didn't change anything. The fix is a settings.json edit … that file is yours to
+  approve") **fires**. Neither HARD_CORE nor SOFTCALL knows "yours to approve", and a settings.json
+  edit is operator-only on this box.
+- m1 fires only by luck: SHIPVERB matches "merges" (RC6). If F5 is fixed, m1 becomes genuine and F3
+  goes silent on it.
+
+**F4 widen the `open_packet_B` reader: weakened, 70% → 45%.** The widened regex reads 4 of 5
+(misses "was only at 70% on it"). "Does not change fire behaviour" is true. "Pure correctness" is
+not. The reader keeps the **first** number (`awk 'NR<=1'`, :125), and m4 would yield 95. cc-decide
+refuses N>90 (:121-122 and `rules:68`), so the packet open fails. That produces the bare idle
+open_packet_B exists to prevent. The packet's conviction must be bound to the fork's sentence, not
+to the message.
+
+**Rule text: weakened, 70% → 55%.** `rules:34` is a measured cut of 97→67 chars (−30, `wc -m`).
+The deployed `~/.claude/rules/10-session-close.md` is byte-identical to the source (diff). But the
+`CLAUDE.global.md:721` sentence is **not resident**. `grep -c 'Nothing on this box catches it'`
+gives 0 for `~/.claude/CLAUDE.md` (the slim variant, 28,894 B) and 1 for `~/.claude/CLAUDE.full.md`.
+So the resident cut is about 30 chars, not about 240. Also, `CLAUDE.global.md:601` carries different
+text ("**No ledger, no auto-continue.** Answer and yield — but *yield* governs…"), so the
+"replace in both" string edit does not apply there. It is still a net cut, so it is compliant.
+
+**F6 doc follow-on floor: weakened, 55% → 40%.** The insertion point is confirmed (`:1317` ship
+floor, `:1322` wake floor). The count reproduces approximately: 26 of 271 changed docs/research .md
+files over 14 days (`git log --since=14.days --name-only` plus a heading grep), against 23 of 262.
+The `Parked:` / fired / id marker convention it depends on does not exist yet. Until it does, F6 is
+the moderate-rate alarm the axis itself rates it as.
+
+### Measurements
+
+| Measurement | Verdict | Note |
+|---|---|---|
+| No tool_use after 06:03:01 or 06:04:16Z | confirmed | jq over the `.handed-off` transcript: the next main-chain records are user prompts at 06:03:14.837Z and 06:04:35.598Z. The operator's next prompt arrived 12-19 s after each Stop, so a block would race a queued prompt. |
+| IDL rows at the 4 Stops | confirmed, with an addition | The 14:27:50Z row carries `suppressed_arm:"handoff"`. CA_HANDOFF (`completion-assert.sh:467`, `needs your`) matched m4's settings.json sentence, not the follow-on clause. |
+| match.sh 0 of 4 | confirmed | Re-run as cited. Pane and peer arms also checked (0 of 4). |
+| Reader 0 of 6 | weakened | 0 of **5**: the messages state 5 convictions. |
+| Corpus 542 / 1,113 / 902 | confirmed in part | 902 files in `/tmp/ax03/msgs` (ls). 542 and 1,113 were not re-derived. |
+| bashform 5 of 902 | confirmed | Re-run in a UTF-8 locale and with no locale: same 5 hits, and all 4 fixtures fire. |
+| 49 YES closes with a follow-on, 1 ownerless | confirmed | f1audit.sh: 69 YES-or-✅ messages, 49 with a clause, 1 ownerless. |
+| 19 of 902 at ≤90 and 4 of 902 above 90 | weakened | Not re-run (detect.py and refined.py logic not re-audited). |
+| 23 of 262 docs | confirmed (≈) | 26 of 271 today. |
+| Test counts 61 / 9 / 61 / 5 / 12 | confirmed | `grep -c '^@test'`. |
+| Rule cut ≈240 chars | weakened | Resident cut is −30 chars (measured). The rest is in non-resident CLAUDE.full.md. |
+
+### Missed by the axis
+
+1. The FIRE_KIND-chain mislabel (`:529` precedes the proposed F1 and F3 slots) whenever an arm
+   bypasses :475.
+2. `FOLLOW_YES` matches the line-2 rung glyph, so F1 fires on compliant ❌ closes (8 of 65 NO closes
+   carry a ✅).
+3. F2 has no silencer for ⛔, decision ids, `Parked:` or an armed or fired continuation. It fires on
+   its own remedy.
+4. anti-deference-nudge reads neither the operator's message (no kill-switch) nor `permission_mode`
+   (plan mode).
+5. The shared `ANTIDEF_MAX` cap: 852 suppressed vs 190 fired, 9 of 96 sessions capped. New arms
+   inherit it, and the same mechanism silenced completion-assert at the incident close.
+6. Completion-assert's suppressed arm at 14:27:50Z was `handoff`, on the settings.json line.
+7. Omission and relabel evasion of F1, and the "name it and get blocked" incentive. A ledger-side
+   or doc-side signal (F6, or axis 04) cannot be evaded by rewording the close.
+8. F4's first-number pick can turn a packet open into a cc-decide refusal.
+9. The :721 sentence is not resident, so it does not count toward the budget.
+10. Jev's retirement was not causal: it had zero measured `drivable` detections and 403'd on every
+    call.

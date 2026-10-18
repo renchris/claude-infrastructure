@@ -363,3 +363,162 @@ number.
   completion-assert :594/:1028 and operator-readout :1329 read it), or have `dod-persist.sh set`
   accept `- [ ]` items. Do not leave the certificate citing it. Conviction 85% that it is dead;
   60% on which cure.
+
+## Skeptic verdicts
+
+Skeptic pass, read-only, at `c19b14ac5` (same tree as the report). I re-opened every cited
+file:line and re-ran the counts. The interactive shell's `grep` is a ugrep wrapper, while the hooks
+run `/usr/bin/grep` (BSD). Where that matters, I name which one ran. Scratch scripts went to
+`/tmp/sk04_*` (outside the repo), and this append is the only repo write.
+
+### S0. The finding that changes the plan: completion-assert was CAPPED at the incident Stop
+
+The report's delivery argument (§0.4, §5, fix 2) is that completion-assert "ran (3350 ms) at the
+incident Stop", so it is the channel to use. It did run, but it said nothing because its budget
+was already spent:
+
+- IDL, `~/.claude/autonomy/idl.jsonl`, at 14:27:50Z for sid 5759497b:
+  `"disposition":"abstained","reason":"capped:3>=3","suppressed_arm":"handoff","rung":"✅","facts":"","class":"assert","count":3,"max":3`.
+- The `assert` budget (`COMPLETION_MAX` default 3, hooks/completion-assert.sh:132) was used up by
+  three 📦 landedness fires in 66 seconds: 13:18:34Z, 13:19:02Z and 13:19:40Z, each with
+  `"facts":"1 commit(s) YOU wrote are committed-but-unlanded"`. All are in the same IDL.
+- An existing arm, **D1 handoff**, *did* match the incident close. It matched "The one change that
+  **needs your** hand is raising the dispatcher's timeout" (the `CA_HANDOFF` regex at
+  hooks/completion-assert.sh:467), and the cap suppressed it. So the incident close was not
+  invisible to completion-assert. It was budget-starved.
+- This is the starvation already documented at hooks/completion-assert.sh:1560-1568 (item
+  3b464e94b3ff): "the TERMINAL close … arrived at `capped:3>=3`". That defect is why the
+  `shape`, `verdict` and `act` classes exist (:1602-1616). It is pinned by
+  tests/completion-assert.bats:1691-1700.
+- Fix 2 as specified copies the FILEDM pair (`contra=1`, :1042-1043). That makes the class
+  `assert` (:1608), which was at 3/3. **So the new term would have been capped at the incident
+  too.**
+- Measured over 7 days of IDL (`python3 -I /tmp/sk04_idl.py`, the archives from 2026-10-13 on
+  plus the live file): 428 `assert`-class cap trips across 46 sessions. 2 of them were at RUNG=✅,
+  both suppressing `handoff`: this incident, and 4736324c on 2026-10-17.
+- **Repair:** give UNDRIVEN its own class, for example `CLASS=undriven` with
+  `COMPLETION_UNDRIVEN_MAX=2`, claimed when UNDRIVEN is the only contradicting fact. Alternatively,
+  stop ledger-arm fires on the same unlanded sha from spending more than one `assert` slot.
+
+### S1. Root causes
+
+| # | Verdict | Conviction | Re-check |
+|---|---|---|---|
+| RC1 REMAINDER always 0 | confirmed, with a qualifier | 88 | wrap-ledger.sh:924-931 and dod-persist.sh:106/:127 are as cited. I re-ran the census: 0 open boxes in 78 files. The 4 files with boxes (44c810f7…, 614c49df…, 740a045d…, a685eb17…, mtimes 2026-08-07..09) hold **hand-written** `- [x]` plan sections, so an agent writing into the DoD file is a dormant producer. "Reachable only in fixtures" is slightly overstated. Independent corroboration: handoff-fire.sh:7713-7714 records W2-B1's replay, "REMAINDER≠0 fires 0 / 44" self-closes. |
+| RC2 SCOPE=met from foreign August blocks | confirmed | 88 | dod-path.sh:168 is as cited. `dod_filter_for` reproduces 16 unattributed 2026-08-10..18 blocks plus the 20:04:37Z block (measured). There is no `dod-persist.sh set` before 20:04:35Z: I checked the main transcript, the quaternary `.jsonl.handed-off` and all 38 subagent transcripts, and found no compaction records. The report misses a causal step: with no foreign blocks, `DOD=absent` would have taken the :2627 arm, which ranks above :2632. The agent's own `grep '^READOUT'` at 14:27:32Z would then have read "✅ Clean & landed — completeness UNKNOWN", not "Complete & landed". One correction to §2: "research-only" does **not** first appear in the close. It appears at 06:06:11Z in a *thinking* block (transcript line 201: "I'm scoping this as research-only"). The jq text search skipped thinking blocks. So the intake scope existed, but privately and unrecorded. |
+| RC3 no ledger input for doc follow-on | confirmed | 97 | The chain at :2492-2659 is as tabulated (arm lines re-grepped: 2505/2512/2514/2516/2531/2550/2563/2567/2571/2575/2586/2618/2627/2632). The READOUT tool result is at 14:27:32.608Z and the close text at 14:27:47.478Z, so the gap is about 15 s, not 20 s. |
+| RC4 polarity-only parser | confirmed | 85 | close-shape.sh:124-145 returns only yes/no/mixed/none, and :179 is the template line. Missed: completion-assert's D3 already parses line 1 of a yes for qualifiers (`CA_YES_HEDGE`, defined at :373 and applied at :1259-1265). That is the natural home for a "yes + undriven follow-on" test, because the message is already in hand there. |
+| RC5 readout timed out; least reliable | confirmed, but its conclusion is undercut by S0 | 80 | The stop_hook_summary is as quoted (`timeoutMs 10000`), and the incident transcript has 9 readout cancels out of 15 Stops. Re-measured with a timestamp cut (≥2026-10-17T20:45Z, `/tmp/sk04_timeouts.py`): 3329 Stops; readout 665 (20.0%), session-continue 445 (13.4%), completion-assert 147 (4.4%). The rule file itself (CLAUDE.rules.slim.10-session-close.md:4) says the readout renders "as a `systemMessage`", and every readout output is `{systemMessage:…}` (operator-readout.sh:1959/2107/2160/2200). So it is operator-facing and never reaches the agent, whether or not it times out. "Ran" does not mean "would have delivered": see S0. |
+| RC6 🔧 parts lacks FILED/UNCONVICTED/FLOOR | confirmed, low impact | 75 | :1323-1330 is as cited. Measured over transcripts modified in 3 days (`/tmp/sk04_safe.py`): 6 "loose ends" fallbacks in 1952 readout renders. It is operator display only. |
+
+### S2. Fix candidates
+
+**Fix 1, UNDRIVEN_MINE: weakened, 60.**
+- *Insertion points:* correct (:1442-1451, :2549, :2571-2575, :2799, BUSY note :2747). The memo
+  key is used only when a transcript is set (:621), and completion-assert exports
+  `WRAP_TRANSCRIPT` (:277), so the Stop path has its transcript.
+- *Missing constraint:* the ledger already sources `session-writes.sh` **only in a bounded child**
+  (`_bounded … bash -c '. "$1" …'`, wrap-ledger.sh:1759-1772). The reason given is that it
+  "defines names four other hooks also define". Step 4 says "resolve and source", which would
+  break that rule.
+- *Latency:* `session_writes_paths` took 0.42 s real at load 384 (re-measured: 51 paths, README
+  included, rc 0). That lands on the shared ledger inside completion-assert's 5 s timeout
+  (settings.json Stop entry), and the incident's completion-assert already took 3.35 s.
+- *Always-firing:* low, confirmed, but the report's numbers do not reproduce.
+  - Touched in 30 days: **6** of 3214 docs match, not 10. ugrep and BSD grep agree; 3117 of the
+    paths still exist.
+  - Tracked docs matching: **10**, not 23 (12 with slot dirs included).
+- *Recall is the real problem.* The heading set is fitted to the incident.
+  - Of 65 synthesis docs (README/REPORT/SYNTHESIS) touched in 30 days, 20 carry a
+    plan/fix/recommendation heading, and only 1 (startup-hooks README) matches.
+  - Missed headings include: "## 3. Build plan", "## 2. Implementation spec", "### 4.2
+    Implementation steps (in order)", "## 7. Implementation brief", "## 3. Fix list", "## Fix
+    candidates", "## Not done here (named for the next owner)".
+  - "## 7. Follow-ons" (close-verdict-first REPORT) is missed because `Follow-?on( work)?\b`
+    cannot match before the plural "s".
+- *Laundering:* any 12-hex string in a `Follow-on:` line clears the doc. It is never checked
+  against the backlog or decide stores, though the ledger already reads the backlog
+  (`count_filed_undriven`). One id also clears a doc with six waves.
+- *Operator decision:* ⛔ precedence holds (:2505).
+- *Stated park:* the disposition grammar has no park form other than an id, so an operator's
+  in-chat "leave the waves" needs a filed row first.
+- *Ownership:* a fired research peer, or a lead-scoped "research only; the lead drives the waves",
+  is pushed to drive work its lead owns. The owner-word exclusion exists only on the message arm.
+- *Message arm:* re-run of the census with rule (iv) as a regex (`/tmp/sk04_census.py`): 337
+  yes-closes from 117 sessions; prose 38, of which 34 have an owner word and **4** do not (1.2%).
+  Of those 4, 1 is the incident and 2 are not-yet-drivable waits ("one test after the next
+  reboot"; a pane "once its window is out of fullscreen"). Precision is therefore about 1 in 4.
+  The arm is also bypassed by spelling: it parses only `follow-on:`, so "Follow-ups: none" or no
+  clause at all (82 of 337) escapes. A value naming "a later session" passes rule (iv).
+- *Placement:* put the message arm in completion-assert (next to D3), not in the ledger.
+
+**Fix 2, completion-assert consumes UNDRIVEN_MINE: weakened, 40.**
+- As specified, it is class `assert` and would have been capped at the incident (S0). The claim
+  that it is "the primary channel because it ran" is refuted by the IDL.
+- It becomes sound with its own class (S0). The test to copy is the CAP SPLIT case
+  (tests/completion-assert.bats:1691-1700), in addition to :2168-2186.
+
+**Fix 3, readout parts term and certificate wording: weakened, 50.**
+- The parts term is implementable and harmless, but it is operator-display only (RC5, RC6).
+- Items 14-15 target a dead path. The standalone certificate (`close-certificate`) fired **0**
+  times across the IDL archives since 2026-09-30 plus the live file (measured, grep -c per
+  archive). In this repo the block renders every Stop, with `Q_N`>0 and 235 items queued (in the
+  hook_success stdout of the incident transcript).
+- Item 14 contradicts tests/operator-readout-research.bats:120
+  (`[[ "$msg" == *"frozen-DoD remainder 0"* ]]`), which the fix does not list.
+
+**Fix 4, SCOPE=met only from attributed blocks: weakened, 55.**
+- The diagnosis is right, but the fix effectively retires the certificate fleet-wide. In 7 days the
+  whole DoD store gained **8** attributed captures, all `manual-set`, from 8 sessions, while 117
+  sessions wrote yes-closes (measured). So SCOPE=unknown becomes near-universal, and the in-block
+  ✅ line becomes a constant "completeness UNKNOWN": an always-on phrase, though not a block.
+- Fixture breakage is wider than listed. These all use unattributed `- [x]` DoD fixtures and go
+  red: tests/wrap-ledger-research.bats:103-110, tests/operator-readout-research.bats:107-121,
+  tests/operator-readout.bats:1859 (`cvf_env`, the very helper fix 3's tests copy) and
+  tests/self-certifying-close.bats:235.
+- Recorded predecessor worktrees are attributed too, so the predicate should be "this lineage",
+  not "this toplevel".
+
+**Fix 5, retire REMAINDER and the rule text: weakened, 50.**
+- Line refs are right (rule :8, :11-12). Net is about **-15** chars (python `len`: -23 on :8 and
+  +8 on :11-12), not -18.
+- The same clause lives in CLAUDE.global.md:850, commands/wrap.md:78 and
+  commands/are-we-done.md:60. None is listed, and editing only the slim file desynchronises the
+  "moved verbatim" copy.
+- REMAINDER consumers missing from the list: scripts/handoff-fire.sh:7700 (the retirement stamp)
+  and :7740-7765 (the `--terminal` refusal). Tests pinning it: tests/handoff-fire-ledger-stamp.bats:124,
+  tests/completion-assert.bats:171 and tests/anti-deference-nudge.bats:307.
+- The rule swap cites a ledger term that does not exist yet, so it must land after fix 1.
+
+### S3. Measurements
+
+| Measurement | Verdict | Re-check |
+|---|---|---|
+| 0 open boxes / 78 files; 4 with boxes | confirmed | re-ran the loop |
+| repo-86523465733a9afe.md 383 lines, 0 checkbox lines | confirmed | `wc -l`, `command grep -cE` |
+| filtered view: 16 August blocks + 20:04:37Z | confirmed | `dod_filter_for` |
+| no `set` before 20:04:35Z; READOUT at 14:27:32Z | confirmed | jq over main, quaternary `.handed-off` and 38 subagent files |
+| incident stop_hook_summary | confirmed | record 651 |
+| 9 cancels / 15 Stops | confirmed | jq |
+| fleet 24 h timeout rates | confirmed within 1 pp | 20.0 / 13.4 / 4.4% of 3329 (timestamp-cut) |
+| ledger run DOD=present REMAINDER=0 SCOPE=met | confirmed by derivation (not re-run) | follows from :938-940 and the filtered view |
+| session_writes_paths 0.47 s, 51 paths | confirmed | 0.42 s at load 384, 51 paths |
+| 10 of 3205 touched, 23 tracked | **refuted as numbers** | 6 of 3214 touched; 10 tracked. The low-fire direction holds |
+| census 338 / 154 / 64 / 82 / 38; 33 of 38 owner | confirmed | 337 / 153 / 64 / 82 / 38; regex gives 34 owner / 4 not |
+
+### S4. Missed by the axis
+
+1. The S0 cap starvation: the existing D1 arm caught the incident close and was capped. The
+   cheapest real fix may be the class split, not a new detector.
+2. Following from S0: give UNDRIVEN its own completion-assert class, or the term inherits the
+   same starvation.
+3. Readout output is `systemMessage` only (operator-facing). No readout change can make an agent
+   continue.
+4. Without the August blocks, the agent's own READOUT grep would have said "completeness UNKNOWN".
+5. "research-only" was decided at intake, in a 06:06:11Z thinking block.
+6. The doc-arm heading regex has low recall (1 of 20 synthesis docs with plan-like headings) and a
+   plural bug ("Follow-ons").
+7. Disposition ids are not verified against the stores.
+8. Fired peers and lead-owned waves are a park and ownership case the doc arm does not handle.
+9. handoff-fire's `--terminal` refusal also keys on the dead REMAINDER and would ignore UNDRIVEN.
+10. Fix 4 and fix 5 break more fixtures and docs than they list.
