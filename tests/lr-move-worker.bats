@@ -282,6 +282,24 @@ limit_tail() { # the last assistant record becomes a usage-limit error, as the c
   [ -z "$(ls -A "$LR_STATE_DIR/locks/swap-slots" 2>/dev/null)" ]
 }
 
+@test "16b [RED] the limit read takes the transcript at the row's cwd slug, not the first glob hit" {
+  # limited_now globbed projects/*/<sid>.jsonl, ~18,200 dirs a store (REPORT §6 item 5). It now reads
+  # projects/<slug(cwd)>/ first, as lr_session_location does. A stale copy whose dir sorts first
+  # (-a-stale) ends in a limit error; the copy at the plan row's cwd slug (the fixture's cwd is
+  # $BATS_TEST_TMPDIR) does not. Only the limit read is under test: the extra copies make the verdict
+  # FAILED on its one-copy conjunct whatever this read does, so the verdict is not asserted.
+  local slug; slug="$(printf %s "$BATS_TEST_TMPDIR" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g')"
+  mkdir -p "$SRC/projects/-a-stale" "$SRC/projects/$slug"
+  cp "$SRC/projects/-x/$SID.jsonl" "$SRC/projects/$slug/$SID.jsonl"
+  cp "$SRC/projects/-x/$SID.jsonl" "$SRC/projects/-a-stale/$SID.jsonl"
+  printf '%s\n' '{"type":"assistant","timestamp":"2026-10-06T06:20:00.000Z","isApiErrorMessage":true,"message":{"role":"assistant","content":[{"type":"text","text":"You'"'"'ve hit your session limit · resets 7:50pm"}]}}' \
+    >> "$SRC/projects/-a-stale/$SID.jsonl"
+  worker
+  # RED before: NOTMOVED became-limited, read off the stale copy the glob reached first.
+  [ -n "$(res reason)" ] || false
+  [[ "$(res reason)" != became-limited:* ]] || { res reason; false; }
+}
+
 # ── THE MEMORY READ, WITH THE GATE ON (replay of batch 20261006T060534Z-next3-next2-64630) ───────
 # Every other case here runs with LR_MOVE_KERNEL_CHECK=off (the fixture), so before 2026-10-06 the
 # move lane's memory read had no test at all: deleting it turned nothing red. These two turn it on

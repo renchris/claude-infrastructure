@@ -169,9 +169,16 @@ esac
 # for idle, or queued for a slot, can have hit its limit since. The census the wait loop reads does
 # not look (an api-error tail is "at rest"), so the same read is made here and again once the slot
 # is held.
+# The transcript is read at the row's cwd slug first, the encoding lr_session_location uses: the glob
+# walked ~18,200 project dirs (REPORT §6 item 5) three times a worker, and could reach a stale copy in
+# a dir that sorts first. Glob only on a miss; LR_MOVE_LOCATION_FAST=off globs always.
 limited_now() { # → 0 when the session's last assistant record is a limit error
-  local tx
-  for tx in "$SRC_CFG"/projects/*/"$SID".jsonl; do [ -f "$tx" ] && break; tx=""; done
+  local tx=""
+  if [ -n "$CWD" ] && [ "$CWD" != - ] && [ "${LR_MOVE_LOCATION_FAST:-on}" != off ]; then
+    tx="$SRC_CFG/projects/$(printf %s "$CWD" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g')/$SID.jsonl"
+    [ -f "$tx" ] || tx=""
+  fi
+  [ -n "$tx" ] || for tx in "$SRC_CFG"/projects/*/"$SID".jsonl; do [ -f "$tx" ] && break; tx=""; done
   [ -n "$tx" ] && [ "$(lr_last_api_error "$tx" 2>/dev/null | cut -f3 || true)" = limit ]
 }
 limited_stop() { finish NOTMOVED "became-limited: its last record is now a limit error, so it owes a turn this lane does not type; nothing touched. Recover it: cc-lr recover ${SID:0:8}"; }
