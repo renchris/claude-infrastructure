@@ -16,6 +16,13 @@
 #   0 — OK (session proceeds)
 #   0 with stderr — rolled back (session proceeds with different version)
 #   No other exits — we never block a session (fail-open).
+#
+# UNKNOWN IS NOT BROKEN (2026-10-18, docs/research/startup-hooks-2026-10-18/README.md §2 #4). A probe
+# that is timed out (124), killed (137) or cannot run (127) under load proves nothing about the binary:
+# that path printed a false "no working version" on 21 of 370 starts (5.7%) and kept a rollback a
+# timeout could trigger. Such a probe is logged as UNKNOWN and the hook exits 0, silent, never
+# re-pointing `current`. A rollback needs a HARD failure that repeats under a 10 s bound. A passing
+# verdict is cached on (link target, inode, mtime), so a healthy start boots no 204 MB binary at all.
 
 set -euo pipefail
 
@@ -50,8 +57,9 @@ cat >/dev/null 2>&1 || true
 # warn. Observed live 2026-06-11 (a /model fable save broke stable-track probes). On new
 # frontier tiers, extend the case pattern via the cc-upgrade skill (model.md).
 SETTINGS_FILE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
-if [[ -f "$SETTINGS_FILE" ]] && command -v python3 >/dev/null 2>&1; then
-  saved_model=$(python3 -c "import json;print(json.load(open('$SETTINGS_FILE')).get('model',''))" 2>/dev/null || echo '')
+if [[ -f "$SETTINGS_FILE" ]] && command -v jq >/dev/null 2>&1; then
+  # jq, not python3: this read runs on every start; python3 is spawned only for the rare strip below.
+  saved_model=$(jq -r '.model // "" | tostring' "$SETTINGS_FILE" 2>/dev/null || echo '')
   case "$saved_model" in
     fable|claude-fable*)
       cp "$SETTINGS_FILE" "$SETTINGS_FILE.bak-model-guard-$(date +%s)" 2>/dev/null || true
@@ -110,11 +118,50 @@ find_binary() {
 
 current_binary="$(find_binary "$current_target" || echo '')"
 
-# Sanity-check: binary exists, responds to --version, AND isn't MANIFEST-skip
-if [[ -n "$current_binary" ]] && [[ "$manifest_skip" == 0 ]] \
-   && CLAUDE_SKIP_AUTH=1 timeout 2 "$current_binary" --version >/dev/null 2>&1; then
-  # Healthy — exit silently
-  exit 0
+# `timeout` by ABSOLUTE path: the harness's PATH need not contain Homebrew, and a missing `timeout`
+# used to read as a broken binary (rc 127). CC_PSV_TIMEOUT_BIN is the test seam.
+TIMEOUT_BIN="${CC_PSV_TIMEOUT_BIN:-}"
+if [[ -z "$TIMEOUT_BIN" ]]; then
+  for _t in /opt/homebrew/bin/timeout /opt/homebrew/bin/gtimeout /usr/local/bin/timeout /usr/local/bin/gtimeout; do
+    [[ -x "$_t" ]] && { TIMEOUT_BIN="$_t"; break; }
+  done
+  [[ -n "$TIMEOUT_BIN" ]] || TIMEOUT_BIN="$(command -v timeout 2>/dev/null || true)"
+fi
+
+# probe <binary> <seconds> → the exit code of a bounded `--version`; 127 when no bound is available
+# (an unbounded probe could hold the session start, so it is never run).
+probe() {
+  [[ -n "$TIMEOUT_BIN" ]] || return 127
+  CLAUDE_SKIP_AUTH=1 "$TIMEOUT_BIN" "$2" "$1" --version >/dev/null 2>&1
+}
+is_unknown() { [[ "$1" == 124 || "$1" == 137 || "$1" == 127 ]]; }
+
+VERDICT_FILE="$HOME/.claude/state/pre-session-validate.verdict"
+verdict_key() { # <binary> → "<link target> <inode> <mtime>" of what the binary resolves to
+  local st; st="$(stat -L -f '%i %m' "$1" 2>/dev/null)" || return 1
+  printf '%s %s' "$current_target" "$st"
+}
+
+if [[ -n "$current_binary" ]] && [[ "$manifest_skip" == 0 ]]; then
+  key="$(verdict_key "$current_binary" || true)"
+  if [[ -n "$key" && -f "$VERDICT_FILE" && "$(cat "$VERDICT_FILE" 2>/dev/null)" == "ok $key" ]]; then
+    exit 0   # this exact binary already passed; nothing on disk has changed since
+  fi
+  rc=0; probe "$current_binary" 2 || rc=$?
+  if [[ "$rc" != 0 ]] && ! is_unknown "$rc"; then
+    rc=0; probe "$current_binary" 10 || rc=$?   # a hard failure must REPEAT under a generous bound
+  fi
+  if [[ "$rc" == 0 ]]; then
+    if [[ -n "$key" ]]; then
+      mkdir -p "${VERDICT_FILE%/*}" 2>/dev/null && printf 'ok %s\n' "$key" > "$VERDICT_FILE.$$" 2>/dev/null \
+        && mv -f "$VERDICT_FILE.$$" "$VERDICT_FILE" 2>/dev/null || true
+    fi
+    exit 0   # Healthy — exit silently
+  fi
+  if is_unknown "$rc"; then
+    log "UNKNOWN: $current_target --version probe rc=$rc (timeout/killed/no-timeout under load) — not a failure; current left as is"
+    exit 0
+  fi
 fi
 
 # BROKEN — find fallback
@@ -142,13 +189,19 @@ for candidate in $(ls -1 "$VERSIONS_DIR" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+'
   # Must have a working binary
   candidate_binary="$(find_binary "$candidate_path" || echo '')"
   [[ -n "$candidate_binary" ]] || continue
-  # Binary must answer --version in <2s
-  if CLAUDE_SKIP_AUTH=1 timeout 2 "$candidate_binary" --version >/dev/null 2>&1; then
+  # Binary must answer --version under the same 10 s bound; an UNKNOWN probe is never a fallback
+  crc=0; probe "$candidate_binary" 10 || crc=$?
+  if [[ "$crc" == 0 ]]; then
     fallback="$candidate_path"
     break
   fi
+  is_unknown "$crc" && { unknown_candidates=$(( ${unknown_candidates:-0} + 1 )); log "fallback $candidate UNKNOWN (rc=$crc)"; }
 done
 
+if [[ -z "$fallback" && "${unknown_candidates:-0}" -gt 0 ]]; then
+  log "no VERIFIED fallback: ${unknown_candidates} candidate(s) UNKNOWN under load — current left as is"
+  exit 0
+fi
 if [[ -z "$fallback" ]]; then
   log "no working fallback found — session will likely fail"
   echo "[pre-session-validate] ERROR: no working version in $VERSIONS_DIR" >&2

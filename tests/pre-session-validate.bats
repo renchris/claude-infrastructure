@@ -76,3 +76,48 @@ model_of() { python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get(
   [ "$status" -eq 0 ]
   [ "$(model_of "$cfg/settings.json")" = "fable" ]   # untouched: disabled means no guard
 }
+
+# ── job (2): UNKNOWN is not broken (startup-hooks-2026-10-18 unit 1.3) ─────────────────────────────
+# A fixture ~/.claude-versions with `current` → 2.1.200 (the stub under test) and a good 2.1.199.
+versions_fixture() { # $1 = body of the 2.1.200 stub
+  h="$BATS_TEST_TMPDIR/home"; V="$h/.claude-versions"
+  mkdir -p "$h/.claude" "$V/2.1.200/bin" "$V/2.1.199/bin"
+  printf '#!/bin/bash\necho call >> "%s/calls"\n%s\n' "$BATS_TEST_TMPDIR" "$1" > "$V/2.1.200/bin/claude"
+  printf '#!/bin/bash\necho 2.1.199\n' > "$V/2.1.199/bin/claude"
+  chmod +x "$V/2.1.200/bin/claude" "$V/2.1.199/bin/claude"
+  ln -s "$V/2.1.200" "$V/current"
+  TB=""; for t in /opt/homebrew/bin/timeout /opt/homebrew/bin/gtimeout /usr/local/bin/timeout; do [ -x "$t" ] && { TB="$t"; break; }; done
+  [ -n "$TB" ] || skip "no coreutils timeout"
+}
+run_hook() { run env -u CLAUDE_CONFIG_DIR HOME="$h" CC_PSV_TIMEOUT_BIN="$TB" bash "$HOOK" </dev/null; }
+
+@test "1.3: a probe that times out is UNKNOWN — no ERROR, no stderr, current NOT re-pointed" {
+  versions_fixture 'sleep 3'
+  run_hook
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]                                         # bats merges stderr: nothing at all
+  [ "$(readlink "$V/current")" = "$V/2.1.200" ]
+  grep -q 'UNKNOWN' "$h/.claude/logs/pre-session-validate.log"
+}
+
+@test "1.3: a hard failure that repeats keeps today's rollback path" {
+  versions_fixture 'exit 1'
+  run_hook
+  [ "$status" -eq 0 ]
+  [ "$(readlink "$V/current")" = "$V/2.1.199" ]
+  [[ "$output" == *"failed --version check"* ]] || false
+  [ "$(grep -c '' "$BATS_TEST_TMPDIR/calls")" -eq 2 ]      # probed twice before any re-point
+}
+
+@test "1.3: a cached passing verdict skips the probe on the next start" {
+  versions_fixture 'echo 2.1.200'
+  run_hook
+  [ "$status" -eq 0 ]
+  run_hook
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '' "$BATS_TEST_TMPDIR/calls")" -eq 1 ]
+  # ...and a changed binary (new mtime) is probed again
+  touch -t 202001010000 "$V/2.1.200/bin/claude"
+  run_hook
+  [ "$(grep -c '' "$BATS_TEST_TMPDIR/calls")" -eq 2 ]
+}
