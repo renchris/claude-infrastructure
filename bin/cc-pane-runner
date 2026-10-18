@@ -98,7 +98,7 @@ _wait="${CC_PANE_CMD_WAIT_S:-300}"
 _fallback() {
   [ -n "${_armed:-}" ] && rm -f "$_armed" 2>/dev/null
   [ -n "${1:-}" ] && printf 'cc-pane-runner: %s — this pane is an ordinary shell.\n' "$1" >&2
-  unset CC_PANE_RUNNER_OWNS_CLOSE
+  unset CC_PANE_RUNNER_OWNS_CLOSE CC_PANE_STARTED_FILE CC_PANE_EXIT_OWED
   exec "${SHELL:-/bin/zsh}" -l -i
 }
 
@@ -166,8 +166,20 @@ _claude_verb() { # $1=command → prints the verb; rc 0 iff it is a claude sessi
 # own clean /exit, which is the "fleet-launched pane" case this decision exists for. A failed `cd`
 # is non-zero and keeps the shell like any other failure. The verb list itself is NOT widened: the
 # wedge watch reads it too, and what it may page is a separate question from what may close.
-_close_on_exit() { # $1=command $2=its exit status $3=1 iff a fleet launcher delivered it (interactive mode)
-  local _v _sd _c _lib=""
+#
+# ── A PANE THAT NEVER RAN CLAUDE CLOSES TOO (lr-wake incident 2026-10-18, REPORT §4 Wave B step 6, K3) ─
+# The operator's rule: a pane that leaves Claude either runs Claude or is closed. Overnight 13
+# refusal panes sat as plain shells, each ending `the fleet launch line exited 9 — keeping a shell`
+# (c2 §2.2), with no session in them and the transcript safe on disk. So besides a clean exit, two
+# more outcomes close the pane, both only for a claude verb or a fleet launch line:
+#   · rc 75 — the launcher QUEUED the launch (one durable requests/<sid>.cc-lr.json retries it);
+#   · claude never started (the exit record's claude_started=false) AND a durable record owns the
+#     retry (the launcher touched $CC_PANE_EXIT_OWED, or this pane's own LR_RUN_DIR holds a
+#     relaunch.rc — the run-dir owner retries, K3's rc 9).
+# Every other non-zero exit keeps the shell, as before. And no reason closes an IN-PLACE pane: a
+# recycle pending for this pane means handoff-fire is about to type the relaunch at this shell.
+_close_on_exit() { # $1=command $2=its exit status $3=1 iff a fleet launcher delivered it (interactive mode) $4=claude_started true|false $5=1 iff an owed record exists
+  local _v _sd _c _lib="" _why
   if ! _v="$(_claude_verb "$1")"; then
     [ "${3:-0}" = 1 ] || return 0
     _v="the fleet launch line"
@@ -176,7 +188,13 @@ _close_on_exit() { # $1=command $2=its exit status $3=1 iff a fleet launcher del
     printf 'cc-pane-runner: %s exited %s — CC_PANE_CLOSE_ON_EXIT=0, keeping the shell\n' "$_v" "$2" >&2
     return 0
   fi
-  if [ "$2" != 0 ]; then
+  if [ "$2" = 0 ]; then
+    _why="exited 0"
+  elif [ "$2" = 75 ]; then
+    _why="exited 75 (queued — one durable request retries it)"
+  elif [ "${4:-true}" = false ] && [ "${5:-0}" = 1 ]; then
+    _why="exited $2 before claude started, and a durable record owns the retry"
+  else
     printf 'cc-pane-runner: %s exited %s — keeping a shell for diagnosis/resume\n' "$_v" "$2" >&2
     return 0
   fi
@@ -186,11 +204,11 @@ _close_on_exit() { # $1=command $2=its exit status $3=1 iff a fleet launcher del
   done
   # shellcheck source=/dev/null  # runtime-resolved: checkout sibling, else the live layer
   if [ -z "$_lib" ] || ! . "$_lib" 2>/dev/null; then
-    printf 'cc-pane-runner: %s exited 0 — recycle check unavailable, keeping the shell\n' "$_v" >&2
+    printf 'cc-pane-runner: %s %s — recycle check unavailable, keeping the shell\n' "$_v" "$_why" >&2
     return 0
   fi
   if cc_pane_recycle_pending "${KITTY_WINDOW_ID:-}"; then
-    printf 'cc-pane-runner: %s exited 0 — recycle pending, keeping the shell\n' "$_v" >&2
+    printf 'cc-pane-runner: %s %s — recycle pending, keeping the shell (an in-place relaunch is coming here)\n' "$_v" "$_why" >&2
     return 0
   fi
   # THE LAST GATE: kitty-fullscreen-guard (docs/research/kitty-crash-2026-10-15/README.md § Chosen fix).
@@ -211,15 +229,85 @@ _close_on_exit() { # $1=command $2=its exit status $3=1 iff a fleet launcher del
         printf 'cc-pane-runner: fullscreen guard not executable at %s — keeping the shell\n' "$_c" >&2
         return 0
       fi
+      # --scope pane, not os-window: the runner removes only ITS OWN pane, and the kitten counts
+      # "last" across every tab of the OS window, so this refuses exactly the crash trigger (the
+      # last pane of a fullscreen window) — os-window scope would refuse every pane of every
+      # fullscreen window and keep the husks this decision exists to remove (K3 as amended).
       if ! "$_c" --window "$KITTY_WINDOW_ID" --mode refuse --scope pane --tool cc-pane-runner >&2; then
-        printf 'cc-pane-runner: %s exited 0 — last pane of a fullscreen (or unreadable) kitty window, keeping the shell\n' "$_v" >&2
+        printf 'cc-pane-runner: %s %s — last pane of a fullscreen (or unreadable) kitty window, keeping the shell\n' "$_v" "$_why" >&2
         return 0
       fi
     fi
   fi
-  printf 'cc-pane-runner: %s exited 0 — closing this pane (CC_PANE_CLOSE_ON_EXIT=0 keeps it)\n' "$_v" >&2
+  printf 'cc-pane-runner: %s %s — closing this pane (CC_PANE_CLOSE_ON_EXIT=0 keeps it)\n' "$_v" "$_why" >&2
   [ -n "${_armed:-}" ] && rm -f "$_armed" 2>/dev/null
   exit 0
+}
+
+# ── THE EXIT RECORD — A CONTRACT OTHER FILES READ (lr-wake 2026-10-18, K3) ──────────────────────
+# Written on EVERY return of the command, before the pane decides what to become:
+#
+#   ~/.claude/run/pane-exit/<window>.json     (<window> = KITTY_WINDOW_ID; dir = $CC_PANE_EXIT_DIR)
+#   {"rc": <int>, "claude_started": <true|false>, "launch_sha": "<hex>", "ts": <int>}
+#
+#   rc              the command's exit status, as this runner saw it
+#   claude_started  true iff a claude session demonstrably started in THIS pane during this launch:
+#                   the launcher touched $CC_PANE_STARTED_FILE, or this pane's cc-registry row or a
+#                   beat naming this pane was written after the launch began
+#   launch_sha      sha256 of the exact command line this runner ran (empty if no hasher), so a
+#                   reader can tell its own launch's record from an older one in the same window id
+#   ts              epoch seconds at which the command returned
+#
+# Readers: lr-fire-resume (Wave C), handoff-fire's PARKED verdict (Wave E), cc-pane-close's
+# never-launched arm (Wave F). Change a field only with all three. Exported to the command, so a
+# launcher can supply the two facts this runner cannot observe from outside:
+#   CC_PANE_STARTED_FILE  touch it when claude is about to start (the TUI handover)
+#   CC_PANE_EXIT_OWED     touch it when the exit leaves a durable record that owns the retry
+_PANE_EXIT_DIR=""
+_pane_exit_prepare() { # → sets _PANE_EXIT_DIR; exports the two launcher-side paths; never fatal
+  local _id="${KITTY_WINDOW_ID:-}"
+  [ -n "$_id" ] || return 0
+  case "$_id" in *[!0-9]*) return 0 ;; esac
+  _PANE_EXIT_DIR="${CC_PANE_EXIT_DIR:-${HOME:-}/.claude/run/pane-exit}"
+  mkdir -p "$_PANE_EXIT_DIR" 2>/dev/null || { _PANE_EXIT_DIR=""; return 0; }
+  rm -f "$_PANE_EXIT_DIR/$_id.started" "$_PANE_EXIT_DIR/$_id.owed" 2>/dev/null
+  : > "$_PANE_EXIT_DIR/$_id.launch" 2>/dev/null || true
+  export CC_PANE_STARTED_FILE="$_PANE_EXIT_DIR/$_id.started" CC_PANE_EXIT_OWED="$_PANE_EXIT_DIR/$_id.owed"
+}
+# "not older than the launch marker", i.e. written at or after the launch began (same-second safe)
+_since_launch() { [ -e "$1" ] && [ ! "$_PANE_EXIT_DIR/${KITTY_WINDOW_ID:-}.launch" -nt "$1" ]; }
+_pane_claude_started() { # → prints true|false
+  local _id="${KITTY_WINDOW_ID:-}" _bd
+  [ -n "$_PANE_EXIT_DIR" ] || { printf 'false'; return 0; }
+  _since_launch "$_PANE_EXIT_DIR/$_id.started" && { printf 'true'; return 0; }
+  _since_launch "${CC_REGISTRY_DIR:-${HOME:-}/.claude/cc-registry}/$_id.json" && { printf 'true'; return 0; }
+  _bd="${CC_BEAT_DIR:-${HOME:-}/.claude/cc-beats}"
+  if [ -d "$_bd" ] && find "$_bd" -name '*.json' -newer "$_PANE_EXIT_DIR/$_id.launch" \
+       -exec grep -El "\"pane\"[[:space:]]*:[[:space:]]*\"?$_id\"?[,}[:space:]]" {} + 2>/dev/null | grep -q .; then
+    printf 'true'; return 0
+  fi
+  printf 'false'
+}
+_pane_owed() { # → prints 1 iff a durable record owns this launch's retry, else 0
+  if [ -n "$_PANE_EXIT_DIR" ] && _since_launch "$_PANE_EXIT_DIR/${KITTY_WINDOW_ID:-}.owed"; then printf 1; return 0; fi
+  if [ -n "${LR_RUN_DIR:-}" ] && [ -f "$LR_RUN_DIR/relaunch.rc" ]; then printf 1; return 0; fi
+  printf 0
+}
+_pane_exit_record() { # $1=command $2=rc $3=claude_started → writes the record atomically; never fatal
+  local _id="${KITTY_WINDOW_ID:-}" _sha="" _t
+  [ -n "$_PANE_EXIT_DIR" ] || return 0
+  case "$2" in ''|*[!0-9]*) return 0 ;; esac
+  if command -v shasum >/dev/null 2>&1; then
+    _sha="$(printf '%s' "$1" | shasum -a 256 2>/dev/null | cut -d' ' -f1)"
+  elif command -v sha256sum >/dev/null 2>&1; then
+    _sha="$(printf '%s' "$1" | sha256sum 2>/dev/null | cut -d' ' -f1)"
+  fi
+  case "$_sha" in *[!0-9a-f]*) _sha="" ;; esac
+  _t="$_PANE_EXIT_DIR/.$_id.json.$$"
+  printf '{"rc":%s,"claude_started":%s,"launch_sha":"%s","ts":%s}\n' "$2" "$3" "$_sha" "$(date +%s)" > "$_t" 2>/dev/null \
+    && mv -f "$_t" "$_PANE_EXIT_DIR/$_id.json" 2>/dev/null
+  rm -f "$_t" 2>/dev/null
+  return 0
 }
 
 # ── RUNNING THE COMMAND: two eval shells, because two callers name things differently ────────────
@@ -328,14 +416,17 @@ _launch() { # $1=command — never returns
   # command that reads an unset variable, i.e. this file would change the meaning of commands it is
   # only supposed to transport. The guard exists for the runner's own logic above, and its job is done.
   set +u
-  local _rc
+  local _rc _started
   export CC_PANE_RUNNER_OWNS_CLOSE=1
+  _pane_exit_prepare
   if [ "$_interactive" = 1 ]; then
     "${SHELL:-/bin/zsh}" -l -i -c "$1"; _rc=$?
   else
     eval "$1"; _rc=$?
   fi
-  _close_on_exit "$1" "$_rc" "$_interactive"
+  _started="$(_pane_claude_started)"
+  _pane_exit_record "$1" "$_rc" "$_started"
+  _close_on_exit "$1" "$_rc" "$_interactive" "$_started" "$(_pane_owed)"
   _fallback ""
 }
 
