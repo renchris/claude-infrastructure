@@ -70,7 +70,7 @@ hookrun() { # $1=cwd → hook mode with stdin JSON (tests/operator-readout.bats'
     debt bl0000000002 22222222-bbbb-4000-8000-000000000002 /Users/x/Development/infra next; } | fixture
   run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
   [ "$status" -eq 0 ]
-  echo "$output" | grep -qx ' ⚠ 2 stranded session(s) — closed by a mover, relaunch failed:' || { echo "$output"; false; }
+  echo "$output" | grep -qx ' ⚠ 2 stranded session(s) · relaunch failed' || { echo "$output"; false; }
   echo "$output" | grep -qxF '   ▶ cc-do bl0000000001   [11111111 · reso · next3]' || { echo "$output"; false; }
   echo "$output" | grep -qxF '   ▶ cc-do bl0000000002   [22222222 · infra · next]' || false
   [ "$(echo "$output" | grep -c '▶ cc-do bl')" -eq 2 ]
@@ -114,9 +114,10 @@ hookrun() { # $1=cwd → hook mode with stdin JSON (tests/operator-readout.bats'
   run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
   [ "$status" -eq 0 ]
   echo "$output" | grep -q ' ⚠ 5 stranded session(s)' || { echo "$output"; false; }
-  echo "$output" | grep -qxF '   ◆ cc-resume-debt settle --sid 33333333-0000-4000-8000-000000000001   [33333333 · alpha · next]' \
+  # rows fit 52 cells (lr-wake Wave H): this command leaves no room for its tag, so it prints alone
+  echo "$output" | grep -qxF '   ◆ cc-resume-debt settle --sid 33333333-0000-4000-8000-000000000001' \
     || { echo "$output"; false; }
   [ "$(echo "$output" | grep -cE '^   (▶ cc-do|◆ cc-resume-debt settle) ')" -eq 3 ]
-  echo "$output" | grep -qxF '   … +2 more — cc-resume-debt list --escalated' || false
+  echo "$output" | grep -qxF '   … +2 more   cc-resume-debt list --escalated' || false
   ! echo "$output" | grep -q 'bl0000000004' || false
 }

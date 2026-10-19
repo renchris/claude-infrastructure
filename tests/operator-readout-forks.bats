@@ -26,6 +26,9 @@ setup() {
   export CC_BACKLOG_PROJECT_WARN=off CC_FIRE_CAPACITY_GATE=off CC_ADMIT_GATE=off
   unset CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID CC_SESSION_ID CLAUDE_CONFIG_DIR ITERM_SESSION_ID \
         KITTY_WINDOW_ID CC_PANE_ID NO_COLOR
+  # Parity with the pre-change hook is a property of the layout that hook drew: collapse. The
+  # footer layout (default since lr-wake Wave H, 2026-10-19) changes the render on purpose.
+  export CC_OPREADOUT_CLASSBUDGET=collapse
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   NEW="$REPO"
   OLD="$BATS_TEST_TMPDIR/old"

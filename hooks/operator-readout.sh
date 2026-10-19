@@ -159,7 +159,9 @@
 #   mode's idiom (bare `▶`/`◆` under collapse, where nothing is numbered; numbered under the
 #   itemised/legacy modes, where everything is) so the `^ [0-9]+ (▶|◆|✎)` NSTEPS count downstream
 #   stays consistent within each mode rather than agreeing with neither.
-#   Modes: CC_OPREADOUT_CLASSBUDGET=collapse (default) · =on (per-class itemisation) · =off (legacy).
+#   Modes: CC_OPREADOUT_CLASSBUDGET=footer (default since 2026-10-19: session-only header, one
+#   counted pile row, rows ≤ 52 cells) · =collapse (the 2026-07-31 shape) · =on (per-class
+#   itemisation) · =off (legacy).
 #   DEGRADATION: collapse is refused when cc-do does not resolve — a close naming a command the
 #   machine lacks is worse than a long command that runs (I11).
 #
@@ -202,6 +204,20 @@ _amlib="$_amd/lib/activation-marker.sh"
 # shellcheck source=lib/shasum-direct.sh
 # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
 . "$_amd/lib/shasum-direct.sh" 2>/dev/null || . "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/shasum-direct.sh" 2>/dev/null || true
+# The shared renderer (lib/cc-say.sh, lr-wake 2026-10-18 RC8): rows are fitted to 52 cells by its
+# cc_say_fit/cc_say_cut. Same tiers as above — the checkout's own lib/ first (a brand-new lib has no
+# ~/.claude/lib link until install.sh runs). Fails OPEN: without it rows print unfitted, as before.
+_or_say="$_amd/../lib/cc-say.sh"
+if [ ! -f "$_or_say" ] && [ -L "$0" ]; then _or_say="$(readlink "$0" 2>/dev/null)"; _or_say="${_or_say%/*}/../lib/cc-say.sh"; fi
+[ -f "$_or_say" ] || _or_say="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/lib/cc-say.sh"
+# shellcheck source=../lib/cc-say.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+[ -f "$_or_say" ] && . "$_or_say" 2>/dev/null
+command -v cc_say_fit >/dev/null 2>&1 || {
+  cc_say_fit() { printf '%s%s\n' "$1" "${2:+${CC_SAY_SEP-   }$2}"; }
+  cc_say_cut() { CC_SAY_CUT="$1"; }
+  cc_say_cells() { CC_SAY_CELLS=0; }
+}
 
 # ── DEADLINE (docs/research/startup-hooks-2026-10-18/README.md §2 #27; hooks/lib/hook-deadline.sh) ─
 # Hook mode only, and before anything else forks: 9 s against the 10 s registration. In time, the
@@ -433,7 +449,31 @@ idl_init "$IDL" "operator-readout"
 [ "$MODE" = "hook" ] || idl_disable
 
 # ── tiny helpers ─────────────────────────────────────────────────────────────────────────────────
-tildify() { printf '%s' "${1/#$HOME/~}"; }   # display+paste-safe: the shell re-expands ~
+tildify() { printf '%s' "${1/#$HOME/~}"; }
+# _or_row MARK TEXT — one step row of the footer layout, fitted to CC_SAY_WIDTH (cc-say.sh). A `▶`
+# row's command (TEXT up to its `   [annotation]`) is NEVER cut: the annotation is cut first, and a
+# command too long for the row prints alone. `✎` rows carry colour escapes, so they are not re-cut.
+_or_row() {
+  local m="$1" t="$2" c
+  case "$m" in
+    ✎) printf ' %s %s\n' "$m" "$t"; return 0 ;;
+    ▶) c="${t%%   \[*}"; _or_cmd_row " ▶ " "$c" "${t#"$c"}"; return 0 ;;
+  esac
+  cc_say_cut " $m $t" "${CC_SAY_WIDTH:-52}"; printf '%s\n' "$CC_SAY_CUT"
+}
+# _or_footer — is render_block drawing the footer layout? (CBUDGET is render_block's local, read
+# here by dynamic scope.) Every row-shape change of lr-wake Wave H sits behind it, so the
+# collapse/itemised layouts stay byte-identical to the pre-Wave-H hook: the revert path is exact.
+_or_footer() { [ "${CBUDGET:-}" = footer ]; }
+# _or_cmd_row LEAD CMD [TAIL] — LEAD+CMD is never cut; TAIL (an annotation) is cut to fit, or dropped
+# when the command leaves it under 10 cells (a 3-cell stub like `[3…` is noise).
+_or_cmd_row() {
+  cc_say_cells "$1$2"
+  if [ -z "${3:-}" ] || [ "${CC_SAY_CELLS:-0}" -gt $(( ${CC_SAY_WIDTH:-52} - 10 )) ]; then
+    printf '%s%s\n' "$1" "$2"; return 0
+  fi
+  cc_say_cut "$1$2$3" "${CC_SAY_WIDTH:-52}"; printf '%s\n' "$CC_SAY_CUT"
+}   # display+paste-safe: the shell re-expands ~
 # The collapse row's --expect value — a byte-identical copy of bin/cc-do's pair (that script's
 # TARGET BINDING note): <=3 stems comma-joined when the list fits the line ($1 = widest list it
 # holds), else `N:CRC` (count + cksum of the sorted set). tests/operator-readout.bats round-trips a
@@ -634,13 +674,25 @@ stranded_sessions() {
     2>/dev/null)" || return 0
   [ -n "$rows" ] || return 0
   n="$(printf '%s\n' "$rows" | grep -c .)"
-  printf ' ⚠ %s stranded session(s) — closed by a mover, relaunch failed:\n' "$n"
+  if ! _or_footer; then   # the collapse/itemised layouts keep the pre-Wave-H rows byte for byte
+    printf ' ⚠ %s stranded session(s) — closed by a mover, relaunch failed:\n' "$n"
+    while IFS="$us" read -r bid sid dcwd acct; do
+      tag="[${sid:0:8} · ${dcwd##*/} · ${acct}]"
+      if [ -n "$bid" ]; then printf '   ▶ cc-do %s   %s\n' "$bid" "$tag"
+      else printf '   ◆ cc-resume-debt settle --sid %s   %s\n' "$sid" "$tag"; fi
+    done <<< "$(printf '%s\n' "$rows" | head -3)"
+    [ "$n" -gt 3 ] && printf '   … +%s more — cc-resume-debt list --escalated\n' "$((n - 3))"
+    return 0
+  fi
+  # Footer layout: rows fit CC_SAY_WIDTH (52 in the readout); the command is never cut, the
+  # [sid · dir · acct] tag after it is (lr-wake Wave H, 2026-10-19).
+  printf ' ⚠ %s stranded session(s) · relaunch failed\n' "$n"
   while IFS="$us" read -r bid sid dcwd acct; do
     tag="[${sid:0:8} · ${dcwd##*/} · ${acct}]"
-    if [ -n "$bid" ]; then printf '   ▶ cc-do %s   %s\n' "$bid" "$tag"
-    else printf '   ◆ cc-resume-debt settle --sid %s   %s\n' "$sid" "$tag"; fi
+    if [ -n "$bid" ]; then _or_cmd_row "   ▶ " "cc-do $bid" "   $tag"
+    else _or_cmd_row "   ◆ " "cc-resume-debt settle --sid $sid" "   $tag"; fi
   done <<< "$(printf '%s\n' "$rows" | head -3)"
-  [ "$n" -gt 3 ] && printf '   … +%s more — cc-resume-debt list --escalated\n' "$((n - 3))"
+  [ "$n" -gt 3 ] && cc_say_fit "   … +$((n - 3)) more" "cc-resume-debt list --escalated"
   return 0
 }
 
@@ -665,12 +717,14 @@ lr_recon_line() {
   if [ "$age" -gt 180 ]; then
     if [ "$age" -ge 3600 ]; then printf -v age '%dh%02dm' $((age / 3600)) $((age % 3600 / 60))
     else printf -v age '%dm%02ds' $((age / 60)) $((age % 60)); fi
-    printf ' ⚠ lr-recon: reconciler heartbeat stale %s — the reset poller is paging and kickstarting it\n' "$age"
+    if _or_footer; then printf ' ⚠ lr-recon: heartbeat stale %s · poller restarts it\n' "$age"
+    else printf ' ⚠ lr-recon: reconciler heartbeat stale %s — the reset poller is paging and kickstarting it\n' "$age"; fi
     return 0
   fi
   # The daemon writes no trailing newline, so `read` returns 1 on a good file: judge the value.
   { IFS= read -r line < "$root/readout.line"; } 2>/dev/null
-  [ -n "$line" ] && printf ' ⟳ %s\n' "$line"
+  if _or_footer; then [ -n "$line" ] && cc_say_fit " ⟳ $line"
+  else [ -n "$line" ] && printf ' ⟳ %s\n' "$line"; fi
   return 0
 }
 
@@ -740,23 +794,38 @@ research_lines() {
     log_idl degraded "research-pending-unread" '{"why":"cc-research pending failed or timed out"}'
     return 0
   fi
-  out="$(printf '%s' "$raw" | jq -r '
+  local _rft=0; _or_footer && _rft=1
+  out="$(printf '%s' "$raw" | jq -r --argjson ft "$_rft" '
       .programs[]? | select(type == "object" and (.program | type) == "string")
       | (.pending_concerns // 0 | if type == "number" then floor else 0 end) as $n
       | ([ .menu[]? | select(type == "object") ]) as $m
       | (.overridden_relays // 0 | if type == "number" then floor else 0 end) as $o
       | select($n > 0 or ($m | length) > 0 or $o > 0)
-      | " ◆ research \(.program): \($n) pending concern(s)"
-        + (if ($m | length) > 0 then
-             " — menu: " + ([ $m[0:3][] | "\(.label // .id // "?") (\(.price // "?" | tostring))" ] | join(" · "))
-             + (if ($m | length) > 3 then " · +\(($m | length) - 3) more" else "" end)
-           else "" end)
-        + (if $o > 0 then " · \($o) relay(s) you overrode as misrouted" else "" end)
-        + "   cc-research verdict \(.program)"' 2>/dev/null)" || {
+      | if $ft == 1 then
+          " ◆ research \(.program): \($n) concern(s)"
+          + (if ($m | length) > 0 then " · \($m | length) option(s)" else "" end)
+          + (if $o > 0 then " · \($o) overrode" else "" end)
+          + "\t" + "cc-research verdict \(.program)"
+        else
+          " ◆ research \(.program): \($n) pending concern(s)"
+          + (if ($m | length) > 0 then
+               " — menu: " + ([ $m[0:3][] | "\(.label // .id // "?") (\(.price // "?" | tostring))" ] | join(" · "))
+               + (if ($m | length) > 3 then " · +\(($m | length) - 3) more" else "" end)
+             else "" end)
+          + (if $o > 0 then " · \($o) relay(s) you overrode as misrouted" else "" end)
+          + "   cc-research verdict \(.program)"
+        end' 2>/dev/null)" || {
     log_idl degraded "research-pending-unread" '{"why":"cc-research pending reply unparseable"}'
     return 0
   }
-  [ -n "$out" ] && printf '%s\n' "$out"
+  # Footer layout: program + counts + the one command; the menu's labels and prices are
+  # `cc-research verdict`'s to show (lr-wake Wave H: a cut menu is noise, and rows fit CC_SAY_WIDTH).
+  local _rp _rc
+  if [ "$_rft" = 1 ]; then
+    [ -n "$out" ] && while IFS="$(printf '\t')" read -r _rp _rc; do cc_say_fit "$_rp" "$_rc"; done <<< "$out"
+  else
+    [ -n "$out" ] && printf '%s\n' "$out"
+  fi
   return 0
 }
 
@@ -834,15 +903,29 @@ fire_loop_line() {
       case "$rc" in ''|*[!0-9]*) rc="?" ;; esac
     fi ;;
   esac
-  if [ "$nitems" -eq 1 ] && { [ "$rc" = 3 ] || [ "$rc" = 4 ]; }; then
-    printf ' ◆ %s+ dispatcher fires failed since %s — %s refused at the payload gate (rc=%s) · cc-backlog block %s --needs "<why>"\n' \
-      "$ladder" "$since" "$id" "$rc" "$id"
+  # Answer first and fitted (lr-wake Wave H): what failed and since when lead, because the age is
+  # what says a loop is stuck; the item/rc tail is what a 52-cell row cuts (the gate remedy names the
+  # item itself). The remedy command is never cut — it moves to its own row when the row is full.
+  if ! _or_footer; then   # the collapse/itemised layouts keep the pre-Wave-H rows byte for byte
+    if [ "$nitems" -eq 1 ] && { [ "$rc" = 3 ] || [ "$rc" = 4 ]; }; then
+      printf ' ◆ %s+ dispatcher fires failed since %s — %s refused at the payload gate (rc=%s) · cc-backlog block %s --needs "<why>"\n' \
+        "$ladder" "$since" "$id" "$rc" "$id"
+    elif [ "$nitems" -eq 1 ]; then
+      printf ' ◆ %s+ dispatcher fires failed since %s — %s, last rc=%s · tail -40 %s\n' \
+        "$ladder" "$since" "$id" "$rc" "$(tildify "$log")"
+    else
+      printf ' ◆ %s+ dispatcher fires failed since %s — %s items, last rc=%s · tail -40 %s\n' \
+        "$ladder" "$since" "$nitems" "$rc" "$(tildify "$log")"
+    fi
+  elif [ "$nitems" -eq 1 ] && { [ "$rc" = 3 ] || [ "$rc" = 4 ]; }; then
+    CC_SAY_SEP=" · " cc_say_fit " ◆ ${ladder}+ dispatch fails since ${since} · ${id} gate rc=${rc}" \
+      "cc-backlog block ${id} --needs \"<why>\""
   elif [ "$nitems" -eq 1 ]; then
-    printf ' ◆ %s+ dispatcher fires failed since %s — %s, last rc=%s · tail -40 %s\n' \
-      "$ladder" "$since" "$id" "$rc" "$(tildify "$log")"
+    CC_SAY_SEP=" · " cc_say_fit " ◆ ${ladder}+ dispatch fails since ${since} · ${id} rc=${rc}" \
+      "tail -40 $(tildify "$log")"
   else
-    printf ' ◆ %s+ dispatcher fires failed since %s — %s items, last rc=%s · tail -40 %s\n' \
-      "$ladder" "$since" "$nitems" "$rc" "$(tildify "$log")"
+    CC_SAY_SEP=" · " cc_say_fit " ◆ ${ladder}+ dispatch fails since ${since} · ${nitems} items" \
+      "tail -40 $(tildify "$log")"
   fi
   return 0
 }
@@ -926,7 +1009,13 @@ render_block() {
   #                        each. The class budget below is right at 6 steps and unreadable at 204.
   #   on               — the per-class itemisation + rollups (§4 M2). Kill switch for collapse.
   #   off              — legacy flat first-come + `+N more` footer.
-  local CBUDGET="${CC_OPREADOUT_CLASSBUDGET:-collapse}"
+  # FOOTER (default since 2026-10-19, lr-wake Wave H): line 1 is THIS session's state only, every
+  # machine-wide pile is one counted `◆ pile …` row at the bottom, and every row fits 52 cells (a
+  # 57-column pane minus the harness's 5-cell gutter). The collapse shape before it stays one env
+  # away — CC_OPREADOUT_CLASSBUDGET=collapse — as the revert path for this live Stop hook.
+  local CBUDGET="${CC_OPREADOUT_CLASSBUDGET:-footer}"
+  # Row budget for cc_say_fit/cc_say_cut (dynamic scope reaches every helper called from here).
+  local CC_SAY_WIDTH="${CC_OPREADOUT_WIDTH:-52}"
   # How many blocked rows the collapse line may NAME beneath itself, and how old a row's premise
   # must be before the block says so. Two, not five: the operator reads a close to make ONE
   # decision, and the whole complaint was volume. Both are `--argjson` into jq below, so a
@@ -1359,13 +1448,18 @@ render_block() {
         # The predicate reads the steps file rather than re-deciding the lane: a second copy of the
         # ladder is the defect, not the cure.
         dact=" → bash scripts/deploy-live.sh"
-        grep -qE "^(deploy|held)${TABC}" "$steps_file" 2>/dev/null && dact=""
+        # Footer layout itemises no deploy row, so only a HELD row (shown in every layout) may
+        # stand in for the header's own `→ deploy-live.sh`.
+        local _dre="^(deploy|held)${TABC}"; [ "$CBUDGET" = footer ] && _dre="^held${TABC}"
+        grep -qE "$_dre" "$steps_file" 2>/dev/null && dact=""
         if [ "${migf:-0}" != "0" ]; then
           state="🚀 landed, NOT live — ${migf} migration(s) FAILED; the enforcing store never took this → bash scripts/deploy-migrations.sh --status"
         elif [ "$adds" != "0" ]; then
           state="🚀 landed, NOT live — ${adds} NEW file(s) absent from the live layer; every consumer guard on them silently skips${dact}"
         else
-          state="🚀 landed, NOT live — the live layer is ${lag:-?} commit(s) behind and PAST its converge budget${dact}"
+          # Footer layout: the count leads, so it is the first thing read (lr-wake Wave H).
+          if _or_footer; then state="🚀 landed, NOT live — ${lag:-?} commit(s) behind, PAST its converge budget${dact}"
+          else state="🚀 landed, NOT live — the live layer is ${lag:-?} commit(s) behind and PAST its converge budget${dact}"; fi
         fi ;;
       "🔧")
         dirty_n="$(lf DIRTY_N)"; gate="$(lf GATE)"; remainder="$(lf REMAINDER)"
@@ -1444,23 +1538,42 @@ render_block() {
     esac
   fi
 
-  # ── class-B early-veto summary (≤24h auto-fire window only; never itemized) ──
-  local b_n=0 b_earliest="" horizon b_line=""
-  horizon="$(epoch_to_iso $(( NOW + 86400 )))"
-  if [ -d "$DEC_DIR" ] && [ -n "$horizon" ]; then
-    b_earliest="$(
+  # ── class-B early-veto summary (never itemized) — SPLIT AT NOW (lr-wake Q2, 2026-10-19) ──────────
+  # The select used to be `veto_deadline <= NOW+24h` with no lower bound, so a deadline already PAST
+  # rendered as "auto-fire ≤24h". On 2026-10-18 three defaults due 05:00Z read that way for 12 h while
+  # the actuator (autonomy-sweep, now class_b_actuate) was starved and fired nothing
+  # (docs/research/lr-wake-incident-2026-10-18/q8-classb-actuator.md). A past deadline is OVERDUE —
+  # nothing fired — and only NOW <= deadline <= NOW+24h is the veto window. One jq pass, not two:
+  # ISO-8601 Z stamps order as strings, so the split is a shell compare.
+  local b_n=0 b_earliest="" b_id="" horizon nowiso b_line="" bo_n=0 bo_since="" b_row="" b_rowc="" _bd _bi
+  horizon="$(epoch_to_iso $(( NOW + 86400 )))"; nowiso="$(epoch_to_iso "$NOW")"
+  if [ -d "$DEC_DIR" ] && [ -n "$horizon" ] && [ -n "$nowiso" ]; then
+    while IFS="$TABC" read -r _bd _bi; do
+      [ -n "$_bd" ] || continue
+      if [[ "$_bd" < "$nowiso" ]]; then
+        bo_n=$((bo_n + 1)); [ -n "$bo_since" ] || bo_since="$_bd"
+      else
+        b_n=$((b_n + 1)); [ -n "$b_earliest" ] || { b_earliest="$_bd"; b_id="$_bi"; }
+      fi
+    done <<< "$(
       # shellcheck disable=SC2016
       dec_jq -r --arg h "$horizon" '
           select((.status // "")=="open" and (.class // "")=="B"
                  and (.veto_deadline // "") != "" and .veto_deadline <= $h)
-          | .veto_deadline' | sort | head -1)"
-    if [ -n "$b_earliest" ]; then
-      b_n="$(
-        # shellcheck disable=SC2016
-        dec_jq -r --arg h "$horizon" '
-            select((.status // "")=="open" and (.class // "")=="B"
-                   and (.veto_deadline // "") != "" and .veto_deadline <= $h) | .id' | grep -c .)"
+          | [.veto_deadline, (.id // "?")] | @tsv' | sort)"
+    [ "$b_n" -gt 0 ] && \
       b_line="${b_n} class-B default(s) auto-fire ≤24h (earliest ${b_earliest}) — veto: cc-decide veto <id>"
+    [ "$bo_n" -gt 0 ] && \
+      b_line="${b_line:+$b_line · }${bo_n} class-B default(s) overdue since ${bo_since} · nothing fired"
+    # The footer layout's own row: overdue first (it is the broken state), else the open window.
+    # Stored as (prose, command) and printed by cc_say_fit where it renders: no capture fork (C19).
+    if [ "$bo_n" -gt 0 ]; then
+      b_row=" ⚠ ${bo_n} class-B overdue · nothing fired since ${bo_since:11:5}Z"; b_rowc=""
+    elif [ "$b_n" -eq 1 ]; then
+      # 51 cells with its 12-char id: the time and the veto share one row
+      b_row=" ⚠ class-B due ${b_earliest:11:5}Z"; b_rowc="cc-decide veto ${b_id}"
+    elif [ "$b_n" -gt 1 ]; then
+      b_row=" ⚠ ${b_n} class-B due from ${b_earliest:11:5}Z"; b_rowc="cc-decide list --open"
     fi
   fi
 
@@ -1588,7 +1701,15 @@ render_block() {
   [ "$c_yours" -gt 0 ] && _y="${c_yours} step(s) are yours"
   [ "$c_mine" -gt 0 ] && _m="${c_mine} decision(s) are yours"
   _own="${_y}${_y:+${_m:+ · }}${_m}"
-  if [ "$total" -gt 0 ] && [ "$CBUDGET" = collapse ]; then
+  if [ "$CBUDGET" = footer ]; then
+    # FOOTER LAYOUT (lr-wake Wave H, 2026-10-19): line 1 answers ONE question — what is THIS
+    # session's state, and is any step or decision of it the operator's. The standing pile (~230
+    # items that belong to no session) used to lead this line ("13 runnable now, 205 need your
+    # call · ✅ …"), then took 20-27 rows below it; it is now the single `◆ pile:` row at the
+    # bottom. A queue is a machine fact too, so it rides that row rather than this one.
+    hdr="OPERATOR ▸ ${_own:+$_own · }${state}"
+    [ -n "$_own" ] || [ -n "$state" ] || hdr="OPERATOR ▸ no step here is yours"
+  elif [ "$total" -gt 0 ] && [ "$CBUDGET" = collapse ]; then
     local _run=$(( c_deploy + c_activation )) _jud=$(( c_decision + c_backlog )) _lead=""
     [ "$_run" -gt 0 ] && _lead="${_run} runnable now"
     [ "$_jud" -gt 0 ] && _lead="${_lead:+$_lead, }${_jud} need your call"
@@ -1639,7 +1760,21 @@ render_block() {
     fi
     hdr="${_hpre}${_hst}${_hsuf}"
   fi
-  printf '%s\n' "$hdr"
+  if [ "$CBUDGET" != footer ]; then printf '%s\n' "$hdr"
+  else
+    # The header is the ANSWER, so it is the one row never cut: a cut header dropped exactly the
+    # fact it existed to state ("2 dispatched session(s) NOT returned", "41 commit(s) behind"),
+    # and the certificate clause is the Session Close Protocol's own pinned wording. What moves
+    # instead is a `→ <command>` tail: past CC_SAY_WIDTH it takes its own row, so the command is
+    # whole and pasteable. Every OTHER row is fitted to the width.
+    cc_say_cells "$hdr"
+    case "$hdr" in
+      *" → "*) if [ "${CC_SAY_CELLS:-0}" -gt "$CC_SAY_WIDTH" ]; then
+                 printf '%s\n   → %s\n' "${hdr%% → *}" "${hdr#* → }"
+               else printf '%s\n' "$hdr"; fi ;;
+      *) printf '%s\n' "$hdr" ;;
+    esac
+  fi
 
   # ── YOURS — first, itemized, never collapsed, exempt from MAX ────────────────────────────────
   # Rendered BEFORE every standing class: the operator reads top-down, and these are the only rows
@@ -1650,13 +1785,14 @@ render_block() {
   # numbered), numbered under itemised/legacy (where everything is) — so `NSTEPS`
   # (`grep -cE '^ [0-9]+ (▶|◆|✎)'`) keeps counting whatever that mode counts.
   local YMAX=5 y_shown=0 y_lines=0 y_num=""
-  [ "$CBUDGET" = collapse ] || y_num=1
+  case "$CBUDGET" in collapse|footer) ;; *) y_num=1 ;; esac
   if [ "$c_yours" -gt 0 ]; then
     while IFS="$TABC" read -r cls mark text stem; do
       [ "$cls" = yours ] || continue
       [ "$y_shown" -lt "$YMAX" ] || continue
       y_shown=$((y_shown + 1)); y_lines=$((y_lines + 1))
       if [ -n "$y_num" ]; then printf ' %d %s %s\n' "$y_lines" "$mark" "$text"
+      elif [ "$CBUDGET" = footer ]; then _or_row "$mark" "$text"
       else                     printf ' %s %s\n'    "$mark" "$text"; fi
     done < "$steps_file"
     if [ "$c_yours" -gt "$y_shown" ]; then
@@ -1679,6 +1815,15 @@ render_block() {
       if [ "$m_shown" -lt "$YMAX" ]; then
         m_shown=$((m_shown + 1)); y_lines=$((y_lines + 1))
         if [ -n "$y_num" ]; then printf ' %d %s %s\n' "$y_lines" "$mark" "$text"
+        elif [ "$CBUDGET" = footer ] && [ "${text%   \[decision *}" != "$text" ]; then
+          # Footer layout: THIS session's decision is an answer row like the header, so it is never
+          # cut — a cut dropped the recommendation and conviction, the two things the row is for.
+          # Past CC_SAY_WIDTH only the `[decision <id>]` handle moves, whole, to its own row.
+          cc_say_cells " $mark $text"
+          if [ "${CC_SAY_CELLS:-0}" -gt "$CC_SAY_WIDTH" ]; then
+            printf ' %s %s\n   %s\n' "$mark" "${text%   \[decision *}" "${text##*   }"
+          else printf ' %s %s\n' "$mark" "$text"; fi
+        elif [ "$CBUDGET" = footer ]; then _or_row "$mark" "$text"
         else                     printf ' %s %s\n'    "$mark" "$text"; fi
         continue
       fi
@@ -1688,6 +1833,8 @@ render_block() {
     if [ "$c_mine" -gt "$m_shown" ]; then
       y_lines=$((y_lines + 1))
       if [ -n "$y_num" ]; then printf ' %d ↳ +%s more this session (%s sign-off, %s low-stakes): cc-decide list --open\n' "$y_lines" "$(( c_mine - m_shown ))" "$m_s" "$m_l"
+      elif [ "$CBUDGET" = footer ]; then
+        cc_say_fit " ↳ +$(( c_mine - m_shown )) more this session ($m_s sign-off, $m_l low-stakes)" "cc-decide list --open"
       else                     printf ' ↳ +%s more this session (%s sign-off, %s low-stakes): cc-decide list --open\n'    "$(( c_mine - m_shown ))" "$m_s" "$m_l"; fi
     fi
     shown=$(( shown + m_shown ))
@@ -1701,7 +1848,7 @@ render_block() {
   if [ "$c_held" -gt 0 ]; then
     while IFS="$TABC" read -r cls mark text stem; do
       [ "$cls" = held ] || continue
-      printf ' %s %s\n' "$mark" "$text"
+      if [ "$CBUDGET" = footer ]; then _or_row "$mark" "$text"; else printf ' %s %s\n' "$mark" "$text"; fi
     done < "$steps_file"
   fi
 
@@ -1715,7 +1862,12 @@ render_block() {
   #   judgment (decision, backlog)   → one `◆ <n> …` counted line each, carrying its listing command
   # A class holding exactly ONE item is still itemised: one specific line costs nothing and says
   # strictly more than "1 decision". `cc-do --list` itemises everything, always.
-  if [ "$CBUDGET" = collapse ]; then
+  if [ "$CBUDGET" = footer ]; then
+    # Nothing standing is itemised here: the pile is one counted row at the bottom (R8 — counts of
+    # machine-wide piles appear only as one footer row). `cc-blockers` / `cc-do --list` itemise it.
+    rm -f "$steps_file" "$steps_file.led" "$steps_file.rp" "$steps_file.rp.rc"
+    # `shown` already counts the yours + mine rows above; nothing standing adds to it here.
+  elif [ "$CBUDGET" = collapse ]; then
     local runnable=$(( c_deploy + c_activation )) stems="" rstems="" cn=0 c2 rcmd clabel
     if [ "$runnable" -eq 1 ]; then
       while IFS="$TABC" read -r cls mark text stem; do
@@ -1891,8 +2043,12 @@ render_block() {
   # these are not operator STEPS — they are records a machine should have drained. `◆` because acking
   # an undelivered escalation is a judgment, not a chore — but `ack --all` DOES clear the pile in one
   # command (bin/cc-escalations:205-219, selftest case 4), so the row names it.
-  [ "${esc_n:-0}" -gt 0 ] && printf ' ◆ %s escalation record(s) unseen — cc-escalations ack --all\n' "$esc_n"
+  # (The footer layout counts them into its `◆ pile:` row instead.)
+  [ "$CBUDGET" != footer ] && [ "${esc_n:-0}" -gt 0 ] && \
+    printf ' ◆ %s escalation record(s) unseen — cc-escalations ack --all\n' "$esc_n"
   # ── the kalloc zone, named on its own line (see kalloc_zone_line) — never inside the count above.
+  # A panic risk is never a pile count, so the footer layout prints it too, verbatim: it is the one
+  # row past 52 cells, kept whole because its producer (capacity-alarm) owns and pins its shape.
   [ -n "$kz_line" ] && printf '%s\n' "$kz_line"
 
   # ── research programs — one counted `◆` line per program owing a ruling, unnumbered for the same
@@ -1902,6 +2058,23 @@ render_block() {
   # ── dispatcher fire loop — ONE counted `◆` line, unnumbered like the two above: it reports a
   # machine loop, and its remedy rides inline rather than under a run mark.
   [ -n "$fl_line" ] && printf '%s\n' "$fl_line"
+
+  # ── FOOTER LAYOUT: the class-B row, then ONE counted pile row — and nothing else below ──────
+  if [ "$CBUDGET" = footer ]; then
+    [ -n "$b_row" ] && cc_say_fit "$b_row" "$b_rowc"
+    local _pp="" _pr=$(( c_deploy + c_activation )) _pc=$(( c_decision + c_backlog ))
+    [ "$_pr" -gt 0 ] && _pp="${_pr} run"
+    [ "$_pc" -gt 0 ] && _pp="${_pp:+$_pp · }${_pc} call"
+    [ "${esc_n:-0}" -gt 0 ] && _pp="${_pp:+$_pp · }${esc_n} esc"
+    [ "${Q_N:-0}" -gt 0 ] && _pp="${_pp:+$_pp · }${Q_N} queued"
+    if [ -n "$_pp" ]; then
+      # `◆ pile:` is the hash-exclusion anchor (§ damping latch, below render_block): a count that
+      # ticks 1088 → 1156 must not re-render the block. Keep the two in step.
+      if command -v cc-blockers >/dev/null 2>&1; then cc_say_fit " ◆ pile: ${_pp}" "cc-blockers"
+      else cc_say_fit " ◆ pile: ${_pp}" "cc-do --list"; fi
+    fi
+    return 0
+  fi
 
   # The `+N more` footer is the LEGACY path only. Under the class budget it is not merely redundant,
   # it is the defect: one aggregate number that hides which CLASSES are missing (§4 F5).
@@ -2310,7 +2483,14 @@ fi
 
 # Damping latch: change → render now; unchanged → re-assert only after TTL.
 # (STATE_DIR/SKEY/LATCH are established by the pre-render stamp gate above — not recomputed here.)
-HASH="$(printf '%s' "$BLOCK" | sha16)"
+# THE HASH COVERS THE SEMANTIC ROWS ONLY (lr-wake Wave H, 2026-10-19). The footer layout's last row
+# is the machine-wide pile count (`◆ pile: 3 run · 231 call · 1156 esc`); it changes on nearly every
+# Stop for reasons that are no session's, and hashing it re-rendered the whole block each time. The
+# row is still SHOWN whenever the block renders (a semantic change, or the TTL re-assert).
+# It is always LAST (with its command, when that wrapped to a row of its own), so everything from it on
+# is cut.
+_or_hb="${BLOCK%%$'\n'" ◆ pile: "*}"
+HASH="$(printf '%s' "$_or_hb" | sha16)"
 if [ -n "$SKEY" ] && [ -n "$HASH" ]; then
   # The stamp may not have been computed above (kill switch, or no latch file existed). Compute it
   # now so the latch we write is always usable by the NEXT turn's cheap gate — a latch missing its

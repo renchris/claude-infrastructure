@@ -128,7 +128,9 @@ PENDING2='[{"program":"alpha","state":"certifying","pending_concerns":2,"waiting
   run bash "$READOUT" --render --cwd "$w"
   [ "$status" -eq 0 ]
   [ "$(printf '%s\n' "$output" | grep -c '^ ◆ research ')" -eq 1 ]
-  printf '%s\n' "$output" | grep -qF ' ◆ research alpha: 2 pending concern(s) — menu: extra round (~4% weekly) · reopen (~1%)'
+  # rows fit 52 cells (lr-wake Wave H): program + counts; the menu's labels are cc-research's to show
+  printf '%s\n' "$output" | grep -qxF ' ◆ research alpha: 2 concern(s) · 2 option(s)'
+  printf '%s\n' "$output" | grep -qxF '   cc-research verdict alpha'
   # a menu item is the operator's purchase decision: never a run line
   [ "$(printf '%s\n' "$output" | grep -c '▶.*research')" -eq 0 ]
 }
@@ -139,7 +141,7 @@ PENDING2='[{"program":"alpha","state":"certifying","pending_concerns":2,"waiting
   w="$(mkrepo r2)"
   run bash "$READOUT" --render --cwd "$w"
   [ "$status" -eq 0 ]
-  printf '%s\n' "$output" | grep -qF ' ◆ research alpha: 0 pending concern(s) — menu: extra round (~4%)'
+  printf '%s\n' "$output" | grep -qxF ' ◆ research alpha: 0 concern(s) · 1 option(s)'
 }
 
 @test "overridden relays alone render one counted ◆ research line, never a run line" {
@@ -149,7 +151,8 @@ PENDING2='[{"program":"alpha","state":"certifying","pending_concerns":2,"waiting
   run bash "$READOUT" --render --cwd "$w"
   [ "$status" -eq 0 ]
   [ "$(printf '%s\n' "$output" | grep -c '^ ◆ research ')" -eq 1 ]
-  printf '%s\n' "$output" | grep -qF ' ◆ research alpha: 0 pending concern(s) · 3 relay(s) you overrode as misrouted   cc-research verdict alpha'
+  printf '%s\n' "$output" | grep -qxF ' ◆ research alpha: 0 concern(s) · 3 overrode'
+  printf '%s\n' "$output" | grep -qxF '   cc-research verdict alpha'
   [ "$(printf '%s\n' "$output" | grep -c '▶.*research')" -eq 0 ]
 }
 
@@ -158,7 +161,7 @@ PENDING2='[{"program":"alpha","state":"certifying","pending_concerns":2,"waiting
   w="$(mkrepo r2a)"
   run bash "$READOUT" --render --cwd "$w"
   [ "$status" -eq 0 ]
-  printf '%s\n' "$output" | grep -qF ' ◆ research alpha: 2 pending concern(s) — menu: extra round (~4% weekly) · reopen (~1%)   cc-research verdict alpha'
+  printf '%s\n' "$output" | grep -qxF ' ◆ research alpha: 2 concern(s) · 2 option(s)'
   [ "$(printf '%s\n' "$output" | grep -c 'overrode')" -eq 0 ]
 }
 
@@ -169,7 +172,9 @@ PENDING2='[{"program":"alpha","state":"certifying","pending_concerns":2,"waiting
   run bash "$READOUT" --render --cwd "$w"
   [ "$status" -eq 0 ]
   [ "$(printf '%s\n' "$output" | grep -c '^ ◆ research ')" -eq 1 ]
-  printf '%s\n' "$output" | grep -qF ' ◆ research alpha: 2 pending concern(s) — menu: extra round (~4% weekly) · reopen (~1%) · 1 relay(s) you overrode as misrouted   cc-research verdict alpha'
+  # 63 cells of facts in a 52-cell row: cut at a whole-fact boundary, the command on its own row
+  printf '%s\n' "$output" | grep -qxF ' ◆ research alpha: 2 concern(s) · 2 option(s)…'
+  printf '%s\n' "$output" | grep -qxF '   cc-research verdict alpha'
   [ "$(printf '%s\n' "$output" | grep -c '▶.*research')" -eq 0 ]
 }
 
@@ -222,7 +227,7 @@ PENDING2='[{"program":"alpha","state":"certifying","pending_concerns":2,"waiting
   w="$(mkrepo h1)"; tr="$(mktr "$BATS_TEST_TMPDIR/h1.jsonl" "$w/f.txt")"
   hook "$w" "$tr"
   [ "$status" -eq 0 ]
-  [[ "$msg" == *"◆ research alpha: 2 pending concern(s)"* ]] || false
+  [[ "$msg" == *"◆ research alpha: 2 concern(s)"* ]] || false
   [[ "$msg" != *"SAFE TO CLOSE"* ]] || false
   [[ "$(printf '%s\n' "$msg" | head -1)" == *"completeness UNKNOWN"* ]]
 }
@@ -236,5 +241,5 @@ PENDING2='[{"program":"alpha","state":"certifying","pending_concerns":2,"waiting
   [ "$status" -eq 0 ]
   [[ "$(printf '%s\n' "$msg" | head -1)" == *"SAFE TO CLOSE"* ]] || false
   [[ "$(printf '%s\n' "$msg" | head -1)" != *"research"* ]] || false
-  [[ "$msg" == *"◆ research alpha: 2 pending concern(s)"* ]]
+  [[ "$msg" == *"◆ research alpha: 2 concern(s)"* ]]
 }

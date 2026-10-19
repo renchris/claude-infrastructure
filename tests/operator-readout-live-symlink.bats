@@ -37,6 +37,9 @@ setup() {
   export CC_ORB_BLG_CACHE_DIR="$BATS_TEST_TMPDIR/blg-cache"
   export WRAP_LEDGER_BIN="$REPO/scripts/wrap-ledger.sh"
   export WRAP_TRUNK="origin/main"
+  # The ✎/▶ row under test is a STANDING backlog row, which only the collapse layout itemises; the
+  # footer layout (default since lr-wake Wave H) counts standing rows into its `◆ pile:` row.
+  export CC_OPREADOUT_CLASSBUDGET=collapse
   : > "$CC_BACKLOG_FILE"
 }
 

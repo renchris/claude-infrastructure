@@ -79,7 +79,7 @@ hdr() {
 }
 
 render() { run /bin/bash "$READOUT" --render --cwd "$W"; }
-nline()  { printf '%s\n' "$output" | grep -c 'dispatcher fires failed'; }
+nline()  { printf '%s\n' "$output" | grep -c 'dispatch fails'; }
 
 @test "the hook parses under /bin/bash 3.2 and that is the interpreter these cases run" {
   run /bin/bash -n "$READOUT"
@@ -94,8 +94,9 @@ nline()  { printf '%s\n' "$output" | grep -c 'dispatcher fires failed'; }
   render
   [ "$status" -eq 0 ]
   [ "$(nline)" -eq 1 ]
-  printf '%s\n' "$output" | grep -qxF ' ◆ 5+ dispatcher fires failed since 10-09 06:00Z — aaaa11112222 refused at the payload gate (rc=4) · cc-backlog block aaaa11112222 --needs "<why>"' \
-    || { echo "$output"; false; }
+  # rows fit 52 cells (lr-wake Wave H): facts cut at a whole-fact boundary, the remedy on its own row
+  printf '%s\n' "$output" | grep -qxF ' ◆ 5+ dispatch fails since 10-09 06:00Z…' || { echo "$output"; false; }
+  printf '%s\n' "$output" | grep -qxF '   cc-backlog block aaaa11112222 --needs "<why>"' || { echo "$output"; false; }
   # the loop alone fires the block: line 1 is the governing header, and nothing is a run line
   [[ "$(printf '%s\n' "$output" | head -1)" == "OPERATOR ▸ "* ]] || false
   [ "$(printf '%s\n' "$output" | grep -c '▶')" -eq 0 ]
@@ -106,7 +107,7 @@ nline()  { printf '%s\n' "$output" | grep -c 'dispatcher fires failed'; }
   hdr aaaa11112222 1; hdr aaaa11112222 3; hdr bbbb11112222 1
   render
   [ "$status" -eq 0 ]
-  printf '%s\n' "$output" | grep -qF 'aaaa11112222 refused at the payload gate (rc=3) · cc-backlog block aaaa11112222' \
+  printf '%s\n' "$output" | grep -qxF '   cc-backlog block aaaa11112222 --needs "<why>"' \
     || { echo "$output"; false; }
 }
 
@@ -115,7 +116,8 @@ nline()  { printf '%s\n' "$output" | grep -c 'dispatcher fires failed'; }
   hdr aaaa11112222 4; hdr aaaa11112222 1         # same item: the gate once, then the anchor probe
   render
   [ "$status" -eq 0 ]
-  printf '%s\n' "$output" | grep -qxF " ◆ 5+ dispatcher fires failed since 10-09 06:00Z — aaaa11112222, last rc=1 · tail -40 $CC_DISPATCH_FIRE_LOG" \
+  printf '%s\n' "$output" | grep -qxF ' ◆ 5+ dispatch fails since 10-09 06:00Z…' || { echo "$output"; false; }
+  printf '%s\n' "$output" | grep -qxF "   tail -40 $CC_DISPATCH_FIRE_LOG" \
     || { echo "$output"; false; }
   [ "$(printf '%s\n' "$output" | grep -c 'cc-backlog block')" -eq 0 ]
 }
@@ -125,12 +127,12 @@ nline()  { printf '%s\n' "$output" | grep -c 'dispatcher fires failed'; }
   hdr bbbb11112222 4                              # a payload refusal, but of a different item
   render
   [ "$status" -eq 0 ]
-  printf '%s\n' "$output" | grep -qF 'aaaa11112222, last rc=? · tail -40 ' || { echo "$output"; false; }
+  printf '%s\n' "$output" | grep -qF '   tail -40 ' || { echo "$output"; false; }   # the tail remedy, not the gate's
   [ "$(printf '%s\n' "$output" | grep -c 'cc-backlog block')" -eq 0 ]
   rm -f "$CC_DISPATCH_FIRE_LOG"                   # and with no log at all
   render
   [ "$status" -eq 0 ]
-  printf '%s\n' "$output" | grep -qF 'aaaa11112222, last rc=? · tail -40 ' || { echo "$output"; false; }
+  printf '%s\n' "$output" | grep -qF '   tail -40 ' || { echo "$output"; false; }   # the tail remedy, not the gate's
 }
 
 @test "several items render the tail remedy even when the longest run is a payload refusal" {
@@ -140,7 +142,8 @@ nline()  { printf '%s\n' "$output" | grep -c 'dispatcher fires failed'; }
   render
   [ "$status" -eq 0 ]
   [ "$(nline)" -eq 1 ]
-  printf '%s\n' "$output" | grep -qxF " ◆ 5+ dispatcher fires failed since 10-09 06:00Z — 3 items, last rc=4 · tail -40 $CC_DISPATCH_FIRE_LOG" \
+  printf '%s\n' "$output" | grep -qxF ' ◆ 5+ dispatch fails since 10-09 06:00Z · 3 items' || { echo "$output"; false; }
+  printf '%s\n' "$output" | grep -qxF "   tail -40 $CC_DISPATCH_FIRE_LOG" \
     || { echo "$output"; false; }
   [ "$(printf '%s\n' "$output" | grep -c 'cc-backlog block')" -eq 0 ]
   # control on the same arm: two runs of 3 are below both thresholds and render nothing
@@ -156,7 +159,7 @@ nline()  { printf '%s\n' "$output" | grep -c 'dispatcher fires failed'; }
   hdr aaaa11112222 4
   render
   [ "$status" -eq 0 ]
-  printf '%s\n' "$output" | grep -qF ' ◆ 10+ dispatcher fires failed since 10-09 06:00Z — 2 items, last rc=4 · tail -40 ' \
+  printf '%s\n' "$output" | grep -qxF ' ◆ 10+ dispatch fails since 10-09 06:00Z · 2 items' \
     || { echo "$output"; false; }
   [ "$(printf '%s\n' "$output" | grep -c 'cc-backlog block')" -eq 0 ]
 }
@@ -173,7 +176,7 @@ nline()  { printf '%s\n' "$output" | grep -c 'dispatcher fires failed'; }
   loop aaaa11112222 3 240
   render; [ "$status" -eq 0 ]
   [ "$a" != "$output" ] || false
-  printf '%s\n' "$output" | grep -qF ' ◆ 10+ dispatcher fires failed since 10-09 06:00Z — aaaa11112222 refused' \
+  printf '%s\n' "$output" | grep -qF ' ◆ 10+ dispatch fails since 10-09 06:00Z' \
     || { echo "$output"; false; }
 }
 
@@ -236,7 +239,7 @@ nline()  { printf '%s\n' "$output" | grep -c 'dispatcher fires failed'; }
   render
   [ "$status" -eq 0 ]
   [ "$(nline)" -eq 1 ] || { echo "$output"; false; }
-  printf '%s\n' "$output" | grep -qF ' ◆ 5+ dispatcher fires failed since 10-09 06:00Z — aaaa11112222, last rc=? ' \
+  printf '%s\n' "$output" | grep -qxF ' ◆ 5+ dispatch fails since 10-09 06:00Z…' \
     || { echo "$output"; false; }
   # longest run 4, and only two runs of >= 3
   : > "$CC_BACKLOG_FILE"
@@ -258,7 +261,7 @@ nline()  { printf '%s\n' "$output" | grep -c 'dispatcher fires failed'; }
   render
   [ "$status" -eq 0 ]
   [ "$(nline)" -eq 1 ]
-  printf '%s\n' "$output" | grep -qF 'aaaa.1112222, last rc=? · tail -40 ' || { echo "$output"; false; }
+  printf '%s\n' "$output" | grep -qF '   tail -40 ' || { echo "$output"; false; }
   [ "$(printf '%s\n' "$output" | grep -c 'cc-backlog block')" -eq 0 ]
 }
 
@@ -269,7 +272,7 @@ nline()  { printf '%s\n' "$output" | grep -c 'dispatcher fires failed'; }
   render
   [ "$status" -eq 0 ]
   [ "$(nline)" -eq 1 ] || { echo "$output"; false; }
-  printf '%s\n' "$output" | grep -qF ' ◆ 5+ dispatcher fires failed since 10-06 12:00Z — aaaa11112222, last rc=? ' \
+  printf '%s\n' "$output" | grep -qxF ' ◆ 5+ dispatch fails since 10-06 12:00Z…' \
     || { echo "$output"; false; }
 }
 

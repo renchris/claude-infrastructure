@@ -55,10 +55,17 @@ setup() {
 
 heartbeat() { printf '{"pid":4242,"progress_wall":%s.25,"uptime":12.5}\n' "$1" > "$RR/heartbeat"; }
 
-@test "recon.on + readout.line + fresh heartbeat renders the line verbatim" {
+# The daemon's line is fitted to the readout's 52-cell rows (lr-wake Wave H): cut with `…`, never wrapped.
+recon_row_ok() { # the row is the whole line, or a prefix of it cut with `…`
+  local r; r="$(printf '%s\n' "$output" | grep -E '^ ⟳ ')"
+  [ "$r" = " ⟳ $LINE" ] && return 0
+  case "$r" in *…) [[ " ⟳ $LINE" == "${r%…}"* ]] ;; *) return 1 ;; esac
+}
+
+@test "recon.on + readout.line + fresh heartbeat renders the line, fitted to the row budget" {
   run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
   [ "$status" -eq 0 ]
-  echo "$output" | grep -qxF " ⟳ $LINE" || { echo "$output"; false; }
+  recon_row_ok || { echo "$output"; false; }
   [ "$(echo "$output" | grep -c 'lr-recon:')" -eq 1 ]
   # NSTEPS invariant: the numbered-step count is what it is with the line absent
   with="$(echo "$output" | grep -cE '^ [0-9]+ (▶|◆|✎)' || true)"
@@ -79,15 +86,15 @@ heartbeat() { printf '{"pid":4242,"progress_wall":%s.25,"uptime":12.5}\n' "$1" >
   heartbeat $((CC_OPREADOUT_NOW - 181))
   run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
   [ "$status" -eq 0 ]
-  echo "$output" | grep -qxF ' ⚠ lr-recon: reconciler heartbeat stale 3m01s — the reset poller is paging and kickstarting it' \
+  echo "$output" | grep -qxF ' ⚠ lr-recon: heartbeat stale 3m01s · poller restarts it' \
     || { echo "$output"; false; }
   ! echo "$output" | grep -qF 'bg-held' || false
   heartbeat $((CC_OPREADOUT_NOW - 7500))
   run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
-  echo "$output" | grep -qF 'heartbeat stale 2h05m —' || { echo "$output"; false; }
+  echo "$output" | grep -qF 'heartbeat stale 2h05m ·' || { echo "$output"; false; }
   heartbeat $((CC_OPREADOUT_NOW - 180))                 # the boundary is still fresh
   run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
-  echo "$output" | grep -qxF " ⟳ $LINE" || { echo "$output"; false; }
+  recon_row_ok || { echo "$output"; false; }
 }
 
 @test "an empty readout.line or a torn heartbeat renders nothing and exits 0" {
@@ -112,6 +119,6 @@ heartbeat() { printf '{"pid":4242,"progress_wall":%s.25,"uptime":12.5}\n' "$1" >
   heartbeat $((CC_OPREADOUT_NOW - 400))
   run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
   [ "$status" -eq 0 ]
-  echo "$output" | grep -qxF ' ⚠ lr-recon: reconciler heartbeat stale 6m40s — the reset poller is paging and kickstarting it' \
+  echo "$output" | grep -qxF ' ⚠ lr-recon: heartbeat stale 6m40s · poller restarts it' \
     || { echo "$output"; false; }
 }

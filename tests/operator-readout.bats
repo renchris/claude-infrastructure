@@ -17,7 +17,8 @@ setup() {
   # owns it, unfixtured, in both directions.
   export CC_BACKLOG_PROJECT_WARN=off
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-  HOOK="$REPO/hooks/operator-readout.sh"
+  # CC_TEST_OPREADOUT_HOOK: run the suite against another build (the red-on-trunk proof, Wave H).
+  HOOK="${CC_TEST_OPREADOUT_HOOK:-$REPO/hooks/operator-readout.sh}"
   DECIDE="$REPO/bin/cc-decide"
   BACKLOG="$REPO/bin/cc-backlog"
 
@@ -75,6 +76,15 @@ setup() {
            "$CC_ANNOUNCE_ALARM_DIR" "$CC_COMPLETION_RECORDS_DIR" "$CC_PAGES_DIR" \
            "$CC_MAILBOX_DIR/dead-letter" "$CC_SWEEP_SEEN_DIR"
   : > "$CC_BACKLOG_FILE"
+  # The cases above the Wave H block pin the COLLAPSE layout (the default until 2026-10-19, still
+  # one env away as the revert path), so they keep asserting it explicitly; the footer layout that
+  # is now the default has its own cases at the end of this file, which unset this.
+  export CC_OPREADOUT_CLASSBUDGET=collapse
+  # The hook's own 9 s deadline wrapper (hooks/lib/hook-deadline.sh, pinned by hook-deadline.bats)
+  # DEFERS a slow render — under load 200 a hook-mode case here measured past 9 s, and the deferral
+  # notice replaced the very line the case asserts (busy: ⏳, 2026-10-19). This suite tests what the
+  # hook RENDERS, not whether the box beat the clock, so its renders get room.
+  export CC_OPREADOUT_DEADLINE_S="${CC_OPREADOUT_DEADLINE_S:-120}"
 }
 
 # ── D3: the escalation counted line ──────────────────────────────────────────────────────────────
@@ -465,7 +475,10 @@ EOS
   "$DECIDE" open --class B --what "Far-future default. Detail." --conviction 60 --receipt "x => y" \
     --default "proceed" --deadline "2099-01-01T00:00:00Z" >/dev/null
   printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/13-x-activate.sh"   # ensure the block fires
-  CC_OPREADOUT_NOW=1784894400 run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"                  # 2026-07-23T12:00:00Z epoch-ish
+  # NOW is 12 h BEFORE the imminent deadline. It used to be 2026-07-23 — three days AFTER it — and
+  # the assertion below passed only because the readout had no lower bound at NOW: the test pinned
+  # the very defect lr-wake Q2 fixed (an overdue default shown as "auto-fire ≤24h").
+  CC_OPREADOUT_NOW=1784505600 run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"                  # 2026-07-20T00:00:00Z
   ! echo "$output" | grep -q 'Imminent default' || false
   ! echo "$output" | grep -q 'Far-future default' || false
   echo "$output" | grep -q '1 class-B default(s) auto-fire ≤24h (earliest 2026-07-20T12:00:00Z) — veto: cc-decide veto <id>'
@@ -1973,6 +1986,7 @@ blk_env() { # blk_env <stub ledger> <cwd> — render as session S1
     CC_HANDOFF_ALARM_DIR="$CC_HANDOFF_ALARM_DIR" CC_ANNOUNCE_ALARM_DIR="$CC_ANNOUNCE_ALARM_DIR" \
     CC_COMPLETION_RECORDS_DIR="$CC_COMPLETION_RECORDS_DIR" CC_PAGES_DIR="$CC_PAGES_DIR" \
     CC_SWEEP_SEEN_DIR="$CC_SWEEP_SEEN_DIR" CC_ORB_BLG_CACHE_DIR="$CC_ORB_BLG_CACHE_DIR" \
+    CC_OPREADOUT_CLASSBUDGET="${CC_OPREADOUT_CLASSBUDGET:-footer}" \
     WRAP_LEDGER_BIN="$1" bash "$HOOK" --render --cwd "$2" --sid S1
 }
 blk_open() { # blk_open <session sid> <what> [recommendation] — a real class-C packet
@@ -2087,4 +2101,132 @@ blk_recheck() { # blk_recheck <what> <sid> <tier> — append a re-check entry to
   [ "$status" -eq 0 ]
   [[ "$msg" == *"⛔ Blocked — need your call"* ]] || { echo "no ⛔ block: $output"; false; }
   [[ "$msg" != *"SAFE TO CLOSE"* ]] || { echo "$msg"; false; }
+}
+
+# ── FOOTER LAYOUT — the default since 2026-10-19 (lr-wake Wave H, RC8) ─────────────────────────────
+# The Stop readout took 20-27 rows at 57 columns, led line 1 with a machine-wide pile count that
+# belongs to no session, and showed class-B defaults 12 h past their deadline as "auto-fire ≤24h"
+# (docs/research/lr-wake-incident-2026-10-18/REPORT.md §4 Wave H, g-message-design.md §5).
+row_cells() { python3 -c 'import re,sys,unicodedata as u
+for l in sys.stdin.read().split("\n"):
+    l=re.sub(r"\x1b\[[0-9;]*m","",l)
+    if l: print(sum(2 if u.east_asian_width(c) in "WF" else 1 for c in l if c!="\ufe0f"))'; }
+
+mk_wave_h() { # the incident's shape, scaled: standing pile + escalations + 3 stranded + an OVERDUE class-B
+  local i id dl
+  for i in 1 2 3; do printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/3$i-a-activate.sh"; done
+  for i in 1 2 3 4; do "$DECIDE" open --class C --conviction 40 --receipt "p => r" --option "a::x" --option "b::y" --what "Decision $i. Detail." >/dev/null; done
+  for i in 1 2 3 4 5; do
+    id="$("$BACKLOG" add --title "Blocked item $i" --project infra)"
+    "$BACKLOG" block "$id" --needs "operator step $i" >/dev/null
+  done
+  for i in $(seq 1 12); do mk_escalation "$i"; done
+  dl="$(date -u -r $(( CC_OPREADOUT_NOW - 3600 )) +%Y-%m-%dT%H:%M:%SZ)"     # NOW − 1 h
+  "$DECIDE" open --class B --what "overdue default" --conviction 60 --receipt "x => y" \
+    --default "no change" --deadline "$dl" >/dev/null
+  cat > "$BATS_TEST_TMPDIR/rd" <<'R'
+#!/bin/bash
+printf '[{"sid":"11111111-aaaa","cwd":"/x/reso","account":"next3","backlog_id":"bl0000000001"},{"sid":"22222222-bbbb","cwd":"/x/claude-infrastructure","account":"next4","backlog_id":"bl0000000002"},{"sid":"33333333-cccc","cwd":"/x/personal","account":"next2"}]\n'
+R
+  chmod +x "$BATS_TEST_TMPDIR/rd"
+  export CC_RESUME_DEBT_BIN="$BATS_TEST_TMPDIR/rd"
+}
+
+@test "WAVE H: the incident fixture renders in ≤ 7 rows, each ≤ 52 cells, with no pile count on line 1" {
+  unset CC_OPREADOUT_CLASSBUDGET
+  mk_wave_h
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c .)" -le 7 ] || { echo "$output"; false; }
+  while read -r n; do [ "$n" -le 52 ] || { echo "row of $n cells:"; echo "$output"; false; }; done < <(printf '%s\n' "$output" | row_cells)
+  row1="$(printf '%s\n' "$output" | head -1)"
+  [[ "$row1" == "OPERATOR ▸ "* ]] || false
+  # the pile — 3 runnable, 9 judgment, 12 escalations — is nowhere on line 1 …
+  ! printf '%s' "$row1" | grep -qE 'runnable|need your call|manual step|escalation|[0-9]+ (run|call|esc)' || { echo "$row1"; false; }
+  # … and is exactly ONE counted row, the last one
+  [ "$(printf '%s\n' "$output" | grep -c '◆ pile: ')" -eq 1 ]
+  printf '%s\n' "$output" | tail -1 | grep -q '^ ◆ pile: 3 run · 9 call · 12 esc' || { echo "$output"; false; }
+  # nothing standing is itemised
+  ! printf '%s\n' "$output" | grep -qE 'cc-do --run|decisions — your call|blocked backlog|escalation record' || false
+  # the stranded sessions keep their commands, uncut
+  printf '%s\n' "$output" | grep -q '^   ▶ cc-do bl0000000001' || false
+  printf '%s\n' "$output" | grep -q '^   ◆ cc-resume-debt settle --sid 33333333-cccc' || false
+}
+
+@test "WAVE H Q2: a class-B default past its deadline reads 'overdue · nothing fired', never 'auto-fire ≤24h'" {
+  unset CC_OPREADOUT_CLASSBUDGET
+  mk_wave_h
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  ! printf '%s' "$output" | grep -q '≤24h' || { echo "$output"; false; }
+  printf '%s\n' "$output" | grep -q '^ ⚠ 1 class-B overdue · nothing fired' || { echo "$output"; false; }
+  # the same split holds in the collapse layout's footer
+  CC_OPREADOUT_CLASSBUDGET=collapse run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  ! printf '%s' "$output" | grep -q '≤24h' || { echo "$output"; false; }
+  printf '%s' "$output" | grep -q '1 class-B default(s) overdue since .* · nothing fired' || { echo "$output"; false; }
+}
+
+@test "WAVE H Q2 CONTROL: a deadline inside the next 24 h is the veto window, with its veto command" {
+  unset CC_OPREADOUT_CLASSBUDGET
+  mk4 1
+  dl="$(date -u -r $(( CC_OPREADOUT_NOW + 7200 )) +%Y-%m-%dT%H:%M:%SZ)"
+  id="$("$DECIDE" open --class B --what "soon" --conviction 60 --receipt "x => y" --default "go" --deadline "$dl")"
+  run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  # the due time and the veto command share one row, neither cut
+  printf '%s\n' "$output" | grep -qxF " ⚠ class-B due ${dl:11:5}Z   cc-decide veto $id" || { echo "$output"; false; }
+  ! printf '%s' "$output" | grep -q 'overdue' || false
+}
+
+@test "WAVE H: the damping hash covers semantic rows only — a pile-count change does not re-render" {
+  unset CC_OPREADOUT_CLASSBUDGET
+  w="$(mkrepo_landed wh)"
+  mk4 2
+  run hookrun "$w"
+  printf '%s' "$output" | jq -e '.systemMessage | contains("◆ pile: 2 run · 4 call")' >/dev/null || { echo "$output"; false; }
+  # ONLY the pile moves (a third activation): the stamp changes, the block re-renders, the hash must not
+  printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/39-z-activate.sh"
+  run hookrun "$w"
+  [ -z "$output" ] || { echo "re-rendered on a pile-only change: $output"; false; }
+  grep -q '"reason":"latched-ttl' "$CC_IDL" || { tail -3 "$CC_IDL"; false; }
+  # CONTROL: a semantic change (an overdue class-B row) DOES re-render, carrying the new pile count
+  dl="$(date -u -r $(( CC_OPREADOUT_NOW - 60 )) +%Y-%m-%dT%H:%M:%SZ)"
+  "$DECIDE" open --class B --what "late" --conviction 60 --receipt "x => y" --default "go" --deadline "$dl" >/dev/null
+  run hookrun "$w"
+  printf '%s' "$output" | jq -e '.systemMessage | contains("overdue · nothing fired") and contains("◆ pile: 3 run")' >/dev/null || { echo "$output"; false; }
+}
+
+@test "WAVE H: line 1 states THIS session's state, never cut; an over-wide header's command takes its own row" {
+  unset CC_OPREADOUT_CLASSBUDGET
+  w="$(mkrepo_unlanded wh2)"
+  mk4 1
+  run hookrun "$w"
+  msg="$(printf '%s' "$output" | jq -r '.systemMessage')"
+  row1="$(printf '%s\n' "$msg" | head -1)"
+  # the whole verdict, no `…` and no pile count …
+  [[ "$row1" == "OPERATOR ▸ 📦 parked — 1 commit(s) on "*" unlanded ("*")" ]] || { echo "$msg"; false; }
+  ! printf '%s' "$row1" | grep -qE 'runnable|need your call|[0-9]+ (run|call)' || false
+  # … and its command, whole, on the row below
+  [ "$(printf '%s\n' "$msg" | sed -n 2p)" = "   → /ship" ] || { echo "$msg"; false; }
+  # every row but the header fits 52 cells
+  while read -r n; do [ "$n" -le 52 ] || { echo "$msg"; false; }; done < <(printf '%s\n' "$msg" | tail -n +2 | row_cells)
+}
+
+@test "WAVE H ⛔: in the footer layout line 1 is the blocked state, this session's decision is whole, the pile is one row" {
+  w="$(mkrepo_landed blkfoot)"
+  for i in 1 2 3; do blk_open OTHER "Foreign decision number $i."; done
+  blk_open OTHER "Own research decision."
+  blk_recheck "Own research decision." S1 signoff
+  CC_OPREADOUT_CLASSBUDGET=footer run blk_env "$(stub_ledger "⛔" "BLOCKED=0" "BLOCKED_RECHECKED=1" "RECHECKED_SRC=ok" \
+    "READOUT=⛔ Blocked — research done, implementation pending: 1 decision(s) need your call: cc-decide list --open")" "$w"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  l1="$(printf '%s\n' "$output" | head -1)"
+  [[ "$l1" == "OPERATOR ▸ ⛔ Blocked — research done, implementation pending: 1 decision(s) need your call"* ]] \
+    || { echo "line 1: $l1"; false; }
+  ! printf '%s' "$l1" | grep -qE '[0-9]+ need your call ·|[0-9]+ (run|call)\b' || { echo "pile on line 1: $l1"; false; }
+  # the own decision keeps its recommendation and conviction; its handle is whole on the next row
+  printf '%s\n' "$output" | grep -qx ' ◆ \[this session · signoff\] Own research decision — ship as designed 88%' \
+    || { echo "$output"; false; }
+  printf '%s\n' "$output" | grep -qE '^   \[decision [0-9a-f]+\]$' || { echo "$output"; false; }
+  # the three foreign packets are the pile, counted once at the bottom
+  printf '%s\n' "$output" | tail -1 | grep -q '^ ◆ pile: 3 call' || { echo "$output"; false; }
+  ! printf '%s\n' "$output" | grep -q 'decisions — your call' || false
 }
