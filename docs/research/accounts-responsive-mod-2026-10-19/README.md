@@ -65,7 +65,7 @@ real pty, 160 → 40 columns, over the width-sweep fixture rows:
 | width ladder: every layout from 35 to 195 cells, deduplicated, each with its widest line's cells, plus the `pane_width` budget per pane width 20-400; written to `<sid>.ladder.json` beside the pane file on every `--readout` in a session; `--ladder` prints it | `bin/claude-accounts` `pane_ladder`, `pane_ladder_file` |
 | the mod: stamps `<sid>.mod` with the call's tool_use_id before the command runs, reads this run's ladder after it, keeps it in `$.state` (and the last 4 in `$.store`, for a resumed transcript), draws under `ToolGroup`/`ToolUse` | `mods/accounts-readout/` |
 | the handshake: a stamp naming THIS call ⇒ the hook sends only its do-not-paste note, no static copy; no stamp or another call's ⇒ unchanged | `hooks/relay-verbatim.sh` |
-| loading on all four accounts: install.sh links `mods/<name>/` into `~/.claude/mods/<name>/` (per-file, like skills); the launcher adds `--plugin-dir` for each live mod to every launch it makes (not `-p`, not a subcommand, not under `CC_MODS=off`) | `install.sh`, `scripts/deploy-link-parity.sh`, `lib/claude-launcher.zsh` |
+| loading on all four accounts: install.sh links `mods/<name>/` as `~/.claude/mods/<name>/`, ONE directory symlink (the vendor/ model: a per-file mod folder fails `claude plugin validate` with path-traversal and loads nothing; through a directory link it validates and its tests pass); the launcher adds `--plugin-dir` for each live mod to every launch it makes (not `-p`, not a subcommand, not under `CC_MODS=off`) | `install.sh`, `scripts/deploy-link-parity.sh`, `lib/claude-launcher.zsh` |
 
 Sessions already running when this converged keep the static copy until they are restarted;
 nothing changes for them.
