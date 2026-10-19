@@ -54,10 +54,30 @@ OUT=$(printf '%s' "$INPUT" | jq -r '.tool_response.stdout // .tool_response.outp
 # NOT to paste: a second, grey copy is what this replaces. No file (not in Claude Code, no tty to
 # size from, colour off, or a probe that failed) means the old contract, paste verbatim, unchanged.
 # Consumed once and only while fresh, so a later readout can never draw a stale one.
-# `--pane`/`--narrow`/`--json` are other surfaces: they print their own output and draw nothing.
-case "$CMD" in *claude-accounts*--readout*) case "$CMD" in *--pane*|*--narrow*|*--json*) ;; *)
+# `--pane`/`--narrow`/`--json`/`--ladder` are other surfaces: they print their own output and
+# draw nothing.
+#
+# WHEN THE accounts-readout MOD DRAWS IT, THIS HOOK DRAWS NOTHING (2026-10-19). A systemMessage is
+# static text: narrow the pane after the draw and Claude Code re-wraps it into soup (operator
+# screenshot, drawn at ~157 columns, viewed at ~35). mods/accounts-readout re-draws the readout
+# from the width ladder (`<sid>.ladder.json`) at every width change instead. It stamps
+# `<sid>.mod` with the tool_use_id of the call it is drawing for, before the command runs, so a
+# match here means the mod saw THIS call; then the static copy would only be a second, wrapping
+# one. No match (no mod loaded, an older session, a failed load) keeps the systemMessage below.
+case "$CMD" in *claude-accounts*--readout*) case "$CMD" in *--pane*|*--narrow*|*--json*|*--ladder*) ;; *)
   SID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
-  PF="${CC_PANE_DIR:-/tmp/claude-accounts-pane}/${SID//[^A-Za-z0-9_-]/}.txt"
+  TUID=$(printf '%s' "$INPUT" | jq -r '.tool_use_id // empty' 2>/dev/null)
+  PDIR="${CC_PANE_DIR:-/tmp/claude-accounts-pane}"
+  PF="$PDIR/${SID//[^A-Za-z0-9_-]/}.txt"
+  LF="$PDIR/${SID//[^A-Za-z0-9_-]/}.ladder.json"
+  if [ -n "$SID" ] && [ -n "$TUID" ] && [ -s "$LF" ] \
+     && [ "$(cat "$PDIR/${SID//[^A-Za-z0-9_-]/}.mod" 2>/dev/null)" = "$TUID" ] \
+     && [ $(( $(date +%s) - $(stat -f %m "$LF" 2>/dev/null || echo 0) )) -le 120 ]; then
+    rm -f "$PF"
+    # shellcheck disable=SC2016  # backticks are markdown code spans, kept literal
+    jq -n --arg t 'ON SCREEN — the /accounts readout is drawn for the operator under this shell command, in colour, by the accounts-readout mod, which re-lays it out whenever the pane changes width. Do NOT paste it into chat: an uncoloured second copy is exactly what this replaces. Add nothing unless the readout shows a ↻ line or a `Skipped by the general router:` line, a ⊘/⚠ login or ○ auth line, a 🚨 spend or ⚠ extra-usage toggle line, a lane reading `→ none`, a 🚨/⚠ line about another agent (a routable backend that bills outside a plan or might, or one on a metered API key), or the operator asked a direct question; then at most 3 lines (commands/accounts.md step 3). If none applies, end the turn with no text.' \
+      '{hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: $t}}' 2>/dev/null && exit 0
+  fi
   if [ -n "$SID" ] && [ -s "$PF" ] \
      && [ $(( $(date +%s) - $(stat -f %m "$PF" 2>/dev/null || echo 0) )) -le 120 ]; then
     PANE=$(cat "$PF" 2>/dev/null); rm -f "$PF"

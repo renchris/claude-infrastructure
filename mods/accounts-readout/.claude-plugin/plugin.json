@@ -1,0 +1,7 @@
+{
+  "name": "accounts-readout",
+  "version": "0.1.0",
+  "description": "Draws the /accounts readout under its shell command and re-lays it out whenever the pane changes width",
+  "author": { "name": "Chris Ren" },
+  "types": "./types/index.d.ts"
+}

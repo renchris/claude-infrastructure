@@ -37,7 +37,11 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
    straight to step 3, and if none of its cases applies, end the turn with no text. Only when the
    note begins `RELAY VERBATIM` (no pane copy: no tty to size from, colour off, outside Claude
    Code) does the paste rule below apply. `claude-accounts --readout --pane --cols N` prints the
-   drawn layout at any width, for a look or a test.
+   drawn layout at any width, for a look or a test. Where the `accounts-readout` mod is loaded
+   (`mods/accounts-readout`, passed by the launcher to every session it starts; 2026-10-19,
+   operator: "we break on small pane widths"), the mod draws it instead of the hook, from the
+   width ladder `--readout` leaves (`--ladder` prints it), and re-lays it out whenever the pane
+   changes width; the note still begins `ON SCREEN` and the same rule applies.
 
    🚨 **Otherwise, paste that output VERBATIM into chat — every row and column, before any commentary.**
    Not a style preference, and CLAUDE.md § Communication Discipline's conciseness rule does NOT
@@ -72,7 +76,7 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
    | `—` for a null or elapsed stamp; the last line says when the quota was READ (`Quota read at 07:49, 28 seconds ago`); the Fable window prints only when it is news (inactive, dated or unknown), never for a permanent, active one | 2026-07-20, 2026-10-18 |
    | Other agents: line 1 names only backends that are signed in, installed and known to bill inside a plan, with the cause for the rest (not installed / not signed in); 🚨 or ⚠ only for a routable backend that bills outside a plan or might, or one on a metered API key; the standing not-wired set closes it with no alarm glyph | 2026-10-18 |
    | Every `/login` line carries its mailbox + Dia profile | 2026-07-30 |
-   | The hook-drawn copy (`--pane`) is the same rows in the board's colours, laid out for the pane SURVIVING ONE SPLIT (`pane_width`: half the pane, never under 44 cells, never over the pane), because drawn text re-wraps when its pane narrows later; columns join by priority as width allows, and under ~43 cells each account takes two rows | 2026-10-18 |
+   | The hook-drawn copy (`--pane`) is the same rows in the board's colours, laid out for the pane SURVIVING ONE SPLIT (`pane_width`: half the pane, never under 44 cells, never over the pane), because drawn text re-wraps when its pane narrows later; columns join by priority as width allows, and under ~43 cells each account takes two rows. With the mod loaded, the copy on screen is re-laid out by that same rule at every width change; the half-pane budget stays because a resize repaints only what is on screen, and a readout that has scrolled away keeps the layout it was drawn with | 2026-10-18, 2026-10-19 |
    | Banked full resets (recorded with `claude-accounts --note-bank`, since the CLI cannot read the bank): while a grant is live, ONE money-tier line `◆ Banked full reset on X and Y, expires Oct 22: work them to 100% first, then redeem at clau.de/reset`; an account AT its weekly wall holding a grant prints `✖ X is at its weekly limit and holds a banked full reset … redeem it now at clau.de/reset` instead of the "out of weekly quota" sentence, and leaves the ◆ line. Every lane already ranks a grant holder by min(weekly reset, grant expiry) | 2026-10-18 |
 
    **What is still yours** — the renderer prints facts; these bind how you may USE them:

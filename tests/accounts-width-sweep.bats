@@ -255,3 +255,57 @@ PY
   done
   [ "$fail" -eq 0 ]
 }
+
+# THE RESIZE CASE (2026-10-19). Tests 1-3 fit the readout to the width it is DRAWN at; the
+# operator then narrowed a pane drawn at ~157 columns to ~35 and the static copy re-wrapped into
+# soup. mods/accounts-readout re-draws from the ladder `--readout` leaves (`<sid>.ladder.json`)
+# at every width change; the pty proof is docs/research/accounts-responsive-mod-2026-10-19/.
+
+@test "8 ladder: the layout picked for each pane width is the one --pane draws for it, and it fits" {
+  run ca --readout --ladder --no-agents --max-wait 0
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  printf '%s' "$output" > "$D/ladder.json"
+  local w out fail=0
+  for w in $WIDTHS; do
+    out="$(jq -r --argjson c "$w" '.budget.cells[$c - .budget.from] as $b
+             | [.variants[] | select(.cells <= $b)] | last | .lines | join("\n")' "$D/ladder.json")"
+    # HH:MM masked: the wide layouts print reset clock times, and the two renders may straddle
+    # a minute (measured: pane=200 differed only in its clock times).
+    [ "$(printf '%s' "$out" | sed -E 's/[0-9]{2}:[0-9]{2}/HH:MM/g')" = \
+      "$(ca --readout --pane --cols "$w" --no-agents --max-wait 0 | sed -E 's/[0-9]{2}:[0-9]{2}/HH:MM/g')" ] \
+      || { echo "pane=$w: the ladder's pick differs from --pane"; fail=1; }
+    printf '%s' "$out" | fits "$w" 5 || fail=1
+  done
+  # deduplicated: no two neighbouring variants lay out the same
+  [ "$(jq '[.variants | range(1; length) as $i | select(.[$i].lines == .[$i - 1].lines)] | length' \
+        "$D/ladder.json")" -eq 0 ] || { echo "duplicate variants"; fail=1; }
+  [ "$fail" -eq 0 ]
+}
+
+@test "9 --readout leaves the ladder beside the pane file, for the session that ran it" {
+  export CLAUDE_CODE_SESSION_ID="sweep-sid"
+  CC_PANE_COLS=160 ca --readout --no-agents --max-wait 0 >/dev/null
+  [ -s "$CC_PANE_DIR/sweep-sid.ladder.json" ] || { ls -la "$CC_PANE_DIR"; false; }
+  [ "$(jq -r '.v, (.variants | length > 1), (.written_ms > 0)' "$CC_PANE_DIR/sweep-sid.ladder.json" \
+       | tr '\n' ' ')" = "1 true true " ]
+}
+
+@test "10 relay hook: the mod's stamp for THIS call silences the static copy; any other keeps it" {
+  export CLAUDE_CODE_SESSION_ID="sweep-sid"
+  relay() {  # <tool_use_id> → the relay hook's JSON for a just-run readout
+    CC_PANE_COLS=160 ca --readout --no-agents --max-wait 0 >/dev/null
+    jq -nc --arg u "$1" '{tool_name:"Bash", tool_input:{command:"claude-accounts --readout"},
+            tool_response:{stdout:"x"}, tool_use_id:$u, session_id:"sweep-sid",
+            hook_event_name:"PostToolUse"}' | "$RELAY"
+  }
+  mkdir -p "$CC_PANE_DIR"; printf 'toolu_A' > "$CC_PANE_DIR/sweep-sid.mod"
+  run relay toolu_A
+  [ "$(printf '%s' "$output" | jq -r '.systemMessage // "none"')" = none ] || { echo "$output"; false; }
+  [[ "$(printf '%s' "$output" | jq -r .hookSpecificOutput.additionalContext)" == *"accounts-readout mod"* ]]
+  [ ! -e "$CC_PANE_DIR/sweep-sid.txt" ]                 # the static copy is consumed, never drawn later
+  run relay toolu_B                                      # a stamp from another call: static copy drawn
+  [ -n "$(printf '%s' "$output" | jq -r '.systemMessage // empty')" ] || { echo "$output"; false; }
+  rm -f "$CC_PANE_DIR/sweep-sid.mod"
+  run relay toolu_C                                      # no mod at all: unchanged
+  [ -n "$(printf '%s' "$output" | jq -r '.systemMessage // empty')" ] || { echo "$output"; false; }
+}

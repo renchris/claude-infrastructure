@@ -9138,6 +9138,46 @@ def pane_file(sid):
     return os.path.join(d, safe + ".txt") if safe else None
 
 
+# THE WIDTH LADDER (2026-10-19). Every layout `_pane_at(cells)` can produce from 35 cells (a
+# 40-column pane less the gutter) to 195 (a 200-column one), deduplicated: consecutive widths
+# that lay out identically keep only the narrowest, so "the widest variant whose `cells` fits"
+# is exactly the layout the renderer would have chosen for that budget. mods/accounts-readout
+# reads it and re-draws on resize; the layout logic stays here, the mod only picks a row of it.
+PANE_LADDER = range(35, 196)
+
+
+def pane_ladder_file(sid):
+    """The ladder beside pane_file(sid). Not consumed: the mod reads it after the tool call."""
+    fp = pane_file(sid)
+    return fp[:-len(".txt")] + ".ladder.json" if fp else None
+
+
+PANE_BUDGET_COLS = range(20, 401)
+
+
+def pane_ladder(pane_at):
+    """{v, written_ms, gutter, budget, variants: [{cells, width, lines}]}, narrowest first.
+
+    `budget` is pane_width() for every pane width from 20 to 400 columns (`cells[cols - from]`),
+    so the mod lays out for a width exactly as `_pane(cols)` would: the widest variant whose
+    `cells` is within it. pane_width keeps its survive-one-split rule under the mod because a
+    resize repaints only what is on screen (measured, docs/research/accounts-responsive-mod-
+    2026-10-19/): a readout that has scrolled away stays at the width it was drawn at, and only
+    the half-pane budget keeps that copy whole through a split. `width` is the widest line's
+    display cells, measured here so the mod never re-implements _disp_w."""
+    variants = []
+    for n in PANE_LADDER:
+        lines = pane_at(n)
+        if variants and variants[-1]["lines"] == lines:
+            continue
+        variants.append({"cells": n, "width": max((_disp_w(x) for x in lines), default=0),
+                         "lines": lines})
+    return {"v": 1, "written_ms": int(time.time() * 1000), "gutter": PANE_GUTTER,
+            "budget": {"from": PANE_BUDGET_COLS.start,
+                       "cells": [pane_width(c) for c in PANE_BUDGET_COLS]},
+            "variants": variants}
+
+
 def _pane_wrap(s, width, first="", cont="  "):
     """Greedy word wrap measured in DISPLAY cells with the `**` markers excluded — textwrap counts
     each marker as two columns and wrapped lines that fit. Splits on plain spaces only, so an NBSP
@@ -11482,10 +11522,16 @@ def main():
                                          for p in load_providers()])
                  if "--no-agents" not in args and not narrow else [])
 
-        def _pane(cols):
-            w = pane_width(cols)
+        def _pane_at(w):
             return readout_lines(rows, cfg, win, cached, pane=w) + [
                 x for ln in provs for x in _pane_prose(ln, w, cont="  ")]
+
+        def _pane(cols):
+            return _pane_at(pane_width(cols))
+        if "--ladder" in args:
+            # The width ladder the accounts-readout mod draws from, on stdout (tests, a look).
+            print(json.dumps(pane_ladder(_pane_at)))
+            return
         if "--pane" in args:
             # The hook-drawn presentation on stdout, for a test or a look at another width:
             # `--cols N` is the PANE's columns (the gutter is taken off here), else the live pane.
@@ -11512,6 +11558,20 @@ def main():
         # the model reads. Best-effort by construction: any failure leaves the chat readout as the
         # only one, which is exactly what the hook falls back to (it tells the model to paste).
         sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+        # THE LADDER TOO (2026-10-19), for mods/accounts-readout: the text above is static, so a
+        # pane narrowed after the draw re-wraps it into soup. The mod re-draws on every width
+        # change and picks the widest layout here that fits. Written before the pane file, and
+        # without needing the pane's width, so the mod has it whatever pane_cols() could read.
+        lp = pane_ladder_file(sid)
+        if not narrow and lp:
+            try:
+                os.makedirs(os.path.dirname(lp), exist_ok=True)
+                tmp = f"{lp}.{os.getpid()}"
+                with open(tmp, "w") as f:
+                    json.dump(pane_ladder(_pane_at), f)
+                os.replace(tmp, lp)
+            except Exception:       # noqa: BLE001 — same contract as the pane file below
+                pass
         if not narrow and sid and board_color_on():
             try:
                 cols, fp = pane_cols(), pane_file(sid)
