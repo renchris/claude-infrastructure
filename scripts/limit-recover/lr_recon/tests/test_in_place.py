@@ -16,12 +16,25 @@ from unittest import mock
 
 from lr_recon import __main__ as M
 from lr_recon import act, plan, settle
+from lr_recon import clock as C
 from lr_recon import types as T
 
 L = "Thu Oct 1 18:38:57 2026"
 SID = "3a06361f-b508-4002-ad3b-e4b476c8c209"
 DETECTED, NOW = 1790885780.0, 1790891200.0
 ANSWER = 1790890183.0  # 21:29:43Z, the fresh turn after the in-place nudge
+BOOT = DETECTED - 86400.0  # a boot before every fixture stamp
+
+
+def _clock() -> C.Clock:
+    """A Clock that never reads the host kernel. A real one reads kern.boottime, and after any
+    host reboot later than these fixed stamps census parks every record PARKED-REBOOT (all 8 tests
+    here and in test_launcher_rooted went red at the 2026-10-18 reboot with no code change)."""
+    tv = "{ sec = %d, usec = 0 }" % int(BOOT)
+    return C.Clock(
+        sysctl=lambda name: tv if name in ("kern.boottime", "kern.waketime") else "",
+        env={},
+    )
 
 
 class InPlaceTests(unittest.TestCase):
@@ -116,6 +129,7 @@ class InPlaceTests(unittest.TestCase):
         if wait:
             rec.wait = T.Wait(reason=substate, since=DETECTED)
         ctx = M.Ctx(self.paths, None, self.tmp)
+        ctx.clock = _clock()
         ctx.records[SID] = rec
         fact = T.Fact(
             acct="next4",
