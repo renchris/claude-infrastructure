@@ -79,7 +79,7 @@ The ledger emits the worst-open FACT rung (priority ⛔ > 📤 > 🔧 > 📦 > �
 | 📦 | clean ∧ committed-but-unlanded (`ahead>0` ∨ `git cherry '+'`) | **`/ship`** — auto-fired by default in every repo per §Session Close's ship policy; held back to an OFFER only where the TARGET repo's own `CLAUDE.md` says landing spends money (a perishable fact this file deliberately does not restate — read that repo's `CLAUDE.md` + its status tool; the old reso hardcode here went stale in three days) |
 | 🚀 | landed on trunk, but the ENFORCING STORE does not carry it — `LIVE_ADDS` > 0 (the lag contains files the live layer does not have AT ALL: **no budget**, breaches at lag 1), or the live layer is past its converge budget (`LIVE_SRC=behind` ∧ `LIVE_LAG` > `WRAP_LIVE_BUDGET_COMMITS`, or the commit **the live layer is on** older than `WRAP_LIVE_BUDGET_MIN` — that arm read this session's own HEAD until 2026-08-26, which made it strictly weaker: an active session resets it at every commit), or `MIG_FAILED` > 0 | **converge** — `bash <repo>/scripts/deploy-live.sh`, then re-read the ledger. A land moved a git ref; it did not move the bytes the machine runs |
 | 👤 | landed ∧ operator-only step(s) THIS session filed are unrun | surface the `OPERATOR ▸` block |
-| ✅ | clean ∧ not-stale ∧ landed ∧ remainder = 0 | complete — nothing to do |
+| ✅ | clean ∧ not-stale ∧ landed ∧ remainder = 0 | complete — nothing this session filed is open |
 
 `🚀` is computed on this pull path as well: it reads the live checkout's git state plus
 the migrations ledger, needing no session id. It is BUDGETED **for an EDIT** — lag *inside* the
