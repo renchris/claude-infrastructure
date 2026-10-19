@@ -1447,7 +1447,11 @@ else
         # (matcher-null → first matcher-less object, i.e. the obj-1 chain tail); no matching object →
         # append the template's object shape. This is the mechanical form of the activation snippets'
         # per-dir jq — placement semantics per fm1b-activate-snippet §3-5.
-        if printf '%s' "$(cat "$target_settings")" | jq --argjson t "$clean_tmpl" '
+        # Commands compare through cmd_bare (scripts/lib/hook-cmd-bare.jq): the template names each
+        # hook's interpreter (/bin/bash ~/.claude/hooks/x.sh) and a live file written before 2026-10-18
+        # holds the bare path, which is the SAME hook — a raw == would append it a second time.
+        if printf '%s' "$(cat "$target_settings")" | jq -L "$REPO_DIR/scripts/lib" --argjson t "$clean_tmpl" '
+              include "hook-cmd-bare";
               def add1($m; $h):
                 (map((.matcher // null) == $m) | index(true)) as $i
                 | if $i == null
@@ -1457,7 +1461,7 @@ else
                 .[$ev.key] = ((.[$ev.key] // []) as $cur
                   | reduce [ $ev.value[]? as $o | ($o.hooks[]?) as $h
                              | {m: ($o.matcher // null), h: $h} ][] as $x ($cur;
-                      if any(.[]?; (.hooks // []) | any(.command == $x.h.command)) then .
+                      if any(.[]?; (.hooks // []) | any((.command // "" | cmd_bare) == ($x.h.command | cmd_bare))) then .
                       else add1($x.m; $x.h) end))))
             ' > "$target_settings.tmp2" && jq -e '.hooks' "$target_settings.tmp2" >/dev/null 2>&1; then
           mv "$target_settings.tmp2" "$target_settings"
@@ -1481,8 +1485,9 @@ else
   # post-install ASSERT (read-only): which template hooks are NOT wired in the target (by basename+args)
   if [[ -f "$target_settings" ]]; then
     norm='s#\|[^ ]*/#|#'
-    tmpl_h="$(printf '%s' "$clean_tmpl" | jq -r '.hooks|to_entries[]|.key as $e|(.value//[])[]?|(.hooks//[])[]?|"\($e)|\(.command)"' 2>/dev/null | sed -E "$norm" | sort -u)"
-    live_h="$(jq -r '.hooks|to_entries[]|.key as $e|(.value//[])[]?|(.hooks//[])[]?|"\($e)|\(.command)"' "$target_settings" 2>/dev/null | sed -E "$norm" | sort -u)"
+    hjq='include "hook-cmd-bare"; .hooks|to_entries[]|.key as $e|(.value//[])[]?|(.hooks//[])[]?|"\($e)|\(.command // "" | cmd_bare)"'
+    tmpl_h="$(printf '%s' "$clean_tmpl" | jq -L "$REPO_DIR/scripts/lib" -r "$hjq" 2>/dev/null | sed -E "$norm" | sort -u)"
+    live_h="$(jq -L "$REPO_DIR/scripts/lib" -r "$hjq" "$target_settings" 2>/dev/null | sed -E "$norm" | sort -u)"
     missing_h="$(comm -23 <(printf '%s\n' "$tmpl_h") <(printf '%s\n' "$live_h"))"
     if [[ -n "$missing_h" ]]; then
       echo "  ⚠ template hooks NOT wired in $(basename "$target_settings") (run with --wire-hooks to add):"

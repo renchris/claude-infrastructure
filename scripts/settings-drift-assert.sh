@@ -24,8 +24,14 @@ JQ="$(command -v jq || true)"
 [ -n "$JQ" ] || { printf 'settings-drift-assert: jq required\n' >&2; exit 3; }
 
 norm_cmd() { # <command-string> → "<basename-of-first-token><rest-verbatim>" (path-spelling-independent)
-  local first rest
-  first="${1%% *}"; rest="${1#"$first"}"
+  local first rest cmd="$1" p
+  # An explicit interpreter prefix (/bin/bash ~/.claude/hooks/x.sh, since 2026-10-18) names the same
+  # hook as the bare path; the prefix set is scripts/lib/hook-cmd-bare.jq's.
+  for p in "/bin/bash " "/bin/sh " "/bin/zsh " "/usr/bin/env bash " "/usr/bin/env sh " \
+           "/usr/bin/env zsh " "/usr/bin/env python3 " "/usr/bin/env python "; do
+    case "$cmd" in "$p"[~/\$]*) cmd="${cmd#"$p"}"; break ;; esac
+  done
+  first="${cmd%% *}"; rest="${cmd#"$first"}"
   printf '%s%s' "$(basename -- "$first")" "$rest"
 }
 

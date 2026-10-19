@@ -230,7 +230,8 @@ _drift_check() { # <settings.json> <event> <registry>  → prints the mismatch, 
   local settings="$1" ev="$2" reg="$3" listed expect
   [ -f "$reg" ] || { echo "no registry at $reg"; return 1; }
   listed="$(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$reg" | tr -d ' ')"
-  expect="$(jq -r --arg ev "$ev" '.hooks[$ev][] | select(.matcher=="Bash") | .hooks[].command' \
+  # cmd_bare first: `/bin/bash ~/.claude/hooks/x.sh` (the explicit-interpreter spelling) is hook x.sh.
+  expect="$(jq -L "$REPO/scripts/lib" -r --arg ev "$ev" 'include "hook-cmd-bare"; .hooks[$ev][] | select(.matcher=="Bash") | .hooks[].command | cmd_bare' \
             "$settings" 2>/dev/null | awk '{print $1}' | sed 's#.*/##')"
   # An empty read is the INSTRUMENT failing, never a clean bill of health.
   [ -n "$expect" ] || { echo "drift guard read NO $ev:Bash hooks from $settings — the instrument, not the subject"; return 1; }

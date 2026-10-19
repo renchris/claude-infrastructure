@@ -19,7 +19,9 @@
 # ORDER. 0037 (one shared settings.json) first: every later settings migration either refuses a
 # forked fleet (0039-0041, 0046-0048) or loops the account dirs and is a no-op on a linked one only
 # because ~/.claude comes first (README rule 7). 0024 last, so unit-gate.sh stays PreToolUse[0]
-# whatever an earlier step inserts. Everything else lexical. After each step: its own verify, then
+# whatever an earlier step inserts. 0070 after even that: it prefixes the interpreter on every hook
+# command, so whatever an earlier step registered by bare `#!` path is rewritten in the same batch
+# (a bare `#!` exec leaks kernel memory on macOS 15.7.9). Everything else lexical. After each step: its own verify, then
 # `cc-settings-parity check` (once 0037 has run) — a step that re-forked an account stops the batch.
 #
 # Usage:
@@ -50,6 +52,7 @@ STATE="${CC_MIGRATIONS_STATE:-$HOME/.claude/autonomy/migrations}"
 DECIDE="${CC_DECIDE_BIN:-$HOME/.claude/bin/cc-decide}"
 FIRST="0037-settings-parity"
 LAST="0024-unit-gate-registration"
+FINAL="0070-hook-explicit-interpreter"
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'c10-batch: %s\n' "$*" >&2; exit "${2:-1}"; }
@@ -110,14 +113,15 @@ classify() {
   done
 }
 
-# ordered_steps — the runnable names, FIRST first, LAST last, the rest lexical.
+# ordered_steps — the runnable names, FIRST first, then the rest lexical, then LAST, then FINAL.
 ordered_steps() {
   local all; all="$(classify | awk -F'\t' '$1=="step"{print $2}')"
   local nl='
 '
   case "$nl$all$nl" in *"$nl$FIRST$nl"*) echo "$FIRST" ;; esac
-  printf '%s\n' "$all" | grep -vx -e "$FIRST" -e "$LAST" | grep -v '^$'
+  printf '%s\n' "$all" | grep -vx -e "$FIRST" -e "$LAST" -e "$FINAL" | grep -v '^$'
   case "$nl$all$nl" in *"$nl$LAST$nl"*) echo "$LAST" ;; esac
+  case "$nl$all$nl" in *"$nl$FINAL$nl"*) echo "$FINAL" ;; esac
   return 0
 }
 

@@ -438,7 +438,7 @@ set_live_panes_bulk() {
 
 @test "wiring: session-deregister.sh is registered as a SessionEnd hook in the settings template" {
   run jq -e '[.hooks.SessionEnd[]?.hooks[]?.command]
-             | any(. == "~/.claude/hooks/session-deregister.sh")' \
+             | any(. == "/bin/bash ~/.claude/hooks/session-deregister.sh")' \
     "$REPO/settings-templates/settings.example.json"
   [ "$status" -eq 0 ]
 }
