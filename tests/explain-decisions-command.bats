@@ -6,6 +6,7 @@
 # sign-off rung instead of a session that read the decisions and went quiet.
 
 setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   C="$REPO/commands/explain-decisions.md"
 }
