@@ -538,6 +538,9 @@ def dry_run(args):
             say("no dead kitty to restore: %s" % why)
             return 0 if ok else 3
         say("dead kitty: pid %d (%s)" % (pid, why))
+        old = earlier_boot(pid)
+        if old:
+            return say_earlier_boot(pid, old)
         plan = boot_resume_argv(now, "crash", kpid=pid, plan=True)
     rc, out, err = sh(plan, timeout=300, env=clean_env())
     n = print_plan(out)
@@ -1031,6 +1034,49 @@ def crash_target(kpid=None):
     return None, "no heartbeat of a dead kitty under %s" % HB_ROOT
 
 
+def earlier_boot(pid):
+    """When the dead kitty's heartbeat was written under another boot: that boot's uuid, else None.
+
+    A kitty that died with the machine (a panic, a power-off, a reboot) is not this command's to
+    restore. boot-resume's event mode looks for the kitty under THIS boot's heartbeat dir and after
+    THIS boot's start, so it refused such a kitty as "no heartbeat … nothing to restore from" (the
+    2026-10-18 panic). Pointing it at the old dir would be worse: the at-boot restore already ran as
+    its own event with its own launch ledger, so a second event could start a session twice."""
+    d = hb_of(pid)
+    cur = boot_uuid()
+    u = os.path.basename(os.path.dirname(d)) if d else ""
+    return u if d and cur and u != cur else None
+
+
+def say_earlier_boot(pid, old_uuid):
+    """Explain an earlier-boot kitty and name the at-boot event that owns its fleet. rc 0 when that
+    event exists, 3 when boot-resume has not run for this boot."""
+    st = hb_start(hb_of(pid))
+    say("kitty %d died before this boot: its last heartbeat (%s) is under boot %s, not this boot (%s)." %
+        (pid, time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st)), old_uuid, boot_uuid()))
+    say("A reboot's fleet is restored by boot-resume when the machine starts, not by --after-crash: "
+        "a separate event keeps its own launch ledger and could start a session twice.")
+    evs = []
+    if os.path.isdir(EVENTS):
+        for n in os.listdir(EVENTS):
+            e = n[len("boot-"):] if n.startswith("boot-") else ""
+            if e.isdigit() and int(e) >= st and os.path.isdir(os.path.join(EVENTS, n)):
+                evs.append((int(e), os.path.join(EVENTS, n)))
+    if not evs:
+        say("no boot-resume event after that heartbeat under %s: boot-resume has not restored this boot yet. "
+            "Run `%s` (it reads the previous boot's heartbeat)." % (EVENTS, seam("CC_RESTORE_BOOT_RESUME")))
+        say("cc-restore: verdict=EARLIER-BOOT kitty=%d event=none — nothing was launched" % pid)
+        return 3
+    epoch, evdir = min(evs)
+    launched = len([ln for ln in read_lines(os.path.join(evdir, "launched")) if ln.strip()])
+    done = read_lines(os.path.join(STATE, "last-boot-epoch"))
+    state = "finished" if done and done[0].strip() == str(epoch) else "not finished"
+    say("that restore is event %s (%s): %d session(s) in its ledger %s/launched. A session it did not bring "
+        "back resumes by hand: ~/.reso/bin/reso-resume-one <account> <cwd> <session-id>." % (evdir, state, launched, evdir))
+    say("cc-restore: verdict=EARLIER-BOOT kitty=%d event=%s — nothing was launched" % (pid, os.path.basename(evdir)))
+    return 0
+
+
 def do_abort():
     h = holder()
     if not h:
@@ -1171,6 +1217,9 @@ def main(argv):
         say("cc-restore: nothing to restore — %s" % why)
         return 0
     say("dead kitty: pid %d (%s)" % (pid, why))
+    old = earlier_boot(pid)
+    if old:
+        return say_earlier_boot(pid, old)
     planned = read_lines(os.path.join(EVENTS, "%d.planned" % pid))
     if planned and planned[0].strip().isdigit():
         # A planned restart that did not finish: carry on in ITS event, so its ledger keeps counting.

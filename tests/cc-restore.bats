@@ -515,6 +515,40 @@ dead_kitty() { # a heartbeat for a kitty pid that is not running
   [ ! -d "$EVENTS" ]
 }
 
+# The 2026-10-18 panic: the dead kitty's heartbeat is under the PREVIOUS boot's uuid. boot-resume's
+# event mode looks only in this boot's dir, so the plan failed preflight; and the at-boot restore had
+# already launched that fleet under its own ledger, so a second event could start a session twice.
+# RED-proof: before the fix both cases run boot-resume as a new crash event for the dead kitty.
+@test "--after-crash on a kitty from an earlier boot launches nothing and names the at-boot event that owns it" {
+  dead_kitty
+  mv "$CC_HEARTBEAT_DIR/UUID-T" "$CC_HEARTBEAT_DIR/UUID-OLD"
+  mkdir -p "$EVENTS/boot-1784800100" "$EVENTS/boot-1784700000"         # this boot's, and an older one
+  printf '%s\n%s\n' "$S1" "$S2" > "$EVENTS/boot-1784800100/launched"
+  echo 1784800100 > "$CC_BOOT_RESUME_STATE_DIR/last-boot-epoch"
+  for dry in "" --dry-run; do
+    run "$SUBJ" --after-crash --kitty-pid "$DK" $dry
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+    [[ "$output" == *"kitty $DK died before this boot"*"under boot UUID-OLD, not this boot (UUID-T)"* ]] || false
+    [[ "$output" == *"event $EVENTS/boot-1784800100 (finished): 2 session(s)"* ]] || false
+    [[ "$output" == *"verdict=EARLIER-BOOT kitty=$DK event=boot-1784800100"* ]] || false
+    [ ! -e "$CC_RESTORE_BOOT_RESUME.log" ] || false
+    no_signal
+    [ ! -e "$EVENTS/$DK" ] || false
+  done
+}
+
+@test "--after-crash on an earlier boot's kitty with no at-boot event says to run boot-resume, exit 3" {
+  dead_kitty
+  mv "$CC_HEARTBEAT_DIR/UUID-T" "$CC_HEARTBEAT_DIR/UUID-OLD"
+  mkdir -p "$EVENTS/boot-1784700000"                                    # older than the heartbeat: not it
+  run "$SUBJ" --after-crash
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$output" == *"boot-resume has not restored this boot yet. Run \`$CC_RESTORE_BOOT_RESUME\`"* ]] || false
+  [[ "$output" == *"verdict=EARLIER-BOOT kitty=$DK event=none"* ]] || false
+  [ ! -e "$CC_RESTORE_BOOT_RESUME.log" ] || false
+  no_signal
+}
+
 # ── --compare ─────────────────────────────────────────────────────────────────────────────────────
 hb_dir() { # <dir> <kitty-ls os-window id> <pane of S1> <pane of S2> <account of S2>
   mkdir -p "$1"
