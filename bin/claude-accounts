@@ -7598,7 +7598,8 @@ def board_path(cfg):
 BOARD_WLOCK_WAIT_S = 5.0
 
 
-def write_board(cfg, lines, sig=None, keep_mtime=False, rendered_from_ts=None, producer=None):
+def write_board(cfg, lines, sig=None, keep_mtime=False, rendered_from_ts=None, producer=None,
+                variants=None):
     """Atomically publish the rendered board. Returns the path, or None on failure.
 
     os.replace, never a truncate-then-write: the reader is a SessionStart hook that may fire at
@@ -7612,6 +7613,10 @@ def write_board(cfg, lines, sig=None, keep_mtime=False, rendered_from_ts=None, p
     re-render: the board's mtime is the hook's PRODUCER-LIVENESS signal (accounts-board.sh), so a
     re-render keeps the existing mtime, never creates a missing board, and aborts if the cache
     moved on since it rendered — a dead keepwarm still reads STALE exactly as before.
+
+    `variants` ({width: lines}, _board_variants) are written beside it as `<board>.w<width>`, each
+    atomically and with the board's own mtime: the hook accepts a variant only when its mtime
+    matches the board's, so its age label stays true of whichever one it prints.
     """
     path = board_path(cfg)
     tmp = f"{path}.{os.getpid()}.tmp"
@@ -7634,6 +7639,13 @@ def write_board(cfg, lines, sig=None, keep_mtime=False, rendered_from_ts=None, p
         if st is not None:
             os.utime(tmp, ns=(st.st_atime_ns, st.st_mtime_ns))
         os.replace(tmp, path)
+        bst = os.stat(path)
+        for n, vl in (variants or {}).items():
+            vtmp = f"{path}.w{n}.{os.getpid()}.tmp"
+            with open(vtmp, "w") as f:
+                f.write("\n".join(vl) + "\n")
+            os.utime(vtmp, ns=(bst.st_atime_ns, bst.st_mtime_ns))
+            os.replace(vtmp, f"{path}.w{n}")
         _write_json_atomic(path + ".meta.json", {"sig": sig, "rendered_from_ts": rendered_from_ts,
                                                  "producer": producer, "at": time.time()})
         return path
@@ -7666,6 +7678,32 @@ def _render_board(cfg, rows, wj, cached, quota_ts=None):
     return readout_lines(rows, cfg, win_from_json(wj), cached, narrow=True, quota_ts=quota_ts)
 
 
+# THE BOARD'S NARROW VARIANTS (2026-10-18). The board above is laid out for 76 cells, and a
+# SessionStart systemMessage gets pane − 5, so below an 81-column pane every one of its rows wrapped
+# mid-cell (operator screenshot, ~55 columns). The producer has no pane to measure — it is a launchd
+# job — so it renders the same rows once per width on this ladder, with the pane presentation
+# (`readout_lines(pane=N)`, the layout `/accounts` draws into a pane), and hooks/accounts-board.sh
+# picks the widest variant that fits the pane it is drawing into. 35 is a 40-column pane; 70 the
+# last step below the board itself. One renderer, laid out N ways: no fact is re-derived here.
+BOARD_LADDER = (35, 40, 45, 50, 55, 60, 65, 70)
+
+
+def _board_variants(cfg, rows, wj, cached, quota_ts=None):
+    """{width: lines} for every width on BOARD_LADDER, from a COPY of the rows (as _render_board)."""
+    rows = json.loads(json.dumps(rows))
+    refresh_login_countdown(rows)
+    apply_assignments(rows, cfg)
+    apply_burn(rows, cfg)
+    win = win_from_json(wj)
+    out = {}
+    for n in BOARD_LADDER:
+        try:
+            out[n] = readout_lines(rows, cfg, win, cached, quota_ts=quota_ts, pane=n)
+        except Exception:   # noqa: BLE001 — a missing variant costs that width, never the board
+            pass
+    return out
+
+
 LOCAL_K_RENDER_MIN_S = 60
 LOCAL_K_RENDER_MAX_LOAD_PER_CPU = 10.0
 
@@ -7690,7 +7728,9 @@ def _local_board(cfg, state):
             return None
     lines = _render_board(cfg, c["rows"], c.get("window") or {}, True, quota_ts=c.get("ts"))
     if write_board(cfg, lines, sig=sig, keep_mtime=True, rendered_from_ts=c.get("ts"),
-                   producer="local") is None:
+                   producer="local",
+                   variants=_board_variants(cfg, c["rows"], c.get("window") or {}, True,
+                                            quota_ts=c.get("ts"))) is None:
         return None
     if not auth_diff:
         state["last_k_render"] = time.time()
@@ -10703,7 +10743,9 @@ def main():
         board = write_board(cfg, _render_board(cfg, _src, wj, was_cached,
                                                quota_ts=(_c or {}).get("ts")),
                             sig=_board_sig(_src), rendered_from_ts=(_c or {}).get("ts"),
-                            producer="keepwarm")
+                            producer="keepwarm",
+                            variants=_board_variants(cfg, _src, wj, was_cached,
+                                                     quota_ts=(_c or {}).get("ts")))
         age = _quota_age_s(cfg)
         print(f"keepwarm: {'served-cache' if was_cached else 'swept'} rows={len(rows)} "
               f"reset_pending={','.join(pending) or '-'} "
