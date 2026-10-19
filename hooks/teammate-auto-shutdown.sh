@@ -56,6 +56,17 @@ set -uo pipefail
 PATH="$PATH:$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin"
 export PATH
 
+# ── DEADLINE (docs/research/startup-hooks-2026-10-18/README.md §2 #27; hooks/lib/hook-deadline.sh) ─
+# 4 s against the 5 s registration. In time, nothing changes. Late, the reap finishes in its own
+# process group (checkpoint, then the detached pane close) instead of being SIGKILLed between the two;
+# no notice, because a TeammateIdle systemMessage lands in a transcript nobody reads.
+_hd_d="${0%/*}"; [ "$_hd_d" = "$0" ] && _hd_d=.
+_hdlib="$_hd_d/lib/hook-deadline.sh"
+[ -f "$_hdlib" ] || { _hd_t="$0"; [ -L "$_hd_t" ] && _hd_t="$(readlink "$_hd_t")"; _hdlib="${_hd_t%/*}/lib/hook-deadline.sh"; }
+[ -f "$_hdlib" ] || _hdlib="$HOME/.claude/hooks/lib/hook-deadline.sh"
+# shellcheck source=lib/hook-deadline.sh disable=SC1091  # runtime-resolved beside this file
+[ -f "$_hdlib" ] && . "$_hdlib" 2>/dev/null && hd_wrap teammate-auto-shutdown "${TEAMMATE_SHUTDOWN_DEADLINE_S:-4}" off "$@"
+
 # ── § THE LOCUS — this hook runs INSIDE THE TEAMMATE, not on the lead (RC-7, 2026-09-19) ─────────
 # The header said "(LEAD-side)" for this file's whole life and the design notes above reasoned from
 # it. Read from the binary, the TeammateIdle block runs in the MEMBER's own Stop pass and only when

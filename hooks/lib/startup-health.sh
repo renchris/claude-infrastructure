@@ -344,7 +344,7 @@ sh_front() {
 
 sh_json_esc() { # <string> → SH_J, JSON-string-safe (the worker already blanked control bytes)
   local s="$1"
-  s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//$'\n'/\\n}"; s="${s//$'\t'/\\t}"; s="${s//$'\r'/\\r}"
+  s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//$'\n'/\\n}"; s="${s//$'\t'/\\t}"; s="${s//$'\r'/\\r}"; s="${s//$'\033'/\\u001b}"
   SH_J="$s"
 }
 
@@ -352,6 +352,9 @@ sh_json_esc() { # <string> → SH_J, JSON-string-safe (the worker already blanke
 sh_front_emit() {
   local m
   sh_front "$1"
+  # SH_SYS_EXTRA: an operator line the caller needs printed in the SAME object (session-beat's late
+  # renders, hooks/lib/hook-deadline.sh) — one hook, one JSON document.
+  [ -n "${SH_SYS_EXTRA:-}" ] && SH_SYS="${SH_SYS:+$SH_SYS$'\n'}$SH_SYS_EXTRA"
   [ -n "$SH_SYS" ] || [ -n "$SH_CTX" ] || return 0
   sh_json_esc "$SH_SYS"; m="$SH_J"
   if [ -n "$SH_CTX" ]; then

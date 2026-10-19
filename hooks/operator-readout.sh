@@ -203,6 +203,18 @@ _amlib="$_amd/lib/activation-marker.sh"
 # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
 . "$_amd/lib/shasum-direct.sh" 2>/dev/null || . "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/shasum-direct.sh" 2>/dev/null || true
 
+# ── DEADLINE (docs/research/startup-hooks-2026-10-18/README.md §2 #27; hooks/lib/hook-deadline.sh) ─
+# Hook mode only, and before anything else forks: 9 s against the 10 s registration. In time, the
+# body's output is relayed byte-identically; late, one "deferred" line now and the block itself at the
+# next prompt, instead of a silent SIGKILL. Lib missing ⇒ the hook runs inline exactly as before.
+case " $* " in *" --render "*|*" -h "*|*" --help "*) : ;; *)
+  _hdlib="$_amd/lib/hook-deadline.sh"
+  [ -f "$_hdlib" ] || { _hdt="$0"; [ -L "$_hdt" ] && _hdt="$(readlink "$_hdt")"; _hdlib="${_hdt%/*}/lib/hook-deadline.sh"; }
+  [ -f "$_hdlib" ] || _hdlib="$HOME/.claude/hooks/lib/hook-deadline.sh"
+  # shellcheck source=lib/hook-deadline.sh disable=SC1091  # runtime-resolved, like the libs above
+  [ -f "$_hdlib" ] && . "$_hdlib" 2>/dev/null && hd_wrap operator-readout "${CC_OPREADOUT_DEADLINE_S:-9}" on ;;
+esac
+
 
 CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 STATE_DIR="${CC_OPREADOUT_STATE_DIR:-$CFG/state/operator-readout}"

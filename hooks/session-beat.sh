@@ -301,10 +301,26 @@ _SH_LIB="${BASH_SOURCE[0]%/*}/lib/startup-health.sh"
 # turn: a possible startup loss on prompt 1, the worker's confirmed losses from prompt 2, once each
 # (hooks/lib/startup-health.sh sh_front). Builtins only, and silent — 0 bytes — on a healthy prompt;
 # a session with no sentinel dir never even sources the lib, and a resolved one exits on a glob.
+# LATE RENDERS (README §2 #27, hooks/lib/hook-deadline.sh): a Stop renderer that missed its deadline
+# left its result as a pending file; this prompt is its next boundary, so it is printed here, once.
+# One glob on the quiet path; the lib is sourced only when a file exists.
+SH_SYS_EXTRA=""
+if [ "$kind" = prompt ]; then
+  for _hd_f in "${CC_HOOK_DEADLINE_DIR:-$HOME/.claude/state/hook-deadline}/pending/$sid".*.msg; do
+    [ -e "$_hd_f" ] || break
+    # shellcheck source=lib/hook-deadline.sh disable=SC1091  # runtime-resolved beside this file
+    . "${BASH_SOURCE[0]%/*}/lib/hook-deadline.sh" 2>/dev/null \
+      && hd_take_pending "${_hd_f%/*}" "$sid" && SH_SYS_EXTRA="$HD_SYS"
+    break
+  done
+fi
 if [ "$kind" = prompt ] && [ -d "${CC_STARTUP_HEALTH_DIR:-$HOME/.claude/state/startup-health}/$sid" ] \
    && [ -f "$_SH_LIB" ]; then
   # shellcheck source=lib/startup-health.sh disable=SC1091  # runtime-resolved beside this file
-  . "$_SH_LIB" && sh_front_emit "$sid" "${hev:-UserPromptSubmit}"
+  . "$_SH_LIB" && sh_front_emit "$sid" "${hev:-UserPromptSubmit}" && SH_SYS_EXTRA=""
+fi
+if [ -n "$SH_SYS_EXTRA" ]; then   # no startup-health front to carry it: print it alone
+  hd_json_esc "$SH_SYS_EXTRA"; printf '{"systemMessage":"%s"}\n' "$HD_J"
 fi
 set -m
 (
