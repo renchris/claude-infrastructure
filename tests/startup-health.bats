@@ -90,3 +90,141 @@ field() { sed -n "s/^$2=//p" "$S/$1"; }
   printf '%s' "$output" | jq -e '.hookSpecificOutput.additionalContext | contains("brief body")' >/dev/null
   [ "$(field desk-brief-inject.done owed)" = "$(( ${#output} + 1 ))" ]
 }
+
+# ── 3.4 transcript worker (hooks/lib/startup-health.sh) ──────────────────────────────────────────
+# Fixtures only: a static transcript plus a sentinel dir; no hook runs. Every .start is stamped at
+# 2026-10-18T12:00:00Z so record timestamps can sit on either side of the epoch floor (30 s).
+RLIB() { printf '%s' "$REPO/hooks/lib/startup-health.sh"; }
+T0=202610181200.00
+mkstart() { mkdir -p "$S"; : > "$S/$1.start"; TZ=UTC touch -t "${2:-$T0}" "$S/$1.start"; }
+mkdone() { # <hook> <rc> <elapsed_s> <owed> [timeout_ms]
+  printf 'rc=%s\nelapsed_s=%s\nowed=%s\ntimeout_ms=%s\n' "$2" "$3" "$4" "${5:-5000}" > "$S/$1.done"
+}
+mksession() { # <transcript> [size]
+  mkdir -p "$S"; printf 'transcript_path=%s\nsize=%s\n' "$1" "${2:-0}" > "$S/session.start"
+  TZ=UTC touch -t "$T0" "$S/session.start"
+}
+cancel_rec() { # <command> [ts] [durationMs] — one SessionStart hook_cancelled transcript line
+  jq -nc --arg c "$1" --arg ts "${2:-2026-10-18T12:00:06.169Z}" --argjson d "${3:-5472}" \
+    '{parentUuid:null,attachment:{type:"hook_cancelled",hookName:"SessionStart:startup",hookEvent:"SessionStart",command:$c,durationMs:$d,timedOut:true,timeoutMs:5000},type:"attachment",timestamp:$ts}'
+}
+user_rec() { printf '{"type":"user","message":{"role":"user","content":"hi"},"timestamp":"2026-10-18T12:00:09.000Z"}\n'; }
+scan() { bash -c '. "$1"; sh_write "$2" "${3:-}"' _ "$(RLIB)" "$S" "${1:-}"; }
+verdict() { cat "$S/$1.verdict"; }
+possible() { bash -c '. "$1"; sh_possible "$2" "$3"; printf "%s" "$SH_REASON"' _ "$(RLIB)" "$S" "$1"; }
+
+@test "3.4(a) a project-hook cancel with no sentinel is one confirmed foreign row naming the command" {
+  TP="$BATS_TEST_TMPDIR/t.jsonl"
+  { cancel_rec 'pnpm exec tsx scripts/unblock-sweep.ts' '' 23100; user_rec; } > "$TP"
+  mksession "$TP"; mkstart desk-brief-inject; mkdone desk-brief-inject 0 1 0
+  scan
+  [ "$(wc -l < "$S/cancels.tsv" | tr -d ' ')" = 1 ]
+  [ "$(cut -f1,3 "$S/cancels.tsv")" = "$(printf 'pnpm exec tsx scripts/unblock-sweep.ts\t23100')" ]
+  [ "$(verdict foreign-1)" = "confirmed pnpm exec tsx scripts/unblock-sweep.ts" ]
+  [ "$(verdict desk-brief-inject)" = cleared ]
+}
+
+@test "3.4(b) rc 0 at 5 s with output owed: possible; a record confirms it, no record clears it" {
+  TP="$BATS_TEST_TMPDIR/t.jsonl"
+  mksession "$TP"; mkstart dod-persist; mkdone dod-persist 0 5 900
+  [ -n "$(possible dod-persist)" ]
+  { cancel_rec '~/.claude/hooks/dod-persist.sh'; user_rec; } > "$TP"
+  scan
+  [ "$(verdict dod-persist)" = confirmed ]
+  user_rec > "$TP"; rm -f "$S/cancels.tsv"
+  scan
+  [ "$(verdict dod-persist)" = cleared ]
+  [ -f "$S/cancels.tsv" ] && [ ! -s "$S/cancels.tsv" ]     # scanned, none
+}
+
+@test "3.4(c) rc 141 is a possible loss, then confirmed or cleared by the transcript" {
+  TP="$BATS_TEST_TMPDIR/t.jsonl"
+  mksession "$TP"; mkstart mailbox-drain; mkdone mailbox-drain 141 0 0
+  [ "$(possible mailbox-drain)" = "exit 141" ]
+  { cancel_rec '~/.claude/hooks/mailbox-drain.sh session-start'; user_rec; } > "$TP"
+  scan; [ "$(verdict mailbox-drain)" = nothing-owed ]       # cancelled, but it owed nothing
+  mkdone mailbox-drain 141 0 120; rm -f "$S/cancels.tsv"
+  scan; [ "$(verdict mailbox-drain)" = confirmed ]
+  user_rec > "$TP"; rm -f "$S/cancels.tsv"
+  scan; [ "$(verdict mailbox-drain)" = cleared ]
+}
+
+@test "3.4(d) resume: a cancel past the stored offset is reported, one before it is ignored" {
+  TP="$BATS_TEST_TMPDIR/t.jsonl"
+  { cancel_rec '~/.claude/hooks/old-hook.sh'; user_rec; } > "$TP"
+  mksession "$TP" "$(wc -c < "$TP" | tr -d ' ')"
+  mkstart desk-brief-inject; mkdone desk-brief-inject 0 1 0
+  { cancel_rec 'bash .claude/hooks/mcp-auth-guard.sh'; user_rec; } >> "$TP"
+  scan
+  [ "$(wc -l < "$S/cancels.tsv" | tr -d ' ')" = 1 ]
+  [ "$(verdict foreign-1)" = "confirmed bash .claude/hooks/mcp-auth-guard.sh" ]
+}
+
+@test "3.4(e) transcript absent: the worker polls to its cap and writes nothing" {
+  mksession "$BATS_TEST_TMPDIR/never.jsonl"; mkstart dod-persist; mkdone dod-persist 143 5 0
+  run bash -c '. "$1"; CC_STARTUP_HEALTH_POLL_S=1 sh_worker "$2"' _ "$(RLIB)" "$SID"
+  [ "$status" -eq 0 ]
+  [ ! -e "$S/cancels.tsv" ]
+  [ ! -e "$S/dod-persist.verdict" ]
+}
+
+@test "3.4 a record older than the start epoch (a fork's copied history, a resume) is ignored" {
+  TP="$BATS_TEST_TMPDIR/t.jsonl"
+  { cancel_rec '~/.claude/hooks/dod-persist.sh' '2026-10-18T11:59:00.000Z'; user_rec; } > "$TP"
+  mksession "$TP"; mkstart dod-persist; mkdone dod-persist 0 1 900
+  scan
+  [ "$(verdict dod-persist)" = cleared ]
+  [ ! -s "$S/cancels.tsv" ]
+}
+
+@test "3.4 a resumed epoch (session.start older than the new .start) reads past the first user record" {
+  TP="$BATS_TEST_TMPDIR/t.jsonl"
+  { user_rec; user_rec; cancel_rec '~/.claude/hooks/dod-persist.sh' '2026-10-18T13:00:06.000Z'; } > "$TP"
+  mksession "$TP"; mkstart dod-persist 202610181300.00; mkdone dod-persist 0 5 900
+  scan
+  [ "$(verdict dod-persist)" = confirmed ]
+}
+
+@test "3.4 an own hook cancelled before its sentinel opened is own (confirmed), never foreign" {
+  TP="$BATS_TEST_TMPDIR/t.jsonl"
+  { cancel_rec '~/.claude/hooks/session-start-dispatch.sh' '' 12004; user_rec; } > "$TP"
+  mksession "$TP"; mkstart desk-brief-inject; mkdone desk-brief-inject 0 1 0
+  scan
+  [ "$(verdict session-start-dispatch)" = confirmed ]
+  [ ! -e "$S/foreign-1.verdict" ]
+}
+
+@test "3.4 the worker scans once per start epoch, and again after a newer .start" {
+  TP="$BATS_TEST_TMPDIR/t.jsonl"; user_rec > "$TP"
+  mksession "$TP"; mkstart desk-brief-inject; mkdone desk-brief-inject 0 1 0
+  bash -c '. "$1"; sh_worker "$2"' _ "$(RLIB)" "$SID"
+  [ -f "$S/cancels.tsv" ]
+  TZ=UTC touch -t 202610181201.00 "$S/cancels.tsv"
+  { cancel_rec '~/.claude/hooks/desk-brief-inject.sh'; user_rec; } > "$TP"
+  bash -c '. "$1"; sh_worker "$2"' _ "$(RLIB)" "$SID"
+  [ "$(verdict desk-brief-inject)" = cleared ]                # current epoch: not rescanned
+  mkstart desk-brief-inject 202610181205.00; mkdone desk-brief-inject 0 1 0
+  { cancel_rec '~/.claude/hooks/desk-brief-inject.sh' '2026-10-18T12:05:06.000Z'; user_rec; } >> "$TP"
+  bash -c '. "$1"; sh_worker "$2"' _ "$(RLIB)" "$SID"
+  [ "$(verdict desk-brief-inject)" = nothing-owed ]           # the new epoch was scanned
+}
+
+@test "3.4 the worker falls back to the payload's transcript path when session.start has none" {
+  TP="$BATS_TEST_TMPDIR/t.jsonl"
+  { cancel_rec '~/.claude/hooks/dod-persist.sh'; user_rec; } > "$TP"
+  mksession ""; mkstart dod-persist; mkdone dod-persist 0 5 900
+  bash -c '. "$1"; sh_worker "$2" "$3"' _ "$(RLIB)" "$SID" "$TP"
+  [ "$(verdict dod-persist)" = confirmed ]
+}
+
+@test "3.4 session-beat's prompt worker writes the verdicts (fixture HOME, no live state)" {
+  TP="$BATS_TEST_TMPDIR/t.jsonl"
+  { cancel_rec '~/.claude/hooks/dod-persist.sh'; user_rec; } > "$TP"
+  mksession "$TP"; mkstart dod-persist; mkdone dod-persist 0 5 900
+  export CC_BEAT_DIR="$BATS_TEST_TMPDIR/beats" CC_BEAT_LOG="$BATS_TEST_TMPDIR/beat.log"
+  printf '{"session_id":"%s","cwd":"/tmp","prompt":"hi","transcript_path":"%s"}' "$SID" "$TP" \
+    | /bin/bash "$REPO/hooks/session-beat.sh" prompt
+  for _ in $(seq 1 150); do [ -f "$S/cancels.tsv" ] && break; sleep 0.2; done
+  [ "$(verdict dod-persist)" = confirmed ]
+}
+

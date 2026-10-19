@@ -93,7 +93,8 @@ if [ "$sync" = 1 ]; then P8_TIMEOUT="${CC_BEAT_TIMEOUT:-3}"; else P8_TIMEOUT="${
 # <ms> is the EVENT's clock, read here in the foreground where boundaries are still in turn order;
 # see ORDER BY EVENT in beat().
 _parsed=$(printf '%s' "$input" | jq -r '
-  ([(.session_id // "" | tostring), (now * 1000 | floor | tostring), (.cwd // "" | tostring)] | @tsv),
+  ([(.session_id // "" | tostring), (now * 1000 | floor | tostring), (.transcript_path // "" | tostring),
+    (.cwd // "" | tostring)] | @tsv),
   (.prompt // "" | tostring)' 2>/dev/null)
 _head="${_parsed%%$'\n'*}"
 prompt=""
@@ -102,8 +103,13 @@ sid="${_head%%$'\t'*}"
 _rest=""
 case "$_head" in *$'\t'*) _rest="${_head#*$'\t'}" ;; esac
 tms="${_rest%%$'\t'*}"
+_rest2=""
+case "$_rest" in *$'\t'*) _rest2="${_rest#*$'\t'}" ;; esac
+# transcript_path: only the startup-health worker reads it (a path never carries a tab or backslash
+# that @tsv would have escaped; a mangled one just fails its -f test and is skipped).
+tp="${_rest2%%$'\t'*}"
 cwd=""
-case "$_rest" in *$'\t'*) cwd="${_rest#*$'\t'}" ;; esac
+case "$_rest2" in *$'\t'*) cwd="${_rest2#*$'\t'}" ;; esac
 [ -n "$sid" ] || exit 0
 # sid is the IDENTITY key, deliberately NOT the pane: tmux panes inherit the server's
 # ITERM_SESSION_ID, so a pane-keyed beat would have N sessions overwrite one row.
@@ -283,9 +289,19 @@ fi
 # The worker: capped_beat in its own process group, stdin, stdout and stderr all /dev/null (see OFF
 # THE PROMPT PATH above). The hook returns as soon as the worker is forked; nothing the worker does
 # can hold this hook's stdout pipe open, so the harness reads EOF at once.
+# STARTUP HEALTH (docs/research/startup-hooks-2026-10-18/README.md §5 unit 3.4): the same worker
+# confirms or clears this session's startup losses from its transcript, once per start epoch
+# (hooks/lib/startup-health.sh sh_worker). Beside the beat, not after it, so a 60 s wait for a
+# transcript Claude Code has not created yet never delays the beat. Builtins until there is work.
+_SH_LIB="${BASH_SOURCE[0]%/*}/lib/startup-health.sh"
 set -m
 (
   set +m
+  if [ "$kind" = prompt ] && [ -f "$_SH_LIB" ]; then
+    # shellcheck source=lib/startup-health.sh disable=SC1091  # runtime-resolved beside this file
+    . "$_SH_LIB" && sh_worker "$sid" "$tp" &
+  fi
   capped_beat
+  wait
 ) </dev/null >/dev/null 2>&1 &
 exit 0
