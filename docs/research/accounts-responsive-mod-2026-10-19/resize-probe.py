@@ -6,6 +6,8 @@ with mods/accounts-readout loaded.
 usage: resize-probe.py <arm: trunk|mod> <repo> <out dir> [--scroll]
   <repo>    whose bin/claude-accounts and hooks/relay-verbatim.sh run (trunk: a `git show
             origin/main:` copy of both; mod: the worktree)
+  PROBE_MOD_DIR (env)  the mod folder to load (default: this checkout's; e.g. the live
+            ~/.claude/mods/accounts-readout link after a converge)
   --scroll  after the readout, have the model reply with 90 lines (a shell command's output
             would be folded into one row) so the readout has left the live screen before the
             resize (the scrollback case)
@@ -35,7 +37,7 @@ CLAUDE = os.path.expanduser("~/.claude-293/node_modules/.bin/claude")
 FIXTURE_BIN = "/tmp/acct-probe/arms/claude-accounts-fixture"
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT_REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))   # this checkout
-MOD_DIR = os.path.join(SCRIPT_REPO, "mods", "accounts-readout")
+MOD_DIR = os.environ.get("PROBE_MOD_DIR") or os.path.join(SCRIPT_REPO, "mods", "accounts-readout")
 WORK = "/tmp/acct-probe/work"
 ROWS, WIDE, NARROW = 60, 160, 40
 SGR = re.compile(r"\x1b\[[0-9;]*m")
