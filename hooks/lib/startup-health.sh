@@ -332,7 +332,11 @@ sh_front() {
   fi
   # Resolved: this epoch is scanned and every verdict above is reported, or no transcript ever
   # came and every hook has had its 3 tries. Either way nothing is left to say until a new .start.
-  if [ "$cur" = 1 ] || [ "$open" = 0 ]; then : > "$d/resolved" 2>/dev/null; fi
+  if [ "$cur" = 1 ] || [ "$open" = 0 ]; then
+    : > "$d/resolved" 2>/dev/null
+    # Nothing is pending any more, so the idle-pane alert file (startup-alert.sh) is emptied too.
+    [ -s "${d%/*}/alerts/$1" ] && : > "${d%/*}/alerts/$1" 2>/dev/null
+  fi
   return 0
 }
 

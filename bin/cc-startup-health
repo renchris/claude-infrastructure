@@ -124,6 +124,10 @@ report_sid() {
     n=$(( n + 1 ))
     printf '  ✗ project hook cancelled — not re-run · re-run it by hand: %s\n' "${v#confirmed }"
   done <<< "$verdicts"
+  if [ -s "$R/alerts/$sid" ]; then
+    echo "  pending idle-pane alerts ($R/alerts/$sid):"
+    sed 's/^/    /' "$R/alerts/$sid"
+  fi
   if [ -s "$d/outbox.txt" ]; then
     echo "  dispatcher outbox (the startup board it built):"
     sed 's/^/    /' "$d/outbox.txt"
@@ -228,6 +232,10 @@ fleet() { # [--ack]
   # Retention first, so a week-old session never re-enters the count.
   find "$R" -mindepth 1 -maxdepth 1 -type d ! -name alerts ! -name '.*' -mtime +"$KEEP_DAYS" \
     -exec rm -rf {} + 2>/dev/null
+  # An idle-pane alert file outlives nothing: drop any whose session dir is gone.
+  for tmp in "$R"/alerts/*; do
+    [ -f "$tmp" ] && [ ! -d "$R/${tmp##*/}" ] && rm -f "$tmp"
+  done
   rows="$R/.fold-rows.$$"
   FOLD_WRITE=1 fold_rows > "$rows"
   if [ "${1:-}" = --ack ]; then

@@ -26,6 +26,8 @@
 #
 # Kill switch: CC_STARTUP_SENTINEL=0.
 
+_SS_LIBDIR="${BASH_SOURCE[0]%/*}"
+
 ss_begin() {
   _SS_ON=0
   [ "${CC_STARTUP_SENTINEL:-1}" = 0 ] && return 0
@@ -61,5 +63,12 @@ ss_end() {
   _SS_ON=0
   printf 'rc=%s\nelapsed_s=%s\nowed=%s\ntimeout_ms=%s\n' "$_rc" "$SECONDS" "${_SS_OWED:-0}" "$_SS_TMO" \
     > "$_SS_DIR/$_SS_HOOK.done" 2>/dev/null || true
+  # A non-zero exit (TERM included) is a possible loss NOW, and an idle pane gets no prompt to hear
+  # it at: leave it in the rolling alert file (hooks/lib/startup-alert.sh, README §5 unit 3.6).
+  if [ "$_rc" != 0 ] && [ -f "$_SS_LIBDIR/startup-alert.sh" ]; then
+    # shellcheck source=startup-alert.sh disable=SC1091
+    . "$_SS_LIBDIR/startup-alert.sh" 2>/dev/null \
+      && sa_alert "${_SS_DIR##*/}" "⚠ startup: $_SS_HOOK may not have delivered (exit $_rc) — confirming"
+  fi
   return 0
 }

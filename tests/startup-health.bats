@@ -469,3 +469,41 @@ PY
   [ "$output" = "$(printf -- '--fleet\nno-file-ok')" ]
 }
 
+# ── 3.6 alert writers (hooks/lib/startup-alert.sh) ───────────────────────────────────────────────
+ALERTS() { printf '%s' "$CC_STARTUP_HEALTH_DIR/alerts/$SID"; }
+
+@test "3.6 a TERMed sentinel leaves its possible-loss line in the rolling alert file" {
+  probe 'sleep 5 & wait $!'
+  bash "$BATS_TEST_TMPDIR/h.sh" & p=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do [ -f "$S/probe-hook.start" ] && break; sleep 0.2; done
+  kill -TERM "$p"; wait "$p" || true
+  [ "$(cat "$(ALERTS)")" = "⚠ startup: probe-hook may not have delivered (exit 143) — confirming" ]
+}
+
+@test "3.6 two faults make one file with two lines; a repeat is not added; a clean exit adds nothing" {
+  probe 'exit 0'; bash "$BATS_TEST_TMPDIR/h.sh"
+  [ ! -e "$(ALERTS)" ]
+  bash -c '. "$1"; sa_alert "$2" "line one"; sa_alert "$2" "line two"; sa_alert "$2" "line one"' \
+    _ "$REPO/hooks/lib/startup-alert.sh" "$SID"
+  [ "$(cat "$(ALERTS)")" = "$(printf 'line one\nline two')" ]
+  [ "$(ls -A "$CC_STARTUP_HEALTH_DIR/alerts")" = "$SID" ]     # no temp or lock left behind
+}
+
+@test "3.6 the front empties the alert file once the session's startup is resolved" {
+  TP="$BATS_TEST_TMPDIR/t.jsonl"; user_rec > "$TP"
+  mksession "$TP"; mkstart mailbox-drain; mkdone mailbox-drain 141 0 0
+  bash -c '. "$1"; sa_alert "$2" "pending line"' _ "$REPO/hooks/lib/startup-alert.sh" "$SID"
+  scan; run front
+  [ -f "$S/resolved" ]
+  [ ! -s "$(ALERTS)" ]
+}
+
+@test "3.6 the report shows pending alerts; the fold drops alert files whose session is gone" {
+  mksession "$BATS_TEST_TMPDIR/never.jsonl"; mkstart dod-persist; mkdone dod-persist 143 5 900
+  bash -c '. "$1"; sa_alert "$2" "pending line"; sa_alert dddd-0 "orphan"' _ "$REPO/hooks/lib/startup-alert.sh" "$SID"
+  run CSH "$SID"
+  printf '%s\n' "$output" | grep -qF 'pending line'
+  CSH --fleet
+  [ -s "$(ALERTS)" ]
+  [ ! -e "$CC_STARTUP_HEALTH_DIR/alerts/dddd-0" ]
+}
