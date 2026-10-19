@@ -13,7 +13,10 @@
 # Exit: 0 clean · 1 findings · 2 no verdict (unreadable file, missing predicate)
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+_p="${BASH_SOURCE[0]}"   # resolve the ~/.claude/scripts symlink first, or `..` is ~/.claude
+while [ -L "$_p" ]; do _d="$(cd "$(dirname "$_p")" && pwd)"; _p="$(readlink "$_p")"
+  case "$_p" in /*) ;; *) _p="$_d/$_p" ;; esac; done
+ROOT="$(cd "$(dirname "$_p")/.." && pwd)"
 PRED="${HOOK_SHEBANG_LINT_PRED:-$ROOT/scripts/hook-interp.py}"
 DEFAULT_FILES=("settings-templates/settings.example.json" "settings-templates/kimi-settings.example.json")
 

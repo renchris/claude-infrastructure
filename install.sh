@@ -1485,6 +1485,7 @@ else
   # post-install ASSERT (read-only): which template hooks are NOT wired in the target (by basename+args)
   if [[ -f "$target_settings" ]]; then
     norm='s#\|[^ ]*/#|#'
+    # shellcheck disable=SC2016  # a jq program, not shell
     hjq='include "hook-cmd-bare"; .hooks|to_entries[]|.key as $e|(.value//[])[]?|(.hooks//[])[]?|"\($e)|\(.command // "" | cmd_bare)"'
     tmpl_h="$(printf '%s' "$clean_tmpl" | jq -L "$REPO_DIR/scripts/lib" -r "$hjq" 2>/dev/null | sed -E "$norm" | sort -u)"
     live_h="$(jq -L "$REPO_DIR/scripts/lib" -r "$hjq" "$target_settings" 2>/dev/null | sed -E "$norm" | sort -u)"
