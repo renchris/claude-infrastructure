@@ -339,14 +339,14 @@ set -m
   set +m
   if [ "$kind" = prompt ] && [ -f "$_SH_LIB" ]; then
     # shellcheck source=lib/startup-health.sh disable=SC1091  # runtime-resolved beside this file
-    . "$_SH_LIB" && sh_worker "$sid" "$tp" &
+    { . "$_SH_LIB" && sh_worker "$sid" "$tp"; } >/dev/null 2>&1 &
   fi
   # The timing fold (hooks/lib/hook-timing-fold.sh): every finished UserPromptSubmit stamp on the box
   # becomes a ledger row here, off the prompt path; each pair is claimed by rename, so two workers
   # never write one row twice.
   if [ "$kind" = prompt ] && [ -f "${BASH_SOURCE[0]%/*}/lib/hook-timing-fold.sh" ]; then
     # shellcheck source=lib/hook-timing-fold.sh disable=SC1091  # runtime-resolved beside this file
-    . "${BASH_SOURCE[0]%/*}/lib/hook-timing-fold.sh" && ht_fold &
+    { . "${BASH_SOURCE[0]%/*}/lib/hook-timing-fold.sh" && ht_fold; } >/dev/null 2>&1 &
   fi
   capped_beat
   wait
