@@ -262,6 +262,60 @@ transcript() { # <sid> <json line…> — a fixture transcript where cc-lr's cfg
   grep -q '"pid":424242' "$MUTEX/holder"
 }
 
+# ── recover --dry-run (2026-10-19, lr-wake H2) ─────────────────────────────────────────────────
+# lr-fire-resume prints `cc-lr recover <sid8>` on a capacity refusal nothing retries; these prove
+# that line, run with --dry-run, keeps every refusal and moves nothing on the admitted arm.
+@test "recover --dry-run on a LIMITED session prints the DRY line, rc 0, no mutex, no fleet, no request" {
+  find_stub 0 "$(row "$SID" 117 LIMITED)"
+  run bash "$LR" recover 117 --target next3 --dry-run
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$output" = "cc-lr: DRY — would recover aaaaaaaa (pane 117, class LIMITED, target next3); nothing was queued or started" ] || { echo "$output"; false; }
+  [ ! -e "$MUTEX" ]
+  [ ! -e "$BATS_TEST_TMPDIR/fleet.argv" ]
+  [ -z "$(find "$REQ" -type f 2>/dev/null)" ]
+}
+
+@test "recover --dry-run REFUSES a session that is not LIMITED with the same rc and text as without it" {
+  find_stub 0 "$(row "$SID" 117 SESSION)"
+  run bash "$LR" recover 117
+  local plain="$output" plain_rc="$status"
+  run bash "$LR" recover 117 --dry-run
+  [ "$status" -eq 2 ] && [ "$plain_rc" -eq 2 ] || false
+  [ "$output" = "$plain" ] || { echo "$output"; false; }
+  [[ "$output" != *"DRY"* ]] || false
+  [ ! -e "$MUTEX" ]
+  [ ! -e "$BATS_TEST_TMPDIR/fleet.argv" ]
+}
+
+@test "recover --dry-run REFUSES a teammate with rc 2" {
+  find_stub 0 "$(row "$SID" 130 TEAMMATE)"
+  run bash "$LR" recover 130 --dry-run
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"lead-owned"* ]] || false
+  [[ "$output" != *"DRY"* ]] || false
+  [ ! -e "$MUTEX" ]
+  [ ! -e "$BATS_TEST_TMPDIR/fleet.argv" ]
+}
+
+@test "recover --dry-run with the reconciler LIVE writes no request: the DRY line comes before the queue" {
+  # Live = recon.on + a fresh heartbeat (lr-recon-fence.sh rules 1 and 4; tests/cc-lr-request.bats).
+  local now; now="$(date +%s)"
+  export LR_RECON_ROOT="$LR_STATE_DIR/recon" LR_RECON_NOW="$now" LR_RECON_WAKETIME=0
+  mkdir -p "$LR_RECON_ROOT/owned"; : > "$LR_STATE_DIR/recon.on"
+  printf '{"pid":1,"progress":7,"progress_wall":%s}' "$now" > "$LR_RECON_ROOT/heartbeat"
+  find_stub 0 "$(row "$SID" 117 LIMITED)"
+  # CONTROL: the same row without --dry-run IS queued, so the fixture really is live.
+  run bash "$LR" recover 117
+  [[ "$output" == *"QUEUED for the reconciler"* ]] || { echo "$output"; false; }
+  rm -f "$REQ/$SID.cc-lr.json"
+  run bash "$LR" recover 117 --dry-run
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == "cc-lr: DRY — would recover aaaaaaaa (pane 117, class LIMITED, target auto);"* ]] || { echo "$output"; false; }
+  [ -z "$(find "$REQ" -type f 2>/dev/null)" ]
+  [ ! -e "$MUTEX" ]
+  [ ! -e "$BATS_TEST_TMPDIR/fleet.argv" ]
+}
+
 @test "recover REFUSES when the mutex is held by a LIVE pid, and fires nothing" {
   mkdir -p "$MUTEX"
   printf '{"sid":"%s","pane":"117","pid":%d,"ts":"t","by":"x"}\n' "$SID" "$$" > "$MUTEX/holder"

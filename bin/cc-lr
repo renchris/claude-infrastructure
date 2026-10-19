@@ -29,7 +29,7 @@
 # alone — never `load`/`unload`/`bootout`/`bootstrap`. tests/cc-lr-front.bats ratchets all of it.
 #
 #   cc-lr find <ref…>                 exec into bin/cc-find, verbatim argv
-#   cc-lr recover <ref> [--target A] [--source-pane P]
+#   cc-lr recover <ref> [--target A] [--source-pane P] [--dry-run]
 #   cc-lr rotate --list [--account A]  READ-ONLY: every session that needs another account, fleet-wide
 #   cc-lr rotate (--all | --account A) [--to B|auto] [--until-idle S] [--wait S]
 #                                     rotate all of them in place, one verdict line per session
@@ -153,9 +153,11 @@ usage() {
 cc-lr — find · recover · status · repair, for a limit-blocked session.
 
   cc-lr find <ref…>          exec bin/cc-find (pane id | sid8 | --tuple | --kw | --limited)
-  cc-lr recover <ref> [--target A] [--source-pane P]
+  cc-lr recover <ref> [--target A] [--source-pane P] [--dry-run]
                              refuse a teammate / an ambiguous ref / a non-limited session,
-                             else take the mutex and fire lr-fleet --one … --detach
+                             else take the mutex and fire lr-fleet --one … --detach.
+                             --dry-run: every refusal as above, then one DRY line; nothing
+                             is queued, locked or started
   cc-lr recover --limited [--account next|next2|next3|next4] [--target A] [--until-idle S]
                              every LIMITED session (optionally one account's), each through
                              the single-ref path above, so each keeps its own refusals. With
@@ -620,7 +622,7 @@ EOF_ROWS
 
 # ── recover ────────────────────────────────────────────────────────────────────────────────────
 cmd_recover() {
-  local ref="" target="auto" pane_arg="" row rc sid pane acct cfg cwd live klass mutex out fpid run
+  local ref="" target="auto" pane_arg="" dry=0 row rc sid pane acct cfg cwd live klass mutex out fpid run
   case " $* " in *" --limited "*)
     local _a=() _x
     for _x in "$@"; do [ "$_x" = --limited ] || _a+=("$_x"); done
@@ -630,6 +632,7 @@ cmd_recover() {
     case "$1" in
       --target) [ $# -ge 2 ] || { usage; exit 3; }; target="$2"; shift 2 ;;
       --source-pane) [ $# -ge 2 ] || { usage; exit 3; }; pane_arg="$2"; shift 2 ;;
+      --dry-run) dry=1; shift ;;
       -h|--help) usage; exit 0 ;;
       --*) echo "cc-lr recover: unknown option $1" >&2; usage; exit 3 ;;
       *) [ -z "$ref" ] || { echo "cc-lr recover: one ref, not two ('$ref' and '$1')" >&2; exit 3; }
@@ -660,6 +663,16 @@ EOF
   [ -n "$CL_HUSK_PANE" ] && [ "$CL_HUSK_PANE" != - ] && pane="$CL_HUSK_PANE"
 
   [ -n "$pane_arg" ] && pane="$pane_arg"
+  # --dry-run stops HERE (2026-10-19, lr-wake H2): every refusal above has run with its own rc and
+  # text, and nothing below is read-only — the queue write, cl_fence_or_refuse (lr_recon_may_act
+  # may take the launch lock and arms an EXIT trap), the mutex and lr-fleet. So it stops before all
+  # of them, whether or not the reconciler is live: the line a capacity refusal prints must be
+  # provable without moving anything.
+  if [ "$dry" -eq 1 ]; then
+    printf 'cc-lr: DRY — would recover %s (pane %s, class %s, target %s); nothing was queued or started\n' \
+      "${sid:0:8}" "${pane:--}" "${klass:-UNKNOWN}" "$target"
+    return 0
+  fi
   # AFTER the three refusals (a teammate or a non-limited sid is no more the reconciler's to drive
   # than ours), BEFORE the mutex: a queued request takes no lock and fires nothing.
   if lr_recon_live; then
