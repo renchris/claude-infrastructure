@@ -377,3 +377,95 @@ CSH() { "$REPO/bin/cc-startup-health" "$@"; }
   printf '%s\n' "$output" | grep -qF 'no startup sentinels for cccccccc-0000'
 }
 
+# ── 3.5 fleet line: cc-startup-health --fleet / --ack and the accounts-board line ─────────────────
+mksid() { # <sid> <hook> <rc> <owed> <transcript-records...> — one settled session, scanned or not
+  local sid="$1" h="$2" rc="$3" owed="$4" tp; shift 4
+  S="$CC_STARTUP_HEALTH_DIR/$sid"; tp="$BATS_TEST_TMPDIR/$sid.jsonl"
+  { for c in "$@"; do cancel_rec "$c"; done; user_rec; } > "$tp"
+  mksession "$tp"; mkstart "$h"; mkdone "$h" "$rc" 5 "$owed"
+  S="$CC_STARTUP_HEALTH_DIR/$SID"
+}
+LINE() { cat "$CC_STARTUP_HEALTH_DIR/fleet-line.txt"; }
+
+@test "3.5 the fold counts losses under ⚠ and deferrals in the plain suffix" {
+  mksid aaaa-1 dod-persist 0 900 '~/.claude/hooks/dod-persist.sh'
+  mksid aaaa-2 mailbox-drain 0 300 '~/.claude/hooks/mailbox-drain.sh session-start'
+  mksid aaaa-3 desk-brief-inject 0 0
+  run CSH --fleet; [ "$status" -eq 0 ]
+  LINE | grep -qE '^⚠ startup losses since ack never \(oldest [0-9]+[mhd]\): 1 — dod-persist 1 · deferred: mailbox-drain 1 · cc-startup-health --ack$'
+  [ -f "$CC_STARTUP_HEALTH_DIR/fleet.stamp" ]
+  [ -f "$CC_STARTUP_HEALTH_DIR/aaaa-1/cancels.tsv" ]          # the fold scanned the unscanned epoch
+}
+
+@test "3.5 a deferral-only state shows no ⚠ line" {
+  mksid aaaa-2 mailbox-drain 0 300 '~/.claude/hooks/mailbox-drain.sh session-start'
+  CSH --fleet
+  [ ! -s "$CC_STARTUP_HEALTH_DIR/fleet-line.txt" ]
+}
+
+@test "3.5 --ack clears only the shown occurrences; a later occurrence raises the line again" {
+  mksid aaaa-1 dod-persist 0 900 '~/.claude/hooks/dod-persist.sh'
+  CSH --fleet; [ -s "$CC_STARTUP_HEALTH_DIR/fleet-line.txt" ]
+  run CSH --ack
+  printf '%s\n' "$output" | grep -qF 'acknowledged 1 occurrence'
+  [ ! -s "$CC_STARTUP_HEALTH_DIR/fleet-line.txt" ]
+  CSH --fleet; [ ! -s "$CC_STARTUP_HEALTH_DIR/fleet-line.txt" ]   # no timer re-raises it
+  mksid aaaa-9 session-start-dispatch 0 400 '~/.claude/hooks/session-start-dispatch.sh'
+  CSH --fleet
+  LINE | grep -qE ': 1 — session-start-dispatch 1 · cc-startup-health --ack$'
+  LINE | grep -qvF 'since ack never'
+}
+
+@test "3.5 an idle pane (no transcript) counts a possible loss from its sentinel; a young start waits" {
+  S="$CC_STARTUP_HEALTH_DIR/aaaa-5"; mksession "$BATS_TEST_TMPDIR/never.jsonl"; mkstart dod-persist; mkdone dod-persist 143 5 900
+  S="$CC_STARTUP_HEALTH_DIR/aaaa-6"; mkdir -p "$S"; : > "$S/dod-persist.start"   # started just now
+  CSH --fleet
+  LINE | grep -qF ': 1 — dod-persist 1 ·'
+}
+
+@test "3.5 retention deletes session dirs older than 7 days" {
+  mksid aaaa-1 dod-persist 0 900 '~/.claude/hooks/dod-persist.sh'
+  TZ=UTC touch -t 202609010000.00 "$CC_STARTUP_HEALTH_DIR/aaaa-1"
+  CSH --fleet
+  [ ! -e "$CC_STARTUP_HEALTH_DIR/aaaa-1" ]
+  [ ! -s "$CC_STARTUP_HEALTH_DIR/fleet-line.txt" ]
+}
+
+board() { # → the accounts-board systemMessage for a fixture board
+  printf 'BOARDBODY\n' > "$BATS_TEST_TMPDIR/board.txt"
+  printf '{"source":"startup","hook_event_name":"SessionStart"}' \
+    | CC_ACCOUNTS_BOARD="$BATS_TEST_TMPDIR/board.txt" "$REPO/hooks/accounts-board.sh" | jq -r '.systemMessage'
+}
+
+@test "3.5 the board: unchanged with no fold files; the line sits above the body; a stale fold is loud" {
+  plain="$(board)"
+  [ "$plain" = BOARDBODY ]
+  mkdir -p "$CC_STARTUP_HEALTH_DIR"; printf '⚠ startup losses since ack never (oldest 2h): 1 — dod-persist 1 · cc-startup-health --ack\n' > "$CC_STARTUP_HEALTH_DIR/fleet-line.txt"
+  : > "$CC_STARTUP_HEALTH_DIR/fleet.stamp"
+  [ "$(board)" = "$(printf '⚠ startup losses since ack never (oldest 2h): 1 — dod-persist 1 · cc-startup-health --ack\nBOARDBODY')" ]
+  : > "$CC_STARTUP_HEALTH_DIR/fleet-line.txt"
+  [ "$(board)" = BOARDBODY ]                                   # nothing unacked: no line
+  TZ=UTC touch -t 202610180000.00 "$CC_STARTUP_HEALTH_DIR/fleet.stamp"
+  board | head -1 | grep -qE '^startup-health fold stale since [0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}$'
+}
+
+@test "3.5 the keepwarm tick runs the fold, bounded, and survives a broken one" {
+  grep -q '_startup_health_fold()' "$REPO/bin/claude-accounts"
+  run python3 - "$REPO/bin/claude-accounts" <<'PY'
+import importlib.machinery, importlib.util, os, sys, types
+src = open(sys.argv[1]).read()
+start = src.index("def _startup_health_fold():")
+end = src.index("\ndef ", start + 10)
+ns = {"os": os, "sys": sys, "subprocess": __import__("subprocess"), "__file__": os.path.join(os.environ["BATS_TEST_TMPDIR"], "claude-accounts")}
+exec(src[start:end], ns)
+tool = os.path.join(os.environ["BATS_TEST_TMPDIR"], "cc-startup-health")
+open(tool, "w").write("#!/bin/sh\necho \"$1\" > \"$BATS_TEST_TMPDIR/fold-called\"\nexit 3\n"); os.chmod(tool, 0o755)
+ns["_startup_health_fold"]()
+print(open(os.path.join(os.environ["BATS_TEST_TMPDIR"], "fold-called")).read().strip())
+ns2 = {"os": os, "sys": sys, "subprocess": __import__("subprocess")}   # exec'd as `python3 -c`: no __file__
+exec(src[start:end], ns2); ns2["_startup_health_fold"](); print("no-file-ok")
+PY
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf -- '--fleet\nno-file-ok')" ]
+}
+

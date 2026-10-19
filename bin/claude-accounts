@@ -10189,6 +10189,29 @@ def render_providers_brief(provs):
     return out
 
 
+def _startup_health_fold():
+    """The keepwarm tick's second job: fold the startup-health fleet line for the accounts board.
+
+    docs/research/startup-hooks-2026-10-18/README.md §5 unit 3.5. `cc-startup-health --fleet` writes
+    ~/.claude/state/startup-health/fleet-line.txt, which hooks/accounts-board.sh only `cat`s, so the
+    fold runs here, off every hook path, on a job that already ticks every 180 s (no new daemon,
+    README §6). Resolved beside this file's REAL path, so it runs the same checkout as this tick and
+    needs no ~/.claude/bin link. Bounded and fully swallowed: a slow or broken fold costs the line
+    (which then reads "fold stale" on the board), never this tick's cache or board.
+    """
+    if os.environ.get("CC_STARTUP_HEALTH_FOLD", "1") == "0":
+        return
+    try:
+        # __file__ is absent when this program is exec'd as `python3 -c` (tests/accounts-board.bats).
+        me = globals().get("__file__") or sys.argv[0]
+        tool = os.path.join(os.path.dirname(os.path.realpath(me)), "cc-startup-health")
+        if os.access(tool, os.X_OK):
+            subprocess.run([tool, "--fleet"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=30, check=False)
+    except Exception:  # noqa: BLE001 — the board line is best-effort by design
+        pass
+
+
 def main():
     args = sys.argv[1:]
     if "-h" in args or "--help" in args:
@@ -10373,6 +10396,7 @@ def main():
               f"age_s={age if age is not None else '-'} "
               f"board={board or 'FAILED'} "
               f"took_ms={int((time.time() - t0) * 1000)}")
+        _startup_health_fold()
         return
 
     if "--relogin-info" in args:

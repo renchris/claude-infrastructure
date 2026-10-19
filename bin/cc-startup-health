@@ -6,13 +6,26 @@
 #                               its sentinel record and its recovery; foreign project hooks the
 #                               harness cancelled, NAMED and never run; the dispatcher's outbox board.
 #                               Without one: the sessions that have anything not delivered.
-# docs/research/startup-hooks-2026-10-18/README.md §5 unit 3.3; gap-G3 (the transcript is the
-# authority).
+#   cc-startup-health --fleet   the off-path fold, run by the keepwarm tick (bin/claude-accounts
+#                               --keepwarm): writes the accounts-board line to $R/fleet-line.txt,
+#                               stamps $R/fleet.stamp, scans any unscanned start epoch, and deletes
+#                               session dirs older than 7 days.
+#   cc-startup-health --ack     acknowledge every occurrence the line counts now. Any LATER
+#                               occurrence raises the line again: clearing is per occurrence
+#                               (<sid>:<hook>:<start-mtime>), never by kind and never on a timer.
+#
+# docs/research/startup-hooks-2026-10-18/README.md §5 units 3.3 and 3.5; gap-G3 (the transcript is
+# the authority), gap-G4 (the fleet line: ~94% of own-hook startup drops happen in panes no person is
+# shown to watch, so a per-pane line alone cannot reach the operator). Losses count under ⚠;
+# deferrals (a mailbox-drain cancel: its mail re-delivers; a cancel of a hook that owed nothing) go
+# in the plain suffix, and alone print no line, so the ⚠ never becomes wallpaper.
 #
 # R=${CC_STARTUP_HEALTH_DIR:-$HOME/.claude/state/startup-health}. bash 3.2-safe; jq for scans only.
 set -uo pipefail
 
 R="${CC_STARTUP_HEALTH_DIR:-$HOME/.claude/state/startup-health}"
+SETTLE_S="${CC_STARTUP_HEALTH_SETTLE_S:-120}"   # a start younger than this may still be running
+KEEP_DAYS="${CC_STARTUP_HEALTH_KEEP_DAYS:-7}"
 
 _self="$0"
 while [ -L "$_self" ]; do
@@ -28,7 +41,14 @@ done
 # shellcheck source=../hooks/lib/startup-health.sh disable=SC1091
 . "$LIB"
 
+now="$(date +%s)"
 mtime() { stat -f %m "$1" 2>/dev/null || echo 0; }
+fmt_age() { # <seconds>
+  if   [ "$1" -lt 3600 ];   then printf '%sm' "$(( $1 / 60 ))"
+  elif [ "$1" -lt 172800 ]; then printf '%sh' "$(( $1 / 3600 ))"
+  else                           printf '%sd' "$(( $1 / 86400 ))"
+  fi
+}
 fmt_t() { date -r "$1" '+%m-%d %H:%M' 2>/dev/null || echo "?"; }
 
 newest_start() { # <dir> → epoch of the newest hook .start (0 if none)
@@ -124,8 +144,119 @@ list_sessions() {
   [ "$any" = 1 ] || echo "no confirmed startup losses under $R"
 }
 
+# ── fleet fold ───────────────────────────────────────────────────────────────────────────────────
+# fold_rows → "<id><TAB><loss|deferred><TAB><label><TAB><start-epoch>" for every occurrence.
+fold_rows() {
+  local d sid ns name v st cls j="$R/.fold-j.$$"
+  for d in "$R"/*/; do
+    d="${d%/}"; sid="${d##*/}"
+    sh_dir "$sid" || continue
+    ns="$(newest_start "$d")"
+    [ "$ns" -gt 0 ] || continue
+    [ $(( now - ns )) -ge "$SETTLE_S" ] || continue
+    [ "${FOLD_WRITE:-0}" = 1 ] && ! sh_current "$d" && sh_write "$d" >/dev/null 2>&1
+    judge_live "$d" > "$j" 2>/dev/null || continue
+    if [ "$JUDGE_SRC" = transcript ]; then
+      while IFS=$'\t' read -r name v; do
+        v="${v%% *}"
+        case "$name" in
+          foreign-*) [ "$v" = confirmed ] && printf '%s:%s:%s\tloss\tproject hook\t%s\n' "$sid" "$name" "$ns" "$ns" ;;
+          *) st="$(mtime "$d/$name.start")"; [ "$st" -gt 0 ] || st="$ns"
+             cls=""
+             case "$v" in
+               confirmed) cls=loss; [ "$name" = mailbox-drain ] && cls=deferred ;;
+               nothing-owed) cls=deferred ;;
+             esac
+             [ -n "$cls" ] && printf '%s:%s:%s\t%s\t%s\t%s\n' "$sid" "$name" "$st" "$cls" "$name" "$st" ;;
+        esac
+      done < "$j"
+    else
+      # No transcript (an idle pane never gets one): the sentinels are the only signal. A possible
+      # loss there is unproven delivery, which counts as a loss (gap-G4 §3 item 4).
+      for name in "$d"/*.start; do
+        [ -e "$name" ] || continue
+        name="${name##*/}"; name="${name%.start}"
+        [ "$name" = session ] && continue
+        sh_possible "$d" "$name"
+        [ -n "$SH_REASON" ] || continue
+        st="$(mtime "$d/$name.start")"
+        cls=loss; [ "$name" = mailbox-drain ] && cls=deferred
+        printf '%s:%s:%s\t%s\t%s\t%s\n' "$sid" "$name" "$st" "$cls" "$name" "$st"
+      done
+    fi
+    rm -f "$j"
+  done
+}
+
+fold_lock() {
+  mkdir "$R/.fold.lock" 2>/dev/null && { printf '%s\n' "$$" > "$R/.fold.lock/pid"; return 0; }
+  local p=""; read -r p < "$R/.fold.lock/pid" 2>/dev/null
+  if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then return 1; fi
+  rm -f "$R/.fold.lock/pid"; rmdir "$R/.fold.lock" 2>/dev/null
+  mkdir "$R/.fold.lock" 2>/dev/null && { printf '%s\n' "$$" > "$R/.fold.lock/pid"; return 0; }
+  return 1
+}
+fold_unlock() { rm -f "$R/.fold.lock/pid"; rmdir "$R/.fold.lock" 2>/dev/null; }
+
+# render <rows-file> → the board line (empty when there is no unacked loss)
+render() {
+  local rows="$1" ack="$R/fleet-ack.txt" at="never"
+  [ -f "$ack" ] && at="$(fmt_t "$(mtime "$ack")")"
+  awk -F'\t' -v now="$now" -v at="$at" -v ackf="$ack" '
+    BEGIN { while ((getline l < ackf) > 0) acked[l] = 1 }
+    ($1 in acked) { next }
+    $2 == "loss"     { L++; lc[$3]++; if (!o || $4 < o) o = $4; if (!($3 in lseen)) { lseen[$3] = 1; lord[++ln] = $3 } }
+    $2 == "deferred" { D++; dc[$3]++; if (!($3 in dseen)) { dseen[$3] = 1; dord[++dn] = $3 } }
+    END {
+      if (!L) exit
+      a = now - o
+      age = (a < 3600) ? int(a / 60) "m" : (a < 172800) ? int(a / 3600) "h" : int(a / 86400) "d"
+      s = "⚠ startup losses since ack " at " (oldest " age "): " L " —"
+      for (i = 1; i <= ln; i++) s = s (i > 1 ? "," : "") " " lord[i] " " lc[lord[i]]
+      if (D) { s = s " · deferred:"; for (i = 1; i <= dn; i++) s = s (i > 1 ? "," : "") " " dord[i] " " dc[dord[i]] }
+      print s " · cc-startup-health --ack"
+    }' "$rows"
+}
+
+fleet() { # [--ack]
+  local rows tmp
+  # No state dir ⇒ no sentinel was ever written on this box: nothing to fold, and creating one here
+  # would put files under a HOME that never ran a hook (the keepwarm suites diff theirs).
+  [ -d "$R" ] || return 0
+  fold_lock || { echo "cc-startup-health: another fold is running" >&2; return 0; }
+  trap 'fold_unlock' EXIT
+  # Retention first, so a week-old session never re-enters the count.
+  find "$R" -mindepth 1 -maxdepth 1 -type d ! -name alerts ! -name '.*' -mtime +"$KEEP_DAYS" \
+    -exec rm -rf {} + 2>/dev/null
+  rows="$R/.fold-rows.$$"
+  FOLD_WRITE=1 fold_rows > "$rows"
+  if [ "${1:-}" = --ack ]; then
+    local before=0 added
+    [ -f "$R/fleet-ack.txt" ] && before="$(wc -l < "$R/fleet-ack.txt" | tr -d ' ')"
+    : >> "$R/fleet-ack.txt"
+    cut -f1 "$rows" | grep -vxFf "$R/fleet-ack.txt" > "$R/.fleet-new.$$"
+    cat "$R/.fleet-new.$$" >> "$R/fleet-ack.txt"; rm -f "$R/.fleet-new.$$"
+    added=$(( $(wc -l < "$R/fleet-ack.txt" | tr -d ' ') - before ))
+    echo "acknowledged $added occurrence(s); a later one raises the line again"
+  fi
+  # Drop acks whose session is gone (retention), so the ack file stays bounded.
+  if [ -f "$R/fleet-ack.txt" ]; then
+    tmp="$R/.fleet-ack.$$"
+    while IFS= read -r a; do [ -d "$R/${a%%:*}" ] && printf '%s\n' "$a"; done < "$R/fleet-ack.txt" > "$tmp"
+    mv -f "$tmp" "$R/fleet-ack.txt"
+  fi
+  tmp="$R/.fleet-line.$$"
+  render "$rows" > "$tmp" && mv -f "$tmp" "$R/fleet-line.txt"
+  : > "$R/fleet.stamp"
+  rm -f "$rows" "$tmp"
+  [ "${1:-}" = --ack ] || [ ! -s "$R/fleet-line.txt" ] || cat "$R/fleet-line.txt"
+  return 0
+}
+
 case "${1:-}" in
-  -h|--help) sed -n '2,12p' "$_self" | sed 's/^# \{0,1\}//' ;;
+  --fleet) fleet ;;
+  --ack)   fleet --ack ;;
+  -h|--help) sed -n '2,24p' "$_self" | sed 's/^# \{0,1\}//' ;;
   "")      list_sessions ;;
   -*)      echo "cc-startup-health: unknown flag $1 (see --help)" >&2; exit 2 ;;
   *)       report_sid "$1" ;;

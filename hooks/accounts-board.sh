@@ -82,7 +82,7 @@ producer_state() {
 }
 
 emit() {  # <message> → the ONE sanctioned channel, top-level, never nested, never additionalContext
-  jq -nc --arg m "${DL_BANNER:-}$1" '{systemMessage:$m}' 2>/dev/null || true
+  jq -nc --arg m "${DL_BANNER:-}${SH_FLEET:-}$1" '{systemMessage:$m}' 2>/dev/null || true
   exit 0
 }
 
@@ -130,6 +130,30 @@ dl_banner() {
 # the board's whole value, which is that its appearance means something.
 src="$(printf '%s' "$input" | jq -r '.source // ""' 2>/dev/null || true)"
 [ "$src" = "compact" ] && exit 0
+
+# ── STARTUP-HEALTH FLEET LINE (docs/research/startup-hooks-2026-10-18/README.md §5 unit 3.5) ───────
+# One `cat` of the line `cc-startup-health --fleet` folds off the hook path on every keepwarm tick:
+# startup hook losses since the operator's last `cc-startup-health --ack` (gap-G4: ~94% of own-hook
+# startup drops happen in panes no person is shown to watch, so this board is how they reach one).
+# Prefixed to EVERY emit below, outside the staleness bands: a loss count is not a rolling quota, so
+# withholding a stale board's numbers must not withhold it. A fold older than 2 ticks (keepwarm runs
+# every 180 s) says so instead of vanishing. Neither file present ⇒ the fold never ran here, and
+# every output below is byte-identical to the board without this block.
+sh_fleet() {
+  local r="${CC_STARTUP_HEALTH_DIR:-$HOME/.claude/state/startup-health}" m
+  [ -e "$r/fleet.stamp" ] || [ -e "$r/fleet-line.txt" ] || return 0
+  m="$(stat -f %m "$r/fleet.stamp" 2>/dev/null || echo 0)"
+  if [ $(( $(date +%s) - m )) -gt "${CC_STARTUP_FLEET_STALE_S:-360}" ]; then
+    if [ "$m" -gt 0 ]; then printf 'startup-health fold stale since %s\n' "$(date -r "$m" '+%m-%d %H:%M')"
+    else printf 'startup-health fold stale since never\n'; fi
+    return 0
+  fi
+  [ -s "$r/fleet-line.txt" ] && printf '%s\n' "$(cat "$r/fleet-line.txt")"
+  return 0
+}
+SH_FLEET="$( (sh_fleet) 2>/dev/null || true)"
+[ -n "$SH_FLEET" ] && SH_FLEET="$SH_FLEET
+"
 
 DL_BANNER="$( (dl_banner) 2>/dev/null || true)"
 [ -n "$DL_BANNER" ] && DL_BANNER="$DL_BANNER
