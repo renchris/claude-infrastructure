@@ -60,17 +60,40 @@ producer_funcs() {
   [ "$(cat "$BATS_TEST_TMPDIR/ran-with")" = "$TARGET_CFG" ]
 }
 
-@test "resume, transplant and remote recycles NEVER stage — their rails run in the watcher first" {
+@test "a plain remote recycle NEVER stages; a transplant stages the fresh form (Wave S)" {
   producer_funcs
-  RESUME_LAUNCHER=/tmp/lr-launch.sh run hf_succ_stage /dev/ttys013 "$BASE"
-  [ "$status" -eq 1 ]; [[ "$output" == *"resume recycle"* ]] || { echo "$output"; false; }
-  RCY_TRANSPLANTED_SOURCE=1 run hf_succ_stage /dev/ttys013 "$BASE"
-  [ "$status" -eq 1 ]; [[ "$output" == *"transplant recycle"* ]] || { echo "$output"; false; }
-  RCY_TRANSPLANT_CAUSE=voluntary run hf_succ_stage /dev/ttys013 "$BASE"
-  [ "$status" -eq 1 ]
   RCY_REMOTE=1 run hf_succ_stage /dev/ttys013 "$BASE"
   [ "$status" -eq 1 ]; [[ "$output" == *"remote recycle"* ]] || { echo "$output"; false; }
   [ ! -e "$CC_PANE_SUCCESSOR_DIR/ttys013.cmd" ] || { ls -la "$CC_PANE_SUCCESSOR_DIR"; false; }
+  # A transplant with no resume launcher relaunches a fresh brief: the typed path runs no rails for it
+  # (no sid to lock, no stub to fold), so its stage is the fresh one, marked transplant.
+  RCY_TRANSPLANTED_SOURCE=1 run hf_succ_stage /dev/ttys013 "$BASE"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -qx "export CLAUDE_CONFIG_DIR=$TARGET_CFG" "$CC_PANE_SUCCESSOR_DIR/ttys013.cmd"
+  [ "$(jq -r .mode "$CC_PANE_SUCCESSOR_DIR/ttys013.json")" = transplant ]
+}
+
+# Wave S (docs/research/lr-wake-incident-2026-10-18/REPORT.md §4). RED on origin/main: a resume
+# recycle refused to stage ("resume recycle — not staged"), so every move typed its relaunch.
+@test "a resume recycle STAGES its launcher behind the rails: fold, launch lock, holders run in the pane first" {
+  producer_funcs
+  # shellcheck disable=SC2034  # read by the sourced hf_succ_stage through dynamic scope
+  RESUME_LAUNCHER=/tmp/lr-launch.sh RESUME_CFG="$TARGET_CFG" RCY_SOURCE_SESSION=2e9ed9f2-0000-4000-8000-000000000001 \
+    RCY_SRC_TX=/src/projects/-x/2e9ed9f2.jsonl HF_LAUNCH_REC=rec-1 HF_LAUNCH_ATT=2 HF_DIR="$REPO/scripts" HF_SELF="$HF" \
+    run hf_succ_stage /dev/ttys013 "$BASE"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  local c="$CC_PANE_SUCCESSOR_DIR/ttys013.cmd"
+  [ "$(jq -r .mode "$CC_PANE_SUCCESSOR_DIR/ttys013.json")" = resume ]
+  # The rails line names the real script, the verdict file beside the cmdfile, and the typed path's sid.
+  head -n 1 "$c" | grep -q "^if bash $REPO/scripts/handoff-fire.sh __succ-rails --verdict $BASE.rails --sid 2e9ed9f2-0000-4000-8000-000000000001 " \
+    || { cat "$c"; false; }
+  head -n 1 "$c" | grep -q -- "--src-tx /src/projects/-x/2e9ed9f2.jsonl --watcher-pid $$ --record-id rec-1 --attempt 2 --launch-lock on --fold-stub on; then$" \
+    || { cat "$c"; false; }
+  sed -n 2p "$c" | grep -qxF -- "$CMD" || { cat "$c"; false; }
+  sed -n 3p "$c" | grep -qx fi || { cat "$c"; false; }
+  # No account export: the launcher pins its own, exactly as the typed line carries none.
+  ! grep -q CLAUDE_CONFIG_DIR= "$c" || { cat "$c"; false; }
+  grep -q '"class":"recycle-successor-staged"' "$HOME/.claude/logs/handoffs.jsonl"
 }
 
 @test "an absent lib or no target config dir is one line and the typed path — never a failed recycle" {
@@ -222,4 +245,98 @@ sends() { grep -c '^session send' "$HOME/it2-calls.log" 2>/dev/null || true; }
   await_watcher 100 || { kill "$WPID" 2>/dev/null; echo "the watcher waited out a grace with nothing staged"; cat "$WOUT"; false; }
   ! grep -q 'successor' "$WOUT" || { cat "$WOUT"; false; }
   grep -q 'lr-launch-succ.sh' "$HOME/it2-calls.log"
+}
+
+# ── WAVE S: A RESUME STAGE RUNS ITS RAILS IN THE PANE, AND THE WATCHER READS THEIR VERDICT ─────────
+# docs/research/lr-wake-incident-2026-10-18/REPORT.md §4 Wave S. The watcher is a resume-mode
+# __recycle ($10 target cfg, $11 the resumed sid, $13 the source transcript); the stage is the REAL
+# producer's, so its .cmd runs the REAL `handoff-fire.sh __succ-rails` when the test, as the pane's
+# consumer, sources it. lr-transplant and lr-lib are stubs that log; the launch lock lives under the
+# test dir. RED on origin/main: a resume recycle refused to stage, so there was nothing to claim.
+resume_world() {
+  watcher_world
+  RSID_S="2e9ed9f2-0000-4000-8000-000000000001"
+  RCFG="$BATS_TEST_TMPDIR/cfg-next3"; mkdir -p "$RCFG"
+  SRCD="$BATS_TEST_TMPDIR/cfg-next4/projects/-x"; mkdir -p "$SRCD"
+  SRCTX="$SRCD/$RSID_S.jsonl"
+  # The re-created stub beside its retired record: the fold has something to do.
+  printf '{"type":"system"}\n' > "$SRCTX"; printf '{"type":"assistant"}\n' > "$SRCTX.handed-off"
+  export RAILS_LOG="$BATS_TEST_TMPDIR/rails.log"; : > "$RAILS_LOG"
+  printf '#!/usr/bin/env bash\nprintf "transplant %%s\\n" "$*" >> "$RAILS_LOG"\nexit 0\n' > "$BATS_TEST_TMPDIR/lr-transplant.sh"
+  printf 'lr_holder_count() { printf "holders %%s\\n" "$1" >> "$RAILS_LOG"; printf "%%s" "${STUB_HOLDERS:-0}"; }\n' > "$BATS_TEST_TMPDIR/lr-lib.sh"
+  chmod +x "$BATS_TEST_TMPDIR/lr-transplant.sh"
+  export HF_LR_TRANSPLANT="$BATS_TEST_TMPDIR/lr-transplant.sh" HF_LR_LIB="$BATS_TEST_TMPDIR/lr-lib.sh"
+  export LR_LOCKS_DIR="$BATS_TEST_TMPDIR/locks"
+  printf 'touch %q\n' "$MARK" > "$WCMDF"
+}
+
+start_resume_watcher() { # → WPID; resume mode, the stub tooling inherited
+  WOUT="$BATS_TEST_TMPDIR/watcher.out"
+  PATH="$WSHIM:$PATH" IT2_BIN="$HOME/.claude/bin/it2" \
+    HF_RECYCLE_SHELL_WAIT_S=60 CC_RECYCLE_CLAIM_GRACE_S=20 CC_RECYCLE_RAILS_WAIT_S=30 \
+    CC_RECYCLE_TYPE_DEADLINE_S=0 FIRE_TYPE_ATTEMPTS=1 FIRE_TYPE_SETTLE=0 FIRE_TYPE_PRESETTLE=0 \
+    RCY_BOOT_WAIT_S=1 RCY_BOOT_STALE_S=2 RCY_BOOT_IVL_S=0.2 RCY_BOOT_SLOW_IVL_S=1 RCY_BOOT_PANE_EVERY=2 \
+    RCY_ENGAGE_TIMEOUT=2 \
+    bash "$HF" __recycle SUCC-PANE "$WTTY" "$WCMDF" /tmp "" "" "" "" "$RCFG" "$RSID_S" "" "$SRCTX" > "$WOUT" 2>&1 3>&- &
+  WPID=$!
+}
+
+stage_resume_for_watcher() { # the REAL producer, for the watcher's real pid
+  local i=0
+  until grep -q '^→ armed:' "$WOUT" 2>/dev/null; do
+    i=$((i + 1)); [ "$i" -le 300 ] || { echo "watcher never armed"; cat "$WOUT"; return 1; }
+    sleep 0.1
+  done
+  sleep 1
+  producer_funcs
+  # shellcheck disable=SC2034  # read by the sourced hf_succ_stage through dynamic scope
+  WATCHER_PID="$WPID" RESUME_LAUNCHER=/tmp/lr-launch.sh RESUME_CFG="$RCFG" RCY_SOURCE_SESSION="$RSID_S" \
+    RCY_SRC_TX="$SRCTX" HF_LAUNCH_REC=rec-s HF_LAUNCH_ATT=1 HF_DIR="$REPO/scripts" HF_SELF="$HF" CMD="$(cat "$WCMDF")" \
+    hf_succ_stage "$WTTY" "$WCMDF" >/dev/null
+}
+
+consume() { # the pane's consumer: take the stage and source it, as the successor loop does
+  local claimed
+  claimed="$(CC_PANE_SUCCESSOR_TTY=ttys999 bash -c '. "$1"; cc_pane_successor_take ttys999' _ "$CC_PANE_SUCCESSOR_LIB")" \
+    || { echo "the consumer could not take the stage"; ls -la "$CC_PANE_SUCCESSOR_DIR"; cat "$WOUT"; return 1; }
+  bash -c '. "$1"' _ "$claimed" || true
+}
+
+@test "Wave S: a claimed resume stage runs fold, launch lock and holders in the pane, then the launcher — zero sends, ONE fold" {
+  resume_world
+  start_resume_watcher
+  stage_resume_for_watcher
+  rm -f "$HOME/pane-cc"                                  # the predecessor exits
+  consume; : > "$HOME/pane-cc"
+  await_watcher 120 || { kill "$WPID" 2>/dev/null; cat "$WOUT"; false; }
+  [ -f "$MARK" ] || { echo "the launcher never ran"; cat "$WOUT"; cat "$RAILS_LOG"; false; }
+  [ "$(cat "$WCMDF.rails")" = ok ] || { cat "$WCMDF.rails"; false; }
+  grep -q 'successor rails passed in the pane' "$WOUT" || { cat "$WOUT"; false; }
+  [ "$(sends)" = 0 ] || { echo "sent $(sends) keystroke(s)"; cat "$HOME/it2-calls.log"; cat "$WOUT"; false; }
+  # The fold ran exactly once — in the pane — and the watcher, seeing the stage, deferred its own.
+  [ "$(grep -c -- '--phase fold-stub' "$RAILS_LOG")" = 1 ] || { cat "$RAILS_LOG"; cat "$WOUT"; false; }
+  grep -q "holders $RSID_S" "$RAILS_LOG" || { cat "$RAILS_LOG"; false; }
+  ! grep -q 'recycle-held-' "$HOME/.claude/logs/handoffs.jsonl" || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+}
+
+@test "Wave S: a foreign live launch-lock holder holds the claimed stage — nothing starts, the watcher raises the held row" {
+  resume_world
+  # Another actuator relaunching the same session holds its lock (a live pid, another record).
+  sleep 300 >/dev/null 2>&1 3>&- & local foreign=$!
+  mkdir -p "$LR_LOCKS_DIR/$RSID_S.launch"
+  printf '{"record_id":"other","attempt":1,"role":"relaunch-at-shell","pid":%s,"lstart":"%s","at":1.0}\n' "$foreign" \
+    "$(TZ=UTC LC_ALL=C /bin/ps -o lstart= -p "$foreign" | tr -s ' ' | sed 's/^ *//; s/ *$//')" > "$LR_LOCKS_DIR/$RSID_S.launch/holder"
+  start_resume_watcher
+  stage_resume_for_watcher
+  rm -f "$HOME/pane-cc"
+  consume
+  await_watcher 120 || { kill "$WPID" "$foreign" 2>/dev/null; cat "$WOUT"; false; }
+  kill "$foreign" 2>/dev/null || true
+  [ ! -f "$MARK" ] || { echo "the launcher ran under a foreign lock"; cat "$WOUT"; false; }
+  [ "$(cut -f1 "$WCMDF.rails")" = held-launch-lock ] || { cat "$WCMDF.rails"; false; }
+  grep -q "HELD at the successor's rails: the launch lock" "$WOUT" || { cat "$WOUT"; false; }
+  grep -q '"class":"recycle-held-launch-lock"' "$HOME/.claude/logs/handoffs.jsonl" || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
+  [ "$(sends)" = 0 ] || { echo "sent $(sends) keystroke(s)"; cat "$HOME/it2-calls.log"; false; }
+  # The foreign holder's lock is untouched.
+  grep -q '"record_id":"other"' "$LR_LOCKS_DIR/$RSID_S.launch/holder"
 }

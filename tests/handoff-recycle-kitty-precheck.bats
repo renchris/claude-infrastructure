@@ -299,6 +299,8 @@ teardown() {
 # readable in the precheck. The verb is driven to its terminal step: a registry row, a limited
 # transcript, an empty team census; CC_TERM=kitty (setup) resolves the terminal with no socket call.
 # RED on the unfixed tree: the probe went on to read the pane and answered REFUSED:pane:unknown.
+# A TYPED relaunch is pinned with CC_PANE_SUCCESSOR=off since Wave S: with the successor lib on, an
+# in-place move stages its relaunch, and that case is the "staged" one below, which is not held.
 probe() { # $@=extra env
   local cfg="$BATS_TEST_TMPDIR/cfg/projects/-some-repo" psid="a1b2c3d4-0000-4000-8000-000000000001"
   mkdir -p "$BATS_TEST_TMPDIR/reg" "$cfg"
@@ -314,11 +316,21 @@ probe() { # $@=extra env
 
 @test "K3 a typed relaunch over the load bound: HELD:load at the precheck, rc 3, before kitty or the pane is read" {
   netstat_capture 0
-  probe HF_PRECHECK_TYPED_RELAUNCH=1 CC_FIRE_CAPACITY_GATE=on HF_LOAD_PER_CORE=30
+  probe HF_PRECHECK_TYPED_RELAUNCH=1 CC_PANE_SUCCESSOR=off CC_FIRE_CAPACITY_GATE=on HF_LOAD_PER_CORE=30
   [ "$status" -eq 3 ] || { echo "status=$status $output"; false; }
   [[ "$output" == *"load: 30/core is above the 20/core bound"* ]] || { echo "$output"; false; }
   [ "$(printf '%s\n' "$output" | sed -n 's/^verdict: //p')" = HELD:load ] || { echo "$output"; false; }
   [[ "$output" != *"kitty_probe:"* && "$output" != *"pane_state:"* ]] || { echo "read past the hold: $output"; false; }
+}
+
+# WAVE S (docs/research/lr-wake-incident-2026-10-18/REPORT.md §4): lr-handoff says "typed" for every
+# in-place move, but the move now stages a keystroke-free successor, which the /exit-time gate lets
+# through at any load; so the precheck does not hold it either. RED on origin/main (9c392dbc8): HELD:load.
+@test "Wave S: an in-place move whose relaunch is STAGED is not load-gated at the precheck, even at 30/core" {
+  netstat_capture 128
+  probe HF_PRECHECK_TYPED_RELAUNCH=1 CC_FIRE_CAPACITY_GATE=on HF_LOAD_PER_CORE=30
+  [[ "$output" == *"load: not gated (the relaunch is staged in the pane, keystroke-free)"* ]] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | sed -n 's/^verdict: //p')" = HELD:wedged ] || { echo "$output"; false; }
 }
 
 @test "K3 CONTROL: the same load without HF_PRECHECK_TYPED_RELAUNCH reads no load verdict; a deaf socket is HELD:unreachable there" {
@@ -333,7 +345,7 @@ probe() { # $@=extra env
 
 @test "K3 a typed relaunch under the bound proceeds past load; a STUCK socket is HELD:wedged at the precheck" {
   netstat_capture 128
-  probe HF_PRECHECK_TYPED_RELAUNCH=1 CC_FIRE_CAPACITY_GATE=on HF_LOAD_PER_CORE=3
+  probe HF_PRECHECK_TYPED_RELAUNCH=1 CC_PANE_SUCCESSOR=off CC_FIRE_CAPACITY_GATE=on HF_LOAD_PER_CORE=3
   [ "$status" -eq 3 ] || { echo "status=$status $output"; false; }
   [[ "$output" == *"load: 3/core (bound 20/core)"* ]] || { echo "$output"; false; }
   [ "$(printf '%s\n' "$output" | sed -n 's/^verdict: //p')" = HELD:wedged ] || { echo "$output"; false; }
@@ -348,11 +360,11 @@ probe() { # $@=extra env
 # RED on origin/main (2a636f1b8): 7.36/core passed the precheck there.
 @test "K7 [RED] a load between the bounds (22/core) holds at the precheck (20/core); the precheck bound is tunable but never above the commit's" {
   netstat_capture 128
-  probe HF_PRECHECK_TYPED_RELAUNCH=1 CC_FIRE_CAPACITY_GATE=on HF_LOAD_PER_CORE=22
+  probe HF_PRECHECK_TYPED_RELAUNCH=1 CC_PANE_SUCCESSOR=off CC_FIRE_CAPACITY_GATE=on HF_LOAD_PER_CORE=22
   [ "$status" -eq 3 ] || { echo "status=$status $output"; false; }
   [[ "$output" == *"load: 22/core is above the 20/core bound"* ]] || { echo "$output"; false; }
   [ "$(printf '%s\n' "$output" | sed -n 's/^verdict: //p')" = HELD:load ] || { echo "$output"; false; }
-  probe HF_PRECHECK_TYPED_RELAUNCH=1 CC_FIRE_CAPACITY_GATE=on HF_LOAD_PER_CORE=22 HF_PRECHECK_LOAD_PER_CORE=30
+  probe HF_PRECHECK_TYPED_RELAUNCH=1 CC_PANE_SUCCESSOR=off CC_FIRE_CAPACITY_GATE=on HF_LOAD_PER_CORE=22 HF_PRECHECK_LOAD_PER_CORE=30
   [[ "$output" == *"load: 22/core (bound 24/core)"* ]] || { echo "a precheck bound above the commit's was not capped: $output"; false; }
   [ "$(printf '%s\n' "$output" | sed -n 's/^verdict: //p')" = HELD:wedged ] || { echo "$output"; false; }
 }

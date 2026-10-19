@@ -14,8 +14,12 @@
 #   · stage  <tty> <cmdfile> <meta.json> — producer; removes any old <key>.cmd, then writes <key>.json
 #     then <key>.cmd, each tmp + mv, both carrying one fresh NONCE (meta `.nonce`; the .cmd's last line
 #     `# cc-pane-successor-nonce: <n>`). The .cmd is self-sufficient (cd, explicit CLAUDE_CONFIG_DIR,
-#     account pin, full launch line).
-#     meta = {pane, pane_tty, pred_sid, watcher_pid, watcher_lstart, created_epoch, ttl_s, mode, token}.
+#     account pin, full launch line). A resume or transplant stage (mode `resume`, lr-wake Wave S)
+#     instead wraps its launcher in `if bash handoff-fire.sh __succ-rails …; then …; fi`: the fold,
+#     launch-lock and holder rails run here, at the claim, and a refusal starts nothing. The launcher
+#     pins its own account, so that form exports no CLAUDE_CONFIG_DIR.
+#     meta = {pane, pane_tty, pred_sid, watcher_pid, watcher_lstart, created_epoch, ttl_s, mode, token};
+#     mode is fresh, resume or transplant.
 #   · take   [tty] — consumer; claims with `mv <key>.cmd <key>.claimed.<pid>` and prints that path.
 #     THE RENAME IS THE ACK: the watcher learns the outcome by whether its revoke finds the file.
 #   · revoke <tty> — producer; `mv <key>.cmd <key>.revoked`. rc != 0 means the consumer won.

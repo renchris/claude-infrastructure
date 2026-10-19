@@ -3898,6 +3898,10 @@ hf_recycle_last_read() { # → 0 every read clean · 1 refused (HF_LR_REASON, HF
   if [ "$rc" != 0 ]; then
     HF_LR_REASON=bg-work; HF_LR_WHAT="${HF_BG_HOLD:-held}"; return 1
   fi
+  # This read proved the transcript at rest (or limited with no turn it can answer) and found no job
+  # but an inbox watcher, after the confirm: the one fact the signal exit needs and that an unfocused
+  # move had nowhere else (hf_exit_signal; Wave S). Any job holds above, so no SIGTERM can reach it.
+  RCY_REST_PROVEN=1
   return 0
 }
 
@@ -3950,9 +3954,11 @@ hf_exit_readback() { # $1=pane → 0 exact /exit read back and CR sent · 1 not 
 # a SIGINT exits 0, which rr_close_on_clean_exit reads as a clean exit and closes the pane on.
 # It runs ONLY when all three facts hold; otherwise the typed path runs exactly as before:
 #   (1) the last rest read proved the transcript at rest (RCY_REST_PROVEN): a signal mid-turn kills
-#       the turn, and an in-turn self-recycle never has that proof;
+#       the turn, and an in-turn self-recycle never has that proof. A move's proof is
+#       hf_recycle_last_read's, which holds first on any background job but an inbox watcher;
 #   (2) OUR successor is staged for the pane's tty: the stage relaunches on claude's exit with no
-#       keystroke; without one, the watcher's typed rails are what this pane was armed for;
+#       keystroke (a resume or transplant stage runs its rails first, Wave S); without one, the
+#       watcher's typed rails are what this pane was armed for;
 #   (3) exactly one claude is pinned (hf_exit_signal_pin), and its start time is re-read right
 #       before the signal, so a reused pid is never the one signalled.
 # A claude still running after HF_EXIT_SIGNAL_GRACE_S gets no KILL: the caller holds, and says the
@@ -4092,8 +4098,8 @@ hf_recycle_subject_yield() { # $1=where the tail noticed → 0 always: one row, 
 # that load and the point of no return. recycle_fire_commit holds before either exit actuator when
 # BOTH hold:
 #   (1) load per core is above the bound, and
-#   (2) no successor of ours is staged for the pane's tty, so the relaunch will be typed: resume,
-#       transplant and remote recycles never stage, and a fresh one whose stage was refused types too.
+#   (2) no successor of ours is staged for the pane's tty, so the relaunch will be typed: a plain
+#       remote recycle never stages, and any recycle whose stage was refused types too.
 # A staged successor is claimed by a local rename, which load delays but cannot fail, so it proceeds
 # at any load, and its load is never read. The bound is per core, so it scales with hw.ncpu the way
 # ship-land's derived ceiling (hw.ncpu × CC_GATE_MAX_LOAD_PER_CORE) does, from the same factor.
@@ -4706,8 +4712,15 @@ it2_type_verified() { # $1=it2-bin $2=session-id $3=command → 0 verified+submi
 # process regains the pane's tty when claude exits (lr-fire-resume's fall-through, reso-resume-one,
 # cc-close-attrib) RUNS it: delivery is a local rename, which load can delay but cannot fail. The
 # watcher decides by claim-or-revoke — a claim skips the typing, a revoke that wins falls back to the
-# §D2 typed path. Resume, transplant and remote recycles never stage: their fold, launch-lock and
-# holder rails must run before anything starts, and only the watcher runs them.
+# §D2 typed path.
+# RESUME AND TRANSPLANT RECYCLES STAGE TOO (lr-wake 2026-10-18, REPORT.md Wave S). They used to type,
+# because their fold, launch-lock and holder rails must run before anything starts and only the
+# watcher ran them; so every move typed /exit and its relaunch, held at the load bound, and
+# stranded under load. Now the staged .cmd runs those rails itself, in the pane, when it is claimed
+# (hf_succ_rails, the `__succ-rails` verb): fold the re-created source stub, take the session's launch
+# lock for the watcher, read H(sid) = 0 under it, and only then start the launcher. Their verdict goes
+# to `<cmdfile>.rails`, where the watcher reads it and raises the same held rows the typed path would.
+# A plain remote recycle (no launcher, no transplant) still never stages.
 hf_succ_lib_load() { # → 0 when lib/pane-successor.sh's verbs are defined (sourced once)
   local c
   command -v cc_pane_successor_stage >/dev/null 2>&1 && return 0
@@ -4730,29 +4743,143 @@ hf_succ_mode() { # → fresh|resume|transplant|remote — the recycle shape that
 # $1=pane tty $2=the typed-path cmdfile (its sibling files carry the stage) → 0 staged · 1 not staged.
 # Never fails a recycle: every refusal is one line and the typed path stays armed in the watcher.
 hf_succ_stage() {
-  local tty="$1" base="$2" mode cfg wl sc mj tok
+  local tty="$1" base="$2" mode cfg wl sc mj tok rsid=""
   mode="$(hf_succ_mode)"
-  if [ "$mode" != fresh ]; then echo "→ successor: $mode recycle — not staged; the watcher types the relaunch after its rails"; return 1; fi
+  if [ "$mode" = remote ]; then echo "→ successor: remote recycle — not staged; the watcher types the relaunch after its rails"; return 1; fi
   if [ "${CC_PANE_SUCCESSOR:-on}" = off ]; then echo "→ successor: CC_PANE_SUCCESSOR=off — not staged; typed relaunch"; return 1; fi
   if ! hf_succ_lib_load; then echo "⚠ successor: lib/pane-successor.sh not found — not staged; typed relaunch" >&2; return 1; fi
-  # The TARGET account's config dir, from the launcher $CMD runs — never the consumer's env, which is
-  # the predecessor's (the pane-44 line carried no CLAUDE_CONFIG_DIR and would have inherited it).
-  cfg="$(config_dir_for_launcher "$LAUNCHER" 2>/dev/null || true)"
-  if [ -z "$cfg" ]; then echo "⚠ successor: no config dir for launcher '$LAUNCHER' — not staged; typed relaunch" >&2; return 1; fi
+  if [ "$mode" = resume ]; then
+    # The launcher pins its own account (lr-fire-resume spawns claude with CLAUDE_CONFIG_DIR=<cfg>),
+    # so the .cmd exports none, exactly as the typed line carries none. The sid is the one the
+    # watcher would lock before typing ($11 of __recycle).
+    cfg="${RESUME_CFG:-}"
+    rsid="${RCY_SOURCE_SESSION:-${rcy_old_sid:-}}"
+  else
+    # The TARGET account's config dir, from the launcher $CMD runs — never the consumer's env, which is
+    # the predecessor's (the pane-44 line carried no CLAUDE_CONFIG_DIR and would have inherited it).
+    cfg="$(config_dir_for_launcher "$LAUNCHER" 2>/dev/null || true)"
+    if [ -z "$cfg" ]; then echo "⚠ successor: no config dir for launcher '$LAUNCHER' — not staged; typed relaunch" >&2; return 1; fi
+  fi
   wl="$(TZ=UTC LC_ALL=C ps -o lstart= -p "${WATCHER_PID:-}" 2>/dev/null | tr -s ' ' | sed 's/^ *//; s/ *$//' || true)"
   if [ -z "$wl" ]; then echo "⚠ successor: watcher ${WATCHER_PID:-?} has no readable start time — not staged; typed relaunch" >&2; return 1; fi
   sc="$base.succ"; mj="$base.succ.json"; tok="hfs-$$-${RANDOM:-0}-$(date +%s)"
-  { printf 'export CLAUDE_CONFIG_DIR=%q\n' "$cfg"
-    printf 'export CC_ACCOUNT_PINNED=1\n'
-    printf '%s\n' "$CMD"; } > "$sc" 2>/dev/null \
+  rm -f "$base.rails" 2>/dev/null || true
+  { if [ "$mode" = resume ]; then
+      # The rails run in the pane, at the claim, before the launcher (hf_succ_rails). A refusal
+      # starts nothing and leaves the pane at its shell; the watcher reads why from $base.rails.
+      printf 'if bash %q __succ-rails --verdict %q --sid %q --cfg %q --src-tx %q --watcher-pid %q --record-id %q --attempt %q --launch-lock %q --fold-stub %q; then\n' \
+        "$HF_DIR/${HF_SELF##*/}" "$base.rails" "$rsid" "$cfg" "${RCY_SRC_TX:-}" "$WATCHER_PID" \
+        "${HF_LAUNCH_REC:-}" "${HF_LAUNCH_ATT:-}" "${HF_LAUNCH_LOCK:-on}" "${HF_FOLD_STUB:-on}"
+      printf '%s\n' "$CMD"
+      printf 'fi\n'
+    else
+      printf 'export CLAUDE_CONFIG_DIR=%q\n' "$cfg"
+      printf 'export CC_ACCOUNT_PINNED=1\n'
+      printf '%s\n' "$CMD"
+    fi; } > "$sc" 2>/dev/null \
     && jq -n --arg pane "$SID" --arg tty "$tty" --arg pred "${rcy_old_sid:-}" --arg wp "$WATCHER_PID" --arg wl "$wl" \
-            --arg ce "$(date +%s)" --arg ttl "${CC_PANE_SUCCESSOR_TTL_S:-900}" --arg tok "$tok" \
+            --arg ce "$(date +%s)" --arg ttl "${CC_PANE_SUCCESSOR_TTL_S:-900}" --arg tok "$tok" --arg mode "$mode" \
             '{pane:$pane, pane_tty:$tty, pred_sid:$pred, watcher_pid:($wp|tonumber), watcher_lstart:$wl,
-              created_epoch:($ce|tonumber), ttl_s:($ttl|tonumber), mode:"fresh", token:$tok}' > "$mj" 2>/dev/null \
+              created_epoch:($ce|tonumber), ttl_s:($ttl|tonumber), mode:$mode, token:$tok}' > "$mj" 2>/dev/null \
     && cc_pane_successor_stage "$tty" "$sc" "$mj" \
     || { echo "⚠ successor: staging for ${tty##*/} failed — typed relaunch" >&2; return 1; }
-  emit_recycle_event recycle-successor-staged "" "$SID" "staged for ${tty##*/} (cfg $cfg, token $tok); the pane's own shell runs it on claude's exit" || true
-  echo "→ successor staged for ${tty##*/}: the pane's own shell runs it when claude exits — no keystrokes (typed fallback after ${CC_RECYCLE_CLAIM_GRACE_S:-20}s at a bare shell with no claim)"
+  if [ "$mode" = resume ]; then
+    emit_recycle_event recycle-successor-staged "" "$SID" "staged for ${tty##*/} ($mode, cfg $cfg, token $tok); the pane runs the fold, launch-lock and holder rails for ${rsid:0:8} on claude's exit, then the launcher" || true
+    echo "→ successor staged for ${tty##*/} ($mode): the pane runs the rails for ${rsid:0:8}, then the launcher, when claude exits — no keystrokes (typed fallback after ${CC_RECYCLE_CLAIM_GRACE_S:-20}s at a bare shell with no claim)"
+  else
+    emit_recycle_event recycle-successor-staged "" "$SID" "staged for ${tty##*/} (cfg $cfg, token $tok); the pane's own shell runs it on claude's exit" || true
+    echo "→ successor staged for ${tty##*/}: the pane's own shell runs it when claude exits — no keystrokes (typed fallback after ${CC_RECYCLE_CLAIM_GRACE_S:-20}s at a bare shell with no claim)"
+  fi
+  return 0
+}
+
+# THE FOLD (W2b), one body for its two callers: the watcher, before it types a resume, and the rails
+# a claimed stage runs in the pane. `lr-transplant --phase fold-stub` appends a stub the predecessor
+# re-created in the retired store to BOTH copies and refuses (rc 2) when the target advanced past the
+# transplant, since a live copy then exists. An lr-transplant without the phase (rc 3) or none at all
+# gets the append-only fold, loudly. Kill switch HF_FOLD_STUB=off = the append-only fold.
+hf_fold_source_stub() { # $1=source transcript $2=sid $3=target cfg → 0 folded or nothing to fold · 2 refused (HF_FOLD_WHY)
+  local src="${1:-}" tp out="" rc=3
+  HF_FOLD_WHY=""
+  { [ -n "$src" ] && [ -f "$src" ] && [ -f "$src.handed-off" ]; } || return 0
+  if [ "${HF_FOLD_STUB:-on}" != off ] && tp="$(hf_lr_script lr-transplant.sh HF_LR_TRANSPLANT)"; then
+    rc=0
+    out="$(bash "$tp" --phase fold-stub --sid "${2:-}" --from "${src%/projects/*}" \
+             --to "${3:-}" ${LR_RECORD_ID:+--record-id "$LR_RECORD_ID"} 2>/dev/null)" || rc=$?
+  fi
+  case "$rc" in
+    0) echo "→ folded a re-created source stub ($(basename "$src")) via lr-transplant --phase fold-stub — appended to both copies, the retired store holds no live-looking copy" ;;
+    2) HF_FOLD_WHY="$(printf '%s' "$out" | jq -r '(.reason // "") + (if (.detail // "") != "" then " (" + .detail + ")" else "" end)' 2>/dev/null || true)"
+       [ -n "$HF_FOLD_WHY" ] || HF_FOLD_WHY="$(printf '%.160s' "$out")"
+       return 2 ;;
+    *) echo "⚠ legacy fold: lr-transplant --phase fold-stub unavailable (rc $rc) — appending the stub to .handed-off only; the target copy does not get it"
+       if cat "$src" >> "$src.handed-off" 2>/dev/null; then
+         rm -f "$src" 2>/dev/null || true
+         echo "→ folded a re-created source stub ($(basename "$src")) into its .handed-off record — the retired store holds no live-looking copy"
+       else
+         echo "⚠ could not fold the re-created source stub $src into its .handed-off record — left in place beside its tombstone (the guard still blocks it)"
+       fi ;;
+  esac
+  return 0
+}
+
+# THE RAILS OF A CLAIMED RESUME STAGE (Wave S), run by the `__succ-rails` verb from the staged .cmd in
+# the pane's own shell, after the predecessor exited and before the launcher starts. The same three
+# reads, in the same order, as the watcher's typed path: the fold, the session's launch lock, then
+# H(sid) = 0 under it. The lock is taken FOR THE WATCHER (its pid, role watcher, the run's record
+# pair): it is alive through the launch and its EXIT trap drops a lock still naming it, and
+# lr-fire-resume re-takes it by record match, exactly as after a typed relaunch. The verdict file is
+# one line: `ok`, or `held-fold|held-launch-lock|held-holder<TAB><why>`. rc 0 start the launcher ·
+# 3 held (nothing starts) · 2 usage.
+hf_succ_rails() {
+  local verdict="" sid="" cfg="" src="" wpid="" rec="" att="" ll=on fold=on dir rc n tmp
+  while [ $# -gt 0 ]; do case "$1" in
+    --verdict) verdict="${2:-}"; shift 2 ;;
+    --sid) sid="${2:-}"; shift 2 ;;
+    --cfg) cfg="${2:-}"; shift 2 ;;
+    --src-tx) src="${2:-}"; shift 2 ;;
+    --watcher-pid) wpid="${2:-}"; shift 2 ;;
+    --record-id) rec="${2:-}"; shift 2 ;;
+    --attempt) att="${2:-}"; shift 2 ;;
+    --launch-lock) ll="${2:-on}"; shift 2 ;;
+    --fold-stub) fold="${2:-on}"; shift 2 ;;
+    *) echo "!! __succ-rails: unknown arg: $1" >&2; return 2 ;;
+  esac; done
+  [ -n "$verdict" ] || { echo "!! __succ-rails needs --verdict" >&2; return 2; }
+  _hf_rails_say() { # $1=verdict line → written atomically; the watcher polls for it
+    tmp="$verdict.tmp.$$"
+    printf '%s\n' "$1" > "$tmp" 2>/dev/null && mv -f "$tmp" "$verdict" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    return 0
+  }
+  rc=0; HF_FOLD_STUB="$fold" LR_RECORD_ID="${rec:-${LR_RECORD_ID:-}}" hf_fold_source_stub "$src" "$sid" "$cfg" || rc=$?
+  if [ "$rc" = 2 ]; then
+    _hf_rails_say "$(printf 'held-fold\t%s' "${HF_FOLD_WHY:-no reason given}")"
+    echo "✗ ${sid:0:8} not started: lr-transplant refused the fold (${HF_FOLD_WHY:-no reason given}) — a live copy may exist" >&2
+    return 3
+  fi
+  if [ "$ll" != off ] && [ -n "$sid" ]; then
+    dir="$(hf_launch_lock_dir "$sid")"
+    rc=0; hf_recycle_lock_take "$dir" watcher "$wpid" "$rec" "$att" || rc=$?
+    # A live holder carrying the run's own pair is the watcher one hop earlier: ours, re-stamped.
+    if [ "$rc" = 1 ] && [ -n "$HF_LOCK_HOLDER" ] && [ -n "$rec" ] \
+       && [ "$(_hf_lock_field "$HF_LOCK_HOLDER" record_id)" = "$rec" ] \
+       && [ "$(_hf_lock_field "$HF_LOCK_HOLDER" attempt)" = "$att" ]; then
+      rc=0; hf_recycle_lock_write "$dir" watcher "$wpid" "$rec" "$att" || rc=2
+    fi
+    if [ "$rc" != 0 ]; then
+      _hf_rails_say "$(printf 'held-launch-lock\t%s' "${HF_LOCK_HOLDER:-<unwritable: $dir>}")"
+      echo "✗ ${sid:0:8} not started: its launch lock is not ours (rc $rc) — another actuator holds it" >&2
+      return 3
+    fi
+    n="$(hf_holder_count "$sid")" || n="unreadable"
+    if [ "$n" != 0 ]; then
+      hf_recycle_lock_release "$dir" "$wpid" >/dev/null 2>&1 || true
+      _hf_rails_say "$(printf 'held-holder\t%s' "$n")"
+      echo "✗ ${sid:0:8} not started: $n live holder(s) — a second copy would split it" >&2
+      return 3
+    fi
+  fi
+  _hf_rails_say ok
   return 0
 }
 
@@ -12241,33 +12368,23 @@ EOF
   # typed, nothing settled (settling would relaunch the same sid somewhere else). An lr-transplant
   # without the phase (rc 3) or none at all falls back to the append-only fold, loudly.
   # Kill switch HF_FOLD_STUB=off = the append-only fold, exactly as before.
-  if [ -n "$RCY_SRC_TX" ] && [ -f "$RCY_SRC_TX" ] && [ -f "$RCY_SRC_TX.handed-off" ]; then
-    rcy_fold_rc=3; rcy_fold_out=""
-    if [ "${HF_FOLD_STUB:-on}" != off ] && rcy_fold_tp="$(hf_lr_script lr-transplant.sh HF_LR_TRANSPLANT)"; then
-      rcy_fold_rc=0
-      rcy_fold_out="$(bash "$rcy_fold_tp" --phase fold-stub --sid "${RCY_RESUME_SID:-}" --from "${RCY_SRC_TX%/projects/*}" \
-                        --to "${RCY_RESUME_CFG:-}" ${LR_RECORD_ID:+--record-id "$LR_RECORD_ID"} 2>/dev/null)" || rcy_fold_rc=$?
-    fi
-    case "$rcy_fold_rc" in
-      0)
-        echo "→ folded a re-created source stub ($(basename "$RCY_SRC_TX")) via lr-transplant --phase fold-stub — appended to both copies, the retired store holds no live-looking copy" ;;
-      2)
-        rcy_fold_why="$(printf '%s' "$rcy_fold_out" | jq -r '(.reason // "") + (if (.detail // "") != "" then " (" + .detail + ")" else "" end)' 2>/dev/null || true)"
-        [ -n "$rcy_fold_why" ] || rcy_fold_why="$(printf '%.160s' "$rcy_fold_out")"
-        emit_recycle_event recycle-held-fold "" "$RSID" "lr-transplant --phase fold-stub REFUSED (${rcy_fold_why:-no reason given}) for ${RCY_RESUME_SID:0:8}; nothing typed, nothing settled" || true
-        hf_alarm recycle-held-fold "$RSID" "${RCY_RESUME_SID:-}" "" "HANDOFF-RECYCLE-HELD (FOLD REFUSED): pane $RSID is at a shell after the /exit, but lr-transplant refused to fold the re-created source stub for session ${RCY_RESUME_SID:0:8} (${rcy_fold_why:-no reason given}). A target that advanced means a live copy exists — so NOTHING was typed and the session was NOT settled. Find the live copy before relaunching: $(cat "$CMDFILE")" || true
-        echo "!! recycle HELD: lr-transplant --phase fold-stub REFUSED (${rcy_fold_why:-no reason given}) — a live copy of ${RCY_RESUME_SID:0:8} may exist, so NO relaunch was typed and nothing was settled" >&2
-        exit 1 ;;
-      *)
-        echo "⚠ legacy fold: lr-transplant --phase fold-stub unavailable (rc $rcy_fold_rc) — appending the stub to .handed-off only; the target copy does not get it"
-        if cat "$RCY_SRC_TX" >> "$RCY_SRC_TX.handed-off" 2>/dev/null; then
-          rm -f "$RCY_SRC_TX" 2>/dev/null || true
-          echo "→ folded a re-created source stub ($(basename "$RCY_SRC_TX")) into its .handed-off record — the retired store holds no live-looking copy"
-        else
-          echo "⚠ could not fold the re-created source stub $RCY_SRC_TX into its .handed-off record — left in place beside its tombstone (the guard still blocks it)"
-        fi ;;
-    esac
+  # A STAGE OF OURS DEFERS THE FOLD (Wave S): a claimed resume stage runs it in the pane, as its first
+  # rail, and a fold here would race that one, or fold under a successor already writing. So with a
+  # stage pending or claimed it runs only after a revoke that wins, right before the typed relaunch.
+  rcy_fold_deferred=0
+  if [ "$rcy_succ_lib" = 1 ] && { hf_succ_ours_staged "$TTY_PATH" || hf_succ_claim_epoch "$TTY_PATH" "$rcy_w_t0" >/dev/null; }; then
+    rcy_fold_deferred=1
   fi
+  rcy_fold_or_hold() { # the fold, or the held arm: nothing typed, nothing settled, exit 1
+    local rc=0
+    hf_fold_source_stub "$RCY_SRC_TX" "${RCY_RESUME_SID:-}" "${RCY_RESUME_CFG:-}" || rc=$?
+    [ "$rc" = 2 ] || return 0
+    emit_recycle_event recycle-held-fold "" "$RSID" "lr-transplant --phase fold-stub REFUSED (${HF_FOLD_WHY:-no reason given}) for ${RCY_RESUME_SID:0:8}; nothing typed, nothing settled" || true
+    hf_alarm recycle-held-fold "$RSID" "${RCY_RESUME_SID:-}" "" "HANDOFF-RECYCLE-HELD (FOLD REFUSED): pane $RSID is at a shell after the /exit, but lr-transplant refused to fold the re-created source stub for session ${RCY_RESUME_SID:0:8} (${HF_FOLD_WHY:-no reason given}). A target that advanced means a live copy exists — so NOTHING was typed and the session was NOT settled. Find the live copy before relaunching: $(cat "$CMDFILE")" || true
+    echo "!! recycle HELD: lr-transplant --phase fold-stub REFUSED (${HF_FOLD_WHY:-no reason given}) — a live copy of ${RCY_RESUME_SID:0:8} may exist, so NO relaunch was typed and nothing was settled" >&2
+    exit 1
+  }
+  [ "$rcy_fold_deferred" = 1 ] || rcy_fold_or_hold
   # THE 2026-07-29 STRAND, made self-diagnosing. A session-owned worktree is reaped BY the exit this
   # watcher just observed, so the relaunch's cd target can disappear between arming and typing. The
   # command already carries a fallback (see the RECYCLE_FALLBACK chain), so this is pure evidence —
@@ -12341,6 +12458,43 @@ EOF
         echo "⚠ successor stage for ${TTY_PATH##*/} gone with no claim — falling back to the typed relaunch" ;;
     esac
   fi
+  # THE RAILS' VERDICT (Wave S). A claimed resume stage ran the fold, the launch lock and H(sid) = 0 in
+  # the pane before its launcher, and wrote what it found beside the cmdfile. A hold there started
+  # nothing, so it gets the typed path's own held row and alarm and the same exit: nothing typed,
+  # nothing settled. No verdict inside the bound (load-scaled 60 s) is not a hold: the engagement
+  # check below decides, as for any claim.
+  if [ "$rcy_succ" = claimed ] && rcy_claim_path="$(cc_pane_successor_claimed "$TTY_PATH" 2>/dev/null)" \
+     && grep -qF -- "$CMDFILE.rails" "${rcy_claim_path% *}" 2>/dev/null; then
+    rcy_rails_max="${CC_RECYCLE_RAILS_WAIT_S:-$(hf_load_scaled 60)}"; case "$rcy_rails_max" in ''|*[!0-9]*) rcy_rails_max=60 ;; esac
+    rcy_rails_t0="$(date +%s)"
+    while [ ! -s "$CMDFILE.rails" ] && [ $(( $(date +%s) - rcy_rails_t0 )) -lt "$rcy_rails_max" ]; do sleep 1; done
+    rcy_rails="$(head -n 1 "$CMDFILE.rails" 2>/dev/null || true)"
+    rcy_rails_why="$(printf '%s' "$rcy_rails" | cut -f2-)"
+    case "$rcy_rails" in
+      ok)
+        echo "→ successor rails passed in the pane for ${RCY_RESUME_SID:0:8}: fold, launch lock, no live holder — its launcher started" ;;
+      held-fold*)
+        emit_recycle_event recycle-held-fold "" "$RSID" "lr-transplant --phase fold-stub REFUSED ($rcy_rails_why) for ${RCY_RESUME_SID:0:8} at the successor's claim; nothing started, nothing settled" || true
+        hf_alarm recycle-held-fold "$RSID" "${RCY_RESUME_SID:-}" "" "HANDOFF-RECYCLE-HELD (FOLD REFUSED): pane $RSID's staged successor was claimed after the exit, but lr-transplant refused to fold the re-created source stub for session ${RCY_RESUME_SID:0:8} ($rcy_rails_why). A target that advanced means a live copy exists — so NOTHING was started and the session was NOT settled. Find the live copy before relaunching: $(cat "$CMDFILE")" || true
+        echo "!! recycle HELD at the successor's rails: lr-transplant --phase fold-stub REFUSED ($rcy_rails_why) — a live copy of ${RCY_RESUME_SID:0:8} may exist, so nothing was started and nothing was settled" >&2
+        exit 1 ;;
+      held-launch-lock*)
+        emit_recycle_event recycle-held-launch-lock "" "$RSID" "launch lock for ${RCY_RESUME_SID:0:8} not ours at the successor's claim: $rcy_rails_why; nothing started" || true
+        hf_alarm recycle-held-launch-lock "$RSID" "${RCY_RESUME_SID:-}" "" "HANDOFF-RECYCLE-HELD (LAUNCH LOCK): pane $RSID's staged successor was claimed after the exit, but session ${RCY_RESUME_SID:0:8}'s launch lock is held by another live actuator ($rcy_rails_why) — NOTHING was started, so two copies cannot start. If that actuator dies without launching, relaunch in that pane: $(cat "$CMDFILE")" || true
+        echo "!! recycle HELD at the successor's rails: the launch lock for ${RCY_RESUME_SID:0:8} is not ours ($rcy_rails_why) — nothing started" >&2
+        exit 1 ;;
+      held-holder*)
+        emit_recycle_event recycle-held-holder "" "$RSID" "session ${RCY_RESUME_SID:0:8} has live holder(s) at the successor's claim: $rcy_rails_why; nothing started" || true
+        hf_alarm recycle-held-holder "$RSID" "${RCY_RESUME_SID:-}" "" "HANDOFF-RECYCLE-HELD (LIVE HOLDER): pane $RSID's staged successor was claimed after the exit, but session ${RCY_RESUME_SID:0:8} is still held by $rcy_rails_why live process(es) (registry row or --resume) — NOTHING was started, a second copy would split it. Once no process holds it, relaunch in that pane: $(cat "$CMDFILE")" || true
+        echo "!! recycle HELD at the successor's rails: session ${RCY_RESUME_SID:0:8} still has live holder(s) ($rcy_rails_why) — nothing started" >&2
+        exit 1 ;;
+      *)
+        echo "⚠ successor rails: no verdict at $CMDFILE.rails after ${rcy_rails_max}s — the engagement check decides" ;;
+    esac
+  fi
+  # A revoke that won (or a stage gone with no claim) hands the relaunch to the typed path, and the
+  # fold deferred above runs first, as it always has before a typed resume.
+  if [ "$rcy_succ" != claimed ] && [ "$rcy_fold_deferred" = 1 ]; then rcy_fold_or_hold; fi
   # SURFACE RE-CHECK between exit and relaunch (CLOSE_RESUME_CUSTODY D3; the 2026-09-28 pane-405
   # incident). A shell confirmed by TTY alone does not prove the PANE survived: that window was
   # destroyed seconds after its /exit and its tty reused by a new window, so at_shell "CONFIRMED" a
@@ -13321,6 +13475,13 @@ if [ "${1:-}" = "--probe-live-subagents" ]; then
   echo "live_subagents: ${PLS_N:-0}"
   exit 0
 fi
+# Internal: the rails of a claimed resume stage (Wave S), run from the staged .cmd in the pane — see
+# hf_succ_rails. Exit 0 means the .cmd starts the launcher; anything else starts nothing.
+if [ "${1:-}" = "__succ-rails" ]; then
+  shift
+  HF_SR_RC=0; hf_succ_rails "$@" || HF_SR_RC=$?
+  exit "$HF_SR_RC"
+fi
 # ── --relaunch-at-shell — type a resume into a pane ALREADY at its shell (W2b) ───────────────────
 # The reconciler's verb for the pane a recycle left behind: the /exit landed, the relaunch did not
 # (a watcher that died, a hold that has since cleared). Every read comes BEFORE any keystroke, in
@@ -13667,7 +13828,14 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
   #     the relaunch will be TYPED (lr-handoff's in-place path sets HF_PRECHECK_TYPED_RELAUNCH=1): that
   #     is the condition the /exit-time gate holds on, and its own predicate decides here, handed the
   #     one reading taken (its HF_LOAD_PER_CORE seam), so the line and the verdict cannot disagree.
-  if [ "${HF_PRECHECK_TYPED_RELAUNCH:-0}" = 1 ]; then
+  #   A MOVE NOW STAGES ITS RELAUNCH (Wave S): lr-handoff still says "typed" for every in-place move,
+  #     but a resume recycle stages a keystroke-free successor whenever the successor lib loads and
+  #     CC_PANE_SUCCESSOR is on, and a staged relaunch is exactly what the /exit-time gate lets through.
+  #     So that case is not held here. Should the stage itself be refused later, the relaunch types
+  #     and the /exit-time gate still holds it at its own bound.
+  if [ "${HF_PRECHECK_TYPED_RELAUNCH:-0}" = 1 ] && [ "${CC_PANE_SUCCESSOR:-on}" != off ] && hf_succ_lib_load; then
+    echo "load: not gated (the relaunch is staged in the pane, keystroke-free)"
+  elif [ "${HF_PRECHECK_TYPED_RELAUNCH:-0}" = 1 ]; then
     PRP_LB="$(hf_recycle_precheck_load_bound)"
     if [ -z "$PRP_LB" ]; then
       echo "load: not gated (the recycle's load hold is off)"
