@@ -17,6 +17,9 @@ this was written. They are not used here.
 2. **Contributing causes (80-85).** The contract text supplied the shape (slim:22 "nothing of mine is open"; the follow-on licence at slim:146 and `why-tier.sh:90-91`). "Research only" was a private, unrecorded narrowing, not a `Scope` line. The rules that forbid this close (slim:68, :86, :184, :191) were resident and were violated.
 3. **Fix set.** Add a store-keyed signal for undriven work (F17). Stop the Stop chain losing the close it exists for: read the payload message (F10), latch per fact or split the cap class (F11), run text-only arms first (F12). Add a follow-on arm discharged by a store fact (F13). Make net-negative rule cuts (F1-F3).
 4. **No fix clears 90% after the skeptic** (the highest is F1 at 72), so no row is "to drive". `round2/C1`, `C2`, `C3` and `C5` are raising F10, F11, F13 and F1; re-score §5 when they land.
+5. **Round 2 (§8, 2026-10-19), scored on net-positive:** the rule-text set (C5) and the stated-⛔ guard (C2a) clear and
+   are driven; the per-fact latch, the follow-on arm and the offer lexicon are dropped on measured harm; the payload
+   read (C1) and the Drive-state term (C6) are below the bar with named routes up. The continuation gap stays open.
 
 ## 2. Root causes, ranked
 
@@ -324,3 +327,32 @@ notes.
 | `axes/09-goal-continuation.md` | Continuation levers, goal arming, enact floor. |
 | `axes/10-detector-design.md` | Drive-state convention; heuristic-classifier audit (1 TP of 15). |
 | `round2/C1`, `C2`, `C3`, `C5` | Round-2 deep-dives on F10, F11, F13 and F1, in progress at writing. |
+| `round2/C1`-`C6` + `*.judge-{fp,efficacy,impl}.md` | Round 2, complete: six designs, each with three adversarial judges (§8). |
+
+## 8. Round 2 outcome and drive state (2026-10-19)
+
+**The bar, corrected** (critic, item 6). slim:68 asks for conviction that *landing the change is net-positive*. Round 1
+scored rows on whether each alone would have prevented the incident, a defect seen in about 1% of yes closes, which no
+row can clear; that bar reproduces "research done, nothing enacted". Each row below carries both numbers, and the >90
+bar applies to net-positive.
+
+| Row | Change | Net-positive | Prevents a repeat | Drive state |
+|---|---|---|---|---|
+| C5 (F1-F3) | Rule text: the yes payload says "nothing drivable is open"; the `follow-on:` licence (slim:146, why-tier, global) becomes its inverse; the S6 catch-all goes; the no-form names "who drives it". Resident rules −14 units. Companion: `drain-peer-findings.py` settles the new payload. | 90 designer, 91 impl judge; FP judge "close to safe" (3 of 976 past closes flip) | 35-45 that line 1 then leads with the remainder; 10-15 that the waves get driven | **driven** — `5a46647ad`, `8a9c8f0a3` |
+| C2a | ⛔ guard: a close that LEADS with ⛔ (or a NO verdict over a ⛔ line 2) answers the ⛔ ledger term. 27 genuine ⛔ closes in 14 days were blocked. Tightened past the design: containment and a yes verdict never count (FP judge §4 found the designer's guard exonerated "✅ Good to close: yes" over ⛔). | 95 designer (27 of 27 hand-read genuine) | ~0 (fixes constraint 2, not the incident) | **driven** — `6ba57ff94`, 7 new bats cases |
+| C2b (F11) | Per-fact latch on the `assert` cap. | 82 designer; FP judge ~10 | 5 | **dropped**: the budget it frees lands ~90% on honest closes, 4 of them genuine ⛔ decisions — a new constraint-2 violation |
+| C1 (F10) | Stop hooks read the payload's `last_assistant_message` (the race is real: 20-23% of discriminating Stops judged the previous message). | 93 designer, 91 impl; FP judge 65-70 (+~75 FP blocks/day from un-blinding low-precision arms) | 0 for this incident | **below bar** — raise by: shadow mode first, plus the opaque-id gloss widening and an armed-wait park (C1 judge-fp §4); C2a is the ⛔ half of those guards and is now landed |
+| C3 (F13) | Follow-on arm discharged by a store fact. | 25-30 (all three judges) | — | **dropped**: prose `follow-on:` precision 4-6% before gates; the cheapest compliance is a relabel |
+| C4 | Conditional-permission offer lexicon. | 2-3 (designer's own non-action verdict confirmed) | — | **dropped**: 6.7% precision; ~81 junk class-B packets per window |
+| C6 (F17/F18) | A `Drive state:` declaration in synthesis docs a session writes, read by wrap-ledger as UNDRIVEN ⇒ 🔧. | 87 designer; impl judge 80 with its §9 changes | the only row aimed at the cause (R1) | **below bar** — raise by the impl judge's §9 changes, then shadow mode with an elapsed-ms IDL row |
+
+**Q4, readability** (critic, item 2). The ❌ form already leads by contract (slim:22, D6 verdict-first; 315 of 329 yes
+closes since 10-11 put the verdict first). The defect was the remainder riding in the tail of a yes; C5 removes the
+licence for that and names the driver. The incident close, correctly written:
+`❌ Good to close: no — six implementation waves in README §5 remain; I am driving wave 1 now.`
+
+**What remains, and who drives it.** No landed row turns finished research or an honest ❌ into the next action
+(critic, item 3): every detector of undriven prose measured at 4-25% precision, and the one exact signal (C6) depends on
+a declaration that 0 of the incident's writers and at most 13% of synthesis writers would have been prompted to write.
+That is a framing question, not a missing fact, after two rounds and 46 agents; this session drives it through the
+frontier escalation (CLAUDE.md § Frontier Tier Routing), then C6 and C1 in shadow mode from whatever that returns.
