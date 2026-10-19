@@ -183,3 +183,12 @@ it from the old directory would be worse: the at-boot restore had already launch
 its own ledger (`events/boot-1792359242/launched`), so a second event could start a session twice.
 `--after-crash` now says the kitty died before this boot, names the at-boot event and its state, and
 launches nothing (`verdict=EARLIER-BOOT`); with no at-boot event it says to run boot-resume (exit 3).
+
+**The heartbeat froze under load (found during recovery, 2026-10-19 00:20).** From 22:08 every
+300 s tick logged `cc-sessions --json failed or did not parse` and wrote nothing, so a crash would
+have restored a two-hour-old fleet. Load was 400-500 on 10 cores (ordinary fleet oversubscription,
+kalloc.1024 at 0.59 GiB), and the census took 4 min 25 s of wall time for 2.6 s of CPU against a
+fixed 30 s bound. The job already runs at utility QoS, so no band change helps. The tick now stretches
+the bound with load per core (30 s up to 75 s, under cc-restore's 120 s bound on the whole tick), and
+when the census still fails it carries each kitty's last roster (rows whose pid is alive) plus the
+kitty-tree backfill, stamps the tick, and records `carried <tick> <last ok tick>` in `hb.census`.
