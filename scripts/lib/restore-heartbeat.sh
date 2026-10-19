@@ -40,6 +40,9 @@
 #                      watching (a live cc-await-ping .watching pid), listen (a TCP port a descendant
 #                      listens on), agent-browser (a live ~/.agent-browser/<name>.pid; sid "-")
 #   hb.roles.tsv       role  pane  sid (sid empty when the role's pane is not live)
+#   hb.census          "ok <tick>", or "carried <tick> <last ok tick>" when the cc-sessions census failed
+#                      or overran its load-scaled bound and the roster is the last one, live pids only,
+#                      plus the kitty tree (2026-10-19: a 30 s bound at load 40/core froze the record 2 h)
 #   hb.displays.tsv    platform_window_id  display_uuid  dx dy dw dh  fullscreen  wx wy ww wh — one row per
 #                      kitty OS window in the tree's order (W3 P7): the display it is on (uuid and
 #                      bounds), whether it fills that display, and its own bounds, all in the top-left
@@ -60,7 +63,7 @@
 #
 # /bin/bash 3.2 safe: launchd runs it. Sourced: defines functions only.
 # Seams: CC_HEARTBEAT_DIR · CC_HB_SESSIONS_BIN · CC_HB_KITTEN_BIN · CC_HB_PS_BIN (also asked -p <pid>) · CC_HB_LSOF_BIN ·
-#   CC_HB_NOW · CC_HB_RETAIN_DAYS · CC_HB_LS_TIMEOUT (5 s; the reboot prep asks with 15) · CC_HB_SWIFT_BIN · CC_HB_TIMEOUT_BIN ("" forces the perl bound) · CC_BOOTUUID_OVERRIDE ·
+#   CC_HB_NOW · CC_HB_RETAIN_DAYS · CC_HB_SESSIONS_TIMEOUT · CC_HB_LOAD1 · CC_HB_LS_TIMEOUT (5 s; the reboot prep asks with 15) · CC_HB_SWIFT_BIN · CC_HB_TIMEOUT_BIN ("" forces the perl bound) · CC_BOOTUUID_OVERRIDE ·
 #   CC_ROLES_DIR · CC_HB_MAILBOX_DIR · CC_HB_AGENT_BROWSER_DIR
 
 HB_PAD=$'\037'
@@ -422,21 +425,47 @@ _hb_roles_tsv() {
   done
 }
 
+# _hb_census_bound — seconds allowed for the cc-sessions census: CC_HB_SESSIONS_TIMEOUT, else 30 s,
+# stretched by the 1-min load per core (15 s per unit of load/core, at most 75 s, which stays under
+# cc-restore's 120 s bound on the whole tick). Measured 2026-10-19 at load 40/core: the census took
+# 4 min 25 s of wall time for 2.6 s of CPU, so a load-blind 30 s bound failed every tick for 2 h and
+# the record froze at 22:08. Past the cap, the carried record (hb_tick) is what keeps it current.
+_hb_census_bound() {
+  local l n
+  if [ -n "${CC_HB_SESSIONS_TIMEOUT:-}" ]; then printf '%s' "$CC_HB_SESSIONS_TIMEOUT"; return 0; fi
+  l="${CC_HB_LOAD1-$(/usr/sbin/sysctl -n vm.loadavg 2>/dev/null | awk '{ print $2 }')}"
+  n="$(/usr/sbin/sysctl -n hw.ncpu 2>/dev/null)"
+  awk -v l="${l:-0}" -v n="${n:-1}" 'BEGIN { if (n + 0 < 1) n = 1; b = 15 * l / n
+    if (b < 30) b = 30; if (b > 75) b = 75; printf "%d", b }'
+}
+
 hb_tick() {
-  local root now uuid sb kb tmpd kps kp kst dir sock pw lsok ok=0 failed=0
+  local root now uuid sb kb tmpd kps kp kst dir sock pw lsok bound census=ok alive ok=0 failed=0
   root="$(hb_root)"; now="${CC_HB_NOW:-$(date +%s)}"
   uuid="$(_hb_bootuuid)"; [ -n "$uuid" ] || uuid=nouuid
   sb="$(_hb_sessions_bin)"
   [ -n "$sb" ] && [ -x "$sb" ] || { echo "restore-heartbeat: no cc-sessions — no heartbeat this tick" >&2; return 2; }
   kb="$(_hb_kitten_bin)"
   tmpd="$(mktemp -d "${TMPDIR:-/tmp}/hb.XXXXXX" 2>/dev/null)" || return 2
-  # A roster that does not parse as an array is no evidence: write nothing, keep every last good file.
-  if ! _hb_to 30 "$sb" --json > "$tmpd/all.json" 2>/dev/null \
+  bound="$(_hb_census_bound)"
+  # The census runs at utility QoS whatever band the caller is in (darwin-qos-band-mechanics: utility
+  # is reachable from a background parent).
+  set -- "$sb" --json
+  [ -x /usr/sbin/taskpolicy ] && set -- /usr/sbin/taskpolicy -c utility "$@"
+  # A census that fails or does not parse is no evidence about the registry, but the fleet still has
+  # to be recorded: a record frozen while the box is loaded is exactly the one a crash then restores
+  # from. So each kitty CARRIES its last roster (rows whose pid is still alive) plus the kitty tree,
+  # hb.census says so, and the tick still returns 2 (alarm-reboot-prep.sh retries on it).
+  if ! _hb_to "$bound" "$@" > "$tmpd/all.json" 2>/dev/null \
      || ! jq -e 'type == "array"' "$tmpd/all.json" >/dev/null 2>&1; then
-    rm -rf "$tmpd"; echo "restore-heartbeat: cc-sessions --json failed or did not parse — kept the last heartbeat" >&2
-    return 2
+    census=carried; echo '[]' > "$tmpd/all.json"
+    echo "restore-heartbeat: cc-sessions --json failed or did not parse within ${bound}s — carried each kitty's last roster (live pids) plus its kitty tree" >&2
   fi
   _hb_to 10 "${CC_HB_PS_BIN:-/bin/ps}" -axo pid=,ppid=,args= > "$tmpd/ps.txt" 2>/dev/null || : > "$tmpd/ps.txt"
+  # The live pids as a JSON object, or null when ps did not answer (then no carried row is dropped).
+  alive="$(awk '$1 ~ /^[0-9]+$/ { print $1 }' "$tmpd/ps.txt" | jq -Rsc 'split("\n") | map(select(. != ""))
+           | if length == 0 then null else map({(.): true}) | add end' 2>/dev/null)"
+  [ -n "$alive" ] || alive=null
   _hb_to 10 "${CC_HB_LSOF_BIN:-/usr/sbin/lsof}" -nP -iTCP -sTCP:LISTEN -Fpn > "$tmpd/lsof.txt" 2>/dev/null || :
   # Every LIVE kitty: those the sessions name, plus those with a directory this boot that are still up
   # with no session left (their roster becomes [], which is an answer: nothing was live there).
@@ -453,8 +482,15 @@ hb_tick() {
       { printf '%s\n' "$kst" > "$dir/.hb.kitty-start.tmp" && _hb_mv "$dir/.hb.kitty-start.tmp" "$dir/hb.kitty-start"; } 2>/dev/null \
         || { failed=$((failed + 1)); continue; }
     fi
-    if ! jq --argjson k "$kp" '[.[] | select(((.kitty_pid // 0) | tonumber? // 0) == $k)]' "$tmpd/all.json" \
-           > "$dir/.hb.roster.json.tmp" 2>/dev/null; then
+    if [ "$census" = ok ]; then
+      jq --argjson k "$kp" '[.[] | select(((.kitty_pid // 0) | tonumber? // 0) == $k)]' "$tmpd/all.json" \
+        > "$dir/.hb.roster.json.tmp" 2>/dev/null
+    else
+      { cat "$dir/hb.roster.json" 2>/dev/null || echo '[]'; } | jq --argjson alive "$alive" \
+        '[.[]? | select($alive == null or (((.pid // "") | tostring) as $p | $alive[$p] == true))]' \
+        > "$dir/.hb.roster.json.tmp" 2>/dev/null
+    fi
+    if ! jq -e 'type == "array"' "$dir/.hb.roster.json.tmp" >/dev/null 2>&1; then
       rm -f "$dir/.hb.roster.json.tmp"
       failed=$((failed + 1)); continue
     fi
@@ -502,13 +538,20 @@ hb_tick() {
     fi
     _hb_bg_tsv "$dir/hb.roster.json" "$tmpd/ps.txt" "$tmpd/lsof.txt" > "$dir/.hb.bg.tsv.tmp" 2>/dev/null \
       && _hb_mv "$dir/.hb.bg.tsv.tmp" "$dir/hb.bg.tsv"
-    _hb_roles_tsv "$tmpd/all.json" > "$dir/.hb.roles.tsv.tmp" 2>/dev/null \
+    # Roles come from the census alone; a carried tick keeps the last good file.
+    [ "$census" = ok ] && _hb_roles_tsv "$tmpd/all.json" > "$dir/.hb.roles.tsv.tmp" 2>/dev/null \
       && _hb_mv "$dir/.hb.roles.tsv.tmp" "$dir/hb.roles.tsv"
+    # hb.census: "ok <tick>" after a census, "carried <tick> <last ok tick>" when the roster was carried.
+    if [ "$census" = ok ]; then pw="ok $now"
+    else pw="carried $now $(awk '$1 == "ok" { print $2; exit } $1 == "carried" { print $3; exit }' "$dir/hb.census" 2>/dev/null)"
+    fi
+    { printf '%s\n' "${pw% }" > "$dir/.hb.census.tmp" && _hb_mv "$dir/.hb.census.tmp" "$dir/hb.census"; } 2>/dev/null
     printf '%s\n' "$now" > "$dir/.hb.start.tmp" 2>/dev/null && _hb_mv "$dir/.hb.start.tmp" "$dir/hb.start" \
       && ok=$((ok + 1))
   done
   rm -rf "$tmpd"
   hb_prune
+  [ "$census" = ok ] || return 2
   [ "$failed" -gt 0 ] && return 2
   [ "$ok" -gt 0 ] && return 0
   return 1

@@ -140,17 +140,47 @@ WHY
   [ "$(cat "$(dir UUID-A "$KP")/hb.start")" = 1784799000 ] || false
 }
 
-@test "cc-sessions failing or not parsing writes nothing and keeps the last good heartbeat (rc 2)" {
-  echo "[$(sess s1 "$KP")]" > "$D/sessions.json"
+# Changed on purpose 2026-10-19: this case used to pin "writes nothing", and under load that froze the
+# record for 2 h (every 30 s census overran at load 40/core), so a crash would restore a stale fleet.
+@test "a census that fails, does not parse or overruns its bound carries the last roster (live pids only), rc 2" {
+  echo "[$(sess s1 "$KP" 1),$(sess s2 "$KP" "$DEADP")]" > "$D/sessions.json"
   hb hb_tick
+  [ "$(cat "$(dir UUID-A "$KP")/hb.census")" = "ok 1784800000" ] || false
+  printf '    1     0 /sbin/launchd\n' > "$D/ps.txt"                      # s1's pid is alive, s2's is not
+  r="$(dir UUID-A "$KP")/hb.roster.json"
   touch "$CC_HB_SESSIONS_BIN.fail"
   CC_HB_NOW=1784800300 hb hb_tick
   [ "$status" -eq 2 ] || false
+  [ "$(jq -r '[.[].session_id] | join(" ")' "$r")" = s1 ] || false
+  [ "$(cat "$(dir UUID-A "$KP")/hb.start")" = 1784800300 ] || false
+  [ "$(cat "$(dir UUID-A "$KP")/hb.census")" = "carried 1784800300 1784800000" ] || false
+  [[ "$output" == *"failed or did not parse within"*"carried each kitty's last roster"* ]] || false
   rm "$CC_HB_SESSIONS_BIN.fail"; echo 'not json' > "$D/sessions.json"
   CC_HB_NOW=1784800600 hb hb_tick
   [ "$status" -eq 2 ] || false
-  [ "$(cat "$(dir UUID-A "$KP")/hb.start")" = 1784800000 ] || false
-  [ "$(jq -r '.[0].session_id' "$(dir UUID-A "$KP")/hb.roster.json")" = s1 ] || false
+  [ "$(cat "$(dir UUID-A "$KP")/hb.census")" = "carried 1784800600 1784800000" ] || false
+  # A census slower than its bound is carried the same way, not waited out.
+  printf '#!/bin/sh\nsleep 8\ncat "%s/sessions.json"\n' "$D" > "$CC_HB_SESSIONS_BIN"
+  echo "[$(sess s3 "$KP" 1)]" > "$D/sessions.json"
+  CC_HB_SESSIONS_TIMEOUT=1 CC_HB_NOW=1784800900 hb hb_tick
+  [ "$status" -eq 2 ] || false
+  [ "$(jq -r '[.[].session_id] | join(" ")' "$r")" = s1 ] || false
+  [ "$(cat "$(dir UUID-A "$KP")/hb.census")" = "carried 1784800900 1784800000" ] || false
+  # ps not answering drops no carried row; the next census that works is "ok" again.
+  : > "$D/ps.txt"; printf '#!/bin/sh\ncat "%s/sessions.json"\n' "$D" > "$CC_HB_SESSIONS_BIN"
+  CC_HB_NOW=1784801200 hb hb_tick
+  [ "$status" -eq 0 ] || false
+  [ "$(cat "$(dir UUID-A "$KP")/hb.census")" = "ok 1784801200" ] || false
+  [ "$(jq -r '[.[].session_id] | join(" ")' "$r")" = s3 ] || false
+}
+
+@test "the census bound is 30 s on an idle box, at most 75 s under any load, and CC_HB_SESSIONS_TIMEOUT overrides it" {
+  CC_HB_LOAD1=0.5 hb _hb_census_bound
+  [ "$output" = 30 ] || false
+  CC_HB_LOAD1=100000 hb _hb_census_bound
+  [ "$output" = 75 ] || false
+  CC_HB_LOAD1=100000 CC_HB_SESSIONS_TIMEOUT=7 hb _hb_census_bound
+  [ "$output" = 7 ] || false
 }
 
 @test "a failed kitten @ ls keeps the last good tree" {
