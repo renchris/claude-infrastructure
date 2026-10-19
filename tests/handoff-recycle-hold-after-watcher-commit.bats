@@ -132,7 +132,7 @@ assert_left_alone() {
 
 @test "1 [RED] pane 332: the journal says CONFIRMED and the load gate holds — no kill, no held-load, rc 0" {
   journal_committed
-  CC_FIRE_CAPACITY_GATE=on HF_LOAD_PER_CORE=15.72 run recycle_fire_commit "$SESS"
+  CC_FIRE_CAPACITY_GATE=on HF_LOAD_PER_CORE=30 run recycle_fire_commit "$SESS"
   [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
   assert_left_alone
   [ -z "$(rows_of recycle-held-load)" ] || { cat "$HOME/.claude/logs/handoffs.jsonl"; false; }
@@ -179,7 +179,7 @@ assert_left_alone() {
 }
 
 @test "6 CONTROL a journal with no commit in it: the hold kills the watcher and releases its lock, as before" {
-  CC_FIRE_CAPACITY_GATE=on HF_LOAD_PER_CORE=15.72 run recycle_fire_commit "$SESS"
+  CC_FIRE_CAPACITY_GATE=on HF_LOAD_PER_CORE=30 run recycle_fire_commit "$SESS"
   [ "$status" -eq 1 ] || { echo "status=$status $output"; false; }
   ! kill -0 "$WATCHER_PID" 2>/dev/null || { echo "watcher still armed"; false; }
   [ -n "$(rows_of recycle-held-load)" ] || { cat "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/null; false; }

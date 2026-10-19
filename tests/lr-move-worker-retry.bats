@@ -125,7 +125,7 @@ load_on() { unset CC_FIRE_CAPACITY_GATE; export HF_LOAD_PER_CORE="$1" STUB_FAIL_
   worker
   [ "$(calls)" = 0 ]
   [ "$(res verdict)" = NOTMOVED ] || { res verdict; res reason; false; }
-  [[ "$(res reason)" == "HELD:load — load 40/core stayed above the 8/core recycle bound"*"nothing touched (no admit, no copy)" ]] || { res reason; false; }
+  [[ "$(res reason)" == "HELD:load — load 40/core stayed above the 20/core recycle bound"*"nothing touched (no admit, no copy)" ]] || { res reason; false; }
   grep -q '"stage":"load-wait"' "$BDIR/$SID.events.jsonl"
   # no slot was taken for the wait
   ! grep -q '"stage":"slot"' "$BDIR/$SID.events.jsonl" || false
@@ -154,8 +154,8 @@ load_on() { unset CC_FIRE_CAPACITY_GATE; export HF_LOAD_PER_CORE="$1" STUB_FAIL_
   [ "$(res verdict)" = MOVED ] || { res reason; false; }
 }
 
-@test "R7-5 the bound is handoff-fire's: HF_RECYCLE_HOLD_LOAD_PER_CORE=50 lets load 40 through" {
-  load_on 40; export LR_MOVE_LOAD_WAIT_S=0 HF_RECYCLE_HOLD_LOAD_PER_CORE=50
+@test "R7-5 the bound is handoff-fire's precheck: HF_RECYCLE_HOLD_LOAD_PER_CORE=50 HF_PRECHECK_LOAD_PER_CORE=50 lets load 40 through" {
+  load_on 40; export LR_MOVE_LOAD_WAIT_S=0 HF_RECYCLE_HOLD_LOAD_PER_CORE=50 HF_PRECHECK_LOAD_PER_CORE=50
   worker
   [ "$(res verdict)" = MOVED ] || { res reason; false; }
 }
@@ -174,4 +174,11 @@ load_on() { unset CC_FIRE_CAPACITY_GATE; export HF_LOAD_PER_CORE="$1" STUB_FAIL_
   rmdir "$BDIR/summary.lock"
   wait "$WPID" || true
   [ "$(res verdict)" = MOVED ]
+}
+
+@test "R7-6 [RED] the worker waits on the precheck bound (20/core), not the commit's (24): load 22 is held before anything is touched" {
+  load_on 22; export LR_MOVE_LOAD_WAIT_S=0
+  worker
+  [ "$(calls)" = 0 ]
+  [[ "$(res reason)" == "HELD:load — load 22/core stayed above the 20/core recycle bound"* ]] || { res reason; false; }
 }

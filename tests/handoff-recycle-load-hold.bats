@@ -124,7 +124,7 @@ commit_at() { CC_FIRE_CAPACITY_GATE=on HF_LOAD_PER_CORE="$1" run recycle_fire_co
 # disarmed, and NO exit actuator reached: no keystroke, no signal row, no debt opened.
 assert_held() {
   [ "$status" -eq 1 ] || { echo "status=$status $output"; cat "$CALLS"; false; }
-  rows_of recycle-held-load | grep -q "load 45.00/core is above the 8/core bound" || { cat "$HOME/.claude/logs/handoffs.jsonl"; echo "$output"; false; }
+  rows_of recycle-held-load | grep -q "load 45.00/core is above the 24/core bound" || { cat "$HOME/.claude/logs/handoffs.jsonl"; echo "$output"; false; }
   [[ "$output" == *"recycle ABORTED before /exit (held: load)"*"Re-run: relaunch-cmd"* ]] || { echo "$output"; false; }
   ! grep -q '^send' "$CALLS" || { echo "a keystroke was sent:"; cat "$CALLS"; false; }
   ! grep -q '^debt' "$CALLS" || { echo "the resume debt opened:"; cat "$CALLS"; false; }
@@ -178,7 +178,7 @@ assert_proceeded() {
   assert_proceeded
 }
 
-@test "5 an unreadable load, or the hold switched off, proceeds; a junk bound takes the default 8" {
+@test "5 an unreadable load, or the hold switched off, proceeds; a junk bound takes the default 24" {
   # The capacity gate's one bypass is the hold's too (and what every recycle suite pins).
   HF_LOAD_PER_CORE=45.00 run recycle_fire_commit "$SESS"
   assert_proceeded

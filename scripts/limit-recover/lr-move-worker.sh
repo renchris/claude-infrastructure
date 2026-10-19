@@ -312,12 +312,24 @@ mw_load_per_core() { # → 1-min load average / logical cpus, 2 decimals; "" if 
   nc="$(/usr/sbin/sysctl -n hw.ncpu 2>/dev/null || true)"
   awk -v l="$la" -v n="$nc" 'BEGIN { if (l == "" || n + 0 <= 0) exit; printf "%.2f", l / n }'
 }
-mw_load_bound() { # → the per-core bound; nothing when the hold is off
+# The worker waits on the PRECHECK's bound (20, never above the commit's 24), not the commit's: a
+# worker that proceeds between the two walks into a precheck HELD:load, which is final NOTMOVED
+# (only HELD:unreachable is retried) — the inverted hysteresis of decisions/load-hold-bound.md §2.
+mw_commit_bound() { # → handoff-fire's commit bound; nothing when the hold is off
   [ "${CC_FIRE_CAPACITY_GATE:-on}" != off ] || return 0
-  awk -v b="${HF_RECYCLE_HOLD_LOAD_PER_CORE:-${CC_GATE_MAX_LOAD_PER_CORE:-8}}" 'BEGIN {
+  awk -v b="${HF_RECYCLE_HOLD_LOAD_PER_CORE:-${CC_GATE_MAX_LOAD_PER_CORE:-24}}" 'BEGIN {
     if (b == "off") exit
     if (b ~ /^[0-9]+(\.[0-9]+)?$/) { if (b + 0 > 0) printf "%s", b; exit }
-    printf "8" }'
+    printf "24" }'
+}
+mw_load_bound() { # → the per-core bound the worker waits on (handoff-fire's precheck); nothing when off
+  local cb
+  cb="$(mw_commit_bound)"
+  [ -n "$cb" ] || return 0
+  awk -v p="${HF_PRECHECK_LOAD_PER_CORE:-20}" -v c="$cb" 'BEGIN {
+    if (!(p ~ /^[0-9]+(\.[0-9]+)?$/) || p + 0 <= 0) p = 20
+    if (p + 0 > c + 0) p = c
+    printf "%s", p }'
 }
 LOAD_LPC=""; LOAD_BOUND=""
 load_over() { # → 0 when load per core is above the recycle bound (LOAD_LPC, LOAD_BOUND set)

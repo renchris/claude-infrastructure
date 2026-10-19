@@ -4098,29 +4098,36 @@ hf_recycle_subject_yield() { # $1=where the tail noticed → 0 always: one row, 
 # at any load, and its load is never read. The bound is per core, so it scales with hw.ncpu the way
 # ship-land's derived ceiling (hw.ncpu × CC_GATE_MAX_LOAD_PER_CORE) does, from the same factor.
 # An unreadable load proceeds, as ship-land's unreadable sensor does: this is a circuit-breaker, not a
-# capacity model. HF_RECYCLE_HOLD_LOAD_PER_CORE=0|off never holds; a non-numeric value takes 8.
+# capacity model. HF_RECYCLE_HOLD_LOAD_PER_CORE=0|off never holds; a non-numeric value takes 24.
+# DEFAULT 24, NOT 8 (operator approval 2026-10-19, decision 600709c5fe4b; evidence
+# docs/research/lr-wake-incident-2026-10-18/decisions/load-hold-bound.md). The 8 was ship-land's gate
+# factor, never typing data: 33 of 33 typed relaunches above 8/core submitted first try, and the box
+# spent 78% of its time above 8/core, so moves almost never happened. Once Wave A's commit handshake
+# (K1) landed, a hold no longer strands anything, so the bound only has to cover typing, which is
+# measured clean up to ~32/core. CC_GATE_MAX_LOAD_PER_CORE stays the fallback knob.
 # CC_FIRE_CAPACITY_GATE=off, the capacity gate's one bypass, switches it off too: it is the same
 # "do not hold on this box's load" decision, and it is what every suite driving a recycle already
 # pins (scripts/test-hermeticity-lint.sh rule 2), so none of them reads the machine's load here.
 hf_recycle_load_bound() { # → the per-core bound; nothing when the hold is off
   [ "${CC_FIRE_CAPACITY_GATE:-on}" != off ] || return 0
-  awk -v b="${HF_RECYCLE_HOLD_LOAD_PER_CORE:-${CC_GATE_MAX_LOAD_PER_CORE:-8}}" 'BEGIN {
+  awk -v b="${HF_RECYCLE_HOLD_LOAD_PER_CORE:-${CC_GATE_MAX_LOAD_PER_CORE:-24}}" 'BEGIN {
     if (b == "off") exit
     if (b ~ /^[0-9]+(\.[0-9]+)?$/) { if (b + 0 > 0) printf "%s", b; exit }
-    printf "8" }'
+    printf "24" }'
 }
 
 # THE PRECHECK'S BOUND, STRICTER THAN THE COMMIT'S (K7 hysteresis, lr-wake 2026-10-18). Both used
 # the same 8/core, so a box hovering near it passed the precheck and held minutes later at the
 # commit, after the transplant and with the watcher armed: pane 350 passed at 7.36/core and held at
-# 8.72. HF_PRECHECK_LOAD_PER_CORE (default 6) applies to the precheck only; it is never looser than
-# the commit bound it guards, and a junk value takes 6. Nothing when the commit hold is off.
+# 8.72. HF_PRECHECK_LOAD_PER_CORE (default 20, the 20/24 hysteresis of decision 600709c5fe4b) applies
+# to the precheck only; it is never looser than the commit bound it guards, and a junk value takes 20.
+# Nothing when the commit hold is off.
 hf_recycle_precheck_load_bound() { # → the precheck's per-core bound; nothing when the hold is off
   local cb
   cb="$(hf_recycle_load_bound)"
   [ -n "$cb" ] || return 0
-  awk -v p="${HF_PRECHECK_LOAD_PER_CORE:-6}" -v c="$cb" 'BEGIN {
-    if (!(p ~ /^[0-9]+(\.[0-9]+)?$/) || p + 0 <= 0) p = 6
+  awk -v p="${HF_PRECHECK_LOAD_PER_CORE:-20}" -v c="$cb" 'BEGIN {
+    if (!(p ~ /^[0-9]+(\.[0-9]+)?$/) || p + 0 <= 0) p = 20
     if (p + 0 > c + 0) p = c
     printf "%s", p }'
 }
