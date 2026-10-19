@@ -114,7 +114,10 @@ can run JS in every tab of every Space, with no prompt and nothing on screen. Ev
    `view-source:` for source and embedded JSON (never on a bot-defended site); curl on public
    routes; `screencapture -l <window id>` for pixels. A job that needs the DOM itself (attributes,
    computed styles, runtime state) goes next to the clean-profile launcher with a one-off login, or
-   to the operator in DevTools.
+   to the operator in DevTools. A job that truly needs his live session is his, in DevTools or
+   through `dia://inspect` with its per-connection prompt. **No on/off script exists or will be
+   built** (operator ruling 2026-10-18, decision `33620baeb16b`: each use costs two Dia restarts and
+   exposes every tab, for about one job in 60 days); never propose one.
 3. **Finding it ON is not permission.** Use it only when the operator turned it on for this task in
    this session; otherwise treat it as off. Report an ON that `cc-dia-js` calls stale.
 4. **Never quit, relaunch or re-flag Dia yourself**, never reapply the flag after an update, and
