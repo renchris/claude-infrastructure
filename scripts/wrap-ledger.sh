@@ -1346,6 +1346,14 @@ _resolve_decide_bin() {
 # The open/class predicate is cc-decide's (`list --open --class C --json`), not ours — this asks the
 # ONE question the packet cannot answer for itself: is it MINE?
 BLOCKED=0; BLOCKED_SRC="skip"; BLOCKED_WHAT=""
+# BLOCKED_RECHECKED = open class-C packets filed by ANOTHER session whose latest `.rechecks[]` entry
+# is THIS session's, carries a conviction and a receipt, and is stamped at or after the last genuine
+# human prompt — research this turn produced that now waits on the operator's sign-off (REPORT A3,
+# docs/research/research-pending-implementation-close-2026-10-18). Turn-scoped on purpose: open
+# class-C packets are weeks old, so a session-scoped count would read ⛔ on every later answer.
+# Fail-open like BLOCKED: no transcript or no bound ⇒ RECHECKED_SRC=none, a read error ⇒ error,
+# and either way BLOCKED_RECHECKED=0 leaves the rung where git put it.
+BLOCKED_RECHECKED=0; RECHECKED_IDS=""; RECHECKED_SRC="skip"; RECHECKED_WHAT=""
 # ── UNCONVICTED — an ask of the operator carrying no number and no receipt (2026-09-08) ──────────
 # docs/research/conviction-close-2026-09-08.md. The incident: a session filed
 # `needs-human: the fleet's headless spawn rate is the operator's policy call` (ae75073ef319) over
@@ -1481,8 +1489,11 @@ compute_close_floor() {
 }
 
 count_blocking_decisions() {
-  if [ -z "$SID" ]; then BLOCKED=0; BLOCKED_SRC="none"; return 0; fi
+  if [ -z "$SID" ]; then BLOCKED=0; BLOCKED_SRC="none"; RECHECKED_SRC="none"; return 0; fi
   local bin json line n what
+  # Every early return below is a store that could not be read; the re-check count reads the same
+  # store, so it inherits that verdict until the parse succeeds.
+  RECHECKED_SRC="error"
   bin="$(_resolve_decide_bin)" || { BLOCKED=0; BLOCKED_SRC="error"; return 0; }
   command -v jq >/dev/null 2>&1 || { BLOCKED=0; BLOCKED_SRC="error"; return 0; }
   json="$(_bounded "${WRAP_DECIDE_TIMEOUT_S:-5}" "$bin" list --open --class C --json 2>/dev/null)" \
@@ -1496,7 +1507,14 @@ count_blocking_decisions() {
   # a conviction AND a receipt — or predate the epoch, or were written by a mechanical producer —
   # are decisions and count here; the rest are UNCONVICTED_PKTS. Two counts precede the free text,
   # and both are always non-empty digits, so the one collapsible cell is the last one.
+  # THE RE-CHECK ROWS (§ BLOCKED_RECHECKED) ride the same fork: after that line, one
+  # `RC<TAB>id<TAB>ts<TAB>tier<TAB>epoch<TAB>what` line per foreign packet whose LAST re-check is
+  # mine and convicted. Every cell before `what` is non-empty by construction (an unparseable ts is
+  # epoch -1, which no bound admits), so the free text is again the only collapsible cell. A
+  # malformed `.rechecks` (not an array) yields no row rather than an error, so it cannot cost the
+  # main count its verdict.
   line="$(printf '%s' "$json" | jq -r --arg sid "$SID" --arg epoch "$CONVICTION_EPOCH" '
+      . as $all |
       [ .[] | select((.session_sid // "") == $sid) ] as $mine
       | ($mine | map(select( ((.producer // "") != "")
                              or ((.created // "") < $epoch)
@@ -1505,9 +1523,19 @@ count_blocking_decisions() {
           ((($mine | length) - ($ask | length)) | tostring),
           (if ($ask | length) == 1
            then ($ask[0].what_plain // "" | tostring | gsub("[\\t\\r\\n]"; " "))
-           else "" end) ] | @tsv' 2>/dev/null)" \
+           else "" end) ] | @tsv,
+        ( $all[] | select((.session_sid // "") != $sid) | select(((.id // "") | tostring) != "")
+          | (if (.rechecks | type) == "array" then .rechecks | last else null end) as $r
+          | select(($r | type) == "object" and (($r.sid // "") == $sid)
+                   and ($r.conviction != null) and ((($r.receipt // "") | tostring) != "")
+                   and ((($r.ts // "") | tostring) != ""))
+          | [ "RC", (.id | tostring), ($r.ts | tostring), ($r.tier // "default" | tostring),
+              ((try ($r.ts | tostring | sub("\\.[0-9]+"; "") | fromdateiso8601) catch -1)
+               | floor | tostring),
+              (.what_plain // "" | tostring | gsub("[\\t\\r\\n]"; " ")) ] | @tsv )' 2>/dev/null)" \
     || { BLOCKED=0; BLOCKED_SRC="error"; return 0; }
   local u
+  # Line 1 only: `read` stops at the first newline, so the RC rows below can never shift a field.
   IFS=$'\t' read -r n u what <<< "$line"
   case "${n:-}" in ''|*[!0-9]*) BLOCKED=0; BLOCKED_SRC="error"; return 0 ;; esac
   case "${u:-}" in ''|*[!0-9]*) u=0 ;; esac
@@ -1520,6 +1548,62 @@ count_blocking_decisions() {
     what="${what%.}"
     [ -n "$what" ] || what="an open class-C decision — see cc-decide list --open --class C"
     BLOCKED_WHAT="$what"
+  fi
+  count_rechecked "$line"
+}
+
+# § BLOCKED_RECHECKED — $1 = the producer's output above; only its RC rows are read. The transcript
+# is resolved and read ONLY when a row exists, so the common close (no re-checks) pays no fork.
+count_rechecked() {
+  local rows tp lim sz bound tag id ep rwhat ids="" k=0 w1="" nl='
+'
+  # The store read fine; zero RC rows is a counted zero, not an unknown. A pattern, not a grep:
+  # this runs at every close, and the common one has no RC row and must stay fork-free.
+  RECHECKED_SRC="ok"
+  case "$1" in *"${nl}RC"$'\t'*) ;; *) return 0 ;; esac
+  rows="${1#*"$nl"}"
+  # The transcript the YOURS peer arm uses (§ YOURS lineage): the Stop hooks' one, else the goal
+  # term's, else (pull path only) the one the session id resolves to.
+  tp="${TRANSCRIPT_FLAG:-${WRAP_TRANSCRIPT:-}}"
+  [ -n "$tp" ] || tp="${GOAL_TP:-}"
+  if [ -z "$tp" ] && [ "$MODE" != "machine" ]; then tp="$(_wl_find_transcript "$SID" || true)"; fi
+  [ -n "$tp" ] && [ -f "$tp" ] || { RECHECKED_SRC="none"; return 0; }
+  # The turn bound: the last GENUINE human prompt, read from a bounded tail (4 MiB, as
+  # hooks/lib/turn-scan.sh). A task-notification, a Stop-hook block, a teammate message or a tool
+  # result is not one — none of them is the operator answering, so none may launder a stamp.
+  lim="${CC_TURN_SCAN_TAIL_BYTES:-4194304}"; case "$lim" in ''|*[!0-9]*) lim=4194304 ;; esac
+  sz="$(wc -c < "$tp" 2>/dev/null | tr -d ' ')"; case "$sz" in ''|*[!0-9]*) RECHECKED_SRC="error"; return 0 ;; esac
+  bound="$( { if [ "$sz" -gt "$lim" ]; then tail -c "$lim" "$tp" | sed 1d; else cat "$tp"; fi; } 2>/dev/null \
+    | jq -Rrn '
+      def txt: if type=="string" then . elif type=="array" then ([.[]?|select(.type=="text")|.text]|join("\n")) else "" end;
+      def machine_env: test("^[[:space:]]*(\\[handoff |<teammate-message|<task-notification|<local-command-|<bash-(input|stdout|stderr)>|<agent-message|Another Claude session sent a message|Stop hook feedback|\\[Request interrupted|Caveat:)") or test("HANDOFF-ENGAGE-[A-Za-z0-9._-]+");
+      def human_user:
+        .type=="user" and (.isMeta != true) and (.isSidechain != true)
+        and ((.message.content|type)!="array" or ([.message.content[]?|select(.type=="tool_result")]|length)==0)
+        and (if (.origin|type)=="object" then .origin.kind=="human"
+             else ((.message.content|txt) as $t | ($t!="") and ($t|machine_env|not)) end);
+      def human_queued:
+        .type=="attachment" and (.attachment.type=="queued_command") and ((.attachment.commandMode//"")=="prompt")
+        and ((.attachment.origin.kind//"human")=="human");
+      [ inputs | (try fromjson catch empty) | objects
+        | select(human_user or human_queued) | (.timestamp // .attachment.timestamp) // empty ]
+      | last // empty | tostring | sub("\\.[0-9]+"; "") | fromdateiso8601 | floor' 2>/dev/null)" \
+    || { RECHECKED_SRC="error"; return 0; }
+  [ -n "$bound" ] || { RECHECKED_SRC="none"; return 0; }
+  case "$bound" in *[!0-9]*) RECHECKED_SRC="error"; return 0 ;; esac
+  # Epochs, never strings: a re-check ts and a transcript ts differ in precision and suffix.
+  # ts and tier are carried for a reader of the raw rows; the bound compares the epoch cell.
+  while IFS=$'\t' read -r tag id _ _ ep rwhat; do
+    [ "$tag" = "RC" ] || continue
+    case "$ep" in ''|*[!0-9]*) continue ;; esac
+    [ "$ep" -ge "$bound" ] || continue
+    k=$((k + 1)); ids="${ids:+$ids }$id"; w1="$rwhat"
+  done <<< "$rows"
+  BLOCKED_RECHECKED="$k"; RECHECKED_IDS="$ids"; RECHECKED_SRC="ok"
+  if [ "$k" -eq 1 ]; then
+    w1="${w1%.}"
+    [ -n "$w1" ] || w1="an open class-C decision — see cc-decide list --open --class C"
+    RECHECKED_WHAT="$w1"
   fi
 }
 
@@ -2501,6 +2585,10 @@ case "$MODE" in machine|full) compute_research ;; esac
 # cannot ride the ✅-eligible path where a worse rung has already decided the answer. That costs ONE
 # bounded fork on every turn close (this is a Stop-hook path) and it is the price of a rung that
 # outranks: an operator decision left open is worse than a dirty tree, and nothing else can see it.
+# THE RE-CHECK VARIANT IS THE EXCEPTION, ON PURPOSE (§ BLOCKED_RECHECKED). The same fork counts it,
+# but its ⛔ rides the ✅-eligible path, just above 👤: a store write must not mask agent-drivable
+# work, so dirty, remainder, unlanded, custody, resident, filed, unconvicted, floor, no-trunk and 🚀
+# all still win over it. Only the filed-by-me ⛔ below outranks everything.
 count_blocking_decisions
 if [ "$BLOCKED" -gt 0 ]; then
   RUNG="⛔"
@@ -2614,6 +2702,15 @@ else
       READOUT="🚀 Landed but NOT live — the live layer is ${LIVE_LAG} commit(s) behind and past its converge budget (the TIME arm: the commit it sits on is ${LIVE_AGE}s old, budget ${LIVE_BUDGET_MIN}m); the machine is not running this yet."
     else
       READOUT="🚀 Landed but NOT live — the live layer is ${LIVE_LAG} commit(s) behind and past its converge budget (the COMMIT arm: ${LIVE_LAG} > ${LIVE_BUDGET_COMMITS}); the machine is not running this yet."
+    fi
+  elif [ "$BLOCKED_RECHECKED" -gt 0 ]; then
+    # § BLOCKED_RECHECKED — this turn re-checked foreign decisions and they now wait on a sign-off.
+    # ⛔, not 👤: a sign-off is a decision, and decisions are the ⛔ rung; 👤 is for operator steps.
+    RUNG="⛔"
+    if [ "$BLOCKED_RECHECKED" -eq 1 ]; then
+      READOUT="⛔ Blocked — research done, implementation pending; need your call: ${RECHECKED_WHAT}."
+    else
+      READOUT="⛔ Blocked — research done, implementation pending: ${BLOCKED_RECHECKED} decision(s) need your call: cc-decide list --open"
     fi
   elif [ "$YOURS" -gt 0 ]; then
     # 👤 outranks the absent-DoD note: an unrun operator step is a fact, an unverifiable scope is not.
@@ -2799,6 +2896,10 @@ emit_machine() {
   printf 'CLOSE_FLOOR_SRC=%s\n' "$CLOSE_FLOOR_SRC"
   printf 'BLOCKED=%s\n' "$BLOCKED"
   printf 'BLOCKED_SRC=%s\n' "$BLOCKED_SRC"
+  # § BLOCKED_RECHECKED — this turn's convicted re-checks of foreign packets (ok|none|error|skip).
+  printf 'BLOCKED_RECHECKED=%s\n' "$BLOCKED_RECHECKED"
+  printf 'RECHECKED_IDS=%s\n' "$RECHECKED_IDS"
+  printf 'RECHECKED_SRC=%s\n' "$RECHECKED_SRC"
   printf 'GOAL_SRC=%s\n' "$GOAL_SRC"
   printf 'GOAL_EVALS=%s\n' "$GOAL_EVALS"
   printf 'GOAL_LAST=%s\n' "$GOAL_LAST"
@@ -2983,7 +3084,11 @@ emit_full() {
 
 rung_next() {
   case "$RUNG" in
-    "⛔") printf 'STOP-ASK — put the decision in line 1 and hand it back; nothing below it closes (cc-decide list --open --class C)' ;;
+    "⛔") if [ "$BLOCKED" -eq 0 ] && [ "$BLOCKED_RECHECKED" -gt 0 ]; then
+            printf 'STOP-ASK — research done, implementation pending: put the sign-off(s) in line 1 and hand them back (cc-decide list --open)'
+          else
+            printf 'STOP-ASK — put the decision in line 1 and hand it back; nothing below it closes (cc-decide list --open --class C)'
+          fi ;;
     "🔧") printf 'continue → finish · run-gate · commit (explicit paths)' ;;
     "📦") if [ "$LANDING" -eq 1 ]; then
             printf 'AWAIT the land already in flight (pid %s) — a second /ship on this worktree only queues behind it' "$LANDING_PID"
