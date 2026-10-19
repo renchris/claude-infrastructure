@@ -36,6 +36,16 @@
 #             Echoes the id.
 #   veto   <id> [--by who]                 open → vetoed   (operator killed the default)
 #   action <id> [--evidence ref]           open → actioned (the decision was carried out)
+#   recheck <id> --conviction N --receipt FILE [--recommendation r]
+#           [--tier signoff|default|nochange] [--session-sid s]
+#           → appends {sid, ts, conviction, receipt, recommendation, tier} (tier defaults to
+#             signoff) to `.rechecks[]` of an OPEN packet; never changes status, id, class or any
+#             other field. Fail-closed, the file untouched on every refusal: an unknown id (rc 3);
+#             a packet that is not open (rc 3); a conviction missing, not 0..100, or past
+#             CC_CONVICTION_ASK_MAX (implement it); a receipt that is not an existing regular FILE,
+#             lives under /tmp, /private/tmp or /var/folders, or does not contain the id; an
+#             unknown tier; no resolvable session sid; an active research program (rc 4 —
+#             program sessions use the kit's implementation signature).
 #   list   [--open | --all | --class X | --expiring] [--json]     (default --open)
 #          --json emits the FULL matching packets as ONE JSON array (never the table), so a
 #          consumer can filter on fields the table does not carry — `session_sid` above all.
@@ -70,7 +80,9 @@
 # waste; a dropped one is silent loss.
 #
 # Env (tests): CC_DECISIONS_DIR · CC_IDL (audit trail) · CC_NOW (ISO override for expiry compare).
-# BSD+GNU portable, no eval, fail-loud. Exit 0 ok · 2 usage/schema-refusal · 3 unknown id.
+# Env (tests): CC_RESEARCH_REGISTRY (read by scripts/lib/research-program.sh for `recheck`).
+# BSD+GNU portable, no eval, fail-loud. Exit 0 ok · 2 usage/schema-refusal · 3 unknown id
+# (and, for recheck, a packet that is not open) · 4 recheck refused inside a research program.
 set -uo pipefail
 
 DECISIONS_DIR="${CC_DECISIONS_DIR:-$HOME/.claude/autonomy/decisions}"
@@ -375,6 +387,108 @@ cmd_transition() {
   echo "$id"
 }
 
+# This script's real path, following every symlink hop. The live layer invokes it as
+# ~/.claude/bin/cc-decide, a per-file link whose target may be RELATIVE to the link's directory,
+# so one bare `readlink` resolved against the cwd finds nothing (bin/cc-backlog `self_path`).
+self_path() {
+  local s="$0" l
+  while [ -L "$s" ]; do
+    l="$(readlink "$s" 2>/dev/null)" || break
+    case "$l" in /*) s="$l" ;; *) s="$(dirname "$s")/$l" ;; esac
+  done
+  printf '%s' "$s"
+}
+
+# ── recheck: an OPEN packet was re-researched (REPORT A4, research-pending-implementation close) ─
+# A held decision goes stale silently: nothing records that a later session looked again, so the
+# next one cannot tell a fresh ask from a month-old one. `recheck` APPENDS that evidence and
+# touches nothing else — inv7 governs the packet, so status/id/class/what stay exactly as filed.
+# Same fail-closed asymmetry as `open`: every refusal leaves the file byte-identical. The receipt is
+# stricter than open's: a FILE (no "<cmd> => <output>" form) that outlives the session (not under a
+# tmp root) and names THIS packet (contains its id), so a recheck cannot cite unrelated research.
+cmd_recheck() {
+  local id="${1:-}"; [ $# -gt 0 ] && shift
+  local conviction="" receipt="" rec="" tier="signoff" sid=""
+  while [ $# -gt 0 ]; do
+    local key="$1"; shift
+    case "$key" in
+      --conviction)     conviction="${1:-}"; [ $# -gt 0 ] && shift ;;
+      --receipt)        receipt="${1:-}";    [ $# -gt 0 ] && shift ;;
+      --recommendation) rec="${1:-}";        [ $# -gt 0 ] && shift ;;
+      --tier)           tier="${1:-}";       [ $# -gt 0 ] && shift ;;
+      --session-sid)    sid="${1:-}";        [ $# -gt 0 ] && shift ;;
+      *) printf 'cc-decide recheck: unknown arg %s\n' "$key" >&2; return 2 ;;
+    esac
+  done
+  case "$id" in ''|-*) echo "cc-decide recheck: <id> is required (recheck <id> --conviction N --receipt FILE)" >&2; return 2 ;; esac
+
+  # A program session closes through the research kit's own signature, not this queue. A missing
+  # lib or registry means "no program" (the lib's own failure direction), so only rc 0 refuses.
+  local rp; rp="$(dirname "$(self_path)")/../scripts/lib/research-program.sh"
+  if [ -f "$rp" ] && bash "$rp" is-active "$PWD" >/dev/null 2>&1; then
+    echo "cc-decide recheck: $PWD is inside an active research program — program sessions use the kit's implementation signature, not a recheck" >&2
+    return 4
+  fi
+
+  local file="$DECISIONS_DIR/$id.json"
+  [ -f "$file" ] || { printf 'cc-decide recheck: unknown id %s\n' "$id" >&2; return 3; }
+  local st; st="$(jq -r "$SFOLD"' sopen' "$file" 2>/dev/null)" \
+    || { printf 'cc-decide recheck: packet %s is unreadable\n' "$id" >&2; return 2; }
+  [ "$st" = "open" ] || { printf 'cc-decide recheck: packet %s is %s, not open — only an open decision can be rechecked\n' "$id" "$st" >&2; return 3; }
+
+  local ask_max; ask_max="$(conviction_ask_max)"
+  [ -n "$conviction" ] || { echo "cc-decide recheck: --conviction N is required (how sure you now are, 0..100)" >&2; return 2; }
+  valid_conviction "$conviction" \
+    || { echo "cc-decide recheck: --conviction '${conviction}' is not an integer 0..100 (a percent, e.g. 60)" >&2; return 2; }
+  if [ "$conviction" -gt "$ask_max" ]; then
+    echo "cc-decide recheck: conviction ${conviction} is past the ${ask_max}% threshold — implement it, do not re-ask; then close the packet with \`cc-decide action ${id}\`." >&2
+    return 2
+  fi
+
+  [ -n "$receipt" ] || { echo "cc-decide recheck: --receipt FILE is required (the research that re-checked this packet)" >&2; return 2; }
+  if [ ! -f "$receipt" ]; then
+    echo "cc-decide recheck: --receipt '${receipt}' is not an existing regular file — a recheck receipt is a file, never \"<cmd> => <output>\"" >&2; return 2
+  fi
+  # Judge the PHYSICAL path too: /tmp and /var/folders are symlinks into /private on macOS, and a
+  # relative path from a tmp cwd names neither prefix literally.
+  local rdir rabs p
+  rdir="$(cd "$(dirname "$receipt")" 2>/dev/null && pwd -P)" \
+    || { echo "cc-decide recheck: --receipt '${receipt}': cannot resolve its directory" >&2; return 2; }
+  rabs="$rdir/$(basename "$receipt")"
+  for p in "$receipt" "$rabs"; do
+    case "$p" in
+      /tmp/*|/private/tmp/*|/var/folders/*|/private/var/folders/*)
+        echo "cc-decide recheck: --receipt '${receipt}' lives under a tmp root (/tmp, /private/tmp, /var/folders) and will evaporate — write it to a committed docs/research path" >&2
+        return 2 ;;
+    esac
+  done
+  grep -qF -- "$id" "$receipt" 2>/dev/null \
+    || { echo "cc-decide recheck: --receipt '${receipt}' does not mention packet ${id} — a recheck receipt must name the decision it re-checked" >&2; return 2; }
+
+  case "$tier" in
+    signoff|default|nochange) : ;;
+    *) echo "cc-decide recheck: --tier must be signoff|default|nochange (got '${tier}')" >&2; return 2 ;;
+  esac
+
+  # The `open` attribution ladder (see cmd_open). Unlike open, an empty sid REFUSES: a recheck
+  # that names no session is evidence nobody can attribute.
+  [ -n "$sid" ] || sid="${CLAUDE_SESSION_ID:-}"
+  [ -n "$sid" ] || sid="${CLAUDE_CODE_SESSION_ID:-}"
+  [ -n "$sid" ] || sid="${CC_SESSION_ID:-}"
+  [ -n "$sid" ] || { echo "cc-decide recheck: no session sid — pass --session-sid or run from a session that exports CLAUDE_CODE_SESSION_ID" >&2; return 2; }
+
+  local tmp="$file.tmp.$$"
+  if jq --arg sid "$sid" --arg ts "$(now_iso)" --argjson c "$conviction" --arg r "$rabs" \
+        --arg rec "$rec" --arg tier "$tier" \
+     '.rechecks = ((.rechecks // []) + [{sid:$sid, ts:$ts, conviction:$c, receipt:$r,
+                                         recommendation:$rec, tier:$tier}])' \
+     "$file" > "$tmp" 2>/dev/null && mv "$tmp" "$file"; then :; else
+    rm -f "$tmp" 2>/dev/null || true; echo "cc-decide recheck: update failed" >&2; return 2
+  fi
+  log_idl recheck "$id" "$(jq -r '.class' "$file" 2>/dev/null || echo '?')" open
+  echo "$id"
+}
+
 # ── the ONE select predicate `list` owns ───────────────────────────────────────────────────────
 # Written once and shared by BOTH renderings (table and --json). cc-decide is the arbiter of what
 # "open"/"expiring" MEAN for a packet (memory: make-the-actuator-the-arbiter), so a second copy of
@@ -531,6 +645,7 @@ case "${1:-}" in
   open)         shift; cmd_open "$@" ;;
   veto)         shift; cmd_transition veto "$@" ;;
   action)       shift; cmd_transition action "$@" ;;
+  recheck)      shift; cmd_recheck "$@" ;;
   list)         shift; cmd_list "$@" ;;
   expire-sweep) shift; cmd_expire_sweep "$@" ;;
   ""|-h|--help|help) usage ;;

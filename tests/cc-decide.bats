@@ -20,6 +20,16 @@ setup() {
   # ambient would make every unflagged `open` in this file mint a different id depending on WHERE
   # the suite ran, which is the same trap tests/completion-assert.bats:23 unsets for.
   unset CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID CC_SESSION_ID
+  # HERMETIC: `recheck` refuses inside an active research program, resolved from the LIVE registry
+  # by default — point it at an absent file (= no program) so the operator's own programs cannot
+  # decide this suite's verdicts.
+  export CC_RESEARCH_REGISTRY="$BATS_TEST_TMPDIR/no-programs.json"
+}
+
+teardown() {
+  # recheck receipts live in the checkout's gitignored .claude/tmp (see _rck_dir), not in
+  # $BATS_TEST_TMPDIR, so they are removed here rather than by bats.
+  if [ -n "${RCK_DIR:-}" ] && [ -d "$RCK_DIR" ]; then rm -rf "$RCK_DIR"; fi
 }
 
 # ── open: valid packets ────────────────────────────────────────────────────────
@@ -747,4 +757,195 @@ _pkt() {  # $1=id  [$2=raw body override]
   run bash "$CD" open --class A --what "drift probe 4"
   [ "$status" -eq 0 ]
   [ "$output" = "$id" ]
+}
+
+# ── recheck: an OPEN packet was re-researched (REPORT A4) ──────────────────────────────────────
+# VACUITY GUARD, measured pre-fix: an unknown verb exits 2 with "unknown verb recheck" AND prints
+# usage(), whose text already contains "implement it", "REFUSED" and "unknown id". So every refusal
+# case below asserts the "cc-decide recheck:" prefix and the ABSENCE of "unknown verb" — matching
+# the refusal's wording alone would pass against the binary that has no recheck at all.
+#
+# RECEIPTS: recheck refuses a receipt under /tmp, /private/tmp or /var/folders, which is where
+# $BATS_TEST_TMPDIR resolves on macOS. So the fixtures live in the checkout's gitignored .claude/tmp
+# (removed by teardown) rather than behind a test-only seam in the tool.
+_rck_dir() {
+  mkdir -p "$REPO/.claude/tmp"
+  RCK_DIR="$(mktemp -d "$REPO/.claude/tmp/cc-decide-recheck.XXXXXX")"
+}
+_rck_open() {  # → echoes the id of a fresh open class-C packet
+  bash "$CD" open --class C --what "recheck probe ${1:-1}" "${C_OK[@]}" --session-sid filer
+}
+_rck_receipt() {  # $1=id → path of a durable receipt that names the packet
+  printf 'rechecked packet %s: still below the threshold\n' "$1" > "$RCK_DIR/receipt-$1.md"
+  printf '%s' "$RCK_DIR/receipt-$1.md"
+}
+_rck_refused() {  # $1=expected rc — the tool's OWN refusal, never the unknown-verb fallthrough
+  [ "$status" -eq "$1" ] || { echo "rc $status, want $1: $output"; return 1; }
+  [[ "$output" == *"cc-decide recheck:"* ]] || { echo "no recheck prefix: $output"; return 1; }
+  [[ "$output" != *"unknown verb"* ]] || { echo "fell through to unknown verb"; return 1; }
+}
+
+@test "recheck appends one entry and changes NOTHING else on the packet" {
+  _rck_dir
+  id="$(_rck_open)"; f="$CC_DECISIONS_DIR/$id.json"; r="$(_rck_receipt "$id")"
+  cp "$f" "$BATS_TEST_TMPDIR/before.json"
+  run bash "$CD" recheck "$id" --conviction 70 --receipt "$r" --recommendation "hold" \
+      --tier default --session-sid s1
+  [ "$status" -eq 0 ]
+  [ "$output" = "$id" ]
+  [ "$(jq -S 'del(.rechecks)' "$BATS_TEST_TMPDIR/before.json")" = "$(jq -S 'del(.rechecks)' "$f")" ]
+  run jq -c '.rechecks | length' "$f";              [ "$output" = "1" ]
+  run jq -r '.rechecks[0].sid' "$f";                [ "$output" = "s1" ]
+  run jq -r '.rechecks[0].conviction | type' "$f";  [ "$output" = "number" ]
+  run jq -r '.rechecks[0].conviction' "$f";         [ "$output" = "70" ]
+  run jq -r '.rechecks[0].recommendation' "$f";     [ "$output" = "hold" ]
+  run jq -r '.rechecks[0].tier' "$f";               [ "$output" = "default" ]
+  run jq -r '.rechecks[0].receipt' "$f";            [ "$output" = "$(cd "$RCK_DIR" && pwd -P)/receipt-$id.md" ]
+  run jq -r '.rechecks[0].ts' "$f"
+  [[ "$output" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || false
+  grep -q '"verb":"recheck"' "$CC_IDL"
+}
+
+@test "recheck twice appends two entries; tier defaults to signoff; list --open --json carries them" {
+  _rck_dir
+  id="$(_rck_open 2)"; r="$(_rck_receipt "$id")"
+  CLAUDE_CODE_SESSION_ID=env-sid run bash "$CD" recheck "$id" --conviction 60 --receipt "$r"
+  [ "$status" -eq 0 ]
+  run bash "$CD" recheck "$id" --conviction 80 --receipt "$r" --session-sid s2
+  [ "$status" -eq 0 ]
+  run jq -r '[.rechecks[] | "\(.sid)/\(.conviction)/\(.tier)"] | join(",")' "$CC_DECISIONS_DIR/$id.json"
+  [ "$output" = "env-sid/60/signoff,s2/80/signoff" ]
+  run bash "$CD" list --open --json
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r --arg id "$id" '.[] | select(.id == $id) | .rechecks | length')" = "2" ]
+  run jq -r --arg id "$id" '.[] | select(.id == $id) | .status' <<< "$output"
+  [ "$output" = "open" ]
+}
+
+@test "recheck REFUSES an unknown id (rc 3) and writes no file" {
+  _rck_dir
+  printf 'deadbeef0001\n' > "$RCK_DIR/r.md"
+  run bash "$CD" recheck deadbeef0001 --conviction 60 --receipt "$RCK_DIR/r.md" --session-sid s
+  _rck_refused 3
+  [[ "$output" == *"unknown id"* ]] || false
+  [ ! -e "$CC_DECISIONS_DIR/deadbeef0001.json" ]
+}
+
+@test "recheck REFUSES a packet that is not open (rc 3), file byte-identical" {
+  _rck_dir
+  id="$(_rck_open 3)"; f="$CC_DECISIONS_DIR/$id.json"; r="$(_rck_receipt "$id")"
+  bash "$CD" action "$id" --evidence done >/dev/null
+  cp "$f" "$BATS_TEST_TMPDIR/copy.json"
+  run bash "$CD" recheck "$id" --conviction 60 --receipt "$r" --session-sid s
+  _rck_refused 3
+  [[ "$output" == *"not open"* ]] || false
+  cmp "$f" "$BATS_TEST_TMPDIR/copy.json"
+}
+
+@test "recheck REFUSES conviction past the threshold (implement it); exactly 90 is accepted" {
+  _rck_dir
+  id="$(_rck_open 4)"; f="$CC_DECISIONS_DIR/$id.json"; r="$(_rck_receipt "$id")"
+  cp "$f" "$BATS_TEST_TMPDIR/copy.json"
+  run bash "$CD" recheck "$id" --conviction 91 --receipt "$r" --session-sid s
+  _rck_refused 2
+  [[ "$output" == *"implement it"* ]] || false
+  cmp "$f" "$BATS_TEST_TMPDIR/copy.json"
+  run bash "$CD" recheck "$id" --conviction 90 --receipt "$r" --session-sid s
+  [ "$status" -eq 0 ]
+}
+
+@test "recheck REFUSES a missing or malformed conviction, file byte-identical" {
+  _rck_dir
+  id="$(_rck_open 5)"; f="$CC_DECISIONS_DIR/$id.json"; r="$(_rck_receipt "$id")"
+  cp "$f" "$BATS_TEST_TMPDIR/copy.json"
+  run bash "$CD" recheck "$id" --receipt "$r" --session-sid s
+  _rck_refused 2
+  [[ "$output" == *"--conviction"* ]] || false
+  run bash "$CD" recheck "$id" --conviction 6o --receipt "$r" --session-sid s
+  _rck_refused 2
+  [[ "$output" == *"not an integer"* ]] || false
+  cmp "$f" "$BATS_TEST_TMPDIR/copy.json"
+}
+
+@test "recheck REFUSES a receipt that is not an existing regular file, file byte-identical" {
+  _rck_dir
+  id="$(_rck_open 6)"; f="$CC_DECISIONS_DIR/$id.json"
+  cp "$f" "$BATS_TEST_TMPDIR/copy.json"
+  for bad in "$RCK_DIR/absent.md" "$RCK_DIR" "probe $id => result"; do
+    run bash "$CD" recheck "$id" --conviction 60 --receipt "$bad" --session-sid s
+    _rck_refused 2
+    [[ "$output" == *"not an existing regular file"* ]] || false
+  done
+  run bash "$CD" recheck "$id" --conviction 60 --session-sid s
+  _rck_refused 2
+  cmp "$f" "$BATS_TEST_TMPDIR/copy.json"
+}
+
+@test "recheck REFUSES a receipt under a tmp root, by literal path AND by physical path" {
+  _rck_dir
+  id="$(_rck_open 7)"; f="$CC_DECISIONS_DIR/$id.json"
+  cp "$f" "$BATS_TEST_TMPDIR/copy.json"
+  t="$(mktemp /tmp/cc-decide-rck.XXXXXX)"
+  printf 'rechecked %s\n' "$id" > "$t"
+  run bash "$CD" recheck "$id" --conviction 60 --receipt "$t" --session-sid s
+  _rck_refused 2 || { rm -f "$t"; false; }
+  [[ "$output" == *"tmp root"* ]] || { rm -f "$t"; false; }
+  # a symlinked directory outside /tmp that resolves into it is still refused
+  ln -s "$(dirname "$t")" "$RCK_DIR/via"
+  run bash "$CD" recheck "$id" --conviction 60 --receipt "$RCK_DIR/via/$(basename "$t")" --session-sid s
+  rm -f "$t"
+  _rck_refused 2
+  [[ "$output" == *"tmp root"* ]] || false
+  cmp "$f" "$BATS_TEST_TMPDIR/copy.json"
+}
+
+@test "recheck REFUSES a receipt that does not name the packet, file byte-identical" {
+  _rck_dir
+  id="$(_rck_open 8)"; f="$CC_DECISIONS_DIR/$id.json"
+  printf 'research about something else entirely\n' > "$RCK_DIR/other.md"
+  cp "$f" "$BATS_TEST_TMPDIR/copy.json"
+  run bash "$CD" recheck "$id" --conviction 60 --receipt "$RCK_DIR/other.md" --session-sid s
+  _rck_refused 2
+  [[ "$output" == *"does not mention packet $id"* ]] || false
+  cmp "$f" "$BATS_TEST_TMPDIR/copy.json"
+}
+
+@test "recheck REFUSES an unknown tier, file byte-identical" {
+  _rck_dir
+  id="$(_rck_open 9)"; f="$CC_DECISIONS_DIR/$id.json"; r="$(_rck_receipt "$id")"
+  cp "$f" "$BATS_TEST_TMPDIR/copy.json"
+  run bash "$CD" recheck "$id" --conviction 60 --receipt "$r" --tier no-change --session-sid s
+  _rck_refused 2
+  [[ "$output" == *"--tier must be signoff|default|nochange"* ]] || false
+  cmp "$f" "$BATS_TEST_TMPDIR/copy.json"
+}
+
+@test "recheck REFUSES when no session sid resolves (flag absent, env ladder empty)" {
+  _rck_dir
+  id="$(_rck_open 10)"; f="$CC_DECISIONS_DIR/$id.json"; r="$(_rck_receipt "$id")"
+  cp "$f" "$BATS_TEST_TMPDIR/copy.json"
+  run bash "$CD" recheck "$id" --conviction 60 --receipt "$r"
+  _rck_refused 2
+  [[ "$output" == *"no session sid"* ]] || false
+  cmp "$f" "$BATS_TEST_TMPDIR/copy.json"
+}
+
+@test "recheck REFUSES inside an active research program (rc 4); a CLOSED program does not" {
+  _rck_dir
+  id="$(_rck_open 11)"; f="$CC_DECISIONS_DIR/$id.json"; r="$(_rck_receipt "$id")"
+  cp "$f" "$BATS_TEST_TMPDIR/copy.json"
+  root="$(cd "$RCK_DIR" && pwd -P)"
+  export CC_RESEARCH_REGISTRY="$BATS_TEST_TMPDIR/programs.json"
+  jq -n --arg root "$root" '{programs:[{slug:"probe", aliases:[], cwd_roots:[$root], state:"certifying"}]}' \
+    > "$CC_RESEARCH_REGISTRY"
+  cd "$RCK_DIR"
+  run bash "$CD" recheck "$id" --conviction 60 --receipt "$r" --session-sid s
+  _rck_refused 4
+  [[ "$output" == *"program sessions use the kit's implementation signature"* ]] || false
+  cmp "$f" "$BATS_TEST_TMPDIR/copy.json"
+  # CONTROL: the same root, closed — the standing rules apply and the recheck lands
+  jq -n --arg root "$root" '{programs:[{slug:"probe", aliases:[], cwd_roots:[$root], state:"closed"}]}' \
+    > "$CC_RESEARCH_REGISTRY"
+  run bash "$CD" recheck "$id" --conviction 60 --receipt "$r" --session-sid s
+  [ "$status" -eq 0 ]
 }
