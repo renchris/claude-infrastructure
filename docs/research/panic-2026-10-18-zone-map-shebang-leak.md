@@ -192,3 +192,44 @@ fixed 30 s bound. The job already runs at utility QoS, so no band change helps. 
 the bound with load per core (30 s up to 75 s, under cc-restore's 120 s bound on the whole tick), and
 when the census still fails it carries each kitty's last roster (rows whose pid is alive) plus the
 kitty-tree backfill, stamps the tick, and records `carried <tick> <last ok tick>` in `hb.census`.
+
+## Implementation of improvement 1 (2026-10-19)
+
+Scope (frozen): the settings template runs every hook and the statusLine through an explicit
+interpreter; migration 0070 rewrites the live settings.json of all five config dirs (c10, operator
+runs it); a land-gate lint refuses a bare `#!` hook command; the hottest script-to-script `#!` calls
+on the hook path are converted; per-exec retention is measured for the converted helpers.
+
+Scope (grown): readers that match hook commands by exact string now compare through one normalizer,
+`cmd_bare` (`scripts/lib/hook-cmd-bare.jq`): `install.sh` (its within-event union would otherwise
+append every hook a second time, measured: 2 copies of validate-bash on the pre-fix install.sh),
+`scripts/settings-drift-assert.sh`, the hook-chain live-parity drift guard, and the 12 still-staged
+settings migrations (0012-0069), which after 0070 would otherwise miss their own hook. The c10 batch
+runs 0070 after 0024, so a hook an earlier step registers by bare path is rewritten in the same run.
+
+What is where:
+
+| Piece | File |
+|---|---|
+| rewrite + lint predicate (prefix = the script's own shebang, verbatim; an interpreter `cmd_bare` cannot strip is refused) | `scripts/hook-interp.py` |
+| normalizer for string matchers | `scripts/lib/hook-cmd-bare.jq` |
+| land-gate arm (fires on lands touching the template, `hooks/` or the lint) | `scripts/hook-shebang-lint.sh`, `scripts/ship-land.sh` |
+| live rewrite, symlink-preserving, backup + by-content verify, idempotent | `migrations/0070-hook-explicit-interpreter.sh` |
+| Stop-path `shasum` (a `#!/usr/bin/perl` script) run by perl directly | `hooks/lib/shasum-direct.sh` |
+
+Hot-path census (no root): each hook run once under inherited xtrace (`SHELLOPTS=xtrace` from the
+environment, so child bash scripts trace too) with a benign payload, every external first word
+resolved and its first two bytes read. A positive control (a fixture hook calling `cc-custody` and
+`cc-mail` by bare name and `cc-backlog` via `/bin/bash`) reported exactly the two bare calls.
+- PreToolUse Bash (11 hooks) and PostToolUse Bash (8): **no nested `#!` exec**. The only candidate
+  found by reading, `memory-index-drain.sh`'s `cc-memory-rotate`, runs only when MEMORY.md changed.
+  The per-Bash leak is therefore the ~20 hook execs themselves, which 0070 converts.
+- Status line: no nested `#!` exec.
+- Stop (13 hooks) and UserPromptSubmit (7): `shasum` from `operator-readout.sh` (its `sha16`, six
+  call sites) and `session-continue.sh` (via `hooks/lib/continue-sentinel.sh`, `dod-path.sh`,
+  `origin-identity.sh`, `deadline-capture.sh`). Converted through `hooks/lib/shasum-direct.sh`.
+- Not converted: 57 files call `shasum`; the rest are off the per-turn path.
+
+Improvement 2 (one dispatcher exec instead of ~20) is not filed: once 0070 is live each hook is a
+Mach-O `bash` exec that retains about 0, so collapsing them buys load, not leak, and the collapse
+(`hooks/hook-chain.sh`) already has an adjudicated history (backlog `05c79abca813`).
