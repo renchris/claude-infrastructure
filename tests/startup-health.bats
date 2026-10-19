@@ -556,3 +556,32 @@ drain() { # <mode> — mailbox-drain against a fixture mailbox, payload naming $
   [ "$status" -eq 0 ]
   [ ! -e "$S/mailbox-drain.start" ]
 }
+
+# ── sentinel wiring: dod-persist (SessionStart branch), fixture DoD store ─────────────────────────
+dodrepo() {
+  export WRAP_DOD_DIR="$BATS_TEST_TMPDIR/dod" CC_DOD_LINEAGE_ONLY=0; mkdir -p "$WRAP_DOD_DIR"
+  CWD="$BATS_TEST_TMPDIR/wt"; mkdir -p "$CWD"
+  git -C "$CWD" init -q; git -C "$CWD" config user.email t@t; git -C "$CWD" config user.name t
+  echo x > "$CWD/f"; git -C "$CWD" add f; git -C "$CWD" commit -qm init
+}
+
+@test "dod-persist SessionStart leaves start+done, owing the context it injected" {
+  dodrepo
+  f="$(bash "$REPO/hooks/dod-persist.sh" path "$CWD" | tr -d '\n')"; mkdir -p "$(dirname "$f")"
+  printf '# Durable frozen DoD\nScope (frozen): ship the widget\n' > "$f"
+  run bash -c "jq -nc --arg c '$CWD' --arg s '$SID' '{hook_event_name:\"SessionStart\",cwd:\$c,session_id:\$s}' | bash '$REPO/hooks/dod-persist.sh'"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -qF 'ship the widget'
+  [ "$(field dod-persist.done rc)" = 0 ]
+  [ "$(field dod-persist.done owed)" -gt 0 ]
+}
+
+@test "dod-persist with no DoD owes nothing; with no payload session id it writes no sentinel" {
+  dodrepo
+  run bash -c "jq -nc --arg c '$CWD' --arg s '$SID' '{hook_event_name:\"SessionStart\",cwd:\$c,session_id:\$s}' | bash '$REPO/hooks/dod-persist.sh'"
+  [ "$(field dod-persist.done owed)" = 0 ]
+  rm -rf "$S"
+  run bash -c "jq -nc --arg c '$CWD' '{hook_event_name:\"SessionStart\",cwd:\$c}' | CLAUDE_CODE_SESSION_ID='$SID' bash '$REPO/hooks/dod-persist.sh'"
+  [ ! -e "$S" ]                                  # the env fallback never names a sentinel
+}
+

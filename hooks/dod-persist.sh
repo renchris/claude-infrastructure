@@ -387,6 +387,7 @@ $_lead"
   framed="$(printf '%s\n' "$own" | _dod_frame_pointer "$_pre" \
     "Below, newest first, in full: " " capture(s) of this session's lineage — every one newer than its newest 'Scope (frozen):' line, or the newest alone when it has none." \
     "$(( ncap - (${#cur} + ${#pcur} > 0) ))" " other capture(s) of this lineage (this session, a session that held this pane before it, or a recorded predecessor worktree) are not shown, and $(( nall - ncap )) from this worktree's other sessions or with no provenance are left out (CC_DOD_LINEAGE_ONLY=1).${unote} Read them in the store: ${files} (\`~/.claude/hooks/dod-persist.sh get\` prints this worktree's newest frozen line).")"
+  command -v ss_owed >/dev/null 2>&1 && ss_owed $(( ${#framed} + 1 ))
   jq -nc --arg c "$framed" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}' 2>/dev/null || true
   return 0
 }
@@ -437,10 +438,19 @@ cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
 # child of the session it belongs to). Empty when neither knows — the field is then OMITTED, never
 # emitted blank, so a reader can distinguish "no session recorded" from "session recorded as nothing".
 sid="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null || true)"
+_ss_sid="$sid"   # the startup sentinel keys on the PAYLOAD's id only, never the env fallback
 [ -n "$sid" ] || sid="${CLAUDE_CODE_SESSION_ID:-}"
 
 case "$event" in
   SessionStart)
+    # Start/done markers, so a harness cancel of this hook is reportable (hooks/lib/startup-sentinel.sh;
+    # docs/research/startup-hooks-2026-10-18/README.md §5 unit 3.1). 5000 ms = its registration timeout.
+    # No transcript path: this hook's parse does not read it, and the sentinel takes it from the first
+    # writer that has one. Owed = the injected context, set just before each emit below.
+    if [ -f "$_dpd/lib/startup-sentinel.sh" ]; then
+      # shellcheck source=lib/startup-sentinel.sh disable=SC1091  # runtime-resolved beside this file
+      . "$_dpd/lib/startup-sentinel.sh" 2>/dev/null && ss_begin dod-persist 5000 "$_ss_sid"
+    fi
     # W3: inject BOTH read sources (repo-key store first, then this toplevel's legacy) — the
     # lossless half of the migration: per-toplevel history keeps injecting exactly where it always
     # did, while every worktree of the repo now shares the repo-key captures.
@@ -492,6 +502,7 @@ $_lead"
     framed="$(printf '%s\n' "$content" | _dod_frame_pointer "$_pre" \
       "Below, newest first, in full: " " capture(s) of this worktree — every one newer than its newest 'Scope (frozen):' line, or the newest alone when it has none. Each '## ' block names the toplevel that wrote it." \
       "$(( ncap - (${#cur} > 0) ))" " other capture(s) of this wave's INTEGRATE-only history, from its own worktree and its RECORDED PREDECESSORS, are not shown. They are prior CONTEXT, NOT additional binding scope — a predecessor's finished contract is not yours to complete. A concurrent wave's captures are filtered out mechanically. Read them in the store: ${_files} (\`~/.claude/hooks/dod-persist.sh get\` prints this worktree's newest frozen line).")"
+    command -v ss_owed >/dev/null 2>&1 && ss_owed $(( ${#framed} + 1 ))
     jq -nc --arg c "$framed" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}' 2>/dev/null || true
     exit 0 ;;
   PreCompact)
