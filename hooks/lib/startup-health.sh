@@ -103,12 +103,14 @@ sh_scan() {
     fi
   } | LC_ALL=C grep -F '"hook_cancelled"' | LC_ALL=C grep -F 'SessionStart' \
     | jq -R -r --argjson f "$floor" '
+        def cell(ph): (if . == null then "" else . end) | tostring
+                      | gsub("[\\t\\r\\n]"; " ") | if . == "" then ph else . end;
         fromjson? | select(type == "object")
         | select((.attachment.type? // "") == "hook_cancelled" and (.attachment.hookEvent? // "") == "SessionStart")
         | select(((.timestamp // "") | tostring | sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch 0)) >= $f)
-        | [(.attachment.command // "?"), (.attachment.hookName // "?"),
-           (.attachment.durationMs // 0), (.attachment.timeoutMs // 0)]
-        | map(tostring | gsub("[[:cntrl:]]"; " ")) | join("\t")' 2>/dev/null
+        | [(.attachment.command | cell("?")), (.attachment.hookName | cell("?")),
+           (.attachment.durationMs | cell("0")), (.attachment.timeoutMs | cell("0"))]
+        | map(gsub("[[:cntrl:]]"; " ")) | join("\t")' 2>/dev/null
   return 0
 }
 
