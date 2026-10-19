@@ -32,14 +32,43 @@ setup() {
   [[ "$output" == *"live sessions      2 "* ]] || false
 }
 
-@test "NOT-READY (exit 3) while a ship-land.sh PROCESS runs, under a shell or directly" {
+@test "NOT-READY (exit 3) when a ship-land.sh PROCESS outlives the wait deadline — and the records are still written" {
+  export CC_REBOOT_PREP_LAND_WAIT_S=0
   printf '  201 bash /Users/x/.claude/scripts/ship-land.sh --land\n' > "$D/ps.out"
   run bash "$S"
   [ "$status" -eq 3 ] || false
+  [[ "$output" == *"waiting for them to finish, deadline "* ]] || false
+  [[ "$output" == *"pids 201 still running at the deadline"* ]] || false
   [[ "$output" == *"verdict=NOT-READY reason=land-in-flight"* ]] || false
+  [ -s "$CC_REBOOT_PREP_DIR/reboot-2020-01-01.start" ] || false   # a reboot taken anyway still restores
   printf '  202 /Users/x/.claude/scripts/ship-land.sh\n' > "$D/ps.out"
   run bash "$S"
   [ "$status" -eq 3 ] || false
+}
+
+@test "a land in flight is WAITED for, deadline printed, then READY — the refusal that stranded the 10-12 reboot" {
+  # ps reports the land for its first two calls, then it is gone.
+  printf '#!/bin/sh\nn=$(cat "%s/ps.n" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > "%s/ps.n"\n[ "$n" -le 2 ] && echo "  201 bash /x/scripts/ship-land.sh --land"\nexit 0\n' "$D" "$D" > "$D/ps"
+  run env CC_REBOOT_PREP_LAND_WAIT_S=60 CC_REBOOT_PREP_LAND_POLL_S=1 bash "$S"
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output"; false; }
+  [[ "$output" == *"pids 201 — waiting for them to finish, deadline "*" (60s)"* ]] || false
+  [[ "$output" == *"lands in flight    finished after "* ]] || false
+  [[ "$output" == *"verdict=READY"* ]]
+}
+
+@test "the HEAD prints the zone level, its share of the ceiling and the ETA, from the alarm's zone state" {
+  mkdir -p "$CC_REBOOT_PREP_DIR"
+  printf 'ceiling_gib=19.98\nslope_gib_day=2.00\nslope_src=trailing 3.0 d\n' > "$CC_REBOOT_PREP_DIR/kalloc-zone.state"
+  printf '#!/bin/sh\necho "data.kalloc.1024 1024 0K 0K 0 0 15728640 0K 0"\n' > "$D/zprint"   # 15.00 GiB
+  run bash "$S"
+  [ "$status" -eq 0 ] || false
+  # Line 2, before the roster, the arrangement and the steps: 4.98 GiB of room at 2 GiB/day.
+  [ "$(printf '%s\n' "$output" | sed -n 2p)" = "  data.kalloc.1024   15.00 GiB = 75% of the ~19.98 GiB panic ceiling · +2.00 GiB/day (trailing 3.0 d) · ceiling in ~2.5 d ($(date -r $(( $(date +%s) + 216000 )) +%Y-%m-%d))" ] \
+    || { printf '%s\n' "$output" | sed -n 1,3p; false; }
+  grep -q 'kalloc1024_gb=15.00' "$CC_REBOOT_PREP_DIR/reboot-2020-01-01.kalloc" || false
+  rm -f "$CC_REBOOT_PREP_DIR/kalloc-zone.state"            # no alarm state: the level alone, said so
+  run bash "$S"
+  [[ "$(printf '%s\n' "$output" | sed -n 2p)" == *"15.00 GiB · ceiling and ETA unknown (no capacity-alarm zone state"* ]]
 }
 
 @test "a session whose brief merely MENTIONS ship-land.sh is not a land (the pgrep -f false positive)" {

@@ -2,16 +2,22 @@
 # alarm-reboot-prep.sh — the agent half of the safe reboot order, run whenever the capacity alarm's
 # kalloc rung fires (host-memory.2 of the 2026-09-30 backlog master plan).
 #
-# WHY A STANDING PROCEDURE. data.kalloc.1024 is a kernel zone only a reboot resets. It read
-# 14.78 GB after 13.8 days on the 2026-09-16 boot (1.05 GB/day measured) and panic #5 died at
-# 9.89 GB, so a reboot buys roughly 5 days to the 6 GB alarm and 9 to the panic level until the
-# driver is fixed (docs/research/kalloc-ratchet-2026-10.md). The first reboot, on 2026-09-30, went
+# WHY A STANDING PROCEDURE. data.kalloc.1024 is a kernel zone only a reboot resets, and on 2026-10-18
+# it panicked the box at 20,955,520 elements (~20 GiB) after 18 days up; it grew 1-4.4 GiB/day
+# (docs/research/panic-2026-10-18-zone-map-shebang-leak.md). The first reboot, on 2026-09-30, went
 # in a safe order; this script is that order, so every later one repeats it instead of improvising:
+#
+#   0. THE HEAD: the zone's level now, its share of the ceiling and the ETA to it (slope and ceiling
+#      from the capacity alarm's <dir>/kalloc-zone.state), printed before anything else. On 10-17
+#      the operator was told to reboot for load reasons with the 18 GB zone never mentioned.
 #
 #   1. record the start epoch        ~/.claude/autonomy/reboot-<date>.start
 #   2. record the live-session roster ~/.claude/autonomy/reboot-<date>.roster.json  (cc-sessions --json;
 #      the resume path relaunches from it after login)
-#   3. refuse while a land is in flight (a ship-land.sh PROCESS) — a reboot mid-push strands the land
+#   3. wait while a land is in flight (a ship-land.sh PROCESS) — a reboot mid-push strands the land.
+#      It WAITS, bounded, with the deadline printed (CC_REBOOT_PREP_LAND_WAIT_S, default 1800 s),
+#      rather than refusing: on 10-12 a refusal put a reboot off and nothing ever re-ran it. Past the
+#      deadline it still records everything below and ends NOT-READY.
 #   4. record the kalloc reading the reboot is about to erase ~/.claude/autonomy/reboot-<date>.kalloc
 #      (its OWN file: appended to .start as a second line, it made boot-resume.sh skip every roster
 #      this script wrote, because the reader took the whole file as the epoch — W3 P3a-i, 2026-10-04)
@@ -42,10 +48,11 @@
 # the cc-resume-layout.sh command that prints the restore plan for that capture is named.
 #
 # It never reboots, never kills a session and never runs sudo: those are the operator's.
-# Exit: 0 READY · 3 NOT-READY (a land is in flight; re-run when it finishes) · 2 usage.
+# Exit: 0 READY · 3 NOT-READY (a land was still in flight at the deadline; re-run when it finishes) · 2 usage.
 # Env:  CC_REBOOT_PREP_DIR (default ~/.claude/autonomy) · CC_REBOOT_PREP_DATE (default today, local)
 #       CC_REBOOT_PREP_PS (default /bin/ps; stub for tests) · CC_REBOOT_PREP_SESSIONS (default cc-sessions)
 #       CC_REBOOT_PREP_ZPRINT (default /usr/bin/zprint) · CC_REBOOT_PREP_TRIES (3) ·
+#       CC_REBOOT_PREP_LAND_WAIT_S (1800) · CC_REBOOT_PREP_LAND_POLL_S (15) ·
 #       CC_HEARTBEAT_DIR (default <dir>/heartbeat) and the heartbeat library's own seams
 set -uo pipefail
 
@@ -66,6 +73,77 @@ CAPTURE_CMD="$DIR/kalloc-root-capture.cmd"
 mkdir -p "$DIR" || { echo "alarm-reboot-prep: cannot create $DIR" >&2; exit 2; }
 
 now="$(date +%s)"
+
+# ── 0. the head: the zone level and the ETA, before anything else ──────────────────────────────────
+# Bounded the way the capacity alarm bounds the same read (perl alarm, output to a file): a zprint
+# wedged in the kernel must not hold the reboot procedure open. Empty ⇒ "unreadable", never 0.
+zone_bytes() {
+  local out b=""
+  [ -x /usr/bin/perl ] || return 0
+  out="$(mktemp "${TMPDIR:-/tmp}/reboot-prep-zp.XXXXXX" 2>/dev/null)" || return 0
+  /usr/bin/perl -e 'my $t = shift; my $p = fork; exit 1 unless defined $p;
+    if (!$p) { exec @ARGV; exit 127 }
+    $SIG{ALRM} = sub { kill "KILL", $p; exit 124 };
+    alarm $t; waitpid($p, 0); exit($? >> 8)' 10 "$ZPRINT" data.kalloc.1024 > "$out" 2>/dev/null
+  b="$(awk '$1 == "data.kalloc.1024" && $2 ~ /^[0-9]+$/ && $7 ~ /^[0-9]+$/ { printf "%.0f", $2 * $7; exit }' "$out" 2>/dev/null)"
+  rm -f "$out"
+  printf '%s' "$b"
+}
+kz() { sed -n "s/^$1=//p" "$DIR/kalloc-zone.state" 2>/dev/null | head -1; }
+kbytes="$(zone_bytes)"
+kalloc=""; [ -n "$kbytes" ] && kalloc="$(awk -v b="$kbytes" 'BEGIN{printf "%.2f", b/1073741824}')"
+kz_ceil="$(kz ceiling_gib)"; kz_slope="$(kz slope_gib_day)"; kz_ssrc="$(kz slope_src)"
+zline="${kalloc:-unreadable}${kalloc:+ GiB}"
+if [ -n "$kalloc" ] && [ -n "$kz_ceil" ]; then
+  zline="$zline = $(awk -v g="$kalloc" -v c="$kz_ceil" 'BEGIN{printf "%.0f", 100 * g / c}')% of the ~$kz_ceil GiB panic ceiling"
+  eta=""
+  [ -n "$kz_slope" ] && eta="$(awk -v g="$kalloc" -v c="$kz_ceil" -v r="$kz_slope" 'BEGIN{
+      if (g + 0 >= c + 0) printf "0.0"; else if (r + 0 > 0) printf "%.1f", (c - g) / r }')"
+  if [ -n "$eta" ]; then
+    zline="$zline · +$kz_slope GiB/day ($kz_ssrc) · ceiling in ~$eta d ($(date -r "$(awk -v n="$now" -v d="$eta" 'BEGIN{printf "%.0f", n + d * 86400}')" +%Y-%m-%d 2>/dev/null))"
+  else
+    zline="$zline · no ETA (slope ${kz_slope:-unknown})"
+  fi
+elif [ -n "$kalloc" ]; then
+  zline="$zline · ceiling and ETA unknown (no capacity-alarm zone state at $DIR/kalloc-zone.state)"
+fi
+if [ "$DRY" = 1 ]; then
+  echo "alarm-reboot-prep --dry-run — $(date '+%Y-%m-%d %H:%M %z') (no reboot record written)"
+else
+  echo "alarm-reboot-prep — $(date '+%Y-%m-%d %H:%M %z')"
+fi
+echo "  data.kalloc.1024   $zline"
+
+# ── 3. lands in flight: WAIT, bounded, deadline printed (see the header) ───────────────────────────
+# A land in flight is a process whose PROGRAM is ship-land.sh (argv[0], or argv[1] under a shell) —
+# never `pgrep -f ship-land.sh`, which also matches every agent session whose brief merely MENTIONS
+# the name (measured 2026-09-30: 6 of 6 matches were claude sessions, 0 were lands).
+find_lands() {
+  "$PS" -axo pid=,args= 2>/dev/null | awk '
+    { a0 = $2; a1 = $3 }
+    a0 ~ /(^|\/)ship-land\.sh$/ { print $1; next }
+    a0 ~ /(^|\/)(ba|z|da)?sh$/ && a1 ~ /(^|\/)ship-land\.sh$/ { print $1 }' | tr '\n' ' '
+}
+lands=""
+if [ "$DRY" = 0 ]; then
+  lands="$(find_lands)"
+  if [ -n "${lands// /}" ]; then
+    wait_s="${CC_REBOOT_PREP_LAND_WAIT_S:-1800}"; poll_s="${CC_REBOOT_PREP_LAND_POLL_S:-15}"
+    case "$wait_s" in ''|*[!0-9]*) wait_s=1800 ;; esac
+    case "$poll_s" in ''|*[!0-9]*|0) poll_s=15 ;; esac
+    deadline=$((now + wait_s))
+    echo "  lands in flight    pids ${lands% } — waiting for them to finish, deadline $(date -r "$deadline" '+%H:%M:%S') (${wait_s}s)"
+    while [ -n "${lands// /}" ] && [ "$(date +%s)" -lt "$deadline" ]; do
+      /bin/sleep "$poll_s"
+      lands="$(find_lands)"
+    done
+    if [ -z "${lands// /}" ]; then
+      echo "  lands in flight    finished after $(( $(date +%s) - now ))s"
+      now="$(date +%s)"     # the records below describe the machine after the wait
+    fi
+  fi
+fi
+
 roster="$DIR/reboot-$DAY.roster.json"
 n=""
 if [ "$DRY" = 0 ]; then
@@ -233,7 +311,6 @@ fi
 rm -f "$droster"
 
 if [ "$DRY" = 1 ]; then
-  echo "alarm-reboot-prep --dry-run — $(date '+%Y-%m-%d %H:%M %z') (no reboot record written)"
   printf '%s' "$ARR"
   echo "  unsent drafts      $d_line"
   echo "capture layout=$layout_v kitty=$n_kitty degraded=$n_degraded ${d_sum:-drafts=none}"
@@ -241,27 +318,16 @@ if [ "$DRY" = 1 ]; then
   exit 0
 fi
 
-kalloc="$("$ZPRINT" data.kalloc.1024 2>/dev/null \
-          | awk '$1 == "data.kalloc.1024" && $7 ~ /^[0-9]+$/ { printf "%.2f", $2 * $7 / 1073741824; exit }')"
 printf '%s kalloc1024_gb=%s\n' "$now" "${kalloc:-unreadable}" > "$DIR/reboot-$DAY.kalloc"
 
-# A land in flight is a process whose PROGRAM is ship-land.sh (argv[0], or argv[1] under a shell) —
-# never `pgrep -f ship-land.sh`, which also matches every agent session whose brief merely MENTIONS
-# the name (measured 2026-09-30: 6 of 6 matches were claude sessions, 0 were lands).
-lands="$("$PS" -axo pid=,args= 2>/dev/null | awk '
-  { a0 = $2; a1 = $3 }
-  a0 ~ /(^|\/)ship-land\.sh$/ { print $1; next }
-  a0 ~ /(^|\/)(ba|z|da)?sh$/ && a1 ~ /(^|\/)ship-land\.sh$/ { print $1 }' | tr '\n' ' ')"
-
-echo "alarm-reboot-prep — $(date '+%Y-%m-%d %H:%M %z')"
 echo "  start epoch        $now  → $DIR/reboot-$DAY.start"
 echo "  live sessions      $n  → $roster"
 printf '%s' "$ARR"
 echo "  unsent drafts      $d_line"
 echo "capture layout=$layout_v kitty=$n_kitty degraded=$n_degraded ${d_sum:-drafts=none}"
-echo "  data.kalloc.1024   ${kalloc:-unreadable} GB (the reading this reboot erases) → $DIR/reboot-$DAY.kalloc"
+echo "  zone reading       ${kalloc:-unreadable}${kalloc:+ GiB} (the reading this reboot erases) → $DIR/reboot-$DAY.kalloc"
 if [ -n "${lands// /}" ]; then
-  echo "  lands in flight    pids ${lands% } — NOT READY: re-run when ship-land.sh has exited"
+  echo "  lands in flight    pids ${lands% } still running at the deadline — NOT READY: re-run when ship-land.sh has exited"
   echo "verdict=NOT-READY reason=land-in-flight"
   exit 3
 fi
@@ -273,9 +339,9 @@ echo "     session resumes from its own handoff or from the roster above."
 if [ -s "$CAPTURE_CMD" ]; then
   echo "  2. A root zone capture is STAGED. Run it before rebooting — the reboot erases the evidence:"
   echo "       bash $CAPTURE_CMD"
-  echo "  3. Reboot within 24 h of the alarm."
+  echo "  3. Reboot before the ceiling ETA above."
 else
-  echo "  2. Reboot within 24 h of the alarm. (No root capture is staged: the ratchet analysis named"
+  echo "  2. Reboot before the ceiling ETA above. (No root capture is staged: the ratchet analysis named"
   echo "     a driver, or has not asked for one.)"
 fi
 # The kitty restart rides the next alarm reboot after the operator's kitty build choice (plan W3):
