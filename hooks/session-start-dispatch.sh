@@ -87,21 +87,47 @@ ledger_raw() { { [ -d "${LEDGER%/*}" ] || mkdir -p "${LEDGER%/*}"; printf '%s\n'
 # cannot break the JSON.
 loud() { # <code> <message>
   local m="${2//[\"\\]/_}"; m="${m//[[:cntrl:]]/_}"
+  command -v ss_owed >/dev/null 2>&1 && ss_owed $(( ${#m} + 48 ))
   printf '{"systemMessage":"⚠ session-start-dispatch: %s"}\n' "$m"
   ledger_raw "{\"v\":1,\"kind\":\"loud\",\"sid\":\"$SID\",\"src\":\"$SRC\",\"pid\":$$,\"why\":\"$1\"}"
   exit 0
 }
 
-# ── SEAM (Wave 3, README row #8). A later unit writes ~/.claude/state/startup-health/alerts/<sid>
-# here, from the two places a start loses output after the print decision: the TERM trap and the
-# late collector. A no-op today on purpose: nothing reads that directory yet.
-ssd_alert_hook() { :; }   # <harness-term|late> <sid> <child names>
+# ── STARTUP HEALTH (README §5 units 3.1 and 3.6). The dispatcher's board is the outbox below; the
+# startup-health reader (hooks/lib/startup-health.sh, bin/cc-startup-health) finds it through a link
+# in the session's sentinel dir, and the two places a start loses output after the print decision —
+# the TERM trap and the late collector — leave a line in the rolling idle-pane alert file
+# (hooks/lib/startup-alert.sh), which README #13a's FileChanged push reads once the operator applies it.
+SH_R="${CC_STARTUP_HEALTH_DIR:-$HOME/.claude/state/startup-health}"
+ssd_outbox_link() { # <outbox file> — point "$SH_R/<sid>/outbox.txt" at this start's board
+  case "$SID" in ''|*[!0-9A-Za-z-]*) return 0 ;; esac
+  [ -d "$SH_R/$SID" ] && [ -f "$1" ] && ln -sf "$1" "$SH_R/$SID/outbox.txt" 2>/dev/null
+  return 0
+}
+ssd_alert_hook() { # <harness-term|late> <sid> <child names>
+  case "${2:-}" in ''|*[!0-9A-Za-z-]*) return 0 ;; esac
+  [ -f "$HERE/lib/startup-alert.sh" ] || return 0
+  # shellcheck source=lib/startup-alert.sh disable=SC1091  # runtime-resolved beside this file
+  . "$HERE/lib/startup-alert.sh" 2>/dev/null || return 0
+  case "$1" in
+    harness-term)
+      ssd_outbox_link "$SPOOL/outbox/$2.${SRC:-nosrc}.json"
+      sa_alert "$2" "⚠ startup: session-start-dispatch may not have delivered (cancelled by Claude Code; still running: ${3:-none}) — confirming" ;;
+    late)
+      [ -n "${3:-}" ] && sa_alert "$2" "⚠ startup: session-start-dispatch children finished late (${3}) — their output missed the startup board · cc-startup-health $2" ;;
+  esac
+  return 0
+}
 
 [ -d "$SPOOL" ] || mkdir -p "$SPOOL" 2>/dev/null
 T="$(mktemp -d "$SPOOL/run.XXXXXX" 2>/dev/null || mktemp -d "${TMPDIR:-/tmp}/ssd.XXXXXX" 2>/dev/null)" \
   || loud mktemp "could not create a work dir under $SPOOL or ${TMPDIR:-/tmp}, so every startup hook was SKIPPED this start (board, notices, Plans/Tasks/MCP lines). Check: df -h ~ ; ls -ld $SPOOL"
 # shellcheck disable=SC2329  # both run from a trap
-cleanup() { [ -e "$T/late" ] || rm -rf "$T"; }   # a late child ⇒ the collector owns $T and removes it
+cleanup() { # a late child ⇒ the collector owns $T and removes it
+  local rc=$?
+  [ -e "$T/late" ] || rm -rf "$T"
+  command -v ss_end >/dev/null 2>&1 && ss_end "$rc"
+}
 trap cleanup EXIT
 
 # The harness cancels a hook at its timeout. Leave a harness-term ledger row and a partial outbox
@@ -125,6 +151,7 @@ term_now() {
   fi
   if [ -n "$late" ] && [ -n "$wd" ]; then printf '%s' "$late" > "$T/late"; else [ -z "$wd" ] || kill -TERM -- "-$wd"; fi
   ssd_alert_hook harness-term "$SID" "${pn# }"
+  command -v ss_end >/dev/null 2>&1 && ss_end 143   # this trap exits 0; the sentinel records the TERM
   exit 0
 }
 trap term_now TERM
@@ -135,6 +162,15 @@ PL=""; IFS= read -r -d '' PL < "$T/payload" || :
 re='"session_id"[[:space:]]*:[[:space:]]*"([^"]*)"'; [[ $PL =~ $re ]] && SID=${BASH_REMATCH[1]}
 re='"source"[[:space:]]*:[[:space:]]*"([^"]*)"'; [[ $PL =~ $re ]] && SRC=${BASH_REMATCH[1]}
 SID=${SID//[!A-Za-z0-9._-]/_}; SRC=${SRC//[!A-Za-z0-9._-]/_}
+# Start/done markers (hooks/lib/startup-sentinel.sh, README §5 unit 3.1). --no-trap: cleanup and
+# term_now above own EXIT and TERM, and call ss_end themselves. 12000 ms = the registration timeout
+# (migration 0068 raises it to 20 s; CC_SSD_REG_TIMEOUT_MS follows it).
+TPATH=""; re='"transcript_path"[[:space:]]*:[[:space:]]*"([^"]*)"'; [[ $PL =~ $re ]] && TPATH=${BASH_REMATCH[1]}
+if [ -f "$HERE/lib/startup-sentinel.sh" ]; then
+  # shellcheck source=lib/startup-sentinel.sh disable=SC1091  # runtime-resolved beside this file
+  . "$HERE/lib/startup-sentinel.sh" 2>/dev/null \
+    && ss_begin --no-trap session-start-dispatch "${CC_SSD_REG_TIMEOUT_MS:-12000}" "$SID" "$TPATH"
+fi
 
 export CC_HOOK_PARENT_PID="${CC_HOOK_PARENT_PID:-$PPID}"
 
@@ -241,9 +277,13 @@ OB="$SPOOL/outbox/${SID:-nosid}.${SRC:-nosrc}.json"
 if [ "$L1" != null ]; then
   [ -d "$SPOOL/outbox" ] || mkdir -p "$SPOOL/outbox"
   printf '%s\n' "$L1" > "$OB.$$" && mv -f "$OB.$$" "$OB"
+  ssd_outbox_link "$OB"
 else
   rm -f "$OB"; L1=""
 fi
 [ -n "$ROW" ] && ledger_raw "$ROW"
-[ -n "$L1" ] && printf '%s\n' "$L1"
+if [ -n "$L1" ]; then
+  command -v ss_owed >/dev/null 2>&1 && ss_owed $(( ${#L1} + 1 ))
+  printf '%s\n' "$L1"
+fi
 exit 0

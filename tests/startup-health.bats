@@ -585,3 +585,40 @@ dodrepo() {
   [ ! -e "$S" ]                                  # the env fallback never names a sentinel
 }
 
+# ── sentinel wiring + 3.6 alert seam: session-start-dispatch, fixture children ────────────────────
+ssd_setup() {
+  H="$BATS_TEST_TMPDIR/children"; mkdir -p "$H"
+  export CC_SSD_HOOK_DIR="$H" CC_SSD_LEDGER="$BATS_TEST_TMPDIR/ledger.jsonl" CC_SSD_SPOOL="$BATS_TEST_TMPDIR/spool"
+  printf '{"session_id":"%s","hook_event_name":"SessionStart","source":"startup","transcript_path":"%s"}' \
+    "$SID" "$BATS_TEST_TMPDIR/t.jsonl" > "$BATS_TEST_TMPDIR/p"
+}
+ssd_child() { printf '#!/bin/bash\n%s\n' "$2" > "$H/$1"; chmod +x "$H/$1"; }
+
+@test "the dispatcher leaves start+done owing its board, and links its outbox for cc-startup-health" {
+  ssd_setup; ssd_child a.sh 'echo BOARD-FROM-CHILD'
+  run env CC_SSD_CHILDREN=a.sh /bin/bash "$REPO/hooks/session-start-dispatch.sh" < "$BATS_TEST_TMPDIR/p" 3>&-
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -qF 'BOARD-FROM-CHILD'
+  [ "$(field session-start-dispatch.done rc)" = 0 ]
+  [ "$(field session-start-dispatch.done owed)" = "$(( ${#output} + 1 ))" ]
+  [ "$(field session-start-dispatch.done timeout_ms)" = 12000 ]
+  [ "$(field session.start transcript_path)" = "$BATS_TEST_TMPDIR/t.jsonl" ]
+  [ -L "$S/outbox.txt" ]
+  [ -s "$S/outbox.txt" ]
+  run CSH "$SID"
+  printf '%s\n' "$output" | grep -qF '    BOARD-FROM-CHILD'
+}
+
+@test "3.6 a harness TERM of the dispatcher: done rc 143, one alert line naming what was running" {
+  ssd_setup; ssd_child fast.sh 'echo FAST'
+  ssd_child hang.sh "echo \$\$ >> '$BATS_TEST_TMPDIR/pids'; exec sleep 60"
+  CC_SSD_CHILDREN="fast.sh hang.sh" CC_SSD_EMIT_S=20 CC_SSD_LATE_S=21 \
+    /bin/bash "$REPO/hooks/session-start-dispatch.sh" < "$BATS_TEST_TMPDIR/p" > "$BATS_TEST_TMPDIR/out" 3>&- &
+  dp=$!
+  for _ in $(seq 1 150); do [ -s "$BATS_TEST_TMPDIR/pids" ] && [ -e "$S/session-start-dispatch.start" ] && break; sleep 0.1; done
+  kill -TERM "$dp"; wait "$dp" || true
+  while read -r p; do kill -KILL "$p" 2>/dev/null || true; done < "$BATS_TEST_TMPDIR/pids"
+  [ "$(field session-start-dispatch.done rc)" = 143 ]
+  grep -qF '⚠ startup: session-start-dispatch may not have delivered (cancelled by Claude Code; still running: hang.sh) — confirming' "$(ALERTS)"
+  [ -L "$S/outbox.txt" ]
+}

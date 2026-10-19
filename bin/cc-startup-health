@@ -129,8 +129,11 @@ report_sid() {
     sed 's/^/    /' "$R/alerts/$sid"
   fi
   if [ -s "$d/outbox.txt" ]; then
+    # The dispatcher's outbox is its printed hook JSON: show both channels it carried, the operator's
+    # systemMessage and the model's additionalContext.
     echo "  dispatcher outbox (the startup board it built):"
-    sed 's/^/    /' "$d/outbox.txt"
+    { jq -r '(.systemMessage // empty), (.hookSpecificOutput.additionalContext // empty)' "$d/outbox.txt" 2>/dev/null \
+        || cat "$d/outbox.txt"; } | sed 's/^/    /'
   fi
 }
 
