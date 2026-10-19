@@ -18,6 +18,9 @@ setup() {
   export LR_RECON_ROOT="$LR_STATE_DIR/recon"; mkdir -p "$LR_RECON_ROOT/owned"
   export LR_RECON_NOW="$NOW" LR_RECON_WAKETIME=0
   unset LR_RECORD_ID LR_RECON_FENCE_FRESH_S LR_LAUNCH_LOCK
+  # the capacity gate is not this suite's subject: the poller cases choose its verdict through
+  # tests/fixtures/lr-poller-capacity-stub.sh, and nothing here may read this box's live load
+  export CC_ADMIT_GATE=off
   SID="aaaaaaaa-1111-4000-8000-000000000001"
   MUTEX="$LR_STATE_DIR/runs/by-sid/$SID.active"
   REQ="$LR_STATE_DIR/requests/$SID.cc-lr.json"
