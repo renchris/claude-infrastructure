@@ -759,3 +759,45 @@ BOARDBODY"; user_rec; } > "$TP"
   CSH --ack
   [ "$(cat "$CC_STARTUP_HEALTH_DIR/fleet-ack.txt")" = "$(grep -o 'aaaa-1:dod-persist:[0-9]*' "$CC_STARTUP_HEALTH_DIR/aaaa-1/fold.cache" | head -1)" ]
 }
+
+# ── #25 load-banded startup span guard (fixture dispatcher ledger + capacity log) ─────────────────
+span_fixture() { # <load_1m> <total_ms>... — one start per ms, a minute apart, each with a load sample
+  local load="$1" i=0 now t ms; shift
+  export CC_SSD_LEDGER="$BATS_TEST_TMPDIR/ssd.jsonl" CC_CAPACITY_LOG="$BATS_TEST_TMPDIR/cap.jsonl"
+  now="$(date +%s)"
+  for ms in "$@"; do
+    i=$(( i + 1 )); t="$(date -u -r $(( now - i * 60 )) +%FT%TZ)"
+    printf '{"ts":"%s","load_1m":%s}\n' "$(date -u -r $(( now - i * 60 - 30 )) +%FT%TZ)" "$load" >> "$CC_CAPACITY_LOG"
+    printf '{"v":1,"ts":"%s","sid":"s%s","total_ms":%s}\n' "$t" "$i" "$ms" >> "$CC_SSD_LEDGER"
+  done
+  mkdir -p "$CC_STARTUP_HEALTH_DIR"
+}
+SPANLINE() { cat "$CC_STARTUP_HEALTH_DIR/span-line.txt"; }
+
+@test "#25 a load band whose 24 h p90 is over 10.1 s puts one line on the board" {
+  span_fixture 420 12000 12500 13000 13500 14000 9000
+  CSH --fleet
+  [ "$(SPANLINE)" = "⚠ startup span p90 13.5 s at load 300+ over 24 h (n 6; target 10.1 s) · cc-startup-health --span" ]
+  board | grep -qF '⚠ startup span p90 13.5 s at load 300+'
+}
+
+@test "#25 inside the target, or too few starts, the guard adds no line" {
+  span_fixture 40 2000 2500 3000 3500 4000 4500
+  CSH --fleet; [ ! -s "$CC_STARTUP_HEALTH_DIR/span-line.txt" ]
+  [ "$(board)" = BOARDBODY ]
+  rm -f "$CC_SSD_LEDGER" "$CC_CAPACITY_LOG" "$CC_STARTUP_HEALTH_DIR/span.stamp"
+  span_fixture 420 15000 15000 15000
+  CSH --fleet; [ ! -s "$CC_STARTUP_HEALTH_DIR/span-line.txt" ]   # n 3 < 5
+}
+
+@test "#25 the guard recomputes at most hourly; --span prints both windows by band" {
+  span_fixture 120 3000 3000 3000 3000 3000
+  CSH --fleet; [ ! -s "$CC_STARTUP_HEALTH_DIR/span-line.txt" ]
+  span_fixture 120 20000 20000 20000 20000 20000 20000 20000 20000 20000 20000 20000
+  CSH --fleet; [ ! -s "$CC_STARTUP_HEALTH_DIR/span-line.txt" ]    # within the hour: not re-read
+  CC_STARTUP_SPAN_EVERY_S=0 CSH --fleet
+  SPANLINE | grep -qF 'at load 50-150 over 24 h (n 16;'
+  run CSH --span
+  printf '%s\n' "$output" | grep -qE '^  50-150 +16 '
+  printf '%s\n' "$output" | grep -qF 'last 7 d:'
+}

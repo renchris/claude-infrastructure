@@ -10,6 +10,7 @@
 #                               --keepwarm): writes the accounts-board line to $R/fleet-line.txt,
 #                               stamps $R/fleet.stamp, scans any unscanned start epoch, and deletes
 #                               session dirs older than 7 days.
+#   cc-startup-health --span    the load-banded startup span (24 h and 7 d) behind the board's span line
 #   cc-startup-health --ack     acknowledge every occurrence the line counts now. Any LATER
 #                               occurrence raises the line again: clearing is per occurrence
 #                               (<sid>:<hook>:<start-mtime>), never by kind and never on a timer.
@@ -239,6 +240,68 @@ fold_dir() { # <dir> <sid> → that session's rows on stdout (and into its cache
   rm -f "$j" "$out"
 }
 
+# ── load-banded startup span guard (README §2 row #25, A7 R5/A7-7) ───────────────────────────────
+# The span of a start is the dispatcher's own total_ms from its per-child ledger (a harness-term row
+# counts at the second it was cancelled), binned by the 1-minute load sampled at or before it (within
+# 15 min) from the capacity log. A load band whose 24 h p90 is over the target (10.1 s, the post-0056
+# goal in A7 §1) with n ≥ 5 puts ONE line on the accounts board; otherwise nothing, so a healthy fleet
+# adds no line. Recomputed at most hourly (span.stamp), because it reads a day of load samples.
+SPAN_TARGET_MS="${CC_STARTUP_SPAN_TARGET_MS:-10100}"
+SPAN_MIN_N="${CC_STARTUP_SPAN_MIN_N:-5}"
+SPAN_EVERY_S="${CC_STARTUP_SPAN_EVERY_S:-3600}"
+SSD_LEDGER="${CC_SSD_LEDGER:-$HOME/.claude/logs/session-start-dispatch.jsonl}"
+CAP_LOG="${CC_CAPACITY_LOG:-$HOME/.claude/logs/capacity-alarm.jsonl}"
+
+span_table() { # <window-s> → "band<TAB>n<TAB>p50_ms<TAB>p90_ms" per load band seen
+  local since=$(( now - $1 )) cap="$R/.span-cap.$$" led="$R/.span-led.$$"
+  [ -f "$SSD_LEDGER" ] || return 0
+  tail -n "${CC_STARTUP_SPAN_CAP_LINES:-12000}" "$CAP_LOG" 2>/dev/null \
+    | jq -c --argjson s "$(( since - 900 ))" 'select(.load_1m != null) | {t: (.ts | fromdateiso8601? // 0), l: .load_1m} | select(.t >= $s)' \
+      > "$cap" 2>/dev/null
+  jq -c --argjson s "$since" '
+      select((.kind == null and .total_ms != null) or .kind == "harness-term")
+      | {t: (.ts | fromdateiso8601? // 0), ms: (.total_ms // ((.at_s // 0) * 1000))} | select(.t >= $s)' \
+    "$SSD_LEDGER" > "$led" 2>/dev/null
+  jq -rn --slurpfile cap "$cap" --slurpfile led "$led" '
+    def band: if . == null then "unknown" elif . < 50 then "0-50" elif . < 150 then "50-150"
+              elif . < 300 then "150-300" else "300+" end;
+    def pct($p): sort as $a | $a[(($a | length) - 1) * $p | floor];
+    ($cap | sort_by(.t)) as $c
+    | [ $led[] | . as $r
+        | ([$c[] | select(.t <= $r.t and .t >= $r.t - 900)] | last | .l?) as $l
+        | {b: ($l | band), ms: $r.ms} ]
+    | group_by(.b)[] | [.[0].b, length, (map(.ms) | pct(0.5)), (map(.ms) | pct(0.9))] | @tsv' 2>/dev/null
+  rm -f "$cap" "$led"
+}
+
+span_guard() { # → rewrites $R/span-line.txt (empty when every band is inside the target)
+  local t="$R/.span-line.$$" b n p50 p90 worst=0 line=""
+  if [ -f "$R/span.stamp" ] && [ $(( now - $(mtime "$R/span.stamp") )) -lt "$SPAN_EVERY_S" ]; then return 0; fi
+  while IFS=$'\t' read -r b n p50 p90; do
+    case "$n$p90" in ''|*[!0-9]*) continue ;; esac
+    [ "$b" = unknown ] && continue
+    [ "$n" -ge "$SPAN_MIN_N" ] && [ "$p90" -gt "$SPAN_TARGET_MS" ] && [ "$p90" -gt "$worst" ] || continue
+    worst="$p90"
+    line="⚠ startup span p90 $(( p90 / 1000 )).$(( p90 % 1000 / 100 )) s at load $b over 24 h (n $n; target $(( SPAN_TARGET_MS / 1000 )).$(( SPAN_TARGET_MS % 1000 / 100 )) s) · cc-startup-health --span"
+  done < <(span_table 86400)
+  printf '%s' "${line:+$line
+}" > "$t" && mv -f "$t" "$R/span-line.txt"
+  : > "$R/span.stamp"
+}
+
+span_report() {
+  local w b n p50 p90
+  for w in 86400 604800; do
+    [ "$w" = 86400 ] && echo "startup span by load band, last 24 h (target p90 $(( SPAN_TARGET_MS / 1000 )).$(( SPAN_TARGET_MS % 1000 / 100 )) s):" \
+                     || echo "last 7 d:"
+    printf '  %-9s %6s %8s %8s\n' load n p50 p90
+    while IFS=$'\t' read -r b n p50 p90; do
+      printf '  %-9s %6s %7ss %7ss\n' "$b" "$n" "$(( p50 / 1000 )).$(( p50 % 1000 / 100 ))" "$(( p90 / 1000 )).$(( p90 % 1000 / 100 ))"
+    done < <(span_table "$w")
+  done
+  echo "  source: $SSD_LEDGER (total_ms) joined to $CAP_LOG (load_1m within 15 min)"
+}
+
 fold_lock() {
   mkdir "$R/.fold.lock" 2>/dev/null && { printf '%s\n' "$$" > "$R/.fold.lock/pid"; return 0; }
   local p=""; read -r p < "$R/.fold.lock/pid" 2>/dev/null
@@ -302,6 +365,7 @@ fleet() { # [--ack]
   fi
   tmp="$R/.fleet-line.$$"
   render "$rows" > "$tmp" && mv -f "$tmp" "$R/fleet-line.txt"
+  span_guard 2>/dev/null
   : > "$R/fleet.stamp"
   rm -f "$rows" "$tmp"
   [ "${1:-}" = --ack ] || [ ! -s "$R/fleet-line.txt" ] || cat "$R/fleet-line.txt"
@@ -311,7 +375,8 @@ fleet() { # [--ack]
 case "${1:-}" in
   --fleet) fleet ;;
   --ack)   fleet --ack ;;
-  -h|--help) sed -n '2,24p' "$_self" | sed 's/^# \{0,1\}//' ;;
+  --span)  span_report ;;
+  -h|--help) sed -n '2,25p' "$_self" | sed 's/^# \{0,1\}//' ;;
   "")      list_sessions ;;
   -*)      echo "cc-startup-health: unknown flag $1 (see --help)" >&2; exit 2 ;;
   *)       report_sid "$1" ;;

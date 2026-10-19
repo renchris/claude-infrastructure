@@ -257,6 +257,8 @@ sh_fleet() {
     return 0
   fi
   [ -s "$r/fleet-line.txt" ] && printf '%s\n' "$(cat "$r/fleet-line.txt")"
+  # The span guard (#25) shares the fold and its freshness: a line only when a load band is over target.
+  [ -s "$r/span-line.txt" ] && printf '%s\n' "$(cat "$r/span-line.txt")"
   return 0
 }
 SH_FLEET="$( (sh_fleet) 2>/dev/null || true)"
