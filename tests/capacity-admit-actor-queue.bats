@@ -40,7 +40,7 @@ pane_admit() { CC_ADMIT_BUDGET_KEY="direct-$SID" cc_capacity_admit lr-fire-resum
   [[ "$output" != *ADMIT* ]] || false
   grep -q 'refusal 1 of budget 3' <(tail -n 1 "$CC_ADMIT_IDL") || { tail -n 1 "$CC_ADMIT_IDL"; false; }
   [ "$(cat "$CC_ADMIT_STATE_DIR/lr-fire-resume.direct-$SID.by-poller.refusals")" = 1 ]
-  ! grep -q budget-expired "$CC_ADMIT_IDL"
+  ! grep -q budget-expired "$CC_ADMIT_IDL" || false
 }
 
 @test "CONTROL — the same actor's fourth evaluation is still released by its own count" {

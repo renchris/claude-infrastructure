@@ -978,7 +978,7 @@ k5_tick() { LR_POLLER_AUTOFIRE=1 LR_POLLER_SPAWN=tmux LR_POLLER_RC_WAIT_S=0 run 
   LR_FAKE_PROBE=refuse k5_tick; LR_FAKE_PROBE=refuse k5_tick
   ! grep -q 'new-session' "$TMUX_LOG" || false
   [ "$(launcher_count b5b5b5b5)" -eq 0 ]
-  ! grep -q '^mint ' "$LR_FAKE_CA_LOG"
+  ! grep -q '^mint ' "$LR_FAKE_CA_LOG" || false
   [ -f "$STATE/parked/$K5_SID.json" ]
   [ "$(grep -c "CAP-WAIT $K5_SID" "$STATE/poller.log")" -eq 1 ]
   [ ! -e "$STATE/fire-fail/$K5_SID" ]

@@ -382,7 +382,7 @@ plog() { cat "$PSTATE/poller.log" 2>/dev/null; }
   [ "$(jq -r .next_at "$PREQ")" -gt "$(date +%s)" ]
   # the probe ran on the QUEUE's clock, and no token was minted for a refusal
   grep -q "probe caller=lr-reset-poller .*queued_since=$(jq -r .first_refused_at "$PREQ")" "$LR_FAKE_CA_LOG"
-  ! grep -q '^mint ' "$LR_FAKE_CA_LOG"
+  ! grep -q '^mint ' "$LR_FAKE_CA_LOG" || false
   # the next tick is inside the backoff: nothing is probed again
   LR_FAKE_PROBE=refuse poll
   [ "$(grep -c '^probe ' "$LR_FAKE_CA_LOG")" -le 2 ]
@@ -399,7 +399,7 @@ plog() { cat "$PSTATE/poller.log" 2>/dev/null; }
   tok="$(sed -n 's/^export CC_ADMIT_ACTOR=poller LR_ADMIT_TOKEN=//p' "$launcher")"
   [ -f "$tok" ] || { cat "$launcher"; false; }
   grep -q '^export CC_ADMIT_ACTOR=poller ' "$launcher"
-  ! grep -q 'LR_RUN_DIR' "$launcher"              # K3: no run-dir owner, so a pane refusal re-queues HERE
+  ! grep -q 'LR_RUN_DIR' "$launcher" || false     # K3: no run-dir owner, so a pane refusal re-queues HERE
   grep -q -- "--prompt /limit-recover" "$launcher"
   grep -q "^mint sid=$SID kind=turn run=\$" "$LR_FAKE_CA_LOG"
   grep -q "REQUEST-SPAWNED $SID on next2 (capacity queue, tmux)" "$PSTATE/poller.log" || { plog; false; }

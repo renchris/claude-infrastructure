@@ -52,7 +52,7 @@ field() { jq -r ".$1" "$CC_PANE_EXIT_DIR/42.json"; }
   [ "$(field rc)" = 75 ]
   [ "$(field claude_started)" = false ]
   [ "$(field launch_sha)" = "$(printf '%s' "bash $S/lr-launch" | shasum -a 256 | cut -d' ' -f1)" ]
-  [[ "$(field ts)" =~ ^[0-9]+$ ]]
+  [[ "$(field ts)" =~ ^[0-9]+$ ]] || false
   [ "$(jq -r 'keys | join(",")' "$CC_PANE_EXIT_DIR/42.json")" = "claude_started,launch_sha,rc,ts" ]
 }
 
