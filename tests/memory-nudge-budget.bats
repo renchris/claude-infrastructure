@@ -162,7 +162,7 @@ ctx() { jq -r '.hookSpecificOutput.additionalContext'; }
   # The rotor writes a `<!-- cold tier: … -->` pointer into the index and topic-style indexes
   # carry a `--- … ---` header; the loader strips both. A raw-byte hook reports a size the
   # operator cannot act on, and at the margin declares a breach that has not happened.
-  base="$(mkindex 40 250)"; d="$BATS_TEST_TMPDIR/fm/memory"; mkdir -p "$d"
+  base="$(mkindex 80 250)"; d="$BATS_TEST_TMPDIR/fm/memory"; mkdir -p "$d"
   { printf -- '---\nname: idx\ntype: reference\n---\n'; \
     printf '<!-- cold tier: archive/MEMORY_ARCHIVE_2026-H2-COLD.md -->\n'; \
     cat "$base"; } >"$d/MEMORY.md"
@@ -188,8 +188,11 @@ ctx() { jq -r '.hookSpecificOutput.additionalContext'; }
   [ -z "$output" ]
 }
 
-@test "healthy index at the periodic slot reports budget, never the alarm" {
-  idx="$(mkindex 40 100)"; out=""
+# The live BUDGET line prints only at >=80% of EITHER cap (docs/research/startup-hooks-2026-10-18/
+# README.md §2 #7), so the fixtures that read its content sit above that: 170 x 100 is 170/200
+# lines (85%) at ~20.3k chars; 80 x 250 is ~21.5k/25000 chars (86%) at 80 lines.
+@test "healthy index near a cap at the periodic slot reports budget, never the alarm" {
+  idx="$(mkindex 170 100)"; out=""
   for _ in $(seq 1 12); do out="$(fire s-periodic "$idx" || true)"; done
   ctxout="$(printf '%s' "$out" | ctx)"
   has "$ctxout" 'MEMORY INDEX BUDGET (live)'
@@ -199,27 +202,62 @@ ctx() { jq -r '.hookSpecificOutput.additionalContext'; }
   has "$ctxout" 'MEMORY CHECK (periodic)'
 }
 
+@test "below 80% of BOTH caps the periodic nudge carries no BUDGET line" {
+  idx="$(mkindex 40 100)"; out=""                # ~4.7k chars, 40 lines
+  for _ in $(seq 1 12); do out="$(fire s-roomy "$idx" || true)"; done
+  ctxout="$(printf '%s' "$out" | ctx)"
+  has "$ctxout" 'MEMORY CHECK (periodic)'
+  hasnt "$ctxout" 'MEMORY INDEX BUDGET'
+  hasnt "$ctxout" '🚨'
+}
+
+@test "the BUDGET line turns on at exactly 80% of the LINE cap" {
+  local below at
+  below="$(mkindex 159 20)"; at="$(mkindex 160 20)"   # 159/200 and 160/200 lines, ~6k chars
+  run bash -c "printf '{\"session_id\":\"s-l159\",\"cwd\":\"/x\"}' \
+    | MEMORY_NUDGE_INTERVAL=1 MEMORY_INDEX_PATH='$below' bash '$HOOK'"
+  hasnt "$(printf '%s' "$output" | ctx)" 'MEMORY INDEX BUDGET'
+  run bash -c "printf '{\"session_id\":\"s-l160\",\"cwd\":\"/x\"}' \
+    | MEMORY_NUDGE_INTERVAL=1 MEMORY_INDEX_PATH='$at' bash '$HOOK'"
+  has "$(printf '%s' "$output" | ctx)" 'MEMORY INDEX BUDGET (live)'
+  has "$(printf '%s' "$output" | ctx)" '160/200 lines'
+}
+
+@test "the BUDGET line turns on at 80% of the CHAR cap alone (lines far below theirs)" {
+  local idx
+  idx="$(mkindex 80 250)"                        # 80 lines (40%), chars over 80%
+  [ $(( $(eff "$idx") * 5 )) -ge $(( LIMIT * 4 )) ]
+  run bash -c "printf '{\"session_id\":\"s-c80\",\"cwd\":\"/x\"}' \
+    | MEMORY_NUDGE_INTERVAL=1 MEMORY_INDEX_PATH='$idx' bash '$HOOK'"
+  has "$(printf '%s' "$output" | ctx)" 'MEMORY INDEX BUDGET (live)'
+  # and the same index with the char cap raised past 125% of it goes quiet
+  run bash -c "printf '{\"session_id\":\"s-c80b\",\"cwd\":\"/x\"}' \
+    | MEMORY_INDEX_LIMIT=$(( $(eff "$idx") * 5 / 4 + 1 )) MEMORY_NUDGE_INTERVAL=1 MEMORY_INDEX_PATH='$idx' bash '$HOOK'"
+  hasnt "$(printf '%s' "$output" | ctx)" 'MEMORY INDEX BUDGET'
+}
+
 @test "budget names a per-append hard cap the model can actually apply" {
-  idx="$(mkindex 40 100)"; out=""
+  idx="$(mkindex 170 100)"; out=""
   for _ in $(seq 1 12); do out="$(fire s-cap "$idx" || true)"; done
   has "$(printf '%s' "$out" | ctx)" 'hard cap this append:'
 }
 
 @test "runway is counted at the OBSERVED density, not the target-length ceiling" {
-  # 40 entries x 250-char hooks: healthy (10739 chars), but written 2.2x longer than
-  # the 115 target. The target-based ceiling leaves 147 slots; only 53 lines of the
-  # length this index is actually written at fit in the headroom. Leading with 145
-  # tells a caller it has 2.8x the room it has. Measured live 2026-08-06 as 37 vs
+  # 80 entries x 250-char hooks: healthy (21499 chars), but written 2.2x longer than
+  # the 115 target. The target-based ceiling leaves 107 slots; only 13 lines of the
+  # length this index is actually written at fit in the headroom. Leading with 107
+  # tells a caller it has 8x the room it has. Measured live 2026-08-06 as 37 vs
   # 11, and that inflated figure had already reached a backlog item's premise as
   # "37 free cardinality slots" — framing a cardinality-bound index as length-bound.
-  idx="$(mkindex 40 250)"; out=""
+  # (Was 40 x 250 → 53 vs 147; moved above 80% of the char cap when the line went near-cap only.)
+  idx="$(mkindex 80 250)"; out=""
   [ "$(eff "$idx")" -lt "$LIMIT" ]               # fixture is healthy, not over
   for _ in $(seq 1 12); do out="$(fire s-runway "$idx" || true)"; done
   ctxout="$(printf '%s' "$out" | ctx)"
-  has "$ctxout" '~53 entry slots left'           # observed 269 chars/line
+  has "$ctxout" '~13 entry slots left'           # observed 269 chars/line
   has "$ctxout" 'ACTUALLY written at'
-  has "$ctxout" '147 char-slots only if'         # ceiling kept, marked conditional
-  hasnt "$ctxout" '~147 entry slots left'        # the pre-fix wording this pins
+  has "$ctxout" '107 char-slots only if'         # ceiling kept, marked conditional
+  hasnt "$ctxout" '~107 entry slots left'        # the pre-fix wording this pins
 }
 
 # ── fail-safe: a side-car must fail no wider than itself ──────────────────────
@@ -499,8 +537,8 @@ rotate_env() {  # small, hand-countable budgets for the actuation tests
   rotate_env
   d="$BATS_TEST_TMPDIR/act5/memory"; mkdir -p "$d"
   printf '# Memory — fixture\n' >"$d/MEMORY.md"
-  pad="$(head -c 120 /dev/zero | tr '\0' x)"
-  for i in $(seq -w 1 12); do                    # dangling: nothing eligible at any stage
+  pad="$(head -c 140 /dev/zero | tr '\0' x)"
+  for i in $(seq -w 1 16); do                    # dangling: nothing eligible; ~2.5k of 3000, above 80%
     printf -- '- [g%s](g%s.md) — %s\n' "$i" "$i" "$pad" >>"$d/MEMORY.md"
   done
   sz="$(wc -c <"$d/MEMORY.md" | tr -d ' ')"
@@ -593,7 +631,7 @@ rotate_env() {  # small, hand-countable budgets for the actuation tests
 # instruction they must believe.
 
 @test "advisory names the wc -c byte reading, and names it as the wrong unit" {
-  idx="$(mkindex 40 250)"; out=""
+  idx="$(mkindex 80 250)"; out=""
   [ "$(eff "$idx")" -lt "$LIMIT" ]                      # healthy branch: the one that was re-mint
   for _ in $(seq 1 12); do out="$(fire s-units "$idx" || true)"; done
   ctxout="$(printf '%s' "$out" | ctx)"
@@ -606,7 +644,7 @@ rotate_env() {  # small, hand-countable budgets for the actuation tests
 }
 
 @test "the byte figure is the file's own, not the unit count relabelled" {
-  idx="$(mkindex 40 250)"; out=""
+  idx="$(mkindex 80 250)"; out=""
   raw="$(wc -c <"$idx" | tr -d ' ')"; units="$(eff "$idx")"
   [ "$raw" -gt "$units" ]                               # fixture really does have a gap to report
   for _ in $(seq 1 12); do out="$(fire s-gap "$idx" || true)"; done
@@ -641,7 +679,7 @@ rotate_env() {  # small, hand-countable budgets for the actuation tests
   # A healthy index whose bytes are ALSO under the cap has no opposite-verdict trap to warn
   # about. The legend still rides along; the 🚨 escalation must not, or it would fire on every
   # index in the fleet and carry no bits in the one state that matters.
-  idx="$(mkindex 40 250)"; out=""
+  idx="$(mkindex 80 250)"; out=""
   [ "$(wc -c <"$idx" | tr -d ' ')" -lt "$LIMIT" ]       # bytes under too: no straddle
   for _ in $(seq 1 12); do out="$(fire s-pol "$idx" || true)"; done
   ctxout="$(printf '%s' "$out" | ctx)"

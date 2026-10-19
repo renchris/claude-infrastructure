@@ -139,10 +139,21 @@ _mn_pruned=""
 [ -r "$STATE_DIR/memory-nudge-prune.day" ] && { read -r _mn_pruned < "$STATE_DIR/memory-nudge-prune.day" || true; }
 if [ -z "$_MN_DAY" ] || [ "$_mn_pruned" != "$_MN_DAY" ]; then
   [ -z "$_MN_DAY" ] || printf '%s\n' "$_MN_DAY" > "$STATE_DIR/memory-nudge-prune.day" 2>/dev/null || true
-  find "$STATE_DIR" \( -name 'nudge-*.count' -o -name 'memory-nudge-*.cache' \) -mtime +1 -delete 2>/dev/null || true
+  find "$STATE_DIR" \( -name 'nudge-*.count' -o -name 'nudge-*.mcount' -o -name 'memory-nudge-*.cache' \) -mtime +1 -delete 2>/dev/null || true
 fi
 
-CF="$STATE_DIR/nudge-${SID}.count"
+# ── MACHINE PROMPTS COUNT SEPARATELY, ON A ×4 INTERVAL (docs/research/startup-hooks-2026-10-18/
+# README.md §2 #7; A9-beyond-startup.md R4). A prompt starting with `<` (task-notification,
+# teammate-message, system tags — the classifier's not-typed predicate above) is the harness or a
+# peer talking, not the operator, yet 471k of 526k nudge chars in 48 h rode those prompts. They now advance their OWN counter, nudge-<sid>.mcount, and fire every INTERVAL×4;
+# typed prompts keep nudge-<sid>.count and the plain INTERVAL. The suffix keeps .mcount out of the
+# `nudge-*.count` glob, and scripts/idl-abstain-alarm.sh reads both files, dividing each by its
+# own interval, so the expected-fires denominator stays exact. A builtin `case`: no fork.
+_mn_lead="${_mn_prompt#"${_mn_prompt%%[![:space:]]*}"}"
+case "$_mn_lead" in
+  '<'*) CF="$STATE_DIR/nudge-${SID}.mcount"; _MN_IV=$(( INTERVAL * 4 )) ;;
+  *)    CF="$STATE_DIR/nudge-${SID}.count";  _MN_IV="$INTERVAL" ;;
+esac
 COUNT=0
 [ -r "$CF" ] && { read -r COUNT < "$CF" || true; }
 case "$COUNT" in ''|*[!0-9]*) COUNT=0 ;; esac
@@ -151,7 +162,7 @@ printf '%s' "$COUNT" > "$CF"
 # Due on the periodic slot? (The other way to be due — an over-cap index on a session's first
 # prompt — needs the measurement, and is decided below.)
 _MN_PERIODIC=0
-[ $(( COUNT % INTERVAL )) -ne 0 ] || _MN_PERIODIC=1
+[ $(( COUNT % _MN_IV )) -ne 0 ] || _MN_PERIODIC=1
 
 # ── Locate the index this session actually loads ──────────────────────────────
 # Slug = project root with '/' and '.' folded to '-'. For a linked worktree the
@@ -787,7 +798,16 @@ if [ "$MEASURE_OK" -eq 1 ] && [ -n "$MEM" ] && [ -f "$MEM" ]; then
       [ "$LINE_SLOTS" -lt 0 ] && LINE_SLOTS=0
       BOUND=chars
       if [ "$LINE_SLOTS" -lt "$FITS" ]; then FITS="$LINE_SLOTS"; BOUND=lines; fi
-      BUDGET_CTX="MEMORY INDEX BUDGET (live): ${TOTAL}/${LIMIT} chars and ${LINES}/${LINE_LIMIT} lines across $N entries — ~${FITS} entry slots left, bound by ${BOUND} (${HEADROOM} chars of headroom at the ${LINE_COST} chars/line this index is ACTUALLY written at; ${SLOTS} char-slots only if every existing entry were first rewritten to the ${HOOK_TARGET} char target — that is a rewrite, not runway). A new index line costs ~${PFX_AVG} chars of prefix before a word of content, so keep its hook <= ${HOOK_TARGET} chars (hard cap this append: ${LINE_BUDGET}). Past either cap the loader drops the NEWEST entries silently.${ROTATE_NOTE} ${UNIT_NOTE} ${FILING}"
+      # ONLY NEAR A CAP (docs/research/startup-hooks-2026-10-18/README.md §2 #7). This ~1,000-char
+      # line rode every periodic nudge on an index with room to spare, where it changes nothing the
+      # model writes. It now prints at >=80% of EITHER cap — the backlog re-mints the FILING form
+      # exists for happened at 20.5 KB and 22.5 KB, both above that — and whenever there is news
+      # whatever the level: a rotation just moved lines out, or the `wc -c` reading is over the cap
+      # (the PHANTOM-BREACH window above). The 🚨 arms above are untouched.
+      if [ $(( TOTAL * 5 )) -ge $(( LIMIT * 4 )) ] || [ $(( LINES * 5 )) -ge $(( LINE_LIMIT * 4 )) ] \
+         || [ -n "$ROTATE_NOTE" ] || [ "${RAW:-0}" -gt "$LIMIT" ]; then
+        BUDGET_CTX="MEMORY INDEX BUDGET (live): ${TOTAL}/${LIMIT} chars and ${LINES}/${LINE_LIMIT} lines across $N entries — ~${FITS} entry slots left, bound by ${BOUND} (${HEADROOM} chars of headroom at the ${LINE_COST} chars/line this index is ACTUALLY written at; ${SLOTS} char-slots only if every existing entry were first rewritten to the ${HOOK_TARGET} char target — that is a rewrite, not runway). A new index line costs ~${PFX_AVG} chars of prefix before a word of content, so keep its hook <= ${HOOK_TARGET} chars (hard cap this append: ${LINE_BUDGET}). Past either cap the loader drops the NEWEST entries silently.${ROTATE_NOTE} ${UNIT_NOTE} ${FILING}"
+      fi
     fi
   fi
 fi
@@ -803,7 +823,7 @@ if [ -r "$_mn_idl" ]; then
   . "$_mn_idl"
   idl_init "${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}" memory-nudge SID
   _mn_why=periodic; [ "$OVERFLOW" -eq 0 ] || _mn_why=overflow
-  log_idl fired "$_mn_why" "$(jq -cn --argjson c "$COUNT" --argjson i "$INTERVAL" '{count:$c,interval:$i}' 2>/dev/null)"
+  log_idl fired "$_mn_why" "$(jq -cn --argjson c "$COUNT" --argjson i "$_MN_IV" '{count:$c,interval:$i}' 2>/dev/null)"
 fi
 
 # PIN THE PATH. The product's own memory instruction says "add a one-line pointer in `MEMORY.md`"
@@ -867,7 +887,20 @@ fi
 # lesson, and the remedy is one-in-one-out on an index whose body already exists. It is also the
 # precondition for any gate that must READ a rule's topic file at the moment its index line is
 # written (routing on durability needs the frontmatter to exist).
-NUDGE="MEMORY CHECK (periodic): if this session surfaced a DURABLE, generalizable rule, a decision (+ its why), a confirmed constraint, or user feedback that is NOT already in MEMORY.md, persist it now — FIRST create the topic file with frontmatter, THEN append its one-line pointer (that order matters: the pointer can be refused when the index is full, and a rule whose body is already on disk survives that refusal); $WHERE. WHERE THE POINTER GOES: a DURABLE, GENERALIZABLE RULE — one that should fire on any work here — belongs in $RULES_HINT, which has no 25,000-char/200-line cap, so it does not compete with the index and cannot be dropped from its tail; it loads unless claudeMdExcludes lists it — if it is excluded, keep the MEMORY.md bullet as the rule's pointer, because nothing else resident points at it (the resident agent-operating-lessons.md beside it holds only the few lessons that fire on any work; do not append there). It is a HOOK tier, not a body tier, and that is enforced at the land gate (scripts/rules-hook-budget-lint.sh): write the FULL lesson VERBATIM to docs/lessons/<slug>.md — never shortened — and put ONE hook line in the rules file linking ../../docs/lessons/<slug>.md, under 420 chars, stating the rule so a reader can act on it without opening the body. A bullet whose link target is a bare dot has no body and is REFUSED. Everything else — a project fact, a pointer to tooling, session-specific context — keeps the MEMORY.md bullet. A CORRECTION edits the file it corrects and adds a dated CORRECTED (YYYY-MM-DD): line; only when a new file wholly replaces an old one, write superseded_by: <heir> (YYYY-MM-DD) in the OLD file's frontmatter within its first 12 lines; an entry that replaces an operator-stated practice carries Replaces: <practice> — ruling pending until the operator rules. SKIP (do not encode as a permanent rule): transient errors, environment/worktree-specific one-offs, lucky paths, negative tool-claims (verify before encoding), anything already indexed. Before writing, run cc-memory-search <terms> to find what is already stored (fall back to grep MEMORY.md), and create a new topic file with Write, not Bash, so the write hook can list its nearest existing files. Nothing durable this session? Ignore this."
+#
+# PROCEDURE BY POINTER (docs/research/startup-hooks-2026-10-18/README.md §2 #7). The full ~2,260-char
+# procedure (the pointer tier, the lesson-body rule, corrections and supersession, the SKIP list)
+# rode every fire, verbatim, in every session. It now lives VERBATIM in
+# docs/memory-nudge-procedure.md, and the nudge keeps the orders a writer needs without opening it:
+# file first, the absolute index path, where a rule goes and the exclusion caveat. The doc is named
+# by absolute path in the CHECKOUT, through the dereferenced _MN_DIR, like every other sibling here.
+# A relative _MN_DIR (the hook run as `bash hooks/memory-nudge.sh`) is anchored at $PWD first.
+case "$_MN_DIR" in /*) _MN_PROC="$_MN_DIR" ;; *) _MN_PROC="$PWD/$_MN_DIR" ;; esac
+case "$_MN_PROC" in
+  */hooks) _MN_PROC="${_MN_PROC%/hooks}/docs/memory-nudge-procedure.md" ;;
+  *)       _MN_PROC="$_MN_PROC/../docs/memory-nudge-procedure.md" ;;
+esac
+NUDGE="MEMORY CHECK (periodic): if this session surfaced a durable, generalizable rule, decision (+why), confirmed constraint or user feedback not already stored (run cc-memory-search <terms>), persist it now — topic file FIRST, with Write, not Bash, then its one-line pointer; $WHERE. A durable rule goes to $RULES_HINT as one hook line, body in docs/lessons/<slug>.md (it loads unless claudeMdExcludes lists it; if so, keep the MEMORY.md bullet). Full procedure: $_MN_PROC. Nothing durable? Ignore this."
 
 # Build with jq: the message interpolates measured values, and shell quoting is
 # not JSON quoting — a hand-rolled heredoc would be a quoting bug waiting to land.

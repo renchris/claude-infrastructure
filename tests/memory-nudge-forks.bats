@@ -105,8 +105,11 @@ calls_of() { grep -cx -- "$1" "$MN_FORK_LOG" || true; }
   [ "$(calls_of git)" -eq 0 ] || { echo "the index path was re-resolved: $CALLS"; false; }
 }
 
+# The BUDGET line prints only at >=80% of a cap (docs/research/startup-hooks-2026-10-18/README.md
+# §2 #7), so the two tests that read it put the 3-line fixture at 3 of a 3-line cap: near it, not over.
 @test "the due prompt still measures and reports the budget after warm non-due prompts" {
   local i
+  export MEMORY_INDEX_LINE_LIMIT=3
   for i in 1 2 3 4 5 6 7 8 9 10 11; do prompt s-due "fix it $i"; done
   [ -z "$OUT" ]
   prompt s-due 'fix it 12'
@@ -133,6 +136,7 @@ calls_of() { grep -cx -- "$1" "$MN_FORK_LOG" || true; }
 # an index last written in an earlier second than the measurement started).
 @test "an index edited after its measurement was cached is re-measured, not served stale" {
   local i
+  export MEMORY_INDEX_LINE_LIMIT=3
   touch -t 202001010000 "$IDX"
   MEMORY_NUDGE_INTERVAL=1 prompt s-edit 'one'      # due: measures the index and caches it
   run jq -r '.hookSpecificOutput.additionalContext' <<< "$OUT"

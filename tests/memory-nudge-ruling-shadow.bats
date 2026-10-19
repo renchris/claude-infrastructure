@@ -64,10 +64,27 @@ ruling_n() { jq -s '[.[] | select(.hook == "memory-nudge:ruling")] | length' "$C
   git -C "$REPO" show "$PRE_SHA:hooks/memory-nudge.sh" > "$pre/memory-nudge.sh"
   ln -s "$REPO/hooks/lib" "$pre/lib"
   MEMORY_NUDGE_STATE_DIR="$BATS_TEST_TMPDIR/st-c" run_hook "$pre/memory-nudge.sh" s-a "$p"
-  printf '%s' "$a" | grep -qF -- "$NUDGE10"
-  printf '%s' "$a" | grep -qF -- "$NUDGE12"
-  local stripped="${a/"$NUDGE10"/}"
-  [ "$OUT" = "${stripped/"$NUDGE12"/}" ]
+  # Since docs/research/startup-hooks-2026-10-18/README.md §2 #7 the hook prints a short pointer
+  # and no BUDGET line on this roomy index, while the pre-change hook printed the BUDGET line and
+  # the full procedure. So the full procedure is REBUILT from docs/memory-nudge-procedure.md (it
+  # holds the old text verbatim) with this run's $WHERE and $RULES_HINT, and the pre-change stdout
+  # must end with exactly it: the replay still proves the shadow added nothing to stdout.
+  local cur doc where hint want pre_ctx
+  cur="$(jq -r '.hookSpecificOutput.additionalContext' <<< "$a")"
+  [ "${cur#MEMORY CHECK (periodic): }" != "$cur" ]       # the pointer is all of it: no cue, no budget
+  [ "${cur%Nothing durable? Ignore this.}" != "$cur" ]
+  where="${cur#*then its one-line pointer; }"; where="${where%%. A durable rule goes to *}"
+  hint="${cur#*A durable rule goes to }"; hint="${hint%% as one hook line*}"
+  doc="$(grep '^MEMORY CHECK (periodic)' "$REPO/docs/memory-nudge-procedure.md")"
+  printf '%s' "$doc" | grep -qF -- "$NUDGE10"
+  printf '%s' "$doc" | grep -qF -- "$NUDGE12"
+  want="${doc//\$WHERE/"$where"}"; want="${want//\$RULES_HINT/"$hint"}"
+  want="${want/"$NUDGE10"/}"; want="${want/"$NUDGE12"/}"
+  pre_ctx="$(jq -r '.hookSpecificOutput.additionalContext' <<< "$OUT")"
+  [ "${pre_ctx#MEMORY INDEX BUDGET (live): }" != "$pre_ctx" ]
+  [ "${pre_ctx%" $want"}" != "$pre_ctx" ]
+  [ "$(jq -c '.hookSpecificOutput.additionalContext = ""' <<< "$OUT")" = \
+    "$(jq -c '.hookSpecificOutput.additionalContext = ""' <<< "$a")" ]
 }
 
 @test "restatement: 'remember: always run the linter'" {
@@ -234,6 +251,8 @@ alarm_run() {
   [ "$(printf '%s' "$OUT" | jq -s 'length')" = "1" ]
   printf '%s' "$OUT" | jq -r '.hookSpecificOutput.additionalContext' > "$BATS_TEST_TMPDIR/ctx"
   grep -qF 'run cc-memory-search <terms>' "$BATS_TEST_TMPDIR/ctx"
-  grep -qF 'fall back to grep MEMORY.md' "$BATS_TEST_TMPDIR/ctx"
   grep -qF 'with Write, not Bash' "$BATS_TEST_TMPDIR/ctx"
+  # The grep fallback rides in the full procedure the pointer names (README §2 #7).
+  grep -qF "Full procedure: $REPO/docs/memory-nudge-procedure.md." "$BATS_TEST_TMPDIR/ctx"
+  grep -qF 'fall back to grep MEMORY.md' "$REPO/docs/memory-nudge-procedure.md"
 }

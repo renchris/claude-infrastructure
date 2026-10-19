@@ -267,7 +267,9 @@ denom_sweep_verdicts() {
 # Fires memory-nudge SHOULD have made: per session counter, floor(count / interval), summed over
 # every config root's state dir (the counter lives under $CFG/state, which is 4 physical dirs —
 # the main root alone holds ~7% of a day's transcripts, acceptance X4). A counter whose mtime is
-# older than the cutoff saw no prompt in the window and is skipped.
+# older than the cutoff saw no prompt in the window and is skipped. Machine (`<`-prefixed) prompts
+# count in nudge-<sid>.mcount on the hook's INTERVAL×4 (docs/research/startup-hooks-2026-10-18/
+# README.md §2 #7), so each file is divided by its own interval: floor(h/iv) + floor(m/(iv×4)).
 denom_nudge_expected() {
   local cutoff="$1" dirs d f c m sum=0 seen=0 iv
   dirs="${CC_EXPECTED_NUDGE_STATE_DIRS:-$HOME/.claude/state $HOME/.claude-next/state $HOME/.claude-secondary/state $HOME/.claude-tertiary/state $HOME/.claude-quaternary/state}"
@@ -277,12 +279,12 @@ denom_nudge_expected() {
     [ -d "$d" ] || continue
     seen=$(( seen + 1 ))
     [ "$iv" -gt 0 ] || continue
-    for f in "$d"/nudge-*.count; do
+    for f in "$d"/nudge-*.count "$d"/nudge-*.mcount; do
       [ -f "$f" ] || continue
       m="$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)"
       [ "$m" -ge "$cutoff" ] 2>/dev/null || continue
       c="$(cat "$f" 2>/dev/null || echo 0)"; case "$c" in ''|*[!0-9]*) c=0 ;; esac
-      sum=$(( sum + c / iv ))
+      case "$f" in *.mcount) sum=$(( sum + c / (iv * 4) )) ;; *) sum=$(( sum + c / iv )) ;; esac
     done
   done
   [ "$seen" -gt 0 ] || { printf 'no nudge state dir present among: %s' "$dirs"; return 1; }
@@ -314,6 +316,7 @@ denom_lesson_symptom_replay_failure() { _denom_lesson_replay "$1" error; }
 # for `memory-nudge:episodic`, the episodic cue, which does the same (truememory §3.18, #18).
 # The shadow never writes these files, so they are a source it cannot fake (X5). The interval kill
 # switch (MEMORY_NUDGE_INTERVAL=0) exits before both the counter and the shadow, so none are due.
+# Both counters are summed: a machine prompt lands in nudge-<sid>.mcount but still writes its rows.
 denom_nudge_prompts() {
   local cutoff="$1" dirs d f c m sum=0 seen=0 iv
   dirs="${CC_EXPECTED_NUDGE_STATE_DIRS:-$HOME/.claude/state $HOME/.claude-next/state $HOME/.claude-secondary/state $HOME/.claude-tertiary/state $HOME/.claude-quaternary/state}"
@@ -322,7 +325,7 @@ denom_nudge_prompts() {
     [ -d "$d" ] || continue
     seen=$(( seen + 1 ))
     [ "$iv" -gt 0 ] || continue
-    for f in "$d"/nudge-*.count; do
+    for f in "$d"/nudge-*.count "$d"/nudge-*.mcount; do
       [ -f "$f" ] || continue
       m="$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)"
       [ "$m" -ge "$cutoff" ] 2>/dev/null || continue
