@@ -1802,6 +1802,10 @@ busy_env() {
     '{sid:"someone-else",pane:"1",cwd:"/x",pid:1,lstart:"x",t:$t,kind:"stop",who:"auto",operatorT:$t,seq:1}' \
     > "$CC_BEAT_DIR/someone-else.json"
   export CC_PERMPEND_DIR="$BATS_TEST_TMPDIR/perm"; mkdir -p "$CC_PERMPEND_DIR"
+  # These cases pin the arm's logic, not the probe's latency. At the box's ambient load (150-200)
+  # the default 8 s bound expires, the probe reads UNKNOWN and the arm stays silent: measured
+  # 2026-10-19, 1-2 of 4 red at 8 s, 4 of 4 green at 60 s, same tree.
+  export WRAP_BUSY_TIMEOUT_S=60
 }
 
 @test "busy: 🔧 with no steps — silent today — now says IDLE with no wake path armed" {
