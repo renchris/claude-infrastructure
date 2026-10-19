@@ -29,6 +29,7 @@
 #
 # Kill switch: CC_STARTUP_HEALTH=0 (reader side; the sentinels have their own).
 
+_SH_LIBDIR="${BASH_SOURCE[0]%/*}"
 SH_OWN="session-start-dispatch dod-persist mailbox-drain desk-brief-inject"
 SH_CAP_BYTES=524288      # first user record: p99 165 KB, max 336 KB (gap-G3 F1)
 SH_FLOOR_S=30
@@ -208,3 +209,150 @@ sh_worker() {
   sh_write "$SH_D" "$tp"
 }
 
+# ── prompt front (README §5 unit 3.2) — runs on EVERY prompt, so builtins only until there is news ──
+
+# The recovery is TEXT for the operator to read, so the tilde is printed, never expanded.
+# shellcheck disable=SC2088
+sh_lost_of() { # <hook> <sid> → SH_LOST SH_RECOV (contract w3-format.md, fixed text)
+  case "$1" in
+    dod-persist) SH_LOST="the frozen DoD contract"; SH_RECOV="~/.claude/hooks/dod-persist.sh get" ;;
+    mailbox-drain) SH_LOST="peer mail (deferred, not lost)"; SH_RECOV="mail re-delivers at the next boundary (cc-mail to read now)" ;;
+    session-start-dispatch) SH_LOST="the startup board and notices"; SH_RECOV="claude-accounts (board) / cc-startup-health $2" ;;
+    desk-brief-inject) SH_LOST="the desk brief"; SH_RECOV="none needed" ;;
+    *) SH_LOST="its output"; SH_RECOV="cc-startup-health $2" ;;
+  esac
+}
+
+sh_secs() { # <ms> → SH_T, one decimal, builtins
+  case "${1:-}" in ''|*[!0-9]*) SH_T="?"; return 0 ;; esac
+  SH_T="$(( $1 / 1000 )).$(( $1 % 1000 / 100 ))"
+}
+
+sh_row_of() { # <dir> <n> | own <hook> → SH_CMD SH_DUR from cancels.tsv (builtin read loop)
+  local d="$1" want="$2" cmd dur n=0
+  SH_CMD=""; SH_DUR=""
+  while IFS=$'\t' read -r cmd _ dur _; do
+    n=$(( n + 1 ))
+    if [ "$want" = own ]; then
+      case "$cmd" in *"/$3.sh"|*"/$3.sh "*) SH_CMD="$cmd"; SH_DUR="$dur"; return 0 ;; esac
+    elif [ "$n" = "$want" ]; then SH_CMD="$cmd"; SH_DUR="$dur"; return 0; fi
+  done < "$d/cancels.tsv"
+}
+
+sh_add() { # <line> → appended to SH_SYS
+  if [ -n "$SH_SYS" ]; then SH_SYS="$SH_SYS"$'\n'"$1"; else SH_SYS="$1"; fi
+}
+
+sh_idl() { # <disposition> <reason> — one IDL row per reported drop (only ever on a report path)
+  [ -n "${_SH_IDL_READY:-}" ] || {
+    # shellcheck source=idl-log.sh disable=SC1091
+    . "${_SH_LIBDIR}/idl-log.sh" 2>/dev/null || return 0
+    # shellcheck disable=SC2034  # read by indirection in idl-log.sh (idl_init's sid-var slot)
+    SH_IDL_SID="$_SH_SID"
+    idl_init "${CC_IDL:-$HOME/.claude/autonomy/idl.jsonl}" "startup-health" SH_IDL_SID
+    _SH_IDL_READY=1
+  }
+  log_idl_fixed "$1" "$2"
+}
+
+SH_DOD_PTR="Startup hook dod-persist may not have delivered this session's frozen DoD contract (the completeness baseline). If no Durable frozen DoD block is above, read it now: ~/.claude/hooks/dod-persist.sh get"
+
+# sh_front <sid> → SH_SYS (operator lines, newline-joined) and SH_CTX (model pointer), both empty on a
+# healthy prompt. Fast exit: "$R/<sid>/resolved" newer than every .start (a resume re-opens it).
+sh_front() {
+  SH_SYS=""; SH_CTX=""
+  [ "${CC_STARTUP_HEALTH:-1}" = 0 ] && return 0
+  sh_dir "${1:-}" || return 0
+  local d="$SH_D" f h v rest tries cur=0 open=0 possible_any=0
+  _SH_SID="$1"
+  [ -d "$d" ] || return 0
+  if [ -e "$d/resolved" ]; then
+    open=0
+    for f in "$d"/*.start; do [ "$f" -nt "$d/resolved" ] && { open=1; break; }; done
+    [ "$open" = 0 ] && return 0
+  fi
+  sh_current "$d" && cur=1
+  open=0
+  # 1. Own hooks with a sentinel and no verdict for this epoch yet: the possible-loss line, once.
+  for f in "$d"/*.start; do
+    [ -e "$f" ] || continue
+    h="${f##*/}"; h="${h%.start}"
+    [ "$h" = session ] && continue
+    [ "$cur" = 1 ] && [ -e "$d/$h.verdict" ] && continue
+    tries=0
+    if [ -e "$d/$h.tries" ] && ! [ "$f" -nt "$d/$h.tries" ]; then read -r tries < "$d/$h.tries"; fi
+    case "$tries" in ''|*[!0-9]*) tries=0 ;; esac
+    [ "$tries" -ge 3 ] && continue                       # gave up: cc-startup-health shows it unconfirmed
+    sh_possible "$d" "$h"
+    if [ -n "$SH_REASON" ]; then
+      possible_any=1
+      if [ "$tries" = 0 ]; then
+        sh_add "⚠ startup: $h may not have delivered ($SH_REASON) — confirming"
+        [ "$h" = dod-persist ] && SH_CTX="$SH_DOD_PTR"
+      fi
+    fi
+    tries=$(( tries + 1 ))
+    printf '%s\n' "$tries" > "$d/$h.tries" 2>/dev/null
+    [ "$tries" -lt 3 ] && open=1
+  done
+  [ "$possible_any" = 1 ] && : > "$d/pending" 2>/dev/null
+  # 2. This epoch is scanned: report every verdict not yet reported (own and foreign), once each.
+  if [ "$cur" = 1 ]; then
+    for f in "$d"/*.verdict; do
+      [ -e "$f" ] || continue
+      h="${f##*/}"; h="${h%.verdict}"
+      [ -e "$d/$h.reported" ] && ! [ "$f" -nt "$d/$h.reported" ] && continue
+      v=""; rest=""
+      read -r v rest < "$f"
+      case "$h" in
+        foreign-*)
+          if [ "$v" = confirmed ]; then
+            sh_row_of "$d" "${h#foreign-}"; sh_secs "$SH_DUR"
+            sh_add "⚠ startup: project hook ${rest:-$SH_CMD} was cancelled after $SH_T s — not re-run · re-run it by hand"
+            sh_idl fired "startup-drop:confirmed:foreign"
+          fi ;;
+        *)
+          sh_possible "$d" "$h"
+          case "$v" in
+            confirmed)
+              sh_row_of "$d" own "$h"; sh_secs "$SH_DUR"; sh_lost_of "$h" "$1"
+              sh_add "⚠ startup: $h did not finish (cancelled after $SH_T s) — $SH_LOST · $SH_RECOV"
+              # The pointer once: with the possible line, or here if this loss was never flagged.
+              if [ "$h" = dod-persist ]; then
+                tries=0; [ -e "$d/$h.tries" ] && read -r tries < "$d/$h.tries"
+                { [ -z "$SH_REASON" ] || [ "${tries:-0}" = 0 ]; } && SH_CTX="$SH_DOD_PTR"
+              fi
+              sh_idl fired "startup-drop:confirmed:$h" ;;
+            nothing-owed) sh_idl cleared "startup-drop:nothing-owed:$h" ;;
+            cleared) [ -n "$SH_REASON" ] && sh_idl cleared "startup-drop:cleared:$h" ;;
+          esac ;;
+      esac
+      : > "$d/$h.reported" 2>/dev/null
+    done
+  fi
+  # Resolved: this epoch is scanned and every verdict above is reported, or no transcript ever
+  # came and every hook has had its 3 tries. Either way nothing is left to say until a new .start.
+  if [ "$cur" = 1 ] || [ "$open" = 0 ]; then : > "$d/resolved" 2>/dev/null; fi
+  return 0
+}
+
+sh_json_esc() { # <string> → SH_J, JSON-string-safe (the worker already blanked control bytes)
+  local s="$1"
+  s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//$'\n'/\\n}"; s="${s//$'\t'/\\t}"; s="${s//$'\r'/\\r}"
+  SH_J="$s"
+}
+
+# sh_front_emit <sid> <hookEventName> → prints the hook JSON, or nothing on a healthy prompt.
+sh_front_emit() {
+  local m
+  sh_front "$1"
+  [ -n "$SH_SYS" ] || [ -n "$SH_CTX" ] || return 0
+  sh_json_esc "$SH_SYS"; m="$SH_J"
+  if [ -n "$SH_CTX" ]; then
+    sh_json_esc "$SH_CTX"
+    printf '{"systemMessage":"%s","hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' \
+      "$m" "${2:-UserPromptSubmit}" "$SH_J"
+  else
+    printf '{"systemMessage":"%s"}\n' "$m"
+  fi
+}

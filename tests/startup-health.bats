@@ -228,3 +228,107 @@ possible() { bash -c '. "$1"; sh_possible "$2" "$3"; printf "%s" "$SH_REASON"' _
   [ "$(verdict dod-persist)" = confirmed ]
 }
 
+# ── 3.2 prompt front (sh_front_emit, under /bin/bash 3.2 like session-beat) ───────────────────────
+front() { /bin/bash -c '. "$1"; sh_front_emit "$2" UserPromptSubmit' _ "$(RLIB)" "$SID"; }
+sys() { printf '%s' "$1" | jq -r '.systemMessage // empty'; }
+ctx() { printf '%s' "$1" | jq -r '.hookSpecificOutput.additionalContext // empty'; }
+idl_count() { grep -c "\"reason\":\"$1\"" "$HOME/.claude/autonomy/idl.jsonl" 2>/dev/null || true; }
+
+@test "3.2 healthy: no output on prompt 1, nothing after the scan, then the resolved fast exit" {
+  TP="$BATS_TEST_TMPDIR/t.jsonl"
+  mksession "$TP"; mkstart dod-persist; mkdone dod-persist 0 1 900
+  run front; [ "$status" -eq 0 ]; [ -z "$output" ]
+  user_rec > "$TP"; scan
+  run front; [ -z "$output" ]
+  [ -f "$S/resolved" ]
+  run front; [ -z "$output" ]
+  [ ! -e "$HOME/.claude/autonomy/idl.jsonl" ]           # a healthy session writes no IDL row
+}
+
+@test "3.2 a possible loss prints the fixed line once (plus the DoD pointer); then the confirmed line once" {
+  TP="$BATS_TEST_TMPDIR/t.jsonl"
+  mksession "$TP"; mkstart dod-persist; mkdone dod-persist 143 5 900
+  run front
+  [ "$(sys "$output")" = "⚠ startup: dod-persist may not have delivered (exit 143) — confirming" ]
+  ctx "$output" | grep -qF '~/.claude/hooks/dod-persist.sh get'
+  [ -f "$S/pending" ]
+  run front; [ -z "$output" ]                            # no verdict yet: no repeat
+  { cancel_rec '~/.claude/hooks/dod-persist.sh' '' 5472; user_rec; } > "$TP"; scan
+  run front
+  [ "$(sys "$output")" = "⚠ startup: dod-persist did not finish (cancelled after 5.4 s) — the frozen DoD contract · ~/.claude/hooks/dod-persist.sh get" ]
+  [ -z "$(ctx "$output")" ]                              # the pointer was already given
+  [ "$(idl_count 'startup-drop:confirmed:dod-persist')" = 1 ]
+  run front; [ -z "$output" ]                            # latched
+}
+
+@test "3.2 an rc-0 cancel never flagged on prompt 1 is reported confirmed, with the pointer, from prompt 2" {
+  TP="$BATS_TEST_TMPDIR/t.jsonl"
+  mksession "$TP"; mkstart dod-persist; mkdone dod-persist 0 2 900
+  run front; [ -z "$output" ]
+  { cancel_rec '~/.claude/hooks/dod-persist.sh'; user_rec; } > "$TP"; scan
+  run front
+  sys "$output" | grep -qF 'dod-persist did not finish'
+  ctx "$output" | grep -qF 'dod-persist.sh get'
+}
+
+@test "3.2 a foreign project-hook cancel is named once, never run, and the JSON survives quotes" {
+  TP="$BATS_TEST_TMPDIR/t.jsonl"
+  cmd='bash -c "echo \"hi\" \\ x"'
+  { cancel_rec "$cmd" '' 23100; user_rec; } > "$TP"
+  mksession "$TP"; mkstart desk-brief-inject; mkdone desk-brief-inject 0 1 0
+  scan
+  run front
+  [ "$(sys "$output")" = "⚠ startup: project hook $cmd was cancelled after 23.1 s — not re-run · re-run it by hand" ]
+  [ "$(idl_count 'startup-drop:confirmed:foreign')" = 1 ]
+  run front; [ -z "$output" ]
+}
+
+@test "3.2 a possible loss the transcript clears prints nothing more and leaves one cleared IDL row" {
+  TP="$BATS_TEST_TMPDIR/t.jsonl"
+  mksession "$TP"; mkstart mailbox-drain; mkdone mailbox-drain 141 0 300
+  run front; sys "$output" | grep -qF 'mailbox-drain may not have delivered (exit 141)'
+  [ -z "$(ctx "$output")" ]                              # the pointer is for dod-persist only
+  user_rec > "$TP"; scan
+  run front; [ -z "$output" ]
+  [ "$(idl_count 'startup-drop:cleared:mailbox-drain')" = 1 ]
+  [ -f "$S/resolved" ]
+}
+
+@test "3.2 no transcript ever: at most 3 tries, one possible line, then resolved" {
+  mksession "$BATS_TEST_TMPDIR/never.jsonl"; mkstart session-start-dispatch; : # no .done: never finished
+  run front; sys "$output" | grep -qF 'session-start-dispatch may not have delivered (it never finished)'
+  run front; [ -z "$output" ]
+  run front; [ -z "$output" ]
+  [ -f "$S/resolved" ]
+  run front; [ -z "$output" ]
+}
+
+@test "3.2 a resume (a .start newer than resolved) re-opens the session" {
+  TP="$BATS_TEST_TMPDIR/t.jsonl"; user_rec > "$TP"
+  mksession "$TP"; mkstart dod-persist; mkdone dod-persist 0 1 900
+  scan; run front; [ -z "$output" ]; [ -f "$S/resolved" ]
+  TZ=UTC touch -t 202610181201.00 "$S/resolved" "$S/cancels.tsv" "$S"/*.verdict "$S"/*.reported
+  mkstart dod-persist 202610181300.00; mkdone dod-persist 143 5 900
+  run front
+  sys "$output" | grep -qF 'dod-persist may not have delivered (exit 143)'
+}
+
+@test "3.2 CC_STARTUP_HEALTH=0 and an unsafe sid print nothing" {
+  mksession "$BATS_TEST_TMPDIR/x"; mkstart dod-persist; mkdone dod-persist 143 5 900
+  run /bin/bash -c '. "$1"; CC_STARTUP_HEALTH=0 sh_front_emit "$2" UserPromptSubmit' _ "$(RLIB)" "$SID"
+  [ -z "$output" ]
+  run /bin/bash -c '. "$1"; sh_front_emit "../x" UserPromptSubmit' _ "$(RLIB)"
+  [ -z "$output" ]
+}
+
+@test "3.2 session-beat prints the front's JSON on stdout, and 0 bytes on a healthy prompt" {
+  export CC_BEAT_DIR="$BATS_TEST_TMPDIR/beats" CC_BEAT_LOG="$BATS_TEST_TMPDIR/beat.log"
+  mksession "$BATS_TEST_TMPDIR/never.jsonl"; mkstart dod-persist; mkdone dod-persist 143 5 900
+  run /bin/bash -c "printf '{\"session_id\":\"$SID\",\"hook_event_name\":\"UserPromptSubmit\",\"cwd\":\"/tmp\",\"prompt\":\"hi\"}' | CC_STARTUP_HEALTH_POLL_S=0 /bin/bash '$REPO/hooks/session-beat.sh' prompt"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | jq -e '.hookSpecificOutput.hookEventName == "UserPromptSubmit"' >/dev/null
+  sys "$output" | grep -qF 'dod-persist may not have delivered'
+  run /bin/bash -c "printf '{\"session_id\":\"bbbb-2\",\"cwd\":\"/tmp\",\"prompt\":\"hi\"}' | /bin/bash '$REPO/hooks/session-beat.sh' prompt"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+

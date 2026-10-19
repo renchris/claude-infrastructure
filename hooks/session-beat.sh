@@ -94,7 +94,7 @@ if [ "$sync" = 1 ]; then P8_TIMEOUT="${CC_BEAT_TIMEOUT:-3}"; else P8_TIMEOUT="${
 # see ORDER BY EVENT in beat().
 _parsed=$(printf '%s' "$input" | jq -r '
   ([(.session_id // "" | tostring), (now * 1000 | floor | tostring), (.transcript_path // "" | tostring),
-    (.cwd // "" | tostring)] | @tsv),
+    (.hook_event_name // "" | tostring), (.cwd // "" | tostring)] | @tsv),
   (.prompt // "" | tostring)' 2>/dev/null)
 _head="${_parsed%%$'\n'*}"
 prompt=""
@@ -108,8 +108,11 @@ case "$_rest" in *$'\t'*) _rest2="${_rest#*$'\t'}" ;; esac
 # transcript_path: only the startup-health worker reads it (a path never carries a tab or backslash
 # that @tsv would have escaped; a mangled one just fails its -f test and is skipped).
 tp="${_rest2%%$'\t'*}"
+_rest3=""
+case "$_rest2" in *$'\t'*) _rest3="${_rest2#*$'\t'}" ;; esac
+hev="${_rest3%%$'\t'*}"   # hook_event_name, echoed back by the startup-health front's JSON
 cwd=""
-case "$_rest2" in *$'\t'*) cwd="${_rest2#*$'\t'}" ;; esac
+case "$_rest3" in *$'\t'*) cwd="${_rest3#*$'\t'}" ;; esac
 [ -n "$sid" ] || exit 0
 # sid is the IDENTITY key, deliberately NOT the pane: tmux panes inherit the server's
 # ITERM_SESSION_ID, so a pane-keyed beat would have N sessions overwrite one row.
@@ -294,6 +297,15 @@ fi
 # (hooks/lib/startup-health.sh sh_worker). Beside the beat, not after it, so a 60 s wait for a
 # transcript Claude Code has not created yet never delays the beat. Builtins until there is work.
 _SH_LIB="${BASH_SOURCE[0]%/*}/lib/startup-health.sh"
+# The FRONT (README §5 unit 3.2), synchronous because it is the only part that can speak to this
+# turn: a possible startup loss on prompt 1, the worker's confirmed losses from prompt 2, once each
+# (hooks/lib/startup-health.sh sh_front). Builtins only, and silent — 0 bytes — on a healthy prompt;
+# a session with no sentinel dir never even sources the lib, and a resolved one exits on a glob.
+if [ "$kind" = prompt ] && [ -d "${CC_STARTUP_HEALTH_DIR:-$HOME/.claude/state/startup-health}/$sid" ] \
+   && [ -f "$_SH_LIB" ]; then
+  # shellcheck source=lib/startup-health.sh disable=SC1091  # runtime-resolved beside this file
+  . "$_SH_LIB" && sh_front_emit "$sid" "${hev:-UserPromptSubmit}"
+fi
 set -m
 (
   set +m
