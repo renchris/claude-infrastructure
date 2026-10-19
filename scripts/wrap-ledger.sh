@@ -2489,7 +2489,7 @@ stale_clause() {
 # HEAD" to a 🔧 raised by a real cause), but it no longer manufactures a 🔧 on an otherwise-clean
 # close. Nothing here weakens a rung the session can actually act on: dirty tree, DoD remainder and
 # unlanded commits are unchanged and still outrank ✅.
-RUNG="✅"; READOUT="✅ Complete & live on trunk — nothing to do."
+RUNG="✅"; READOUT="✅ Complete & live on trunk — nothing this session filed is open."
 # The goal term is computed BEFORE the ladder and consumed by NONE of it — it is a report, not a
 # rung (§ GOAL). Unconditional like ⛔'s read, and for the opposite reason: ⛔ cannot ride the
 # ✅-eligible path because it outranks everything, this one cannot because it ranks nowhere at all.
@@ -2995,7 +2995,7 @@ rung_next() {
                   printf '%s NEW file(s) never reached the live layer' "$LIVE_ADDS"; \
                 else printf 'the converger is behind its budget'; fi )" ;;
     "👤") printf 'surface the OPERATOR block — %s step(s) are the operator'"'"'s (my side is done)' "$YOURS" ;;
-    "✅") printf 'complete — nothing to do' ;;
+    "✅") printf 'complete — nothing this session filed is open' ;;
     *)    printf 'model-state (📤) overrides — surface it' ;;
   esac
 }

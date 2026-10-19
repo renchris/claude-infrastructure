@@ -2936,3 +2936,24 @@ off_path_timeout() { # → echoes an off-PATH bounder, or nothing
   [ "$status" -eq 0 ]
   [ "$(field "$output" BOUND_SRC)" = "none" ]
 }
+
+# ── ✅ names what it checked (REPORT A2, research-pending-implementation-close-2026-10-18) ──
+# "nothing to do" claimed the whole task was empty when the ledger had only checked what THIS
+# session filed; an operator read it as "the open decisions are handled". The line now states its
+# scope, so the model relaying it verbatim (close-shape line-1-rung) cannot over-claim.
+@test "✅ default READOUT names its scope" {
+  ok_state
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "✅" ]
+  [ "$(field "$output" READOUT)" = "✅ Complete & live on trunk — nothing this session filed is open." ]
+  ! printf '%s' "$output" | grep -q 'nothing to do' || false
+}
+
+@test "--full Next row on ✅ names its scope" {
+  ok_state
+  run bash "$LEDGER" --full
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '^Next: *complete — nothing this session filed is open$'
+  ! printf '%s' "$output" | grep -q 'nothing to do' || false
+}
