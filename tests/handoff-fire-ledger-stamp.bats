@@ -199,4 +199,8 @@ custody_why() {
     | grep -q WIRED || { echo "the stamp section exists but calls no ledger"; false; }
   awk '/if \[ "\$RECYCLE" = 1 \]; then/{g=NR} /## STATE YOU ARE INHERITING/{ if (g && NR-g < 6) print "GATED"; exit }' "$HF" \
     | grep -q GATED || { echo "the stamp section is not gated on RECYCLE — an ordinary fire's brief would claim its successor inherited a predecessor's rung"; false; }
+  # "collect it" must not hand the successor the OPERATOR's sign-offs: a research-done ⛔ is theirs.
+  awk '/## STATE YOU ARE INHERITING/{s=1} s && /\} >> "\$PF_NB"/{exit}
+       s && /A ⛔ that reads "research done, implementation pending" is the operator/ && /leave those packets alone unless this brief names them/{print "SCOPED"; exit}' "$HF" \
+    | grep -q SCOPED || { echo "the recycle brief tells the successor to collect every non-✅ rung, the operator's sign-offs included"; false; }
 }

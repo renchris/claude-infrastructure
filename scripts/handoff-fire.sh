@@ -17021,6 +17021,7 @@ if [ -n "$NOTIFY_BACK" ] || [ "$SELF_RETIRE_TRAILER" = 1 ] || [ "$ENGAGE_VERIFY"
       printf 'This is your predecessor'"'"'s ledger at the instant it recycled, not yours. A rung other\n'
       printf 'than ✅ is work that survived the recycle and is now YOURS: collect it before starting\n'
       printf 'anything new. UNREAD means nobody looked — it is not a clean-state claim.\n'
+      printf 'A ⛔ that reads "research done, implementation pending" is the operator'"'"'s sign-off, not yours: leave those packets alone unless this brief names them.\n'
     } >> "$PF_NB"
   fi
   # THE AUTHOR'S PAYLOAD, kept for the payload gates. They exist to judge what a HUMAN/AGENT WROTE;
