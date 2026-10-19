@@ -18,6 +18,7 @@ setup() {
   HOOK="$REPO/hooks/validate-bash.sh"
   unset KITTY_WINDOW_ID
   export IT2_WRAPPER_NO_KITTY=1 CC_WCLAIM_GATE=off CC_LINEAGE_GATE=off CC_FIRE_CAPACITY_GATE=off
+  export CC_ADMIT_GATE=off   # a probe naming lr-fire-resume must never reach the live admission gate
   # the hook's probes name handoff-fire; pin every seam it could resolve off the live box
   export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/handoff-account-sweep.json" \
          CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/claude-accounts" CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/claude-accounts-heal-"
@@ -107,6 +108,29 @@ reason() { printf '%s' "$output" | jq -r '.hookSpecificOutput.permissionDecision
   probe '~/.claude/scripts/limit-recover/lr-fleet.sh --one 2e9ed9f2'
   not_denied
   probe 'cc-lr recover 2e9ed9f2 --target next3'
+  not_denied
+}
+
+# ── kitty launching a temp-dir program (lr-wake Wave E; decisions/q6-pane258-and-replace.md) ──────
+# The hf-tmp deny above covers handoff-fire only. 9f6593c5's launcher-rooted pane came from kitty
+# directly, and that is the command below, verbatim from q6 (2026-10-17T08:24:12Z). RED on main.
+@test "DENY kitten @ launch of a /tmp script — the 9f6593c5 retry loop, verbatim — and its other spellings" {
+  probe 'kitten @ launch --match id:7 --type=window --hold --cwd /Users/chrisren/Development/.worktrees/wt-cc-141442-81738 --title "resume 9f6593c5 (next, retrying)" /tmp/resume-9f6593c5-retry.sh'
+  denied; reason | grep -q 'lr-fleet.sh --one' || false
+  probe 'kitty @ --to unix:/tmp/kitty-1 launch --type=window -- /bin/bash /private/tmp/lr-rescue/resume-5232121f.sh'
+  denied
+  probe 'kitten @ launch --type=os-window --os-window-state=fullscreen "$TMPDIR/x.sh"'
+  denied
+}
+
+@test "ALLOW sanctioned kitty launches: a --cwd under /tmp, a repo or PATH program, a socket under /tmp" {
+  probe 'kitten @ launch --type=window --location=vsplit --match window_id:344 --next-to id:344 --cwd /tmp/scratch /bin/zsh'
+  not_denied
+  probe 'kitty @ launch --type=window --cwd=/private/tmp/x -- /Users/chrisren/.claude/scripts/limit-recover/lr-fire-resume.sh next2 /wt 5232121f'
+  not_denied
+  probe 'kitty @ --to unix:/tmp/kitty-1 launch --type=os-window --os-window-state=fullscreen --keep-focus /bin/zsh -l'
+  not_denied
+  probe "grep -rn 'kitten @ launch' /tmp/notes.txt"
   not_denied
 }
 

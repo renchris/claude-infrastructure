@@ -2308,6 +2308,11 @@ fi
 #             commands/handoff.md). handoff-fire's own placement replaces it.
 #   hf-tmp    `handoff-fire … --launcher <temp path>`: the hand-written /tmp/lr-rescue/resume-*.sh
 #             launchers that bypassed the lr rails and fed the rescue loop (REPORT RC7).
+#   kitty-tmp `kitty|kitten @ … launch … <temp path>`: the same hand-built launcher started by kitty
+#             directly. 9f6593c5's 24-try retry loop began as `kitten @ launch --match id:7
+#             --type=window --hold … /tmp/resume-9f6593c5-retry.sh` (2026-10-17); its pane was
+#             launcher-rooted, so every later move held HELD:no-shell (7x on 10-18). Any launch token
+#             under a temp dir counts (the program, `bash <it>`, a --watcher) except --cwd's value.
 #   plist     `launchctl load|bootstrap <plist>` where the plist is not one this repo SHIPS
 #             (launchd/, launchd/staged/, scripts/limit-recover/) sitting in ~/Library/LaunchAgents
 #             or in one of those repo dirs: the agent-installed com.reso.drain-to-next3 placed 11
@@ -2316,9 +2321,11 @@ fi
 # `bash install.sh`, `bash scripts/deploy-live.sh`, `scripts/limit-recover/lr-recon-launchd.sh` and
 # the docs/activation scripts (their launchctl runs INSIDE the script, which this hook never sees),
 # `launchctl bootstrap gui/<uid> ~/Library/LaunchAgents/<shipped>.plist`, bootout/print/list, a
-# split or --window fire, a --launcher that is not a temp path, and every grep/cat that names these.
+# split or --window fire, a --launcher that is not a temp path, a kitty launch whose program lives in
+# the repo or on PATH (a --cwd under /tmp is fine), and every grep/cat that names these.
 if [[ "$CMD" == *launchctl* || ( "$CMD" == *handoff-fire* && ( "$CMD" == *--tab* || "$CMD" == *--launcher* ) ) \
-      || ( ( "$CMD" == *kitty* || "$CMD" == *kitten* ) && "$CMD" == *tab* ) ]]; then
+      || ( ( "$CMD" == *kitty* || "$CMD" == *kitten* ) && ( "$CMD" == *tab* \
+           || ( "$CMD" == *launch* && ( "$CMD" == */tmp/* || "$CMD" == *TMPDIR* || "$CMD" == */var/folders/* ) ) ) ) ]]; then
   vb_rule_text_init
   _vss_self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
   _vss_repo="$(cd "$(dirname "$_vss_self")/.." 2>/dev/null && pwd)"
@@ -2399,6 +2406,14 @@ for seg in segments(text):
             print("tab"); sys.exit(0)
         if any(a.startswith("new_tab") for a in opts):
             print("tab"); sys.exit(0)
+        if "launch" in args:
+            la = args[args.index("launch") + 1:]
+            for a, prev in zip(la, [""] + la):
+                if prev == "--cwd" or a.startswith("--cwd="):
+                    continue
+                v = a.split("=", 1)[1] if a.startswith("--") and "=" in a else a
+                if v.startswith(TEMP):
+                    print("kitty-tmp " + v); sys.exit(0)
     if cmd in ("handoff-fire.sh", "handoff-fire"):
         if "--tab" in args:
             print("hf-tab"); sys.exit(0)
@@ -2425,6 +2440,8 @@ for seg in segments(text):
       deny "handoff-fire --tab refused — kitty tabs are retired (operator rule: no tabs, every OS window fullscreen on its own Space, at most 4 panes). Fire with --split-right when your own OS window has fewer than 4 panes, else --window --surface-reason \"operator rule: no tabs, <=4 panes\". The --tab doctrine is what turned the 2026-10-18 rescue loop into 22 hidden tabs (docs/research/lr-wake-incident-2026-10-18/REPORT.md RC3)." ;;
     hf-tmp\ *)
       deny "handoff-fire --launcher ${_vss_hit#hf-tmp } refused — a launcher written to a temp directory is a hand-built recovery outside the rails. On 2026-10-18 hand-written /tmp/lr-rescue/resume-*.sh launchers fired 16 rescue panes that the capacity gate then refused, leaving 13 dead shells (REPORT RC2, RC7). Rescue a stranded session with \`lr-fleet.sh --one <sid>\` or \`cc-lr recover <sid>\`, which admit before they spawn and queue on a refusal." ;;
+    kitty-tmp\ *)
+      deny "kitty launch of ${_vss_hit#kitty-tmp } refused — a program in a temp directory started as a pane is a hand-built launcher outside the rails. On 2026-10-17 \`kitten @ launch … /tmp/resume-9f6593c5-retry.sh\` started a 24-try retry loop in a launcher-rooted pane that no move could ever take (HELD:no-shell 7x on 10-18; decisions/q6-pane258-and-replace.md). Relaunch a session with \`lr-fleet.sh --one <sid>\` or \`cc-lr recover <sid>\`; open a pane with handoff-fire or scripts/lib/pane-placement.sh." ;;
     plist\ *)
       deny "LaunchAgent load refused — ${_vss_hit#plist } is not a plist this repo ships (launchd/, launchd/staged/, scripts/limit-recover/, loaded from ~/Library/LaunchAgents or those dirs). On 2026-10-18 an agent-installed LaunchAgent (com.reso.drain-to-next3) placed 11 move batches and 30+ rotates that nobody requested (REPORT §5 Q9). Loading a LaunchAgent is an activation the operator owns: add the plist to the repo's launchd/ and hand the operator the load command." ;;
   esac
