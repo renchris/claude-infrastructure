@@ -32,6 +32,7 @@ setup() {
   export HOME="$D/home"; mkdir -p "$HOME"
   export CLAUDE_ACCOUNTS_JSON="$D/acct.json"
   export CC_ACCOUNTS_BOARD="$D/board.txt"
+  export CC_PANE_DIR="$D/pane"
   command -v jq >/dev/null 2>&1 || skip "jq not installed"
   mk_cfg
 }
@@ -147,7 +148,7 @@ sys.exit(1 if bad else 0)' "$@"
 
 @test "3 /accounts as drawn by the relay hook: the drawn message fits at every width" {
   local w out fail=0
-  export CLAUDE_CODE_SESSION_ID="sweep-sid" CC_PANE_DIR="$D/pane"
+  export CLAUDE_CODE_SESSION_ID="sweep-sid"
   for w in $WIDTHS; do
     CC_PANE_COLS="$w" ca --readout --no-agents --max-wait 0 >/dev/null 2>"$D/err" \
       || { echo "pane=$w: readout failed: $(cat "$D/err")"; fail=1; continue; }
