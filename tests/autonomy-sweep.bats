@@ -2408,3 +2408,36 @@ PY
   [ "$(osa_count)" -eq 1 ]                                   # the mutant's rung is live code…
   grep -qx 'cloud-refusal-route banner=absent' "$STRAND_WITNESS" || { cat "$STRAND_WITNESS"; false; }   # …and it ran behind 0a
 }
+
+# ── class-B actuator hoist (lr-wake Q8, 2026-10-19) ─────────────────────────────────────────────────
+# On 2026-10-18, 39 of 40 live ticks ended themselves before §2, so three defaults due 05:00Z fired
+# 12 h late (docs/research/lr-wake-incident-2026-10-18/q8-classb-actuator.md). The actuator now runs
+# right after strand_rung; these pin that a tick cut at its FIRST checkpoint still fires, and that the
+# hoist neither fires early nor files a second item on the next full tick.
+@test "class-B actuator · an overdue default FIRES even when the tick dies at its FIRST checkpoint" {
+  id=$(bash "$CC_DECIDE_BIN" open --class B --what "overdue default under a starved tick" \
+        --conviction 60 --receipt "x => y" --default "continue on next2" \
+        --deadline "2000-01-01T00:00:00Z")
+  truncated_tick
+  [ "$status" -eq 0 ]
+  # cut where 29 of 39 live ticks were cut on 2026-10-18 — nothing below the first checkpoint ran
+  [ "$(jq -r 'select(.disposition=="self-bound")|.stopped_before' "$CC_IDL" | tail -1)" = "0b-author-death-join" ]
+  # THE PROPERTY: the default fired anyway, and its work item exists
+  [ "$(jq -r .status "$CC_DECISIONS_DIR/$id.json")" = "expired-actioned" ]
+  jq -e --arg id "$id" 'select(.verb=="expire-sweep" and .id==$id)' "$CC_IDL" >/dev/null
+  run bash "$CC_BACKLOG_BIN" list --open
+  echo "$output" | grep -q "class-B default fired: continue on next2"
+}
+
+@test "class-B actuator CONTROL · a future-deadline packet stays open on a truncated tick, and a later full tick adds no second item" {
+  fut=$(bash "$CC_DECIDE_BIN" open --class B --what "not yet due" --conviction 60 --receipt "x => y" \
+         --default "park" --deadline "2099-01-01T00:00:00Z")
+  od=$(bash "$CC_DECIDE_BIN" open --class B --what "due" --conviction 60 --receipt "x => y" \
+         --default "do the thing" --deadline "2000-01-01T00:00:00Z")
+  truncated_tick
+  [ "$(jq -r .status "$CC_DECISIONS_DIR/$fut.json")" = "open" ]
+  [ "$(jq -r .status "$CC_DECISIONS_DIR/$od.json")" = "expired-actioned" ]
+  run "${SWEEP_TO[@]}" bash "$SWEEP"          # full tick
+  [ "$status" -eq 0 ]
+  [ "$(bash "$CC_BACKLOG_BIN" list --open | grep -c 'class-B default fired: do the thing')" -eq 1 ]
+}

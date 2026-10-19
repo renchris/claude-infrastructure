@@ -15,7 +15,8 @@
 #        completion-push/        terminal-completion pushes whose verdict != "verified" (stuck)
 #        decisions/*.json        OPEN class-B/C packets awaiting operator early-veto
 #        handoff-alarms/         handoff-fire alarm records (D1) + this sweep's own D4 orphans
-#   2. Run `cc-decide expire-sweep` — the sweep is the class-B default ACTUATOR: for each fired
+#   2. Run `cc-decide expire-sweep` (HOISTED 2026-10-19: it runs as `class_b_actuate` right after
+#      the strand rung, so a truncated tick still reaches it) — the class-B default ACTUATOR: for each fired
 #      default it appends a cc-backlog item (bounded + auditable), NEVER acting inline. A default
 #      the PRODUCER declared `no-change` actuates nothing, so it is counted + summarised but gets
 #      NO backlog item — an open item is cc-dispatch's fire predicate, and a worker must never be
@@ -416,7 +417,7 @@ SWEEP_CP_LAST="$SWEEP_T0"
 # silently attributed to the cloud-return pass — a per-phase meter whose first bucket is mislabelled
 # would misdirect exactly the re-measurement this meter exists to inform (the arms above the first
 # checkpoint are what the self-bound keeps hitting).
-SWEEP_CP_PHASE="${CC_SWEEP_CP_PHASE0:-0-strand-page+0a-i-config-parity+0a-cloud-return}"
+SWEEP_CP_PHASE="${CC_SWEEP_CP_PHASE0:-0-strand-page+0-classb-actuate+0a-i-config-parity+0a-cloud-return}"
 SWEEP_PHASE_LOG_MIN_S="${CC_SWEEP_PHASE_LOG_MIN_S:-5}"
 case "$SWEEP_PHASE_LOG_MIN_S" in ''|*[!0-9]*) SWEEP_PHASE_LOG_MIN_S=5 ;; esac
 
@@ -534,6 +535,67 @@ EOF
   return 0
 }
 strand_rung
+# ── 0-classb. the class-B default ACTUATOR — HOISTED to run right after strand_rung (2026-10-19) ──
+# It used to sit at §2, behind three checkpoints. On 2026-10-18, 39 of 40 ticks between 05:00Z and
+# 17:13Z ended themselves at the 400 s self-bound before reaching it (phase 0 alone: median 695 s),
+# so three class-B defaults due at 05:00Z fired 12 h 13 min late and the readout said "auto-fire
+# ≤24h" the whole time (docs/research/lr-wake-incident-2026-10-18/q8-classb-actuator.md). Same move,
+# same argument as strand_rung and §0a-i: the actuator must be REACHED on a maximally-truncated tick.
+# Cost: one jq per packet, ~6 s typical; `_bounded` caps the producer at CC_SWEEP_BOUND_S, so the
+# worst case stays inside the 400 + 180 < 600 arithmetic. Idempotent: cc-decide flips a packet's
+# status exactly once, so a later full tick finds nothing to fire and files no second item. The
+# counters it bumps still feed total_new when the tick gets that far.
+#   For each fired default it appends a cc-backlog item (bounded + auditable), NEVER acting inline.
+class_b_actuate() {
+  if [ -n "$DECIDE" ]; then
+    # FIVE fields: "fired <id> <subject_project|-> <change|no-change> <default>". Every cell is
+    # PADDED by the emitter (bin/cc-decide § cmd_expire_sweep) precisely because tab is IFS-
+    # whitespace: an empty cell here would collapse the run and shift `deffect` into `dproj` on the
+    # no-project packets, i.e. on the exact population this branch exists to handle.
+    while IFS="$(printf '\t')" read -r tag did dproj deffect ddef; do
+      [ "$tag" = "fired" ] || continue
+      fired_defaults=$((fired_defaults + 1))
+
+      # A NO-CHANGE default actuates NOTHING — "hold (no change without ruling)", "disclose-only
+      # (already landed; silence = no further change)", "park this decision to the backlog and
+      # continue other work". Each of those became an OPEN backlog item, and `open` is exactly
+      # cc-dispatch's fire predicate, so the next tick could claim it and spawn a peer session whose
+      # entire assignment was to change nothing. The fired default is still COUNTED (so it lands in
+      # the summary + the IDL and still wakes the desk) — it is only kept out of the dispatch queue.
+      # The trail survives without a work item: the packet itself is the evidence (transitioned to
+      # `expired-actioned`, never deleted — inv7) plus cc-decide's own expire-sweep IDL line.
+      # The predicate is cc-decide's, read verbatim; nothing here inspects the default's wording.
+      if [ "$deffect" = "no-change" ]; then
+        fired_nochange=$((fired_nochange + 1))
+        continue
+      fi
+
+      if [ -n "$BACKLOG" ]; then
+        # --project EXPLICITLY. This sweep runs from launchd with cwd=/, and omitting it left
+        # cc-backlog to default off $(pwd) → project "/", which matches no dispatcher filter: 5 of
+        # these records sat structurally undrained for 8 days (item f7abcbdee98c). cc-backlog now
+        # REFUSES a degenerate default rather than storing one, so this value must be passed.
+        #
+        # PREFER the packet's own declared subject: the producer knew its cwd, so a project recorded
+        # at `cc-decide open --project` is the decision's real subject rather than the sweep's host.
+        # Absent ("-"), fall back to the host project as before — the sweep must NEVER recover the
+        # subject by grepping a path out of `what_plain`; that is the shape-classifier that must not
+        # be built (memory: fixture-vs-real-classifier-needs-a-producer — classify by the producer's
+        # literal emission, never by shape). On the fallback the SUBJECT stays resolvable by the
+        # reader from `--dod-ref decision:<id>`, which is exact.
+        dispatch_project="$dproj"
+        case "$dispatch_project" in
+          ""|"-") dispatch_project="${CC_SWEEP_PROJECT:-claude-infrastructure}" ;;
+        esac
+        "$BACKLOG" add --title "class-B default fired: $ddef" \
+          --project "$dispatch_project" \
+          --source autonomy-sweep --dod-ref "decision:$did" >/dev/null 2>&1 || true
+      fi
+    done < <(_bounded "$DECIDE" expire-sweep 2>/dev/null || true)
+  fi
+  return 0
+}
+class_b_actuate
 
 
 # ── 0a-i. CONFIG-DIR GUARDRAIL PARITY — hoisted above §0a, for the reason §0a itself records ──────
@@ -572,7 +634,8 @@ strand_rung
 # the parity checker is REACHED, on every tick, including a maximally-truncated one.
 #
 # ⚠️ WHAT THIS DOES NOT FIX, stated here because the numbers above are the evidence for it and a
-# reader will otherwise take this hoist for a cure: §2, §2b, §2b-i..vi, §2e, §2f and §3 are STILL
+# reader will otherwise take this hoist for a cure: §2 (hoisted on its own 2026-10-19, see
+# class_b_actuate), §2b, §2b-i..vi, §2e, §2f and §3 are STILL
 # starved — including §3, the summary + desk notify, whose last `fired` row is 2026-09-07T21:14:23Z.
 # Hoisting one block cures one block; the general repair is not row 6's surface and is filed.
 #
@@ -1184,53 +1247,9 @@ done
 
 sweep_yield 2-expire-sweep
 
-# ── 2. expire-sweep = the class-B default ACTUATOR (append to backlog, never act inline) ──
-if [ -n "$DECIDE" ]; then
-  # FIVE fields: "fired <id> <subject_project|-> <change|no-change> <default>". Every cell is
-  # PADDED by the emitter (bin/cc-decide § cmd_expire_sweep) precisely because tab is IFS-
-  # whitespace: an empty cell here would collapse the run and shift `deffect` into `dproj` on the
-  # no-project packets, i.e. on the exact population this branch exists to handle.
-  while IFS="$(printf '\t')" read -r tag did dproj deffect ddef; do
-    [ "$tag" = "fired" ] || continue
-    fired_defaults=$((fired_defaults + 1))
-
-    # A NO-CHANGE default actuates NOTHING — "hold (no change without ruling)", "disclose-only
-    # (already landed; silence = no further change)", "park this decision to the backlog and
-    # continue other work". Each of those became an OPEN backlog item, and `open` is exactly
-    # cc-dispatch's fire predicate, so the next tick could claim it and spawn a peer session whose
-    # entire assignment was to change nothing. The fired default is still COUNTED (so it lands in
-    # the summary + the IDL and still wakes the desk) — it is only kept out of the dispatch queue.
-    # The trail survives without a work item: the packet itself is the evidence (transitioned to
-    # `expired-actioned`, never deleted — inv7) plus cc-decide's own expire-sweep IDL line.
-    # The predicate is cc-decide's, read verbatim; nothing here inspects the default's wording.
-    if [ "$deffect" = "no-change" ]; then
-      fired_nochange=$((fired_nochange + 1))
-      continue
-    fi
-
-    if [ -n "$BACKLOG" ]; then
-      # --project EXPLICITLY. This sweep runs from launchd with cwd=/, and omitting it left
-      # cc-backlog to default off $(pwd) → project "/", which matches no dispatcher filter: 5 of
-      # these records sat structurally undrained for 8 days (item f7abcbdee98c). cc-backlog now
-      # REFUSES a degenerate default rather than storing one, so this value must be passed.
-      #
-      # PREFER the packet's own declared subject: the producer knew its cwd, so a project recorded
-      # at `cc-decide open --project` is the decision's real subject rather than the sweep's host.
-      # Absent ("-"), fall back to the host project as before — the sweep must NEVER recover the
-      # subject by grepping a path out of `what_plain`; that is the shape-classifier that must not
-      # be built (memory: fixture-vs-real-classifier-needs-a-producer — classify by the producer's
-      # literal emission, never by shape). On the fallback the SUBJECT stays resolvable by the
-      # reader from `--dod-ref decision:<id>`, which is exact.
-      dispatch_project="$dproj"
-      case "$dispatch_project" in
-        ""|"-") dispatch_project="${CC_SWEEP_PROJECT:-claude-infrastructure}" ;;
-      esac
-      "$BACKLOG" add --title "class-B default fired: $ddef" \
-        --project "$dispatch_project" \
-        --source autonomy-sweep --dod-ref "decision:$did" >/dev/null 2>&1 || true
-    fi
-  done < <("$DECIDE" expire-sweep 2>/dev/null || true)
-fi
+# ── 2. expire-sweep — the class-B ACTUATOR moved up: it runs as `class_b_actuate`, right after
+# strand_rung (2026-10-19, lr-wake Q8). This label stays as the checkpoint for the open-decision
+# reader below, which is a reader, not an actuator.
 
 # ── decisions still OPEN after the expire-sweep → surface once (awaiting early-veto) ──
 for f in "$DECISIONS_DIR"/*.json; do
