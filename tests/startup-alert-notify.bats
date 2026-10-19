@@ -46,6 +46,7 @@ fire() { run bash -c 'printf "%s" "$1" | bash "$2"' _ "$1" "$HOOK"; }
   fire "$(payload "$AL/$SID" add)"
   [ "$status" -eq 0 ]
   [ "$(printf '%s' "$output" | jq -r .systemMessage)" = "⚠ startup: session-start-dispatch cancelled at 9 s · recovery packet not injected" ]
+  # shellcheck disable=SC1003  # the trailing \\ is the ST terminator (ESC \), not a quote escape
   [ "$(printf '%s' "$output" | jq -r .terminalSequence)" = "$(printf '\a\033]99;;Claude Code startup fault 0478b034\033\\')" ]
 }
 
