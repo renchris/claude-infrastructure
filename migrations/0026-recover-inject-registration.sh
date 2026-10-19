@@ -3,10 +3,11 @@
 # migration-step: register hooks/recover-inject.sh as a UserPromptSubmit hook so a session that comes back from a NON-quota interruption (network drop, crash, stall, a failed background task) is told to audit disk before it reconciles from context — it edits settings.json, which is C10
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0026-recover-inject-registration.sh
 # migration-subject: ~/.claude/hooks/recover-inject.sh
-# migration-verify: jq -e '[.hooks.UserPromptSubmit[].hooks[]? | select(.command == "~/.claude/hooks/recover-inject.sh")] | length >= 1 and all(.[]; (.asyncRewake // false) == false)' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
-# migration-conflict: jq -e '[.hooks.UserPromptSubmit[].hooks[]? | select(.command == "~/.claude/hooks/recover-inject.sh")] | length >= 1 and any(.[]; (.asyncRewake // false) != false)' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
+# migration-verify: jq -e 'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.UserPromptSubmit[].hooks[]? | select(((.command // "") | cmd_bare) == "~/.claude/hooks/recover-inject.sh")] | length >= 1 and all(.[]; (.asyncRewake // false) == false)' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
+# migration-conflict: jq -e 'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.UserPromptSubmit[].hooks[]? | select(((.command // "") | cmd_bare) == "~/.claude/hooks/recover-inject.sh")] | length >= 1 and any(.[]; (.asyncRewake // false) != false)' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
+# cmd_bare: a hook command may carry its interpreter (/bin/bash ~/.claude/hooks/x.sh) since 0070.
 #
-# 0026 — D3 of docs/plans/NONLIMIT_RESUME_LADDER.md (T6/W2-B).
+# 0026 —D3 of docs/plans/NONLIMIT_RESUME_LADDER.md (T6/W2-B).
 # Subject: hooks/recover-inject.sh · tests/recover-inject.bats (18/18, 5 mutants killed)
 # Engine:  scripts/limit-recover/lr-audit.py --ledger-only · lr-lib.sh lr_last_api_error /
 #          lr_tail_nonsuccess_notification · tests/lr-audit-nonlimit.bats (29/29)
@@ -121,7 +122,7 @@ for dir in "$HOME"/.claude "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME
   fi
 
   if jq -e --arg c "$HOOK_CMD" \
-       '[.hooks.UserPromptSubmit[].hooks[]?.command] | any(. == $c)' "$f" >/dev/null 2>&1; then
+       'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.UserPromptSubmit[].hooks[]?.command] | any(((. // "") | cmd_bare) == $c)' "$f" >/dev/null 2>&1; then
     printf '0026: %s — already registered\n' "$f"
     continue
   fi
@@ -140,7 +141,7 @@ for dir in "$HOME"/.claude "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME
     # once, and it must NOT carry asyncRewake — a backgrounded entry's stdout reaches nobody, so it
     # would inject nothing while reading registered.
     if jq -e --arg c "$HOOK_CMD" \
-         '[.hooks.UserPromptSubmit[].hooks[]? | select(.command == $c)]
+         'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.UserPromptSubmit[].hooks[]? | select(((.command // "") | cmd_bare) == $c)]
           | length == 1 and ((.[0].asyncRewake // false) == false)' "$tmp" >/dev/null 2>&1; then
       mv "$tmp" "$f" && printf '0026: %s — registered UserPromptSubmit (backup: %s)\n' "$f" "$bak"
     else

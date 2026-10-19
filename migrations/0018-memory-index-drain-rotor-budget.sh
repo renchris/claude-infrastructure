@@ -3,10 +3,11 @@
 # migration-step: raise hooks/memory-index-drain.sh's declared PostToolUse timeout from 10s to 30s and set env MID_DEADLINE_S=24 in the same settings.json edit, so the hook's internal rotor budget fits inside the deadline the harness enforces — it edits settings.json, which is C10
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0018-memory-index-drain-rotor-budget.sh
 # migration-subject: ~/.claude/hooks/memory-index-drain.sh
-# migration-verify: jq -e '([.hooks.PostToolUse[]?.hooks[]?|select(.command=="~/.claude/hooks/memory-index-drain.sh")|.timeout] | length > 0 and all(. >= 30)) and ((.env.MID_DEADLINE_S // "0" | tonumber) >= 20 and (.env.MID_DEADLINE_S | tonumber) <= 27)' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
-# migration-conflict: jq -e '[.hooks.PostToolUse[]?.hooks[]?|select(.command=="~/.claude/hooks/memory-index-drain.sh")|.timeout] | length > 0 and any(. < 30)' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
+# migration-verify: jq -e 'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); ([.hooks.PostToolUse[]?.hooks[]?|select(((.command // "") | cmd_bare)=="~/.claude/hooks/memory-index-drain.sh")|.timeout] | length > 0 and all(. >= 30)) and ((.env.MID_DEADLINE_S // "0" | tonumber) >= 20 and (.env.MID_DEADLINE_S | tonumber) <= 27)' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
+# migration-conflict: jq -e 'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.PostToolUse[]?.hooks[]?|select(((.command // "") | cmd_bare)=="~/.claude/hooks/memory-index-drain.sh")|.timeout] | length > 0 and any(. < 30)' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
+# cmd_bare: a hook command may carry its interpreter (/bin/bash ~/.claude/hooks/x.sh) since 0070.
 #
-# 0018 — the DECLARATION half of bounding the drain's actuator. 0015 registered the hook with
+# 0018 —the DECLARATION half of bounding the drain's actuator. 0015 registered the hook with
 # timeout=10 and a header that reasoned "the rotor's own lock makes a slow case bounded rather than
 # unbounded". That was wrong about the quantity that matters: the lock bounds CONCURRENCY, not
 # DURATION, and the rotor was measured at 118s under a forced breach (the hub scan forks one grep
@@ -76,13 +77,13 @@ for dir in $DIRS; do
 
   # Only configs that already registered the hook (0015's own discriminator, one axis narrower).
   if ! jq -e --arg c "$HOOK_CMD" \
-       '[.hooks.PostToolUse[]?.hooks[]?.command] | any(. == $c)' "$f" >/dev/null 2>&1; then
+       'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.PostToolUse[]?.hooks[]?.command] | any(((. // "") | cmd_bare) == $c)' "$f" >/dev/null 2>&1; then
     printf '0018: %s — hook not registered here; skipped\n' "$f"
     continue
   fi
 
   if jq -e --arg c "$HOOK_CMD" --argjson t "$TIMEOUT" --arg b "$BUDGET" \
-       '([.hooks.PostToolUse[]?.hooks[]?|select(.command==$c)|.timeout] | all(. >= $t))
+       'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); ([.hooks.PostToolUse[]?.hooks[]?|select(((.command // "") | cmd_bare)==$c)|.timeout] | all(. >= $t))
         and ((.env.MID_DEADLINE_S // "") == $b)' "$f" >/dev/null 2>&1; then
     printf '0018: %s — already applied\n' "$f"
     continue
@@ -96,12 +97,12 @@ for dir in $DIRS; do
   # group, hook and env entry is carried through untouched — a sibling migration or a hand-edit owns
   # those.
   if jq --arg c "$HOOK_CMD" --argjson t "$TIMEOUT" --arg b "$BUDGET" \
-       '.hooks.PostToolUse |= map(.hooks |= map(if .command == $c then .timeout = $t else . end))
+       'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); .hooks.PostToolUse |= map(.hooks |= map(if ((.command // "") | cmd_bare) == $c then .timeout = $t else . end))
         | .env = ((.env // {}) + {MID_DEADLINE_S: $b})' \
        "$f" > "$tmp" 2>/dev/null && [ -s "$tmp" ] && jq -e . "$tmp" >/dev/null 2>&1; then
     # verify the edit BY CONTENT before it replaces the live file
     if jq -e --arg c "$HOOK_CMD" --argjson t "$TIMEOUT" --arg b "$BUDGET" \
-         '([.hooks.PostToolUse[]?.hooks[]?|select(.command==$c)|.timeout] | length > 0 and all(. >= $t))
+         'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); ([.hooks.PostToolUse[]?.hooks[]?|select(((.command // "") | cmd_bare)==$c)|.timeout] | length > 0 and all(. >= $t))
           and ((.env.MID_DEADLINE_S // "") == $b)' "$tmp" >/dev/null 2>&1; then
       mv "$tmp" "$f" && printf '0018: %s — timeout=%s env.MID_DEADLINE_S=%s (backup: %s)\n' "$f" "$TIMEOUT" "$BUDGET" "$bak"
     else

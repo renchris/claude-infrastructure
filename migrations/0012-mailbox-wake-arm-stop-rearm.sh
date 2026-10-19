@@ -3,8 +3,9 @@
 # migration-step: register hooks/mailbox-wake-arm.sh ALSO on Stop with asyncRewake so an idle session re-arms its inbox watcher at every boundary instead of going deaf when its birth watcher is spent — it edits settings.json, which is C10
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0012-mailbox-wake-arm-stop-rearm.sh
 # migration-subject: ~/.claude/hooks/mailbox-wake-arm.sh
-# migration-verify: jq -e '[.hooks.Stop[].hooks[]? | select(.command == "~/.claude/hooks/mailbox-wake-arm.sh")] | length >= 1 and all(.[]; .asyncRewake == true)' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
-# migration-conflict: jq -e '[.hooks.Stop[].hooks[]? | select(.command == "~/.claude/hooks/mailbox-wake-arm.sh")] | length >= 1 and any(.[]; .asyncRewake != true)' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
+# migration-verify: jq -e 'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.Stop[].hooks[]? | select(((.command // "") | cmd_bare) == "~/.claude/hooks/mailbox-wake-arm.sh")] | length >= 1 and all(.[]; .asyncRewake == true)' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
+# migration-conflict: jq -e 'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.Stop[].hooks[]? | select(((.command // "") | cmd_bare) == "~/.claude/hooks/mailbox-wake-arm.sh")] | length >= 1 and any(.[]; .asyncRewake != true)' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
+# cmd_bare: a hook command may carry its interpreter (/bin/bash ~/.claude/hooks/x.sh) since 0070.
 #
 # 0012 — W2, the safety net under W1. Subject: hooks/mailbox-wake-arm.sh (claim guard) ·
 # tests/mailbox-wake-arm.bats (21/21). Design: docs/research/goal-safe-2way-comms-2026-08-13.md §5.
@@ -134,7 +135,7 @@ for dir in "$HOME"/.claude "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME
   fi
 
   if jq -e --arg c "$HOOK_CMD" \
-       '[.hooks.Stop[].hooks[]?.command] | any(. == $c)' "$f" >/dev/null 2>&1; then
+       'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.Stop[].hooks[]?.command] | any(((. // "") | cmd_bare) == $c)' "$f" >/dev/null 2>&1; then
     printf '0012: %s — already registered\n' "$f"
     continue
   fi
@@ -153,7 +154,7 @@ for dir in "$HOME"/.claude "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME
     # verify the edit BY CONTENT before it replaces the live file — both the command AND the field
     # that makes it asynchronous, because the command alone would register a turn-BLOCKING hook.
     if jq -e --arg c "$HOOK_CMD" \
-         '[.hooks.Stop[].hooks[]? | select(.command == $c)]
+         'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.Stop[].hooks[]? | select(((.command // "") | cmd_bare) == $c)]
           | length == 1 and .[0].asyncRewake == true' "$tmp" >/dev/null 2>&1; then
       mv "$tmp" "$f" && printf '0012: %s — registered asyncRewake on Stop (backup: %s)\n' "$f" "$bak"
     else

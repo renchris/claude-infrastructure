@@ -45,12 +45,13 @@ case "${1:-}" in
 esac
 [ -n "$mode" ] || { printf '%s: pass --dry-run, --check, --verify or --confirm settings.json\n' "$N" >&2; exit 2; }
 
+# cmd_bare: a hook command may carry its interpreter (/bin/bash ~/.claude/hooks/x.sh) since 0070.
 # shellcheck disable=SC2016  # jq programs, not shell
-present() { jq -e --arg e "$EVENT" --arg c "$CMD" '[.hooks[$e][]?.hooks[]? | select(.command == $c)] | length > 0' "$1" >/dev/null 2>&1; }
+present() { jq -e --arg e "$EVENT" --arg c "$CMD" 'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks[$e][]?.hooks[]? | select(((.command // "") | cmd_bare) == $c)] | length > 0' "$1" >/dev/null 2>&1; }
 # shellcheck disable=SC2016
-applied() { jq -e --arg e "$EVENT" --arg c "$CMD" --argjson t "$TO" '[.hooks[$e][]?.hooks[]? | select(.command == $c)] as $h | ($h | length > 0) and ($h | all((.timeout // 0) >= $t))' "$1" >/dev/null 2>&1; }
+applied() { jq -e --arg e "$EVENT" --arg c "$CMD" --argjson t "$TO" 'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks[$e][]?.hooks[]? | select(((.command // "") | cmd_bare) == $c)] as $h | ($h | length > 0) and ($h | all((.timeout // 0) >= $t))' "$1" >/dev/null 2>&1; }
 # shellcheck disable=SC2016
-target() { jq --arg e "$EVENT" --arg c "$CMD" --argjson t "$TO" '.hooks[$e] |= map(.hooks |= map(if .command == $c and ((.timeout // 0) < $t) then .timeout = $t else . end))' "$1"; }
+target() { jq --arg e "$EVENT" --arg c "$CMD" --argjson t "$TO" 'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); .hooks[$e] |= map(.hooks |= map(if ((.command // "") | cmd_bare) == $c and ((.timeout // 0) < $t) then .timeout = $t else . end))' "$1"; }
 
 if [ "$mode" = verify ]; then applied "$f"; exit $?; fi
 
@@ -78,7 +79,7 @@ if ! target "$real" > "$tmp" 2>/dev/null || ! jq -e . "$tmp" >/dev/null 2>&1; th
 fi
 # BY CONTENT: with every timeout of the one registration set aside, the documents are identical.
 # shellcheck disable=SC2016
-norm='.hooks[$e] |= map(.hooks |= map(if .command == $c then del(.timeout) else . end))'
+norm='def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); .hooks[$e] |= map(.hooks |= map(if ((.command // "") | cmd_bare) == $c then del(.timeout) else . end))'
 if [ "$(jq -S --arg e "$EVENT" --arg c "$CMD" "$norm" "$real")" != "$(jq -S --arg e "$EVENT" --arg c "$CMD" "$norm" "$tmp")" ] || ! applied "$tmp"; then
   rm -f "$tmp"; printf '%s: edit did not verify by content — nothing written\n' "$N" >&2; exit 1
 fi

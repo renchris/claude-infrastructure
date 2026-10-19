@@ -3,7 +3,8 @@
 # migration-step: register hooks/read-before-write-parity.sh as a PreToolUse hook (its own "Write|Edit|MultiEdit" entry) in ~/.claude/settings.json, which every account links to since 0037 — so ALL accounts at once. It refuses a write to an existing file the session never Read, the native guard Claude Code 2.1.284 no longer applies to opus-5-5 / sonnet-5-5. It refuses to write unless cc-settings-parity reports every account linked and the LIVE hook exists. It writes settings.json, which is C10.
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0047-read-before-write-parity-registration.sh --confirm settings.json
 # migration-subject: hooks/read-before-write-parity.sh
-# migration-verify: "$HOME/.claude/bin/cc-settings-parity" check >/dev/null 2>&1 && jq -e '[.hooks.PreToolUse[]? | select(.matcher == "Write|Edit|MultiEdit") | .hooks[]?.command] | any(. == "~/.claude/hooks/read-before-write-parity.sh")' "$HOME/.claude/settings.json" >/dev/null
+# migration-verify: "$HOME/.claude/bin/cc-settings-parity" check >/dev/null 2>&1 && jq -e 'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.PreToolUse[]? | select(.matcher == "Write|Edit|MultiEdit") | .hooks[]?.command] | any(((. // "") | cmd_bare) == "~/.claude/hooks/read-before-write-parity.sh")' "$HOME/.claude/settings.json" >/dev/null
+# cmd_bare: a hook command may carry its interpreter (/bin/bash ~/.claude/hooks/x.sh) since 0070.
 #
 # The verifier is config-dir-INVARIANT (as 0036-0041): one shared file, one answer from every dir.
 #
@@ -55,7 +56,7 @@ esac
 
 registered() {
   jq -e --arg c "$CMD" --arg m "$MATCHER" \
-    '[.hooks.PreToolUse[]? | select(.matcher == $m) | .hooks[]?.command] | any(. == $c)' "$1" >/dev/null 2>&1
+    'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.PreToolUse[]? | select(.matcher == $m) | .hooks[]?.command] | any(((. // "") | cmd_bare) == $c)' "$1" >/dev/null 2>&1
 }
 
 if [ "$mode" = verify ]; then

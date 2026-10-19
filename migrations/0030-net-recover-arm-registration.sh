@@ -3,10 +3,11 @@
 # migration-step: register hooks/net-recover-arm.sh on SessionStart AND Stop with asyncRewake, so a session whose turn died on an API error is WOKEN when the path comes back instead of waiting for the operator to notice — it edits settings.json, which is C10
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0030-net-recover-arm-registration.sh
 # migration-subject: ~/.claude/hooks/net-recover-arm.sh
-# migration-verify: jq -e '[.hooks.SessionStart[].hooks[]? , .hooks.Stop[].hooks[]? | select(.command == "~/.claude/hooks/net-recover-arm.sh")] | length == 2 and all(.[]; .asyncRewake == true and .timeout >= 14400)' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
-# migration-conflict: jq -e '[.hooks.SessionStart[].hooks[]? , .hooks.Stop[].hooks[]? | select(.command == "~/.claude/hooks/net-recover-arm.sh")] | length >= 1 and any(.[]; (.asyncRewake // false) != true or (.timeout // 0) < 14400)' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
+# migration-verify: jq -e 'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.SessionStart[].hooks[]? , .hooks.Stop[].hooks[]? | select(((.command // "") | cmd_bare) == "~/.claude/hooks/net-recover-arm.sh")] | length == 2 and all(.[]; .asyncRewake == true and .timeout >= 14400)' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
+# migration-conflict: jq -e 'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.SessionStart[].hooks[]? , .hooks.Stop[].hooks[]? | select(((.command // "") | cmd_bare) == "~/.claude/hooks/net-recover-arm.sh")] | length >= 1 and any(.[]; (.asyncRewake // false) != true or (.timeout // 0) < 14400)' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
+# cmd_bare: a hook command may carry its interpreter (/bin/bash ~/.claude/hooks/x.sh) since 0070.
 #
-# 0030 — D4 of docs/plans/NONLIMIT_RESUME_LADDER.md (T6/W2-C, T14).
+# 0030 —D4 of docs/plans/NONLIMIT_RESUME_LADDER.md (T6/W2-C, T14).
 # Subject: hooks/net-recover-arm.sh · tests/net-recover-arm.bats
 # Proof it can work at all: docs/research/api-error-rewake-proof-2026-09.md (W2-0, both arms)
 #
@@ -107,7 +108,7 @@ for dir in "$HOME"/.claude "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME
   fi
 
   if jq -e --arg c "$HOOK_CMD" \
-       '[.hooks.SessionStart[].hooks[]?, .hooks.Stop[].hooks[]? | select(.command == $c)] | length >= 2' \
+       'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.SessionStart[].hooks[]?, .hooks.Stop[].hooks[]? | select(((.command // "") | cmd_bare) == $c)] | length >= 2' \
        "$f" >/dev/null 2>&1; then
     printf '0030: %s — already registered\n' "$f"
     continue
@@ -132,8 +133,8 @@ for dir in "$HOME"/.claude "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME
     # Verify BY CONTENT before replacing the live file: exactly two entries, BOTH asyncRewake:true
     # and BOTH with a timeout at or above the subject's own watch. Those are the two values whose
     # wrong settings are silent and catastrophic (see the conflict oracle above).
-    if jq -e --arg c "$HOOK_CMD" '
-         [.hooks.SessionStart[].hooks[]?, .hooks.Stop[].hooks[]? | select(.command == $c)]
+    if jq -e --arg c "$HOOK_CMD" 'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; "");
+         [.hooks.SessionStart[].hooks[]?, .hooks.Stop[].hooks[]? | select(((.command // "") | cmd_bare) == $c)]
          | length == 2 and all(.[]; .asyncRewake == true and .timeout >= 14400)' "$tmp" >/dev/null 2>&1; then
       mv "$tmp" "$f" && printf '0030: %s — registered SessionStart + Stop (backup: %s)\n' "$f" "$bak"
     else

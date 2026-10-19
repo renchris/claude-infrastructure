@@ -59,10 +59,11 @@ CONFIG_DIRS=("$HOME/.claude" "$HOME/.claude-next" "$HOME/.claude-secondary" "$HO
 verify_one() {
   local f="${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json"
   [ -f "$f" ] || { printf '0024 --verify: %s absent\n' "$f" >&2; return 1; }
+  # cmd_bare: a hook command may carry its interpreter (/bin/bash ~/.claude/hooks/x.sh) since 0070.
   jq -e --arg m "$MATCHER" --arg c "$CMD" \
-     '(.hooks.PreToolUse // []) | (length > 0)
+     'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); (.hooks.PreToolUse // []) | (length > 0)
         and (.[0].matcher == $m)
-        and ([.[0].hooks[]?.command] | any(. == $c))' "$f" >/dev/null 2>&1 && return 0
+        and ([.[0].hooks[]?.command] | any(((. // "") | cmd_bare) == $c))' "$f" >/dev/null 2>&1 && return 0
   printf '0024 --verify: %s — unit-gate.sh is not the FIRST PreToolUse entry (first matcher is %s)\n' \
     "$f" "$(jq -c '(.hooks.PreToolUse // [])[0].matcher // "NONE"' "$f" 2>/dev/null)" >&2
   return 1
@@ -76,8 +77,8 @@ conflict_one() {
   local f="${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json"
   [ -f "$f" ] || return 1
   jq -e --arg m "$MATCHER" --arg c "$CMD" \
-     '[(.hooks.PreToolUse // [])[] | select(.matcher == $m)] as $s
-      | ($s | length > 0) and ([$s[].hooks[]?.command] | any(. == $c) | not)' "$f" >/dev/null 2>&1
+     'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [(.hooks.PreToolUse // [])[] | select(.matcher == $m)] as $s
+      | ($s | length > 0) and ([$s[].hooks[]?.command] | any(((. // "") | cmd_bare) == $c) | not)' "$f" >/dev/null 2>&1
 }
 
 case "${1:-}" in
@@ -122,7 +123,7 @@ for dir in "${CONFIG_DIRS[@]}"; do
   fi
 
   if jq -e --arg m "$MATCHER" --arg c "$CMD" \
-       '(.hooks.PreToolUse[0].matcher == $m) and ([.hooks.PreToolUse[0].hooks[]?.command] | any(. == $c))' \
+       'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); (.hooks.PreToolUse[0].matcher == $m) and ([.hooks.PreToolUse[0].hooks[]?.command] | any(((. // "") | cmd_bare) == $c))' \
        "$f" >/dev/null 2>&1; then
     printf '0024: %s — already FIRST\n' "$f"
     continue
@@ -137,19 +138,19 @@ for dir in "${CONFIG_DIRS[@]}"; do
   # first position without ever duplicating the row (MEMORY: denylist-enumerates-spellings — a
   # guard that can only append cannot repair the state it is supposed to own).
   # shellcheck disable=SC2016  # $m/$c/$t are jq variables bound by --arg/--argjson.
-  jq --arg m "$MATCHER" --arg c "$CMD" --argjson t "$TMO" '
+  jq --arg m "$MATCHER" --arg c "$CMD" --argjson t "$TMO" 'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; "");
       .hooks.PreToolUse = (
         [ { matcher: $m, hooks: [ { type: "command", command: $c, timeout: $t } ] } ]
         + [ (.hooks.PreToolUse // [])[]
-            | select( (.matcher != $m) or ([.hooks[]?.command] | any(. == $c) | not) ) ]
+            | select( (.matcher != $m) or ([.hooks[]?.command] | any(((. // "") | cmd_bare) == $c) | not) ) ]
       )' "$f" > "$tmp" 2>/dev/null || { rm -f "$tmp"; printf '0024: %s — jq FAILED\n' "$f" >&2; rc=1; continue; }
 
   # Content check before the swap, and it re-asserts the file's OTHER arrays survived: a settings
   # edit that lands valid JSON having dropped .hooks.Stop is the worst outcome available here.
   if [ -s "$tmp" ] && jq -e . "$tmp" >/dev/null 2>&1 \
      && jq -e --arg m "$MATCHER" --arg c "$CMD" \
-          '(.hooks.PreToolUse[0].matcher == $m)
-             and ([.hooks.PreToolUse[0].hooks[]?.command] | any(. == $c))
+          'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); (.hooks.PreToolUse[0].matcher == $m)
+             and ([.hooks.PreToolUse[0].hooks[]?.command] | any(((. // "") | cmd_bare) == $c))
              and ([.hooks.PreToolUse[] | select(.matcher == $m)] | length == 1)' "$tmp" >/dev/null 2>&1 \
      && jq -e '(.hooks.Stop | type == "array" and length > 0)
                and (.hooks.PreToolUse | length >= 2)' "$tmp" >/dev/null 2>&1; then

@@ -95,7 +95,8 @@ verify_one() {
     || { printf '0023 --verify: %s — env.%s is %s, expected "%s"\n' "$f" "$ENV_KEY" \
            "$(jq -c --arg k "$ENV_KEY" '.env[$k] // "ABSENT"' "$f" 2>/dev/null)" "$ENV_VAL" >&2; miss=1; }
 
-  have="$(jq -r '.hooks // {} | to_entries[] | .key as $e | (.value // [])[]? | (.hooks // [])[]? | "\($e)|\(.command)"' "$f" 2>/dev/null)" || return 1
+  # cmd_bare: a hook command may carry its interpreter (/bin/bash ~/.claude/hooks/x.sh) since 0070.
+  have="$(jq -r 'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); .hooks // {} | to_entries[] | .key as $e | (.value // [])[]? | (.hooks // [])[]? | "\($e)|\(.command // "" | cmd_bare)"' "$f" 2>/dev/null)" || return 1
   for row in "${ROWS[@]}"; do
     _row "$row"
     grep -qxF -- "$EV|$CMD" <<<"$have" \
@@ -172,7 +173,7 @@ for dir in "${CONFIG_DIRS[@]}"; do
     _row "$row"
 
     if jq -e --arg e "$EV" --arg c "$CMD" \
-         '[.hooks[$e][]?.hooks[]?.command] | any(. == $c)' "$f" >/dev/null 2>&1; then
+         'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks[$e][]?.hooks[]?.command] | any(((. // "") | cmd_bare) == $c)' "$f" >/dev/null 2>&1; then
       printf '0023: %s — %s|%s already registered\n' "$f" "$EV" "$CMD"
       continue
     fi
@@ -187,7 +188,7 @@ for dir in "${CONFIG_DIRS[@]}"; do
 
     # shellcheck disable=SC2016  # same: the expression is jq's, not the shell's.
     if jq --arg e "$EV" --arg c "$CMD" --argjson t "$TMO" "$jq_expr" "$f" > "$tmp" 2>/dev/null \
-       && _commit "$tmp" --arg e "$EV" --arg c "$CMD" '[.hooks[$e][]?.hooks[]?.command] | any(. == $c)'; then
+       && _commit "$tmp" --arg e "$EV" --arg c "$CMD" 'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks[$e][]?.hooks[]?.command] | any(((. // "") | cmd_bare) == $c)'; then
       printf '0023: %s — %s registered (%s)\n' "$f" "$EV" "$CMD"
     else
       printf '0023: %s — %s registration FAILED its content check; left unchanged\n' "$f" "$EV" >&2; rc=1

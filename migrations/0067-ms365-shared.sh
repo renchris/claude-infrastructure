@@ -50,8 +50,9 @@ case "${1:-}" in
   *) die "unknown argument $1 (use --dry-run, --verify or --confirm ms365-shared)" 2 ;;
 esac
 
+# cmd_bare: a hook command may carry its interpreter (/bin/bash ~/.claude/hooks/x.sh) since 0070.
 registered() {
-  jq -e --arg c "$CMD" --arg m "$MATCHER" '[.hooks.PreToolUse[]? | select(.matcher == $m) | .hooks[]?.command] | any(. == $c)' "$1" >/dev/null 2>&1
+  jq -e --arg c "$CMD" --arg m "$MATCHER" 'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.PreToolUse[]? | select(.matcher == $m) | .hooks[]?.command] | any(((. // "") | cmd_bare) == $c)' "$1" >/dev/null 2>&1
 }
 if [ "$mode" = verify ]; then
   [ -e "$MARKER" ] && "$LC" print "$DOMAIN/$LABEL" >/dev/null 2>&1 && registered "$f" \

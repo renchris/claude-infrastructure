@@ -3,10 +3,11 @@
 # migration-step: register hooks/frontier-spawn-gate.sh under the PreToolUse Bash matcher so a frontier SESSION fire (handoff-fire.sh --model fable) is counted against the same per-session cap an Agent spawn is — it edits settings.json, which is C10
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0029-frontier-gate-session-path.sh
 # migration-subject: ~/.claude/hooks/frontier-spawn-gate.sh
-# migration-verify: jq -e '[.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[]? | select(.command == "~/.claude/hooks/frontier-spawn-gate.sh")] | length == 1' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
-# migration-conflict: jq -e '[.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[]? | select(.command == "~/.claude/hooks/frontier-spawn-gate.sh")] | length >= 1 and any(.[]; (.asyncRewake // false) != false or (.timeout // 0) > 10)' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
+# migration-verify: jq -e 'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[]? | select(((.command // "") | cmd_bare) == "~/.claude/hooks/frontier-spawn-gate.sh")] | length == 1' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
+# migration-conflict: jq -e 'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[]? | select(((.command // "") | cmd_bare) == "~/.claude/hooks/frontier-spawn-gate.sh")] | length >= 1 and any(.[]; (.asyncRewake // false) != false or (.timeout // 0) > 10)' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
+# cmd_bare: a hook command may carry its interpreter (/bin/bash ~/.claude/hooks/x.sh) since 0070.
 #
-# 0029 — R2 of docs/plans/NONLIMIT_RESUME_LADDER.md § W3 (conviction 93%, "pure safety gap; the only
+# 0029 —R2 of docs/plans/NONLIMIT_RESUME_LADDER.md § W3 (conviction 93%, "pure safety gap; the only
 # real bound").
 # Subject: hooks/frontier-spawn-gate.sh · tests/frontier-spawn-gate.bats (24/24, 4 mutants killed)
 #
@@ -95,7 +96,7 @@ for dir in "$HOME"/.claude "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME
   fi
 
   if jq -e --arg c "$HOOK_CMD" \
-       '[.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[]?.command] | any(. == $c)' \
+       'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[]?.command] | any(((. // "") | cmd_bare) == $c)' \
        "$f" >/dev/null 2>&1; then
     printf '0029: %s — already registered\n' "$f"
     continue
@@ -118,10 +119,10 @@ for dir in "$HOME"/.claude "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME
     # above watches for. Also assert the Agent entry SURVIVED: a jq path slip that rewrote the wrong
     # group would leave the majority path gated and the minority path silently ungated, which is the
     # same defect inverted and would read as a successful migration.
-    if jq -e --arg c "$HOOK_CMD" '
-         ([.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[]? | select(.command == $c)]
+    if jq -e --arg c "$HOOK_CMD" 'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; "");
+         ([.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[]? | select(((.command // "") | cmd_bare) == $c)]
             | length == 1 and ((.[0].asyncRewake // false) == false) and (.[0].timeout == 5))
-         and ([.hooks.PreToolUse[] | select(.matcher == "Agent") | .hooks[]? | select(.command == $c)]
+         and ([.hooks.PreToolUse[] | select(.matcher == "Agent") | .hooks[]? | select(((.command // "") | cmd_bare) == $c)]
             | length == 1)' "$tmp" >/dev/null 2>&1; then
       mv "$tmp" "$f" && printf '0029: %s — registered PreToolUse/Bash (backup: %s)\n' "$f" "$bak"
     else

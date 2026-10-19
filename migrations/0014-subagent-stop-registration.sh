@@ -3,7 +3,8 @@
 # migration-step: register hooks/subagent-stop.sh as a SubagentStop hook so a finished subagent's report leaves a harvest index — it edits settings.json, which is C10
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0014-subagent-stop-registration.sh
 # migration-subject: ~/.claude/hooks/subagent-stop.sh
-# migration-verify: jq -e '[.hooks.SubagentStop[]?.hooks[]?.command] | any(. == "~/.claude/hooks/subagent-stop.sh")' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
+# migration-verify: jq -e 'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.SubagentStop[]?.hooks[]?.command] | any(((. // "") | cmd_bare) == "~/.claude/hooks/subagent-stop.sh")' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
+# cmd_bare: a hook command may carry its interpreter (/bin/bash ~/.claude/hooks/x.sh) since 0070.
 #
 # 0014 — the registration half of the SubagentStop consumer (backlog 7ea31ffa1a08).
 # Subject: hooks/subagent-stop.sh, built and symlinked into ~/.claude/hooks since 2026-07-30.
@@ -80,7 +81,7 @@ for dir in "$HOME"/.claude "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME
   fi
 
   if jq -e --arg c "$HOOK_CMD" \
-       '[.hooks.SubagentStop[]?.hooks[]?.command] | any(. == $c)' "$f" >/dev/null 2>&1; then
+       'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.SubagentStop[]?.hooks[]?.command] | any(((. // "") | cmd_bare) == $c)' "$f" >/dev/null 2>&1; then
     printf '0014: %s — already registered\n' "$f"
     continue
   fi
@@ -101,7 +102,7 @@ for dir in "$HOME"/.claude "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME
        "$f" > "$tmp" 2>/dev/null && [ -s "$tmp" ] && jq -e . "$tmp" >/dev/null 2>&1; then
     # verify the edit BY CONTENT before it replaces the live file
     if jq -e --arg c "$HOOK_CMD" \
-         '[.hooks.SubagentStop[]?.hooks[]?.command] | any(. == $c)' "$tmp" >/dev/null 2>&1; then
+         'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.SubagentStop[]?.hooks[]?.command] | any(((. // "") | cmd_bare) == $c)' "$tmp" >/dev/null 2>&1; then
       mv "$tmp" "$f" && printf '0014: %s — registered (backup: %s)\n' "$f" "$bak"
     else
       rm -f "$tmp"; printf '0014: %s — edit did not contain the hook; left unchanged\n' "$f" >&2; rc=1
