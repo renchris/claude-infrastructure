@@ -80,7 +80,7 @@ MIN_CLAUSE = 40          # a clause shorter than this names nothing actionable
 # there is nothing to file. A 🔧 rung overrides: that rung IS an open loose end.
 _SETTLED = re.compile(
     r"\b(rows? closed|all closed|already (closed|filed|landed)|"
-    r"0 unpushed|nothing (of mine )?is open|no loose ends|"
+    r"0 unpushed|nothing (of mine |drivable )?is open|no loose ends|"
     r"content[- ]verified|safe to close)\b", re.I)
 # Ranked first: a clause that states an OPEN thing, not one that merely mentions
 # the machinery of filing.
@@ -418,6 +418,10 @@ def selftest():
     if finding_of("Re-checked live: clean tree, 0 unpushed, both backlog rows "
                   "closed and nothing of mine is open.") != "":
         print("FAIL: a settled close was drained as a finding"); ok = False
+    # The close template's yes payload (2026-10-18): "nothing drivable is open" settles like the old one.
+    if finding_of("Good to close: yes — nothing drivable is open, and the sealed set "
+                  "stays parked on data.") != "":
+        print("FAIL: the template's own settled payload was drained as a finding"); ok = False
     fo = finding_of("I filed it as a backlog row for later. The tenant-drift env "
                     "fix still remains unlanded on its own branch today.")
     if "still remains unlanded" not in fo:
