@@ -2,6 +2,12 @@
 
 > 🚨 **NOT POSTED, AND POSTING IS NOT AN AGENT'S CALL.** This file is a draft for the operator to
 > review and submit if he chooses. Nothing in this phase opened an issue, a PR or a comment.
+>
+> ⛔ **CORRECTED (2026-10-19): do not post this draft.** The "pre-blessed" quote below cuts out
+> the maintainer's actual design for #9450 (show the bars, then auto-hide them after the drag),
+> which shipped as `toggle_window_title_bars` (#9626). This action is an alternative to that design,
+> not the feature he asked for. See
+> `~/.claude/autonomy/incidents/kitty-crash-2026-10-15/upstream-2026-10-19/out/REPORT.md` §2 row 4.
 
 ---
 
