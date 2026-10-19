@@ -15,7 +15,9 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"
   F="$BATS_TEST_TMPDIR/fx"
   mkdir -p "$HOME/.claude/hooks" "$F"
+  # shellcheck disable=SC2016  # the fixture script's own $0/$1, not ours
   printf '#!/bin/bash\nprintf "%%s|%%s|%%s\\n" "$0" "$1" "$(cat)"\n' > "$HOME/.claude/hooks/b.sh"
+  # shellcheck disable=SC2016  # the fixture script's own $0/$1, not ours
   printf '#!/usr/bin/env bash\nprintf "env:%%s\\n" "$1"\n' > "$HOME/.claude/hooks/e.sh"
   printf '#!/usr/bin/env python3\nimport sys; print("py:" + sys.argv[1])\n' > "$HOME/.claude/hooks/p.py"
   chmod +x "$HOME/.claude/hooks/"*
@@ -49,6 +51,7 @@ settings() { # <file> — every command spelling a live settings.json carries, p
   [ "${lines[4]}" = "/bin/bash ~/.claude/hooks/b.sh done" ]      # already explicit: untouched
   [ "${lines[5]}" = "date +%s >> /dev/null" ]                     # a Mach-O first word: untouched
   [ "${lines[6]}" = "/bin/bash ~/.claude/hooks/b.sh status" ]
+  # shellcheck disable=SC2088  # a literal ~, as settings.json stores it
   [ "${lines[7]}" = "~/.claude/hooks/b.sh" ]                      # mcpServers are not hooks
   # matcher, if, timeout carried through; a second rewrite is the identity
   [ "$(jq -c '.hooks.PreToolUse[0] | del(.hooks[0].command)' "$F/out.json")" = \
@@ -86,6 +89,7 @@ settings() { # <file> — every command spelling a live settings.json carries, p
 
 @test "the jq normalizer and the python one agree on one corpus" {
   local c py jqv
+  # shellcheck disable=SC2088  # a literal ~, as settings.json stores it
   for c in "/bin/bash ~/.claude/hooks/x.sh a" "/usr/bin/env bash \$HOME/x.sh" "/usr/bin/env python3 /a/b.py" \
            "/bin/sh ~/x" "/bin/bash -c 'echo hi'" "~/.claude/hooks/x.sh" "date +%s" "/usr/bin/env  bash ~/y"; do
     py="$("${PRED[@]}" bare "$c")"
