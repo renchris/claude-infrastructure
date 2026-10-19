@@ -11,6 +11,7 @@
 #                               stamps $R/fleet.stamp, scans any unscanned start epoch, and deletes
 #                               session dirs older than 7 days.
 #   cc-startup-health --span    the load-banded startup span (24 h and 7 d) behind the board's span line
+#   cc-startup-health --detector  the shadow drop detector's held trips and its last log rows
 #   cc-startup-health --ack     acknowledge every occurrence the line counts now. Any LATER
 #                               occurrence raises the line again: clearing is per occurrence
 #                               (<sid>:<hook>:<start-mtime>), never by kind and never on a timer.
@@ -302,6 +303,83 @@ span_report() {
   echo "  source: $SSD_LEDGER (total_ms) joined to $CAP_LOG (load_1m within 15 min)"
 }
 
+# ── fleet drop detector, SHADOW mode (README §2 row #26; A5 §4.4 as amended by A5-F9) ─────────────
+# Over the same fold rows, per hook label, losses only (deferrals render nothing unless their retry
+# fails), unacked occurrences only. A label trips on any of:
+#   floor     an absolute per-hook floor: >= DETECT_FLOOR losses in the last 6 h. The amendment's
+#             point: a relative rule alone lets a sustained load-era rate become its own baseline.
+#   relative  6 h loss share >= 2x its 7 d share, and >= 5 %, with n >= 20 starts in the 6 h.
+#   new       a label with a loss in the last 6 h and none before it in the 7 d kept.
+# A trip PERSISTS until every occurrence that raised it is acknowledged (cc-startup-health --ack):
+# clearing must match the occurrence, never a window rolling past it (README §6). SHADOW: trips and
+# clears are only logged to DETECT_LOG — nothing is paged and the board never shows them — until a
+# shadow period has shown the rules quiet at baseline. State: $R/detector.state.
+DETECT_LOG="${CC_STARTUP_DETECT_LOG:-$HOME/.claude/logs/startup-health-detector.jsonl}"
+DETECT_FLOOR="${CC_STARTUP_DETECT_FLOOR:-3}"
+
+detect_trips() { # <rows-file> → "rule<TAB>label<TAB>l6<TAB>n6<TAB>l7<TAB>n7<TAB>ids" per trip now
+  awk -F'\t' -v now="$now" -v ackf="$R/fleet-ack.txt" -v floor="$DETECT_FLOOR" '
+    BEGIN { while ((getline l < ackf) > 0) acked[l] = 1 }
+    $2 == "start" { s7[$3]++; if (now - $4 <= 21600) s6[$3]++; next }
+    $2 != "loss"  { next }
+    { lab = $3; if (now - $4 > 21600) prior[lab] = 1 }
+    ($1 in acked) { next }
+    { l7[lab]++; if (now - $4 <= 21600) { l6[lab]++; ids[lab] = ids[lab] (ids[lab] == "" ? "" : ",") $1 } }
+    END {
+      for (lab in l6) {
+        den = (lab == "project hook") ? "session" : lab
+        n6 = s6[den] + 0; n7 = s7[den] + 0
+        sh6 = (n6 > 0) ? l6[lab] / n6 : 0; sh7 = (n7 > 0) ? l7[lab] / n7 : 0
+        row = lab "\t" l6[lab] "\t" n6 "\t" l7[lab] "\t" n7 "\t" ids[lab]
+        if (l6[lab] >= floor) print "floor\t" row
+        if (n6 >= 20 && sh6 >= 0.05 && sh6 >= 2 * sh7) print "relative\t" row
+        if (!(lab in prior)) print "new\t" row
+      }
+    }' "$1"
+}
+
+detect_shadow() { # <rows-file> — fold the trips into $R/detector.state and log every change
+  local st="$R/detector.state" new="$R/.detector.$$" ts rule lab l6 n6 l7 n7 ids keep id
+  ts="$(date -u +%FT%TZ)"
+  : > "$new"
+  # 1. Every held trip stays until each of its occurrences is acked; then it clears (logged).
+  if [ -f "$st" ]; then
+    while IFS=$'\t' read -r rule lab ids; do
+      [ -n "$rule" ] || continue
+      keep=0
+      for id in ${ids//,/ }; do grep -qxF -- "$id" "$R/fleet-ack.txt" 2>/dev/null || { keep=1; break; }; done
+      if [ "$keep" = 1 ]; then printf '%s\t%s\t%s\n' "$rule" "$lab" "$ids" >> "$new"
+      else jq -nc --arg ts "$ts" --arg r "$rule" --arg h "$lab" \
+             '{ts:$ts, event:"clear", rule:$r, hook:$h, cleared_by:"ack", shadow:true}' >> "$DETECT_LOG" 2>/dev/null
+      fi
+    done < "$st"
+  fi
+  # 2. A trip not already held is raised (logged once).
+  while IFS=$'\t' read -r rule lab l6 n6 l7 n7 ids; do
+    [ -n "$rule" ] || continue
+    awk -F'\t' -v r="$rule" -v h="$lab" '$1 == r && $2 == h { f = 1 } END { exit !f }' "$new" && continue
+    printf '%s\t%s\t%s\n' "$rule" "$lab" "$ids" >> "$new"
+    mkdir -p "${DETECT_LOG%/*}" 2>/dev/null
+    jq -nc --arg ts "$ts" --arg r "$rule" --arg h "$lab" --argjson l6 "$l6" --argjson n6 "$n6" \
+      --argjson l7 "$l7" --argjson n7 "$n7" --arg ids "$ids" \
+      '{ts:$ts, event:"trip", rule:$r, hook:$h, losses_6h:$l6, starts_6h:$n6, losses_7d:$l7, starts_7d:$n7,
+        occurrences:($ids | split(",")), shadow:true}' >> "$DETECT_LOG" 2>/dev/null
+  done < <(detect_trips "$1")
+  mv -f "$new" "$st"
+}
+
+detector_report() {
+  echo "startup drop detector — SHADOW mode (logs only; nothing is paged or shown on the board)"
+  if [ -s "$R/detector.state" ]; then
+    echo "  held trips (each clears when every occurrence that raised it is acked):"
+    awk -F'\t' '{ n = split($3, a, ","); printf "    %-9s %-24s %d occurrence(s)\n", $1, $2, n }' "$R/detector.state"
+  else
+    echo "  no trip held"
+  fi
+  [ -s "$DETECT_LOG" ] && { echo "  last log rows ($DETECT_LOG):"; tail -n 5 "$DETECT_LOG" | sed 's/^/    /'; }
+  return 0
+}
+
 fold_lock() {
   mkdir "$R/.fold.lock" 2>/dev/null && { printf '%s\n' "$$" > "$R/.fold.lock/pid"; return 0; }
   local p=""; read -r p < "$R/.fold.lock/pid" 2>/dev/null
@@ -366,6 +444,7 @@ fleet() { # [--ack]
   tmp="$R/.fleet-line.$$"
   render "$rows" > "$tmp" && mv -f "$tmp" "$R/fleet-line.txt"
   span_guard 2>/dev/null
+  detect_shadow "$rows" 2>/dev/null
   : > "$R/fleet.stamp"
   rm -f "$rows" "$tmp"
   [ "${1:-}" = --ack ] || [ ! -s "$R/fleet-line.txt" ] || cat "$R/fleet-line.txt"
@@ -376,7 +455,8 @@ case "${1:-}" in
   --fleet) fleet ;;
   --ack)   fleet --ack ;;
   --span)  span_report ;;
-  -h|--help) sed -n '2,25p' "$_self" | sed 's/^# \{0,1\}//' ;;
+  --detector) detector_report ;;
+  -h|--help) sed -n '2,26p' "$_self" | sed 's/^# \{0,1\}//' ;;
   "")      list_sessions ;;
   -*)      echo "cc-startup-health: unknown flag $1 (see --help)" >&2; exit 2 ;;
   *)       report_sid "$1" ;;

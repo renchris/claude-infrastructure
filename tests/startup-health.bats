@@ -801,3 +801,49 @@ SPANLINE() { cat "$CC_STARTUP_HEALTH_DIR/span-line.txt"; }
   printf '%s\n' "$output" | grep -qE '^  50-150 +16 '
   printf '%s\n' "$output" | grep -qF 'last 7 d:'
 }
+
+# ── #26 fleet drop detector, shadow mode ───────────────────────────────────────────────────────────
+# Sentinel-only sessions (no transcript): a dod-persist .done rc 143 is a loss, rc 0 a clean start.
+det_sid() { # <sid> <rc> <age-s>
+  local d="$CC_STARTUP_HEALTH_DIR/$1" t
+  mkdir -p "$d"; printf 'transcript_path=%s\nsize=0\n' "$BATS_TEST_TMPDIR/none.jsonl" > "$d/session.start"
+  : > "$d/dod-persist.start"; printf 'rc=%s\nelapsed_s=1\nowed=900\ntimeout_ms=5000\n' "$2" > "$d/dod-persist.done"
+  t="$(date -r $(( $(date +%s) - $3 )) +%Y%m%d%H%M.%S)"; touch -t "$t" "$d/dod-persist.start" "$d/session.start"
+}
+DLOG() { cat "$BATS_TEST_TMPDIR/detector.jsonl" 2>/dev/null; }
+
+@test "#26 the floor and never-seen rules trip in SHADOW: logged, never on the board; ack clears per occurrence" {
+  export CC_STARTUP_DETECT_LOG="$BATS_TEST_TMPDIR/detector.jsonl"
+  det_sid dddd-1 143 3600; det_sid dddd-2 143 3600; det_sid dddd-3 143 3600
+  CSH --fleet
+  [ "$(DLOG | jq -r 'select(.event == "trip") | .rule + " " + .hook + " " + (.losses_6h | tostring)' | sort | tr '\n' ',')" = "floor dod-persist 3,new dod-persist 3," ]
+  DLOG | jq -e 'select(.event == "trip") | .shadow == true' >/dev/null
+  [ "$(board | grep -ciE 'detector|trip|relative')" = 0 ]      # shadow: nothing of it on the board
+  CSH --fleet
+  [ "$(DLOG | jq -r 'select(.event == "trip")' | grep -c '"trip"')" = 2 ]   # a held trip is logged once
+  CSH --ack
+  [ "$(DLOG | jq -r 'select(.event == "clear") | .rule' | sort | tr '\n' ',')" = "floor,new," ]
+  [ ! -s "$CC_STARTUP_HEALTH_DIR/detector.state" ]
+}
+
+@test "#26 a trip is held until its own occurrences are acked, not cleared by a later quiet window" {
+  export CC_STARTUP_DETECT_LOG="$BATS_TEST_TMPDIR/detector.jsonl"
+  det_sid dddd-1 143 3600; det_sid dddd-2 143 3600; det_sid dddd-3 143 3600
+  CSH --fleet
+  for s in dddd-1 dddd-2 dddd-3; do touch -t "$(date -r $(( $(date +%s) - 30000 )) +%Y%m%d%H%M.%S)" "$CC_STARTUP_HEALTH_DIR/$s/dod-persist.start"; done
+  CSH --fleet                                                  # all three now older than 6 h
+  grep -q '^floor' "$CC_STARTUP_HEALTH_DIR/detector.state"
+  [ -z "$(DLOG | jq -r 'select(.event == "clear")')" ]
+}
+
+@test "#26 the relative rule: a 6 h share at least twice the 7 d share, >= 5 %, n >= 20 — below the floor" {
+  export CC_STARTUP_DETECT_LOG="$BATS_TEST_TMPDIR/detector.jsonl"
+  for i in $(seq 1 40); do det_sid "old-$i" 0 172800; done
+  det_sid old-41 143 172800                                    # a prior loss: dod-persist is not "new"
+  for i in $(seq 1 18); do det_sid "new-$i" 0 3600; done
+  det_sid new-19 143 3600; det_sid new-20 143 3600             # 2 of 20 in 6 h (10 %) vs 3 of 61 in 7 d
+  CSH --fleet
+  [ "$(DLOG | jq -r 'select(.event == "trip") | .rule' | tr '\n' ',')" = "relative," ]
+  run CSH --detector
+  printf '%s\n' "$output" | grep -qE 'relative +dod-persist +2 occurrence'
+}
