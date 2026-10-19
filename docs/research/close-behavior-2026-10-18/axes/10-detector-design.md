@@ -539,3 +539,25 @@ verdict that a heuristic cannot gate still holds on precision alone.
 - **A B refinement worth testing as an advisory only.** In the first 150 characters of the 25
   hits, a follow-on clause with neither an owner phrase nor a store id singled out only the
   incident (one clause was cut off), and the agent writes this prose itself.
+
+### Re-check after the 16:34 reboot (resumed skeptic slot, 19:59)
+
+- The verdicts above were already complete and committed in `dcc5f9d56`. This slot did not
+  re-run them. Since then only `f12dd4b12` has landed, and it touches the synthesis README only
+  (measured: `git log dcc5f9d56..HEAD --stat`).
+- I re-read these citations and they still hold:
+  - `wrap-ledger.sh:896-931` (REMAINDER) and `:2514-2570` (the FILED_MINE and UNCONVICTED rungs
+    in the ✅-eligible branch);
+  - `tests/research-program-exemption-rules.bats:37`, which pins the sentence F3 cuts;
+  - `session-writes.sh:56-72` (worktree-implies-mine is refuted);
+  - `validate-plan-structure.sh:60-79` (a research path added to the `case` reaches the blocking
+    status gate);
+  - `CLAUDE.global.md:507-516` (Stop `additionalContext` forces a turn);
+  - `anti-deference-nudge.sh:12-50`.
+- F3's arithmetic re-measured with `wc -wc`. The cut sentence is 22 words and 137 characters. The
+  added text is 35 words and 202 characters, so the change is a net gain of 13 words.
+- **`/tmp/detector-proto/` no longer exists.** The reboot cleared it (measured: `ls`, and
+  `mdfind -name drive_check.py` finds nothing). Every number above taken from `classify*.py`,
+  `drive_check.py`, `signals_*.py` or `out/*` was measured before 16:34 and can no longer be
+  reproduced from disk. The synthesis should cite those numbers as measured before the reboot. A
+  build of F1 or F4 has to rewrite its checker, because no prototype survives to port.
