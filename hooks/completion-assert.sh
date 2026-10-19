@@ -1196,15 +1196,46 @@ fi
 # the cc-decide store itself (MEMORY.md make-the-actuator-the-arbiter,
 # sibling-auditors-must-share-the-state-model).
 #
-# This cannot become a standing gate on the CORRECT close: a close whose line 1 actually IS the ⛔
-# rung carries no done-assertion, so it abstains at the close-tell gate above and never reaches
-# here — and one that names an irreducible operator-only blocker abstains earlier still at GENUINE.
-# What is left is precisely the target: a close asserting done while a decision it filed is open.
-# Bounded by this hook's own per-session cap (MAX), like every other term.
+# A CLOSE THAT ANSWERS NO IS THE ⛔ RUNG, NOT A FALSE DONE (REPORT A1, 2026-10-19). This comment
+# used to say the term could not gate a CORRECT close, because a ⛔-led close carries no
+# done-assertion and abstains at the close-tell gate. The IDL refuted that: in the window
+# 2026-10-18T12:18Z → 10-19T04:06Z, 4 of the 6 fires whose only fact was BLOCKED ON YOU landed on
+# `❌ Good to close: no` closes. A no-led close passes the gate as soon as its body names any CLOSE
+# token ("the report has landed"), and the term then convicted it for answering honestly. So the
+# term now spares a close whose own verdict is no while line 1 does not lead with a done reading
+# (that pair is D6's contradiction and stays convicted), and a close led by the ⛔ line with no
+# verdict at all. There is NO line-2 disjunct: "Everything is done" over a ⛔ line 2 is still the
+# target. The polarity and the done-reading come from close-shape.sh, the one code path D6 uses; a
+# missing lib keeps contra=1, so detection is the fail direction. A spare is recorded as
+# `blocked-answered` in the exoneration. One that names an irreducible operator-only blocker
+# abstains earlier still at GENUINE. Bounded by this hook's own per-session cap (MAX), like every
+# other term.
+#   The facts name the count the rung came from. BLOCKED counts decisions FILED this session; a ⛔
+# raised only by decisions re-researched this turn (wrap-ledger BLOCKED_RECHECKED; absent ⇒ 0) has
+# BLOCKED=0, and "0 decision(s) filed this session are open" would contradict the model's own rung.
 if [ "$RUNG" = "⛔" ]; then
   _ca_blocked="$(lfield BLOCKED)"; case "$_ca_blocked" in ''|*[!0-9]*) _ca_blocked="?" ;; esac
-  contra=1
-  facts="${facts}BLOCKED ON YOU — ${_ca_blocked} decision(s) filed this session are open (cc-decide list --open); that IS your rung; "
+  _ca_bk_ans=0
+  if _ca_source_close_shape && command -v close_verdict_polarity >/dev/null 2>&1 \
+     && command -v close_line_reads_done >/dev/null 2>&1; then
+    _ca_bk_pol="$(close_verdict_polarity "$MSG")"
+    if [ "$_ca_bk_pol" = no ] && ! close_line_reads_done "$ca_first"; then
+      _ca_bk_ans=1
+    elif [ "$_ca_bk_pol" = none ]; then
+      case "$ca_first" in "⛔"*) _ca_bk_ans=1 ;; esac
+    fi
+  fi
+  if [ "$_ca_bk_ans" -eq 1 ]; then
+    _ca_exon="${_ca_exon}blocked-answered "
+  else
+    contra=1
+    _ca_brc="$(lfield BLOCKED_RECHECKED)"; case "$_ca_brc" in ''|*[!0-9]*) _ca_brc=0 ;; esac
+    if { [ "$_ca_blocked" = "?" ] || [ "$_ca_blocked" -eq 0 ]; } && [ "$_ca_brc" -gt 0 ]; then
+      facts="${facts}BLOCKED ON YOU — ${_ca_brc} decision(s) you re-researched this turn are open (cc-decide list --open); that IS your rung; lead with \`❌ Good to close: no — research done, implementation pending: …\`; "
+    else
+      facts="${facts}BLOCKED ON YOU — ${_ca_blocked} decision(s) filed this session are open (cc-decide list --open); that IS your rung; "
+    fi
+  fi
 fi
 
 # ── THE DOUBLE-BLOCK YIELD (backlog 79e2b74796af) ────────────────────────────────────────────────
@@ -1592,13 +1623,13 @@ fi
 #     an act provably exists in a store and demanding a line for it can never be a guess. It is 80
 #     of the 190 act-required closes measured.
 #   · ⛔ is deliberately NOT included even though it is the rung of the founding evidence. Its
-#     ledger term above sets contra=1 for EVERY ⛔ close that gets this far, so a D7 term gated on
-#     contra=0 would be unreachable, and one that is not gated would divert a conviction's reason
-#     and arm string. A branch no fixture can drive is a claim with no control (MEMORY.md
-#     control-must-be-able-to-fail), so it is not written. The reachable ⛔ gap is upstream of every
-#     arm — a CORRECT ⛔ close asserts no done-tell and abstains at the close-tell gate — and
-#     closing it means widening that gate, which would change the population every existing arm was
-#     tuned against. That is a separate change with its own evidence, not a rider on this one.
+#     ledger term above sets contra=1 for every ⛔ close that gets this far EXCEPT one that answers
+#     no (or is led by the ⛔ line with no verdict) — and that close is the ⛔ answer itself: the
+#     act it owes is a reply to the open decisions, named by `cc-decide list --open`, not a
+#     `▶ Run this:` line. A D7 demand there would convict the honest close the term now spares, and
+#     an ungated one would divert a conviction's reason and arm string. (This bullet used to say a
+#     correct ⛔ close never reaches here because it abstains at the close-tell gate; REPORT A1
+#     measured otherwise — a no-led close that names any CLOSE token passes that gate.)
 #   · ✅/📦/🚀/🔧 either have no operator act by definition or already have a drivable agent action
 #     the arms above demand.
 # GATED ON contra=0 for the same reason D6 is: when the ledger already contradicts the close, the

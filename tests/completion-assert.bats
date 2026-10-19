@@ -1248,6 +1248,89 @@ CA_BLOCKED_LEDGER=(DIRTY=0 DIRTY_N=0 UNLANDED=0 AHEAD=0 REMAINDER=0 TRUNK=origin
   printf '%s' "$row" | jq -e '.facts | length > 0' >/dev/null
 }
 
+# ── ⛔ HONEST NO: a close that answers no is the ⛔ rung, not a false done (REPORT A1, 2026-10-19) ──
+# The term's old premise — "a correct ⛔ close carries no done-assertion, so it abstains at the
+# close-tell gate" — was refuted by the IDL: of 6 fires whose only fact was BLOCKED ON YOU, 4 landed
+# on `❌ Good to close: no` closes. A no-led close that names a CLOSE token anywhere in its body
+# passes the gate and was convicted for answering honestly. The sandbox is
+# docs/research/research-pending-implementation-close-2026-10-18/REPORT.md §3 (r1/r2/h1-h3/c0).
+# Every case carries "landed" in its body so the CLOSE gate is reached and the TERM is what decides.
+CA_RECHECK_LEDGER=(DIRTY=0 DIRTY_N=0 UNLANDED=0 AHEAD=0 REMAINDER=0 TRUNK=origin/main
+                   BLOCKED=3 BLOCKED_RECHECKED=3 RUNG=⛔)
+CA_RP_L1='❌ Good to close: no — research done, implementation pending: 3 decision(s) wait on your sign-off — first, retire the old dashboard, 85%.'
+CA_RP_L2='⛔ Blocked — research done, implementation pending: 3 decision(s) need your call: cc-decide list --open'
+CA_RP_L3='Reply approve or veto for each; on approval this pane recycles into implementation.'
+CA_RP_BODY='The 74 open decisions were re-checked by 9 research agents; the report has landed at docs/research/x/REPORT.md.'
+
+@test "⛔ HONEST NO: research-pending close (r1) ⇒ ABSTAIN ledger-clean:exonerated:blocked-answered" {
+  WRAP_LEDGER_BIN="$(mkledger rp1 "${CA_RECHECK_LEDGER[@]}")"; export WRAP_LEDGER_BIN
+  run run_ca "$(mkfix "$CA_RP_L1"$'\n'"$CA_RP_L2"$'\n'"$CA_RP_L3"$'\n\n'"$CA_RP_BODY")" \
+             "$BATS_TEST_TMPDIR" "rp-1"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  /usr/bin/grep -q '"reason":"ledger-clean:exonerated:blocked-answered"' "$COMPLETION_IDL"
+}
+
+@test "⛔ RUNG-LED (r2): a close led by the ⛔ rung line, no verdict ⇒ ABSTAIN" {
+  WRAP_LEDGER_BIN="$(mkledger rp2 "${CA_RECHECK_LEDGER[@]}")"; export WRAP_LEDGER_BIN
+  run run_ca "$(mkfix "$CA_RP_L2"$'\n'"$CA_RP_L3"$'\n\n'"$CA_RP_BODY")" "$BATS_TEST_TMPDIR" "rp-2"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  /usr/bin/grep -q '"reason":"ledger-clean:exonerated:blocked-answered"' "$COMPLETION_IDL"
+}
+
+# The FIRE controls: the spare is keyed on the close's own answer, so a yes, a done line 1 over a
+# no verdict, a done line 1 over a ⛔ line 2 (no line-2 disjunct), and a bare yes all still convict.
+@test "⛔ FIRE h1: a yes verdict over a ⛔ line 2 ⇒ FIRE" {
+  WRAP_LEDGER_BIN="$(mkledger rph1 "${CA_RECHECK_LEDGER[@]}")"; export WRAP_LEDGER_BIN
+  run run_ca "$(mkfix "✅ Good to close: yes — nothing of mine is open; follow-on: none"$'\n'"$CA_RP_L2"$'\n\n'"$CA_RP_BODY")" \
+             "$BATS_TEST_TMPDIR" "rp-h1"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+
+@test "⛔ FIRE h2: a done line 1 over a no verdict on line 2 ⇒ FIRE" {
+  WRAP_LEDGER_BIN="$(mkledger rph2 "${CA_RECHECK_LEDGER[@]}")"; export WRAP_LEDGER_BIN
+  run run_ca "$(mkfix "✅ All done and landed — nothing left to do."$'\n'"❌ Good to close: no — research done, implementation pending: 3 decisions wait on you.")" \
+             "$BATS_TEST_TMPDIR" "rp-h2"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+
+@test "⛔ FIRE h3: a done line 1 over a ⛔ line 2 ⇒ FIRE (there is no line-2 disjunct)" {
+  WRAP_LEDGER_BIN="$(mkledger rph3 "${CA_RECHECK_LEDGER[@]}")"; export WRAP_LEDGER_BIN
+  run run_ca "$(mkfix "Everything is done and landed."$'\n'"⛔ Blocked — 3 decision(s) need your call: cc-decide list --open")" \
+             "$BATS_TEST_TMPDIR" "rp-h3"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+
+@test "⛔ FIRE c0: the yes line alone ⇒ FIRE" {
+  WRAP_LEDGER_BIN="$(mkledger rpc0 "${CA_RECHECK_LEDGER[@]}")"; export WRAP_LEDGER_BIN
+  run run_ca "$(mkfix "✅ Good to close: yes — nothing of mine is open; follow-on: none"$'\n\n'"$CA_RP_BODY")" \
+             "$BATS_TEST_TMPDIR" "rp-c0"
+  [ "$status" -eq 0 ]; fired "$output"
+}
+
+# A ⛔ computed only from decisions re-researched this turn has BLOCKED=0, so today's text would
+# tell the model "0 decision(s) filed this session are open" — a fact that contradicts its own rung.
+@test "⛔ facts for a re-check-only ledger name 're-researched this turn'" {
+  WRAP_LEDGER_BIN="$(mkledger rpf DIRTY=0 DIRTY_N=0 UNLANDED=0 AHEAD=0 REMAINDER=0 \
+                              TRUNK=origin/main BLOCKED=0 BLOCKED_RECHECKED=3 RUNG=⛔)"; export WRAP_LEDGER_BIN
+  run run_ca "$(mkfix "✅ Good to close: yes — nothing of mine is open; follow-on: none"$'\n\n'"$CA_RP_BODY")" \
+             "$BATS_TEST_TMPDIR" "rp-f"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | /usr/bin/grep -q '3 decision(s) you re-researched this turn are open'
+  printf '%s' "$output" | /usr/bin/grep -q 'research done, implementation pending'
+  ! printf '%s' "$output" | /usr/bin/grep -q 'filed this session are open'
+}
+
+# Detection is the fail direction: without the lib the term cannot read the close's polarity, so it
+# convicts exactly as it did before the spare existed.
+@test "CLOSE_SHAPE_LIB pointing at a missing file ⇒ an honest no over ⛔ still FIRES" {
+  WRAP_LEDGER_BIN="$(mkledger rpnl "${CA_RECHECK_LEDGER[@]}")"; export WRAP_LEDGER_BIN
+  CLOSE_SHAPE_LIB="$BATS_TEST_TMPDIR/no-such-close-shape.sh" \
+    run run_ca "$(mkfix "$CA_RP_L1"$'\n'"$CA_RP_L2"$'\n'"$CA_RP_L3"$'\n\n'"$CA_RP_BODY")" \
+               "$BATS_TEST_TMPDIR" "rp-nl"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | /usr/bin/grep -q 'BLOCKED ON YOU'
+}
+
 # ── D6 — the ORIGIN Pyramid-close contract (CLOSE_INTEGRITY W1) ─────────────────────────────────
 # The one close every other arm waves through: ledger ✅, real written work, a close-shaped
 # message — and the operator's two standing questions (Complication/Solution/Outcome + an explicit

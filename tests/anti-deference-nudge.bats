@@ -703,3 +703,15 @@ PEER_NEG=(
   [ "$status" -eq 0 ]; [ -z "$output" ]
   grep -q '"reason":"no-tell"' "$ANTIDEF_IDL"
 }
+
+# ── The research-pending close is the ⛔ rung, not deference (REPORT A1, 2026-10-19) ──
+# "wait on your sign-off" / "need your call" / "Reply approve or veto" are an honest ⛔ answer to
+# open class-C decisions, and completion-assert now spares them. A PIN, green before and after that
+# change: it fails only if TELLS widens to convict the prescribed close lines here instead.
+@test "research-pending close lines 1-3 ⇒ no-tell" {
+  run runhook "$(mkfix '❌ Good to close: no — research done, implementation pending: 3 decision(s) wait on your sign-off — first, retire the old dashboard, 85%.
+⛔ Blocked — research done, implementation pending: 3 decision(s) need your call: cc-decide list --open
+Reply approve or veto for each; on approval this pane recycles into implementation.')"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q '"reason":"no-tell"' "$ANTIDEF_IDL"
+}
