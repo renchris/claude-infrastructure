@@ -135,10 +135,13 @@ SH
   printf '%s\n' "$output" | grep -qx 'SAW_INT=\[\]' || false
 }
 
-@test "the env-mode command is ECHOED first, so a watching operator and get-text see the same line" {
-  run env -u CC_PANE_CMD_DIR CC_PANE_CMD="true" SHELL="/bin/echo" "$RUNNER"
+@test "the env-mode command is announced in ONE short line, and logged whole (lr-wake Wave H2)" {
+  # It used to be echoed verbatim — a median 335-char launch line, 6-8 wrapped rows at 57 columns.
+  # Now the pane gets `⟳ starting <verb> · <dir>` and the full command goes to the cc-say log.
+  run env -u CC_PANE_CMD_DIR CC_SAY_LOG="$BATS_TEST_TMPDIR/say.jsonl" CC_PANE_CMD="true" SHELL="/bin/echo" "$RUNNER"
   [ "$status" -eq 0 ]
-  printf '%s\n' "$output" | grep -qx 'true' || false
+  printf '%s\n' "$output" | grep -q '^⟳ starting true' || { echo "$output"; false; }
+  grep -q '"detail":"true"' "$BATS_TEST_TMPDIR/say.jsonl" || { cat "$BATS_TEST_TMPDIR/say.jsonl"; false; }
 }
 
 @test "an EMPTY CC_PANE_CMD is not env mode — it falls through to the file path's own diagnostic" {
@@ -244,13 +247,17 @@ SH
   # silently reintroduce the 2026-08-07 race on exactly one path. The three surfaces call kt_launch
   # (5c3905fcd moved the raw `kt launch` into that one helper); the fourth (split) delegates to
   # it2-kitty and pre-delivers through its environment.
+  # Since lr-wake Wave E (fd34d855d) the split and window surfaces place through hf_place_pane →
+  # cc_place_pane, which carries the same argv, and only the fullscreen os-window fallback calls
+  # kt_launch itself; so a creating SITE is either call, and each must carry the flags.
   local n
-  n="$(grep -c 'kt_launch --.*HF_ARGV\[@\]' "$HF")"
-  [ "$n" -eq 3 ] || { echo "expected 3 argv-carrying kt_launch sites, found $n"; false; }
-  # …and no kt_launch site is left WITHOUT them.
+  n="$(grep -E 'kt_launch --|cc_place_pane "' "$HF" | grep -c 'HF_ARGV\[@\]')"
+  [ "$n" -ge 2 ] || { echo "expected an argv-carrying cc_place_pane and kt_launch site, found $n"; false; }
+  grep -q 'cc_place_pane ".*HF_ARGV\[@\]' "$HF" || { echo "the placement policy call carries no argv"; false; }
+  # …and no creating site is left WITHOUT them.
   local bare
-  bare="$(grep -n 'kt_launch --' "$HF" | grep -vc 'HF_ARGV\[@\]' || true)"
-  [ "$bare" -eq 0 ] || { echo "$bare kt_launch site(s) still type:"; grep -n 'kt_launch --' "$HF" | grep -v 'HF_ARGV\[@\]'; false; }
+  bare="$(grep -nE 'kt_launch --|cc_place_pane "' "$HF" | grep -vc 'HF_ARGV\[@\]' || true)"
+  [ "$bare" -eq 0 ] || { echo "$bare creating site(s) still type:"; grep -nE 'kt_launch --|cc_place_pane "' "$HF" | grep -v 'HF_ARGV\[@\]'; false; }
   # The per-site argv only reaches kitty if the helper forwards it whole: its one raw `kt launch`
   # passes "$@", and no other raw `kt launch` exists to bypass it.
   sed -n '/^kt_launch() {/,/^}/p' "$HF" | grep -q 'kt launch "\$@"' || false
@@ -270,13 +277,15 @@ SH
   # reason. Removing every guarded expansion first and then looking for ANY survivor cannot be fooled
   # by a spelling this test did not think of.
   local residue
-  residue="$(grep -n 'kt_launch --' "$HF" | sed 's/\${HF_ARGV\[@\]+"\${HF_ARGV\[@\]}"}//g' | grep -c 'HF_ARGV\[@\]' || true)"
-  [ "$residue" -eq 0 ] || { echo "$residue unguarded HF_ARGV expansion(s) on a kt_launch line"; false; }
-  # …and the guarded form is actually PRESENT on all three — a file with no expansions at all would
-  # otherwise satisfy the check above vacuously. Counted on the launch lines only: the helper's own
-  # doc comment quotes the same form, and counting the whole file would pin a comment.
-  local n; n="$(grep 'kt_launch --' "$HF" | grep -c '\${HF_ARGV\[@\]+"\${HF_ARGV\[@\]}"}')"
-  [ "$n" -eq 3 ] || { echo "expected 3 guarded expansions on kt_launch lines, found $n"; false; }
+  residue="$(grep -nE 'kt_launch --|cc_place_pane "' "$HF" | sed 's/\${HF_ARGV\[@\]+"\${HF_ARGV\[@\]}"}//g' | grep -c 'HF_ARGV\[@\]' || true)"
+  [ "$residue" -eq 0 ] || { echo "$residue unguarded HF_ARGV expansion(s) on a creating line"; false; }
+  # …and the guarded form is actually PRESENT on every creating site (kt_launch and, since Wave E,
+  # cc_place_pane) — a file with no expansions at all would otherwise satisfy the check above
+  # vacuously. Counted on those lines only: the helper's own doc comment quotes the same form.
+  local n m
+  n="$(grep -E 'kt_launch --|cc_place_pane "' "$HF" | grep -c '\${HF_ARGV\[@\]+"\${HF_ARGV\[@\]}"}')"
+  m="$(grep -cE 'kt_launch --|cc_place_pane "' "$HF")"
+  [ "$n" -ge 2 ] && [ "$n" -eq "$m" ] || { echo "guarded expansions on $n of $m creating lines"; false; }
 }
 
 @test "it2_land does NOT type when the command was pre-delivered" {
