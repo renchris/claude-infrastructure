@@ -14,6 +14,7 @@
 # wall-clock ratchet); only their order matters.
 
 setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   LEDGER="$REPO/scripts/wrap-ledger.sh"
   export CC_CUSTODY_DIR="$BATS_TEST_TMPDIR/custody"
