@@ -326,12 +326,17 @@ exp_setup() {
   [ -s "$EXP" ] || { echo "extraction of the expect body from $FIRE failed" >&2; return 1; }
 
   STUB="$BATS_TEST_TMPDIR/stub"
+  # Like the TUI, the stub takes the bracketed-paste frame the prompt arrives in as framing, not text
+  # (lr-wake 2026-10-18; tests/lr-fire-resume-inject-atomic.bats pins the frame itself).
   cat > "$STUB" <<'SH'
 #!/bin/bash
 [[ "$1" == "--version" ]] && { echo "stub 9.9.9"; exit 0; }
 echo "BOOTED"
 : > "$LR_TEST_GOT"
-while IFS= read -r line; do printf 'GOT:[%s]\n' "$line" >> "$LR_TEST_GOT"; done
+while IFS= read -r line; do
+  line="${line//$'\e[200~'/}"; line="${line//$'\e[201~'/}"
+  printf 'GOT:[%s]\n' "$line" >> "$LR_TEST_GOT"
+done
 exit 0
 SH
   chmod +x "$STUB"

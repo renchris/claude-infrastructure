@@ -22,13 +22,24 @@
 # THE CLASSES, each narrow and named. Anything that matches none of them is a DRAFT and every
 # caller keeps refusing, exactly as before:
 #   rail-prompt     begins with a marker this rail types (exact PREFIX of the space-stripped form)
-#   rail-token      ends with lr-fire-resume's submit token, alone or behind a paste chip — the
-#                   token is `run:<sid8>:<UTC stamp>:<8 hex>`, minted per run, never typed by hand
+#   rail-token      ends with lr-fire-resume's submit token, alone or behind one or more paste
+#                   chips — the token is `run:<sid8>:<UTC stamp>:<8 hex>`, minted per run, never
+#                   typed by hand
+#   rail-exit       exactly `/exit`: the recycle's own exit keystrokes, left behind when the read-back
+#                   missed (pane 384, 2026-10-18 — the draft-carry typed it into the successor)
+#   rail-residue    byte for byte the residue this pane last RECORDED as ours (the store
+#                   cc_tui_residue_record and lr-fire-resume write). Needs the pane id as $2.
 #   terminal-reply  begins with an escape-sequence introducer's remnant (_G, P>|, ]N;rgb:, [?N, [>N)
 #                   — a terminal query reply or graphics command that reached the pty as input
 #   stray-keystroke at most CC_COMPOSER_STRAY_MAX (default 2) characters, not a /command. The loss
 #                   is bounded by construction: the worst case discards two typed characters, and
 #                   composer_discard_note keeps them on disk.
+#
+# MORE THAN ONE CHIP (lr-wake 2026-10-18, pane 430). An unframed 2,050-byte prompt collapsed into
+# `[Pasted text #1][Pasted text #2]re) -->`; the chip rules anchored on ONE chip, so the box read as a
+# draft and every verified rail held on it for 8 h. A run of chips is still only what a paste leaves.
+# No generic tail rule is added for that box: `re) -->` is something an operator could type, so it is
+# cleared only through rail-residue, i.e. when the run that left it recorded exactly that content.
 #
 # Kill switch: CC_COMPOSER_UNINTENDED=off — every non-empty composer is a draft again.
 # shellcheck shell=bash
@@ -42,10 +53,11 @@ OPUS55-UPGRADE(
 In-placeupgrade:thissessionwasrelaunchedbycc-lrupgrade
 [operator-rulingcc-lr-switch'
 
-composer_unintended_class() { # $1=space-stripped composer content → class on stdout; rc 0 unintended · 1 a draft
-  local c="${1:-}" m
+composer_unintended_class() { # $1=space-stripped composer content [$2=pane id] → class on stdout; rc 0 unintended · 1 a draft
+  local c="${1:-}" m chip='\[Pastedtext#[0-9]+(\+[0-9]+lines)?\]'
   [ "${CC_COMPOSER_UNINTENDED:-on}" != off ] || return 1
   [ -n "$c" ] || return 1
+  [ "$c" = /exit ] && { printf 'rail-exit'; return 0; }
   while IFS= read -r m; do
     [ -n "$m" ] || continue
     case "$c" in "$m"*) printf 'rail-prompt'; return 0 ;; esac
@@ -62,9 +74,12 @@ EOF
   # The token must END the content: a draft that merely quotes a token (a pasted log line) keeps
   # typing after it, and the chip form admits nothing but token text between the chip and the end.
   if printf '%s' "$c" | LC_ALL=C grep -qE '\(submittoken:run:[0-9a-f]{8}:[0-9]{8}T[0-9]{6}Z:[0-9a-f]{8}\)?$' \
-     || printf '%s' "$c" | LC_ALL=C grep -qE '^\[Pastedtext#[0-9]+(\+[0-9]+lines)?\][A-Za-z0-9:()]*Z:[0-9a-f]{8}\)?$' \
-     || printf '%s' "$c" | LC_ALL=C grep -qE '^\[Pastedtext#[0-9]+(\+[0-9]+lines)?\][0-9a-f]{2,8}\)?$'; then
+     || printf '%s' "$c" | LC_ALL=C grep -qE "^(${chip})+[A-Za-z0-9:()]*Z:[0-9a-f]{8}\\)?\$" \
+     || printf '%s' "$c" | LC_ALL=C grep -qE "^(${chip})+[0-9a-f]{2,8}\\)?\$"; then
     printf 'rail-token'; return 0
+  fi
+  if composer_residue_matches "${2:-}" "$c"; then
+    printf 'rail-residue'; return 0
   fi
   if printf '%s' "$c" | LC_ALL=C grep -qE '^(_G[A-Za-z]=|P>\||\][0-9]+;rgb:|\[\?[0-9][0-9;]*[A-Za-z$]|\[>[0-9;]*c)'; then
     printf 'terminal-reply'; return 0
@@ -77,6 +92,19 @@ EOF
     printf 'stray-keystroke'; return 0
   fi
   return 1
+}
+
+# Is $2 exactly the residue last recorded for pane $1? The record is `<ts>\t<content>`, one file per
+# pane (cc-tui.sh cc_tui_residue_record, handoff-fire.sh composer_residue_record, lr-fire-resume).
+# Both sides are compared whitespace-stripped, because writers record either the raw read or the
+# stripped one. Content-keyed, so a stale record can only ever match the text it was written for.
+composer_residue_matches() { # $1=pane id $2=space-stripped content → rc 0 a byte match
+  local f rec
+  [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 1
+  f="${CC_COMPOSER_RESIDUE_DIR:-$HOME/.claude/logs/composer-residue}/${1//\//_}"
+  [ -f "$f" ] || return 1
+  rec="$(cut -f2- < "$f" 2>/dev/null | LC_ALL=C tr -d '[:space:]')" || return 1
+  [ -n "$rec" ] && [ "$rec" = "$2" ]
 }
 
 # Keep what was discarded. Append-only, one line per discard, never breaks the caller.

@@ -9,6 +9,8 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export CC_COMPOSER_DISCARD_LOG="$BATS_TEST_TMPDIR/discarded.log"
   export CC_FIRE_CAPACITY_GATE=off      # hermeticity ratchet: never read live machine load
+  # …and capacity-admit's terms pinned, because a K8 case reads lr-fire-resume.sh, which sources it
+  export CC_ADMIT_LOADAVG_OVERRIDE=1.0 CC_ADMIT_HEADROOM_OVERRIDE=64 CC_ADMIT_RESERVE_TERM=off
   unset CC_COMPOSER_UNINTENDED CC_COMPOSER_STRAY_MAX
   # shellcheck disable=SC1091
   . "$REPO/scripts/lib/composer-intent.sh"
@@ -77,6 +79,63 @@ cls() { composer_unintended_class "$1" || printf 'DRAFT'; }
   [ "$(cls 'I')" = DRAFT ]
   [ "$(cls '_Ga=d,d=I')" = DRAFT ]
   [ "$(cls '[limit-recover]x')" = DRAFT ]
+}
+
+# ── K8 (lr-wake 2026-10-18): rail-exit, multi-chip rail-token, rail-residue ─────────────────────────
+cls_at() { composer_unintended_class "$1" "$2" || printf 'DRAFT'; }
+
+@test "K8 rail-exit: an exact /exit is the rail's own; anything else after the slash stays a draft" {
+  [ "$(cls '/exit')" = rail-exit ]            # pane 384's leftover, carried into its successor
+  [ "$(cls '/exitnow')" = DRAFT ]
+  [ "$(cls '/exit-plan')" = DRAFT ]
+  [ "$(cls '/ex')" = DRAFT ]
+}
+
+@test "K8 rail-token: two chips plus a token are what a paste leaves; words after them are not" {
+  [ "$(cls '[Pastedtext#1][Pastedtext#2]Z:16ba1a46)')" = rail-token ]
+  [ "$(cls '[Pastedtext#1][Pastedtext#2+3lines]2bd7')" = rail-token ]
+  [ "$(cls '[Pastedtext#1][Pastedtext#2][Pastedtext#3]9f3a)')" = rail-token ]
+  [ "$(cls '[Pastedtext#1][Pastedtext#2]fixthis')" = DRAFT ]
+  [ "$(cls 'note[Pastedtext#1][Pastedtext#2]2bd7')" = DRAFT ]
+  [ "$(cls '[Pastedtext#1][Pastedtext#2]')" = DRAFT ]
+}
+
+@test "K8 rail-residue: the 430 box is cleared only when this pane recorded exactly that box" {
+  export CC_COMPOSER_RESIDUE_DIR="$BATS_TEST_TMPDIR/residue"; mkdir -p "$CC_COMPOSER_RESIDUE_DIR"
+  local box='[Pastedtext#1][Pastedtext#2]re)-->'
+  [ "$(cls_at "$box" 430)" = DRAFT ]                                         # no record: an operator's
+  printf '2026-10-18T10:07:12Z\t[Pasted text #1][Pasted text #2]re) -->\n' > "$CC_COMPOSER_RESIDUE_DIR/430"
+  [ "$(cls_at "$box" 430)" = rail-residue ]                                  # recorded raw, compared stripped
+  [ "$(cls_at "${box}x" 430)" = DRAFT ]                                      # one byte more is not it
+  [ "$(cls_at "$box" 431)" = DRAFT ]                                         # another pane's record
+  [ "$(cls "$box")" = DRAFT ]                                                # no pane id: nothing to match
+  export CC_COMPOSER_UNINTENDED=off
+  [ "$(cls_at "$box" 430)" = DRAFT ]                                         # the kill switch still wins
+}
+
+@test "K8 the dim suggestion reads EMPTY through LR_SCREEN_SH; the same row typed for real is a draft" {
+  # Claude Code paints its prompt suggestion faint (ESC[22;2m) inside the box; the plain read cannot
+  # see that, so pane 23's `/goal clear` read as a draft (RC5, h defect 4). --ansi is what tells them apart.
+  local prog b='────────────────────────────────' d=$'\e[22;2m' n=$'\e[22m'
+  prog="$(sed -n "/<<'LRSCREENSH'/,/^LRSCREENSH\$/p" "$REPO/scripts/limit-recover/lr-fire-resume.sh" | sed '1d;$d')"
+  [ -n "$prog" ] || { echo "LR_SCREEN_SH extraction failed"; false; }
+  local it2="$BATS_TEST_TMPDIR/it2"
+  # shellcheck disable=SC2016  # the stub's own $vars
+  printf '#!/bin/bash\nfor a in "$@"; do [ "$a" = --ansi ] && { cat "$SCR_ANSI"; exit 0; }; done\ncat "$SCR_PLAIN"\n' > "$it2"
+  chmod +x "$it2"
+  export SCR_ANSI="$BATS_TEST_TMPDIR/ansi" SCR_PLAIN="$BATS_TEST_TMPDIR/plain"
+  printf '%s\n' "  chrome" "${d}${b}${n}" " ❯ ${d}/goal clear${n}" "${d}${b}${n}" " ? for shortcuts" > "$SCR_ANSI"
+  printf '%s\n' "  chrome" "$b" " ❯ /goal clear" "$b" " ? for shortcuts" > "$SCR_PLAIN"
+  run env LR_IT2="$it2" LR_PANE=23 LR_SCREEN_WANT="" bash -c "$prog"
+  [ "$output" = EMPTY ] || { echo "a faint suggestion read '$output', not EMPTY"; false; }
+  # the same text NOT faint is someone's draft
+  printf '%s\n' "  chrome" "$b" " ❯ "$'\e[39m'"/goal clear"$'\e[39m' "$b" " ? for shortcuts" > "$SCR_ANSI"
+  run env LR_IT2="$it2" LR_PANE=23 LR_SCREEN_WANT="" bash -c "$prog"
+  [ "$output" = DRAFT ] || { echo "a typed row read '$output', not DRAFT"; false; }
+  # a reader that refuses --ansi falls back to the plain read, which cannot tell: DRAFT, as before
+  printf '#!/bin/bash\nfor a in "$@"; do [ "$a" = --ansi ] && exit 2; done\ncat "$SCR_PLAIN"\n' > "$it2"
+  run env LR_IT2="$it2" LR_PANE=23 LR_SCREEN_WANT="" bash -c "$prog"
+  [ "$output" = DRAFT ] || { echo "the plain fallback read '$output'"; false; }
 }
 
 @test "composer_discard_note keeps what was discarded, one line per discard" {

@@ -59,11 +59,13 @@ setup() {
   awk '/<<.LRSCREENSH./ { f = 1; next } /^LRSCREENSH$/ { f = 0 } f' \
     "$REPO/scripts/limit-recover/lr-fire-resume.sh" > "$W/lr-screen.sh"
   [ -s "$W/lr-screen.sh" ] || { echo "LR_SCREEN_SH was not extracted" >&2; return 1; }
+  # LR_SCREEN_SH reads --ansi first (faint runs are not content, lr-wake 2026-10-18), so this stub
+  # serves the rendering for --ansi, as the hf_bounded and cc_tui_rpc stubs below already do.
   cat > "$W/lr-it2" <<'STUB'
 #!/usr/bin/env bash
-n=""; i=1
-while [ "$i" -le "$#" ]; do [ "${!i}" = -n ] && { j=$((i + 1)); n="${!j}"; }; i=$((i + 1)); done
-tail -n "${n:-1000}" "$PARITY_PLAIN"
+n=""; f="$PARITY_PLAIN"; i=1
+while [ "$i" -le "$#" ]; do [ "${!i}" = -n ] && { j=$((i + 1)); n="${!j}"; }; [ "${!i}" = --ansi ] && f="$PARITY_ANSI"; i=$((i + 1)); done
+tail -n "${n:-1000}" "$f"
 STUB
   chmod +x "$W/lr-it2"
   # it2k: composer_state, extracted by name; its kitty transport (kt) is stubbed per read

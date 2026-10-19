@@ -27,6 +27,8 @@
 #                  --agent-id/--agent-name/--team-name/...; see the note after the arg loop).
 #
 # Exit codes before the TUI starts, each also written to $LR_RUN_DIR/relaunch.rc: 2 usage ·
+# 9 the capacity gate refused and the run dir's owner retries · 75 the gate refused and the launch is
+# QUEUED as one durable requests/<sid>.cc-lr.json (no run dir; REPORT lr-wake-2026-10-18 K3) ·
 # 10 the launch lock is held · 11 a live holder of <sid> · 12 the member guard (a teammate its lead
 # dropped or a same-id successor holds, or a team-blind resume of an Agent Teams member).
 #
@@ -132,6 +134,19 @@ _lrf_exit_trap() {
   return 0
 }
 trap _lrf_exit_trap EXIT
+
+# ── THE WORKTREE ARGUMENT IS A PATH, NOTHING ELSE (lr-wake 2026-10-18, e §2) ──────────────────────
+# Overnight a rescue agent built a cwd with a sed that also matched a comment line, and `whose` plus
+# a newline plus the path reached a launch line. Absolute, and free of control characters — but NOT
+# required to exist: a missing tree is restored, unparked or re-added below, which is the job of
+# that block, so a `-d` here would break exactly the resumes it exists for.
+case "$WT" in
+  /*) ;;
+  *) echo "lr-fire-resume: worktree must be an absolute path (got '$WT')" >&2; exit 2 ;;
+esac
+case "$WT" in
+  *[[:cntrl:]]*) echo "lr-fire-resume: worktree contains a control character: $(printf %q "$WT")" >&2; exit 2 ;;
+esac
 
 # ── the OPUS default is RESOLVED from the SSOT, never a local constant ────────────────────────────
 # This line read `model="claude-opus-4-8"` and the opus path never overrode it: lr-handoff appends
@@ -744,6 +759,63 @@ for _d in "$_LR_DIR/../lib/capacity-admit.sh" \
           "$HOME/.claude/scripts/lib/capacity-admit.sh"; do
   [ -f "$_d" ] && { _LR_CA="$_d"; break; }
 done
+# ── A REFUSED LAUNCH WITH NO RUN DIR IS QUEUED ONCE (lr-wake 2026-10-18, REPORT §4 Wave C, K3) ─────
+# requests/<sid>.cc-lr.json, the request lane lr-reset-poller.sh retries with backoff and admits on
+# its own clock. Fields: sid, mode, cause, account, cwd, model, effort, prompt, first_refused_at
+# (never rewritten), refusals. The poller owns next_at, cap_k and spawned_at; nothing here sets them.
+# A re-refusal UPDATES the same file (refusals+1), so three re-runs still leave one request. Not
+# carried: --summary, --permission-mode, --branch — a queued resume comes back with the defaults.
+LR_REQ_STATE="${LR_STATE_DIR:-$HOME/.reso/limit-recover}"
+LR_REQ_FILE="$LR_REQ_STATE/requests/$SID.cc-lr.json"
+lr_refusal_knob() { # $1=the refusing term → the knob that moves that term's ceiling, or nothing
+  case "${1:-}" in
+    load)             printf CC_ADMIT_MAX_LOAD_PER_CORE ;;
+    headroom)         printf CC_ADMIT_MIN_HEADROOM_GB ;;
+    segments)         printf LR_SEGMENT_PCT ;;
+    active)           printf CC_ADMIT_ACTIVE_CEILING ;;
+    reserve-headroom) printf CC_ADMIT_RESERVE_GB ;;
+    reserve-active)   printf CC_ADMIT_ACTIVE_RESERVE ;;
+    reserve-slots)    printf CC_ADMIT_RESERVE_SLOTS ;;
+  esac
+  return 0
+}
+lr_queue_owner() { # → who else already owns this session's retry, or nothing; never fails
+  local f pid
+  [ -f "$LR_REQ_STATE/parked/$SID.json" ] && { printf 'a parked record'; return 0; }
+  for f in "$LR_REQ_STATE/requests/$SID"*.json; do
+    [ -f "$f" ] && [ "$f" != "$LR_REQ_FILE" ] && { printf 'a %s request' "${f##*/}"; return 0; }
+  done
+  # A run claim counts only while its holder is provably alive: a dead claim owns nothing, and the
+  # poller files a request whose sid a live run holds as superseded anyway, so writing one is safe.
+  f="$LR_REQ_STATE/runs/by-sid/$SID.active"
+  if [ -d "$f" ] && command -v lr_claim_holder_pid >/dev/null 2>&1 \
+     && pid="$(lr_claim_holder_pid "$f" 2>/dev/null)" \
+     && [ "$(lr_claim_holder_state "$f" "$pid" 2>/dev/null)" = live ]; then
+    printf 'a live run (pid %s)' "$pid"
+  fi
+  return 0
+}
+lr_queue_write() { # → rc 0 only when requests/<sid>.cc-lr.json holds this refusal, read back
+  local tmp="$LR_REQ_FILE.tmp.$$"
+  command -v jq >/dev/null 2>&1 || return 1
+  mkdir -p "${LR_REQ_FILE%/*}" 2>/dev/null || return 1
+  if [ -f "$LR_REQ_FILE" ]; then
+    jq '.refusals = (((.refusals // 0) | tonumber? // 0) + 1)' "$LR_REQ_FILE" > "$tmp" 2>/dev/null \
+      || { rm -f "$tmp"; return 1; }
+  else
+    jq -n --arg sid "$SID" --arg a "$ACCT" --arg cwd "$WT" --arg m "$model" --arg e "$effort" \
+          --arg p "$PROMPT" --argjson t "$(date +%s)" \
+      '{sid: $sid, mode: "recover", cause: "capacity", account: $a, cwd: $cwd,
+        first_refused_at: $t, refusals: 1}
+       + (if $m != "" then {model: $m} else {} end)
+       + (if $e != "" then {effort: $e} else {} end)
+       + (if $p != "" then {prompt: $p} else {} end)' > "$tmp" 2>/dev/null \
+      || { rm -f "$tmp"; return 1; }
+  fi
+  mv -f "$tmp" "$LR_REQ_FILE" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  # A request the poller cannot parse owns nothing, and rc 75 lets the pane close.
+  jq -e '.cause == "capacity" and (.refusals | type) == "number"' "$LR_REQ_FILE" >/dev/null 2>&1
+}
 #
 # ── ONE ADMISSION DECISION (LIMIT_RECOVER_100P W2, 2026-09-19) ─────────────────────────────────
 # This gate is the SECOND evaluation of a net-zero operation the driver already evaluated, in a
@@ -782,18 +854,52 @@ elif [ -n "$_LR_CA" ]; then
   # ("one recovery's refusals cannot release another's"), and an empty key would pool every direct
   # invocation into ONE shared counter — so the direct path keys on its own sid instead.
   _lr_bkey="${LR_RUN:-}"; _lr_bkey="${_lr_bkey##*/}"; : "${_lr_bkey:=direct-$SID}"
+  # A launch the queue already holds is judged on the QUEUE's clock (capacity-admit reads it as
+  # CC_ADMIT_QUEUED_SINCE), so a poller spawn whose token could not be redeemed is not charged as a
+  # fresh first refusal. Only without a run dir: a run-dir owner keeps its own budget.
+  _lr_qs=""
+  if [ -z "${LR_RUN_DIR:-}" ] && [ -f "$LR_REQ_FILE" ]; then
+    _lr_qs="$(jq -r '.first_refused_at // empty' "$LR_REQ_FILE" 2>/dev/null)" || _lr_qs=""
+  fi
   if ! CC_ADMIT_TOKEN="${LR_ADMIT_TOKEN:-}" CC_ADMIT_WANT_SID="$SID" \
        CC_ADMIT_LOAD_TERM="${LR_LOAD_TERM:-off}" CC_ADMIT_BUDGET_KEY="$_lr_bkey" \
-       CC_ADMIT_MAX_SEGMENT_PCT="${LR_SEGMENT_PCT:-50}" \
+       CC_ADMIT_MAX_SEGMENT_PCT="${LR_SEGMENT_PCT:-50}" CC_ADMIT_QUEUED_SINCE="$_lr_qs" \
        cc_capacity_admit lr-fire-resume "resume $SID on $ACCT"; then
-    echo "✗ $(cc_capacity_admit_reason)" >&2
-    echo "  Shed load first (close finished panes / let the wave drain), then re-run this exact command." >&2
-    echo "  Override for one resume: CC_ADMIT_GATE=off ; raise the bar: CC_ADMIT_MAX_LOAD_PER_CORE=<n>" >&2
-    # THE POSITIVE DISCRIMINATOR. The watcher outside this pane has no way to learn WHY no claude
-    # appeared — it polled a corpse for 90 s and reported "no process appeared". `relaunch.rc` is
-    # written BEFORE the exit, in the run's own dir, so the watcher reads a FACT (rc 9 = the gate
-    # refused) in ~2 s instead of inferring one from silence (D1-FT R2 (a)).
-    lr_relaunch_rc 9 "gate: $(cc_capacity_admit_reason)"
+    # ONE LINE, AND NO INVITATION TO RE-RUN (lr-wake 2026-10-18, RC2/RC8). This used to print the
+    # reason plus "Shed load first …, then re-run this exact command" plus an override line that
+    # always named CC_ADMIT_MAX_LOAD_PER_CORE, whatever term refused. Overnight an agent did re-run
+    # it, 25 times, and every refusal left a plain shell. The full reason still reaches the IDL row
+    # and, with a run dir, relaunch.rc; the pane gets the verdict, the term and the knob that moves
+    # THAT term's ceiling.
+    _lr_term="$(cc_capacity_admit_refusal 2>/dev/null)" || _lr_term=""
+    _lr_term="${_lr_term%% *}"; [ -n "$_lr_term" ] || _lr_term="${CC_ADMIT_REFUSED_TERM:-}"
+    _lr_knob="$(lr_refusal_knob "$_lr_term")"
+    _lr_fact="box busy (${_lr_term:-capacity})${_lr_knob:+ · knob $_lr_knob}"
+    if [ -n "${LR_RUN_DIR:-}" ]; then
+      # rc 9: the run dir's owner retries (K3). THE POSITIVE DISCRIMINATOR: the watcher outside this
+      # pane cannot learn WHY no claude appeared, so `relaunch.rc` is written BEFORE the exit and it
+      # reads a fact in ~2 s instead of inferring one from silence (D1-FT R2 (a)). The owed marker
+      # tells the pane runner a durable record owns the retry, so it may close this pane.
+      echo "⏸ ${SID:0:8} refused · its run retries · $_lr_fact" >&2
+      lr_relaunch_rc 9 "gate: $(cc_capacity_admit_reason)"
+      [ -z "${CC_PANE_EXIT_OWED:-}" ] || : > "$CC_PANE_EXIT_OWED" 2>/dev/null || true
+      exit 9
+    fi
+    # rc 75: no run dir, so nothing would retry this launch but a re-run. Queue it ONCE instead —
+    # unless something already owns the retry — and exit 75, which the pane runner closes on.
+    _lr_why=""
+    if [ -n "$EXTRA_ARGS$EXTRA_ENV" ]; then
+      _lr_why="a teammate identity cannot ride the queue"
+    elif _lr_own="$(lr_queue_owner)" && [ -n "$_lr_own" ]; then
+      echo "⏸ ${SID:0:8} queued · $_lr_own owns the retry · $_lr_fact" >&2
+      exit 75
+    elif lr_queue_write; then
+      echo "⏸ ${SID:0:8} queued · $_lr_fact" >&2
+      exit 75
+    else
+      _lr_why="the request could not be written"
+    fi
+    echo "✗ ${SID:0:8} not resumed · not queued: $_lr_why · $_lr_fact" >&2
     exit 9
   fi
   echo "-- $(cc_capacity_admit_reason)" >&2
@@ -803,8 +909,55 @@ else
   lr_state 'gate-absent' gate "capacity-admit.sh unreachable — spawning UNGATED"
 fi
 
-# Single-line prompt only — the composer submits on CR; newlines are unsafe here.
+# ── WHERE A RUN WITH NO RUN DIR WRITES ITS RECORD (lr-wake 2026-10-18, e §5 fix 6) ─────────────────
+# A by-hand or rescue run has no LR_RUN_DIR, so its state notes and pane captures used to go nowhere:
+# pane 430 left one log line and no screen, which is why nobody can say how its Enter was lost. Notes
+# and captures fall back to a per-run dir here. LR_RUN_DIR itself stays unset — its presence is what
+# decides rc 9 against rc 75 above and who reads relaunch.rc — so the fallback has its own name.
+LR_NOTE_DIR="${LR_RUN_DIR:-${LR_STATE_DIR:-$HOME/.reso/limit-recover}/fire-resume/$SID/$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+mkdir -p "$LR_NOTE_DIR" 2>/dev/null || LR_NOTE_DIR=""
+export LR_NOTE_DIR
+
+# ── EVERY TYPED PROMPT CARRIES A TOKEN (lr-wake 2026-10-18, e §5 fix 4) ─────────────────────────────
+# Without one the submit poll had nothing to look for, so it gave up before its first look: pane
+# 430's run had no token, sent no second Enter, and logged only "submission not verified". A run the
+# driver handed no token mints its own, in the form composer-intent.sh recognises as rail-token. It is
+# never exported past the spawn: the spawn line unsets LR_SUBMIT_TOKEN.
+if [ -z "${LR_SUBMIT_TOKEN:-}" ] && [ -n "$PROMPT" ]; then
+  LR_SUBMIT_TOKEN="run:$(printf '%s' "$SID" | cut -c1-8):$(date -u +%Y%m%dT%H%M%SZ):$(od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  case "$LR_SUBMIT_TOKEN" in
+    run:????????:????????T??????Z:[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
+      export LR_SUBMIT_TOKEN
+      echo "-- lr-fire-resume: no submit token from the driver — minted $LR_SUBMIT_TOKEN for this run" >&2 ;;
+    *) LR_SUBMIT_TOKEN="" ;;
+  esac
+fi
+
+# ── A LONG PROMPT IS NEVER TYPED (lr-wake 2026-10-18, RC5) ──────────────────────────────────────────
+# Above Claude Code's paste threshold a typed prompt arrives as chips, never as text, so neither the
+# composer read-back nor a human can see what is in the box: pane 430's 2,050-byte brief became
+# `[Pasted text #1][Pasted text #2]re) -->` and sat unsubmitted for 8 h. Over LR_PROMPT_INLINE_MAX
+# characters (800, counting the token suffix appended below) the whole prompt goes to a file in the
+# run dir, newlines intact, and the typed text is one short pointer line that renders as text and
+# starts with this rail's own marker.
+LR_PROMPT_FILE=""
+_lr_max="${LR_PROMPT_INLINE_MAX:-800}"; case "$_lr_max" in ''|*[!0-9]*) _lr_max=800 ;; esac
+_lr_tok="${LR_SUBMIT_TOKEN:-}"; _lr_room=$(( _lr_max - ${#_lr_tok} - 18 ))
+if [ -n "$PROMPT" ] && [ "${#PROMPT}" -gt "$_lr_room" ] && [ -n "$LR_NOTE_DIR" ]; then
+  LR_PROMPT_FILE="$LR_NOTE_DIR/prompt.md"
+  if printf '%s\n' "$PROMPT" > "$LR_PROMPT_FILE" 2>/dev/null; then
+    lr_state 'prompt-file' inject "the ${#PROMPT}-character prompt is in $LR_PROMPT_FILE; a pointer line is typed"
+    PROMPT="[limit-recover] Your relaunch prompt is ${#PROMPT} characters, so it is in a file: read $LR_PROMPT_FILE and follow it."
+  else
+    echo "!! lr-fire-resume: could not write $LR_PROMPT_FILE — typing the ${#PROMPT}-character prompt inline" >&2
+    LR_PROMPT_FILE=""
+  fi
+fi
+
+# Single-line prompt only — the composer submits on CR; newlines are unsafe here. No ESC either: the
+# prompt is sent inside a bracketed-paste frame, and an ESC[201~ in its text would end that frame early.
 PROMPT=${PROMPT//$'\n'/ }
+PROMPT=${PROMPT//$'\e'/}
 
 # ── THE RUN TOKEN RIDES THE PROMPT, AND THIS IS THE ONLY PLACE THAT CAN GUARANTEE IT (W3p F1) ────
 # The token's whole job is to be findable in the TARGET transcript, and it gets there iff it is in
@@ -1030,8 +1183,48 @@ IFS='' read -r -d '' LR_SCREEN_SH <<'LRSCREENSH' || true
 # dies at the wrap, a border run is width-invariant by construction. This is composer_content()'s
 # parse (handoff-fire.sh), reproduced here because expect cannot call a bash function.
 [ -n "${LR_IT2:-}" ] && [ -n "${LR_PANE:-}" ] || { printf UNKNOWN; exit 0; }
-scr="$("$LR_IT2" session read -s "$LR_PANE" -n "${LR_SCREEN_LINES:-24}" 2>/dev/null)" || scr=""
-[ -n "$scr" ] || { printf UNKNOWN; exit 0; }
+# DIM IS NOT CONTENT (lr-wake 2026-10-18 RC5; the rule cc-tui.sh cc_tui_composer_rows runs on). Claude
+# Code paints its prompt suggestion faint (SGR 2) inside the box, and real input is never faint: read
+# without the rendering, a suggestion looked like a DRAFT. So the pane is read WITH its rendering, the
+# box is found on an escape-stripped copy, and its rows come from a copy with every faint run dropped.
+# Both copies keep one output line per input line, so they index alike. A reader that refuses --ansi
+# (an older it2, a stub) falls back to the plain read, where the two copies are the same text.
+lr_rd() { "$LR_IT2" session read -s "$LR_PANE" -n "$1" --ansi 2>/dev/null || "$LR_IT2" session read -s "$LR_PANE" -n "$1" 2>/dev/null; }
+lr_plain() { LC_ALL=C perl -pe 's/\e\[[0-?]*[ -\/]*[@-~]|\e\][^\a\e]*(?:\a|\e\\)?|\e.//g'; }
+lr_nodim() {
+  LC_ALL=C perl -ne '
+    chomp; my ($d, $o) = (0, "");
+    while (/\G(?:\e\[([0-9;:]*)m|\e\[[0-?]*[ -\/]*[@-~]|\e\][^\a\e]*(?:\a|\e\\)?|\e.|([^\e]))/gcs) {
+      if (defined $1) {
+        my @p = split /;/, $1, -1; @p = ("") unless @p;
+        for (my $i = 0; $i < @p; $i++) {
+          my ($c) = split /:/, $p[$i], 2; $c = "" unless defined $c;
+          if ($c eq "" || $c eq "0" || $c eq "22") { $d = 0 }
+          elsif ($c eq "2") { $d = 1 }
+          elsif ($c =~ /^[345]8$/ && $p[$i] !~ /:/) {
+            my $m = defined $p[$i + 1] ? $p[$i + 1] : "";
+            $i += $m eq "5" ? 2 : $m eq "2" ? 4 : 0;
+          }
+        }
+      } elsif (defined $2) { $o .= $2 unless $d }
+    }
+    print "$o\n";'
+}
+# DRAFT-MINE, and when the caller asks (LR_SCREEN_RECORD=1, at an unsubmitted verdict) the box is also
+# recorded as this pane's residue, so the next verified rail clears it as rail-residue
+# (composer-intent.sh) instead of holding on it as a draft for good.
+mine() {
+  if [ "${LR_SCREEN_RECORD:-0}" = 1 ] && [ -n "${body:-}" ]; then
+    rd="${CC_COMPOSER_RESIDUE_DIR:-$HOME/.claude/logs/composer-residue}"
+    mkdir -p "$rd" 2>/dev/null \
+      && printf '%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$body" > "$rd/${LR_PANE//\//_}" 2>/dev/null
+  fi
+  printf DRAFT-MINE; exit 0
+}
+raw="$(lr_rd "${LR_SCREEN_LINES:-24}")" || raw=""
+[ -n "$raw" ] || { printf UNKNOWN; exit 0; }
+scr="$(printf '%s\n' "$raw" | lr_plain)"
+LR_NODIM="$(printf '%s\n' "$raw" | lr_nodim)"; export LR_NODIM
 # A SELECTOR LINE is `❯` followed by an ordinal — a parked menu. The composer box draws `❯` too, so
 # "contains ❯" would call every healthy screen a menu; the ordinal is what identifies an option.
 if LC_ALL=C grep -qE '❯[[:space:]]*[0-9]+\.' <<<"$scr"; then printf MENU; exit 0; fi
@@ -1062,7 +1255,8 @@ body="$(LC_ALL=C awk -v b='────────────' -v u='─' -v g
         if (index(line[b2], u) != 1) exit 9
         cmd = (index(line[b2 + 1], g) == 1) ? slashcmd(line[b2 + 1]) : ""
         for (i = 1; i < b2; i++) if (selector(line[i])) exit 9
-        for (i = b2 + 1; i < b1; i++) print line[i] }' <<<"$scr")" \
+        n = split(ENVIRON["LR_NODIM"], nd, "\n")
+        for (i = b2 + 1; i < b1; i++) print ((i <= n) ? nd[i] : line[i]) }' <<<"$scr")" \
   && rc=0 || rc=$?
 # A TALL COMPOSER (goal-arm-readback, 2026-10-10): a long prompt wrapped in a narrow pane puts the
 # TOP border above the 24-row window, and a healthy composer read UNKNOWN. Only in that shape (a
@@ -1076,7 +1270,9 @@ body="$(LC_ALL=C awk -v b='────────────' -v u='─' -v g
 # (docs/research/goal-arm-readback-2026-10-10/REPORT.md).
 if [ "$rc" = 8 ] && [ "${LR_SCREEN_LINES_MAX:-200}" -gt "${LR_SCREEN_LINES:-24}" ] 2>/dev/null; then
   off="$body"
-  scr="$("$LR_IT2" session read -s "$LR_PANE" -n "${LR_SCREEN_LINES_MAX:-200}" 2>/dev/null)" || scr=""
+  raw="$(lr_rd "${LR_SCREEN_LINES_MAX:-200}")" || raw=""
+  scr="$(printf '%s\n' "$raw" | lr_plain)"
+  LR_NODIM="$(printf '%s\n' "$raw" | lr_nodim)"; export LR_NODIM
   body="$(LC_ALL=C awk -v b='────────────' -v u='─' -v g='❯' -v off="$off" '
     function border(s) { return index(s, b) > 0 }
     function selector(s,   t, n) { t = s; sub(/^ +/, "", t); n = length(s) - length(t); return (n >= 1 && n <= 4 && index(t, g) == 1) }
@@ -1092,7 +1288,8 @@ if [ "$rc" = 8 ] && [ "${LR_SCREEN_LINES_MAX:-200}" -gt "${LR_SCREEN_LINES:-24}"
       for (i = bot + 1; i <= NR; i++)
         if (index(line[i], g) > 0) exit 9
       for (i = 1; i < top; i++) if (selector(line[i])) exit 9
-      for (i = top + 1; i < bot; i++) print line[i]
+      n = split(ENVIRON["LR_NODIM"], nd, "\n")
+      for (i = top + 1; i < bot; i++) print ((i <= n) ? nd[i] : line[i])
     }' <<<"$scr")" && rc=0 || rc=$?
 fi
 [ "$rc" = 0 ] || { printf UNKNOWN; exit 0; }
@@ -1105,31 +1302,36 @@ if LC_ALL=C grep -qE '^[[:space:]]*Try "[^"]*("|\.\.\.)[[:space:]]*$' <<<"$body"
 body="$(printf '%s' "$body" | LC_ALL=C tr -d '[:space:]')"
 [ -n "$body" ] || { printf EMPTY; exit 0; }
 if [ -n "${LR_SCREEN_WANT:-}" ]; then
-  case "$body" in *"$LR_SCREEN_WANT"*) printf DRAFT-MINE; exit 0 ;; esac
+  case "$body" in *"$LR_SCREEN_WANT"*) mine ;; esac
 fi
 if [ -n "${LR_SCREEN_NONCE:-}" ]; then
-  case "$body" in *"$LR_SCREEN_NONCE"*) printf DRAFT-MINE; exit 0 ;; esac
+  case "$body" in *"$LR_SCREEN_NONCE"*) mine ;; esac
 fi
+# EVERY LEADING CHIP GOES, NOT THE FIRST (lr-wake 2026-10-18, pane 430: `[Pasted text #1][Pasted
+# text #2]re) -->`). Stripping through the first `]` left the second chip in the "tail", so our own
+# box read DRAFT and earned no Enter. The prefix must be chips and nothing else; any other text before
+# the tail leaves `rest` equal to the box, which matches no tail fragment.
 case "$body" in
   "[Pastedtext#"*"]"?*)
-    rest="${body#*]}"
-    if [ -n "${LR_SCREEN_TAIL:-}" ] && [ "${#rest}" -ge 2 ]; then
-      case "$LR_SCREEN_TAIL" in *"$rest"*) printf DRAFT-MINE; exit 0 ;; esac
+    rest="$(printf '%s' "$body" | LC_ALL=C sed -E 's/^(\[Pastedtext#[0-9]+(\+[0-9]+lines)?\])+//')"
+    if [ -n "${LR_SCREEN_TAIL:-}" ] && [ "$rest" != "$body" ] && [ "${#rest}" -ge 2 ]; then
+      case "$LR_SCREEN_TAIL" in *"$rest"*) mine ;; esac
     fi ;;
 esac
 # A lone chip whose line count is our prompt's (see LR_SCREEN_NL): the whole box, anchored.
 case "${LR_SCREEN_NL:-}" in
   ''|*[!0-9]*) ;;
-  0) LC_ALL=C grep -qE '^\[Pastedtext#[0-9]+\]$' <<<"$body" && { printf DRAFT-MINE; exit 0; } ;;
-  *) LC_ALL=C grep -qE "^\[Pastedtext#[0-9]+[+]${LR_SCREEN_NL}lines\]\$" <<<"$body" && { printf DRAFT-MINE; exit 0; } ;;
+  0) LC_ALL=C grep -qE '^\[Pastedtext#[0-9]+\]$' <<<"$body" && mine ;;
+  *) LC_ALL=C grep -qE "^\[Pastedtext#[0-9]+[+]${LR_SCREEN_NL}lines\]\$" <<<"$body" && mine ;;
 esac
 printf DRAFT
 LRSCREENSH
 IFS='' read -r -d '' LR_NOTE_SH <<'LRNOTESH' || true
-# ONE lr_state_append, from inside the expect program. Inert without a run dir (this script is also
-# run by hand) and LOUD when the library is unreachable — a state log that drops lines silently is
-# worse than none, because its silence reads as "nothing happened".
-[ -n "${LR_RUN_DIR:-}" ] || exit 0
+# ONE lr_state_append, from inside the expect program. A by-hand run writes to its fallback dir
+# (LR_NOTE_DIR), inert only when neither exists, and LOUD when the library is unreachable — a state
+# log that drops lines silently is worse than none, because its silence reads as "nothing happened".
+_n_dir="${LR_RUN_DIR:-${LR_NOTE_DIR:-}}"
+[ -n "$_n_dir" ] || exit 0
 for _n_lib in "${LR_LIB_PATH:-}" \
               "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-lib.sh" \
               "$HOME/.claude/scripts/limit-recover/lr-lib.sh"; do
@@ -1137,7 +1339,7 @@ for _n_lib in "${LR_LIB_PATH:-}" \
 done
 command -v lr_state_append >/dev/null 2>&1 || {
   echo "!! lr-fire-resume: lr-lib.sh unreachable — state '${LR_ST_STATE:-}' NOT recorded" >&2; exit 0; }
-lr_state_append "$LR_RUN_DIR" "${LR_ST_STATE:-}" "${LR_ST_STAGE:-}" "${LR_ST_DETAIL:-}" || true
+lr_state_append "$_n_dir" "${LR_ST_STATE:-}" "${LR_ST_STAGE:-}" "${LR_ST_DETAIL:-}" || true
 LRNOTESH
 # ONE pane capture into the run bundle, for the moments whose cause no log can rebuild later: the CR
 # sent unconfirmed, the re-CR withheld, NOT SUBMITTED (4fe9935f, 2026-10-13 — the CR was lost and
@@ -1145,9 +1347,10 @@ LRNOTESH
 # writes a NO CAPTURE file rather than nothing when the pane cannot be read, so a missing screen is
 # never mistaken for a capture nobody asked for.
 IFS='' read -r -d '' LR_CAPTURE_SH <<'LRCAPTURESH' || true
-[ -n "${LR_RUN_DIR:-}" ] && [ -d "$LR_RUN_DIR" ] || exit 0
+d="${LR_RUN_DIR:-${LR_NOTE_DIR:-}}"
+[ -n "$d" ] && [ -d "$d" ] || exit 0
 tag="$(printf '%s' "${LR_CAP_TAG:-capture}" | LC_ALL=C tr -c 'A-Za-z0-9_-' '-')"
-out="$LR_RUN_DIR/screen-$tag-$(date -u +%Y%m%dT%H%M%SZ).txt"
+out="$d/screen-$tag-$(date -u +%Y%m%dT%H%M%SZ).txt"
 if [ -z "${LR_IT2:-}" ] || [ -z "${LR_PANE:-}" ]; then
   printf 'NO CAPTURE: no pane reader (LR_IT2=%s LR_PANE=%s)\n' "${LR_IT2:-}" "${LR_PANE:-}" > "$out" || exit 0
 else
@@ -1205,6 +1408,9 @@ lr_rc=0
 # everything below is the SESSION's own lifetime, whose end is not a relaunch failure and must never
 # be recorded as one (W2).
 trap - EXIT
+# The pane runner's started marker (K3): from here on claude starts, so a later non-zero exit is the
+# session ending, never a launch that did not happen. Unset when no runner launched this pane.
+[ -z "${CC_PANE_STARTED_FILE:-}" ] || : > "$CC_PANE_STARTED_FILE" 2>/dev/null || true
 # The expect program turns echo OFF before interact; every exit path it can take must not hand the
 # fall-through shell a terminal that no longer echoes, so the original state is restored here too.
 lr_tty_saved=""
@@ -1291,11 +1497,12 @@ expect -c '
       }
     }
   }
-  proc lr_screen {} {
+  # record 1 also files a DRAFT-MINE box as this pane residue (LR_SCREEN_SH says why).
+  proc lr_screen {{record 0}} {
     global env
     if {![info exists env(LR_SCREEN_SH)]} { return UNKNOWN }
     set v ""
-    catch { set v [string trim [exec /bin/bash -c $env(LR_SCREEN_SH)]] }
+    catch { set v [string trim [exec env LR_SCREEN_RECORD=$record /bin/bash -c $env(LR_SCREEN_SH)]] }
     if {$v eq ""} { return UNKNOWN }
     return $v
   }
@@ -1356,6 +1563,25 @@ expect -c '
     lr_note CR-UNCONFIRMED inject "composer never read DRAFT-MINE within ${bound}s — sending the CR unconfirmed, as before; screen: $cap"
     send -- "\r"
   }
+  # ONE BRACKETED PASTE, THEN THE CR AS ITS OWN KEYSTROKE (lr-wake 2026-10-18, RC5). The prompt used
+  # to go in as raw keystrokes, and Claude Code splits an unframed burst by read timing: on pane 430
+  # it became two paste chips plus a 7-character tail, the reader could not prove the box was ours,
+  # and the Enter was lost. The TUI turns bracketed paste on (DECSET 2004), so the frame makes the
+  # whole prompt ONE paste event whatever the pty does to the bytes, and lr_submit_cr gates the CR on
+  # the composer showing our text, so it never rides inside the paste. The bash side strips ESC from
+  # the prompt, so no byte of it can close the frame early. LR_BRACKETED_PASTE=off types raw keys.
+  proc lr_inject {} {
+    global env prompt_b
+    sleep 0.3
+    send "\025"
+    sleep 0.2
+    if {[info exists env(LR_BRACKETED_PASTE)] && $env(LR_BRACKETED_PASTE) eq "off"} {
+      send -- $prompt_b
+    } else {
+      send -- "\033\[200~$prompt_b\033\[201~"
+    }
+    lr_submit_cr
+  }
   # submitted <ts> | queued <ts> | none | unreadable | skip — `unreadable` and `skip` are NOT `none`.
   proc lr_probe {t0} {
     global env
@@ -1397,9 +1623,9 @@ expect -c '
   set xargs [expr {[info exists env(LR_EXTRA_ARGS)] ? [regexp -all -inline {\S+} $env(LR_EXTRA_ARGS)] : {}}]
   set xenv  [expr {[info exists env(LR_EXTRA_ENV)] ? [regexp -all -inline {\S+} $env(LR_EXTRA_ENV)] : {}}]
   if {$wrap ne ""} {
-    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u LR_SEGMENT_PCT -u LR_ADMIT_MODE -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV -u LR_RECORD_ID -u LR_ATTEMPT DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $wrap $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs
+    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u LR_SEGMENT_PCT -u LR_ADMIT_MODE -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV -u LR_RECORD_ID -u LR_ATTEMPT -u LR_NOTE_DIR -u CC_ADMIT_ACTOR -u CC_PANE_STARTED_FILE -u CC_PANE_EXIT_OWED DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $wrap $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs
   } else {
-    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u LR_SEGMENT_PCT -u LR_ADMIT_MODE -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV -u LR_RECORD_ID -u LR_ATTEMPT DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs
+    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u LR_SEGMENT_PCT -u LR_ADMIT_MODE -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV -u LR_RECORD_ID -u LR_ATTEMPT -u LR_NOTE_DIR -u CC_ADMIT_ACTOR -u CC_PANE_STARTED_FILE -u CC_PANE_EXIT_OWED DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs
   }
   # The launch lock now names the spawned claude (env and the wrapper both exec in place, so this
   # pid IS the session). A failure here costs the handover, never the recovery.
@@ -1544,16 +1770,11 @@ expect -c '
     -re $re_ready {
       if {$prompt ne "" && !$injected} {
         set injected 1
-        # 0.3/0.2/0.2, down from 2/1/1. The three sleeps exist to let the composer mount and to keep
-        # the ^U, the text and the CR from coalescing into one paste the TUI reads as a single
-        # keystroke — a settling delay, not a wait for a remote event. 4 s of the old budget was
-        # pure latency on every recovery, and the submit poll below now measures the outcome
-        # instead of guessing at it.
-        sleep 0.3
-        send "\025"
-        sleep 0.2
-        send -- $prompt_b
-        lr_submit_cr
+        # 0.3/0.2/0.2 inside lr_inject, down from 2/1/1. The sleeps let the composer mount and keep
+        # the ^U and the paste apart — a settling delay, not a wait for a remote event. 4 s of the
+        # old budget was pure latency on every recovery, and the submit poll below now measures the
+        # outcome instead of guessing at it.
+        lr_inject
       } elseif {$prompt eq "" && !$ready_noted} {
         set ready_noted 1
         lr_note READY ready "the ready signal matched and there is no prompt to type — nothing was sent"
@@ -1578,11 +1799,7 @@ expect -c '
           set injected 1
           lr_note READY-QUIET inject "READY never matched; composer reads EMPTY after ${quiet}s quiet — typing"
           lr_say "READY never matched, but the composer reads EMPTY after ${quiet}s of quiet — typing the prompt on that evidence."
-          sleep 0.3
-          send "\025"
-          sleep 0.2
-          send -- $prompt_b
-          lr_submit_cr
+          lr_inject
         } else {
           lr_note READY-NOT-SEEN inject "screen reads $sv after ${quiet}s quiet — prompt NOT typed"
           lr_tell "✗ READY NEVER SEEN — prompt NOT typed: the pty went quiet for ${quiet}s and the screen reads $sv, not an empty composer. NOTHING was sent, because Enter on a parked menu takes its default. Type the prompt by hand in the pane."
@@ -1662,15 +1879,19 @@ expect -c '
       set verb [lindex $r 0]
       set ts   [lindex $r 1]
       if {$verb eq "submitted"} { break }
-      if {$verb eq "skip"} { break }
       if {$verb eq "queued" && $deadline < $qmax} { set deadline $qmax }
+      # SKIP LOOKS AS NONE DOES (lr-wake 2026-10-18, pane 430). A run with no probe used to break
+      # here, before its first look: no second Enter, no note, one log line. The transcript cannot
+      # answer for it, but the composer still can, so it gets the same looks and the same gated
+      # re-Enters, and ends on an explicit UNSUBMITTED or UNVERIFIED below.
+      set look [expr {$verb eq "none" || $verb eq "skip"}]
       set el [expr {([clock milliseconds] - $tcr) / 1000}]
       # Turns and seconds drift apart on a loaded box, so while a scheduled look is still ahead and
       # could still act, the deadline is kept two turns out rather than trusted to line up.
-      if {$verb eq "none" && $recr < $recrmax && $si < [llength $sched] && $deadline < $t + 2} {
+      if {$look && $recr < $recrmax && $si < [llength $sched] && $deadline < $t + 2} {
         set deadline [expr {$t + 2}]
       }
-      if {$verb eq "none" && $recr < $recrmax && $el >= $nextlook} {
+      if {$look && $recr < $recrmax && $el >= $nextlook} {
         while {$si < [llength $sched] && [lindex $sched $si] <= $el} { incr si }
         if {$si < [llength $sched]} {
           set nextlook [lindex $sched $si]
@@ -1727,6 +1948,9 @@ expect -c '
           # instrument that can settle it — to the engagement budget.
           # (memory: predicate-refusal-is-not-a-negative · empty-vs-no-surface ·
           #  gate-default-decides-failure-direction)
+          # With no probe there is no transcript to poll, so nothing later can settle it: stop here
+          # and let the verdict below say UNVERIFIED with this reading.
+          if {$verb eq "skip"} { break }
           if {$deadline < $qmax} { set deadline $qmax }
           # ONCE, not per look. The look is now rescheduled every 15s rather than latched off after
           # the first one, so an unguarded note here would write ten identical lines into the state
@@ -1756,8 +1980,20 @@ expect -c '
       lr_note INDETERMINATE:submit submit "the target transcript could not be read — submission NOT measured"
       lr_say "submission NOT MEASURED — the target transcript could not be read. This is not a failure and it is not a success; read the pane."
     } elseif {$verb eq "skip"} {
-      lr_say "submission not verified — this run carries no submit token (a by-hand run, or lr-submit-probe.sh is unreachable)."
+      # NEVER GREEN WITHOUT A PROBE. Our own text still in the box is UNSUBMITTED, a fact, and the
+      # box is filed as this pane residue so a later rail clears it; anything else is UNVERIFIED.
+      set sv [lr_screen 1]
+      set cap [lr_capture UNSUBMITTED]
+      if {$sv eq "DRAFT-MINE"} {
+        lr_note UNSUBMITTED submit "no submit probe; our prompt is still in the composer after $recr re-Enter(s); screen: $cap"
+        lr_tell "✗ UNSUBMITTED — the prompt is still sitting in the composer after $recr re-Enter(s), and no submit probe was reachable to check the transcript. Check the pane. Screen at this moment: $cap"
+      } else {
+        lr_note UNVERIFIED:submit submit "no submit probe; the composer reads $sv after $recr re-Enter(s); screen: $cap"
+        lr_tell "⚠ UNVERIFIED — no submit probe was reachable, so nothing proves the prompt landed; the composer reads $sv after $recr re-Enter(s). Check the pane. Screen at this moment: $cap"
+      }
     } else {
+      # Read the box once more first: our own text still there is filed as this pane residue.
+      lr_screen 1
       set cap [lr_capture NOT-SUBMITTED]
       lr_note FAILED:submit submit "no record of the prompt in the transcript within ${deadline}s; screen: $cap"
       lr_tell "✗ NOT SUBMITTED — the prompt never reached the transcript within ${deadline}s. The session is alive and may be TASK-LESS: check the composer, and type the prompt by hand only if it is not already answered. Screen at this moment: $cap"
@@ -1856,7 +2092,25 @@ if [ -n "$lr_succ_lib" ] && . "$lr_succ_lib" 2>/dev/null \
   cc_pane_successor_exec "$lr_succ_claimed" 1 || true
 fi
 # <<< lr-successor
-printf '\n[lr-fire-resume] session ended (rc %s) — this pane is now an ordinary shell.\n' "$lr_rc" >&2
+# WHAT FOLLOWS, SAID ONCE (lr-wake 2026-10-18, h defect 6). "This pane is now an ordinary shell" was
+# printed after every exit, the planned /exit of a recycle included, where handoff-fire types the
+# relaunch at this shell a moment later: the same false husk banner as complaint (c). A recycle
+# pending for this pane (lib/pane-recycle-pending.sh reads the recycler's own lock) gets one line
+# naming what follows; only when nothing follows does the pane say it is a shell. The pending check
+# fails toward "pending", so it is asked only when there is a pane id to ask it about.
+# TODO(cc_say): render this through Wave H's lib/cc-say.sh (`cc_say run "relaunch follows here" …`)
+#   once it is on trunk; until then the same one-line shape is printed inline, no SGR, <=56 cells.
+lr_pend_lib="" lr_pend_id="${KITTY_WINDOW_ID:-${LR_PANE:-}}"
+for lr_succ_c in "${lr_succ_d:+$lr_succ_d/../../lib/pane-recycle-pending.sh}" "${HOME:-}/.claude/lib/pane-recycle-pending.sh"; do
+  [ -n "$lr_succ_c" ] && [ -r "$lr_succ_c" ] && { lr_pend_lib="$lr_succ_c"; break; }
+done
+# shellcheck source=/dev/null  # runtime-resolved: checkout sibling, else the live layer
+if [ -n "$lr_pend_id" ] && [ -n "$lr_pend_lib" ] && . "$lr_pend_lib" 2>/dev/null \
+   && cc_pane_recycle_pending "$lr_pend_id"; then
+  printf '\n⟳ %s relaunch follows here · claude exited rc %s\n' "${SID:0:8}" "$lr_rc" >&2
+else
+  printf '\n[lr-fire-resume] session ended (rc %s) — this pane is now an ordinary shell.\n' "$lr_rc" >&2
+fi
 # `-l -i` is load-bearing, not cosmetic, for the reason bin/cc-pane-runner:69 records: ~/.zprofile
 # puts ~/.claude/shims on PATH and ~/.zshrc synthesizes ITERM_SESSION_ID from KITTY_WINDOW_ID, so a
 # non-login non-interactive shell yields a pane that is alive and UNADDRESSABLE — and the launcher
