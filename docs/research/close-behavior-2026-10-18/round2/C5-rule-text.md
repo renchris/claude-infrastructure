@@ -4,7 +4,7 @@ Round 2, 2026-10-18. Candidate C5 (rule text) from `axes/01-rule-text.md` and it
 Read-only in the repo; every prototype edit and test run is on copies under `/tmp/r2-C5/`. Every number is
 labelled measured (with the command) or estimated (with the method).
 
-Status: in progress (written incrementally).
+Status: complete; see §8 for which bats runs finished and §9 for the conviction split.
 
 ## 0. Setup facts and brief corrections
 
@@ -252,3 +252,78 @@ of a `bats` token, including `/opt/homebrew/bin/bats`, to `cc-bats` (header, tra
 is the waiver (`CC_BATS_WAIVER_REASON=… CC_BATS_MAX_ROOTS=0`), and it appends to
 `~/.claude/state/bats-waivers.jsonl`, a live-state write this brief forbids. So I did not take it, and I did not
 route around the rewrite hook. Results are recorded below as they arrive.
+
+**Results** (measured; admission came at 21:20 local, after `try-bats.sh`'s retry interval was cut from 20 s to 4 s;
+the TAP files are in `/tmp/r2-C5/out/`):
+
+| suite (tree) | plan | ok | not ok | note |
+|---|---|---|---|---|
+| `research-program-exemption-rules.bats` (core+D+E, `/tmp/r2-C5/repo`) | 1..4 | 4 | 0 | the pinning suite the brief names |
+| `research-program-exemption-rules.bats` (core, `/tmp/r2-C5/core`) | 1..4 | 4 | 0 | |
+| `why-tier.bats` (full) | 1..16 | 16 | 0 | hedge/shape bodies, P7 word floor |
+| `completion-assert.bats -f C5PROBE` (full) | 1..4 | 4 | 0 | new payload yes PASS `ledger-clean`; parked filed id no hedge; incident-as-honest-no no `verdict-first`, no hedge; 👤 yes PASS |
+| `drain-peer-findings.bats` (full) | 1..14 | 10 | 4 | tests 1-4 fail at `git -C "$REPO" cat-file -p "$PREFIX_BLOB"` -> `fatal: not a git repository`: the copy has no `.git` (rsync `--exclude=.git`). They fail before any code under test runs, and no edit touches `drain-peer-findings.py` or `measure-harvest-latency.py`. Tests 5-14 pass, including the producer selftest and the M2 settled-close guard. |
+| `cc-memory-search.bats -f 'CLAUDE\|global\|slim'` (full) | 1..1 | 1 | 0 | global/slim anchor |
+| `wrap-ledger.bats -f 'parity\|control'` (full) | 1..6 | 6 | 0 | ladder parity in CLAUDE.global.md and commands/wrap.md, with its controls |
+
+`completion-assert.bats`, the whole suite (plan `1..189` with the probes): admitted at 21:35 and stopped by me at
+22:20 to free the slot. By then **75 ok, 0 not ok** (tests 1-75, snapshot
+`/tmp/r2-C5/out/full-completion-assert.PARTIAL.tap`). At a load average of 340-380 it was running about 0.5
+tests/min, so tests 76-189 would have taken more than an hour. In its place I ran every test that touches the
+edited template text:
+
+| suite (tree) | plan | ok | not ok | note |
+|---|---|---|---|---|
+| `completion-assert.bats -f 'MENTION\|close-shape\|D6 FIRE\|template'` (full) | 1..7 | 7 | 0 | D6 FIRE (reason names the contract), template is rejected as a quote (`close_shape_ok`), honest-close control, D6 MENTION-vs-USE, D7 fail-safe, polarity table including the template, A′ template has no ▶ and polarity none |
+
+The remaining `verdict-first` tests (38, `bats -c -f verdict-first`) never got a slot: cc-bats refused from
+22:28 to 22:46 local at load averages around 330. I stopped the waiter so that no orphan holds a slot after
+this run, so **they were not run**. They feed literal fixture closes into matchers this set does not change. The only S2-payload strings
+they contain are old-wording inputs (§4.2 pin scan), so the edits cannot change their outcome (by reading).
+
+## 9. Verdict and conviction (post-measurement)
+
+Two claims, two separate numbers:
+
+1. **"Landing core + D is net-positive and causes no regression": 90%.** Measured: budget -14 on the resident
+   rules (judge admits it, a +1 control is refused); 0 remaining copies of the licence; 0 tests pin any edited
+   span; every pinning suite green (exemption 4/4 on both trees, why-tier 16/16, wrap-ledger parity 6/6,
+   memsearch 1/1); the new wording goes through the real hook without a false FAIL (C5PROBE 4/4); and the chosen
+   payload wording leaves the peer-findings drain silent where the obvious alternative would not. What keeps the
+   number at 90 and not higher, all estimated: (a) the full completion-assert suite was stopped at 75/189 (all ok);
+   the 7 template-touching tests ran green, and the 38 verdict-first tests were refused admission and not run (§8); (b) about a 5% chance of behavioural side effects, such as agents filing
+   rows to make a yes reachable. Filing is bounded by `cc-backlog`'s impossibility classes and its N <= 90 refusal
+   for `needs-human` (bin/cc-backlog:1237-1251, read, not run). Another side effect would be agents reading
+   "research only or not" as overriding an operator's explicit "research only, do not implement". F1 and the
+   kill-switch still govern that case, and the sentence only changes the verdict word, not what gets done.
+2. **"C5 alone stops a repeat of the incident": about 40% (estimated, §7).** It removes the clause that licensed
+   the close and changes the words the agent copies, but the incident broke four correct rules, and an honest no is
+   still a resting place.
+
+**Does C5 clear 90%?** No, not in the sense the goal needs. Its safety and hygiene case is at 90 with measured
+evidence, and it should land as the text half of whichever mechanism candidate clears. On efficacy it does not
+clear 90 and cannot without an A/B that this environment cannot run safely. Recommendation: land core + D, together
+with a mechanism candidate. Do not count it as the fix on its own.
+
+## 10. Operator-only steps
+
+None for the edit itself. No settings.json change is needed. Landing goes through the repo's normal `/ship`; the
+live copy at `~/.claude/rules/10-session-close.md` updates via `install.sh`/converge, as for any rule change. Optional
+hygiene that is not operator-only: the slim global's `derived-from` hash (`cecd5a0c2fa35792`) has been stale since
+before this change (current full text `2f5ed0e7def902cc`). Whoever lands G-* may refresh it; it costs 0 loader
+units (column-0 HTML comment).
+
+## 11. Open risks
+
+- Full `completion-assert.bats` stopped at 75/189 (0 not ok); the 7 template tests are green; tests 76-189 minus those 7 are unrun in this sandbox.
+- `drain-peer-findings.bats` 1-4 not exercised in this copy (no `.git`); they need a git checkout of the edited tree.
+- Efficacy unmeasured (no safe A/B); about 40% is an estimate.
+- An honest no remains terminal-valid (slim:148). Continuation still rests on slim:103, slim:105 and F2 plus a
+  mechanism.
+- Inside an active research program, S-b's "unfiled work the Follow-On Gate passes" relies on slim:75 (F1
+  replaced, refinements filed to the apply-at-build list) and slim:77 ("residuals … are not open work") to stay
+  out of the program loop. Judged by reading; no test covers it.
+- A fire-and-forget hand-off ("nobody drives" is false because a fired session drives it) has no `follow-on:`
+  value, since the template admits only filed ids or none. This gap predates C5 and C5 does not widen it.
+
+Status: complete (2026-10-18 22:30 local).

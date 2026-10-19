@@ -5,7 +5,7 @@ alternative" and "Missed by the axis" item 4. Read-only in the repo. Every proto
 and test run is on copies under `/tmp/r2-C2/`. Every number is labelled measured (with the command)
 or estimated (with the method).
 
-Status: in progress (written incrementally).
+Status: complete, 2026-10-18 (local). Repo untouched: every edit below is on `/tmp/r2-C2/` copies.
 
 ## 0. Setup facts
 
@@ -34,7 +34,8 @@ Status: in progress (written incrementally).
    convicted. Each one says the commits are not landed yet and gives the reason: the gate is running,
    the land is queued on the shared lock, it is parked under a brief or ruling, or auto mode refused
    the land. **One** of the 27 plausibly caused a ship: the incident's own fire #2, which led the
-   agent to land from a separate worktree. For fire #3 the count is 0 of 11 (measured, §3).
+   agent to land from a separate worktree. For fire #3, 0 of 11 caused a ship. One of the 11 was followed
+   by a ship call, and that was the incident's land, already in flight (§3: measured counts, hand-read cause).
    So the latch allows **one** fire per (fact, HEAD).
 3. **What the latch would have recovered over 14 days.** Replaying the observed sequence with
    key = (normalized facts, HEAD sha), K=1: assert-class fires go from 345 to 265 (−23%). 43 of the
@@ -60,9 +61,15 @@ Status: in progress (written incrementally).
    `handoff`, aimed at the 70% settings.json step, not at the §5 waves (axis 02 RC5; replay §5.4).
    C2 makes a future follow-on arm reachable. It does not make the incident close drive §5.
 6. **Conviction (honest, post-measurement): 82%** that C2 plus the ⛔ guard is a net-positive change
-   that meets constraints 1-6. Measured noise reduction, measured repeat uselessness, one mechanism
-   that copies the ship floor's own per-HEAD discipline, and all named suites green on the patched
-   copy (§6). It is **below 90%** for two measured reasons:
+   that meets constraints 1-6 as far as §8 claims. The support, all measured:
+   - noise reduction and repeat uselessness;
+   - one mechanism that copies the ship floor's own per-HEAD discipline;
+   - an incident replay that turns `capped:3>=3` into a live fire;
+   - `completion-assert.bats` green: 181 unchanged + 17 new or rewritten = 198;
+   - `-forks` 8/8 (+3 processes, budget margin 53 ≥ 40) and `-assignee-shared-cwd` 9/9;
+   - `-durations` 6/8, with its two wall-clock reds reproduced on the unmodified tree at the same load (§6).
+
+   It is **below 90%** for two measured reasons:
    - About 90% of the 41 fires the latch recovers from the cap are false positives on wait, park or
      status closes. A hand-read of all 41 found 3-4 true positives (§7). C2 stops the repeats, but it
      cannot stop the ledger arm's *first* conviction of a stated park.
@@ -259,10 +266,10 @@ of 1/27 and a measured cost of 26 blocks on stated parks or in-flight lands.
   It already treats "same sha, said once" as the normal state.
 - **No new double-block.** C2 only removes completion-assert fires. The double-block yield is untouched: when
   session-continue blocks on this Stop, `contra=0`, `FKEY` stays empty, nothing is recorded, and it still runs
-  first (`:1169-1192`). After C2, a 📦 fact is nagged at most twice per sha: the ship floor on the idle Stop,
+  first (`:1137-1192`). After C2, a 📦 fact is nagged at most twice per sha: the ship floor on the idle Stop,
   and completion-assert once on the first done-reading close. Today it is the floor plus up to 3.
-- **The HEAD is read the way the floor reads it** (`git -C "$CWD" rev-parse HEAD`, as at
-  `session-continue.sh:1249`), and only on the contradiction path. 79% of Stops abstain `no-close-tell` before the
+- **The HEAD is read the way the floor reads it** (`git -C "$CWD" rev-parse HEAD`, the same read as
+  `session-continue.sh:1249`'s `cd "$cwd" && git rev-parse HEAD`), and only on the contradiction path. 79% of Stops abstain `no-close-tell` before the
   ledger, and those pay nothing. A non-repo cwd keys on `?`, which is what the ⛔ and stub-ledger fixtures run in.
 - **What C2 cannot do:** the ship floor's budget (2 per session) and this hook's budget (3) stay separate. A
   session that commits again on a new HEAD gets a fresh conviction from both. That is intended: a new commit is
@@ -784,6 +791,11 @@ bats through cc-bats's documented kill switch, `CC_BATS_QOS=off`, with the utili
 | base hook + base `completion-assert.bats` | 1..185 | 185 | 0 | 267 s |
 | **patched hook + unmodified suite** | 1..185 | 181 | **4**: #11 `cap: distinct false-dones…`, #83 `⛔ CAP: distinct ⛔ closes…`, #84 `⛔ CAP: the capped record names…`, #111 `CAP SPLIT: mid-wave convictions…` | 323 s |
 | final hook + final suite, the 19 tests matching `FACT LATCH\|⛔ STATED\|⛔ CAP\|CAP SPLIT\|^cap:` (13 new, 4 rewritten, 2 unchanged CAP SPLIT) | 1..19 | 19 | 0 | 1,477 s |
+| base-git + `completion-assert-forks.bats` (parity and process budget against SHF_BASE e1fbd8a5a) | 1..8 | 8 | 0 | 3,107 s |
+| final-git + `completion-assert-forks.bats` | 1..8 | 8 | 0 | 1,309 s |
+| final-git + `completion-assert-assignee-shared-cwd.bats` | 1..9 | 9 | 0 | 93 s |
+| final-git + `completion-assert-durations.bats` (SHF_BASE 4b1224be5) | 1..8 | 6 | **2**: #3 `A3 … BESIDE the ledger`, #7 `C4 D1's backlog read runs BESIDE the ledger` | 3,658 s |
+| base-git + the same two durations tests (`--filter '^A3 \|^C4 '`), the control | 1..2 | 0 | **2**: the same two. A3 "prefetch off 58135 ms, on 98207 ms"; C4 failed at `cmp dserial dnew` (dserial empty) | 1,583 s |
 
 The four reds in row 2 are exactly the four predicted by reading (§5.3). Neither the ⛔ guard nor the D6 helper
 move flipped anything else, and that includes `D7 CLASS` and every D6 `line-1-rung` / verdict-first case. The final
@@ -792,12 +804,42 @@ to final, `diff -q`) and the 17 new or rewritten ones (row 3). `bats --count` on
 198-test run did not fit this session at load 370 (row 3 ran at about 78 s per test). Treat it as the implementer's
 first check, together with the land gate's own run.
 
+**The two durations reds are wall-clock tests that the load made unrunnable, not C2** (measured):
+- `A3` compares two arms of the *same* hook that differ only in `CC_CA_PREFETCH`. Its line reads "prefetch off
+  73731 ms, on 83989 ms (pre-change hook 228251 ms)". The test plants 2 s sleeps and expects about 4 s vs about
+  2 s, but at load 360 each Stop took 1-4 minutes. C2's +3 processes sit identically in both arms.
+- `C4` failed its parity `cmp`. Under the planted 2 s `sleep` wrappers, the old arm answered a 👤 `act` block and
+  both new arms (prefetch on and off) answered nothing.
+- The same C4 Stop, run hook-only through **base and final** without the sleep wrappers, from a blank state each
+  time (`/tmp/r2-C2/bin/c4ab.sh`, twice per arm), gives a byte-identical 1,006-byte `act` block with rung 👤 from
+  both. So C2 does not change C4's answer. The empty answers come from the slowed reads under load, which is
+  plausibly the ledger's own bounded backlog read.
+- **The base tree fails the same two tests in the same load regime** (control row above). They are red on
+  unmodified HEAD at this load.
+
+**Process budget (measured, the forks suite's own `# done claim, ledger computed` line).**
+- SHF_BASE: 155 external calls; base HEAD: 99; final: **102**. The +3 is exactly `git` 19→20, `shasum` 6→7 and
+  `sed` 3→4: the fact-key read on the contradiction path.
+- The suite's floor is "at least 40 fewer than SHF_BASE". The margin goes from 56 to 53, so it holds.
+- The parity tests (same stdout, stderr, IDL rows and state file names as SHF_BASE on a first fire) are green on
+  final. The third latch column changes a file's contents, not its name, and the first fire's IDL record is
+  unchanged.
+
 RED-proofs without bats, hook-only, `/bin/bash` 3.2, same seams:
 - `redproof.sh`, the four Stops of `FACT LATCH: the terminal close's DIFFERENT defect…`. Base: fired 1, 2, 3,
   then `capped:3>=3` with `suppressed_arm:"handoff"`. Final: fired 1, `latched-same-fact` ×2, then `handoff` fires 2/3.
 - `redproof2.sh`, the three `⛔ STATED` texts. Base: all three fire `ledger`. Final: the ⛔-led close and the
   verdict + ⛔-line-2 close abstain `ledger-clean:exonerated:blocked-rung-stated`, and the control (⛔ only on
   line 3) still fires.
+
+**Trunk moved during this work** (measured). origin/main is now dfdb5c273. It carries b0f3971b8 (arm O,
+"outbound source read", +73 lines in `hooks/completion-assert.sh` and a new `tests/completion-assert-outbound.bats`).
+That commit is not in this worktree's history. Both C2 diffs apply cleanly to trunk's two files: `patch --dry-run`
+against `git show origin/main:<file>` copies in `/tmp/r2-C2/trunk/` (`--verbose`) applies every hunk with no fuzz;
+hook hunks 3-7 land at offset +73. The two arms do not
+interact. Arm O writes two-column `<hash> outbound` lines into the same `.fired` file, and the fact latch reads
+field 3 only, while the assert count counts `assert` lines only. That is by reading; `completion-assert-outbound.bats`
+was not run.
 
 Static (measured): `shellcheck hooks/completion-assert.sh`, bare as the land gate runs it, gives rc 0 with no
 findings on both base and final. `/bin/bash -n` (3.2) is OK. The incident replay (§5.4) is identical under
@@ -868,8 +910,10 @@ the arm's close-tell gate, not in its budget.
 6. **Session-level spend across HEADs is unchanged.** The live self-repro (three facts, two HEADs) still caps.
    Whether a lead that commits mid-wave should be re-convicted per commit is a policy question. C2 answers it the
    way the ship floor already does: yes, once per commit.
-7. **Process budget.** The sibling `completion-assert-forks.bats` pins "a done claim that reaches the ledger
-   starts at least 40 fewer processes than [SHF_BASE]". C2 adds 3 on that path. Result in §6.
+7. **Process budget.** C2 adds 3 processes on the contradiction path. The measured count is 99 → 102 (§6), still 53
+   under SHF_BASE against a floor of 40. It adds no process on the 79% of Stops that end at `no-close-tell`. If the
+   3 ever matter, `sed` can become a builtin: `shopt -s extglob; ${facts//+([0-9])/N}` parses and folds correctly
+   under `/bin/bash` 3.2 (measured). That would cost an extglob toggle around one line.
 8. **Fixture texts.** The new ⛔ STATED tests avoid D1's `needs your` / `is yours` spellings so that each case names
    one arm. Real ⛔ closes often say "need your call" (no s), which D1 does not match.
 
