@@ -834,7 +834,7 @@ _rck_refused() {  # $1=expected rc — the tool's OWN refusal, never the unknown
 @test "recheck REFUSES a packet that is not open (rc 3), file byte-identical" {
   _rck_dir
   id="$(_rck_open 3)"; f="$CC_DECISIONS_DIR/$id.json"; r="$(_rck_receipt "$id")"
-  bash "$CD" action "$id" --evidence done >/dev/null
+  bash "$CD" action "$id" --evidence "done" >/dev/null
   cp "$f" "$BATS_TEST_TMPDIR/copy.json"
   run bash "$CD" recheck "$id" --conviction 60 --receipt "$r" --session-sid s
   _rck_refused 3
