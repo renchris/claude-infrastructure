@@ -28,6 +28,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from lr_recon import store
 from lr_recon import types as T
+from lr_recon.clock import run_bounded
 from lr_recon import working as W
 
 KWORK_WINDOW_S = 600  # KWORK_WINDOW_MIN = 10 (§C5)
@@ -229,7 +230,7 @@ def place(
     mvs: Sequence[T.Mover],
     facts_dir: str,
     kw: Dict[str, Optional[int]],
-    run: RunFn = subprocess.run,
+    run: RunFn = run_bounded,
     timeout: float = 30.0,
 ) -> Tuple[Dict[str, T.Placement], int]:
     """Run --place once for a lane. Exit 3 (or anything unparseable) ⇒ every mover WAIT_DATA."""
@@ -430,7 +431,7 @@ def phantom_rows(records: Sequence[T.Record]) -> List[Dict[str, Any]]:
     return rows
 
 
-def assign_many(rows: Sequence[Dict[str, Any]], run: RunFn = subprocess.run) -> int:
+def assign_many(rows: Sequence[Dict[str, Any]], run: RunFn = run_bounded) -> int:
     if not rows:
         return 0
     fd, path = tempfile.mkstemp(prefix="lr-recon-assign-", suffix=".jsonl")
@@ -454,7 +455,7 @@ def assign_many(rows: Sequence[Dict[str, Any]], run: RunFn = subprocess.run) -> 
             pass
 
 
-def unassign(assign_id: str, run: RunFn = subprocess.run) -> int:
+def unassign(assign_id: str, run: RunFn = run_bounded) -> int:
     """Void a phantom (close, park, ABORT, re-place, terminal failure); keyed by id, repeatable."""
     try:
         cp = run(

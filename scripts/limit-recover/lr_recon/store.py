@@ -24,6 +24,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from lr_recon import types as T
+from lr_recon.clock import run_bounded
 
 Alive = Callable[[int, str], bool]
 ArgvOf = Callable[[int], str]
@@ -463,8 +464,12 @@ def lock_release(dirpath: str, record_id: str) -> bool:
     return True
 
 
-def proc_lstart(pid: int, run: Callable[..., Any] = subprocess.run) -> str:
-    """ps LSTART under TZ=UTC LC_ALL=C, so (pid, lstart) is an exact identity (§10 #12)."""
+PROC_LSTART_TIMEOUT_S = 40.0  # observe.PS_BOUND_MAX_S: one ps call at 10+ runnable threads per cpu
+
+
+def proc_lstart(pid: int, run: Callable[..., Any] = run_bounded) -> str:
+    """ps LSTART under TZ=UTC LC_ALL=C, so (pid, lstart) is an exact identity (§10 #12). Bounded:
+    it ran with no timeout, the one child the loop could wait on forever; a timeout reads as ""."""
     env = dict(os.environ, TZ="UTC", LC_ALL="C")
     try:
         cp = run(
@@ -472,8 +477,9 @@ def proc_lstart(pid: int, run: Callable[..., Any] = subprocess.run) -> str:
             capture_output=True,
             text=True,
             env=env,
+            timeout=PROC_LSTART_TIMEOUT_S,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return ""
     # Collapse runs of spaces ("Sep  9" → "Sep 9"): the one rendering observe.py, the fence and the
     # watchdog all compare, so a padded day never reads as a different process.

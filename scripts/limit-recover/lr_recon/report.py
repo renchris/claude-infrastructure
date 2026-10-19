@@ -22,6 +22,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from lr_recon import store
 from lr_recon import types as T
+from lr_recon.clock import run_bounded
 
 PageSink = Callable[[str], None]
 MailSink = Callable[[str, str], None]
@@ -514,7 +515,7 @@ class MailUnverified(PageFailed):
 def _run(argv: List[str], timeout: float) -> Tuple[int, str]:
     """(rc, stderr). A timeout is rc 124 and a missing binary rc 127, never an exception."""
     try:
-        cp = subprocess.run(
+        cp = run_bounded(
             argv,
             timeout=timeout,
             check=False,

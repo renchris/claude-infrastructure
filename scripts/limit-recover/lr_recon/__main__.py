@@ -39,7 +39,15 @@ from lr_recon import (
 from lr_recon import facts as F
 from lr_recon import types as T
 from lr_recon.admit import Admission, BootSlots, jitter_s
-from lr_recon.clock import Caffeinate, Clock, Heartbeat, bind_steps, shift_record, step
+from lr_recon.clock import (
+    Caffeinate,
+    Clock,
+    Heartbeat,
+    bind_steps,
+    run_bounded,
+    shift_record,
+    step,
+)
 
 MOVING = ("TRANSPLANTED", "EXITING", "HUSK-RETIRED", "EXITED", "RELAUNCHED")
 IN_FLIGHT_MAX_S = 600.0  # a relaunch gap longer than this is unowned (the watcher --await caps at 1200)
@@ -442,7 +450,7 @@ def snap_bin() -> str:
 
 def _run_snap(args: List[str]) -> Tuple[int, str]:
     try:
-        cp = subprocess.run(
+        cp = run_bounded(
             ["/bin/bash", snap_bin()] + args,
             stdin=subprocess.DEVNULL,
             capture_output=True,

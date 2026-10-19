@@ -20,7 +20,7 @@ import time
 from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Tuple
 
 from lr_recon import types as T
-from lr_recon.clock import step
+from lr_recon.clock import run_bounded, step
 from lr_recon.observe_rows import (
     SHELLS,
     GlobFn,
@@ -154,7 +154,7 @@ def _ps_read(
 
 
 def read_ps(
-    run: RunFn = subprocess.run,
+    run: RunFn = run_bounded,
     bound: Optional[float] = None,
     budget: float = PS_BUDGET_S,
     clock: Callable[[], float] = time.monotonic,
@@ -234,7 +234,7 @@ def kitten_bin(
 
 def kitty_ls(
     sock: str,
-    run: RunFn = subprocess.run,
+    run: RunFn = run_bounded,
     timeout: float = 5.0,
     kitten: Optional[str] = None,
     degraded: Optional[List[str]] = None,
@@ -426,7 +426,7 @@ def composer_from_screen(screen: str) -> str:
 def composer_state(
     sock: str,
     window_id: int,
-    run: RunFn = subprocess.run,
+    run: RunFn = run_bounded,
     kitten: Optional[str] = None,
     timeout: float = 5.0,
 ) -> str:
@@ -463,7 +463,7 @@ def _uptime_raw() -> float:
 def observe(
     paths: Optional[T.Paths],
     home: str,
-    run: RunFn = subprocess.run,
+    run: RunFn = run_bounded,
     glob_fn: GlobFn = glob.glob,
     transcript_fn: Optional[TranscriptFn] = None,
     now: Optional[float] = None,

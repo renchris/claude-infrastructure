@@ -26,6 +26,8 @@ import subprocess
 import time
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
+from lr_recon.clock import run_bounded
+
 # argv -> (rc, stdout). rc < 0 means the runner itself failed (spawn error, timeout).
 Runner = Callable[[List[str]], Tuple[int, str]]
 
@@ -56,7 +58,7 @@ def _env_int(env: Mapping[str, str], key: str, default: int) -> int:
 def default_runner(argv: List[str]) -> Tuple[int, str]:
     """Run argv with no stdin and a hard bound; a spawn failure or timeout is rc -1, never a raise."""
     try:
-        cp = subprocess.run(
+        cp = run_bounded(
             argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30
         )
     except (OSError, subprocess.TimeoutExpired):

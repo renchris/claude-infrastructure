@@ -38,6 +38,18 @@
 #      it killed five holders in a row at progress 0 and no pass completed for 80 min; and a
 #      holder at progress 564 frozen 311 s (load 404) sampled 83% in lstat, the census's own
 #      filesystem walk — working, I/O-bound code. A restart only buys another slow first pass.
+#      The CPU floor is also blind to a LIVE child: `ps -S` counts only reaped ones, so a holder
+#      waiting on its own bounded child reads exactly like a wedged one. The reconciler therefore
+#      publishes `step_due` in the heartbeat — spawn time + timeout of the children it is waiting
+#      on, 0 when none — and the floor convicts only past step_due + STEP_MARGIN_S. A holder that
+#      overran its own declared bound by the margin never stepped after a child that had to end,
+#      which is the wedge; one still inside the bound is waiting, not stuck. 2026-10-19 01:19:58Z
+#      pid 1416 was killed 186 s into a unit of two chained bounded children under load 138.
+#
+# WHY STEP_MARGIN_S=60: step_due is stamped BEFORE the spawn and the child's timeout clock starts
+# AFTER it, so the margin covers fork/exec under load, the kill + reap of a child that timed out,
+# and the loop being scheduled again to call step(); at load 500 those are seconds to tens of
+# seconds. Kept below STALL_AGE_S so a wedge after a short child still dies near 180 s.
 #
 # Never `launchctl kickstart -k` (the kill is ours to attribute; KeepAlive does the restart), never
 # flock(1) (absent on macOS; one launchd job cannot overlap itself anyway).
@@ -67,6 +79,7 @@ STALL_READ_S=30      # condition 2: two reads at least this far apart
 STALL_AGE_S=180      # condition 3
 WAKE_GUARD_S=120     # condition 3, wake half
 CPU_MIN_CS=50        # condition 4: CPU centiseconds over the trailing STALL_AGE_S window = working
+STEP_MARGIN_S=60     # condition 4: the floor waits until the heartbeat's step_due + this
 STARTUP_GRACE_S=600  # progress 0 this soon after the holder's own lstart = still on its first pass
 STALL_MAX_S=900      # frozen progress this long with no CPU evidence of work is killed
 SLOW_MAX_S=3600      # frozen progress this long is killed whatever the CPU says (a spinning loop)
@@ -98,6 +111,8 @@ HB_PID="$(hb_num pid)"
 HB_PROGRESS="$(hb_num progress)"
 HB_WALL="$(hb_num wall)"
 HB_PWALL="$(hb_num progress_wall)"
+HB_STEP_DUE="$(hb_num step_due)"      # absent (an older reconciler) or 0 = no child declared
+HB_CHILD_BOUND="$(hb_num child_bound_s)"
 HB_LSTART="$(sed -n 's/.*"lstart":[[:space:]]*"\([^"]*\)".*/\1/p' "$HB" | head -n 1 | tr -s ' ')"
 
 is_int() { case "${1:-}" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
@@ -289,6 +304,8 @@ if [ "$ALIVE" -eq 1 ] && is_int "$HB_PROGRESS" && [ $((NOW - PROG_SEEN)) -ge "$S
       log "stalled ${stalled}s at progress=$HB_PROGRESS but no CPU reading across ${STALL_AGE_S}s yet — no kill"
     elif [ "$CPU_WIN" -ge "$CPU_MIN_CS" ]; then
       log "slow, not stalled: pid=$HB_PID progress=$HB_PROGRESS unchanged ${stalled}s, CPU +$(secs "$CPU_WIN")s over the last ${CPU_SPAN}s (load ${load:-?}) — no kill"
+    elif is_int "$HB_STEP_DUE" && [ "$NOW" -lt $((HB_STEP_DUE + STEP_MARGIN_S)) ]; then
+      log "inside a bounded child: pid=$HB_PID progress=$HB_PROGRESS unchanged ${stalled}s, CPU +$(secs "$CPU_WIN")s, child bound ${HB_CHILD_BOUND:-?}s, step due in $((HB_STEP_DUE - NOW))s + ${STEP_MARGIN_S}s margin (load ${load:-?}) — no kill"
     else
       why="CPU +$(secs "$CPU_WIN")s over the last ${CPU_SPAN}s, under the $(secs "$CPU_MIN_CS")s floor (load ${load:-?})"
     fi

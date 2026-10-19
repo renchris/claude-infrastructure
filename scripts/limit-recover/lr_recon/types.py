@@ -445,7 +445,15 @@ class Heartbeat:
 
     ``progress_wall`` is the wall time of the last ``progress`` change, so ONE read answers the
     fence's "advanced within 180 s" (C10). Sleep adjustment for readers: the age of an advance is
-    ``now - max(progress_wall, kern.waketime)`` — a wake restarts the clock, which errs to DEFER."""
+    ``now - max(progress_wall, kern.waketime)`` — a wake restarts the clock, which errs to DEFER.
+
+    ``step_due`` is the wall time by which the loop has promised its next advance: the latest
+    (spawn + timeout) of the bounded children it has started since the last one, 0.0 when none is
+    in flight. ``child_bound_s`` is the largest of those timeouts. The watchdog reads ``step_due``
+    so its no-CPU kill never lands inside a child's own bound (lr-recon-watchdog.sh condition 4).
+    ``max_step_gap_s`` is the longest awake gap between two advances this process has made,
+    ``max_step_gap_bound_s`` the child bound declared inside it and ``max_step_gap_at`` its wall
+    time: the invariant "gap ≤ bound + margin" measured in production, not asserted."""
 
     pid: int
     lstart: str
@@ -453,6 +461,11 @@ class Heartbeat:
     wall: float
     uptime_raw: float
     progress_wall: float = 0.0
+    step_due: float = 0.0
+    child_bound_s: float = 0.0
+    max_step_gap_s: float = 0.0
+    max_step_gap_bound_s: float = 0.0
+    max_step_gap_at: float = 0.0
 
 
 # ── account facts (C4) ───────────────────────────────────────────────────────────────────────────

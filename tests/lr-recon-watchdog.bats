@@ -240,6 +240,57 @@ ticks_cpu() {  # $1=from $2=to $3=start cs $4=cs added per 30 s tick — progres
   grep -q "KILL -TERM pid=$HOLDER: progress=$p unchanged 180s; CPU +0.00s" "$LR_RECON_ROOT/watchdog.log"
 }
 
+hb_due() {  # $1=progress $2=progress_wall $3=step_due $4=child_bound_s — the post-2026-10-19 heartbeat
+  printf '{"pid":%s,"lstart":"%s","progress":%s,"wall":%s.5,"uptime_raw":12.0,"progress_wall":%s.1,"step_due":%s.0,"child_bound_s":%s.0,"max_step_gap_s":0.0,"max_step_gap_bound_s":0.0,"max_step_gap_at":0.0}\n' \
+    "$HOLDER" "$HOLDER_LSTART" "$1" "$2" "$2" "$3" "$4" > "$LR_RECON_ROOT/heartbeat"
+}
+
+@test "2026-10-19 pid 1416 control: chained bounded children with no step between die at the floor" {
+  # 4cdf10f34's heartbeat: one step per stage, none per child, no step_due. A unit of a 120 s
+  # --place then a 90 s void holds progress past 180 s with the holder's own CPU frozen.
+  fake_cpu
+  hb "$HOLDER" "$HOLDER_LSTART" 55711 $((T - 210)) $((T - 210))
+  ticks_cpu $((T - 210)) $((T - 60)) 100 1
+  [ ! -e "$KLOG" ]
+  ticks_cpu $((T - 30)) $((T - 30)) 106 0
+  [ "$(sed -n 1p "$KLOG")" = "-TERM $HOLDER" ]
+  grep -q "progress=55711 unchanged 180s; CPU +0.06s over the last 180s, under the 0.50s floor" \
+    "$LR_RECON_ROOT/watchdog.log"
+}
+
+@test "2026-10-19 pid 1416 fixed: a step per child plus its declared bound is never killed; a wedge in it is" {
+  fake_cpu
+  printf '  0:01.00\n' > "$CPUF"
+  # child 1: --place, bound 120, declared at T-210
+  hb_due 55711 $((T - 210)) $((T - 90)) 120
+  for now in $((T - 210)) $((T - 180)) $((T - 150)) $((T - 120)); do tick "$now"; done
+  # it returned at T-90 and stepped; child 2 (a void, bound 90) declared at once
+  hb_due 55712 $((T - 90)) "$T" 90
+  for now in $((T - 90)) $((T - 60)) $((T - 30)) "$T"; do tick "$now"; done
+  [ ! -e "$KLOG" ]
+  # child 2 never returns (a wait its timeout cannot end) and the loop never steps: its bound +
+  # margin (due T+60) ends before the 180 s floor, so the wedge dies at the floor as before
+  for now in $((T + 30)) $((T + 60)); do tick "$now"; done
+  [ ! -e "$KLOG" ]
+  tick $((T + 90))
+  [ "$(sed -n 1p "$KLOG")" = "-TERM $HOLDER" ]
+  grep -q "KILL -TERM pid=$HOLDER: progress=55712 unchanged 180s; CPU +0.00s" "$LR_RECON_ROOT/watchdog.log"
+}
+
+@test "a single child whose bound outlasts the floor is waited out, then a wedge in it dies" {
+  fake_cpu
+  printf '  0:01.00\n' > "$CPUF"
+  hb_due 9 $((T - 300)) $((T + 60)) 360  # declared at T-300 with a 360 s bound
+  ticks_cpu $((T - 300)) "$T" 100 0
+  [ ! -e "$KLOG" ]
+  grep -q "inside a bounded child: pid=$HOLDER progress=9 unchanged 300s" "$LR_RECON_ROOT/watchdog.log"
+  ticks_cpu $((T + 90)) $((T + 90)) 100 0
+  [ ! -e "$KLOG" ]
+  ticks_cpu $((T + 120)) $((T + 120)) 100 0  # step_due + STEP_MARGIN_S
+  [ "$(sed -n 1p "$KLOG")" = "-TERM $HOLDER" ]
+  grep -q "KILL -TERM pid=$HOLDER: progress=9 unchanged 420s; CPU +0.00s" "$LR_RECON_ROOT/watchdog.log"
+}
+
 @test "a holder whose lstart mismatches (pid reuse) is not killed" {
   hb "$HOLDER" "$DEAD_LSTART" 7 $((T - 300)) $((T - 400))
   tick $((T - 300))

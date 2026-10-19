@@ -20,6 +20,7 @@ import subprocess
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from lr_recon import types as T
+from lr_recon.clock import run_bounded
 
 FRESH_S_DEFAULT = 180.0
 
@@ -124,7 +125,7 @@ def read_waketime(env: Optional[Mapping[str, str]] = None) -> float:
     if seam is not None:
         return seam
     try:
-        out = subprocess.run(
+        out = run_bounded(
             ["sysctl", "-n", "kern.waketime"],
             capture_output=True,
             text=True,
@@ -145,7 +146,7 @@ def fresh_s(env: Optional[Mapping[str, str]] = None) -> float:
 def _ps(field: str, pid: int) -> str:
     env: Dict[str, str] = dict(os.environ, TZ="UTC", LC_ALL="C")
     try:
-        return subprocess.run(
+        return run_bounded(
             ["ps", "-o", field + "=", "-p", str(pid)],
             capture_output=True,
             text=True,

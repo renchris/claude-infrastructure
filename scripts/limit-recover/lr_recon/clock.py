@@ -40,7 +40,7 @@ def _uptime_raw() -> float:
 def _run_sysctl(name: str) -> str:
     """``sysctl -n <name>``, bounded; "" on any failure so callers read it as "no evidence"."""
     try:
-        cp = subprocess.run(
+        cp = run_bounded(
             ["/usr/sbin/sysctl", "-n", name],
             capture_output=True,
             text=True,
@@ -224,6 +224,12 @@ class Heartbeat:
         self._lock = threading.Lock()
         self.progress = 0
         self.progress_wall = clock.wall()
+        self._progress_up = clock.uptime()
+        self.step_due = 0.0
+        self.child_bound_s = 0.0
+        self.max_step_gap_s = 0.0
+        self.max_step_gap_bound_s = 0.0
+        self.max_step_gap_at = 0.0
         self.write_errors = 0
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -237,16 +243,38 @@ class Heartbeat:
                 wall=self.clock.wall(),
                 uptime_raw=self.clock.uptime(),
                 progress_wall=self.progress_wall,
+                step_due=self.step_due,
+                child_bound_s=self.child_bound_s,
+                max_step_gap_s=self.max_step_gap_s,
+                max_step_gap_bound_s=self.max_step_gap_bound_s,
+                max_step_gap_at=self.max_step_gap_at,
             )
 
     def render(self) -> str:
         # Compact separators: bash readers sed `"key":value` out of it.
         return json.dumps(T.to_dict(self.snapshot()), separators=(",", ":")) + "\n"
 
+    def declare_child(self, bound_s: float) -> None:
+        """A bounded child is about to start: the next advance is due by now + ``bound_s``."""
+        with self._lock:
+            self.step_due = max(self.step_due, self.clock.wall() + bound_s)
+            self.child_bound_s = max(self.child_bound_s, bound_s)
+
     def advance(self) -> None:
         with self._lock:
+            up = self.clock.uptime()
+            gap = (
+                up - self._progress_up
+            )  # uptime: a lid-close is not a gap the loop made
+            if gap > self.max_step_gap_s:
+                self.max_step_gap_s = gap
+                self.max_step_gap_bound_s = self.child_bound_s
+                self.max_step_gap_at = self.clock.wall()
+            self._progress_up = up
             self.progress += 1
             self.progress_wall = self.clock.wall()
+            self.step_due = 0.0
+            self.child_bound_s = 0.0
 
     def write_now(self) -> bool:
         try:
@@ -297,14 +325,40 @@ def step() -> None:
     120 s --place probes, 30 s admission probes and kitty reads ran past the watchdog's 900 s
     ceiling while blocked on LIVE children, whose CPU `ps -S` does not count — so the watchdog
     killed a working reconciler three times in an hour on 2026-10-18, each restart mid-pass
-    (lr-recon-watchdog.sh condition 4). Every child the loop waits on is bounded (largest:
-    plan.PLACE_TIMEOUT_MAX_S), so the gap between two steps is bounded by one unit, below the
-    watchdog's STALL_AGE_S. A wedged unit never returns to call step(), so the counter freezes
-    exactly as before. Only the bound thread advances: a step from any other thread, or with
-    nothing bound (``--once``, tests), is a no-op."""
+    (lr-recon-watchdog.sh condition 4). A step per stage was still not enough: one unit chains
+    several bounded children (admission probes, a 120 s --place, ps reads that take 30-40 s under
+    load), and on 2026-10-19 the watchdog killed a holder running that fix 186 s into such a unit
+    while 58 other samples froze 600-1193 s. So every child the loop thread waits on now goes
+    through ``run_bounded``, which declares its bound before the spawn and steps after it: the gap
+    between two steps is one child plus the loop's own CPU work, and the watchdog waits out the
+    declared bound (heartbeat ``step_due``) before it reads a quiet CPU as a wedge. A wedged unit
+    never returns to call step(), so the counter freezes exactly as before. Only the bound thread
+    advances: a step from any other thread, or with nothing bound (``--once``, tests), is a no-op."""
     loop = _LOOP
     if loop is not None and loop[1] == threading.get_ident():
         loop[0].advance()
+
+
+def declare_child(bound_s: float) -> None:
+    """The bound loop thread is about to wait up to ``bound_s`` on a child (no-op elsewhere)."""
+    loop = _LOOP
+    if loop is not None and loop[1] == threading.get_ident():
+        loop[0].declare_child(bound_s)
+
+
+def run_bounded(*args: Any, **kw: Any) -> "subprocess.CompletedProcess[Any]":
+    """``subprocess.run`` for a child the loop waits on: the timeout is REQUIRED (an unbounded
+    child is the one wait no watchdog margin can cover), declared to the heartbeat before the
+    spawn, and the loop steps once the call returns or raises. The default ``run`` of every
+    reconciler call site, so a new site inherits the step by default instead of by hand edit."""
+    timeout = kw.get("timeout")
+    if timeout is None:
+        raise TypeError("run_bounded needs timeout=")
+    declare_child(float(timeout))
+    try:
+        return subprocess.run(*args, **kw)
+    finally:
+        step()
 
 
 class Caffeinate:
