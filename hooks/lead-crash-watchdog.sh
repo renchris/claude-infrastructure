@@ -1523,7 +1523,11 @@ surface_death() {
 #     --terminal whose it2 close failed): "CLOSED CLEANLY … safe to close this pane" — the other
 #     half of the ambiguity, so a finished session's leftover pane is never read as a kill.
 #   retired-by-desk whose pane survived: "RETIRED … safe to close, do NOT resume".
+#   A session limit-recover MOVED (pane_lr_facts, any class): "✗ <sid8> moved <src>→<dst>, relaunch
+#     failed · ▶ lr-fleet --one <sid8>" and one queued request when no LIVE copy runs (STRANDED), or
+#     "✅ <sid8> moved … and runs in pane N" when cc-find shows one (K6) — never "CLOSED CLEANLY".
 #   A recycle/resume that DID relaunch, or a pane that closed: NOTHING — the pane already says it.
+# Every "safe to close" is painted only after cc-pane-close --dry-run agrees (paint_pane_verdict).
 #
 # WHEN. Only after the pane has SETTLED: a recycle types /exit and the relaunch line within seconds
 # of each other, and a self-close closes the pane right after the exit. The verdict waits up to
@@ -1667,11 +1671,135 @@ pane_custody_fact() { # $1=tpath → lib/pane-custody.sh's TSV line for LEAD_PAN
   # ignored; an undatable transcript passes 0 and gets the weaker, pane-only match.
   cc_pane_custody "$LEAD_PANE" "$(cc_transcript_start_epoch "$1")" 2>/dev/null || true
 }
+# ── A SESSION LIMIT-RECOVER MOVED IS NOT A CLEAN EXIT (lr-wake 2026-10-18, REPORT §4 Wave F, RC4) ────
+# Overnight a move's /exit read as RECYCLE/clean-exit and this arm painted "✅ CLOSED CLEANLY … safe to
+# close" over pane 332, 28 s after lr had recorded STRANDED, with `claude4 --resume` for a session
+# whose transcript lived on another account. The death class cannot see a move; lr's own records can,
+# so they are joined here before any banner is chosen:
+#   · <sid>.HANDOFF.json in the registration's store — the durable tombstone; handed_off_to names the
+#     store holding the full transcript (a same-store tombstone is a --mark, never a move);
+#   · locks/<sid>.lock — the transient split-brain lock, whose "to" says the same;
+#   · the newest bundle's verdict row (<LR_STATE_DIR>/<sid>/bundle-*/events.jsonl, state STRANDED);
+#   · faults/<sid>.json — whose claim.by names the claiming store when nothing above does.
+# Per K6 the pane is closed only when cc-find shows a LIVE copy elsewhere (MOVED); a move with no LIVE
+# copy is STRANDED: painted as such and queued once for lr's poller (requests/<sid>.cc-lr.json, deduped
+# against parked/, runs/by-sid/ and requests/ as lr-fire-resume does), never offered a hand resume.
+# Seams: LR_STATE_DIR · CC_FIND_BIN · LCW_LR_FACT_MAX_AGE_S (21600: how old a bundle verdict or fault
+# may be and still speak) · CC_PANE_LR_ENQUEUE=off (paint only).
+pane_acct_for_cfg() { # $1=config dir → next | next2 | next3 | next4
+  case "${1%/}" in
+    *.claude-secondary)  printf 'next2' ;;
+    *.claude-tertiary)   printf 'next3' ;;
+    *.claude-quaternary) printf 'next4' ;;
+    *)                   printf 'next' ;;
+  esac
+}
+pane_same_store() { # $1 $2 = config dirs → 0 iff one store (compared by projects/, as lr_config_dirs keys it)
+  local a b
+  a=$(cd "$1/projects" 2>/dev/null && pwd -P || true); [[ -n "$a" ]] || a="$1/projects"
+  b=$(cd "$2/projects" 2>/dev/null && pwd -P || true); [[ -n "$b" ]] || b="$2/projects"
+  [[ "$a" == "$b" ]]
+}
+pane_handed_off_to() { # $1=sid $2=cfg → the OTHER store its tombstone names, when that store holds the sid
+  local tomb to f
+  for tomb in "$2"/projects/*/"$1".HANDOFF.json; do
+    [[ -f "$tomb" ]] || continue
+    to=$(sed -n '/"handed_off_to":"/{s/.*"handed_off_to":"\([^"]*\)".*/\1/p;q;}' "$tomb" 2>/dev/null || true)
+    [[ -n "$to" ]] || continue
+    pane_same_store "$to" "$2" && continue
+    for f in "$to"/projects/*/"$1".jsonl; do [[ -f "$f" ]] && { printf '%s' "$to"; return 0; }; done
+  done
+  return 1
+}
+pane_full_cfg() { # $1=sid $2=cfg → the store holding the FULL transcript: each tombstone hop followed (≤4)
+  local cfg="$2" hop=0 to
+  while (( hop < 4 )) && to=$(pane_handed_off_to "$1" "$cfg"); do cfg="$to"; hop=$(( hop + 1 )); done
+  printf '%s' "$cfg"
+}
+pane_find_live() { # $1=sid → the pane of a LIVE copy cc-find shows outside LEAD_PANE ("?" when unpaned), or nothing
+  local self bin
+  self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
+  bin="${CC_FIND_BIN:-$(dirname "$self")/../bin/cc-find}"
+  [[ -x "$bin" ]] || bin="$HOME/.claude/bin/cc-find"
+  [[ -x "$bin" ]] || return 0
+  { lcw_bounded "${LCW_PROBE_TIMEOUT_S:-15}" "$bin" "${1:0:8}" </dev/null 2>/dev/null || true; } \
+    | awk -F'\t' -v s="$1" -v me="${LEAD_PANE:-}" '$1 == s && $6 == "LIVE" && $2 != me { print ($2 == "" ? "?" : $2); exit }'
+}
+pane_lr_facts() { # $1=sid → sets LRF_STATE (stranded | moved-live | empty) LRF_SRC LRF_DST LRF_DST_CFG LRF_LIVE_PANE LRF_FACTS
+  local sid="$1" st="${LR_STATE_DIR:-$HOME/.reso/limit-recover}" max="${LCW_LR_FACT_MAX_AGE_S:-21600}"
+  local now dst="" to ev row vstate vts detail by fs
+  LRF_STATE=""; LRF_SRC=""; LRF_DST=""; LRF_DST_CFG=""; LRF_LIVE_PANE=""; LRF_FACTS=""
+  [[ -n "$sid" && -n "${LEAD_CFG:-}" ]] || return 0
+  now=$(date +%s)
+  to=$(pane_full_cfg "$sid" "$LEAD_CFG")
+  if ! pane_same_store "$to" "$LEAD_CFG"; then dst="$to"; LRF_FACTS="tombstone"; fi
+  if [[ -z "$dst" && -f "$st/locks/$sid.lock" ]]; then
+    to=$(sed -n '/"to":"/{s/.*"to":"\([^"]*\)".*/\1/p;q;}' "$st/locks/$sid.lock" 2>/dev/null || true)
+    if [[ -n "$to" ]] && ! pane_same_store "$to" "$LEAD_CFG"; then dst="$to"; LRF_FACTS="lock"; fi
+  fi
+  ev=$(find "$st/$sid" -maxdepth 2 -path '*/bundle-*/events.jsonl' 2>/dev/null | LC_ALL=C sort | tail -1 || true)
+  if [[ -n "$ev" ]]; then
+    row=$(jq -c 'select(.stage == "verdict")' "$ev" 2>/dev/null | tail -1 || true)
+    vstate=$(jq -r '.state // empty' <<<"$row" 2>/dev/null || true)
+    vts=$(jq -r '.ts // empty | sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch empty) | floor' <<<"$row" 2>/dev/null || true)
+    if [[ "$vstate" == STRANDED && "$vts" =~ ^[0-9]+$ ]] && (( now - vts <= max )); then
+      LRF_FACTS="${LRF_FACTS:+$LRF_FACTS+}bundle"
+      if [[ -z "$dst" ]]; then
+        detail=$(jq -r '.detail // empty' <<<"$row" 2>/dev/null || true)
+        dst=$(sed -n 's/.*now lives under \([^ ,]*\).*/\1/p' <<<"$detail" | head -1 || true)
+      fi
+    fi
+  fi
+  if [[ -f "$st/faults/$sid.json" ]]; then
+    fs=$(jq -r '.first_seen // 0 | floor' "$st/faults/$sid.json" 2>/dev/null || echo 0)
+    if [[ "$fs" =~ ^[0-9]+$ ]] && (( now - fs <= max )); then
+      LRF_FACTS="${LRF_FACTS:+$LRF_FACTS+}fault"
+      by=$(jq -r '.claim.by // empty' "$st/faults/$sid.json" 2>/dev/null || true)
+      if [[ -z "$dst" && -n "$by" ]] && ! pane_same_store "$by" "$LEAD_CFG"; then dst="$by"; fi
+    fi
+  fi
+  # A fault alone is a claim, not a move: a tombstone, the lock or a STRANDED verdict must speak.
+  case "$LRF_FACTS" in *tombstone*|*lock*|*bundle*) ;; *) LRF_FACTS=""; return 0 ;; esac
+  LRF_SRC=$(pane_acct_for_cfg "$LEAD_CFG"); LRF_DST_CFG="$dst"
+  LRF_DST="?"; [[ -z "$dst" ]] || LRF_DST=$(pane_acct_for_cfg "$dst")
+  LRF_LIVE_PANE=$(pane_find_live "$sid")
+  if [[ -n "$LRF_LIVE_PANE" ]]; then LRF_STATE=moved-live; else LRF_STATE=stranded; fi
+  return 0
+}
+pane_lr_enqueue() { # $1=sid $2=target cfg → one status sentence; writes requests/<sid>.cc-lr.json at most once
+  local sid="$1" cfg="${2:-}" st="${LR_STATE_DIR:-$HOME/.reso/limit-recover}" f req tmp
+  [[ "${CC_PANE_LR_ENQUEUE:-on}" != off ]] || { printf 'Not queued (CC_PANE_LR_ENQUEUE=off).'; return 0; }
+  [[ ! -f "$st/parked/$sid.json" ]] || { printf 'limit-recover already holds it (a parked record).'; return 0; }
+  for f in "$st/requests/$sid"*.json; do
+    [[ -f "$f" ]] && { printf 'Queued for the limit-recover poller (requests/%s).' "${f##*/}"; return 0; }
+  done
+  [[ ! -e "$st/runs/by-sid/$sid.active" ]] || { printf 'limit-recover already holds it (a run claim).'; return 0; }
+  req="$st/requests/$sid.cc-lr.json"; tmp="$st/requests/.$sid.cc-lr.$$.tmp"
+  if mkdir -p "$st/requests" 2>/dev/null \
+     && jq -nc --arg sid "$sid" --argjson at "$(date +%s)" --arg pane "${LEAD_PANE:-}" --arg cfg "$cfg" \
+          --arg acct "$( [[ -n "$cfg" ]] && pane_acct_for_cfg "$cfg" )" --arg cwd "${LEAD_CWD:-}" \
+          '{sid:$sid, at:$at, requested_by:"lead-crash-watchdog", mode:"recover", cause:"stranded", pane:$pane}
+           + (if $cfg != "" then {config_dir:$cfg, account:$acct} else {} end)
+           + (if $cwd != "" then {cwd:$cwd} else {} end)' > "$tmp" 2>/dev/null \
+     && mv -f "$tmp" "$req" 2>/dev/null; then
+    log "[watchdog $sid] STRANDED — queued requests/${req##*/} for the limit-recover poller"
+    printf 'Queued for the limit-recover poller (requests/%s).' "${req##*/}"
+  else
+    rm -f "$tmp" 2>/dev/null || true
+    printf 'NOT queued (could not write %s) — run the command above.' "$req"
+  fi
+}
 pane_verdict_text() { # $1=sid $2=class $3=cause $4=exit $5=sig $6=tpath → line 1: headline<TAB>title; then a blank line and the block
   local sid="$1" class="$2" cause="$3" ec="${4:-}" sig="${5:-}" tpath="${6:-}"
   local launcher work close reason when role="" rule headline title body resume
-  local tm tm_is tm_name tm_team tm_src tm_mid reopen
-  launcher=$(pane_launcher_for_cfg "$LEAD_CFG")
+  local tm tm_is tm_name tm_team tm_src tm_mid reopen full_cfg f
+  # The resume hint names the launcher of the store holding the FULL transcript (each HANDOFF.json hop
+  # followed), never the registration's store: that printed `claude4` for a session living on next2.
+  full_cfg="$LEAD_CFG"; [[ -z "$LEAD_CFG" ]] || full_cfg=$(pane_full_cfg "$sid" "$LEAD_CFG")
+  launcher=$(pane_launcher_for_cfg "$full_cfg")
+  if [[ "$full_cfg" != "$LEAD_CFG" ]]; then
+    for f in "$full_cfg"/projects/*/"$sid".jsonl; do [[ -f "$f" ]] && { tpath="$f"; break; }; done
+  fi
   work=$(pane_work_state "$LEAD_CWD"); close=$(pane_last_close "$tpath"); reason=$(pane_end_reason "$sid")
   when=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   pane_is_desk "$LEAD_PANE" && role=" — the DESK"
@@ -1697,6 +1825,27 @@ $reopen"; resume_crash="$reopen"
     crash_note="The
    exit text above offers a resume line; ignore it — a teammate is not resumable outside its team."
   fi
+  # LR FACTS FIRST (pane_lr_facts): a moved session's banner says where it went, whatever the death
+  # class read. A teammate keeps its own banner — its lead owns it, not limit-recover.
+  LRF_STATE=""
+  [[ "$tm_is" == 1 ]] || pane_lr_facts "$sid"
+  case "$LRF_STATE" in
+    stranded)
+      headline="✗ ${sid:0:8} moved ${LRF_SRC}→${LRF_DST}, relaunch failed · ▶ lr-fleet --one ${sid:0:8}"
+      title="✗ stranded ${sid:0:8}"
+      body="$headline
+   $(pane_lr_enqueue "$sid" "$LRF_DST_CFG") Its full transcript is on $LRF_DST ($launcher); no copy runs anywhere.
+   work in ${LEAD_CWD:-?}: $work · its last close verdict: $close · lr facts: $LRF_FACTS"
+      printf '%s\t%s\n\n%s\n%s\n%s\n' "$headline" "$title" "$rule" "$body" "$rule"
+      return 0 ;;
+    moved-live)
+      headline="✅ ${sid:0:8} moved ${LRF_SRC}→${LRF_DST} and runs in pane $LRF_LIVE_PANE"
+      title="✅ moved ${sid:0:8}"
+      body="$headline (verdict painted $when).
+   This pane holds nothing: safe to close (Ctrl-D). Do NOT resume it here — a second copy would split it."
+      printf '%s\t%s\n\n%s\n%s\n%s\n' "$headline" "$title" "$rule" "$body" "$rule"
+      return 0 ;;
+  esac
   case "$class:$cause" in
     RECYCLE:retired-teammate)
       # No re-spawn advice here: the lead ORDERED this end, so there is nothing to re-spawn. The two
@@ -1727,8 +1876,8 @@ $reopen"; resume_crash="$reopen"
       headline="✅ RETIRED — Claude session ${sid:0:8}${role} was retired by the desk after its work was collected"
       title="✅ retired ${sid:0:8}"
       body="$headline (verdict painted $when).
-   The pane close that should have followed did not happen. This pane holds nothing: safe to close
-   (Ctrl-D). Do NOT resume it — its work was landed before the retirement." ;;
+   The pane close that should have followed did not happen. This pane holds nothing: safe to close (Ctrl-D).
+   Do NOT resume it — its work was landed before the retirement." ;;
     RECYCLE:*)
       headline="✅ CLOSED CLEANLY — Claude session ${sid:0:8}${role} exited on its own (reason: $reason); nothing relaunched here"
       title="✅ closed ${sid:0:8}"
@@ -1791,6 +1940,18 @@ paint_pane_verdict() { # $1=sid $2=pid $3=class $4=cause $5=exit $6=sig $7=tpath
   # `| head -1`: this file runs under pipefail, and a producer cut off by head reads as a failure.
   local first; first="${out%%$'\n'*}"; headline="${first%%$'\t'*}"; title="${first#*$'\t'}"
   block="${out#*$'\n'}"; block="${block#$'\n'}"
+  # THE CLOSER DECIDES BEFORE THE PAINT (lr-wake 2026-10-18, RC4). A banner promising "safe to close"
+  # over a pane the closer then refuses is a second false verdict, so a "holds nothing" block is
+  # painted only after cc-pane-close --dry-run agrees; when it refuses, its own reason replaces the
+  # promise, and the phrase the close trigger keys on is gone with it.
+  local kept=""
+  case "$block" in *"This pane holds nothing"*)
+    if ! kept=$(pane_close_predicate "$sid"); then
+      block="${block//This pane holds nothing: safe to close (Ctrl-D)./Nothing runs here, but the closer keeps this pane: $kept.}"
+      block="${block//This pane holds nothing: close this pane (Ctrl-D)./Nothing runs here, but the closer keeps this pane: $kept.}"
+      log "[watchdog $sid] pane verdict: the closer keeps pane ${LEAD_PANE:-?} ($kept) — painted without the safe-to-close line"
+    fi ;;
+  esac
   if { printf '\n%s\n' "$block"; printf '\033]2;%s\007' "$title"; } > "$PANE_VERDICT_DEV/$tty" 2>/dev/null; then
     log "[watchdog $sid] pane verdict PAINTED on $tty (pane ${LEAD_PANE:-?}): $headline"
   else
@@ -1811,13 +1972,30 @@ paint_pane_verdict() { # $1=sid $2=pid $3=class $4=cause $5=exit $6=sig $7=tpath
 # window, the session's own `Good to close: yes` or a teammate/custody ruling, no uncommitted work),
 # so this adds a trigger, not a judgment. The banner stays: if the closer refuses, it is still right.
 # Kill switch CC_PANE_VERDICT_CLOSE=off · CC_PANE_VERDICT_CLOSE_GRACE_S (20) · CC_PANE_CLOSE_BIN.
+pane_closer_bin() { # → cc-pane-close's path, or rc 1
+  local bin
+  bin="${CC_PANE_CLOSE_BIN:-$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")")/../bin/cc-pane-close}"
+  [[ -x "$bin" ]] || bin="$HOME/.claude/bin/cc-pane-close"
+  [[ -x "$bin" ]] || return 1
+  printf '%s' "$bin"
+}
+# rc 0 = the closer would close LEAD_PANE now (or no automatic close applies, so the banner stands as
+# the operator's instruction); rc 1 = it refuses, with its reason on stdout.
+pane_close_predicate() { # $1=sid
+  local bin out rc=0 why
+  [[ "${CC_PANE_VERDICT_CLOSE:-on}" != off && "${LEAD_PANE:-}" =~ ^[0-9]+$ ]] || return 0
+  bin=$(pane_closer_bin) || return 0
+  out=$(lcw_bounded 60 "$bin" --pane "$LEAD_PANE" --dry-run 2>/dev/null </dev/null) || rc=$?
+  (( rc == 0 )) && return 0
+  why=$(sed -n 's/.*REFUSED — //p' <<<"$out" | head -1 || true)
+  printf '%s' "${why:-cc-pane-close --dry-run answered rc $rc}"
+  return 1
+}
 pane_verdict_close() { # $1=sid $2=tty — ALWAYS returns 0; the close verdict goes to the log
   local sid="$1" tty="$2" bin rc=0 out procs
   [[ "${CC_PANE_VERDICT_CLOSE:-on}" != off ]] || { log "[watchdog $sid] pane close SUPPRESSED (CC_PANE_VERDICT_CLOSE=off)"; return 0; }
   [[ "${LEAD_PANE:-}" =~ ^[0-9]+$ ]] || { log "[watchdog $sid] pane close SKIPPED — pane id '${LEAD_PANE:-}' is not a kitty window id"; return 0; }
-  bin="${CC_PANE_CLOSE_BIN:-$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")")/../bin/cc-pane-close}"
-  [[ -x "$bin" ]] || bin="$HOME/.claude/bin/cc-pane-close"
-  [[ -x "$bin" ]] || { log "[watchdog $sid] pane close SKIPPED — cc-pane-close not found"; return 0; }
+  bin=$(pane_closer_bin) || { log "[watchdog $sid] pane close SKIPPED — cc-pane-close not found"; return 0; }
   sleep "${CC_PANE_VERDICT_CLOSE_GRACE_S:-20}"
   # Re-read after the grace: the operator may have started something in the pane meanwhile.
   [[ -e "$PANE_VERDICT_DEV/$tty" ]] || { log "[watchdog $sid] pane close NOT NEEDED — $tty closed during the grace"; return 0; }

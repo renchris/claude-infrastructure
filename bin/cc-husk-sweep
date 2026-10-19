@@ -44,7 +44,7 @@
 # otherwise (and UNKNOWN is resumed with --resume, because a session that cannot be shown done is
 # not done — memory: lookup-miss-is-not-absence). Only the session's ASSISTANT text counts as its
 # close: the CLAUDE.md attachment quotes "Good to close: no" too (root cause 7).
-# Four verdicts are NEVER resumed, --all included:
+# Five verdicts are NEVER resumed, --all included:
 #   TEAMMATE     the transcript carries "teamName" — a retired Agent Teams member; its lead owns it,
 #                and resuming it re-spawns a member nobody will shut down. Close the pane instead.
 #   COLLECTED    custody for this pane, opened since the session started, was discharged (return or
@@ -54,6 +54,9 @@
 #                item 3). Custody still OPEN changes nothing: the verdict stands.
 #   DUPLICATE    two husks resolved to ONE sid; at most one of them can be right, and typing the line
 #                into both puts two writers on one transcript
+#   RECYCLED→<sid8|pane N> / MOVED→pane <N>  the session's lineage continues in another pane (a
+#                recycle successor, a claimed pane-successor stage, or a later registration
+#                elsewhere — see lineage_of); a resume here would start a second copy (pane 332)
 #   TRANSPLANTED (below)
 #
 # TRANSPLANTED is the verdict none of that reaches: a limit transplant keeps the SAME sid and moves
@@ -244,8 +247,97 @@ watchdog_sid() {  # <pane> → the sid of the LAST registration naming exactly p
   [ -n "$KSTART_TS" ] && [ -f "$WDLOG" ] || return 1
   LC_ALL=C awk -v p="pane=$1" -v since="$KSTART_TS" '
     index($0, " registered session=") && $NF == p && substr($0, 2, 19) >= since {
-      s = $0; sub(/.* registered session=/, "", s); sub(/[[:space:]].*/, "", s); last = s }
-    END { if (last ~ /^[0-9a-f-]+$/ && length(last) == 36) print last; else exit 1 }' "$WDLOG"
+      s = $0; sub(/.* registered session=/, "", s); sub(/[[:space:]].*/, "", s); last = s; at = substr($0, 2, 19) }
+    END { if (last ~ /^[0-9a-f-]+$/ && length(last) == 36) print last "|" at; else exit 1 }' "$WDLOG"
+}
+# ── LINEAGE: a session that RECYCLED is not this pane's to resume (lr-wake 2026-10-18, h defect 2) ──
+# Pane 332 read `2e9ed9f2 … dirty RESUME`, but 2e9ed9f2 had re-registered in pane 442 and recycled
+# there into fad30cb7, which was live. `--resume 2e9ed9f2` would have started a second copy of a
+# lineage that already continues — the split brain. None of the gates above sees it: the sid is not
+# live (its successor is), it was not transplanted, and nothing else claims it. Three records do,
+# each written by the machinery that moved it, and each read only AFTER this pane's own registration
+# (`since`), so the pane's own earlier history cannot convict it:
+#   · handoff-fire's `recycle-engaged` row (handoffs.jsonl; prev_sid + target_pane): the successor is
+#     the session that registered in target_pane around that row AND whose brief carries a
+#     HANDOFF-RECYCLE- marker (the recycle's own stamp) ⇒ RECYCLED→<successor sid8>;
+#   · a claimed pane-successor stage (lib/pane-successor.sh: <tty>.json meta with pred_sid, plus a
+#     <tty>.claimed.* file) ⇒ RECYCLED→pane <meta.pane>;
+#   · a later registration of the same sid in ANOTHER pane, or a recycle-engaged row naming another
+#     pane with no provable successor ⇒ MOVED→pane <N>.
+# All three are NEVER resumed, --all included. Seams: CC_HUSK_HANDOFFS_LOG · CC_PANE_SUCCESSOR_DIR.
+lineage_of() { # <sid> <pane> <since: watchdog-log local timestamp, or empty> → verdict token / nothing
+  LC_ALL=C python3 - "$1" "$2" "${3:-}" "$WDLOG" "${CC_HUSK_HANDOFFS_LOG:-$HOME/.claude/logs/handoffs.jsonl}" \
+      "${CC_PANE_SUCCESSOR_DIR:-$HOME/.claude/run/pane-successor}" "$STORES" <<'PY' 2>/dev/null || true
+import calendar, glob, json, os, re, sys, time
+sid, pane, since_s, wdlog, hlog, psdir, stores = sys.argv[1:8]
+def local_ep(s):
+    try: return time.mktime(time.strptime(s, "%Y-%m-%d %H:%M:%S"))
+    except Exception: return None
+def utc_ep(s):
+    try: return calendar.timegm(time.strptime(re.sub(r"\.[0-9]+", "", s).rstrip("Z"), "%Y-%m-%dT%H:%M:%S"))
+    except Exception: return None
+since = local_ep(since_s) if since_s else 0.0
+since = since or 0.0
+REG = re.compile(r"^\[([0-9-]+ [0-9:]+)\] registered session=([0-9a-f-]{36}) .* pane=([0-9]+)\s*$")
+regs = []
+try:
+    with open(wdlog, "r", errors="replace") as fh:
+        for line in fh:
+            if " registered session=" not in line: continue
+            m = REG.match(line)
+            if m:
+                ep = local_ep(m.group(1))
+                if ep is not None: regs.append((ep, m.group(2), m.group(3)))
+except Exception:
+    pass
+def brief_has_marker(s):
+    for st in stores.split(":"):
+        for p in glob.glob(os.path.join(st, "projects", "*", s + ".jsonl")):
+            try:
+                with open(p, "r", errors="replace") as fh:
+                    for i, line in enumerate(fh):
+                        if i > 400: break
+                        try: r = json.loads(line)
+                        except Exception: continue
+                        if r.get("type") != "user" or r.get("isMeta"): continue
+                        c = (r.get("message") or {}).get("content")
+                        if isinstance(c, list): c = "\n".join(b.get("text", "") for b in c if isinstance(b, dict))
+                        return isinstance(c, str) and "HANDOFF-RECYCLE-" in c
+            except Exception:
+                continue
+    return False
+moved = ""
+# 1. recycle-engaged rows for this sid, after this pane's registration
+try:
+    with open(hlog, "r", errors="replace") as fh:
+        rows = [json.loads(l) for l in fh if '"recycle-engaged"' in l and sid in l]
+except Exception:
+    rows = []
+for r in reversed(rows):
+    if r.get("prev_sid") != sid: continue
+    ep = utc_ep(str(r.get("ts", "")))
+    if ep is None or ep <= since: continue
+    tp = str(r.get("target_pane") or "")
+    succ = [s for (e, s, p) in regs if p == tp and s != sid and ep - 900 <= e <= ep + 60]
+    for s in reversed(succ):
+        if brief_has_marker(s):
+            print("RECYCLED→" + s[:8]); sys.exit(0)
+    if tp and tp != pane and not moved: moved = "MOVED→pane " + tp
+# 2. a claimed pane-successor stage whose predecessor is this sid
+for meta in glob.glob(os.path.join(psdir, "*.json")):
+    try: m = json.load(open(meta))
+    except Exception: continue
+    if m.get("pred_sid") != sid: continue
+    key = os.path.basename(meta)[:-5]
+    claims = [c for c in glob.glob(os.path.join(psdir, key + ".claimed.*")) if os.path.getmtime(c) > since]
+    if claims:
+        print("RECYCLED→pane " + str(m.get("pane") or key)); sys.exit(0)
+# 3. the same sid registered later in another pane
+for (e, s, p) in reversed(regs):
+    if s == sid and p != pane and e > since:
+        moved = moved or ("MOVED→pane " + p); break
+if moved: print(moved)
+PY
 }
 
 resolve() {  # <pane> <cwd> → sets R_SID R_LAUNCHER R_CWD R_SRC R_STORE (empty sid = unresolved)
@@ -254,8 +346,9 @@ resolve() {  # <pane> <cwd> → sets R_SID R_LAUNCHER R_CWD R_SRC R_STORE (empty
   # it to the store that actually HOLDS the transcript. On rc 1, R_SRC says why (empty = nothing
   # named a session; live-elsewhere; read-failed).
   local pane="$1" cwd="$2" row sb d
-  R_SID=""; R_LAUNCHER=""; R_CWD="$cwd"; R_SRC=""; R_STORE=""
+  R_SID=""; R_LAUNCHER=""; R_CWD="$cwd"; R_SRC=""; R_STORE=""; R_SINCE="$KSTART_TS"
   if R_SID="$(watchdog_sid "$pane")"; then
+    R_SINCE="${R_SID#*|}"; R_SID="${R_SID%%|*}"
     is_live_sid "$R_SID" && { R_SID=""; R_SRC=live-elsewhere; return 1; }
     R_LAUNCHER=claude; R_SRC=watchdog; return 0   # no account on the line: settle() reads the store
   fi
@@ -454,6 +547,10 @@ while IFS=$'\t' read -r pane pid cwd; do
   cust="$(cc_pane_custody "$pane" "$(cc_transcript_start_epoch "$R_TP")" 2>/dev/null || true)"
   [ "${cust%%$'\t'*}" != collected ] || v=COLLECTED
   [ -z "$XPLANT" ] || v="TRANSPLANTED→$(acct_for_dir "$XPLANT")"
+  # LINEAGE (lineage_of): consulted before any row may say RESUME, and it outranks every verdict but
+  # TEAMMATE — a recycled or moved session's continuation lives in another pane.
+  lin="$(lineage_of "$R_SID" "$pane" "$R_SINCE")"
+  [ -z "$lin" ] || v="$lin"
   ! is_teammate "$R_TP" || v=TEAMMATE
   rows="$rows$pane"$'\t'"$R_SID"$'\t'"$R_LAUNCHER"$'\t'"$death"$'\t'"$close"$'\t'"$work"$'\t'"$v"$'\t'"$R_CWD"$'\t'"$R_SRC"$'\n'
 done < <(printf '%s' "$PANES" | jq -r '.[] | [(.id // .uuid // ""), (.pid // 0), (.cwd // "")] | @tsv')
@@ -463,7 +560,7 @@ done < <(printf '%s' "$PANES" | jq -r '.[] | [(.id // .uuid // ""), (.pid // 0),
 dups="$(printf '%s' "$rows" | awk -F'\t' '$2 != "-" { n[$2]++ } END { for (s in n) if (n[s] > 1) printf "%s ", s }')"
 rows="$(printf '%s' "$rows" | awk -F'\t' -v OFS='\t' -v dups="$dups" -v only="$ONLY" '
   BEGIN { k = split(dups, a, " "); for (i = 1; i <= k; i++) d[a[i]] = 1 }
-  { if (($2 in d) && $7 !~ /^(TRANSPLANTED|TEAMMATE|COLLECTED)/) $7 = "DUPLICATE"
+  { if (($2 in d) && $7 !~ /^(TRANSPLANTED|TEAMMATE|COLLECTED|RECYCLED|MOVED)/) $7 = "DUPLICATE"
     if (only == "" || $1 == only) print }')"
 [ -z "$rows" ] || rows="$rows"$'\n'
 
@@ -477,9 +574,11 @@ else
     $7 == "TEAMMATE"  { t = t " " $1 }
     $7 == "DUPLICATE" { d = d " " $1 }
     $7 == "COLLECTED" { c = c " " $1 }
+    $7 ~ /^(RECYCLED|MOVED)/ { r = r " " $1 }
     END { if (t != "") print "TEAMMATE (panes" t "): a retired team member — never resumed; close the pane."
           if (d != "") print "DUPLICATE (panes" d "): one sid, several panes — never resumed; at most one is right."
-          if (c != "") print "COLLECTED (panes" c "): its originator collected the work (custody returned or abandoned) — never resumed; close the pane." }'
+          if (c != "") print "COLLECTED (panes" c "): its originator collected the work (custody returned or abandoned) — never resumed; close the pane."
+          if (r != "") print "RECYCLED/MOVED (panes" r "): the session continues in the pane named — never resumed here (a second copy would split it); close this pane with cc-pane-close." }'
 fi
 [ "$MODE" = resume ] || exit 0
 
@@ -491,7 +590,7 @@ while IFS=$'\t' read -r pane sid launcher death close work v cwd _; do
   # two-writers-one-transcript failure the gate above exists to prevent. DUPLICATE is the same
   # failure from the other side, a TEAMMATE belongs to its lead, and a COLLECTED session's work was
   # finished by its originator — a resume would re-arm its /goal over it.
-  case "$v" in TRANSPLANTED*|DUPLICATE|TEAMMATE|COLLECTED) continue ;; esac
+  case "$v" in TRANSPLANTED*|RECYCLED*|MOVED*|DUPLICATE|TEAMMATE|COLLECTED) continue ;; esac
   if [ "$ALL" = 1 ] || [ "$v" != DONE ]; then plan="$plan$pane"$'\t'"$sid"$'\t'"$launcher"$'\t'"$cwd"$'\n'; fi
 done <<<"$rows"
 [ -n "$plan" ] || { echo "cc-husk-sweep: nothing to resume (every resolved husk is DONE or never-resumable; --all resumes the DONE ones)"; exit 0; }

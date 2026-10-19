@@ -16,7 +16,7 @@
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-  HOOK="$REPO/hooks/lead-crash-watchdog.sh"
+  HOOK="${LCW_HOOK_UNDER_TEST:-$REPO/hooks/lead-crash-watchdog.sh}"
   T="$BATS_TEST_TMPDIR"
   export HOME="$T/home"
   mkdir -p "$HOME/.claude/bin" "$HOME/.claude/watchdog" "$HOME/.claude/logs" "$T/dev" "$T/roles" "$T/acct/projects/proj" "$T/jetsam" "$T/teardown" "$T/registry"
@@ -288,4 +288,88 @@ custody_row() { # <kind> <ts> [targetPane]
   run verdict_with "$HOOK" CRASH external-sigterm 143 15
   painted | grep -q 'Teammate trunk-reds is not resumable'
   ! painted | grep -q 'WORK COLLECTED' || false
+}
+
+# ── lr-wake 2026-10-18 (REPORT §4 Wave F, RC4): lr's records outrank the death class ─────────────
+# Pane 332 was painted "✅ CLOSED CLEANLY … safe to close" 28 s after lr recorded STRANDED, with a
+# `claude4` resume line for a session whose full transcript lived on another account. The fixture is
+# a move next4→next3: the registration's store (quaternary) holds the 4 KB stub + the HANDOFF.json
+# tombstone, the tertiary store holds the full transcript, and the bundle's verdict row says STRANDED.
+# RED on origin/main (7dc482f24), measured: the five cases below fail there (the first paints CLOSED
+# CLEANLY and `safe to close`); the lone-fault CONTROL passes on both.
+lr_move_fixture() {
+  SRC="$T/src/.claude-quaternary"; DST="$T/dst/.claude-tertiary"
+  mkdir -p "$SRC/projects/proj" "$DST/projects/proj" "$T/lr/$SID/bundle-20261018T071345Z"
+  export CC_PANE_VERDICT_CFG="$SRC" LR_STATE_DIR="$T/lr" CC_FIND_BIN="$T/stub-find"
+  printf '{"type":"user","message":{"role":"user","content":"stub"}}\n' > "$SRC/projects/proj/$SID.jsonl"
+  printf '{"sid":"%s","handed_off_to":"%s"}\n' "$SID" "$DST" > "$SRC/projects/proj/$SID.HANDOFF.json"
+  printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Good to close: no — mid-search"}]}}\n' > "$DST/projects/proj/$SID.jsonl"
+  printf '{"ts":"%s","state":"STRANDED","stage":"verdict","detail":"proven=no — session %s now lives under %s, and the source pane 330 is a tombstoned husk"}\n' \
+    "$(date -u +%FT%TZ)" "${SID:0:8}" "$DST" > "$T/lr/$SID/bundle-20261018T071345Z/events.jsonl"
+  printf '#!/bin/bash\ncat "%s" 2>/dev/null\nexit 0\n' "$T/find.out" > "$T/stub-find"; chmod +x "$T/stub-find"
+  rm -f "$T/cwd/scratch.txt"                      # clean work: the old arm said "safe to close" here
+}
+
+@test "STRANDED bundle: no CLOSED CLEANLY, no safe to close; the answer-first line names the move and lr-fleet; the hint is claude3" {
+  lr_move_fixture
+  run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
+  [ "$status" -eq 0 ]
+  painted | grep -qF "✗ 88e2c2b1 moved next4→next3, relaunch failed · ▶ lr-fleet --one 88e2c2b1" || { painted; false; }
+  ! painted | grep -q 'CLOSED CLEANLY' || { painted; false; }
+  ! painted | grep -q 'safe to close' || { painted; false; }
+  painted | grep -q '(claude3)' || { painted; false; }
+  ! painted | grep -q 'claude4' || { painted; false; }
+  painted | grep -q 'last close verdict: no'          # read from the FULL transcript, not the stub
+  # it is never handed to the closer, and it is queued exactly once for lr's poller
+  [ ! -s "$T/closed.txt" ] || { cat "$T/closed.txt"; false; }
+  jq -e --arg d "$DST" '.cause == "stranded" and .mode == "recover" and .config_dir == $d and .pane == "330"' "$T/lr/requests/$SID.cc-lr.json"
+}
+
+@test "STRANDED: a repaint queues nothing twice, and a parked record or live run claim means nothing is queued" {
+  lr_move_fixture
+  run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
+  at1=$(jq -r .at "$T/lr/requests/$SID.cc-lr.json"); : > "$T/dev/ttys099"
+  run verdict_with "$HOOK" CRASH external-sigterm 143 15
+  [ "$(jq -r .at "$T/lr/requests/$SID.cc-lr.json")" = "$at1" ]
+  [ "$(find "$T/lr/requests" -name "$SID*" | wc -l | tr -d ' ')" = 1 ]
+  painted | grep -q 'Queued for the limit-recover poller'
+  rm -rf "$T/lr/requests"; mkdir -p "$T/lr/parked"; printf '{}\n' > "$T/lr/parked/$SID.json"; : > "$T/dev/ttys099"
+  run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
+  [ ! -e "$T/lr/requests/$SID.cc-lr.json" ]
+  painted | grep -q 'already holds it (a parked record)'
+}
+
+@test "K6: the same move with a LIVE copy cc-find shows in another pane is MOVED, and only then handed to the closer" {
+  lr_move_fixture
+  printf '%s\t442\tnext3\t%s\t/x\tLIVE\tLEAD\n' "$SID" "$DST" > "$T/find.out"
+  run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
+  painted | grep -qF "✅ 88e2c2b1 moved next4→next3 and runs in pane 442" || { painted; false; }
+  [ ! -e "$T/lr/requests/$SID.cc-lr.json" ]
+  grep -qx -- '--pane 330 --dry-run' "$T/closed.txt"
+  grep -qx -- '--pane 330' "$T/closed.txt"
+}
+
+@test "K6 CONTROL: a LIVE copy in THIS pane is not a copy elsewhere — still STRANDED" {
+  lr_move_fixture
+  printf '%s\t330\tnext3\t%s\t/x\tLIVE\tLEAD\n' "$SID" "$DST" > "$T/find.out"
+  run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
+  painted | grep -q 'relaunch failed' || { painted; false; }
+}
+
+@test "the closer decides before the paint: when --dry-run refuses, its reason replaces 'safe to close' and no close follows" {
+  rm -f "$T/cwd/scratch.txt"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\ncase "$*" in *--dry-run*) echo "pane 330: REFUSED — nothing says session 88e2c2b1 meant to end"; exit 1 ;; esac\necho closed\n' "$T/closed.txt" > "$CC_PANE_CLOSE_BIN"
+  run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
+  ! painted | grep -q 'safe to close' || { painted; false; }
+  painted | grep -q 'the closer keeps this pane: nothing says session 88e2c2b1 meant to end' || { painted; false; }
+  [ "$(cat "$T/closed.txt")" = "--pane 330 --dry-run" ] || { cat "$T/closed.txt"; false; }
+}
+
+@test "CONTROL: a lone fault record with no tombstone, lock or STRANDED verdict changes nothing" {
+  mkdir -p "$T/lr/faults"; export LR_STATE_DIR="$T/lr"
+  printf '{"sid":"%s","first_seen":%s,"claim":{"by":"/x/.claude-secondary"}}\n' "$SID" "$(date +%s)" > "$T/lr/faults/$SID.json"
+  rm -f "$T/cwd/scratch.txt"
+  run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
+  painted | grep -q 'CLOSED CLEANLY'
+  [ ! -d "$T/lr/requests" ]
 }
