@@ -66,6 +66,17 @@ field() { sed -n "s/^$2=//p" "$S/$1"; }
   [ "$(field session.start size)" = 10 ]     # the FIRST writer's record stands
 }
 
+@test "session.start written with no transcript path is upgraded by the first writer that has one" {
+  TP=""; probe 'exit 0'; bash "$BATS_TEST_TMPDIR/h.sh"
+  [ -z "$(field session.start transcript_path)" ]
+  TP="$BATS_TEST_TMPDIR/t.jsonl"; printf '0123' > "$TP"; probe 'exit 0'; bash "$BATS_TEST_TMPDIR/h.sh"
+  [ "$(field session.start transcript_path)" = "$TP" ]
+  [ "$(field session.start size)" = 4 ]
+  printf 'more' >> "$TP"; TP="$BATS_TEST_TMPDIR/other.jsonl"; probe 'exit 0'; bash "$BATS_TEST_TMPDIR/h.sh"
+  [ "$(field session.start transcript_path)" = "$BATS_TEST_TMPDIR/t.jsonl" ]   # a real path is never replaced
+  [ "$(field session.start size)" = 4 ]
+}
+
 @test "CC_STARTUP_SENTINEL=0 writes nothing; an unsafe sid writes nothing" {
   probe 'exit 0'
   CC_STARTUP_SENTINEL=0 bash "$BATS_TEST_TMPDIR/h.sh"

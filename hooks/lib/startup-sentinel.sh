@@ -34,18 +34,33 @@ ss_begin() {
   local _notrap=0
   [ "${1:-}" = --no-trap ] && { _notrap=1; shift; }
   _SS_HOOK="${1:-}"; _SS_TMO="${2:-5000}"
-  local _sid="${3:-}" _tp="${4:-}" _sz=0 _opts
+  local _sid="${3:-}" _tp="${4:-}" _sz=0 _opts _need _k _v
   case "$_SS_HOOK" in ''|*[!0-9A-Za-z_-]*) return 0 ;; esac
   case "$_sid" in ''|*[!0-9A-Za-z-]*) return 0 ;; esac
   case "$_SS_TMO" in ''|*[!0-9]*) _SS_TMO=5000 ;; esac
   _SS_DIR="${CC_STARTUP_HEALTH_DIR:-$HOME/.claude/state/startup-health}/$_sid"
   [ -d "$_SS_DIR" ] || mkdir -p "$_SS_DIR" 2>/dev/null || return 0
   : > "$_SS_DIR/$_SS_HOOK.start" 2>/dev/null || return 0
-  if [ ! -e "$_SS_DIR/session.start" ]; then
+  # First writer wins — except that a record with NO transcript path (a writer whose payload parse
+  # does not read it) is upgraded by the first writer that has one, or the reader would be left
+  # without the path for good. One builtin read, only when a record exists and we hold a path.
+  _need=0
+  if [ ! -e "$_SS_DIR/session.start" ]; then _need=1
+  elif [ -n "$_tp" ]; then
+    _need=2
+    while IFS='=' read -r _k _v; do
+      [ "$_k" = transcript_path ] && [ -n "$_v" ] && _need=0
+    done < "$_SS_DIR/session.start"
+  fi
+  if [ "$_need" != 0 ]; then
     [ -n "$_tp" ] && [ -f "$_tp" ] && _sz="$(stat -f %z "$_tp" 2>/dev/null || echo 0)"
-    _opts="$-"; set -C
-    printf 'transcript_path=%s\nsize=%s\n' "$_tp" "$_sz" > "$_SS_DIR/session.start" 2>/dev/null || true
-    case "$_opts" in *C*) ;; *) set +C ;; esac
+    if [ "$_need" = 1 ]; then
+      _opts="$-"; set -C
+      printf 'transcript_path=%s\nsize=%s\n' "$_tp" "$_sz" > "$_SS_DIR/session.start" 2>/dev/null || true
+      case "$_opts" in *C*) ;; *) set +C ;; esac
+    else
+      printf 'transcript_path=%s\nsize=%s\n' "$_tp" "$_sz" > "$_SS_DIR/session.start" 2>/dev/null || true
+    fi
   fi
   _SS_OWED=0; _SS_ON=1
   if [ "$_notrap" = 0 ]; then
