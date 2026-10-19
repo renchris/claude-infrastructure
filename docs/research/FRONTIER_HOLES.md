@@ -12,7 +12,12 @@ overwrite history. Statuses: `OPEN` → `IN-PANEL <date>` → `CONFIRMED-BY-PANE
 _(none — H-INERT-1 CONFIRMED-BY-PANEL 2026-07-30 and moved to `## Resolved`; its capture record is
 retained verbatim under `## Resolved` so the pre-panel framing is never rewritten.)_
 
-### H-CLOSE-1 · What makes finished research (or an honest "❌ no — X remains") produce the next action instead of a stop? — IN-PANEL 2026-10-19 (2 Fable panelists, inline; lead session ce527c7b)
+### H-CLOSE-1 · What makes finished research (or an honest "❌ no — X remains") produce the next action instead of a stop? — SOLVED-PATH-KNOWN 2026-10-19 (2 Fable panelists, inline; lead session ce527c7b)
+
+- **Verdict** (`docs/research/close-behavior-2026-10-18/round3-frontier-panel.md`): the leak is the yes-with-follow-on
+  close, not the honest no (a no-close names its driver ~95% of the time, measured over ~40 sessions). Path: the
+  landed C5 rule change, then — if the 7-day post-land census shows the shape survives — a store-act disposition
+  (a non-✅ close must end with `set`, a fire, a decision or a why-not-now row). Verdict-no latch refuted.
 
 - **Wall.** Two research rounds (46 agents, `docs/research/close-behavior-2026-10-18/`) found every prose
   detector of undriven work at 4-25% precision and the one exact signal (a doc declaration) unprompted in the
