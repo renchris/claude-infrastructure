@@ -622,3 +622,120 @@ ssd_child() { printf '#!/bin/bash\n%s\n' "$2" > "$H/$1"; chmod +x "$H/$1"; }
   grep -qF '⚠ startup: session-start-dispatch may not have delivered (cancelled by Claude Code; still running: hang.sh) — confirming' "$(ALERTS)"
   [ -L "$S/outbox.txt" ]
 }
+
+# ── 5.4 stamp only after proof of delivery (hooks/lib/startup-proof.sh + sh_settle) ───────────────
+# A delivered-hook record in the transcript, the shape Claude Code writes for SessionStart output.
+delivered_rec() { # <attachment type> <text>
+  jq -nc --arg t "$1" --arg c "$2" '{type:"attachment",attachment:{type:$t,hookName:"SessionStart:startup",hookEvent:"SessionStart",content:$c},timestamp:"2026-10-18T12:00:07.000Z"}'
+}
+settle() { bash -c '. "$1"; sh_settle "$2"' _ "$(RLIB)" "$S"; }
+scanned() { mkdir -p "$S"; : > "$S/cancels.tsv"; }        # this start epoch is scanned (no .start yet)
+
+rcy_packet() {
+  export CC_RECYCLE_FAILED_DIR="$BATS_TEST_TMPDIR/recycle-failed"; mkdir -p "$CC_RECYCLE_FAILED_DIR"
+  TOK="recycle-recovery:$SID:1791000000"; PKT="$CC_RECYCLE_FAILED_DIR/$SID.json"
+  jq -n --arg tok "$TOK" '{failed_at:"2026-10-09T05:31:00Z", token:$tok}' > "$PKT"
+  printf 'Your self-recycle FAILED. token %s\n' "$TOK" > "$CC_RECYCLE_FAILED_DIR/$SID.prompt.md"
+}
+rcy_hook() {
+  printf '{"session_id":"%s","hook_event_name":"SessionStart","source":"resume"}' "$SID" \
+    | /bin/bash "$REPO/hooks/recycle-failed-inject.sh"
+}
+
+@test "5.4 recycle order: printed, NOT stamped at print; the transcript's record of it stamps injected_at" {
+  rcy_packet
+  run rcy_hook
+  printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext' | grep -qF "$TOK"
+  [ -z "$(jq -r '.injected_at // empty' "$PKT")" ]
+  [ -f "$S/proof.recycle-order" ]
+  TP="$BATS_TEST_TMPDIR/t.jsonl"; mksession "$TP"
+  { delivered_rec hook_additional_context "RECYCLE FAILED … recovery token $TOK"; user_rec; } > "$TP"
+  scanned; settle
+  [ -n "$(jq -r '.injected_at // empty' "$PKT")" ]
+  [ -f "$S/settled.recycle-order" ]
+}
+
+@test "5.4 recycle order lost at startup: the front injects it ONCE, and that turn's record proves it" {
+  rcy_packet; rcy_hook >/dev/null
+  TP="$BATS_TEST_TMPDIR/t.jsonl"; mksession "$TP"; user_rec > "$TP"
+  scanned; settle
+  [ -f "$S/fallback.recycle-order" ]
+  [ -z "$(jq -r '.injected_at // empty' "$PKT")" ]
+  run front
+  ctx "$output" | grep -qF "$TOK"
+  sys "$output" | grep -qF 'recycle-order did not reach this session at startup — delivered now'
+  [ -f "$S/fallback.recycle-order.sent" ]
+  run front; [ -z "$(ctx "$output")" ]                         # once
+  jq -nc --arg c "$(cat "$S/fallback.recycle-order.sent")" \
+    '{type:"attachment",attachment:{type:"hook_additional_context",hookEvent:"UserPromptSubmit",content:$c}}' >> "$TP"
+  settle
+  [ -n "$(jq -r '.injected_at // empty' "$PKT")" ]
+}
+
+@test "5.4 a request whose start ended without proof (no fallback) runs no action and is unproven" {
+  TP="$BATS_TEST_TMPDIR/t.jsonl"; mksession "$TP"; user_rec > "$TP"
+  bash -c '. "$1"; sp_request "$2" probe "NEEDLE-ZZ" touch "$3"' _ "$REPO/hooks/lib/startup-proof.sh" "$SID" "$BATS_TEST_TMPDIR/latch"
+  settle; [ -f "$S/proof.probe" ]                              # not scanned yet: undecided
+  scanned; settle
+  [ -f "$S/unproven.probe" ]
+  [ ! -e "$BATS_TEST_TMPDIR/latch" ]
+}
+
+@test "5.4 CC_STARTUP_PROOF=0 restores print-then-stamp" {
+  rcy_packet
+  run env CC_STARTUP_PROOF=0 /bin/bash -c "printf '{\"session_id\":\"$SID\"}' | /bin/bash '$REPO/hooks/recycle-failed-inject.sh'"
+  [ -n "$(jq -r '.injected_at // empty' "$PKT")" ]
+  [ ! -e "$S/proof.recycle-order" ]
+}
+
+@test "5.4 desk brief: the fired row waits for proof; unproven writes failed/not-delivered instead" {
+  mkdir -p "$BATS_TEST_TMPDIR/roles"; echo p1 > "$BATS_TEST_TMPDIR/roles/desk"
+  printf 'brief body\n' > "$BATS_TEST_TMPDIR/brief.md"
+  IDLF="$BATS_TEST_TMPDIR/idl.jsonl"
+  run bash -c "printf '{\"session_id\":\"$SID\"}' | DESK_BRIEF_IDL='$IDLF' CC_ROLES_DIR='$BATS_TEST_TMPDIR/roles' DESK_BRIEF_PANE=p1 DESK_BRIEF_FILE='$BATS_TEST_TMPDIR/brief.md' bash '$REPO/hooks/desk-brief-inject.sh'"
+  [ "$status" -eq 0 ]
+  [ -z "$(grep '"fired"' "$IDLF" 2>/dev/null)" ]                # no fired row at print
+  TP="$BATS_TEST_TMPDIR/t.jsonl"; mksession "$TP"
+  { delivered_rec hook_additional_context "You hold the machine-wide DESK role (…)"; user_rec; } > "$TP"
+  scanned; settle
+  [ "$(jq -r 'select(.disposition == "fired") | .reason + " " + .pane + " " + .hook' "$IDLF")" = "injected p1 desk-brief-inject" ]
+}
+
+@test "5.4 deadline banner: the latch is written on proof, not at print" {
+  export DL_DIR="$BATS_TEST_TMPDIR/deadlines"; mkdir -p "$DL_DIR/.state" "$BATS_TEST_TMPDIR/work"
+  export CLAUDE_CODE_ENTRYPOINT=cli CC_PANE_ID=pane-fixture CC_FIRED_DIR="$BATS_TEST_TMPDIR/fired"
+  printf '⏰ Pay the fixture bill — tomorrow\n' > "$DL_DIR/.state/banner.txt"
+  printf 'BOARDBODY\n' > "$CC_ACCOUNTS_BOARD"
+  run bash -c "printf '{\"source\":\"startup\",\"cwd\":\"$BATS_TEST_TMPDIR/work\",\"session_id\":\"$SID\"}' | '$REPO/hooks/accounts-board.sh'"
+  printf '%s' "$output" | jq -r .systemMessage | grep -qF 'Pay the fixture bill'
+  [ ! -e "$DL_DIR/.state/banner-latch" ]
+  TP="$BATS_TEST_TMPDIR/t.jsonl"; mksession "$TP"
+  { delivered_rec hook_system_message "⏰ Pay the fixture bill — tomorrow
+BOARDBODY"; user_rec; } > "$TP"
+  scanned; settle
+  [[ "$(cat "$DL_DIR/.state/banner-latch")" == "$(date +%F) "* ]]
+}
+
+@test "5.4 goal nudge at SessionStart: the once-marker waits for proof" {
+  export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mbox"; mkdir -p "$CC_MAILBOX_DIR"
+  GT="$BATS_TEST_TMPDIR/goal.jsonl"
+  printf '{"type":"attachment","attachment":{"type":"goal_status","met":false,"sentinel":true,"condition":"finish"}}\n' > "$GT"
+  gd() { printf '{"transcript_path":"%s","session_id":"%s"}' "$GT" "$SID" | ITERM_SESSION_ID="w0t0p0:AAAAAAAA-1111-2222-3333-444444444444" bash "$REPO/hooks/mailbox-drain.sh" session-start; }
+  run gd; printf '%s' "$output" | grep -qF 'do NOT park the ordinary 4-hour watcher'
+  [ -z "$(ls -A "$CC_MAILBOX_DIR/.goalnudge" 2>/dev/null)" ]
+  run gd; printf '%s' "$output" | grep -qF 'do NOT park'      # unproven: said again
+  TP="$BATS_TEST_TMPDIR/t.jsonl"; mksession "$TP"
+  { delivered_rec hook_additional_context "$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"; user_rec; } > "$TP"
+  scanned; settle
+  [ -n "$(ls -A "$CC_MAILBOX_DIR/.goalnudge" 2>/dev/null)" ]
+}
+
+@test "5.4 an idl request whose start ended without proof writes failed / not-delivered, never fired" {
+  IDLF="$BATS_TEST_TMPDIR/idl.jsonl"
+  TP="$BATS_TEST_TMPDIR/t.jsonl"; mksession "$TP"; user_rec > "$TP"
+  bash -c '. "$1"; sp_request "$2" desk-brief "You hold the machine-wide DESK role" idl "$3" desk-brief-inject "{\"pane\":\"p1\"}"' \
+    _ "$REPO/hooks/lib/startup-proof.sh" "$SID" "$IDLF"
+  scanned; settle
+  [ "$(jq -r '.disposition + " " + .reason + " " + .pane' "$IDLF")" = "failed not-delivered p1" ]
+  [ -f "$S/unproven.desk-brief" ]
+}

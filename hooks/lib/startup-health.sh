@@ -197,8 +197,8 @@ sh_worker() {
   [ "${CC_STARTUP_HEALTH:-1}" = 0 ] && return 0
   sh_dir "${1:-}" || return 0
   [ -d "$SH_D" ] || return 0
-  [ -e "$SH_D/resolved" ] && sh_current "$SH_D" && return 0
-  sh_current "$SH_D" && return 0
+  # A scanned epoch still settles its open proof requests (unit 5.4) — a glob, then nothing.
+  if sh_current "$SH_D"; then sh_settle "$SH_D" "$tp"; return 0; fi
   if [ -f "$SH_D/session.start" ]; then
     while IFS='=' read -r k v; do [ "$k" = transcript_path ] && [ -n "$v" ] && tp="$v"; done < "$SH_D/session.start"
   fi
@@ -209,6 +209,100 @@ sh_worker() {
     sleep 1; i=$(( i + 1 ))
   done
   sh_write "$SH_D" "$tp"
+  sh_settle "$SH_D" "$tp"
+}
+
+# ── proof of delivery (README §5 unit 5.4, §2 row #21) ──────────────────────────────────────────────
+# hooks/lib/startup-proof.sh lets a SessionStart hook FILE "proof.<name>" instead of stamping "I
+# delivered this" at print. sh_settle reads the transcript's delivered hook output and only then
+# performs the request's action. States, one file each, so a reader needs no parse:
+#   proof.<name>      open
+#   settled.<name>    proven; the action ran
+#   unproven.<name>   the start ended without it; the action did NOT run, so the hook says it again
+#                     at its next start (or, with a fallback, the front already said it once)
+#   fallback.<name>   text the prompt front injects once as additionalContext → fallback.<name>.sent
+SH_PROOF_FALLBACK_S=600   # a fallback that has not shown up in the transcript after this is unproven
+
+# sh_delivered <transcript> <offset> <needle> → 0 when <needle> is in delivered hook output past <offset>.
+sh_delivered() {
+  tail -c +"$(( $2 + 1 ))" "$1" 2>/dev/null \
+    | LC_ALL=C grep -F -e '"hook_success"' -e '"hook_system_message"' -e '"hook_additional_context"' \
+    | jq -R -e --arg n "$3" '
+        fromjson? | select(type == "object") | .attachment? // empty
+        | select((.type // "") | IN("hook_success", "hook_system_message", "hook_additional_context"))
+        | [(.stdout // ""), (.content // "")] | map(tostring) | join("\n") | select(contains($n))' \
+      >/dev/null 2>&1
+}
+
+sh_proof_act() { # <dir> <name> <action> <a1> <a2> <a3> <proven 0|1>
+  local tmp now
+  now="$(date -u +%FT%TZ 2>/dev/null)"
+  case "$3" in
+    touch) [ "$7" = 1 ] && { mkdir -p "${4%/*}" 2>/dev/null; : > "$4"; } ;;
+    write) [ "$7" = 1 ] && { mkdir -p "${4%/*}" 2>/dev/null; printf '%s\n' "$5" > "$4.$$" && mv -f "$4.$$" "$4"; } ;;
+    jqset)
+      [ "$7" = 1 ] && [ -f "$4" ] || return 0
+      case "$5" in ''|*[!A-Za-z0-9_]*) return 0 ;; esac
+      tmp="$4.tmp.$$"
+      if jq --arg k "$5" --arg v "$now" '.[$k] = $v' "$4" > "$tmp" 2>/dev/null; then mv -f "$tmp" "$4"
+      else rm -f "$tmp"; fi ;;
+    idl)
+      [ -n "$4" ] && [ -n "$5" ] || return 0
+      mkdir -p "${4%/*}" 2>/dev/null
+      jq -cn --arg ts "$now" --arg hook "$5" --arg sid "${1##*/}" \
+        --arg d "$([ "$7" = 1 ] && echo fired || echo failed)" \
+        --arg r "$([ "$7" = 1 ] && echo injected || echo not-delivered)" --arg x "${6:-}" \
+        '{ts:$ts,hook:$hook,sid:$sid,disposition:$d,reason:$r} + (($x | fromjson?) // {})' >> "$4" 2>/dev/null ;;
+  esac
+  return 0
+}
+
+# sh_settle <dir> [<fallback transcript path>] — settle every open proof request. Off the prompt path
+# (session-beat's detached worker, and the fold). A request is decided once its start has been
+# scanned (cancels.tsv current) AND the transcript holds a user record past the offset, i.e. that
+# start's hook records are flushed.
+sh_settle() {
+  local d="$1" tp="" size=0 k v f name needle action a1 a2 a3 fb flushed=0 m now any=0
+  for f in "$d"/proof.*; do [ -e "$f" ] && { any=1; break; }; done
+  [ "$any" = 1 ] || return 0
+  if [ -f "$d/session.start" ]; then
+    while IFS='=' read -r k v; do
+      case "$k" in transcript_path) tp="$v" ;; size) size="$v" ;; esac
+    done < "$d/session.start"
+  fi
+  [ -n "$tp" ] || tp="${2:-}"
+  [ -n "$tp" ] && [ -f "$tp" ] || return 0
+  case "$size" in ''|*[!0-9]*) size=0 ;; esac
+  [ "$(stat -f %z "$tp" 2>/dev/null || echo 0)" -lt "$size" ] && size=0
+  sh_current "$d" && tail -c +"$(( size + 1 ))" "$tp" 2>/dev/null | LC_ALL=C grep -qF '"type":"user"' && flushed=1
+  now="$(date +%s)"
+  for f in "$d"/proof.*; do
+    [ -f "$f" ] || continue
+    name="${f##*/proof.}"
+    case "$name" in *.*) continue ;; esac            # a writer's temp file
+    needle=""; action=""; a1=""; a2=""; a3=""; fb=""
+    while IFS='=' read -r k v; do
+      case "$k" in needle) needle="$v" ;; action) action="$v" ;; arg1) a1="$v" ;; arg2) a2="$v" ;;
+                   arg3) a3="$v" ;; fallback) fb="$v" ;; esac
+    done < "$f"
+    [ -n "$needle" ] || { mv -f "$f" "$d/unproven.$name"; continue; }
+    if sh_delivered "$tp" "$size" "$needle"; then
+      sh_proof_act "$d" "$name" "$action" "$a1" "$a2" "$a3" 1
+      mv -f "$f" "$d/settled.$name"; rm -f "$d/fallback.$name"
+      continue
+    fi
+    [ "$flushed" = 1 ] || continue
+    if [ -n "$fb" ] && [ -s "$fb" ] && [ ! -e "$d/fallback.$name.sent" ]; then
+      [ -e "$d/fallback.$name" ] || { cp "$fb" "$d/.fallback.$name.$$" && mv -f "$d/.fallback.$name.$$" "$d/fallback.$name"; }
+      continue
+    fi
+    if [ -e "$d/fallback.$name.sent" ]; then
+      m="$(stat -f %m "$d/fallback.$name.sent" 2>/dev/null || echo 0)"
+      [ $(( now - m )) -lt "$SH_PROOF_FALLBACK_S" ] && continue
+    fi
+    sh_proof_act "$d" "$name" "$action" "$a1" "$a2" "$a3" 0
+    mv -f "$f" "$d/unproven.$name"
+  done
 }
 
 # ── prompt front (README §5 unit 3.2) — runs on EVERY prompt, so builtins only until there is news ──
@@ -271,8 +365,10 @@ sh_front() {
   if [ -e "$d/resolved" ]; then
     open=0
     for f in "$d"/*.start; do [ "$f" -nt "$d/resolved" ] && { open=1; break; }; done
+    for f in "$d"/fallback.*; do case "$f" in *.sent) ;; *) [ -e "$f" ] && open=1 ;; esac; done
     [ "$open" = 0 ] && return 0
   fi
+  sh_fallbacks "$d"
   sh_current "$d" && cur=1
   open=0
   # 1. Own hooks with a sentinel and no verdict for this epoch yet: the possible-loss line, once.
@@ -340,6 +436,23 @@ sh_front() {
     [ -s "${d%/*}/alerts/$1" ] && : > "${d%/*}/alerts/$1" 2>/dev/null
   fi
   return 0
+}
+
+# sh_fallbacks <dir> — the UPS fallback of unit 5.4: a proof request whose needle never reached the
+# transcript at startup has its text injected here, ONCE (fallback.<name> → fallback.<name>.sent), and
+# the worker then proves it from this turn's own hook record. Builtin reads; one mv per injection.
+sh_fallbacks() {
+  local f name l body
+  for f in "$1"/fallback.*; do
+    [ -f "$f" ] || continue
+    case "$f" in *.sent) continue ;; esac
+    name="${f##*/fallback.}"; body=""
+    while IFS= read -r l || [ -n "$l" ]; do body="$body$l"$'\n'; done < "$f"
+    mv -f "$f" "$f.sent" 2>/dev/null || continue
+    [ -n "$body" ] || continue
+    if [ -n "$SH_CTX" ]; then SH_CTX="$SH_CTX"$'\n\n'"$body"; else SH_CTX="$body"; fi
+    sh_add "⚠ startup: $name did not reach this session at startup — delivered now"
+  done
 }
 
 sh_json_esc() { # <string> → SH_J, JSON-string-safe (the worker already blanked control bytes)

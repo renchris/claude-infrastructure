@@ -46,10 +46,27 @@ injected="${rest%%	*}"; token="${rest#*	}"
 [ "${CC_RECYCLE_ATTACHED_TOKEN:-}" = "$token" ] && exit 0
 
 # Print FIRST, stamp after (see the header): a lost stamp repeats the order, a lost print loses it.
-ctx="RECYCLE FAILED — this session's self-recycle did not complete, and it was resumed without the recovery prompt. Delivered once by SessionStart (hooks/recycle-failed-inject.sh; packet $pkt). Act on it before anything else:
+ctx="RECYCLE FAILED — this session's self-recycle did not complete, and it was resumed without the recovery prompt. Delivered once by SessionStart (hooks/recycle-failed-inject.sh; packet $pkt; recovery token $token). Act on it before anything else:
 
 $(cat "$prompt")"
 jq -nc --arg c "$ctx" '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $c}}' || exit 0
+
+# STAMP ONLY AFTER PROOF (docs/research/startup-hooks-2026-10-18/README.md §2 #21, §5 unit 5.4). A
+# printed order is not a delivered one: the dispatcher this child runs under can be cancelled after
+# the print, and its output is then dropped whole. So file a proof request instead of stamping:
+# session-beat's prompt worker stamps injected_at once the transcript's delivered hook output holds
+# the token, and if the start ended without it the prompt front injects the order once (the UPS
+# fallback) and the worker proves it from that turn. No lib, no writable state dir, or
+# CC_STARTUP_PROOF=0: print-then-stamp below, as before.
+_spl="${BASH_SOURCE[0]%/*}/lib/startup-proof.sh"
+# shellcheck source=lib/startup-proof.sh disable=SC1091  # runtime-resolved beside this file
+if [ -f "$_spl" ] && . "$_spl" 2>/dev/null; then
+  _spd="${CC_STARTUP_HEALTH_DIR:-$HOME/.claude/state/startup-health}/$sid"
+  if mkdir -p "$_spd" 2>/dev/null && printf '%s\n' "$ctx" > "$_spd/recycle-order.txt" 2>/dev/null \
+     && SP_FALLBACK="$_spd/recycle-order.txt" sp_request "$sid" recycle-order "$token" jqset "$pkt" injected_at; then
+    exit 0
+  fi
+fi
 
 tmp="$pkt.tmp.$$"
 if { jq --arg v "$(date -u +%FT%TZ)" '.injected_at = $v' "$pkt" > "$tmp"; } 2>/dev/null; then

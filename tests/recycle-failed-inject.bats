@@ -10,6 +10,10 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export CC_RECYCLE_FAILED_DIR="$BATS_TEST_TMPDIR/recycle-failed"; mkdir -p "$CC_RECYCLE_FAILED_DIR"
   unset CC_RECYCLE_ATTACHED_TOKEN
+  # These cases pin the print-then-stamp contract, which CC_STARTUP_PROOF=0 keeps. The default path
+  # files a proof request instead and stamps on the transcript's proof (README §5 unit 5.4); its cases
+  # live in tests/startup-health.bats beside the reader that settles them.
+  export CC_STARTUP_PROOF=0
   SID=6defb493-0000-4000-8000-000000000044
   TOK="recycle-recovery:$SID:1791000000"
   PKT="$CC_RECYCLE_FAILED_DIR/$SID.json"

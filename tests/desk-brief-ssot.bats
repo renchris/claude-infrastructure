@@ -11,6 +11,9 @@
 # role → get the brief, mechanically, on every start/resume/compact.
 
 setup() {
+  # The IDL cases below pin the row written at print, which CC_STARTUP_PROOF=0 keeps; by default the
+  # `fired` row waits for the transcript's proof (README §5 unit 5.4, tests/startup-health.bats).
+  export CC_STARTUP_PROOF=0
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   BRIEF="$REPO/docs/templates/desk-boot-brief.md"
   HOOK="$REPO/hooks/desk-brief-inject.sh"

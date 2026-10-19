@@ -133,7 +133,16 @@ if _out="$(jq -nc --arg c "$framed" \
 then
   # The POSITIVE CONTROL for the whole record stream: without a `fired` row, an all-abstain table is
   # ambiguous between "the desk is elsewhere" and "this hook can no longer inject anything".
-  log_idl fired "injected" "$(jq -cn --arg r "$ROLE" --arg p "$pane" '{role:$r,pane:$p}' 2>/dev/null || echo '{}')"
+  # It claims DELIVERY, so it is written on proof (README §5 unit 5.4): a proof request on the brief's
+  # opening line, which session-beat's worker turns into this same `fired` row once the transcript
+  # holds it — or into `failed` / not-delivered when the start ended without it. No lib, no session
+  # id or CC_STARTUP_PROOF=0: the row is written now, as before.
+  _x="$(jq -cn --arg r "$ROLE" --arg p "$pane" '{role:$r,pane:$p}' 2>/dev/null || echo '{}')"
+  # shellcheck source=lib/startup-proof.sh disable=SC1091  # runtime-resolved beside this file
+  if ! { [ -f "$SCRIPT_DIR/lib/startup-proof.sh" ] && . "$SCRIPT_DIR/lib/startup-proof.sh" 2>/dev/null \
+         && sp_request "$SID" desk-brief "You hold the machine-wide DESK role" idl "$IDL" desk-brief-inject "$_x"; }; then
+    log_idl fired "injected" "$_x"
+  fi
 else
   log_idl failed "render-failed"
 fi

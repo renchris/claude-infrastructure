@@ -215,7 +215,19 @@ dl_banner() {
   cur="$(date +%F) $(shasum < "$f" 2>/dev/null | cut -c1-16)"
   latch="${f%/*}/banner-latch"
   [ "$(cat "$latch" 2>/dev/null)" = "$cur" ] && return 0
-  printf '%s\n' "$cur" > "$latch" 2>/dev/null || true
+  # The latch is spent only on PROOF that the banner reached the session (README §5 unit 5.4): this
+  # child's output rides the dispatcher's, which can be cancelled after this line. With a session id
+  # and hooks/lib/startup-proof.sh, file the latch write as a proof request on the banner's first
+  # line; session-beat's worker writes the latch once the transcript holds it. Otherwise latch now.
+  local first sid spl
+  first="$(sed -n '/[^[:space:]]/{p;q;}' "$f" 2>/dev/null)"
+  sid="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)"
+  spl="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lib/startup-proof.sh"
+  # shellcheck source=lib/startup-proof.sh disable=SC1091  # runtime-resolved beside this file
+  if ! { [ -n "$first" ] && [ -f "$spl" ] && . "$spl" 2>/dev/null \
+         && sp_request "$sid" dl-banner "$first" write "$latch" "$cur"; }; then
+    printf '%s\n' "$cur" > "$latch" 2>/dev/null || true
+  fi
   printf '%s\n' "$(cat "$f")"
 }
 

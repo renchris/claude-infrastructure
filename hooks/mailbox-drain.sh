@@ -645,6 +645,16 @@ _gicrumb_stamp() {
 _goalnudge_stamp() {
   _gicrumb_stamp
   [ -n "${_gn_mark:-}" ] && [ "$MODE" != "post-tool" ] || return 0
+  # At SessionStart the once-per-goal marker is touched only on PROOF the nudge reached the session
+  # (README §5 unit 5.4): a cancelled drain's output is dropped whole after this point. The proof
+  # request names the nudge's fixed opening; session-beat's worker touches the marker once the
+  # transcript holds it. No lib (or CC_STARTUP_PROOF=0): stamp now, as every other mode does.
+  if [ "$MODE" = session-start ] && [ -f "$_scd/lib/startup-proof.sh" ]; then
+    # shellcheck source=lib/startup-proof.sh disable=SC1091  # runtime-resolved beside this file
+    . "$_scd/lib/startup-proof.sh" 2>/dev/null \
+      && sp_request "$own_sid" goal-nudge "(a /goal is LIVE, so do NOT park the ordinary 4-hour watcher" touch "$_gn_mark" \
+      && return 0
+  fi
   mkdir -p "${_gn_mark%/*}" 2>/dev/null && : > "$_gn_mark" 2>/dev/null || return 0
   find "${_gn_mark%/*}" -type f -mtime +7 -delete 2>/dev/null || true
 }

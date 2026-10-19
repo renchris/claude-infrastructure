@@ -162,6 +162,7 @@ fold_rows() {
     [ "$ns" -gt 0 ] || continue
     [ $(( now - ns )) -ge "$SETTLE_S" ] || continue
     [ "${FOLD_WRITE:-0}" = 1 ] && ! sh_current "$d" && sh_write "$d" >/dev/null 2>&1
+    [ "${FOLD_WRITE:-0}" = 1 ] && sh_settle "$d" >/dev/null 2>&1   # unit 5.4: panes with no prompt too
     judge_live "$d" > "$j" 2>/dev/null || continue
     if [ "$JUDGE_SRC" = transcript ]; then
       while IFS=$'\t' read -r name v; do
