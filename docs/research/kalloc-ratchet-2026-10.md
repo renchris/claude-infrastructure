@@ -8,6 +8,14 @@ Scope (frozen): correlate the capacity-alarm kalloc series (live + rotated logs,
 reboots) against session count, process churn, coalition counts and top_procs; measure the
 post-reboot slope; name a top driver at r ≥ 0.6, or say inconclusive and stage a root capture.
 
+> **CORRECTED (2026-10-18):** the zone panicked the box on 10-18 at 20,955,520 elements (~20 GiB,
+> the DATA-submap ceiling; 9.89 GB was never a limit). The leak is the steady drift in
+> `data.kalloc.1024 − cred`, not credential churn: every `#!` script exec retains ~1 element
+> (+0.94 ± 0.06 per exec on-box; explicit `/bin/bash script` ≈ 0), matching upstream
+> claude-code#66020. The `cred` correlation below is real but transient and nets to ~0, and
+> `kalloc.48` no longer co-moves (r = 0.09). Full analysis:
+> [`panic-2026-10-18-zone-map-shebang-leak.md`](panic-2026-10-18-zone-map-shebang-leak.md).
+
 ## Answer
 
 1. **Driver, named: kernel credential churn.** Minute by minute, data.kalloc.1024 moves one-for-one
