@@ -58,10 +58,16 @@ dry() { bash "$HF" --prompt-file "$PF" --session-id "w1t0p0:FAKE-UUID" --account
   echo "$output" | grep -qiE "follow: +YES"
 }
 
-@test "explicit --tab WITHOUT --follow is normalized to a background tab" {
+# CONTRACT CHANGED 2026-10-19 (lr-wake 2026-10-18, REPORT §4 Wave E; operator rule: no kitty tabs,
+# ever). This asserted the rewrite to `bg-tab` — the rewrite that turned 22 agent `--tab` fires into
+# hidden tabs of plain shells. --tab is now a DEPRECATED alias: it stays SURFACE=tab, warns, and spawn()
+# places it through scripts/lib/pane-placement.sh (tests/handoff-fire-no-tab.bats).
+@test "explicit --tab WITHOUT --follow is a deprecated alias: warned, never rewritten to a background tab" {
   run dry --tab
   [ "$status" -eq 0 ]
-  echo "$output" | grep -qE "surface: +bg-tab"
+  echo "$output" | grep -qE "surface: +tab"
+  ! echo "$output" | grep -qE "surface: +bg-tab" || false
+  echo "$output" | grep -qF -- "--tab is DEPRECATED"
   echo "$output" | grep -qiE "follow: +no"
 }
 

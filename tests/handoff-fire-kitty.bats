@@ -31,6 +31,8 @@
 # Every assertion is `[ ]`, `run`+status, or `… || false`. `[[ ]]` and `(( ))` are errexit-EXEMPT in
 # bats and are silently DEAD anywhere but a body's last line — that has burned this repo twice.
 
+bats_require_minimum_version 1.5.0   # `run --separate-stderr`
+
 setup() {
   # Pin the fire capacity gate OFF. handoff-fire's capacity_gate() refuses a net-new fire above
   # 2.0/core and this box lives well above that, so an unpinned suite goes red-by-LOAD rather than
@@ -176,8 +178,14 @@ FAKE
   x_tab="$(sed -n '/^as_tab() {/,/^}/p' "$HF")";                   [ -n "$x_tab" ]
   x_sfm="$(sed -n '/^spawn_frontmost() {/,/^}/p' "$HF")";          [ -n "$x_sfm" ]
   x_py="$(sed -n '/^it2py() {/,/^}/p' "$HF")";                     [ -n "$x_py" ]
+  # lr-wake 2026-10-18 (Wave E): as_tab and it2py bgtab no longer open a tab — they PLACE through
+  # scripts/lib/pane-placement.sh (hf_place_pane). The REAL helper and the REAL library, against this
+  # suite's fake kitty; hf_adopt_split_pane stays unextracted, so a failed placement stays a failure.
+  x_place="$(sed -n '/^hf_place_pane() {/,/^}/p' "$HF")";          [ -n "$x_place" ]
+  export CC_PANE_PLACEMENT_LIB="$REPO/scripts/lib/pane-placement.sh" CC_PLACE_LOAD_PER_CORE=0
+  export CC_SPAWN_LOG_FILE="$BATS_TEST_TMPDIR/spawns.jsonl"
   eval "$x_kitty"; eval "$x_kid"; eval "$x_kt"; eval "$x_ktl"; eval "$x_field"
-  eval "$x_write"; eval "$x_ttyq"; eval "$x_tab"; eval "$x_sfm"; eval "$x_py"
+  eval "$x_write"; eval "$x_ttyq"; eval "$x_tab"; eval "$x_sfm"; eval "$x_py"; eval "$x_place"
 
   pin_iterm2
 }
@@ -409,23 +417,27 @@ pin_kitty()  { export KITTY_WINDOW_ID=25; unset IT2_WRAPPER_NO_KITTY; }
 
 # ── as_tab ───────────────────────────────────────────────────────────────────────────────────────
 
-@test "as_tab in kitty creates a TAB matched to the FIRING window and keeps the OK <id> contract" {
+@test "as_tab in kitty PLACES the pane beside the FIRING window — never a tab — and keeps the OK <id> contract" {
+  # lr-wake 2026-10-18: --tab is a deprecated alias; no kitty tabs, ever. The window is still pinned
+  # by id (without --match kitty targets the ACTIVE window — the fire drifts into another window).
   pin_kitty
   export KFAKE_LAUNCH_ID=77
   run as_tab 25
   [ "$status" -eq 0 ]
   [ "$output" = "OK 77" ]
-  grep -q -- '--type=tab' "$KLOG"
-  grep -q -- '--cwd=current' "$KLOG"
-  # Without --match kitty targets the ACTIVE tab — the fire drifts into another window.
-  grep -q -- '--match id:25' "$KLOG"
+  ! grep -q -- '--type=tab' "$KLOG" || false
+  grep -q -- '--location=vsplit' "$KLOG"
+  grep -q -- '--source-window id:25 --cwd=current' "$KLOG"
+  grep -q -- '--match window_id:25' "$KLOG"
 }
 
 @test "as_tab in kitty on a DEAD anchor echoes NOTFOUND and returns 0 (the caller classifies)" {
   # A non-zero return would be read as ERR(n) — a bridge error — instead of a gone window.
   pin_kitty
   export KFAKE_LAUNCH_RC=1
-  run as_tab 25
+  # placement explains a failure on stderr, which spawn() discards (`as_tab … 2>/dev/null`);
+  # the verdict is the stdout line.
+  run --separate-stderr as_tab 25
   [ "$status" -eq 0 ]
   [ "$output" = "NOTFOUND" ]
 }
@@ -433,7 +445,9 @@ pin_kitty()  { export KITTY_WINDOW_ID=25; unset IT2_WRAPPER_NO_KITTY; }
 @test "as_tab in kitty refuses a non-integer launch result rather than landing into it" {
   pin_kitty
   export KFAKE_LAUNCH_ID="Error: no matching window"
-  run as_tab 25
+  # placement explains a failure on stderr, which spawn() discards (`as_tab … 2>/dev/null`);
+  # the verdict is the stdout line.
+  run --separate-stderr as_tab 25
   [ "$status" -eq 0 ]
   [ "$output" = "NOTFOUND" ]
 }
@@ -456,13 +470,14 @@ pin_kitty()  { export KITTY_WINDOW_ID=25; unset IT2_WRAPPER_NO_KITTY; }
 
 # ── spawn_frontmost ──────────────────────────────────────────────────────────────────────────────
 
-@test "spawn_frontmost in kitty creates an OS-WINDOW and echoes the new id" {
+@test "spawn_frontmost in kitty creates a FULLSCREEN OS-WINDOW and echoes the new id" {
   pin_kitty; FOLLOW=1
   export KFAKE_LAUNCH_ID=88
   run spawn_frontmost
   [ "$status" -eq 0 ]
   [ "$output" = "88" ]
   grep -q -- '--type=os-window' "$KLOG"
+  grep -q -- '--os-window-state=fullscreen' "$KLOG"
 }
 
 @test "spawn_frontmost AUTONOMOUS (--follow off) keeps the operator's focus (C1)" {
@@ -533,15 +548,17 @@ pin_kitty()  { export KITTY_WINDOW_ID=25; unset IT2_WRAPPER_NO_KITTY; }
   [ "$status" -eq 5 ]
 }
 
-@test "it2py bgtab in kitty creates a BACKGROUND tab — --keep-focus is the whole point" {
+@test "it2py bgtab in kitty PLACES the pane (never a tab) and never takes the operator's focus" {
+  # lr-wake 2026-10-18: this verb made the 22 hidden tabs of that night. What it promised is kept —
+  # focus never moves (C1) — and the tab is gone.
   pin_kitty
   export KFAKE_LAUNCH_ID=77
   run it2py bgtab 25
   [ "$status" -eq 0 ]
   [ "$output" = "Created new pane: 77" ]       # EXACT format it2_bgtab regexes
-  grep -q -- '--keep-focus' "$KLOG"
-  grep -q -- '--type=tab' "$KLOG"
-  grep -q -- '--match id:25' "$KLOG"
+  grep -q -- '--dont-take-focus' "$KLOG"
+  ! grep -q -- '--type=tab' "$KLOG" || false
+  grep -q -- '--match window_id:25' "$KLOG"
 }
 
 @test "it2py bgtab returns rc 1 when the anchor window is gone" {
@@ -551,11 +568,12 @@ pin_kitty()  { export KITTY_WINDOW_ID=25; unset IT2_WRAPPER_NO_KITTY; }
   [ "$status" -eq 1 ]
 }
 
-@test "it2py bgtab passes a launch EXPIRY through as rc 13 (UNKNOWN), never the retryable rc 1" {
-  # Item 2891c7ba7dd9: kitty queues a launch it could not answer and runs it later, so flattening the
-  # expiry to 1 licensed a retry that became a second session (panes 321-326).
+@test "it2py bgtab passes a placement UNKNOWN through as rc 13, never the retryable rc 1" {
+  # Item 2891c7ba7dd9: kitty queues a launch it could not answer and runs it later, so flattening an
+  # undetermined outcome to 1 licensed a retry that became a second session (panes 321-326). The
+  # verdict now comes from hf_place_pane (13 = a window MAY be running this fire's command).
   pin_kitty
-  export KFAKE_LAUNCH_RC=124
+  hf_place_pane() { return 13; }
   run it2py bgtab 25
   [ "$status" -eq 13 ]
 }

@@ -745,6 +745,8 @@ _fires() {
       research-gate)     printf '%s' "$mapped" | grep -q 'research-gate'     || false ;;
       # RECYCLE_KEYSTROKELESS_DELIVERY §D3 — the --recovery-of idempotency refusal: own denominator.
       recovery-of)       printf '%s' "$mapped" | grep -q 'recovery-of'       || false ;;
+      # lr-wake Wave E — admit-before-spawn's refusal is the capacity-admit library's verdict: own denominator.
+      capacity-admit)    printf '%s' "$mapped" | grep -q 'capacity-admit)'   || false ;;
       *) echo "UNMAPPED refusal reason '$reason' — it will fall into the fail-visible *) arm and be"
          echo "missing from every gate denominator. Add it to _fire_gate_of and to this case."; false ;;
     esac

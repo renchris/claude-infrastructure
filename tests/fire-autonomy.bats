@@ -191,9 +191,12 @@ STUB
 
 @test "dry-run: --cwd fire pre-trusts the cwd in the account config" {
   printf 'x\n' > "$BATS_TEST_TMPDIR/p.txt"
-  run bash "$HF" --prompt-file "$BATS_TEST_TMPDIR/p.txt" --cwd /tmp/somedir --in-place --account next4 --dry-run
+  # The dir must EXIST since lr-wake 2026-10-18 (Wave E): --cwd is refused (exit 2) unless it names an
+  # existing absolute directory, so the fixture creates the one it names.
+  mkdir -p "$BATS_TEST_TMPDIR/somedir"
+  run bash "$HF" --prompt-file "$BATS_TEST_TMPDIR/p.txt" --cwd "$BATS_TEST_TMPDIR/somedir" --in-place --account next4 --dry-run
   [ "$status" -eq 0 ]
-  printf '%s\n' "$output" | grep -qF 'pre-trust: /tmp/somedir → .claude-quaternary'
+  printf '%s\n' "$output" | grep -qF "pre-trust: $BATS_TEST_TMPDIR/somedir → .claude-quaternary"
 }
 
 # The PLAIN recycle — no relocation, no account re-pick — used to be the one fire path that skipped

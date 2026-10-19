@@ -41,6 +41,10 @@ setup() {
   hf_bounded() { "$@"; }
   eval "$(grep -E '^FIRE_PARKED_RE=' "$HF")"
   eval "$(sed -n '/^pane_parked_reason() {/,/^}/p' "$HF")"
+  # The K3 exit-record arm (lr-wake 2026-10-18, Wave E). Extracted, never re-stated.
+  eval "$(sed -n '/^hf_pane_exit_record() {/,/^}/p' "$HF")"
+  export CC_PANE_EXIT_DIR="$BATS_TEST_TMPDIR/pane-exit"; mkdir -p "$CC_PANE_EXIT_DIR"
+  unset HF_SPAWN_T0
   # The FOURTH state's oracle + the enumeration it delegates to. Sourced rather than re-stated: the
   # dialog strings must have exactly one edit site, and tests/pane-modal.bats is what pins them
   # against the shipping binary. Extracting a copy here would let the two drift and both stay green.
@@ -129,6 +133,79 @@ screen() { printf '%s\n' "$@" > "$SCREEN"; }
   run pane_parked_reason "$IT2" "$PANE"
   [ "$status" -eq 0 ]
   printf '%s\n' "$output" | grep -q 'command not found: claude5'
+}
+
+# ── PANE 403 (lr-wake 2026-10-18, RC7; REPORT §4 Wave E) ──────────────────────────────────────────
+# The literal screen (e-input-gibberish.md § Window 403, `kitten @ get-text --match id:403`). The argv
+# transport runs the launch line under `$SHELL -l -i -c`, so zsh prefixed its error `zsh:cd:1:` and the
+# `^zsh: ` anchor missed it; the runner's own verdict line matched nothing either. The fire sat silent
+# for its whole engagement window. RED on origin/main: both cases below returned 1 (not parked).
+pane_403_screen() {
+  screen "cd \$'whose\\n/Users/chrisren/Development/claude-infrastructure' && nocorrect CC_ACCOUNT_PINNED=1 /tmp/lr-rescue/resume-5232121f.sh --effort max \"\$(cat /tmp/handoff-prompt-nb-pdjB25)\"" \
+         'zsh:cd:1: no such file or directory: whose\n/Users/chrisren/Development/claude-infrastructure' \
+         'cc-pane-runner: the fleet launch line exited 1 — keeping a shell for diagnosis/resume' \
+         'chrisren@mac wt-cc-184726-89776 % '
+}
+
+@test "parked: THE LITERAL PANE-403 SCREEN — a zsh -c \`cd\` failure (zsh:cd:1:) is PARKED" {
+  pane_403_screen
+  run pane_parked_reason "$IT2" "$PANE"
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -qF 'zsh:cd:1: no such file or directory: whose'
+}
+
+@test "parked: the cc-pane-runner's own 'exited <rc>' line is PARKED even with the shell's line scrolled away" {
+  screen 'cc-pane-runner: the fleet launch line exited 1 — keeping a shell for diagnosis/resume' 'chrisren@mac ~ % '
+  run pane_parked_reason "$IT2" "$PANE"
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -qF 'exited 1'
+}
+
+@test "NOT parked: the runner's 'exited 0' line is a session that ran and ended, not a refusal" {
+  screen 'cc-pane-runner: claude exited 0 — closing this pane (CC_PANE_CLOSE_ON_EXIT=0 keeps it)'
+  run pane_parked_reason "$IT2" "$PANE"
+  [ "$status" -eq 1 ]
+}
+
+@test "verify_engagement: the pane-403 screen returns 2 (PARKED) and is never re-sent the brief" {
+  pane_403_screen
+  run verify_engagement "$PROJ" "MARK" "$REG" "$PANE" "$IT2" "the brief"
+  [ "$status" -eq 2 ]
+  [ ! -s "$SENDS" ]
+}
+
+# ── THE K3 EXIT RECORD: a launch line that returned without starting claude is PARKED, screen or not ──
+exit_record() { # $1=pane $2=rc $3=claude_started $4=ts
+  printf '{"rc":%s,"claude_started":%s,"launch_sha":"","ts":%s}\n' "$2" "$3" "$4" > "$CC_PANE_EXIT_DIR/$1.json"
+}
+
+@test "parked: an exit record (claude_started=false) written after THIS spawn, with an unreadable screen" {
+  export HF_SPAWN_T0=1000
+  exit_record 403 9 false 1005
+  : > "$SCREEN"
+  run pane_parked_reason "$IT2" 403
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"exited 9 before claude started"* ]] || false
+}
+
+@test "NOT parked: an exit record OLDER than this spawn names somebody else's launch (kitty reuses ids)" {
+  export HF_SPAWN_T0=2000
+  exit_record 403 1 false 1005
+  run pane_parked_reason "$IT2" 403
+  [ "$status" -eq 1 ]
+}
+
+@test "NOT parked: an exit record with claude_started=true stays with the disk oracle" {
+  export HF_SPAWN_T0=1000
+  exit_record 403 1 true 1005
+  run pane_parked_reason "$IT2" 403
+  [ "$status" -eq 1 ]
+}
+
+@test "NOT parked: no spawn epoch (an extracted caller) ⇒ the record arm abstains (fail-open)" {
+  exit_record 403 1 false 1005
+  run pane_parked_reason "$IT2" 403
+  [ "$status" -eq 1 ]
 }
 
 @test "parked: NOMATCH refuses the whole line on an unmatched glob" {

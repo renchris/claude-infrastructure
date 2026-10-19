@@ -127,7 +127,9 @@ SH
 
 @test "stamp-peer: a --cwd that is not a directory is REFUSED" {
   run bash "$HF" stamp-peer --pane 28 --cwd "$BATS_TEST_TMPDIR/no-such-dir"
-  [ "$status" -eq 1 ]
+  # exit 2 since lr-wake 2026-10-18 (Wave E): every directory argument is validated by one helper
+  # (hf_valid_dir_arg — absolute, no control characters, existing) and refused with exit 2.
+  [ "$status" -eq 2 ]
   # Assert the SPECIFIC refusal, not just a nonzero exit and an absent file. Against a tree with no
   # `stamp-peer` subcommand at all those two facts are also true — the argument falls through to the
   # ordinary fire path, which exits 1 and writes no stamp — so the loose form passed on the unfixed

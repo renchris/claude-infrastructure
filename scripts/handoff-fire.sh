@@ -109,10 +109,10 @@
 #                       continuation": RAISE + focus the new surface (⌘D split of the firing pane by
 #                       default) exactly as a manual /handoff wants. WITHOUT --follow the fire is
 #                       AUTONOMOUS and NEVER steals focus (C1, 2026-07-19, the ttys018 mis-inject):
-#                       the default surface becomes a BACKGROUND tab (not a split of the operator's
-#                       active pane), nothing is raised (no `session focus`/order_window_front=True),
-#                       and the operator-focused session is captured before + asserted unchanged after
-#                       the fire (fail-loud on any steal). Only /handoff (operator-initiated) passes it.
+#                       the surface is still the split-right default (VISIBLE), nothing is raised (no
+#                       `session focus`/order_window_front=True), and the operator-focused session is
+#                       captured before + asserted unchanged after the fire (fail-loud on any steal).
+#                       Only /handoff (operator-initiated) passes it.
 #   --split-right       The --follow DEFAULT + the STANDING operator preference for MANUAL handoffs.
 #                       ⌘D-split the FIRING pane — THIS session's own pane, located via $ITERM_SESSION_ID
 #                       — new pane to the RIGHT, SAME TAB, SAME PROFILE, IN THE OPERATOR'S WINDOW.
@@ -121,32 +121,42 @@
 #                       into another window (the "separate window" complaint this default exists to
 #                       kill). An EXPLICIT --split-right WITHOUT --follow still splits, but restores +
 #                       asserts the operator's focus (never raises). AUTONOMOUS fires that pass no
-#                       surface flag get --tab-style background instead (see --follow).
+#                       surface flag get the same split (see --follow).
+#                       ROOM (kitty, lr-wake 2026-10-18): the operator rule is NO TABS and at most
+#                       CC_MAX_PANES_PER_SPACE (4) vertical panes per fullscreen OS window. A split
+#                       whose anchor window is full (or holds more than one tab) is PLACED instead
+#                       by scripts/lib/pane-placement.sh: into the next OS window with room, else a
+#                       NEW FULLSCREEN OS window on its own Space. Never a tab, never a fifth pane.
 #   --split-down        Split the firing pane, new pane below (⌘⇧D). Same it2 path + fail-loud.
-#   --tab               Background tab in the FIRING pane's window (not the current view); fails loud
-#                       rather than drifting to another window. WITH --follow it raises the tab; the
-#                       AUTONOMOUS default already IS a background tab, so an explicit autonomous --tab
-#                       is the same background surface (opt-in for --follow: pair with --surface-reason).
-#   --window            OPT-IN (pair with --surface-reason). Fresh iTerm2 window — the ONLY surface
-#                       that deliberately does NOT anchor to the firing pane. WITHOUT --follow it is
-#                       created without activating iTerm2 (background). A HEADLESS caller (launchd/
-#                       cron) must NOT reach for this: see HEADLESS ANCHOR below.
+#   --tab               DEPRECATED ALIAS (lr-wake 2026-10-18: NO kitty tabs, ever). Accepted so old
+#                       briefs do not break, never honoured as a tab: the pane is placed by the
+#                       placement policy (cc_place_pane — beside the firing pane when its window has
+#                       room, else the next window with room, else a new fullscreen OS window). A
+#                       "splits time out" motive is answered there too: its split retries scale
+#                       with load. Use --split-right, or --window with --surface-reason.
+#   --window            OPT-IN (pair with --surface-reason). A fresh OS window — the ONLY surface
+#                       that deliberately does NOT anchor to the firing pane. Under kitty it opens
+#                       FULLSCREEN (its own Space). WITHOUT --follow it is created without taking
+#                       focus (background). A HEADLESS caller (launchd/cron) must NOT reach for
+#                       this: see HEADLESS ANCHOR below.
 #
 # HEADLESS ANCHOR (2026-07-30). A caller with no --session-id and no $ITERM_SESSION_ID — a launchd
 # or cron caller that can never have a firing pane — no longer has to choose --window. The split
 # surfaces resolve a live anchor themselves (resolve_headless_anchor → the desk role pane → the
 # currently-active session → any live pane), so a headless fire lands as a ⌘D split in the operator's
 # EXISTING window+tab like every other fire. A fresh window is minted only when iTerm2 has no live
-# pane at all, and a would-be sliver (anchor tab already ≥ CC_FIRE_MAX_PANES, default 5 — iTerm2 kills Metal at 6/tab) degrades to
-# a background tab in that SAME window — never to a new one. Kill-switch: CC_FIRE_HEADLESS_ANCHOR=off.
+# pane at all, and a would-be sliver (anchor tab already ≥ CC_FIRE_MAX_PANES, default 5 — iTerm2 kills Metal at 6/tab) overflows
+# to a NEW WINDOW — never to a tab; under kitty it is placed (next window with room, else a new fullscreen OS
+# window) and the kitty room cap is CC_MAX_PANES_PER_SPACE (4). Kill-switch: CC_FIRE_HEADLESS_ANCHOR=off.
 # WHY this is not a re-opening of the app-frontmost drift bug (d662845): an anchor that was NAMED and
 # is gone still FAILS LOUD. Only the never-named case resolves — there is no operator intent to
 # betray there. Between 2026-07-25 and 2026-07-30 the headless callers hardcoded --window and every
 # dispatched session opened its own window (174 in one day), which is the "handoffs open a whole new
 # window instead of a ⌘D split" the operator has reported since 2026-07-03.
-#   --surface-reason R  Why a non-default surface (--tab/--window) was chosen — e.g. sliver-avoidance
-#                       for many parallel fires. Recorded in the fire summary; silences the advisory
-#                       that otherwise warns a --tab/--window handoff is overriding the ⌘D default.
+#   --surface-reason R  Why a non-default surface (--window) was chosen — e.g. "operator rule: no
+#                       tabs, <=4 panes" when the firing window is full. Recorded in the fire summary;
+#                       silences the advisory that otherwise warns a --window handoff is overriding
+#                       the ⌘D default. (--tab always warns: it is deprecated, whatever the reason.)
 #   --probe             Liveness-probe the account headlessly before firing (haiku, or fable-5
 #                       when --model fable). auto: walk the ranked list to the first passing
 #                       account. Explicit account: hard-fail with the rejection class.
@@ -873,6 +883,11 @@ _fire_gate_of() { # $1=refusal reason → gate name
     # has since engaged, a live claude holds the pane, or the token is malformed. It measured the
     # RECOVERY's own idempotency, nothing else, so it gets its own denominator.
     recovery-of)       printf recovery  ;;
+    # lr-wake 2026-10-18 (Wave E) — admit-before-spawn: an lr-fire-resume relaunch refused by
+    # cc_capacity_admit BEFORE any pane opened. It is the capacity-admit library's decision (its own
+    # IDL row, its own actor/subject budget), not capacity_gate()'s terms, so it gets its own
+    # denominator rather than diluting the capacity admit ratio with a second instrument's verdicts.
+    capacity-admit)    printf capacity-admit ;;
     *)                 printf '%s' "${1:-unknown}" ;;
   esac
 }
@@ -1593,6 +1608,19 @@ kt() { hf_bounded "${CC_KITTY_BIN:-${CC_TERM_KITTY:-kitty}}" @ ${CC_TERM_KITTY_T
 # this fire's own $CMD (hf_adopt_split_pane — kitty + argv delivery only, else it finds nothing), so a
 # launch that happened is never reported as one that did not. HF_TIMEOUT_S is rebound for this call only.
 kt_launch() {
+  # NO KITTY TABS, EVER (lr-wake 2026-10-18, RC3; operator rule: every OS window fullscreen on its own
+  # Space, at most 4 vertical panes). This is the one launch primitive in this file, so the refusal
+  # lives HERE rather than at each caller: a future surface cannot reintroduce a tab by forgetting a
+  # check. rc 1 is the documented refusal — provably nothing was created — so no caller retries into
+  # an expiry. Placement belongs to scripts/lib/pane-placement.sh (hf_place_pane below).
+  local _a _prev=""
+  for _a in "$@"; do
+    if [ "$_a" = "--type=tab" ] || { [ "$_prev" = "--type" ] && [ "$_a" = tab ]; }; then
+      echo "!! kt_launch REFUSED --type=tab — operator rule: no kitty tabs, ever (<=4 panes per fullscreen window). Nothing was launched; place the pane through the policy (hf_place_pane / cc_place_pane)." >&2
+      return 1
+    fi
+    _prev="$_a"
+  done
   # stderr is CAPTURED, not discarded (2026-10-17, item 2891c7ba7dd9): kitty's own "Timed out waiting
   # for a response from kitty" arrives there, and it is one of the two shapes of a bound EXPIRY (the
   # other is timeout(1)'s 124/137). The id is the last all-digit line, so a warning cannot become one.
@@ -1627,6 +1655,82 @@ kt_launch() {
       fi ;;
   esac
   printf '%s' "$id"
+}
+
+# ── THE PLACEMENT POLICY AT THIS FILE'S SPAWN SITES (lr-wake 2026-10-18, RC3; REPORT §4 Wave E) ──
+# hf_place_pane ANCHOR [REQUESTED] → the new kitty window id on stdout.
+#   rc 0 placed · 1 nothing launched (provably: no pane carries this fire's command) · 13 UNKNOWN
+# One policy, owned by scripts/lib/pane-placement.sh (cc_place_pane, Wave D): a vsplit beside ANCHOR
+# when its OS window has 1 tab and fewer than CC_MAX_PANES_PER_SPACE (4) panes, else a split into the
+# next window with room, else a NEW FULLSCREEN OS window. Never a tab, never a fifth pane, and never
+# the operator's focus unless --follow. The pane's argv is this fire's HF_ARGV (the predelivered
+# command; empty ⇒ a shell the caller types into, exactly as the other surfaces). cc_place_pane adopts
+# a timed-out launch by its own token; a "nothing created" it cannot prove (its list unreadable) is
+# re-checked by this fire's own command (hf_adopt_split_pane), and only a CLEAN miss reads as rc 1.
+# The library is resolved repo-relative first (it may land in the same commit as this caller), then
+# from the live layer; CC_PANE_PLACEMENT_LIB is the seam. Absent ⇒ rc 1 and a loud line: a fire that
+# cannot be placed is refused, never put in a tab.
+hf_place_pane() {
+  local anchor="${1##*:}" req="${2:-split}" id rc=0 cwd=current f arc=0
+  case "$anchor" in ''|*[!0-9]*) anchor=""; cwd="${LAUNCH_DIR:-$PWD}" ;; esac
+  if ! command -v cc_place_pane >/dev/null 2>&1; then
+    for f in "${CC_PANE_PLACEMENT_LIB:-}" "$(dirname "$0")/lib/pane-placement.sh" \
+             "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/pane-placement.sh" "${HOME:-}/.claude/scripts/lib/pane-placement.sh"; do
+      # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+      if [ -n "$f" ] && [ -f "$f" ]; then . "$f" && break; fi
+    done
+  fi
+  if ! command -v cc_place_pane >/dev/null 2>&1; then
+    echo "!! placement policy unavailable (scripts/lib/pane-placement.sh not found) — nothing was launched; a pane that cannot be placed is refused, never put in a tab." >&2
+    return 1
+  fi
+  id="$(CC_PLACE_KITTY_BIN="${CC_KITTY_BIN:-}" CC_PLACE_REQUESTED="$req" \
+        CC_PLACE_FOCUS="$([ "${FOLLOW:-0}" = 1 ] && echo 1 || echo 0)" \
+        CC_PLACE_DETAIL="handoff-fire pid:$$${CC_HF_PLACE_DETAIL:+ $CC_HF_PLACE_DETAIL}" \
+        cc_place_pane "$anchor" "$cwd" -- ${HF_ARGV[@]+"${HF_ARGV[@]}"})" || rc=$?
+  id="$(printf '%s' "$id" | tr -d '[:space:]')"
+  case "$id" in ''|*[!0-9]*) id="" ;; esac
+  if [ "$rc" = 0 ] && [ -n "$id" ]; then printf '%s' "$id"; return 0; fi
+  [ "$rc" != 2 ] || return 1                       # usage: nothing was attempted
+  if command -v hf_adopt_split_pane >/dev/null 2>&1; then
+    id="$(hf_adopt_split_pane)" || arc=$?
+    if [ "$arc" = 0 ] && [ -n "$id" ]; then
+      echo "→ placement reported no pane, but window $id already runs this fire's command — ADOPTED it (a re-fire would have launched a duplicate session)." >&2
+      printf '%s' "$id"; return 0
+    fi
+    if [ "$arc" = 2 ]; then
+      echo "!! placement outcome UNKNOWN — no window id came back and kitty's window list could not be read, so a window MAY be running this fire's command; look before re-firing." >&2
+      return 13
+    fi
+  fi
+  return 1
+}
+
+# hf_anchor_room ID → 0 the anchor's OS window has room for a split (exactly 1 tab, fewer than
+# CC_MAX_PANES_PER_SPACE panes, not zoomed) · 1 it is FULL (or holds more than one tab) · 2 CANNOT TELL
+# (not kitty, a non-kitty id, an unreadable list, or the anchor absent from it). The same pane count
+# pane-placement.sh uses (groups, else windows), so the two can never disagree about "full". Only 1
+# changes the surface; 2 leaves the requested split exactly as it was (its own refusals stand).
+hf_anchor_room() {
+  local id="${1##*:}" ls cap="${CC_MAX_PANES_PER_SPACE:-4}"
+  case "$id" in ''|*[!0-9]*) return 2 ;; esac
+  case "$cap" in ''|*[!0-9]*|0) cap=4 ;; esac
+  ls="$(kt ls 2>/dev/null)" || return 2
+  printf '%s' "$ls" | HF_ROOM_ID="$id" HF_ROOM_CAP="$cap" /usr/bin/python3 -c '
+import json, os, sys
+try:
+    d = json.load(sys.stdin)
+    a, cap = os.environ["HF_ROOM_ID"], int(os.environ["HF_ROOM_CAP"])
+    for o in d:
+        tabs = o.get("tabs") or []
+        if any(str(w.get("id")) == a for t in tabs for w in t.get("windows") or []):
+            if len(tabs) != 1: sys.exit(1)
+            t = tabs[0]
+            n = len(t.get("groups") or []) or len(t.get("windows") or [])
+            sys.exit(1 if (t.get("layout") == "stack" or n >= cap) else 0)
+except Exception:
+    sys.exit(2)
+sys.exit(2)'
 }
 
 # Resolve one kitty window id out of `kitty @ ls` and print ONE field of it. `kitty @ ls` is the only
@@ -5853,7 +5957,16 @@ it2_paste_submit_verified() { # $1=it2-bin $2=pane-uuid $3=text [$4=max-pre-wait
 # `[^:]*:` middle. The middle is deliberately colon-free so bash's benign startup chatter
 # (`bash: no job control in this shell`, emitted by any `bash -i` without a tty) can never match:
 # it has no second colon, and it is not a refusal.
-FIRE_PARKED_RE="${FIRE_PARKED_RE:-^((zsh|bash): (correct |no matches found|event not found|command not found|no such file or directory)|bash: [^:]*: (command not found|no such file or directory))}"
+# TWO MORE SHAPES (lr-wake 2026-10-18, RC7; e-input-gibberish § "the PARKED detector cannot see a zsh
+# `cd` failure"). Pane 403's screen read, verbatim:
+#   zsh:cd:1: no such file or directory: whose\n/Users/chrisren/Development/claude-infrastructure
+#   cc-pane-runner: the fleet launch line exited 1 — keeping a shell for diagnosis/resume
+# A `zsh -c` (the argv transport runs `$SHELL -l -i -c`) prefixes its errors with `:<builtin>:<line>:`,
+# so the `^zsh: ` anchor missed the first line, and nothing matched the runner's own verdict line; the
+# fire sat silent for its whole engagement window and the agent read that silence as "still in
+# preflight". The optional `(:[a-z_]+:[0-9]+)?` takes the -c form; the runner arm takes a NON-ZERO
+# exit only (exit 0 is a session that ran and ended, not a refusal). Both stay anchored at column 0.
+FIRE_PARKED_RE="${FIRE_PARKED_RE:-^((zsh|bash)(:[a-z_]+:[0-9]+)?: (correct |no matches found|event not found|command not found|no such file or directory)|bash: [^:]*: (command not found|no such file or directory)|cc-pane-runner: .* exited [1-9][0-9]*)}"
 
 # The modal enumeration for pane_wedge_reason below. Same guarded shape as the capacity-admit lib
 # (~line 3300) and for the same stated reason: a bare `. lib` under this script's `set -e` would
@@ -5875,15 +5988,53 @@ if [ -n "$_CC_PM" ]; then
   # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
   . "$_CC_PM" 2>/dev/null || _CC_PM=""
 fi
+# ── THE PANE'S OWN EXIT RECORD (K3, as built by Wave B in bin/cc-pane-runner) ───────────────────────
+# ~/.claude/run/pane-exit/<KITTY_WINDOW_ID>.json = {"rc":<int>,"claude_started":<bool>,"launch_sha":…,
+# "ts":<epoch>}, written on EVERY return of the launch line. It is the one fact about a launcher's fate
+# that survives the pane: the runner may close a refused pane (rc 75), and a screen read then returns
+# nothing. Read only when it postdates THIS fire's spawn (HF_SPAWN_T0) — kitty reuses window ids across
+# restarts, so an older record names somebody else's launch. Unset T0, a non-integer pane, a missing or
+# unparseable file ⇒ nothing (fail-open, like every other arm of this oracle).
+# hf_pane_exit_record PANE → prints "<rc> <claude_started>" · rc 0 found / 1 none
+hf_pane_exit_record() {
+  local p="${1##*:}" f t0="${HF_SPAWN_T0:-}" row
+  case "$p" in ''|*[!0-9]*) return 1 ;; esac
+  case "$t0" in ''|*[!0-9]*) return 1 ;; esac
+  f="${CC_PANE_EXIT_DIR:-${HOME:-}/.claude/run/pane-exit}/$p.json"
+  [ -f "$f" ] || return 1
+  row="$(/usr/bin/python3 -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    rc, cs, ts = d["rc"], d["claude_started"], d["ts"]
+    assert isinstance(rc, int) and isinstance(cs, bool) and isinstance(ts, int)
+except Exception:
+    sys.exit(1)
+if ts < int(sys.argv[2]): sys.exit(1)
+print("%d %s" % (rc, "true" if cs else "false"))' "$f" "$t0" 2>/dev/null)" || return 1
+  [ -n "$row" ] || return 1
+  printf '%s' "$row"
+}
+
 pane_parked_reason() { # $1=it2-bin $2=session-id → echoes the reason, 0 parked / 1 not-parked/unknown
-  local it2="$1" id="$2" screen line
+  local it2="$1" id="$2" screen line rec
   [ -n "$it2" ] && [ -n "$id" ] || return 1
   screen="$(hf_bounded "$it2" session read -s "$id" -n "${FIRE_TYPE_READLINES:-500}" 2>/dev/null || true)"
-  [ -n "$screen" ] || return 1          # unreadable ⇒ UNKNOWN, never "parked" (fail-open: the disk
-                                        # oracle stays the authority; this one only ever short-circuits)
-  line="$(printf '%s\n' "$screen" | grep -aoiE "$FIRE_PARKED_RE.*" | head -1 || true)"
-  [ -n "$line" ] || return 1
-  printf '%s' "$line"
+  if [ -n "$screen" ]; then
+    line="$(printf '%s\n' "$screen" | grep -aoiE "$FIRE_PARKED_RE.*" | head -1 || true)"
+    if [ -n "$line" ]; then printf '%s' "$line"; return 0; fi
+  fi
+  # No shell line on the screen, or no screen at all: the exit record can still say the launch line
+  # RETURNED without ever starting claude. That is a parked pane by definition — nothing to re-send to.
+  # A record with claude_started=true is a session that ran and ended, and stays with the disk oracle.
+  if command -v hf_pane_exit_record >/dev/null 2>&1 && rec="$(hf_pane_exit_record "$id")"; then
+    case "$rec" in
+      *' false') printf 'exit record: the launch line exited %s before claude started (%s)' "${rec%% *}" \
+                   "${CC_PANE_EXIT_DIR:-${HOME:-}/.claude/run/pane-exit}/${id##*:}.json"; return 0 ;;
+    esac
+  fi
+  return 1                              # unreadable/unmatched ⇒ UNKNOWN, never "parked" (fail-open: the
+                                        # disk oracle stays the authority; this one only ever short-circuits)
 }
 
 # ---- PANE-WEDGED oracle: claude STARTED, and is inert on a modal (backlog 75c2e3e2bde7) --------
@@ -6327,7 +6478,13 @@ verify_engagement() { # $1=projects $2=marker $3=regdir $4=pane $5=it2-bin $6=re
   if [ -z "$timeout" ]; then
     if command -v fire_engage_window >/dev/null 2>&1; then timeout="$(fire_engage_window)"; else timeout=120; fi
   fi
-  local t=0 esrc=0
+  # THE WINDOW IS WALL-CLOCK (lr-wake 2026-10-18, RC7; REPORT §4 Wave E). `t` used to be the SUM of
+  # the sleep intervals, so every read inside the loop (a transcript scan, two pane reads) was free:
+  # at load ~100 a 480 s window measured 49 minutes, and the fire that should have said "never
+  # engaged" was killed first and said nothing. `t` is now the larger of the summed sleeps and the
+  # elapsed seconds since the loop began ($SECONDS: a builtin, no fork), so the window ends on time
+  # under load and never earlier than it did before.
+  local t=0 esrc=0 t0="$SECONDS"
   ENGAGE_PARKED=""
   ENGAGE_WEDGED=""
   ENGAGE_UNSURE=""
@@ -6342,7 +6499,7 @@ verify_engagement() { # $1=projects $2=marker $3=regdir $4=pane $5=it2-bin $6=re
     [ -n "$ENGAGE_PARKED" ] && return 2
     ENGAGE_WEDGED="$(pane_wedge_reason "$it2" "$pane" || true)"
     [ -n "$ENGAGE_WEDGED" ] && return 4
-    /bin/sleep "$interval"; t=$((t + interval))
+    /bin/sleep "$interval"; t=$((t + interval)); [ $((SECONDS - t0)) -le "$t" ] || t=$((SECONDS - t0))
   done
   # ABSTAIN FROM THE RE-SEND when the brief is already IN the session (2026-08-11). The re-send exists
   # to recover a LOST prompt; typing it into a session that demonstrably holds it is not a recovery,
@@ -6389,7 +6546,7 @@ verify_engagement() { # $1=projects $2=marker $3=regdir $4=pane $5=it2-bin $6=re
     it2_paste_submit_verified "$it2" "$pane" "$resend" \
       || echo "⚠ INC-4 resend did not submit (see the reason above) — re-polling on the original launch only" >&2
   fi
-  t=0
+  t=0; t0="$SECONDS"
   while [ "$t" -lt "$retry" ]; do
     esrc=0; engagement_seen "$pdir" "$marker" "$regdir" "$pane" || esrc=$?
     [ "$esrc" -eq 0 ] && return 0
@@ -6402,7 +6559,7 @@ verify_engagement() { # $1=projects $2=marker $3=regdir $4=pane $5=it2-bin $6=re
     # window closes on a generic "never engaged" for a pane whose screen names its own cause.
     ENGAGE_WEDGED="$(pane_wedge_reason "$it2" "$pane" || true)"
     [ -n "$ENGAGE_WEDGED" ] && return 4
-    /bin/sleep "$interval"; t=$((t + interval))
+    /bin/sleep "$interval"; t=$((t + interval)); [ $((SECONDS - t0)) -le "$t" ] || t=$((SECONDS - t0))
   done
   # THE WINDOW EXPIRED. What that licenses depends on what the reads actually established:
   #   · a read FAILED, or the brief was seen ingested ⇒ 5, CANNOT TELL. Absence of evidence inside a
@@ -7558,13 +7715,13 @@ EOF
 # the P8 register() overwrites atomically on its next run. No pid (that is P8's authoritative
 # liveness field) — presence must not encode liveness (session-register P8 rule).
 ensure_registration() { # $1=regdir $2=pane $3=name $4=cwd $5=cmd → best-effort, always 0
-  local regdir="$1" pane="$2" name="$3" cwd="$4" cmd="$5" tmp t=0
+  local regdir="$1" pane="$2" name="$3" cwd="$4" cmd="$5" tmp t=0 t0="$SECONDS"
   local timeout="${FIRE_REG_TIMEOUT:-30}" interval="${FIRE_REG_INTERVAL:-3}"
   [ -n "$pane" ] && [ -n "$regdir" ] || return 0
   command -v jq >/dev/null 2>&1 || return 0
   [ -f "$regdir/$pane.json" ] && return 0
   while [ "$t" -lt "$timeout" ]; do
-    /bin/sleep "$interval"; t=$((t + interval))
+    /bin/sleep "$interval"; t=$((t + interval)); [ $((SECONDS - t0)) -le "$t" ] || t=$((SECONDS - t0))
     [ -f "$regdir/$pane.json" ] && return 0
   done
   mkdir -p "$regdir" 2>/dev/null || return 0
@@ -10038,11 +10195,36 @@ fi
 # rows stay in handoffs.jsonl: shared mechanism, separate policy, separate telemetry — the same split
 # the CC_FIRE_* / CC_ADMIT_* namespaces already keep, for the same stub-redirection reason.
 # Env: CC_FIRE_ADMIT_BUDGET(1) · CC_FIRE_ADMIT_STATE_DIR
+#
+# THE BUDGET IS KEYED PER SUBJECT (lr-wake 2026-10-18, RC2/RC7; REPORT §4 Wave E). It was keyed by
+# term alone, so it was ONE counter for every fire on the box: in a loop over N stranded sessions,
+# fire 1's refusal released fire 2 — a different session — into the saturated box, and the loop read
+# each "admitted after 1 refusal" as permission to keep going. The key now names WHAT is being fired
+# (_cc_fire_subject): the session an lr-fire-resume launcher resumes, else the --worktree, else the
+# --cwd, else the firing session. The operator's own re-fire of the same thing still meets the same
+# counter, so the bound still releases it on the next try; a different subject gets its own count.
+# No subject (nothing to key on) ⇒ the old term-only key, unchanged.
+_cc_fire_subject() { # → a key-safe subject id, or nothing
+  local s="" w=""
+  if command -v hf_launcher_file >/dev/null 2>&1 && command -v hf_launcher_subject >/dev/null 2>&1; then
+    w="$(hf_launcher_file)"
+    [ -z "$w" ] || s="$(hf_launcher_subject "$w")" || s=""
+    [ -z "$s" ] || { printf 'sid-%s' "$s"; return 0; }
+  fi
+  if [ -n "${WORKTREE:-}" ]; then s="wt-$WORKTREE"
+  elif [ -n "${CWD:-}" ]; then s="cwd-$(printf '%s' "$CWD" | cksum | awk '{print $1}')"
+  elif [ -n "${SESSION_ID:-${CLAUDE_SESSION_ID:-}}" ]; then s="by-${SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+  fi
+  case "$s" in *[!A-Za-z0-9._-]*) s="$(printf '%s' "$s" | tr -c 'A-Za-z0-9._-' '_')" ;; esac
+  printf '%s' "$s"
+}
 _cc_fire_budget_file() { # $1=term → state path, or empty when it cannot be keyed
-  local dir="${CC_FIRE_ADMIT_STATE_DIR:-$HOME/.claude/autonomy/capacity-fire}"
+  local dir="${CC_FIRE_ADMIT_STATE_DIR:-$HOME/.claude/autonomy/capacity-fire}" subj=""
   case "${1:-}" in ''|*[!A-Za-z0-9._-]*) return 0 ;; esac
+  if command -v _cc_fire_subject >/dev/null 2>&1; then subj="$(_cc_fire_subject 2>/dev/null)" || subj=""; fi
+  case "$subj" in *[!A-Za-z0-9._-]*) subj="" ;; esac
   mkdir -p "$dir" 2>/dev/null || return 0
-  printf '%s/%s.refusals' "$dir" "$1"
+  printf '%s/%s%s.refusals' "$dir" "$1" "${subj:+.$subj}"
 }
 
 # The bound is on CONSECUTIVE refusals. Every admit clears both terms' counters, so refusals spread
@@ -12968,6 +13150,80 @@ fi
 # an ordinary fire — the file's presence is what licenses cc-reaper to auto-reap, so stamping every
 # fire would license the reaper against operator sessions." A launcher that opens an ad-hoc split
 # for a human must not stamp it; one dispatching a peer says so explicitly.
+# ── A DIRECTORY ARGUMENT IS VALIDATED BEFORE ANY GATE (lr-wake 2026-10-18, RC7; REPORT §4 Wave E) ──
+# `--cwd` was taken verbatim and only ever reached a shell inside the pane, as `cd <it> && …`. An agent's
+# `sed` misparse handed it `whose\n/Users/…/claude-infrastructure`; the fire spawned, the pane printed
+# `zsh:cd:1: no such file or directory`, kept a plain shell, and the fire said nothing for its whole
+# engagement window (pane 403). A path is refused here unless it is absolute, carries no control
+# character and names an existing directory — exit 2, before any gate, any spawn or any spawn row.
+# $1 = the flag (for the message) · $2 = the value. Returns 0 when valid; never returns otherwise.
+hf_valid_dir_arg() {
+  local flag="$1" v="$2" why=""
+  case "$v" in
+    *[[:cntrl:]]*) why="it contains a control character (a newline or tab is a parse slip, never a path)" ;;
+    /*) [ -d "$v" ] || why="it is not a directory (no such directory)" ;;
+    *) why="it is not absolute" ;;
+  esac
+  [ -n "$why" ] || return 0
+  printf '!! %s REFUSED — %s: %q\n' "$flag" "$why" "$v" >&2
+  echo "   Nothing was launched. Pass an existing absolute directory." >&2
+  exit 2
+}
+
+# hf_launcher_subject FILE → the session uuid a limit-recover launcher resumes: the first uuid on its
+# lr-fire-resume line (`exec …/lr-fire-resume.sh <acct> <worktree> <sid> …`), else the file's first
+# uuid. rc 1 when FILE is not a readable file or names no session.
+hf_launcher_subject() {
+  local f="${1:-}" s="" uu='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+  [ -n "$f" ] && [ -f "$f" ] && [ -r "$f" ] || return 1
+  s="$(grep -E 'lr-fire-resume' "$f" 2>/dev/null | grep -oE "$uu" | head -1)" || s=""
+  [ -n "$s" ] || s="$(grep -oE "$uu" "$f" 2>/dev/null | head -1)" || s=""
+  [ -n "$s" ] || return 1
+  printf '%s' "$s"
+}
+
+# hf_launcher_is_lr FILE → 0 when FILE is a limit-recover relaunch: it IS lr-fire-resume, or it execs it.
+hf_launcher_is_lr() {
+  local f="${1:-}"
+  [ -n "$f" ] && [ -f "$f" ] && [ -r "$f" ] || return 1
+  case "${f##*/}" in lr-fire-resume*) return 0 ;; esac
+  grep -qE '(^|[[:space:]/])lr-fire-resume(\.sh)?([[:space:]]|$)' "$f" 2>/dev/null
+}
+
+# hf_launcher_file → the launcher FILE this fire runs (the first word of $LAUNCHER past a `bash`/`sh`/
+# `zsh` interpreter and any VAR=value prefix), or nothing when that word is not a file.
+hf_launcher_file() {
+  local w
+  for w in ${LAUNCHER:-}; do
+    case "$w" in bash|sh|zsh|nocorrect|*=*) continue ;; esac
+    if [ -f "$w" ]; then printf '%s' "$w"; fi
+    return 0
+  done
+  return 0
+}
+
+# hf_sid_stranded SID → 0 when limit-recover's NEWEST bundle for SID closed on a STRANDED verdict (the
+# move transplanted the session and its relaunch never verified) · 1 not, or cannot tell. The same
+# record the watchdog joins (lead-crash-watchdog.sh pane_lr_facts): <LR_STATE_DIR>/<sid>/bundle-*/
+# events.jsonl, last `"stage":"verdict"` row. Bundle names are UTC stamps, so the glob's sort is time.
+hf_sid_stranded() {
+  local sid="${1:-}" st="${LR_STATE_DIR:-${HOME:-}/.reso/limit-recover}" ev last=""
+  case "$sid" in ''|*[!0-9a-f-]*) return 1 ;; esac
+  for ev in "$st/$sid"/bundle-*/events.jsonl; do if [ -f "$ev" ]; then last="$ev"; fi; done
+  [ -n "$last" ] || return 1
+  /usr/bin/python3 -c '
+import json, sys
+v = None
+for line in open(sys.argv[1], errors="replace"):
+    try:
+        r = json.loads(line)
+    except Exception:
+        continue
+    if isinstance(r, dict) and r.get("stage") == "verdict":
+        v = r.get("state")
+sys.exit(0 if v == "STRANDED" else 1)' "$last" 2>/dev/null
+}
+
 if [ "${1:-}" = "stamp-peer" ]; then
   shift
   SP_PANE="" SP_CWD="" SP_BY="" SP_PROMPT="" SP_BY_SID=""
@@ -12987,7 +13243,7 @@ if [ "${1:-}" = "stamp-peer" ]; then
   # — it would land in `unknown` forever and re-create, one launcher at a time, exactly the
   # unvalidatable stamp this change set exists to remove.
   [ -n "$SP_CWD" ] || { echo "!! stamp-peer needs --cwd (it is the tenancy oracle the origin gate binds on)" >&2; exit 1; }
-  [ -d "$SP_CWD" ] || { echo "!! stamp-peer: --cwd is not a directory: $SP_CWD" >&2; exit 1; }
+  hf_valid_dir_arg "stamp-peer --cwd" "$SP_CWD"
   mark_fired_peer "$FIRED_DIR" "$SP_PANE" "$SP_CWD" "$SP_BY" "$SP_PROMPT" "$SP_BY_SID"
   # mark_fired_peer is best-effort by contract (it returns 0 even when the write fails) because a
   # fire must never die on its own bookkeeping. A caller that ASKED for a stamp is in the opposite
@@ -14780,6 +15036,38 @@ while [ $# -gt 0 ]; do case "$1" in
   *) echo "!! unknown arg: $1" >&2; usage 1 ;;
 esac; done
 
+# The directory arguments, before any gate (hf_valid_dir_arg: pane 403's `whose\n/…` cwd).
+[ -z "$CWD" ]        || hf_valid_dir_arg --cwd "$CWD"
+[ -z "$RESUME_CWD" ] || hf_valid_dir_arg --resume-cwd "$RESUME_CWD"
+
+# A HAND-WRITTEN /tmp LAUNCHER NEVER RELAUNCHES A STRANDED SESSION (lr-wake 2026-10-18, RC7; REPORT §4
+# Wave E). The STRANDED text already said "do NOT hand-spawn"; an agent wrote /tmp/lr-rescue/resume-
+# <sid>.sh anyway and fired it 25 times with --tab, and every fire that the inner gate refused left a
+# plain shell. A STRANDED session has an owner — limit-recover's queue (`lr-fleet --one <sid8>`,
+# `cc-lr recover`) — and a second relaunch path beside it is how a split brain starts. /tmp is also
+# wiped at every boot, so such a launcher cannot even be re-run. Refused before any gate, exit 2.
+if [ "$EXPLICIT_LAUNCHER" = 1 ]; then
+  _hf_lf="$(hf_launcher_file)"
+  case "$_hf_lf" in
+    /tmp/*|/private/tmp/*)
+      if _hf_ls="$(hf_launcher_subject "$_hf_lf")" && hf_sid_stranded "$_hf_ls"; then
+        echo "!! --launcher $_hf_lf REFUSED — session ${_hf_ls:0:8} has a STRANDED limit-recover record, and a hand-written /tmp launcher is not how a stranded session is relaunched." >&2
+        echo "   Nothing was launched. Its owner is limit-recover's queue: lr-fleet --one ${_hf_ls:0:8}  (or cc-lr recover)." >&2
+        exit 2
+      fi ;;
+  esac
+fi
+
+# --tab IS A DEPRECATED ALIAS (lr-wake 2026-10-18, RC3: NO kitty tabs, ever). The 22 bg-tab panes of
+# that night came from agent `--tab` fires that this script turned into `kitty @ launch --type=tab`.
+# The flag stays parseable so an old brief does not die on `unknown arg`, but it never makes a tab:
+# SURFACE=tab is placed by scripts/lib/pane-placement.sh (as_tab → hf_place_pane), which splits beside
+# the firing pane when its OS window has room and otherwise overflows to a window with room or a new
+# fullscreen OS window. Said once, here, whatever --surface-reason was given.
+if [ "$SURFACE" = tab ]; then
+  echo "⚠ --tab is DEPRECATED (operator rule: no tabs, <=4 panes per fullscreen window) — placing this pane by the placement policy instead. Use --split-right, or --window --surface-reason \"operator rule: no tabs, <=4 panes\"." >&2
+fi
+
 # ---- G5: --cloud ships DEFAULT-OFF ------------------------------------------------------------
 # Checked FIRST, before the payload checks and therefore before any side effect, because this is a
 # refusal about what the fire IS rather than about whether its arguments are well-formed.
@@ -15388,12 +15676,13 @@ REPO_GITDIR="$(hf_git_owner "$REPO")"
 # 2026-07-26 after a desk wave landed 3 landers in background tabs: "I don't care as much about the
 # immediate one-time fix but making sure this behavior happens long-horizon."
 #
-# NOW: placement defaults to split-right (VISIBLE) for autonomous fires too; ONLY an EXPLICIT --tab
-# opts into the background surface. --follow additionally raises, unchanged. A memory the agent has
-# to remember is not a mechanism — this is the mechanism.
-if [ "$RECYCLE" = 0 ] && [ "$FOLLOW" = 0 ] && [ "$SURFACE_EXPLICIT" = 1 ] && [ "$SURFACE" = tab ]; then
-  SURFACE="bg-tab"
-fi
+# NOW: placement defaults to split-right (VISIBLE) for autonomous fires too. --follow additionally
+# raises, unchanged. A memory the agent has to remember is not a mechanism — this is the mechanism.
+#
+# THE BACKGROUND-TAB REWRITE IS GONE (lr-wake 2026-10-18, RC3). An explicit autonomous --tab used to
+# be rewritten here to SURFACE=bg-tab — `kitty @ launch --type=tab --keep-focus` — and that one rewrite
+# made all 22 hidden tabs of plain shells that night. --tab now stays SURFACE=tab, a deprecated alias
+# that spawn() places through the policy (see the --tab note after the option parse).
 
 # ---- model normalization -------------------------------------------------------------------
 # Family aliases resolve from the SSOT, never from a literal pinned here. Both arms were
@@ -17423,6 +17712,64 @@ fi
 # (⇒ the pre-2026-08-07 typed path, unchanged). Deliberately NOT called from inside spawn(): the
 # recycle path never reaches spawn and must keep typing — it re-uses the CURRENT pane, so there is
 # no launch to put an argv on, and that is the one surface this change cannot help.
+#
+# ── ADMIT BEFORE SPAWN, AND HAND THE LAUNCHER THE TOKEN (lr-wake 2026-10-18, RC2; REPORT §4 Wave E) ──
+# A fire whose launcher is an lr-fire-resume relaunch was gated TWICE: capacity_gate above admitted it
+# and minted nothing, then lr-fire-resume re-evaluated the box inside the new pane, 10-20 s later, and
+# refused with exit 9 — after the pane existed. That is the 13 rescue husks of the night. Now the
+# decision lr-fire-resume makes is made HERE, before any pane: cc_capacity_admit (the same library,
+# keyed by actor `handoff-fire` and by the resumed session, so one session's refusals never release
+# another's), and on an admit one admission token is minted for that session and handed to the
+# launcher as LR_ADMIT_TOKEN, which lr-fire-resume redeems (IDL basis `token`) instead of re-deciding.
+# A refusal exits 9 with NO pane opened. Skipped for a recycle (it re-uses its pane), for --dry-run,
+# when the caller already owns admission (LR_ADMIT_TOKEN set, or the launcher exports its own token —
+# lr-handoff's launchers do), and when no session can be named (the in-pane gate then decides, as before).
+hf_lr_admit() {
+  local f sid tok
+  [ "${RECYCLE:-0}" = 0 ] && [ "${DRY:-0}" = 0 ] || return 0
+  [ -z "${LR_ADMIT_TOKEN:-}" ] || return 0
+  f="$(hf_launcher_file)"
+  [ -n "$f" ] && hf_launcher_is_lr "$f" || return 0
+  if grep -qE '^export LR_ADMIT_TOKEN=[^[:space:]]' "$f" 2>/dev/null \
+     && ! grep -qE "^export LR_ADMIT_TOKEN=(''|\"\")?[[:space:]]*$" "$f" 2>/dev/null; then
+    return 0
+  fi
+  sid="$(hf_launcher_subject "$f")" || return 0
+  if ! command -v cc_capacity_admit >/dev/null 2>&1; then
+    echo "-- admit-before-spawn: capacity-admit.sh unavailable — the launcher will evaluate its own gate in the pane" >&2
+    return 0
+  fi
+  if ! CC_ADMIT_ACTOR=handoff-fire CC_ADMIT_BUDGET_KEY="$sid" CC_ADMIT_WANT_SID="$sid" \
+       cc_capacity_admit handoff-fire "fire lr-fire-resume relaunch of $sid"; then
+    echo "!! capacity REFUSED this relaunch of ${sid:0:8} BEFORE any pane was opened — $(cc_capacity_admit_reason 2>/dev/null || true)" >&2
+    echo "   Nothing was launched. A stranded session is relaunched by limit-recover's queue (lr-fleet --one ${sid:0:8}), never by re-running this fire in a loop." >&2
+    command -v emit_fire_refusal >/dev/null 2>&1 && emit_fire_refusal capacity-admit "admit-before-spawn refused the lr-fire-resume relaunch of $sid"
+    exit 9
+  fi
+  tok="$(CC_ADMIT_TOKEN_KIND=turn cc_capacity_token_mint "$sid" 2>/dev/null)" || tok=""
+  if [ -z "$tok" ]; then
+    echo "-- admit-before-spawn: admitted, but no admission token could be minted — the launcher will evaluate its own gate in the pane" >&2
+    return 0
+  fi
+  # Into the command, right before the launcher word: an env assignment that rides the pane's own
+  # shell (typed or argv), so the token reaches lr-fire-resume through the launcher's exec.
+  # Pattern and replacement through variables: identical on bash 3.2 (launchd) and 5.x (no quote
+  # removal inside the replacement to differ on). A command the pattern does not match is left as it
+  # was, and the token is then not claimed as handed over.
+  local pat rep before="$CMD"
+  pat="${NC:-}${PREFIX:-}${LAUNCHER}"
+  rep="${NC:-}${PREFIX:-}LR_ADMIT_TOKEN=$(printf %q "$tok") ${LAUNCHER}"
+  CMD="${CMD/"$pat"/$rep}"
+  if [ "$CMD" = "$before" ]; then
+    echo "-- admit-before-spawn: admitted, but the launch command has no launcher word to carry the token — the launcher will evaluate its own gate in the pane" >&2
+    return 0
+  fi
+  HF_ADMIT_TOKEN="$tok"
+  echo "→ admit-before-spawn: admitted the relaunch of ${sid:0:8}; admission token $tok handed to the launcher (one-shot)" >&2
+}
+# shellcheck disable=SC2034  # the token this fire handed over; read back by tests/handoff-fire-admit-spawn.bats
+HF_ADMIT_TOKEN=""
+hf_lr_admit
 hf_argv_launch
 
 # The dir the fired session lands in — pre-trusted below so it never stalls at the trust dialog.
@@ -17436,6 +17783,14 @@ elif [ -n "$WORKTREE" ]; then LAUNCH_DIR="$WT"
 elif [ -n "$CWD" ];      then LAUNCH_DIR="$CWD"
 else                          LAUNCH_DIR="$REPO"
 fi
+# The same rule hf_valid_dir_arg applied to the arguments, asserted on the dir the pane will `cd` into,
+# whichever arm chose it (lr-wake 2026-10-18, RC7): absolute and free of control characters. Existence
+# is NOT asserted here — a cold --worktree is created after this line, and a dry run never creates it.
+case "$LAUNCH_DIR" in
+  /*[[:cntrl:]]*|[!/]*|'')
+    printf '!! launch dir REFUSED — not an absolute, printable path: %q. Nothing was launched.\n' "$LAUNCH_DIR" >&2
+    exit 2 ;;
+esac
 
 # ---- RELOCATING RECYCLE: carry the inherited peer stamp to the new cwd (item fe740e799fd5) -------
 # HERE, and not one line earlier: LAUNCH_DIR is the first point at which the destination is FINAL,
@@ -17813,26 +18168,21 @@ print("%s %d" % hit)
         return 0
         ;;
       bgtab)
-        # --keep-focus IS the whole point of this verb: it is what makes the new tab a BACKGROUND
-        # one. Without it kitty focuses the tab it just created and the fire steals the operator's
-        # view — the exact C1 failure it2py bgtab exists to prevent. It also makes the iTerm2 path's
-        # capture-restore-assert dance unnecessary here: focus never moves, so there is nothing to
-        # restore and no window to self-clean.
-        # --match pins the tab to the FIRING window's os-window; kitty otherwise silently targets
-        # the ACTIVE tab (same trap bin/it2-kitty documents for --next-to on split).
-        local bsid="${2:-}"; bsid="${bsid##*:}"
-        local bnew
-        # ${HF_ARGV[@]+…} pre-delivers $CMD as this tab's ARGV (see hf_argv_launch). Unset/empty ⇒
-        # expands to NOTHING and the caller types, exactly as before — which is also what an
-        # extracted-function test sees, so this line's old behaviour is preserved there verbatim.
+        # NO LONGER A TAB (lr-wake 2026-10-18, RC3). This verb was `kitty @ launch --type=tab
+        # --keep-focus`, and it made all 22 hidden tabs of plain shells that night. It now PLACES the
+        # pane through the policy (hf_place_pane → scripts/lib/pane-placement.sh): beside the firing
+        # pane when its OS window has room, else the next window with room, else a new fullscreen OS
+        # window. What the verb promised is kept — the operator's focus never moves (placement passes
+        # --dont-take-focus / --keep-focus unless --follow), and the window is pinned by id. The
+        # pane-spawn row is cc_place_pane's own (surface window/os-window), never `bg-tab`.
         # rc 13 (UNKNOWN: an expiry or an unreadable list) is PASSED THROUGH, never flattened to 1 —
         # 1 is the refusal the caller retries, and a retry after an expiry is a second queued session.
-        local blrc=0
-        bnew="$(kt_launch --type=tab --keep-focus --cwd=current --match "id:$bsid" ${HF_ARGV[@]+"${HF_ARGV[@]}"})" || blrc=$?
+        local bsid="${2:-}"; bsid="${bsid##*:}"
+        local bnew blrc=0
+        bnew="$(hf_place_pane "$bsid" bg-tab)" || blrc=$?
         [ "$blrc" != 13 ] || return 13
         [ "$blrc" = 0 ] || return 1
         case "$bnew" in ''|*[!0-9]*) return 1 ;; esac
-        command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn bg-tab kitty "$bnew" "${LAUNCH_DIR:-$PWD}" "it2py bgtab --match id:$bsid"
         # EXACT format it2_bgtab parses (:3712 area): /^Created new pane: /.
         printf 'Created new pane: %s\n' "$bnew"
         return 0
@@ -18335,18 +18685,18 @@ as_tab() { # $1=session-uuid  → echoes "OK <new-session-id>" | "NOTFOUND"
     # STDOUT CONTRACT IS LOAD-BEARING and unchanged: "OK <new-id>" | "NOTFOUND", rc 0 either way
     # (the caller at :3949 area captures with `|| out="ERR($?)"`, so a non-zero return would be
     # reported as a bridge error rather than as a gone window).
-    # --match pins the tab into the FIRING window's os-window. Without it kitty creates the tab in
-    # whatever os-window is ACTIVE — i.e. the exact "handoff fired into another window" drift the
-    # iTerm2 branch's foundWin walk exists to prevent. A dead anchor makes launch exit non-zero,
-    # which is what NOTFOUND means.
+    # NO LONGER A TAB (lr-wake 2026-10-18, RC3): --tab is a deprecated alias, and under kitty its pane
+    # is PLACED by the policy (hf_place_pane → scripts/lib/pane-placement.sh) — beside the firing pane
+    # when its OS window has room, else the next window with room, else a new fullscreen OS window.
+    # The anchor is still pinned by id, so a dead anchor still cannot drift into the ACTIVE window.
+    # The pane-spawn row is cc_place_pane's own.
     local tnew trc=0
-    # Same pre-delivery as the bg-tab and split surfaces; unset/empty ⇒ nothing, and the caller types.
-    tnew="$(kt_launch --type=tab --cwd=current --match "id:${1##*:}" ${HF_ARGV[@]+"${HF_ARGV[@]}"})" || trc=$?
-    # kt_launch's UNKNOWN (rc 13) is a third stdout state, not a NOTFOUND: NOTFOUND is retried, and a
-    # retry after an expiry queues a second session (item 2891c7ba7dd9, the bg-tab arm's same defect).
+    tnew="$(hf_place_pane "${1##*:}" tab)" || trc=$?
+    # UNKNOWN (rc 13) is a third stdout state, not a NOTFOUND: NOTFOUND is retried, and a retry after
+    # an expiry queues a second session (item 2891c7ba7dd9, the bg-tab arm's same defect).
     if [ "$trc" = 13 ]; then printf 'UNKNOWN\n'; return 0; fi
     [ "$trc" = 0 ] || tnew=""
-    case "$tnew" in ''|*[!0-9]*) printf 'NOTFOUND\n' ;; *) command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn tab kitty "$tnew" "${LAUNCH_DIR:-$PWD}" "as_tab --match id:${1##*:}"; printf 'OK %s\n' "$tnew" ;; esac
+    case "$tnew" in ''|*[!0-9]*) printf 'NOTFOUND\n' ;; *) printf 'OK %s\n' "$tnew" ;; esac
     return 0
   fi
   # LOGGED BEFORE THE LAUNCH, with pane ABSENT — deliberately. This branch's osascript stdout IS the
@@ -18411,8 +18761,11 @@ spawn_frontmost() { # → echoes the new session id on stdout | empty on failure
     [ "${FOLLOW:-0}" = 1 ] || kfocus="--keep-focus"
     # shellcheck disable=SC2086
     # Same pre-delivery as the other three surfaces; unset/empty ⇒ nothing, and the caller types.
+    # FULLSCREEN (lr-wake 2026-10-18, RC3): every OS window is fullscreen on its own Space. kitty
+    # 0.48.2 applies the state natively (glfw.c:1452; see scripts/lib/pane-placement.sh step 3), so
+    # an overflow or --window pane gets its own Space instead of floating over the operator's.
     local wrc=0
-    wnew="$(kt_launch --type=os-window --cwd=current $kfocus ${HF_ARGV[@]+"${HF_ARGV[@]}"})" || wrc=$?
+    wnew="$(kt_launch --type=os-window --cwd=current --os-window-state=fullscreen $kfocus ${HF_ARGV[@]+"${HF_ARGV[@]}"})" || wrc=$?
     [ "$wrc" != 13 ] || return 13             # outcome UNKNOWN — the caller must not read it as "nothing launched"
     [ "$wrc" = 0 ] || wnew=""
     # Empty output IS this function's documented failure and the caller (:3821 area) already fails
@@ -18560,6 +18913,35 @@ spawn() {
     echo "   Re-run from inside the firing iTerm2 pane, pass --session-id <uuid>, or use --window to open a fresh window on purpose." >&2
     return 1
   fi
+  # THE ROOM CHECK COVERS NAMED ANCHORS TOO (lr-wake 2026-10-18, RC3; REPORT §4 Wave E). The crowding
+  # degrade above runs only for a HEADLESS anchor, so a named --split-right into a window already
+  # holding 4 (or 5) panes made the fifth, and nothing counted tabs at all. Under kitty, a split whose
+  # anchor window is FULL — CC_MAX_PANES_PER_SPACE (4) panes, more than one tab, or zoomed — is placed
+  # by the policy instead: the next window with room, else a new fullscreen OS window. A window WITH
+  # room keeps the split exactly as before (it2_split below, byte-identical), and an unreadable census
+  # (rc 2) changes nothing: the split's own refusals and UNKNOWN verdicts still decide.
+  if { [ "$SURFACE" = split-right ] || [ "$SURFACE" = split-down ]; } \
+     && command -v in_kitty >/dev/null 2>&1 && in_kitty && command -v hf_anchor_room >/dev/null 2>&1; then
+    local room=0 pnew="" prc=0
+    hf_anchor_room "$FIRING_SID" || room=$?
+    if [ "$room" = 1 ]; then
+      echo "→ the firing pane's OS window is full (≥ ${CC_MAX_PANES_PER_SPACE:-4} panes, or more than one tab) — placing this $SURFACE by the policy: the next window with room, else a new fullscreen OS window. Never a tab, never a fifth pane." >&2
+      [ -n "$SURFACE_REASON" ] || SURFACE_REASON="operator rule: no tabs, <=${CC_MAX_PANES_PER_SPACE:-4} panes — anchor window full, placed by policy"
+      pnew="$(hf_place_pane "$FIRING_SID" "$SURFACE")" || prc=$?
+      if [ "$prc" = 13 ]; then
+        FIRE_SPAWN_UNKNOWN=1
+        echo "   Look for a pane running this brief before re-firing. The worktree is KEPT." >&2
+        return 13
+      fi
+      if [ "$prc" != 0 ] || [ -z "$pnew" ]; then
+        echo "!! could not place the overflow pane for $FIRING_SID (rc=$prc) — nothing was launched." >&2
+        return 1
+      fi
+      it2_land "$pnew" || return 1
+      SPAWNED_PANE="$pnew"
+      return 0
+    fi
+  fi
   case "$SURFACE" in
     bg-tab)
       # AUTONOMOUS DEFAULT — a BACKGROUND tab in the firing pane's window: never splits the operator's
@@ -18663,9 +19045,9 @@ spawn() {
       SPAWNED_PANE="$newid"                          # the fired pane — engagement verify + registry
       ;;
     tab)
-      # Reached only WITH --follow (autonomous --tab was normalized to bg-tab). as_tab CREATES a
-      # background tab in the firing window and echoes its id; it2_land then lands the launch command
-      # via it2_type_verified (bracketed-paste + echo-verify) and raises the tab (--follow).
+      # The DEPRECATED --tab alias (lr-wake 2026-10-18). Under kitty as_tab PLACES the pane through
+      # the policy (never a tab) and echoes its id; it2_land then lands the launch command via
+      # it2_type_verified (bracketed-paste + echo-verify) and raises it (--follow only).
       # UNKNOWN (kitty expiry / unreadable list) or ERR(124|137) (the bound around osascript fired) is
       # never retried and never "Nothing was launched" — the bg-tab arm's verdict, for the same reason.
       local out newid="" try
@@ -19577,11 +19959,13 @@ recycle_await_verdict() { # $1=watcher log → 0 engaged / 1 dead-or-failed / 3 
   return 3
 }
 
-# Split-right (⌘D) is the STANDING operator preference for handoffs. --tab/--window override it and
-# should carry a reason (e.g. sliver-avoidance for many parallel fires). Advise when they don't —
-# this is the guard against agents silently reverting the default to --tab session after session.
-if [ "$SURFACE_EXPLICIT" = 1 ] && { [ "$SURFACE" = tab ] || [ "$SURFACE" = window ]; } && [ -z "$SURFACE_REASON" ]; then
-  echo "⚠ --$SURFACE overrides the split-right (⌘D) handoff default. Prefer --split-right unless you have a reason (e.g. sliver-avoidance for many parallel fires); pass --surface-reason \"…\" to record it." >&2
+# Split-right (⌘D) is the STANDING operator preference for handoffs. --window overrides it and should
+# carry a reason. This advisory was DEAD for every autonomous fire (lr-wake 2026-10-18, RC3): it tested
+# SURFACE=tab, which the bg-tab rewrite had already renamed, so the 25 rescue `--tab` fires never saw
+# it. --tab now warns once after the option parse, unconditionally (it is deprecated, whatever the
+# reason); this line covers --window, and names the reason the operator rule supplies.
+if [ "$SURFACE_EXPLICIT" = 1 ] && [ "$SURFACE" = window ] && [ -z "$SURFACE_REASON" ]; then
+  echo "⚠ --window overrides the split-right (⌘D) handoff default. Use it only when your own OS window already holds 4 panes, and record that: --surface-reason \"operator rule: no tabs, <=4 panes\"." >&2
 fi
 
 if [ "$DRY" = 1 ]; then
@@ -19782,6 +20166,8 @@ else
   # verify_engagement RETURNED, so a fire that took 10s and one that took 10 minutes recorded the
   # same single instant and "fire→engaged p95" was unfalsifiable (V2 §2 M-2).
   LR_STARTED_AT="$(_iso_now)"
+  # The epoch the pane's K3 exit record must postdate to be THIS launch's (hf_pane_exit_record).
+  HF_SPAWN_T0="$(date +%s)"
   spawn
   # P0-11: prove the fired session ingested the brief before claiming success. A cold fire that
   # raced CC boot sits at an empty composer (INC-4) — re-send once, then FAIL LOUD.
@@ -20124,6 +20510,17 @@ else
       # keystroke bug that cannot exist. The pane parked either way; how the command arrived is not
       # what this message is for, and it is the one part of it that is transport-dependent.
       echo "!! FIRE FAILED — pane PARKED, launcher never ran: ${SPAWNED_PANE:-<pane?>} is still a shell and refused/blocked on the launch command — $ENGAGE_PARKED" >&2
+      # THE PANE'S OWN EXIT RECORD (K3), when the runner wrote one for this launch: the rc the launch
+      # line returned and whether claude ever started. It outlives the pane (the runner may already
+      # have closed a queued one, rc 75) and it is what tells "cd failed" from "the launcher refused".
+      if _hf_xr="$(hf_pane_exit_record "${SPAWNED_PANE:-}")"; then
+        case "${_hf_xr%% *}" in
+          75) _hf_xw="queued — one durable request retries it; do NOT re-fire by hand" ;;
+          9)  _hf_xw="refused — the run's owner retries it; do NOT re-fire by hand" ;;
+          *)  _hf_xw="the launch line failed" ;;
+        esac
+        echo "   Exit record: rc ${_hf_xr%% *}, claude_started ${_hf_xr##* } — ${_hf_xw}." >&2
+      fi
       echo "   The launch command was: $CMD" >&2
       echo "   No session exists to recover (a re-send would run the brief as shell commands). Clear the pane, then re-fire; if the stuck word is the launcher itself, check that '$LAUNCHER' is defined in the operator's interactive zsh (the launchers are aliases/functions — 'command -v' cannot see them from a script)." >&2
       emit_handoff_telemetry 0 || true

@@ -18,6 +18,8 @@
 #
 # Every assertion is `[ ]`, `run`+status, or `… || false`.
 
+bats_require_minimum_version 1.5.0   # `run --separate-stderr`
+
 setup() {
   # One export per line: the pin-guard (handoff-fire-capacity-gate.bats case 25) reads them that way.
   export CC_FIRE_CAPACITY_GATE=off
@@ -103,20 +105,23 @@ created() { wc -l < "$CREATED" | tr -d ' '; }
   [ "$output" = 101 ]
 }
 
-@test "--tab: the same slow launch keeps the OK <id> contract instead of reading as a dead anchor" {
-  HF_TIMEOUT_S=1; export FAKE_SLEEP=3
-  run as_tab 7
-  echo "$output"
-  [ "$(created)" = 1 ]
-  [ "$output" = "OK 101" ]
+@test "--tab (deprecated, lr-wake 2026-10-18): as_tab's kitty site PLACES through the policy, never kt_launch --type=tab" {
+  # The slow-launch identity this case used to pin now belongs to the placement library, which adopts a
+  # timed-out launch by its own token (tests/pane-placement.bats) — as_tab no longer launches anything.
+  local x_tab
+  x_tab="$(sed -n '/^as_tab() {/,/^}/p' "$HF" | sed 's/#.*//')"
+  [ -n "$x_tab" ]
+  grep -qE 'tnew="\$\(hf_place_pane ' <<<"$x_tab"
+  ! grep -qE 'type=tab' <<<"$x_tab" || false
 }
 
-@test "bg-tab: it2py's kitty launch site goes through kt_launch too" {
+@test "bg-tab: it2py's kitty site places through the policy too — no tab, no bare kt launch" {
   # The third site. Extracting it2py whole needs the kitty suite's fixtures, so this pins the call.
   local x_py
   x_py="$(sed -n '/^it2py() {/,/^}/p' "$HF" | sed 's/#.*//')"
   [ -n "$x_py" ]
-  grep -qE 'bnew="\$\(kt_launch --type=tab --keep-focus' <<<"$x_py"
+  grep -qE 'bnew="\$\(hf_place_pane "\$bsid" bg-tab\)"' <<<"$x_py"
+  ! grep -qE 'type=tab' <<<"$x_py" || false
   ! grep -qE 'kt launch' <<<"$x_py" || false
 }
 
@@ -157,11 +162,15 @@ created() { wc -l < "$CREATED" | tr -d ' '; }
 }
 
 @test "EQUIVALENCE GUARD: a launch kitty REFUSES still prints nothing (the caller's fail-loud signal)" {
+  # The same generous round-trip bound as the two adoption cases above: the refusal path reads the
+  # fake `kitty @ ls` (a python start-up) to rule out adoption, and at load ~30/core that start-up
+  # outlived the default 10 s bound, so the read came back UNREADABLE and the case went red by load.
+  HF_TIMEOUT_S=120
   export FAKE_LAUNCH=refuse
   run spawn_frontmost
   [ "$(created)" = 0 ]
   [ -z "$output" ]
-  run as_tab 7
+  run --separate-stderr as_tab 7       # spawn() discards as_tab's stderr; the verdict is stdout
   [ "$output" = NOTFOUND ]
 }
 

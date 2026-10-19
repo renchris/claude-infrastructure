@@ -8,6 +8,11 @@
 # the >=40 min wait, never retries, keeps the worktree (FIRE_SPAWN_UNKNOWN) and exits 124.
 #
 # Every assertion is `[ ]`, `run`+status, or `… || false` (bats errexit exemption on `[[ ]]`).
+#
+# lr-wake 2026-10-18 (Wave E): kt_launch now REFUSES --type=tab outright (no kitty tabs, ever), so its
+# expiry cases below launch --type=os-window — the surface that still goes through kt_launch. The
+# bg-tab and tab arms of spawn() keep their UNKNOWN contract; under kitty they now PLACE through the
+# policy rather than open a tab (tests/handoff-fire-no-tab.bats).
 
 bats_require_minimum_version 1.5.0   # `run --separate-stderr`
 
@@ -35,7 +40,7 @@ setup() {
 @test "kt_launch: a timeout(1) expiry (rc 124) with no pane carrying the command YET ⇒ rc 13, not an empty success" {
   kt() { return 124; }
   hf_adopt_split_pane() { return 1; }          # the list READ cleanly and shows nothing — still not a verdict
-  run kt_launch --type=tab
+  run kt_launch --type=os-window
   [ "$status" -eq 13 ] || { echo "rc=$status out=$output"; false; }
   [[ "$output" == *"outcome UNKNOWN"* ]] || false
 }
@@ -43,20 +48,20 @@ setup() {
 @test "kt_launch: kitty's own 'Timed out waiting for a response' (rc 1) is an expiry too ⇒ rc 13" {
   kt() { echo "Error: Timed out waiting for a response from kitty" >&2; return 1; }
   hf_adopt_split_pane() { return 1; }
-  run kt_launch --type=tab
+  run kt_launch --type=os-window
   [ "$status" -eq 13 ] || { echo "rc=$status out=$output"; false; }
 }
 
 @test "kt_launch: an expiry whose pane IS found is ADOPTED, not UNKNOWN" {
   kt() { return 124; }
   hf_adopt_split_pane() { echo 321; }
-  run --separate-stderr kt_launch --type=tab
+  run --separate-stderr kt_launch --type=os-window
   [ "$status" -eq 0 ] && [ "$output" = 321 ] || { echo "rc=$status out=$output"; false; }
 }
 
 @test "kt_launch CONTROL: a warning on stderr beside a real id still yields the id" {
   kt() { echo "warning: something cosmetic" >&2; echo 77; }
-  run --separate-stderr kt_launch --type=tab
+  run --separate-stderr kt_launch --type=os-window
   [ "$status" -eq 0 ] && [ "$output" = 77 ] || { echo "rc=$status out=$output"; false; }
 }
 
