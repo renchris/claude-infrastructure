@@ -482,6 +482,25 @@ _cca_interactive_argv() { # → rc 0 iff BIN_ARGV starts an interactive session
   done
   return 0
 }
+# _cca_say KIND VERDICT [FACT] [ACTION] — the shared one-line renderer (lib/cc-say.sh), found in this
+# file's own checkout through its symlink, else the live layer; a plain stand-in when neither
+# exists. Lazy: only a path that prints pays for the source.
+_cca_say() {
+  if ! command -v cc_say >/dev/null 2>&1; then
+    local s="$0" t sd c
+    while [[ -L "$s" ]]; do
+      t="$(readlink "$s" 2>/dev/null)" || break
+      case "$t" in /*) s="$t" ;; *) s="$(dirname "$s")/$t" ;; esac
+    done
+    sd="$(cd "$(dirname "$s")" 2>/dev/null && pwd)" || sd=""
+    for c in "${sd:+$sd/../lib/cc-say.sh}" "${HOME:-}/.claude/lib/cc-say.sh"; do
+      # shellcheck source=/dev/null  # runtime-resolved: checkout sibling, else the live layer
+      [[ -n "$c" && -r "$c" ]] && { . "$c" 2>/dev/null; break; }
+    done
+  fi
+  if command -v cc_say >/dev/null 2>&1; then CC_SAY_TOOL=cc-close-attrib cc_say "$@"
+  else printf '%s%s\n' "$2" "${3:+ · $3}" >&2; fi
+}
 LAUNCH_WD_PID=""
 _cca_launch_watchdog() {
   local after="${CC_LAUNCH_WATCHDOG_S:-20}" poll="${CC_LAUNCH_WATCHDOG_POLL_S:-10}"
@@ -497,9 +516,11 @@ _cca_launch_watchdog() {
   mkdir -p "${out%/*}" 2>/dev/null || true
   printf '{"ts":"%s","event":"launch-stalled","pid":%s,"wrapper_pid":%s,"waited_s":%s,"started_at":"%s","likely":"blocked in the keychain/system-CA query (SecItemCopyMatching to secd)","action":"none"}\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" "$child" "$$" "$((SECONDS - t0))" "$STARTED_AT" >> "$out" 2>/dev/null || true
+  # One gray line that decides nothing (lr-wake Wave H): the secd explanation and the log path go
+  # to the cc-say log, and to the pane only under CC_SAY_VERBOSE=1.
   if [[ -t 2 ]]; then
-    printf '\033[38;2;140;140;140m◆ claude pid %s has not registered a session after %ss: likely blocked in the keychain/system-CA query (secd). Not killed; it resumes when the query returns. Log: %s\033[0m\n' \
-      "$child" "$((SECONDS - t0))" "$out" >&2
+    CC_SAY_DETAIL="likely blocked in the keychain/system-CA query (secd); not killed, it resumes when the query returns · log $out" \
+      _cca_say wait "claude $child waiting on keychain" "$((SECONDS - t0))s · no action"
   fi
   # From here the wrapper's exit-time reap is ignored: once a stall is on record its ending must be
   # too, and the child's exit ends this loop within one poll without help.
@@ -592,11 +613,13 @@ _cca_take_successor() {
   [[ -n "$lib" ]] && . "$lib" 2>/dev/null || return 0
   claimed="$(cc_pane_successor_take)" && [[ -n "$claimed" ]] || return 0
   write_record "$child" "$code" closed "$claimed" || true
+  # One line each, the claim path to the cc-say log (lr-wake Wave H): nothing here is a decision.
   if command -v cc_pane_successor_handback >/dev/null 2>&1 && cc_pane_successor_handback "$claimed"; then
-    printf '[cc-close-attrib] session ended (rc %s) — the successor loop runs the staged successor %s\n' "$code" "$claimed" >&2
+    CC_SAY_DETAIL="the successor loop runs the staged successor $claimed" \
+      _cca_say run "session ended · starting successor" "rc $code"
     exit "$code"
   fi
-  printf '[cc-close-attrib] session ended (rc %s) — running the staged successor %s\n' "$code" "$claimed" >&2
+  CC_SAY_DETAIL="running the staged successor $claimed" _cca_say run "session ended · starting successor" "rc $code"
   cc_pane_successor_exec "$claimed" 0 || true
   return 0
 }

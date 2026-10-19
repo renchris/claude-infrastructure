@@ -237,14 +237,19 @@ fork_fixture() {
   printf 'forked\n' > "$HOME/.claude-next/commands/stale.md"
 }
 
-@test "summary mode folds every fork into ONE line naming only the non-backups" {
+@test "summary mode folds every fork into ONE log record naming only the non-backups, and prints nothing" {
+  # lr-wake Wave H: the fold decides nothing until that account's panes close, and it re-printed at
+  # every launch — it now goes to the cc-say log (~/.claude/logs/pane-say.jsonl), not the pane.
   command -v zsh >/dev/null 2>&1 || skip "zsh unavailable"
   fork_fixture
+  export CC_SAY_LOG="$BATS_TEST_TMPDIR/pane-say.jsonl"
   run env CC_MIRROR_FORKS=summary zsh -fc "source '$MIRROR'; _cc_sync_config_mirror \"\$HOME/.claude-next\" 2>&1 >/dev/null"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [ "$(printf '%s\n' "$output" | grep -c 'config-mirror:')" = 1 ] || { echo "$output"; false; }
-  [[ "$output" == *"2 file(s) in .claude-next shadow ~/.claude (commands, tasks-index.json)"* ]] || { echo "$output"; false; }
-  [[ "$output" != *bak-kitty* ]] || { echo "backups named in the summary: $output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c 'config-mirror:' || true)" = 0 ] || { echo "$output"; false; }
+  [ "$(jq -c 'select(.tool=="config-mirror" and (.verdict | test("shadow")))' "$CC_SAY_LOG" | grep -c .)" = 1 ] || { cat "$CC_SAY_LOG"; false; }
+  jq -e 'select(.tool=="config-mirror" and .verdict=="2 file(s) in .claude-next shadow ~/.claude"
+         and (.detail | startswith("commands, tasks-index.json")))' "$CC_SAY_LOG" >/dev/null || { cat "$CC_SAY_LOG"; false; }
+  ! grep -q 'bak-kitty' "$CC_SAY_LOG" || { echo "backups named in the summary"; false; }
 }
 
 @test "summary mode is SILENT when every fork is a backup" {

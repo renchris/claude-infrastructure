@@ -110,6 +110,16 @@ _cc_instructions_variant_target() {
   return 1
 }
 
+# The shared renderer (lib/cc-say.sh, lr-wake 2026-10-18 RC8), resolved BESIDE this file — both are
+# linked into ~/.claude/lib, and :A follows the link to the checkout. Repair notices and the tty fork
+# fold go to its log (~/.claude/logs/pane-say.jsonl), not to a pane: they decide nothing now, and they
+# re-printed at every launch in the same pane. Absent ⇒ a stand-in that keeps the one fault line.
+_cc_say_lib="${${(%):-%x}:A:h}/cc-say.sh"
+[[ -f "$_cc_say_lib" ]] && source "$_cc_say_lib"
+unset _cc_say_lib
+(( $+functions[cc_say] )) || cc_say() { print -u2 -- "${2}${3:+ · $3}${4:+ · ▶ $4}"; }
+(( $+functions[cc_say_detail] )) || cc_say_detail() { :; }
+
 # _cc_sync_config_mirror [--convert] <dst-config-dir>
 #   Default (no --convert): RACE-SAFE. Creates MISSING symlinks + HEALS isolated entries that were
 #   wrongly symlinked to ~/.claude (e.g. the .last-session leak). It NEVER mv's a forked real dir,
@@ -180,7 +190,7 @@ _cc_sync_config_mirror() {
     # and STILL missed .oauth_refresh.lock when the vendor added it. The next new lock must be safe
     # without anyone editing this file.
     if [[ "$name" == *.lock || "$name" == *.lock.d || "$name" == *.pid || "$name" == *.sock ]]; then
-      [[ -L "$dst/$name" ]] && { rm -f "$dst/$name"; print -u2 "config-mirror: un-shared transient '$name' in ${dst:t}"; }
+      [[ -L "$dst/$name" ]] && { rm -f "$dst/$name"; CC_SAY_TOOL=config-mirror cc_say_detail "un-shared transient '$name'" "${dst:t}"; }
       continue
     fi
     # An account registered for an instructions A/B arm reads CLAUDE.<variant>.md as its CLAUDE.md
@@ -216,14 +226,16 @@ _cc_sync_config_mirror() {
   if (( ${#forks} )); then
     local -a live=(${forks:#*bak*})
     if (( ${#live} )); then
-      local more="" on="" off=""; (( ${#live} > 3 )) && more=", +$(( ${#live} - 3 )) more"
-      [[ -t 2 && -z "$NO_COLOR" ]] && { on=$'\e[38;2;125;133;144m'; off=$'\e[0m'; }  # gray, never SGR-2
-      print -u2 -- "${on}config-mirror: ${#live} file(s) in ${dst:t} shadow ~/.claude (${(j:, :)live[1,3]}$more) — with its panes closed: _cc_sync_account --convert $dst${off}"
+      local more=""; (( ${#live} > 3 )) && more=", +$(( ${#live} - 3 )) more"
+      # Log only (lr-wake Wave H): it decides nothing until that account's panes are closed, and it
+      # used to re-print at every launch. The piped per-name FORKED lines above are unchanged.
+      CC_SAY_TOOL=config-mirror cc_say_detail "${#live} file(s) in ${dst:t} shadow ~/.claude" \
+        "${(j:, :)live[1,3]}$more · with its panes closed: _cc_sync_account --convert $dst"
     fi
   fi
   # Heal: an isolated entry that got wrongly symlinked to ~/.claude (the account-state leak).
   for k in ${(k)keep}; do
-    [[ -L "$dst/$k" ]] && { rm -f "$dst/$k"; print -u2 "config-mirror: un-shared isolated '$k' in ${dst:t}"; }
+    [[ -L "$dst/$k" ]] && { rm -f "$dst/$k"; CC_SAY_TOOL=config-mirror cc_say_detail "un-shared isolated '$k'" "${dst:t}"; }
   done
   # Reap symlinks into ~/.claude whose target has since DISAPPEARED. The share loop above walks
   # `$src/*`, so it can only ever see names that still exist there — a link whose source was
@@ -239,7 +251,7 @@ _cc_sync_config_mirror() {
     _cc_linktarget "$l"
     [[ "$_CC_LINK" == "$src"/* ]] || continue            # not ours — leave it alone
     [[ -e "$l" ]] && continue                            # target still resolves — healthy
-    rm -f "$l"; print -u2 "config-mirror: reaped dangling '${l:t}' in ${dst:t}"
+    rm -f "$l"; CC_SAY_TOOL=config-mirror cc_say_detail "reaped dangling '${l:t}'" "${dst:t}"
   done
   # Seed .claude.json ONLY for SAME-account dirs (e.g. ~/.claude-next — intentionally shares
   # account 1's identity). CROSS-account dirs (isolate-set keeps .credentials.json) must start
@@ -276,7 +288,8 @@ _cc_sync_config_mirror() {
     [[ -e "$_cm_f" ]] || continue
     [[ "$_cm_f" != "$src/settings.json" && "$_cm_f" -ef "$src/settings.json" ]] && continue
     grep -qE "$_cm_authkey" "$_cm_f" 2>/dev/null \
-      && print -u2 "⚠️  config-mirror: $_cm_f has an account-pinning auth key — move it to a per-dir settings.local.json"
+      && CC_SAY_TOOL=config-mirror cc_say warn "${_cm_f:h:t}/settings.json: account-pinning auth key" \
+           "move it to settings.local.json"
   done
   return 0
 }

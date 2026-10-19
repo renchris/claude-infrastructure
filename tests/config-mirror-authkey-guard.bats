@@ -50,7 +50,7 @@ setup() {
   run zsh -fc "source '$MIRROR'; _cc_sync_config_mirror \"\$HOME/.claude-next\" 2>&1"
   [ "$status" -eq 0 ]
   # Keyed on the PATH, so a warning about $src can never satisfy this assertion.
-  if ! printf '%s\n' "$output" | grep -q "\.claude-next/settings.json has an account-pinning auth key"; then
+  if ! printf '%s\n' "$output" | grep -q "\.claude-next/settings.json: account-pinning auth key"; then
     echo "GUARD BLIND: a pinning key in the dir's own settings.json went unreported" >&2
     printf '%s\n' "$output" >&2
     return 1
@@ -65,7 +65,7 @@ setup() {
   export HOME="$D/fh-src"
   run zsh -fc "source '$MIRROR'; _cc_sync_config_mirror \"\$HOME/.claude-next\" 2>&1"
   [ "$status" -eq 0 ]
-  if ! printf '%s\n' "$output" | grep -q "\.claude/settings.json has an account-pinning auth key"; then
+  if ! printf '%s\n' "$output" | grep -q "\.claude/settings.json: account-pinning auth key"; then
     echo "COVERAGE LOST: the original \$src arm of the guard no longer fires" >&2
     printf '%s\n' "$output" >&2
     return 1

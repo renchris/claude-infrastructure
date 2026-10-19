@@ -47,6 +47,17 @@ CFG_IN="${1:?config-dir or account alias}"; WT="${2:?worktree}"
 for _CC_AM in "${CC_ACCOUNT_MAP:-}" "$(dirname "$0")/../../lib/account-map.generated.sh" "$HOME/.claude/lib/account-map.generated.sh"; do
   [ -n "$_CC_AM" ] && [ -f "$_CC_AM" ] && { source "$_CC_AM"; break; }
 done
+
+# Every line this script prints is detail, never a decision (it was 15 of the 18 preflight lines on a
+# husk pane, 2026-10-18), so all of it goes to the cc-say log only (lr-wake Wave H). The checkout's
+# lib/ is found through this file's own symlink: install.sh links lib/*.sh into ~/.claude/lib, but
+# the Python twin lib/cc_say.py lives only in the checkout.
+_LR_LIB="$(cd "$(dirname "$(readlink "$0" 2>/dev/null || printf '%s' "$0")")/../../lib" 2>/dev/null && pwd || true)"
+# shellcheck source=../../lib/cc-say.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+[ -n "$_LR_LIB" ] && [ -f "$_LR_LIB/cc-say.sh" ] && . "$_LR_LIB/cc-say.sh"
+command -v cc_say_detail >/dev/null 2>&1 || cc_say_detail() { :; }
+export CC_SAY_TOOL=lr-preseed
 if cc_acct_dir_for_name "$CFG_IN"; then
   CFG="$CC_ACCT_DIR"
 else
@@ -59,7 +70,7 @@ if command -v defaults >/dev/null 2>&1; then
   case "$cur" in
     1|true|YES) : ;;  # already suppressed (any truthy encoding)
     *) defaults write com.googlecode.iterm2 PreventEscapeSequenceFromClearingHistory -bool true 2>/dev/null \
-         && echo "lr-preseed: iTerm2 clear-scrollback modal suppressed (PreventEscapeSequenceFromClearingHistory=true)" >&2 \
+         && cc_say_detail "iTerm2 clear-scrollback modal suppressed" "PreventEscapeSequenceFromClearingHistory=true" \
          || true ;;
   esac
 fi
@@ -68,9 +79,15 @@ fi
 CJSON="$CFG/.claude.json"
 if [[ -f "$CJSON" && -d "$WT" ]]; then
   WT_REAL=$(cd "$WT" && pwd -P)
-  python3 - "$CJSON" "$WT_REAL" <<'PY' >&2 || true
+  python3 - "$CJSON" "$WT_REAL" "${_LR_LIB:-}" <<'PY' >&2 || true
 import json, os, sys, tempfile, time, errno
 cjson, wt = sys.argv[1], sys.argv[2]
+try:  # the cc-say twin: every line here is detail → log only (lr-wake Wave H); absent ⇒ silent
+    sys.path.insert(0, sys.argv[3]); from cc_say import say_detail
+except Exception:
+    def say_detail(verdict, detail=""): pass
+def note(msg):  # every line below is a detail record, never pane text
+    say_detail(msg)
 lockdir = cjson + ".lock"          # proper-lockfile uses a <file>.lock DIRECTORY
 STALE = 15.0                        # steal only a clearly-dead lock (heartbeat is ~5s)
 
@@ -92,7 +109,7 @@ def acquire(timeout=2.0):
             time.sleep(0.15)
 
 if not acquire():
-    print("lr-preseed: .claude.json locked by a live session — skipped trust seed "
+    note(".claude.json locked by a live session — skipped trust seed "
           "(expect trust-handler will answer the prompt)")
     sys.exit(0)
 
@@ -133,7 +150,7 @@ try:
             d[key] = UPSELL_FLOOR; changed = True
 
     if not changed:
-        print("lr-preseed: trust + upsell gates already set for %s" % wt)
+        note("trust + upsell gates already set for %s" % wt)
     else:
         mode = os.stat(cjson).st_mode & 0o777
         fd, tmp = tempfile.mkstemp(dir=os.path.dirname(cjson), prefix=".claude.json.", suffix=".tmp")
@@ -142,13 +159,13 @@ try:
         os.chmod(tmp, mode)                 # preserve original perms (don't leak 0600 from mkstemp)
         os.replace(tmp, cjson)              # atomic
         tmp = None
-        print("lr-preseed: folder-trust pre-accepted + upsell gates raised for %s "
+        note("folder-trust pre-accepted + upsell gates raised for %s "
               "in %s/.claude.json" % (wt, os.path.basename(os.path.dirname(cjson))))
 except Exception as e:
     if tmp:
         try: os.unlink(tmp)
         except Exception: pass
-    print("lr-preseed: trust seed skipped (%s) — expect trust-handler will cover it" % e)
+    note("trust seed skipped (%s) — expect trust-handler will cover it" % e)
 finally:
     try: os.rmdir(lockdir)
     except Exception: pass

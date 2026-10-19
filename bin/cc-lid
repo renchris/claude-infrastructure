@@ -124,7 +124,8 @@ render_state() {   # $1 = on|off · $2 = "now " after a change · $3 = optional 
     # state is never left for the reader to infer.
     local b='' d='' c='' r='' on_badge=' ON ' off_badge=' OFF '
     if [ -z "${NO_COLOR:-}" ]; then
-      b=$'\e[1m' d=$'\e[2m' c=$'\e[1;36m' r=$'\e[0m'
+      # d is the cc-say meta gray, never SGR-2 (`\e[2m` renders as nothing on some panes; lr-wake RC8)
+      b=$'\e[1m' d=$'\e[38;2;150;150;160m' c=$'\e[1;36m' r=$'\e[0m'
       on_badge=$'\e[1;30;43m ON \e[0m' off_badge=$'\e[1;30;42m OFF \e[0m'
     else
       on_badge='[ON]' off_badge='[OFF]'

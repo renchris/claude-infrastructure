@@ -27,7 +27,7 @@ SESSION_ID="" _SIE_REASON=started _SIE_LOCKED=0 MSG_SRC=none
 _sie_exit() {
     local rc=$?
     if [ "$_SIE_LOCKED" = 1 ]; then session_index_unlock; fi
-    if [ "$rc" -ne 0 ]; then
+    if [ "$rc" -ne 0 ] && [ "$rc" -ne 75 ]; then   # 75 = a replay that queued again: not a failure
         log_idl failed "errexit:$rc" "$(jq -cn --arg r "$_SIE_REASON" '{last:$r}' 2>/dev/null)"
     elif [ "$_SIE_REASON" = indexed ]; then
         log_idl fired indexed "$(jq -cn --arg m "$MSG_COUNT" --arg s "$MSG_SRC" '{msgs:($m|tonumber? // 0),msgs_src:$s}' 2>/dev/null)"
@@ -58,13 +58,41 @@ fi
 # shellcheck source=/dev/null  # $HELPERS is resolved at runtime (repo checkout or ~/.claude fallback)
 source "$HELPERS"
 
+# ── SQLITE_BUSY ⇒ QUEUE THE ROW, never a pane error (lr-wake 2026-10-18, a-failed-self-recycle F6) ──
+# With ~50 sessions contending at load 15-30/core, `database is locked` outlasted the 5 s
+# busy_timeout on SessionEnd after SessionEnd, and each one printed a hook failure into a pane that
+# was closing anyway. The row is not lost: this hook's own stdin is written to the queue and a later
+# SessionEnd that gets a write through replays it (drain, end of file). Any OTHER failure re-raises
+# exactly as before. The DB work runs in a `set -e` subshell so errexit keeps its meaning inside it.
+# Seam: SESSION_INDEX_QUEUE_DIR. SIE_DRAINING=1 marks a replay, which exits 75 when it did not index.
+_SIE_Q="${SESSION_INDEX_QUEUE_DIR:-$(dirname "$SESSION_INDEX_DB")/session-index-queue}"
+_sie_db() { # <fn> [args…] — run one DB write; SQLITE_BUSY queues this SessionEnd and exits
+    local ef rc=0
+    ef="$(mktemp "${TMPDIR:-/tmp}/sie-err.XXXXXX")" || { "$@"; return; }
+    set +e; ( set -e; "$@" ) 2>"$ef"; rc=$?; set -e
+    if [ "$rc" -eq 0 ]; then cat "$ef" >&2; rm -f "$ef"; return 0; fi
+    if grep -qE 'database is locked|SQLITE_BUSY' "$ef" 2>/dev/null; then
+        rm -f "$ef"
+        case "$SESSION_ID" in *[!A-Za-z0-9_-]*) ;; *)
+            mkdir -p "$_SIE_Q" 2>/dev/null && printf '%s\n' "$INPUT" > "$_SIE_Q/$SESSION_ID.json" 2>/dev/null || true ;;
+        esac
+        session_index_log "Queued $SESSION_ID: SQLITE_BUSY in $1" 2>/dev/null || true
+        _SIE_REASON=busy-queued
+        [ "${SIE_DRAINING:-0}" = 1 ] && exit 75
+        exit 0
+    fi
+    cat "$ef" >&2; rm -f "$ef"
+    return "$rc"
+}
+
 # Init DB (idempotent)
-session_index_init_db
+_sie_db session_index_init_db
 
 # Non-blocking lock — skip if backfill/tagger is running (hook must be <200ms)
 if ! session_index_trylock; then
     session_index_log "Skipped indexing $SESSION_ID (lock held by another process)"
     _SIE_REASON=lock-held
+    [ "${SIE_DRAINING:-0}" = 1 ] && exit 75   # a replay that did not index keeps its queue file
     exit 0
 fi
 # trylock installed its own `trap session_index_unlock EXIT`, replacing ours; take it back and
@@ -181,7 +209,7 @@ fi
 KEYWORDS=$(session_index_extract_keywords "$SUMMARY $FIRST_PROMPT $CONTEXT_TEXT")
 
 # Upsert
-session_index_upsert_with_fts \
+_sie_db session_index_upsert_with_fts \
     "$SESSION_ID" \
     "$PROJECT_PATH" \
     "$PROJECT_NAME" \
@@ -202,4 +230,18 @@ session_index_upsert_with_fts \
 
 session_index_log "Indexed session $SESSION_ID ($PROJECT_NAME, ${MSG_COUNT} msgs)"
 _SIE_REASON=indexed
+
+# ── DRAIN: the DB just took a write, so replay up to 3 queued SessionEnds (never from a replay) ──
+# The lock is released first: each replay is this same hook on its saved stdin and takes the lock
+# itself. A replay that did not index (busy again, lock held) exits 75 and its file stays queued.
+if [ "${SIE_DRAINING:-0}" != 1 ] && [ -d "$_SIE_Q" ]; then
+    session_index_unlock; _SIE_LOCKED=0
+    _sie_n=0
+    for _sie_f in "$_SIE_Q"/*.json; do
+        [ -f "$_sie_f" ] || continue
+        [ "$_sie_n" -lt 3 ] || break
+        _sie_n=$((_sie_n + 1))
+        if SIE_DRAINING=1 bash "$_sie_self" < "$_sie_f" >/dev/null 2>&1; then rm -f "$_sie_f"; fi
+    done
+fi
 exit 0

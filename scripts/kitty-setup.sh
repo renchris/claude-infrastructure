@@ -155,7 +155,7 @@ esac
 pass=0; miss=0
 ok(){   printf '  \033[32m✓\033[0m %s\n' "$*"; pass=$((pass+1)); }
 no(){   printf '  \033[31m✗\033[0m %s\n' "$*"; miss=$((miss+1)); }
-info(){ printf '  \033[2m·\033[0m %s\n' "$*"; }
+info(){ printf '  \033[38;2;150;150;160m·\033[0m %s\n' "$*"; }   # cc-say meta gray, never SGR-2
 hdr(){  printf '\n\033[1m%s\033[0m\n' "$*"; }
 
 settings_files() {
