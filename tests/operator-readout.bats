@@ -1952,3 +1952,135 @@ CVF_YES=$'✅ Complete & live on trunk — x.\nGood to close: yes — nothing of
   [ "$status" -eq 0 ]
   [[ "$msg" == *"SAFE TO CLOSE"* ]]
 }
+
+# ── ⛔: the blocked rung, the research header, and THIS session's decisions ──────────────────────
+# The case arm handled 📦 🚀 🔧 ✅ only, so a ⛔ ledger left `state` EMPTY: the research close of
+# 2026-10-18 rendered `OPERATOR ▸ 4 need your call` (slot C §5 scenario B, measured), its own packet
+# folded into the standing `◆ 4 decisions` pile, and a ⛔ with nothing else on the board rendered
+# nothing at all. Packets are filed by the REAL producer; `.rechecks[]` has no producer on this
+# branch yet (cc-decide recheck, A4), so the re-check entry is appended to a real packet with jq.
+blk_env() { # blk_env <stub ledger> <cwd> — render as session S1
+  env - HOME="$HOME" PATH="$PATH" CC_BACKLOG_FILE="$CC_BACKLOG_FILE" \
+    CC_ACTIVATION_DIR="$CC_ACTIVATION_DIR" CC_DECISIONS_DIR="$CC_DECISIONS_DIR" \
+    CC_SHARED_CHECKOUT="$CC_SHARED_CHECKOUT" CC_OPREADOUT_NOW="$CC_OPREADOUT_NOW" \
+    CC_OPREADOUT_TTL_S="$CC_OPREADOUT_TTL_S" WRAP_TRUNK="origin/main" CC_IDL="$CC_IDL" \
+    CC_RESUME_DEBT_BIN=none LR_STATE_DIR="$LR_STATE_DIR" LR_RECON_ROOT="$LR_RECON_ROOT" \
+    CC_RESEARCH_REGISTRY="$CC_RESEARCH_REGISTRY" CC_MAILBOX_DIR="$CC_MAILBOX_DIR" \
+    CC_HANDOFF_ALARM_DIR="$CC_HANDOFF_ALARM_DIR" CC_ANNOUNCE_ALARM_DIR="$CC_ANNOUNCE_ALARM_DIR" \
+    CC_COMPLETION_RECORDS_DIR="$CC_COMPLETION_RECORDS_DIR" CC_PAGES_DIR="$CC_PAGES_DIR" \
+    CC_SWEEP_SEEN_DIR="$CC_SWEEP_SEEN_DIR" CC_ORB_BLG_CACHE_DIR="$CC_ORB_BLG_CACHE_DIR" \
+    WRAP_LEDGER_BIN="$1" bash "$HOOK" --render --cwd "$2" --sid S1
+}
+blk_open() { # blk_open <session sid> <what> [recommendation] — a real class-C packet
+  "$DECIDE" open --class C --conviction 85 --receipt "probe => result" \
+    --option "a::outcome a" --option "b::outcome b" --recommendation "${3:-approve it}" \
+    --session-sid "$1" --what "$2" >/dev/null
+}
+blk_recheck() { # blk_recheck <what> <sid> <tier> — append a re-check entry to that packet
+  local f t
+  f="$(grep -l -F "\"what_plain\": \"$1\"" "$CC_DECISIONS_DIR"/*.json 2>/dev/null | head -1)"
+  [ -n "$f" ] || f="$(grep -l -F "$1" "$CC_DECISIONS_DIR"/*.json | head -1)"
+  t="$f.tmp"
+  jq --arg s "$2" --arg tier "$3" '.rechecks = ((.rechecks // []) + [{sid: $s, ts: "2026-10-18T00:00:00Z",
+      conviction: 88, receipt: "docs/r.md", recommendation: "ship as designed", tier: $tier}])' "$f" > "$t"
+  mv "$t" "$f"
+}
+
+@test "⛔ research: line 1 is the blocked state, answer first, and the pile partition is not on it" {
+  w="$(mkrepo_landed blkres)"
+  for i in 1 2 3; do blk_open OTHER "Foreign decision number $i."; done
+  blk_open OTHER "Own research decision."
+  blk_recheck "Own research decision." S1 signoff
+  run blk_env "$(stub_ledger "⛔" "BLOCKED=0" "BLOCKED_RECHECKED=1" "RECHECKED_SRC=ok" \
+    "READOUT=⛔ Blocked — research done, implementation pending: 1 decision(s) need your call: cc-decide list --open")" "$w"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  l1="$(printf '%s\n' "$output" | head -1)"
+  [[ "$l1" == "OPERATOR ▸ ⛔ Blocked — research done, implementation pending: 1 decision(s) need your call"* ]] \
+    || { echo "line 1: $l1"; false; }
+  [[ "$l1" != *"need your call · "* ]] || { echo "pile partition leads line 1: $l1"; false; }
+  [[ "$l1" != *"3 need your call"* ]] || { echo "pile on line 1: $l1"; false; }
+  printf '%s\n' "$output" | grep -q '◆ \[this session · signoff\] Own research decision — ship as designed 88%' \
+    || { echo "$output"; false; }
+}
+
+@test "⛔ filed: the blocked state is rendered, appended the way 📦/🚀 are" {
+  w="$(mkrepo_landed blkfiled)"
+  blk_open OTHER "Foreign decision one."
+  blk_open S1 "Choose the reboot posture."
+  run blk_env "$(stub_ledger "⛔" "BLOCKED=1" "READOUT=⛔ Blocked — need your call: Choose the reboot posture.")" "$w"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  l1="$(printf '%s\n' "$output" | head -1)"
+  # appended after the partition, which now names the own packet apart from the foreign one
+  [[ "$l1" == "OPERATOR ▸ 1 decision(s) are yours · 1 need your call · ⛔ Blocked — need your call: Choose"* ]] \
+    || { echo "line 1: $l1"; false; }
+  printf '%s\n' "$output" | grep -q '◆ \[this session · filed\] Choose the reboot posture — approve it 85%' \
+    || { echo "$output"; false; }
+}
+
+@test "⛔ with an empty pile still renders its state" {
+  w="$(mkrepo_landed blkempty)"
+  run blk_env "$(stub_ledger "⛔" "BLOCKED=1" "READOUT=⛔ Blocked — need your call: Decide the thing.")" "$w"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | head -1)" = "OPERATOR ▸ ⛔ Blocked — need your call: Decide the thing." ] \
+    || { echo "$output"; false; }
+}
+
+@test "⛔ own packets are itemized and excluded from the pile; a foreign packet stays in it" {
+  w="$(mkrepo_landed blkown)"
+  blk_open OTHER "Foreign decision alpha."
+  blk_open OTHER "Foreign decision beta."
+  blk_open S1 "Own filed decision."
+  blk_open OTHER "Own rechecked decision."
+  blk_recheck "Own rechecked decision." S1 default
+  run blk_env "$(stub_ledger "⛔" "BLOCKED=1" "BLOCKED_RECHECKED=1" \
+    "READOUT=⛔ Blocked — research done, implementation pending: 2 decision(s) need your call: cc-decide list --open")" "$w"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  printf '%s\n' "$output" | grep -q '◆ \[this session · filed\] Own filed decision' || { echo "$output"; false; }
+  printf '%s\n' "$output" | grep -q '◆ \[this session · default\] Own rechecked decision' || { echo "$output"; false; }
+  printf '%s\n' "$output" | grep -q '◆ 2 decisions — your call' || { echo "$output"; false; }
+  ! printf '%s\n' "$output" | grep -q '4 decisions' || { echo "$output"; false; }
+  # each own packet appears exactly once in the whole block
+  [ "$(printf '%s\n' "$output" | grep -c 'Own filed decision')" -eq 1 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'Own rechecked decision')" -eq 1 ]
+}
+
+@test "⛔ 8 own packets ⇒ 5 itemized lines and a '↳ +3' rollup split by tier" {
+  w="$(mkrepo_landed blkeight)"
+  for i in 1 2 3 4 5 6; do blk_open S1 "Own signoff decision $i."; done
+  for i in 1 2; do blk_open OTHER "Own lowstakes decision $i."; blk_recheck "Own lowstakes decision $i." S1 nochange; done
+  run blk_env "$(stub_ledger "⛔" "BLOCKED=6" "BLOCKED_RECHECKED=2" \
+    "READOUT=⛔ Blocked — research done, implementation pending: 8 decision(s) need your call: cc-decide list --open")" "$w"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c '^ ◆ \[this session · ')" -eq 5 ] || { echo "$output"; false; }
+  printf '%s\n' "$output" | grep -qF ' ↳ +3 more this session (1 sign-off, 2 low-stakes): cc-decide list --open' \
+    || { echo "$output"; false; }
+  ! printf '%s\n' "$output" | grep -q 'decisions — your call' || { echo "own packets leaked into the pile: $output"; false; }
+}
+
+@test "⛔ header stays within 100 columns under a 300-char what_plain" {
+  w="$(mkrepo_landed blkwide)"
+  long="Decide$(printf ' word%.0s' $(seq 1 60))"
+  blk_open S1 "$long"
+  run blk_env "$(stub_ledger "⛔" "BLOCKED=1" "READOUT=⛔ Blocked — need your call: ${long}.")" "$w"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  l1="$(printf '%s\n' "$output" | head -1)"
+  [[ "$l1" == "OPERATOR ▸ "*"⛔ Blocked — need your call: Decide word"* ]] || { echo "line 1: $l1"; false; }
+  # columns are characters: this awk counts BYTES, and ⛔ ▸ · — … are 2-3 bytes each
+  [ "$(printf '%s' "$l1" | LC_ALL=en_US.UTF-8 wc -m | tr -d ' ')" -le 100 ] || { echo "line 1 too wide: $l1"; false; }
+  # the own row is budgeted in characters too
+  row="$(printf '%s\n' "$output" | grep '^ ◆ \[this session · filed\] Decide word')"
+  [ -n "$row" ] || { echo "$output"; false; }
+  [ "$(printf '%s' "$row" | LC_ALL=en_US.UTF-8 wc -m | tr -d ' ')" -le 100 ] || { echo "row too wide: $row"; false; }
+}
+
+@test "⛔ never renders SAFE TO CLOSE, even on a write turn" {
+  cvf_env
+  w="$(cvf_repo blkcert)"; tr="$(cvf_tr "$BATS_TEST_TMPDIR/blkcert.jsonl" "$w/f.txt" "$CVF_YES")"
+  blk_open S1 "Choose the reboot posture."
+  export WRAP_LEDGER_BIN
+  WRAP_LEDGER_BIN="$(stub_ledger "⛔" "BLOCKED=1" "READOUT=⛔ Blocked — need your call: Choose the reboot posture.")"
+  cvf_hook "$w" "$tr"
+  [ "$status" -eq 0 ]
+  [[ "$msg" == *"⛔ Blocked — need your call"* ]] || { echo "no ⛔ block: $output"; false; }
+  [[ "$msg" != *"SAFE TO CLOSE"* ]] || { echo "$msg"; false; }
+}

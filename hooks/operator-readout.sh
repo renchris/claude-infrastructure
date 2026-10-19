@@ -1052,7 +1052,10 @@ render_block() {
       # a default/deadline, but it is a post-hoc audit trail with nothing for the operator to do.
       # shellcheck disable=SC2016  # a jq program: $ is jq syntax, not a shell expansion
       dec_jq -r --arg ph "$CC_PLACEHOLDER_RE" --arg con "$C_ON" --arg coff "$C_OFF" \
-        --argjson nowarg "$DEC_NOW" "$CC_PH_JQ"'
+        --argjson nowarg "$DEC_NOW" --arg sid "$SID" "$CC_PH_JQ"'
+        # word-boundary cut with an ellipsis, so a capped sentence never ends mid-word
+        def wcut($n): if length <= $n then . elif $n < 2 then ""
+                      else (.[0:($n - 1)] | sub(" [^ ]*$"; "")) + "…" end;
         select((.status // "" | if . == "" then "open" else . end) == "open"
                and ((.class // "") == "C"
                     or ((.class // "") == "B"
@@ -1096,7 +1099,43 @@ render_block() {
            elif $run != ""   then "decision\t▶\t\($run)   [decision \($cls) \($id8): \($sent | .[0:60])]\t\($id8)"
            elif $staged != "" then "decision\t▶\tbash \($staged)   [decision \($cls) \($id8): \($sent | .[0:60])]\t\($id8)"
            else "decision\t◆\t[decision \($cls) \($id8)\($agelbl)] \($sent)\t\($id8)" end) as $line
-        | "\(.created // "?")\t\($line)"'
+        # THIS SESSION (A7) — the `yours` split, applied to decisions. A packet is MINE when this
+        # session filed it (`.session_sid`) or when the LATEST re-check entry is this session
+        # (`.rechecks[-1].sid`: a research pass that re-convicted a packet someone else filed now
+        # carries it). Decided HERE, in the one jq that reads the store, so a packet carries exactly
+        # one class and is never both itemized as mine and counted in the pile. The same session
+        # guard as the backlog leg: "" and the unresolvable "?" never match, or a session-less render
+        # would promote the whole standing pile.
+        # Tier: the re-check entry declares signoff|default|nochange (an absent or unknown one reads
+        # as signoff, the conservative side); a packet filed here and never re-checked is "filed".
+        # Field 5 = the tier, for the rollup split; the sort key ranks sign-offs ahead of low-stakes.
+        | ((.rechecks // []) | if type == "array" and length > 0 then .[-1] else null end) as $rc
+        | ($sid != "" and $sid != "?") as $sidok
+        | (if $sidok and ($rc | type) == "object" and ($rc.sid // "") == $sid then "rc"
+           elif $sidok and (.session_sid // "") == $sid then "filed" else "" end) as $own
+        | if $own == "" then "\(.created // "?")\t\($line)"
+          else
+            (if $own == "filed" then "filed"
+             else ($rc.tier // "signoff" | if . == "default" or . == "nochange" then . else "signoff" end)
+             end) as $tier
+          | (if $own == "rc" then ($rc.recommendation // .recommendation) else .recommendation end
+             // "" | tostring | gsub("[\n\t]"; " ") | wcut(28)) as $rec
+          | (if $own == "rc" then ($rc.conviction // .conviction) else .conviction end) as $cv
+          | (if ($cv | type) == "number" then " \($cv | floor)%" else "" end) as $conv
+          | "[this session · \($tier)] " as $lbl
+          | "   [decision \($id8)]" as $tail
+          # 97 = 100 columns less the ` ◆ ` the renderer prefixes. The decision itself outranks the
+          # recommendation: it keeps at least 40 characters, and the recommendation takes what is
+          # left, or is dropped below 8 (a stub of a recommendation reads as a different one).
+          | (97 - ($lbl | length) - ($tail | length) - ($conv | length)) as $base
+          | ($s | sub("\\.$"; "")) as $s0
+          | ($s0 | wcut(if ($s0 | length) + 3 + ($rec | length) <= $base then ($s0 | length)
+                        else ([$base - 3 - ($rec | length), 40] | max) end)) as $what
+          | ($rec | wcut($base - ($what | length) - 3)
+             | if length < 8 then "" else . end) as $rec
+          | (if $rec != "" then " — \($rec)\($conv)" elif $conv != "" then " —\($conv)" else "" end) as $rc_part
+          | "Z\(if $tier == "default" or $tier == "nochange" then 1 else 0 end)\(.created // "?")\tmine\t◆\t\($lbl)\($what)\($rc_part)\($tail)\t\($id8)\t\($tier)"
+          end'
     } | sort | cut -f2- >> "$steps_file"
   fi
 
@@ -1232,7 +1271,7 @@ render_block() {
 
   # ── state line from the un-fakeable ledger (cwd repo; skipped cleanly outside a repo) ──
   local state="" led="" branch ahead shas dirty_n gate remainder parts custody dact
-  local resident resident_names
+  local resident resident_names blk_rechecked=0
   RUNG="?"
   if [ -n "$cwd" ] && [ -d "$cwd" ]; then
     # `wrap` and `_wl_sid` were resolved, and the read itself started, at § PREFETCH above.
@@ -1392,6 +1431,16 @@ render_block() {
         elif [ "${CERT_WROTE:-2}" = "0" ] && [ "$scope" = "unknown" ]; then
           state="✅ clean & landed — completeness UNKNOWN (no durable DoD to confirm scope)"
         else state="✅ live on trunk"; fi ;;
+      "⛔")
+        # The ledger's READOUT IS the state: it already names the decision (one filed packet) or the
+        # count and its listing command, and it is the operator's own words under ⛔ (BLOCKED_WHAT).
+        # Before this arm a ⛔ ledger left `state` EMPTY — the new-enum-member defect the 🚀 arm
+        # describes — and the research close of 2026-10-18 rendered `OPERATOR ▸ 4 need your call`.
+        # BLOCKED_RECHECKED (>0 = the research variant) picks the answer-first header below; absent
+        # (an older ledger) reads as 0, i.e. the filed shape. Width is fitted at compose time.
+        state="$(lf READOUT)"; [ -n "$state" ] || state="⛔ Blocked — need your call: cc-decide list --open"
+        blk_rechecked="$(lf BLOCKED_RECHECKED)"
+        case "$blk_rechecked" in ''|*[!0-9]*) blk_rechecked=0 ;; esac ;;
     esac
   fi
 
@@ -1434,7 +1483,7 @@ render_block() {
   # class = MAX + 4 lines worst case. MAX's meaning narrows from "total lines" to "itemized lines".
   # Kill switch: CC_OPREADOUT_CLASSBUDGET=off restores flat first-come + the `+N more` footer exactly.
   local total=0 cls mark text stem
-  local c_deploy=0 c_activation=0 c_decision=0 c_backlog=0 c_yours=0 c_held=0
+  local c_deploy=0 c_activation=0 c_decision=0 c_backlog=0 c_yours=0 c_held=0 c_mine=0
   # PASS 1 — count per class. Fork-free: a `< file` redirect is not a fork, and this REPLACES the
   # `grep -c .` that used to compute the total, so the class budget costs one fork LESS than the
   # flat renderer it supersedes (C19: no new fork may enter render_block).
@@ -1456,6 +1505,8 @@ render_block() {
       # `yours` counts toward the TOTAL (so it can fire the block on its own) but into its own
       # counter — which is precisely what keeps it out of c_backlog and out of the allocation below.
       yours)      c_yours=$((c_yours + 1)) ;;
+      # `mine` is `yours` for decisions: this session's packets, out of c_decision for the same reason.
+      mine)       c_mine=$((c_mine + 1)) ;;
       # `held` follows `yours`'s shape for the same reason and one more: it is a runnable class the
       # ACTUATOR has refused, so counting it into c_deploy would let a command the lane rejects draw
       # a slot in the collapse line and be named as runnable — the exact defect §2.6 D5 closes.
@@ -1485,7 +1536,9 @@ render_block() {
   # The kalloc zone joins it too: a panic ETA that rendered only beside an unrelated step is the
   # 2026-10-18 delivery failure again (kalloc_zone_line).
   local kz_line; kz_line="$(kalloc_zone_line)"
-  if [ "$total" -eq 0 ] && [ "$RUNG" != "📦" ] && [ "$RUNG" != "🚀" ] && [ "$Q_N" -eq 0 ] \
+  # ⛔ joins them: a blocked rung IS the operator's move, so a ⛔ with an otherwise empty board
+  # rendered nothing at all — the one close where silence is never right.
+  if [ "$total" -eq 0 ] && [ "$RUNG" != "📦" ] && [ "$RUNG" != "🚀" ] && [ "$RUNG" != "⛔" ] && [ "$Q_N" -eq 0 ] \
      && [ -z "$rp_lines" ] && [ -z "$fl_line" ] && [ -z "$kz_line" ]; then rm -f "$steps_file" "$steps_file.led" "$steps_file.rp" "$steps_file.rp.rc"; return 0; fi
 
   # ALLOCATION. Written out per class rather than looped: four classes is a fixed set, and the
@@ -1530,8 +1583,11 @@ render_block() {
   # question the `👤` rung raises: of everything on this board, THESE came out of the work you just
   # watched. It is a real partition — c_yours, the runnable legs and the judgment legs are disjoint
   # and sum to `total` — so the line still summarises exactly the groupings printed below it.
-  local _y=""
+  # This session's decisions (`mine`) are the same kind of partition term, so they join `yours`.
+  local _y="" _m="" _own=""
   [ "$c_yours" -gt 0 ] && _y="${c_yours} step(s) are yours"
+  [ "$c_mine" -gt 0 ] && _m="${c_mine} decision(s) are yours"
+  _own="${_y}${_y:+${_m:+ · }}${_m}"
   if [ "$total" -gt 0 ] && [ "$CBUDGET" = collapse ]; then
     local _run=$(( c_deploy + c_activation )) _jud=$(( c_decision + c_backlog )) _lead=""
     [ "$_run" -gt 0 ] && _lead="${_run} runnable now"
@@ -1542,7 +1598,7 @@ render_block() {
     [ "$c_held" -gt 0 ] && _lead="${_lead:+$_lead, }${c_held} held"
     # `yours`-only ⇒ the fallback must NOT fire: "2 step(s) are yours · 2 manual step(s)" restates
     # the same two items as if they were four.
-    if [ -n "$_y" ]; then _lead="${_y}${_lead:+ · $_lead}"; else _lead="${_lead:-${total} manual step(s)}"; fi
+    if [ -n "$_own" ]; then _lead="${_own}${_lead:+ · $_lead}"; else _lead="${_lead:-${total} manual step(s)}"; fi
     hdr="OPERATOR ▸ ${_lead}${state:+ · $state}"
     # ANSWER FIRST when the answer is "yes, close" (Minto: line 1 carries the idea, not the pile).
     # This machine standingly holds ~200 judgment items, so the default ordering renders
@@ -1553,10 +1609,10 @@ render_block() {
     # what it is. Only the certified case reorders — every other rung keeps the existing shape.
     # Not under the session's own "no": that close is not a "yes, close", so the pile keeps its place.
     if [ "$RUNG" = "✅" ] && [ "${CERT_WROTE:-2}" = "0" ] && [ "${CERT_VERDICT:-none}" != "no" ]; then
-      hdr="OPERATOR ▸ ${state}${_y:+ · $_y}"
+      hdr="OPERATOR ▸ ${state}${_own:+ · $_own}"
     fi
-  elif [ "$total" -gt 0 ]; then hdr="OPERATOR ▸ ${_y:+$_y · }${total} manual step(s)${state:+ · $state}"
-  elif [ "$RUNG" = "📦" ] || [ "$RUNG" = "🚀" ]; then hdr="OPERATOR ▸ ${state}"
+  elif [ "$total" -gt 0 ]; then hdr="OPERATOR ▸ ${_own:+$_own · }${total} manual step(s)${state:+ · $state}"
+  elif [ "$RUNG" = "📦" ] || [ "$RUNG" = "🚀" ] || [ "$RUNG" = "⛔" ]; then hdr="OPERATOR ▸ ${state}"
   # research-only render: the SESSION's state governs line 1 and the program line sits below it —
   # two verdicts, never merged into one sentence.
   elif [ -n "$rp_lines" ]; then hdr="OPERATOR ▸ ${state:-research program awaiting you}${q_line:+ · $q_line}"
@@ -1564,6 +1620,25 @@ render_block() {
   elif [ -n "$fl_line" ]; then hdr="OPERATOR ▸ ${state:-dispatcher fires failing}${q_line:+ · $q_line}"
   elif [ -n "$kz_line" ]; then hdr="OPERATOR ▸ ${state:-kernel zone heading for a panic}${q_line:+ · $q_line}"
   else hdr="OPERATOR ▸ ${q_line}"; fi   # queue-only render: the queue IS the governing line
+  # ANSWER FIRST for the RESEARCH ⛔ (A7), in every mode: research is done and the only thing left is
+  # the operator's call, so line 1 is that call. The partition led it before — `4 need your call`,
+  # three of them other sessions' standing pile — which is the reading this reorder exists to stop.
+  # The filed ⛔ keeps the partition and carries its state appended, the way 📦/🚀 do.
+  if [ "$RUNG" = "⛔" ] && [ "$blk_rechecked" -gt 0 ]; then hdr="OPERATOR ▸ ${state}${_y:+ · $_y}"; fi
+  # FIT ⛔ TO 100 COLUMNS. The filed READOUT carries the packet's whole what_plain, so a long one
+  # wrapped line 1. First drop the `: cc-decide list --open` tail (the own-decision rollup and the
+  # pile line both carry it), then cut the state at a word. `${#}` counts bytes under the C locale,
+  # which only ever cuts sooner; the word cut drops any partial character the slice left, and the
+  # ellipsis is measured in the same unit so it cannot push the line back over.
+  if [ "$RUNG" = "⛔" ] && [ -n "$state" ] && [ "${#hdr}" -gt 100 ]; then
+    local _hpre="${hdr%%"$state"*}" _hsuf="${hdr#*"$state"}" _hst="$state" _hroom _hell="…"
+    _hroom=$(( 100 - ${#_hpre} - ${#_hsuf} ))
+    [ "${#_hst}" -gt "$_hroom" ] && _hst="${_hst%: cc-decide list --open}"
+    if [ "${#_hst}" -gt "$_hroom" ] && [ "$_hroom" -gt "${#_hell}" ]; then
+      _hst="${_hst:0:$(( _hroom - ${#_hell} ))}"; _hst="${_hst% *}${_hell}"
+    fi
+    hdr="${_hpre}${_hst}${_hsuf}"
+  fi
   printf '%s\n' "$hdr"
 
   # ── YOURS — first, itemized, never collapsed, exempt from MAX ────────────────────────────────
@@ -1590,6 +1665,32 @@ render_block() {
       else                     printf ' ↳ cc-backlog list --blocked   [+%s more yours]\n'    "$(( c_yours - y_shown ))"; fi
     fi
     shown="$y_shown"
+  fi
+
+  # ── MINE — this session's decisions, the same contract as YOURS (A7) ─────────────────────────
+  # Itemized after `yours`, exempt from MAX, never collapsed, YMAX then one `↳` rollup that splits
+  # the rest into sign-offs (signoff, filed) and low-stakes (default, nochange) — every class-C packet
+  # still waits on the operator whatever its tier, so the rollup counts them all and labels them.
+  # Numbering continues `yours`'s, under the same mode rule.
+  local m_shown=0 m_s=0 m_l=0 m_tier
+  if [ "$c_mine" -gt 0 ]; then
+    while IFS="$TABC" read -r cls mark text stem; do
+      [ "$cls" = mine ] || continue
+      if [ "$m_shown" -lt "$YMAX" ]; then
+        m_shown=$((m_shown + 1)); y_lines=$((y_lines + 1))
+        if [ -n "$y_num" ]; then printf ' %d %s %s\n' "$y_lines" "$mark" "$text"
+        else                     printf ' %s %s\n'    "$mark" "$text"; fi
+        continue
+      fi
+      m_tier="${stem##*"$TABC"}"
+      case "$m_tier" in default|nochange) m_l=$((m_l + 1)) ;; *) m_s=$((m_s + 1)) ;; esac
+    done < "$steps_file"
+    if [ "$c_mine" -gt "$m_shown" ]; then
+      y_lines=$((y_lines + 1))
+      if [ -n "$y_num" ]; then printf ' %d ↳ +%s more this session (%s sign-off, %s low-stakes): cc-decide list --open\n' "$y_lines" "$(( c_mine - m_shown ))" "$m_s" "$m_l"
+      else                     printf ' ↳ +%s more this session (%s sign-off, %s low-stakes): cc-decide list --open\n'    "$(( c_mine - m_shown ))" "$m_s" "$m_l"; fi
+    fi
+    shown=$(( shown + m_shown ))
   fi
 
   # ── ⊘ HELD — rendered in BOTH modes, because it lives above the collapse/itemise fork ────────────
@@ -1747,6 +1848,7 @@ render_block() {
     # stream, and letting them through here would make close_class see backlog→yours→backlog and
     # emit that class's rollup twice.
     [ "$cls" = yours ] && continue
+    [ "$cls" = mine ] && continue   # `mine` likewise, and for the same reason
     # `held` likewise: already rendered above the fork, and it must not open a class run here (it has
     # no allocation and close_class has no arm for it, so letting it through would emit a bare row
     # outside the budget the other classes are held to).
