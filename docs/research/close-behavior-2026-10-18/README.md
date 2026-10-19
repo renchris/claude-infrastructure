@@ -356,3 +356,8 @@ licence for that and names the driver. The incident close, correctly written:
 a declaration that 0 of the incident's writers and at most 13% of synthesis writers would have been prompted to write.
 That is a framing question, not a missing fact, after two rounds and 46 agents; this session drives it through the
 frontier escalation (CLAUDE.md § Frontier Tier Routing), then C6 and C1 in shadow mode from whatever that returns.
+
+**Update, round 3** (`round3-frontier-panel.md`, H-CLOSE-1 solved-path-known). The panel refuted the verdict-no latch on
+measured precision: an honest no-close names its driver in ~95% of ~40 sessions, so the leak is the yes-with-follow-on
+shape, which C5 now makes a contract breach. The next build, a store-act disposition for non-✅ closes, waits on a
+7-day post-C5 census (backlog `562b31cb7d99`, parked not-yet-true until 2026-10-26). C1 and C6 stay below the bar until that census.
