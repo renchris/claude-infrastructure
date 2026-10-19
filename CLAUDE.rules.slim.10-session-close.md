@@ -31,7 +31,7 @@ Judge per task, not per turn.
 
 | End-state | Action |
 |---|---|
-| Read-only / advisory / research (no tracked writes) | No ledger, no auto-continue, no readout. Work the turn itself named is not exempt (see E0 below). |
+| Read-only / advisory (no tracked writes) | No ledger, no auto-continue, no readout. Work the turn itself named is not exempt (see E0 below). |
 | In scope: unwritten, unverified or uncommitted | Auto-continue: finish, run the gate, commit (atomic, explicit paths). |
 | In scope: gate ran red | Debug the root cause for up to about 2 cycles, then commit the partial work and report. No blind retries. |
 | Committed, not landed | Apply the ship policy below. |
@@ -96,7 +96,7 @@ Emit it at every write-turn close; omit it on read-only turns. It is one line: t
 - 🚀 Landed, not live: on trunk, but the live layer is past its converge budget or a migration could not reach it. Lag inside the budget is a ✅ with a note; a newly added file gets no budget (when a 🚀 needs reading: `~/.claude/commands/wrap.md`).
 - 👤 Yours: agent side complete and landed, but operator-only steps this session filed are unrun. It counts only this session's steps; the machine's standing pile is the `◆` line in the `operator-readout.sh` block.
 - ✅ Live: complete, on trunk (`trunk..HEAD = 0`), clean.
-- E0, read-only turn: no readout. A read-only turn that names drivable work is not E0: run the Follow-On Gate on each item and drive the passes (here, in a subagent, in a team, or in a fired session) before yielding. Inside an active research program, a completeness or pushback question is answered by relaying the certificate, and its named residuals are not drivable work (§ Follow-On Gate, Active research program exemption).
+- E0, read-only turn: no readout. A read-only turn that names drivable work is not E0: run the Follow-On Gate on each item and drive the passes (here, in a subagent, in a team, or in a fired session) before yielding. What it cannot drive it files (`cc-decide open`/`recheck <id>`) so the rung is `⛔`; its verdict: `no — research done, implementation pending: …`. Inside an active research program, a completeness or pushback question is answered by relaying the certificate, and its named residuals are not drivable work (§ Follow-On Gate, Active research program exemption).
 
 ### What each rung requires
 
@@ -157,7 +157,7 @@ S6. Name each item this session created in plain English, never as a bare count 
 
 Expand every identifier at first use in the same message. Session-internal tokens (plan-section labels, slot or rule names such as S1 or R1/R2, codenames) mean nothing to the reader: expand them, or delete an id that means nothing to the reader, such as a plan-section label (`git log` and the plan file hold it). A filed id carries its gloss: `` `1031594b6327` ("build the `--why <topic>` tier") ``, not `1031594b6327` alone. A label is never the subject of a line; state the decision itself ("may a new paying customer's database sit on Turso's Fly line? Answer yes or no", not "G-A is the one thing I need").
 
-File a decision you are holding the moment you have it; filing is what makes it the `⛔` rung: `cc-decide open --class C --what <plain English, no codenames> --conviction N --receipt R --option "label::outcome" --option "label::outcome"`. A class-B packet (an unattended ask whose default fires at its deadline) also carries `--conviction N --receipt R`; both follow the F2 number rule (Follow-On Gate). `wrap-ledger.sh` computes `⛔` from this session's open class-C packets, and it outranks every other rung; an unfiled decision is invisible to it, and `✅ SAFE TO CLOSE` would render over the open question.
+File a decision you are holding the moment you have it; filing is what makes it the `⛔` rung: `cc-decide open --class C --what <plain English, no codenames> --conviction N --receipt R --option "label::outcome" --option "label::outcome"`. A class-B packet also carries `--conviction N --receipt R`; both follow the F2 number rule (Follow-On Gate). `wrap-ledger.sh` computes `⛔` from this session's open class-C packets; an unfiled decision is invisible to it, and `✅ SAFE TO CLOSE` would render over the open question.
 
 ### Where dropped detail goes
 
@@ -186,7 +186,7 @@ Every open item ends as exactly one of these; "say the word" is not a dispositio
   - (c) Who it is for: `cc-backlog needs "<step>" --class needs-human|needs-credential` for an operator-only gate (the class is required; an unclassed `needs` is refused once the gate enforces) (add `--run "<cmd>"` when one exists; the operator's `cc-do <id>` closes it), or `cc-backlog add --why-not-now "<class>: <detail>"` for agent work. An add this session made without `--why-not-now` stays your own 🔧 (`FILED_MINE`) until it is driven, closed, or handed off with the reason.
 
   If you cannot answer all three, drop it. The standing pile renders as one counted line in the `OPERATOR ▸` block, never as your prose; an item this session filed is still named, in S2 or S6.
-- BLOCKED: a genuine operator-only gate (credential, sudo, destructive migration, a real value fork). It is S1's `⛔` rung, stated as the decision you need. At the exhaustion close — every Follow-On Gate pass and every item at 90%+ conviction driven, only operator decisions left — itemize only the decisions this session drove to the wall, one line each, answer-first: the decision as a sentence, its conviction number, its measured options. The counted `◆` line still owns the machine's standing pile.
+- BLOCKED: a genuine operator-only gate (credential, sudo, destructive migration, a real value fork). It is S1's `⛔` rung, stated as the decision you need. At the exhaustion close — every Follow-On Gate pass and every item at 90%+ conviction driven, only operator decisions left — itemize only the decisions this session drove to the wall, one line each, answer-first: the decision as a sentence, its conviction number, its measured options.
 
 Offering researched, in-scope remaining work ("say the word and I'll pick up either") is a defect; the Follow-On Gate already settled it. Drive it or drop it; filing needs a named impossibility class. Inside an active research program, naming a certificate residual or a refinement filed to the apply-at-build list relays the program's state and is not an offer (§ Follow-On Gate, Active research program exemption).
 
