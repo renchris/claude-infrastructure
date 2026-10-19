@@ -1,0 +1,181 @@
+{
+ "binary": "/Users/chrisren/.claude-293/node_modules/.bin/claude",
+ "t0_epoch": 1792410695.802,
+ "anchor": {
+  "t": 0.762,
+  "how": "composer"
+ },
+ "writes": [
+  {
+   "t": 1.767,
+   "path": "$S/p/alertdir/s1",
+   "planned_off": 1.0
+  },
+  {
+   "t": 20.775,
+   "path": "$S/p/alerts/sidA",
+   "planned_off": 20.0
+  },
+  {
+   "t": 21.274,
+   "path": "$S/p/alertdir/s2",
+   "planned_off": 20.5
+  },
+  {
+   "t": 28.772,
+   "path": "$S/p/alerts/sidB",
+   "planned_off": 28.0
+  },
+  {
+   "t": 34.77,
+   "path": "$S/p/alertdir/s3",
+   "planned_off": 34.0
+  }
+ ],
+ "verdict": {
+  "a_static_dir_toast_idle": {
+   "pass": true,
+   "s1_visible": [
+    [
+     10.739,
+     15.744
+    ]
+   ],
+   "B_ran_s1": [
+    2.443
+   ]
+  },
+  "b_sessionstart_watchpaths": {
+   "pass": true,
+   "sidA_visible": [
+    [
+     21.449,
+     26.442
+    ]
+   ],
+   "B_ran_sidA": [
+    21.421
+   ]
+  },
+  "c_second_toast_dropped": {
+   "pass": true,
+   "s2_visible": [],
+   "B_ran_s2": [
+    21.978
+   ],
+   "s2_write_inside_sidA_window": true
+  },
+  "d_toast_lifetime_s": {
+   "pass": true,
+   "s1_lifetime": 5.005
+  },
+  "e_cancelled_hook_paths_lost": {
+   "pass": true,
+   "sidB_visible": [],
+   "B_ran_sidB": [],
+   "control_s3_visible": [
+    [
+     35.445,
+     40.448
+    ]
+   ]
+  },
+  "f_bel_per_event": {
+   "pass": true,
+   "B_runs": {
+    "s1": [
+     2.443
+    ],
+    "sidA": [
+     21.421
+    ],
+    "s2": [
+     21.978
+    ],
+    "sidB": [],
+    "s3": [
+     35.43
+    ]
+   },
+   "standalone_bel_times": [
+    2.448,
+    21.437,
+    22.005,
+    35.443
+   ]
+  },
+  "g_term_marker": {
+   "answer": "no TERM marker",
+   "ss2_lines": [
+    "SS2START 1792410696.462 pid=45278 ppid=44983 parent=/Users/chrisren/.claude-293/node_modules/.bin/claude",
+    "SS2END 1792410698.410 sleep_rc=143"
+   ]
+  },
+  "h_zero_tokens": {
+   "pass": false,
+   "transcripts": [],
+   "files_with_ZZFCZZ": []
+  },
+  "groupA_hook_ran": [],
+  "seed_prompt": false
+ },
+ "load_at_end": [
+  322.87548828125,
+  305.5205078125,
+  301.21142578125
+ ],
+ "ev_log": [
+  "SS1 1792410696.460",
+  "SS2START 1792410696.462 pid=45278 ppid=44983 parent=/Users/chrisren/.claude-293/node_modules/.bin/claude",
+  "B 1792410698.245 {\"session_id\":\"51f76fa6-8f4f-42f6-b8fa-bf984606e9af\",\"transcript_path\":\"$S/cfg/projects/-private-var-folders-0s-t55zvgts2qqb78fbqgn8ldy40000gn-T-w6probeA-o1wcqtg4-proj/51f76fa6-8f4f-42f6-b8fa-bf984606e9af.jsonl\",\"cwd\":\"$S/proj\",\"hook_event_name\":\"FileChanged\",\"file_path\":\"$S/p/alertdir/s1\",\"event\":\"add\"}",
+  "SS2END 1792410698.410 sleep_rc=143",
+  "B 1792410717.223 {\"session_id\":\"51f76fa6-8f4f-42f6-b8fa-bf984606e9af\",\"transcript_path\":\"$S/cfg/projects/-private-var-folders-0s-t55zvgts2qqb78fbqgn8ldy40000gn-T-w6probeA-o1wcqtg4-proj/51f76fa6-8f4f-42f6-b8fa-bf984606e9af.jsonl\",\"cwd\":\"$S/proj\",\"hook_event_name\":\"FileChanged\",\"file_path\":\"$S/p/alerts/sidA\",\"event\":\"add\"}",
+  "B 1792410717.780 {\"session_id\":\"51f76fa6-8f4f-42f6-b8fa-bf984606e9af\",\"transcript_path\":\"$S/cfg/projects/-private-var-folders-0s-t55zvgts2qqb78fbqgn8ldy40000gn-T-w6probeA-o1wcqtg4-proj/51f76fa6-8f4f-42f6-b8fa-bf984606e9af.jsonl\",\"cwd\":\"$S/proj\",\"hook_event_name\":\"FileChanged\",\"file_path\":\"$S/p/alertdir/s2\",\"event\":\"add\"}",
+  "B 1792410731.232 {\"session_id\":\"51f76fa6-8f4f-42f6-b8fa-bf984606e9af\",\"transcript_path\":\"$S/cfg/projects/-private-var-folders-0s-t55zvgts2qqb78fbqgn8ldy40000gn-T-w6probeA-o1wcqtg4-proj/51f76fa6-8f4f-42f6-b8fa-bf984606e9af.jsonl\",\"cwd\":\"$S/proj\",\"hook_event_name\":\"FileChanged\",\"file_path\":\"$S/p/alertdir/s3\",\"event\":\"add\"}"
+ ],
+ "settings": {
+  "hooks": {
+   "SessionStart": [
+    {
+     "hooks": [
+      {
+       "type": "command",
+       "command": "/bin/bash $S/hooks/ss1.sh",
+       "timeout": 10
+      }
+     ]
+    },
+    {
+     "hooks": [
+      {
+       "type": "command",
+       "command": "/bin/bash $S/hooks/ss2.sh",
+       "timeout": 2
+      }
+     ]
+    }
+   ],
+   "FileChanged": [
+    {
+     "matcher": "$S/p/alertdir",
+     "hooks": [
+      {
+       "type": "command",
+       "command": "/bin/bash $S/hooks/fcA.sh",
+       "timeout": 5
+      }
+     ]
+    },
+    {
+     "hooks": [
+      {
+       "type": "command",
+       "command": "/bin/bash $S/hooks/fcB.sh",
+       "timeout": 5
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

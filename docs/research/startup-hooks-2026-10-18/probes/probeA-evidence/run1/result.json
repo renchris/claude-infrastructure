@@ -1,0 +1,160 @@
+{
+ "binary": "/Users/chrisren/.claude-293/node_modules/.bin/claude",
+ "t0_epoch": 1792410554.827,
+ "anchor": {
+  "t": 1.734,
+  "how": "composer"
+ },
+ "writes": [
+  {
+   "t": 2.779,
+   "path": "$S/p/alertdir/s1",
+   "planned_off": 1.0
+  },
+  {
+   "t": 9.743,
+   "path": "$S/p/alerts/sidA",
+   "planned_off": 8.0
+  },
+  {
+   "t": 10.243,
+   "path": "$S/p/alertdir/s2",
+   "planned_off": 8.5
+  },
+  {
+   "t": 17.744,
+   "path": "$S/p/alerts/sidB",
+   "planned_off": 16.0
+  },
+  {
+   "t": 23.744,
+   "path": "$S/p/alertdir/s3",
+   "planned_off": 22.0
+  }
+ ],
+ "verdict": {
+  "a_static_dir_toast_idle": {
+   "pass": true,
+   "s1_visible": [
+    [
+     11.705,
+     16.709
+    ]
+   ],
+   "B_ran_s1": [
+    3.451
+   ]
+  },
+  "b_sessionstart_watchpaths": {
+   "pass": false,
+   "sidA_visible": [],
+   "B_ran_sidA": [
+    10.387
+   ]
+  },
+  "c_second_toast_dropped": {
+   "pass": false,
+   "s2_visible": [],
+   "B_ran_s2": [
+    10.904
+   ],
+   "s2_write_inside_sidA_window": false
+  },
+  "d_toast_lifetime_s": {
+   "pass": true,
+   "s1_lifetime": 5.004
+  },
+  "e_cancelled_hook_paths_lost": {
+   "pass": true,
+   "sidB_visible": [],
+   "B_ran_sidB": [],
+   "control_s3_visible": [
+    [
+     24.419,
+     29.427
+    ]
+   ]
+  },
+  "f_bel_per_event": {
+   "pass": false,
+   "standalone_bel_times": [
+    3.46,
+    10.396,
+    10.913,
+    24.417
+   ]
+  },
+  "g_term_marker": {
+   "answer": "no TERM marker (SIGKILL or no signal)",
+   "ss2_lines": [
+    "SS2START 1792410556.449",
+    "SS2END 1792410558.269"
+   ]
+  },
+  "h_zero_tokens": {
+   "pass": false,
+   "transcripts": [],
+   "files_with_ZZFCZZ": []
+  },
+  "groupA_hook_ran": []
+ },
+ "load_at_end": [
+  294.25537109375,
+  295.31103515625,
+  297.58544921875
+ ],
+ "ev_log": [
+  "SS1 1792410556.400",
+  "SS2START 1792410556.449",
+  "SS2END 1792410558.269",
+  "B 1792410558.278 {\"session_id\":\"48a83b95-9213-4364-92b1-b1ae43593030\",\"transcript_path\":\"$S/cfg/projects/-private-var-folders-0s-t55zvgts2qqb78fbqgn8ldy40000gn-T-w6probeA-6l9kdpio-proj/48a83b95-9213-4364-92b1-b1ae43593030.jsonl\",\"cwd\":\"$S/proj\",\"hook_event_name\":\"FileChanged\",\"file_path\":\"$S/p/alertdir/s1\",\"event\":\"add\"}",
+  "B 1792410565.214 {\"session_id\":\"48a83b95-9213-4364-92b1-b1ae43593030\",\"transcript_path\":\"$S/cfg/projects/-private-var-folders-0s-t55zvgts2qqb78fbqgn8ldy40000gn-T-w6probeA-6l9kdpio-proj/48a83b95-9213-4364-92b1-b1ae43593030.jsonl\",\"cwd\":\"$S/proj\",\"hook_event_name\":\"FileChanged\",\"file_path\":\"$S/p/alerts/sidA\",\"event\":\"add\"}",
+  "B 1792410565.731 {\"session_id\":\"48a83b95-9213-4364-92b1-b1ae43593030\",\"transcript_path\":\"$S/cfg/projects/-private-var-folders-0s-t55zvgts2qqb78fbqgn8ldy40000gn-T-w6probeA-6l9kdpio-proj/48a83b95-9213-4364-92b1-b1ae43593030.jsonl\",\"cwd\":\"$S/proj\",\"hook_event_name\":\"FileChanged\",\"file_path\":\"$S/p/alertdir/s2\",\"event\":\"add\"}",
+  "B 1792410579.226 {\"session_id\":\"48a83b95-9213-4364-92b1-b1ae43593030\",\"transcript_path\":\"$S/cfg/projects/-private-var-folders-0s-t55zvgts2qqb78fbqgn8ldy40000gn-T-w6probeA-6l9kdpio-proj/48a83b95-9213-4364-92b1-b1ae43593030.jsonl\",\"cwd\":\"$S/proj\",\"hook_event_name\":\"FileChanged\",\"file_path\":\"$S/p/alertdir/s3\",\"event\":\"add\"}"
+ ],
+ "settings": {
+  "hooks": {
+   "SessionStart": [
+    {
+     "hooks": [
+      {
+       "type": "command",
+       "command": "/bin/bash $S/hooks/ss1.sh",
+       "timeout": 10
+      }
+     ]
+    },
+    {
+     "hooks": [
+      {
+       "type": "command",
+       "command": "/bin/bash $S/hooks/ss2.sh",
+       "timeout": 2
+      }
+     ]
+    }
+   ],
+   "FileChanged": [
+    {
+     "matcher": "$S/p/alertdir",
+     "hooks": [
+      {
+       "type": "command",
+       "command": "/bin/bash $S/hooks/fcA.sh",
+       "timeout": 5
+      }
+     ]
+    },
+    {
+     "hooks": [
+      {
+       "type": "command",
+       "command": "/bin/bash $S/hooks/fcB.sh",
+       "timeout": 5
+      }
+     ]
+    }
+   ]
+  }
+ }
+}
