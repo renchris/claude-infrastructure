@@ -1,0 +1,60 @@
+u 40
+ ▐▛1██▛█   Claude Code v2.1.293
+▝▜█2████▀  Haiku 5.5 · Claude Max
+ ▝▝3  ▝▝   /private/tmp/acct-probe/work · /rc
+   4
+   5
+❯ 86n exactly this one shell command and nothing else, then reply with only the word ALPHA: /tmp/acct-probe/arms/claude-accounts-fixture --readout --no-agents
+  97max-wait 0
+  18
+  49n 1 shell command
+  10 ➤ desk (bare claude) → next2
+  11    room in both its 5-hour and weekly limits; weekly resets in 99d+
+  12 ➤ general → next · ➤ fable → none
+  13
+  14                        5-hour ─────  weekly ─────────────────────
+  15    account       live   used resets   used  fable  resets  login
+  16    next-quatern…   12   88%* 1h 11m   46%* ▆▆▆▆▁▁▁▁  18%*    99d+  99d+
+  17 ➤  next2            1    82% 2h 29m    48% ▆▆▆▆▁▁▁▁   21%    99d+  99d+
+  28    next3            0   100%    44m    40% ▆▆▆▁▁▁▁▁   10%    99d+  99d+
+  59 ➤ᵍ next             2     0% 3h 37m    22% ▆▆▁▁▁▁▁▁    0%    99d+  99d+
+  20
+  21 ✖ next3 is out of 5-hour quota, confirmed by Anthropic's server (102%
+  52   used); resets in 44m
+  53 ▲ next-quaternary-extremely-long-account-name-for-width-testing — 5h at
+  54   88%, at/over the 85% routing cutoff; resets in 1h 11m
+  55 △ next2 — 5h at 82%; resets in 2h 29m
+  66 ▲ next3 — 5h at 102%, at/over the 85% routing cutoff; resets in 44m
+  67 ↻ next-quaternary-extremely-long-account-name-for-width-testing —
+  68   last-known; not polled this sweep, excluded from routing
+  69
+  60 At the last 2 days' pace, unused at weekly reset: next 19% · no forecast
+  61   yet for next-quaternary-extremely-long-account-name-for-width-testing
+  62 Fable window: unknown — frontier_access in model-config.yaml did not
+  63   parse, so the Fable lane is refused · Quota read from cache, age unknown
+  64   · claude-accounts --readout --fresh reads it again now
+  65
+⏺ 76PHA
+  77
+✻ 78ewed for 10s · done 12:09 PM
+  79
+❯ 70thout running any tool, reply with the whole numbers from 1 to 90, one per line, then the word BRAVO on its own line, and nothing else.
+  71
+⏺ 72
+  73
+  74
+  75
+  86
+  87
+  88
+  89
+  90
+  BRAVO
+
+✻ Worked for 1s · done 12:09 PM
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⚠ Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker · restart with CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 to keep future transcripts
+  ⏵⏵ auto mode on (shift+tab to cycle)

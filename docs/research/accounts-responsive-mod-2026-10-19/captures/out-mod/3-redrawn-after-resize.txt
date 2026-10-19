@@ -1,0 +1,60 @@
+  and nothing else, then reply with
+  only the word ALPHA: /tmp/acct-probe/
+  arms/claude-accounts-fixture
+  --readout --no-agents --max-wait 0
+
+  Ran 1 shell command
+  ⎿  ➤ desk (bare claude) → next2
+        room in both its 5-hour and
+        weekly limits; weekly resets in
+        99d+
+     ➤ general → next · ➤ fable → none
+
+        next-quatern… 5h  88%*  1h 11m
+        12 live       wk  46%*    99d+
+     ➤  next2         5h   82%  2h 29m
+        1 live        wk   48%    99d+
+        next3         5h  100%     44m
+        0 live        wk   40%    99d+
+     ➤ᵍ next          5h    0%  3h 37m
+        2 live        wk   22%    99d+
+
+     ✖ next3 is out of 5-hour quota,
+       confirmed by Anthropic's server
+       (102% used); resets in 44m
+     ▲ next-quaternary-extremely-long-ac
+       count-name-for-width-testing — 5h
+       at 88%, at/over the 85% routing
+       cutoff; resets in 1h 11m
+     △ next2 — 5h at 82%; resets in 2h
+       29m
+     ▲ next3 — 5h at 102%, at/over the
+       85% routing cutoff; resets in 44m
+     ↻ next-quaternary-extremely-long-ac
+       count-name-for-width-testing —
+       last-known; not polled this
+       sweep, excluded from routing
+
+     At the last 2 days' pace, unused at
+       weekly reset: next 19% · no
+       forecast yet for
+       next-quaternary-extremely-long-ac
+       count-name-for-width-testing
+     Fable window: unknown —
+       frontier_access in
+       model-config.yaml did not parse,
+       so the Fable lane is refused ·
+       Quota read from cache, age
+       unknown ·
+       claude-accounts --readout --fresh
+       reads it again now
+
+⏺ ALPHA
+
+✻ Worked for 13s · done 12:06 PM
+
+────────────────────────────────────────
+❯ uuu
+────────────────────────────────────────
+  ⚠ Transcript saving is off — inheri…
+  Press Ctrl-C again to exit

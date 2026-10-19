@@ -1,0 +1,11 @@
+{
+  "arm": "mod",
+  "scroll": true,
+  "turns_ok": [
+    true,
+    true
+  ],
+  "drawn_at_160": null,
+  "redrawn_after_resize": false,
+  "after_resize_40": null
+}

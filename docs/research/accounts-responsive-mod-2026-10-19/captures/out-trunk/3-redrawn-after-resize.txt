@@ -1,0 +1,60 @@
+                            5-hour ─────
+      weekly ─────────────────────
+        account       live   used resets
+       used  fable  resets  login
+        next-quatern…   12   88%* 1h 11m
+       46%* ▆▆▆▆▁▁▁▁  18%*    99d+
+     99d+
+     ➤  next2            1    82% 2h 29m
+        48% ▆▆▆▆▁▁▁▁   21%    99d+
+     99d+
+        next3            0   100%    44m
+        40% ▆▆▆▁▁▁▁▁   10%    99d+
+     99d+
+     ➤ᵍ next             2     0% 3h 37m
+        22% ▆▆▁▁▁▁▁▁    0%    99d+
+     99d+
+
+     ✖ next3 is out of 5-hour quota,
+     confirmed by Anthropic's server
+     (102%
+       used); resets in 44m
+     ▲ next-quaternary-extremely-long-ac
+     count-name-for-width-testing — 5h
+     at
+       88%, at/over the 85% routing
+     cutoff; resets in 1h 11m
+     △ next2 — 5h at 82%; resets in 2h
+     29m
+     ▲ next3 — 5h at 102%, at/over the
+     85% routing cutoff; resets in 44m
+     ↻ next-quaternary-extremely-long-ac
+     count-name-for-width-testing —
+       last-known; not polled this
+     sweep, excluded from routing
+
+     At the last 2 days' pace, unused at
+      weekly reset: next 18% · no
+     forecast
+       yet for
+     next-quaternary-extremely-long-acco
+     unt-name-for-width-testing
+     Fable window: unknown —
+     frontier_access in
+     model-config.yaml did not
+       parse, so the Fable lane is
+     refused · Quota read from cache,
+     age unknown
+       ·
+     claude-accounts --readout --fresh
+     reads it again now
+
+⏺ ALPHA
+
+✻ Cogitated for 9s · done 12:03 PM
+
+────────────────────────────────────────
+❯ uuu
+────────────────────────────────────────
+  ⚠ Transcript saving is off — inheri…
+  Press Ctrl-C again to exit
