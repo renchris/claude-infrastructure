@@ -328,3 +328,72 @@ displays_setup() {
   CC_HB_SWIFT_BIN="$D/absent" hb hb_display_probe
   [ "$status" -eq 1 ] || false
 }
+
+# ── roster backfill from the kitty tree (2026-10-18 panic) ──────────────────────────────────────────
+# Three live kitty panes had no registry row by the last tick, so they were absent from the roster and
+# boot-resume never considered them. Window 27 runs claude under reso-resume-one's expect (not the
+# foreground process group); window 28 runs it directly. Claude Code's own sessions/<pid>.json names
+# each session, and its procStart must equal the pid's start time now.
+backfill_setup() { # registry holds only s-reg in window 5; windows 27 and 28 have no row
+  echo "[$(sess s-reg "$KP" 400 /w/reg claude-next 5)]" > "$D/sessions.json"
+  echo '[{"id": 1, "tabs": [{"windows": [{"id": 5, "pid": 300, "cwd": "/w/reg"},
+         {"id": 27, "pid": 500, "cwd": "/w/tpg"}, {"id": 28, "pid": 600, "cwd": "/w/voiceink"}]}]}]' > "$D/tree.json"
+  printf '#!/bin/sh\n[ -f "%s/tree.json" ] && exec cat "%s/tree.json"\necho "[]"\n' "$D" "$D" > "$CC_HB_KITTEN_BIN"
+  cat > "$D/ps.txt" <<PS
+  300     1 -zsh
+  400   300 /x/node_modules/.bin/claude --model m
+  500     1 -zsh
+  510   500 bash /h/.reso/bin/reso-resume-one next2 /w/tpg sid-tpg
+  520   510 expect -c script
+  530   520 /x/node_modules/.bin/claude --resume sid-tpg --effort high
+  600     1 -zsh
+  610   600 bash /h/.claude/bin/cc-close-attrib /x/node_modules/.bin/claude --permission-mode auto
+  620   610 /x/node_modules/.bin/claude --permission-mode auto VoiceInk lead
+  630   620 /x/node_modules/.bin/claude -p probe
+PS
+  mkdir -p "$HOME/.claude-secondary/sessions" "$HOME/.claude-quaternary/sessions"
+  printf '{"pid":530,"sessionId":"sid-tpg","cwd":"/w/tpg","startedAt":1784600000123,"procStart":"Mon Oct 19 00:45:55 2026"}' \
+    > "$HOME/.claude-secondary/sessions/530.json"
+  printf '{"pid":620,"sessionId":"sid-vi","cwd":"/w/voiceink","startedAt":1784600500000,"procStart":"Mon Oct 19 01:00:00 2026"}' \
+    > "$HOME/.claude-quaternary/sessions/620.json"
+  echo 'Mon Oct 19 00:45:55 2026' > "$D/ident.530"; echo 'Mon Oct 19 01:00:00 2026' > "$D/ident.620"
+}
+
+@test "backfill: live panes with no registry row join the roster and hb.session.tsv, named by sessions/<pid>.json" {
+  backfill_setup
+  hb hb_tick
+  [ "$status" -eq 0 ] || false
+  r="$(dir UUID-A "$KP")/hb.roster.json"
+  [ "$(jq -c '[.[] | [.paneUUID, .session_id, .account, .pid]] | sort' "$r")" \
+    = '[["27","sid-tpg","claude-secondary",530],["28","sid-vi","claude-quaternary",620],["5","s-reg","claude-next",400]]' ] || false
+  [ "$(jq -r '.[] | select(.paneUUID == "27") | [.name, .cwd, .startedAt, .kitty_pid == '"$KP"', .source] | @tsv' "$r")" \
+    = "$(printf 'tpg-27\t/w/tpg\t1784600000123\ttrue\tkitty-tree')" ] || false
+  [ "$(cut -f1 "$(dir UUID-A "$KP")/hb.session.tsv" | sort | tr '\n' ' ')" = "s-reg sid-tpg sid-vi " ] || false
+  [[ "$output" == *"2 live pane(s) with no registry row added to the roster: 27 28"* ]] || false
+}
+
+@test "backfill: a stale sessions file, a pane already rostered, or no tree this tick adds nothing; --resume is the fallback" {
+  backfill_setup
+  echo 'Mon Oct 19 09:09:09 2026' > "$D/ident.620"          # pid 620 reused since the file was written
+  hb hb_tick
+  r="$(dir UUID-A "$KP")/hb.roster.json"
+  [ "$(jq -r '[.[].paneUUID] | sort | join(" ")' "$r")" = "27 5" ] || false
+  # The same file with its pid's start time restored is accepted, so the refusal above was procStart.
+  echo 'Mon Oct 19 01:00:00 2026' > "$D/ident.620"; hb hb_tick
+  [ "$(jq -r '[.[].paneUUID] | sort | join(" ")' "$r")" = "27 28 5" ] || false
+  # No sessions file: the argv's --resume names the session (window 27); window 28's argv has none.
+  rm -f "$HOME"/.claude-*/sessions/*.json
+  mkdir -p "$HOME/.claude-secondary/projects/-w-tpg"; : > "$HOME/.claude-secondary/projects/-w-tpg/sid-tpg.jsonl"
+  hb hb_tick
+  [ "$(jq -c '[.[] | select(.source == "kitty-tree") | [.paneUUID, .session_id, .account]]' "$r")" \
+    = '[["27","sid-tpg","claude-secondary"]]' ] || false
+  # A pane the registry already names is never duplicated, and a failed tree read adds nothing.
+  echo "[$(sess s-reg "$KP" 400 /w/reg claude-next 5),$(sess s-27 "$KP" 999 /w/tpg claude-next 27)]" > "$D/sessions.json"
+  hb hb_tick
+  [ "$(jq -r '[.[].paneUUID] | sort | join(" ")' "$r")" = "27 5" ] || false
+  [ "$(jq -r '.[] | select(.paneUUID == "27") | .session_id' "$r")" = s-27 ] || false
+  echo "[$(sess s-reg "$KP" 400 /w/reg claude-next 5)]" > "$D/sessions.json"; touch "$CC_HB_KITTEN_BIN.fail"
+  printf '#!/bin/sh\nexit 1\n' > "$CC_HB_KITTEN_BIN"
+  hb hb_tick
+  [ "$(jq -r '[.[].paneUUID] | join(" ")' "$r")" = "5" ] || false
+}

@@ -27,7 +27,9 @@
 # from cc-relayout). A pid that cannot be proven is dead, and its directory is not written.
 #   hb.kitty-start     the kitty's own process start epoch (ps lstart), one line; written FIRST, and
 #                      every later tick must read the same value from ps or it writes nothing here
-#   hb.roster.json     the `cc-sessions --json` rows whose kitty_pid is this kitty (an array)
+#   hb.roster.json     the `cc-sessions --json` rows whose kitty_pid is this kitty (an array), plus a
+#                      row (source "kitty-tree") for each live pane the registry has no row for
+#                      (_hb_roster_backfill)
 #   hb.start           the tick epoch, one line, one field; written LAST
 #   hb.session.tsv     sid  account  model  effort  permission_mode  branch  pid
 #                      account = the config dir of the newest transcript; model and effort from the
@@ -323,6 +325,90 @@ _hb_bg_tsv() {
   done
 }
 
+# _hb_roster_backfill <roster.json> <kitty-ls.json> <ps.txt> <kitty-pid> <socket> — the roster on
+# stdout, plus one row for each window of this kitty whose process tree holds a live top-level
+# `claude` that no roster row names (by pane or by pid). Names of the added panes go to stderr.
+#
+# WHY (2026-10-18 panic): the roster was ONLY the registry, so a live session whose registry row had
+# gone missing did not exist to boot-resume. Three kitty panes (TPG 27, VoiceInk 28, Club Vinyl 19)
+# were never considered: each had registered at SessionStart (lead-crash-watchdog.log, 10-15 and
+# 10-16), no squatter re-registered the pane and no SessionEnd or cc-reconcile prune is logged, yet
+# all three rows were gone by the last tick. All three were the oldest sessions in that kitty, which
+# fits cc-sessions deleting a stale-judged row once startedAt is over CC_REG_RETAIN_H. Whatever
+# removed them, the kitty tree this tick already reads is a second, independent witness, so a row's
+# absence from one store no longer erases a live session.
+#
+# Identity comes from Claude Code's own <config>/sessions/<pid>.json (sessionId, cwd, startedAt),
+# accepted only when its procStart equals the pid's start time now (a crash leaves stale files and
+# pids are reused), else from `--resume <sid>` in the argv. A process with neither is not added: a
+# row without a session id is nothing boot-resume can resume. A `claude` nested under another
+# `claude`, and `claude -p` / `--print`, are not pane tenants and are skipped. Matching on the tree,
+# not the foreground, finds a claude under reso-resume-one's expect, which owns its own pty.
+_hb_roster_backfill() {
+  local roster="$1" tree="$2" kp="$4" sock="$5" found wid cpid wcwd d f sid cwd acct st ps want got extra="" n=0 names=""
+  found="$( { jq -r '.[]?.tabs[]?.windows[]? | select((.id | type) == "number" and (.pid | type) == "number")
+                     | "W\t\(.id)\t\(.pid)\t\((.cwd // "") | gsub("[\\t\\n]"; " "))"' "$tree" 2>/dev/null
+              jq -r '.[]? | "R\t\(.paneUUID // "")\t\(.pid // "")"' "$roster" 2>/dev/null
+              awk '{ pid = $1; ppid = $2; $1 = ""; $2 = ""; sub(/^  */, ""); gsub(/\t/, " "); print "P\t" pid "\t" ppid "\t" $0 }' "$3" 2>/dev/null
+            } | awk -F'\t' '
+      function isclaude(a,   t, b, n) {
+        if (a == "" || a ~ /(^| )(-p|--print)( |$)/) return 0
+        split(a, t, " "); n = split(t[1], b, "/"); return b[n] == "claude"
+      }
+      $1 == "W" { win[$3] = $2; wcwd[$2] = $4; next }
+      $1 == "R" { if ($2 != "") rpane[$2] = 1; if ($3 != "") rpid[$3] = 1; next }
+      $1 == "P" { parent[$2] = $3; args[$2] = $4; order[++n] = $2; next }
+      END {
+        for (i = 1; i <= n; i++) {
+          p = order[i]
+          if (!isclaude(args[p]) || (p in rpid)) continue
+          w = ""; nested = 0
+          if (p in win) w = win[p]
+          q = parent[p]; hops = 0
+          while (w == "" && q != "" && q != "0" && q != "1" && hops < 64) {
+            if (isclaude(args[q])) { nested = 1; break }
+            if (q in win) { w = win[q]; break }
+            q = parent[q]; hops++
+          }
+          if (nested || w == "" || (w in rpane) || (w in done)) continue
+          done[w] = 1; print w "\t" p "\t" wcwd[w]
+        } }')"
+  while IFS=$'\t' read -r wid cpid wcwd; do
+    [ -n "$wid" ] && [ -n "$cpid" ] || continue
+    sid=""; cwd="$wcwd"; acct=""; st=0
+    for d in "$HOME"/.claude-* "$HOME"/.claude; do
+      f="$d/sessions/$cpid.json"
+      [ -f "$f" ] || continue
+      want="$(jq -r '.procStart // ""' "$f" 2>/dev/null | tr -s ' ' | sed 's/^ //;s/ $//')"
+      got="$(_hb_to 5 /usr/bin/env TZ=UTC LC_ALL=C "${CC_HB_PS_BIN:-/bin/ps}" -p "$cpid" -o lstart= 2>/dev/null \
+             | head -n 1 | tr -s ' ' | sed 's/^ //;s/ $//')"
+      [ -n "$want" ] && [ "$want" = "$got" ] || continue
+      sid="$(jq -r '.sessionId // ""' "$f" 2>/dev/null)"
+      cwd="$(jq -r '.cwd // ""' "$f" 2>/dev/null)"; [ -n "$cwd" ] || cwd="$wcwd"
+      st="$(jq -r '.startedAt // 0 | floor' "$f" 2>/dev/null)"; case "$st" in ''|*[!0-9]*) st=0 ;; esac
+      acct="${d##*/}"; acct="${acct#.}"
+      break
+    done
+    if [ -z "$sid" ]; then
+      ps="$(awk -v p="$cpid" '$1 == p { $1 = ""; $2 = ""; print; exit }' "$3" 2>/dev/null)"
+      sid="$(_hb_argv_flag "$ps" --resume)"
+      case "$sid" in ''|-*) sid="" ;; esac
+      [ -n "$sid" ] && acct="$(_hb_transcript "$sid" "$cwd" | cut -f1)"
+    fi
+    [ -n "$sid" ] || continue
+    extra="${extra}$(jq -cn --arg pane "$wid" --arg name "${cwd##*/}-$wid" --arg cwd "$cwd" --arg account "$acct" \
+        --argjson pid "$cpid" --argjson st "$st" --arg sid "$sid" --arg sock "$sock" --argjson kp "$kp" \
+        '{paneUUID: $pane, name: $name, cwd: $cwd, account: $account, pid: $pid, startedAt: $st,
+          session_id: $sid, surface: "pane", kitty_listen_on: $sock, kitty_pid: $kp, source: "kitty-tree"}' 2>/dev/null)
+"
+    n=$((n + 1)); names="${names} ${wid}"
+  done <<EOF
+$found
+EOF
+  [ "$n" -gt 0 ] && echo "restore-heartbeat: kitty $kp: $n live pane(s) with no registry row added to the roster:${names}" >&2
+  { cat "$roster"; printf '%s' "$extra"; } | jq -cs '(.[0] // []) + .[1:]'
+}
+
 # _hb_roles_tsv <all-roster.json> — role  pane  sid, one row per cc-roles file.
 _hb_roles_tsv() {
   local rd f pane sid
@@ -337,7 +423,7 @@ _hb_roles_tsv() {
 }
 
 hb_tick() {
-  local root now uuid sb kb tmpd kps kp kst dir sock pw ok=0 failed=0
+  local root now uuid sb kb tmpd kps kp kst dir sock pw lsok ok=0 failed=0
   root="$(hb_root)"; now="${CC_HB_NOW:-$(date +%s)}"
   uuid="$(_hb_bootuuid)"; [ -n "$uuid" ] || uuid=nouuid
   sb="$(_hb_sessions_bin)"
@@ -379,19 +465,29 @@ hb_tick() {
       rm -f "$dir/.hb.roster.json.tmp"; continue
     fi
     if ! _hb_mv "$dir/.hb.roster.json.tmp" "$dir/hb.roster.json"; then failed=$((failed + 1)); continue; fi
-    _hb_session_tsv "$dir/hb.roster.json" "$tmpd/ps.txt" > "$dir/.hb.session.tsv.tmp" 2>/dev/null \
-      && _hb_mv "$dir/.hb.session.tsv.tmp" "$dir/hb.session.tsv"
+    lsok=0
     if [ "$kp" != 0 ] && [ -n "$kb" ] && [ -x "$kb" ]; then
       sock="$(jq -r '[.[] | .kitty_listen_on // empty][0] // ""' "$dir/hb.roster.json" 2>/dev/null)"
       [ -n "$sock" ] || sock="unix:/tmp/kitty-$kp"
       if _hb_to "${CC_HB_LS_TIMEOUT:-5}" "$kb" @ --to "$sock" ls > "$dir/.hb.kitty-ls.json.tmp" 2>/dev/null \
          && jq -e 'type == "array"' "$dir/.hb.kitty-ls.json.tmp" >/dev/null 2>&1; then
         # A tree read this tick is whole again, so a reboot prep's verdict on an older one is void.
-        _hb_mv "$dir/.hb.kitty-ls.json.tmp" "$dir/hb.kitty-ls.json" && rm -f "$dir/hb.layout-degraded"
+        _hb_mv "$dir/.hb.kitty-ls.json.tmp" "$dir/hb.kitty-ls.json" && rm -f "$dir/hb.layout-degraded" && lsok=1
       else
         rm -f "$dir/.hb.kitty-ls.json.tmp"
       fi
     fi
+    # Only a tree read THIS tick may add rows: an older tree names windows that may be gone.
+    if [ "$lsok" = 1 ]; then
+      if _hb_roster_backfill "$dir/hb.roster.json" "$dir/hb.kitty-ls.json" "$tmpd/ps.txt" "$kp" "$sock" \
+           > "$dir/.hb.roster.json.tmp" && jq -e 'type == "array"' "$dir/.hb.roster.json.tmp" >/dev/null 2>&1; then
+        _hb_mv "$dir/.hb.roster.json.tmp" "$dir/hb.roster.json"
+      else
+        rm -f "$dir/.hb.roster.json.tmp"
+      fi
+    fi
+    _hb_session_tsv "$dir/hb.roster.json" "$tmpd/ps.txt" > "$dir/.hb.session.tsv.tmp" 2>/dev/null \
+      && _hb_mv "$dir/.hb.session.tsv.tmp" "$dir/hb.session.tsv"
     # The display of each OS window in the tree. A short or malformed answer keeps the last good file.
     if [ "$kp" != 0 ] && [ -f "$dir/hb.kitty-ls.json" ]; then
       pw="$(jq -r '.[]? | .platform_window_id // empty' "$dir/hb.kitty-ls.json" 2>/dev/null | grep -E '^[0-9]+$' | tr '\n' ' ')"
