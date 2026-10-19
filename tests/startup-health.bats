@@ -694,6 +694,7 @@ rcy_hook() {
   IDLF="$BATS_TEST_TMPDIR/idl.jsonl"
   run bash -c "printf '{\"session_id\":\"$SID\"}' | DESK_BRIEF_IDL='$IDLF' CC_ROLES_DIR='$BATS_TEST_TMPDIR/roles' DESK_BRIEF_PANE=p1 DESK_BRIEF_FILE='$BATS_TEST_TMPDIR/brief.md' bash '$REPO/hooks/desk-brief-inject.sh'"
   [ "$status" -eq 0 ]
+  # shellcheck disable=SC2143  # deliberate: a bare `! grep -q` never fails a bats test
   [ -z "$(grep '"fired"' "$IDLF" 2>/dev/null)" ]                # no fired row at print
   TP="$BATS_TEST_TMPDIR/t.jsonl"; mksession "$TP"
   { delivered_rec hook_additional_context "You hold the machine-wide DESK role (…)"; user_rec; } > "$TP"
