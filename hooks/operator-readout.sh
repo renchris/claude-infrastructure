@@ -347,7 +347,11 @@ ESC_SEEN_DIR="${CC_SWEEP_SEEN_DIR:-$HOME/.claude/autonomy/sweep-seen}"
 # The kalloc ZONE page (scripts/capacity-alarm.sh § THE ZONE PAGE) sits BESIDE pages/, never in it,
 # so it is not one of the counted records above: it gets its own named line. Derived from the same
 # seam the writer derives it from.
-ZONE_PAGE_FILE="$(dirname "$ESC_PAGES_DIR")/kalloc-zone.page"
+# Parameter expansion, not dirname(1): this line runs on EVERY Stop, and the warm-path fork census
+# (tests/operator-readout-forks.bats) allows no dirname there. A trailing slash is stripped first so
+# the result matches dirname's.
+_or_pd="${ESC_PAGES_DIR%/}"; case "$_or_pd" in */*) _or_pd="${_or_pd%/*}" ;; *) _or_pd=. ;; esac
+ZONE_PAGE_FILE="${_or_pd:-/}/kalloc-zone.page"
 # A SEAM, and specifically so the deploy platter's own existence check (I11) is testable in BOTH
 # states. Without it the suite asserts the operator's live ~/.claude/scripts/ and the verdict flips
 # by machine — borrowed hermeticity, and the flip case is exactly the one the check exists for.
