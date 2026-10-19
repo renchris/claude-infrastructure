@@ -152,24 +152,64 @@ list_sessions() {
 }
 
 # ── fleet fold ───────────────────────────────────────────────────────────────────────────────────
-# fold_rows → "<id><TAB><loss|deferred><TAB><label><TAB><start-epoch>" for every occurrence.
+# fold_rows → "<id><TAB><class><TAB><label><TAB><start-epoch>" for every occurrence. Classes: loss,
+# deferred, and `start` (one per hook start, plus one `session` row per session: the denominators of
+# the shadow drop detector, #26; render() ignores them).
+#
+# COST. This runs every keepwarm tick over a week of session dirs, so a settled session is folded
+# ONCE: its rows are cached in "<dir>/fold.cache" and reused while no file in that dir is newer (a
+# builtin -nt per file, no fork). A recompute costs one `stat` for all of a dir's .start files. Only
+# a session judged from its transcript is cached; a sentinel-only one (no transcript yet) and a start
+# still settling are recomputed each tick, because a transcript appearing changes nothing in the dir.
 fold_rows() {
-  local d sid ns name v st cls j="$R/.fold-j.$$"
+  local d sid f fresh l
   for d in "$R"/*/; do
     d="${d%/}"; sid="${d##*/}"
     sh_dir "$sid" || continue
-    ns="$(newest_start "$d")"
-    [ "$ns" -gt 0 ] || continue
-    [ $(( now - ns )) -ge "$SETTLE_S" ] || continue
-    [ "${FOLD_WRITE:-0}" = 1 ] && ! sh_current "$d" && sh_write "$d" >/dev/null 2>&1
-    [ "${FOLD_WRITE:-0}" = 1 ] && sh_settle "$d" >/dev/null 2>&1   # unit 5.4: panes with no prompt too
-    judge_live "$d" > "$j" 2>/dev/null || continue
+    if [ -f "$d/fold.cache" ]; then
+      fresh=1
+      for f in "$d"/*; do [ "$f" -nt "$d/fold.cache" ] && { fresh=0; break; }; done
+      if [ "$fresh" = 1 ]; then
+        while IFS= read -r l; do printf '%s\n' "$l"; done < "$d/fold.cache"
+        continue
+      fi
+    fi
+    fold_dir "$d" "$sid"
+  done
+}
+
+fold_dir() { # <dir> <sid> → that session's rows on stdout (and into its cache once judged)
+  local d="$1" sid="$2" ns=0 m p name v st cls j="$R/.fold-j.$$" out="$R/.fold-o.$$" starts
+  starts="$(stat -f '%m %N' "$d"/*.start 2>/dev/null)"
+  while read -r m p; do
+    case "$p" in */session.start|'') continue ;; esac
+    [ "$m" -gt "$ns" ] && ns="$m"
+  done <<< "$starts"
+  [ "$ns" -gt 0 ] || return 0
+  [ $(( now - ns )) -ge "$SETTLE_S" ] || return 0
+  if [ "${FOLD_WRITE:-0}" = 1 ]; then
+    sh_current "$d" || sh_write "$d" >/dev/null 2>&1
+    sh_settle "$d" >/dev/null 2>&1   # unit 5.4: panes with no prompt too
+  fi
+  st_of() { # <hook> → its .start mtime, from the one stat above
+    local m2 p2
+    while read -r m2 p2; do [ "$p2" = "$d/$1.start" ] && { printf '%s' "$m2"; return 0; }; done <<< "$starts"
+    printf '%s' "$ns"
+  }
+  judge_live "$d" > "$j" 2>/dev/null || { rm -f "$j"; return 0; }
+  {
+    printf '%s:session:%s:start\tstart\tsession\t%s\n' "$sid" "$ns" "$ns"
+    while read -r m p; do
+      case "$p" in */session.start|'') continue ;; esac
+      name="${p##*/}"; name="${name%.start}"
+      printf '%s:%s:%s:start\tstart\t%s\t%s\n' "$sid" "$name" "$m" "$name" "$m"
+    done <<< "$starts"
     if [ "$JUDGE_SRC" = transcript ]; then
       while IFS=$'\t' read -r name v; do
         v="${v%% *}"
         case "$name" in
           foreign-*) [ "$v" = confirmed ] && printf '%s:%s:%s\tloss\tproject hook\t%s\n' "$sid" "$name" "$ns" "$ns" ;;
-          *) st="$(mtime "$d/$name.start")"; [ "$st" -gt 0 ] || st="$ns"
+          *) st="$(st_of "$name")"
              cls=""
              case "$v" in
                confirmed) cls=loss; [ "$name" = mailbox-drain ] && cls=deferred ;;
@@ -181,19 +221,22 @@ fold_rows() {
     else
       # No transcript (an idle pane never gets one): the sentinels are the only signal. A possible
       # loss there is unproven delivery, which counts as a loss (gap-G4 §3 item 4).
-      for name in "$d"/*.start; do
-        [ -e "$name" ] || continue
-        name="${name##*/}"; name="${name%.start}"
-        [ "$name" = session ] && continue
+      while read -r m p; do
+        case "$p" in */session.start|'') continue ;; esac
+        name="${p##*/}"; name="${name%.start}"
         sh_possible "$d" "$name"
         [ -n "$SH_REASON" ] || continue
-        st="$(mtime "$d/$name.start")"
         cls=loss; [ "$name" = mailbox-drain ] && cls=deferred
-        printf '%s:%s:%s\t%s\t%s\t%s\n' "$sid" "$name" "$st" "$cls" "$name" "$st"
-      done
+        printf '%s:%s:%s\t%s\t%s\t%s\n' "$sid" "$name" "$m" "$cls" "$name" "$m"
+      done <<< "$starts"
     fi
-    rm -f "$j"
-  done
+  } > "$out"
+  cat "$out"
+  # Cache only a transcript-judged session with nothing left to settle.
+  if [ "${FOLD_WRITE:-0}" = 1 ] && [ "$JUDGE_SRC" = transcript ] && ! ls "$d"/proof.* >/dev/null 2>&1; then
+    mv -f "$out" "$d/fold.cache" 2>/dev/null
+  fi
+  rm -f "$j" "$out"
 }
 
 fold_lock() {
@@ -246,7 +289,7 @@ fleet() { # [--ack]
     local before=0 added
     [ -f "$R/fleet-ack.txt" ] && before="$(wc -l < "$R/fleet-ack.txt" | tr -d ' ')"
     : >> "$R/fleet-ack.txt"
-    cut -f1 "$rows" | grep -vxFf "$R/fleet-ack.txt" > "$R/.fleet-new.$$"
+    awk -F'\t' '$2 != "start" { print $1 }' "$rows" | grep -vxFf "$R/fleet-ack.txt" > "$R/.fleet-new.$$"
     cat "$R/.fleet-new.$$" >> "$R/fleet-ack.txt"; rm -f "$R/.fleet-new.$$"
     added=$(( $(wc -l < "$R/fleet-ack.txt" | tr -d ' ') - before ))
     echo "acknowledged $added occurrence(s); a later one raises the line again"

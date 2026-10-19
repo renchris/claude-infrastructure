@@ -739,3 +739,23 @@ BOARDBODY"; user_rec; } > "$TP"
   [ "$(jq -r '.disposition + " " + .reason + " " + .pane' "$IDLF")" = "failed not-delivered p1" ]
   [ -f "$S/unproven.desk-brief" ]
 }
+
+@test "3.5 the fold folds a settled session once (cache), and refolds it when a file in it changes" {
+  mksid aaaa-1 dod-persist 0 900 "$HK/dod-persist.sh"
+  CSH --fleet
+  C="$CC_STARTUP_HEALTH_DIR/aaaa-1/fold.cache"
+  [ -f "$C" ]
+  rm -f "$BATS_TEST_TMPDIR/aaaa-1.jsonl"                       # cached: the transcript is no longer read
+  CSH --fleet
+  LINE | grep -qF ': 1 — dod-persist 1 ·'
+  TZ=UTC touch -t 202601010000.00 "$C"                         # any file in the dir now newer ⇒ refold
+  CSH --fleet
+  [ "$C" -nt "$CC_STARTUP_HEALTH_DIR/aaaa-1/dod-persist.done" ]
+  LINE | grep -qF ': 1 — dod-persist 1 ·'                      # the stored verdicts still count it
+}
+
+@test "3.5 --ack records occurrences only, never the start rows the detector counts" {
+  mksid aaaa-1 dod-persist 0 900 "$HK/dod-persist.sh"
+  CSH --ack
+  [ "$(cat "$CC_STARTUP_HEALTH_DIR/fleet-ack.txt")" = "$(grep -o 'aaaa-1:dod-persist:[0-9]*' "$CC_STARTUP_HEALTH_DIR/aaaa-1/fold.cache" | head -1)" ]
+}
