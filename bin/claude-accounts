@@ -9238,7 +9238,10 @@ def _pane_grid(cells, width):
             s += "  " if grp != prev and grp is not None else " "
             prev = grp
             t, rgb, b = vals.get(k, ("", None, False))
-            s += t if k == "bar" else _cell(t, cw, al, rgb, b)
+            # The bar arrives pre-coloured and already `bw` wide, so it is appended as is; the
+            # header row's bar cell is EMPTY and must still be padded to `bw`, or every header to
+            # its right sits a bar's width left of its column (operator screenshot, 2026-10-19).
+            s += t if k == "bar" and t else _cell(t, cw, al, rgb, b)
         return s
 
     def cols_of(grp):

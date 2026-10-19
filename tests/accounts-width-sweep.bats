@@ -211,3 +211,47 @@ board_at() {  # <pane cols> → the SessionStart systemMessage for that pane
   # and an unknown width (no tty anywhere up the tree, no override) keeps the old board too
   [ "$(printf '{"source":"startup"}' | CC_PANE_COLS=x "$HOOK" | jq -r .systemMessage)" = "$want" ]
 }
+
+# Operator, 2026-10-19, with a screenshot: "The weekly reset header is not aligned with the
+# respective column". The weekly bar has no header, and its empty header cell was appended
+# UNPADDED, so every header right of the bar sat a bar's width (4 or 8 cells) left of its column.
+# Fitting is not alignment: case 1 stayed green through it. Here every right-aligned header must
+# end exactly where each account row has a cell ending — a non-space at its last column and a space
+# (or the end of the row) right after it.
+@test "7 /accounts pane readout: every right-aligned header ends on its column's right edge" {
+  local w fail=0
+  for w in $WIDTHS; do
+    CC_BOARD_COLOR=off ca --readout --pane --cols "$w" --no-agents --max-wait 0 > "$D/grid" 2>"$D/err" \
+      || { echo "pane=$w: --pane failed: $(cat "$D/err")"; fail=1; continue; }
+    python3 - "$w" "$D/grid" <<'PY' || fail=1
+import re, sys
+w, lines = sys.argv[1], open(sys.argv[2]).read().split("\n")
+hi = next((i for i, l in enumerate(lines) if re.search(r"\baccount\b", l)), None)
+if hi is None:          # the stacked form (two rows per account) carries no header row
+    sys.exit(0)
+head = lines[hi]
+rows = []
+for l in lines[hi + 1:]:        # the grid runs from the header to the first blank line
+    if not l.strip():
+        break
+    rows.append(l)
+bad = 0
+for m in re.finditer(r"\b(live|used|resets|fable)\b", head):
+    e = m.end()
+    for r in rows:
+        # the cell a header names must END at the header's edge: a percent under used/fable, a
+        # countdown under resets, a count under live. Edge-matching alone is fooled whenever the
+        # shift lands inside another cell ("5d 11h") or on the bar's own edge.
+        want = {"used": r"\d+%\*?", "fable": r"\d+%\*?|—", "live": r"\d+|\?",
+                "resets": r"\d+d \d+h|\d+h \d+m|\d+[dhm]|99d\+|—"}[m.group()]
+        ok = len(r) >= e and (len(r) == e or r[e] == " ") \
+            and re.search(r"(?:^|\s)(?:" + want + r")$", r[:e]) is not None \
+            and not (m.group() == "resets" and re.match(r" \d+[hms]\b", r[e:]))  # nor cut mid-countdown
+        if not ok:
+            bad += 1
+            print(f"MISALIGNED pane={w}: header {m.group()!r} ends at {e}, row {r!r}")
+sys.exit(1 if bad else 0)
+PY
+  done
+  [ "$fail" -eq 0 ]
+}
