@@ -301,7 +301,7 @@ PY
   mkdir -p "$CC_PANE_DIR"; printf 'toolu_A' > "$CC_PANE_DIR/sweep-sid.mod"
   run relay toolu_A
   [ "$(printf '%s' "$output" | jq -r '.systemMessage // "none"')" = none ] || { echo "$output"; false; }
-  [[ "$(printf '%s' "$output" | jq -r .hookSpecificOutput.additionalContext)" == *"accounts-readout mod"* ]]
+  [[ "$(printf '%s' "$output" | jq -r .hookSpecificOutput.additionalContext)" == *"accounts-readout mod"* ]] || false
   [ ! -e "$CC_PANE_DIR/sweep-sid.txt" ]                 # the static copy is consumed, never drawn later
   run relay toolu_B                                      # a stamp from another call: static copy drawn
   [ -n "$(printf '%s' "$output" | jq -r '.systemMessage // empty')" ] || { echo "$output"; false; }
