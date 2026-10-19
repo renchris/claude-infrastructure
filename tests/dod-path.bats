@@ -12,6 +12,7 @@ setup() {
   WL="$REPO_ROOT/scripts/wrap-ledger.sh"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export WRAP_DOD_DIR="$BATS_TEST_TMPDIR/dod"; mkdir -p "$WRAP_DOD_DIR"
+  export CC_DOD_CHECKPOINT_MS=0   # dod-persist's wall-clock checkpoint would fire under load mid-suite
   # CLAUDE_CODE_SESSION_ID and the pane ids too: `set` stamps the capture with the first, and the
   # SessionStart lineage frame reads all three. Left ambient, a run inside a Claude session passes a
   # case that a launchd runner (none of them set) fails — row c6ba32a5f661.

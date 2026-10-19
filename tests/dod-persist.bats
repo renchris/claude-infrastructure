@@ -15,6 +15,11 @@ setup() {
   # Lineage-only is the DEFAULT since 2026-09-24. The cases below that pin the older worktree frame
   # run it explicitly at =0; the lineage-only cases pass =1, and "unset is on" is asserted with env -u.
   export CC_DOD_LINEAGE_ONLY=0
+  # every SessionStart appends a timing line; keep it in scratch, never the operator's log dir
+  export CC_DOD_TIMING_LOG="$BATS_TEST_TMPDIR/dod-timing.jsonl"
+  # the 3.5 s checkpoint is wall-clock: at high load it fires mid-suite and swaps the render for its
+  # pointer, so every case runs without it except the checkpoint cases, which set it themselves
+  export CC_DOD_CHECKPOINT_MS=0
   CWD="$BATS_TEST_TMPDIR/wt"; mkdir -p "$CWD"
   git -C "$CWD" init -q; git -C "$CWD" config user.email t@t; git -C "$CWD" config user.name t
   echo x > "$CWD/f"; git -C "$CWD" add f; git -C "$CWD" commit -qm init
@@ -714,4 +719,73 @@ bud_line() { printf '%s\n' "$1" | grep -nF -- "$2" | head -1 | cut -d: -f1; }   
   local l1 l3 l5; l1="$(bud_line "$c" '## 2026-09-01T')"; l3="$(bud_line "$c" '## 2026-09-03T')"; l5="$(bud_line "$c" '## 2026-09-05T')"
   [ -z "$l1" ] && [ -n "$l3" ] && [ -n "$l5" ] || false
   [ "$l5" -lt "$l3" ] || false
+}
+
+# ── cost (startup-hooks README §2 #17): one payload parse, one rev-parse, phase timing, checkpoint ──
+# A git shim that counts its own calls, then execs the real git: the memo's whole claim is a number.
+git_counter() {
+  local real; real="$(command -v git)"
+  mkdir -p "$BATS_TEST_TMPDIR/gshim"
+  printf '#!/bin/bash\necho x >> "%s"\nexec "%s" "$@"\n' "$BATS_TEST_TMPDIR/git-calls" "$real" > "$BATS_TEST_TMPDIR/gshim/git"
+  chmod +x "$BATS_TEST_TMPDIR/gshim/git"; : > "$BATS_TEST_TMPDIR/git-calls"
+}
+
+@test "cost: a lineage SessionStart asks git at most twice (one rev-parse, one config read)" {
+  git -C "$CWD" remote add origin https://example.invalid/cost.git   # the repo-key path: one config read
+  lo_setup
+  git_counter
+  run bash -c "printf '%s' '$(lo_json MESID)' | PATH='$BATS_TEST_TMPDIR/gshim':\"\$PATH\" CC_DOD_LINEAGE_ONLY=1 bash '$HOOK' 2>/dev/null"
+  [ "$status" -eq 0 ]
+  ctx_of "$output" | grep -qF '    Scope (frozen): my contract'
+  [ "$(wc -l < "$BATS_TEST_TMPDIR/git-calls" | tr -d ' ')" -le 2 ] || { echo "git calls: $(wc -l < "$BATS_TEST_TMPDIR/git-calls")" >&2; false; }
+}
+
+@test "cost: the memo answers only for the cwd it was primed with" {
+  local other="$BATS_TEST_TMPDIR/other"; git init -q "$other"
+  git -C "$other" remote add origin https://example.invalid/other.git
+  run bash -c ". '$REPO/hooks/lib/dod-path.sh'; dod_prime '$CWD'; dod_toplevel '$other'; echo; dod_path_for '$other'; echo; dod_toplevel '$CWD'"
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "$(git -C "$other" rev-parse --show-toplevel)" ]
+  [ "${lines[1]}" = "$(bash -c ". '$REPO/hooks/lib/dod-path.sh'; dod_path_for '$other'")" ]
+  [ "${lines[2]}" = "$(git -C "$CWD" rev-parse --show-toplevel)" ]
+}
+
+@test "cost: an empty payload field between two others does not shift the fields after it" {
+  lo_setup
+  local j; j="$(jq -nc --arg c "$CWD" '{hook_event_name:"SessionStart",session_id:"",cwd:$c}')"
+  run bash -c "printf '%s' '$j' | CLAUDE_CODE_SESSION_ID=MESID CC_DOD_LINEAGE_ONLY=1 bash '$HOOK' 2>/dev/null"
+  [ "$status" -eq 0 ]
+  ctx_of "$output" | grep -qF '    Scope (frozen): my contract'   # cwd intact; sid fell back to the env
+}
+
+@test "timing: a SessionStart appends one line of per-phase milliseconds; an empty CC_DOD_TIMING_LOG writes none" {
+  lo_setup
+  run bash -c "printf '%s' '$(lo_json MESID)' | CC_DOD_LINEAGE_ONLY=1 bash '$HOOK' 2>/dev/null"
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$CC_DOD_TIMING_LOG" | tr -d ' ')" -eq 1 ]
+  jq -e '.outcome == "ok" and .sid == "MESID" and (.total_ms|type) == "number"
+         and (.phases|keys) == ["lineage","parse","prime","read","render","scope"]' "$CC_DOD_TIMING_LOG"
+  run bash -c "printf '%s' '$(lo_json MESID)' | CC_DOD_TIMING_LOG= CC_DOD_LINEAGE_ONLY=1 bash '$HOOK' 2>/dev/null"
+  [ "$(wc -l < "$CC_DOD_TIMING_LOG" | tr -d ' ')" -eq 1 ]
+}
+
+@test "checkpoint: past its budget the hook emits a labelled pointer to the store instead of the render" {
+  lo_setup
+  run bash -c "printf '%s' '$(lo_json MESID)' | CC_DOD_CHECKPOINT_MS=1 CC_DOD_LINEAGE_ONLY=1 bash '$HOOK' 2>/dev/null"
+  [ "$status" -eq 0 ]
+  local c; c="$(ctx_of "$output")"
+  printf '%s' "$c" | grep -qF 'DoD not injected: dod-persist stopped at its 1 ms checkpoint (prime,'
+  printf '%s' "$c" | grep -qF "$STORE"
+  printf '%s' "$c" | grep -qF 'dod-persist.sh get'
+  lo_lacks "$c" 'my contract'
+  [ "${#c}" -lt 400 ]
+  jq -e '.outcome == "checkpoint"' "$CC_DOD_TIMING_LOG"
+  # CONTROL: with the checkpoint off the same start renders the contract
+  run bash -c "printf '%s' '$(lo_json MESID)' | CC_DOD_LINEAGE_ONLY=1 bash '$HOOK' 2>/dev/null"
+  ctx_of "$output" | grep -qF '    Scope (frozen): my contract'
+}
+
+@test "checkpoint: no store ⇒ still silent past the budget (nothing to point at)" {
+  run bash -c "printf '%s' '$(sjson SessionStart)' | CC_DOD_CHECKPOINT_MS=1 bash '$HOOK' 2>/dev/null"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
 }

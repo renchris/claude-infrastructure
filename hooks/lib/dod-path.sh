@@ -37,10 +37,54 @@
 . "${BASH_SOURCE[0]%/*}/shasum-direct.sh" 2>/dev/null || true
 _dod_dir() { printf '%s' "${WRAP_DOD_DIR:-$HOME/.claude/autonomy/dod}"; }
 
+# ── IN-PROCESS MEMO (docs/research/startup-hooks-2026-10-18/README.md §2 #17, A2-F2) ─────────────
+# One SessionStart of dod-persist asked git for the same toplevel 4-5 times and walked the lineage
+# file 3-4 times, because every helper below re-derives its facts and most calls run inside `$( )`,
+# where a lazy memo dies with the subshell. dod_prime <cwd> derives them ONCE in the calling shell
+# (one rev-parse, one config read, one ancestor walk); every later call for the SAME cwd string,
+# subshells included, reads the variables instead. A different cwd falls through to the unmemoized
+# code, so a consumer that never primes behaves exactly as before.
+# IN-PROCESS ONLY, by rule: a cross-process DoD memo was reverted once for staling the ⛔ rung
+# (docs/research/memory-econ-rearchitecture-2026-08-10/prior-art.md:166). File EXISTENCE is never
+# memoized (dod_read_files still tests it live), so a store a `set` creates mid-run is seen.
+_DOD_M_CWD=""
+_dod_memo_hit() { [ -n "$_DOD_M_CWD" ] && [ "$_DOD_M_CWD" = "${1:-.}" ]; }
+_dod_sha16() { # $1=text → sets _DOD_SHA16 to the first 16 chars of its shasum ("" when shasum fails)
+  _DOD_SHA16="$(printf '%s' "$1" | shasum 2>/dev/null)"
+  _DOD_SHA16="${_DOD_SHA16:0:16}"
+}
+dod_prime() { # $1=cwd — derive this process's DoD facts once (see above). Always 0.
+  local cwd="${1:-.}" t rec k v can="" org=""
+  _DOD_M_CWD=""
+  t="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" || t=""
+  _DOD_M_TOP="$t"; [ -n "$_DOD_M_TOP" ] || _DOD_M_TOP="$cwd"
+  # ONE config read for both identity keys. `--get` returns a key's LAST value, so the loop keeps the
+  # last record of each; -z keeps a value with an embedded newline whole, and a valueless key (no
+  # newline in its record) reads as empty, as `--get` prints it. Names print lowercased, which is
+  # what the regexp matches; a subsection name keeps its case, as `--get remote.origin.url` needs.
+  while IFS= read -r -d '' rec; do
+    k="${rec%%"$_DOD_NL"*}"
+    case "$rec" in *"$_DOD_NL"*) v="${rec#*"$_DOD_NL"}" ;; *) v="" ;; esac
+    while :; do case "$v" in *"$_DOD_NL") v="${v%"$_DOD_NL"}" ;; *) break ;; esac; done  # $( ) stripped these
+    case "$k" in
+      cc.canonicalurl) can="$v" ;;
+      remote.origin.url) org="$v" ;;
+    esac
+  done < <(git -C "$cwd" config -z --get-regexp '^(cc\.canonicalurl|remote\.origin\.url)$' 2>/dev/null)
+  [ -n "$can" ] || can="$org"
+  _DOD_M_RK=""
+  if [ -n "$can" ]; then _dod_sha16 "$can"; _DOD_M_RK="$_DOD_SHA16"; fi
+  _dod_sha16 "$_DOD_M_TOP"; _DOD_M_LEGACY="${WRAP_DOD_DIR:-$HOME/.claude/autonomy/dod}/${_DOD_SHA16:-unknown}.md"
+  _DOD_M_CWD="$cwd"   # toplevel, key and legacy path are live from here; the walk below reads them
+  _DOD_M_ANC="$(_dod_lineage_ancestors_compute "$cwd")"
+  return 0
+}
+
 _dod_repo_key() { # $1=cwd → sha16 of the repo's identity URL, or nothing (local-only repo)
   # cc.canonicalUrl, when set, is the repo's IDENTITY across an origin move: claude-infrastructure's
   # working origin moved to a private repo while its public URL became a projection
   # (docs/plans/PUBLIC_REPO_HYGIENE.md), and every stored DoD is keyed on the old URL's hash.
+  if _dod_memo_hit "${1:-.}"; then printf '%s' "$_DOD_M_RK"; return 0; fi
   local u
   u="$(git -C "${1:-.}" config --get cc.canonicalUrl 2>/dev/null || true)"
   [ -n "$u" ] || u="$(git -C "${1:-.}" config --get remote.origin.url 2>/dev/null || true)"
@@ -49,6 +93,7 @@ _dod_repo_key() { # $1=cwd → sha16 of the repo's identity URL, or nothing (loc
 }
 
 _dod_legacy_file() { # $1=cwd → the pre-W3 path-hash file (the formula both copies carried)
+  if _dod_memo_hit "${1:-.}"; then printf '%s' "$_DOD_M_LEGACY"; return 0; fi
   local top hash
   top="$(git -C "${1:-.}" rev-parse --show-toplevel 2>/dev/null || printf '%s' "${1:-.}")"
   hash="$(printf '%s' "$top" | shasum 2>/dev/null | cut -c1-16)"
@@ -59,7 +104,9 @@ _dod_legacy_file() { # $1=cwd → the pre-W3 path-hash file (the formula both co
 # hooks/dod-persist.sh persist_dod stamps `## … · toplevel=<this>` and the lineage filter below
 # compares against it BYTE-EQUAL, so a second copy of the formula is not a style problem here — it
 # is a silent filter miss (this file's own header names that exact defect for the path formula).
+# dod_prime's rev-parse is the same formula, so the memo cannot fork the identity.
 dod_toplevel() {
+  if _dod_memo_hit "${1:-.}"; then printf '%s' "$_DOD_M_TOP"; return 0; fi
   local t
   t="$(git -C "${1:-.}" rev-parse --show-toplevel 2>/dev/null)" || t=""
   [ -n "$t" ] || t="${1:-.}"
@@ -108,6 +155,7 @@ dod_lineage_record() {
   case "$from$to$lbl" in *"$_DOD_TAB"*) return 0 ;; esac   # a tab would corrupt the row's fields
   case "$from$to$lbl" in *"$_DOD_NL"*) return 0 ;; esac
   f="$(_dod_lineage_file)"
+  _DOD_M_CWD=""   # this process's memoized ancestor walk no longer matches the file
   mkdir -p "$(dirname "$f")" 2>/dev/null || return 0
   printf '%s\t%s\t%s\t%s\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '?')" "$from" "$to" "$lbl" \
@@ -127,6 +175,10 @@ dod_lineage_record() {
 # under the old parse (from == to), and a self-edge can never print, because its `to` is on the
 # frontier only if its `from` is already seen; awk simply skips those lines.
 dod_lineage_ancestors() {
+  if _dod_memo_hit "${1:-.}"; then printf '%s\n' "$_DOD_M_ANC"; return 0; fi   # dod_prime walked it
+  _dod_lineage_ancestors_compute "$@"
+}
+_dod_lineage_ancestors_compute() {
   local me f
   me="$(dod_toplevel "${1:-.}")"
   [ -n "$me" ] || return 0
@@ -183,7 +235,8 @@ _dod_filter_file() {
 dod_filter_for() {
   local anc
   [ -f "${2:-}" ] || return 0
-  anc="${_DOD_NL}$(dod_lineage_ancestors "${1:-.}")${_DOD_NL}"
+  if _dod_memo_hit "${1:-.}"; then anc="${_DOD_NL}${_DOD_M_ANC}${_DOD_NL}"
+  else anc="${_DOD_NL}$(dod_lineage_ancestors "${1:-.}")${_DOD_NL}"; fi
   _dod_filter_file "$2" "$anc"
   return 0
 }
@@ -193,13 +246,15 @@ dod_filter_for() {
 # this file's filter, so the three cannot disagree about which captures are this wave's.
 dod_read_content() {
   local cwd="${1:-.}" anc f
-  anc="${_DOD_NL}$(dod_lineage_ancestors "$cwd")${_DOD_NL}"
+  if _dod_memo_hit "$cwd"; then anc="${_DOD_NL}${_DOD_M_ANC}${_DOD_NL}"
+  else anc="${_DOD_NL}$(dod_lineage_ancestors "$cwd")${_DOD_NL}"; fi
+  _dod_read_files_var "$cwd"
   while IFS= read -r f; do
     [ -n "$f" ] && [ -f "$f" ] || continue
     _dod_filter_file "$f" "$anc"
     printf '\n'
   done <<DODRC
-$(dod_read_files "$cwd")
+$_DOD_RF_LIST
 DODRC
   return 0
 }
@@ -210,6 +265,11 @@ DODRC
 dod_path_for() {
   local cwd="${1:-.}" rk
   if [ -n "${WRAP_DOD_FILE:-}" ]; then printf '%s' "$WRAP_DOD_FILE"; return 0; fi
+  if _dod_memo_hit "$cwd"; then
+    if [ -n "$_DOD_M_RK" ]; then printf '%s/repo-%s.md' "${WRAP_DOD_DIR:-$HOME/.claude/autonomy/dod}" "$_DOD_M_RK"
+    else printf '%s' "$_DOD_M_LEGACY"; fi
+    return 0
+  fi
   rk="$(_dod_repo_key "$cwd")"
   if [ -n "$rk" ]; then printf '%s/repo-%s.md' "$(_dod_dir)" "$rk"
   else _dod_legacy_file "$cwd"; fi
@@ -220,11 +280,25 @@ dod_path_for() {
 # toplevel's legacy. Empty output = no durable DoD anywhere. Under WRAP_DOD_FILE prints that file
 # iff it exists (the test seam stays one-file, both modes).
 dod_read_files() {
+  _dod_read_files_var "${1:-.}"
+  [ -z "$_DOD_RF_LIST" ] || printf '%s\n' "$_DOD_RF_LIST"
+  return 0
+}
+# _dod_read_files_var <cwd> → the same list in _DOD_RF_LIST (newline-joined, no trailing newline),
+# with no subshell once dod_prime has run for that cwd. Existence is tested live on every call.
+_dod_read_files_var() {
   local cwd="${1:-.}" rf lf
-  if [ -n "${WRAP_DOD_FILE:-}" ]; then [ -f "$WRAP_DOD_FILE" ] && printf '%s\n' "$WRAP_DOD_FILE"; return 0; fi
-  rf="$(dod_path_for "$cwd" write)"
-  lf="$(_dod_legacy_file "$cwd")"
-  [ -f "$rf" ] && printf '%s\n' "$rf"
-  [ "$lf" != "$rf" ] && [ -f "$lf" ] && printf '%s\n' "$lf"
+  _DOD_RF_LIST=""
+  if [ -n "${WRAP_DOD_FILE:-}" ]; then [ -f "$WRAP_DOD_FILE" ] && _DOD_RF_LIST="$WRAP_DOD_FILE"; return 0; fi
+  if _dod_memo_hit "$cwd"; then
+    if [ -n "$_DOD_M_RK" ]; then rf="${WRAP_DOD_DIR:-$HOME/.claude/autonomy/dod}/repo-${_DOD_M_RK}.md"
+    else rf="$_DOD_M_LEGACY"; fi
+    lf="$_DOD_M_LEGACY"
+  else
+    rf="$(dod_path_for "$cwd" write)"
+    lf="$(_dod_legacy_file "$cwd")"
+  fi
+  [ -f "$rf" ] && _DOD_RF_LIST="$rf"
+  if [ "$lf" != "$rf" ] && [ -f "$lf" ]; then _DOD_RF_LIST="${_DOD_RF_LIST:+${_DOD_RF_LIST}${_DOD_NL}}$lf"; fi
   return 0
 }

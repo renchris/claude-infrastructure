@@ -19,7 +19,7 @@
 # summary IDL record is emitted per run (rotated >= 0), so "ran but rotated nothing" stays
 # distinguishable from "never ran" (the autonomy-sweep B-3 convention).
 #
-# Targets: default = every unbounded autonomy/audit log (27, see DEFAULT_TARGETS below);
+# Targets: default = every unbounded autonomy/audit log (28, see DEFAULT_TARGETS below);
 #   override/extend via ROTATE_TARGETS (whitespace/newline-separated absolute paths, no spaces
 #   WITHIN a path) or positional args. A missing target is skipped, not an error (its writer may
 #   not have created it yet). Sibling files that share a target's prefix but are NOT rotations
@@ -445,6 +445,7 @@ $HOME/.claude/logs/capacity-alarm.jsonl
 $HOME/.claude/logs/compressor-sentinel.jsonl
 $HOME/.claude/logs/compressor-sentinel-snap.log
 $HOME/.claude/logs/pane-spawns.jsonl
+$HOME/.claude/logs/dod-persist-timing.jsonl
 $HOME/.claude/logs/auth-timeseries.jsonl
 $HOME/.claude/logs/account-utilization.jsonl
 $HOME/.claude/logs/account-assignments.jsonl
@@ -458,6 +459,8 @@ $HOME/.claude/logs/session-start-dispatch.jsonl"
 # (hooks/session-start-dispatch.sh v2: one row per SessionStart plus one per late child, ~205 runs/day
 # × ~1.2 KB ≈ 250 KB/day — docs/research/startup-hooks-2026-10-18/A3-dispatcher.md §4.2).
 
+# dod-persist-timing.jsonl joined 2026-10-19 in the SAME commit that created its writer
+# (hooks/dod-persist.sh, one ~150-byte row per SessionStart ≈ 30 KB/day).
 # attrib.jsonl joined 2026-10-04 in the SAME commit that created its writer (capacity-alarm's libproc
 # attribution pass, ~4-10 KB per row at 5-60 rows/h ≈ 1-10 MB/day) — same rule as the rows below.
 # convoy-gauge.jsonl and convoy-gauge-transitions.log joined 2026-10-10 in the SAME commit that

@@ -29,12 +29,69 @@
 # both at one file proves the producer↔consumer contract end-to-end.
 set -uo pipefail
 
+# ── PHASE TIMING + CHECKPOINT (docs/research/startup-hooks-2026-10-18/README.md §2 #17) ──────────
+# The harness cancels this SessionStart hook at 5 s and discards ALL of its output: 18 cancels in two
+# days, about 15 of them sessions that were owed a DoD (A5-F4), and no record of where the time went.
+# Each SessionStart now appends one JSON line of per-phase milliseconds to CC_DOD_TIMING_LOG
+# (default ~/.claude/logs/dod-persist-timing.jsonl, rotated by scripts/rotate-autonomy-logs.sh; set
+# it empty to disable), and at each phase boundary past CC_DOD_CHECKPOINT_MS (default 3500; 0 or a
+# non-number disables) it stops and emits a short labelled pointer to the store instead of being
+# cancelled into nothing. Builtins only (EPOCHREALTIME, or SECONDS under bash 3.2), so a healthy
+# start pays no spawn and no model token for either.
+_dod_t_now() {
+  local t="${EPOCHREALTIME:-}"; t="${t//[!0-9]/}"
+  if [ -n "$t" ]; then _DOD_NOW="$t"; else _DOD_NOW=$(( SECONDS * 1000000 )); fi
+}
+_dod_t_now; _DOD_T0="$_DOD_NOW"; _DOD_TL="$_DOD_NOW"; _DOD_PHASES=""
+_dod_mark() {  # $1=phase → its milliseconds since the previous mark, kept for the timing line
+  _dod_t_now
+  _DOD_PHASES="${_DOD_PHASES:+${_DOD_PHASES},}\"$1\":$(( (_DOD_NOW - _DOD_TL) / 1000 ))"
+  _DOD_TL="$_DOD_NOW"
+}
+# shellcheck disable=SC2329  # reached through the EXIT trap's _dod_finish
+_dod_timing_log() {  # $1=outcome → one line in the timing log (never creates its directory)
+  local f="${CC_DOD_TIMING_LOG-$HOME/.claude/logs/dod-persist-timing.jsonl}" ts s=""
+  [ -n "$f" ] && [ -d "${f%/*}" ] || return 0
+  ts="${EPOCHREALTIME:-}"; ts="${ts%%[.,]*}"; case "$ts" in ''|*[!0-9]*) ts=null ;; esac
+  case "${sid:-}" in ''|*[!A-Za-z0-9-]*) ;; *) s=",\"sid\":\"${sid}\"" ;; esac
+  printf '{"ts":%s%s,"outcome":"%s","total_ms":%s,"phases":{%s}}\n' "$ts" "$s" "$1" \
+    "$(( (_DOD_TL - _DOD_T0) / 1000 ))" "$_DOD_PHASES" >> "$f" 2>/dev/null || true
+}
+_dod_checkpoint() {  # $1=phase just finished — past the budget, point at the store and stop (SessionStart only)
+  local max="${CC_DOD_CHECKPOINT_MS:-3500}" ms f1
+  _dod_mark "$1"
+  case "$max" in ''|*[!0-9]*|0) return 0 ;; esac
+  ms=$(( (_DOD_TL - _DOD_T0) / 1000 ))
+  [ "$ms" -ge "$max" ] || return 0
+  _DOD_NEXT_PHASE=""   # the phase is already marked; _dod_finish only writes the line
+  _dod_read_files_var "$cwd"
+  f1="${_DOD_RF_LIST%%"$_dod_nl"*}"
+  if [ -z "$f1" ]; then _DOD_OUTCOME=checkpoint-empty; exit 0; fi
+  _DOD_OUTCOME=checkpoint
+  f1="DoD not injected: dod-persist stopped at its ${max} ms checkpoint (${1}, ${ms} ms) instead of being cancelled. Your frozen scope is in $(_dod_tilde "$f1"); \`~/.claude/hooks/dod-persist.sh get\` prints it."
+  if command -v ss_owed >/dev/null 2>&1; then ss_owed $(( ${#f1} + 1 )); fi
+  jq -nc --arg c "$f1" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}' 2>/dev/null || true
+  exit 0
+}
+# The SessionStart arm's EXIT trap: mark the phase in flight, then write the one timing line, on
+# every exit path (render done, nothing to inject, checkpoint). It REPLACES the startup sentinel's
+# own `trap 'ss_end $?' EXIT` (armed earlier in the arm), so it ends the sentinel too; ss_end is a
+# no-op when the sentinel never began.
+_DOD_NEXT_PHASE=render; _DOD_OUTCOME=ok
+# shellcheck disable=SC2329  # invoked by `trap '_dod_finish $?' EXIT`
+_dod_finish() {  # $1=the exit status
+  [ -z "$_DOD_NEXT_PHASE" ] || _dod_mark "$_DOD_NEXT_PHASE"
+  _dod_timing_log "$_DOD_OUTCOME"
+  if command -v ss_end >/dev/null 2>&1; then ss_end "${1:-0}"; fi
+}
+
 # ── DoD path — the SHARED lib (CLOSE_INTEGRITY W3): repo-identity key, legacy read-fallback ──
 # Was an inline path-hash formula duplicated in wrap-ledger.sh behind a MUST-match comment — and
 # path-keying meant a fresh worktree started on a BLANK scope contract (generator G2). Both sides
 # now source hooks/lib/dod-path.sh; the inline fallback below preserves the exact legacy formula
 # for a live layer that has not yet linked the new lib (an ADD gets no converge budget).
-_dpd="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+case "$0" in */*) _dpd="${0%/*}" ;; *) _dpd=. ;; esac   # dirname without the fork
+_dpd="$(cd "$_dpd" 2>/dev/null && pwd)"
 _dplib="$_dpd/lib/dod-path.sh"
 [ -f "$_dplib" ] || { _dpt="$0"; [ -L "$_dpt" ] && _dpt="$(readlink "$_dpt")"
   _dplib="$(cd "$(dirname "$_dpt")" 2>/dev/null && pwd)/lib/dod-path.sh"; }
@@ -67,6 +124,11 @@ command -v dod_read_content >/dev/null 2>&1 || dod_read_content() {
 $(dod_read_files "${1:-$PWD}")
 DPRC
   return 0; }
+# Memo fallbacks for a live layer whose lib predates dod_prime (README §2 #17): no memo, same answers.
+command -v dod_prime >/dev/null 2>&1 || dod_prime() { return 0; }
+command -v _dod_memo_hit >/dev/null 2>&1 || _dod_memo_hit() { return 1; }
+command -v _dod_read_files_var >/dev/null 2>&1 || _dod_read_files_var() {
+  _DOD_RF_LIST="$(dod_read_files "${1:-.}")"; return 0; }
 dod_file_for() { dod_path_for "$1" write; }   # the canonical path — where new captures go
 
 # ── newest "Scope (frozen): …" line already recorded — reads the STREAM on stdin ──
@@ -192,11 +254,14 @@ _dod_lineage_blocks() {  # $1=lineage session ids  $2=predecessor toplevels (bot
 }
 # Lines outside every '## ' block, other than the file headers: a legacy boxes-only checklist or a
 # pre-provenance scope. The lineage filter cannot attribute them, so it leaves them out and says so.
-_dod_unblocked_count() {  # stdin → count
-  awk '/^# Durable frozen DoD/ {inb=0; next}
+# The same pass also counts the '## ' header lines (`grep -c '^## '`), so the injection reads both
+# numbers from one spawn.
+_dod_head_and_unblocked_count() {  # stdin → "<headers> <unblocked>"
+  awk '/^## / {h++}
+       /^# Durable frozen DoD/ {inb=0; next}
        /^## / {inb=1; next}
        !inb && !/^#/ && NF {n++}
-       END {print n+0}' 2>/dev/null || printf '0\n'
+       END {print h+0, n+0}' 2>/dev/null || printf '0 0\n'
 }
 # This session plus the newest CC_DOD_LINEAGE_PANE_MAX (3) sessions that held this pane before it,
 # newline-framed. Bounded because a pane can be reused for unrelated work over its life; the same
@@ -337,14 +402,21 @@ LOSCOPEEOF
   printf '%s' "$s"
 }
 _dod_inject_lineage_only() {  # $1=cwd  $2=own sid  $3=content (already toplevel-filtered)
-  local pred sids kept own cur pcur files f1 nall ncap nun unote framed _lead _pre
-  pred="${_dod_nl}$(_dod_lineage_pred "$1")${_dod_nl}"
+  local pred sids kept own cur pcur files f1 nall ncap nun unote framed _lead _pre _cnt
+  if _dod_memo_hit "$1"; then   # the primed walk minus its first line: `tail -n +2` without the forks
+    pred="$_dod_nl"
+    case "$_DOD_M_ANC" in *"$_dod_nl"*) pred="${_dod_nl}${_DOD_M_ANC#*"$_dod_nl"}" ;; esac
+    pred="${pred}${_dod_nl}"
+  else
+    pred="${_dod_nl}$(_dod_lineage_pred "$1")${_dod_nl}"
+  fi
   sids="${_dod_nl}$(_dod_lineage_sids "$2")${_dod_nl}"
   kept="$(printf '%s\n' "$3" | _dod_lineage_blocks "$sids" "$pred")"
-  files="$(dod_read_files "$1" | paste -sd' ' - 2>/dev/null)"
-  nall="$(printf '%s\n' "$3" | grep -c '^## ' 2>/dev/null || true)"
+  _dod_read_files_var "$1"
+  files="${_DOD_RF_LIST//"$_dod_nl"/ }"   # `paste -sd' '`
+  _cnt="$(printf '%s\n' "$3" | _dod_head_and_unblocked_count)"
+  nall="${_cnt%% *}"; nun="${_cnt##* }"
   case "$nall" in ''|*[!0-9]*) nall=0 ;; esac
-  nun="$(printf '%s\n' "$3" | _dod_unblocked_count)"
   case "$nun" in ''|*[!0-9]*) nun=0 ;; esac
   unote=""
   [ "$nun" -gt 0 ] && unote=" ${nun} line(s) outside any capture block (a legacy checklist or pre-provenance scope) are left out too."
@@ -354,7 +426,7 @@ _dod_inject_lineage_only() {  # $1=cwd  $2=own sid  $3=content (already toplevel
     # so that is all it says: ≤100 chars on the live path. Lines outside any block (a legacy checklist)
     # count as one more capture, the unit _dod_newest_within also makes of them; the first file is the
     # repo-key store, where new captures go.
-    f1="$(dod_read_files "$1" | head -1)"
+    f1="${_DOD_RF_LIST%%"$_dod_nl"*}"
     jq -nc --arg c "No DoD of this lineage; $(( nall + (nun > 0) )) other capture(s) in $(_dod_tilde "$f1")" \
       '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}' 2>/dev/null || true
     return 0
@@ -366,9 +438,22 @@ _dod_inject_lineage_only() {  # $1=cwd  $2=own sid  $3=content (already toplevel
   # after it now come from this session's lineage alone (the session ids, no predecessor toplevels);
   # a predecessor's newest contract is shown, when this lineage has none, as prior context only.
   own="$(printf '%s\n' "$3" | _dod_lineage_blocks "$sids" "$_dod_nl")"
-  cur="$(_dod_lineage_scope "$1" "$sids" "$_dod_nl")"
-  pcur=""
-  [ -n "$cur" ] || pcur="$(_dod_lineage_scope "$1" "$sids" "$pred")"
+  _dod_checkpoint lineage
+  # One read source (the usual case): $3 IS that source's filtered content, so the per-source scope
+  # equals the newest frozen line of the blocks already in hand — `own` for the contract, `kept` for a
+  # predecessor's — and re-filtering the store to find it again is skipped. Two sources keep the
+  # per-source precedence (repo-key store first) through _dod_lineage_scope.
+  case "$_DOD_RF_LIST" in
+    *"$_dod_nl"*)
+      cur="$(_dod_lineage_scope "$1" "$sids" "$_dod_nl")"
+      pcur=""
+      [ -n "$cur" ] || pcur="$(_dod_lineage_scope "$1" "$sids" "$pred")" ;;
+    *)
+      cur="$(printf '%s\n' "$own" | last_recorded_scope)"
+      pcur=""
+      [ -n "$cur" ] || pcur="$(printf '%s\n' "$kept" | last_recorded_scope)" ;;
+  esac
+  _dod_checkpoint scope
   ncap="$(printf '%s\n' "$kept" | grep -c '^## ' 2>/dev/null || true)"
   case "$ncap" in ''|*[!0-9]*) ncap=0 ;; esac
   if [ -n "$cur" ]; then
@@ -398,6 +483,7 @@ case "${1:-}" in
     scope="${2:-}"
     [ -n "$scope" ] || { printf 'usage: dod-persist.sh set "<Scope (frozen): DoD>"\n' >&2; exit 2; }
     case "$scope" in *"Scope (frozen):"*|*"Scope (grown):"*) ;; *) scope="Scope (frozen): $scope" ;; esac
+    dod_prime "$PWD"
     f="$(dod_path_for "$PWD" write)"
     # The dedup compares against MY OWN last capture, not the file's. Unfiltered it would read a
     # concurrent sibling's identical scope as "unchanged", skip the write, and leave this wave with
@@ -418,6 +504,7 @@ case "${1:-}" in
     # W3: two read sources — the repo-key store (new captures) wins; this toplevel's legacy file
     # answers only when the new store has no scope yet.
     _g=""; _gc="${2:-$PWD}"
+    dod_prime "$_gc"
     while IFS= read -r _gf; do
       [ -n "$_gf" ] || continue
       _g="$(dod_filter_for "$_gc" "$_gf" | last_recorded_scope)"
@@ -430,14 +517,31 @@ esac
 
 # ── Hook modes (JSON on stdin; dispatch by hook_event_name) ──
 command -v jq >/dev/null 2>&1 || exit 0
-input="$(cat 2>/dev/null || printf '{}')"
-event="$(printf '%s' "$input" | jq -r '.hook_event_name // empty' 2>/dev/null || true)"
-cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
+IFS= read -r -d '' input || true   # the whole payload, without a `cat` fork (EOF ends the read)
+# ONE jq for every payload field (README §2 #17; the mailbox-drain.sh one-parse pattern), split with
+# parameter expansion rather than `read`, which would collapse an empty field between two tabs. A row
+# that is not exactly one line of five fields, or that @tsv had to escape (a backslash), takes the old
+# field-by-field parse, so an odd payload reads exactly as it always did.
+_dod_tab="$(printf '\tx')"; _dod_tab="${_dod_tab%x}"
+_row="$(printf '%s' "$input" | jq -r '[(.hook_event_name // ""), (.cwd // ""), (.session_id // ""), (.transcript_path // ""), (.trigger // "auto")] | @tsv' 2>/dev/null)" || _row=""
+_tabs="${_row//[!$_dod_tab]/}"
+case "$_row" in *"\\"*|*"$_dod_nl"*) _tabs="" ;; esac
+if [ "${#_tabs}" -eq 4 ]; then
+  event="${_row%%"$_dod_tab"*}"; _row="${_row#*"$_dod_tab"}"
+  cwd="${_row%%"$_dod_tab"*}"; _row="${_row#*"$_dod_tab"}"
+  sid="${_row%%"$_dod_tab"*}"; _row="${_row#*"$_dod_tab"}"
+  tp="${_row%%"$_dod_tab"*}"; trigger="${_row#*"$_dod_tab"}"
+else
+  event="$(printf '%s' "$input" | jq -r '.hook_event_name // empty' 2>/dev/null || true)"
+  cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
+  sid="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null || true)"
+  tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
+  trigger="$(printf '%s' "$input" | jq -r '.trigger // "auto"' 2>/dev/null || echo auto)"
+fi
 [ -n "$cwd" ] || cwd="$PWD"
 # per-capture provenance: the hook payload is authoritative; the env is the fallback (a hook runs as a
 # child of the session it belongs to). Empty when neither knows — the field is then OMITTED, never
 # emitted blank, so a reader can distinguish "no session recorded" from "session recorded as nothing".
-sid="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null || true)"
 _ss_sid="$sid"   # the startup sentinel keys on the PAYLOAD's id only, never the env fallback
 [ -n "$sid" ] || sid="${CLAUDE_CODE_SESSION_ID:-}"
 
@@ -459,8 +563,13 @@ case "$event" in
     # 101 worktrees, 15 distinct frozen scopes, and no input existed to tell them apart. There is
     # one now: dod_read_content keeps this wave's captures and its recorded predecessors', drops a
     # foreign wave's, and keeps anything unattributable (see hooks/lib/dod-path.sh § FAIL-OPEN).
+    _dod_mark parse
+    trap '_dod_finish $?' EXIT
+    dod_prime "$cwd"
+    _dod_checkpoint prime
     content="$(dod_read_content "$cwd")"
-    [ -n "$content" ] || exit 0
+    if [ -z "$content" ]; then _DOD_NEXT_PHASE="read"; _DOD_OUTCOME="empty"; exit 0; fi
+    _dod_checkpoint read
     if [ "${CC_DOD_LINEAGE_ONLY:-1}" = 1 ]; then
       _dod_inject_lineage_only "$cwd" "$sid" "$content"
       exit 0
@@ -506,10 +615,9 @@ $_lead"
     jq -nc --arg c "$framed" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}' 2>/dev/null || true
     exit 0 ;;
   PreCompact)
-    tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
     case "$tp" in "~"*) tp="$HOME${tp#\~}" ;; esac
-    trigger="$(printf '%s' "$input" | jq -r '.trigger // "auto"' 2>/dev/null || echo auto)"
     { [ -n "$tp" ] && [ -f "$tp" ]; } || exit 0
+    dod_prime "$cwd"
     f="$(dod_path_for "$cwd" write)"
     scope="$(extract_scope "$tp")"
     if [ -n "$scope" ]; then
