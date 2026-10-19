@@ -233,3 +233,21 @@ resolved and its first two bytes read. A positive control (a fixture hook callin
 Improvement 2 (one dispatcher exec instead of ~20) is not filed: once 0070 is live each hook is a
 Mach-O `bash` exec that retains about 0, so collapsing them buys load, not leak, and the collapse
 (`hooks/hook-chain.sh`) already has an adjudicated history (backlog `05c79abca813`).
+
+Per-exec measurement of the converted helpers (2026-10-19, no root, throwaway inputs; live settings
+untouched): interleaved, randomized arms of 150 execs each, residual = data.kalloc.1024 − cred from
+`zprint` column 7 before and after each arm, fitted as Δresidual = drift·seconds + per-arm intercept.
+Arms: `pr-gate.sh` by bare path vs `/bin/bash pr-gate.sh`, and `/usr/bin/shasum` vs
+`/usr/bin/perl /usr/bin/shasum`. Seven cycles at mean load **598** (range 416-798):
+
+| Contrast | Retained per exec (±1 SE) |
+|---|---|
+| hook: bare `#!` − `/bin/bash` | −1.5 ± 3.8 |
+| shasum: bare `#!` − perl | +8.6 ± 3.8 |
+
+**Inconclusive.** At this load one 150-exec arm took 80-440 s, fleet drift was 12.7 ± 4.1 /s, and
+the per-exec SE (±3.8) is four times the effect being measured (+0.94); the +8.6 is implausibly
+large for one element per exec and reads as arms of unequal duration under a moving load. The
+per-exec evidence remains the 96-cycle A/B above. A decisive re-run needs load near the 09-30
+carry-ab level (≤ ~200) or root (`sudo zprint` per-view, or `eslogger exec`), and is cheapest
+done after 0070 is applied, as the fleet-level Δ(data.kalloc.1024 − cred)/s before vs after.
