@@ -40,9 +40,27 @@ locale. Three passes of two such deletions over the 13.2 KB case-1 command take 
 `LC_ALL=en_US.UTF-8` and 1.9 s under `LC_ALL=C` (the operator's `LANG` is `en_CA.UTF-8`).
 
 All three sites match only ASCII bytes. A UTF-8 multibyte sequence never contains an ASCII byte, so
-running these substitutions byte-wise (`LC_ALL=C`) gives identical output. The fix is that
-substitution, scoped to those sites, and it is a follow-on to this measurement (see the commit that
-lands it).
+running these substitutions byte-wise (`LC_ALL=C`) gives identical output.
+
+## Fix (follow-on, 2026-10-19)
+
+`LC_ALL=C` alone was not enough. Bash 3.2's `${x//c/}` is also quadratic in its match count, so a
+42 KB synthetic heredoc still ran past 120 s byte-wise. The landed fix (`hooks/validate-bash.sh`,
+`pha_flatten`, `_wcs_split`, `_wbw_strip`):
+
+- A function-local `LC_ALL=C` at all three sites.
+- Above 2 KB (`CC_VB_TR_MIN_BYTES`), `pha_flatten` and `_wcs_split` make one `LC_ALL=C tr` pass. That
+  is one fork, only on a command that large.
+
+Same 40 cancels, replayed back to back at load ~185-205:
+
+| | p50 | p90 | max | over 5 s | decisions changed |
+|---|---|---|---|---|---|
+| pre-fix | 2,763 ms | 10,356 ms | 22,618 ms | 12 | — |
+| fixed | 218 ms | 384 ms | 618 ms | 0 | 0 of 40 |
+
+The 42 KB fixture goes from over 120 s to 1 s. `tests/validate-bash-locale.bats` pins it within the
+harness's limit, and pins byte-identical decisions against the pre-fix hook on both paths.
 
 ## Not covered
 

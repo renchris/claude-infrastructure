@@ -472,10 +472,23 @@ fi
 # behind up to three env-assignment or interpreter/prefix words. This is strictly WIDER than the old
 # first-word arm (which saw only segment one) and strictly NARROWER than the old whole-string arm.
 # Forkless throughout — this hook fires on EVERY Bash call on the box.
-_wcs_words="$CMD"
-for _wcs_sep in ';' '&&' '||' '|' '&' '(' ')' '{' '}'; do
-  _wcs_words="${_wcs_words//"$_wcs_sep"/$'\n'}"
-done
+# Byte-wise, for the reason given above pha_flatten (W7-pretooluse-replay.md): this loop was 26% of
+# the traced time of validate-bash's harness kills. The separators are ASCII, so the bytes are the same.
+_wcs_split() {
+  local LC_ALL=C _wcs_sep
+  # Large command: one linear tr pass (see pha_flatten). `&&`/`||` become two newlines instead of
+  # one, i.e. an extra EMPTY segment, which the loop below reads as no command word at all.
+  if [ "${#CMD}" -gt "${CC_VB_TR_MIN_BYTES:-2048}" ]; then
+    # shellcheck disable=SC2020  # a SET of separators, each to a newline, is exactly the intent
+    _wcs_words="$(printf '%s' "$CMD" | LC_ALL=C tr ';|&(){}' '\n\n\n\n\n\n\n')"
+    return 0
+  fi
+  _wcs_words="$CMD"
+  for _wcs_sep in ';' '&&' '||' '|' '&' '(' ')' '{' '}'; do
+    _wcs_words="${_wcs_words//"$_wcs_sep"/$'\n'}"
+  done
+}
+_wcs_split
 _wcs_hit=0
 while IFS= read -r _wcs_seg; do
   _wcs_w="${_wcs_seg#"${_wcs_seg%%[![:space:]]*}"}"          # left-trim
@@ -644,14 +657,19 @@ _wbw_hit=0
 if [[ "${CC_WCLAIM_GATE:-on}" != off ]]; then
   # ARM 1 — a redirection whose target is a FILE. Strip fd duplication and /dev/null first; what
   # survives is a write. Pure parameter expansion, bash 3.2-safe, zero forks.
-  _wbw_scan="$CMD"
-  _wbw_scan="${_wbw_scan//2>&1/ }"; _wbw_scan="${_wbw_scan//1>&2/ }"
-  _wbw_scan="${_wbw_scan//>&2/ }";  _wbw_scan="${_wbw_scan//>&1/ }"
-  _wbw_scan="${_wbw_scan//&>>\/dev\/null/ }"; _wbw_scan="${_wbw_scan//&>\/dev\/null/ }"
-  _wbw_scan="${_wbw_scan//2>> \/dev\/null/ }"; _wbw_scan="${_wbw_scan//2>>\/dev\/null/ }"
-  _wbw_scan="${_wbw_scan//2> \/dev\/null/ }";  _wbw_scan="${_wbw_scan//2>\/dev\/null/ }"
-  _wbw_scan="${_wbw_scan//>> \/dev\/null/ }";  _wbw_scan="${_wbw_scan//>>\/dev\/null/ }"
-  _wbw_scan="${_wbw_scan//> \/dev\/null/ }";   _wbw_scan="${_wbw_scan//>\/dev\/null/ }"
+  # Byte-wise (ASCII patterns; see the note above pha_flatten): 5.5% of the harness kills' time.
+  _wbw_strip() {
+    local LC_ALL=C
+    _wbw_scan="$CMD"
+    _wbw_scan="${_wbw_scan//2>&1/ }"; _wbw_scan="${_wbw_scan//1>&2/ }"
+    _wbw_scan="${_wbw_scan//>&2/ }";  _wbw_scan="${_wbw_scan//>&1/ }"
+    _wbw_scan="${_wbw_scan//&>>\/dev\/null/ }"; _wbw_scan="${_wbw_scan//&>\/dev\/null/ }"
+    _wbw_scan="${_wbw_scan//2>> \/dev\/null/ }"; _wbw_scan="${_wbw_scan//2>>\/dev\/null/ }"
+    _wbw_scan="${_wbw_scan//2> \/dev\/null/ }";  _wbw_scan="${_wbw_scan//2>\/dev\/null/ }"
+    _wbw_scan="${_wbw_scan//>> \/dev\/null/ }";  _wbw_scan="${_wbw_scan//>>\/dev\/null/ }"
+    _wbw_scan="${_wbw_scan//> \/dev\/null/ }";   _wbw_scan="${_wbw_scan//>\/dev\/null/ }"
+  }
+  _wbw_strip
   case "$_wbw_scan" in *'>'*) _wbw_hit=1 ;; esac
 
   # ARM 2 — a heredoc fed to something that can write. This is the shape the incident used
@@ -1604,7 +1622,22 @@ fi
 # One substitution per character, not a bracket class: `[\'\"\\$]` inside double quotes does not
 # survive bash's own quote removal (it dies at "unexpected EOF looking for matching `\"'"). A
 # FUNCTION, not a `$(...)`, so the gate stays fork-free on every Bash call in the fleet.
+# BYTE-WISE ON PURPOSE (docs/research/startup-hooks-2026-10-18/W7-pretooluse-replay.md): bash 3.2
+# runs `${x//pat/}` multibyte-aware under a UTF-8 locale, and on a long heredoc command that is the
+# harness's 10 s kill — two deletions over one 13.2 KB command took 35.0 s under en_US.UTF-8 and 1.9 s
+# under C. Every pattern here is ASCII, and no UTF-8 multibyte sequence contains an ASCII byte, so the
+# C-locale result is the same bytes. `local` scopes it to this function.
+# C alone is not enough on a LARGE command: bash 3.2's `${x//c/}` is also quadratic in the number of
+# matches (a 42 KB heredoc still ran past 120 s byte-wise), so above CC_VB_TR_MIN_BYTES (2 KB) one
+# `LC_ALL=C tr` pass does the same deletions in linear time. One fork, only on a command that size;
+# everything shorter stays fork-free. `$( )` drops trailing newlines, which no consumer can see (each
+# is a glob or a `[[:space:]]|$`-terminated match).
 pha_flatten() {
+  local LC_ALL=C
+  if [ "${#1}" -gt "${CC_VB_TR_MIN_BYTES:-2048}" ]; then
+    PHA_FLAT="$(printf '%s' "$1" | LC_ALL=C tr -d "'\"\\\\\$")"
+    return 0
+  fi
   PHA_FLAT="$1"
   PHA_FLAT="${PHA_FLAT//\'/}"
   PHA_FLAT="${PHA_FLAT//\"/}"
