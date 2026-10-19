@@ -844,7 +844,7 @@ elif [ "$tok_fired" = 1 ]; then
 elif [ "$early" = 1 ]; then
   why="context ${used}% BURNING toward the ${CC_CE_WALL:-88}% auto-compact wall — forecast ≤${forecast_min}min at the observed rate"
 elif [ "$freewin" = 1 ]; then
-  why="context ${used}% (≥ ${T_FREEWIN}%) at an IDLE boundary the ledger reads ✅ — clean, landed, no DoD remainder, no operator step outstanding"
+  why="context ${used}% (≥ ${T_FREEWIN}%) at an IDLE boundary the ledger reads ✅ — clean, landed, no DoD remainder, no operator step filed by this session"
 else
   why="context ${used}% ≥ ${T}%"
 fi

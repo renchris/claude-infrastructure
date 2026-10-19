@@ -431,6 +431,9 @@ mk_ps_rss() { # $1=rss_kb → `ps` stub (right-aligned, as real ps emits) for a 
   ! echo "$output" | grep -q "BURNING" || false     # not the forecast tier
   ! echo "$output" | grep -q -- "-1min" || false    # never quote an unmeasured forecast
   ! echo "$output" | grep -q "before auto-compaction"   # nothing is urgent at 43%
+  # the ledger counts only steps THIS session filed, so the advisory may claim no more than that
+  echo "$output" | grep -q "no operator step filed by this session"
+  ! echo "$output" | grep -q "no operator step outstanding" || false
 }
 @test "free-win: the IDL row carries axis=freewin + the rung that authorised it" {
   export CC_BOUNDARY_T_FREEWIN=35
