@@ -112,6 +112,14 @@ own_agent_id="${_row%%"$_t"*}"; _row="${_row#*"$_t"}"
 own_cwd="${_row%%"$_t"*}"; own_event="${_row#*"$_t"}"
 case "$own_sid" in *[!0-9A-Fa-f-]*) own_sid="" ;; esac
 
+# Start/done markers, session-start mode only, so a harness cancel of this hook is reportable
+# (hooks/lib/startup-sentinel.sh; docs/research/startup-hooks-2026-10-18/README.md §5 unit 3.1).
+# 5000 ms = its registration timeout. The EXIT trap below chains ss_end, since it replaces this one.
+if [ "$MODE" = session-start ] && [ -f "$_scd/lib/startup-sentinel.sh" ]; then
+  # shellcheck source=lib/startup-sentinel.sh disable=SC1091  # runtime-resolved beside this file
+  . "$_scd/lib/startup-sentinel.sh" 2>/dev/null && ss_begin mailbox-drain 5000 "$own_sid" "$own_tp"
+fi
+
 # SUBAGENTS NEVER DRAIN (2026-09-28). A subagent's PostToolUse payload carries its PARENT's
 # session_id, so keyed on session_id it read the lead's inbox: 27 subagent transcripts in 7 days held
 # peer mail, and the drain advanced the shared .seen cursor, so the lead never saw those lines. The
@@ -300,7 +308,8 @@ if [ "$_etc" = 1 ]; then
   # A held claim is a LIVE drain delivering this window right now — deliver nothing, never a dup.
   if mailbox_drain_claim "$own_uuid"; then
     _claimed=1
-    trap 'mailbox_drain_release "$own_uuid"' EXIT
+    _md_rc=0
+    trap '_md_rc=$?; mailbox_drain_release "$own_uuid"; [ "${_SS_ON:-0}" = 1 ] && ss_end "$_md_rc"' EXIT
     # COUNT ONCE: one grep of the inbox serves the cursor clamp, the window and the remainder note
     # below (an older lib ignores the extra argument and counts for itself — LIB SKEW).
     _lines="$(mailbox_lines "$own_uuid")"
@@ -651,6 +660,7 @@ if [ -z "$body" ]; then
   [ "$MODE" = "post-tool" ] && exit 0
   # A crumb alone must not ship under the "no wake path" header it does not speak for.
   [ "$_hdr_ok" = 1 ] || { _hdr=""; nudge="${nudge#"${nudge%%[!$'\n']*}"}"; }
+  command -v ss_owed >/dev/null 2>&1 && ss_owed $(( ${#_hdr} + ${#nudge} + 1 ))
   jq -nc --arg e "$EVENT" --arg c "${_hdr}${nudge}" \
     '{hookSpecificOutput:{hookEventName:$e, additionalContext:$c}}' && _goalnudge_stamp
   exit 0
@@ -959,6 +969,7 @@ if [ "$_cust_n" -gt 0 ]; then
 fi
 _out="$(jq -nc --arg e "$EVENT" --arg c "$ctx" --arg m "$msg" \
   '{hookSpecificOutput:{hookEventName:$e, additionalContext:$c}, systemMessage:$m}')" || exit 0
+command -v ss_owed >/dev/null 2>&1 && ss_owed $(( ${#_out} + 1 ))
 printf '%s\n' "$_out" || exit 0   # a write that failed delivered nothing — leave the window pending
 _goalnudge_stamp                    # the nudge rode this payload ($nudge is in $ctx), so it was told
 # COMMIT (6a178497df5f) — only now that the emit is written. A reap before this line re-delivers the

@@ -521,3 +521,27 @@ ALERTS() { printf '%s' "$CC_STARTUP_HEALTH_DIR/alerts/$SID"; }
   [ ! -e "$CC_STARTUP_HEALTH_DIR/alerts/dddd-0" ]
 }
 
+# ── sentinel wiring: mailbox-drain (session-start mode only), fixture mailbox ─────────────────────
+drain() { # <mode> — mailbox-drain against a fixture mailbox, payload naming $SID
+  export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mbox"; mkdir -p "$CC_MAILBOX_DIR"
+  printf '{"session_id":"%s","transcript_path":"%s","hook_event_name":"SessionStart"}' "$SID" "${TP:-}" \
+    | ITERM_SESSION_ID="w0t0p0:AAAAAAAA-1111-2222-3333-444444444444" bash "$REPO/hooks/mailbox-drain.sh" "$1"
+}
+
+@test "mailbox-drain session-start leaves start+done, owing the bytes it printed" {
+  mkdir -p "$BATS_TEST_TMPDIR/mbox"
+  printf 'peer line for the start\n' > "$BATS_TEST_TMPDIR/mbox/AAAAAAAA-1111-2222-3333-444444444444.md"
+  run drain session-start
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -qF 'peer line for the start'
+  [ -f "$S/mailbox-drain.start" ]
+  [ "$(field mailbox-drain.done rc)" = 0 ]
+  [ "$(field mailbox-drain.done owed)" -gt 0 ]
+  [ "$(field mailbox-drain.done timeout_ms)" = 5000 ]
+}
+
+@test "mailbox-drain writes no sentinel outside session-start mode" {
+  run drain prompt
+  [ "$status" -eq 0 ]
+  [ ! -e "$S/mailbox-drain.start" ]
+}
