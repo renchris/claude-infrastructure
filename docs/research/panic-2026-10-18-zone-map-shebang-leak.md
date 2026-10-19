@@ -153,3 +153,33 @@ current boot's heartbeat and fails preflight.
 
 The roster gap (live panes missing from `hb.roster.json`) and the panic-blind `cc-restore` are the
 two recovery defects this crash exposed.
+
+### Recovery follow-up (2026-10-19, dispatched session `fix/post-panic-recovery`)
+
+| Item | Outcome |
+|---|---|
+| `ed29c5a1` | Not resumable, and nothing is lost: it never wrote a transcript in any account store (it was an empty session started 10-17 19:40), and its worktree `wt-cc-193636-79736` is clean with 0 commits ahead of trunk. |
+| VoiceInk | Its session is `509e3aad` (next4). Resumed as the full session into its recorded pane (kitty window 22). It was at rest, waiting on the operator's dictations, so it was not nudged. |
+| `09e18eed` | Had already recycled itself at 23:00 into `9a3088f9` (pane 24, `research-kit-24`), whose brief covers the reboot and re-arming. A note about the dead watcher and the benchmark was delivered to inbox 24. |
+| `64973e2f` | Its own self-close had failed to close pane 16 (`/tmp/handoff-selfclose-16-1792371087.log`: four pane-close attempts failed while claude still ran). `cc-teardown 16` closed it, verified (process gone, pane absent). |
+| Local-only branches | Bundled and `git bundle verify`-ed in `~/Backups/git-bundles/2026-10-18/`: claude-infrastructure `tm2*` (11 branches), TrueMemory `tm2/2.0` + `tm2/slice`, `personal`, `reso-landing-design-research`. `tpg` (not a git repo) is `tpg.tar.gz`; macOS tar folded 6 real files named `._*` into AppleDouble metadata, so they are copied beside it in `tpg-dot-underscore-files/`, byte-compared. The Time Machine disk is simply not attached (backupd error 18); filed as backlog `f7dedfcc9cef`. |
+
+**Why the roster missed three live panes.** `hb.roster.json` was the registry (`cc-sessions --json`) and
+nothing else. TPG (pane 27), Club Vinyl (19) and VoiceInk (28) each registered at SessionStart
+(`lead-crash-watchdog.log`, 10-15 and 10-16), and no other session re-registered those panes, no
+SessionEnd and no `cc-reconcile` prune is logged for them, yet their rows were gone by the last tick.
+They were the three oldest sessions in that kitty: every surviving row had started after 10-17 04:20,
+and these three before 10-16 02:15. That matches `cc-sessions` deleting a row it judges stale once
+`startedAt` is older than `CC_REG_RETAIN_H` (24 h), the one registry remover that writes no log. The
+remover is not proven. The fix does not depend on it: the heartbeat now cross-checks the kitty tree it
+already reads, and adds a row for any window holding a live top-level `claude` the roster lacks, with
+the session named by Claude Code's own `sessions/<pid>.json` (checked against the pid's start time) or
+by `--resume` in its argv.
+
+**Why `cc-restore --after-crash` failed after the panic.** It found kitty 44163's heartbeat, but
+boot-resume's event mode looks for a kitty only under the current boot's heartbeat directory and after
+the current boot started, so the plan failed with "no heartbeat … nothing to restore from". Restoring
+it from the old directory would be worse: the at-boot restore had already launched that fleet under
+its own ledger (`events/boot-1792359242/launched`), so a second event could start a session twice.
+`--after-crash` now says the kitty died before this boot, names the at-boot event and its state, and
+launches nothing (`verdict=EARLIER-BOOT`); with no at-boot event it says to run boot-resume (exit 3).
