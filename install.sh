@@ -926,6 +926,30 @@ if [[ -d "$REPO_DIR/skills" ]]; then
   done
 fi
 
+# --- Mods (Claude Code function-hook plugins) ---
+# The skills model, for mods/<name>/: a REAL directory of per-file links under $CONFIG_DIR/mods,
+# re-globbed every run so a new file is linked by the next converge. Real, not a directory link,
+# because the engine writes its generated types into <mod>/.claude-plugin/types/ (and a
+# tsconfig.json at the mod's root) when it loads the mod; those land in the live dir and never in
+# the checkout. Both are skipped here (and gitignored) for a checkout a session loaded directly.
+# lib/claude-launcher.zsh names each live mod dir in CLAUDE_CODE_PLUGIN_DIRS, so every session the
+# launcher starts loads it, on every account (docs/research/accounts-responsive-mod-2026-10-19/).
+if [[ -d "$REPO_DIR/mods" ]]; then
+  echo ""
+  echo "Mods → $CONFIG_DIR/mods/"
+  for moddir in "$REPO_DIR"/mods/*/; do
+    [[ -f "$moddir/.claude-plugin/plugin.json" ]] || continue
+    name="$(basename "$moddir")"
+    ensure_real_dir "$CONFIG_DIR/mods/$name"
+    while IFS= read -r f; do
+      rel="${f#"$moddir"}"
+      [[ "$rel" == */* ]] && ensure_real_dir "$CONFIG_DIR/mods/$name/${rel%/*}"
+      link_file "$f" "$CONFIG_DIR/mods/$name/$rel"
+    done < <(find "$moddir" -type f -not -path '*/.claude-plugin/types/*' \
+               -not -path "${moddir}tsconfig.json" | sort)
+  done
+fi
+
 # --- Vendored third-party plugin content ---
 # ONE directory symlink per vendored plugin, deliberately NOT the per-file model used
 # above. vendor/ is upstream content we never edit and replace wholesale, so a per-file

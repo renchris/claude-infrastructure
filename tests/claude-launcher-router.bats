@@ -333,3 +333,42 @@ rec() {   # rec <records-dir> <routed-dir> <acct> <note> [env-prefix...]
   rec "$d" "" "" "pinned - every account capped"    # the real lib is not
   tail -1 "$f" | grep -q '"outcome":"pinned"'
 }
+
+# MODS (2026-10-19): each live ~/.claude/mods/<name>/ with a manifest rides every launch as a
+# `--plugin-dir`, so the accounts-readout mod loads on all four accounts — except where a session
+# cannot draw (`-p`) or the argv is a subcommand, and never under CC_MODS=off.
+runmods() {   # <command> → the argv the pinned body received
+  CC_LAUNCHER_ACCOUNTS_BIN="$STUB" zsh -f -c "
+    claude() { print -r -- \"args=\$*\" }
+    source '$LIB'
+    $1
+  " 2>/dev/null
+}
+
+@test "mods: every live mod with a manifest is passed as --plugin-dir, on the pinned and routed paths" {
+  mkrouter next4 0
+  mkdir -p "$HOME/.claude/mods/m1/.claude-plugin" "$HOME/.claude/mods/no-manifest"
+  printf '{}' > "$HOME/.claude/mods/m1/.claude-plugin/plugin.json"
+  run runmods "claude1 hello"
+  [ "$output" = "args=--plugin-dir $HOME/.claude/mods/m1 hello" ] || { echo "$output"; false; }
+  run runmods "claude hello"
+  [ "$output" = "args=--plugin-dir $HOME/.claude/mods/m1 hello" ] || { echo "$output"; false; }
+  run runmods "CLAUDE_CONFIG_DIR=$HOME/.claude-quaternary claude --resume abc"
+  [ "$output" = "args=--plugin-dir $HOME/.claude/mods/m1 --resume abc" ] || { echo "$output"; false; }
+}
+
+@test "mods: not for -p, a subcommand, CC_MODS=off, or a machine with none" {
+  mkrouter next4 0
+  run runmods "claude1 hello"
+  [ "$output" = "args=hello" ] || { echo "$output"; false; }
+  mkdir -p "$HOME/.claude/mods/m1/.claude-plugin"
+  printf '{}' > "$HOME/.claude/mods/m1/.claude-plugin/plugin.json"
+  run runmods "claude1 -p hi"
+  [ "$output" = "args=-p hi" ] || { echo "$output"; false; }
+  run runmods "claude1 --print hi"
+  [ "$output" = "args=--print hi" ] || { echo "$output"; false; }
+  run runmods "claude1 mcp list"
+  [ "$output" = "args=mcp list" ] || { echo "$output"; false; }
+  run runmods "CC_MODS=off claude1 hello"
+  [ "$output" = "args=hello" ] || { echo "$output"; false; }
+}

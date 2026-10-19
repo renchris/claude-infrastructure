@@ -188,6 +188,32 @@ _cc_charge_on_commit() {
     rm -f "$sent" ) >/dev/null 2>&1 &!
 }
 
+# ── mods: `--plugin-dir` for each live mod (2026-10-19) ─────────────────────────────────────────
+# install.sh links each repo mods/<name>/ into ~/.claude/mods/<name>/ (accounts-readout: the
+# /accounts readout re-laid out on resize). This puts one `--plugin-dir` per live mod into
+# _CC_MOD_ARGV for the call sites below, so every session the launcher starts loads them, on every
+# account, with no edit to the settings.json the four accounts share.
+# A FLAG, NOT CLAUDE_CODE_PLUGIN_DIRS, and that is a measured choice: a loaded mod costs a session
+# ~50-60 MB RSS (304 → 352 MB and 289 → 350 MB, CC 2.1.293, docs/research/accounts-responsive-
+# mod-2026-10-19/), and an exported variable is inherited by every `claude -p` a session's shell
+# runs, none of which can draw anything. Not added for `-p`/`--print`, for a subcommand (`mcp`,
+# `plugin`, ...), or under CC_MODS=off.
+_cc_mod_argv() {
+  emulate -L zsh
+  typeset -ga _CC_MOD_ARGV=()
+  [[ "${CC_MODS:-on}" == off ]] && return 0
+  local a
+  for a in "$@"; do [[ "$a" == (-p|--print) ]] && return 0; done
+  case "${1:-}" in
+    mcp|plugin|plugins|config|doctor|update|upgrade|install|setup-token|migrate-installer|auth) return 0 ;;
+  esac
+  local d
+  for d in "$HOME"/.claude/mods/*(N/); do
+    [[ -f "$d/.claude-plugin/plugin.json" ]] && _CC_MOD_ARGV+=(--plugin-dir "${d%/}")
+  done
+  return 0
+}
+
 # ── the split ──────────────────────────────────────────────────────────────────────────────────
 # Installed by COPYING the existing claude() into _claude_pinned and defining a router in its
 # place, rather than by editing the body in ~/.zshrc. Three reasons: the rc needs exactly one
@@ -240,7 +266,8 @@ _cc_install_router() {
           # Prefix assignment, deliberately NOT `export`: it scopes the pin to exactly this call
           # and leaves the caller's environment untouched, so a later launch in the same shell
           # re-routes instead of inheriting a stale account.
-          CLAUDE_CONFIG_DIR="$_CC_ROUTED_DIR" _claude_pinned "$@"
+          _cc_mod_argv "$@"
+          CLAUDE_CONFIG_DIR="$_CC_ROUTED_DIR" _claude_pinned "${_CC_MOD_ARGV[@]}" "$@"
           _rc=$?
         } always {
           [[ -n "$_CC_LAUNCH_SENTINEL" ]] && rm -f "$_CC_LAUNCH_SENTINEL"
@@ -251,12 +278,13 @@ _cc_install_router() {
       # account are indistinguishable in silence, which is how a dark feature survives for weeks.
       [[ -t 2 && -n "$_CC_ROUTE_NOTE" ]] && print -u2 "◆ ${_CC_ROUTE_NOTE}"
     fi
-    _claude_pinned "$@"
+    _cc_mod_argv "$@"
+    _claude_pinned "${_CC_MOD_ARGV[@]}" "$@"
   }
 
   # Account 1's pinned name. claude2/3/4 already have this shape and keep working unchanged: they
   # set CLAUDE_CONFIG_DIR, which the router reads as "pinned" and passes straight through.
-  claude1() { CLAUDE_CONFIG_DIR="$HOME/.claude-next" _claude_pinned "$@" }
+  claude1() { _cc_mod_argv "$@"; CLAUDE_CONFIG_DIR="$HOME/.claude-next" _claude_pinned "${_CC_MOD_ARGV[@]}" "$@" }
 }
 _cc_install_router
 

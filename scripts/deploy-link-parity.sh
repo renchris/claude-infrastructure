@@ -599,6 +599,15 @@ for d in "$REPO"/skills/*/; do
   n="$(basename "$d")"
   for f in "$d"*; do check_one "skills/$n/$(basename "$f")" "$CFG/skills/$n/$(basename "$f")"; done
 done
+# mods/<name>/ — install.sh's mods leg links every file of a mod RECURSIVELY (its manifest is
+# nested at .claude-plugin/plugin.json), less what the engine generates; walked the same way.
+for d in "$REPO"/mods/*/; do
+  [ -f "$d/.claude-plugin/plugin.json" ] || continue
+  n="$(basename "$d")"
+  while IFS= read -r f; do
+    check_one "mods/$n/${f#"$d"}" "$CFG/mods/$n/${f#"$d"}"
+  done < <(find "$d" -type f -not -path '*/.claude-plugin/types/*' -not -path "${d}tsconfig.json" | sort)
+done
 # The seven classes below were absent from this walk until 2026-08-31, and the reason they were
 # missed is the generalisation of the bin/ fix directly above it. That fix asked "who else holds a
 # copy of the bin/ enumeration?" and answered THREE files. The question it did not ask is the one
