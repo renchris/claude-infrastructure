@@ -73,6 +73,7 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
    | Other agents: line 1 names only backends that are signed in, installed and known to bill inside a plan, with the cause for the rest (not installed / not signed in); 🚨 or ⚠ only for a routable backend that bills outside a plan or might, or one on a metered API key; the standing not-wired set closes it with no alarm glyph | 2026-10-18 |
    | Every `/login` line carries its mailbox + Dia profile | 2026-07-30 |
    | The hook-drawn copy (`--pane`) is the same rows in the board's colours, laid out for the pane SURVIVING ONE SPLIT (`pane_width`: half the pane, never under 44 cells, never over the pane), because drawn text re-wraps when its pane narrows later; columns join by priority as width allows, and under ~43 cells each account takes two rows | 2026-10-18 |
+   | Banked full resets (recorded with `claude-accounts --note-bank`, since the CLI cannot read the bank): while a grant is live, ONE money-tier line `◆ Banked full reset on X and Y, expires Oct 22: work them to 100% first, then redeem at clau.de/reset`; an account AT its weekly wall holding a grant prints `✖ X is at its weekly limit and holds a banked full reset … redeem it now at clau.de/reset` instead of the "out of weekly quota" sentence, and leaves the ◆ line. Every lane already ranks a grant holder by min(weekly reset, grant expiry) | 2026-10-18 |
 
    **What is still yours** — the renderer prints facts; these bind how you may USE them:
    - 🚨 **Never state or imply a starred number is current, and never rank or recommend on
@@ -127,13 +128,17 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
    - **A lane reading `→ none`**: say whether it is policy (`--route` exit 2: quota, 5h cutoff,
      window) or data (exit 3: the fleet was not seen) — step 5's table — and never substitute a
      remembered account.
+   - **A ✖ banked-reset line (`redeem it now at clau.de/reset`)**: say it needs the operator, in a
+     browser logged into that account (its Dia profile), before the grant's expiry; no agent can
+     redeem it, and the CLI `/limit-reset` is a different, weekly-charging feature — never suggest it.
    - **A 🚨/⚠ line about another agent (a routable backend that bills outside a plan or might, or one on a metered API key)**:
      it is metered money or may be; say it must be unwired or moved onto a plan.
    - **A direct question from the operator** the readout does not answer outright (e.g. "can I
      start a Fable wave now?"): one sentence, naming the lane (desk, general or fable) and quoting
      the readout's own numbers. "Which account do I use" is line 1 — point at it, do not reword it.
 
-   NOT triggers: the standing `Not wired, because … would bill outside our plans` line, the ⚠ WALL /
+   NOT triggers: the standing `Not wired, because … would bill outside our plans` line, the ◆
+   banked-reset line (the routing already acts on it), the ⚠ WALL /
    LATE / START SOON pace rows and the ⚠ fleet-burn line. Each already says everything it has to
    say, and they print often enough that commenting on them is the habit this rule removes.
 

@@ -177,7 +177,16 @@ Usage:
       (default 30) — scheduled or banked, with no flag — one row each (lag, channel usage|wire,
       throttled polls and wire attempts it took), then median/max lag per kind and channel.
       Reads ~/.claude/logs/quota-reset-detect.jsonl. No network.
-  claude-accounts --no-color          plain output (also: NO_COLOR env, pipes, TERM=dumb;
+  claude-accounts --note-bank ACCT --left N --expires ISO [--source WHO]
+                                      record a read of ACCT's banked limit resets (the CLI cannot
+      read the bank; check it at clau.de/reset). ISO must carry an offset. Writes
+      ~/.claude/state/limit-bank.json. While a grant is live and expires before ACCT's weekly
+      reset, every lane ranks ACCT by the grant's expiry instead (effective_reset_h); an unscheduled
+      weekly reset on ACCT is read as a redemption and decrements resets_left. N=0 or a past
+      expiry is ignored by every reader.
+  claude-accounts --bank-wall         accounts at their weekly wall that hold a live grant, one
+      TAB-separated `acct key sentence` line each (autonomy-sweep pages each key once).
+  claude-accounts --no-color         plain output (also: NO_COLOR env, pipes, TERM=dumb;
                                       FORCE_COLOR=1 forces color for screenshots)
 
 Shared cache: /tmp/claude-accounts-cache.json (default TTL 90s, flock single-flight) so N
@@ -2708,6 +2717,15 @@ def watch_resets(rows, now=None):
     for e in events:
         log_event(f"reset {e['acct']} {e['window']}: {e['kind']} reset detected via "
                   f"{e['channel']} — {e['from_pct']:.0f}% → {e['to_pct']:.0f}%, lag {e['lag_s']:.0f}s")
+        # An UNSCHEDULED weekly reset on an account holding a banked grant is that grant being
+        # redeemed — the only local trace a redemption leaves — so the bank is decremented here.
+        if e["window"] == "7d" and e["kind"] == "unscheduled":
+            try:
+                if bank_redeemed(e["acct"], f"reset-detect {e['detected_at']}") is not None:
+                    log_event(f"bank {e['acct']}: redemption inferred from the unscheduled weekly "
+                              f"reset; resets_left decremented")
+            except Exception as be:              # telemetry must not break a sweep
+                log_event(f"bank {e['acct']}: decrement FAILED {type(be).__name__}: {be}")
     return events
 
 
@@ -3266,6 +3284,235 @@ def collect(cfg, no_heal=False, prev=None):
         r["auth_actionable"] = r.get("auth") in ACTIONABLE_AUTH
         r["login_fixable"] = r.get("auth") in LOGIN_FIXABLE
     return rows
+
+
+# ---- banked limit resets: THE BANK STATE (recorded, never read off the wire) -----------------
+# A banked "Full reset" grant refills the 5-hour, weekly and Fable limits, can be redeemed only AT
+# a limit (weekly 100%), and does NOT move the weekly reset day. So an unredeemed grant is LOST
+# unless its account reaches 100% before the grant expires — for routing, the grant's expiry is a
+# deadline exactly like a weekly reset, and the earlier of the two is the one that strands quota.
+#
+# THE STORE IS RECORDED BY HAND, and that is a measured constraint, not a shortcut: the CLI surface
+# is not offered the bank (`/api/oauth/usage?cedar_ember=1` answers 200 with `eligible:false,
+# ineligible_reason:"surface", grants:[]` on all four accounts, 2026-10-18), and redemption is
+# web-only (clau.de/reset). A reader built on that endpoint would read "no grant" forever.
+# Recorded with `--note-bank <acct> --left N --expires <ISO>`; decremented by the reset detector
+# when it sees an UNSCHEDULED weekly reset on an account holding a grant (watch_resets), since a
+# redemption leaves no other local record.
+#
+# An entry with resets_left 0, or past expires_at, is ignored by every reader: no cleanup needed,
+# and an unreadable store reads as "no grant" — the pre-bank ranking, byte for byte.
+BANK_REDEEM_URL = "clau.de/reset"
+# Tie-break between EQUAL effective deadlines (operator ruling 2026-10-18: pure earliest-deadline
+# first, goal zero unused weekly quota): the account whose REAL weekly reset is earlier goes first,
+# because the refill it gets on redeeming expires sooner. Expressed as a sub-minute nudge on the
+# effective deadline (<= 3.6 s at a full week), so it orders a tie and can never reorder anything
+# a real deadline separates.
+BANK_TIE_H = 1e-3
+
+
+def bank_path():
+    explicit = os.environ.get("CC_LIMIT_BANK_JSON")
+    if explicit:
+        return explicit
+    # A redirected ledger or SSOT takes the bank with it (the _reset_log_path discipline), so a
+    # suite exercising the router on real account names can never read or decrement the real bank.
+    if os.environ.get("CLAUDE_ACCOUNTS_LASTGOOD"):
+        return os.path.splitext(LASTGOOD_PATH)[0] + ".limit-bank.json"
+    state = os.path.join(HOME, ".claude", "state")
+    if os.environ.get("CLAUDE_ACCOUNTS_JSON"):
+        h = sha256(os.path.realpath(CFG_PATH).encode()).hexdigest()[:8]
+        return os.path.join(state, f"limit-bank-{h}.json")
+    return os.path.join(state, "limit-bank.json")
+
+
+_BANK_MEMO = {}
+
+
+def bank_load():
+    """-> {acct: entry} from the bank store; {} when absent or unreadable. Memoised on the file's
+    (path, mtime, size), so the router may ask once per row without re-reading."""
+    p = bank_path()
+    try:
+        st = os.stat(p)
+    except OSError:
+        return {}
+    key = (p, st.st_mtime_ns, st.st_size)
+    if _BANK_MEMO.get("key") == key:
+        return _BANK_MEMO["val"]
+    try:
+        with open(p) as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        d = {}
+    accts = d.get("accounts") if isinstance(d, dict) else None
+    val = accts if isinstance(accts, dict) else {}
+    _BANK_MEMO.update(key=key, val=val)
+    return val
+
+
+def bank_live(acct, now=None):
+    """The account's unredeemed, unexpired grant -> its entry plus `expires_epoch` and
+    `hours_left`; None otherwise (no entry, resets_left 0, expired, or an unparseable expiry)."""
+    e = bank_load().get(acct) if acct else None
+    if not isinstance(e, dict):
+        return None
+    left = e.get("resets_left")
+    if not isinstance(left, int) or isinstance(left, bool) or left <= 0:
+        return None
+    exp = _epoch(e.get("expires_at"))
+    now = time.time() if now is None else now
+    if exp is None or exp <= now:
+        return None
+    return dict(e, expires_epoch=exp, hours_left=(exp - now) / 3600.0)
+
+
+def bank_live_all(rows, now=None):
+    """-> [(row, grant)] for every row holding a live grant, in row order."""
+    return [(r, g) for r in rows for g in [bank_live(r.get("acct"), now)] if g]
+
+
+def bank_at_wall(r):
+    """True when the row's weekly limit is spent: the one state in which a grant CAN be redeemed."""
+    w = r.get("wire") or {}
+    return w.get("7d_status") == "rejected" or (r.get("weekly_pct") or 0) >= 100
+
+
+def effective_reset_h(r, R, field="weekly_reset_h"):
+    """THE ROUTER'S WEEKLY DEADLINE, in hours: min(weekly reset, grant expiry) when the account
+    holds a live grant that expires BEFORE its weekly reset; otherwise `weekly_reset_h` itself,
+    returned unchanged (absent stays absent), so a fleet with no live grant ranks byte-identically
+    to the pre-bank router. Every lane reads its weekly deadline through this one helper, then
+    applies horizon() exactly as before — the only change is which instant is the deadline.
+    `field="fable_reset_h"` gives the Fable lane the same cap: a redemption refills Fable too."""
+    wrh = r.get(field)
+    g = bank_live(r.get("acct"))
+    if g is None:
+        return wrh
+    real = wrh if (isinstance(wrh, (int, float)) and wrh > 0) else R.get("NO_RESET_H", WEEK_H)
+    if g["hours_left"] >= real:
+        return wrh
+    return g["hours_left"] + BANK_TIE_H * clamp(real / WEEK_H, 0.0, 1.0)
+
+
+def _bank_write(mutate):
+    """Apply `mutate(accounts_dict)` to the store under a lock; atomic replace. -> the new dict."""
+    p = bank_path()
+    os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+    with open(p + ".lock", "a") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            with open(p) as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            d = {}
+        d = d if isinstance(d, dict) else {}
+        accts = d.get("accounts") if isinstance(d.get("accounts"), dict) else {}
+        mutate(accts)
+        d.update(version=1, accounts=accts)
+        tmp = f"{p}.{os.getpid()}.tmp"
+        with open(tmp, "w") as f:
+            json.dump(d, f, indent=2, sort_keys=True)
+            f.write("\n")
+        os.replace(tmp, p)
+    return accts
+
+
+def bank_note(acct, left, expires_at, source):
+    """`--note-bank`: record one read of an account's bank."""
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    def m(accts):
+        accts[acct] = {"resets_left": left, "expires_at": expires_at,
+                       "verified_at": now_iso, "source": source}
+    return _bank_write(m)[acct]
+
+
+def bank_redeemed(acct, source):
+    """A redemption seen: decrement resets_left (never below 0). -> the new entry, or None when the
+    account held no live grant (nothing to decrement, and nothing is written)."""
+    if bank_live(acct) is None:
+        return None
+    out = {}
+
+    def m(accts):
+        e = dict(accts.get(acct) or {})
+        e["resets_left"] = max(0, int(e.get("resets_left") or 0) - 1)
+        e["redeemed_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        e["source"] = source
+        accts[acct] = e
+        out.update(e)
+    _bank_write(m)
+    return out
+
+
+def bank_wall_lines(rows):
+    """-> [(acct, grant_key, sentence)] for each account AT its weekly wall holding a live grant.
+    The key names the GRANT (account + expiry), so a pager can say it once per account per grant."""
+    out = []
+    for r, g in bank_live_all(rows):
+        if bank_at_wall(r):
+            out.append((r["acct"], f"{r['acct']}@{g.get('expires_at')}",
+                        f"`{r['acct']}` is at its weekly limit and holds a banked full reset "
+                        f"(expires {_bank_day(g)}): redeem it now at {BANK_REDEEM_URL}"))
+    return out
+
+
+def _bank_day(g):
+    return datetime.fromtimestamp(g["expires_epoch"]).strftime("%b %-d")
+
+
+def bank_readout_line(rows):
+    """The one plain readout line while any grant is live and not yet at its wall; None otherwise.
+    Accounts already at the wall are named by their own at-wall line instead."""
+    live = [(r, g) for r, g in bank_live_all(rows) if not bank_at_wall(r)]
+    if not live:
+        return None
+    days = {_bank_day(g) for _r, g in live}
+    names = [f"`{r['acct']}`" for r, _g in live]
+    who = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+    if len(days) == 1:
+        when = f"expires {days.pop()}"
+    else:
+        who = ", ".join(f"`{r['acct']}` ({_bank_day(g)})" for r, g in live)
+        when = "expiring as shown"
+    them = "it" if len(live) == 1 else "them"
+    return (f"◆ Banked full reset on {who}, {when}: work {them} to 100% first, "
+            f"then redeem at {BANK_REDEEM_URL}")
+
+
+def note_bank_main(args):
+    """`--note-bank ACCT --left N --expires ISO [--source WHO]` -> exit 0 recorded · 64 bad args.
+    The expiry must carry a UTC offset: "Oct 22" read off a web page is a local date, and a naive
+    stamp would be read as UTC — five hours late on this box, i.e. past the real deadline."""
+    def val(flag):
+        i = args.index(flag) if flag in args else -1
+        return args[i + 1] if 0 <= i < len(args) - 1 and not args[i + 1].startswith("--") else None
+    names = [a["name"] for a in load_cfg(need_claude_bin=False)["accounts"]]
+    acct, left, exp = val("--note-bank"), val("--left"), val("--expires")
+    if acct not in names:
+        print(f"claude-accounts: --note-bank needs an account ({'|'.join(names)}); got {acct!r}",
+              file=sys.stderr)
+        return 64
+    try:
+        n = int(left)
+        if n < 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        print(f"claude-accounts: --left needs a whole number >= 0; got {left!r}", file=sys.stderr)
+        return 64
+    try:
+        t = datetime.fromisoformat(str(exp).replace("Z", "+00:00"))
+    except ValueError:
+        t = None
+    if t is None or t.tzinfo is None:
+        print(f"claude-accounts: --expires needs an ISO-8601 time WITH an offset "
+              f"(e.g. 2026-10-22T00:00-05:00); got {exp!r}", file=sys.stderr)
+        return 64
+    e = bank_note(acct, n, t.isoformat(), val("--source") or "note-bank")
+    print(f"bank {acct}: resets_left={e['resets_left']} expires_at={e['expires_at']} "
+          f"source={e['source']!r} -> {bank_path()}")
+    return 0
 
 
 # ---- router (verified scoring math, 2026-07-04; audit fixes 2026-07-10) -----------------------
@@ -5783,7 +6030,7 @@ def score_general(r, cfg, cliff=True, recovery=False):
     w_rem = weekly_headroom(r)
     if w_rem <= R["WEEKLY_FLOOR"]:
         return None, "weekly-exhausted"
-    T = horizon(r.get("weekly_reset_h"), R)
+    T = horizon(effective_reset_h(r, R), R)
     # T**γ (M7): deadline-dominant urgency — see the utilization-pressure block above. γ=1 is
     # the exact pre-M7 linear form.
     return (w_rem / (T ** urgency_exp(R))) * _soft(r, R) * (_dispatch_cliff_factor(r) if cliff else 1.0), None
@@ -5909,7 +6156,7 @@ def desk_keys(r, cfg):
         return su, None, DESK_TIER_ANY
     w_rem = weekly_headroom(r)
     if su < desk_5h_floor(R):
-        w_floor = desk_w_floor_at(R, r.get("weekly_reset_h"))
+        w_floor = desk_w_floor_at(R, effective_reset_h(r, R))
         return su, w_rem, (DESK_TIER_SAFE if w_rem >= w_floor else DESK_TIER_5H)
     return su, w_rem, DESK_TIER_ANY
 
@@ -6008,7 +6255,7 @@ def score_interactive(r, cfg, cliff=True):
     # other lane uses (horizon() — so an absent or elapsed reset reads as FAR AWAY, never imminent),
     # and 1/(1+T) is in (0,1) for every T >= EPS_H, so a within-tier key can never reach the next
     # tier however the operator tunes EPS_H.
-    key = 1.0 / (1.0 + horizon(r.get("weekly_reset_h"), R))
+    key = 1.0 / (1.0 + horizon(effective_reset_h(r, R), R))
     # The cliff SOFT band demotes INSIDE the tier rather than across tiers (a soft-band account is
     # still a safer desk than one that failed the 5h key outright), and is lifted only when the
     # week is stranding — see _desk_cliff_factor for why x0.25 everywhere misrouted.
@@ -6058,7 +6305,7 @@ def score_fable(r, cfg, win, cliff=True, recovery=False):
         # what was already refused, it only names what IT refused.
         return None, ("recovery-fable-thin" if recovery and f_eff > R["FABLE_FLOOR"]
                       else "fable-exhausted")
-    T_fable = horizon(r.get("fable_reset_h"), R)
+    T_fable = horizon(effective_reset_h(r, R, "fable_reset_h"), R)
     H = max(min(T_fable, h_deadline), R["EPS_H"]) if h_deadline is not None else max(T_fable, R["EPS_H"])
     JB = R["JB_BONUS"] if (h_deadline is not None and T_fable > h_deadline) else 1.00
     # H**γ mirrors score_general — the scoped bucket strands at ITS reset by the same law.
@@ -6520,7 +6767,7 @@ def _dispatch_first(s, r, R, roomy):
     if cliff_band(r) == "drain" or _dispatch_cliff_factor(r) != 1.0 \
             or not _su_projected(r, R) < R["S_SOFT"]:
         return False
-    t = horizon(r.get("weekly_reset_h"), R)
+    t = horizon(effective_reset_h(r, R), R)
     return not any(s2 > s and t2 < t for s2, t2 in roomy)
 
 
@@ -6544,7 +6791,7 @@ def _dispatch_partition(out, R, promote):
         if spare is not None:
             r["dispatch_spare_pp"] = spare
         judged.append((s, r, tok))
-    roomy = [(s, horizon(r.get("weekly_reset_h"), R)) for s, r, tok in judged if tok == "roomy"]
+    roomy = [(s, horizon(effective_reset_h(r, R), R)) for s, r, tok in judged if tok == "roomy"]
     first, keep, held = [], [], []
     for s, r, tok in judged:
         if tok == "lifted" and promote and _dispatch_first(s, r, R, roomy):
@@ -6585,7 +6832,7 @@ def dispatch_floor_note(r, rows, cfg):
                 f"a new task needs {need:.1f}")
     if tok == "lifted":
         s = score_general(r, cfg)[0]
-        roomy = [(s2, horizon(x.get("weekly_reset_h"), R)) for x in rows
+        roomy = [(s2, horizon(effective_reset_h(x, R), R)) for x in rows
                  if x is not r and dispatch_floor_row(x, R)[0] == "roomy"
                  for s2 in [score_general(x, cfg)[0]] if s2]
         if s and _dispatch_first(s, r, R, roomy):
@@ -9449,7 +9696,14 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None, pane=None
         wire = r.get("wire") or {}
         w7, s7 = wire.get("7d_util"), wire.get("7d_status")
         resets = _resetw_clause(r)
-        if s7 == "rejected":
+        _bank_g = bank_live(acct)
+        if _bank_g and bank_at_wall(r):
+            # AT THE WALL WITH A GRANT IN HAND is not "out of quota": it is the one moment the
+            # grant can be redeemed, and the grant is lost at its expiry if nobody does.
+            explained.add((acct, "weekly-exhausted"))
+            _note(_SEV_OUT, "✖ " + f"`{acct}` is at its weekly limit and holds a banked full reset "
+                         f"(expires {_bank_day(_bank_g)}): **redeem it now at {BANK_REDEEM_URL}**")
+        elif s7 == "rejected":
             explained.add((acct, "weekly-exhausted"))
             _note(_SEV_OUT, "✖ " + f"`{acct}` is **out of weekly quota**, confirmed by Anthropic's server"
                          + (f" ({w7 * 100:.0f}% used)" if w7 is not None else "") + resets)
@@ -9579,6 +9833,10 @@ def readout_lines(rows, cfg, win, cached, narrow=False, quota_ts=None, pane=None
             out.append(_wrow(mk, nm, live, p5, cd5, abs5, pwk, bar, pfb, cdw, absw, login,
                              nw, ww))
         out += ["```", ""]
+    # The bank line rides the MONEY tier: an unredeemed grant past its expiry is quota lost for good.
+    _bank_line = bank_readout_line(rows)
+    if _bank_line:
+        _note(_SEV_MONEY, _bank_line)
     # Severity order (money, auth, out, near, 5h cutoff, cliff, stale, info, footnote), stable.
     notes.sort(key=lambda t: t[0])
     for _sev, n in notes:
@@ -10653,6 +10911,11 @@ def main():
     if "--local-refresh" in args:
         sys.exit(local_refresh_main())
 
+    # --note-bank ACCT --left N --expires ISO [--source WHO]: record one read of an account's bank
+    # of limit resets (see bank_path). A file write only — no sweep, no network, no lock.
+    if "--note-bank" in args:
+        sys.exit(note_bank_main(args))
+
     # --max-wait / --max-age are GLOBAL modifiers, parsed before load_cfg() because --max-wait 0
     # also decides whether load_cfg may fork the claude-bin resolver. Shaped exactly like
     # `--login-status --window-h N`: positional value, malformed ⇒ exit 64, absent ⇒ None ⇒ every
@@ -11156,6 +11419,14 @@ def main():
         else:
             for s, r in cand:
                 print(f"{r['acct']} {s:.6f}")
+        return
+
+    # --bank-wall: one TAB-separated line per account at its weekly wall that holds a live grant —
+    # `acct<TAB>grant-key<TAB>sentence`. autonomy-sweep pages each grant-key once. Empty = nothing
+    # to redeem. Meant to run with --max-wait 0 (cache only), so it never forces a sweep.
+    if "--bank-wall" in args:
+        for acct, key, text in bank_wall_lines(rows):
+            print(f"{acct}\t{key}\t{text}")
         return
 
     if "--readout" in args:

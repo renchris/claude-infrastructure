@@ -98,6 +98,9 @@ setup() {
   export CC_ROLES_DIR="$BATS_TEST_TMPDIR/roles"
   export CC_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
   export CC_SWEEP_SEEN_DIR="$BATS_TEST_TMPDIR/seen"
+  # The bank-wall arm forks claude-accounts; inert by default here (a path that does not exist),
+  # and stubbed by the two desk-reach cases that exercise it.
+  export CC_SWEEP_BANK_WALL_BIN="$BATS_TEST_TMPDIR/no-bank-wall"
   export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl"
   export CC_DECIDE_BIN="$REPO/bin/cc-decide"
   export CC_BACKLOG_BIN="$REPO/bin/cc-backlog"
@@ -2087,6 +2090,36 @@ dead_desk() {
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   [ ! -f "$HOME/.claude/autonomy/propose-goal-arm.paged" ]
   grep -q '"source":"propose-goal-arm".*"delivered":false' "$CC_IDL"
+}
+
+@test "desk-reach bank-wall arm: an account at its wall with a live grant pages once per grant" {
+  dead_desk
+  export CC_SWEEP_BANK_WALL_BIN="$BATS_TEST_TMPDIR/bank-wall"
+  printf '#!/bin/bash\nprintf "next\\tnext@grant-a\\tnext is at its weekly limit: redeem it now at clau.de/reset\\n"\n' \
+    > "$CC_SWEEP_BANK_WALL_BIN"; chmod +x "$CC_SWEEP_BANK_WALL_BIN"
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  [ "$(arm_pages bank-wall)" -eq 1 ]
+  grep -q 'clau.de/reset' "$CC_IDL"
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$(arm_pages bank-wall)" -eq 1 ]                 # same grant: never paged twice
+  # A NEW grant on the same account is a new key, so it pages again.
+  printf '#!/bin/bash\nprintf "next\\tnext@grant-b\\tnext again\\n"\n' > "$CC_SWEEP_BANK_WALL_BIN"
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$(arm_pages bank-wall)" -eq 2 ]
+}
+
+@test "desk-reach bank-wall arm: an UNDELIVERED page leaves no stamp, and an empty answer pages nothing" {
+  dead_desk; export CC_SWEEP_OS_CHANNEL=off
+  export CC_SWEEP_BANK_WALL_BIN="$BATS_TEST_TMPDIR/bank-wall"
+  printf '#!/bin/bash\nprintf "next\\tnext@k\\tnext at wall\\n"\n' > "$CC_SWEEP_BANK_WALL_BIN"; chmod +x "$CC_SWEEP_BANK_WALL_BIN"
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ -z "$(ls "$HOME/.claude/autonomy/bank-wall" 2>/dev/null)" ]
+  grep -q '"source":"bank-wall".*"delivered":false' "$CC_IDL"
+  printf '#!/bin/bash\nexit 3\n' > "$CC_SWEEP_BANK_WALL_BIN"; : > "$CC_IDL"
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  ! grep -q '"source":"bank-wall"' "$CC_IDL" || false
+  grep -q '"bank_wall_paged":0' "$CC_IDL"
 }
 
 @test "desk-reach ts7-peer arm: an admitting peer range pages once and writes no store" {

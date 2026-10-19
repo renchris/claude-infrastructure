@@ -2073,6 +2073,7 @@ print("OK")'
   [[ "$out$other" != *LEAK* ]] || { echo "exported TAIL leaked: $out $other"; false; }
   for p in 'a ↻ line or a `Skipped by the general router:` line' 'login or ○ auth line' \
            'spend or ⚠ extra-usage toggle line' 'a lane reading `→ none`' \
+           'a ✖ banked-reset line (`redeem it now at clau.de/reset`)' \
            'line about another agent (a routable backend that bills outside a plan or might, or one on a metered API key)' \
            'NOT triggers'; do
     grep -qiF -- "$p" "$H" || { echo "hook lacks: $p"; false; }
@@ -3421,4 +3422,138 @@ assert ca.score_interactive(row(session_pct=86), cfg)[0] is None
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+# ---- banked limit resets: the grant's expiry is a deadline (bin/claude-accounts effective_reset_h)
+# BANK is the module-level fixture: the store sits beside the redirected ledger (bank_path), so a
+# case can never read or decrement the operator's real ~/.claude/state/limit-bank.json.
+BANK='
+import os, json, time
+from datetime import datetime, timedelta, timezone
+assert ca.bank_path() == os.path.splitext(os.environ["CLAUDE_ACCOUNTS_LASTGOOD"])[0] + ".limit-bank.json"
+def iso(h):
+    return (datetime.now(timezone.utc) + timedelta(hours=h)).isoformat()
+def bank(**accts):
+    with open(ca.bank_path(), "w") as f:
+        json.dump({"version": 1, "accounts": {a: {"resets_left": left, "expires_at": iso(h),
+                   "verified_at": iso(0), "source": "bats"} for a, (left, h) in accts.items()}}, f)
+def nobank():
+    try:
+        os.remove(ca.bank_path())
+    except FileNotFoundError:
+        pass
+def order(rows, lane):
+    return [r["acct"] for _s, r in ca.ranked([dict(x) for x in rows], cfg, WIN_OPEN, lane)[0]]
+def scored(rows, lane):
+    return [(round(s, 12), r["acct"]) for s, r in ca.ranked([dict(x) for x in rows], cfg, WIN_OPEN, lane)[0]]
+'
+
+@test "bank (a): a grant expiring before the weekly reset moves that account ahead in every lane" {
+  # MUTANT: return weekly_reset_h unconditionally from effective_reset_h and `far` stays last.
+  run python3 -c "$LOAD$BANK"'
+far  = row(acct="far",  weekly_reset_h=100.0, fable_reset_h=100.0)
+soon = row(acct="soon", weekly_reset_h=60.0,  fable_reset_h=60.0)
+nobank()
+for lane in ("general", "interactive", "fable"):
+    assert order([far, soon], lane) == ["soon", "far"], (lane, order([far, soon], lane))
+bank(far=(1, 30.0))
+for lane in ("general", "interactive", "fable"):
+    assert order([far, soon], lane) == ["far", "soon"], (lane, order([far, soon], lane))
+assert abs(ca.effective_reset_h(far, R) - 30.0) < 0.01
+# a grant that expires AFTER the weekly reset is no deadline at all: the raw field comes back
+bank(far=(1, 130.0))
+assert ca.effective_reset_h(far, R) == 100.0 and order([far, soon], "general") == ["soon", "far"]
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "bank (b): an expired grant, resets_left 0, or an unreadable store ranks byte-identically" {
+  # MUTANT: drop the `left <= 0` or `exp <= now` test in bank_live and a lane reorders.
+  run python3 -c "$LOAD$BANK"'
+rows = [row(acct="far", weekly_reset_h=100.0, weekly_pct=30), row(acct="soon", weekly_reset_h=60.0),
+        row(acct="none", weekly_reset_h=None)]
+nobank()
+base = {lane: scored(rows, lane) for lane in ("general", "interactive", "fable")}
+for state in ("expired", "spent", "garbage"):
+    if state == "expired":
+        bank(far=(1, -1.0), soon=(1, -0.01))
+    elif state == "spent":
+        bank(far=(0, 30.0), soon=(0, 5.0))
+    else:
+        open(ca.bank_path(), "w").write("{not json")
+    for lane, want in base.items():
+        assert scored(rows, lane) == want, (state, lane, scored(rows, lane), want)
+    assert ca.effective_reset_h(rows[2], R) is None        # absent stays absent
+    assert ca.bank_readout_line(rows) is None and ca.bank_wall_lines(rows) == []
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "bank (c): equal effective deadlines go to the EARLIER real weekly reset" {
+  # Operator ruling 2026-10-18: pure earliest-deadline-first; on a tie the account whose refill
+  # expires sooner goes first. MUTANT: drop the BANK_TIE_H nudge and accounts order wins (`late`).
+  run python3 -c "$LOAD$BANK"'
+late  = row(acct="late",  weekly_reset_h=120.0)
+early = row(acct="early", weekly_reset_h=80.0)
+bank(late=(1, 30.0), early=(1, 30.0))
+# the two expiries are written microseconds apart; pin them to ONE instant so the tie is exact
+d = json.load(open(ca.bank_path())); d["accounts"]["early"]["expires_at"] = d["accounts"]["late"]["expires_at"]
+json.dump(d, open(ca.bank_path(), "w"))
+assert order([late, early], "interactive") == ["early", "late"], order([late, early], "interactive")
+assert ca.effective_reset_h(early, R) < ca.effective_reset_h(late, R)
+assert ca.effective_reset_h(late, R) - ca.effective_reset_h(early, R) < 0.01   # a nudge, not a deadline
+# a real deadline gap still decides: a grant 1 h sooner beats the tie-break
+bank(late=(1, 29.0), early=(1, 30.0))
+assert order([late, early], "interactive") == ["late", "early"]
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "bank (d): at the wall with a grant reads 'redeem at clau.de/reset', not out of quota; the ◆ line names the rest" {
+  run python3 -c "$LOAD$BANK$READOUT"'
+wall = row(acct="wall", weekly_pct=100, wire={"7d_status": "rejected", "7d_util": 1.0})
+work = row(acct="work", weekly_pct=20, weekly_reset_h=100.0)
+plain = row(acct="plain", weekly_pct=20)
+bank(wall=(1, 40.0), work=(1, 40.0))
+lines = ca.bank_wall_lines([wall, work, plain])
+assert [(a, k.split("@")[0]) for a, k, _t in lines] == [("wall", "wall")], lines
+assert "clau.de/reset" in lines[0][2]
+out = rd([wall, work, plain])
+assert "`wall` is at its weekly limit and holds a banked full reset" in out, out
+assert "redeem it now at clau.de/reset" in out and "`wall` is **out of weekly quota**" not in out, out
+diamond = [l for l in out.splitlines() if l.startswith("◆ Banked full reset")]
+assert len(diamond) == 1 and "`work`" in diamond[0] and "`wall`" not in diamond[0], diamond
+assert "work it to 100% first, then redeem at clau.de/reset" in diamond[0], diamond
+# the wall row is still excluded from routing: a capped account takes no new work
+assert ca.score_general(dict(wall), cfg)[1] == "weekly-exhausted"
+# with no grant, the wall row is the plain server-confirmed sentence and there is no ◆ line
+nobank()
+out = rd([wall, work, plain])
+assert "`wall` is **out of weekly quota**" in out and "◆ Banked" not in out, out
+# the redemption decrement: an unscheduled weekly reset spends the grant, and only once
+bank(wall=(1, 40.0))
+assert ca.bank_redeemed("wall", "bats")["resets_left"] == 0
+assert ca.bank_live("wall") is None and ca.bank_redeemed("wall", "bats") is None
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "bank: --note-bank records a read, refuses a naive expiry, and the store follows the redirected ledger" {
+  # Expiries are seeded RELATIVE to now (the wall-clock ratchet): an absolute date rots.
+  local exp naive; exp="$(date -u -v+100H +%Y-%m-%dT%H:%M:%S+00:00)"; naive="${exp%+00:00}"
+  run "$CA_BIN" --note-bank next3 --left 1 --expires "$exp" --source bats
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  local store="${CA_LEDGER%.json}.limit-bank.json"
+  run python3 -c 'import json,sys; e=json.load(open(sys.argv[1]))["accounts"]["next3"]; assert e["resets_left"]==1 and e["expires_at"]==sys.argv[2] and e["source"]=="bats", e; print("OK")' "$store" "$exp"
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+  run "$CA_BIN" --note-bank next3 --left 1 --expires "$naive"
+  [ "$status" -eq 64 ]
+  run "$CA_BIN" --note-bank nope --left 1 --expires "$exp"
+  [ "$status" -eq 64 ]
+  run "$CA_BIN" --note-bank next3 --left -1 --expires "$exp"
+  [ "$status" -eq 64 ]
 }

@@ -1769,6 +1769,30 @@ case "${_pgw_rc:-absent}" in
 esac
 log_idl propose-goal-arm "$(jq -nc --arg rc "${_pgw_rc:-absent}" --arg v "$_pgw_verdict" '{propose_goal_rc:$rc, propose_goal_verdict:$v}')"
 
+# ── 2b-iii-b2. THE BANK-AT-WALL ARM — an account at its weekly limit that holds a banked reset ────
+# A banked full reset can be redeemed only AT the weekly wall, and it is lost at its expiry if
+# nobody redeems it — and redemption is web-only (clau.de/reset), so no agent can do it. The router
+# drives the account to the wall (bin/claude-accounts effective_reset_h); this arm owns the moment
+# it arrives: one page per account per GRANT (the key carries the grant's expiry), stamped only on
+# delivery so an undelivered page retries next sweep. Cache-only read (`--max-wait 0`): it never
+# forces a quota sweep, and an abstaining cache prints nothing, which pages nothing.
+# Above the `nothing-new` exit for 2b-iii-b's reason: reaching the wall makes no page of its own.
+_bank_bin="${CC_SWEEP_BANK_WALL_BIN:-$_SWEEP_DIR/../bin/claude-accounts}"
+_bank_paged=0
+if [ -x "$_bank_bin" ]; then
+  _bank_dir="$_cc_cfg/autonomy/bank-wall"
+  while IFS="$(printf '\t')" read -r _bk_acct _bk_key _bk_text; do
+    [ -n "$_bk_key" ] || continue
+    _bk_stamp="$_bank_dir/$(printf '%s' "$_bk_key" | tr -c 'A-Za-z0-9._-' '_').paged"
+    [ -f "$_bk_stamp" ] && continue
+    if sweep_desk_page bank-wall "💳 ${_bk_text} — a person must do this in a browser logged into ${_bk_acct}; the grant is lost at its expiry."; then
+      mkdir -p "$_bank_dir" 2>/dev/null && : >"$_bk_stamp" 2>/dev/null || true
+      _bank_paged=$((_bank_paged + 1))
+    fi
+  done < <(_bounded "$_bank_bin" --bank-wall --max-wait 0 2>/dev/null)
+fi
+log_idl bank-wall-arm "$(jq -nc --argjson n "${_bank_paged:-0}" '{bank_wall_paged:$n}')"
+
 sweep_yield 2b-iii-c-dated-park-arm
 
 # ── 2b-iii-c. THE DATED-PARK ARM — the other half of every park whose gate is a CLOCK ─────────────
