@@ -549,6 +549,9 @@ for f in "$REPO"/hooks/lib/*.sh;  do check_one "hooks/lib/$(basename "$f")" "$CF
 # reported by NOTHING on the forward leg. The orphan and stray legs below are keyed on the
 # DIRECTORY, so they already covered it; only the per-file existence check was blind.
 for f in "$REPO"/hooks/lib/*.py;  do check_one "hooks/lib/$(basename "$f")" "$CFG/hooks/lib/$(basename "$f")"; done
+# hooks/lib/*.jq joined install.sh's hooks/lib loop in a9c31098d (dispatcher v2) with no walk here,
+# so tests/deploy-link-parity.bats's coverage arm read it UNCLAIMED from that land on.
+for f in "$REPO"/hooks/lib/*.jq;  do check_one "hooks/lib/$(basename "$f")" "$CFG/hooks/lib/$(basename "$f")"; done
 for f in "$REPO"/commands/*.md;   do check_one "commands/$(basename "$f")"  "$CFG/commands/$(basename "$f")"; done
 for f in "$REPO"/scripts/*.sh;    do check_one "scripts/$(basename "$f")"   "$CFG/scripts/$(basename "$f")"; done
 # SAME OMISSION AS hooks/lib/*.py ABOVE, one class down and eleven days later. `1aa535891` extended
