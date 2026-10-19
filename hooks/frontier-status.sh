@@ -5,7 +5,7 @@
 # roles.lead_default in model-config.yaml; the frontier tier (versions.frontier_latest)
 # is not opt-in — it is Follow-On Gate F2's third branch (CLAUDE.global.md § Frontier Tier Routing).
 # Prints AT MOST one line:
-#   - window open  → status + open-hole count + the two skills + launcher
+#   - window open AND OPEN holes in this project → hole count + window status + /frontier-run
 #   - window closed but OPEN holes exist in this project → parked-holes reminder
 #   - otherwise → silent (zero context cost outside frontier-relevant sessions)
 set -uo pipefail
@@ -32,9 +32,15 @@ if [ "${active:-}" = "true" ] && [ -n "${end:-}" ] && [ ! "$today" \> "$end" ]; 
   window_open=1
 fi
 
-if [ "$window_open" = 1 ]; then
-  echo "Frontier: ${fmodel:-frontier} window OPEN→${end} · default=${lead:-opus} · agent auto-escalates, bounded (frontier_discovery_budget) · holes: ${holes} OPEN in ${LEDGER} · /frontier-hole=capture · /frontier-run=inline-on-blocking-wall / batch-at-wrap-up"
-elif [ "${holes:-0}" -gt 0 ] 2>/dev/null; then
+# SILENT UNLESS A HOLE IS OPEN (docs/research/startup-hooks-2026-10-18/README.md §2 #12, A4-R4).
+# The open-window line was identical on 404 of 404 starts with 0 holes, it restated the routing rules
+# CLAUDE.md already carries, and its "agent auto-escalates" contradicted them ("a session chooses the
+# ladder; it is not automatic"). `end` is a sentinel while frontier_access is permanent, so the
+# 14-day window-closing branch A4-R4 offered would never fire; an open hole is the only news.
+case "$holes" in ''|*[!0-9]*) holes=0 ;; esac
+if [ "$holes" -gt 0 ] && [ "$window_open" = 1 ]; then
+  echo "Frontier: ${holes} OPEN hole(s) in ${LEDGER} · ${fmodel:-frontier} window open→${end} · default=${lead:-opus} · escalating is this session's call, not automatic, bounded by frontier_discovery_budget · /frontier-run=inline-on-blocking-wall / batch-at-wrap-up"
+elif [ "$holes" -gt 0 ]; then
   echo "Frontier: window closed · ${holes} OPEN hole(s) parked in ${LEDGER} await the next frontier window (/frontier-hole still captures)"
 fi
 exit 0

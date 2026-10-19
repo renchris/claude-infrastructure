@@ -186,6 +186,12 @@ FILTERED=$(find "$FILTERED_DIR" -maxdepth 1 -mindepth 1 \( -type l -o -type d \)
   ! -name '_all' ! -name '_current' ! -name '.' 2>/dev/null | wc -l | tr -d ' ')
 PROJECT_NAME=$(basename "$PROJECT_DIR")
 ACTIVE_TASKS=$(jq -r '((.pending // 0) + (.in_progress // 0))' "$ACTIVE_SUMMARY" 2>/dev/null || echo "0")
+case "$ACTIVE_TASKS" in ''|*[!0-9]*) ACTIVE_TASKS=0 ;; esac
+
+# SILENT WHEN THERE IS NO ACTIVE WORK (docs/research/startup-hooks-2026-10-18/README.md §2 #12,
+# A4-R5): "Tasks: 0 active …" was 358 of 404 starts' line and changes no decision. The symlinks
+# above are still maintained on every start; only the report waits for something to report.
+[ "$ACTIVE_TASKS" -gt 0 ] || exit 0
 
 CONTEXT="Tasks: ${ACTIVE_TASKS} active"
 [ -n "$ACTIVE_ID" ] && [ "$ACTIVE_ID" != "$TASK_LIST_ID" ] && CONTEXT="$CONTEXT (auto-detected ${ACTIVE_ID:0:8}…)"
@@ -193,5 +199,6 @@ CONTEXT="$CONTEXT. ${FILTERED} list(s) for ${PROJECT_NAME} (${TOTAL} total)."
 [ -f "$FILTERED_DIR/TASKS.md" ] && CONTEXT="$CONTEXT TASKS.md ready."
 CONTEXT="$CONTEXT .claude-tasks/_current/ = active."
 
-echo "{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"$CONTEXT\"}}"
+# jq, not an echo template: a project name with a quote or backslash broke the hand-built JSON
+jq -nc --arg c "$CONTEXT" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}'
 exit 0

@@ -147,3 +147,24 @@ sym_ctx() {
   [ "$status" -eq 0 ]
   echo "$output" | grep -qE '3 all'               # index length = 3
 }
+
+# ── the report line (startup-hooks README §2 #12, A4-R5): silent at 0 open, no fixed help tail ──
+@test "report: no open plan ⇒ no output" {
+  proj="$BATS_TEST_TMPDIR/closed"; mkdir -p "$proj/docs/plans"
+  printf -- '---\nstatus: complete\n---\n# Done\n' > "$proj/docs/plans/done.md"
+  echo '{"version":1,"plans":{}}' > "$CC_PLAN_INDEX"
+  run env CLAUDE_PROJECT_DIR="$proj" CC_PLAN_INDEX="$CC_PLAN_INDEX" CC_PLANS_DIR="$CC_PLANS_DIR" \
+    bash -c "cd '$proj' && bash '$(SYMHOOK)'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || { echo "0-open start printed: $output" >&2; false; }
+}
+
+@test "report: open plans ⇒ the count line alone, without the help tail" {
+  proj="$BATS_TEST_TMPDIR/one"; mkdir -p "$proj/docs/plans"
+  printf -- '---\nstatus: complete\n---\n# Done\n' > "$proj/docs/plans/done.md"
+  echo "# Live" > "$proj/docs/plans/live.md"
+  echo '{"version":1,"plans":{}}' > "$CC_PLAN_INDEX"
+  run sym_ctx "$proj"
+  [ "$status" -eq 0 ]
+  [ "$output" = "Plans: 1/2 open for one · 0 all." ]
+}

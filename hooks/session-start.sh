@@ -457,10 +457,7 @@ fi
 
 # Check agent-browser installation
 AGENT_BROWSER_STATUS="not installed"
-if command -v agent-browser &> /dev/null; then
-  AGENT_BROWSER_STATUS="installed"
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] agent-browser: $AGENT_BROWSER_STATUS" >> "$LOG_FILE"
-fi
+command -v agent-browser &> /dev/null && AGENT_BROWSER_STATUS="installed"   # logged with the claim below
 
 # Output additionalContext for Claude (JSON format).
 # THREE states, never two: a probe that could not run must not be spelled the same way as a probe
@@ -482,6 +479,19 @@ elif [ "$MCP_STATE" = ok ]; then
   MCP_CLAIM="MCP: 0 servers connected — the probe RAN and answered zero${_DEG}${_CACHE_NOTE}${_FAIL_NOTE}. agent-browser: $AGENT_BROWSER_STATUS. Use agent-browser skill for browser automation."
 else
   MCP_CLAIM="MCP: UNKNOWN — the probe could not ask ($MCP_REASON)${_FAIL_NOTE}. This is NOT a report of zero connected servers; MCP tools may be present. agent-browser: $AGENT_BROWSER_STATUS."
+fi
+# SILENT WHEN HEALTHY (docs/research/startup-hooks-2026-10-18/README.md §2 #12, A4-R5). The healthy
+# claim was the same "N server(s) connected · agent-browser: installed" on 403 of 403 starts, and the
+# model already holds its tool list, so it was re-read at every start for no decision. Every claim
+# is still written to sessions.log (it carries the agent-browser status the old log line held), and
+# the transcript gets it only when it says something: 0 connected, UNKNOWN, any degraded server, a
+# failing refresher, or agent-browser missing. Silence is safe here only because the SessionStart
+# dispatcher (hooks/session-start-dispatch.sh, v2) names a killed, late or malformed child loudly; a
+# child that ran and printed nothing is its healthy case.
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] $MCP_CLAIM" >> "$LOG_FILE"
+if [ "$MCP_STATE" = ok ] && [ "$CONNECTED_COUNT" -gt 0 ] && [ "$DEGRADED_COUNT" -eq 0 ] \
+   && [ "$MCP_FAIL_N" -eq 0 ] && [ "$AGENT_BROWSER_STATUS" = installed ]; then
+  MCP_CLAIM=""
 fi
 
 # === MISSION BOARD (2026-09-09) ===
@@ -580,6 +590,7 @@ if [ -x "$HOME/.claude/bin/cc-mission" ] && [ -n "$_ss_mtb" ] && _ss_mission_sta
   fi
 fi
 
+[ -n "${EFFORT_WARN}${MCP_CLAIM}" ] || exit 0   # healthy: nothing to say
 cat <<EOF
 {
   "hookSpecificOutput": {

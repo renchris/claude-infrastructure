@@ -124,3 +124,27 @@ mk_fresh_dir() {  # a dir whose summary POSTDATES its one task → guard must sk
   [ -L "$CLAUDE_CONFIG_DIR/tasks-index.json" ] || { echo "the account's link was replaced by a real file (re-forked)" >&2; false; }
   [ "$(jq -r '.taskLists["board-shared"].projectName' "$HOME/.claude/tasks-index.json")" = proj ]
 }
+
+# ── the report line (startup-hooks README §2 #12, A4-R5): silent at 0 active, jq-built JSON ──
+@test "report: 0 active tasks ⇒ no output; one pending task ⇒ the Tasks line as valid JSON" {
+  export CLAUDE_CODE_TASK_LIST_ID=lst
+  mkdir -p "$CC_TASKS_DIR/lst"
+  run run_hook
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || { echo "0-active start printed: $output" >&2; false; }
+  printf '{"id":"1","status":"pending","description":"x"}\n' > "$CC_TASKS_DIR/lst/1.json"
+  run run_hook
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')" = \
+    "Tasks: 1 active. 0 list(s) for proj (1 total). TASKS.md ready. .claude-tasks/_current/ = active." ]
+}
+
+@test "report: a project name with a quote and a backslash still yields valid JSON" {
+  export CLAUDE_PROJECT_DIR="$BATS_TEST_TMPDIR/pr\"o\\j"; mkdir -p "$CLAUDE_PROJECT_DIR"
+  export CLAUDE_CODE_TASK_LIST_ID=lst
+  mkdir -p "$CC_TASKS_DIR/lst"
+  printf '{"id":"1","status":"in_progress","description":"x"}\n' > "$CC_TASKS_DIR/lst/1.json"
+  run run_hook
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext' | grep -qF "for pr\"o\\j ("
+}

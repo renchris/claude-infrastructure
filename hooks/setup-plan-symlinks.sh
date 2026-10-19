@@ -91,6 +91,12 @@ case "$ALL_TOTAL" in ''|*[!0-9]*) ALL_TOTAL=0 ;; esac
 
 PROJECT_NAME=$(basename "$PROJECT_DIR")
 
-echo "{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"Plans: ${PROJ_OPEN}/${PROJ_TOTAL} open for ${PROJECT_NAME} · ${ALL_TOTAL} all. .claude-plans/ = project plans, .claude-plans/_all/ = global plan sink. Run 'find-plan.sh --list-open' for the cross-project open list.\"}}"
+# SILENT AT 0 OPEN, AND NO FIXED TAIL (docs/research/startup-hooks-2026-10-18/README.md §2 #12,
+# A4-R5): the 135-char ".claude-plans/ = … Run 'find-plan.sh --list-open' …" help was identical on
+# 404 of 404 starts; the count is the only part that changes. Built with jq, not an echo template.
+case "$PROJ_OPEN" in ''|*[!0-9]*) PROJ_OPEN=0 ;; esac
+[ "$PROJ_OPEN" -gt 0 ] || exit 0
+jq -nc --arg c "Plans: ${PROJ_OPEN}/${PROJ_TOTAL} open for ${PROJECT_NAME} · ${ALL_TOTAL} all." \
+  '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}'
 
 exit 0

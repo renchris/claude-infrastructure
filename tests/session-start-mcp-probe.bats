@@ -482,3 +482,57 @@ FAIL_STAMP() { printf '%s' "$CLAUDE_CONFIG_DIR/.mcp-probe-cache.refresh-fail"; }
   grep -q 'Session started in' "$HOME/.claude/logs/sessions.log" || false
   grep -q 'MCP probe binary: .*test rung' "$HOME/.claude/logs/sessions.log" || false
 }
+
+# ─── (j) silent when healthy (startup-hooks README §2 #12, A4-R5) ──────────────────────────────
+# Every case above runs WITHOUT agent-browser on PATH, which is itself news, so they still see the
+# line. These put a stub on PATH: healthy is then silent in the transcript, the claim still lands in
+# sessions.log, and each unhealthy state keeps its line.
+mk_agent_browser() { printf '#!/bin/bash\nexit 0\n' > "$STUB/agent-browser"; chmod 755 "$STUB/agent-browser"; }
+claim_log() { grep -F 'MCP: ' "$HOME/.claude/logs/sessions.log" | tail -1; }
+
+@test "(j) healthy (servers connected, none degraded, agent-browser installed) ⇒ no output; the claim is logged" {
+  mk_agent_browser
+  printf 'a: u - %s Connected\n' '✔' > "$TMP/one.txt"
+  mk_claude "$TMP/running-claude" "$TMP/one.txt"; mk_resolver "$TMP/running-claude"
+  run_hook
+  [ "$status" -eq 0 ] || false
+  [ -z "$output" ] || { echo "healthy start printed: $output" >&2; false; }
+  [[ "$(claim_log)" == *"MCP: 1 server(s) connected. agent-browser: installed."* ]] || false
+}
+
+@test "(j-b) each unhealthy state keeps its line: degraded, zero, UNKNOWN, failing refresher, no agent-browser" {
+  mk_agent_browser
+  { printf 'a: u - %s Connected\n' '✔'; printf 'b: u - timed out\n'; } > "$TMP/deg.txt"
+  mk_claude "$TMP/running-claude" "$TMP/deg.txt"; mk_resolver "$TMP/running-claude"
+  run_hook
+  [[ "$output" == *"MCP: 1 server(s) connected (1 degraded)"* ]] || false
+  local cache="$CLAUDE_CONFIG_DIR/.mcp-probe-cache"   # each probe caches its answer; the next state must probe
+  rm -f "$cache"
+  printf 'No MCP servers configured.\n' > "$TMP/none.txt"
+  mk_claude "$TMP/running-claude" "$TMP/none.txt"
+  run_hook
+  [[ "$output" == *"MCP: 0 servers connected"* ]] || false
+  rm -f "$cache" "$HOME/.claude/bin/cc-claude-bin"; mk_ps "/bin/bash /some/harness"
+  run_hook
+  [[ "$output" == *"MCP: UNKNOWN"* ]] || false
+  mkdir -p "$CLAUDE_CONFIG_DIR"
+  printf 'v1\t%s\tok\t1\t0\t\n' "$(date +%s)" > "$CLAUDE_CONFIG_DIR/.mcp-probe-cache"
+  printf 'v1\t2\t1700000000\t%s\n' "$(date +%s)" > "$(FAIL_STAMP)"
+  run_hook
+  [[ "$output" == *"[2 refresh attempt(s) failed since"* ]] || false
+  rm -f "$(FAIL_STAMP)" "$STUB/agent-browser"
+  run_hook
+  [[ "$output" == *"MCP: 1 server(s) connected [cached "*"agent-browser: not installed."* ]] || false
+  printf '%s' "$output" | python3 -c 'import json,sys; json.load(sys.stdin)' || false
+}
+
+@test "(j-c) a healthy start with the effort tripwire still prints the tripwire alone" {
+  mk_agent_browser
+  export CLAUDE_CODE_EFFORT_LEVEL=max
+  printf 'a: u - %s Connected\n' '✔' > "$TMP/one.txt"
+  mk_claude "$TMP/running-claude" "$TMP/one.txt"; mk_resolver "$TMP/running-claude"
+  run_hook
+  [[ "$output" == *"CLAUDE_CODE_EFFORT_LEVEL=max"* ]] || false
+  [[ "$output" != *"MCP: "* ]] || false
+  printf '%s' "$output" | python3 -c 'import json,sys; json.load(sys.stdin)' || false
+}
