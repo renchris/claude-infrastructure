@@ -187,7 +187,7 @@ board_at() {  # <pane cols> → the SessionStart systemMessage for that pane
   local f t
   t=$(( $(date +%s) - 900 ))
   for f in "$CC_ACCOUNTS_BOARD" "$CC_ACCOUNTS_BOARD".w*; do
-    [ -e "$f" ] && touch -t "$(date -r "$t" +%Y%m%d%H%M.%S)" "$f"
+    [ -e "$f" ] && touch -t "$(date -r "$t" +%Y%m%d%H%M.%S)" "$f" || false
   done
   # launchctl stubbed: the warning names the producer's state, and the real job is not ours to read
   mkdir -p "$D/bin"; printf '#!/bin/sh\nexit 1\n' > "$D/bin/launchctl"; chmod +x "$D/bin/launchctl"
