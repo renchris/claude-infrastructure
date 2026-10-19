@@ -26,6 +26,12 @@ class LauncherRootedTests(unittest.TestCase):
 
     def setUp(self):
         self.setUp_world()
+        # admission's probe and token mint shell out to capacity-admit.sh: never from a unit test
+        # (unstubbed, the live fleet at load ~600 answered "capacity" and nothing was dispatched)
+        for target, value in (("probe", (True, "admit")), ("mint_token", None)):
+            p = mock.patch("lr_recon.admit.Admission." + target, return_value=value)
+            p.start()
+            self.addCleanup(p.stop)
         # zero-human scope (D1.9): without both markers every census record is PLAN-ONLY
         for p in (self.paths.autorecover_on, self.paths.recon_autorecover_on):
             os.makedirs(os.path.dirname(p), exist_ok=True)
