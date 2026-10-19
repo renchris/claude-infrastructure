@@ -8,15 +8,18 @@ at rest, and how many subagents are still writing.
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import glob
 import importlib
 import json
 import os
 import sys
+import threading
 import time
-from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
+from lr_recon import clock
 from lr_recon import types as T
 
 TAIL_BYTES = 128 * 1024
@@ -43,8 +46,116 @@ def slug(cwd: str) -> str:
     return cwd.replace("/", "-").replace(".", "-")
 
 
+INDEXED_SUFFIXES = (".jsonl", ".jsonl.handed-off", ".HANDOFF.json")
+SWEEP_STEP_DIRS = 256  # project dirs listed between two clock.step() calls
+
+
+class ProjectsIndex:
+    """Every ``<cfg>/projects/*/<name>`` the reconciler asks about, from ONE sweep per store.
+
+    A ``projects/*/<sid>.jsonl`` glob lists projects/ and then lstats one candidate in EVERY
+    project dir. With ~18,300 dirs per store (one per worktree path ever opened) one such glob took
+    3.32 s at load 600 and a pass made ~1,500 of them, so the live reconciler spent ~80 min a pass
+    in lstat (2026-10-19, pid 78642, heartbeat max_step_gap_s 1926). This lists each store once:
+    projects/, then each project dir, keeping only names with an indexed suffix, which is O(dirs)
+    directory reads per pass in place of O(lookups x dirs) lstats.
+
+    It gives the glob's answer: ``*`` matches the same entries (no dot-names; directories, symlinks
+    followed), a name matches iff it is listed (glob's ``lexists``, so a dangling symlink counts),
+    paths are spelled with the caller's own cfg (callers split them on ``/projects/``), and hits
+    come back sorted. Two cfgs over one physical projects/ (``.claude`` and ``.claude-next``) share
+    one sweep. A project dir that cannot be listed is lexists-probed per lookup, as glob would.
+    The listing is a snapshot taken at a store's first lookup in the pass; every hit is re-checked
+    with lexists before it is returned, so a file a mover took away since is never served, and one
+    created since is seen next pass."""
+
+    def __init__(
+        self,
+        scandir_fn: Callable[[str], Any] = os.scandir,
+        lexists_fn: Callable[[str], bool] = os.path.lexists,
+        step_fn: Optional[Callable[[], None]] = None,
+    ) -> None:
+        self._scandir = scandir_fn
+        self._lexists = lexists_fn
+        self._step = step_fn if step_fn is not None else clock.step
+        self._stores: Dict[str, Tuple[Dict[str, List[str]], List[str]]] = {}
+
+    def _sweep(self, proj: str) -> Tuple[Dict[str, List[str]], List[str]]:
+        names: Dict[str, List[str]] = {}
+        unlisted: List[str] = []
+        dirs: List[str] = []
+        try:
+            with self._scandir(proj) as it:
+                for e in it:
+                    if e.name.startswith("."):
+                        continue
+                    try:
+                        if e.is_dir():
+                            dirs.append(e.name)
+                    except OSError:
+                        continue
+        except OSError:
+            return names, unlisted
+        for i, d in enumerate(dirs):
+            if i and i % SWEEP_STEP_DIRS == 0:
+                self._step()
+            try:
+                with self._scandir(os.path.join(proj, d)) as it:
+                    for e in it:
+                        if e.name.endswith(INDEXED_SUFFIXES):
+                            names.setdefault(e.name, []).append(d)
+            except OSError:
+                unlisted.append(d)
+        self._step()
+        return names, unlisted
+
+    def find(self, cfg: str, name: str) -> List[str]:
+        """Sorted ``<cfg>/projects/*/<name>`` paths that exist (lexists), spelled with ``cfg``."""
+        base = os.path.join(cfg, "projects")
+        if not name.endswith(INDEXED_SUFFIXES) or os.sep in name:
+            return sorted(
+                glob.glob(os.path.join(glob.escape(cfg), "projects", "*", name))
+            )
+        key = os.path.realpath(base)
+        got = self._stores.get(key)
+        if got is None:
+            got = self._stores[key] = self._sweep(key)
+        names, unlisted = got
+        cands = [os.path.join(base, d, name) for d in names.get(name, [])]
+        cands += [os.path.join(base, d, name) for d in unlisted]
+        return sorted(p for p in cands if self._lexists(p))
+
+
+_ACTIVE: Optional[Tuple[ProjectsIndex, int]] = (
+    None  # (index, ident of the thread it serves)
+)
+
+
+@contextlib.contextmanager
+def pass_index(index: Optional[ProjectsIndex] = None) -> Iterator[ProjectsIndex]:
+    """Serve ``in_projects`` on this thread from one index for the block's duration (one pass)."""
+    global _ACTIVE
+    prev = _ACTIVE
+    idx = index if index is not None else ProjectsIndex()
+    _ACTIVE = (idx, threading.get_ident())
+    try:
+        yield idx
+    finally:
+        _ACTIVE = prev
+
+
+def in_projects(cfg: str, name: str, escape: bool = True) -> List[str]:
+    """Sorted ``<cfg>/projects/*/<name>``: from the pass's index when one is open on this thread,
+    else the glob (``escape=False`` keeps a caller that never escaped its cfg exactly as it was)."""
+    active = _ACTIVE
+    if active is not None and active[1] == threading.get_ident():
+        return active[0].find(cfg, name)
+    base = glob.escape(cfg) if escape else cfg
+    return sorted(glob.glob(os.path.join(base, "projects", "*", name)))
+
+
 def find_transcript(cfg_dirs: Sequence[str], cwd: str, sid: str) -> Optional[str]:
-    """Slug-direct first (cheap, exact), then a glob across every project dir: a session whose
+    """Slug-direct first (cheap, exact), then every project dir (``in_projects``): a session whose
     cwd moved (worktree hop, recycle) still has exactly one ``<sid>.jsonl``."""
     if not sid:
         return None
@@ -54,9 +165,7 @@ def find_transcript(cfg_dirs: Sequence[str], cwd: str, sid: str) -> Optional[str
             if os.path.isfile(p):
                 return p
     for cfg in cfg_dirs:
-        hits = sorted(
-            glob.glob(os.path.join(glob.escape(cfg), "projects", "*", sid + ".jsonl"))
-        )
+        hits = in_projects(cfg, sid + ".jsonl")
         if hits:
             return hits[0]
     return None
@@ -74,13 +183,7 @@ def locate(cfg_dirs: Sequence[str], cwd: str, sid: str) -> Tuple[str, bool]:
         p = find_transcript([cfg], cwd, sid)
         if p:
             return p, os.path.exists(handed_off_path(p))
-        hits = sorted(
-            glob.glob(
-                os.path.join(
-                    glob.escape(cfg), "projects", "*", handed_off_path(sid + ".jsonl")
-                )
-            )
-        )
+        hits = in_projects(cfg, handed_off_path(sid + ".jsonl"))
         if hits:
             return hits[0][: -len(".handed-off")], True
     return "", False

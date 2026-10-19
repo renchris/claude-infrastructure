@@ -1477,6 +1477,13 @@ def _abstain(
 
 
 def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
+    # One projects/ sweep per store per pass serves every sid → transcript / .handed-off /
+    # .HANDOFF.json lookup (transcript.ProjectsIndex): a glob per lookup lstat'd every project dir.
+    with transcript.pass_index():
+        return _run_pass(ctx, force_observe)
+
+
+def _run_pass(ctx: Ctx, force_observe: bool) -> Dict[str, Any]:
     paths = ctx.paths
     store.ensure_dirs(paths)  # cheap, and a wiped root must never crash the loop
     act.reap_children()  # before ps, so an exited actuator is gone AND its exit code is kept

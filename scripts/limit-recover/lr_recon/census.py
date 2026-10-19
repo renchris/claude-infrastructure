@@ -14,7 +14,6 @@ Decision 2 is SETTLED: a pane with live background work holds until the job ends
 from __future__ import annotations
 
 import dataclasses
-import glob
 import json
 import os
 from typing import Dict, List, Mapping, Optional, Sequence, Set, Tuple
@@ -589,9 +588,7 @@ def _store_key(cfg: str) -> str:
 
 
 def _has_copy(cfg: str, sid: str) -> bool:
-    return bool(
-        glob.glob(os.path.join(glob.escape(cfg), "projects", "*", sid + ".jsonl"))
-    )
+    return bool(transcript.in_projects(cfg, sid + ".jsonl"))
 
 
 def successor_state(
@@ -612,10 +609,9 @@ def successor_state(
     if not sid or not src or env.get("LR_SUCCESSOR_GATE", "on") == "off":
         return None
     skey = _store_key(src)
-    proj = os.path.join(glob.escape(src), "projects", "*")
-    ho = bool(glob.glob(os.path.join(proj, sid + ".jsonl.handed-off")))
+    ho = bool(transcript.in_projects(src, sid + ".jsonl.handed-off"))
     tomb, to = "", ""
-    for f in sorted(glob.glob(os.path.join(proj, sid + ".HANDOFF.json"))):
+    for f in transcript.in_projects(src, sid + ".HANDOFF.json"):
         try:
             with open(f) as fh:
                 cand = str(json.load(fh).get("handed_off_to") or "")

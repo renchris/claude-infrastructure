@@ -14,7 +14,6 @@ over a pane we simply could not read).
 
 from __future__ import annotations
 
-import glob
 import hashlib
 import json
 import os
@@ -22,7 +21,7 @@ from typing import Callable, Dict, List, Optional
 
 from lr_recon import store, tokens
 from lr_recon import types as T
-from lr_recon.transcript import slug
+from lr_recon.transcript import in_projects, slug
 
 MOVED_SAMPLE_GAP_S = 15.0
 
@@ -46,14 +45,14 @@ def _same_cfg(a: str, b: str) -> bool:
 
 
 def transcript_path(cfg: str, cwd: str, sid: str) -> str:
-    """Slug-direct path, then a glob fallback that also finds a tombstoned copy."""
+    """Slug-direct path, then every project dir (``in_projects``), which also finds a tombstoned copy."""
     if not cfg:
         return ""
     direct = os.path.join(cfg, "projects", slug(cwd), sid + ".jsonl")
     if os.path.exists(direct) or os.path.exists(direct + ".handed-off"):
         return direct
     for pat in (sid + ".jsonl", sid + ".jsonl.handed-off"):
-        hits = sorted(glob.glob(os.path.join(cfg, "projects", "*", pat)))
+        hits = in_projects(cfg, pat, escape=False)
         if hits:
             return (
                 hits[0][: -len(".handed-off")]
