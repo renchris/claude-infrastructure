@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# cc-startup-health — what a session's startup hooks failed to deliver, and how to get it back.
+#
+#   cc-startup-health [<sid>]   read-only report. With a sid: every own SessionStart hook's state
+#                               (confirmed lost / possible, unconfirmed / delivered / nothing owed),
+#                               its sentinel record and its recovery; foreign project hooks the
+#                               harness cancelled, NAMED and never run; the dispatcher's outbox board.
+#                               Without one: the sessions that have anything not delivered.
+# docs/research/startup-hooks-2026-10-18/README.md §5 unit 3.3; gap-G3 (the transcript is the
+# authority).
+#
+# R=${CC_STARTUP_HEALTH_DIR:-$HOME/.claude/state/startup-health}. bash 3.2-safe; jq for scans only.
+set -uo pipefail
+
+R="${CC_STARTUP_HEALTH_DIR:-$HOME/.claude/state/startup-health}"
+
+_self="$0"
+while [ -L "$_self" ]; do
+  _l="$(readlink "$_self")"
+  if [ "${_l#/}" != "$_l" ]; then _self="$_l"; else _self="$(dirname "$_self")/$_l"; fi
+done
+_root="$(cd "$(dirname "$_self")/.." 2>/dev/null && pwd || true)"
+LIB=""
+for _c in "$_root/hooks/lib/startup-health.sh" "$HOME/.claude/hooks/lib/startup-health.sh"; do
+  [ -f "$_c" ] && { LIB="$_c"; break; }
+done
+[ -n "$LIB" ] || { echo "cc-startup-health: hooks/lib/startup-health.sh not found" >&2; exit 2; }
+# shellcheck source=../hooks/lib/startup-health.sh disable=SC1091
+. "$LIB"
+
+mtime() { stat -f %m "$1" 2>/dev/null || echo 0; }
+fmt_t() { date -r "$1" '+%m-%d %H:%M' 2>/dev/null || echo "?"; }
+
+newest_start() { # <dir> → epoch of the newest hook .start (0 if none)
+  local f m n=0
+  for f in "$1"/*.start; do
+    [ -e "$f" ] || continue
+    case "$f" in */session.start) continue ;; esac
+    m="$(mtime "$f")"; [ "$m" -gt "$n" ] && n="$m"
+  done
+  printf '%s' "$n"
+}
+
+# judge_live <dir> → "name<TAB>verdict" lines for the CURRENT epoch WITHOUT writing anything:
+# the stored verdicts when this epoch is scanned, else a scan into a private temp file, else
+# (no transcript yet) nothing — the caller falls back to the sentinels.
+JUDGE_SRC=""
+judge_live() {
+  local d="$1" f h v tmp
+  if sh_current "$d"; then
+    JUDGE_SRC=transcript
+    for f in "$d"/*.verdict; do
+      [ -e "$f" ] || continue
+      h="${f##*/}"; h="${h%.verdict}"; v="$(head -1 "$f")"
+      printf '%s\t%s\n' "$h" "$v"
+    done
+    return 0
+  fi
+  tmp="$(mktemp -t cc-startup-health.XXXXXX)" || return 1
+  if sh_scan "$d" > "$tmp"; then
+    JUDGE_SRC=transcript
+    cp "$tmp" "$tmp.c"; sh_judge "$d" "$tmp.c"; rm -f "$tmp.c"
+  else
+    JUDGE_SRC=sentinels
+  fi
+  rm -f "$tmp"
+}
+
+# ── report ───────────────────────────────────────────────────────────────────────────────────────
+report_sid() {
+  local sid="$1" d f h v seen=" " n
+  sh_dir "$sid" || { echo "cc-startup-health: not a session id: $sid" >&2; return 2; }
+  d="$SH_D"
+  [ -d "$d" ] || { echo "no startup sentinels for $sid (under $R)"; return 0; }
+  echo "startup health — $sid"
+  local vf verdicts; vf="$(mktemp -t cc-startup-health.XXXXXX)" || return 1
+  judge_live "$d" > "$vf"; verdicts="$(cat "$vf")"; rm -f "$vf"
+  echo "  source: $JUDGE_SRC$( [ "$JUDGE_SRC" = sentinels ] && printf ' (no transcript yet — states below are possible, not confirmed)')"
+  for f in "$d"/*.start "$d"/*.verdict; do
+    [ -e "$f" ] || continue
+    h="${f##*/}"; h="${h%.*}"
+    case "$h" in session|foreign-*) continue ;; esac
+    case "$seen" in *" $h "*) continue ;; esac
+    seen="$seen$h "
+    v="$(printf '%s\n' "$verdicts" | awk -F'\t' -v h="$h" '$1 == h { print $2; exit }')"
+    sh_possible "$d" "$h"; sh_lost_of "$h" "$sid"
+    local rec="no .done (never finished)"
+    [ "$SH_DONE" = 1 ] && rec="rc=$SH_RC elapsed=${SH_EL}s owed=${SH_OWED}B timeout=${SH_TMO}ms"
+    [ -e "$d/$h.start" ] || rec="no sentinel (cancelled before it opened)"
+    case "$v" in
+      confirmed)    printf '  ✗ %-24s LOST — %s · recover: %s   [%s]\n' "$h" "$SH_LOST" "$SH_RECOV" "$rec" ;;
+      nothing-owed) printf '  · %-24s cancelled, nothing owed   [%s]\n' "$h" "$rec" ;;
+      cleared)      printf '  ✓ %-24s delivered (no cancel record)   [%s]\n' "$h" "$rec" ;;
+      *) if [ -n "$SH_REASON" ]; then
+           printf '  ? %-24s possible loss, unconfirmed (%s) — %s · recover: %s   [%s]\n' "$h" "$SH_REASON" "$SH_LOST" "$SH_RECOV" "$rec"
+         else
+           printf '  ~ %-24s no loss signal, unconfirmed   [%s]\n' "$h" "$rec"
+         fi ;;
+    esac
+  done
+  n=0
+  while IFS=$'\t' read -r h v; do
+    case "$h" in foreign-*) ;; *) continue ;; esac
+    n=$(( n + 1 ))
+    printf '  ✗ project hook cancelled — not re-run · re-run it by hand: %s\n' "${v#confirmed }"
+  done <<< "$verdicts"
+  if [ -s "$d/outbox.txt" ]; then
+    echo "  dispatcher outbox (the startup board it built):"
+    sed 's/^/    /' "$d/outbox.txt"
+  fi
+}
+
+list_sessions() {
+  local d sid any=0 v
+  [ -d "$R" ] || { echo "no startup-health state under $R"; return 0; }
+  for d in "$R"/*/; do
+    d="${d%/}"; sid="${d##*/}"
+    sh_dir "$sid" || continue
+    v="$(judge_live "$d" | awk -F'\t' '$2 ~ /^confirmed/ { n++ } END { print n + 0 }')"
+    if [ "$v" -gt 0 ]; then
+      any=1; printf '%s  %s lost  (started %s)\n' "$sid" "$v" "$(fmt_t "$(newest_start "$d")")"
+    fi
+  done
+  [ "$any" = 1 ] || echo "no confirmed startup losses under $R"
+}
+
+case "${1:-}" in
+  -h|--help) sed -n '2,12p' "$_self" | sed 's/^# \{0,1\}//' ;;
+  "")      list_sessions ;;
+  -*)      echo "cc-startup-health: unknown flag $1 (see --help)" >&2; exit 2 ;;
+  *)       report_sid "$1" ;;
+esac

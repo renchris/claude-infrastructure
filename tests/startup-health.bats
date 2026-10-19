@@ -332,3 +332,48 @@ idl_count() { grep -c "\"reason\":\"$1\"" "$HOME/.claude/autonomy/idl.jsonl" 2>/
   [ "$status" -eq 0 ]; [ -z "$output" ]
 }
 
+# ── 3.3 cc-startup-health [sid] (read-only report) ────────────────────────────────────────────────
+CSH() { "$REPO/bin/cc-startup-health" "$@"; }
+
+@test "3.3 report: a confirmed DoD loss with its recovery, a foreign hook named and never run, the outbox" {
+  TP="$BATS_TEST_TMPDIR/t.jsonl"
+  { cancel_rec '~/.claude/hooks/dod-persist.sh'; cancel_rec 'pnpm exec tsx scripts/unblock-sweep.ts' '' 23100; user_rec; } > "$TP"
+  mksession "$TP"; mkstart dod-persist; mkdone dod-persist 0 5 900
+  mkstart desk-brief-inject; mkdone desk-brief-inject 0 1 0
+  printf 'BOARD-LINE-ZZ\n' > "$S/outbox.txt"
+  run CSH "$SID"
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -qF 'dod-persist'
+  printf '%s\n' "$output" | grep -F 'dod-persist' | grep -qF 'LOST — the frozen DoD contract · recover: ~/.claude/hooks/dod-persist.sh get'
+  printf '%s\n' "$output" | grep -F 'desk-brief-inject' | grep -qF 'delivered'
+  printf '%s\n' "$output" | grep -qF 'project hook cancelled — not re-run · re-run it by hand: pnpm exec tsx scripts/unblock-sweep.ts'
+  printf '%s\n' "$output" | grep -qF 'BOARD-LINE-ZZ'
+}
+
+@test "3.3 report is read-only: an unscanned session is judged in memory and its dir is untouched" {
+  TP="$BATS_TEST_TMPDIR/t.jsonl"
+  { cancel_rec '~/.claude/hooks/dod-persist.sh'; user_rec; } > "$TP"
+  mksession "$TP"; mkstart dod-persist; mkdone dod-persist 0 5 900
+  before="$(ls -la "$S")"
+  run CSH "$SID"
+  printf '%s\n' "$output" | grep -F 'dod-persist' | grep -qF 'LOST'
+  [ "$(ls -la "$S")" = "$before" ]
+}
+
+@test "3.3 report without a transcript shows a possible loss as unconfirmed" {
+  mksession "$BATS_TEST_TMPDIR/never.jsonl"; mkstart dod-persist; mkdone dod-persist 143 5 900
+  run CSH "$SID"
+  printf '%s\n' "$output" | grep -qF 'no transcript yet'
+  printf '%s\n' "$output" | grep -F 'dod-persist' | grep -qF 'possible loss, unconfirmed (exit 143)'
+}
+
+@test "3.3 no sid lists the sessions with confirmed losses; an unknown sid says so" {
+  TP="$BATS_TEST_TMPDIR/t.jsonl"
+  { cancel_rec '~/.claude/hooks/dod-persist.sh'; user_rec; } > "$TP"
+  mksession "$TP"; mkstart dod-persist; mkdone dod-persist 0 5 900
+  run CSH
+  printf '%s\n' "$output" | grep -qF "$SID  1 lost"
+  run CSH cccccccc-0000
+  printf '%s\n' "$output" | grep -qF 'no startup sentinels for cccccccc-0000'
+}
+
