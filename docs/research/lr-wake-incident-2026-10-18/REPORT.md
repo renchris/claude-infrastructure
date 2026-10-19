@@ -422,3 +422,13 @@ The 18 husks named in h were closed by the lead before 13:35. The tabs are merge
 - RC5's lost Enter is the weakest item at 50%. Wave C's capture would settle it.
 - RC8 (65%) and RC9 (70%) rest on single snapshots.
 - What would lower this: a second `/exit` sender found in the new `pane-keys.jsonl` once Wave D lands, or a replay showing that Wave A's marker does not stop the 60 s send.
+
+## 6. Landed
+
+Scope (frozen, implementation): land §4 waves A, B, C, D, F, G, H, then E and H2, plus h-file defects 1–7 not owned by §4, each with its named bats test. Tier 3 (S, B2) only if all of those are landed.
+
+Each wave ran as its own dispatched session in its own worktree (`lrwake-<X>`), at most 3 at once. Briefs: `~/.reso/lrwake-briefs/`. The "test" column is the wave's own run on the landed tree. "Lead re-run" is the lead's run of the same files; `deferred` means `cc-bats` refused for lack of a slot, which is not a result.
+
+| Wave | Landed (tip sha) | Tests (plan line, 0 not ok) | Lead re-run | Notes |
+|---|---|---|---|---|
+| D | 73949af55 (8 commits, 6fd8c7068..73949af55) | pane-placement 1..15 · it2-kitty-no-tab 1..9 · validate-bash-surface-deny 1..14 · cc-where-layout 1..4 · pane-spawn-tab-ratchet 1..6 · cc-relayout 1..15 · kitty-conf-bindings 1..39 · validate-bash-git-ownership 1..7 | deferred (load 287, both bats slots held) | Converged live. Q4: `cmd+t` and `ctrl+shift+t` open a fullscreen OS window (kitty `glfw.c:1452` is native fullscreen), above 90%, implemented. Q9 deny side implemented; the installers stay allowed. Scope grown: the git-ownership parser no longer false-asks on multi-line commit messages. Follow-on: `lr-handoff.sh:2196` still opens its own split, handed to Wave E. Pre-existing red on main, not this wave's: `validate-bash-differential.bats` (stale line pins in `tests/fixtures/validate-bash-sites.tsv`). |
