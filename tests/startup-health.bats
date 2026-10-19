@@ -83,6 +83,15 @@ field() { sed -n "s/^$2=//p" "$S/$1"; }
   [ "$(field desk-brief-inject.done owed)" = 0 ]
 }
 
+@test "desk-brief-inject records the payload's transcript path and size in session.start" {
+  TP="$BATS_TEST_TMPDIR/t.jsonl"; printf '0123456789' > "$TP"
+  run bash -c "printf '{\"session_id\":\"$SID\",\"transcript_path\":\"$TP\"}' | DESK_BRIEF_IDL='$BATS_TEST_TMPDIR/idl.jsonl' CC_ROLES_DIR='$BATS_TEST_TMPDIR/roles' DESK_BRIEF_PANE=p1 bash '$REPO/hooks/desk-brief-inject.sh'"
+  [ "$status" -eq 0 ]
+  [ "$(field session.start transcript_path)" = "$TP" ]
+  [ "$(field session.start size)" = 10 ]
+  [ "$(field desk-brief-inject.done rc)" = 0 ]
+}
+
 @test "desk-brief-inject's injected brief is recorded as owed bytes" {
   mkdir -p "$BATS_TEST_TMPDIR/roles"; echo p1 > "$BATS_TEST_TMPDIR/roles/desk"
   printf 'brief body\n' > "$BATS_TEST_TMPDIR/brief.md"
@@ -511,3 +520,4 @@ ALERTS() { printf '%s' "$CC_STARTUP_HEALTH_DIR/alerts/$SID"; }
   [ -s "$(ALERTS)" ]
   [ ! -e "$CC_STARTUP_HEALTH_DIR/alerts/dddd-0" ]
 }
+

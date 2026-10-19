@@ -80,11 +80,15 @@ else
 fi
 # SID rides the SessionStart payload. Read stdin only when it is NOT a tty — a hook invoked by hand
 # in a terminal must never hang waiting for input it will not get.
-SID="?"
+SID="?"; TP=""
 if [ ! -t 0 ]; then
   _in="$(cat 2>/dev/null || true)"
   if [ -n "$_in" ] && command -v jq >/dev/null 2>&1; then
-    SID="$(printf '%s' "$_in" | jq -r '.session_id // "?"' 2>/dev/null || echo '?')"
+    # One parse: the session id, and the transcript path the startup sentinel records as this
+    # session's offset (the first sentinel writer's session.start is the one that stands).
+    _row="$(printf '%s' "$_in" | jq -r '[(.session_id // "?"), (.transcript_path // "")] | map(tostring | gsub("\t"; " ")) | join("\t")' 2>/dev/null || echo '?')"
+    SID="${_row%%$'\t'*}"
+    case "$_row" in *$'\t'*) TP="${_row#*$'\t'}" ;; esac
     [ -n "$SID" ] || SID="?"
   fi
 fi
@@ -95,7 +99,7 @@ fi
 # docs/research/startup-hooks-2026-10-18/README.md §5 unit 3.1). 5000 ms = its registration timeout.
 # shellcheck source=lib/startup-sentinel.sh disable=SC1091  # runtime-resolved beside this file
 [ -f "$SCRIPT_DIR/lib/startup-sentinel.sh" ] && . "$SCRIPT_DIR/lib/startup-sentinel.sh" 2>/dev/null \
-  && ss_begin desk-brief-inject 5000 "$SID"
+  && ss_begin desk-brief-inject 5000 "$SID" "$TP"
 command -v jq >/dev/null 2>&1 || abstain "no-jq"
 
 # --- is THIS pane the desk? --------------------------------------------------------------------
