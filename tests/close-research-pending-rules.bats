@@ -7,6 +7,7 @@
 # pattern research-program-exemption-rules.bats guards.
 
 setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   G="$REPO/CLAUDE.global.md"; S="$REPO/CLAUDE.rules.slim.10-session-close.md"
 }
