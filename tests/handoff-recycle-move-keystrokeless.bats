@@ -86,11 +86,14 @@ case "${1:-}" in
 esac
 exit 0
 SH
-  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "$IT2_LOG"\nexec %q "$@"\n' "$REPO/bin/it2-kitty" > "$STUB/it2"
+  # shellcheck disable=SC2016  # the stub's own $* and log path, expanded when it runs
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "$IT2_LOG"\nexec %q "$@" 2>>"$IT2_LOG.err"\n' "$REPO/bin/it2-kitty" > "$STUB/it2"
   # shellcheck disable=SC2016  # the stub's own $1, expanded when it runs
   printf '#!/usr/bin/env bash\nprintf "sleep %%s\\n" "$1" >> "%s/sleeps.log"\n' "$BATS_TEST_TMPDIR" > "$STUB/sleep"
   chmod +x "$STUB/kitty" "$STUB/it2" "$STUB/sleep"
-  export CC_TERM_KITTY="$STUB/kitty"
+  # An explicit socket, as a detached caller names one: no KITTY_WINDOW_ID here (the consumer's take
+  # must not see one either), and the fake kitty ignores --to.
+  export CC_TERM_KITTY="$STUB/kitty" CC_TERM_KITTY_TO="unix:$BATS_TEST_TMPDIR/kitty.sock"
 
   # ── the move: S, live on next4 in pane 332, transplanted to next3 ──────────────────────────────
   SESS="5e5e5e5e-0000-4000-8000-0000000000a1"; PANE=332
@@ -101,6 +104,7 @@ SH
   SRCTX="$SRC/projects/-x/$SESS.jsonl"
   export RAILS_LOG="$BATS_TEST_TMPDIR/rails.log"; : > "$RAILS_LOG"
   # lr-transplant: confirm, unconfirm and fold-stub all succeed, and each call is logged.
+  # shellcheck disable=SC2016  # the stub's own $* and log path, expanded when it runs
   printf '#!/usr/bin/env bash\nprintf "transplant %%s\\n" "$*" >> "$RAILS_LOG"\nexit 0\n' > "$STUB/lr-transplant.sh"
   chmod +x "$STUB/lr-transplant.sh"
   export HF_LR_TRANSPLANT="$STUB/lr-transplant.sh" HF_LR_LIB="$LRD/lr-lib.sh"
@@ -126,20 +130,25 @@ SH
   chmod +x "$LAUNCHER_SH"
   export MV_SRC="$SRC" MV_DST="$DST" MV_SID="$SESS" MV_PANE="$PANE"
 
-  _hf_resume_debt() { printf 'debt %s\n' "$*" >> "$RAILS_LOG"; }
-  as_write() { printf 'as_write %q\n' "$2" >> "$RAILS_LOG"; }
-  as_write_transports() { echo stub; }
-  write_teardown_marker() { :; }
-  # Edges of the last read that are not this wave's subject: an unfocused pane, no subagents, no team.
-  hf_focus_gate() { return 0; }
-  subagent_dir_for_sid() { :; }
-  live_subagents_of() { :; }
-  hf_team_live() { return 1; }
-  # The pin: the subject (pid + start time), exactly one claude naming S. The real pin reads the
-  # pane's tty tree, which a fixture process does not have.
-  hf_exit_signal_pin() {
-    HF_EXIT_SIG_PID="$SUBJ"; HF_EXIT_SIG_LSTART="$(_hf_lstart "$SUBJ")"
-    [ -n "$HF_EXIT_SIG_LSTART" ] || { HF_EXIT_SIG_WHY="subject gone"; HF_EXIT_SIG_PID=""; return 1; }
+  # Stubs, invoked by the extracted functions under test; the pin's globals are read by hf_exit_signal.
+  # shellcheck disable=SC2329,SC2034
+  {
+    _hf_resume_debt() { printf 'debt %s\n' "$*" >> "$RAILS_LOG"; }
+    as_write() { printf 'as_write %q\n' "$2" >> "$RAILS_LOG"; }
+    as_write_transports() { echo stub; }
+    write_teardown_marker() { :; }
+    hf_canary_hook() { :; }
+    # Edges of the last read that are not this wave's subject: an unfocused pane, no subagents, no team.
+    hf_focus_gate() { return 0; }
+    subagent_dir_for_sid() { :; }
+    live_subagents_of() { :; }
+    hf_team_live() { return 1; }
+    # The pin: the subject (pid + start time), exactly one claude naming S. The real pin reads the
+    # pane's tty tree, which a fixture process does not have.
+    hf_exit_signal_pin() {
+      HF_EXIT_SIG_PID="$SUBJ"; HF_EXIT_SIG_LSTART="$(_hf_lstart "$SUBJ")"
+      [ -n "$HF_EXIT_SIG_LSTART" ] || { HF_EXIT_SIG_WHY="subject gone"; HF_EXIT_SIG_PID=""; return 1; }
+    }
   }
   # The subject's process table for the bg-work gate (hf_bg_work_kind's HF_PS_SNAPSHOT seam).
   export HF_PS_SNAPSHOT="$BATS_TEST_TMPDIR/ps.txt"
@@ -228,7 +237,9 @@ gone() { local n=0; while kill -0 "$1" 2>/dev/null && [ "$n" -lt 50 ]; do sleep 
   ! grep -q '^debt' "$RAILS_LOG" || { echo "the resume debt opened:"; cat "$RAILS_LOG"; false; }
   # The hold disarmed the watcher, so its stage can no longer be claimed.
   ! kill -0 "$WATCHER_PID" 2>/dev/null || { echo "watcher still armed"; false; }
-  ! CC_PANE_SUCCESSOR_TTY=ttys999 bash -c '. "$1"; cc_pane_successor_take ttys999' _ "$CC_PANE_SUCCESSOR_LIB" >/dev/null
+  if CC_PANE_SUCCESSOR_TTY=ttys999 bash -c '. "$1"; cc_pane_successor_take ttys999' _ "$CC_PANE_SUCCESSOR_LIB" >/dev/null; then
+    echo "the stage of a disarmed watcher was claimable"; false
+  fi
 }
 
 @test "3 Q3 control: a session whose only job is its inbox watcher (cc-await-ping) is signalled" {

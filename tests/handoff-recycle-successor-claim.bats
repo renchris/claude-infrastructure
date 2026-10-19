@@ -90,7 +90,7 @@ producer_funcs() {
   head -n 1 "$c" | grep -q -- "--src-tx /src/projects/-x/2e9ed9f2.jsonl --watcher-pid $$ --record-id rec-1 --attempt 2 --launch-lock on --fold-stub on; then$" \
     || { cat "$c"; false; }
   sed -n 2p "$c" | grep -qxF -- "$CMD" || { cat "$c"; false; }
-  sed -n 3p "$c" | grep -qx fi || { cat "$c"; false; }
+  sed -n 3p "$c" | grep -qx 'fi' || { cat "$c"; false; }
   # No account export: the launcher pins its own, exactly as the typed line carries none.
   ! grep -q CLAUDE_CONFIG_DIR= "$c" || { cat "$c"; false; }
   grep -q '"class":"recycle-successor-staged"' "$HOME/.claude/logs/handoffs.jsonl"
@@ -262,7 +262,9 @@ resume_world() {
   # The re-created stub beside its retired record: the fold has something to do.
   printf '{"type":"system"}\n' > "$SRCTX"; printf '{"type":"assistant"}\n' > "$SRCTX.handed-off"
   export RAILS_LOG="$BATS_TEST_TMPDIR/rails.log"; : > "$RAILS_LOG"
+  # shellcheck disable=SC2016  # the stubs' own $* and $RAILS_LOG, expanded when they run
   printf '#!/usr/bin/env bash\nprintf "transplant %%s\\n" "$*" >> "$RAILS_LOG"\nexit 0\n' > "$BATS_TEST_TMPDIR/lr-transplant.sh"
+  # shellcheck disable=SC2016
   printf 'lr_holder_count() { printf "holders %%s\\n" "$1" >> "$RAILS_LOG"; printf "%%s" "${STUB_HOLDERS:-0}"; }\n' > "$BATS_TEST_TMPDIR/lr-lib.sh"
   chmod +x "$BATS_TEST_TMPDIR/lr-transplant.sh"
   export HF_LR_TRANSPLANT="$BATS_TEST_TMPDIR/lr-transplant.sh" HF_LR_LIB="$BATS_TEST_TMPDIR/lr-lib.sh"
