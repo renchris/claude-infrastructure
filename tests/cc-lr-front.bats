@@ -1317,8 +1317,11 @@ rot_wrote_nothing() {
   # accounts with headroom are said to stay, never silently skipped
   [[ "$output" == *"next2: headroom on both limits"* ]] || { echo "$output"; false; }
   [[ "$output" == *"2 to recover · 1 to move · 0 waiting for idle · 2 held"* ]] || { echo "$output"; false; }
-  [[ "$output" == *"bounds: move 4 at a time"*"not memory"*"recover 2 at a time"*"memory read:"* ]] || { echo "$output"; false; }
   [[ "$output" == *"rotate them: cc-lr rotate --all"* ]] || { echo "$output"; false; }
+  # the bounds are internal knobs: only under --verbose (2026-10-19, lr-wake H2)
+  [[ "$output" != *"bounds:"* ]] || { echo "$output"; false; }
+  run bash "$LR" rotate --list --verbose
+  [[ "$output" == *"bounds: move 4 at a time"*"not memory"*"recover 2 at a time"*"memory read:"* ]] || { echo "$output"; false; }
   # the census was asked about the capped account only
   grep -q -- '--from next ' "$BATS_TEST_TMPDIR/census.argv" || { cat "$BATS_TEST_TMPDIR/census.argv"; false; }
   ! grep -q -- '--from next2\|--from next3\|--from next4' "$BATS_TEST_TMPDIR/census.argv" || { cat "$BATS_TEST_TMPDIR/census.argv"; false; }
@@ -1354,7 +1357,7 @@ rot_wrote_nothing() {
 
 @test "[RED] rotate --account next --no-wait: the limited session is fired, the idle one queued, the busy one and the other accounts untouched" {
   rot_fleet
-  run bash "$LR" rotate --account next --no-wait
+  run bash "$LR" rotate --account next --no-wait --verbose
   # in flight is rc 1: nothing has a verdict yet
   [ "$status" -eq 1 ] || { echo "rc $status: $output"; false; }
   grep -q cccc0780 "$BATS_TEST_TMPDIR/fleet.argv" || { echo "the limited session was not fired"; echo "$output"; false; }
@@ -1368,6 +1371,8 @@ rot_wrote_nothing() {
   [[ "$output" == *"0 rotated · 0 not · 2 still in flight"* ]] || { echo "$output"; false; }
   [[ "$output" == *"cc-lr status cccc0780"* ]] || { echo "$output"; false; }
   [[ "$output" == *"cc-lr move --status $(basename "$d")"* ]] || { echo "$output"; false; }
+  # ONCE per run: the move lane's own ▶ row stands down inside rotate (2026-10-19, lr-wake H2)
+  [ "$(printf '%s\n' "$output" | grep -c "cc-lr move --status $(basename "$d")")" -eq 1 ] || { echo "$output"; false; }
   [[ "$output" == *"bounds: move 4 at a time"* ]] || { echo "$output"; false; }
 }
 

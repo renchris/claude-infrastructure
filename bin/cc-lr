@@ -31,7 +31,7 @@
 #   cc-lr find <ref…>                 exec into bin/cc-find, verbatim argv
 #   cc-lr recover <ref> [--target A] [--source-pane P] [--dry-run]
 #   cc-lr rotate --list [--account A]  READ-ONLY: every session that needs another account, fleet-wide
-#   cc-lr rotate (--all | --account A) [--to B|auto] [--until-idle S] [--wait S]
+#   cc-lr rotate (--all | --account A) [--to B|auto] [--until-idle S] [--wait S] [--verbose]
 #                                     rotate all of them in place, one verdict line per session
 #   cc-lr switch [--target A|auto] [--dry-run]
 #                                     move THIS pane's session to another account, in place
@@ -39,9 +39,9 @@
 #   cc-lr switch (--pane P | --sid S | --from A --all-idle) --target A [--dry-run] [--wait S|--no-wait]
 #                [--until-idle S]     ask ANOTHER idle session to move itself (the driver form);
 #                                     --until-idle waits out a busy one for up to S seconds (default off)
-#   cc-lr plan --from A --to B [--until-idle S] [--cold-only] [--json]
+#   cc-lr plan --from A --to B [--until-idle S] [--cold-only] [--json] [--verbose]
 #                                     READ-ONLY: every session on A and what `move` would do with it
-#   cc-lr move --from A --to B|auto [--until-idle S] [--cold-only] [--slots W] [--wait S] [--dry-run]
+#   cc-lr move --from A --to B|auto [--until-idle S] [--cold-only] [--slots W] [--wait S] [--dry-run] [--verbose]
 #                                     restart A's idle sessions on B in place, no model turn (the lane)
 #   cc-lr plan|move (--sid S [--sid S2 ...] | --sids S1,S2,...) --to B   named sessions, any accounts, one batch, in that order
 #   cc-lr move --status <batch> · cc-lr move --abort <batch>
@@ -170,7 +170,7 @@ cc-lr — find · recover · status · repair, for a limit-blocked session.
                              account, one row each. That is every limit-blocked session, plus
                              every other session of an account at 100% of its 5-hour or weekly
                              limit, with what would be done (recover, move, wait, hold) and why.
-  cc-lr rotate (--all | --account A) [--to B|auto] [--until-idle S] [--wait S | --no-wait]
+  cc-lr rotate (--all | --account A) [--to B|auto] [--until-idle S] [--wait S | --no-wait] [--verbose]
                              rotate all of them in place: limit-blocked sessions through
                              `recover` (each keeps its own refusals), the capped account's other
                              sessions through `move` (no model turn), then one verdict line per
@@ -178,6 +178,7 @@ cc-lr — find · recover · status · repair, for a limit-blocked session.
                              --to auto (the default) lets the router choose per account.
                              A recover the reconciler takes is counted as QUEUED, on its own line.
                              Exit 0 all rotated (or queued) · 1 some not or still in flight · 3 usage.
+                             --verbose (rotate, plan, move) also prints the bounds in force.
   cc-lr switch [--target A|auto] [--dry-run]
                              move THIS pane's session to another account, in place: same
                              window, same uuid, new account. SELF only — no ref, no
@@ -208,12 +209,12 @@ cc-lr — find · recover · status · repair, for a limit-blocked session.
                              ask the reconciler to reset one member's retry budget (writes a
                              ctl request; the daemon acts on it)
   While the reconciler is live, recover and switch QUEUE a request for it instead of acting.
-  cc-lr plan --from A --to B [--until-idle S] [--cold-only] [--json]
+  cc-lr plan --from A --to B [--until-idle S] [--cold-only] [--json] [--verbose]
                              READ-ONLY: one row and one disposition for every session on
                              account A (idle, busy, limited, background, held), and what
                              `move` would do with it. Writes and types nothing.
   cc-lr move --from A --to B|auto [--until-idle S] [--cold-only] [--slots W] [--wait S]
-             [--dry-run] [--target-unverified]   (or --sid S / --pane P with --to B)
+             [--dry-run] [--target-unverified] [--verbose]   (or --sid S / --pane P with --to B)
                              --sid repeats and --sids S1,S2,... is the same list: one batch, any source accounts, in the order named
                              restart every idle, healthy session of A on B, each in its own
                              pane, with NO model turn: one intent file per session and one
@@ -1397,20 +1398,45 @@ $census
 EOF
   return 0
 }
-cl_move_table() { # stdin = cl_move_rows output; $1=from $2=to $3=footer note
-  local rows nm nw nh nt
+# ANSWER FIRST (2026-10-19, lr-wake H2; g-message-design §5.3 I). The first line is the verdict —
+# the tally, with the PLAN / DRY RUN footer on it — and the table is detail: it prints only when
+# there is more than one row to tell apart, or under --verbose. With one row the verdict line names
+# that sid8 and its disposition, and its action follows on its own row. Message only.
+CL_VERBOSE=0   # --verbose on plan / move / rotate: the table for one row, and the bounds line
+cl_move_nrows() { printf '%s\n' "$1" | awk -F'\t' '$2 != ""' | grep -c . || true; }
+cl_move_tally() { # <rows> <note> → the one-line count, the note appended
+  local nm nw nh nt
+  nm="$(printf '%s\n' "$1" | awk -F'\t' '$8 == "move"' | grep -c . || true)"
+  nw="$(printf '%s\n' "$1" | awk -F'\t' '$8 == "wait"' | grep -c . || true)"
+  nh="$(printf '%s\n' "$1" | awk -F'\t' '$8 == "hold"' | grep -c . || true)"
+  nt="$(printf '%s\n' "$1" | awk -F'\t' '$8 == "none"' | grep -c . || true)"
+  printf '%s to move · %s waiting · %s held · %s on target%s\n' "$nm" "$nw" "$nh" "$nt" "${2:+ · $2}"
+}
+cl_move_glyph() { # <rows> → ⟳ when something would move, ✗ when nothing would
+  if [ "$(printf '%s\n' "$1" | awk -F'\t' '$8 == "move" || $8 == "wait"' | grep -c . || true)" -gt 0 ]; then
+    printf '⟳'; else printf '✗'; fi
+}
+cl_move_table() { # stdin = cl_move_rows output; $1=from $2=to $3=footer note $4=verdict glyph ("" = the detail alone)
+  local rows n p s disp action
   rows="$(cat)"
+  n="$(cl_move_nrows "$rows")"
+  if [ "$n" -le 1 ] && [ "$CL_VERBOSE" -eq 0 ]; then
+    [ -n "$4" ] || return 0
+    IFS=$'\t' read -r p s _ _ _ _ disp _ action _ <<EOF
+$(printf '%s\n' "$rows" | awk -F'\t' '$2 != ""' | sed -n '1p')
+EOF
+    printf '%s %s %s · %s → %s%s\n' "$4" "${s:0:8}" "${disp:--}" "${1:--}" "$2" "${3:+ · $3}"
+    [ -z "$s" ] || printf '  pane %s · %s\n' "$p" "$action"
+    return 0
+  fi
+  [ -z "$4" ] || printf '%s %s\n' "$4" "$(cl_move_tally "$rows" "$3")"
   printf 'from %s → %s\n' "${1:--}" "$2"
   printf '%-5s %-8s  %-26s %-7s %-5s %s\n' PANE SID DISPOSITION IDLE CACHE ACTION
   printf '%s\n' "$rows" | while IFS=$'\t' read -r p s _ _ _ _ disp _ action idle cache; do
     [ -n "$s" ] || continue
     printf '%-5s %-8s  %-26s %-7s %-5s %s\n' "$p" "${s:0:8}" "$disp" "${idle}s" "$cache" "$action"
   done
-  nm="$(printf '%s\n' "$rows" | awk -F'\t' '$8 == "move"' | grep -c . || true)"
-  nw="$(printf '%s\n' "$rows" | awk -F'\t' '$8 == "wait"' | grep -c . || true)"
-  nh="$(printf '%s\n' "$rows" | awk -F'\t' '$8 == "hold"' | grep -c . || true)"
-  nt="$(printf '%s\n' "$rows" | awk -F'\t' '$8 == "none"' | grep -c . || true)"
-  printf '%s to move · %s waiting · %s held · %s on target%s\n' "$nm" "$nw" "$nh" "$nt" "${3:+ · $3}"
+  [ -n "$4" ] || cl_move_tally "$rows" ""
 }
 cl_move_rows_json() { # stdin = rows → a JSON array
   jq -Rn '[inputs | select(length > 0) | split("\t")
@@ -1481,6 +1507,7 @@ cmd_plan() {
       --until-idle) [ $# -ge 2 ] || { usage; exit 3; }; until_s="$2"; shift 2 ;;
       --cold-only) cold=1; shift ;;
       --json) json=1; shift ;;
+      --verbose) CL_VERBOSE=1; shift ;;
       -h|--help) usage; exit 0 ;;
       *) echo "cc-lr plan: unknown argument $1" >&2; usage; exit 3 ;;
     esac
@@ -1501,7 +1528,8 @@ cmd_plan() {
   if [ "$json" -eq 1 ]; then
     printf '%s\n' "$rows" | cl_move_rows_json | jq -c --arg from "$from" --arg to "$to" '{from:$from, to:$to, rows:.}'
   else
-    printf '%s\n' "$rows" | cl_move_table "$from" "$to" "PLAN: nothing was written or typed"
+    printf '%s\n' "$rows" | cl_move_table "$from" "$to" "PLAN: nothing was written or typed" "$(cl_move_glyph "$rows")"
+    [ "$CL_VERBOSE" -eq 0 ] || cl_bounds_line
   fi
 }
 cl_move_result_line() { # <pane> <sid> <verdict> <reason>
@@ -1547,6 +1575,7 @@ EOF
 }
 CL_MOVE_EXCL=""
 CL_MOVE_QUEUED_OUT=""   # a file path: a real run writes its batch id there once the request is on disk
+CL_MOVE_NO_STATUS_ROW=""   # set by rotate, whose own in-flight list names each batch's status command
 cmd_move() {
   local from="" to="" until_s=0 wait_s="${CC_LR_MOVE_WAIT_S:-600}" cold=0 dry=0 slots="" unver=false self="" selv="" saw_pane=0 json=0
   local status_b="" abort_b="" rows rc=0 batch bdir by now nm s p ac cfg act tmp unroute="" urc hint=""
@@ -1564,6 +1593,7 @@ cmd_move() {
       --status) [ $# -ge 2 ] || { usage; exit 3; }; status_b="$2"; shift 2 ;;
       --abort) [ $# -ge 2 ] || { usage; exit 3; }; abort_b="$2"; shift 2 ;;
       --json) json=1; shift ;;
+      --verbose) CL_VERBOSE=1; shift ;;
       -h|--help) usage; exit 0 ;;
       *) echo "cc-lr move: unknown argument $1" >&2; usage; exit 3 ;;
     esac
@@ -1632,8 +1662,8 @@ cmd_move() {
   [ "$urc" -ne 0 ] || hint="$(cl_relogin_hint "$to" "$unroute")"
   if [ "$urc" -eq 1 ] && [ "${CC_LR_TARGET_ROUTABLE:-on}" != off ] && [ "${CC_LR_STRICT_ROUTE:-on}" != off ]; then ranked_at="$rt0"; fi
   if [ "$dry" -eq 1 ]; then
-    printf '%s\n' "$rows" | cl_move_table "$from" "$to" "DRY RUN: nothing was written or typed"
-    cl_bounds_line "$slots"
+    printf '%s\n' "$rows" | cl_move_table "$from" "$to" "DRY RUN: nothing was written or typed" "$(cl_move_glyph "$rows")"
+    [ "$CL_VERBOSE" -eq 0 ] || cl_bounds_line "$slots"
     case "$urc" in
       0) printf 'target-unroutable: the router does not rank %s (%s)%s — a real run would be refused\n' "$to" "$unroute" "${hint:+ — $hint}" ;;
       3) printf 'target-unverified: %s — a real run would be refused without --target-unverified\n' "$unroute" ;;
@@ -1646,7 +1676,7 @@ cmd_move() {
   esac
   nm="$(printf '%s\n' "$rows" | awk -F'\t' '$8 == "move" || $8 == "wait"' | grep -c . || true)"
   if [ "$nm" -eq 0 ]; then
-    printf '%s\n' "$rows" | cl_move_table "$from" "$to" "nothing to move; nothing was written"
+    printf '%s\n' "$rows" | cl_move_table "$from" "$to" "nothing to move; nothing was written" "✗"
     return 1
   fi
   cc_acct_dir_for_name "$to" >/dev/null 2>&1 || true
@@ -1671,30 +1701,38 @@ cmd_move() {
   done <<EOF
 $rows
 EOF
-  printf '%s\n' "$rows" | cl_move_table "$from" "$to" "batch $batch"
-  cl_bounds_line "$slots"
   tmp="$(lr_move_state)/move/requests/.$batch.$$.tmp"
   jq -nc --arg b "$batch" --argjson ts "$now" --arg rqp "$by" --arg rqs "$(cl_requester_sid)" \
     '{kind:"move-batch", batch:$b, ts:$ts, requester_pane:$rqp, requester_sid:$rqs}' > "$tmp" \
     && mv -f "$tmp" "$(lr_move_state)/move/requests/$batch.json" || cl_die "cannot write the batch request; nothing will run" 2
   [ -z "$CL_MOVE_QUEUED_OUT" ] || printf '%s\n' "$batch" > "$CL_MOVE_QUEUED_OUT"
-  printf 'cc-lr: batch %s queued for the poller (%s session(s)); re-derive its verdicts any time with: cc-lr move --status %s\n' "$batch" "$nm" "$batch"
+  # THE VERDICT FIRST, once the request is on disk (2026-10-19, lr-wake H2): what was queued, then
+  # the ONE command that reads it back — printed once per run, never repeated by the lines below.
+  # Inside `rotate` (CL_MOVE_NO_STATUS_ROW) the caller's own in-flight list names it instead.
+  if [ "$(cl_move_nrows "$rows")" -eq 1 ]; then
+    printf '⏸ %s moves %s → %s when idle · batch %s\n' "$(printf '%s\n' "$rows" | awk -F'\t' '$2 != "" { print substr($2, 1, 8); exit }')" "$from" "$to" "$batch"
+  else
+    printf '⏸ %s session(s) move %s → %s when idle · batch %s\n' "$nm" "$from" "$to" "$batch"
+  fi
+  [ -n "$CL_MOVE_NO_STATUS_ROW" ] || printf '  ▶ cc-lr move --status %s\n' "$batch"
+  # THE CALLER IS NOT WAITED ON (R4/R5). Its worker can see it at rest only once this tool call has
+  # returned and the turn has ended, so blocking here on its own row would hold it busy until the
+  # --wait bound, every time. It is marked seen; the other rows are waited on as before.
+  local deadline seen=" " left f v last_kick
+  if [ -n "$selfsid" ]; then
+    printf 'cc-lr move: queued THIS session (%s) in batch %s — end your turn now and start no other work; the move fires once this session is at rest (<= %ss).\n' \
+      "${selfsid:0:8}" "$batch" "$until_s"
+    printf 'cc-lr move: if a Stop hook keeps you going, run ~/.claude/hooks/session-continue.sh clear first\n'
+    seen=" $selfsid "
+  fi
+  printf '%s\n' "$rows" | cl_move_table "$from" "$to" "" ""
+  [ "$CL_VERBOSE" -eq 0 ] || cl_bounds_line "$slots"
   # `kickstart` with NO `-k` — the rule every request writer here follows (see cmd_repair).
   if command -v launchctl >/dev/null 2>&1; then
     launchctl kickstart "gui/$(id -u)/$POLLER_LABEL" >/dev/null 2>&1 \
       || echo "cc-lr: the kick failed — the poller's own interval will start the batch" >&2
   fi
   cl_tick_note "$(lr_move_state)/move/requests/$batch.json"
-  # THE CALLER IS NOT WAITED ON (R4/R5). Its worker can see it at rest only once this tool call has
-  # returned and the turn has ended, so blocking here on its own row would hold it busy until the
-  # --wait bound, every time. It is marked seen; the other rows are waited on as before.
-  local deadline seen=" " left f v last_kick
-  if [ -n "$selfsid" ]; then
-    printf 'cc-lr move: queued THIS session (%s) in batch %s — end your turn now and start no other work; the move fires once this session is at rest (<= %ss). Check: cc-lr move --status %s\n' \
-      "${selfsid:0:8}" "$batch" "$until_s" "$batch"
-    printf 'cc-lr move: if a Stop hook keeps you going, run ~/.claude/hooks/session-continue.sh clear first\n'
-    seen=" $selfsid "
-  fi
   # Bounded wait; the batch runner and its workers are detached and outlive this process.
   deadline=$(( now + wait_s )); last_kick="$now"
   while :; do
@@ -1726,8 +1764,8 @@ EOF
     sleep "${CC_LR_MOVE_POLL_S:-3}"
   done
   if [ "$left" -gt 0 ]; then
-    printf '… %s session(s) still in flight after %ss — the workers keep running: cc-lr move --status %s\n' "$left" "$wait_s" "$batch"
-    cl_verdict_by "cc-lr move --status $batch"
+    printf '⟳ %s session(s) still in flight after %ss; the workers keep running\n' "$left" "$wait_s"
+    [ -n "$CL_MOVE_NO_STATUS_ROW" ] || cl_verdict_by "the ▶ command above"
     cl_tick_note "$(lr_move_state)/move/requests/$batch.json"
   fi
   if [ "$(jq -r '.admitted // true' "$bdir/admit.json" 2>/dev/null)" = false ]; then
@@ -1840,7 +1878,7 @@ cl_rotate_table() { # <rows file> <notes file> <footer>
     "$(cl_rotate_count "$1" recover)" "$(cl_rotate_count "$1" move)" "$(cl_rotate_count "$1" wait)" \
     "$(cl_rotate_count "$1" hold)" "$(cl_rotate_count "$1" none)" "${3:+ · $3}"
   [ ! -s "$2" ] || sed 's/^/  /' "$2"
-  cl_bounds_line
+  [ "$CL_VERBOSE" -eq 0 ] || cl_bounds_line
 }
 cl_rotate_verdict_line() { # <pane> <sid> <run dir> → one line from the recover run's verdict.txt
   local v why
@@ -1866,6 +1904,7 @@ cmd_rotate() {
       --wait) [ $# -ge 2 ] || { usage; exit 3; }; wait_s="$2"; shift 2 ;;
       --no-wait) wait_s=0; shift ;;
       --json) json=1; shift ;;
+      --verbose) CL_VERBOSE=1; shift ;;
       -h|--help) usage; exit 0 ;;
       *) echo "cc-lr rotate: unknown argument $1" >&2; usage; exit 3 ;;
     esac
@@ -1917,7 +1956,7 @@ cmd_rotate() {
 
   # THE ACT: the per-account command that already exists, once per account in scope, each in a
   # subshell so one account's usage error or refusal never ends the others.
-  CL_RL_LIMITED_FILE="$lf"; CL_RL_OUT="$of"
+  CL_RL_LIMITED_FILE="$lf"; CL_RL_OUT="$of"; CL_MOVE_NO_STATUS_ROW=1
   for a in $accts; do
     t="$to"; [ "$t" != "$a" ] || t=auto
     printf -- '── %s ──\n' "$a"
@@ -1928,7 +1967,7 @@ cmd_rotate() {
   printf -- '── verdicts ──\n'
   if [ "$n_rec" -eq 0 ] && [ "$n_bat" -eq 0 ] && [ "$n_q" -eq 0 ]; then
     echo "cc-lr rotate: nothing was started — no limited session and no capped account with a movable session in scope."
-    cl_bounds_line
+    [ "$CL_VERBOSE" -eq 0 ] || cl_bounds_line
     return 1
   fi
   cl_move_lib || true
@@ -1981,7 +2020,7 @@ EOF
     cl_verdict_by "the commands above"
     cl_tick_note
   fi
-  cl_bounds_line
+  [ "$CL_VERBOSE" -eq 0 ] || cl_bounds_line
   [ "$left" -eq 0 ] && [ "$bad" -eq 0 ] && { [ "$good" -gt 0 ] || [ "$n_q" -gt 0 ]; }
 }
 

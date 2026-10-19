@@ -206,7 +206,13 @@ nfiles() { local f n=0; for f in "$1"/*; do [ -e "$f" ] && n=$((n + 1)); done; p
   fleet
   run bash "$CCLR" move --sid "$S1" --to next2 --dry-run
   [ "$status" -eq 0 ]
-  [ "$(printf '%s\n' "$output" | grep -cE '^40[0-9] ')" -eq 1 ]
+  # one row: no table — the verdict line names it, answer first (2026-10-19, lr-wake H2)
+  [ "${lines[0]}" = "⟳ ${S1:0:8} move · next3 → next2 · DRY RUN: nothing was written or typed" ] || { echo "$output"; false; }
+  [[ "${lines[1]}" == "  pane 401 · restart on next2"* ]] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -cE '^40[0-9] ')" -eq 0 ] || { echo "$output"; false; }
+  # --verbose brings the table back
+  run bash "$CCLR" move --sid "$S1" --to next2 --dry-run --verbose
+  [ "$(printf '%s\n' "$output" | grep -cE '^40[0-9] ')" -eq 1 ] || { echo "$output"; false; }
   [[ "$output" == *"from next3 → next2"* ]]
 }
 
@@ -293,16 +299,26 @@ for d in "$LR_STATE_DIR"/move/*/; do
 done
 STUB
   chmod +x "$STUBS/launchctl"
-  run bash "$CCLR" move --sid "$S1" --to next2 --wait 30
+  run bash "$CCLR" move --sid "$S1" --to next2 --wait 30 --verbose
   # RED before the fix: rc 1.
   [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
   [[ "$output" == *"MOVED — pane 401 runs the session on the target"* ]] || { echo "$output"; false; }
   [[ "$output" == *"bounds: move 4 at a time (LR_MOVE_SLOTS; a fixed count"*"not memory"* ]] || { echo "$output"; false; }
+  # without --verbose: the verdict line first, the status command once, no bounds line
+  run bash "$CCLR" move --sid "$S1" --to next2 --wait 30
+  [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
+  local b; b="$(printf '%s\n' "${lines[0]}" | sed -n 's/^⏸ .* · batch //p')"
+  [[ "${lines[0]}" == "⏸ ${S1:0:8} moves next3 → next2 when idle · batch "* ]] || { echo "$output"; false; }
+  [ -n "$b" ] || { echo "no batch id on the verdict line: $output"; false; }
+  [ "${lines[1]}" = "  ▶ cc-lr move --status $b" ] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c 'cc-lr move --status')" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" != *"bounds:"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"MOVED — pane 401 runs the session on the target"* ]] || { echo "$output"; false; }
 }
 
 @test "18 --slots W is the width this batch was given, and the bounds line says so" {
   sess 401 "$S1"
-  run bash "$CCLR" move --sid "$S1" --to next2 --slots 6 --dry-run
+  run bash "$CCLR" move --sid "$S1" --to next2 --slots 6 --dry-run --verbose
   [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
   [[ "$output" == *"bounds: move 6 at a time (--slots;"* ]] || { echo "$output"; false; }
 }
