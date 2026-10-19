@@ -3862,6 +3862,39 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── HOOK SHEBANG lint (docs/research/panic-2026-10-18-zone-map-shebang-leak.md improvement 1) ──
+  # A hook command or statusLine that runs a `#!` script by bare path leaks one 1 KiB kernel element
+  # per run on macOS 15.7.9; ~100 such commands drove data.kalloc.1024 to its ~20 GiB ceiling and
+  # panicked the kernel on 2026-10-18. The template is what install.sh seeds and every settings
+  # migration is written against, so a bare entry there spreads. Diff-scoped: arms only when the land
+  # touches the template, a hook script (its shebang decides the prefix) or the lint itself.
+  # gate_bounded: SHIP_LAND_HOOK_SHEBANG_LINT=/nonexistent disarms a broken detector.
+  HSB_LINT="${SHIP_LAND_HOOK_SHEBANG_LINT:-scripts/hook-shebang-lint.sh}"
+  if [[ -x "$HSB_LINT" ]]; then
+    local hsb_own=""
+    hsb_own="$(git diff --name-only "$range" -- 'settings-templates/*.json' 'hooks/*' 'statusline.sh' \
+                 'scripts/hook-interp.py' 'scripts/hook-shebang-lint.sh' 2>/dev/null || true)"
+    if [[ -n "$hsb_own" ]]; then
+      echo "→ gate: hook-shebang lint (this land edits $(printf '%s\n' "$hsb_own" | grep -c .) template/hook file(s))" >&2
+      if ! selftest_ok "$HSB_LINT" scripts/hook-interp.py; then
+        echo "✗ gate: hook-shebang-lint --selftest FAILED — the detector no longer discriminates." >&2
+        echo "  Escape if it is the detector that is broken: SHIP_LAND_HOOK_SHEBANG_LINT=/nonexistent" >&2
+        gate_red hook-shebang-selftest
+        return 1  # gate_bounded: SHIP_LAND_HOOK_SHEBANG_LINT=/nonexistent — escape for a broken detector
+      fi
+      local _hsrc=0
+      "$HSB_LINT" >&2 || _hsrc=$?
+      if (( _hsrc == 2 )); then arm_nonverdict "hook-shebang-lint"; return 1; fi
+      if (( _hsrc != 0 )); then
+        echo "✗ gate: hook-shebang RED — a template hook or statusLine execs a #! script by bare path." >&2
+        echo "  Prefix the script's own interpreter (/bin/bash ~/.claude/hooks/x.sh); fix with:" >&2
+        echo "  python3 scripts/hook-interp.py rewrite settings-templates/settings.example.json --root . --hermetic" >&2
+        gate_red hook-shebang
+        return 1  # gate_bounded: fires only on lands touching the template, hooks/ or the lint
+      fi
+    fi
+  fi
+
   # ── always-loaded INSTRUCTION BUDGET ratchet (docs/plans/INSTRUCTION_BUDGET.md D7) ─────────────
   # The size half of the arm above, and the land-time arm of the one predicate the Write/Edit gate
   # (hooks/backup-before-write.sh) and the fleet auditor (bin/cc-instruction-budget) share. The

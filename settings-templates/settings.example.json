@@ -1,5 +1,5 @@
 {
-  "_comment": "Reproducible Claude Code config template — the FULL live hook roster (G-P6-7). Captured from the primary ~/.claude/settings.json with PORTABLE ~/.claude paths (live uses some machine-absolute /Users/... paths; the template normalizes them). install.sh --wire-hooks merges .hooks/.permissions.deny/.permissions.ask additively; scripts/settings-drift-assert.sh asserts these arrays match across all 5 config dirs. The anti-premature-done Stop hooks (session-continue, anti-deference-nudge, teammate-checkpoint, boundary-handoff) MUST survive a settings reset — that is the whole point of this capture.",
+  "_comment": "Reproducible Claude Code config template — the FULL live hook roster (G-P6-7). Captured from the primary ~/.claude/settings.json with PORTABLE ~/.claude paths (live uses some machine-absolute /Users/... paths; the template normalizes them). install.sh --wire-hooks merges .hooks/.permissions.deny/.permissions.ask additively; scripts/settings-drift-assert.sh asserts these arrays match across all 5 config dirs. The anti-premature-done Stop hooks (session-continue, anti-deference-nudge, teammate-checkpoint, boundary-handoff) MUST survive a settings reset — that is the whole point of this capture. Every hook command and the statusLine name their interpreter (/bin/bash <path>, matching the script's shebang): a bare `#!` exec leaks 1 KiB of kernel memory per run on macOS 15.7.9 (docs/research/panic-2026-10-18-zone-map-shebang-leak.md); scripts/hook-shebang-lint.sh refuses a bare one at land.",
   "_comment_env": "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION / _AWAY_SUMMARY hard-pin the two grey-text UI features (input ghost-text suggestion; the 'recap:' line). Both are the FIRST branch of their gate fn (Kwo/vyr in 2.1.220), so a truthy value short-circuits the GrowthBook gate, the non-interactive check, and an accidental /config toggle-off — and re-wins on every settings reload. Load-bearing for suggestions: their gate tengu_chomp_inflection DEFAULTS FALSE, so they fail-to-OFF whenever GrowthBook is unreachable (telemetry off, cold cache, startup budget missed); the env var is what makes them deterministic. Neither var affects how OFTEN the features fire — that is trigger conditions (recap: terminal blurred + 3min idle + fresh prompt cache; suggestions: terminal focused + empty input + last turn under 10k tokens), which are not configurable. CLAUDE_CODE_CERT_STORE=bundled (migration 0055) keeps Claude Code off the macOS system CA store, which 2.1.284 loads synchronously on its main thread with no timeout: a stalled secd/trustd froze every launch on 2026-10-04. The value must be spelled exactly; an unrecognized one silently falls back to bundled,system. On a Mac with a TLS-inspecting or local root, add NODE_EXTRA_CA_CERTS=<root.pem>. NOTE this comment sits OUTSIDE .env deliberately: every key inside .env is written into process.env and inherited by every child process.",
   "env": {
     "MCP_TIMEOUT": "30000",
@@ -21,7 +21,7 @@
   },
   "statusLine": {
     "type": "command",
-    "command": "~/.claude/statusline.sh"
+    "command": "/bin/bash ~/.claude/statusline.sh"
   },
   "permissions": {
     "defaultMode": "auto",
@@ -104,26 +104,26 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/curl-gate.py",
+            "command": "/usr/bin/env python3 ~/.claude/hooks/curl-gate.py",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/validate-bash.sh",
+            "command": "/bin/bash ~/.claude/hooks/validate-bash.sh",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/git-worktree-guard.sh",
+            "command": "/usr/bin/env bash ~/.claude/hooks/git-worktree-guard.sh",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/keychain-guard.sh"
+            "command": "/usr/bin/env bash ~/.claude/hooks/keychain-guard.sh"
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/rm-safe-allowlist.sh",
+            "command": "/bin/bash ~/.claude/hooks/rm-safe-allowlist.sh",
             "timeout": 5
           }
         ]
@@ -133,17 +133,17 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/backup-before-write.sh",
+            "command": "/bin/bash ~/.claude/hooks/backup-before-write.sh",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/check-edit-boundary.sh",
+            "command": "/bin/bash ~/.claude/hooks/check-edit-boundary.sh",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/plan-agent-teams-default.sh",
+            "command": "/bin/bash ~/.claude/hooks/plan-agent-teams-default.sh",
             "timeout": 5
           }
         ]
@@ -153,12 +153,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/agent-teams-enforce.sh",
+            "command": "/bin/bash ~/.claude/hooks/agent-teams-enforce.sh",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/frontier-spawn-gate.sh",
+            "command": "/usr/bin/env bash ~/.claude/hooks/frontier-spawn-gate.sh",
             "timeout": 5
           }
         ]
@@ -168,7 +168,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/cc-unattended-ask-guard.sh",
+            "command": "/usr/bin/env bash ~/.claude/hooks/cc-unattended-ask-guard.sh",
             "timeout": 5
           }
         ]
@@ -180,22 +180,22 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/post-file-edit.sh",
+            "command": "/bin/bash ~/.claude/hooks/post-file-edit.sh",
             "timeout": 30
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/plan-index-update.sh",
+            "command": "/bin/bash ~/.claude/hooks/plan-index-update.sh",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/validate-plan-structure.sh",
+            "command": "/bin/bash ~/.claude/hooks/validate-plan-structure.sh",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/plan-version-commit.sh",
+            "command": "/bin/bash ~/.claude/hooks/plan-version-commit.sh",
             "timeout": 10
           }
         ]
@@ -205,16 +205,16 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/log-bash.sh",
+            "command": "/bin/bash ~/.claude/hooks/log-bash.sh",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/waiting-recycle.sh"
+            "command": "/usr/bin/env bash ~/.claude/hooks/waiting-recycle.sh"
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/relay-verbatim.sh",
+            "command": "/bin/bash ~/.claude/hooks/relay-verbatim.sh",
             "timeout": 5
           }
         ]
@@ -224,7 +224,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/memory-index-drain.sh",
+            "command": "/usr/bin/env bash ~/.claude/hooks/memory-index-drain.sh",
             "timeout": 10
           }
         ]
@@ -234,7 +234,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/task-mutation-index.sh",
+            "command": "/bin/bash ~/.claude/hooks/task-mutation-index.sh",
             "timeout": 5
           }
         ]
@@ -244,7 +244,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/teammate-checkpoint.sh",
+            "command": "/bin/bash ~/.claude/hooks/teammate-checkpoint.sh",
             "timeout": 10
           }
         ]
@@ -254,7 +254,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/mailbox-drain.sh post-tool",
+            "command": "/bin/bash ~/.claude/hooks/mailbox-drain.sh post-tool",
             "timeout": 5
           }
         ]
@@ -264,7 +264,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/plan-pin-session.sh",
+            "command": "/bin/bash ~/.claude/hooks/plan-pin-session.sh",
             "timeout": 5
           }
         ]
@@ -275,37 +275,37 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/session-start.sh",
+            "command": "/bin/bash ~/.claude/hooks/session-start.sh",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/setup-plan-symlinks.sh",
+            "command": "/bin/bash ~/.claude/hooks/setup-plan-symlinks.sh",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/setup-task-symlinks.sh",
+            "command": "/bin/bash ~/.claude/hooks/setup-task-symlinks.sh",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/pre-session-validate.sh",
+            "command": "/bin/bash ~/.claude/hooks/pre-session-validate.sh",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/lead-crash-watchdog.sh",
+            "command": "/bin/bash ~/.claude/hooks/lead-crash-watchdog.sh",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/session-register.sh",
+            "command": "/bin/bash ~/.claude/hooks/session-register.sh",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/mailbox-drain.sh session-start",
+            "command": "/bin/bash ~/.claude/hooks/mailbox-drain.sh session-start",
             "timeout": 5
           }
         ]
@@ -314,7 +314,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/session-index-start.sh",
+            "command": "/bin/bash ~/.claude/hooks/session-index-start.sh",
             "timeout": 5
           }
         ]
@@ -323,7 +323,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/config-mirror-assert.sh",
+            "command": "/bin/bash ~/.claude/hooks/config-mirror-assert.sh",
             "timeout": 8
           }
         ]
@@ -332,7 +332,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/frontier-status.sh",
+            "command": "/usr/bin/env bash ~/.claude/hooks/frontier-status.sh",
             "timeout": 5
           }
         ]
@@ -341,7 +341,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/live-session-registry.sh",
+            "command": "/bin/bash ~/.claude/hooks/live-session-registry.sh",
             "timeout": 5
           }
         ]
@@ -351,7 +351,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/activation-watch.sh",
+            "command": "/bin/bash ~/.claude/hooks/activation-watch.sh",
             "timeout": 5
           }
         ]
@@ -360,7 +360,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/dod-persist.sh",
+            "command": "/usr/bin/env bash ~/.claude/hooks/dod-persist.sh",
             "timeout": 5
           }
         ]
@@ -370,7 +370,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/desk-brief-inject.sh",
+            "command": "/usr/bin/env bash ~/.claude/hooks/desk-brief-inject.sh",
             "timeout": 5
           }
         ]
@@ -380,7 +380,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/accounts-board.sh",
+            "command": "/usr/bin/env bash ~/.claude/hooks/accounts-board.sh",
             "timeout": 5
           }
         ]
@@ -391,7 +391,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/session-end.sh",
+            "command": "/bin/bash ~/.claude/hooks/session-end.sh",
             "timeout": 10
           }
         ]
@@ -401,7 +401,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/session-deregister.sh",
+            "command": "/bin/bash ~/.claude/hooks/session-deregister.sh",
             "timeout": 5
           }
         ]
@@ -410,7 +410,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/session-index-end.sh",
+            "command": "/bin/bash ~/.claude/hooks/session-index-end.sh",
             "timeout": 10
           }
         ]
@@ -419,7 +419,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/session-save-id.sh",
+            "command": "/bin/bash ~/.claude/hooks/session-save-id.sh",
             "timeout": 5
           }
         ]
@@ -428,7 +428,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/harvest-skill-end.sh",
+            "command": "/bin/bash ~/.claude/hooks/harvest-skill-end.sh",
             "timeout": 10
           }
         ]
@@ -437,7 +437,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/live-session-registry.sh",
+            "command": "/bin/bash ~/.claude/hooks/live-session-registry.sh",
             "timeout": 5
           }
         ]
@@ -449,42 +449,42 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/notify.sh complete",
+            "command": "/bin/bash ~/.claude/hooks/notify.sh complete",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/cache-expiry-tracker.sh",
+            "command": "/bin/bash ~/.claude/hooks/cache-expiry-tracker.sh",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/teammate-checkpoint.sh",
+            "command": "/bin/bash ~/.claude/hooks/teammate-checkpoint.sh",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/session-continue.sh",
+            "command": "/usr/bin/env bash ~/.claude/hooks/session-continue.sh",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/anti-deference-nudge.sh",
+            "command": "/usr/bin/env bash ~/.claude/hooks/anti-deference-nudge.sh",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/completion-assert.sh",
+            "command": "/usr/bin/env bash ~/.claude/hooks/completion-assert.sh",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/operator-readout.sh",
+            "command": "/usr/bin/env bash ~/.claude/hooks/operator-readout.sh",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/session-beat.sh stop",
+            "command": "/bin/bash ~/.claude/hooks/session-beat.sh stop",
             "timeout": 5
           }
         ]
@@ -494,7 +494,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/boundary-handoff.sh",
+            "command": "/bin/bash ~/.claude/hooks/boundary-handoff.sh",
             "timeout": 5
           }
         ]
@@ -505,7 +505,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/subagent-stop.sh",
+            "command": "/bin/bash ~/.claude/hooks/subagent-stop.sh",
             "timeout": 10
           }
         ]
@@ -516,36 +516,36 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/handed-off-session-guard.sh"
+            "command": "/usr/bin/env bash ~/.claude/hooks/handed-off-session-guard.sh"
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/cache-expiry-warning.sh",
+            "command": "/bin/bash ~/.claude/hooks/cache-expiry-warning.sh",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/memory-nudge.sh",
+            "command": "/bin/bash ~/.claude/hooks/memory-nudge.sh",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/handoff-intent-nudge.sh",
+            "command": "/bin/bash ~/.claude/hooks/handoff-intent-nudge.sh",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/research-precognition-nudge.sh",
+            "command": "/bin/bash ~/.claude/hooks/research-precognition-nudge.sh",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/mailbox-drain.sh prompt",
+            "command": "/bin/bash ~/.claude/hooks/mailbox-drain.sh prompt",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/session-beat.sh prompt",
+            "command": "/bin/bash ~/.claude/hooks/session-beat.sh prompt",
             "timeout": 5
           }
         ]
@@ -557,7 +557,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/notify.sh permission",
+            "command": "/bin/bash ~/.claude/hooks/notify.sh permission",
             "timeout": 5
           }
         ]
@@ -567,7 +567,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/notify.sh elicitation",
+            "command": "/bin/bash ~/.claude/hooks/notify.sh elicitation",
             "timeout": 5
           }
         ]
@@ -577,7 +577,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/push-critical.sh",
+            "command": "/bin/bash ~/.claude/hooks/push-critical.sh",
             "timeout": 6
           }
         ]
@@ -587,7 +587,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/push-critical.sh",
+            "command": "/bin/bash ~/.claude/hooks/push-critical.sh",
             "timeout": 6
           }
         ]
@@ -597,7 +597,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/push-critical.sh",
+            "command": "/bin/bash ~/.claude/hooks/push-critical.sh",
             "timeout": 6
           }
         ]
@@ -609,7 +609,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/notify.sh permission",
+            "command": "/bin/bash ~/.claude/hooks/notify.sh permission",
             "timeout": 5
           }
         ]
@@ -619,7 +619,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/notify.sh question",
+            "command": "/bin/bash ~/.claude/hooks/notify.sh question",
             "timeout": 5
           }
         ]
@@ -629,7 +629,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/notify.sh plan",
+            "command": "/bin/bash ~/.claude/hooks/notify.sh plan",
             "timeout": 5
           }
         ]
@@ -640,7 +640,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/teammate-auto-shutdown.sh",
+            "command": "/bin/bash ~/.claude/hooks/teammate-auto-shutdown.sh",
             "timeout": 5
           }
         ]
@@ -651,7 +651,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/worktree-setup.sh",
+            "command": "/bin/bash ~/.claude/hooks/worktree-setup.sh",
             "timeout": 180
           }
         ]
@@ -662,7 +662,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/task-quality-gate.sh",
+            "command": "/bin/bash ~/.claude/hooks/task-quality-gate.sh",
             "timeout": 120
           }
         ]
@@ -679,7 +679,7 @@
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/dod-persist.sh",
+            "command": "/usr/bin/env bash ~/.claude/hooks/dod-persist.sh",
             "timeout": 10
           }
         ]
@@ -694,7 +694,7 @@
           },
           {
             "type": "command",
-            "command": "~/.claude/hooks/dod-persist.sh",
+            "command": "/usr/bin/env bash ~/.claude/hooks/dod-persist.sh",
             "timeout": 10
           }
         ]
@@ -706,7 +706,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/log-bash.sh",
+            "command": "/bin/bash ~/.claude/hooks/log-bash.sh",
             "timeout": 5
           }
         ]
@@ -715,7 +715,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/mailbox-drain.sh post-tool"
+            "command": "/bin/bash ~/.claude/hooks/mailbox-drain.sh post-tool"
           }
         ]
       }
