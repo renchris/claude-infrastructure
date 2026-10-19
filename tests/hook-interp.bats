@@ -76,8 +76,8 @@ settings() { # <file> — every command spelling a live settings.json carries, p
   jq -n '{hooks:{Stop:[{hooks:[{type:"command",command:"~/.claude/hooks/k.sh"}]}]}}' > "$F/k.json"
   run "${PRED[@]}" rewrite "$F/k.json"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"refused"*"unknown-interp"* ]]
-  [[ "$output" != *'"hooks"'* ]]      # nothing on stdout to write
+  [[ "$output" == *"refused"*"unknown-interp"* ]] || false
+  [[ "$output" != *'"hooks"'* ]] || false # nothing on stdout to write
   jq -n '{hooks:{Stop:[{hooks:[{type:"command",command:"/bin/bash ~/.claude/hooks/p.py"}]}]}}' > "$F/m.json"
   run "${PRED[@]}" lint "$F/m.json"
   [ "$status" -eq 1 ]
@@ -97,14 +97,14 @@ settings() { # <file> — every command spelling a live settings.json carries, p
 @test "land-gate lint: the real template is clean, and the same template with its prefixes stripped is RED" {
   run "$REPO/scripts/hook-shebang-lint.sh"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"verdict=clean"* ]]
+  [[ "$output" == *"verdict=clean"* ]] || false
   jq -L "$REPO/scripts/lib" 'include "hook-cmd-bare";
       .hooks |= map_values(map(.hooks |= map(.command |= cmd_bare))) | .statusLine.command |= cmd_bare' \
      "$REPO/settings-templates/settings.example.json" > "$F/stripped.json"
   run "$REPO/scripts/hook-shebang-lint.sh" --file "$F/stripped.json"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"statusLine"* ]]
-  [[ "$output" =~ verdict=RED\ n=([0-9]+) ]]
+  [[ "$output" == *"statusLine"* ]] || false
+  [[ "$output" =~ verdict=RED\ n=([0-9]+) ]] || false
   [ "${BASH_REMATCH[1]}" -ge 70 ]
   run "$REPO/scripts/hook-shebang-lint.sh" --selftest
   [ "$status" -eq 0 ]
@@ -134,7 +134,7 @@ fleet() { # one shared file linked from three dirs, plus one forked real copy
   [ "$status" -eq 1 ]
   run m0070 --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" == *"/bin/bash ~/.claude/hooks/b.sh pre"* ]]
+  [[ "$output" == *"/bin/bash ~/.claude/hooks/b.sh pre"* ]] || false
   run m0070
   [ "$status" -eq 2 ]
   cmp -s "$HOME/.claude/settings.json" "$F/orig.json"
@@ -146,7 +146,7 @@ fleet() { # one shared file linked from three dirs, plus one forked real copy
   run m0070 --confirm settings.json
   [ "$status" -eq 0 ]
   [ "$(printf '%s\n' "$output" | grep -c '^0070: rewrote ')" -eq 2 ]     # shared file + the fork
-  [ -L "$HOME/.claude-next/settings.json" ] && [ -L "$HOME/.claude-secondary/settings.json" ]
+  [ -L "$HOME/.claude-next/settings.json" ] && [ -L "$HOME/.claude-secondary/settings.json" ] || false
   run m0070 --verify
   [ "$status" -eq 0 ]
   [ "$(jq -r .statusLine.command "$HOME/.claude-quaternary/settings.json")" = "/bin/bash ~/.claude/hooks/b.sh status" ]
@@ -157,12 +157,12 @@ fleet() { # one shared file linked from three dirs, plus one forked real copy
   cp "$HOME/.claude/settings.json" "$F/after.json"
   run m0070 --confirm settings.json
   [ "$status" -eq 0 ]
-  [[ "$output" == *"already applied in every config dir"* ]]
+  [[ "$output" == *"already applied in every config dir"* ]] || false
   cmp -s "$HOME/.claude/settings.json" "$F/after.json"
 }
 
 @test "shasum-direct: same digests as /usr/bin/shasum, run by perl, no #! exec" {
-  [ -x /usr/bin/perl ] && [ -r /usr/bin/shasum ] || skip "no perl shasum on this platform"
+  [ -x /usr/bin/perl ] && [ -r /usr/bin/shasum ] || skip "no perl shasum on this platform" || false
   IFS= read -r l < /usr/bin/shasum
   [[ "$l" == '#!/usr/bin/perl'* ]] || skip "/usr/bin/shasum is not the perl script here"
   run /bin/bash -c '. "$1/hooks/lib/shasum-direct.sh"; type -t shasum
@@ -172,7 +172,7 @@ fleet() { # one shared file linked from three dirs, plus one forked real copy
   [ "${lines[1]}" = "$(printf abc | /usr/bin/shasum)" ]
   [ "${lines[2]}" = "$(printf abc | /usr/bin/shasum -a 256)" ]
   run /bin/bash -c '. "$1/hooks/lib/shasum-direct.sh"; set -x; printf abc | shasum >/dev/null' _ "$REPO"
-  [[ "$output" == *"/usr/bin/perl /usr/bin/shasum"* ]]
+  [[ "$output" == *"/usr/bin/perl /usr/bin/shasum"* ]] || false
   # the Stop-path libs pull it in
   run /bin/bash -c '. "$1/hooks/lib/continue-sentinel.sh"; type -t shasum' _ "$REPO"
   [ "$output" = "function" ]

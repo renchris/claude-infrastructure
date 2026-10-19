@@ -247,7 +247,7 @@ _drift_check() { # <settings.json> <event> <registry>  → prints the mismatch, 
   HOME="$ORIG_HOME" /usr/bin/env python3 "$REPO/scripts/hook-interp.py" rewrite "$settings" --root "$REPO" \
     2>/dev/null > "$rewritten"
   run jq -r '.hooks.PreToolUse[] | select(.matcher=="Bash") | .hooks[0].command' "$rewritten"
-  [[ "$output" == /bin/bash* || "$output" == /usr/bin/env* ]]
+  [[ "$output" == /bin/bash* || "$output" == /usr/bin/env* ]] || false
   run _drift_check "$rewritten" PreToolUse  "$REPO/config/hook-chains.d/pretooluse-bash"
   [ "$status" -eq 0 ] || { echo "$output" >&2; false; }
   run _drift_check "$rewritten" PostToolUse "$REPO/config/hook-chains.d/posttooluse-bash"
