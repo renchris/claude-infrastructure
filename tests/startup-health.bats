@@ -10,6 +10,7 @@ setup() {
   LIB="$REPO/hooks/lib/startup-sentinel.sh"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude"
   export CC_STARTUP_HEALTH_DIR="$BATS_TEST_TMPDIR/sh"
+  export CC_ACCOUNTS_BOARD="$BATS_TEST_TMPDIR/board.txt"   # the accounts-board hook's /tmp default
   SID="aaaaaaaa-1111-2222-3333-444444444444"
   S="$CC_STARTUP_HEALTH_DIR/$SID"
 }
