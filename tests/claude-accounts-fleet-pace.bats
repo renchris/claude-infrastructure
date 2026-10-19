@@ -296,6 +296,9 @@ def spy(*a, **k):
     calls.append(a)
     return orig[1](*a, **k)
 ca.fleet_pace_line = spy
+# Inside a Claude session `--readout` also renders the hook-drawn pane copy, a second surface with
+# its own call; the control counts the chat readout alone, so it must not depend on where bats ran.
+os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
 for argv, want in ((["--rank", "general"], 0), (["--route", "general"], 0),
                    (["--rank", "fable"], 0), (["--route", "fable", "--recovery"], 0),
                    (["--readout"], 1)):
