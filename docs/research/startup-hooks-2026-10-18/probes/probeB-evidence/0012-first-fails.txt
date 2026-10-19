@@ -1,0 +1,25 @@
+### arm=first-fails
+--- 0012 output (rc below)
+0012: NOTE — no readable installed track to re-confirm asyncRewake; proceeding.
+cp: $S/home/.claude/settings.json.bak-0012-20261019104906: Permission denied
+0012: $S/home/.claude/settings.json — backup FAILED, not touching it
+0012: $S/home/.claude-next/settings.json — registered asyncRewake on Stop (backup: $S/home/.claude-next/settings.json.bak-0012-20261019104906)
+0012: $S/home/.claude-secondary/settings.json — registered asyncRewake on Stop (backup: $S/home/.claude-secondary/settings.json.bak-0012-20261019104907)
+0012: $S/home/.claude-tertiary/settings.json — registered asyncRewake on Stop (backup: $S/home/.claude-tertiary/settings.json.bak-0012-20261019104907)
+0012: $S/home/.claude-quaternary/settings.json — registered asyncRewake on Stop (backup: $S/home/.claude-quaternary/settings.json.bak-0012-20261019104907)
+rc=1
+--- layout after
+.claude/settings.json: REAL FILE; Stop registrations of mailbox-wake-arm: 0
+.claude-next/settings.json: REAL FILE; Stop registrations of mailbox-wake-arm: 1
+.claude-quaternary/settings.json: REAL FILE; Stop registrations of mailbox-wake-arm: 1
+.claude-secondary/settings.json: REAL FILE; Stop registrations of mailbox-wake-arm: 1
+.claude-tertiary/settings.json: REAL FILE; Stop registrations of mailbox-wake-arm: 1
+--- backups written
+.claude-tertiary/settings.json.bak-0012-20261019104907
+.claude-next/settings.json.bak-0012-20261019104906
+.claude-secondary/settings.json.bak-0012-20261019104907
+.claude-quaternary/settings.json.bak-0012-20261019104907
+--- the registered entry
+[]
+.claude-next (forked) [{"type":"command","command":"~/.claude/hooks/mailbox-wake-arm.sh","timeout":14400,"asyncRewake":true,"rewakeMessage":"📬 Peer mail arrived while you were idle — delivered by the inbox watcher, not typed by you:","rewakeSummary":"📬 peer mail"}]
+

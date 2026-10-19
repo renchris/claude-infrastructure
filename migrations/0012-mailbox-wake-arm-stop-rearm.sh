@@ -1,7 +1,7 @@
 #!/bin/bash
 # migration-class: c10
-# migration-step: register hooks/mailbox-wake-arm.sh ALSO on Stop with asyncRewake so an idle session re-arms its inbox watcher at every boundary instead of going deaf when its birth watcher is spent — it edits settings.json, which is C10
-# migration-run: bash ~/Development/claude-infrastructure/migrations/0012-mailbox-wake-arm-stop-rearm.sh
+# migration-step: migration 0012 — register hooks/mailbox-wake-arm.sh ALSO on Stop with asyncRewake in ~/.claude/settings.json, which every account links to, so an idle session re-arms its inbox watcher at every turn end instead of going deaf once its birth watcher is spent (re-probed on 2.1.293: it does not pause /goal checks). It writes settings.json, which is C10.
+# migration-run: bash ~/Development/claude-infrastructure/migrations/0012-mailbox-wake-arm-stop-rearm.sh --confirm settings.json
 # migration-subject: ~/.claude/hooks/mailbox-wake-arm.sh
 # migration-verify: jq -e 'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.Stop[].hooks[]? | select(((.command // "") | cmd_bare) == "~/.claude/hooks/mailbox-wake-arm.sh")] | length >= 1 and all(.[]; .asyncRewake == true)' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
 # migration-conflict: jq -e 'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.Stop[].hooks[]? | select(((.command // "") | cmd_bare) == "~/.claude/hooks/mailbox-wake-arm.sh")] | length >= 1 and any(.[]; .asyncRewake != true)' "${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json" >/dev/null
@@ -57,11 +57,36 @@
 # Every config file is backed up before it is touched, and the edit is verified BY CONTENT before it
 # replaces the live file — so "operator can revert" is a property of this script, not a promise.
 #
-# WHY IT WRITES EVERY CONFIG DIR. ~/.claude, ~/.claude-next, ~/.claude-secondary, ~/.claude-tertiary
-# and ~/.claude-quaternary are separate REAL files, not symlinks into the checkout, and live sessions
-# run against all of them. Registering in one leaves every session launched against another deaf at
-# exactly the boundary this exists to cover.
+# WHY IT WRITES EVERY CONFIG DIR (original, 2026-08-16). ~/.claude, ~/.claude-next, ~/.claude-secondary,
+# ~/.claude-tertiary and ~/.claude-quaternary are separate REAL files, not symlinks into the checkout,
+# and live sessions run against all of them. Registering in one leaves every session launched against
+# another deaf at exactly the boundary this exists to cover.
+# CORRECTED (2026-10-19): since 0037 the four account files are SYMLINKS to the one real
+# ~/.claude/settings.json, so the per-dir loop was replaced by the 0068 contract: resolve the one real
+# file, refuse a forked fleet (cc-settings-parity), write it once, verify by content. Measured in a
+# scratch HOME (docs/research/startup-hooks-2026-10-18/probes/probeB-RESULT.md): the old loop wrote the
+# shared file once when everything worked, but when its first write failed it registered through each
+# symlink with `mv`, which replaced every link with a real file and forked all four accounts. It also
+# registered a bare `#!` command, which 0070 exists to remove (kernel-memory leak per exec).
+# Re-probed on 2.1.293 (same doc): the goal-deferral predicate reads only the task registry, and an
+# asyncRewake hook never enters it, so this registration does not pause /goal evaluation.
+#
+# Usage: bash migrations/0012-mailbox-wake-arm-stop-rearm.sh --dry-run | --check | --verify
+#        bash migrations/0012-mailbox-wake-arm-stop-rearm.sh --confirm settings.json
+# Exit: 0 applied / already applied / skipped / preflight ok · 1 failure, nothing written · 2 usage ·
+#       3 REFUSED, an account settings.json is still forked (run 0037 first)
 set -uo pipefail
+
+mode=""
+case "${1:-}" in
+  --dry-run) mode=dry ;;
+  --check) mode=check ;;
+  --verify) mode=verify ;;
+  --confirm) [ "${2:-}" = "settings.json" ] || { printf '0012: --confirm must name its target: --confirm settings.json\n' >&2; exit 2; }; mode=apply ;;
+  '') [ -n "${CC_MIGRATION_STATE:-}" ] && mode=apply ;;
+  *) printf '0012: unknown argument %s (use --dry-run, --check, --verify or --confirm settings.json)\n' "$1" >&2; exit 2 ;;
+esac
+[ -n "$mode" ] || { printf '0012: pass --dry-run, --check, --verify or --confirm settings.json\n' >&2; exit 2; }
 
 # shellcheck disable=SC2088  # the tilde is DELIBERATELY literal: this string is stored INTO
 # settings.json, where CC expands it at hook-run time. Every sibling entry is written the same way.
@@ -72,9 +97,16 @@ HOOK_FILE="${CC_CLAUDE_DIR:-$HOME/.claude}/hooks/mailbox-wake-arm.sh"
 TIMEOUT=14400
 REWAKE_MSG='📬 Peer mail arrived while you were idle — delivered by the inbox watcher, not typed by you:'
 REWAKE_SUM='📬 peer mail'
-rc=0
 
 command -v jq >/dev/null 2>&1 || { printf '0012: jq required\n' >&2; exit 1; }
+f="${CC_CLAUDE_DIR:-$HOME/.claude}/settings.json"
+parity="${CC_SETTINGS_PARITY_BIN:-$HOME/.claude/bin/cc-settings-parity}"
+# shellcheck disable=SC2016  # jq programs, not shell
+DEFS='def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); def mine: ((.command // "") | cmd_bare) == $c;'
+if [ "$mode" = verify ]; then
+  jq -e --arg c "$HOOK_CMD" "$DEFS"' [.hooks.Stop[]?.hooks[]? | select(mine)] | length >= 1 and all(.[]; .asyncRewake == true)' "$f" >/dev/null 2>&1
+  exit $?
+fi
 
 # ── precondition 1: the subject must be on the live layer ────────────────────────────────────────
 # Re-derived at CONSUMPTION, not trusted from the header: a migration's premise can rot between
@@ -123,46 +155,53 @@ else
   printf '0012: NOTE — no readable installed track to re-confirm asyncRewake; proceeding.\n' >&2
 fi
 
-for dir in "$HOME"/.claude "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME"/.claude-tertiary "$HOME"/.claude-quaternary; do
-  f="$dir/settings.json"
-  [ -f "$f" ] || continue
+# ── the one shared file (0037): resolve it, refuse a forked fleet, write it once ────────────────────
+[ -f "$f" ] || { printf '0012: %s not found — nothing written\n' "$f" >&2; exit 1; }
+real="$f"
+if [ -L "$f" ]; then t="$(readlink "$f")"; case "$t" in /*) real="$t" ;; *) real="$(dirname "$f")/$t" ;; esac; fi
+jq -e . "$real" >/dev/null 2>&1 || { printf '0012: %s is not valid JSON — nothing written\n' "$real" >&2; exit 1; }
 
-  # Only touch a config that already runs Stop hooks. A settings.json with no Stop array is not a
-  # fleet config, and inventing one here would be a scope this migration never claimed.
-  if ! jq -e '.hooks.Stop | type == "array" and length > 0' "$f" >/dev/null 2>&1; then
-    printf '0012: %s — no Stop array; skipped (not a fleet config)\n' "$f"
-    continue
-  fi
+# Only touch a config that already runs Stop hooks. A settings.json with no Stop array is not a
+# fleet config, and inventing one here would be a scope this migration never claimed.
+if ! jq -e '.hooks.Stop | type == "array" and length > 0' "$real" >/dev/null 2>&1; then
+  printf '0012: %s — no Stop array; skipped (not a fleet config)\n' "$real"
+  exit 0
+fi
+if jq -e --arg c "$HOOK_CMD" "$DEFS"' [.hooks.Stop[].hooks[]? | select(mine)] | length > 0' "$real" >/dev/null 2>&1; then
+  printf '0012: %s — already registered\n' "$real"
+  exit 0
+fi
+"$parity" check >/dev/null 2>&1 || {
+  printf '0012: REFUSED — accounts do not all share %s (%s check failed). Converge with 0037 first.\n' "$f" "$parity" >&2
+  exit 3
+}
+printf '0012: will register %s on Stop (asyncRewake) in %s\n' "$HOOK_CMD" "$real"
+case "$mode" in
+  dry) printf '0012: DRY RUN — nothing written\n'; exit 0 ;;
+  check) printf '0012: CHECK ok — preflight passes, nothing written\n'; exit 0 ;;
+esac
 
-  if jq -e --arg c "$HOOK_CMD" \
-       'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.Stop[].hooks[]?.command] | any(((. // "") | cmd_bare) == $c)' "$f" >/dev/null 2>&1; then
-    printf '0012: %s — already registered\n' "$f"
-    continue
-  fi
-
-  bak="$f.bak-0012-$(date +%Y%m%d%H%M%S)"
-  cp -p "$f" "$bak" || { printf '0012: %s — backup FAILED, not touching it\n' "$f" >&2; rc=1; continue; }
-
-  tmp="$f.tmp-0012-$$"
-  # Append to the FIRST Stop group. Ordering is irrelevant to correctness: the harness BACKGROUNDS
-  # this hook the moment it is dispatched (P-W2a), so it can neither delay a sibling Stop hook nor be
-  # delayed by one — including a sibling that returns decision:"block" (P-W2d).
-  if jq --arg c "$HOOK_CMD" --argjson t "$TIMEOUT" --arg m "$REWAKE_MSG" --arg s "$REWAKE_SUM" \
-       '.hooks.Stop[0].hooks += [{"type":"command","command":$c,"timeout":$t,
-         "asyncRewake":true,"rewakeMessage":$m,"rewakeSummary":$s}]' \
-       "$f" > "$tmp" 2>/dev/null && [ -s "$tmp" ] && jq -e . "$tmp" >/dev/null 2>&1; then
-    # verify the edit BY CONTENT before it replaces the live file — both the command AND the field
-    # that makes it asynchronous, because the command alone would register a turn-BLOCKING hook.
-    if jq -e --arg c "$HOOK_CMD" \
-         'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); [.hooks.Stop[].hooks[]? | select(((.command // "") | cmd_bare) == $c)]
-          | length == 1 and .[0].asyncRewake == true' "$tmp" >/dev/null 2>&1; then
-      mv "$tmp" "$f" && printf '0012: %s — registered asyncRewake on Stop (backup: %s)\n' "$f" "$bak"
-    else
-      rm -f "$tmp"; printf '0012: %s — edit did not verify; left unchanged\n' "$f" >&2; rc=1
-    fi
-  else
-    rm -f "$tmp"; printf '0012: %s — jq edit FAILED; left unchanged\n' "$f" >&2; rc=1
-  fi
-done
-
-exit "$rc"
+bdir="$HOME/.claude/backups/mailbox-wake-arm-stop-0012-$(date +%Y%m%d%H%M%S)"
+mkdir -p "$bdir" && cp -p "$real" "$bdir/settings.json" || { printf '0012: backup FAILED — nothing written\n' >&2; exit 1; }
+tmp="$(dirname "$real")/.settings.json.tmp-0012-$$"
+# Append to the FIRST Stop group. Ordering is irrelevant to correctness: the harness BACKGROUNDS
+# this hook the moment it is dispatched (P-W2a), so it can neither delay a sibling Stop hook nor be
+# delayed by one — including a sibling that returns decision:"block" (P-W2d). The command names its
+# interpreter (0070): a bare `#!` exec leaks kernel memory on macOS 15.7.9, at every turn end here.
+if ! jq --arg c "/bin/bash $HOOK_CMD" --argjson t "$TIMEOUT" --arg m "$REWAKE_MSG" --arg s "$REWAKE_SUM" \
+     '.hooks.Stop[0].hooks += [{"type":"command","command":$c,"timeout":$t,
+       "asyncRewake":true,"rewakeMessage":$m,"rewakeSummary":$s}]' "$real" > "$tmp" 2>/dev/null \
+   || ! jq -e . "$tmp" >/dev/null 2>&1; then
+  rm -f "$tmp"; printf '0012: jq edit FAILED — nothing written\n' >&2; exit 1
+fi
+# BY CONTENT: exactly one entry, and asynchronous (the command alone would register a turn-BLOCKING
+# hook); with that entry removed, the documents are identical.
+norm() { jq -S --arg c "$HOOK_CMD" "$DEFS"' .hooks.Stop |= map(.hooks |= map(select(mine | not)))' "$1"; }
+if ! jq -e --arg c "$HOOK_CMD" "$DEFS"' [.hooks.Stop[].hooks[]? | select(mine)] | length == 1 and .[0].asyncRewake == true' "$tmp" >/dev/null 2>&1 \
+   || [ "$(norm "$real")" != "$(norm "$tmp")" ]; then
+  rm -f "$tmp"; printf '0012: edit did not verify by content — nothing written\n' >&2; exit 1
+fi
+mv "$tmp" "$real" || { rm -f "$tmp"; printf '0012: write FAILED — nothing written\n' >&2; exit 1; }
+printf '0012: registered asyncRewake on Stop for every account. Backup: %s/settings.json. Takes effect in NEW sessions.\n' "$bdir"
+"$parity" check >/dev/null 2>&1 || printf '0012: WARNING — cc-settings-parity check now fails; restore with: cp -p %s/settings.json %s\n' "$bdir" "$real" >&2
+exit 0

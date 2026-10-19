@@ -1,0 +1,20 @@
+### arm=happy
+--- 0012 output (rc below)
+0012: NOTE — no readable installed track to re-confirm asyncRewake; proceeding.
+0012: $S/home/.claude/settings.json — registered asyncRewake on Stop (backup: $S/home/.claude/settings.json.bak-0012-20261019104906)
+0012: $S/home/.claude-next/settings.json — already registered
+0012: $S/home/.claude-secondary/settings.json — already registered
+0012: $S/home/.claude-tertiary/settings.json — already registered
+0012: $S/home/.claude-quaternary/settings.json — already registered
+rc=0
+--- layout after
+.claude/settings.json: REAL FILE; Stop registrations of mailbox-wake-arm: 1
+.claude-next/settings.json: symlink -> $S/home/.claude/settings.json; Stop registrations of mailbox-wake-arm: 1
+.claude-quaternary/settings.json: symlink -> $S/home/.claude/settings.json; Stop registrations of mailbox-wake-arm: 1
+.claude-secondary/settings.json: symlink -> $S/home/.claude/settings.json; Stop registrations of mailbox-wake-arm: 1
+.claude-tertiary/settings.json: symlink -> $S/home/.claude/settings.json; Stop registrations of mailbox-wake-arm: 1
+--- backups written
+.claude/settings.json.bak-0012-20261019104906
+--- the registered entry
+[{"type":"command","command":"~/.claude/hooks/mailbox-wake-arm.sh","timeout":14400,"asyncRewake":true,"rewakeMessage":"📬 Peer mail arrived while you were idle — delivered by the inbox watcher, not typed by you:","rewakeSummary":"📬 peer mail"}]
+

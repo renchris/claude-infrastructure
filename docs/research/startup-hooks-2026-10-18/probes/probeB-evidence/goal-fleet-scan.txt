@@ -1,0 +1,15 @@
+sessions with goal_status in 48h: 124
+with >=1 evaluation inside birth-watcher window before any mail wake: 7
+total such evaluations: 23
+('d6b45ad8', 13, 13, True, 62.4)
+('3e929a81', 11, 4, True, 75.4)
+('9240c6a9', 2, 2, True, 1.4)
+('a1db6aaa', 2, 1, True, 22.7)
+('a6fe7087', 1, 1, True, 81.8)
+('6237b592', 1, 1, True, 156.0)
+('6237b592', 1, 1, True, 156.0)
+('81f5f625', 2, 0, True, None)
+('dabcece5', 0, 0, True, None)
+('b90de804', 0, 0, True, None)
+('c5666e57', 0, 0, True, None)
+('3d6ef109', 0, 0, True, None)

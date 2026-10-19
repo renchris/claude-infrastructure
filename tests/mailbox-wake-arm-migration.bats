@@ -128,85 +128,147 @@ count_stop() { # <config-dir> → how many Stop wake-arm entries
 # The guard precondition is therefore an assertion about a FILE THIS SCRIPT DOES NOT SHIP, which is
 # the only shape that survives a partial converge of a symlink farm.
 
+# CORRECTED 2026-10-19: since 0037 the account settings.json files are SYMLINKS to the one real
+# ~/.claude/settings.json, so 0012 now follows the 0068 contract (one real file, parity refusal,
+# --confirm, verify by content). Every 0012 test below runs on that shared layout via shared12.
+shared12() {
+  mkdir -p "$HOME/.claude/bin"
+  ln -sf "$REPO/bin/cc-settings-parity" "$HOME/.claude/bin/cc-settings-parity"
+  unset CC_SETTINGS_PARITY_BIN CC_PARITY_CANONICAL CC_PARITY_ACCOUNTS_JSON CC_MIGRATION_STATE
+  CC_PARITY_DIRS=""
+  for a in next secondary tertiary quaternary; do
+    mkdir -p "$HOME/.claude-$a"; rm -f "$HOME/.claude-$a/settings.json"
+    ln -s "$HOME/.claude/settings.json" "$HOME/.claude-$a/settings.json"
+    CC_PARITY_DIRS="${CC_PARITY_DIRS:+$CC_PARITY_DIRS:}$HOME/.claude-$a"
+  done
+  export CC_PARITY_DIRS
+}
+links_intact() {
+  for a in next secondary tertiary quaternary; do [ -L "$HOME/.claude-$a/settings.json" ] || return 1; done
+}
+
 @test "0012 declares its migration class (an undeclared class is a hard error, never a default)" {
   grep -q '^# migration-class: c10$' "$MIG12" || false
 }
 
-@test "0012 declares the operator step and the exact command to paste" {
+@test "0012 declares the operator step and the exact command to paste, with --confirm" {
   grep -q '^# migration-step: ' "$MIG12" || false
-  grep -q '^# migration-run: ' "$MIG12" || false
+  grep -q '^# migration-run: bash .*0012-mailbox-wake-arm-stop-rearm.sh --confirm settings.json$' "$MIG12" || false
 }
 
-@test "0012 registers the hook on STOP in every FLEET config dir" {
-  run bash "$MIG12"
+@test "0012 without --confirm writes nothing (bare, --dry-run, --check)" {
+  shared12
+  before="$(cat "$HOME/.claude/settings.json")"
+  run bash "$MIG12"; [ "$status" -eq 2 ]
+  run bash "$MIG12" --dry-run; [ "$status" -eq 0 ]
+  run bash "$MIG12" --check; [ "$status" -eq 0 ]
+  [ "$(cat "$HOME/.claude/settings.json")" = "$before" ]
+}
+
+@test "0012 registers on STOP once in the shared file; every account sees it and stays LINKED" {
+  shared12
+  run bash "$MIG12" --verify; [ "$status" -ne 0 ]
+  run bash "$MIG12" --confirm settings.json
   [ "$status" -eq 0 ]
   [ "$(count_stop "$HOME/.claude")" = "1" ]
   [ "$(count_stop "$HOME/.claude-tertiary")" = "1" ]
+  links_intact
+  run bash "$MIG12" --verify; [ "$status" -eq 0 ]
 }
 
-@test "0012 registers it ASYNC — a synchronous entry would wedge every turn end for 14400s" {
-  bash "$MIG12" >/dev/null 2>&1
+@test "0012 registers it ASYNC with an explicit interpreter — never a bare #! exec at every turn end" {
+  shared12
+  bash "$MIG12" --confirm settings.json >/dev/null 2>&1
   run entry_stop "$HOME/.claude"
   printf '%s' "$output" | jq -e '.asyncRewake == true' >/dev/null || false
   printf '%s' "$output" | jq -e '.timeout == 14400' >/dev/null || false
+  # shellcheck disable=SC2016  # jq program, not shell
+  printf '%s' "$output" | jq -e '.command == "/bin/bash ~/.claude/hooks/mailbox-wake-arm.sh"' >/dev/null || false
 }
 
 @test "0012 sets the operator-facing labels the harness renders on a wake" {
-  bash "$MIG12" >/dev/null 2>&1
+  shared12
+  bash "$MIG12" --confirm settings.json >/dev/null 2>&1
   run entry_stop "$HOME/.claude"
   printf '%s' "$output" | jq -e '.rewakeMessage | length > 0' >/dev/null || false
   printf '%s' "$output" | jq -e '.rewakeSummary | length > 0' >/dev/null || false
 }
 
 @test "0012 is IDEMPOTENT — a second run adds nothing and still exits 0" {
-  bash "$MIG12" >/dev/null 2>&1
-  run bash "$MIG12"
+  shared12
+  bash "$MIG12" --confirm settings.json >/dev/null 2>&1
+  after="$(cat "$HOME/.claude/settings.json")"
+  run bash "$MIG12" --confirm settings.json
   [ "$status" -eq 0 ]
   printf '%s' "$output" | grep -q 'already registered' || false
-  [ "$(count_stop "$HOME/.claude")" = "1" ]
+  [ "$(cat "$HOME/.claude/settings.json")" = "$after" ]
+}
+
+@test "0012 REFUSES a forked fleet untouched" {
+  shared12
+  rm "$HOME/.claude-next/settings.json"
+  jq '.env = {B:"2"}' "$HOME/.claude/settings.json" > "$HOME/.claude-next/settings.json"
+  before="$(cat "$HOME/.claude/settings.json")"
+  run bash "$MIG12" --confirm settings.json
+  [ "$status" -eq 3 ]
+  [ "$(cat "$HOME/.claude/settings.json")" = "$before" ]
+}
+
+@test "0012 whose write cannot happen never writes through a symlink (the old loop forked all four)" {
+  shared12
+  chmod a-w "$HOME/.claude"
+  run bash "$MIG12" --confirm settings.json
+  chmod u+w "$HOME/.claude"
+  [ "$status" -eq 1 ]
+  links_intact
+  [ "$(count_stop "$HOME/.claude")" = "0" ]
 }
 
 @test "0012 REFUSES when the subject carries no CLAIM GUARD — one watcher per idle boundary" {
   # The registration is only safe in the same breath as the guard. A live layer that took the
   # settings edit but not the hook would wake the model once per accumulated watcher, which is the
   # exact turn-burn W2 exists to make cheap.
+  shared12
   grep -v '_armed_already' "$REPO/hooks/mailbox-wake-arm.sh" > "$HOME/.claude/hooks/mailbox-wake-arm.sh"
   chmod +x "$HOME/.claude/hooks/mailbox-wake-arm.sh"
-  run bash "$MIG12"
+  run bash "$MIG12" --confirm settings.json
   [ "$status" -eq 1 ]
   printf '%s' "$output" | grep -q 'no claim guard' || false
   [ "$(count_stop "$HOME/.claude")" = "0" ]
 }
 
 @test "0012 REFUSES when the adapter is not on the live layer (a registered no-op reads GREEN)" {
+  shared12
   rm -f "$HOME/.claude/hooks/mailbox-wake-arm.sh"
-  run bash "$MIG12"
+  run bash "$MIG12" --confirm settings.json
   [ "$status" -eq 1 ]
   printf '%s' "$output" | grep -q 'NOT registered' || false
   [ "$(count_stop "$HOME/.claude")" = "0" ]
 }
 
 @test "0012 SKIPS a config with no Stop array rather than inventing one" {
-  mkdir -p "$HOME/.claude-quaternary"
-  printf '{"hooks":{"SessionStart":[{"hooks":[]}]}}' > "$HOME/.claude-quaternary/settings.json"
-  run bash "$MIG12"
+  shared12
+  printf '{"hooks":{"SessionStart":[{"hooks":[]}]}}' > "$HOME/.claude/settings.json"
+  run bash "$MIG12" --confirm settings.json
   [ "$status" -eq 0 ]
   printf '%s' "$output" | grep -q 'not a fleet config' || false
-  run jq -e '.hooks | has("Stop")' "$HOME/.claude-quaternary/settings.json"
+  run jq -e '.hooks | has("Stop")' "$HOME/.claude/settings.json"
   [ "$status" -ne 0 ]
 }
 
 @test "0012 backs up before it edits, and never disturbs a sibling Stop hook" {
-  bash "$MIG12" >/dev/null 2>&1
-  run bash -c "ls '$HOME/.claude/settings.json.bak-0012-'* 2>/dev/null | wc -l"
+  shared12
+  bash "$MIG12" --confirm settings.json >/dev/null 2>&1
+  run bash -c "ls '$HOME/.claude/backups/'mailbox-wake-arm-stop-0012-*/settings.json 2>/dev/null | wc -l"
   [ "$(printf '%s' "$output" | tr -d ' ')" = "1" ]
   run jq '[.hooks.Stop[].hooks[]? | select(.command|test("session-continue"))] | length' "$HOME/.claude/settings.json"
   [ "$output" = "1" ]
 }
 
 @test "0012 leaves the SessionStart registration alone — the two halves are independent" {
+  shared12
   bash "$MIG" >/dev/null 2>&1
-  bash "$MIG12" >/dev/null 2>&1
+  bash "$MIG12" --confirm settings.json >/dev/null 2>&1
   [ "$(count "$HOME/.claude")" = "1" ]
   [ "$(count_stop "$HOME/.claude")" = "1" ]
   run jq -e . "$HOME/.claude/settings.json"
