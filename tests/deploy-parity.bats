@@ -2181,9 +2181,14 @@ _rawdeploy_extract() {  # $1=install.sh  $2=out TSV: line \t kind \t srcclass \t
   # VARIABLE source #5: the selected variant's rule set, `run cp "$_rsrc"` (INSTRUCTION_BUDGET.md,
   # the 473335c307b2 follow-on). Loop-driven like $_variant; its for-header is scored by CLASS
   # COVERAGE via the assert's `CLAUDE.rules.*.md)` arm.
-  [ "$DVAR" -eq 5 ]
+  # VARIABLE source #6: the mods DIRECTORY link, `run ln -sfn "$msrc"` (2026-10-19,
+  # docs/research/accounts-responsive-mod-2026-10-19/). vendor's shape for a harder reason: a
+  # per-file mod folder does not load. Loop-driven; its for-header is scored by CLASS COVERAGE via
+  # the assert's `mods/*)` arm, and the assert's mods dir-link leg checks the link itself.
+  [ "$DVAR" -eq 6 ]
   [ "$(awk -F'\t' '$2=="DEPLOY" && $3=="VARIABLE"{print $1}' "$RAW" \
-       | while IFS= read -r n; do sed -n "${n}p" "$MAP"; done | grep -c 'ln -sfn')" -eq 2 ]
+       | while IFS= read -r n; do sed -n "${n}p" "$MAP"; done | grep -c 'ln -sfn')" -eq 3 ]
+  [ "$(awk -F'\t' '$2=="DEPLOY" && $3=="VARIABLE" && $4=="$msrc"{n++} END{print n+0}' "$RAW")" -eq 1 ]
   [ "$(awk -F'\t' '$2=="DEPLOY" && $3=="VARIABLE" && $4=="$pvsrc"{n++} END{print n+0}' "$RAW")" -eq 1 ]
   [ "$(awk -F'\t' '$2=="DEPLOY" && $3=="VARIABLE" && $4=="$_variant"{n++} END{print n+0}' "$RAW")" -eq 1 ]
   [ "$(awk -F'\t' '$2=="DEPLOY" && $3=="VARIABLE" && $4=="$_instr_src"{n++} END{print n+0}' "$RAW")" -eq 1 ]
