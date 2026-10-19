@@ -339,10 +339,13 @@ if [ "$MODE" = "session-start" ] && command -v mailbox_migrate >/dev/null 2>&1; 
   _adopted=0
   for _f in "$_mdir"/*.forward; do
     [ -f "$_f" ] || continue                                   # unmatched glob
-    _tgt="$(head -n1 "$_f" 2>/dev/null | tr -dc '0-9A-Fa-f-')"
+    # Builtins only (startup-hooks-2026-10-18 README §2 #28): `head | tr` per file was 2 spawns × every
+    # forward on every SessionStart (11 live forwards measured ⇒ 22+ spawns on the startup path).
+    _tgt=""; IFS= read -r _tgt < "$_f" 2>/dev/null || [ -n "$_tgt" ] || continue
+    _tgt="${_tgt//[!0-9A-Fa-f-]/}"
     # a forward may name our PANE (legacy, pre-M1) or our SESSION (post-M1) — honour both
     { [ "$_tgt" = "$own_uuid" ] || [ "$_tgt" = "$own_pane" ]; } || continue
-    _pred="$(basename "$_f" .forward)"
+    _pred="${_f##*/}"; _pred="${_pred%.forward}"
     [ "$_pred" = "$own_uuid" ] && continue                     # paranoia: never adopt from ourselves
     _n="$(mailbox_migrate "$_pred" "$own_uuid" 2>/dev/null || true)"
     case "$_n" in ''|*[!0-9]*) _n=0 ;; esac
@@ -922,25 +925,32 @@ ctx="$(printf '📬 peer mail ◀ %s new %s from other Claude sessions%s\n%s  �
 # that page REAL pages — HANDOFF-HUSK-PANE / REAPER SURFACE / desk-sweep) is COUNTED but not NAMED,
 # so a burst of test traffic can never crowd out one real peer report. Counting rather than hiding
 # it matters: "0 peer messages, 12 fixture" is itself the signal that a suite is leaking.
-_names="$(printf '%s\n' "$body" \
-  | grep -v 'HANDOFF-HUSK-PANE\|REAPER SURFACE\|\[desk-sweep\]' \
-  | sed -n 's/^[0-9TZ:+-]* \[\([^]]*\)\].*/\1/p' \
-  | awk '!seen[$0]++' | head -3 | paste -sd, - 2>/dev/null)"
-_noise="$(printf '%s\n' "$body" | grep -c 'HANDOFF-HUSK-PANE\|REAPER SURFACE\|\[desk-sweep\]' || true)"
-case "$_noise" in ''|*[!0-9]*) _noise=0 ;; esac
-_sig=$(( n - _noise )); [ "$_sig" -lt 0 ] && _sig=0
-if [ "$_sig" -gt 0 ]; then
-  msg="📬 peer mail ◀ ${_sig} peer message(s)${_names:+ from ${_names}}"
-  [ "$_noise" -gt 0 ] && msg="${msg} · ${_noise} fixture/lifecycle suppressed"
-  msg="${msg} — full text: cc-mail"
-else
-  msg="📬 peer mail ◀ ${n} lifecycle/fixture message(s), no peer traffic — cc-mail --all"
-fi
+# The sed digest is the FALLBACK, so it is built only when the headline renderer returned nothing
+# (it was always computed and then overwritten: 5 spawns per drain — README §2 #28).
+case "$_dg" in
+  '📬 peer mail ◀ '*) msg="$_dg" ;;
+  *)
+    _names="$(printf '%s\n' "$body" \
+      | grep -v 'HANDOFF-HUSK-PANE\|REAPER SURFACE\|\[desk-sweep\]' \
+      | sed -n 's/^[0-9TZ:+-]* \[\([^]]*\)\].*/\1/p' \
+      | awk '!seen[$0]++' | head -3 | paste -sd, - 2>/dev/null)"
+    _noise="$(printf '%s\n' "$body" | grep -c 'HANDOFF-HUSK-PANE\|REAPER SURFACE\|\[desk-sweep\]' || true)"
+    case "$_noise" in ''|*[!0-9]*) _noise=0 ;; esac
+    _sig=$(( n - _noise )); [ "$_sig" -lt 0 ] && _sig=0
+    if [ "$_sig" -gt 0 ]; then
+      msg="📬 peer mail ◀ ${_sig} peer message(s)${_names:+ from ${_names}}"
+      [ "$_noise" -gt 0 ] && msg="${msg} · ${_noise} fixture/lifecycle suppressed"
+      msg="${msg} — full text: cc-mail"
+    else
+      msg="📬 peer mail ◀ ${n} lifecycle/fixture message(s), no peer traffic — cc-mail --all"
+    fi
+    ;;
+esac
 # The headline digest supersedes the name list above when the renderer is present: it names the
 # ORIGIN sender (the sed above reads the first bracket, which is `forwarded:<box>` for a forward),
 # and carries the first message's pane, session title, sent time, lag and title. Still one line, and
 # still no body beyond that ≤72-char title. The sed digest stays as the fallback for a missing lib.
-case "$_dg" in '📬 peer mail ◀ '*) msg="$_dg" ;; esac
+
 # A custody discharge is a LEDGER state change the operator's close surface reads, so it belongs on
 # the human line as well as the model's — appended to whichever digest was built, because a peer's
 # return ping can arrive alongside either real peer traffic or none.

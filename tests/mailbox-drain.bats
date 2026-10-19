@@ -1431,3 +1431,21 @@ count_grep_stub() { # → $CG_BIN on PATH; env STUB_INBOX STUB_SEEN STUB_LOG [ST
   [[ "$output" == *"YOUR /goal WAS SKIPPED"* ]] || false
   [[ "$output" != *"$(printf 'x%.0s' $(seq 1 121))"* ]] || false
 }
+
+# ── unit 5.6 (startup-hooks-2026-10-18): the builtin .forward read keeps the old sanitizing ──────
+@test "5.6: a .forward whose target line carries CR/whitespace junk is still adopted" {
+  local PRED="BBBBBBBB-1111-2222-3333-444444444444"
+  printf 'inherited via crlf\n' > "$CC_MAILBOX_DIR/$PRED.md"
+  printf ' %s\r\noccupant=x\n' "$UUID" > "$CC_MAILBOX_DIR/$PRED.forward"
+  run bash -c "echo '{}' | ITERM_SESSION_ID='w0t0p0:$UUID' '$DRAIN' session-start"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext' | grep -q 'inherited via crlf'
+}
+
+@test "5.6: a .forward with no trailing newline is still read" {
+  local PRED="BBBBBBBB-1111-2222-3333-444444444444"
+  printf 'inherited no-eol\n' > "$CC_MAILBOX_DIR/$PRED.md"
+  printf '%s' "$UUID" > "$CC_MAILBOX_DIR/$PRED.forward"
+  run bash -c "echo '{}' | ITERM_SESSION_ID='w0t0p0:$UUID' '$DRAIN' session-start"
+  printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext' | grep -q 'inherited no-eol'
+}
