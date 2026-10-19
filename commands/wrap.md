@@ -173,7 +173,7 @@ shape-missing close, latched + capped):
 
 Line 1 is the verdict, led by its own glyph: ✅ on a yes, ❌ on a no; leave one blank line under it.
 Line 2 is the rung readout's glyph and state clause, verbatim, with your own clause in place of its
-tail. An honest `❌ Good to close: no — <what remains + who owns it>` satisfies the contract; naming
+tail. An honest `❌ Good to close: no — <what remains + who drives it>` satisfies the contract; naming
 what remains is not a hedge, a both-ways answer is (D3).
 
 ## The act line (CLOSE_SCANNABILITY W2, 2026-08-23)

@@ -176,7 +176,7 @@ close_shape_ok() {
 # close_shape_ok "$(close_shape_template)" is still rc 1.)
 close_shape_template() {
   cat <<'TPL'
-<S2 line 1, led by the verdict's own glyph — ✅ on a yes, ❌ on a no> Good to close: <yes — nothing of mine is open; follow-on: <filed ids, each expanded in plain English|none> | no — <what remains + who owns it>>
+<S2 line 1, led by the verdict's own glyph — ✅ on a yes, ❌ on a no> Good to close: <yes — nothing drivable is open; follow-on: <filed ids, each expanded in plain English|none> | no — <what remains + who drives it>>
 <S1 line 2 = wrap-ledger READOUT's rung glyph and state clause verbatim, then YOUR one clause naming what the work was (or expanding the count the ledger could only count)>
 <S3, only when the operator must act: the run-this marker line, then the one literal command — see close_act_template>
 <then AT MOST three supporting lines, one fact each: S4 what is now true against the frozen scope · S5 the sha or doc path that HOLDS what this close dropped · S6 what is theirs, NAMED not counted>

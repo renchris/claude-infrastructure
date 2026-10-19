@@ -557,8 +557,8 @@ gate can only ever REFUTE a false done and nothing ever AFFIRMED a true one):
   path with `/wrap`): an ORIGIN session (no fired-peer stamp — `hooks/lib/origin-identity.sh`)
   closing genuine completion (✅/👤) after real written work this session must answer, mechanically
   matched, **two** things, **verdict first**: line 1 is the verdict, led by its own glyph —
-  `✅ Good to close: yes — nothing of mine is open; follow-on: <filed ids|none>` or
-  `❌ Good to close: no — <what remains + who owns it>` — and line 2 relays the ledger's own
+  `✅ Good to close: yes — nothing drivable is open; follow-on: <filed ids|none>` or
+  `❌ Good to close: no — <what remains + who drives it>` — and line 2 relays the ledger's own
   **rung glyph** and state clause (`line-1-rung` accepts the glyph there). An honest no satisfies
   (the contract is that the question is ANSWERED; hedging stays D3's defect, and naming what
   remains is not a hedge). A no under a line 1 that opens with a done reading (✅, complete, done,
@@ -924,9 +924,9 @@ line is line 2; with none due it is line 1.
 round-trip. So does a close whose line 1 read *"All five resolved — close whenever you like"* and
 whose last paragraph introduced *"Five follow-ons sit in the backlog queue"*: measured, and the
 operator still replied *"Are we good to close?"*. If something is parked or is theirs, **that IS the
-rung** (`📦` / `👤`); if it is immaterial it does not appear in the S1 line at all. Never both — and
-anything that would withdraw the assertion goes in S2's `follow-on:` clause, *beside* it, never below
-it. A plain `Good to close: no — <what remains + who owns it>` is not a hedge: it is one verdict,
+rung** (`📦` / `👤`); if it is immaterial it does not appear in the S1 line at all. Never both. Unfiled work
+the Follow-On Gate passes that nobody drives makes S2 a no, "research only" or not (on 2026-10-18 a
+yes carried six undriven implementation waves in its `follow-on:`). A plain `Good to close: no — <what remains + who drives it>` is not a hedge: it is one verdict,
 and the remainder is its content. **It must carry an idea, not a category:** *"205 manual steps"* names the pile and says nothing —
 the blank assertion Minto kills with *"'There are three problems' tells the kind, not the idea"*
 (Ch 7 p. 94). *"12 runnable now, 195 need your call"* is the same facts made into a conclusion, and it
@@ -941,7 +941,7 @@ of closes today; a 173-word close with `✅` at line 1 whose literal last line r
 yes — complete, landed, no loose ends; follow-on: none.` drew the operator's entire next message,
 **"Good to close?"**. A rendered certificate is no substitute either — `operator-readout.sh:1254`
 already prints `✅ SAFE TO CLOSE — nothing is left on this side.` at every certified close, and **107
-of 403 `✅` closes still drew a re-ask.** An honest `Good to close: no — <what remains + who owns it>`
+of 403 `✅` closes still drew a re-ask.** An honest `Good to close: no — <what remains + who drives it>`
 satisfies equally; the contract is that the question is ANSWERED. **A done-reading line above a `no`
 defeats it** (operator screenshot, 2026-10-10): two closes side by side both opened `✅ …`; one's
 next line said `Good to close: no`, and at a glance both read yes. Lines 1 and 2 render as one
@@ -979,7 +979,7 @@ and stays counted: it renders as one `◆` line in the `OPERATOR ▸` block carr
 command, and re-prosing it is the defect that block exists to prevent. Saying what is *theirs* is the
 only protective feature measured (−6.9pp, p = 0.029) **and** the one fact `/wrap` can never retrieve
 (it reports `Blocked on you: unknown — session id unresolvable`), so it may never be dropped. Omit S6
-when nothing is theirs; S2's `follow-on:` clause discharges it.
+when nothing is theirs.
 
 🚨 **Every identifier is expanded at first use in that same message — and a label is never the subject
 of a line.** The largest measured effect on this surface: ≥2 opaque hex ids → **49.2% vs 33.6%**

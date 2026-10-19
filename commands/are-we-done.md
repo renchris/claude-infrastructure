@@ -37,7 +37,7 @@ two paragraphs of process has already cost the round-trip this command exists to
 Emit exactly this shape. Nothing above line 1, no preamble, no restatement of the question:
 
 ```
-✅ Good to close: yes — nothing of mine is open; follow-on: <filed ids | none>
+✅ Good to close: yes — nothing drivable is open; follow-on: <filed ids | none>
 
 <rung glyph> <state clause> — <one clause naming what the work WAS>
 ▶ Run this:                          ← ONLY if a command is genuinely theirs to run
@@ -46,7 +46,7 @@ Working | Idling — <cause, one clause>
 Mine this session: <what THIS session filed or created, named | nothing unfiled>
 ```
 
-On a `no`, line 1 is `❌ Good to close: no — <which check, and who owns it>`; the rung line stays
+On a `no`, line 1 is `❌ Good to close: no — <which check, and who drives it>`; the rung line stays
 line 2. A `✅` or `👤` never opens a `no`.
 
 **Report the verdict, NOT the audit trail.** You run every check below; you SHOW a check only when
@@ -57,8 +57,9 @@ asked what you know. A green check is worth zero words.
 `yes` requires ALL of: the rung is `✅` (or `👤` with every step FILED, not prosed) · clean tree ·
 landed verified **by content** (`git ls-tree origin/main -- <your paths>`, never by a commit
 count — a sibling's rebase reads 0 and proves nothing) · your diff's gates ran green THIS turn ·
-frozen-DoD remainder 0 · custody carries no row with YOUR marker. Any one unknown ⇒
-`Good to close: no — <which check, and who owns it>`. Never hedge a `yes` with a trailing caveat:
+frozen-DoD remainder 0 · custody carries no row with YOUR marker · no unfiled work the Follow-On
+Gate passes that nobody drives, "research only" or not. Any one unknown ⇒
+`Good to close: no — <which check, and who drives it>`. Never hedge a `yes` with a trailing caveat:
 if something is parked or theirs, that IS the rung, and it belongs on the rung line.
 
 Inside a research program, the program's verdict (the `Program:` line above) is relayed separately

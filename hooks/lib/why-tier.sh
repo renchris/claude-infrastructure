@@ -87,9 +87,9 @@ The ban is at DOCUMENT scale, not sentence scale. A close whose line 1 read "All
 close whenever you like" and whose last paragraph introduced "Five follow-ons sit in the backlog
 queue" was measured, and the operator still replied "Are we good to close?".
 If something is parked or is theirs, THAT IS THE RUNG (📦 / 👤). If it is immaterial it does not
-appear in the rung line at all. Anything that would withdraw the assertion goes in the `follow-on:`
-clause of the Good-to-close line — beside the verdict, never below it. A plain
-`Good to close: no — <what remains + who owns it>` is not a hedge: one verdict, and the remainder is
+appear in the rung line at all. Unfiled work the Follow-On Gate passes that nobody drives makes the
+verdict a NO, "research only" or not; `follow-on:` holds only filed ids, each with its gloss. A plain
+`Good to close: no — <what remains + who drives it>` is not a hedge: one verdict, and the remainder is
 its content.
 WHY
     ;;
@@ -169,8 +169,8 @@ WHY
 SHAPE — the ORIGIN close contract (hooks/lib/close-shape.sh; one code path with /wrap).
 An ORIGIN session (no fired-peer stamp — hooks/lib/origin-identity.sh) closing genuine completion
 (✅ / 👤) after real written work must answer, mechanically matched, TWO things:
-  1. line 1 is the verdict, led by its own glyph: `✅ Good to close: yes — nothing of mine is
-     open; follow-on: <filed ids|none>` or `❌ Good to close: no — <what remains + who owns it>`.
+  1. line 1 is the verdict, led by its own glyph: `✅ Good to close: yes — nothing drivable is
+     open; follow-on: <filed ids|none>` or `❌ Good to close: no — <what remains + who drives it>`.
      The contract is that the question is ANSWERED, not that the answer is yes.
   2. line 2 carries the ledger's own RUNG GLYPH — run `scripts/wrap-ledger.sh --machine`, take
      READOUT, copy its glyph and state clause verbatim, and replace only the tail with one clause
