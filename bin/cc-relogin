@@ -320,15 +320,21 @@ def live_sessions(config_dir: str) -> int:
 
 
 def session_count(info: dict[str, Any], row: dict[str, Any]) -> tuple[int, str]:
-    """-> (k, source). ps first; when ps fails, the native census claude-accounts already put on
-    the row (`k_native`) — the count the router itself routes on. -1 only when both are blind.
-    The fallback can lag by one census pass, and it can only matter past the live-ok deadline or
-    when it reads 0; reading 0 it lets the k==0 path run exactly as a clean ps would."""
+    """-> (k, source). The higher of ps and the native census claude-accounts already put on the
+    row (`k_native`, the count the router itself routes on); whichever one exists when the other
+    does not; -1 only when both are blind. The max is the Phase 3 ruling (2026-10-19,
+    docs/plans/ACCOUNTS_BOARD_FRESHNESS.md § Phase 3): both instruments fail by undercounting, and
+    an undercount opens this gate. `k_native` can lag by one census pass, so it can read a session
+    that just ended; that only defers a renewal by a pass. No `k_native` (`census: ps` mode, or the
+    rollback that strips it) leaves ps alone, as before."""
     k = live_sessions(info.get("config_dir", ""))
-    if k >= 0:
-        return k, "ps"
     n = row.get("k_native")
-    if isinstance(n, int) and not isinstance(n, bool) and n >= 0:
+    has_n = isinstance(n, int) and not isinstance(n, bool) and n >= 0
+    if k >= 0:
+        if has_n and n > k:
+            return n, f"k_native (above ps={k})"
+        return k, "ps"
+    if has_n:
         return n, "k_native (ps failed)"
     return -1, "unknown (ps failed, no k_native on the row)"
 

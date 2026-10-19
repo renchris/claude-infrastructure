@@ -7,7 +7,8 @@
 # `concurrency-unmeasured`, and the launcher fell back to its pinned account. One census serves all
 # four accounts, so a starved ps is fleet-wide by construction. The native census reads argv only
 # for claude-shaped processes (354 ms against ps's 9,285 ms, same pid set) and the router may charge
-# it as k_src=panes-native — while row["k"] and heal's k_live stay ps-only until the Phase 3 soak.
+# it as k_src=panes-native. Since the Phase 3 ruling (2026-10-19) heal's k_live reads the higher of
+# ps and native (gate_counts); row["k"] stays ps-only (C6).
 #
 # Hermetic: scratch SSOT, HOME, logs, util/assign/route stores and local dir under BATS_TEST_TMPDIR.
 # The libproc lister, argv reader and path reader are stubbed through their seams in every case
@@ -311,7 +312,7 @@ def probe(c, acct, kc, k_live, ledger, prev, no_heal):
              "fable_reset_h": 24.0, "credits_on": False}, None)
 ca.probe_account = probe
 rows = ca.collect(cfg)
-assert seen == {"a1": None, "a2": None, "next": None}, seen          # heal sees k_live None
+assert seen == {"a1": 1, "a2": 2, "next": 0}, seen       # Phase 3: the heal gate reads native
 assert all(r["k"] is None and "k_stale" not in r for r in rows), rows
 assert [r["k_native"] for r in rows] == [1, 2, 0], rows
 assert all(ca.k_src(r) == "panes-native" for r in rows)
@@ -443,6 +444,84 @@ t0 = time.monotonic()
 assert ca.concurrency(cfg) is None
 assert time.monotonic() - t0 < 3, time.monotonic() - t0
 assert "concurrency: ps UNAVAILABLE (TimeoutExpired" in open(ca.LOG_PATH).read()
+print("OK")
+'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]]
+}
+
+NAT='
+def mk_nat(counts):
+    names = list(counts)
+    n = ca._Census(dict(counts), headless={k: 0 for k in names},
+                   live_sids={k: set() for k in names}, unknown=dict(counts), attributed=set())
+    n.as_of = time.time()
+    n.meta = {"as_of": n.as_of, "ms": 40, "cpu_ms": 30, "reason": None, "tty_pop": 9, "reads": 3}
+    return n
+'
+
+@test "gate_counts: the higher of ps and native, whichever was taken, None only when neither" {
+  # The Phase 3 ruling. Both instruments fail by UNDERCOUNTING, and an undercount opens heal's
+  # rotation gate, so the gate takes the max; native alone would trade ps's blindness for its own.
+  run python3 -c "$LOAD$NAT"'
+ps = {"a1": 1, "a2": 0, "next": 4}
+nat = mk_nat({"a1": 2, "a2": 0, "next": 3})
+assert ca.gate_counts(cfg, ps, nat) == {"a1": 2, "a2": 0, "next": 4}
+assert ca.gate_counts(cfg, None, nat) == {"a1": 2, "a2": 0, "next": 3}
+assert ca.gate_counts(cfg, ps, None) == ps
+assert ca.gate_counts(cfg, None, None) is None
+# an account a census did not see counts 0 in it, never None
+assert ca.gate_counts(cfg, {"a1": 1}, None) == {"a1": 1, "a2": 0, "next": 0}
+print("OK")
+'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]]
+}
+
+@test "collect: heal's k_live is the gate count, while row k stays the ps count (C6)" {
+  run python3 -c "$LOAD$NAT"'
+os.environ["CC_ACCOUNTS_CENSUS"] = "ab"
+ca._census_ab = lambda c: ({"a1": 1, "a2": 0, "next": 0}, mk_nat({"a1": 2, "a2": 0, "next": 3}))
+ca.working_concurrency = lambda c, **k: None
+ca.watch_resets = lambda rows: None
+ca._ssl_warm = lambda: None
+seen = {}
+def probe(c, acct, kc, k_live, ledger, prev, no_heal):
+    seen[acct["name"]] = k_live
+    return {"acct": acct["name"], "k": k_live, "auth": "ok"}, None
+ca.probe_account = probe
+rows = ca.collect(cfg)
+assert seen == {"a1": 2, "a2": 0, "next": 3}, seen
+assert [r["k"] for r in rows] == [1, 0, 0], rows
+assert [r["k_native"] for r in rows] == [2, 0, 3], rows
+print("OK")
+'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]]
+}
+
+@test "heal re-check: a session only native sees refuses, no census refuses, ps mode stays on ps" {
+  run python3 -c "$LOAD$NAT"'
+os.environ["CC_ACCOUNTS_CENSUS"] = "ab"
+cfg["claude_bin"] = "/usr/bin/false"             # past the binary check; every case refuses before it runs
+acct = dict(cfg["accounts"][0], name="census-gate-test")
+cfg["accounts"].append(acct)                     # gate_counts keys on the configured accounts
+ca._census_ab = lambda c: (None, mk_nat({"census-gate-test": 1}))
+ok, why = ca.heal(cfg, acct, "rt", 0)
+assert ok is False and "a session started during the sweep" in why, (ok, why)
+ca._census_ab = lambda c: ({"census-gate-test": 0}, mk_nat({"census-gate-test": 1}))
+ok, why = ca.heal(cfg, acct, "rt", 0)
+assert ok is False and "a session started during the sweep" in why, (ok, why)
+ca._census_ab = lambda c: (None, None)
+ok, why = ca.heal(cfg, acct, "rt", 0)
+assert ok is False and "UNMEASURABLE" in why, (ok, why)
+# census: ps (or its rollback sentinel) never takes the native census
+del os.environ["CC_ACCOUNTS_CENSUS"]
+def boom(c):
+    raise AssertionError("native census taken in ps mode")
+ca._census_ab = boom
+ca.concurrency = lambda c: {"census-gate-test": 4}
+assert ca.gate_census(cfg) == {"census-gate-test": 4}
 print("OK")
 '
   [ "$status" -eq 0 ] || { echo "$output"; false; }

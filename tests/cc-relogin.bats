@@ -1058,6 +1058,22 @@ JSON
   echo "$output" | grep -q '3 live session(s) \[k_native (ps failed)\]'
 }
 
+@test "ps and k_native both measured: the higher one gates — a session only native sees refuses" {
+  # Phase 3 ruling (2026-10-19): both instruments fail by undercounting, so the gate takes the max.
+  mk_info all true; mk_creds; mk_fresh_k all 60 2
+  run env CC_RELOGIN_LIVE_OK_H=40 "$C" next3
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q '2 live session(s) \[k_native (above ps=0)\]'
+  [ ! -f "$D/claude-calls" ]
+  # control: ps above k_native stays the ps count, labelled ps
+  # (the default ps file: the fake counts calls across runs, so the first run spent ps.1)
+  mk_fresh_k all 60 0
+  printf '%s\n' "/opt/c/bin/claude --resume  CLAUDE_CONFIG_DIR=$CFG" > "$D/ps"
+  run env CC_RELOGIN_LIVE_OK_H=40 "$C" next3
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q '1 live session(s) \[ps\]'
+}
+
 @test "a PROVEN renewal folds into the router cache and logs which world routing is in" {
   mk_info all true; mk_creds
   mk_fresh 1 logged-out "2026-08-01T00:00:00Z"

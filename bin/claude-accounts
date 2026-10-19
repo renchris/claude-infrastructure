@@ -768,10 +768,20 @@ def concurrency(cfg):
     (docs/plans/ACCOUNTS_BOARD_FRESHNESS.md D1). With `census: "ab"` in accounts.json, a libproc
     census runs CONCURRENTLY with ps (no added serial time), is published through `_NATIVE_LAST`
     and logged beside ps as `census-ab:`; this function's return value and its None contract are
-    unchanged, and so is everything that reads it (heal's gate, `row["k"]`)."""
+    unchanged, and so is `row["k"]`, which reads it. Heal's rotation gate no longer reads it
+    directly: since the Phase 3 ruling (2026-10-19) it reads gate_counts(), which combines this
+    count with the native census."""
     global _NATIVE_LAST
     if _census_mode(cfg) != "ab":
         return _ps_census(cfg)
+    res, _NATIVE_LAST = _census_ab(cfg)
+    return res
+
+
+def _census_ab(cfg):
+    """-> (ps counts | None, native _Census | None), taken concurrently, and the `census-ab:` line
+    logged. Publishes nothing: concurrency() owns `_NATIVE_LAST`, so heal's re-check, which runs on
+    a pool thread, can take its own pair without racing a sibling account's."""
     box = {}
     w0 = time.monotonic()
     # A daemon thread, started BEFORE the ps subprocess and joined after it: concurrent, so it
@@ -784,12 +794,33 @@ def concurrency(cfg):
     ps_ms = int((time.monotonic() - p0) * 1000)
     th.join(max(0.0, NATIVE_WALL_BUDGET_S - (time.monotonic() - w0)))
     nat, meta = (box.get("n"), box.get("m")) if "m" in box else (None, {"reason": "join-timeout"})
-    _NATIVE_LAST = nat
     log_event(_census_ab_line(cfg, res, nat, meta, ps_ms))
-    return res
+    return res, nat
 
 
-PS_JOIN_S = 15.0         # ps's own 10 s timeout plus a 5 s reap allowance
+def gate_counts(cfg, ps, native):
+    """The rotation gate's live-session count per account -> {name: int} | None.
+
+    The Phase 3 ruling (2026-10-19, docs/plans/ACCOUNTS_BOARD_FRESHNESS.md § Phase 3), after a
+    7-day soak at 99.4% exact agreement with a maximum per-account difference of 1: the HIGHER of
+    the two counts when both were taken, whichever one was taken otherwise, None only when neither
+    was. The max, never native alone, because both instruments fail by undercounting and an
+    undercount OPENS this gate; the native census alone would trade ps's blindness for its own."""
+    if ps is None and native is None:
+        return None
+    return {a["name"]: max(c.get(a["name"], 0) for c in (ps, native) if c is not None)
+            for a in cfg["accounts"]}
+
+
+def gate_census(cfg):
+    """A fresh gate_counts() for heal's under-lock re-check. `census: ps` (or its rollback
+    sentinel) keeps the gate on ps alone, through concurrency() as before."""
+    if _census_mode(cfg) != "ab":
+        return concurrency(cfg)
+    return gate_counts(cfg, *_census_ab(cfg))
+
+
+PS_JOIN_S = 15.0        # ps's own 10 s timeout plus a 5 s reap allowance
 
 
 def _ps_census(cfg):
@@ -974,8 +1005,9 @@ def _registry_entries(by_dir):
 # reads argv only for claude-shaped processes: 354 ms against ps's 9,285 ms at load 738, same pid
 # set (synth probe cmp4.py). Lazy by contract (C2): ctypes and both dylibs load inside the first
 # call, never at import, because `--route`/`--rank` sit on the launch path and importing ctypes alone
-# measured 11.6-13.8 ms of CPU. It is NOT a gate instrument yet: `row["k"]` and heal's `k_live` stay
-# ps-only until the Phase 3 soak (`--census-ab-report`) says otherwise.
+# measured 11.6-13.8 ms of CPU. Since the Phase 3 ruling (2026-10-19, after a 7-day soak at 99.4%
+# exact agreement) it is a gate instrument for heal's `k_live`, through gate_counts(); `row["k"]`
+# stays ps-only.
 _NATIVE_LIBS = None          # (ctypes, libproc, libc, BSDInfo), loaded on first use
 _NATIVE_LAST = None          # the census concurrency() ran beside ps this sweep; collect() reads it
 _NATIVE_META = None          # meta of the last native_census() call, a None result included
@@ -1900,10 +1932,11 @@ def heal(cfg, acct, refresh_token, k_live):
     the refresh grant AND persists the (possibly rotated) tokens to the same keychain item.
     Gated: only when the account has ZERO live sessions (no rotation race with a running CC) and
     under a per-account lock. Returns (ok, detail)."""
-    # `k_live is None` = the sweep's ps snapshot failed. Refuse BEFORE taking the lock, for the
-    # same reason the under-lock re-check refuses: this gate is proven or it is not held.
+    # `k_live is None` = the sweep took no census: ps failed and, in `census: ab` mode, the native
+    # census did too (gate_counts). Refuse BEFORE taking the lock, for the same reason the
+    # under-lock re-check refuses: this gate is proven or it is not held.
     if k_live is None:
-        return False, "skipped: live-session count UNMEASURABLE (ps failed) — CC may own the token"
+        return False, "skipped: live-session count UNMEASURABLE (no census) — CC may own the token"
     if k_live > 0:
         return False, f"skipped: {k_live} live session(s) — CC owns the token lifecycle"
     if not refresh_token:
@@ -1923,13 +1956,13 @@ def heal(cfg, acct, refresh_token, k_live):
         # gate is the rotation-safety invariant — a refresh racing a running CC can rotate
         # the token out from under it, and a discarded rotation means logged out — so it
         # must be evaluated against current state, not a stale reading.
-        # UNKNOWN refuses. concurrency() returns None when `ps` could not be read, and this gate
+        # UNKNOWN refuses. gate_census() returns None when no census could be taken, and this gate
         # is an invariant that must be PROVEN, not assumed: "I could not look" is not "there is
         # nobody there". The old all-zero return made an unreadable `ps` indistinguishable from a
         # quiet fleet and let the redeem proceed into a live rotation race (07 §6.5).
-        live_now = concurrency(cfg)
+        live_now = gate_census(cfg)
         if live_now is None:
-            return False, "skipped: live-session count UNMEASURABLE (ps failed) — refusing to " \
+            return False, "skipped: live-session count UNMEASURABLE (no census) — refusing to " \
                           "redeem a refresh token that may be rotating under live sessions"
         if live_now.get(acct["name"], 0) > 0:
             return False, "skipped: a session started during the sweep — CC owns the token"
@@ -3191,6 +3224,12 @@ def collect(cfg, no_heal=False, prev=None):
     counts = concurrency(cfg)
     native = _NATIVE_LAST
     k_of_name =(lambda _n: None) if counts is None else (lambda n: counts.get(n, 0))
+    # The probe's k_live is heal's rotation gate, and since Phase 3 it reads gate_counts(): the
+    # higher of ps and native, whichever was taken, None only when neither was. `row["k"]` is put
+    # back to the ps count right after the probe (C6), so the router's charge, the board and
+    # handoff-fire's relogin gate see exactly what they saw before.
+    gate = gate_counts(cfg, counts, native)
+    gate_of = (lambda _n: None) if gate is None else (lambda n: gate.get(n, 0))
     _ssl_warm()                       # both lazy urllib globals, main thread, before fan-out
     ledger = load_lastgood()
     # The local pass's first reads, for probe_account's reuse guard (D6). Passed only when there
@@ -3205,7 +3244,10 @@ def collect(cfg, no_heal=False, prev=None):
         of collect() to prevent."""
         name = acct["name"]
         try:
-            return probe_account(cfg, acct, kc, k_of_name(name), ledger, prev, no_heal, **fr_kw)
+            row, entry = probe_account(cfg, acct, kc, gate_of(name), ledger, prev, no_heal,
+                                       **fr_kw)
+            row["k"] = k_of_name(name)
+            return row, entry
         except Exception as e:                    # never bare: KeyboardInterrupt/SystemExit pass
             # Containment, not concealment — the traceback goes to the log so a real
             # regression is still discoverable rather than silently degrading forever.
@@ -3254,9 +3296,9 @@ def collect(cfg, no_heal=False, prev=None):
         row["k_sids_at"] = getattr(wcounts, "at", None) if wcounts is not None else None
         if counts is not None:
             row["k_as_of"] = k_as_of
-        # The native census rides BESIDE `k`, never in it: row["k"] and the probe's k_live stay
-        # ps-only (C6), so heal's rotation gate and handoff-fire's relogin gate still refuse on a
-        # count ps did not take. Only the router's charge (k_panes) may read k_native.
+        # The native census rides BESIDE `k`, never in it: row["k"] stays ps-only (C6), so
+        # handoff-fire's relogin gate still refuses on a count ps did not take. The router's charge
+        # (k_panes) reads k_native; heal's gate already had it, through gate_counts() above.
         if native is not None:
             row["k_native"] = native.get(acct["name"], 0)
             row["k_native_as_of"] = native.as_of
@@ -3264,8 +3306,8 @@ def collect(cfg, no_heal=False, prev=None):
         # to leave k_work unbounded for the whole sweep.
         bound_kwork(row, acct["name"], counts if counts is not None else native, wcounts)
         # HERE, not at the probe's k_live argument, and that placement is the safety property:
-        # heal()'s rotation gate reads the argument and must keep seeing None (inherit_k's
-        # docstring). This stamps a SEPARATE field on the row afterwards, so only the router's
+        # heal()'s rotation gate reads the argument and must never see an inherited count
+        # (inherit_k's docstring). This stamps a SEPARATE field on the row afterwards, so only the router's
         # charge learns the inherited count.
         inherit_k(row, prev, grace_s=cfg.get("cache_grace_s", K_GRACE_S))
         if entry:

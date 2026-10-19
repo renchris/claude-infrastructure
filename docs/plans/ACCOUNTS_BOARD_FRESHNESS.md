@@ -602,6 +602,16 @@ bg(){ out=$(bats "$1" 2>&1); n=$(printf '%s\n' "$out" | sed -n 's/^1\.\.\([0-9]*
   - DoD 6 (72 h abstention count, due on or after 2026-10-15) is row `7947f9e6dc7f`. The count 13 h after converge is 0, over 1 interactive decision.
   - DoD 16 (timings at the next real login or logout) is row `5ed9c5541e24`. None has happened yet.
   - O2 (the Phase 3 ruling) is row `e04527859ada`; the soak reads `NOT-YET (window 0.6 d < 7 d; ps-OK 238 < 500)`.
+- Both observational DoD items have since passed. DoD 6: 0 fleet-wide abstentions since 2026-10-12, against a baseline of 11/day. DoD 16: a real relogin logged `local: first-read next3 200` and then `local: routable next3`.
+
+### Phase 3 — gate-grade native census (ruled 2026-10-19)
+
+Scope (frozen): heal's rotation gate (the probe's `k_live` and the under-lock re-check) and cc-relogin's live-session count read max(ps, native) when both are measured, native alone when ps is not, ps alone in `census: ps` mode or when native is not; `row["k"]` stays ps-only (C6 narrows to the row); suites green, landed, converged.
+
+- **Soak:** `--census-ab-report` at 2026-10-19T07:21Z: window 7.0 d, ps-OK 2566, exact agreement 2551/2566 = 99.4%, max per-account difference 1, ps unavailable on 608 of 3174 sweeps, `soak: PASS`.
+- **Ruling:** the operator took the recommendation (decision packet `622e2cc84d31`, conviction 85%). Max, not native alone, because the native census's known failure is an undercount, and an undercount opens a rotation gate instead of closing it. Rejected: ps only (the gate stays blind on 19% of sweeps) and native only (a native undercount lets a heal or relogin go ahead under live sessions).
+- **Locus L.** Two call sites in two files, on the same None contract W1 built; a dispatched session would spend more context re-reading that contract than the change itself takes.
+- **Out of scope:** handoff-fire's relogin gate reads `row["k"]` and so stays ps-only. Changing that field would also change the router's charge and the board.
 
 ## 5. Tests to add or extend
 
