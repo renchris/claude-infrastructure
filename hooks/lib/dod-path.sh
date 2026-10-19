@@ -31,6 +31,10 @@
 # WRAP_DOD_DIR.
 # shellcheck shell=bash
 
+# The Stop path hashes on every turn; /usr/bin/shasum is a #! perl script (lib/shasum-direct.sh).
+# shellcheck source=shasum-direct.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+. "${BASH_SOURCE[0]%/*}/shasum-direct.sh" 2>/dev/null || true
 _dod_dir() { printf '%s' "${WRAP_DOD_DIR:-$HOME/.claude/autonomy/dod}"; }
 
 _dod_repo_key() { # $1=cwd → sha16 of the repo's identity URL, or nothing (local-only repo)

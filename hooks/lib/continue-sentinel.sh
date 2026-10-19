@@ -13,6 +13,11 @@
 #
 # Pure function definitions only — no side effects on source (safe under `set -u`).
 
+# The Stop path hashes on every turn; /usr/bin/shasum is a #! perl script (lib/shasum-direct.sh).
+# shellcheck source=shasum-direct.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+. "${BASH_SOURCE[0]%/*}/shasum-direct.sh" 2>/dev/null || true
+
 # Directory holding every continue sentinel for the active config dir.
 continue_state_dir() {
   printf '%s/state' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"

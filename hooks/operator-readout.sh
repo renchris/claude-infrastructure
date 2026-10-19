@@ -198,6 +198,10 @@ _amlib="$_amd/lib/activation-marker.sh"
 # shellcheck source=lib/activation-marker.sh
 # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
 . "$_amlib" 2>/dev/null || activation_settled() { [ -f "${1:?}.done" ]; }
+# sha16 hashes on every Stop; /usr/bin/shasum is a #! perl script, run here without the #! exec.
+# shellcheck source=lib/shasum-direct.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+. "$_amd/lib/shasum-direct.sh" 2>/dev/null || . "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/shasum-direct.sh" 2>/dev/null || true
 
 
 CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"

@@ -33,6 +33,11 @@
 # Seams: DL_DIR · DL_BIN · DL_PERSONAL_ROOT · DL_CAPTURE_STATE_DIR · CC_PANE_ID · CC_FIRED_DIR
 # shellcheck shell=bash
 
+# The Stop path hashes on every turn; /usr/bin/shasum is a #! perl script (lib/shasum-direct.sh).
+# shellcheck source=shasum-direct.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+. "${BASH_SOURCE[0]%/*}/shasum-direct.sh" 2>/dev/null || true
+
 # Cheap prefilter so the common Stop spawns no Python. A superset of what capture-scan accepts.
 _DLC_PRE='[0-9]{4}-[0-9]{2}-[0-9]{2}|(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.? [0-9]{1,2}|it'"'"'?s time|bring (this|it) up|revisit|come back to|park(ed)? (this|it)'
 

@@ -35,6 +35,10 @@
 # _iso_now stays its own; the two emit the identical format).
 # shellcheck shell=bash
 
+# The Stop path hashes on every turn; /usr/bin/shasum is a #! perl script (lib/shasum-direct.sh).
+# shellcheck source=shasum-direct.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+. "${BASH_SOURCE[0]%/*}/shasum-direct.sh" 2>/dev/null || true
 _oi_now() { date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true; }
 
 oi_fired_dir() { printf '%s' "${CC_FIRED_DIR:-$HOME/.claude/cc-fired}"; }
