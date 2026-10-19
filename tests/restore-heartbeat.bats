@@ -7,6 +7,10 @@
 # "not provably the dead kitty" at its not-kitty scenario (the dead roster is rewritten), "genuinely
 # live" on the missing hb.kitty-start, "re-proves" with the roster emptied, hb_pick --dead-kitty
 # dropping the reused pid's fleet.
+# RED-proof (2026-10-19, panic recovery), run against origin/main dfdb5c273's library: both backfill
+# cases fail (the roster holds only the registry row, windows 27 and 28 absent), the carried-census
+# case fails at its first hb.census read (no such file: a failed census wrote nothing), and the bound
+# case fails (no _hb_census_bound).
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd -P)"

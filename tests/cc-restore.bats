@@ -518,7 +518,8 @@ dead_kitty() { # a heartbeat for a kitty pid that is not running
 # The 2026-10-18 panic: the dead kitty's heartbeat is under the PREVIOUS boot's uuid. boot-resume's
 # event mode looks only in this boot's dir, so the plan failed preflight; and the at-boot restore had
 # already launched that fleet under its own ledger, so a second event could start a session twice.
-# RED-proof: before the fix both cases run boot-resume as a new crash event for the dead kitty.
+# RED-proof (run 2026-10-19 against origin/main dfdb5c273): both cases fail, neither prints the earlier-boot
+# verdict, and the no-event case exits 0 instead of 3 (the old path plans a new crash event instead).
 @test "--after-crash on a kitty from an earlier boot launches nothing and names the at-boot event that owns it" {
   dead_kitty
   mv "$CC_HEARTBEAT_DIR/UUID-T" "$CC_HEARTBEAT_DIR/UUID-OLD"
