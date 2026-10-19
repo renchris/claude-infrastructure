@@ -37,6 +37,10 @@ run_wire() { run bash "$REPO/install.sh" --wire-hooks --config-dir "$CFG"; }
   [ "$output" -eq 1 ]   # no duplicate Bash object created
   run jq -r '[.hooks.PreToolUse[] | select(.matcher=="Bash") | .hooks[].command] | join("|")' "$CFG/settings.json"
   [[ "$output" == *"validate-bash.sh"* && "$output" == *"keychain-guard.sh"* ]] || false
+  # the fixture's bare validate-bash.sh IS the template's `/bin/bash ~/.claude/hooks/validate-bash.sh`:
+  # the union compares through cmd_bare, so it is not appended a second time
+  run jq '[.hooks.PreToolUse[] | select(.matcher=="Bash") | .hooks[].command | select(test("validate-bash\\.sh"))] | length' "$CFG/settings.json"
+  [ "$output" -eq 1 ]
   run jq -r '[.hooks.PreCompact[] | select(.matcher=="auto") | .hooks[].command] | join("|")' "$CFG/settings.json"
   [[ "$output" == *"echo x"* && "$output" == *"dod-persist.sh"* ]]
 }

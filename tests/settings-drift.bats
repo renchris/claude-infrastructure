@@ -88,7 +88,9 @@ mkcfg() { # <dir> <deny-json-array> <stop-cmd>
 @test "path-spelling variants of the same hook are NOT drift (normalization)" {
   mkcfg "$D/a" '["Bash(sudo:*)"]' "~/.claude/hooks/anti-deference-nudge.sh"
   mkcfg "$D/b" '["Bash(sudo:*)"]' "/Users/someone/.claude/hooks/anti-deference-nudge.sh"
-  CC_DRIFT_DIRS="$D/a $D/b" run "$S" --assert
+  # the explicit-interpreter spelling (migration 0070) names the same hook
+  mkcfg "$D/c" '["Bash(sudo:*)"]' "/bin/bash ~/.claude/hooks/anti-deference-nudge.sh"
+  CC_DRIFT_DIRS="$D/a $D/b $D/c" run "$S" --assert
   [ "$status" -eq 0 ]
 }
 

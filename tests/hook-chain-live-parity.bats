@@ -240,6 +240,20 @@ _drift_check() { # <settings.json> <event> <registry>  → prints the mismatch, 
   return 1
 }
 
+@test "drift guard reads the explicit-interpreter spelling (migration 0070) as the same registration" {
+  local settings="${CC_LIVE_SETTINGS:-$ORIG_HOME/.claude/settings.json}"
+  [ -r "$settings" ] || skip "no live settings.json at $settings — the drift guard has no expectation to read"
+  local rewritten="$BATS_TEST_TMPDIR/settings-explicit.json"
+  HOME="$ORIG_HOME" /usr/bin/env python3 "$REPO/scripts/hook-interp.py" rewrite "$settings" --root "$REPO" \
+    2>/dev/null > "$rewritten"
+  run jq -r '.hooks.PreToolUse[] | select(.matcher=="Bash") | .hooks[0].command' "$rewritten"
+  [[ "$output" == /bin/bash* || "$output" == /usr/bin/env* ]]
+  run _drift_check "$rewritten" PreToolUse  "$REPO/config/hook-chains.d/pretooluse-bash"
+  [ "$status" -eq 0 ] || { echo "$output" >&2; false; }
+  run _drift_check "$rewritten" PostToolUse "$REPO/config/hook-chains.d/posttooluse-bash"
+  [ "$status" -eq 0 ] || { echo "$output" >&2; false; }
+}
+
 @test "registry membership matches the settings.json set it replaces (drift guard)" {
   local settings="${CC_LIVE_SETTINGS:-$ORIG_HOME/.claude/settings.json}"
   # A missing settings.json is an ABSENT instrument, never a clean bill of health.
