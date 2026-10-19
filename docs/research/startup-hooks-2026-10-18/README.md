@@ -221,6 +221,16 @@ Each is a new migration plus its bats, applied by the operator, never by an agen
 
 #25 load-banded span guard on the board; #26 fleet detector (shadow week) over the fold that #8's fleet line already uses; #27 Stop renderer deadline wrapper; #30-#31 precompute, only on ledger evidence. From A9 F9: per-hook `EPOCHREALTIME` stamps in the UPS hooks' IDL rows, and `cutreplay.py` adapted for PreToolUse and run in a hermetic `HOME` (validate-bash writes an audit log).
 
+**Status 2026-10-19 (W7 measurement session; #25/#26 belong to the Wave 3 session):**
+
+| item | state | where |
+|---|---|---|
+| #27 Stop renderer deadline | landed `4a826162c`, live | `hooks/lib/hook-deadline.sh`. operator-readout 9 s, teammate-auto-shutdown 4 s; a late result is printed once at the next prompt (session-beat) or at the hook's own next run. |
+| UPS per-hook stamps | landed `bc2a8f699`, live | `hooks/lib/hook-timing.sh` + `hook-timing-fold.sh` → `~/.claude/logs/hook-timing.jsonl`. File mtimes are the clock (`$EPOCHREALTIME` only under bash ≥5). +0.75 ms p50 per hook, 0 forks. The rows go to their own ledger, not idl.jsonl, because `cc-audit` reads a fixed IDL tail. |
+| PreToolUse cutreplay | landed `7672c5798` | `cutreplay.py --event PreToolUse`, `a9-replay-pretooluse.py`; findings in `W7-pretooluse-replay.md` |
+| validate-bash slow rule (A9 R9, follow-on) | landed `a1932b261`, live | byte-wise substitutions, plus a linear `tr` path above 2 KB. Replay p90 10.4 s → 0.38 s, 0 decision changes. |
+| #30/#31 precompute | **not decided: the ledger is below its floor** | `session-start-dispatch.jsonl` has 11 rows (needs 50). Interim: activation-watch p90 759 ms, escalation-watch p90 1,201 ms. Parked as backlog `149ae5936586` (not-yet-true) with the deciding query. |
+
 ---
 
 ## 6. Rejected / do-not-repropose
