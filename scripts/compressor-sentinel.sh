@@ -1567,6 +1567,21 @@ panic_scan() {
   local verdict when uptime csrc census
   verdict="$(printf '%s' "$body" | grep -ao 'Compressor Info:[^\\"]*' | head -1)"
   when="$(printf '%s' "$body" | grep -ao '"timestamp":"[^"]*"' | head -1 | sed 's/.*:"//; s/"$//')"
+  # THE PANIC'S OWN CLOCK, not the report's. The header `timestamp` is when macOS WROTE the report,
+  # at the next boot: the 2026-10-18 panic happened at 16:33:33 CDT and its header says 19:40:28,
+  # three hours of FileVault wait later. The kernel's `Epoch Time` block carries `Calendar: 0x<sec>`
+  # taken at the panic itself (0x6ad53b2d = 2026-10-18T21:33:33Z). Absent or implausible ⇒ the
+  # header time stands in, and panicked_at_src says which one this row holds.
+  local cal cal_s pts psrc
+  cal="$(printf '%s' "$body" | grep -ao 'Calendar: 0x[0-9a-fA-F]\{1,16\}' | head -1 | sed 's/.*0x//')"
+  cal_s=""; [ -n "$cal" ] && cal_s="$((16#$cal))"
+  if [ -n "$cal_s" ] && [ "$cal_s" -ge 1000000000 ] 2>/dev/null \
+     && pts="$(date -u -r "$cal_s" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$cal_s" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" \
+     && [ -n "$pts" ]; then
+    psrc="panic-calendar"
+  else
+    pts="${when:-unknown}"; psrc="report-write-time"
+  fi
   uptime="$(printf '%s' "$body" | grep -ao 'uptime[^,]*' | head -1)"
 
   # The anchor is `"procname":"<comm>"`, READ OUT OF THE REAL REPORT rather than guessed. The first
@@ -1592,10 +1607,12 @@ panic_scan() {
   fi
 
   jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')" \
-         --arg report "$base" --arg pts "${when:-unknown}" --arg v "${verdict:-unknown}" \
+         --arg report "$base" --arg pts "$pts" --arg psrc "$psrc" --arg wts "${when:-unknown}" \
+         --arg v "${verdict:-unknown}" \
          --arg up "${uptime:-unknown}" --arg c "${census:-}" --arg cs "$csrc" \
          --arg path "$f" \
-    '{ts:$ts,kind:"panic",report:$report,panicked_at:$pts,verdict:$v,uptime:$up,
+    '{ts:$ts,kind:"panic",report:$report,panicked_at:$pts,panicked_at_src:$psrc,report_written_at:$wts,
+      verdict:$v,uptime:$up,
       census:$c,census_source:$cs,path:$path,
       note:"recorded by compressor-sentinel at startup; macOS rotates the source report away"}' \
     >> "$PANIC_LEDGER" 2>/dev/null || return 3

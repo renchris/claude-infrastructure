@@ -917,7 +917,26 @@ scan() { CC_PANIC_DIRS="$D/panics" CC_PANIC_LEDGER="$D/panic.jsonl" bash "$S" --
   run scan
   [ "$status" -eq 0 ] || false
   jq -e '.verdict | test("100% of segments limit \\(BAD\\)")' "$D/panic.jsonl" >/dev/null || false
+  # No `Calendar:` in this fixture: the report-write time stands in, and the row SAYS so.
   jq -e '.panicked_at == "2026-08-09 03:41:24.00 -0700"' "$D/panic.jsonl" >/dev/null || false
+  jq -e '.panicked_at_src == "report-write-time"' "$D/panic.jsonl" >/dev/null || false
+}
+
+# The header `timestamp` is when macOS WROTE the report, at the next boot. The 2026-10-18 panic
+# happened at 16:33:33 CDT (its `Calendar: 0x6ad53b2d`) and its header reads 19:40:28 — three hours
+# of FileVault wait recorded as the moment of death. Fixture bytes are the live report's own lines.
+@test "panic reader: panicked_at is the panic's own Calendar epoch, not the report-write time" {
+  mkdir -p "$D/panics"
+  { printf '{"bug_type":"210","timestamp":"2026-10-18 19:40:28.00 -0500","os_version":"macOS 15.7.9 (24G830)"}\n'
+    printf '{"panicString":"panic(cpu 0 caller 0xfffffe0028d1a2b0): zalloc[3]: zone map exhausted\\n'
+    printf 'Epoch Time:        sec       usec\\n  Boot    : 0x6abd7056 0x0004727b\\n  Sleep   : 0x6acab36a 0x0000db80\\n'
+    printf '  Wake    : 0x6acab488 0x000351ec\\n  Calendar: 0x6ad53b2d 0x0005159a\\n\\nZone info:\\n"}\n'
+  } > "$D/panics/panic-full-2026-10-18-194028.0002.panic"
+  run scan
+  [ "$status" -eq 0 ] || false
+  jq -e '.panicked_at == "2026-10-18T21:33:33Z"' "$D/panic.jsonl" >/dev/null || { cat "$D/panic.jsonl"; false; }
+  jq -e '.panicked_at_src == "panic-calendar"' "$D/panic.jsonl" >/dev/null || false
+  jq -e '.report_written_at == "2026-10-18 19:40:28.00 -0500"' "$D/panic.jsonl" >/dev/null
 }
 
 # The culprit, counted by the kernel. This is the whole argument that the CC fleet is the VICTIM
