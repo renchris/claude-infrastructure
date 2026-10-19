@@ -19,6 +19,13 @@
 # launch): CC_RESEARCH_ROUTER=off. The classifier waits at most 9 s (§4.1, ruling 4bf73c4e55d5), inside the 10 s timeout
 # migrations/0050 registers.
 set -uo pipefail
+# Per-hook timing stamps (hooks/lib/hook-timing.sh; README §5 Wave 7, A9-F9): two builtin file
+# writes, no fork — session-beat's detached worker folds them into ~/.claude/logs/hook-timing.jsonl.
+# [ -f ] first: under `set -e`, bash 3.2 EXITS the hook when `.` cannot find its file, even
+# inside an `if` — a missing lib must cost the stamp, never the hook (measured 2026-10-19).
+_ht_l="${BASH_SOURCE[0]%/*}/lib/hook-timing.sh"
+# shellcheck source=lib/hook-timing.sh disable=SC1091  # runtime-resolved beside this file
+if [ -f "$_ht_l" ] && . "$_ht_l" 2>/dev/null; then ht_begin research-precognition-nudge; fi
 command -v jq &>/dev/null || exit 0
 INPUT=$(cat)
 PROMPT=$(printf '%s' "$INPUT" | jq -r '.prompt // .user_prompt // empty' 2>/dev/null || echo "")

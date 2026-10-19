@@ -70,6 +70,16 @@
 # bash 3.2-safe. jq required (absent ⇒ silent no-op, same as session-register.sh).
 set -uo pipefail
 
+# Per-hook timing stamps, prompt beats only (hooks/lib/hook-timing.sh; README §5 Wave 7, A9-F9):
+# builtins only. The worker below folds every finished stamp into ~/.claude/logs/hook-timing.jsonl.
+if [ "${1:-prompt}" = prompt ]; then
+  # [ -f ] first: under `set -e`, bash 3.2 EXITS the hook when `.` cannot find its file, even
+  # inside an `if` — a missing lib must cost the stamp, never the hook (measured 2026-10-19).
+  _ht_l="${BASH_SOURCE[0]%/*}/lib/hook-timing.sh"
+  # shellcheck source=lib/hook-timing.sh disable=SC1091  # runtime-resolved beside this file
+  if [ -f "$_ht_l" ] && . "$_ht_l" 2>/dev/null; then ht_begin session-beat; fi
+fi
+
 input=$(cat 2>/dev/null)
 
 [ "${CC_BEAT:-on}" = off ] && exit 0
@@ -117,6 +127,8 @@ case "$_rest3" in *$'\t'*) cwd="${_rest3#*$'\t'}" ;; esac
 # sid is the IDENTITY key, deliberately NOT the pane: tmux panes inherit the server's
 # ITERM_SESSION_ID, so a pane-keyed beat would have N sessions overwrite one row.
 case "$sid" in *[!0-9A-Za-z_-]*) exit 0 ;; esac   # path-safety: sid becomes a filename
+# shellcheck disable=SC2034  # read by hook-timing.sh ht_end
+HT_SID="$sid"
 case "$tms" in ''|*[!0-9]*) tms=$(( $(date +%s) * 1000 )) ;; esac   # unreachable when jq parsed sid
 # Undo @tsv's escaping of the cwd (\\ \t \n \r); 0x02 holds an escaped backslash meanwhile (not
 # 0x01, bash's internal CTLESC byte, which mangles inside ${//}).
@@ -328,6 +340,13 @@ set -m
   if [ "$kind" = prompt ] && [ -f "$_SH_LIB" ]; then
     # shellcheck source=lib/startup-health.sh disable=SC1091  # runtime-resolved beside this file
     . "$_SH_LIB" && sh_worker "$sid" "$tp" &
+  fi
+  # The timing fold (hooks/lib/hook-timing-fold.sh): every finished UserPromptSubmit stamp on the box
+  # becomes a ledger row here, off the prompt path; each pair is claimed by rename, so two workers
+  # never write one row twice.
+  if [ "$kind" = prompt ] && [ -f "${BASH_SOURCE[0]%/*}/lib/hook-timing-fold.sh" ]; then
+    # shellcheck source=lib/hook-timing-fold.sh disable=SC1091  # runtime-resolved beside this file
+    . "${BASH_SOURCE[0]%/*}/lib/hook-timing-fold.sh" && ht_fold &
   fi
   capped_beat
   wait

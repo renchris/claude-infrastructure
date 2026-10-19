@@ -20,6 +20,13 @@
 # check, so `ps` runs only on a prompt that actually mentions a handoff. The hook only adds context
 # and never blocks, so the reorder cannot change any blocking outcome.
 set -u
+# Per-hook timing stamps (hooks/lib/hook-timing.sh; README §5 Wave 7, A9-F9): two builtin file
+# writes, no fork — session-beat's detached worker folds them into ~/.claude/logs/hook-timing.jsonl.
+# [ -f ] first: under `set -e`, bash 3.2 EXITS the hook when `.` cannot find its file, even
+# inside an `if` — a missing lib must cost the stamp, never the hook (measured 2026-10-19).
+_ht_l="${BASH_SOURCE[0]%/*}/lib/hook-timing.sh"
+# shellcheck source=lib/hook-timing.sh disable=SC1091  # runtime-resolved beside this file
+if [ -f "$_ht_l" ] && . "$_ht_l" 2>/dev/null; then ht_begin handoff-intent-nudge; fi
 INPUT="$(cat)"
 PROMPT="$(printf '%s' "$INPUT" | jq -r '.prompt // empty' 2>/dev/null)" || exit 0
 [ -n "$PROMPT" ] || exit 0

@@ -51,6 +51,15 @@
 # defaults under).
 
 MODE="${1:-}"
+# Per-hook timing stamps, prompt mode only (hooks/lib/hook-timing.sh; README §5 Wave 7, A9-F9):
+# builtins only. The drain's own EXIT trap below replaces this one, so it calls ht_end itself.
+if [ "$MODE" = prompt ]; then
+  # [ -f ] first: under `set -e`, bash 3.2 EXITS the hook when `.` cannot find its file, even
+  # inside an `if` — a missing lib must cost the stamp, never the hook (measured 2026-10-19).
+  _ht_l="${BASH_SOURCE[0]%/*}/lib/hook-timing.sh"
+  # shellcheck source=lib/hook-timing.sh disable=SC1091  # runtime-resolved beside this file
+  if [ -f "$_ht_l" ] && . "$_ht_l" 2>/dev/null; then ht_begin mailbox-drain; fi
+fi
 
 case "$0" in */*) _scd="${0%/*}" ;; *) _scd=. ;; esac   # dirname without the exec
 _scd="$(cd "$_scd" 2>/dev/null && pwd)"
@@ -111,6 +120,8 @@ own_tp="${_row%%"$_t"*}"; _row="${_row#*"$_t"}"
 own_agent_id="${_row%%"$_t"*}"; _row="${_row#*"$_t"}"
 own_cwd="${_row%%"$_t"*}"; own_event="${_row#*"$_t"}"
 case "$own_sid" in *[!0-9A-Fa-f-]*) own_sid="" ;; esac
+# shellcheck disable=SC2034  # read by hook-timing.sh ht_end (prompt mode)
+HT_SID="$own_sid"
 
 # Start/done markers, session-start mode only, so a harness cancel of this hook is reportable
 # (hooks/lib/startup-sentinel.sh; docs/research/startup-hooks-2026-10-18/README.md §5 unit 3.1).
@@ -309,7 +320,7 @@ if [ "$_etc" = 1 ]; then
   if mailbox_drain_claim "$own_uuid"; then
     _claimed=1
     _md_rc=0
-    trap '_md_rc=$?; mailbox_drain_release "$own_uuid"; [ "${_SS_ON:-0}" = 1 ] && ss_end "$_md_rc"' EXIT
+    trap '_md_rc=$?; mailbox_drain_release "$own_uuid"; [ "${_SS_ON:-0}" = 1 ] && ss_end "$_md_rc"; [ -n "${_HT_F:-}" ] && ht_end "$_md_rc"' EXIT
     # COUNT ONCE: one grep of the inbox serves the cursor clamp, the window and the remainder note
     # below (an older lib ignores the extra argument and counts for itself — LIB SKEW).
     _lines="$(mailbox_lines "$own_uuid")"
