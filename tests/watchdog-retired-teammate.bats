@@ -51,7 +51,20 @@ add_shutdown() { # $1=the member the request is addressed to
 verdict() { # $1=class $2=cause $3=exit $4=sig
   bash "$HOOK" --pane-verdict "$SID" 63977 "$1" "$2" "$3" "$4" "$TX" </dev/null
 }
-painted() { cat "$T/dev/ttys099"; }
+# the painted text with its truecolor runs stripped; what the verdict dropped is cc_say_detail's log
+painted() { LC_ALL=C sed $'s/\033\\[[0-9;]*m//g' "$T/dev/ttys099"; }
+said() { cat "$HOME/.claude/logs/pane-say.jsonl" 2>/dev/null; }
+# every painted row fits the 56-cell pane budget (cc-say's own cell model), with no SGR-2 and no rule
+assert_rows() {
+  ! LC_ALL=C grep -q $'\033\\[2m' "$T/dev/ttys099" || { echo "SGR-2 painted"; false; }
+  ! grep -q '────' "$T/dev/ttys099" || { echo "a rule was painted: $(painted)"; false; }
+  # shellcheck source=/dev/null
+  . "$REPO/lib/cc-say.sh"
+  local line
+  while IFS= read -r line; do
+    cc_say_cells "$line"; [ "$CC_SAY_CELLS" -le 56 ] || { echo "row is $CC_SAY_CELLS cells: $line"; false; }
+  done < <(painted)
+}
 
 # ── 1. the RETIRED class ──────────────────────────────────────────────────────────────────────────
 
@@ -76,9 +89,10 @@ painted() { cat "$T/dev/ttys099"; }
   mk_member_tx lt-wrap; add_shutdown lt-wrap
   run verdict RECYCLE retired-teammate "" ""
   [ "$status" -eq 0 ]
-  painted | grep -q 'RETIRED — teammate lt-wrap (session 74148f20) was shut down by its lead'
-  painted | grep -q 'close this pane'
-  ! painted | grep -q 'Resume' || false
+  painted | grep -q '✓ lt-wrap retired by its lead · closing in 0s'
+  said | grep -q 'teammate lt-wrap (session 74148f20) was shut down by its lead'
+  ! painted | grep -qi 'resume' || false
+  assert_rows
   ! painted | grep -q -- '--resume' || false
 }
 
@@ -104,13 +118,16 @@ painted() { cat "$T/dev/ttys099"; }
   run bash "$HOOK" --classify "$SID" ""
   [ "$(printf '%s' "$output" | cut -f1)" = CRASH ]
   run verdict CRASH external-sigterm 143 15
-  painted | grep -q 'NOT A CLEAN EXIT'
-  painted | grep -q 'tell its lead (session 4726bdf3)'
+  painted | grep -q '✗ 74148f20 killed (external-sigterm)'
+  painted | grep -q '⚠ lt-wrap not resumable · tell its lead 4726bdf3'
   ! painted | grep -q -- '--resume' || false
+  ! said | grep -q -- '--resume' || false
+  assert_rows
   : > "$T/dev/ttys099"
   run verdict RECYCLE clean-exit 0 ""
-  painted | grep -q 'tell its lead (session 4726bdf3)'
+  painted | grep -q '⚠ lt-wrap not resumable · tell its lead 4726bdf3'
   ! painted | grep -q -- '--resume' || false
+  assert_rows
 }
 
 # ── 2. pane_last_close reads ASSISTANT text only ─────────────────────────────────────────────────
@@ -121,7 +138,7 @@ painted() { cat "$T/dev/ttys099"; }
   printf '{"type":"attachment","attachment":{"type":"instructions","content":"An honest `Good to close: no — <what remains>` also satisfies."}}\n' >> "$TX"
   printf '{"type":"user","message":{"role":"user","content":"is it Good to close: no?"}}\n' >> "$TX"
   run verdict RECYCLE clean-exit 0 ""
-  painted | grep -q 'its last close verdict: yes'
+  said | grep -q 'last close verdict: yes'
 }
 
 @test "a session whose only close phrase is in its instructions reads '-', not 'no'" {
@@ -129,7 +146,7 @@ painted() { cat "$T/dev/ttys099"; }
   printf '{"type":"attachment","attachment":{"type":"instructions","content":"An honest `Good to close: no — <what remains>` also satisfies."}}\n' > "$TX"
   printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}\n' >> "$TX"
   run verdict RECYCLE clean-exit 0 ""
-  painted | grep -q 'its last close verdict: -'
+  said | grep -q 'last close verdict: -'
 }
 
 # ── 3. the close-record join is keyed on pid + start time ───────────────────────────────────────
@@ -220,10 +237,13 @@ cls() { bash "$HOOK" --classify "$SID" "${1:-}" | cut -f1-2; }
   [ "$(cls 23017)" = "$(printf 'RECYCLE\tretired-teammate')" ]
   run verdict RECYCLE retired-teammate 143 15
   [ "$status" -eq 0 ]
-  painted | grep -q 'RETIRED MID-TASK — teammate cvf-docs (session 74148f20) was stopped by its lead (TaskStop); not a crash'
-  painted | grep -q 'check its worktree for uncommitted work'
+  painted | grep -q '⚠ cvf-docs retired mid-task by lead · TaskStop'
+  painted | grep -q '⚠ check its worktree for uncommitted work'
+  said | grep -q 'teammate cvf-docs (session 74148f20) was stopped by its lead (TaskStop); this was not a crash'
   ! painted | grep -q 're-spawns members' || false
-  ! painted | grep -q 'NOT A CLEAN EXIT' || false
+  ! painted | grep -qi 'killed' || false
+  ! painted | grep -q 'closing in\|safe to close' || false
+  assert_rows
   ! painted | grep -q -- '--resume' || false
   [ ! -s "$T/closed.txt" ] || { echo "a mid-task retirement was auto-closed, losing its warning"; false; }
   bash "$HOOK" --surface-death "$SID" 23017 RECYCLE retired-teammate 143 15 "$TX" >/dev/null
@@ -237,8 +257,8 @@ cls() { bash "$HOOK" --classify "$SID" "${1:-}" | cut -f1-2; }
   rm -f "$T/close/23017-100.json"
   [ "$(cls 23017 | cut -f1)" = CRASH ]
   run verdict CRASH abrupt-unknown "" ""
-  painted | grep -q 'NOT A CLEAN EXIT'
-  ! painted | grep -q 'RETIRED' || false
+  painted | grep -q 'killed (abrupt-unknown)'
+  ! painted | grep -qi 'retired' || false
 }
 
 @test "an idle member retired by its lead's request alone is RETIRED, holds nothing, and its pane is handed to the closer" {
@@ -246,8 +266,8 @@ cls() { bash "$HOOK" --classify "$SID" "${1:-}" | cut -f1-2; }
   setup_lead; lead_request cvf-docs 60
   [ "$(cls)" = "$(printf 'RECYCLE\tretired-teammate')" ]
   run verdict RECYCLE retired-teammate "" ""
-  painted | grep -q 'stopped by its lead (shutdown_request)'
-  painted | grep -q 'This pane holds nothing'
+  said | grep -q 'stopped by its lead (shutdown_request)'
+  painted | grep -q '✓ cvf-docs retired by its lead · closing in 0s'
   ! painted | grep -q 're-spawns members' || false
   [ -s "$T/closed.txt" ]
 }
@@ -283,6 +303,6 @@ cls() { bash "$HOOK" --classify "$SID" "${1:-}" | cut -f1-2; }
 @test "the member-side retired banner gives no re-spawn advice" {
   mk_member_tx lt-wrap; add_shutdown lt-wrap
   run verdict RECYCLE retired-teammate "" ""
-  painted | grep -q 'its work went to the lead'
+  said | grep -q 'its work went to the lead'
   ! painted | grep -q 're-spawns members' || false
 }

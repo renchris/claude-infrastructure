@@ -1520,14 +1520,14 @@ surface_death() {
 #     `claude --resume` line Claude printed uses the default account and cannot see a transcript
 #     that lives under another account's store (cc-husk-sweep's header records that incident).
 #   RECYCLE/clean-exit whose pane SURVIVED with nothing relaunched (a /exit, or a self-close
-#     --terminal whose it2 close failed): "CLOSED CLEANLY … safe to close this pane" — the other
+#     --terminal whose it2 close failed): "✓ <sid8> ended cleanly · closing in 20s" — the other
 #     half of the ambiguity, so a finished session's leftover pane is never read as a kill.
-#   retired-by-desk whose pane survived: "RETIRED … safe to close, do NOT resume".
+#   retired-by-desk whose pane survived: "✓ <sid8> retired by desk · closing in 20s".
 #   A session limit-recover MOVED (pane_lr_facts, any class): "✗ <sid8> moved <src>→<dst>, relaunch
-#     failed · ▶ lr-fleet --one <sid8>" and one queued request when no LIVE copy runs (STRANDED), or
-#     "✅ <sid8> moved … and runs in pane N" when cc-find shows one (K6) — never "CLOSED CLEANLY".
+#     failed" over "▶ cc-lr recover <sid8>" and one queued request when no LIVE copy runs (STRANDED),
+#     or "✓ <sid8> moved, runs in pane N" when cc-find shows one (K6) — never "ended cleanly".
 #   A recycle/resume that DID relaunch, or a pane that closed: NOTHING — the pane already says it.
-# Every "safe to close" is painted only after cc-pane-close --dry-run agrees (paint_pane_verdict).
+# Every "closing in" is painted only after cc-pane-close --dry-run agrees (paint_pane_verdict).
 #
 # WHEN. Only after the pane has SETTLED: a recycle types /exit and the relaunch line within seconds
 # of each other, and a self-close closes the pane right after the exit. The verdict waits up to
@@ -1789,10 +1789,73 @@ pane_lr_enqueue() { # $1=sid $2=target cfg → one status sentence; writes reque
     printf 'NOT queued (could not write %s) — run the command above.' "$req"
   fi
 }
+# THE VERDICT IS ONE LINE (lr-wake 2026-10-18, RC8; g-message-design.md §5.3 E). Each row is drawn
+# by lib/cc-say.sh: answer first, ≤ 56 cells, at most one `▶`, no rules and no full paths. A dirty
+# or unlanded working dir adds ONE amber row; a teammate, or a session another pane holds custody
+# of, adds one ⚠ row naming who to tell. Everything else — the cause's exit and signal, the work
+# state, the last close verdict, the pinned resume line, custody facts — goes to the pane-say log
+# (cc_say_detail), never to the terminal.
+#
+# _lcw_say_load — the shared renderer, found in this hook's own checkout through its symlink, else
+# the live layer; rc 1 when neither exists. Lazy: only a paint pays for the source.
+_lcw_say_load() {
+  command -v cc_say >/dev/null 2>&1 && return 0
+  local s="${BASH_SOURCE[0]}" t sd c
+  while [[ -L "$s" ]]; do
+    t="$(readlink "$s" 2>/dev/null)" || break
+    case "$t" in /*) s="$t" ;; *) s="$(dirname "$s")/$t" ;; esac
+  done
+  sd="$(cd "$(dirname "$s")" 2>/dev/null && pwd)" || sd=""
+  for c in "${sd:+$sd/../lib/cc-say.sh}" "${HOME:-}/.claude/lib/cc-say.sh"; do
+    # shellcheck source=/dev/null  # runtime-resolved: checkout sibling, else the live layer
+    [[ -n "$c" && -r "$c" ]] && { . "$c" 2>/dev/null || true; break; }
+  done
+  command -v cc_say >/dev/null 2>&1
+}
+# _lcw_say KIND VERDICT [FACT] [ACTION] — one verdict row on STDOUT (the verdict is captured by
+# `$(...)`), in colour: the target is the pane's tty written by path, which no isatty test can see.
+# `sid` is the caller's local (bash scoping), stamped on the log record. A plain stand-in without it.
+_lcw_say() {
+  if _lcw_say_load; then
+    CC_SAY_TOOL=lead-crash-watchdog CC_SAY_FD=1 CC_SAY_COLOR=1 CC_SAY_WIDTH=56 \
+      CC_SAY_SID="${sid:-}" CC_SAY_PANE="${LEAD_PANE:-}" cc_say "$@"
+  else
+    local g="─"
+    case "$1" in ok) g="✓" ;; fail) g="✗" ;; warn) g="⚠" ;; esac
+    printf '%s %s%s%s\n' "$g" "$2" "${3:+ · $3}" "${4:+ · ▶ $4}"
+  fi
+}
+_lcw_say_detail() { # VERDICT DETAIL → the pane-say log only; prints nothing
+  _lcw_say_load || return 0
+  CC_SAY_TOOL=lead-crash-watchdog CC_SAY_SID="${sid:-}" CC_SAY_PANE="${LEAD_PANE:-}" cc_say_detail "$@"
+}
+# The row builders below write pane_verdict_text's locals (bash scoping): `body`, and `headline`
+# (the first row's plain text, for the daemon log).
+_pv_add() { # KIND VERDICT [FACT] [ACTION]
+  local out; out=$(_lcw_say "$@")
+  if [[ -z "$body" ]]; then body="$out"; else body="$body"$'\n'"$out"; fi
+  [[ -n "$headline" ]] || headline="$2${3:+ · $3}"
+}
+_pv_work_row() { # the ONE amber row for a dirty or unlanded working dir, else nothing
+  local what="uncommitted" b="${LEAD_CWD:-?}"
+  case "$work" in dirty:*) ;; unlanded:*) what="unlanded" ;; *) return 0 ;; esac
+  _pv_add warn "$what work in ${b##*/}"
+}
+# A TEAMMATE IS NOT RESUMABLE (root cause 6): resumed outside its team it is a stray session with no
+# lead to report to, and its lead re-spawns members itself. So no teammate verdict offers --resume —
+# this row names the lead instead. Its team is `session-<lead sid8>`.
+_pv_tm_row() {
+  _pv_add warn "$nm not resumable" "tell its lead ${tm_team#session-}"
+  detail="$detail · teammate $tm_name is not resumable outside its team: tell its lead (session ${tm_team#session-}) — the lead re-spawns members"
+}
+_pv_out() { # the caller's verdict in paint_pane_verdict's framing; its detail goes to the log
+  _lcw_say_detail "$headline" "$detail (painted $when)"
+  printf '%s\t%s\n\n%s\n' "$headline" "$title" "$body"
+}
 pane_verdict_text() { # $1=sid $2=class $3=cause $4=exit $5=sig $6=tpath → line 1: headline<TAB>title; then a blank line and the block
   local sid="$1" class="$2" cause="$3" ec="${4:-}" sig="${5:-}" tpath="${6:-}"
-  local launcher work close reason when role="" rule headline title body resume
-  local tm tm_is tm_name tm_team tm_src tm_mid reopen full_cfg f
+  local launcher work close reason when role="" headline="" title="" body="" detail="" resume
+  local tm tm_is tm_name tm_team tm_src tm_mid full_cfg f s8 pane closing nm
   # The resume hint names the launcher of the store holding the FULL transcript (each HANDOFF.json hop
   # followed), never the registration's store: that printed `claude4` for a session living on next2.
   full_cfg="$LEAD_CFG"; [[ -z "$LEAD_CFG" ]] || full_cfg=$(pane_full_cfg "$sid" "$LEAD_CFG")
@@ -1802,48 +1865,37 @@ pane_verdict_text() { # $1=sid $2=class $3=cause $4=exit $5=sig $6=tpath → lin
   fi
   work=$(pane_work_state "$LEAD_CWD"); close=$(pane_last_close "$tpath"); reason=$(pane_end_reason "$sid")
   when=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  pane_is_desk "$LEAD_PANE" && role=" — the DESK"
+  s8="${sid:0:8}"; pane="${LEAD_PANE:-<pane>}"
+  pane_is_desk "$LEAD_PANE" && role=" (desk)"
   resume="nocorrect CC_ACCOUNT_PINNED=1 $launcher --resume $sid"
-  rule='────────────────────────────────────────────────────────────────────────────────'
-  # A TEAMMATE IS NOT RESUMABLE (root cause 6): resumed outside its team it is a stray session with no
-  # lead to report to, and its lead re-spawns members itself. So no teammate banner offers --resume —
-  # the reopen line names the lead instead. Its team is `session-<lead sid8>`.
+  # The promise a closable verdict makes, and the phrase paint_pane_verdict hands the pane to the
+  # closer on: a countdown only when cc-pane-close will be called, else the operator's instruction.
+  closing="safe to close"
+  if [[ "${CC_PANE_VERDICT_CLOSE:-on}" != off && "${LEAD_PANE:-}" =~ ^[0-9]+$ ]] && pane_closer_bin >/dev/null; then
+    closing="closing in ${CC_PANE_VERDICT_CLOSE_GRACE_S:-20}s"
+  fi
+  _lcw_say_load || true
   tm=$(teammate_facts "$tpath")
   IFS=$'\t' read -r tm_is tm_name tm_team _ tm_src tm_mid <<< "$tm" || true
-  local reopen_dirty reopen_clean resume_crash crash_note
-  reopen_dirty="▶ Reopen it here:   $resume"
-  reopen_clean="To reopen the session instead:
-▶ $resume"
-  resume_crash="▶ Resume it here:   $resume"
-  crash_note="The
-   \"Resume this session with: claude --resume …\" line above is Claude Code's ordinary exit text, and
-   its bare \`claude\` is the WRONG launcher for this account's transcript store."
-  if [[ "$tm_is" == 1 ]]; then
-    reopen="▶ Teammate $tm_name is not resumable: tell its lead (session ${tm_team#session-}) — the lead re-spawns members"
-    reopen_dirty="$reopen"; reopen_clean="
-$reopen"; resume_crash="$reopen"
-    crash_note="The
-   exit text above offers a resume line; ignore it — a teammate is not resumable outside its team."
-  fi
+  nm="$tm_name"; (( ${#nm} <= 12 )) || nm="${nm:0:11}…"
   # LR FACTS FIRST (pane_lr_facts): a moved session's banner says where it went, whatever the death
   # class read. A teammate keeps its own banner — its lead owns it, not limit-recover.
   LRF_STATE=""
   [[ "$tm_is" == 1 ]] || pane_lr_facts "$sid"
   case "$LRF_STATE" in
     stranded)
-      headline="✗ ${sid:0:8} moved ${LRF_SRC}→${LRF_DST}, relaunch failed · ▶ lr-fleet --one ${sid:0:8}"
-      title="✗ stranded ${sid:0:8}"
-      body="$headline
-   $(pane_lr_enqueue "$sid" "$LRF_DST_CFG") Its full transcript is on $LRF_DST ($launcher); no copy runs anywhere.
-   work in ${LEAD_CWD:-?}: $work · its last close verdict: $close · lr facts: $LRF_FACTS"
-      printf '%s\t%s\n\n%s\n%s\n%s\n' "$headline" "$title" "$rule" "$body" "$rule"
+      # `cc-lr recover`, not `lr-fleet --one`: lr-fleet is not on PATH, so the painted command did not
+      # run when pasted; cc-lr recover drives the same lr-fleet --one behind its guards.
+      title="✗ stranded $s8"
+      _pv_add fail "$s8 moved ${LRF_SRC}→${LRF_DST}, relaunch failed" "" "cc-lr recover $s8"
+      detail="$(pane_lr_enqueue "$sid" "$LRF_DST_CFG") Its full transcript is on $LRF_DST ($launcher); no copy runs anywhere · work in ${LEAD_CWD:-?}: $work · last close verdict: $close · lr facts: $LRF_FACTS"
+      _pv_out
       return 0 ;;
     moved-live)
-      headline="✅ ${sid:0:8} moved ${LRF_SRC}→${LRF_DST} and runs in pane $LRF_LIVE_PANE"
-      title="✅ moved ${sid:0:8}"
-      body="$headline (verdict painted $when).
-   This pane holds nothing: safe to close (Ctrl-D). Do NOT resume it here — a second copy would split it."
-      printf '%s\t%s\n\n%s\n%s\n%s\n' "$headline" "$title" "$rule" "$body" "$rule"
+      title="✅ moved $s8"
+      _pv_add ok "$s8 moved, runs in pane $LRF_LIVE_PANE" "$closing"
+      detail="moved ${LRF_SRC}→${LRF_DST} and runs in pane $LRF_LIVE_PANE. Do NOT resume it here — a second copy would split it."
+      _pv_out
       return 0 ;;
   esac
   case "$class:$cause" in
@@ -1852,77 +1904,65 @@ $reopen"; resume_crash="$reopen"
       # sources differ in what they prove: `own` means the member received the request (its work went
       # to the lead); a lead source proves the order, not the member's state — so a member that died
       # with a tool call open is said to have been stopped MID-TASK, and the pane is NOT auto-closed
-      # ("holds nothing" is the closer's trigger), because the warning is the point of the paint.
-      title="✅ retired ${sid:0:8}"
+      # (the countdown is the closer's trigger), because the warning is the point of the paint.
+      title="✅ retired $s8"
       if [[ "${tm_src:-own}" == lead-* ]]; then
         local how="TaskStop"; [[ "$tm_src" == lead-request ]] && how="shutdown_request"
-        headline="✅ RETIRED — teammate $tm_name (session ${sid:0:8}) was stopped by its lead ($how); this was not a crash"
+        detail="teammate $tm_name (session $s8) was stopped by its lead ($how); this was not a crash"
         if [[ "${tm_mid:-0}" == 1 ]]; then
-          headline="⚠ RETIRED MID-TASK — teammate $tm_name (session ${sid:0:8}) was stopped by its lead ($how); not a crash, but it was mid-task"
-          title="⚠ retired mid-task ${sid:0:8}"
-          body="$headline (verdict painted $when).
-   ⚠ It was stopped MID-TASK (a tool call never returned): check its worktree for uncommitted work
-   before its lead (session ${tm_team#session-}) removes it. Then close this pane (Ctrl-D); there is nothing to resume."
+          title="⚠ retired mid-task $s8"
+          _pv_add warn "$nm retired mid-task by lead" "$how"
+          _pv_add warn "check its worktree for uncommitted work"
+          detail="$detail. It was stopped MID-TASK (a tool call never returned): check its worktree before its lead (session ${tm_team#session-}) removes it. Nothing to resume."
         else
-          body="$headline (verdict painted $when).
-   This pane holds nothing: close this pane (Ctrl-D). There is nothing to resume."
+          _pv_add ok "$nm retired by its lead" "$closing"
+          detail="$detail. Nothing to resume."
         fi
       else
-        headline="✅ RETIRED — teammate $tm_name (session ${sid:0:8}) was shut down by its lead; its work went to the lead"
-        body="$headline (verdict painted $when).
-   This pane holds nothing: close this pane (Ctrl-D). There is nothing to resume."
+        _pv_add ok "$nm retired by its lead" "$closing"
+        detail="teammate $tm_name (session $s8) was shut down by its lead; its work went to the lead. Nothing to resume."
       fi ;;
     RECYCLE:retired-by-desk)
-      headline="✅ RETIRED — Claude session ${sid:0:8}${role} was retired by the desk after its work was collected"
-      title="✅ retired ${sid:0:8}"
-      body="$headline (verdict painted $when).
-   The pane close that should have followed did not happen. This pane holds nothing: safe to close (Ctrl-D).
-   Do NOT resume it — its work was landed before the retirement." ;;
+      title="✅ retired $s8"
+      _pv_add ok "$s8 retired by desk" "$closing"
+      detail="session $s8${role} was retired by the desk after its work was collected; the pane close that should have followed did not happen. Do NOT resume it — its work was landed before the retirement." ;;
     RECYCLE:*)
-      headline="✅ CLOSED CLEANLY — Claude session ${sid:0:8}${role} exited on its own (reason: $reason); nothing relaunched here"
-      title="✅ closed ${sid:0:8}"
-      body="$headline (verdict painted $when).
-   work in ${LEAD_CWD:-?}: $work · its last close verdict: $close"
+      title="✅ closed $s8"
+      detail="exited on its own (reason: $reason); nothing relaunched here · work in ${LEAD_CWD:-?}: $work · last close verdict: $close"
       case "$work" in
-        dirty:*|unlanded:*) body="$body
-   ⚠ Its working dir still holds uncommitted or unlanded work — look at that before closing this pane.
-$reopen_dirty" ;;
-        *) body="$body
-   This pane holds nothing: safe to close (Ctrl-D). $reopen_clean" ;;
-      esac ;;
+        dirty:*|unlanded:*) _pv_add ok "$s8${role} ended cleanly" ;;
+        *) _pv_add ok "$s8${role} ended cleanly" "$closing" ;;
+      esac
+      _pv_work_row
+      if [[ "$tm_is" == 1 ]]; then _pv_tm_row; else detail="$detail · reopen: $resume"; fi ;;
     *)
-      # CUSTODY, for a lead only (a teammate's banner above already names its lead). This paint happens
-      # ONCE, at death, and a discharge usually arrives later — so an OPEN row names the owner instead of
+      # CUSTODY, for a lead only (a teammate's row already names its lead). This paint happens ONCE,
+      # at death, and a discharge usually arrives later — so an OPEN row names the owner instead of
       # offering a resume, and the sweep (which reads custody live) is the place to decide.
       local cust="" c_state="" c_slug="" c_kind="" c_ts="" c_op=""
       [[ "$tm_is" == 1 ]] || cust=$(pane_custody_fact "$tpath")
       IFS=$'\t' read -r c_state c_slug c_kind c_ts c_op <<< "$cust" || true
-      case "$c_state" in
-        collected)
-          headline="✅ WORK COLLECTED — Claude session ${sid:0:8}${role} was killed here, and its originator (pane $c_op) collected its work"
-          title="✅ collected ${sid:0:8}"
-          body="$headline (verdict painted $when).
-   cause: ${cause}${ec:+ (exit $ec}${sig:+, signal $sig}${ec:+)}. custody $c_slug: $c_kind at $c_ts.
-   The \"Resume this session with:\" line above is Claude Code's ordinary exit text; ignore it.
-   work in ${LEAD_CWD:-?}: $work · its last close verdict: $close
-   Do NOT resume it — close this pane (Ctrl-D). A resume would re-arm its /goal over finished work.
-▶ Or triage first:  cc-husk-sweep --pane ${LEAD_PANE:-<pane>}" ;;
-        open)
-          crash_note="The
-   exit text above offers a resume line; do not use it while another session holds this work."
-          resume_crash="▶ Not yours to resume: its originator (pane $c_op) holds custody of this work ($c_slug, opened $c_ts) — tell it" ;;
-      esac
-      if [[ "$c_state" != collected ]]; then
-        headline="⛔ NOT A CLEAN EXIT — Claude session ${sid:0:8}${role} was KILLED here"
-        title="⛔ KILLED ${sid:0:8}"
-        body="$headline (verdict painted $when).
-   cause: ${cause}${ec:+ (exit $ec}${sig:+, signal $sig}${ec:+)}. It did not exit and nothing closed it. $crash_note
-   work in ${LEAD_CWD:-?}: $work · its last close verdict: $close
-$resume_crash
-▶ Or triage first:  cc-husk-sweep --pane ${LEAD_PANE:-<pane>}"
-      fi ;;
+      detail="cause: ${cause}${ec:+ (exit $ec}${sig:+, signal $sig}${ec:+)} · work in ${LEAD_CWD:-?}: $work · last close verdict: $close"
+      if [[ "$c_state" == collected ]]; then
+        title="✅ collected $s8"
+        _pv_add ok "$s8 work collected by pane $c_op" "do not resume" "cc-husk-sweep --pane $pane"
+        detail="$detail · killed here; its originator (pane $c_op) collected its work: custody $c_slug: $c_kind at $c_ts. A resume would re-arm its /goal over finished work."
+      else
+        title="⛔ KILLED $s8"
+        # The pinned resume line (~85 cells) never fits a 56-cell row, so the row's ▶ is the triage
+        # command and the resume line goes to the log.
+        _pv_add fail "$s8${role} killed ($cause)" "" "cc-husk-sweep --pane $pane"
+        if [[ "$c_state" == open ]]; then
+          _pv_add warn "pane $c_op holds custody of its work" "tell it"
+          detail="$detail · not yours to resume: its originator (pane $c_op) holds custody of this work ($c_slug, opened $c_ts)"
+        elif [[ "$tm_is" != 1 ]]; then
+          detail="$detail · resume: $resume (the exit text's bare \`claude --resume\` is the WRONG launcher for this account's store)"
+        fi
+      fi
+      _pv_work_row
+      [[ "$tm_is" != 1 ]] || _pv_tm_row ;;
   esac
-  printf '%s\t%s\n\n%s\n%s\n%s\n' "$headline" "$title" "$rule" "$body" "$rule"
+  _pv_out
 }
 paint_pane_verdict() { # $1=sid $2=pid $3=class $4=cause $5=exit $6=sig $7=tpath — ALWAYS returns 0
   local sid="$1" class="${3:-}" cause="${4:-}" ec="${5:-}" sig="${6:-}" tpath="${7:-}" tty state out headline title block
@@ -1940,15 +1980,22 @@ paint_pane_verdict() { # $1=sid $2=pid $3=class $4=cause $5=exit $6=sig $7=tpath
   # `| head -1`: this file runs under pipefail, and a producer cut off by head reads as a failure.
   local first; first="${out%%$'\n'*}"; headline="${first%%$'\t'*}"; title="${first#*$'\t'}"
   block="${out#*$'\n'}"; block="${block#$'\n'}"
-  # THE CLOSER DECIDES BEFORE THE PAINT (lr-wake 2026-10-18, RC4). A banner promising "safe to close"
-  # over a pane the closer then refuses is a second false verdict, so a "holds nothing" block is
-  # painted only after cc-pane-close --dry-run agrees; when it refuses, its own reason replaces the
-  # promise, and the phrase the close trigger keys on is gone with it.
-  local kept=""
-  case "$block" in *"This pane holds nothing"*)
+  # THE CLOSER DECIDES BEFORE THE PAINT (lr-wake 2026-10-18, RC4). A row promising "closing in Ns"
+  # over a pane the closer then refuses is a second false verdict, so a closable row is painted only
+  # after cc-pane-close --dry-run agrees; when it refuses, a ⚠ triage row replaces the promise (its
+  # reason goes to the log), and the phrase the close trigger keys on is gone with it.
+  local kept="" line nb=""
+  case "$block" in *"closing in "*|*"safe to close"*)
     if ! kept=$(pane_close_predicate "$sid"); then
-      block="${block//This pane holds nothing: safe to close (Ctrl-D)./Nothing runs here, but the closer keeps this pane: $kept.}"
-      block="${block//This pane holds nothing: close this pane (Ctrl-D)./Nothing runs here, but the closer keeps this pane: $kept.}"
+      _lcw_say_load || true
+      while IFS= read -r line; do
+        case "$line" in *"closing in "*|*"safe to close"*)
+          line=$(_lcw_say warn "${sid:0:8} ended, reason unknown" "" "cc-husk-sweep --pane ${LEAD_PANE:-<pane>}") ;;
+        esac
+        if [[ -z "$nb" ]]; then nb="$line"; else nb="$nb"$'\n'"$line"; fi
+      done <<< "$block"
+      block="$nb"
+      _lcw_say_detail "${sid:0:8} pane kept" "Nothing runs here, but the closer keeps this pane: $kept."
       log "[watchdog $sid] pane verdict: the closer keeps pane ${LEAD_PANE:-?} ($kept) — painted without the safe-to-close line"
     fi ;;
   esac
@@ -1957,7 +2004,7 @@ paint_pane_verdict() { # $1=sid $2=pid $3=class $4=cause $5=exit $6=sig $7=tpath
   else
     log "[watchdog $sid] pane verdict WRITE FAILED on $tty (pane ${LEAD_PANE:-?}): $headline"
   fi
-  case "$block" in *"This pane holds nothing"*) pane_verdict_close "$sid" "$tty" ;; esac
+  case "$block" in *"closing in "*|*"safe to close"*) pane_verdict_close "$sid" "$tty" ;; esac
   return 0
 }
 # ── A PANE THAT HOLDS NOTHING IS CLOSED, NOT LABELLED (2026-10-01) ──────────────────────────────────

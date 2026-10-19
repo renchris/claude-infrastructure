@@ -47,26 +47,45 @@ setup() {
 verdict_with() { # $1=hook $2=class $3=cause $4=exit $5=sig
   bash "$1" --pane-verdict "$SID" 63977 "$2" "$3" "$4" "$5" "$TX" </dev/null
 }
-painted() { cat "$T/dev/ttys099"; }
+# the painted text with its truecolor runs stripped (the OSC-2 title stays); the raw bytes are the file
+painted() { LC_ALL=C sed $'s/\033\\[[0-9;]*m//g' "$T/dev/ttys099"; }
+# what the verdict dropped from the pane: cc_say_detail's log, under the fixture HOME
+said() { cat "$HOME/.claude/logs/pane-say.jsonl" 2>/dev/null; }
+# every painted row fits the 56-cell pane budget (cc-say's own cell model), with no SGR-2 and no rule
+assert_rows() {
+  ! LC_ALL=C grep -q $'\033\\[2m' "$T/dev/ttys099" || { echo "SGR-2 painted"; false; }
+  ! grep -q '────' "$T/dev/ttys099" || { echo "a rule was painted: $(painted)"; false; }
+  # shellcheck source=/dev/null
+  . "$REPO/lib/cc-say.sh"
+  local line n=0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    cc_say_cells "$line"; [ "$CC_SAY_CELLS" -le 56 ] || { echo "row is $CC_SAY_CELLS cells: $line"; false; }
+    n=$((n + 1))
+  done < <(painted)
+  [ "$n" -ge 1 ] && [ "$n" -le 4 ] || { echo "$n rows painted: $(painted)"; false; }
+}
 
-@test "external-sigterm over a bare shell paints NOT A CLEAN EXIT, the cause, and the PINNED launcher's resume line" {
+@test "external-sigterm over a bare shell paints killed, the cause and triage; the PINNED launcher's resume line is logged" {
   run verdict_with "$HOOK" CRASH external-sigterm 143 15
   [ "$status" -eq 0 ]
-  painted | grep -q 'NOT A CLEAN EXIT'
-  painted | grep -q 'was KILLED here'
-  painted | grep -q 'external-sigterm (exit 143, signal 15)'
-  painted | grep -q "nocorrect CC_ACCOUNT_PINNED=1 claude3 --resume $SID"
-  painted | grep -q 'cc-husk-sweep --pane 330'
-  # the pane's own printed spelling (default account) is named as WRONG, never offered as the command
+  painted | grep -q '✗ 88e2c2b1 killed (external-sigterm)'
+  painted | grep -q '▶ cc-husk-sweep --pane 330'
+  said | grep -q 'external-sigterm (exit 143, signal 15)'
+  said | grep -q "nocorrect CC_ACCOUNT_PINNED=1 claude3 --resume $SID"
+  # the resume line (~85 cells) never fits a row; the pane's own printed spelling is never offered
+  ! painted | grep -q -- '--resume' || false
   ! painted | grep -q '^▶.* claude --resume' || false
   # the stdout copy carries the same content, so a caller without a tty can still read it
-  echo "$output" | grep -q 'NOT A CLEAN EXIT'
+  echo "$output" | grep -q 'killed (external-sigterm)'
+  assert_rows
 }
 
 @test "the verdict carries the work state of the cwd and the session's last close verdict (facts, not the session's word)" {
   run verdict_with "$HOOK" CRASH external-sigterm 143 15
-  painted | grep -q 'dirty:1'
-  painted | grep -q 'last close verdict: no'
+  painted | grep -q '⚠ uncommitted work in cwd'
+  said | grep -q 'work in [^"]*: dirty:1'
+  said | grep -q 'last close verdict: no'
 }
 
 @test "the title escape rides along, so the tab is labelled until the next prompt" {
@@ -77,7 +96,7 @@ painted() { cat "$T/dev/ttys099"; }
 @test "when the victim IS the desk the pane says so, and the death is escalated to Notification Center with the restore command" {
   printf '330\n' > "$T/roles/desk"
   run verdict_with "$HOOK" CRASH external-sigterm 143 15
-  painted | grep -q 'the DESK'
+  painted | grep -q '88e2c2b1 (desk) killed'
   run bash "$HOOK" --surface-death "$SID" 63977 CRASH external-sigterm 143 15 "$TX"
   [ -s "$PAGED" ]
   [ -s "$OSA" ] || { echo "desk death was not escalated"; false; }
@@ -111,20 +130,20 @@ painted() { cat "$T/dev/ttys099"; }
   [ ! -s "$T/dev/ttys099" ] || { echo "painted over a running command"; false; }
 }
 
-@test "a clean exit whose pane survived, over CLEAN work, paints CLOSED CLEANLY and 'safe to close'" {
+@test "a clean exit whose pane survived, over CLEAN work, paints one 'ended cleanly · closing in' row" {
   rm -f "$T/cwd/scratch.txt"
   printf '[2026-09-08 17:47:36] Session ended sid=%s reason=prompt_input_exit\n' "$SID" > "$CC_SESSIONS_LOG"
   run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
-  painted | grep -q 'CLOSED CLEANLY'
-  painted | grep -q 'reason: prompt_input_exit'
-  painted | grep -q 'safe to close'
-  ! painted | grep -q 'KILLED' || false
+  painted | grep -q '✓ 88e2c2b1 ended cleanly · closing in 0s'
+  said | grep -q 'reason: prompt_input_exit'
+  ! painted | grep -qi 'killed' || false
+  assert_rows
 }
 
 @test "a clean exit over CLEAN work hands its pane to cc-pane-close after painting" {
   rm -f "$T/cwd/scratch.txt"
   run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
-  painted | grep -q 'safe to close'
+  painted | grep -q 'closing in 0s'
   grep -qx -- '--pane 330' "$T/closed.txt" || { cat "$T/closed.txt" 2>/dev/null; false; }
 }
 @test "CONTROL: a clean exit over DIRTY work is never handed to the closer" {
@@ -142,22 +161,24 @@ painted() { cat "$T/dev/ttys099"; }
   rm -f "$T/closed.txt"; : > "$T/dev/ttys099"
   CC_PANE_VERDICT_CLOSE=off run verdict_with "$HOOK" RECYCLE retired-by-desk 137 9
   painted | grep -q 'safe to close'
+  ! painted | grep -q 'closing in' || false        # no countdown when nothing will close it
   [ ! -s "$T/closed.txt" ] || { cat "$T/closed.txt"; false; }
 }
 
-@test "a clean exit over DIRTY work warns about the work instead of saying safe" {
+@test "a clean exit over DIRTY work adds ONE amber work row instead of a countdown" {
   run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
-  painted | grep -q 'CLOSED CLEANLY'
-  painted | grep -q 'uncommitted or unlanded work'
-  ! painted | grep -q 'safe to close' || false
-  painted | grep -q "claude3 --resume $SID"
+  painted | grep -q '✓ 88e2c2b1 ended cleanly'
+  painted | grep -q '⚠ uncommitted work in cwd'
+  ! painted | grep -q 'closing in\|safe to close' || false
+  said | grep -q "claude3 --resume $SID"
+  assert_rows
 }
 
-@test "a retirement by the desk whose pane survived says safe to close and do NOT resume" {
+@test "a retirement by the desk whose pane survived says retired and closing; do NOT resume is logged" {
   run verdict_with "$HOOK" RECYCLE retired-by-desk 137 9
-  painted | grep -q 'RETIRED'
-  painted | grep -q 'Do NOT resume'
-  painted | grep -q 'safe to close'
+  painted | grep -q '✓ 88e2c2b1 retired by desk · closing in 0s'
+  said | grep -q 'Do NOT resume'
+  assert_rows
 }
 
 @test "kill switch CC_PANE_VERDICT=0 paints nothing" {
@@ -190,9 +211,9 @@ painted() { cat "$T/dev/ttys099"; }
   rm -f "$CC_SESSIONS_LOG"
   run verdict_with "$HOOK" CRASH external-sigterm 143 15
   [ "$status" -eq 0 ]
-  painted | grep -q 'NOT A CLEAN EXIT'
-  painted | grep -q 'last close verdict: -'
-  painted | grep -q "claude3 --resume $SID"
+  painted | grep -q 'killed (external-sigterm)'
+  said | grep -q 'last close verdict: -'
+  said | grep -q "claude3 --resume $SID"
 }
 
 # ── the prompt's background residents (2026-09-22, pane 503 / ttys006) ─────────────────────────────
@@ -206,7 +227,7 @@ GITSTATUSD='/Users/x/.cache/gitstatus/gitstatusd-darwin-arm64 -G v1.5.4 -s -1 -u
   printf 'S+ /bin/zsh -l -i\nS /bin/zsh -l -i\nSs /bin/zsh -l\nS %s\nS %s\n' "$GITSTATUSD" "$GITSTATUSD" > "$T/procs"
   run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
   [ "$status" -eq 0 ]
-  painted | grep -q 'CLOSED CLEANLY' || { echo "not painted over a bare prompt: $(painted)"; false; }
+  painted | grep -q 'ended cleanly' || { echo "not painted over a bare prompt: $(painted)"; false; }
 }
 
 @test "a background resident never masks a FOREGROUND command — that pane is still not written over" {
@@ -248,37 +269,39 @@ custody_row() { # <kind> <ts> [targetPane]
   run verdict_with "$HOOK" CRASH external-sigterm 143 15
   [ "$status" -eq 0 ]
   ! painted | grep -q -- '--resume' || { echo "a collected lead was offered a resume: $(painted)"; false; }
-  painted | grep -q 'WORK COLLECTED'
-  painted | grep -q 'originator (pane 38) collected its work'
-  painted | grep -q 'custody w2-reso-review: abandon at 2026-10-01T03:59:28Z'
-  painted | grep -q 'Do NOT resume it — close this pane (Ctrl-D)'
-  painted | grep -q 'cc-husk-sweep --pane 330'
+  painted | grep -q '✓ 88e2c2b1 work collected by pane 38 · do not resume'
+  said | grep -q 'originator (pane 38) collected its work'
+  said | grep -q 'custody w2-reso-review: abandon at 2026-10-01T03:59:28Z'
+  painted | grep -q '▶ cc-husk-sweep --pane 330'
+  assert_rows
 }
 
-@test "CRASH + custody still open: no bare resume line; the banner names the originator pane" {
+@test "CRASH + custody still open: no resume line anywhere; one ⚠ row names the originator pane" {
   custody_row open 2026-10-01T00:35:50Z
   run verdict_with "$HOOK" CRASH external-sigterm 143 15
   [ "$status" -eq 0 ]
-  ! painted | grep -q 'Resume it here' || { echo "an owned lead was offered a resume: $(painted)"; false; }
-  ! painted | grep -q -- '--resume' || false
-  painted | grep -q 'NOT A CLEAN EXIT'
-  painted | grep -q 'its originator (pane 38) holds custody of this work (w2-reso-review'
+  ! painted | grep -q -- '--resume' || { echo "an owned lead was offered a resume: $(painted)"; false; }
+  ! said | grep -q -- '--resume' || { echo "an owned lead's log offered a resume: $(said)"; false; }
+  painted | grep -q 'killed (external-sigterm)'
+  painted | grep -q '⚠ pane 38 holds custody of its work · tell it'
+  said | grep -q 'its originator (pane 38) holds custody of this work (w2-reso-review'
   painted | grep -q 'cc-husk-sweep --pane 330'
+  assert_rows
 }
 
 @test "CRASH + no custody for this pane (another pane's row, or an earlier tenant's) is unchanged" {
   custody_row open 2026-10-01T00:35:50Z 41
   custody_row abandon 2026-10-01T03:59:28Z 41
   run verdict_with "$HOOK" CRASH external-sigterm 143 15
-  painted | grep -q "▶ Resume it here:   nocorrect CC_ACCOUNT_PINNED=1 claude3 --resume $SID"
+  said | grep -q "resume: nocorrect CC_ACCOUNT_PINNED=1 claude3 --resume $SID"
   # pane-id reuse: a row targeting 330 from BEFORE this session's first record does not speak for it
-  : > "$T/dev/ttys099"
+  : > "$T/dev/ttys099"; : > "$HOME/.claude/logs/pane-say.jsonl"
   custody_row open 2026-09-30T10:00:00Z
   custody_row abandon 2026-09-30T12:00:00Z
   printf '{"type":"user","timestamp":"2026-10-01T00:00:00.000Z"}\n' | cat - "$TX" > "$T/tx2" && mv "$T/tx2" "$TX"
   run verdict_with "$HOOK" CRASH external-sigterm 143 15
-  painted | grep -q "▶ Resume it here:   nocorrect CC_ACCOUNT_PINNED=1 claude3 --resume $SID"
-  ! painted | grep -q 'WORK COLLECTED' || false
+  said | grep -q "resume: nocorrect CC_ACCOUNT_PINNED=1 claude3 --resume $SID"
+  ! painted | grep -q 'work collected' || false
 }
 
 @test "a TEAMMATE's CRASH banner keeps naming its lead, custody or not" {
@@ -286,8 +309,9 @@ custody_row() { # <kind> <ts> [targetPane]
   custody_row open 2026-10-01T00:35:50Z
   custody_row abandon 2026-10-01T03:59:28Z
   run verdict_with "$HOOK" CRASH external-sigterm 143 15
-  painted | grep -q 'Teammate trunk-reds is not resumable'
-  ! painted | grep -q 'WORK COLLECTED' || false
+  painted | grep -q '⚠ trunk-reds not resumable · tell its lead 918b909f'
+  ! painted | grep -q 'work collected' || false
+  assert_rows
 }
 
 # ── lr-wake 2026-10-18 (REPORT §4 Wave F, RC4): lr's records outrank the death class ─────────────
@@ -310,16 +334,20 @@ lr_move_fixture() {
   rm -f "$T/cwd/scratch.txt"                      # clean work: the old arm said "safe to close" here
 }
 
-@test "STRANDED bundle: no CLOSED CLEANLY, no safe to close; the answer-first line names the move and lr-fleet; the hint is claude3" {
+@test "STRANDED bundle: no CLOSED CLEANLY, no safe to close; the answer-first line names the move and cc-lr recover; the hint is claude3" {
   lr_move_fixture
   run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
   [ "$status" -eq 0 ]
-  painted | grep -qF "✗ 88e2c2b1 moved next4→next3, relaunch failed · ▶ lr-fleet --one 88e2c2b1" || { painted; false; }
-  ! painted | grep -q 'CLOSED CLEANLY' || { painted; false; }
-  ! painted | grep -q 'safe to close' || { painted; false; }
-  painted | grep -q '(claude3)' || { painted; false; }
+  painted | grep -qF "✗ 88e2c2b1 moved next4→next3, relaunch failed" || { painted; false; }
+  painted | grep -qF "▶ cc-lr recover 88e2c2b1" || { painted; false; }
+  ! painted | grep -q 'lr-fleet' || { painted; false; }   # not on PATH: the pasted command did not run
+  ! painted | grep -q 'CLOSED CLEANLY\|ended cleanly' || { painted; false; }
+  ! painted | grep -q 'safe to close\|closing in' || { painted; false; }
+  said | grep -q '(claude3)' || { said; false; }
   ! painted | grep -q 'claude4' || { painted; false; }
-  painted | grep -q 'last close verdict: no'          # read from the FULL transcript, not the stub
+  ! said | grep -q 'claude4' || { said; false; }
+  said | grep -q 'last close verdict: no'          # read from the FULL transcript, not the stub
+  assert_rows
   # it is never handed to the closer, and it is queued exactly once for lr's poller
   [ ! -s "$T/closed.txt" ] || { cat "$T/closed.txt"; false; }
   jq -e --arg d "$DST" '.cause == "stranded" and .mode == "recover" and .config_dir == $d and .pane == "330"' "$T/lr/requests/$SID.cc-lr.json"
@@ -332,18 +360,21 @@ lr_move_fixture() {
   run verdict_with "$HOOK" CRASH external-sigterm 143 15
   [ "$(jq -r .at "$T/lr/requests/$SID.cc-lr.json")" = "$at1" ]
   [ "$(find "$T/lr/requests" -name "$SID*" | wc -l | tr -d ' ')" = 1 ]
-  painted | grep -q 'Queued for the limit-recover poller'
+  said | grep -q 'Queued for the limit-recover poller'
   rm -rf "$T/lr/requests"; mkdir -p "$T/lr/parked"; printf '{}\n' > "$T/lr/parked/$SID.json"; : > "$T/dev/ttys099"
+  : > "$HOME/.claude/logs/pane-say.jsonl"
   run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
   [ ! -e "$T/lr/requests/$SID.cc-lr.json" ]
-  painted | grep -q 'already holds it (a parked record)'
+  said | grep -q 'already holds it (a parked record)'
 }
 
 @test "K6: the same move with a LIVE copy cc-find shows in another pane is MOVED, and only then handed to the closer" {
   lr_move_fixture
   printf '%s\t442\tnext3\t%s\t/x\tLIVE\tLEAD\n' "$SID" "$DST" > "$T/find.out"
   run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
-  painted | grep -qF "✅ 88e2c2b1 moved next4→next3 and runs in pane 442" || { painted; false; }
+  painted | grep -qF "✓ 88e2c2b1 moved, runs in pane 442 · closing in 0s" || { painted; false; }
+  said | grep -qF 'moved next4→next3 and runs in pane 442' || { said; false; }
+  assert_rows
   [ ! -e "$T/lr/requests/$SID.cc-lr.json" ]
   grep -qx -- '--pane 330 --dry-run' "$T/closed.txt"
   grep -qx -- '--pane 330' "$T/closed.txt"
@@ -356,13 +387,16 @@ lr_move_fixture() {
   painted | grep -q 'relaunch failed' || { painted; false; }
 }
 
-@test "the closer decides before the paint: when --dry-run refuses, its reason replaces 'safe to close' and no close follows" {
+@test "the closer decides before the paint: when --dry-run refuses, a triage row replaces the countdown and no close follows" {
   rm -f "$T/cwd/scratch.txt"
   printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\ncase "$*" in *--dry-run*) echo "pane 330: REFUSED — nothing says session 88e2c2b1 meant to end"; exit 1 ;; esac\necho closed\n' "$T/closed.txt" > "$CC_PANE_CLOSE_BIN"
   run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
-  ! painted | grep -q 'safe to close' || { painted; false; }
-  painted | grep -q 'the closer keeps this pane: nothing says session 88e2c2b1 meant to end' || { painted; false; }
+  ! painted | grep -q 'safe to close\|closing in' || { painted; false; }
+  painted | grep -q '⚠ 88e2c2b1 ended, reason unknown' || { painted; false; }
+  painted | grep -q '▶ cc-husk-sweep --pane 330' || { painted; false; }
+  said | grep -q 'the closer keeps this pane: nothing says session 88e2c2b1 meant to end' || { said; false; }
   [ "$(cat "$T/closed.txt")" = "--pane 330 --dry-run" ] || { cat "$T/closed.txt"; false; }
+  assert_rows
 }
 
 @test "CONTROL: a lone fault record with no tombstone, lock or STRANDED verdict changes nothing" {
@@ -370,6 +404,18 @@ lr_move_fixture() {
   printf '{"sid":"%s","first_seen":%s,"claim":{"by":"/x/.claude-secondary"}}\n' "$SID" "$(date +%s)" > "$T/lr/faults/$SID.json"
   rm -f "$T/cwd/scratch.txt"
   run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
-  painted | grep -q 'CLOSED CLEANLY'
+  painted | grep -q 'ended cleanly'
   [ ! -d "$T/lr/requests" ]
+}
+
+@test "every verdict class paints answer-first rows of ≤ 56 cells, with no SGR-2 and no rule" {
+  local c
+  for c in "CRASH external-sigterm 143 15" "RECYCLE clean-exit 0 x" "RECYCLE retired-by-desk 137 9" "CRASH killed-oom-or-force 137 9"; do
+    : > "$T/dev/ttys099"
+    # shellcheck disable=SC2086  # the class tuple is split on purpose
+    set -- $c
+    run verdict_with "$HOOK" "$1" "$2" "$3" "${4#x}"
+    [ "$status" -eq 0 ]
+    assert_rows || { echo "class: $c"; false; }
+  done
 }
