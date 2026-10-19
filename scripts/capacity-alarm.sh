@@ -221,9 +221,22 @@
 #
 # data.kalloc.1024 IS READ BY zprint, WHICH IS D2's HAZARD — so the read is hedged three ways:
 #   · DAMPED: one sample per CC_CAP_KALLOC_MIN_S (900 s). Rows in between CARRY the last value with
-#     its own measured-at epoch (`kalloc1024_at`, src=carried) — only a sample from THIS boot, and
-#     none older than four windows. A ~0.65 GB/day ratchet gains nothing from 60 s sampling, and
+#     its own measured-at epoch (`kalloc1024_at`, src=carried) — only a sample from THIS boot, of
+#     ANY age (2026-10-18, below). A ~0.65 GB/day ratchet gains nothing from 60 s sampling, and
 #     the carry is what keeps the per-rung page from re-firing every time a sample is skipped.
+#     THE CARRY HAS NO AGE LIMIT INSIDE A BOOT. It used to expire after four windows, so a run of
+#     SKIPPED/timed-out reads under load blanked the rung and RETRACTED the page: the 10-06..10-18
+#     ALARM was rewritten 18 times that way on its road to the panic. The zone only ratchets up
+#     within a boot, so the last measured value is a lower bound however old it is; the row says
+#     how old (`kalloc1024_at`). When the previous row holds none, the zone series below supplies it.
+#
+# THE CEILING AND THE ZONE PAGE (2026-10-18, docs/research/panic-2026-10-18-zone-map-shebang-leak.md
+# § Answer 3-6). The zone panicked at KALLOC_CEILING_ELEMS elements (~20 GiB). Tiers at 50/70/85% of
+# it, each carrying the level, the trailing-3-day slope and the ETA to the ceiling, go on a page of
+# their OWN (kalloc-zone.page, OUTSIDE pages/, so no "N escalation record(s)" count folds it in) and
+# on a named notification this job posts itself, on each tier crossing and at least daily — never
+# routed through the sweep, which stopped before its notify phase on the last day. The first kernel
+# `killing_idle_process … osr_code: 9` line pages the same way.
 #   · SKIPPED UNDER A STORM: if segments or pressure already sit at their warn floor the zone map is
 #     not walked (the 2026-08-05 sample that walked it never returned).
 #   · BOUNDED WITHOUT coreutils: /usr/bin/perl forks zprint under alarm(CC_CAP_KALLOC_TIMEOUT_S=5)
@@ -255,6 +268,10 @@
 #        CC_CAP_KALLOC_ALARM_GB (default 6) · CC_CAP_KALLOC_MIN_S (default 900, sample damping) ·
 #        CC_CAP_KALLOC_TIMEOUT_S (default 5) · CC_CAP_ZPRINT (zprint binary; ABSOLUTE for rung 8) ·
 #        CC_CAP_BOOTTIME (boot epoch, for stubbing the carry's reboot guard) ·
+#        CC_CAP_OSR9 (auto | on | off — the kernel-log scan for osr_code 9; auto = launchd tick only) ·
+#        CC_CAP_OSR9_SCAN_S (default 300) · CC_CAP_LOGBIN (log(1) binary; default /usr/bin/log) ·
+#        CC_CAP_ZONE_NOTIFY (auto | on | off — the zone page's own notification; auto = launchd tick
+#          only) · CC_CAP_OSASCRIPT (default /usr/bin/osascript) · CC_CAP_LR_PAGE (the phone leg) ·
 #        CC_CAP_CONVOY (auto | on | off — the convoy-gauge tick; auto = only on this job's own
 #          launchd tick) · CC_CAP_CONVOY_GAUGE (the gauge script) · CC_CAP_CONVOY_TIMEOUT_S (45) ·
 #        CC_CAP_ATTRIB_LATEST (the daemon's attrib-latest.json; default beside CC_CAP_ATTRIB_LOG) ·
@@ -360,6 +377,20 @@ case "$KALLOC_WARN_GB"   in ''|*[!0-9.]*|.*|*.|*.*.*) KALLOC_WARN_GB=4 ;; esac
 case "$KALLOC_ALARM_GB"  in ''|*[!0-9.]*|.*|*.|*.*.*) KALLOC_ALARM_GB=6 ;; esac
 case "$KALLOC_MIN_S"     in ''|*[!0-9]*) KALLOC_MIN_S=900 ;; esac
 case "$KALLOC_TIMEOUT_S" in ''|*[!0-9]*|0) KALLOC_TIMEOUT_S=5 ;; esac   # alarm(0) CANCELS the bound
+# THE ZONE'S PANIC CEILING — measured, not inferred. The 2026-10-18 panic (zalloc[3] KERN_NO_SPACE on
+# the zone map's DATA submap) came at 20,955,520 data.kalloc.1024 elements = 19.98 GiB after 18.05
+# days up; upstream reports cluster at 20-21.3M (docs/research/panic-2026-10-18-zone-map-shebang-leak.md
+# § Answer 3). The 9.89 GB this file quoted before was panic #5's bystander reading, never a ceiling:
+# the zone passed it with no panic and the page read as a false alarm. Every ceiling, percentage
+# and ETA below derives from this one constant; reboot-prep reads it back from the zone state file.
+KALLOC_CEILING_ELEMS=20955520
+KALLOC_CEILING_GIB="$(awk -v e="$KALLOC_CEILING_ELEMS" 'BEGIN{printf "%.2f", e * 1024 / 1073741824}')"
+# Beside pages/, never in it, and derived from the SAME seam so a reader (operator-readout.sh) and
+# this writer cannot drift apart.
+ZONE_DIR="$(dirname "${CC_PAGES_DIR:-$HOME/.claude/autonomy/pages}")"
+ZONE_PAGE="$ZONE_DIR/kalloc-zone.page"
+ZONE_STATE="$ZONE_DIR/kalloc-zone.state"
+ZONE_SERIES="$HOME/.claude/logs/kalloc-zone-series.tsv"   # "<epoch> <bytes>", one row per MEASURED read
 # An EXPLICIT override is honoured verbatim; only the DEFAULT falls back. Folding the override into
 # the fallback list is how an override stops being one (memory path-resolved-dependency-in-daemon-code).
 SYSCTL="${CC_CAP_SYSCTL:-}"
@@ -1407,9 +1438,19 @@ if [ "${CC_CAP_KALLOC:-on}" != "off" ]; then
   case "$P_KALLOC_AT" in
     ''|*[!0-9]*) : ;;
     *) if [ -n "$P_KALLOC_GB" ] && [ -n "$BOOT_EPOCH" ] && [ "$P_KALLOC_AT" -ge "$BOOT_EPOCH" ] \
-          && [ "$P_KALLOC_AT" -le $((NOW_EPOCH + 5)) ] \
-          && [ $((NOW_EPOCH - P_KALLOC_AT)) -lt $((4 * KALLOC_MIN_S)) ]; then _carry=1; fi ;;
+          && [ "$P_KALLOC_AT" -le $((NOW_EPOCH + 5)) ]; then _carry=1; fi ;;
   esac
+  # No carry on the previous row (a pre-fix row, or a boot whose first rows were all SKIPPED): the
+  # zone series holds this boot's last MEASURED value — the chain is never broken by one blank row.
+  if [ "$_carry" = 0 ] && [ -n "$BOOT_EPOCH" ] && [ -r "$ZONE_SERIES" ]; then
+    _last="$(awk -v b="$BOOT_EPOCH" -v n="$NOW_EPOCH" '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $1 >= b && $1 <= n + 5 { l = $1 " " $2 }
+                END { if (l != "") print l }' "$ZONE_SERIES" 2>/dev/null)"
+    if [ -n "$_last" ]; then
+      P_KALLOC_AT="${_last%% *}"
+      P_KALLOC_GB="$(awk -v b="${_last#* }" 'BEGIN{printf "%.2f", b/1073741824}')"
+      _carry=1
+    fi
+  fi
   _storm=0
   if [ -n "$SEG_PCT" ] && awk -v a="$SEG_PCT" -v b="$SEG_WARN_PCT" 'BEGIN{exit !(a+0 >= b+0)}'; then _storm=1; fi
   case "$PRESSURE" in ''|*[!0-9]*) : ;; *) [ "$PRESSURE" -ge "$PRESSURE_WARN" ] && _storm=1 ;; esac
@@ -1421,7 +1462,16 @@ if [ "${CC_CAP_KALLOC:-on}" != "off" ]; then
     _kb="$(read_kalloc)"; _krc=$?
     case "$_krc" in
       0)   KALLOC_GB="$(awk -v b="$_kb" 'BEGIN{printf "%.2f", b/1073741824}')"
-           KALLOC_AT="$NOW_EPOCH"; KALLOC_SRC="measured" ;;
+           KALLOC_AT="$NOW_EPOCH"; KALLOC_SRC="measured"
+           # The slope's input: measured reads only, never a carry (a carry would flatten it).
+           if [ "$APPEND" = 1 ]; then
+             mkdir -p "${ZONE_SERIES%/*}" 2>/dev/null
+             printf '%s %s\n' "$NOW_EPOCH" "$_kb" >> "$ZONE_SERIES" 2>/dev/null
+             # Bounded: ~41 days of 900 s samples, trimmed to the newest ~20 days in place.
+             if [ "$(wc -l < "$ZONE_SERIES" 2>/dev/null | tr -d ' ')" -gt 4000 ] 2>/dev/null; then
+               tail -n 2000 "$ZONE_SERIES" > "$ZONE_SERIES.tmp" 2>/dev/null && mv -f "$ZONE_SERIES.tmp" "$ZONE_SERIES"
+             fi
+           fi ;;
       124) KALLOC_SRC="timeout" ;;
       3)   KALLOC_SRC="no-bound" ;;
       *)   KALLOC_SRC="unreadable" ;;
@@ -1433,18 +1483,52 @@ if [ "${CC_CAP_KALLOC:-on}" != "off" ]; then
   fi
 fi
 
-chronic_advice() { # → the scheduled-reboot advisory, one line, with the measured ratchet when known
-  local rate="" eta=""
-  if [ -n "$KALLOC_GB" ] && [ -n "$UPTIME_DAYS" ] && awk -v d="$UPTIME_DAYS" 'BEGIN{exit !(d+0 >= 1)}'; then
-    rate="$(awk -v g="$KALLOC_GB" -v d="$UPTIME_DAYS" 'BEGIN{printf "%.2f", g/d}')"
-    eta="$(awk -v g="$KALLOC_GB" -v r="$rate" -v a="$KALLOC_ALARM_GB" \
-             'BEGIN{ if (r+0 > 0 && g+0 < a+0) printf "%.0f", (a-g)/r }')"
+# ── the zone against its ceiling: level, tier, trailing slope, ETA (2026-10-18) ──────────────────
+# The SLOPE is a least-squares fit over this boot's MEASURED samples in the trailing 3 days (the
+# series above), never the since-boot mean: the leak sped up 3-4x inside one boot (13.4 → 44-53
+# elements/s, doc § Answer 6), and a mean forecast the panic a week late. It needs two samples an
+# hour apart; before that the since-boot mean stands in and the label says so. No slope ⇒ no ETA.
+ZONE_PCT=""; ZONE_TIER=""; ZONE_SLOPE=""; ZONE_SLOPE_SRC=""; ZONE_ETA_DAYS=""; ZONE_ETA_DATE=""; ZONE_LINE=""
+if [ -n "$KALLOC_GB" ]; then
+  read -r ZONE_PCT ZONE_TIER <<< "$(awk -v g="$KALLOC_GB" -v c="$KALLOC_CEILING_GIB" 'BEGIN{
+    p = g / c; t = 0; if (p >= 0.50) t = 1; if (p >= 0.70) t = 2; if (p >= 0.85) t = 3
+    printf "%.0f %d", 100 * p, t }')"
+  _sl=""
+  [ -r "$ZONE_SERIES" ] && _sl="$(awk -v b="${BOOT_EPOCH:-0}" -v n="$NOW_EPOCH" '
+    BEGIN { lo = n - 3 * 86400; if (b + 0 > lo) lo = b + 0 }
+    $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $1 >= lo && $1 <= n + 5 {
+      x = ($1 - n) / 86400; y = $2 / 1073741824
+      k++; sx += x; sy += y; sxx += x * x; sxy += x * y
+      if (t0 == "" || $1 < t0) t0 = $1; if ($1 > t1) t1 = $1 }
+    END { if (k < 2 || t1 - t0 < 3600) exit; d = k * sxx - sx * sx; if (d <= 0) exit
+          printf "%.2f %.1f", (k * sxy - sx * sy) / d, (t1 - t0) / 86400 }' "$ZONE_SERIES" 2>/dev/null)"
+  if [ -n "$_sl" ]; then
+    ZONE_SLOPE="${_sl%% *}"; ZONE_SLOPE_SRC="trailing ${_sl#* } d"
+  elif [ -n "$BOOT_EPOCH" ] && [ $((NOW_EPOCH - BOOT_EPOCH)) -ge 3600 ]; then
+    ZONE_SLOPE="$(awk -v g="$KALLOC_GB" -v s="$((NOW_EPOCH - BOOT_EPOCH))" 'BEGIN{printf "%.2f", g * 86400 / s}')"
+    ZONE_SLOPE_SRC="since-boot mean"
   fi
-  printf 'SCHEDULE A REBOOT — the one measured reset (data.kalloc.1024 read 81 MB after the 2026-08-25 reboot and only ratchets up while sessions come and go) · up %s d%s%s · panic #5 died at 9.89 GB / 73 swapfiles on day 10.9; at the 1.0-1.9 GB/day measured since (docs/research/kalloc-ratchet-2026-10.md) that level comes 5-9 days after a boot, so a weekly reboot no longer stays under it — reboot at each ALARM.\n' \
-    "${UPTIME_DAYS:-?}" "${rate:+ · kalloc +${rate} GB/day since boot}" "${eta:+ · ALARM floor in ~${eta} d}"
+  if [ -n "$ZONE_SLOPE" ]; then
+    ZONE_ETA_DAYS="$(awk -v g="$KALLOC_GB" -v c="$KALLOC_CEILING_GIB" -v r="$ZONE_SLOPE" 'BEGIN{
+      if (g + 0 >= c + 0) printf "0.0"; else if (r + 0 > 0) printf "%.1f", (c - g) / r }')"
+  fi
+  if [ -n "$ZONE_ETA_DAYS" ]; then
+    ZONE_ETA_DATE="$(date -r "$(awk -v n="$NOW_EPOCH" -v d="$ZONE_ETA_DAYS" 'BEGIN{printf "%.0f", n + d * 86400}')" +%Y-%m-%d 2>/dev/null)"
+  fi
+  ZONE_LINE="data.kalloc.1024 ${KALLOC_GB} GiB = ${ZONE_PCT}% of the ~${KALLOC_CEILING_GIB} GiB panic ceiling"
+  if [ -n "$ZONE_SLOPE" ]; then ZONE_LINE="${ZONE_LINE} · +${ZONE_SLOPE} GiB/day (${ZONE_SLOPE_SRC})"; else ZONE_LINE="${ZONE_LINE} · slope unknown"; fi
+  if [ -n "$ZONE_ETA_DAYS" ]; then ZONE_LINE="${ZONE_LINE} · ceiling in ~${ZONE_ETA_DAYS} d (${ZONE_ETA_DATE:-?})"; else ZONE_LINE="${ZONE_LINE} · no ETA"; fi
+  case "$KALLOC_SRC" in measured) : ;;
+    *) [ -n "$KALLOC_AT" ] && ZONE_LINE="${ZONE_LINE} · ${KALLOC_SRC}, read $(( (NOW_EPOCH - KALLOC_AT) / 60 )) min ago" ;;
+  esac
+fi
+
+chronic_advice() { # → the scheduled-reboot advisory, two lines, with the zone's level and ETA when known
+  printf 'SCHEDULE A REBOOT — the one measured reset: data.kalloc.1024 only ratchets up within a boot, and on 2026-10-18 it panicked the box at %s elements (~%s GiB) · up %s d%s · reboot on the ETA, before 70%% of the ceiling (docs/research/panic-2026-10-18-zone-map-shebang-leak.md).\n' \
+    "$KALLOC_CEILING_ELEMS" "$KALLOC_CEILING_GIB" "${UPTIME_DAYS:-?}" "${ZONE_LINE:+ · $ZONE_LINE}"
   # The standing procedure (host-memory.2): the same safe order as the 2026-09-30 reboot, driven by
   # one script so no alarm reboot is improvised. It never reboots; it prepares and prints the steps.
-  printf 'REBOOT PROCEDURE — reboot within 24 h, in the safe order: run  bash %s/scripts/alarm-reboot-prep.sh  (records the start epoch + session roster, refuses while a land is in flight, prints any staged root zone capture to run first); leads write a handoff; then reboot. Evidence: docs/research/kalloc-ratchet-2026-10.md\n' \
+  printf 'REBOOT PROCEDURE — in the safe order: run  bash %s/scripts/alarm-reboot-prep.sh  (prints the zone level and ETA, waits with a printed deadline for an in-flight land, records the start epoch + session roster, prints any staged root zone capture to run first); leads write a handoff; then reboot.\n' \
     "${CC_CAP_PREP_ROOT:-$HOME/.claude}"
 }
 
@@ -1943,7 +2027,7 @@ case "$PTY_MAX" in ''|*[!0-9]*) PTY_MAX="" ;; esac
 PTY_PCT=""
 if [ -n "$PTY_MAX" ] && [ "$PTY_MAX" -gt 0 ]; then PTY_PCT=$(( PTY_USED * 100 / PTY_MAX )); fi
 
-JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"seg_pct":%s,"seg_warn_pct":%s,"seg_alarm_pct":%s,"coal_procs":%s,"coal_app":"%s","coal_warn":%s,"coal_alarm":%s,"coal_true_procs":%s,"coal_id":%s,"coal_fp_mb":%s,"coal_fp_src":"%s","auto_coal_procs":%s,"auto_coal_id":%s,"auto_coal_fp_mb":%s,"auto_coal_fp_src":"%s","top_procs":%s,"seg_source":%s,"swap_delta_mb":%s,"swap_delta_floor_mb":%s,"swap_window_s":%s,"occupancy_pct":%s,"thrash_cd_ratio":%s,"compressions":%s,"decompressions":%s,"load_1m":%s,"load_5m":%s,"load_15m":%s,"ncpu":%s,"load_per_core":%s,"load_warn_per_core":%s,"load_alarm_per_core":%s,"ptys_used":%s,"ptys_max":%s,"ptys_pct":%s,"per_session_mb_src":"%s","swapfiles":%s,"swapfile_prefix":"%s","swapfile_warn":%s,"swapfile_alarm":%s,"kalloc1024_gb":%s,"kalloc1024_src":"%s","kalloc1024_at":%s,"kalloc_warn_gb":%s,"kalloc_alarm_gb":%s,"uptime_days":%s,"chronic_verdict":"%s","sessions_bg":%s,"top_src":"%s"}' \
+JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"seg_pct":%s,"seg_warn_pct":%s,"seg_alarm_pct":%s,"coal_procs":%s,"coal_app":"%s","coal_warn":%s,"coal_alarm":%s,"coal_true_procs":%s,"coal_id":%s,"coal_fp_mb":%s,"coal_fp_src":"%s","auto_coal_procs":%s,"auto_coal_id":%s,"auto_coal_fp_mb":%s,"auto_coal_fp_src":"%s","top_procs":%s,"seg_source":%s,"swap_delta_mb":%s,"swap_delta_floor_mb":%s,"swap_window_s":%s,"occupancy_pct":%s,"thrash_cd_ratio":%s,"compressions":%s,"decompressions":%s,"load_1m":%s,"load_5m":%s,"load_15m":%s,"ncpu":%s,"load_per_core":%s,"load_warn_per_core":%s,"load_alarm_per_core":%s,"ptys_used":%s,"ptys_max":%s,"ptys_pct":%s,"per_session_mb_src":"%s","swapfiles":%s,"swapfile_prefix":"%s","swapfile_warn":%s,"swapfile_alarm":%s,"kalloc1024_gb":%s,"kalloc1024_src":"%s","kalloc1024_at":%s,"kalloc_warn_gb":%s,"kalloc_alarm_gb":%s,"uptime_days":%s,"chronic_verdict":"%s","sessions_bg":%s,"top_src":"%s","kalloc_ceiling_pct":%s,"kalloc_tier":%s,"kalloc_slope_gib_day":%s,"kalloc_eta_days":%s}' \
   "$TS" "$VERDICT" "$SESSIONS" "${HEAD:-null}" "${COMP:-null}" "${ACT:-null}" "${WIRED:-null}" \
   "${SWAP_MB:-null}" "$WARN_GB" "$ALARM_GB" "$ROOM_JSON" "$PER_MB" \
   "$SESSIONS_EXE" "$SESSIONS_BIN" "${PRESSURE:-null}" "$PROC_WARN_GB" "${MAX_PROC_GB:-null}" \
@@ -1959,7 +2043,8 @@ JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compre
   "$PTY_USED" "${PTY_MAX:-null}" "${PTY_PCT:-null}" "$PER_MB_SRC" \
   "${SWAPFILES:-null}" "$SWAPFILE_PREFIX_JSON" "$SWAPFILE_WARN" "$SWAPFILE_ALARM" \
   "${KALLOC_GB:-null}" "$KALLOC_SRC" "${KALLOC_AT:-null}" "$KALLOC_WARN_GB" "$KALLOC_ALARM_GB" \
-  "${UPTIME_DAYS:-null}" "$CHRONIC_VERDICT" "$SESSIONS_BG" "$TOP_SRC")"
+  "${UPTIME_DAYS:-null}" "$CHRONIC_VERDICT" "$SESSIONS_BG" "$TOP_SRC" \
+  "${ZONE_PCT:-null}" "${ZONE_TIER:-null}" "${ZONE_SLOPE:-null}" "${ZONE_ETA_DAYS:-null}")"
 
 if [ "$APPEND" = 1 ]; then
   mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
@@ -2041,7 +2126,11 @@ if [ "${CC_CAP_PAGE:-on}" != "off" ] && [ "$APPEND" = 1 ]; then
   # OK / SKIPPED / NO-DATA all RETRACT, for the same reason the combined page self-clears: a page
   # whose condition has passed is misinformation, and a rung whose instrument just went blind is
   # not asserting anything either.
-  for _rung in swap headroom pressure maxproc segments coalition load swapfiles kalloc; do
+  # The kalloc rung pages on its OWN channel (the zone block below), not here: as one more file in
+  # pages/ it reached the operator only inside the "N escalation record(s)" count, which never said
+  # kalloc. A page this loop wrote before that move is retracted.
+  rm -f "$PAGES_DIR/capacity-alarm-kalloc.page" "$PAGES_DIR/capacity-alarm-kalloc.page.notified" 2>/dev/null || true
+  for _rung in swap headroom pressure maxproc segments coalition load swapfiles; do
     _now_state="$(rung_state "$RUNG_STATES" "$_rung")"
     _prev_state="$(rung_state "$PREV_STATES" "$_rung")"
     # Record-only (X17): the load rung asserts nothing, so it takes the retract arm below, and a
@@ -2064,7 +2153,6 @@ if [ "${CC_CAP_PAGE:-on}" != "off" ] && [ "$APPEND" = 1 ]; then
           # above this number for 42 h will act on a reading that did not need acting on.
           load)      _detail="load ${LOAD_1M:-?} (1-min) on ${NCPU:-?} cores = ${LOAD_PER_CORE:-?}/core (warn >=${LOAD_WARN_PER_CORE} · alarm >=${LOAD_ALARM_PER_CORE}) · 5/15-min ${LOAD_5M:-?}/${LOAD_15M:-?} · UNCALIBRATED: 2.53/core was fatal 2026-08-05, 5.98/core survived" ;;
           swapfiles) _detail="${SWAPFILES:-?} swapfiles at ${SWAPFILE_PREFIX:-?}* (warn >=${SWAPFILE_WARN} · alarm >=${SWAPFILE_ALARM}) · ${SWAP_MB:-?} MB of swap in use · panic #5 died holding 73" ;;
-          kalloc)    _detail="kernel zone data.kalloc.1024 holds ${KALLOC_GB:-?} GB (warn >=${KALLOC_WARN_GB} · alarm >=${KALLOC_ALARM_GB}) · ${KALLOC_SRC} · panic #5 died at 9.89 GB" ;;
           *)         _detail="" ;;
         esac
         {
@@ -2074,7 +2162,7 @@ if [ "${CC_CAP_PAGE:-on}" != "off" ] && [ "$APPEND" = 1 ]; then
           printf 'combined verdict this sample: %s  ·  thrash d/c %s\n' \
             "$VERDICT" "${THRASH_CD_RATIO:-n/a}"
           case "$_rung" in
-            swapfiles|kalloc)
+            swapfiles)
               chronic_advice
               printf 'chronic (rung 8): reported beside the verdict, never folded into it (D5).\n' ;;
             *)
@@ -2087,6 +2175,184 @@ if [ "${CC_CAP_PAGE:-on}" != "off" ] && [ "$APPEND" = 1 ]; then
         rm -f "$_rung_page" "$_rung_page.notified" 2>/dev/null || true ;;
     esac
   done
+fi
+
+# ── THE ZONE PAGE (2026-10-18) — its own file, its own notification, and the kernel's own warning ──
+# Why each piece exists is in docs/research/panic-2026-10-18-zone-map-shebang-leak.md § Answer 4-5:
+# the zone read ALARM for 12 days to the panic and nothing acted, because the page was retracted by
+# every SKIPPED read, reached the operator only as one of ~500 records in a count banner that never
+# said "kalloc", depended on a sweep that stopped before its notify phase, and quoted a wrong ceiling.
+#
+# FILES (both under ~/.claude/autonomy, deliberately OUTSIDE pages/, so the sweep, cc-escalations and
+# the readout's escalation count never fold this page into "N record(s)"):
+#   kalloc-zone.page   the standard envelope (epoch · headline · detail · re-run), present while the
+#                      zone is at the rung's WARN floor or the kernel has started its idle sweep;
+#                      rewritten every tick. Retracted ONLY on a reading below the floor or a reboot —
+#                      never because an instrument went blind (the carry above holds the value).
+#   kalloc-zone.state  key=value: this tick's level, tier, slope and ETA for other readers
+#                      (alarm-reboot-prep.sh, operator-readout.sh), plus this block's own memory
+#                      (the scan cursor, the osr_code 9 tally, what was last notified and when).
+#
+# THE KERNEL'S OWN WARNING. Before the 10-18 panic the kernel logged 324 lines of
+#   memorystatus: killing_idle_process pid N [name] jetsam_reason->osr_code: 9
+# over 8 hours, the first at 08:20 for a 16:33 panic; none in a 20-minute sample of a healthy boot.
+# xnu's reason.h names 9 MEMORY_IDLE_EXIT: the idle sweep the kernel runs when zone-map OR compressor
+# exhaustion is near (panic #5's spiral began with the same lines), so it pages either way.
+# The scan is /usr/bin/log by absolute path, bounded, damped to one per CC_CAP_OSR9_SCAN_S over the
+# window since the last good scan (capped at 1 h), and predicated on the memorystatus category: at
+# load 290 that took 7 s where `sender == "kernel"` took 63 s for a 2-minute window. A failed or
+# timed-out scan leaves the cursor, so the next one re-covers the gap.
+#
+# THE NOTIFICATION is posted by this job directly (no sweep, no desk role, no mailbox), titled with
+# the zone, the level and the ETA: on the first osr_code 9 line of a boot, on each tier crossing
+# (50/70/85% of the ceiling), and again every 24 h while at tier 1+ or after an osr_code 9. The phone
+# leg rides lr-page.sh when its Pushover file exists (backlog 516d31862158 is that credential).
+# `auto` posts and scans only on this job's own launchd tick, so a hand-run or a test never banners
+# the operator or reads the live log; the bookkeeping is advanced only when a banner really posted.
+ZONE_OSR9_SCAN_S="${CC_CAP_OSR9_SCAN_S:-300}"
+case "$ZONE_OSR9_SCAN_S" in ''|*[!0-9]*) ZONE_OSR9_SCAN_S=300 ;; esac
+zone_mode_on() { # <mode value> → 0 when this run should act on it
+  case "$1" in
+    off) return 1 ;;
+    on)  return 0 ;;
+    *)   [ "${XPC_SERVICE_NAME:-}" = "com.claude.capacity-alarm" ] ;;
+  esac
+}
+zone_bounded() { # <seconds> <cmd...> — perl alarm, the zprint bound; rc 124 when cut
+  /usr/bin/perl -e 'my $t = shift; my $p = fork; exit 1 unless defined $p;
+    if (!$p) { exec @ARGV; exit 127 }
+    $SIG{ALRM} = sub { kill "KILL", $p; exit 124 };
+    alarm $t; waitpid($p, 0); exit($? >> 8)' "$@"
+}
+zone_notify() { # <title> <message> → 0 only when the banner was posted
+  local osa="${CC_CAP_OSASCRIPT:-/usr/bin/osascript}" lrp
+  zone_mode_on "${CC_CAP_ZONE_NOTIFY:-auto}" || return 1
+  [ -x /usr/bin/perl ] && [ -x "$osa" ] || return 1
+  zone_bounded 10 "$osa" - "$1" "$2" >/dev/null 2>&1 <<'OSA' || return 1
+on run argv
+  set v to item 1 of argv
+  set m to item 2 of argv
+  if (count of m) > 240 then set m to (text 1 thru 240 of m)
+  display notification m with title v sound name "Sosumi"
+end run
+OSA
+  lrp="${CC_CAP_LR_PAGE:-$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/limit-recover/lr-page.sh}"
+  if [ -f "$lrp" ] && { [ -n "${PUSHOVER_TOKEN:-}" ] || [ -f "${LR_PAGE_CREDS:-$HOME/.config/lr-page/pushover.env}" ]; }; then
+    LR_PAGE_OS_CHANNEL=off zone_bounded 30 /bin/bash "$lrp" --title "$1" -- "$2" </dev/null >/dev/null 2>&1
+  fi
+  return 0
+}
+
+if [ "${CC_CAP_PAGE:-on}" != "off" ] && [ "$APPEND" = 1 ] && [ -n "$BOOT_EPOCH" ]; then
+  ZS_BOOT=""; ZS_SCAN_AT=""; ZS_OSR9_N=0; ZS_OSR9_FIRST=""; ZS_OSR9_LAST_TS=""; ZS_OSR9_LINE=""
+  ZS_OSR9_NOTIFIED=""; ZS_NTIER=0; ZS_NAT=0; ZS_NREASON=""
+  if [ -r "$ZONE_STATE" ]; then
+    while IFS='=' read -r _k _v; do
+      case "$_k" in
+        boot) ZS_BOOT="$_v" ;;              osr9_scan_at) ZS_SCAN_AT="$_v" ;;
+        osr9_n) ZS_OSR9_N="$_v" ;;          osr9_first) ZS_OSR9_FIRST="$_v" ;;
+        osr9_last_ts) ZS_OSR9_LAST_TS="$_v" ;; osr9_line) ZS_OSR9_LINE="$_v" ;;
+        osr9_notified) ZS_OSR9_NOTIFIED="$_v" ;; notified_tier) ZS_NTIER="$_v" ;;
+        notified_at) ZS_NAT="$_v" ;;        notified_reason) ZS_NREASON="$_v" ;;
+      esac
+    done < "$ZONE_STATE"
+  fi
+  case "$ZS_OSR9_N" in ''|*[!0-9]*) ZS_OSR9_N=0 ;; esac
+  case "$ZS_NTIER" in ''|*[!0-9]*) ZS_NTIER=0 ;; esac
+  case "$ZS_NAT" in ''|*[!0-9]*) ZS_NAT=0 ;; esac
+  # A reboot resets the zone, so everything remembered about the last boot is void — page included.
+  # kern.boottime jitters by a second (compressor-sentinel's freeze_boot_already), hence the ±5 s.
+  case "$ZS_BOOT" in ''|*[!0-9]*) _same_boot=0 ;;
+    *) _same_boot=0; [ $((ZS_BOOT - BOOT_EPOCH)) -le 5 ] && [ $((BOOT_EPOCH - ZS_BOOT)) -le 5 ] && _same_boot=1 ;;
+  esac
+  if [ "$_same_boot" = 0 ]; then
+    rm -f "$ZONE_PAGE" 2>/dev/null
+    ZS_SCAN_AT=""; ZS_OSR9_N=0; ZS_OSR9_FIRST=""; ZS_OSR9_LAST_TS=""; ZS_OSR9_LINE=""
+    ZS_OSR9_NOTIFIED=""; ZS_NTIER=0; ZS_NAT=0; ZS_NREASON=""
+  fi
+
+  # ── the osr_code 9 scan ──
+  if zone_mode_on "${CC_CAP_OSR9:-auto}" && [ -x /usr/bin/perl ]; then
+    case "$ZS_SCAN_AT" in ''|*[!0-9]*) ZS_SCAN_AT="$BOOT_EPOCH" ;; esac
+    if [ $((NOW_EPOCH - ZS_SCAN_AT)) -ge "$ZONE_OSR9_SCAN_S" ]; then
+      _win=$((NOW_EPOCH - ZS_SCAN_AT + 60)); [ "$_win" -gt 3600 ] && _win=3600
+      _of="$(mktemp "${TMPDIR:-/tmp}/cap-osr9.XXXXXX" 2>/dev/null)"
+      if [ -n "$_of" ]; then
+        if zone_bounded "${CC_CAP_OSR9_TIMEOUT_S:-30}" "${CC_CAP_LOGBIN:-/usr/bin/log}" show --last "${_win}s" --style compact \
+             --predicate 'subsystem == "com.apple.xnu" AND category == "memorystatus" AND eventMessage CONTAINS "osr_code: 9"' \
+             > "$_of" 2>/dev/null; then
+          # Only lines newer than the last one counted: the window overlaps the previous scan by 60 s.
+          _hits="$(awk -v last="$ZS_OSR9_LAST_TS" '
+            /killing_idle_process/ && /osr_code: 9([^0-9]|$)/ && $1 ~ /^[0-9][0-9][0-9][0-9]-/ {
+              ts = $1 " " $2; if (last != "" && ts <= last) next
+              n++; if (n == 1) first = $0; lts = ts }
+            END { if (n > 0) { gsub(/[=\t]/, " ", first); printf "%d\t%s\t%s", n, lts, substr(first, 1, 220) } }' "$_of")"
+          ZS_SCAN_AT="$NOW_EPOCH"
+          if [ -n "$_hits" ]; then
+            IFS="$(printf '\t')" read -r _hn _hts _hline <<< "$_hits"
+            ZS_OSR9_N=$((ZS_OSR9_N + _hn)); ZS_OSR9_LAST_TS="$_hts"
+            [ -n "$ZS_OSR9_FIRST" ] || { ZS_OSR9_FIRST="$NOW_EPOCH"; ZS_OSR9_LINE="$_hline"; }
+          fi
+        fi
+        rm -f "$_of" 2>/dev/null
+      fi
+    fi
+  fi
+
+  # ── the page ──
+  _zone_up=0
+  if [ -n "$KALLOC_GB" ] && awk -v a="$KALLOC_GB" -v b="$KALLOC_WARN_GB" 'BEGIN{exit !(a+0 >= b+0)}'; then _zone_up=1; fi
+  [ "$ZS_OSR9_N" -gt 0 ] && _zone_up=1
+  _osr9_txt=""
+  if [ "$ZS_OSR9_N" -gt 0 ]; then
+    _osr9_txt="KERNEL PRE-PANIC SIGN: ${ZS_OSR9_N} 'killing_idle_process … osr_code: 9' line(s) this boot, the first seen $(date -r "$ZS_OSR9_FIRST" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "$ZS_OSR9_FIRST"); on 2026-10-18 the first came 8 h before the panic. First: ${ZS_OSR9_LINE}"
+  fi
+  if [ "$_zone_up" = 1 ]; then
+    mkdir -p "$ZONE_DIR" 2>/dev/null || true
+    {
+      printf '%s\n' "$NOW_EPOCH"
+      printf 'kalloc zone tier %s of 3 (50/70/85%% of the ~%s GiB panic ceiling)%s\n' \
+        "${ZONE_TIER:-?}" "$KALLOC_CEILING_GIB" "${ZONE_ETA_DATE:+ — ceiling ETA $ZONE_ETA_DATE}"
+      printf '%s\n' "${ZONE_LINE:-data.kalloc.1024 level unknown this boot}"
+      [ -n "$_osr9_txt" ] && printf '%s\n' "$_osr9_txt"
+      chronic_advice
+      printf 're-run:  %s\n' "$0"
+    } > "$ZONE_PAGE.tmp" 2>/dev/null && mv -f "$ZONE_PAGE.tmp" "$ZONE_PAGE"
+  elif [ -n "$KALLOC_GB" ]; then
+    rm -f "$ZONE_PAGE" 2>/dev/null           # a READING below the floor, never a blind tick
+  fi
+
+  # ── the notification ──
+  _tier="${ZONE_TIER:-0}"; _why=""
+  if [ "$ZS_OSR9_N" -gt 0 ] && [ -z "$ZS_OSR9_NOTIFIED" ]; then _why=osr9
+  elif [ "$_tier" -ge 1 ] && [ "$_tier" -gt "$ZS_NTIER" ]; then _why="tier-$_tier"
+  elif { [ "$_tier" -ge 1 ] || [ "$ZS_OSR9_N" -gt 0 ]; } && [ $((NOW_EPOCH - ZS_NAT)) -ge 86400 ]; then _why=daily
+  fi
+  if [ -n "$_why" ]; then
+    if [ "$_why" = osr9 ]; then
+      _title="kalloc.1024 PRE-PANIC — kernel idle-kill sweep (osr_code 9) · zone ${ZONE_PCT:-?}% · ETA ${ZONE_ETA_DATE:-unknown}"
+    else
+      _title="kalloc.1024 zone ${ZONE_PCT:-?}% (${KALLOC_GB:-?} GiB) · tier ${_tier} · ceiling ETA ${ZONE_ETA_DATE:-unknown}"
+    fi
+    _msg="${ZONE_LINE:-zone level unknown}. Reboot via: bash ${CC_CAP_PREP_ROOT:-$HOME/.claude}/scripts/alarm-reboot-prep.sh"
+    if zone_notify "$_title" "$_msg"; then
+      [ "$_tier" -gt "$ZS_NTIER" ] && ZS_NTIER="$_tier"
+      ZS_NAT="$NOW_EPOCH"; ZS_NREASON="$_why"
+      [ "$ZS_OSR9_N" -gt 0 ] && [ -z "$ZS_OSR9_NOTIFIED" ] && ZS_OSR9_NOTIFIED="$NOW_EPOCH"
+    fi
+  fi
+
+  mkdir -p "$ZONE_DIR" 2>/dev/null || true
+  {
+    printf 'boot=%s\nat=%s\nsrc=%s\ngib=%s\npct=%s\ntier=%s\n' "$BOOT_EPOCH" "${KALLOC_AT:-}" "$KALLOC_SRC" \
+      "${KALLOC_GB:-}" "${ZONE_PCT:-}" "${ZONE_TIER:-}"
+    printf 'slope_gib_day=%s\nslope_src=%s\neta_days=%s\neta_date=%s\n' "${ZONE_SLOPE:-}" "${ZONE_SLOPE_SRC:-}" \
+      "${ZONE_ETA_DAYS:-}" "${ZONE_ETA_DATE:-}"
+    printf 'ceiling_elems=%s\nceiling_gib=%s\nline=%s\n' "$KALLOC_CEILING_ELEMS" "$KALLOC_CEILING_GIB" "${ZONE_LINE:-}"
+    printf 'osr9_scan_at=%s\nosr9_n=%s\nosr9_first=%s\nosr9_last_ts=%s\nosr9_line=%s\nosr9_notified=%s\n' \
+      "${ZS_SCAN_AT:-}" "$ZS_OSR9_N" "$ZS_OSR9_FIRST" "$ZS_OSR9_LAST_TS" "$ZS_OSR9_LINE" "$ZS_OSR9_NOTIFIED"
+    printf 'notified_tier=%s\nnotified_at=%s\nnotified_reason=%s\n' "$ZS_NTIER" "$ZS_NAT" "$ZS_NREASON"
+  } > "$ZONE_STATE.tmp" 2>/dev/null && mv -f "$ZONE_STATE.tmp" "$ZONE_STATE"
 fi
 
 if [ "$QUIET" != 1 ] && [ "$WANT_JSON" != 1 ]; then
@@ -2122,6 +2388,7 @@ if [ "$QUIET" != 1 ] && [ "$WANT_JSON" != 1 ]; then
   # Rung 8 (D5) — SKIPPED, never "0", when the instrument cannot be trusted.
   echo "  swapfiles on disk:      ${SWAPFILES:-SKIPPED (dir unreadable, or 0 counted while the kernel reports swap)}${SWAPFILES:+   (warn >=${SWAPFILE_WARN} / alarm >=${SWAPFILE_ALARM} · ${SWAPFILE_PREFIX}* · chronic)}"
   echo "  kalloc.1024 zone:       ${KALLOC_GB:-SKIPPED}${KALLOC_GB:+ GB}   (${KALLOC_SRC} · warn >=${KALLOC_WARN_GB} / alarm >=${KALLOC_ALARM_GB} · chronic · up ${UPTIME_DAYS:-?} d)"
+  [ -n "$ZONE_LINE" ] && echo "                          ${ZONE_LINE} · tier ${ZONE_TIER} of 3"
   echo "  VERDICT:                ${VERDICT}"
   echo "  CHRONIC (rung 8):       ${CHRONIC_VERDICT}   (reported beside the verdict, never folded into it — D5)"
   if [ "$CHRONIC_VERDICT" = WARN ] || [ "$CHRONIC_VERDICT" = ALARM ]; then

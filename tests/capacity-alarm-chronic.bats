@@ -199,10 +199,12 @@ calls() { if [ -f "$D/zprint.calls" ]; then wc -l < "$D/zprint.calls" | tr -d ' 
 }
 
 @test "the zone read is BOUNDED without coreutils — a wedged zprint yields null, never 0, and the tick ends" {
-  mk_zprint 10838624 30
+  # The stub would hold for 600 s; the bound is 1 s. Under 300 s separates the two at any load we
+  # have seen: at load ~580 (2026-10-19) one tick alone took 74 s, and a 20 s ceiling measured that.
+  mk_zprint 10838624 600
   local t0=$SECONDS
   run env CC_CAP_KALLOC_TIMEOUT_S=1 /bin/bash "$A" --json --no-append
-  [ $((SECONDS - t0)) -lt 20 ] || { echo "the bound did not hold: $((SECONDS - t0))s"; false; }
+  [ $((SECONDS - t0)) -lt 300 ] || { echo "the bound did not hold: $((SECONDS - t0))s"; false; }
   [ "$(row_field kalloc1024_gb)" = null ] || false
   [ "$(row_field kalloc1024_src)" = timeout ] || false
   [ "$(calls)" = 1 ]                                   # non-vacuity: it really was invoked
@@ -250,30 +252,32 @@ calls() { if [ -f "$D/zprint.calls" ]; then wc -l < "$D/zprint.calls" | tr -d ' 
   [ "$(calls)" = 0 ]
 }
 
-@test "each ratchet pages on ITS OWN transition with a reboot advisory — and the combined page stays down" {
+@test "each ratchet pages on ITS OWN surface with a reboot advisory — and the combined page stays down" {
   export CC_CAP_KALLOC_MIN_S=0                         # sample every run, so no page reads a carry
   mk_zprint 7340032                                    # 7.00 GB — past the 6 GB floor
   mk_swapdir 20                                        # at the 20-file floor
-  local P="$CC_PAGES_DIR" m0
+  local P="$CC_PAGES_DIR" Z="$HOME/.claude/autonomy" m0
   run /bin/bash "$A" --quiet
-  [ -f "$P/capacity-alarm-kalloc.page" ] || false
+  # The zone pages BESIDE pages/, never in it (capacity-alarm-kalloc-zone.bats owns that page).
+  [ -f "$Z/kalloc-zone.page" ] || false
+  [ ! -f "$P/capacity-alarm-kalloc.page" ] || false
   [ -f "$P/capacity-alarm-swapfiles.page" ] || false
-  grep -q 'SCHEDULE A REBOOT' "$P/capacity-alarm-kalloc.page" || false
+  grep -q 'SCHEDULE A REBOOT' "$P/capacity-alarm-swapfiles.page" || false
   # host-memory.2: the page carries the standing safe-order procedure, not just the advice to reboot
-  grep -q 'REBOOT PROCEDURE .*scripts/alarm-reboot-prep.sh' "$P/capacity-alarm-kalloc.page" || false
-  grep -q 'data.kalloc.1024 holds 7.00 GB' "$P/capacity-alarm-kalloc.page" || false
+  grep -q 'REBOOT PROCEDURE .*scripts/alarm-reboot-prep.sh' "$P/capacity-alarm-swapfiles.page" || false
+  grep -q 'data.kalloc.1024 7.00 GiB = 35% of the ~19.98 GiB panic ceiling' "$Z/kalloc-zone.page" || false
   grep -q '^20 swapfiles at ' "$P/capacity-alarm-swapfiles.page" || false
-  ! grep -q 'shed by CLOSING' "$P/capacity-alarm-kalloc.page" || false   # not the lever for a leak
+  ! grep -q 'shed by CLOSING' "$Z/kalloc-zone.page" || false   # not the lever for a leak
   [ ! -f "$P/capacity-alarm.page" ] || false           # D5: the verdict is OK, so no combined page
   # TRANSITION-ONLY (D3): a standing ALARM does not rewrite its page, so its clock still says when it began.
-  touch -t 202001010000 "$P/capacity-alarm-kalloc.page"
-  m0="$(stat -f %m "$P/capacity-alarm-kalloc.page")"
+  touch -t 202001010000 "$P/capacity-alarm-swapfiles.page"
+  m0="$(stat -f %m "$P/capacity-alarm-swapfiles.page")"
   run /bin/bash "$A" --quiet
-  [ "$(stat -f %m "$P/capacity-alarm-kalloc.page")" = "$m0" ] || false
+  [ "$(stat -f %m "$P/capacity-alarm-swapfiles.page")" = "$m0" ] || false
   # ...and both RETRACT when the ratchets clear (a reboot; here, the stubs).
   mk_zprint 1024; rm -f "$D"/vm/swapfile*; mk_swapdir 3
   run /bin/bash "$A" --quiet
-  [ ! -f "$P/capacity-alarm-kalloc.page" ] || false
+  [ ! -f "$Z/kalloc-zone.page" ] || false
   [ ! -f "$P/capacity-alarm-swapfiles.page" ]
 }
 

@@ -316,6 +316,10 @@ ESC_PAGES_DIR="${CC_PAGES_DIR:-$HOME/.claude/autonomy/pages}"
 # than given a seam of its own, so the two ends cannot drift — same rule the other four follow.
 ESC_DEADLETTER_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}/dead-letter"
 ESC_SEEN_DIR="${CC_SWEEP_SEEN_DIR:-$HOME/.claude/autonomy/sweep-seen}"
+# The kalloc ZONE page (scripts/capacity-alarm.sh § THE ZONE PAGE) sits BESIDE pages/, never in it,
+# so it is not one of the counted records above: it gets its own named line. Derived from the same
+# seam the writer derives it from.
+ZONE_PAGE_FILE="$(dirname "$ESC_PAGES_DIR")/kalloc-zone.page"
 # A SEAM, and specifically so the deploy platter's own existence check (I11) is testable in BOTH
 # states. Without it the suite asserts the operator's live ~/.claude/scripts/ and the verdict flips
 # by machine — borrowed hermeticity, and the flip case is exactly the one the check exists for.
@@ -533,6 +537,25 @@ dec_jq() {
 # (the SessionStart guarantee), never the guarantee itself, so degrading quiet is correct here.
 # NOTE: these stores are deliberately NOT in cheap_stamp() — same as the queue line, a change here
 # is reported at the next render within the latch TTL, which is the staleness bound documented there.
+# ── the kalloc zone line — ONE ` ⚠` line (NSTEPS counts `^ [0-9]+ (▶|◆|✎)`, so it is not a step) that
+# names the zone, its level against the panic ceiling and the ETA, read from the page the capacity
+# alarm rewrites every tick. The 2026-10-18 panic came after 12 days in which this level reached
+# the operator only inside an escalation COUNT that never said kalloc (docs/research/
+# panic-2026-10-18-zone-map-shebang-leak.md § Answer 5). Absent page ⇒ nothing printed.
+kalloc_zone_line() {
+  local f="$ZONE_PAGE_FILE" lvl k m now stale=""
+  [ -f "$f" ] || return 0
+  lvl="$(sed -n 3p "$f" 2>/dev/null)"
+  [ -n "$lvl" ] || return 0
+  k="$(sed -n 4p "$f" 2>/dev/null)"
+  case "$k" in "KERNEL PRE-PANIC SIGN"*) lvl="KERNEL PRE-PANIC SIGN (osr_code 9 idle-kill sweep) · $lvl" ;; esac
+  m="$(/usr/bin/stat -f %m "$f" 2>/dev/null)"; now="${NOW:-$(date +%s)}"
+  case "$m" in ''|*[!0-9]*) : ;;
+    *) [ $((now - m)) -gt 1800 ] && stale=" (as of $(date -r "$m" '+%m-%d %H:%M') — the capacity alarm has not rewritten it since)" ;;
+  esac
+  printf ' ⚠ %s%s — reboot via: bash ~/.claude/scripts/alarm-reboot-prep.sh\n' "$lvl" "$stale"
+}
+
 escalation_unseen_count() {
   command -v perl >/dev/null 2>&1 || { printf 0; return 0; }
   local f n
@@ -1447,8 +1470,11 @@ render_block() {
   # A dispatcher fire loop joins it for the same reason: nothing else aggregates those failures, so
   # a line that waited for an unrelated step to fire the block would report the loop by luck.
   local fl_line; fl_line="$(fire_loop_line)"
+  # The kalloc zone joins it too: a panic ETA that rendered only beside an unrelated step is the
+  # 2026-10-18 delivery failure again (kalloc_zone_line).
+  local kz_line; kz_line="$(kalloc_zone_line)"
   if [ "$total" -eq 0 ] && [ "$RUNG" != "📦" ] && [ "$RUNG" != "🚀" ] && [ "$Q_N" -eq 0 ] \
-     && [ -z "$rp_lines" ] && [ -z "$fl_line" ]; then rm -f "$steps_file" "$steps_file.led" "$steps_file.rp" "$steps_file.rp.rc"; return 0; fi
+     && [ -z "$rp_lines" ] && [ -z "$fl_line" ] && [ -z "$kz_line" ]; then rm -f "$steps_file" "$steps_file.led" "$steps_file.rp" "$steps_file.rp.rc"; return 0; fi
 
   # ALLOCATION. Written out per class rather than looped: four classes is a fixed set, and the
   # alternatives (eval, or a `$(fn)` lookup) cost either clarity or a fork per step.
@@ -1524,6 +1550,7 @@ render_block() {
   elif [ -n "$rp_lines" ]; then hdr="OPERATOR ▸ ${state:-research program awaiting you}${q_line:+ · $q_line}"
   # fire-loop-only render: same shape — the session verdict on line 1, the loop on its own line.
   elif [ -n "$fl_line" ]; then hdr="OPERATOR ▸ ${state:-dispatcher fires failing}${q_line:+ · $q_line}"
+  elif [ -n "$kz_line" ]; then hdr="OPERATOR ▸ ${state:-kernel zone heading for a panic}${q_line:+ · $q_line}"
   else hdr="OPERATOR ▸ ${q_line}"; fi   # queue-only render: the queue IS the governing line
   printf '%s\n' "$hdr"
 
@@ -1751,6 +1778,8 @@ render_block() {
   # an undelivered escalation is a judgment, not a chore — but `ack --all` DOES clear the pile in one
   # command (bin/cc-escalations:205-219, selftest case 4), so the row names it.
   [ "${esc_n:-0}" -gt 0 ] && printf ' ◆ %s escalation record(s) unseen — cc-escalations ack --all\n' "$esc_n"
+  # ── the kalloc zone, named on its own line (see kalloc_zone_line) — never inside the count above.
+  [ -n "$kz_line" ] && printf '%s\n' "$kz_line"
 
   # ── research programs — one counted `◆` line per program owing a ruling, unnumbered for the same
   # reason as the escalation line: a purchase decision, not a step NSTEPS should count.

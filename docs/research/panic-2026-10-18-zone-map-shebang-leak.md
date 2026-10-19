@@ -123,6 +123,40 @@ Report upstream:
     kalloc growth is not the panic mechanism.
 11. Add this machine's 15.7.9 data point to claude-code#66020.
 
+## The alarm actuator (2026-10-19): improvements 5-7 and the head of 9
+
+Built on `fix/kalloc-alarm-actuator`; the commit body holds the per-file detail.
+
+- Ceiling: `scripts/capacity-alarm.sh` `KALLOC_CEILING_ELEMS=20955520` is the one constant. The
+  9.89 GB anchor is gone from the advice and the pages.
+- Tiers at 50/70/85% of it. The level, the trailing-3-day least-squares slope over this boot's
+  measured samples (`~/.claude/logs/kalloc-zone-series.tsv`) and the ETA go on
+  `~/.claude/autonomy/kalloc-zone.page`. That file is beside `pages/`, so no escalation count
+  includes it. The same values go to `kalloc-zone.state` for other readers.
+- Carry: inside a boot, the last measured value carries at any age. It is no longer dropped after
+  4×900 s. A SKIPPED or timed-out read keeps the page up, and only a reading below the floor or a
+  reboot retracts it.
+- The kernel's warning: a bounded `/usr/bin/log` scan, once every 5 minutes, with a
+  memorystatus-category predicate. At load 290 it took 7 s, against 63 s for `sender == "kernel"`.
+  It pages on the first `killing_idle_process … osr_code: 9` line. **Naming correction to § Answer
+  4:** that line's own verb is `killing_idle_process`, and xnu's `reason.h` names code 9
+  `JETSAM_REASON_MEMORY_IDLE_EXIT`, not zone-map exhaustion. It is the idle sweep the kernel runs
+  when the zone map or the compressor nears exhaustion; panic #5's spiral began with the same
+  lines (`panic-2026-08-24-evidence/log-timeline.md:77`). It is a pre-panic sign either way.
+- Notification: the alarm posts its own banner, titled with the zone, the level and the ETA. It
+  posts on the first `osr_code: 9` line, on each tier crossing, and every 24 h while the zone is at
+  tier 1 or higher. It does not depend on the sweep or a desk role. The phone leg uses `lr-page.sh`
+  once the Pushover file from backlog `516d31862158` exists. `hooks/operator-readout.sh` prints the
+  zone on its own `⚠` line, and that line by itself is enough to render the operator block.
+- `scripts/alarm-reboot-prep.sh` prints the zone level, its share of the ceiling and the ETA as
+  line 2. It waits for an in-flight land with a printed deadline (1800 s by default) instead of
+  refusing.
+- `scripts/compressor-sentinel.sh` takes `panicked_at` from the panic's `Calendar:` epoch
+  (`panicked_at_src`). The 10-18 row already in the ledger keeps its report-write time, 19:40:28.
+  The true time is 16:33:33 CDT.
+
+Still open, and not this change's to decide: the reboot rule itself (decision `ee0ad84e8974`).
+
 ## Untested, cheapest first
 
 1. The intervention A/B in improvement 1. It settles "dominant".
