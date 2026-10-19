@@ -464,5 +464,19 @@ class ResetAwareDrain(_Base):
         self.assertTrue(drain.read_latch(self.paths, "next4", "7d")["stopped"])
 
 
+class ProvenanceReach(_Base):
+    """The reconciler daemon runs from ~/.claude/scripts/limit-recover, a farm of per-file
+    symlinks with no scripts/checks/ beside it: the hourly provenance check must still be found."""
+
+    def test_the_check_is_found_through_a_symlink_farm(self):
+        farm = os.path.join(self.tmp, "farm", "scripts", "limit-recover", "lr_recon")
+        os.makedirs(farm)
+        link = os.path.join(farm, "act.py")
+        os.symlink(os.path.realpath(M.act.__file__), link)
+        path = M.provenance_check(link)
+        self.assertTrue(os.path.isfile(path), path)
+        self.assertFalse(path.startswith(os.path.join(self.tmp, "farm")), path)
+
+
 if __name__ == "__main__":
     unittest.main()

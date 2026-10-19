@@ -490,6 +490,16 @@ def _stranded(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
 PROVENANCE_EVERY_S = 3600.0
 
 
+def provenance_check(act_file: Optional[str] = None) -> str:
+    """The check's path in the CHECKOUT this package really lives in. The daemon runs from
+    ~/.claude/scripts/limit-recover, a farm of per-file symlinks where scripts/checks/ is not
+    deployed, so a path built from the import location named a file that does not exist and the
+    hourly check never ran. realpath(act.py) is the checkout's own file."""
+    real = os.path.realpath(act_file or act.__file__)
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(real))))
+    return os.path.join(repo, "scripts", "checks", "launchagent-provenance.sh")
+
+
 def _provenance(paths: T.Paths, now: float) -> bool:
     """REPORT §5 Q9, the provenance half: once an hour, detached and self-bounded, the check that
     pages on a com.reso.* LaunchAgent no repository shipped (scripts/checks/launchagent-provenance.sh;
@@ -504,9 +514,7 @@ def _provenance(paths: T.Paths, now: float) -> bool:
     except OSError:
         pass
     store.atomic_write_text(stamp, "%f\n" % now)
-    check = os.path.join(
-        os.path.dirname(act.SCRIPTS), "scripts", "checks", "launchagent-provenance.sh"
-    )
+    check = provenance_check()
     if not os.path.isfile(check):
         return False
     try:

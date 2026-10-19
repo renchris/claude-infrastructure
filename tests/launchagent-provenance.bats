@@ -88,3 +88,9 @@ pages() { [ -f "$BATS_TEST_TMPDIR/pages.log" ] && wc -l < "$BATS_TEST_TMPDIR/pag
   [ "$status" -eq 2 ] || { echo "$output"; false; }
   [[ "$output" == *"verdict=no-verdict"* ]]
 }
+
+@test "5 the reconciler daemon, run from the ~/.claude symlink farm, still reaches this check" {
+  # its launchd job cds into ~/.claude/scripts/limit-recover, where scripts/checks/ is not deployed
+  run bash -c 'cd "$1/scripts/limit-recover" && python3 -m unittest lr_recon.tests.test_wave_g.ProvenanceReach 2>&1' _ "$REPO"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
