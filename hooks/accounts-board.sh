@@ -81,8 +81,104 @@ producer_state() {
   fi
 }
 
+# ── NARROW PANES (2026-10-18) ─────────────────────────────────────────────────────────────────
+# The board file is 76 cells wide, and a SessionStart systemMessage gets pane − 5 cells (a 5-column
+# continuation indent) plus, on line 1 only, the harness's ~31-column `⎿ SessionStart:startup
+# says: ` prefix (docs/research/board-render-2026-09-22.md, findings 6-7). So below an 81-column
+# pane every grid row wrapped mid-cell, which is the break the operator screenshotted. The producer
+# now also writes narrower variants beside the board (`<board>.w<N>`, N = the cell budget each was
+# laid out for), and this hook picks the widest one that fits the pane it is drawing into.
+#
+# THE PANE WIDTH comes from the tty of the claude process that ran this hook: the hook's own stdio
+# is a pipe, so we walk up from our parent to the first ancestor that owns a tty and ask the tty
+# (`stty -f`, BSD; `-F` is the GNU spelling), ~50 ms. `CC_PANE_COLS` overrides it, the same seam
+# `claude-accounts --pane` reads. An unknown width changes nothing: the 76 board, as before.
+PANE_GUTTER=5      # continuation indent on every rendered row
+PANE_PREFIX=31     # line 1's `⎿ SessionStart:startup says: ` prefix
+BOARD_W=76         # the width the main board file is laid out for (bin/claude-accounts NARROW_W)
+
+pane_cols() {
+  local p t sz i
+  case "${CC_PANE_COLS:-}" in '') ;; *[!0-9]*) return 1 ;; *) printf '%s' "$CC_PANE_COLS"; return 0 ;; esac
+  p="${CC_HOOK_PARENT_PID:-$PPID}"
+  for i in 1 2 3 4 5; do
+    t="$(ps -o tty= -p "$p" 2>/dev/null | tr -d ' ')"
+    case "$t" in
+      ''|'?'*) ;;
+      *) sz="$(stty -f "/dev/$t" size 2>/dev/null || stty -F "/dev/$t" size 2>/dev/null)"
+         case "${sz##* }" in ''|*[!0-9]*|0) ;; *) printf '%s' "${sz##* }"; return 0 ;; esac ;;
+    esac
+    p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"
+    case "$p" in ''|*[!0-9]*|0|1) return 1 ;; esac
+    : "$i"
+  done
+  return 1
+}
+COLS="$(pane_cols 2>/dev/null || true)"
+
+# The narrow variant for this pane, or the board itself. Only a variant written in the SAME
+# producer pass as the board counts (mtimes within 60 s): the hook labels the board's age from
+# the board's mtime, so a leftover variant from an older producer would print older numbers under
+# a fresher label.
+pick_board() {
+  local use w best="" bm vm f
+  [ -n "$COLS" ] || { printf '%s' "$BOARD"; return; }
+  use=$(( COLS - PANE_GUTTER ))
+  [ "$use" -ge "$BOARD_W" ] && { printf '%s' "$BOARD"; return; }
+  bm="$(stat -f %m "$BOARD" 2>/dev/null || stat -c %Y "$BOARD" 2>/dev/null || echo 0)"
+  for f in "$BOARD".w[0-9]*; do
+    [ -s "$f" ] || continue
+    w="${f##*.w}"; case "$w" in *[!0-9]*) continue ;; esac
+    vm="$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)"
+    [ $(( bm - vm )) -le 60 ] && [ $(( vm - bm )) -le 60 ] || continue
+    # the widest that fits; failing any fit, the narrowest there is
+    if [ "$w" -le "$use" ]; then
+      case "$best" in ''|-*) best="$w" ;; *) [ "$w" -gt "$best" ] && best="$w" ;; esac
+    else
+      case "$best" in '') best="-$w" ;; -*) [ "$w" -lt "${best#-}" ] && best="-$w" ;; esac
+    fi
+  done
+  case "$best" in '') printf '%s' "$BOARD" ;; *) printf '%s' "$BOARD.w${best#-}" ;; esac
+}
+
+# Fit a message to the pane at WORD boundaries, so the terminal never wraps it mid-word. Lines
+# carrying SGR are the producer's laid-out grid and pass through untouched (pick_board already
+# chose a variant that fits); plain prose — the age, staleness and producer lines this hook writes
+# — is re-wrapped with a hanging indent two past its own. A single token wider than the pane (a
+# path, a command) is never split: broken, it would no longer paste. And when line 1 cannot share
+# its row with the harness prefix, the message starts on the next row instead.
+fit() {  # <message> → the message fitted to $COLS, or unchanged when the width is unknown
+  [ -n "$COLS" ] || { printf '%s' "$1"; return; }
+  local LC_ALL=en_US.UTF-8
+  local use=$(( COLS - PANE_GUTTER )) line ind word cur out="" first="" n=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    n=$(( n + 1 ))
+    if [ "$n" -eq 1 ]; then
+      first="$(printf '%s' "$line" | sed $'s/\033\\[[0-9;]*m//g')"
+    fi
+    case "$line" in *$'\033'*) out="$out$line"$'\n'; continue ;; esac
+    if [ "${#line}" -le "$use" ]; then out="$out$line"$'\n'; continue; fi
+    ind="${line%%[! ]*}"; cur="$ind"
+    set -f
+    # shellcheck disable=SC2086  # word-splitting the prose IS the point
+    for word in $line; do
+      if [ "$cur" = "$ind" ] || [ "$cur" = "$ind  " ]; then cur="$cur$word"
+      elif [ $(( ${#cur} + 1 + ${#word} )) -le "$use" ]; then cur="$cur $word"
+      else out="$out$cur"$'\n'; cur="$ind  $word"
+      fi
+    done
+    set +f
+    out="$out$cur"$'\n'
+  done <<EOF
+$1
+EOF
+  out="${out%$'\n'}"
+  [ $(( ${#first} + PANE_PREFIX )) -gt "$COLS" ] && out=$'\n'"$out"
+  printf '%s' "$out"
+}
+
 emit() {  # <message> → the ONE sanctioned channel, top-level, never nested, never additionalContext
-  jq -nc --arg m "${DL_BANNER:-}${SH_FLEET:-}$1" '{systemMessage:$m}' 2>/dev/null || true
+  jq -nc --arg m "$(fit "${DL_BANNER:-}${SH_FLEET:-}$1")" '{systemMessage:$m}' 2>/dev/null || true
   exit 0
 }
 
@@ -184,7 +280,7 @@ fmt_age() {  # seconds → the coarsest form that still answers "should I trust 
   fi
 }
 
-body="$(cat "$BOARD" 2>/dev/null || true)"
+body="$(cat "$(pick_board)" 2>/dev/null || true)"
 # Emptiness by a glob, never by stripping: `${body//[[:space:]]/}` is superlinear on /bin/bash 3.2
 # (0.9 s on a 2 KB board, 6.5 s at 4 KB; docs/research/sessionstart-readout-2026-10-06, R1), so
 # every byte added to the board would have cost startup time wherever this runs under 3.2.
