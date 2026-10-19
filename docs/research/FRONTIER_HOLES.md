@@ -12,6 +12,15 @@ overwrite history. Statuses: `OPEN` → `IN-PANEL <date>` → `CONFIRMED-BY-PANE
 _(none — H-INERT-1 CONFIRMED-BY-PANEL 2026-07-30 and moved to `## Resolved`; its capture record is
 retained verbatim under `## Resolved` so the pre-panel framing is never rewritten.)_
 
+### H-CLOSE-1 · What makes finished research (or an honest "❌ no — X remains") produce the next action instead of a stop? — IN-PANEL 2026-10-19 (2 Fable panelists, inline; lead session ce527c7b)
+
+- **Wall.** Two research rounds (46 agents, `docs/research/close-behavior-2026-10-18/`) found every prose
+  detector of undriven work at 4-25% precision and the one exact signal (a doc declaration) unprompted in the
+  sessions that need it. The rule text already orders the drive and was violated. Framing question, not a fact.
+- **Constraints.** Silent when nothing drivable remains; never blocks a ⛔ decision or a stated park; no
+  settings.json; the Stop-hook block reason is the only no-human continuation channel; hooks time out at 5 s.
+- **Confidence the hole is real:** high (R1/R8 at 90-93 in the study README §2).
+
 ### H-INERT-1 · What GENERATES built-but-inert mechanisms? — CONFIRMED-BY-PANEL 2026-07-30 (3 Fable panelists, baseline-blind; lead session a78e659d) — RESOLVED, see verdict below
 - **Seam/axis**: the composition of four surfaces that each individually "work" —
   land pipeline (`commands/ship.md`, `scripts/ship-land.sh`) × activation queue
