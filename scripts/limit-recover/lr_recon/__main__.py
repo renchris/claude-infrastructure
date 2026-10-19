@@ -26,10 +26,12 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from lr_recon import (
     act,
+    capped,
     census,
     classify,
     evidence,
     observe,
+    observe_rows,
     plan,
     report,
     settle,
@@ -422,7 +424,14 @@ def _wakes(ctx: Ctx, snap: T.Snapshot, facts: Dict[str, T.Fact], now: float) -> 
         if rec.substate == "HELD:team" and census.live_members(rec.sid, snap) == 0:
             continue  # the team is gone: the census releases it to an ordinary move
         f = facts.get("%s.%s" % (rec.source_acct, rec.scope))
-        if f is not None and not f.contradicted and (f.resets_at or 0) > now:
+        if (
+            f is not None
+            and not f.contradicted
+            and (f.resets_at or 0) > now
+            and not rec.close.get(
+                "cohort_exit"
+            )  # its proof already outranked that fact
+        ):
             continue  # no headroom: the source is limited again, on a later reset
         pane = snap.panes.get("%d:%d" % rec.pane) if rec.pane else None
         if pane is None or pane.state != "claude":
@@ -436,6 +445,81 @@ def _wakes(ctx: Ctx, snap: T.Snapshot, facts: Dict[str, T.Fact], now: float) -> 
         _event(ctx.paths, "wake", rec.sid, rec.record_id, rec.substate)
         n += 1
     return n
+
+
+def _stranded(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
+    """lr-wake h defect 5: every tombstoned session whose successor never started (census.
+    stranded_tombstone) is a STRANDED state, recorded once (event ``stranded-tombstone``) and paged
+    once with its one remedy: ``lr-unstrand.sh`` exits it in its OWN pane (refusing on background
+    work or a non-empty composer) and resumes it on the target there. Nothing is typed from here:
+    the remedy is one command, never a recycle and never a new pane."""
+    amap = _amap(ctx.home)
+    rep = ctx.reporter or report.Reporter(ctx.paths, mode)
+    rep.mode = mode
+    ctx.reporter = rep
+    n = 0
+    for s in snap.sessions.values():
+        step()
+        seen: Set[str] = set()
+        for h in s.holders:
+            if h.bg or not h.cfg or h.cfg in seen:
+                continue
+            seen.add(h.cfg)
+            plan_ = census.stranded_tombstone(s.sid, h.cfg, s, now, amap=amap)
+            if plan_ is None:
+                continue
+            n += 1
+            text = (
+                "STRANDED %s (pane %s): moved %s → %s at %s, the successor never started and the "
+                "old process still sits in its pane. Remedy, same pane: %s"
+                % (
+                    s.sid[:8],
+                    plan_["pane"] or "?",
+                    observe_rows.acct_of_cfg(h.cfg, amap) or h.cfg,
+                    plan_["target_acct"] or plan_["target"],
+                    plan_["since"],
+                    plan_["command"],
+                )
+            )
+            if rep._once("stranded", s.sid + ":" + plan_["since"], "stranded", text):
+                _event(ctx.paths, "stranded-tombstone", s.sid, "", text)
+            break
+    return n
+
+
+PROVENANCE_EVERY_S = 3600.0
+
+
+def _provenance(paths: T.Paths, now: float) -> bool:
+    """REPORT §5 Q9, the provenance half: once an hour, detached and self-bounded, the check that
+    pages on a com.reso.* LaunchAgent no repository shipped (scripts/checks/launchagent-provenance.sh;
+    the agent-installed drain ran 12 h unseen on 2026-10-18). It only reads and pages; it never loads
+    or unloads anything. LR_RECON_PROVENANCE=off skips it."""
+    if os.environ.get("LR_RECON_PROVENANCE", "on") == "off":
+        return False
+    stamp = paths.p("provenance.stamp")
+    try:
+        if now - os.stat(stamp).st_mtime < PROVENANCE_EVERY_S:
+            return False
+    except OSError:
+        pass
+    store.atomic_write_text(stamp, "%f\n" % now)
+    check = os.path.join(
+        os.path.dirname(act.SCRIPTS), "scripts", "checks", "launchagent-provenance.sh"
+    )
+    if not os.path.isfile(check):
+        return False
+    try:
+        subprocess.Popen(
+            ["/bin/bash", check],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError:
+        return False
+    return True
 
 
 SNAP_TIMEOUT_S = 20
@@ -622,6 +706,7 @@ def _derive(
     snap: T.Snapshot,
     now: float,
     facts: Optional[Dict[str, T.Fact]] = None,
+    usage: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> None:
     """Level-triggered confirm (§3 step 10): the derived phase replaces the cached one."""
     for rec in ctx.records.values():
@@ -649,6 +734,16 @@ def _derive(
             if why:
                 _event(ctx.paths, "not-needed", rec.sid, rec.record_id, why)
                 continue
+            planned = rec.substate == "PLANNED"
+            why, resume = settle.cohort_exit(rec, facts, usage, snap, now)
+            if why:
+                if planned:
+                    plan.unassign(
+                        assign_id
+                    )  # its seat on the target is no longer wanted
+                ev = "cohort-exit-resume" if resume else "not-needed"
+                _event(ctx.paths, ev, rec.sid, rec.record_id, why)
+                continue  # a resume is _wakes' (the stay), this same pass
         if rec.substate == "PARKED-REBOOT":
             continue  # the census owns the reboot park (census.park); the phase table defers
         if rec.escalated:
@@ -1093,6 +1188,27 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
         )
         if not ok:
             continue
+        if which in act.CLAIMED_ACTUATORS:
+            # the claim before the token (act.hold_claim): another live driver keeps the session
+            ok, why = act.hold_claim(ctx.paths, rec, _alive, now)
+            if not ok:
+                if rec.close.get("claim_held") != why:
+                    rec.close["claim_held"] = why
+                    holder = store.read_claim(ctx.paths, rec.sid)
+                    _event(
+                        ctx.paths,
+                        "claim-held",
+                        rec.sid,
+                        rec.record_id,
+                        "%s: pid %s (%s) drives it; no token minted"
+                        % (
+                            why,
+                            holder.pid if holder else "?",
+                            (holder.owner if holder else "") or "a bash lane",
+                        ),
+                    )
+                continue
+            rec.close.pop("claim_held", None)
         ok, why = _admit(ctx, rec, which, snap, now)
         if not ok:
             # The gate's numbers ride with its name, for `cc-lr status --cohort` (report.next_action):
@@ -1525,7 +1641,7 @@ def _run_pass(ctx: Ctx, force_observe: bool) -> Dict[str, Any]:
     ctx.pre_census = {s: r.substate or "" for s, r in ctx.records.items()}
     buckets, stale = _census(ctx, snap, facts, reqs, mode, now)
     _focus_ledger(paths, snap, buckets, mode, now)
-    _derive(ctx, snap, now, facts)
+    _derive(ctx, snap, now, facts, capped.latest_usage(ctx.home, now))
     _draft_snapshots(ctx, snap)
     for rec in (
         ctx.records.values()
@@ -1536,6 +1652,7 @@ def _run_pass(ctx: Ctx, force_observe: bool) -> Dict[str, Any]:
     _refire(ctx, now)
     _abandon(ctx, now)
     _wakes(ctx, snap, facts, now)
+    _stranded(ctx, snap, mode, now)
     step()
     placed = _plan(ctx, snap, facts, mode, now)
     step()
@@ -1655,6 +1772,10 @@ def daemon(ctx: Ctx) -> int:
                 for rec in ctx.records.values():
                     shift_record(rec, slept)
             summary = run_pass(ctx, force_observe=ctx.clock.take_observe_only())
+            if (
+                not ctx.paths.canary
+            ):  # the daemon only: a --once or test pass never pages it
+                _provenance(ctx.paths, time.time())
             hb.advance()
             moving = any(
                 r.open and r.phase in MOVING or r.substate == "PLANNED"

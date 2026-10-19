@@ -1169,6 +1169,20 @@ cl_move_lib() { # → 0 when lr-move-lib.sh is loaded
   done
   return 1
 }
+# One page per pane and session for a bg-work modal the census found (lr-page-once.sh latches it, so
+# every later plan, move or rotate that meets the same modal is silent). Never fails the census.
+cl_page_bgwork_dialog() { # <pane> <sid>
+  local f
+  for f in "$_CL_BIN/../scripts/limit-recover/lr-page-once.sh" \
+           "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-page-once.sh"; do
+    [ -f "$f" ] || continue
+    # shellcheck disable=SC1090  # runtime-resolved library ladder, same shape as the ones above
+    ( . "$f" && lr_page_once "bgwork-dialog-$1-$2" "bg-work-modal" \
+        "pane $1 ${2:0:8}: the 'Background work is running' exit modal is up and nothing will answer it. Answer it in the pane (Stay keeps the work)." ) >/dev/null 2>&1
+    return 0
+  done
+  return 0
+}
 cl_move_goal_lib() {
   local f
   command -v goal_live_condition >/dev/null 2>&1 && return 0
@@ -1311,6 +1325,12 @@ cl_move_rows() { # <from or ""> <to> <until_idle_s> <sel flag or ""> <sel value>
           disp=hold:retired-source action="a stale handoff marker blocks its prompts; repair first: cc-lr repair-markers --sid $s"
         fi ;;
       bg-session) disp=hold:bg-session action="a background job moves only when named: cc-lr switch --sid $s --target $to" ;;
+      bg-work-dialog)
+        # THE BG-WORK MODAL IS A HOLD PLUS ONE PAGE, NEVER A WAIT (lr-wake 2026-10-18, pane 350): the
+        # census used to read it as composer-unknown, which waited out 3 × 3600 s and said nothing.
+        # Nothing here answers it ("Exit and stop tasks" ends the only copy's work); the operator does.
+        disp=hold:bg-work-dialog act=hold action="the 'Background work is running' exit modal is up; answer it in the pane (Stay keeps the work), then move it"
+        cl_page_bgwork_dialog "$p" "$s" ;;
       self)
         # THE CALLER WAITS FOR ITS OWN TURN, IT IS NOT HELD (R4/R5, docs/plans/LIMIT_RECOVER_SELF_INPLACE.md
         # § W0). A terminal hold:self left a session no lane to move itself: `move` held it, `rotate`

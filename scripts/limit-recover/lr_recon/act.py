@@ -24,6 +24,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from lr_recon import census, store
 from lr_recon import types as T
+from lr_recon.clock import run_bounded
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LR_DIR = os.path.dirname(HERE)  # scripts/limit-recover
@@ -476,6 +477,63 @@ def may_actuate(
     if running >= workers:
         return False, "workers-cap"
     return True, "ok"
+
+
+CLAIMED_ACTUATORS = (
+    "A",
+    "A-husk",
+    "B",
+    "R",
+    "C",
+    "C-retry",
+)  # the ones that drive the session
+_SELF_LSTART: Tuple[int, str] = (0, "")  # (pid, lstart) of this daemon, read once
+
+
+def hold_claim(
+    paths: T.Paths,
+    rec: T.Record,
+    alive: Callable[[int, str], bool],
+    now: Optional[float] = None,
+) -> Tuple[bool, str]:
+    """ONE DRIVER PER SESSION (lr-wake 2026-10-18, Wave G): before any admission token is minted for
+    an actuator that drives the session, this record must hold ``runs/by-sid/<sid>.active``.
+    3e929a81 was driven at once by a drain batch (``cc-lr move``, which takes that claim), a poller
+    REQUEST and this reconciler's cohort, because the reconciler's own claim (``_own_and_charge``)
+    logged ``held`` and dispatched anyway. Returns (ok, the claim verdict). ``held`` and
+    ``lost-race`` refuse: another live driver has the session, and nothing is minted or spawned.
+    A legacy holder (pid only) counts as alive while its argv is a recovery driver naming the sid,
+    the same rule the bash taker uses."""
+    cur = store.read_claim(paths, rec.sid)
+    if cur is not None and cur.record_id and cur.record_id == rec.record_id:
+        return True, "ours"
+    global _SELF_LSTART
+    if _SELF_LSTART[0] != os.getpid() or not _SELF_LSTART[1]:
+        _SELF_LSTART = (
+            os.getpid(),
+            store.proc_lstart(os.getpid()),
+        )  # one ps per process
+    me = T.RunClaimHolder(
+        pid=os.getpid(),
+        lstart=_SELF_LSTART[1],
+        owner="lr-reconciler",
+        record_id=rec.record_id,
+    )
+    verdict = store.claim_take(paths, rec.sid, me, alive, _argv_of, now)
+    return verdict not in ("held", "lost-race"), verdict
+
+
+def _argv_of(pid: int) -> str:
+    try:
+        cp = run_bounded(
+            ["ps", "-o", "command=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return str(cp.stdout or "") if cp.returncode == 0 else ""
 
 
 def workers_cap() -> int:

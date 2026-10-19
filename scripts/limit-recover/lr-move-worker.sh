@@ -143,7 +143,7 @@ case "$DISP" in
   wait:*)
     : > "$BDIR/$SID.waiting"
     ev waiting "$DISP, budget ${UNTIL}s"
-    deadline=$(( T0 + UNTIL )); calm=0; absent=0; last_ts=""; d=""
+    deadline=$(( T0 + UNTIL )); calm=0; absent=0; last_ts=""; d=""; first_d=""; d_changed=""; n_reads=0
     while :; do
       aborted && finish NOTMOVED "aborted while waiting for idle; nothing touched"
       intent_recheck
@@ -156,8 +156,24 @@ case "$DISP" in
           || finish NOTMOVED "gone: the session left the census on two consecutive snapshots (moved elsewhere or ended); nothing touched"
         if [ "$d" = move ]; then calm=$((calm + 1)); else calm=0; fi
         [ "$calm" -lt 2 ] || break
+        n_reads=$((n_reads + 1))
+        if [ -z "$first_d" ]; then first_d="${d:--}"; elif [ "${d:--}" != "$first_d" ]; then d_changed=1; fi
       fi
-      [ "$(date +%s)" -lt "$deadline" ] || finish NOTMOVED "still-busy:${d:-unread} after ${UNTIL}s; nothing touched"
+      if [ "$(date +%s)" -ge "$deadline" ]; then
+        ev wait-end "${n_reads} snapshot(s) read, first '${first_d:-none}'${d_changed:+, changed}"
+        # A WAIT THAT NEVER CHANGED FOR THE WHOLE BUDGET IS A HOLD, NOT BUSYNESS (lr-wake 2026-10-18,
+        # pane 350: three 3600 s waits on an unreadable box, the bg-work modal, and no page). Page once
+        # per session and disposition; a later batch meeting the same hold stays silent. At least two
+        # snapshots must have been read: one sample is no evidence that anything stood still.
+        if [ -n "$first_d" ] && [ -z "$d_changed" ] && [ "$n_reads" -ge 2 ] && [ "${LR_MOVE_WAIT_PAGE:-on}" != off ]; then
+          # shellcheck source=/dev/null
+          ( . "$LR/lr-page-once.sh" && lr_page_once "move-wait-$SID-$first_d" "move-wait" \
+              "pane $PANE ${SID:0:8}: '$first_d' did not change for ${UNTIL}s of waiting to move to $TO; nothing typed. Look at the pane." ) \
+            >"$BDIR/$SID.page.log" 2>&1 || true
+          ev wait-paged "$first_d unchanged for ${UNTIL}s"
+        fi
+        finish NOTMOVED "still-busy:${d:-unread} after ${UNTIL}s; nothing touched"
+      fi
       sleep "${LR_MOVE_WAIT_POLL_S:-5}"
     done
     rm -f "$BDIR/$SID.waiting" 2>/dev/null || true ;;
@@ -213,6 +229,28 @@ MW_INTENT_LIB="${LR_MOVE_INTENT_LIB:-$LR/../lib/composer-intent.sh}"
 # Stale junk (composer-intent.sh's classes: rail prompts, tokens, terminal replies, a stray
 # keystroke) is cleared with read-back (cc_tui_clear) and logged (composer_discard_note), then the
 # row moves with no carry.
+# A BOX THAT READS EXACTLY `/exit` IS THE RAIL'S OWN KEYSTROKES, NEVER A DRAFT (lr-wake 2026-10-18,
+# pane 384: a recycle's read-back missed, `/exit` sat unsent, and the draft-carry retyped it into the
+# successor's composer). composer-intent.sh's rail-exit class (Wave C, K8) names it; here it is
+# cleared at once with read-back, with no staleness wait, and is never handed to the recycle's carry.
+# Read for EVERY row right before the actuator, not only for a `draft` row: the box can gain the
+# leftover after the plan was written. rc 0 cleared · 1 not rail-exit (or unreadable) · finishes
+# HELD:draft when the clear cannot be proven.
+rail_exit_clear() { # $1=the box as read (space-stripped)
+  local cls crc=0
+  [ -f "$MW_INTENT_LIB" ] || return 1
+  # shellcheck source=/dev/null
+  cls="$( . "$MW_INTENT_LIB" && composer_unintended_class "${1:-}" "$PANE")" || return 1
+  [ "$cls" = rail-exit ] || return 1
+  # shellcheck source=/dev/null
+  ( . "$MW_TUI_LIB" >/dev/null 2>&1 && cc_tui_clear "$PANE" ) >/dev/null 2>&1 || crc=$?
+  [ "$crc" -eq 0 ] \
+    || finish NOTMOVED "HELD:draft — its box holds the rail's leftover /exit and it could not be cleared (cc_tui_clear rc $crc); nothing else touched"
+  # shellcheck source=/dev/null
+  ( . "$MW_INTENT_LIB" && composer_discard_note "$PANE" rail-exit "$1" )
+  ev rail-exit-cleared "a leftover /exit was cleared with read-back; it is never carried"
+  return 0
+}
 draft_gate() { # → returns with DRAFT_CARRY set (or not); finishes HELD:draft for a pasted block
   local c prev="" seen=0 now hid said="" stale wait deadline cls crc
   stale="${LR_MOVE_DRAFT_STALE_S:-120}"; case "$stale" in ''|*[!0-9]*) stale=120 ;; esac
@@ -221,6 +259,7 @@ draft_gate() { # → returns with DRAFT_CARRY set (or not); finishes HELD:draft 
   while :; do
     c="$(mw_composer)" || { ev draft "the box could not be read; the recycle's probe decides"; return 0; }
     [ -n "$c" ] || { ev draft "the box is empty now; a plain move"; return 0; }
+    rail_exit_clear "$c" && return 0
     now="$(date +%s)"
     if [ "$c" != "$prev" ]; then
       prev="$c"; seen="$now"
@@ -393,6 +432,11 @@ if [ -n "$DRAFT_CARRY" ]; then
   _mw_now="$(mw_composer)" || _mw_now=""
   [ "$_mw_now" = "$DRAFT_TEXT" ] \
     || finish NOTMOVED "HELD:draft — its box changed after it was read for the carry, so someone may be typing; nothing touched"
+elif [ "${LR_MOVE_RAIL_EXIT_CLEAR:-on}" != off ] && { [ -n "$SOCK" ] || [ -n "${LR_MOVE_TUI_LIB:-}" ]; } \
+     && _mw_now="$(mw_composer)" && [ -n "$_mw_now" ]; then
+  # Any row: a leftover /exit is cleared here rather than met by the recycle's composer gate. Only
+  # through the pane's own registered socket (or an explicit TUI seam): never the caller's terminal.
+  rail_exit_clear "$_mw_now" || true
 fi
 attempt=1
 while :; do

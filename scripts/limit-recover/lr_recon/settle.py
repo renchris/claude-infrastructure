@@ -19,9 +19,9 @@ Three things W3 built the parts for and nothing called, found by the W5 rig's fi
 import json
 import os
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from lr_recon import classify, report
+from lr_recon import capped, census, classify, report
 from lr_recon import types as T
 from lr_recon.evidence import _same_cfg, transcript_path
 
@@ -296,6 +296,15 @@ def rebucket(
     if not rec.open or rec.phase != "PRE-MOVE":
         return False
     new = BUCKET_SUBSTATE.get(bucket_name, bucket_name)
+    if (
+        new == "DETECTED"
+        and rec.substate == "WAIT_RESET"
+        and rec.close.get("cohort_exit")
+    ):
+        # cohort_exit's stay: the session still reads LIMITED until its in-place continue lands,
+        # and DETECTED would plan the move the exit just cancelled. The plan re-offers it after
+        # REOFFER_AFTER_S if the wake never lands (plan.movers).
+        return False
     if new == "HELD:team":
         rec.close.pop("team_zero", None)
     elif rec.substate == "HELD:team":
@@ -771,6 +780,11 @@ def _in_place(rec: T.Record, h: T.HolderObs, ok: float, now: float) -> str:
         same_window=bool(rec.pane and h.pane and tuple(h.pane) == tuple(rec.pane)),
         same_uuid=True,
     )
+    # A cohort exit (cohort_exit) was never a recovery: the source served again, so nothing was needed.
+    if rec.close.get("cohort_exit"):
+        proof = "%s; %s" % (rec.close["cohort_exit"], proof)
+        rec.terminal = T.Terminal(outcome="NOT_NEEDED", proof=proof, at=now)
+        return proof
     rec.terminal = T.Terminal(outcome="CLOSED", proof=proof, at=now)
     return proof
 
@@ -850,6 +864,75 @@ def idle_unneeded(rec: T.Record, facts: Optional[Dict[str, T.Fact]], now: float)
     rec.substate, rec.wait, rec.escalated = None, None, False
     rec.terminal = T.Terminal(outcome="NOT_NEEDED", proof=proof, at=now)
     return proof
+
+
+def cohort_exit(
+    rec: T.Record,
+    facts: Optional[Dict[str, T.Fact]],
+    usage: Optional[Dict[str, Dict[str, Any]]],
+    snap: T.Snapshot,
+    now: float,
+) -> Tuple[str, bool]:
+    """lr-wake h defect 3: a limited member whose SOURCE can serve again has nothing to move. Cohort
+    ``next4-7d-1792314000`` held 3e929a81 PRE-MOVE/IN-FLIGHT 11 h after it formed, with next4's
+    weekly limit already reset (5% used): the cohort had no exit for "the source is healthy again".
+
+    Only before any move of ours committed (PRE-MOVE, nothing confirmed or typed; the caller has
+    checked no actuator is alive), and only on POSITIVE evidence (capped.recovered: the cohort's
+    reset passed, the fact was contradicted, or a fresh usage row under 100). Returns (proof,
+    resume): with the session still live in its own pane on the source, ``resume`` is True and the
+    record becomes the in-place stay wake (WAIT_RESET, detail ``stay``) — _wakes types the continue
+    in its own pane and the fresh turn closes it NOT_NEEDED (``_in_place``). With nothing to wake
+    it is NOT_NEEDED at once and the resume debt owns the session. ('', False) = not settled."""
+    if (
+        rec.kind != "limited"
+        or rec.terminal is not None
+        or rec.phase != "PRE-MOVE"
+        # None is a record nothing owns (back from SPLIT-BRAIN): the census owns that one (§4.4)
+        or rec.substate in (None, "PARKED-REBOOT")
+        or rec.timeline.confirmed is not None
+        or rec.timeline.exit_typed_by_me is not None
+        or rec.close.get("cohort_exit")
+    ):
+        return "", False
+    proof = capped.recovered(
+        rec.source_acct,
+        rec.scope,
+        facts or {},
+        usage or {},
+        now,
+        census.cohort_resets(rec.cohort_id) if rec.cohort_id else None,
+    )
+    if not proof:
+        return "", False
+    proof = "cohort exit: " + proof
+    s = snap.sessions.get(rec.sid)
+    live_here = bool(
+        s is not None
+        and any(
+            not h.bg
+            and h.pane is not None
+            and rec.pane
+            and tuple(h.pane) == tuple(rec.pane)
+            and _same_cfg(h.cfg, rec.source_cfg)
+            for h in s.holders
+        )
+    )
+    rec.target_acct, rec.target_cfg, rec.escalated = "", "", False
+    rec.close["cohort_exit"] = proof
+    if live_here:
+        rec.substate = "WAIT_RESET"
+        rec.wait = T.Wait(
+            reason="WAIT_RESET",
+            since=now,
+            eta=now,
+            detail="stay",
+            wakes=["reset"],
+        )
+        return proof, True
+    rec.substate, rec.wait = None, None
+    rec.terminal = T.Terminal(outcome="NOT_NEEDED", proof=proof, at=now)
+    return proof, False
 
 
 def replacement_unproven(rec: T.Record, now: float) -> bool:

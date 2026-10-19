@@ -14,6 +14,7 @@ Decision 2 is SETTLED: a pane with live background work holds until the job ends
 from __future__ import annotations
 
 import dataclasses
+import datetime
 import json
 import os
 from typing import Dict, List, Mapping, Optional, Sequence, Set, Tuple
@@ -651,6 +652,112 @@ def successor_state(
     if not src_holder or env.get("LR_HUSK_RETIRE", "on") == "off":
         return "none"
     return "husk" if src_pane else "unknown"
+
+
+STRANDED_QUIET_S = (
+    600.0  # h defect 5: N minutes with no new successor bytes (default 10)
+)
+_COPY_SLACK_S = 5.0
+
+
+def stranded_tombstone(
+    sid: str,
+    src: str,
+    s: Optional[T.SessionObs],
+    now: float,
+    quiet_s: Optional[float] = None,
+    env: Optional[Mapping[str, str]] = None,
+    amap: Optional[Mapping[str, str]] = None,
+) -> Optional[Dict[str, str]]:
+    """lr-wake h defect 5: a transplant whose relaunch never happened, as a first-class STRANDED
+    state. 3e929a81 (2026-10-18 03:03Z): the next4→next3 transplant wrote ``<sid>.HANDOFF.json`` and
+    renamed the next4 transcript ``.jsonl.handed-off``, the next3 successor never started (its copy
+    stayed byte-identical, 4,040,651 bytes, mtime 02:56), and the old next4 process stayed in pane 23
+    behind the handed-off guard for ~10 h while three dispatchers re-drove it.
+
+    STRANDED = ``successor_state`` reads ``husk`` (tombstone, a copy on the target, the old process
+    alive in a pane on ``src``, no holder on the target) AND the successor transcript has gained no
+    bytes: its size is at most the tombstone's ``confirm_len`` (when recorded) and its mtime is no
+    later than the tombstone, for ``quiet_s`` (LR_STRANDED_QUIET_S, default 600 s) since it.
+
+    The remedy is the one that worked by hand, in the SAME pane: ``/exit`` (only with no background
+    work and an empty composer), then ``lr-fire-resume.sh <target> <cwd> <sid>``. Never a recycle,
+    never a new pane. Returns the remedy plan (sid, pane, src, target, target_acct, cwd, since,
+    command) or None."""
+    env = os.environ if env is None else env
+    if successor_state(sid, src, s, env) != "husk" or s is None:
+        return None
+    if quiet_s is None:
+        try:
+            quiet_s = float(env.get("LR_STRANDED_QUIET_S", "") or STRANDED_QUIET_S)
+        except ValueError:
+            quiet_s = STRANDED_QUIET_S
+    for tomb in transcript.in_projects(src, sid + ".HANDOFF.json"):
+        try:
+            with open(tomb) as fh:
+                t = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(t, dict):
+            continue
+        to = str(t.get("handed_off_to") or "")
+        ts = _iso(t.get("ts"))
+        if not to or ts is None or now - ts < quiet_s:
+            continue
+        succ = str(t.get("target_transcript") or "")
+        if not succ or not os.path.exists(succ):
+            hits = transcript.in_projects(to, sid + ".jsonl")
+            succ = hits[0] if hits else ""
+        try:
+            st = os.stat(succ)
+        except OSError:
+            continue
+        confirm = t.get("confirm_len")
+        if (
+            isinstance(confirm, int)
+            and not isinstance(confirm, bool)
+            and st.st_size > confirm
+        ):
+            return None  # the successor wrote: it ran
+        if st.st_mtime > ts + _COPY_SLACK_S:
+            return None
+        pane = next(
+            (
+                h.pane
+                for h in s.holders
+                if not h.bg
+                and h.pane is not None
+                and h.cfg
+                and _store_key(h.cfg) == _store_key(src)
+            ),
+            None,
+        )
+        acct = observe_rows.acct_of_cfg(to, dict(amap or {}))
+        cwd = s.cwd or ""
+        return {
+            "sid": sid,
+            "pane": "%d:%d" % pane if pane else "",
+            "src": src,
+            "target": to,
+            "target_acct": acct,
+            "cwd": cwd,
+            "since": t.get("ts") or "",
+            "command": "bash ~/.claude/scripts/limit-recover/lr-unstrand.sh --sid %s"
+            % sid,
+        }
+    return None
+
+
+def _iso(v: object) -> Optional[float]:
+    if not isinstance(v, str) or not v:
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(v.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return dt.timestamp()
 
 
 # TODO(W4): swap for lr-reset-poller.sh rq_stale_reason once it is extracted into lr-lib.sh.

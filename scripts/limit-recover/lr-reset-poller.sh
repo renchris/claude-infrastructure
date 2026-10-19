@@ -2280,18 +2280,52 @@ for cfg in "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME"/.claude-tertia
     # authoritative classification via lr-audit (isApiErrorMessage + reset parse)
     aj=$(mktemp); python3 "$AUDIT" --config-dir "$cfg" --session "$sid" --cwd "$cwd" \
         --json "$aj" --quiet >/dev/null 2>&1 || true
+    # AN INHERITED LIMIT IS NOT THIS ACCOUNT'S (lr-wake Q7, 2026-10-18, decisions/q7-next2-cap.md).
+    # A transplant byte-copies the transcript, limit line included: 5232121f's next4 "weekly limit"
+    # line (06:51:35Z) arrived on next2 at 07:05:20Z and was parked as `(next2, weekly) resets
+    # 09:00Z` — next4's reset — while next2 sat at 0-1%. So the newest tombstone in ANOTHER store that
+    # handed this sid off to THIS store dates the move, and every limit event at or before it is the
+    # source's, never this account's.
+    _ho_ts=""
+    for _ho_c in "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME"/.claude-tertiary "$HOME"/.claude-quaternary; do
+      [[ "$_ho_c" != "$cfg" ]] || continue
+      for _ho_f in "$_ho_c"/projects/*/"$sid".HANDOFF.json; do
+        [[ -f "$_ho_f" ]] || continue
+        _ho_to="$(jq -r '.handed_off_to // empty' "$_ho_f" 2>/dev/null)"
+        [[ -n "$_ho_to" ]] || continue
+        [[ "$(cd "${_ho_to%/}/projects" 2>/dev/null && pwd -P)" == "$(cd "$cfg/projects" 2>/dev/null && pwd -P)" ]] || continue
+        _ho_t="$(jq -r '.ts // empty' "$_ho_f" 2>/dev/null)"
+        [[ -z "$_ho_t" || "$_ho_t" < "$_ho_ts" ]] || _ho_ts="$_ho_t"
+      done
+    done
     read -r kind reset < <(python3 -c "
 import json,sys
+from datetime import datetime
 try: es=json.load(open(sys.argv[1])).get('limit_events',[])
 except Exception: es=[]
+def ep(v):
+    try: return datetime.fromisoformat(str(v).replace('Z','+00:00')).timestamp()
+    except Exception: return None
 # A KIND WITH A RESET, never an allowlist of kind names. The old tuple could not even be
 # satisfied by 'fable' — lr-audit never emitted that spelling — so it was a three-name list doing
 # the work of one question, and every cap it did not name was dropped in silence. A cap that
 # carries a reset is exactly the set a TIMER can recover; the others are handled above or by the
 # operator.
 es=[e for e in es if e.get('resets_at_utc')]
+ho=ep(sys.argv[2]) if sys.argv[2] else None
+if ho is not None:
+    mine=[e for e in es if (ep(e.get('timestamp')) or 0) > ho]
+    if es and not mine: print('INHERITED', sys.argv[2]); sys.exit(0)
+    es=mine
 if es: e=es[-1]; print(e['kind'], e['resets_at_utc'])
-" "$aj" 2>/dev/null); rm -f "$aj"
+" "$aj" "$_ho_ts" 2>/dev/null); rm -f "$aj"
+    if [[ "${kind:-}" == INHERITED ]]; then
+      [[ -e "$STATE/inherited-skip/$sid.$reset" ]] || {
+        mkdir -p "$STATE/inherited-skip"; : > "$STATE/inherited-skip/$sid.$reset"
+        log "SKIP  $sid ($acct) — its limit line was inherited through the transplant at $reset; not a limit on $acct, not parked"
+      }
+      continue
+    fi
     [[ -n "${reset:-}" ]] || continue                        # no genuine reset-bearing limit
     # RECURRENCE (LR-i, 2026-07-15): the resumed/ marker is EVENT-keyed, never sid-keyed-forever.
     # The original `[[ -f $RESUMED/$sid.json ]] && continue` (pre-parse, sid-keyed) meant a session

@@ -39,7 +39,7 @@
 # Census columns: pane sid binary model target effort perm cfg cwd pid disposition
 # Dispositions: upgrade · upgrade-teammate · upgrade-lead · current · self · duplicate · no-transcript
 #               · mid-turn · subagents-in-flight · background-job · composer-occupied · headless
-#               · composer-unknown · stale-row
+#               · composer-unknown · bg-work-dialog · stale-row
 #               team procedure holds: lead-awaits-teammates · lead-no-team-file · teammate-no-team
 #               · teammate-shutdown-pending · teammate-unidentified
 #               (LRU_TEAM_PROC=off: the old blanket `teammate` / `lead-with-teammate` exclusions)
@@ -614,6 +614,24 @@ lru_composer() { # $1=pane
   lru_is_rail_junk "$c" && return 3
   return 1
 }
+# AN UNREADABLE BOX IS NAMED BEFORE IT IS WAITED ON (lr-wake 2026-10-18, pane 350). The exit-time
+# "Background work is running" modal hides the composer, so cc_tui_composer fails and the row read
+# `composer-unknown`, which every caller waits out: pane 350 sat at the modal through three 3600 s
+# waits with no page. The screen is read once more and, when it is that modal, the row is
+# `bg-work-dialog`: a HOLD (not waitable, not moved) that cc-lr pages once. Only the read fails the
+# same way as before. Seams: LRU_MODAL_LIB (hooks/lib/pane-modal.sh) · LRU_TUI_LIB.
+LRU_MODAL_LIB="${LRU_MODAL_LIB:-$LRU_DIR/../../hooks/lib/pane-modal.sh}"
+lru_unreadable_disp() { # $1=pane → bg-work-dialog | composer-unknown on stdout
+  local scr
+  # shellcheck source=/dev/null  # both libs are runtime seams (LRU_TUI_LIB, LRU_MODAL_LIB)
+  if [ -f "$LRU_TUI_LIB" ] && [ -f "$LRU_MODAL_LIB" ] \
+     && scr="$( . "$LRU_TUI_LIB" >/dev/null 2>&1; cc_tui_screen "$1" )" \
+     && printf '%s' "$scr" | ( . "$LRU_MODAL_LIB" >/dev/null 2>&1; pane_bgwork_dialog ); then
+    printf 'bg-work-dialog'
+  else
+    printf 'composer-unknown'
+  fi
+}
 # The receipt handoff-fire's composer gate reads (composer_residue_is_ours): `<ts>\t<content>` in
 # the SAME store cc_tui_residue_record writes, keyed on the pane id. Written only for content
 # lru_is_rail_junk accepted, and immediately before the recycle that consumes it.
@@ -743,7 +761,7 @@ EOF2
       if [ -z "$disp" ] && [ "$(lru_bg_kind "$snap" "$pid")" = work ]; then disp=background-job; fi
       if [ -z "$disp" ]; then
         local crc=0; lru_composer "$pane" || crc=$?
-        case "$crc" in 0|3) disp=upgrade${role:+-$role} ;; 1) disp=composer-occupied ;; *) disp=composer-unknown ;; esac
+        case "$crc" in 0|3) disp=upgrade${role:+-$role} ;; 1) disp=composer-occupied ;; *) disp="$(lru_unreadable_disp "$pane")" ;; esac
       fi
     fi
     out="$out$pane"$'\t'"$sid"$'\t'"$bin"$'\t'"${model:--}"$'\t'"${tgt:--}"$'\t'"${eff:--}"$'\t'"$perm"$'\t'"$cfg"$'\t'"${cwd:--}"$'\t'"$pid"$'\t'"$disp"$'\n'
@@ -778,7 +796,7 @@ EOF
 # Switch census columns: pane sid account cfg cwd pid disposition
 # Dispositions: move · self · on-target · duplicate · stale-row · headless · teammate · lead-with-teammate
 #               · no-transcript · mid-turn · subagents-in-flight · background-job
-#               · composer-occupied · composer-unknown
+#               · composer-occupied · composer-unknown · bg-work-dialog
 #               bg rows: bg-session · bg-busy · bg-no-pane · bg-split · bg-host (the host pane's row)
 #               · bg-attach-nowin (a `claude attach <job>` viewer is live, but no window of the
 #                 kitty this drainer talks to owns it, or kitty could not be asked)
@@ -1077,7 +1095,7 @@ lru_switch_census() {
         # cc_tui_submit needs an EMPTY composer — it holds (rc 3) on anything else, rail junk
         # included, and it never scrubs. So only 0 is `move`; 1 and 3 are both occupied.
         local crc=0; lru_composer "$pane" || crc=$?
-        case "$crc" in 0) disp=move ;; 1|3) disp=composer-occupied ;; *) disp=composer-unknown ;; esac
+        case "$crc" in 0) disp=move ;; 1|3) disp=composer-occupied ;; *) disp="$(lru_unreadable_disp "$pane")" ;; esac
       fi
     fi
     out="$out$pane"$'\t'"$sid"$'\t'"${acct:--}"$'\t'"$cfg"$'\t'"${cwd:--}"$'\t'"$pid"$'\t'"$disp"$'\n'
@@ -2208,11 +2226,15 @@ lru_step() { # $1=sid $2=step — closes the previous step (ok) and opens this o
 # readback = our machinery failed (charged, backoff 10 then 20 min, terminal at LRU_MAX_ATTEMPTS) ·
 # notlive / stranded / unanswered = named terminals · keep = leave the record exactly as it is.
 LRU_NEXT_CLASS=""
-lru_class_of() { # $1=verdict $2=reason → ok | wait | fault | readback | notlive | stranded
+lru_class_of() { # $1=verdict $2=reason → ok | wait | hold | fault | readback | notlive | stranded
   case "$1" in upgraded) echo ok; return 0 ;; esac
   case "$2" in
     *"(held: exit-readback)"*) echo readback ;;
-    *"(held: busy"*|*"(held: subagents"*|*"(held: draft"*|*"(held: focused"*|*"(held: bgwork"*|*"(held: locked"*|*"(held: wake"*|*"(held: last-read"*) echo wait ;;
+    # The bg-work modal does not end by itself (lr-wake 2026-10-18, pane 350): a HOLD, never a wait
+    # re-judged every refill. It parks as terminal `held-bgwork` (TTL-expiring) and reaches the drain
+    # news once.
+    *"(held: bgwork"*|bg-work-dialog*) echo hold ;;
+    *"(held: busy"*|*"(held: subagents"*|*"(held: draft"*|*"(held: focused"*|*"(held: locked"*|*"(held: wake"*|*"(held: last-read"*) echo wait ;;
     *"(held: "*) echo fault ;;
     "not live:"*) echo notlive ;;
     "reconciler owns it"*|"busy: another run holds"*|"in flight"*|"census timed out"*|"capacity:"*|"composer-occupied"*) echo wait ;;
@@ -2235,6 +2257,7 @@ lru_st_verdict() { # $1=sid $2=verdict $3=reason — disposition, counters and t
     ok) disp=upgraded; term=upgraded ;;
     wait) disp=waiting ;;
     notlive) disp=terminal; term=not-live ;;
+    hold) disp=terminal; term="held-bgwork" ;;
     stranded) disp=terminal; term=stranded ;;
     exit-pending) disp=exit-pending ;;
     unanswered) disp=terminal; term=exit-unanswered ;;

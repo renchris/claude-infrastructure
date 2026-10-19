@@ -27,6 +27,11 @@ mvf_setup() {
   export LR_MOVE_PROVE_POLL_S=0.2 LR_MOVE_STABLE_S=1 LR_MOVE_SLOT_POLL_S=0.2 LR_MOVE_WAIT_POLL_S=0.2
   export LR_MOVE_HELD_PROVE_S=2 LR_MOVE_PROVE_S=90 LR_MOVE_WATCH_POLL_S=0.3 LR_MOVE_SNAP_S=1
   export LR_MOVE_KERNEL_CHECK=off LR_MOVE_PRESEED=off
+  # The worker's page-once (a wait that never changed) pages through this recorder, never the
+  # operator's Notification Center or phone.
+  export LR_PAGE_ONCE_BIN="$STUBS/lr-page"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/pages.log"\necho "lr-page: verdict=posted os=off phone=skipped"\n' "$BATS_TEST_TMPDIR" > "$LR_PAGE_ONCE_BIN"
+  chmod +x "$LR_PAGE_ONCE_BIN"
 }
 mvf_teardown() {
   local p
