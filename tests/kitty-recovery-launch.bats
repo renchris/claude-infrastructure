@@ -47,6 +47,9 @@ setup() {
   BRL="$REPO/scripts/boot-resume-launch.sh"
   CENSUS="$REPO/scripts/render-census.sh"
 
+  # The split arm places through scripts/lib/pane-placement.sh (lr-wake Wave E): its retry count and
+  # bound scale with load, so the load is pinned and the spawn log kept per-test.
+  export CC_PLACE_LOAD_PER_CORE=0 CC_SPAWN_LOG_FILE="$BATS_TEST_TMPDIR/spawns.jsonl"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   export TMPDIR="$BATS_TEST_TMPDIR/tmp"; mkdir -p "$TMPDIR"
   STUB="$BATS_TEST_TMPDIR/bin"; mkdir -p "$STUB"
@@ -169,6 +172,8 @@ fire() { # $1=sid, rest=extra args — the REAL --launch path, with every extern
   mk_handoff_fixture
   in_kitty 31
   export ITERM_SESSION_ID="w0t0p0:31"      # the shim's synthesized form; ##*: yields the kitty id
+  # the census the placement policy reads first (lr-wake Wave E): the anchor's one-tab window has room
+  export KITTY_LS_JSON='[{"id":1,"tabs":[{"id":10,"layout":"splits","windows":[{"id":31},{"id":99}]}]}]'
   run fire "khan0001-0000-0000-0000-000000000001"
   [ "$status" -eq 0 ]
   grep -q -- '--type=window' "$KITTY_LOG"
@@ -202,7 +207,7 @@ fire() { # $1=sid, rest=extra args — the REAL --launch path, with every extern
   # A USABLE listing (it carries window ids) that does not carry the one the launch just returned:
   # the stub's launch answers 99, and 98 is another live window, so this is the real dead case.
   export ITERM_SESSION_ID="w0t0p0:31" LRH_KITTY_SETTLE_S=0 \
-         KITTY_LS_JSON='[{"tabs":[{"windows":[{"id": 98,"title":"x"}]}]}]'
+         KITTY_LS_JSON='[{"id":1,"tabs":[{"id":10,"layout":"splits","windows":[{"id": 31,"title":"a"},{"id": 98,"title":"x"}]}]}]'
   run fire "khan0006-0000-0000-0000-000000000006"
   [ "$status" -eq 0 ]
   grep -q -- '--location=vsplit' "$KITTY_LOG"          # it really did try the split
@@ -218,7 +223,7 @@ fire() { # $1=sid, rest=extra args — the REAL --launch path, with every extern
   mk_handoff_fixture
   in_kitty 31
   export ITERM_SESSION_ID="w0t0p0:31" LRH_KITTY_SETTLE_S=0 \
-         KITTY_LS_JSON='[{"tabs":[{"windows":[{"id": 99,"title":"x"},{"id": 98,"title":"y"}]}]}]'
+         KITTY_LS_JSON='[{"id":1,"tabs":[{"id":10,"layout":"splits","windows":[{"id": 31,"title":"a"},{"id": 99,"title":"x"},{"id": 98,"title":"y"}]}]}]'
   run fire "khan0007-0000-0000-0000-000000000007"
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'fired split pane'
@@ -243,15 +248,21 @@ fire() { # $1=sid, rest=extra args — the REAL --launch path, with every extern
   echo "$output" | grep -q 'fired split pane'
 }
 
-@test "lr-handoff: a failed kitty split falls back to a kitty OS-WINDOW, never to iTerm2" {
+@test "lr-handoff: a failed kitty split falls back to a FULLSCREEN kitty OS-WINDOW, never to iTerm2 or a tab" {
+  # Since lr-wake Wave E the split arm goes through scripts/lib/pane-placement.sh, and a split that
+  # fails is answered there: a new fullscreen OS window (its own Space). The pane is the successor.
   mk_handoff_fixture
   in_kitty 31
-  export ITERM_SESSION_ID="w0t0p0:31" KITTY_SPLIT_FAIL=1
+  export ITERM_SESSION_ID="w0t0p0:31" KITTY_SPLIT_FAIL=1 \
+         KITTY_LS_JSON='[{"id":1,"tabs":[{"id":10,"layout":"splits","windows":[{"id":31},{"id":99}]}]}]'
   run fire "khan0002-0000-0000-0000-000000000002"
   [ "$status" -eq 0 ]
+  grep -q -- '--location=vsplit' "$KITTY_LOG"          # the split was tried first
   grep -q -- '--type=os-window' "$KITTY_LOG"
+  grep -q -- '--os-window-state=fullscreen' "$KITTY_LOG"
+  gone '--type=tab' "$KITTY_LOG"
   [ ! -s "$OSA_LOG" ]
-  echo "$output" | grep -q 'fired new kitty window'
+  echo "$output" | grep -q 'fired split pane'
 }
 
 @test "lr-handoff: a non-integer pane id inside kitty REFUSES the split (no hijack of the active window)" {

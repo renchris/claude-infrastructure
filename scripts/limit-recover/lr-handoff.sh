@@ -1386,6 +1386,40 @@ lrh_target_routable() { # → 0 routable / 1 the router excludes it (reason prin
   return 1
 }
 
+# ── HELD:no-shell PAGES ONCE PER PANE (lr-wake 2026-10-18; decision 56c6862291f2, q6-pane258-and-
+# replace.md) ──────────────────────────────────────────────────────────────────────────────────────
+# The hold is right and stays: a launcher-rooted pane has no shell to relaunch into, and replacing it
+# would open a new window id beside it. What was wrong is the noise — the move lane retries the pane
+# every pass, so one session (9f6593c5, pane 258) held 7 times on 10-18 and the operator had no single
+# row saying why. The first hold for a pane+session writes a marker and pages once (lr-page.sh, the
+# liveness-free page); every later hold for the same pair stays silent on the pager and says so on
+# stderr. The marker is keyed on BOTH, so a new session in that pane, or the same session in a new
+# pane, is a new fact and pages again. Seams: LR_STATE_DIR · LRH_PAGE_BIN.
+lrh_page_no_shell_once() { # → always 0
+  local dir mark pg="" c
+  dir="${LR_STATE_DIR:-$HOME/.reso/limit-recover}/held-no-shell"
+  case "${SOURCE_PANE:-}" in ''|*[!A-Za-z0-9._-]*) return 0 ;; esac
+  case "${SID:-}" in ''|*[!A-Za-z0-9._-]*) return 0 ;; esac
+  mark="$dir/${SOURCE_PANE}.${SID}"
+  if [[ -e "$mark" ]]; then
+    echo "lr-handoff: HELD:no-shell for pane $SOURCE_PANE again — already paged once ($(cat "$mark" 2>/dev/null || echo '?')); not paging again" >&2
+    return 0
+  fi
+  mkdir -p "$dir" 2>/dev/null || return 0
+  date -u +%Y-%m-%dT%H:%M:%SZ > "$mark" 2>/dev/null || return 0
+  for c in "${LRH_PAGE_BIN:-}" "$(dirname "$0")/lr-page.sh" "$LR/lr-page.sh"; do
+    [[ -n "$c" && -f "$c" ]] && { pg="$c"; break; }
+  done
+  if [[ -z "$pg" ]]; then
+    echo "lr-handoff: lr-page.sh unreachable — HELD:no-shell for pane $SOURCE_PANE was not paged" >&2
+    return 0
+  fi
+  /bin/bash "$pg" --title held-no-shell \
+    "limit-recover will not move session ${SID:0:8}: pane $SOURCE_PANE is launcher-rooted (no shell survives its /exit). It stays where it is; close or restart it from a shell-rooted pane to make it movable. This page fires once per pane." \
+    >/dev/null 2>&1 || echo "lr-handoff: the HELD:no-shell page for pane $SOURCE_PANE reached no channel" >&2
+  return 0
+}
+
 lrh_precheck() { # → 0 admitted (token minted) / 6 HELD|REFUSED|PARKED, nothing moved
   local hf out rc state lrh_ki
   # FIRST, because it is the cheapest refusal and the one that costs a whole session when skipped.
@@ -1468,6 +1502,7 @@ lrh_precheck() { # → 0 admitted (token minted) / 6 HELD|REFUSED|PARKED, nothin
       echo "lr-handoff: PRECHECK HELD:no-shell — pane $SOURCE_PANE is launcher-rooted (no shell survives its /exit) and --no-replace forbids a successor beside it. NOTHING has been transplanted, no lock and no tombstone were written, and the source session is untouched." >&2
       echo "lr-handoff: verdict: HELD:no-shell" >&2
       lrh_state HELD precheck "HELD:no-shell"
+      lrh_page_no_shell_once
       return 6
     fi
     # ── THE ONLY WRITER OF killed_inflight (W3i B3) ──────────────────────────────────────────────
@@ -2206,11 +2241,39 @@ if [[ $LAUNCH -eq 1 && $PRINT_ONLY -ne 1 ]]; then
          # pane-theft class. No --title: it is sticky and would freeze the ✳/◐ liveness glyph;
          # provenance rides in --var (kitty @ ls user_vars, unforgeable by the child).
          LRH_FOCUS=(); [[ -n "$SOURCE_PANE" ]] && LRH_FOCUS=(--dont-take-focus)
-         if KID="$(lrh_kitty launch --type=window --location=vsplit \
-           --match "window_id:$LRH_ANCHOR" --next-to "id:$LRH_ANCHOR" --source-window "id:$LRH_ANCHOR" --cwd=current \
-           ${LRH_FOCUS[@]+"${LRH_FOCUS[@]}"} \
-           --var "lr_continuation_of=$SID" --var "lr_source_pane=$LRH_ANCHOR" --var "lr_target_account=$TARGET" \
-           "${LRH_LAUNCH_TAIL[@]}" 2>/dev/null)"; then
+         # THE PLACEMENT POLICY (lr-wake 2026-10-18, REPORT §4 Waves D/E). This arm opened its own
+         # `kitty @ launch --location=vsplit` with no pane count at all, so a recovery beside a full
+         # window made a fifth pane (q6: a replace of window 19 would have put 8 panes in one OS
+         # window). scripts/lib/pane-placement.sh owns the choice now — a vsplit beside the anchor
+         # when its OS window has room, else a split into a window with room, else a NEW fullscreen
+         # OS window; never a tab — and writes the pane-spawn row itself. The inline launch below is
+         # only the fallback for a live layer that has not linked that library yet.
+         LRH_PLACER=""
+         if ! command -v cc_place_pane >/dev/null 2>&1; then
+           for LRH_PLACER in "${LRH_PANE_PLACEMENT_LIB:-}" "$(dirname "$0")/../lib/pane-placement.sh" \
+                             "$LR/../lib/pane-placement.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/pane-placement.sh"; do
+             # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+             [[ -n "$LRH_PLACER" && -f "$LRH_PLACER" ]] && . "$LRH_PLACER" && break
+           done
+         fi
+         LRH_PLACED=0 LRH_SPLIT_RC=0
+         if command -v cc_place_pane >/dev/null 2>&1; then
+           LRH_PLACED=1
+           # rc 1 = nothing was created (the library adopts a timed-out launch by its own token first)
+           KID="$(CC_PLACE_KITTY_BIN="${CC_KITTY_BIN:-}" CC_PLACE_REQUESTED=split \
+                  CC_PLACE_FOCUS="$([[ -n "$SOURCE_PANE" ]] && echo 0 || echo 1)" \
+                  CC_PLACE_DETAIL="lr-handoff vsplit anchor:$LRH_ANCHOR continuation_of:${SID:0:8} target:$TARGET" \
+                  cc_place_pane "$LRH_ANCHOR" current -- \
+                    --var "lr_continuation_of=$SID" --var "lr_source_pane=$LRH_ANCHOR" --var "lr_target_account=$TARGET" \
+                    "${LRH_LAUNCH_TAIL[@]}")" || LRH_SPLIT_RC=$?
+         else
+           KID="$(lrh_kitty launch --type=window --location=vsplit \
+             --match "window_id:$LRH_ANCHOR" --next-to "id:$LRH_ANCHOR" --source-window "id:$LRH_ANCHOR" --cwd=current \
+             ${LRH_FOCUS[@]+"${LRH_FOCUS[@]}"} \
+             --var "lr_continuation_of=$SID" --var "lr_source_pane=$LRH_ANCHOR" --var "lr_target_account=$TARGET" \
+             "${LRH_LAUNCH_TAIL[@]}" 2>/dev/null)" || LRH_SPLIT_RC=$?
+         fi
+         if [[ $LRH_SPLIT_RC -eq 0 ]]; then
            FIRED="split"
            # `kitty @ launch` prints the new window id, and only that, on success. Accept it ONLY as
            # a bare integer: kitty's id space is integers, so anything else is a diagnostic or a
@@ -2227,7 +2290,8 @@ if [[ $LAUNCH -eq 1 && $PRINT_ONLY -ne 1 ]]; then
            # `|| true`: this is the LAST command of the arm, and under `set -e` a false && -list
            # here would exit the script — which is now REACHABLE, because a demoted fire makes the
            # first test false on purpose.
-           { [ -n "$FIRED" ] && command -v cc_log_pane_spawn >/dev/null 2>&1 \
+           # cc_place_pane wrote its own row (a row means a pane exists); only the inline fallback logs here.
+           { [ -n "$FIRED" ] && [[ $LRH_PLACED -eq 0 ]] && command -v cc_log_pane_spawn >/dev/null 2>&1 \
              && cc_log_pane_spawn split kitty "" "${PWD:-}" "lr-handoff vsplit anchor:$LRH_ANCHOR"; } || true
          fi ;;
     esac
@@ -2280,7 +2344,11 @@ OSA
     if [[ $LRH_REPLACE -eq 1 ]]; then
       echo "lr-handoff: REPLACED in place — successor pane ${NEW_PANE:-?} fired beside source pane $LRH_ANCHOR on '$TARGET'; the source is retired below once the successor is verified (manual fallback: $_LRH_FB)" >&2
     else
-      echo "lr-handoff: fired split pane (right of pane $LRH_ANCHOR, ${LRH_SPAWN_SHAPE:-argv}-rooted) on '$TARGET' (manual fallback: $_LRH_FB)" >&2
+      if [[ ${LRH_PLACED:-0} -eq 1 ]]; then
+        echo "lr-handoff: fired split pane ${NEW_PANE:-?} (placed by the pane policy from anchor pane $LRH_ANCHOR — beside it when its window has room, else a window with room or a new fullscreen OS window; ${LRH_SPAWN_SHAPE:-argv}-rooted) on '$TARGET' (manual fallback: $_LRH_FB)" >&2
+      else
+        echo "lr-handoff: fired split pane (right of pane $LRH_ANCHOR, ${LRH_SPAWN_SHAPE:-argv}-rooted) on '$TARGET' (manual fallback: $_LRH_FB)" >&2
+      fi
     fi
   elif [[ $IN_KITTY -eq 1 ]]; then
     command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn os-window kitty "" "${PWD:-}" "lr-handoff fallback os-window"

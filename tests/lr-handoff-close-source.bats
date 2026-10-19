@@ -42,6 +42,9 @@ setup() {
   # parse) would refuse every case here on a subject this suite does not test. Its own cases live
   # beside the guard.
   export LRH_LIVE_PARSER_CHECK=off
+  # The split arm places through scripts/lib/pane-placement.sh (lr-wake Wave E): its retry count and
+  # bound scale with load, so the load is pinned and the spawn log kept per-test.
+  export CC_PLACE_LOAD_PER_CORE=0 CC_SPAWN_LOG_FILE="$BATS_TEST_TMPDIR/spawns.jsonl"
   export CC_FIRE_HEADROOM_GATE=off
   STUB="$BATS_TEST_TMPDIR/bin"; mkdir -p "$STUB"
   export KITTY_LOG="$BATS_TEST_TMPDIR/kitty.log"; : > "$KITTY_LOG"
@@ -57,6 +60,17 @@ printf '%s\n' "$*" >> "${KITTY_LOG:?}"
 if [ "${KITTY_FAIL:-0}" = 1 ]; then exit 1; fi
 case " $* " in
   *" --type=window "*) [ "${KITTY_SPLIT_FAIL:-0}" = 1 ] && exit 1 ;;
+esac
+# `@ ls`: the anchor (31) in a one-tab window, plus the id this stub's launch answers when it is an
+# integer — the placement policy reads the census first (lr-wake 2026-10-18, Wave E: the split arm
+# now goes through scripts/lib/pane-placement.sh), and the survival check reads it after.
+case " $* " in
+  *" ls "*) n="${KITTY_NEW_ID-99}"
+            case "$n" in
+              ''|*[!0-9]*) printf '[{"id":1,"tabs":[{"id":10,"layout":"splits","windows":[{"id":31}]}]}]\n' ;;
+              *) printf '[{"id":1,"tabs":[{"id":10,"layout":"splits","windows":[{"id":31},{"id":%s}]}]}]\n' "$n" ;;
+            esac
+            exit 0 ;;
 esac
 printf '%s\n' "${KITTY_NEW_ID-99}"
 exit 0
@@ -170,11 +184,14 @@ no_raw_teardown() {
 }
 
 @test "kitty os-window fallback: its id is captured too" {
+  # Since lr-wake Wave E the failed split is answered by the placement policy itself: a NEW fullscreen
+  # OS window (never a tab), whose id is the successor exactly as the old fallback arm's was.
   unset IT2_WRAPPER_NO_KITTY; export KITTY_WINDOW_ID=31
   export ITERM_SESSION_ID="w0t0p0:31" KITTY_SPLIT_FAIL=1 KITTY_NEW_ID=72
   fire_tx "clos0002-0000-0000-0000-000000000002" --close-source
   [ "$status" -eq 0 ]
   grep -q -- '--type=os-window' "$KITTY_LOG"
+  grep -q -- '--os-window-state=fullscreen' "$KITTY_LOG"
   grep -q -- 'self-close --successor 72 --transplanted-source' "$HF_LOG"
   no_raw_teardown
 }
