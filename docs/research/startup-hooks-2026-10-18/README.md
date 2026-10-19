@@ -329,3 +329,43 @@ The critic's deviation was a scratch `/tmp/critic-mbx-cancels.tsv`, since remove
 - The timing bias is "only hooks that write stdout **or stderr** get a duration", not "only printing hooks" [M, A7 skeptic].
 - The ".claude" census bucket is ~95% `.claude-next` sessions (shared `projects/`). True account-1 starts are about 10 transcripts [M, A1 skeptic].
 - 9 of the 411 listed transcripts were moved by limit-recover. Recomputed counts run slightly low (for example 397 vs 410 dispatcher records); resolve transcripts by session id, not by path.
+
+---
+
+## Implementation results (2026-10-19)
+
+Waves 1-5 and 7 landed through the project-local `/ship`. Wave 6 is operator-only: its migrations are landed **unapplied** and every item is a filed backlog row. Every sha below is an ancestor of `origin/main` [M: `git merge-base --is-ancestor`], and every file it touched is present there [M: `git ls-tree origin/main`].
+
+### Landed units
+
+| Wave | Unit → sha |
+|---|---|
+| 1 | 1.1 temp-slug glob exclusion `2c12d4a4f` · 1.2 PostToolUseFailure event name `57a88ea77` · 1.3 pre-session-validate `28dc5c520` · 1.4 session-index-start `d4e3a1113` · 1.5 wake-nag gate `4bae5b880` · 1.6 memory-nudge `21155efe1` |
+| 2 | dispatcher v2 (emit by deadline, late children, loud drops, per-child ledger) `a9c31098d` |
+| 3 | 3.1 sentinels `1fc30b348` · 3.2 prompt front `d592e81ea` · 3.3 `cc-startup-health` `0c2fa2067` · 3.4 transcript worker `22f6c9f97` · 3.5 fleet line `18ba75ae1` · 3.6 alert writers: sentinel half `51e8113ad`, dispatcher half `e05f5239a` · sentinel wiring: dod-persist `4af5dd4ae`, mailbox-drain `c1a940a10`, desk-brief `a5c06bbcf`, empty-path upgrade `3ac8d68a0` · worker stdout fix `b3c4e5dc5` · fold cache `48f467fd8` |
+| 4 | 4.1 dod-persist pointer `72ffe5160` · 4.2 silent-when-healthy one-liners `493beb7b5` · 4.3 goal-inert crumb `36afca47f` |
+| 5 | 5.1 dod-persist cost `dcf43f30f` (45 → 15 execs per lineage start, output byte-identical over 19 scenarios) · 5.2 mission board gate `8e46846e4` · 5.3 MCP failure stamp `aaf9eb8c3` · 5.4 stamp after proof `a3c8f40f5` · 5.5 async hygiene `e7edc4e7e` · 5.6 mailbox-drain trims `7ecff6a73` · 5.7 mirror split: **decision pending** (below) |
+| 7 | #25 span guard `26aaf5e7e` · #26 drop detector, shadow mode `fcfc4bd9c` · #27 Stop renderer deadline `4a826162c` · UPS per-hook stamps `bc2a8f699` · PreToolUse cutreplay `7672c5798` · validate-bash slow rule `a1932b261` · #30/#31 parked (§5 Wave 7 status) |
+| 6 (unapplied) | 0068 dispatcher timeout + 0069 TeammateIdle timeout `92f4c6f81` · 0071 FileChanged startup alerts + `startup-alert-notify.sh` `63c534895` (probe A, `probes/probeA-RESULT.md`) · 0012 rewritten to the 0068 contract `3319250f6` (probe B, `probes/probeB-RESULT.md`) |
+
+### Wave 6 rows (operator)
+
+6.1 `ab8edbc0666e` (run 0068) · 6.2 `323bc280ed89` (run 0071; probe A passed on 2.1.293; replaces `9a586d9eacd9`) · 6.3 `2cedae8e4ec0` (only if cancels persist) · 6.4 `ce770ba17b96` (run the fixed 0012; probe B recommends applying at 78%: an `asyncRewake` Stop hook does not defer /goal on 2.1.293; replaces `ecf9c60083ff`; the c10 batch `f7d7449ce5e2` now passes 0012 and is red at 0066, which predates this program) · 6.5 `ba4cc8ecbc27` (run 0069) · 6.6a `421e8d452a93` · 6.6b `6f330a10160e` · 6.7 `b7cc410bd014` · 6.8 `730533bea2ab`.
+
+### Dispatcher latency and drops, before and after
+
+Two instruments. The census is `python3 -I a3_dispatch_census.py <list> --rows <tsv>` over the transcripts born in each window (the harness's own `durationMs`; lists and rows kept outside the repo). The ledger is `~/.claude/logs/session-start-dispatch.jsonl` from Wave 2 (the dispatcher's own clock from process start), read only. Isolated = secondary, tertiary, quaternary.
+
+| Measure | Baseline (§2 #1; A2/A3/A8) | After 1.1 (census, transcripts born 10-18T20:40Z to 10-19T11:17Z) | After Wave 2 (census + ledger, 10-19T11:17Z to 17:32Z; **interim, n=13**) |
+|---|---|---|---|
+| Dispatcher runs | 410 per 2 d | 59: 44 delivered, 15 cancelled | 13: 13 delivered, 0 cancelled; 0 harness-term rows |
+| Isolated p50, delivered runs | 7.4-9.2 s | 4.9 s (n=41) | 3.0 s census / 2.4 s ledger (n=11) |
+| Isolated p90 / max | — | 10.4 s / 12.3 s | 3.7 s / 4.1 s census |
+| Runs ≥9 s (the old child-kill bound) | 84 of 364 (48 h) | 9 of 44 delivered | 0 |
+| Late, killed, absent or malformed children | ~80 real kills per 2 d [E] | not recorded (no ledger yet) | 0 of 130 child rows |
+| config-mirror-assert model output on isolated starts | pending-link warning on ~46% | 0 of 41 | 0 of 11; child p50 2.4 s, p90 3.0 s, max 3.2 s |
+| Dispatcher model context per start | max 650-677 chars | mean 617, max 659 | mean 670, max 705 (all 13 rows predate 4.2) |
+
+Reading it. The 1.1 window includes the 16:34 local reboot's resume storm (load 300-590); all 15 cancels (12.8-25.9 s) fall in it, so its isolated p50 is the clean comparison. The Wave 2 window is quiet and small: it shows the expected direction (p50 3.0 s against the §1 estimate of "about 3 s", no run near the bound) but it is not yet the ≥50-start sample the plan called for. The census's accounts-board detector (`"CLAUDE MAX" in s`) no longer matches the redesigned board and reports it on 2 of 13 starts; the ledger shows `accounts-board.sh` `st:ok` with a 1.9-2.8 KB systemMessage on 13 of 13, so that is a stale signature, not a loss. The fleet line (3.5) read at 17:45Z: 1 loss since it was installed, a project hook.
+
+Still open: the ≥50-start re-run of this table, 5.7 (decide at 30 isolated ledger rows; interim config-mirror-assert p50 2.1-2.4 s, under the 3 s trigger), and #30/#31 (decide at 50 rows, backlog `149ae5936586`).
