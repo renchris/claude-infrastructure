@@ -79,7 +79,8 @@
 #         load       loadavg per core            — off on the Agent-tool path (see below)
 #         headroom   reclaimable GB              — the term that fired 0 times in 127 refusals
 #         segments   compressor-segment %        — the memory term that CAN bind (§S6.6 item 2)
-#         active     sessions mid-turn           — the ~8 ceiling the design point rests on (item 1)
+#         active     CPU-active turns            — ceiling in cores, ncpu × 0.8 (lr-wake Wave B2);
+#                    CC_ADMIT_ACTIVE_SIGNAL=beat reverts to every prompt-beat session against 8
 #       plus the operator reserve's three: reserve-headroom · reserve-active · reserve-slots.
 #       <caller>  short stable id, [A-Za-z0-9._-] only. Keys the budget state file, so two callers
 #                 cannot spend each other's budget. An unusable id fails OPEN (recorded) rather
@@ -98,7 +99,10 @@
 #      CC_ADMIT_SEGMENT_OVERRIDE · CC_SP_ACTIVE_OVERRIDE ·
 #      CC_ADMIT_STATE_DIR · CC_ADMIT_IDL · CC_ADMIT_NOTIFY_BIN ·
 #      CC_ADMIT_LOAD_TERM(on) · CC_ADMIT_HEADROOM_TERM(on) · CC_ADMIT_SEGMENT_TERM(on) ·
-#      CC_ADMIT_ACTIVE_TERM(on)  — per-caller term selection
+#      CC_ADMIT_ACTIVE_TERM(on)  — per-caller term selection ·
+#      CC_ADMIT_ACTIVE_SIGNAL(cpu|beat) · CC_ADMIT_ACTIVE_PER_CORE(0.8) ·
+#      CC_ADMIT_ACTIVE_CPU_FILE(~/.claude/autonomy/active-cpu.json) ·
+#      CC_ADMIT_ACTIVE_CPU_MIN_CORES(0.25) · CC_ADMIT_ACTIVE_CPU_MAX_AGE_S(90) — see _cc_admit_active_cpu
 # Pure definitions only — safe to source under `set -u`. bash 3.2-safe, BSD+GNU portable, no eval.
 
 # ══ THE HARDWARE TERMS — ONE IMPLEMENTATION, TWO POLICIES ══════════════════════════════════════
@@ -1231,6 +1235,51 @@ cc_capacity_probe() { # $1=caller $2=what → 0 would-admit / 9 would-refuse · 
 }
 _CC_ADMIT_PROBE=0
 
+# ── THE CPU-ACTIVE SIGNAL (lr-wake 2026-10-18, REPORT §4 Wave B2; c2-capacity-admit-rescue-loop §5.3)
+# The ACTIVE term used to count every session whose latest beat is `kind:"prompt"` (cc_sp_active).
+# A turn blocked in `sleep`, Monitor or a background wait keeps that beat for as long as it waits and
+# loads the box with nothing: on 2026-10-18 the rescuer 2cc3a7fa sat in `until …; sleep 15` loops for
+# 30 min and counted as one of the 8 it was refused against (c2 §2.6, REPORT RC9). The signal is now
+# a mid-turn session whose claude process tree used at least CC_ADMIT_ACTIVE_CPU_MIN_CORES (0.25) of
+# a core over the last sample window, read from the file scripts/active-cpu-sampler.sh rewrites every
+# 15 s. The gate reads one file and never samples or sleeps itself.
+#
+# THE CEILING IS IN CORES on this signal: floor(ncpu × CC_ADMIT_ACTIVE_PER_CORE), default 0.8, which
+# is 8 on the 10-core box, i.e. the literal it replaces, so the design point does not move where it
+# was measured; it moves only with the core count. An explicit CC_ADMIT_ACTIVE_CEILING still wins, and
+# CC_ADMIT_RESTORE_R still replaces either.
+#
+# THE REVERT, without a deploy: CC_ADMIT_ACTIVE_SIGNAL=beat in the caller's environment restores the
+# old term exactly (every prompt-beat session against the fixed ceiling 8). So does any evaluation
+# without a usable sample:
+#   no file at all     the sampler is not installed: the old term, silently (a deliberate state)
+#   stale/bad/dead     the sampler broke: the old term, and `active-cpu` lands in the row's BLIND list
+#   CC_SP_ACTIVE_OVERRIDE set   a test or a caller pinned the old census; it is honoured verbatim
+# A missing sample therefore never deletes the term and never widens admission past what it was.
+CC_ADMIT_ACT_CPU=""
+CC_ADMIT_ACT_CPU_WHY=""
+_cc_admit_active_cpu() { # → 0 usable (sets CC_ADMIT_ACT_CPU) / 1 no sample file / 2 sample unusable
+  local f now maxage thr row
+  CC_ADMIT_ACT_CPU=""; CC_ADMIT_ACT_CPU_WHY=""
+  f="${CC_ADMIT_ACTIVE_CPU_FILE:-$HOME/.claude/autonomy/active-cpu.json}"
+  [ -f "$f" ] || return 1
+  command -v jq >/dev/null 2>&1 || { CC_ADMIT_ACT_CPU_WHY="no jq"; return 2; }
+  now="$(date +%s)"
+  maxage="${CC_ADMIT_ACTIVE_CPU_MAX_AGE_S:-90}"; cc_hw_is_int "$maxage" || maxage=90
+  thr="${CC_ADMIT_ACTIVE_CPU_MIN_CORES:-0.25}"; cc_hw_is_num "$thr" || thr=0.25
+  # shellcheck disable=SC2016  # a jq program: $now/$max/$thr are jq's
+  row="$(jq -r --argjson now "$now" --argjson max "$maxage" --arg thr "$thr" '
+      if (.t|type) != "number" or (.trees|type) != "array" then "bad"
+      elif .beats_live != true then "beats-dead"
+      elif ($now - .t) > $max or (.t - $now) > 60 then "stale"
+      else [.trees[] | select(.mid_turn == true and (.cores|type) == "number"
+                              and .cores >= ($thr|tonumber))] | length | tostring
+      end' "$f" 2>/dev/null)"
+  if cc_hw_is_int "$row"; then CC_ADMIT_ACT_CPU="$row"; return 0; fi
+  CC_ADMIT_ACT_CPU_WHY="${row:-unreadable}"
+  return 2
+}
+
 # ── the page: a refusal that nobody sees is a silent drop ──────────────────────────────────────
 _cc_admit_page() { # $1=text
   local n; n="${CC_ADMIT_NOTIFY_BIN:-}"
@@ -1246,6 +1295,7 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   local caller="${1:-unknown}" what="${2:-spawn}"
   local ncpu load ceiling lpc verdict floor head_gb sysctl_bin budget detail
   local seg_row seg_pct seg_segs seg_lim seg_ceiling act act_ceiling act_label act_inflight act_tok
+  local act_cpu act_rc act_per act_cores
   local tok_occ tok_rep tok_pgmax
 
   # The enabled-term list for THIS evaluation, rebuilt every call. See _cc_admit_emit's header: once
@@ -1535,6 +1585,31 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   if [ "${CC_ADMIT_ACTIVE_TERM:-on}" != off ]; then
     act_ceiling="${CC_ADMIT_ACTIVE_CEILING:-8}"
     act_label="active ceiling ${act_ceiling}"
+    # THE SIGNAL (Wave B2, _cc_admit_active_cpu above): CPU-active turns against a ceiling in cores.
+    # The label keeps ending in the ceiling's digits: cc_capacity_admit_short reads them from there.
+    act_cpu=""
+    if [ "${CC_ADMIT_ACTIVE_SIGNAL:-cpu}" != beat ] && [ -z "${CC_SP_ACTIVE_OVERRIDE:-}" ]; then
+      _cc_admit_active_cpu; act_rc=$?
+      if [ "$act_rc" = 0 ]; then
+        act="$CC_ADMIT_ACT_CPU"; act_cpu=1
+        act_per="${CC_ADMIT_ACTIVE_PER_CORE:-0.8}"
+        act_label="CPU-active (>=${CC_ADMIT_ACTIVE_CPU_MIN_CORES:-0.25} core) ceiling ${act_ceiling}"
+        if [ -z "${CC_ADMIT_ACTIVE_CEILING:-}" ]; then
+          act_cores=""
+          if cc_hw_is_int "$ncpu" && [ "$ncpu" -gt 0 ] && cc_hw_is_num "$act_per"; then
+            act_cores="$(awk -v n="$ncpu" -v p="$act_per" 'BEGIN { c = int(n * p); if (c < 1) c = 1; printf "%d", c }')"
+          fi
+          if cc_hw_is_int "$act_cores"; then
+            act_ceiling="$act_cores"
+            act_label="CPU-active (>=${CC_ADMIT_ACTIVE_CPU_MIN_CORES:-0.25} core) ceiling ${ncpu} cores x ${act_per} = ${act_ceiling}"
+          else
+            _cc_admit_note_blind active-cores   # no core count: the fixed ceiling stands
+          fi
+        fi
+      elif [ "$act_rc" = 2 ]; then
+        _cc_admit_note_blind "active-cpu(${CC_ADMIT_ACT_CPU_WHY})"
+      fi
+    fi
     # THE RESTORE BUDGET (lr-reconciler): R replaces the ceiling, and an admitted-but-unredeemed token
     # is a session already on its way in, so it counts as active for every caller. A malformed R is
     # our own bad input — noted and ignored, never a refusal.
@@ -1545,7 +1620,7 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
         _cc_admit_note_blind restore-r
       fi
     fi
-    if _cc_admit_load_presence && command -v cc_sp_active >/dev/null 2>&1; then
+    if [ -z "$act_cpu" ] && _cc_admit_load_presence && command -v cc_sp_active >/dev/null 2>&1; then
       act="$(cc_sp_active 2>/dev/null || true)"
     fi
     if ! cc_hw_is_int "$act" || ! cc_hw_is_int "$act_ceiling"; then

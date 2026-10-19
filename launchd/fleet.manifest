@@ -219,6 +219,12 @@ com.claude.capacity-alarm         | run    | 600  | ~/.claude/logs/capacity-alar
 # plist lives in launchd/staged/ (RunAtLoad + KeepAlive in launchd/ would start at the next login with
 # no decision, the chime-player reason). Flip to `run` once that script's read-back has passed.
 com.claude.capacity-attrib        | staged | 5    | ~/.claude/logs/attrib-latest.json | 13 | 52-load-2026-10-17-activate.sh
+# ── com.claude.active-cpu-sampler (2026-10-19, lr-wake REPORT §4 Wave B2) ──────────────────────────────
+# Writes ~/.claude/autonomy/active-cpu.json every 15 s (KeepAlive internal loop, so interval_s is its
+# tick); capacity-admit.sh's ACTIVE term reads it to count CPU-active turns. The file it rewrites is the
+# evidence. `staged` with its plist in launchd/staged/ until 54-active-cpu-sampler-activate.sh's
+# read-back passes; flip to `run` then.
+com.claude.active-cpu-sampler     | staged | 15   | ~/.claude/autonomy/active-cpu.json | — | 54-active-cpu-sampler-activate.sh
 # ── com.claude.compressor-sentinel (2026-08-05, panic-compressor-2026-08-05.md §7.1) ───────────────
 # The un-starvable guard for the axis that panicked the box 3x in 6 days. KeepAlive internal-loop
 # daemon (no StartInterval — interval_s below is its INTERNAL tick), evidence = its own JSONL, which

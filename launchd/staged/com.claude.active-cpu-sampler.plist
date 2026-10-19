@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.active-cpu-sampler (lr-wake 2026-10-18, REPORT §4 Wave B2). Every 15 s it writes
+  ~/.claude/autonomy/active-cpu.json: the CPU each claude session tree used since the last tick, and
+  whether that session is mid-turn. scripts/lib/capacity-admit.sh's ACTIVE term reads it, so the
+  admission gate counts turns that are burning CPU, not turns blocked in `sleep`. With no file the
+  gate keeps its old term, so this job changes nothing until it is loaded.
+
+  🚨 STAGED, NOT LOADED. It lives in launchd/staged/, outside install.sh's launchd/*.plist glob;
+  docs/activation/pending-activation/54-active-cpu-sampler-activate.sh is the only thing that installs
+  and loads it.
+
+  KeepAlive internal loop, no StartInterval: each tick's rate needs the previous tick's sample, which
+  the script holds in active-cpu.prev, and launchd only has to start it and restart it if it dies.
+  NO ProcessType, for the compressor-sentinel's measured reason: a Background-band sampler stops
+  sampling exactly when the box is loaded, and load is what this sampler exists to report. A tick is
+  one `ps -A` plus one jq over the beats, about 0.1 s of CPU, so 15 s costs well under 1% of a core.
+
+  /bin/bash, not the script's shebang: launchd's bash is 3.2 and the script is written for it, and a
+  direct #! exec per start is avoided (memory kalloc-1024-leak-is-shebang-exec). PATH carries
+  /opt/homebrew/bin for jq and /bin for ps.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.active-cpu-sampler</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; exec /bin/bash "$HOME/.claude/scripts/active-cpu-sampler.sh"</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>  <string>/tmp/claude-active-cpu-sampler.stdout.log</string>
+    <key>StandardErrorPath</key><string>/tmp/claude-active-cpu-sampler.stderr.log</string>
+</dict>
+</plist>
