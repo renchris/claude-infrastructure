@@ -62,6 +62,8 @@ hold() { # $1=key $2=pid $3=lstart
   printf '{"pid":%s,"lstart":"%s","role":"recycle"}\n' "$2" "$3" > "$d/holder"
 }
 run_runner() { SHELL="$S/fakeshell" CC_PANE_CMD="$1" run "$RUNNER"; }
+# The runner's routine decisions are detail since lr-wake Wave H2: logged, never painted.
+said() { grep -qF -- "$1" "$HOME/.claude/logs/pane-say.jsonl" || { echo "not in the cc-say log: $1"; cat "$HOME/.claude/logs/pane-say.jsonl" 2>/dev/null; false; }; }
 run_wrap() { CC_CLOSE_ATTRIB_PS_BIN="$S/fakeps" CC_CLOSE_ATTRIB_KILL_BIN="$S/fakekill" run "$WRAP" "$S/claude" "$@"; }
 
 # ── bin/cc-pane-runner ────────────────────────────────────────────────────────────────────────────
@@ -70,14 +72,15 @@ run_wrap() { CC_CLOSE_ATTRIB_PS_BIN="$S/fakeps" CC_CLOSE_ATTRIB_KILL_BIN="$S/fak
   run_runner "claude --resume x"
   [ "$status" -eq 0 ]
   [ ! -e "$T/shell-ran" ]
-  [[ "$output" == *"claude exited 0 — closing this pane"* ]]
+  said "claude exited 0 — closing this pane"
 }
 
 @test "runner: claude exiting 143 keeps a shell for the resume verdict" {
   STUB_RC=143 run_runner "claude"
   [ "$status" -eq 7 ]
   [ -e "$T/shell-ran" ]
-  [[ "$output" == *"claude exited 143 — keeping a shell for diagnosis/resume"* ]]
+  said "claude exited 143 — keeping a shell for diagnosis/resume"
+  [[ "$output" == *"✗ launch failed (exit 143) · ▶ cc-husk-sweep --pane 42"* ]] || { echo "$output"; false; }
 }
 
 @test "runner: a vendor teammate line (cd … && env VAR=… …/claude.exe --agent-id …) in FILE mode closes on exit 0" {
@@ -86,7 +89,10 @@ run_wrap() { CC_CLOSE_ATTRIB_PS_BIN="$S/fakeps" CC_CLOSE_ATTRIB_KILL_BIN="$S/fak
   run_runner "cd $(printf %q "$T") && env CLAUDECODE=1 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 $S/claude.exe --agent-id x@session-y --agent-name x --team-name session-y"
   [ "$status" -eq 0 ]
   [ ! -e "$T/shell-ran" ]
-  [[ "$output" == *"claude.exe exited 0 — closing this pane"* ]]
+  said "claude.exe exited 0 — closing this pane"
+  # the short launch line keeps the anchor cc-spawn-verify's parked_evidence greps for
+  [[ "$output" == *"⟳ starting claude.exe --agent-name x"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"CLAUDECODE=1"* ]] || { echo "the full launch line was echoed: $output"; false; }
 }
 
 @test "runner: a cd … && env … prefix in front of a NON-claude command still becomes a shell" {
@@ -100,14 +106,14 @@ run_wrap() { CC_CLOSE_ATTRIB_PS_BIN="$S/fakeps" CC_CLOSE_ATTRIB_KILL_BIN="$S/fak
   CC_PANE_CMD_INTERACTIVE=1 run_runner "cd $(printf %q "$T") && claude --resume x"
   [ "$status" -eq 0 ]
   [ ! -e "$T/shell-ran" ]
-  [[ "$output" == *"claude exited 0 — closing this pane"* ]]
+  said "claude exited 0 — closing this pane"
 }
 
 @test "runner: an interactive launch line the verb parse cannot read ({ cd … ; } && launcher) still closes" {
   CC_PANE_CMD_INTERACTIVE=1 run_runner "{ cd $(printf %q "$T") 2>/dev/null || cd / ; } && claude --resume x"
   [ "$status" -eq 0 ]
   [ ! -e "$T/shell-ran" ]
-  [[ "$output" == *"the fleet launch line exited 0 — closing this pane"* ]]
+  said "the fleet launch line exited 0 — closing this pane"
 }
 
 @test "runner: a fleet launch line whose session exits 143 keeps the shell" {
@@ -134,7 +140,7 @@ run_wrap() { CC_CLOSE_ATTRIB_PS_BIN="$S/fakeps" CC_CLOSE_ATTRIB_KILL_BIN="$S/fak
   run_runner "claude"
   [ "$status" -eq 7 ]
   [ -e "$T/shell-ran" ]
-  [[ "$output" == *"recycle pending, keeping the shell"* ]]
+  said "recycle pending, keeping the shell"
 }
 
 @test "runner: a recycle lock whose holder is provably dead (pid reused: lstart differs) closes" {
@@ -148,7 +154,7 @@ run_wrap() { CC_CLOSE_ATTRIB_PS_BIN="$S/fakeps" CC_CLOSE_ATTRIB_KILL_BIN="$S/fak
   mkdir -p "$(lock_dir iterm2)"
   run_runner "claude"
   [ "$status" -eq 7 ]
-  [[ "$output" == *"recycle pending"* ]]
+  said "recycle pending"
 }
 
 @test "runner: the recycle key spelled as the socket without unix: is checked too" {
@@ -156,14 +162,14 @@ run_wrap() { CC_CLOSE_ATTRIB_PS_BIN="$S/fakeps" CC_CLOSE_ATTRIB_KILL_BIN="$S/fak
   hold /tmp/kitty-test-sock "$$" "$(lstart_of "$$")"
   run_runner "claude"
   [ "$status" -eq 7 ]
-  [[ "$output" == *"recycle pending"* ]]
+  said "recycle pending"
 }
 
 @test "runner: CC_PANE_CLOSE_ON_EXIT=0 keeps the shell after a clean claude exit" {
   CC_PANE_CLOSE_ON_EXIT=0 run_runner "claude"
   [ "$status" -eq 7 ]
   [ -e "$T/shell-ran" ]
-  [[ "$output" == *"CC_PANE_CLOSE_ON_EXIT=0, keeping the shell"* ]]
+  said "CC_PANE_CLOSE_ON_EXIT=0, keeping the shell"
 }
 
 # Fullscreen guard (docs/research/kitty-crash-2026-10-15/README.md § Chosen fix): emptying a fullscreen
@@ -181,13 +187,15 @@ run_wrap() { CC_CLOSE_ATTRIB_PS_BIN="$S/fakeps" CC_CLOSE_ATTRIB_KILL_BIN="$S/fak
   GUARD_RC=3 run_runner "claude"
   [ "$status" -eq 7 ]
   [ -e "$T/shell-ran" ]
-  [[ "$output" == *"last pane of a fullscreen (or unreadable) kitty window, keeping the shell"* ]]
+  said "last pane of a fullscreen (or unreadable) kitty window, keeping the shell"
+  [[ "$output" == *"⚠ last pane of a fullscreen window · close it by hand"* ]] || { echo "$output"; false; }
 }
 
 @test "runner: a guard that cannot be found keeps the shell (fail closed), naming the path" {
   CC_KITTY_FS_GUARD="$T/no-such-guard" run_runner "claude"
   [ "$status" -eq 7 ]
-  [[ "$output" == *"fullscreen guard not executable at $T/no-such-guard"* ]]
+  said "fullscreen guard not executable at $T/no-such-guard"
+  [[ "$output" == *"⚠ pane kept, not closed · fullscreen guard missing"* ]] || { echo "$output"; false; }
 }
 
 @test "runner: the command sees CC_PANE_RUNNER_OWNS_CLOSE=1; the fallback shell does not" {

@@ -360,7 +360,9 @@ mk_lr_tail() {
   local t="$BATS_TEST_TMPDIR/tree"
   mkdir -p "$t/scripts/limit-recover" "$t/lib" "$t/bin"
   ln -sf "$LIB" "$t/lib/pane-successor.sh"
+  ln -sf "$REPO/lib/cc-say.sh" "$t/lib/cc-say.sh"
   { printf '#!/bin/bash\nset -euo pipefail\nlr_rc=0\n'
+    sed -n '/^# >>> lr-say$/,/^# <<< lr-say$/p' "$REPO/scripts/limit-recover/lr-fire-resume.sh"
     sed -n '/^# >>> lr-successor$/,/^# <<< lr-successor$/p' "$REPO/scripts/limit-recover/lr-fire-resume.sh"
     printf 'echo FELL-THROUGH\n'
   } > "$t/scripts/limit-recover/lr-tail.sh"
@@ -376,7 +378,10 @@ mk_lr_tail() {
   run env CLAUDE_CONFIG_DIR=/pred SHELL="$FAKESH" "$LR_TAIL"
   [ "$status" -eq 0 ]
   [ "$(cat "$MARK")" = "ran CCD=<unset>" ]
-  [[ "$output" == *"running the staged successor $CC_PANE_SUCCESSOR_DIR/ttys913.claimed."* ]] || false
+  # One line on the pane; the claimed path is detail (lr-wake Wave H2), in the cc-say log.
+  [[ "$output" == *"⟳ ended, starting successor · claude exited rc 0"* ]] || { echo "$output"; false; }
+  grep -q "staged successor $CC_PANE_SUCCESSOR_DIR/ttys913.claimed." "$HOME/.claude/logs/pane-say.jsonl" \
+    || { cat "$HOME/.claude/logs/pane-say.jsonl"; false; }
   [[ "$output" != *FELL-THROUGH* ]] || false
   grep -qxF 'argv: [-l] [-i]' "$FAKESH_LOG"   # the trailing shell keeps the pane
 }

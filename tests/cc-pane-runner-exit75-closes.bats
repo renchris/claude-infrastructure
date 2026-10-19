@@ -40,14 +40,17 @@ setup() {
 # the fleet delivery mode: handoff-fire / lr-lib hand over a shell line, interactive
 run_fleet() { SHELL="$S/fakeshell" CC_PANE_CMD_INTERACTIVE=1 CC_PANE_CMD="$1" run "$RUNNER"; }
 record() { cat "$CC_PANE_EXIT_DIR/42.json"; }
+# The runner's routine decisions are detail since lr-wake Wave H2: logged, never painted.
+said() { grep -qF -- "$1" "$HOME/.claude/logs/pane-say.jsonl" || { echo "not in the cc-say log: $1"; cat "$HOME/.claude/logs/pane-say.jsonl" 2>/dev/null; false; }; }
 field() { jq -r ".$1" "$CC_PANE_EXIT_DIR/42.json"; }
 
 @test "rc 75 (queued) closes the pane — through the guard, in refuse mode, at pane scope — and records the exit" {
   LAUNCH_RC=75 run_fleet "bash $S/lr-launch"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ ! -e "$T/shell-ran" ]
-  [[ "$output" == *"the fleet launch line exited 75 (queued — one durable request retries it) — closing this pane"* ]] || false
+  said "the fleet launch line exited 75 (queued — one durable request retries it) — closing this pane"
   [[ "$output" != *"keeping a shell"* ]] || false
+  [ -z "$output" ] || { echo "a queued close painted the pane: $output"; false; }
   [ "$(cat "$T/guard-log")" = "--window 42 --mode refuse --scope pane --tool cc-pane-runner" ]
   [ "$(field rc)" = 75 ]
   [ "$(field claude_started)" = false ]
@@ -60,7 +63,8 @@ field() { jq -r ".$1" "$CC_PANE_EXIT_DIR/42.json"; }
   GUARD_RC=3 LAUNCH_RC=75 run_fleet "bash $S/lr-launch"
   [ "$status" -eq 7 ]
   [ -e "$T/shell-ran" ]
-  [[ "$output" == *"last pane of a fullscreen (or unreadable) kitty window, keeping the shell"* ]] || false
+  [[ "$output" == *"⚠ last pane of a fullscreen window · close it by hand"* ]] || { echo "$output"; false; }
+  said "last pane of a fullscreen (or unreadable) kitty window, keeping the shell"
 }
 
 @test "an in-place shell survives: rc 75 while a recycle is pending for this pane keeps the shell, guard never asked" {
@@ -70,7 +74,7 @@ field() { jq -r ".$1" "$CC_PANE_EXIT_DIR/42.json"; }
   LAUNCH_RC=75 run_fleet "bash $S/lr-launch"
   [ "$status" -eq 7 ]
   [ -e "$T/shell-ran" ]
-  [[ "$output" == *"recycle pending, keeping the shell"* ]] || false
+  said "recycle pending, keeping the shell"
   [ ! -e "$T/guard-log" ]
   [ "$(field rc)" = 75 ]
 }
@@ -79,7 +83,9 @@ field() { jq -r ".$1" "$CC_PANE_EXIT_DIR/42.json"; }
   LAUNCH_RC=1 run_fleet "bash $S/lr-launch"
   [ "$status" -eq 7 ]
   [ -e "$T/shell-ran" ]
-  [[ "$output" == *"the fleet launch line exited 1 — keeping a shell for diagnosis/resume"* ]] || false
+  # claude never started, and only this runner can see it: one ✗ line with one command (Wave H2)
+  [[ "$output" == "✗ launch failed (exit 1) · ▶ cc-husk-sweep --pane 42" ]] || { echo "$output"; false; }
+  said "the fleet launch line exited 1 — keeping a shell for diagnosis/resume"
   [ ! -e "$T/guard-log" ]
   [ "$(field rc)" = 1 ]
   [ "$(field claude_started)" = false ]
@@ -88,7 +94,7 @@ field() { jq -r ".$1" "$CC_PANE_EXIT_DIR/42.json"; }
 @test "claude never started and a durable record owns the retry (rc 9, owed) closes through the guard" {
   LAUNCH_RC=9 LAUNCH_OWED=1 run_fleet "bash $S/lr-launch"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [[ "$output" == *"exited 9 before claude started, and a durable record owns the retry — closing this pane"* ]] || false
+  said "exited 9 before claude started, and a durable record owns the retry — closing this pane"
   [ "$(cat "$T/guard-log")" = "--window 42 --mode refuse --scope pane --tool cc-pane-runner" ]
 }
 

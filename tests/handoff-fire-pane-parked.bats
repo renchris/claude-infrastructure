@@ -161,6 +161,13 @@ pane_403_screen() {
   printf '%s\n' "$output" | grep -qF 'exited 1'
 }
 
+@test "parked: the runner's cc_say line '✗ launch failed (exit N)' is PARKED (lr-wake Wave H2)" {
+  screen '✗ launch failed (exit 1) · ▶ cc-husk-sweep --pane 403' 'chrisren@mac ~ % '
+  run pane_parked_reason "$IT2" "$PANE"
+  [ "$status" -eq 0 ] || { echo "rc $status: $output"; false; }
+  printf '%s\n' "$output" | grep -qF 'launch failed (exit 1)'
+}
+
 @test "NOT parked: the runner's 'exited 0' line is a session that ran and ended, not a refusal" {
   screen 'cc-pane-runner: claude exited 0 — closing this pane (CC_PANE_CLOSE_ON_EXIT=0 keeps it)'
   run pane_parked_reason "$IT2" "$PANE"

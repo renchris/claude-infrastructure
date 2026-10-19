@@ -123,7 +123,9 @@ dead_pid() { sh -c 'echo $$' ; }
   sleep 0.3
   LR_LAUNCH_GUARD=off run fire
   [ "$status" -eq 0 ] || { echo "rc=$status"; echo "$output"; false; }
+  # One pane line names it: the launch line, amber, which a rail switched off always takes (Wave H2).
   [ "$(printf '%s\n' "$output" | grep -c 'LR_LAUNCH_GUARD=off')" = 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"⚠ resuming ${SID:0:8} on "*"LR_LAUNCH_GUARD=off"* ]] || { echo "$output"; false; }
   [ -s "$STUB_OUT.pid" ]
   [ "$(jq -r .role "$LOCK/holder")" = lr-fire-resume ] || { echo "the handover ran with the guard off"; false; }
 }
@@ -146,7 +148,7 @@ git_repo() {
   holder "$GLOCK" "$(dead_pid)" "someone-else"
   run bash "$FIRE" "$ACCT" "$WT" "$SID" --model m --effort high --no-prompt --branch br --repo "$GR" </dev/null
   [ "$status" -eq 0 ] || { echo "rc=$status"; echo "$output"; false; }
-  [[ "$output" == *"stealing a stale git lock"* ]] || { echo "$output"; false; }
+  grep -q '"verdict":"stealing a stale git lock"' "$HOME/.claude/logs/pane-say.jsonl" || { echo "$output"; false; }
   [ -d "$WT" ] && [ ! -e "$GLOCK" ]
 }
 
@@ -166,6 +168,6 @@ git_repo() {
   rm -rf "$WT"
   run bash "$FIRE" "$ACCT" "$WT" "$SID" --model m --effort high --no-prompt --branch br --repo "$GR" </dev/null
   [ "$status" -eq 0 ] || { echo "rc=$status"; echo "$output"; false; }
-  [[ "$output" == *"re-adding it with -f"* ]] || { echo "$output"; false; }
+  grep -q 're-adding it with -f' "$HOME/.claude/logs/pane-say.jsonl" || { echo "$output"; false; }
   [ -d "$WT" ]
 }

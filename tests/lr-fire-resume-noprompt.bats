@@ -90,9 +90,11 @@ fire() { bash "$FIRE" "$ACCT" "$WT" "$SID" --model m --effort high "$@" </dev/nu
     || { echo "not in the stub env (rc=$status)"; echo "$output"; false; }
 }
 
-@test "LR_PRESEED_DONE skips the preseed with one stderr line" {
+@test "LR_PRESEED_DONE skips the preseed with one detail record, and no pane line (Wave H2)" {
   run fire --no-prompt
-  [[ "$output" == *"-- lr-fire-resume: preseed skipped (LR_PRESEED_DONE=bats)"* ]] || { echo "$output"; false; }
+  grep -q '"verdict":"preseed skipped".*LR_PRESEED_DONE=bats' "$HOME/.claude/logs/pane-say.jsonl" \
+    || { echo "$output"; cat "$HOME/.claude/logs/pane-say.jsonl"; false; }
+  [[ "$output" != *"preseed skipped"* ]] || { echo "a decision-free note reached the pane: $output"; false; }
 }
 
 @test "LR_CLAUDE_BIN that is not an executable file is the cannot-resolve error, rc 1" {
@@ -104,8 +106,13 @@ fire() { bash "$FIRE" "$ACCT" "$WT" "$SID" --model m --effort high "$@" </dev/nu
 @test "an invalid LR_RECR_SCHEDULE falls back to the default, loudly" {
   for bad in "5,3" "0,5" "a,b" "5,,9" "05,9"; do
     LR_RECR_SCHEDULE="$bad" run fire --no-prompt
-    [[ "$output" == *"LR_RECR_SCHEDULE='$bad' is not a list"*"using 5,15,30,45"* ]] \
+    # Loudly = the amber launch line names it (Wave H2); the full sentence is in the cc-say log.
+    [[ "$output" == *"⚠ resuming "*"bad LR_RECR_SCHEDULE"* ]] \
       || { echo "[$bad] no fallback warning: $output"; false; }
+    grep -qF "LR_RECR_SCHEDULE='$bad' is not a list" "$HOME/.claude/logs/pane-say.jsonl" \
+      || { echo "[$bad] no fallback detail"; cat "$HOME/.claude/logs/pane-say.jsonl"; false; }
+    grep -qF 'using 5,15,30,45' "$HOME/.claude/logs/pane-say.jsonl" \
+      || { echo "[$bad] the detail names no default"; cat "$HOME/.claude/logs/pane-say.jsonl"; false; }
     grep -qx 'LR_RECR_SCHEDULE=5,15,30,45' "$STUB_OUT.env" || { echo "[$bad] not exported as the default"; false; }
   done
   LR_RECR_SCHEDULE="2,4" run fire --no-prompt
@@ -218,7 +225,7 @@ refusing_gate() { export CC_ADMIT_GATE=on CC_ADMIT_MIN_HEADROOM_GB=999999 CC_ADM
   refusing_gate
   LR_ADMIT_MODE=swap run fire --no-prompt
   [ "$status" -eq 0 ]
-  [[ "$output" == *"-- gate-exempt: swap"* ]] || false
+  grep -q '"verdict":"gate-exempt: swap"' "$HOME/.claude/logs/pane-say.jsonl" || false
   [ -s "$STUB_OUT.painted" ]
   grep -q '"gate-exempt"' "$LR_RUN_DIR/events.jsonl"
 }

@@ -5966,7 +5966,9 @@ it2_paste_submit_verified() { # $1=it2-bin $2=pane-uuid $3=text [$4=max-pre-wait
 # fire sat silent for its whole engagement window and the agent read that silence as "still in
 # preflight". The optional `(:[a-z_]+:[0-9]+)?` takes the -c form; the runner arm takes a NON-ZERO
 # exit only (exit 0 is a session that ran and ended, not a refusal). Both stay anchored at column 0.
-FIRE_PARKED_RE="${FIRE_PARKED_RE:-^((zsh|bash)(:[a-z_]+:[0-9]+)?: (correct |no matches found|event not found|command not found|no such file or directory)|bash: [^:]*: (command not found|no such file or directory)|cc-pane-runner: .* exited [1-9][0-9]*)}"
+# The runner's line is `✗ launch failed (exit N)` since it moved onto lib/cc-say.sh (lr-wake Wave H2);
+# the old `cc-pane-runner: … exited N` arm stays for a pane whose runner predates that.
+FIRE_PARKED_RE="${FIRE_PARKED_RE:-^((zsh|bash)(:[a-z_]+:[0-9]+)?: (correct |no matches found|event not found|command not found|no such file or directory)|bash: [^:]*: (command not found|no such file or directory)|cc-pane-runner: .* exited [1-9][0-9]*|✗ launch failed \(exit [1-9][0-9]*\))}"
 
 # The modal enumeration for pane_wedge_reason below. Same guarded shape as the capacity-admit lib
 # (~line 3300) and for the same stated reason: a bare `. lib` under this script's `set -e` would

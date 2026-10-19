@@ -39,7 +39,12 @@ setup() {
   REQ="$LR_STATE_DIR/requests/$SID.cc-lr.json"
 }
 
-fire() { run timeout 120 /bin/bash "$FIRE" "$CFG" "$WT" "$SID" --model m --effort high --prompt "continue the work" </dev/null; }
+fire() {
+  run timeout 120 /bin/bash "$FIRE" "$CFG" "$WT" "$SID" --model m --effort high --prompt "continue the work" </dev/null
+  # What a terminal draws: the mouse-reporting resets (`ESC[?1000l` …) are consumed without a glyph,
+  # and with the preflight notes now in the log they would otherwise prefix the verdict line.
+  output="$(printf '%s' "$output" | sed $'s/\e\\[?[0-9;]*[hl]//g')"
+}
 
 @test "RED-PROOF no run dir: rc 75, one request carrying the K3 fields, one line naming the term's knob" {
   fire
@@ -55,7 +60,10 @@ fire() { run timeout 120 /bin/bash "$FIRE" "$CFG" "$WT" "$SID" --model m --effor
   local refusal; refusal="$(printf '%s\n' "$output" | grep -E '⏸|✗')"
   [ "$(printf '%s\n' "$refusal" | wc -l | tr -d ' ')" = 1 ] || { echo "not ONE refusal line: $output"; false; }
   [[ "$refusal" == "⏸ ${SID:0:8} queued"* ]] || { echo "the line does not lead with the verdict: $refusal"; false; }
-  [[ "$refusal" == *"knob CC_ADMIT_MAX_LOAD_PER_CORE"* ]] || { echo "no knob for the load term: $refusal"; false; }
+  # The pane carries the term's numbers; the knob that moves THAT term is detail (Wave H2), logged.
+  [[ "$refusal" == *"(load "*"/core > "*")"* ]] || { echo "no load fact on the line: $refusal"; false; }
+  [[ "$refusal" != *"knob"* ]] || { echo "an override on the pane line: $refusal"; false; }
+  grep -q 'knob CC_ADMIT_MAX_LOAD_PER_CORE' "$HOME/.claude/logs/pane-say.jsonl" || { echo "no knob for the load term in the detail"; cat "$HOME/.claude/logs/pane-say.jsonl"; false; }
 }
 
 @test "RED-PROOF three re-runs leave exactly ONE request, first_refused_at unchanged, no re-run advice" {
@@ -86,7 +94,9 @@ fire() { run timeout 120 /bin/bash "$FIRE" "$CFG" "$WT" "$SID" --model m --effor
   fire
   [ "$status" -eq 75 ] || { echo "rc $status: $output"; false; }
   [ ! -e "$REQ" ] || { echo "a parked session got a second owner"; false; }
-  [[ "$output" == *"a parked record owns the retry"* ]] || { echo "$output"; false; }
+  # The pane says "already queued"; WHO owns the retry is detail (Wave H2), in the cc-say log.
+  [[ "$output" == *"⏸ ${SID:0:8} already queued · load "* ]] || { echo "$output"; false; }
+  grep -q 'a parked record owns the retry' "$HOME/.claude/logs/pane-say.jsonl" || { cat "$HOME/.claude/logs/pane-say.jsonl"; false; }
 }
 
 @test "the worktree argument must be absolute and free of control characters (403's cwd)" {

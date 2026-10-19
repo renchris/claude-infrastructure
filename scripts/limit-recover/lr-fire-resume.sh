@@ -108,10 +108,51 @@ for _lrf_team in "$_LRF_DIR/lr-team.sh" \
   # shellcheck disable=SC1090  # runtime-resolved library ladder
   [ -f "$_lrf_team" ] && { . "$_lrf_team" 2>/dev/null || true; break; }
 done
+# >>> lr-say
+# ── WHAT THE PANE SHOWS: ONE LINE PER EVENT (lr-wake 2026-10-18, RC8, Wave H2) ───────────────────
+# A refusal husk spent 7 lines on one fact, and 14 of the 18 preflight lines on screen that night
+# decided nothing (g-message-design §2.1-2.2). So the preflight speaks ONCE: a `--` note goes to the
+# cc-say log only (lib/cc-say.sh; CC_SAY_VERBOSE=1 prints it), an anomaly is logged and remembered
+# for the one line printed just before claude starts, and a refusal is one `✗`/`⏸` line carrying at
+# most one command. The renderer is the checkout's sibling (through this file's symlink), else the
+# live layer; with neither, a plain stand-in keeps the same one-line shape.
+_lrf_real="$(readlink "${BASH_SOURCE[0]}" 2>/dev/null)" || _lrf_real=""
+for _lrf_c in "${_LRF_DIR:+$_LRF_DIR/../../lib/cc-say.sh}" "${_lrf_real:+${_lrf_real%/*}/../../lib/cc-say.sh}" \
+              "${HOME:-}/.claude/lib/cc-say.sh"; do
+  # shellcheck disable=SC1090  # runtime-resolved library ladder
+  [ -n "$_lrf_c" ] && [ -r "$_lrf_c" ] && { . "$_lrf_c" 2>/dev/null || true; break; }
+done
+if ! command -v cc_say >/dev/null 2>&1; then
+  cc_say() {
+    local g='─'
+    case "$1" in ok) g='✓' ;; fail) g='✗' ;; warn) g='⚠' ;; wait) g='⏸' ;; run) g='⟳' ;; esac
+    printf '%s %s%s%s\n' "$g" "$2" "${3:+ · $3}" "${4:+ · ▶ $4}" >&2
+  }
+  cc_say_detail() { :; }
+fi
+# Local, never exported: the expect spawn below passes this environment to claude, and a session
+# whose hooks inherited CC_SAY_TOOL=lr-fire-resume would sign every line it logs as this script.
+# The tail blocks below (lr-successor and after) are also run on their own by tests, so this block is
+# fenced (`>>> lr-say`) for them to prepend, and reads nothing it does not guard.
+# shellcheck disable=SC2034  # CC_SAY_TOOL / CC_SAY_SID are read by cc_say through bash's dynamic scope
+_lrf_say()    { local CC_SAY_TOOL=lr-fire-resume CC_SAY_SID="${SID:-}"; cc_say "$@"; }
+# shellcheck disable=SC2034  # as above
+_lrf_detail() { local CC_SAY_TOOL=lr-fire-resume CC_SAY_SID="${SID:-}"; cc_say_detail "$@"; }
+_LRF_ANOM="" _LRF_ANOM_N=0 _LRF_ANOM_P=0
+# The launch line names ONE anomaly: the first, unless a later one switched a safety rail off (two
+# live copies, no launch lock, no capacity gate) — that one takes the slot, the rest are counted.
+_lrf_anom() { # $1=the anomaly in ≤4 words, for the launch line $2=the full sentence, for the log [$3=1 a rail is off]
+  _LRF_ANOM_N=$(( _LRF_ANOM_N + 1 ))
+  if [ -z "$_LRF_ANOM" ] || { [ "${3:-0}" = 1 ] && [ "$_LRF_ANOM_P" = 0 ]; }; then
+    _LRF_ANOM="$1"; _LRF_ANOM_P="${3:-0}"
+  fi
+  _lrf_detail "⚠ $1" "${2:-}"
+}
+# <<< lr-say
 lr_state() { # $1=state $2=stage $3=detail — always rc 0; the writer itself is loud on failure
   [ -n "${LR_RUN_DIR:-}" ] || return 0
   if ! command -v lr_state_append >/dev/null 2>&1; then
-    echo "!! lr-fire-resume: lr-lib.sh unreachable — state '$1' NOT recorded" >&2; return 0
+    _lrf_anom "run state not recorded" "lr-lib.sh unreachable — state '$1' NOT recorded"; return 0
   fi
   lr_state_append "$LR_RUN_DIR" "$1" "${2:-}" "${3:-}" || true
   return 0
@@ -120,9 +161,9 @@ lr_relaunch_rc() { # $1=rc $2=why — write ONCE; the first cause is the real on
   [ -n "${LR_RUN_DIR:-}" ] || return 0
   [ -f "$LR_RUN_DIR/relaunch.rc" ] && return 0
   lr_state FAILED "${3:-relaunch}" "rc=$1 — $2"
-  mkdir -p "$LR_RUN_DIR" 2>/dev/null || { echo "!! lr-fire-resume: cannot write $LR_RUN_DIR/relaunch.rc — the watcher will have to infer this failure from silence" >&2; return 0; }
+  mkdir -p "$LR_RUN_DIR" 2>/dev/null || { _lrf_anom "relaunch.rc not written" "cannot write $LR_RUN_DIR/relaunch.rc — the watcher will have to infer this failure from silence"; return 0; }
   printf '%s\n' "$1" > "$LR_RUN_DIR/relaunch.rc" 2>/dev/null \
-    || echo "!! lr-fire-resume: cannot write $LR_RUN_DIR/relaunch.rc — the watcher will have to infer this failure from silence" >&2
+    || _lrf_anom "relaunch.rc not written" "cannot write $LR_RUN_DIR/relaunch.rc — the watcher will have to infer this failure from silence"
   return 0
 }
 # EVERY pre-expect failure, not just the ones someone remembered. The trap is DISARMED immediately
@@ -382,12 +423,11 @@ fi
 
 # Split-brain refusal BEFORE any side effect (no worktree creation, no config writes, no TUI).
 if _LR_TV="$(lr_tombstone_verdict "$SID" "$cfg")"; then
-  echo "-- lr-fire-resume: tombstone check: $_LR_TV" >&2
+  _lrf_detail "tombstone check" "$_LR_TV"
 else
   if [[ $FORCE_SPLIT -eq 1 ]]; then
-    echo "!! lr-fire-resume: --force-split — resuming a transplanted session ANYWAY:" >&2
-    printf '%s\n' "$_LR_TV" | sed 's/^/   /' >&2
-    echo "   Two live copies of $SID now exist. Land from only ONE of them." >&2
+    _lrf_anom "two live copies (--force-split)" \
+      "--force-split — resuming a transplanted session ANYWAY: $_LR_TV · Two live copies of $SID now exist. Land from only ONE of them." 1
   else
     printf 'lr-fire-resume: %s\n' "$_LR_TV" >&2
     echo "  Resume it where it actually went, or if you deliberately want two live copies," >&2
@@ -436,7 +476,7 @@ lr_git_lock() { # $1=lock dir — waits LR_GIT_LOCK_WAIT_S (30) polling 0.5 s; r
   mkdir -p "$(dirname "$d")" 2>/dev/null || true
   until mkdir "$d" 2>/dev/null; do
     if _lrl_stale "$d"; then
-      echo "-- lr-fire-resume: stealing a stale git lock (holder: $(cat "$d/holder" 2>/dev/null || echo none))" >&2
+      _lrf_detail "stealing a stale git lock" "holder: $(cat "$d/holder" 2>/dev/null || echo none)"
       rm -rf "$d"
     else
       [ "$tries" -gt 0 ] || return 1
@@ -485,7 +525,7 @@ lr_sid_holders() { # $1=sid → one "pid P (source)" line per live holder of tha
 lr_launch_guard() { # (a) take or re-take the launch lock, (b) refuse over any live holder of $SID
   local d h pid role rec hs
   if [ "${LR_LAUNCH_GUARD:-on}" = off ]; then
-    echo "!! lr-fire-resume: LR_LAUNCH_GUARD=off — no launch lock and no holder re-check for $SID" >&2
+    _lrf_anom "LR_LAUNCH_GUARD=off" "LR_LAUNCH_GUARD=off — no launch lock and no holder re-check for $SID" 1
     return 0
   fi
   d="$LR_LOCK_DIR"; h="$d/holder"
@@ -502,7 +542,7 @@ lr_launch_guard() { # (a) take or re-take the launch lock, (b) refuse over any l
       exit 10
     fi
   fi
-  _lrl_holder_write "$d" lr-fire-resume "$$" || echo "!! lr-fire-resume: could not write $h" >&2
+  _lrl_holder_write "$d" lr-fire-resume "$$" || _lrf_anom "launch lock unstamped" "could not write $h"
   # One line per typer acquisition in the reconciler's launch.log — the §C7 double-typer audit
   # counts distinct typer pids per (sid, attempt). Best effort, and only where the dir exists.
   _lrl_log="${LR_RECON_ROOT:-${LR_STATE_DIR:-$HOME/.reso/limit-recover}/recon}"
@@ -552,13 +592,13 @@ lr_member_guard() {
     [ -n "$name" ] || name="${id%%@*}"
     [ -n "$team" ] || team="${id#*@}"
     if ! command -v lr_member_row >/dev/null 2>&1 || ! command -v lr_agent_id_holders >/dev/null 2>&1; then
-      echo "!! lr-fire-resume: member guard UNDECIDED for teammate $id — lr-lib.sh/lr-team.sh unreachable; relaunching it unchecked" >&2
+      _lrf_anom "member guard undecided" "member guard UNDECIDED for teammate $id — lr-lib.sh/lr-team.sh unreachable; relaunching it unchecked"
       return 0
     fi
     lr_member_row "$cfg" "$team" "$name" || rc=$?
     case "$rc" in
       0) ;;
-      2) echo "!! lr-fire-resume: member row of teammate $id UNREAD (no jq) — relaunching it without the member-row check" >&2 ;;
+      2) _lrf_anom "member row unread" "member row of teammate $id UNREAD (no jq) — relaunching it without the member-row check" ;;
       *)
         echo "REFUSED — teammate $id: no member row in ${cfg%/}/teams/$team/config.json; its lead dropped it, so relaunching it would resurrect a retired member" >&2
         lr_relaunch_rc 12 "teammate $id: no member row - its lead dropped it"
@@ -567,7 +607,7 @@ lr_member_guard() {
     esac
     n="$(lr_agent_id_holders "$id" 2>/dev/null)" || n=""
     case "$n" in
-      '' | *[!0-9]*) echo "!! lr-fire-resume: successor census for teammate $id UNREAD — relaunching it unchecked" >&2 ;;
+      '' | *[!0-9]*) _lrf_anom "successor census unread" "successor census for teammate $id UNREAD — relaunching it unchecked" ;;
       0) ;;
       *)
         echo "REFUSED — teammate $id is superseded: $n live claude process(es) already carry --agent-id $id" >&2
@@ -579,7 +619,7 @@ lr_member_guard() {
   fi
   case "${CC_RESUME_TEAMMATE_GUARD:-}" in off | checked) return 0 ;; esac
   if ! command -v lr_team_member >/dev/null 2>&1; then
-    echo "!! lr-fire-resume: team membership of $SID UNDECIDED — lr-lib.sh unreachable; resuming it unchecked" >&2
+    _lrf_anom "team membership undecided" "team membership of $SID UNDECIDED — lr-lib.sh unreachable; resuming it unchecked"
     return 0
   fi
   lr_team_member "$SID" "$cfg" "$WT" >/dev/null || rc=$?
@@ -589,7 +629,7 @@ lr_member_guard() {
       lr_relaunch_rc 12 "team-blind resume of an Agent Teams member"
       exit 12
       ;;
-    2) echo "!! lr-fire-resume: team membership of $SID UNDECIDED (the teammate predicate could not run) — resuming it unchecked" >&2 ;;
+    2) _lrf_anom "team membership undecided" "team membership of $SID UNDECIDED (the teammate predicate could not run) — resuming it unchecked" ;;
   esac
   return 0
 }
@@ -648,7 +688,7 @@ lr_restore_sid() { # → rc 0 iff a tombstone names $SID and cc-wt-restore broug
   "$_LRF_WTR" "$WT" --sid "$SID" --yes >/dev/null || rc=$?
   [ -z "$gl" ] || rm -rf "$gl"
   [ "$rc" -eq 0 ] || return 1
-  echo "-- lr-fire-resume: restored $WT from its tombstone (sid $SID matched), detached at the recorded head" >&2
+  _lrf_detail "restored from its tombstone" "restored $WT from its tombstone (sid $SID matched), detached at the recorded head"
 }
 if [ -n "$_LRF_WTL" ] && _lrf_pk="$(wt_parked_lookup "$WT" 2>/dev/null)"; then
   _lrf_gl="$(lr_wt_glock "${_lrf_pk%%	*}")" || _lrf_gl=""
@@ -659,7 +699,7 @@ if [ -n "$_LRF_WTL" ] && _lrf_pk="$(wt_parked_lookup "$WT" 2>/dev/null)"; then
   _lrf_up=0; WT_ACTOR=lr-fire-resume wt_unpark "$WT" || _lrf_up=$?
   rm -rf "$_lrf_gl"
   case "$_lrf_up" in
-    0) echo "-- lr-fire-resume: unparked $WT — the parked tree is back at its own path" >&2; lr_reaped unparked ;;
+    0) _lrf_detail "unparked" "unparked $WT — the parked tree is back at its own path"; lr_reaped unparked ;;
     2) echo "✗ lr-fire-resume: $WT is parked and could not be unparked (reason above)" >&2; lr_reaped exit-1; exit 1 ;;
   esac
 fi
@@ -687,7 +727,7 @@ if [[ ! -d "$WT" ]]; then
       _lr_wt_else="$(git -C "$REPO" worktree list --porcelain | awk -v br="refs/heads/$BR" -v a="$WT" -v b="$_lr_wt_abs" '
         /^worktree / { p = substr($0, 10) } $0 == "branch " br && p != a && p != b { print p }')"
       if [ -z "$_lr_wt_else" ]; then
-        echo "-- lr-fire-resume: $WT is registered but missing — re-adding it with -f" >&2
+        _lrf_detail "worktree re-added" "$WT is registered but missing — re-adding it with -f"
         _lr_wt_rc=0; git -C "$REPO" worktree add -f "$WT" "$BR" >&2 || _lr_wt_rc=$?
       else
         echo "✗ lr-fire-resume: $WT is registered but missing, and $BR is also checked out at: $_lr_wt_else — refusing -f" >&2
@@ -715,7 +755,7 @@ _LR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # LR_PRESEED_DONE: the caller already preseeded this account (the fleet does it once per account, the
 # W5 rig has no account at all), so a second pass here would only re-write the same config.
 if [[ -n "${LR_PRESEED_DONE:-}" ]]; then
-  echo "-- lr-fire-resume: preseed skipped (LR_PRESEED_DONE=$LR_PRESEED_DONE)" >&2
+  _lrf_detail "preseed skipped" "LR_PRESEED_DONE=$LR_PRESEED_DONE"
 else
   "$_LR_DIR/lr-preseed-env.sh" "$cfg" "$WT" || true
 fi
@@ -840,7 +880,7 @@ lr_queue_write() { # → rc 0 only when requests/<sid>.cc-lr.json holds this ref
 # Only with --no-prompt: a prompted resume owes a turn and is gated as before. The mode is unset on
 # the spawn line, so the resumed session never inherits it. Kill switch LR_ADMIT_SWAP=off.
 if [ "${LR_ADMIT_MODE:-}" = swap ] && [ "${LR_ADMIT_SWAP:-on}" != off ] && [[ $NO_PROMPT -eq 1 ]]; then
-  echo "-- gate-exempt: swap (a no-prompt account swap is admitted before /exit; nothing refuses after it)" >&2
+  _lrf_detail "gate-exempt: swap" "a no-prompt account swap is admitted before /exit; nothing refuses after it"
   lr_state 'gate-exempt' gate "swap: no in-pane capacity gate for a no-prompt account swap of $SID on $ACCT"
 elif [ -n "$_LR_CA" ]; then
   # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
@@ -869,18 +909,22 @@ elif [ -n "$_LR_CA" ]; then
     # reason plus "Shed load first …, then re-run this exact command" plus an override line that
     # always named CC_ADMIT_MAX_LOAD_PER_CORE, whatever term refused. Overnight an agent did re-run
     # it, 25 times, and every refusal left a plain shell. The full reason still reaches the IDL row
-    # and, with a run dir, relaunch.rc; the pane gets the verdict, the term and the knob that moves
-    # THAT term's ceiling.
+    # and, with a run dir, relaunch.rc; the pane gets the verdict and the term's numbers
+    # (cc_capacity_admit_short: `box full 9/8`). The knob that moves THAT term's ceiling and the full
+    # reason are detail (CC_SAY_VERBOSE=1 prints them; the pane-say log keeps them): a pane-width line
+    # has room for the fact, and an override is not the operator's next move (Wave H2).
     _lr_term="$(cc_capacity_admit_refusal 2>/dev/null)" || _lr_term=""
     _lr_term="${_lr_term%% *}"; [ -n "$_lr_term" ] || _lr_term="${CC_ADMIT_REFUSED_TERM:-}"
     _lr_knob="$(lr_refusal_knob "$_lr_term")"
-    _lr_fact="box busy (${_lr_term:-capacity})${_lr_knob:+ · knob $_lr_knob}"
+    _lr_fact="$(cc_capacity_admit_short 2>/dev/null)" || _lr_fact=""
+    [ -n "$_lr_fact" ] || _lr_fact="box busy (${_lr_term:-capacity})"
+    CC_SAY_DETAIL="${_lr_knob:+knob $_lr_knob · }$(cc_capacity_admit_reason)"
     if [ -n "${LR_RUN_DIR:-}" ]; then
       # rc 9: the run dir's owner retries (K3). THE POSITIVE DISCRIMINATOR: the watcher outside this
       # pane cannot learn WHY no claude appeared, so `relaunch.rc` is written BEFORE the exit and it
       # reads a fact in ~2 s instead of inferring one from silence (D1-FT R2 (a)). The owed marker
       # tells the pane runner a durable record owns the retry, so it may close this pane.
-      echo "⏸ ${SID:0:8} refused · its run retries · $_lr_fact" >&2
+      _lrf_say wait "${SID:0:8} refused ($_lr_fact)" "its run retries"
       lr_relaunch_rc 9 "gate: $(cc_capacity_admit_reason)"
       [ -z "${CC_PANE_EXIT_OWED:-}" ] || : > "$CC_PANE_EXIT_OWED" 2>/dev/null || true
       exit 9
@@ -891,21 +935,31 @@ elif [ -n "$_LR_CA" ]; then
     if [ -n "$EXTRA_ARGS$EXTRA_ENV" ]; then
       _lr_why="a teammate identity cannot ride the queue"
     elif _lr_own="$(lr_queue_owner)" && [ -n "$_lr_own" ]; then
-      echo "⏸ ${SID:0:8} queued · $_lr_own owns the retry · $_lr_fact" >&2
+      CC_SAY_DETAIL="$CC_SAY_DETAIL · $_lr_own owns the retry" _lrf_say wait "${SID:0:8} already queued" "$_lr_fact"
       exit 75
     elif lr_queue_write; then
-      echo "⏸ ${SID:0:8} queued · $_lr_fact" >&2
+      _lrf_say wait "${SID:0:8} queued ($_lr_fact)" "the queue retries it"
       exit 75
     else
       _lr_why="the request could not be written"
     fi
-    echo "✗ ${SID:0:8} not resumed · not queued: $_lr_why · $_lr_fact" >&2
+    # NOTHING RETRIES THIS ONE, so the line carries the one command that does: `cc-lr recover` drives
+    # lr-fleet --one under its own guards (it refuses a teammate, which only its lead re-spawns).
+    # The term's numbers ride inside the verdict on every refusal line, because cc_say cuts and drops
+    # a fact before it moves a command to its own row, and "not resumed" without why is half an answer.
+    CC_SAY_DETAIL="$CC_SAY_DETAIL · not queued: $_lr_why"   # the knob stays first: a verbose row is cut from the right
+    if [ -n "$EXTRA_ARGS$EXTRA_ENV" ]; then
+      _lrf_say fail "${SID:0:8} not resumed ($_lr_fact)" "$_lr_why"
+    else
+      _lrf_say fail "${SID:0:8} not resumed ($_lr_fact)" "not queued" "cc-lr recover ${SID:0:8}"
+    fi
     exit 9
   fi
-  echo "-- $(cc_capacity_admit_reason)" >&2
+  CC_SAY_DETAIL=""
+  _lrf_detail "capacity admitted" "$(cc_capacity_admit_reason)"
   lr_state 'gate-admitted' gate "$(cc_capacity_admit_reason)"
 else
-  echo "!! lr-fire-resume: capacity-admit: ABSENT (scripts/lib/capacity-admit.sh unreachable) — spawning UNGATED" >&2
+  _lrf_anom "capacity gate absent" "capacity-admit: ABSENT (scripts/lib/capacity-admit.sh unreachable) — spawning UNGATED" 1
   lr_state 'gate-absent' gate "capacity-admit.sh unreachable — spawning UNGATED"
 fi
 
@@ -928,7 +982,7 @@ if [ -z "${LR_SUBMIT_TOKEN:-}" ] && [ -n "$PROMPT" ]; then
   case "$LR_SUBMIT_TOKEN" in
     run:????????:????????T??????Z:[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
       export LR_SUBMIT_TOKEN
-      echo "-- lr-fire-resume: no submit token from the driver — minted $LR_SUBMIT_TOKEN for this run" >&2 ;;
+      _lrf_detail "submit token minted" "no submit token from the driver — minted $LR_SUBMIT_TOKEN for this run" ;;
     *) LR_SUBMIT_TOKEN="" ;;
   esac
 fi
@@ -949,7 +1003,7 @@ if [ -n "$PROMPT" ] && [ "${#PROMPT}" -gt "$_lr_room" ] && [ -n "$LR_NOTE_DIR" ]
     lr_state 'prompt-file' inject "the ${#PROMPT}-character prompt is in $LR_PROMPT_FILE; a pointer line is typed"
     PROMPT="[limit-recover] Your relaunch prompt is ${#PROMPT} characters, so it is in a file: read $LR_PROMPT_FILE and follow it."
   else
-    echo "!! lr-fire-resume: could not write $LR_PROMPT_FILE — typing the ${#PROMPT}-character prompt inline" >&2
+    _lrf_anom "long prompt typed inline" "could not write $LR_PROMPT_FILE — typing the ${#PROMPT}-character prompt inline"
     LR_PROMPT_FILE=""
   fi
 fi
@@ -989,7 +1043,12 @@ fi
 if [ "$LR_SUBMIT_TOKEN_IN_PROMPT" = 1 ]; then
   lr_state 'submit-token-armed' inject "the typed prompt carries $LR_SUBMIT_TOKEN"
 else
-  echo "-- lr-fire-resume: no submit token in the typed prompt — submission cannot be proved from the transcript for this run" >&2
+  # An anomaly only when a prompt is typed: a --no-prompt resume has nothing to prove submitted.
+  if [ -n "$PROMPT" ]; then
+    _lrf_anom "no submit proof" "no submit token in the typed prompt — submission cannot be proved from the transcript for this run"
+  else
+    _lrf_detail "no submit token" "no prompt is typed, so there is no submission to prove"
+  fi
 fi
 
 # ── THE AS-IS DEFAULT ────────────────────────────────────────────────────────────────────────────
@@ -1017,9 +1076,9 @@ fi
 # during the next recovery. RE-CHECK the var name on any CC bump.
 if [[ $SUMMARY -eq 0 && "${LR_RESUME_SUPPRESS:-on}" != "off" ]]; then
   export CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999999
-  echo "-- lr-fire-resume: resume-summary prompt suppressed at the source — resuming FULL AS-IS" >&2
+  _lrf_detail "resume-summary prompt suppressed" "suppressed at the source — resuming FULL AS-IS"
 elif [[ $SUMMARY -eq 1 ]]; then
-  echo "!! lr-fire-resume: --summary — resuming from a /compact SUMMARY (spends usage, loses fidelity and the /goal)" >&2
+  _lrf_anom "from a /compact summary" "--summary — resuming from a /compact SUMMARY (spends usage, loses fidelity and the /goal)"
 fi
 
 # Width-invariant answers for every in-PTY prompt this script fast-paths. Each menu answer is
@@ -1069,7 +1128,7 @@ if [ "$_lr_ok" = 1 ]; then
   done
 fi
 if [ "$_lr_ok" = 0 ]; then
-  echo "!! lr-fire-resume: LR_RECR_SCHEDULE='$_lr_sched' is not a list of strictly ascending positive integers — using 5,15,30,45" >&2
+  _lrf_anom "bad LR_RECR_SCHEDULE" "LR_RECR_SCHEDULE='$_lr_sched' is not a list of strictly ascending positive integers — using 5,15,30,45"
   _lr_sched="5,15,30,45"
 fi
 export LR_RECR_SCHEDULE="$_lr_sched"
@@ -1129,7 +1188,7 @@ for _lrf_probe in "$_LRF_DIR/lr-submit-probe.sh" \
                   "$HOME/.claude/scripts/limit-recover/lr-submit-probe.sh"; do
   [ -x "$_lrf_probe" ] && { LR_PROBE="$_lrf_probe"; break; }
 done
-[ -n "$LR_PROBE" ] || echo "!! lr-fire-resume: lr-submit-probe.sh unreachable — SUBMISSION cannot be measured for this run" >&2
+[ -n "$LR_PROBE" ] || _lrf_anom "no submit probe" "lr-submit-probe.sh unreachable — SUBMISSION cannot be measured for this run"
 LR_LIB_PATH="${_lrf_lib:-}"
 LR_IT2="$HOME/.claude/bin/it2"
 [ -x "$LR_IT2" ] || LR_IT2=""
@@ -1415,6 +1474,14 @@ trap - EXIT
 # fall-through shell a terminal that no longer echoes, so the original state is restored here too.
 lr_tty_saved=""
 [ -t 0 ] && lr_tty_saved="$(stty -g 2>/dev/null)"
+# THE ONE PREFLIGHT LINE (Wave H2): everything above was detail, so the pane says what it decided —
+# amber, naming the first anomaly, when any check degraded; gray when every check passed.
+if [ -n "$_LRF_ANOM" ]; then
+  _lrf_n=""; [ "$_LRF_ANOM_N" -gt 1 ] && _lrf_n=" +$(( _LRF_ANOM_N - 1 ))"
+  _lrf_say warn "resuming ${SID:0:8} on ${ACCT##*/}" "$_LRF_ANOM$_lrf_n"
+else
+  _lrf_say run "resuming ${SID:0:8} on ${ACCT##*/}" "checks ok"
+fi
 lr_state relaunch-typed expect "spawning $model/$effort on $(basename "$cfg")"
 # shellcheck disable=SC2016  # single quotes are REQUIRED: the body below is an expect(1) program,
 #   and its $env(...)/$bin references must reach expect uninterpreted. Bash expansion here would
@@ -2088,7 +2155,8 @@ done
 # shellcheck source=/dev/null  # runtime-resolved: checkout sibling, else the live layer
 if [ -n "$lr_succ_lib" ] && . "$lr_succ_lib" 2>/dev/null \
    && lr_succ_claimed="$(cc_pane_successor_take)" && [ -n "$lr_succ_claimed" ]; then
-  printf '\n[lr-fire-resume] session ended (rc %s) — running the staged successor %s\n' "$lr_rc" "$lr_succ_claimed" >&2
+  printf '\n' >&2
+  CC_SAY_DETAIL="staged successor $lr_succ_claimed" _lrf_say run "${SID:+${SID:0:8} }ended, starting successor" "claude exited rc $lr_rc"
   cc_pane_successor_exec "$lr_succ_claimed" 1 || true
 fi
 # <<< lr-successor
@@ -2098,8 +2166,7 @@ fi
 # pending for this pane (lib/pane-recycle-pending.sh reads the recycler's own lock) gets one line
 # naming what follows; only when nothing follows does the pane say it is a shell. The pending check
 # fails toward "pending", so it is asked only when there is a pane id to ask it about.
-# TODO(cc_say): render this through Wave H's lib/cc-say.sh (`cc_say run "relaunch follows here" …`)
-#   once it is on trunk; until then the same one-line shape is printed inline, no SGR, <=56 cells.
+# Both lines go through the shared renderer (lib/cc-say.sh, Wave H2).
 lr_pend_lib="" lr_pend_id="${KITTY_WINDOW_ID:-${LR_PANE:-}}"
 for lr_succ_c in "${lr_succ_d:+$lr_succ_d/../../lib/pane-recycle-pending.sh}" "${HOME:-}/.claude/lib/pane-recycle-pending.sh"; do
   [ -n "$lr_succ_c" ] && [ -r "$lr_succ_c" ] && { lr_pend_lib="$lr_succ_c"; break; }
@@ -2107,9 +2174,9 @@ done
 # shellcheck source=/dev/null  # runtime-resolved: checkout sibling, else the live layer
 if [ -n "$lr_pend_id" ] && [ -n "$lr_pend_lib" ] && . "$lr_pend_lib" 2>/dev/null \
    && cc_pane_recycle_pending "$lr_pend_id"; then
-  printf '\n⟳ %s relaunch follows here · claude exited rc %s\n' "${SID:0:8}" "$lr_rc" >&2
+  printf '\n' >&2; _lrf_say run "${SID:0:8} relaunch follows here" "claude exited rc $lr_rc"
 else
-  printf '\n[lr-fire-resume] session ended (rc %s) — this pane is now an ordinary shell.\n' "$lr_rc" >&2
+  printf '\n' >&2; _lrf_say warn "${SID:0:8} ended, pane is an ordinary shell" "rc $lr_rc · close it (Ctrl-D)"
 fi
 # `-l -i` is load-bearing, not cosmetic, for the reason bin/cc-pane-runner:69 records: ~/.zprofile
 # puts ~/.claude/shims on PATH and ~/.zshrc synthesizes ITERM_SESSION_ID from KITTY_WINDOW_ID, so a
@@ -2119,6 +2186,6 @@ fi
 # and claude reads a non-tty stdout as print mode: re-point it at the pane's terminal, as
 # lib/pane-successor.sh's loop does (recycle-failure-2026-10-14 F2). No controlling tty ⇒ unchanged.
 if [ -t 0 ] && { [ ! -t 1 ] || [ ! -t 2 ]; } && [ -w /dev/tty ] && (: >/dev/tty) 2>/dev/null; then
-  exec >/dev/tty 2>/dev/tty; printf '%s\n' "[lr-fire-resume] output was not the terminal (a pipe or file); re-attached to /dev/tty" >&2
+  exec >/dev/tty 2>/dev/tty; _lrf_detail "re-attached to /dev/tty" "output was not the terminal (a pipe or file)"
 fi
 exec "${SHELL:-/bin/zsh}" -l -i

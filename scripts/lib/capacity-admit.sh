@@ -436,6 +436,45 @@ CC_ADMIT_REFUSAL=""
 CC_ADMIT_REFUSED_TERM=""
 cc_capacity_admit_refused_term() { printf '%s' "$CC_ADMIT_REFUSED_TERM"; }
 cc_capacity_admit_refusal() { printf '%s' "$CC_ADMIT_REFUSAL"; }
+# The term's own measured sentence for the last refusal (`8 sessions mid-turn + 1 > active ceiling 8`).
+CC_ADMIT_REFUSED_DETAIL=""
+
+# THE SHORT FORM, FOR A PANE (lr-wake 2026-10-18, RC8, Wave H2). CC_ADMIT_REASON is the full sentence
+# and stays verbatim for the IDL, relaunch.rc and pages; a pane line has ~20 cells for the fact, and
+# the 2026-10-18 husks spent three wrapped rows on it. This renders the refusing term's numbers only:
+#   active / reserve-active   box full 9/8           (sessions mid-turn + tokens + this one / ceiling)
+#   load                      load 14.2/core > 12
+#   headroom / reserve-headroom  4.1 GB free < 6
+#   segments                  compressor 62% > 50%
+#   reserve-slots             sessions 55/54
+# A shape it cannot read (or no refusal at all) prints `box busy (<term>)` — a fact never invented.
+cc_capacity_admit_short() {
+  local t="$CC_ADMIT_REFUSED_TERM" d="$CC_ADMIT_REFUSED_DETAIL" a k lim x c
+  case "$t" in
+    active|reserve-active)
+      a="${d%% sessions mid-turn*}"; k=0
+      case "$d" in *" admission token(s) in flight"*) k="${d#* mid-turn + }"; k="${k%% admission token*}" ;; esac
+      if [ "$t" = reserve-active ]; then lim="${d##*= }"; lim="${lim%% *}"; else lim="${d##*[!0-9]}"; fi
+      if cc_hw_is_int "$a" && cc_hw_is_int "$k" && cc_hw_is_int "$lim"; then
+        printf 'box full %s/%s' "$(( a + k + 1 ))" "$lim"; return 0
+      fi ;;
+    load)
+      x="${d#*= }"; x="${x%%/core*}"; c="${d##*ceiling }"; c="${c%%/core*}"
+      if cc_hw_is_num "$x" && cc_hw_is_num "$c"; then printf 'load %s/core > %s' "$x" "$c"; return 0; fi ;;
+    headroom|reserve-headroom)
+      x="${d#reclaimable }"; x="${x%%GB*}"
+      if [ "$t" = reserve-headroom ]; then c="${d##*= }"; else c="${d##*floor }"; fi
+      c="${c%%GB*}"
+      if cc_hw_is_num "$x" && cc_hw_is_num "$c"; then printf '%s GB free < %s' "$x" "$c"; return 0; fi ;;
+    segments)
+      x="${d#compressor segments }"; x="${x%%%*}"; c="${d##*ceiling }"; c="${c%%%*}"
+      if cc_hw_is_num "$x" && cc_hw_is_num "$c"; then printf 'compressor %s%% > %s%%' "$x" "$c"; return 0; fi ;;
+    reserve-slots)
+      a="${d%% live session trees*}"; lim="${d##*= }"; lim="${lim%% *}"
+      if cc_hw_is_int "$a" && cc_hw_is_int "$lim"; then printf 'sessions %s/%s' "$(( a + 1 ))" "$lim"; return 0; fi ;;
+  esac
+  printf 'box busy (%s)' "${t:-capacity}"
+}
 
 # ── record ONE row into the IDL ────────────────────────────────────────────────────────────────
 # The IDL is where cc-dispatch already files its `reason:"capacity"` rows, so `cc-idl` becomes the
@@ -1212,7 +1251,7 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   # The enabled-term list for THIS evaluation, rebuilt every call. See _cc_admit_emit's header: once
   # the gate carries four terms, `basis` (shared with capacity_gate, which has two) can no longer say
   # which were in force, and a ratio computed without that split is the §9.5.1 defect.
-  CC_ADMIT_TERMS=""; CC_ADMIT_BLIND=""; CC_ADMIT_REFUSAL=""; CC_ADMIT_REFUSED_TERM=""
+  CC_ADMIT_TERMS=""; CC_ADMIT_BLIND=""; CC_ADMIT_REFUSAL=""; CC_ADMIT_REFUSED_TERM=""; CC_ADMIT_REFUSED_DETAIL=""
   [ "${CC_ADMIT_LOAD_TERM:-on}"     = off ] || CC_ADMIT_TERMS="load"
   [ "${CC_ADMIT_HEADROOM_TERM:-on}" = off ] || CC_ADMIT_TERMS="${CC_ADMIT_TERMS:+$CC_ADMIT_TERMS,}headroom"
   [ "${CC_ADMIT_SEGMENT_TERM:-on}"  = off ] || CC_ADMIT_TERMS="${CC_ADMIT_TERMS:+$CC_ADMIT_TERMS,}segments"
@@ -1651,6 +1690,7 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
 # can never stand as a permanent refusal — the §12.2 outage, made structurally unreachable.
 _cc_admit_spend() { # $1=caller $2=what $3=budget $4=detail $5=term → 0 admit / 9 refuse
   local caller="$1" what="$2" budget="$3" detail="$4" term="$5" sf n rc since qmax now age
+  CC_ADMIT_REFUSED_DETAIL="$detail"   # read only through cc_capacity_admit_short, and only on a refusal
   # ── A QUEUED REQUEST IS BOUNDED BY THE CLOCK, NOT BY RE-RUNS (lr-wake 2026-10-18, Wave B step 4) ──
   # The count release can only be reached by running the spawn again, and overnight that is what an
   # agent did: 25 fires, 12 refused panes, every admit a budget-expired release (c2 §2.5). A request

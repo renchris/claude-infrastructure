@@ -203,7 +203,8 @@ run_exp() { run timeout 120 expect -f "$EXP" </dev/null; }
 # successor block runs here as the subject runs it, with the trailing shell replaced by a marker.
 tail_run() { # $1 = pane id → the banner the tail prints
   local t="$BATS_TEST_TMPDIR/tail.sh"
-  { printf '#!/bin/bash\nset -euo pipefail\nlr_rc=0 SID=%s LR_PANE=""\nlr_succ_d=%q\n' "$SID" "$REPO/scripts/limit-recover"
+  { printf '#!/bin/bash\nset -euo pipefail\nlr_rc=0 SID=%s LR_PANE=""\nlr_succ_d=%q _LRF_DIR=%q\n' "$SID" "$REPO/scripts/limit-recover" "$REPO/scripts/limit-recover"
+    sed -n '/^# >>> lr-say$/,/^# <<< lr-say$/p' "$FIRE"     # the renderer the banner is printed through
     sed -n '/^# <<< lr-successor$/,$p' "$FIRE"
   } > "$t"
   grep -q 'cc_pane_recycle_pending' "$t" || { echo "the tail extraction holds no recycle check" >&2; return 1; }
@@ -233,10 +234,10 @@ recycle_lock() { # $1 = pane id → a live recycle lock for it, held by this tes
   export LR_LOCKS_DIR="$BATS_TEST_TMPDIR/locks"
   unset CC_TERM_KITTY_TO KITTY_LISTEN_ON
   run tail_run 351
-  [[ "$output" == *"this pane is now an ordinary shell"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"⚠ ${SID:0:8} ended, pane is an ordinary shell"* ]] || { echo "$output"; false; }
   recycle_lock 352                       # another pane's recycle is not this pane's
   run tail_run 351
-  [[ "$output" == *"this pane is now an ordinary shell"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"⚠ ${SID:0:8} ended, pane is an ordinary shell"* ]] || { echo "$output"; false; }
   run tail_run ""                        # no pane id: nothing to ask, so no claim that a relaunch follows
-  [[ "$output" == *"this pane is now an ordinary shell"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"⚠ ${SID:0:8} ended, pane is an ordinary shell"* ]] || { echo "$output"; false; }
 }

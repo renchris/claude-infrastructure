@@ -66,7 +66,7 @@ reaped() { jq -r --arg o "$1" 'select(.launcher == "lr-fire-resume" and .outcome
   [ ! -e "$w" ]
   fire "$w" "$SID_OTHER" feat
   if ! { [ "$status" -eq 1 ] && [[ "$output" == *"cannot resolve the claude binary"* ]]; }; then echo "status $status: $output"; false; fi
-  [[ "$output" == *"unparked $w"* ]] || { echo "$output"; false; }
+  grep -qF "unparked $w" "$HOME/.claude/logs/pane-say.jsonl" || { echo "$output"; false; }   # detail since Wave H2
   [ "$(snap "$w")" = "$before" ] || { diff <(echo "$before") <(snap "$w"); false; }
   [ "$(git -C "$w" symbolic-ref --short HEAD)" = feat ]
   [ "$(reaped unparked)" = "$w" ] || { cat "$WT_RESUME_REAPED"; false; }

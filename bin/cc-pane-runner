@@ -97,7 +97,7 @@ _wait="${CC_PANE_CMD_WAIT_S:-300}"
 # claude the operator resumes at that prompt is no longer one this runner will close.
 _fallback() {
   [ -n "${_armed:-}" ] && rm -f "$_armed" 2>/dev/null
-  [ -n "${1:-}" ] && printf 'cc-pane-runner: %s — this pane is an ordinary shell.\n' "$1" >&2
+  [ -n "${1:-}" ] && _say warn "$1" "pane is an ordinary shell"
   unset CC_PANE_RUNNER_OWNS_CLOSE CC_PANE_STARTED_FILE CC_PANE_EXIT_OWED
   exec "${SHELL:-/bin/zsh}" -l -i
 }
@@ -114,6 +114,36 @@ _self_dir() {
   done
   (cd "$(dirname "$_s")" 2>/dev/null && pwd) || true
 }
+
+# ── WHAT THIS PANE SAYS: ONE LINE PER EVENT, AND ONLY WHEN NOBODY ELSE DID (lr-wake 2026-10-18, RC8) ─
+# The runner used to echo the whole launch line (median 335 chars, 6-8 wrapped rows at 57 columns)
+# and then add "the fleet launch line exited 9 — keeping a shell" under a refusal the launcher had
+# already explained: 2 of the 7 lines on husk pane 435 (g-message-design §2.2). Now every line goes
+# through the shared renderer (lib/cc-say.sh), the launch line and every routine decision go to the
+# cc-say log only (CC_SAY_VERBOSE=1 prints them), and the pane shows a line only for what the
+# operator must know: a failed launch, or a pane kept that should have closed. The renderer is
+# sourced lazily; with neither the checkout's nor the live layer's copy, a plain stand-in prints the
+# same one-line shape. Its variables are LOCAL to _say: this runner's environment is the command's.
+_say_load() {
+  command -v cc_say >/dev/null 2>&1 && return 0
+  local _sd _c
+  _sd="$(_self_dir)"
+  for _c in "${_sd:+$_sd/../lib/cc-say.sh}" "${HOME:-}/.claude/lib/cc-say.sh"; do
+    # shellcheck source=/dev/null  # runtime-resolved: checkout sibling, else the live layer
+    [ -n "$_c" ] && [ -r "$_c" ] && { . "$_c" 2>/dev/null; break; }
+  done
+  command -v cc_say >/dev/null 2>&1 && return 0
+  cc_say() {
+    local _g='─'
+    case "$1" in ok) _g='✓' ;; fail) _g='✗' ;; warn) _g='⚠' ;; wait) _g='⏸' ;; run) _g='⟳' ;; esac
+    printf '%s %s%s%s\n' "$_g" "$2" "${3:+ · $3}" "${4:+ · ▶ $4}" >&2
+  }
+  cc_say_detail() { :; }
+}
+# shellcheck disable=SC2034  # CC_SAY_TOOL / CC_SAY_PANE are read by cc_say through bash's dynamic scope
+_say()    { _say_load; local CC_SAY_TOOL=cc-pane-runner CC_SAY_PANE="${KITTY_WINDOW_ID:-}"; cc_say "$@"; }
+# shellcheck disable=SC2034  # as above
+_detail() { _say_load; local CC_SAY_TOOL=cc-pane-runner CC_SAY_PANE="${KITTY_WINDOW_ID:-}"; cc_say_detail "$@"; }
 
 # The launch VERB, iff the command starts a Claude session: strip a leading `nocorrect`, take the
 # first word, then its basename. rc 1 (and no output) for any other command. ONE list, read by both
@@ -185,7 +215,7 @@ _close_on_exit() { # $1=command $2=its exit status $3=1 iff a fleet launcher del
     _v="the fleet launch line"
   fi
   if [ "${CC_PANE_CLOSE_ON_EXIT:-1}" = 0 ]; then
-    printf 'cc-pane-runner: %s exited %s — CC_PANE_CLOSE_ON_EXIT=0, keeping the shell\n' "$_v" "$2" >&2
+    _detail "$_v exited $2 — CC_PANE_CLOSE_ON_EXIT=0, keeping the shell"
     return 0
   fi
   if [ "$2" = 0 ]; then
@@ -195,7 +225,7 @@ _close_on_exit() { # $1=command $2=its exit status $3=1 iff a fleet launcher del
   elif [ "${4:-true}" = false ] && [ "${5:-0}" = 1 ]; then
     _why="exited $2 before claude started, and a durable record owns the retry"
   else
-    printf 'cc-pane-runner: %s exited %s — keeping a shell for diagnosis/resume\n' "$_v" "$2" >&2
+    _kept_line "$_v" "$2" "${3:-0}" "${4:-true}"
     return 0
   fi
   _sd="$(_self_dir)"
@@ -204,11 +234,12 @@ _close_on_exit() { # $1=command $2=its exit status $3=1 iff a fleet launcher del
   done
   # shellcheck source=/dev/null  # runtime-resolved: checkout sibling, else the live layer
   if [ -z "$_lib" ] || ! . "$_lib" 2>/dev/null; then
-    printf 'cc-pane-runner: %s %s — recycle check unavailable, keeping the shell\n' "$_v" "$_why" >&2
+    CC_SAY_DETAIL="$_v $_why — recycle check unavailable, keeping the shell" _say warn "pane kept, not closed" "recycle check unavailable"
     return 0
   fi
   if cc_pane_recycle_pending "${KITTY_WINDOW_ID:-}"; then
-    printf 'cc-pane-runner: %s %s — recycle pending, keeping the shell (an in-place relaunch is coming here)\n' "$_v" "$_why" >&2
+    # The relaunch that is coming here says what it is; a line from this runner would be a second.
+    _detail "$_v $_why — recycle pending, keeping the shell" "an in-place relaunch is coming here"
     return 0
   fi
   # THE LAST GATE: kitty-fullscreen-guard (docs/research/kitty-crash-2026-10-15/README.md § Chosen fix).
@@ -219,14 +250,14 @@ _close_on_exit() { # $1=command $2=its exit status $3=1 iff a fleet launcher del
   if [ -n "${KITTY_WINDOW_ID:-}" ]; then
     _c="${CC_KITTY_FS_GUARD:-}"
     if [ "$_c" = off ]; then
-      printf 'cc-pane-runner: CC_KITTY_FS_GUARD=off — closing without the fullscreen guard\n' >&2
+      _detail "CC_KITTY_FS_GUARD=off — closing without the fullscreen guard"
     else
       if [ -z "$_c" ]; then
         _c="${_sd:+$_sd/kitty-fullscreen-guard}"
         [ -n "$_c" ] && [ -x "$_c" ] || _c="${HOME:-}/.claude/bin/kitty-fullscreen-guard"
       fi
       if [ ! -x "$_c" ]; then
-        printf 'cc-pane-runner: fullscreen guard not executable at %s — keeping the shell\n' "$_c" >&2
+        CC_SAY_DETAIL="fullscreen guard not executable at $_c — keeping the shell ($_v $_why)" _say warn "pane kept, not closed" "fullscreen guard missing"
         return 0
       fi
       # --scope pane, not os-window: the runner removes only ITS OWN pane, and the kitten counts
@@ -234,14 +265,36 @@ _close_on_exit() { # $1=command $2=its exit status $3=1 iff a fleet launcher del
       # last pane of a fullscreen window) — os-window scope would refuse every pane of every
       # fullscreen window and keep the husks this decision exists to remove (K3 as amended).
       if ! "$_c" --window "$KITTY_WINDOW_ID" --mode refuse --scope pane --tool cc-pane-runner >&2; then
-        printf 'cc-pane-runner: %s %s — last pane of a fullscreen (or unreadable) kitty window, keeping the shell\n' "$_v" "$_why" >&2
+        CC_SAY_DETAIL="$_v $_why — last pane of a fullscreen (or unreadable) kitty window, keeping the shell" \
+          _say warn "last pane of a fullscreen window" "close it by hand"
         return 0
       fi
     fi
   fi
-  printf 'cc-pane-runner: %s %s — closing this pane (CC_PANE_CLOSE_ON_EXIT=0 keeps it)\n' "$_v" "$_why" >&2
+  _detail "$_v $_why — closing this pane" "CC_PANE_CLOSE_ON_EXIT=0 keeps it"
   [ -n "${_armed:-}" ] && rm -f "$_armed" 2>/dev/null
   exit 0
+}
+
+# A non-zero exit that keeps the shell. One line, or none (one event, one line):
+#   · rc 3 / 9 from a fleet launcher — lr-fire-resume already printed the refusal and why;
+#   · claude ran and then died — the shell stays for the resume lead-crash-watchdog paints here;
+#   · the launch never started claude — the one case only this runner can see.
+# `✗ launch failed (exit N)` is also what handoff-fire's PARKED detector matches (FIRE_PARKED_RE).
+# "Never started" needs the exit record's evidence (a kitty pane): without it the runner cannot tell
+# a launch that died from a session that ran, and says only what it saw.
+_kept_line() { # $1=verb $2=rc $3=1 iff fleet launch line $4=claude_started
+  local _s="$1 exited $2 — keeping a shell for diagnosis/resume"
+  if [ "$3" = 1 ] && { [ "$2" = 3 ] || [ "$2" = 9 ]; }; then
+    _detail "$_s" "the launcher printed the refusal"
+  elif [ "$4" = true ] || [ -z "$_PANE_EXIT_DIR" ]; then
+    CC_SAY_DETAIL="$_s" _say warn "${1#the } exited $2" "shell kept for resume"
+  else
+    # With a pane id the command takes the fact's room (cc_say drops a fact before it moves a command).
+    _s="$_s (claude never started)"
+    if [ -n "${KITTY_WINDOW_ID:-}" ]; then CC_SAY_DETAIL="$_s" _say fail "launch failed (exit $2)" "" "cc-husk-sweep --pane $KITTY_WINDOW_ID"
+    else CC_SAY_DETAIL="$_s" _say fail "launch failed (exit $2)" "shell kept"; fi
+  fi
 }
 
 # ── THE EXIT RECORD — A CONTRACT OTHER FILES READ (lr-wake 2026-10-18, K3) ──────────────────────
@@ -394,8 +447,25 @@ _arm_wedge_watch() { # $1=the command about to run
   return 0
 }
 
+# THE LAUNCH LINE, SHORT (lr-wake Wave H2). The full command goes to the cc-say log. A fleet launch
+# line (interactive mode: handoff-fire, lr-lib) prints nothing here, because its launcher speaks for
+# itself — lr-fire-resume prints one line just before claude starts, and a refusal is its first
+# line. A delivered command (file mode: Claude Code's teammate panes) gets one gray line naming
+# the verb and the directory, and KEEPS `--agent-name <n>` verbatim: cc-spawn-verify's
+# parked_evidence greps a dead teammate pane's screen for exactly that string, so it is printed at the
+# full 56-cell budget, never fitted to a narrower pane (kitty's get-text joins a soft-wrapped line).
+_launch_line() { # $1=command $2=1 iff interactive (fleet) mode
+  local _l="${1#nocorrect }" _d="" _v _n=""
+  if [ "$2" = 1 ]; then _detail "fleet launch line" "$1"; return 0; fi
+  case "$_l" in "cd "*" && "*) _d="${_l#cd }"; _d="${_d%% && *}" ;; esac
+  _d="${_d%/}"; _d="${_d##*/}"; [ -n "$_d" ] || _d="${PWD##*/}"
+  _v="$(_claude_verb "$1")" || { _v="${_l%% *}"; _v="${_v##*/}"; }
+  case " $_l " in *" --agent-name "*) _n="${_l#* --agent-name }"; _n=" --agent-name ${_n%% *}" ;; esac
+  CC_SAY_DETAIL="$1" CC_SAY_WIDTH=56 _say run "starting ${_v}${_n}" "$_d"
+}
+
 _launch() { # $1=command — never returns
-  printf '%s\n' "$1"
+  _launch_line "$1" "${CC_PANE_CMD_INTERACTIVE:-0}"
   # CONSUME the env-mode delivery record before running it — the exact analogue of the `rm -f` the
   # file path does below, and for the mirror-image reason. `kitty @ launch --env` puts these two in
   # the PANE's environment, so they are inherited by the command this file runs and by every
@@ -471,7 +541,7 @@ rm -f "$_cmdfile" "$_armed" 2>/dev/null
 
 [ -n "$_cmd" ] || _fallback "the delivered command was empty"
 
-# _launch echoes the command first: the operator watching this pane sees the same line they would
-# have seen typed, and a `kitty @ get-text` progress probe has something to anchor on. It never
+# _launch says what it is starting first (_launch_line: one short line, the full command in the
+# cc-say log), and that line keeps the `--agent-name <n>` anchor cc-spawn-verify reads. It never
 # returns — it ends in a shell, or in a closed pane after a clean claude exit (_close_on_exit).
 _launch "$_cmd"
