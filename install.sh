@@ -927,26 +927,28 @@ if [[ -d "$REPO_DIR/skills" ]]; then
 fi
 
 # --- Mods (Claude Code function-hook plugins) ---
-# The skills model, for mods/<name>/: a REAL directory of per-file links under $CONFIG_DIR/mods,
-# re-globbed every run so a new file is linked by the next converge. Real, not a directory link,
-# because the engine writes its generated types into <mod>/.claude-plugin/types/ (and a
-# tsconfig.json at the mod's root) when it loads the mod; those land in the live dir and never in
-# the checkout. Both are skipped here (and gitignored) for a checkout a session loaded directly.
-# lib/claude-launcher.zsh names each live mod dir in CLAUDE_CODE_PLUGIN_DIRS, so every session the
-# launcher starts loads it, on every account (docs/research/accounts-responsive-mod-2026-10-19/).
+# ONE directory symlink per mod, the vendor/ model below and NOT the per-file one: measured
+# 2026-10-19 on CC 2.1.293, a mod folder of per-file links fails `claude plugin validate` and loads
+# nothing ("hooks/hooks.json names none in modules (path-traversal)": the engine resolves each
+# module and refuses one whose real path leaves the plugin's root). A folder given as a link is
+# loaded from, and watched at, the folder it names. The engine writes generated types and a
+# tsconfig.json into that folder when it loads it; mods/<name>/.gitignore keeps both untracked.
+# lib/claude-launcher.zsh passes each live mod dir as --plugin-dir, so every session the launcher
+# starts loads it, on every account (docs/research/accounts-responsive-mod-2026-10-19/).
 if [[ -d "$REPO_DIR/mods" ]]; then
   echo ""
   echo "Mods → $CONFIG_DIR/mods/"
+  ensure_real_dir "$CONFIG_DIR/mods"
   for moddir in "$REPO_DIR"/mods/*/; do
     [[ -f "$moddir/.claude-plugin/plugin.json" ]] || continue
-    name="$(basename "$moddir")"
-    ensure_real_dir "$CONFIG_DIR/mods/$name"
-    while IFS= read -r f; do
-      rel="${f#"$moddir"}"
-      [[ "$rel" == */* ]] && ensure_real_dir "$CONFIG_DIR/mods/$name/${rel%/*}"
-      link_file "$f" "$CONFIG_DIR/mods/$name/$rel"
-    done < <(find "$moddir" -type f -not -path '*/.claude-plugin/types/*' \
-               -not -path "${moddir}tsconfig.json" | sort)
+    msrc="${moddir%/}"; mdest="$CONFIG_DIR/mods/$(basename "$msrc")"
+    if [[ -L "$mdest" && "$(readlink "$mdest")" == "$msrc" ]]; then
+      skipped=$((skipped + 1))
+      continue
+    fi
+    run ln -sfn "$msrc" "$mdest"
+    echo "  ✓ $mdest → $msrc"
+    installed=$((installed + 1))
   done
 fi
 

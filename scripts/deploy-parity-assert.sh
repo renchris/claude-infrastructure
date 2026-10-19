@@ -528,7 +528,7 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
   #   delivers, with both partitions asserted to SUM. No outage was repaired: all nine literal sources
   #   partition 3 CLAIMED / 6 DECLARED / 0 default with 0 stranded, and both root SSOTs were read live
   #   and healthy at 2026-09-01T05:56Z.
-  if ! _tracked="$(git -C "$REPO" ls-files -- hooks commands scripts bin skills agents lib vendor model-config.yaml providers.json mcp-servers.json 2>/dev/null)"; then
+  if ! _tracked="$(git -C "$REPO" ls-files -- hooks commands scripts bin skills agents lib vendor mods model-config.yaml providers.json mcp-servers.json 2>/dev/null)"; then
     report "NOVERDICT" "(existence)" "git ls-files failed in $REPO — the tracked set is unknown"
     noverdict=1
     _tracked=""
@@ -704,6 +704,9 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       # loop "would silently fail to link every BRAND-NEW file on the next re-vendor"). Handled by
       # its own loop below; per-file demands here would contradict install.sh outright.
       vendor/*)                  want=0 ;;
+      # mods/ likewise, one directory link per mod, and for a harder reason: a per-file mod folder
+      # does not load at all (install.sh's mods leg). Its own loop below, beside vendor's.
+      mods/*)                    want=0 ;;
       # ── SECOND INSTALLER ── a class install.sh does not deploy because ANOTHER installer does.
       # MEASURED 2026-08-31 by method 238. #264 scored the DETECTOR against install.sh and #265
       # scored THIS FILE against it, but BOTH auditors derive their populations FROM install.sh, so
@@ -1039,6 +1042,33 @@ EOF
     fi
     printf 'MISSING: ln -sf %s %s\n' "$REPO/vendor/$_vn" "$LIVE/vendor/$_vn"
     cls_row 'vendor/*/ (dir link)' miss
+    missing=$((missing + 1))
+    drift=1
+  done <<EOF
+$_tracked
+EOF
+
+  # ── mods/<name>/ — ONE DIRECTORY symlink per mod, never per-file (2026-10-19) ─────────────────
+  # The vendor/ leg's shape and its reasons, plus one: a per-file mod folder fails to load (the
+  # engine refuses a module whose real path leaves the plugin root). A mod is a tracked
+  # mods/<name>/.claude-plugin/plugin.json, which is what install.sh links on.
+  _mseen=""
+  while IFS= read -r rel; do
+    case "$rel" in mods/*/.claude-plugin/plugin.json) ;; *) continue ;; esac
+    _mn="${rel#mods/}"; _mn="${_mn%%/*}"
+    [ -n "$_mn" ] || continue
+    case " $_mseen " in *" $_mn "*) continue ;; esac
+    _mseen="$_mseen $_mn"
+    if [ -e "$LIVE/mods/$_mn" ]; then cls_row 'mods/*/ (dir link)' live; continue; fi
+    _act="$(pending_owner "mods/$_mn")"
+    if [ -n "$_act" ]; then
+      report "PENDING" "mods/$_mn" "unlinked BY DESIGN — staged: $_act"
+      cls_row 'mods/*/ (dir link)' pending
+      pending=$((pending + 1))
+      continue
+    fi
+    printf 'MISSING: ln -sf %s %s\n' "$REPO/mods/$_mn" "$LIVE/mods/$_mn"
+    cls_row 'mods/*/ (dir link)' miss
     missing=$((missing + 1))
     drift=1
   done <<EOF

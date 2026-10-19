@@ -347,8 +347,10 @@ runmods() {   # <command> → the argv the pinned body received
 
 @test "mods: every live mod with a manifest is passed as --plugin-dir, on the pinned and routed paths" {
   mkrouter next4 0
-  mkdir -p "$HOME/.claude/mods/m1/.claude-plugin" "$HOME/.claude/mods/no-manifest"
-  printf '{}' > "$HOME/.claude/mods/m1/.claude-plugin/plugin.json"
+  # install.sh's shape: each mod a DIRECTORY SYMLINK into the checkout (a per-file one cannot load)
+  mkdir -p "$BATS_TEST_TMPDIR/checkout/mods/m1/.claude-plugin" "$HOME/.claude/mods/no-manifest"
+  printf '{}' > "$BATS_TEST_TMPDIR/checkout/mods/m1/.claude-plugin/plugin.json"
+  ln -s "$BATS_TEST_TMPDIR/checkout/mods/m1" "$HOME/.claude/mods/m1"
   run runmods "claude1 hello"
   [ "$output" = "args=--plugin-dir $HOME/.claude/mods/m1 hello" ] || { echo "$output"; false; }
   run runmods "claude hello"

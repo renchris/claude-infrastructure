@@ -189,10 +189,10 @@ _cc_charge_on_commit() {
 }
 
 # ── mods: `--plugin-dir` for each live mod (2026-10-19) ─────────────────────────────────────────
-# install.sh links each repo mods/<name>/ into ~/.claude/mods/<name>/ (accounts-readout: the
-# /accounts readout re-laid out on resize). This puts one `--plugin-dir` per live mod into
-# _CC_MOD_ARGV for the call sites below, so every session the launcher starts loads them, on every
-# account, with no edit to the settings.json the four accounts share.
+# install.sh links each repo mods/<name>/ as ~/.claude/mods/<name>/, a directory link
+# (accounts-readout: the /accounts readout re-laid out on resize). This puts one `--plugin-dir` per
+# live mod into _CC_MOD_ARGV for the call sites below, so every session the launcher starts loads
+# them, on every account, with no edit to the settings.json the four accounts share.
 # A FLAG, NOT CLAUDE_CODE_PLUGIN_DIRS, and that is a measured choice: a loaded mod costs a session
 # ~50-60 MB RSS (304 → 352 MB and 289 → 350 MB, CC 2.1.293, docs/research/accounts-responsive-
 # mod-2026-10-19/), and an exported variable is inherited by every `claude -p` a session's shell
@@ -208,7 +208,7 @@ _cc_mod_argv() {
     mcp|plugin|plugins|config|doctor|update|upgrade|install|setup-token|migrate-installer|auth) return 0 ;;
   esac
   local d
-  for d in "$HOME"/.claude/mods/*(N/); do
+  for d in "$HOME"/.claude/mods/*(N-/); do      # -/: install.sh links each mod as a DIR symlink
     [[ -f "$d/.claude-plugin/plugin.json" ]] && _CC_MOD_ARGV+=(--plugin-dir "${d%/}")
   done
   return 0

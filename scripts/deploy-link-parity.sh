@@ -599,15 +599,6 @@ for d in "$REPO"/skills/*/; do
   n="$(basename "$d")"
   for f in "$d"*; do check_one "skills/$n/$(basename "$f")" "$CFG/skills/$n/$(basename "$f")"; done
 done
-# mods/<name>/ — install.sh's mods leg links every file of a mod RECURSIVELY (its manifest is
-# nested at .claude-plugin/plugin.json), less what the engine generates; walked the same way.
-for d in "$REPO"/mods/*/; do
-  [ -f "$d/.claude-plugin/plugin.json" ] || continue
-  n="$(basename "$d")"
-  while IFS= read -r f; do
-    check_one "mods/$n/${f#"$d"}" "$CFG/mods/$n/${f#"$d"}"
-  done < <(find "$d" -type f -not -path '*/.claude-plugin/types/*' -not -path "${d}tsconfig.json" | sort)
-done
 # The seven classes below were absent from this walk until 2026-08-31, and the reason they were
 # missed is the generalisation of the bin/ fix directly above it. That fix asked "who else holds a
 # copy of the bin/ enumeration?" and answered THREE files. The question it did not ask is the one
@@ -641,6 +632,7 @@ done
 #   NOT-PER-FILE /githooks/*       copies into <repo>/.git/hooks and ~/.git-template/hooks (install.sh's githooks leg)
 #   NOT-PER-FILE /launchd/*.plist  copies into ~/Library/LaunchAgents (install.sh's LaunchAgents leg)
 #   NOT-PER-FILE /vendor/*/        ONE directory symlink per plugin, deliberately not per file (install.sh's vendor leg)
+#   NOT-PER-FILE /mods/*/          ONE directory symlink per mod: a per-file mod folder does not load (install.sh's mods leg)
 #   NOT-PER-FILE /CLAUDE.global.*.md  COPIES to ~/.claude/CLAUDE.<variant>.md, a different name (install.sh's instructions-variant leg, ade130dc7)
 #   NOT-PER-FILE /CLAUDE.rules.*.md  COPIES the selected variant's rule set to ~/.claude/rules/<name>.md, a different name (install.sh's variant-rules leg)
 
