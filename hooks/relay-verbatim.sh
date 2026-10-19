@@ -45,6 +45,29 @@ esac
 OUT=$(printf '%s' "$INPUT" | jq -r '.tool_response.stdout // .tool_response.output // empty' 2>/dev/null)
 [ -n "$OUT" ] || exit 0
 
+# THE /accounts READOUT IS DRAWN HERE, IN COLOUR, WHEN IT CAN BE (2026-10-18). Inside Claude Code,
+# `claude-accounts --readout` also writes the same rows laid out for THIS pane's width, in the
+# board's palette (bin/claude-accounts pane_file / _pane_grid). A top-level `systemMessage` from
+# PostToolUse renders under the collapsed shell-command line with its SGR intact (measured on CC
+# 2.1.293 under a real pty, same method as docs/research/board-render-2026-09-22.md), so that copy
+# reaches the operator coloured and unwrapped, which no pasted markdown can. The model is then told
+# NOT to paste: a second, grey copy is what this replaces. No file (not in Claude Code, no tty to
+# size from, colour off, or a probe that failed) means the old contract, paste verbatim, unchanged.
+# Consumed once and only while fresh, so a later readout can never draw a stale one.
+# `--pane`/`--narrow`/`--json` are other surfaces: they print their own output and draw nothing.
+case "$CMD" in *claude-accounts*--readout*) case "$CMD" in *--pane*|*--narrow*|*--json*) ;; *)
+  SID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+  PF="${CC_PANE_DIR:-/tmp/claude-accounts-pane}/${SID//[^A-Za-z0-9_-]/}.txt"
+  if [ -n "$SID" ] && [ -s "$PF" ] \
+     && [ $(( $(date +%s) - $(stat -f %m "$PF" 2>/dev/null || echo 0) )) -le 120 ]; then
+    PANE=$(cat "$PF" 2>/dev/null); rm -f "$PF"
+    if [ -n "$PANE" ]; then
+      # shellcheck disable=SC2016  # backticks are markdown code spans, kept literal
+      jq -n --arg m $'\n'"$PANE" --arg t 'ON SCREEN — the /accounts readout has just been drawn for the operator, in colour and fitted to their pane width, by the PostToolUse hook under this shell command. Do NOT paste it into chat: an uncoloured second copy is exactly what this replaces. Add nothing unless the readout shows a ↻ line or a `Skipped by the general router:` line, a ⊘/⚠ login or ○ auth line, a 🚨 spend or ⚠ extra-usage toggle line, a lane reading `→ none`, a 🚨/⚠ line about another agent (a routable backend that bills outside a plan or might, or one on a metered API key), or the operator asked a direct question; then at most 3 lines (commands/accounts.md step 3). If none applies, end the turn with no text.' \
+        '{systemMessage: $m, hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: $t}}' 2>/dev/null && exit 0
+    fi
+  fi ;; esac ;; esac
+
 jq -n --arg w "$WHAT" --arg t "$TAIL" '{
   hookSpecificOutput: {
     hookEventName: "PostToolUse",

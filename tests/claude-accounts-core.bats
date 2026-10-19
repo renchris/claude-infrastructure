@@ -2080,6 +2080,111 @@ print("OK")'
   done
 }
 
+@test "--readout pane: every width 30-160 fits pane-5 cells, no trailing ink, the six columns kept" {
+  # MUTANTS: drop the `last` no-pad rule (trailing ink at every width with a login column); make a
+  # must-column optional (a 45-col pane loses the 5h countdown); wrap prose with textwrap (the `**`
+  # markers wrap a fitting line, and a wide glyph breaches); remove the stacked fallback (<= 43
+  # cols overflows).
+  run python3 -c "$LOAD$READOUT"'
+import unicodedata
+os.environ.pop("NO_COLOR", None); os.environ["CC_BOARD_COLOR"] = "on"
+def cells(s): return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in ca._SGR_RE.sub("", s))
+rows = [row(acct="next-quaternary", is_self=True, weekly_reset_at=at(150), weekly_reset_h=150),
+        row(acct="dead1", auth="login-required", login_expires_h=400.0),
+        row(acct="ok", session_reset_at=at(1.5), weekly_reset_at=at(30), weekly_reset_h=30,
+            login_expires_at=at(20), login_expires_h=20.0, credits_used=1, credits_used_usd=3.5)]
+for cols in range(30, 161):
+    w = max(ca.PANE_MIN, cols - ca.PANE_GUTTER)
+    out = ca.readout_lines(rows, cfg, WIN_OPEN, False, pane=w)
+    for l in out:
+        plain = ca._SGR_RE.sub("", l)
+        assert cells(l) <= w, (cols, cells(l), plain)
+        assert plain == plain.rstrip(), (cols, repr(plain))
+    txt = "\n".join(ca._SGR_RE.sub("", l) for l in out)
+    assert "```" not in txt and "**" not in txt and "`" not in txt, (cols, txt)
+    assert "\x1b[" in "".join(out), cols                     # coloured, like the board
+    lines = txt.splitlines()
+    hdr = [l for l in lines if l[3:].startswith("account")]
+    if hdr:                                                   # one row per account
+        assert hdr[0].count("used") == 2 and hdr[0].count("resets") == 2, (cols, hdr)
+    else:                                                     # two rows: 5-hour over weekly
+        assert sum(" 5h " in l for l in lines) == 3 and sum(" wk " in l for l in lines) == 3, (cols, txt)
+    assert "next-quat" in txt and "dead1" in txt, (cols, txt) # a name stays recognisable
+    if cols >= 60:
+        assert hdr, (cols, txt)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "--readout pane: one set of facts — the same cells and sentences as the chat readout" {
+  # MUTANT: compute a pane cell from anything but the chat grid's `cells` (e.g. the board's
+  # sweep-time countdown) and a percent or countdown differs between the two surfaces.
+  run python3 -c "$LOAD$READOUT"'
+rows = [row(acct="a", weekly_pct=37, session_pct=12, session_reset_at=at(2.2), weekly_reset_at=at(40),
+            weekly_reset_h=40), row(acct="b", weekly_pct=81, weekly_reset_at=at(90), weekly_reset_h=90,
+            login_expires_at=at(10), login_expires_h=10.0)]
+os.environ["CC_BOARD_COLOR"] = "off"
+chat = rd(rows)
+pane = "\n".join(ca.readout_lines(rows, cfg, WIN_OPEN, False, pane=135))
+for name in ("a", "b"):
+    c = acctrow(chat, name).split()
+    p = next(l for l in pane.splitlines() if l[3:].split()[:1] == [name]).split()
+    assert c == p, (c, p)
+flat = lambda t: " ".join(t.replace("**", "").replace("`", "").replace(" ", " ").split())
+for ln in chat.splitlines():
+    if ln.startswith(("⚠", "⊘", "🚨", "△", "▲", "✖", "↻", "○")):
+        assert flat(ln) in flat(pane), (ln, pane)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "relay-verbatim: a fresh pane render is DRAWN (systemMessage) and the model told not to paste" {
+  # MUTANTS: forget the rm (a later readout draws a stale copy); drop the age gate; draw for
+  # `--pane` (the agent's own probe would land on the operator's screen); nest systemMessage
+  # under hookSpecificOutput (silently never rendered — accounts-board.sh's header).
+  H="$REPO/hooks/relay-verbatim.sh"; D="$BATS_TEST_TMPDIR/pane"; mkdir -p "$D"
+  hook() { jq -n --arg c "$1" '{session_id:"s-1",tool_input:{command:$c},tool_response:{stdout:"x"}}' \
+             | CC_PANE_DIR="$D" CC_HOOK_PROFILE='' bash "$H"; }
+  printf 'ROW1\nROW2\n' > "$D/s-1.txt"
+  out="$(hook 'claude-accounts --readout')"
+  [ "$(jq -r .systemMessage <<<"$out")" = $'\nROW1\nROW2' ] || { echo "$out"; false; }
+  [[ "$(jq -r .hookSpecificOutput.additionalContext <<<"$out")" == "ON SCREEN"*"Do NOT paste"* ]] \
+    || { echo "$out"; false; }
+  [ ! -e "$D/s-1.txt" ] || { echo "not consumed"; false; }
+  out="$(hook 'claude-accounts --readout')"                 # consumed: back to the paste contract
+  [ "$(jq -r '.systemMessage // empty' <<<"$out")" = "" ] || { echo "$out"; false; }
+  [[ "$(jq -r .hookSpecificOutput.additionalContext <<<"$out")" == "RELAY VERBATIM"* ]] || { echo "$out"; false; }
+  printf 'OLD\n' > "$D/s-1.txt"; touch -t 202001010000 "$D/s-1.txt"
+  [ "$(hook 'claude-accounts --readout' | jq -r '.systemMessage // empty')" = "" ] || { echo "stale drawn"; false; }
+  printf 'NEW\n' > "$D/s-1.txt"
+  [ "$(hook 'claude-accounts --readout --pane --cols 40' | jq -r '.systemMessage // empty')" = "" ] \
+    || { echo "--pane drawn"; false; }
+  [ -e "$D/s-1.txt" ] || { echo "--pane consumed the file"; false; }
+}
+
+@test "pane_cols / pane_file / pane_width: overrides, unknown width, sanitised sids, survives a split" {
+  run python3 -c "$LOAD"'
+os.environ.pop("CLAUDE_PID", None); os.environ.pop("CC_PANE_COLS", None)
+assert ca.pane_cols() is None
+os.environ["CC_PANE_COLS"] = "52"; assert ca.pane_cols() == 52
+os.environ["CC_PANE_COLS"] = "x"; assert ca.pane_cols() is None
+os.environ["CC_PANE_DIR"] = "/d"
+assert ca.pane_file("../../etc/passwd") == "/d/etcpasswd.txt", ca.pane_file("../../etc/passwd")
+assert ca.pane_file("") is None
+# Survives one split (2026-10-18: drawn for 80 cols, the pane was ~51 two minutes later): never
+# wider than the pane, never under the 44-cell floor a halved 100-col pane still clears.
+for cols, want in ((30, 25), (45, 40), (49, 44), (80, 44), (100, 44), (140, 64), (200, 94)):
+    assert ca.pane_width(cols) == want, (cols, ca.pane_width(cols), want)
+for cols in range(30, 400):
+    w = ca.pane_width(cols)
+    assert w <= max(ca.PANE_MIN, cols - ca.PANE_GUTTER) and (w <= (cols - 1) // 2 - ca.PANE_GUTTER or w == min(cols - ca.PANE_GUTTER, ca.PANE_FLOOR) or w == ca.PANE_FLOOR), cols
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
 @test "_md_when, _fmt_when, _fmt_asof: a NAIVE stamp is UTC, as hrs_until reads it" {
   # MUTANT: restore `if dt.tzinfo is not None: dt = dt.astimezone()` and the naive clock is off
   # by the UTC offset. The zone is pinned off UTC: on a UTC box the mutant would pass.

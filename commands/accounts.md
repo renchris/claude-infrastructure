@@ -28,7 +28,18 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
    claude-accounts --readout   # router headline + fenced grid + flag lines + drain line + read-time line + provider lines
    ```
 
-   🚨 **Paste that output VERBATIM into chat — every row and column, before any commentary.**
+   **First, read the hook's note on that command.** Inside Claude Code the run also lays the same
+   rows out for the operator's pane width, in the SessionStart board's colours, and
+   `hooks/relay-verbatim.sh` draws that copy on screen (a PostToolUse `systemMessage`; 2026-10-18,
+   operator: "get color into this … best designed at all pane widths"). When its note begins
+   **`ON SCREEN`**, the readout is already in front of the operator: **do NOT paste it**, since a
+   grey markdown copy that wraps in a narrow pane is exactly what the drawn one replaces. Go
+   straight to step 3, and if none of its cases applies, end the turn with no text. Only when the
+   note begins `RELAY VERBATIM` (no pane copy: no tty to size from, colour off, outside Claude
+   Code) does the paste rule below apply. `claude-accounts --readout --pane --cols N` prints the
+   drawn layout at any width, for a look or a test.
+
+   🚨 **Otherwise, paste that output VERBATIM into chat — every row and column, before any commentary.**
    Not a style preference, and CLAUDE.md § Communication Discipline's conciseness rule does NOT
    override it (that rule governs your prose — see its "brevity governs YOUR prose, never a
    rendered artifact" clause). A summary like "all 4 accounts healthy, router says next" is a
@@ -61,6 +72,7 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
    | `—` for a null or elapsed stamp; the last line says when the quota was READ (`Quota read at 07:49, 28 seconds ago`); the Fable window prints only when it is news (inactive, dated or unknown), never for a permanent, active one | 2026-07-20, 2026-10-18 |
    | Other agents: line 1 names only backends that are signed in, installed and known to bill inside a plan, with the cause for the rest (not installed / not signed in); 🚨 or ⚠ only for a routable backend that bills outside a plan or might, or one on a metered API key; the standing not-wired set closes it with no alarm glyph | 2026-10-18 |
    | Every `/login` line carries its mailbox + Dia profile | 2026-07-30 |
+   | The hook-drawn copy (`--pane`) is the same rows in the board's colours, laid out for the pane SURVIVING ONE SPLIT (`pane_width`: half the pane, never under 44 cells, never over the pane), because drawn text re-wraps when its pane narrows later; columns join by priority as width allows, and under ~43 cells each account takes two rows | 2026-10-18 |
 
    **What is still yours** — the renderer prints facts; these bind how you may USE them:
    - 🚨 **Never state or imply a starred number is current, and never rank or recommend on
@@ -87,7 +99,7 @@ One entrypoint over the 4-account fleet. The mechanism is `~/bin/claude-accounts
    - A row's `←`/`➤` markers and lines 1-2 are ONE answer from ONE ranking pass; do not restate
      the pick at all (step 3).
 
-3. **After the paste: add nothing, unless one of the cases below is on screen.** The readout leads
+3. **After the readout (drawn by the hook, or pasted): add nothing, unless one of the cases below is on screen.** The readout leads
    with its own answer — line 1 is the desk pick (what bare `claude` opens on) and why, line 2 the
    general and fable picks — and it prints what will go unused at the weekly reset, when the quota
    was read, and which other agents are ready. Restating any of that is a second renderer in prose:
