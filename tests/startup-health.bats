@@ -97,6 +97,9 @@ field() { sed -n "s/^$2=//p" "$S/$1"; }
 # 2026-10-18T12:00:00Z so record timestamps can sit on either side of the epoch floor (30 s).
 RLIB() { printf '%s' "$REPO/hooks/lib/startup-health.sh"; }
 T0=202610181200.00
+# The literal ~ is the harness's own command text in a hook_cancelled record, never a path to expand.
+# shellcheck disable=SC2088
+HK='~/.claude/hooks'
 mkstart() { mkdir -p "$S"; : > "$S/$1.start"; TZ=UTC touch -t "${2:-$T0}" "$S/$1.start"; }
 mkdone() { # <hook> <rc> <elapsed_s> <owed> [timeout_ms]
   printf 'rc=%s\nelapsed_s=%s\nowed=%s\ntimeout_ms=%s\n' "$2" "$3" "$4" "${5:-5000}" > "$S/$1.done"
@@ -129,7 +132,7 @@ possible() { bash -c '. "$1"; sh_possible "$2" "$3"; printf "%s" "$SH_REASON"' _
   TP="$BATS_TEST_TMPDIR/t.jsonl"
   mksession "$TP"; mkstart dod-persist; mkdone dod-persist 0 5 900
   [ -n "$(possible dod-persist)" ]
-  { cancel_rec '~/.claude/hooks/dod-persist.sh'; user_rec; } > "$TP"
+  { cancel_rec "$HK/dod-persist.sh"; user_rec; } > "$TP"
   scan
   [ "$(verdict dod-persist)" = confirmed ]
   user_rec > "$TP"; rm -f "$S/cancels.tsv"
@@ -142,7 +145,7 @@ possible() { bash -c '. "$1"; sh_possible "$2" "$3"; printf "%s" "$SH_REASON"' _
   TP="$BATS_TEST_TMPDIR/t.jsonl"
   mksession "$TP"; mkstart mailbox-drain; mkdone mailbox-drain 141 0 0
   [ "$(possible mailbox-drain)" = "exit 141" ]
-  { cancel_rec '~/.claude/hooks/mailbox-drain.sh session-start'; user_rec; } > "$TP"
+  { cancel_rec "$HK/mailbox-drain.sh session-start"; user_rec; } > "$TP"
   scan; [ "$(verdict mailbox-drain)" = nothing-owed ]       # cancelled, but it owed nothing
   mkdone mailbox-drain 141 0 120; rm -f "$S/cancels.tsv"
   scan; [ "$(verdict mailbox-drain)" = confirmed ]
@@ -152,7 +155,7 @@ possible() { bash -c '. "$1"; sh_possible "$2" "$3"; printf "%s" "$SH_REASON"' _
 
 @test "3.4(d) resume: a cancel past the stored offset is reported, one before it is ignored" {
   TP="$BATS_TEST_TMPDIR/t.jsonl"
-  { cancel_rec '~/.claude/hooks/old-hook.sh'; user_rec; } > "$TP"
+  { cancel_rec "$HK/old-hook.sh"; user_rec; } > "$TP"
   mksession "$TP" "$(wc -c < "$TP" | tr -d ' ')"
   mkstart desk-brief-inject; mkdone desk-brief-inject 0 1 0
   { cancel_rec 'bash .claude/hooks/mcp-auth-guard.sh'; user_rec; } >> "$TP"
@@ -171,7 +174,7 @@ possible() { bash -c '. "$1"; sh_possible "$2" "$3"; printf "%s" "$SH_REASON"' _
 
 @test "3.4 a record older than the start epoch (a fork's copied history, a resume) is ignored" {
   TP="$BATS_TEST_TMPDIR/t.jsonl"
-  { cancel_rec '~/.claude/hooks/dod-persist.sh' '2026-10-18T11:59:00.000Z'; user_rec; } > "$TP"
+  { cancel_rec "$HK/dod-persist.sh" '2026-10-18T11:59:00.000Z'; user_rec; } > "$TP"
   mksession "$TP"; mkstart dod-persist; mkdone dod-persist 0 1 900
   scan
   [ "$(verdict dod-persist)" = cleared ]
@@ -180,7 +183,7 @@ possible() { bash -c '. "$1"; sh_possible "$2" "$3"; printf "%s" "$SH_REASON"' _
 
 @test "3.4 a resumed epoch (session.start older than the new .start) reads past the first user record" {
   TP="$BATS_TEST_TMPDIR/t.jsonl"
-  { user_rec; user_rec; cancel_rec '~/.claude/hooks/dod-persist.sh' '2026-10-18T13:00:06.000Z'; } > "$TP"
+  { user_rec; user_rec; cancel_rec "$HK/dod-persist.sh" '2026-10-18T13:00:06.000Z'; } > "$TP"
   mksession "$TP"; mkstart dod-persist 202610181300.00; mkdone dod-persist 0 5 900
   scan
   [ "$(verdict dod-persist)" = confirmed ]
@@ -188,7 +191,7 @@ possible() { bash -c '. "$1"; sh_possible "$2" "$3"; printf "%s" "$SH_REASON"' _
 
 @test "3.4 an own hook cancelled before its sentinel opened is own (confirmed), never foreign" {
   TP="$BATS_TEST_TMPDIR/t.jsonl"
-  { cancel_rec '~/.claude/hooks/session-start-dispatch.sh' '' 12004; user_rec; } > "$TP"
+  { cancel_rec "$HK/session-start-dispatch.sh" '' 12004; user_rec; } > "$TP"
   mksession "$TP"; mkstart desk-brief-inject; mkdone desk-brief-inject 0 1 0
   scan
   [ "$(verdict session-start-dispatch)" = confirmed ]
@@ -201,18 +204,18 @@ possible() { bash -c '. "$1"; sh_possible "$2" "$3"; printf "%s" "$SH_REASON"' _
   bash -c '. "$1"; sh_worker "$2"' _ "$(RLIB)" "$SID"
   [ -f "$S/cancels.tsv" ]
   TZ=UTC touch -t 202610181201.00 "$S/cancels.tsv"
-  { cancel_rec '~/.claude/hooks/desk-brief-inject.sh'; user_rec; } > "$TP"
+  { cancel_rec "$HK/desk-brief-inject.sh"; user_rec; } > "$TP"
   bash -c '. "$1"; sh_worker "$2"' _ "$(RLIB)" "$SID"
   [ "$(verdict desk-brief-inject)" = cleared ]                # current epoch: not rescanned
   mkstart desk-brief-inject 202610181205.00; mkdone desk-brief-inject 0 1 0
-  { cancel_rec '~/.claude/hooks/desk-brief-inject.sh' '2026-10-18T12:05:06.000Z'; user_rec; } >> "$TP"
+  { cancel_rec "$HK/desk-brief-inject.sh" '2026-10-18T12:05:06.000Z'; user_rec; } >> "$TP"
   bash -c '. "$1"; sh_worker "$2"' _ "$(RLIB)" "$SID"
   [ "$(verdict desk-brief-inject)" = nothing-owed ]           # the new epoch was scanned
 }
 
 @test "3.4 the worker falls back to the payload's transcript path when session.start has none" {
   TP="$BATS_TEST_TMPDIR/t.jsonl"
-  { cancel_rec '~/.claude/hooks/dod-persist.sh'; user_rec; } > "$TP"
+  { cancel_rec "$HK/dod-persist.sh"; user_rec; } > "$TP"
   mksession ""; mkstart dod-persist; mkdone dod-persist 0 5 900
   bash -c '. "$1"; sh_worker "$2" "$3"' _ "$(RLIB)" "$SID" "$TP"
   [ "$(verdict dod-persist)" = confirmed ]
@@ -220,7 +223,7 @@ possible() { bash -c '. "$1"; sh_possible "$2" "$3"; printf "%s" "$SH_REASON"' _
 
 @test "3.4 session-beat's prompt worker writes the verdicts (fixture HOME, no live state)" {
   TP="$BATS_TEST_TMPDIR/t.jsonl"
-  { cancel_rec '~/.claude/hooks/dod-persist.sh'; user_rec; } > "$TP"
+  { cancel_rec "$HK/dod-persist.sh"; user_rec; } > "$TP"
   mksession "$TP"; mkstart dod-persist; mkdone dod-persist 0 5 900
   export CC_BEAT_DIR="$BATS_TEST_TMPDIR/beats" CC_BEAT_LOG="$BATS_TEST_TMPDIR/beat.log"
   printf '{"session_id":"%s","cwd":"/tmp","prompt":"hi","transcript_path":"%s"}' "$SID" "$TP" \
@@ -251,10 +254,10 @@ idl_count() { grep -c "\"reason\":\"$1\"" "$HOME/.claude/autonomy/idl.jsonl" 2>/
   mksession "$TP"; mkstart dod-persist; mkdone dod-persist 143 5 900
   run front
   [ "$(sys "$output")" = "⚠ startup: dod-persist may not have delivered (exit 143) — confirming" ]
-  ctx "$output" | grep -qF '~/.claude/hooks/dod-persist.sh get'
+  ctx "$output" | grep -qF "$HK/dod-persist.sh get"
   [ -f "$S/pending" ]
   run front; [ -z "$output" ]                            # no verdict yet: no repeat
-  { cancel_rec '~/.claude/hooks/dod-persist.sh' '' 5472; user_rec; } > "$TP"; scan
+  { cancel_rec "$HK/dod-persist.sh" '' 5472; user_rec; } > "$TP"; scan
   run front
   [ "$(sys "$output")" = "⚠ startup: dod-persist did not finish (cancelled after 5.4 s) — the frozen DoD contract · ~/.claude/hooks/dod-persist.sh get" ]
   [ -z "$(ctx "$output")" ]                              # the pointer was already given
@@ -266,7 +269,7 @@ idl_count() { grep -c "\"reason\":\"$1\"" "$HOME/.claude/autonomy/idl.jsonl" 2>/
   TP="$BATS_TEST_TMPDIR/t.jsonl"
   mksession "$TP"; mkstart dod-persist; mkdone dod-persist 0 2 900
   run front; [ -z "$output" ]
-  { cancel_rec '~/.claude/hooks/dod-persist.sh'; user_rec; } > "$TP"; scan
+  { cancel_rec "$HK/dod-persist.sh"; user_rec; } > "$TP"; scan
   run front
   sys "$output" | grep -qF 'dod-persist did not finish'
   ctx "$output" | grep -qF 'dod-persist.sh get'
@@ -338,7 +341,7 @@ CSH() { "$REPO/bin/cc-startup-health" "$@"; }
 
 @test "3.3 report: a confirmed DoD loss with its recovery, a foreign hook named and never run, the outbox" {
   TP="$BATS_TEST_TMPDIR/t.jsonl"
-  { cancel_rec '~/.claude/hooks/dod-persist.sh'; cancel_rec 'pnpm exec tsx scripts/unblock-sweep.ts' '' 23100; user_rec; } > "$TP"
+  { cancel_rec "$HK/dod-persist.sh"; cancel_rec 'pnpm exec tsx scripts/unblock-sweep.ts' '' 23100; user_rec; } > "$TP"
   mksession "$TP"; mkstart dod-persist; mkdone dod-persist 0 5 900
   mkstart desk-brief-inject; mkdone desk-brief-inject 0 1 0
   printf 'BOARD-LINE-ZZ\n' > "$S/outbox.txt"
@@ -353,7 +356,7 @@ CSH() { "$REPO/bin/cc-startup-health" "$@"; }
 
 @test "3.3 report is read-only: an unscanned session is judged in memory and its dir is untouched" {
   TP="$BATS_TEST_TMPDIR/t.jsonl"
-  { cancel_rec '~/.claude/hooks/dod-persist.sh'; user_rec; } > "$TP"
+  { cancel_rec "$HK/dod-persist.sh"; user_rec; } > "$TP"
   mksession "$TP"; mkstart dod-persist; mkdone dod-persist 0 5 900
   before="$(ls -la "$S")"
   run CSH "$SID"
@@ -370,7 +373,7 @@ CSH() { "$REPO/bin/cc-startup-health" "$@"; }
 
 @test "3.3 no sid lists the sessions with confirmed losses; an unknown sid says so" {
   TP="$BATS_TEST_TMPDIR/t.jsonl"
-  { cancel_rec '~/.claude/hooks/dod-persist.sh'; user_rec; } > "$TP"
+  { cancel_rec "$HK/dod-persist.sh"; user_rec; } > "$TP"
   mksession "$TP"; mkstart dod-persist; mkdone dod-persist 0 5 900
   run CSH
   printf '%s\n' "$output" | grep -qF "$SID  1 lost"
@@ -389,8 +392,8 @@ mksid() { # <sid> <hook> <rc> <owed> <transcript-records...> — one settled ses
 LINE() { cat "$CC_STARTUP_HEALTH_DIR/fleet-line.txt"; }
 
 @test "3.5 the fold counts losses under ⚠ and deferrals in the plain suffix" {
-  mksid aaaa-1 dod-persist 0 900 '~/.claude/hooks/dod-persist.sh'
-  mksid aaaa-2 mailbox-drain 0 300 '~/.claude/hooks/mailbox-drain.sh session-start'
+  mksid aaaa-1 dod-persist 0 900 "$HK/dod-persist.sh"
+  mksid aaaa-2 mailbox-drain 0 300 "$HK/mailbox-drain.sh session-start"
   mksid aaaa-3 desk-brief-inject 0 0
   run CSH --fleet; [ "$status" -eq 0 ]
   LINE | grep -qE '^⚠ startup losses since ack never \(oldest [0-9]+[mhd]\): 1 — dod-persist 1 · deferred: mailbox-drain 1 · cc-startup-health --ack$'
@@ -399,19 +402,19 @@ LINE() { cat "$CC_STARTUP_HEALTH_DIR/fleet-line.txt"; }
 }
 
 @test "3.5 a deferral-only state shows no ⚠ line" {
-  mksid aaaa-2 mailbox-drain 0 300 '~/.claude/hooks/mailbox-drain.sh session-start'
+  mksid aaaa-2 mailbox-drain 0 300 "$HK/mailbox-drain.sh session-start"
   CSH --fleet
   [ ! -s "$CC_STARTUP_HEALTH_DIR/fleet-line.txt" ]
 }
 
 @test "3.5 --ack clears only the shown occurrences; a later occurrence raises the line again" {
-  mksid aaaa-1 dod-persist 0 900 '~/.claude/hooks/dod-persist.sh'
+  mksid aaaa-1 dod-persist 0 900 "$HK/dod-persist.sh"
   CSH --fleet; [ -s "$CC_STARTUP_HEALTH_DIR/fleet-line.txt" ]
   run CSH --ack
   printf '%s\n' "$output" | grep -qF 'acknowledged 1 occurrence'
   [ ! -s "$CC_STARTUP_HEALTH_DIR/fleet-line.txt" ]
   CSH --fleet; [ ! -s "$CC_STARTUP_HEALTH_DIR/fleet-line.txt" ]   # no timer re-raises it
-  mksid aaaa-9 session-start-dispatch 0 400 '~/.claude/hooks/session-start-dispatch.sh'
+  mksid aaaa-9 session-start-dispatch 0 400 "$HK/session-start-dispatch.sh"
   CSH --fleet
   LINE | grep -qE ': 1 — session-start-dispatch 1 · cc-startup-health --ack$'
   LINE | grep -qvF 'since ack never'
@@ -425,7 +428,7 @@ LINE() { cat "$CC_STARTUP_HEALTH_DIR/fleet-line.txt"; }
 }
 
 @test "3.5 retention deletes session dirs older than 7 days" {
-  mksid aaaa-1 dod-persist 0 900 '~/.claude/hooks/dod-persist.sh'
+  mksid aaaa-1 dod-persist 0 900 "$HK/dod-persist.sh"
   TZ=UTC touch -t 202609010000.00 "$CC_STARTUP_HEALTH_DIR/aaaa-1"
   CSH --fleet
   [ ! -e "$CC_STARTUP_HEALTH_DIR/aaaa-1" ]
