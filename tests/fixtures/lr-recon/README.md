@@ -69,6 +69,7 @@ phase no incident exhibited; `note` names the real row it was derived from.
 | `token_is_this_attempt` | bool | that token is this attempt's (5) |
 | `confirm_len` | int\|null | target copy length at confirm (5) |
 | `nonerror_assistant_after_token` | bool | a later non-error, non-notification assistant record (5) |
+| `prompt_answered_after_confirm` | bool | with no token of this attempt: a non-error assistant record past `confirm_len` that answers a non-notification prompt typed after the relaunch (5) |
 | `holder_stable_two_samples` | bool | same (pid, lstart) on 2 samples ≥15 s apart (6) |
 | `readiness` | `READY\|READY-QUIET\|composer-empty-x2\|parked-menu\|none` | readiness evidence (6) |
 | `relaunch_substate` | `UNPROMPTED\|DRAFTED\|SUBMITTED` | sub-state of RELAUNCHED (7) |

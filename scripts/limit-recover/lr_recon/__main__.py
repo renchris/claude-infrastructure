@@ -830,6 +830,16 @@ def _derive(
             )  # rows 4 and 7 read it
         if act.live_procs(rec, snap) or ev.live_launcher or ev.live_watcher:
             rec.close["busy_at"] = now
+        # C's quiet grace reads typer_at, not busy_at: a launcher whose own verdict ended its typing
+        # is only the session's pty relay, and keying C on it held the owed continue for good.
+        if (
+            act.live_procs(rec, snap)
+            or ev.live_watcher
+            or (ev.live_launcher and not settle.launcher_settled(ctx.home, rec, now))
+        ):
+            rec.close["typer_at"] = now
+        else:
+            rec.close.setdefault("typer_at", 0.0)
         rec.phase = res.phase
         ctx.actions[rec.sid] = res.action
         _note_close(rec, res, snap, now)
@@ -1190,10 +1200,12 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
         which = act.choose(res, rec)
         if which is None:
             continue
-        if which == "C" and now - float(rec.close.get("busy_at", 0)) < C_GRACE_S:
+        typer_at = rec.close.get("typer_at", rec.close.get("busy_at", 0))
+        if which == "C" and now - float(typer_at) < C_GRACE_S:
             # The move's own launcher types the prompt, and its user record lands 1.6-11 s after
             # the Enter (W0) with re-sends up to 45 s: C only after that whole chain is quiet, or
-            # it types a SECOND prompt into a session that already has one (W5 rig).
+            # it types a SECOND prompt into a session that already has one (W5 rig). typer_at
+            # (stamped by _derive) ends the chain at the launcher's own verdict, not its exit.
             continue
         ok, why = act.may_actuate(
             ctx.paths, mode, rec, which, snap, now, wake_ok, running, act.workers_cap()

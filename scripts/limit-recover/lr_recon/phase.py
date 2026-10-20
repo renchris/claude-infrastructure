@@ -49,26 +49,35 @@ def _result(
 def _engaged(ev: T.Evidence) -> Tuple[bool, str]:
     """Row 5, returning (holds, the first failing conjunct). The notification exclusion rides in
     ``nonerror_assistant_after_token`` (tokens.nonerror_after never counts a turn that answers a
-    task-notification), so the 751/815 and 405-c shapes cannot close here."""
+    task-notification), so the 751/815 and 405-c shapes cannot close here.
+
+    With no token of this attempt, ``prompt_answered_after_confirm`` is the other proof: somebody
+    typed a prompt into the relaunched session and it answered. lr-fire-resume's READY-NOT-SEEN asks
+    a human to do exactly that, and C would then type a second, redundant continue. Its scan opens
+    no turn on a notification or meta record, so the same shapes stay out."""
     if ev.kind != "limited":
         return False, "kind"
-    if not ev.token_is_this_attempt:
+    if ev.token_is_this_attempt:
+        if ev.token_record_offset is None or ev.confirm_len is None:
+            return False, "offset-unknown"
+        # The offset is where the token's record STARTS (tokens.find_token), so a record starting
+        # AT confirm_len is wholly past the confirmed copy: the first append after the transplant,
+        # which is exactly where a same-uuid resume types the prompt (W5 rig). Only a record
+        # starting inside the confirmed bytes is a replay of the source.
+        if ev.token_record_offset < ev.confirm_len:
+            return False, "token<confirm_len"
+        if not ev.nonerror_assistant_after_token:
+            return False, "no-nonerror-turn"
+        why = "token>=confirm_len"
+    elif ev.prompt_answered_after_confirm and ev.confirm_len is not None:
+        why = "prompt-answered>=confirm_len"
+    else:
         return False, "no-token-this-attempt"
-    if ev.token_record_offset is None or ev.confirm_len is None:
-        return False, "offset-unknown"
-    # The offset is where the token's record STARTS (tokens.find_token), so a record starting AT
-    # confirm_len is wholly past the confirmed copy: the first append after the transplant, which
-    # is exactly where a same-uuid resume types the prompt (W5 rig). Only a record starting inside
-    # the confirmed bytes is a replay of the source.
-    if ev.token_record_offset < ev.confirm_len:
-        return False, "token<confirm_len"
-    if not ev.nonerror_assistant_after_token:
-        return False, "no-nonerror-turn"
     if not _target_bound(ev):
         return False, "no-target-holder"
     if ev.source_alive:
         return False, "source-alive"
-    return True, "token>=confirm_len"
+    return True, why
 
 
 def derive_phase(ev: T.Evidence) -> T.PhaseResult:

@@ -662,6 +662,8 @@ class Evidence:
     token_is_this_attempt: bool = False
     confirm_len: Optional[int] = None
     nonerror_assistant_after_token: bool = False
+    # no token of this attempt, yet the target answered a prompt typed after the relaunch (row 5)
+    prompt_answered_after_confirm: bool = False
     holder_stable_two_samples: bool = False
     readiness: str = "none"
     relaunch_substate: Optional[str] = None

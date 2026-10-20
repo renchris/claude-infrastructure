@@ -255,6 +255,12 @@ def _target_reads(rec: T.Record, ev: T.Evidence) -> None:
         ev.nonerror_assistant_after_token = tokens.nonerror_after(
             tgt, ev.token_record_offset
         )
+    elif rec.confirm_len:
+        # A record starting AT confirm_len is the target's first append (row 5's boundary), so the
+        # scan starts one byte before it.
+        ev.prompt_answered_after_confirm = tokens.prompt_answered_after(
+            tgt, rec.confirm_len - 1
+        )
 
 
 def _target_holder(rec: T.Record, s: Optional[T.SessionObs]) -> Optional[T.HolderObs]:

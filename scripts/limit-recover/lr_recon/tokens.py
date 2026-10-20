@@ -119,10 +119,13 @@ def find_token(path: str, token: str, min_offset: int = 0) -> Optional[int]:
     return None
 
 
-def _turns_after(path: str, offset: int) -> Iterator[Tuple[Dict[str, Any], bool]]:
-    """(assistant record, answers-a-prompt) for each assistant record after ``offset``. The record
-    AT ``offset`` is the submit record, so the first turn after it answers a prompt."""
-    answers_prompt = True
+def _turns_after(
+    path: str, offset: int, opened: bool = True
+) -> Iterator[Tuple[Dict[str, Any], bool]]:
+    """(assistant record, answers-a-prompt) for each assistant record after ``offset``. With
+    ``opened`` the record AT ``offset`` is the submit record, so the first turn after it answers a
+    prompt; without it ``offset`` is a bare byte boundary and only a later prompt opens a turn."""
+    answers_prompt = opened
     turn_closed = (
         False  # an assistant record has been seen since the last opening user record
     )
@@ -156,3 +159,17 @@ def last_assistant_after(path: str, offset: int) -> str:
 def nonerror_after(path: str, offset: int) -> bool:
     """True iff a non-error assistant record that answers a prompt (not a notification) follows."""
     return any(_verdict(rec, ours) == "ok" for rec, ours in _turns_after(path, offset))
+
+
+def prompt_answered_after(path: str, offset: int) -> bool:
+    """True iff, after ``offset``, a non-error assistant record answers a PROMPT that itself arrived
+    after ``offset``. ``nonerror_after`` cannot answer this: it reads the record at its offset as our
+    submit, so its first turn counts as ours, and at the transplant boundary (confirm_len) that first
+    turn is usually a queued task-notification of the dead process (e80b61f4, 2026-10-20: three
+    stale task ids answered seconds after the relaunch). A notification or meta record never opens a
+    turn here, so only a prompt somebody typed into the relaunched session (a hand-typed continue
+    after lr-fire-resume's READY-NOT-SEEN, which asks for exactly that) can satisfy it."""
+    return any(
+        _verdict(rec, ours) == "ok"
+        for rec, ours in _turns_after(path, offset, opened=False)
+    )
