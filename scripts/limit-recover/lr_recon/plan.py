@@ -198,12 +198,28 @@ def movers(
                 or now >= rec.wait.eta + REOFFER_AFTER_S
             )
         )
-        if not reset_due and rec.substate not in (
-            "DETECTED",
-            "WAIT_SLOT",
-            "WAIT_DATA",
-            "WAIT_CAPACITY",
-            "BACKOFF",
+        # A WAIT_RESET parked on a no-answer (detail "wait-data") with its reset still past the stay
+        # window is a strand, not a wait: apply no longer makes one, and one made before is
+        # re-offered every pass (operator ruling 2026-10-13: a session on a rejected account moves).
+        stranded = (
+            rec.substate == "WAIT_RESET"
+            and rec.kind == "limited"
+            and rec.wait is not None
+            and rec.wait.detail == "wait-data"
+            and rec.wait.eta is not None
+            and rec.wait.eta - now >= EPS_STAY_S
+        )
+        if (
+            not reset_due
+            and not stranded
+            and rec.substate
+            not in (
+                "DETECTED",
+                "WAIT_SLOT",
+                "WAIT_DATA",
+                "WAIT_CAPACITY",
+                "BACKOFF",
+            )
         ):
             continue
         s = snap.sessions.get(rec.sid)
@@ -377,10 +393,13 @@ def apply(
             continue
         eta = now + p.eta_s if p.eta_s is not None else None
         resets = _source_resets(rec, facts)
+        # No eta is no answer (wait-data, or a timeout kept as one), not "nothing frees sooner":
+        # it parks on the reset only inside the stay window. Further out it stays a mover, or a
+        # 9 h weekly reset strands it on a rejected account while load is high (2026-10-20).
         if (
             rec.kind == "limited"
             and resets is not None
-            and (eta is None or resets < eta)
+            and (resets < eta if eta is not None else resets - now < EPS_STAY_S)
         ):
             reason = "WAIT_RESET"
             eta = resets

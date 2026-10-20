@@ -189,6 +189,63 @@ class PlanTests(unittest.TestCase):
             (recs["c"].substate, recs["c"].wait.max_age_s), ("WAIT_DATA", 120)
         )
 
+    def test_no_answer_past_the_stay_window_is_a_mover_not_a_reset(self):
+        """2026-10-20: --place timed out at load1 ~350 and apply parked two LIMITED records on a
+        rejected weekly account in WAIT_RESET until its reset 9 h out; movers never re-offered
+        them. A no-answer parks on the reset only inside EPS_STAY_S (the NOW+300 case above)."""
+        rec = _rec("a")
+        facts = {"next3.7d": T.Fact(acct="next3", scope="7d", resets_at=NOW + 9 * 3600)}
+        P.apply(
+            {"a": rec},
+            {"a": T.Placement(acct=None, reason="wait-data")},
+            facts,
+            str,
+            NOW,
+        )
+        self.assertEqual((rec.substate, rec.wait.eta), ("WAIT_DATA", None))
+        snap = T.Snapshot(wall=NOW, uptime_raw=0)
+        self.assertEqual([m.sid for m in P.movers([rec], snap, NOW + 60)], ["a"])
+        edge = _rec("e")
+        facts_e = {
+            "next3.7d": T.Fact(acct="next3", scope="7d", resets_at=NOW + P.EPS_STAY_S)
+        }
+        P.apply(
+            {"e": edge},
+            {"e": T.Placement(acct=None, reason="wait-data")},
+            facts_e,
+            str,
+            NOW,
+        )
+        self.assertEqual(edge.substate, "WAIT_DATA")
+
+    def test_a_record_parked_far_on_a_no_answer_is_re_offered(self):
+        """Heal for records parked before the fix: a limited WAIT_RESET from a no-answer (detail
+        "wait-data") whose reset is still past the stay window is a mover every pass. A stay, a
+        no-answer inside the window, and a numeric-eta reset wait still sleep to their reset."""
+        snap = T.Snapshot(wall=NOW, uptime_raw=0)
+        far = _rec("a", substate="WAIT_RESET")
+        far.wait = T.Wait(
+            reason="WAIT_RESET", since=NOW, eta=NOW + 9 * 3600, detail="wait-data"
+        )
+        self.assertEqual([m.sid for m in P.movers([far], snap, NOW + 60)], ["a"])
+        near = _rec("b", substate="WAIT_RESET")
+        near.wait = T.Wait(
+            reason="WAIT_RESET", since=NOW, eta=NOW + 300, detail="wait-data"
+        )
+        stay = _rec("c", substate="WAIT_RESET")
+        stay.wait = T.Wait(
+            reason="WAIT_RESET", since=NOW, eta=NOW + 9 * 3600, detail="stay"
+        )
+        floors = _rec("d", substate="WAIT_RESET")
+        floors.wait = T.Wait(
+            reason="WAIT_RESET", since=NOW, eta=NOW + 9 * 3600, detail="floors"
+        )
+        idle = _rec("i", kind="idle", substate="WAIT_RESET")
+        idle.wait = T.Wait(
+            reason="WAIT_RESET", since=NOW, eta=NOW + 9 * 3600, detail="wait-data"
+        )
+        self.assertEqual(P.movers([near, stay, floors, idle], snap, NOW + 60), [])
+
     def test_auth_hop_no_eligible_waits_for_a_seat_not_a_reset(self):
         """W5 rig target-auth: a hop FROM an auth-failed account with no eligible target stays a
         mover (WAIT_SLOT), never WAIT_RESET on the source's 5h fact — nothing leaves WAIT_RESET
