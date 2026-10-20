@@ -1281,6 +1281,12 @@ All packets below are filed in W0, after converge, so that every `--receipt` res
 - **Restore-owner follow-ups** (code, out of this plan's scope):
   - `cc-backlog add --title "boot-resume.sh:448-452 tells the operator to wait until load is under 6 per core before restarting a deaf kitty; at the standing 15-40 per core that never happens. Replace with the bounded restore gate (CC_RESTORE_GATE_MAX_S) wording (B8 R8)" --project claude-infrastructure`
   - `cc-backlog add --title "Move path keeps ~20 per-sid projects/*/<sid>.jsonl globs (lr-transplant, lr-fire-resume, lr-handoff, lr-ingest-verify, lr-move-*), measured 1.2-2.4 s each at load1 241-247; no owner (B4 review F10)" --project claude-infrastructure`
+    - **Driven 2026-10-20 (backlog `d80b297539d5`).** Owner: `lr_sid_file` in `lr-lib.sh` (lr-transplant's copy is `lrt_at`). It reads the session's own slug first and globs only on a miss. lr-handoff exports `LR_SID_SLUG=slug(--cwd)` to its children, and lr-transplant pins it to the slug it located. Kill switch: `LR_MOVE_LOCATION_FAST=off`. Test: `tests/lr-sid-file.bats`.
+    - **Per in-place move, enumerated from the code:** 11 globs before, 5 after.
+      - Gone on a slug hit: the voluntary fail-fast read, the tier read (2 globs), the bundle's last-message read (2), and confirm's stub check (1). The stub check is now derived from the copy-count glob confirm already runs.
+      - Kept on purpose, because each needs every slug: the admit's source locate ("exactly one copy"), the admit's target-live read (the return hop), confirm's copy count, `lr-ingest-verify` C2 ("exactly one transcript"), and `lr-audit.py find_session` (it picks the newest of several copies).
+      - Rare-branch sites stay globs: unconfirm's re-run probe and the fold-stub fallback.
+    - **Cost measured** on an 18,401-dir fixture store at load1 266 (5 runs timed with bash 5 `EPOCHREALTIME`): a glob took 0.30-0.81 s (median 0.58), a slug hit 0.007-0.25 s (median 0.07, mostly the subshell fork), and a miss cost the same as a glob.
 
 ## The guarantee
 

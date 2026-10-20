@@ -48,16 +48,56 @@ lr_config_dirs() { # → one config dir per line; ~/.claude and ~/.claude-next a
   return 0
 }
 
+# ── ONE SESSION'S FILE IN ONE STORE: the known slug before the glob (B4 review F10, 2026-10-20) ──
+# `<store>/projects/*/<sid><suffix>` stats every project dir, ~18,400 per store on this box: 1.2-2.4 s
+# a glob at load1 241-247 (docs/research/lr-sustained-load-2026-10-20/impl/B4-cheap-place.md F10),
+# and one move ran about eleven of them. Claude Code writes a session at projects/<slug(launch
+# cwd)>/, so a caller that knows the slug answers with one stat. LR_SID_SLUG carries it: lr-handoff
+# exports slug(--cwd) to everything it starts, and lr-transplant pins it to the slug it located.
+# A miss (a cwd that changed, a symlinked spelling, a hint left by another session) globs exactly as
+# before. So the answer differs from the glob's only when one session has copies at two slugs, and
+# then it is the copy at the session's own slug instead of whichever dir sorts first. A site that
+# COUNTS copies keeps its glob: "no copy" and "exactly one copy" cannot be proven from one slug.
+# Kill switch: LR_MOVE_LOCATION_FAST=off, the one lr_session_location and the move worker honour.
+lr_slug() { # $1=cwd → Claude Code's project-dir name for it: every non-alphanumeric byte → `-`
+  printf %s "${1:-}" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g'
+}
+lr_sid_slug() { # → the LR_SID_SLUG hint, empty when unset, switched off, or not a slug
+  [ "${LR_MOVE_LOCATION_FAST:-on}" != off ] || return 0
+  case "${LR_SID_SLUG:-}" in ''|*[!A-Za-z0-9-]*) return 0 ;; esac
+  printf %s "$LR_SID_SLUG"
+}
+lr_sid_file() { # $1=store $2=sid $3=suffix (.jsonl, .jsonl.handed-off, .HANDOFF.json) [$4=-f|-e|-r, default -f] → first match / rc 1 none
+  local t="${4:--f}" s="" f
+  # lr_sid_slug inline: a subshell per lookup is most of what a hit costs at load1 250 (measured).
+  if [ "${LR_MOVE_LOCATION_FAST:-on}" != off ]; then
+    case "${LR_SID_SLUG:-}" in ''|*[!A-Za-z0-9-]*) ;; *) s="$LR_SID_SLUG" ;; esac
+  fi
+  if [ -n "$s" ] && _lr_is "$t" "$1/projects/$s/$2$3"; then printf '%s' "$1/projects/$s/$2$3"; return 0; fi
+  for f in "$1"/projects/*/"$2$3"; do _lr_is "$t" "$f" && { printf '%s' "$f"; return 0; }; done
+  return 1
+}
+_lr_is() { case "$1" in -e) [ -e "$2" ] ;; -r) [ -r "$2" ] ;; *) [ -f "$2" ] ;; esac; }
+
 # ── TIER: what the session was ACTUALLY running when it hit the limit ────────────────────────────
 # The transcript carries (message.model, effort) per assistant turn; argv carries only the LAUNCH
 # tier and the registry row carries neither. The tail of a transcript may belong to a rescuer (a
 # same-account duplicate appending by path), so the pick is the last NON-ERROR turn BEFORE the last
 # limit error, and only when there is no limit error at all the last turn overall.
 lr_tier_from_transcript() { # $1=cfg $2=sid → "model effort" on stdout / rc 1 when nothing on disk
-  local f
+  local f s
+  # The live copy at the session's own slug first (lr_sid_file above); both globs only when that
+  # copy is absent or holds no turn, so a miss reads exactly what it always read.
+  s="$(lr_sid_slug)"
+  if [ -n "$s" ] && [ -f "$1/projects/$s/$2.jsonl" ] && _lr_tier_of "$1/projects/$s/$2.jsonl"; then return 0; fi
   for f in "$1"/projects/*/"$2".jsonl "$1"/projects/*/"$2".jsonl.handed-off; do
     [ -f "$f" ] || continue
-    /usr/bin/python3 - "$f" "$LR_LIB_DIR" <<'PY' && return 0
+    _lr_tier_of "$f" && return 0
+  done
+  return 1
+}
+_lr_tier_of() { # $1=transcript → "model effort" / rc 1 when it holds no model turn
+  /usr/bin/python3 - "$1" "$LR_LIB_DIR" <<'PY'
 import json, sys
 try:
     sys.path.insert(0, sys.argv[2])
@@ -114,8 +154,6 @@ if pick is None:
     pick = turns[-1]
 print(pick[1], pick[2])
 PY
-  done
-  return 1
 }
 
 # ── ENGAGEMENT after a baseline: the one thing a husk can never produce ──────────────────────────
@@ -911,7 +949,7 @@ lr_transplanted_to() { # $1=sid $2=this cfg → target cfg on stdout / rc 1
   to_real="$(cd "$to" 2>/dev/null && pwd -P || printf '%s' "$to")"
   here_real="$(cd "$here" 2>/dev/null && pwd -P || printf '%s' "$here")"
   [ "$to_real" != "$here_real" ] || return 1
-  ls "$to"/projects/*/"$sid".jsonl >/dev/null 2>&1 || return 1
+  lr_sid_file "$to" "$sid" .jsonl -e >/dev/null || return 1
   printf '%s' "$to"
 }
 
@@ -936,7 +974,7 @@ lr_transplanted_to() { # $1=sid $2=this cfg → target cfg on stdout / rc 1
 # superseded_by_pid). Testing for a different store keeps the same-account case out, so the
 # tombstone can be read safely. Lock first — it is the stronger evidence when it exists.
 lr_transplant_target() { # $1=sid $2=this cfg → target cfg on stdout / rc 1
-  local sid="${1:-}" here="${2:-}" tomb to to_real here_real pd
+  local sid="${1:-}" here="${2:-}" tomb to to_real here_real
   [ -n "$sid" ] && [ -n "$here" ] || return 1
   if to="$(lr_transplanted_to "$sid" "$here" 2>/dev/null)"; then printf '%s' "$to"; return 0; fi
   here_real="$(cd "$here" 2>/dev/null && pwd -P || printf '%s' "$here")"
@@ -948,10 +986,7 @@ lr_transplant_target() { # $1=sid $2=this cfg → target cfg on stdout / rc 1
     # SAME store ⇒ a same-account `--mark`, never a transplant. This is the whole safety property.
     [ "$to_real" != "$here_real" ] || continue
     # the successor must actually be there — a tombstone pointing at nothing is not a move
-    for pd in "$to"/projects/*/"$sid".jsonl; do
-      [ -f "$pd" ] || continue
-      printf '%s' "$to"; return 0
-    done
+    lr_sid_file "$to" "$sid" .jsonl >/dev/null && { printf '%s' "$to"; return 0; }
   done
   return 1
 }

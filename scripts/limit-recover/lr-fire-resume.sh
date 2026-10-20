@@ -345,7 +345,7 @@ lr_tombstone_verdict() { # sid resuming-cfg-dir → reason on stdout; rc 0 = all
   local sid="$1" here="$2"
   local state="${LR_STATE_DIR:-$HOME/.reso/limit-recover}"
   local lock="$state/locks/$sid.lock"
-  local to to_real here_real hits=() line acct
+  local to to_real here_real hit="" line acct
 
   [ -f "$lock" ] || { echo "no tombstone for $sid — never transplanted"; return 0; }
 
@@ -373,9 +373,15 @@ lr_tombstone_verdict() { # sid resuming-cfg-dir → reason on stdout; rc 0 = all
     return 0
   fi
 
-  while IFS= read -r line; do [ -n "$line" ] && hits+=("$line"); done \
-    < <(ls "$to"/projects/*/"$sid".jsonl 2>/dev/null || true)
-  if [ ${#hits[@]} -eq 0 ]; then
+  # The session's own slug first (lr_sid_file, B4 review F10); only the first copy is ever read, so
+  # one stat answers when it is there. Without lr-lib the glob runs: an undefined helper must never
+  # read as "no successor", which is the one answer that allows the resume.
+  if command -v lr_sid_file >/dev/null 2>&1; then
+    hit="$(lr_sid_file "$to" "$sid" .jsonl -e || true)"
+  else
+    for line in "$to"/projects/*/"$sid".jsonl; do [ -e "$line" ] && { hit="$line"; break; }; done
+  fi
+  if [ -z "$hit" ]; then
     echo "tombstone names $to, but no transcript for $sid survives there — successor is gone, recovery allowed"
     return 0
   fi
@@ -384,8 +390,8 @@ lr_tombstone_verdict() { # sid resuming-cfg-dir → reason on stdout; rc 0 = all
   [ -n "$acct" ] || acct="$(basename "$to_real")"
   echo "REFUSED — $sid was transplanted away and its successor is still on disk."
   echo "  went to:      $acct  ($to)"
-  echo "  successor:    ${hits[0]}"
-  echo "  last activity: $(date -r "${hits[0]}" -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo unknown)"
+  echo "  successor:    $hit"
+  echo "  last activity: $(date -r "$hit" -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo unknown)"
   echo "  tombstone:    $lock"
   return 3
 }

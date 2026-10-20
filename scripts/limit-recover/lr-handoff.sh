@@ -308,6 +308,11 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$SID" ]] || { echo "lr-handoff: no --sid and CLAUDE_CODE_SESSION_ID unset" >&2; exit 2; }
 [[ -z "$OPERATOR_INTENT" || $VOLUNTARY -eq 1 ]] || { echo "lr-handoff: --operator-intent is only meaningful with --voluntary" >&2; exit 2; }
+# THE SESSION'S SLUG, for every per-sid lookup this run and its children make (lr_sid_file, B4 review
+# F10): --cwd is the plan row's cwd, where Claude Code wrote the transcript, so one stat answers what
+# a projects/* glob over ~18,400 dirs per store answered before. Exported, because lr-transplant (both
+# phases) and lr-fire-resume make the same lookups. A wrong slug only misses, and a miss globs.
+LR_SID_SLUG="$(lr_slug "$CWD")"; export LR_SID_SLUG
 # WHO PLACED THIS MOVE. A placed move's target was ranked by its placer and its subject asked
 # nothing, so the router re-read, the pane mail and a human-answered dialog are all wrong for it.
 # The reconciler was the only placer; the operator's move lane (cc-lr move, design-swap-v3) is the
@@ -659,8 +664,7 @@ if [[ -n "$OPERATOR_INTENT" ]]; then
 fi
 if [[ $VOLUNTARY -eq 1 && -n "$SOURCE_PANE" && "${LRH_VOLUNTARY_FAILFAST:-on}" != off ]] \
    && command -v lr_last_api_error >/dev/null 2>&1; then
-  _lrh_vtx=""
-  for _lrh_f in "$CFG"/projects/*/"$SID".jsonl; do [[ -f "$_lrh_f" ]] && { _lrh_vtx="$_lrh_f"; break; }; done
+  _lrh_vtx="$(lr_sid_file "$CFG" "$SID" .jsonl || true)"
   if [[ -n "$_lrh_vtx" ]]; then
     # `|| true`: rc 1 IS the healthy answer ("not an api error"), and under set -e + pipefail it
     # would otherwise end this script silently at rc 1 — the one outcome that names nothing.
@@ -962,7 +966,7 @@ fi
 # exactly as before and lr-fleet's CWD-GONE park is the answer. Kill switch LR_RECREATE_WORKTREE=off.
 LRH_LR_REPO=""
 if [[ ! -d "$CWD" && "${LR_RECREATE_WORKTREE:-on}" != off ]]; then
-  _lrh_rtx=""; for _lrh_f in "$CFG"/projects/*/"$SID".jsonl; do [[ -f "$_lrh_f" ]] && { _lrh_rtx="$_lrh_f"; break; }; done
+  _lrh_rtx="$(lr_sid_file "$CFG" "$SID" .jsonl || true)"
   _lrh_plan=""
   [[ -n "$_lrh_rtx" ]] && _lrh_plan="$(lr_reaped_worktree_plan "$_lrh_rtx" "$CWD")"
   if [[ -n "$_lrh_plan" ]]; then
@@ -1062,15 +1066,21 @@ else
     _dod="$(printf '%s\n' "$_dod_all" | awk '/^## /{buf=""} {buf = buf $0 "\n"} END{printf "%s", buf}')"
     [[ "${#_dod}" -gt 450 ]] && _dod="${_dod:0:450} …[truncated — full capture in the store named below]"
   fi
-  _last_msg="$(/usr/bin/python3 - "$CFG" "$SID" "$LR_LIB_DIR" <<'PY' 2>/dev/null || true
-import glob, json, sys
+  _last_msg="$(/usr/bin/python3 - "$CFG" "$SID" "$LR_LIB_DIR" "$(lr_sid_slug)" <<'PY' 2>/dev/null || true
+import glob, json, os, sys
 cfg, sid = sys.argv[1], sys.argv[2]
 try:
     sys.path.insert(0, sys.argv[3])
     from lr_predicate import classify_text
 except Exception:                       # module unreachable: degrade to the pre-W4 text test
     classify_text = None
-files = glob.glob(f"{cfg}/projects/*/{sid}.jsonl") + glob.glob(f"{cfg}/projects/*/{sid}.jsonl.handed-off")
+# The live copy at the slug lr_sid_slug names, and its retired twin; both globs only when
+# that copy is absent, because each walks every project dir in the store (B4 review F10).
+own = f"{cfg}/projects/{sys.argv[4]}/{sid}.jsonl" if len(sys.argv) > 4 and sys.argv[4] else ""
+if own and os.path.isfile(own):
+    files = [own] + [p for p in (own + ".handed-off",) if os.path.isfile(p)]
+else:
+    files = glob.glob(f"{cfg}/projects/*/{sid}.jsonl") + glob.glob(f"{cfg}/projects/*/{sid}.jsonl.handed-off")
 last_limit = None; texts = []
 for f in files:
     for line in open(f, errors="replace"):
@@ -1291,9 +1301,7 @@ for _lrh_ca in "$(dirname "$_CC_KS")/../lib/capacity-admit.sh" "$(dirname "$0")/
 done
 # Was the SOURCE retired (a confirm ran)? The source store answers, never the recycle's stderr.
 lrh_source_retired() { # → 0 when <sid>.jsonl.handed-off exists under the source config dir
-  local f
-  for f in "$CFG"/projects/*/"$SID".jsonl.handed-off; do [[ -e "$f" ]] && return 0; done
-  return 1
+  lr_sid_file "$CFG" "$SID" .jsonl.handed-off -e >/dev/null
 }
 # The reason handoff-fire held with: its newest recycle-held-* row for this pane since the fire.
 lrh_held_reason() { # → draft|focused|busy|team|… on stdout, `unknown` when no row names it

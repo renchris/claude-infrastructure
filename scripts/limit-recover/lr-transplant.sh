@@ -105,6 +105,15 @@ done
 [[ -n "$WATCHER_RECORD" ]] || WATCHER_RECORD="${HF_WATCHER_RECORD:-}"
 # The actuator this run acts for: the caller, unless it names a longer-lived process that owns it.
 LRT_HOLDER_PID="${LR_HOLDER_PID:-$PPID}"
+# THE SESSION'S SLUG BEFORE THE GLOB (B4 review F10, 2026-10-20). `projects/*/<sid>…` stats every
+# project dir, ~18,400 per store: 1.2-2.4 s a glob at load1 241-247. lr-handoff exports LR_SID_SLUG
+# (its --cwd's slug), and the source locate below pins it to the slug it found. lrt_at is lr-lib's
+# lr_sid_file, which this script does not source: one stat at the slug, the glob only on a miss, so a
+# miss answers exactly as before. The globs that COUNT copies (the locate, confirm's copy check, the
+# target-live read before admit) stay globs: "exactly one" and "none" cannot be read off one slug.
+# Kill switch: LR_MOVE_LOCATION_FAST=off.
+LRT_SLUG=""
+if [[ "${LR_MOVE_LOCATION_FAST:-on}" != off && "${LR_SID_SLUG:-}" =~ ^[A-Za-z0-9-]+$ ]]; then LRT_SLUG="$LR_SID_SLUG"; fi
 
 # OPTIONAL FIELDS, ABSENT WHEN UNASKED — not defaulted. Both fragments carry their own leading comma
 # and are appended immediately before a closing brace, so with neither flag every record this script
@@ -298,10 +307,14 @@ lrt_link_rename() { # $1=path $2=new path → link-then-unlink; rc 1 with NOTHIN
   ln "$1" "$2" 2>/dev/null || return 1
   unlink "$1"
 }
-lrt_retired() { # → the first <FROM>/projects/*/<sid>.jsonl.handed-off, empty when none
+lrt_at() { # $1=store $2=suffix → the first regular <store>/projects/*/<sid><suffix>, LRT_SLUG's first; empty when none
   local _c
-  for _c in "$FROM"/projects/*/"$SID".jsonl.handed-off; do [[ -f "$_c" ]] && { printf '%s' "$_c"; return 0; }; done
+  if [[ -n "$LRT_SLUG" && -f "$1/projects/$LRT_SLUG/$SID$2" ]]; then printf '%s' "$1/projects/$LRT_SLUG/$SID$2"; return 0; fi
+  for _c in "$1"/projects/*/"$SID$2"; do [[ -f "$_c" ]] && { printf '%s' "$_c"; return 0; }; done
   return 0
+}
+lrt_retired() { # → the first <FROM>/projects/*/<sid>.jsonl.handed-off, empty when none
+  lrt_at "$FROM" .jsonl.handed-off
 }
 # ── STALE ROUND-TRIP LEFTOVERS, SET ASIDE (2026-10-04) ──────────────────────────────────────────
 # A session that leaves S for T and later COMES BACK to S finds, beside its fresh live copy in S, the
@@ -370,7 +383,7 @@ lrt_sweep_target() { # $1=the TARGET slug dir now holding the live copy $2=this 
     _to_real=""
     [[ -z "$_to" ]] || _to_real="$(python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$_to/projects")"
     if [[ -n "$_to" && ! ( "$_mode" == admit && "$_to_real" == "$FROM_PROJ_REAL" ) ]]; then
-      for _c in "$_to"/projects/*/"$SID".jsonl; do [[ -f "$_c" ]] && _live="$_c"; done
+      _live="$(lrt_at "$_to" .jsonl)"
     fi
     # A marker naming ANOTHER store, in the store just confirmed as the live one, records a departure
     # this move undid. One naming TO itself is a same-account superseded mark: left untouched.
@@ -421,12 +434,15 @@ PY
 lrt_restored_json() { [[ -z "${LRT_RESTORED:-}" ]] || printf ',"restored_target":[%s]' "$LRT_RESTORED"; }
 lrt_stub() { # → the <sid>.jsonl that sits beside a .handed-off in the same slug dir, empty when none
   local _c
-  for _c in "$FROM"/projects/*/"$SID".jsonl.handed-off; do
-    # a retired copy that is a strict prefix of the live one is a round trip's leftover, not a stub
-    lrt_stale_retired "${_c%.handed-off}" && continue
-    [[ -f "$_c" && -e "${_c%.handed-off}" ]] && { printf '%s' "${_c%.handed-off}"; return 0; }
-  done
+  if [[ -n "$LRT_SLUG" ]] && lrt_stub_at "$FROM/projects/$LRT_SLUG/$SID.jsonl.handed-off"; then return 0; fi
+  for _c in "$FROM"/projects/*/"$SID".jsonl.handed-off; do lrt_stub_at "$_c" && return 0; done
   return 0
+}
+lrt_stub_at() { # $1=a <sid>.jsonl.handed-off → prints its live twin, rc 0, when that twin is a stub
+  # a retired copy that is a strict prefix of the live one is a round trip's leftover, not a stub
+  lrt_stale_retired "${1%.handed-off}" && return 1
+  [[ -f "$1" && -e "${1%.handed-off}" ]] || return 1
+  printf '%s' "${1%.handed-off}"
 }
 lrt_assert_lock() { # every custody phase runs under the admit's lock: present, owned by TO, and the caller's
   local _o _id
@@ -479,14 +495,21 @@ lrt_file_evidence() { # $1=kind (unconfirmed|aborted) $2=slug $3=tombstone (may 
 #   rc 2  REFUSED / FATAL — sha mismatch after the re-copy, or the source vanished mid-flight
 #   rc 3  usage
 if [[ "$PHASE" == confirm ]]; then
-  # A STUB BESIDE THE RETIRED COPY is a session that kept writing after its retire. Confirming now
-  # would copy the stub over the target and retire it onto `.handed-off`; fold-stub owns that state.
-  CONFIRM_STUB="$(lrt_stub)"
-  [[ -z "$CONFIRM_STUB" ]] || lrt_refuse stub-beside-retired stub-beside-retired \
-    "$CONFIRM_STUB sits beside its .handed-off copy; run --phase fold-stub (or unconfirm) first"
+  # A glob on purpose, not lrt_at: the copy count below refuses a second copy at any slug.
   CONFIRM_HITS=()
   while IFS= read -r line; do [[ -n "$line" ]] && CONFIRM_HITS+=("$line"); done \
     < <(ls "$FROM"/projects/*/"$SID".jsonl 2>/dev/null || true)
+  # A STUB BESIDE THE RETIRED COPY is a session that kept writing after its retire. Confirming now
+  # would copy the stub over the target and retire it onto `.handed-off`; fold-stub owns that state.
+  # A stub IS a live <sid>.jsonl, so it is one of CONFIRM_HITS: each is tested for a retired twin
+  # instead of globbing the `.handed-off` spelling as well (B4 review F10). Still checked before the
+  # copy count, so a stub keeps its own refusal.
+  CONFIRM_STUB=""
+  for _c in ${CONFIRM_HITS[@]+"${CONFIRM_HITS[@]}"}; do
+    lrt_stub_at "$_c.handed-off" >/dev/null && { CONFIRM_STUB="$_c"; break; }
+  done
+  [[ -z "$CONFIRM_STUB" ]] || lrt_refuse stub-beside-retired stub-beside-retired \
+    "$CONFIRM_STUB sits beside its .handed-off copy; run --phase fold-stub (or unconfirm) first"
   if [[ ${#CONFIRM_HITS[@]} -gt 1 ]]; then
     echo "lr-transplant: REFUSED — multiple copies of $SID under $FROM/projects; disambiguate manually:" >&2
     printf '  %s\n' "${CONFIRM_HITS[@]}" >&2
@@ -496,13 +519,9 @@ if [[ "$PHASE" == confirm ]]; then
     # THE SHAPE A RE-RUN ACTUALLY HAS. Confirm's own success renames the source, so a second call
     # finds no `<sid>.jsonl` at all — the same trap the W11 idempotence check was written for. A
     # `.handed-off` copy beside it is confirm reporting its own completed work, not a lost transcript.
-    CONFIRM_RETIRED=""
-    for _c in "$FROM"/projects/*/"$SID".jsonl.handed-off; do
-      [[ -f "$_c" ]] && { CONFIRM_RETIRED="$_c"; break; }
-    done
+    CONFIRM_RETIRED="$(lrt_retired)"
     if [[ -n "$CONFIRM_RETIRED" ]]; then
-      CONFIRM_DST=""
-      for _c in "$TO"/projects/*/"$SID".jsonl; do [[ -f "$_c" ]] && { CONFIRM_DST="$_c"; break; }; done
+      CONFIRM_DST="$(lrt_at "$TO" .jsonl)"
       # A re-run heals what an earlier confirm (or one before the sweep existed) left on the target —
       # but only while this move still holds custody: a lock that is gone, or that a later move now
       # owns, means TO's marker may be that later move's tombstone (see THE SWEEP NEVER UNDOES).
@@ -719,8 +738,7 @@ fi
 # the lock are withdrawn. Refused while anything could still be acting on the move: the actuator the
 # lock records (unless that is this caller), a watcher, or a live session on the target.
 if [[ "$PHASE" == abort ]]; then
-  AB_TOMB=""
-  for _c in "$FROM"/projects/*/"$SID".HANDOFF.json; do [[ -f "$_c" ]] && { AB_TOMB="$_c"; break; }; done
+  AB_TOMB="$(lrt_at "$FROM" .HANDOFF.json)"
   if [[ ! -e "$LOCK" && -z "$AB_TOMB" ]]; then
     printf '{"ok":true,"already_aborted":true,"phase":"abort","sid":"%s"}\n' "$SID"
     exit 0
@@ -761,7 +779,8 @@ PY
   if [[ -n "$AB_TOMB" ]]; then
     AB_SLUG="$(basename "$(dirname "$AB_TOMB")")"
   else
-    for _c in "$FROM"/projects/*/"$SID".jsonl; do [[ -f "$_c" ]] && { AB_SLUG="$(basename "$(dirname "$_c")")"; break; }; done
+    _c="$(lrt_at "$FROM" .jsonl)"
+    [[ -z "$_c" ]] || AB_SLUG="$(basename "$(dirname "$_c")")"
   fi
   lrt_file_evidence aborted "$AB_SLUG" "$AB_TOMB"
   lrt_unreturn   # the move did not happen: the target's own leftovers from the hop it reversed go back
@@ -802,14 +821,12 @@ lrt_already_done() { # → prints the existing target transcript when THIS trans
   # A GLOB, not `ls | head` — the shell already enumerates this and shellcheck is right that parsing
   # ls is the wrong tool (SC2012). An unmatched glob stays literal, which `-f` then rejects.
   local _c
-  _dst=""
-  for _c in "$TO"/projects/*/"$SID".jsonl; do [[ -f "$_c" ]] && { _dst="$_c"; break; }; done
+  _dst="$(lrt_at "$TO" .jsonl)"
   [[ -n "$_dst" ]] || return 1
   # Completeness, only when a live source copy survives to compare against. Bytes, not sha: the
   # successor has been APPENDING to the target since the transplant, so the two are legitimately
   # unequal and only "at least as much" is a meaningful test.
-  _src=""
-  for _c in "$FROM"/projects/*/"$SID".jsonl; do [[ -f "$_c" ]] && { _src="$_c"; break; }; done
+  _src="$(lrt_at "$FROM" .jsonl)"
   if [[ -n "$_src" ]]; then
     _sb=$(wc -c < "$_src" 2>/dev/null | tr -d ' ' || echo 0)
     _db=$(wc -c < "$_dst" 2>/dev/null | tr -d ' ' || echo 0)
@@ -864,7 +881,8 @@ PY
   fi
 fi
 
-# Locate the source transcript (exactly one real file). (macOS ships bash 3.2 — no mapfile.)
+# Locate the source transcript (exactly one real file). (macOS ships bash 3.2 — no mapfile.) A glob
+# on purpose, not lrt_at: "exactly one" needs every slug, and this is the move's one source walk.
 HITS=()
 while IFS= read -r line; do [[ -n "$line" ]] && HITS+=("$line"); done \
   < <(ls "$FROM"/projects/*/"$SID".jsonl 2>/dev/null || true)
@@ -877,6 +895,7 @@ fi
 SRC="${HITS[0]}"
 SRC_DIR=$(dirname "$SRC")
 SLUG=$(basename "$SRC_DIR")
+[[ "${LR_MOVE_LOCATION_FAST:-on}" == off ]] || LRT_SLUG="$SLUG"   # every later lookup: the located slug
 DST_DIR="$TO/projects/$SLUG"
 DST="$DST_DIR/$SID.jsonl"
 
@@ -1024,6 +1043,7 @@ LRT_HOLDER_JSON="$(lrt_holder_json)"
 LRT_CLEANUP=0 LRT_DIR_FRESH=0
 # A target that already holds a live copy before this run is never swept at admit (THE RETURN HOP):
 # its marker may be a later move's tombstone, which is the hazard THE SWEEP NEVER UNDOES describes.
+# A glob on purpose, not lrt_at: a copy at ANY slug is a return hop, and absence needs every slug.
 LRT_TO_LIVE_BEFORE=""
 for _c in "$TO"/projects/*/"$SID".jsonl; do [[ -f "$_c" ]] && LRT_TO_LIVE_BEFORE="$_c"; done
 [[ -e "$LOCK" || -e "$DST" ]] || LRT_CLEANUP=1
