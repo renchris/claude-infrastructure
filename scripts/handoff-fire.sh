@@ -2850,7 +2850,7 @@ hf_remote_pane_term() { # $1=remote pane id → 0 resolved · 1 REMOTE-PANE-ABSE
   HF_REMOTE_PANE_UNAVAIL_SOCK=
   HF_REMOTE_PANE_UNAVAIL_TRIES=$(( ${_HF_RPT_ATTEMPT:-0} + 1 ))
 
-  local bin saved_to tried=" " cand id answered=0 qrc accepting=
+  local bin saved_to tried=" " cand id answered=0 qrc accepting="" awhy="" crc why kpid
   bin="${CC_KITTY_BIN:-${CC_TERM_KITTY:-kitty}}"
   saved_to="${CC_TERM_KITTY_TO:-}"
   # An operator-named socket is explicit intent and is tried FIRST — the same precedence
@@ -2862,16 +2862,39 @@ hf_remote_pane_term() { # $1=remote pane id → 0 resolved · 1 REMOTE-PANE-ABSE
     tried="$tried$cand "
     # A socket FILE outlives a SIGKILLed kitty, so the arbiter is a real bounded `kitty @ … ls`.
     # hf_bounded's 124 on expiry is a non-zero here, i.e. "does not answer" — the safe direction.
-    # Did not answer. Ask the KERNEL which kind of no this is before moving on: a socket that
-    # accepts is a live kitty that was merely too slow, and that is retryable.
-    kitty_socket_answers "$bin" "$cand" || { kitty_socket_accepting "$cand" && accepting="$cand"; continue; }
-    # kt_window_field reads the address out of CC_TERM_KITTY_TO, so the candidate is installed before
-    # the query and rolled back below if no candidate ever resolves.
-    CC_TERM_KITTY_TO="$cand"; export CC_TERM_KITTY_TO
-    qrc=0; id="$(kt_window_field "$pane" id)" || qrc=$?
-    # rc 1 ⇒ the QUERY failed (wedged kitty, unparseable JSON). That is a resolver fault, not a fact
-    # about P, so it must NOT license the ABSENT verdict — only a clean enumeration may.
-    [ "$qrc" = 0 ] || { kitty_socket_accepting "$cand" && accepting="$cand"; continue; }
+    qrc=1
+    if kitty_socket_answers "$bin" "$cand"; then
+      # kt_window_field reads the address out of CC_TERM_KITTY_TO, so the candidate is installed
+      # before the query and rolled back below if no candidate ever resolves.
+      CC_TERM_KITTY_TO="$cand"; export CC_TERM_KITTY_TO
+      qrc=0; id="$(kt_window_field "$pane" id)" || qrc=$?
+    fi
+    # Did not answer, or rc 1 ⇒ the QUERY failed (wedged kitty, unparseable JSON). That is a resolver
+    # fault, not a fact about P, so it must NOT license the ABSENT verdict — only a clean enumeration
+    # may. Ask the KERNEL which kind of no this is before moving on. Three of them are retryable:
+    #   · connect(2) accepts (rc 0): a live kitty that was merely too slow (`timeout`);
+    #   · the connect probe's OWN bound fired (rc 124/137): we learned nothing, so it is unknown, not
+    #     a no (`probe-unknown`). In band 20 python's start alone can pass the 3 s bound (lr-sustained-
+    #     load 2026-10-20, REPORT §4 A3 i, axis 06 F5), and reading that as "not accepting" skipped
+    #     the very retry that resolved the same pane seconds later;
+    #   · refused (rc 3) while the kitty that owns the socket is alive (`refused-live`): a live kitty
+    #     whose accept backlog is full refuses at once too (husk-panes-2026-09-30.md:88).
+    # The strongest of them names the park: timeout, then probe-unknown, then refused-live.
+    if [ "$qrc" != 0 ]; then
+      crc=0; kitty_socket_accepting "$cand" || crc=$?
+      why=
+      case "$crc" in
+        0) why=timeout ;;
+        124|137) why=probe-unknown ;;
+        3) kpid="${cand##*kitty-}"
+           case "$kpid" in ''|*[!0-9]*) ;; *) ! kill -0 "$kpid" 2>/dev/null || why=refused-live ;; esac ;;
+      esac
+      case "$why:$awhy" in
+        :*|refused-live:timeout|refused-live:probe-unknown|probe-unknown:timeout) ;;
+        *) accepting="$cand"; awhy="$why" ;;
+      esac
+      continue
+    fi
     answered=1
     [ -n "$id" ] && { export CC_TERM=kitty; return 0; }
   done <<EOF
@@ -2901,7 +2924,7 @@ EOF
   # covers the retry. The restore block above has already run, so the re-ask starts from the same
   # clean slate a fresh caller would get. CC_REMOTE_PANE_TERM_TRIES=1 disables the retry outright.
   if [ -n "$accepting" ]; then
-    HF_REMOTE_PANE_UNAVAIL_WHY=timeout
+    HF_REMOTE_PANE_UNAVAIL_WHY="$awhy"
     HF_REMOTE_PANE_UNAVAIL_SOCK="$accepting"
     if [ "${_HF_RPT_ATTEMPT:-0}" -lt $(( ${CC_REMOTE_PANE_TERM_TRIES:-3} - 1 )) ]; then
       local _HF_RPT_ATTEMPT=$(( ${_HF_RPT_ATTEMPT:-0} + 1 ))
@@ -2920,11 +2943,16 @@ EOF
 hf_remote_pane_term_say() { # $1=rc from hf_remote_pane_term  $2=pane  $3=mode label
   case "$1" in
     1) echo "!! $3 REFUSED: REMOTE-PANE-ABSENT — a terminal control socket ANSWERED and enumerates no window $2. That is a definite negative about the pane, not about the query: retrying cannot change it. Nothing was typed." >&2 ;;
-    3) if [ "${HF_REMOTE_PANE_UNAVAIL_WHY:-no-socket}" = timeout ]; then
-         echo "!! $3 PARKED: REMOTE-PANE-RESOLVER-TIMEOUT — the terminal control socket ${HF_REMOTE_PANE_UNAVAIL_SOCK:-?} IS present and ACCEPTING connections, but did not answer \`ls\` inside the bound on ${HF_REMOTE_PANE_UNAVAIL_TRIES:-1} attempt(s). A live terminal too busy to reply is NOT an absent one: NOTHING is known about pane $2 either way and it is probably alive. Retry when the box is quieter (check the load average first) — never conclude the pane is gone. Nothing was typed." >&2
-       else
-         echo "!! $3 PARKED: REMOTE-PANE-RESOLVER-UNAVAILABLE — no terminal control socket answered at all, and none of the candidates would even accept a connection, so NOTHING is known about pane $2 either way; it may be perfectly alive. This is a non-verdict about the resolver — park and retry, never conclude the pane is gone. Nothing was typed." >&2
-       fi ;;
+    3) case "${HF_REMOTE_PANE_UNAVAIL_WHY:-no-socket}" in
+       timeout)
+         echo "!! $3 PARKED: REMOTE-PANE-RESOLVER-TIMEOUT — the terminal control socket ${HF_REMOTE_PANE_UNAVAIL_SOCK:-?} IS present and ACCEPTING connections, but did not answer \`ls\` inside the bound on ${HF_REMOTE_PANE_UNAVAIL_TRIES:-1} attempt(s). A live terminal too busy to reply is NOT an absent one: NOTHING is known about pane $2 either way and it is probably alive. Retry it — never conclude the pane is gone. Nothing was typed." >&2 ;;
+       probe-unknown)
+         echo "!! $3 PARKED: REMOTE-PANE-RESOLVER-PROBE-UNKNOWN — the terminal control socket ${HF_REMOTE_PANE_UNAVAIL_SOCK:-?} did not answer \`ls\`, and the connect probe's own ${CC_KITTY_CONNECT_TIMEOUT_S:-3}s bound fired before it could say whether the socket accepts, on ${HF_REMOTE_PANE_UNAVAIL_TRIES:-1} attempt(s). Our own timeout is no verdict: NOTHING is known about pane $2 either way. Retry it — never conclude the pane is gone. Nothing was typed." >&2 ;;
+       refused-live)
+         echo "!! $3 PARKED: REMOTE-PANE-RESOLVER-REFUSED-LIVE — the terminal control socket ${HF_REMOTE_PANE_UNAVAIL_SOCK:-?} refused the connection, but the kitty that owns it is alive, and a live kitty with a full accept backlog refuses too, on ${HF_REMOTE_PANE_UNAVAIL_TRIES:-1} attempt(s). NOTHING is known about pane $2 either way. Retry it — never conclude the pane is gone. Nothing was typed." >&2 ;;
+       *)
+         echo "!! $3 PARKED: REMOTE-PANE-RESOLVER-UNAVAILABLE — no terminal control socket answered at all, and none of the candidates would even accept a connection, so NOTHING is known about pane $2 either way; it may be perfectly alive. This is a non-verdict about the resolver — park and retry, never conclude the pane is gone. Nothing was typed." >&2 ;;
+       esac ;;
   esac
   return 0
 }

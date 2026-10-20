@@ -106,7 +106,13 @@ setup() {
 
   SOCKDIR="$BATS_TEST_TMPDIR/sock"; mkdir -p "$SOCKDIR"
   export CC_FIRE_KITTY_SOCK_DIR="$SOCKDIR"
-  mksock "$SOCKDIR/kitty-4242"
+  # The fixture kitty's pid is one that has EXITED: the resolver re-asks a refusing socket whose
+  # owner is alive (`kill -0` on the pid in its name), so a fixed number like 4242 would make every
+  # refused-socket case depend on whether that pid happens to be running on this box.
+  ( exit 0 ) & KFAKE_KPID=$!; wait "$KFAKE_KPID" || true
+  ! kill -0 "$KFAKE_KPID" 2>/dev/null || false
+  export KFAKE_KPID
+  mksock "$SOCKDIR/kitty-$KFAKE_KPID"
 
   mkdir -p "$HOME/.config/kitty"
   printf 'listen_on unix:%s/kitty-{kitty_pid}\n' "$SOCKDIR" > "$HOME/.config/kitty/kitty.conf"
@@ -145,7 +151,7 @@ FAKE
   # helper, because "kitten" is the near-miss the basename match has to reject.
   cat > "$STUB/ps" <<'FAKE'
 #!/bin/sh
-printf '%s\n' "${KFAKE_PS-  4242 /Applications/kitty.app/Contents/MacOS/kitty
+printf '%s\n' "${KFAKE_PS-  $KFAKE_KPID /Applications/kitty.app/Contents/MacOS/kitty
    758 /Applications/kitty.app/Contents/MacOS/kitten
    755 /usr/bin/login}"
 FAKE
@@ -200,7 +206,7 @@ clean_term() { unset CC_TERM CC_TERM_KITTY_TO KITTY_WINDOW_ID ITERM_SESSION_ID I
   hf_remote_pane_term 110 || false
   [ "$CC_TERM" = kitty ]
   [ -n "$CC_TERM_KITTY_TO" ]
-  [ "$CC_TERM_KITTY_TO" = "unix:$SOCKDIR/kitty-4242" ]
+  [ "$CC_TERM_KITTY_TO" = "unix:$SOCKDIR/kitty-$KFAKE_KPID" ]
   # …and the pin that used to decide this is now a no-op, because CC_TERM is already set.
   pin_term_verdict_for_watcher
   [ "$CC_TERM" = kitty ]
@@ -309,14 +315,14 @@ clean_term() { unset CC_TERM CC_TERM_KITTY_TO KITTY_WINDOW_ID ITERM_SESSION_ID I
   export CC_TERM_KITTY_TO="unix:$SOCKDIR/kitty-99999"
   hf_remote_pane_term 110 || false
   [ "$CC_TERM" = kitty ]
-  [ "$CC_TERM_KITTY_TO" = "unix:$SOCKDIR/kitty-4242" ]
+  [ "$CC_TERM_KITTY_TO" = "unix:$SOCKDIR/kitty-$KFAKE_KPID" ]
 }
 
 @test "the resolver ADDRESSES the socket it found — --to is on the wire, not just detected" {
   # Detecting kitty without addressing it swaps one silent failure for another: `kitty @` with no
   # --to reads KITTY_LISTEN_ON, which is exactly what a detached driver does not have.
   hf_remote_pane_term 110 || false
-  grep -q -- "--to unix:$SOCKDIR/kitty-4242" "$KLOG" || false
+  grep -q -- "--to unix:$SOCKDIR/kitty-$KFAKE_KPID" "$KLOG" || false
 }
 
 # ── the static half: the constraints the sibling suites impose on this function ──────────────────
@@ -339,9 +345,10 @@ clean_term() { unset CC_TERM CC_TERM_KITTY_TO KITTY_WINDOW_ID ITERM_SESSION_ID I
   first="$(grep -n '^ *[A-Z_]*TERM_RC=0; hf_remote_pane_term ' "$HF" | head -1 | cut -d: -f1)"
   [ -n "$first" ]
   [ "$def" -lt "$first" ]
-  # …and all three call sites are wired, one per remote entry point.
+  # …and all four call sites are wired, one per remote entry point (RAS_: --relaunch-at-shell,
+  # 492b6310b; PRP_: --probe-recycle-preconditions; SC_: self-close; RCY_: the remote recycle).
   n="$(grep -c '^ *[A-Z_]*TERM_RC=0; hf_remote_pane_term ' "$HF")"
-  [ "$n" -eq 3 ]
+  [ "$n" -eq 4 ]
 }
 
 @test "kitty_headless is NOT called — it is env-gated the wrong way for a remote pane" {
@@ -400,13 +407,13 @@ clean_term() { unset CC_TERM CC_TERM_KITTY_TO KITTY_WINDOW_ID ITERM_SESSION_ID I
 # case and the retry.
 
 @test "THE ITEM: a socket that ACCEPTS but does not answer is a TIMEOUT, not an absent resolver" {
-  rm -f "$SOCKDIR/kitty-4242"; mklistener "$SOCKDIR/kitty-4242"
+  rm -f "$SOCKDIR/kitty-$KFAKE_KPID"; mklistener "$SOCKDIR/kitty-$KFAKE_KPID"
   export KFAKE_KITTY_RC=1              # the client rc for BOTH causes — it cannot discriminate
   export CC_REMOTE_PANE_TERM_TRIES=1   # the retry is its own case below; this one is the verdict
   set +e; hf_remote_pane_term 110; rc=$?; set -e
   [ "$rc" -eq 3 ]
   [ "$HF_REMOTE_PANE_UNAVAIL_WHY" = timeout ]
-  [ "$HF_REMOTE_PANE_UNAVAIL_SOCK" = "unix:$SOCKDIR/kitty-4242" ]
+  [ "$HF_REMOTE_PANE_UNAVAIL_SOCK" = "unix:$SOCKDIR/kitty-$KFAKE_KPID" ]
   # Invariant 3 is undisturbed: a parking caller still inherits no half-pinned terminal.
   [ -z "${CC_TERM:-}" ]
   [ -z "${CC_TERM_KITTY_TO:-}" ]
@@ -448,7 +455,7 @@ clean_term() { unset CC_TERM CC_TERM_KITTY_TO KITTY_WINDOW_ID ITERM_SESSION_ID I
   local deep="$SOCKDIR"
   while [ "${#deep}" -lt 100 ]; do deep="$deep/pad"; done
   mkdir -p "$deep"
-  local s="$deep/kitty-4242"
+  local s="$deep/kitty-$KFAKE_KPID"
   [ "${#s}" -gt 104 ]   # the control proves nothing unless it is genuinely over the cap
 
   # Retune the conf, which is the SSOT kitty_socket_template reads and which outranks the dir seam.
@@ -478,7 +485,7 @@ clean_term() { unset CC_TERM CC_TERM_KITTY_TO KITTY_WINDOW_ID ITERM_SESSION_ID I
   [ "$output" -ge 1 ]
 
   # (b) the item's own case — a live socket, a silent server.
-  rm -f "$SOCKDIR/kitty-4242"; mklistener "$SOCKDIR/kitty-4242"
+  rm -f "$SOCKDIR/kitty-$KFAKE_KPID"; mklistener "$SOCKDIR/kitty-$KFAKE_KPID"
   clean_term
   set +e; hf_remote_pane_term 110; set -e
   run hf_remote_pane_term_say 3 110 self-close
@@ -505,18 +512,18 @@ clean_term() { unset CC_TERM CC_TERM_KITTY_TO KITTY_WINDOW_ID ITERM_SESSION_ID I
 @test "THE RETRY: an accepting-but-silent socket is RE-ASKED, and a later answer RESOLVES it" {
   # A load spike is a MOMENT, not a state: the same box that read 197 answered in 0.06 s at load 17
   # four days later. Parking on the first timeout is what stranded the two husk panes.
-  rm -f "$SOCKDIR/kitty-4242"; mklistener "$SOCKDIR/kitty-4242"
+  rm -f "$SOCKDIR/kitty-$KFAKE_KPID"; mklistener "$SOCKDIR/kitty-$KFAKE_KPID"
   export KFAKE_FAIL_ONCE="$BATS_TEST_TMPDIR/failonce"
   hf_remote_pane_term 110 || false
   [ "$CC_TERM" = kitty ]
-  [ "$CC_TERM_KITTY_TO" = "unix:$SOCKDIR/kitty-4242" ]
+  [ "$CC_TERM_KITTY_TO" = "unix:$SOCKDIR/kitty-$KFAKE_KPID" ]
   # …and it took more than one ask to get there, so the resolution IS the retry's doing.
   n="$(grep -c ' ls$' "$KLOG")"
   [ "$n" -ge 2 ]
 }
 
 @test "the retry is BOUNDED — it stops at CC_REMOTE_PANE_TERM_TRIES over a genuinely wedged kitty" {
-  rm -f "$SOCKDIR/kitty-4242"; mklistener "$SOCKDIR/kitty-4242"
+  rm -f "$SOCKDIR/kitty-$KFAKE_KPID"; mklistener "$SOCKDIR/kitty-$KFAKE_KPID"
   export KFAKE_KITTY_RC=1
   export CC_REMOTE_PANE_TERM_TRIES=3
   set +e; hf_remote_pane_term 110; rc=$?; set -e
@@ -527,7 +534,7 @@ clean_term() { unset CC_TERM CC_TERM_KITTY_TO KITTY_WINDOW_ID ITERM_SESSION_ID I
 }
 
 @test "CC_REMOTE_PANE_TERM_TRIES=1 disables the retry outright — one ask, today's behaviour" {
-  rm -f "$SOCKDIR/kitty-4242"; mklistener "$SOCKDIR/kitty-4242"
+  rm -f "$SOCKDIR/kitty-$KFAKE_KPID"; mklistener "$SOCKDIR/kitty-$KFAKE_KPID"
   export KFAKE_KITTY_RC=1
   export CC_REMOTE_PANE_TERM_TRIES=1
   set +e; hf_remote_pane_term 110; rc=$?; set -e
@@ -549,7 +556,7 @@ clean_term() { unset CC_TERM CC_TERM_KITTY_TO KITTY_WINDOW_ID ITERM_SESSION_ID I
 @test "REMOTE-PANE-ABSENT never retries — a definite negative about the pane must not be re-asked" {
   # rc 1 is terminal by contract ("retrying cannot change it"), and a live socket is present here,
   # so only the rc check keeps the retry off this path.
-  rm -f "$SOCKDIR/kitty-4242"; mklistener "$SOCKDIR/kitty-4242"
+  rm -f "$SOCKDIR/kitty-$KFAKE_KPID"; mklistener "$SOCKDIR/kitty-$KFAKE_KPID"
   export CC_REMOTE_PANE_TERM_TRIES=3
   set +e; hf_remote_pane_term 999; rc=$?; set -e
   [ "$rc" -eq 1 ]
@@ -565,4 +572,73 @@ clean_term() { unset CC_TERM CC_TERM_KITTY_TO KITTY_WINDOW_ID ITERM_SESSION_ID I
   [ "$CC_TERM" = kitty ]
   n="$(grep -c ' ls$' "$KLOG")"
   [ "$n" -eq 2 ]
+}
+
+# ── our own timeout is "unknown, retry" (lr-sustained-load 2026-10-20, REPORT §4 A3 i) ───────────
+# In band 20 python's start alone can pass the connect probe's 3 s bound, and that rc 124 used to read
+# as "not accepting": no retry, HELD:pane:resolver-unavailable, while the same pane answered seconds
+# later. The bound firing is stubbed (hf_bounded_s returns it) so the case cannot depend on load.
+
+@test "A3 [RED] the connect probe's own bound firing (rc 124, 137) is probe-unknown, and IS re-asked" {
+  export KFAKE_KITTY_RC=1 CC_REMOTE_PANE_TERM_TRIES=3
+  for brc in 124 137; do
+    : > "$KLOG"; clean_term
+    eval "hf_bounded_s() { return $brc; }"
+    set +e; hf_remote_pane_term 110; rc=$?; set -e
+    [ "$rc" -eq 3 ]
+    [ "$HF_REMOTE_PANE_UNAVAIL_WHY" = probe-unknown ] || { echo "rc $brc → $HF_REMOTE_PANE_UNAVAIL_WHY"; false; }
+    [ "$HF_REMOTE_PANE_UNAVAIL_SOCK" = "unix:$SOCKDIR/kitty-$KFAKE_KPID" ]
+    n="$(grep -c ' ls$' "$KLOG")"
+    [ "$n" -eq 3 ]
+    [ "$HF_REMOTE_PANE_UNAVAIL_TRIES" -eq 3 ]
+  done
+}
+
+@test "A3 [RED] a probe-unknown first ask that answers on the re-ask RESOLVES the pane" {
+  hf_bounded_s() { return 124; }
+  export KFAKE_FAIL_ONCE="$BATS_TEST_TMPDIR/failonce"
+  hf_remote_pane_term 110 || false
+  [ "$CC_TERM" = kitty ]
+  n="$(grep -c ' ls$' "$KLOG")"
+  [ "$n" -ge 2 ]
+}
+
+@test "A3 [RED] a refusal from a socket whose kitty is ALIVE is re-asked (refused-live): a full backlog refuses too" {
+  # The owner is this test's own shell, which is alive by construction.
+  export KFAKE_KPID=$$
+  mksock "$SOCKDIR/kitty-$KFAKE_KPID"
+  export KFAKE_KITTY_RC=1 CC_REMOTE_PANE_TERM_TRIES=3
+  set +e; hf_remote_pane_term 110; rc=$?; set -e
+  [ "$rc" -eq 3 ]
+  [ "$HF_REMOTE_PANE_UNAVAIL_WHY" = refused-live ]
+  n="$(grep -c ' ls$' "$KLOG")"
+  [ "$n" -eq 3 ]
+}
+
+@test "A3 CONTROL: an ACCEPTING socket outranks a probe-unknown one in the park's name" {
+  # Two candidates: the operator-named one's probe bound fires, the listed one accepts.
+  mkdir -p "$SOCKDIR/other"; mksock "$SOCKDIR/other/kitty-1"
+  rm -f "$SOCKDIR/kitty-$KFAKE_KPID"; mklistener "$SOCKDIR/kitty-$KFAKE_KPID"
+  hf_bounded_s() { case "$*" in *"/other/kitty-1"*) return 124 ;; esac; shift; "$@"; }
+  export CC_TERM_KITTY_TO="unix:$SOCKDIR/other/kitty-1" KFAKE_KITTY_RC=1 CC_REMOTE_PANE_TERM_TRIES=1
+  set +e; hf_remote_pane_term 110; rc=$?; set -e
+  [ "$rc" -eq 3 ]
+  [ "$HF_REMOTE_PANE_UNAVAIL_WHY" = timeout ]
+  [ "$HF_REMOTE_PANE_UNAVAIL_SOCK" = "unix:$SOCKDIR/kitty-$KFAKE_KPID" ]
+}
+
+@test "A3 the two new park sub-states have their own wording, and neither says ABSENT" {
+  local w out
+  for w in probe-unknown refused-live; do
+    HF_REMOTE_PANE_UNAVAIL_WHY="$w" HF_REMOTE_PANE_UNAVAIL_SOCK="unix:/tmp/kitty-1" HF_REMOTE_PANE_UNAVAIL_TRIES=3
+    run hf_remote_pane_term_say 3 110 self-close
+    [ "$status" -eq 0 ]
+    out="$output"
+    case "$w" in
+      probe-unknown) [[ "$out" == *"REMOTE-PANE-RESOLVER-PROBE-UNKNOWN"* ]] || { echo "$out"; false; } ;;
+      refused-live)  [[ "$out" == *"REMOTE-PANE-RESOLVER-REFUSED-LIVE"* ]] || { echo "$out"; false; } ;;
+    esac
+    [[ "$out" == *"never conclude the pane is gone"* ]] || false
+    [[ "$out" != *"REMOTE-PANE-ABSENT"* ]] || false
+  done
 }
