@@ -44,6 +44,12 @@ setup() {
 [ -n "${STUB_SLEEP:-}" ] && sleep "$STUB_SLEEP"
 case "${1:-}" in
   --rank)
+    # STUB_RANK_SLEEP: only the first STUB_RANK_SLOW_CALLS (default all) --rank calls sleep; every
+    # call is counted in STUB_RANK_COUNTER, so a test can tell a retry from a single read.
+    if [ -n "${STUB_RANK_COUNTER:-}" ]; then
+      n=$(( $(cat "$STUB_RANK_COUNTER" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$STUB_RANK_COUNTER"
+      [ -n "${STUB_RANK_SLEEP:-}" ] && [ "$n" -le "${STUB_RANK_SLOW_CALLS:-99}" ] && sleep "$STUB_RANK_SLEEP"
+    fi
     [ -n "${STUB_RANK_RC:-}" ] && { echo "claude-accounts: rank probe failed" >&2; exit "$STUB_RANK_RC"; }
     [ -n "${STUB_RANK_GARBAGE:-}" ] && { printf '   \n<html>rate limited</html>\n'; exit 0; }
     i=0; for n in ${STUB_RANK-next next4 next3 next2}; do printf '%s 0.%06d\n' "$n" $((900-i)); i=$((i+1)); done
@@ -85,6 +91,9 @@ STUB
 
   export CC_WAVE_ACCOUNTS_BIN="$C/bin/claude-accounts" CC_WAVE_ROUTE_BIN="$C/bin/cc-route" \
          CC_WAVE_IDL="$C/idl.jsonl"
+  # The (1)-(6) cases measure the FIRST bounded read, so the rank retry is held under every stub
+  # sleep and the last-good file is off; section (9) unpins both, one variable per test.
+  export CC_WAVE_ORACLE_RETRY_TIMEOUT_S=1 CC_WAVE_RANK_LAST_GOOD=off
   IT1='[{"id":"a","slot":"lead"}]'
   # Resolved the same way the subject does — absolute paths only. Every bound-dependent test skips
   # LOUDLY rather than silently passing when no timeout(1) exists (a silent pass would be the
@@ -372,4 +381,87 @@ last_idl() { tail -1 "$CC_WAVE_IDL"; }
   export STUB_ROUTE_CLIFF=1
   run "$WP" --items "$IT1"
   [ "$status" -eq 4 ]
+}
+
+# ── (9) Rank retry + last good — a timeout under sustained load is not the pass's verdict ─────────
+# lr-sustained-load wave 5 (docs/research/lr-sustained-load-2026-10-20/REPORT.md §3.1): at 15-40
+# load per core the 20 s `--rank general` bound fired on every dispatcher pass and each one walled
+# unknown, so nothing fired for three days. RED against origin/main before the change (run with
+# CC_WAVE_PLAN_UNDER_TEST=<archived pre-change bin/cc-wave-plan>): 9a, 9b and 9d exit 6 there.
+
+rank_slow() { # <slow-calls> — the first N --rank calls sleep 3 s past a 1 s first bound
+  export STUB_RANK_COUNTER="$C/rank-calls" STUB_RANK_SLEEP=3 STUB_RANK_SLOW_CALLS="$1" \
+         CC_WAVE_ORACLE_TIMEOUT_S=1
+}
+last_good_at() { # <age-s> <rank lines…> — a last-good file written <age-s> seconds ago
+  local age="$1"; shift
+  { printf 'ts=%s\n' "$(( $(date +%s) - age ))"; printf '%s\n' "$@"; } > "$C/last-good"
+  export CC_WAVE_RANK_LAST_GOOD="$C/last-good"
+}
+
+@test "9a: a rank timeout is retried once under the larger bound, and the plan is placed" {
+  [ -n "$TMO" ] || skip "no absolute-path timeout(1) on this box — the bound cannot be exercised"
+  rank_slow 1
+  export CC_WAVE_ORACLE_RETRY_TIMEOUT_S=10
+  run "$WP" --items "$IT1" --json
+  [ "$status" -eq 0 ]
+  [ "$(cat "$C/rank-calls")" -eq 2 ]
+  echo "$output" | grep -v '^cc-wave-plan' | jq -e '.[0].account=="next"'
+  last_idl | jq -e 'select(.action=="fired" and (.detail|test("answered on retry")))'
+}
+
+@test "9b: both reads time out → a last-good answer inside the grace band is placed on" {
+  [ -n "$TMO" ] || skip "no absolute-path timeout(1) on this box — the bound cannot be exercised"
+  rank_slow 99
+  last_good_at 100 'acctZ 0.500000'
+  run "$WP" --items "$IT1" --json
+  [ "$status" -eq 0 ]
+  [ "$(cat "$C/rank-calls")" -eq 2 ]
+  printf '%s\n' "$output" | grep -q 'placing on the last good rank answer'
+  plan="$("$WP" --items "$IT1" --json 2>/dev/null)"
+  echo "$plan" | jq -e '.[0].account=="acctZ"'
+  last_idl | jq -e 'select(.action=="fired" and (.detail|test("rank: last-good [0-9]+s old")))'
+}
+
+@test "9c: a last-good answer older than the grace band is NOT used → still unknown (6)" {
+  [ -n "$TMO" ] || skip "no absolute-path timeout(1) on this box — the bound cannot be exercised"
+  rank_slow 99
+  last_good_at 700 'acctZ 0.500000'
+  run "$WP" --items "$IT1"
+  [ "$status" -eq 6 ]
+  last_idl | jq -e 'select(.verdict=="unknown" and .evidence.reason=="oracle-timeout"
+                           and .evidence.rank_source=="live" and .evidence.rank_retried==true)'
+}
+
+@test "9d: a live answer writes the last-good file, and a later double timeout reads it back" {
+  [ -n "$TMO" ] || skip "no absolute-path timeout(1) on this box — the bound cannot be exercised"
+  unset CC_WAVE_RANK_LAST_GOOD                        # the default path: beside the IDL
+  export STUB_RANK='acctQ acctR'
+  run "$WP" --items "$IT1"
+  [ "$status" -eq 0 ]
+  f="$(dirname "$CC_WAVE_IDL")/cc-wave-plan-rank.last-good"
+  head -1 "$f" | grep -Eq '^ts=[0-9]+$'
+  grep -q '^acctQ 0\.' "$f"
+  rank_slow 99
+  export STUB_RANK='acctX'
+  plan="$("$WP" --items "$IT1" --json 2>/dev/null)"
+  echo "$plan" | jq -e '.[0].account=="acctQ"'
+}
+
+@test "9e: the grace-band kill switch also turns off last-good reuse" {
+  [ -n "$TMO" ] || skip "no absolute-path timeout(1) on this box — the bound cannot be exercised"
+  rank_slow 99
+  last_good_at 10 'acctZ 0.500000'
+  export CC_WAVE_ORACLE_MAX_AGE_S=0
+  run "$WP" --items "$IT1"
+  [ "$status" -eq 6 ]
+}
+
+@test "9f: only a timeout is retried — a failing rank (rc 1) is read once and walls unknown" {
+  export STUB_RANK_COUNTER="$C/rank-calls" STUB_RANK_RC=1
+  last_good_at 10 'acctZ 0.500000'
+  run "$WP" --items "$IT1"
+  [ "$status" -eq 6 ]
+  [ "$(cat "$C/rank-calls")" -eq 1 ]
+  last_idl | jq -e 'select(.evidence.reason=="oracle-rc" and .evidence.rank_retried==false)'
 }

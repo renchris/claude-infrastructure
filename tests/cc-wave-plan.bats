@@ -115,6 +115,10 @@ STUB
 
   export CC_WAVE_ACCOUNTS_BIN="$C/bin/claude-accounts" CC_WAVE_ROUTE_BIN="$C/bin/cc-route" \
          CC_WAVE_IDL="$C/idl.jsonl"
+  # The rank retry (45 s by default) would outwait every stub sweep below, and a last-good file
+  # written by a test's first run would answer its later timeout. Both are pinned off-path here so
+  # C1-C6 keep measuring the FIRST bounded read; tests/cc-wave-plan-verdict.bats covers the retry.
+  export CC_WAVE_ORACLE_RETRY_TIMEOUT_S=1 CC_WAVE_RANK_LAST_GOOD=off
 
   # W2-B urgency fixtures. acctA ranks first and is BEHIND (needs 20%/d, burning 3%/d); acctB is
   # AHEAD (4 vs 9) and keeps the flat cap. With KMAX=8 and acctA charged 1, its allowance is

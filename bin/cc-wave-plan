@@ -58,12 +58,17 @@
 #     grace, default 600), and cc-route's inner `--route` inherits it via CC_ROUTE_ACCOUNTS_MAX_AGE.
 #     At all 83 measured oracle-timeout walls a sweep ≤488s old existed; the TTL-only read re-swept
 #     at background QoS instead, and the bound killed the sweep before it could write the cache.
+#   · RANK RETRY + LAST GOOD — a `--rank general` timeout is not the pass's verdict: it is retried
+#     ONCE under CC_WAVE_ORACLE_RETRY_TIMEOUT_S (default 45), and if that also times out the last
+#     good rank answer is placed on when it is no older than the grace band. Only then `unknown`.
 #
 # Exit: 0 = plan emitted · 2 = usage (bad/empty args) · 3 = config/parse-fail (LOUD, never a silent
 #       default) · 4 = capped | capacity · 5 = auth · 6 = unknown. One IDL record per invocation.
 # Env (tests): CC_WAVE_ACCOUNTS_BIN, CC_WAVE_ROUTE_BIN, CC_WAVE_MAX_PER_ACCT, CC_WAVE_FABLE_GUARD_MIN,
 #       CC_WAVE_IDL, CC_WAVE_ORACLE_TIMEOUT_S, CC_WAVE_TIMEOUT_BIN (set-but-empty ⇒ force "absent"),
 #       CC_WAVE_ORACLE_MAX_AGE_S (seconds; 0|off ⇒ the TTL-only argv verbatim; unset ⇒ cache_grace_s),
+#       CC_WAVE_ORACLE_RETRY_TIMEOUT_S (0|off ⇒ no retry), CC_WAVE_RANK_LAST_GOOD (path; off ⇒ none;
+#       unset ⇒ beside the IDL),
 #       CC_WAVE_VERDICT_LANE (v1 ⇒ the pre-v2 path verbatim: one exit 4, no evidence, no bound),
 #       CC_WAVE_MAX_PER_ACCT_URGENT (≤ CC_WAVE_MAX_PER_ACCT ⇒ urgency off, byte-identical plans),
 #       CLAUDE_ACCOUNTS_JSON (the SSOT accounts.json the router's KMAX is read from — the SAME env
@@ -90,6 +95,24 @@ IDL="${CC_WAVE_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 # revert. Everything new below is gated on it.
 VERDICT_LANE="${CC_WAVE_VERDICT_LANE:-v2}"
 ORACLE_TIMEOUT_S="${CC_WAVE_ORACLE_TIMEOUT_S:-20}"
+# ── THE RANK RETRY (lr-sustained-load wave 5, 2026-10-20) ─────────────────────────────────────────
+# Load on this box stays at 15-40 per core by design (docs/research/lr-sustained-load-2026-10-20/
+# REPORT.md §3.1), so a 20s `--rank general` timeout is a normal event, not a verdict. Treating it
+# as one ended every pass in WALL[unknown]: the dispatcher fired nothing from 2026-10-17 to 10-20
+# while admitting 8 a pass. The first bound stays 20s (a cache-served read finishes well inside
+# it); a timeout earns ONE retry under this bound, which covers a cold sweep. Sized from five timed
+# calls at priority 31, load1 ~225 (22/core), all cache-served: 6.33 4.74 8.09 2.10 3.37 s, p90
+# ≈ 8.1 s, ≈ 14.6 s scaled to 40/core; the cold sweep the rail lead timed at 20 s at load ~215
+# scales to ≈ 37 s at 40/core. 45 s covers that with margin and still fits a 300 s pass.
+ORACLE_RETRY_TIMEOUT_S="${CC_WAVE_ORACLE_RETRY_TIMEOUT_S:-45}"
+case "$ORACLE_RETRY_TIMEOUT_S" in off) ORACLE_RETRY_TIMEOUT_S=0 ;; esac
+# THE LAST GOOD RANK. If the retry times out too, the newest successful rank answer is used if it
+# is no older than the grace band (ORACLE_MAX_AGE_S): the same freshness the grace-band read
+# above already accepts from claude-accounts' cache, and every fire is still gated by
+# handoff-fire's own `--fresh --json` read. Line 1 is `ts=<epoch>`; the rest is the raw answer.
+# Default path beside the IDL, so a test that pins the IDL also pins this file.
+RANK_LAST_GOOD="${CC_WAVE_RANK_LAST_GOOD:-$(dirname "$IDL")/cc-wave-plan-rank.last-good}"
+[ "$RANK_LAST_GOOD" = off ] && RANK_LAST_GOOD=""
 
 # ── THE GRACE-BAND READ (C, 2026-09-11) ──────────────────────────────────────────────────────────
 # The bound above was never the defect, and it is deliberately NOT raised. Measured 2026-09-01..11:
@@ -172,14 +195,15 @@ oracle_stderr()  { { [ -n "$ORACLE_ERRF" ] && [ -s "$ORACLE_ERRF" ] && cat "$ORA
 # run_oracle <bin> <args…> — THE single external-call chokepoint (§7 A8: zero unwrapped
 # claude-accounts / cc-route call sites). stdout passes through VERBATIM so every existing parse is
 # byte-identical; stderr is teed to the evidence sink; the call is bounded. Returns the callee's rc
-# (124 = timeout(1) expiry). Lane v1 runs unwrapped, as it did before.
+# (124 = timeout(1) expiry). Lane v1 runs unwrapped, as it did before. ORACLE_BOUND_S, set on the
+# one rank retry only, overrides the bound for that call.
 run_oracle() {
   local bin="$1"; shift
   if [ "$VERDICT_LANE" = v1 ] || [ -z "$TIMEOUT_BIN" ]; then
     if [ -n "$ORACLE_ERRF" ]; then "$bin" "$@" 2>>"$ORACLE_ERRF"; else "$bin" "$@" 2>/dev/null; fi
   else
-    if [ -n "$ORACLE_ERRF" ]; then "$TIMEOUT_BIN" "$ORACLE_TIMEOUT_S" "$bin" "$@" 2>>"$ORACLE_ERRF"
-    else "$TIMEOUT_BIN" "$ORACLE_TIMEOUT_S" "$bin" "$@" 2>/dev/null; fi
+    if [ -n "$ORACLE_ERRF" ]; then "$TIMEOUT_BIN" "${ORACLE_BOUND_S:-$ORACLE_TIMEOUT_S}" "$bin" "$@" 2>>"$ORACLE_ERRF"
+    else "$TIMEOUT_BIN" "${ORACLE_BOUND_S:-$ORACLE_TIMEOUT_S}" "$bin" "$@" 2>/dev/null; fi
   fi
 }
 
@@ -265,9 +289,11 @@ wall_emit() {
          --argjson rc "$EV_ORACLE_RC" --argjson rrc "$RANK_RC" --argjson orc "$EV_ROUTE_RC" \
          --argjson rn "${#RANKED[@]}" --argjson accts "$EV_ACCOUNTS" \
          --argjson ma "${ORACLE_MAX_AGE_S:-null}" \
+         --arg rsrc "$RANK_SOURCE" --argjson rtry "$RANK_RETRIED" \
      '{ts:$ts, actor:$actor, action:"wall", verdict:$verdict, detail:$detail,
        evidence:{oracle_rc:$rc, rank_rc:$rrc, route_rc:$orc, ranked_n:$rn, accounts:$accts,
                  raw_excerpt:$raw, stderr_excerpt:$err, timeout_bin:$tb, oracle_max_age_s:$ma,
+                 rank_source:$rsrc, rank_retried:($rtry == 1),
                  reason:$reason, action:$act}}' \
      >> "$IDL" 2>/dev/null || true
   case "$verdict" in
@@ -351,12 +377,67 @@ window_mins_to_close() {
 RANKED=(); RCOUNTS=(); RLOAD=(); RCAP=()
 RANK_NONE=0; RANK_BAD=0
 load_ranks() {
-  local bin line name score
+  local bin
   bin="$(accounts_bin)"; [ -n "$bin" ] || fail_config "claude-accounts unavailable (cannot rank accounts)"
   # Captured (not piped from a process substitution) because the rc and the RAW text are both
   # EVIDENCE now: an empty ranked set means nothing until you know whether the oracle answered.
   # STRAND_FIRST=off: this ranking places a whole wave, and a promoted thin account is budgeted for one fire.
   RANK_RAW="$(CC_ROUTE_DISPATCH_STRAND_FIRST=off run_oracle "$bin" --rank general ${ORACLE_MAX_AGE_S:+--max-age "$ORACLE_MAX_AGE_S"})"; RANK_RC=$?
+  # A timeout is retried ONCE under the larger bound (RANK RETRY, top of file). Only a timeout:
+  # any other rc is an answer or a failure, and retrying it would only spend the pass.
+  if [ "$RANK_RC" -eq 124 ] && [ "$VERDICT_LANE" != v1 ] && [ -n "$TIMEOUT_BIN" ] \
+     && [ "$ORACLE_RETRY_TIMEOUT_S" != 0 ]; then
+    RANK_RETRIED=1
+    RANK_RAW="$(ORACLE_BOUND_S="$ORACLE_RETRY_TIMEOUT_S" CC_ROUTE_DISPATCH_STRAND_FIRST=off run_oracle "$bin" --rank general ${ORACLE_MAX_AGE_S:+--max-age "$ORACLE_MAX_AGE_S"})"; RANK_RC=$?
+  fi
+  parse_rank_raw
+  # Both bounded reads timed out: place on the last good answer if it is inside the grace band.
+  # RANK_RC stays 124 on purpose, so every record built later says the live read did not answer.
+  if [ "${#RANKED[@]}" -eq 0 ] && [ "$RANK_RC" -eq 124 ] && rank_last_good_read; then
+    RANK_NONE=0; RANK_BAD=0
+    parse_rank_raw
+  fi
+  [ "${#RANKED[@]}" -gt 0 ] || wall_no_headroom
+  [ "$RANK_SOURCE" = live ] && rank_last_good_write
+  return 0
+}
+
+RANK_RETRIED=0; RANK_SOURCE=live; RANK_LAST_GOOD_AGE=""
+rank_last_good_read() {
+  local f="$RANK_LAST_GOOD" first ts now
+  [ -n "$f" ] && [ -n "$ORACLE_MAX_AGE_S" ] && [ -s "$f" ] || return 1
+  IFS= read -r first < "$f" || return 1
+  ts="${first#ts=}"
+  case "$first" in ts=*) ;; *) return 1 ;; esac
+  case "$ts" in ''|*[!0-9]*) return 1 ;; esac
+  now="$(date +%s)"
+  [ "$now" -ge "$ts" ] && [ $((now - ts)) -le "$ORACLE_MAX_AGE_S" ] || return 1
+  RANK_RAW="$(sed 1d "$f" 2>/dev/null)" || return 1
+  RANK_SOURCE=last-good; RANK_LAST_GOOD_AGE=$((now - ts))
+  echo "cc-wave-plan: ⚠️  claude-accounts --rank general timed out at ${ORACLE_TIMEOUT_S}s and again at ${ORACLE_RETRY_TIMEOUT_S}s; placing on the last good rank answer (${RANK_LAST_GOOD_AGE}s old, grace ${ORACLE_MAX_AGE_S}s)." >&2
+  return 0
+}
+# Written only from a live answer that parsed to ≥1 account; tmp + mv so a reader never sees half.
+rank_last_good_write() {
+  local f="$RANK_LAST_GOOD" tmpf
+  [ -n "$f" ] && [ "$RANK_RC" -eq 0 ] || return 0
+  mkdir -p "$(dirname "$f")" 2>/dev/null || return 0
+  tmpf="$f.tmp.$$"
+  { printf 'ts=%s\n' "$(date +%s)"; printf '%s\n' "$RANK_RAW"; } > "$tmpf" 2>/dev/null \
+    && mv -f "$tmpf" "$f" 2>/dev/null || rm -f "$tmpf" 2>/dev/null
+  return 0
+}
+# rank_detail — the IDL clause for a plan whose rank was not the first bounded read's answer.
+rank_detail() {
+  if [ "$RANK_SOURCE" = last-good ]; then
+    printf '; rank: last-good %ss old (live read timed out at %ss and %ss)' "$RANK_LAST_GOOD_AGE" "$ORACLE_TIMEOUT_S" "$ORACLE_RETRY_TIMEOUT_S"
+  elif [ "$RANK_RETRIED" -eq 1 ]; then
+    printf '; rank: answered on retry (%ss bound after a %ss timeout)' "$ORACLE_RETRY_TIMEOUT_S" "$ORACLE_TIMEOUT_S"
+  fi
+}
+
+parse_rank_raw() {
+  local line name score
   # PARSE BY SHAPE, against the producer's literal contract: `--rank` emits
   # `f"{acct} {score:.6f}"` per routable account (claude-accounts:1699), and when NOTHING is
   # routable it prints the sentinel `none` on stdout and exits 2 (policy refused) or 3 (data
@@ -375,7 +456,7 @@ load_ranks() {
   done <<EOF
 $RANK_RAW
 EOF
-  [ "${#RANKED[@]}" -gt 0 ] || wall_no_headroom
+  return 0
 }
 
 # wall_no_headroom — the ranked set came back EMPTY. Which of the three states is that?
@@ -770,9 +851,9 @@ cmd_plan() {
   local urg_detail=""; urg_detail="$(urgency_line)" || urg_detail=""
   [ -n "$urg_detail" ] && urg_detail="; $urg_detail"
   if [ "$any_fb" -eq 1 ]; then
-    idl abstained "fable-straddle-fallback: frontier items → Opus (window guard ${GUARD_MIN}m); placed $n across $n_accts accounts$urg_detail"
+    idl abstained "fable-straddle-fallback: frontier items → Opus (window guard ${GUARD_MIN}m); placed $n across $n_accts accounts$urg_detail$(rank_detail)"
   else
-    idl fired "placed $n items across $n_accts accounts$urg_detail"
+    idl fired "placed $n items across $n_accts accounts$urg_detail$(rank_detail)"
   fi
 
   if [ "$as_json" -eq 1 ]; then
@@ -798,6 +879,10 @@ selftest() {
   # cleanup_oracle handler, leaking a stderr sink the moment selftest calls an oracle directly.
   trap 'cleanup_oracle; rm -rf "${tmp:-}"' EXIT
   export CC_WAVE_IDL="$tmp/idl.jsonl"
+  # Every check shares $tmp, so a last-good file written by one would answer another's timeout, and
+  # the retry would outwait the stubs' sleeps. Both are pinned here; tests/cc-wave-plan-verdict.bats
+  # exercises them, one fixture per test.
+  export CC_WAVE_ORACLE_RETRY_TIMEOUT_S="${CC_WAVE_ORACLE_RETRY_TIMEOUT_S:-1}" CC_WAVE_RANK_LAST_GOOD=off
   SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
   # accounts stub: --rank general (STUB_RANK space-list; set-but-empty = nobody has headroom) · --json
