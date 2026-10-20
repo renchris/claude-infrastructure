@@ -448,8 +448,10 @@ deaf_page() {
     l1="$("$SYSCTL" -n vm.loadavg 2>/dev/null | tr -d '{}' | awk '{ print $1 }')"
     lim="${CC_RESTORE_START_LOAD:-6}"
     per="$(awk -v l="$l1" -v n="$nc" 'BEGIN { if (l !~ /^[0-9.]+$/) print "?"; else printf "%.2f", l / n }')"
+    # Never "wait until load is under": at the standing 15-40 per core that wait has no end. The restore's
+    # own start gate (restore_start_gate) already waits, bounded by CC_RESTORE_GATE_MAX_S, then goes ahead.
     if [ "$per" != "?" ] && awk -v p="$per" -v g="$lim" 'BEGIN { exit !(p > g) }'; then
-      hold=" Load per core is $per, over the restore gate of $lim: do NOT restart yet, wait until it is under."
+      hold=" Load per core is $per, over the restore gate of $lim: restart anyway. The restore waits at most ${CC_RESTORE_GATE_MAX_S:-600} s per round (CC_RESTORE_GATE_MAX_S) for load to fall, then goes ahead, so waiting by hand gains nothing."
     fi
     # The SAME step, class and falsifier as handoff-fire.sh's stuck-kitty row, so one wedge is one row.
     [ -n "$BACKLOG" ] && "$BACKLOG" needs "restart kitty (control socket stuck: queue full)" --class needs-human \

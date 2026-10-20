@@ -1404,14 +1404,20 @@ deaf_fixture() { # <queued rows> <sample: peer|nopeer|broken>
   [ ! -e "$CC_KQ_SAMPLE_BIN.log" ]
 }
 
-@test "P5 deaf page: while load per core is over the restore gate it says to wait, never to restart now" {
+@test "P5 deaf page: while load per core is over the restore gate it names the bounded gate wait, never an unbounded hand wait" {
   deaf_fixture 128 nopeer
   export CC_SYSCTL_BIN="$BATS_TEST_TMPDIR/stub-sysctl"
   printf '#!/bin/bash\ncase "$*" in *hw.ncpu*) echo 2 ;; *vm.loadavg*) echo "{ 40.00 30.00 20.00 }" ;; esac\n' > "$CC_SYSCTL_BIN"
   chmod +x "$CC_SYSCTL_BIN"
+  export CC_RESTORE_GATE_MAX_S=120
   run /bin/bash "$SCRIPT"
   [ "$status" -eq 0 ]
-  grep -q 'Load per core is 20.00, over the restore gate of 6: do NOT restart yet' "$CC_NOTIFY_BIN.log"
+  grep -q 'Load per core is 20.00, over the restore gate of 6: restart anyway' "$CC_NOTIFY_BIN.log"
+  grep -q 'waits at most 120 s per round (CC_RESTORE_GATE_MAX_S)' "$CC_NOTIFY_BIN.log"
+  # the operator premise is load that never falls: no wording may send them to wait for it
+  grep -q -- "--restart-kitty --confirm $KP" "$CC_NOTIFY_BIN.log"
+  run grep -q 'do NOT restart\|wait until it is under' "$CC_NOTIFY_BIN.log"
+  [ "$status" -eq 1 ]
 }
 
 @test "P5 plan mode: restore-v2.plan makes a handled boot write the v2 plan once, launching nothing and touching no marker" {
