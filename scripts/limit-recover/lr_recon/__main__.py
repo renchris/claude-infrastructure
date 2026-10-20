@@ -121,6 +121,9 @@ class Ctx:
         self.pre_census: Dict[str, str] = {}
         self.place_misses: Dict[str, int] = {}
         self.band_paged = False  # band.py: one page per daemon process when below priority 31
+        # kept across passes so each pass re-reads only the project dirs that changed
+        # (transcript.ProjectsIndex): a fresh sweep was ~73,000 directory reads a pass
+        self.projects = transcript.ProjectsIndex()
 
 
 def _alive(pid: int, lstart: str) -> bool:
@@ -1647,9 +1650,10 @@ def _abstain(
 
 
 def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
-    # One projects/ sweep per store per pass serves every sid → transcript / .handed-off /
-    # .HANDOFF.json lookup (transcript.ProjectsIndex): a glob per lookup lstat'd every project dir.
-    with transcript.pass_index():
+    # One projects/ index serves every sid → transcript / .handed-off / .HANDOFF.json lookup
+    # (transcript.ProjectsIndex): a glob per lookup lstat'd every project dir. The daemon's index
+    # is kept across passes and refreshed incrementally; a ctx without one sweeps afresh.
+    with transcript.pass_index(getattr(ctx, "projects", None)):
         return _run_pass(ctx, force_observe)
 
 
@@ -1720,8 +1724,8 @@ def _run_pass(ctx: Ctx, force_observe: bool) -> Dict[str, Any]:
     step()
     _release_terminal(ctx)
     defects = _invariant(ctx, snap, now)
-    for rec in ctx.records.values():
-        store.save_record(paths, rec, now)
+    # one batch: a record whose content did not change is not rewritten (store.save_records)
+    store.save_records(paths, list(ctx.records.values()), now)
     act.reap_children()
     summary = {
         "mode": mode,

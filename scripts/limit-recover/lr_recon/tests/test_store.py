@@ -466,5 +466,99 @@ class Requests(Base):
         self.assertEqual([r.sid for r in S.list_requests(self.paths)], [SID2])
 
 
+class SaveRecords(Base):
+    """The pass's record batch: a record whose content did not change is not rewritten, and the
+    directory is fsynced once per batch, not once per record (freeze capture 2026-10-10)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        S._SAVED.clear()
+        self.addCleanup(S._SAVED.clear)
+        self.recs = [
+            T.Record(sid=SID, record_id="recon:c1:0f1e2d3c:1"),
+            T.Record(sid=SID2, record_id="recon:c1:11111111:1"),
+        ]
+        self.fsyncs: List[str] = []
+        real = S._fsync_dir
+
+        def spy(d: str) -> None:
+            self.fsyncs.append(d)
+            real(d)
+
+        S._fsync_dir = spy  # type: ignore[assignment]
+        self.addCleanup(setattr, S, "_fsync_dir", real)
+
+    def disk(self, sid: str) -> T.Record:
+        rec = S.load_record(self.paths, sid)
+        assert rec is not None
+        return rec
+
+    def test_first_batch_writes_all_with_one_directory_fsync(self) -> None:
+        self.assertEqual(S.save_records(self.paths, self.recs, now=100.0), 2)
+        self.assertEqual(self.fsyncs, [self.paths.sessions])
+        self.assertEqual(self.disk(SID2), self.recs[1])
+        self.assertEqual(
+            [n for n in os.listdir(self.paths.sessions) if n.startswith(".")], []
+        )
+
+    def test_unchanged_records_are_skipped_until_the_refresh(self) -> None:
+        S.save_records(self.paths, self.recs, now=100.0)
+        self.fsyncs.clear()
+        self.assertEqual(S.save_records(self.paths, self.recs, now=110.0), 0)
+        self.assertEqual(self.fsyncs, [])
+        self.assertEqual([r.updated_at for r in self.recs], [110.0, 110.0])
+        self.assertEqual(self.disk(SID).updated_at, 100.0)  # lags by under refresh_s
+        n = S.save_records(self.paths, self.recs, now=100.0 + S.RECORD_REFRESH_S)
+        self.assertEqual(n, 2)
+        self.assertEqual(self.disk(SID).updated_at, 100.0 + S.RECORD_REFRESH_S)
+
+    def test_a_changed_record_is_written_alone(self) -> None:
+        S.save_records(self.paths, self.recs, now=100.0)
+        self.recs[1].attempt = 3
+        self.assertEqual(S.save_records(self.paths, self.recs, now=105.0), 1)
+        self.assertEqual(self.disk(SID2).attempt, 3)
+        self.assertEqual(self.disk(SID).updated_at, 100.0)
+
+    def test_a_file_gone_from_disk_is_rewritten(self) -> None:
+        S.save_records(self.paths, self.recs, now=100.0)
+        S.quarantine(self.paths, S.record_path(self.paths, SID))
+        self.assertEqual(S.save_records(self.paths, self.recs, now=105.0), 1)
+        self.assertEqual(self.disk(SID), self.recs[0])
+
+    def test_a_single_save_in_between_forgets_the_memo(self) -> None:
+        """act.py saves one record mid-pass; if the pass then puts back the content the batch last
+        wrote, the batch must still overwrite the single save's file."""
+        S.save_records(self.paths, self.recs, now=100.0)
+        before = self.recs[0].attempt
+        self.recs[0].attempt = before + 7
+        S.save_record(self.paths, self.recs[0], now=101.0)
+        self.recs[0].attempt = before
+        self.assertEqual(S.save_records(self.paths, self.recs, now=102.0), 1)
+        self.assertEqual(self.disk(SID).attempt, before)
+
+    def test_a_failed_tmp_write_leaves_no_tmp_and_no_partial_rename(self) -> None:
+        S.save_records(self.paths, self.recs, now=100.0)
+        before = self.recs[0].attempt
+        for r in self.recs:
+            r.attempt = before + 9
+        real, calls = S._write_tmp, []
+
+        def boom(path: str, text: str) -> str:
+            calls.append(path)
+            if len(calls) == 2:
+                raise OSError(28, "No space left on device")
+            return real(path, text)
+
+        S._write_tmp = boom  # type: ignore[assignment]
+        self.addCleanup(setattr, S, "_write_tmp", real)
+        with self.assertRaises(OSError):
+            S.save_records(self.paths, self.recs, now=105.0)
+        # nothing is renamed before every tmp is ready
+        self.assertEqual(self.disk(SID).attempt, before)
+        self.assertEqual(
+            [n for n in os.listdir(self.paths.sessions) if n.startswith(".")], []
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

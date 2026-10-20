@@ -17,7 +17,7 @@ import os
 import sys
 import threading
 import time
-from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Set, Tuple
 
 from lr_recon import clock
 from lr_recon import types as T
@@ -51,41 +51,148 @@ def slug(cwd: str) -> str:
 
 INDEXED_SUFFIXES = (".jsonl", ".jsonl.handed-off", ".HANDOFF.json")
 SWEEP_STEP_DIRS = 256  # project dirs listed between two clock.step() calls
+# A kept index re-stats every project dir once per this many passes (a 1/N slice each pass), so a
+# file created where no rule below looks is still seen within N passes: the bounded full walk.
+ROLL_PASSES = 30
+
+
+def _stem(name: str) -> str:
+    """``<sid>`` of ``<sid><indexed suffix>``."""
+    for suf in INDEXED_SUFFIXES:
+        if name.endswith(suf):
+            return name[: -len(suf)]
+    return name
+
+
+class _Store:
+    """One physical projects/: what each project dir held at its last read, and that read's mtime."""
+
+    def __init__(self) -> None:
+        self.mtimes: Dict[
+            str, Optional[int]
+        ] = {}  # dir → st_mtime_ns at its read (None: unread)
+        self.held: Dict[str, Tuple[str, ...]] = {}  # dir → indexed names in it
+        self.names: Dict[str, Set[str]] = {}  # name → dirs holding it
+        self.unlisted: Set[str] = set()
+        self.top: Optional[int] = None  # projects/'s st_mtime_ns at its last listing
+        self.order: List[str] = []
+        self.cursor = 0
+        self.seen = -1  # the pass this store was last refreshed in
+        self.full = -1  # the pass every dir of this store was last re-checked in
 
 
 class ProjectsIndex:
-    """Every ``<cfg>/projects/*/<name>`` the reconciler asks about, from ONE sweep per store.
+    """Every ``<cfg>/projects/*/<name>`` the reconciler asks about, without a walk per lookup.
 
     A ``projects/*/<sid>.jsonl`` glob lists projects/ and then lstats one candidate in EVERY
     project dir. With ~18,300 dirs per store (one per worktree path ever opened) one such glob took
     3.32 s at load 600 and a pass made ~1,500 of them, so the live reconciler spent ~80 min a pass
-    in lstat (2026-10-19, pid 78642, heartbeat max_step_gap_s 1926). This lists each store once:
-    projects/, then each project dir, keeping only names with an indexed suffix, which is O(dirs)
-    directory reads per pass in place of O(lookups x dirs) lstats.
+    in lstat (2026-10-19, pid 78642, heartbeat max_step_gap_s 1926). The first pass lists each store
+    once: projects/, then each project dir, keeping only names with an indexed suffix.
+
+    That sweep alone was still ~73,000 directory reads a pass over four stores (2026-10-20, 10.6 s
+    at load 196 in the foreground, minutes in the daemon's background band), so the daemon keeps
+    the index across passes (``begin_pass``) and each later pass re-reads only a project dir whose
+    mtime moved, a create, unlink or rename in it being what moves it. At a store's first lookup in
+    a pass it stats: projects/ (a new or removed project dir relists it, and a new dir is read at
+    once); every dir a lookup of the previous or this pass touched, or the slug-direct path found a
+    transcript in (``touch``), which is where a live session's ``.handed-off`` or ``.HANDOFF.json``
+    appears; and a rolling 1/``ROLL_PASSES`` slice of all dirs, so a file appearing anywhere else (a
+    new transcript in an old dir under a cwd the census does not know) is seen within that many
+    passes. That last case is the one incremental rule that lags the full walk.
 
     It gives the glob's answer: ``*`` matches the same entries (no dot-names; directories, symlinks
     followed), a name matches iff it is listed (glob's ``lexists``, so a dangling symlink counts),
     paths are spelled with the caller's own cfg (callers split them on ``/projects/``), and hits
     come back sorted. Two cfgs over one physical projects/ (``.claude`` and ``.claude-next``) share
-    one sweep. A project dir that cannot be listed is lexists-probed per lookup, as glob would.
-    The listing is a snapshot taken at a store's first lookup in the pass; every hit is re-checked
-    with lexists before it is returned, so a file a mover took away since is never served, and one
-    created since is seen next pass."""
+    one store. A project dir that cannot be listed is lexists-probed per lookup, as glob would.
+    Every hit is re-checked with lexists before it is returned, so a file a mover took away since is
+    never served."""
 
     def __init__(
         self,
         scandir_fn: Callable[[str], Any] = os.scandir,
         lexists_fn: Callable[[str], bool] = os.path.lexists,
         step_fn: Optional[Callable[[], None]] = None,
+        stat_fn: Callable[[str], os.stat_result] = os.stat,
+        roll_passes: int = ROLL_PASSES,
     ) -> None:
         self._scandir = scandir_fn
         self._lexists = lexists_fn
         self._step = step_fn if step_fn is not None else clock.step
-        self._stores: Dict[str, Tuple[Dict[str, List[str]], List[str]]] = {}
+        self._stat = stat_fn
+        self._roll = max(1, roll_passes)
+        self._stores: Dict[str, _Store] = {}
+        self._keys: Dict[
+            str, str
+        ] = {}  # base → realpath, this pass (realpath lstats each part)
+        self._pass = 0
+        self._hot: Set[str] = set()  # project dir names touched last pass
+        self._touched: Set[str] = set()  # ... and this pass
+        self._reads = 0  # dir reads since the last step()
+        self._rechecked: Set[Tuple[str, str]] = (
+            set()
+        )  # (store, name) a recheck already answered
 
-    def _sweep(self, proj: str) -> Tuple[Dict[str, List[str]], List[str]]:
-        names: Dict[str, List[str]] = {}
-        unlisted: List[str] = []
+    def begin_pass(self) -> None:
+        self._pass += 1
+        self._keys = {}
+        self._hot, self._touched = self._touched, set()
+
+    def touch(self, project: str) -> None:
+        """Mark a project dir NAME (every store) for an mtime check at the next refresh."""
+        self._touched.add(project)
+
+    def _tick(self) -> None:
+        self._reads += 1
+        if self._reads % SWEEP_STEP_DIRS == 0:
+            self._step()
+
+    def _put(self, st: _Store, d: str, held: Tuple[str, ...]) -> None:
+        for n in st.held.get(d, ()):
+            s = st.names.get(n)
+            if s is not None:
+                s.discard(d)
+                if not s:
+                    del st.names[n]
+        st.held[d] = held
+        for n in held:
+            st.names.setdefault(n, set()).add(d)
+
+    def _drop(self, st: _Store, d: str) -> None:
+        self._put(st, d, ())
+        st.held.pop(d, None)
+        st.mtimes.pop(d, None)
+        st.unlisted.discard(d)
+
+    def _read(self, proj: str, st: _Store, d: str, mtime: Optional[int]) -> None:
+        """List one project dir; ``mtime`` was taken BEFORE the read, so a change racing the read
+        leaves a stale mtime and is re-read at the next check."""
+        try:
+            with self._scandir(os.path.join(proj, d)) as it:
+                held = tuple(e.name for e in it if e.name.endswith(INDEXED_SUFFIXES))
+        except OSError:
+            st.unlisted.add(d)
+            st.mtimes[d] = None
+            self._put(st, d, ())
+            return
+        st.unlisted.discard(d)
+        st.mtimes[d] = mtime
+        self._put(st, d, held)
+
+    def _check(self, proj: str, st: _Store, d: str) -> None:
+        self._tick()
+        try:
+            m: Optional[int] = self._stat(os.path.join(proj, d)).st_mtime_ns
+        except (FileNotFoundError, NotADirectoryError):
+            self._drop(st, d)
+            return
+        except OSError:
+            m = None
+        if m is None or m != st.mtimes.get(d):
+            self._read(proj, st, d, m)
+
+    def _list(self, proj: str) -> Optional[List[str]]:
         dirs: List[str] = []
         try:
             with self._scandir(proj) as it:
@@ -98,35 +205,96 @@ class ProjectsIndex:
                     except OSError:
                         continue
         except OSError:
-            return names, unlisted
-        for i, d in enumerate(dirs):
-            if i and i % SWEEP_STEP_DIRS == 0:
-                self._step()
-            try:
-                with self._scandir(os.path.join(proj, d)) as it:
-                    for e in it:
-                        if e.name.endswith(INDEXED_SUFFIXES):
-                            names.setdefault(e.name, []).append(d)
-            except OSError:
-                unlisted.append(d)
+            return None
+        return dirs
+
+    def _refresh(self, proj: str, st: _Store) -> None:
+        if st.seen == self._pass:
+            return
+        st.seen = self._pass
+        self._reads = 0
+        try:
+            top: Optional[int] = self._stat(proj).st_mtime_ns
+        except OSError:
+            top = None
+        fresh: Set[str] = set()
+        if top is None or top != st.top:
+            listing = self._list(proj)
+            if listing is None and top is None:  # no store here (any more)
+                for d in list(st.mtimes):
+                    self._drop(st, d)
+                st.order, st.top = [], None
+            elif listing is None:
+                pass  # a listing that failed on a store that is there: kept, retried next pass
+            else:
+                st.top = top
+                now_in = set(listing)
+                for d in [d for d in st.mtimes if d not in now_in]:
+                    self._drop(st, d)
+                for d in listing:
+                    if d not in st.mtimes:
+                        fresh.add(d)
+                        self._check(proj, st, d)
+                st.order = listing
+                st.cursor %= max(1, len(listing))
+        visit = [d for d in self._hot | self._touched if d in st.mtimes]
+        n = len(st.order)
+        k = -(-n // self._roll) if n else 0
+        visit += [st.order[(st.cursor + j) % n] for j in range(k)]
+        st.cursor = (st.cursor + k) % n if n else 0
+        for d in visit:
+            if d in st.mtimes and d not in fresh:
+                fresh.add(d)
+                self._check(proj, st, d)
         self._step()
-        return names, unlisted
+
+    def _store(self, cfg: str) -> Tuple[str, str, _Store]:
+        base = os.path.join(cfg, "projects")
+        key = self._keys.get(base)
+        if key is None:
+            key = self._keys[base] = os.path.realpath(base)
+        st = self._stores.get(key)
+        if st is None:
+            st = self._stores[key] = _Store()
+        self._refresh(key, st)
+        return base, key, st
+
+    def recheck(self, cfg: str, name: str) -> List[str]:
+        """``find`` after an mtime check of EVERY dir in the store, done the first time a name is
+        asked for this way and at most once per store per pass. For a live session's transcript the
+        slug-direct path missed: the one case where the rolling slice could leave a session the full
+        walk would catch without a transcript for up to ROLL_PASSES passes. A warm session that has
+        not written one yet is asked about every pass, hence once per name."""
+        if not name.endswith(INDEXED_SUFFIXES) or os.sep in name:
+            return self.find(cfg, name)
+        _, key, st = self._store(cfg)
+        if (key, name) not in self._rechecked:
+            self._rechecked.add((key, name))
+            if st.full != self._pass:
+                st.full = self._pass
+                self._reads = 0
+                for d in list(st.order):
+                    if d in st.mtimes:
+                        self._check(key, st, d)
+                self._step()
+        return self.find(cfg, name)
 
     def find(self, cfg: str, name: str) -> List[str]:
         """Sorted ``<cfg>/projects/*/<name>`` paths that exist (lexists), spelled with ``cfg``."""
-        base = os.path.join(cfg, "projects")
         if not name.endswith(INDEXED_SUFFIXES) or os.sep in name:
             return sorted(
                 glob.glob(os.path.join(glob.escape(cfg), "projects", "*", name))
             )
-        key = os.path.realpath(base)
-        got = self._stores.get(key)
-        if got is None:
-            got = self._stores[key] = self._sweep(key)
-        names, unlisted = got
-        cands = [os.path.join(base, d, name) for d in names.get(name, [])]
-        cands += [os.path.join(base, d, name) for d in unlisted]
-        return sorted(p for p in cands if self._lexists(p))
+        base, key, st = self._store(cfg)
+        stem = _stem(name)
+        for suf in (
+            INDEXED_SUFFIXES
+        ):  # where any file of this sid lives: its next one lands there
+            self._touched.update(st.names.get(stem + suf, ()))
+        dirs = st.names.get(name, set()) | st.unlisted
+        return sorted(
+            p for p in (os.path.join(base, d, name) for d in dirs) if self._lexists(p)
+        )
 
 
 _ACTIVE: Optional[Tuple[ProjectsIndex, int]] = (
@@ -136,10 +304,12 @@ _ACTIVE: Optional[Tuple[ProjectsIndex, int]] = (
 
 @contextlib.contextmanager
 def pass_index(index: Optional[ProjectsIndex] = None) -> Iterator[ProjectsIndex]:
-    """Serve ``in_projects`` on this thread from one index for the block's duration (one pass)."""
+    """Serve ``in_projects`` on this thread from one index for the block's duration (one pass). A
+    kept index (the daemon's, across passes) refreshes incrementally; a fresh one sweeps."""
     global _ACTIVE
     prev = _ACTIVE
     idx = index if index is not None else ProjectsIndex()
+    idx.begin_pass()
     _ACTIVE = (idx, threading.get_ident())
     try:
         yield idx
@@ -166,6 +336,11 @@ def find_transcript(cfg_dirs: Sequence[str], cwd: str, sid: str) -> Optional[str
         for cfg in cfg_dirs:
             p = os.path.join(cfg, "projects", slug(cwd), sid + ".jsonl")
             if os.path.isfile(p):
+                active = _ACTIVE
+                if active is not None and active[1] == threading.get_ident():
+                    active[0].touch(
+                        slug(cwd)
+                    )  # its .handed-off / .HANDOFF.json land here
                 return p
     for cfg in cfg_dirs:
         hits = in_projects(cfg, sid + ".jsonl")
@@ -357,6 +532,12 @@ def observe_transcript(path: str, now: Optional[float] = None) -> T.TranscriptOb
 def observe(cfg: str, cwd: str, sid: str) -> T.TranscriptObs:
     """The injected seam observe.py and main use; empty when no transcript is found."""
     path = find_transcript([cfg], cwd, sid)
+    active = _ACTIVE
+    if not path and cfg and active is not None and active[1] == threading.get_ident():
+        hits = active[0].recheck(
+            cfg, sid + ".jsonl"
+        )  # never lag the full walk on a live session
+        path = hits[0] if hits else None
     return observe_transcript(path) if path else T.TranscriptObs()
 
 

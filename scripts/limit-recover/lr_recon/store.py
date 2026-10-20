@@ -128,7 +128,65 @@ def load_record(paths: T.Paths, sid: str) -> Optional[T.Record]:
 
 def save_record(paths: T.Paths, rec: T.Record, now: Optional[float] = None) -> None:
     rec.updated_at = time.time() if now is None else now
-    atomic_write_json(record_path(paths, rec.sid), T.to_dict(rec))
+    path = record_path(paths, rec.sid)
+    _SAVED.pop(path, None)  # the batch's memo of this file is no longer what is on disk
+    atomic_write_json(path, T.to_dict(rec))
+
+
+# A record whose only change since the batch last wrote it is ``updated_at`` is rewritten at most
+# once per RECORD_REFRESH_S, so the on-disk ``updated_at`` lags the in-memory one by at most that.
+# Every record was rewritten every pass (tmp + fsync + rename + dir fsync, ~140 records), which the
+# 2026-10-10 freeze capture caught as rename/open/fsync/write under load.
+RECORD_REFRESH_S = 60.0
+# path → (its content without updated_at, when the batch wrote it)
+_SAVED: Dict[str, Tuple[str, float]] = {}
+
+
+def save_records(
+    paths: T.Paths,
+    recs: List[T.Record],
+    now: Optional[float] = None,
+    refresh_s: float = RECORD_REFRESH_S,
+) -> int:
+    """``save_record`` for a pass's records as one batch: each changed record is written to an
+    fsynced tmp, then all are renamed and the directory is fsynced ONCE. A record whose content
+    (``updated_at`` aside) is what this batch last wrote, whose file is still listed, and which was
+    written under ``refresh_s`` ago is skipped. Every record's in-memory ``updated_at`` is ``now``.
+    Returns how many files were written; on a failure every tmp not yet renamed is removed."""
+    t = time.time() if now is None else now
+    try:
+        present = set(os.listdir(paths.sessions))
+    except OSError:
+        present = set()
+    todo: List[Tuple[str, str, str]] = []  # (tmp, path, memo)
+    written = 0
+    try:
+        for rec in recs:
+            rec.updated_at = t
+            data = T.to_dict(rec)
+            path = record_path(paths, rec.sid)
+            memo = dumps({k: v for k, v in data.items() if k != "updated_at"})
+            last = _SAVED.get(path)
+            if (
+                last is not None
+                and last[0] == memo
+                and 0 <= t - last[1] < refresh_s
+                and os.path.basename(path) in present
+            ):
+                continue
+            todo.append((_write_tmp(path, dumps(data) + "\n"), path, memo))
+        while todo:
+            tmp, path, memo = todo[0]
+            os.replace(tmp, path)
+            todo.pop(0)
+            _SAVED[path] = (memo, t)
+            written += 1
+    finally:
+        for tmp, _, _ in todo:
+            _unlink(tmp)
+        if written:
+            _fsync_dir(paths.sessions)
+    return written
 
 
 def quarantine(paths: T.Paths, path: str, now: Optional[float] = None) -> str:
@@ -464,7 +522,9 @@ def lock_release(dirpath: str, record_id: str) -> bool:
     return True
 
 
-PROC_LSTART_TIMEOUT_S = 40.0  # observe.PS_BOUND_MAX_S: one ps call at 10+ runnable threads per cpu
+PROC_LSTART_TIMEOUT_S = (
+    40.0  # observe.PS_BOUND_MAX_S: one ps call at 10+ runnable threads per cpu
+)
 
 
 def proc_lstart(pid: int, run: Callable[..., Any] = run_bounded) -> str:
