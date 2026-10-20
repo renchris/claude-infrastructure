@@ -28,6 +28,11 @@ setup() {
   printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/pages.log"\n' "$BATS_TEST_TMPDIR" > "$LR_PAGE_BIN"
   chmod +x "$LR_PAGE_BIN"
   unset LR_RECORD_ID CC_RECYCLE_CLAIM_CHECK
+  # handoff-fire's seams, pinned though only its claim check runs here (test-hermeticity-lint)
+  export CC_FIRE_CAPACITY_GATE=off
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/sweep-stamp.json"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/absent-claude-accounts"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-lock-"
   # test_main's world: one limited session on pane 5:7, this sid
   export SID="abcdef01-0000-0000-0000-000000000001" RID="recon:next3-7d-1:abcdef01:1"
   export GO="$BATS_TEST_TMPDIR/go" VERDICT="$BATS_TEST_TMPDIR/verdict"
