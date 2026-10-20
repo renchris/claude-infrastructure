@@ -107,6 +107,20 @@ sums() { for f in "$HOME"/.claude/settings.json "$HOME"/.claude-*/settings.json;
   [ "$(sums)" = "$before" ]
 }
 
+@test "the REAL 0066 is held (manual), and --verify names it HELD yet exits 0 when every other step is live" {
+  cp "$REAL/migrations/0066-hook-if-filters.sh" "$FX/migrations/"
+  run batch --list
+  [[ "$output" == *"held    0066-hook-if-filters — manual"* ]] || { echo "$output"; false; }
+  # Every runnable fixture step gone: what is left is live (0054), held (0052, 0053, 0066) or dropped.
+  for n in 0037-settings-parity 0050-add-key 0060-prepend-other 0024-unit-gate-registration; do
+    rm "$FX/migrations/$n.sh" "$CC_MIGRATIONS_STATE/staged/$n.json"
+  done
+  run batch --verify
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"HELD      0066-hook-if-filters"* ]] || false
+  [[ "$output" == *"VERIFIED"* ]] || false
+}
+
 @test "a decision hold opens only once its packet is actioned" {
   printf '#!/bin/bash\necho %s\n' "'[{\"id\":\"abc123def456\",\"status\":\"actioned\"}]'" > "$CC_DECIDE_BIN"
   run batch --list

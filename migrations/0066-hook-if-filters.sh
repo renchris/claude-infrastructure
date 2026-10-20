@@ -4,6 +4,7 @@
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0066-hook-if-filters.sh --confirm settings.json
 # migration-verify: bash "${CC_MIGRATION_REPO:-$HOME/Development/claude-infrastructure}/migrations/0066-hook-if-filters.sh" --verify
 # migration-conflict: bash "${CC_MIGRATION_REPO:-$HOME/Development/claude-infrastructure}/migrations/0066-hook-if-filters.sh" --conflict
+# migration-batch-hold: manual — its --confirm starts a live logged-in claude probe the scratch rehearsal cannot sandbox; run its migration-run line alone from a logged-in pane
 #
 # ══ 0066 — hook `if` filters (load root cause X18, 2026-10-17) ══
 # 1. pr-gate.sh (PreToolUse Bash) acts only on `gh pr create` / `gh pr edit`, yet starts a bash on
@@ -26,6 +27,9 @@
 # probed command (gh pr create among them) ever executes. It then requires every pattern to fire on
 # its spellings, no `if` logger to fire on `ls`, and the no-`if` logger to have seen every command
 # (a command the model never ran is an UNKNOWN, which fails closed). The matrix is printed either way.
+# A run that proves nothing is BLIND (rc 3), never a FAIL of the binary: an empty fired.log, a child
+# that hit its 240 s bound (rc 124), "Not logged in", or any command the no-`if` logger never saw.
+# The c10 batch's scratch HOME has no login, which is why 0066 is held out of the batch (above).
 #
 # BLAST RADIUS: three hook entries in one file; nothing else changes (verified by content after the
 # edit). A pr-gate or relay-verbatim entry that already carries an `if` outside this set, or only part
@@ -35,8 +39,8 @@
 # Usage: bash migrations/0066-hook-if-filters.sh --dry-run | --check | --verify | --conflict | --probe
 #        bash migrations/0066-hook-if-filters.sh --confirm settings.json
 # Exit: 0 applied / already applied / preflight ok / probe passed · 1 failure or probe failed (nothing
-#       written) · 2 usage · 3 REFUSED: an account settings.json is forked (run 0037 first) or a
-#       different `if` is already set
+#       written) · 2 usage · 3 REFUSED: an account settings.json is forked (run 0037 first), a
+#       different `if` is already set, or the probe was BLIND (nothing written)
 # shellcheck disable=SC2016  # every single-quoted string below is a jq program; $x are jq variables
 set -uo pipefail
 
@@ -117,17 +121,30 @@ DENY
   for i in "${!PROBE_CMDS[@]}"; do prompt="$prompt
 $((i + 1)). ${PROBE_CMDS[$i]}"; done
   printf '%s: probe: %s in %s (all Bash calls are denied by a probe hook)\n' "$N" "$("$bin" --version 2>/dev/null | head -1)" "$s"
-  ( cd "$s" && "$bin" -p --setting-sources project --settings "$s/probe-settings.json" \
-      --allowedTools Bash --max-turns 30 "$prompt" ) > "$s/claude.out" 2>&1 || :
+  # The child is bounded (240 s), detached from any calling session (an inherited CLAUDECODE or
+  # CLAUDE_CODE_SESSION_ID binds it to the caller), and runs on the CALLER's account: CLAUDE_CONFIG_DIR
+  # is inherited as-is, never pinned to one account dir.
+  local rc=0 blind=""
+  ( cd "$s" && env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID timeout 240 "$bin" -p --setting-sources project \
+      --settings "$s/probe-settings.json" --allowedTools Bash --max-turns 30 "$prompt" ) > "$s/claude.out" 2>&1 || rc=$?
   : >> "$s/fired.log"
   _fired() { grep -qxF -- "$1	$2" "$s/fired.log"; }   # <label> <command> → it ran that hook
   printf '%-12s %s\n' "spelling" "fired (no-if logger first)"
   for i in "${!PROBE_CMDS[@]}"; do
     c="${PROBE_CMDS[$i]}"; fired=""
-    _fired noif "$c" && fired="noif" || { fired="NOT-RUN"; ok=1; }
+    _fired noif "$c" && fired="noif" || { fired="NOT-RUN"; blind="${blind:+$blind; }cmd $((i + 1)) never ran"; }
     while IFS=$'\t' read -r label pat need; do _fired "$label" "$c" && fired="$fired $label"; done <<< "$PROBE_ROWS"
     printf '%-12s %s   ← %s\n' "cmd $((i + 1))" "$fired" "$c"
   done
+  # BLIND (rc 3): the run proves nothing about `if`, so it is neither a pass nor a FAIL of the binary.
+  [ -s "$s/fired.log" ] || blind="no hook fired at all (empty fired.log)"
+  [ "$rc" -eq 124 ] && blind="${blind:+$blind; }the child hit its 240 s bound (rc 124)"
+  grep -q 'Not logged in' "$s/claude.out" 2>/dev/null && blind="${blind:+$blind; }claude is not logged in"
+  if [ -n "$blind" ]; then
+    printf '%s: probe BLIND — %s; nothing about `if` was proven. Transcript: %s/claude.out\n' "$N" "$blind" "$s" >&2
+    return 3
+  fi
+  # FAIL (rc 1) only for a command that RAN and whose `if` did not fire, or an `if` that fired on ls.
   while IFS=$'\t' read -r label pat need; do
     for i in $need; do
       _fired "$label" "${PROBE_CMDS[$((i - 1))]}" \
@@ -206,7 +223,12 @@ case "$mode" in
   check) printf '%s: preflight ok — accounts share one file, the edit is well-formed; nothing written\n' "$N"; exit 0 ;;
 esac
 
-probe || { printf '%s: REFUSED — the `if` probe did not pass on this binary; nothing written\n' "$N" >&2; exit 1; }
+probe; prc=$?
+case "$prc" in
+  0) ;;
+  3) printf '%s: REFUSED — BLIND, nothing written (the probe ran nothing it could judge; run it from a logged-in pane)\n' "$N" >&2; exit 3 ;;
+  *) printf '%s: REFUSED — the `if` probe did not pass on this binary; nothing written\n' "$N" >&2; exit 1 ;;
+esac
 
 bdir="$HOME/.claude/backups/hook-if-filters-$N-$(date +%Y%m%d%H%M%S)"
 mkdir -p "$bdir" && cp -p "$real" "$bdir/settings.json" || { printf '%s: backup FAILED — nothing written\n' "$N" >&2; exit 1; }

@@ -19,6 +19,8 @@ setup() {
   M="$REPO_ROOT/migrations/0066-hook-if-filters.sh"
   export HOME="$BATS_TEST_TMPDIR/home"
   export TMPDIR="$BATS_TEST_TMPDIR/tmp/"
+  # claude-accounts' pane state defaults to an absolute /tmp path that a fixtured $HOME does not move.
+  export CC_PANE_DIR="$BATS_TEST_TMPDIR/claude-accounts-pane"
   mkdir -p "$HOME/.claude" "$TMPDIR" "$BATS_TEST_TMPDIR/bin"
   S="$HOME/.claude/settings.json"
   jq -n '{env: {MCP_TIMEOUT: "30000"}, hooks: {
@@ -38,19 +40,24 @@ setup() {
   stub_claude good
 }
 
-# stub_claude <good|skip-bash-c|ls-fires|never-runs>: a claude that "runs" each numbered command of
-# the prompt and logs the hooks a real run would start, matching each `if` as a glob.
+# stub_claude <good|skip-bash-c|ls-fires|never-runs|not-logged-in|partial|timeout>: a claude that
+# "runs" each numbered command of the prompt and logs the hooks a real run would start, matching each
+# `if` as a glob. not-logged-in prints the real refusal and runs nothing; partial runs only commands
+# 1-5; timeout runs everything and then exits 124, as `timeout 240` reports a killed child.
 stub_claude() {
   # shellcheck disable=SC2016  # the stub's own variables expand when the stub runs
   printf '%s\n' '#!/bin/bash' \
     'echo "$*" >> "'"$BATS_TEST_TMPDIR"'/claude-calls"' \
+    'echo "CLAUDECODE=${CLAUDECODE:-unset} SID=${CLAUDE_CODE_SESSION_ID:-unset} CFG=${CLAUDE_CONFIG_DIR:-unset}" >> "'"$BATS_TEST_TMPDIR"'/claude-env"' \
     '[ "${1:-}" = --version ] && { echo "9.9.9 (stub)"; exit 0; }' \
     'set_file=""; prompt=""; while [ $# -gt 0 ]; do case "$1" in --settings) set_file="$2"; shift 2 ;; *) prompt="$1"; shift ;; esac; done' \
     'mode="'"$1"'"; [ "$mode" = never-runs ] && exit 0' \
-    'log="${set_file%/*}/fired.log"' \
+    '[ "$mode" = not-logged-in ] && { echo "Not logged in · Please run /login"; exit 1; }' \
+    'log="${set_file%/*}/fired.log"; n=0' \
     'rows="$(jq -r ".hooks.PreToolUse[0].hooks[] | select(.[\"if\"] != null) | [(.command | split(\" \") | last), .[\"if\"]] | @tsv" "$set_file")"' \
     'while IFS= read -r line; do' \
     '  case "$line" in [0-9]*". "*) cmd="${line#*. }" ;; *) continue ;; esac' \
+    '  n=$((n + 1)); [ "$mode" = partial ] && [ "$n" -gt 5 ] && break' \
     '  printf "noif\t%s\n" "$cmd" >> "$log"' \
     '  while IFS=$'"'\\t'"' read -r label pat; do' \
     '    glob="${pat#Bash(}"; glob="${glob%)}"' \
@@ -59,6 +66,7 @@ stub_claude() {
     '    if [[ $cmd == $glob ]] || { [ "$mode" = ls-fires ] && [ "$cmd" = ls ] && [ "$label" = pr-create ]; }; then printf "%s\t%s\n" "$label" "$cmd" >> "$log"; fi' \
     '  done <<< "$rows"' \
     'done <<< "$prompt"' \
+    '[ "$mode" = timeout ] && exit 124; exit 0' \
     > "$BATS_TEST_TMPDIR/bin/claude"
   chmod +x "$BATS_TEST_TMPDIR/bin/claude"
   export CC_IF_PROBE_CLAUDE="$BATS_TEST_TMPDIR/bin/claude"
@@ -140,16 +148,47 @@ rest() { jq -c '.hooks.PreToolUse |= map(.hooks |= map(select(.command | test("p
   [ "$(ifs PreToolUse 'pr-gate')" = '["Bash(*gh pr create*)","Bash(*gh pr edit*)"]' ]
 }
 
-@test "8: a probe that misses bash -c, fires on ls, or never runs makes --confirm refuse and write nothing" {
+@test "8: FAIL (rc 1) — a probe that ran but misses bash -c or fires on ls makes --confirm refuse and write nothing" {
   sum="$(shasum "$S")"
-  for mode in skip-bash-c ls-fires never-runs; do
+  for mode in skip-bash-c ls-fires; do
     stub_claude "$mode"
     run bash "$M" --confirm settings.json
     [ "$status" -eq 1 ] || { echo "$mode: rc $status"; echo "$output"; false; }
     [[ "$output" == *"probe did not pass"* ]] || { echo "$mode"; echo "$output"; false; }
+    [[ "$output" != *"BLIND"* ]] || { echo "$mode"; echo "$output"; false; }
     [ "$(shasum "$S")" = "$sum" ]
   done
   [ ! -d "$HOME/.claude/backups" ]
+}
+
+@test "8b: BLIND (rc 3) — empty log, not logged in, rc 124 and a partial run prove nothing; --confirm writes nothing" {
+  sum="$(shasum "$S")"
+  for mode in never-runs not-logged-in timeout partial; do
+    stub_claude "$mode"
+    run bash "$M" --confirm settings.json
+    [ "$status" -eq 3 ] || { echo "$mode: rc $status"; echo "$output"; false; }
+    [[ "$output" == *"probe BLIND"* ]] || { echo "$mode"; echo "$output"; false; }
+    [[ "$output" == *"REFUSED — BLIND, nothing written"* ]] || { echo "$mode"; echo "$output"; false; }
+    [ "$(shasum "$S")" = "$sum" ]
+  done
+  [ ! -d "$HOME/.claude/backups" ]
+}
+
+@test "8c: each BLIND cause is named, and --probe alone passes rc 3 through" {
+  stub_claude never-runs;    run bash "$M" --probe; [ "$status" -eq 3 ]; [[ "$output" == *"empty fired.log"* ]] || false
+  stub_claude not-logged-in; run bash "$M" --probe; [ "$status" -eq 3 ]; [[ "$output" == *"not logged in"* ]] || false
+  stub_claude timeout;       run bash "$M" --probe; [ "$status" -eq 3 ]; [[ "$output" == *"rc 124"* ]] || false
+  stub_claude partial;       run bash "$M" --probe; [ "$status" -eq 3 ]; [[ "$output" == *"cmd 6 never ran"* ]] || false
+}
+
+@test "8d: the probe child runs without the caller's session vars and on the caller's CLAUDE_CONFIG_DIR" {
+  run env CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=parent-sid CLAUDE_CONFIG_DIR="$HOME/.claude-acct" bash "$M" --probe
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -q "CLAUDECODE=unset SID=unset CFG=$HOME/.claude-acct" "$BATS_TEST_TMPDIR/claude-env"
+}
+
+@test "8e: 0066 is held out of the c10 batch as manual" {
+  [[ "$(header batch-hold)" == "manual — "* ]] || false
 }
 
 @test "9: --probe alone prints the matrix and passes on a correct binary" {
