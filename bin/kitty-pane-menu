@@ -278,7 +278,9 @@ def equalize_tab_of(wid: int) -> None:
     inherit: this script runs as a `launch --type=background` child, and kitty hands those an
     EMPTY KITTY_WINDOW_ID (measured the same day), so an inherited value would mean "no window".
     It also does not move focus, which is what keeps a move to a window on another macOS Space
-    from dragging the operator across Spaces — a `focus-window` first would.
+    from dragging the operator across Spaces — a `focus-window` first would. The one exception is
+    a move that empties its source window: follow_moved_pane() focuses the pane AFTER the source has
+    closed, because the guard's exit from fullscreen already took the operator to the desktop.
     """
     cmd = ["kitty", "@"]
     if ADDRESS:
@@ -983,6 +985,56 @@ def refocus() -> None:
         pass
 
 
+FOLLOW_WAIT_S = 2.0
+
+
+def _cg_window_present(pwid: object) -> bool | None:
+    """Is platform window PWID still in the window server's list? None = could not tell."""
+    if not isinstance(pwid, int) or isinstance(pwid, bool) or pwid <= 0:
+        return None
+    try:
+        import ctypes as c
+        cg = c.CDLL("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+        cf = c.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+        cg.CGWindowListCopyWindowInfo.restype = c.c_void_p
+        cg.CGWindowListCopyWindowInfo.argtypes = [c.c_uint32, c.c_uint32]
+        cf.CFArrayGetCount.restype = c.c_long
+        cf.CFArrayGetCount.argtypes = [c.c_void_p]
+        cf.CFRelease.argtypes = [c.c_void_p]
+        info = cg.CGWindowListCopyWindowInfo(1 << 3, pwid)  # kCGWindowListOptionIncludingWindow
+        if not info:
+            return None
+        try:
+            return cf.CFArrayGetCount(info) > 0
+        finally:
+            cf.CFRelease(info)
+    except Exception:
+        return None
+
+
+def follow_moved_pane(wid: int, src_osw: object, src_pwid: object) -> bool:
+    """After a move that EMPTIED its source OS window, take the operator to the pane.
+
+    The guard had to toggle that window out of fullscreen first, and macOS moved the window AND the
+    display to the regular desktop; once the emptied window closes, nothing else takes the operator
+    on, so they were left on the desktop (16 of 20 last-pane moves,
+    docs/research/kitty-lastpane-move-2026-10-19/README.md § 1a). Only then — the source gone from
+    a fresh `kitty @ ls` AND from the window server's list, so this can never run before or during
+    the close the guard protects — focus the moved pane, which switches to its Space. A source that
+    is still there (it was not emptied, or is still closing) is not followed: today's no-focus
+    behavior stands. → True when the focus was sent and kitty accepted it."""
+    deadline = time.monotonic() + FOLLOW_WAIT_S
+    while True:
+        tree = load()
+        kitty_gone = bool(tree) and not any(o.get("id") == src_osw for o in tree)
+        cg_gone = _cg_window_present(src_pwid) is False
+        if kitty_gone and cg_gone:
+            return kitty("focus-window", "--match", f"id:{wid}").returncode == 0
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.1)
+
+
 GUARD_VERDICTS = {0: "safe", 1: "then-failed", 2: "usage", 3: "refused", 4: "window-not-found",
                   127: "guard-unavailable"}
 
@@ -1144,6 +1196,7 @@ def main() -> int:
     log_row("kitty-pane-menu", "intent", choice=choice, wid=wid, os_window_id=self_osw,
             platform_window_id=(own or {}).get("platform_window_id"),
             panes=sum(len(t.get("windows", [])) for t in (own or {}).get("tabs", [])) if own else None)
+    src_panes = sum(len(t.get("windows", [])) for t in (own or {}).get("tabs", [])) if own else None
     result: dict = {}
 
     if choice == "Paste":
@@ -1199,10 +1252,14 @@ def main() -> int:
                     # pick leaves the pane where it was, and equalizing then would square up the
                     # SOURCE tab — a visible change from an action that did not happen.
                     equalize_tab_of(wid)
+                    if src_panes == 1:
+                        result["followed"] = follow_moved_pane(
+                            wid, self_osw, (own or {}).get("platform_window_id"))
                 break
 
     log_row("kitty-pane-menu", "result", choice=choice, wid=wid, **result)
-    refocus()
+    if not result.get("followed"):
+        refocus()
     return 0
 
 

@@ -35,7 +35,9 @@ HOW IT DECIDES
        longest transition measured (0.90 s).
     3. --mode refuse (autonomous callers) never toggles. --mode toggle (operator-initiated) toggles
        an FS window out of fullscreen ONCE — only when it is onscreen, so the operator is never
-       pulled across Spaces — then waits for a stable windowed read, and never toggles again.
+       pulled to a Space they were not looking at — then waits for a stable windowed read, and never
+       toggles again. The exit itself DOES move the operator's view: macOS takes the window, and
+       the display, to the regular desktop (docs/research/kitty-lastpane-move-2026-10-19/README.md).
 
 RELAX ON THE FIX (2026-10-16; README § Corrections after upstream review, and the follow-up brief's
 corrections F1-F4, F9 in ~/.claude/autonomy/incidents/kitty-crash-2026-10-15/upstream-2026-10-16/)
@@ -568,7 +570,37 @@ def cached_fsfix(pid: int) -> bool | None:
 # ── the decision ─────────────────────────────────────────────────────────────────────────────────
 
 
-def _alert(wid: int, last: WindowState) -> None:
+def _alert_message(wid: int, verdict: str, last: WindowState) -> str:
+    """The alert says what the refusal LEFT BEHIND. The old single text ("did not leave fullscreen
+    … Leave fullscreen and try again") was shown after the window had already left fullscreen and
+    when no toggle was sent at all (docs/research/kitty-lastpane-move-2026-10-19/README.md § 1b);
+    following it re-entered fullscreen on a window that was already windowed."""
+    seen = f"(last state: {last.state}, Space types {last.types}, onscreen {last.onscreen})"
+    if verdict == "refused-timeout" and last.types == [0]:
+        return (
+            f"kitty window {wid} left fullscreen and is now a normal window on the desktop, still "
+            "holding the pane: the desktop was not on screen long enough to confirm it had settled "
+            f"{seen}. Go to that window and choose Move again; it will not leave fullscreen a "
+            "second time."
+        )
+    if verdict == "refused-timeout":
+        return (
+            f"kitty window {wid} was asked to leave fullscreen and did not settle within "
+            f"{AFTER_DEADLINE_S:g} s {seen}. The pane was not moved. Find the window before "
+            "trying again."
+        )
+    if verdict == "refused-entered":
+        return (
+            f"kitty window {wid} entered fullscreen instead of leaving it and was toggled back "
+            f"{seen}. The pane was not moved."
+        )
+    return (
+        f"Nothing changed: kitty window {wid}'s fullscreen Space was not on screen when the "
+        f"request started {seen}. Go to that window and try again."
+    )
+
+
+def _alert(wid: int, verdict: str, last: WindowState) -> None:
     """Toggle-mode refusals only. Strings travel through argv, never into the script text, and
     nothing names application "kitty" (that LAUNCHES a dead kitty — how it came back at 00:01:28)."""
     script = [
@@ -577,11 +609,7 @@ def _alert(wid: int, last: WindowState) -> None:
         "-e", "end run",
     ]
     title = "kitty: pane not moved or closed"
-    msg = (
-        f"kitty window {wid} is the last pane of a fullscreen window and it did not leave "
-        f"fullscreen cleanly (last state: {last.state}, Space types {last.types}). "
-        "Leave fullscreen and try again."
-    )
+    msg = _alert_message(wid, verdict, last)
     try:
         subprocess.run(
             ["osascript", *script, title, msg],
@@ -906,6 +934,11 @@ def main(argv: list[str] | None = None) -> int:
         platform_window_id=info.get("platform_window_id"),
         panes=info.get("panes_in_os_window"),
         state=last.state if verdict != "safe-not-last" else None,
+        # The read the verdict was decided on. Without these a refused-timeout could not be told
+        # apart (bounds churn vs an offscreen desktop vs a Space bounce) after the fact.
+        types=last.types if verdict != "safe-not-last" else None,
+        onscreen=last.onscreen if verdict != "safe-not-last" else None,
+        bounds=list(last.bounds) if verdict != "safe-not-last" and last.bounds else None,
         verdict=verdict,
         rc=rc,
         mode=mode,
@@ -925,7 +958,7 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         if rc == 3 and mode == "toggle":
-            _alert(wid, last)
+            _alert(wid, verdict, last)
         return rc
     if opts["then"]:
         trc = run_then(addr, wid, opts["then"])

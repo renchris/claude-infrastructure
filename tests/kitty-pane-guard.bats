@@ -268,3 +268,34 @@ PY
   run grep -c 'action --match' "$CALLS"
   [ "$output" = "0" ] || { cat "$CALLS"; false; }
 }
+
+@test "15 a move that EMPTIES its source follows the pane after the source closed; one that does not, never focuses" {
+  # docs/research/kitty-lastpane-move-2026-10-19/README.md § 1a: the guard's exit from fullscreen
+  # takes the display to the desktop and nothing took the operator on. The source's platform id is
+  # one no window owns, so the real window-server read says "gone" without touching a real window.
+  export KPG_TREE2="$BATS_TEST_TMPDIR/tree2.json"
+  sed 's/"platform_window_id": 101/"platform_window_id": 2147483646/' "$KPG_TREE" >"$KPG_TREE.x"
+  mv "$KPG_TREE.x" "$KPG_TREE"
+  # from the 2nd full ls on (the destination re-check, then the follow's poll) os-window 1 is gone
+  cat >"$KPG_TREE2" <<'JSON'
+[{"id": 2, "platform_window_id": 102,
+  "tabs": [{"id": 2, "is_active": true, "is_focused": false,
+            "windows": [{"id": 60, "is_active": false, "is_focused": false, "at_prompt": true,
+                         "title": "destination", "cwd": "/tmp/b", "foreground_processes": []},
+                        {"id": 50, "is_active": true, "is_focused": false, "at_prompt": true,
+                         "title": "where I clicked", "cwd": "/tmp/a", "foreground_processes": []}]}]}]
+JSON
+  KPG_PICK="destination — 1 pane" run python3 "$BIN/kitty-pane-menu"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  d=$(first 'detach-window --match id:50 --target-tab id:2'); f=$(first 'focus-window --match id:50')
+  [ -n "$d" ] || { cat "$CALLS"; false; }
+  [ -n "$f" ] || { cat "$CALLS"; false; }
+  [ "$d" -lt "$f" ] || { cat "$CALLS"; false; }
+  rows | grep -q '"followed": true' || { rows; false; }
+  # the source never goes away (case 1's shape): no focus, today's behavior
+  unset KPG_TREE2; : >"$CALLS"; : >"$KPG_LS_N"
+  KPG_PICK="destination — 1 pane" run python3 "$BIN/kitty-pane-menu"
+  [ "$status" -eq 0 ]
+  run grep -c 'focus-window' "$CALLS"
+  [ "$output" = "0" ] || { cat "$CALLS"; false; }
+}

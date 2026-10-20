@@ -282,7 +282,8 @@ vrow() { grep '"phase":"verdict"' "$CC_KITTY_PANE_ACTIONS_LOG" | tail -1; }
   KFG_KITTEN_OUT='{"wid":7,"os_window_id":2,"platform_window_id":2147483646,"panes_in_os_window":1,"tabs_in_os_window":1,"panes_in_tab":1,"last_for":{"pane":true,"tab":true,"os-window":true}}' \
     run "$GUARD" --window 7 --to unix:/nowhere --mode toggle --tool t
   [ "$status" -eq 3 ] || { echo "$output"; false; }
-  grep -q '^osascript .*display alert.*kitty window 7 is the last pane of a fullscreen window.*last state: UNKNOWN.*Leave fullscreen and try again' "$CALLS" || { cat "$CALLS"; false; }
+  # refused-unknown sends no toggle, so the alert says nothing changed (2026-10-19 rewrite)
+  grep -q "^osascript .*display alert.*Nothing changed: kitty window 7's fullscreen Space was not on screen.*last state: UNKNOWN" "$CALLS" || { cat "$CALLS"; false; }
   run grep -c 'application "kitty"' "$CALLS"
   [ "$output" = "0" ] || { cat "$CALLS"; false; }
   # refuse mode never alerts — its callers are autonomous and nobody is at the keyboard
@@ -493,4 +494,29 @@ main()
   # through the CLI, with the cache keyed on a pid's real start (this bats shell's)
   run drive "g.proc_start = REAL_PROC_START; cache($$, REAL_PROC_START($$), 'true\n'); g.pid_window_states = lambda pid: [(1, FS)]; print(g.main(['--any-fs', '--kitty-pid', '$$']))"
   [ "${lines[-1]}" = "0" ] || { echo "$output"; false; }
+}
+
+@test "34 alert text names what the refusal LEFT: stranded windowed, unsettled, toggled back, or nothing changed" {
+  # docs/research/kitty-lastpane-move-2026-10-19/README.md § 1b: the one old text ("Leave
+  # fullscreen and try again") was shown after the window had ALREADY left fullscreen.
+  run drive '
+for v, st in (("refused-timeout", g.WindowState("UNKNOWN", [0], False, None)),
+              ("refused-timeout", UNK), ("refused-entered", FS),
+              ("refused-not-visible", FS_BG), ("refused-unknown", UNK)):
+    print(v, "|", g._alert_message(7, v, st))'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "${lines[0]}" == "refused-timeout | kitty window 7 left fullscreen and is now a normal window on the desktop, still holding the pane"*"will not leave fullscreen a second time." ]] || { echo "$output"; false; }
+  [[ "${lines[1]}" == "refused-timeout | kitty window 7 was asked to leave fullscreen and did not settle within 8 s"* ]] || { echo "$output"; false; }
+  [[ "${lines[2]}" == "refused-entered | kitty window 7 entered fullscreen instead of leaving it"* ]] || { echo "$output"; false; }
+  [[ "${lines[3]}" == "refused-not-visible | Nothing changed:"* ]] || { echo "$output"; false; }
+  [[ "${lines[4]}" == "refused-unknown | Nothing changed:"* ]] || { echo "$output"; false; }
+  run grep -c 'Leave fullscreen and try again' <<<"$output"
+  [ "$output" = "0" ]
+}
+
+@test "35 the verdict row carries the read it was decided on: types, onscreen, bounds" {
+  run drive 'kitten(); states(lambda t: FS if not toggles else g.WindowState("UNKNOWN", [0], False, (1.0, 2.0, 800.0, 600.0))); cli("--window", "7", "--to", "unix:/nowhere", "--mode", "toggle", "--tool", "t")'
+  [[ "$output" == *"rc=3 toggles=1"* ]] || { echo "$output"; false; }
+  vrow | grep -q '"state":"UNKNOWN","types":\[0\],"onscreen":false,"bounds":\[1.0,2.0,800.0,600.0\],"verdict":"refused-timeout"' || { cat "$CC_KITTY_PANE_ACTIONS_LOG"; false; }
+  grep -q '^osascript .*display alert.*left fullscreen and is now a normal window on the desktop' "$CALLS" || { cat "$CALLS"; false; }
 }
