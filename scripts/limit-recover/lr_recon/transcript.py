@@ -25,6 +25,9 @@ from lr_recon import types as T
 TAIL_BYTES = 128 * 1024
 HEAD_BYTES = 8 * 1024
 SUBAGENT_FRESH_S = 120.0
+LIMITED_QUIET_S = (
+    60.0  # a limited turn's reply lands in ~4 s; gap-3 holds read 135 s to 4 h
+)
 _NO_RESPONSE = "No response requested."
 _STOP_AT_REST = ("end_turn", "stop_sequence", "max_tokens", "refusal")
 
@@ -261,15 +264,48 @@ def _ok_turn_ts(data: bytes) -> List[float]:
     return out
 
 
-def _at_rest(data: bytes) -> bool:
+def _limited_and_quiet(
+    last: Dict[str, Any],
+    last_asst: Optional[Dict[str, Any]],
+    newest: Optional[float],
+    now: Optional[float],
+) -> bool:
+    """gap-3 E1, physics instead of shapes: on a session whose last assistant record is the limit
+    error, any prompt gets the limit back within ~4 s (handoff-fire.sh, the fallback-C timing), so
+    trailing user records with nothing written for LIMITED_QUIET_S are not a turn in flight. One
+    exception: a trailing `<bash-input>` (a local `!` command, which needs no API) may still run.
+
+    handoff-fire's precheck already releases every measured shape (the replayed goal since
+    c82a349ce, the dead-source notification since 10-13); this copy had none of them, and its
+    at_rest feeds the admission's active count and idle fan-out eligibility."""
+    if now is None or last_asst is None or newest is None:
+        return False
+    if not _P.classify_record(last_asst).get("limit"):
+        return False
+    if _text(last).lstrip().startswith("<bash-input>"):
+        return False
+    return now - newest >= LIMITED_QUIET_S
+
+
+def _at_rest(data: bytes, now: Optional[float] = None) -> bool:
     """The last user/assistant record decides: an assistant record not waiting on a tool (or an
-    error/limit record, or the synthetic no-op) is at rest; a trailing user record is not."""
+    error/limit record, or the synthetic no-op) is at rest; a trailing user record is not, unless
+    it follows a limit error and the session has been quiet since (_limited_and_quiet)."""
     last: Optional[Dict[str, Any]] = None
+    last_asst: Optional[Dict[str, Any]] = None
+    newest: Optional[float] = None
     for rec in _records(data):
         if rec.get("type") in ("user", "assistant") and not rec.get("isSidechain"):
             last = rec
-    if last is None or last.get("type") != "assistant":
+            if rec.get("type") == "assistant":
+                last_asst = rec
+            ts = _ts(rec)
+            if ts is not None and (newest is None or ts > newest):
+                newest = ts
+    if last is None:
         return False
+    if last.get("type") != "assistant":
+        return _limited_and_quiet(last, last_asst, newest, now)
     if _is_error(last) or _text(last).strip() == _NO_RESPONSE:
         return True
     msg = _msg(last)
@@ -312,7 +348,7 @@ def observe_transcript(path: str, now: Optional[float] = None) -> T.TranscriptOb
         mtime=st.st_mtime,
         last=dict(_P.classify_tail(tail)),
         last_assistant_ok_at=oks[-1] if oks else None,
-        at_rest=_at_rest(tail),
+        at_rest=_at_rest(tail, now),
         teammate=bool(_P.is_teammate_head(head)),
         live_subagents=live_subagents(path, now),
     )
