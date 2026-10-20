@@ -59,6 +59,12 @@ setup() {
 have_old() {
   shf_old_tree "$OLD" "$REPO" hooks/boundary-handoff.sh scripts/wrap-ledger.sh \
     || skip "the pre-change commit $SHF_BASE is not in this clone"
+  # b1b5d81ef reworded the free-win advisory on purpose, after SHF_BASE. Carry that one edit into
+  # the control so parity measures the fork cut, not the wording; fail if the old text is gone.
+  local h="$OLD/hooks/boundary-handoff.sh"
+  grep -q 'no operator step outstanding"' "$h" || { echo "SHF_BASE wording not found in $h"; false; }
+  sed 's/no operator step outstanding"/no operator step filed by this session"/' "$h" > "$h.tmp"
+  mv "$h.tmp" "$h"; chmod +x "$h"
 }
 
 # blank <used_pct|none> — every directory the hook writes, emptied, and the telemetry row rewritten
