@@ -2322,3 +2322,69 @@ SH
   [[ "$output" == *"husk-recycle/HELD:draft"* ]] || { echo "$output"; false; }
   [ ! -e "$HTOK" ] || { echo "token left behind:"; cat "$HTOK"; false; }
 }
+
+# ═══ A7 Part A′ (lr-sustained-load 2026-10-20) — the backstop lets go of a session the reconciler placed ═
+# A poller-dispatched run holds runs/by-sid for its whole life, and the reconciler cannot take
+# ownership while it does: on 2026-10-20 fleet/one-20261020T044205Z-3d1d988a waited to 05:00:51 for its
+# first router call, parked twice on rc 3, and held the claim while the reconciler had been placed
+# since 04:53. So a --from-daemon run re-reads the reconciler's record right before ranking.
+recon_rec() { # $1=jq object merged over an open, acting PLANNED record placed onto next2
+  local o="${1:-}"; [ -n "$o" ] || o='{}'
+  export LR_RECON_ROOT="$LR_STATE_DIR/recon"; mkdir -p "$LR_RECON_ROOT/sessions"
+  jq -nc --arg sid "$SID" --argjson o "$o" \
+    '{sid:$sid, record_id:"recon:next2-5h-1:x:1", kind:"limited", origin:"hook", plan_only:false, escalated:false,
+      pane:[1,616], phase:"PRE-MOVE", substate:"PLANNED", target_acct:"next2", terminal:null} * $o' \
+    > "$LR_RECON_ROOT/sessions/$SID.json"
+}
+one_daemon() { # a daemon-dispatched --one, run inline as its detached child runs (verdict.txt written)
+  export CC_NOTIFY_BIN=/usr/bin/true TMPDIR="$BATS_TEST_TMPDIR"
+  LR_FLEET_DETACHED=1 run bash "$FLEET" --one "$SID" --target auto --source-pane 616 "$@"
+}
+
+@test "[RED] A7 A′: --from-daemon with the reconciler's record PLANNED onto a target: PARKED 'reconciler placed', nothing ranked, nothing typed; the park is refunded" {
+  acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"; recon_rec
+  one_daemon --from-daemon
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"reconciler placed"* ]] || { echo "$output"; false; }
+  ! grep -q -- '--rank' "$ACC_LOG" || { cat "$ACC_LOG"; false; }
+  [ ! -s "$LRH_LOG" ] || { cat "$LRH_LOG"; false; }
+  local run; run="$(cat "$LR_STATE_DIR/fleet/last")"
+  grep -q 'verdict=PARKED .*reconciler placed' "$run/verdict.txt" || { cat "$run/verdict.txt"; false; }
+  # THE REFUND: the poller's own rq_refund_park, run against this run's verdict, hands the attempt back
+  export RESULTS="$BATS_TEST_TMPDIR/results"; mkdir -p "$RESULTS"
+  printf 'lr-fleet: DETACHED\nrun=%s log=%s/detached.log\n' "$run" "$run" > "$RESULTS/$SID.log"
+  printf '{"sid":"%s","attempts":1}\n' "$SID" > "$BATS_TEST_TMPDIR/rq.json"
+  local fn; fn="$(sed -n '/^rq_refund_park() {/,/^}/p' "$REPO/scripts/limit-recover/lr-reset-poller.sh")"
+  [ -n "$fn" ] || { echo "rq_refund_park not found in the poller"; false; }
+  bash -c 'log() { printf "%s\n" "$*"; }; RQ_MAX_ATTEMPTS=3; eval "$1"; rq_refund_park "$2" "$3"' _ "$fn" "$BATS_TEST_TMPDIR/rq.json" "$SID"
+  [ "$(jq -r .attempts "$BATS_TEST_TMPDIR/rq.json")" = 0 ] || { cat "$BATS_TEST_TMPDIR/rq.json"; false; }
+  [ "$(jq -r .last_verdict "$BATS_TEST_TMPDIR/rq.json")" = parked-refunded ]
+}
+
+@test "A7 A′ KILL SWITCH: \$STATE/fleet-recon-placed.off — the same run ranks and recovers as before" {
+  acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"; recon_rec
+  : > "$LR_STATE_DIR/fleet-recon-placed.off"
+  one_daemon --from-daemon
+  [[ "$output" != *"reconciler placed"* ]] || { echo "$output"; false; }
+  grep -q -- '--rank' "$ACC_LOG" || { cat "$ACC_LOG"; echo "$output"; false; }
+  grep -q -- '--target next2' "$LRH_LOG" || { cat "$LRH_LOG"; echo "$output"; false; }
+}
+
+@test "A7 A′ CONTROLS: an operator --one, and records that are not an acting placement, all rank as before" {
+  acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  local c
+  for c in operator plan_only escalated terminal detected no_target; do
+    : > "$ACC_LOG"; : > "$LRH_LOG"
+    case "$c" in
+      operator)   recon_rec ;;
+      plan_only)  recon_rec '{"plan_only":true}' ;;
+      escalated)  recon_rec '{"escalated":true}' ;;
+      terminal)   recon_rec '{"terminal":{"outcome":"ENGAGED","at":1}}' ;;
+      detected)   recon_rec '{"substate":"DETECTED"}' ;;
+      no_target)  recon_rec '{"target_acct":""}' ;;
+    esac
+    if [ "$c" = operator ]; then one_daemon; else one_daemon --from-daemon; fi
+    [[ "$output" != *"reconciler placed"* ]] || { echo "case $c: $output"; false; }
+    grep -q -- '--rank' "$ACC_LOG" || { echo "case $c never ranked"; cat "$ACC_LOG"; echo "$output"; false; }
+  done
+}

@@ -488,3 +488,132 @@ slot_free() { [ ! -d "$LR_STATE_DIR/locks/swap-slots/slot-1" ]; }
   [ "$(verdict_of "$S1")" = MOVED ] || { verdict_of "$S1"; jq -r .reason "$BDIR/$S1.json"; false; }
   ! grep -q '"stage":"slot-yield"' "$BDIR/$S1.events.jsonl" || false
 }
+
+# ── THE MOVE LANE LETS GO THE MOMENT A SESSION TURNS LIMITED (A7 Part B, lr-sustained-load 2026-10-20) ─
+# "2 of the 4 idle sessions here started turns and walled" while queued (REPORT §4 D2): the limit was
+# read after the idle wait and once the slot was held, so a session that walled inside a wait held
+# its claim and slot to the wait's end, and the reconciler's take_ownership could not have it. The
+# worker now re-reads the limit every LR_MOVE_LIMIT_RECHECK_S (30) inside the slot, draft and idle
+# waits, and once more right before the actuator. The cases run under /bin/bash with the re-read on
+# every poll (LR_MOVE_LIMIT_RECHECK_S=0), and each is RED on a worker that waits the hold out.
+mw_rf_env() { export LR_RECON_ROOT="$LR_STATE_DIR/recon" TMPDIR="$BATS_TEST_TMPDIR" WORKER_BASH=/bin/bash LR_MOVE_LIMIT_RECHECK_S=0; }
+mw_reset() { # a second run of the same row: the first one's result, events and limit tail gone
+  rm -f "$BDIR/$SID.json" "$BDIR/$SID.events.jsonl" "$BDIR/$SID.draft"
+  cp "$BATS_TEST_TMPDIR/tx.clean" "$SRC/projects/-x/$SID.jsonl"
+}
+no_noise() { ! grep -qi 'syntax error\|bad substitution\|command not found' "$1" || { cat "$1"; false; }; }
+
+@test "26 [RED] a row that turns limited while it waits for a slot is let go at once: became-limited, not slot-wait; never invoked. move-limit-recheck.off: no re-read" {
+  [ -x /bin/bash ] || skip "/bin/bash absent"
+  mw_rf_env; cp "$SRC/projects/-x/$SID.jsonl" "$BATS_TEST_TMPDIR/tx.clean"
+  MVF_SLOTS=1 mvf_plan w1 move "$PANE:$SID"
+  hold_slot 1
+  # F-B1, the path is kept: a limited copy that appears in a dir the glob reaches first is never read
+  # (the re-read repeats no glob), so the row waits the slot out
+  export LR_MOVE_SLOT_WAIT_S=3
+  wstart "$SID" "$PANE"; await_stage "$SID" slot-wait
+  mkdir -p "$SRC/projects/-a-stale"; cp "$SRC/projects/-x/$SID.jsonl" "$SRC/projects/-a-stale/$SID.jsonl"
+  printf '%s\n' '{"type":"assistant","timestamp":"2026-10-06T06:20:00.000Z","isApiErrorMessage":true,"message":{"role":"assistant","content":[{"type":"text","text":"You'"'"'ve hit your session limit · resets 7:50pm"}]}}' \
+    >> "$SRC/projects/-a-stale/$SID.jsonl"
+  WRC=0; wait "$WPID" || WRC=$?
+  [[ "$(res reason)" == slot-wait:* ]] || { res reason; false; }
+  rm -f "$SRC/projects/-a-stale/$SID.jsonl"; rmdir "$SRC/projects/-a-stale"; mw_reset
+  # the switch file: the same row waits the slot out and never reads the limit again
+  : > "$LR_STATE_DIR/move-limit-recheck.off"
+  export LR_MOVE_SLOT_WAIT_S=3
+  wstart "$SID" "$PANE"; await_stage "$SID" slot-wait; limit_tail
+  WRC=0; wait "$WPID" || WRC=$?
+  [[ "$(res reason)" == slot-wait:* ]] || { res reason; false; }
+  rm -f "$LR_STATE_DIR/move-limit-recheck.off"; mw_reset
+  export LR_MOVE_SLOT_WAIT_S=45
+  wstart "$SID" "$PANE"; await_stage "$SID" slot-wait; limit_tail
+  WRC=0; wait "$WPID" || WRC=$?
+  # RED before: `slot-wait:` after the whole 45 s. The verdict is the timing assertion.
+  [ "$(res verdict)" = NOTMOVED ] || { res verdict; res reason; false; }
+  [[ "$(res reason)" == became-limited:*"cc-lr recover ${SID:0:8}"* ]] || { res reason; false; }
+  ! invoked || false
+  [ ! -d "$CLAIMS/$SID.active" ]
+  [ ! -e "$BDIR/$SID.slotwait" ]
+  [ "$(ls "$LR_STATE_DIR/locks/swap-slots")" = slot-1 ]
+  no_noise "$BATS_TEST_TMPDIR/worker.$SID.out"
+}
+
+@test "27 [RED] a draft row that turns limited while its box is still changing is let go: became-limited, not HELD:draft; and the read right before the actuator catches a limit after the slot" {
+  [ -x /bin/bash ] || skip "/bin/bash absent"
+  mw_rf_env; cp "$SRC/projects/-x/$SID.jsonl" "$BATS_TEST_TMPDIR/tx.clean"
+  jq -c '.rows[0].disposition = "draft"' "$BDIR/plan.json" > "$BDIR/plan.json.t" && mv "$BDIR/plan.json.t" "$BDIR/plan.json"
+  # a stub cc-tui: window N's box is the file composer-N; the Nth read past LIMIT_AT_READ turns the session limited
+  export LR_MOVE_TUI_LIB="$BATS_TEST_TMPDIR/tui.sh" BOX="$BATS_TEST_TMPDIR/composer-$PANE" TXF="$SRC/projects/-x/$SID.jsonl"
+  cat > "$LR_MOVE_TUI_LIB" <<'EOF'
+cc_tui_composer() {
+  local n; n=$(( $(cat "$BOX.reads" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$BOX.reads"
+  if [ -n "${LIMIT_AT_READ:-}" ] && [ "$n" -eq "$LIMIT_AT_READ" ]; then
+    printf '%s\n' '{"type":"assistant","timestamp":"2026-10-06T06:20:00.000Z","isApiErrorMessage":true,"message":{"role":"assistant","content":[{"type":"text","text":"You'"'"'ve hit your session limit · resets 7:50pm"}]}}' >> "$TXF"
+  fi
+  tr -d '[:space:]' < "$BOX"
+}
+cc_tui_clear() { : > "$BOX"; }
+EOF
+  # (1) the box keeps changing (someone typing), then the session walls: the draft wait lets go
+  export LR_MOVE_DRAFT_STALE_S=100000 LR_MOVE_DRAFT_WAIT_S=45 LR_MOVE_DRAFT_POLL_S=0.2
+  echo "typing 0" > "$BOX"
+  wstart "$SID" "$PANE"
+  ( i=1; while kill -0 "$WPID" 2>/dev/null; do echo "typing $i" > "$BOX"; i=$((i + 1)); sleep 0.3; done ) 3>&- &
+  await_stage "$SID" draft-wait; limit_tail
+  WRC=0; wait "$WPID" || WRC=$?
+  # RED before: HELD:draft at the end of the 45 s draft wait
+  [ "$(res verdict)" = NOTMOVED ] || { res verdict; res reason; false; }
+  [[ "$(res reason)" == became-limited:* ]] || { res reason; false; }
+  ! invoked || false
+  [ ! -d "$CLAIMS/$SID.active" ]
+  # (2) F-B3: a stale draft is carried; the session walls between the slot and the actuator (the box's
+  # re-read with the slot held is read 2), and the last read before W5 lets it go
+  mw_reset; rm -f "$BOX.reads"; echo "please also check the reaper" > "$BOX"
+  export LR_MOVE_DRAFT_STALE_S=0 LIMIT_AT_READ=2
+  worker
+  [ "$(res verdict)" = NOTMOVED ] || { res verdict; res reason; false; }
+  [[ "$(res reason)" == became-limited:* ]] || { res reason; false; }
+  ! invoked || false
+  grep -q '"stage":"slot"' "$BDIR/$SID.events.jsonl" || { cat "$BDIR/$SID.events.jsonl"; false; }
+  no_noise "$BATS_TEST_TMPDIR/worker.out"
+}
+
+@test "28 [RED] a wait row that turns limited while the census still reads it busy: became-limited in the idle wait, under /bin/bash; never reaches the slot" {
+  [ -x /bin/bash ] || skip "/bin/bash absent"
+  mw_rf_env
+  MVF_UNTIL=60 mvf_plan w1 wait "$PANE:$SID"
+  printf '%s\t%s\tnext4\t%s\t/x\t1\tmid-turn\n' "$PANE" "$SID" "$SRC" > "$BDIR/snap.tsv"; echo 1 > "$BDIR/snap.ts"
+  wstart "$SID" "$PANE"
+  await_stage "$SID" waiting; limit_tail
+  WRC=0; wait "$WPID" || WRC=$?
+  # RED before: still-busy:mid-turn after the 60 s budget (and "command not found" had the read been
+  # called from the wait while still defined below it)
+  [ "$(res verdict)" = NOTMOVED ] || { res verdict; res reason; false; }
+  [[ "$(res reason)" == became-limited:* ]] || { res reason; false; }
+  ! grep -q '"stage":"slot-wait"' "$BDIR/$SID.events.jsonl" || false
+  ! invoked || false
+  [ ! -e "$BDIR/$SID.waiting" ]
+  [ ! -d "$CLAIMS/$SID.active" ]
+  no_noise "$BATS_TEST_TMPDIR/worker.$SID.out"
+}
+
+@test "29 [RED] hands-off on and the reconciler live in act mode: the reason says the reconciler recovers it (cc-lr status); otherwise cc-lr recover" {
+  [ -x /bin/bash ] || skip "/bin/bash absent"
+  mw_rf_env
+  : > "$LR_STATE_DIR/autorecover.on"; : > "$LR_STATE_DIR/recon.on"
+  mkdir -p "$LR_RECON_ROOT"; : > "$LR_RECON_ROOT/autorecover.on"; echo act > "$LR_RECON_ROOT/mode"
+  export LR_RECON_WAKETIME=0
+  hb() { printf '{"pid":1,"progress":7,"progress_wall":%s}' "$(( $(date +%s) - $1 ))" > "$LR_RECON_ROOT/heartbeat"; }
+  hb 10; cp "$SRC/projects/-x/$SID.jsonl" "$BATS_TEST_TMPDIR/tx.clean"; limit_tail
+  worker
+  [[ "$(res reason)" == became-limited:*"the reconciler recovers it"*"cc-lr status ${SID:0:8}" ]] || { res reason; false; }
+  # F-B2: a promise only when it is true — a stale heartbeat, or a mode that is not act, keeps cc-lr recover
+  local c
+  for c in stale observe; do
+    mw_reset; limit_tail
+    if [ "$c" = stale ]; then hb 3600; else hb 10; echo observe > "$LR_RECON_ROOT/mode"; fi
+    worker
+    [[ "$(res reason)" == became-limited:*"cc-lr recover ${SID:0:8}" ]] || { echo "case $c: $(res reason)"; false; }
+    [[ "$(res reason)" != *"reconciler recovers"* ]] || { echo "case $c: $(res reason)"; false; }
+  done
+}

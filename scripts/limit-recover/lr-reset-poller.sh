@@ -178,6 +178,147 @@ lrp_may_act() { # $1=sid $2=arm → 0 ACT (pair with lrp_act_done on every exit 
   return 1
 }
 lrp_act_done() { (( LRP_FENCE )) || return 0; lr_recon_act_done; }
+# ── RECONCILER FIRST, POLLER AS A BOUNDED BACKSTOP (A7, lr-sustained-load 2026-10-20) ────────────
+# With hands-off recovery on (autorecover.on AND recon/autorecover.on; the operator created the second
+# 2026-10-20T17:10:31Z), a live reconciler in act mode drives every limited session it holds an open
+# record for. Its fence (owned/<sid>) starts only at PLANNED, so until then this lane and the reconciler
+# raced for runs/by-sid: on 2026-10-20 two poller runs on 3e929a81/3d1d988a held the claims 21-22 min and
+# PARKED (router rc=3) while the reconciler, placed, logged claim-held from 04:53. This lane now leaves
+# such a sid alone for a bounded time, then acts exactly as before: the fence and the run claim still
+# arbitrate. A deferral spends no attempt, no cap and no claim, and writes nothing but its stamp.
+#   · THE POLLER OWNS THE CLOCK (efficacy R1). The record's own times move: plan re-offers a passed
+#     stay every 900 s and rewrites wait.eta, so a window keyed on the record re-armed for ever
+#     (simulated: g=930 never acts). So $STATE/recon-first/<sid> is stamped ONCE (set -C) at the first
+#     deferral, and <sid>.eta once with the first eta seen passed; neither is re-read from the record
+#     after. Defer only while now − t0 < g: at most 2·g plus a tick per incident. A hook request's own
+#     ts bounds the first window too (t0 = min(stamp, request ts), correctness F-A2), so every hook
+#     request is backed up within g + one tick of its death. The stamps go when the sid's request and
+#     parked record are both gone (lrp_rf_gc).
+#   · g = LR_POLLER_RECON_FIRST_S (600); a hook request the reconciler has not ingested yet gets
+#     LR_POLLER_RECON_INGEST_S (180). Both are clamped to ≤ 900 here: past that the backstop is gone.
+#   · NOT INGESTED means no OPEN record and a request newer than the one on file (terminal.at before the
+#     request, or close.death another death than its death_uuid): 22 of 157 records re-opened a sid,
+#     pane 20's among them, and a terminal file is kept up to 20 days (F-A1).
+#   · SCOPE (F-A5, R4): kind limited only; a PARKED-REBOOT record and one whose wake failed
+#     (close.wake_failed: never retyped) are the reconciler's no longer. WAIT_RESET and HELD:team (its
+#     WAKE_SUBSTATES) take the eta window.
+# MODES: LR_POLLER_RECON_FIRST=shadow (the shipped default until packet 4ffc4e1e5f1c is ruled) logs
+# `RECON-FIRST would-defer <sid>` and dispatches exactly as today; on defers; off is today's code.
+# Off also: $STATE/recon-first.off (takes effect next tick).
+# Any read that fails ⇒ act as before (our own failure is "unknown", never a reason to hold a session).
+LRP_RF_DIR="$STATE/recon-first"
+LRP_RF_INIT=0 LRP_RF_OK=0 LRP_RF_BOTH=0 LRP_RF_MODE=off LRP_RF_ROOT="" LRP_RF_G=600 LRP_RF_ING=180
+LRP_RF_N=0 LRP_RF_SIDS="" LRP_RF_SEEN=" "
+lrp_rf_clamp() { # $1=value $2=default → seconds in [0, 900]
+  local v="$1"
+  [[ "$v" =~ ^[0-9]+$ ]] || v="$2"
+  (( ${#v} <= 4 )) || v=900
+  v=$(( 10#$v )); (( v <= 900 )) || v=900
+  printf '%s' "$v"
+}
+lrp_rf_init() { # the per-tick constants, read once (F-A4, R5: they were nine forks per sid)
+  LRP_RF_INIT=1
+  LRP_RF_MODE="${LR_POLLER_RECON_FIRST:-shadow}"
+  case "$LRP_RF_MODE" in on|shadow) : ;; *) LRP_RF_MODE=off ;; esac
+  [[ "$LRP_RF_MODE" != off && ! -e "$STATE/recon-first.off" ]] || return 0
+  (( LRP_FENCE )) || return 0
+  LRP_RF_ROOT="$(_lr_recon_root)"
+  # THE BRACES ARE LOAD-BEARING: a missing mode file is the shell's own message, emitted before tr runs.
+  [[ "$({ tr -d '[:space:]' < "$LRP_RF_ROOT/mode"; } 2>/dev/null)" == act ]] || return 0
+  lr_recon_live || return 0
+  [[ -e "$STATE/autorecover.on" && -e "$LRP_RF_ROOT/autorecover.on" ]] && LRP_RF_BOTH=1
+  LRP_RF_G="$(lrp_rf_clamp "${LR_POLLER_RECON_FIRST_S:-600}" 600)"
+  LRP_RF_ING="$(lrp_rf_clamp "${LR_POLLER_RECON_INGEST_S:-180}" 180)"
+  LRP_RF_OK=1
+}
+lrp_rf_stamp() { # $1=stamp file $2=epoch to write if absent → the stamp's epoch; written once, never moved
+  local s=""
+  if [[ ! -e "$1" ]]; then
+    mkdir -p "$LRP_RF_DIR" 2>/dev/null || true
+    ( set -C; printf '%s\n' "$2" > "$1" ) 2>/dev/null || true
+  fi
+  { read -r s < "$1"; } 2>/dev/null || true
+  [[ "$s" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$s"
+}
+lrp_rf_note() { # $1=sid → counted once per tick, whichever call site deferred it (F-A6)
+  case "$LRP_RF_SEEN" in *" $1 "*) return 0 ;; esac
+  LRP_RF_SEEN="$LRP_RF_SEEN$1 "
+  LRP_RF_N=$(( LRP_RF_N + 1 ))
+  (( ${#LRP_RF_SIDS} < 72 )) && LRP_RF_SIDS="${LRP_RF_SIDS:+$LRP_RF_SIDS,}${1:0:8}"
+  return 0
+}
+lrp_rf_flush() { # one summary line for what was deferred since the last flush
+  (( LRP_RF_N > 0 )) || return 0
+  log "RECON-FIRST $LRP_RF_N limited session(s) left to the live hands-off reconciler, up to ${LRP_RF_G}s each (sids: $LRP_RF_SIDS); this lane backs each one up after that"
+  LRP_RF_N=0; LRP_RF_SIDS=""
+}
+lrp_rf_gc() { # a stamp lives as long as its sid's request or parked record, never longer
+  local f s
+  [[ -d "$LRP_RF_DIR" ]] || return 0
+  for f in "$LRP_RF_DIR"/*; do
+    [[ -e "$f" ]] || continue
+    s="${f##*/}"; s="${s%.eta}"
+    [[ -e "$REQUESTS/$s.json" || -e "$PARKED/$s.json" ]] || rm -f "$f" 2>/dev/null || true
+  done
+}
+lrp_recon_first() { # $1=sid $2=hook request file or "" → rc 0 DEFER this tick · rc 1 act as before
+  local sid="$1" rq="${2:-}" rec row="" rqt="" rqd="" now t0 s1 s2 why
+  local term="" po="" esc="" pane="" org="" kind="" sub="" eta="" wf="" tat="" dth=""
+  (( LRP_RF_INIT )) || lrp_rf_init
+  (( LRP_RF_OK )) || return 1
+  now="$(date +%s)"; rec="$LRP_RF_ROOT/sessions/$sid.json"
+  if [[ -n "$rq" && -f "$rq" ]]; then
+    # The hook writes ts (ISO) once per death and no `at` (F-A3); the mtime only if ts is unreadable.
+    IFS=$'\t' read -r rqt rqd <<< "$(jq -r '[(((.ts // "") | fromdateiso8601? // "") | tostring), (.death_uuid // "" | tostring)]
+                                         | map(if . == "" then "-" else . end) | @tsv' "$rq" 2>/dev/null)"
+    [[ "$rqt" =~ ^[0-9]+$ ]] || rqt="$(stat -f %m "$rq" 2>/dev/null || true)"
+    [[ "$rqt" =~ ^[0-9]+$ ]] || rqt=""
+    [[ "$rqd" != - ]] || rqd=""
+  fi
+  if [[ -f "$rec" ]]; then
+    # @tsv with a placeholder: an empty field must not shift the ones after it (R5)
+    row="$(jq -r '[(.terminal == null), (.plan_only == true), (.escalated == true), (.pane != null),
+                   (.origin // ""), (.kind // ""), (.substate // ""),
+                   ((.wait.eta // 0) | floor), ((.close.wake_failed // "") != ""), ((.terminal.at // 0) | floor),
+                   ((.close.death // "") | tostring | split("@")[0] // "")]
+                  | map(tostring | if . == "" then "-" else . end) | @tsv' "$rec" 2>/dev/null)" || return 1
+    IFS=$'\t' read -r term po esc pane org kind sub eta wf tat dth <<< "$row"
+    [[ "$term" == true || "$term" == false ]] || return 1
+  fi
+  if [[ ! -f "$rec" || "$term" == false ]]; then
+    # NOT INGESTED YET: hands-off scope and a hook request only, bounded by the request's own age.
+    [[ -n "$rqt" ]] && (( LRP_RF_BOTH )) || return 1
+    if [[ -f "$rec" ]]; then   # a terminal record is an earlier death unless it is this request's own
+      [[ "$tat" =~ ^[0-9]+$ ]] || return 1
+      (( tat < rqt )) || { [[ -n "$rqd" && "$dth" != - && "$dth" != "$rqd" ]]; } || return 1
+    fi
+    (( now - rqt < LRP_RF_ING )) || return 1
+    why="its request is $(( now - rqt ))s old and not ingested yet"
+  else
+    [[ "$kind" == limited && "$po" == false && "$esc" == false && "$pane" == true && "$wf" == false \
+       && "$sub" != PARKED-REBOOT ]] || return 1
+    [[ "$org" == cc-lr ]] || (( LRP_RF_BOTH )) || return 1   # a stale non-cc-lr record after the switch is pulled
+    [[ "$eta" =~ ^[0-9]+$ ]] || return 1
+    s1="$(lrp_rf_stamp "$LRP_RF_DIR/$sid" "$now")" || return 1
+    t0="$s1"
+    [[ -n "$rqt" ]] && (( rqt < t0 )) && t0="$rqt"
+    if [[ -e "$LRP_RF_DIR/$sid.eta" ]] || { [[ "$sub" == WAIT_RESET || "$sub" == HELD:team ]] && (( eta > 0 && now >= eta )); }; then
+      s2="$(lrp_rf_stamp "$LRP_RF_DIR/$sid.eta" "$eta")" || return 1
+      t0="$s2"
+    fi
+    (( now - t0 < LRP_RF_G )) || return 1
+    why="open $sub record, $(( now - t0 ))s into its ${LRP_RF_G}s window"
+  fi
+  if [[ "$LRP_RF_MODE" == shadow ]]; then
+    case "$LRP_RF_SEEN" in *" $sid "*) return 1 ;; esac
+    LRP_RF_SEEN="$LRP_RF_SEEN$sid "
+    log "RECON-FIRST would-defer $sid — $why; dispatched as today (LR_POLLER_RECON_FIRST=shadow)"
+    return 1
+  fi
+  lrp_rf_note "$sid"
+  return 0
+}
 REQUESTS="$STATE/requests"; RESULTS="$STATE/results"
 # CLAIMED and RUN_CLAIMS are the request lane's two new stores (W5-A, 2026-09-20), created HERE
 # beside the other two because the loop that uses them must never be the thing that decides whether
@@ -1745,6 +1886,13 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
     fi
   fi
 
+  # ── RECONCILER FIRST (A7) — before the stay, the post-reset wake, the cap, the fence and the claim,
+  # so a deferred request spends no cap, no attempt and no claim. The hook's own requests only: a
+  # stranded husk gets no reconciler record (lr_recon __main__ skips it), so it is never deferred.
+  if (( _rq_hook == 1 )) && [[ -z "$_rq_husk" && "$_rq_by" == stop-failure-marker ]] && lrp_recon_first "$_rq_sid" "$_rq"; then
+    continue   # the reconciler drives it this tick; the next tick re-asks
+  fi
+
   # ── STAY NEAR THE RESET, AND PACE THE COHORT (W6b: D1.4, D1.6, resolution 4) ─────────────────
   # Both are checked BEFORE the fence and the claim, and neither spends an attempt: a request held
   # here is exactly as it was, and the next tick sees it again.
@@ -1911,6 +2059,10 @@ fi
 if (( _rq_recon > 0 )); then
   log "RECON-OWNED $_rq_recon cc-lr request(s) left for the live reconciler"
 fi
+# Beside RECON-OWNED, not only at the end of the tick: the `exit 0` below (lr-select missing) skips
+# the end (F-A6). The stamps are swept here for the same reason.
+lrp_rf_flush
+lrp_rf_gc
 if (( _rq_held > 0 )); then
   log "HOOK-HELD $_rq_held hook-originated request(s) NOT drained — $STATE/autorecover.on is absent (sids: $_rq_held_sids); creating that file is the operator's call and releases the whole cohort"
 fi
@@ -2466,6 +2618,7 @@ reroute_parked() { # $1=sid $2=acct $3=cfg $4=reset epoch → dispatches or does
     [[ -e "$PARKED/$sid.team-noted" ]] || { log "REROUTE-SKIP $sid — held:team, a lead with live members is never moved; it is woken in place at its reset"; : > "$PARKED/$sid.team-noted"; }
     return 0
   fi
+  lrp_recon_first "$sid" "" && return 0   # A7: the live hands-off reconciler drives it for now
   if [[ "$reset_ep" =~ ^[0-9]+$ ]] && (( reset_ep > 0 )); then
     left=$(( reset_ep - $(date +%s) ))
     if (( left > 0 && left < RQ_STAY_S )); then
@@ -2811,6 +2964,8 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
     fi
     if ! account_has_headroom "$acct"; then log "WAIT  $sid — $acct still capped, retry next tick"; continue; fi
     (( fired >= MAX_PER_RUN )) && { log "CAP   per-run resume cap ($MAX_PER_RUN) reached; deferring rest"; break; }
+    # A7: the reconciler's own WAIT_RESET wake comes at eta + 120-180 s; this one would be the second.
+    lrp_recon_first "$sid" "" && continue
     lrp_may_act "$sid" nudge || continue
     _lrp_nrc=0; nudge_in_place "$sid" "$cfg" "$_lrp_rows" "$reset_epoch" 1 || _lrp_nrc=$?
     lrp_act_done
@@ -2959,4 +3114,5 @@ done
 if (( _rr_held > 0 )); then
   log "REROUTE-HELD $_rr_held parked session(s) not rerouted — $STATE/autorecover.on is absent; the zero-human switch is the operator's to set"
 fi
+lrp_rf_flush
 exit 0

@@ -133,6 +133,61 @@ fi
 ev fenced
 aborted() { [ -e "$BDIR/abort" ]; }
 
+# W2b. A session whose last record is now a limit error owes a turn, and this lane types none: it
+# would come up on the target at rest, still unanswered, and be reported MOVED. The plan-time hold
+# (bin/cc-lr, hold:limited) reads the transcript once, when the plan is written; a row that waited
+# for idle, or queued for a slot, can have hit its limit since. The census the wait loop reads does
+# not look (an api-error tail is "at rest"), so the same read is made after the idle wait, once the
+# slot is held and right before the actuator, and every LR_MOVE_LIMIT_RECHECK_S inside each wait.
+# DEFINED HERE, above the first wait (A7 Part B, lr-sustained-load 2026-10-20): the W2 idle wait,
+# the draft wait and the slot wait all re-read it, so a session that turns limited while queued is
+# let go at once rather than holding its claim and slot to the end of the wait.
+# The transcript is read at the row's cwd slug first, the encoding lr_session_location uses: the glob
+# walked ~18,200 project dirs (REPORT §6 item 5) three times a worker, and could reach a stale copy in
+# a dir that sorts first. Glob only on a miss; LR_MOVE_LOCATION_FAST=off globs always. The path found
+# is kept for the worker's life (F-B1): the 30 s re-read would otherwise repeat a miss's glob up to
+# 20 times in one 600 s wait.
+_mw_tx=""
+limited_now() { # → 0 when the session's last assistant record is a limit error
+  local tx="$_mw_tx"
+  [ -z "$tx" ] || [ -f "$tx" ] || tx=""
+  if [ -z "$tx" ] && [ -n "$CWD" ] && [ "$CWD" != - ] && [ "${LR_MOVE_LOCATION_FAST:-on}" != off ]; then
+    tx="$SRC_CFG/projects/$(printf %s "$CWD" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g')/$SID.jsonl"
+    [ -f "$tx" ] || tx=""
+  fi
+  [ -n "$tx" ] || for tx in "$SRC_CFG"/projects/*/"$SID".jsonl; do [ -f "$tx" ] && break; tx=""; done
+  _mw_tx="$tx"
+  [ -n "$tx" ] && [ "$(lr_last_api_error "$tx" 2>/dev/null | cut -f3 || true)" = limit ]
+}
+# Who recovers it. Hands-off on (both markers and recon.on) hands it to the reconciler, but only a
+# reconciler that is in act mode and live is a promise (F-B2): otherwise the requester is told to act.
+mw_reconciler_recovers() {
+  local root="${LR_RECON_ROOT:-$STATE/recon}"
+  [ -e "$STATE/autorecover.on" ] && [ -e "$root/autorecover.on" ] && [ -e "$STATE/recon.on" ] || return 1
+  [ "$({ tr -d '[:space:]' < "$root/mode"; } 2>/dev/null)" = act ] || return 1
+  command -v lr_recon_live >/dev/null 2>&1 && lr_recon_live
+}
+limited_stop() {
+  local next="Recover it: cc-lr recover ${SID:0:8}"
+  mw_reconciler_recovers \
+    && next="Hands-off recovery is on and the reconciler is live, so the reconciler recovers it; watch it: cc-lr status ${SID:0:8}"
+  finish NOTMOVED "became-limited: its last record is now a limit error, so it owes a turn this lane does not type; nothing touched. $next"
+}
+# The re-read inside the waits, at most every LR_MOVE_LIMIT_RECHECK_S (default 30 s): one tail read
+# and one python per read (lr_last_api_error). Off: LR_MOVE_LIMIT_RECHECK=off, or the switch file
+# $STATE/move-limit-recheck.off, read by each worker as it starts.
+_mw_limit_on=1
+{ [ "${LR_MOVE_LIMIT_RECHECK:-on}" != off ] && [ ! -e "$STATE/move-limit-recheck.off" ]; } || _mw_limit_on=0
+_mw_limit_at=$SECONDS
+limit_recheck() {
+  [ "$_mw_limit_on" = 1 ] || return 0
+  local every="${LR_MOVE_LIMIT_RECHECK_S:-30}"
+  case "$every" in ''|*[!0-9]*) every=30 ;; esac
+  [ $(( SECONDS - _mw_limit_at )) -ge "$every" ] || return 0
+  _mw_limit_at=$SECONDS
+  if limited_now; then limited_stop; fi
+}
+
 # W2. A row that was busy at plan time waits for the batch runner's shared census (one census for
 # every waiting worker, never one each: a census is ~7 CPU-seconds) to call it `move` on two
 # consecutive snapshots. A sid ABSENT from two consecutive snapshots has left the source's census —
@@ -148,6 +203,7 @@ case "$DISP" in
     while :; do
       aborted && finish NOTMOVED "aborted while waiting for idle; nothing touched"
       intent_recheck
+      limit_recheck
       ts="$(sed -n '1p' "$BDIR/snap.ts" 2>/dev/null || true)"
       if [ -n "$ts" ] && [ "$ts" != "$last_ts" ] && [ -f "$BDIR/snap.tsv" ]; then
         last_ts="$ts"
@@ -180,25 +236,7 @@ case "$DISP" in
     rm -f "$BDIR/$SID.waiting" 2>/dev/null || true ;;
 esac
 
-# W2b. A session whose last record is now a limit error owes a turn, and this lane types none: it
-# would come up on the target at rest, still unanswered, and be reported MOVED. The plan-time hold
-# (bin/cc-lr, hold:limited) reads the transcript once, when the plan is written; a row that waited
-# for idle, or queued for a slot, can have hit its limit since. The census the wait loop reads does
-# not look (an api-error tail is "at rest"), so the same read is made here and again once the slot
-# is held.
-# The transcript is read at the row's cwd slug first, the encoding lr_session_location uses: the glob
-# walked ~18,200 project dirs (REPORT §6 item 5) three times a worker, and could reach a stale copy in
-# a dir that sorts first. Glob only on a miss; LR_MOVE_LOCATION_FAST=off globs always.
-limited_now() { # → 0 when the session's last assistant record is a limit error
-  local tx=""
-  if [ -n "$CWD" ] && [ "$CWD" != - ] && [ "${LR_MOVE_LOCATION_FAST:-on}" != off ]; then
-    tx="$SRC_CFG/projects/$(printf %s "$CWD" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g')/$SID.jsonl"
-    [ -f "$tx" ] || tx=""
-  fi
-  [ -n "$tx" ] || for tx in "$SRC_CFG"/projects/*/"$SID".jsonl; do [ -f "$tx" ] && break; tx=""; done
-  [ -n "$tx" ] && [ "$(lr_last_api_error "$tx" 2>/dev/null | cut -f3 || true)" = limit ]
-}
-limited_stop() { finish NOTMOVED "became-limited: its last record is now a limit error, so it owes a turn this lane does not type; nothing touched. Recover it: cc-lr recover ${SID:0:8}"; }
+# W2b. The limit read after the idle wait (limited_now, defined above the first wait).
 limited_now && limited_stop
 
 # W2d. A DRAFT IS CARRIED, NEVER HELD FOR BEING THERE (operator request 2026-10-18). The plan gives a
@@ -272,6 +310,7 @@ draft_gate() { # → returns with DRAFT_CARRY set (or not); finishes HELD:draft 
     [ -n "$said" ] || { said=1; ev draft-wait "its box changed within ${stale}s (input idle ${hid}s); waiting until it sits unchanged that long, up to ${wait}s"; }
     aborted && finish NOTMOVED "aborted while its draft was still changing; nothing touched"
     intent_recheck
+    limit_recheck
     [ "$now" -lt "$deadline" ] \
       || finish NOTMOVED "HELD:draft — its box was still changing after ${wait}s, so someone is typing in it; nothing touched"
     sleep "${LR_MOVE_DRAFT_POLL_S:-10}"
@@ -376,6 +415,7 @@ slot_deadline=$(( $(date +%s) + ${LR_MOVE_SLOT_WAIT_S:-600} ))
 until slot_try; do
   aborted && finish NOTMOVED "aborted while waiting for a slot; nothing touched"
   intent_recheck
+  limit_recheck
   [ "$(date +%s)" -lt "$slot_deadline" ] || finish NOTMOVED "slot-wait: no move slot freed in ${LR_MOVE_SLOT_WAIT_S:-600}s (width $WIDTH, a fixed count, not a memory limit)${_mw_yielded:+, and it yielded the free ones to rows ahead of it in the plan}; nothing touched. Run it again once the lane has drained"
   sleep "${LR_MOVE_SLOT_POLL_S:-2}"
 done
@@ -421,6 +461,9 @@ elif [ "${LR_MOVE_RAIL_EXIT_CLEAR:-on}" != off ] && { [ -n "$SOCK" ] || [ -n "${
   # through the pane's own registered socket (or an explicit TUI seam): never the caller's terminal.
   rail_exit_clear "$_mw_now" || true
 fi
+# The last read before W5 (F-B3): the kernel read, the intent and the box all came after the slot's
+# limit read, and each can take seconds under load.
+if [ "$_mw_limit_on" = 1 ] && limited_now; then limited_stop; fi
 attempt=1
 while :; do
   HLOG="$BDIR/$SID.handoff.log"; [ "$attempt" -eq 1 ] || HLOG="$BDIR/$SID.handoff.$attempt.log"

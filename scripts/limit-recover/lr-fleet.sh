@@ -866,6 +866,19 @@ for r in rows:
     ok.append((w, s, a))
 for w, s, a in sorted(ok): print(a)'
 }
+# The reconciler's record for $1 is open, acting (not plan-only, not escalated) and PLANNED onto a
+# target → 0 and the target account on stdout · 1 otherwise. Read-only on the reconciler's tree; the
+# record is written tmp + rename, so a read never sees half a file. Any failed read is "not placed":
+# this run then goes on exactly as before.
+lf_recon_placed() {
+  [ ! -e "$STATE/fleet-recon-placed.off" ] || return 1
+  local rec="${LR_RECON_ROOT:-$STATE/recon}/sessions/$1.json" t
+  [ -f "$rec" ] || return 1
+  t="$(jq -r 'select(.terminal == null and (.plan_only == true | not) and (.escalated == true | not)
+                     and .substate == "PLANNED" and ((.target_acct // "") != "")) | .target_acct' "$rec" 2>/dev/null)" || return 1
+  [ -n "$t" ] || return 1
+  printf '%s' "$t"
+}
 # ── THE ADMIT SECTION — everything under the lock, and NOTHING ELSE ─────────────────────────────
 # Returns 0 = admitted and LF_ADMIT_TARGET / LF_ADMIT_T0 are set · 1 = parked, the row is already
 # written · 3 = dry run, the row is already written and the caller stops at rc 0.
@@ -873,8 +886,20 @@ for w, s, a in sorted(ok): print(a)'
 # release: a section with five `return` sites and a release beside each is a release site waiting
 # to be missed.
 lf_admit_section() { # $1=sid $2=cfg $3=acct $4=pane $5=cwd $6=tier → 0 admitted · 1 parked · 3 dry
-  local sid="$1" cfg="$2" acct="$3" pane="$4" cwd="$5" tier="$6" target model="" effort=""
+  local sid="$1" cfg="$2" acct="$3" pane="$4" cwd="$5" tier="$6" target model="" effort="" rplaced=""
   LF_ADMIT_TARGET=""; LF_ADMIT_T0=""
+  # THE BACKSTOP LETS GO OF A SESSION THE RECONCILER HAS PLACED (A7 Part A′, efficacy R3 option a).
+  # A poller-dispatched run holds runs/by-sid for its whole life, and while it does the reconciler
+  # cannot write owned/<sid> (take_ownership takes the claim first): on 2026-10-20 one such run waited
+  # 18 min to its first router call, parked twice on rc 3, and held the claim while the reconciler had
+  # been placed since 04:53. So right before the router call, a daemon run re-reads the reconciler's
+  # record; an open, acting PLANNED record with a target ends this run PARKED, which the poller's
+  # rq_refund_park hands back as no attempt. Off: $STATE/fleet-recon-placed.off, read per run.
+  if [ "$FROM_DAEMON" = 1 ] && rplaced="$(lf_recon_placed "$sid")"; then
+    echo "lr-fleet: $sid — reconciler placed: its record is PLANNED onto $rplaced; leaving the session (and the claim) to it" >&2
+    lf_row "$sid" "$pane" "$pane" "$acct" "-" "parked" "reconciler placed: its open record is PLANNED onto $rplaced, so this backstop run lets go before ranking; nothing was ranked, charged or typed"
+    return 1
+  fi
   # CALLED DIRECTLY, never through `$( )` — see lf_pick_target's header. A subshell here is what
   # made three of its four outputs unreachable.
   lf_pick_target "$acct" "$tier" "$sid" || {
