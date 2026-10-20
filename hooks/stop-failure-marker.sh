@@ -617,10 +617,14 @@ if [ -e "$_SF_RQ_STATE/recon.on" ]; then
     # LR_STATE_DIR is the hook's own resolved state dir, so the ledger lands under the same tree
     # the recon.on flag was read from; LR_RECON_ROOT, when set, passes through untouched. With no
     # timeout(1) it runs unbounded rather than dropping the fact, as the page ladder above does.
-    if LR_STATE_DIR="$_SF_RQ_STATE" PYTHONPATH="$_sf_lrd" \
-         ${_sf_tb:+"$_sf_tb" -k 1 "${STOP_FAILURE_FACT_TIMEOUT_S:-2}"} python3 -m lr_recon.facts \
+    # It runs FROM $_sf_lrd, in a subshell: `python -m` puts the cwd at sys.path[0] ahead of the
+    # stdlib, and the hook's cwd is the capped session's, so a json.py planted there ran against
+    # live facts (G2 review C1). -E drops PYTHONPATH/PYTHONHOME, -s the user site; the cwd is now
+    # the package's own parent, which is also how lr_recon is found.
+    if ( cd "$_sf_lrd" 2>/dev/null && LR_STATE_DIR="$_SF_RQ_STATE" \
+         ${_sf_tb:+"$_sf_tb" -k 1 "${STOP_FAILURE_FACT_TIMEOUT_S:-2}"} /usr/bin/python3 -E -s -m lr_recon.facts \
          hook-write --acct "$ACCOUNT" --sid "$SID" --scope "$_sf_scope" --resets-at "$_sf_reset" \
-         >/dev/null 2>&1; then
+         >/dev/null 2>&1 ); then
       log_idl fired "fact-written"
     else
       log_idl abstained "fact-write-failed"
