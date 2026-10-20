@@ -1,0 +1,45 @@
+# G1 allowlist: every load read in the limit-recover rail, by enclosing function (tests/lr-guarantee-g1-lint.bats).
+# Columns: path<TAB>enclosing-function<TAB>class<TAB>reason/owner. Anchored on function names, never line numbers.
+# Python names are qualified (Class.method); <top> is code outside any function.
+# Classes: telemetry | capped-bound-stretch | env-off:<module>.<function> | debt:<owner>.
+#   telemetry: the reading is recorded or printed and decides nothing.
+#   capped-bound-stretch: the reading lengthens a bound, and the function shows its cap (python `return min(`, shell min( or an awk clamp).
+#   env-off: the call's env comes from that lr_recon builder, which sets CC_ADMIT_LOAD_TERM off, and a test proves it.
+#   debt: a real load-dependent decision with a named owner; printed on every run, and RESOLVED when it no longer matches.
+# Plan: docs/plans/LR_SUSTAINED_LOAD_IMPL.md W1 lever 5; design: docs/research/lr-sustained-load-2026-10-20/impl/B1-load-harness.md §9.10.
+scripts/limit-recover/lr_recon/admit.py	Admission.enter_active	telemetry	l_open is recorded and read by nothing (B1 §9.10)
+scripts/limit-recover/lr_recon/admit.py	Admission.decide	telemetry	load1/load5/ncpu are accepted for symmetry and deleted unread (`del load1, load5, ncpu`)
+scripts/limit-recover/lr_recon/__main__.py	_admission_period	telemetry	os.getloadavg() is handed to Admission.enter_active, which only records it
+scripts/limit-recover/lr_recon/__main__.py	_admit	telemetry	os.getloadavg() is handed to Admission.decide, which deletes it
+scripts/limit-recover/lr_recon/__main__.py	_plan	debt:B2	load1 feeds plan.place_timeout (capped at 120 s) and the log line; the cap lives in place_timeout, so it is not visible here
+scripts/limit-recover/lr_recon/plan.py	place_timeout	capped-bound-stretch	--place bound: min(PLACE_TIMEOUT_MAX_S, ...), 120 s at most
+scripts/limit-recover/lr_recon/observe.py	ps_bound	capped-bound-stretch	ps bound: min(PS_BOUND_MAX_S, ...), 40 s at most; os.getloadavg is a default argument (F2)
+scripts/limit-recover/lr_recon/clock.py	Clock.load_multiplier	debt:W8	max(1, load1/ncpu/2) is uncapped (x20 at 40/core) and has no caller (F12)
+scripts/limit-recover/lr_recon/clock.py	Clock.__init__	debt:W8	binds os.getloadavg as a default argument, the seam load_multiplier reads (F2)
+bin/cc-lr	cl_self_wait_s	capped-bound-stretch	self-wait budget 900 s x min(4, 1 + load/core / 5), 3600 s at most (awk clamp)
+scripts/handoff-fire.sh	hf_load_per_core	telemetry	value accessor (seam HF_LOAD_PER_CORE); every caller is scanned as a read and carries its own row
+scripts/handoff-fire.sh	hf_load_scaled	capped-bound-stretch	base x min(4, 1 + load/core / 10) (awk clamp)
+scripts/handoff-fire.sh	_it2_type_line	capped-bound-stretch	typing-echo deadline settle x (base + per x load/core), clamped at settle x FIRE_TYPE_ECHO_CAP (60)
+scripts/handoff-fire.sh	fire_engage_window	capped-bound-stretch	engagement window base x load/core / ref, clamped at FIRE_ENGAGE_TIMEOUT_MAX (480 s)
+scripts/handoff-fire.sh	rcy_recovery_packet	telemetry	load/core is written into the recovery packet's cause text
+scripts/handoff-fire.sh	capacity_gate	debt:W12	fire-path only (skipped for --recycle, `[ "$RECYCLE" = 0 ]`); its load term defaults off via ${CC_FIRE_LOAD_TERM:-off}, which no rail env sets
+scripts/handoff-fire.sh	hf_lr_admit	debt:W12	bare cc_capacity_admit (library load term on at 2.0/core); fire-path only, skipped for a recycle and when an admit token is held (C7)
+scripts/handoff-fire.sh	hf_recycle_load_bound	debt:typed-relaunch	the typed-relaunch hold's per-core bound (24/core); HOLD-LOAD never releases while load stays up (F11; W12b and the TR ruling)
+scripts/handoff-fire.sh	hf_recycle_precheck_load_bound	debt:typed-relaunch	the precheck's per-core bound (20/core) for the same typed-relaunch hold (F11)
+scripts/handoff-fire.sh	hf_recycle_load_gate	debt:typed-relaunch	holds a typed relaunch above the bound (F11; W12b and the TR ruling)
+scripts/handoff-fire.sh	<top>	debt:typed-relaunch	the move precheck's top-level block reads load/core and calls hf_recycle_load_gate (HELD:load)
+scripts/lib/capacity-admit.sh	<top>	telemetry	library default ceiling CC_HW_DEFAULT_MAX_LOAD_PER_CORE=2.0; Rule 3 holds every rail call to term off, and bare calls are debt rows
+scripts/lib/capacity-admit.sh	cc_hw_ready	telemetry	readiness check that the library default ceiling is set; no reading
+scripts/lib/capacity-admit.sh	cc_hw_load1	telemetry	value accessor; its callers are scanned as reads and carry their own rows
+scripts/lib/capacity-admit.sh	cc_capacity_admit	telemetry	the library load term; Rule 3 holds every rail call to CC_ADMIT_LOAD_TERM=off, where the reading reaches only the detail line; bare rail calls are debt rows
+scripts/limit-recover/lr-fire-resume.sh	lr_refusal_knob	telemetry	names the CC_ADMIT_MAX_LOAD_PER_CORE knob in a refusal line; reads no load
+scripts/limit-recover/lr-move-worker.sh	mw_load_per_core	telemetry	value accessor for the `ev load` lines (05829eeb7)
+scripts/limit-recover/lr-move-worker.sh	<top>	telemetry	`ev load` lines only: a staged relaunch is not gated, a typed one is held by handoff-fire's own hold
+scripts/limit-recover/lr-recon-watchdog.sh	<top>	telemetry	load goes into the stall verdict's log line; the kill decision reads progress, wake time and CPU
+scripts/limit-recover/lr-upgrade.sh	lru_load1	telemetry	value accessor for the upgrade ledger and census headers
+scripts/limit-recover/lr-upgrade.sh	lru_step_row	telemetry	load1= field of the upgrade ledger row
+scripts/limit-recover/lr-upgrade.sh	lru_status	telemetry	writes and displays the census header's load1= field
+scripts/limit-recover/lr-upgrade.sh	lru_refill	telemetry	load1= field of the census header
+scripts/limit-recover/lr-upgrade.sh	lru_capacity	debt:W12	bare cc_capacity_probe fallback, reached only when lr-lib.sh's term-off lr_capacity_probe_corrected is not loaded (owner provisional, asked of the lead)
+scripts/boot-resume-launch.sh	<top>	debt:W8	bare cc_capacity_admit under the actuator env; W8 converts it to env-off:act.actuator_env
+bin/reso-resume-one	<top>	debt:resume-sessions	bare cc_capacity_admit; off the rail (no rail caller: the actuators mention reso-resume-one in comments only)
