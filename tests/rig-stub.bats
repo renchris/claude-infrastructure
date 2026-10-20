@@ -204,6 +204,11 @@ RIGLIB() { python3 "$REPO/tests/rig/rig_lib.py" "$@"; }
   printf '{"pid": %d, "lstart": "Thu Jan  1 00:00:00 1970"}\n' "$other" > "$R/stale.pid.id"
   echo "$other" > "$R/norec.pid"                      # no identity recorded at all
   echo "$other" > "$R/noroot.pid"; RIGLIB record-id "$R/noroot.pid"   # right lstart, argv not the rig's
+  # the rig's own argv but another lstart: the pid was reused by a process that happens to match
+  echo "$good" > "$R/reused.pid"
+  printf '{"pid": %d, "lstart": "Thu Jan  1 00:00:00 1970"}\n' "$good" > "$R/reused.pid.id"
+  run RIGLIB kill-verified "$R" "$R/reused.pid" TERM; [ "$status" -eq 1 ]
+  kill -0 "$good"
   run RIGLIB kill-verified "$R" "$R/stale.pid" TERM;  [ "$status" -eq 1 ]
   run RIGLIB kill-verified "$R" "$R/norec.pid" TERM;  [ "$status" -eq 1 ]
   run RIGLIB kill-verified "$R" "$R/noroot.pid" TERM; [ "$status" -eq 1 ]

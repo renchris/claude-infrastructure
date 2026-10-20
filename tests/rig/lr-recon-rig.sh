@@ -44,6 +44,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 KITTEN="${LR_KITTEN_BIN:-/Applications/kitty.app/Contents/MacOS/kitten}"
 KITTY_REAL="${LR_RIG_REAL_KITTY:-/Applications/kitty.app/Contents/MacOS/kitty}"
+# Setup bounds (B1 §9.1). At 25/core the daemon's startup outran the old fixed 60 s before its
+# first heartbeat (measured 2026-10-20, load1 247 on 10 CPUs, band 31). A bound that fires here is
+# a setup NO-VERDICT (exit 2), never a result; the caller sizes it to the box.
+HB_WAIT_S="${LR_RIG_HB_WAIT_S:-60}" BOOT_WAIT_S="${LR_RIG_BOOT_WAIT_S:-90}"
 REAL_HOME="$HOME"
 # B1 of the W5 contract: argv0 must end in /claude, which only exec -a onto the framework binary keeps
 PYAPP="$(/usr/bin/python3 -c 'import sys;print(sys.base_prefix)')/Resources/Python.app/Contents/MacOS/Python"
@@ -232,7 +236,7 @@ log "opened $(wc -l < "$RIG/windows" | tr -d ' ') rig panes on $SOCK"
 # every live stub reaches its starting state (limit death written, or idle at rest) before anything
 t0=$(date +%s)
 until python3 "$HERE/rig_lib.py" booted "$RIG"; do
-  [ $(( $(date +%s) - t0 )) -lt 90 ] || { teardown; die "stubs did not boot within 90 s"; }
+  [ $(( $(date +%s) - t0 )) -lt "$BOOT_WAIT_S" ] || { teardown; die "stubs did not boot within $BOOT_WAIT_S s"; }
   sleep 1
 done
 
@@ -303,7 +307,7 @@ log "rig daemon supervisor pid $SUP (recon.on + mode=act under $RIG only)"
 # go_barrier matrices create.)
 t0=$(date +%s)
 until [ -n "$(find "$RIG/state/heartbeat" -newermt "-15 seconds" 2>/dev/null)" ]; do
-  [ $(( $(date +%s) - t0 )) -lt 60 ] || { teardown; die "the rig daemon wrote no heartbeat within 60 s"; }
+  [ $(( $(date +%s) - t0 )) -lt "$HB_WAIT_S" ] || { teardown; die "the rig daemon wrote no heartbeat within $HB_WAIT_S s"; }
   sleep 1
 done
 SRC="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("source","next"))' "$FAULTS")"
