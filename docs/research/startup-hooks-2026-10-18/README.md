@@ -356,16 +356,24 @@ Waves 1-5 and 7 landed through the project-local `/ship`. Wave 6 is operator-onl
 
 Two instruments. The census is `python3 -I a3_dispatch_census.py <list> --rows <tsv>` over the transcripts born in each window (the harness's own `durationMs`; lists and rows kept outside the repo). The ledger is `~/.claude/logs/session-start-dispatch.jsonl` from Wave 2 (the dispatcher's own clock from process start), read only. Isolated = secondary, tertiary, quaternary.
 
-| Measure | Baseline (§2 #1; A2/A3/A8) | After 1.1 (census, transcripts born 10-18T20:40Z to 10-19T11:17Z) | After Wave 2 (census + ledger, 10-19T11:17Z to 17:32Z; **interim, n=13**) |
-|---|---|---|---|
-| Dispatcher runs | 410 per 2 d | 59: 44 delivered, 15 cancelled | 13: 13 delivered, 0 cancelled; 0 harness-term rows |
-| Isolated p50, delivered runs | 7.4-9.2 s | 4.9 s (n=41) | 3.0 s census / 2.4 s ledger (n=11) |
-| Isolated p90 / max | — | 10.4 s / 12.3 s | 3.7 s / 4.1 s census |
-| Runs ≥9 s (the old child-kill bound) | 84 of 364 (48 h) | 9 of 44 delivered | 0 |
-| Late, killed, absent or malformed children | ~80 real kills per 2 d [E] | not recorded (no ledger yet) | 0 of 130 child rows |
-| config-mirror-assert model output on isolated starts | pending-link warning on ~46% | 0 of 41 | 0 of 11; child p50 2.4 s, p90 3.0 s, max 3.2 s |
-| Dispatcher model context per start | max 650-677 chars | mean 617, max 659 | mean 670, max 705 (all 13 rows predate 4.2) |
+| Measure | Baseline (§2 #1; A2/A3/A8) | After 1.1 (census, transcripts born 10-18T20:40Z to 10-19T11:17Z) | After Wave 2 (census + ledger, 10-19T11:17Z to 17:32Z; **interim, n=13**) | After Wave 2, final (10-19T11:17Z to 10-20T05:16Z; census n=63, ledger n=68) |
+|---|---|---|---|---|
+| Dispatcher runs | 410 per 2 d | 59: 44 delivered, 15 cancelled | 13: 13 delivered, 0 cancelled; 0 harness-term rows | census 63 delivered, 0 cancelled; ledger 68 printed, 0 harness-term rows |
+| Isolated p50, delivered runs | 7.4-9.2 s | 4.9 s (n=41) | 3.0 s census / 2.4 s ledger (n=11) | 3.4 s census (n=30) / 2.8 s ledger (n=36); shared 1.9 s ledger (n=32) |
+| Isolated p90 / max | — | 10.4 s / 12.3 s | 3.7 s / 4.1 s census | 5.3 s / 9.4 s census; 6.0 s / 9.1 s ledger |
+| Runs ≥9 s (the old child-kill bound) | 84 of 364 (48 h) | 9 of 44 delivered | 0 | 1 of 68 (9.1 s, a resume during an account switch) |
+| Late, killed, absent or malformed children | ~80 real kills per 2 d [E] | not recorded (no ledger yet) | 0 of 130 child rows | 1 of 680: `session-start.sh` late at 15.1 s, collected by the late path (`late-ok`), not lost |
+| config-mirror-assert model output on isolated starts | pending-link warning on ~46% | 0 of 41 | 0 of 11; child p50 2.4 s, p90 3.0 s, max 3.2 s | child p50 2.8 s, p90 4.1 s, ≥3 s on 11 of 36; slowest child in 65 of 68 runs |
+| Dispatcher model context per start | max 650-677 chars | mean 617, max 659 | mean 670, max 705 (all 13 rows predate 4.2) | after 4.2: mean 131, max 297 (n=55) |
 
 Reading it. The 1.1 window includes the 16:34 local reboot's resume storm (load 300-590); all 15 cancels (12.8-25.9 s) fall in it, so its isolated p50 is the clean comparison. The Wave 2 window is quiet and small: it shows the expected direction (p50 3.0 s against the §1 estimate of "about 3 s", no run near the bound) but it is not yet the ≥50-start sample the plan called for. The census's accounts-board detector (`"CLAUDE MAX" in s`) no longer matches the redesigned board and reports it on 2 of 13 starts; the ledger shows `accounts-board.sh` `st:ok` with a 1.9-2.8 KB systemMessage on 13 of 13, so that is a stale signature, not a loss. The fleet line (3.5) read at 17:45Z: 1 loss since it was installed, a project hook.
 
-Still open: the ≥50-start re-run of this table, 5.7 (decide at 30 isolated ledger rows; interim config-mirror-assert p50 2.1-2.4 s, under the 3 s trigger), and #30/#31 (decide at 50 rows, backlog `149ae5936586`).
+Still open (as of 2026-10-19; resolved in Final dispositions below): the ≥50-start re-run of this table, 5.7 (decide at 30 isolated ledger rows; interim config-mirror-assert p50 2.1-2.4 s, under the 3 s trigger), and #30/#31 (decide at 50 rows, backlog `149ae5936586`).
+
+### Final dispositions (2026-10-20)
+
+- **After Wave 2, ≥50 starts:** the final column above (census and ledger both past 50). The isolated-account median went 7.4-9.2 s → 4.9 s (1.1) → 2.8-3.4 s (Wave 2), with 0 cancels in 63 starts against 15 of 59 in the 1.1 window. Model context per start fell 80% with 4.2. Rows and lists: kept outside the repo with the lead's state.
+- **#30/#31 precompute: not built.** activation-watch p90 1.2 s and escalation-watch p90 1.4 s were the slowest child in 0 of 68 runs, so precomputing them saves 0 ms of first response. Backlog `149ae5936586` closed on that measurement.
+- **5.7 mirror split: reopened as a decision.** At n=20 it read as not warranted (median 2.1-2.6 s). At n=36 the isolated median is 2.8 s, p90 4.1 s, 3 s or more on 11 of 36 starts, and config-mirror-assert is the slowest child in 65 of 68 runs. The literal trigger (a 3 s median) is still unmet; whether to build is filed as `cc-decide` packet `c1eadaa7322d` (recommend build, 70%).
+- **Wave 6:** applied by the operator 2026-10-19: 0068, 0069, 0071, 0012. The rest are `cc-decide` packets with their research (two rounds, adversarially checked): 6.3 hold and re-measure `407dfa620bd2`, 6.6a retire pre-session-validate via a new 0072 `f27d3dcf0473`, 6.6b keep desk-brief-inject `9db03d3bbaf4`, 6.7 upgrade at the next window with floor 2.1.301 `5a7554481183`, 6.8 split and close `39421508c872`, and fixing 0066's login-less probe so the settings batch can run `9cdae1c4d4b2`.
+- **Test hermeticity found on the way:** six suites wrote fixture sessions into the live `~/.claude/state/startup-health` (fixed `612a5370a`); the 0012 case in `staged-migrations-cmd-bare.bats` ran the rewritten 0012 without `--confirm` (fixed `87683835e`). Per-wave suites over trunk: 31 of 31 with 0 failures.
