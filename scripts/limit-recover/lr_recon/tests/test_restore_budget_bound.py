@@ -139,7 +139,13 @@ class StandingRefusalIsVisible(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.home = os.path.join(self.tmp, "home")
         os.makedirs(self.home)
-        self.paths = T.Paths.from_env(root=os.path.join(self.tmp, "lr", "recon"))
+        # An explicit env, never os.environ: lr_root is the parent of recon.on and locks/, and without
+        # it from_env resolved under the caller's $HOME, which for a bare run is the live tree.
+        self.paths = T.Paths.from_env(
+            root=os.path.join(self.tmp, "lr", "recon"),
+            env={"HOME": self.home, "LR_STATE_DIR": self.tmp + "/lr"},
+        )
+        self.assertTrue(self.paths.lr_root.startswith(self.tmp), self.paths.lr_root)
         M.store.ensure_dirs(self.paths)
         open(self.paths.recon_on, "w").close()
         self.ctx = M.Ctx(self.paths, None, self.home)
