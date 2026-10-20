@@ -47,7 +47,7 @@ for l in "${LABELS[@]}"; do
   src="$LIVE/$l.plist"
   [ -f "$src" ] || fail "live plist missing: $src"
   plutil -lint "$src" >/dev/null 2>&1 || fail "plutil -lint failed: $src"
-  plutil -p "$src" 2>/dev/null | grep -q '"ProcessType" => "Interactive"' \
+  case "$(plutil -p "$src" 2>/dev/null)" in *'"ProcessType" => "Interactive"'*) ;; *) false ;; esac \
     || fail "$src has no ProcessType Interactive: the live layer is not converged yet (scripts/deploy-live.sh)"
 done
 [ -f "$LIVE/lr_recon/band.py" ] || fail "$LIVE/lr_recon/band.py missing: the live layer is not converged yet"
@@ -61,7 +61,9 @@ fi
 
 # 2. wait for a quiet reconciler: no lr-recon-act child (an actuator mid-move).
 acting() { local p c; p="$(job_pid com.reso.lr-reconciler)"; [ -n "$p" ] || return 1
-  for c in $(pgrep -P "$p" 2>/dev/null); do ps -o command= -p "$c" 2>/dev/null | grep -q 'lr-recon-act' && return 0; done
+  for c in $(pgrep -P "$p" 2>/dev/null); do
+    case "$(ps -o command= -p "$c" 2>/dev/null)" in *lr-recon-act*) return 0 ;; esac
+  done
   return 1; }
 deadline=$(( $(date +%s) + QUIET_MAX_S ))
 while acting; do
