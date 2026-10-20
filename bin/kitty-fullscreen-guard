@@ -32,7 +32,10 @@ HOW IT DECIDES
        4; WINDOWED = exactly [0] and onscreen; UNKNOWN = anything else. The Space type is not a
        transition detector (it leaves 4 up to 0.39 s before an exit animation ends and never reads
        4 during an enter), so "windowed" only counts after it has held for STABLE_S, longer than the
-       longest transition measured (0.90 s).
+       longest transition measured (0.90 s). One UNKNOWN shape is a window at rest: exactly [0],
+       bounds present, NOT onscreen — a normal window on a desktop the display is not showing.
+       Before any toggle it counts as safe (safe-windowed-offscreen) after BG_STABLE_S of identical
+       windowed reads; any other read in that hold refuses. After a toggle it stays UNKNOWN.
     3. --mode refuse (autonomous callers) never toggles. --mode toggle (operator-initiated) toggles
        an FS window out of fullscreen ONCE — only when it is onscreen, so the operator is never
        pulled to a Space they were not looking at — then waits for a stable windowed read, and never
@@ -111,6 +114,7 @@ except Exception:
 TOOL = "kitty-fullscreen-guard"
 SAMPLE_S = 0.1  # poll interval
 STABLE_S = 1.0  # a windowed read counts only after holding this long (> 0.90 s longest transition)
+BG_STABLE_S = 2.0  # a windowed read on a desktop NOT on screen: > 2x the longest transition (0.90 s)
 UNKNOWN_DEADLINE_S = 3.0  # toggle mode, before toggling: UNKNOWN is polled this long, then refused
 AFTER_DEADLINE_S = 8.0  # after the one toggle: stable windowed must arrive by then
 KITTY_CALL_TIMEOUT_S = 5.0
@@ -620,10 +624,38 @@ def _alert(wid: int, verdict: str, last: WindowState) -> None:
         pass
 
 
+SAFE_VERDICTS = ("safe-windowed", "safe-windowed-offscreen")
+
+
+def _is_bg_windowed(s: WindowState) -> bool:
+    """Space type exactly [0] with bounds, but not on screen: a normal window on a desktop the
+    display is not showing — or the 0.17-0.39 s tail of an exit animation, which is why it only
+    counts after _hold_bg_windowed. classify() calls it UNKNOWN, which refused every pane whose
+    windowed OS window sat on another desktop (wid 170, 2026-10-20: 1200x828, 5 identical reads in
+    11 s, left as a dead pane titled "last pane of a fullscreen window")."""
+    return s.types == [0] and s.onscreen is False and s.bounds is not None
+
+
+def _hold_bg_windowed(pwid: Any, first: WindowState) -> tuple[str, WindowState]:
+    """Safe only after BG_STABLE_S of reads that are all windowed (on screen or not) with bounds
+    identical to the first. Any other read refuses as refused-unknown — never refused-fs, so the
+    relax mapping (FS + onscreen ⇒ 0) can never apply to a window that moved mid-hold."""
+    start, held = _now(), first.bounds
+    while True:
+        _sleep(SAMPLE_S)
+        s = read_window_state(pwid)
+        if not (_is_bg_windowed(s) or s.state == WINDOWED) or s.bounds != held:
+            return "refused-unknown", s
+        if _now() - start >= BG_STABLE_S:
+            return "safe-windowed-offscreen", s
+
+
 def _refuse_mode(pwid: Any) -> tuple[str, WindowState]:
     start = _now()
     while True:
         s = read_window_state(pwid)
+        if _is_bg_windowed(s):
+            return _hold_bg_windowed(pwid, s)
         if s.state != WINDOWED:
             return ("refused-fs" if s.state == FS else "refused-unknown"), s
         if _now() - start >= STABLE_S:
@@ -632,7 +664,8 @@ def _refuse_mode(pwid: Any) -> tuple[str, WindowState]:
 
 
 def _before_toggle(pwid: Any) -> tuple[str, WindowState]:
-    """→ ("safe-windowed" | "toggle" | "refused-not-visible" | "refused-unknown", last read)."""
+    """→ ("safe-windowed" | "safe-windowed-offscreen" | "toggle" | "refused-not-visible" |
+    "refused-unknown", last read)."""
     start = _now()
     since = None
     while True:
@@ -644,6 +677,8 @@ def _before_toggle(pwid: Any) -> tuple[str, WindowState]:
             since = t if since is None else since
             if t - since >= STABLE_S:
                 return "safe-windowed", s
+        elif _is_bg_windowed(s):
+            return _hold_bg_windowed(pwid, s)
         else:
             since = None
             if t - start >= UNKNOWN_DEADLINE_S:
@@ -738,16 +773,16 @@ def decide(
         verdict, s = _refuse_mode(pwid)
         if mode != "refuse" and verdict == "refused-fs" and s.onscreen is not True:
             verdict = "refused-not-visible"
-        rc, relaxed = relaxed_rc(0 if verdict == "safe-windowed" else 3, verdict, s, reason)
+        rc, relaxed = relaxed_rc(0 if verdict in SAFE_VERDICTS else 3, verdict, s, reason)
         return rc, verdict, info, s, relaxed
 
     if mode == "refuse":
         verdict, s = _refuse_mode(pwid)
-        return (0 if verdict == "safe-windowed" else 3), verdict, info, s, None
+        return (0 if verdict in SAFE_VERDICTS else 3), verdict, info, s, None
 
     verdict, s = _before_toggle(pwid)
     if verdict != "toggle":
-        return (0 if verdict == "safe-windowed" else 3), verdict, info, s, None
+        return (0 if verdict in SAFE_VERDICTS else 3), verdict, info, s, None
     try:
         toggled = kitten_query(addr, wid, toggle=True)
     except NotFound:

@@ -520,3 +520,31 @@ for v, st in (("refused-timeout", g.WindowState("UNKNOWN", [0], False, None)),
   vrow | grep -q '"state":"UNKNOWN","types":\[0\],"onscreen":false,"bounds":\[1.0,2.0,800.0,600.0\],"verdict":"refused-timeout"' || { cat "$CC_KITTY_PANE_ACTIONS_LOG"; false; }
   grep -q '^osascript .*display alert.*left fullscreen and is now a normal window on the desktop' "$CALLS" || { cat "$CALLS"; false; }
 }
+
+# A normal window on a desktop the display is not showing: type [0], bounds, onscreen False.
+# wid 170, 2026-10-20: refused 5 times in 11 s as refused-unknown and left as a dead pane.
+@test "36 refuse mode: a windowed window on a desktop not on screen is safe after 2.0 s of identical reads" {
+  run drive 'kitten(); states(lambda t: g.WindowState("UNKNOWN", [0], False, (0.0, 0.0, 1200.0, 828.0))); run("refuse")'
+  [[ "$output" == "rc=0 verdict=safe-windowed-offscreen toggles=0 "* ]] || { echo "$output"; false; }
+  python3 -c "import sys; t=float('$(field t)'); sys.exit(0 if 2.0 <= t < 2.3 else 1)" || { echo "$output"; false; }
+}
+
+@test "37 the offscreen hold refuses as refused-unknown on fullscreen, other bounds, or an unreadable read — never relaxable" {
+  BG='g.WindowState("UNKNOWN", [0], False, (0.0, 0.0, 1200.0, 828.0))'
+  run drive "kitten(); states(lambda t: $BG if t < 0.5 else FS); run('refuse')"
+  [[ "$output" == "rc=3 verdict=refused-unknown toggles=0 "* ]] || { echo "$output"; false; }
+  run drive "kitten(); states(lambda t: $BG if t < 0.5 else g.WindowState('UNKNOWN', [0], False, (0.0, 0.0, 1300.0, 828.0))); run('refuse')"
+  [[ "$output" == "rc=3 verdict=refused-unknown toggles=0 "* ]] || { echo "$output"; false; }
+  run drive "kitten(); states(lambda t: $BG if t < 0.5 else UNK); run('refuse')"
+  [[ "$output" == "rc=3 verdict=refused-unknown toggles=0 "* ]] || { echo "$output"; false; }
+  # on the patched build an FS-onscreen read is relaxable — but not when it arrives inside this hold
+  run drive "kitten(fsfix=True); states(lambda t: $BG if t < 0.5 else FS); run('refuse')"
+  [[ "$output" == "rc=3 verdict=refused-unknown toggles=0 "*"relaxed=None" ]] || { echo "$output"; false; }
+}
+
+@test "38 toggle mode: a windowed window on a desktop not on screen is safe with no toggle; after a toggle it is not" {
+  run drive 'kitten(); states(lambda t: g.WindowState("UNKNOWN", [0], False, (0.0, 0.0, 1200.0, 828.0))); run()'
+  [[ "$output" == "rc=0 verdict=safe-windowed-offscreen toggles=0 "* ]] || { echo "$output"; false; }
+  run drive 'kitten(); states(lambda t: FS if not toggles else g.WindowState("UNKNOWN", [0], False, (0.0, 0.0, 1200.0, 828.0))); run()'
+  [[ "$output" == "rc=3 verdict=refused-timeout toggles=1 "* ]] || { echo "$output"; false; }
+}
