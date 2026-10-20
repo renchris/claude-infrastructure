@@ -41,6 +41,10 @@ from lr_recon import (
 from lr_recon import facts as F
 from lr_recon import types as T
 from lr_recon.admit import Admission, BootSlots, jitter_s
+try:
+    from lr_recon import band
+except ImportError:  # a live layer advanced before install.sh linked the new file: run without it
+    band = None  # type: ignore[assignment]
 from lr_recon.clock import (
     Caffeinate,
     Clock,
@@ -116,6 +120,7 @@ class Ctx:
         # transient --place non-answers
         self.pre_census: Dict[str, str] = {}
         self.place_misses: Dict[str, int] = {}
+        self.band_paged = False  # band.py: one page per daemon process when below priority 31
 
 
 def _alive(pid: int, lstart: str) -> bool:
@@ -528,6 +533,22 @@ def _provenance(paths: T.Paths, now: float) -> bool:
     except OSError:
         return False
     return True
+
+
+def _band(ctx: Ctx, now: float) -> None:
+    """REPORT lever A1: log this daemon's own base priority once per pass to recon/band.log and
+    page once per process if it is below 31 (band.py). LR_RECON_BAND_CHECK=off skips it."""
+    if band is None or os.environ.get("LR_RECON_BAND_CHECK", "on") == "off":
+        return
+    rep = ctx.reporter or report.Reporter(ctx.paths, read_mode(ctx.paths, ctx.mode_cap))
+
+    def page(text: str) -> None:
+        _event(ctx.paths, "band-low", detail=text[:200])
+        rep.daemon_page("BAND", text)
+
+    ctx.band_paged = band.check(
+        ctx.paths.p("band.log"), now, ctx.band_paged, page, store.append_bounded
+    )
 
 
 SNAP_TIMEOUT_S = 20
@@ -1800,6 +1821,7 @@ def daemon(ctx: Ctx) -> int:
                 not ctx.paths.canary
             ):  # the daemon only: a --once or test pass never pages it
                 _provenance(ctx.paths, time.time())
+            _band(ctx, time.time())
             hb.advance()
             moving = any(
                 r.open and r.phase in MOVING or r.substate == "PLANNED"

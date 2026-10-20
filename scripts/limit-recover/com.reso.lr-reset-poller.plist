@@ -25,10 +25,17 @@
      set LR_POLLER_SPAWN=tmux so resumes run in a DETACHED tmux PTY (attach: `tmux attach -t
      lr-resume-<sid8>`). auto = try GUI, fall back to tmux — never silently fail a resume.
      A MONTHLY-SPEND kill (no reset) opens a class-B cc-decide packet instead of parking; its default
-     fires after LR_SPEND_VETO_HOURS (default 1h). -->
+     fires after LR_SPEND_VETO_HOURS (default 1h).
+
+     ProcessType Interactive (docs/research/lr-sustained-load-2026-10-20/REPORT.md §3.1, lever A1):
+     with no ProcessType launchd's default light limits put the tick and every move batch, worker
+     and recycle it starts at PRI 20, below the sessions' 31, and a child cannot climb back from
+     there. Until this job is reloaded from this file the installed copy lacks the key, and
+     launchd-parity-lint.sh reports the drift. -->
 <plist version="1.0">
 <dict>
   <key>Label</key><string>com.reso.lr-reset-poller</string>
+  <key>ProcessType</key><string>Interactive</string>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>

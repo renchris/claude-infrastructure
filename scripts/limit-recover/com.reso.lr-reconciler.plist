@@ -22,10 +22,19 @@
 
      /usr/bin/python3 is PINNED rather than taken from PATH: the package is written 3.9-compatible
      for exactly that interpreter, and PATH puts Homebrew first, so an unpinned `python3` would run
-     whatever version brew last installed — a different interpreter under launchd than under test. -->
+     whatever version brew last installed — a different interpreter under launchd than under test.
+
+     ProcessType Interactive (docs/research/lr-sustained-load-2026-10-20/REPORT.md §3.1, lever A1):
+     with no ProcessType launchd runs the daemon and every child it starts (the capacity probe, the
+     placer, the ps census, lr-handoff, handoff-fire, the kitty clients) at PRI 20, below the
+     sessions' 31; at load ~200 the same work took 7-111x longer there and the rail's own bounds
+     fired. setsid children inherit the band. The daemon logs its own base priority every pass to
+     recon/band.log and pages once if it reads below 31 (lr_recon/band.py). An edit here does
+     nothing until the job is booted out and bootstrapped again. -->
 <plist version="1.0">
 <dict>
   <key>Label</key><string>com.reso.lr-reconciler</string>
+  <key>ProcessType</key><string>Interactive</string>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>

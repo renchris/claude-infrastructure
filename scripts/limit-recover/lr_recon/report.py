@@ -699,6 +699,11 @@ class Reporter:
         self._emit(kind, cid, text)
         return text
 
+    def daemon_page(self, kind: str, text: str) -> None:
+        """A page about the daemon itself, not a cohort (band.py's priority check). Same sinks and
+        the same observe-mode shadowing as every other page; the caller latches it."""
+        self._emit(kind, "_daemon", text)
+
     def digest(self) -> str:
         """Observe mode's replacement for paging: every would-be page since the last digest."""
         rows, self._shadowed = self._shadowed, []
