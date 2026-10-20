@@ -253,3 +253,53 @@ calls()      { cat "$C/wp_calls" 2>/dev/null || echo 0; }
   grep -q 'WALL\\\[' "$REPO/bin/cc-dispatch"
   grep -q 'capacity=' "$REPO/bin/cc-dispatch"
 }
+
+# ── BAND SELF-CHECK (lr-sustained-load wave 5) ────────────────────────────────────────────────────
+# The unknown wall above was the SYMPTOM; the cause was the job's band (ProcessType Background,
+# PRI 4). Each launchd pass now logs its base priority and pages when it is below 31. The reader is
+# a stub python file printing a fixed band, so the verdict is the tree's, not this box's. RED on the
+# pre-change binary: no dispatch-band.log is written at all (band-a, band-b), and no page (band-a).
+# CC_DISPATCH_BAND_CHECK=on stands in for launchd's XPC_SERVICE_NAME=com.claude.dispatcher: in a
+# Claude Code tool shell any process started with XPC_SERVICE_NAME set to a real label aborts
+# (rc 134, measured 2026-10-20 with `bash -c 'echo hi'`), so a test cannot fake the launchd marker.
+
+band_reader() { printf 'print(%s)\n' "$1" > "$C/band-reader.py"; export CC_DISPATCH_BAND_READER="$C/band-reader.py"; }
+band_page()   { printf '%s' "$C/pages/cc-dispatch-band.page"; }
+
+@test "band-a: a checked pass reading PRI 4 logs 'low' and raises the band page naming the reload" {
+  band_reader 4
+  CC_DISPATCH_BAND_CHECK=on run "$DISP" --once
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -Eq '^[0-9]+ pid=[0-9]+ pri=4 floor=31 low$' "$C/dispatch-band.log"
+  [ -s "$(band_page)" ]
+  grep -q 'lr-band-reload.sh --confirm dispatcher-band' "$(band_page)"
+  # the page is raised once per 6 h, not once per 5-minute pass
+  rm -f "$(band_page)"
+  CC_DISPATCH_BAND_CHECK=on run "$DISP" --once
+  [ "$(grep -c ' low$' "$C/dispatch-band.log")" -eq 2 ]
+  [ ! -e "$(band_page)" ]
+}
+
+@test "band-b: a pass reading 31 logs 'ok' and clears a standing band page" {
+  band_reader 31
+  printf '1\nstale\n' > "$(band_page)"
+  CC_DISPATCH_BAND_CHECK=on run "$DISP" --once
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -Eq '^[0-9]+ pid=[0-9]+ pri=31 floor=31 ok$' "$C/dispatch-band.log"
+  [ ! -e "$(band_page)" ]
+}
+
+@test "band-c: a hand-run or kicked pass (not launchd's job) logs nothing — its band is its caller's" {
+  band_reader 4
+  env -u XPC_SERVICE_NAME "$DISP" --once >/dev/null 2>&1
+  [ ! -e "$C/dispatch-band.log" ]
+  [ ! -e "$(band_page)" ]
+}
+
+@test "band-d: an unreadable band is 'unknown' and never pages" {
+  printf 'print("n/a")\n' > "$C/band-reader.py"; export CC_DISPATCH_BAND_READER="$C/band-reader.py"
+  CC_DISPATCH_BAND_CHECK=on run "$DISP" --once
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -Eq ' pri=\? floor=31 unknown$' "$C/dispatch-band.log"
+  [ ! -e "$(band_page)" ]
+}

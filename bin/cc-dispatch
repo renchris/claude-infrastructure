@@ -1877,6 +1877,58 @@ write_page() { # <detail>
 }
 clear_page() { rm -f "$PAGE_FILE" 2>/dev/null || true; }
 
+# ── BAND SELF-CHECK (lr-sustained-load wave 5; docs/research/lr-sustained-load-2026-10-20/REPORT.md
+# §3.1). The launchd job shipped as ProcessType Background, which is priority 4: at 15-40 load per
+# core its rank read never finished inside cc-wave-plan's bound and the dispatcher fired nothing
+# from 2026-10-17. The plist now says Interactive, but a plist edit does nothing until the job is
+# reloaded, and a reload from a stale copy silently puts it back at 4. So every launchd pass logs
+# its own BASE priority (lr_recon/band.py, the reconciler's reader: one python fork, no `ps`, whose
+# per-thread read decays under CPU burn) as `<epoch> pid=<pid> pri=<n> floor=31 ok|low|unknown`,
+# and a low read raises the standing page below, at most once per 6 h; an ok read clears it.
+# Scope: auto ⇒ only when launchd started this process as com.claude.dispatcher (XPC_SERVICE_NAME),
+# because a hand-run or a cc-backlog kick inherits its caller's band, which says nothing about the
+# job. on ⇒ always (tests), off ⇒ never. An unreadable band logs `unknown` and never pages.
+DISPATCH_BAND_LOG="${CC_DISPATCH_BAND_LOG:-$(dirname "$IDL")/dispatch-band.log}"
+BAND_PAGE_FILE="$PAGES_DIR/cc-dispatch-band.page"
+band_check() {
+  local pri verdict reader stamp tmo=""
+  case "${CC_DISPATCH_BAND_CHECK:-auto}" in
+    off) return 0 ;;
+    on)  ;;
+    *)   [ "${XPC_SERVICE_NAME:-}" = com.claude.dispatcher ] || return 0 ;;
+  esac
+  # $_self is $0 with its symlinks resolved (CONF PATH block above): through the live layer the
+  # reader is the checkout's band.py, never a path guessed relative to ~/.claude/bin.
+  reader="${CC_DISPATCH_BAND_READER:-$(cd "$(dirname "$_self")/.." 2>/dev/null && pwd)/scripts/limit-recover/lr_recon/band.py}"
+  for tmo in /opt/homebrew/bin/timeout /usr/local/bin/timeout /usr/bin/timeout; do
+    [ -x "$tmo" ] && break; tmo=""
+  done
+  if [ -n "$tmo" ]; then pri="$("$tmo" 15 /usr/bin/python3 -I "$reader" "$$" 2>/dev/null)" || pri=""
+  else pri="$(/usr/bin/python3 -I "$reader" "$$" 2>/dev/null)" || pri=""; fi
+  case "$pri" in
+    ''|*[!0-9]*) pri="?"; verdict=unknown ;;
+    *) if [ "$pri" -lt 31 ]; then verdict=low; else verdict=ok; fi ;;
+  esac
+  mkdir -p "$(dirname "$DISPATCH_BAND_LOG")" 2>/dev/null || return 0
+  printf '%s pid=%s pri=%s floor=31 %s\n' "$(date +%s)" "$$" "$pri" "$verdict" >> "$DISPATCH_BAND_LOG" 2>/dev/null
+  # keep the log bounded: past 256 KiB, keep its newest 2000 lines
+  if [ "$(wc -c < "$DISPATCH_BAND_LOG" 2>/dev/null || echo 0)" -gt 262144 ]; then
+    tail -n 2000 "$DISPATCH_BAND_LOG" > "$DISPATCH_BAND_LOG.tmp.$$" 2>/dev/null \
+      && mv -f "$DISPATCH_BAND_LOG.tmp.$$" "$DISPATCH_BAND_LOG" 2>/dev/null
+  fi
+  stamp="$DISPATCH_BAND_LOG.paged"
+  case "$verdict" in
+    ok)  rm -f "$BAND_PAGE_FILE" "$stamp" 2>/dev/null ;;
+    low)
+      [ -n "$(find "$stamp" -mmin -360 2>/dev/null)" ] && return 0
+      mkdir -p "$PAGES_DIR" 2>/dev/null || return 0
+      { date +%s
+        printf 'cc-dispatch band @ %s: the dispatcher pass (pid %s) runs at scheduling priority %s, below the 31 every Claude session runs at, so its account-rank read times out under load and it fires nothing. Reload com.claude.dispatcher from the repo plist (ProcessType Interactive): bash ~/.claude/scripts/limit-recover/lr-band-reload.sh --confirm dispatcher-band\n' \
+          "$(now_iso)" "$$" "$pri"; } > "$BAND_PAGE_FILE" 2>/dev/null && : > "$stamp" 2>/dev/null ;;
+  esac
+  return 0
+}
+
 # ── one cron pass ────────────────────────────────────────────────────────────────────────────────
 dispatch() { # <dry|run|decide>
   local mode="$1" backlog waveplan spawn items dispatchable count wave plan rc n
@@ -4217,5 +4269,7 @@ elif [ "$WANT_DECIDE" -eq 1 ] || is_on "${CC_DISPATCH_DECIDE_ONLY:-}"; then MODE
 fi
 if   [ "$WANT_USAGE" -eq 1 ];    then usage
 elif [ "$WANT_SELFTEST" -eq 1 ]; then selftest
-else dispatch "$MODE"
+else
+  [ "$MODE" = dry ] || band_check
+  dispatch "$MODE"
 fi

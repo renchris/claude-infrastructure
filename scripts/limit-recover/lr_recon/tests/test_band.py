@@ -74,6 +74,46 @@ class BasePriority(unittest.TestCase):
     def test_a_gone_pid_reads_none(self) -> None:
         self.assertIsNone(band.base_priority(2**30))
 
+    @unittest.skipUnless(sys.platform == "darwin", "darwin only")
+    def test_run_as_a_file_it_prints_the_named_pids_band(self) -> None:
+        """bin/cc-dispatch's band self-check runs ``python3 -I band.py <its pid>``: the same read,
+        as a number on stdout; an unreadable pid prints ``?`` and exits 1."""
+        path = os.path.join(HERE, "lr_recon", "band.py")
+        try:
+            cp = subprocess.run(
+                [sys.executable, "-I", path, str(os.getpid())],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            gone = subprocess.run(
+                [sys.executable, "-I", path, str(2**30)],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            self.skipTest("child did not answer in 60 s under load")
+        self.assertEqual(
+            (cp.returncode, cp.stdout.strip()), (0, str(band.base_priority()))
+        )
+        self.assertEqual((gone.returncode, gone.stdout.strip()), (1, "?"))
+
+    def test_the_dispatcher_plist_declares_processtype_interactive(self) -> None:
+        """Wave 5: the dispatcher shipped as Background (PRI 4); its rank read timed out every pass."""
+        # plutil, not plistlib: the plist's long-standing header comment carries `--` sequences,
+        # which expat rejects inside an XML comment and launchd's own parser accepts.
+        path = os.path.join(HERE, "..", "..", "launchd", "com.claude.dispatcher.plist")
+        if not os.access("/usr/bin/plutil", os.X_OK):
+            self.skipTest("plutil absent")
+        cp = subprocess.run(
+            ["/usr/bin/plutil", "-extract", "ProcessType", "raw", path],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual((cp.returncode, cp.stdout.strip()), (0, "Interactive"))
+
 
 class Check(unittest.TestCase):
     def setUp(self) -> None:

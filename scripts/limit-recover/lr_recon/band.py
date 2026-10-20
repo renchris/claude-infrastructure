@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import ctypes
 import os
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 
 FLOOR = 31  # the band every Claude session runs at
 PROC_PIDTASKINFO = 4
@@ -141,3 +141,23 @@ def check(
     except Exception:  # noqa: BLE001 — a failed page must never stop the daemon
         return False
     return True
+
+
+def main(argv: List[str]) -> int:
+    """``python3 band.py [pid]``: print the base priority of ``pid`` (default: the caller, i.e. this
+    process's parent), or ``?`` and exit 1 when unreadable. Run as a FILE, not ``-m lr_recon.band``,
+    so a shell caller (bin/cc-dispatch's band self-check) loads this module and nothing else."""
+    try:
+        pid = int(argv[1]) if len(argv) > 1 else os.getppid()
+    except ValueError:
+        print("?")
+        return 2
+    pri = base_priority(pid)
+    print("?" if pri is None else pri)
+    return 0 if pri is not None else 1
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(main(sys.argv))
