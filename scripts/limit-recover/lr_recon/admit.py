@@ -28,8 +28,10 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from lr_recon.clock import run_bounded
 
-# argv -> (rc, stdout). rc < 0 means the runner itself failed (spawn error, timeout).
+# argv -> (rc, stdout). rc < 0 means the runner itself failed: RC_SPAWN_ERROR or RC_TIMEOUT.
 Runner = Callable[[List[str]], Tuple[int, str]]
+RC_SPAWN_ERROR = -1  # the child never ran (OSError at spawn)
+RC_TIMEOUT = -2  # the runner's own bound fired before the child answered
 
 REPO_ROOT = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -56,13 +58,18 @@ def _env_int(env: Mapping[str, str], key: str, default: int) -> int:
 
 
 def default_runner(argv: List[str]) -> Tuple[int, str]:
-    """Run argv with no stdin and a hard bound; a spawn failure or timeout is rc -1, never a raise."""
+    """Run argv with no stdin and a hard bound, never a raise: a timeout is RC_TIMEOUT and a spawn
+    failure RC_SPAWN_ERROR, kept apart so a refusal can say which (2026-10-20, next3 cohort: six
+    "probe-error" refusals at load ~259 were the 30 s bound firing on a demoted child, and read the
+    same as a broken library)."""
     try:
         cp = run_bounded(
             argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return -1, ""
+    except subprocess.TimeoutExpired:
+        return RC_TIMEOUT, ""
+    except OSError:
+        return RC_SPAWN_ERROR, ""
     return cp.returncode, cp.stdout
 
 
@@ -180,7 +187,8 @@ class Admission:
         return shlex.quote(os.path.join(self.repo, LIB_REL))
 
     def probe(self, restore_r: int) -> Tuple[bool, str]:
-        """rc 0 admit, rc 9 refuse ("capacity"); anything else is not an admission ("probe-error").
+        """rc 0 admit, rc 9 refuse ("capacity"); the runner's bound firing is "probe-timeout"; any
+        other code is "probe-error rc=<N>" (RC_SPAWN_ERROR reads rc=-1).
 
         The load term is OFF, as lr-lib.sh's probe runs it: the CPU brake (gate 2) is this module's
         load gate. With it on, all 89 of the probe's IDL rows refused on load, and rc 9 was
@@ -196,7 +204,11 @@ class Admission:
         rc, _ = self.runner(["bash", "-c", cmd])
         if rc == 0:
             return True, "admit"
-        return False, "capacity" if rc == 9 else "probe-error"
+        if rc == 9:
+            return False, "capacity"
+        if rc == RC_TIMEOUT:
+            return False, "probe-timeout"
+        return False, "probe-error rc=%d" % rc
 
     def library_probe(self, restore_r: int) -> bool:
         return self.probe(restore_r)[0]
@@ -235,8 +247,8 @@ class Admission:
         cohort: str = "",
     ) -> Tuple[bool, str]:
         """Apply R, the brake, the pacer, then the probe. The reason names the first gate that refused
-        ("restore-r", "cpu", "pacer:<acct>", "capacity", "probe-error", "drip"); "admit" or "admit:drip"
-        otherwise. An admission takes a pacer slot and resets the cohort's refusal run.
+        ("restore-r", "cpu", "pacer:<acct>", "capacity", "probe-timeout", "probe-error rc=<N>", "drip");
+        "admit" or "admit:drip" otherwise. An admission takes a pacer slot and resets the cohort's refusal run.
 
         load5 is accepted for the caller's symmetry with ``enter_active``; the brake reads load1 only,
         because L_open already carries the lagging load5 term (§C6 gate 2)."""

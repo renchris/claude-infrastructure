@@ -6,9 +6,11 @@ import json
 import os
 import shlex
 import shutil
+import subprocess
 import tempfile
 import unittest
-from typing import List, Tuple
+from typing import Any, Callable, List, Tuple
+from unittest import mock
 
 from lr_recon import admit as A
 
@@ -148,7 +150,42 @@ class Library(unittest.TestCase):
         r.rc = 9
         self.assertEqual(adm.probe(8), (False, "capacity"))
         r.rc = 1
-        self.assertEqual(adm.probe(8), (False, "probe-error"))
+        self.assertEqual(adm.probe(8), (False, "probe-error rc=1"))
+
+    def test_a_timeout_is_not_a_probe_error(self) -> None:
+        """2026-10-20, next3 cohort: six "probe-error" refusals at load ~259 were the runner's 30 s
+        bound firing on a demoted child; by hand the same probe answered 0 or 9 in under 5 s. The
+        refusal now says which it was, in the reason the event and the status line carry verbatim."""
+        r = FakeRunner(rc=A.RC_TIMEOUT)
+        adm = active(r)
+        self.assertEqual(adm.probe(8), (False, "probe-timeout"))
+        self.assertEqual(
+            adm.decide("s", "a", 1.0, 0, 0, 1.0, 1.0, 10), (False, "probe-timeout")
+        )
+        r.rc = 3
+        self.assertEqual(adm.probe(8), (False, "probe-error rc=3"))
+        r.rc = A.RC_SPAWN_ERROR
+        self.assertEqual(adm.probe(8), (False, "probe-error rc=-1"))
+        r.rc = 0
+        self.assertEqual(adm.probe(8), (True, "admit"))
+        r.rc = 9
+        self.assertEqual(adm.probe(8), (False, "capacity"))
+
+    def test_default_runner_keeps_timeout_and_spawn_error_apart(self) -> None:
+        def raises(exc: BaseException) -> Callable[..., Any]:
+            def run(*_a: Any, **kw: Any) -> Any:
+                self.assertEqual(kw["timeout"], 30)  # the bound itself is unchanged
+                raise exc
+
+            return run
+
+        with mock.patch.object(
+            A, "run_bounded", raises(subprocess.TimeoutExpired("bash", 30))
+        ):
+            self.assertEqual(A.default_runner(["bash"]), (A.RC_TIMEOUT, ""))
+        with mock.patch.object(A, "run_bounded", raises(OSError("no such file"))):
+            self.assertEqual(A.default_runner(["bash"]), (A.RC_SPAWN_ERROR, ""))
+        self.assertNotEqual(A.RC_TIMEOUT, A.RC_SPAWN_ERROR)
 
     def test_mint_token(self) -> None:
         r = FakeRunner(rc=0, out="/tmp/tok/s1.abc\n")
