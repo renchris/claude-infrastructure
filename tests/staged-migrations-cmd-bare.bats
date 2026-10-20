@@ -71,10 +71,14 @@ rerun_is_noop() {
   real_hook mailbox-wake-arm.sh
   jq -n '{hooks:{SessionStart:[{hooks:[{type:"command",command:"~/.claude/hooks/mailbox-drain.sh session-start",timeout:10}]}],
                  Stop:[{hooks:[{type:"command",command:"~/.claude/hooks/session-continue.sh",timeout:10}]}]}}' > "$S"
-  run /bin/bash "$(mig 0012-mailbox-wake-arm-stop-rearm.sh)"; [ "$status" -eq 0 ]
+  # 3319250f6 moved 0012 to the 0068 contract: --confirm settings.json, refused on a forked fleet.
+  linked_fleet
+  run /bin/bash "$(mig 0012-mailbox-wake-arm-stop-rearm.sh)" --confirm settings.json; [ "$status" -eq 0 ]
   rewrite_0070 mailbox-wake-arm.sh
   verify_header 0012-mailbox-wake-arm-stop-rearm.sh
-  rerun_is_noop /bin/bash "$(mig 0012-mailbox-wake-arm-stop-rearm.sh)"
+  run /bin/bash "$(mig 0012-mailbox-wake-arm-stop-rearm.sh)" --verify
+  [ "$status" -eq 0 ] || { echo "0012 --verify reads not-live after 0070: $output"; false; }
+  rerun_is_noop /bin/bash "$(mig 0012-mailbox-wake-arm-stop-rearm.sh)" --confirm settings.json
 }
 
 @test "0014: subagent-stop on SubagentStop survives the 0070 rewrite" {
