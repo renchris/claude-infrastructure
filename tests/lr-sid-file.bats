@@ -83,7 +83,7 @@ turn() { # $1=file $2=ts $3=model
   LR_SID_SLUG="$OWN" LR_HOLDER_PID=$$ run /bin/bash "$REPO/scripts/limit-recover/lr-transplant.sh" \
     --sid "$SID" --from "$CFG" --to "$TO" --phase admit
   [ "$status" -eq 0 ]
-  [[ "$output" == *"\"slug\":\"$DECOY\""* ]]
+  [[ "$output" == *"\"slug\":\"$DECOY\""* ]] || false
   cmp -s "$CFG/projects/$DECOY/$SID.jsonl" "$TO/projects/$DECOY/$SID.jsonl"
 }
 
@@ -94,9 +94,11 @@ turn() { # $1=file $2=ts $3=model
   : > "$CFG/projects/$OWN/$SID.jsonl"
   LR_SID_SLUG="$OWN" LR_HOLDER_PID=$$ run /bin/bash "$REPO/scripts/limit-recover/lr-transplant.sh" \
     --sid "$SID" --from "$CFG" --to "$TO" --phase abort
-  [ "$status" -eq 0 ]; [[ "$output" == *'"phase":"abort"'* ]]
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"phase":"abort"'* ]] || false
   # control: the glob's pick is the decoy, whose tombstone names another store ⇒ refused
   LR_HOLDER_PID=$$ run /bin/bash "$REPO/scripts/limit-recover/lr-transplant.sh" \
     --sid "$SID" --from "$CFG" --to "$TO" --phase abort
-  [ "$status" -ne 0 ]; [[ "$output" == *"does not name"* ]]
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"does not name"* ]] || false
 }
