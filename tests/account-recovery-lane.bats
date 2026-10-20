@@ -637,10 +637,22 @@ assert general(snap()) == (["next2", "next4", "next", "next3"], "lifted-first")
 # placement memory absent (CC_ROUTE_ASSIGN off, or a row that never met apply_assignments)
 assert general(snap(k_placed=DROP)) == (unparked, "lifted")
 assert general(snap(k_placed=True)) == (unparked, "lifted")
-# a login cliff in play
+# a login cliff in play: soft, with the factor still on its score — the drain point (6.6h) is
+# inside DESK_LIFE_H and before the 13.2h weekly reset, so neither strand-lift arm takes it off
 soft = ca._cliff_env("CC_ROUTE_CLIFF_SOFT_H", ca.CLIFF_SOFT_H)
-got = general(snap(login_expires_h=soft - 1.0))
+drain = ca._cliff_env("CC_ROUTE_CLIFF_DRAIN_H", ca.CLIFF_DRAIN_H)
+life = ca._cliff_env("CC_ROUTE_DESK_LIFE_H", ca.DESK_LIFE_H)
+got = general(snap(login_expires_h=drain + 6.6))
 assert got[1] == "lifted" and got[0][0] != "next2", got
+# ...but a soft cliff the strand lift has taken off the score is not in play (2196228fc): the
+# DESK_LIFE_H arm (drain point past the life of any session), then the reset-first arm (the weekly
+# reset lands before the drain point), whose kill switch puts the refusal back
+assert general(snap(login_expires_h=soft - 1.0))[1] == "lifted-first"
+assert general(snap(login_expires_h=drain + life - 1.0))[1] == "lifted-first"
+os.environ["CC_ROUTE_CLIFF_RESET_FIRST"] = "off"
+got = general(snap(login_expires_h=drain + life - 1.0))
+assert got[1] == "lifted" and got[0][0] != "next2", got
+os.environ.pop("CC_ROUTE_CLIFF_RESET_FIRST")
 # 5h-hot: projected 5h utilisation at S_SOFT, measured and then by projection alone
 hot = general(snap(session_pct=100.0 * R["S_SOFT"]))
 assert hot[1] == "lifted" and hot[0][0] != "next2", hot
