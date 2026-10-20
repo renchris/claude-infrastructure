@@ -107,8 +107,11 @@
   cc-wave-plan's 20 s bound, every pass walled unknown, and the dispatcher fired 0 sessions from
   2026-10-17. Interactive is the band every Claude session runs at (31), and children inherit it.
   Nothing here needs demoting: the pass is decision work, and the workers it starts run in their
-  own panes (or off-box), not as children of this job. Nice 5 and LowPriorityIO are kept: nice
-  moves NI only, never the band (memory darwin-qos-band-mechanics). cc-dispatch logs its own base
+  own panes (or off-box), not as children of this job. Nice 5 and LowPriorityIO were removed after
+  the first reload: with Nice 5 the task's BASE priority read 26 (31 - 5) on every read of
+  `proc_pidinfo(PROC_PIDTASKINFO).pti_priority` (lr_recon/band.py), while `ps -M` showed the
+  thread at 31T, so the band self-check below paged on every pass. The reconciler carries neither
+  key and reads 31 with the same reader. cc-dispatch logs its own base
   priority on every launchd pass to ~/.claude/autonomy/dispatch-band.log and raises a page when it
   reads below 31. An edit here does nothing until the job is booted out and bootstrapped again:
   scripts/limit-recover/lr-band-reload.sh with the dispatcher-band consent does that and reads the
@@ -135,12 +138,6 @@
 
     <key>RunAtLoad</key>
     <false/>
-
-    <key>LowPriorityIO</key>
-    <true/>
-
-    <key>Nice</key>
-    <integer>5</integer>
 
     <key>ProcessType</key>
     <string>Interactive</string>
