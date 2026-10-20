@@ -90,9 +90,22 @@ def _fresh(path: str, now: float, window: float) -> bool:
         return False
 
 
+def _written_in(path: str, end: float, window: float) -> bool:
+    """Last written inside [end - window, end]. Both bounds: a file written AFTER ``end`` is not
+    evidence about the window ending there (gap-3 E4.1)."""
+    try:
+        return 0 <= end - os.stat(path).st_mtime <= window
+    except OSError:
+        return False
+
+
 def subagents_written(
-    tx_path: str, sid: str, now: float, window: float = KWORK_WINDOW_S
+    tx_path: str, sid: str, end: float, window: float = KWORK_WINDOW_S
 ) -> int:
+    """Distinct subagent transcripts last written in the ``window`` ending AT ``end``, never after
+    it. With no lower bound on the age, the files a resumed lead writes after its death counted
+    toward the death's weight: 7046d8d0 was charged 65 = 1 + 59 + 5 post-death files, 5507881f 20
+    against 8 in the window (gap-3 §0 item 2b)."""
     if not tx_path:
         return 0
     base = os.path.join(os.path.dirname(tx_path), sid, "subagents")
@@ -101,7 +114,7 @@ def subagents_written(
         os.path.join(base, "**", "agent-*.jsonl"),
     )
     seen = {p for pat in pats for p in glob.glob(pat, recursive=True)}
-    return sum(1 for p in seen if _fresh(p, now, window))
+    return sum(1 for p in seen if _written_in(p, end, window))
 
 
 def _subagent_paths(tx_path: str, sid: str) -> List[str]:
@@ -156,6 +169,35 @@ def mover_weight(s: T.SessionObs, death_ts: float) -> int:
     return 1 + subagents_written(s.transcript.path, s.sid, death_ts)
 
 
+def kmax() -> Optional[int]:
+    """The ACTIVE seat cap --place enforces: ``.router.KMAX`` of the SSOT claude-accounts reads
+    (``CLAUDE_ACCOUNTS_JSON``, else ~/.claude/accounts.json). None when unreadable: --place cannot
+    run without that file either, so there is no cap to clamp against."""
+    path = os.environ.get("CLAUDE_ACCOUNTS_JSON") or os.path.expanduser(
+        "~/.claude/accounts.json"
+    )
+    try:
+        with open(path, encoding="utf-8") as fh:
+            k = json.load(fh)["router"]["KMAX"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if isinstance(k, bool) or not isinstance(k, (int, float)) or k < 1:
+        return None
+    return int(k)
+
+
+def clamp_weight(w: int, cap: Optional[int]) -> int:
+    """Strictly below the placer's cap, so no mover is structurally unplaceable (gap-3 E4.2).
+
+    --place refuses any account with ``cap - placed < w``, and its cap is at most KMAX, so a mover
+    heavier than KMAX could never be placed: 5 movers since 10-01 (w 11, 11, 18 at KMAX 8; 35, 65
+    at KMAX 24), each rescued only by another lane. A resumed lead does restart fan-out (12 of 18
+    weighted movers reached 5+ subagents within 60 min), but its measured peak never passed 12, so
+    KMAX - 1 still charges every lead seen and leaves the target one seat."""
+    w = max(1, int(w))
+    return w if cap is None else max(1, min(w, cap - 1))
+
+
 # D1.11: a reset-due WAIT_RESET is first continued in place. It is offered to another account
 # only once its source has been seen limited again after the reset (a fact observed after the
 # ETA), or once the in-place wake has had this long. Offering it at the reset itself read the
@@ -177,6 +219,7 @@ def movers(
 ) -> List[T.Mover]:
     """PRE-MOVE records that want a target, LIMITED before IDLE, then oldest death first."""
     rows: List[Tuple[int, float, T.Mover]] = []
+    cap = kmax()
     for rec in records:
         if (
             not rec.open
@@ -224,7 +267,7 @@ def movers(
             continue
         s = snap.sessions.get(rec.sid)
         death = rec.timeline.detected or now
-        w = mover_weight(s, death) if s else rec.weight
+        w = clamp_weight(mover_weight(s, death) if s else rec.weight, cap)
         m = T.Mover(
             sid=rec.sid,
             src=rec.source_cfg or rec.source_acct,
@@ -232,6 +275,9 @@ def movers(
             w=w,
             model=(s.model if s and s.model else None),
             death_ts=death,
+            # gap-3 E4.3: the id phantom_rows charges this record under, so --place does not
+            # count the mover's own still-live phantom against its own re-placement
+            assign_id=rec.assign_id or rec.record_id,
         )
         rows.append((0 if rec.kind == "limited" else 1, death, m))
     rows.sort(key=lambda r: (r[0], r[1], r[2].sid))

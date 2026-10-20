@@ -843,6 +843,9 @@ class Mover:
     model: Optional[str] = None
     burn_ph: Optional[float] = None
     death_ts: Optional[float] = None
+    assign_id: Optional[str] = (
+        None  # its own phantom's ledger id, exempt from its own charge
+    )
 
 
 @dataclass

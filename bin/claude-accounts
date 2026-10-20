@@ -4267,8 +4267,17 @@ def assignment_counts(cfg, path=None, now=None, exempt_src=(), sweep=None, ttl_m
     here in the last five hours", not "what is too new for the census to have seen". None (every
     other caller) reads exactly as before."""
     counts = {}
+    for e, w in _live_assignments(cfg, path, now, exempt_src, sweep, ttl_min):
+        counts[e["acct"]] = counts.get(e["acct"], 0) + w
+    return counts
+
+
+def _live_assignments(cfg, path=None, now=None, exempt_src=(), sweep=None, ttl_min=None):
+    """The ledger rows assignment_counts charges, each as (row, weight), by exactly its rules.
+    --place reads it too, to find a mover's OWN phantom (gap-3 E4.3)."""
+    out = []
     if not _term_on("CC_ROUTE_ASSIGN"):
-        return counts
+        return out
     ttl_s = 60.0 * (ttl_min if ttl_min is not None else
                     _cliff_env("CC_ROUTE_ASSIGN_TTL_MIN",
                                cfg["router"].get("ASSIGN_TTL_MIN", ASSIGN_TTL_MIN)))
@@ -4296,8 +4305,8 @@ def assignment_counts(cfg, path=None, now=None, exempt_src=(), sweep=None, ttl_m
         w = e.get("w")
         if isinstance(w, bool) or not isinstance(w, int) or w < 1:
             w = 1
-        counts[e["acct"]] = counts.get(e["acct"], 0) + w
-    return counts
+        out.append((e, w))
+    return out
 
 
 def desk_incumbent(cfg, path=None, now=None):
@@ -4509,6 +4518,12 @@ def log_route_decision(kind, cand, reasons, cfg, cached, path=None):
     return None
 
 
+def _assignment_sweep(rows):
+    """{acct: (sids, sids_at)} from rows whose sweep named its sessions (k_sids, as of k_sids_at)."""
+    return {r.get("acct"): (set(r.get("k_sids") or ()), r.get("k_sids_at"))
+            for r in rows if r.get("k_sids_at") is not None}
+
+
 def apply_assignments(rows, cfg):
     """Stamp live phantom counts onto rows (cached or fresh — both are ≤TTL-old opinions about
     everything EXCEPT what this box fired seconds ago, which is exactly what phantoms carry).
@@ -4527,8 +4542,7 @@ def apply_assignments(rows, cfg):
     # A row whose sweep named its sessions (k_sids, as of k_sids_at) lends that list to the
     # ledger read, so a phantom with a `sid` the SAME account's census already counts is not
     # charged a second time. Rows without k_sids_at (walk unmeasured, stub) skip nothing.
-    sweep = {r.get("acct"): (set(r.get("k_sids") or ()), r.get("k_sids_at"))
-             for r in rows if r.get("k_sids_at") is not None}
+    sweep = _assignment_sweep(rows)
     counts = assignment_counts(cfg, sweep=sweep)
     desk_counts = assignment_counts(cfg, exempt_src=DESK_EXEMPT_SRC, sweep=sweep)
     inc = desk_incumbent(cfg)
@@ -6492,7 +6506,8 @@ def cmd_place(args: list, cfg: dict) -> int:
     (unplaced movers included), 3 = WAIT_DATA (no servable cache), 64 = bad arguments/inputs.
 
     INPUTS. --movers: JSONL {sid, src (account name OR config-dir path), kind limited|idle, w (int,
-    default 1), model?, burn_ph? (the mover's own pre-death 5h burn, pp/h), death_ts? (epoch)}.
+    default 1), model?, burn_ph? (the mover's own pre-death 5h burn, pp/h), death_ts? (epoch),
+    assign_id? (the ledger id of the mover's own phantom, never charged against its own placement)}.
     --kwork: JSON {acct: int|null} — missing/null is UNMEASURED and gets no seats, because a count
     nobody took is not zero. --facts: a dir of `<acct>.<scope>.json` {status:"rejected", scope,
     window, resets_at, first_sid, observed_at, src, contradicted?}; 5h/7d/auth cover every lane,
@@ -6550,7 +6565,7 @@ def cmd_place(args: list, cfg: dict) -> int:
     def phantom_w(a: str) -> int:
         return snap[a].get("k_phantom") or 0
 
-    cap, why = {}, {}
+    cap, why, free = {}, {}, {}
     for a, r in snap.items():
         kw = kwork.get(a)
         if not isinstance(kw, int) or isinstance(kw, bool):
@@ -6563,8 +6578,27 @@ def cmd_place(args: list, cfg: dict) -> int:
         rc = dict(r, k_work=kw, k_phantom=phantom_w(a))
         x = _excluded(rc, R, recovery=True, k_of=lambda _r, _k=kw + phantom_w(a): _k)
         x = None if x == "kmax-concurrency" else x
-        cap[a] = 0 if x else max(0, KMAX - kw - phantom_w(a))
+        if not x:
+            free[a] = KMAX - kw - phantom_w(a)
+        cap[a] = 0 if x else max(0, free[a])
         why[a] = x or "kmax-concurrency"
+
+    # gap-3 E4.3: a mover re-placed while its own phantom is still live (PLANNED, then BACKOFF,
+    # inside the phantom's 1200 s TTL) was charged its own seats on the account it was planned on:
+    # db755a94 (w=19 on next4) waited ~13 min for its own phantom. Each mover gets back exactly
+    # what its own ledger id charges, on that account only, by the ledger's own rules.
+    own_ids = {m["assign_id"] for m in movers
+               if isinstance(m.get("assign_id"), str) and m["assign_id"]}
+    own = {e["id"]: (e["acct"], ew)
+           for e, ew in (_live_assignments(cfg, sweep=_assignment_sweep(rows)) if own_ids else ())
+           if e.get("id") in own_ids}
+
+    def own_w(m: dict, a: str) -> int:
+        o = own.get(m.get("assign_id"))
+        return o[1] if o is not None and o[0] == a else 0
+
+    def room(m: dict, a: str) -> int:
+        return max(0, free[a] + own_w(m, a)) if a in free else cap[a]
 
     def src_of(m: dict) -> "str | None":
         s = str(m["src"])
@@ -6618,7 +6652,7 @@ def cmd_place(args: list, cfg: dict) -> int:
         for a in snap:
             mf = live(a, lambda f: str(f.get("scope", "")).startswith("model:")
                       and _place_covers(f, lane, m.get("model")))
-            if cap[a] - placed_w[a] < w:
+            if room(m, a) - placed_w[a] < w:
                 reasons.add(why[a])
                 zeroing += acct_facts(a)
             elif a != src and holds(a, sid):
@@ -6632,7 +6666,8 @@ def cmd_place(args: list, cfg: dict) -> int:
             elif (miss := floors_ok(a, placed_n[a] + 1, b_sess)):
                 reasons.add(miss)
             else:
-                rc = dict(snap[a], k_work=kwork[a], k_phantom=phantom_w(a) + placed_w[a])
+                rc = dict(snap[a], k_work=kwork[a],
+                          k_phantom=max(0, phantom_w(a) - own_w(m, a)) + placed_w[a])
                 s, x = (score_fable(rc, cfg, win, recovery=True) if lane == "fable"
                         else score_general(rc, cfg, recovery=True))
                 if s is None or s <= 0:

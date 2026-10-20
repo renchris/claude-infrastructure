@@ -142,6 +142,35 @@ print("OK")'
   [[ "$output" == *OK* ]] || false
 }
 
+@test "(d2) gap-3 E4.3: a mover's own live phantom does not charge its own re-placement; others still pay it" {
+  run python3 -c "$LOAD"'
+t = time.time()
+with open(os.environ["CC_ASSIGN_LOG"], "w") as fh:
+    fh.write(json.dumps({"t": t - 60, "acct": "a", "id": "recon:c:db755a94:1", "sid": "db",
+                         "w": 6, "ttl_s": 1200}) + "\n")
+mv = {"sid": "db", "src": "x", "kind": "limited", "w": 6, "burn_ph": 1, "death_ts": 1}
+# control: the same mover WITHOUT its id is refused by its own 6 seats (KMAX 8 - 6 = 2 < 6)
+rc, plan = place({"a": {}}, {"a": 0}, [mv])
+assert plan["db"]["acct"] is None and plan["db"]["reason"] == "kmax-concurrency", plan
+rc, plan = place({"a": {}}, {"a": 0}, [dict(mv, assign_id="recon:c:db755a94:1")])
+assert plan["db"]["acct"] == "a", plan
+# the exemption is the mover s own, on that account only: a stranger still pays the phantom
+other = {"sid": "s9", "src": "x", "kind": "limited", "w": 3, "burn_ph": 1, "death_ts": 2,
+         "assign_id": "recon:c:s9:1"}
+rc, plan = place({"a": {}}, {"a": 0}, [other])
+assert plan["s9"]["acct"] is None, plan
+# a voided phantom is no longer charged, so it is no longer refunded either
+with open(os.environ["CC_ASSIGN_LOG"], "a") as fh:
+    fh.write(json.dumps({"t": t - 30, "void": "recon:c:db755a94:1"}) + "\n")
+rc, plan = place({"a": {}}, {"a": 0}, [dict(mv, w=8, assign_id="recon:c:db755a94:1")])
+assert plan["db"]["acct"] == "a", plan
+rc, plan = place({"a": {}}, {"a": 0}, [dict(mv, w=9, assign_id="recon:c:db755a94:1")])
+assert plan["db"]["acct"] is None, plan
+print("OK")'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *OK* ]] || false
+}
+
 @test "(e) per-pick floors: the 7th mover onto a 0.45-5h account with b_sess 7 pp/h is refused recovery-5h-thin" {
   run python3 -c "$LOAD"'
 rc, plan = place({"a": {"session_pct": 45, "session_reset_h": 1/3, "weekly_reset_h": 2.0}},
