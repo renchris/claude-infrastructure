@@ -569,6 +569,13 @@ class DodLine(unittest.TestCase):
             r.close.pop("via")
         return r
 
+    def _live(self):
+        """A member detected at t=1, so the launch.log rows these tests write (t >= 1) sit inside
+        its cohort's lifetime."""
+        r = self._rec(1)
+        r.timeline.detected = 1.0
+        return r
+
     def test_short_shape(self):
         recs = [self._rec(i) for i in range(5)]
         self.assertEqual(
@@ -604,7 +611,7 @@ class DodLine(unittest.TestCase):
         )
 
     def test_double_typer_counts_distinct_pids_per_sid_attempt(self):
-        r = self._rec(1)
+        r = self._live()
         with open(self.paths.launch_log, "w") as fh:
             fh.write("1\t%s\tlr-fire-resume\ttaken\tpid=10\tattempt=1\n" % r.sid)
             fh.write(
@@ -621,7 +628,7 @@ class DodLine(unittest.TestCase):
     def test_inherited_takes_and_legacy_takes_are_not_counted_against_an_attempt(self):
         """W5 rig: cc-resume-debt took the lock while the daemon was stopped (the designed fallback)
         and its child boot-resume-launch inherited it; neither is a second typer of attempt 1."""
-        r = self._rec(1)
+        r = self._live()
         with open(self.paths.launch_log, "w") as fh:
             fh.write("1\t%s\tcc-resume-debt\ttaken\tpid=30\n" % r.sid)
             fh.write("2\t%s\tboot-resume-launch\tinherited\tpid=31\n" % r.sid)
@@ -630,7 +637,7 @@ class DodLine(unittest.TestCase):
         self.assertIn("double-typer 0", R.dod_line(self.paths, [r]))
 
     def test_a_second_move_spawn_in_one_attempt_is_a_double_typer(self):
-        r = self._rec(1)
+        r = self._live()
         with open(self.paths.launch_log, "w") as fh:
             fh.write("1\t%s\trecon-A\tspawn\tpid=20\tattempt=1\n" % r.sid)
             fh.write("2\t%s\tlr-fire-resume\ttaken\tpid=21\tattempt=1\n" % r.sid)
@@ -647,7 +654,7 @@ class DodLine(unittest.TestCase):
     def test_two_moves_each_numbering_attempt_1_are_not_a_double_typer(self):
         """W5b2 30c3a88d: two moves 31 h apart, one launch take each, both attempt=1 under their
         own records — keyed (sid, attempt) they merged into a double typer."""
-        r = self._rec(1)
+        r = self._live()
         with open(self.paths.launch_log, "w") as fh:
             fh.write(
                 "1\t%s\tlr-fire-resume\ttaken\tpid=45443\tattempt=1\trecord=hf-13384-1\n"
@@ -700,6 +707,84 @@ class DodLine(unittest.TestCase):
                 "1791873300\t%s\tlr-fire-resume\ttaken\tpid=25999\tattempt=3"
                 "\trecord=recon:next3-7d-1791892800:c56c729c:1\n" % r.sid
             )  # a second launch take on ONE record's attempt is a real double typer
+        self.assertIn("double-typer 1", R.dod_line(self.paths, [r]))
+
+    # 3e929a81 as cohort next3-7d-1792497600 (opened 1792463515) read it on 2026-10-20: two resumes
+    # of one old record 35 h apart, both days before the cohort existed
+    SID_3E92 = "3e929a81-9f8b-4dfb-892a-376da06a7081"
+    OLD_3E92 = (
+        "1792220205\t{sid}\tlr-fire-resume\ttaken\tpid=13782\tattempt=1\trecord=hf-52800-1792220137\n"
+        "1792347945\t{sid}\tlr-fire-resume\ttaken\tpid=18320\tattempt=1\trecord=hf-52800-1792220137\n"
+    )
+
+    def _member_3e92(self, detected=1792466154.95):
+        r = self._rec(1)
+        r.sid, r.record_id = self.SID_3E92, "recon:next3-7d-1792497600:3e929a81:1"
+        r.timeline.detected = detected
+        r.close["at"] = (detected or 0) + 30
+        return r
+
+    def _take(self, ts, pid, record="hf-52800-1792220137"):
+        return "%d\t%s\tlr-fire-resume\ttaken\tpid=%d\tattempt=1\trecord=%s\n" % (
+            ts,
+            self.SID_3E92,
+            pid,
+            record,
+        )
+
+    def test_a_member_joining_with_two_old_takes_is_not_a_double_typer(self):
+        r = self._member_3e92()
+        with open(self.paths.launch_log, "w") as fh:
+            fh.write(self.OLD_3E92.format(sid=r.sid))
+        self.assertIn("double-typer 0", R.dod_line(self.paths, [r], 1792463515.97))
+        self.assertIn("double-typer 0", R.dod_line(self.paths, [r]))
+        # the unbounded read (every other caller's default) still sees the old pair
+        self.assertEqual(R.double_typers(self.paths, [r.sid]), 1)
+
+    def test_two_takes_inside_the_cohort_lifetime_are_a_double_typer(self):
+        r = self._member_3e92()
+        with open(self.paths.launch_log, "w") as fh:
+            fh.write(self._take(1792466200, 40))
+            fh.write(self._take(1792466300, 41))
+        self.assertIn("double-typer 1", R.dod_line(self.paths, [r], 1792463515.97))
+
+    def test_one_old_take_and_one_inside_are_not_a_double_typer(self):
+        r = self._member_3e92()
+        with open(self.paths.launch_log, "w") as fh:
+            fh.write(self._take(1792347945, 18320))
+            fh.write(self._take(1792466200, 40))
+        self.assertIn("double-typer 0", R.dod_line(self.paths, [r], 1792463515.97))
+        with open(self.paths.launch_log, "a") as fh:
+            fh.write(
+                self._take(1792466300, 41)
+            )  # a second take inside the window counts
+        self.assertIn("double-typer 1", R.dod_line(self.paths, [r], 1792463515.97))
+
+    def test_the_window_opens_at_the_earliest_member_detection(self):
+        """A member detected later still has its rows read from the cohort's first detection on."""
+        late, early = self._member_3e92(), self._rec(2)
+        early.timeline.detected = 1792464374.57
+        with open(self.paths.launch_log, "w") as fh:
+            fh.write(
+                self._take(1792465000, 40)
+            )  # after early's detection, before late's
+            fh.write(self._take(1792466300, 41))
+        self.assertIn("double-typer 1", R.dod_line(self.paths, [late, early]))
+        self.assertIn("double-typer 0", R.dod_line(self.paths, [late]))
+
+    def test_a_cohort_record_is_counted_even_before_the_window(self):
+        r = self._member_3e92()
+        own = r.record_id
+        with open(self.paths.launch_log, "w") as fh:
+            fh.write(self._take(1792400000, 40, own))
+            fh.write(self._take(1792400100, 41, own))
+        self.assertIn("double-typer 1", R.dod_line(self.paths, [r], 1792463515.97))
+
+    def test_opened_at_bounds_a_cohort_with_no_detection_and_neither_reads_all(self):
+        r = self._member_3e92(detected=None)
+        with open(self.paths.launch_log, "w") as fh:
+            fh.write(self.OLD_3E92.format(sid=r.sid))
+        self.assertIn("double-typer 0", R.dod_line(self.paths, [r], 1792463515.97))
         self.assertIn("double-typer 1", R.dod_line(self.paths, [r]))
 
 

@@ -281,7 +281,10 @@ MOVE_ROLES = ("recon-A", "recon-A-husk", "recon-B", "recon-R")
 
 
 def _typers(
-    paths: T.Paths, sids: Sequence[str]
+    paths: T.Paths,
+    sids: Sequence[str],
+    since: Optional[float] = None,
+    records: Optional[Set[str]] = None,
 ) -> Dict[Tuple[str, str, str], Dict[str, set]]:
     """(sid, record, attempt) → {"launch": distinct launch-lock taker pids, "move": move-actuator
     spawn pids} from recon/launch.log. lr-fire-resume and every fenced legacy actor log their
@@ -289,7 +292,11 @@ def _typers(
     attempt: two processes launching the session, or a second move actuator over the same attempt.
     The record is in the key because every move numbers its attempts from 1: keyed (sid, attempt),
     30c3a88d's two moves 31 h apart (hf-13384-…, hf-73036-…, one take each) read as a double
-    typer (W5b2). The launch lock refuses a concurrent second take, so a split cannot hide one."""
+    typer (W5b2). The launch lock refuses a concurrent second take, so a split cannot hide one.
+    ``since`` bounds the read to one cohort's lifetime: a row before it counts only if its record=
+    is in ``records``. Unbounded, 3e929a81 joined next3-7d-1792497600 carrying two resumes of one
+    old record 35 h apart (hf-52800-…, both attempt=1, both days before the cohort opened) and the
+    cohort read double-typer 1 forever. An unparseable timestamp is kept, never dropped."""
     want, out = set(sids), {}  # type: ignore[var-annotated]
     try:
         with open(paths.launch_log, encoding="utf-8", errors="replace") as fh:
@@ -298,6 +305,12 @@ def _typers(
                 if len(t) < 4 or t[1] not in want:
                     continue
                 kv = dict(x.split("=", 1) for x in t[4:] if "=" in x)
+                if since is not None and kv.get("record", "") not in (records or ()):
+                    try:
+                        if float(t[0]) < since:
+                            continue
+                    except ValueError:
+                        pass
                 # "inherited" is a child acting under its parent's lock: the same typer chain
                 cls = (
                     "launch"
@@ -321,10 +334,15 @@ def _typers(
     return out
 
 
-def double_typers(paths: T.Paths, sids: Sequence[str]) -> int:
+def double_typers(
+    paths: T.Paths,
+    sids: Sequence[str],
+    since: Optional[float] = None,
+    records: Optional[Set[str]] = None,
+) -> int:
     return sum(
         1
-        for v in _typers(paths, sids).values()
+        for v in _typers(paths, sids, since, records).values()
         if len(v["launch"]) > 1 or len(v["move"]) > 1
     )
 
@@ -342,13 +360,25 @@ def _p95(xs: List[float]) -> float:
     return xs[max(0, int(round(0.95 * len(xs) + 0.5)) - 1)] if xs else 0.0
 
 
-def dod_line(paths: T.Paths, records: Sequence[T.Record]) -> str:
+def dod_line(
+    paths: T.Paths, records: Sequence[T.Record], opened_at: Optional[float] = None
+) -> str:
     """The cohort's measured DoD. Short shape (every member engaged in place):
     ``ENGAGED k/n · same-window · same-uuid · double-typer · split-brain · lost-records · p95``;
-    otherwise the tally shape with CLOSED / HOLD named / REPLACED-NEW-WINDOW / NOT_NEEDED."""
+    otherwise the tally shape with CLOSED / HOLD named / REPLACED-NEW-WINDOW / NOT_NEEDED.
+    The double-typer read starts at the cohort's lifetime: its earliest member detection or its
+    opening, whichever is earlier; with neither known it reads the whole log."""
     n = len(records)
     sids = [r.sid for r in records]
-    double = double_typers(paths, sids)
+    bounds = [float(r.timeline.detected) for r in records if r.timeline.detected]
+    if opened_at:
+        bounds.append(float(opened_at))
+    double = double_typers(
+        paths,
+        sids,
+        min(bounds) if bounds else None,
+        {r.record_id for r in records if r.record_id},
+    )
     split = sum(1 for r in records if "SPLIT-BRAIN" in (r.close.get("seen") or []))
     lost = _quarantined(paths, sids)
     via = [r.close.get("via") for r in records]
@@ -428,7 +458,7 @@ def write_cohort(
     os.makedirs(paths.cohorts, exist_ok=True)
     doc = T.to_dict(cohort)
     doc["status"] = cohort_status(cohort, records, now)
-    doc["status"]["dod"] = dod_line(paths, records)
+    doc["status"]["dod"] = dod_line(paths, records, cohort.opened_at)
     store.atomic_write_json(os.path.join(paths.cohorts, cohort.cid + ".json"), doc)
 
 
