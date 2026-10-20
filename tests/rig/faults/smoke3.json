@@ -1,0 +1,9 @@
+{
+  "_what": "W1 smoke cohort (B1 §6.2): three clean members boot ALIVE behind the go barrier and each writes its limit death 5 s after the rig writes $RIG/go, while the daemon is live. No cc-lr request: the daemon detects them itself (autorecover mirrors production). Every relaunch passes its continue prompt on argv, which the stub must submit itself.",
+  "source": "next",
+  "scope": "5h",
+  "go_barrier": true,
+  "groups": [
+    {"name": "clean", "count": 3, "knobs": {"die_at_s": 5}, "expect": "ENGAGED"}
+  ]
+}

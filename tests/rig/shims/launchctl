@@ -1,0 +1,8 @@
+#!/bin/bash
+# The rig's launchctl (B1 review S4): first on the rig PATH, logs its argv and does nothing.
+# `launchctl` addresses the user's REAL launchd domain whatever HOME says, so without this the rig's
+# cc-lr path (`cc-lr recover` → `launchctl kickstart gui/<uid>/<poller>`) would start the production
+# poller. The rig also exports CC_LR_POLLER_LABEL=rig.invalid; this shim is the second wall.
+log="${LR_RIG:-/tmp}/state/shims.log"
+printf '%s\t%s\t%s\n' "$(date +%s)" "${0##*/}" "$*" >> "$log" 2>/dev/null
+exit 0

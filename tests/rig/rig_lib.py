@@ -7,6 +7,11 @@
   rig_lib.py audit    ROOT SPECS      launch-log audit: ≤1 typer per (sid, attempt), and for every
                                       fold case sha(target) == sha(retired + stub)
   rig_lib.py home     RIG             build the rig HOME (accounts.json, registry, links)
+  rig_lib.py record-id PIDFILE [exact]  write PIDFILE.id: the pid's lstart (and its argv with `exact`)
+  rig_lib.py kill-verified RIG PIDFILE SIG[,SIG]  signal only if (pid, lstart, argv) still match
+  rig_lib.py sweep    RIG SIG [OUT]   signal every rig process by verified identity; leftovers → OUT
+  rig_lib.py containment RIG          read `kitten @ ls` on stdin; rc 3 if a rig pane shares an OS window
+  rig_lib.py result   RIG KEY=VAL…    merge keys into RIG/rig-result.json
 
 Pure stdlib, python 3.9 (the pinned /usr/bin/python3 the daemon runs under).
 """
@@ -16,10 +21,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import time
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 ACCOUNTS = [  # the generated account map resolves these names under $HOME, so a rig HOME is enough
     ("next", ".claude-next", "cfg-a"),
@@ -42,6 +48,13 @@ def expand(faults: Dict[str, Any], seed: str = "") -> List[Dict[str, Any]]:
     """One spec per session, in matrix order. sids are fresh uuid4s (the stub writes them)."""
     out: List[Dict[str, Any]] = []
     i = 0
+    # matrix-level switches the stub must see per member (B1 C15): with go_barrier a member boots
+    # alive and dies at $LR_RIG/go + die_at_s; with idle_fanout too it boots WORKING, never idle
+    barrier = (
+        {k: True for k in ("go_barrier", "idle_fanout") if faults.get(k)}
+        if faults.get("go_barrier")
+        else {}
+    )
     for g in faults["groups"]:
         for _ in range(int(g["count"])):
             i += 1
@@ -50,7 +63,7 @@ def expand(faults: Dict[str, Any], seed: str = "") -> List[Dict[str, Any]]:
                     "n": i,
                     "sid": str(uuid.uuid4()),
                     "group": g["name"],
-                    "knobs": g.get("knobs") or {},
+                    "knobs": dict(g.get("knobs") or {}, **barrier),
                     "expect": g["expect"],
                     "recovers": g.get("recovers") or "",
                     "fold": bool(g.get("fold")),
@@ -87,7 +100,13 @@ def expected_line(faults: Dict[str, Any]) -> str:
     held = draft + bg
     parts = [
         "CLOSED %d/%d (ENGAGED %d, MOVED %d%s)"
-        % (eng + mov + inplace, n, eng, mov, ", IN-PLACE %d" % inplace if inplace else "")
+        % (
+            eng + mov + inplace,
+            n,
+            eng,
+            mov,
+            ", IN-PLACE %d" % inplace if inplace else "",
+        )
     ]
     hold = "HOLD named %d/%d (draft %d, bgwork %d" % (held, n, draft, bg)
     if rec_bg:
@@ -151,9 +170,9 @@ def audit(root: str, specs: List[Dict[str, Any]], home: str) -> int:
                     t[1],
                     kv.get("attempt") or "legacy@" + t[0],
                 )  # a legacy take is its own key
-                keys.setdefault(key, {"launch": set(), "move": set(), "type": set()})[cls].add(
-                    kv.get("pid", "?")
-                )
+                keys.setdefault(key, {"launch": set(), "move": set(), "type": set()})[
+                    cls
+                ].add(kv.get("pid", "?"))
     except OSError:
         print("launch-log audit: %s/launch.log unreadable" % root)
         return 1
@@ -229,6 +248,204 @@ def build_home(rig: str) -> None:
 # ── run-time helpers (lr-recon-rig.sh) ──────────────────────────────────────────────────────────
 
 
+# ── identity, teardown and containment (B1 review S1-S3) ────────────────────────────────────────
+# Pids on this box advance ~800/s, so a pidfile a few minutes stale names an unrelated process (it
+# could be a production claude). Nothing here signals a pid without re-reading its lstart against the
+# one recorded when it was written, and its argv against the rig root.
+
+PS_BOUND_S = 30.0
+
+
+def _ps(args: List[str]) -> str:
+    try:
+        return subprocess.run(
+            ["/bin/ps"] + args,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=PS_BOUND_S,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def proc_id(pid: int) -> Tuple[str, str]:
+    """(lstart, argv) of a live pid, ("", "") when it is gone or unreadable."""
+    if pid <= 0:
+        return "", ""
+    return (
+        # one space between fields: `ps` pads a one-digit day ("Oct  7"), the -axo split does not
+        " ".join(_ps(["-o", "lstart=", "-p", str(pid)]).split()),
+        _ps(["-ww", "-o", "command=", "-p", str(pid)]).strip(),
+    )
+
+
+def _read_pid(pidfile: str) -> int:
+    try:
+        return int(open(pidfile).read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return 0
+
+
+def record_id(pidfile: str, exact: bool = False) -> int:
+    """PIDFILE.id = {"pid", "lstart"[, "argv"]}, read now. ``exact`` pins the argv too (for a
+    process whose argv cannot name the root, e.g. the planted /bin/sleep)."""
+    pid = _read_pid(pidfile)
+    lstart, argv = proc_id(pid)
+    if not lstart:
+        return 1
+    rec: Dict[str, Any] = {"pid": pid, "lstart": lstart}
+    if exact:
+        rec["argv"] = argv
+    with open(pidfile + ".id", "w") as fh:
+        json.dump(rec, fh)
+    return 0
+
+
+def _names_root(text: str, rig: str) -> bool:
+    """``rig`` as a whole path component: /tmp/lr-rig never matches /tmp/lr-rig2."""
+    for sep in ("/", " ", "'", '"'):
+        if rig + sep in text:
+            return True
+    return text.endswith(rig)
+
+
+def verified(rig: str, pid: int, rec: Dict[str, Any]) -> bool:
+    lstart, argv = proc_id(pid)
+    if not lstart or lstart != rec.get("lstart"):
+        return False
+    if "argv" in rec:
+        return argv == rec["argv"]
+    return _names_root(argv, rig) or "lr_recon" in argv
+
+
+def _signum(name: str) -> int:
+    import signal
+
+    return int(getattr(signal, "SIG" + name.upper().replace("SIG", "")))
+
+
+def kill_verified(rig: str, pidfile: str, sigs: str) -> int:
+    """rc 0 signalled · 1 refused (no record, gone, or a different process now owns the pid)."""
+    pid = _read_pid(pidfile)
+    try:
+        rec = load(pidfile + ".id")
+    except (OSError, ValueError):
+        return 1
+    if not pid or rec.get("pid") != pid or not verified(rig, pid, rec):
+        return 1
+    for s in sigs.split(","):
+        try:
+            os.kill(pid, _signum(s))
+        except OSError:
+            return 1
+    return 0
+
+
+def _ancestors() -> set:
+    out, pid = set(), os.getpid()
+    for _ in range(64):
+        out.add(pid)
+        ppid = _ps(["-o", "ppid=", "-p", str(pid)]).strip()
+        if not ppid.isdigit() or int(ppid) <= 1:
+            break
+        pid = int(ppid)
+    return out
+
+
+# A real session carries its prompt on argv (`bash …/cc-close-attrib …/claude … <prompt>`), and a
+# prompt can name a rig root: such a process is never a rig process unless it runs under the rig env.
+CLAUDE_NAMES = ("claude", "claude.exe", "node", "Claude", "cc-close-attrib")
+
+
+def rig_procs(rig: str) -> List[Tuple[int, str, str]]:
+    """(pid, lstart, argv) of every process that belongs to this rig root: its argv names the root,
+    or it was exec'd under the rig env (LR_RIG=<root>, read with ps -E). A real claude whose prompt
+    merely mentions the root is never one (argv0 outside the root and no rig env). The caller and its
+    ancestors are excluded."""
+    out: List[Tuple[int, str, str]] = []
+    mine = _ancestors()
+    env_tag = "LR_RIG=" + rig
+    for line in _ps(["-axww", "-E", "-o", "pid=,lstart=,command="]).splitlines():
+        parts = line.split(None, 6)
+        if len(parts) < 7 or not parts[0].isdigit():
+            continue
+        pid, lstart, text = int(parts[0]), " ".join(parts[1:6]), parts[6]
+        if pid in mine:
+            continue
+        rig_env = (env_tag + " ") in text or text.endswith(env_tag)
+        if not (rig_env or _names_root(text, rig)):
+            continue
+        head = text.split(" ", 4)[:4]
+        if not rig_env and any(
+            os.path.basename(t) in CLAUDE_NAMES and not t.startswith(rig + "/")
+            for t in head
+        ):
+            continue
+        out.append((pid, lstart, text))
+    return out
+
+
+def sweep(rig: str, sig: str, out: str = "") -> int:
+    """Signal every rig_procs process whose lstart still matches (re-read per pid); list what is
+    still alive afterwards in ``out`` (rig-result.json's leftovers). rc = the number left."""
+    procs = rig_procs(rig)
+    for pid, lstart, _text in procs:
+        if proc_id(pid)[0] == lstart:
+            try:
+                os.kill(pid, _signum(sig))
+            except OSError:
+                pass
+    time.sleep(1.0)
+    left = [
+        {"pid": p, "argv": t[:200]}
+        for p, ls, t in rig_procs(rig)
+        if proc_id(p)[0] == ls
+    ]
+    if out:
+        result(rig, {"leftovers": left}, path=out)
+    return len(left)
+
+
+def _under(cwd: str, rig: str) -> bool:
+    cwd = cwd[len("/private") :] if cwd.startswith("/private/") else cwd
+    return cwd == rig or cwd.startswith(rig + "/")
+
+
+def containment(rig: str, ls: List[Dict[str, Any]]) -> List[str]:
+    """S1: an OS window holding a pane under this rig root AND a pane that is not (the operator's
+    own window, or the other arm's) is a containment breach. A new OS window the R path opened for a
+    rig pane alone is fine."""
+    hits: List[str] = []
+    for ow in ls:
+        mine, other = [], []
+        for t in ow.get("tabs", []):
+            for w in t.get("windows", []):
+                (mine if _under(str(w.get("cwd") or ""), rig) else other).append(
+                    str(w.get("id"))
+                )
+        if mine and other:
+            hits.append(
+                "os-window %s: rig %s beside %s"
+                % (ow.get("id"), ",".join(mine), ",".join(other))
+            )
+    return hits
+
+
+def result(rig: str, kv: Dict[str, Any], path: str = "") -> None:
+    path = path or os.path.join(rig, "rig-result.json")
+    try:
+        cur = load(path)
+    except (OSError, ValueError):
+        cur = {}
+    cur.update(kv)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(cur, fh, indent=1)
+    os.replace(tmp, path)
+
+
 def _specs(rig: str) -> List[Dict[str, Any]]:
     return load(os.path.join(rig, "specs.json"))
 
@@ -267,8 +484,10 @@ def _spawn_sleep(rig: str, tag: str) -> int:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    with open(os.path.join(rig, tag + ".pid"), "w") as fh:
+    pidfile = os.path.join(rig, tag + ".pid")
+    with open(pidfile, "w") as fh:
         fh.write(str(p.pid))
+    record_id(pidfile, exact=True)  # its argv cannot name the root: pin the argv itself
     return p.pid
 
 
@@ -432,10 +651,11 @@ def _settled(
 
 def drive(rig: str, timeout: float) -> int:
     """Fire each daemon fault when its session first leaves PRE-MOVE; stop when every session has
-    settled (terminal, or holding its expected HOLD for 30 s) or at the timeout (rc 1)."""
-    import signal
-
+    settled (terminal, or holding its expected HOLD for 30 s) or at the timeout (rc 1). rc 3: the
+    containment sampler found a rig pane in a non-rig OS window (NO-VERDICT)."""
     specs = _specs(rig)
+    dpf = os.path.join(rig, "state", "daemon.pid")
+    hit = os.path.join(rig, "state", "containment.hit")
     t0, fired, cont_at, held = time.time(), set(), 0.0, {}
     last = 0.0
     while True:
@@ -449,12 +669,13 @@ def drive(rig: str, timeout: float) -> int:
             if r.get("phase") in MOVING or r.get("substate") == "PLANNED":
                 pid = _daemon_pid(rig)
                 fired.add(s["sid"])
+                # S2: by verified identity only; a refused kill is a fault that did not fire
                 if f == "kill9" and pid:
-                    os.kill(pid, signal.SIGKILL)
+                    if kill_verified(rig, dpf, "KILL"):
+                        print("[rig] fault %s NOT fired: daemon pid unverified" % f)
                 elif f == "sigstop200" and pid:
-                    os.kill(pid, signal.SIGSTOP)
-                    cont_at = now + 200
-                    stopped = pid
+                    if kill_verified(rig, dpf, "STOP") == 0:
+                        cont_at = now + 200
                 elif f == "clockskew600":
                     with open(os.path.join(rig, "state", "clock-skew"), "w") as fh:
                         fh.write("600\n")
@@ -464,11 +685,14 @@ def drive(rig: str, timeout: float) -> int:
                     flush=True,
                 )
         if cont_at and now >= cont_at:
-            try:
-                os.kill(stopped, signal.SIGCONT)
-            except OSError:
-                pass
+            kill_verified(rig, dpf, "CONT")
             cont_at = 0.0
+        if os.path.exists(hit):
+            print(
+                "[rig] NO-VERDICT containment: %s" % open(hit).read().strip(),
+                flush=True,
+            )
+            return 3
         done = sum(1 for s in specs if _settled(s, recs.get(s["sid"]), held, now))
         if now - last >= 30:
             last = now
@@ -575,6 +799,38 @@ def main(argv: List[str]) -> int:
         return drive(argv[2], float(argv[3]))
     if cmd == "home":
         build_home(argv[2])
+        return 0
+    if cmd == "record-id":
+        return record_id(argv[2], len(argv) > 3 and argv[3] == "exact")
+    if cmd == "kill-verified":
+        return kill_verified(argv[2], argv[3], argv[4] if len(argv) > 4 else "TERM")
+    if cmd == "sweep":
+        return min(
+            sweep(
+                argv[2],
+                argv[3] if len(argv) > 3 else "TERM",
+                argv[4] if len(argv) > 4 else "",
+            ),
+            125,
+        )
+    if cmd == "containment":
+        try:
+            ls = json.load(sys.stdin)
+        except ValueError:
+            return 0  # an unreadable ls is no reading, not a breach
+        hits = containment(argv[2], ls)
+        for h in hits:
+            print(h)
+        return 3 if hits else 0
+    if cmd == "result":
+        kv: Dict[str, Any] = {}
+        for a in argv[3:]:
+            k, _, v = a.partition("=")
+            try:
+                kv[k] = json.loads(v)
+            except ValueError:
+                kv[k] = v
+        result(argv[2], kv)
         return 0
     print("rig_lib: unknown command %s" % cmd, file=sys.stderr)
     return 2

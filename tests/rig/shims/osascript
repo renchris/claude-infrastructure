@@ -1,0 +1,6 @@
+#!/bin/bash
+# The rig's osascript (B1 review S4): first on the rig PATH, logs its argv and does nothing, so no
+# rig actuator can focus, raise or script the operator's real apps and windows.
+log="${LR_RIG:-/tmp}/state/shims.log"
+printf '%s\t%s\t%s\n' "$(date +%s)" "${0##*/}" "$*" >> "$log" 2>/dev/null
+exit 0

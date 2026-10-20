@@ -36,6 +36,7 @@ HERE = os.path.dirname(os.path.realpath(__file__))
 FIX = os.path.join(HERE, "..", "fixtures", "lr-recon")
 VERSION = "2.1.284"
 ESC = "\x1b"
+LIMIT_NOTICE = "  ⎿  You've hit your session limit · resets 1:30am (America/Chicago)"
 PASTE_ON, PASTE_OFF = ESC + "[200~", ESC + "[201~"
 
 
@@ -245,6 +246,9 @@ class Tui:
         self.banner = "" if resumed else ""
         self.notice = ""
         self.chip = None  # (offset of the pasted run in buf,) when shown as a chip
+        # the positional prompt a relauncher passed after --resume SID: submitted once, by the stub
+        # itself, right after its first frame (the real CLI's self-submit; B1 M10)
+        self.pending_prompt = ""
 
     def shown(self):
         """CC collapses a big paste to a chip: over 800 chars or more than 2 newlines (HF:3159)."""
@@ -393,6 +397,10 @@ class Tui:
         )
         try:
             self.draw()
+            if self.pending_prompt:
+                prompt, self.pending_prompt = self.pending_prompt, ""
+                self.submit(prompt)
+                self.draw()
             while True:
                 r, _w, _x = select.select([fd], [], [], 0.25)
                 self.tick()
@@ -476,9 +484,31 @@ class Tui:
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
+    def due_death(self):
+        """go_barrier: the limit death, once $LR_RIG/go exists and die_at_s has passed. Only the
+        ORIGINAL process dies, and only once: a resumed stub reads the same spec on the target
+        account, so without both guards it would die again there and be moved twice (B1 C15)."""
+        k = self.s.knobs
+        if not k.get("go_barrier") or k.get("idle") or self.resumed:
+            return False
+        try:
+            go = os.stat(os.path.join(RIG, "go")).st_mtime
+        except OSError:
+            return False
+        if time.time() < go + float(k.get("die_at_s") or 0):
+            return False
+        return not self.s.state().get("died_at")
+
     def tick(self):
-        """Faults that fire on their own clock: a draft typed after confirm, a stub re-created."""
+        """Faults that fire on their own clock: the go_barrier death, a draft typed after confirm,
+        a stub re-created."""
         k, tx = self.s.knobs, self.s.tx
+        if self.due_death():
+            self.s.mark(died_at=time.time())
+            self.busy = False
+            self.s.error("limit")
+            self.notice = LIMIT_NOTICE
+            self.draw()
         confirmed = os.path.exists(tx + ".handed-off")
         dr = k.get("draft") or {}
         if (
@@ -549,19 +579,25 @@ def fresh(sid):
     s.user("Work on the rig task.")
     s.assistant("Working on it.")
     s.back_s = 0.0
-    if not k.get("idle"):
+    # go_barrier: alive and WORKING (a user turn in flight, the busy frame) until $LR_RIG/go +
+    # die_at_s, never idle at rest, so the idle fan-out cannot move a member before it dies (C15).
+    # Without it the member dies here, at boot, exactly as before.
+    barrier = bool(k.get("go_barrier")) and not k.get("idle")
+    dies_now = not k.get("idle") and not barrier
+    if dies_now:
         s.error("limit")
     t = Tui(s, resumed=False)
+    if barrier:
+        s.user("Keep going on the rig task.")
+        t.busy = True
     bgk = k.get("bg_job") or {}
     if bgk.get("at") == "boot":
         t.start_bg(int(bgk.get("seconds", 3600)))
     dr = k.get("draft") or {}
     if dr.get("at") == "boot":
         t.buf = dr.get("text", "draft")
-    if not k.get("idle"):
-        t.notice = (
-            "  ⎿  You've hit your session limit · resets 1:30am (America/Chicago)"
-        )
+    if dies_now:
+        t.notice = LIMIT_NOTICE
     boot = os.path.join(RIG, "tmp", "boot")
     os.makedirs(boot, exist_ok=True)
     open(os.path.join(boot, sid + ".ok"), "w").close()
@@ -569,7 +605,7 @@ def fresh(sid):
     return 0
 
 
-def resume(sid):
+def resume(sid, prompt=""):
     cfg = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(
         os.environ["HOME"], ".claude"
     )
@@ -595,8 +631,41 @@ def resume(sid):
         print("claude: crashed after boot (rig fault)")
         return 1
     t = Tui(s, resumed=True)
+    t.pending_prompt = prompt
     t.key_loop()
     return 0
+
+
+# flags of the real CLI that take a value: their value is never the positional prompt
+VALUE_FLAGS = {
+    "--model",
+    "--effort",
+    "--permission-mode",
+    "--mcp-config",
+    "--settings",
+    "--append-system-prompt",
+    "--session-id",
+    "--resume",
+    "-r",
+}
+
+
+def _resume_args(a):
+    """(sid, prompt) from `--resume SID [flags…] [PROMPT]`. Both relaunchers spawn `… --resume $sid
+    {*}$xargs {*}$prompt` (lr-fire-resume.sh, reso-resume-one); the stub used to drop the prompt, so
+    an argv-relaunched member never engaged until fallback C typed it 600 s later (B1 M10, F21)."""
+    i = a.index("--resume") if "--resume" in a else a.index("-r")
+    sid, rest, prompt, j = a[i + 1], a[i + 2 :], "", 0
+    while j < len(rest):
+        if rest[j] in VALUE_FLAGS:
+            j += 2
+            continue
+        if rest[j].startswith("-"):
+            j += 1
+            continue
+        prompt = rest[j]
+        j += 1
+    return sid, prompt
 
 
 def main(argv):
@@ -612,10 +681,8 @@ def main(argv):
         return write_dead(
             a[a.index("--rig-write-dead") + 1], a[a.index("--rig-cwd") + 1]
         )
-    if "--resume" in a:
-        return resume(a[a.index("--resume") + 1])
-    if "-r" in a:
-        return resume(a[a.index("-r") + 1])
+    if "--resume" in a or "-r" in a:
+        return resume(*_resume_args(a))
     if "--session-id" in a:
         return fresh(a[a.index("--session-id") + 1])
     return fresh(str(uuid.uuid4()))
