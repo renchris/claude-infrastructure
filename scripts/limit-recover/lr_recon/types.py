@@ -481,6 +481,12 @@ class Heartbeat:
     max_step_gap_s: float = 0.0
     max_step_gap_bound_s: float = 0.0
     max_step_gap_at: float = 0.0
+    # B6: where a long pass is right now (the pass row lands only at its end). Flat, unique keys:
+    # the watchdog's sed takes the LAST "KEY": match, so a nested "pid" would corrupt HB_PID.
+    phase: str = ""
+    phase_at: float = 0.0
+    pass_seq: int = 0
+    pass_at: float = 0.0
 
 
 # ── account facts (C4) ───────────────────────────────────────────────────────────────────────────

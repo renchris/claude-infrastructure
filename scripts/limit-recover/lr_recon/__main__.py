@@ -42,16 +42,30 @@ from lr_recon import (
 from lr_recon import facts as F
 from lr_recon import types as T
 from lr_recon.admit import Admission, BootSlots, jitter_s
+
 try:
     from lr_recon import band
-except ImportError:  # a live layer advanced before install.sh linked the new file: run without it
+except (
+    ImportError
+):  # a live layer advanced before install.sh linked the new file: run without it
     band = None  # type: ignore[assignment]
+# B6, guarded wider than band: a new ~900-line module can fail its import under the deployment
+# interpreter with a SyntaxError or NameError, not only ImportError, and an unguarded failure here
+# crash-loops every restart. The daemon then runs without it and says so in one event.
+_TELEMETRY_IMPORT_ERROR = ""
+try:
+    from lr_recon import telemetry
+except Exception as _e:  # noqa: BLE001
+    telemetry = None  # type: ignore[assignment]
+    _TELEMETRY_IMPORT_ERROR = repr(_e)[:200]
 from lr_recon.clock import (
     Caffeinate,
     Clock,
     Heartbeat,
+    bind_child_hook,
     bind_steps,
     run_bounded,
+    set_phase,
     shift_record,
     step,
 )
@@ -121,13 +135,41 @@ class Ctx:
         # transient --place non-answers
         self.pre_census: Dict[str, str] = {}
         self.place_misses: Dict[str, int] = {}
-        self.band_paged = False  # band.py: one page per daemon process when below priority 31
+        self.band_paged = (
+            False  # band.py: one page per daemon process when below priority 31
+        )
         # kept across passes so each pass re-reads only the project dirs that changed
         # (transcript.ProjectsIndex): a fresh sweep was ~73,000 directory reads a pass
         self.projects = transcript.ProjectsIndex()
         # A6 (c): the claim keeper runs only in daemon(), after its flock — never in --once or a
         # test pass, which would stamp a process that exits seconds later (S-2)
         self.keeper = False
+        # B6: only daemon() builds the writer (P3); --once and test passes leave it None and write
+        # no telemetry. pass_seq counts every pass for the heartbeat even while telemetry is off.
+        self.telem: Any = None
+        self.pass_seq = 0
+        self.slept = 0.0
+
+
+def _own(ctx: Any, key: str, default: Any) -> Any:
+    """An attribute the Ctx itself holds (never one a test's stand-in ctx manufactures)."""
+    try:
+        return vars(ctx).get(key, default)
+    except TypeError:
+        return default
+
+
+def _tel(ctx: Ctx) -> Any:
+    return _own(ctx, "telem", None)
+
+
+def _ph(ctx: Ctx, name: str) -> None:
+    """A phase mark: the heartbeat directly (true while telemetry is paused or off), then the
+    writer's phase ledger."""
+    set_phase(name, _own(ctx, "pass_seq", 0))
+    tel = _tel(ctx)
+    if tel is not None:
+        tel.phase(name)
 
 
 def _alive(pid: int, lstart: str) -> bool:
@@ -446,10 +488,15 @@ def _wakes(ctx: Ctx, snap: T.Snapshot, facts: Dict[str, T.Fact], now: float) -> 
         ):
             continue  # no headroom: the source is limited again, on a later reset
         pane = snap.panes.get("%d:%d" % rec.pane) if rec.pane else None
+        tel = _tel(ctx)
         if pane is None or pane.state != "claude":
+            if tel is not None:
+                tel.gate("wake", "pane-unseen")
             continue
         ok, _why = ctx.admission.pace_wake(rec.sid, rec.source_acct, now)
         if not ok:
+            if tel is not None:
+                tel.gate("wake", _why)
             continue
         ctx.actions[rec.sid] = (
             "wake"  # marked typed (wake_eta) only once _dispatch spawns it
@@ -835,10 +882,14 @@ def _derive(
                     % (pr.argv_hash, pr.pid, pr.nonce, why),
                 )
                 continue
-            text = settle.tail(settle.actlog(ctx.paths, rec, pr.argv_hash))
+            log = settle.actlog(ctx.paths, rec, pr.argv_hash)
+            text = settle.tail(log)
             detail = settle.settle_exit(rec, pr, rc, text, now)
             if detail:
                 _event(ctx.paths, "exit", rec.sid, rec.record_id, detail)
+            tel = _tel(ctx)
+            if tel is not None:
+                tel.act_exit(rec, pr, rc, detail or "", log)
         if not act.live_procs(rec, snap):
             detail = settle.rolled_back(ctx.paths, rec, now)
             if detail:
@@ -1064,6 +1115,9 @@ def _plan(
                 load1,
             ),
         )
+        tel = _tel(ctx)
+        if rc != 0 and tel is not None:
+            tel.gate("place", plan.PLACE_CAUSE.get(rc, "exit"))
         if (
             rc == 3 and mode != "observe"
         ):  # a sweep hits the usage endpoint: never in shadow
@@ -1250,6 +1304,13 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
     running = act.running_count(ctx.records, snap)
     wake_ok = ctx.clock.wake_guard_ok()
     _admission_period(ctx, snap, now)
+    tel = _tel(ctx)
+
+    def refused(gate: str, why: str) -> None:
+        # B6: EVERY refusal counts, each pass; the events below stay on change only
+        if tel is not None:
+            tel.gate(gate, why)
+
     for rec in sorted(
         ctx.records.values(),
         key=lambda r: (r.kind != "limited", r.timeline.detected or now),
@@ -1269,16 +1330,19 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
             # the Enter (W0) with re-sends up to 45 s: C only after that whole chain is quiet, or
             # it types a SECOND prompt into a session that already has one (W5 rig). typer_at
             # (stamped by _derive) ends the chain at the launcher's own verdict, not its exit.
+            refused("grace", "C")
             continue
         ok, why = act.may_actuate(
             ctx.paths, mode, rec, which, snap, now, wake_ok, running, act.workers_cap()
         )
         if not ok:
+            refused("may", why)  # this refusal had no event at all
             continue
         if which in act.CLAIMED_ACTUATORS:
             # the claim before the token (act.hold_claim): another live driver keeps the session
             ok, why = act.hold_claim(ctx.paths, rec, _alive, now)
             if not ok:
+                refused("claim", why)
                 if rec.close.get("claim_held") != why:
                     rec.close["claim_held"] = why
                     holder = store.read_claim(ctx.paths, rec.sid)
@@ -1301,6 +1365,7 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
             # The gate's numbers ride with its name, for `cc-lr status --cohort` (report.next_action):
             # a standing refusal read "the reconciler continues" for as long as it stood.
             terms = ctx.admission.last_terms if why in ("restore-r", "drip") else ""
+            refused("admit", why)
             if rec.close.get("admit_refused") != why:
                 rec.close["admit_refused"] = why
                 _event(
@@ -1316,6 +1381,8 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
         rec.close.pop("admit_refused", None)
         rec.close.pop("admit_terms", None)
         rec.close.pop("admit_refused_at", None)
+        if tel is not None:
+            tel.admitted(why)
         if (
             which in settle.MOVE_ACTUATORS
             and rec.close.get("move_attempt") == rec.attempt
@@ -1327,6 +1394,7 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
             rec.attempt += 1
         argv = _command(ctx, rec, which)
         if not argv:
+            refused("argv", "empty")
             continue
         pane = snap.panes.get("%d:%d" % rec.pane) if rec.pane else None
         if which in settle.MOVE_ACTUATORS:
@@ -1335,6 +1403,9 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
             # pass killed before save_records lost it and the next move re-used the attempt (a
             # double typer by the audit above). If Popen raises, an attempt number is skipped.
             rec.close["move_attempt"] = rec.attempt
+        if tel is not None:
+            # B6: like move_attempt, set before spawn so spawn's own saves carry the stamps
+            tel.pre_spawn(rec, which)
         pid = act.spawn(
             ctx.paths,
             rec,
@@ -1343,6 +1414,8 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
             act.actuator_env(rec, ctx.paths, pane.sock if pane else ""),
             now,
         )
+        if tel is not None:
+            tel.spawned(rec, which, pid)
         if which == "C" and ctx.actions.get(rec.sid) == "wake" and rec.wait:
             # typed for this reset: the next pass waits for the turn instead of retyping. Set here,
             # not when the wake was chosen, or a wake refused by admission was never tried again
@@ -1497,10 +1570,14 @@ def _report(ctx: Ctx, mode: str, now: float, snap: Optional[T.Snapshot] = None) 
     try:
         # operator-readout.sh reads this one file instead of loading every record: a Stop hook
         # has a ~2-3 s budget and no python on its path. Empty file ⇒ nothing open ⇒ no line.
-        store.atomic_write_text(
-            ctx.paths.p("readout.line"),
-            report.readout_line(ctx.paths, now, list(ctx.records.values())),
-        )
+        line = report.readout_line(ctx.paths, now, list(ctx.records.values()))
+        tel = _tel(ctx)
+        alert = getattr(tel, "last_alert", "") if tel is not None else ""
+        if line and alert:
+            # B6 §6.4: only a measured anomaly of the last pass; empty otherwise, so the Stop
+            # hook's "a wrong line is worse than a missing one" holds
+            line = line.rstrip("\n") + " · ⚠ rail: %s → cc-lr status --rail" % alert
+        store.atomic_write_text(ctx.paths.p("readout.line"), line)
     except Exception as e:
         _event(ctx.paths, "report-error", detail=repr(e)[:200])
 
@@ -1703,8 +1780,27 @@ def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
     # One projects/ index serves every sid → transcript / .handed-off / .HANDOFF.json lookup
     # (transcript.ProjectsIndex): a glob per lookup lstat'd every project dir. The daemon's index
     # is kept across passes and refreshed incrementally; a ctx without one sweeps afresh.
-    with transcript.pass_index(getattr(ctx, "projects", None)):
-        return _run_pass(ctx, force_observe)
+    seq = _own(ctx, "pass_seq", 0) + 1
+    if isinstance(ctx, Ctx):
+        ctx.pass_seq = seq
+    set_phase("begin", seq)
+    tel = _tel(ctx)
+    if tel is not None:
+        tel.check_switch()
+        tel.pass_begin(seq, _own(ctx, "slept", 0.0))
+    out: Optional[Dict[str, Any]] = None
+    exc: Optional[BaseException] = None
+    try:
+        with transcript.pass_index(getattr(ctx, "projects", None)):
+            out = _run_pass(ctx, force_observe)
+        return out
+    except BaseException as e:
+        exc = e
+        raise
+    finally:
+        if tel is not None:
+            tel.pass_end(out, exc)
+        set_phase("idle", seq)
 
 
 def _run_pass(ctx: Ctx, force_observe: bool) -> Dict[str, Any]:
@@ -1713,6 +1809,7 @@ def _run_pass(ctx: Ctx, force_observe: bool) -> Dict[str, Any]:
     act.reap_children()  # before ps, so an exited actuator is gone AND its exit code is kept
     mode = "observe" if force_observe else read_mode(paths, ctx.mode_cap)
     now = time.time()
+    _ph(ctx, "observe")
     # rig_keep: a sid the daemon holds a record for stays visible mid-move (observe._sessions)
     snap = observe.observe(
         paths,
@@ -1722,6 +1819,9 @@ def _run_pass(ctx: Ctx, force_observe: bool) -> Dict[str, Any]:
         rig_keep=frozenset(ctx.records),
     )
     step()
+    tel = _tel(ctx)
+    if tel is not None:
+        tel.observed(snap)
     ctx.degraded_streak = ctx.degraded_streak + 1 if snap.degraded else 0
     # W7a: the one gate between the census and every decision. It stands before facts, census,
     # derive, refire/abandon, wakes, plan, dispatch, release and the invariant, so an empty or
@@ -1745,12 +1845,15 @@ def _run_pass(ctx: Ctx, force_observe: bool) -> Dict[str, Any]:
                 _event(
                     paths, "rig-refuse", sid, detail="no registry row carries rig:true"
                 )
+    _ph(ctx, "facts")
     facts = _facts(ctx, snap, now)
     step()
+    _ph(ctx, "census")
     reqs = store.list_requests(paths)
     ctx.pre_census = {s: r.substate or "" for s, r in ctx.records.items()}
     buckets, stale = _census(ctx, snap, facts, reqs, mode, now)
     _focus_ledger(paths, snap, buckets, mode, now)
+    _ph(ctx, "derive")
     _derive(ctx, snap, now, facts, capped.latest_usage(ctx.home, now))
     _draft_snapshots(ctx, snap)
     for rec in (
@@ -1759,21 +1862,30 @@ def _run_pass(ctx: Ctx, force_observe: bool) -> Dict[str, Any]:
         if evidence.fold_witness(paths, rec) == "fold":
             _event(paths, "fold-witness", rec.sid)
     # before planning, so a re-armed member is placed and dispatched this pass
+    _ph(ctx, "ctl")
     _refire(ctx, now)
     _abandon(ctx, now)
     _wakes(ctx, snap, facts, now)
     _stranded(ctx, snap, mode, now)
     step()
+    _ph(ctx, "plan")
     placed = _plan(ctx, snap, facts, mode, now)
     step()
     spawned = 0
     if mode == "act" and os.path.exists(paths.recon_on):
+        _ph(ctx, "own")
         _own_and_charge(ctx, now)
+        _ph(ctx, "dispatch")
         spawned = _dispatch(ctx, snap, mode, now)
         ctx.actuations += spawned
     step()
+    if tel is not None:
+        # before _report (cohort_status's in_state_s reads the state stamp); stamps ride save_records
+        tel.note_states(ctx.records.values(), lambda r: report.bucket(r) == "moving")
+    _ph(ctx, "report")
     _report(ctx, mode, now, snap)
     step()
+    _ph(ctx, "save")
     _release_terminal(ctx)
     defects = _invariant(ctx, snap, now)
     # one batch: a record whose content did not change is not rewritten (store.save_records)
@@ -1833,7 +1945,9 @@ def wait_for_change(
 
 
 RESTART_REQUEST = "restart.request"  # under recon/ctl: a pass-boundary restart (A6 (f))
-RESTART_REQUEST_ON = "restart-request.on"  # under recon/: the operator's ruling; absent = inert
+RESTART_REQUEST_ON = (
+    "restart-request.on"  # under recon/: the operator's ruling; absent = inert
+)
 
 
 def _restamp(paths: T.Paths, rec: T.Record, pid: int, lstart: str) -> None:
@@ -1994,6 +2108,26 @@ def _startup(
         _event(paths, "restart-loop", detail="second restart within 10 minutes")
 
 
+def _make_telemetry(ctx: Ctx, me: str, prev: Dict[str, Any]) -> Any:
+    """B6, daemon only (P3). The constructor is guarded too: methods are, __init__ is not, and an
+    exception there would kill every daemon start. Any failure is one event and no telemetry."""
+    if telemetry is None:
+        if _TELEMETRY_IMPORT_ERROR:
+            _event(
+                ctx.paths, "telemetry-off", detail="import: " + _TELEMETRY_IMPORT_ERROR
+            )
+        return None
+    if os.environ.get("LR_RECON_TELEMETRY", "on") == "off":
+        return None
+    try:
+        tel = telemetry.Telemetry(ctx.paths)
+    except Exception as e:  # noqa: BLE001
+        _event(ctx.paths, "telemetry-off", detail="constructor: %r" % e)
+        return None
+    tel.start(prev, list(ctx.records.values()), me)
+    return tel
+
+
 def daemon(ctx: Ctx) -> int:
     paths = ctx.paths
     store.ensure_dirs(paths)
@@ -2017,10 +2151,14 @@ def daemon(ctx: Ctx) -> int:
     ctx.keeper = True  # after the flock: the one process whose claims these are (S-2)
     hb.start()
     bind_steps(hb)  # run_pass's step() calls advance hb, from this thread only
+    ctx.telem = _make_telemetry(ctx, me, prev)
+    if ctx.telem is not None:
+        bind_child_hook(ctx.telem.child)
     caf = Caffeinate(os.getpid())
     try:
         while True:
             slept = ctx.clock.tick()
+            ctx.slept = slept
             if slept:
                 for rec in ctx.records.values():
                     shift_record(rec, slept)
@@ -2034,6 +2172,8 @@ def daemon(ctx: Ctx) -> int:
             ):  # the daemon only: a --once or test pass never pages it
                 _provenance(ctx.paths, time.time())
             _band(ctx, time.time())
+            if ctx.telem is not None:
+                ctx.telem.box()  # off the loop thread, ≤ 2.5 s wait, throttled on its own CPU
             hb.advance()
             moving = any(
                 r.open and r.phase in MOVING or r.substate == "PLANNED"
@@ -2047,6 +2187,7 @@ def daemon(ctx: Ctx) -> int:
             else:
                 wait_for_change(paths, ctx.home, DORMANT_S, hb)
     finally:
+        bind_child_hook(None)
         bind_steps(None)
         caf.close()
         hb.stop()

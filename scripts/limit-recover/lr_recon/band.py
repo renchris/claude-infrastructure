@@ -29,7 +29,8 @@ from __future__ import annotations
 
 import ctypes
 import os
-from typing import Callable, List, Optional
+import time
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 FLOOR = 31  # the band every Claude session runs at
 PROC_PIDTASKINFO = 4
@@ -73,12 +74,9 @@ _LIBPROC: Optional[ctypes.CDLL] = None
 
 def base_priority(pid: Optional[int] = None) -> Optional[int]:
     """The base scheduling priority of ``pid`` (default: this process); None when unreadable."""
-    global _LIBPROC
     try:
-        if _LIBPROC is None:
-            _LIBPROC = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
         ti = _TaskInfo()
-        n = _LIBPROC.proc_pidinfo(
+        n = _lib().proc_pidinfo(
             int(os.getpid() if pid is None else pid),
             PROC_PIDTASKINFO,
             ctypes.c_uint64(0),
@@ -90,6 +88,161 @@ def base_priority(pid: Optional[int] = None) -> Optional[int]:
     if n != ctypes.sizeof(ti):
         return None
     return int(ti.priority)
+
+
+# ── B6 reads: every thread's BASE priority, kitty's main thread, thermal and memory ──
+# Same mechanism as base_priority: in-process libproc syscalls, no fork. A ps fork from a loaded box
+# is the cost being diagnosed, and ps prints decayed CURRENT priority, which under-counts the
+# default band 1.05-6x (axis 04 R0.2).
+PROC_PIDLISTTHREADS, PROC_PIDTHREADINFO, TH_STATE_RUNNING = 6, 5, 1
+CENSUS_DEADLINE_S = 2.0
+
+
+class _ThreadInfo(ctypes.Structure):
+    """``struct proc_threadinfo``: two uint64, eight int32, char[64] (112 bytes)."""
+
+    _fields_ = [
+        ("user", ctypes.c_uint64),
+        ("system", ctypes.c_uint64),
+        ("cpu_usage", ctypes.c_int32),
+        ("policy", ctypes.c_int32),
+        ("run_state", ctypes.c_int32),
+        ("flags", ctypes.c_int32),
+        ("sleep_time", ctypes.c_int32),
+        ("curpri", ctypes.c_int32),
+        ("priority", ctypes.c_int32),
+        ("maxpriority", ctypes.c_int32),
+        ("name", ctypes.c_char * 64),
+    ]
+
+
+def _lib() -> ctypes.CDLL:
+    global _LIBPROC
+    if _LIBPROC is None:
+        _LIBPROC = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    return _LIBPROC
+
+
+def _threads(pid: int, cap: int = 2048) -> List[_ThreadInfo]:
+    """Every readable thread of ``pid``; [] when unreadable. Thread handles are 64-bit and MUST go
+    in as c_uint64: passed as a plain int (ctypes' C int) the info call returns 0 (measured)."""
+    try:
+        lib = _lib()
+        handles = (ctypes.c_uint64 * cap)()
+        n = lib.proc_pidinfo(
+            int(pid),
+            PROC_PIDLISTTHREADS,
+            ctypes.c_uint64(0),
+            handles,
+            ctypes.sizeof(handles),
+        )
+        out = []
+        for i in range(max(0, min(cap, n // 8))):
+            ti = _ThreadInfo()
+            r = lib.proc_pidinfo(
+                int(pid),
+                PROC_PIDTHREADINFO,
+                ctypes.c_uint64(handles[i]),
+                ctypes.byref(ti),
+                ctypes.sizeof(ti),
+            )
+            if r == ctypes.sizeof(ti):
+                out.append(ti)
+        return out
+    except (OSError, AttributeError, ValueError):
+        return []
+
+
+def main_thread(pid: int) -> Optional[Tuple[int, int]]:
+    """(base, current) priority of ``pid``'s first thread; None when unreadable."""
+    th = _threads(pid, cap=4)
+    return (int(th[0].priority), int(th[0].curpri)) if th else None
+
+
+def _all_pids(max_pids: int) -> List[int]:
+    try:
+        buf = (ctypes.c_int * max_pids)()
+        n = _lib().proc_listallpids(buf, ctypes.sizeof(buf))
+    except (OSError, AttributeError):
+        return []
+    return [int(buf[i]) for i in range(max(0, min(n, max_pids))) if buf[i] > 0]
+
+
+def runnable_by_base(
+    pids: Optional[List[int]] = None,
+    deadline_s: float = CENSUS_DEADLINE_S,
+    max_pids: int = 8192,
+    mono: Callable[[], float] = time.monotonic,
+) -> Optional[Dict[str, Any]]:
+    """RUNNABLE threads counted by BASE priority over every readable process. Same-user only:
+    root-owned processes are unreadable, so counts are lower bounds ("procs" of "of"). A monotonic
+    deadline is checked per pid: past it the counts so far come back with ``partial: true``. Meant
+    to run off the loop thread (ctypes releases the GIL), since an in-process syscall cannot be
+    timed out and is not a declared child."""
+    end = mono() + deadline_s
+    todo = _all_pids(max_pids) if pids is None else list(pids)
+    if not todo:
+        return None
+    run: Dict[str, int] = {}
+    thr = readable = 0
+    partial = False
+    for pid in todo:
+        if mono() > end:
+            partial = True
+            break
+        th = _threads(pid)
+        if not th:
+            continue
+        readable += 1
+        thr += len(th)
+        for t in th:
+            if t.run_state == TH_STATE_RUNNING:
+                k = str(int(t.priority))
+                run[k] = run.get(k, 0) + 1
+    return {
+        "run": run,
+        "thr": thr,
+        "procs": readable,
+        "of": len(todo),
+        "partial": partial,
+    }
+
+
+def _sysctl_int(name: str) -> Optional[int]:
+    try:
+        lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+        v, sz = ctypes.c_int(0), ctypes.c_size_t(4)
+        if lib.sysctlbyname(
+            name.encode(), ctypes.byref(v), ctypes.byref(sz), None, ctypes.c_size_t(0)
+        ):
+            return None
+        return int(v.value)
+    except (OSError, AttributeError):
+        return None
+
+
+def pressure_level() -> Optional[int]:
+    """kern.memorystatus_vm_pressure_level: 1 normal, 2 warn, 4 critical; None when unreadable."""
+    return _sysctl_int("kern.memorystatus_vm_pressure_level")
+
+
+def thermal_level() -> Optional[int]:
+    """The thermal pressure notify state (0 nominal … 3+ critical); None when unreadable."""
+    try:
+        lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+        tok, st = ctypes.c_int(0), ctypes.c_uint64(0)
+        if lib.notify_register_check(
+            b"com.apple.system.thermalpressurelevel", ctypes.byref(tok)
+        ):
+            return None
+        try:
+            if lib.notify_get_state(tok, ctypes.byref(st)):
+                return None
+        finally:
+            lib.notify_cancel(tok)
+        return int(st.value)
+    except (OSError, AttributeError):
+        return None
 
 
 def below_floor(pri: Optional[int]) -> bool:

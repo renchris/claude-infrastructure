@@ -47,6 +47,7 @@
 #   cc-lr move --status <batch> · cc-lr move --abort <batch>
 #   cc-lr status [ref | --all]
 #   cc-lr status --cohort [cid]       the reconciler's cohorts, one line per member
+#   cc-lr status --rail [--since 1h]  the reconciler's own telemetry (bands, passes, gates, latencies)
 #   cc-lr repair <bundle|ref> [--mode relaunch|prompt] [--target A] [--source-pane P]
 #   cc-lr repair-markers [--sid S] [--dry-run]
 #                                     set aside STALE handoff markers (via the drainer; never renames itself)
@@ -204,7 +205,11 @@ cc-lr — find · recover · status · repair, for a limit-blocked session.
   cc-lr status --cohort [cid] [--root DIR]
                              the reconciler's cohorts: the DoD line, then per member the phase, age, attempt,
                              last error class, next action and ETA
-  cc-lr accounts --limited   the reconciler's unexpired limit facts, grouped by account
+  cc-lr status --rail [--since 1h|30m|90s] [--json] [--history] [--root DIR]
+                             the reconciler's own telemetry: bands, pass and phase times, gate
+                             refusals by reason, records' time in state, detect→first-attempt and
+                             detect→engaged. rc 0 ok/WARN · 1 NO DATA · 2 unreadable
+  cc-lr accounts --limited  the reconciler's unexpired limit facts, grouped by account
   cc-lr cohort refire <sid|sid8|pane>
                              ask the reconciler to reset one member's retry budget (writes a
                              ctl request; the daemon acts on it)
@@ -2480,6 +2485,7 @@ cl_status_cohort() { # [cid] → rc 0 (also for "none") · 1 the named cohort is
               "pane " + (if (.pane | type) == "array" then (.pane | map(tostring) | join(":")) else "-" end),
               (.phase // "-") + (if .substate then "/" + .substate else "" end),
               "age " + (if (.age_s | type) == "number" then "\(.age_s | floor)s" else "-" end),
+              (if (.in_state_s | type) == "number" then "in-state \(.in_state_s | floor)s" else empty end),
               "attempt \(.attempt // 0)",
               "err " + (.last_error // "-"),
               "next: " + (.next_action // "-"),
@@ -2488,6 +2494,17 @@ cl_status_cohort() { # [cid] → rc 0 (also for "none") · 1 the named cohort is
   done
   [ "$bad" -lt "${#files[@]}" ] || return 2
   return 0
+}
+
+# ── the reconciler's own telemetry (B6) ───────────────────────────────────────────────────────
+# lr_recon/telemetry.py's readout is the ONE renderer and the one verdict (ok · WARN · NO DATA,
+# computed from recon/telemetry.jsonl, the heartbeat and the records); this only reaches it. No
+# outer timeout: the windowed read is ~0.02 s and makes no fork.
+cl_status_rail() { # [--since W] [--json] [--history] → rc 0 ok/WARN · 1 NO DATA · 2 unreadable
+  local pkg
+  pkg="$(cl_recon_pkg)" || cl_die "cannot reach scripts/limit-recover/lr_recon; nothing was read" 2
+  LR_STATE_DIR="$STATE" LR_RECON_ROOT="$RECON_ROOT" PYTHONPATH="$pkg${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 -m lr_recon.telemetry readout "$@"
 }
 
 # EVIDENCE THAT EXISTS NOWHERE ELSE (decision 6d4722735677). `lr-lock.py evidence-gc` keeps an evidence
@@ -2519,6 +2536,19 @@ cmd_status() {
           esac
         done
         cl_status_cohort "$cid"; return $? ;;
+      --rail) shift
+        local rargs=()
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --root) [ -n "${2:-}" ] || { echo "cc-lr status: --root needs a directory" >&2; exit 3; }
+                    RECON_ROOT="$2"; shift 2 ;;
+            --since) [ -n "${2:-}" ] || { echo "cc-lr status: --since needs a window (90s, 30m, 1h)" >&2; exit 3; }
+                     rargs+=(--since "$2"); shift 2 ;;
+            --json|--history) rargs+=("$1"); shift ;;
+            *) echo "cc-lr status --rail: unknown argument $1" >&2; exit 3 ;;
+          esac
+        done
+        cl_status_rail ${rargs[@]+"${rargs[@]}"}; return $? ;;
       --root) [ -n "${2:-}" ] || { echo "cc-lr status: --root needs a directory" >&2; exit 3; }
               RECON_ROOT="$2"; shift 2 ;;
       --all) ref=""; shift ;;

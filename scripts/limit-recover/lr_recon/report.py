@@ -250,6 +250,10 @@ def cohort_status(
     members = []
     for r in sorted(records, key=lambda x: x.sid):
         start = r.wait.since if r.wait else (r.timeline.detected or r.updated_at)
+        # B6 display only: the telemetry stamp of the current state and of the first attempt
+        tel = r.close.get("tel") or {}
+        at, first = tel.get("at"), tel.get("first")
+        det = r.timeline.detected
         members.append(
             {
                 "sid": r.sid,
@@ -259,6 +263,10 @@ def cohort_status(
                 "substate": r.substate,
                 "bucket": bucket(r),
                 "age_s": round(now - start, 1) if start else None,
+                "in_state_s": round(now - float(at), 1) if at else None,
+                "first_attempt_s": round(float(first) - det, 1)
+                if first and det and not tel.get("pre")
+                else None,
                 "attempt": r.attempt,
                 "last_error": r.last_error.cls if r.last_error else None,
                 "next_action": next_action(r),

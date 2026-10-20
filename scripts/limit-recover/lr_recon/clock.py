@@ -230,6 +230,10 @@ class Heartbeat:
         self.max_step_gap_s = 0.0
         self.max_step_gap_bound_s = 0.0
         self.max_step_gap_at = 0.0
+        self.phase = ""
+        self.phase_at = 0.0
+        self.pass_seq = 0
+        self.pass_at = 0.0
         self.write_errors = 0
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -248,7 +252,20 @@ class Heartbeat:
                 max_step_gap_s=self.max_step_gap_s,
                 max_step_gap_bound_s=self.max_step_gap_bound_s,
                 max_step_gap_at=self.max_step_gap_at,
+                phase=self.phase,
+                phase_at=self.phase_at,
+                pass_seq=self.pass_seq,
+                pass_at=self.pass_at,
             )
+
+    def set_phase(self, name: str, seq: int) -> None:
+        """B6: the pass's current phase, for a reader of a pass that has not ended. ``begin``
+        also stamps ``pass_at``, so a killed pass still leaves how long it had run."""
+        with self._lock:
+            now = self.clock.wall()
+            self.phase, self.phase_at, self.pass_seq = name[:24], now, int(seq)
+            if name == "begin":
+                self.pass_at = now
 
     def render(self) -> str:
         # Compact separators: bash readers sed `"key":value` out of it.
@@ -355,10 +372,81 @@ def run_bounded(*args: Any, **kw: Any) -> "subprocess.CompletedProcess[Any]":
     if timeout is None:
         raise TypeError("run_bounded needs timeout=")
     declare_child(float(timeout))
+    t0, late = time.monotonic(), False
     try:
         return subprocess.run(*args, **kw)
+    except subprocess.TimeoutExpired:
+        late = True
+        raise
     finally:
         step()
+        _note_child(args[0] if args else kw.get("args"), time.monotonic() - t0, late)
+
+
+def set_phase(name: str, seq: int = 0) -> None:
+    """B6: stamp the pass phase on the bound loop's heartbeat (no-op elsewhere). Called by
+    __main__ directly, outside the B6 writer's guard, so the phase stays true while that writer is off."""
+    loop = _LOOP
+    if loop is not None and loop[1] == threading.get_ident():
+        loop[0].set_phase(name, seq)
+
+
+# B6 child ledger: the daemon binds the B6 writer's ``child(label, dur, late)`` here. run_bounded is
+# already the one choke point for every child the loop waits on, so a new call site inherits it.
+_CHILD_HOOK: Optional[Callable[[str, float, bool], None]] = None
+_INTERP = ("bash", "sh", "zsh", "dash", "python3", "python")
+
+
+def bind_child_hook(fn: Optional[Callable[[str, float, bool], None]]) -> None:
+    global _CHILD_HOOK
+    _CHILD_HOOK = fn
+
+
+def child_label(argv: Any) -> str:
+    """The ledger label: ``ps:all`` vs ``ps:pid`` (a 1.5 MB census vs a 5 s per-pid read),
+    ``probe``/``mint`` for the capacity ``bash -c`` probes, an interpreter's script basename,
+    ``claude-accounts --place``, else argv0's basename plus a leading ``--flag``. ≤ 40 chars."""
+    a = (
+        [str(x) for x in argv]
+        if isinstance(argv, (list, tuple))
+        else str(argv or "").split()
+    )
+    if not a:
+        return "?"
+    b0 = os.path.basename(a[0])
+    if b0 == "ps":
+        lab = "ps:pid" if "-p" in a else "ps:all"
+    elif b0 in _INTERP and len(a) > 1 and a[1] == "-c":
+        text = a[2] if len(a) > 2 else ""
+        lab = (
+            "probe"
+            if "cc_capacity_probe" in text
+            else "mint"
+            if "cc_capacity_token_mint" in text
+            else b0 + " -c"
+        )
+    elif b0 in _INTERP:
+        script = next((x for x in a[1:] if not x.startswith("-")), "")
+        lab = os.path.basename(script) or b0
+    elif b0 == "claude-accounts" and "--place" in a:
+        lab = "claude-accounts --place"
+    else:
+        lab = b0 + (" " + a[1] if len(a) > 1 and a[1].startswith("--") else "")
+    return lab[:40]
+
+
+def _note_child(argv: Any, dur: float, late: bool) -> None:
+    """Feed the ledger after step(); never raises, and only the bound loop thread reports."""
+    fn = _CHILD_HOOK
+    if fn is None:
+        return
+    try:
+        loop = _LOOP
+        if loop is None or loop[1] != threading.get_ident():
+            return
+        fn(child_label(argv), dur, late)
+    except Exception:  # noqa: BLE001 — a ledger defect must never replace the child's result
+        pass
 
 
 class Caffeinate:

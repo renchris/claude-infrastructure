@@ -1850,14 +1850,18 @@ class MainTests(unittest.TestCase):
 
         ctx = M.Ctx(self.paths, None, self.home)
         summary = {"open": 0}
+        # B6: an injected fake writer, so no unit test censuses the live box (W6)
+        fake = mock.MagicMock()
         with (
             mock.patch.object(M, "run_pass", return_value=summary) as rp,
             mock.patch.object(M, "wait_for_change", side_effect=Stop),
+            mock.patch.object(M, "_make_telemetry", return_value=fake),
         ):
             with self.assertRaises(Stop):
                 M.daemon(ctx)
         rp.assert_called_once()
         self.assertTrue(os.path.exists(self.paths.heartbeat))
+        fake.box.assert_called_once()
 
 
 if __name__ == "__main__":
