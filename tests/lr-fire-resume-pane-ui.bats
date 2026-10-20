@@ -118,7 +118,8 @@ SH
   export LR_RE_MENU="$never" LR_RE_ASIS_STRONG="$never" LR_RE_ASIS="$never" \
          LR_RE_TRUST="$never" LR_RE_TRUST_RB="$never" LR_RE_FS="$never" LR_RE_FS_RB="$never" \
          LR_RE_OVERAGE="$never" LR_RE_READY="$never"
-  export LR_QUIET_S=1 LR_SUBMIT_POLL_S=2 RCY_ENGAGE_TIMEOUT=3 LR_SUBMIT_PAINT_S=0
+  # LR_READY_WAIT_S=0: one look, as before gap 1, so a non-EMPTY screen gives its verdict at once.
+  export LR_QUIET_S=1 LR_SUBMIT_POLL_S=2 RCY_ENGAGE_TIMEOUT=3 LR_SUBMIT_PAINT_S=0 LR_READY_WAIT_S=0
   LR_SCREEN_SH="$(sed -n "/<<'LRSCREENSH'/,/^LRSCREENSH\$/p" "$FIRE" | sed '1d;$d')"
   LR_NOTE_SH="$(sed -n "/<<'LRNOTESH'/,/^LRNOTESH\$/p" "$FIRE" | sed '1d;$d')"
   [ -n "$LR_SCREEN_SH" ] && [ -n "$LR_NOTE_SH" ] || { echo "helper-program extraction failed" >&2; return 1; }

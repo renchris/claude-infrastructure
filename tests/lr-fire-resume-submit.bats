@@ -168,7 +168,7 @@ enqueue()   { printf '{"type":"queue-operation","operation":"enqueue","timestamp
   # made this case vacuously green over an empty block rather than red
   # (docs/lessons/absent-range-endpoint-selects-everything.md is the same family: a range whose
   # endpoint moved does not fail, it silently answers a different question).
-  blk="$(sed -n "/^  if {\$injected} {/,/^  interact\$/p" "$FIRE")"
+  blk="$(sed -n "/^  if {\$injected || \$argvp} {/,/^  interact\$/p" "$FIRE")"
   [ -n "$blk" ] || { echo "the post-inject block could not be located in $FIRE — the anchor is stale"; false; }
   case "$blk" in *lr_probe*) ;; *) echo "extracted a span that does not contain the submit poll:"; printf '%s\n' "$blk"; false ;; esac
   [ "${blk##*$'\n'}" = "  interact" ] || { echo "the span does not END at interact: ${blk##*$'\n'}"; false; }

@@ -1051,6 +1051,32 @@ else
   fi
 fi
 
+# ── THE OWED PROMPT RIDES THE SPAWN ARGV, NOT THE KEYBOARD (gap 1, 2026-10-20) ──────────────────────
+# `claude --resume <sid> "<prompt>"` submits the prompt itself once the session is up, with no typing
+# (bin/reso-resume-one --prompt-file, piloted 2026-10-05 and in production since). Typing it waited
+# for a painted composer under ONE 8 s wall-clock deadline: 15 of 78 prompted relaunches since 10-01
+# ended READY-NOT-SEEN, 44% at 10/core or more, because boot time under load outlasts any fixed
+# clock (docs/research/lr-sustained-load-2026-10-20/gap-1-post-relaunch-prompt-delivery.md §2).
+# On argv the relay types NOTHING after the menus: it answers the pre-ready menus as before and then
+# waits on the transcript probe alone. The note `prompt-argv` (after relaunch-typed) is what tells
+# the reconciler's fallback C that this attempt's prompt is already in flight (settle.py).
+# Two heads stay on the typed path: a leading `/` is parsed as a slash command out of an initial
+# prompt (handoff-fire.sh check_slash_head), and a leading `-` would be read as an option.
+# LR_PROMPT_ARGV=off is the kill switch back to typing.
+_lr_argv_knob="${LR_PROMPT_ARGV:-on}"
+LR_PROMPT_ARGV=0
+if [ -n "$PROMPT" ]; then
+  if [ "$_lr_argv_knob" = off ]; then
+    _lrf_detail "prompt typed" "LR_PROMPT_ARGV=off — the prompt is typed after READY, not passed on argv"
+  else
+    case "$PROMPT" in
+      /*|-*) _lrf_detail "prompt typed" "the prompt starts with '${PROMPT:0:1}', which the CLI would parse from argv — typing it instead" ;;
+      *) LR_PROMPT_ARGV=1 ;;
+    esac
+  fi
+fi
+export LR_PROMPT_ARGV
+
 # ── THE AS-IS DEFAULT ────────────────────────────────────────────────────────────────────────────
 # THE DEFECT (backlog d1490376b963). This script pressed Enter on the HIGHLIGHTED DEFAULT of the
 # resume-return menu, which is option 1, `Resume from summary (recommended)`. That runs /compact:
@@ -1483,6 +1509,10 @@ else
   _lrf_say run "resuming ${SID:0:8} on ${ACCT##*/}" "checks ok"
 fi
 lr_state relaunch-typed expect "spawning $model/$effort on $(basename "$cfg")"
+# AFTER relaunch-typed: settle.launcher_settled reads only what follows this attempt's last start.
+if [ "$LR_PROMPT_ARGV" = 1 ]; then
+  lr_state prompt-argv inject "the ${#PROMPT}-character prompt rides the spawn argv; nothing is typed"
+fi
 # shellcheck disable=SC2016  # single quotes are REQUIRED: the body below is an expect(1) program,
 #   and its $env(...)/$bin references must reach expect uninterpreted. Bash expansion here would
 #   corrupt the script — the values are passed in via the LR_* environment exported above.
@@ -1495,6 +1525,12 @@ expect -c '
   set perm   [expr {[info exists env(LR_PERM)] ? $env(LR_PERM) : "auto"}]
   set sid    $env(LR_SID)
   set prompt $env(LR_PROMPT)
+  # ARGV DELIVERY (gap 1): the prompt is the last spawn argument and this program types nothing
+  # after the menus. aprompt is a LIST so an absent prompt passes NO argument (an empty positional
+  # would be submitted as an empty prompt), and one element keeps the text a single argument.
+  set argvp [expr {[info exists env(LR_PROMPT_ARGV)] && $env(LR_PROMPT_ARGV) eq "1" && $prompt ne ""}]
+  set aprompt [list]
+  if {$argvp} { lappend aprompt $prompt }
   set injected 0
   # With no prompt to type (--no-prompt), readiness is still a fact worth recording: the W3 phase
   # oracle derives MOVED from these notes. Latched, so one run writes at most one.
@@ -1514,11 +1550,16 @@ expect -c '
     catch {exec /bin/stty -echo <@ stdin 2>/dev/null}
   }
   # <<< lr-tty-quiet
-  # THE QUIET BUDGET. `timeout` in expect means "no new output for N seconds", and a booting TUI
-  # paints continuously — so silence is the positive fact that the frame has settled. 8 s replaces
-  # the old 300 s `timeout {}`, which was not a wait but a silent give-up: a READY phrase the binary
-  # had stopped painting meant the prompt was simply never typed and nothing anywhere said so.
+  # THE LOOK INTERVAL, NOT A QUIET WINDOW (corrected 2026-10-20, gap 1 §0). In Expect 5.45 the
+  # `timeout` of an expect command counts WALL CLOCK from the start of that command, and output that
+  # matches no pattern does NOT reset it; only exp_continue does (measured: a child printing every
+  # 1 s against `set timeout 3` timed out at 3040 ms). So this is how often the timeout arm below
+  # looks at the screen, never proof that the frame has settled.
   set quiet [expr {[info exists env(LR_QUIET_S)] ? $env(LR_QUIET_S) : 8}]
+  # THE WAIT BOUND: how long, from the spawn, the timeout arm keeps re-arming while the TUI has not
+  # mounted a composer. One look at 8 s lost 15 of 78 prompted relaunches since 10-01 to boots of
+  # 12-112 s under load. Wall clock and bounded, so a recovery is still attempted whatever the load.
+  set readywait [expr {[info exists env(LR_READY_WAIT_S)] ? $env(LR_READY_WAIT_S) : 180}]
   # ── THE THREE QUESTIONS THIS PROGRAM ASKS THE WORLD ───────────────────────────────────────────
   # Each is one `exec` of a whole shell program handed over in the environment (see the LR_*_SH
   # block in the bash above). Every one of them may fail, and each failure has its own WORD —
@@ -1690,10 +1731,11 @@ expect -c '
   set xargs [expr {[info exists env(LR_EXTRA_ARGS)] ? [regexp -all -inline {\S+} $env(LR_EXTRA_ARGS)] : {}}]
   set xenv  [expr {[info exists env(LR_EXTRA_ENV)] ? [regexp -all -inline {\S+} $env(LR_EXTRA_ENV)] : {}}]
   if {$wrap ne ""} {
-    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u LR_SEGMENT_PCT -u LR_ADMIT_MODE -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV -u LR_RECORD_ID -u LR_ATTEMPT -u LR_NOTE_DIR -u CC_ADMIT_ACTOR -u CC_PANE_STARTED_FILE -u CC_PANE_EXIT_OWED DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $wrap $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs
+    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u LR_SEGMENT_PCT -u LR_ADMIT_MODE -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV -u LR_RECORD_ID -u LR_ATTEMPT -u LR_NOTE_DIR -u CC_ADMIT_ACTOR -u CC_PANE_STARTED_FILE -u CC_PANE_EXIT_OWED DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $wrap $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs {*}$aprompt
   } else {
-    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u LR_SEGMENT_PCT -u LR_ADMIT_MODE -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV -u LR_RECORD_ID -u LR_ATTEMPT -u LR_NOTE_DIR -u CC_ADMIT_ACTOR -u CC_PANE_STARTED_FILE -u CC_PANE_EXIT_OWED DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs
+    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u LR_SEGMENT_PCT -u LR_ADMIT_MODE -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV -u LR_RECORD_ID -u LR_ATTEMPT -u LR_NOTE_DIR -u CC_ADMIT_ACTOR -u CC_PANE_STARTED_FILE -u CC_PANE_EXIT_OWED DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs {*}$aprompt
   }
+  set tspawn [clock seconds]
   # The launch lock now names the spawned claude (env and the wrapper both exec in place, so this
   # pid IS the session). A failure here costs the handover, never the recovery.
   if {[info exists env(LR_LOCK_SH)] && $env(LR_LOCK_SH) ne ""} {
@@ -1835,7 +1877,12 @@ expect -c '
       exp_continue
     }
     -re $re_ready {
-      if {$prompt ne "" && !$injected} {
+      if {$argvp} {
+        # The composer is mounted and the prompt is already in the CLI: nothing to type. The
+        # transcript probe below is the verdict. Not a READY note: at stage ready that would read as
+        # a finished no-prompt run to the reconciler.
+        lr_note READY-ARGV inject "the ready signal matched [expr {[clock seconds] - $tspawn}]s after spawn; the prompt went on argv, nothing typed"
+      } elseif {$prompt ne "" && !$injected} {
         set injected 1
         # 0.3/0.2/0.2 inside lr_inject, down from 2/1/1. The sleeps let the composer mount and keep
         # the ^U and the paste apart — a settling delay, not a wait for a remote event. 4 s of the
@@ -1848,11 +1895,23 @@ expect -c '
       }
     }
     timeout {
-      # ── THE QUIET ARM: WHAT USED TO BE `timeout {}` ─────────────────────────────────────────
-      # The pty has painted nothing for $quiet seconds, so the frame has settled and READY never
-      # matched. That is the version-coupling failure, and it is the one this file cannot prevent:
-      # the status-line wording belongs to the binary, not to us. The cure is to stop asking the SCREEN
-      # for a phrase and ask it for a SHAPE — an empty composer box between two border runs.
+      # ── THE LOOK ARM: WHAT USED TO BE `timeout {}` ──────────────────────────────────────────
+      # READY has not matched within $quiet seconds of the last (re)arm. Two causes look alike here:
+      # the binary stopped painting the READY phrase (version coupling, which no wording here can
+      # prevent), or the TUI has simply not mounted yet (a slow boot, the common case under load).
+      # So the SCREEN is asked for a SHAPE (an empty composer box between two border runs) and,
+      # until $readywait seconds from the spawn, any other answer RE-ARMS the wait instead of
+      # ending it. A look is cheap (under 1 s at load 250) and types nothing.
+      set waited [expr {[clock seconds] - $tspawn}]
+      if {$argvp} {
+        # The prompt is already in the CLI. Keep the menu arms live until READY or the bound; the
+        # transcript probe ends the wait early once the prompt has landed.
+        set pv [lindex [lr_probe $t0] 0]
+        if {$pv ne "submitted" && $pv ne "queued" && $waited < $readywait} {
+          set timeout $quiet
+          exp_continue
+        }
+      }
       #
       # 🚨 NEVER A BLIND CR INTO A QUIET PTY. A parked menu is quiet too, and Enter on one takes the
       # highlighted default — which on the resume menu is "resume from summary" (spends usage,
@@ -1860,16 +1919,27 @@ expect -c '
       # one that affirmatively reads EMPTY; MENU, DRAFT and UNKNOWN all park and SAY SO. That is the
       # 2026-08-06 rule this repo already runs on: typing needs the affirmative (memory
       # probe-that-acts-on-absence-must-confirm-presence).
-      if {$prompt ne "" && !$injected} {
+      if {$argvp} {
+        # handled above: nothing is typed on argv, and the poll below gives the verdict
+      } elseif {$prompt ne "" && !$injected} {
         set sv [lr_screen]
         if {$sv eq "EMPTY"} {
           set injected 1
-          lr_note READY-QUIET inject "READY never matched; composer reads EMPTY after ${quiet}s quiet — typing"
-          lr_say "READY never matched, but the composer reads EMPTY after ${quiet}s of quiet — typing the prompt on that evidence."
+          lr_note READY-QUIET inject "READY never matched; composer reads EMPTY ${waited}s after spawn — typing"
+          lr_say "READY never matched, but the composer reads EMPTY ${waited}s after spawn — typing the prompt on that evidence."
           lr_inject
+        } elseif {$waited < $readywait} {
+          # NOT MOUNTED YET is not a verdict (gap 1): re-arm and look again, up to the bound.
+          if {![info exists lookwait]} {
+            set lookwait 1
+            lr_say "READY not seen and the screen reads $sv ${waited}s after spawn — still booting, looking again every ${quiet}s up to ${readywait}s."
+          }
+          set timeout $quiet
+          exp_continue
         } else {
-          lr_note READY-NOT-SEEN inject "screen reads $sv after ${quiet}s quiet — prompt NOT typed"
-          lr_tell "✗ READY NEVER SEEN — prompt NOT typed: the pty went quiet for ${quiet}s and the screen reads $sv, not an empty composer. NOTHING was sent, because Enter on a parked menu takes its default. Type the prompt by hand in the pane."
+          set cap [lr_capture READY-NOT-SEEN]
+          lr_note READY-NOT-SEEN inject "screen reads $sv ${waited}s after spawn (bound ${readywait}s) — prompt NOT typed; screen: $cap"
+          lr_tell "✗ READY NEVER SEEN — prompt NOT typed: ${waited}s after spawn the screen reads $sv, not an empty composer. NOTHING was sent, because Enter on a parked menu takes its default. Type the prompt by hand in the pane. Screen: $cap"
         }
       } elseif {$prompt eq "" && !$ready_noted} {
         if {[lr_screen] eq "EMPTY"} {
@@ -1880,7 +1950,7 @@ expect -c '
     }
     eof { exit }
   }
-  if {$injected} {
+  if {$injected || $argvp} {
     # ══ SUBMISSION IS A RECORD IN THE TRANSCRIPT, NEVER A PHRASE ON THE SCREEN ══════════════════
     # WHAT THIS REPLACES. The old verifier waited for the TUI chrome that renders while a turn is
     # running, and re-sent CR up to five times until it appeared. It failed in both directions:
@@ -1940,10 +2010,17 @@ expect -c '
     # The poll must outlive the first look: a deadline of `poll` turns shorter than it would end the
     # run with FAILED:submit without ever reading the composer.
     if {$deadline < $nextlook + 1} { set deadline [expr {$nextlook + 1}] }
+    # ON ARGV NOTHING WAS TYPED, so there is no composer draft a re-Enter could submit and no
+    # keystroke is ever owed: no looks, and the probe alone is polled to the engagement bound.
+    if {$argvp} {
+      set recrmax 0
+      if {$deadline < $qmax} { set deadline $qmax }
+    }
     set unmeasured 0
     for {set t 0} {$t < $deadline} {incr t} {
       set r [lr_probe $t0]
       set verb [lindex $r 0]
+      if {$argvp && $verb eq "skip"} { break }
       set ts   [lindex $r 1]
       if {$verb eq "submitted"} { break }
       if {$verb eq "queued" && $deadline < $qmax} { set deadline $qmax }
@@ -2062,8 +2139,13 @@ expect -c '
       # Read the box once more first: our own text still there is filed as this pane residue.
       lr_screen 1
       set cap [lr_capture NOT-SUBMITTED]
-      lr_note FAILED:submit submit "no record of the prompt in the transcript within ${deadline}s; screen: $cap"
-      lr_tell "✗ NOT SUBMITTED — the prompt never reached the transcript within ${deadline}s. The session is alive and may be TASK-LESS: check the composer, and type the prompt by hand only if it is not already answered. Screen at this moment: $cap"
+      if {$argvp} {
+        lr_note FAILED:submit submit "the prompt went on the spawn argv and no record of it is in the transcript within ${deadline}s; screen: $cap"
+        lr_tell "✗ NOT SUBMITTED — the prompt went on the spawn argv and is not in the transcript within ${deadline}s. The CLI may still be holding it behind a slow boot or a dialog: check the pane, and type the prompt by hand only if the session is idle and has not answered it. Screen at this moment: $cap"
+      } else {
+        lr_note FAILED:submit submit "no record of the prompt in the transcript within ${deadline}s; screen: $cap"
+        lr_tell "✗ NOT SUBMITTED — the prompt never reached the transcript within ${deadline}s. The session is alive and may be TASK-LESS: check the composer, and type the prompt by hand only if it is not already answered. Screen at this moment: $cap"
+      }
     }
     set timeout 300
   }

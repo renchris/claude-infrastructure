@@ -70,7 +70,8 @@ fire() { bash "$FIRE" "$ACCT" "$WT" "$SID" --model m --effort high "$@" </dev/nu
 
 @test "control: the byte recorder does see a typed prompt (so zero bytes above is a measurement)" {
   # PAINT_S=0: the CR follows the text at once, so the recorder's CR stop ends the case promptly.
-  LR_SUBMIT_PAINT_S=0 run fire --prompt "hello-from-bats"
+  # LR_PROMPT_ARGV=off: on argv nothing is typed at all (tests/lr-fire-resume-argv-prompt.bats).
+  LR_PROMPT_ARGV=off LR_SUBMIT_PAINT_S=0 run fire --prompt "hello-from-bats"
   [ -s "$STUB_OUT.bytes" ] || { echo "the recorder saw nothing even with a prompt: $output"; false; }
   grep -q 'hello-from-bats' "$STUB_OUT.bytes" || { od -c "$STUB_OUT.bytes" | head; false; }
 }

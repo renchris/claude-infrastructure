@@ -32,6 +32,8 @@ setup() {
   unset LR_RUN LR_RUN_DIR LR_ADMIT_TOKEN LR_SUBMIT_TOKEN
   # seconds, not minutes: every bound the expect program reads is a seam for this reason
   export LR_QUIET_S=1 LR_SUBMIT_POLL_S=2 RCY_ENGAGE_TIMEOUT=3 LR_RECR_SCHEDULE=1,2 LR_SUBMIT_RECR_MAX=1
+  # the TYPED path is the subject (re-Enter at the first look), so the argv delivery is switched off
+  export LR_PROMPT_ARGV=off
   SID="aaaa1111-0000-4000-8000-000000000001"
   CFG="$BATS_TEST_TMPDIR/target"; mkdir -p "$CFG/projects/-x"; : > "$CFG/projects/-x/$SID.jsonl"
   WT="$BATS_TEST_TMPDIR/wt"; mkdir -p "$WT"

@@ -122,6 +122,7 @@ TCL
   { stubs
     echo 'proc lr_probe {t0} { return {none {}} }'
     echo 'set poll 30; set qmax 180; set deadline $poll; set verb skip; set ts ""'
+    echo "set argvp 0"
     echo 'set recr 0; set recrmax 2; set nextlook [expr {$poll - 1}]; set unmeasured 0'
     echo 'set t0 0'
     # The look schedule is WALL CLOCK since the first CR (tcr), not loop turns. With lr_pump stubbed
