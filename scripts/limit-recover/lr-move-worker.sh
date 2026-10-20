@@ -7,7 +7,8 @@
 #   W0 claim     the per-session claim the batch took is re-stamped to THIS process; not ours ⇒ stop
 #   W1 fence     lr_recon_may_act: the reconciler, or anything holding the launch lock, wins
 #   W2 wait      only `wait:*` rows: until the batch's shared census says `move` twice in a row
-#   W2c load     wait while load/core is above handoff-fire's recycle bound — no slot held (R7)
+#   W2c load     the load is recorded, never waited on: staged moves are not load-gated, and a
+#                typed one is held by handoff-fire itself (lr-sustained-load REPORT §4 A2)
 #   W3 slot      the swap slot (lr-move-lib.sh), then the kernel-safety read — both BEFORE /exit
 #   W5 actuate   lr-handoff --in-place --voluntary --operator-intent --no-prompt --no-replace;
 #                a clean HELD:unreachable (admit withdrawn, nothing confirmed) is re-driven (R6)
@@ -296,15 +297,18 @@ draft_gate() { # → returns with DRAFT_CARRY set (or not); finishes HELD:draft 
 }
 if [ "$DISP" = draft ] && [ "${LR_MOVE_CARRY_DRAFT:-on}" != off ]; then draft_gate; fi
 
-# W2c. THE LOAD PRECHECK (R7, docs/plans/LIMIT_RECOVER_SELF_INPLACE.md § W0). handoff-fire holds
-# every resume recycle, which a move always is, when load per core is above its bound (the F1 guard:
-# /exit typed at ~45 runnable per core stranded pane 44, 2026-10-09). That hold sits AFTER
-# lr-handoff's admit and handoff-fire's confirm, so on a loaded box every move paid admit + confirm
-# + unconfirm, left a locks/<sid>.unconfirmed-* dir and failed anyway. The same test is made here,
-# before the slot and before anything is touched; the bound itself is handoff-fire's, unchanged.
-# These two copies MUST stay in step with scripts/handoff-fire.sh's hf_load_per_core and
-# hf_recycle_load_bound (same seam HF_LOAD_PER_CORE, same knobs, same "unreadable ⇒ proceed").
-# LR_MOVE_LOAD_PRECHECK=off restores the old behaviour (actuate and let handoff-fire hold).
+# W2c. NO LOAD WAIT (lr-sustained-load 2026-10-20, REPORT.md §4 A2). This used to wait while load
+# per core sat above handoff-fire's precheck bound (20), for max(600, UNTIL) s, and then finish a
+# final NOTMOVED HELD:load. Load on this box stays at 15-40 per core by design, so the wait never
+# opened: 4/4 rows of one batch held 605-613 s, and two idle sessions turned limited while waiting.
+# It copied a hold that, since Wave S, handoff-fire no longer applies to this lane:
+#   · a move whose relaunch is STAGED (CC_PANE_SUCCESSOR on and the successor lib loads) is not
+#     load-gated by handoff-fire at all (`load: not gated` in --probe-recycle-preconditions), so
+#     the copy here held moves its source never would;
+#   · a move whose relaunch is TYPED is still held by handoff-fire, at its precheck (before anything
+#     is transplanted) and at the /exit, which are the points that guard the F1 strand (pane 44,
+#     2026-10-09). That decision stays there, so this lane never originates a HELD:load.
+# The reading is still recorded (one `load` event), so a row says which of the two paths decides.
 mw_load_per_core() { # → 1-min load average / logical cpus, 2 decimals; "" if unreadable · seam HF_LOAD_PER_CORE
   if [ -n "${HF_LOAD_PER_CORE+set}" ]; then printf '%s' "$HF_LOAD_PER_CORE"; return 0; fi
   local la nc
@@ -312,50 +316,21 @@ mw_load_per_core() { # → 1-min load average / logical cpus, 2 decimals; "" if 
   nc="$(/usr/sbin/sysctl -n hw.ncpu 2>/dev/null || true)"
   awk -v l="$la" -v n="$nc" 'BEGIN { if (l == "" || n + 0 <= 0) exit; printf "%.2f", l / n }'
 }
-# The worker waits on the PRECHECK's bound (20, never above the commit's 24), not the commit's: a
-# worker that proceeds between the two walks into a precheck HELD:load, which is final NOTMOVED
-# (only HELD:unreachable is retried) — the inverted hysteresis of decisions/load-hold-bound.md §2.
-mw_commit_bound() { # → handoff-fire's commit bound; nothing when the hold is off
-  [ "${CC_FIRE_CAPACITY_GATE:-on}" != off ] || return 0
-  awk -v b="${HF_RECYCLE_HOLD_LOAD_PER_CORE:-${CC_GATE_MAX_LOAD_PER_CORE:-24}}" 'BEGIN {
-    if (b == "off") exit
-    if (b ~ /^[0-9]+(\.[0-9]+)?$/) { if (b + 0 > 0) printf "%s", b; exit }
-    printf "24" }'
-}
-mw_load_bound() { # → the per-core bound the worker waits on (handoff-fire's precheck); nothing when off
-  local cb
-  cb="$(mw_commit_bound)"
-  [ -n "$cb" ] || return 0
-  awk -v p="${HF_PRECHECK_LOAD_PER_CORE:-20}" -v c="$cb" 'BEGIN {
-    if (!(p ~ /^[0-9]+(\.[0-9]+)?$/) || p + 0 <= 0) p = 20
-    if (p + 0 > c + 0) p = c
-    printf "%s", p }'
-}
-LOAD_LPC=""; LOAD_BOUND=""
-load_over() { # → 0 when load per core is above the recycle bound (LOAD_LPC, LOAD_BOUND set)
-  [ "${LR_MOVE_LOAD_PRECHECK:-on}" != off ] || return 1
-  LOAD_BOUND="$(mw_load_bound)"; [ -n "$LOAD_BOUND" ] || return 1
-  LOAD_LPC="$(mw_load_per_core || true)"
-  awk -v l="$LOAD_LPC" -v b="$LOAD_BOUND" 'BEGIN { exit !(l + 0 > b + 0) }'
-}
-LOAD_WAIT_S="${LR_MOVE_LOAD_WAIT_S:-$(( ${UNTIL:-0} > 600 ? ${UNTIL:-0} : 600 ))}"
-load_t0="$(date +%s)"; load_deadline=$(( load_t0 + LOAD_WAIT_S )); load_said=""
-load_wait() { # returns once the load is under the bound; past the deadline finishes HELD:load
-  while load_over; do
-    aborted && finish NOTMOVED "aborted while waiting for the load to fall; nothing touched"
-    intent_recheck
-    [ -n "$load_said" ] || { load_said=1; ev load-wait "load ${LOAD_LPC}/core above the ${LOAD_BOUND}/core recycle bound; waiting up to ${LOAD_WAIT_S}s"; }
-    [ "$(date +%s)" -lt "$load_deadline" ] \
-      || finish NOTMOVED "HELD:load — load ${LOAD_LPC}/core stayed above the ${LOAD_BOUND}/core recycle bound for $(( $(date +%s) - load_t0 ))s; nothing touched (no admit, no copy)"
-    sleep "${LR_MOVE_LOAD_POLL_S:-15}"
+mw_relaunch_staged() { # → 0 when handoff-fire will stage this move's relaunch (its hf_succ_lib_load test)
+  [ "${CC_PANE_SUCCESSOR:-on}" != off ] || return 1
+  local c
+  for c in "${CC_PANE_SUCCESSOR_LIB:-}" "$LR/../../lib/pane-successor.sh" "${HOME:-}/.claude/lib/pane-successor.sh"; do
+    [ -n "$c" ] && [ -f "$c" ] || continue
+    # shellcheck source=/dev/null
+    ( . "$c" && command -v cc_pane_successor_stage ) >/dev/null 2>&1 && return 0
   done
+  return 1
 }
-
-# The load wait, then W3 (slot + kernel read), then one more load read right before the actuator:
-# a load that rose while this worker queued sends it back to waiting WITHOUT the slot, within the
-# same deadline, so no slot is held while waiting.
-while :; do
-load_wait
+if mw_relaunch_staged; then
+  ev load "$(mw_load_per_core || true)/core; the relaunch is staged, so load does not gate this move"
+else
+  ev load "$(mw_load_per_core || true)/core; the relaunch is typed, so handoff-fire's own load hold decides"
+fi
 
 # W3. The slot, then the kernel-safety read, both while the session is still alive in its pane.
 # The width is a fixed count (terminal control streams and overlapping boots), not a memory
@@ -417,10 +392,6 @@ if [ "${LR_MOVE_KERNEL_CHECK:-on}" != off ] && command -v lr_capacity_probe_corr
 fi
 aborted && finish NOTMOVED "aborted before the move; nothing touched"
 intent_ok || intent_stop
-load_over || break
-lr_swap_slot_release
-ev load-recheck "load ${LOAD_LPC}/core rose above the ${LOAD_BOUND}/core bound while queued; slot released, waiting again"
-done
 
 # W5. The actuator: the reconciler's idle-move argv with the operator's intent in place of an
 # account fact, and its environment with three differences (placer, swap admission, bgwork answer).
