@@ -132,7 +132,12 @@ topic() {
   ctx="$(printf '{"session_id":"s-pin","cwd":"/nonexistent-cwd-xyz"}' \
     | MEMORY_NUDGE_INTERVAL=1 MEMORY_INDEX_PATH="$M/MEMORY.md" bash "$REPO/hooks/memory-nudge.sh" \
     | jq -r '.hookSpecificOutput.additionalContext')"
-  [[ "$ctx" == *"dated CORRECTED (YYYY-MM-DD): line"* ]] || false
-  [[ "$ctx" == *"superseded_by: <heir> (YYYY-MM-DD)"* ]] || false
-  [[ "$ctx" == *"Replaces: <practice> — ruling pending"* ]] || false
+  # since 21155efe1 the nudge carries a pointer and the procedure lives in the doc it names, so
+  # follow the pointer the model receives and pin the clause there
+  [[ "$ctx" =~ Full\ procedure:\ ([^ ]*docs/memory-nudge-procedure\.md) ]] || false
+  proc="${BASH_REMATCH[1]}"
+  [[ -f "$proc" ]] || false
+  grep -qF 'dated CORRECTED (YYYY-MM-DD): line' "$proc"
+  grep -qF 'superseded_by: <heir> (YYYY-MM-DD)' "$proc"
+  grep -qF 'Replaces: <practice> — ruling pending' "$proc"
 }
