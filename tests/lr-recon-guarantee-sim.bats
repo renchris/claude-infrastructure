@@ -56,18 +56,19 @@ ok() {
   ok test_s5a_restart_neutrality GuaranteeSim
 }
 
-@test "S5b (owner W2) the claim stays with the live actuator: expected failure" {
-  ok test_s5b_claim_stays_with_the_live_actuator GuaranteeSim "expected failure"
+@test "S5b the claim stays with the live actuator, not the new daemon (hard since W2)" {
+  ok test_s5b_claim_stays_with_the_live_actuator GuaranteeSim
 }
 
 @test "every named mutant turns its checker red" {
   for t in f2_planted_load_default f3_composer_read_reaches_kitty s1_pace_requires_load_below_20_per_core \
     s1_pace_requires_load_below_2_per_core s2_aimd_wired_to_slow_boots s2_one_boot_slot s2b_drip_100x_slower \
-    s3_backoff_cap_900 s4_place_timeout_is_a_verdict s5a_restart_forgets_the_live_actuator; do
+    s3_backoff_cap_900 s4_place_timeout_is_a_verdict s5a_restart_forgets_the_live_actuator \
+    s5b_restamp_to_the_new_daemon; do
     ok "test_$t" MutantsDie
   done
 }
 
 @test "the module run ends OK" {
-  has '^OK( \(expected failures=1\))?$'
+  has '^OK$'
 }

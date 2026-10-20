@@ -28,6 +28,8 @@ MUTANT → RED (each applied in ``MutantsDie``, which asserts its checker raises
   * S3  ``classify.BACKOFF_CAP_S = 900``                          → a backoff of 480 s > 300
   * S4  ``plan.keep_waits`` ends every mover IMPOSSIBLE on rc 124 → a record closes on our timeout
   * S5a the restart forgets live actuators (procs dropped on load, no argv adoption) → a 2nd spawn
+  * S5b ``_restamp`` stamps the claim to the new daemon (the pre-W2 shape) → the claim leaves the
+        live actuator. S5b is hard: W2 (A6) landed before W1, so W1 flipped its expectedFailure.
   * F2  a planted function with ``os.getloadavg`` as a default    → the defaults scan fails
   * F3  the composer read reaches the real ``composer_state``     → the tripwire records a child
 """
@@ -672,6 +674,20 @@ class SimCase(unittest.TestCase):
         )
         self.assertEqual(len(s.spawns), s.n)
 
+    def check_s5b(self) -> None:
+        # C16 / REPORT A6 (ii): on restart an in-flight claim is re-stamped to the adopted live
+        # actuator, never to the new daemon. W2 (1eb5548ac, A6) made it hold.
+        s, _detected, ctx = self.run_restart()
+        for sid in ctx.records:
+            [p] = s.live(sid)
+            claim = store.read_claim(s.paths, sid)
+            self.assertIsNotNone(claim)
+            self.assertEqual(
+                (claim.pid, claim.lstart),
+                (p.pid, p.lstart),
+                "claim re-stamped away from the live actuator",
+            )
+
     def check_f2(self) -> None:
         self.assertEqual(sorted(set(load_defaults()) - ALLOW_LOAD_DEFAULTS), [])
 
@@ -708,18 +724,11 @@ class GuaranteeSim(SimCase):
     def test_s5a_restart_neutrality(self) -> None:
         self.check_s5a()
 
-    # owner W2 (A6 restart safety): W2 flips this to a hard test in its own commit
-    @unittest.expectedFailure
+    # Hard since W2 (A6 restart safety) landed first: Phase 0 shared-file rule 4 flips the
+    # expectedFailure in the commit that makes it pass. A comment, not a docstring: unittest -v
+    # would split the line the bats case greps.
     def test_s5b_claim_stays_with_the_live_actuator(self) -> None:
-        # C16 / REPORT A6 (ii): on restart an in-flight claim is re-stamped to the adopted live
-        # actuator, not to the new daemon (`_startup` restamps to os.getpid(), __main__.py:1790-1794).
-        # A comment, not a docstring: unittest -v would split the line the bats case greps.
-        s, _detected, ctx = self.run_restart()
-        for sid in ctx.records:
-            [p] = s.live(sid)
-            claim = store.read_claim(s.paths, sid)
-            self.assertIsNotNone(claim)
-            self.assertEqual((claim.pid, claim.lstart), (p.pid, p.lstart))
+        self.check_s5b()
 
 
 class MutantsDie(SimCase):
@@ -810,6 +819,17 @@ class MutantsDie(SimCase):
             mock.patch.object(plan, "keep_waits", verdict),
             mock.patch.object(M, "_plan", plan_spy),
             why="closed on our own timeout",
+        )
+
+    def test_s5b_restamp_to_the_new_daemon(self) -> None:
+        # the pre-W2 shape: _startup re-stamped every in-flight claim to os.getpid()
+        def to_daemon(paths: T.Paths, rec: T.Record, pid: int, lstart: str) -> None:
+            store.claim_restamp(paths, rec.sid, rec.record_id, os.getpid(), "daemon")
+
+        self.dies(
+            self.check_s5b,
+            mock.patch.object(M, "_restamp", to_daemon),
+            why="claim re-stamped away from the live actuator",
         )
 
     def test_s5a_restart_forgets_the_live_actuator(self) -> None:
