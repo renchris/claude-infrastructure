@@ -7,6 +7,7 @@
 # path-hash files keep answering for their own toplevel; new captures go to the repo-key store.
 
 setup() {
+  export CC_STARTUP_HEALTH_DIR="$BATS_TEST_TMPDIR/startup-health"  # startup sentinels: never the live ~/.claude/state/startup-health
   REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   DP="$REPO_ROOT/hooks/dod-persist.sh"
   WL="$REPO_ROOT/scripts/wrap-ledger.sh"

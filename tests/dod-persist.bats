@@ -9,6 +9,7 @@
 # to end below (dod-persist writes → wrap-ledger reports DOD=present).
 
 setup() {
+  export CC_STARTUP_HEALTH_DIR="$BATS_TEST_TMPDIR/startup-health"  # startup sentinels: never the live ~/.claude/state/startup-health
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HOOK="$REPO/hooks/dod-persist.sh"
   export WRAP_DOD_DIR="$BATS_TEST_TMPDIR/dod"; mkdir -p "$WRAP_DOD_DIR"

@@ -4,6 +4,7 @@
 # interpreter the harness hands it (deployment-interpreter lesson), against a fixture packet dir.
 
 setup() {
+  export CC_STARTUP_HEALTH_DIR="$BATS_TEST_TMPDIR/startup-health"  # startup sentinels: never the live ~/.claude/state/startup-health
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd -P)"
   HOOK="$REPO/hooks/recycle-failed-inject.sh"
   SSD="$REPO/hooks/session-start-dispatch.sh"

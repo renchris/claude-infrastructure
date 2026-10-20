@@ -22,6 +22,9 @@ setup() {
   # without this every run of this suite would append to the REAL fleet IDL and pollute the very
   # signal these cases exist to protect.
   export DESK_BRIEF_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
+  # Same reason for the startup sentinels (hooks/lib/startup-sentinel.sh): without this the fixture
+  # sessions S1-S8 land in the live ~/.claude/state/startup-health, which the fleet line folds.
+  export CC_STARTUP_HEALTH_DIR="$BATS_TEST_TMPDIR/startup-health"
   PANE="PANE-AAAA-BBBB-CCCC-000000000001"
 }
 ctx() { jq -r '.hookSpecificOutput.additionalContext' ; }

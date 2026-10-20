@@ -19,6 +19,7 @@
 # shellcheck disable=SC2030,SC2031  # each @test is its own subshell: a per-test export is the point
 
 setup() {
+  export CC_STARTUP_HEALTH_DIR="$BATS_TEST_TMPDIR/startup-health"  # startup sentinels: never the live ~/.claude/state/startup-health
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd -P)"
   SSD="$REPO/hooks/session-start-dispatch.sh"
   D="$BATS_TEST_TMPDIR"; H="$D/hooks"; mkdir -p "$H"

@@ -8,6 +8,7 @@
 #   2. Assert the SPECIFIC string, never a loose glob that a degraded result also matches.
 
 setup() {
+  export CC_STARTUP_HEALTH_DIR="$BATS_TEST_TMPDIR/startup-health"  # startup sentinels: never the live ~/.claude/state/startup-health
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   DRAIN="$REPO/hooks/mailbox-drain.sh"
   # ── HERMETIC $HOME (2026-08-07) ──────────────────────────────────────────────────────────────
