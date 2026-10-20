@@ -198,7 +198,12 @@ Already landed and not redone: 31f4242e0, 20368fc85, c82a349ce, 58885750c, ed561
 
 If the operator rules yes on the pass-boundary restart request (W2 lever 11), the lead runs `touch ~/.reso/limit-recover/recon/ctl/restart.request` for R2-R5 instead.
 
-## W0: land the designs, file the decisions, record the baseline (L)
+## W0: land the designs, file the decisions, record the baseline (L) — DONE (2026-10-20 20:31Z, lead pane 187)
+
+- Designs and plan landed `dc13d1a09` (15 files under `impl/`; no separate `impl/PLAN.md` was written, so this plan file is the PLAN receipt, used for the TR packet). Converged: the live checkout reads `dc13d1a09`.
+- Filed (class B packets, as specified): A7 `4ffc4e1e5f1c`, D1 `0223cae3d185`, D2b `76a584cc935b`, D2a `c9a05672e692`, TR `db44ab0ebc55`, pass-boundary restart `5353dd6e8277`, harness top-up load `4eee30ac4de4`, harness windows `75bb72581c54`, G2 scope `4ab193daae88`, B8-2 `74b9bd774c40`, B8-3 `1ef91f32a58c`, B8-4 `1c7000af9e41`, C1 `745e0fdc78e6`.
+- Filed needs rows: B8 App Nap `d25661ba57f1`, fd headroom `7e912ef257cb`, kitty restart `1c94119a286d` (`--confirm 853`, the main kitty), C1 credentials `bd40ec7f3d4f` / `156c1aa935e7` (needs-credential), R1-R5 reload `b8bbc2317870`, RK `626ed25b243c`, D2b shadow `f259e20643bf`. Backlog rows: `6473702a6bfe` (boot-resume load wording), `d80b297539d5` (move-path per-sid globs).
+- Learning: `handoff-fire.sh` refuses a brief whose `cc-notify` target is a pane number (F3 back-channel check); name the lead's full session uuid.
 
 - **Goal.** Make the 15 reviewed designs and this plan durable on `main`, so that every decision receipt and wave brief resolves to a tracked file.
 - **Actions, in order.**

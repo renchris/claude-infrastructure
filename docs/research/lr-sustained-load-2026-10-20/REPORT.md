@@ -580,6 +580,41 @@ Not yet built: B1 (load harness and the guarantee tests of §5), B2-B8, C1-C2, D
 an operator ruling). Gap 2 (each capped session recovering itself from its own priority-31 tree)
 is the largest remaining lever.
 
+### 8.1 Remaining levers: disposition (lead pane 187, from 2026-10-20 20:30Z)
+
+The remaining levers are executed by `docs/plans/LR_SUSTAINED_LOAD_IMPL.md` (landed `dc13d1a09`, designs
+under `impl/`). Each row below ends LANDED (sha on `main`, content-verified, converged, suites green)
+or FILED (operator packet `cc-decide` or step `cc-backlog needs`, with its id). A row reading
+IN FLIGHT names the wave that will close it. Decision packets were filed at class B, with a deadline
+and a default, as the plan specifies.
+
+| Lever | State | Where |
+|---|---|---|
+| A5 false HELD:busy on a `/goal` record | LANDED | `c82a349ce` (before wave 1) |
+| A8 one seat for a resumed lead | LANDED as superseded | replaced by gap 3's weight levers, wave 3 `9fc5964c3` |
+| A7 drive cohort members that turned limited while queued | FILED | packet `4ffc4e1e5f1c` (lane order; default: reconciler first, poller after 10 min). Code: W5, W13, logging-only until ruled |
+| D1 re-pick honours the router's held verdict | FILED | packet `0223cae3d185`. Code: W15, lands at mode `off` |
+| D2 warning-band shedding | FILED | packets `76a584cc935b` (late-band idle shed, D2b) and `c9a05672e692` (at-the-wall idle fan-out, D2a); step `f259e20643bf` (shadow switch). Code: W13, W16, shadow only |
+| B8 kitty hygiene | FILED | steps `d25661ba57f1` (App Nap key), `7e912ef257cb` (fd headroom), `1c94119a286d` (planned kitty restart); packets `74b9bd774c40` (official 0.49.2), `1ef91f32a58c` (in-kitty fd watcher), `1c7000af9e41` (in-process App Nap test). Agent tools: W7 |
+| C1 credential flip | FILED | packet `745e0fdc78e6` (wait for the next wall); steps `bd40ec7f3d4f`, `156c1aa935e7` (leftover `.credentials.json` in two config dirs) |
+| Gap 2 self-recovery from the session's own priority-31 tree | FILED | packet `4ab193daae88` (scope ruling). Code: W17, behind its measured entry trigger |
+| Typed-relaunch load hold (plan closure TR) | FILED | packet `db44ab0ebc55`. Code: W12b part 2 after the ruling |
+| Pass-boundary restart request (A6 lever 11) | FILED | packet `5353dd6e8277` |
+| B1 harness load and windows | FILED | packets `4eee30ac4de4` (background top-up load), `75bb72581c54` (main-terminal windows) |
+| Reconciler reload batches R1-R5, router-cache band RK | FILED | steps `b8bbc2317870` (R1-R5), `626ed25b243c` (RK) |
+| B1 load harness and guarantee tests | IN FLIGHT | W1 (hermetic tier), W4 (live tier), W4b |
+| A6 restart safety | IN FLIGHT | W2 |
+| B4 cheap `--place` | IN FLIGHT | W3 (client), W10 (holds map) |
+| B6 telemetry | IN FLIGHT | W6 |
+| B7 pass-scoped `now` audit, and C2-lite (typed delivery retries instead of escalating) | IN FLIGHT | W8 |
+| B2 bounded pass (stage 1) | IN FLIGHT | W9; stage 2 dropped with a re-open trigger (plan § Dropped) |
+| B3 per-record deadline (rescoped) | IN FLIGHT | W11 |
+| B5 kitty off the pre-commit path | IN FLIGHT | W12 (kernel identity, one-window probe), W14 (kitty-free census binding) |
+| C2 socket transport for the owed prompt | IN FLIGHT | full transport dropped by the plan (reviewer: "works as specified" ≈ 0%); C2-lite rides W8; a re-open row is filed when W8 lands |
+
+Safety precondition wave W0b (test hermeticity, reaper whitelist, hook cwd) was dispatched alone
+at 20:33Z before any slot starts.
+
 ## Appendix A. Refuted claims and levers (dropped)
 
 | Item | Axis | Why it was dropped |
