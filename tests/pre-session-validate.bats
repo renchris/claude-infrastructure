@@ -45,7 +45,7 @@ model_of() { python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get(
   [ "$(model_of "$h/.claude/settings.json")" = "fable" ]
   # launching account untouched; no stray backup written into the default account's dir
   [ "$(model_of "$cfg/settings.json")" = "sonnet" ]
-  ! ls "$h/.claude"/settings.json.bak-model-guard-* >/dev/null 2>&1
+  run ls "$h/.claude"/settings.json.bak-model-guard-*; [ "$status" -ne 0 ]
 }
 
 @test "guard still heals the default account when CLAUDE_CONFIG_DIR is unset (backward compat)" {
@@ -57,6 +57,21 @@ model_of() { python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get(
   [ -z "$(model_of "$h/.claude/settings.json")" ]
   run python3 -c "import json;print(json.load(open('$h/.claude/settings.json'))['x'])"
   [ "$output" = "1" ]
+}
+
+@test "guard writes THROUGH a symlinked account settings.json (0037 shared file): link survives, target healed" {
+  h="$BATS_TEST_TMPDIR/home"; cfg="$BATS_TEST_TMPDIR/cfg"
+  mkdir -p "$h/.claude" "$cfg"
+  printf '%s\n' '{"model": "fable", "keepKey": "keepVal"}' > "$h/.claude/settings.json"   # the shared real file
+  ln -s "$h/.claude/settings.json" "$cfg/settings.json"                                   # account link to it
+  run env HOME="$h" CLAUDE_CONFIG_DIR="$cfg" bash "$HOOK" </dev/null
+  [ "$status" -eq 0 ]
+  [ -L "$cfg/settings.json" ]                                      # pre-fix os.replace forked it into a real file
+  [ "$(readlink "$cfg/settings.json")" = "$h/.claude/settings.json" ]
+  [ -z "$(model_of "$h/.claude/settings.json")" ]                  # the shared target lost its model key
+  run python3 -c "import json;print(json.load(open('$h/.claude/settings.json'))['keepKey'])"
+  [ "$output" = "keepVal" ]
+  run ls "$cfg"/.settings-model-guard-*; [ "$status" -ne 0 ]       # no temp file left beside the link
 }
 
 @test "guard leaves a non-frontier saved model untouched" {

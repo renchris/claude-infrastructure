@@ -290,11 +290,6 @@
           },
           {
             "type": "command",
-            "command": "/bin/bash ~/.claude/hooks/pre-session-validate.sh",
-            "timeout": 10
-          },
-          {
-            "type": "command",
             "command": "/bin/bash ~/.claude/hooks/lead-crash-watchdog.sh",
             "timeout": 10
           },

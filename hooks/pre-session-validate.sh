@@ -48,10 +48,12 @@ cat >/dev/null 2>&1 || true
 . "${BASH_SOURCE[0]%/*}/lib/async-span.sh" 2>/dev/null && async_span_begin pre-session-validate
 
 # === SETTINGS MODEL PORTABILITY GUARD (2026-06-11) ===
-# `/model <X>` "saved as default" writes "model" into the LAUNCHING account's own
-# settings.json — a PER-ACCOUNT file keyed by CLAUDE_CONFIG_DIR (~/.claude,
-# ~/.claude-next, ~/.claude-secondary, … are INDEPENDENT real files, NOT symlinked).
-# A window-bound frontier model (fable / claude-fable-5) left saved there poisons THAT
+# `/model <X>` "saved as default" writes "model" into the LAUNCHING account's
+# settings.json, keyed by CLAUDE_CONFIG_DIR. Since migration 0037 every account's
+# settings.json (~/.claude-next, ~/.claude-secondary, …) is a SYMLINK to the one shared
+# ~/.claude/settings.json, so the strip below writes through the link (realpath, temp
+# file in the REAL dir, os.replace onto the real file): replacing the link path itself
+# would turn that account's link into a forked private copy. A window-bound frontier model (fable / claude-fable-5) left saved there poisons THAT
 # account: the day it resolves to a stable binary (2.1.114 can't resolve the model)
 # every plain `claude` launch dies with "There's an issue with the selected model".
 # So the guard MUST read the launching account's settings via CLAUDE_CONFIG_DIR — a
@@ -69,15 +71,15 @@ if [[ -f "$SETTINGS_FILE" ]] && command -v jq >/dev/null 2>&1; then
       cp "$SETTINGS_FILE" "$SETTINGS_FILE.bak-model-guard-$(date +%s)" 2>/dev/null || true
       python3 - "$SETTINGS_FILE" <<'PYEOF' 2>>"$LOG_FILE" || true
 import json, os, sys, tempfile
-p = sys.argv[1]
-with open(p) as f:
+real = os.path.realpath(sys.argv[1])
+with open(real) as f:
     d = json.load(f)
 d.pop('model', None)
-fd, tmp = tempfile.mkstemp(dir=os.path.dirname(p), prefix='.settings-model-guard-')
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(real), prefix='.settings-model-guard-')
 with os.fdopen(fd, 'w') as f:
     json.dump(d, f, indent=2, ensure_ascii=False)
     f.write('\n')
-os.replace(tmp, p)
+os.replace(tmp, real)
 PYEOF
       log "model guard: stripped non-portable saved model '$saved_model' from settings.json"
       echo "[pre-session-validate] stripped saved default model '$saved_model' from shared settings.json (window-bound frontier model would break the stable track; frontier launchers pin --model explicitly)." >&2
