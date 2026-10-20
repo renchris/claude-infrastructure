@@ -223,9 +223,11 @@ calls_gate() { grep -qE '^[^#]*[^_a-zA-Z]cc_capacity_admit[[:space:]]' "$1"; }
   # not a caller, so it is excluded by name alongside the three limit-recover files that only
   # mention it in prose. scripts/checks/restore-tree-live-verify.py (2026-10-15) is excluded the same
   # way: it sets CC_RESUME_ONE_BIN to a sleep stub and drives cc-resume-layout.sh --restore, so its
-  # only spawns go through the gated batch caller below, against a throwaway kitty.
+  # only spawns go through the gated batch caller below, against a throwaway kitty. bin/cc-restore
+  # (7faddf57f, 2026-10-19) is prose too: it names the engine only inside a printed hint ("resumes by
+  # hand: ~/.reso/bin/reso-resume-one …") and never executes it.
   callers="$(grep -rlE '^[^#]*(RESUME_ONE|reso-resume-one)' "$REPO/scripts" "$REPO/bin" 2>/dev/null \
-             | grep -v 'lr-fire-resume.sh\|lr-preseed-env.sh\|lr-select.py\|bin/reso-resume-one\|checks/restore-tree-live-verify.py' || true)"
+             | grep -v 'lr-fire-resume.sh\|lr-preseed-env.sh\|lr-select.py\|bin/reso-resume-one\|checks/restore-tree-live-verify.py\|bin/cc-restore$' || true)"
   # TWO gated invokers as of 2026-08-24. bin/cc-resume-layout.sh joined boot-resume-launch.sh when
   # /resume-sessions grew a per-monitor layout: it fires a BATCH, which is precisely the shape this
   # gate exists to bound. It was landed UNGATED, this case caught it, and the post-land verifier
