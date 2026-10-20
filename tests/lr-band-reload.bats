@@ -23,6 +23,14 @@ setup() {
   : > "$LR_BAND_LIVE_DIR/lr_recon/band.py"
   # both jobs loaded today, in launchd's default band
   for l in com.reso.lr-reconciler com.reso.lr-reset-poller; do echo "daemon (3)" > "$FAKE/$l"; done
+  # the dispatcher target (wave 5): loaded today at Background; the repo plist and a live
+  # cc-dispatch that carries the band self-check are fixtured beside the live dir
+  echo "background (5)" > "$FAKE/com.claude.dispatcher"
+  export LR_BAND_DISPATCHER_PLIST="$BATS_TEST_TMPDIR/com.claude.dispatcher.plist"
+  export LR_BAND_DISPATCHER_BIN="$BATS_TEST_TMPDIR/cc-dispatch"
+  export LR_BAND_DISPATCHER_LOG="$BATS_TEST_TMPDIR/dispatch-band.log"
+  cp "$BATS_TEST_DIRNAME/../launchd/com.claude.dispatcher.plist" "$LR_BAND_DISPATCHER_PLIST"
+  cp "$BATS_TEST_DIRNAME/../bin/cc-dispatch" "$LR_BAND_DISPATCHER_BIN"
   cat > "$BATS_TEST_TMPDIR/bin/launchctl" <<'SH'
 #!/bin/bash
 echo "$*" >> "$FAKE_LOG"
@@ -42,6 +50,12 @@ case "$1" in
     fi
     exit 0 ;;
   bootout) l="${2##*/}"; [ -f "$FAKE/$l.pid" ] && kill "$(cat "$FAKE/$l.pid")" 2>/dev/null; rm -f "$FAKE/$l" "$FAKE/$l.pid" ;;
+  enable) exit 0 ;;
+  kickstart)
+    l="${2##*/}"; [ -f "$FAKE/$l" ] || exit 113
+    sleep 30 & p=$!; echo "$p" > "$FAKE/$l.pid"
+    echo "$(date +%s) pid=$p pri=$FAKE_BAND floor=31 $([ "$FAKE_BAND" -ge 31 ] && echo ok || echo low)" >> "$LR_BAND_DISPATCHER_LOG"
+    exit 0 ;;
   *) exit 64 ;;
 esac
 SH
@@ -50,7 +64,10 @@ SH
 }
 
 teardown() {
-  if [ -f "$FAKE/com.reso.lr-reconciler.pid" ]; then kill "$(cat "$FAKE/com.reso.lr-reconciler.pid")" 2>/dev/null || true; fi
+  local l
+  for l in com.reso.lr-reconciler com.claude.dispatcher; do
+    if [ -f "$FAKE/$l.pid" ]; then kill "$(cat "$FAKE/$l.pid")" 2>/dev/null || true; fi
+  done
   return 0
 }
 
@@ -94,5 +111,57 @@ teardown() {
   export FAKE_BAND=20
   run bash "$SUT" --confirm lr-band
   [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=FAILED"* ]] || { echo "$output"; false; }
+}
+
+# ── the dispatcher target (lr-sustained-load wave 5) ──────────────────────────────────────────────
+# RED on the pre-change script: `--dispatcher` and `--confirm dispatcher-band` were unknown
+# arguments (exit 2), so there was no step that reloads the dispatcher and reads its band back.
+
+@test "dispatcher dry run: preflight passes on the repo plist and the live cc-dispatch, nothing reloaded" {
+  run bash "$SUT" --dispatcher
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"declares ProcessType Interactive; the live cc-dispatch logs its band"* ]] || { echo "$output"; false; }
+  ! grep -q 'bootout\|bootstrap' "$FAKE_LOG" 2>/dev/null
+}
+
+@test "[RED] dispatcher: a plist still at Background is refused before anything is reloaded" {
+  /usr/bin/sed -i '' 's#<string>Interactive</string>#<string>Background</string>#' "$LR_BAND_DISPATCHER_PLIST"
+  run bash "$SUT" --confirm dispatcher-band
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"not converged"* ]] || { echo "$output"; false; }
+  ! grep -q 'bootout\|bootstrap' "$FAKE_LOG" 2>/dev/null
+}
+
+@test "[RED] dispatcher: a live cc-dispatch without the band self-check is refused" {
+  printf '#!/bin/bash\nexit 0\n' > "$LR_BAND_DISPATCHER_BIN"
+  run bash "$SUT" --confirm dispatcher-band
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"no band self-check"* ]] || { echo "$output"; false; }
+  ! grep -q 'bootout\|bootstrap' "$FAKE_LOG" 2>/dev/null
+}
+
+@test "dispatcher apply: bootout, enable, bootstrap, kickstart; spawn type and band read back; rail untouched" {
+  run bash "$SUT" --confirm dispatcher-band
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  l=com.claude.dispatcher
+  cmp -s "$LR_BAND_DISPATCHER_PLIST" "$LR_LAUNCHD_AGENTS_DIR/$l.plist" || { echo "$l not installed"; false; }
+  for verb in bootout enable kickstart; do
+    grep -q "^$verb gui/[0-9]*/$l\$" "$FAKE_LOG" || { cat "$FAKE_LOG"; false; }
+  done
+  grep -q "^bootstrap gui/[0-9]* $LR_LAUNCHD_AGENTS_DIR/$l.plist\$" "$FAKE_LOG" || { cat "$FAKE_LOG"; false; }
+  # enable precedes bootstrap (a disabled label refuses bootstrap with a bare EIO)
+  [ "$(grep -n "^enable " "$FAKE_LOG" | cut -d: -f1)" -lt "$(grep -n "^bootstrap " "$FAKE_LOG" | cut -d: -f1)" ]
+  [[ "$output" == *"$l spawn type = interactive (4)"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"✓ dispatch-band.log: "*" pri=31 floor=31 ok"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=ok"* ]] || { echo "$output"; false; }
+  ! grep -q 'com.reso.lr-' "$FAKE_LOG" || false
+}
+
+@test "dispatcher apply: a pass that logs a band below 31 fails the verdict" {
+  export FAKE_BAND=4
+  run bash "$SUT" --confirm dispatcher-band
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"pri=4 floor=31 low (want floor=31 ok)"* ]] || { echo "$output"; false; }
   [[ "$output" == *"verdict=FAILED"* ]] || { echo "$output"; false; }
 }
