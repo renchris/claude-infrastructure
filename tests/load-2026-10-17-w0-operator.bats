@@ -138,7 +138,7 @@ calls() { cat "$STUB/calls" 2>/dev/null; }
 @test "xcrun-cache removes only stale temp files and records the cleanup" {
   echo db > "$STUB/T/xcrun_db"; echo x > "$STUB/T/xcrun_db-old"; echo y > "$STUB/T/xcrun_db-new"
   echo z > "$STUB/T/other-old"
-  touch -d '2 hours ago' "$STUB/T/xcrun_db-old" "$STUB/T/other-old"
+  touch -t 202001010000 "$STUB/T/xcrun_db-old" "$STUB/T/other-old"
   run "$SCRIPT" --confirm xcrun-cache
   [ "$status" -eq 0 ]
   [ ! -e "$STUB/T/xcrun_db-old" ]
