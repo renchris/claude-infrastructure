@@ -12,11 +12,30 @@ irreversible inside the 30 s wake guard; HEAL is disabled until the operator rul
 ``LR_HEAL_CORE_BARE``; every actuation carries ``CC_RECYCLE_BGWORK_ANSWER=cancel`` (decision 2:
 hold, never "Exit and stop tasks"). The sibling's core.bare heal (``LR_BARE_REPAIR``) is left as
 landed — decision 5 is SETTLED "allow", so nothing here overrides it.
+
+Restart safety (A6, docs/research/lr-sustained-load-2026-10-20/impl/A6-restart-safety.md §2.2):
+1. Identity. An actuator is (pid, lstart) for liveness, read from the pass's one ps census, and its
+   spawn nonce for its verdict.
+2. Inherited. A ProcRole loaded from the record file is tracked without a respawn; when it dies its
+   verdict comes from its exit file ``recon/exits/<nonce>.rc``, which the wrapper writes.
+3. Found by argv scan. A ``/bin/bash -c … lr-recon-act --record-id <rid> --intent <nonce>`` row is
+   the WRAPPER: adopted under ``rec.intent.actuator`` when the nonce is the intent's, else as
+   "adopted" (liveness only). A row whose nonce a recorded proc already carries REPAIRS that proc's
+   (pid, lstart) instead of appending a second entry (one spawn is one exit). Every other
+   ``--record-id`` match is a descendant: "adopted", no nonce.
+4. Only the wrapper's exit is a verdict. A descendant never carries a code, and an in-memory code is
+   accepted only for a pid this process spawned under the same nonce (a reused pid never speaks).
+5. Claim. The run claim names the daemon, or a live named actuator an EARLIER daemon started: only
+   that one is an ancestor of the handoff-fire that checks it (claim_holder_for).
+6. Unknown is not a verdict: no code from any source is settle_exit's existing None path.
+7. Replay. A settle's effects and the pruning of its proc land in one atomic record write, so a
+   killed pass replays the exit from its file exactly once. Events may show it twice.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import time
 import uuid
@@ -31,16 +50,44 @@ LR_DIR = os.path.dirname(HERE)  # scripts/limit-recover
 SCRIPTS = os.path.dirname(LR_DIR)  # scripts/
 IRREVERSIBLE = ("A", "A-husk", "B", "R", "UNCONFIRM", "FOLD", "ABORT", "SPLIT", "HEAL")
 BOOTING = ("A", "A-husk", "B", "R")  # hold a TUI boot slot (§6 B)
-WRAPPER = 'shift 4; "$@"'  # $0 lr-recon-act $1..$4 = the four tokens
-ACTLOG_MAX_AGE_S = 7 * 86400  # stated bound on recon/actlogs (§C12)
+# $0 lr-recon-act $1..$4 = the four tokens. The actuator runs as the wrapper's CHILD (bash 3.2 does
+# not exec a command that is followed by more of the list); its code goes to
+# $LR_RECON_ROOT/exits/<nonce>.rc, which the NEXT daemon reads: a restart reparents this setsid'd
+# wrapper to launchd, which reaps it, so no waitpid of ours sees the code (2026-10-20: 6 of 7
+# actuators that crossed a restart read "code unknown"). Builtins only, no fork. A signal-killed
+# child is 128+N, what Popen.poll() of the wrapper reads. A non-hex nonce or a missing exits/ dir
+# (a test or tool run without LR_RECON_ROOT) writes nothing.
+WRAPPER = (
+    'n="$4"; shift 4; "$@"; rc=$?; '
+    'case "$n" in ""|*[!0-9a-f]*) ;; *) [ -d "${LR_RECON_ROOT:-/nonexistent}/exits" ] && '
+    'printf "%d\\n" "$rc" 2>/dev/null >"$LR_RECON_ROOT/exits/$n.rc";; esac; exit "$rc"'
+)
+ACTLOG_MAX_AGE_S = (
+    7 * 86400
+)  # stated bound on recon/actlogs (§C12); exit files share it
+# Kill switches, files under the reconciler root read every pass (no reload). exit-files.off: the
+# reader ignores exit files. claim-keeper.off: the run claim's holder is ALWAYS this daemon — the
+# keeper still hands a claim back to it, and never hands one to an actuator (A6 S-7).
+EXITS_OFF = "exit-files.off"
+KEEPER_OFF = "claim-keeper.off"
+_HEX = re.compile(r"[0-9a-f]{6,32}")
+# The wrapper's own ps row, anchored on its interpreter so a grep or pgrep row that merely quotes
+# the token is never adopted under an actuator name (A6 S-11).
+_WRAPPER_TOK = re.compile(
+    r"^/bin/bash -c .*?\blr-recon-act --record-id (\S+) --intent ([0-9a-f]{6,32})(?:\s|$)"
+)
 
 PopenFn = Callable[..., Any]
 # pid → exit code of our own actuators, filled by reap_children and drained by settle.dead_actuators.
 EXIT_CODES: Dict[int, int] = {}
-# pid → the actuator's own Popen, held so it is never garbage-collected into subprocess._active:
-# every later Popen runs subprocess._cleanup, which reaped those and stole the exit code before
-# reap_children's waitpid saw it (W5 rig: 32 of 113 exits read "code unknown").
-_CHILDREN: Dict[int, "subprocess.Popen[bytes]"] = {}
+# pid → (the actuator's own Popen, its nonce), held so the Popen is never garbage-collected into
+# subprocess._active: every later Popen runs subprocess._cleanup, which reaped those and stole the
+# exit code before reap_children's waitpid saw it (W5 rig: 32 of 113 exits read "code unknown").
+_CHILDREN: Dict[int, Tuple["subprocess.Popen[bytes]", str]] = {}
+# pid → nonce of every actuator THIS process spawned: the only pids an EXIT_CODES entry may speak
+# for, and only under the same nonce (a reused pid never hands an actuator a stranger's code, A6 S-4).
+# Popped when the code is consumed.
+_SPAWNED: Dict[int, str] = {}
 
 
 def _p(*parts: str) -> str:
@@ -330,9 +377,16 @@ def spawn(
         )
     pid = int(proc.pid)
     if hasattr(proc, "poll"):  # tests inject fakes with only .pid
-        _CHILDREN[pid] = proc
+        _CHILDREN[pid] = (proc, nonce)
+    _SPAWNED[pid] = nonce
     rec.procs.append(
-        T.ProcRole(role="actuator", pid=pid, lstart=lstart_of(pid), argv_hash=actuator)
+        T.ProcRole(
+            role="actuator",
+            pid=pid,
+            lstart=lstart_of(pid),
+            argv_hash=actuator,
+            nonce=nonce,
+        )
     )
     store.save_record(paths, rec, now)
     fence = store.read_fence(paths, rec.sid)
@@ -358,7 +412,8 @@ def live_procs(rec: T.Record, snap: T.Snapshot) -> List[T.ProcRole]:
 
 
 def adopt(rec: T.Record, snap: T.Snapshot) -> List[T.ProcRole]:
-    """Find live actuators for this record by their argv token and record them (§C2 step 4)."""
+    """Find live actuators for this record by their argv token and record them (§C2 step 4; A6
+    rule 3 in the module docstring: the wrapper by its nonce, a known nonce repaired in place)."""
     tok = "--record-id %s" % rec.record_id
     known = {(p.pid, p.lstart) for p in rec.procs}
     found = []
@@ -366,7 +421,25 @@ def adopt(rec: T.Record, snap: T.Snapshot) -> List[T.ProcRole]:
         if row.zombie or tok not in row.args or (row.pid, row.lstart) in known:
             continue
         role = "watcher" if "__recycle" in row.args else "actuator"
-        pr = T.ProcRole(role=role, pid=row.pid, lstart=row.lstart, argv_hash="adopted")
+        name, nonce = "adopted", ""
+        m = _WRAPPER_TOK.match(row.args) if role == "actuator" else None
+        if m and m.group(1) == rec.record_id:
+            nonce = m.group(2)  # the wrapper itself: its exit file is readable
+            same = [p for p in rec.procs if p.nonce == nonce]
+            if same:
+                # spawn's lstart read timed out ("" lstart), or the pid was recorded wrong: one
+                # spawn is one entry, or its exit is scored twice (A6 F10/S-3)
+                same[0].pid, same[0].lstart = row.pid, row.lstart
+                known.add((row.pid, row.lstart))
+                found.append(same[0])
+                continue
+            # killed between Popen and the procs save (§4.5): the intent names the actuator
+            it = rec.intent
+            if it is not None and it.nonce == nonce and it.actuator:
+                name = it.actuator
+        pr = T.ProcRole(
+            role=role, pid=row.pid, lstart=row.lstart, argv_hash=name, nonce=nonce
+        )
         rec.procs.append(pr)
         found.append(pr)
     return found
@@ -396,12 +469,15 @@ def reap_children() -> int:
     n = 0
     # our own actuators first: poll() owns their waitpid and keeps returncode on the object, so
     # no other reaper can race it (negative = signal, as below)
-    for pid, proc in list(_CHILDREN.items()):
+    for pid, (proc, _nonce) in list(_CHILDREN.items()):
         rc = proc.poll()
         if rc is not None:
             EXIT_CODES[pid] = rc
             del _CHILDREN[pid]
             n += 1
+    # W9 (B2) deletes this loop; until then a child we did not spawn as an actuator (the
+    # provenance Popen) is reaped and its code DROPPED: pids wrap in ~86 s here, and a stranger's
+    # code under an actuator's pid was scored as that actuator's verdict (A6 §1.4)
     while True:
         try:
             pid, _status = os.waitpid(-1, os.WNOHANG)
@@ -409,14 +485,54 @@ def reap_children() -> int:
             return n
         if pid == 0:
             return n
-        EXIT_CODES[pid] = (
-            os.WEXITSTATUS(_status) if os.WIFEXITED(_status) else -os.WTERMSIG(_status)
-        )
+        if pid in _SPAWNED:
+            EXIT_CODES[pid] = (
+                os.WEXITSTATUS(_status)
+                if os.WIFEXITED(_status)
+                else -os.WTERMSIG(_status)
+            )
         n += 1
 
 
+def read_exit(paths: T.Paths, pr: T.ProcRole) -> Optional[int]:
+    """The wrapper's durable exit code, or None (no nonce, a non-hex one, no file, unreadable, or
+    exit-files.off). The nonce comes from a record file, so it is checked before it names a path."""
+    if not _HEX.fullmatch(pr.nonce or "") or os.path.exists(paths.p(EXITS_OFF)):
+        return None
+    try:
+        with open(_p(paths.exits, pr.nonce + ".rc"), encoding="ascii") as fh:
+            raw = fh.read(16).strip()
+    except (OSError, ValueError):
+        return None
+    return int(raw) if re.fullmatch(r"-?[0-9]{1,3}", raw) else None
+
+
+def intent_only_exit(paths: T.Paths, rec: T.Record) -> Optional[T.ProcRole]:
+    """A6 S-9: the daemon was killed between Popen and the procs save, and the wrapper exited before
+    any census saw it. Nothing carries the intent's nonce, so prune_dead would clear the intent and
+    the exit file would never be read. Returns a proc to settle once under ``intent.actuator`` (the
+    caller then clears the intent), or None. Call it after adopt, before prune_dead."""
+    it = rec.intent
+    if it is None or not it.actuator or any(p.nonce == it.nonce for p in rec.procs):
+        return None
+    pr = T.ProcRole(
+        role="actuator", pid=0, lstart="", argv_hash=it.actuator, nonce=it.nonce
+    )
+    return pr if read_exit(paths, pr) is not None else None
+
+
+def reap_exits(paths: T.Paths, now: float) -> int:
+    """Exit files older than ACTLOG_MAX_AGE_S go, at startup only. Never at consumption: a file
+    must outlive the record write that consumed it (rule 7)."""
+    return _reap_older(paths.exits, now)
+
+
 def reap_actlogs(paths: T.Paths, now: float) -> int:
-    d, n = paths.p("actlogs"), 0
+    return _reap_older(paths.p("actlogs"), now)
+
+
+def _reap_older(d: str, now: float) -> int:
+    n = 0
     try:
         names = os.listdir(d)
     except OSError:
@@ -490,6 +606,84 @@ CLAIMED_ACTUATORS = (
 _SELF_LSTART: Tuple[int, str] = (0, "")  # (pid, lstart) of this daemon, read once
 
 
+def self_ident(snap: Optional[T.Snapshot] = None) -> Tuple[int, str]:
+    """(pid, lstart) of this process: the pass census's own row when it has one (no second ps on
+    the keeper's path, whatever the load), else one bounded ps per process, cached. An lstart of ""
+    means unknown: the keeper writes nothing on it."""
+    global _SELF_LSTART
+    pid = os.getpid()
+    row = snap.procs.get(pid) if snap is not None else None
+    if row is not None and row.lstart and not row.zombie:
+        _SELF_LSTART = (pid, row.lstart)
+        return pid, row.lstart
+    if _SELF_LSTART[0] != pid or not _SELF_LSTART[1]:
+        _SELF_LSTART = (pid, store.proc_lstart(pid))  # one ps per process
+    return _SELF_LSTART
+
+
+def keeper_on(paths: T.Paths) -> bool:
+    return not os.path.exists(paths.p(KEEPER_OFF))
+
+
+def claim_holder_for(
+    rec: T.Record, snap: T.Snapshot, me: Tuple[int, str], keeper: bool = True
+) -> Optional[Tuple[int, str]]:
+    """A6 (c): who the run claim must name — a LIVE ancestor of every process driving the record.
+    hf_recycle_claim_foreign (handoff-fire.sh) refuses a live holder that is not the caller or an
+    ancestor, and an actuator an earlier daemon started is no descendant of this one (e80b61f4 and
+    7aae55e1, 2026-10-20). Only a NAMED wrapper (recorded at spawn, or adopted by its nonce) can be
+    that ancestor; an adopted descendant never is (A6 F-A). With the keeper off the holder is always
+    this daemon (S-7). None: our own lstart is unknown this pass — write nothing, retry next pass."""
+    if keeper:
+        live = [
+            p
+            for p in rec.procs
+            if p.role == "actuator"
+            and p.argv_hash != "adopted"
+            and snap.alive(p.pid, p.lstart)
+        ]
+        if live:
+            w = live[
+                -1
+            ]  # the newest spawn: may_actuate allows one live actuator per record
+            if snap.procs[w.pid].ppid != me[0]:  # started by an earlier daemon
+                return (w.pid, w.lstart)
+    return me if me[1] else None
+
+
+def keep_claim(
+    paths: T.Paths, rec: T.Record, snap: T.Snapshot, me: Tuple[int, str]
+) -> Tuple[str, str]:
+    """Re-stamp the record's OWN run claim to claim_holder_for, on change only. Never raises: an
+    OSError (a steal renamed the claim dir mid-write) is unknown, retried next pass (S-6). Returns
+    (event, detail): ("", "") wrote nothing · ("claim-restamp", …) · ("claim-race", …) the re-read
+    after the write named someone else."""
+    if not rec.open or not rec.record_id:
+        return "", ""
+    try:
+        cur = store.read_claim(paths, rec.sid)
+        if cur is None or cur.record_id != rec.record_id:
+            return "", ""  # absent, or another record's or lane's: never ours to write
+        want = claim_holder_for(rec, snap, me, keeper_on(paths))
+        if want is None or (cur.pid, cur.lstart) == want:
+            return "", ""
+        if not store.claim_restamp(paths, rec.sid, rec.record_id, want[0], want[1]):
+            return "", ""
+        back = store.read_claim(paths, rec.sid)
+    except OSError:
+        return "", ""
+    if back is None or (back.pid, back.lstart) != want:
+        return "claim-race", "wrote %d, read back %s" % (
+            want[0],
+            "nothing" if back is None else "%d by %s" % (back.pid, back.owner),
+        )
+    return "claim-restamp", "run claim %d → %d (%s)" % (
+        cur.pid,
+        want[0],
+        "this daemon" if want[0] == me[0] else "the actuator an earlier daemon started",
+    )
+
+
 def hold_claim(
     paths: T.Paths,
     rec: T.Record,
@@ -507,15 +701,10 @@ def hold_claim(
     cur = store.read_claim(paths, rec.sid)
     if cur is not None and cur.record_id and cur.record_id == rec.record_id:
         return True, "ours"
-    global _SELF_LSTART
-    if _SELF_LSTART[0] != os.getpid() or not _SELF_LSTART[1]:
-        _SELF_LSTART = (
-            os.getpid(),
-            store.proc_lstart(os.getpid()),
-        )  # one ps per process
+    pid, lstart = self_ident()
     me = T.RunClaimHolder(
-        pid=os.getpid(),
-        lstart=_SELF_LSTART[1],
+        pid=pid,
+        lstart=lstart,
         owner="lr-reconciler",
         record_id=rec.record_id,
     )

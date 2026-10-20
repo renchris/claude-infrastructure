@@ -307,6 +307,12 @@ class Paths:
         return self.p("restarts.jsonl")
 
     @property
+    def exits(self) -> str:
+        """``exits/<nonce>.rc``: each actuator wrapper's exit code, which outlives the daemon that
+        spawned it (A6 (a)): a restart reparents the wrapper to launchd, so no waitpid of ours sees it."""
+        return self.p("exits")
+
+    @property
     def lock(self) -> str:
         return self.p("reconciler.lock")
 
@@ -367,6 +373,7 @@ class Paths:
             self.shadow,
             self.quarantine,
             self.ctl,
+            self.exits,
         ]
 
 
@@ -408,6 +415,9 @@ class ProcRole:
     pid: int
     lstart: str
     argv_hash: str = ""
+    # the spawn nonce (act.wrap's --intent): names this actuator's exit file recon/exits/<nonce>.rc,
+    # which outlives the daemon that spawned it (A6). "" for a descendant found by argv, or a legacy row.
+    nonce: str = ""
 
 
 # ── locks, claims, fence (C7, C10) ───────────────────────────────────────────────────────────────

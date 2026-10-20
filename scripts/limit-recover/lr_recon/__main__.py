@@ -15,6 +15,7 @@ is moving, 5 s while any is open, and on each 20 s timeout while DORMANT.
 from __future__ import annotations
 
 import argparse
+import calendar
 import fcntl
 import json
 import os
@@ -124,6 +125,9 @@ class Ctx:
         # kept across passes so each pass re-reads only the project dirs that changed
         # (transcript.ProjectsIndex): a fresh sweep was ~73,000 directory reads a pass
         self.projects = transcript.ProjectsIndex()
+        # A6 (c): the claim keeper runs only in daemon(), after its flock — never in --once or a
+        # test pass, which would stamp a process that exits seconds later (S-2)
+        self.keeper = False
 
 
 def _alive(pid: int, lstart: str) -> bool:
@@ -804,7 +808,33 @@ def _derive(
                     "15 min or an input changed",
                 )
             rec.close["rearm_inputs"] = inputs
-        for pr, rc in settle.dead_actuators(act.prune_dead(rec, snap), act.EXIT_CODES):
+        # A6: the intent's nonce is read BEFORE prune_dead clears it — it is what tells this
+        # spawn's exit from a stale one (S-5) — and an exit nothing carries is found first (S-9)
+        want = rec.intent.nonce if rec.intent is not None else None
+        orphan = act.intent_only_exit(ctx.paths, rec)
+        dead = act.prune_dead(rec, snap)
+        if orphan is not None:
+            dead.append(orphan)
+            rec.intent = None  # settled once; the wrapper is gone, the file says so
+        for pr, rc in settle.dead_actuators(
+            dead,
+            act.EXIT_CODES,
+            lambda p: act.read_exit(ctx.paths, p),
+            act._SPAWNED,
+            rec.procs,
+            want,
+        ):
+            why = settle.superseded(pr, want, rec.procs)
+            if why:
+                _event(
+                    ctx.paths,
+                    "stale-exit",
+                    rec.sid,
+                    rec.record_id,
+                    "%s pid=%d nonce=%s %s — not scored"
+                    % (pr.argv_hash, pr.pid, pr.nonce, why),
+                )
+                continue
             text = settle.tail(settle.actlog(ctx.paths, rec, pr.argv_hash))
             detail = settle.settle_exit(rec, pr, rc, text, now)
             if detail:
@@ -1301,6 +1331,10 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
         pane = snap.panes.get("%d:%d" % rec.pane) if rec.pane else None
         if which in settle.MOVE_ACTUATORS:
             _record_jobs(ctx, rec, snap, now)
+            # A6 S-8: set BEFORE spawn, so spawn's pre-Popen intent save carries it. Set after, a
+            # pass killed before save_records lost it and the next move re-used the attempt (a
+            # double typer by the audit above). If Popen raises, an attempt number is skipped.
+            rec.close["move_attempt"] = rec.attempt
         pid = act.spawn(
             ctx.paths,
             rec,
@@ -1309,13 +1343,13 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
             act.actuator_env(rec, ctx.paths, pane.sock if pane else ""),
             now,
         )
-        if which in settle.MOVE_ACTUATORS:
-            rec.close["move_attempt"] = rec.attempt
         if which == "C" and ctx.actions.get(rec.sid) == "wake" and rec.wait:
             # typed for this reset: the next pass waits for the turn instead of retyping. Set here,
             # not when the wake was chosen, or a wake refused by admission was never tried again
             # (W6d rig: one CPU-brake refusal left a STAY session unwoken for good).
             rec.close["wake_eta"] = rec.wait.eta
+            # A6 (d): a decision, not replayable from any file; on disk now, not at the pass end
+            store.save_record(ctx.paths, rec, now)
         if which in settle.MOVE_ACTUATORS + ("C", "C-retry"):
             store.append_launch(
                 ctx.paths,
@@ -1649,6 +1683,22 @@ def _abstain(
     return summary
 
 
+def _keep_claims(ctx: Ctx, snap: T.Snapshot) -> None:
+    """A6 (c), right after the W7a gate and before facts and the census: under load the first
+    _derive comes minutes after the census (287 s measured once, p90 736 s), and the claim must name
+    a live ancestor of every chain driving the record well before that (A6 F-C). adopt is
+    idempotent; _derive runs it again. The daemon only (ctx.keeper, set after its flock): a --once
+    process would stamp itself, then exit (S-2)."""
+    me = act.self_ident(snap)
+    for rec in ctx.records.values():
+        if not rec.open:
+            continue
+        act.adopt(rec, snap)
+        ev, detail = act.keep_claim(ctx.paths, rec, snap, me)
+        if ev:
+            _event(ctx.paths, ev, rec.sid, rec.record_id, detail)
+
+
 def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
     # One projects/ index serves every sid → transcript / .handed-off / .HANDOFF.json lookup
     # (transcript.ProjectsIndex): a glob per lookup lstat'd every project dir. The daemon's index
@@ -1682,6 +1732,8 @@ def _run_pass(ctx: Ctx, force_observe: bool) -> Dict[str, Any]:
     if why:
         return _abstain(ctx, snap, mode, now, why)
     ctx.abstain_streak = 0
+    if ctx.keeper:
+        _keep_claims(ctx, snap)
     for sid in (
         snap.rig_refused
     ):  # rig/canary mode: logged once per sid per process, never acted on
@@ -1780,27 +1832,166 @@ def wait_for_change(
     return False
 
 
-def _startup(ctx: Ctx) -> None:
+RESTART_REQUEST = "restart.request"  # under recon/ctl: a pass-boundary restart (A6 (f))
+RESTART_REQUEST_ON = "restart-request.on"  # under recon/: the operator's ruling; absent = inert
+
+
+def _restamp(paths: T.Paths, rec: T.Record, pid: int, lstart: str) -> None:
+    try:
+        store.claim_restamp(paths, rec.sid, rec.record_id, pid, lstart)
+    except OSError:
+        pass  # a steal renamed the claim dir mid-write: the first trusted pass decides (S-6)
+
+
+def _prev_heartbeat(paths: T.Paths) -> Dict[str, Any]:
+    """The previous daemon's heartbeat (pid, lstart, progress_wall), read before ours replaces it.
+    {} when absent or unreadable: forensics only, never raises."""
+    try:
+        with open(paths.heartbeat, encoding="utf-8") as fh:
+            hb = json.load(fh)
+        return hb if isinstance(hb, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _restart_forensics(prev: Dict[str, Any], now: float) -> Dict[str, Any]:
+    """A6 (e): who ran before, how long it had been frozen, and whether the code changed under it
+    (deploy-driven vs a watchdog kill). Each field is best-effort; nothing here raises."""
+    out: Dict[str, Any] = {}
+    try:
+        out["prev_pid"] = int(prev.get("pid") or 0)
+        out["prev_lstart"] = str(prev.get("lstart") or "")
+        if prev.get("progress_wall"):
+            out["prev_progress_age_s"] = round(now - float(prev["progress_wall"]), 1)
+    except (TypeError, ValueError):
+        pass
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        mt = max(
+            os.stat(os.path.join(here, n)).st_mtime
+            for n in os.listdir(here)
+            if n.endswith(".py")
+        )
+        out["code_mtime"] = int(mt)
+        started = out.get("prev_lstart")
+        if started:
+            epoch = calendar.timegm(time.strptime(started, "%a %b %d %H:%M:%S %Y"))
+            out["code_newer_than_prev"] = mt > epoch
+    except (OSError, ValueError):
+        pass
+    return out
+
+
+def _restart_loop(paths: T.Paths, now: float) -> bool:
+    """Two restarts within 10 minutes among the last three rows. A requested restart's own row and
+    the startup row that follows it are exempt: they are the pass-boundary restart (f) working."""
+    try:
+        with open(paths.restarts, encoding="utf-8") as fh:
+            rows = [json.loads(ln) for ln in fh.readlines()[-4:]]
+        n = 0
+        for i in range(max(0, len(rows) - 3), len(rows)):
+            if rows[i].get("cause") == "requested" or (
+                i > 0 and rows[i - 1].get("cause") == "requested"
+            ):
+                continue
+            if now - float(rows[i].get("t", 0)) < RESTART_PAGE_WINDOW_S:
+                n += 1
+        return n >= 2
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def _restart_requested(paths: T.Paths) -> bool:
+    """A6 (f), inert until ruled: ``recon/ctl/restart.request`` asks for a restart at this pass
+    boundary, after save_records, honored only while ``recon/restart-request.on`` exists. launchd
+    KeepAlive restarts the daemon within ~10 s; a deploy then never kills a pass mid-act."""
+    req = os.path.join(paths.ctl, RESTART_REQUEST)
+    if not (os.path.exists(req) and os.path.exists(paths.p(RESTART_REQUEST_ON))):
+        return False
+    store._unlink(req)
+    store.append_restart(
+        paths, {"t": time.time(), "pid": os.getpid(), "cause": "requested"}
+    )
+    return True
+
+
+def _startup(
+    ctx: Ctx, me: Optional[str] = None, prev: Optional[Dict[str, Any]] = None
+) -> None:
     paths = ctx.paths
 
     def bad(path: str, reason: str) -> None:
         _event(paths, "quarantine", detail="%s %s" % (os.path.basename(path), reason))
 
     ctx.records = store.load_all(paths, bad)
-    me = store.proc_lstart(os.getpid())
+    me = store.proc_lstart(os.getpid()) if me is None else me
+    prev = _prev_heartbeat(paths) if prev is None else prev
+    keeper = act.keeper_on(paths)
+    inherited: List[str] = []
+    phases: Dict[str, str] = {}
     for rec in ctx.records.values():
         claim = store.read_claim(paths, rec.sid)
-        if rec.open and claim is not None and claim.record_id == rec.record_id:
-            store.claim_restamp(paths, rec.sid, rec.record_id, os.getpid(), me)
+        if not (rec.open and claim is not None and claim.record_id == rec.record_id):
+            continue
+        acts = [p for p in rec.procs if p.role == "actuator"]
+        if not (keeper and (rec.intent is not None or acts)):
+            _restamp(paths, rec, os.getpid(), me)
+            continue
+        # A6 (c): an actuator the last daemon started may still run, and only it (an ancestor of
+        # its handoff-fire) may hold the claim. Startup has no census: stamp the last NAMED
+        # actuator's recorded identity — a dead one is no worse a holder than the dead old daemon,
+        # and a live one is protected from the first moment, however long the first pass takes
+        # (F-D, S-1). The first trusted pass's keeper then decides from its census.
+        named = [p for p in acts if p.argv_hash != "adopted"]
+        intent_act = rec.intent.actuator if rec.intent is not None else ""
+        inherited.append(
+            "%s:%s"
+            % (
+                rec.sid[:8],
+                named[-1].argv_hash if named else intent_act or "adopted",
+            )
+        )
+        phases[rec.sid[:8]] = rec.phase
+        if named and named[-1].lstart:
+            w = named[-1]
+            if (claim.pid, claim.lstart) != (w.pid, w.lstart):
+                _restamp(paths, rec, w.pid, w.lstart)
+            detail = (
+                "pid %d → %s pid %d, started by the last daemon; the first pass decides"
+                % (
+                    claim.pid,
+                    w.argv_hash,
+                    w.pid,
+                )
+            )
+        elif not named and claim.lstart:
+            # intent-only (killed between Popen and the procs save) or adopted-only: the wrapper's
+            # pid is unknown until a census adopts it by nonce. A dead holder with an lstart reads
+            # dead or reused to bash, never foreign (F-B); the first pass hands it over.
+            detail = (
+                "pid %d left for the first pass (no named actuator recorded)"
+                % claim.pid
+            )
+        else:
+            # never leave an old-daemon claim with an empty lstart: bash judges it by pid alone,
+            # and a reused pid reads live and foreign (S-1)
+            _restamp(paths, rec, os.getpid(), me)
+            detail = "pid %d → this daemon (no recorded lstart to stamp)" % claim.pid
+        _event(paths, "claim-inherited", rec.sid, rec.record_id, detail)
     now = time.time()
-    store.append_restart(paths, {"t": now, "pid": os.getpid(), "lstart": me})
-    try:
-        with open(paths.restarts, encoding="utf-8") as fh:
-            recent = [json.loads(ln).get("t", 0) for ln in fh.readlines()[-3:]]
-        if sum(1 for t in recent if now - float(t) < RESTART_PAGE_WINDOW_S) >= 2:
-            _event(paths, "restart-loop", detail="second restart within 10 minutes")
-    except (OSError, ValueError):
-        pass
+    act.reap_exits(paths, now)
+    row: Dict[str, Any] = {
+        "t": now,
+        "pid": os.getpid(),
+        "lstart": me,
+        "inflight": len(inherited),
+        "inherited": inherited[:16],
+        "prev_phase": dict(list(phases.items())[:16]),
+    }
+    row.update(_restart_forensics(prev, now))
+    store.append_restart(paths, row)
+    if _restart_loop(paths, now):
+        _event(paths, "restart-loop", detail="second restart within 10 minutes")
 
 
 def daemon(ctx: Ctx) -> int:
@@ -1815,11 +2006,15 @@ def daemon(ctx: Ctx) -> int:
             file=sys.stderr,
         )
         return 0
-    _startup(ctx)
-    hb = Heartbeat(
-        paths.heartbeat, os.getpid(), store.proc_lstart(os.getpid()), ctx.clock
-    )
+    # A6 F-E ii: read the previous heartbeat, then write ours BEFORE _startup's claim loop, with
+    # one ps for both. The watchdog's kill already let the old heartbeat go stale, so until ours
+    # is written the fence's freshness rule holds nothing off an inherited record.
+    me = store.proc_lstart(os.getpid())
+    prev = _prev_heartbeat(paths)
+    hb = Heartbeat(paths.heartbeat, os.getpid(), me, ctx.clock)
     hb.write_now()
+    _startup(ctx, me, prev)
+    ctx.keeper = True  # after the flock: the one process whose claims these are (S-2)
     hb.start()
     bind_steps(hb)  # run_pass's step() calls advance hb, from this thread only
     caf = Caffeinate(os.getpid())
@@ -1830,6 +2025,10 @@ def daemon(ctx: Ctx) -> int:
                 for rec in ctx.records.values():
                     shift_record(rec, slept)
             summary = run_pass(ctx, force_observe=ctx.clock.take_observe_only())
+            if _restart_requested(paths):
+                return (
+                    0  # after this pass's save_records; launchd KeepAlive restarts us
+                )
             if (
                 not ctx.paths.canary
             ):  # the daemon only: a --once or test pass never pages it

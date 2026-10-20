@@ -64,11 +64,28 @@ SH
 }
 
 teardown() {
-  local l
+  local l w
   for l in com.reso.lr-reconciler com.claude.dispatcher; do
     if [ -f "$FAKE/$l.pid" ]; then kill "$(cat "$FAKE/$l.pid")" 2>/dev/null || true; fi
   done
+  if [ -f "$BATS_TEST_TMPDIR/wrapper.pid" ]; then
+    w="$(cat "$BATS_TEST_TMPDIR/wrapper.pid")"
+    pkill -P "$w" 2>/dev/null || true
+    kill "$w" 2>/dev/null || true
+  fi
   return 0
+}
+
+# An actuator wrapper in act.WRAPPER's argv shape (`/bin/bash -c <script> lr-recon-act --record-id
+# <rid> --intent <nonce> …`), started by this test, so its ppid is not the reconciler's: the shape of
+# an actuator inherited across an earlier restart, which launchd (ppid 1) holds (A6 F-J).
+fake_wrapper() { # $1=record id
+  /bin/bash -c 'sleep 30; :' lr-recon-act --record-id "$1" --intent 0123456789ab >/dev/null 2>&1 3>&- &
+  echo $! > "$BATS_TEST_TMPDIR/wrapper.pid"
+}
+record() { # $1=record id $2=terminal JSON (null = open)
+  mkdir -p "$LR_STATE_DIR/recon/sessions"
+  printf '{"sid":"abcdef01","record_id":"%s","terminal":%s}\n' "$1" "$2" > "$LR_STATE_DIR/recon/sessions/abcdef01.json"
 }
 
 @test "dry run: preflight passes on the repo plists, nothing is booted out, exit 0" {
@@ -82,6 +99,54 @@ teardown() {
   run bash "$SUT" --confirm yes
   [ "$status" -eq 2 ] || { echo "$output"; false; }
   ! grep -q 'bootout' "$FAKE_LOG" 2>/dev/null
+}
+
+@test "an unknown flag is refused before anything is reloaded" {
+  run bash "$SUT" --confirm lr-band --nwo
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"unknown argument '--nwo'"* ]] || { echo "$output"; false; }
+  ! grep -q 'bootout\|bootstrap' "$FAKE_LOG" 2>/dev/null
+}
+
+@test "--now dry run: preflight passes and it says the quiet wait is skipped; nothing reloaded" {
+  run bash "$SUT" --now
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"would: skip the quiet wait (--now"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"--confirm lr-band --now)"* ]] || { echo "$output"; false; }
+  ! grep -q 'bootout\|bootstrap' "$FAKE_LOG" 2>/dev/null
+}
+
+@test "--now is refused for the dispatcher target, which keeps its own quiet point" {
+  run bash "$SUT" --confirm dispatcher-band --now
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  ! grep -q 'bootout\|bootstrap' "$FAKE_LOG" 2>/dev/null
+}
+
+@test "[RED] an inherited lr-recon-act naming an open record holds the reload (any ppid)" {
+  # pre-A6 the predicate was `pgrep -P <reconciler>` only, and this wrapper is no child of it
+  record "recon:bats-open:1" null
+  fake_wrapper "recon:bats-open:1"
+  run bash "$SUT" --confirm lr-band
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"mid-act for 5s"* ]] || { echo "$output"; false; }
+  ! grep -q 'bootout\|bootstrap' "$FAKE_LOG" 2>/dev/null
+}
+
+@test "CONTROL: the same wrapper on a TERMINAL record does not hold the reload" {
+  record "recon:bats-done:1" '{"outcome":"MOVED","proof":"x","at":1.0}'
+  fake_wrapper "recon:bats-done:1"
+  run bash "$SUT" --confirm lr-band
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=ok"* ]] || { echo "$output"; false; }
+}
+
+@test "--now: an in-flight inherited actuator does not hold the reload, and is named" {
+  record "recon:bats-open:1" null
+  fake_wrapper "recon:bats-open:1"
+  run bash "$SUT" --confirm lr-band --now
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"--now: not waiting for a quiet boundary (an actuator is in flight"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=ok"* ]] || { echo "$output"; false; }
 }
 
 @test "[RED] a live plist without ProcessType Interactive is refused before anything is reloaded" {

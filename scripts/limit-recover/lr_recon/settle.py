@@ -19,7 +19,7 @@ Three things W3 built the parts for and nothing called, found by the W5 rig's fi
 import json
 import os
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from lr_recon import capped, census, classify, report
 from lr_recon import types as T
@@ -558,11 +558,50 @@ def note_unconfirm(paths: T.Paths, rec: T.Record, now: float) -> str:
     return rec.substate or ""
 
 
+def superseded(pr: T.ProcRole, want: Optional[str], live: List[T.ProcRole]) -> str:
+    """Why a dead actuator's exit must not be settled at all ('' = settle it). "stale": a newer spawn
+    holds the intent, and this exit would be scored against that spawn's attempt, log and phase
+    (A6 S-5). "duplicate": a live entry carries its nonce, so the one spawn is still running (S-3).
+    Not even the None path: a None exit can still be scored by its log (_rolled_back_by_its_log)."""
+    if not pr.nonce:
+        return ""
+    if any(p.nonce == pr.nonce for p in live):
+        return "duplicate"
+    if want is not None and pr.nonce != want:
+        return "stale"
+    return ""
+
+
 def dead_actuators(
-    procs: List[T.ProcRole], exits: Dict[int, int]
+    procs: List[T.ProcRole],
+    exits: Dict[int, int],
+    durable: Optional[Callable[[T.ProcRole], Optional[int]]] = None,
+    spawned: Optional[Dict[int, str]] = None,
+    live: Optional[List[T.ProcRole]] = None,
+    want: Optional[str] = None,
 ) -> List[Tuple[T.ProcRole, Optional[int]]]:
-    """Pair each dead actuator with its exit code (None: exited before this daemon, or adopted)."""
-    return [(p, exits.pop(p.pid, None)) for p in procs if p.role == "actuator"]
+    """Pair each dead actuator with its exit code (A6 rules 4 and 6): the wrapper's exit file first
+    (``durable``: exact by nonce, survives a restart and pid reuse), then this process's own reaped
+    code, accepted only when ``spawned`` says this process spawned that pid under that nonce; None
+    is unknown. An adopted descendant never carries a code: the wrapper's exit is the verdict. A
+    superseded entry (stale or duplicate) gets None. ``spawned=None`` is the legacy pairing by pid."""
+    out: List[Tuple[T.ProcRole, Optional[int]]] = []
+    for p in procs:
+        if p.role != "actuator":
+            continue
+        own = exits.pop(p.pid, None)  # always popped: never left for a reused pid
+        if spawned is not None:
+            mine = bool(p.nonce) and spawned.get(p.pid) == p.nonce
+            if mine:
+                spawned.pop(p.pid, None)
+            else:
+                own = None
+        if p.argv_hash == "adopted" or superseded(p, want, live or []):
+            out.append((p, None))
+            continue
+        rc = durable(p) if durable is not None else None
+        out.append((p, own if rc is None else rc))
+    return out
 
 
 # ── attempts: in flight, hop, release (W5) ───────────────────────────────────────────────────────

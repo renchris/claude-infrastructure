@@ -277,12 +277,14 @@ class ActTests(unittest.TestCase):
         """A later Popen's subprocess._cleanup reaped a collected Popen first, so waitpid saw
         nothing and the rc read "code unknown" (W5 rig: 32 of 113 exits lost)."""
         paths = _paths()
+        # no inherited LR_RECON_ROOT: the A6 wrapper writes its exit file under that root's exits/
+        env = {k: v for k, v in os.environ.items() if k != "LR_RECON_ROOT"}
         pid = A.spawn(
             paths,
             _rec(),
             "A",
             ["/bin/sh", "-c", "sleep 0.2; exit 7"],
-            dict(os.environ),
+            env,
             NOW,
             lstart_of=lambda p: L,
         )
