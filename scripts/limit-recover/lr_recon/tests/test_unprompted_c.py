@@ -208,6 +208,109 @@ class UnpromptedCTests(unittest.TestCase):
         )
         self.assertEqual(M.settle.launcher_settled(self.home, rec, time.time()), "")
 
+    # ── the prompt went on the spawn argv (gap 1 lever 1) ─────────────────────────────────────
+
+    def test_an_argv_prompt_holds_C_past_a_failed_verdict_until_the_chain_bound(self):
+        """The relay passed the prompt on argv and its probe gave up (a boot slower than the poll):
+        the CLI still holds the prompt, so C would be a second copy. Only the chain bound frees C."""
+        rec = self._rec()
+        self._bundle(
+            rec,
+            [
+                ("gate-admitted", "gate"),
+                ("relaunch-typed", "expect"),
+                ("prompt-argv", "inject"),
+                ("FAILED:submit", "submit"),
+            ],
+        )
+        now = time.time()
+        for n in range(3):
+            self.assertEqual(self._spawned(self._pass(rec, now + 20 * n)), [])
+        self.assertEqual(M.settle.launcher_settled(self.home, rec, now + 40), "")
+        inside = now + M.settle.LAUNCHER_CHAIN_MAX_S - 1
+        self.assertEqual(self._spawned(self._pass(rec, inside)), [])
+        late = now + M.settle.LAUNCHER_CHAIN_MAX_S + 1
+        self.assertEqual(self._spawned(self._pass(rec, late)), [])  # inside stamp
+        self.assertEqual(self._spawned(self._pass(rec, late + M.C_GRACE_S)), ["C"])
+
+    def test_an_argv_prompt_whose_record_landed_settles_the_launcher(self):
+        rec = self._rec()
+        self._bundle(
+            rec,
+            [
+                ("relaunch-typed", "expect"),
+                ("prompt-argv", "inject"),
+                ("submitted", "submit"),
+            ],
+        )
+        self.assertEqual(
+            M.settle.launcher_settled(self.home, rec, time.time()),
+            "launcher verdict submitted",
+        )
+
+    def test_a_typed_run_after_an_argv_run_reads_its_own_verdict(self):
+        """CONTROL: prompt-argv belongs to the run it follows; a later relaunch-typed resets it."""
+        rec = self._rec()
+        self._bundle(
+            rec,
+            [
+                ("relaunch-typed", "expect"),
+                ("prompt-argv", "inject"),
+                ("relaunch-typed", "expect"),
+                ("READY-NOT-SEEN", "inject"),
+            ],
+        )
+        self.assertEqual(
+            M.settle.launcher_settled(self.home, rec, time.time()),
+            "launcher verdict READY-NOT-SEEN",
+        )
+
+    # ── C is not charged a second first-turn admission (gap 1 lever 3) ────────────────────────
+
+    def _refusing_admission(self):
+        p = mock.patch(
+            "lr_recon.admit.Admission.decide", return_value=(False, "cpu-brake")
+        )
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_C_rides_the_launchers_admission(self):
+        """The launcher redeemed an admission for this first turn and typed nothing: C goes out
+        even while a fresh admission would be refused."""
+        self._refusing_admission()
+        rec = self._rec()
+        self._bundle(
+            rec,
+            [
+                ("gate-admitted", "gate"),
+                ("relaunch-typed", "expect"),
+                ("READY-NOT-SEEN", "inject"),
+            ],
+        )
+        now = time.time()
+        spawned = []
+        for n in range(3):
+            spawned = self._spawned(self._pass(rec, now + 20 * n))
+            if spawned:
+                break
+        self.assertEqual(spawned, ["C"])
+
+    def test_C_without_a_launcher_admission_is_still_gated(self):
+        """CONTROL: no gate-admitted in this attempt (an ungated or by-hand launch), so C pays."""
+        self._refusing_admission()
+        rec = self._rec()
+        self._bundle(
+            rec,
+            [
+                ("gate-absent", "gate"),
+                ("relaunch-typed", "expect"),
+                ("READY-NOT-SEEN", "inject"),
+            ],
+        )
+        now = time.time()
+        for n in range(3):
+            self.assertEqual(self._spawned(self._pass(rec, now + 20 * n)), [])
+
     # ── the already-resumed shape ────────────────────────────────────────────────────────────
 
     def test_a_prompt_answered_after_the_relaunch_closes_engaged(self):

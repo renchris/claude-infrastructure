@@ -745,21 +745,20 @@ LAUNCHER_DONE_STATES = (
     "FAILED:submit",
     "FAILED",
 )
+# lr-fire-resume passed the owed prompt as the spawn's positional argument (gap 1, 2026-10-20): the
+# relay types nothing, and the CLI itself submits the prompt once its boot reaches the REPL.
+PROMPT_ARGV = "prompt-argv"
 # A launcher that never wrote a verdict (an unreadable screen on the --no-prompt path notes nothing,
 # and a missing LR_NOTE_SH silences every note) still types nothing this long after the target
-# holder appeared: its ready arms and the submit poll (RCY_ENGAGE_TIMEOUT 180 s, re-reads to 45 s)
-# are all bounded well inside it.
+# holder appeared: its ready wait (LR_READY_WAIT_S 180 s) and the submit poll (RCY_ENGAGE_TIMEOUT
+# 180 s, re-reads to 45 s) are all bounded well inside it. It is also the bound on an argv prompt
+# that never lands: the slowest boot measured was 112 s (gap 1 §2.2).
 LAUNCHER_CHAIN_MAX_S = 600.0
 
 
-def launcher_settled(home: str, rec: T.Record, now: float) -> str:
-    """Why this attempt's live lr-fire-resume can no longer type ('' = it still may).
-
-    C's quiet grace exists so C never types over the launcher's own prompt, and it was keyed on the
-    launcher PROCESS. That process is a pty relay for the session's whole life, so on a relaunch
-    whose launcher typed nothing (READY-NOT-SEEN, both RELAUNCHED/UNPROMPTED members of cohort
-    next3-7d-1792497600 on 2026-10-20) the grace never opened and the owed continue never went out.
-    The launcher's own verdict, in this attempt's bundle, says when its typing is over."""
+def _attempt_events(home: str, rec: T.Record) -> List[Dict[str, Any]]:
+    """This attempt's events from its newest bundle (an older bundle of the attempt is a past run),
+    or [] when none of the newest four bundles carries the attempt."""
     import glob
 
     runs = sorted(
@@ -776,33 +775,60 @@ def launcher_settled(home: str, rec: T.Record, now: float) -> str:
                 lines = fh.readlines()[-200:]
         except OSError:
             continue
-        mine, started, verdict = False, False, ""
+        mine: List[Dict[str, Any]] = []
         for ln in lines:
             try:
                 ev = json.loads(ln)
             except ValueError:
                 continue
-            if not isinstance(ev, dict) or str(ev.get("attempt", "")) != str(
-                rec.attempt
-            ):
-                continue
-            mine = True
-            state = ev.get("state")
-            if state == "relaunch-typed":  # a (re)start: its verdict is owed again
-                started, verdict = True, ""
-            elif started and (
-                state in LAUNCHER_DONE_STATES
-                or (state in READY_STATES and ev.get("stage") == "ready")
-            ):
-                verdict = str(state)
-        if verdict:
-            return "launcher verdict %s" % verdict
-        if mine:  # the newest bundle of this attempt answers alone; an older one is a past run
-            break
+            if isinstance(ev, dict) and str(ev.get("attempt", "")) == str(rec.attempt):
+                mine.append(ev)
+        if mine:
+            return mine
+    return []
+
+
+def launcher_settled(home: str, rec: T.Record, now: float) -> str:
+    """Why this attempt's live lr-fire-resume can no longer type ('' = it still may).
+
+    C's quiet grace exists so C never types over the launcher's own prompt, and it was keyed on the
+    launcher PROCESS. That process is a pty relay for the session's whole life, so on a relaunch
+    whose launcher typed nothing (READY-NOT-SEEN, both RELAUNCHED/UNPROMPTED members of cohort
+    next3-7d-1792497600 on 2026-10-20) the grace never opened and the owed continue never went out.
+    The launcher's own verdict, in this attempt's bundle, says when its typing is over.
+
+    A prompt passed on the spawn argv (``prompt-argv``) is DELIVERED, not owed: only its own record
+    (``submitted``) or the chain bound settles that run, so C never sends a second copy."""
+    started, verdict, argv = False, "", False
+    for ev in _attempt_events(home, rec):
+        state = ev.get("state")
+        if state == "relaunch-typed":  # a (re)start: its verdict is owed again
+            started, verdict, argv = True, "", False
+        elif started and state == PROMPT_ARGV:
+            argv = True
+        elif started and (
+            state in LAUNCHER_DONE_STATES
+            or (state in READY_STATES and ev.get("stage") == "ready")
+        ):
+            verdict = str(state)
+    if argv and verdict != "submitted":
+        # The prompt is IN the spawned CLI, which submits it whenever its boot gets there: no
+        # verdict short of the record itself means it was lost, and a C typed now would be the
+        # second copy. Only the chain bound below releases it.
+        verdict = ""
+    if verdict:
+        return "launcher verdict %s" % verdict
     seen = (rec.target_sample or {}).get("at")
     if seen is not None and now - float(seen) >= LAUNCHER_CHAIN_MAX_S:
         return "target holder up %ds with no launcher verdict" % (now - float(seen))
     return ""
+
+
+def launcher_admitted(home: str, rec: T.Record) -> bool:
+    """True iff this attempt's launcher passed its own capacity gate (``gate-admitted``). That
+    admission paid for the session's first turn; when the launcher then typed nothing, C delivers
+    that same turn and must not be charged for it a second time (gap 1 lever 3)."""
+    return any(ev.get("state") == "gate-admitted" for ev in _attempt_events(home, rec))
 
 
 def replaced_elsewhere(rec: T.Record, snap: T.Snapshot, now: float) -> bool:

@@ -1137,6 +1137,15 @@ def _admit(
         return False, "boot-slots"
     if rec.kind != "limited" or which not in FIRST_TURN:
         return True, "no-first-turn"
+    if (
+        which in ("C", "C-retry")
+        and (rec.phase, rec.substate) == ("RELAUNCHED", "UNPROMPTED")
+        and settle.launcher_admitted(ctx.home, rec)
+    ):
+        # The relaunch's own launcher was admitted for this first turn and typed nothing; C now
+        # delivers that turn. A second admission charged it twice and, under the CPU brake that
+        # never lifts at 15-40/core, held the owed continue indefinitely (gap 1 lever 3).
+        return True, "launcher-admitted"
     unredeemed = sum(
         1
         for r in ctx.records.values()
