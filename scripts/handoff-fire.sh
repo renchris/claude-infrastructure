@@ -2985,12 +2985,20 @@ hf_transcript_at_rest() { # $1=transcript → 0 at rest · 1 in flight · 2 unre
   # command (<command-message>, then an isMeta prompt) and /goal (stdout with no caveat, then an
   # isMeta prompt) DO start a turn and are never skipped. A file holding only the triple proves
   # nothing and stays rc 1. lr-upgrade.sh's lru_at_rest has the same rule; keep the two in step.
+  # A REPLAYED GOAL IS NOT A PROMPT (2026-10-20, pane 48, 769b7294). At every turn end under a live
+  # /goal (after the stop-hook summary, or after "Goal paused · usage limit reached"), Claude Code
+  # re-appends the isMeta "A session-scoped Stop hook is now active with condition:" record carrying
+  # the ARM's timestamp, so it is stamped older than the record before it; a limited, goal-paused
+  # session then read as a turn in flight and every move was HELD:busy. Such a trailing replay is
+  # skipped like the triple. Survey of 7,346 transcripts: 383 replays, 356 whose skip reads at rest,
+  # 0 followed by a model turn (2 by a <synthetic> resume record 10 h later). A fresh arm carries a
+  # current timestamp and is never skipped.
   last="$(tail -n "${HF_REST_TAIL_LINES:-400}" "$tx" 2>/dev/null \
     | jq -rc --argjson win "${HF_STALE_NOTIF_S:-600}" 'select((.type=="assistant" or .type=="user"
                   or (.type=="system" and .subtype=="informational" and ((.content | type) == "string")
                       and (.content | startswith("A hook blocked the turn from ending")) and (.content | contains("overriding and ending turn"))))
                 and ((.isSidechain // false)|not))
-              | if .type == "system" then "system block-cap" else "\(.type) \(if .type == "assistant" and (.isApiErrorMessage // false) then "api-error" else (.message.stop_reason // "-") end)\(
+              | "\(.timestamp // "")\t" + if .type == "system" then "system block-cap" else "\(.type) \(if .type == "assistant" and (.isApiErrorMessage // false) then "api-error" else (.message.stop_reason // "-") end)\(
                   if .type == "user" and ((.message.content | type) == "string")
                      and (.message.content | startswith("<task-notification>"))
                      and ((now - ((.timestamp // "") | sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch now))) > $win)
@@ -2999,9 +3007,15 @@ hf_transcript_at_rest() { # $1=transcript → 0 at rest · 1 in flight · 2 unre
                     | if startswith("<local-command-caveat>") then " local-caveat"
                       elif startswith("<command-name>") or startswith("<command-message>") then " local-cmd"
                       elif startswith("<local-command-stdout>") then " local-out"
-                      else "" end) else "" end)" end' 2>/dev/null \
-    | awk '{ l[NR] = $0 } END { i = NR
-             while (i >= 3 && l[i] == "user - local-out" && l[i-1] == "user - local-cmd" && l[i-2] == "user - local-caveat") i -= 3
+                      else "" end) else "" end)\(
+                  if .type == "user" and (.isMeta // false) and ((.message.content | type) == "string")
+                     and (.message.content | startswith("A session-scoped Stop hook is now active with condition:"))
+                  then " goal" else "" end)" end' 2>/dev/null \
+    | awk -F '\t' '{ t[NR] = $1; l[NR] = $2 } END { i = NR
+             while (1) {
+               if (i >= 3 && l[i] == "user - local-out" && l[i-1] == "user - local-cmd" && l[i-2] == "user - local-caveat") i -= 3
+               else if (i >= 2 && l[i] == "user - goal" && t[i] != "" && t[i-1] != "" && t[i] < t[i-1]) i -= 1
+               else break }
              print ((i >= 1 && i < NR) ? l[i] : l[NR]) }')"
   [ -n "$last" ] || return 2
   [ "$last" = "assistant end_turn" ] && return 0

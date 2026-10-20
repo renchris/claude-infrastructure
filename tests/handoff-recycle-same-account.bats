@@ -425,6 +425,43 @@ both_rc() { # $1=expected rc → both mirrors return it on $TX
   both_rc 1
 }
 
+# ── A REPLAYED GOAL IS NOT A PROMPT (2026-10-20, pane 48, session 769b7294) ──────────────────────
+# At each turn end under a live /goal, Claude Code re-appends the isMeta goal-condition record with
+# the ARM's timestamp. After a weekly limit the pane sat at "Goal paused · usage limit reached" while
+# the reconciler's move was HELD:busy six times on that trailing record.
+goal_replay() { # $1=timestamp → the goal-condition record as Claude Code writes it
+  rec "{\"type\":\"user\",\"isMeta\":true,\"message\":{\"role\":\"user\",\"content\":\"A session-scoped Stop hook is now active with condition: \\\"x\\\"\"},\"timestamp\":\"$1\"}"
+}
+
+@test "[RED] at-rest oracle: a goal-paused limit (the goal record replayed with its arm's older timestamp) is REST, in both mirrors" {
+  load_both_rest
+  : > "$TX"
+  rec '{"type":"user","message":{"role":"user","content":[{"type":"tool_result"}]},"timestamp":"2026-10-20T02:40:05.000Z"}'
+  rec '{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit","message":{"role":"assistant","stop_reason":"stop_sequence","content":[{"type":"text","text":"You'"'"'ve hit your weekly limit"}]},"timestamp":"2026-10-20T02:40:06.777Z"}'
+  rec '{"type":"system","subtype":"informational","content":"Goal paused · usage limit reached · send a message after it resets to continue","timestamp":"2026-10-20T02:40:06.823Z"}'
+  goal_replay 2026-10-19T15:15:16.795Z
+  rec '{"type":"system","subtype":"turn_duration","timestamp":"2026-10-20T02:40:06.865Z"}'
+  both_rc 0
+  # the same replay after an ordinary end_turn
+  at_rest_tx; goal_replay 2026-09-22T09:00:00.000Z; both_rc 0
+}
+
+@test "at-rest oracle: a FRESH /goal arm, and a replay after a prompt, stay in flight" {
+  load_both_rest
+  # a fresh arm: stdout, then the goal record stamped now, no assistant after it
+  at_rest_tx
+  rec "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"<local-command-stdout>Goal set: x</local-command-stdout>\"},\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)\"}"
+  goal_replay "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"; both_rc 1
+  # a replay after a teammate message: the message decides, and a turn answers it
+  at_rest_tx
+  rec '{"type":"user","message":{"role":"user","content":"Another Claude session sent a message"},"timestamp":"2026-09-22T10:00:05Z"}'
+  goal_replay 2026-09-22T09:00:00.000Z; both_rc 1
+  # a replay after a tool_use is mid-turn
+  at_rest_tx
+  rec '{"type":"assistant","message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"tool_use"}]},"timestamp":"2026-09-22T10:00:05Z"}'
+  goal_replay 2026-09-22T09:00:00.000Z; both_rc 1
+}
+
 # ── DEFECT 6 — a resume-mode recycle never needs --no-self-retire ─────────────────────────────────
 
 @test "[RED] a fired peer's SELF resume-mode recycle does not die on the prompt trailer" {
