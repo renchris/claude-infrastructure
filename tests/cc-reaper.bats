@@ -2066,6 +2066,34 @@ EOF
   [ "$got" = "90633 " ]
 }
 
+# ── THE INHERITED ACTUATOR AND THE HARNESS ARMS (2026-10-20, LR sustained-load W0b). An lr_recon
+# actuator runs under the act.py wrapper argv and is ppid 1 once the reconciler that spawned it
+# restarts; the load harness runs its arms under /tmp/lrh-<id>-cure|red/ for ~75 min. Both aged 700 s
+# (11:40), past the 600 s orphan-bash floor. A plain orphan and a non-arm /tmp/lrh- path beside them
+# are still collected (controls).
+@test "garbage: an inherited lr-recon-act actuator and a harness arm are never collected; plain orphans still are" {
+  mk_garbage_fixtures
+  cat > "$GA" <<'EOF'
+90651 1 11:40 bash
+90652 1 11:40 bash
+90653 1 11:40 bash
+90654 1 11:40 bash
+90655 1 11:40 bash
+EOF
+  cat > "$GB" <<'EOF'
+90651 /bin/bash -c shift 4; "$@" lr-recon-act --record-id r --intent 0123456789ab /Users/x/.claude/bin/cc-lr move --sid s
+90652 /bin/bash /tmp/lrh-20261020T1530Z-cure/supervisor.sh 4500
+90653 /bin/bash /tmp/lrh-20261020T1530Z-red/supervisor.sh 4500
+90654 /bin/bash /Users/x/some/unrelated/orphan.sh
+90655 /bin/bash /tmp/lrh-20261020T1530Z-scratch/loop.sh
+EOF
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  got="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
+  # RED before the fix: 90651, 90652 and 90653 appear in this list too.
+  [ "$got" = "90654 90655 " ]
+}
+
 # ── THE PID THAT CHANGED HANDS (2026-08-16). The kill-time re-verification checked `ucomm` only, and
 # orphan-bash / stuck-wrapper / dead-lead-watchdog all carry the ERE `^bash$` — so for the three
 # classes that dominate the candidate set it asked "is this a bash?" of a pid it had already decided

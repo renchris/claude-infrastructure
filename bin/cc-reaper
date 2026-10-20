@@ -734,7 +734,13 @@ _gs_escalation_alive() { # <pid> — did this pid survive the TERM? rc 0 = still
 # live at ages 3000-4430 s under load, unlisted, while the arm happened to be skipping on a timed-out
 # snapshot: the next sweep that got its snapshot would have TERMed a move mid-flight and stranded the
 # session. Listed by script name, the same shape as the lr-upgrade drainer.
-GARBAGE_WL="lead-supervisor|cc-dispatch|cc-discover|cc-reaper|qos-census|compressor-sentinel|postland-verify|session-search|devserver-gc|deploy-live|cc-relogin|lr-reset-poller|teammate-reap|capacity-alarm|power-policy|log-rotation|restic|worktree-gc|wt-tombstone|caffeinate|cc-await-ping|mailbox-wake-arm|ship-land|desk-land|cloud-return|cloud-reconcile|nightly-regression|public-publish|reso-keepalive|boot-resume|cc-restore|lr-upgrade[.]sh --drain|lr-move-batch[.]sh|lr-move-worker[.]sh|kitty|tmux|iTerm|launchd"
+# lr-recon-act + harness arm roots (2026-10-20, LR sustained-load W0b): the reconciler runs each
+# actuator under `/bin/bash -c 'shift 4; "$@"' lr-recon-act --record-id R --intent N ...` (act.py
+# WRAPPER). An actuator inherited across a reconciler restart is ppid 1, so at 600 s it read as
+# orphan-bash and a move was TERMed mid-flight. The load-harness arms run under
+# /tmp/lrh-<id>-cure/ and /tmp/lrh-<id>-red/, and their detached bash supervisor lives ~75 min;
+# the reaper TERMed /tmp/lr-rig processes on 2026-09-29. Both listed by their own argv token.
+GARBAGE_WL="lead-supervisor|cc-dispatch|cc-discover|cc-reaper|qos-census|compressor-sentinel|postland-verify|session-search|devserver-gc|deploy-live|cc-relogin|lr-reset-poller|teammate-reap|capacity-alarm|power-policy|log-rotation|restic|worktree-gc|wt-tombstone|caffeinate|cc-await-ping|mailbox-wake-arm|ship-land|desk-land|cloud-return|cloud-reconcile|nightly-regression|public-publish|reso-keepalive|boot-resume|cc-restore|lr-upgrade[.]sh --drain|lr-move-batch[.]sh|lr-move-worker[.]sh|lr-recon-act|/tmp/lrh-[0-9A-Za-z]+-(cure|red)/|kitty|tmux|iTerm|launchd"
 _gs_argv_reread() { # <pid> → that pid's argv on stdout, "" when unreadable. Under the fixture seam it
                     # reads CC_REAPER_GARBAGE_PS_B2 (else PS_B again), never the live process table.
   local pid="$1" f
