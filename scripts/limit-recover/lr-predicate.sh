@@ -41,7 +41,10 @@ EOF
 }
 
 _lrp_run() { # stdin -> the module, $@ -> the python argv
-  /usr/bin/python3 -c '
+  # -I: `python3 -c` puts the cwd at sys.path[0] ahead of the stdlib, and the stop-failure hook calls
+  # this from a capped session's cwd, so a json.py planted there ran in here (G2 review C1). -I keeps
+  # the cwd off sys.path and implies -E -s; LRP_DIR is read from os.environ and still arrives.
+  /usr/bin/python3 -I -c '
 import json, sys, os
 sys.path.insert(0, os.environ["LRP_DIR"])
 import lr_predicate as P
