@@ -67,7 +67,23 @@ def _call_name(call: ast.Call) -> str:
     return ""
 
 
-def _patches_state_dir(call: ast.Call) -> bool:
+def _tempish(v: ast.AST, scope: Optional[ast.AST]) -> bool:
+    """A temp-rooted value: its source names tmp/tempfile, or it is a local name assigned from one
+    in the same scope (`lr = os.path.join(self.tmp, "lr")`, test_restart_safety)."""
+    if any(t in _src(v) for t in TEMPISH):
+        return True
+    if isinstance(v, ast.Name) and scope is not None:
+        for n in ast.walk(scope):
+            if (
+                isinstance(n, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == v.id for t in n.targets)
+                and any(t in _src(n.value) for t in TEMPISH)
+            ):
+                return True
+    return False
+
+
+def _patches_state_dir(call: ast.Call, scope: Optional[ast.AST] = None) -> bool:
     """mock.patch.dict(os.environ, {"LR_STATE_DIR": <temp-rooted>, …}) or with a named dict."""
     if _call_name(call) != "dict" or not isinstance(call.func, ast.Attribute):
         return False
@@ -79,7 +95,7 @@ def _patches_state_dir(call: ast.Call) -> bool:
         if isinstance(arg, ast.Dict):
             for k, v in zip(arg.keys, arg.values):
                 if isinstance(k, ast.Constant) and k.value == "LR_STATE_DIR":
-                    return any(t in _src(v) for t in TEMPISH)
+                    return _tempish(v, scope)
         elif isinstance(arg, ast.Name):
             return True  # a named env dict: resolved by _named_env_dicts below
     return False
@@ -115,7 +131,7 @@ def _has_patch(scope: ast.AST) -> bool:
     for n in ast.walk(scope):
         if (
             isinstance(n, ast.Call)
-            and _patches_state_dir(n)
+            and _patches_state_dir(n, scope)
             and not (len(n.args) > 1 and isinstance(n.args[1], ast.Name))
         ):
             return True
@@ -171,8 +187,16 @@ def scan_source(name: str, text: str) -> List[str]:
     ]
     # a scope that only USES paths got them from a helper (test_act's _paths) or from setUp
     module_hermetic = bool(all_builds) and all(_hermetic_build(b) for b in all_builds)
+    # a subclass runs its same-module base's setUp: it inherits that base's patch evidence
+    patched = {
+        n.name for n in tree.body if isinstance(n, ast.ClassDef) and _has_patch(n)
+    }
     findings: List[str] = []
     for scope_name, scope in _scopes(tree):
+        if isinstance(scope, ast.ClassDef) and any(
+            isinstance(b, ast.Name) and b.id in patched for b in scope.bases
+        ):
+            continue
         builds: List[ast.Call] = []
         uses: List[ast.Call] = []
         for n in ast.walk(scope):
@@ -274,6 +298,15 @@ def c():
     env = {"LR_STATE_DIR": os.path.join(tmp, "lr"), "HOME": tmp}
     with mock.patch.dict(os.environ, env):
         return M.Ctx(T.Paths.from_env(root=tmp), None, tmp)
+class Base:
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        lr = os.path.join(self.tmp, "lr")
+        mock.patch.dict(os.environ, {"LR_STATE_DIR": lr}).start()
+        self.paths = T.Paths.from_env(root=os.path.join(lr, "recon"))
+class Sub(Base):
+    def test_it(self):
+        return M.Ctx(self.paths, None, self.tmp)
 """
         self.assertEqual(scan_source("ok.py", ok), [])
 
