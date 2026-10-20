@@ -273,3 +273,23 @@ set_halt() { mkdir -p "$(dirname "$1")"; printf 'ts=2026-09-09T00:00:00Z\nscope=
   run env CC_CLAUDE_DIR="$CLAUDE_CONFIG_DIR" bash "$MIG" --conflict
   [ "$status" -ne 0 ]
 }
+
+@test "0024 apply registers FIRST beside a second, foreign * group (research-block), keeping it, never duplicating" {
+  mkdir -p "$HOME/.claude/hooks" "$HOME/.claude/bin"
+  ln -s "$HOOK" "$HOME/.claude/hooks/unit-gate.sh"
+  ln -s "$REPO/bin/cc-halt" "$HOME/.claude/bin/cc-halt"
+  local s="$HOME/.claude/settings.json"
+  jq -n '{hooks:{Stop:[{hooks:[{type:"command",command:"x"}]}],
+                 PreToolUse:[{matcher:"Bash",hooks:[{type:"command",command:"b"}]},
+                             {matcher:"*",hooks:[{type:"command",command:"~/.claude/hooks/research-block.sh"}]}]}}' > "$s"
+  run bash "$MIG"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # shellcheck disable=SC2088  # the literal "~/" is what settings.json stores
+  [ "$(jq -r '.hooks.PreToolUse[0].hooks[0].command' "$s")" = "~/.claude/hooks/unit-gate.sh" ]
+  [ "$(jq '[.hooks.PreToolUse[] | select(.matcher == "*")] | length' "$s")" -eq 2 ]
+  [ "$(jq '[.hooks.PreToolUse[].hooks[] | select(.command | test("unit-gate"))] | length' "$s")" -eq 1 ]
+  run env CC_CLAUDE_DIR="$HOME/.claude" bash "$MIG" --verify
+  [ "$status" -eq 0 ]
+  run bash "$MIG"
+  [ "$status" -eq 0 ]; [[ "$output" == *"already FIRST"* ]] || false
+}

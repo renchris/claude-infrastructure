@@ -147,11 +147,14 @@ for dir in "${CONFIG_DIRS[@]}"; do
 
   # Content check before the swap, and it re-asserts the file's OTHER arrays survived: a settings
   # edit that lands valid JSON having dropped .hooks.Stop is the worst outcome available here.
+  # "No duplicate" counts `*` groups carrying OUR command, not every `*` group: another fleet-wide
+  # gate (research-block.sh, registered on its own `*` group since) is kept by the edit above, and a
+  # count of all `*` groups refused every real settings.json (first c10 rehearsal, 2026-10-20).
   if [ -s "$tmp" ] && jq -e . "$tmp" >/dev/null 2>&1 \
      && jq -e --arg m "$MATCHER" --arg c "$CMD" \
           'def cmd_bare: sub("^(/bin/(ba|z)?sh|/usr/bin/env +(ba|z)?sh|/usr/bin/env +python3?) +(?=[~$/])"; ""); (.hooks.PreToolUse[0].matcher == $m)
              and ([.hooks.PreToolUse[0].hooks[]?.command] | any(((. // "") | cmd_bare) == $c))
-             and ([.hooks.PreToolUse[] | select(.matcher == $m)] | length == 1)' "$tmp" >/dev/null 2>&1 \
+             and ([.hooks.PreToolUse[] | select(.matcher == $m) | select([.hooks[]?.command] | any(((. // "") | cmd_bare) == $c))] | length == 1)' "$tmp" >/dev/null 2>&1 \
      && jq -e '(.hooks.Stop | type == "array" and length > 0)
                and (.hooks.PreToolUse | length >= 2)' "$tmp" >/dev/null 2>&1; then
     mv "$tmp" "$f"
