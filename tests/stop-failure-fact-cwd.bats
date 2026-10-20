@@ -35,6 +35,10 @@ setup() {
   printf '#!/bin/bash\nexit 0\n' > "$STOP_FAILURE_LAUNCHCTL"; chmod +x "$STOP_FAILURE_LAUNCHCTL"
   export STOP_FAILURE_LR_STATE="$BATS_TEST_TMPDIR/lrstate"
   mkdir -p "$STOP_FAILURE_LR_STATE"; : > "$STOP_FAILURE_LR_STATE/recon.on"
+  # The hook bounds the fact write at 2 s. At load ~250 a cold python3 import overran that, the fact
+  # was never written, and the land gate's off-box run read this suite red. The bound is not this
+  # suite's subject, so it is widened here; the hijack assertion does not depend on it.
+  export STOP_FAILURE_FACT_TIMEOUT_S=120
   FACTS="$STOP_FAILURE_LR_STATE/recon/facts"
   # The capped session's cwd, holding the planted module. It writes the marker on import, but only
   # inside ARM 3's own process (`hook-write` in argv): the teammate predicate (lr-predicate.sh,
