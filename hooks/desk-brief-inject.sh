@@ -40,6 +40,7 @@
 #   DESK_BRIEF_FILE   (default <repo>/docs/templates/desk-boot-brief.md, symlink-resolved)
 #   DESK_BRIEF_PANE   (default $ITERM_SESSION_ID's uuid — the pane this session runs in)
 #   DESK_BRIEF_IDL    (default ~/.claude/autonomy/idl.jsonl — the disposition log)
+#   KITTY_PID         (set by kitty; the stale-instance guard compares the role file's mtime to it)
 set -uo pipefail
 
 # --- resolve THIS script through its symlink ---------------------------------------------------
@@ -117,6 +118,40 @@ fi
 holder="$(head -n1 "$ROLES_DIR/$ROLE" 2>/dev/null | tr -d '[:space:]')"
 [ -n "$holder" ] || abstain "role-empty"          # registered but names no pane → can never match
 [ "$holder" = "$pane" ] || abstain "other-holder" # someone ELSE is the desk → silent no-op
+
+# STALE-INSTANCE GUARD (decision packet 9db03d3bbaf4, 2026-10-20). A kitty window id is a small
+# integer that every kitty instance re-issues from 1, so a role file written under an EARLIER kitty can
+# name an id the running one has since given to an unrelated pane, which would then be handed the desk
+# brief. A role file older than the running kitty ($KITTY_PID), or a kitty that cannot be found, cannot
+# name a pane of this instance. iTerm uuids never repeat, so only a numeric pane is checked, and only on
+# this rare match path (one ps, one stat, one date). The role file stays ONE line: cc-dispatch,
+# waiting-recycle, `cc-notify "$(cat ~/.claude/cc-roles/desk)"` and handoff-fire all read all of it, and
+# --recycle rewrites it whole, which refreshes its mtime. `ps -o etime` is whole seconds, so the
+# comparison allows 1 s and leans toward injecting.
+case "$pane" in
+  ''|*[!0-9]*) ;;
+  *)
+    if [ -n "${KITTY_PID:-}" ]; then
+      _et="$(ps -o etime= -p "$KITTY_PID" 2>/dev/null | tr -d ' ')"
+      [ -n "$_et" ] || abstain "stale-instance"   # no such kitty: the role cannot name a pane of it
+      _mt="$(stat -c %Y "$ROLES_DIR/$ROLE" 2>/dev/null || stat -f %m "$ROLES_DIR/$ROLE" 2>/dev/null)"
+      _now="$(date +%s)"
+      case "$_mt$_now" in
+        ''|*[!0-9]*) ;;                              # unreadable clock or mtime: no verdict, inject
+        *)
+          _days=0; case "$_et" in *-*) _days="${_et%%-*}"; _et="${_et#*-}" ;; esac
+          _age=0; _oifs="$IFS"; IFS=:
+          # shellcheck disable=SC2086  # deliberate split of [[dd-]hh:]mm:ss on ':'
+          set -- $_et
+          IFS="$_oifs"
+          for _f in "$@"; do _age=$(( _age * 60 + 10#$_f )); done
+          _start=$(( _now - _age - 10#$_days * 86400 ))
+          [ $(( _mt + 1 )) -lt "$_start" ] && abstain "stale-instance"
+          ;;
+      esac
+    fi
+    ;;
+esac
 
 # --- inject ------------------------------------------------------------------------------------
 [ -f "$BRIEF" ] || abstain "brief-missing"

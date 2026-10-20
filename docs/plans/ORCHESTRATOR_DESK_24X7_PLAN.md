@@ -4,6 +4,13 @@ status: in-progress
 
 # ORCHESTRATOR DESK 24×7 — the self-originating operator program
 
+**Dormant (2026-10-20).** The desk-invariant launchd job is unloaded and no `~/.claude/cc-roles/desk`
+file exists, so no desk runs. The machinery stays installed: hooks/desk-brief-inject.sh is kept (it
+restores the brief after an in-place recycle, and auto-compact is off) and now skips a role file
+older than the running kitty instance (`stale-instance`; decision packet `9db03d3bbaf4`). **Revisit
+trigger:** retire desk-brief-inject only together with `/desk`, `claude-desk`, `desk-register` and
+`desk-invariant`, as one program decision, never alone.
+
 **Scope (frozen 2026-07-18):** take the orchestrator-desk stack from "largely-activated safety
 harness for human-initiated waves" (P7 verdict) to a **self-originating, 24/7, net-positive,
 no-human-in-loop operator** that (a) exhaustively identifies ALL tasks toward 100.00/100.00

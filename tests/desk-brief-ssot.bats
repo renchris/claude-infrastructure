@@ -182,6 +182,52 @@ reason() { jq -r '.reason'      "$DESK_BRIEF_IDL" 2>/dev/null | tail -1; }
   [ "$(jq -r '.pane' "$DESK_BRIEF_IDL" | tail -1)" = "$PANE" ]
 }
 
+# ---- stale-instance guard (decision packet 9db03d3bbaf4): kitty re-issues window ids per instance ----
+# KITTY_PID is this test's own bats process: it started before the test body, so a role file written
+# now is newer than it, and one dated 2020 is older.
+
+@test "stale-instance: window ids match but the role file predates the running kitty → skipped, named" {
+  printf '%s\n' 145 > "$CC_ROLES_DIR/desk"
+  touch -t 202001010000 "$CC_ROLES_DIR/desk"
+  run env DESK_BRIEF_PANE=145 KITTY_PID="$$" "$HOOK" <<< '{"hook_event_name":"SessionStart","session_id":"S9"}'
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  [ "$(disp)" = "abstained" ]
+  [ "$(reason)" = "stale-instance" ]
+}
+
+@test "stale-instance: POSITIVE CONTROL — the role file is newer than the running kitty → fired" {
+  printf '%s\n' 145 > "$CC_ROLES_DIR/desk"
+  run env DESK_BRIEF_PANE=145 KITTY_PID="$$" "$HOOK" <<< '{"hook_event_name":"SessionStart","session_id":"S10"}'
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | ctx | grep -q "Desk boot brief"
+  [ "$(disp)" = "fired" ]
+}
+
+@test "stale-instance: a KITTY_PID that names no process → skipped (the role cannot name a pane of it)" {
+  printf '%s\n' 145 > "$CC_ROLES_DIR/desk"
+  true & gone=$!; wait "$gone"
+  run env DESK_BRIEF_PANE=145 KITTY_PID="$gone" "$HOOK" <<< '{"hook_event_name":"SessionStart","session_id":"S11"}'
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  [ "$(reason)" = "stale-instance" ]
+}
+
+@test "stale-instance: no KITTY_PID → behavior unchanged, an old role file still fires" {
+  printf '%s\n' 145 > "$CC_ROLES_DIR/desk"
+  touch -t 202001010000 "$CC_ROLES_DIR/desk"
+  run env -u KITTY_PID DESK_BRIEF_PANE=145 "$HOOK" <<< '{"hook_event_name":"SessionStart","session_id":"S12"}'
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | ctx | grep -q "Desk boot brief"
+  [ "$(disp)" = "fired" ]
+}
+
+@test "stale-instance: an iTerm (non-numeric) pane is never checked, even with an old file and KITTY_PID" {
+  printf '%s\n' "$PANE" > "$CC_ROLES_DIR/desk"
+  touch -t 202001010000 "$CC_ROLES_DIR/desk"
+  run env DESK_BRIEF_PANE="$PANE" KITTY_PID="$$" "$HOOK" <<< '{"hook_event_name":"SessionStart","session_id":"S13"}'
+  [ "$status" -eq 0 ]
+  [ "$(disp)" = "fired" ]
+}
+
 @test "IDL: a MISSING brief is brief-missing — a broken SSOT never poses as 'not the desk'" {
   printf '%s\n' "$PANE" > "$CC_ROLES_DIR/desk"
   run env DESK_BRIEF_PANE="$PANE" DESK_BRIEF_FILE="$BATS_TEST_TMPDIR/nope.md" \
@@ -227,7 +273,7 @@ reason() { jq -r '.reason'      "$DESK_BRIEF_IDL" 2>/dev/null | tail -1; }
   # these must classify DORMANT — reported for review, never a page. Blind tokens page.
   local blind; blind="$(sed -n '/^_default_blind=(/,/)$/p' "$REPO/scripts/idl-abstain-alarm.sh")"
   [ -n "$blind" ]                                   # the extractor must SEE its subject
-  for r in no-role-file role-empty other-holder brief-missing brief-empty; do
+  for r in no-role-file role-empty other-holder stale-instance brief-missing brief-empty; do
     ! printf '%s' "$blind" | grep -q -- "$r" || false
   done
 }
