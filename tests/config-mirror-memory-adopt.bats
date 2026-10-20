@@ -250,3 +250,42 @@ temp_fixture() {
   [ "$status" -eq 0 ]
   [ -L "$HOME/.claude-secondary/projects/-Users-x-private-tmp-lookalike/memory" ]
 }
+
+# ── --slug: one slug, same rules (startup-hooks-2026-10-18 unit 5.7) ─────────────────────────────
+# config-mirror-assert.sh links the session's own slug inline with --slug and leaves the rest to a
+# detached sweep, so --slug must touch the named slug and nothing else, and must refuse what the
+# full walk excludes.
+@test "--slug: links and adopts only the named slug; temp and path-like slugs are refused" {
+  command -v zsh >/dev/null 2>&1 || skip "zsh unavailable"
+  temp_fixture
+  canonical proj-other note.md
+  strand .claude-secondary proj-stranded note.md
+  slug() { zsh -fc "source '$MIRROR'; _cc_sync_memory_mirror --slug '$1' \"\$HOME/.claude-secondary\""; }
+
+  run slug proj-control
+  [ "$status" -eq 0 ]
+  [ "$(readlink "$HOME/.claude-secondary/projects/proj-control/memory")" = "$HOME/.claude/projects/proj-control/memory" ]
+  [ ! -e "$HOME/.claude-secondary/projects/proj-other/memory" ]          # not walked
+  [ ! -L "$HOME/.claude-secondary/projects/proj-stranded/memory" ]       # not walked
+
+  run slug proj-stranded                                                 # the ADOPT branch, one slug
+  [ "$status" -eq 0 ]
+  [ -L "$HOME/.claude-secondary/projects/proj-stranded/memory" ]
+  [ -f "$HOME/.claude/projects/proj-stranded/memory/note.md" ]
+
+  run slug -private-tmp-claude-run-7
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/.claude-secondary/projects/-private-tmp-claude-run-7/memory" ]
+  run slug -private-tmp-stranded
+  [ "$status" -eq 0 ]
+  [ ! -L "$HOME/.claude-secondary/projects/-private-tmp-stranded/memory" ]
+  run slug ../proj-other
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/.claude-secondary/projects/proj-other/memory" ]
+  [ ! -e "$HOME/.claude-secondary/proj-other" ]
+
+  # --convert and --slug combine in either order
+  run zsh -fc "source '$MIRROR'; _cc_sync_memory_mirror --slug proj-other --convert \"\$HOME/.claude-secondary\""
+  [ "$status" -eq 0 ]
+  [ -L "$HOME/.claude-secondary/projects/proj-other/memory" ]
+}

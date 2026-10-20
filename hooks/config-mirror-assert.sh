@@ -10,11 +10,40 @@ cfg="${CLAUDE_CONFIG_DIR:-}"
 [ -z "$cfg" ] && exit 0                        # account 1 default → nothing to mirror
 [ "$cfg" = "$HOME/.claude" ] && exit 0         # the source itself
 case "$cfg" in "$HOME/.claude-"*) ;; *) exit 0 ;; esac
+lib="$HOME/.claude/lib/config-mirror.zsh"
+
+# THE MEMORY WALK IS SPLIT (docs/research/startup-hooks-2026-10-18 README §5 unit 5.7). This child
+# used to run _cc_sync_account inline, whose memory walk visits every project slug: 2.8 s p50 and
+# 4.1 s p90 on the isolated accounts, the slowest SessionStart child in 65 of 68 dispatcher runs, and
+# past the dispatcher's 9 s bound at high load, which killed the checks below with it. Now only the
+# session's OWN slug is linked inline (from the payload's transcript_path, and only when that path
+# lies under this account's projects/), the config mirror and the checks run next, and the full walk
+# starts last as a detached single-flight sweep (sweep_start below) whose result nobody here waits
+# for. Bounded stdin read, as hooks/session-start.sh does: a caller that leaves stdin open costs at
+# most a second, never a hung start.
+payload="" own=""
+if [ ! -t 0 ]; then IFS= read -r -d '' -t 1 payload || true; fi
+if [ -n "$payload" ] && command -v jq >/dev/null 2>&1; then
+  tp="$(printf '%s' "$payload" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
+  tdir="${tp%/*}"
+  [ -n "$tp" ] && [ "${tdir%/*}" = "$cfg/projects" ] && own="${tdir##*/}"
+fi
+
 # -f = skip rc files (fast, no p10k/nvm cost); source the single-source-of-truth lib, then sync.
 # Stderr is CAPTURED rather than discarded: the mirror reports a forked real dir there (a condition
 # safe mode cannot fix, so it survives every future run until someone converts it), and discarding
 # that is what let ~/.claude-next carry a frozen `commands` for seven weeks with nothing said.
-err="$(zsh -fc "source \"$HOME/.claude/lib/config-mirror.zsh\"; _cc_sync_account \"$cfg\"" 2>&1 >/dev/null || true)"
+# Arguments go in as positionals, never spliced into the script text. The `sweep-wanted` line tells
+# sweep_start whether this account has a memory walk at all (~/.claude-next shares projects/, so it
+# has none); the order mirrors _cc_sync_account, which skips memory when the config mirror fails.
+# shellcheck disable=SC2016  # the single-quoted text is zsh source; $1-$3 expand inside zsh
+err="$(zsh -fc '
+  source "$1" || exit 1
+  _cc_sync_config_mirror "$2" || exit 1
+  if (( $+functions[_cc_memory_mirror_wanted] )) && _cc_memory_mirror_wanted "$2"; then
+    print -u2 "config-mirror-assert: sweep-wanted"
+    [[ -z "$3" ]] || _cc_sync_memory_mirror --slug "$3" "$2"
+  fi' zsh "$lib" "$cfg" "$own" 2>&1 >/dev/null || true)"
 forks="$(printf '%s\n' "$err" | grep -c 'FORKED real' 2>/dev/null || true)"
 # Only warnings are emitted. The healthy "re-asserted" line said nothing a session could act on and
 # was re-read for the rest of every context (docs/research/token-efficiency-2026-09-23/measure/hooks.md
@@ -98,15 +127,75 @@ if [ -x "$abf" ]; then
   [ -n "$bline" ] && msg="${msg:+$msg  }$bline"
 fi
 
-[ -n "$msg" ] || exit 0
-msg="knowledge-layer mirror (${cfg##*/}): $msg"
+if [ -n "$msg" ]; then
+  msg="knowledge-layer mirror (${cfg##*/}): $msg"
+  # Top-level `systemMessage`, not additionalContext: it renders in the operator's terminal at 0
+  # model tokens, where additionalContext is model context the TUI hides (hooks/accounts-board.sh
+  # header has the channel proof; 0 of ~720 sessions in 7 days acted on this line as context). The
+  # key must be top-level: hookSpecificOutput.systemMessage is silently ignored.
+  # Built with a real encoder — the message carries operator text and paths, and a printf-built
+  # string would break the hook's stdout contract on the first quote or backslash.
+  CC_MSG="$msg" python3 -c 'import json,os;print(json.dumps({"systemMessage":os.environ["CC_MSG"]}))' 2>/dev/null \
+    || printf '{"systemMessage":"knowledge-layer mirror for %s reported a warning; run the mirror by hand to see it."}\n' "${cfg##*/}"
+fi
 
-# Top-level `systemMessage`, not additionalContext: it renders in the operator's terminal at 0 model
-# tokens, where additionalContext is model context the TUI hides (hooks/accounts-board.sh header has
-# the channel proof; 0 of ~720 sessions in 7 days acted on this line as context). The key must be
-# top-level: hookSpecificOutput.systemMessage is silently ignored.
-# Built with a real encoder — the message carries operator text and paths, and a printf-built string
-# would break the hook's stdout contract on the first quote or backslash.
-CC_MSG="$msg" python3 -c 'import json,os;print(json.dumps({"systemMessage":os.environ["CC_MSG"]}))' 2>/dev/null \
-  || printf '{"systemMessage":"knowledge-layer mirror for %s reported a warning; run the mirror by hand to see it."}\n' "${cfg##*/}"
+# ── the full memory walk, detached (unit 5.7) ───────────────────────────────────────────────────
+# Started only AFTER the report above is written, so a sweep that is slow, killed or never starts
+# cannot cost the checks their output. Single-flight twice over: a 600 s stamp throttles re-spawn
+# across a /clear burst, and a `mkdir` claim keeps two starts that pass the stamp together from both
+# walking. The sweep removes the claim when it finishes; a claim older than 1800 s belongs to a
+# sweep that died and is broken. scripts/lib/detach.sh gives the sweep its own session, stdin
+# /dev/null and its output in the log, so it neither holds this hook's stdout pipe nor dies with the
+# dispatcher's process group. Its lines (start, then verdict and ms) go to
+# ~/.claude/logs/config-mirror-sweep.log. CC_MIRROR_SWEEP=off disables it; the shell launcher's
+# _cc_sync_account still walks every slug on each launch either way.
+_cm_deref() {
+  local p="$1" t n=0
+  while [ -L "$p" ] && [ "$n" -lt 20 ]; do
+    t="$(readlink "$p")"
+    case "$t" in /*) p="$t" ;; *) p="$(dirname "$p")/$t" ;; esac
+    n=$(( n + 1 ))
+  done
+  printf '%s\n' "$p"
+}
+sweep_start() {
+  [ "${CC_MIRROR_SWEEP:-async}" = off ] && return 0
+  case "$err" in *'config-mirror-assert: sweep-wanted'*) ;; *) return 0 ;; esac
+  local sd="$HOME/.claude/state/config-mirror" acct="${cfg##*/}" log="$HOME/.claude/logs/config-mirror-sweep.log"
+  local stamp="$sd/$acct.sweep-stamp" claim="$sd/$acct.sweep.claim" now last age det
+  mkdir -p "$sd" "${log%/*}" 2>/dev/null || return 0
+  now="$(date +%s)"
+  last="$(stat -f %m "$stamp" 2>/dev/null || echo 0)"
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  [ $(( now - last )) -ge "${CC_MIRROR_SWEEP_MIN_S:-600}" ] || return 0
+  if [ -d "$claim" ]; then
+    age="$(stat -f %m "$claim" 2>/dev/null || echo "$now")"
+    case "$age" in ''|*[!0-9]*) age="$now" ;; esac
+    [ $(( now - age )) -ge "${CC_MIRROR_SWEEP_STALE_S:-1800}" ] && rmdir "$claim" 2>/dev/null
+  fi
+  mkdir "$claim" 2>/dev/null || return 0
+  : > "$stamp" 2>/dev/null || true
+  det="$(cd "$(dirname "$(_cm_deref "${BASH_SOURCE[0]}")")/.." 2>/dev/null && pwd)/scripts/lib/detach.sh"
+  if [ ! -r "$det" ]; then
+    printf '%s config-mirror sweep %s verdict=error reason=detach-missing\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$acct" >>"$log" 2>/dev/null || true
+    rmdir "$claim" 2>/dev/null || true
+    return 0
+  fi
+  # shellcheck source=../scripts/lib/detach.sh
+  # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+  . "$det"
+  # shellcheck disable=SC2016  # zsh source, expanded by the detached zsh
+  detach "$log" zsh -fc '
+    zmodload zsh/datetime
+    t0=$EPOCHREALTIME rc=1 v=ok
+    print -r -- "$(date -u +%Y-%m-%dT%H:%M:%SZ) config-mirror sweep ${2:t} start pid=$$"
+    source "$1" && { _cc_sync_memory_mirror "$2"; rc=$? }
+    rmdir "$3" 2>/dev/null
+    (( rc )) && v=error
+    ms=$(( (EPOCHREALTIME - t0) * 1000 ))
+    print -r -- "$(date -u +%Y-%m-%dT%H:%M:%SZ) config-mirror sweep ${2:t} verdict=$v rc=$rc ms=${ms%%.*}"
+  ' zsh "$lib" "$cfg" "$claim" >/dev/null 2>&1 || rmdir "$claim" 2>/dev/null || true
+}
+sweep_start || true
 exit 0

@@ -303,12 +303,32 @@ _cc_sync_config_mirror() {
 #   --convert: also MERGE a real dst memory dir into canonical (rsync --ignore-existing keeps
 #              canonical's copies + adds dst-only files; MEMORY.md indexes are line-unioned), back it
 #              up → *.premirror-bak, then symlink. No data loss: canonical kept, dst preserved in .bak.
+#
+#   --slug <slug>: visit ONE slug instead of walking all of them, with the same per-slug rules. This
+#              is what SessionStart's config-mirror-assert.sh runs inline for the session's own
+#              project; the full walk is detached from it (docs/research/startup-hooks-2026-10-18
+#              README §5 unit 5.7), because at 2.8 s p50 on the isolated accounts it was the slowest
+#              SessionStart child in 65 of 68 dispatcher runs. Temp slugs are skipped here too, so
+#              --slug never does what the full walk's glob exclusion forbids.
+#
+# _cc_memory_mirror_wanted <dst>: true when <dst> keeps projects/ real, i.e. when the memory mirror
+# has any work to do there. One predicate, so the hook deciding whether to start a sweep and the
+# walk deciding whether to run cannot disagree.
+_cc_memory_mirror_wanted() { [[ " ${_CC_ISOLATE[${1:?}]-} " == *" projects "* ]]; }
+
 _cc_sync_memory_mirror() {
   emulate -L zsh
-  local convert=0; [[ "$1" == --convert ]] && { convert=1; shift; }
+  local convert=0 only=""
+  while (( $# )); do
+    case "$1" in
+      --convert) convert=1; shift ;;
+      --slug)    only="${2:?memory-mirror: --slug needs a slug}"; shift 2 ;;
+      *)         break ;;
+    esac
+  done
   local dst="${1:?}" cano="$HOME/.claude/projects"
   [[ "$dst" == "$HOME/.claude-"* && "$dst" != "$HOME/.claude" ]] || { print -u2 "memory-mirror: refusing $dst"; return 1; }
-  [[ " ${_CC_ISOLATE[$dst]} " == *" projects "* ]] || return 0   # same-account already shares memory
+  _cc_memory_mirror_wanted "$dst" || return 0                    # same-account already shares memory
   # Throwaway temp-dir slugs from headless runs (-private-var-folders-*, -private-tmp*) are ~95% of
   # projects/ (17,446 of 18,258 on 2026-10-18) and never hold memory worth sharing. They are
   # excluded INSIDE both globs, so they are never stat'ed, hashed or looped: a per-slug skip in the
@@ -316,8 +336,15 @@ _cc_sync_memory_mirror() {
   # is anchored to the whole name, so a slug that merely contains "-private-tmp" is still walked.
   setopt extendedglob
   local -A slugs; local sp slug c d
-  for sp in "$cano"/^(-private-var-folders-*|-private-tmp*)(N/);         do slugs[${sp:t}]=1; done
-  for sp in "$dst/projects"/^(-private-var-folders-*|-private-tmp*)(N/); do slugs[${sp:t}]=1; done
+  if [[ -n "$only" ]]; then
+    # A slug is one path component; anything else (a separator, a dot entry) is refused rather
+    # than joined into a path.
+    [[ "$only" == (-private-var-folders-*|-private-tmp*|*/*|.|..) ]] && return 0
+    slugs[$only]=1
+  else
+    for sp in "$cano"/^(-private-var-folders-*|-private-tmp*)(N/);         do slugs[${sp:t}]=1; done
+    for sp in "$dst/projects"/^(-private-var-folders-*|-private-tmp*)(N/); do slugs[${sp:t}]=1; done
+  fi
   for slug in ${(k)slugs}; do
     c="$cano/$slug/memory"; d="$dst/projects/$slug/memory"
     if [[ -L "$d" ]]; then
