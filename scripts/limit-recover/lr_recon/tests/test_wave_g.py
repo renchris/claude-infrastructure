@@ -36,6 +36,10 @@ class _Base(unittest.TestCase):
             os.environ,
             {
                 "LR_STATE_DIR": os.path.join(self.tmp, "lr"),
+                # drain.run resolves its root through T.Paths.from_env, so an ambient
+                # LR_RECON_ROOT (every lrsl wave runner exports one) wrote the latch outside
+                # self.paths and read_latch(...)["stopped"] raised KeyError
+                "LR_RECON_ROOT": os.path.join(self.tmp, "lr", "recon"),
                 "HOME": self.home,
                 "LR_RECON_USAGE_FILE": self.usage,
                 "LR_PAGE_BIN": "/nonexistent-page-bin",
