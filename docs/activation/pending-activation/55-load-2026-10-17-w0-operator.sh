@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
-# 53-load-2026-10-17-w0-operator  —  Wave 0 of the load-root-cause program, handed over as one script
+# 55-load-2026-10-17-w0-operator  —  Wave 0 of the load-root-cause program, handed over as one script
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 # WHY (docs/plans/LOAD_ROOT_CAUSE_2026_10_17.md scope: "hand every operator-only step over as one
 #   script"; DESIGN §5 rows OP-1, OP-2, OP-2b, OP-2c, OP-4): W1-W5 landed, but W0 is root-only and was
@@ -8,8 +8,8 @@
 #   so no agent runs this (C10). It reads each step's state, prints the evidence next to it, and acts
 #   only on a step the operator names.
 #
-#   53-load-2026-10-17-w0-operator.sh                  report every step's state; change NOTHING, no sudo
-#   53-load-2026-10-17-w0-operator.sh --confirm <target> [--window peak|idle]   repeatable:
+#   55-load-2026-10-17-w0-operator.sh                  report every step's state; change NOTHING, no sudo
+#   55-load-2026-10-17-w0-operator.sh --confirm <target> [--window peak|idle]   repeatable:
 #     spotlight-privacy   OP-1 precondition: back up the Data volume's Spotlight VolumeConfiguration.plist
 #                         into the capture dir, add ~/Development to its Exclusions, read it back.
 #     fseventsd-restart   OP-1 / X1: refused unless the Exclusions entry reads back AND fseventsd's
@@ -42,14 +42,14 @@
 # Seams (tests): CC_W0_SUDO · CC_W0_OUT · CC_W0_DEV · CC_W0_SPOT_PLIST · CC_W0_PLISTBUDDY · CC_W0_WAIT_S · HOME.
 # ───────────────────────────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
-N=53
+N=55
 SUDO="${CC_W0_SUDO:-sudo}"
 OUT="${CC_W0_OUT:-$HOME/.claude/logs/load-2026-10-17/w0}"
 DEV="${CC_W0_DEV:-$HOME/Development}"
 SPOT_PLIST="${CC_W0_SPOT_PLIST:-/System/Volumes/Data/.Spotlight-V100/VolumeConfiguration.plist}"
 PB="${CC_W0_PLISTBUDDY:-/usr/libexec/PlistBuddy}"
 WAIT_S="${CC_W0_WAIT_S:-10}"
-DONE="$HOME/.claude/autonomy/pending-activation/53-load-2026-10-17-w0-operator.sh.done"
+DONE="$HOME/.claude/autonomy/pending-activation/55-load-2026-10-17-w0-operator.sh.done"
 FOOT_WEDGED_MB=1024   # refuse a restart below this: the wedge measured 11-13 GB, healthy is < 100 MB
 
 usage() {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# 53-load-2026-10-17-w0-operator.sh — Wave 0 of the load-root-cause program as one operator script.
+# 55-load-2026-10-17-w0-operator.sh — Wave 0 of the load-root-cause program as one operator script.
 #
 # WHY THIS SUITE EXISTS: every W0 step is root-only and one of them restarts a system daemon, so the
 # script's value is in what it REFUSES: a bare run that writes nothing and never calls sudo, a restart
@@ -15,7 +15,7 @@
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-  SCRIPT="${W0_SCRIPT:-$REPO/docs/activation/pending-activation/53-load-2026-10-17-w0-operator.sh}"
+  SCRIPT="${W0_SCRIPT:-$REPO/docs/activation/pending-activation/55-load-2026-10-17-w0-operator.sh}"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude/autonomy"
   STUB="$BATS_TEST_TMPDIR/stub"; mkdir -p "$STUB/bin" "$STUB/T"
   export STUB PATH="$STUB/bin:$PATH" CC_W0_SUDO=sudo CC_W0_PLISTBUDDY="$STUB/bin/PlistBuddy"
@@ -174,7 +174,7 @@ calls() { cat "$STUB/calls" 2>/dev/null; }
 }
 
 @test "the .done marker needs a healthy daemon, the xcrun record and all four captures" {
-  DONE="$HOME/.claude/autonomy/pending-activation/53-load-2026-10-17-w0-operator.sh.done"
+  DONE="$HOME/.claude/autonomy/pending-activation/55-load-2026-10-17-w0-operator.sh.done"
   run "$SCRIPT" --confirm wired-capture --confirm fsusage-capture --window idle
   printf '1 pytest\n2 pytest\n' > "$STUB/gates"
   run "$SCRIPT" --confirm wired-capture --confirm fsusage-capture --window peak

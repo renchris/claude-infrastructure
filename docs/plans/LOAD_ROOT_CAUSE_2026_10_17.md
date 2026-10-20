@@ -34,7 +34,7 @@ fixes X1-X27, §3 worktree lifecycle, §4 instrument, §5 WP table with file own
 
 | Wave | Repo | WPs (DESIGN §5) | Fixes | Status |
 |---|---|---|---|---|
-| W0 | — | OP-1, OP-2, OP-2b, OP-2c | X1 fseventsd restart, X24 cleanups, wired + fs_usage capture | X1 **done by another actor** (fseventsd pid 96656, 14 MB at 2026-10-17 ~10:00Z; was 12-13 GB). Spotlight Privacy entry, OP-2, OP-2b, OP-2c **handed over** as `docs/activation/pending-activation/53-load-2026-10-17-w0-operator.sh` (bare run reports, no sudo; one `--confirm` per step; `.done` from disk when fseventsd < 100 MB, the xcrun cleanup recorded and all four captures present; suite `tests/load-2026-10-17-w0-operator.bats`, 11 cases). OP-4 reported only (W6) |
+| W0 | — | OP-1, OP-2, OP-2b, OP-2c | X1 fseventsd restart, X24 cleanups, wired + fs_usage capture | X1 **done by another actor** (fseventsd pid 96656, 14 MB at 2026-10-17 ~10:00Z; was 12-13 GB). Spotlight Privacy entry, OP-2, OP-2b, OP-2c **handed over** as `docs/activation/pending-activation/55-load-2026-10-17-w0-operator.sh` (bare run reports, no sudo; one `--confirm` per step; `.done` from disk when fseventsd < 100 MB, the xcrun cleanup recorded and all four captures present; suite `tests/load-2026-10-17-w0-operator.bats`, 11 cases). OP-4 reported only (W6) |
 | W1-CI | claude-infrastructure | WP-1, WP-5, WP-6, WP-7, WP-8 | X2, X3 (bats), X8, X5, X4 | **landed 2026-10-17**: WP-6 adfb09b6c · WP-5 542d44d8b, 8bb8430fd · WP-1 250ff0a72 · WP-7 9d6cbcc5c, b9bc84e1a · WP-8 (ms365, staged) 13077919e..54c3943ad, migration renumbered 0067 (W4 took 0066). Operator: 0057 root re-install (backlog f433e92713c8), 0067 ms365 cutover (62694f2b1ffb) |
 | W1-ACS | agent-context-sync | WP-2, WP-3, WP-4, WP-22, WP-30 | X3, X11, X20, X10, X26 | **landed** — agent-context-sync `5b1f10f1` (7 commits: WP-30 e72a536d, WP-4 a278cb90 + 38ddea63, WP-3 5d363837, WP-2 68eab10c, WP-22 b63251c9 + 5b1f10f1), content-verified; land gate `scripts/gate.sh` green (201 + 4441 passed), CI ci + diagrams green. Operator: OP-3 native pandoc install (backlog 2c1acaa94c3b), OP-6 point lane fires at `docs/lanes/COMMON.md` (dfc2d3f79629) |
 | W2 | claude-infrastructure | WP-9, WP-10, WP-11, WP-12, WP-13, WP-14 | X6, X7, PARK tier, §4.2 detectors | **landed** — 55d01fcd4, bfab48403, 47970f271 + the WP-10 phase B land (PARK tiers, `--path`, late DETACH, ARCHIVE, all behind `--park-first`; AC-6 always on), content-verified; contract `docs/research/load-root-cause-2026-10-17/W2-CONTRACT.md`. Activation (`--park-first` in the nightly / wake run) is W3 |
@@ -90,7 +90,7 @@ fixes X1-X27, §3 worktree lifecycle, §4 instrument, §5 WP table with file own
   `.hooks.PreToolUse` but each preserves entries it does not own: either order converges, never concurrently.
   Under load ~250 the bats slot gate (2 roots) serialized four teammates' suites; size waves for that.
 - W0 handover (2026-10-17, cloud session): DESIGN kept OP-1/2/2b/2c as prose, so "one script" was the
-  only unbuilt part of the scope. Script 53 refuses an fseventsd restart below 1 GB footprint (X1 already
+  only unbuilt part of the scope. Script 55 refuses an fseventsd restart below 1 GB footprint (X1 already
   ran, a second restart only forces a rescan) and without the Spotlight exclusion reading back; it waits
   on `ps -p`, never `kill -0` (EPERM on a root daemon reads as "gone"); it censuses the X24 orphans BY
   KIND and signals none, since the design's pids were recorded at filing. xcrun rebuilds its db on the
