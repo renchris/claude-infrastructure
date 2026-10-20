@@ -37,8 +37,18 @@ def probe_ok(_argv: List[str]) -> Tuple[int, str]:
     return 0, "/tmp/token\n"
 
 
-def entered() -> A.Admission:
-    adm = A.Admission(runner=probe_ok, repo="/repo", env={})
+class Wall:
+    def __init__(self, t: float) -> None:
+        self.t = t
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def entered(wall: "Wall" = None) -> A.Admission:  # type: ignore[assignment]
+    adm = A.Admission(
+        runner=probe_ok, repo="/repo", env={}, wall=wall or Wall(REFUSED_AT)
+    )
     # one corpse and a fleet quieter than the ceiling at entry: R is the floor
     adm.enter_active(4, 1, CEILING, load1=1.0, load5=1.0, ncpu=10, now=REFUSED_AT - 60)
     return adm
@@ -70,34 +80,42 @@ class RestoreBudgetIsBounded(unittest.TestCase):
         )  # an admission past the budget pages, as the drip always has
         self.assertEqual(adm.last_terms, "active 12 + in flight 0 + 1 vs R 8")
 
-    def test_past_the_run_the_brake_the_pacer_and_the_drip_clock_still_decide(
+    def test_past_the_run_the_pace_the_pacer_and_the_drip_clock_still_decide(
         self,
     ) -> None:
-        adm = entered()
+        wall = Wall(REFUSED_AT)
+        adm = entered(wall)
         for i in range(A.DRIP_AFTER):
             adm.decide(SID, "next", REFUSED_AT + i, ACTIVE, 0, 1.0, 1.0, 10, COHORT)
         t = REFUSED_AT + 10
-        # the CPU brake: load far over the operating point, and under 20 s since ACTIVE entry + admit
-        adm.entered_at = t - 1
+        wall.t = t
+        # load far over the pre-limit operating point no longer refuses (REPORT §4 A4)
         self.assertEqual(
             adm.decide(SID, "next", t, ACTIVE, 0, 400.0, 1.0, 10, COHORT),
-            (False, "cpu"),
-        )
-        self.assertEqual(
-            adm.decide(SID, "next", t, ACTIVE, 0, 1.0, 1.0, 10, COHORT),
             (True, "admit:drip"),
         )
-        # a second member of the cohort waits out the drip's clock, then is admitted too
+        # a second member of the cohort waits out the drip's wall clock, then is admitted too
         other = "5dd11e6c-ed1d-4adb-b79d-3d417ba638e1"
+        wall.t = t + 1
         self.assertEqual(
             adm.decide(other, "next2", t + 1, ACTIVE, 1, 1.0, 1.0, 10, COHORT),
             (False, "drip"),
         )
+        wall.t = t + A.DRIP_EVERY_S
         self.assertEqual(
             adm.decide(
                 other, "next2", t + A.DRIP_EVERY_S, ACTIVE, 1, 1.0, 1.0, 10, COHORT
             ),
             (True, "admit:drip"),
+        )
+        # the pace still binds past the run: spend the bucket, and the next member waits on it
+        adm.pace_tokens = 0.0
+        third = "6ee22f7d-fe2e-5bec-c8a0-4e528cb749f2"
+        wall.t = t + 2 * A.DRIP_EVERY_S
+        adm.pace_at = wall.t
+        self.assertEqual(
+            adm.decide(third, "next4", wall.t, ACTIVE, 2, 1.0, 1.0, 10, COHORT),
+            (False, "pace"),
         )
 
     def test_inside_the_budget_nothing_changed_and_dormant_still_refuses(self) -> None:

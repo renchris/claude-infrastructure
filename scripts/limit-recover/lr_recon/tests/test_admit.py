@@ -1,4 +1,4 @@
-"""admit.py: frozen R, CPU brake + floor, per-account pacer, drip, boot AIMD (§C6, §6).
+"""admit.py: frozen R, wall-clock pace, per-account pacer, drip, boot AIMD (§C6, §6).
 
 Hermetic: the bash library is a fake runner; one optional test probes the real library, read-only."""
 
@@ -26,8 +26,18 @@ class FakeRunner:
         return self.rc, self.out
 
 
-def active(runner: FakeRunner, **kw: float) -> A.Admission:
-    adm = A.Admission(runner=runner, repo="/repo", env={})
+class Wall:
+    """The admission's own clock, set by hand: a test moves it apart from the pass ``now``."""
+
+    def __init__(self, t: float = 0.0) -> None:
+        self.t = t
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def active(runner: FakeRunner, wall: "Wall" = None, **kw: float) -> A.Admission:  # type: ignore[assignment]
+    adm = A.Admission(runner=runner, repo="/repo", env={}, wall=wall or Wall())
     adm.enter_active(
         5,
         3,
@@ -74,32 +84,66 @@ class RestoreBudget(unittest.TestCase):
         self.assertEqual(adm.enter_active(1, 0, 6), 6)
 
 
-class CpuBrake(unittest.TestCase):
-    def test_brake_then_floor(self) -> None:
-        adm = active(FakeRunner())  # L_open = 0.1, so the limit is 2.5 per core
-        self.assertEqual(adm.decide("s1", "a", 25.0, 0, 0, 10.0, 10.0, 10)[0], True)
-        self.assertEqual(
-            adm.decide("s2", "b", 30.0, 0, 0, 40.0, 40.0, 10), (False, "cpu")
-        )
-        self.assertEqual(
-            adm.decide("s2", "b", 44.9, 0, 0, 40.0, 40.0, 10), (False, "cpu")
-        )
-        self.assertEqual(
-            adm.decide("s2", "b", 45.0, 0, 0, 40.0, 40.0, 10), (True, "admit")
-        )
-        self.assertEqual(
-            adm.decide("s3", "c", 46.0, 0, 0, 40.0, 40.0, 10), (False, "cpu")
-        )
+class WallPace(unittest.TestCase):
+    """Gate 2 is a wall-clock token bucket with no load term (REPORT §4 A4). It replaced a CPU brake
+    that, at the operator's standing 15-40 per core, admitted one first turn per PASS: its load term
+    never opened and its 20 s floor read the pass's single ``now``."""
 
-    def test_l_open_raises_the_limit(self) -> None:
-        adm = active(FakeRunner(), load1=20.0, load5=35.0)  # L_open = 3.5 per core
-        self.assertTrue(adm.cpu_ok(34.0, 10, 1.0))
-        self.assertFalse(adm.cpu_ok(36.0, 10, 1.0))
-
-    def test_floor_before_any_admission_counts_from_entry(self) -> None:
+    def test_load_is_not_a_gate(self) -> None:
+        """Before: load1 40 on 10 cores, 1 s after ACTIVE entry, read (False, "cpu")."""
         adm = active(FakeRunner())
-        self.assertFalse(adm.cpu_ok(90.0, 10, 19.0))
-        self.assertTrue(adm.cpu_ok(90.0, 10, 20.0))
+        self.assertEqual(
+            adm.decide("s1", "a", 1.0, 0, 0, 400.0, 400.0, 10), (True, "admit")
+        )
+        self.assertEqual(
+            adm.decide("s2", "b", 1.0, 0, 0, 40.0, 40.0, 10), (True, "admit")
+        )
+
+    def test_one_pass_admits_more_than_one(self) -> None:
+        """Before: inside one pass (one ``now``) at load 30/core, only the first member passed;
+        every later one read "cpu" until the next pass."""
+        adm = active(FakeRunner(), wall=Wall(100.0), load1=1.0)
+        got = [
+            adm.decide("s%d" % i, "acct%d" % i, 50.0, 0, 0, 300.0, 300.0, 10)
+            for i in range(4)
+        ]
+        self.assertEqual(got, [(True, "admit")] * 4)
+
+    def test_paced_by_wall_time_not_by_pass(self) -> None:
+        wall = Wall(0.0)
+        adm = active(FakeRunner(), wall=wall)
+        for i in range(A.PACE_BURST):
+            self.assertEqual(
+                adm.decide("b%d" % i, "acct%d" % i, 0.0, 0, 0, 1.0, 1.0, 10),
+                (True, "admit"),
+            )
+        # the burst is spent: one pass, one ``now``, refused until wall time refills a token
+        self.assertEqual(adm.decide("x", "q", 0.0, 0, 0, 1.0, 1.0, 10), (False, "pace"))
+        wall.t = A.PACE_EVERY_S - 0.1
+        self.assertEqual(adm.decide("x", "q", 0.0, 0, 0, 1.0, 1.0, 10), (False, "pace"))
+        # same pass ``now`` still, but 20 s of wall time went by inside it
+        wall.t = A.PACE_EVERY_S
+        self.assertEqual(adm.decide("x", "q", 0.0, 0, 0, 1.0, 1.0, 10), (True, "admit"))
+        # a later pass whose ``now`` jumped far ahead earns nothing the wall did not
+        self.assertEqual(
+            adm.decide("y", "r", 9999.0, 0, 0, 1.0, 1.0, 10), (False, "pace")
+        )
+
+    def test_the_bucket_never_holds_more_than_the_burst(self) -> None:
+        wall = Wall(0.0)
+        adm = active(FakeRunner(), wall=wall)
+        adm.decide("a", "q", 0.0, 0, 0, 1.0, 1.0, 10)
+        wall.t = 3600.0
+        self.assertTrue(adm.pace_ok(wall.t))
+        self.assertEqual(adm.pace_tokens, float(A.PACE_BURST))
+
+    def test_leave_active_refills(self) -> None:
+        adm = active(FakeRunner())
+        for i in range(A.PACE_BURST):
+            adm.decide("b%d" % i, "acct%d" % i, 0.0, 0, 0, 1.0, 1.0, 10)
+        self.assertFalse(adm.pace_ok(0.0))
+        adm.leave_active()
+        self.assertTrue(adm.pace_ok(0.0))
 
 
 class Pacer(unittest.TestCase):
@@ -241,9 +285,11 @@ class Library(unittest.TestCase):
 class Drip(unittest.TestCase):
     def test_one_per_30s_after_three_refusals(self) -> None:
         r = FakeRunner(rc=9)
-        adm = active(r)
+        wall = Wall()
+        adm = active(r, wall=wall)
 
         def ask(sid: str, t: float) -> Tuple[bool, str]:
+            wall.t = t
             return adm.decide(sid, "a%s" % sid, t, 0, 0, 1.0, 1.0, 10, cohort="c1")
 
         self.assertEqual(
@@ -262,6 +308,33 @@ class Drip(unittest.TestCase):
         self.assertEqual(
             ask("7", 36.0), (False, "capacity")
         )  # a real admission reset the run
+
+    def test_the_drip_bound_holds_at_load_400_on_10_cores(self) -> None:
+        """The guarantee (REPORT §5, operator premise: load never falls). The probe refuses every
+        time and load1 is 400 on 10 cores; a member is still admitted after DRIP_AFTER refusals,
+        and each later member within DRIP_EVERY_S of wall time. Before: the brake read 40/core
+        against a 2.5 limit and refused "cpu" in front of the drip until 20 s after ACTIVE entry,
+        and a "cpu" refusal never counted toward the drip's run."""
+        for rc in (9, A.RC_TIMEOUT):
+            wall = Wall(1000.0)
+            adm = active(FakeRunner(rc=rc), wall=wall)  # entry at pass now 0.0
+            got = [
+                adm.decide("m%d" % i, "q%d" % i, 1.0, 0, 0, 400.0, 400.0, 10, "c1")
+                for i in range(A.DRIP_AFTER + 1)
+            ]
+            self.assertTrue(all(not ok for ok, _ in got[: A.DRIP_AFTER]), got)
+            self.assertEqual(got[-1], (True, "admit:drip"))
+            # the next member: refused only by the drip's own clock, then admitted on wall time
+            # alone, with the pass ``now`` never moving
+            wall.t += A.DRIP_EVERY_S - 1
+            self.assertEqual(
+                adm.decide("n", "r", 1.0, 0, 0, 400.0, 400.0, 10, "c1"), (False, "drip")
+            )
+            wall.t += 1
+            self.assertEqual(
+                adm.decide("n", "r", 1.0, 0, 0, 400.0, 400.0, 10, "c1"),
+                (True, "admit:drip"),
+            )
 
     def test_cohorts_count_separately(self) -> None:
         adm = active(FakeRunner(rc=9))
