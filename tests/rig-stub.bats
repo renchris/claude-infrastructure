@@ -213,7 +213,10 @@ RIGLIB() { python3 "$REPO/tests/rig/rig_lib.py" "$@"; }
   run RIGLIB kill-verified "$R" "$R/norec.pid" TERM;  [ "$status" -eq 1 ]
   run RIGLIB kill-verified "$R" "$R/noroot.pid" TERM; [ "$status" -eq 1 ]
   kill -0 "$other"
-  run RIGLIB kill-verified "$R" "$R/good.pid" TERM;   [ "$status" -eq 0 ]
+  # recorded under one locale, verified under another (the supervisor runs under env.sh's LANG):
+  # lstart reads "Tue 20 Oct" in en_GB and "Tue Oct 20" in en_US, and must still match
+  echo "$good" > "$R/good.pid"; LC_ALL=en_GB.UTF-8 RIGLIB record-id "$R/good.pid"
+  LC_ALL=en_US.UTF-8 run RIGLIB kill-verified "$R" "$R/good.pid" TERM; [ "$status" -eq 0 ]
   wait "$good" 2>/dev/null || true
   if kill -0 "$good" 2>/dev/null; then false; fi
   kill "$other"

@@ -44,9 +44,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 KITTEN="${LR_KITTEN_BIN:-/Applications/kitty.app/Contents/MacOS/kitten}"
 KITTY_REAL="${LR_RIG_REAL_KITTY:-/Applications/kitty.app/Contents/MacOS/kitty}"
-# Setup bounds (B1 §9.1). At 25/core the daemon's startup outran the old fixed 60 s before its
-# first heartbeat (measured 2026-10-20, load1 247 on 10 CPUs, band 31). A bound that fires here is
-# a setup NO-VERDICT (exit 2), never a result; the caller sizes it to the box.
+# Setup bounds (B1 §9.1): the load harness sizes them per arm (its red arm starts python at band
+# 20). A bound that fires here is a setup NO-VERDICT (exit 2), never a result.
 HB_WAIT_S="${LR_RIG_HB_WAIT_S:-60}" BOOT_WAIT_S="${LR_RIG_BOOT_WAIT_S:-90}"
 REAL_HOME="$HOME"
 # B1 of the W5 contract: argv0 must end in /claude, which only exec -a onto the framework binary keeps
@@ -264,7 +263,8 @@ AUTORECOVER="${LR_RIG_AUTORECOVER:-$GO_BARRIER}"
 echo $(( $(date +%s) + TIMEOUT_S + 1800 )) > "$RIG/deadline"
 OWNER_PID="${LR_RIG_OWNER_PID:-}" OWNER_LSTART="${LR_RIG_OWNER_LSTART:-}"
 if [ -z "$OWNER_PID" ] && [ "${LR_RIG_KEEP:-0}" != 1 ]; then OWNER_PID=$$; fi
-if [ -n "$OWNER_PID" ] && [ -z "$OWNER_LSTART" ]; then OWNER_LSTART="$(ps -o lstart= -p "$OWNER_PID" | xargs)"; fi
+# LC_ALL=C on both sides: lstart is locale-formatted, and the supervisor runs under env.sh's LANG
+if [ -n "$OWNER_PID" ] && [ -z "$OWNER_LSTART" ]; then OWNER_LSTART="$(LC_ALL=C ps -o lstart= -p "$OWNER_PID" | xargs)"; fi
 cat > "$RIG/supervisor.sh" <<EOF
 #!/bin/bash
 # KeepAlive + ThrottleInterval 10 for the daemon, StartInterval 30 for the watchdog.
@@ -272,7 +272,7 @@ cd "$REPO/scripts/limit-recover" || exit 1
 last_wd=0
 deadman() { # 0 = this arm must stop now
   [ "\$(date +%s)" -ge "\$(cat "$RIG/deadline" 2>/dev/null || echo 0)" ] && return 0
-  [ -n "$OWNER_PID" ] && [ "\$(ps -o lstart= -p "$OWNER_PID" 2>/dev/null | xargs)" != "$OWNER_LSTART" ] && return 0
+  [ -n "$OWNER_PID" ] && [ "\$(LC_ALL=C ps -o lstart= -p "$OWNER_PID" 2>/dev/null | xargs)" != "$OWNER_LSTART" ] && return 0
   return 1
 }
 while [ ! -e "$RIG/stop" ]; do

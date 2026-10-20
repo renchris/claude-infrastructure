@@ -258,8 +258,11 @@ PS_BOUND_S = 30.0
 
 def _ps(args: List[str]) -> str:
     try:
+        # LC_ALL=C: lstart is locale-formatted ("Tue Oct 20" vs "Tue 20 Oct"), and an identity
+        # recorded under one locale must compare equal when read under another
         return subprocess.run(
             ["/bin/ps"] + args,
+            env=dict(os.environ, LC_ALL="C"),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
