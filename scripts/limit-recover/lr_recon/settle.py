@@ -197,7 +197,7 @@ def settle_exit(
             # one window per R: the same pass re-derived PANE-GONE/R and spawned another
             rec.next_eligible_at = now + R_PROOF_S
         return "%s rc=0" % pr.argv_hash
-    if rc is None:
+    if rc is None and not _rolled_back_by_its_log(rec, pr.argv_hash, text):
         # Adopted by argv, or exited before this daemon could reap it: no code is no verdict. The
         # derived phase is the truth; scoring it as a failure escalated a move that had engaged.
         return "%s exited, code unknown — the phase decides" % pr.argv_hash
@@ -206,8 +206,66 @@ def settle_exit(
         # that (a watcher's own engagement wait timing out) is a stale verdict. Scored, it bumped
         # the attempt and re-opened a MOVED record to RELAUNCHED (W5b real canary 3).
         return "%s rc=%s after %s — the phase decides" % (pr.argv_hash, rc, rec.phase)
-    disp, sub, reason = outcome(rec, rc, text, pr.argv_hash)
-    if pr.argv_hash in MOVE_ACTUATORS:
+    return _score(rec, pr.argv_hash, rc, text, now)
+
+
+# lr-handoff's own closing line; a rollback after the transplant began ends "verdict=NOTMOVED".
+_VERDICT = re.compile(r"^lr-handoff \S+: verdict=([A-Z][A-Z-]*)", re.M)
+
+
+def _rolled_back_by_its_log(rec: T.Record, actuator: str, text: str) -> bool:
+    """A move actuator whose LAST verdict is NOTMOVED, on a record the phase table derives PRE-MOVE:
+    the move was undone (admit aborted: lock, tombstone and target copy withdrawn; source alive), so
+    its exit is a verdict even with no exit code. One move spawn per (sid, attempt) makes the log
+    this spawn's own."""
+    verdicts = _VERDICT.findall(text)
+    return (
+        actuator in MOVE_ACTUATORS
+        and rec.phase == "PRE-MOVE"
+        and bool(verdicts)
+        and verdicts[-1] == "NOTMOVED"
+    )
+
+
+def rolled_back(paths: T.Paths, rec: T.Record, now: float) -> str:
+    """§4.4: a move that rolled back after its transplant began, whose exit nothing scored, is
+    re-offered as a counted retry. The R exit is reaped with no code (the daemon restarted under it,
+    or adopted it), "the phase decides", and the phase table derives PRE-MOVE with no substate once
+    the target copy is withdrawn: timeline.planned and target_acct keep holder_gone and _in_place
+    off it, movers() takes no substate None, and RECON-DEFECT paged every pass with nothing acting
+    (db755a94, 2026-10-20: HELD:unreachable on pane 41, then NOTMOVED, "a retry is safe").
+
+    Keyed on the evidence, not the shape: this attempt's own move actlog must end NOTMOVED. Scored
+    exactly as a reaped exit would be (_score), so the attempt is bumped and repeated rollbacks
+    escalate through the existing budget. The caller has checked no actuator of the record is live.
+    Returns the event detail ('' = not settled)."""
+    t = rec.timeline
+    if (
+        not rec.open
+        or rec.phase != "PRE-MOVE"
+        or rec.substate is not None
+        or rec.wait is not None
+        or (rec.next_eligible_at or 0) > now
+        or rec.escalated
+        or not rec.target_acct
+        or t.confirmed is not None
+        or t.exit_typed_by_me is not None
+        or now - float(rec.close.get("busy_at", 0)) < HOLDER_GONE_QUIET_S
+    ):
+        return ""
+    for a in MOVE_ACTUATORS:
+        text = tail(actlog(paths, rec, a))
+        if _rolled_back_by_its_log(rec, a, text):
+            return "rolled back, nothing scored it: " + _score(rec, a, None, text, now)
+    return ""
+
+
+def _score(
+    rec: T.Record, actuator: str, rc: Optional[int], text: str, now: float
+) -> str:
+    """Score one failed actuator exit: its class sets the substate, wait, backoff or terminal."""
+    disp, sub, reason = outcome(rec, rc, text, actuator)
+    if actuator in MOVE_ACTUATORS:
         # Whatever it was refused for, the NEXT move spawn is a new attempt: the double-typer audit
         # allows exactly one move spawn per (sid, attempt), so a retry must not share one. Nor may it
         # inherit this attempt's confirm: note_confirm re-reads it while the tombstone stands.
@@ -247,7 +305,7 @@ def settle_exit(
             rec.substate, rec.wait = "BACKOFF", None
         disp = d
     return "%s rc=%s → %s%s" % (
-        pr.argv_hash,
+        actuator,
         rc,
         disp,
         ("/" + rec.substate) if pre and rec.substate else "",

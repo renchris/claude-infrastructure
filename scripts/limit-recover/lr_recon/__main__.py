@@ -785,6 +785,10 @@ def _derive(
             detail = settle.settle_exit(rec, pr, rc, text, now)
             if detail:
                 _event(ctx.paths, "exit", rec.sid, rec.record_id, detail)
+        if not act.live_procs(rec, snap):
+            detail = settle.rolled_back(ctx.paths, rec, now)
+            if detail:
+                _event(ctx.paths, "rolled-back", rec.sid, rec.record_id, detail)
         if not rec.open:
             continue
         if settle.note_watcher_hold(ctx.home, rec, now):
