@@ -132,6 +132,35 @@ class NotMoved(unittest.TestCase):
         ]:
             self.assertIn(sub, T.PRE_MOVE_SUBSTATES)
 
+    def test_terminal_holds_are_transient(self) -> None:
+        # REPORT §4 A3 ii (lr-sustained-load 2026-10-20): a slow or deaf terminal retries.
+        for r in (
+            "pane:resolver-unavailable",
+            "unreachable",
+            "wedged",
+            "composer-unreadable",
+        ):
+            for kind in ("limited", "idle"):
+                self.assertEqual(C.map_notmoved(r, kind), ("TRANSIENT", ""), r)
+
+    def test_load_stays_out_of_transient(self) -> None:
+        # A3 iii: only a typed relaunch still holds on load; it is not retried every 300 s.
+        self.assertEqual(C.map_notmoved("load", "limited"), ("DETERMINISTIC", ""))
+
+    def test_terminal_hold_never_reaches_impossible(self) -> None:
+        # The same unreachable hold, hour after hour, backs off at <= 300 s and pages; it never
+        # escalates, which is the road to IMPOSSIBLE and release.
+        r = rec()
+        cls, _ = C.map_notmoved("unreachable", "limited")
+        now = 0.0
+        for _ in range(40):
+            d = C.apply_failure(r, cls, "fp-unreachable", "HELD:unreachable", now)
+            self.assertIn(d, ("BACKOFF", "BACKOFF_PAGE"))
+            assert r.next_eligible_at is not None
+            self.assertLessEqual(r.next_eligible_at - now, C.BACKOFF_CAP_S)
+            now = r.next_eligible_at
+        self.assertFalse(r.escalated)
+
 
 class Failures(unittest.TestCase):
     def test_transient_never_escalates(self) -> None:

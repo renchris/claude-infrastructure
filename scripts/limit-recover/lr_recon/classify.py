@@ -29,6 +29,10 @@ COUNTED = ("TRANSIENT", "DETERMINISTIC", "IMPOSSIBLE")  # WAIT and HOLD are not 
 _PATH = re.compile(r"(?:~|(?<![\w.~])/)[^\s:'\"()\[\],;]*[^\s:'\"()\[\],;.]")
 _DIGITS = re.compile(r"\d+")
 _KILLED_RC = frozenset((124, 137, 143, -9, -15))
+# map_notmoved's terminal-side holds that retry as TRANSIENT (REPORT §4 A3 ii)
+_TERMINAL_TRANSIENT = frozenset(
+    ("pane:resolver-unavailable", "unreachable", "wedged", "composer-unreadable")
+)
 
 
 def _rx(*alts: str) -> List[Pattern[str]]:
@@ -131,7 +135,10 @@ def map_notmoved(reason: str, kind: str, pane_at_shell: bool = True) -> Tuple[st
     if r == "teammate":
         return ("NOT_NEEDED", "")  # the lead owns it
     if r == "team":
-        return ("HOLD", "HELD:team")  # a lead with live members (D4.4), never DETERMINISTIC
+        return (
+            "HOLD",
+            "HELD:team",
+        )  # a lead with live members (D4.4), never DETERMINISTIC
     # D7.1: lr-handoff's `verdict: HELD:<reason>` after an ABORTED admit (exit 6, NOTMOVED, the
     # source restored). Each is a hold to re-probe, never a DETERMINISTIC candidate that escalates.
     if r == "focused":
@@ -145,6 +152,12 @@ def map_notmoved(reason: str, kind: str, pane_at_shell: bool = True) -> Tuple[st
     if r == "pane-not-cc":
         return ("EXITED", "") if pane_at_shell else ("TRANSIENT", "")
     if r.startswith("unreadable"):
+        return ("TRANSIENT", "")
+    # A slow or deaf terminal is a moment, not a fact about the session (lr-sustained-load 2026-10-20,
+    # REPORT §4 A3 ii): retried on the TRANSIENT backoff (capped at BACKOFF_CAP_S) and paged, never
+    # DETERMINISTIC, whose repeat escalates and ends IMPOSSIBLE. `load` stays out (A3 iii): only a typed
+    # relaunch still holds on load, and a 300 s retry of it under permanent load buys nothing.
+    if r in _TERMINAL_TRANSIENT:
         return ("TRANSIENT", "")
     if r.startswith("capacity"):
         return ("WAIT", "WAIT_CAPACITY")

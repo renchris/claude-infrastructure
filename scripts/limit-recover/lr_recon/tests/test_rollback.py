@@ -115,31 +115,45 @@ class RolledBack(unittest.TestCase):
             rec.attempt, 2
         )  # the R spawned under attempt 1; the retry is a new one
         self.assertIsNotNone(rec.substate)
-        self.assertEqual(rec.last_error.cls, "DETERMINISTIC")
+        # HELD:unreachable is TRANSIENT (lr-sustained-load REPORT §4 A3 ii): a deaf terminal retries
+        self.assertEqual(rec.last_error.cls, "TRANSIENT")
         [ev] = self._events("rolled-back")
-        self.assertIn("R rc=None → RETRY", ev["detail"])
+        self.assertIn("R rc=None → BACKOFF", ev["detail"])
         self.assertEqual(rec.last_error.detail, "unreachable")
 
     def test_the_rolled_back_record_is_a_mover_again(self):
         rec = self._rec()
         self._log(rec)
         self.assertEqual(plan.movers([rec], TM._snap(self.now, self.tmp), self.now), [])
-        self.assertIn("RETRY/BACKOFF", settle.rolled_back(self.paths, rec, self.now))
+        self.assertIn("BACKOFF/BACKOFF", settle.rolled_back(self.paths, rec, self.now))
         self.assertEqual(rec.substate, "BACKOFF")
         self.assertGreater(rec.next_eligible_at, self.now)
         [m] = plan.movers([rec], TM._snap(self.now, self.tmp), self.now)
         self.assertEqual(m.sid, SID)
 
     def test_repeated_rollbacks_escalate_through_the_existing_budget(self):
+        # a hold that is still DETERMINISTIC (load: A3 iii keeps it out of TRANSIENT)
+        held_load = ROLLED_BACK.replace("HELD:unreachable", "HELD:load")
         rec = self._rec()
-        self._log(rec)
+        self._log(rec, held_load)
         settle.rolled_back(self.paths, rec, self.now)
         # the retry rolls back the same way under attempt 2
         rec.substate, rec.next_eligible_at = None, None
-        self._log(rec)
+        self._log(rec, held_load)
         self.assertIn("ESCALATED", settle.rolled_back(self.paths, rec, self.now + 60))
         self.assertTrue(rec.escalated)
         self.assertEqual(rec.attempt, 3)
+
+    def test_repeated_unreachable_rollbacks_back_off_and_never_escalate(self):
+        """A3 ii: the same deaf-terminal rollback, twice, is a backoff, not ESCALATED → IMPOSSIBLE."""
+        rec = self._rec()
+        self._log(rec)
+        settle.rolled_back(self.paths, rec, self.now)
+        rec.substate, rec.next_eligible_at = None, None
+        self._log(rec)
+        self.assertIn("BACKOFF", settle.rolled_back(self.paths, rec, self.now + 60))
+        self.assertFalse(rec.escalated)
+        self.assertEqual(rec.last_error.cls, "TRANSIENT")
 
     def test_an_unknown_code_R_exit_reads_its_notmoved_verdict(self):
         """The fast path: the exit is reaped while the record already derives PRE-MOVE."""
