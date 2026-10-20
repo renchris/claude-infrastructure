@@ -332,11 +332,14 @@ EOF2
     # LRU_SELF_SID PINNED EMPTY (2026-10-18, pane 374's ask): this runner inherits the requester's
     # env, and the census reads LRU_SELF_SID as "this row is me" (disp=self, a hold), so a batch moving
     # the requester's own session would wait on a `self` that never turns `move`. No row is the runner.
-    # THE CENSUS IS CLAMPED TO THE UTILITY BAND (2026-10-18, REPORT §6 item 1). The staged
-    # com.reso.lr-move-kick starts this runner in the Interactive band so the lane's waits run at 31;
-    # a census is 19-27 CPU-s (raw/F) and must not compete there. Kill switch LR_MOVE_CENSUS_CLAMP=off.
+    # THE CENSUS RUNS IN THE RUNNER'S OWN BAND (2026-10-20). It was clamped to utility on 2026-10-18
+    # (lr-inplace-immediacy REPORT §6 item 1) to keep its 19-27 CPU-s off the 31 band. But it is on
+    # the critical path: the workers waiting on `<sid>.waiting` read their row from the snap.tsv it
+    # writes, and at load ~200 utility costs 20-153x (docs/research/lr-sustained-load-2026-10-20,
+    # axis 04 L5 and axis 07 skeptic L1: never clamp a census a waiting worker reads). With the
+    # poller and move-kick at ProcessType Interactive, the clamp is opt-in: LR_MOVE_CENSUS_CLAMP=on.
     snap_tp=(); _mb_tp="${LR_MOVE_TASKPOLICY_BIN:-/usr/sbin/taskpolicy}"
-    if [ "${LR_MOVE_CENSUS_CLAMP:-on}" != off ] && [ -x "$_mb_tp" ]; then snap_tp=("$_mb_tp" -c utility); fi
+    if [ "${LR_MOVE_CENSUS_CLAMP:-off}" = on ] && [ -x "$_mb_tp" ]; then snap_tp=("$_mb_tp" -c utility); fi
     if LRU_SELF_SID='' ${snap_tp[@]+"${snap_tp[@]}"} /bin/bash "$UPGRADE" --switch-census ${snap_from:+--from "$snap_from"} --target "$TO" ${snap_sel[@]+"${snap_sel[@]}"} > "$BDIR/snap.tsv.tmp" 2>/dev/null; then
       mv -f "$BDIR/snap.tsv.tmp" "$BDIR/snap.tsv" && date +%s > "$BDIR/snap.ts"
     fi

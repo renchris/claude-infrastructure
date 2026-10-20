@@ -488,34 +488,36 @@ STUB
   ! grep -q -- "^self=\[$S2\]" "$CENSUS_LOG" || { cat "$CENSUS_LOG"; false; }
 }
 
-@test "26 [RED] the WATCH census is clamped to the utility band" {
+@test "26 [RED] the WATCH census runs unclamped by default: a waiting worker reads what it writes" {
   [ -x /bin/bash ] || skip "/bin/bash absent"
-  # The staged com.reso.lr-move-kick starts batches in the Interactive band (REPORT §6 item 1), and a
-  # census is 19-27 CPU-s (raw/F): it must not compete with the load at 31. A recorder stands in for
-  # /usr/sbin/taskpolicy and runs the census it was handed.
+  # The workers waiting on `<sid>.waiting` read their row from the snap.tsv this census writes, so it
+  # is on the critical path, and at load ~200 the utility band costs it 20-153x
+  # (docs/research/lr-sustained-load-2026-10-20, axis 04 L5, axis 07 skeptic L1). A recorder stands
+  # in for /usr/sbin/taskpolicy and runs the census it was handed.
   export TP_LOG="$BATS_TEST_TMPDIR/taskpolicy.log"
   printf '#!/bin/bash\necho "$*" >> "$TP_LOG"\nshift 2\nexec "$@"\n' > "$STUBS/taskpolicy"; chmod +x "$STUBS/taskpolicy"
   export LR_MOVE_TASKPOLICY_BIN="$STUBS/taskpolicy"
+  unset LR_MOVE_CENSUS_CLAMP
   sess 401 "$S1"
   sess 402 "$S2"
   run bash "$CCLR" move --sids "$S1,$S2" --to next2 --wait 0
   [ -n "$(moved_dir)" ] || { echo "rc $status: $output"; false; }
   watchbatch "$S2"
   [ -s "$CENSUS_LOG" ] || { echo "$output"; false; }
-  # RED before: no taskpolicy call at all.
-  grep -q -- '^-c utility /bin/bash .*--switch-census ' "$TP_LOG" || { cat "$TP_LOG" 2>/dev/null; false; }
+  # RED before: `-c utility /bin/bash ... --switch-census` was recorded on every census.
+  [ ! -s "$TP_LOG" ] || { cat "$TP_LOG"; false; }
 }
 
-@test "27 KILL SWITCH: LR_MOVE_CENSUS_CLAMP=off runs the WATCH census without taskpolicy" {
+@test "27 OPT-IN: LR_MOVE_CENSUS_CLAMP=on still clamps the WATCH census to the utility band" {
   [ -x /bin/bash ] || skip "/bin/bash absent"
   export TP_LOG="$BATS_TEST_TMPDIR/taskpolicy.log"
   printf '#!/bin/bash\necho "$*" >> "$TP_LOG"\nshift 2\nexec "$@"\n' > "$STUBS/taskpolicy"; chmod +x "$STUBS/taskpolicy"
-  export LR_MOVE_TASKPOLICY_BIN="$STUBS/taskpolicy" LR_MOVE_CENSUS_CLAMP=off
+  export LR_MOVE_TASKPOLICY_BIN="$STUBS/taskpolicy" LR_MOVE_CENSUS_CLAMP=on
   sess 401 "$S1"
   sess 402 "$S2"
   run bash "$CCLR" move --sids "$S1,$S2" --to next2 --wait 0
   [ -n "$(moved_dir)" ] || { echo "rc $status: $output"; false; }
   watchbatch "$S2"
   [ -s "$CENSUS_LOG" ] || { echo "$output"; false; }
-  [ ! -s "$TP_LOG" ] || { cat "$TP_LOG"; false; }
+  grep -q -- '^-c utility /bin/bash .*--switch-census ' "$TP_LOG" || { cat "$TP_LOG" 2>/dev/null; false; }
 }
