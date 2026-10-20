@@ -3913,6 +3913,13 @@ def _term_on(env_name):
     return os.environ.get(env_name, "on").strip().lower() not in ("off", "0", "false")
 
 
+def _switch_on(env_name, off_file):
+    """_term_on plus a FILE form, both read on every call (LR_SUSTAINED_LOAD W3). The env form
+    serves interactive callers; `~/.claude/state/<off_file>` serves the reconciler's --place
+    child, whose plist environment only a reload can change (B4 review F11)."""
+    return _term_on(env_name) and not os.path.exists(os.path.join(HOME, ".claude", "state", off_file))
+
+
 def urgency_exp(R):
     return _cliff_env("CC_ROUTE_URGENCY_EXP", R.get("URGENCY_EXP", URGENCY_EXP_DEFAULT))
 
@@ -4614,6 +4621,7 @@ def _rolled(a, b, stamp_field, pct_field):
 
 UTIL_TAIL_SEED_B = 131072       # first tail slice; doubled until the SPAN is covered
 UTIL_TAIL_MAX_B = 33554432      # 32 MiB — past the 25 MiB rotation bound, so never a real cap
+UTIL_TAIL_CROSS_SLACK_S = 3600  # a slice "reached back" only past cutoff − this (B4 C3, review F3)
 
 
 _UTIL_MEMO = None            # {"ident", "hours", "rows"} — this process's last _util_tail read
@@ -4676,28 +4684,46 @@ def _util_tail_read(path=None, hours=48.0, max_bytes=None):
     requested span is covered.
 
     Stale rows (inherited/errored sweeps) are dropped — a rate needs two MEASUREMENTS, not a
-    measurement and an echo."""
+    measurement and an echo.
+
+    THE STOP RULE (B4 C3). The old test, "a KEPT row within 60 s after the cutoff", almost never
+    held: the log is written in bursts (p90 gap 399 s), so on ~85% of calls the read doubled to
+    the whole file and then walked every rotated sibling. A read now also stops once a slice holds
+    a dated row older than cutoff − UTIL_TAIL_CROSS_SLACK_S. That keeps the same rows only on a
+    time-ordered file, which the single writer gives by construction: record_utilization stamps
+    `ts` under get_data's single-flight flock (_acquire_lock). The slack absorbs a small inversion
+    straddling the cutoff (review F3, test U5), and the final sort is unconditional so row order
+    never depends on which path stopped the read. It stops at the old rule's slice or an earlier
+    one, never before a slice crosses the cutoff. Kill switch: CC_UTIL_TAIL_CROSS=off or
+    ~/.claude/state/util-tail-cross.off."""
     path = path or UTIL_PATH
     cutoff = time.time() - max(0.0, hours) * 3600.0
+    cross_at = cutoff - UTIL_TAIL_CROSS_SLACK_S if _switch_on(
+        "CC_UTIL_TAIL_CROSS", "util-tail-cross.off") else None
 
     def _parse(lines, out):
+        """-> True when a dated row older than cross_at was seen: the read reached back past the
+        cutoff. A stale row counts for that (its stamp is still a time on the file)."""
+        crossed = False
         for ln in lines:
             try:
                 e = json.loads(ln)
             except (json.JSONDecodeError, TypeError):
-                continue
-            if e.get("stale"):
                 continue
             try:
                 t = datetime.fromisoformat(str(e.get("ts")).replace("Z", "+00:00")).timestamp()
             except (ValueError, TypeError):
                 continue
             if t < cutoff:
+                crossed = crossed or (cross_at is not None and t < cross_at)
+                continue
+            if e.get("stale"):
                 continue
             e["_t"] = t
             out.append(e)
+        return crossed
 
-    out = []
+    out, reached = [], False
     try:
         size = os.path.getsize(path)
     except OSError:
@@ -4711,20 +4737,20 @@ def _util_tail_read(path=None, hours=48.0, max_bytes=None):
                     if size > want:
                         f.seek(size - want)
                         f.readline()          # drop the probable fragment after a mid-file seek
-                    _parse(f.readlines(), rows)
+                    reached = _parse(f.readlines(), rows)
             except OSError:
-                rows = []
+                rows, reached = [], False
             out = rows
             # Covered when we either reached back past the cutoff or read the whole file. A
             # FIXED byte cap cannot know which of those it hit; that is the defect being cured.
             if want >= size or want >= UTIL_TAIL_MAX_B or max_bytes:
                 break
-            if rows and min(r["_t"] for r in rows) <= cutoff + 60:
+            if reached or (rows and min(r["_t"] for r in rows) <= cutoff + 60):
                 break
             want *= 2
 
     # Still short of the requested span (or the live file is gone): walk the rotations.
-    if not out or min(r["_t"] for r in out) > cutoff + 60:
+    if not reached and (not out or min(r["_t"] for r in out) > cutoff + 60):
         try:
             sibs = sorted(glob.glob(path + ".*"),
                           key=lambda p: (os.path.getmtime(p), p), reverse=True)
@@ -4734,15 +4760,15 @@ def _util_tail_read(path=None, hours=48.0, max_bytes=None):
             try:
                 if sib.endswith(".gz"):
                     with gzip.open(sib, "rt") as f:
-                        _parse(f.readlines(), out)
+                        reached = _parse(f.readlines(), out)
                 else:
                     with open(sib) as f:
-                        _parse(f.readlines(), out)
+                        reached = _parse(f.readlines(), out)
             except (OSError, EOFError, UnicodeDecodeError):
                 continue
-            if out and min(r["_t"] for r in out) <= cutoff + 60:
+            if reached or (out and min(r["_t"] for r in out) <= cutoff + 60):
                 break
-        out.sort(key=lambda e: e["_t"])
+    out.sort(key=lambda e: e["_t"])
 
     span = ((max(r["_t"] for r in out) - min(r["_t"] for r in out)) / 3600.0) if len(out) >= 2 else 0.0
     return out, span
@@ -6501,13 +6527,33 @@ def _place_load_inputs(args: list) -> tuple:
     return lane, movers, facts_dir, kwork
 
 
+# B4 C2: --place reads three apply_burn outputs and nothing else: burn_5h_ph (2 h), burn_5h_ewma_ph
+# (SU_EWMA_LOOKBACK_H) and wk_strand_pp (burn_wk_ewma_ph, WK_EWMA_LOOKBACK_H). The 336 h read exists
+# for burst_percentile and exchange_rate, which only the board renders. The hour of slack covers
+# the gap between the read's clock and apply_burn's, which the parent's ≤120 s kill bounds.
+PLACE_BURN_LOOKBACK_H = max(SU_EWMA_LOOKBACK_H, WK_EWMA_LOOKBACK_H, 2.0) + 1.0
+
+
+def _place_burn_samples():
+    """The utilization rows --place's burn fields can see, or None (apply_burn's own 336 h read)
+    with CC_PLACE_BURN_NARROW=off or ~/.claude/state/place-burn-narrow.off."""
+    if not _switch_on("CC_PLACE_BURN_NARROW", "place-burn-narrow.off"):
+        return None
+    return _util_tail(hours=PLACE_BURN_LOOKBACK_H)[0]
+
+
 def cmd_place(args: list, cfg: dict) -> int:
     """Batch recovery placement: stdout {sid: {acct, reason, eta_s, weight}}; exit 0 = a plan
     (unplaced movers included), 3 = WAIT_DATA (no servable cache), 64 = bad arguments/inputs.
 
     INPUTS. --movers: JSONL {sid, src (account name OR config-dir path), kind limited|idle, w (int,
     default 1), model?, burn_ph? (the mover's own pre-death 5h burn, pp/h), death_ts? (epoch),
-    assign_id? (the ledger id of the mover's own phantom, never charged against its own placement)}.
+    assign_id? (the ledger id of the mover's own phantom, never charged against its own placement),
+    holds? ({acct: [config_dir, bool]}: the caller's own answer to "does that store hold a live
+    projects/*/<sid>.jsonl", from an index that gives the glob's answer)}. An entry is trusted only
+    when realpath(config_dir) equals realpath of the account's config_dir HERE, so a map computed
+    over a different accounts.json can never answer (B4 review F5). An account the map omits, a
+    malformed entry, or CC_PLACE_HOLDS_MAP=off / ~/.claude/state/place-holds-map.off globs as before.
     --kwork: JSON {acct: int|null} — missing/null is UNMEASURED and gets no seats, because a count
     nobody took is not zero. --facts: a dir of `<acct>.<scope>.json` {status:"rejected", scope,
     window, resets_at, first_sid, observed_at, src, contradicted?}; 5h/7d/auth cover every lane,
@@ -6538,7 +6584,7 @@ def cmd_place(args: list, cfg: dict) -> int:
     mark_self(rows, cfg)
     refresh_login_countdown(rows)
     apply_assignments(rows, cfg)
-    apply_burn(rows, cfg)
+    apply_burn(rows, cfg, samples=_place_burn_samples())
     win = win_from_json(wj)
     R, now = cfg["router"], time.time()
     KMAX = R["KMAX"]
@@ -6634,8 +6680,22 @@ def cmd_place(args: list, cfg: dict) -> int:
             return "recovery-weekly-thin"
         return None
 
-    def holds(a: str, sid: str) -> bool:
-        return bool(glob.glob(os.path.join(dirs[a], "projects", "*", glob.escape(sid) + ".jsonl")))
+    trust_holds = _switch_on("CC_PLACE_HOLDS_MAP", "place-holds-map.off")
+    _real = {}
+
+    def realp(p: str) -> str:
+        if p not in _real:
+            _real[p] = os.path.realpath(os.path.expanduser(p))
+        return _real[p]
+
+    def holds(a: str, m: dict) -> bool:
+        known = m.get("holds") if trust_holds else None
+        ent = known.get(a) if isinstance(known, dict) else None
+        if isinstance(ent, list) and len(ent) == 2 and isinstance(ent[0], str) and ent[0] \
+                and isinstance(ent[1], bool) and realp(ent[0]) == realp(dirs[a]):
+            return ent[1]
+        return bool(glob.glob(os.path.join(dirs[a], "projects", "*",
+                                           glob.escape(m["sid"]) + ".jsonl")))
 
     placed_w = {a: 0 for a in snap}
     placed_n = {a: 0 for a in snap}
@@ -6655,7 +6715,7 @@ def cmd_place(args: list, cfg: dict) -> int:
             if room(m, a) - placed_w[a] < w:
                 reasons.add(why[a])
                 zeroing += acct_facts(a)
-            elif a != src and holds(a, sid):
+            elif a != src and holds(a, m):
                 reasons.add("store-holds-sid")
             elif mf:
                 reasons.add(f"fact:{sorted(str(f.get('scope')) for f in mf)[0]}")

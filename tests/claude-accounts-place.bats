@@ -42,7 +42,7 @@ PY
 # rows: {acct: overrides}; every row acct becomes a cfg account with a sandbox config_dir.
 # facts: [(acct, scope, overrides)]; stores: {acct: [sid, ...]} seeds projects/p/<sid>.jsonl.
 LOAD='
-import importlib.machinery, os, json, time, io, contextlib
+import importlib.machinery, importlib.util, os, json, time, io, contextlib
 ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
     "ca", importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"])))
 importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"]).exec_module(ca)
@@ -86,6 +86,11 @@ def tally(plan):
     t = {}
     for v in plan.values(): t[v["acct"]] = t.get(v["acct"], 0) + v["weight"]
     return t
+def hmap(**kw):  # B4 C1: the {acct: [config_dir, bool]} holds map, over the fixture stores
+    return {a: [os.path.join(T, "cfg-" + a), v] for a, v in kw.items()}
+GLOBS = []
+_glob = ca.glob.glob
+ca.glob.glob = lambda p, *a, **k: (GLOBS.append(p) if "/projects/" in p else None, _glob(p, *a, **k))[1]
 '
 
 @test "(a) a panes-charged snapshot (row k_work null) never yields more than KMAX - live seats per account, never 40-k" {
@@ -614,6 +619,287 @@ p = rank("--src", "b")                                      # b has not reset: s
 assert p.returncode == 0, (p.returncode, p.stderr)
 p = rank("--src", "ghost")
 assert p.returncode == 64, (p.returncode, p.stderr)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+}
+
+# ---- cheap --place (LR_SUSTAINED_LOAD W3, B4 C1-C2) ------------------------------------------------
+# --place cost 4.75-11.7 s and 4.3-4.9 CPU-s at PRI 31 with 9 movers, from two corpus scans: a
+# projects/*/<sid>.jsonl glob per mover x account (~18.3k lstat each) and a 336 h utilization read
+# that parsed the whole file twice on ~85% of calls. C1 trusts a caller's holds map, C2 reads 49 h.
+# Design: docs/research/lr-sustained-load-2026-10-20/impl/B4-cheap-place.md §2, §6.
+
+@test "P1 RED: a complete holds map answers the store check, so --place globs no project dir" {
+  run python3 -c "$LOAD"'
+rows = {"a": {}, "b": {}, "c": {}}
+mv = [dict(m, holds=hmap(a=False, b=False, c=False)) for m in movers(3, src="a")]
+rc, plan = place(rows, {"a": 0, "b": 0, "c": 0}, mv, stores={"b": ["s00"]})
+assert rc == 0, rc
+assert GLOBS == [], GLOBS                  # before C1: 3 movers x 2 non-source accounts = 6 globs
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+}
+
+@test "P2 RED: the map is the answer, not decoration — false over a disk copy places, true over none refuses" {
+  run python3 -c "$LOAD"'
+f7 = [("a", "7d", {})]
+rc, plan = place({"a": {}, "b": {}}, {"a": 0, "b": 0},
+                 movers(1, src="a", holds=hmap(a=False, b=False)), facts=f7, stores={"b": ["s00"]})
+assert plan["s00"]["acct"] == "b" and plan["s00"]["reason"] == "placed", plan
+os.remove(os.path.join(T, "cfg-b", "projects", "p", "s00.jsonl"))      # the store no longer holds it
+rc, plan = place({"a": {}, "b": {}}, {"a": 0, "b": 0},
+                 movers(1, src="a", holds=hmap(a=False, b=True)), facts=f7)
+assert plan["s00"]["acct"] is None and plan["s00"]["reason"] == "fact:7d,store-holds-sid", plan
+assert plan["s00"]["eta_s"] is not None, plan
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+}
+
+@test "P2c: an entry is trusted only when its config_dir resolves to the account's own store (realpath)" {
+  # The mutant "trust any cfg" turns this red: a map computed over a DIFFERENT accounts.json
+  # (B4 correctness review F5) must never answer for the store --place itself resolves.
+  run python3 -c "$LOAD"'
+f7 = [("a", "7d", {})]
+fix = dict(facts=f7, stores={"b": ["s00"]})
+stranger = {"b": [os.path.join(T, "elsewhere"), False]}
+rc, plan = place({"a": {}, "b": {}}, {"a": 0, "b": 0}, movers(1, src="a", holds=stranger), **fix)
+assert plan["s00"]["reason"] == "fact:7d,store-holds-sid", plan          # globbed, not trusted
+os.symlink(os.path.join(T, "cfg-b"), os.path.join(T, "link-b"))
+for alias in (os.path.join(T, "link-b"), os.path.join(T, "cfg-b") + "/"):
+    rc, plan = place({"a": {}, "b": {}}, {"a": 0, "b": 0},
+                     movers(1, src="a", holds={"b": [alias, False]}), **fix)
+    assert plan["s00"]["acct"] == "b", (alias, plan)                     # same store: trusted
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+}
+
+@test "P3: an account the map omits, or a malformed entry, is globbed exactly as before" {
+  # Mutant: holds() reading a missing key as False turns the first arm red.
+  run python3 -c "$LOAD"'
+f7 = [("a", "7d", {})]
+rc, plan = place({"a": {}, "b": {}}, {"a": 0, "b": 0},
+                 movers(1, src="a", holds=hmap(a=False)), facts=f7, stores={"b": ["s00"]})
+assert plan["s00"]["reason"] == "fact:7d,store-holds-sid", plan
+for bad in ({"b": True}, {"b": [os.path.join(T, "cfg-b"), "yes"]}, {"b": [None, False]},
+            {"b": [os.path.join(T, "cfg-b"), False, 1]}, ["b"]):
+    rc, plan = place({"a": {}, "b": {}}, {"a": 0, "b": 0},
+                     movers(1, src="a", holds=bad), facts=f7, stores={"b": ["s00"]})
+    assert rc == 0 and plan["s00"]["reason"] == "fact:7d,store-holds-sid", (bad, plan)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+}
+
+@test "P4: CC_PLACE_HOLDS_MAP=off and ~/.claude/state/place-holds-map.off each ignore the map, read per call" {
+  run python3 -c "$LOAD"'
+f7 = [("a", "7d", {})]
+def go():
+    return place({"a": {}, "b": {}}, {"a": 0, "b": 0},
+                 movers(1, src="a", holds=hmap(a=False, b=False)), facts=f7, stores={"b": ["s00"]})[1]
+assert go()["s00"]["acct"] == "b"
+os.environ["CC_PLACE_HOLDS_MAP"] = "off"
+assert go()["s00"]["reason"] == "fact:7d,store-holds-sid"
+del os.environ["CC_PLACE_HOLDS_MAP"]
+off = os.path.join(os.environ["HOME"], ".claude", "state", "place-holds-map.off")
+os.makedirs(os.path.dirname(off), exist_ok=True)
+open(off, "w").close()                                  # same process: the switch is read per call
+assert go()["s00"]["reason"] == "fact:7d,store-holds-sid"
+os.remove(off)
+assert go()["s00"]["acct"] == "b"
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+}
+
+@test "P5 RED: --place reads PLACE_BURN_LOOKBACK_H (49) hours of the series, not 336; the switches restore 336" {
+  run python3 -c "$LOAD"'
+HOURS, real = [], ca._util_tail
+def spy(path=None, hours=48.0, max_bytes=None):
+    HOURS.append(hours); return real(path, hours, max_bytes)
+ca._util_tail = spy
+def go():
+    del HOURS[:]
+    place({"a": {}, "b": {}}, {"a": 0, "b": 0}, movers(1, src="a"))
+    return list(HOURS)
+assert ca.PLACE_BURN_LOOKBACK_H == 49.0, ca.PLACE_BURN_LOOKBACK_H
+assert go() == [49.0], HOURS
+os.environ["CC_PLACE_BURN_NARROW"] = "off"
+assert go() == [ca.BURST_LOOKBACK_H], HOURS
+del os.environ["CC_PLACE_BURN_NARROW"]
+off = os.path.join(os.environ["HOME"], ".claude", "state", "place-burn-narrow.off")
+os.makedirs(os.path.dirname(off), exist_ok=True)
+open(off, "w").close()
+assert go() == [ca.BURST_LOOKBACK_H], HOURS
+os.remove(off)
+assert go() == [49.0], HOURS
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+}
+
+@test "P6: the burn fields --place reads are bit-identical under the 49 h read, and a 24 h read is not (power)" {
+  # EQUIVALENCE GUARD with power. Mutant PLACE_BURN_LOOKBACK_H = 24.0 turns it red; the in-test
+  # 24 h arm is the positive control that this fixture can tell a narrower window apart at all.
+  run python3 -c "$LOAD"'
+import random
+from datetime import datetime, timezone
+iso = lambda t: datetime.fromtimestamp(t, timezone.utc).isoformat()
+rnd, T0 = random.Random(7), time.time()
+t = T0 - 20 * 86400
+A = "abcd"
+sp, wp = dict.fromkeys(A, 0.0), dict.fromkeys(A, 0.0)
+sra = {a: t + rnd.uniform(0, 5 * 3600) for a in A}
+wra = {a: t + rnd.uniform(0, 7 * 86400) for a in A}
+p = os.path.join(T, "util-p6.jsonl")
+with open(p, "w") as fh:
+    while t < T0 - 60:
+        t += rnd.choice((60, 120, 300, 300, 600, 900, 1800, 3600))   # bursty sweeps, shared stamp
+        for a in A:
+            if t >= sra[a]: sp[a], sra[a] = 0.0, sra[a] + 5 * 3600
+            if t >= wra[a]: wp[a], wra[a] = 0.0, wra[a] + 7 * 86400
+            sp[a] = min(100.0, sp[a] + rnd.uniform(0, 3)); wp[a] = min(100.0, wp[a] + rnd.uniform(0, .4))
+            e = {"ts": iso(t), "acct": a, "session_pct": round(sp[a]), "weekly_pct": round(wp[a]),
+                 "session_reset_at": iso(sra[a]), "weekly_reset_at": iso(wra[a])}
+            if rnd.random() < 0.03: e["stale"] = True
+            fh.write(json.dumps(e) + "\n")
+F = ("burn_5h_ph", "burn_5h_ewma_ph", "burn_wk_ewma_ph", "wk_strand_pp")
+real_time, seen, diff24 = time.time, dict.fromkeys(F, 0), 0
+def burn(M, h):
+    ss = [e for e in ca._util_tail_read(p, h)[0] if e["_t"] <= M]
+    out = []
+    for a in A:
+        last = [e for e in ss if e["acct"] == a][-1]
+        wr = datetime.fromisoformat(last["weekly_reset_at"]).timestamp()
+        out.append({"acct": a, "weekly_pct": last["weekly_pct"], "weekly_reset_h": (wr - M) / 3600})
+    ca.apply_burn(out, {}, samples=ss)
+    return out
+for j in range(20):
+    M = T0 - 3600 - j * 7.2 * 3600
+    ca.time.time = lambda: M
+    wide, narrow, n24 = burn(M, ca.BURST_LOOKBACK_H), burn(M, ca.PLACE_BURN_LOOKBACK_H), burn(M, 24.0)
+    for w_, n_, x_ in zip(wide, narrow, n24):
+        for f in F:
+            assert w_.get(f) == n_.get(f), (j, w_["acct"], f, w_.get(f), n_.get(f))
+            seen[f] += f in w_
+            diff24 += w_.get(f) != x_.get(f)
+ca.time.time = real_time
+assert all(seen.values()), seen                  # every field is present somewhere: not vacuous
+assert diff24 > 0, diff24                        # the fixture has the power to see a narrower read
+print("OK", seen, diff24)'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+}
+
+@test "P6b: of apply_burn's outputs, cmd_place's call graph reads only the three fields 49 h covers (ast)" {
+  # A future reader of a wider field (burst, exchange_k, burn_ratio ...) on the --place path would
+  # silently see a 49 h window. Mutant: add r.get("burst") to floors_ok -> red.
+  run python3 - "$CA_BIN" <<'PY'
+import ast, sys
+tree = ast.parse(open(sys.argv[1]).read())
+funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+def key(s):
+    s = getattr(s, "value", s) if type(s).__name__ == "Index" else s
+    return s.value if isinstance(s, ast.Constant) and isinstance(s.value, str) else None
+W = set()
+for n in ast.walk(funcs["apply_burn"]):
+    for t in (n.targets if isinstance(n, ast.Assign) else []):
+        if isinstance(t, ast.Subscript) and key(t.slice):
+            W.add(key(t.slice))
+R, seen, todo = set(), set(), ["cmd_place"]
+while todo:
+    f = todo.pop()
+    if f in seen or f not in funcs or f == "apply_burn":
+        continue
+    seen.add(f)
+    for n in ast.walk(funcs[f]):
+        if isinstance(n, ast.Call):
+            if isinstance(n.func, ast.Attribute) and n.func.attr == "get" and n.args and key(n.args[0]):
+                R.add(key(n.args[0]))
+            todo += [x.id for x in [n.func] + list(n.args) if isinstance(x, ast.Name)]
+        if isinstance(n, ast.Subscript) and isinstance(n.ctx, ast.Load) and key(n.slice):
+            R.add(key(n.slice))
+assert len(W) >= 10 and len(seen) >= 50, (len(W), len(seen))          # the walk is not vacuous
+got = W & R
+assert got and got <= {"burn_5h_ph", "burn_5h_ewma_ph", "wk_strand_pp"}, sorted(got)
+print("OK", sorted(got))
+PY
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+}
+
+@test "P7: differential — 40 seeded frozen fixtures place byte-identically with glob-computed maps and with none" {
+  # EQUIVALENCE GUARD with power: flipping one map bit must change at least one answer, and real
+  # store-holds-sid walls must be exercised, or the comparison proves nothing.
+  run python3 -c "$LOAD"'
+import random, shutil
+T0, real_time = time.time(), time.time
+ca.time.time = lambda: T0
+def wipe():
+    for d in os.listdir(T):
+        if d.startswith("cfg-"): shutil.rmtree(os.path.join(T, d))
+mism, flips, walls = 0, 0, 0
+for seed in range(40):
+    rnd = random.Random(seed)
+    accts = ["a", "b", "c", "d"][:rnd.randint(2, 4)]
+    rows = {a: {"session_pct": rnd.randint(0, 60), "weekly_pct": rnd.randint(0, 80)} for a in accts}
+    kwork = {a: rnd.choice([None, 0, 1, 3, 6, 7, 8]) for a in accts}
+    facts = [(rnd.choice(accts), rnd.choice(["7d", "5h", "model:opus"]), {})
+             for _ in range(rnd.randint(0, 2))]
+    mv = [{"sid": "s%02d" % i, "src": rnd.choice(accts), "kind": rnd.choice(["limited", "idle"]),
+           "w": rnd.randint(1, 12), "model": rnd.choice(["claude-opus-5-5", "claude-sonnet-5-5"])}
+          for i in range(rnd.randint(1, 9))]
+    stores = {}
+    for m in mv:
+        for a in rnd.sample(accts, rnd.randint(0, min(3, len(accts)))):
+            stores.setdefault(a, []).append(m["sid"])
+    wipe()
+    rc0, bare = place(rows, kwork, mv, facts=facts, stores=stores)
+    hm = lambda m: {a: [os.path.join(T, "cfg-" + a), m["sid"] in stores.get(a, [])] for a in accts}
+    rc1, mapped = place(rows, kwork, [dict(m, holds=hm(m)) for m in mv], facts=facts, stores=stores)
+    mism += (rc0, json.dumps(bare, sort_keys=True)) != (rc1, json.dumps(mapped, sort_keys=True))
+    walls += sum("store-holds-sid" in (v["reason"] or "") for v in bare.values())
+    flip = [dict(m, holds={a: [c, not b] for a, (c, b) in hm(m).items()}) for m in mv]
+    rc2, flipped = place(rows, kwork, flip, facts=facts, stores=stores)
+    flips += json.dumps(flipped, sort_keys=True) != json.dumps(bare, sort_keys=True)
+ca.time.time = real_time
+print("mismatches=%d flips_that_changed=%d store_walls=%d" % (mism, flips, walls))
+assert mism == 0 and flips > 0 and walls > 0
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+  [[ "$output" == *"mismatches=0 "* ]] || false
+}
+
+@test "E1 RED: a 9-mover batch with complete maps globs nothing, and its parse count does not grow with history" {
+  # The scaling form of the end-to-end contract (B4 reviews F1/F6: the absolute 5,000 bound was
+  # unreachable, the prototype measured 11,880-13,865). A 20-day and a 60-day series with the same
+  # newest 20 days must cost the same json.loads; before C2+C3 the whole file was parsed twice.
+  run python3 -c "$LOAD"'
+from datetime import datetime, timezone
+now = time.time()
+lines = []
+for k in range(int(60 * 86400 / 300), -1, -1):      # one 3-row burst every 5 min; the 49 h cutoff
+    ts = datetime.fromtimestamp(now - 150 - k * 300, timezone.utc).isoformat()   # falls 150 s off
+    lines += [json.dumps({"ts": ts, "acct": a, "session_pct": (k * 7) % 100, "weekly_pct": 40,
+                          "pad": "x" * 120}) + "\n" for a in "abc"]
+short = lines[-int(20 * 86400 / 300) * 3:]
+mv = [dict(m, holds=hmap(a=False, b=False, c=False)) for m in movers(9, src="a")]
+real, counts = ca.json.loads, []
+for ls in (short, lines):
+    open(os.environ["CC_UTIL_LOG"], "w").writelines(ls)
+    n = [0]
+    ca.json.loads = lambda *a, **k: (n.__setitem__(0, n[0] + 1), real(*a, **k))[1]
+    del GLOBS[:]
+    rc, plan = place({"a": {}, "b": {}, "c": {}}, {"a": 0, "b": 0, "c": 0}, mv)
+    ca.json.loads = real
+    assert rc == 0 and GLOBS == [], (rc, GLOBS[:3])
+    counts.append(n[0])
+print("json.loads 20d=%d 60d=%d lines=%d/%d" % (counts[0], counts[1], len(short), len(lines)))
+assert counts[0] == counts[1], counts
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || false

@@ -46,6 +46,55 @@ def rec(mins_ago, sp=10, wp=40, acct="next3", sra=None, wra=None):
     return json.dumps(e) + "\n"
 '
 
+# The stop-rule cases (B4 C3) freeze the clock so the cutoff is exact, count json.loads, and
+# compare against a brute-force read of every file.
+C3='
+import glob, gzip
+FIX = NOW.timestamp()
+ca.time.time = lambda: FIX
+ACCTS = ("next", "next2", "next3", "next4")
+def burst_file(p, mins, every=5.0, off=2.5, stale_every=0, junk_every=0, opener=open):
+    # one 4-row burst (shared ts) every EVERY min, the newest OFF min ago, back to MINS (or a lo-hi pair)
+    lo, hi = mins if isinstance(mins, tuple) else (0, mins)
+    with opener(p, "wt") as f:
+        k = int((hi - off) // every)
+        while off + k * every >= lo:
+            for i, a in enumerate(ACCTS):
+                ln = rec(off + k * every, acct=a)
+                if stale_every and (k + i) % stale_every == 0:
+                    e = json.loads(ln); e["stale"] = True; ln = json.dumps(e) + "\n"
+                f.write(ln)
+                if junk_every and (k + i) % junk_every == 0:
+                    f.write("{not json\n")
+            k -= 1
+def counted(fn, *a, **k):
+    n, real = [0], ca.json.loads
+    ca.json.loads = lambda *x, **y: (n.__setitem__(0, n[0] + 1), real(*x, **y))[1]
+    try:
+        return fn(*a, **k), n[0]
+    finally:
+        ca.json.loads = real
+def brute(paths, hours):
+    cut, out = FIX - hours * 3600, []
+    for p in paths:
+        with (gzip.open(p, "rt") if p.endswith(".gz") else open(p)) as f:
+            for ln in f:
+                try:
+                    e = json.loads(ln)
+                    t = datetime.fromisoformat(e["ts"]).timestamp()
+                except (ValueError, KeyError):
+                    continue
+                if t >= cut and not e.get("stale"):
+                    e["_t"] = t; out.append(e)
+    return sorted(out, key=lambda e: e["_t"])
+def rows_off(*a, **k):
+    os.environ["CC_UTIL_TAIL_CROSS"] = "off"
+    try:
+        return ca._util_tail_read(*a, **k)[0]
+    finally:
+        del os.environ["CC_UTIL_TAIL_CROSS"]
+'
+
 @test "RP-6: _util_tail honours a TIME span, not a byte cap (128 KiB buys 12 h of the live series)" {
   # 4,400 records at 6 min spacing = 440 h, ~1.29 MB, i.e. ~9x the old 128 KiB cap. A byte-capped
   # reader returns ~45 h of THIS fixture only because its record is small; against the live file
@@ -219,6 +268,145 @@ for argv, want in ((["--route", "interactive", "--max-wait", "0"], False),
     except Stop:
         pass
     assert ca._UTIL_MEMO_ON is want, (argv, ca._UTIL_MEMO_ON)
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+# ---- the stop rule (LR_SUSTAINED_LOAD W3, B4 C3) ----------------------------------------------------
+# The old rule stopped only when a KEPT row fell within 60 s after the cutoff. The log is written
+# in bursts, so on ~85% of calls the read doubled to the whole file (and walked every rotated
+# sibling). A read now also stops once a slice reaches back past cutoff - UTIL_TAIL_CROSS_SLACK_S.
+
+@test "U1 RED (RP-9): a read that crossed the cutoff stops, keeping exactly the brute-force rows" {
+  run python3 -c "$LOAD$C3"'
+p = os.path.join(TMP, "u1.jsonl")
+burst_file(p, 20 * 1440)                     # cutoff 48 h falls 2.5 min from a burst on each side
+(rows, span), n = counted(ca._util_tail_read, p, 48.0)
+want = brute([p], 48.0)
+assert rows == want, (len(rows), len(want))
+n49 = len(brute([p], 49.0))
+lines = sum(1 for _ in open(p))
+print("json.loads=%d kept=%d n49=%d lines=%d" % (n, len(rows), n49, lines))
+assert n <= 4 * n49 + 131072 // 250, (n, n49)          # before C3: ~2x the whole file
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "U2 RED (RP-10): a rotated history is read only as far back as the span — one sibling for 48 h" {
+  # Offset so NO row lands within 60 s after the cutoff (the old rule's only stop), and sibling
+  # mtimes set newest-first as rotate-autonomy-logs leaves them (B4 correctness review F6).
+  run python3 -c "$LOAD$C3"'
+p = os.path.join(TMP, "u2.jsonl")
+burst_file(p, 180)                                                  # live: newest 3 h
+sibs = []
+for i, (lo, hi) in enumerate(((180, 3780), (3780, 7380), (7380, 10980))):   # three 60 h siblings
+    s = p + ".2026080%dT000000Z.gz" % (3 - i)
+    burst_file(s, (lo, hi), opener=gzip.open)
+    os.utime(s, (FIX - 3600 * (1 + i), FIX - 3600 * (1 + i)))
+    sibs.append(s)
+opened, real = [], ca.gzip.open
+ca.gzip.open = lambda f, *a, **k: (opened.append(f), real(f, *a, **k))[1]
+rows, span = ca._util_tail_read(p, 48.0)
+ca.gzip.open = real
+assert rows == brute([sibs[0], p], 48.0), len(rows)
+assert opened == [sibs[0]], opened                                  # before C3: all three
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "U3: CC_UTIL_TAIL_CROSS=off and ~/.claude/state/util-tail-cross.off restore the old stop rule, read per call" {
+  run python3 -c "$LOAD$C3"'
+p = os.path.join(TMP, "u3.jsonl")
+burst_file(p, 20 * 1440)
+lines = sum(1 for _ in open(p))
+off = os.path.join(os.environ["HOME"], ".claude", "state", "util-tail-cross.off")
+os.makedirs(os.path.dirname(off), exist_ok=True)
+def loads():
+    return counted(ca._util_tail_read, p, 48.0)[1]
+on = loads()
+os.environ["CC_UTIL_TAIL_CROSS"] = "off"
+env_off = loads()
+del os.environ["CC_UTIL_TAIL_CROSS"]
+open(off, "w").close()
+file_off = loads()
+os.remove(off)
+print("on=%d env_off=%d file_off=%d lines=%d" % (on, env_off, file_off, lines))
+assert on < lines and env_off >= lines and file_off >= lines and loads() == on
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "U4: rows are identical with the stop rule on and off — 8 spans x 5 fixtures" {
+  # EQUIVALENCE GUARD. Mutant: break after the first slice unconditionally -> spans past the seed differ.
+  run python3 -c "$LOAD$C3"'
+F = {}
+F["even"] = os.path.join(TMP, "even.jsonl"); burst_file(F["even"], 17 * 1440, every=6.0, off=0.0)
+F["bursty"] = os.path.join(TMP, "bursty.jsonl"); burst_file(F["bursty"], 17 * 1440)
+F["stale"] = os.path.join(TMP, "stale.jsonl"); burst_file(F["stale"], 17 * 1440, stale_every=7)
+F["junk"] = os.path.join(TMP, "junk.jsonl"); burst_file(F["junk"], 17 * 1440, junk_every=11)
+F["rotated"] = os.path.join(TMP, "rot.jsonl"); burst_file(F["rotated"], 180)
+for i, (lo, hi) in enumerate(((180, 9000), (9000, 17820), (17820, 26640))):
+    s = F["rotated"] + ".2026080%dT000000Z.gz" % (3 - i)
+    burst_file(s, (lo, hi), opener=gzip.open)
+    os.utime(s, (FIX - 3600 * (1 + i), FIX - 3600 * (1 + i)))
+n = 0
+for name, p in sorted(F.items()):
+    files = sorted(glob.glob(p + ".*"), key=os.path.getmtime) + [p]
+    for h in (0.5, 2.0, 6.0, 48.0, 49.0, 72.0, 336.0, 400.0):
+        on, off = ca._util_tail_read(p, h)[0], rows_off(p, h)
+        assert on == off, (name, h, len(on), len(off))
+        assert on == brute(files, h), (name, h, len(on))     # both arms share the loop, so also
+                                                             # against every row on disk
+        assert on, (name, h)
+        n += 1
+print("OK", n)'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "U5: one write inversion straddling the cutoff, seed slice split between the pair, keeps the old rule's rows" {
+  # Red on the slack-less prototype (B4 correctness review F3, c3adv.py): B (cutoff+30 s) is
+  # written BEFORE A (cutoff-30 s); the seed slice holds A but not B. Without the slack, A reads as
+  # "crossed" and the read stops, losing B. Mutant UTIL_TAIL_CROSS_SLACK_S = 0 -> red.
+  run python3 -c "$LOAD$C3"'
+iso = lambda t: datetime.fromtimestamp(t, timezone.utc).isoformat()
+H = 2.0
+cut = FIX - H * 3600
+line = lambda t, **x: json.dumps(dict({"ts": iso(t), "acct": "next3", "session_pct": 1,
+                                       "weekly_pct": 2}, **x)) + "\n"
+tail = "".join(line(cut + 120 + i * 300) for i in range(int((FIX - cut - 120) // 300) + 1))
+B = line(cut + 30, pad="b" * 250)
+A0 = line(cut - 30, pad="")
+A = line(cut - 30, pad="a" * (131072 - 150 - len(tail) - len(A0)))
+assert len(A) + len(tail) < 131072 < len(B) + len(A) + len(tail)
+p = os.path.join(TMP, "u5.jsonl")
+with open(p, "w") as f:
+    f.writelines(line(cut - 7200 - i * 300) for i in range(600, 0, -1))
+    f.write(B + A + tail)
+new, old = ca._util_tail_read(p, H)[0], rows_off(p, H)
+assert any(r.get("pad", "").startswith("b") for r in old), "the fixture lost B under the OLD rule"
+assert new == old == brute([p], H), (len(new), len(old))
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
+@test "U6: rows come back in time order whichever path stopped the read (the sort is unconditional)" {
+  # Before C3 only the sibling walk sorted; a read that now stops in the live file must not hand
+  # back FILE order. Mutant: sort only inside the sibling branch -> red.
+  run python3 -c "$LOAD$C3"'
+p = os.path.join(TMP, "u6.jsonl")
+burst_file(p, 3 * 1440)
+ls = open(p).readlines()
+ls[-1], ls[-9] = ls[-9], ls[-1]                       # one inversion inside the kept window
+open(p, "w").writelines(ls)
+rows = ca._util_tail_read(p, 6.0)[0]
+assert [r["_t"] for r in rows] == sorted(r["_t"] for r in rows)
+assert rows == brute([p], 6.0), len(rows)
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || { echo "$output"; false; }

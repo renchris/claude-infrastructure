@@ -902,6 +902,19 @@ DST="$DST_DIR/$SID.jsonl"
 if [[ -e "$DST" && $FORCE -ne 1 ]]; then
   echo "lr-transplant: REFUSED — $DST already exists (use --force to overwrite)" >&2; exit 2
 fi
+# THE ARRIVAL CHECK SPANS EVERY SLUG (LR_SUSTAINED_LOAD W3; B4 correctness review F4). A copy of
+# $SID under ANOTHER slug in the target is not refused by the same-slug test above, so the move
+# went through and left the target holding two copies, and the NEXT hop off it died "multiple
+# copies … disambiguate manually": a strand only an operator could clear. Refused here, before any
+# lock or tombstone, it is one refused attempt and a re-place. One glob per move (1.2-2.4 s at
+# load1 241-247, review F10), off the scorer. An unmatched glob stays literal, which -e rejects.
+if [[ $FORCE -ne 1 ]]; then
+  for _arr in "$TO"/projects/*/"$SID".jsonl; do
+    if [[ -e "$_arr" ]]; then
+      echo "lr-transplant: REFUSED — $_arr already exists (another slug than $SLUG; use --force to overwrite)" >&2; exit 2
+    fi
+  done
+fi
 
 # Split-brain lock (one transplant owner per session uuid). LOCK is resolved ABOVE, beside the
 # same-target idempotence check that has to read it before the source lookup.

@@ -621,3 +621,31 @@ _stores() { export LR_CONFIG_DIRS="$T/from:$T/to:$T/third:$T/other"; }
   run grep -q custody_from "$LOCK"
   [ "$status" -eq 1 ] || { echo "the lock carries custody_from on an ordinary move"; false; }
 }
+
+@test "W3 arrival RED PROOF: a copy under ANOTHER slug in the target is refused before any lock or tombstone" {
+  # Before W3 the arrival refusal checked only the source's own slug, so this move went through,
+  # left the target holding two copies, and the NEXT hop off it died "multiple copies …
+  # disambiguate manually" — a strand only an operator could clear (B4 correctness review F4).
+  mkdir -p "$T/to/projects/other-slug"
+  printf '{"type":"user"}\n' > "$T/to/projects/other-slug/$SID.jsonl"
+  _admit
+  [ "$status" -eq 2 ] || { echo "rc=$status $output"; false; }
+  [[ "$output" == *"REFUSED"*"other-slug/$SID.jsonl already exists"* ]] || { echo "$output"; false; }
+  [ ! -e "$DST" ] || { echo "a second copy was written at the source slug"; false; }
+  [ ! -e "$LOCK" ] || { echo "a lock was taken before the refusal"; false; }
+  [ ! -e "$T/from/projects/slug/$SID.HANDOFF.json" ] || { echo "a tombstone was written"; false; }
+  [ -f "$SRC" ] || { echo "the source was touched"; false; }
+  # --force keeps its old meaning: the operator's override still moves it
+  _transplant --force
+  [ "$status" -eq 0 ] || { echo "rc=$status $output"; false; }
+  [ -f "$DST" ] || { echo "--force did not move it"; false; }
+}
+
+@test "W3 arrival CONTROL: an unrelated sid under another slug in the target does not refuse" {
+  # The widened glob is keyed on THIS sid; a different session's transcript is not a copy of it.
+  mkdir -p "$T/to/projects/other-slug"
+  printf '{"type":"user"}\n' > "$T/to/projects/other-slug/99999999-2222-3333-4444-555555555555.jsonl"
+  _admit
+  [ "$status" -eq 0 ] || { echo "rc=$status $output"; false; }
+  [ -f "$DST" ] || { echo "target copy missing"; false; }
+}
