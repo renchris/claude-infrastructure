@@ -562,6 +562,23 @@ above, it says so; the gap file is the evidence.
   30/core or more, and no base-priority census exists above 28/core. Supports A1 (ship it without
   waiting for self-promotion to 37) and sizing every bound from the priority-31 p90 at 40/core.
 
+## 8. Implemented (2026-10-20)
+
+Four dispatched waves landed the levers below on `main`, each content-verified with its suites run.
+The recovery services were reloaded at priority 31 at 07:23Z (`lr-band-reload.sh`: reconciler and
+reset poller read `31T`; `recon/band.log pri=31 ok`).
+
+| Wave | Levers | Landed |
+|---|---|---|
+| 1 | A1 rail at priority 31 (`ProcessType Interactive` on the reconciler and reset poller, per-pass band check that pages below 31, move census unclamped); A4 admission paced by a wall-clock token bucket (1 per 20 s, burst 6), no load term, drip on the wall clock | `07ce89a99` |
+| 2 | A2 the move worker never waits for load nor ends `HELD:load`; A3 our probe timeouts (rc 124/137) and a refused socket with a live owner retry; resolver-unavailable, unreachable, wedged and composer-unreadable are TRANSIENT (backoff ≤300 s) | `9316d9842` |
+| 3 | Gap 3: mover weight counted only up to the death and clamped to KMAX−1; a mover's own phantom refunded on re-place; HOLD-COMPOSER/HOLD-LOAD page at 900 s; quiet-window at-rest rule in `lr_recon/transcript.py` (the hf precheck already covered all 16 false HELD:busy runs via `c82a349ce`) | `9fc5964c3` |
+| 4 | Gap 1: the owed prompt rides the claude spawn argv (the relay types nothing); the typed path waits up to 180 s for READY; fallback C skips a second first-turn admission for a gate-admitted relaunch | `a8ebaa7c0`, `a24255bf6` |
+
+Not yet built: B1 (load harness and the guarantee tests of §5), B2-B8, C1-C2, D1-D2, and A7 (needs
+an operator ruling). Gap 2 (each capped session recovering itself from its own priority-31 tree)
+is the largest remaining lever.
+
 ## Appendix A. Refuted claims and levers (dropped)
 
 | Item | Axis | Why it was dropped |
