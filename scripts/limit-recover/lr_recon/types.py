@@ -65,6 +65,8 @@ PRE_MOVE_SUBSTATES = (
     "HOLD-BGWORK",
     "HOLD-SUBAGENTS",
     "HOLD-MENU",
+    "HOLD-COMPOSER",  # the precheck read a turn in flight or an unreadable composer
+    "HOLD-LOAD",  # a recycle the load gate refused after the confirm (gap-3 E2)
     "HOLD:iterm",
     "HOLD:repo-bare",
     "HELD:team",
@@ -123,6 +125,9 @@ MAX_AGE_S: Dict[str, Optional[int]] = {
     "HOLD-BGWORK": 1200,  # decision 2: 3600 when the job is a ship-land (Wait.detail)
     "HOLD-SUBAGENTS": 1800,
     "HOLD-MENU": None,
+    # gap-3 E2: re-probed every 120 s with no page at all; 769b7294 sat in it 03:23-05:17Z
+    "HOLD-COMPOSER": 900,
+    "HOLD-LOAD": 900,
     "HOLD:repo-bare": None,
     "HOLD:iterm": None,
     "HELD:team": 600,  # not ENGAGED 10 min after reset

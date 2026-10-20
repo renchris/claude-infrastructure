@@ -57,7 +57,7 @@ BUCKET_SUBSTATE = {
 TEAM_ABSORBS = ("WAIT_SLOT", "WAIT_DATA", "WAIT_CAPACITY", "BACKOFF", "PLANNED")
 TEAM_EXIT_PASSES = 2
 # Holds the census cannot observe: re-probed through the actuator's own precheck.
-REPROBED = ("HOLD-DRAFT", "HOLD-MENU", "HOLD-COMPOSER")
+REPROBED = ("HOLD-DRAFT", "HOLD-MENU", "HOLD-COMPOSER", "HOLD-LOAD")
 _REASON = re.compile(r"(?:PRECHECK |verdict: )(?:HELD|REFUSED):([A-Za-z:-]+)")
 # classify's IMPOSSIBLE text, which is also R's own subject line (outcome)
 _LAUNCHER_ROOTED = re.compile(r"launcher[- ]rooted", re.IGNORECASE)
@@ -71,6 +71,11 @@ RCY_HELD_SUB = {
     "team": "HELD:team",
     "busy": "HOLD-COMPOSER",  # mid-turn: re-probed through the precheck
     "unreachable": "HOLD-COMPOSER",  # composer unreadable (not a draft): re-probed the same way
+    "exit-readback": "HOLD-COMPOSER",  # the typed /exit read back wrong: a composer read
+    # gap-3 E2: a recycle the load gate refused after the confirm is not a composer hold. 6 of the
+    # 18 HOLD-COMPOSER transitions 10-13..10-20 were this (load 9.9-29.1/core), and 0 of 18 were a
+    # composer condition, so the label hid the cause from every page and readout.
+    "load": "HOLD-LOAD",
 }
 # handoff-fire's hf_recycle_hold line: held after the confirm, and whether the unconfirm undid it.
 # Three forms: exit-readback is held AFTER /exit was typed and says so (recycle-failures-kitty
@@ -183,6 +188,7 @@ def settle_exit(
     if rc == 0 and pr.argv_hash == "UNCONFIRM":
         return _unconfirmed(rec, now)
     if rc == 0:
+        release_holds(rec)
         # TRANSPLANTED too: a confirmed move is usually derived TRANSPLANTED (row 12) in the pass
         # before its A exits, and a PRE-MOVE-only test left the relaunch gap with no substate.
         if pr.argv_hash in ("A", "A-husk") and rec.phase in (
@@ -274,6 +280,8 @@ def _score(
     detail = (reason or disp)[:200]
     fp = classify.fingerprint(rec.phase, disp, text, -1 if rc is None else rc, "")
     pre = rec.phase == "PRE-MOVE"
+    if disp != "HOLD":
+        release_holds(rec)
     if disp == "NOT_NEEDED":
         rec.terminal = T.Terminal(
             outcome="NOT_NEEDED", proof="actuator: " + detail, at=now
@@ -332,6 +340,13 @@ def _unconfirmed(rec: T.Record, now: float) -> str:
 
 def _hold(rec: T.Record, sub: str, now: float) -> None:
     since = rec.wait.since if rec.wait and rec.wait.reason == sub else now
+    if sub in REPROBED:
+        # gap-3 E2: a re-probed hold's wait is dropped by reprobe (DETECTED) and again by the next
+        # placement (PLANNED), so `since` restarted every 120 s cycle and its max age never came
+        # (769b7294 cycled six times 03:23-05:17Z, never paged). The first hold of the class is
+        # kept in close.hold_since until a non-hold outcome (release_holds).
+        held = rec.close.setdefault("hold_since", {})
+        since = min(since, float(held.setdefault(sub, since)))
     rec.substate = sub
     rec.wait = T.Wait(
         reason=sub,
@@ -339,6 +354,11 @@ def _hold(rec: T.Record, sub: str, now: float) -> None:
         eta=now + REPROBE_S if sub in REPROBED else None,
         max_age_s=T.MAX_AGE_S.get(sub),
     )
+
+
+def release_holds(rec: T.Record) -> None:
+    """A non-hold outcome ends every re-probed hold's age clock (see _hold)."""
+    rec.close.pop("hold_since", None)
 
 
 def rebucket(

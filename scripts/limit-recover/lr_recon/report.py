@@ -51,6 +51,8 @@ _SAY: Dict[str, str] = {
     "HOLD-BGWORK": "held: a background job is still running",
     "HOLD-SUBAGENTS": "held: subagents are still running",
     "HOLD-MENU": "held: a menu is open in the pane",
+    "HOLD-COMPOSER": "held: the precheck read a turn in flight or an unreadable composer",
+    "HOLD-LOAD": "held: the recycle was refused for machine load",
     "HOLD:repo-bare": "held: the checkout is a bare repository",
     "HOLD:iterm": "held: an iTerm pane cannot be relaunched in place",
     "HELD:team": "held: team lead; continued in place at the reset",
@@ -63,6 +65,8 @@ _NEXT: Dict[str, str] = {
     "HOLD-BGWORK": "moves when the job ends",
     "HOLD-SUBAGENTS": "moves when the subagents finish",
     "HOLD-MENU": "close the menu in the pane",
+    "HOLD-COMPOSER": "re-probed every 2 minutes; look at the pane if it stays held",
+    "HOLD-LOAD": "re-probed every 2 minutes",
     "HOLD:repo-bare": "move this session by hand",
     "HOLD:iterm": "relaunch this session by hand",
 }
