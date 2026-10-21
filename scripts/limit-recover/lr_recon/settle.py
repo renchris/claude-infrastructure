@@ -224,6 +224,10 @@ def settle_exit(
     if rc is None and not _rolled_back_by_its_log(rec, pr.argv_hash, text):
         # Adopted by argv, or exited before this daemon could reap it: no code is no verdict. The
         # derived phase is the truth; scoring it as a failure escalated a move that had engaged.
+        if pr.argv_hash in MOVE_ACTUATORS:
+            rec.close["exit_unknown"] = (
+                pr.argv_hash
+            )  # W11 lever 10: unknown_exit resolves it
         return "%s exited, code unknown — the phase decides" % pr.argv_hash
     if rec.phase in ("MOVED", "ENGAGED"):
         # The phase table already proved the move from disk; an actuator exiting non-zero after
@@ -282,6 +286,60 @@ def rolled_back(paths: T.Paths, rec: T.Record, now: float) -> str:
         if _rolled_back_by_its_log(rec, a, text):
             return "rolled back, nothing scored it: " + _score(rec, a, None, text, now)
     return ""
+
+
+def unknown_exit(paths: T.Paths, rec: T.Record, now: float) -> str:
+    """W11 lever 10 (owner handed over by W2): a move whose exit had no code and whose actlog does
+    NOT end NOTMOVED leaves a PRE-MOVE/None record that nothing scores. RECON-DEFECT paged it every
+    pass with nothing acting. Past the HOLDER_GONE_QUIET_S window, with no live actuator (the
+    caller's check), confirmed and exit_typed_by_me unset and the phase still PRE-MOVE, it is
+    re-offered as a counted TRANSIENT retry (the attempt bumped, as _score does) plus one page
+    (close.unknown_exit_retries, read by the reporter). The safety of the re-offer is a HYPOTHESIS,
+    guarded by the same predicates as rolled_back: no confirm and no typed /exit means the session
+    was never handed over. Returns the event detail ('' = not settled)."""
+    a = rec.close.get("exit_unknown")
+    if not a:
+        return ""
+    t = rec.timeline
+    if (
+        rec.phase != "PRE-MOVE"
+        or t.confirmed is not None
+        or t.exit_typed_by_me is not None
+    ):
+        rec.close.pop(
+            "exit_unknown", None
+        )  # the move went on: the phase decided, as promised
+        return ""
+    if (
+        not rec.open
+        or rec.substate is not None
+        or rec.wait is not None
+        or (rec.next_eligible_at or 0) > now
+        or rec.escalated
+        or quiet_for(rec, "busy", now) < HOLDER_GONE_QUIET_S
+    ):
+        return ""
+    text = tail(actlog(paths, rec, str(a)))
+    if _rolled_back_by_its_log(rec, str(a), text):
+        return ""  # rolled_back owns a NOTMOVED log
+    rec.close.pop("exit_unknown", None)
+    if a in MOVE_ACTUATORS:
+        rec.attempt += (
+            1  # one move spawn per (sid, attempt): the retry is a new attempt
+        )
+        rec.confirm_len = rec.timeline.confirmed = None
+    detail = "%s exited with no code and no NOTMOVED verdict; re-offered" % a
+    fp = classify.fingerprint(rec.phase, "TRANSIENT", "unknown-exit " + str(a), -1, "")
+    d = classify.apply_failure(rec, "TRANSIENT", fp, detail, now)
+    rec.substate, rec.wait = "BACKOFF", None
+    rec.close["unknown_exit_retries"] = (
+        int(rec.close.get("unknown_exit_retries", 0)) + 1
+    )
+    return "%s → %s/BACKOFF (unknown-exit retry %d)" % (
+        detail,
+        d,
+        rec.close["unknown_exit_retries"],
+    )
 
 
 def _score(

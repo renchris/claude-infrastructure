@@ -28,6 +28,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from lr_recon import (
     act,
+    admit,
     capped,
     census,
     clock,
@@ -66,6 +67,7 @@ from lr_recon.clock import (
     Clock,
     Heartbeat,
     bind_child_hook,
+    bind_step_hook,
     bind_steps,
     run_bounded,
     set_phase,
@@ -178,6 +180,16 @@ class Ctx:
         self.orphans_paged = False
         self.pass_exc_streak = 0
         self.pass_exc_paged_at = 0.0
+        # W11 (B3): the deadline's mode (recon/deadline.off|.shadow, re-read every pass), the lane's
+        # occupancy (recounted at each dispatch, incremented per admission: never pass-scoped), the
+        # slot-priority lease the move lane obeys, and the last pass's length that sizes it
+        self.deadline = "on"
+        self.deadline_used = 0
+        self.deadline_per_acct: Dict[str, int] = {}
+        self.slot_priority_want = ""
+        self.slot_priority_at = 0.0
+        self.last_pass_s = 0.0
+        self.hard_paged: Optional[float] = None
 
     def wall(self) -> float:
         """B7 R2: the instant a decision or an action is taken (``now`` is the census instant).
@@ -566,6 +578,25 @@ def _wakes(ctx: Ctx, snap: T.Snapshot, facts: Dict[str, T.Fact], now: float) -> 
                 tel.gate("wake", "pane-unseen")
             continue
         ok, _why = ctx.admission.pace_wake(rec.sid, rec.source_acct, now)
+        if not ok:
+            dl = _own(ctx, "deadline", "off")
+            if dl != "off" and admit.overdue(rec, now):
+                # W11: a wake past due + W_wake skips the pacer (its slot is still charged)
+                if dl == "shadow":
+                    _deadline_shadow(ctx, rec, "wake", _why)
+                else:
+                    ctx.admission.pacer_take(
+                        rec.sid, rec.source_acct, ctx.admission._t_dec(now)
+                    )
+                    _event(
+                        ctx.paths,
+                        "wake-deadline",
+                        rec.sid,
+                        rec.record_id,
+                        "%s refused it; overdue since %s"
+                        % (_why, report._hm(admit.deadline_of(rec))),
+                    )
+                    ok = True
         if not ok:
             if tel is not None:
                 tel.gate("wake", _why)
@@ -964,6 +995,7 @@ def _derive(
             continue
         act.adopt(rec, snap)
         _note_activity(ctx, rec, snap, now)
+        _deadline_derive(ctx, rec, now)
         was, assign_id = rec.substate, rec.assign_id or rec.record_id
         proof = (
             ""
@@ -1061,6 +1093,10 @@ def _derive(
             detail = settle.rolled_back(ctx.paths, rec, now)
             if detail:
                 _event(ctx.paths, "rolled-back", rec.sid, rec.record_id, detail)
+            else:
+                detail = settle.unknown_exit(ctx.paths, rec, now)  # W11 lever 10
+                if detail:
+                    _event(ctx.paths, "unknown-exit", rec.sid, rec.record_id, detail)
         if not rec.open:
             continue
         if settle.note_watcher_hold(ctx.home, rec, now):
@@ -1454,6 +1490,131 @@ def _admission_period(ctx: Ctx, snap: T.Snapshot, now: float) -> None:
             ctx.boots.release(sid)
 
 
+# ── W11 (B3): the per-record deadline's wiring ──────────────────────────────────────────────────
+def _deadline_derive(ctx: Ctx, rec: T.Record, now: float) -> None:
+    """Every open limited record: set its deadline once, rebase it on leaving a reset wait, and
+    note the first pass it is overdue (event ``overdue``). Never raises (F-B)."""
+    try:
+        if rec.kind != "limited":
+            return
+        admit.ensure_deadline(rec)
+        if admit.sync_deadline(rec):
+            _event(
+                ctx.paths,
+                "deadline-rebased",
+                rec.sid,
+                rec.record_id,
+                "left its reset wait: deadline %s" % report._hm(rec.deadline_at),
+            )
+        if "overdue_at" not in rec.close and admit.overdue(rec, now):
+            rec.close["overdue_at"] = now
+            d = admit.deadline_of(rec) or now
+            _event(
+                ctx.paths,
+                "overdue",
+                rec.sid,
+                rec.record_id,
+                "lane=%s age=%ds substate=%s deadline=%s"
+                % (
+                    rec.lane,
+                    int(now - (rec.timeline.detected or d)),
+                    rec.substate,
+                    report._hm(d),
+                ),
+            )
+    except Exception as e:  # noqa: BLE001 — a deadline bug must never strand every record
+        _event(ctx.paths, "deadline-error", rec.sid, rec.record_id, repr(e)[:200])
+
+
+def _deadline_lane(ctx: Ctx, now: float) -> None:
+    """Lever 3 (correctness F-A): the lane is deadline-admitted first turns that are submitted, not
+    yet ENGAGED, and admitted <= T_att ago. Not live processes: a C exits ~24 s after submitting,
+    so counting live actuators admitted 6 first turns a pass onto one account. Recounted once per
+    dispatch from the records, then incremented per admission (never pass-scoped, B7 class)."""
+    used, per = 0, {}  # type: Tuple[int, Dict[str, int]]
+    for r in ctx.records.values():
+        at = r.close.get("deadline_admitted_at")
+        if not r.open or at is None or r.phase in ("ENGAGED", "MOVED"):
+            continue
+        try:
+            if now - float(at) > admit.T_ATT_S:
+                continue  # D7: a first turn that never ENGAGES leaves the lane after T_att
+        except (TypeError, ValueError):
+            continue
+        used += 1
+        a = str(r.close.get("deadline_acct") or r.target_acct or r.source_acct)
+        per[a] = per.get(a, 0) + 1
+    ctx.deadline_used, ctx.deadline_per_acct = used, per
+
+
+def _deadline_room(ctx: Ctx, rec: T.Record) -> str:
+    """'' = room in the lane for this record's first turn, else the reason it has none."""
+    acct = rec.target_acct or rec.source_acct
+    if _own(ctx, "deadline_used", 0) >= admit.DEADLINE_WIDTH:
+        return "deadline-lane"
+    if _own(ctx, "deadline_per_acct", {}).get(acct, 0) >= admit.DEADLINE_PER_ACCT:
+        return "deadline-acct:%s" % acct
+    return ""
+
+
+def _deadline_note(ctx: Ctx, rec: T.Record, why: str, now: float) -> None:
+    """An overdue record held this pass: its blocker in close.deadline_hold (the DEADLINE page
+    names it) and a ``deadline-held`` event on change, like admit-refused."""
+    if rec.close.get("deadline_hold") != why:
+        rec.close["deadline_hold"] = why
+        _event(
+            ctx.paths,
+            "deadline-held",
+            rec.sid,
+            rec.record_id,
+            "%s (overdue %ds)" % (why, int(now - (admit.deadline_of(rec) or now))),
+        )
+
+
+def _deadline_shadow(ctx: Ctx, rec: T.Record, would: str, actual: str) -> None:
+    """recon/deadline.shadow: log the would-admit once per record per attempt, change nothing."""
+    key = "%s:%d" % (would, rec.attempt)
+    if rec.close.get("deadline_shadow") != key:
+        rec.close["deadline_shadow"] = key
+        _event(
+            ctx.paths,
+            "deadline-shadow",
+            rec.sid,
+            rec.record_id,
+            "would admit (%s); actual: %s" % (would, actual),
+        )
+
+
+def _slot_priority(ctx: Ctx) -> None:
+    """Lever 4: while an overdue A/R record waits on boot slots, keep lr_root/locks/slot-priority
+    leased (until = now + max(180 s, 2 × the last pass)); lr-move-lib.sh caps the move lane at one
+    slot while it stands. Nothing waits: remove our own file at once rather than let it lapse."""
+    root = ctx.paths.lr_root
+    if ctx.slot_priority_want:
+        w = time.time()
+        if admit.write_slot_priority(root, w, ctx.last_pass_s, ctx.slot_priority_want):
+            ctx.slot_priority_at = w
+    elif ctx.slot_priority_at:
+        ctx.slot_priority_at = 0.0
+        admit.clear_slot_priority(root)
+
+
+def _slot_priority_refresh(ctx: Ctx) -> None:
+    """clock.step's hook: refresh the lease mid-pass (at most every 30 s), so the move lane's cap
+    cannot lapse inside one long pass ("Freshness is subject-relative")."""
+    if ctx.slot_priority_want and time.time() - ctx.slot_priority_at >= 30.0:
+        _slot_priority(ctx)
+
+
+def _lstart_epoch(lstart: str) -> Optional[float]:
+    try:
+        return time.mktime(
+            time.strptime(" ".join(lstart.split()), "%a %b %d %H:%M:%S %Y")
+        )
+    except (ValueError, OverflowError):
+        return None
+
+
 def _admit(
     ctx: Ctx, rec: T.Record, which: str, snap: T.Snapshot, now: float
 ) -> Tuple[bool, str]:
@@ -1489,9 +1650,15 @@ def _admit(
         and r.sid != rec.sid
     )
     l1, l5, _l15 = os.getloadavg()
+    # W11: an overdue record's first turn may take the deadline lane (decide's overdue branch). The
+    # mode gates it (F-H): off = today's gates exactly, shadow = today's gates plus a would-admit log.
+    dl = _own(ctx, "deadline", "off")
+    od = dl != "off" and admit.overdue(rec, now)
+    room = _deadline_room(ctx, rec) if od else "no"
+    acct = rec.target_acct or rec.source_acct
     ok, why = ctx.admission.decide(
         rec.sid,
-        rec.target_acct or rec.source_acct,
+        acct,
         now,
         _active_now(snap),
         unredeemed,
@@ -1499,19 +1666,68 @@ def _admit(
         l5,
         os.cpu_count() or 1,
         rec.cohort_id,
+        overdue=od and dl == "on",
+        lane_room=not room,
     )
+    if od and room and not ok and dl == "on":
+        ctx.admission.deadline_why = room
+    if od and dl == "shadow" and not room and not ok:
+        _deadline_shadow(ctx, rec, "first turn", why)
     if not ok:
         if which in act.BOOTING:
             ctx.boots.release(rec.sid)
         return False, why
     # an idle move relaunches with no prompt (act.cmd_move adds --no-prompt), so it owes no turn
-    rec.admit_token = (
-        ctx.admission.mint_token(rec.sid, owes_prompt=rec.kind != "idle") or ""
-    )
-    # W9: mints are counted per pass (summary "mints"). Each is ≤ 30 s + the reap grace, and a pass
-    # mints at most MINTS_PER_PASS (6, the pace bucket's burst; the cap above enforces it)
+    tok = ctx.admission.mint_token(rec.sid, owes_prompt=rec.kind != "idle")
     if isinstance(ctx, Ctx):
         ctx.pass_mints += 1
+    if why == "admit:deadline" and tok is None and which in settle.MOVE_ACTUATORS:
+        # Lever 6 (efficacy 3): with no token lr-handoff re-probes the very gate this admission
+        # bypassed and can park the move (lr-handoff.sh's PARKED capacity), silently. So no A/R
+        # spawns: the pace and pacer charges stand and the record retries next pass, loudly.
+        if which in act.BOOTING:
+            ctx.boots.release(rec.sid)
+        _event(
+            ctx.paths,
+            "deadline-mint-failed",
+            rec.sid,
+            rec.record_id,
+            "%s on %s: no admission token minted; not spawned, retried next pass"
+            % (which, acct),
+        )
+        return False, "deadline-mint-failed"
+    rec.admit_token = tok or ""
+    # W9: mints are counted per pass (summary "mints"). Each is ≤ 30 s + the reap grace, and a pass
+    # mints at most MINTS_PER_PASS (6, the pace bucket's burst; the cap above enforces it)
+    if why == "admit:deadline":
+        t_dec = max(now, ctx.wall()) if isinstance(ctx, Ctx) else now
+        rec.close["deadline_admitted_at"] = t_dec
+        rec.close["deadline_acct"] = acct
+        ctx.deadline_used = _own(ctx, "deadline_used", 0) + 1
+        per = _own(ctx, "deadline_per_acct", {})
+        per[acct] = per.get(acct, 0) + 1
+        ctx.deadline_per_acct = per
+        # F-K: the spawn row carries no admission reason, so the lane's admissions are evented
+        _event(
+            ctx.paths,
+            "deadline-admit",
+            rec.sid,
+            rec.record_id,
+            "%s on %s lane_used=%d/%d acct_used=%d/%d memory=%s"
+            % (
+                which,
+                acct,
+                ctx.deadline_used,
+                admit.DEADLINE_WIDTH,
+                per[acct],
+                admit.DEADLINE_PER_ACCT,
+                ctx.admission.hard.state,
+            ),
+        )
+    else:
+        rec.close.pop("deadline_admitted_at", None)
+        rec.close.pop("deadline_acct", None)
+    rec.close.pop("deadline_hold", None)
     return True, why
 
 
@@ -1556,16 +1772,32 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
     wake_ok = ctx.clock.wake_guard_ok()
     _admission_period(ctx, snap, now)
     tel = _tel(ctx)
+    dl = _own(ctx, "deadline", "off")
+    ctx.admission.begin_pass(now)  # W11 lever 5: the probe at most once per pass
+    _deadline_lane(ctx, now)
+    ctx.slot_priority_want = ""
+    inf = float("inf")
 
-    def refused(gate: str, why: str) -> None:
+    def refused(gate: str, why: str, rec: Optional[T.Record] = None) -> None:
         # B6: EVERY refusal counts, each pass; the events below stay on change only
         if tel is not None:
             tel.gate(gate, why)
+        if rec is not None and dl != "off" and admit.overdue(rec, now):
+            _deadline_note(ctx, rec, "%s:%s" % (gate, why), now)
 
-    for rec in sorted(
-        ctx.records.values(),
-        key=lambda r: (r.kind != "limited", r.timeline.detected or now),
-    ):
+    def order(r: T.Record) -> Tuple[bool, float, float]:
+        # W11: earliest deadline first (the switch gates the sort too, F-H); before, oldest death
+        # first, which a re-offered weekly-reset strand jumped by hours (efficacy 8)
+        if dl == "off":
+            return (r.kind != "limited", 0.0, r.timeline.detected or now)
+        admit.sync_deadline(r)
+        return (
+            r.kind != "limited",
+            admit.deadline_of(r) or inf,
+            r.timeline.detected or now,
+        )
+
+    for rec in sorted(ctx.records.values(), key=order):
         step()
         t_dec = max(now, ctx.wall())  # B7 R2: this record's decision instant
         res = T.PhaseResult(
@@ -1584,22 +1816,22 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
             # B7 R4: this is an EVIDENCE wait, so it reads the census instant, never t_dec. C's
             # go-ahead is this census's UNPROMPTED and nothing re-reads the transcript before it
             # types; a later wall reading cannot make that census newer (B7 reviews, finding 1).
-            refused("grace", "C")
+            refused("grace", "C", rec)
             continue
         if _c_rc5_landed(ctx, rec, which, t_dec):
-            refused("grace", "c-rc5-landed")
+            refused("grace", "c-rc5-landed", rec)
             continue
         ok, why = act.may_actuate(
             ctx.paths, mode, rec, which, snap, now, wake_ok, running, act.workers_cap()
         )
         if not ok:
-            refused("may", why)  # this refusal had no event at all
+            refused("may", why, rec)  # this refusal had no event at all
             continue
         if which in act.CLAIMED_ACTUATORS:
             # the claim before the token (act.hold_claim): another live driver keeps the session
             ok, why = act.hold_claim(ctx.paths, rec, _alive, now)
             if not ok:
-                refused("claim", why)
+                refused("claim", why, rec)
                 if rec.close.get("claim_held") != why:
                     rec.close["claim_held"] = why
                     holder = store.read_claim(ctx.paths, rec.sid)
@@ -1623,6 +1855,17 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
             # a standing refusal read "the reconciler continues" for as long as it stood.
             terms = ctx.admission.last_terms if why in ("restore-r", "drip") else ""
             refused("admit", why)
+            if dl != "off" and admit.overdue(rec, now):
+                # the overdue branch fell through: say why (lane full, hard stop) beside the gate
+                dwhy = ctx.admission.deadline_why
+                _deadline_note(
+                    ctx, rec, "admit:%s%s" % (why, " (%s)" % dwhy if dwhy else ""), now
+                )
+                if dl == "on" and why == "boot-slots" and which in act.BOOTING:
+                    # lever 4: the move lane yields while this overdue A/R waits on a boot slot
+                    ctx.slot_priority_want = (
+                        "overdue %s waits on boot slots" % rec.sid[:8]
+                    )
             if rec.close.get("admit_refused") != why:
                 rec.close["admit_refused"] = why
                 _event(
@@ -1651,7 +1894,7 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
             rec.attempt += 1
         argv = _command(ctx, rec, which)
         if not argv:
-            refused("argv", "empty")
+            refused("argv", "empty", rec)
             continue
         pane = snap.panes.get("%d:%d" % rec.pane) if rec.pane else None
         if which in settle.MOVE_ACTUATORS:
@@ -1695,6 +1938,8 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
             )
         running += 1
         n += 1
+    if isinstance(ctx, Ctx):
+        _slot_priority(ctx)
     return n
 
 
@@ -1840,6 +2085,7 @@ def _report(ctx: Ctx, mode: str, now: float, snap: Optional[T.Snapshot] = None) 
         outbox=_own(ctx, "page_outbox", False),
         sends=report.SENDS_PER_PASS if caps else None,
     )
+    adm = _own(ctx, "admission", None)
     by_cid: Dict[str, List[T.Record]] = {}
     for r in ctx.records.values():
         by_cid.setdefault(r.cohort_id, []).append(r)
@@ -1856,8 +2102,24 @@ def _report(ctx: Ctx, mode: str, now: float, snap: Optional[T.Snapshot] = None) 
                 step()
                 rep.immediate_pages(cohort, r)
                 rep.max_age_page(cohort, r)
+                _w11_record_pages(ctx, rep, cohort, r, snap, now)
+            # W11 lever 8: one DEADLINE page per cohort (after max_age_page, whose latch excludes
+            # its members), the drip's page, and the SLO page that had no caller
+            if snap is not None:
+                live = {r.sid for r in recs if act.live_procs(r, snap)}
+                rep.deadline_page(cohort, recs, live)
+            if adm is not None and cid in adm.drip_pages:
+                rep.drip_page(cohort)
+            if any(r.kind == "limited" for r in recs):
+                rep.slo_page(cohort, recs)
             report.write_cohort(ctx.paths, cohort, recs, now)
         except Exception as e:  # a surface failure never stops the loop
+            _event(ctx.paths, "report-error", detail=repr(e)[:200])
+    if adm is not None:
+        adm.drip_pages = []
+        try:
+            _hard_stop_report(ctx, rep, now)
+        except Exception as e:  # noqa: BLE001
             _event(ctx.paths, "report-error", detail=repr(e)[:200])
     try:
         rep.flush_outbox(immediate_only=True)
@@ -1886,6 +2148,66 @@ def _report(ctx: Ctx, mode: str, now: float, snap: Optional[T.Snapshot] = None) 
         store.atomic_write_text(ctx.paths.p("readout.line"), line)
     except Exception as e:
         _event(ctx.paths, "report-error", detail=repr(e)[:200])
+
+
+def _w11_record_pages(
+    ctx: Ctx,
+    rep: report.Reporter,
+    cohort: T.Cohort,
+    r: T.Record,
+    snap: Optional[T.Snapshot],
+    now: float,
+) -> None:
+    """Per record: classify's BACKOFF_PAGE, an unknown-exit re-offer, and (lever 9) an actuator
+    alive past T_att — paged once, never killed. Only our own actuators count: role "actuator", not
+    adopted by argv (a watcher or an adopted descendant outlives its attempt by design)."""
+    rep.backoff_page(cohort, r)
+    rep.unknown_exit_page(cohort, r)
+    if snap is None or not r.open or r.kind != "limited":
+        return
+    for p in act.live_procs(r, snap):
+        if p.role != "actuator" or p.argv_hash in ("", "adopted"):
+            continue
+        t0 = _lstart_epoch(p.lstart)
+        if t0 is not None and now - t0 > admit.T_ATT_S:
+            rep.attempt_page(cohort, r, p.pid, p.lstart, now - t0)
+
+
+def _hard_stop_report(ctx: Ctx, rep: report.Reporter, now: float) -> None:
+    """The hard stop's own events (trip, release, unknown-release), and lever 7's page: a trip that
+    has lasted W_hard while overdue records wait pages once per trip, "deadline bypass off"."""
+    hs = ctx.admission.hard
+    waiting = [
+        r
+        for r in ctx.records.values()
+        if r.open and r.phase not in ("ENGAGED", "MOVED") and admit.overdue(r, now)
+    ]
+    if waiting and hs.tripped and _own(ctx, "deadline", "off") == "on":
+        # decide() reads the stop only for an overdue member with lane room; a trip judged on a
+        # stale read would page a stop that has since cleared, so read it once more here
+        hs.check()
+    for ev, detail in hs.events:
+        _event(ctx.paths, ev, detail=detail)
+    hs.events = []
+    since = hs.tripped_since()
+    if since is None:
+        ctx.hard_paged = None
+        return
+    if ctx.hard_paged == since or time.time() - since < admit.DEADLINE_HARD_S:
+        return
+    if not waiting:
+        return
+    ctx.hard_paged = since
+    rep.daemon_page(
+        "DEADLINE-OFF",
+        "deadline bypass off: %s for %d min while %d overdue record(s) wait; the bound is today's "
+        "drip plus slots until it releases"
+        % (
+            "; ".join(str(t["why"]) for t in hs.tripped.values()),
+            int((time.time() - since) // 60),
+            len(waiting),
+        ),
+    )
 
 
 REFIRE_SUFFIX = ".refire.json"
@@ -2034,6 +2356,13 @@ def _invariant(ctx: Ctx, snap: T.Snapshot, now: Optional[float] = None) -> int:
         if r.phase in ("ENGAGED", "MOVED"):
             continue
         if (
+            r.phase == "PRE-MOVE"
+            and r.substate is None
+            and r.close.get("exit_unknown")
+            and not r.escalated
+        ):
+            continue  # W11 lever 10: settle.unknown_exit owns it and re-offers it past its window
+        if (
             r.phase in ("EXITING", "PRE-MOVE")
             and r.substate is None
             and (now or time.time()) - float(r.close.get("busy_at", 0)) < ACTIVE_FAST_S
@@ -2178,6 +2507,7 @@ def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
         tel.pass_begin(seq, _own(ctx, "slept", 0.0))
     out: Optional[Dict[str, Any]] = None
     exc: Optional[BaseException] = None
+    t0 = time.time()
     try:
         with transcript.pass_index(getattr(ctx, "projects", None)):
             out = _run_pass(ctx, force_observe)
@@ -2186,6 +2516,10 @@ def run_pass(ctx: Ctx, force_observe: bool = False) -> Dict[str, Any]:
         exc = e
         raise
     finally:
+        if isinstance(ctx, Ctx):
+            ctx.last_pass_s = max(
+                0.0, time.time() - t0
+            )  # W11: sizes the slot-priority lease
         if tel is not None:
             tel.pass_end(out, exc)
         set_phase("idle", seq)
@@ -2203,6 +2537,10 @@ def _run_pass(ctx: Ctx, force_observe: bool) -> Dict[str, Any]:
     ctx.pass_clock = read_pass_clock(paths)
     ctx.admission.pacer_on_wall = ctx.pass_clock != "pass"
     classify.read_switches(paths.root)
+    # W11: recon/deadline.off | recon/deadline.shadow, re-read every pass (no reload)
+    ctx.deadline = admit.deadline_mode(
+        paths.p("deadline.off"), paths.p("deadline.shadow")
+    )
     now = time.time()
     _ph(ctx, "observe")
     # rig_keep: a sid the daemon holds a record for stays visible mid-move (observe._sessions)
@@ -2289,6 +2627,11 @@ def _run_pass(ctx: Ctx, force_observe: bool) -> Dict[str, Any]:
         _ph(ctx, "dispatch")
         spawned = _dispatch(ctx, snap, mode, now)
         ctx.actuations += spawned
+    elif ctx.slot_priority_want or ctx.slot_priority_at:
+        ctx.slot_priority_want = (
+            ""  # no dispatch, no waiter: the move lane gets its slots back
+        )
+        _slot_priority(ctx)
     step()
     if tel is not None:
         # before _report (cohort_status's in_state_s reads the state stamp); stamps ride save_records
@@ -2612,6 +2955,9 @@ def daemon(ctx: Ctx) -> int:
     ctx.keeper = True  # after the flock: the one process whose claims these are (S-2)
     hb.start()
     bind_steps(hb)  # run_pass's step() calls advance hb, from this thread only
+    bind_step_hook(
+        lambda: _slot_priority_refresh(ctx)
+    )  # W11 lever 4: the lease keeps pace
     ctx.telem = _make_telemetry(ctx, me, prev)
     if ctx.telem is not None:
         bind_child_hook(ctx.telem.child)
@@ -2671,6 +3017,7 @@ def daemon(ctx: Ctx) -> int:
             pass
         bind_child_hook(None)
         bind_steps(None)
+        bind_step_hook(None)
         try:
             if ctx.reporter is not None and ctx.page_outbox:
                 ctx.reporter.begin_pass(outbox=True, sends=None)

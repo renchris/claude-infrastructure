@@ -376,6 +376,25 @@ def step() -> None:
     loop = _LOOP
     if loop is not None and loop[1] == threading.get_ident():
         loop[0].advance()
+    hook = _STEP_HOOK
+    if hook is not None and hook[1] == threading.get_ident():
+        try:
+            hook[0]()
+        except Exception:  # noqa: BLE001 — a refresher's failure must never stop the pass
+            pass
+
+
+# W11 (B3 lever 4): work that must keep pace with the pass, not wait for its end. The reconciler's
+# slot-priority file carries an `until` that the move lane obeys; written once per pass it lapsed
+# inside one long pass ("Freshness is subject-relative"), so each step may refresh it. The hook is
+# the caller's (rate-limited there), runs on the binding thread only, and never raises.
+_STEP_HOOK: Optional[Tuple[Callable[[], None], int]] = None
+
+
+def bind_step_hook(fn: Optional[Callable[[], None]]) -> None:
+    """Run ``fn`` at every ``step()`` of the calling thread; None unbinds."""
+    global _STEP_HOOK
+    _STEP_HOOK = None if fn is None else (fn, threading.get_ident())
 
 
 def declare_child(bound_s: float) -> None:

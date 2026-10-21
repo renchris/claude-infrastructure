@@ -354,9 +354,13 @@ class Sim:
             pat(mock.patch.object(plan, "assign_many", lambda rows, run=None: 0))
             pat(mock.patch.object(plan, "unassign", lambda assign_id, run=None: 0))
             pat(mock.patch.object(act, "spawn", self.spawn))
+            # W11 lever 6: an overdue A/R spawns only with the token its admission minted, so the
+            # Sim mints one (a path nothing reads: spawn is the Sim's own)
             pat(
                 mock.patch.object(
-                    Admission, "mint_token", lambda adm, sid, owes_prompt=True: None
+                    Admission,
+                    "mint_token",
+                    lambda adm, sid, owes_prompt=True: "/sim/token/" + sid,
                 )
             )
             pat(mock.patch.dict(act.EXIT_CODES, clear=True))
@@ -656,8 +660,11 @@ class SimCase(unittest.TestCase):
             place_rc=lambda p: 124 if p < answer else 0,
             probe_rc=lambda p: admit.RC_TIMEOUT if p == answer else 0,
         )
+        # W11: six 120 s --place timeouts carry pass 6 past the records' 600 s deadline, where an
+        # overdue first turn skips the probe by design (test_deadline D3/D4). This case is about
+        # the probe's own timeout before the deadline, so the soft window is widened here.
         subs: List[str] = []
-        with s.patched():
+        with s.patched(), mock.patch.dict(os.environ, {"LR_DEADLINE_SOFT_S": "36000"}):
             ctx = s.make_ctx()
             s.run(
                 ctx,

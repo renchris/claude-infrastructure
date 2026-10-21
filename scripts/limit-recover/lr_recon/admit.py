@@ -32,15 +32,19 @@ so the drip's bound holds at any load.
 State is plain attributes and every external effect (the bash library, the environment) is injected.
 """
 
+import atexit
+import calendar
+import ctypes
 import hashlib
+import json
 import os
 import re
 import shlex
 import subprocess
 import time
-from typing import Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
-from lr_recon.clock import run_bounded
+from lr_recon.clock import atomic_write, run_bounded
 
 # argv -> (rc, stdout). rc < 0 means the runner itself failed: RC_SPAWN_ERROR or RC_TIMEOUT.
 Runner = Callable[[List[str]], Tuple[int, str]]
@@ -98,6 +102,462 @@ def jitter_s(sid: str) -> float:
     return float(int(digest[:8], 16) % (JITTER_MAX_S + 1))
 
 
+# ── W11 (B3): the per-record deadline ────────────────────────────────────────────────────────────
+# A LIMITED record carries deadline_at = timeline.detected + W_soft. Past it the record is OVERDUE
+# and its first turn skips the soft gates (restore-r, the pace and the pacer, which are still
+# charged, the probe and its drip) inside a lane of width D, with a per-account cap, while the hard
+# stop reads clear. A full lane or a tripped stop only removes the bypass: the call falls through to
+# today's gates unchanged, so an overdue record is never treated worse than today. Every HARD gate
+# runs before decide() and none of them is touched (design §3). No term here reads the load average.
+# Kill switches, read every pass: recon/deadline.off (today's gates exactly), recon/deadline.shadow
+# (log would-admit only).
+DEADLINE_SOFT_S = (
+    600.0  # W_soft: the move lane's soft gates bind for 10 min after detection
+)
+DEADLINE_WAKE_S = 300.0  # W_wake: a reset wake's own clock, from its due time
+DEADLINE_HARD_S = (
+    900.0  # W_hard: an overdue record (and a hard-stop trip) pages this long past
+)
+DEADLINE_WIDTH = (
+    6  # D: deadline first turns submitted and not yet ENGAGED (BootSlots.START)
+)
+DEADLINE_PER_ACCT = (
+    3  # of which at most this many on one target account (correctness F-A)
+)
+T_ATT_S = 900.0  # the attempt budget: a lane member leaves D after it, an actuator past it pages
+WAKE_AFTER_S = (
+    120.0  # __main__.WAKE_AFTER_S: a reset wake is due at eta + this + its jitter
+)
+WAKE_SUBSTATES = ("WAIT_RESET", "HELD:team")
+# the hard stop (positive evidence of a physical limit only; unknown is never a stop)
+SEG_HARD_PCT = (
+    60.0  # compressor-sentinel pct that trips; release needs <= SEG_HARD_PCT - 10
+)
+PRESSURE_HARD = 4  # kern.memorystatus_vm_pressure_level critical
+THERMAL_HARD = 3  # thermal 2 is this box's steady state at 15/core (measured): 2 would be a load gate
+SENTINEL_FRESH_S = 60.0
+RELEASE_GAP_S = 30.0  # a trip releases after two clear reads at least this far apart
+UNKNOWN_RELEASE_S = (
+    300.0  # a tripped source whose reads turn unknown releases after this
+)
+SLOT_PRIORITY = (
+    "slot-priority"  # under lr_root/locks/: the move lane caps itself while it stands
+)
+SLOT_YIELD_OFF = (
+    "slot-yield.off"  # under lr_root/locks/: the move lane ignores the file
+)
+SLOT_PRIORITY_MIN_S = 180.0
+
+
+def _env(env: Optional[Mapping[str, str]]) -> Mapping[str, str]:
+    """F-B 1: None is the process environment, never a missing attribute on every pass."""
+    return os.environ if env is None else env
+
+
+def _env_float(env: Optional[Mapping[str, str]], key: str, default: float) -> float:
+    try:
+        val = float(_env(env).get(key, "") or default)
+    except (TypeError, ValueError):
+        return default
+    return val if val > 0 else default
+
+
+def _num(v: Any) -> Optional[float]:
+    """A sentinel field as a number, or None: a torn, blank, bool or string field is no reading."""
+    if isinstance(v, bool) or v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        return float(str(v).strip())
+    except ValueError:
+        return None
+
+
+def deadline_mode(
+    off_file: str, shadow_file: str, env: Optional[Mapping[str, str]] = None
+) -> str:
+    """'off' | 'shadow' | 'on'. A file in recon/ wins (operator, read every pass, no reload)."""
+    e = _env(env)
+    try:
+        if os.path.exists(off_file) or e.get("LR_DEADLINE") == "off":
+            return "off"
+        if os.path.exists(shadow_file) or e.get("LR_DEADLINE") == "shadow":
+            return "shadow"
+    except (OSError, TypeError, ValueError):
+        return "off"  # an unreadable switch is today's gates, never a bypass
+    return "on"
+
+
+def ensure_deadline(rec: Any, env: Optional[Mapping[str, str]] = None) -> bool:
+    """Set once: detected + W_soft. Never reset by an attempt, a hop or a restart (REPORT §5).
+    Returns whether it was set now. Idle moves get none. Never raises."""
+    try:
+        if rec.kind == "limited" and rec.deadline_at is None and rec.timeline.detected:
+            rec.deadline_at = float(rec.timeline.detected) + _env_float(
+                env, "LR_DEADLINE_SOFT_S", DEADLINE_SOFT_S
+            )
+            return True
+    except (AttributeError, TypeError, ValueError):
+        pass
+    return False
+
+
+def wake_due(rec: Any, wake_after_s: float = WAKE_AFTER_S) -> Optional[float]:
+    """When a reset wake is due (_wakes' own test), or None: not a wake, or a reset nobody knows."""
+    w = rec.wait
+    if (
+        rec.phase != "PRE-MOVE"
+        or rec.substate not in WAKE_SUBSTATES
+        or w is None
+        or w.detail
+        == "wait-data"  # a strand plan.movers re-offers: a mover, not a wake
+        or w.eta is None
+    ):
+        return None
+    return float(w.eta) + (
+        0.0 if w.detail == "stay" else wake_after_s + jitter_s(rec.sid)
+    )
+
+
+def sync_deadline(rec: Any, env: Optional[Mapping[str, str]] = None) -> bool:
+    """Efficacy 8: a record that leaves a reset wait for a move takes max(deadline_at, wake_due +
+    W_wake), the same treatment as a sleep. Without it a weekly-reset strand re-offered by
+    plan.movers came back overdue by hours and jumped every fresh detection. The wake's due time
+    is remembered while it waits (close.wake_due) and applied once it has left. Never raises."""
+    try:
+        due = wake_due(rec)
+        if due is not None:
+            rec.close["wake_due"] = due
+            return False
+        last = rec.close.get("wake_due")
+        if last is None:
+            return False
+        rec.close.pop("wake_due", None)
+        new = float(last) + _env_float(env, "LR_DEADLINE_WAKE_S", DEADLINE_WAKE_S)
+        if rec.kind == "limited" and (rec.deadline_at is None or rec.deadline_at < new):
+            rec.deadline_at = new
+            return True
+    except (AttributeError, TypeError, ValueError):
+        pass
+    return False
+
+
+def deadline_of(
+    rec: Any,
+    env: Optional[Mapping[str, str]] = None,
+    wake_after_s: float = WAKE_AFTER_S,
+) -> Optional[float]:
+    """The record's deadline: a reset wake's due + W_wake while it waits on a reset, else
+    deadline_at (or detected + W_soft before ensure_deadline has run). None: no deadline (idle,
+    terminal, or a reset nobody knows). Never raises (F-B): an unreadable record has none."""
+    try:
+        if rec.terminal is not None or rec.kind != "limited":
+            return None
+        if rec.phase == "PRE-MOVE" and rec.substate in WAKE_SUBSTATES:
+            due = wake_due(rec, wake_after_s)
+            w = rec.wait
+            if due is not None:
+                return due + _env_float(env, "LR_DEADLINE_WAKE_S", DEADLINE_WAKE_S)
+            if w is None or w.detail != "wait-data":
+                return None  # waiting on a reset nobody knows: physics, not a gate
+        if rec.deadline_at is not None:
+            return float(rec.deadline_at)
+        d = rec.timeline.detected
+        return (
+            float(d) + _env_float(env, "LR_DEADLINE_SOFT_S", DEADLINE_SOFT_S)
+            if d
+            else None
+        )
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def overdue(rec: Any, now: float, env: Optional[Mapping[str, str]] = None) -> bool:
+    """Past its deadline. Unknown (any error) is NOT overdue: the bypass needs evidence."""
+    d = deadline_of(rec, env)
+    try:
+        return d is not None and float(now) >= d
+    except (TypeError, ValueError):
+        return False
+
+
+# ── the hard stop: read in-process, never forks, never raises ────────────────────────────────────
+_LIBC: List[Any] = []
+_THERM_TOK: List[Optional[int]] = [None]
+
+
+def _libc() -> Any:
+    if not _LIBC:
+        _LIBC.append(ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True))
+    return _LIBC[0]
+
+
+def _thermal_cancel() -> None:
+    tok = _THERM_TOK[0]
+    _THERM_TOK[0] = None
+    if tok is not None:
+        try:
+            _libc().notify_cancel(tok)
+        except Exception:  # noqa: BLE001 — at exit nothing may raise
+            pass
+
+
+def thermal_level() -> Optional[int]:
+    """The thermal pressure notify state (0 nominal … 3 trapping), None when unreadable. F-B: the
+    token is registered ONCE per process, with argtypes/restype set, and cancelled at exit; a
+    per-call register leaked one notify port per pass."""
+    try:
+        lib = _libc()
+        if _THERM_TOK[0] is None:
+            lib.notify_register_check.argtypes = [
+                ctypes.c_char_p,
+                ctypes.POINTER(ctypes.c_int),
+            ]
+            lib.notify_register_check.restype = ctypes.c_uint32
+            lib.notify_get_state.argtypes = [
+                ctypes.c_int,
+                ctypes.POINTER(ctypes.c_uint64),
+            ]
+            lib.notify_get_state.restype = ctypes.c_uint32
+            lib.notify_cancel.argtypes = [ctypes.c_int]
+            lib.notify_cancel.restype = ctypes.c_uint32
+            tok = ctypes.c_int(0)
+            if lib.notify_register_check(
+                b"com.apple.system.thermalpressurelevel", ctypes.byref(tok)
+            ):
+                return None
+            _THERM_TOK[0] = int(tok.value)
+            atexit.register(_thermal_cancel)
+        st = ctypes.c_uint64(0)
+        if lib.notify_get_state(_THERM_TOK[0], ctypes.byref(st)):
+            return None
+        return int(st.value)
+    except Exception:  # noqa: BLE001 — unreadable is unknown, never a stop
+        return None
+
+
+def pressure_level() -> Optional[int]:
+    """kern.memorystatus_vm_pressure_level: 1 normal, 2 warn, 4 critical; None when unreadable."""
+    try:
+        v, sz = ctypes.c_int(0), ctypes.c_size_t(ctypes.sizeof(ctypes.c_int))
+        if _libc().sysctlbyname(
+            b"kern.memorystatus_vm_pressure_level",
+            ctypes.byref(v),
+            ctypes.byref(sz),
+            None,
+            ctypes.c_size_t(0),
+        ):
+            return None
+        return int(v.value)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+class HardStop:
+    """'' = no positive evidence of a physical limit. Unknown is NOT a stop (operator premise) and is
+    named 'unknown', never 'ok'. Three sources, each with its own release rule ("release != !trip"):
+      sentinel  trips on strk > 0 or pct >= SEG_HARD_PCT; a clear read is fresh, strk 0, pct <= 50;
+      pressure  trips at level >= PRESSURE_HARD; a clear read is any lower level;
+      thermal   trips at level >= THERMAL_HARD; a clear read is any lower level.
+    A tripped source releases after two clear reads >= RELEASE_GAP_S apart. A tripped source whose
+    reads turn unknown (a stale sentinel, a failed sysctl) stays tripped for at most
+    UNKNOWN_RELEASE_S, then releases with a ``hardstop-unknown-release`` event (correctness F-I:
+    the sentinel log goes stale for hours, and a release that needed a fresh row pinned the bypass
+    off). Every read is in-process: no fork, no subprocess, no timeout of ours to misread."""
+
+    SOURCES = ("sentinel", "pressure", "thermal")
+
+    def __init__(
+        self,
+        env: Optional[Mapping[str, str]] = None,
+        sentinel_log: Optional[str] = None,
+        pressure: Optional[Callable[[], Optional[int]]] = None,
+        thermal: Optional[Callable[[], Optional[int]]] = None,
+        wall: Optional[Callable[[], float]] = None,
+    ) -> None:
+        self.env = env
+        self.sentinel_log = sentinel_log
+        self.pressure = pressure or pressure_level
+        self.thermal = thermal or thermal_level
+        self.wall = wall or time.time
+        self.state = "unknown"
+        self.tripped: Dict[
+            str, Dict[str, Any]
+        ] = {}  # source -> {since, why, clear_at, unknown_at}
+        self.events: List[Tuple[str, str]] = []  # (ev, detail), drained by the caller
+
+    def _log(self) -> str:
+        if self.sentinel_log:
+            return self.sentinel_log
+        e = _env(self.env)
+        return e.get("CC_SENTINEL_LOG") or os.path.join(
+            e.get("HOME") or os.path.expanduser("~"),
+            ".claude",
+            "logs",
+            "compressor-sentinel.jsonl",
+        )
+
+    def _sentinel(self, wall: float) -> Tuple[str, str]:
+        """('trip'|'clear'|'mid'|'unknown', why) from the last row, fresh iff its ts is <= 60 s old."""
+        try:
+            with open(self._log(), "rb") as fh:
+                fh.seek(0, os.SEEK_END)
+                size = fh.tell()
+                fh.seek(max(0, size - 4096))
+                tail = fh.read().decode("utf-8", "replace")
+            lines = [ln for ln in tail.splitlines() if ln.strip()]
+            row = json.loads(lines[-1]) if lines else None
+            if not isinstance(row, dict):
+                return "unknown", "sentinel row unreadable"
+            ts = calendar.timegm(
+                time.strptime(str(row.get("ts")), "%Y-%m-%dT%H:%M:%SZ")
+            )
+            if abs(wall - ts) > SENTINEL_FRESH_S:
+                return "unknown", "sentinel stale"
+            strk, pct = _num(row.get("strk")), _num(row.get("pct"))
+            if strk is not None and strk > 0:
+                return "trip", "compressor breach (sentinel strk %d)" % int(strk)
+            if pct is not None and pct >= SEG_HARD_PCT:
+                return "trip", "compressor %.1f%%" % pct
+            if pct is None:
+                return "unknown", "sentinel pct unreadable"
+            return ("clear" if pct <= SEG_HARD_PCT - 10 else "mid"), ""
+        except Exception:  # noqa: BLE001 — torn, blank, string or absent: unknown, never a stop
+            return "unknown", "sentinel unreadable"
+
+    @staticmethod
+    def _level(
+        fn: Callable[[], Optional[int]], hard: int, name: str
+    ) -> Tuple[str, str]:
+        try:
+            lvl = fn()
+        except Exception:  # noqa: BLE001
+            lvl = None
+        if lvl is None or isinstance(lvl, bool):
+            return "unknown", ""
+        try:
+            lvl = int(lvl)
+        except (TypeError, ValueError):
+            return "unknown", ""
+        return ("trip", "%s level %d" % (name, lvl)) if lvl >= hard else ("clear", "")
+
+    def check(self) -> str:
+        """The first tripped source's reason, or ''. Never raises (F-B)."""
+        try:
+            return self._check()
+        except Exception as e:  # noqa: BLE001
+            self.state = "unknown"
+            self.events.append(("hardstop-error", repr(e)[:160]))
+            return ""
+
+    def _check(self) -> str:
+        wall = self.wall()
+        reads = {
+            "sentinel": self._sentinel(wall),
+            "pressure": self._level(self.pressure, PRESSURE_HARD, "memory pressure"),
+            "thermal": self._level(self.thermal, THERMAL_HARD, "thermal"),
+        }
+        for src in self.SOURCES:
+            verdict, why = reads[src]
+            t = self.tripped.get(src)
+            if t is None:
+                if verdict == "trip":
+                    self.tripped[src] = {
+                        "since": wall,
+                        "why": why,
+                        "clear_at": None,
+                        "unknown_at": None,
+                    }
+                    self.events.append(("hardstop-trip", "%s: %s" % (src, why)))
+                continue
+            if verdict == "trip":
+                t.update(why=why, clear_at=None, unknown_at=None)
+            elif verdict == "clear":
+                t["unknown_at"] = None
+                if t["clear_at"] is None:
+                    t["clear_at"] = wall
+                elif wall - t["clear_at"] >= RELEASE_GAP_S:
+                    del self.tripped[src]
+                    self.events.append(
+                        ("hardstop-release", "%s: two clear reads" % src)
+                    )
+            elif verdict == "mid":
+                t.update(
+                    clear_at=None, unknown_at=None
+                )  # not over the line, not clear of it
+            else:
+                t["clear_at"] = None
+                if t["unknown_at"] is None:
+                    t["unknown_at"] = wall
+                elif wall - t["unknown_at"] >= UNKNOWN_RELEASE_S:
+                    del self.tripped[src]
+                    self.events.append(
+                        (
+                            "hardstop-unknown-release",
+                            "%s: tripped on %s, unreadable for %ds; released to unknown"
+                            % (src, t["why"], int(wall - t["unknown_at"])),
+                        )
+                    )
+        if self.tripped:
+            self.state = "tripped"
+            src = min(self.tripped, key=lambda s: self.tripped[s]["since"])
+            return "%s" % self.tripped[src]["why"]
+        known = reads["sentinel"][0] != "unknown" or reads["pressure"][0] != "unknown"
+        self.state = "ok" if known else "unknown"
+        return ""
+
+    def tripped_since(self) -> Optional[float]:
+        return min((t["since"] for t in self.tripped.values()), default=None)
+
+
+# ── slot priority: the move lane yields boot slots to overdue reconciler records ─────────────────
+def slot_priority_path(lr_root: str) -> str:
+    return os.path.join(lr_root, "locks", SLOT_PRIORITY)
+
+
+def write_slot_priority(
+    lr_root: str, now: float, last_pass_s: float, why: str
+) -> float:
+    """``until`` = now + max(180 s, 2 × the last pass): a fixed lease from the WRITE would lapse
+    inside one long pass, so the writer also refreshes it from clock.step. lr-move-lib.sh's acquire
+    caps the move lane at 1 slot while ``until`` > its own clock. Returns until (0 = not written)."""
+    try:
+        if os.path.exists(os.path.join(lr_root, "locks", SLOT_YIELD_OFF)):
+            return 0.0
+        until = float(now) + max(
+            SLOT_PRIORITY_MIN_S, 2.0 * max(0.0, float(last_pass_s))
+        )
+        atomic_write(
+            slot_priority_path(lr_root),
+            "until=%d\npid=%d\nwhy=%s\n"
+            % (int(until), os.getpid(), why.replace("\n", " ")[:120]),
+        )
+        return until
+    except (OSError, TypeError, ValueError):
+        return 0.0
+
+
+def slot_priority_until(lr_root: str) -> Optional[float]:
+    """The standing file's until, or None (absent or unreadable)."""
+    try:
+        with open(slot_priority_path(lr_root), encoding="utf-8") as fh:
+            for ln in fh:
+                if ln.startswith("until="):
+                    return float(ln[len("until=") :].strip())
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def clear_slot_priority(lr_root: str) -> bool:
+    try:
+        os.unlink(slot_priority_path(lr_root))
+        return True
+    except OSError:
+        return False
+
+
 class Admission:
     """One per ACTIVE period (§C6). ``enter_active`` freezes R and L_open; ``leave_active`` clears all."""
 
@@ -133,6 +593,17 @@ class Admission:
         self.over_at: Dict[
             str, float
         ] = {}  # cohort -> the pass that last counted a restore-r
+        # W11 (B3): the hard stop is read only on an overdue admission; a test or a caller that
+        # builds Admission directly gets the default (F-L)
+        self.hard = HardStop()
+        self.deadline_why = ""  # why the last overdue decide fell through (reset each decide)
+        self.drip_pages: List[str] = []  # cohorts whose drip opened, drained by the reporter
+        # W11 lever 5: the probe at most once per pass. pass_now is set by begin_pass; a caller that
+        # never opens a pass (a direct decide) reads the probe per call, as before
+        self.pass_now: Optional[float] = None
+        self.probe_memo: Optional[Tuple[bool, str]] = None
+        self.probe_counted: Dict[str, float] = {}  # cohort -> the pass that counted a refusal
+        self.probe_calls = 0
 
     # ── gate 1: the frozen restore budget ────────────────────────────────────────────────────
     def enter_active(
@@ -167,6 +638,29 @@ class Admission:
         self.paged.clear()
         self.over_at.clear()
         self.page_due = False
+        self.drip_pages = []  # F-L
+        self.probe_counted.clear()
+        self.probe_memo = None
+
+    def begin_pass(self, now: float) -> None:
+        """The dispatcher opens a pass (W11 lever 5). From here a REFUSING probe reading counts once
+        per pass toward DRIP_AFTER and is reused for every later candidate of the pass, so the
+        fall-through paths no longer make the pass length grow with the cohort (B2 review C3: the
+        command is sid-free, so k calls asked one question k times). An admitting reading admits
+        one member; the next candidate reads again. Semantics change, stated: the drip opens after
+        DRIP_AFTER refusing PASSES, not members."""
+        self.pass_now = now
+        self.probe_memo = None
+        self.deadline_why = ""
+
+    def _probe_pass(self, restore_r: int) -> Tuple[bool, str]:
+        if self.pass_now is not None and self.probe_memo is not None:
+            return self.probe_memo
+        self.probe_calls += 1
+        ok, why = self.probe(restore_r)
+        if self.pass_now is not None and not ok:
+            self.probe_memo = (ok, why)
+        return ok, why
 
     def restore_ok(self, active: int, unredeemed: int) -> bool:
         """``active + unredeemed + 1 <= R``: an admitted-but-unredeemed token is already on its way in."""
@@ -283,6 +777,8 @@ class Admission:
         load5: float,
         ncpu: int,
         cohort: str = "",
+        overdue: bool = False,
+        lane_room: bool = False,
     ) -> Tuple[bool, str]:
         """Apply R, the pace, the pacer, then the probe. The reason names the first gate that refused
         ("restore-r", "pace", "pacer:<acct>", "capacity", "probe-timeout", "probe-error rc=<N>", "drip");
@@ -292,6 +788,23 @@ class Admission:
         load1, load5 and ncpu are accepted for the caller's symmetry with ``enter_active``; no gate
         here reads them (REPORT §4 A4: under a load that never falls, a load gate never opens)."""
         del load1, load5, ncpu
+        self.deadline_why = ""  # F-L: never sticky across calls
+        if overdue:
+            # W11: the overdue branch first. Only with lane room and a clear hard stop does it admit;
+            # otherwise the call falls through to today's path unchanged (never worse than today).
+            if lane_room:
+                hard = self.hard.check()
+                if not hard:
+                    self.pace_ok(self.wall())
+                    self.pace_take()  # charged, never required (the bucket floors at 0)
+                    t_dec = self._t_dec(now)
+                    self.pacer_take(sid, acct, t_dec)  # charged, never refused
+                    self.last_admit_at = t_dec
+                    self.last_terms = "deadline (memory %s)" % self.hard.state
+                    return True, "admit:deadline"  # restore-r, probe and drip untouched
+                self.deadline_why = "hard:" + hard
+            else:
+                self.deadline_why = "deadline-lane"
         self.last_terms = "active %d + in flight %d + 1 vs R %s" % (
             active,
             unredeemed,
@@ -318,11 +831,15 @@ class Admission:
             return False, "pace"
         if not self.pacer_ok(acct, self._t_dec(now), sid):
             return False, "pacer:%s" % acct
-        ok, reason = (False, "restore-r") if over else self.probe(self.restore_r)
+        ok, reason = (False, "restore-r") if over else self._probe_pass(self.restore_r)
         if not ok:
             run = self.refusals.get(cohort, 0)
             if run < DRIP_AFTER:
-                self.refusals[cohort] = run + 1
+                if self.pass_now is None or self.probe_counted.get(cohort) != self.pass_now:
+                    self.probe_counted[cohort] = (
+                        self.pass_now if self.pass_now is not None else now
+                    )
+                    self.refusals[cohort] = run + 1
                 return False, reason
             # wall time, read after the probe: a pass is one ``now`` however long it runs, so a
             # pass-scoped drip clock opened at most once per pass (REPORT §3.2, axis 01 F3)
@@ -333,6 +850,7 @@ class Admission:
             if cohort not in self.paged:
                 self.paged.add(cohort)
                 self.page_due = True
+                self.drip_pages.append(cohort)  # W11 lever 8: one DRIP page per cohort
             self.last_drip_at[cohort] = wall
             reason = "admit:drip"
         else:

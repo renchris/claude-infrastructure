@@ -20,7 +20,7 @@ import subprocess
 import time
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
-from lr_recon import store
+from lr_recon import admit, store
 from lr_recon import types as T
 from lr_recon.clock import run_bounded
 
@@ -173,7 +173,17 @@ def _verdict_part(rec: T.Record) -> str:
     return "verdict=ESCALATED %s%s — next: %s" % (who(rec), err, next_action(rec))
 
 
-def next_action(rec: T.Record) -> str:
+def next_action(rec: T.Record, now: Optional[float] = None) -> str:
+    """What happens next, in words. W11: with ``now`` (passed only by the DEADLINE page) an overdue
+    record is prefixed "overdue since HH:MM: "; with no ``now`` there is no prefix, so the text never
+    depends on the clock (F-C: a wall-clock prefix broke 5 of 57 test_report tests, measured)."""
+    head = ""
+    if now is not None and rec.terminal is None and admit.overdue(rec, now):
+        head = "overdue since %s: " % _hm(admit.deadline_of(rec))
+    return head + _next_action(rec)
+
+
+def _next_action(rec: T.Record) -> str:
     if rec.terminal is not None:
         return (
             "none"
@@ -1148,6 +1158,132 @@ class Reporter:
         self._save(cohort.cid, latch)
         self._emit("MAX-AGE", cohort.cid, text)
         return text
+
+    # ── W11 (B3) pages: each latched, so each fires once (then hourly where stated) ─────────────
+    def deadline_page(
+        self, cohort: T.Cohort, records: Sequence[T.Record], live: Set[str]
+    ) -> Optional[str]:
+        """ONE page per cohort (F-D: per-record pages ran N × 55 s in one pass) for its limited
+        members overdue past deadline + W_hard and not in a live attempt (``live`` = sids with a
+        live actuator), then hourly. A member is left out when another page owns it (F-E): any
+        ``age:<record_id>:*`` latch or a close.hold_since (MAX-AGE), ESCALATED, PARKED-REBOOT
+        (boot-resume owns it, for days), wake_failed (WAKE-FAILED), plan_only and a cohort_exit stay."""
+        now = self.now()
+        latch = self._latch(cohort.cid)
+        rows = []
+        for r in sorted(records, key=lambda x: x.sid):
+            if (
+                r.kind != "limited"
+                or not r.open
+                or r.escalated
+                or r.phase in ("ENGAGED", "MOVED")
+                or r.sid in live
+                or r.plan_only
+                or r.substate == "PARKED-REBOOT"
+                or r.close.get("wake_failed")
+                or r.close.get("cohort_exit")
+                or r.close.get("hold_since")
+                or any(str(k).startswith("age:%s:" % r.record_id) for k in latch)
+            ):
+                continue
+            d = admit.deadline_of(r)
+            if d is None or now < d + admit.DEADLINE_HARD_S:
+                continue
+            err = r.last_error
+            rows.append(
+                "%s — overdue since %s (detected %s); soft gates bypassed; blocked by %s — next: %s"
+                % (
+                    who(r),
+                    _hm(d),
+                    _hm(r.timeline.detected),
+                    r.close.get("deadline_hold")
+                    or (
+                        "%s: %s" % (err.cls.lower(), err.detail[:80])
+                        if err
+                        else "nothing recorded"
+                    ),
+                    next_action(r, now),
+                )
+            )
+        if not rows:
+            return None
+        last = latch.get("deadline")
+        if isinstance(last, (int, float)) and now - last < REFIRE_S:
+            return None
+        text = "%s: %d limited session(s) past their deadline: %s" % (
+            self._head(cohort),
+            len(rows),
+            "; ".join(rows),
+        )
+        latch["deadline"] = now
+        self._save(cohort.cid, latch)
+        self._emit("DEADLINE", cohort.cid, text)
+        return text
+
+    def drip_page(self, cohort: T.Cohort) -> Optional[str]:
+        """Architecture C6: the drip "admits one per 30 s AND pages" — once per cohort."""
+        return self._once(
+            cohort.cid,
+            "drip",
+            "DRIP",
+            "%s: the capacity probe refused %d passes running; the drip now admits one first turn "
+            "per %ds — next: read cc-lr status --cohort; nothing to do unless it stands"
+            % (self._head(cohort), admit.DRIP_AFTER, int(admit.DRIP_EVERY_S)),
+        )
+
+    def backoff_page(self, cohort: T.Cohort, rec: T.Record) -> Optional[str]:
+        """classify's BACKOFF_PAGE (the 6th TRANSIENT, then every PAGE_EVERY), once per count."""
+        n = rec.close.get("backoff_page")
+        if not n or not rec.open:
+            return None
+        err = rec.last_error
+        return self._once(
+            cohort.cid,
+            "backoff:%s:%s" % (rec.record_id, n),
+            "BACKOFF",
+            "%s: %s — %s transient failures running%s — next: %s"
+            % (
+                self._head(cohort),
+                who(rec),
+                n,
+                ", last: %s" % err.detail[:120] if err else "",
+                next_action(rec),
+            ),
+        )
+
+    def attempt_page(
+        self, cohort: T.Cohort, rec: T.Record, pid: int, lstart: str, age_s: float
+    ) -> Optional[str]:
+        """W11 lever 9: an actuator alive past T_att pages once and is NOT killed."""
+        return self._once(
+            cohort.cid,
+            "tatt:%s:%d:%s" % (rec.record_id, pid, lstart),
+            "T-ATT",
+            "%s: %s — its actuator pid %d has run %s, past the %ds attempt budget; not killed, "
+            "its boot slot stays held while it lives — next: %s"
+            % (
+                self._head(cohort),
+                who(rec),
+                pid,
+                _dur(age_s),
+                int(admit.T_ATT_S),
+                next_action(rec),
+            ),
+        )
+
+    def unknown_exit_page(self, cohort: T.Cohort, rec: T.Record) -> Optional[str]:
+        """W11 lever 10: one page per unknown-exit re-offer (it replaced a RECON-DEFECT every pass)."""
+        n = rec.close.get("unknown_exit_retries")
+        if not n:
+            return None
+        return self._once(
+            cohort.cid,
+            "unk:%s:%s" % (rec.record_id, n),
+            "RECON-DEFECT",
+            "%s: %s — its move exited with no code and no NOTMOVED verdict; re-offered as transient "
+            "retry %s (the re-offer's safety is a hypothesis) — next: %s"
+            % (self._head(cohort), who(rec), n, next_action(rec)),
+        )
 
     def slo_page(self, cohort: T.Cohort, records: Sequence[T.Record]) -> Optional[str]:
         """§7.4: 10 minutes after the last death every member is CLOSED or in a named WAIT/HOLD

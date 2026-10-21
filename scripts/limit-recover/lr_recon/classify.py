@@ -270,6 +270,10 @@ def apply_failure(rec: T.Record, cls: str, fp: str, detail: str, now: float) -> 
         n = rec.attempts_by_class[cls]
         rec.next_eligible_at = now + backoff_s(n)
         page = n == PAGE_AT or (n > PAGE_AT and (n - PAGE_AT) % PAGE_EVERY == 0)
+        if page:
+            # W11 lever 8: the disposition only ever reached an event's text and paged nobody; the
+            # reporter pages each latched count once (report.Reporter.backoff_page)
+            rec.close["backoff_page"] = n
         return "BACKOFF_PAGE" if page else "BACKOFF"
     if cls == "IMPOSSIBLE":
         return "IMPOSSIBLE"
