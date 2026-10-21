@@ -51,6 +51,12 @@ setup() {
 
   export HOME="$BATS_TEST_TMPDIR/home"
   mkdir -p "$HOME/.claude/logs"
+  # D1's C-1 cases source handoff-fire's recycle_repick, so its seams are pinned too: absent
+  # paths (the sensors fail open on absence), and the router always a fixture wrapper.
+  export CC_FIRE_CAPACITY_GATE=off CC_FIRE_HEADROOM_GATE=off
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/sweep-stamp.json"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-lock-"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/no-such-claude-accounts"
 
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   export CA_BIN="$REPO/bin/claude-accounts"
