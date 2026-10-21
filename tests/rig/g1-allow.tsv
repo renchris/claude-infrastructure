@@ -22,7 +22,6 @@ scripts/handoff-fire.sh	_it2_type_line	capped-bound-stretch	typing-echo deadline
 scripts/handoff-fire.sh	fire_engage_window	capped-bound-stretch	engagement window base x load/core / ref, clamped at FIRE_ENGAGE_TIMEOUT_MAX (480 s)
 scripts/handoff-fire.sh	rcy_recovery_packet	telemetry	load/core is written into the recovery packet's cause text
 scripts/handoff-fire.sh	capacity_gate	debt:W12	fire-path only (skipped for --recycle, `[ "$RECYCLE" = 0 ]`); its load term defaults off via ${CC_FIRE_LOAD_TERM:-off}, which no rail env sets
-scripts/handoff-fire.sh	hf_lr_admit	debt:W12	bare cc_capacity_admit (library load term on at 2.0/core); fire-path only, skipped for a recycle and when an admit token is held (C7)
 scripts/handoff-fire.sh	hf_recycle_load_bound	debt:typed-relaunch	the typed-relaunch hold's per-core bound (24/core); HOLD-LOAD never releases while load stays up (F11; W12b and the TR ruling)
 scripts/handoff-fire.sh	hf_recycle_precheck_load_bound	debt:typed-relaunch	the precheck's per-core bound (20/core) for the same typed-relaunch hold (F11)
 scripts/handoff-fire.sh	hf_recycle_load_gate	debt:typed-relaunch	holds a typed relaunch above the bound (F11; W12b and the TR ruling)
