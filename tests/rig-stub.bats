@@ -195,6 +195,7 @@ RIGLIB() { python3 "$REPO/tests/rig/rig_lib.py" "$@"; }
 }
 
 @test "W1 S2: kill-verified signals only the (pid, lstart, argv) it recorded" {
+  need_band   # eight python starts: minutes at background QoS (postland)
   R="$BATS_TEST_TMPDIR/rig"; mkdir -p "$R"
   /bin/bash -c 'exec -a "$0/holder" /bin/sleep 120' "$R" & good=$!
   /bin/sleep 120 & other=$!
@@ -223,6 +224,7 @@ RIGLIB() { python3 "$REPO/tests/rig/rig_lib.py" "$@"; }
 }
 
 @test "W1 S3: the sweep takes a process naming the root, never one naming a sibling root" {
+  need_band
   R="$BATS_TEST_TMPDIR/rig"; mkdir -p "$R"
   /bin/bash -c 'exec -a "$0/member" /bin/sleep 120' "$R" & mine=$!
   /bin/bash -c 'exec -a "$0/member" /bin/sleep 120' "${R}2" & sibling=$!
@@ -239,6 +241,7 @@ RIGLIB() { python3 "$REPO/tests/rig/rig_lib.py" "$@"; }
 }
 
 @test "W1 S1: containment is a rig pane sharing an OS window with a non-rig pane, nothing else" {
+  need_band
   R=/tmp/lrh-t1-cure
   ok='[{"id":1,"tabs":[{"windows":[{"id":10,"cwd":"/tmp/lrh-t1-cure/work"},{"id":11,"cwd":"/private/tmp/lrh-t1-cure/work/s01"}]}]},{"id":2,"tabs":[{"windows":[{"id":20,"cwd":"/Users/x"}]}]},{"id":3,"tabs":[{"windows":[{"id":30,"cwd":"/tmp/lrh-t1-cure/work/s02"}]}]}]'
   bad='[{"id":2,"tabs":[{"windows":[{"id":20,"cwd":"/Users/x"},{"id":21,"cwd":"/tmp/lrh-t1-cure/work/s01"}]}]}]'
@@ -266,6 +269,7 @@ RIGLIB() { python3 "$REPO/tests/rig/rig_lib.py" "$@"; }
 }
 
 @test "W1 smoke3: go_barrier reaches every member's knobs, and the derived line is ENGAGED 3/3" {
+  need_band
   run RIGLIB expected "$REPO/tests/rig/faults/smoke3.json"
   [[ "$output" == "ENGAGED 3/3 · "* ]] || { echo "$output"; false; }
   RIGLIB expand "$REPO/tests/rig/faults/smoke3.json" "$BATS_TEST_TMPDIR/specs.json"
