@@ -828,6 +828,7 @@ rollback_clean() {  # T-P9-7: abort any in-progress rebase so ship-land never ex
 # there is ONE way this fleet attests a signalled death, not two.
 LIFECYCLE_ROLE="outer"   # the locked child sets "locked": it attests, but owns no marker and files no inbox
 INFLIGHT_FILE=""         # non-empty ⇒ THIS process claimed the worktree's in-flight marker
+LANDED_HEAD=""           # outer: set ONLY by post_state_read, i.e. once the child content-verified
 
 # ── LAND_MAIN_ROOT — THE DURABLE CHECKOUT, RESOLVED WHILE IT IS STILL RESOLVABLE ─────────────────
 # The failure inbox runs from a TRAP, and by then this land's cwd may no longer be a git worktree at
@@ -922,8 +923,25 @@ inflight_claim() {  # 0 = claimed · refuses (exit 11) when a LIVE land already 
     printf 'branch=%s\n'  "${BRANCH:-?}"
     printf 'head=%s\n'    "$(git rev-parse HEAD 2>/dev/null || echo '?')"
     printf 'sid=%s\n'     "${CLAUDE_CODE_SESSION_ID:-}"
+    printf 'phase=%s\n'   "pre-push"
   } > "$f" 2>/dev/null || return 0
   INFLIGHT_FILE="$f"
+  return 0
+}
+
+# THE LAND'S PHASE, in the marker (reboot-resume R13, 2026-10-21). pre-push → pushed (the child's
+# first push returned 0) → post-release (content-verified; only cleanup, the sweep and the attest
+# remain). A reader deciding whether a reboot strands this land needs exactly that split: on
+# 2026-10-21 alarm-reboot-prep said NOT-READY for a land that had pushed and verified 30 minutes
+# earlier and was only stuck in its stranded-sweep. The outer writes its own marker; the locked
+# child writes the one the outer names in SHIP_LAND_INFLIGHT_FILE (passed on the land-lock line
+# only, so no gate child inherits it). Best-effort: a phase that cannot be written never fails a land.
+inflight_phase() {  # $1=phase
+  local f
+  if [[ "$LIFECYCLE_ROLE" = "outer" ]]; then f="${INFLIGHT_FILE:-}"; else f="${SHIP_LAND_INFLIGHT_FILE:-}"; fi
+  [[ -n "$f" && -f "$f" ]] || return 0
+  { grep -v '^phase=' "$f" 2>/dev/null; printf 'phase=%s\n' "$1"; } > "$f.phase.$$" 2>/dev/null \
+    && mv -f "$f.phase.$$" "$f" 2>/dev/null || rm -f "$f.phase.$$" 2>/dev/null
   return 0
 }
 
@@ -1492,6 +1510,18 @@ _land_sig_verdict() {  # <signame> <signum>
   trap - TERM HUP INT EXIT
   local rc=$(( 128 + $2 ))
   gate_home_teardown
+  # A KILL AFTER THE PROOF IS NOT A FAILED LAND (reboot-resume R15, 2026-10-21). In the outer,
+  # LANDED_HEAD is set only by post_state_read, i.e. once the locked child content-verified the
+  # land on the trunk; what is left is cleanup, the sweep and the attest. Killed there, the old arm
+  # attested verify=killed, pinned refs/land/failed/* at the trunk tip and filed a re-land row for
+  # work that was already on it. Now it attests what is true (verify ok, sweep killed, exit 0) and
+  # files nothing: there is nothing to re-land.
+  if [[ "$LIFECYCLE_ROLE" = "outer" && -n "${LANDED_HEAD:-}" ]]; then
+    attest_land "ok" "killed" "clean" 0
+    inflight_release
+    echo "✓ ship-land: LANDED $(git rev-parse --short "$LANDED_HEAD" 2>/dev/null || printf '%s' "$LANDED_HEAD") → origin/${TRUNK:-trunk}; content-verified before SIG$1 arrived during post-land cleanup (sweep=killed). Nothing to re-land." >&2
+    exit 0
+  fi
   rollback_clean
   # THE ATTESTATION IS THE WHOLE POINT: without it a killed land is indistinguishable from a land
   # that never ran, and 100% of the exit-144 population read as absence rather than death.
@@ -1683,6 +1713,7 @@ post_release_finish() {  # $1=trunk — runs in the OUTER process, the land-lock
   post_state_read "$f"
   rm -f "$f" 2>/dev/null || true
   local TRUNK="$1"
+  inflight_phase post-release
 
   # --- discharge the rollback ref (STRANDED_EXPOSURE_2026-07-26 §8.2) ---
   # THE ONLY PLACE THIS REF MAY BE DELETED, and it is reachable only past the locked child's
@@ -1726,11 +1757,22 @@ post_release_finish() {  # $1=trunk — runs in the OUTER process, the land-lock
   # could flip it with nothing here to notice. So the argv is built explicitly, and no sid means no
   # `--mine` — degrade to the bounded default count, never to a confident silence.
   local sweep_out sweep_rc sweep_field
-  local -a sweep_args=()
+  local -a sweep_args=() sweep_bound=()
   local sweep_sid="${CLAUDE_CODE_SESSION_ID:-}"
   [[ -n "$sweep_sid" ]] && sweep_args+=(--mine "$sweep_sid")
-  sweep_out="$("$STRANDED_SWEEP" "${sweep_args[@]+"${sweep_args[@]}"}" "$TRUNK" 2>&1)"; sweep_rc=$?
-  if [[ "$sweep_rc" -eq 0 ]]; then
+  # BOUNDED (reboot-resume R13, 2026-10-21). Normally 59-62 s; on 2026-10-21 one ran past 62 minutes
+  # after its land had pushed and verified, so the land read as IN FLIGHT the whole time and a reboot
+  # prep refused on it. The sweep is advisory and runs after the proof, so the bound can only cost a
+  # REVIEW prompt, never a land: past it the attestation says sweep=timeout and the land is reported
+  # landed. SHIP_LAND_SWEEP_S=0 (or no timeout(1)) runs it unbounded, as before.
+  local sweep_s="${SHIP_LAND_SWEEP_S:-900}"
+  case "$sweep_s" in ''|*[!0-9]*) sweep_s=900 ;; esac
+  [[ -n "${TIMEOUT_BIN:-}" && "$sweep_s" -gt 0 ]] && sweep_bound=("$TIMEOUT_BIN" -k 10 "$sweep_s")
+  sweep_out="$("${sweep_bound[@]+"${sweep_bound[@]}"}" "$STRANDED_SWEEP" "${sweep_args[@]+"${sweep_args[@]}"}" "$TRUNK" 2>&1)"; sweep_rc=$?
+  if [[ ${#sweep_bound[@]} -gt 0 ]] && { [[ "$sweep_rc" -eq 124 ]] || [[ "$sweep_rc" -eq 137 ]]; }; then
+    sweep_field="timeout"
+    echo "⚠ ship-land: stranded-sweep did not finish inside ${sweep_s}s — no sweep verdict for this land (advisory only; the land is already content-verified)."
+  elif [[ "$sweep_rc" -eq 0 ]]; then
     sweep_field="clean"
     echo "✓ ship-land: stranded-sweep clean."
   else
@@ -5327,6 +5369,7 @@ main_locked() {
   fi
   cat "$PUSH_LOG" >&2
   rm -f "$PUSH_LOG"
+  inflight_phase pushed
 
   while :; do
     # BOUNDED, and here a timeout must ABORT rather than fall through: land-verify would then read a
@@ -5704,7 +5747,7 @@ main_outer() {
            SHIP_LAND_SMOKE_CARRIED="$SMOKE_CARRIED" \
            SHIP_LAND_SMOKE_S="$SMOKE_S" SHIP_LAND_NET_STATE="$NET_STATE"
     meas_export
-    "$LAND_LOCK" -- "$SELF" __locked "$TRUNK" "$DRY_RUN" "$GATE_BASE" "$GATE_HEAD"
+    SHIP_LAND_INFLIGHT_FILE="${INFLIGHT_FILE:-}" "$LAND_LOCK" -- "$SELF" __locked "$TRUNK" "$DRY_RUN" "$GATE_BASE" "$GATE_HEAD"
     rc=$?
     # THE LOCK IS RELEASED THE INSTANT THAT RETURNS. Cleanup + attest run here, unlocked.
     child_attested_absorb
@@ -5737,7 +5780,7 @@ main_outer() {
   # the one lane that only fires under sustained contention, i.e. when the fleet can least afford
   # an 87s hold. Same handover, same finish, one process deeper.
   meas_export
-  "$LAND_LOCK" -- "$SELF" __locked "$TRUNK" "$DRY_RUN" "" ""
+  SHIP_LAND_INFLIGHT_FILE="${INFLIGHT_FILE:-}" "$LAND_LOCK" -- "$SELF" __locked "$TRUNK" "$DRY_RUN" "" ""
   rc=$?
   child_attested_absorb
   [[ "$rc" -eq 0 ]] && post_release_finish "$TRUNK"

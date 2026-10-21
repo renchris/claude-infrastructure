@@ -97,6 +97,8 @@ _extract_to() {  # $1=dest — the real function plus the collaborators it needs
     echo 'post_state_read() { LANDED_HEAD="$(git rev-parse HEAD)"; }'
     echo 'attest_land() { :; }'
     echo 'STRANDED_SWEEP="/usr/bin/true"'
+    echo 'TIMEOUT_BIN=""'                       # the sweep's bound (R13): unbounded here
+    echo 'inflight_phase() { :; }'              # the marker phase write (R13): no marker here
     echo 'SCRIPT_DIR="/nonexistent"'
     sed -n '/^post_release_finish() {/,/^}/p' "$SHIPLAND"
   } > "$1"

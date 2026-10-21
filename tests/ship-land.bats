@@ -69,7 +69,7 @@ setup() {
         SHIP_LAND_LANE SHIP_LAND_SMOKE_BUDGET_S SHIP_LAND_SMOKE_NICE SHIP_LAND_TIMEOUT_BIN \
         SHIP_LAND_SMOKE_PER_SUITE_S SHIP_LAND_SMOKE_BUDGET_CAP_S \
         SHIP_LAND_SMOKE_STATE SHIP_LAND_SMOKE_N SHIP_LAND_SMOKE_S SHIP_LAND_NET_STATE \
-        SHIP_LAND_BACKUP_REF SHIP_BACKUP_REAP \
+        SHIP_LAND_BACKUP_REF SHIP_BACKUP_REAP SHIP_LAND_SWEEP_S SHIP_LAND_INFLIGHT_FILE \
         SHIP_LAND_T0 SHIP_LAND_MEAS_ROUNDS SHIP_LAND_MEAS_GATE_S \
         SHIP_LAND_MEAS_ARMS_S SHIP_LAND_MEAS_STATICS_S \
         2>/dev/null || true
@@ -4496,4 +4496,54 @@ _w0_fail_land() { # <branch> <file> — commit an SC2164 script so the gate is R
   [ "$status" -eq 0 ]
   [ "$(st "$a")" = "done landed" ]
   [ "$(st "$b")" = "open " ]
+}
+
+# ── reboot-resume R13 + R15 (2026-10-21): the post-push phase ──────────────────────────────────
+# A land that had pushed and content-verified sat 62+ minutes in an unbounded stranded-sweep; reboot
+# prep read it as in flight, and a kill there filed a failed-land ref at the trunk tip. The sweep runs
+# under TIMEOUT_BIN, so a stub timeout(1) is the seam: for the sweep it snapshots the in-flight marker
+# and then sleeps or answers a chosen rc; everything else it runs unbounded.
+sweep_timeout_stub() {  # $1=sleep seconds $2=rc for the sweep
+  local s="$BATS_TEST_TMPDIR/timeout-stub"
+  printf '#!/bin/bash\ncase "$*" in *stranded-sweep.sh*)\n  cp "$(git rev-parse --absolute-git-dir)/ship-land-inflight" "%s/marker.snap" 2>/dev/null\n  touch "%s/sweep.ready"; sleep %s; exit %s ;;\nesac\nwhile [ "${1#-}" != "$1" ]; do [ "$1" = -k ] && shift; shift; done\nshift; exec "$@"\n' \
+    "$BATS_TEST_TMPDIR" "$BATS_TEST_TMPDIR" "$1" "$2" > "$s"
+  chmod +x "$s"; export SHIP_LAND_TIMEOUT_BIN="$s"
+}
+
+@test "R13: the marker reads phase=post-release during the sweep, and a sweep past its bound is sweep=timeout, landed" {
+  sweep_timeout_stub 0 124
+  git checkout -q -b feat/phase main
+  printf '#!/usr/bin/env bash\necho ph\n' > ph.sh
+  git add ph.sh && git commit -q -m "feat: ph"
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  echo "$output" | grep -q "LANDED" || false
+  echo "$output" | grep -q "stranded-sweep did not finish inside 900s" || false
+  grep -q '"sweep":"timeout"' "$LAND_LOG" || false
+  grep -qx 'phase=post-release' "$BATS_TEST_TMPDIR/marker.snap" || { cat "$BATS_TEST_TMPDIR/marker.snap"; false; }
+  [ "$(grep -c '^phase=' "$BATS_TEST_TMPDIR/marker.snap")" -eq 1 ] || false   # replaced, never appended
+  [ ! -e "$(git rev-parse --absolute-git-dir)/ship-land-inflight" ] || false  # released at the end
+}
+
+@test "R15: SIGTERM during the post-release phase files no failure ref and attests exit 0" {
+  sweep_timeout_stub 6 0
+  git checkout -q -b feat/postkill main
+  printf '#!/usr/bin/env bash\necho pk\n' > pk.sh
+  git add pk.sh && git commit -q -m "feat: pk"
+  SHIP_LAND_FAILURE_INBOX=on CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl" \
+    bash "$SHIPLAND" --trunk main > "$BATS_TEST_TMPDIR/pk.out" 2>&1 &
+  land=$!
+  for _ in $(seq 1 600); do [ -e "$BATS_TEST_TMPDIR/sweep.ready" ] && break; sleep 0.2; done
+  [ -e "$BATS_TEST_TMPDIR/sweep.ready" ] || { kill "$land" 2>/dev/null; cat "$BATS_TEST_TMPDIR/pk.out"; false; }
+  kill -TERM "$land" 2>/dev/null || true
+  rc=0; wait "$land" 2>/dev/null || rc=$?
+  [ "$rc" -eq 0 ] || { cat "$BATS_TEST_TMPDIR/pk.out"; false; }
+  [ -z "$(git for-each-ref refs/land/failed/)" ] || { git for-each-ref refs/land/failed/; false; }
+  grep '"sweep":"killed"' "$LAND_LOG" | grep -q '"verify":"ok"' || { cat "$LAND_LOG"; false; }
+  grep '"sweep":"killed"' "$LAND_LOG" | grep -q '"exit":0' || false
+  ! grep -q '"verify":"killed"' "$LAND_LOG" || false
+  ! grep -q 're-land feat/postkill' "$BATS_TEST_TMPDIR/backlog.jsonl" 2>/dev/null || false
+  grep -q 'Nothing to re-land' "$BATS_TEST_TMPDIR/pk.out" || false
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- pk.sh)" ] || false
 }
