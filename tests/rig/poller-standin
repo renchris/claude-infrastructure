@@ -1,0 +1,45 @@
+#!/bin/bash
+# poller-standin — the rig's launchd stand-in for the move lane's kick (LR_SUSTAINED_LOAD W4b; B1 §16
+# A7). Production starts a queued `cc-lr move` batch from com.reso.lr-move-kick (WatchPaths on
+# move/requests/) and from every poller tick, both running `lr-reset-poller.sh --move-kick`. The rig
+# has no launchd job (loading one is the operator's step), and `cc-lr move`'s own `launchctl
+# kickstart` reaches the rig's logging shim, so without this nothing would ever start the batch.
+#
+#   poller-standin <rig root>/ <lr-reset-poller.sh>        (lr-recon-rig.sh starts it, detached)
+#
+# It runs THE REAL --move-kick of the tree under test, under the arm's env (HOME, LR_STATE_DIR,
+# LR_RECON_ROOT, PATH with tests/rig/shims first) and with LR_LAUNCHCTL_BIN on the rig's shim, every
+# LR_RIG_KICK_S (default 5) while a request is queued. The hard-link claim inside the kick is what
+# starts a batch at most once (lr-reset-poller.sh lrp_move_kick); this loop adds no claim of its own.
+# Safety: it refuses unless LR_RIG names the root it was given and HOME and LR_STATE_DIR lie under
+# it, so it can never kick the real ~/.reso/limit-recover. It stops at <root>/stop, past
+# <root>/deadline, or after one pass with LR_RIG_STANDIN_ONCE=1 (the bats suite). Each kick appends
+# `epoch<TAB>kick<TAB>rc` to <root>/state/poller-standin.log.
+# The root is passed with a trailing slash so the argv matches cc-reaper's GARBAGE_WL
+# (`/tmp/lrh-<id>-cure|red/`): a detached bash older than 600 s is otherwise TERMed.
+set -u
+rig="${1%/}" poller="${2:-}"
+under() { case "$1" in "$rig"/*) return 0 ;; *) return 1 ;; esac; }
+case "$rig" in ''|*..*) echo "poller-standin: refusing root '$rig'" >&2; exit 2 ;; esac
+[ "${LR_RIG:-}" = "$rig" ] || { echo "poller-standin: LR_RIG=${LR_RIG:-unset} is not $rig (run it under the arm's env.sh)" >&2; exit 2; }
+under "${HOME:-/}" && under "${LR_STATE_DIR:-/}" || { echo "poller-standin: HOME or LR_STATE_DIR is outside $rig; refusing" >&2; exit 2; }
+[ -f "$poller" ] || { echo "poller-standin: no poller at '$poller'" >&2; exit 2; }
+[ -x "$rig/bin/launchctl" ] || { echo "poller-standin: no launchctl shim at $rig/bin/launchctl" >&2; exit 2; }
+mkdir -p "$rig/state"
+log="$rig/state/poller-standin.log"
+every="${LR_RIG_KICK_S:-5}"
+case "$every" in ''|*[!0-9]*) every=5 ;; esac
+while :; do
+  [ -e "$rig/stop" ] && break
+  dl="$(cat "$rig/deadline" 2>/dev/null || echo 0)"
+  case "$dl" in ''|*[!0-9]*) dl=0 ;; esac
+  [ "$dl" -gt 0 ] && [ "$(date +%s)" -ge "$dl" ] && break
+  if compgen -G "$LR_STATE_DIR/move/requests/*.json" >/dev/null 2>&1; then
+    rc=0
+    LR_LAUNCHCTL_BIN="$rig/bin/launchctl" /bin/bash "$poller" --move-kick >/dev/null 2>&1 || rc=$?
+    printf '%s\tkick\t%s\n' "$(date +%s)" "$rc" >> "$log"
+  fi
+  [ "${LR_RIG_STANDIN_ONCE:-0}" = 1 ] && break
+  sleep "$every"
+done
+exit 0

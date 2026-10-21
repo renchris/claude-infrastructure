@@ -1,9 +1,10 @@
 {
-  "_what": "B1 §6.1 guarantee cohort at n = 30 (W4; run once guarantee9 is stable). guarantee9's groups scaled up, plus 3 idle members MOVED by the idle fan-out, 1 draft at boot (HOLD-DRAFT, a hard hold that must page by its max age) and 1 background job at boot (HOLD-BGWORK). Counts sum to 30. With idle_fanout on, go_barrier members boot WORKING, never idle (C15). KMAX 16 clamps the heavy lead to 15 and leaves 33 seats for the rest. Run with LR_RIG_HOLD_WINDOW=1 (the harness sets it) so the arm stays up until each hold has paged (C5).",
+  "_what": "B1 §6.1 guarantee cohort at n = 30 (W4; run once guarantee9 is stable). guarantee9's groups scaled up, plus 3 idle members MOVED by the idle fan-out, 1 draft at boot (HOLD-DRAFT, a hard hold that must page by its max age) and 1 background job at boot (HOLD-BGWORK). Counts sum to 30. With idle_fanout on, go_barrier members boot WORKING, never idle (C15). KMAX 16 clamps the heavy lead to 15 and leaves 33 seats for the rest. Run with LR_RIG_HOLD_WINDOW=1 (the harness sets it) so the arm stays up until each hold has paged (C5). W4b: idle_fanout_switch sets LR_IDLE_FANOUT=on AND creates the arm's recon/idle-fanout.on (D2a), so the same matrix drives a tree before and after W13 moves the daemon to the file; and a 4-row idle move batch (extra rows on next3 → next4, not members, kitty calls slowed to hold their slots for minutes) is queued at go through the real cc-lr move and started by the poller stand-in, so the lane holds 4 of the shared swap slots while the limited members recover (W11's slot priority).",
   "source": "next",
   "scope": "5h",
   "go_barrier": true,
-  "idle_fanout": true,
+  "idle_fanout_switch": true,
+  "move_batch": {"rows": 4, "row_knobs": {"kitty_delay_s": [20, 40], "kitty_delay_k": 8}, "slots": 4, "at": 0, "origin": "idle", "from": "next3", "to": "next4"},
   "die_spread_s": 300,
   "seed": "guarantee30",
   "boot_delay_bin": {"median": 46, "p90": 212, "cap": 300},

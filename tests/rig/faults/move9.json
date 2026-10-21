@@ -1,0 +1,18 @@
+{
+  "_what": "W4b T5 (B1 §8.3, A7 Part B): a member that turns limited while queued in the move lane. Two real cc-lr move batches, started only by tests/rig/poller-standin (the tree's own lr-reset-poller.sh --move-kick). Batch 0 queues one extra idle row on next3 at go with --slots 1; its kitty calls are slowed (12 calls at 25-35 s) so it holds the one lane slot for minutes. Batch 1 queues the subject (idle at rest on next) at go + 30, so its worker sits in the SLOT WAIT; at go + 150 the subject takes a turn that hits the limit (stub idle_then_limit). Cure (W5 Part B): the worker's 30 s re-read lets it go NOTMOVED `became-limited … the reconciler recovers it` within T5's 120 s, and the reconciler drives it. Red (tree:<W5 parent>@31): the worker holds it through the slot wait, so the release is late (or a slot-wait expiry). Eight clean-limited members around it keep the reconciler's own lane busy on the shared slot store. All nine are expected ENGAGED.",
+  "source": "next",
+  "scope": "5h",
+  "go_barrier": true,
+  "die_spread_s": 120,
+  "seed": "move9",
+  "boot_delay_bin": {"median": 46, "p90": 212, "cap": 300},
+  "placer": {"cpu_s": 4.0, "map_cpu_s": 0.15, "kmax": 8, "occupied": {}, "charge_ttl_s": 900},
+  "groups": [
+    {"name": "clean-limited", "count": 8, "knobs": {}, "expect": "ENGAGED"},
+    {"name": "t5-subject", "count": 1, "knobs": {"idle": true, "idle_then_limit": true, "die_at_s": 150}, "expect": "ENGAGED"}
+  ],
+  "move_batch": [
+    {"rows": 1, "row_knobs": {"kitty_delay_s": [25, 35], "kitty_delay_k": 12}, "slots": 1, "at": 0, "origin": "idle", "from": "next3", "to": "next4"},
+    {"groups": ["t5-subject"], "slots": 1, "at": 30, "origin": "idle", "to": "next2"}
+  ]
+}

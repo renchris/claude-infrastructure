@@ -1024,6 +1024,8 @@ def collect(run: str, arm: str) -> int:
         "shim_calls": len(text(os.path.join(root, "state", "shims.log")).splitlines()),
         "supervisor_times": sup_times,
         "typed_relaunch": "CC_PANE_SUCCESSOR=off" in text(os.path.join(root, "env.sh")),
+        # rig_lib.t5, written only for a matrix with a move_batch (W4b)
+        "t5": rr.get("t5"),
         "end": time.time(),
         "start": float(meta.get("started") or 0),
     }
@@ -1414,11 +1416,17 @@ def assess(run: str, arm: str) -> int:
         "mode": mode4,
         "n": sc,
     }
+    # T5 from the rig's own reading (rig_lib.t5): NO-VERDICT unless a queued member turned limited
+    t5 = facts.get("t5") if isinstance(facts.get("t5"), dict) else {}
+    mode5, v5 = _mode(expect, "T5"), str(t5.get("v") or "NO-VERDICT")
+    if v5 in ("PASS", "FAIL") and mode5 != "hard":
+        v5 = "X" + v5
     res["T5"] = {
-        "v": "NO-VERDICT",
-        "mode": _mode(expect, "T5"),
-        "n": 0,
-        "why": "phase 2 (move lane, W4b)",
+        "v": v5 if v5 in ("PASS", "FAIL", "XPASS", "XFAIL") else "NO-VERDICT",
+        "mode": mode5,
+        "n": int(t5.get("n") or 0),
+        "fail": list(t5.get("fail") or []),
+        "why": "" if t5 else "no move_batch in this matrix (W4b)",
     }
     pre_ok = all(v[0] for v in pre.values())
     hard_fail = [a for a, r in res.items() if r["mode"] == "hard" and r["v"] == "FAIL"]

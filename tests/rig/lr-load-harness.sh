@@ -160,7 +160,8 @@ for a in arms.split(","):
     else:
         sys.exit("unknown arm %s" % a)
 now = time.time()
-meta = {"id": rid, "matrix": os.path.abspath(matrix), "n": n, "n_extra": int(f.get("busy_extra") or 0), "arms": arm,
+n_extra = int(f.get("busy_extra") or 0) + sum(b["rows"] for b in rig_lib.batches(f))  # W4b move rows are panes too
+meta = {"id": rid, "matrix": os.path.abspath(matrix), "n": n, "n_extra": n_extra, "arms": arm,
         "cure_tree": ctree, "sock": sock, "kitty_pid": int(m.group(1)) if m else 0, "ncpu": ncpu, "pcores": pc,
         "started": now, "deadline": now + length + 900, "max_s": length + 900, "boot_wait_s": boot,
         "arm_timeout_s": int(t_done + 300), "every_s": 5, "census_every_s": 15, "bg_topup": int(bg), "df_topup": int(df),

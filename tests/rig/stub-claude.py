@@ -30,6 +30,8 @@ Load-harness knobs (B1 §9.2, W4). All off unless the spec carries them:
   boot_delay_bin {median, p90, cap}  a lognormal draw per resume (gap-4's distribution for a bin)
   boot_cpu_s N             per resume: burn N CPU-s before READY (calibrated from real boots)
   busy_forever             a busy_extra pane: WORKING for ever, never dies (holds the restore budget)
+  idle_then_limit          with idle: at rest from boot (so a move lane queues it straight into its
+                           slot wait), then at go + die_at_s a user turn that hits the limit (W4b, T5)
   stop_failure_hook PATH   at death, pipe a StopFailure JSON to PATH (the G2 seam; B1 uses none)
 Every invocation appends `t pid base stub mode` to $LR_RECON_ROOT/band-calls.log (F14: the band is
 read INSIDE the call path, where a 5 s sampler cannot see a short-lived child). A draft member logs
@@ -610,7 +612,7 @@ class Tui:
         k = self.s.knobs
         if (
             not k.get("go_barrier")
-            or k.get("idle")
+            or (k.get("idle") and not k.get("idle_then_limit"))
             or k.get("busy_forever")
             or self.resumed
         ):
@@ -646,6 +648,9 @@ class Tui:
             self.s.assistant("Partial output before the limit.")
             self.s.back_s = 0.0
             self.s.mark(busy_until=time.time())
+        if k.get("idle_then_limit"):
+            # a session at rest turns limited only by taking a turn: the prompt, then the limit
+            self.s.user("One more thing on the rig task.")
         self.busy = False
         self.s.error("limit")
         if k.get("goal_meta_after_limit"):

@@ -12,8 +12,25 @@
   rig_lib.py sweep    RIG SIG [OUT]   signal every rig process by verified identity; leftovers → OUT
   rig_lib.py containment RIG          read `kitten @ ls` on stdin; rc 3 if a rig pane shares an OS window
   rig_lib.py result   RIG KEY=VAL…    merge keys into RIG/rig-result.json
-  rig_lib.py extra-specs FAULTS OUT   busy_extra N → N never-dying WORKING pane specs (not members)
+  rig_lib.py extra-specs FAULTS OUT   busy_extra N → N never-dying WORKING pane specs (not members),
+                                      plus each move_batch's `rows` idle panes (W4b)
   rig_lib.py kitty-faults RIG         windows.sid + knobs → faults/kitty-{delay,fail}.tsv (kitty-slow)
+  rig_lib.py pane-rows RIG            n<TAB>sid<TAB>stale<TAB>config-dot-dir, members then extras
+  rig_lib.py switches FAULTS RIG      on|off for LR_IDLE_FANOUT; idle_fanout_switch also creates the
+                                      arm's recon/idle-fanout.on (W4b, D2a)
+  rig_lib.py kitty-ls-fail FAULTS RIG [BASE]  kitty_ls_fail {from, for} → faults/kitty-ls-fail.tsv,
+                                      epochs from BASE (default now: the go moment)
+  rig_lib.py t5       RIG             T5: a member that turned limited while queued in the move lane
+                                      was let go at once and driven by the reconciler → rig-result.json
+
+Move lane (W4b, B1 §16 A7). A matrix block ``move_batch`` (one dict or a list) queues a REAL
+``cc-lr move`` batch inside the arm: ``{rows, groups, row_knobs, slots, at, origin, from, to,
+until_idle_s}``. ``rows`` N opens N extra idle panes on ``from`` (default next3; never members, so
+they never enter the DoD line) with ``row_knobs``; ``groups`` names member groups queued after them.
+``at`` is seconds after go (or after the drive starts). ``origin`` is passed as CC_LR_MOVE_ORIGIN
+(D2 §6.5; a tree without the seam writes no plan.origin, which the queue row reports).
+LR_RIG_MOVE_SLOTS overrides every batch's ``slots`` for one arm (D2 E1's red arm: --slots 4).
+Nothing starts the batch but tests/rig/poller-standin, the real `lr-reset-poller.sh --move-kick`.
 
 Pure stdlib, python 3.9 (the pinned /usr/bin/python3 the daemon runs under).
 """
@@ -36,11 +53,39 @@ ACCOUNTS = [  # the generated account map resolves these names under $HOME, so a
     ("next4", ".claude-quaternary", "cfg-d"),
 ]
 ORDINAL = {1: "1st", 2: "2nd", 3: "3rd"}
+DOT = {name: dot for name, dot, _real in ACCOUNTS}
 
 
 def load(path: str) -> Dict[str, Any]:
     with open(path, encoding="utf-8") as fh:
         return json.load(fh)
+
+
+def batches(faults: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The matrix's move_batch block(s), normalised; [] when it has none."""
+    mb = faults.get("move_batch")
+    raw = mb if isinstance(mb, list) else [mb] if isinstance(mb, dict) else []
+    out = []
+    for b in raw:
+        out.append(
+            {
+                "rows": int(b.get("rows") or 0),
+                "groups": list(b.get("groups") or []),
+                "row_knobs": dict(b.get("row_knobs") or {}),
+                "slots": int(b.get("slots") or 4),
+                "at": float(b.get("at") or 0),
+                "origin": str(b.get("origin") or ""),
+                "from": str(b.get("from") or "next3"),
+                "to": str(b.get("to") or "next4"),
+                "until_idle_s": int(b.get("until_idle_s") or 600),
+            }
+        )
+    return out
+
+
+def idle_fanout(faults: Dict[str, Any]) -> bool:
+    """The env switch and the file switch both turn the idle fan-out on (W4b)."""
+    return bool(faults.get("idle_fanout") or faults.get("idle_fanout_switch"))
 
 
 # ── expand ──────────────────────────────────────────────────────────────────────────────────────
@@ -67,6 +112,10 @@ def expand(faults: Dict[str, Any], seed: str = "") -> List[Dict[str, Any]]:
         if faults.get("go_barrier")
         else {}
     )
+    # the file switch boots members the same way as the env switch (W4b)
+    if barrier and idle_fanout(faults):
+        barrier["idle_fanout"] = True
+    in_batch = {g: i for i, b in enumerate(batches(faults)) for g in b["groups"]}
     for g in faults["groups"]:
         for _ in range(int(g["count"])):
             i += 1
@@ -110,6 +159,9 @@ def expand(faults: Dict[str, Any], seed: str = "") -> List[Dict[str, Any]]:
                     # from failing the whole pair (B1 C9); the load harness reads it
                     "scope": dict(g.get("scope") or {}),
                     "source": faults.get("source", "next"),
+                    "account": faults.get("source", "next"),
+                    # the move_batch this member is a row of (T5), None when it is in none
+                    "move_batch": in_batch.get(g["name"]),
                 }
             )
     return out
@@ -516,6 +568,13 @@ def _specs(rig: str) -> List[Dict[str, Any]]:
     return load(os.path.join(rig, "specs.json"))
 
 
+def _extras(rig: str) -> List[Dict[str, Any]]:
+    try:
+        return load(os.path.join(rig, "specs-extra.json"))
+    except (OSError, ValueError):
+        return []
+
+
 def _records(rig: str) -> Dict[str, Dict[str, Any]]:
     out: Dict[str, Dict[str, Any]] = {}
     d = os.path.join(rig, "state", "sessions")
@@ -716,6 +775,254 @@ def _fault_log(rig: str, sid: str, fault: str, what: str) -> None:
         pass
 
 
+# ── the move lane, the D2a switch file and a deaf kitty (W4b) ───────────────────────────────────
+
+
+def switches(faults: Dict[str, Any], rig: str) -> str:
+    """LR_IDLE_FANOUT for env.sh. ``idle_fanout_switch: true`` also creates the arm's
+    recon/idle-fanout.on (D2 §6.6): a tree that reads the file and one that reads only the env both
+    see the fan-out on, so the same matrix runs against either side of W13."""
+    if faults.get("idle_fanout_switch"):
+        d = os.path.join(rig, "state")
+        os.makedirs(d, exist_ok=True)
+        open(os.path.join(d, "idle-fanout.on"), "a").close()
+    return "on" if idle_fanout(faults) else "off"
+
+
+def kitty_ls_fail(
+    faults: Dict[str, Any], rig: str, base: Optional[float] = None
+) -> int:
+    """kitty_ls_fail {from, for} (or a list) → faults/kitty-ls-fail.tsv, one `from<TAB>until`
+    epoch row per window, from ``base`` (the go moment). kitty-slow fails the daemon's full
+    `kitten @ ls` inside a window only (B5-R, C2: the census goes deaf, the panes stay alive)."""
+    k = faults.get("kitty_ls_fail")
+    wins = k if isinstance(k, list) else [k] if isinstance(k, dict) else []
+    b = time.time() if base is None else float(base)
+    rows = []
+    for w in wins:
+        frm = int(b + float(w.get("from") or 0))
+        rows.append("%d\t%d" % (frm, frm + int(float(w.get("for") or 0))))
+    os.makedirs(os.path.join(rig, "faults"), exist_ok=True)
+    with open(os.path.join(rig, "faults", "kitty-ls-fail.tsv"), "w") as fh:
+        fh.write("".join(r + "\n" for r in rows))
+    print("kitty ls fail: %s" % (", ".join(rows) if rows else "none"))
+    return 0
+
+
+def pane_rows(rig: str) -> int:
+    """One `n sid stale dot` row per pane to open: members, then extras (a move row on its own
+    account's config dir; everything else on the source's)."""
+    for s in _specs(rig) + _extras(rig):
+        dot = DOT.get(str(s.get("account") or "next"), DOT["next"])
+        print("%d\t%s\t%s\t%s" % (s["n"], s["sid"], bool(s.get("stale_request")), dot))
+    return 0
+
+
+def _rigenv(rig: str, argv: List[str]) -> List[str]:
+    """argv run the way lr-recon-rig.sh's rigenv runs it: a clean env, then the arm's env.sh."""
+    return [
+        "/usr/bin/env",
+        "-i",
+        "/bin/bash",
+        "-c",
+        '. "$0"; exec "$@"',
+        os.path.join(rig, "env.sh"),
+    ] + argv
+
+
+def _batch_sids(rig: str, i: int) -> List[str]:
+    """A batch's rows in the order named: its extra rows (the slot holders), then its members."""
+    return [s["sid"] for s in _extras(rig) if s.get("move_batch") == i] + [
+        s["sid"] for s in _specs(rig) if s.get("move_batch") == i
+    ]
+
+
+def queue_argv(rig: str, b: Dict[str, Any], sids: List[str], repo: str) -> List[str]:
+    """The operator's own verb, `cc-lr move`, inside the arm. --wait 0: the batch is the lane's
+    from here on (the stand-in starts it), and the drive must not block on it."""
+    slots = os.environ.get("LR_RIG_MOVE_SLOTS") or str(b["slots"])
+    env = ["CC_LR_MOVE_ORIGIN=" + b["origin"]] if b["origin"] else []
+    return _rigenv(
+        rig,
+        ["/usr/bin/env"]
+        + env
+        + [
+            os.path.join(repo, "bin", "cc-lr"),
+            "move",
+            "--sids",
+            ",".join(sids),
+            "--to",
+            b["to"],
+            "--slots",
+            slots,
+            "--until-idle",
+            str(b["until_idle_s"]),
+            "--wait",
+            "0",
+            "--target-unverified",
+        ],
+    )
+
+
+def find_batch(rig: str, sids: List[str], taken: set) -> Tuple[str, Dict[str, Any]]:
+    """The batch dir whose plan names every one of ``sids`` (a batch not already attributed)."""
+    root = os.path.join(rig, "lr", "move")
+    for name in sorted(os.listdir(root)) if os.path.isdir(root) else []:
+        if name in taken:
+            continue
+        try:
+            plan = load(os.path.join(root, name, "plan.json"))
+        except (OSError, ValueError):
+            continue
+        got = {r.get("sid") for r in plan.get("rows") or [] if isinstance(r, dict)}
+        if sids and set(sids) <= got:
+            return name, plan
+    return "", {}
+
+
+class MoveQueue:
+    """Queue each move_batch at base + at, once; attribute it to its batch dir when cc-lr exits.
+    Evidence: state/move-batches.json, and one faults.log row per queued sid (P3)."""
+
+    def __init__(self, rig: str, faults: Dict[str, Any]) -> None:
+        self.rig, self.bs = rig, batches(faults)
+        self.repo = os.environ.get("LR_RIG_REPO", "")
+        self.live: Dict[int, Tuple[subprocess.Popen, List[str], float]] = {}
+        self.done: Dict[int, Dict[str, Any]] = {}
+
+    def step(self, base: float, now: float) -> None:
+        for i, b in enumerate(self.bs):
+            if i in self.live or i in self.done or now < base + b["at"]:
+                continue
+            sids = _batch_sids(self.rig, i)
+            if not self.repo or not sids:
+                self._settle(
+                    i, sids, None, "not-queued (no LR_RIG_REPO or no rows)", now
+                )
+                continue
+            log = open(os.path.join(self.rig, "state", "move-batch.%d.log" % i), "ab")
+            p = subprocess.Popen(
+                queue_argv(self.rig, b, sids, self.repo),
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+            log.close()
+            self.live[i] = (p, sids, now)
+            print(
+                "[rig] move batch %d: cc-lr move of %d row(s) → %s, slots %s, origin %s"
+                % (
+                    i,
+                    len(sids),
+                    b["to"],
+                    os.environ.get("LR_RIG_MOVE_SLOTS") or b["slots"],
+                    b["origin"] or "-",
+                ),
+                flush=True,
+            )
+        for i, (p, sids, t) in list(self.live.items()):
+            if p.poll() is not None:
+                del self.live[i]
+                self._settle(i, sids, p.returncode, "", t)
+
+    def _settle(
+        self, i: int, sids: List[str], rc: Optional[int], why: str, t: float
+    ) -> None:
+        taken = {d.get("batch") for d in self.done.values()}
+        name, plan = find_batch(self.rig, sids, taken) if not why else ("", {})
+        what = "queued batch=%s" % name if name else (why or "not-queued rc=%s" % rc)
+        self.done[i] = {
+            "i": i,
+            "batch": name,
+            "sids": sids,
+            "rc": rc,
+            "at": t,
+            "plan_origin": plan.get("origin"),
+            "plan_slots": plan.get("slots"),
+        }
+        for sid in sids:
+            _fault_log(self.rig, sid, "move_batch", what)
+        result(
+            self.rig,
+            {"batches": [self.done[k] for k in sorted(self.done)]},
+            path=os.path.join(self.rig, "state", "move-batches.json"),
+        )
+        print("[rig] move batch %d: %s (cc-lr rc %s)" % (i, what, rc), flush=True)
+
+
+# T5 (B1 §8.3, A7 Part B): a member that turns limited while queued in the move lane is let go at
+# once and driven by the reconciler. "At once" is the worker's re-read period (LR_MOVE_LIMIT_RECHECK_S,
+# 30 s) plus three passes of margin at 15-40/core; the red arm holds it to the end of the slot wait.
+T5_RELEASE_S = 120.0
+T5_DRIVEN = ("ENGAGED", "MOVED", "IN-PLACE")
+
+
+def t5(rig: str) -> Dict[str, Any]:
+    """T5 over every member queued in a move batch that turned limited (its stub's died_at). Each
+    must end NOTMOVED `became-limited … the reconciler recovers it` within T5_RELEASE_S of its limit,
+    and its record must close ENGAGED, MOVED or IN-PLACE. NO-VERDICT when none turned limited."""
+    import glob
+
+    recs = _records(rig)
+    subj, fail, rows = 0, [], []
+    for s in _specs(rig):
+        if s.get("move_batch") is None:
+            continue
+        sid = s["sid"]
+        st = {}
+        try:
+            st = load(os.path.join(rig, "tmp", "stub", sid + ".json"))
+        except (OSError, ValueError):
+            pass
+        died = st.get("died_at")
+        if not died:
+            rows.append({"sid": sid, "why": "never turned limited"})
+            continue
+        subj += 1
+        res = [
+            p
+            for p in glob.glob(os.path.join(rig, "lr", "move", "*", sid + ".json"))
+            if os.path.basename(os.path.dirname(p)) not in ("requests", "intent")
+        ]
+        out = ((recs.get(sid) or {}).get("terminal") or {}).get("outcome") or ""
+        row: Dict[str, Any] = {"sid": sid, "died_at": died, "outcome": out}
+        if not res:
+            row["why"] = "no release: the lane still holds it"
+        else:
+            try:
+                r = load(res[0])
+            except (OSError, ValueError):
+                r = {}
+            rel = os.stat(res[0]).st_mtime - float(died)
+            reason = str(r.get("reason") or "")
+            row.update(
+                verdict=r.get("verdict"), released_s=round(rel, 1), reason=reason[:160]
+            )
+            if r.get("verdict") != "NOTMOVED" or "became-limited" not in reason:
+                row["why"] = "ended %s, not let go as became-limited" % r.get("verdict")
+            elif rel > T5_RELEASE_S:
+                row["why"] = "let go %.0fs after its limit (bound %.0fs)" % (
+                    rel,
+                    T5_RELEASE_S,
+                )
+            elif "the reconciler recovers it" not in reason:
+                row["why"] = "let go without handing it to the reconciler"
+        if "why" not in row and out not in T5_DRIVEN:
+            row["why"] = "not driven by the reconciler (outcome %s)" % (out or "open")
+        if "why" in row:
+            fail.append("%s %s" % (sid[:8], row["why"]))
+        rows.append(row)
+    v = "NO-VERDICT" if not subj else ("FAIL" if fail else "PASS")
+    rec = {"v": v, "n": subj, "fail": fail, "rows": rows, "bound_s": T5_RELEASE_S}
+    result(rig, {"t5": rec})
+    print(
+        "T5 move lane: %s · %d queued member(s) turned limited%s"
+        % (v, subj, (" · " + "; ".join(fail)) if fail else "")
+    )
+    return rec
+
+
 # B1 C5: a hard hold pages at MAX_AGE_S (HOLD-DRAFT 900 s, HOLD-BGWORK 1200 s, types.py); a drive that
 # stops at "held 30 s" never sees the page. LR_RIG_HOLD_WINDOW=1 keeps it until entry + age + 2 passes.
 HOLD_PAGE_AGE_S = {"HOLD-DRAFT": 900, "HOLD-BGWORK": 1200}
@@ -751,14 +1058,25 @@ def _settled(
 def drive(rig: str, timeout: float) -> int:
     """Fire each daemon fault when its session first leaves PRE-MOVE; stop when every session has
     settled (terminal, or holding its expected HOLD for 30 s) or at the timeout (rc 1). rc 3: the
-    containment sampler found a rig pane in a non-rig OS window (NO-VERDICT)."""
+    containment sampler found a rig pane in a non-rig OS window (NO-VERDICT). A matrix's move_batch
+    blocks are queued here, each at go + at (W4b)."""
     specs = _specs(rig)
     dpf = os.path.join(rig, "state", "daemon.pid")
     hit = os.path.join(rig, "state", "containment.hit")
     t0, fired, cont_at, held = time.time(), set(), 0.0, {}
     last = 0.0
+    try:
+        mq: Optional[MoveQueue] = MoveQueue(rig, load(os.path.join(rig, "matrix.json")))
+    except (OSError, ValueError):
+        mq = None
     while True:
         now = time.time()
+        if mq is not None and mq.bs:
+            try:
+                base = os.stat(os.path.join(rig, "go")).st_mtime
+            except OSError:
+                base = t0
+            mq.step(base, now)
         recs = _records(rig)
         for s in specs:
             f = s["daemon_fault"]
@@ -862,7 +1180,9 @@ def kitty_faults(rig: str) -> int:
     opens) and each member's knobs: faults/kitty-delay.tsv `wid lo hi k` (kitty_delay_s [lo, hi],
     the first kitty_delay_k calls only, default 3: B1 F15) and faults/kitty-fail.tsv `wid n`
     (send_text_fail_n). rc 0; prints how many rows each table got."""
-    by_sid = {s["sid"]: s for s in _specs(rig)}
+    by_sid = {
+        s["sid"]: s for s in _specs(rig) + _extras(rig)
+    }  # a move row's knobs too (W4b)
     delay, fail = [], []
     try:
         rows = [
@@ -905,9 +1225,31 @@ def extra_specs(faults: Dict[str, Any], out: str) -> int:
         }
         for i in range(n)
     ]
+    # W4b: each move_batch's `rows` idle panes on its `from` account, queued in that batch. Idle at
+    # rest and never dying (no go_barrier knob), so only the move lane ever acts on them.
+    j = 0
+    for i, b in enumerate(batches(faults)):
+        if b["from"] not in DOT:
+            raise ValueError(
+                "move_batch %d: from=%s is not a rig account" % (i, b["from"])
+            )
+        for _ in range(b["rows"]):
+            specs.append(
+                {
+                    "n": 200 + j,
+                    "sid": str(uuid.uuid4()),
+                    "group": "move-row-%d" % i,
+                    "knobs": dict(b["row_knobs"], idle=True),
+                    "expect": "",
+                    "stale_request": False,
+                    "account": b["from"],
+                    "move_batch": i,
+                }
+            )
+            j += 1
     with open(out, "w", encoding="utf-8") as fh:
         json.dump(specs, fh, indent=1)
-    print(n)
+    print(len(specs))
     return 0
 
 
@@ -964,6 +1306,18 @@ def main(argv: List[str]) -> int:
         return extra_specs(load(argv[2]), argv[3])
     if cmd == "kitty-faults":
         return kitty_faults(argv[2])
+    if cmd == "pane-rows":
+        return pane_rows(argv[2])
+    if cmd == "switches":
+        print(switches(load(argv[2]), argv[3]))
+        return 0
+    if cmd == "kitty-ls-fail":
+        return kitty_ls_fail(
+            load(argv[2]), argv[3], float(argv[4]) if len(argv) > 4 else None
+        )
+    if cmd == "t5":
+        t5(argv[2])
+        return 0
     if cmd == "audit":
         return audit(argv[2], load(argv[3]), argv[4] if len(argv) > 4 else "")
     if cmd == "booted":

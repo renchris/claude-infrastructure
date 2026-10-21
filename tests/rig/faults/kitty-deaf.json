@@ -1,0 +1,14 @@
+{
+  "_what": "W4b, for W14 (B5-R) and the C2/B5-R class: a deaf kitty. Six clean-limited members die behind the go barrier over 60 s; from go + 60 for 480 s the daemon's FULL `kitten @ ls` (the census read, observe.py) fails through kitten-slow, while every --match call and every actuator call through kitty-slow still reaches kitty. Evidence: ls-fail rows in state/kitty-delay.log. W14's owed run: records are bound by the ps-env path in mode on (recon/pane-bind-env.mode) and none are in shadow, where they wait for ls to return at go + 540. All six are expected ENGAGED once kitty hears again.",
+  "source": "next",
+  "scope": "5h",
+  "go_barrier": true,
+  "die_spread_s": 60,
+  "seed": "kitty-deaf",
+  "boot_delay_bin": {"median": 46, "p90": 212, "cap": 300},
+  "placer": {"cpu_s": 4.0, "map_cpu_s": 0.15, "kmax": 8, "occupied": {}, "charge_ttl_s": 900},
+  "kitty_ls_fail": {"from": 60, "for": 480},
+  "groups": [
+    {"name": "clean-limited", "count": 6, "knobs": {}, "expect": "ENGAGED"}
+  ]
+}

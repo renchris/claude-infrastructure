@@ -158,6 +158,7 @@ mkdir -p "$RIG"/{bin,specs,work,tmp,lr,state,home/.claude/bin} || die "mkdir $RI
 # S4: launchctl and osascript resolve to logging no-ops before any real one on the rig PATH
 for s in launchctl osascript; do ln -sf "$HERE/shims/$s" "$RIG/bin/$s"; done
 : > "$RIG/started"   # the mtime the real-HOME check below compares against
+cp "$FAULTS" "$RIG/matrix.json" || die "copy $FAULTS"   # the drive reads its move_batch blocks (W4b)
 
 for s in kitty-slow kitten-slow; do [ -e "$HERE/$s" ] && ln -sf "$HERE/$s" "$RIG/bin/$s"; done
 
@@ -181,7 +182,8 @@ if [ -s "$RIG/placer.env" ]; then
   . "$RIG/placer.env"
 fi
 python3 "$HERE/rig_lib.py" home "$RIG" || die "rig home"
-IDLE_FANOUT="$(python3 -c 'import json,sys;print("on" if json.load(open(sys.argv[1])).get("idle_fanout") else "off")' "$FAULTS")"
+# idle_fanout (env) or idle_fanout_switch (env AND the arm's recon/idle-fanout.on, D2a; W4b)
+IDLE_FANOUT="$(python3 "$HERE/rig_lib.py" switches "$FAULTS" "$RIG")" || die "matrix switches"
 write_env
 for d in scripts hooks lib model-config.yaml; do ln -s "$REPO/$d" "$RIG/home/.claude/$d"; done
 mkdir -p "$RIG/home/bin" "$RIG/home/.claude/autonomy/resume-debt" "$RIG/home/.reso/bin"
@@ -255,8 +257,9 @@ open_os_window() { # a new rig OS window with its control window, cwd under the 
   [ -n "$prev_focus" ] && "$KITTEN" @ --to "$SOCK" focus-window --match "id:$prev_focus" >/dev/null 2>&1
   in_win=0
 }
-while IFS=$'\t' read -r n sid stale; do
+while IFS=$'\t' read -r n sid stale dot; do
   cwd="$RIG/work/s$(printf %02d "$n")"
+  cfgd="$RIG/home/${dot:-.claude-next}"   # a move row lives on its batch's `from` account (W4b)
   if [ "$stale" = True ]; then # the dead session: a transcript and a request, never a process
     rigenv "$RIG/bin/claude" --rig-write-dead "$sid" --rig-cwd "$cwd" || die "dead session $sid"
     continue
@@ -265,13 +268,12 @@ while IFS=$'\t' read -r n sid stale; do
   in_win=$((in_win + 1))
   where=(--type=window --location=vsplit --match "window_id:$first")   # a TAB match: the tab holding $first
   wid="$("$KITTEN" @ --to "$SOCK" launch "${where[@]}" --keep-focus --title "$RIG_TAG s$n" \
-        --cwd "$cwd" --env ZDOTDIR="$RIG/home" --env CLAUDE_CONFIG_DIR="$RIG/home/.claude-next" \
-        /usr/bin/env /bin/zsh -f -c "for v in \${(k)parameters[(I)CLAUDE*]} \${(k)parameters[(I)ANTHROPIC*]} ITERM_SESSION_ID CC_PANE_ID; do unset \$v; done; . $RIG/env.sh; export ZDOTDIR=$RIG/home CLAUDE_CONFIG_DIR=$RIG/home/.claude-next; cd $cwd && exec zsh -ic 'claude --session-id $sid; exec zsh -i'")" \
+        --cwd "$cwd" --env ZDOTDIR="$RIG/home" --env CLAUDE_CONFIG_DIR="$cfgd" \
+        /usr/bin/env /bin/zsh -f -c "for v in \${(k)parameters[(I)CLAUDE*]} \${(k)parameters[(I)ANTHROPIC*]} ITERM_SESSION_ID CC_PANE_ID; do unset \$v; done; . $RIG/env.sh; export ZDOTDIR=$RIG/home CLAUDE_CONFIG_DIR=$cfgd; cd $cwd && exec zsh -ic 'claude --session-id $sid; exec zsh -i'")" \
     || die "kitty launch for s$n"
   echo "$wid" >> "$RIG/windows"
   printf '%s\t%s\n' "$wid" "$sid" >> "$RIG/windows.sid"   # kitty-slow's window → member map
-done < <(python3 -c 'import json,sys
-for s in json.load(open(sys.argv[1])) + json.load(open(sys.argv[2])): print("%d\t%s\t%s" % (s["n"], s["sid"], s["stale_request"]))' "$RIG/specs.json" "$RIG/specs-extra.json")
+done < <(python3 "$HERE/rig_lib.py" pane-rows "$RIG")
 log "opened $(wc -l < "$RIG/windows" | tr -d ' ') rig panes on $SOCK (busy_extra $N_EXTRA)"
 python3 "$HERE/rig_lib.py" kitty-faults "$RIG" || die "kitty fault tables"
 # The load harness opens one arm's windows at a time (B1 review S5: two arms reading → launching →
@@ -364,9 +366,23 @@ until [ -n "$(find "$RIG/state/heartbeat" -newermt "-15 seconds" 2>/dev/null)" ]
   sleep 1
 done
 SRC="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("source","next"))' "$FAULTS")"
+# W4b: a matrix with a move_batch gets the move lane's starter, the poller stand-in, at the arm's
+# band (production's lr-move-kick is ProcessType Interactive; the red arm's pfx clamps it to 20).
+# Its argv names "$RIG/" with the slash cc-reaper's whitelist keys on; teardown TERMs it by its
+# pidfile (argv names the root) like the supervisor.
+if [ -n "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("move_batch") or "")' "$FAULTS")" ]; then
+  # shellcheck disable=SC2016 # $0/$1/$2 are the inner shell's, on purpose
+  STANDIN="$(detach "$RIG/state/poller-standin.out" ${pfx[@]+"${pfx[@]}"} /usr/bin/env -i /bin/bash -c '. "$0"; exec /bin/bash "$1" "$2" "$3"' \
+             "$RIG/env.sh" "$HERE/poller-standin" "$RIG/" "$REPO/scripts/limit-recover/lr-reset-poller.sh")" || die "poller stand-in spawn"
+  echo "$STANDIN" > "$RIG/standin.pid"
+  record_id "$RIG/standin.pid" || die "poller stand-in $STANDIN gone before its identity was recorded"
+  log "move lane: poller stand-in pid $STANDIN runs the tree's lr-reset-poller.sh --move-kick"
+fi
 # go_barrier: every member is alive until now; each dies at go + its die_at_s, so detection is the
 # daemon's own (the clock starts at death). The legacy path dies at boot and is driven by cc-lr.
 [ "$GO_BARRIER" = on ] && : > "$RIG/go" && log "go: members die at go + die_at_s"
+# W4b kitty_ls_fail: the daemon's full `kitten @ ls` fails inside [go + from, go + from + for)
+python3 "$HERE/rig_lib.py" kitty-ls-fail "$FAULTS" "$RIG" || die "kitty ls fault table"
 REQUEST="${LR_RIG_REQUEST:-}"
 [ -n "$REQUEST" ] || { [ "$GO_BARRIER" = on ] && REQUEST=none || REQUEST=cc-lr; }
 if [ "$REQUEST" = cc-lr ]; then
@@ -388,7 +404,7 @@ fi
   done
 ) &
 SAMPLER=$!
-python3 "$HERE/rig_lib.py" drive "$RIG" "$TIMEOUT_S"; drive_rc=$?
+LR_RIG_REPO="$REPO" python3 "$HERE/rig_lib.py" drive "$RIG" "$TIMEOUT_S"; drive_rc=$?
 : > "$RIG/drive.done"; kill "$SAMPLER" 2>/dev/null; wait "$SAMPLER" 2>/dev/null
 if [ "$drive_rc" -eq 3 ]; then
   /usr/bin/python3 "$HERE/rig_lib.py" result "$RIG" verdict="NO-VERDICT containment" drive_rc=3 \
@@ -406,6 +422,8 @@ STATUS="$(rigenv "$REPO/bin/cc-lr" status --cohort "$CID" --root "$RIG/state")"
 printf '%s\n' "$STATUS"
 GOT="$(printf '%s\n' "$STATUS" | sed -n 's/^DoD: //p' | head -1)"
 python3 "$HERE/rig_lib.py" timings "$RIG"
+# W4b: T5 over the members queued in a move batch; only a matrix that queued one prints the line
+[ -s "$RIG/state/move-batches.json" ] && python3 "$HERE/rig_lib.py" t5 "$RIG"
 echo
 python3 "$HERE/rig_lib.py" audit "$RIG/state" "$RIG/specs.json" "$RIG/home"; audit_rc=$?
 python3 "$HERE/rig_lib.py" refusal "$RIG"; refusal_rc=$?

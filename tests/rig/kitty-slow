@@ -1,23 +1,29 @@
 #!/bin/bash
-# kitty-slow — kitty remote-control fault wrapper for the lr-recon rig (LR_SUSTAINED_LOAD W4).
+# kitty-slow — kitty remote-control fault wrapper for the lr-recon rig (LR_SUSTAINED_LOAD W4, W4b).
 # Exported as CC_TERM_KITTY (kitty-slow) and LR_KITTEN_BIN (kitten-slow, a symlink to this file).
 #   $LR_RIG/faults/kitty-delay.tsv  wid<TAB>lo<TAB>hi<TAB>k  the first k (default 3) calls naming
 #                                   window wid sleep a draw in [lo,hi] s (tenths)
 #   $LR_RIG/faults/kitty-fail.tsv   wid<TAB>n               the first n send-text calls for wid exit 1
 #                                   without reaching kitty
+#   $LR_RIG/faults/kitty-ls-fail.tsv  from<TAB>until        (W4b, kitty_ls_fail) a FULL `ls` through
+#                                   kitten-slow (the daemon's: no --match) exits 1 while
+#                                   from <= now < until (epochs) — a deaf kitty; outside it, exec
 # Counters: $LR_RIG/state/kitty-slow/<wid>.{delay,fail}.n. Every FAULTED call is appended to
-# $LR_RIG/state/kitty-delay.log as epoch<TAB>wid<TAB><delay_s|fail><TAB>subcmd. With neither tsv
-# non-empty, or no window id in argv, it execs the real binary before any fork.
+# $LR_RIG/state/kitty-delay.log as epoch<TAB>wid<TAB><delay_s|fail|ls-fail><TAB>subcmd (wid `-` for
+# ls-fail). With no tsv non-empty, or no window id in argv and no ls fault due, it execs the real
+# binary before any fork.
 set -u
 real=${LR_RIG_REAL_KITTY:-/Applications/kitty.app/Contents/MacOS/kitty}
 [ "${0##*/}" = kitten-slow ] && real=${real%/*}/kitten
 dly=${LR_RIG:-/nonexistent}/faults/kitty-delay.tsv fl=${LR_RIG:-/nonexistent}/faults/kitty-fail.tsv
-[ -s "$dly" ] || [ -s "$fl" ] || exec "$real" "$@"
+lsf=${LR_RIG:-/nonexistent}/faults/kitty-ls-fail.tsv
+[ -s "$dly" ] || [ -s "$fl" ] || [ -s "$lsf" ] || exec "$real" "$@"
 
-wid='' sub='' at=0 val=0
+wid='' sub='' at=0 val=0 match=0
 for a in "$@"; do
   v=${a#--match=}; v=${v#window_}
   case $v in id:[0-9]*) v=${v#id:}; [ -n "$wid" ] || wid=${v%%[!0-9]*} ;; esac
+  case $a in --match|--match=*|-m) match=1 ;; esac
   if [ "$val" = 1 ]; then val=0; continue; fi
   if [ "$at" = 0 ]; then [ "$a" = @ ] && at=1; continue; fi
   [ -n "$sub" ] && continue
@@ -27,11 +33,24 @@ for a in "$@"; do
     *) sub=$a ;;
   esac
 done
+
+note() { mkdir -p "$LR_RIG/state/kitty-slow"; printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "${wid:--}" "$1" "${sub:--}" >> "$LR_RIG/state/kitty-delay.log"; }
+# The deaf window: the daemon's census reads every pane through ONE full `kitten @ ls` (observe.py);
+# a call scoped by --match, or through kitty-slow (the actuators), is never the census and passes.
+if [ "$sub" = ls ] && [ "$match" = 0 ] && [ "${0##*/}" = kitten-slow ] && [ -s "$lsf" ]; then
+  now=$(date +%s)
+  while IFS=$'\t' read -r from until _ || [ -n "${from:-}" ]; do
+    case "$from$until" in ''|*[!0-9]*) continue ;; esac
+    if [ "$now" -ge "$from" ] && [ "$now" -lt "$until" ]; then
+      note ls-fail
+      printf 'Error: rig fault kitty_ls_fail (deaf until %s)\n' "$until" >&2; exit 1
+    fi
+  done < "$lsf"
+fi
 [ -n "$wid" ] || exec "$real" "$@"
 
 st=$LR_RIG/state/kitty-slow
 tenths() { local i=${1%%.*} f=''; case $1 in *.*) f=${1#*.}; f=${f:0:1} ;; esac; _t=$((10#${i:-0} * 10 + 10#${f:-0})); }
-note() { mkdir -p "$st"; printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$wid" "$1" "${sub:--}" >> "$LR_RIG/state/kitty-delay.log"; }
 count() { local c=0; [ -f "$1" ] && read -r c < "$1"; _c=$((${c:-0} + 1)); }
 
 if [ -s "$dly" ]; then

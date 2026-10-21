@@ -1,0 +1,14 @@
+{
+  "_what": "W4b, for W16's E1 test (D2 review E1): a k = 9 limited cohort plus a concurrent 4-row shed batch. The batch is a real cc-lr move of 4 extra idle rows on next3 → next4, queued at go with CC_LR_MOVE_ORIGIN=shed and --slots 1, so it holds one slot of the store the reconciler's BootSlots share (locks/swap-slots under the arm's LR_STATE_DIR). Assertion (W16): every member's t_first within the no-shed arm's bound. Red arm: today's --slots 4 with no yield, which the rig takes from LR_RIG_MOVE_SLOTS=4 for that arm. A tree without D2's origin seam queues the same batch with no plan.origin; state/move-batches.json reports plan_origin either way.",
+  "source": "next",
+  "scope": "5h",
+  "go_barrier": true,
+  "die_spread_s": 120,
+  "seed": "shed-e1",
+  "boot_delay_bin": {"median": 46, "p90": 212, "cap": 300},
+  "placer": {"cpu_s": 4.0, "map_cpu_s": 0.15, "kmax": 8, "occupied": {}, "charge_ttl_s": 900},
+  "groups": [
+    {"name": "clean-limited", "count": 9, "knobs": {}, "expect": "ENGAGED"}
+  ],
+  "move_batch": {"rows": 4, "row_knobs": {"kitty_delay_s": [20, 40], "kitty_delay_k": 8}, "slots": 1, "at": 0, "origin": "shed", "from": "next3", "to": "next4"}
+}
