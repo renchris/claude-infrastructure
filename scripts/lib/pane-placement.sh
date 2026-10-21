@@ -38,7 +38,11 @@
 #      CC_MAX_PANES_PER_SPACE panes;
 #   2. otherwise a vsplit into the next OS window with room (1 tab, fewer than the cap, not zoomed),
 #      fullest first, so overflow windows fill to 4 before another is minted: a fullscreen window
-#      holding one pane is the precondition of the 2026-10-15 kitty crash (kitty-fullscreen-guard);
+#      holding one pane is the precondition of the 2026-10-15 kitty crash (kitty-fullscreen-guard).
+#      Only windows of the anchor's own kind qualify: an lr-recon rig OS window (a pane cwd under
+#      /tmp/lr-rig or /tmp/lrh-<id>-cure|red, or titled with that tag) takes only panes of that
+#      rig, and a rig pane never goes elsewhere. A lead placed into a rig window broke a W4 pair
+#      run's containment (LR_SUSTAINED_LOAD W4b);
 #   3. otherwise a NEW OS window, `--os-window-state=fullscreen`. kitty 0.48.2 applies that state
 #      through toggle_fullscreen_for_os_window (glfw.c:1452), which is NATIVE fullscreen unless
 #      macos_traditional_fullscreen is set (glfw.c:1379; config/kitty.conf leaves it unset), so the
@@ -125,6 +129,17 @@ def room(o):
     t = tabs[0]
     if t.get("layout") == "stack" or panes(t) >= cap: return None
     return t
+import re
+RIG_CWD = re.compile(r"^(?:/private)?/tmp/(lr-rig|lrh-[0-9A-Za-z]+-(?:cure|red))(?:/|$)")
+RIG_TITLE = re.compile(r"^(lr-rig|lrh-[0-9A-Za-z]+-(?:cure|red))(?: |$)")
+def rig(o):
+    # the lr-recon rig root an OS window belongs to (tests/rig/lr-recon-rig.sh: every pane cwd under
+    # /tmp/lr-rig or /tmp/lrh-<id>-cure|red, titled with that tag), or None for any other window
+    for t in o.get("tabs") or []:
+        for w in t.get("windows") or []:
+            m = RIG_CWD.match(str(w.get("cwd") or "")) or RIG_TITLE.match(str(w.get("title") or ""))
+            if m: return m.group(1)
+    return None
 home = None
 if anchor.isdigit():
     for o in d:
@@ -134,8 +149,12 @@ if anchor.isdigit():
 if home is not None and room(home) is not None:
     print("split %s %s %d 1" % (anchor, home["id"], panes(home["tabs"][0]))); sys.exit(0)
 cands = []
+mine = rig(home) if home is not None else None
 for o in d:
     if o is home: continue
+    # a rig OS window takes only the panes of the same rig, and a rig pane never spills into any
+    # other window: either way the arm reads a containment breach and the pair is NO-VERDICT (W4b)
+    if rig(o) != mine: continue
     t = room(o)
     if t is None or not t.get("windows"): continue
     cands.append((-panes(t), o["id"], o, t))

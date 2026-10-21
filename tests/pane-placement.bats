@@ -103,6 +103,41 @@ for o in json.load(open(sys.argv[1])):
   grep -q -- "--match window_id:60[123] " "$KLOG"
 }
 
+# mark OS window <osw> as an lr-recon rig window: every pane's cwd under <root>
+rig_window() {
+  python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+for o in d:
+    if o["id"] == int(sys.argv[2]):
+        for t in o["tabs"]:
+            for w in t["windows"]: w["cwd"] = sys.argv[3] + "/work/s%02d" % (w["id"] % 100)
+json.dump(d, open(sys.argv[1], "w"))' "$KSTATE" "$@"
+}
+
+@test "step 2 never splits into an lr-recon rig OS window, and a rig pane never spills out of its rig (W4b)" {
+  one_window 344 345 346 347
+  add_window 21 501
+  add_window 22 601 602 603
+  rig_window 22 /private/tmp/lrh-ab12-cure      # the fullest window with room is a rig arm's
+  run place 344 /work/a
+  [ "$status" -eq 0 ]
+  grep -qF -- "--match window_id:501 " "$KLOG"
+  ! grep -q -- "--match window_id:60[123] " "$KLOG" || false
+  # a rig pane whose own window is full: the operator's window and the OTHER arm's both have room,
+  # and neither is taken; it gets a new OS window (the rig's containment sampler would read either)
+  : > "$KLOG"
+  one_window 344 345 346 347
+  rig_window 18 /tmp/lr-rig
+  add_window 21 501
+  add_window 22 601 602 603
+  rig_window 22 /tmp/lrh-ab12-red
+  run place 344 /work/a
+  [ "$status" -eq 0 ]
+  [ "$(launches --type=window)" -eq 0 ]
+  [ "$(launches --type=os-window)" -eq 1 ]
+}
+
 @test "a window holding 2 tabs is never split into, and a zoomed (stack) tab is never split into" {
   one_window 344 345
   python3 -c '
