@@ -693,7 +693,7 @@ open(sys.argv[2], "w").write(s.replace(sys.argv[3], sys.argv[4]))' "$LRD/lr-move
   w16_env; w16_plan "" 1; w16_focus bad
   worker
   [ "$(res verdict)" = NOTMOVED ] && [[ "$(res reason)" == HELD:focus-unknown* ]] || { res reason; false; }
-  ! invoked
+  ! invoked || false
   rm -f "$BDIR/$SID.json" "$BDIR/$SID.events.jsonl"
   LR_MOVE_FOCUS_UNKNOWN=proceed worker
   [ "$(res verdict)" = MOVED ] || { res reason; false; }

@@ -97,7 +97,7 @@ await_row() { # the detached controller's first decision row, bounded; it never 
   # the tick has exited; the controller is still alive as lr-shed.py, at the poller's band
   # (/usr/bin/python3 is a shim that execs the Xcode framework Python, so the argv reads `…/Python -I`)
   ps -o command= -p "$SP" | grep -q 'Python.* -I .*/lr-shed.py --tick\|python3 -I .*/lr-shed.py --tick' || { ps -o command= -p "$SP"; false; }
-  ! ps -o command= -p "$SP" | grep -q taskpolicy
+  ! ps -o command= -p "$SP" | grep -q taskpolicy || false
   [ ! -e "$PSTATE/shed/run.pid" ]
   # D1: the run the kick started is the one that takes the lock and writes the decision
   for _i in $(seq 1 50); do [ -s "$PSTATE/shed/run.lock" ] && break; sleep 0.2; done

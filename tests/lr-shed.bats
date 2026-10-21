@@ -528,7 +528,7 @@ PY
   jq -nc --argjson ts "$(( $(date +%s) - 4000 ))" '{origin:"shed", from:"next3", to:"next2", ts:$ts, rows:[{sid:"s9", act:"move"}]}' > "$b/plan.json"
   echo '{"sid":"s9","verdict":"STRANDED","reason":"no copy"}' > "$b/s9.json"
   for _i in 1 2 3; do run tick; [ "$status" -eq 0 ] || { echo "$output"; false; }; done
-  [ -s "$SHED/breaker" ] && jq -e '.why == "casualty"' "$SHED/breaker" >/dev/null
+  [ -s "$SHED/breaker" ] && jq -e '.why == "casualty"' "$SHED/breaker" >/dev/null || false
   [ -e "$b/abort" ]
   [ "$(grep -c "shed-casualty-" "$STUBS/pages.log")" -eq 1 ] || { cat "$STUBS/pages.log"; false; }
   [ "$(moves)" -eq 0 ] || { cat "$STUBS/cclr.log"; false; }
@@ -595,7 +595,7 @@ print(json.dumps({"ts": datetime.fromtimestamp(float(sys.argv[1]), timezone.utc)
   run tick
   [ "$(moves)" -eq 0 ] || { cat "$STUBS/cclr.log"; false; }
   dec yield | jq -e '.limited_open == 1' >/dev/null || { cat "$SHED/decisions.jsonl"; false; }
-  ! grep -q '^plan' "$STUBS/cclr.log" 2>/dev/null
+  ! grep -q '^plan' "$STUBS/cclr.log" 2>/dev/null || false
   rm -f "$SHED/decisions.jsonl" "$SHED/state.json"; printf 'shadow\n' > "$SHED/mode"
   run tick
   dec pick | jq -e '.would_yield == true' >/dev/null || { cat "$SHED/decisions.jsonl"; false; }
