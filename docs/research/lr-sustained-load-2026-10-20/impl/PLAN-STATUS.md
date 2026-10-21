@@ -19,7 +19,8 @@ whichever session holds it. Fire kit (template + helper): `impl/lead-kit/` (copi
 | W8 | A | lrsl-w8 | `72fc09748` | pair `--red tree:a294d2bcb@31`: cure H1-H9, c_rpc_fail_twice ENGAGED cure / ESCALATED red | target:W8 flip in `load-expect.json` after that run |
 | W9 | A | lrsl-w9 | `784682330`, `9700c6213` (swap-slot race) | T2 `--red tree:72fc09748@31`: P_obs ≤180 s → XPASS | `load-expect.json` T2 row → hard after the XPASS |
 | W10 | A | lrsl-w10 | `52fc6f2b8` (+ DaemonWiring hermetic) | pair `--red tree:054ca06bb@31`: place events carry `holds=n/n holds_s=` | post-R3 production band report: `/tmp/w10h/holds_report.py` |
-| W4 | B | lrsl-w4 | IN FLIGHT pane 263 (fired 22:28) | — | — |
+| W4 | B | lrsl-w4 | `30cadb316` `354bd4c04` `da293caf2` (bats 1..58 0 not ok, 34/34 mutants; custody returned 01:49) | own pair guarantee9 `--arms cure,red` (cure-only and pair ran NO-VERDICT: load 9.6-11.2/core, containment) | — |
+| W4b | B | lrsl-w4b | IN FLIGHT pane 359 (fired 2026-10-21 01:21) | — | grants: `load_lib.py`, `stub-claude.py` (standing: W4's rig files except `load-expect.json`/`g1-allow.tsv`), `scripts/lib/pane-placement.sh` (skip rig OS windows, W4 finding) |
 | W12 | C | lrsl-w12 | IN FLIGHT pane 267 (fired 22:40) | — | carries `lr-guarantee-g1-lint.bats:415` deletion |
 | W11 | A | lrsl-w11 | IN FLIGHT pane 304 (fired 23:46) | — | removes `g1-allow.tsv:25` (hf_lr_admit debt:W12) if W12 landed |
 | C2 re-open | — | — | backlog `649ebd06939f`, blocked not-yet-true | — | — |
@@ -43,5 +44,8 @@ Next per slot (Phase 0 order and edges): A W13 → W14 → W17 · B W4b → W15 
 - `handoff-fire.sh` refuses a brief whose `cc-notify` target is a pane number; use the lead's full session uuid.
 - The capacity gate refuses once at 8 active sessions and admits the next fire; the helper retries once.
 - Land smoke is shed above load 80; every wave re-ran its own suites after the land.
+- Tier-L queue (2026-10-21 01:19 and 01:24, successor lead): `preflight --matrix guarantee9 --arms cure,red`
+  read NO-VERDICT twice on kitty limits, not load (29.8/core): kitty fds 151+3×36=259 > 230 and coalition
+  697+4×34=833 > 650. Both fall only with fewer panes or the B8 kitty restart (`1c94119a286d`); retry per slice.
 - Unexplained, out of scope: `cc-lr status --rail` showed `dispatch 4 ×2` (two processes at base priority 4) while
   `com.claude.dispatcher` is loaded Interactive.

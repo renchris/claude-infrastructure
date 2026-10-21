@@ -602,7 +602,7 @@ and a default, as the plan specifies.
 | Pass-boundary restart request (A6 lever 11) | FILED | packet `5353dd6e8277` |
 | B1 harness load and windows | FILED | packets `4eee30ac4de4` (background top-up load), `75bb72581c54` (main-terminal windows) |
 | Reconciler reload batches R1-R5, router-cache band RK | FILED | steps `b8bbc2317870` (R1-R5), `626ed25b243c` (RK) |
-| B1 load harness and guarantee tests | IN FLIGHT | hermetic tier LANDED W1 `e6713c4da`..`2d99d8e93` (Tier G simulation, rig, no-load-wait lint; 783 OK, bats 1..36); live tier W4 and W4b to come |
+| B1 load harness and guarantee tests | IN FLIGHT | hermetic tier LANDED W1 `e6713c4da`..`2d99d8e93` (Tier G simulation, rig, no-load-wait lint; 783 OK, bats 1..36); live tier LANDED W4 `da293caf2` (two concurrent arms, in-path bands, verdict with power; bats 1..58, 34/34 mutants; its pair run owed); rig completion W4b to come |
 | A6 restart safety | LANDED | W2 `1eb5548ac` + `45b8bbfa9` (claim re-stamped to the adopted actuator, exit codes survive a restart); 667 unittest OK, bats 1..21; live once operator reload R1 (`b8bbc2317870`) runs; Tier-L guarantee9 pair owed after W4 |
 | B4 cheap `--place` | LANDED | client half W3 `c79df708d` (0.15 CPU-s at priority 31, was 3.0-3.3); holds map W10 `52fc6f2b8` (864 unittest OK, 10/10 mutants); live after reload R3; Tier-L pair owed after W4 |
 | B6 telemetry | LANDED | W6 `8f4ab29f9` + `748186142` (`recon/telemetry.jsonl`, `cc-lr status --rail`); 743 unittest OK, bats 1..39; live after reload R2; Tier-L cure run owed after W4 |
