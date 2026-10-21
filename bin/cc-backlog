@@ -135,6 +135,13 @@
 #                                                                  0 unclassed events, then enforced;
 #                                                                  --force bypasses and logs.
 #                                                                  CC_BACKLOG_CLASS_GATE=warn|enforce|off pins.
+#           block … [--until "<probe>"]                           UNTIL (2026-10-21): an ARMING probe, stored
+#                                                                  as field `until` and carried by list --json.
+#                                                                  Exit 0 = the precondition has arrived, so
+#                                                                  the restore wakes the row's --session (kind
+#                                                                  `unblocked`). It never closes the row; that
+#                                                                  is --falsifier, which must not carry it.
+#                                                                  A re-block without --until drops it.
 #   class-gate [--enforcing]                                     → the gate's mode + unclassed callers in the
 #                                                                  window; --enforcing exits 0 iff enforcing.
 #   add|needs|block from a checkout under /tmp or /private/tmp   → REFUSED (fixture root) unless
@@ -1581,6 +1588,9 @@ fold() { # [--strict] [--as-of <iso>] — handed to valid_records; pipefail carr
         closeKind:     ($r.closeKind     // $p.closeKind     // ""),
         closePointer:  ($r.closePointer  // $p.closePointer  // ""),
         blockClass:    (if $r.event == "block" then ($r.blockClass // "") else ($p.blockClass // "") end),
+        # until rides `block` (UNTIL in the header) and REPLACES like blockClass: the arming probe
+        # belongs to the CURRENT block, so a re-block without one carries none forward.
+        until:         (if $r.event == "block" then ($r.until // "") else ($p.until // "") end),
         # VENUE — where the CURRENT holder runs, which decides which liveness oracles can see it
         # (see VENUE in the header). Note the shape: unlike every sibling above, a `claim` RESETS
         # it rather than carrying forward. `$r.venue // $p.venue` would be wrong in a way that
@@ -3019,11 +3029,15 @@ cmd_transition() {
   local event="$1"; shift
   local id="${1:-}"; [ $# -gt 0 ] && shift
   local by="" evidence="" needs="" run="" session="" venue="" force=0 selfrel="" role=""
-  local klass="" conviction="" receipt="" kind=""
+  local klass="" conviction="" receipt="" kind="" until=""
   while [ $# -gt 0 ]; do
     local key="$1"; shift
     case "$key" in
       --by)       by="${1:-}";       [ $# -gt 0 ] && shift ;;
+      # --until "<probe>" rides `block` only (see UNTIL in the header): exit 0 means the block's
+      # precondition has ARRIVED and the row's session should be woken. NOT --falsifier, whose
+      # exit 0 CLOSES the row (docs/lessons/arming-and-mootness-cannot-share-one-falsifier.md).
+      --until)    until="${1:-}";    [ $# -gt 0 ] && shift ;;
       # --class / --conviction / --receipt ride `block` (THE CLASS GATE, see class_gate_block).
       --class)      klass="${1:-}";      [ $# -gt 0 ] && shift ;;
       --conviction) conviction="${1:-}"; [ $# -gt 0 ] && shift ;;
@@ -3049,6 +3063,9 @@ cmd_transition() {
   done
   [ -n "$id" ] || { printf 'cc-backlog %s: <id> is required\n' "$event" >&2; return 2; }
   if [ "$event" = block ]; then fixture_root_refusal block || return $?; fi
+  if [ "$event" != block ] && [ -n "$until" ]; then
+    printf 'cc-backlog %s: --until applies only to block (an arming probe for a blocked row)\n' "$event" >&2; return 2
+  fi
   # `block` MUST carry the pending operator step — that IS the desk-surfaced payload.
   if [ "$event" = block ] && [ -z "$needs" ]; then
     printf 'cc-backlog block: --needs "<operator-only step>" is required\n' >&2; return 2
@@ -3907,11 +3924,19 @@ cmd_transition() {
   # longer sit ahead of a refusal's own verdict on line 1. Emitted before the append, never after:
   # a reader that sees the record must be able to see the sentence that explains it.
   if [ -n "${pmsg:-}" ]; then printf '%s\n' "$pmsg" >&2; fi
+  # An arming probe needs someone to wake: the restore classifier keys `until` on the row's `session`.
+  # A row with none (d4a65e8decc0, 2026-10-21) takes the BLOCKING session's id; a row that already
+  # names one keeps it, and an explicit --session always wins.
+  if [ "$event" = block ] && [ -n "$until" ] && [ -z "$session" ]; then
+    if [ -z "$(fold | jq -r --arg i "$id" 'map(select(.id == $i)) | first | .session // ""' 2>/dev/null)" ]; then
+      session="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-${CC_SESSION_ID:-}}}"
+    fi
+  fi
   jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg event "$event" \
      --arg by "$by" --arg evidence "$evidence" --arg needs "$needs" \
      --arg pgate "${pgate:-}" \
      --arg run "$run" --arg session "$session" --arg venue "$venue" --argjson force "$force" \
-     --arg selfrel "$selfrel" --arg role "$role" \
+     --arg selfrel "$selfrel" --arg role "$role" --arg until "$until" \
      --arg lane "$lane" --arg closedby "$closedby" --arg closedsess "$closedsess" \
      --arg bclass "$bclass" --arg conviction "$conviction" --arg receipt "$receipt" \
      --arg ckind "${_BL_CLOSE_KIND:-}" --arg cptr "${_BL_CLOSE_PTR:-}" \
@@ -3928,6 +3953,7 @@ cmd_transition() {
       + (if $needs != ""    then {needs:$needs}       else {} end)
       + (if $run != ""      then {run:$run}           else {} end)
       + (if $session != ""  then {session:$session}   else {} end)
+      + (if $until != ""    then {until:$until}       else {} end)
       + (if $venue != ""    then {venue:$venue}       else {} end)
       + (if $role != ""     then {role:$role}         else {} end)
       + (if $pgate != ""    then {premise:$pgate}     else {} end)
@@ -5575,6 +5601,8 @@ cmd_list() {
            # metric would read 100% the day the field became visible, over a store where nothing had
            # one. `has("falsifier")` and `select(.falsifier)` must agree, which needs the key absent.
            | (if (.falsifier // "") == "" then del(.falsifier) else . end)
+           # Same rule: an absent `until` means no arming probe, and readers key on its presence.
+           | (if (.until // "") == "" then del(.until) else . end)
            # Same del-when-empty rule as `falsifier`, same reason and it is the same metric: the
            # coverage question is `select(.venuePlan)`, jq treats "" as TRUTHY, and a ""-carrying
            # key would make every item in the store answer "yes, it has been routed" on the day the
