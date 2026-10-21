@@ -158,7 +158,9 @@ kills() {
 }
 
 @test "mutant: the pacer slot stamped before the probe (efficacy 6), dies" {
-  kills admit.py 'self.pacer_take(sid, acct, t_dec)' 'self.pacer_take(sid, acct, now)' \
+  # anchored on the line after it: W11 added a second pacer_take(sid, acct, t_dec) on the overdue branch
+  kills admit.py $'self.pacer_take(sid, acct, t_dec)\n        return True, reason' \
+    $'self.pacer_take(sid, acct, now)\n        return True, reason' \
     PacerOnWall.test_the_slot_is_stamped_after_the_probe
 }
 
