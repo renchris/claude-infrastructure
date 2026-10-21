@@ -816,6 +816,9 @@ class Record:
     goal_snapshot: str = ""
     terminal: Optional[Terminal] = None
     sentinel_until: Optional[float] = None
+    # W11 (B3): a limited record's deadline, set once from timeline.detected + W_soft, after which
+    # the soft admission gates no longer hold it; moved only across a sleep or a reset-wait re-offer
+    deadline_at: Optional[float] = None
     updated_at: float = 0.0
 
     @property

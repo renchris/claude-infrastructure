@@ -182,6 +182,8 @@ def shift_record(rec: T.Record, slept: float) -> None:
         rec.next_eligible_at += slept
     if rec.sentinel_until is not None:
         rec.sentinel_until += slept
+    if rec.deadline_at is not None:  # W11: a deadline, not history (timeline stays put)
+        rec.deadline_at += slept
     if rec.wait is not None:
         if rec.wait.since:
             rec.wait.since += slept
