@@ -592,7 +592,7 @@ and a default, as the plan specifies.
 |---|---|---|
 | A5 false HELD:busy on a `/goal` record | LANDED | `c82a349ce` (before wave 1) |
 | A8 one seat for a resumed lead | LANDED as superseded | replaced by gap 3's weight levers, wave 3 `9fc5964c3` |
-| A7 drive cohort members that turned limited while queued | FILED | packet `4ffc4e1e5f1c` (lane order; default: reconciler first, poller after 10 min). Code: W5, W13, logging-only until ruled |
+| A7 drive cohort members that turned limited while queued | FILED | packet `4ffc4e1e5f1c` (lane order; default: reconciler first, poller after 10 min). Code: W5 LANDED `a294d2bcb` (`fef98e423` + 2 fixups; reconciler first, poller after a bounded wait, move lane lets go; Part A in shadow until ruled), W13 to come |
 | D1 re-pick honours the router's held verdict | FILED | packet `0223cae3d185`. Code: W15, lands at mode `off` |
 | D2 warning-band shedding | FILED | packets `76a584cc935b` (late-band idle shed, D2b) and `c9a05672e692` (at-the-wall idle fan-out, D2a); step `f259e20643bf` (shadow switch). Code: W13, W16, shadow only |
 | B8 kitty hygiene | FILED | steps `d25661ba57f1` (App Nap key), `7e912ef257cb` (fd headroom), `1c94119a286d` (planned kitty restart); packets `74b9bd774c40` (official 0.49.2), `1ef91f32a58c` (in-kitty fd watcher), `1c7000af9e41` (in-process App Nap test). Agent tools: W7 |
@@ -603,17 +603,17 @@ and a default, as the plan specifies.
 | B1 harness load and windows | FILED | packets `4eee30ac4de4` (background top-up load), `75bb72581c54` (main-terminal windows) |
 | Reconciler reload batches R1-R5, router-cache band RK | FILED | steps `b8bbc2317870` (R1-R5), `626ed25b243c` (RK) |
 | B1 load harness and guarantee tests | IN FLIGHT | W1 (hermetic tier), W4 (live tier), W4b |
-| A6 restart safety | IN FLIGHT | W2 |
-| B4 cheap `--place` | IN FLIGHT | W3 (client), W10 (holds map) |
-| B6 telemetry | IN FLIGHT | W6 |
-| B7 pass-scoped `now` audit, and C2-lite (typed delivery retries instead of escalating) | IN FLIGHT | W8 |
+| A6 restart safety | LANDED | W2 `1eb5548ac` + `45b8bbfa9` (claim re-stamped to the adopted actuator, exit codes survive a restart); 667 unittest OK, bats 1..21; live once operator reload R1 (`b8bbc2317870`) runs; Tier-L guarantee9 pair owed after W4 |
+| B4 cheap `--place` | IN FLIGHT | client half LANDED W3 `c79df708d` (0.15 CPU-s at priority 31, was 3.0-3.3); holds map W10 to come |
+| B6 telemetry | LANDED | W6 `8f4ab29f9` + `748186142` (`recon/telemetry.jsonl`, `cc-lr status --rail`); 743 unittest OK, bats 1..39; live after reload R2; Tier-L cure run owed after W4 |
+| B7 pass-scoped `now` audit, and C2-lite (typed delivery retries instead of escalating) | LANDED | W8 `72fc09748` (right clock per decision, no actuator load term, every hold reason mapped); 783 unittest OK, now-audit 1..26, Tier G 1..11, G1 lint 1..9; live after reload R2; Tier-L pair owed after W4 |
 | B2 bounded pass (stage 1) | IN FLIGHT | W9; stage 2 dropped with a re-open trigger (plan § Dropped) |
 | B3 per-record deadline (rescoped) | IN FLIGHT | W11 |
 | B5 kitty off the pre-commit path | IN FLIGHT | W12 (kernel identity, one-window probe), W14 (kitty-free census binding) |
-| C2 socket transport for the owed prompt | IN FLIGHT | full transport dropped by the plan (reviewer: "works as specified" ≈ 0%); C2-lite rides W8; a re-open row is filed when W8 lands |
+| C2 socket transport for the owed prompt | FILED | full transport dropped by the plan (reviewer: "works as specified" ≈ 0%); C2-lite LANDED in W8 `72fc09748`; re-open row `649ebd06939f`, parked not-yet-true until its trigger fires |
 
-Safety precondition wave W0b (test hermeticity, reaper whitelist, hook cwd) was dispatched alone
-at 20:33Z before any slot starts.
+Safety precondition wave W0b (test hermeticity, reaper whitelist, hook cwd, and the same cwd
+import hijack in `lr-predicate.sh`) LANDED `9f005ae66` + `b24389ff7` before any slot started.
 
 ## Appendix A. Refuted claims and levers (dropped)
 
