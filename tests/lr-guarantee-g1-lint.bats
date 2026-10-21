@@ -26,6 +26,10 @@
 setup() {
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   export HOME="$BATS_TEST_TMPDIR/home" TMPDIR="$BATS_TEST_TMPDIR/tmp"
+  export LR_STATE_DIR="$BATS_TEST_TMPDIR/lr" LR_RECON_ROOT="$BATS_TEST_TMPDIR/recon"
+  # the lint only READS handoff-fire.sh and capacity-admit.sh as text, but the hermeticity gate
+  # closes both against ambient load for every suite that names them
+  export CC_FIRE_CAPACITY_GATE=off CC_ADMIT_GATE=off
   mkdir -p "$HOME" "$TMPDIR"
   ROOT="$BATS_TEST_TMPDIR/root"
   ALLOW="$BATS_TEST_TMPDIR/allow.tsv"
