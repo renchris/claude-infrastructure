@@ -1044,16 +1044,95 @@ def analyse(rows, cfg, gset):
     )
 
 
-def census_data(days, extra_roots=()):
+TRUNK_REFS = (
+    "refs/remotes/origin/HEAD",
+    "refs/remotes/origin/main",
+    "refs/remotes/origin/master",
+    "refs/heads/main",
+    "refs/heads/master",
+)
+
+
+def trunk_of(root):
+    """The trunk commit of the git checkout at root, or None when there is none to compare with
+    (a fake or broken .git, no trunk ref). None makes the checkout count, as it did before."""
+    try:
+        top = _git(root, "rev-parse", "--show-toplevel")
+        if os.path.realpath(top) != os.path.realpath(root):
+            return None
+    except Exception:
+        return None
+    for ref in TRUNK_REFS:
+        try:
+            return _git(root, "rev-parse", "--verify", "-q", ref + "^{commit}")
+        except Exception:
+            continue
+    return None
+
+
+def repo_sig(fs, root, cwd):
+    """The repo-tier instruction set a session at cwd loads, as (path relative to root, sha)."""
+    L = Loader(fs, Excludes([root]))
+    chain, d = [], os.path.normpath(cwd)
+    while d == root or d.startswith(root + "/"):
+        chain.insert(0, d)
+        d = os.path.dirname(d)
+    for d in chain:
+        L.walk_dir(d, "repo")
+    return sorted((os.path.relpath(r["path"], root), r["sha"]) for r in L.rows)
+
+
+def off_trunk(cwd, memo):
+    """True when the checkout at cwd loads repo-tier instruction files that are not trunk's: a
+    worktree pinned at an old commit (a research control arm), a stale one, or a branch that edits
+    them. No trunk edit can change what it loads (a branch's growth is the land ratchet's), so it
+    may not stand for the repo: 2026-10-21, a control arm pinned at 8788dea27 carried the pre-367e42f26
+    root CLAUDE.md and held repo-claude-infrastructure at 139,498 while trunk loaded 16,915."""
+    root = git_root(cwd)
+    if not root:
+        return False
+    lab = main_repo(root)
+    if lab not in memo:
+        memo[lab] = trunk_of(root)
+    sha = memo[lab]
+    if not sha:
+        return False
+    k = (lab, sha, os.path.relpath(os.path.normpath(cwd), root))
+    try:
+        if k not in memo:
+            gfs = GitFS(root, sha)
+            memo[k] = (repo_sig(gfs, root, cwd), gfs.tree())
+        want, tree = memo[k]
+        have = repo_sig(DiskFS(), root, cwd)
+        # A file neither trunk nor this checkout tracks (an untracked local rules file) is the
+        # checkout's own load, not a vintage: it may not make the checkout off-trunk.
+        extra = [p for p, _ in have if p not in tree and not p.startswith("..")]
+        if extra:
+            tracked = set(_git(root, "ls-files", "--", *extra).splitlines())
+            have = [x for x in have if x[0] not in extra or x[0] in tracked]
+        return have != want
+    except Exception:
+        return False
+
+
+def census_data(days, extra_roots=(), trunk_only=True):
+    """trunk_only: a repo is represented by its trunk-vintage checkouts (off_trunk); with none
+    left it is measured at trunk itself. The excluded cwds are listed under `offtrunk`."""
     cfg = load_config()
     cfgdirs = config_dirs()
     gset = global_user_reals(cfgdirs)
     out = []
+    memo = {}
     for lab, cwds in sorted(population(days, extra_roots).items()):
+        stale = sorted(w for w in cwds if trunk_only and off_trunk(w, memo))
+        cur = [w for w in cwds if w not in stale]
         for c in cfgdirs:
             reps = {}
-            for cwd in cwds:
+            for cwd in cur:
                 reps[cwd] = session(c, cwd)
+            if not reps:
+                rep = lab + "@trunk"
+                reps[rep] = session(c, lab, fs=GitFS(lab, memo[lab]))
             rep = max(reps, key=lambda k: (sum(r["units"] for r in reps[k]), k))
             rows = reps[rep]
             a = analyse(rows, cfg, gset)
@@ -1065,7 +1144,17 @@ def census_data(days, extra_roots=()):
             if hit:
                 hit["cfgs"].append(c)
                 continue
-            out.append(dict(label=lab, cwd=rep, cfgs=[c], rows=rows, sig=sig, **a))
+            out.append(
+                dict(
+                    label=lab,
+                    cwd=rep,
+                    cfgs=[c],
+                    rows=rows,
+                    sig=sig,
+                    offtrunk=stale,
+                    **a,
+                )
+            )
     return cfg, out
 
 
@@ -1202,6 +1291,19 @@ def cmd_census(argv):
         )
         return 0
     print(render(data))
+    seen = set()
+    for e in data:
+        if e["offtrunk"] and e["label"] not in seen:
+            seen.add(e["label"])
+            print(
+                "\n%s: %d off-trunk checkout(s) not counted (their instruction files are not "
+                "trunk's): %s"
+                % (
+                    e["label"].replace(home(), "~"),
+                    len(e["offtrunk"]),
+                    ", ".join(w.replace(home(), "~") for w in e["offtrunk"]),
+                )
+            )
     print(
         "\nper-file budget %s · tiers user %s / ancestor %s / repo %s · units = loader chars "
         "(UTF-16, frontmatter + comment blocks stripped) · DUP = an instruction file loaded twice"
@@ -1320,7 +1422,8 @@ def cmd_file(argv):
 def cmd_publish(argv):
     """Write the @import reachability set the hook's forkless pre-screen reads."""
     try:
-        _cfg, data = census_data(float(_opt(argv, "--days", "7")))
+        # every checkout, off-trunk ones too: a write there still needs the pre-screen to see it
+        _cfg, data = census_data(float(_opt(argv, "--days", "7")), trunk_only=False)
         s = set()
         for e in data:
             for r in e["rows"]:

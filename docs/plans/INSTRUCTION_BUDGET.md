@@ -104,6 +104,15 @@ conditional (`paths:`) rules get their own 40k per-file cap so `paths:` is not a
 shrink-only. Deny messages name the destination (`.claude/bottles/…`, `docs/lessons/…`, the
 situational file), not "add paths:".
 
+**D7 addendum (2026-10-21, backlog `1db77e89cf5c`): the auditor judges a repo by its trunk-vintage
+checkouts.** A checkout whose tracked repo-tier instruction files differ from trunk's (a pinned research
+control arm, a stale worktree, a branch editing them) is listed as "off-trunk, not counted" instead of
+standing for the repo: no trunk edit can change what it loads, and a branch's growth is the land ratchet's.
+Untracked local rules files still count. With no trunk-vintage checkout left, the repo is measured at trunk
+itself. Incident: `fca-control-base`, pinned at `8788dea27` for the frontier control arm, still carried the
+92,655-char root `CLAUDE.md` that `367e42f26` removed, and held the repo row at 139,498 while trunk loaded
+16,915. `publish` still reads every checkout.
+
 ## Known issues (not in scope)
 
 - The deployed `CLAUDE.slim.md` (sha d28f…, 57.5k) has drifted from the file the F1 gate certified

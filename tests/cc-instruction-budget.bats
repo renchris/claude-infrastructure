@@ -78,6 +78,36 @@ hasnt() { if printf '%s' "$1" | grep -qF -- "$2"; then return 1; fi; }
   [ "$status" -eq 0 ]
 }
 
+@test "a worktree pinned off trunk does not stand for its repo; trunk's own growth and an untracked local file still do" {
+  # 2026-10-21: a research control arm pinned at an old commit carried a 92k root CLAUDE.md that trunk
+  # had already removed, and held the repo row open (139,498) while trunk loaded 16,915.
+  W="$HOME/Development/wapp"; mkdir -p "$W/.claude/rules"
+  w() { git -C "$W" -c core.hooksPath=/dev/null -c core.excludesFile=/dev/null -c commit.gpgSign=false \
+          -c user.name=t -c user.email=t@t "$@"; }
+  w init -q -b main
+  xs 65000 > "$W/.claude/rules/lessons.md"; w add -A; w commit -qm fat
+  xs 100 > "$W/.claude/rules/lessons.md"; w commit -qam slim
+  P="$HOME/Development/.worktrees/pinned"; w worktree add -q --detach "$P" HEAD~1
+  mkdir -p "$HOME/.claude/projects/-pinned"
+  jq -nc --arg c "$P" '{type:"user", cwd:$c}' > "$HOME/.claude/projects/-pinned/s1.jsonl"
+  run "$IB" assert --class repo-wapp --repo "$W"
+  [ "$status" -eq 0 ]
+  run "$IB" census --days 1
+  has "$output" "1 off-trunk checkout(s) not counted"
+  has "$output" "/.worktrees/pinned"
+  # control: the same bytes ON trunk breach
+  xs 65000 > "$W/.claude/rules/lessons.md"; w commit -qam regrow
+  run "$IB" assert --class repo-wapp --repo "$W"
+  [ "$status" -eq 1 ]
+  has "$output" 'BREACH [repo-wapp]'
+  # an untracked local rules file is the checkout's own load, not a vintage: it still counts
+  xs 100 > "$W/.claude/rules/lessons.md"; w commit -qam slim-again
+  xs 65000 > "$W/.claude/rules/local.md"
+  run "$IB" assert --class repo-wapp --repo "$W"
+  [ "$status" -eq 1 ]
+  has "$output" 'local.md'
+}
+
 @test "assert is a NON-VERDICT (rc 3), not green, when it cannot measure" {
   export CC_IB_CONFIG="$BATS_TEST_TMPDIR/missing.json"
   run "$IB" assert
