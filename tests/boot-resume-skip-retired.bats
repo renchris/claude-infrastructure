@@ -75,6 +75,21 @@ launched() { cat "$STUBS/launch.log" 2>/dev/null; }
   grep -q '"retired_skipped":1' "$CC_IDL"
 }
 
+@test "R1: a lead-supervisor reap newer than the last activity retires the session; an older one, or another actor's, does not" {
+  # 2026-10-21 REPORT.md R1: the retired check also accepts the lead supervisor's own close record.
+  {
+    printf '{"ts":"2026-10-01T18:45:00Z","actor":"lead-supervisor","kind":"reap","sid":"sid-gone","why":"clean-completion-shipped-clean-worktree"}\n'
+    printf '{"ts":"2026-10-01T18:45:00Z","actor":"lead-supervisor","kind":"reap","sid":"sid-live","why":"older than its last activity"}\n'
+    printf '{"ts":"2026-10-01T18:55:00Z","actor":"someone-else","kind":"reap","sid":"sid-live"}\n'
+  } > "$CC_IDL"
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  ! launched | grep -q sid-gone || false
+  launched | grep -q sid-live
+  grep -q 'gone-pane (sid-gone): reaped by the lead supervisor (clean-completion-shipped-clean-worktree) at 2026-10-01T18:45:00Z, after its last activity 2026-10-01T18:43:24Z' "$STUBS/notify.log"
+  tail -n 1 "$CC_IDL" | grep -q '"retired_skipped":1'
+}
+
 @test "the skip is logged with the marker and its time, and the page names it with a resume line" {
   marker sid-gone terminal 2026-10-01T18:43:34Z
   run bash "$SCRIPT"

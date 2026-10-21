@@ -59,6 +59,9 @@ SH
   export CC_RESTORE_PASTE_CMD="$BATS_TEST_TMPDIR/no-paste-here"
   # This suite names the fire script only in comments; pinned so no case reads live machine load.
   export CC_FIRE_CAPACITY_GATE=off
+  # The capacity-admit gate is closed too (the land's hermeticity lint): every launcher and layout
+  # here is a stub, so no case may reach scripts/lib/capacity-admit.sh against the live machine.
+  export CC_ADMIT_GATE=off
 
   # stub cc-backlog: echo a hex id + log the argv. MANDATORY, not optional — resolve_bin's ladder
   # reaches the REPO's own bin/cc-backlog from $(dirname $0)/../bin, so an unstubbed run would file
@@ -79,8 +82,8 @@ SH
 #!/bin/bash
 if [ "$1" = --check-only ]; then
   shift; printf '%s\n' "$*" >> "$0.checks"
-  grep -qx "$3" "$0.held" 2>/dev/null && exit 5
-  grep -qx "$3" "$0.member" 2>/dev/null && exit 7   # an Agent Teams member (teammate resurrection)
+  grep -qx "$3" "$0.held" 2>/dev/null && { echo "boot-resume-launch: $3 already has 1 live holder(s) - stub" >&2; exit 5; }
+  grep -qx "$3" "$0.member" 2>/dev/null && { echo "boot-resume-launch: NOT LAUNCHING $3 - an Agent Teams member (stub)" >&2; exit 7; }
   exit 0
 fi
 printf '%s\n' "$*" >> "$0.log"
@@ -126,7 +129,9 @@ SH
   export CC_RESUME_CLASSIFY_BIN="$BATS_TEST_TMPDIR/stub-classify"
   cat > "$CC_RESUME_CLASSIFY_BIN" <<'SH'
 #!/bin/bash
+# Like the real classifier this stub takes --owner (boot-resume passes it only to one that does).
 printf '%s\n' "$*" >> "$0.log"
+ls "${CC_MAILBOX_DIR:-/nonexistent}" > "$0.mbox-seen" 2>/dev/null   # what mail existed when it ran
 [ -f "$0.fail" ] && exit 3
 while IFS= read -r row; do
   [ -n "$row" ] || continue
@@ -201,8 +206,13 @@ case "$*" in
 esac
 SH
   chmod +x "$CC_SYSCTL_BIN"
-  export CC_RESTORE_GATE_POLL_S=0
   export CC_HANDOFF_LOG="$BATS_TEST_TMPDIR/handoffs.jsonl" CC_TEARDOWN_DIR="$BATS_TEST_TMPDIR/teardown"
+  # 2026-10-21 (reboot-resume R3, R8): the mail carry works on a fixture mailbox through the real
+  # library, and cc-restore-rebind is a stub that logs its argv (the real one claims live roles).
+  export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mailbox"
+  export CC_RESTORE_REBIND_BIN="$BATS_TEST_TMPDIR/stub-rebind"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$0.log"\necho "cc-restore-rebind: verdict=NOOP"\n' > "$CC_RESTORE_REBIND_BIN"
+  chmod +x "$CC_RESTORE_REBIND_BIN"
 }
 
 # reg_entry <sid> <startedAt_ms> <account-config-basename> [cwd] [name]
@@ -989,7 +999,7 @@ v2_fleet() { # a dead kitty's heartbeat of e1 (claude-next) and e2 (claude-terti
   grep -qx 'cc-resume-layout: map sid=e1 wid=51 oswin=1' "$CC_BOOT_RESUME_STATE_DIR/last-layout.map"
   grep -qx 'cc-resume-layout: map sid=e1 wid=51 oswin=1' "$ev/map"
   [ ! -f "$CC_BOOT_RESUME_STATE_DIR/events/1784805000.done" ]   # one row was shed
-  [ "$(notify_count)" -eq 1 ]
+  [ "$(notify_count)" -eq 2 ]                                  # the early page and its follow-up (R8)
   grep -q 'this restore runs again for them' "$CC_NOTIFY_BIN.log"
   printf '%s\n' "$SUM_OK1" > "$CC_RESUME_LAYOUT_BIN.sum"
   run /bin/bash "$SCRIPT" --event 1784805000 --kind crash        # round 2
@@ -997,7 +1007,7 @@ v2_fleet() { # a dead kitty's heartbeat of e1 (claude-next) and e2 (claude-terti
   [ "$(grep -c '	e1	' "$CC_RESUME_LAYOUT_BIN.rows")" -eq 1 ]   # e1 went to the layout once, ever
   [ "$(grep -c '	e2	' "$CC_RESUME_LAYOUT_BIN.rows")" -eq 2 ]
   [ -f "$CC_BOOT_RESUME_STATE_DIR/events/1784805000.done" ]
-  [ "$(notify_count)" -eq 1 ]                                  # one page per event, not per round
+  [ "$(notify_count)" -eq 2 ]                                  # paged in round 1 only, not per round
   tail -n 1 "$CC_IDL" | grep -q '"ledger_skipped":1'
   tail -n 1 "$CC_IDL" | grep -q '"channel":"already-paged"'
   [ "$(sort "$ev/launched" | tr '\n' ' ')" = "e1 e2 " ]
@@ -1005,6 +1015,8 @@ v2_fleet() { # a dead kitty's heartbeat of e1 (claude-next) and e2 (claude-terti
 
 @test "v2: past the event's deadline a shed row no longer holds the event open" {
   v2_fleet
+  # The deadline runs from the event's first run (R18): that run is stamped 1801 s before this one.
+  mkdir -p "$CC_BOOT_RESUME_STATE_DIR/events/1784805000"; echo 1784805000 > "$CC_BOOT_RESUME_STATE_DIR/events/1784805000/started"
   export CC_RESTORE_NOW=$((1784805000 + 1801))
   stub_layout "$SUM_MAP1"
   run /bin/bash "$SCRIPT" --event 1784805000 --kind crash
@@ -1012,23 +1024,44 @@ v2_fleet() { # a dead kitty's heartbeat of e1 (claude-next) and e2 (claude-terti
   [ -f "$CC_BOOT_RESUME_STATE_DIR/events/1784805000.done" ]
 }
 
-@test "v2 start gate: waits while load per core is over the gate, logging each reading; at its deadline it goes ahead" {
+@test "R18: a reboot whose first run comes 2 h after the kernel boot still gets a retry round for a shed session" {
+  # 2026-10-21: login 47 min after boot. Measured from kern.boottime the 30-min deadline had passed
+  # before the first run, so a shed session would have had no retry. Now it runs from <event>/started.
+  roster alarm 1784799900 "[$(rrow s1 claude-next /x/s1 S-ONE),$(rrow s2 claude-next /x/s2 S-TWO)]"
+  mkdir -p "$CC_BOOT_RESUME_STATE_DIR"; touch "$CC_BOOT_RESUME_STATE_DIR/restore-v2"
+  # The heartbeats this restore takes are stamped at its own clock, after the boot, as on a real login.
+  export CC_BOOT_RESUME_MODE=resume CC_RESTORE_NOW=$((1784800000 + 7200)) CC_HB_NOW=$((1784800000 + 7200))
+  stub_layout 'cc-resume-layout: map sid=s1 wid=51 oswin=1
+cc-resume-layout: verdict=ok launched=1 shed=1 failed=0 windows=1 fullscreen_ok=1 fullscreen_failed=0'
+  run /bin/bash "$SCRIPT"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  ev="$CC_BOOT_RESUME_STATE_DIR/events/boot-1784800000"
+  [ "$(cat "$ev/started")" = $((1784800000 + 7200)) ]
+  [ "$(marker)" = "" ]                                         # not marked: the retry round is still owed
+  grep -q 'this restore runs again for them' "$CC_NOTIFY_BIN.log"
+  grep -q '"done":false' "$CC_IDL"
+  # Past started + 1800 the shed row no longer holds it open.
+  CC_RESTORE_NOW=$((1784800000 + 7200 + 1801)) run /bin/bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '	s1	' "$CC_RESUME_LAYOUT_BIN.rows")" -eq 1 ]   # the retry round re-offered only s2
+  [ "$(grep -c '	s2	' "$CC_RESUME_LAYOUT_BIN.rows")" -eq 2 ]
+  [ "$(marker)" = 1784800000 ]
+}
+
+@test "R4: no load gate — at 35 per core the layout starts at once; one reading is logged as telemetry" {
   v2_fleet
-  printf '64.0\n64.0\n2.0\n' > "$CC_SYSCTL_BIN.loads"            # 8/core, 8/core, then 0.25/core
+  printf '280.0\n' > "$CC_SYSCTL_BIN.loads"                     # 35 per core on the stub's 8 cores
+  # The old knobs, now inert. Under the old gate these made 3+ readings 10 s apart before going ahead.
+  export CC_RESTORE_GATE_MAX_S=20 CC_RESTORE_GATE_POLL_S=10 CC_RESTORE_START_LOAD=6
   stub_layout "$SUM_OK2"
   run /bin/bash "$SCRIPT" --event 1784805000 --kind crash
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(cat "$CC_RESUME_LAYOUT_BIN.n")" -eq 1 ]
   log="$CC_BOOT_RESUME_STATE_DIR/events/1784805000/load.log"
-  [ "$(grep -c 'gate=6' "$log")" -eq 3 ]
-  tail -n 1 "$log" | grep -q 'per_core=0.25'
-  grep -q '"gate":"open"' "$CC_IDL"
-  rm -rf "$CC_BOOT_RESUME_STATE_DIR" "$CC_RESUME_LAYOUT_BIN".* "$CC_SYSCTL_BIN.n" "$CC_IDL" "$CC_NOTIFY_BIN".*
-  printf '64.0\n' > "$CC_SYSCTL_BIN.loads"; stub_layout "$SUM_OK2"
-  CC_RESTORE_GATE_MAX_S=0 run /bin/bash "$SCRIPT" --event 1784805000 --kind crash
-  [ "$status" -eq 0 ]
-  grep -q '"gate":"deadline"' "$CC_IDL"
-  [ "$(cat "$CC_RESUME_LAYOUT_BIN.n")" -eq 1 ]                  # restored anyway
-  grep -q 'stayed over 6 for the whole wait' "$CC_NOTIFY_BIN.log"
+  [ "$(grep -c . "$log")" -eq 1 ]                               # one reading: nothing polled, nothing slept
+  grep -q 'per_core=35.00 gate=none' "$log"
+  grep -q '"gate":"none","load_per_core":"35.00"' "$CC_IDL"
+  ! grep -q 'for the whole wait' "$CC_NOTIFY_BIN.log" || false
 }
 
 @test "v2 headroom: a row on an account at its weekly limit is restored, noted, listed, and never gets a prompt" {
@@ -1404,16 +1437,15 @@ deaf_fixture() { # <queued rows> <sample: peer|nopeer|broken>
   [ ! -e "$CC_KQ_SAMPLE_BIN.log" ]
 }
 
-@test "P5 deaf page: while load per core is over the restore gate it names the bounded gate wait, never an unbounded hand wait" {
+@test "P5 deaf page: at any load it says restart anyway, because the restore never waits for load" {
   deaf_fixture 128 nopeer
   export CC_SYSCTL_BIN="$BATS_TEST_TMPDIR/stub-sysctl"
   printf '#!/bin/bash\ncase "$*" in *hw.ncpu*) echo 2 ;; *vm.loadavg*) echo "{ 40.00 30.00 20.00 }" ;; esac\n' > "$CC_SYSCTL_BIN"
   chmod +x "$CC_SYSCTL_BIN"
-  export CC_RESTORE_GATE_MAX_S=120
   run /bin/bash "$SCRIPT"
   [ "$status" -eq 0 ]
-  grep -q 'Load per core is 20.00, over the restore gate of 6: restart anyway' "$CC_NOTIFY_BIN.log"
-  grep -q 'waits at most 120 s per round (CC_RESTORE_GATE_MAX_S)' "$CC_NOTIFY_BIN.log"
+  grep -q 'Load per core is 20.00: restart anyway. The restore does not wait for load to fall' "$CC_NOTIFY_BIN.log"
+  ! grep -q 'CC_RESTORE_GATE_MAX_S\|restore gate' "$CC_NOTIFY_BIN.log" || false
   # the operator premise is load that never falls: no wording may send them to wait for it
   grep -q -- "--restart-kitty --confirm $KP" "$CC_NOTIFY_BIN.log"
   run grep -q 'do NOT restart\|wait until it is under' "$CC_NOTIFY_BIN.log"
@@ -1450,7 +1482,7 @@ deaf_fixture() { # <queued rows> <sample: peer|nopeer|broken>
 # into the pane the layout's map line names for that session, never submits it, and deletes it. The
 # stub kitty renders pane N's box from $0.d/N.box and records every send-text.
 drafts_kitty() {
-  export CC_TERM_KITTY="$BATS_TEST_TMPDIR/stub-kitty" CC_CARRY_SETTLE_S=0 CC_RESTORE_DRAFT_WAIT=5 CC_RESTORE_DRAFT_POLL=0
+  export CC_TERM_KITTY="$BATS_TEST_TMPDIR/stub-kitty" CC_CARRY_SETTLE_S=0 CC_RESTORE_DRAFT_WAIT=60 CC_RESTORE_DRAFT_POLL=0
   mkdir -p "$CC_TERM_KITTY.d"
   cat > "$CC_TERM_KITTY" <<'SH'
 #!/bin/bash
@@ -1485,7 +1517,7 @@ cc-resume-layout: verdict=ok launched=1 shed=0 failed=0 windows=1 fullscreen_ok=
   stub_layout "$SUM_DRAFT"
   run /bin/bash "$SCRIPT"
   [ "$status" -eq 0 ]
-  [ "$(cat "$CC_TERM_KITTY.d/51.typed")" = 'fix the login bug' ]
+  [ "$(cat "$CC_TERM_KITTY.d/51.typed")" = 'fix the login bug' ] || { cat "$CC_BOOT_RESUME_STATE_DIR/events/boot-1784800000/drafts.log" "$CC_TERM_KITTY.log" "$CC_BOOT_RESUME_STATE_DIR/last-layout.map"; ls "$CC_BOOT_RESUME_ROSTER_DIR"; echo "$output" | tail -20; false; }
   [ "$(grep -c ' send-text ' "$CC_TERM_KITTY.log")" -eq 1 ]
   ! grep ' send-text ' "$CC_TERM_KITTY.log" | grep -qv -- '--from-file' || false   # no CR
   [ ! -e "$CC_BOOT_RESUME_ROSTER_DIR/reboot-alarm.drafts" ]
@@ -1529,4 +1561,253 @@ cc-resume-layout: verdict=ok launched=1 shed=0 failed=0 windows=1 fullscreen_ok=
   [ "$(cat "$CC_TERM_KITTY.d/51.box")" = 'the operator is typing' ]
   [ "$(cat "$CC_BOOT_RESUME_ROSTER_DIR/reboot-alarm.drafts/a1/draft.txt")" = 'fix the login bug' ]
   grep -q '1 saved draft(s) were NOT typed back' "$CC_NOTIFY_BIN.log"
+}
+
+# ══ REBOOT RESUME PERFECTION (2026-10-21; docs/research/reboot-resume-2026-10-21/REPORT.md) ═══════
+# After the 2026-10-21 restart 26 of 29 sessions came back, but 15 sat idle with work in hand: the
+# classifier read only to the last heartbeat tick, mail stayed in renumbered pane boxes, the restore
+# waited 600 s on load and ran at background priority, and its summary reached nobody.
+v2_reboot() { mkdir -p "$CC_BOOT_RESUME_STATE_DIR"; touch "$CC_BOOT_RESUME_STATE_DIR/restore-v2"; export CC_BOOT_RESUME_MODE=resume; }
+evb() { printf '%s' "$CC_BOOT_RESUME_STATE_DIR/events/boot-1784800000"; }
+prow() { # <sid> <pane> <name> — a roster row that carries its kitty window id
+  printf '{"session_id":"%s","account":"claude-next","cwd":"/x/%s","name":"%s","pid":1,"startedAt":1,"paneUUID":"%s"}' "$1" "$1" "$3" "$2"
+}
+iso_at() { date -u -r "$1" +%Y-%m-%dT%H:%M:%S+0000; }
+mtime_at() { touch -t "$(date -r "$2" +%Y%m%d%H%M.%S)" "$1"; }   # <file> <epoch>
+
+@test "R1: the classifier reads to the restored sessions' shutdown burst, not to the last heartbeat tick" {
+  v2_reboot
+  hbeat UUID-PREV 4001 1784799000 "[$(prow h1 30 HB-ONE),$(prow h2 31 HB-TWO)]"
+  tomb h1 1784799570; tomb h2 1784799572
+  tomb zz 1784799800                                            # a pane nobody restores, closed later
+  stub_layout "$SUM_OK2"
+  run /bin/bash "$SCRIPT"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -q -- '--boot-epoch 1784799572 ' "$CC_RESUME_CLASSIFY_BIN.log" || { cat "$CC_RESUME_CLASSIFY_BIN.log" "$(evb)/cut"; echo "$output"; false; }
+  [ "$(cat "$(evb)/cut")" = "1784799572 tombstones" ]
+  grep -q '"cut":1784799572,"cut_src":"tombstones"' "$CC_IDL"
+}
+
+@test "R1: with no tombstones the cut is the newest pre-boot transcript write, never one written after the boot" {
+  v2_reboot
+  hbeat UUID-PREV 4001 1784799000 "[$(prow h1 30 HB-ONE)]"
+  unset CC_TRANSCRIPT_MTIME_BIN
+  txn claude-next h1 202601010000 "$ASST"; mtime_at "$HOME/.claude-next/projects/-x-h1/h1.jsonl" 1784799600
+  txn claude-tertiary h1 202601010000 "$ASST"; mtime_at "$HOME/.claude-tertiary/projects/-x-h1/h1.jsonl" 1784800500
+  stub_layout "$SUM_OK2"
+  run /bin/bash "$SCRIPT"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -q -- '--boot-epoch 1784799600 ' "$CC_RESUME_CLASSIFY_BIN.log"
+  [ "$(cat "$(evb)/cut")" = "1784799600 transcripts" ]
+}
+
+@test "R1: a row that started after the tick floors the cut, so it has something to classify" {
+  v2_reboot
+  hbeat UUID-PREV 4001 1784799900 "[$(prow h1 30 HB-ONE)]"
+  reg_entry late 1784799950000 claude-next /x/late LATE-REG
+  stub_layout "$SUM_OK2"
+  run /bin/bash "$SCRIPT"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -q -- '--boot-epoch 1784799950 ' "$CC_RESUME_CLASSIFY_BIN.log"
+  [ "$(cat "$(evb)/cut")" = "1784799950 started-after-tick" ]
+}
+
+@test "R1: a later round reads the first round's cut, not the disk as it is by then" {
+  v2_reboot
+  hbeat UUID-PREV 4001 1784799000 "[$(prow h1 30 HB-ONE)]"
+  tomb h1 1784799570
+  mkdir -p "$(evb)"; echo '1784799123 tombstones' > "$(evb)/cut"
+  stub_layout "$SUM_OK2"
+  run /bin/bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  grep -q -- '--boot-epoch 1784799123 ' "$CC_RESUME_CLASSIFY_BIN.log"
+  [ "$(cat "$(evb)/cut")" = '1784799123 tombstones' ]
+}
+
+@test "R8: with no desk role the page reaches the reboot's owner right after the layout, then a follow-up; --owner reaches the classifier" {
+  v2_reboot; rm -f "$CC_ROLES_DIR/desk"
+  echo 1784799000 > "$CC_BOOT_RESUME_ROSTER_DIR/reboot-2026-10-21.start"
+  echo own-sid-1 > "$CC_BOOT_RESUME_ROSTER_DIR/reboot-2026-10-21.owner"
+  hbeat UUID-PREV 4001 1784799900 "[$(prow own-sid-1 30 OWNER),$(prow o2 31 OTHER)]"
+  stub_layout 'cc-resume-layout: map sid=own-sid-1 wid=51 oswin=1
+cc-resume-layout: map sid=o2 wid=52 oswin=1
+cc-resume-layout: verdict=ok launched=2 shed=0 failed=0 windows=1 fullscreen_ok=1 fullscreen_failed=0'
+  run /bin/bash "$SCRIPT"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -q -- '--owner own-sid-1' "$CC_RESUME_CLASSIFY_BIN.log"
+  [ "$(notify_count)" -eq 2 ]
+  head -n 1 "$CC_NOTIFY_BIN.log" | grep -q '^own-sid-1 🔄 restore under way: rebooted .* reopened 2/2 session(s)'
+  grep -q '^own-sid-1 (follow-up, prompts confirmed) 🔄 boot-delta' "$CC_NOTIFY_BIN.log"
+  [ ! -e "$CC_BACKLOG_BIN.log" ]
+  grep -q '"notified":"own-sid-1","notified_as":"owner","early_page":true' "$CC_IDL"
+  grep -qx "$(evb)" "$CC_RESTORE_REBIND_BIN.log"                 # roles re-resolved after the layout
+  [ -f "$(evb)/rows.tsv" ]                                        # R12: the merge lands on round 1
+  [ ! -e "$(evb)/rows.tsv.tmp" ]
+  [ "$(marker)" = 1784800000 ]
+}
+
+@test "R8: no owner and no desk role ⇒ a lead role whose session is live gets the page; a dead one is passed over" {
+  v2_reboot; rm -f "$CC_ROLES_DIR/desk"
+  hbeat UUID-PREV 4001 1784799900 "[$(prow l1 30 L-ONE)]"
+  echo 999 > "$CC_ROLES_DIR/alpha-lead"                         # its pane holds no live session
+  echo 7 > "$CC_ROLES_DIR/drain-lead"
+  jq -n --argjson p "$$" '{paneUUID:"7",session_id:"lead-sid",pid:$p,startedAt:1784800100000}' > "$CC_REGISTRY_DIR/7.json"
+  stub_layout "$SUM_OK2"
+  run /bin/bash "$SCRIPT"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  head -n 1 "$CC_NOTIFY_BIN.log" | grep -q '^7 🔄 restore under way'
+  ! grep -q '^999 ' "$CC_NOTIFY_BIN.log" || false
+  grep -q '"notified":"7","notified_as":"role:drain-lead"' "$CC_IDL"
+}
+
+@test "R8: nobody to page ⇒ one backlog row, filed in the background, says how many were restored — never 'nothing was told'" {
+  v2_reboot; rm -f "$CC_ROLES_DIR/desk"
+  hbeat UUID-PREV 4001 1784799900 "[$(prow b1 30 B-ONE),$(prow b2 31 B-TWO)]"
+  stub_layout "$SUM_OK2"
+  run /bin/bash "$SCRIPT"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(grep -c '^needs ' "$CC_BACKLOG_BIN.log")" -eq 1 ]
+  grep -q '^needs boot-resume restored 2 of 2 session(s) after it rebooted ' "$CC_BACKLOG_BIN.log"
+  ! grep -q 'nothing was told' "$CC_BACKLOG_BIN.log" || false
+  grep -q '"channel":"backlog-needs","backlog_id":"beef1234cafe"' "$CC_IDL"
+  grep -q 'boot-delta' "$CC_BOOT_RESUME_STATE_DIR/undelivered-1784800000.page"   # the full text replaced the early one
+  [ "$(marker)" = 1784800000 ]
+}
+
+@test "RETIRED: a session the classifier finds closing itself is not relaunched, gets no note, and is named in the page" {
+  v2_fleet
+  printf 'e1 RETIRED\n' > "$CC_RESUME_CLASSIFY_BIN.verdicts"
+  stub_layout "$SUM_OK1"
+  run /bin/bash "$SCRIPT" --event "$EV" --kind crash
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  ! grep -q '	e1	' "$CC_RESUME_LAYOUT_BIN.rows" || false
+  grep -q '	e2	' "$CC_RESUME_LAYOUT_BIN.rows"
+  ! grep -q 'boot-resume e1 ' "$CC_NOTIFY_BIN.notes" || false
+  [ ! -e "$(evdir)/prompts/e1.txt" ]
+  grep -q 'EV-ONE (e1): it was closing itself at the cut' "$CC_NOTIFY_BIN.log"
+  grep -q '"retired_skipped":1' "$CC_IDL"
+  grep -q '"retired_by_classifier":1' "$CC_IDL"
+}
+
+@test "R3: a session's unread mail in its old pane box is carried to it before the classifier runs; mail from after the cut stays" {
+  v2_reboot
+  hbeat UUID-PREV 4001 1784799900 "[$(prow m1 31 M-ONE),$(prow m2 8 M-TWO)]"
+  mkdir -p "$CC_MAILBOX_DIR"
+  printf '%s [wt-x] HANDOFF-PING fire-W2: DONE — W2 landed fa03894\n%s [wt-y] a second report\n' \
+    "$(iso_at 1784799700)" "$(iso_at 1784799800)" > "$CC_MAILBOX_DIR/31.md"
+  printf '%s [someone] for the next occupant\n' "$(iso_at 1784800300)" > "$CC_MAILBOX_DIR/8.md"
+  stub_layout "$SUM_OK2"
+  run /bin/bash "$SCRIPT"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(grep -c 'forwarded:31' "$CC_MAILBOX_DIR/m1.md" 2>/dev/null)" = 2 ] || { ls -la "$CC_MAILBOX_DIR"; cat "$(evb)/mail-carry.log" "$(evb)/run.stderr"; echo "$output"; false; }
+  grep -q 'DONE — W2 landed fa03894' "$CC_MAILBOX_DIR/m1.md"
+  grep -qx m1.md "$CC_RESUME_CLASSIFY_BIN.mbox-seen"             # already there when the classifier ran
+  [ "$(cat "$CC_MAILBOX_DIR/31.acked")" = 2 ]
+  [ ! -e "$CC_MAILBOX_DIR/m2.md" ]
+  grep -q 'pane=31 sid=m1 pre_cut=2 migrated=2 rc=0' "$(evb)/mail-carry.log"
+  grep -q '"mail_carried":1' "$CC_IDL"
+}
+
+@test "R10: held sessions are logged with the launcher's reason and named; a held member's lead gets a teammate item and is woken" {
+  export CC_BOOTUUID_OVERRIDE=UUID-1
+  KP="$(dead_pid)"
+  hbeat UUID-1 "$KP" 1784804900 "[$(prow L0 40 LEAD),$(prow t1 41 MEM-ONE),$(prow t2 42 MEM-TWO),$(prow x9 43 BUSY)]"
+  echo '[{"id":1,"tabs":[{"windows":[
+    {"id":40,"foreground_processes":[{"cmdline":["claude","--resume","L0"]}]},
+    {"id":41,"foreground_processes":[{"cmdline":["claude","--agent-name","tm-one","--team-name","T","--parent-session-id","L0"]}]},
+    {"id":42,"foreground_processes":[{"cmdline":["claude","--agent-name","tm-two","--parent-session-id","L0"]}]}]}]}]' \
+    > "$CC_HEARTBEAT_DIR/UUID-1/$KP/hb.kitty-ls.json"
+  printf 't1\nt2\n' > "$CC_RESUME_LAUNCH_BIN.member"; echo x9 > "$CC_RESUME_LAUNCH_BIN.held"
+  printf 'L0 AT-REST\n' > "$CC_RESUME_CLASSIFY_BIN.verdicts"
+  stub_layout "$SUM_OK1"
+  run /bin/bash "$SCRIPT" --event "$EV" --kind crash
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(grep -c . "$(evdir)/held.log")" -eq 3 ]
+  awk -F'\t' '$2 == "t1" && $3 == 7 && $4 == "L0" && $5 ~ /an Agent Teams member/' "$(evdir)/held.log" | grep -q .
+  awk -F'\t' '$2 == "x9" && $3 == 5 && $4 == "-" && $5 ~ /live holder/' "$(evdir)/held.log" | grep -q .
+  [ "$(jq -r '.sessions.L0.items | map(select(.kind == "teammate")) | map(.detail) | join("|")' "$(evdir)/lost.json")" = "tm-one: held at restore, respawn it|tm-two: held at restore, respawn it" ]
+  [ "$(jq -r '.sessions.L0.verdict' "$(evdir)/lost.json")" = WAKE-LOST ]
+  [ "$(awk -F'\t' '$2 == "L0" { print $NF }' "$(evdir)/rows.tsv")" = WAKE-LOST ]
+  [ -s "$(evdir)/prompts/L0.txt" ]                              # the lead is prompted, not just noted
+  grep -q 'boot-resume L0 .*Agent Teams members (tm-one: held at restore, respawn it; tm-two' "$CC_NOTIFY_BIN.notes"
+  grep -q 'MEM-ONE (t1): NOT LAUNCHING t1 - an Agent Teams member (stub) (an Agent Teams member of lead L0' "$CC_NOTIFY_BIN.log"
+  grep -q 'BUSY (x9): x9 already has 1 live holder' "$CC_NOTIFY_BIN.log"
+  grep -q '"resume_held":3' "$CC_IDL"
+}
+
+@test "R7: the confirm phase ends on the wall clock however slow each check is, and asks a confirmed session once" {
+  v2_fleet
+  export CC_RESTORE_CONFIRM_S=3 CC_RESTORE_CONFIRM_POLL=0 CC_RESTORE_CONFIRM_CMD="$BATS_TEST_TMPDIR/stub-confirm"
+  printf '#!/bin/bash\necho "$1" >> "$0.calls"\nwc -l < "$CC_HB_SESSIONS_BIN.calls" >> "$0.ticks" 2>/dev/null\n[ "$1" = e2 ] && { echo "user=1 assistant=1"; exit 0; }\nsleep 1; echo "user=0 assistant=0"; exit 2\n' > "$CC_RESTORE_CONFIRM_CMD"
+  chmod +x "$CC_RESTORE_CONFIRM_CMD"
+  stub_layout "$SUM_OK2"
+  run /bin/bash "$SCRIPT" --event "$EV" --kind crash
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # A poll of 0 used to spend none of the 90 s budget per round, so this loop never ended at all;
+  # on the wall clock a 3 s budget with 1 s checks ends after a handful (fewer when the box is loaded).
+  [ "$(grep -cx e2 "$CC_RESTORE_CONFIRM_CMD.calls")" -eq 1 ]
+  n1="$(grep -cx e1 "$CC_RESTORE_CONFIRM_CMD.calls")"; [ "$n1" -ge 1 ] && [ "$n1" -le 5 ] || false
+  grep -q 'sid=e2 nonce=R-[0-9a-f]* user=1 assistant=1 confirmed' "$(evdir)/prompt.log"
+  grep -q 'sid=e1 .* user=0 assistant=0 unconfirmed' "$(evdir)/prompt.log"
+  # R9: the heartbeat after the layout had already run when the first prompt was checked.
+  [ "$(head -n 1 "$CC_RESTORE_CONFIRM_CMD.ticks" | tr -d ' ')" -eq 1 ]
+}
+
+@test "R9: a heartbeat is taken right after the layout returns and again at exit; none when nothing was laid out" {
+  v2_fleet
+  stub_layout "$SUM_OK2"
+  run /bin/bash "$SCRIPT" --event "$EV" --kind crash
+  [ "$status" -eq 0 ]
+  [ "$(grep -c . "$CC_HB_SESSIONS_BIN.calls")" -eq 2 ]
+  rm -rf "$CC_BOOT_RESUME_STATE_DIR" "$CC_HB_SESSIONS_BIN.calls"
+  printf 'e1\ne2\n' > "$CC_RESUME_LAUNCH_BIN.held"                # nobody admitted: nothing opens
+  run /bin/bash "$SCRIPT" --event "$EV" --kind crash
+  [ "$status" -eq 0 ]
+  [ ! -e "$CC_HB_SESSIONS_BIN.calls" ]
+}
+
+@test "R20: the event keeps its own timestamped layout log, classifier log and run stderr" {
+  v2_fleet
+  stub_layout "$SUM_OK2"
+  run /bin/bash "$SCRIPT" --event "$EV" --kind crash
+  [ "$status" -eq 0 ]
+  grep -qE '^[0-9]{2}:[0-9]{2}:[0-9]{2} === .* layout --desktops --restore rows=2' "$(evdir)/layout.txt"
+  grep -qE "^[0-9]{2}:[0-9]{2}:[0-9]{2} boot-resume: restore $EV round at .* cut " "$(evdir)/run.stderr"
+  grep -q '^=== .* classify --boot-epoch ' "$(evdir)/classify.txt"
+}
+
+@test "R22: the first round of a reboot keeps templateMigrator's durations with the boot's event; an event never asks" {
+  export CC_LOG_BIN="$BATS_TEST_TMPDIR/stub-log"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$0.calls"\necho "2026-10-21 14:46:59 templateMigrator: noise"\necho "2026-10-21 14:47:07 templateMigrator: MigrateFilesStepDuration=1527.03"\necho "2026-10-21 14:47:07 templateMigrator: TotalDuration=1534.31"\necho "2026-10-21 14:47:07 templateMigrator: ** Migration completed successfully **"\n' > "$CC_LOG_BIN"
+  chmod +x "$CC_LOG_BIN"
+  v2_reboot
+  hbeat UUID-PREV 4001 1784799900 "[$(prow h1 30 HB-ONE)]"
+  stub_layout "$SUM_OK2"
+  run /bin/bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  i=0; while [ ! -s "$(evb)/template-migration.txt" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+  grep -q 'TotalDuration=1534.31' "$(evb)/template-migration.txt"
+  ! grep -q noise "$(evb)/template-migration.txt" || false
+  grep -q -- "show --style compact --start $(date -r 1784800000 '+%Y-%m-%d %H:%M:%S') --predicate process == \"templateMigrator\"" "$CC_LOG_BIN.calls"
+  rm -f "$CC_LOG_BIN.calls"
+  v2_fleet; stub_layout "$SUM_OK2"
+  run /bin/bash "$SCRIPT" --event "$EV" --kind crash
+  [ "$status" -eq 0 ]
+  sleep 0.3; [ ! -e "$CC_LOG_BIN.calls" ]
+}
+
+@test "R5: only the routine tick of an already-handled boot re-runs itself under taskpolicy -c utility; a restore runs at normal priority" {
+  export CC_TASKPOLICY_BIN="$BATS_TEST_TMPDIR/stub-taskpolicy"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$0.log"\nshift 2\nexec "$@"\n' > "$CC_TASKPOLICY_BIN"; chmod +x "$CC_TASKPOLICY_BIN"
+  mkdir -p "$CC_BOOT_RESUME_STATE_DIR"; echo 1784800000 > "$CC_BOOT_RESUME_STATE_DIR/last-boot-epoch"
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$CC_TASKPOLICY_BIN.log")" = "-c utility /bin/bash $SCRIPT" ]   # once: the re-run does not re-exec
+  [ "$(grep -c '"reason":"already-processed"' "$CC_IDL")" -eq 1 ]
+  rm -f "$CC_BOOT_RESUME_STATE_DIR/last-boot-epoch" "$CC_TASKPOLICY_BIN.log"
+  roster r 1784799900 "[$(rrow a claude-next /x/a A)]"
+  export CC_BOOT_RESUME_MODE=resume; stub_layout "$SUM_OK2"
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ ! -e "$CC_TASKPOLICY_BIN.log" ]
 }

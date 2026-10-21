@@ -81,10 +81,22 @@
 #   here; deleting it is the off switch). A recycle retires its predecessor once its successor is
 #   found; each row takes its account from its newest transcript and its model, effort and permission
 #   mode from its last real records; the layout gets row-contract columns 6-11 and --restore; the
-#   launches wait at a load-per-core start gate with the per-launch load term off; a launched-once
+#   launches start at once with the per-launch load term off (load per core is logged, never waited
+#   on: 15-40 per core is this machine's design point); a launched-once
 #   ledger (<state>/events/<id>/launched, fed by the layout's map lines) keeps a later round from
 #   opening a sid twice; rows on accounts at their weekly limit are restored and never nudged; the
-#   event is marked done only once nothing was shed or its deadline has passed, and pages once.
+#   event is marked done only once nothing was shed or its deadline (counted from the event's first
+#   run, <event>/started) has passed. It pages as soon as the layout returns and follows up once the
+#   prompts are confirmed, to the reboot's owner session, else the desk role, else a live lead role.
+#
+# REBOOT RESUME PERFECTION (2026-10-21; docs/research/reboot-resume-2026-10-21/REPORT.md R1-R20):
+#   the classifier reads up to the true cut (<event>/cut: the restored sessions' shutdown tombstone
+#   burst, else their newest pre-boot transcript write, else the heartbeat tick) instead of the last
+#   tick; the reboot prep's owner session (reboot-<date>.owner) is passed as --owner; a RETIRED row
+#   (a self-close that was under way) is never relaunched and is named in the page; each pane's
+#   unread mail is carried to its session before the layout; held sessions are logged to
+#   <event>/held.log and an Agent Teams member's lead is told to respawn it; a heartbeat is taken
+#   right after the layout and at exit.
 #
 # KITTY PAGES (W3 P5), on every tick of an already-handled boot, after the heartbeat. Neither one ever
 #   restarts or relaunches anything: a deliberate quit cannot be told from a crash, and a crash
@@ -115,9 +127,11 @@
 #   CC_BOOT_RESUME_KITTY_TRIES / _KITTY_POLL (wait for a kitty to come up; tests set POLL=0) ·
 #   CC_TEARDOWN_DIR (self-close markers) · CC_BOOT_RESUME_SKIP_RETIRED (off = resume a session that
 #   closed itself on purpose too) · CC_BOOT_RESUME_ACTIVITY_TAIL (transcript lines read, default 4000) ·
-#   restore v2: CC_HANDOFF_LOG · CC_ACCOUNTS_BIN · CC_RESTORE_EXHAUSTED_PCT (100) · CC_RESTORE_START_LOAD
-#   (6 per core) · CC_RESTORE_GATE_MAX_S (600) · CC_RESTORE_GATE_POLL_S (10) · CC_RESTORE_DEADLINE_S
-#   (1800 after the event) · CC_RESTORE_NOW · CC_BOOT_RESUME_META_TAIL (1500) · kitty pages:
+#   restore v2: CC_HANDOFF_LOG · CC_ACCOUNTS_BIN · CC_RESTORE_EXHAUSTED_PCT (100) · CC_RESTORE_DEADLINE_S
+#   (1800 after the event's first run) · CC_RESTORE_NOW · CC_BOOT_RESUME_META_TAIL (1500) ·
+#   CC_RESTORE_CONFIRM_S (90, wall clock) · CC_RESTORE_CONFIRM_CMD (test seam for rn_confirm) ·
+#   CC_RESTORE_REBIND_BIN · CC_MAILBOX_LIB (hooks/lib/mailbox-pending.sh; CC_MAILBOX_DIR via it) ·
+#   CC_TASKPOLICY_BIN (/usr/sbin/taskpolicy; the same-boot tick's demotion) · kitty pages:
 #   CC_BOOT_RESUME_PS_BIN (/bin/ps) · CC_RESTORE_BIN (the cc-restore the pages name) ·
 #   CC_HF_NETSTAT_FILE · CC_KQ_SAMPLE_BIN · CC_KITTY_WEDGED_QUEUE_N · CC_BOOT_RESUME_KITTY_PAGES=off.
 # BSD+GNU portable, no eval, fail-loud. bash 3.2-safe.
@@ -155,6 +169,11 @@ fi
 command -v jq >/dev/null 2>&1 || { echo "boot-resume: jq required" >&2; exit 1; }
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+# R20: a local clock stamp on each line of a log this job keeps (one perl, not a date per line).
+ts_lines() {
+  if [ -x /usr/bin/perl ]; then /usr/bin/perl -MPOSIX -ne 'BEGIN { $| = 1 } print strftime("%H:%M:%S ", localtime), $_'
+  else cat; fi
+}
 
 # Shared helpers (consolidation audit 02): resolve_bin lived here AND in autonomy-sweep.sh, already drifted.
 # Resolution ladder mirrors the hooks/lib house idiom: beside-script → CFG → ~/.claude.
@@ -209,6 +228,15 @@ LAUNCH="$(resolve_bin "${CC_RESUME_LAUNCH_BIN:-}" boot-resume-launch.sh boot-res
 LAYOUT="$(resolve_bin "${CC_RESUME_LAYOUT_BIN:-}" cc-resume-layout.sh)"
 CLASSIFY="$(resolve_bin "${CC_RESUME_CLASSIFY_BIN:-}" cc-resume-classify.py)"
 KSOCK_BIN="$(resolve_bin "${CC_KITTY_SOCKET_BIN:-}" cc-kitty-socket)"
+# R8: re-binds roles and forwards named by the old pane numbers, right after the layout. Under a bats
+# harness only an explicit seam runs (it claims roles and writes forwards in the live stores).
+REBIND=""
+if [ -n "${CC_RESTORE_REBIND_BIN:-}" ] || [ -z "${BATS_TEST_FILENAME:-}${BATS_TEST_TMPDIR:-}${BATS_VERSION:-}" ]; then
+  REBIND="$(resolve_bin "${CC_RESTORE_REBIND_BIN:-}" cc-restore-rebind)"
+fi
+# R3: the mailbox library whose mailbox_migrate carries a pane's mail to its session.
+MAILBOX_LIB="${CC_MAILBOX_LIB:-$(cd "$(dirname "$0")" 2>/dev/null && pwd)/../hooks/lib/mailbox-pending.sh}"
+[ -f "$MAILBOX_LIB" ] || MAILBOX_LIB="$HOME/.claude/hooks/lib/mailbox-pending.sh"
 OPEN_BIN="${CC_OPEN_BIN:-/usr/bin/open}"
 ROSTER_DIR="${CC_BOOT_RESUME_ROSTER_DIR:-$HOME/.claude/autonomy}"
 TOMB_DIR="${CC_SHUTDOWN_TOMB_DIR:-$HOME/.claude/autonomy/shutdown-tombstones}"
@@ -432,7 +460,7 @@ crash_page() {
   return 0
 }
 deaf_page() {
-  local kp sock why nc l1 per lim hold=""
+  local kp sock why nc l1 per hold=""
   command -v kq_deaf >/dev/null 2>&1 || return 0
   # Under a bats harness the real netstat and sample are never run: the capture seam must be set.
   if _kp_under_bats && [ -z "${CC_HF_NETSTAT_FILE:-}" ]; then return 0; fi
@@ -446,13 +474,10 @@ deaf_page() {
     why="$(kq_deaf "$sock" "$kp")" || continue
     nc="$("$SYSCTL" -n hw.ncpu 2>/dev/null | tr -d '[:space:]')"; case "$nc" in ''|*[!0-9]*|0) nc=1 ;; esac
     l1="$("$SYSCTL" -n vm.loadavg 2>/dev/null | tr -d '{}' | awk '{ print $1 }')"
-    lim="${CC_RESTORE_START_LOAD:-6}"
     per="$(awk -v l="$l1" -v n="$nc" 'BEGIN { if (l !~ /^[0-9.]+$/) print "?"; else printf "%.2f", l / n }')"
-    # Never "wait until load is under": at the standing 15-40 per core that wait has no end. The restore's
-    # own start gate (restore_start_gate) already waits, bounded by CC_RESTORE_GATE_MAX_S, then goes ahead.
-    if [ "$per" != "?" ] && awk -v p="$per" -v g="$lim" 'BEGIN { exit !(p > g) }'; then
-      hold=" Load per core is $per, over the restore gate of $lim: restart anyway. The restore waits at most ${CC_RESTORE_GATE_MAX_S:-600} s per round (CC_RESTORE_GATE_MAX_S) for load to fall, then goes ahead, so waiting by hand gains nothing."
-    fi
+    # Never "wait until load is under": at the standing 15-40 per core that wait has no end, and the
+    # restore itself no longer waits for load either (R4, 2026-10-21) — it logs one reading and starts.
+    [ "$per" != "?" ] && hold=" Load per core is $per: restart anyway. The restore does not wait for load to fall, so waiting by hand gains nothing."
     # The SAME step, class and falsifier as handoff-fire.sh's stuck-kitty row, so one wedge is one row.
     [ -n "$BACKLOG" ] && "$BACKLOG" needs "restart kitty (control socket stuck: queue full)" --class needs-human \
         --falsifier "test ! -S $sock" >/dev/null 2>&1
@@ -498,6 +523,19 @@ if [ -n "$EVENT" ]; then
     [ "$_hb_now" -gt "$HB_HI" ] 2>/dev/null && HB_HI="$_hb_now"
   fi
 elif same_boot; then
+  # R5 (2026-10-21): the routine tick of an already-handled boot is housekeeping, so it alone runs in
+  # the utility band. The plist no longer demotes the job: a demoted RESTORE ranked below every claude
+  # process (priority 20 against 31), a glob took 24-46 s instead of 3.4 s, and the 2026-10-21 restore
+  # took 88 minutes. Re-run once, by interpreter path (a #! exec leaks kernel memory on 15.x), with a
+  # marker so the re-run does not re-exec again. No taskpolicy(8) ⇒ run here as before.
+  if [ -z "${CC_BOOT_RESUME_DEMOTED:-}" ]; then
+    _tp="${CC_TASKPOLICY_BIN-/usr/sbin/taskpolicy}"
+    _kp_under_bats && [ -z "${CC_TASKPOLICY_BIN:-}" ] && _tp=""
+    if [ -n "$_tp" ] && [ -x "$_tp" ]; then
+      export CC_BOOT_RESUME_DEMOTED=1
+      exec "$_tp" -c utility /bin/bash "$0"
+    fi
+  fi
   heartbeat
   kitty_pages
   log_idl abstained ',"reason":"already-processed","n_open":0,"resumed":0'
@@ -532,6 +570,7 @@ JQ_CELL='def cell: (if . == null then "" else . end) | tostring
 GHOSTS=""
 n_open=0
 ANCHOR="$BOOT"
+REG_NEW_MAX=0
 add_row() { # <acct> <cwd> <sid> <name> <branch>, each already padded
   GHOSTS="${GHOSTS}$1	$2	$3	$4	$5
 "
@@ -627,6 +666,9 @@ EOF
           | [(.account|cell), (.cwd|cell), (.session_id|cell), (.name|cell),
              ((.branch // $br[.session_id])|cell)] | @tsv')"; then
     n_reg_new="$(printf '%s' "$reg_new" | jq 'length' 2>/dev/null || echo 0)"
+    # R1: a row admitted because it started after the tick must be classifiable, so the cut is never
+    # earlier than the newest such start (see the CUT block below).
+    REG_NEW_MAX="$(printf '%s' "$reg_new" | jq '[.[].startedAt / 1000 | floor] | max // 0' 2>/dev/null)"
     hb_one="$(printf '%s\n' "$hb_sel" | head -n 1 | cut -f2)"
     SOURCE=heartbeat; ANCHOR="$hb_start"
     SRC_FILES="$hb_files"; HB_DIRS="$hb_dirs"; HB_META="$hb_sess"
@@ -797,18 +839,36 @@ EOF
   return 0
 }
 RETIRED=""; n_retired=0
+ghost_sids() { printf '%s\n' "$GHOSTS" | cut -f3 | grep -v "^${TSV_PAD}\$" | grep . | tr '\n' ' '; }
+# R1 (2026-10-21): a session the lead supervisor REAPED (closed after a clean, shipped completion) is
+# retired too. Its record is {"actor":"lead-supervisor","kind":"reap","sid":…,"ts":…,"why":…} in the
+# IDL, and it counts under the same rule as a self-close marker: only when newer than the session's
+# last activity. The newest reap per kept sid, read in one pass. A teardown marker outranks it.
+REAPS=""
+if [ "${CC_BOOT_RESUME_SKIP_RETIRED:-on}" != off ] && [ "$n_open" -gt 0 ] && [ -f "$IDL" ]; then
+  REAPS="$(grep -F '"kind":"reap"' "$IDL" 2>/dev/null | grep -F '"lead-supervisor"' | jq -Rrn --arg sids " $(ghost_sids)" '
+      [ inputs | fromjson? | select(type == "object" and .actor == "lead-supervisor" and .kind == "reap"
+                                    and (.sid | type) == "string" and (.ts | type) == "string")
+        | .sid as $s | select($sids | contains(" " + $s + " ")) ]
+      | group_by(.sid) | map(max_by(.ts))[] | [.sid, .ts[0:19], ((.why // "") | tostring | gsub("[\\t\\n]"; " "))] | @tsv' 2>/dev/null)"
+fi
 if [ "${CC_BOOT_RESUME_SKIP_RETIRED:-on}" != off ] && [ "$n_open" -gt 0 ]; then
   KEPT=""; n_kept=0
   while IFS=$'\t' read -r k_acct k_cwd k_sid k_name k_br; do
     [ -n "$k_sid" ] && [ "$k_sid" != "$TSV_PAD" ] || continue
     r_sid="$(unpad "$k_sid")"; r_acct="$(unpad "$k_acct")"
-    mk="$(retired_marker "$r_sid" | head -1)"
+    mk="$(retired_marker "$r_sid" | head -1)"; rp_why=""
+    if [ -z "$mk" ] && [ -n "$REAPS" ]; then
+      rp="$(printf '%s\n' "$REAPS" | awk -F'\t' -v s="$r_sid" '$1 == s { print; exit }')"
+      [ -n "$rp" ] && { mk="reap	$(printf '%s' "$rp" | cut -f2)	${TSV_PAD}"; rp_why="$(printf '%s' "$rp" | cut -f3)"; }
+    fi
     if [ -n "$mk" ]; then
       mk_mode="${mk%%	*}"; mk_rest="${mk#*	}"; mk_ts="${mk_rest%%	*}"; mk_pane="$(unpad "${mk_rest#*	}")"
       tf="$(transcript_file "$r_acct" "$r_sid")"; act=""
       [ -n "$tf" ] && act="$(last_activity "$tf")"
       if iso_sec "$mk_ts" && iso_sec "$act" && [[ "$mk_ts" > "$act" ]]; then
         why="${mk_mode} self-close marker ${TEARDOWN_DIR}/${r_sid}.json at ${mk_ts}Z, after its last activity ${act}Z"
+        [ "$mk_mode" = reap ] && why="reaped by the lead supervisor (${rp_why:-no reason recorded}) at ${mk_ts}Z, after its last activity ${act}Z"
         succ=""
         if [ "$mk_mode" = recycle ]; then
           succ="$(recycle_successor "$r_sid" "$mk_ts" "$mk_pane" "$tf")"
@@ -851,16 +911,18 @@ fi
 #    from the roster to git in the cwd, then to the heartbeat's git read and the transcript's
 #    gitBranch when the worktree was reaped; group and slot are the OS window and the order in it,
 #    from the heartbeat's kitty tree. META rows: sid acct model effort pm branch group slot, padded. ──
-newest_account() { # <sid> <cwd> → config basename (no dot) of the newest transcript, or ""
-  local d b m best="" bm=0
+newest_account() { # <sid> <cwd> → "<config basename (no dot) of the newest transcript>\t<newest write at or before CUT_HI>"
+  local d b m best="" bm=0 pre=0
   for d in "$HOME"/.claude*; do
     [ -d "$d/projects" ] || continue
     b="${d##*/}"; b="${b#.}"
     m="$(transcript_mtime "$b" "$1" "$2")"
     case "$m" in ''|*[!0-9]*) continue ;; esac
     [ "$m" -gt "$bm" ] && { bm="$m"; best="$b"; }
+    # The same reads feed the R1 cut: the session's last write before the machine went down.
+    [ "$m" -le "$CUT_HI" ] && [ "$m" -gt "$pre" ] && pre="$m"
   done
-  printf '%s' "$best"
+  printf '%s\t%s' "$best" "$pre"
 }
 transcript_meta() { # <transcript> → "model\teffort\tpermission_mode\tbranch", padded
   tail -n "${CC_BOOT_RESUME_META_TAIL:-1500}" "$1" 2>/dev/null | jq -Rrn --arg pad "$TSV_PAD" '
@@ -890,11 +952,32 @@ tree_slots() { # → "sid\tgroup\tslot" for each roster session found in the hea
 $HB_DIRS
 EOF
 }
+team_map() { # → "member sid\tlead sid\tagent name" for each roster session whose pane ran an Agent Teams member
+  local hd
+  while IFS= read -r hd; do
+    [ -n "$hd" ] && [ -f "$hd/hb.kitty-ls.json" ] && [ -f "$hd/hb.roster.json" ] || continue
+    # The member's own sid is not in its argv: the window id (= the roster's paneUUID) joins them.
+    jq -r --slurpfile r "$hd/hb.roster.json" '
+      ($r[0] | if type == "array" then . else [] end
+         | map(select(type == "object" and (.session_id // "") != "" and (.paneUUID // "") != "")
+               | {key: (.paneUUID | tostring), value: .session_id}) | from_entries) as $m
+      | .[]?.tabs[]?.windows[]? | (.id | tostring) as $w | select($m[$w] != null)
+      | [ .foreground_processes[]?.cmdline | select(type == "array" and index("--parent-session-id") != null) ] | first // empty
+      | . as $a | ($a | index("--parent-session-id")) as $i | ($a | index("--agent-name")) as $j
+      | [$m[$w], ($a[$i + 1] // ""), (if $j == null then "" else ($a[$j + 1] // "") end)]
+      | select(.[1] != "") | @tsv' "$hd/hb.kitty-ls.json" 2>/dev/null
+  done <<EOF
+$HB_DIRS
+EOF
+}
 tsv_col() { printf '%s\n' "$1" | cut -f"$2"; }   # <one tsv line> <n>
 meta_col() { # <sid> <n> → META column n of that sid, unpadded
   unpad "$(printf '%s\n' "$META" | awk -F'\t' -v s="$1" -v n="$2" '$1 == s { print $n; exit }')"
 }
 META=""; n_meta_none=0; n_acct_tx=0
+# The cut cannot be after the event (a restart's own tick may stamp past it, hence HB_HI).
+CUT_HI="$BOOT"; [ "$HB_HI" -gt "$CUT_HI" ] 2>/dev/null && CUT_HI="$HB_HI"
+TX_PRE_MAX=0   # newest pre-cut transcript write over the kept rows (R1's second rung)
 EXHAUSTED_ACCTS=""; EXH_SIDS=""; n_exhausted=0
 if [ "$RESTORE_V2" = 1 ] && [ "$n_open" -gt 0 ]; then
   SLOTS="$(tree_slots)"
@@ -903,7 +986,9 @@ if [ "$RESTORE_V2" = 1 ] && [ "$n_open" -gt 0 ]; then
     sid="$(unpad "$m_sid")"; [ -n "$sid" ] || continue
     cwd="$(unpad "$m_cwd")"
     hbr="$(printf '%s\n' "$HB_META" | awk -F'\t' -v s="$sid" '$1 == s { print; exit }')"
-    acct="$(newest_account "$sid" "$cwd")"
+    na="$(newest_account "$sid" "$cwd")"; acct="${na%%	*}"; na_pre="${na#*	}"
+    case "$na_pre" in ''|*[!0-9]*) na_pre=0 ;; esac
+    [ "$na_pre" -gt "$TX_PRE_MAX" ] && TX_PRE_MAX="$na_pre"
     if [ -n "$acct" ]; then n_acct_tx=$((n_acct_tx + 1))
     else acct="$(unpad "$(tsv_col "$hbr" 2)")"; [ -n "$acct" ] || acct="$(unpad "$m_acct")"; fi
     tm=""; tf="$(transcript_file "$acct" "$sid")"
@@ -950,28 +1035,84 @@ EOF
   fi
 fi
 
+# ── R1 (2026-10-21): THE CUT, the moment the sessions actually died, which is what the classifier
+#    reads up to. It used to be ANCHOR, the source's own stamp — for a heartbeat that is the last tick,
+#    and on 2026-10-21 that left the last 9.5 minutes before shutdown unread (551eb39b's promise to
+#    run the leak test, 5d19ef73's self-close in flight). Strongest first, each inside (ANCHOR, CUT_HI]:
+#    the last burst of shutdown tombstones written by the RESTORED sessions (a lone pane closed by hand
+#    belongs to nobody here); else their newest pre-cut transcript write (Claude Code writes at exit,
+#    so this is the shutdown even after a hard power-off); else ANCHOR. Never earlier than a row that
+#    STARTED after the tick, or that row has nothing to classify. The registry source passes no
+#    --boot-epoch (the classifier anchors on kern.boottime itself), and a tombstone source's ANCHOR
+#    already is the burst. A later round reuses the first round's cut (<event>/cut): by then the
+#    resumed sessions have written past it. ──
+tomb_cut() { # <lo> <hi> → newest endedAt of the last burst among the kept rows' tombstones, or ""
+  [ -d "$TOMB_DIR" ] || return 0
+  for t in "$TOMB_DIR"/*.json; do [ -f "$t" ] && jq -c 'select(type == "object")' "$t" 2>/dev/null; done \
+    | jq -rs --argjson lo "$1" --argjson hi "$2" --argjson burst "$TOMB_BURST" --arg sids " $(ghost_sids)" '
+        [ .[] | (.session_id // "") as $s
+              | select($s != "" and ((.endedAt // 0) | type) == "number"
+                       and .endedAt > $lo and .endedAt <= $hi and ($sids | contains(" " + $s + " "))) ]
+        | if length == 0 then empty else
+            (map(.endedAt) | max) as $last | map(select(.endedAt >= $last - $burst)) | map(.endedAt) | max | floor
+          end' 2>/dev/null
+}
+CUT="$ANCHOR"; CUT_SRC=anchor
+case "$ANCHOR" in ''|*[!0-9]*) ANCHOR="$BOOT"; CUT="$BOOT" ;; esac
+if [ "$SOURCE" = heartbeat ] || [ "$SOURCE" = roster ]; then
+  _c="$(head -n 1 "$EVENT_DIR/cut" 2>/dev/null)"
+  if [ "$PLAN_ONLY" = 0 ] && [ "${_c%% *}" -gt 0 ] 2>/dev/null; then
+    CUT="${_c%% *}"; CUT_SRC="$(printf '%s' "$_c" | awk '{ print $2 }') (first round)"
+  else
+    _t="$(tomb_cut "$ANCHOR" "$CUT_HI")"
+    if [ "${_t:-0}" -gt "$ANCHOR" ] 2>/dev/null; then CUT="$_t"; CUT_SRC=tombstones
+    elif [ "$TX_PRE_MAX" -gt "$ANCHOR" ]; then CUT="$TX_PRE_MAX"; CUT_SRC=transcripts
+    fi
+    case "$REG_NEW_MAX" in ''|*[!0-9]*) REG_NEW_MAX=0 ;; esac
+    [ "$REG_NEW_MAX" -gt "$CUT" ] && [ "$REG_NEW_MAX" -le "$CUT_HI" ] && { CUT="$REG_NEW_MAX"; CUT_SRC=started-after-tick; }
+  fi
+fi
+
+# ── the reboot's OWNER (R2/R8): the session that ran alarm-reboot-prep.sh, which writes its session id
+#    to reboot-<date>.owner beside the .start it stamps. The newest one whose .start falls in this
+#    reboot's window, exactly as the roster is chosen. It is passed to the classifier as --owner (the
+#    classifier gives it a wake item, so it is prompted) and is the first recipient of the page. An
+#    event has no owner: kitty restarts and crashes are not prepared. Absent file ⇒ no owner. ──
+OWNER_SID=""
+if [ -z "$EVENT" ]; then
+  _ost=0
+  for f in "$ROSTER_DIR"/reboot-*.owner; do
+    [ -f "$f" ] || continue
+    st="$(head -n 1 "${f%.owner}.start" 2>/dev/null | awk '{ print $1 }')"
+    case "$st" in ''|*[!0-9]*) continue ;; esac
+    { [ "$st" -gt "$LOWER" ] && [ "$st" -le "$BOOT" ] && [ "$st" -ge "$_ost" ]; } || continue
+    o="$(head -n 1 "$f" 2>/dev/null | tr -d '[:space:]')"
+    case "$o" in ''|*[!A-Za-z0-9-]*) continue ;; esac
+    OWNER_SID="$o"; _ost="$st"
+  done
+fi
+
 # Restore v2 marks an event (or a flagged reboot) done only once nothing was shed, or once its
 # deadline has passed: until then the next round runs, and the ledger keeps it from launching a sid
 # twice. The page goes out once per event, on its first round (<event>/paged).
+# R18: the deadline counts from the event's FIRST RUN (<event>/started), not from kern.boottime. On
+# 2026-10-21 the login came 47 minutes after the boot, so a deadline of boot + 30 min had already
+# passed at the first run, and a shed session would have had no retry round at all.
 restore_now() { printf '%s' "${CC_RESTORE_NOW:-$(date +%s)}"; }
-restore_done() { [ "${resume_shed:-0}" -eq 0 ] || [ "$(restore_now)" -ge $((BOOT + ${CC_RESTORE_DEADLINE_S:-1800})) ]; }
-restore_start_gate() { # rc 0 once load per core is at or under the gate, 1 at the wait's deadline
-  local lim="${CC_RESTORE_START_LOAD:-6}" max="${CC_RESTORE_GATE_MAX_S:-600}" poll="${CC_RESTORE_GATE_POLL_S:-10}"
-  local t0 now l1 nc per
+restore_t0() { local s; s="$(head -n 1 "$EVENT_DIR/started" 2>/dev/null)"; case "$s" in ''|*[!0-9]*) s="$BOOT" ;; esac; printf '%s' "$s"; }
+restore_deadline() { printf '%s' $(( $(restore_t0) + ${CC_RESTORE_DEADLINE_S:-1800} )); }
+restore_done() { [ "${resume_shed:-0}" -eq 0 ] || [ "$(restore_now)" -ge "$(restore_deadline)" ]; }
+# R4 (2026-10-21): no start gate. It waited up to 600 s per round for load to fall to 6 per core,
+# which at this machine's standing 15-40 per core it never does (60 readings from 61.47 to 6.99 on
+# 2026-10-21, then the deadline). One reading is kept as telemetry; nothing waits for it.
+restore_load_reading() {
+  local l1 nc per
   nc="$("$SYSCTL" -n hw.ncpu 2>/dev/null | tr -d '[:space:]')"; case "$nc" in ''|*[!0-9]*|0) nc=1 ;; esac
-  t0="$(restore_now)"
+  l1="$("$SYSCTL" -n vm.loadavg 2>/dev/null | tr -d '{}' | awk '{ print $1 }')"
+  per="$(awk -v l="$l1" -v n="$nc" 'BEGIN { if (l !~ /^[0-9.]+$/) print "?"; else printf "%.2f", l / n }')"
   mkdir -p "$EVENT_DIR" 2>/dev/null || true
-  while :; do
-    l1="$("$SYSCTL" -n vm.loadavg 2>/dev/null | tr -d '{}' | awk '{ print $1 }')"
-    now="$(restore_now)"
-    per="$(awk -v l="$l1" -v n="$nc" 'BEGIN { if (l !~ /^[0-9.]+$/) print "?"; else printf "%.2f", l / n }')"
-    printf '%s load1=%s ncpu=%s per_core=%s gate=%s\n' "$now" "${l1:-?}" "$nc" "$per" "$lim" >> "$EVENT_DIR/load.log" 2>/dev/null
-    [ "$per" = "?" ] && return 0      # an unreadable load is no reason to hold a restore
-    awk -v p="$per" -v g="$lim" 'BEGIN { exit !(p <= g) }' && return 0
-    [ $((now - t0)) -ge "$max" ] && return 1
-    sleep "$poll"
-    [ -z "${CC_RESTORE_NOW:-}" ] || CC_RESTORE_NOW=$((CC_RESTORE_NOW + poll))
-  done
+  printf '%s load1=%s ncpu=%s per_core=%s gate=none\n' "$(restore_now)" "${l1:-?}" "$nc" "$per" >> "$EVENT_DIR/load.log" 2>/dev/null
+  printf '%s' "$per"
 }
 mark_processed() {
   if [ "$RESTORE_V2" = 1 ] && ! restore_done; then return 0; fi
@@ -992,7 +1133,7 @@ mark_processed() {
 # ── --plan-only: what a restore of this event WOULD do, and nothing else — no ownership probe (a
 #    live session reads as held), no classifier, no layout, no page, no marker. ──
 if [ "$PLAN_ONLY" = 1 ]; then
-  echo "boot-resume: plan event=${EVENT} kind=${EVENT_KIND} source=${SOURCE_LABEL:-none} anchor=${ANCHOR} sessions=${n_open} retired=${n_retired}"
+  echo "boot-resume: plan event=${EVENT} kind=${EVENT_KIND} source=${SOURCE_LABEL:-none} anchor=${ANCHOR} cut=${CUT}(${CUT_SRC}) sessions=${n_open} retired=${n_retired}"
   # The 11 row-contract columns the layout would get, '-' for an empty cell. Column 10 (prompt_file)
   # stays empty here: a prompt is written only for a row classified INTERRUPTED or WAKE-LOST, and a
   # plan runs no classifier.
@@ -1056,9 +1197,103 @@ n_wake=0        # restore v2: at rest, but with work open at the cut that died w
 n_noted=0; n_note_fail=0   # restore v2: inbox notes written this round / refused by cc-notify
 n_prompt=0; n_prompt_ok=0; n_prompt_fb=0; n_prompt_noreply=0; n_prompt_bad=0   # launch-argument prompts
 n_draft_typed=0; n_draft_kept=0; n_draft_left=0; drafts_dir=""; layout_ran=0     # the reboot prep's unsent drafts
-PROMPTED=""     # restore v2: "<sid>\t<prompt file>\t<nonce>" per row that got a prompt
+PROMPTED=""     # restore v2: "<sid>\t<prompt file>\t<nonce>\t<cwd>" per row that got a prompt
 kv() { printf '%s\n' "$2" | tr ' ' '\n' | sed -n "s/^$1=//p" | head -1; }   # <key> <summary-line>
 num() { case "$1" in ''|*[!0-9]*) printf 0 ;; *) printf '%s' "$1" ;; esac; }
+HELD=""; HELD_MEMBERS=""; n_mail_carried=0; n_ret_cls=0; load_per_core=""; MAIL_LOG=""
+EARLY_TO=""; EARLY_KIND=""; BL_PID=""; BL_OUT=""
+
+# ── WHO HEARS ABOUT IT (R8, 2026-10-21). The page used to need cc-roles/desk, which nothing re-creates
+#    after a sweep or a reboot, so every recent reboot's summary went to a backlog row that said
+#    "nothing was told" over 26 resumed sessions. The ladder: the reboot's owner session (the one
+#    that ran alarm-reboot-prep.sh, when it is back), else the desk role, else a lead role whose
+#    session is live (*-lead, orchestrator; re-resolved by cc-restore-rebind first), else the backlog.
+#    Live = this restore launched it, or a registry row started this boot names it with a running pid. ──
+sid_live() { # <session id or pane number> → rc 0 when a session of this boot holds it
+  local k="$1" kb p
+  [ -n "$k" ] || return 1
+  [ "$RESTORE_V2" = 1 ] && grep -qxF "$k" "$EVENT_DIR/launched" 2>/dev/null && return 0
+  kb="$(boottime)"; case "$kb" in ''|*[!0-9]*) kb=0 ;; esac   # the kernel boot, also in event mode
+  for p in $(for f in "$REGISTRY_DIR"/*.json; do [ -f "$f" ] && cat "$f" && echo; done 2>/dev/null \
+             | jq -r --arg k "$k" --argjson kb "$kb" 'select(type == "object"
+                 and ((.session_id // "") == $k or ((.paneUUID // "") | tostring) == $k)
+                 and ((((.startedAt // 0) | if type == "number" then . else 0 end) / 1000) >= $kb))
+               | .pid // empty | tostring' 2>/dev/null); do
+    case "$p" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$p" 2>/dev/null && return 0
+  done
+  return 1
+}
+PAGE_TO=""; PAGE_KIND=""
+resolve_page_target() { # sets PAGE_TO and PAGE_KIND; rc 1 when nobody can be told
+  local t r
+  PAGE_TO=""; PAGE_KIND=""
+  if [ -n "$OWNER_SID" ] && sid_live "$OWNER_SID"; then PAGE_TO="$OWNER_SID"; PAGE_KIND=owner; return 0; fi
+  t=""; [ -f "$ROLES_DIR/desk" ] && t="$(head -1 "$ROLES_DIR/desk" 2>/dev/null | tr -d '[:space:]')"
+  [ -n "$t" ] && { PAGE_TO="$t"; PAGE_KIND=desk; return 0; }
+  for r in "$ROLES_DIR"/*-lead "$ROLES_DIR"/orchestrator; do
+    [ -f "$r" ] || continue
+    t="$(head -1 "$r" 2>/dev/null | tr -d '[:space:]')"
+    [ -n "$t" ] && sid_live "$t" && { PAGE_TO="$t"; PAGE_KIND="role:${r##*/}"; return 0; }
+  done
+  return 1
+}
+cut_phrase() { # "rebooted 2026-…Z" / "kitty crash at …"
+  local w=rebooted; [ -n "$EVENT" ] && w="kitty ${EVENT_KIND} at"
+  printf '%s %s' "$w" "$(date -u -r "$BOOT" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' "$BOOT")"
+}
+page_lists() { # the retired and held sessions, each named — shared by the early page and the final one
+  [ "$n_retired" -gt 0 ] && printf '\n⏭ %s not resumed — they closed themselves on purpose, or were closing themselves at the cut:\n%s' "$n_retired" "$RETIRED"
+  [ -n "$HELD" ] && printf '\n⏸ not launched by this restore (the launcher said why; %s):\n%s' "$HELD_LOG" "$HELD"
+  return 0
+}
+# shellcheck disable=SC2016  # the backticks are literal: the row tells the operator a command to run
+backlog_step() { # <why> → the backlog row's text, true to what happened
+  local undeliv="$STATE_DIR/undelivered-$BOOT.page"
+  if [ "$MODE" = resume ] && [ "${resumed:-0}" -gt 0 ]; then
+    printf 'boot-resume restored %s of %s session(s) after it %s (%s recovery prompt(s) sent), but no session could be told (%s: no owner session, desk role or live lead role). Read the summary: %s. To have the next restore page a session directly, run `cc-roles claim desk` from the desk pane.' \
+      "$resumed" "$n_fire" "$(cut_phrase)" "${n_prompt:-0}" "$1" "$undeliv"
+  elif [ "$MODE" = resume ]; then
+    printf 'boot-resume could not reopen any of the %s session(s) that were open when it %s (%s). Full report: %s — recover with /resume-sessions in any Claude session, then run `cc-roles claim desk` from the desk pane so the next boot pages directly.' \
+      "$n_open" "$(cut_phrase)" "$1" "$undeliv"
+  else
+    printf 'boot-resume could not page the desk (%s): %s session(s) were open when it %s and, in page mode, none were resumed and nothing was told. Full delta: %s — recover with /resume-sessions in any Claude session, then run `cc-roles claim desk` from the desk pane so the next boot pages directly.' \
+      "$1" "$n_open" "$(cut_phrase)" "$undeliv"
+  fi
+}
+early_page() { # restore v2, first round, right after the layout
+  local where msg why=no-desk-role
+  where="one window each"; [ "$opener" = desktops ] && where="${desk_windows} fullscreen Desktop(s)"
+  msg="🔄 restore under way: $(cut_phrase) · source: ${SOURCE_LABEL} · reopened ${resumed}/${n_fire} session(s) into ${where} just now. ${n_int} cut off mid-turn and ${n_wake} at rest with work that died got a recovery prompt (${n_prompt} sent; a follow-up page says how many ran); ${n_rest} at rest got an inbox note only."
+  [ "$n_mail_carried" -gt 0 ] && msg="${msg} ✉ the unread mail of ${n_mail_carried} session(s) was carried from its old pane number to the session."
+  [ "$resume_shed" -gt 0 ] && msg="${msg} ⏸ ${resume_shed} shed by the capacity gate; this restore runs again for them until $(date -r "$(restore_deadline)" +%H:%M 2>/dev/null)."
+  [ "$resume_fail" -gt 0 ] && msg="${msg} ⚠ ${resume_fail} failed to launch."
+  msg="${msg}$(page_lists)"
+  if resolve_page_target && [ -n "$NOTIFY" ]; then
+    "$NOTIFY" "$PAGE_TO" "$msg" >/dev/null 2>&1 || true   # cc-notify's mailbox fallback ⇒ durable at exit 0
+    EARLY_TO="$PAGE_TO"; EARLY_KIND="$PAGE_KIND"
+    paged_once
+    echo "boot-resume: early page delivered to ${PAGE_KIND} ${PAGE_TO}" >&2
+    return 0
+  fi
+  [ -n "$PAGE_TO" ] && why=no-notify-bin
+  # Nobody to tell. The page goes to disk now and the backlog row is filed in the BACKGROUND, so the
+  # confirm phase is not held by it; the end of the run waits for it before deciding to mark.
+  mkdir -p "$STATE_DIR" 2>/dev/null || true
+  printf '%s\n' "$msg" > "$STATE_DIR/undelivered-$BOOT.page" 2>/dev/null || true
+  if [ -n "$BACKLOG" ]; then
+    BL_OUT="$EVENT_DIR/backlog.out"; BL_WHY="$why"
+    ( "$BACKLOG" needs "$(backlog_step "$why")" --class needs-human --receipt "$STATE_DIR/undelivered-$BOOT.page" \
+        --project claude-infrastructure > "$BL_OUT" 2>/dev/null ) &
+    BL_PID=$!
+  fi
+  echo "boot-resume: early page undeliverable (${why}); filing to the backlog in the background" >&2
+  return 0
+}
+paged_once() { [ "$RESTORE_V2" = 1 ] || return 0; mkdir -p "$EVENT_DIR" 2>/dev/null && : > "$EVENT_DIR/paged" 2>/dev/null; return 0; }
+confirm_one() { # <sid> <nonce> — rn_confirm, or the test seam that stands in for it
+  if [ -n "${CC_RESTORE_CONFIRM_CMD:-}" ]; then "$CC_RESTORE_CONFIRM_CMD" "$@"; else rn_confirm "$@"; fi
+}
 if [ "$MODE" = "resume" ]; then
   if [ -z "$LAUNCH" ] || [ ! -x "$LAUNCH" ]; then
     log_idl failed ",\"n_open\":$n_open,\"resumed\":0,\"delivered\":false,\"reason\":\"no-resume-launcher\""
@@ -1073,6 +1308,27 @@ if [ "$MODE" = "resume" ]; then
     export CC_ADMIT_LOAD_TERM=off
     mkdir -p "$EVENT_DIR" 2>/dev/null || true
     [ -n "$EXH_SIDS" ] && printf '%s' "$EXH_SIDS" | tr ' ' '\n' > "$EVENT_DIR/exhausted" 2>/dev/null
+    # R18 and R1: the first round stamps when the restore started and where it cut; later rounds read both.
+    [ -s "$EVENT_DIR/started" ] || { restore_now; echo; } > "$EVENT_DIR/started" 2>/dev/null
+    [ -s "$EVENT_DIR/cut" ] || printf '%s %s\n' "$CUT" "$CUT_SRC" > "$EVENT_DIR/cut" 2>/dev/null
+    # R22, the boot half: after an OS update the 47 minutes from boot to login went to macOS's
+    # Template Migration (TotalDuration=1534.31 on 2026-10-21), whose log was dominated by the temp
+    # files the reboot prep now prunes. Its durations are kept with the boot's event so the next update
+    # measures the gain. Asked once per boot, in the background (`log show` is slow at load), and only
+    # its few duration lines are kept. Under a bats harness only an explicit CC_LOG_BIN runs.
+    if [ -z "$EVENT" ] && [ ! -e "$EVENT_DIR/template-migration.asked" ]; then
+      _lb="${CC_LOG_BIN:-}"; [ -z "$_lb" ] && ! _kp_under_bats && _lb=/usr/bin/log
+      if [ -n "$_lb" ] && [ -x "$_lb" ]; then
+        : > "$EVENT_DIR/template-migration.asked"
+        ( "$_lb" show --style compact --start "$(date -r "$BOOT" '+%Y-%m-%d %H:%M:%S')" \
+            --predicate 'process == "templateMigrator" AND (eventMessage CONTAINS "Duration" OR eventMessage CONTAINS "Migration completed")' 2>/dev/null \
+            | grep -E 'Duration=|Migration completed' | tail -n 8 > "$EVENT_DIR/template-migration.tmp" \
+          && mv -f "$EVENT_DIR/template-migration.tmp" "$EVENT_DIR/template-migration.txt" ) >/dev/null 2>&1 &
+      fi
+    fi
+    # R20: this run's own stderr, timestamped, kept with the event. launchd's log is the other copy.
+    exec 2> >(ts_lines | tee -a "$EVENT_DIR/run.stderr" >&2)
+    echo "boot-resume: restore ${EVENT_ID} round at $(date -u +%Y-%m-%dT%H:%M:%SZ): ${n_open} row(s), source ${SOURCE_LABEL}, cut ${CUT} (${CUT_SRC}), owner ${OWNER_SID:-none}" >&2
   fi
   # WINNERS rows: "<alias>\t<sid>\t<cwd>\t<branch>\t<label>", padded.
   WINNERS=""
@@ -1122,6 +1378,30 @@ EOF
   #    rule and second-writer check (--check-only opens nothing). ADMITTED is plain TSV for the
   #    layout and the classifier, which both split on single tabs (cut / awk / str.split), so an
   #    empty branch cell is safe there.
+  # R10: every session the probe holds (5, 7) or fails is written down WITH the launcher's own reason
+  #    (its stderr used to go to /dev/null, so four members of one team were held on 2026-10-21 and
+  #    nothing said why) and named in the page. A held Agent Teams member (7) is mapped to its lead
+  #    through the --parent-session-id the heartbeat's kitty tree captured from its argv (a team
+  #    config's leadSessionId stops matching once the lead is resumed); the lead is told to respawn it.
+  HELD_LOG="$STATE_DIR/last-held.log"; [ "$RESTORE_V2" = 1 ] && HELD_LOG="$EVENT_DIR/held.log"
+  HELD_ERR="$STATE_DIR/.check-only.err"; HELD=""; HELD_MEMBERS=""
+  TEAM_MAP="$(team_map)"
+  held_note() { # <sid> <label> <rc> — reads the probe's stderr from $HELD_ERR
+    local why lead mname
+    why="$(grep . "$HELD_ERR" 2>/dev/null | tail -n 1 | sed 's/^boot-resume-launch: //' | tr '\t' ' ')"
+    [ -n "$why" ] || why="exit $3, no reason given"
+    lead=""; mname=""
+    if [ "$3" = 7 ]; then
+      lead="$(printf '%s\n' "$TEAM_MAP" | awk -F'\t' -v s="$1" '$1 == s { print $2; exit }')"
+      mname="$(printf '%s\n' "$TEAM_MAP" | awk -F'\t' -v s="$1" '$1 == s { print $3; exit }')"
+      HELD_MEMBERS="${HELD_MEMBERS}${1}	${lead}	${mname:-$2}
+"
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\n' "$(now_iso)" "$1" "$3" "${lead:--}" "$why" >> "$HELD_LOG" 2>/dev/null
+    case "$3" in 5|7) ;; *) why="FAILED the ownership probe: $why" ;; esac
+    HELD="${HELD}  - $2 (${1:0:8}): ${why}${lead:+ (an Agent Teams member of lead ${lead:0:8}, whose restore note asks it to respawn the member)}
+"
+  }
   ADMITTED=""
   while IFS=$'\t' read -r alias sid cwd br label; do
     alias="$(unpad "$alias")"; sid="$(unpad "$sid")"; cwd="$(unpad "$cwd")"
@@ -1138,11 +1418,12 @@ EOF
       [ "$br" = HEAD ] && br=""
     fi
     [ -z "$br" ] && [ "$RESTORE_V2" = 1 ] && br="$(meta_col "$sid" 6)"   # the reaped-worktree branch
-    "$LAUNCH" --check-only "$alias" "$cwd" "$sid" "$br" >/dev/null 2>&1
-    case "$?" in
+    "$LAUNCH" --check-only "$alias" "$cwd" "$sid" "$br" >/dev/null 2>"$HELD_ERR"
+    c_rc=$?
+    case "$c_rc" in
       0) ;;
-      5|7) resume_held=$((resume_held + 1)); continue ;;
-      *) resume_fail=$((resume_fail + 1)); continue ;;
+      5|7) resume_held=$((resume_held + 1)); held_note "$sid" "${label:-${sid:0:8}}" "$c_rc"; continue ;;
+      *) resume_fail=$((resume_fail + 1)); held_note "$sid" "${label:-${sid:0:8}}" "$c_rc"; continue ;;
     esac
     if [ "$RESTORE_V2" = 1 ]; then
       # Row contract columns 6-11 (model effort group slot prompt_file permission_mode), each empty
@@ -1161,10 +1442,55 @@ EOF
   #    classifier, or one that returned a different number of rows, is no evidence at all, so every
   #    row becomes UNKNOWN — restored, never nudged (the classifier's own fail-safe polarity).
   n_adm="$(printf '%s' "$ADMITTED" | grep -c . || true)"
+  # 1b. MAIL CARRY (R3), before the classifier reads mailboxes and before any window opens. Mail is
+  #     keyed by pane number, and the restore renumbers panes: on 2026-10-21 a lead's "W2 landed"
+  #     report sat in its old pane-31 box until the window's next occupant sealed it (31.sealed). For
+  #     each admitted row whose old pane (the roster's paneUUID) holds unacked lines from before the
+  #     cut, mailbox_migrate moves them to the session's own box, exactly once (it advances the pane's
+  #     cursors by what landed). A pane two rows claim is carried to neither: nobody can say whose it is.
+  n_mail_carried=0
+  if [ "$n_adm" -gt 0 ] && [ -n "$SRC_FILES" ] && [ -f "$MAILBOX_LIB" ]; then
+    PANES="$(printf '%s' "$SRC_FILES" | tr '\n' '\0' | xargs -0 cat 2>/dev/null | jq -rs --arg adm " $(printf '%s\n' "$ADMITTED" | cut -f2 | tr '\n' ' ')" '
+        [ .[] | (if type == "array" then . else (.sessions // []) end)[]
+          | select(type == "object") | (.session_id // "") as $s
+          | select($s != "" and ((.paneUUID // "") | tostring | test("^[0-9]+$"))
+                   and ($adm | contains(" " + $s + " ")))
+          | {p: (.paneUUID | tostring), s: .session_id} ] | unique
+        | group_by(.p)[] | select((map(.s) | unique | length) == 1) | .[0] | [.p, .s] | @tsv' 2>/dev/null)"
+    if [ -n "$PANES" ]; then
+      # The log lives with the event under restore v2; outside it there is no event dir to create.
+      MAIL_LOG="$STATE_DIR/last-mail-carry.log"; [ "$RESTORE_V2" = 1 ] && MAIL_LOG="$EVENT_DIR/mail-carry.log"
+      n_mail_carried="$( (
+        set +u   # the lib is written for hooks, not for set -u
+        # shellcheck source=../hooks/lib/mailbox-pending.sh
+        # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+        . "$MAILBOX_LIB" 2>/dev/null || exit 0
+        n=0
+        while IFS=$'\t' read -r p s; do
+          [ -n "$p" ] && [ -n "$s" ] || continue
+          old="$(mailbox_window_tagged "$p" "$(mailbox_acked "$p")" "$((CUT + 1))" 2>/dev/null | grep -c '^P ')"
+          [ "${old:-0}" -gt 0 ] || continue
+          m="$(mailbox_migrate "$p" "$s" 2>/dev/null)"; rc=$?
+          printf '%s pane=%s sid=%s pre_cut=%s migrated=%s rc=%s\n' "$(now_iso)" "$p" "$s" "$old" "${m:-0}" "$rc" \
+            >> "$MAIL_LOG" 2>/dev/null
+          [ "${m:-0}" -gt 0 ] 2>/dev/null && n=$((n + 1))
+        done <<PANES_EOF
+$PANES
+PANES_EOF
+        echo "$n" ) )"
+      n_mail_carried="$(num "$n_mail_carried")"
+    fi
+  fi
   CLASSIFIED=""
   if [ "$n_adm" -gt 0 ] && [ -n "$CLASSIFY" ] && [ -x "$CLASSIFY" ]; then
     CL_ARGS=()
-    [ "$SOURCE" != registry ] && CL_ARGS=(--boot-epoch "$ANCHOR")
+    # R1: the true cut, not the source's stamp (see the CUT block).
+    [ "$SOURCE" != registry ] && CL_ARGS=(--boot-epoch "$CUT")
+    # The reboot's owner gets a wake item. Passed only to a classifier that knows the flag, so an older
+    # one is never handed an argument it refuses (argparse exit 2 would make every row UNKNOWN).
+    if [ -n "$OWNER_SID" ] && grep -q -e '--owner' "$CLASSIFY" 2>/dev/null; then
+      CL_ARGS[${#CL_ARGS[@]}]=--owner; CL_ARGS[${#CL_ARGS[@]}]="$OWNER_SID"
+    fi
     if [ "$RESTORE_V2" = 1 ]; then
       # WAKE-LOST and the lost-items file are restore v2's; without the flag the classifier's output
       # is what it always was. The heartbeat dirs say what was live under each session at the cut.
@@ -1178,17 +1504,70 @@ $HB_DIRS
 EOF
     fi
     CLASSIFIED="$(printf '%s' "$ADMITTED" | "$CLASSIFY" ${CL_ARGS[@]+"${CL_ARGS[@]}"} 2>"$STATE_DIR/last-classify.txt")" || CLASSIFIED=""
+    # R20: each event keeps its own copy; last-classify.txt is overwritten by the next run.
+    [ "$RESTORE_V2" = 1 ] && { echo "=== $(now_iso) classify ${CL_ARGS[*]-}"; cat "$STATE_DIR/last-classify.txt"; } >> "$EVENT_DIR/classify.txt" 2>/dev/null
   fi
   if [ "$(printf '%s' "$CLASSIFIED" | grep -c . || true)" != "$n_adm" ]; then
     CLASSIFIED="$(printf '%s' "$ADMITTED" | awk -F'\t' 'NF { print $0 "\tUNKNOWN" }')"
   fi
+  # A held Agent Teams member's lead (R10): the member is a teammate item in the lead's lost items,
+  # so its restore note names it, and a lead that was otherwise at rest has work that died with the
+  # old process — WAKE-LOST, which prompts it. A lead the classifier could not read (UNKNOWN) stays
+  # as it is: no evidence is no evidence.
+  if [ "$RESTORE_V2" = 1 ] && [ -n "$HELD_MEMBERS" ] && [ -n "$CLASSIFIED" ]; then
+    while IFS=$'\t' read -r m_sid m_lead m_name; do
+      [ -n "$m_lead" ] || continue
+      printf '%s\n' "$CLASSIFIED" | awk -F'\t' -v s="$m_lead" '$2 == s { f = 1 } END { exit !f }' || continue
+      CLASSIFIED="$(printf '%s\n' "$CLASSIFIED" | awk -F'\t' -v OFS='\t' -v s="$m_lead" '$2 == s && $NF == "AT-REST" { $NF = "WAKE-LOST" } NF { print }')"
+      [ -f "$EVENT_DIR/lost.json" ] || printf '{"sessions":{}}\n' > "$EVENT_DIR/lost.json"
+      jq --arg l "$m_lead" --arg n "$m_name" --arg m "$m_sid" '
+          .sessions = (.sessions // {})
+          | .sessions[$l] = (.sessions[$l] // {verdict: "WAKE-LOST", items: []})
+          | .sessions[$l].items = ((.sessions[$l].items // [])
+              | if any(.[]; .kind == "teammate" and ((.detail // "") | startswith($n))) then map(
+                    if .kind == "teammate" and ((.detail // "") | startswith($n)) then .detail = "\($n): held at restore, respawn it" | .sid = $m else . end)
+                else . + [{kind: "teammate", detail: "\($n): held at restore, respawn it", sid: $m}] end)
+          | if .sessions[$l].verdict == "AT-REST" then .sessions[$l].verdict = "WAKE-LOST"
+              | .sessions[$l].why = ((.sessions[$l].why // "") + "; an Agent Teams member was held at restore") else . end' \
+        "$EVENT_DIR/lost.json" > "$EVENT_DIR/lost.json.tmp" 2>/dev/null && mv -f "$EVENT_DIR/lost.json.tmp" "$EVENT_DIR/lost.json"
+    done <<EOF
+$HELD_MEMBERS
+EOF
+  fi
   # The classified rows, kept with the event: cc-restore-rebind and cc-restore --compare read them.
   # A later round admits only what is still missing, so its rows are merged over the earlier ones
-  # by sid (column 2), never written in their place.
+  # by sid (column 2), never written in their place. R12: the `|| true` is inside the braces — on the
+  # first round rows.tsv does not exist yet, and under pipefail a failing cat failed the whole pipe,
+  # so the mv never ran and every restore left only rows.tsv.tmp.
   if [ "$RESTORE_V2" = 1 ] && [ "$n_adm" -gt 0 ]; then
-    { printf '%s\n' "$CLASSIFIED"; cat "$EVENT_DIR/rows.tsv" 2>/dev/null; } \
+    { printf '%s\n' "$CLASSIFIED"; cat "$EVENT_DIR/rows.tsv" 2>/dev/null || true; } \
       | awk -F'\t' 'NF >= 2 && !seen[$2]++' > "$EVENT_DIR/rows.tsv.tmp" 2>/dev/null \
       && mv -f "$EVENT_DIR/rows.tsv.tmp" "$EVENT_DIR/rows.tsv" 2>/dev/null
+  fi
+  # RETIRED (T1's verdict): the session was closing itself — a handoff-fire.sh self-close tool call was
+  #   pending at the cut, or its terminal-intent record was still on disk. It is not relaunched, gets no
+  #   note and no prompt, and is named in the page with the command that brings it back. On 2026-10-21
+  #   5d19ef73 was mid `self-close --terminal` when the power went, and came back as an idle pane.
+  n_ret_cls=0
+  RET_SIDS="$(printf '%s\n' "$CLASSIFIED" | awk -F'\t' '$NF == "RETIRED" { print $2 }' | tr '\n' ' ')"
+  if [ -n "${RET_SIDS// /}" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      r_sid="$(printf '%s' "$line" | cut -f2)"
+      case " $RET_SIDS " in *" $r_sid "*) ;; *) continue ;; esac
+      r_alias="$(printf '%s' "$line" | cut -f1)"; r_cwd="$(printf '%s' "$line" | cut -f3)"; r_lab="$(printf '%s' "$line" | cut -f5)"
+      r_launcher=""; command -v cc_acct_launcher_for_name >/dev/null 2>&1 && r_launcher="$(cc_acct_launcher_for_name "$r_alias")"
+      RETIRED="${RETIRED}  - ${r_lab:-${r_sid:0:8}} (${r_sid}): it was closing itself at the cut (a self-close in flight) — to bring it back: cd '${r_cwd:-.}' && ${r_launcher:-claude} --resume ${r_sid}
+"
+      n_retired=$((n_retired + 1)); n_ret_cls=$((n_ret_cls + 1))
+    done <<EOF
+$CLASSIFIED
+EOF
+    ADMITTED="$(printf '%s\n' "$ADMITTED" | awk -F'\t' -v r=" $RET_SIDS " 'NF && !index(r, " " $2 " ")')
+"
+    CLASSIFIED="$(printf '%s\n' "$CLASSIFIED" | awk -F'\t' '$NF != "RETIRED" && NF')"
+    n_adm=$((n_adm - n_ret_cls))
+    mkdir -p "$STATE_DIR" 2>/dev/null && printf '%s' "$RETIRED" > "$STATE_DIR/last-retired.txt" 2>/dev/null
   fi
   n_int="$(printf '%s\n' "$CLASSIFIED" | awk -F'\t' '$NF == "INTERRUPTED"' | grep -c . || true)"
   n_wake="$(printf '%s\n' "$CLASSIFIED" | awk -F'\t' '$NF == "WAKE-LOST"' | grep -c . || true)"
@@ -1222,7 +1601,8 @@ EOF
         pf="$(rn_write_prompt "$EVENT_DIR/prompts" "$sid" \
                "$(rn_prompt_text "$rn_kind" "$BOOT" "$EVENT_DIR/lost.json" "$sid" "$verdict" "$nonce")")" || continue
       fi
-      PROMPTED="${PROMPTED}${sid}	${pf}	${nonce}
+      # Column 4, the worktree: rn_confirm and rn_fallback find the transcript by direct path from it.
+      PROMPTED="${PROMPTED}${sid}	${pf}	${nonce}	$(printf '%s' "$line" | cut -f3)
 "
       n_prompt=$((n_prompt + 1))
     done <<EOF
@@ -1244,24 +1624,27 @@ EOF
   #    (cc-resume-layout.sh --desktops). By default that is <=4 panes per OS window as a 2x2; under
   #    restore v2 (--restore) it is one row of up to 6 panes per window. At login there may be no kitty yet — exit
   #    3 means no live control socket — so open one and give it a moment before falling back.
-  # The start gate (restore v2): wait until load per core is at or under CC_RESTORE_START_LOAD, for
-  # at most CC_RESTORE_GATE_MAX_S, logging every reading to <event>/load.log so the login boot-storm
-  # value gets measured. At the deadline the restore goes ahead: holding it longer saves nothing.
-  gate_verdict=""
+  # No start gate (R4): one load-per-core reading goes to <event>/load.log as telemetry, and the
+  # layout starts at once. The layout's own per-pane capacity admission is what paces the launches.
+  load_per_core=""
   if [ "$RESTORE_V2" = 1 ] && [ "$n_adm" -gt 0 ]; then
-    if restore_start_gate; then gate_verdict=open; else gate_verdict=deadline; fi
+    load_per_core="$(restore_load_reading)"
   fi
   LAY_ARGS=(--desktops)
   [ "$RESTORE_V2" = 1 ] && LAY_ARGS=(--desktops --restore)
+  # R20: the layout's stderr, one timestamped copy per event (last-layout.txt used to run on across
+  # boots with no time on any line); a restore outside v2 keeps last-layout.txt, now timestamped too.
+  LAYOUT_LOG="$STATE_DIR/last-layout.txt"; [ "$RESTORE_V2" = 1 ] && LAYOUT_LOG="$EVENT_DIR/layout.txt"
   layout_rc=127; layout_sum=""
   if [ "$n_adm" -gt 0 ] && [ -n "$LAYOUT" ] && [ -x "$LAYOUT" ]; then
     tries="${CC_BOOT_RESUME_KITTY_TRIES:-10}"; poll="${CC_BOOT_RESUME_KITTY_POLL:-3}"; opened=0
     while :; do
       # To a file, not $( … | grep): the layout's exit status is the verdict (3 = no kitty), and a
-      # command substitution's pipeline status never reaches this shell. pipefail makes $? the
-      # layout's own, since printf cannot fail here.
-      printf '%s' "$ADMITTED" | "$LAYOUT" "${LAY_ARGS[@]}" >"$STATE_DIR/last-layout.out" 2>>"$STATE_DIR/last-layout.txt"
-      layout_rc=$?; layout_ran=1
+      # command substitution's pipeline status never reaches this shell. Its stdout goes to the file
+      # and its stderr down the pipe to the timestamped log; PIPESTATUS[1] is the layout's own rc.
+      echo "=== $(now_iso) layout ${LAY_ARGS[*]} rows=${n_adm}" | ts_lines >> "$LAYOUT_LOG" 2>/dev/null
+      printf '%s' "$ADMITTED" | "$LAYOUT" "${LAY_ARGS[@]}" 2>&1 >"$STATE_DIR/last-layout.out" | ts_lines >> "$LAYOUT_LOG" 2>/dev/null
+      layout_rc="${PIPESTATUS[1]}"; layout_ran=1
       layout_sum="$(grep '^cc-resume-layout: verdict=' "$STATE_DIR/last-layout.out" 2>/dev/null | tail -1)"
       [ "$layout_rc" = 3 ] && [ "$tries" -gt 0 ] || break
       # By PATH, not by name: the staged sandbox build shares kitty's bundle id, so `-a kitty` could
@@ -1297,18 +1680,51 @@ EOF
       [ -n "$line" ] || continue
       alias="$(printf '%s' "$line" | cut -f1)"; sid="$(printf '%s' "$line" | cut -f2)"
       cwd="$(printf '%s' "$line" | cut -f3)";   br="$(printf '%s' "$line" | cut -f4)"
-      "$LAUNCH" "$alias" "$cwd" "$sid" "$br" >/dev/null 2>&1
-      case "$?" in
+      "$LAUNCH" "$alias" "$cwd" "$sid" "$br" >/dev/null 2>"$HELD_ERR"
+      w_rc=$?
+      case "$w_rc" in
         0) resumed=$((resumed + 1))
            [ "$RESTORE_V2" = 1 ] && printf '%s\n' "$sid" >> "$EVENT_DIR/launched" 2>/dev/null ;;
         9) resume_shed=$((resume_shed + 1)) ;;
-        5|7) resume_held=$((resume_held + 1)) ;;
+        5|7) resume_held=$((resume_held + 1)); held_note "$sid" "$(printf '%s' "$line" | cut -f5)" "$w_rc" ;;
         6) resume_indet=$((resume_indet + 1)) ;;
         *) resume_fail=$((resume_fail + 1)) ;;
       esac
     done <<EOF
 $ADMITTED
 EOF
+  fi
+
+  # 3b. RIGHT AFTER THE LAYOUT RETURNS (R8, R9; 2026-10-21). Three things that used to wait for the
+  #     confirm phase, or for the next launchd tick, or never ran at all:
+  #     - REBIND (v2): roles and forwards that name old pane numbers are re-resolved to the new panes
+  #       (cc-restore-rebind; a kitty event's cc-restore runs it again later, which is safe). It reads
+  #       the pre-restore roster and roles beside the map, so they are copied in when absent.
+  #     - THE PAGE: the summary goes out now, while the prompts are still being confirmed, to the
+  #       reboot's owner session, else the desk role, else a live lead role; a follow-up with the
+  #       confirmed counts goes to the same session after the confirm phase. With nobody to tell, it
+  #       is filed to the backlog in the background, in words that say what actually happened.
+  #     - A HEARTBEAT of the restored fleet, and another at every exit from here on: the heartbeat
+  #       lives in this same launchd job, so while a restore ran there was none (the new kitty got its
+  #       first one 94 minutes after it started, on 2026-10-21).
+  if [ "$RESTORE_V2" = 1 ] && [ "$layout_ran" = 1 ] && [ -n "$REBIND" ] && [ -x "$REBIND" ]; then
+    [ -s "$STATE_DIR/last-layout.map" ] && cat "$STATE_DIR/last-layout.map" >> "$EVENT_DIR/layout.map" 2>/dev/null
+    if [ ! -f "$EVENT_DIR/hb.roster.json" ] && [ -n "$HB_DIRS" ]; then
+      printf '%s' "$HB_DIRS" | sed 's|$|/hb.roster.json|' | tr '\n' '\0' | xargs -0 cat 2>/dev/null \
+        | jq -s '[.[] | if type == "array" then .[] else empty end]' > "$EVENT_DIR/hb.roster.json" 2>/dev/null || true
+    fi
+    if [ ! -f "$EVENT_DIR/hb.roles.tsv" ] && [ -n "$HB_DIRS" ]; then
+      printf '%s' "$HB_DIRS" | sed 's|$|/hb.roles.tsv|' | tr '\n' '\0' | xargs -0 cat 2>/dev/null | sort -u > "$EVENT_DIR/hb.roles.tsv" 2>/dev/null || true
+    fi
+    "$REBIND" "$EVENT_DIR" >> "$EVENT_DIR/rebind.out" 2>&1
+    echo "boot-resume: cc-restore-rebind rc $? ($(tail -n 1 "$EVENT_DIR/rebind.out" 2>/dev/null))" >&2
+  fi
+  if [ "$RESTORE_V2" = 1 ] && [ ! -f "$EVENT_DIR/paged" ] && { [ "$layout_ran" = 1 ] || [ "$opener" = windows ]; }; then
+    early_page
+  fi
+  if [ "$layout_ran" = 1 ] || [ "$opener" = windows ]; then
+    heartbeat
+    trap 'heartbeat' EXIT
   fi
 
   # 4. KEEPALIVE, scoped to the INTERRUPTED sessions. It re-nudges any idle pane whose cwd CONTAINS
@@ -1328,28 +1744,42 @@ EOF
     if [ -n "$PROMPTED" ] && command -v rn_confirm >/dev/null 2>&1; then
       # CONFIRM: within CC_RESTORE_CONFIRM_S of the layout returning, a user record with the nonce
       # (submitted) and a real assistant record after it (a turn ran). One shared deadline.
-      c_left="${CC_RESTORE_CONFIRM_S:-90}"; c_poll="${CC_RESTORE_CONFIRM_POLL:-5}"
+      # R7 (2026-10-21): the deadline is WALL CLOCK. It used to lose CC_RESTORE_CONFIRM_POLL per round
+      # however long the round took, and at load one round of rn_confirm calls took minutes, so 90 s
+      # ran from 15:35 to 16:10. A session confirmed once is not asked again, and the report below
+      # reuses each session's last answer instead of re-reading every transcript.
+      c_end=$(( $(date +%s) + ${CC_RESTORE_CONFIRM_S:-90} )); c_poll="${CC_RESTORE_CONFIRM_POLL:-5}"
+      C_RES=""   # "<sid>\t<rc>\t<seen>", the newest answer per sid last
       while :; do
         c_open=0
-        while IFS=$'\t' read -r sid pf nonce; do
+        while IFS=$'\t' read -r sid pf nonce p_cwd; do
           [ -n "$sid" ] || continue
-          rn_confirm "$sid" "$nonce" >/dev/null 2>&1 || c_open=$((c_open + 1))
+          # Confirmed already (a "<sid>\t0\t" line)? A string match, not a pipe into an early-exit test.
+          case "
+${C_RES}" in *"
+${sid}	0	"*) continue ;; esac
+          c_rc=0; c_seen="$(confirm_one "$sid" "$nonce" "$p_cwd" 2>/dev/null)" || c_rc=$?
+          C_RES="${C_RES}${sid}	${c_rc}	${c_seen}
+"
+          [ "$c_rc" = 0 ] || c_open=$((c_open + 1))
         done <<EOF
 $PROMPTED
 EOF
-        [ "$c_open" -gt 0 ] && [ "$c_left" -gt 0 ] || break
-        sleep "$c_poll"; c_left=$((c_left - c_poll))
+        [ "$c_open" -gt 0 ] && [ "$(date +%s)" -lt "$c_end" ] || break
+        sleep "$c_poll"
       done
-      while IFS=$'\t' read -r sid pf nonce; do
+      while IFS=$'\t' read -r sid pf nonce p_cwd; do
         [ -n "$sid" ] || continue
-        c_rc=0; c_seen="$(rn_confirm "$sid" "$nonce" 2>/dev/null)" || c_rc=$?
+        c_last="$(printf '%s\n' "$C_RES" | awk -F'\t' -v s="$sid" '$1 == s { l = $0 } END { print l }')"
+        c_rc="$(printf '%s' "$c_last" | cut -f2)"; c_seen="$(printf '%s' "$c_last" | cut -f3)"
+        case "$c_rc" in ''|*[!0-9]*) c_rc=2 ;; esac
         case "$c_rc" in
           0) c_v=confirmed; n_prompt_ok=$((n_prompt_ok + 1)) ;;
           # Submitted, but no turn ran (an account at its limit looks like this). A second submit
           # would run the recovery twice, so this is reported, never retried.
           1) c_v=submitted-no-reply; n_prompt_noreply=$((n_prompt_noreply + 1)) ;;
           *) # Never submitted: cc-wake, then the verified paste. Never a blind CR.
-             if c_fb="$(rn_fallback "$sid" "$pf" "$nonce" 2>/dev/null)"; then
+             if c_fb="$(rn_fallback "$sid" "$pf" "$nonce" "$p_cwd" 2>/dev/null)"; then
                c_v="fallback ${c_fb}"; n_prompt_fb=$((n_prompt_fb + 1))
              else
                c_v="unconfirmed ${c_fb}"; n_prompt_bad=$((n_prompt_bad + 1))
@@ -1417,10 +1847,11 @@ $GHOSTS
 EOF
 [ "$n_open" -gt "$shown" ] && listing="${listing}  … +$((n_open - shown)) more
 "
-# The skipped sessions are NAMED, each with the command that brings it back: a skip is a judgment
-# about intent, and the operator is the one who can overrule it.
-[ "$n_retired" -gt 0 ] && listing="${listing}⏭ ${n_retired} not resumed — they closed themselves on purpose after their last activity:
-${RETIRED}"
+# The skipped and held sessions are NAMED, each retired one with the command that brings it back: a
+# skip is a judgment about intent, and the operator is the one who can overrule it.
+_pl="$(page_lists)"; [ -n "$_pl" ] && listing="${listing}${_pl#
+}
+"
 
 if [ "$MODE" = "resume" ]; then
   where="one window each"
@@ -1441,7 +1872,7 @@ if [ "$MODE" = "resume" ]; then
   # Each arm keeps its condition and its message on ONE line: tests/capacity-admit-coverage.bats (22)
   # keys on the emitting statement, so a counted shed that tells nobody fails it.
   shed_retry=0; { [ "$RESTORE_V2" = 1 ] && ! restore_done; } && shed_retry=1
-  [ "$resume_shed" -gt 0 ] && [ "$shed_retry" = 1 ] && msg="${msg} ⏸ ${resume_shed} shed by the capacity gate — this restore runs again for them until $(date -r $((BOOT + ${CC_RESTORE_DEADLINE_S:-1800})) +%H:%M 2>/dev/null), and its ledger keeps any session from opening twice."
+  [ "$resume_shed" -gt 0 ] && [ "$shed_retry" = 1 ] && msg="${msg} ⏸ ${resume_shed} shed by the capacity gate — this restore runs again for them until $(date -r "$(restore_deadline)" +%H:%M 2>/dev/null), and its ledger keeps any session from opening twice."
   [ "$resume_shed" -gt 0 ] && [ "$shed_retry" = 0 ] && msg="${msg} ⏸ ${resume_shed} shed by the capacity gate (box saturated at boot) — re-run /resume-sessions once it settles."
   if [ "$RESTORE_V2" = 1 ]; then
     [ "$resume_ledger" -gt 0 ] && msg="${msg} ${resume_ledger} were already opened by an earlier round of this restore."
@@ -1455,7 +1886,7 @@ if [ "$MODE" = "resume" ]; then
     [ "$n_draft_kept" -gt 0 ] && msg="${msg} ⚠ ${n_draft_kept} saved draft(s) were NOT typed back, because the box was not empty or could not be read; the text is in ${drafts_dir}/<session id>/draft.txt (${EVENT_DIR}/drafts.log says why)."
     [ "$n_draft_left" -gt 0 ] && msg="${msg} ${n_draft_left} saved draft(s) belong to sessions this round did not open; they stay in ${drafts_dir}."
     [ "$n_meta_none" -gt 0 ] && msg="${msg} ${n_meta_none} had no recorded model or effort, so they came back on the launcher's defaults."
-    [ "${gate_verdict:-}" = deadline ] && msg="${msg} Load per core stayed over ${CC_RESTORE_START_LOAD:-6} for the whole wait; restored anyway (${EVENT_DIR}/load.log)."
+    [ "$n_mail_carried" -gt 0 ] && msg="${msg} ✉ the unread mail of ${n_mail_carried} session(s) was carried from its old pane number to the session (${MAIL_LOG})."
   fi
   [ "$resume_held" -gt 0 ] && msg="${msg} ⏸ ${resume_held} not launched — owned by the limit-recovery reconciler, already running, parked for the reboot, or an Agent Teams member its lead owns (see cc-lr status --cohort)."
   [ "$resume_indet" -gt 0 ] && msg="${msg} ⏳ ${resume_indet} launch indeterminate, reconciling — kitty did not answer in time and no window has appeared yet; cc-resume-debt's sweep relaunches only if none appears (see cc-resume-debt list --open)."
@@ -1469,53 +1900,63 @@ fi
 
 V2_IDL=""
 if [ "$RESTORE_V2" = 1 ]; then
-  V2_IDL=",\"restore_v2\":true,\"wake_lost\":${n_wake},\"noted\":${n_noted},\"note_failed\":${n_note_fail},\"prompts\":${n_prompt},\"prompts_confirmed\":${n_prompt_ok},\"prompts_fallback\":${n_prompt_fb},\"prompts_no_reply\":${n_prompt_noreply},\"prompts_unconfirmed\":${n_prompt_bad},\"drafts_typed\":${n_draft_typed},\"drafts_kept\":${n_draft_kept},\"ledger_skipped\":${resume_ledger},\"exhausted\":${n_exhausted},\"no_model\":${n_meta_none},\"gate\":\"${gate_verdict:-}\",\"done\":$(restore_done && echo true || echo false)"
+  V2_IDL=",\"restore_v2\":true,\"wake_lost\":${n_wake},\"noted\":${n_noted},\"note_failed\":${n_note_fail},\"prompts\":${n_prompt},\"prompts_confirmed\":${n_prompt_ok},\"prompts_fallback\":${n_prompt_fb},\"prompts_no_reply\":${n_prompt_noreply},\"prompts_unconfirmed\":${n_prompt_bad},\"drafts_typed\":${n_draft_typed},\"drafts_kept\":${n_draft_kept},\"ledger_skipped\":${resume_ledger},\"exhausted\":${n_exhausted},\"no_model\":${n_meta_none},\"gate\":\"none\",\"load_per_core\":\"${load_per_core:-}\",\"cut\":${CUT},\"cut_src\":\"${CUT_SRC}\",\"owner\":\"${OWNER_SID}\",\"mail_carried\":${n_mail_carried},\"retired_by_classifier\":${n_ret_cls},\"done\":$(restore_done && echo true || echo false)"
+  # This round's early page landed (R8): the follow-up, with the confirmed counts, goes to the same
+  # session, and the round ends there.
+  if [ -n "$EARLY_TO" ]; then
+    [ -n "$NOTIFY" ] && "$NOTIFY" "$EARLY_TO" "(follow-up, prompts confirmed) ${msg}" >/dev/null 2>&1
+    mark_processed
+    log_idl fired ",\"n_open\":$n_open,\"resumed\":$resumed,\"resume_failed\":$resume_fail,\"resume_shed\":$resume_shed,\"resume_held\":$resume_held,\"interrupted\":$n_int,\"at_rest\":$n_rest,\"opener\":\"$opener\",\"fullscreen_ok\":$desk_fs_ok,\"fullscreen_failed\":$desk_fs_bad,\"desk_jobs_up\":$dj_up,\"desk_jobs_total\":$dj_total,\"notified\":\"$EARLY_TO\",\"notified_as\":\"$EARLY_KIND\",\"early_page\":true,\"delivered\":true${V2_IDL}"
+    exit 0
+  fi
   # One page per event, not per round: a later round marks and logs, and says nothing.
-  if [ -f "$EVENT_DIR/paged" ]; then
+  if [ -z "$BL_PID" ] && [ -f "$EVENT_DIR/paged" ]; then
     mark_processed
     log_idl fired ",\"n_open\":$n_open,\"resumed\":$resumed,\"resume_failed\":$resume_fail,\"resume_shed\":$resume_shed,\"resume_held\":$resume_held,\"delivered\":true,\"channel\":\"already-paged\"${V2_IDL}"
     exit 0
   fi
 fi
-paged_once() { [ "$RESTORE_V2" = 1 ] || return 0; mkdir -p "$EVENT_DIR" 2>/dev/null && : > "$EVENT_DIR/paged" 2>/dev/null; return 0; }
 
-# ── deliver to the desk ROLE (resolved at send-time). No role ⇒ FAIL LOUD, do NOT mark processed. ──
-DESK_TARGET=""
-[ -f "$ROLES_DIR/desk" ] && DESK_TARGET="$(head -1 "$ROLES_DIR/desk" 2>/dev/null | tr -d '[:space:]')"
-
-if [ -n "$DESK_TARGET" ] && [ -n "$NOTIFY" ]; then
-  "$NOTIFY" "$DESK_TARGET" "$msg" >/dev/null 2>&1 || true   # cc-notify's mailbox fallback ⇒ durable at exit 0
+# ── deliver: the owner session, else the desk role, else a live lead role (resolve_page_target).
+#    Nobody ⇒ the backlog; that failing too ⇒ FAIL LOUD, do NOT mark processed. ──
+if [ -z "$BL_PID" ] && resolve_page_target && [ -n "$NOTIFY" ]; then
+  "$NOTIFY" "$PAGE_TO" "$msg" >/dev/null 2>&1 || true   # cc-notify's mailbox fallback ⇒ durable at exit 0
   paged_once
   mark_processed
-  log_idl fired ",\"n_open\":$n_open,\"resumed\":$resumed,\"resume_failed\":$resume_fail,\"resume_shed\":$resume_shed,\"resume_held\":$resume_held,\"interrupted\":$n_int,\"at_rest\":$n_rest,\"opener\":\"$opener\",\"fullscreen_ok\":$desk_fs_ok,\"fullscreen_failed\":$desk_fs_bad,\"desk_jobs_up\":$dj_up,\"desk_jobs_total\":$dj_total,\"notified\":\"$DESK_TARGET\",\"delivered\":true${V2_IDL}"
+  log_idl fired ",\"n_open\":$n_open,\"resumed\":$resumed,\"resume_failed\":$resume_fail,\"resume_shed\":$resume_shed,\"resume_held\":$resume_held,\"interrupted\":$n_int,\"at_rest\":$n_rest,\"opener\":\"$opener\",\"fullscreen_ok\":$desk_fs_ok,\"fullscreen_failed\":$desk_fs_bad,\"desk_jobs_up\":$dj_up,\"desk_jobs_total\":$dj_total,\"notified\":\"$PAGE_TO\",\"notified_as\":\"$PAGE_KIND\",\"delivered\":true${V2_IDL}"
   exit 0
 else
   # ── a wake with nobody to WAKE is not a wake with nobody to TELL. ────────────────────────────────
-  # Two distinct causes reach this branch and the record must say which: the role is absent, or
+  # Two distinct causes reach this branch and the record must say which: nobody to page, or
   # cc-notify itself did not resolve. The old record called both "no-desk-role", which sends the next
   # reader at the roles dir for a fault that may be in resolve_bin's ladder.
   why=no-desk-role
-  [ -n "$DESK_TARGET" ] && why=no-notify-bin
+  [ -n "$PAGE_TO" ] && why=no-notify-bin
+  [ -n "$BL_PID" ] && why="${BL_WHY:-$why}"
 
   # The page itself, verbatim, on disk beside this script's own state — the one store that needs no
   # address, no daemon and no drain. It is what the backlog row POINTS AT, so the row stays one line.
+  # When the early page already filed the row, this rewrites the file it points at with the full text.
   mkdir -p "$STATE_DIR" 2>/dev/null || true
   undeliv="$STATE_DIR/undelivered-$BOOT.page"
   printf '%s\n' "$msg" > "$undeliv" 2>/dev/null || true
 
   # The step text carries the whole decision: how many, when, where the full text is, what to run,
-  # and the cure for the CLASS (claim the role) so the next boot does not come back here.
-  step="boot-resume could not page the desk ($why): ${n_open} session(s) were open before the ${boot_h} reboot and nothing was told. Full delta: ${undeliv} — recover with /resume-sessions in any Claude session, then run \`cc-roles claim desk\` from the desk pane so the next boot pages directly."
+  # and the cure for the CLASS (claim the role) so the next boot does not come back here. It says
+  # what actually happened (R8): "nothing was told" over 26 resumed sessions was false on 2026-10-21.
   # No --run: the recovery is a slash command inside a Claude session, not a shell command, and
   # `cc-roles claim desk` would bind the role to cc-do's throwaway shell rather than to the desk pane.
   # cmd_needs' own header says an absent falsifier is honest and a fabricated one lies; same here.
   bid=""
-  if [ -n "$BACKLOG" ]; then
-    bid="$("$BACKLOG" needs "$step" --class needs-human --receipt "$undeliv" --project claude-infrastructure 2>/dev/null | tail -1 | tr -d '[:space:]')"
-    # An id is hex. Anything else — a warning line, an empty write, a usage error — is NOT a filing,
-    # and treating it as one is how a fallback reports delivery it never made.
-    case "$bid" in ''|*[!0-9a-f]*) bid="" ;; esac
+  if [ -n "$BL_PID" ]; then
+    wait "$BL_PID" 2>/dev/null
+    bid="$(tail -1 "$BL_OUT" 2>/dev/null | tr -d '[:space:]')"
+  elif [ -n "$BACKLOG" ]; then
+    bid="$("$BACKLOG" needs "$(backlog_step "$why")" --class needs-human --receipt "$undeliv" --project claude-infrastructure 2>/dev/null | tail -1 | tr -d '[:space:]')"
   fi
+  # An id is hex. Anything else — a warning line, an empty write, a usage error — is NOT a filing,
+  # and treating it as one is how a fallback reports delivery it never made.
+  case "$bid" in ''|*[!0-9a-f]*) bid="" ;; esac
 
   if [ -n "$bid" ]; then
     # DELIVERED, durably, to a lane that is read. Marking here is what converts an unbounded silent
