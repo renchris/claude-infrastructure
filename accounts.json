@@ -72,7 +72,8 @@
     "DISPATCH_W_FLOOR": 0.10,
     "DISPATCH_STRAND_PP": 4.0,
     "DISPATCH_FIRE_BURN_PPH": 0.42,
-    "DISPATCH_CLAIM_TTL_MIN": 300.0
+    "DISPATCH_CLAIM_TTL_MIN": 300.0,
+    "_repick_held": "D1, recycle re-pick off a HELD account (LR_SUSTAINED_LOAD W15, packet 0223cae3d185; docs/research/lr-sustained-load-2026-10-20/impl/D1-repick-ruling.md). route-meta on the general and fable lanes (not --recovery) carries dispatch_held=<accts>|- (the dispatch floor's held set), repick_leave= (the held accounts whose verdict is in REPICK_LEAVE_VERDICTS: on-pace, hold-credits), repick_unknown= (held on a stale or absent reading: level-stale, pace-unknown, pace-stale) and repick_held=off|shadow|on. handoff-fire's recycle_repick moves a pane off a repick_leave incumbent onto an unheld line 1 only in mode on; shadow records the would-be move; claimed and flat incumbents stay (claimed is forecast to strand, and the re-pick's own --assign creates it). The mode is the MOST RESTRICTIVE present value of env CC_ROUTE_REPICK_HELD, the file ~/.claude/state/repick-held and an optional REPICK_HELD key here; a value outside the three reads off; nothing present is the code default, off, until the ruling. No REPICK_HELD key is set here on purpose: under most-restrictive precedence an SSOT off would pin the switch file shut. Strand stop rule: a held-basis move off an account whose week then closes more than DISPATCH_STRAND_PP unused writes ~/.claude/state/repick-held.strand-trip, which reads as off until the operator removes it and re-rules. Kill: printf off > ~/.claude/state/repick-held."
   },
   "accounts": [
     {

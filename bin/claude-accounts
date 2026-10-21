@@ -3864,6 +3864,208 @@ def repick_ratio(R):
     if not _term_on("CC_ROUTE_REPICK"):
         return None
     return _cliff_env("CC_ROUTE_REPICK_RATIO", (R or {}).get("REPICK_RATIO", REPICK_RATIO_DEFAULT))
+
+
+# ── D1 (LR_SUSTAINED_LOAD W15, packet 0223cae3d185): a recycle LEAVES an account held for new work ──
+# The dispatch floor (dispatch_floor_row/_dispatch_partition) decides which thin accounts are HELD
+# for new work; every fire obeys it and --recovery excludes a thin account outright. A recycle is a
+# fresh session from disk, i.e. new work, and was the one automatic path that kept landing on a
+# held account (3 of 9 at the 2026-10-20 next3 wall). The SETS and the SWITCH ride route-meta for
+# repick_ratio's reason: handoff-fire's recycle_repick tests membership and owns no vocabulary.
+#
+# NOT every hold is a reason to leave (docs/research/lr-sustained-load-2026-10-20/impl/
+# D1-repick-ruling.md, review R.3 changes 1-2):
+#   - `claimed` is forecast to STRAND by one more fire, and the re-pick's own --assign creates it
+#     on the account it lands on; leaving it would evict the residents of a week that dies unused.
+#   - `flat` is every thin account once the strand rescue is switched off, so leaving it would turn
+#     that kill switch into "leave every thin account" (the 2026-10-09 strand, in reverse).
+#   - the data-quality holds read a STALE or ABSENT pace, which appears exactly when sweeps stall
+#     under load: an unknown, so the pane stays and the stay row says `held-unknown`.
+# So the leave set is the two verdicts that say "this account uses its own week": on-pace, and
+# hold-credits (an overshoot is paid overage, never a strand).
+REPICK_LEAVE_VERDICTS = ("on-pace", "hold-credits")
+REPICK_UNKNOWN_VERDICTS = ("level-stale", "pace-unknown", "pace-stale")
+# Most restrictive first: the order IS the precedence (repick_held_mode).
+REPICK_HELD_MODES = ("off", "shadow", "on")
+# The code default is OFF and stays off until the D1 ruling sets the mode: the stays are still
+# written to disk (handoff-fire's recycle-repick-stay row), which is what REPORT B6 asked for
+# whatever the ruling says.
+REPICK_HELD_DEFAULT = "off"
+# The strand-side stop rule (review R.3 change 5a): a held-basis move off an account whose week
+# then closes with more than DISPATCH_STRAND_PP unused trips the mode to off. Moves are recorded by
+# handoff-fire in their own ledger because handoffs.jsonl is trimmed to ~2.4 days and a thin window
+# runs up to 71 h before its reset.
+REPICK_STRAND_LOOKBACK_S = 8 * 86400.0     # a week plus a day: every move whose window can close
+REPICK_STRAND_CHECK_EVERY_S = 3600.0       # the check reads ledgers; it runs on a sweep, hourly
+REPICK_STRAND_ENGAGE_S = 3600.0            # a successor engages in minutes (M5: 103-269 s)
+REPICK_STRAND_UTIL_BYTES = 16 << 20        # ~2.4 KB a sweep: 16 MB covers the 71 h worst case
+REPICK_STRAND_RESET_SLACK_S = 300.0        # reset stamps differ in the fraction between sweeps
+
+
+def repick_held_switch_path():
+    """`~/.claude/state/repick-held`, one word. Keyed on $HOME and never on CLAUDE_CONFIG_DIR, so
+    every account's sessions read the same switch."""
+    return os.path.join(HOME, ".claude", "state", "repick-held")
+
+
+def repick_strand_trip_path():
+    return os.path.join(HOME, ".claude", "state", "repick-held.strand-trip")
+
+
+def repick_moves_path():
+    return os.environ.get("CC_REPICK_MOVES_LOG") or os.path.join(
+        HOME, ".claude", "state", "repick-held-moves.jsonl")
+
+
+def repick_held_mode(R):
+    """off|shadow|on — whether handoff-fire's recycle_repick moves a pane off a HELD incumbent.
+
+    The MOST RESTRICTIVE present value wins (off < shadow < on) across env CC_ROUTE_REPICK_HELD,
+    the operator switch file (repick_held_switch_path) and SSOT router.REPICK_HELD, so
+    `printf off > ~/.claude/state/repick-held` is fleet-wide even for a process that exported
+    `on` (review R.3 change 8). A tripped strand stop rule is a present `off`. A present value
+    outside the three reads `off`: this term AUTHORISES moving a pane, so its safe failure
+    direction is off (repick_ratio's docstring). Empty or unreadable is absent. Nothing present
+    is REPICK_HELD_DEFAULT."""
+    try:
+        with open(repick_held_switch_path()) as f:
+            switch = f.read(64)
+    except OSError:
+        switch = None
+    present = []
+    for raw in (os.environ.get("CC_ROUTE_REPICK_HELD"), switch, (R or {}).get("REPICK_HELD")):
+        if raw is None or not str(raw).strip():
+            continue
+        v = str(raw).strip().lower()
+        present.append(v if v in REPICK_HELD_MODES else "off")
+    if os.path.exists(repick_strand_trip_path()):
+        present.append("off")
+    if not present:
+        return REPICK_HELD_DEFAULT
+    return min(present, key=REPICK_HELD_MODES.index)
+
+
+def repick_held_sets(cand, R):
+    """(dispatch_held, repick_leave, repick_unknown) account lists off the partition's own stamps.
+    Empty when the floor is off: _dispatch_partition's early return leaves old flags in place, and
+    a stray thin_demoted must not speak for a floor that did not run (R-3)."""
+    if not dispatch_w_floor(R or {}) > 0:
+        return [], [], []
+    held = [r for _s, r in cand if r.get("thin_demoted")]
+    return ([r["acct"] for r in held],
+            [r["acct"] for r in held if r.get("dispatch_floor") in REPICK_LEAVE_VERDICTS],
+            [r["acct"] for r in held if r.get("dispatch_floor") in REPICK_UNKNOWN_VERDICTS])
+
+
+def repick_strand_check(cfg, now=None, force=False):
+    """The strand-side stop rule -> the trip evidence when it trips now, else None.
+
+    An account that a held-basis re-pick moved a pane OFF, and whose week then CLOSED more than
+    DISPATCH_STRAND_PP short of 100%, writes repick_strand_trip_path(); repick_held_mode then reads
+    off until the operator removes the file and re-rules (packet 0223cae3d185). A move counts only
+    once it LANDED: a recycle-engaged row for its pane within REPICK_STRAND_ENGAGE_S. A move older
+    than handoffs.jsonl's window cannot be judged and counts as landed, toward the stop.
+    Runs on a live sweep, at most hourly, and only while the moves ledger holds a recent move, so
+    a fleet in mode off pays one failed open() per sweep."""
+    now = time.time() if now is None else now
+    trip = repick_strand_trip_path()
+    if os.path.exists(trip):
+        return None
+    moves = []
+    try:
+        with open(repick_moves_path()) as f:
+            for ln in f:
+                try:
+                    m = json.loads(ln)
+                except ValueError:
+                    continue
+                t = _iso_epoch(m.get("ts")) if isinstance(m, dict) else None
+                if t is not None and now - REPICK_STRAND_LOOKBACK_S <= t <= now and m.get("from"):
+                    moves.append((t, m))
+    except OSError:
+        return None
+    if not moves:
+        return None
+    stamp = trip + ".checked"
+    try:
+        if not force and now - os.path.getmtime(stamp) < REPICK_STRAND_CHECK_EVERY_S:
+            return None
+    except OSError:
+        pass
+    try:
+        os.makedirs(os.path.dirname(stamp), exist_ok=True)
+        with open(stamp, "w") as f:
+            f.write(f"{now:.0f}\n")
+    except OSError:
+        pass
+    # `oldest` = the first row the trimmed handoffs.jsonl still holds: an engagement before it is
+    # unknowable, not absent.
+    engaged, oldest = {}, None
+    try:
+        with open(os.path.join(HOME, ".claude", "logs", "handoffs.jsonl")) as f:
+            for ln in f:
+                try:
+                    o = json.loads(ln)
+                except ValueError:
+                    continue
+                t = _iso_epoch(o.get("ts")) if isinstance(o, dict) else None
+                if t is None:
+                    continue
+                oldest = t if oldest is None else min(oldest, t)
+                if o.get("class") == "recycle-engaged" and o.get("engaged") is True \
+                        and o.get("target_pane"):
+                    engaged.setdefault(str(o["target_pane"]), []).append(t)
+    except OSError:
+        pass
+    util = {}
+    try:
+        size = os.path.getsize(UTIL_PATH)
+        for ln in _tail_lines(UTIL_PATH, size, REPICK_STRAND_UTIL_BYTES)[0]:
+            try:
+                u = json.loads(ln)
+            except ValueError:
+                continue
+            if not isinstance(u, dict) or u.get("stale") is True:
+                continue
+            t, rs, pct = _iso_epoch(u.get("ts")), _iso_epoch(u.get("weekly_reset_at")), u.get("weekly_pct")
+            if t is not None and rs is not None and _is_num(pct):
+                util.setdefault(u.get("acct"), []).append((t, rs, float(pct)))
+    except OSError:
+        return None
+    strand_pp = dispatch_strand_pp(cfg.get("router") or {}) or DISPATCH_STRAND_PP_DEFAULT
+    for t, m in sorted(moves, key=lambda x: x[0]):
+        pane = str(m.get("target_pane") or "")
+        landed = (oldest is None or oldest > t
+                  or any(t <= e <= t + REPICK_STRAND_ENGAGE_S for e in engaged.get(pane, ())))
+        if not landed:
+            continue
+        series = util.get(m["from"]) or []
+        before = [x for x in series if x[0] <= t]
+        if not before:
+            continue
+        reset = max(before)[1]
+        if reset > now or reset <= t:
+            continue                                    # not closed yet, or a pre-reset reading
+        closing = max(p for _t, rs, p in series if abs(rs - reset) <= REPICK_STRAND_RESET_SLACK_S)
+        if not 100.0 - closing > strand_pp:
+            continue
+        ev = {"ts": datetime.fromtimestamp(now, timezone.utc).isoformat(), "acct": m["from"],
+              "week_reset_at": datetime.fromtimestamp(reset, timezone.utc).isoformat(),
+              "closing_pct": closing, "unused_pp": round(100.0 - closing, 1),
+              "strand_pp": strand_pp, "move": m, "packet": "0223cae3d185",
+              "clear": "rm " + trip + " after the operator re-rules"}
+        try:
+            with open(trip, "w") as f:
+                f.write(json.dumps(ev) + "\n")
+        except OSError:
+            return None
+        print(f"claude-accounts: D1 STRAND STOP — {m['from']} closed its week at {closing:.0f}% "
+              f"with a held-basis recycle move off it; repick_held reads off until the ruling is "
+              f"re-opened ({trip})", file=sys.stderr)
+        return ev
+    return None
+
+
 PROJ_LOOKAHEAD_H = 1.0     # how far ahead SF projects 5h burn (capped at the window reset)
 
 # ---- the DESK lane's own terms (DESK_ROUTER_AND_STARTUP_V1 W1, R2 §7(ii)/§10) -------------------
@@ -8386,6 +8588,12 @@ def get_data(cfg, fresh=False, no_heal=False, max_wait=None, max_age=None, src=N
                   "deadline": win["deadline"].isoformat() if win["deadline"] else None}
             cache_commit(cfg, {"ts": time.time(), "cfg_key": _cfg_key(cfg), "no_heal": no_heal,
                                "rows": rows, "window": wj, "prev": prev})
+            # D1's strand-side stop rule rides the LIVE sweep (keepwarm, every 180 s), never a
+            # cache read: a recycle's cache-only --rank must not pay for a ledger read. Advisory.
+            try:
+                repick_strand_check(cfg)
+            except Exception:  # a stop-rule fault must never cost the sweep
+                pass
             return rows, wj, False, prev
         finally:
             hold_disarm()
@@ -11518,6 +11726,7 @@ def main():
             w = cand[0][1]
             lxh = w.get("login_expires_h")
             age = _quota_age_s(cfg)
+            held_sets = repick_held_sets(cand, cfg.get("router"))
             print("route-meta: "
                   + " ".join([f"acct={w['acct']}",
                               f"cliff_band={cliff_band(w)}",
@@ -11582,6 +11791,15 @@ def main():
                                     if _is_num(r.get("dispatch_spare_pp")) else "-")
                                  for _s, r in cand
                                  if r.get("dispatch_floor") not in (None, "roomy")) or "-")]
+                                if kind in ("general", "fable") and not recovery else [])
+                             # D1 (W15): the HELD set, the subset a recycle LEAVES, the subset
+                             # held on an unknown, and the mode — appended AFTER dispatch_floor so
+                             # the pinned " repick_ratio=… dispatch_floor=" adjacency survives.
+                             # recycle_repick tests membership in these; it owns no verdict name.
+                             + ([f"dispatch_held={','.join(held_sets[0]) or '-'}",
+                                 f"repick_leave={','.join(held_sets[1]) or '-'}",
+                                 f"repick_unknown={','.join(held_sets[2]) or '-'}",
+                                 f"repick_held={repick_held_mode(cfg.get('router'))}"]
                                 if kind in ("general", "fable") and not recovery else [])
                              # The desk lane's own decision inputs: which rung of the degradation
                              # ladder the winner came from, and whether hysteresis was in play.

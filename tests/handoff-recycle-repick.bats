@@ -45,12 +45,18 @@ setup() {
   # Paths are BAKED into the stub rather than passed through the environment: the block invokes the
   # router through `perl -e 'alarm 25; exec @ARGV'`, and a stub that depended on inherited env would
   # be pinning the harness's plumbing rather than the block's behaviour.
+  # ROUTE_RC2, when present, is the exit of every router call AFTER the first: the D1 retry on our
+  # own alarm (rc 142) is a second call, and a stub with one answer could not tell it ran.
+  ROUTE_RC2="$BATS_TEST_TMPDIR/route.rc2"
+  ROUTE_SEEN="$BATS_TEST_TMPDIR/route.seen"
   printf '%s\n' \
     '#!/bin/bash' \
     "printf '%s\\n' \"\$*\" >> $STUB_LOG" \
-    "if [ \"\$1\" = --assign ]; then exit \"\$(cat $ASSIGN_RC 2>/dev/null || echo 0)\"; fi" \
+    "if [ \"\$1\" = --assign ] || [ \"\$1\" = --unassign ]; then exit \"\$(cat $ASSIGN_RC 2>/dev/null || echo 0)\"; fi" \
     "[ -f $ROUTE_ERR ] && cat $ROUTE_ERR >&2" \
     "[ -f $ROUTE_OUT ] && cat $ROUTE_OUT" \
+    "if [ -f $ROUTE_SEEN ] && [ -f $ROUTE_RC2 ]; then exit \"\$(cat $ROUTE_RC2)\"; fi" \
+    ": > $ROUTE_SEEN" \
     "exit \"\$(cat $ROUTE_RC 2>/dev/null || echo 0)\"" > "$STUB"
   chmod +x "$STUB"
   # Bare-name seam pin: run_repick passes the stub explicitly, but the ratchet (rightly) treats an
@@ -64,8 +70,10 @@ setup() {
 }
 
 run_repick() { # $1 = the pane's current account. stdout → $output, stderr → $ERRF.
+  # RP_BASH=/bin/bash runs the block under macOS's bash 3.2, the interpreter a hook-fired recycle
+  # can get ("Deployment interpreter ≠ yours"); the default is whatever bash PATH names.
   run env CC_ACCOUNTS_BIN="$STUB" CC_ACCOUNTS_BIN_EXPLICIT="${EXPLICIT:-1}" ERRF="$ERRF" \
-      bash -c 'set -euo pipefail; . "$1"; recycle_repick "$2" 2>"$ERRF"' _ "$BLOCK" "$1"
+      "${RP_BASH:-bash}" -c 'set -euo pipefail; . "$1"; recycle_repick "$2" 2>"$ERRF"' _ "$BLOCK" "$1"
 }
 
 called() { # $1 = a substring of an expected invocation
@@ -457,5 +465,305 @@ _incident_fleet() {
   [ -z "$output" ]
   grep -qF 'recycle stays on next3' "$ERRF"
   grep -qF '4x threshold' "$ERRF"
-  [ ! -e "$HOME/.claude/logs/handoffs.jsonl" ]
+  # D1-10. This line read `[ ! -e …handoffs.jsonl ]`, and that assertion ENCODED the defect: a stay
+  # was never on disk, so it was unrecoverable once the pane exited (axis-10 open question 4).
+  # The edit is the cure, not a weakened test: the stay is now a row with its reason.
+  run jq -r 'select(.class=="recycle-repick-stay") | [.why,.pressure,.best,(.rank_rc|tostring)] | join("|")' \
+    "$HOME/.claude/logs/handoffs.jsonl"
+  [ "$output" = "below-threshold|below-threshold|next2|0" ]
+}
+
+# ================================================================================================
+# D1 — a recycle LEAVES an account the router holds for new work (LR_SUSTAINED_LOAD W15, packet
+# 0223cae3d185; docs/research/lr-sustained-load-2026-10-20/impl/D1-repick-ruling.md §6.6 and both
+# reviews). The router declares the sets on route-meta: dispatch_held= (held for new work),
+# repick_leave= (the held subset a recycle leaves: its own pace walls it), repick_unknown= (held on
+# an unreadable pace) and repick_held= (the mode). The block tests membership and owns no verdict.
+#
+# The fixture is the M3 ranking (CONSTRUCTED from the 2026-10-19T18:36:54Z sweep, review R.3 10):
+# next3 is held on-pace and ranked last on a score that line 1 beats by only 1.11x, so neither the
+# exclusion nor the pressure arm moves it. RED on main: today's block stays and records nothing.
+# ================================================================================================
+
+# $1 = mode token ("" = no repick_held token), $2 = dispatch_held, $3 = repick_leave,
+# $4 = repick_unknown (default -)
+_held_fleet() {
+  printf 'next 0.000185\nnext2 0.000105\nnext4 0.000045\nnext3 0.000166\n' > "$ROUTE_OUT"
+  {
+    printf 'route-meta: acct=next k_eff=3 repick_ratio=4 dispatch_floor=next3:on-pace:1.2'
+    printf ' dispatch_held=%s repick_leave=%s repick_unknown=%s' "$2" "$3" "${4:--}"
+    [ -n "$1" ] && printf ' repick_held=%s' "$1"
+    printf '\n'
+  } > "$ROUTE_ERR"
+  printf '0\n' > "$ROUTE_RC"
+}
+LOGF() { printf '%s' "$HOME/.claude/logs/handoffs.jsonl"; }
+stay_why() { jq -r 'select(.class=="recycle-repick-stay") | .why' "$(LOGF)"; }
+
+@test "D1-1 [RED] mode on: a held on-pace incumbent moves to an open line 1, charged, on disk" {
+  _held_fleet on next3 next3
+  run_repick next3
+  [ "$status" -eq 0 ]
+  [ "$output" = "next" ]
+  called '--assign next --src recycle-repick --id rp:'
+  grep -qF 'next3 is held for new work by the router' "$ERRF"
+  grep -qF '(on-pace)' "$ERRF"
+  grep -qF 'held arm: repick_held=on' "$ERRF"
+  run jq -r 'select(.class=="recycle-repick") | [.from,.to,.basis,.held_token,.repick_held,.pressure,(.rank_rc|tostring),(.rank_s|type)] | join("|")' "$(LOGF)"
+  [ "$output" = "next3|next|held|on-pace|on|below-threshold|0|number" ]
+  # the strand stop rule's own ledger, which outlives handoffs.jsonl's trim
+  run jq -r '[.from,.to,(.assign_id|startswith("rp:"))|tostring] | join("|")' "$HOME/.claude/state/repick-held-moves.jsonl"
+  [ "$output" = "next3|next|true" ]
+}
+
+@test "D1-2 shadow: no move, no charge, and a stay row that names the would-be target" {
+  _held_fleet shadow next3 next3
+  run_repick next3
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  ! called '--assign'
+  grep -qF 'SHADOW: would have moved to next' "$ERRF"
+  run jq -r 'select(.class=="recycle-repick-stay") | [.why,.best,.repick_held] | join("|")' "$(LOGF)"
+  [ "$output" = "held-shadow|next|shadow" ]
+  [ ! -e "$HOME/.claude/state/repick-held-moves.jsonl" ]
+}
+
+@test "D1-3 mode off keeps TODAY's decision and line, with the held fact beside it (mutant M-a)" {
+  _held_fleet off next3 next3
+  run_repick next3
+  [ -z "$output" ]
+  ! called '--assign'
+  # review R.3 change 9: the pressure reason survives in its own field and on stderr
+  grep -qF "next (0.000185) does not beat its 0.000166 by the router's 4x threshold" "$ERRF"
+  run jq -r 'select(.class=="recycle-repick-stay") | [.why,.pressure,.held_token] | join("|")' "$(LOGF)"
+  [ "$output" = "held-mode-off|below-threshold|on-pace" ]
+}
+
+@test "D1-4 no repick_held token (an older router) is off, never on (mutant M-b)" {
+  _held_fleet "" next3 next3
+  run_repick next3
+  [ -z "$output" ]
+  ! called '--assign'
+  run stay_why
+  [ "$output" = "held-mode-off" ]
+}
+
+@test "D1-5 a held line 1 means every routable account is held: stay (mutant M-c)" {
+  _held_fleet on next3,next,next2,next4 next3,next,next2,next4
+  run_repick next3
+  [ -z "$output" ]
+  ! called '--assign'
+  grep -qF 'so is every routable account' "$ERRF"
+  run stay_why
+  [ "$output" = "held-everywhere" ]
+}
+
+@test "D1-6 dispatch_held=- stays below-threshold with today's message (mutant M-a)" {
+  _held_fleet on - -
+  run_repick next3
+  [ -z "$output" ]
+  grep -qF "by the router's 4x threshold" "$ERRF"
+  run stay_why
+  [ "$output" = "below-threshold" ]
+}
+
+@test "D1-7 membership is exact: next is not held because next3 is (mutant M-d)" {
+  printf 'next2 0.000200\nnext 0.000150\nnext3 0.000010\n' > "$ROUTE_OUT"
+  printf 'route-meta: acct=next2 repick_ratio=4 dispatch_floor=next3:on-pace:0.0 dispatch_held=next3 repick_leave=next3 repick_unknown=- repick_held=on\n' > "$ROUTE_ERR"
+  run_repick next
+  [ -z "$output" ]
+  ! called '--assign'
+  run stay_why
+  [ "$output" = "below-threshold" ]
+}
+
+@test "D1-8 held AND outscored 4x moves on PRESSURE: the held arm runs only after it (mutant M-e)" {
+  printf 'next 0.005000\nnext2 0.000105\nnext3 0.000040\n' > "$ROUTE_OUT"
+  printf 'route-meta: acct=next repick_ratio=4 dispatch_floor=next3:on-pace:0.0 dispatch_held=next3 repick_leave=next3 repick_unknown=- repick_held=on\n' > "$ROUTE_ERR"
+  run_repick next3
+  [ "$output" = "next" ]
+  run jq -r 'select(.class=="recycle-repick") | [.basis,.pressure] | join("|")' "$(LOGF)"
+  [ "$output" = "pressure|over-threshold" ]
+}
+
+@test "D1-9 excluded AND held moves on EXCLUSION (mutant M-f)" {
+  _held_fleet on next3 next3
+  printf 'claude-accounts: general excluded — next3=5h-cutoff\n' >> "$ROUTE_ERR"
+  run_repick next3
+  [ "$output" = "next" ]
+  run jq -r 'select(.class=="recycle-repick") | .basis' "$(LOGF)"
+  [ "$output" = "excluded" ]
+}
+
+@test "D1-11 the unanswered taxonomy: rc 2 is rank-none, rc 3 and 142 are rank-unanswered" {
+  _held_fleet on next3 next3
+  printf 'none\n' > "$ROUTE_OUT"; printf '2\n' > "$ROUTE_RC"
+  run_repick next3
+  [ -z "$output" ]
+  run jq -r 'select(.class=="recycle-repick-stay") | [.why,(.rank_rc|tostring)] | join("|")' "$(LOGF)"
+  [ "$output" = "rank-none|2" ]
+  rm -f "$(LOGF)" "$ROUTE_SEEN"
+  printf '3\n' > "$ROUTE_RC"
+  run_repick next3
+  run jq -r 'select(.class=="recycle-repick-stay") | [.why,(.rank_rc|tostring)] | join("|")' "$(LOGF)"
+  [ "$output" = "rank-unanswered|3" ]
+  # our own alarm, twice: the one retry also lost, and the row says so
+  rm -f "$(LOGF)" "$ROUTE_SEEN" "$STUB_LOG"
+  printf '142\n' > "$ROUTE_RC"
+  run_repick next3
+  [ -z "$output" ]
+  [ "$(grep -c -- '--rank general' "$STUB_LOG")" = 2 ]
+  run jq -r 'select(.class=="recycle-repick-stay") | [.why,(.rank_rc|tostring)] | join("|")' "$(LOGF)"
+  [ "$output" = "rank-unanswered|142" ]
+}
+
+@test "D1-11b one retry on our own alarm only: 142 then an answer decides; 3 is never retried" {
+  _held_fleet on next3 next3
+  printf '142\n' > "$ROUTE_RC"; printf '0\n' > "$ROUTE_RC2"
+  run_repick next3
+  [ "$output" = "next" ]
+  [ "$(grep -c -- '--rank general' "$STUB_LOG")" = 2 ]
+  rm -f "$STUB_LOG" "$ROUTE_SEEN"
+  printf '3\n' > "$ROUTE_RC"
+  run_repick next3
+  [ -z "$output" ]
+  [ "$(grep -c -- '--rank general' "$STUB_LOG")" = 1 ]
+}
+
+@test "D1-12 the read is cache-only and source-aware: the exact final argv" {
+  _held_fleet off - -
+  run_repick next3
+  # --max-wait 0 arms no router itimer, so perl's alarm stays the hard bound; --src AFTER the lane,
+  # which the router reads positionally
+  [ "$(sed -n '1p' "$STUB_LOG")" = "--max-wait 0 --max-age 600 --rank general --src next3" ]
+}
+
+@test "D1-13 static: the decision owns no verdict vocabulary, it reads the router's sets" {
+  grep -q 'repick_leave=' "$BLOCK"
+  [ "$(grep -vE '^[[:space:]]*#' "$BLOCK" | sed 's/#.*$//' | grep -cE 'on-pace|claimed|pace-unknown|pace-stale|level-stale|hold-credits')" = 0 ]
+}
+
+@test "D1-14 static: a stay row is never classed recycle-held-*, which lr lanes read as a HOLD" {
+  [ "$(grep -c 'class:"recycle-held-' "$BLOCK")" = 0 ]
+  grep -q 'class:"recycle-repick-stay"' "$BLOCK"
+}
+
+@test "D1-15 a held move in a dry run prints the move, charges nothing, records nothing (mutant M-h)" {
+  _held_fleet on next3 next3
+  export DRY=1
+  run_repick next3
+  [ "$output" = "next" ]
+  ! called '--assign'
+  grep -qF 'recycle RE-PICK: next3 → next' "$ERRF"
+  [ ! -e "$(LOGF)" ]
+  [ ! -e "$HOME/.claude/state/repick-held-moves.jsonl" ]
+  # …and a dry STAY records nothing either
+  _held_fleet shadow next3 next3
+  run_repick next3
+  [ -z "$output" ]
+  [ ! -e "$(LOGF)" ]
+}
+
+@test "D1-16 a held incumbent OUTSIDE the leave set stays: held-not-leave (mutant: leave any held)" {
+  # `claimed` is forecast to strand, and the re-pick's own --assign makes it; `flat` is every thin
+  # account under the strand kill switch. The router keeps both out of repick_leave.
+  printf 'next 0.000185\nnext2 0.000105\nnext3 0.000166\n' > "$ROUTE_OUT"
+  printf 'route-meta: acct=next repick_ratio=4 dispatch_floor=next3:claimed:6.0 dispatch_held=next3 repick_leave=- repick_unknown=- repick_held=on\n' > "$ROUTE_ERR"
+  run_repick next3
+  [ -z "$output" ]
+  ! called '--assign'
+  run jq -r 'select(.class=="recycle-repick-stay") | [.why,.held_token] | join("|")' "$(LOGF)"
+  [ "$output" = "held-not-leave|claimed" ]
+}
+
+@test "D1 a hold on an unreadable pace is an UNKNOWN: held-unknown, no move" {
+  printf 'next 0.000185\nnext2 0.000105\nnext3 0.000166\n' > "$ROUTE_OUT"
+  printf 'route-meta: acct=next repick_ratio=4 dispatch_floor=next3:pace-stale:- dispatch_held=next3 repick_leave=- repick_unknown=next3 repick_held=on\n' > "$ROUTE_ERR"
+  run_repick next3
+  [ -z "$output" ]
+  ! called '--assign'
+  grep -qF 'unknown, so no move' "$ERRF"
+  run stay_why
+  [ "$output" = "held-unknown" ]
+}
+
+@test "D1 a top pick on a HELD incumbent is held-everywhere, not top-pick" {
+  printf 'next3 0.000166\nnext 0.000100\n' > "$ROUTE_OUT"
+  printf 'route-meta: acct=next3 repick_ratio=4 dispatch_floor=next3:on-pace:0.0,next:on-pace:0.0 dispatch_held=next3,next repick_leave=next3,next repick_unknown=- repick_held=on\n' > "$ROUTE_ERR"
+  run_repick next3
+  [ -z "$output" ]
+  run stay_why
+  [ "$output" = "held-everywhere" ]
+  rm -f "$(LOGF)"
+  printf 'route-meta: acct=next3 repick_ratio=4 dispatch_floor=- dispatch_held=- repick_leave=- repick_unknown=- repick_held=on\n' > "$ROUTE_ERR"
+  run_repick next3
+  run stay_why
+  [ "$output" = "top-pick" ]
+}
+
+@test "D1 a DECLINED re-pick is a stay on disk too" {
+  _held_fleet on next3 next3
+  run env CC_ACCOUNTS_BIN="$STUB" CC_ACCOUNTS_BIN_EXPLICIT=1 ERRF="$ERRF" \
+      bash -c 'set -euo pipefail; cc_acct_dir_for_name() { return 1; }; . "$1"; recycle_repick "$2" 2>"$ERRF"' \
+      _ "$BLOCK" next3
+  [ -z "$output" ]
+  run stay_why
+  [ "$output" = "declined-unmapped" ]
+}
+
+@test "D1 under /bin/bash 3.2: move, shadow, off and the unanswered row decide the same" {
+  [ -x /bin/bash ] || skip "no /bin/bash"
+  export RP_BASH=/bin/bash
+  _held_fleet on next3 next3
+  run_repick next3
+  [ "$output" = "next" ]
+  rm -f "$(LOGF)"
+  _held_fleet shadow next3 next3
+  run_repick next3
+  [ -z "$output" ]
+  run stay_why
+  [ "$output" = "held-shadow" ]
+  rm -f "$(LOGF)"
+  _held_fleet off next3 next3
+  run_repick next3
+  [ -z "$output" ]
+  grep -qF "4x threshold" "$ERRF"
+  rm -f "$(LOGF)" "$ROUTE_SEEN"
+  printf '142\n' > "$ROUTE_RC"
+  run_repick next3
+  run jq -r '.why + "|" + (.rank_rc|tostring)' "$(LOGF)"
+  [ "$output" = "rank-unanswered|142" ]
+}
+
+# ---- the charge is voided when a re-picked recycle is HELD (review R.3 change 6) ---------------
+
+@test "D1 a re-picked recycle held after the pre-pass voids its own --assign by id" {
+  HOLD="$BATS_TEST_TMPDIR/hold-block.sh"
+  { sed -n '/^hf_recycle_repick_void() {/,/^}$/p' "$FIRE"
+    sed -n '/^hf_recycle_hold() {/,/^}$/p' "$FIRE"; } > "$HOLD"
+  grep -q 'hf_recycle_repick_void$' "$HOLD"
+  run env CC_ACCOUNTS_BIN="$STUB" CC_ACCOUNTS_BIN_EXPLICIT=1 RCY_REPICK_ASSIGN_ID="rp:187:1792574008" \
+      bash -c 'set -euo pipefail
+        hf_recycle_watcher_committed() { return 1; }; hf_recycle_disarm() { :; }
+        hf_recycle_unconfirm() { RCY_UNCONFIRM_RC=0; }; emit_recycle_event() { :; }
+        SID=187; . "$1"; hf_recycle_hold load "detail" "what"' _ "$HOLD"
+  [ "$status" -eq 1 ]
+  called '--unassign rp:187:1792574008'
+  # no id (a recycle that kept its own account) voids nothing
+  rm -f "$STUB_LOG"
+  run env CC_ACCOUNTS_BIN="$STUB" CC_ACCOUNTS_BIN_EXPLICIT=1 \
+      bash -c 'set -euo pipefail
+        hf_recycle_watcher_committed() { return 1; }; hf_recycle_disarm() { :; }
+        hf_recycle_unconfirm() { RCY_UNCONFIRM_RC=0; }; emit_recycle_event() { :; }
+        SID=187; . "$1"; hf_recycle_hold load "detail" "what"' _ "$HOLD"
+  [ "$status" -eq 1 ]
+  [ ! -e "$STUB_LOG" ]
+}
+
+@test "D1 the call site mints the assign id before the re-pick and keeps it only for a real move" {
+  run sed -n '/^if \[ "\$RECYCLE" = 1 \]; then/,/^fi$/p' "$FIRE"
+  printf '%s\n' "$output" | grep -qF 'RCY_REPICK_ID="rp:'
+  printf '%s\n' "$output" | grep -A3 -F 'ACCOUNT="$_repick"' | grep -qF 'RCY_REPICK_ASSIGN_ID="$RCY_REPICK_ID"'
+  grep -qF -- '--id "$aid"' "$BLOCK"
+  grep -qF 'RCY_REPICK_ID:-' "$BLOCK"
 }

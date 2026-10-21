@@ -4016,6 +4016,24 @@ rcy_jobs_mail() { # → 0 always; a no-op unless this watcher recorded jobs
   return 0
 }
 
+# A re-picked recycle that is HELD never launches, so the --assign its re-pick placed is a 5-hour
+# claim with no session behind it, and on a lifted-first account one claim flips the dispatch
+# verdict (D1 review R.3 change 6). Void it by the id the pre-pass minted. Advisory and bounded,
+# like the charge itself; a hermetic suite without an opt-in router never reaches the real ledger.
+hf_recycle_repick_void() { # → 0 always
+  local bin="${CC_ACCOUNTS_BIN:-claude-accounts}"
+  [ -n "${RCY_REPICK_ASSIGN_ID:-}" ] || return 0
+  if [ -n "${BATS_TEST_TMPDIR:-}" ] && [ "${CC_ACCOUNTS_BIN_EXPLICIT:-0}" != 1 ]; then return 0; fi
+  command -v "$bin" >/dev/null 2>&1 || return 0
+  if command -v perl >/dev/null 2>&1; then
+    perl -e 'alarm 25; exec @ARGV' "$bin" --unassign "$RCY_REPICK_ASSIGN_ID" >/dev/null 2>&1 || true
+  else
+    "$bin" --unassign "$RCY_REPICK_ASSIGN_ID" >/dev/null 2>&1 || true
+  fi
+  RCY_REPICK_ASSIGN_ID=""
+  return 0
+}
+
 # A HOLD AFTER THE ARM: unconfirm (if owed), disarm, one row, one line, exit 1. Nothing is typed by
 # any caller of this — the row class is recycle-held-<reason> and the detail carries the unconfirm rc.
 hf_recycle_hold() { # $1=reason $2=detail $3=what the operator reads → exit 1
@@ -4047,6 +4065,7 @@ hf_recycle_hold() { # $1=reason $2=detail $3=what the operator reads → exit 1
   if [ -n "${cmdfile:-}" ]; then date +%s > "$cmdfile.exit-aborted" 2>/dev/null || true; fi
   hf_recycle_disarm
   hf_recycle_unconfirm
+  hf_recycle_repick_void
   emit_recycle_event "recycle-held-$1" "" "$SID" "$2; unconfirm rc $RCY_UNCONFIRM_RC$snap" || true
   # "The session stays alive" only when the pane says so: at 03:41Z on pane 332 it had been gone
   # for 2.5 minutes when this line said it.
@@ -16451,8 +16470,20 @@ env_account() { # reverse of cfg_dir: THIS session's account from its own CLAUDE
 # exactly today's byte-identical relaunch. Kill switch, absent router, non-zero exit (2 = nothing
 # routable, 3 = data unreadable), an unchanged winner, a name the account map does not declare, or
 # a hermetic harness without an opt-in stub: each returns nothing and the caller keeps its launcher.
+#
+# THE THIRD ARM, `held` (LR_SUSTAINED_LOAD W15, packet 0223cae3d185; design and both reviews in
+# docs/research/lr-sustained-load-2026-10-20/impl/D1-repick-ruling.md). The dispatch floor HOLDS a
+# thin account for new work, and a recycle is new work. When the router lists the incumbent in
+# `repick_leave=` (the held subset whose own pace walls it) and line 1 is not in `dispatch_held=`,
+# the pane moves, but only in mode `repick_held=on`; `shadow` records the would-be move, `off` (the
+# code default until the ruling) keeps today's decision. A held incumbent outside the leave set
+# stays: `held-unknown` when its hold is a stale or absent reading (an unknown, never a verdict),
+# `held-not-leave` otherwise. Every stay the router was asked about leaves a recycle-repick-stay
+# row with rank_rc and rank_s, which is how D1's reach under load is measured.
 recycle_repick() { # $1 = the pane's CURRENT account → replacement account on stdout, or nothing
   local cur="$1" bin="${CC_ACCOUNTS_BIN:-claude-accounts}" errf out new reason exline rc=0
+  local t0 rank_s="" ranked="" rr_raw="" dh_raw="" rl_raw="" ru_raw="" rh_raw="" df_raw="" cur_tok=""
+  local pressure="" aid
   [ -n "$cur" ] || return 0
   # The exclusion map is parsed with `sed -n "s/^${cur}=//p"`, so an account name carrying regex
   # metacharacters would be interpreted rather than matched. Every real name is [a-z0-9]; anything
@@ -16474,6 +16505,27 @@ recycle_repick() { # $1 = the pane's CURRENT account → replacement account on 
   # reaches this must never poll the operator's real router nor append to their real ledger.
   if [ -n "${BATS_TEST_TMPDIR:-}" ] && [ "${CC_ACCOUNTS_BIN_EXPLICIT:-0}" != 1 ]; then return 0; fi
   command -v "$bin" >/dev/null 2>&1 || return 0
+  # A STAY IS RECORDED TOO (D1; axis-10 open question 4): a "stays" written only into a pane that is
+  # about to exit is unrecoverable. It reads the caller's locals (bash scope is dynamic), so every
+  # stay carries the same rank_rc, rank_s, pressure and held fields. Nested, and its closing brace
+  # is INDENTED: the suite extracts this function from its marker to the first column-0 `}`. NEVER
+  # name the class `recycle-held-*`: lr-move-worker.sh, lr-handoff.sh and lr-fleet.sh read that
+  # prefix as a HELD recycle. A dry run records nothing, as it charges nothing.
+  _rp_stay() { # $1 = why
+    [ "${DRY:-0}" = 0 ] && [ "${CC_FIRE_REFUSAL_LOG:-1}" != 0 ] && command -v jq >/dev/null 2>&1 \
+      && mkdir -p "$HOME/.claude/logs" 2>/dev/null || return 0
+    jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg f "$cur" --arg why "$1" \
+           --arg b "${new:-}" --arg rc "$rc" --arg s "${rank_s:-}" --arg pr "$pressure" \
+           --arg rk "$ranked" --arg ex "${exline:-}" --arg rr "$rr_raw" --arg hm "$rh_raw" \
+           --arg ht "$cur_tok" --arg p "${SID:-}" \
+      '{ts:$ts, class:"recycle-repick-stay", gate:"recycle", from:$f, why:$why,
+        best:(if $b == "" or $b == $f then null else $b end), rank_rc:($rc|tonumber? // null),
+        rank_s:($s|tonumber? // null), pressure:(if $pr == "" then null else $pr end),
+        ranked:(if $rk == "" then null else $rk end), excluded:(if $ex == "" then null else $ex end),
+        repick_ratio:(if $rr == "" then null else $rr end), repick_held:(if $hm == "" then null else $hm end),
+        held_token:(if $ht == "" then null else $ht end), target_pane:(if $p == "" then null else $p end)}' \
+      >> "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/null || true
+  }
   errf="$(mktemp "${TMPDIR:-/tmp}/handoff-repick-XXXXXX")" || return 0
   # BOUNDED, unlike the fire path's own --rank call, because the failure mode differs: a fire that
   # stalls on a dark endpoint has not yet cost anything, while a recycle that stalls has already
@@ -16485,44 +16537,84 @@ recycle_repick() { # $1 = the pane's CURRENT account → replacement account on 
   # line. `--route` then throws away everything except the winner's name. `--rank` keeps the
   # per-account scores, which is exactly the measured magnitude the pressure half below needs — so
   # the wider surface costs nothing and asking twice would have cost a second full scoring pass.
+  #
+  # CACHE-ONLY (D1, reviews R.3 3-4 and C1-C2). `--max-wait 0 --max-age 600` serves the shared cache
+  # up to the router's grace and never takes the lock or sweeps: a sweep measured p50 27.4 s / p90
+  # 78.7 s, so a recycle that swept lost to the alarm about half the time. It also arms no itimer,
+  # so perl's alarm stays the one hard bound (`--max-wait N>0` replaced it with the router's own
+  # timer and then disarmed it, leaving the post-sweep work unbounded). A cache over 600 s old means
+  # keepwarm is down, and a recycle must not become the sweeper: exit 3, a stay. `--src "$cur"`,
+  # AFTER the lane (the kind is read positionally), makes the router refuse a cache that predates
+  # the incumbent's own reset, the one event at which a 10-minute-old reading is wrong by ~100 pp.
+  # ONE retry, on our own alarm only (rc 142), under 45 s (the wave-5 pattern, 134000efe): the next
+  # recycle of this pane is a median 16.3 h away, past most walls, so a lost read is nearly final.
+  # rank_s is the router calls' own wall time, not the function's.
+  t0=$SECONDS
   if command -v perl >/dev/null 2>&1; then
-    out="$(perl -e 'alarm 25; exec @ARGV' "$bin" --rank general 2>"$errf")" || rc=$?
+    out="$(perl -e 'alarm 25; exec @ARGV' "$bin" --max-wait 0 --max-age 600 --rank general --src "$cur" 2>"$errf")" || rc=$?
+    if [ "$rc" = 142 ]; then
+      rc=0
+      out="$(perl -e 'alarm 45; exec @ARGV' "$bin" --max-wait 0 --max-age 600 --rank general --src "$cur" 2>"$errf")" || rc=$?
+    fi
   else
-    out="$("$bin" --rank general 2>"$errf")" || rc=$?
+    out="$("$bin" --max-wait 0 --max-age 600 --rank general --src "$cur" 2>"$errf")" || rc=$?
   fi
-  if [ "$rc" != 0 ] || [ -z "$out" ] || [ "$out" = none ]; then rm -f "$errf"; return 0; fi
+  rank_s=$((SECONDS - t0))
+  # rc 2 is the router's POLICY answer (nothing routable); 142 (our alarm), 3 (no servable cache)
+  # and anything else are UNKNOWN. Two whys, so the timeout share under load stays unpolluted.
+  if [ "$rc" != 0 ] || [ -z "$out" ] || [ "$out" = none ]; then
+    rm -f "$errf"
+    if [ "$rc" = 2 ]; then _rp_stay rank-none; else _rp_stay rank-unanswered; fi
+    return 0
+  fi
   # `--rank` lines are `<name> <score>`, so the winner is FIELD 1 of line 1. The old `--route` parse
   # was `tr -d '[:space:]'` over the whole line, which under --rank would yield `next30.005070` —
   # a name the account map cannot declare, i.e. a silent decline on every recycle. Field-extracted
   # here rather than space-stripped, for that reason.
   new="$(printf '%s\n' "$out" | sed -n '1p' | awk '{print $1}')"
-  if [ -z "$new" ]; then rm -f "$errf"; return 0; fi
+  if [ -z "$new" ]; then rm -f "$errf"; _rp_stay rank-unanswered; return 0; fi
   # THE RANKING, rendered once for every line below. Without it the announcement named a winner and
   # an exclusion and left the operator to reconstruct the rest: on 2026-09-24 pane 480 was moved
   # next → next3 (the FARTHEST weekly reset) and the question that came back was "why not next2 or
   # next, which expire soonest?". The router had answered it — next was excluded (13 working
   # sessions against KMAX 8) and next2 scored half of next3 because only 2% of its week was left —
   # but none of that was on screen. Here-string, not a pipe, for the pipefail reason given below.
-  local ranked
   ranked="$(awk 'NR<=4 && NF>=2 {printf "%s%s %s", (NR>1 ? " > " : ""), $1, $2}' <<<"$out")"
-  if [ "$new" = "$cur" ]; then
-    echo "♻ recycle stays on $cur — the router's own top pick (ranked: ${ranked:-?})" >&2
-    rm -f "$errf"; return 0
-  fi
   # `claude-accounts: general excluded — next3=kmax-concurrency; next=5h-cutoff`. The prefix is
   # stripped by SHAPE rather than by the literal separator, so the em-dash never has to survive a
   # round trip through this file to keep the parse working. `sed -n '1p'` and not `head -1`:
   # pipefail turns a SIGPIPE'd producer into a non-zero pipeline, and this runs under `set -e`.
   exline="$(sed -n 's/^claude-accounts: [a-z]* excluded[^A-Za-z0-9]*//p' "$errf" | sed -n '1p')"
-  # BOTH stderr fields are read BEFORE the file is removed, and that ordering is load-bearing rather
+  # EVERY stderr field is read BEFORE the file is removed, and that ordering is load-bearing rather
   # than tidy. The pressure block below needs the router's declared threshold off this same stderr;
   # parsing it after this `rm` read an absent file, produced an empty string, and hit the block's own
   # fail-soft "unknown ⇒ keep the incumbent" — so the whole second half was DEAD CODE that could
   # never fire and would never have said so. Caught here before it shipped; the suite now pins the
-  # threshold parse against a fixture that carries a real route-meta line.
-  local rr_raw
+  # threshold parse against a fixture that carries a real route-meta line. The D1 sets and mode are
+  # read here too, before the top-pick test, which needs `dispatch_held=`.
   rr_raw="$(sed -n 's/.*[[:space:]]repick_ratio=\([^[:space:]]*\).*/\1/p' "$errf" | sed -n '1p')"
+  dh_raw="$(sed -n 's/.*[[:space:]]dispatch_held=\([^[:space:]]*\).*/\1/p' "$errf" | sed -n '1p')"
+  rl_raw="$(sed -n 's/.*[[:space:]]repick_leave=\([^[:space:]]*\).*/\1/p' "$errf" | sed -n '1p')"
+  ru_raw="$(sed -n 's/.*[[:space:]]repick_unknown=\([^[:space:]]*\).*/\1/p' "$errf" | sed -n '1p')"
+  rh_raw="$(sed -n 's/.*[[:space:]]repick_held=\([a-z]*\).*/\1/p' "$errf" | sed -n '1p')"
+  df_raw="$(sed -n 's/.*[[:space:]]dispatch_floor=\([^[:space:]]*\).*/\1/p' "$errf" | sed -n '1p')"
   rm -f "$errf"
+  # Display only: the router's verdict on the incumbent, for the row and the line. The DECISION
+  # reads set membership below, never this token.
+  cur_tok="$(awk -v a="$cur" 'BEGIN { RS = ","; FS = ":" } $1 == a { print $2; exit }' <<<"$df_raw")"
+  if [ "$new" = "$cur" ]; then
+    # A held incumbent on line 1 means every routable account is held: the partition puts held
+    # rows last. That is the correct stay, and it is classed so (review R.3 change 5c).
+    case ",${dh_raw}," in
+      *",$cur,"*)
+        echo "♻ recycle stays on $cur — the router's own top pick, held for new work (${cur_tok:-held}) like every routable account (ranked: ${ranked:-?})" >&2
+        _rp_stay held-everywhere ;;
+      *)
+        echo "♻ recycle stays on $cur — the router's own top pick (ranked: ${ranked:-?})" >&2
+        _rp_stay top-pick ;;
+    esac
+    return 0
+  fi
   # Split on `; ` FIRST and anchor the whole field: `next` is a prefix of `next2/3/4`, so a
   # substring test would read a next3 exclusion as convicting next and move a perfectly routable
   # pane. The `=` is what makes the anchor exact.
@@ -16547,37 +16639,84 @@ recycle_repick() { # $1 = the pane's CURRENT account → replacement account on 
   # a non-numeric score — resolves to no re-pick, because the alternative to a re-pick is not a
   # failure, it is today's byte-identical relaunch. Only an affirmative, measured, above-threshold
   # ratio moves a pane.
-  local rr="$rr_raw" cur_s="" best_s="" why
-  if [ -z "$reason" ]; then
-    # `off` is the router's kill switch and lands here as a non-numeric, which this guard rejects
-    # along with a missing field and a typo. All three mean v1.
-    case "$rr" in ''|*[!0-9.]*) return 0 ;; esac
+  local rr="$rr_raw" cur_s="" best_s="" why="" basis="" stay=""
+  if [ -n "$reason" ]; then
+    basis=excluded; why="$cur is NOT routable ($reason)"
+  else
     # Here-strings, not pipes: `awk … exit` is an early-exit consumer, and under this script's
     # `set -o pipefail` a SIGPIPE'd producer makes the whole pipeline non-zero — which under
     # `set -e` would kill the fire on the very input the match SUCCEEDED on. No pipeline, no
     # producer to signal. (The land's pipefail-sigpipe ratchet flags exactly this shape.)
     cur_s="$(awk -v a="$cur" '$1==a {print $2; exit}' <<<"$out")"
     best_s="$(awk 'NR==1 {print $2}' <<<"$out")"
-    # The incumbent absent from the ranking is NOT pressure — it is an account the router did not
-    # score this pass, which is the same unknown as a missing threshold. (It also cannot be the
-    # exclusion case: that was handled above, and an excluded account still appears in the map.)
-    [ -n "$cur_s" ] && [ -n "$best_s" ] || return 0
-    # Float comparison in awk — bash has no float arithmetic, and every one of these is a decimal
-    # well below 1. A zero/negative incumbent score against a positive best is unbounded pressure
-    # and is treated as over-threshold explicitly, because `best/0` is not a comparison anyone
-    # should be making at 25 lines of shell.
-    awk -v c="$cur_s" -v b="$best_s" -v r="$rr" '
-      BEGIN {
-        if (c + 0 <= 0) { exit (b + 0 > 0) ? 0 : 1 }
-        exit ((b + 0) / (c + 0) >= r + 0) ? 0 : 1
-      }' || {
-      echo "♻ recycle stays on $cur — routable, and $new ($best_s) does not beat its $cur_s by the router's ${rr}x threshold (ranked: ${ranked:-?})" >&2
+    # The pressure verdict is KEPT in its own field whatever the held arm then decides, so the
+    # decision trace of a pane that does not move is today's (review R.3 change 9).
+    case "$rr" in
+      # `off` is the router's kill switch and lands here as a non-numeric, which this guard rejects
+      # along with a missing field and a typo. All three mean v1.
+      ''|*[!0-9.]*) pressure="pressure-off" ;;
+      # The incumbent absent from the ranking is NOT pressure — it is an account the router did not
+      # score this pass, which is the same unknown as a missing threshold. (It also cannot be the
+      # exclusion case: that was handled above, and an excluded account still appears in the map.)
+      *) if [ -z "$cur_s" ] || [ -z "$best_s" ]; then
+           pressure="incumbent-unscored"
+         # Float comparison in awk — bash has no float arithmetic, and every one of these is a
+         # decimal well below 1. A zero/negative incumbent score against a positive best is
+         # unbounded pressure and is treated as over-threshold explicitly, because `best/0` is not
+         # a comparison anyone should be making at 25 lines of shell.
+         elif awk -v c="$cur_s" -v b="$best_s" -v r="$rr" '
+                BEGIN {
+                  if (c + 0 <= 0) { exit (b + 0 > 0) ? 0 : 1 }
+                  exit ((b + 0) / (c + 0) >= r + 0) ? 0 : 1
+                }'; then
+           pressure="over-threshold"; basis=pressure
+           echo "⚠ recycle re-pick on PRESSURE: $cur scores $cur_s against $new at $best_s (router threshold ${rr}x) — moving this pane" >&2
+           why="$cur is routable but outscored: $cur_s against $new's $best_s, at or over the router's ${rr}x threshold"
+         else
+           pressure="below-threshold"
+         fi ;;
+    esac
+    # ── D1, the THIRD arm: the router HOLDS the incumbent for new work ───────────────────────────
+    # Only when pressure did not move the pane, so every basis "held" row is a move the first two
+    # arms would not have made. Membership is comma-fenced and exact: `next` is a prefix of
+    # next2/3/4. A held-basis move never lands on a held account (Q2): line 1 held ⇒ every routable
+    # account is held ⇒ held-everywhere. The verdict NAMES are the router's; this reads its sets.
+    stay="$pressure"
+    if [ -z "$basis" ]; then
+      case ",${dh_raw}," in
+        *",$cur,"*)
+          case ",${dh_raw}," in
+            *",$new,"*) stay="held-everywhere" ;;
+            *) case ",${rl_raw}," in
+                 *",$cur,"*)
+                   case "$rh_raw" in
+                     on)     basis=held
+                             why="$cur is held for new work by the router's dispatch floor (${cur_tok:-held}); $new is open to it" ;;
+                     shadow) stay="held-shadow" ;;
+                     *)      stay="held-mode-off" ;;   # off, absent (an older router), or anything else
+                   esac ;;
+                 *) case ",${ru_raw}," in
+                      *",$cur,"*) stay="held-unknown" ;;
+                      *)          stay="held-not-leave" ;;
+                    esac ;;
+               esac ;;
+          esac ;;
+      esac
+    fi
+    if [ -z "$basis" ]; then
+      # Today's line, byte-for-byte, whenever the threshold was the reason the pane stayed
+      # pressure-wise; the held arm's own line follows it where it has something to add.
+      if [ "$pressure" = below-threshold ]; then
+        echo "♻ recycle stays on $cur — routable, and $new ($best_s) does not beat its $cur_s by the router's ${rr}x threshold (ranked: ${ranked:-?})" >&2
+      fi
+      case "$stay" in
+        held-shadow)     echo "♻ recycle stays on $cur — held for new work (${cur_tok:-held}); SHADOW: would have moved to $new (repick_held=shadow; ranked: ${ranked:-?})" >&2 ;;
+        held-everywhere) echo "♻ recycle stays on $cur — held for new work, and so is every routable account (ranked: ${ranked:-?})" >&2 ;;
+        held-unknown)    echo "♻ recycle stays on $cur — held for new work on a reading the router cannot judge (${cur_tok:-held}): unknown, so no move" >&2 ;;
+      esac
+      _rp_stay "$stay"
       return 0
-    }
-    echo "⚠ recycle re-pick on PRESSURE: $cur scores $cur_s against $new at $best_s (router threshold ${rr}x) — moving this pane" >&2
-    why="$cur is routable but outscored: $cur_s against $new's $best_s, at or over the router's ${rr}x threshold"
-  else
-    why="$cur is NOT routable ($reason)"
+    fi
   fi
   # SSOT check, not a naming one: launcher_for()/cfg_dir() below will HALT the fire on an account
   # the generated map does not declare (`!! unknown account`), which would turn a routing nicety
@@ -16586,6 +16725,7 @@ recycle_repick() { # $1 = the pane's CURRENT account → replacement account on 
   if command -v cc_acct_dir_for_name >/dev/null 2>&1; then
     cc_acct_dir_for_name "$new" >/dev/null 2>&1 || {
       echo "⚠ recycle re-pick DECLINED: router named '$new' but the account map declares no config dir for it — staying on $cur" >&2
+      _rp_stay declined-unmapped
       return 0
     }
   fi
@@ -16608,15 +16748,25 @@ recycle_repick() { # $1 = the pane's CURRENT account → replacement account on 
   # unreachable code on every measured path — an added arm with no case that can die on it — and
   # the equality test above (`[ "$new" = "$cur" ]`, :9474) already implements the
   # other half the wave named: a recycle that STAYS on its account charges nothing.
+  #
+  # D1 (review R.3 change 6, C7): the charge carries an id, so a recycle HELD after this pre-pass
+  # (hf_recycle_hold) can void the 5-hour claim it placed with no session behind it; the caller
+  # mints RCY_REPICK_ID and keeps it, since this runs in a command substitution. And it runs
+  # under the same perl alarm as the read: a second Python start on a loaded box is not free.
+  aid="${RCY_REPICK_ID:-rp:$(printf '%s' "${SID:-}" | tr -c 'A-Za-z0-9._-' '_'):$(date +%s)}"
   if [ "${DRY:-0}" = 0 ]; then
-    "$bin" --assign "$new" --src recycle-repick >/dev/null 2>&1 || true
+    if command -v perl >/dev/null 2>&1; then
+      perl -e 'alarm 25; exec @ARGV' "$bin" --assign "$new" --src recycle-repick --id "$aid" >/dev/null 2>&1 || true
+    else
+      "$bin" --assign "$new" --src recycle-repick --id "$aid" >/dev/null 2>&1 || true
+    fi
   fi
   # The whole decision on one line: why the incumbent lost, the ranking the winner came from, and
   # every exclusion — so "why not the soonest-expiring account?" is answered where it is asked.
   # The score's shape is named because it is the non-obvious part: M7 divides weekly headroom by
   # hours-to-reset SQUARED, so an account whose week ends soonest still loses when little of that
   # week is left to burn (next2 at 98% used, 2026-09-24).
-  echo "♻ recycle RE-PICK: $cur → $new — $why · ranked: ${ranked:-?} · excluded: ${exline:-none} · score = weekly headroom ÷ hours-to-reset² × 5h/concurrency factors (router: claude-accounts --rank general; kill switch: CC_RECYCLE_REPICK=off)" >&2
+  echo "♻ recycle RE-PICK: $cur → $new — $why · ranked: ${ranked:-?} · excluded: ${exline:-none} · score = weekly headroom ÷ hours-to-reset² × 5h/concurrency factors (router: claude-accounts --rank general; kill switch: CC_RECYCLE_REPICK=off; held arm: repick_held=${rh_raw:-absent} (~/.claude/state/repick-held))" >&2
   # …and ON DISK, because the line above is written into a pane that is about to exit: the recycle
   # kills the very session whose tool call would have recorded it, so the announcement reached no
   # transcript and the 2026-09-24 move had to be reconstructed from the utilization series. A dry
@@ -16624,13 +16774,29 @@ recycle_repick() { # $1 = the pane's CURRENT account → replacement account on 
   if [ "${DRY:-0}" = 0 ] && [ "${CC_FIRE_REFUSAL_LOG:-1}" != 0 ] && command -v jq >/dev/null 2>&1 \
      && mkdir -p "$HOME/.claude/logs" 2>/dev/null; then
     jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg f "$cur" --arg t "$new" \
-           --arg b "$([ -n "$reason" ] && echo excluded || echo pressure)" --arg w "$why" \
+           --arg b "$basis" --arg w "$why" \
            --arg rk "$ranked" --arg ex "$exline" --arg rr "$rr" --arg p "${SID:-}" \
+           --arg rc "$rc" --arg s "${rank_s:-}" --arg pr "$pressure" --arg hm "$rh_raw" \
+           --arg ht "$cur_tok" --arg id "$aid" \
       '{ts:$ts, class:"recycle-repick", gate:"recycle", from:$f, to:$t, basis:$b, why:$w,
         ranked:$rk, excluded:(if $ex == "" then null else $ex end),
         repick_ratio:(if $rr == "" then null else $rr end),
-        target_pane:(if $p == "" then null else $p end)}' \
+        target_pane:(if $p == "" then null else $p end),
+        rank_rc:($rc|tonumber? // null), rank_s:($s|tonumber? // null),
+        pressure:(if $pr == "" then null else $pr end),
+        repick_held:(if $hm == "" then null else $hm end),
+        held_token:(if $ht == "" then null else $ht end), assign_id:$id}' \
       >> "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/null || true
+    # A held-basis move also goes to the strand stop rule's own ledger (claude-accounts
+    # repick_strand_check): handoffs.jsonl is trimmed to ~2.4 days, and a thin window can run 71 h
+    # before the reset that judges it.
+    if [ "$basis" = held ] && mkdir -p "$HOME/.claude/state" 2>/dev/null; then
+      jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg f "$cur" --arg t "$new" \
+             --arg p "${SID:-}" --arg ht "$cur_tok" --arg id "$aid" \
+        '{ts:$ts, from:$f, to:$t, target_pane:(if $p == "" then null else $p end),
+          held_token:(if $ht == "" then null else $ht end), assign_id:$id}' \
+        >> "${CC_REPICK_MOVES_LOG:-$HOME/.claude/state/repick-held-moves.jsonl}" 2>/dev/null || true
+    fi
   fi
   printf '%s\n' "$new"
 }
@@ -16906,13 +17072,20 @@ if [ "$RECYCLE" = 1 ]; then
     # `auto` arm, the one place the account was inferred rather than asked for. Everything after
     # this point (launcher_for, config_dir_for_launcher, ARGS, CMD) reads $ACCOUNT through the
     # generated SSOT map, so swapping the NAME here is the whole change: no launch line is composed.
+    # The re-pick's --assign id is minted HERE, because recycle_repick runs in a command
+    # substitution and nothing it sets survives it: hf_recycle_hold voids this id when the
+    # re-picked recycle is held before it launches (D1, review R.3 change 6).
+    RCY_REPICK_ID="rp:$(printf '%s' "${SID:-}" | tr -c 'A-Za-z0-9._-' '_'):$(date +%s)"
     _repick="$(recycle_repick "$ACCOUNT" || true)"
     # `RECYCLE_REPICK_FROM` used to be set here. Its ONLY reader was the pre_trust guard below,
     # and that guard is gone (2026-08-15): the recycle branch now pre-trusts unconditionally, so a
     # re-pick no longer needs to announce itself to reach the write. Keeping the assignment would
     # leave a variable nothing reads — which shellcheck SC2034 correctly reds the land for. The
     # re-pick is still announced to the operator by recycle_repick's own "♻ recycle RE-PICK" line.
-    if [ -n "$_repick" ]; then ACCOUNT="$_repick"; fi
+    if [ -n "$_repick" ]; then
+      ACCOUNT="$_repick"
+      if [ "${DRY:-0}" = 0 ]; then RCY_REPICK_ASSIGN_ID="$RCY_REPICK_ID"; fi
+    fi
   fi
 fi
 

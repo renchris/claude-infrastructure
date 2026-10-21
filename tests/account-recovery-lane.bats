@@ -46,7 +46,8 @@ setup() {
         CC_ROUTE_CLIFF_TERM CC_ROUTE_KWORK CC_ROUTE_DISPATCH_W_FLOOR \
         CC_ROUTE_DISPATCH_STRAND CC_ROUTE_DISPATCH_STRAND_FIRST CC_ROUTE_DISPATCH_STRAND_PP \
         CC_ROUTE_DISPATCH_FIRE_BURN_PPH CC_ROUTE_DISPATCH_CLAIM_TTL_MIN CC_ROUTE_ASSIGN \
-        CC_ROUTE_ASSIGN_TTL_MIN
+        CC_ROUTE_ASSIGN_TTL_MIN CC_ROUTE_REPICK_HELD CC_ROUTE_REPICK CC_ROUTE_REPICK_RATIO \
+        CC_REPICK_MOVES_LOG CC_RECYCLE_REPICK MODEL DRY SID RCY_REPICK_ID
 
   export HOME="$BATS_TEST_TMPDIR/home"
   mkdir -p "$HOME/.claude/logs"
@@ -893,10 +894,13 @@ json.dump({"ts": now, "cfg_key": ca._cfg_key(cfg), "no_heal": False,
            "window": {"active": True, "end": "2099-12-31", "deadline": None, "permanent": True},
            "prev": None, "rows": rows}, open(os.environ["CACHE"], "w"))
 iso = lambda t: datetime.fromtimestamp(t, timezone.utc).isoformat()
+# SEED_BURN_PPH (D1): the same 30 h burning at that rate up to 94 %, which makes next2 on-pace.
+burn = float(os.environ.get("SEED_BURN_PPH") or 0)
 with open(os.environ["CC_UTIL_LOG"], "w") as f:           # 30 h of a QUIET next2, 6-minute sweeps
     for i in range(300, -1, -1):
         f.write(json.dumps({"ts": iso(now - i * 360.0), "acct": "next2", "session_pct": 0,
-                            "weekly_pct": 94, "weekly_reset_at": iso(now + 13.2 * 3600.0)}) + "\n")
+                            "weekly_pct": round(94 - burn * i * 0.1),
+                            "weekly_reset_at": iso(now + 13.2 * 3600.0)}) + "\n")
 with open(os.environ["CC_ASSIGN_LOG"], "w") as f:
     for spec in sys.argv[1:]:
         acct, ago = spec.split(":")
@@ -988,4 +992,261 @@ assert "not routed: " in line(snap(k=10 ** 6)) and "new work" not in line(snap(k
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || false
+}
+
+# ================================================================================================
+# D1 — a recycle LEAVES an account held for new work (LR_SUSTAINED_LOAD W15, packet 0223cae3d185;
+# docs/research/lr-sustained-load-2026-10-20/impl/D1-repick-ruling.md §6.6 and both reviews).
+# The router side: route-meta declares dispatch_held= / repick_leave= / repick_unknown= /
+# repick_held=, the mode's precedence, and the strand-side stop rule. The consumer is
+# handoff-fire's recycle_repick; C-1 below runs it against THIS router, which is the only case that
+# catches a token-name drift between the two files.
+# ================================================================================================
+
+@test "D1 R-1/R-5: a claimed next2 is HELD but not LEFT; the tokens ride after dispatch_floor, general and fable only" {
+  seed_snapshot "next2:100"
+  run rank_meta general
+  [[ "$output" == *" dispatch_floor=next2:claimed:6.0 dispatch_held=next2 repick_leave=- repick_unknown=- repick_held=off"* ]] || { echo "$output"; false; }
+  # the pinned adjacency of the STRAND RESCUE suite survives the append
+  [[ "$output" == *" repick_ratio=4 dispatch_floor="* ]] || { echo "$output"; false; }
+  run rank_meta fable
+  [[ "$output" == *" dispatch_held="*" repick_held="* ]] || { echo "$output"; false; }
+  run rank_meta general --recovery
+  [[ "$output" == *"route-meta:"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"dispatch_held="* && "$output" != *"repick_held="* ]] || { echo "$output"; false; }
+}
+
+@test "D1 R-4: a lifted-first next2 is open, so nothing is held (mutant: held from the floor token's presence)" {
+  seed_snapshot
+  run rank_meta general
+  [[ "$output" == *" dispatch_floor=next2:lifted-first:6.0 dispatch_held=- repick_leave=- repick_unknown=- "* ]] || { echo "$output"; false; }
+}
+
+@test "D1 through the CLI: an on-pace next2 is in repick_leave; an unread pace is in repick_unknown" {
+  SEED_BURN_PPH=0.5 seed_snapshot
+  run rank_meta general
+  [[ "$output" == *" dispatch_floor=next2:on-pace:0.0 dispatch_held=next2 repick_leave=next2 repick_unknown=- "* ]] || { echo "$output"; false; }
+  rm -f "$CC_UTIL_LOG" "$CC_ASSIGN_LOG"
+  seed "a98:98:10" "a11:11:10"
+  run rank_meta general
+  [[ "$output" == *" dispatch_floor=a98:pace-unknown:- dispatch_held=a98 repick_leave=- repick_unknown=a98 "* ]] || { echo "$output"; false; }
+}
+
+@test "D1 the sets, one control per verdict, and R-3: a stray flag never speaks for a floor that is off" {
+  run python3 -c "$LOAD$SNAP"'
+def sets(rows):
+    for r in rows:
+        r["auth"] = "ok"
+    out, _ = ca.ranked(rows, CFG2, WIN_OPEN, "general")
+    return ca.repick_held_sets(out, R)
+assert sets(snap()) == ([], [], []), sets(snap())                                   # lifted-first
+assert sets(snap(k_placed=1)) == (["next2"], [], []), sets(snap(k_placed=1))        # claimed
+assert sets(snap(burn_wk_ewma_ph=0.2, wk_strand_pp=3.4)) == (["next2"], ["next2"], [])  # on-pace
+assert sets(snap(credits_on=True)) == (["next2"], ["next2"], [])                    # hold-credits
+assert sets(snap(burn_wk_flat_ph=DROP)) == (["next2"], [], ["next2"])               # pace-stale
+assert sets(snap(wk_strand_pp=DROP, burn_wk_ewma_ph=DROP)) == (["next2"], [], ["next2"])  # pace-unknown
+assert sets(snap(stale_quota=True)) == (["next2"], [], ["next2"])                   # level-stale
+os.environ["CC_ROUTE_DISPATCH_STRAND"] = "off"
+assert sets(snap()) == (["next2"], [], []), sets(snap())                            # flat
+os.environ.pop("CC_ROUTE_DISPATCH_STRAND")
+# R-3: the floor off returns early WITHOUT clearing the stamps, so a stray flag must not count
+os.environ["CC_ROUTE_DISPATCH_W_FLOOR"] = "off"
+rows = snap()
+for r in rows:
+    r["auth"] = "ok"
+rows[0].update(thin_demoted=True, dispatch_floor="on-pace")
+out, _ = ca.ranked(rows, CFG2, WIN_OPEN, "general")
+assert any(r.get("thin_demoted") for _s, r in out)
+assert ca.repick_held_sets(out, R) == ([], [], []), ca.repick_held_sets(out, R)
+assert ca.REPICK_LEAVE_VERDICTS == ("on-pace", "hold-credits")
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+}
+
+@test "D1 R-2: the MOST RESTRICTIVE present mode wins across env, switch file and SSOT; garbage is off" {
+  run python3 -c "$LOAD"'
+p = ca.repick_held_switch_path()
+assert p == os.path.join(os.environ["HOME"], ".claude", "state", "repick-held"), p
+os.makedirs(os.path.dirname(p), exist_ok=True)
+def mode(env=None, sw=None, ssot=None):
+    os.environ.pop("CC_ROUTE_REPICK_HELD", None)
+    if env is not None:
+        os.environ["CC_ROUTE_REPICK_HELD"] = env
+    if os.path.exists(p):
+        os.remove(p)
+    if sw is not None:
+        open(p, "w").write(sw)
+    return ca.repick_held_mode({} if ssot is None else {"REPICK_HELD": ssot})
+assert ca.REPICK_HELD_DEFAULT == "off" and mode() == "off"
+assert mode(env="on") == "on" and mode(sw="on\n") == "on" and mode(ssot="on") == "on"
+assert mode(env="on", sw="off\n") == "off"          # the file is fleet-wide even over an env on
+assert mode(env="off", sw="on\n") == "off"
+assert mode(env="shadow", sw="on\n") == "shadow"
+assert mode(env="on", sw="on\n", ssot="shadow") == "shadow"
+assert mode(env=" ON ") == "on"
+assert mode(env="bogus", sw="on\n") == "off"        # a typo AUTHORISES nothing
+assert mode(sw="yes\n") == "off"
+assert mode(env="", sw="on\n") == "on"              # empty is absent, not garbage
+assert mode(env="shadow", sw="  \n") == "shadow"
+# a tripped strand stop rule is a present off
+t = ca.repick_strand_trip_path()
+open(t, "w").write("{}\n")
+assert mode(env="on", sw="on\n", ssot="on") == "off"
+os.remove(t)
+assert mode(env="on") == "on"
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+}
+
+@test "D1 strand stop rule: a LANDED held move off an account whose week closed >4pp unused trips off" {
+  run python3 -c "$LOAD"'
+import time
+from datetime import datetime, timezone
+iso = lambda t: datetime.fromtimestamp(t, timezone.utc).isoformat()
+H = os.environ["HOME"]
+ca.UTIL_PATH = os.path.join(os.environ["BATS_TEST_TMPDIR"], "util-strand.jsonl")
+moves = ca.repick_moves_path()
+hand = os.path.join(H, ".claude", "logs", "handoffs.jsonl")
+trip = ca.repick_strand_trip_path()
+now = time.time()
+def case(closing, engaged=True, reset_ago_h=1.0, move_ago_h=10.0, window_from_h=72.0):
+    for f in (trip, trip + ".checked"):
+        if os.path.exists(f):
+            os.remove(f)
+    os.makedirs(os.path.dirname(moves), exist_ok=True)
+    mt = now - move_ago_h * 3600.0
+    with open(moves, "w") as f:
+        f.write(json.dumps({"ts": iso(mt), "from": "next3", "to": "next", "target_pane": "55"}) + "\n")
+    with open(hand, "w") as f:
+        f.write(json.dumps({"ts": iso(now - window_from_h * 3600.0), "class": "recycle-intent"}) + "\n")
+        if engaged:
+            f.write(json.dumps({"ts": iso(mt + 200), "class": "recycle-engaged", "engaged": True,
+                                "target_pane": "55"}) + "\n")
+    reset = now - reset_ago_h * 3600.0
+    with open(ca.UTIL_PATH, "w") as f:
+        for i in range(40, -1, -1):           # 20 h of readings before the reset, rising to `closing`
+            t = reset - i * 1800.0 - 60
+            f.write(json.dumps({"ts": iso(t), "acct": "next3", "weekly_pct": closing - i * 0.25 // 1,
+                                "weekly_reset_at": iso(reset + 0.123), "stale": False}) + "\n")
+        if reset < now:                        # after the reset: a fresh week (and a stale echo)
+            f.write(json.dumps({"ts": iso(reset + 120), "acct": "next3", "weekly_pct": 0,
+                                "weekly_reset_at": iso(reset + 7 * 86400), "stale": False}) + "\n")
+            f.write(json.dumps({"ts": iso(reset + 180), "acct": "next3", "weekly_pct": 99,
+                                "weekly_reset_at": iso(reset + 0.5), "stale": True}) + "\n")
+    return ca.repick_strand_check(cfg, now=now, force=True)
+ev = case(90)
+assert ev and ev["acct"] == "next3" and ev["closing_pct"] == 90 and ev["unused_pp"] == 10.0, ev
+assert os.path.exists(trip)
+os.environ["CC_ROUTE_REPICK_HELD"] = "on"
+assert ca.repick_held_mode({}) == "off"                       # tripped ⇒ off, over an env on
+assert case(97) is None and not os.path.exists(trip)          # inside DISPATCH_STRAND_PP: no trip
+assert case(96) is None                                       # exactly 4 unused is not MORE than 4
+assert case(90, engaged=False) is None                        # never landed: not a D1 move
+assert case(90, engaged=False, window_from_h=1.0) is not None # trimmed past the move: toward the stop
+assert case(90, reset_ago_h=-5.0) is None                     # the week has not closed yet
+assert case(90, move_ago_h=0.5) is None                       # moved AFTER that reset: next window
+# the throttle: an hourly check, unless forced
+case(97)
+assert ca.repick_strand_check(cfg, now=now) is None
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+}
+
+@test "D1 strand stop rule costs nothing without a move: no ledger, no stamp, no read" {
+  run python3 -c "$LOAD"'
+ca.UTIL_PATH = "/nonexistent/should-not-be-read"
+assert ca.repick_strand_check(cfg) is None
+assert not os.path.exists(ca.repick_strand_trip_path() + ".checked")
+print("OK")'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *OK* ]] || false
+}
+
+# C-1 needs all four accounts DECLARED (review R.3 change 7): with only next3 the real router
+# refuses `--assign next4` (rc 64) and nothing reaches the ledger.
+four_accounts() { python3 - "$CA_CFG" <<'PY'
+import json, sys
+p = sys.argv[1]
+c = json.load(open(p))
+base = c["accounts"][0]
+c["accounts"] = [dict(base, name=n, config_dir=f"/tmp/ca-recovery-test-nonexistent-{n}",
+                      launcher=f"claude-{n}") for n in ("next", "next2", "next3", "next4")]
+json.dump(c, open(p, "w"))
+PY
+}
+# The extracted recycle_repick against THIS router, through a wrapper the block can exec.
+run_real_repick() { # $1 = incumbent
+  local block="$BATS_TEST_TMPDIR/repick-block.sh" wrap="$BATS_TEST_TMPDIR/ca-wrap"
+  sed -n '/^# ---- W2-A: recycle account re-pick/,/^}$/p' "$REPO/scripts/handoff-fire.sh" > "$block"
+  printf '#!/bin/bash\nexec python3 "%s" "$@"\n' "$CA_BIN" > "$wrap"; chmod +x "$wrap"
+  run env CC_ACCOUNTS_BIN="$wrap" CC_ACCOUNTS_BIN_EXPLICIT=1 TMPDIR="$BATS_TEST_TMPDIR" \
+      "${RP_BASH:-bash}" -c 'set -euo pipefail; . "$1"; recycle_repick "$2" 2>"$3"' \
+      _ "$block" "$1" "$BATS_TEST_TMPDIR/repick.err"
+}
+
+@test "D1 C-1 [RED] producer to consumer: an on-pace next2 recycle moves to next4 on the real router" {
+  four_accounts
+  SEED_BURN_PPH=0.5 seed_snapshot
+  export CC_ROUTE_REPICK_HELD=on
+  run_real_repick next2
+  [ "$status" -eq 0 ] || { cat "$BATS_TEST_TMPDIR/repick.err"; false; }
+  [ "$output" = "next4" ] || { echo "$output"; cat "$BATS_TEST_TMPDIR/repick.err"; false; }
+  run jq -r 'select(.src=="recycle-repick") | [.acct, (.id|startswith("rp:"))|tostring] | join("|")' "$CC_ASSIGN_LOG"
+  [ "$output" = "next4|true" ] || { echo "$output"; false; }
+  run jq -r 'select(.class=="recycle-repick") | [.basis,.held_token,.repick_held] | join("|")' "$HOME/.claude/logs/handoffs.jsonl"
+  [ "$output" = "held|on-pace|on" ] || { echo "$output"; false; }
+  # and with the code default (off) the same fleet keeps the pane, and says so on disk
+  rm -f "$HOME/.claude/logs/handoffs.jsonl"
+  unset CC_ROUTE_REPICK_HELD
+  SEED_BURN_PPH=0.5 seed_snapshot
+  run_real_repick next2
+  [ -z "$output" ] || { echo "$output"; false; }
+  run jq -r 'select(.class=="recycle-repick-stay") | [.why,.pressure] | join("|")' "$HOME/.claude/logs/handoffs.jsonl"
+  [ "$output" = "held-mode-off|below-threshold" ] || { echo "$output"; false; }
+}
+
+@test "D1 C-1 a claimed next2 stays on the real router even in mode on (D1-16, producer side)" {
+  four_accounts
+  seed_snapshot "next2:100"
+  export CC_ROUTE_REPICK_HELD=on
+  local before; before="$(wc -l < "$CC_ASSIGN_LOG")"
+  run_real_repick next2
+  [ -z "$output" ] || { echo "$output"; false; }
+  [ "$(wc -l < "$CC_ASSIGN_LOG")" = "$before" ]
+  run jq -r 'select(.class=="recycle-repick-stay") | [.why,.held_token] | join("|")' "$HOME/.claude/logs/handoffs.jsonl"
+  [ "$output" = "held-not-leave|claimed" ] || { echo "$output"; false; }
+}
+
+@test "D1 C-2 [RED] a cache that predates the incumbent's reset is refused: stay, rank_rc=3, no charge" {
+  four_accounts
+  SEED_BURN_PPH=0.5 seed_snapshot
+  # the cache is 300 s old and next2's 5h window rolled 60 s ago: its picture of next2 is void
+  python3 - "$CACHE" <<'PY'
+import json, sys, time
+from datetime import datetime, timezone
+p = sys.argv[1]; c = json.load(open(p)); now = time.time()
+c["ts"] = now - 300
+for r in c["rows"]:
+    if r["acct"] == "next2":
+        r["session_reset_at"] = datetime.fromtimestamp(now - 60, timezone.utc).isoformat()
+json.dump(c, open(p, "w"))
+PY
+  export CC_ROUTE_REPICK_HELD=on
+  run_real_repick next2
+  [ -z "$output" ] || { echo "$output"; false; }
+  [ ! -s "$CC_ASSIGN_LOG" ] || [ "$(jq -r 'select(.src=="recycle-repick")' "$CC_ASSIGN_LOG" | wc -l | tr -d ' ')" = 0 ]
+  run jq -r 'select(.class=="recycle-repick-stay") | [.why,(.rank_rc|tostring)] | join("|")' "$HOME/.claude/logs/handoffs.jsonl"
+  [ "$output" = "rank-unanswered|3" ] || { echo "$output"; false; }
+}
+
+@test "D1 C-1 under /bin/bash 3.2 decides the same" {
+  [ -x /bin/bash ] || skip "no /bin/bash"
+  four_accounts
+  SEED_BURN_PPH=0.5 seed_snapshot
+  export CC_ROUTE_REPICK_HELD=on RP_BASH=/bin/bash
+  run_real_repick next2
+  [ "$output" = "next4" ] || { echo "$output"; cat "$BATS_TEST_TMPDIR/repick.err"; false; }
 }
