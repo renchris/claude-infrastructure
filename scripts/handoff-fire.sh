@@ -8920,8 +8920,11 @@ fired_marker_is_mine() { # $1=marker $2=self-pane → 0 proven mine / 1 not prov
 #             from a recycle brief, and none of them carries the marker
 #   unknown — anything unresolvable: no sid, a missing transcript, a recycle brief whose predecessor
 #             cannot be joined (handoffs.jsonl rotates). Callers treat unknown exactly as before.
-fired_marker_owner() { # $1=marker $2=self-pane → echoes mine|foreign|unknown
-  local marker="${1:-}" pane="${2:-}" sid tj bts prev depth=0 brief
+# $3=inbound counts a transcript only when the marker ARRIVED in a user prompt (oi_marker_inbound),
+# never when it merely appears — a session that `cat`s someone else's stamp carries its marker in a
+# tool_result. Used where `mine` AUTHORISES (hf_peer_in_stamped_tree); the default stays the grep.
+fired_marker_owner() { # $1=marker $2=self-pane [$3=inbound] → echoes mine|foreign|unknown
+  local marker="${1:-}" pane="${2:-}" mode="${3:-}" sid tj bts prev depth=0 brief
   [ -n "$marker" ] && [ -n "$pane" ] || { printf 'unknown'; return 0; }
   command -v jq >/dev/null 2>&1 || { printf 'unknown'; return 0; }
   sid="$(cc_sid_for_pane "$pane")"
@@ -8929,7 +8932,11 @@ fired_marker_owner() { # $1=marker $2=self-pane → echoes mine|foreign|unknown
     [ -n "$sid" ] || { printf 'unknown'; return 0; }
     tj="$(transcript_for_sid "$sid")"
     [ -n "$tj" ] || { printf 'unknown'; return 0; }
-    grep -qF -- "$marker" "$tj" 2>/dev/null && { printf 'mine'; return 0; }
+    if [ "$mode" = inbound ]; then
+      oi_marker_inbound "$marker" "$tj" && { printf 'mine'; return 0; }
+    else
+      grep -qF -- "$marker" "$tj" 2>/dev/null && { printf 'mine'; return 0; }
+    fi
     brief="$(jq -rc -s 'map(select(.type=="user" and (.isMeta != true))) | .[0] // empty
               | (.message.content | if type=="string" then . else ([.[]? | select(.type=="text") | .text] | join("\n")) end)' \
             "$tj" 2>/dev/null || true)"
@@ -9160,12 +9167,53 @@ adopt_orphan_stamp() { # $1=fired-dir $2=cwd $3=self-pane → 0 adopted (echoes 
 # THE REMOTE FORM ABSTAINS (RCY_REMOTE=1, --source-pane). There the pane belongs to somebody else,
 # so $PWD is the CALLER's cwd and the tenancy compare would be asking about the wrong directory —
 # an `unknown`-class answer dressed up as a verdict. Abstaining leaves today's behaviour exactly.
+#
+# ONE MORE PROOF is admitted besides `valid`: hf_peer_in_stamped_tree (below), a pane recycling from a
+# SUBDIRECTORY of the stamped cwd (pane 69). Out-param HRIP_SUBTREE=1 says which proof held, so the
+# call site can move the stamp's cwd to the dir the successor boots in.
 hf_recycle_inherits_peer() { # $1=fired-dir $2=pane $3=this-pane-cwd $4=remote-flag → rc 0 iff inherited
   local dir="${1:-}" pane="${2:-}" cwd="${3:-}" remote="${4:-0}"
+  HRIP_SUBTREE=0   # deliberately NOT local — read by the caller
   [ "$remote" = 0 ] || return 1
   [ -n "$dir" ] && [ -n "$pane" ] && [ -n "$cwd" ] || return 1
-  [ "$(fired_stamp_tenancy "$dir/$pane.json" "$cwd")" = valid ] || return 1
+  [ "$(fired_stamp_tenancy "$dir/$pane.json" "$cwd")" = valid ] && return 0
+  hf_peer_in_stamped_tree "$dir/$pane.json" "$pane" "$cwd" || return 1
+  HRIP_SUBTREE=1
   return 0
+}
+
+# ---- INSIDE THE STAMPED TREE is not a different tenancy (pane 69, 2026-10-20) -------------------
+# fired_stamp_tenancy compares cwds EXACTLY, and a pane's cwd is wherever its session's shell stood
+# when the session booted. Pane 69 was fired into …/tm-upstream-wt; its session's shell was in
+# …/tm-upstream-wt/.publish-state when it ran --recycle, so the successor booted THERE. The recycle
+# read the stamp as `stale` and inherited nothing (no trailer, no recycledAt), and the finished
+# successor's self-close was refused as "an ORIGIN session under a reused id": adoption looks up the
+# subdirectory's cwd key, and the repair proof needs the trailer the recycle never wrote.
+#
+# A SUBDIRECTORY ALONE PROVES NOTHING — an operator pane opened inside a peer's worktree, under a kitty
+# id the peer once held, is the very foreign tenant tenancy exists to refuse. So the cwd relation only
+# NARROWS where the question is asked; the proof is the marker, read the strict way:
+#   · the stamp is OPEN (closedAt null) — a spent contract is never resurrected through a subdir;
+#   · $PWD is a STRICT descendant of the stamp's cwd, both resolved (a string prefix is not enough:
+#     …/wt2 is not inside …/wt);
+#   · the stamp's marker ARRIVED in a prompt (fired_marker_owner … inbound) in this pane's own session
+#     or a recycle predecessor joined by handoff-fire's own recycle-engaged row. A session that only
+#     READ the stamp carries its marker in a tool_result and is refused.
+# It never reads --allow-origin-close. CC_SELFCLOSE_SUBTREE=0 disables it.
+hf_peer_in_stamped_tree() { # $1=stamp $2=pane $3=cwd → rc 0 iff proven
+  local stamp="${1:-}" pane="${2:-}" here="${3:-}" want got marker
+  [ "${CC_SELFCLOSE_SUBTREE:-1}" != 0 ] || return 1
+  [ -n "$stamp" ] && [ -n "$pane" ] && [ -n "$here" ] || return 1
+  [ "$(fired_stamp_tenancy "$stamp" "$here")" = stale ] || return 1
+  want="$(jq -r '.cwd // ""' "$stamp" 2>/dev/null || true)"
+  want="$(cd "$want" 2>/dev/null && pwd -P)" || return 1
+  got="$(cd "$here" 2>/dev/null && pwd -P)" || return 1
+  [ -n "$want" ] && [ -n "$got" ] && [ "$want" != / ] || return 1
+  case "$got/" in "$want"/*) ;; *) return 1 ;; esac
+  [ "$(jq -r '.closedAt // "null"' "$stamp" 2>/dev/null || echo x)" = null ] || return 1
+  marker="$(jq -r '.marker // ""' "$stamp" 2>/dev/null || true)"
+  [ -n "$marker" ] || return 1
+  [ "$(fired_marker_owner "$marker" "$pane" inbound)" = mine ]
 }
 
 # ---- …and a RELOCATING recycle must carry the stamp's cwd with it (item fe740e799fd5) -----------
@@ -14843,6 +14891,16 @@ USAGE
         fi ;;
     esac
   fi
+  # ---- INSIDE THE STAMPED TREE (pane 69, 2026-10-20) — hf_peer_in_stamped_tree's header ----------
+  # `stale` only because this pane runs in a SUBDIRECTORY of the stamp's cwd, and the stamp's marker
+  # provably arrived in this pane's own recycle chain: the same tenancy, read from lower in the tree.
+  # Recovers a pane whose recycle predates the inheriting fix; scoped like M9 (no named class, local).
+  if [ "$SC_STAMP_STATE" = stale ] && [ "$SC_STAMP_FOREIGN" = 0 ] && [ "$SC_CLASS_EXEMPT" = 0 ] \
+     && [ -z "$SC_SUBJ_CWD" ] && hf_peer_in_stamped_tree "$SC_FIRED_STAMP" "$SC_SID" "$PWD"; then
+    # LEGIBILITY (R10): a pane that changes its own authorisation says so.
+    echo "→ fired-peer stamp accepted from inside the stamped tree: pane $SC_SID runs in $PWD, a subdirectory of the stamp's cwd $(jq -r '.cwd // "?"' "$SC_FIRED_STAMP" 2>/dev/null), and the stamp's fire marker arrived in this pane's own session chain (recycle-engaged join). Same tenancy, not a reused id." >&2
+    SC_STAMP_STATE=valid
+  fi
   # ---- ADOPTION (item 1467ea1dad4f): a stamp MISS is not evidence of "never fired" ---------------
   # The pane id is volatile — a resume, a crash-recreate or a kitty restart renumbers the pane and
   # orphans its stamp under the old id (measured 2026-08-07: pane 353 holding pane 351's stamp). The
@@ -17673,7 +17731,7 @@ WANT_SELF_RETIRE=0
 # fired peer, so it finishes and idles (the deference defect the trailer exists to prevent), and
 # fired_contract_in_my_brief can never re-derive its status if the stamp is ever lost — the
 # c163f42390a3 repair path is unreachable for a recycled peer without this.
-RCY_INHERIT_PEER=0
+RCY_INHERIT_PEER=0 RCY_INHERIT_SUBTREE=0
 # NOT IN RESUME MODE (cc-lr upgrade defect 6, measured 2026-09-22). A resume-mode recycle has no brief:
 # its payload is the launcher and the continuation prompt travels INSIDE it, which is why the arg
 # check above REFUSES --prompt-file there. A fired peer recycling ITSELF in resume mode inherited the
@@ -17683,7 +17741,7 @@ RCY_INHERIT_PEER=0
 # so there is nothing for a trailer to add.
 if [ "$RECYCLE" = 1 ] && [ -z "$RESUME_LAUNCHER" ] \
    && hf_recycle_inherits_peer "$FIRED_DIR" "${SID:-}" "$PWD" "${RCY_REMOTE:-0}"; then
-  RCY_INHERIT_PEER=1
+  RCY_INHERIT_PEER=1 RCY_INHERIT_SUBTREE="$HRIP_SUBTREE"
 fi
 SELF_RETIRE_TRAILER="$WANT_SELF_RETIRE"
 [ "$SELF_RETIRE" = 1 ] && [ "$RCY_INHERIT_PEER" = 1 ] && SELF_RETIRE_TRAILER=1
@@ -18432,7 +18490,10 @@ esac
 #
 # RECYCLE_RELOC only: a same-dir recycle's stamp already names $PWD (hf_migrate_peer_stamp
 # short-circuits on that too, so this is belt-and-braces rather than the only guard).
-if [ "$RCY_INHERIT_PEER" = 1 ] && [ "$RECYCLE_RELOC" = 1 ] && [ "$DRY" = 0 ]; then
+# A SUBTREE inherit (hf_peer_in_stamped_tree — pane 69) moves the stamp too: the successor boots in
+# $PWD, a subdirectory of the stamped cwd, and every exact-cwd oracle (self-close, cc-classify,
+# oi_origin_class) must read it there. LAUNCH_DIR is $PWD for a same-dir recycle.
+if [ "$RCY_INHERIT_PEER" = 1 ] && { [ "$RECYCLE_RELOC" = 1 ] || [ "$RCY_INHERIT_SUBTREE" = 1 ]; } && [ "$DRY" = 0 ]; then
   hf_migrate_peer_stamp "$FIRED_DIR" "$SID" "${LAUNCH_DIR:-}" || true
 fi
 # Every inheriting recycle, same-dir or relocating: the successor session boots after this line, so
