@@ -303,11 +303,12 @@ tx_of() { find "$HOME" -name "$1.jsonl" | head -1; }
 t5_fixture() { # VERDICT REASON RELEASE_DELAY_S OUTCOME
   printf '[{"n":9,"sid":"subj-0001","move_batch":1,"knobs":{}},{"n":1,"sid":"m1","move_batch":null,"knobs":{}}]\n' > "$R/specs.json"
   mkdir -p "$R/tmp/stub" "$R/state/sessions" "$R/lr/move/B2"
-  printf '{"died_at": %s}\n' "$(( $(date +%s) - 600 ))" > "$R/tmp/stub/subj-0001.json"
+  local died=$(( $(date +%s) - 600 ))   # ONE clock read: the release mtime is died + delay exactly
+  printf '{"died_at": %s}\n' "$died" > "$R/tmp/stub/subj-0001.json"
   printf '{"sid":"subj-0001","terminal":{"outcome":"%s"}}\n' "$4" > "$R/state/sessions/subj-0001.json"
   if [ -n "$1" ]; then
     printf '{"sid":"subj-0001","verdict":"%s","reason":"%s"}\n' "$1" "$2" > "$R/lr/move/B2/subj-0001.json"
-    touch -t "$(date -r $(( $(date +%s) - 600 + $3 )) +%Y%m%d%H%M.%S)" "$R/lr/move/B2/subj-0001.json"
+    touch -t "$(date -r $(( died + $3 )) +%Y%m%d%H%M.%S)" "$R/lr/move/B2/subj-0001.json"
   fi
 }
 T5_OK="became-limited: its last record is now a limit error, so it owes a turn this lane does not type; nothing touched. Hands-off recovery is on and the reconciler is live, so the reconciler recovers it; watch it: cc-lr status subj-000"
