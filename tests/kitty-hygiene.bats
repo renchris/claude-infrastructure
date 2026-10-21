@@ -309,11 +309,13 @@ FX
 @test "T5 band 4 is WARN(napped-now); an unreadable band is band=? WARN(unknown:band)" {
   echo 4 > "$T/band.val"; echo 4T > "$T/bin/ps.thr"
   st
-  [ "$status" -eq 1 ] && [ "$(line band)" = band=4/4T ] || { echo "$output"; false; }
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ "$(line band)" = band=4/4T ] || { echo "$output"; false; }
   [[ "$output" == *"WARN(napped-now)"* ]] || { echo "$output"; false; }
   echo '?' > "$T/band.val"
   st
-  [ "$status" -eq 1 ] && [[ "$(line band)" == 'band=?/'* ]] || { echo "$output"; false; }
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$(line band)" == 'band=?/'* ]] || { echo "$output"; false; }
   [[ "$output" == *"unknown:band"* ]] || false
 }
 
@@ -364,7 +366,8 @@ FX
   printf '%s Z\n%s Z\n%s S\n' "$KP" "$KP" "$KP" > "$T/bin/ps.zombies"
   echo 0.48.2 > "$T/bin/PlistBuddy.ver"
   st
-  [ "$status" -eq 1 ] && [ "$(line zombies)" = zombies=2 ] || { echo "$output"; false; }
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ "$(line zombies)" = zombies=2 ] || { echo "$output"; false; }
   [[ "$output" == *"WARN(signals)"* ]] || { echo "$output"; false; }
   [[ "$(line version)" == *"fixes=signal:n listener:n" ]] || false
   echo 0.49.2 > "$T/bin/PlistBuddy.ver"
@@ -416,7 +419,8 @@ FX
 
 @test "kill switch: CC_KITTY_HYGIENE=off prints verdict=OFF, exit 0, and reads nothing" {
   CC_KITTY_HYGIENE=off st
-  [ "$status" -eq 0 ] && [ "$output" = "verdict=OFF (CC_KITTY_HYGIENE=off)" ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$output" = "verdict=OFF (CC_KITTY_HYGIENE=off)" ] || { echo "$output"; false; }
   [ ! -e "$T/bin/defaults.log" ] && [ ! -e "$T/bin/ps.log" ]
 }
 
@@ -556,7 +560,8 @@ naps() { run /bin/bash "$SUT" naps --pid "$KP" "$@"; }
 
 @test "naps is never run inside cc-restore" {
   CC_KH_CALLER=cc-restore naps
-  [ "$status" -eq 2 ] && [[ "$output" == *"never run inside cc-restore"* ]] || { echo "$output"; false; }
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"never run inside cc-restore"* ]] || { echo "$output"; false; }
   [ ! -e "$T/bin/log.log" ]
 }
 
@@ -571,7 +576,8 @@ naps() { run /bin/bash "$SUT" naps --pid "$KP" "$@"; }
 
 @test "sample: --rc to a main kitty needs --rc-production" {
   run /bin/bash "$SUT" sample --pid "$KP" --every 0 --count 1 --rc unix:/tmp/b8probe/x.sock --out "$T/s.tsv"
-  [ "$status" -eq 2 ] && [[ "$output" == *"needs --rc-production"* ]] || { echo "$output"; false; }
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"needs --rc-production"* ]] || { echo "$output"; false; }
   [ ! -e "$T/bin/kitten.log" ]
 }
 
@@ -607,7 +613,8 @@ naps() { run /bin/bash "$SUT" naps --pid "$KP" "$@"; }
 
 @test "headroom set raises the soft limit to 8192, or to a lower hard limit, and never touches the hard one" {
   run /bin/bash -c "ulimit -Sn 256; /usr/bin/python3 -I '$FDH' set"
-  [ "$status" -eq 0 ] && [[ "$output" == *"soft=256->8192 hard=unlimited"* ]] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"soft=256->8192 hard=unlimited"* ]] || { echo "$output"; false; }
   run /bin/bash -c "ulimit -Sn 300; ulimit -Hn 1000; /usr/bin/python3 -I '$FDH' set"
   [ "$status" -eq 0 ] && [[ "$output" == *"soft=300->1000 hard=1000"* ]] || { echo "$output"; false; }
 }

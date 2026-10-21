@@ -63,7 +63,8 @@ key() { /usr/libexec/PlistBuddy -c "Print :$1" "$PLIST"; }
   local p
   for p in com.claude.accounts-local com.claude.accounts-keepwarm; do
     run /usr/libexec/PlistBuddy -c "Print :ProcessType" "$REPO/launchd/staged/$p.plist"
-    [ "$status" -eq 0 ] && [ "$output" = Interactive ] || { echo "$p ProcessType is '$output'"; false; }
+    [ "$status" -eq 0 ] || { echo "$p ProcessType is '$output'"; false; }
+    [ "$output" = Interactive ] || { echo "$p ProcessType is '$output'"; false; }
     run /usr/libexec/PlistBuddy -c "Print :LowPriorityIO" "$REPO/launchd/staged/$p.plist"
     [ "$status" -ne 0 ] || { echo "$p has LowPriorityIO: $output"; false; }
   done
