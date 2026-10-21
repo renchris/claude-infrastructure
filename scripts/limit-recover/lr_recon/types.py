@@ -34,6 +34,11 @@ ORIGINS = ("hook", "census", "fanout", "cc-lr")  # ascending rank; cc-lr is stic
 SURFACES = ("kitty", "iterm")
 ROOT_SHAPES = ("shell", "launcher", "headless", "unknown")
 PANE_STATES = ("claude", "shell", "gone", "unknown")  # fixture `pane_state`
+# W14 (B5-R): where a holder's pane came from. "ls" = a window root in kitty's own `kitten @ ls`;
+# "env" = the kernel (ps -E KITTY_WINDOW_ID/KITTY_PID + ancestry, W12's rules) while that kitty's
+# ls failed; "" = unbound. recon/pane-bind-env.mode: off | shadow (default: log, never bind) | on.
+PANE_SRCS = ("ls", "env", "")
+PANE_BIND_ENV_MODES = ("off", "shadow", "on")
 SCOPES_ACCOUNT_WIDE = ("5h", "7d", "auth")  # plus "model:<name>" and "fable" (C4)
 
 # §4.2 phases, in table order. PRE-MOVE carries a substate from PRE_MOVE_SUBSTATES.
@@ -553,6 +558,9 @@ class PaneObs:
     cwd: str = ""
     root_shape: str = "unknown"  # ROOT_SHAPES
     state: str = "unknown"  # PANE_STATES
+    pane_src: str = (
+        "ls"  # PANE_SRCS; an "env" pane has no title, cwd, focus or foreground read
+    )
 
     @property
     def key(self) -> Tuple[int, int]:
@@ -584,6 +592,7 @@ class HolderObs:
     pane: Optional[Tuple[int, int]] = (
         None  # (kitty_pid, window_id) when pane-bound by ppid walk
     )
+    pane_src: str = ""  # PANE_SRCS: "ls", "env" (W14, mode on only), "" unbound
 
 
 @dataclass
@@ -657,6 +666,10 @@ class Snapshot:
     ps_attempts: int = (
         0  # tries the successful ps read took (2 = its retry saved the pass)
     )
+    # W14: one row per claude process the kernel pane binding judged this pass (observe.env_rows);
+    # the mode it ran under ("" = not run). Counts for the kitty-degraded event come from these.
+    pane_bind_env: List[Dict[str, Any]] = field(default_factory=list)
+    pane_bind_env_mode: str = ""
 
     def alive(self, pid: int, lstart: str) -> bool:
         row = self.procs.get(pid)

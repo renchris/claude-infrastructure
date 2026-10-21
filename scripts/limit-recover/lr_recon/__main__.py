@@ -2451,7 +2451,9 @@ def request_abandon(paths: T.Paths, sid: str, by: str = "operator") -> str:
 def _kitty_degraded(ctx: Ctx, snap: T.Snapshot) -> None:
     """C2 E5 T4: one ``kitty-degraded`` event when a pass's degraded list holds a ``kitty:`` entry
     while an open record owes its continue (UNPROMPTED). It is the direct observable of the fault C2
-    targets: a deaf kitty spawns no C at all (E1), so no C exit can count it. On change only."""
+    targets: a deaf kitty spawns no C at all (E1), so no C exit can count it. On change only.
+    W14: it carries the kernel pane binding's counts for that pass (observe.env_counts), ahead of
+    the sid list so a long list cannot truncate them."""
     kitty = sorted(d for d in snap.degraded if d.startswith("kitty:"))
     owed = sorted(
         r.sid[:8] for r in ctx.records.values() if r.open and r.substate == "UNPROMPTED"
@@ -2461,8 +2463,8 @@ def _kitty_degraded(ctx: Ctx, snap: T.Snapshot) -> None:
         _event(
             ctx.paths,
             "kitty-degraded",
-            detail="%s while %d record(s) owe their continue: %s"
-            % (", ".join(kitty), len(owed), " ".join(owed)),
+            detail="%s while %d record(s) owe their continue · %s: %s"
+            % (", ".join(kitty), len(owed), observe.env_counts(snap), " ".join(owed)),
         )
     ctx.kitty_degraded = key
 

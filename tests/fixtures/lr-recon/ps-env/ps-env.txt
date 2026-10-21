@@ -1,0 +1,7 @@
+  871 /x/claude.exe HOME=/h PATH=/usr/bin:/bin KITTY_PID=860 KITTY_WINDOW_ID=4
+  901 /x/claude.exe --resume aaaa1111-0000-4000-8000-000000000001 continue KITTY_WINDOW_ID=99 KITTY_PID=860 HOME=/h PATH=/usr/bin:/bin TERM=xterm-kitty KITTY_LISTEN_ON=unix:/tmp/kitty-853 KITTY_PID=853 KITTY_WINDOW_ID=7
+  905 /x/claude.exe --resume aaaa1111-0000-4000-8000-000000000001 HOME=/h PATH=/usr/bin:/bin KITTY_PID=853 KITTY_WINDOW_ID=7 KITTY_LISTEN_ON=unix:/tmp/kitty-853
+  911 /x/claude.exe HOME=/h PATH=/usr/bin:/bin KITTY_PID=860 KITTY_WINDOW_ID=8
+  921 /x/claude.exe HOME=/h PATH=/usr/bin:/bin KITTY_PID=853 KITTY_WINDOW_ID=9
+  931 /x/claude.exe --resume hhhh8888-0000-4000-8000-000000000008 HOME=/h PATH=/usr/bin:/bin KITTY_PID=860 KITTY_WINDOW_ID=3
+  950 /x/claude.exe -p headless HOME=/h PATH=/usr/bin:/bin

@@ -20,6 +20,7 @@ import time
 from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Tuple
 
 from lr_recon import clock as _clock
+from lr_recon import store
 from lr_recon import types as T
 from lr_recon.clock import run_bounded, step
 from lr_recon.observe_rows import (
@@ -27,6 +28,7 @@ from lr_recon.observe_rows import (
     GlobFn,
     acct_cfg_map,
     acct_of_cfg,
+    ancestors,
     argv0,
     bind as bind,  # re-exported: bind is part of observe's surface (§C3.2)
     bg_host_pid,
@@ -461,6 +463,315 @@ def composer_state(
     return composer_from_screen(scr)
 
 
+# ── W14 (B5-R): kitty-free pane binding ──────────────────────────────────────────────────────────
+# A record born while its kitty's `kitten @ ls` fails had no pane: no window roots ⇒ bind() None ⇒
+# PRE-MOVE/None with nothing dispatched, for the whole outage (C2 efficacy E1). The kernel already
+# knows the pane: kitty puts KITTY_WINDOW_ID and KITTY_PID in every window's env, and the ppid chain
+# reaches that kitty. These are W12's kernel pane identity rules (handoff-fire.sh hf_kid_probe), read
+# from the pass's one ps table plus ONE `ps -E` call for the claude pids. Only a kitty whose ls failed
+# is bound this way, only in mode on, and only above the background band (W12's hf_kitty_band): a
+# background-banded or unreadable kitty main thread holds as today, retried the next pass.
+
+PANE_BIND_ENV_MODE = (
+    "pane-bind-env.mode"  # under LR_RECON_ROOT; `printf off >` is the kill switch
+)
+PANE_BIND_ENV_LOG = "pane-bind-env.jsonl"  # under recon/shadow
+PANE_BIND_ENV_LOG_MAX = 4 << 20
+PANE_BIND_ENV_PIDS_MAX = 256
+# With every kitty answering, the shadow comparison against ls runs at most this often: the rows are
+# the on-flip's evidence (≥ 30 rows, 0 agree=no), not something a pass needs.
+PANE_BIND_ENV_HEALTHY_EVERY_S = 120.0
+PS_ENV_BOUND_S = 20.0
+KITTY_BAND_SAMPLES = 3
+KITTY_BAND_BG_MAX = 4  # PRI ≤ 4: Darwin's background band (App Nap, screen lock)
+_ENV_KEYS = ("KITTY_WINDOW_ID", "KITTY_PID", "KITTY_LISTEN_ON")
+_SOCK_RE = re.compile(r"^unix:/[A-Za-z0-9_./-]+$")
+_HEALTHY_AT = [float("-inf")]  # monotonic time of the last healthy-kitty shadow sample
+
+
+def pane_bind_env_mode(paths: Optional[T.Paths]) -> str:
+    """recon/pane-bind-env.mode, re-read every pass: off | shadow | on. Absent or unrecognised ⇒ the
+    code default ``shadow`` (log, bind nothing); no paths (a tool or test census) ⇒ off."""
+    if paths is None:
+        return "off"
+    try:
+        with open(paths.p(PANE_BIND_ENV_MODE), "rb") as fh:
+            raw = fh.read(16)
+    except OSError:
+        return "shadow"
+    v = "".join(c for c in raw.decode("ascii", "replace") if "a" <= c <= "z")
+    return v if v in T.PANE_BIND_ENV_MODES else "shadow"
+
+
+def parse_ps_env(out: str) -> Dict[int, Dict[str, str]]:
+    """pid → its LAST KITTY_* tokens, from `ps -E -o pid=,command=`. The owed prompt rides claude's
+    argv, before the env block, so the last match is the env's (lr-lib.sh lr_pid_env). A line with no
+    HOME=/PATH= token has no readable env block and is left out: unknown, never "no kitty"."""
+    res: Dict[int, Dict[str, str]] = {}
+    for line in out.splitlines():
+        toks = line.split()
+        if len(toks) < 2 or not toks[0].isdigit():
+            continue
+        if not any(t.startswith(("HOME=", "PATH=")) for t in toks[1:]):
+            continue
+        env: Dict[str, str] = {}
+        for t in toks[1:]:
+            k, sep, v = t.partition("=")
+            if sep and k in _ENV_KEYS:
+                env[k] = v
+        res[int(toks[0])] = env
+    return res
+
+
+def read_ps_env(
+    run: RunFn, pids: List[int], bound: float = PS_ENV_BOUND_S
+) -> Dict[int, Dict[str, str]]:
+    """One bounded `ps -E` for ``pids``. ps exits 1 when one of them died since the table was read and
+    still prints the rest, so any output counts; none raises (the binding then decides nothing)."""
+    argv = ["/bin/ps", "-E", "-ww", "-o", "pid=,command=", "-p"]
+    res = run(
+        argv + [",".join(str(p) for p in pids)],
+        capture_output=True,
+        text=True,
+        timeout=bound,
+        env=_ps_env(),
+    )
+    out = str(res.stdout or "")
+    if not out.strip():
+        raise RuntimeError("ps -E exited %s with no rows" % res.returncode)
+    return parse_ps_env(out)
+
+
+def kitty_of(pid: int, procs: Dict[int, T.ProcRow]) -> int:
+    """The nearest live kitty ancestor of ``pid``, or 0."""
+    for a in ancestors(pid, procs):
+        row = live(a, procs)
+        if row is not None and argv0(row.args) == "kitty":
+            return a
+    return 0
+
+
+def env_pane(
+    pid: int,
+    env: Dict[str, str],
+    procs: Dict[int, T.ProcRow],
+    ttys: Dict[int, str],
+) -> Tuple[Optional[Tuple[int, int]], int, str]:
+    """(pane, window root pid, why-not) by W12's rules, each a refusal when it fails:
+    (1) the pid is alive and not a zombie; (2) its env names KITTY_WINDOW_ID=W and KITTY_PID=K;
+    (3) K is on its ppid chain, and the process directly under K — the window root — is alive, not a
+    zombie, with a controlling tty; (4) K is alive, not a zombie, and its argv0 is kitty."""
+    if live(pid, procs) is None:
+        return None, 0, "pid gone or zombie"
+    wid, kp = env.get("KITTY_WINDOW_ID", ""), env.get("KITTY_PID", "")
+    if not wid.isdigit() or not kp.isdigit():
+        return None, 0, "no KITTY_WINDOW_ID/KITTY_PID in env"
+    k = int(kp)
+    krow = live(k, procs)
+    if krow is None or argv0(krow.args) != "kitty":
+        return None, 0, "env KITTY_PID %d is not a live kitty" % k
+    chain = [pid] + list(ancestors(pid, procs))
+    if k not in chain[1:]:
+        return None, 0, "env KITTY_PID %d is not an ancestor" % k
+    root = chain[chain.index(k) - 1]
+    rrow = procs.get(root)
+    if rrow is None or rrow.zombie:
+        return None, 0, "window root %d gone or zombie" % root
+    if not ttys.get(root):
+        return None, 0, "window root %d has no tty" % root
+    return (k, int(wid)), root, ""
+
+
+def kitty_band(
+    kpid: int, run: RunFn = run_bounded, samples: int = KITTY_BAND_SAMPLES
+) -> Tuple[int, str]:
+    """W12's hf_kitty_band: ``samples`` bounded `ps -M` reads of kitty's main thread, majority
+    decides. (0 above the band | 1 background-banded | 2 unreadable, no proof; the samples read)."""
+    low = high = 0
+    read: List[str] = []
+    for _ in range(samples):
+        step()
+        p = ""
+        try:
+            out = _run_ok(run, ["/bin/ps", "-M", "-p", str(kpid)], 5.0, _ps_env())
+            lines = out.splitlines()
+            f = lines[1].split() if len(lines) > 1 else []
+            p = re.match(r"\d*", f[5]).group(0) if len(f) > 5 else ""  # type: ignore[union-attr]
+        except Exception:  # noqa: BLE001 — an unread sample is a "?", never a band
+            p = ""
+        read.append(p or "?")
+        if p:
+            if int(p) <= KITTY_BAND_BG_MAX:
+                low += 1
+            else:
+                high += 1
+    if low + high < 2:
+        return 2, " ".join(read)
+    return (0 if low < high else 1), " ".join(read)
+
+
+def _capped(under: Dict[int, int], failed: Dict[int, str]) -> List[int]:
+    """At most PANE_BIND_ENV_PIDS_MAX pids; the cap drops healthy-kitty comparisons first, since a
+    deaf kitty's claudes are what the binding is for."""
+    return sorted(under, key=lambda p: (under[p] not in failed, p))[
+        :PANE_BIND_ENV_PIDS_MAX
+    ]
+
+
+def env_rows(
+    snap: T.Snapshot,
+    ttys: Dict[int, str],
+    roots: Dict[int, Tuple[int, int]],
+    failed: Dict[int, str],
+    mode: str,
+    run: RunFn = run_bounded,
+    clock: Callable[[], float] = time.monotonic,
+) -> Dict[int, Tuple[int, int]]:
+    """Judge every claude under a kitty whose ls failed (``failed``: kitty pid → its socket), plus, at
+    most every PANE_BIND_ENV_HEALTHY_EVERY_S, every claude under a kitty that answered (the shadow
+    comparison against ls). Appends one row per claude to ``snap.pane_bind_env`` and returns the
+    env roots ``bind`` may use: empty unless mode is on. In mode on it also adds a PaneObs
+    (pane_src "env", state "unknown": nothing read its foreground) for each pane it binds."""
+    if mode not in ("shadow", "on"):
+        return {}
+    snap.pane_bind_env_mode = mode
+    procs = snap.procs
+    healthy = clock() - _HEALTHY_AT[0] >= PANE_BIND_ENV_HEALTHY_EVERY_S
+    under: Dict[int, int] = {}
+    for r in procs.values():
+        if r.zombie or not is_claude(r.args):
+            continue
+        k = kitty_of(r.pid, procs)
+        if k and (k in failed or healthy):
+            under[r.pid] = k
+    if not under:
+        return {}
+    if healthy and any(k not in failed for k in under.values()):
+        _HEALTHY_AT[0] = clock()
+    pids = _capped(under, failed)
+    step()
+    try:
+        envs = read_ps_env(run, pids)
+    except Exception as e:  # noqa: BLE001 — no env read: nothing is bound, and the pass says why
+        snap.degraded_why["pane-bind-env"] = str(e)[:200] or type(e).__name__
+        return {}
+    out: Dict[int, Tuple[int, int]] = {}
+    bands: Dict[int, Tuple[int, str]] = {}
+    for pid in pids:
+        k = under[pid]
+        row = procs[pid]
+        key, root, why = (
+            env_pane(pid, envs[pid], procs, ttys)
+            if pid in envs
+            else (None, 0, "env block unreadable")
+        )
+        ls_key = bind(pid, procs, roots)
+        agree, band, held, bound = "-", "", "", False
+        if k not in failed:
+            if key is not None:
+                agree = "yes" if key == ls_key else "no"
+            elif ls_key is not None:
+                agree = "miss"
+        elif key is not None and key[0] in failed:
+            if key[0] not in bands:
+                bands[key[0]] = kitty_band(key[0], run)
+            brc, band = bands[key[0]]
+            if brc == 1:
+                held = "banded"
+                why = "kitty background-banded: its main thread would not drain output (B8)"
+            elif brc == 2:
+                held = "band-unreadable"
+                why = "kitty main-thread band unreadable, so the binding has no proof"
+            elif mode == "on":
+                out[pid] = key
+                bound = True
+                _env_pane_obs(snap, key, root, ttys, failed[key[0]], envs[pid])
+        elif key is not None:
+            why = "env kitty %d answered ls; the nearest kitty %d did not" % (key[0], k)
+        snap.pane_bind_env.append(
+            {
+                "t": snap.wall,
+                "mode": mode,
+                "pid": pid,
+                "lstart": row.lstart,
+                "kitty_pid": k,
+                "ls_ok": k not in failed,
+                "env": "%d:%d" % key if key else "-",
+                "ls": "%d:%d" % ls_key if ls_key else "-",
+                "root": root,
+                "agree": agree,
+                "band": band,
+                "held": held,
+                "bound": bound,
+                "why": why,
+            }
+        )
+    return out
+
+
+def _env_pane_obs(
+    snap: T.Snapshot,
+    key: Tuple[int, int],
+    root: int,
+    ttys: Dict[int, str],
+    sock: str,
+    env: Dict[str, str],
+) -> None:
+    sk = "%d:%d" % key
+    if sk in snap.panes:
+        return
+    procs = snap.procs
+    if not sock:
+        lo = env.get("KITTY_LISTEN_ON", "")
+        sock = lo if _SOCK_RE.match(lo) else "unix:/tmp/kitty-%d" % key[0]
+    rrow = procs[root]
+    snap.panes[sk] = T.PaneObs(
+        kitty_pid=key[0],
+        window_id=key[1],
+        sock=sock,
+        kitty_lstart=procs[key[0]].lstart,
+        tty=ttys.get(root, ""),
+        root_pid=root,
+        root_lstart=rrow.lstart,
+        root_shape="shell" if argv0(rrow.args) in SHELLS else "launcher",
+        state="unknown",
+        pane_src="env",
+    )
+
+
+def env_counts(snap: T.Snapshot) -> str:
+    """The kitty-degraded event's counts: of the claudes under a deaf kitty, how many the kernel
+    bound (or would, in shadow), how many it refused, and how many a low kitty band held."""
+    if not snap.pane_bind_env_mode:
+        return "pane-bind-env off"
+    deaf = [r for r in snap.pane_bind_env if not r.get("ls_ok")]
+    proven = sum(1 for r in deaf if r.get("env") != "-")
+    held = sum(1 for r in deaf if r.get("held"))
+    bound = sum(1 for r in deaf if r.get("bound"))
+    return (
+        "pane-bind-env %s: %d of %d claude(s) under a deaf kitty bound by env (%d kernel-proven, %d held by the kitty band)"
+        % (
+            snap.pane_bind_env_mode,
+            bound,
+            len(deaf),
+            proven,
+            held,
+        )
+    )
+
+
+def _log_env_rows(paths: Optional[T.Paths], snap: T.Snapshot) -> None:
+    if paths is None or not snap.pane_bind_env:
+        return
+    try:
+        os.makedirs(paths.shadow, exist_ok=True)
+        path = os.path.join(paths.shadow, PANE_BIND_ENV_LOG)
+        for r in snap.pane_bind_env:
+            store.append_bounded(path, store.dumps(r), PANE_BIND_ENV_LOG_MAX)
+    except OSError:
+        pass  # a log we could not write changes no decision
+
+
 # ── C3.4-5, 7: sessions ──────────────────────────────────────────────────────────────────────────
 
 
@@ -481,8 +792,10 @@ def observe(
     registry_dir: Optional[str] = None,
     rig: Optional[bool] = None,
     rig_keep: FrozenSet[str] = frozenset(),
+    pane_bind_env: Optional[str] = None,
 ) -> T.Snapshot:
-    """One census pass. Never raises: every instrument is fenced and degrades by name."""
+    """One census pass. Never raises: every instrument is fenced and degrades by name.
+    ``pane_bind_env`` overrides recon/pane-bind-env.mode (W14; tests and one-shot reads)."""
     snap = T.Snapshot(
         wall=time.time() if now is None else now, uptime_raw=_uptime_raw()
     )
@@ -502,11 +815,13 @@ def observe(
     except Exception:  # noqa: BLE001
         snap.degraded.append("kitty-sockets")
     roots: Dict[int, Tuple[int, int]] = {}
+    failed: Dict[int, str] = {}  # kitty pid → the socket whose ls failed (W14)
     for sock in snap.sockets:
         step()
         kpid = int(sock.rsplit("-", 1)[-1])
         data = kitty_ls(sock, run, kitten=kitten, degraded=snap.degraded)
         if data is None:
+            failed[kpid] = sock
             continue
         try:
             for p in panes_from_ls(sock, kpid, data, procs, ttys):
@@ -515,6 +830,20 @@ def observe(
                     roots[p.root_pid] = p.key
         except Exception:  # noqa: BLE001
             snap.degraded.append("kitty:" + sock)
+            failed[kpid] = sock
+    env_roots: Dict[int, Tuple[int, int]] = {}
+    try:
+        env_roots = env_rows(
+            snap,
+            ttys,
+            roots,
+            failed,
+            pane_bind_env_mode(paths) if pane_bind_env is None else pane_bind_env,
+            run,
+        )
+    except Exception as e:  # noqa: BLE001 — the kernel binding is advisory: it never costs a pass
+        snap.degraded_why["pane-bind-env"] = str(e)[:200] or type(e).__name__
+    _log_env_rows(paths, snap)
     try:
         _sessions(
             snap,
@@ -526,6 +855,7 @@ def observe(
             rig_mode() if rig is None else rig,
             rig_keep,
             paths.canary if paths is not None else frozenset(),
+            env_roots,
         )
     except Exception:  # noqa: BLE001
         snap.degraded.append("sessions")
@@ -542,6 +872,7 @@ def _sessions(
     rig: bool = False,
     rig_keep: FrozenSet[str] = frozenset(),
     canary: FrozenSet[str] = frozenset(),
+    env_roots: Optional[Dict[int, Tuple[int, int]]] = None,
 ) -> None:
     procs = snap.procs
     kitty_ok = not any(d.startswith("kitty") for d in snap.degraded)
@@ -608,7 +939,7 @@ def _sessions(
             for r in rrows
         ]
         sources += [("resume-argv", "", p, "") for p in leaves.get(sid, [])]
-        holders = holders_for(sources, procs, roots)
+        holders = holders_for(sources, procs, roots, env_roots)
         bound = [h for h in holders if h.pane is not None and not h.bg]
         ranked = bound or [h for h in holders if not h.bg] or holders
         lead: Optional[T.HolderObs] = ranked[0] if ranked else None

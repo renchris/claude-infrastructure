@@ -312,21 +312,42 @@ def bg_work_for(
 
 
 def bind(
-    pid: int, procs: Dict[int, T.ProcRow], roots: Dict[int, Tuple[int, int]]
+    pid: int,
+    procs: Dict[int, T.ProcRow],
+    roots: Dict[int, Tuple[int, int]],
+    env_roots: Optional[Dict[int, Tuple[int, int]]] = None,
 ) -> Optional[Tuple[int, int]]:
     """(kitty_pid, window_id) by walking the ppid chain to a window root — never by tty (§C3.2)."""
+    return bind_src(pid, procs, roots, env_roots)[0]
+
+
+def bind_src(
+    pid: int,
+    procs: Dict[int, T.ProcRow],
+    roots: Dict[int, Tuple[int, int]],
+    env_roots: Optional[Dict[int, Tuple[int, int]]] = None,
+) -> Tuple[Optional[Tuple[int, int]], str]:
+    """``bind`` plus where the pane came from (T.PANE_SRCS). kitty's own window roots always win;
+    ``env_roots`` (W14: claude pid → kernel-proven pane, only for a kitty whose `ls` failed, only in
+    mode on) is consulted for the same chain only when no ls root is on it."""
     if pid in roots:
-        return roots[pid]
-    for a in ancestors(pid, procs):
+        return roots[pid], "ls"
+    chain = list(ancestors(pid, procs))
+    for a in chain:
         if a in roots:
-            return roots[a]
-    return None
+            return roots[a], "ls"
+    if env_roots:
+        for p in [pid] + chain:
+            if p in env_roots:
+                return env_roots[p], "env"
+    return None, ""
 
 
 def holders_for(
     sources: List[Tuple[str, str, int, str]],
     procs: Dict[int, T.ProcRow],
     roots: Dict[int, Tuple[int, int]],
+    env_roots: Optional[Dict[int, Tuple[int, int]]] = None,
 ) -> List[T.HolderObs]:
     """H(sid): distinct live (pid, lstart); a later source only fills an unknown cfg (§C3.5)."""
     held: Dict[Tuple[int, str], T.HolderObs] = {}
@@ -338,6 +359,7 @@ def holders_for(
         if key in held:
             held[key].cfg = held[key].cfg or cfg
             continue
+        pane, psrc = bind_src(row.pid, procs, roots, env_roots)
         held[key] = T.HolderObs(
             row.pid,
             row.lstart,
@@ -345,6 +367,7 @@ def holders_for(
             src,
             kind,
             kind == "bg",
-            bind(row.pid, procs, roots),
+            pane,
+            psrc,
         )
     return list(held.values())

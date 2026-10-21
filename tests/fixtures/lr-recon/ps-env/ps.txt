@@ -1,0 +1,15 @@
+    1     0 Ss   Tue Oct 20 11:19:17 2026     /sbin/launchd
+  853     1 S    Tue Oct 20 11:19:17 2026     /Applications/kitty.app/Contents/MacOS/kitty
+  860     1 S    Tue Oct 20 11:19:18 2026     /Applications/kitty.app/Contents/MacOS/kitty
+  870   860 Ss   Tue Oct 20 11:19:40 2026     -zsh
+  871   870 S+   Tue Oct 20 11:19:50 2026     /x/claude.exe
+  900   853 Ss   Tue Oct 20 11:20:00 2026     -zsh
+  901   900 S+   Tue Oct 20 11:21:00 2026     /x/claude.exe --resume aaaa1111-0000-4000-8000-000000000001 continue KITTY_WINDOW_ID=99 KITTY_PID=860
+  905   900 S+   Tue Oct 20 11:40:00 2026     /x/claude.exe --resume aaaa1111-0000-4000-8000-000000000001
+  910   853 Ss   Tue Oct 20 11:20:10 2026     -zsh
+  911   910 S+   Tue Oct 20 11:21:10 2026     /x/claude.exe
+  920   853 Z    Tue Oct 20 11:20:20 2026     (zsh)
+  921   920 S+   Tue Oct 20 11:21:20 2026     /x/claude.exe
+  930   860 Ss   Tue Oct 20 11:20:30 2026     -zsh
+  931   930 S+   Tue Oct 20 11:21:30 2026     /x/claude.exe --resume hhhh8888-0000-4000-8000-000000000008
+  950     1 S    Tue Oct 20 11:21:50 2026     /x/claude.exe -p headless

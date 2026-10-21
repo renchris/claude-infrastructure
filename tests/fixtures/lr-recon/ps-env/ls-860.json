@@ -1,0 +1,34 @@
+[
+  {
+    "id": 1,
+    "is_focused": true,
+    "tabs": [
+      {
+        "id": 1,
+        "is_focused": true,
+        "windows": [
+          {
+            "id": 4,
+            "pid": 870,
+            "is_focused": false,
+            "cwd": "/w/g",
+            "title": "g",
+            "foreground_processes": [
+              {"pid": 871, "cmdline": ["/x/claude.exe"], "cwd": "/w/g"}
+            ]
+          },
+          {
+            "id": 3,
+            "pid": 930,
+            "is_focused": false,
+            "cwd": "/w/h",
+            "title": "h",
+            "foreground_processes": [
+              {"pid": 931, "cmdline": ["/x/claude.exe", "--resume", "hhhh8888-0000-4000-8000-000000000008"], "cwd": "/w/h"}
+            ]
+          }
+        ]
+      }
+    ]
+  }
+]
