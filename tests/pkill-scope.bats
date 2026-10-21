@@ -425,6 +425,34 @@ EOF
   [ "$(decision 'git commit -m "fix: pkill -f x -P \$\$ was inert"')" = "PASS" ]
 }
 
+@test "guard: a MULTI-LINE quoted message before the kill hides nothing (the 2026-10-21 incident)" {
+  # Verbatim from the transcript. The per-line sed quote strip paired the message's closing quote
+  # with the opening quote of "next start", erased `; pkill -f `, and every kill gate stayed shut;
+  # the trailing -P then matched HANDOFF-PING in 9 fired sessions' argv.
+  local incident='git add scripts/warm-edge.sh && git commit -q -m "feat(cache): post-deploy edge warm script (experiment)
+
+W2.8. 16 GETs (4 pages x iOS Safari / Chrome Android Accept x br / gzip), page
+GETs only. Unmeasured: keep it only if the next YVR/SEA landing after a
+deploy-plus-warm reads Hit." && git log --oneline -1; pkill -f "next start" -P $(lsof -ti tcp:3026 | head -1) 2>/dev/null; kill $(lsof -ti tcp:3026) 2>/dev/null; sleep 1; lsof -ti tcp:3026 || echo PASS_FREE'
+  [ "$(CC_KILL_SELECTION_GATE=off decision "$incident")" = "DENY" ]
+  # The fragments live in plain single quotes on their own lines so the repo lint above (which feeds
+  # every tracked pkill line to the hook) reads each as the inert string it is.
+  local inert='pkill -f my-daemon -9' nl=$'\n' ap="'"
+  [ "$(decision "git commit -m \"a${nl}b\" && $inert")" = "DENY" ] || false
+  # an apostrophe inside a multi-line double-quoted message is not a quote
+  [ "$(decision "git commit -m \"it${ap}s${nl}fine\" && $inert")" = "DENY" ]
+}
+
+@test "guard: a multi-line message that only MENTIONS a kill still passes" {
+  local mention='was: pkill -f x -P 1' scoped='pkill -f my-daemon' killq='pkill -9 -f my-daemon'
+  local inert='pkill -f my-daemon -9' nl=$'\n' ap="'"
+  [ "$(decision "git commit -m \"fix: trailing -P${nl}${nl}${mention}${nl}now fine\" && echo ok")" = "PASS" ] || false
+  [ "$(decision "git commit -m \"it${ap}s${nl}fine\" && $scoped")" = "PASS" ] || false
+  [ "$(decision "echo hi # don${ap}t${nl}${killq}")" = "PASS" ]
+  # a kill inside "$( )" is code, and quotes inside it nest
+  [ "$(decision "echo \"\$($inert)\"")" = "DENY" ]
+}
+
 @test "guard: a QUOTED pattern containing a dash-word is not mistaken for a trailing flag" {
   # The false positive this check shipped with, caught by sweeping it over the repo's own 107
   # tracked kill lines: `--trunk` lives INSIDE the pattern. The line is still denied — it is an

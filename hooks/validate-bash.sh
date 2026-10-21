@@ -955,7 +955,43 @@ fi
 # `pkill -f "bats.*${PWD##*/}"` would be denied by the very commit message describing why it is
 # scoped. Text is not execution — and neither is stdin. (CMD_NOHD is computed once, above the
 # system-damage arm, which reads it first.)
-CMD_NOQ=$(printf '%s' "$CMD_NOHD" | sed -e "s/'[^']*'/''/g" -e 's/"[^"]*"/""/g')
+#
+# A QUOTE SPANS LINES, AND sed DOES NOT (2026-10-21, docs/research/husk-mass-sigterm-2026-10-21.md).
+# The sed pairing below runs one line at a time, so a multi-line `git commit -m "…` puts its closing
+# quote on a later line where sed pairs it with the NEXT opening quote — `Hit." && …; pkill -f "next
+# start"` became `Hit.""next start"`, swallowing the `; pkill -f ` between them. The position test
+# read no kill, every gate in this file stayed shut (this one, the live selection gate and the
+# empty-selector gate all read CMD_NOQ), and `pkill -f "next start" -P $(…)` — the exact inert-flag
+# shape the clause below names — ran: `-P` matched HANDOFF-PING in 9 sessions' argv and their 6
+# teammates died with them, leaving 9 KILLED husk panes. So a quote-state scan that carries its
+# state ACROSS lines now produces the copy, and the old sed copy is appended after it: the gate
+# opens if EITHER puts a kill in command position. Opening is the safe direction — every verdict
+# below re-reads CMD_NOHD — so the union can only cost a gate that opens and then passes.
+# A `$(` inside double quotes is CODE with its own quoting, so it is emitted and scanned like the top
+# level (`"$(pkill -f x)"` runs the kill), and its `)` returns to the enclosing double quote.
+vb_strip_quotes() {
+  printf '%s' "$1" | awk -v SQ="'" -v DQ='"' '
+    {
+      s = $0; n = length(s); o = ""
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (st == 0) {
+          if (c == "\\") { o = o substr(s, i, 2); i++; continue }
+          if (c == "#" && (i == 1 || substr(s, i - 1, 1) ~ /[ \t;&|(]/)) break
+          if (c == SQ) { st = (i > 1 && substr(s, i - 1, 1) == "$") ? 3 : 1; o = o SQ SQ; continue }
+          if (c == DQ) { st = 2; o = o DQ DQ; continue }
+          if (d > 0 && c == "(") pd[d]++
+          if (d > 0 && c == ")") { if (pd[d] > 0) pd[d]--; else { d--; st = 2; o = o ")"; continue } }
+          o = o c; continue
+        }
+        if (st != 1 && c == "\\") { i++; continue }
+        if (st == 2 && c == "$" && substr(s, i + 1, 1) == "(") { d++; pd[d] = 0; st = 0; o = o "$("; i++; continue }
+        if ((st != 2 && c == SQ) || (st == 2 && c == DQ)) st = 0
+      }
+      print o
+    }'
+}
+CMD_NOQ=$(vb_strip_quotes "$CMD_NOHD")$'\n'$(printf '%s' "$CMD_NOHD" | sed -e "s/'[^']*'/''/g" -e 's/"[^"]*"/""/g')
 if printf '%s' "$CMD_NOQ" | sed 's/[&|()]/;/g' | tr ';' '\n' | sed 's/^[[:space:]]*//' \
      | grep -qE '^(sudo[[:space:]]+)?(pkill|killall)([[:space:]]|$)'; then
   PK_OCCURRENCES=$(printf '%s' "$CMD_NOHD" | grep -oE '(pkill|killall)[^;&|]*' || true)
