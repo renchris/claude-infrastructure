@@ -82,7 +82,7 @@
 # Kill switch: CC_KITTY_HYGIENE=off (status prints verdict=OFF, exit 0; alarm-reboot-prep prints
 # nothing). For cc-restore, point CC_RESTORE_HYGIENE_BIN at /usr/bin/true.
 # Seams (tests): CC_KH_{DEFAULTS,PS,LSOF,LOG,CODESIGN,PLISTBUDDY,SYSCTL,IOREG,LSAPPINFO,KITTEN,STAT}_BIN,
-#   CC_KH_PYTHON, CC_KH_BAND_PY, CC_KH_NAPS_PY, CC_KH_PLIST, CC_KITTY_APP, CC_KH_TIMEOUT_BIN,
+#   CC_KH_PYTHON, CC_KH_BAND_PY, CC_KH_NAPS_PY, CC_KH_PLIST, CC_KITTY_APP, CC_KH_TIMEOUT_BIN, CC_KH_SAMPLE_DIR (/tmp),
 #   CC_KH_FD_SOFT (256), CC_KH_FD_WARN (180), CC_RESTORE_FD_MAX (180), CC_KH_{PS,LSOF,DEFAULTS,BAND}_TIMEOUT_S.
 set -u
 
@@ -396,7 +396,7 @@ cmd_sample() {
     echo "kitty-hygiene: sample: $pid is a main kitty; remote control to it needs --rc-production (each unanswered call costs it an fd)" >&2
     exit 2
   fi
-  out="${out:-/tmp/kh-samples-$pid.tsv}"
+  out="${out:-${CC_KH_SAMPLE_DIR:-/tmp}/kh-samples-$pid.tsv}"
   [ -s "$out" ] || printf 'ts\tpid\tload1\tlocked\tfront\tband\tmain_thr\tthreads_at_4\trc_rc\trtt_ms\tfds\tfds_unix\n' > "$out"
   local i=0 unanswered=0 paused=0 backoff=$((every * 2)) next_rc=0
   while alive "$pid"; do
