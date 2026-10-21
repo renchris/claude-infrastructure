@@ -43,6 +43,10 @@ setup() {
   unset CC_PANE_SUCCESSOR CC_PANE_SUCCESSOR_TTY CC_PANE_SUCCESSOR_NOW
   unset CC_PANE_SUCCESSOR_LOOP_PID CC_PANE_SUCCESSOR_HANDBACK TERM_PROGRAM
   export KITTY_WINDOW_ID=44
+  # The lib's root-shell zshexit hook (cc_pane_fs_zshexit, pane-successor.bats owns it) forks
+  # `kitty @ ls` when the shell exits at EOF — under case 5's `ulimit -u 1` that fork failed and was
+  # read as the PROMPT hook forking. This suite's subject is the precmd claim, so the exit hook is off.
+  export CC_KITTY_FS_GUARD=off
   # The "watcher" whose liveness take proves is this bats process.
   export W3_WPID=$$
   W3_WLSTART="$(TZ=UTC LC_ALL=C ps -o lstart= -p "$$" | tr -s ' ' | sed 's/^ *//; s/ *$//')"
