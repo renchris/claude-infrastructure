@@ -1,0 +1,64 @@
+[locate] Step 0 — you are a COLD session; run this first: cd /Users/chrisren/Development/.worktrees/nonlimit-resume-fable 2>/dev/null || echo "worktree not yet provisioned — you were fired with --worktree, so you are already in it". Then: git log --oneline -1 (expect 8788dea27 or a rebase of it) && cat docs/plans/NONLIMIT_RESUME_LADDER.md
+
+YOU ARE THE W1 / FABLE 5.1 DISCOVERY PASS. Read docs/plans/NONLIMIT_RESUME_LADDER.md in full before anything else. It is the complete Opus-5 research capture and it is your input, not your subject.
+
+THE PROBLEM. When a Claude Code session is interrupted by something that is NOT a usage limit — a wifi/DNS drop (ENOTFOUND), a reconnect, or a Dynamic Workflow agent stall — the operator currently types a paragraph by hand ("Reconnected to internet, continue. If there are any subagents/background processes/Dynamic Workflows, investigate/introspect to see if there are any incomplete/halted agents that need to be refired. Do not take incomplete result as complete or as something that you just have to continue to work around from"). That paragraph is unreliable for the exact reason /limit-recover was built: the model reconciles from CONTEXT, which still holds the pre-kill narrative and reads plausible, satisfices on the units it happens to remember, and smooths the gaps into the conclusion.
+
+WHAT IS ALREADY SETTLED — do NOT re-verify it, that is banned ceremony and it burns your window:
+- The lr-audit.py engine is ALREADY interruption-agnostic. slot_verdict returns NULL on ANY api_error; classify_limit_text only labels the evidence string, it does not gate the verdict. Non-limit errors are excluded from limit_events, so a network death yields limit_events:[] AND a correct gap ledger.
+- The ENOTFOUND record carries the same structural envelope as a cap: type:assistant, isApiErrorMessage:true, error:"server_error", model:"<synthetic>".
+- The fleet census WAS blind to all of it and is now fixed (commit 3a63bfd43): 35 limit + 29 network, 6 live panes surfacing as RESUME-IN-PLACE.
+- A workflow stall arrives as a type:"user" <task-notification>, NOT an assistant api_error. "stalled"/"stream watchdog" appear nowhere in scripts/limit-recover/.
+
+YOUR JOB IS THE PART OPUS 5 COULD NOT REACH. Six questions, all in § Handoff brief of the plan doc. The ones that matter most:
+1. THE RUNNING GAP. A quota kill ends the session; a network drop does NOT — the TUI survives and a delegated unit may still be running or retrying. Teammates get a RUNNING verdict (active <5min => never respawn over a live member). Bare subagents and workflow slots have NO such verdict, so a live one reads PARTIAL and a blind re-run DOUBLES it. What is the correct liveness predicate when the harness gives no liveness signal, the process may be mid-retry, and this repo's own memory says a stamp written at run-end cannot be a liveness proxy and orphanhood is not discriminating?
+2. STALL IS A THIRD CLASS, not a network variant. 6 attempts x 180s means the harness already exhausted its own retries. Is re-firing correct, or does it reproduce the stall? What separates a stall that will clear from a deterministic one?
+3. THE TRIGGER PROBLEM IS GENERAL. Every future non-quota death class will be invisible the same way. Is there a formulation that does not enumerate spellings? This repo's own rule: a denylist enumerates spellings, not the class.
+4. IS /limit-recover NOW A MISNOMER for a general interrupted-work recovery command?
+5. ZERO-PARAGRAPH AUTOMATION is the operator's actual ask. What is the design where a reconnect needs no prompt at all — and what is the failure mode of making it automatic?
+6. UNKNOWN-UNKNOWNS: what is wrong with this framing that Opus 5 could not see? This is why you are on the frontier tier. Spend real effort here.
+
+HARD CONSTRAINTS — these bind even if you skim everything else:
+- DO NOT IMPLEMENT. No code changes to scripts/, hooks/, bin/ or commands/. Your deliverable is a DESIGN an Agent Teams wave can execute.
+- DO NOT re-run the Opus-reachable measurements. Cite the plan doc.
+- DO NOT push, ship, deploy, or land. A land is already in flight elsewhere on this repo.
+- Every claim gets a file:line or a command+output. This repo treats an unreceipted claim as a defect.
+- INTEGRATE into docs/plans/NONLIMIT_RESUME_LADDER.md — append a "## W1 — Fable 5.1 discovery" section. NEVER overwrite or delete existing sections; that rule is CRITICAL in this repo's CLAUDE.md.
+
+DELIVERABLE: docs/plans/NONLIMIT_RESUME_LADDER.md gains a "## W1 — Fable 5.1 discovery" section containing (a) a recommended design with its rejected alternatives and WHY each was rejected, (b) an explicit answer to each of the six questions, (c) a W2 task breakdown an Opus 5 Agent Teams wave can execute with stepped-down assignee effort, and (d) a section titled "What Opus 5 could not see" naming what its framing got wrong. Commit it on this branch. Do not land it.
+
+## BACK-CHANNEL — ping the originator (claude-infrastructure-721)
+On completion, at a decision gate, or on a blocker, ping the session that fired this handoff:
+  cc-notify claude-infrastructure-721 "HANDOFF-PING fire-nonlimit-resume-fable: <one-line status>"
+(cc-notify is on PATH at $HOME/.claude/bin/cc-notify — v2 INBOX transport: it
+APPENDS the ping to the originator's inbox $HOME/.claude/mailbox/<uuid>.md;
+NO keystrokes — nothing is ever typed into any composer. The originator reads it
+at its next safe boundary (SessionStart / UserPromptSubmit / its Stop-fold), or
+within seconds if it armed cc-await-ping (the mailbox write wakes the watcher).
+Trust the stderr verdict: "wake-path armed" = instant; "NO watcher armed" =
+lands next turn; "mailbox only" = target gone — surface that in YOUR report and
+do NOT hand-write mailbox files yourself.)
+
+## ON COMPLETION — SELF-RETIRE (do NOT idle)
+You are a fired PEER session: the desk drives you to DONE and you CLOSE YOURSELF — you are
+NOT an idle human-in-the-loop pane. ANNOUNCE, then retire — the ping is a STEP, not a
+courtesy: self-close checks whether this pane ever pinged the address it was fired with,
+and if it did not it announces on your behalf and says your status is UNREPORTED. That is
+a strictly worse report than the one you would have written. When your work is finished:
+  1. DRIVE any trivial, pre-authorized remaining step to a clean terminal state (push / ff /
+     land per the standing values). NEVER finish on a "say the word" / "heads-up" and sit
+     idle — that is the deference defect. A step that is GENUINELY the operator's call is
+     surfaced in your ping, not a reason to idle.
+  2. LAND IT BEFORE YOU PING, AND PING BEFORE YOU CLOSE. Committed is NOT safe: a commit
+     on your branch is visible to nobody but this machine, and it retires with this pane.
+     Check `git rev-list --count origin/main..HEAD` yourself; if it is not 0, /ship it, or
+     say so IN THE PING and name the branch so the originator can collect it. A ping that
+     reads as done over an unlanded branch is the measured top loss class — it is how a
+     lead reads a stranded track as a completed one.
+  3. Then retire your OWN pane (self-close refuses a dirty tree, and WARNS — it does not
+     refuse — on an unlanded branch; it now also tells your originator, so an unlanded
+     close is loud rather than silent, never a substitute for landing it):
+       $HOME/.claude/scripts/handoff-fire.sh self-close --terminal
+Report, finish the trivial tail, close. Do not wait idle for input that is not coming.
+
+<!-- handoff-fire engagement marker: HANDOFF-ENGAGE-32453-1788975802-22110 (ignore) -->
