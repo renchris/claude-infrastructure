@@ -19,8 +19,8 @@ setup() {
 # ends with SIGHUP (the stub exits 0 on it) once a condition holds, within a stated bound. Each one
 # starts python and waits, so it skips below band 20: postland runs suites at background QoS, where
 # python took minutes to start (B1 C11/F18).
-need_band() {
-  b="$(/usr/bin/python3 -I "$REPO/scripts/limit-recover/lr_recon/band.py" $$ 2>/dev/null)"
+need_band() { # read with ps, not python: at PRI 4 a python start is the cost being avoided
+  b="$(ps -o pri= -p $$ 2>/dev/null | tr -d ' ')"
   case "$b" in ''|*[!0-9]*) skip "band unreadable ($b)" ;; esac
   [ "$b" -ge 20 ] || skip "band $b < 20 (postland background QoS)"
 }

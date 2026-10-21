@@ -24,6 +24,13 @@
 # elsewhere; the red-proofs below copy the scan set into $BATS_TEST_TMPDIR and never edit the repo.
 
 setup() {
+  # W1 lever 6 (B1 C11/F18): every case starts python. At background QoS (postland) this suite
+  # ran past 600 s (measured 2026-10-21, load1 ~60 on 10 CPUs, PRI 4) against postland's 300 s
+  # per-file bound, so below band 20 each case skips with the band as its counted reason. Read
+  # with ps: a python start is the cost being avoided. cc-bats (band 20) and the land gate assert.
+  b="$(ps -o pri= -p $$ 2>/dev/null | tr -d ' ')"
+  case "$b" in ''|*[!0-9]*) skip "band unreadable ($b)" ;; esac
+  [ "$b" -ge 20 ] || skip "band $b < 20 (postland background QoS)"
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   export HOME="$BATS_TEST_TMPDIR/home" TMPDIR="$BATS_TEST_TMPDIR/tmp"
   export LR_STATE_DIR="$BATS_TEST_TMPDIR/lr" LR_RECON_ROOT="$BATS_TEST_TMPDIR/recon"

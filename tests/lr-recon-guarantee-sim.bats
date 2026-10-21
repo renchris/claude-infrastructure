@@ -5,6 +5,13 @@
 # setup_file runs the module once; each case reads its own line from that run.
 
 setup_file() {
+  # W1 lever 6 (B1 C11/F18): postland runs suites at background QoS, where this one python run
+  # spent 16 min (measured 2026-10-21, load1 ~60 on 10 CPUs, PRI 4) against postland's 300 s
+  # per-file bound. Below band 20 every case skips with the band as its counted reason. The band is
+  # read with ps, not python: a python start is the very cost being avoided.
+  b="$(ps -o pri= -p $$ 2>/dev/null | tr -d ' ')"
+  case "$b" in ''|*[!0-9]*) skip "band unreadable ($b)" ;; esac
+  [ "$b" -ge 20 ] || skip "band $b < 20 (postland background QoS)"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd -P)"
   export HOME="$BATS_FILE_TMPDIR/home" TMPDIR="$BATS_FILE_TMPDIR/tmp"
   export LR_STATE_DIR="$BATS_FILE_TMPDIR/lr" LR_RECON_ROOT="$BATS_FILE_TMPDIR/lr/recon"
