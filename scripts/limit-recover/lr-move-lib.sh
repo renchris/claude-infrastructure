@@ -241,12 +241,51 @@ lr_swap_slot_orphan() { # $1=slot dir → 0 when its holder is gone (dead, reuse
   if [ ! -s "$1/pid" ] && [ -z "$(find "$1" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then return 1; fi
   return 0
 }
+# SLOT PRIORITY, SUBJECT-RELATIVE (W11, B3 lever 4). The reconciler's boot slots are this same pool,
+# and with this lane holding 4 of the 6 an overdue limited record had 2 (7 `boot-slots` refusals on
+# 10-18). While an overdue A/R record waits on a boot slot the reconciler leases
+# <state>/locks/slot-priority ("until=<epoch>", "pid=<reconciler>"); while `until` is ahead of THIS
+# clock the lane holds at most LR_MOVE_PRIORITY_SLOTS (1) slots, the reconciler's own not counted.
+# The reconciler refreshes `until` every pass and from clock.step, so the cap does not lapse inside
+# one long pass ("Freshness is subject-relative"); a file whose `until` has passed is ignored.
+# Kill switch: touch <state>/locks/slot-yield.off.
+lr_swap_slot_priority() { # $1=slots root → 0 while the lease stands (the reconciler's pid on stdout) · 1 none
+  local locks u p
+  locks="$(dirname "$1")"
+  [ -f "$locks/slot-priority" ] && [ ! -e "$locks/slot-yield.off" ] || return 1
+  u="$(sed -n 's/^until=//p' "$locks/slot-priority" 2>/dev/null | sed -n '1p')"
+  case "$u" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$u" -gt "$(date +%s)" ] || return 1
+  p="$(sed -n 's/^pid=//p' "$locks/slot-priority" 2>/dev/null | sed -n '1p')"
+  printf '%s' "$p"
+}
 lr_swap_slot_acquire() { # $1=width → 0 taken (LR_SWAP_SLOT set) · 1 none free
-  local w="${1:-4}" root i=1 d
+  local w="${1:-4}" root rp d n=0 rc cap="${LR_MOVE_PRIORITY_SLOTS:-1}"
   case "$w" in ''|*[!0-9]*) w=4 ;; esac
   [ "$w" -ge 1 ] || w=1
   root="$(lr_swap_slot_dir)"
   mkdir -p "$root" 2>/dev/null || return 1
+  rp="$(lr_swap_slot_priority "$root")" || { _lr_swap_slot_take "$w" "$root"; return; }
+  case "$cap" in ''|*[!0-9]*) cap=1 ;; esac
+  # Count and take under one lock: a batch starts its workers together, and a count-then-take race
+  # would let each of them see the lane empty. A lock older than a minute is a taker that died.
+  if ! mkdir "$root.prio" 2>/dev/null; then
+    [ -n "$(find "$root.prio" -maxdepth 0 -mmin +1 2>/dev/null)" ] && rmdir "$root.prio" 2>/dev/null
+    return 1
+  fi
+  for d in "$root"/slot-*; do
+    [ -d "$d" ] || continue
+    case "$d" in *.dead.*|*.steal) continue ;; esac
+    [ "$(cat "$d/pid" 2>/dev/null || true)" = "${rp:-x}" ] && continue
+    lr_pidlock_live "$d" && n=$((n + 1))
+  done
+  rc=1
+  [ "$n" -ge "$cap" ] || { _lr_swap_slot_take "$w" "$root"; rc=$?; }
+  rmdir "$root.prio" 2>/dev/null || true
+  return "$rc"
+}
+_lr_swap_slot_take() { # $1=width $2=slots root → 0 taken (LR_SWAP_SLOT set) · 1 none free
+  local w="$1" root="$2" i=1 d
   # A DEAD SLOT IS TAKEN IN PLACE, UNDER ITS OWN LOCK (W9; lr_recon/admit.py BootSlots._steal_locked
   # is the same protocol). The steal used to mv slot-N away once it had judged the holder dead, then
   # mkdir it again, so a racer's fresh take made in between was moved too and both believed they held
