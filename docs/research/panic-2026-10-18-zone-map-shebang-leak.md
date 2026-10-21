@@ -285,3 +285,34 @@ large for one element per exec and reads as arms of unequal duration under a mov
 per-exec evidence remains the 96-cycle A/B above. A decisive re-run needs load near the 09-30
 carry-ab level (≤ ~200) or root (`sudo zprint` per-view, or `eslogger exec`), and is cheapest
 done after 0070 is applied, as the fleet-level Δ(data.kalloc.1024 − cred)/s before vs after.
+
+## Post-0070 fleet measurement (backlog `f0355eff46d5`)
+
+Cutover: migration 0070 rewrote `~/.claude/settings.json` at **1792549362 = 2026-10-21 02:22:42
+UTC** (settings mtime; its backup dir `hook-interp-0070-20261020212242` agrees). After it, 80 of 104
+hook commands in each of the four config dirs start `/bin/bash`; before it, 2 of 104.
+
+Instrument: `scripts/kalloc-leak-rate.sh`. It fits the zone series capacity-alarm already writes
+(`~/.claude/logs/kalloc-zone-series.tsv`, one measured read per ~900 s) by least squares over 24 h
+either side of the cutover, and divides each side's growth by its Bash tool calls (from
+`bash-commands.log` and its rotated `.gz` siblings over the same span), because the raw rate moves
+with how busy the fleet is. Verdict per Bash call: `reduced` at a ratio ≤ 0.5, `partial` below 0.8,
+else `unchanged`; `insufficient` (exit 1) while a side spans under 90% of the window. The series is
+raw bytes, not the `− cred` residual above; over 24 h `cred`'s rise-and-fall part averages out, and
+both sides share the instrument.
+
+Baseline, read 2026-10-21 02:30 UTC (71 rows over 23.1 h):
+
+| Side | GiB/day | elements/s | Bash calls | elements per call |
+|---|---|---|---|---|
+| before | 1.66 | 20.2 | 32,181 | 52.1 |
+
+The item's quoted ~1.1 GiB/day baseline is from an earlier boot; this boot's pre-0070 day is 1.66.
+The after side completes at 2026-10-22 02:22 UTC (plus one ~900 s sample). Run then:
+
+`bash scripts/kalloc-leak-rate.sh --cutover 1792549362`
+
+What to expect: 24 of 104 hook commands still run by bare path, the ~570 `#!` executables in
+`hooks/ bin/ scripts/` still call each other by path, and a session that was already running at the
+cutover may keep the hook list it loaded at startup (not verified), so a residual floor is expected;
+`reduced` is the fix working at fleet scale, `unchanged` refutes the hooks as the dominant source.
