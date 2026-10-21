@@ -98,6 +98,14 @@
   At PRI 31 python3 starts in ~0.1s under the same load. The job is seconds of CPU every 180s, so
   Background bought politeness nobody could measure and cost the only output the job has.
 
+  🚨 ProcessType Interactive SINCE 2026-10-20 (was Standard). Standard did NOT deliver the PRI 31 the
+  paragraph above intended: `ps -M` read the live job at 20T (G2 review R6, lr-sustained-load
+  2026-10-20), the utility band, where the same rail work ran 7-111x slower at load ~200 than at 31.
+  This job produces the router cache that D1, G2, cc-wave-plan and recycle_repick read, so its band
+  is theirs. Interactive is the band every Claude session and the reconciler run at. A plist edit
+  does nothing until the job is reloaded: `bash ~/.claude/scripts/limit-recover/lr-band-reload.sh
+  --keepwarm`, then `--confirm keepwarm-band` (operator batch RK; agents may not reload jobs).
+
   AND A DEADLINE THAT COVERS STARTUP. claude-accounts arms its own SIGALRM (CC_KEEPWARM_DEADLINE_S,
   225s), but only once the interpreter has started and imported — so a stall in exec, dyld or
   imports was unbounded, which is exactly where the 3h40m tick sat. `perl -e 'alarm N; exec ...'`
@@ -125,7 +133,7 @@
   <false/>
 
   <key>ProcessType</key>
-  <string>Standard</string>
+  <string>Interactive</string>
 
   <key>StandardOutPath</key>
   <string>/Users/chrisren/.claude/logs/accounts-keepwarm.out.log</string>

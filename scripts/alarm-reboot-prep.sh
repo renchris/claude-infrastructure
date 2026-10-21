@@ -350,6 +350,24 @@ if [ -s "$DIR/kitty-restart-pending" ]; then
   echo "  This reboot is ALSO the kitty restart: $(head -1 "$DIR/kitty-restart-pending")"
   echo "     (remove $DIR/kitty-restart-pending once kitty is back on the new build)"
 fi
+# B8: the reboot is also a kitty start, and kitty reads NSAppSleepDisabled at start (advisory; it
+# never changes the verdict). The status output is CAPTURED, then matched: under this file's
+# pipefail, `status | grep -q` read the WARN exit of the very case it looks for and never printed the
+# hint (measured HINT-NOT-PRINTED, review S4). The cheap verb (one defaults read, one ps), bounded as
+# a whole with its process group, so a stalled read cannot hold the reboot procedure (E-8).
+if [ "${CC_KITTY_HYGIENE:-on}" != off ]; then
+  hyg="${CC_REBOOT_PREP_HYGIENE_BIN:-$HOME/.claude/scripts/kitty-hygiene.sh}"
+  hyg_out=""
+  if [ -x "$hyg" ] && [ -x /usr/bin/perl ]; then
+    hyg_out="$(/usr/bin/perl -e 'my $t = shift; my $p = fork; exit 125 unless defined $p;
+      if (!$p) { setpgrp(0, 0); exec @ARGV; exit 127 }
+      $SIG{ALRM} = sub { kill "KILL", -$p; exit 124 };
+      alarm $t; waitpid($p, 0); exit($? >> 8)' "${CC_REBOOT_PREP_HYGIENE_S:-30}" "$hyg" status --only key,main,probe 2>/dev/null)"
+  fi
+  case "$hyg_out" in
+    key=absent*|*$'\n'key=absent*) echo "  Before rebooting (it is also a kitty start): defaults write net.kovidgoyal.kitty NSAppSleepDisabled -bool YES" ;;
+  esac
+fi
 echo "  After login, resume sessions with the resume-sessions skill; the next capacity-alarm tick"
 echo "  should read data.kalloc.1024 under 3 GB."
 echo "verdict=READY"

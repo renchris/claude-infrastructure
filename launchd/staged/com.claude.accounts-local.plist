@@ -23,9 +23,13 @@
   and FSEvents went dark on this machine on 2026-09-08, during which no WatchPaths job fired at all.
   ThrottleInterval 10 stops a burst of keychain writes from relaunching it back to back.
 
-  ProcessType Standard, with no LowPriorityIO: keepwarm's 2026-09-24 note records a PRI-4 tick that
-  sat 3h40m in dyld under load. A local pass is well under a second of CPU, so the clamp buys
-  nothing and costs freshness.
+  ProcessType Interactive (since 2026-10-20; was Standard), with no LowPriorityIO: keepwarm's
+  2026-09-24 note records a PRI-4 tick that sat 3h40m in dyld under load. A local pass is well under
+  a second of CPU, so the clamp buys nothing and costs freshness. Standard was meant to give PRI 31
+  and gave 20 (`ps -M` read 20T, G2 review R6): the utility band, where rail work ran 7-111x slower
+  at load ~200. This job writes the router's auth and session overlay, so its band is the router's.
+  Reload with `bash ~/.claude/scripts/limit-recover/lr-band-reload.sh --keepwarm`, then
+  `--confirm keepwarm-band` (operator batch RK).
 
   A DEADLINE THAT COVERS STARTUP. `perl -e 'alarm N; exec ...'` arms the kernel timer before the
   exec, and a pending alarm survives execve, so a stall in exec, dyld or imports ends with exit 142
@@ -68,7 +72,7 @@
   <integer>10</integer>
 
   <key>ProcessType</key>
-  <string>Standard</string>
+  <string>Interactive</string>
 
   <key>StandardOutPath</key>
   <string>/Users/chrisren/.claude/logs/accounts-local.out.log</string>

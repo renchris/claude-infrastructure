@@ -42,11 +42,12 @@ key() { /usr/libexec/PlistBuddy -c "Print :$1" "$PLIST"; }
   [ "$output" = "args:--local-refresh" ] || { echo "a healthy tick ran: $output"; false; }
 }
 
-@test "cadence keys: StartInterval 20 floor, keychain WatchPaths accelerator, Standard priority" {
+@test "cadence keys: StartInterval 20 floor, keychain WatchPaths accelerator, Interactive priority" {
   [ "$(key StartInterval)" = 20 ]
   [ "$(key ThrottleInterval)" = 10 ]
   [ "$(key RunAtLoad)" = true ]
-  [ "$(key ProcessType)" = Standard ]
+  # Interactive since 2026-10-20: Standard read 20T live, not the 31 it was meant to give (G2 R6)
+  [ "$(key ProcessType)" = Interactive ]
   [ "$(key WatchPaths:0)" = /Users/chrisren/Library/Keychains/login.keychain-db ]
   run key WatchPaths:1
   [ "$status" -ne 0 ] || { echo "a second WatchPaths entry appeared: $output"; false; }
@@ -54,4 +55,16 @@ key() { /usr/libexec/PlistBuddy -c "Print :$1" "$PLIST"; }
   [ "$status" -ne 0 ] || { echo "LowPriorityIO is back: $output"; false; }
   [ "$(key StandardOutPath)" = /Users/chrisren/.claude/logs/accounts-local.out.log ]
   [ "$(key StandardErrorPath)" = /Users/chrisren/.claude/logs/accounts-local.err.log ]
+}
+
+@test "both router-cache producers declare ProcessType Interactive (PRI 31), the band their readers run at" {
+  # D1, G2, cc-wave-plan and recycle_repick read what keepwarm and accounts-local write; at 20 the
+  # producers ran the utility band under a load their readers do not feel (LR_SUSTAINED_LOAD W7).
+  local p
+  for p in com.claude.accounts-local com.claude.accounts-keepwarm; do
+    run /usr/libexec/PlistBuddy -c "Print :ProcessType" "$REPO/launchd/staged/$p.plist"
+    [ "$status" -eq 0 ] && [ "$output" = Interactive ] || { echo "$p ProcessType is '$output'"; false; }
+    run /usr/libexec/PlistBuddy -c "Print :LowPriorityIO" "$REPO/launchd/staged/$p.plist"
+    [ "$status" -ne 0 ] || { echo "$p has LowPriorityIO: $output"; false; }
+  done
 }

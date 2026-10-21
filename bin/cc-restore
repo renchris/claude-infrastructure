@@ -24,6 +24,13 @@ WHAT A RESTART DOES, in order (docs/research/session-durability-2026-10/W3-build
   8. runs cc-restore-rebind (forwards, roles, exhausted accounts), closes the window kitty opened at
      launch if it is still a lone idle shell, then prints the verdict line.
 
+KITTY HYGIENE (B8, advisory; scripts/kitty-hygiene.sh). Preflight prints `hygiene:` lines from a
+cheap `status --only key,main,probe` (one defaults read, one ps; at most 30 s) and, when the App Nap
+key is absent, the one `defaults write` line, because kitty reads that key at start. A restart's
+finish() takes one bounded `status --only key,adopted,band` of the new kitty and ends the verdict line
+with `appnap=adopted|NOT-ADOPTED|unknown` (`skipped` after a crash). Neither ever fails a preflight or
+a restore, and neither sits on the relaunch path. Off: point CC_RESTORE_HYGIENE_BIN at /usr/bin/true.
+
 It never relaunches by itself after a crash: the crash page (boot-resume.sh) files one operator row
 carrying `cc-restore --after-crash`, because a deliberate quit cannot be told apart from a crash.
 
@@ -40,10 +47,10 @@ Exit: 0 done (or a clean dry run) · 1 partial / compare differs · 2 usage or r
 Seams: CC_BOOT_RESUME_STATE_DIR · CC_HEARTBEAT_DIR · CC_RESTORE_PS_BIN · CC_RESTORE_KILL_BIN ·
   CC_OPEN_BIN · CC_KITTY_APP · CC_RESTORE_KITTEN_BIN · CC_RESTORE_BOOT_RESUME · CC_RESTORE_SWAP_BIN ·
   CC_RESTORE_REBIND_BIN · CC_RESTORE_SESSIONS_BIN · CC_RESTORE_LSOF_BIN · CC_RESTORE_ZPRINT_BIN ·
-  CC_RESTORE_LAYOUT_BIN ·
+  CC_RESTORE_LAYOUT_BIN · CC_RESTORE_HYGIENE_BIN ·
   CC_RESTORE_SOCKET_TMPL · CC_RESTORE_TERM_WAIT_S (3) · CC_RESTORE_EXIT_WAIT_S (30) ·
   CC_RESTORE_SOCKET_WAIT_S (60) · CC_RESTORE_K_TIMEOUT_S (10) · CC_RESTORE_K_BACKOFF_S (30) · CC_RESTORE_FD_MAX (180) ·
-  CC_RESTORE_ROUND_SLEEP_S (30) · CC_RESTORE_LAND_POLL_S (15) · CC_RESTORE_MAX_S (2700) ·
+  CC_RESTORE_ROUND_SLEEP_S (30) · CC_RESTORE_HYGIENE_TIMEOUT_S (30) · CC_RESTORE_LAND_POLL_S (15) · CC_RESTORE_MAX_S (2700) ·
   RESTORE_LOCK_BOOT_UUID · RESTORE_LOCK_PS_BIN.
 """
 import json
@@ -72,6 +79,7 @@ DEFAULTS = {
     "CC_RESTORE_SESSIONS_BIN": os.path.join(BIN, "cc-sessions"),
     "CC_RESTORE_LSOF_BIN": "/usr/sbin/lsof",
     "CC_RESTORE_LAYOUT_BIN": os.path.join(BIN, "cc-resume-layout.sh"),
+    "CC_RESTORE_HYGIENE_BIN": os.path.join(SCRIPTS, "kitty-hygiene.sh"),
 }
 STATE_SEAMS = ("CC_BOOT_RESUME_STATE_DIR", "CC_HEARTBEAT_DIR")
 
@@ -192,6 +200,53 @@ def fd_gate(pid):
         raise Stop(6, "kitty %d holds %d file descriptors, over the limit of %d: the restore stops here "
                       "rather than push it into its 256 soft limit" % (pid, n, lim))
     return n
+
+
+# ── kitty hygiene (B8, advisory) ──────────────────────────────────────────────────────────────────
+HYGIENE_HINT = ("the NEW kitty will App Nap; first run: "
+                "defaults write net.kovidgoyal.kitty NSAppSleepDisabled -bool YES")
+
+
+def hygiene(fields, pid=None, timeout=None):
+    """(rc, stdout+stderr lines) of `kitty-hygiene.sh status --only <fields> [--pid P]`. Bounded and
+    never raises; `--pid` only when a pid is known (a sentinel pid reads nothing, review E-12)."""
+    argv = [seam("CC_RESTORE_HYGIENE_BIN"), "status", "--only", fields]
+    if pid:
+        argv += ["--pid", str(pid)]
+    try:
+        env = dict(os.environ, CC_KH_CALLER="cc-restore")
+        # Its own process group, killed whole at the bound: sh()'s subprocess.run kills only the
+        # direct child, and an orphaned grandchild (a bounded lsof) holding the pipe stretches the wait.
+        p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                             env=env, start_new_session=True)
+        try:
+            out, _ = p.communicate(timeout=timeout or num("CC_RESTORE_HYGIENE_TIMEOUT_S", 30))
+            return p.returncode, out.decode("utf-8", "replace").splitlines()
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            out, _ = p.communicate()
+            return 124, out.decode("utf-8", "replace").splitlines()
+    except Exception as e:  # noqa: BLE001 — advisory: nothing here may stop a restore
+        return 127, ["hygiene unavailable: %s" % e]
+
+
+def hygiene_appnap(pid):
+    """adopted | NOT-ADOPTED | unknown, from one bounded read of the new kitty. Never raises."""
+    try:
+        rc, lines = hygiene("key,adopted,band", pid)
+        kv = dict(ln.split("=", 1) for ln in lines if "=" in ln and " " not in ln.split("=", 1)[0])
+        key, adopted = kv.get("key", "?"), kv.get("adopted", "?").split(" ")[0]
+        base = kv.get("band", "?").split("/")[0]
+        if key in ("absent", "off") or adopted == "pending":
+            return "NOT-ADOPTED"
+        if key == "on" and adopted == "yes" and base.isdigit() and int(base) >= 31:
+            return "adopted"
+        return "unknown"
+    except Exception:  # noqa: BLE001
+        return "unknown"
 
 
 _k_busy = False
@@ -517,6 +572,15 @@ def preflight(confirm=None, need_one=True):
         ok = False
         say("preflight: kitty-build-swap.sh status failed (rc %d): the title-band link does not match "
             "the installed build. Fix that first; a restart now would start a kitty its config does not fit." % rc)
+    # B8: advisory. kitty reads NSAppSleepDisabled at start, so say so BEFORE the restart. `ok` is
+    # never changed here, and the read is the cheap one (one defaults read, one ps).
+    hrc, hlines = hygiene("key,main,probe", mk[0][0] if len(mk) == 1 else None)
+    for ln in hlines:
+        say("  hygiene: " + ln)
+    if hrc == 124:
+        say("  hygiene: unknown (kitty-hygiene.sh passed its %d s bound)" % num("CC_RESTORE_HYGIENE_TIMEOUT_S", 30))
+    if any(ln.startswith("key=absent") for ln in hlines):
+        say("  hygiene: " + HYGIENE_HINT)
     for name in ("CC_RESTORE_BOOT_RESUME", "CC_RESTORE_REBIND_BIN"):
         if not os.access(seam(name), os.X_OK):
             ok = False
@@ -584,6 +648,7 @@ class Worker(object):
         self.sock = None
         self.load_seen = 0
         self.startup = []           # window ids the new kitty opened on its own (open_kitty)
+        self.appnap = "unknown"     # B8: set in finish(), never on the relaunch path
 
     def on_signal(self, signum, frame):
         self.abort = True
@@ -829,8 +894,12 @@ class Worker(object):
         if marked:
             self.close_startup_window()
         full = marked and st["restored"] == st["n"] and st["dup"] == 0
-        say("cc-restore: verdict=%s restored=%d/%d maybe=%d dup=%d shed=%d events=%s" %
-            ("RESTORED" if full else "PARTIAL", st["restored"], st["n"], st["maybe"], st["dup"], st["shed"], self.evdir))
+        # B8: one bounded read of the NEW kitty, after the fleet is back (never inside wait_socket),
+        # and not after a crash, whose restore must not wait on an advisory read.
+        self.appnap = "skipped" if self.mode == "crash" else hygiene_appnap(self.new_pid)
+        say("cc-restore: verdict=%s restored=%d/%d maybe=%d dup=%d shed=%d events=%s appnap=%s" %
+            ("RESTORED" if full else "PARTIAL", st["restored"], st["n"], st["maybe"], st["dup"], st["shed"], self.evdir,
+             self.appnap))
         say("pass check: %s --compare %s" % (os.path.join(HOME, ".claude/bin/cc-restore"), self.evdir))
         return 0 if full else 1
 

@@ -65,7 +65,7 @@ SH
 
 teardown() {
   local l w
-  for l in com.reso.lr-reconciler com.claude.dispatcher; do
+  for l in com.reso.lr-reconciler com.claude.dispatcher com.claude.accounts-keepwarm com.claude.accounts-local; do
     if [ -f "$FAKE/$l.pid" ]; then kill "$(cat "$FAKE/$l.pid")" 2>/dev/null || true; fi
   done
   if [ -f "$BATS_TEST_TMPDIR/wrapper.pid" ]; then
@@ -229,4 +229,97 @@ record() { # $1=record id $2=terminal JSON (null = open)
   [ "$status" -eq 1 ] || { echo "$output"; false; }
   [[ "$output" == *"pri=4 floor=31 low (want floor=31 ok)"* ]] || { echo "$output"; false; }
   [[ "$output" == *"verdict=FAILED"* ]] || { echo "$output"; false; }
+}
+
+# ── the router-cache producers (LR_SUSTAINED_LOAD W7, batch RK) ───────────────────────────────────
+# RED on the pre-change tree: `--keepwarm` / `--confirm keepwarm-band` were unknown arguments
+# (exit 2), and the staged plists said ProcessType Standard (read 20T live).
+KW="com.claude.accounts-keepwarm com.claude.accounts-local"
+kw_setup() { # installed copies at the old Standard band, both loaded; the staged dir is the repo's
+  export LR_BAND_KEEPWARM_DIR="$BATS_TEST_DIRNAME/../launchd/staged"
+  export LR_BAND_PY="$BATS_TEST_TMPDIR/band.py"
+  printf 'import os\nprint(os.environ.get("FAKE_BAND", "31"))\n' > "$LR_BAND_PY"
+  mkdir -p "$LR_LAUNCHD_AGENTS_DIR"
+  local l
+  for l in $KW; do
+    /usr/bin/sed 's#<string>Interactive</string>#<string>Standard</string>#' "$LR_BAND_KEEPWARM_DIR/$l.plist" > "$LR_LAUNCHD_AGENTS_DIR/$l.plist"
+    echo "standard (2)" > "$FAKE/$l"
+  done
+}
+
+@test "keepwarm dry run: preflight passes on the staged repo plists, names the installed band, nothing reloaded" {
+  kw_setup
+  run bash "$SUT" --keepwarm
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"both staged plists lint and declare ProcessType Interactive"* ]] || { echo "$output"; false; }
+  for l in $KW; do
+    [[ "$output" == *"would: bootout + bootstrap + kickstart $l (installed ProcessType Standard; now: spawn type standard (2))"* ]] || { echo "$output"; false; }
+  done
+  [[ "$output" == *"--confirm keepwarm-band)"* ]] || { echo "$output"; false; }
+  ! grep -q 'bootout\|bootstrap\|kickstart' "$FAKE_LOG" 2>/dev/null
+}
+
+@test "[RED] keepwarm: a staged plist still at Standard is refused before anything is reloaded" {
+  kw_setup
+  mkdir -p "$BATS_TEST_TMPDIR/staged"
+  cp "$LR_BAND_KEEPWARM_DIR"/com.claude.accounts-*.plist "$BATS_TEST_TMPDIR/staged/"
+  /usr/bin/sed -i '' 's#<string>Interactive</string>#<string>Standard</string>#' "$BATS_TEST_TMPDIR/staged/com.claude.accounts-local.plist"
+  export LR_BAND_KEEPWARM_DIR="$BATS_TEST_TMPDIR/staged"
+  run bash "$SUT" --confirm keepwarm-band
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"not converged"* ]] || { echo "$output"; false; }
+  ! grep -q 'bootout\|bootstrap' "$FAKE_LOG" 2>/dev/null
+}
+
+@test "keepwarm apply: both installed from launchd/staged, bootout/bootstrap/kickstart, spawn type and band read back; rail untouched" {
+  kw_setup
+  run bash "$SUT" --confirm keepwarm-band
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  for l in $KW; do
+    cmp -s "$LR_BAND_KEEPWARM_DIR/$l.plist" "$LR_LAUNCHD_AGENTS_DIR/$l.plist" || { echo "$l not installed"; false; }
+    grep -q "^bootout gui/[0-9]*/$l\$" "$FAKE_LOG" || { cat "$FAKE_LOG"; false; }
+    grep -q "^bootstrap gui/[0-9]* $LR_LAUNCHD_AGENTS_DIR/$l.plist\$" "$FAKE_LOG" || { cat "$FAKE_LOG"; false; }
+    grep -q "^kickstart gui/[0-9]*/$l\$" "$FAKE_LOG" || { cat "$FAKE_LOG"; false; }
+    [[ "$output" == *"$l spawn type = interactive (4)"* ]] || { echo "$output"; false; }
+    [[ "$output" == *"✓ $l band=31 (pid "* ]] || { echo "$output"; false; }
+    [[ "$output" == *"── ps -M $l (pid "* ]] || { echo "$output"; false; }
+  done
+  [[ "$output" == *"verdict=ok"* ]] || { echo "$output"; false; }
+  ! grep -q 'com.reso.lr-\|com.claude.dispatcher' "$FAKE_LOG" || false
+}
+
+@test "keepwarm apply: a caught tick below 31 fails the verdict" {
+  kw_setup
+  export FAKE_BAND=20
+  run bash "$SUT" --confirm keepwarm-band
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"com.claude.accounts-keepwarm band=20 (pid"*"want >= 31)"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=FAILED"* ]] || { echo "$output"; false; }
+}
+
+@test "keepwarm: a producer that is not installed is skipped, never armed; the other is reloaded" {
+  kw_setup
+  rm -f "$LR_LAUNCHD_AGENTS_DIR/com.claude.accounts-local.plist" "$FAKE/com.claude.accounts-local"
+  run bash "$SUT" --confirm keepwarm-band
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"com.claude.accounts-local: not installed"*"skipped"* ]] || { echo "$output"; false; }
+  ! grep -E -q '^(bootout|bootstrap|kickstart|enable) .*accounts-local' "$FAKE_LOG" || { cat "$FAKE_LOG"; false; }
+  [ ! -e "$LR_LAUNCHD_AGENTS_DIR/com.claude.accounts-local.plist" ]
+  grep -q "^bootstrap gui/[0-9]* $LR_LAUNCHD_AGENTS_DIR/com.claude.accounts-keepwarm.plist\$" "$FAKE_LOG"
+}
+
+@test "keepwarm: a tick in flight holds the reload (bounded), and nothing is reloaded" {
+  kw_setup
+  sleep 30 & echo $! > "$FAKE/com.claude.accounts-keepwarm.pid"
+  run bash "$SUT" --confirm keepwarm-band
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"tick ran for 5s; nothing reloaded"* ]] || { echo "$output"; false; }
+  ! grep -q 'bootout\|bootstrap' "$FAKE_LOG" 2>/dev/null
+}
+
+@test "--now is refused for the keepwarm target" {
+  kw_setup
+  run bash "$SUT" --confirm keepwarm-band --now
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  ! grep -q 'bootout\|bootstrap' "$FAKE_LOG" 2>/dev/null
 }

@@ -127,7 +127,17 @@ SH
   printf '#!/bin/bash\necho "COMMAND PID USER FD"\ni=0; n="$(cat "$0.n" 2>/dev/null || echo 40)"\nwhile [ "$i" -lt "$n" ]; do echo "kitty $2 u $i"; i=$((i + 1)); done\n' > "$CC_RESTORE_LSOF_BIN"
   export CC_RESTORE_ZPRINT_BIN="$T/zprint"
   printf '#!/bin/bash\necho "data.kalloc.1024 1024 0K 0K 0K 0 4194304 0"\n' > "$CC_RESTORE_ZPRINT_BIN"
-  chmod +x "$T"/ps "$T"/kill "$T"/open "$T"/kitten "$T"/boot-resume "$T"/swap "$T"/rebind "$T"/sessions "$T"/lsof "$T"/zprint "$T"/layout
+  # kitty hygiene (B8): records its argv and caller tag; prints .out (default: a keyed, adopted kitty)
+  export CC_RESTORE_HYGIENE_BIN="$T/hygiene"
+  cat > "$CC_RESTORE_HYGIENE_BIN" <<'SH'
+#!/bin/bash
+echo "$* caller=${CC_KH_CALLER:-}" >> "$0.log"
+[ -f "$0.hang" ] && sleep 20
+if [ -f "$0.out" ]; then cat "$0.out"; else printf 'key=on\nadopted=yes (kitty started after the key)\nband=31/47T\nverdict=OK\n'; fi
+[ -f "$0.rc" ] && exit "$(cat "$0.rc")"
+exit 0
+SH
+  chmod +x "$T"/ps "$T"/kill "$T"/open "$T"/kitten "$T"/boot-resume "$T"/swap "$T"/rebind "$T"/sessions "$T"/lsof "$T"/zprint "$T"/layout "$T"/hygiene
 
   # the heartbeat tick, over stubs: two sessions in the "kitty"
   export CC_HB_SESSIONS_BIN="$T/hb-sessions"
@@ -617,4 +627,61 @@ compare_fixture() {
   run /usr/bin/python3 "$SUBJ" --help
   [ "$status" -eq 0 ]
   [[ "$output" == *"--restart-kitty --confirm <pid>"* ]] || false
+}
+
+# ── kitty hygiene (B8, advisory) ──────────────────────────────────────────────────────────────────
+# The hook prints and never decides: a WARN or a hang in kitty-hygiene.sh must leave every verdict
+# as it was, and it never sits on the relaunch path (impl/B8-kitty-hygiene.md review S5, S6, E-7).
+absent_key() { printf 'key=absent\nmain_kitties=1\nmain=%s ppid=1\nverdict=WARN(key)\n' "$KP" > "$CC_RESTORE_HYGIENE_BIN.out"; echo 1 > "$CC_RESTORE_HYGIENE_BIN.rc"; }
+
+@test "T11 dry run: hygiene WARN key=absent prints the defaults write hint and the dry run still ends DRY-RUN-OK" {
+  absent_key
+  run "$SUBJ" --restart-kitty --dry-run
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"  hygiene: key=absent"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"hygiene: the NEW kitty will App Nap; first run: defaults write net.kovidgoyal.kitty NSAppSleepDisabled -bool YES"* ]] || false
+  [[ "$output" == *"verdict=DRY-RUN-OK"* ]] || { echo "$output"; false; }
+  # the cheap verb, with --pid only because there is exactly one main kitty, tagged as cc-restore's
+  grep -qx "status --only key,main,probe --pid $KP caller=cc-restore" "$CC_RESTORE_HYGIENE_BIN.log"
+  no_signal
+}
+
+@test "T11b no single main kitty: the hygiene read leaves --pid out (a sentinel pid reads nothing)" {
+  echo "4242 $LSTART /Users/x/kitty-pr3/kitty/launcher/kitty --config NONE" >> "$CC_RESTORE_PS_BIN.kitty"
+  run "$SUBJ" --restart-kitty --dry-run
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  grep -qx "status --only key,main,probe caller=cc-restore" "$CC_RESTORE_HYGIENE_BIN.log"
+}
+
+@test "T11c a restart ends its verdict line with appnap=, AFTER events= (cc-restore.bats:279 shape kept)" {
+  run "$SUBJ" --restart-kitty --confirm "$KP" --no-wait
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  ev="$(ev_of)"
+  [[ "$output" == *"cc-restore: verdict=RESTORED restored=2/2 maybe=0 dup=0 shed=0 events=$EVENTS/$ev appnap=adopted"* ]] || { echo "$output"; false; }
+  # the new kitty is read once, in finish(), after the rebind
+  grep -qx "status --only key,adopted,band --pid $NEWPID caller=cc-restore" "$CC_RESTORE_HYGIENE_BIN.log"
+}
+
+@test "T11d key absent: the restart still RESTORES, and says appnap=NOT-ADOPTED" {
+  absent_key
+  run "$SUBJ" --restart-kitty --confirm "$KP" --no-wait
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=RESTORED "*" appnap=NOT-ADOPTED"* ]] || { echo "$output"; false; }
+}
+
+@test "T11e a hanging hygiene read is bounded: preflight says unknown, the restart RESTORES with appnap=unknown" {
+  : > "$CC_RESTORE_HYGIENE_BIN.hang"
+  export CC_RESTORE_HYGIENE_TIMEOUT_S=1
+  run "$SUBJ" --restart-kitty --confirm "$KP" --no-wait
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"hygiene: unknown (kitty-hygiene.sh passed its 1 s bound)"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=RESTORED "*" appnap=unknown"* ]] || { echo "$output"; false; }
+}
+
+@test "T11f --after-crash skips the hygiene read of the new kitty: appnap=skipped" {
+  dead_kitty
+  run "$SUBJ" --after-crash
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=RESTORED restored=2/2"*" appnap=skipped"* ]] || { echo "$output"; false; }
+  ! grep -q -- '--only key,adopted,band' "$CC_RESTORE_HYGIENE_BIN.log" || false
 }

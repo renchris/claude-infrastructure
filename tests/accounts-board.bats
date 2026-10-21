@@ -677,10 +677,11 @@ for l in rows:
 # overlaps ticks, so the SessionStart board was withheld for hours.
 PLIST_KW="launchd/staged/com.claude.accounts-keepwarm.plist"
 
-@test "26 the keepwarm plist runs at Standard priority — Background starved the board for hours" {
+@test "26 the keepwarm plist runs at Interactive priority — Background starved the board for hours" {
   command -v plutil >/dev/null 2>&1 || skip "plutil is Darwin-only"
   run plutil -extract ProcessType raw "$REPO/$PLIST_KW"
-  [ "$output" = "Standard" ] || { echo "ProcessType is $output"; false; }
+  # Interactive since 2026-10-20 (LR_SUSTAINED_LOAD W7): Standard read 20T live, not the intended 31
+  [ "$output" = "Interactive" ] || { echo "ProcessType is $output"; false; }
   run plutil -extract LowPriorityIO raw "$REPO/$PLIST_KW"
   [ "$status" -ne 0 ] || { echo "LowPriorityIO is back: $output"; false; }
 }

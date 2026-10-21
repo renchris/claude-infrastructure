@@ -106,6 +106,47 @@ setup() {
   [[ "$output" == *"ALSO the kitty restart: kitty 0.48.3 patched build from ~/kitty-dev"* ]] || false
 }
 
+# ── B8 (K3): the reboot is also a kitty start. The stub EXITS 1 with key=absent, as the real
+#    `status` does on a WARN: under pipefail the old `status | grep -q` read that exit and never
+#    printed the hint (RED on the design's sketch; measured HINT-NOT-PRINTED, review S4). ──
+hyg_stub() { # $1=key state $2=exit code [$3=sleep]
+  printf '#!/bin/bash\necho "$*" >> "$0.log"\n%sprintf "key=%s\\nmain_kitties=1\\nverdict=WARN(key)\\n"\nexit %s\n' \
+    "${3:+sleep $3; }" "$1" "$2" > "$D/hyg"
+  chmod +x "$D/hyg"; export CC_REBOOT_PREP_HYGIENE_BIN="$D/hyg"
+}
+
+@test "T12 key=absent with a WARN exit prints the defaults write hint; the verdict stays READY" {
+  hyg_stub absent 1
+  run bash "$S"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"Before rebooting (it is also a kitty start): defaults write net.kovidgoyal.kitty NSAppSleepDisabled -bool YES"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=READY"* ]] || false
+  # the cheap verb, never the full status
+  [ "$(cat "$D/hyg.log")" = "status --only key,main,probe" ]
+}
+
+@test "T12b key=on says nothing; CC_KITTY_HYGIENE=off never calls the tool" {
+  hyg_stub on 0
+  run bash "$S"
+  [ "$status" -eq 0 ] || false
+  [[ "$output" != *"Before rebooting (it is also a kitty start)"* ]] || false
+  rm -f "$D/hyg.log"; hyg_stub absent 1
+  CC_KITTY_HYGIENE=off run bash "$S"
+  [ "$status" -eq 0 ] || false
+  [[ "$output" != *"Before rebooting (it is also a kitty start)"* ]] || false
+  [ ! -e "$D/hyg.log" ]
+}
+
+@test "T12c a stalled hygiene read is bounded as a whole: no hint, verdict READY, within the bound" {
+  hyg_stub absent 1 30
+  export CC_REBOOT_PREP_HYGIENE_S=1
+  s=$SECONDS; run bash "$S"; el=$(( SECONDS - s ))
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=READY"* ]] || false
+  [[ "$output" != *"Before rebooting (it is also a kitty start)"* ]] || false
+  [ "$el" -lt 20 ] || { echo "took ${el}s — the bound did not fire"; false; }
+}
+
 # ── The .start pair (W3 P3a-i): the two scripts run together. Until 2026-10-04 this script appended
 #    its kalloc reading to .start as a second line, and boot-resume.sh read the whole file as the
 #    epoch, so every roster this script wrote was skipped at the reboot it was written for. ──
