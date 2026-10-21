@@ -65,7 +65,11 @@ parent_hook() {
   [ "$(decision 'git reset --hard HEAD')" = "ASK" ]                          # unstaged tracked edit
   git -C "$FX" reset -q --hard HEAD~1
   [ "$(decision 'cd /tmp && git reset --hard origin/main')" = "ASK" ]
-  [ "$(decision "git -C $FX reset --hard origin/main")" = "ASK" ]
+  # 2026-10-20: a LITERAL `-C <dir>` / `cd <dir> &&` is tracked and judged on THAT repo's state
+  # (tests/permission-widening-2026-10-20.bats); FX is clean and behind origin/main here, so it passes.
+  [ "$(decision "git -C $FX reset --hard origin/main")" = "PASS" ]
+  [ "$(decision 'git -C "$R" reset --hard origin/main')" = "ASK" ]          # a variable dir
+  [ "$(decision "git -c core.x=1 -C $FX reset --hard origin/main")" = "ASK" ]  # other global option
   [ "$(decision 'GIT_DIR=/x/.git git reset --hard origin/main')" = "ASK" ]
   [ "$(decision 'git stash pop; git reset --hard origin/main')" = "ASK" ]
   [ "$(decision "bash -c 'git reset --hard origin/main'")" = "ASK" ]

@@ -6,6 +6,8 @@
 # unchanged. Kill switch: CC_VB_AGENT_RM_DENY=off.
 # Evidence and the verbatim reason: docs/research/hook-ask-confirmations-2026-09-28.md §7 (Round 5 —
 # a "tell your lead" sentence made subagents stop without salvaging, so the reason carries none).
+# The unpermitted target is /var/x/out, not /tmp/x/out: since 2026-10-20 /tmp outside the reserved
+# names is agent scratch and permitted (SCRATCH-TEMP CATEGORY, tests/permission-widening-2026-10-20.bats).
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
@@ -37,13 +39,13 @@ reason() { printf '%s' "$output" | jq -r '.hookSpecificOutput.permissionDecision
 REASON='Refused inside a subagent: no one can answer a prompt here. For a throwaway directory, create a fresh one in the same command: D=$(mktemp -d /tmp/<name>.XXXXXX) … rm -rf "$D". Do not reuse the old directory without clearing it — its old contents are still there; use a fresh mktemp directory. Do not delete it any other way (no find -delete, python, rsync or a script file). If the deletion is itself the task, stop and report the exact command to your lead.'
 
 @test "subagent: rm -rf on a non-artifact target is DENIED with the round-4 reason, verbatim" {
-  probe 'rm -rf /tmp/x/out' 'agent-abc123'
+  probe 'rm -rf /var/x/out' 'agent-abc123'
   [ "$(decision)" = deny ]
   [ "$(reason)" = "$REASON" ]
 }
 
 @test "subagent: the reason carries no 'tell your lead' sentence (round 5: 0/10 salvaged with it)" {
-  probe 'rm -rf /tmp/x/out' 'agent-abc123'
+  probe 'rm -rf /var/x/out' 'agent-abc123'
   ! reason | grep -qi 'tell your lead'
 }
 
@@ -58,17 +60,17 @@ REASON='Refused inside a subagent: no one can answer a prompt here. For a throwa
 }
 
 @test "main thread (no agent_id): the same rm still ASKS" {
-  probe 'rm -rf /tmp/x/out'
+  probe 'rm -rf /var/x/out'
   [ "$(decision)" = ask ]
 }
 
 @test "empty agent_id is the main thread: ASK" {
-  run bash -c 'jq -nc "{tool_name:\"Bash\", tool_input:{command:\"rm -rf /tmp/x/out\"}, agent_id:\"\"}" | "$0"' "$HOOK"
+  run bash -c 'jq -nc "{tool_name:\"Bash\", tool_input:{command:\"rm -rf /var/x/out\"}, agent_id:\"\"}" | "$0"' "$HOOK"
   [ "$(decision)" = ask ]
 }
 
 @test "teammate-shaped payload (no agent_id; --agent-id only in the command's argv): ASK" {
-  probe 'claude --agent-id w1@session-t -p hi; rm -rf /tmp/x/out'
+  probe 'claude --agent-id w1@session-t -p hi; rm -rf /var/x/out'
   [ "$(decision)" = ask ]
 }
 
@@ -79,20 +81,20 @@ REASON='Refused inside a subagent: no one can answer a prompt here. For a throwa
 
 @test "kill switch CC_VB_AGENT_RM_DENY=off restores the ask inside a subagent" {
   export CC_VB_AGENT_RM_DENY=off
-  probe 'rm -rf /tmp/x/out' 'agent-abc123'
+  probe 'rm -rf /var/x/out' 'agent-abc123'
   [ "$(decision)" = ask ]
 }
 
 @test "log_decision carries aid: the subagent's id on a deny, '-' on the main thread" {
-  probe 'rm -rf /tmp/x/out' 'agent-abc123'
+  probe 'rm -rf /var/x/out' 'agent-abc123'
   [ "$(jq -r '.aid' "$CC_VB_DECISION_LOG" | tail -1)" = agent-abc123 ]
   [ "$(jq -r '.decision' "$CC_VB_DECISION_LOG" | tail -1)" = deny ]
-  probe 'rm -rf /tmp/x/out'
+  probe 'rm -rf /var/x/out'
   [ "$(jq -r '.aid' "$CC_VB_DECISION_LOG" | tail -1)" = - ]
   [ "$(jq -r '.decision' "$CC_VB_DECISION_LOG" | tail -1)" = ask ]
 }
 
 @test "an agent_id holding a tab cannot shift the command into a metadata cell" {
-  run bash -c 'jq -nc "{tool_name:\"Bash\", tool_input:{command:\"rm -rf /tmp/x/out\"}, session_id:\"s\", agent_id:\"a\\tb\"}" | "$0"' "$HOOK"
+  run bash -c 'jq -nc "{tool_name:\"Bash\", tool_input:{command:\"rm -rf /var/x/out\"}, session_id:\"s\", agent_id:\"a\\tb\"}" | "$0"' "$HOOK"
   [ "$(decision)" = deny ]
 }

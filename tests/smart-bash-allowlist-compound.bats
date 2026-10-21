@@ -179,11 +179,15 @@ EOF')" = defer ]
   [ "$(decide "$HOOK" 'SP=/tmp/x; git push origin main')" = defer ]
 }
 
-@test "a redirect to a file disqualifies an otherwise read-only segment" {
+@test "a redirect to a file outside the project or agent scratch disqualifies the segment" {
   [ "$(decide "$HOOK" 'echo hi')" = allow ]
   [ "$(decide "$HOOK" 'echo hi > /etc/passwd')" = defer ]
-  [ "$(decide "$HOOK" 'echo hi >> notes.txt')" = defer ]
-  # ...but the null and std streams are not writes
+  [ "$(decide "$HOOK" 'echo hi >> ~/.zshrc')" = defer ]
+  # 2026-10-20 (permission widening, decision 29d62f1ad390): a redirect INTO the project is a
+  # write the operator always allowed, so it no longer defers. The full matrix of the write scope
+  # lives in tests/permission-widening-2026-10-20.bats.
+  [ "$(decide "$HOOK" 'echo hi >> notes.txt')" = allow ]
+  # ...and the null and std streams are not writes
   [ "$(decide "$HOOK" 'echo hi > /dev/null 2>&1')" = allow ]
 }
 
@@ -210,11 +214,16 @@ EOF')" = defer ]
   unset RM_SAFE_ALLOWLIST_DISABLED
 }
 
-@test "git read subcommands are allowed; git mutations are not" {
+@test "git read subcommands are allowed; the mutations that execute or discard are not" {
   [ "$(decide "$HOOK" 'git status && git log --oneline -5')" = allow ]
   [ "$(decide "$HOOK" 'git rev-parse HEAD')" = allow ]
-  [ "$(decide "$HOOK" 'git worktree add /tmp/x')" = defer ]
-  [ "$(decide "$HOOK" 'git config user.email x@y.z')" = defer ]
+  # 2026-10-20: local history operations (worktree add, a repo-local identity key) are allowed —
+  # tests/permission-widening-2026-10-20.bats. Their forced and executing forms still defer.
+  [ "$(decide "$HOOK" 'git worktree add /tmp/x')" = allow ]
+  [ "$(decide "$HOOK" 'git worktree add --force /tmp/x')" = defer ]
+  [ "$(decide "$HOOK" 'git config user.email x@y.z')" = allow ]
+  [ "$(decide "$HOOK" 'git config core.hooksPath /tmp/h')" = defer ]
+  [ "$(decide "$HOOK" 'git config --global user.email x@y.z')" = defer ]
   [ "$(decide "$HOOK" 'git config --get user.email')" = allow ]
 }
 

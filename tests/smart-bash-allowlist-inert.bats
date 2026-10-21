@@ -153,15 +153,19 @@ mutant() {
 }
 
 @test "SAFETY 3: the redirect scanner still sits ABOVE \`[\` and \`:\`" {
-  # `: > file` is the one way a no-op touches the filesystem; `[ … ] > file` likewise. Both must
-  # stay refused, which is only true because the new branches sit BELOW redirects_to_file().
-  [ "$(decide "$FIX" ': > out.txt')" = defer ]
-  [ "$(decide "$FIX" '[ -f file.ts ] > out.txt')" = defer ]
-  [ "$(decide "$FIX" '[ -f file.ts ] >> out.txt')" = defer ]
+  # `: > file` is the one way a no-op touches the filesystem; `[ … ] > file` likewise. Outside the
+  # write scope both must stay refused, which is only true because the new branches sit BELOW the
+  # redirect-target check.
+  [ "$(decide "$FIX" ': > /etc/out.txt')" = defer ]
+  [ "$(decide "$FIX" '[ -f file.ts ] > /etc/out.txt')" = defer ]
+  [ "$(decide "$FIX" '[ -f file.ts ] >> /etc/out.txt')" = defer ]
+  # 2026-10-20: INSIDE the project the same redirect is a write the operator always allows
+  # (tests/permission-widening-2026-10-20.bats).
+  [ "$(decide "$FIX" ': > out.txt')" = allow ]
 
   # MUTANT: hoist the two branches above the redirect check.
   local m; m="$(mutant noop_above_redirect)" || { echo "MUTANT UNAVAILABLE"; return 1; }
-  [ "$(decide "$m" ': > out.txt')" = allow ]
+  [ "$(decide "$m" ': > /etc/out.txt')" = allow ]
 }
 
 @test "SAFETY 4: a command that is ONLY comments is not allowed" {

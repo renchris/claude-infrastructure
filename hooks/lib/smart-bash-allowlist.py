@@ -41,6 +41,7 @@ a perishable fact cannot learn that it changed.
 import json
 import os
 import re
+import shlex
 import sys
 from urllib.parse import urlparse
 
@@ -594,6 +595,345 @@ def _scratch_path(p):
     return False
 
 
+# ── write scope (operator ruling 2026-10-20, decision 29d62f1ad390) ──────────────────────
+# The prompts this hook could not clear were dominated by WRITES the operator answers yes to
+# every time — `cat > f`, `echo x >> log`, `cp a b`, `git add` — 14-day census in
+# docs/research/permission-prompt-reduction-2026-10-20/REPORT.md. A write is admitted when its
+# target is in one of two places, decided on the RESOLVED path:
+#   · the project: the hook's cwd subtree, except `.git/` internals and the protected paths
+#     above, and never when that cwd is $HOME or `/` (then "the project" would be everything);
+#   · agent scratch: strictly under /private/tmp, outside the fleet's RESERVED top-level names
+#     (the same list hooks/validate-bash.sh's SCRATCH-TEMP category uses — dot-files, cc-*,
+#     claude-*, land-lock*, com.*, tmux-*, kitty-<digits>, launchd*, powerlog, Cursor-*), or
+#     inside THIS session's own harness scratchpad.
+# A RELATIVE target is resolved against every directory the command may be in when it runs —
+# the hook's cwd plus each literal `cd` target — and must pass against ALL of them; a `cd` this
+# cannot read literally makes every relative write undecidable. Before this, `cd /etc && sed -i
+# … hosts` judged `hosts` against the hook's own cwd.
+_SCRATCH_RESERVED = re.compile(
+    r"^(\.|cc-|claude|land-lock|com\.|tmux-|kitty-[0-9]|launchd|powerlog|Cursor-)|\.sock$"
+)
+_SESSION_ID = None  # set by main() from the payload, for the own-scratchpad case
+# Both set by decide() per command: the absolute dirs the command may run in (None when a `cd`
+# is undecidable), and the fence prefixes, so the git arm re-checks a `git -C x push` form.
+_CWD_CANDIDATES = None
+_FENCE_CUR = None
+_CD_RE = re.compile(r"(?:^|[;&|({\s])cd(?:[ \t]+([^;&|\s)]+))?(?=$|[;&|)\s])")
+
+
+def _cwd_candidates(cmd):
+    try:
+        cands = [os.getcwd()]
+    except OSError:
+        return None
+    if re.search(r"(^|[^\w-])(pushd|popd)(\s|$)", cmd):
+        return None
+    for m in _CD_RE.finditer(cmd):
+        t = m.group(1)
+        if not t:
+            return None  # a bare `cd` goes to $HOME
+        t = _unquote(t)
+        if "$" in t:
+            # `D=$(mktemp -d); cd $D` — a directory this command made (MKTEMP_CWD: everything
+            # relative under it is new), or a single literal binding; anything else is undecidable.
+            kind, t = _resolve_var_path(t)
+            if kind == "mktemp":
+                cands.append(MKTEMP_CWD)
+                continue
+            if kind is None:
+                return None
+        if t.startswith("~/"):
+            t = os.path.expanduser(t)
+        if not t.startswith("/") or any(c in t for c in "$`*?") or ".." in t:
+            return None
+        cands.append(t)
+    return cands
+
+
+MKTEMP_CWD = "\0mktemp-cwd"  # a cwd candidate that is a directory this command created
+
+
+def _scratch_write_ok(real):
+    if not real.startswith("/private/tmp/"):
+        return False
+    rest = real[len("/private/tmp/") :]
+    top = rest.split("/", 1)[0]
+    if not top or top in (".", ".."):
+        return False
+    if _SESSION_ID and re.fullmatch(r"[0-9a-fA-F-]{36}", _SESSION_ID):
+        own = re.match(r"^claude-[0-9]+/[^/]+/%s/." % re.escape(_SESSION_ID), rest)
+        if own:
+            return True
+    return not _SCRATCH_RESERVED.search(top)
+
+
+def _in_write_scope(p):
+    try:
+        real = os.path.realpath(p)
+        root = os.path.realpath(os.getcwd())
+    except OSError:
+        return False
+    if _protected(real):
+        return False
+    home = os.path.realpath(os.path.expanduser("~"))
+    if root not in ("/", home) and (
+        real == root or real.startswith(root.rstrip("/") + "/")
+    ):
+        return not re.search(r"(^|/)\.git(/|$)", real[len(root) :])
+    return _scratch_write_ok(real)
+
+
+def write_target_ok(tok):
+    """True when a file this command WRITES may be written without asking."""
+    p = _unquote(tok)
+    if p in ("/dev/null", "/dev/stdout", "/dev/stderr"):
+        return True
+    if "$" in p:
+        # `"$D/out.txt"` — resolved from this command's own single binding of D (a literal path,
+        # or a `$(mktemp -d)` it made); anything else stays a variable and is refused below.
+        kind, p = _resolve_var_path(p)
+        if kind == "mktemp":
+            return True
+        if kind is None:
+            return False
+    # A POSITIVE character class: `>(cmd)` (process substitution), a glob, a variable, `~` and
+    # quoting tricks all fall outside it, so none of them can be read as a path.
+    if not _PATH_CHARS.fullmatch(p or "") or ".." in p.split("/"):
+        return False
+    if _protected(p):
+        return False
+    if p.startswith("/"):
+        return _in_write_scope(p)
+    cands = _CWD_CANDIDATES
+    if not cands:
+        return False
+    return all(c == MKTEMP_CWD or _in_write_scope(os.path.join(c, p)) for c in cands)
+
+
+def redirect_targets(seg):
+    """The file targets of every output redirect in the segment, or None when unparseable.
+
+    Same quote-aware walk as redirects_to_file below; null/std streams and fd dups are omitted.
+    """
+    out, quote, i, n = [], None, 0, len(seg)
+    while i < n:
+        ch = seg[i]
+        if quote:
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            i += 1
+            continue
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == ">":
+            j = i + 1
+            while j < n and seg[j] in ">|":
+                j += 1
+            while j < n and seg[j] == " ":
+                j += 1
+            k = j
+            if k < n and seg[k] in "'\"":
+                q = seg[k]
+                k = seg.find(q, k + 1)
+                if k < 0:
+                    return None
+                k += 1
+            else:
+                while k < n and seg[k] not in " \t":
+                    k += 1
+            t = seg[j:k]
+            if not t:
+                return None
+            if not _SAFE_REDIRECT_TARGET.match(t):
+                out.append(t)
+            i = k
+            continue
+        i += 1
+    return out
+
+
+def strip_redirects(seg):
+    """The segment with every redirection operator and its target removed, quote-aware.
+
+    Quote-aware for the same reason as the scanners: a `>` inside an awk program or a grep
+    pattern is DATA and must survive, or `awk '{print > "f"}'` would lose its write form.
+    """
+    out, quote, i, n = [], None, 0, len(seg)
+    while i < n:
+        ch = seg[i]
+        if quote:
+            out.append(ch)
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "\\":
+            out.append(seg[i : i + 2])
+            i += 2
+            continue
+        if ch in "<>" or (ch in "0123456789&" and i + 1 < n and seg[i + 1] == ">"):
+            j = i + 1
+            while j < n and seg[j] in "<>|&0123456789-":
+                j += 1
+            while j < n and seg[j] == " ":
+                j += 1
+            k = j
+            if k < n and seg[k] in "'\"":
+                e = seg.find(seg[k], k + 1)
+                k = n if e < 0 else e + 1
+            else:
+                while k < n and seg[k] not in " \t":
+                    k += 1
+            # `2>&1`, `>&2`: the operator scan above already consumed the fd, nothing follows
+            if seg[i:j].rstrip().endswith(("&1", "&2", "&-")) or (
+                j > i and seg[j - 1] in "0123456789-" and "&" in seg[i:j]
+            ):
+                k = j
+            out.append(" ")
+            i = k
+            continue
+        out.append(ch)
+        i += 1
+    return " ".join("".join(out).split())
+
+
+_PATH_CHARS = re.compile(r"[A-Za-z0-9_./@%+=:,-]+")
+
+
+# ── rm inside a compound: the same scratch category as validate-bash.sh ──────────────────
+# rm-safe-allowlist.sh (below) already admits a literal /tmp target; what it cannot see is the
+# spelling agents actually write, `T=$(mktemp -d …) … rm -rf "$T"` or `D=/tmp/x; … rm -rf "$D"`.
+# validate-bash.sh resolves those (SAME-COMMAND VARIABLE RESOLUTION, SELF-CREATED-TEMP) and, since
+# 2026-10-20, permits agent scratch outside the reserved names; this is the matching ALLOW, so the
+# deletion it no longer asks about is not handed to the classifier instead. validate-bash's own
+# verdict still applies on top — its ask outranks this allow.
+_CMD_ORIG = (
+    None  # set by decide(): the heredoc-free command before substitution extraction
+)
+_DEEP_ARTIFACT = re.compile(
+    r"(^|/)(__pycache__|node_modules|\.next|\.turbo|\.pytest_cache|\.mypy_cache|\.ruff_cache"
+    r"|\.tox|htmlcov)(/|$)"
+)
+_MKTEMP_DIR_SUBST = re.compile(
+    r"^\$\(\s*(?:/usr/bin/)?mktemp\s+(?:-[a-zA-Z]*d[a-zA-Z]*|--directory)(?:\s+[^;&|$`()\s]+)*\s*\)$"
+)
+
+
+def _assigned_value(name):
+    """The one value this command binds NAME to, or None when it binds it zero or several ways."""
+    text = _CMD_ORIG or ""
+    vals = re.findall(
+        r"(?:^|[\s;&|(])%s=(\"\$\([^()]*\)\"|\$\([^()]*\)|\"[^\"]*\"|'[^']*'|[^\s;&|]*)"
+        % re.escape(name),
+        text,
+    )
+    if len(set(vals)) != 1:
+        return None
+    if re.search(
+        r"\b(read|mapfile|readarray)\b[^;&|\n]*\b%s\b|\bfor\s+%s\s+in\b|\b%s\+="
+        % ((re.escape(name),) * 3),
+        text,
+    ):
+        return None  # bound out of sight as well
+    return vals[0]
+
+
+def _has_socket(path, depth=4):
+    import stat
+
+    base = path.rstrip("/").count("/")
+    for root, dirs, files in os.walk(path):
+        if root.count("/") - base >= depth:
+            dirs[:] = []
+        for f in files + dirs:
+            try:
+                if stat.S_ISSOCK(os.lstat(os.path.join(root, f)).st_mode):
+                    return True
+            except OSError:
+                continue
+    return False
+
+
+def _resolve_var_path(t):
+    """("mktemp", None) for a path under a dir this command's `$(mktemp -d)` made; ("path", p)
+    for `$NAME[/rest]` bound once to a literal; (None, None) when the binding is undecidable.
+    A token without a leading variable comes back unchanged as ("path", t)."""
+    m = re.fullmatch(
+        r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?((?:/[A-Za-z0-9_.@%+=:,-]+)*)/?", t
+    )
+    if not m:
+        return ("path", t) if "$" not in t else (None, None)
+    v = _assigned_value(m.group(1))
+    if v is None or ".." in m.group(2).split("/"):
+        return None, None
+    vv = v[1:-1] if len(v) >= 2 and v[0] == v[-1] == '"' else v
+    if _MKTEMP_DIR_SUBST.match(vv):
+        return (
+            "mktemp",
+            None,
+        )  # a directory THIS command created, wherever mktemp put it
+    if v.startswith("'") or "$" in vv or "`" in vv:
+        return None, None
+    return "path", _unquote(v) + m.group(2)
+
+
+def _rm_scratch_target(tok):
+    kind, t = _resolve_var_path(tok)
+    if kind == "mktemp":
+        return True
+    if kind is None:
+        return False
+    if not _PATH_CHARS.fullmatch(t or "") or ".." in t.split("/"):
+        return False
+    if not t.startswith("/") and _DEEP_ARTIFACT.search(t):
+        return True
+    if t.startswith("/"):
+        cands = [t]
+    elif _CWD_CANDIDATES:
+        cands = [os.path.join(c, t) for c in _CWD_CANDIDATES if c != MKTEMP_CWD]
+    else:
+        return False
+    for c in cands:
+        real = os.path.realpath(c)
+        if not _scratch_write_ok(real):
+            return False
+        if os.path.isdir(real) and _has_socket(real):
+            return False
+    return True
+
+
+def _rm_scratch_segment(seg):
+    # The rm hook's kill switch disarms this extension of it as well (smart-bash-allowlist-compound
+    # "rm is DELEGATED"): disarming the owner must not leave a second path that still allows.
+    if os.environ.get("RM_SAFE_ALLOWLIST_DISABLED") == "1":
+        return None
+    argv = _argv(seg)
+    if not argv:
+        return None
+    targets = []
+    for a in argv[1:]:
+        if a == "--" or a in ("--recursive", "--force", "--verbose", "--dir"):
+            continue
+        if a.startswith("-"):
+            if not re.fullmatch(r"-[rfRdv]+", a):
+                return None
+            continue
+        targets.append(a)
+    if targets and all(_rm_scratch_target(t) for t in targets):
+        return "rm: agent scratch target(s), resolved"
+    return None
+
+
 _RM_HOOK = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "rm-safe-allowlist.sh"
 )
@@ -895,6 +1235,529 @@ def _unquote(tok):
     return tok
 
 
+# ── 2026-10-20 widening: wrappers, local git, scoped writes, inert builtins ───────────────
+# Census and evidence counts: docs/research/permission-prompt-reduction-2026-10-20/REPORT.md.
+# Every arm is a POSITIVE grammar: an unrecognised flag, a variable where a path must be, or a
+# form that executes something (`rebase -x`, `clone ext::`, `-c core.*`, `push --receive-pack`)
+# defers to the normal permission flow exactly as before.
+WRAPPERS = {"timeout", "time", "nice", "nohup", "taskpolicy"}
+_DURATION = re.compile(r"^[0-9]+(\.[0-9]+)?[smhd]?$")
+
+
+def _unwrap(v, p):
+    """The wrapped command's argv for a WRAPPERS verb, or None when the grammar is not plain."""
+    i = 1
+    if v == "timeout":
+        while i < len(p) and p[i].startswith("-"):
+            if p[i] in ("-s", "-k", "--signal", "--kill-after") and i + 1 < len(p):
+                i += 2
+            elif p[i] in ("--foreground", "--preserve-status", "-v", "--verbose") or p[
+                i
+            ].startswith(("--signal=", "--kill-after=")):
+                i += 1
+            else:
+                return None
+        if i >= len(p) or not _DURATION.match(p[i]):
+            return None
+        i += 1
+    elif v == "time":
+        if i < len(p) and p[i] == "-p":
+            i += 1
+    elif v == "nice":
+        if i + 1 < len(p) and p[i] == "-n":
+            i += 2
+        elif i < len(p) and re.match(r"^-[0-9]+$", p[i]):
+            i += 1
+    elif v == "taskpolicy":
+        while i < len(p) and p[i].startswith("-"):
+            if p[i] in ("-c", "-p", "-t", "-l") and i + 1 < len(p):
+                i += 2
+            elif p[i] in ("-b", "-B", "-d", "-g", "-a"):
+                i += 1
+            else:
+                return None
+    rest = p[i:]
+    return rest or None
+
+
+def _argv(seg):
+    """The segment's argv WITHOUT its redirections. Every file a redirect writes was judged at the
+    top of allowed_segment; what is left (`2>&1`, `>/dev/null`) is not an argument, and leaving it
+    in made `git push origin HEAD:main 2>&1` read `2>&1` as a refspec (175 refused segments)."""
+    try:
+        return shlex.split(strip_redirects(seg), posix=True)
+    except ValueError:
+        return None
+
+
+_GIT_SAFE_CONFIG = re.compile(
+    r"^(user\.(name|email)|commit\.gpgsign|tag\.gpgsign|init\.defaultbranch|advice\.[a-z.]+"
+    r"|color\.[a-z.]+|protocol\.file\.allow|pull\.(rebase|ff)|rerere\.enabled"
+    r"|merge\.conflictstyle|safe\.directory|gc\.auto|maintenance\.auto)$",
+    re.I,
+)
+_GIT_REF = re.compile(r"^[A-Za-z0-9_./@{}^~-]+$")
+GIT_READ_EXTRA = {
+    "cherry",
+    "ls-remote",
+    "range-diff",
+    "show-ref",
+    "show-branch",
+    "fsck",
+}
+# Local history operations. Every one leaves the previous state reachable through the reflog
+# or the working tree, which is why the operator answers yes to them; the lossy forms of
+# reset/restore are decided by hooks/validate-bash.sh's GIT-OWNERSHIP block, whose `ask`
+# outranks this allow (hook decisions merge deny > ask > allow).
+GIT_LOCAL_WRITE = {
+    "add",
+    "commit",
+    "switch",
+    "rebase",
+    "merge",
+    "cherry-pick",
+    "revert",
+    "stash",
+    "clone",
+    "init",
+    "worktree",
+    "pull",
+    "tag",
+    "branch",
+    "mv",
+    "rm",
+    "notes",
+    "apply",
+    "am",
+    "config",
+    "reset",
+    "restore",
+    "checkout",
+    "push",
+}
+_PUSH_FLAGS = {
+    "-q",
+    "--quiet",
+    "-u",
+    "--set-upstream",
+    "--porcelain",
+    "-v",
+    "--verbose",
+    "--tags",
+    "--follow-tags",
+    "--atomic",
+    "--no-progress",
+    "--progress",
+    "-n",
+    "--dry-run",
+}
+
+
+def _git_norm(argv):
+    """(sub, args) after peeling the harmless global options, or None when one re-aims git."""
+    i = 1
+    while i < len(argv) and argv[i].startswith("-"):
+        t = argv[i]
+        if t == "-C" and i + 1 < len(argv):
+            # Which repo a LOCAL history operation runs in does not change what it can do, so a
+            # variable dir (`git -C "$W"`) is fine here; one argv token, nothing that executes.
+            d = argv[i + 1]
+            if not d or "`" in d or "$(" in d:
+                return None
+            i += 2
+        elif t == "-c" and i + 1 < len(argv):
+            if not _GIT_SAFE_CONFIG.match(argv[i + 1].split("=", 1)[0]):
+                return None  # core.pager / core.hooksPath / alias.* run programs
+            i += 2
+        elif t in ("--no-pager", "-P", "--no-optional-locks", "--literal-pathspecs"):
+            i += 1
+        elif t in ("--version", "--help"):
+            # `git --version`: read-only, judged as the `version` subcommand
+            return "version", []
+        else:
+            return None  # --git-dir, --work-tree, --exec-path … re-aim or execute
+    if i >= len(argv):
+        return None
+    return argv[i], argv[i + 1 :]
+
+
+def _push_ok(args):
+    words = []
+    for a in args:
+        if a.startswith("-"):
+            if a not in _PUSH_FLAGS:
+                return False  # --force*, -f, --mirror, --delete, --prune, --receive-pack, --exec
+            continue
+        words.append(a)
+    if not words:
+        return True
+    remote = words[0]
+    if "::" in remote or not _PATH_CHARS.fullmatch(remote):
+        return False
+    for r in words[1:]:
+        if r.startswith(("+", ":")) or not _GIT_REF.fullmatch(r.replace(":", "")):
+            return False
+    return True
+
+
+def _git_sub_ok(sub, args):
+    flags = [a for a in args if a.startswith("-")]
+    words = [a for a in args if not a.startswith("-")]
+    if sub == "push":
+        return _push_ok(args)
+    if sub == "add":
+        return not any(
+            f in ("-f", "--force") or re.fullmatch(r"-[A-Za-z]*f[A-Za-z]*", f)
+            for f in flags
+        )
+    if sub == "commit":
+        return True  # --no-verify is refused by DANGER on the whole command
+    if sub == "switch":
+        return not any(f in ("-f", "--force", "--discard-changes") for f in flags)
+    if sub == "checkout":
+        # `checkout <x>` may be a PATH and discard its changes; only the branch-making forms pass.
+        return (
+            any(f in ("-b", "-B", "--detach", "--orphan") for f in flags)
+            and "--" not in args
+        )
+    if sub == "rebase":
+        return not any(
+            f in ("-x", "--exec", "-i", "--interactive")
+            or f.startswith(("--exec=", "-x"))
+            for f in flags
+        )
+    if sub == "merge":
+        return not any(
+            f in ("-s", "--strategy") or f.startswith("--strategy=") for f in flags
+        )
+    if sub == "stash":
+        # drop is decided by validate-bash (a tag-selected entry only); pop and clear never pass
+        return not words or words[0] in (
+            "push",
+            "save",
+            "list",
+            "show",
+            "apply",
+            "create",
+            "drop",
+        )
+    if sub == "clone":
+        if any(
+            f
+            in (
+                "-c",
+                "--config",
+                "-u",
+                "--upload-pack",
+                "--template",
+                "--separate-git-dir",
+            )
+            or f.startswith(
+                ("--config=", "--upload-pack=", "--template=", "--separate-git-dir=")
+            )
+            for f in flags
+        ):
+            return False
+        if not words or "::" in words[0]:
+            return False  # ext:: and other transport helpers run programs
+        return len(words) < 2 or _new_dir_ok(words[-1])
+    if sub == "init":
+        return all(_new_dir_ok(w) for w in words)
+    if sub == "worktree":
+        if not words:
+            return False
+        if words[0] == "add":
+            return not any(f in ("-f", "--force") for f in flags)
+        if words[0] == "remove":
+            return not any(f in ("-f", "--force") for f in flags)
+        return words[0] in ("list", "prune", "lock", "unlock", "repair", "move")
+    if sub == "rm":
+        return "--cached" in flags or not any(f in ("-f", "--force") for f in flags)
+    if sub == "config":
+        if any(f in ("--global", "--system", "--file", "-f", "--blob") for f in flags):
+            return False
+        if any(
+            f in ("--get", "--get-all", "--get-regexp", "--list", "-l") for f in flags
+        ):
+            return True
+        return bool(words) and bool(_GIT_SAFE_CONFIG.match(words[0]))
+    return True  # pull, tag, branch, notes, apply, am, cherry-pick, revert, mv, reset, restore
+
+
+def _git_segment(seg):
+    argv = _argv(seg)
+    if not argv:
+        return None
+    g = _git_norm(argv)
+    if g is None:
+        return None
+    sub, args = g
+    canon = " ".join(["git", sub] + args)
+    if _FENCE_CUR and crosses_fence(canon, _FENCE_CUR):
+        return None  # `git -C x push` must meet the same fence `git push` does
+    if sub in GIT_READ or sub in GIT_READ_EXTRA:
+        guard = GIT_SUBCOMMAND_READ_ONLY.get(sub)
+        if guard is None or guard.match(" ".join(args)):
+            return f"git {sub}: read-only"
+        if sub not in GIT_LOCAL_WRITE and sub not in (
+            "branch",
+            "tag",
+            "stash",
+            "worktree",
+        ):
+            return None
+    if sub in GIT_LOCAL_WRITE or sub in ("branch", "tag", "stash", "worktree"):
+        if _git_sub_ok(sub, args):
+            return f"git {sub}: local history operation (reflog-recoverable)"
+    return None
+
+
+_SECRET_SOURCE = re.compile(
+    r"(^|/)\.(ssh|aws|gnupg|netrc|docker|kube|config/gh)(/|$)|(^|/)id_[a-z0-9]+$|\.pem$|\.p12$"
+    r"|(^|/)\.env($|\.)|keychain|(^|/)credentials(\.json)?$|\.claude[^/]*/\.credentials"
+)
+_INERT_BUILTINS = {
+    "read",
+    "continue",
+    "break",
+    "exit",
+    "return",
+    "shift",
+    "wait",
+    "umask",
+    "unset",
+}
+READ_ONLY_EXTRA = {
+    "uptime",
+    "shellcheck",
+    "nproc",
+    "getconf",
+    "vm_stat",
+    "sha256sum",
+    "ioreg",
+}
+
+
+def _new_dir_ok(tok):
+    """A clone/init destination: in the write scope, or a path that does not exist yet under
+    ~/Development (a NEW directory — git refuses a non-empty existing one, so nothing is lost)."""
+    if write_target_ok(tok):
+        return True
+    kind, p = _resolve_var_path(_unquote(tok))
+    if kind == "mktemp":
+        return True
+    if (
+        kind is None
+        or not _PATH_CHARS.fullmatch((p or "").lstrip("~"))
+        or ".." in p.split("/")
+    ):
+        return False
+    p = os.path.expanduser(p)
+    dev = os.path.realpath(os.path.expanduser("~/Development")) + "/"
+    return (
+        os.path.isabs(p)
+        and not os.path.exists(p)
+        and os.path.realpath(p).startswith(dev)
+    )
+
+
+_TAR_LETTERS = set("cxtvzjJfpkCOPa")
+
+
+def _archive_segment(v, seg):
+    """tar / unzip / split, with every file they WRITE inside the write scope."""
+    argv = _argv(seg)
+    if not argv:
+        return None
+    a = argv[1:]
+    if v == "unzip":
+        dest, i = ".", 0
+        while i < len(a):
+            if a[i] == "-d" and i + 1 < len(a):
+                dest, i = a[i + 1], i + 2
+            elif a[i] in (
+                "-q",
+                "-qq",
+                "-o",
+                "-n",
+                "-j",
+                "-l",
+                "-t",
+                "-v",
+                "-oq",
+                "-qo",
+            ):
+                i += 1
+            elif a[i].startswith("-"):
+                return None
+            else:
+                i += 1
+        return (
+            "unzip: extracts into the project or agent scratch"
+            if write_target_ok(dest)
+            else None
+        )
+    if v == "split":
+        words, i = [], 0
+        while i < len(a):
+            if a[i] in ("-l", "-b", "-n", "-a") and i + 1 < len(a):
+                i += 2
+            elif a[i] in ("-d",) or re.fullmatch(r"-[0-9]+", a[i]):
+                i += 1
+            elif a[i].startswith("-"):
+                return None
+            else:
+                words.append(a[i])
+                i += 1
+        ok = len(words) == 2 and write_target_ok(words[1] + "x")
+        return "split: pieces under the project or agent scratch" if ok else None
+    # tar: one leading mode bundle (with or without `-`), then -C/-f with values and paths.
+    if not a:
+        return None
+    mode = a[0].lstrip("-")
+    if not mode or set(mode) - _TAR_LETTERS or len(set(mode) & set("cxt")) != 1:
+        return None
+    rest, archive, dest, i = a[1:], None, ".", 0
+    if "f" in mode and rest:
+        archive, rest = rest[0], rest[1:]
+    while i < len(rest):
+        t = rest[i]
+        if t in ("-C", "--directory") and i + 1 < len(rest):
+            dest, i = rest[i + 1], i + 2
+        elif t == "-f" and i + 1 < len(rest):
+            archive, i = rest[i + 1], i + 2
+        elif re.fullmatch(r"--strip-components=[0-9]+|-v|-z|-p|--exclude=[^ ]+", t):
+            i += 1
+        elif t.startswith("-"):
+            return None  # -I / --use-compress-program / --to-command / --checkpoint-action …
+        else:
+            i += 1
+    if "c" in mode:
+        ok = archive is not None and write_target_ok(archive)
+    elif "x" in mode:
+        ok = write_target_ok(dest)
+    else:
+        ok = True  # t: lists only
+    return "tar: writes under the project or agent scratch" if ok else None
+
+
+def _write_verb_segment(v, seg):
+    """Reason, None (defer), or False when this verb is not one of the scoped write verbs."""
+    if v in _INERT_BUILTINS:
+        return f"{v}: shell builtin, runs nothing"
+    if v in READ_ONLY_EXTRA:
+        return f"{v}: read-only, no redirect"
+    if v == "command":
+        a = seg.split()
+        return (
+            "command -v: lookup only" if len(a) >= 2 and a[1] in ("-v", "-V") else None
+        )
+    if v in ("local", "declare", "typeset"):
+        a = seg.split()
+        if any(x in ("-f", "-F") for x in a[1:]):
+            return "declare -f: lists functions"
+        return (
+            f"{v}: variable declaration"
+            if all(
+                re.match(r"^(-[a-zA-Z]+|[A-Za-z_][A-Za-z0-9_]*(=.*)?)$", x)
+                for x in a[1:]
+            )
+            else None
+        )
+    if v in ("tar", "unzip", "split"):
+        return _archive_segment(v, seg)
+    if v not in ("tee", "cp", "mv", "touch", "mktemp", "ln"):
+        return False
+    argv = _argv(seg)
+    if not argv:
+        return None
+    flags = [a for a in argv[1:] if a.startswith("-")]
+    words = [a for a in argv[1:] if not a.startswith("-")]
+    if v == "tee":
+        if any(f not in ("-a", "--append", "-i") for f in flags):
+            return None
+        return (
+            "tee: files under the project or agent scratch"
+            if all(write_target_ok(w) for w in words)
+            else None
+        )
+    if v == "touch":
+        if flags or not words:
+            return None
+        return (
+            "touch: files under the project or agent scratch"
+            if all(write_target_ok(w) for w in words)
+            else None
+        )
+    if v == "mktemp":
+        if any(not re.fullmatch(r"-[dqut]+", f) for f in flags) or len(words) > 1:
+            return None
+        if "-t" in "".join(flags):
+            return None  # -t takes a prefix in TMPDIR; rare, keep it out
+        return (
+            "mktemp: creates a NEW unique file or directory"
+            if (not words or write_target_ok(words[0]))
+            else None
+        )
+    if v == "ln":
+        if any(
+            f not in ("-s", "-f", "-n", "-sf", "-sfn", "-snf", "-fs", "-h")
+            for f in flags
+        ):
+            return None
+        return (
+            "ln: link created under the project or agent scratch"
+            if (len(words) == 2 and write_target_ok(words[-1]))
+            else None
+        )
+    ok_flags = {
+        "-r",
+        "-R",
+        "-p",
+        "-f",
+        "-a",
+        "-n",
+        "-v",
+        "-X",
+        "-L",
+        "-P",
+        "-H",
+        "-rf",
+        "-Rf",
+        "-fR",
+        "-fr",
+        "-rp",
+        "-Rp",
+        "-pR",
+        "-av",
+        "-rv",
+        "-Rv",
+    }
+    if any(f not in ok_flags for f in flags) or len(words) < 2:
+        return None
+    if v == "cp":
+        srcs, dst = words[:-1], words[-1]
+        resolved = []
+        for s in srcs:
+            kind, r = _resolve_var_path(s) if "$" in s else ("path", s)
+            if kind is None or "`" in s:
+                return None
+            resolved.append(r or "")
+        if any(_SECRET_SOURCE.search(s) or _protected(s) for s in resolved):
+            return None
+        return (
+            "cp: destination under the project or agent scratch"
+            if write_target_ok(dst)
+            else None
+        )
+    # mv REMOVES its sources, so every path it names must be in scope.
+    return (
+        "mv: source and destination under the project or agent scratch"
+        if all(write_target_ok(w) for w in words)
+        else None
+    )
+
+
 def allowed_segment(seg, sole=False):
     """The positive whitelist. Returns a reason string, or None to defer.
 
@@ -904,7 +1767,41 @@ def allowed_segment(seg, sole=False):
     """
     v = verb(seg)
     if v is None:
+        # `done < list` leaves a segment that is only an INPUT redirect: it reads a file and runs
+        # nothing. Anything else left after the redirects are removed is judged as usual.
+        if seg.lstrip().startswith("<") and not redirects_to_file(seg):
+            rest = strip_redirects(seg)
+            return (
+                allowed_segment(rest, sole) if rest else "input redirect: reads a file"
+            )
         return None
+
+    # Redirect targets are judged FIRST, for every arm below. A redirect into the project or agent
+    # scratch is a write the operator always allows (write scope, above); anything else defers.
+    # The verb is then judged with its redirects removed. Before 2026-10-20 the git-commit, sed
+    # and chmod arms returned ahead of the redirect scanner, so `git commit -m x > anywhere`
+    # was admitted with its redirect unexamined.
+    if redirects_to_file(seg):
+        targets = redirect_targets(seg)
+        if targets is None or not all(write_target_ok(t) for t in targets):
+            return None
+        inner = allowed_segment(strip_redirects(seg), sole)
+        return (
+            None
+            if inner is None
+            else inner + "; redirect into the project or agent scratch"
+        )
+
+    # A wrapper that only changes HOW a command runs (a time limit, a priority, a QoS clamp)
+    # is judged by the command it runs. They sit in DISPATCHERS for the general case; these
+    # five have a fixed argv grammar, so the wrapped command is recoverable exactly.
+    if v in WRAPPERS:
+        inner = _unwrap(v, seg.split())
+        if not inner:
+            return None
+        r = allowed_segment(" ".join(inner), sole)
+        return None if r is None else f"{v} → {r}"
+
     if v in DISPATCHERS:
         return None  # something else chooses the real command — never decide
 
@@ -917,9 +1814,12 @@ def allowed_segment(seg, sole=False):
 
     parts = seg.split()
 
-    # git commit — a local operation. --no-verify is already refused by DANGER.
-    if v == "git" and len(parts) >= 2 and parts[1] == "commit":
-        return "git commit: local commit, no --no-verify"
+    if v == "git":
+        return _git_segment(seg)
+
+    r = _write_verb_segment(v, seg)
+    if r is not False:
+        return r
 
     # sed -n — read-only paging. -n suppresses auto-print, so sed emits only what an
     # explicit p/=/l prints. Validated by POSITIVE whitelist of the script shape: a
@@ -962,7 +1862,7 @@ def allowed_segment(seg, sole=False):
         # segment of a compound, where its own whole-command anchor makes it inert.
         if sole:
             return None
-        return _rm_hook_allows(seg)
+        return _rm_hook_allows(seg) or _rm_scratch_segment(seg)
 
     # ── everything below is read-only, so a redirect disqualifies it outright ────────
     if redirects_to_file(seg):
@@ -1121,6 +2021,13 @@ def decide(cmd, _fence=None, _depth=0):
     cmd, heredocs_ok = strip_heredocs(cmd)
     if not heredocs_ok:
         return None, "unterminated heredoc"
+    if _depth == 0:
+        # Per-command context for the write-scope and git arms. Module globals rather than
+        # parameters so allowed_segment keeps its signature (tests/sba-mutate.py drives it).
+        global _CWD_CANDIDATES, _FENCE_CUR, _CMD_ORIG
+        _CMD_ORIG = cmd  # first: the cwd candidates resolve `cd $D` through it
+        _CWD_CANDIDATES = _cwd_candidates(cmd)
+        _FENCE_CUR = fence
 
     # Judge every command substitution FIRST, with the same rules and the same fence.
     if _depth >= MAX_SUBST_DEPTH:
@@ -1141,7 +2048,9 @@ def decide(cmd, _fence=None, _depth=0):
     # normalize() peels leading `VAR=` assignments, so an env proxy or a relocated curlrc on a curl
     # command would be invisible to the curl arm. Either one moves where curl connects: defer.
     if any(verb(s) == "curl" for s in judgeable) and (
-        _ssrf is None or _ssrf.ENV_PROXY_RE.search(cmd) or _ssrf.ENV_CURLRC_RE.search(cmd)
+        _ssrf is None
+        or _ssrf.ENV_PROXY_RE.search(cmd)
+        or _ssrf.ENV_CURLRC_RE.search(cmd)
     ):
         return None, "curl with a proxy or curlrc environment override"
     reasons, judged = [], 0
@@ -1166,7 +2075,10 @@ def main():
     except Exception:
         return 0  # malformed input — defer, never guess
     cmd = ""
+    global _SESSION_ID
     if isinstance(payload, dict):
+        sid = payload.get("session_id")
+        _SESSION_ID = sid if isinstance(sid, str) else None
         ti = payload.get("tool_input")
         if isinstance(ti, dict):
             cmd = ti.get("command") or ""

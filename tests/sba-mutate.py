@@ -71,11 +71,15 @@ def noop_above_redirect(s):
         '        return ": no-op builtin, read-only, no redirect"\n'
     )
     s = sub(s, branches, "", "the [ / : branches (removal)")
+    # Since 2026-10-20 the redirect check is the FIRST thing allowed_segment does (every arm's
+    # redirect targets are judged there), so that is what the branches are hoisted above.
     return sub(
         s,
-        "    parts = seg.split()\n",
-        "    parts = seg.split()\n" + branches,
-        "the [ / : branches (hoist above redirects_to_file)",
+        "    # Redirect targets are judged FIRST",
+        "    parts = seg.split()\n"
+        + branches
+        + "    # Redirect targets are judged FIRST",
+        "the [ / : branches (hoist above the redirect-target check)",
     )
 
 
@@ -94,10 +98,10 @@ def comment_as_verb(s):
     # which reads as a guarded case and guards nothing. Measured: the first draft did exactly that.
     return sub(
         s,
-        "    v = verb(seg)\n    if v is None:\n        return None\n",
+        "    v = verb(seg)\n    if v is None:\n",
         '    if seg.startswith("#"):\n'
         '        return "comment"\n'
-        "    v = verb(seg)\n    if v is None:\n        return None\n",
+        "    v = verb(seg)\n    if v is None:\n",
         "comment admitted as a verb, above the v-is-None return",
     )
 

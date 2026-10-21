@@ -1855,6 +1855,48 @@ fi
 
 # ── Warn (ask): destructive but sometimes intentional ────────────────
 
+# ── AGENT SCRATCH (shared by GIT-OWNERSHIP and the rm SCRATCH-TEMP category below) ─────────────
+# Strictly under /private/tmp, outside the RESERVED top-level names the fleet's own live state
+# uses, and holding no socket. Why the location is generalized at all, and why these names: the
+# SCRATCH-TEMP CATEGORY comment in the rm section. The same reserved list lives in
+# hooks/lib/smart-bash-allowlist.py (_SCRATCH_RESERVED); tests/permission-widening-2026-10-20.bats
+# pins the two to the same verdicts.
+_SCRATCH_TEMP_RESERVED='^(\.|cc-|claude|land-lock|com\.|tmux-|kitty-[0-9]|launchd|powerlog|Cursor-)'
+is_scratch_temp_path() {  # <absolute path, already resolved> → 0 iff agent scratch under /private/tmp
+  local stp="$1" rest top
+  [[ "${CC_VB_SCRATCH_TEMP:-on}" != "off" ]] || return 1
+  case "$stp" in /private/tmp/?*) ;; *) return 1 ;; esac
+  rest=${stp#/private/tmp/}
+  top=${rest%%/*}
+  case "$top" in ''|.|..) return 1 ;; esac
+  [[ "$top" =~ $_SCRATCH_TEMP_RESERVED ]] && return 1
+  case "$top" in *.sock) return 1 ;; esac
+  # A live listener anywhere below the target is infrastructure, whatever it is called.
+  # -quit stops at the first hit; maxdepth bounds the walk.
+  if [[ -e "$stp" ]]; then
+    [[ -z "$(find "$stp" -maxdepth 4 -type s -print -quit 2>/dev/null)" ]] || return 1
+  fi
+  return 0
+}
+_vb_realpath() {  # <absolute path> → resolved: the deepest EXISTING ancestor via cd -P, rest re-attached
+  local p="$1" rest="" b
+  case "$p" in /*) ;; *) return 1 ;; esac
+  case "$p" in *'$'*|*'`'*|*'*'*|*'?'*|*'~'*) return 1 ;; esac
+  while [[ ! -d "$p" && "$p" != "/" ]]; do
+    b=${p##*/}
+    case "$b" in ''|.|..) return 1 ;; esac
+    rest="$b${rest:+/$rest}"
+    p=${p%/*}; [[ -n "$p" ]] || p=/
+  done
+  p=$(cd -P "$p" 2>/dev/null && pwd) || return 1
+  printf '%s%s' "${p%/}" "${rest:+/$rest}"
+}
+is_scratch_temp_dir() {  # <absolute dir> → 0 iff it resolves to agent scratch
+  local r
+  r=$(_vb_realpath "$1") || return 1
+  [[ -n "$r" ]] && is_scratch_temp_path "$r"
+}
+
 # ── GIT-OWNERSHIP BEGIN ─────────────────────────────────────────────────────────────────────────
 # `git reset --hard`, `git stash drop` and `git restore` are decided HERE, on the repo's live state,
 # rather than by the blanket `permissions.ask` rules `Bash(git reset --hard:*)`,
@@ -1875,17 +1917,36 @@ fi
 #   restore       `--staged` without `--worktree`: it unstages, and the working tree is untouched.
 # A mention (a commit message, an echo) is not an invocation and no longer asks; a nested shell,
 # eval, a heredoc, or a wrapper prefix (timeout / env / sudo …) is OPAQUE and asks.
-_git_own_scan() {  # → one line per verb present: RESET <ok|ask> <target> · DROP <ok|ask> · RESTORE <ok|ask>
-  CMD="$CMD" python3 - <<'PYEOF' 2>/dev/null
+#
+# 2026-10-20 (operator ruling, decision 29d62f1ad390; census in
+# docs/research/permission-prompt-reduction-2026-10-20/REPORT.md — 116 reset asks, 19 restore,
+# 11 drop, none refused on its merits). Three widenings, each still a proof:
+#   · a `cd <literal>` / `git -C <literal>` no longer makes the command opaque. The scan tracks
+#     every directory each git statement may run in (a cd chained by `&&` replaces the set; any
+#     other separator ADDS to it, because the cd may have failed), and every one must pass;
+#   · a repo under agent scratch (is_scratch_temp_path: /private/tmp outside the reserved
+#     names) is the agent's own throwaway, so reset/restore there need no lossless proof, and a
+#     stash drop needs only that the repo's COMMON dir is scratch too (a /tmp worktree of a real
+#     repo shares that repo's stash stack);
+#   · when the heredoc bodies cannot execute (vb_classify: VB_RAW=0), the scan reads CMD_NOHD, so
+#     a brief written with `cat > f <<EOF` that MENTIONS `git reset --hard` is not an invocation.
+# And one new arm, PUSH, for when the operator removes the blanket `Bash(git push:*)` ask
+# (migrations/0074): a push asks unless it is non-force, names a literal remote, and every remote
+# it can reach is the operator's own (CC_VB_PUSH_OWNERS, default renchris) or a local path.
+_git_own_scan() {  # → RESET/RESTORE/DROP/PUSH <mode> … lines, plus the dirs each may act in
+  GO_SCAN="$_GO_TEXT" RAWCMD="$CMD" GO_CWD="$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)" \
+    python3 - <<'PYEOF' 2>/dev/null
 import os, re, shlex
-cmd = os.environ.get("CMD", "")
+cmd = os.environ.get("GO_SCAN", "")
+raw = os.environ.get("RAWCMD", cmd)
+CWD0 = os.environ.get("GO_CWD", "")
 NEST = {"bash", "sh", "zsh", "ksh", "dash", "eval", "xargs", "sudo", "env", "ssh", "nohup", "timeout",
         "time", "command", "exec", "builtin", "find", "parallel", "watch", "doas", "su", "script"}
 RO_GIT = {"fetch", "status", "log", "rev-parse", "rev-list", "diff", "show", "describe", "ls-files",
           "ls-tree", "cherry", "merge-base", "remote", "branch", "stash"}
 RO_HEADS = {"set", "echo", "printf", "true", ":", "test", "[", "[[", "sleep", "date", "pwd", "ls",
             "cat", "head", "tail", "wc", "grep"}
-def statements():
+def statements():  # → [(assignments, argv, separator-after)], paren-seen
     # Unquoted newlines become `;` so the lexer sees them as separators.
     buf, q, esc = [], None, False
     for ch in cmd:
@@ -1897,82 +1958,171 @@ def statements():
         buf.append(";" if ch == "\n" else ch)
     lex = shlex.shlex("".join(buf), posix=True, punctuation_chars="();<>|&")
     lex.whitespace_split = True; lex.commenters = "#"
-    out, cur = [], []
+    # Each statement also carries its PAREN DEPTH: a `$( … )` or `( … )` body is a subshell, so a
+    # cd there moves nothing outside it, and a statement there is undecidable once a cd ran inside.
+    out, cur, depth, d0 = [], [], 0, 0
     for t in lex:
         if t and all(c in "();|&" for c in t):
-            if cur: out.append(cur)
+            if cur: out.append([cur, t, d0])
+            elif out: out[-1][1] = t
             cur = []
+            depth = max(0, depth + t.count("(") - t.count(")"))
         else:
+            if not cur: d0 = depth
             cur.append(t)
-    if cur: out.append(cur)
+    if cur: out.append([cur, None, d0])
     res = []
-    for a in out:
+    for a, sep, dp in out:
         i = 0
         while i < len(a) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", a[i]): i += 1
-        res.append((a[:i], a[i:]))
+        res.append((a[:i], a[i:], sep, dp))
     return res
 try:
-    st = statements()
+    st3 = statements()
 except ValueError:
-    st = None
-def git_sub(a):  # (subcommand index) or None when git carries a global option
+    st3 = None
+st = None if st3 is None else [(p, a) for p, a, _, _ in st3]
+def git_parse(a):  # None: not git · "opaque": a global option that re-aims or runs · (index, -C dirs)
     if not a or os.path.basename(a[0]) != "git": return None
-    if len(a) > 1 and a[1].startswith("-"): return -1
-    return 1 if len(a) > 1 else None
+    i, cdirs = 1, []
+    while i < len(a) and a[i].startswith("-"):
+        if a[i] == "-C" and i + 1 < len(a):
+            cdirs.append(a[i + 1]); i += 2; continue
+        return "opaque"   # `git -c k=v`, `--git-dir`, `--work-tree` … re-aim the repo
+    return (i, cdirs) if i < len(a) else None
+def gsub(a):
+    g = git_parse(a)
+    return a[g[0]] if isinstance(g, tuple) else None
+def gargs(a):
+    return a[git_parse(a)[0] + 1:]
 opaque = st is None or "<<" in cmd or "`" in cmd or any(
-    a and (os.path.basename(a[0]) in NEST or a[0] in ("cd", "pushd", "popd", ".", "source"))
+    a and (os.path.basename(a[0]) in NEST or a[0] in (".", "source"))
     for _, a in (st or [])) or any(
-    any(p.startswith(("GIT_DIR=", "GIT_WORK_TREE=")) for p in pre) for pre, _ in (st or [])) or any(
-    git_sub(a) == -1 for _, a in (st or []))   # `git -C x`, `git -c k=v`, `--git-dir` … re-aim the repo
+    t.startswith(("GIT_DIR=", "GIT_WORK_TREE=")) for pre, a in (st or []) for t in pre + a) or any(
+    git_parse(a) == "opaque" for _, a in (st or []))
+HOME = os.path.expanduser("~")
+def lit_dir(t, base):
+    if t.startswith("~/"): t = HOME + t[1:]
+    if not t or any(c in t for c in "$`*?{~"): return None
+    if not t.startswith("/"):
+        if not base: return None
+        t = os.path.join(base, t)
+    return os.path.normpath(t)
+# The directories each statement may run in. A `cd` chained by `&&` REPLACES the set; any other
+# separator ADDS to it (the cd may have failed, or been skipped by `||`). A pushd/popd or a
+# non-literal cd makes it undecidable from that point on; a cd inside a subshell moves nothing
+# outside it but makes every LATER statement inside a subshell undecidable.
+cwds, cur, inner_cd = [], ({CWD0} if CWD0.startswith("/") else None), False
+for pre, a, sep, dp in (st3 or []):
+    cwds.append(None if cur is None or (dp > 0 and inner_cd) else set(cur))
+    if a and a[0] in ("pushd", "popd"):
+        cur = None
+    elif a and a[0] == "cd" and dp > 0:
+        inner_cd = True
+    elif a and a[0] == "cd":
+        if cur is None or len(a) != 2:
+            cur = None; continue
+        new = {lit_dir(a[1], b) for b in cur}
+        cur = None if None in new else (new if sep == "&&" else cur | new)
+def stmt_dirs(k):
+    g, base = git_parse(st[k][1]), cwds[k]
+    if base is None or not isinstance(g, tuple): return None
+    res = set()
+    for d in base:
+        for c in g[1]:
+            d = lit_dir(c, d)
+            if d is None: return None
+        res.add(d)
+    return res
 out = []
-if re.search(r"\bgit\b[^;&|]*\breset\b[^;&|]*--hard\b", cmd):  # no \n: as wide as the bash trigger, or a multi-line mention prints NO verdict, which reads as ask
-    v = "ask"; tgt = "-"
-    idx = [k for k, (_, a) in enumerate(st or []) if git_sub(a) == 1 and a[1] == "reset" and "--hard" in a]
-    if not opaque and len(idx) == 1:
-        k = idx[0]; a = st[k][1]
-        rest = [t for t in a[2:] if t not in ("--hard", "-q", "--quiet")]
-        before_ok = all(
-            (b and b[0] in RO_HEADS) or (git_sub(b) == 1 and b[1] in RO_GIT
-                                         and not (b[1] == "stash" and any(x in b for x in ("pop", "apply", "drop", "clear", "push", "save"))))
-            for _, b in st[:k])
-        if before_ok and len(rest) <= 1 and not any(c in "".join(rest) for c in "$`*?{"):
-            v = "ok"; tgt = rest[0] if rest else "HEAD"
-    elif not opaque and not idx:
-        v = "none"   # a mention — a commit message, an echo — is not an invocation
-    out.append("RESET %s %s" % (v, tgt))
-if re.search(r"\bgit\b[^;&|]*\bstash\s+drop\b", cmd):  # no \n: see the reset gate above
-    v = "ask"
-    idx = [a for _, a in (st or []) if git_sub(a) == 1 and len(a) > 2 and a[1] == "stash" and a[2] == "drop"]
-    if not opaque and idx:
+def verdict(name, idx, ok_mode, dir_tag):
+    dirs = [stmt_dirs(k) for k in idx]
+    if any(d is None for d in dirs):
+        out.append("%s ask -" % name); return
+    out.append("%s %s" % (name, ok_mode))
+    for d in sorted(set().union(*dirs)): out.append("%s %s" % (dir_tag, d))
+RE_RESET = r"\bgit\b[^;&|]*\breset\b[^;&|]*--hard\b"  # no \n: as wide as the bash trigger, or a multi-line mention prints NO verdict, which reads as ask
+if re.search(RE_RESET, raw):
+    idx = [k for k, (_, a) in enumerate(st or []) if gsub(a) == "reset" and "--hard" in a]
+    if opaque: out.append("RESET ask -")
+    elif not idx: out.append("RESET none -")   # a mention — a commit message, an echo, a data heredoc
+    else:
+        mode = "dirs -"
+        if len(idx) == 1:
+            k = idx[0]
+            rest = [t for t in gargs(st[k][1]) if t not in ("--hard", "-q", "--quiet")]
+            before_ok = all(
+                not b or b[0] in RO_HEADS or b[0] == "cd" or (gsub(b) in RO_GIT
+                    and not (gsub(b) == "stash" and any(x in b for x in ("pop", "apply", "drop", "clear", "push", "save"))))
+                for _, b in st[:k])
+            if before_ok and len(rest) <= 1 and not any(c in "".join(rest) for c in "$`*?{"):
+                mode = "ok " + (rest[0] if rest else "HEAD")
+        verdict("RESET", idx, mode, "RDIR")
+RE_DROP = r"\bgit\b[^;&|]*\bstash\s+drop\b"  # no \n: see the reset gate above
+if re.search(RE_DROP, raw):
+    idx = [k for k, (_, a) in enumerate(st or []) if gsub(a) == "stash" and gargs(a)[:1] == ["drop"]]
+    if opaque: out.append("DROP ask -")
+    elif not idx: out.append("DROP none -")
+    else:
         good = True
-        for a in idx:
-            args = [t for t in a[3:] if t not in ("-q", "--quiet")]
+        for k in idx:
+            args = [t for t in gargs(st[k][1])[1:] if t not in ("-q", "--quiet")]
             m = re.fullmatch(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?", args[0]) if len(args) == 1 else None
             binds = re.findall(r"(?:^|[\s;&|(])%s=(\"?\$\([^\n]*)" % re.escape(m.group(1)), cmd) if m else []
             if not (len(binds) == 1 and re.search(r"git\s+stash\s+list\b[^\n]*\|\s*grep\b", binds[0])):
                 good = False
-        v = "ok" if good else "ask"
-    elif not opaque and not idx:
-        v = "none"
-    out.append("DROP " + v)
-if re.search(r"\bgit\b[^;&|]*\brestore\b", cmd):  # no \n: a multi-line commit message naming the word was asked about (2026-10-18)
-    v = "ask"
-    idx = [a for _, a in (st or []) if git_sub(a) == 1 and a[1] == "restore"]
-    if not opaque:
-        def staged_only(a):
-            fl = [t for t in a[2:] if t.startswith("-")]
-            staged = any(t in ("--staged", "-S") or (re.fullmatch(r"-[A-Za-z]+", t) and "S" in t) for t in fl)
-            wt = any(t in ("--worktree", "-W") or (re.fullmatch(r"-[A-Za-z]+", t) and "W" in t) for t in fl)
-            return staged and not wt
-        v = ("ok" if all(staged_only(a) for a in idx) else "ask") if idx else "none"
-    out.append("RESTORE " + v)
+        if good and all(not git_parse(st[k][1])[1] for k in idx) and not any(a and a[0] == "cd" for _, a in st):
+            out.append("DROP ok -")   # the 2026-09-24 tag recipe, on the payload cwd
+        else:
+            verdict("DROP", idx, "dirs -", "DDIR")
+RE_RESTORE = r"\bgit\b[^;&|]*\brestore\b"  # no \n: a multi-line commit message naming the word was asked about (2026-10-18)
+if re.search(RE_RESTORE, raw):
+    idx = [k for k, (_, a) in enumerate(st or []) if gsub(a) == "restore"]
+    def staged_only(a):
+        fl = [t for t in gargs(a) if t.startswith("-")]
+        staged = any(t in ("--staged", "-S") or (re.fullmatch(r"-[A-Za-z]+", t) and "S" in t) for t in fl)
+        wt = any(t in ("--worktree", "-W") or (re.fullmatch(r"-[A-Za-z]+", t) and "W" in t) for t in fl)
+        return staged and not wt
+    if opaque: out.append("RESTORE ask -")
+    elif not idx: out.append("RESTORE none -")
+    elif all(staged_only(st[k][1]) for k in idx): out.append("RESTORE ok -")
+    else: verdict("RESTORE", idx, "dirs -", "SDIR")
+PUSH_FLAGS = {"-q", "--quiet", "-u", "--set-upstream", "--porcelain", "-v", "--verbose", "--tags",
+              "--follow-tags", "--atomic", "--no-progress", "--progress", "-n", "--dry-run"}
+RE_PUSH = r"\bgit\b[^;&|]*\bpush\b"
+if re.search(RE_PUSH, raw):
+    idx = [k for k, (_, a) in enumerate(st or []) if gsub(a) == "push"]
+    if opaque: out.append("PUSH ask -")
+    elif not idx: out.append("PUSH none -")
+    else:
+        good, remotes = True, set()
+        for k in idx:
+            args = gargs(st[k][1]); words = [t for t in args if not t.startswith("-")]
+            # --force*, -f, --mirror, --delete, --prune, --receive-pack/--exec (runs a program), …
+            if any(t.startswith("-") and t not in PUSH_FLAGS for t in args): good = False
+            if words and ("::" in words[0] or any(c in words[0] for c in "$`*?{~")): good = False
+            if any(r.startswith(("+", ":")) or any(c in r for c in "$`*?") for r in words[1:]): good = False
+            remotes.add(words[0] if words else "*")
+        if not good: out.append("PUSH ask -")
+        else:
+            for r in sorted(remotes): out.append("PREM " + r)
+            verdict("PUSH", idx, "dirs -", "PDIR")
+# RMREL: each RELATIVE rm target, resolved against every dir its statement may run in (read by the
+# rm SCRATCH-TEMP category). An undecidable cwd prints the target with an empty resolution.
+if not opaque and re.search(r"(^|[^A-Za-z0-9_-])rm(\s|$)", cmd):
+    for k, (_, a) in enumerate(st or []):
+        if not a or os.path.basename(a[0]) != "rm": continue
+        for t in a[1:]:
+            if t.startswith("-") or t.startswith(("/", "~")) or any(c in t for c in "$`*?") or ".." in t.split("/"):
+                continue
+            if cwds[k] is None: out.append("RMREL\t%s\t" % t); continue
+            for d in sorted(cwds[k]): out.append("RMREL\t%s\t%s" % (t, os.path.normpath(os.path.join(d, t))))
 print("\n".join(out))
 PYEOF
 }
 
-_git_reset_lossless() {  # <target> — 0 iff the payload cwd's repo would lose nothing to the reset
-  local tgt="$1" cwd n
-  cwd=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
+_git_reset_lossless() {  # <target> <dir> — 0 iff that dir's repo would lose nothing to the reset
+  local tgt="$1" cwd="$2" n
   [[ -n "$cwd" && -d "$cwd" ]] || return 1
   git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
   git -C "$cwd" rev-parse --verify -q "${tgt}^{commit}" >/dev/null 2>&1 || return 1
@@ -1993,26 +2143,135 @@ _GO_RESTORE_RE='git[^;&|]*[[:space:]]restore([[:space:]]|$)'
 # bash-native on purpose: tests/fixtures/validate-bash-sites.tsv polices every grep site, and a
 # `[[ =~ ]]` over the whole command spans lines where grep would not — which only WIDENS the trigger;
 # the parser above is what decides.
-_GO_ANY_RE="$_GO_RESET_RE|$_GO_DROP_RE|$_GO_RESTORE_RE"
-if [[ "$CMD" =~ $_GO_ANY_RE ]]; then
-  _GO_OUT=""
+_GO_PUSH_RE='git[^;&|]*[[:space:]]push([[:space:]]|$)'
+_GO_ANY_RE="$_GO_RESET_RE|$_GO_DROP_RE|$_GO_RESTORE_RE|$_GO_PUSH_RE"
+_go_dirs() {  # <tag> → the dirs the scan listed under that tag, one per line
+  printf '%s\n' "$_GO_OUT" | sed -n "s/^$1 //p"
+}
+_go_all_scratch() {  # <tag> → 0 iff the scan listed dirs under <tag> and EVERY one is agent scratch
+  local d n=0
+  while IFS= read -r d; do
+    [[ -n "$d" ]] || continue
+    n=$((n + 1))
+    is_scratch_temp_dir "$d" || return 1
+  done <<<"$(_go_dirs "$1")"
+  [[ "$n" -gt 0 ]]
+}
+# The owner of a remote URL: github/gitlab/bitbucket `owner/repo` in https, ssh or scp form. A local
+# path (or file://) is the operator's own disk. Anything else has no owner we can name.
+_go_remote_owned() {  # <dir> <remote> → 0 iff every push URL that remote resolves to is the operator's
+  local d="$1" r="$2" u n=0 owners="${CC_VB_PUSH_OWNERS:-renchris}" o
+  case "$r" in
+    /*|./*|../*|file://*) return 0 ;;
+  esac
+  [[ "$r" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
+  while IFS= read -r u; do
+    [[ -n "$u" ]] || continue
+    n=$((n + 1))
+    case "$u" in /*|file://*) continue ;; esac
+    # No `:` at all is a local PATH (`../sibling`, `bare.git`); every network form carries one.
+    case "$u" in *:*) ;; *) continue ;; esac
+    if [[ "$u" =~ ^(https://|ssh://git@|git@)(github\.com|gitlab\.com|bitbucket\.org)[:/]([A-Za-z0-9_.-]+)/ ]]; then
+      o=${BASH_REMATCH[3]}
+      case " $owners " in *" $o "*) continue ;; esac
+    fi
+    return 1
+  done <<<"$(git -C "$d" remote get-url --push --all "$r" 2>/dev/null)"
+  [[ "$n" -gt 0 ]]
+}
+_go_push_owned() {  # → 0 iff every (dir, remote) pair the scan listed pushes to the operator's own repo
+  local d r rems nd=0
+  rems=$(printf '%s\n' "$_GO_OUT" | sed -n 's/^PREM //p')
+  while IFS= read -r d; do
+    [[ -n "$d" ]] || continue
+    nd=$((nd + 1))
+    [[ -d "$d" ]] || return 1
+    while IFS= read -r r; do
+      [[ -n "$r" ]] || continue
+      if [[ "$r" == "*" ]]; then   # bare `git push`: every remote must be the operator's
+        while IFS= read -r r; do
+          [[ -n "$r" ]] || continue
+          _go_remote_owned "$d" "$r" || return 1
+        done <<<"$(git -C "$d" remote 2>/dev/null)"
+      else
+        _go_remote_owned "$d" "$r" || return 1
+      fi
+    done <<<"$rems"
+  done <<<"$(_go_dirs PDIR)"
+  [[ "$nd" -gt 0 ]]
+}
+# One scan per command, shared with the rm SCRATCH-TEMP category's relative targets. It reads the
+# heredoc-free text when the bodies cannot execute (vb_classify), so a brief written with
+# `cat > f <<EOF` that MENTIONS a reset is not an invocation; otherwise the raw command, where any
+# `<<` makes the scan opaque exactly as before.
+_GO_SCANNED=0
+_GO_OUT=""
+_go_scan_once() {
+  [[ "$_GO_SCANNED" == 1 ]] && return 0
+  _GO_SCANNED=1
+  vb_classify
+  _GO_TEXT="$CMD"
+  [[ "$VB_RAW" == "0" ]] && _GO_TEXT="$CMD_NOHD"
   command -v python3 >/dev/null 2>&1 && _GO_OUT=$(_git_own_scan)
+  return 0
+}
+if [[ "$CMD" =~ $_GO_ANY_RE ]]; then
+  _go_scan_once
   if [[ "$CMD" =~ $_GO_RESET_RE ]]; then
     _GO_RESET=$(printf '%s\n' "$_GO_OUT" | sed -n 's/^RESET //p')
     case "$_GO_RESET" in
       "none "*) ;;
-      "ok "*) _git_reset_lossless "${_GO_RESET#ok }" \
-                || warn "git reset --hard can destroy uncommitted work. Verify intentional." ;;
+      "ok "*|"dirs "*)
+        while IFS= read -r _go_d; do
+          [[ -n "$_go_d" ]] || continue
+          is_scratch_temp_dir "$_go_d" && continue
+          [[ "$_GO_RESET" == "ok "* ]] && _git_reset_lossless "${_GO_RESET#ok }" "$_go_d" && continue
+          warn "git reset --hard can destroy uncommitted work. Verify intentional."
+        done <<<"$(_go_dirs RDIR)"
+        [[ -n "$(_go_dirs RDIR)" ]] || warn "git reset --hard can destroy uncommitted work. Verify intentional." ;;
       *) warn "git reset --hard can destroy uncommitted work. Verify intentional." ;;
     esac
   fi
   if [[ "$CMD" =~ $_GO_DROP_RE ]]; then
-    [[ "$(printf '%s\n' "$_GO_OUT" | sed -n 's/^DROP //p')" =~ ^(ok|none)$ ]] \
+    _GO_DROP=$(printf '%s\n' "$_GO_OUT" | sed -n 's/^DROP //p')
+    _go_drop_ok=0
+    case "$_GO_DROP" in
+      "ok "*|"none "*) _go_drop_ok=1 ;;
+      "dirs "*)
+        # A scratch repo's stash is its own — unless it is a worktree of a real repo, whose stash
+        # stack it shares. So the COMMON dir must be scratch too, and the dir must exist to tell.
+        _go_drop_ok=1
+        while IFS= read -r _go_d; do
+          [[ -n "$_go_d" ]] || continue
+          _go_cd=$(git -C "$_go_d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+          { is_scratch_temp_dir "$_go_d" && [[ -n "$_go_cd" ]] && is_scratch_temp_dir "$_go_cd"; } || _go_drop_ok=0
+        done <<<"$(_go_dirs DDIR)"
+        _go_all_scratch DDIR || _go_drop_ok=0 ;;
+    esac
+    [[ "$_go_drop_ok" == 1 ]] \
       || warn "git stash drop on an entry not selected by its own tag — bare drop (stash@{0}) or a stash@{N} index can drop ANOTHER session's stash on the shared stack. Re-find your entry by tag: N=\$(git stash list --format='%gd %gs' | grep <tag> | head -1 | cut -d' ' -f1); git stash drop \"\$N\"."
   fi
   if [[ "$CMD" =~ $_GO_RESTORE_RE ]]; then
-    [[ "$(printf '%s\n' "$_GO_OUT" | sed -n 's/^RESTORE //p')" =~ ^(ok|none)$ ]] \
-      || warn "git restore of the WORKING TREE discards uncommitted changes. Verify intentional (--staged alone only unstages and does not ask)."
+    _GO_RESTORE=$(printf '%s\n' "$_GO_OUT" | sed -n 's/^RESTORE //p')
+    case "$_GO_RESTORE" in
+      "ok "*|"none "*) ;;
+      "dirs "*) _go_all_scratch SDIR \
+                  || warn "git restore of the WORKING TREE discards uncommitted changes. Verify intentional (--staged alone only unstages and does not ask)." ;;
+      *) warn "git restore of the WORKING TREE discards uncommitted changes. Verify intentional (--staged alone only unstages and does not ask)." ;;
+    esac
+  fi
+  # PUSH. Inert while the blanket `Bash(git push:*)` ask stands (its prompt comes first either way);
+  # it is what keeps a push to someone ELSE's repo behind a prompt once migrations/0074 removes it.
+  # Force spellings are denied by the settings deny rules and refused by the scan; this asks on
+  # --delete/--mirror/--prune, a `+`/`:` refspec, a variable remote, and any remote not the operator's.
+  if [[ "$CMD" =~ $_GO_PUSH_RE && "${CC_VB_PUSH_GATE:-on}" != "off" ]]; then
+    _GO_PUSH=$(printf '%s\n' "$_GO_OUT" | sed -n 's/^PUSH //p')
+    case "$_GO_PUSH" in
+      "none "*) ;;
+      "dirs "*) _go_push_owned \
+                  || warn "git push to a remote that is not one of your own repositories (or that this hook cannot resolve). Pushing to someone else's repository publishes to a third party. Verify intentional." ;;
+      *) warn "git push in a form this hook cannot verify (a delete, mirror, prune or forced refspec, a variable remote, or an opaque command). Verify intentional." ;;
+    esac
   fi
 fi
 # ── GIT-OWNERSHIP END ───────────────────────────────────────────────────────────────────────────
@@ -2249,6 +2508,9 @@ _rm_expand_token() {  # <token> → the token with resolvable same-command varia
 # list for them would enumerate spellings rather than the class (MEMORY.md
 # denylist-enumerates-spellings-not-the-class). The invariant that makes THIS category safe — the
 # command created it — is the one to generalize, never the location.
+# SUPERSEDED 2026-10-20 by operator ruling (decision 29d62f1ad390): the location IS generalized now,
+# by the SCRATCH-TEMP CATEGORY below, which carves the live infrastructure out by the two properties
+# it actually has — a reserved top-level name and a socket — rather than by listing its paths.
 # shellcheck disable=SC2016  # the single-quoted '$(' `` ` `` and '$' are LITERALS to match in the
 _rm_is_mktemp_dir_substitution() {  # <assignment-value> → 0 iff it is exactly `$(mktemp -d …)`
   local v="$1" inner a
@@ -2309,14 +2571,69 @@ is_self_created_mktemp_target() {  # <argv-token> → 0 iff it names a dir THIS 
 }
 # ── SELF-CREATED-TEMP END ───────────────────────────────────────────────────────────────────────
 
-# rm_target_is_permitted <argv-token> — the THREE predicates. The third is checked on the RAW token,
+# ── SCRATCH-TEMP CATEGORY (operator ruling 2026-10-20, decision 29d62f1ad390) ───────────────────
+# The NOT-WIDENED note above refused literal /tmp targets because /tmp also holds LIVE fleet
+# infrastructure. The operator has since ruled that prompts which are virtually always a yes must
+# stop (docs/research/permission-prompt-reduction-2026-10-20/REPORT.md): over the 14 days to
+# 2026-10-20, 71 `rm -r` asks named a literal /tmp path and 48 a variable, every one answered yes
+# or timed out unanswered, none refused on its merits. So the location IS generalized now, with
+# the live infrastructure carved out by the two properties it actually has, not by spelling:
+#   · it lives under a RESERVED top-level name — dot-files (.desk-land-*, .s.PGSQL.*), cc-* (sockets,
+#     telemetry, the permission beacon), claude-* (every session's harness scratchpad, and logs),
+#     land-lock*, com.* (app IPC), tmux-*, kitty-<digits> (the kitty socket), launchd*, powerlog,
+#     Cursor-*. The fleet names its own /tmp state this way; an agent's throwaway does not;
+#   · or it holds a socket somewhere below it (bounded find) — a live listener, whatever its name.
+# Everything else strictly under /private/tmp is agent scratch. The target is RESOLVED first
+# (_sp_resolve: symlink chain on the final component, `..` and globs refused), so a link out of /tmp
+# or a crafted prefix still fails closed. /var/folders (TMPDIR) is NOT included: other apps keep
+# live state there under names no list can enumerate.
+# Kill switch: CC_VB_SCRATCH_TEMP=off. is_scratch_temp_path itself sits above GIT-OWNERSHIP,
+# which uses it too.
+is_scratch_temp_target() {  # <argv-token> → 0 iff it RESOLVES to agent scratch under /private/tmp
+  local t="$1" res
+  case "$t" in /*) ;; *) return 1 ;; esac
+  res=$(_sp_resolve "$t"); [[ -n "$res" ]] || return 1
+  is_scratch_temp_path "$res"
+}
+
+# Build-artifact NAMES that are never source, matched at ANY depth of a relative path:
+# `bin/__pycache__`, `docs/research/x/__pycache__`. SAFE_RM_TARGETS matches only at the top, and
+# `build`, `dist`, `out`, `target` stay top-only on purpose — `scripts/build` can be source.
+_DEEP_ARTIFACT_RE='(^|/)(__pycache__|node_modules|\.next|\.turbo|\.pytest_cache|\.mypy_cache|\.ruff_cache|\.tox|htmlcov)(/|$)'
+is_deep_artifact_target() {  # <argv-token> → 0 iff a relative path INSIDE a never-source artifact dir
+  local t="$1"
+  case "$t" in /*|*'..'*|*'$'*|*'`'*|'~'*) return 1 ;; esac
+  [[ "$t" =~ $_DEEP_ARTIFACT_RE ]]
+}
+
+# A RELATIVE token resolves against the directory its rm runs in. GIT-OWNERSHIP's scan already
+# tracks that per statement (a `cd` chained by `&&` replaces the set, any other separator adds to
+# it, an undecidable cd ends it), so the scan also prints every relative rm target resolved
+# against each directory its statement may run in (RMREL lines). The target is permitted only
+# when EVERY resolution is permitted; a token the scan did not resolve permits nothing.
+is_relative_permitted_target() {  # <argv-token> → 0 iff permitted in every dir its rm may run in
+  local t="$1" tag tok abs n=0
+  case "$t" in /*|'~'*|*'$'*|*'`'*|*'*'*|*'?'*|*'..'*|'') return 1 ;; esac
+  _go_scan_once
+  while IFS=$'\t' read -r tag tok abs; do
+    [[ "$tag" == "RMREL" && "$tok" == "$t" ]] || continue
+    [[ -n "$abs" ]] || return 1
+    n=$((n + 1))
+    is_own_scratchpad_target "$abs" || is_scratch_temp_target "$abs" || return 1
+  done <<<"$_GO_OUT"
+  [[ "$n" -gt 0 ]]
+}
+# ── SCRATCH-TEMP END ────────────────────────────────────────────────────────────────────────────
+
+# rm_target_is_permitted <argv-token> — the predicates. The mktemp one is checked on the RAW token,
 # not the resolved one: its whole point is a value that CANNOT be resolved (a command substitution),
 # so resolution has already refused it by the time we get here.
 rm_target_is_permitted() {
   local resolved
   resolved=$(_rm_expand_token "$1")
   is_safe_rm_target "$resolved" || is_own_scratchpad_target "$resolved" \
-    || is_self_created_mktemp_target "$1"
+    || is_self_created_mktemp_target "$1" || is_scratch_temp_target "$resolved" \
+    || is_deep_artifact_target "$resolved" || is_relative_permitted_target "$resolved"
 }
 
 # is_safe_rm_target <argv-token> — shared by both paths below, for the same no-drift reason.
