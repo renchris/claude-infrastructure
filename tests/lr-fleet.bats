@@ -2367,7 +2367,8 @@ one_daemon() { # a daemon-dispatched --one, run inline as its detached child run
   one_daemon --from-daemon
   [[ "$output" != *"reconciler placed"* ]] || { echo "$output"; false; }
   grep -q -- '--rank' "$ACC_LOG" || { cat "$ACC_LOG"; echo "$output"; false; }
-  grep -q -- '--target next2' "$LRH_LOG" || { cat "$LRH_LOG"; echo "$output"; false; }
+  # the source is next2, so the ranked walk passes it: recovered onto next3
+  grep -q -- '--target next3 --launch --in-place' "$LRH_LOG" || { cat "$LRH_LOG"; echo "$output"; false; }
 }
 
 @test "A7 A′ CONTROLS: an operator --one, and records that are not an acting placement, all rank as before" {
