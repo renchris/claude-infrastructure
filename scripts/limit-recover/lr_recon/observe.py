@@ -38,6 +38,7 @@ from lr_recon.observe_rows import (
     is_claude,
     is_iterm,
     live,
+    live_as,
     read_registry,
     read_session_rows,
     registry_cfg,
@@ -921,7 +922,13 @@ def _sessions(
         if canary and sid not in canary:
             snap.rig_refused.append(sid)
             continue
-        live_reg = [r for r in rrows if live(r.get("pid"), procs) is not None]
+        # a registry row outlives its session by CC_REG_RETAIN_H, so its pid alone is not identity:
+        # one whose lstart names another instant is a reused pid and holds nothing (live_as)
+        live_reg = [
+            r
+            for r in rrows
+            if live_as(r.get("pid"), r.get("lstart"), procs) is not None
+        ]
         pick = live_reg or rrows
         rrow: Optional[Dict[str, Any]] = pick[-1] if pick else None
         sources: List[Tuple[str, str, int, str]] = [
@@ -933,10 +940,10 @@ def _sessions(
             (
                 "registry",
                 registry_cfg(str(r.get("account") or ""), home, amap),
-                r["pid"] if isinstance(r.get("pid"), int) else 0,
+                r["pid"],
                 "",
             )
-            for r in rrows
+            for r in live_reg
         ]
         sources += [("resume-argv", "", p, "") for p in leaves.get(sid, [])]
         holders = holders_for(sources, procs, roots, env_roots)

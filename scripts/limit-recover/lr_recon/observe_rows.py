@@ -69,6 +69,30 @@ def live(pid: Any, procs: Dict[int, T.ProcRow]) -> Optional[T.ProcRow]:
     return row if row is not None and not row.zombie else None
 
 
+def _canon_start(s: str) -> str:
+    """An LSTART with whitespace collapsed and the UTC+ambient-locale order (`Wed 21 Oct`) folded to
+    the C order (`Wed Oct 21`): both name one instant (hooks/session-register.sh PID-REUSE GUARD).
+    Normalises order only, never the timezone or month names."""
+    t = s.split()
+    if len(t) == 5 and t[1].isdigit() and not t[2].isdigit():
+        t[1], t[2] = t[2], t[1]
+    return " ".join(t)
+
+
+def live_as(pid: Any, start: Any, procs: Dict[int, T.ProcRow]) -> Optional[T.ProcRow]:
+    """``live(pid)`` that also refuses a REUSED pid: a row whose recorded start (session
+    `procStart`, registry `lstart`) names another instant than the live pid's lstart is a dead
+    session's leftover, not a holder (bin/cc-wake W2). A leftover row read as a second holder was
+    SPLIT-BRAIN in both guarantee9 cure arms (LR_SUSTAINED_LOAD W14f). No recorded start, or no
+    live lstart, has nothing to disprove and keeps the pid-only answer."""
+    row = live(pid, procs)
+    if row is None or not isinstance(start, str) or not start.strip():
+        return row
+    if row.lstart.strip() and _canon_start(start) != _canon_start(row.lstart):
+        return None
+    return row
+
+
 # ── accounts (invariant 24) ──────────────────────────────────────────────────────────────────────
 
 
@@ -115,7 +139,7 @@ def registry_cfg(account: str, home: str, amap: Dict[str, str]) -> str:
 
 
 def read_registry(reg_dir: str, glob_fn: GlobFn = glob.glob) -> List[Dict[str, Any]]:
-    """Registry rows that are dicts carrying a session_id; the row's own lstart is ignored (local TZ)."""
+    """Registry rows that are dicts carrying a session_id; the census checks their lstart (live_as)."""
     rows = []
     for f in sorted(glob_fn(os.path.join(reg_dir, "*.json"))):
         d = load_json(f)
@@ -146,7 +170,10 @@ def read_session_rows(
             d = load_json(f)
             if not isinstance(d, dict) or not isinstance(d.get("sessionId"), str):
                 continue
-            if d["sessionId"] and live(d.get("pid"), procs) is not None:
+            if (
+                d["sessionId"]
+                and live_as(d.get("pid"), d.get("procStart"), procs) is not None
+            ):
                 real = os.path.realpath(f)
                 if real in by_file:
                     if (
