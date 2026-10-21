@@ -132,8 +132,12 @@ class RolledBack(unittest.TestCase):
         self.assertEqual(m.sid, SID)
 
     def test_repeated_rollbacks_escalate_through_the_existing_budget(self):
-        # a hold that is still DETERMINISTIC (load: A3 iii keeps it out of TRANSIENT)
-        held_load = ROLLED_BACK.replace("HELD:unreachable", "HELD:load")
+        # a hold that is still DETERMINISTIC (no-shell keeps its page-once refusal; W8 mapped load
+        # to the re-probed HOLD-LOAD), pinned so this example cannot silently go stale
+        self.assertEqual(
+            settle.classify.map_notmoved("no-shell", "limited"), ("DETERMINISTIC", "")
+        )
+        held_load = ROLLED_BACK.replace("HELD:unreachable", "HELD:no-shell")
         rec = self._rec()
         self._log(rec, held_load)
         settle.rolled_back(self.paths, rec, self.now)

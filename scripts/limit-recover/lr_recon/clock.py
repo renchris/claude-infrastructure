@@ -4,7 +4,26 @@ A laptop lid close freezes the daemon mid-pass; on wake every wall-clock deadlin
 expired at once. ``Clock.tick`` measures the pause as Δwall − Δuptime (CLOCK_UPTIME_RAW does not
 advance during sleep), so callers can shift deadlines by it and spend the next pass observing
 instead of acting on a world that moved while we were frozen. Every external effect (time
-sources, sysctl, load, process spawn, file write) is an injectable seam so tests stay hermetic.
+sources, sysctl, process spawn, file write) is an injectable seam so tests stay hermetic.
+
+The two clocks of one pass (B7, docs/research/lr-sustained-load-2026-10-20/impl/B7-now-audit.md §1).
+``now`` is the CENSUS instant: the census, facts and evidence were read at about that moment, and
+the pass then runs for minutes. ``t_dec = max(now, wall())`` is the instant a decision is taken.
+
+  R1  an observation (what a census saw) is stamped with ``now``, and census stamps compare to ``now``
+  R2  an action we take (spawn, admission, pacer slot, launch.log row) is stamped with ``t_dec``
+  R3  a rate gate ("no more than one per N s") reads ``t_dec`` against the action stamps
+  R4  an evidence wait ("act only on a census taken >= N s after X") reads ``now``, never the wall: a
+      later wall reading cannot make an older census newer. C's 60 s grace is one (nothing re-reads
+      the transcript before C types), and so is may_actuate's next_eligible_at (R_PROOF_S)
+  R5  a quiet window ("X absent >= N s") runs from the FIRST census that did not see X (a lower
+      bound), never the last that did (an upper bound); each census stamps its sighting before any
+      reader in the same pass (settle.note_seen / quiet_for)
+  R6  updated_at is rewritten every pass, so it is never an age anchor
+  R7  a stamp used as pass identity stays ``now`` (busy_at at _invariant, Admission.over_at)
+
+``max(now, wall())`` is never earlier than the census instant, so a test that drives ``now`` by
+hand keeps its semantics. ``recon/pass-clock`` = ``pass`` reverts t_dec and the wall pacer.
 """
 
 from __future__ import annotations
@@ -79,15 +98,11 @@ class Clock:
         wall: Callable[[], float] = time.time,
         uptime: Callable[[], float] = _uptime_raw,
         sysctl: Callable[[str], str] = _run_sysctl,
-        getloadavg: Callable[[], Tuple[float, float, float]] = os.getloadavg,
-        cpu_count: Callable[[], Optional[int]] = os.cpu_count,
         env: Optional[Mapping[str, str]] = None,
     ) -> None:
         self.wall = wall
         self.uptime = uptime
         self._sysctl = sysctl
-        self._getloadavg = getloadavg
-        self._cpu_count = cpu_count
         env = os.environ if env is None else env
         self.sleep_threshold_s = _env_float(
             env, "LR_SLEEP_THRESHOLD_S", SLEEP_THRESHOLD_S
@@ -153,15 +168,9 @@ class Clock:
         anchor = wt if wt is not None else self.last_wake_wall
         return now - anchor >= guard
 
-    def load_multiplier(self) -> float:
-        """§4.3: process bounds scale by max(1, load1/ncpu/2) so a loaded box is not convicted
-        of a hang it merely queued behind."""
-        try:
-            load1 = float(self._getloadavg()[0])
-        except (OSError, IndexError, TypeError, ValueError):
-            return 1.0
-        ncpu = self._cpu_count() or 1
-        return max(1.0, load1 / ncpu / 2)
+    # W8 (G1 F12): load_multiplier, max(1, load1/ncpu/2) uncapped (x20 at 40/core) with no caller,
+    # and its getloadavg/cpu_count seam are deleted. A bound that must stretch with load says so in
+    # its own function, capped (the G1 lint's capped-bound-stretch class).
 
 
 def shift_record(rec: T.Record, slept: float) -> None:

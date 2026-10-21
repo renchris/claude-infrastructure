@@ -97,6 +97,20 @@ def _role_live(rec: T.Record, snap: T.Snapshot, *roles: str) -> bool:
     return any(p.role in roles and snap.alive(p.pid, p.lstart) for p in rec.procs)
 
 
+def watcher_live(rec: T.Record, snap: T.Snapshot) -> bool:
+    """A live recycle watcher of the sid (Evidence.live_watcher)."""
+    return _argv_live(snap, rec.sid, "handoff-fire", "__recycle") or _role_live(
+        rec, snap, "watcher"
+    )
+
+
+def launcher_live(rec: T.Record, snap: T.Snapshot) -> bool:
+    """A live lr-fire-resume of the sid, or a recorded launcher (Evidence.live_launcher)."""
+    return _argv_live(snap, rec.sid, "lr-fire-resume") or _role_live(
+        rec, snap, "launcher", "fire_resume"
+    )
+
+
 def _pane(rec: T.Record, snap: T.Snapshot) -> Optional[T.PaneObs]:
     if not rec.pane:
         return None
@@ -203,10 +217,8 @@ def build(
         source_at_composer=source_alive and state == "claude",
         handed_off=handed,
         stub_present=stub,
-        live_watcher=_argv_live(snap, rec.sid, "handoff-fire", "__recycle")
-        or _role_live(rec, snap, "watcher"),
-        live_launcher=_argv_live(snap, rec.sid, "lr-fire-resume")
-        or _role_live(rec, snap, "launcher", "fire_resume"),
+        live_watcher=watcher_live(rec, snap),
+        live_launcher=launcher_live(rec, snap),
         pane_state=state,
         pane_absent_observations=rec.pane_absent_obs + (state == "gone"),
         # The pane's tty is "present" while the pane's recorded ROOT process (pid + lstart) lives.
@@ -232,6 +244,11 @@ def build(
         pre_move=(rec.substate or "") if rec.phase == "PRE-MOVE" else "",
     )
     _target_reads(rec, ev)
+    if ev.token_record_offset is not None and ev.token_is_this_attempt:
+        # B7 review correctness 2 (R5): `submitted` above is the PREVIOUS pass's stamp, and _derive
+        # stamps this census's token only after derive. A record first seen by this census then
+        # derived UNPROMPTED, and C typed a second prompt over it (census+70 s, measured).
+        ev.submitted = True
     ev.holder_stable_two_samples = _stable(rec, s, snap.wall)
     return ev
 

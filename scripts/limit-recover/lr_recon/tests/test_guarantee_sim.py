@@ -17,7 +17,7 @@ F3 TRIPWIRE: ``subprocess.Popen``/``run`` (and ``Popen._execute_child``, which a
 ``_run_snap`` and ``_provenance`` record the call and raise, so a real child fails the case even
 where production swallows the exception (``observe.composer_state`` does). ``store.proc_lstart``
 answers from the Sim's process table. F2: no lr_recon function may hold ``os.getloadavg`` as a
-default except the allow set the Sim injects past (``Clock.__init__``, ``observe.ps_bound``).
+default except the allow set the Sim injects past (``observe.ps_bound``).
 
 MUTANT → RED (each applied in ``MutantsDie``, which asserts its checker raises AssertionError):
   * S1  ``Admission.pace_ok`` also requires load1/ncpu < 20      → traces differ at load ≥ 250
@@ -72,7 +72,7 @@ DRIP_AFTER, DRIP_EVERY_S = 3, 30.0
 SRC, TARGETS = "next3", ("next", "next2", "next4")
 NOTMOVED_RC = 6
 RESETS = T0 + 9 * 3600  # a weekly reset well past the stay window: every member moves
-ALLOW_LOAD_DEFAULTS = {"lr_recon.clock.Clock.__init__", "lr_recon.observe.ps_bound"}
+ALLOW_LOAD_DEFAULTS = {"lr_recon.observe.ps_bound"}  # Clock.__init__'s seam went in W8
 REAL_COMPOSER = observe.composer_state
 
 
@@ -381,8 +381,6 @@ class Sim:
             wall=self.wall,
             uptime=lambda: 0.0,
             sysctl=self.sysctl,
-            getloadavg=self.loadavg,
-            cpu_count=lambda: NCPU,
             env={},
         )
         ctx.admission = Admission(runner=self.runner, env={}, wall=self.wall)

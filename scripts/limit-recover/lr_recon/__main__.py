@@ -37,6 +37,7 @@ from lr_recon import (
     report,
     settle,
     store,
+    tokens,
     transcript,
 )
 from lr_recon import facts as F
@@ -149,6 +150,28 @@ class Ctx:
         self.telem: Any = None
         self.pass_seq = 0
         self.slept = 0.0
+        # B7 kill switch (recon/pass-clock), re-read every pass by read_pass_clock
+        self.pass_clock = "wall"
+        # C2 E5 T4: the last kitty-degraded event's key, so an outage writes one event, not one a pass
+        self.kitty_degraded: Optional[str] = None
+
+    def wall(self) -> float:
+        """B7 R2: the instant a decision or an action is taken (``now`` is the census instant).
+        Under the kill switch it reads -inf, so every max(now, wall) is the pass ``now`` again."""
+        return time.time() if self.pass_clock != "pass" else float("-inf")
+
+
+PASS_CLOCK = "pass-clock"  # under recon/: `pass` turns B7's decision-time readings off
+
+
+def read_pass_clock(paths: T.Paths) -> str:
+    """``recon/pass-clock`` holding ``pass`` reverts B7's t_dec and wall pacer ("pass"); anything else,
+    or no file, is "wall". It does NOT restore the old busy-stamp position (B7 review efficacy 4)."""
+    try:
+        with open(paths.p(PASS_CLOCK), encoding="utf-8") as fh:
+            return "pass" if fh.read().strip() == "pass" else "wall"
+    except OSError:
+        return "wall"
 
 
 def _own(ctx: Any, key: str, default: Any) -> Any:
@@ -797,6 +820,7 @@ def _derive(
         if not rec.open:
             continue
         act.adopt(rec, snap)
+        _note_activity(ctx, rec, snap, now)
         was, assign_id = rec.substate, rec.assign_id or rec.record_id
         proof = (
             ""
@@ -933,18 +957,6 @@ def _derive(
             rec.timeline.submitted = (
                 rec.timeline.submitted or now
             )  # rows 4 and 7 read it
-        if act.live_procs(rec, snap) or ev.live_launcher or ev.live_watcher:
-            rec.close["busy_at"] = now
-        # C's quiet grace reads typer_at, not busy_at: a launcher whose own verdict ended its typing
-        # is only the session's pty relay, and keying C on it held the owed continue for good.
-        if (
-            act.live_procs(rec, snap)
-            or ev.live_watcher
-            or (ev.live_launcher and not settle.launcher_settled(ctx.home, rec, now))
-        ):
-            rec.close["typer_at"] = now
-        else:
-            rec.close.setdefault("typer_at", 0.0)
         rec.phase = res.phase
         ctx.actions[rec.sid] = res.action
         _note_close(rec, res, snap, now)
@@ -954,13 +966,29 @@ def _derive(
             rec
         ):  # this pass entered the relaunch gap: owned, not orphaned
             _event(ctx.paths, "in-flight", rec.sid, rec.record_id, "relaunch gap")
+        if rec.phase == "PRE-MOVE" and rec.substate == "IN-FLIGHT":
+            # B7 D4: its own anchor, never updated_at (save_records rewrites that every pass, so an
+            # unconfirmed record measured one pass gap and sat IN-FLIGHT silently). _invariant
+            # pages on it; it feeds no DETERMINISTIC ladder (B7 review efficacy 3).
+            rec.close.setdefault("in_flight_at", now)
+        else:
+            rec.close.pop("in_flight_at", None)
+        if rec.substate == "UNPROMPTED":
+            # C2 E5: the durable age of an owed continue, any phase (a deaf kitty leaves the record
+            # PRE-MOVE with substate UNPROMPTED); MAX_AGE_S["UNPROMPTED"] pages on it
+            rec.close.setdefault("unprompted_since", now)
+        else:
+            rec.close.pop("unprompted_since", None)
         if (
             rec.phase == "PRE-MOVE"
             and rec.substate == "IN-FLIGHT"
             and not ev.holders
             and not rec.escalated
-            and now - (rec.timeline.confirmed or rec.updated_at or now)
-            >= IN_FLIGHT_MAX_S
+            and rec.timeline.confirmed is not None
+            and now - rec.timeline.confirmed >= IN_FLIGHT_MAX_S
+            # never while this attempt's watcher or unsettled launcher lives: the watcher's own
+            # --await runs to 1,200 s, so a 600 s verdict here was our timeout convicting it
+            and settle.quiet_for(rec, "typer", now) >= 0
         ):
             # §4.4: a relaunch gap past its bound with no holder is a failure, not a flag. The
             # lr-fire-resume relay lives as long as its child, so live_launcher cannot bound it (W5
@@ -1038,6 +1066,46 @@ def _derive(
             rec.terminal = T.Terminal(
                 outcome="NOT_NEEDED", proof="handed-to-resume-debt", at=now
             )
+
+
+def _note_activity(ctx: Ctx, rec: T.Record, snap: T.Snapshot, now: float) -> None:
+    """B7 R5: this census's sighting of the move's activity, stamped at the top of _derive's loop for
+    EVERY open record, before any reader and before any early ``continue`` (holder_gone and
+    rolled_back read busy; C's grace and the IN-FLIGHT anchor read typer). A skipped stamp left a
+    first-unseen anchor reading "seen" forever (B7 review correctness 4).
+
+    busy: an actuator, watcher or recorded launcher of the record, or an lr-fire-resume relay of THIS
+    move (settle.move_relay_live). _invariant's ACTIVE_FAST_S skip reads the same stamp, so a record
+    held only by the session's own long-lived relay is re-driven or paged, never silent.
+    typer: something that may still type into the session. C's quiet grace reads typer, not busy: a
+    launcher whose own verdict ended its typing is only the session's pty relay, and keying C on it
+    held the owed continue for good."""
+    first = _own(ctx, "pass_clock", "wall") != "pass"
+    live = bool(act.live_procs(rec, snap))
+    watcher = evidence.watcher_live(rec, snap)
+    settle.note_seen(
+        rec,
+        "busy",
+        live
+        or watcher
+        or evidence._role_live(rec, snap, "launcher", "fire_resume")
+        or settle.move_relay_live(ctx.home, rec, snap, now),
+        now,
+        first_unseen=first,
+    )
+    settle.note_seen(
+        rec,
+        "typer",
+        live
+        or watcher
+        or (
+            evidence.launcher_live(rec, snap)
+            and not settle.launcher_settled(ctx.home, rec, now)
+        ),
+        now,
+        first_unseen=first,
+    )
+    rec.close.setdefault("typer_at", 0.0)
 
 
 def _note_close(
@@ -1316,6 +1384,7 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
         key=lambda r: (r.kind != "limited", r.timeline.detected or now),
     ):
         step()
+        t_dec = max(now, ctx.wall())  # B7 R2: this record's decision instant
         res = T.PhaseResult(
             phase=rec.phase,
             substate=rec.substate,
@@ -1324,13 +1393,18 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
         which = act.choose(res, rec)
         if which is None:
             continue
-        typer_at = rec.close.get("typer_at", rec.close.get("busy_at", 0))
-        if which == "C" and now - float(typer_at) < C_GRACE_S:
+        if which == "C" and settle.quiet_for(rec, "typer", now) < C_GRACE_S:
             # The move's own launcher types the prompt, and its user record lands 1.6-11 s after
             # the Enter (W0) with re-sends up to 45 s: C only after that whole chain is quiet, or
-            # it types a SECOND prompt into a session that already has one (W5 rig). typer_at
-            # (stamped by _derive) ends the chain at the launcher's own verdict, not its exit.
+            # it types a SECOND prompt into a session that already has one (W5 rig). The typer
+            # stamp (_note_activity) ends the chain at the launcher's own verdict, not its exit.
+            # B7 R4: this is an EVIDENCE wait, so it reads the census instant, never t_dec. C's
+            # go-ahead is this census's UNPROMPTED and nothing re-reads the transcript before it
+            # types; a later wall reading cannot make that census newer (B7 reviews, finding 1).
             refused("grace", "C")
+            continue
+        if _c_rc5_landed(ctx, rec, which, t_dec):
+            refused("grace", "c-rc5-landed")
             continue
         ok, why = act.may_actuate(
             ctx.paths, mode, rec, which, snap, now, wake_ok, running, act.workers_cap()
@@ -1376,7 +1450,7 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
                     "%s (%s)" % (why, terms) if terms else why,
                 )
             rec.close["admit_terms"] = terms
-            rec.close.setdefault("admit_refused_at", now)
+            rec.close.setdefault("admit_refused_at", t_dec)
             continue
         rec.close.pop("admit_refused", None)
         rec.close.pop("admit_terms", None)
@@ -1427,11 +1501,43 @@ def _dispatch(ctx: Ctx, snap: T.Snapshot, mode: str, now: float) -> int:
             store.append_launch(
                 ctx.paths,
                 "%d\t%s\trecon-%s\tspawn\tpid=%d\tattempt=%d\trecord=%s"
-                % (now, rec.sid, which, pid, rec.attempt, rec.record_id),
+                % (
+                    max(now, ctx.wall()),
+                    rec.sid,
+                    which,
+                    pid,
+                    rec.attempt,
+                    rec.record_id,
+                ),
             )
         running += 1
         n += 1
     return n
+
+
+def _c_rc5_landed(ctx: Ctx, rec: T.Record, which: str, t: float) -> bool:
+    """C2-lite double-prompt guard: before a C or C-retry after an rc-5 C (CR sent, no record yet,
+    "CANNOT TELL"), re-read the target transcript in process for THAT attempt's token. kitty runs a
+    timed-out request late (~9 min measured, handoff-fire.sh), so the first C may land during the
+    backoff, after this pass's census read the transcript. Present: skip the retry, stamp the
+    submit, and let the next census re-derive. Returns True when the retry is skipped."""
+    token = rec.close.get("c_rc5_token")
+    if which not in classify.C_ACTUATORS or not token or rec.phase == "PRE-MOVE":
+        return False
+    tgt = evidence.transcript_path(rec.target_cfg, rec.cwd, rec.sid)
+    if not tgt or not os.path.exists(tgt) or tokens.find_token(tgt, token, 0) is None:
+        return False
+    rec.close.pop("c_rc5_token", None)
+    rec.timeline.submitted = rec.timeline.submitted or t
+    _event(
+        ctx.paths,
+        "c-rc5-landed",
+        rec.sid,
+        rec.record_id,
+        "the rc-5 C's token is in the target transcript: %s skipped, re-derived next pass"
+        % which,
+    )
+    return True
 
 
 def _command(ctx: Ctx, rec: T.Record, which: str) -> List[str]:
@@ -1677,6 +1783,25 @@ def request_abandon(paths: T.Paths, sid: str, by: str = "operator") -> str:
     return path
 
 
+def _kitty_degraded(ctx: Ctx, snap: T.Snapshot) -> None:
+    """C2 E5 T4: one ``kitty-degraded`` event when a pass's degraded list holds a ``kitty:`` entry
+    while an open record owes its continue (UNPROMPTED). It is the direct observable of the fault C2
+    targets: a deaf kitty spawns no C at all (E1), so no C exit can count it. On change only."""
+    kitty = sorted(d for d in snap.degraded if d.startswith("kitty:"))
+    owed = sorted(
+        r.sid[:8] for r in ctx.records.values() if r.open and r.substate == "UNPROMPTED"
+    )
+    key = "%s|%s" % (",".join(kitty), ",".join(owed)) if kitty and owed else None
+    if key is not None and key != _own(ctx, "kitty_degraded", None):
+        _event(
+            ctx.paths,
+            "kitty-degraded",
+            detail="%s while %d record(s) owe their continue: %s"
+            % (", ".join(kitty), len(owed), " ".join(owed)),
+        )
+    ctx.kitty_degraded = key
+
+
 def _invariant(ctx: Ctx, snap: T.Snapshot, now: Optional[float] = None) -> int:
     """§4.4: every non-terminal record has a live process, a next_eligible_at, or a named wait."""
     bad = 0
@@ -1690,11 +1815,18 @@ def _invariant(ctx: Ctx, snap: T.Snapshot, now: Optional[float] = None) -> int:
             continue
         # A confirmed move in its relaunch gap is owned by the phase table (rows 10-11 dispatch B or
         # R if the relaunch fails) — for a bounded time. Past IN_FLIGHT_MAX_S it is a defect again.
+        # B7 D4: its anchor is the confirm, else the first pass that saw it IN-FLIGHT (never
+        # updated_at, which save_records rewrites every pass); while this attempt's watcher or
+        # unsettled launcher lives (typer seen by this census) it is owned, however long.
+        t = now or time.time()
         if (
             r.phase == "PRE-MOVE"
             and r.substate == "IN-FLIGHT"
-            and (now or time.time()) - (r.timeline.confirmed or r.updated_at or 0)
-            < IN_FLIGHT_MAX_S
+            and (
+                t - (r.timeline.confirmed or r.close.get("in_flight_at") or t)
+                < IN_FLIGHT_MAX_S
+                or settle.quiet_for(r, "typer", t) < 0
+            )
         ):
             continue
         if act.live_procs(r, snap) or r.next_eligible_at or (r.wait and r.wait.reason):
@@ -1808,6 +1940,10 @@ def _run_pass(ctx: Ctx, force_observe: bool) -> Dict[str, Any]:
     store.ensure_dirs(paths)  # cheap, and a wiped root must never crash the loop
     act.reap_children()  # before ps, so an exited actuator is gone AND its exit code is kept
     mode = "observe" if force_observe else read_mode(paths, ctx.mode_cap)
+    # W8 kill switches, read every pass (no reload): B7's clocks, and classify's two mappings
+    ctx.pass_clock = read_pass_clock(paths)
+    ctx.admission.pacer_on_wall = ctx.pass_clock != "pass"
+    classify.read_switches(paths.root)
     now = time.time()
     _ph(ctx, "observe")
     # rig_keep: a sid the daemon holds a record for stays visible mid-move (observe._sessions)
@@ -1855,6 +1991,7 @@ def _run_pass(ctx: Ctx, force_observe: bool) -> Dict[str, Any]:
     _focus_ledger(paths, snap, buckets, mode, now)
     _ph(ctx, "derive")
     _derive(ctx, snap, now, facts, capped.latest_usage(ctx.home, now))
+    _kitty_degraded(ctx, snap)
     _draft_snapshots(ctx, snap)
     for rec in (
         ctx.records.values()

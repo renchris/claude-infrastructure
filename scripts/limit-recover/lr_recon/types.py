@@ -131,6 +131,9 @@ MAX_AGE_S: Dict[str, Optional[int]] = {
     "HOLD:repo-bare": None,
     "HOLD:iterm": None,
     "HELD:team": 600,  # not ENGAGED 10 min after reset
+    # C2 E5 (W8): an owed continue prompt, any phase, from close.unprompted_since. Before, nothing
+    # paged a long-unprompted record and the C2 re-open trigger rested on a weekly manual command.
+    "UNPROMPTED": 1800,
 }
 HOLD_BGWORK_SHIPLAND_MAX_AGE_S = (
     3600  # decision 2 (SETTLED): page at 60 min for a ship-land job

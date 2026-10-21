@@ -387,7 +387,8 @@ g1_copy_root() {
            printf '%s\n' scripts/limit-recover/*.sh)"
   for f in $files scripts/handoff-fire.sh scripts/boot-resume-launch.sh \
     scripts/lib/capacity-admit.sh bin/reso-resume-one bin/cc-lr bin/cc-wave-plan bin/cc-dispatch \
-    bin/claude-accounts tests/rig/lr-recon-rig.sh; do
+    bin/claude-accounts tests/rig/lr-recon-rig.sh \
+    scripts/limit-recover/lr_recon/tests/test_now_audit.py; do  # W8: proves the env-off rows
     mkdir -p "$ROOT/$(dirname "$f")"
     cp "$REPO/$f" "$ROOT/$f"
   done
@@ -406,7 +407,6 @@ g1_copy_root() {
   [ "$(printf '%s\n' "$output" | grep -c '^G1 DEBT ')" -eq "$n" ]
   printf '%s\n' "$output" | grep -q '^G1 DEBT scripts/handoff-fire.sh hf_lr_admit() debt:W12'
   printf '%s\n' "$output" | grep -q '^G1 DEBT scripts/handoff-fire.sh hf_recycle_load_gate() debt:typed-relaunch'
-  printf '%s\n' "$output" | grep -q '^G1 DEBT scripts/limit-recover/lr_recon/clock.py Clock.load_multiplier() debt:W8'
 }
 
 @test "C3: a new function holding a bare os.getloadavg() is red, and named" {
@@ -469,10 +469,12 @@ g1_copy_root() {
 }
 
 @test "C3: a capped-bound-stretch row whose function shows no min( cap is red (F12)" {
+  # planted, since W8 deleted the uncapped Clock.load_multiplier this control first pointed at
   g1_copy_root
-  awk -F'\t' 'BEGIN { OFS = FS } $2 == "Clock.load_multiplier" { $3 = "capped-bound-stretch" } { print }' \
-    "$REPO/tests/rig/g1-allow.tsv" > "$ALLOW"
+  printf '\n\ndef g1_uncapped():\n    return max(1.0, os.getloadavg()[0] / 2)\n' \
+    >> "$ROOT/scripts/limit-recover/lr_recon/plan.py"
+  printf 'scripts/limit-recover/lr_recon/plan.py\tg1_uncapped\tcapped-bound-stretch\tplanted, no cap\n' >> "$ALLOW"
   run g1_lint
   [ "$status" -eq 1 ]
-  [[ "$output" == *"G1 FAIL capped-bound-stretch row has no min(MAX, ...) cap in Clock.load_multiplier()"* ]] || false
+  [[ "$output" == *"G1 FAIL capped-bound-stretch row has no min(MAX, ...) cap in g1_uncapped()"* ]] || false
 }

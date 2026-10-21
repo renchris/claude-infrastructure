@@ -9,6 +9,7 @@ phase, class, the first ``!!`` line with digits and paths normalised, and the ac
 The frozen Record has no paging field, so paging is carried in the returned disposition.
 """
 
+import os
 import re
 from typing import Dict, List, Optional, Pattern, Tuple
 
@@ -33,6 +34,53 @@ _KILLED_RC = frozenset((124, 137, 143, -9, -15))
 _TERMINAL_TRANSIENT = frozenset(
     ("pane:resolver-unavailable", "unreachable", "wedged", "composer-unreadable")
 )
+
+
+# W8 kill switches, files under the reconciler root that __main__ re-reads every pass (read_switches):
+# hold-map.off restores today's DETERMINISTIC fall-through for the actuator hold reasons W8 mapped;
+# c-rc5-transient.off restores today's DETERMINISTIC reading of cc-tui's C failure lines.
+HOLD_MAP_OFF = "hold-map.off"
+C_RC5_OFF = "c-rc5-transient.off"
+SWITCHES: Dict[str, bool] = {"hold_map": True, "c_rc5_transient": True}
+
+
+def read_switches(root: str) -> None:
+    """Re-read both kill switches (a missing root reads as both on, the default)."""
+    SWITCHES["hold_map"] = not os.path.exists(os.path.join(root, HOLD_MAP_OFF))
+    SWITCHES["c_rc5_transient"] = not os.path.exists(os.path.join(root, C_RC5_OFF))
+
+
+# C2-lite (C2 efficacy E2): cc-tui's own verdict lines after C or C-retry that say OUR kitty RPC could
+# not tell, never that the session refused. rc 5 is "never failed" by cc-tui's own contract
+# (cc-tui.sh:14); a failed send-text RPC and a window missing from kitty's list are the RPC's
+# uncertainty under load. Read as DETERMINISTIC, a repeat escalated and REARM_CAP re-arms later the
+# record ended IMPOSSIBLE: our own timeout became a verdict. TRANSIENT backs off at <= 300 s. Read on
+# the LAST cc-tui line only: the actlog is per (attempt, actuator) and appended, so an earlier run's
+# line must not classify this one, and a transcript path in the line ("…-headless-…") must not reach
+# the free-text IMPOSSIBLE list first.
+C_ACTUATORS = ("C", "C-retry")
+_C_TRANSIENT = (
+    re.compile(r"^cc-tui: submitted, but .*\bCANNOT TELL\b"),  # rc 5
+    re.compile(r"^cc-tui: the send-text RPC failed for window \S+"),
+    re.compile(
+        r"^cc-tui: refusing to type into window \S+ — it is not in kitty's window list"
+    ),
+)
+
+
+def c_transient(text: str) -> bool:
+    """True iff the last ``cc-tui:`` line of a C/C-retry log is one of the RPC-uncertainty lines."""
+    if not SWITCHES["c_rc5_transient"]:
+        return False
+    last = next(
+        (
+            ln.strip()
+            for ln in reversed(text.splitlines())
+            if ln.lstrip().startswith("cc-tui:")
+        ),
+        "",
+    )
+    return any(p.search(last) for p in _C_TRANSIENT)
 
 
 def _rx(*alts: str) -> List[Pattern[str]]:
@@ -156,14 +204,48 @@ def map_notmoved(reason: str, kind: str, pane_at_shell: bool = True) -> Tuple[st
     # A slow or deaf terminal is a moment, not a fact about the session (lr-sustained-load 2026-10-20,
     # REPORT §4 A3 ii): retried on the TRANSIENT backoff (capped at BACKOFF_CAP_S) and paged, never
     # DETERMINISTIC, whose repeat escalates and ends IMPOSSIBLE. `load` stays out (A3 iii): only a typed
-    # relaunch still holds on load, and a 300 s retry of it under permanent load buys nothing.
+    # relaunch still holds on load, and a 300 s retry of it under permanent load buys nothing; W8 maps
+    # it to the re-probed HOLD-LOAD instead (HOLD_MAP below).
     if r in _TERMINAL_TRANSIENT:
         return ("TRANSIENT", "")
     if r.startswith("capacity"):
         return ("WAIT", "WAIT_CAPACITY")
     if r.startswith("router"):
         return ("TRANSIENT", "") if re.search(r"\b5\b", r) else ("WAIT", "WAIT_SLOT")
+    if SWITCHES["hold_map"]:
+        hit = HOLD_MAP.get(r) or (
+            HOLD_MAP["bg-work:"] if r.startswith("bg-work:") else None
+        )
+        if hit is not None:
+            return hit
     return ("DETERMINISTIC", "")
+
+
+# G5 closure (W8; B3 correctness R.3): every actuator hold reason has an explicit row. Before, these
+# fell to DETERMINISTIC, a repeat escalated, and after REARM_CAP re-arms the record ended IMPOSSIBLE.
+# Each row was read at its emitting site. Kill switch: recon/hold-map.off.
+HOLD_MAP: Dict[str, Tuple[str, str]] = {
+    # handoff-fire hf_bg_work_gate: a turn in flight, or at-rest cannot be shown (a busy composer)
+    "mid-turn": ("HOLD", "HOLD-COMPOSER"),
+    # hf_bg_work_gate: a live background job in the pane (ship-land, or any other), and its family
+    "bg-work:ship-land": ("HOLD", "HOLD-BGWORK"),
+    "bg-work:other": ("HOLD", "HOLD-BGWORK"),
+    "bg-work:": ("HOLD", "HOLD-BGWORK"),
+    # --relaunch-at-shell: a foreign LIVE launch-lock holder, or a live holder of the session (a
+    # registry pane or a --resume process): another driver has it, a REPORT §5 hard predicate.
+    # HOLD-COMPOSER is the re-probed hold (every REPROBE_S) that pages at its max age.
+    "launch-lock": ("HOLD", "HOLD-COMPOSER"),
+    "holder": ("HOLD", "HOLD-COMPOSER"),
+    # lr-handoff's own wake guard ("held before the first irreversible step … a retry is safe")
+    "wake-guard": ("TRANSIENT", ""),
+    # the typed relaunch held on load: re-probed, paged at MAX_AGE_S (900 s), never IMPOSSIBLE.
+    # Its root, the typed-relaunch hold itself, is W12b and the TR ruling.
+    "load": ("HOLD", "HOLD-LOAD"),
+    # lr-handoff --no-replace over a launcher-rooted pane: no shell survives its /exit, and nothing
+    # will make one. It KEEPS its refusal: lr-handoff pages it once per pane (lrh_page_no_shell_once), and
+    # its repeat escalates and is released like any other deterministic failure.
+    "no-shell": ("DETERMINISTIC", ""),
+}
 
 
 def backoff_s(n: int) -> int:

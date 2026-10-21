@@ -70,6 +70,9 @@ ACTLOG_MAX_AGE_S = (
 # keeper still hands a claim back to it, and never hands one to an actuator (A6 S-7).
 EXITS_OFF = "exit-files.off"
 KEEPER_OFF = "claim-keeper.off"
+LOAD_TERM_ON = (
+    "actuator-load-term.on"  # W8: restores the library's load term for actuators
+)
 _HEX = re.compile(r"[0-9a-f]{6,32}")
 # The wrapper's own ps row, anchored on its interpreter so a grep or pgrep row that merely quotes
 # the token is never adopted under an actuator name (A6 S-11).
@@ -98,9 +101,14 @@ def actuator_env(
     rec: T.Record, paths: T.Paths, pane_sock: str, base: Optional[Dict[str, str]] = None
 ) -> Dict[str, str]:
     """The §C8 environment, identical for every actuator."""
-    env = dict(os.environ if base is None else base)
+    src = os.environ if base is None else base
+    env = dict(src)
     env.update(
         {
+            # G1 Rule 3 (W8): no actuator inherits the capacity library's load term. R's
+            # cmd_replace runs boot-resume-launch.sh, whose bare cc_capacity_admit has the term ON
+            # by default at a 2.0/core ceiling, which permanent 15-40/core load never opens.
+            "CC_ADMIT_LOAD_TERM": "off",
             "LR_RECORD_ID": rec.record_id,
             "LR_ATTEMPT": str(rec.attempt),
             "HF_RECYCLE_ATTEMPT": "%s:%d" % (rec.record_id, rec.attempt),
@@ -129,6 +137,12 @@ def actuator_env(
         # 180 s and paged recycle-dead (W5b real canary 3). Canaries 1-2 passed only because
         # their resumed sessions happened to take a turn.
         env["HF_ENGAGE_BY_PROCESS"] = "1"
+    if os.path.exists(_p(paths.root, LOAD_TERM_ON)):
+        # kill switch: the actuators get the environment's own value back, as before W8
+        if "CC_ADMIT_LOAD_TERM" in src:
+            env["CC_ADMIT_LOAD_TERM"] = src["CC_ADMIT_LOAD_TERM"]
+        else:
+            env.pop("CC_ADMIT_LOAD_TERM", None)
     if pane_sock:
         env["CC_TERM_KITTY_TO"] = pane_sock
     if rec.admit_token:
@@ -364,8 +378,11 @@ def spawn(
 ) -> int:
     """§4.5 write order: intent nonce saved → spawn → (pid, lstart) into record and fence."""
     nonce = uuid.uuid4().hex[:12]
-    rec.intent = T.Intent(nonce=nonce, at=now, actuator=actuator)
-    store.save_record(paths, rec, now)
+    # B7 R2: the spawn's own instant, never the pass start (p50 >= 173 s backdated before A1).
+    # time.time read here, not as a default argument, so a test that patches it is honoured.
+    t = max(now, time.time())
+    rec.intent = T.Intent(nonce=nonce, at=t, actuator=actuator)
+    store.save_record(paths, rec, t)
     with open(_actlog(paths, rec, actuator), "ab", 0) as log:
         proc = popen(
             wrap(rec, nonce, argv),
@@ -388,7 +405,7 @@ def spawn(
             nonce=nonce,
         )
     )
-    store.save_record(paths, rec, now)
+    store.save_record(paths, rec, t)
     fence = store.read_fence(paths, rec.sid)
     if fence is not None and fence.record_id == rec.record_id:
         fence.procs = list(rec.procs)
@@ -396,7 +413,7 @@ def spawn(
     store.append_event(
         paths,
         T.Event(
-            t=now,
+            t=t,
             ev="spawn",
             sid=rec.sid,
             record_id=rec.record_id,

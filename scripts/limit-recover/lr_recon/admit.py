@@ -4,16 +4,20 @@ Four gates guard a limited session's FIRST TURN (the continue prompt), in this o
   1. the frozen restore budget R (growth past the pre-limit population is refused),
   2. the wall-clock pace: a token bucket of PACE_BURST that refills one per PACE_EVERY_S of WALL
      time, with no load term (it replaced the CPU brake, 2026-10-20),
-  3. the per-target-account pacer (at most 3 submitted-not-ENGAGED per account),
+  3. the per-target-account pacer (at most 3 first turns per account per 20 s of WALL time; under
+     load ENGAGED takes minutes, so more than 3 may be submitted-not-ENGAGED at once, still bounded
+     by the pace and BootSlots),
   4. the library's memory terms via ``cc_capacity_probe`` (a PROBE: it charges nothing).
 
 WHY THE BRAKE WENT (docs/research/lr-sustained-load-2026-10-20/REPORT.md §3.2, lever A4). It
 admitted while load1/ncpu <= max(2.5, L_open), else once 20 s after the last admission. On this
 machine load stays at 15-40 per core by design, and the session it gates does not move load1, so
 the load term never opened; and its 20 s floor was measured against the PASS's ``now``, one value
-for the whole pass, which made it one admission per pass. The pace and the drip now read their own
-wall clock (``self.wall``) at decide time. The pass ``now`` keeps its one job: the identity of a
-pass in the restore budget's refusal run, which must count passes, not members.
+for the whole pass, which made it one admission per pass. The pace, the drip and the pacer now read
+their own wall clock (``self.wall``) at decide time (B7 D3: a pacer slot stamped at the pass ``now``
+never freed inside a pass, which capped first turns at 3 per account per pass), never earlier than
+the census instant, and the pacer re-reads it after the probe. The pass ``now`` keeps its one job:
+the identity of a pass in the restore budget's refusal run, which must count passes, not members.
 
 A relaunch with no prompt needs none of them. A LIMITED session whose first turn is refused is still
 relaunched unprompted (RELAUNCHED-UNPROMPTED is a named wait that frees the source seat), so a refusal
@@ -108,6 +112,8 @@ class Admission:
         self.repo = repo or REPO_ROOT
         # the pace's and the drip's clock, read at decide time; never the pass's ``now``
         self.wall: Callable[[], float] = wall or time.time
+        # B7: the pacer reads the wall too; the reconciler's recon/pass-clock kill switch clears it
+        self.pacer_on_wall = True
         e = env if env is not None else os.environ
         self.pacer_per_acct = _env_int(e, "LR_PACER_PER_ACCT", 3)
         self.restore_r: Optional[int] = None
@@ -204,10 +210,15 @@ class Admission:
 
     def pace_wake(self, sid: str, acct: str, now: float) -> Tuple[bool, str]:
         """In-place reset wakes share the pacer; the caller adds ``jitter_s(sid)`` to the wake time."""
-        if not self.pacer_ok(acct, now, sid):
+        t = self._t_dec(now)
+        if not self.pacer_ok(acct, t, sid):
             return False, "pacer:%s" % acct
-        self.pacer_take(sid, acct, now)
+        self.pacer_take(sid, acct, t)
         return True, "admit"
+
+    def _t_dec(self, now: float) -> float:
+        """B7 R2/R3: the pacer's decision instant, the wall but never earlier than the census."""
+        return max(now, self.wall()) if self.pacer_on_wall else now
 
     # ── gate 4: the library's memory terms ───────────────────────────────────────────────────
     def _lib(self) -> str:
@@ -305,7 +316,7 @@ class Admission:
             return False, "restore-r"
         if not self.pace_ok(self.wall()):
             return False, "pace"
-        if not self.pacer_ok(acct, now, sid):
+        if not self.pacer_ok(acct, self._t_dec(now), sid):
             return False, "pacer:%s" % acct
         ok, reason = (False, "restore-r") if over else self.probe(self.restore_r)
         if not ok:
@@ -327,9 +338,11 @@ class Admission:
         else:
             reason = "admit"
             self.refusals[cohort] = 0
-        self.last_admit_at = now
+        # B7: re-read after the probe (up to 30 s), so the slot is stamped at the admission itself
+        t_dec = self._t_dec(now)
+        self.last_admit_at = t_dec
         self.pace_take()
-        self.pacer_take(sid, acct, now)
+        self.pacer_take(sid, acct, t_dec)
         return True, reason
 
 

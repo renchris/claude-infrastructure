@@ -15,8 +15,6 @@ scripts/limit-recover/lr_recon/telemetry.py	Telemetry.__init__	telemetry	binds o
 scripts/limit-recover/lr_recon/__main__.py	_plan	debt:B2	load1 feeds plan.place_timeout (capped at 120 s) and the log line; the cap lives in place_timeout, so it is not visible here
 scripts/limit-recover/lr_recon/plan.py	place_timeout	capped-bound-stretch	--place bound: min(PLACE_TIMEOUT_MAX_S, ...), 120 s at most
 scripts/limit-recover/lr_recon/observe.py	ps_bound	capped-bound-stretch	ps bound: min(PS_BOUND_MAX_S, ...), 40 s at most; os.getloadavg is a default argument (F2)
-scripts/limit-recover/lr_recon/clock.py	Clock.load_multiplier	debt:W8	max(1, load1/ncpu/2) is uncapped (x20 at 40/core) and has no caller (F12)
-scripts/limit-recover/lr_recon/clock.py	Clock.__init__	debt:W8	binds os.getloadavg as a default argument, the seam load_multiplier reads (F2)
 bin/cc-lr	cl_self_wait_s	capped-bound-stretch	self-wait budget 900 s x min(4, 1 + load/core / 5), 3600 s at most (awk clamp)
 scripts/handoff-fire.sh	hf_load_per_core	telemetry	value accessor (seam HF_LOAD_PER_CORE); every caller is scanned as a read and carries its own row
 scripts/handoff-fire.sh	hf_load_scaled	capped-bound-stretch	base x min(4, 1 + load/core / 10) (awk clamp)
@@ -42,5 +40,6 @@ scripts/limit-recover/lr-upgrade.sh	lru_step_row	telemetry	load1= field of the u
 scripts/limit-recover/lr-upgrade.sh	lru_status	telemetry	writes and displays the census header's load1= field
 scripts/limit-recover/lr-upgrade.sh	lru_refill	telemetry	load1= field of the census header
 scripts/limit-recover/lr-upgrade.sh	lru_capacity	debt:W12	bare cc_capacity_probe fallback, reached only when lr-lib.sh's term-off lr_capacity_probe_corrected is not loaded (owner provisional, asked of the lead)
-scripts/boot-resume-launch.sh	<top>	debt:W8	bare cc_capacity_admit under the actuator env; W8 converts it to env-off:act.actuator_env
+scripts/boot-resume-launch.sh	<top>	env-off:act.actuator_env	bare cc_capacity_admit, reached under R's cmd_replace; act.actuator_env sets CC_ADMIT_LOAD_TERM=off for every actuator (W8, test_now_audit ActuatorEnvLoadTermOff)
+scripts/limit-recover/lr-lib.sh	lr_capacity_probe_corrected	env-off:act.actuator_env	${CC_ADMIT_LOAD_TERM:-off}: the one rail env that names the term, act.actuator_env, sets it off (W8); every other caller passes CC_ADMIT_LOAD_TERM=off itself
 bin/reso-resume-one	<top>	debt:resume-sessions	bare cc_capacity_admit; off the rail (no rail caller: the actuators mention reso-resume-one in comments only)

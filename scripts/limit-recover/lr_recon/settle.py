@@ -16,9 +16,11 @@ Three things W3 built the parts for and nothing called, found by the W5 rig's fi
   lr-transplant writes it; ENGAGED (§4.2 row 5) cannot hold without it.
 """
 
+import calendar
 import json
 import os
 import re
+import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from lr_recon import capped, census, classify, report
@@ -58,7 +60,12 @@ TEAM_ABSORBS = ("WAIT_SLOT", "WAIT_DATA", "WAIT_CAPACITY", "BACKOFF", "PLANNED")
 TEAM_EXIT_PASSES = 2
 # Holds the census cannot observe: re-probed through the actuator's own precheck.
 REPROBED = ("HOLD-DRAFT", "HOLD-MENU", "HOLD-COMPOSER", "HOLD-LOAD")
-_REASON = re.compile(r"(?:PRECHECK |verdict: )(?:HELD|REFUSED):([A-Za-z:-]+)")
+# lr-handoff's wake guard writes neither a PRECHECK nor a `verdict:` line, only `lr-handoff:
+# HELD:wake-guard (woke Ns ago)` and a NOTMOVED verdict quoting it (lr-handoff.sh WAKE GUARD), so
+# that one line is matched by name (W8 G5): unmatched, it fell to the free-text DETERMINISTIC.
+_REASON = re.compile(
+    r"(?:PRECHECK |verdict: |lr-handoff: (?=HELD:wake-guard\b))(?:HELD|REFUSED):([A-Za-z:-]+)"
+)
 # classify's IMPOSSIBLE text, which is also R's own subject line (outcome)
 _LAUNCHER_ROOTED = re.compile(r"launcher[- ]rooted", re.IGNORECASE)
 # handoff-fire's held-after-confirm reasons (recycle-held-<reason>) → the PRE-MOVE hold they mean
@@ -143,6 +150,10 @@ def outcome(
         if disp == "DETERMINISTIC" and "unreadable" in reason:
             disp = "TRANSIENT"  # a screen we could not read is a retry, never a verdict
         return disp, sub, reason
+    if actuator in classify.C_ACTUATORS and classify.c_transient(text):
+        # C2-lite (W8): cc-tui could not tell, or its kitty RPC failed; never a verdict on the
+        # session. Read first, so no free-text class outranks cc-tui's own last line.
+        return "TRANSIENT", "", ""
     lines = text.splitlines()[-40:]
     if actuator == "R":
         # R's own subject: lr-handoff's REPLACE announces "pane P is launcher-rooted … REPLACING in
@@ -187,6 +198,13 @@ def settle_exit(
         return wake_exit(rec, rc, text, now)
     if rc == 0 and pr.argv_hash == "UNCONFIRM":
         return _unconfirmed(rec, now)
+    if pr.argv_hash in classify.C_ACTUATORS:
+        # C2-lite: an rc-5 C typed its prompt and could not see it land; the next C or C-retry
+        # first looks for THIS token (__main__._c_rc5_landed). A later exit of either kind ends it.
+        if rc == 5 and rec.submit_token:
+            rec.close["c_rc5_token"] = rec.submit_token
+        elif rc == 0:
+            rec.close.pop("c_rc5_token", None)
     if rc == 0:
         release_holds(rec)
         # TRANSPLANTED too: a confirmed move is usually derived TRANSPLANTED (row 12) in the pass
@@ -256,7 +274,7 @@ def rolled_back(paths: T.Paths, rec: T.Record, now: float) -> str:
         or not rec.target_acct
         or t.confirmed is not None
         or t.exit_typed_by_me is not None
-        or now - float(rec.close.get("busy_at", 0)) < HOLDER_GONE_QUIET_S
+        or quiet_for(rec, "busy", now) < HOLDER_GONE_QUIET_S
     ):
         return ""
     for a in MOVE_ACTUATORS:
@@ -292,6 +310,10 @@ def _score(
         rec.last_error = T.LastError(cls="HOLD", fingerprint=fp, detail=detail, at=now)
         if pre:
             _hold(rec, sub or _hold_substate(text), now)
+            if rec.wait is not None and reason.startswith("bg-work:ship-land"):
+                rec.wait.detail = (
+                    "ship-land"  # decision 2: a ship-land job pages at 60 min
+                )
         else:
             # Past PRE-MOVE no hold substate stops the phase table, which re-derived the same
             # actuator every pass: a held husk re-spawned A-husk every ~4 s (W5b real canary 3,
@@ -1022,9 +1044,90 @@ def _never_began(rec: T.Record) -> bool:
     )
 
 
-HOLDER_GONE_QUIET_S = (
-    60.0  # since a watcher or launcher of the move was last seen (close.busy_at)
-)
+def note_seen(
+    rec: T.Record, key: str, seen: bool, now: float, first_unseen: bool = True
+) -> None:
+    """B7 R5: stamp one census's view of an activity (``busy``: an actuator, watcher or launcher of
+    the move; ``typer``: something that may still type into the session), before any reader of the
+    same pass. ``<key>_at`` is the last census that SAW it, an UPPER bound on when it stopped;
+    ``<key>_quiet_at`` is the first census that did NOT, a LOWER bound (None while it is seen). A
+    quiet window is measured from the lower bound: from the upper bound one long pass read as that
+    much quiet, with the activity gone a second before the census. ``first_unseen=False`` (the
+    recon/pass-clock kill switch) keeps the old last-seen reading."""
+    at, quiet = key + "_at", key + "_quiet_at"
+    if seen:
+        rec.close[at] = now
+        rec.close[quiet] = None
+    elif quiet not in rec.close:
+        # a record no pass of this code has stamped (an older daemon's): keep its old reading, so
+        # the first pass after the upgrade decides exactly as before (a fresh `now` here re-waited a
+        # 30-min-old rollback 60 s more and paged RECON-DEFECT, measured)
+        rec.close[quiet] = float(rec.close.get(at) or 0.0)
+    elif rec.close[quiet] is None:
+        # seen by the previous census, not by this one
+        rec.close[quiet] = now if first_unseen else float(rec.close.get(at) or 0.0)
+
+
+def quiet_for(rec: T.Record, key: str, t: float) -> float:
+    """Seconds ``key`` has certainly been absent at ``t`` (-1.0: this pass's census saw it). A record
+    no pass has stamped yet (a unit test) reads the old last-seen gap."""
+    quiet = key + "_quiet_at"
+    if quiet not in rec.close:
+        last = rec.close.get(key + "_at")
+        if last is None and key == "typer":
+            last = rec.close.get(
+                "busy_at"
+            )  # the C grace's reading before typer_at (58885750c)
+        return t - float(last or 0.0)
+    q = rec.close[quiet]
+    return -1.0 if q is None else t - float(q)
+
+
+def _lstart_epoch(lstart: str) -> Optional[float]:
+    """ps LSTART (read under TZ=UTC LC_ALL=C, observe.PS_ENV_OVERRIDES) as epoch seconds."""
+    try:
+        return float(calendar.timegm(time.strptime(lstart, "%a %b %d %H:%M:%S %Y")))
+    except (TypeError, ValueError):
+        return None
+
+
+def _attempt_launcher_open(home: str, rec: T.Record, now: float) -> bool:
+    """This attempt's launcher started (a ``relaunch-typed`` event) and has not settled."""
+    started = any(
+        ev.get("state") == "relaunch-typed" for ev in _attempt_events(home, rec)
+    )
+    return started and not launcher_settled(home, rec, now)
+
+
+def move_relay_live(home: str, rec: T.Record, snap: T.Snapshot, now: float) -> bool:
+    """A live ``lr-fire-resume … <sid>`` that belongs to THIS move (B7 review: busy is a lane of the
+    move, not any relay of the sid). The relay is the session's pty relay for the session's whole
+    life (lr-fire-resume execs a shell only after claude exits), so a source pane rooted by an
+    EARLIER relay was busy in every census and a rolled-back move on it never re-drove, silently
+    (6 relays measured alive 13-15 h). A relay counts if it started after the move (its lstart is
+    later than timeline.planned, else the move spawn's intent.at), or this attempt's launcher has
+    not settled. With no move start on record, or an unreadable lstart, every relay counts, as
+    before."""
+    start = rec.timeline.planned
+    if start is None and rec.intent is not None:
+        start = rec.intent.at
+    relays = [
+        r
+        for r in snap.procs.values()
+        if not r.zombie and rec.sid in r.args and "lr-fire-resume" in r.args
+    ]
+    if not relays:
+        return False
+    if start is None:
+        return True
+    for r in relays:
+        t = _lstart_epoch(r.lstart)
+        if t is None or t > float(start):
+            return True
+    return _attempt_launcher_open(home, rec, now)
+
+
+HOLDER_GONE_QUIET_S = 60.0  # since the first census that saw no watcher or launcher of the move (busy_quiet_at)
 
 
 def holder_gone(rec: T.Record, snap: T.Snapshot, now: float) -> str:
@@ -1047,7 +1150,7 @@ def holder_gone(rec: T.Record, snap: T.Snapshot, now: float) -> str:
         or rec.next_eligible_at
     ):
         return ""
-    if now - float(rec.close.get("busy_at", 0)) < HOLDER_GONE_QUIET_S:
+    if quiet_for(rec, "busy", now) < HOLDER_GONE_QUIET_S:
         return ""
     s = snap.sessions.get(rec.sid)
     if s is not None and s.holders:

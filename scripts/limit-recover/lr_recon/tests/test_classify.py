@@ -144,8 +144,9 @@ class NotMoved(unittest.TestCase):
                 self.assertEqual(C.map_notmoved(r, kind), ("TRANSIENT", ""), r)
 
     def test_load_stays_out_of_transient(self) -> None:
-        # A3 iii: only a typed relaunch still holds on load; it is not retried every 300 s.
-        self.assertEqual(C.map_notmoved("load", "limited"), ("DETERMINISTIC", ""))
+        # A3 iii: only a typed relaunch still holds on load; it is not retried every 300 s. W8: it
+        # is the re-probed HOLD-LOAD (paged at 900 s), never DETERMINISTIC, never IMPOSSIBLE.
+        self.assertEqual(C.map_notmoved("load", "limited"), ("HOLD", "HOLD-LOAD"))
 
     def test_terminal_hold_never_reaches_impossible(self) -> None:
         # The same unreachable hold, hour after hour, backs off at <= 300 s and pages; it never

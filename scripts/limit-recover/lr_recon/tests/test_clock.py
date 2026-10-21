@@ -187,22 +187,6 @@ class WakeGuard(unittest.TestCase):
         self.assertTrue(clk.wake_guard_ok())
 
 
-class LoadMultiplier(unittest.TestCase):
-    def test_floor_and_scale(self) -> None:
-        ft = FakeTime()
-        idle = ft.clock(getloadavg=lambda: (0.5, 0.0, 0.0), cpu_count=lambda: 8)
-        self.assertEqual(idle.load_multiplier(), 1.0)
-        busy = ft.clock(getloadavg=lambda: (48.0, 0.0, 0.0), cpu_count=lambda: 8)
-        self.assertAlmostEqual(busy.load_multiplier(), 3.0)
-        nocpu = ft.clock(getloadavg=lambda: (4.0, 0.0, 0.0), cpu_count=lambda: None)
-        self.assertAlmostEqual(nocpu.load_multiplier(), 2.0)
-
-        def boom() -> Any:
-            raise OSError("no loadavg")
-
-        self.assertEqual(ft.clock(getloadavg=boom).load_multiplier(), 1.0)
-
-
 class HeartbeatFile(unittest.TestCase):
     def setUp(self) -> None:
         self.dir = tempfile.mkdtemp(prefix="lr-clock-test.")

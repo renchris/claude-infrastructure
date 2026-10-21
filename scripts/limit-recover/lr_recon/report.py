@@ -53,6 +53,7 @@ _SAY: Dict[str, str] = {
     "HOLD-MENU": "held: a menu is open in the pane",
     "HOLD-COMPOSER": "held: the precheck read a turn in flight or an unreadable composer",
     "HOLD-LOAD": "held: the recycle was refused for machine load",
+    "UNPROMPTED": "relaunched, but its continue prompt is not yet delivered",
     "HOLD:repo-bare": "held: the checkout is a bare repository",
     "HOLD:iterm": "held: an iTerm pane cannot be relaunched in place",
     "HELD:team": "held: team lead; continued in place at the reset",
@@ -107,7 +108,20 @@ def _state(rec: T.Record) -> Optional[str]:
     """The named WAIT/HOLD state, if any: the wait's reason, else a PRE-MOVE substate."""
     if rec.wait is not None:
         return rec.wait.reason
+    if rec.substate == "UNPROMPTED":
+        return "UNPROMPTED"  # W8: an owed continue has a max age in every phase (C2 E5)
     return rec.substate if rec.phase == "PRE-MOVE" else None
+
+
+def _since(rec: T.Record) -> float:
+    """When the record entered its named state: the wait's own stamp; for UNPROMPTED its durable
+    close.unprompted_since; else (B7 D4b) the detection, never updated_at, which save_records
+    rewrites every pass (a max age measured from it never came)."""
+    if rec.wait is not None:
+        return rec.wait.since
+    if _state(rec) == "UNPROMPTED" and rec.close.get("unprompted_since") is not None:
+        return float(rec.close["unprompted_since"])
+    return rec.timeline.detected or rec.updated_at
 
 
 def bucket(rec: T.Record) -> str:
@@ -193,7 +207,7 @@ def max_age_deadline(rec: T.Record) -> Optional[float]:
     st, w = _state(rec), rec.wait
     if rec.terminal is not None or st is None or st not in T.MAX_AGE_S:
         return None
-    since = w.since if w is not None else rec.updated_at
+    since = _since(rec)
     limit = T.MAX_AGE_S[st]
     if limit is None:
         return since  # "at once": due on entry
@@ -221,7 +235,7 @@ def residue_needs(rec: T.Record, now: float) -> Optional[str]:
     st = _state(rec)
     if st not in ("HOLD-DRAFT", "HOLD-BGWORK") or not max_age_due(rec, now):
         return None
-    since = rec.wait.since if rec.wait else rec.updated_at
+    since = _since(rec)
     detail = " (%s)" % rec.wait.detail if rec.wait and rec.wait.detail else ""
     return "limit-recover on %s %s: %s is %s%s for %s — %s%s" % (
         rec.source_acct or "?",
@@ -1001,7 +1015,7 @@ class Reporter:
         last = latch.get(key)
         if isinstance(last, (int, float)) and now - last < REFIRE_S:
             return None
-        since = rec.wait.since if rec.wait else rec.updated_at
+        since = _since(rec)
         text = "%s: %s — %s for %s, past its maximum age — next: %s%s" % (
             self._head(cohort),
             who(rec),
