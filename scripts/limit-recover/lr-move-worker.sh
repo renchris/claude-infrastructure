@@ -55,6 +55,10 @@ PANE="$(row pane)"; FROM="$(jq -r '.from // empty' "$PLAN" 2>/dev/null)"; TO="$(
 SRC_CFG="$(row config_dir)"; TO_CFG="$(jq -r '.to_config_dir // empty' "$PLAN" 2>/dev/null)"
 CWD="$(row cwd)"; DISP="$(row disposition)"; UNTIL="$(jq -r '.until_idle_s // 0' "$PLAN" 2>/dev/null)"; ACCT="$(row account)"
 WIDTH="$(jq -r '.slots // empty' "$PLAN" 2>/dev/null)"; : "${WIDTH:=${LR_MOVE_SLOTS:-4}}"
+# A LATE-BAND SHED ROW (D2b, LR_SUSTAINED_LOAD W16; bin/cc-lr CC_LR_MOVE_ORIGIN / _HOLD_FOCUSED). Absent
+# on every operator batch, which therefore runs exactly as before.
+ORIGIN="$(jq -r '.origin // empty' "$PLAN" 2>/dev/null)"
+HOLD_FOCUSED="$(jq -r '.hold_focused // false' "$PLAN" 2>/dev/null)"
 # The driven rows ahead of this one in the plan (act move or wait, plan order): W3 yields to them.
 AHEAD="$(jq -r --arg s "$SID" '[.rows[] | select(.act == "move" or .act == "wait") | .sid] | .[0:(index($s) // 0)][]' "$PLAN" 2>/dev/null | tr '\n' ' ')"
 REC="move-$BATCH-${SID:0:8}"
@@ -109,11 +113,28 @@ ev claimed
 # and one read is ~12 forks, so a read on every poll is pure fork cost on a box whose load ran
 # ~270-390 while this was built (2026-10-18).
 _mw_intent_at=0
+# A SHED INTENT IS NOT AN OPERATOR'S (D2 review D10). `--operator-intent` means a healthy pane moved by
+# its operator, and lr_intent_check reads no `origin`, so a shed's intent alone would keep actuating
+# after `rm shed/mode`, after the breaker tripped, or after autorecover.on went, until it expired. A
+# shed row is therefore re-authorized at every intent read: shed/mode reads `on`, there is no
+# shed/breaker, the global zero-human marker exists and LR_SHED is not off. The plan or the intent
+# saying `shed` is enough to require it.
+shed_authorized() { # → 0 when the shed may still actuate (LR_INTENT_WHY says why not)
+  local m
+  [ "${LR_SHED:-on}" != off ] || { LR_INTENT_WHY="shed-revoked: LR_SHED=off"; return 1; }
+  m="$(awk 'NF { print $1; exit }' "$STATE/shed/mode" 2>/dev/null || true)"
+  [ "$m" = on ] || { LR_INTENT_WHY="shed-revoked: shed/mode reads '${m:-absent}', not on"; return 1; }
+  [ ! -e "$STATE/shed/breaker" ] || { LR_INTENT_WHY="shed-revoked: shed/breaker is present (a casualty or a strand)"; return 1; }
+  [ -e "$STATE/autorecover.on" ] || { LR_INTENT_WHY="shed-revoked: autorecover.on is absent"; return 1; }
+}
 intent_ok() { # → 0 while the intent still admits this move (LR_INTENT_WHY says why not)
   _mw_intent_at=$SECONDS
   command -v lr_intent_check >/dev/null 2>&1 \
     || { LR_INTENT_WHY="unavailable: lr-intent.sh is not beside the worker, so no intent can be checked"; return 1; }
-  lr_intent_check "$BDIR/intent/$SID.json" "$SID" "$PANE" "$ACCT" "$TO"
+  lr_intent_check "$BDIR/intent/$SID.json" "$SID" "$PANE" "$ACCT" "$TO" || return 1
+  if [ "$ORIGIN" = shed ] || [ "$(jq -r '.origin // empty' "$BDIR/intent/$SID.json" 2>/dev/null)" = shed ]; then
+    shed_authorized
+  fi
 }
 intent_stop() { finish NOTMOVED "intent-invalid: $LR_INTENT_WHY (re-checked by the worker before the move); nothing touched"; }
 intent_recheck() { # the polls' re-read, once LR_MOVE_INTENT_RECHECK_S have passed since the last one
@@ -464,6 +485,27 @@ fi
 # The last read before W5 (F-B3): the kernel read, the intent and the box all came after the slot's
 # limit read, and each can take seconds under load.
 if [ "$_mw_limit_on" = 1 ] && limited_now; then limited_stop; fi
+# A PLAN THAT HOLDS FOCUSED PANES (hold_focused, the late-band shed; D2 review D9). The recycle's focus
+# gate (lr-lib.sh lr_focus_gate) holds a focused pane under LR_MOVE_FOCUSED=off but lets `unknown`
+# through, and unknown is exactly a kitty too slow to answer `ls` at load (B8). So for these rows the
+# worker reads focus itself, last, with nothing slow after it: focused ⇒ HELD:focused, unknown ⇒
+# HELD:focus-unknown (LR_MOVE_FOCUS_UNKNOWN=hold, the default; =proceed lets it through). The
+# handoff still gets LR_MOVE_FOCUSED=off, so a pane focused after this read is held at the /exit.
+# FOCUS_ENV is expanded with the bash 3.2 guard (review D6): a bare "${A[@]}" of an empty array is
+# `unbound variable` under `set -u` there, and would abort every operator row right here.
+FOCUS_ENV=()
+if [ "$HOLD_FOCUSED" = true ]; then
+  FOCUS_ENV=(LR_MOVE_FOCUSED=off)
+  if [ -n "$SOCK" ]; then _mw_focus="$(CC_TERM_KITTY_TO="$SOCK" lr_pane_focused "$PANE" 2>/dev/null || true)"
+  else _mw_focus="$(lr_pane_focused "$PANE" 2>/dev/null || true)"; fi
+  ev focus "${_mw_focus:-unknown} (hold_focused)"
+  case "${_mw_focus:-unknown}" in
+    yes) finish NOTMOVED "HELD:focused — the plan holds focused panes (a late-band shed row) and this one has focus; nothing touched" ;;
+    no) ;;
+    *) [ "${LR_MOVE_FOCUS_UNKNOWN:-hold}" = proceed ] \
+         || finish NOTMOVED "HELD:focus-unknown — the plan holds focused panes and this pane's focus could not be read; nothing touched" ;;
+  esac
+fi
 attempt=1
 while :; do
   HLOG="$BDIR/$SID.handoff.log"; [ "$attempt" -eq 1 ] || HLOG="$BDIR/$SID.handoff.$attempt.log"
@@ -476,6 +518,7 @@ while :; do
       CLAUDE_CODE_DISABLE_AGENT_VIEW=1 HF_ENGAGE_BY_PROCESS=1 LR_ADMIT_MODE=swap LR_SEGMENT_PCT=90 \
       ${LR_MOVE_PRESEEDED:+LR_PRESEED_DONE=1} ${SOCK:+CC_TERM_KITTY_TO="$SOCK"} \
       ${DRAFT_CARRY:+LRH_CARRY_DRAFT=1 CC_RECYCLE_DRAFT_WAIT=0 HF_RCY_CARRY_STALE=1} \
+      ${FOCUS_ENV[@]+"${FOCUS_ENV[@]}"} \
       /bin/bash "$HANDOFF" --sid "$SID" --config-dir "$SRC_CFG" --cwd "$CWD" --target "$TO" --launch --in-place \
         --source-pane "$PANE" --record-id "$REC" --attempt "$attempt" \
         --voluntary --operator-intent "$BDIR/intent/$SID.json" --no-prompt --no-replace \

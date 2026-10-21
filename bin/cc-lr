@@ -1175,7 +1175,8 @@ EOF3
 # A row is `move` only when the idle oracle (lr-upgrade.sh --switch-census) says so AND none of the
 # lane's own holds applies: a limit-blocked session owes a turn and belongs to `recover --limited`;
 # a session with a live /goal would be driven on by its goal mid-move; a session another actuator
-# has claimed is in flight. Drafts are held, never carried.
+# has claimed is in flight. A draft is carried unsent since 2026-10-18 (`draft` rows, cl_move_rows);
+# LR_MOVE_CARRY_DRAFT=off holds it, which is how the late-band shed always runs (D2 review D8).
 # Kill switch LR_MOVE_LANE=off: `move` refuses rc 2 and writes nothing; `plan` still reads.
 cl_move_lib() { # → 0 when lr-move-lib.sh is loaded
   local f
@@ -1579,8 +1580,18 @@ EOF
   [ ! -s "$bdir/summary.json" ] || printf 'summary: %s\n' "$(jq -r '"\(.status): \(.verdicts); target auth after the batch: \(.target_auth_after); \(.wall_s)s"' "$bdir/summary.json")"
 }
 CL_MOVE_EXCL=""
-CL_MOVE_QUEUED_OUT=""   # a file path: a real run writes its batch id there once the request is on disk
-CL_MOVE_NO_STATUS_ROW=""   # set by rotate, whose own in-flight list names each batch's status command
+# THREE ENVIRONMENT SEAMS for a machine caller (D2b's late-band shed, scripts/limit-recover/lr-shed.py;
+# LR_SUSTAINED_LOAD W16). These were plain globals reset at load, so only `rotate`, inside this
+# process, could set them. Unset, every plan and intent is byte-identical to before.
+#   CC_LR_MOVE_QUEUED_OUT    a file path: a real run writes its batch id there once the request is on disk
+#   CC_LR_MOVE_ORIGIN        `shed` or empty (an operator). Recorded in plan.json and each intent, so
+#                            the worker re-authorizes a shed row at actuation (review D10) and the
+#                            shed finds its own batches on disk (review D3). Any other value refuses.
+#   CC_LR_MOVE_HOLD_FOCUSED  1: the worker holds a focused pane, and one whose focus it cannot read
+CL_MOVE_QUEUED_OUT="${CC_LR_MOVE_QUEUED_OUT:-}"
+CL_MOVE_NO_STATUS_ROW="${CC_LR_MOVE_QUEUED_OUT:+1}"   # also set by rotate, whose own in-flight list names each batch's status command
+CL_MOVE_ORIGIN="${CC_LR_MOVE_ORIGIN:-}"
+CL_MOVE_HOLD_FOCUSED="${CC_LR_MOVE_HOLD_FOCUSED:-}"
 cmd_move() {
   local from="" to="" until_s=0 wait_s="${CC_LR_MOVE_WAIT_S:-600}" cold=0 dry=0 slots="" unver=false self="" selv="" saw_pane=0 json=0
   local status_b="" abort_b="" rows rc=0 batch bdir by now nm s p ac cfg act tmp unroute="" urc hint=""
@@ -1613,6 +1624,7 @@ cmd_move() {
     return 0
   fi
   case "$until_s$wait_s${slots:-0}" in *[!0-9]*) echo "cc-lr move: --until-idle, --wait and --slots take whole numbers" >&2; exit 3 ;; esac
+  case "$CL_MOVE_ORIGIN" in ''|shed) ;; *) echo "cc-lr move: CC_LR_MOVE_ORIGIN must be empty or 'shed', not '$CL_MOVE_ORIGIN'. Nothing was written." >&2; exit 3 ;; esac
   [ -n "$to" ] && { [ -n "$from" ] || [ -n "$self" ]; } || { echo "cc-lr move: name the source and the target — --from <acct> --to <acct|auto> (or --sid/--pane with --to)" >&2; exit 3; }
   if [ "$to" = auto ]; then
     [ -n "$from" ] || { echo "cc-lr move: --to auto needs --from" >&2; exit 3; }
@@ -1690,8 +1702,11 @@ cmd_move() {
   printf '%s\n' "$rows" | cl_move_rows_json | jq -c --arg b "$batch" --arg from "$from" --arg to "$to" --arg tcfg "${CC_ACCT_DIR:-}" \
       --argjson until "$until_s" --arg slots "$slots" --arg by "${by:-?}" --argjson unver "$unver" --argjson ts "$now" \
       --arg rqp "$by" --arg rqs "$(cl_requester_sid)" --argjson rre "$ranked_at" \
+      --arg origin "$CL_MOVE_ORIGIN" --arg hf "$CL_MOVE_HOLD_FOCUSED" \
       '{batch:$b, from:$from, to:$to, to_config_dir:$tcfg, until_idle_s:$until, requested_by:$by, requester_pane:$rqp, requester_sid:$rqs, target_unverified:$unver, ts:$ts, router_ranked_epoch:$rre, rows:.}
-       + (if $slots != "" then {slots:($slots | tonumber)} else {} end)' > "$bdir/plan.json.$$.tmp" \
+       + (if $slots != "" then {slots:($slots | tonumber)} else {} end)
+       + (if $origin != "" then {origin:$origin} else {} end)
+       + (if $hf == "1" then {hold_focused:true} else {} end)' > "$bdir/plan.json.$$.tmp" \
     && mv -f "$bdir/plan.json.$$.tmp" "$bdir/plan.json" || cl_die "cannot write $bdir/plan.json; nothing was queued" 2
   # ONE INTENT PER SESSION, mode 0600 (lr-intent.sh checks owner, mode, path, binding and expiry).
   while IFS=$'\t' read -r p s ac cfg _ _ _ act _; do
@@ -1700,8 +1715,9 @@ cmd_move() {
     ( umask 077
       jq -nc --arg b "$batch" --arg sid "$s" --arg pane "$p" --arg from "$ac" --arg to "$to" --arg by "${by:-?}" \
             --argjson ts "$now" --argjson exp "$(( now + until_s + 900 ))" \
-            --arg sha "$(printf '%s|%s|%s|%s' "$s" "$p" "$ac" "$to" | shasum -a 256 | cut -c1-16)" \
-            '{kind:"cc-lr-move", batch:$b, sid:$sid, pane:$pane, from:$from, to:$to, requested_by:$by, ts:$ts, expires_epoch:$exp, plan_row_sha:$sha}' > "$tmp" ) \
+            --arg sha "$(printf '%s|%s|%s|%s' "$s" "$p" "$ac" "$to" | shasum -a 256 | cut -c1-16)" --arg origin "$CL_MOVE_ORIGIN" \
+            '{kind:"cc-lr-move", batch:$b, sid:$sid, pane:$pane, from:$from, to:$to, requested_by:$by, ts:$ts, expires_epoch:$exp, plan_row_sha:$sha}
+             + (if $origin != "" then {origin:$origin} else {} end)' > "$tmp" ) \
       && mv -f "$tmp" "$bdir/intent/$s.json" || cl_die "cannot write the intent for ${s:0:8}; the batch was not queued" 2
   done <<EOF
 $rows

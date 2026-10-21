@@ -518,6 +518,37 @@ lrp_evidence_gc_kick() {
 }
 lrp_evidence_gc_kick
 
+# ── THE LATE-BAND SHED (D2b, packet 76a584cc935b; LR_SUSTAINED_LOAD W16) ─────────────────────────
+# Nothing at all happens while $STATE/shed/mode is absent (the kill switch: rm it). Otherwise the
+# controller (lr-shed.py) is started DETACHED, so a census of minutes never lengthens this tick, ONLY
+# by the live layer (the evidence-GC lesson: test ticks once started 133 copies), at most every
+# LR_SHED_EVERY_MIN. NOT under taskpolicy: its census and kitty reads must inherit this job's
+# Interactive band (priority 31); band 20 is 7-111x slower at this load.
+# The kick holds NO lock and reads NO pid (D2 review D1: a kick that wrote the pid it started locked
+# the controller out of its own run). lr-shed.py takes shed/run.lock itself, O_EXCL with
+# (pid, lstart), so a start that races a running tick is a quiet no-op there.
+lrp_shed_kick() {
+  local m="$STATE/shed/mode" stamp="$STATE/shed/kick.stamp" py="$LR/lr-shed.py" live det="" d pid
+  [[ "${LR_SHED:-on}" != off && -f "$m" ]] || return 0
+  [[ ! -e "$stamp" ]] || [[ -n "$(find "$stamp" -mmin +"${LR_SHED_EVERY_MIN:-9}" 2>/dev/null)" ]] || return 0
+  live="$(/usr/bin/readlink -f "$HOME/.claude/scripts/limit-recover/lr-shed.py" 2>/dev/null)"
+  if [[ -z "$live" || "$(/usr/bin/readlink -f "$py" 2>/dev/null)" != "$live" ]]; then
+    log "SHED-SKIP $py is not the deployed layer's lr-shed.py; only the live poller starts the shed"; return 0
+  fi
+  if [[ $DRY -eq 1 ]]; then log "DRY   shed would start: /usr/bin/python3 -I $py --tick"; return 0; fi
+  for d in "$LR/../lib/detach.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/detach.sh" "$HOME/.claude/scripts/lib/detach.sh"; do
+    [[ -f "$d" ]] && { det="$d"; break; }
+  done
+  [[ -n "$det" ]] || { log "SHED-SKIP scripts/lib/detach.sh unreachable"; return 0; }
+  mkdir -p "$STATE/shed" 2>/dev/null; : > "$stamp" 2>/dev/null || true
+  # shellcheck disable=SC1090  # runtime-resolved sibling
+  pid="$( . "$det" && detach "$STATE/shed/shed.log" /usr/bin/env LR_STATE_DIR="$STATE" /usr/bin/python3 -I "$py" --tick 2>/dev/null )" || pid=""
+  if [[ "$pid" =~ ^[0-9]+$ ]]; then log "SHED-KICK started pid $pid (log $STATE/shed/shed.log)"
+  else log "SHED-KICK could not be started (retried next tick)"; fi
+  return 0
+}
+lrp_shed_kick
+
 # ── THE MID-TICK DRAIN (lr-inplace-immediacy, 2026-10-18) ─────────────────────────────────────────
 # The two looks above (top of the tick, and lrp_tick_end) left every request written in between to
 # wait for the END of the tick, and a tick is long exactly when the box is loaded and the operator is

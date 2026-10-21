@@ -617,3 +617,138 @@ EOF
     [[ "$(res reason)" != *"reconciler recovers"* ]] || { echo "case $c: $(res reason)"; false; }
   done
 }
+
+# ── A LATE-BAND SHED ROW (D2b, LR_SUSTAINED_LOAD W16; D2 review D6, D9, D10) ─────────────────────────
+# The shed's plan carries origin=shed and hold_focused=true (bin/cc-lr CC_LR_MOVE_ORIGIN /
+# _HOLD_FOCUSED). The worker then (a) holds a focused pane AND one whose focus it cannot read, and
+# passes LR_MOVE_FOCUSED=off to the recycle; (b) re-authorizes the shed at every intent read, so
+# removing shed/mode, a tripped breaker or a missing autorecover.on stops a queued row. An operator
+# row has neither field, and its env list must still reach the actuator under bash 3.2 (D6: a bare
+# "${A[@]}" of an empty array is `unbound variable` there, before lr-handoff, holding claim and slot).
+# Each case runs under /bin/bash, the interpreter the batch runner gives the worker.
+w16_plan() { # [origin] [hold_focused 1] [intent origin]
+  jq -c --arg o "${1:-}" --arg hf "${2:-}" '. + (if $o != "" then {origin:$o} else {} end)
+    + (if $hf == "1" then {hold_focused:true} else {} end)' "$BDIR/plan.json" > "$BDIR/plan.t" && mv "$BDIR/plan.t" "$BDIR/plan.json"
+  if [ -n "${3:-}" ]; then
+    ( umask 077; jq -c --arg o "$3" '.origin = $o' "$BDIR/intent/$SID.json" > "$BDIR/intent/.$SID.t" ) \
+      && mv "$BDIR/intent/.$SID.t" "$BDIR/intent/$SID.json"
+  fi
+}
+w16_env() { # a recorder in front of the lr-handoff stub: what focus env the actuator received
+  export WORKER_BASH=/bin/bash REAL_HANDOFF="$LR_MOVE_HANDOFF_BIN"
+  printf '#!/bin/bash\nprintf "%%s\\n" "${LR_MOVE_FOCUSED:-unset}" >> "$STUB_LOG/focus.log"\nexec "$REAL_HANDOFF" "$@"\n' > "$STUBS/lr-handoff-focus"
+  chmod +x "$STUBS/lr-handoff-focus"; export LR_MOVE_HANDOFF_BIN="$STUBS/lr-handoff-focus"
+}
+w16_focus() { # yes|no|bad → the kitty listing lr_pane_focused reads (LR_FOCUS_LS_FILE)
+  export LR_FOCUS_LS_FILE="$BATS_TEST_TMPDIR/kitty-ls.json"
+  case "$1" in
+    bad) echo 'not json' > "$LR_FOCUS_LS_FILE" ;;
+    *) jq -nc --argjson id "$PANE" --argjson f "$([ "$1" = yes ] && echo true || echo false)" \
+         '[{is_focused:true, tabs:[{is_focused:true, windows:[{id:$id, is_focused:$f}]}]}]' > "$LR_FOCUS_LS_FILE" ;;
+  esac
+}
+w16_shed_on() { mkdir -p "$LR_STATE_DIR/shed"; echo on > "$LR_STATE_DIR/shed/mode"; : > "$LR_STATE_DIR/autorecover.on"; }
+# w16_mutant <old> <new> → LRD becomes a copy of the lane whose worker has that one site changed
+w16_mutant() {
+  local t="$BATS_TEST_TMPDIR/mut" f
+  mkdir -p "$t/scripts/limit-recover"
+  for f in "$LRD"/*; do [ "${f##*/}" = lr-move-worker.sh ] || ln -s "$f" "$t/scripts/limit-recover/${f##*/}"; done
+  ln -s "$REPO/scripts/lib" "$t/scripts/lib"; ln -s "$REPO/lib" "$t/lib"
+  /usr/bin/python3 -c 'import sys
+s = open(sys.argv[1]).read(); n = s.count(sys.argv[3])
+assert n == 1, "mutant anchor found %d times" % n
+open(sys.argv[2], "w").write(s.replace(sys.argv[3], sys.argv[4]))' "$LRD/lr-move-worker.sh" "$t/scripts/limit-recover/lr-move-worker.sh" "$1" "$2"
+  LRD="$t/scripts/limit-recover"
+}
+
+@test "30 [RED] D6: an operator row (no hold_focused) reaches the actuator under /bin/bash 3.2 with no focus env" {
+  [ -x /bin/bash ] || skip "/bin/bash absent"
+  w16_env
+  worker
+  [ "$(res verdict)" = MOVED ] || { res reason; cat "$BATS_TEST_TMPDIR/worker.out"; false; }
+  [ "$(cat "$STUB_LOG/focus.log")" = unset ]
+  no_noise "$BATS_TEST_TMPDIR/worker.out"
+}
+
+@test "31 D6 mutant (the bare \"\${FOCUS_ENV[@]}\" spelling) aborts the operator row before the actuator: dies" {
+  [ -x /bin/bash ] || skip "/bin/bash absent"
+  /bin/bash -c 'case "$BASH_VERSION" in 3.*) ;; *) exit 1 ;; esac' || skip "/bin/bash is not 3.2"
+  w16_env
+  w16_mutant '      ${FOCUS_ENV[@]+"${FOCUS_ENV[@]}"} \' '      "${FOCUS_ENV[@]}" \'
+  worker
+  ! invoked || { echo "the mutant reached the actuator: the bash 3.2 case has no power"; false; }
+  grep -q 'FOCUS_ENV\[@\]: unbound variable' "$BATS_TEST_TMPDIR/worker.out" || { cat "$BATS_TEST_TMPDIR/worker.out"; false; }
+}
+
+@test "32 [RED] D9: a hold_focused row whose pane has focus is HELD:focused; never invoked" {
+  [ -x /bin/bash ] || skip "/bin/bash absent"
+  w16_env; w16_plan "" 1; w16_focus yes
+  worker
+  [ "$(res verdict)" = NOTMOVED ] && [[ "$(res reason)" == HELD:focused* ]] || { res reason; false; }
+  ! invoked
+}
+
+@test "33 [RED] D9: a hold_focused row whose focus cannot be read is HELD:focus-unknown; =proceed lets it through" {
+  [ -x /bin/bash ] || skip "/bin/bash absent"
+  w16_env; w16_plan "" 1; w16_focus bad
+  worker
+  [ "$(res verdict)" = NOTMOVED ] && [[ "$(res reason)" == HELD:focus-unknown* ]] || { res reason; false; }
+  ! invoked
+  rm -f "$BDIR/$SID.json" "$BDIR/$SID.events.jsonl"
+  LR_MOVE_FOCUS_UNKNOWN=proceed worker
+  [ "$(res verdict)" = MOVED ] || { res reason; false; }
+}
+
+@test "34 D9 mutant (unknown focus proceeds, as lr_focus_gate does): dies" {
+  [ -x /bin/bash ] || skip "/bin/bash absent"
+  w16_env; w16_plan "" 1; w16_focus bad
+  w16_mutant '    *) [ "${LR_MOVE_FOCUS_UNKNOWN:-hold}" = proceed ] \' '    *) [ "${LR_MOVE_FOCUS_UNKNOWN:-proceed}" = proceed ] \'
+  worker
+  invoked || { echo "the mutant held too, so the unknown-focus case has no power"; false; }
+}
+
+@test "35 a hold_focused row with an unfocused pane moves, and the actuator gets LR_MOVE_FOCUSED=off" {
+  [ -x /bin/bash ] || skip "/bin/bash absent"
+  w16_env; w16_plan "" 1; w16_focus no
+  worker
+  [ "$(res verdict)" = MOVED ] || { res reason; false; }
+  [ "$(cat "$STUB_LOG/focus.log")" = off ]
+  grep -q '"stage":"focus"' "$BDIR/$SID.events.jsonl"
+}
+
+@test "36 [RED] D10: a shed row re-authorizes at the intent read — mode on + no breaker + autorecover.on moves it" {
+  [ -x /bin/bash ] || skip "/bin/bash absent"
+  w16_env; w16_plan shed "" shed; w16_shed_on
+  worker
+  [ "$(res verdict)" = MOVED ] || { res reason; false; }
+}
+
+@test "37 [RED] D10: shadow mode, a breaker, no autorecover.on, LR_SHED=off, or a shed intent under an origin-less plan: shed-revoked, never invoked" {
+  [ -x /bin/bash ] || skip "/bin/bash absent"
+  w16_env; w16_plan shed "" shed
+  local c
+  for c in shadow breaker zero-human env intent-only; do
+    rm -f "$BDIR/$SID.json" "$BDIR/$SID.events.jsonl" "$LR_STATE_DIR/shed/breaker"; w16_shed_on
+    unset LR_SHED
+    case "$c" in
+      shadow) echo shadow > "$LR_STATE_DIR/shed/mode" ;;
+      breaker) : > "$LR_STATE_DIR/shed/breaker" ;;
+      zero-human) rm -f "$LR_STATE_DIR/autorecover.on" ;;
+      env) export LR_SHED=off ;;
+      intent-only) jq -c 'del(.origin)' "$BDIR/plan.json" > "$BDIR/plan.t" && mv "$BDIR/plan.t" "$BDIR/plan.json"; echo shadow > "$LR_STATE_DIR/shed/mode" ;;
+    esac
+    worker
+    [ "$(res verdict)" = NOTMOVED ] && [[ "$(res reason)" == "intent-invalid: shed-revoked:"* ]] || { echo "case $c: $(res reason)"; false; }
+  done
+  ! invoked
+}
+
+@test "38 D10 mutant (the shed is not re-authorized): a shadow-mode shed row moves: dies" {
+  [ -x /bin/bash ] || skip "/bin/bash absent"
+  w16_env; w16_plan shed "" shed; w16_shed_on; echo shadow > "$LR_STATE_DIR/shed/mode"
+  w16_mutant '    shed_authorized
+  fi' '    true
+  fi'
+  worker
+  invoked || { echo "the mutant held too, so the re-authorization case has no power"; false; }
+}

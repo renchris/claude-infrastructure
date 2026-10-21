@@ -58,6 +58,10 @@ say() { printf '%s lr-move-batch %s: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$BA
 T0="$(date +%s)"
 
 [ -s "$PLAN" ] || { say "no plan at $PLAN; nothing to do"; exit 2; }
+# WHO RUNS THIS BATCH, by (pid, lstart): <batch>/runner/{pid,lstart}. The late-band shed holds its
+# source account while a batch of its own is unsettled, and needs a release that is bounded when a
+# runner dies without writing summary.settled/ (D2 review E3; scripts/limit-recover/lr-shed.py).
+mkdir -p "$BDIR/runner" 2>/dev/null && lr_pidlock_stamp "$BDIR/runner" "$$" 2>/dev/null || true
 FROM="$(jq -r '.from // empty' "$PLAN")"; TO="$(jq -r '.to // empty' "$PLAN")"
 TO_CFG="$(jq -r '.to_config_dir // empty' "$PLAN")"; UNTIL="$(jq -r '.until_idle_s // 0' "$PLAN")"
 UNVERIFIED_OK="$(jq -r '.target_unverified // false' "$PLAN")"

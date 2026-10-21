@@ -450,6 +450,12 @@ ROUTER_OPTIONAL_RANGES = {
     "DISPATCH_STRAND_PP": (1.0, 100.0),       # least forecast-dead weekly pp one new fire needs
     "DISPATCH_FIRE_BURN_PPH": (0.05, 5.0),    # weekly pp/h one fire is budgeted until the reset
     "DISPATCH_CLAIM_TTL_MIN": (1.0, 10080.0),  # how long a placement claims its account's spare
+    # The late-band shed's three (D2b, LR_SUSTAINED_LOAD W16; see shed_band_row). Tight on purpose
+    # (D2 review D12): 0.97 typed for 97, or a 48 h trip, must be REFUSED, never bounded into a band
+    # that opens at 50 % — the rejected option, which stranded 2.2-3.1 pp per wall.
+    "SHED_LV_OPEN": (95.0, 100.0),     # weekly used % at which the band opens
+    "SHED_TTW_OPEN_H": (0.0, 6.0),     # ...or hours to the wall at the FAST pace
+    "SHED_GUARD_H": (1.0, 24.0),       # the SLOW pace must still wall this long before the reset
     # Display only: the 5h use at which the readout starts saying when the window resets (`△`),
     # below S_CUT's `▲`. 80 typed for 0.80 would silently hide the line, hence the range.
     "S_RESET_SHOW": (0.0, 1.0),
@@ -6883,6 +6889,12 @@ def cmd_place(args: list, cfg: dict) -> int:
         return None
 
     trust_holds = _switch_on("CC_PLACE_HOLDS_MAP", "place-holds-map.off")
+    # --exclude a,b (D2b, W16): accounts no mover may be placed on, the source's own included. The
+    # late-band shed names every banded and walled account, so an idle mover is never "placed" back
+    # onto the account it is leaving (`stay`) or onto another one about to wall (review D17).
+    excl = set()
+    if "--exclude" in args and args.index("--exclude") + 1 < len(args):
+        excl = {x for x in args[args.index("--exclude") + 1].split(",") if x}
     _real = {}
 
     def realp(p: str) -> str:
@@ -6912,6 +6924,9 @@ def cmd_place(args: list, cfg: dict) -> int:
             if isinstance(m.get("burn_ph"), (int, float)) else b_default
         reasons, zeroing, scored = set(), [], []
         for a in snap:
+            if a in excl:
+                reasons.add("excluded")
+                continue
             mf = live(a, lambda f: str(f.get("scope", "")).startswith("model:")
                       and _place_covers(f, lane, m.get("model")))
             if room(m, a) - placed_w[a] < w:
@@ -7022,6 +7037,166 @@ def dispatch_strand_pp(R):
 def dispatch_fire_burn_pph(R):
     return _dispatch_knob("CC_ROUTE_DISPATCH_FIRE_BURN_PPH", R, "DISPATCH_FIRE_BURN_PPH",
                           DISPATCH_FIRE_BURN_PPH_DEFAULT)
+
+
+# ── the LATE warning band (D2b, packet 76a584cc935b; LR_SUSTAINED_LOAD W16): idle sessions may leave
+# an account before its weekly wall ─────────────────────────────────────────────────────────────────
+# Replay of 7 walls (10-08..10-20, 43 limited sessions; docs/research/lr-sustained-load-2026-10-20/
+# impl/D2-warning-band-shedding.md §3.3): LV 97 + a 2 h guard avoided 15 at <=1.5 pp stranded in
+# total; LV 90 with no guard avoided 24 and stranded 15.6-21.8 pp. That replay ran a SIMPLER rule
+# than this one (review D13): it is re-run on this function before `on` is ever asked. This only
+# answers "is the account in the band"; the controller (scripts/limit-recover/lr-shed.py) owns
+# hysteresis, selection and the move. Shipped for shadow: nothing acts on it without shed/mode.
+SHED_LV_OPEN_DEFAULT = 97.0      # weekly used % at which the band opens
+SHED_TTW_OPEN_H_DEFAULT = 2.0    # ...or hours to the wall at the FAST pace
+SHED_GUARD_H_DEFAULT = 2.0       # the SLOW pace must still wall this long before the reset
+SHED_BAND_MAX_AGE_S = 1200       # its own cache grace (review E8): the level moves <= 1-2 pp/h
+
+_SHED_KEYS = {"SHED_LV_OPEN": ("CC_ROUTE_SHED_LV_OPEN", SHED_LV_OPEN_DEFAULT),
+              "SHED_TTW_OPEN_H": ("CC_ROUTE_SHED_TTW_OPEN_H", SHED_TTW_OPEN_H_DEFAULT),
+              "SHED_GUARD_H": ("CC_ROUTE_SHED_GUARD_H", SHED_GUARD_H_DEFAULT)}
+
+
+def shed_knob(R, key):
+    """Env > SSOT > default. NOT _dispatch_knob: that one CLAMPS, and a clamp moves a typo toward
+    shedding (0.97 for 97 became a band from 50 %, review D12). An env value that is malformed,
+    non-finite or outside the key's range is ignored and the SSOT/default stands; an SSOT value
+    outside it is refused at load (_validate_router)."""
+    env, default = _SHED_KEYS[key]
+    lo, hi = ROUTER_OPTIONAL_RANGES[key]
+    base = R.get(key, default)
+    raw = os.environ.get(env)
+    if raw:
+        try:
+            v = float(raw)
+        except ValueError:
+            return base
+        if math.isfinite(v) and lo <= v <= hi:
+            return v
+    return base
+
+
+def _shed_finite(x):
+    return _is_num(x) and math.isfinite(x)
+
+
+def shed_band_row(r, R, facts=None, now=None):
+    """D2b -> (token, facts). PURE apart from the clock: reads apply_burn's stamps and the caller's
+    live 5h/7d facts for this account, no I/O.
+       off              CC_ROUTE_SHED=off
+       walled           used >= 100 %, or the server or a live fact rejects the 5h/7d window
+                        (review D7): the at-wall population is the reconciler's and D2a's, one driver
+                        per phase, and a dead source would turn background jobs and /goal holds
+                        into moves
+       out              used < SHED_LV_OPEN and the fast-pace wall is > SHED_TTW_OPEN_H away
+       band             in the late band, and the SLOW pace still walls >= SHED_GUARD_H before
+                        the reset: idle sessions (who add nothing to the measured pace) may leave
+       band-guard       in the late band, but the slow pace lands the wall inside SHED_GUARD_H of
+                        the reset, or never: shedding could strand, so nothing is shed
+       hold-credits     extra usage is on: an overshoot is overage, not a wall
+       unknown:<why>    level-stale | no-reset | pace-unknown | pace-stale. The controller
+                        neither opens nor closes a band on it (our blindness is not a verdict)
+    `trip` says which arm opened it ("level" or "ttw"): only the TTW arm flaps, so only it needs
+    the controller's confirmation (review E2). Every input passes math.isfinite (review D4: NaN
+    reached `band` through max(0.0, nan) and min() silently dropping it)."""
+    if not _term_on("CC_ROUTE_SHED"):
+        return "off", {}
+    now = time.time() if now is None else now
+    used = weekly_used_frac(r)
+    ra = r.get("weekly_reset_at")
+    key = {"reset_at": ra, "reset_key": _reset_key(ra)}
+    if (_shed_finite(used) and used >= 1.0) or wire_rejects(r, "7d") or wire_rejects(r, "5h") \
+            or any(str(f.get("scope")) in ("5h", "7d") and _place_fact_live(f, r, now)
+                   for f in (facts or [])):
+        return "walled", dict(key, used_pct=round(100.0 * used, 2) if _shed_finite(used) else None)
+    if r.get("stale_quota") or r.get("error"):
+        return "unknown:level-stale", key
+    if r.get("credits_on"):
+        return "hold-credits", key
+    wrh = _until(r, "weekly_reset_at", "weekly_reset_h")
+    if not _shed_finite(used) or not _shed_finite(wrh) or not (0 < wrh <= WEEK_H):
+        return "unknown:no-reset", key
+    ewma, flat = r.get("burn_wk_ewma_ph"), r.get("burn_wk_flat_ph")
+    if not _shed_finite(ewma):
+        return "unknown:pace-unknown", key
+    if not _shed_finite(flat):
+        return "unknown:pace-stale", key        # flat is None when the ledger is > 1 h old
+    left = max(0.0, 100.0 * (1.0 - used))
+    hi, lo = max(ewma, flat), min(ewma, flat)
+    ttw_hi = left / hi if hi > 0 else math.inf
+    ttw_lo = left / lo if lo > 0 else math.inf
+    out = dict(key, used_pct=round(100.0 * used, 2), left_pp=round(left, 2), reset_h=round(wrh, 2),
+               pace_hi=round(hi, 4), pace_lo=round(lo, 4),
+               ttw_hi_h=None if ttw_hi == math.inf else round(ttw_hi, 2),
+               ttw_lo_h=None if ttw_lo == math.inf else round(ttw_lo, 2))
+    lv, tt, gh = (shed_knob(R, k) for k in ("SHED_LV_OPEN", "SHED_TTW_OPEN_H", "SHED_GUARD_H"))
+    level = 100.0 * used >= lv
+    if not (level or ttw_hi <= tt):
+        return "out", out
+    out["trip"] = "level" if level else "ttw"
+    if not (lo > 0 and ttw_lo <= wrh - gh):
+        return "band-guard", out
+    return "band", out
+
+
+def cmd_shed_band(args, cfg):
+    """--shed-band --json [--facts DIR]: the D2b verdict per account, and the recovery-lane targets
+    that are not themselves banded or walled. CACHE-ONLY (max_wait 0), dispatched before the
+    get_data anchor like --place, so it never sweeps. Its own grace (CC_SHED_BAND_MAX_AGE_S,
+    default 1200 s, review E8). Each account carries its cache and ledger age, so a blind reading
+    can be told from an empty one (review E7), and its swept k_work, which the controller hands to
+    --place. exit 0 answered · 3 WAIT_DATA (no servable cache)."""
+    max_age = _cliff_env("CC_SHED_BAND_MAX_AGE_S", SHED_BAND_MAX_AGE_S)
+    try:
+        rows, wj, _c, _p = get_data(cfg, max_wait=0, max_age=max_age)
+    except CacheOnlyUnavailable:
+        print(json.dumps({"v": 1, "wait_data": True}))
+        return PLACE_EXIT_WAIT_DATA
+    facts = {}
+    if "--facts" in args and args.index("--facts") + 1 < len(args):
+        fd = args[args.index("--facts") + 1]
+        facts = _place_read_facts(fd) if os.path.isdir(fd) else {}
+    now = time.time()
+    try:
+        with open(cfg["cache_file"]) as f:
+            cts = json.load(f).get("ts")
+        cache_age = round(now - cts, 1) if _shed_finite(cts) else None
+    except (OSError, ValueError, AttributeError, KeyError):
+        cache_age = None
+    samples = _util_tail(hours=PLACE_BURN_LOOKBACK_H)[0]
+    newest, kw_led = {}, {}
+    for e in samples:
+        a, t = e.get("acct"), e.get("_t")
+        if _shed_finite(t) and t > newest.get(a, 0.0):
+            newest[a] = t
+            kw_led[a] = e.get("k_work")
+    mark_self(rows, cfg)
+    refresh_login_countdown(rows)
+    apply_assignments(rows, cfg)
+    apply_burn(rows, cfg, samples=samples)
+    R, win = cfg["router"], win_from_json(wj)
+    accts = []
+    for r in rows:
+        if r.get("acct") in (None, "none"):
+            continue
+        tok, f = shed_band_row(r, R, facts.get(r["acct"]), now)
+        # The swept row's k_work, else the newest ledger sample's when that sample is inside this
+        # read's own grace: a cache-only sweep leaves the row's null (measured on the live cache,
+        # 2026-10-21, every account), and --place gives an unmeasured account no seats at all.
+        age = now - newest[r["acct"]] if r["acct"] in newest else None
+        kw = r.get("k_work")
+        if not _is_num(kw) and age is not None and age <= max_age:
+            kw = kw_led.get(r["acct"])
+        accts.append(dict(f, acct=r["acct"], verdict=tok, cache_age_s=cache_age,
+                          ledger_age_s=None if age is None else round(age, 1),
+                          k_work=kw if _is_num(kw) else None))
+    held = {a["acct"] for a in accts if a["verdict"] in ("band", "band-guard", "walled")}
+    out, reasons = _ranked(rows, cfg, win, "general", recovery=True)
+    print(json.dumps({"v": 1, "ts": now, "accounts": accts,
+                      "targets": [r["acct"] for _s, r in out if r["acct"] not in held],
+                      "excluded": reasons,
+                      "knobs": {k: shed_knob(R, k) for k in _SHED_KEYS}}, sort_keys=True))
+    return 0
 
 
 def dispatch_claim_ttl_min(R):
@@ -11457,6 +11632,9 @@ def main():
     # max_wait 0), so it is dispatched before the get_data anchor below and can never sweep.
     if "--place" in args:
         sys.exit(cmd_place(args, cfg))
+    # D2b (W16): the late-band verdict, cache-only for the same reason.
+    if "--shed-band" in args:
+        sys.exit(cmd_shed_band(args, cfg))
 
     # M7: record a fire-time assignment and exit — a WRITE, deliberately dispatched BEFORE the
     # get_data anchor below so telling the router about a fire can never itself trigger a sweep
