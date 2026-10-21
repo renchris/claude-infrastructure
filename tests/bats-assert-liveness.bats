@@ -154,6 +154,22 @@ bash_major() { "$1" -c 'echo "${BASH_VERSINFO[0]}"'; }
   done
 }
 
+@test "A && B || { …; false; } is LIVE on both branches and is not flagged as and-absorbed" {
+  for stmt in '[ 1 -eq 1 ] && [ 1 -eq 2 ] || { echo DIAG; false; }' \
+              '[ 1 -eq 2 ] && [ 1 -eq 1 ] || { echo DIAG; false; }' \
+              '[ 1 -eq 2 ] && [ 1 -eq 1 ] || ( echo DIAG; false )'; do
+    mkblock "$D/t.bats" "$stmt" nonfinal
+    run bats_passes "$D/t.bats"
+    [ "$status" -ne 0 ] || { echo "not live: $stmt"; false; }
+    [ "$(findings "$D/t.bats")" -eq 0 ] || { echo "flagged: $stmt"; false; }
+  done
+  # CONTROL: a group that cannot fail swallows the failure — bats passes it, still flagged.
+  mkblock "$D/t.bats" '[ 1 -eq 2 ] && [ 1 -eq 1 ] || { echo DIAG; }' nonfinal
+  run bats_passes "$D/t.bats"
+  [ "$status" -eq 0 ]
+  [ "$(findings "$D/t.bats")" -eq 1 ]
+}
+
 @test "the || false idiom is LIVE and is never re-flagged (idempotence)" {
   for stmt in '[[ 1 -eq 2 ]] || false' '! true || false'; do
     mkblock "$D/t.bats" "$stmt" nonfinal

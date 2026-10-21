@@ -472,12 +472,31 @@ def is_hard_fail(elem: str) -> bool:
     """True when `elem` reliably fails the test — a usable `||` failure handler.
 
     Covers `false`, `exit N`/`return N` for non-zero N, and a `{ ...; return 1; }` group.
+    A `{ ...; false; }` or `( ...; false )` group is one too: its status is its LAST
+    statement's. Missing it flagged `A && B || { echo "$output"; false; }` as and-absorbed —
+    a list that exits 1 under bash 3.2 and 5 alike — and blocked a land on 8 live lines.
     A benign handler (`|| echo missing`) is deliberately NOT one: it swallows the failure,
     which leaves the assertion just as unenforced.
     """
     e = strip_quoted(elem).strip()
     if re.match(r"^false(\s|$)", e):
         return True
+    g = re.match(r"^\{(.*)\}$|^\((.*)\)$", e, re.S)
+    if g:
+        body = (
+            (g.group(1) if g.group(1) is not None else g.group(2)).strip().rstrip(";")
+        )
+        depth, last = 0, 0
+        for i, c in enumerate(body):
+            if c in "({[":
+                depth += 1
+            elif c in ")}]":
+                depth -= 1
+            elif c in ";\n" and depth == 0:
+                last = i + 1
+        tail = body[last:].strip()
+        if tail and tail != e and is_hard_fail(tail):
+            return True
     return bool(re.search(r"\b(exit|return)\s+[1-9]", e))
 
 
