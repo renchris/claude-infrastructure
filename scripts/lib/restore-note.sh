@@ -27,9 +27,10 @@
 #   rn_prompt_text <kind> <epoch> <lost.json> <sid> <verdict> <nonce>
 #   rn_write_prompt <dir> <sid> <text>                writes <dir>/<sid>.txt, prints the path
 #   rn_nonce                                          R-<8 hex>
-#   rn_confirm <sid> <nonce>                          prints "user=N assistant=N"; rc 0 confirmed ·
+#   rn_confirm <sid> <nonce> [cwd]                    prints "user=N assistant=N"; rc 0 confirmed ·
 #                                                     1 submitted, no reply yet · 2 not submitted
-#   rn_fallback <sid> <prompt-file> <nonce>           prints "verdict=<…> via=<…>"; rc 0 delivered
+#   rn_fallback <sid> <prompt-file> <nonce> [cwd]     prints "verdict=<…> via=<…>"; rc 0 delivered
+#   (cwd, the row's worktree, lets the transcript be found by its path instead of by a glob)
 #
 # The lost items come from cc-resume-classify.py --lost-json, which reads the transcript and the
 # heartbeat's hb.bg.tsv as they stood at the cut. Nothing here reads live state to decide what was lost.
@@ -37,7 +38,7 @@
 # Off switch: CC_RESTORE_NUDGE=off — no prompt file and no fallback; the notes still go out.
 # /bin/bash 3.2 safe: launchd runs boot-resume.sh. Sourced: defines functions only.
 # Seams: CC_NOTIFY_BIN · CC_WAKE_BIN · CC_RESTORE_PASTE_CMD · CC_REGISTRY_DIR · CC_RESTORE_PROJECT_ROOTS ·
-#   CC_RESTORE_WAKE_WAIT_S · CC_RESTORE_NOTE_MAX (items named per kind, default 4)
+#   CC_RESTORE_WAKE_WAIT_S · CC_RESTORE_NOTE_MAX (items named per kind, default 4) · CC_RESTORE_TX_CACHE
 
 # Under a bats harness an unset seam never falls through to the real tool: a test once reached the
 # live kitty that way (1deb094d2; restore-heartbeat.sh carries the same guard).
@@ -205,26 +206,77 @@ rn_write_prompt() { # <dir> <sid> <text> → the path
   printf '%s' "$1/$2.txt"
 }
 
-_rn_transcript() { # <sid> → the newest transcript of that session across the account stores
-  local d f best="" bm=0 m
+# FINDING A TRANSCRIPT WITHOUT A GLOB (R6, 2026-10-21). This used to glob every project dir of every
+# store on every call: about 73,000 dirs, and ~/.claude-next/projects is a symlink to
+# ~/.claude/projects, so that store was scanned twice. At restore load the same glob took 24-46 s, and
+# the confirm loop calls this for every prompted row on every round. Now:
+#   1. each store root once, by its real path (_rn_roots);
+#   2. the direct path, <root>/<slug>/<sid>.jsonl, for every project slug known for the session: the
+#      slug of the cwd the caller passes (the row's worktree, / and . turned into -, as
+#      restore-heartbeat.sh _hb_transcript does) and the slugs a fallback glob found before, cached per
+#      session. A slug, not a path, is cached, so a session the restore relaunched on another account
+#      is still found: its new transcript sits under the same slug in another root;
+#   3. the glob, only when no direct path exists.
+# The newest file wins, as before.
+_rn_roots() { # → each project root once, by real path
+  local d r seen=" "
   # shellcheck disable=SC2086  # CC_RESTORE_PROJECT_ROOTS is an intentional space-separated dir list
   for d in ${CC_RESTORE_PROJECT_ROOTS:-"$HOME"/.claude/projects "$HOME"/.claude-*/projects}; do
     [ -d "$d" ] || continue
-    for f in "$d"/*/"$1".jsonl; do
-      [ -f "$f" ] || continue
-      m="$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)"
-      [ "$m" -gt "$bm" ] && { bm="$m"; best="$f"; }
-    done
+    r="$(cd "$d" 2>/dev/null && pwd -P)" || continue
+    case "$seen" in *" $r "*) continue ;; esac
+    seen="$seen$r "
+    printf '%s\n' "$r"
   done
+}
+
+_rn_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+
+_rn_transcript() { # <sid> [cwd] → the newest transcript of that session across the account stores
+  local sid="$1" cwd="${2:-}" cache roots slugs d s f best="" bm=0 m
+  cache="${CC_RESTORE_TX_CACHE:-${TMPDIR:-/tmp}/cc-restore-tx-$(id -u)}"
+  roots="$(_rn_roots)"
+  [ -n "$cwd" ] && slugs="$(printf '%s' "$cwd" | tr '/.' '--')"
+  [ -s "$cache/$sid" ] && slugs="$(printf '%s\n%s' "${slugs:-}" "$(cat "$cache/$sid" 2>/dev/null)")"
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    while IFS= read -r s; do
+      f="$d/$s/$sid.jsonl"
+      [ -n "$s" ] && [ -f "$f" ] || continue
+      m="$(_rn_mtime "$f")"; [ "$m" -gt "$bm" ] && { bm="$m"; best="$f"; }
+    done <<EOF
+${slugs:-}
+EOF
+  done <<EOF
+$roots
+EOF
+  if [ -z "$best" ]; then
+    slugs=""
+    while IFS= read -r d; do
+      [ -n "$d" ] || continue
+      for f in "$d"/*/"$sid".jsonl; do
+        [ -f "$f" ] || continue
+        s="${f%/*}"; slugs="$slugs${s##*/}
+"
+        m="$(_rn_mtime "$f")"; [ "$m" -gt "$bm" ] && { bm="$m"; best="$f"; }
+      done
+    done <<EOF
+$roots
+EOF
+    if [ -n "$slugs" ] && mkdir -p "$cache" 2>/dev/null; then
+      printf '%s' "$slugs" | sort -u > "$cache/.$sid.$$" 2>/dev/null && mv -f "$cache/.$sid.$$" "$cache/$sid" 2>/dev/null
+    fi
+  fi
   [ -n "$best" ] && printf '%s' "$best"
+  return 0
 }
 
 # A user record carrying the nonce shows the prompt was SUBMITTED; a real assistant record after it
 # shows a turn RAN. The second half matters: on 10-01 a user record landed on an account at its
 # weekly limit and nothing ran (C2-skeptic-code #6).
-rn_confirm() { # <sid> <nonce> → "user=N assistant=N"; rc 0 confirmed · 1 submitted, no reply · 2 not submitted
+rn_confirm() { # <sid> <nonce> [cwd] → "user=N assistant=N"; rc 0 confirmed · 1 submitted, no reply · 2 not submitted
   local tx at nu=0 na=0
-  tx="$(_rn_transcript "$1")"
+  tx="$(_rn_transcript "$1" "${3:-}")"
   if [ -n "$tx" ]; then
     at="$(grep -a -n -F -- "$2" "$tx" 2>/dev/null | grep -a '"type":"user"' | head -n 1 | cut -d: -f1)"
     if [ -n "$at" ]; then
@@ -264,8 +316,8 @@ _rn_paste_cmd() {
 
 # For a prompt that never reached the transcript. cc-wake first: it uses the session's own messaging
 # socket, touches no composer and proves itself by the inbox receipt. The verified paste second.
-rn_fallback() { # <sid> <prompt-file> <nonce> → "verdict=<woken|pasted|unconfirmed> via=<…> [why=…]"
-  local sid="$1" pf="$2" nonce="$3" wb pc pane rc why=""
+rn_fallback() { # <sid> <prompt-file> <nonce> [cwd] → "verdict=<woken|pasted|unconfirmed> via=<…> [why=…]"
+  local sid="$1" pf="$2" nonce="$3" cwd="${4:-}" wb pc pane rc why=""
   [ "${CC_RESTORE_NUDGE:-on}" != off ] || { printf 'verdict=unconfirmed via=none why=CC_RESTORE_NUDGE=off'; return 1; }
   [ -s "$pf" ] || { printf 'verdict=unconfirmed via=none why=no-prompt-file'; return 1; }
   wb="$(_rn_bin "${CC_WAKE_BIN:-}" cc-wake)"
@@ -280,7 +332,7 @@ rn_fallback() { # <sid> <prompt-file> <nonce> → "verdict=<woken|pasted|unconfi
   fi
   # The wake may have been sent and only its receipt missed the wait: the transcript says whether a
   # turn took the prompt, and a second submit on top of it would run the recovery twice.
-  rn_confirm "$sid" "$nonce" >/dev/null 2>&1 && { printf 'verdict=woken via=cc-wake why=%s,transcript' "$why"; return 0; }
+  rn_confirm "$sid" "$nonce" "$cwd" >/dev/null 2>&1 && { printf 'verdict=woken via=cc-wake why=%s,transcript' "$why"; return 0; }
   pc="$(_rn_paste_cmd)"; pane="$(_rn_pane_of "$sid")"
   if [ -z "$pc" ]; then why="$why,no-verified-paste-entry-point"
   elif [ -z "$pane" ]; then why="$why,no-single-registry-pane"
@@ -289,8 +341,8 @@ rn_fallback() { # <sid> <prompt-file> <nonce> → "verdict=<woken|pasted|unconfi
     # shellcheck disable=SC2086  # the command may carry its own subcommand word
     $pc "$pane" "$pf" >/dev/null 2>&1 || rc=$?
     # rc 0 says the paste helper read the composer back and sent Enter. Submitted is the transcript's call.
-    if [ "$rc" = 0 ] && rn_confirm "$sid" "$nonce" >/dev/null 2>&1; then printf 'verdict=pasted via=paste-verified'; return 0; fi
-    [ "$rc" = 0 ] && sleep "${CC_RESTORE_PASTE_SETTLE_S:-15}" && rn_confirm "$sid" "$nonce" >/dev/null 2>&1 \
+    if [ "$rc" = 0 ] && rn_confirm "$sid" "$nonce" "$cwd" >/dev/null 2>&1; then printf 'verdict=pasted via=paste-verified'; return 0; fi
+    [ "$rc" = 0 ] && sleep "${CC_RESTORE_PASTE_SETTLE_S:-15}" && rn_confirm "$sid" "$nonce" "$cwd" >/dev/null 2>&1 \
       && { printf 'verdict=pasted via=paste-verified'; return 0; }
     why="$why,paste-rc-$rc"
   fi

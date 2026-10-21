@@ -24,6 +24,7 @@ setup() {
   # The classifier's reason stores default under the fixture HOME; an exported override must not
   # point it at the real backlog, intent records or reboot prep.
   unset CC_BACKLOG_FILE CC_BACKLOG_BIN CC_SELF_CLOSE_INTENT_DIR CC_REBOOT_PREP_DIR CC_RESTORE_PROJECT_ROOTS
+  export CC_RESTORE_TX_CACHE="$BATS_TEST_TMPDIR/tx-cache"
   export CC_NOTIFY_BIN="$REPO/bin/cc-notify" CC_NOTIFY_WAKE=0 CC_WAKE=off
   export CC_WAKE_BIN="$BATS_TEST_TMPDIR/stub-wake"
   printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$0.log"\nexit 1\n' > "$CC_WAKE_BIN"; chmod +x "$CC_WAKE_BIN"
@@ -34,7 +35,10 @@ setup() {
   LOST="$BATS_TEST_TMPDIR/lost.json"
 }
 
-teardown() { [ -z "${KPID:-}" ] || kill "$KPID" 2>/dev/null || true; }
+teardown() {
+  [ -z "${KPID:-}" ] || kill "$KPID" 2>/dev/null || true
+  chmod -R u+rwx "$BATS_TEST_TMPDIR" 2>/dev/null || true   # the R6 test takes a root's read bit
+}
 
 rn() { /bin/bash -c '. "$1"; shift; "$@"' _ "$LIB" "$@"; }   # one library function, under bash 3.2
 
@@ -335,6 +339,34 @@ PROMISE="This session closes too. After you log in, it reopens with the others, 
   [ "$(jq -r --arg a "$SID_A" '.sessions[$a].items[] | select(.kind == "mail") | .count' "$LOST")" = 1 ]
   p="$(rn rn_prompt_text reboot "$CUT" "$LOST" "$SID_A" WAKE-LOST R-0a1b2c3d)"
   [[ "$p" == *'An unread inbox message is waiting for you (newest from macapp-extract-55: "HANDOFF-PING fire-x: DONE — W2 landed on origin/main at fa03894"); read it and act on it.'* ]] || { echo "$p"; false; }
+}
+
+@test "the transcript is found by its direct path without a glob, each store root once, and a relaunch on another account by the cached slug" {
+  mkdir -p "$HOME/.claude/projects/-Users-x-wt" "$HOME/.claude-secondary/projects" "$HOME/.claude-next"
+  ln -s "$HOME/.claude/projects" "$HOME/.claude-next/projects"
+  run rn _rn_roots
+  [ "$(printf '%s\n' "$output" | grep -c .)" -eq 2 ] || { echo "the symlinked store was listed twice: $output"; false; }
+  printf '%s\n%s\n' "$USER_N" "$ASST_OK" | jq -c '. + {timestamp: "2026-01-01T00:00:00Z"}' > "$HOME/.claude/projects/-Users-x-wt/$SID_A.jsonl"
+  chmod 311 "$HOME/.claude/projects"            # no listing: a glob over it finds nothing, a direct path still opens
+  run rn rn_confirm "$SID_A" R-feedc0de /Users/x/wt
+  [ "$status" -eq 0 ] || { echo "$status $output"; false; }
+  run rn rn_confirm "$SID_A" R-feedc0de         # no cwd and nothing cached: only the glob is left, and it cannot list
+  [ "$status" -eq 2 ] || { echo "$status $output"; false; }
+  chmod 755 "$HOME/.claude/projects"
+  run rn rn_confirm "$SID_A" R-feedc0de         # the fallback glob finds it and caches the slug
+  [ "$status" -eq 0 ] || { echo "$status $output"; false; }
+  [ "$(cat "$CC_RESTORE_TX_CACHE/$SID_A")" = "-Users-x-wt" ]
+  chmod 311 "$HOME/.claude/projects"
+  run rn rn_confirm "$SID_A" R-feedc0de         # the cached slug is a direct path again
+  [ "$status" -eq 0 ] || { echo "$status $output"; false; }
+  # Relaunched on another account: the same slug under another root, newer, holding the new prompt.
+  mkdir -p "$HOME/.claude-secondary/projects/-Users-x-wt"
+  printf '%s\n' "$USER_N" | sed 's/R-feedc0de/R-0badc0de/' | jq -c '. + {timestamp: "2026-01-01T01:00:00Z"}' \
+    > "$HOME/.claude-secondary/projects/-Users-x-wt/$SID_A.jsonl"
+  touch -t 203001010000 "$HOME/.claude-secondary/projects/-Users-x-wt/$SID_A.jsonl"
+  run rn rn_confirm "$SID_A" R-0badc0de
+  [ "$status" -eq 1 ] || { echo "$status $output"; false; }
+  [ "$output" = "user=1 assistant=0" ] || false
 }
 
 @test "an unreadable transcript among good rows is one UNKNOWN row: every row comes back and the run exits 0" {
