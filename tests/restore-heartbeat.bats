@@ -431,3 +431,85 @@ PS
   hb hb_tick
   [ "$(jq -r '[.[].paneUUID] | join(" ")' "$r")" = "5" ] || false
 }
+
+# ── reboot-resume 2026-10-21, wave T4 (docs/research/reboot-resume-2026-10-21/REPORT.md R9 R19 R23) ──
+# RED-proof, run against origin/main cc1d441f6's library: the ps-kitty case fails at its first
+# assertion (no directory for a kitty the registry does not name), census.log does not exist, the
+# no-session-id row stays in the roster, _hb_display_bound and hb_tree_refresh are undefined.
+
+@test "R9: a live kitty that only ps knows gets its heartbeat; a kitty child, a +subcommand and a non-kitty do not" {
+  cat > "$D/ps.txt" <<PS
+  $KP     1 /Applications/kitty.app/Contents/MacOS/kitty
+  $PPID   $KP /Applications/kitty.app/Contents/MacOS/kitty
+  777     1 /Applications/kitty.app/Contents/MacOS/kitty +kitten panel
+  778     1 /Applications/kitty.app/Contents/MacOS/kitty
+PS
+  ident 777 "$KSTART"; ident 778 "$KSTART" /bin/zsh
+  hb hb_tick
+  [ "$status" -eq 0 ] || false
+  [ "$(jq -c . "$(dir UUID-A "$KP")/hb.roster.json")" = '[]' ] || false
+  [ "$(cat "$(dir UUID-A "$KP")/hb.start")" = 1784800000 ] || false
+  [ "$(cat "$(dir UUID-A "$KP")/hb.kitty-start")" = "$KSTART" ] || false
+  for p in "$PPID" 777 778; do [ ! -e "$(dir UUID-A "$p")" ] || { echo "dir for $p"; false; }; done
+  hb _hb_ps_kittys "$D/ps.txt"
+  [ "$output" = "$KP" ] || false
+}
+
+@test "R9 R19: each tick appends ok|carried, the census and tick durations and the kitty count to census.log" {
+  echo "[$(sess s1 "$KP")]" > "$D/sessions.json"
+  hb hb_tick
+  touch "$CC_HB_SESSIONS_BIN.fail"
+  CC_HB_NOW=1784800300 hb hb_tick
+  [ "$status" -eq 2 ] || false
+  [ "$(wc -l < "$CC_HEARTBEAT_DIR/census.log" | tr -d ' ')" = 2 ] || false
+  head -1 "$CC_HEARTBEAT_DIR/census.log" | grep -Eq $'^1784800000\tok\tcensus_s=[0-9]+\ttick_s=[0-9]+\tkittys=1$' || false
+  tail -1 "$CC_HEARTBEAT_DIR/census.log" | grep -Eq $'^1784800300\tcarried\tcensus_s=[0-9]+\ttick_s=[0-9]+\tkittys=1$' || false
+  # Prune leaves the log alone (it is a file beside the boot dirs, not one of them).
+  [ -d "$CC_HEARTBEAT_DIR/UUID-A" ] || false
+}
+
+@test "R19: a registry row with no session id never enters the roster, from a census or from a carried roster" {
+  echo "[$(sess s1 "$KP"),{\"session_id\":null,\"kitty_pid\":$KP,\"pid\":1,\"paneUUID\":\"P9\"},{\"session_id\":\"\",\"kitty_pid\":$KP,\"pid\":1,\"paneUUID\":\"P8\"}]" > "$D/sessions.json"
+  hb hb_tick
+  r="$(dir UUID-A "$KP")/hb.roster.json"
+  [ "$(jq -r '[.[].session_id] | join(" ")' "$r")" = s1 ] || false
+  echo "[$(sess s1 "$KP" 1),{\"kitty_pid\":$KP,\"pid\":1,\"paneUUID\":\"P7\"}]" > "$r"
+  printf '    1     0 /sbin/launchd\n' > "$D/ps.txt"
+  touch "$CC_HB_SESSIONS_BIN.fail"
+  CC_HB_NOW=1784800300 hb hb_tick
+  [ "$(jq -r '[.[].paneUUID] | join(" ")' "$r")" = Ps1 ] || false
+}
+
+@test "R23: the display read is bounded at 20 s idle, scaled by load up to 60 s, and CC_HB_SWIFT_TIMEOUT overrides it" {
+  CC_HB_LOAD1=0.5 hb _hb_display_bound
+  [ "$output" = 20 ] || false
+  CC_HB_LOAD1=100000 hb _hb_display_bound
+  [ "$output" = 60 ] || false
+  n="$(/usr/sbin/sysctl -n hw.ncpu)"
+  CC_HB_LOAD1="$((n * 8))" hb _hb_display_bound
+  [ "$output" = 40 ] || false
+  CC_HB_LOAD1=100000 CC_HB_SWIFT_TIMEOUT=7 hb _hb_display_bound
+  [ "$output" = 7 ] || false
+}
+
+@test "R23: hb_tree_refresh re-reads one kitty's tree and backfills its roster between ticks, leaving hb.start alone" {
+  backfill_setup
+  mv "$D/tree.json" "$D/tree.later"
+  hb hb_tick
+  r="$(dir UUID-A "$KP")/hb.roster.json"
+  [ "$(jq -r '[.[].paneUUID] | join(" ")' "$r")" = 5 ] || false
+  mv "$D/tree.later" "$D/tree.json"
+  hb hb_tree_refresh "$KP"
+  [ "$status" -eq 0 ] || false
+  [ "$(jq -r '[.[].tabs[].windows[].id] | join(" ")' "$(dir UUID-A "$KP")/hb.kitty-ls.json")" = "5 27 28" ] || false
+  [ "$(jq -r '[.[].paneUUID] | sort | join(" ")' "$r")" = "27 28 5" ] || false
+  [ "$(cat "$(dir UUID-A "$KP")/hb.start")" = 1784800000 ] || false
+  [ -z "$(find "$CC_HEARTBEAT_DIR" -name '.hb.*')" ] || false
+  # A failed ls keeps the last good tree (rc 2); a kitty with no directory this boot is rc 1.
+  printf '#!/bin/sh\nexit 1\n' > "$CC_HB_KITTEN_BIN"
+  hb hb_tree_refresh "$KP"
+  [ "$status" -eq 2 ] || false
+  [ "$(jq -r '[.[].tabs[].windows[].id] | join(" ")' "$(dir UUID-A "$KP")/hb.kitty-ls.json")" = "5 27 28" ] || false
+  hb hb_tree_refresh "$PPID"
+  [ "$status" -eq 1 ] || false
+}

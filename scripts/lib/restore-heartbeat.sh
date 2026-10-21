@@ -13,6 +13,9 @@
 #                                    the newest whose start is in (lower, upper], plus any written in
 #                                    the same tick (two kittys live together). rc 1 when none.
 #   hb_prune                         drop heartbeat dirs older than CC_HB_RETAIN_DAYS (7)
+#   hb_tree_refresh <kitty-pid> [sock]
+#                                    re-read one kitty's tree (and backfill its roster) between ticks;
+#                                    pane-spawn-log.sh calls it when a pane opens (R23)
 #   hb_display_probe [pwid...]       no argument: one "uuid dx dy dw dh" row per display now attached;
 #                                    with platform window ids: one hb.displays.tsv row per id found.
 #                                    Tab-separated, read-only. rc 1 when Swift is absent or failed.
@@ -52,6 +55,8 @@
 #                      scripted reboot did not arrive or does not hold every session pane (one line: why).
 #                      cc-resume-layout.sh does not replay a tree beside it, and boot-resume.sh takes no
 #                      window groups from it; the next tick that reads a tree removes it
+# Beside the boot dirs, <root>/census.log gets one line per tick: "<tick> ok|carried census_s=<n>
+# tick_s=<n> kittys=<n>" (R9, R19), the last 2000 kept.
 # Empty TSV cells are written as $'\037' (boot-resume.sh's field-collapse guard).
 #
 # cc-sessions SWEEPS registry rows of dead sessions started over 24 h ago. boot-resume.sh therefore
@@ -63,7 +68,7 @@
 #
 # /bin/bash 3.2 safe: launchd runs it. Sourced: defines functions only.
 # Seams: CC_HEARTBEAT_DIR · CC_HB_SESSIONS_BIN · CC_HB_KITTEN_BIN · CC_HB_PS_BIN (also asked -p <pid>) · CC_HB_LSOF_BIN ·
-#   CC_HB_NOW · CC_HB_RETAIN_DAYS · CC_HB_SESSIONS_TIMEOUT · CC_HB_LOAD1 · CC_HB_LS_TIMEOUT (5 s; the reboot prep asks with 15) · CC_HB_SWIFT_BIN · CC_HB_TIMEOUT_BIN ("" forces the perl bound) · CC_BOOTUUID_OVERRIDE ·
+#   CC_HB_NOW · CC_HB_RETAIN_DAYS · CC_HB_SESSIONS_TIMEOUT · CC_HB_LOAD1 · CC_HB_LS_TIMEOUT (5 s; the reboot prep asks with 15) · CC_HB_SWIFT_BIN · CC_HB_SWIFT_TIMEOUT (else load-scaled, 20-60 s) · CC_HB_TIMEOUT_BIN ("" forces the perl bound) · CC_BOOTUUID_OVERRIDE ·
 #   CC_ROLES_DIR · CC_HB_MAILBOX_DIR · CC_HB_AGENT_BROWSER_DIR
 
 HB_PAD=$'\037'
@@ -205,9 +210,26 @@ for p in want {
     print("\(p)\t\(d.0)\t\(Int(d.1.minX))\t\(Int(d.1.minY))\t\(Int(d.1.width))\t\(Int(d.1.height))\t\(fs)\t\(Int(r.minX))\t\(Int(r.minY))\t\(Int(r.width))\t\(Int(r.height))")
 }
 SWIFT
-  _hb_to "${CC_HB_SWIFT_TIMEOUT:-20}" "$sw" "$td/d.swift" "$@" 2>/dev/null || rc=1
+  _hb_to "$(_hb_display_bound)" "$sw" "$td/d.swift" "$@" 2>/dev/null || rc=1
   rm -rf "$td"
   return "$rc"
+}
+
+# _hb_load_per_core — the 1-minute load divided by the cores, as a decimal; 0 when unreadable.
+_hb_load_per_core() {
+  local l n
+  l="${CC_HB_LOAD1-$(/usr/sbin/sysctl -n vm.loadavg 2>/dev/null | awk '{ print $2 }')}"
+  n="$(/usr/sbin/sysctl -n hw.ncpu 2>/dev/null)"
+  awk -v l="${l:-0}" -v n="${n:-1}" 'BEGIN { if (n + 0 < 1) n = 1; printf "%.2f", l / n }'
+}
+
+# _hb_display_bound — seconds for one Swift display read: CC_HB_SWIFT_TIMEOUT, else 20 s stretched by
+# load (5 s per unit of load per core, at most 60 s). The interpreter compiles the script on every
+# call, so its wall time grows with load like the census does; a load-blind 20 s bound left
+# hb.displays.tsv 20 minutes old at the 2026-10-21 restart (R23).
+_hb_display_bound() {
+  if [ -n "${CC_HB_SWIFT_TIMEOUT:-}" ]; then printf '%s' "$CC_HB_SWIFT_TIMEOUT"; return 0; fi
+  awk -v r="$(_hb_load_per_core)" 'BEGIN { b = 5 * r; if (b < 20) b = 20; if (b > 60) b = 60; printf "%d", b }'
 }
 
 # _hb_transcript <sid> <cwd> — "<config-basename>\t<path>" of the session's NEWEST transcript, or "".
@@ -431,16 +453,46 @@ _hb_roles_tsv() {
 # 4 min 25 s of wall time for 2.6 s of CPU, so a load-blind 30 s bound failed every tick for 2 h and
 # the record froze at 22:08. Past the cap, the carried record (hb_tick) is what keeps it current.
 _hb_census_bound() {
-  local l n
   if [ -n "${CC_HB_SESSIONS_TIMEOUT:-}" ]; then printf '%s' "$CC_HB_SESSIONS_TIMEOUT"; return 0; fi
-  l="${CC_HB_LOAD1-$(/usr/sbin/sysctl -n vm.loadavg 2>/dev/null | awk '{ print $2 }')}"
-  n="$(/usr/sbin/sysctl -n hw.ncpu 2>/dev/null)"
-  awk -v l="${l:-0}" -v n="${n:-1}" 'BEGIN { if (n + 0 < 1) n = 1; b = 15 * l / n
-    if (b < 30) b = 30; if (b > 75) b = 75; printf "%d", b }'
+  awk -v r="$(_hb_load_per_core)" 'BEGIN { b = 15 * r; if (b < 30) b = 30; if (b > 75) b = 75; printf "%d", b }'
+}
+
+# _hb_ps_kittys <ps.txt> — the pid of every kitty in a `ps -axo pid=,ppid=,args=` listing that
+# _hb_kitty_ident confirms, one per line. A `kitty +<subcommand>` and a process whose parent is
+# itself a kitty (a prewarm fork keeps its parent's argv) are not a kitty instance.
+#
+# WHY (R9, 2026-10-21 restart): the kitty list came only from the registry rows and from this boot's
+# existing directories, so the kitty started at login had no directory and no row naming it until a
+# session registered there, and it got its first heartbeat 94 minutes after it started. A kitty that
+# is up is a fleet to record, whether or not the registry has caught up with it.
+_hb_ps_kittys() {
+  local p
+  while IFS= read -r p; do
+    [ -n "$p" ] && _hb_kitty_ident "$p" >/dev/null && printf '%s\n' "$p"
+  done <<EOF
+$(awk '{ a[$1] = $3; s[$1] = $4; pp[$1] = $2 }
+      function isk(x) { return x ~ /\/kitty\.app\/Contents\/MacOS\/kitty$/ }
+      END { for (q in a) if (isk(a[q]) && s[q] !~ /^\+/ && !isk(a[pp[q]]) && q ~ /^[0-9]+$/) print q }' "$1" 2>/dev/null)
+EOF
+  return 0
+}
+
+# _hb_census_log <root> <tick> <ok|carried> <census s> <tick s> <kittys> — one line per tick in
+# <root>/census.log, so a slow or carried census is a measured fact and not an inference from gaps
+# between hb.start stamps (R9, R19). The log keeps its last 2000 lines.
+_hb_census_log() {
+  local f="$1/census.log"
+  ( umask 077; mkdir -p "$1" ) 2>/dev/null || return 0
+  printf '%s\t%s\tcensus_s=%s\ttick_s=%s\tkittys=%s\n' "$2" "$3" "$4" "$5" "$6" >> "$f" 2>/dev/null || return 0
+  if [ "$(wc -l < "$f" 2>/dev/null | tr -d ' ')" -gt 4000 ] 2>/dev/null; then
+    tail -n 2000 "$f" > "$f.tmp" 2>/dev/null && _hb_mv "$f.tmp" "$f"
+  fi
+  return 0
 }
 
 hb_tick() {
-  local root now uuid sb kb tmpd kps kp kst dir sock pw lsok bound census=ok alive ok=0 failed=0
+  local root now uuid sb kb tmpd kps kp kst dir sock pw lsok bound census=ok alive ok=0 failed=0 t0 tc nk=0
+  t0="$(date +%s)"
   root="$(hb_root)"; now="${CC_HB_NOW:-$(date +%s)}"
   uuid="$(_hb_bootuuid)"; [ -n "$uuid" ] || uuid=nouuid
   sb="$(_hb_sessions_bin)"
@@ -461,16 +513,19 @@ hb_tick() {
     census=carried; echo '[]' > "$tmpd/all.json"
     echo "restore-heartbeat: cc-sessions --json failed or did not parse within ${bound}s — carried each kitty's last roster (live pids) plus its kitty tree" >&2
   fi
+  tc=$(( $(date +%s) - t0 ))
   _hb_to 10 "${CC_HB_PS_BIN:-/bin/ps}" -axo pid=,ppid=,args= > "$tmpd/ps.txt" 2>/dev/null || : > "$tmpd/ps.txt"
   # The live pids as a JSON object, or null when ps did not answer (then no carried row is dropped).
   alive="$(awk '$1 ~ /^[0-9]+$/ { print $1 }' "$tmpd/ps.txt" | jq -Rsc 'split("\n") | map(select(. != ""))
            | if length == 0 then null else map({(.): true}) | add end' 2>/dev/null)"
   [ -n "$alive" ] || alive=null
   _hb_to 10 "${CC_HB_LSOF_BIN:-/usr/sbin/lsof}" -nP -iTCP -sTCP:LISTEN -Fpn > "$tmpd/lsof.txt" 2>/dev/null || :
-  # Every LIVE kitty: those the sessions name, plus those with a directory this boot that are still up
-  # with no session left (their roster becomes [], which is an answer: nothing was live there).
+  # Every LIVE kitty: those the sessions name, those with a directory this boot that are still up
+  # with no session left (their roster becomes [], which is an answer: nothing was live there), and
+  # every kitty running now (_hb_ps_kittys), whose panes the tree backfill below then names.
   kps="$( { jq -r '.[] | (.kitty_pid // 0) | tostring' "$tmpd/all.json" 2>/dev/null
-            for dir in "$root/$uuid"/*; do [ -d "$dir" ] && printf '%s\n' "${dir##*/}"; done; } \
+            for dir in "$root/$uuid"/*; do [ -d "$dir" ] && printf '%s\n' "${dir##*/}"; done
+            _hb_ps_kittys "$tmpd/ps.txt"; } \
           | grep -E '^[0-9]+$' | sort -u)"
   for kp in $kps; do
     # A dead kitty's last heartbeat is the evidence of its fleet: never overwrite it. Dead includes
@@ -482,12 +537,15 @@ hb_tick() {
       { printf '%s\n' "$kst" > "$dir/.hb.kitty-start.tmp" && _hb_mv "$dir/.hb.kitty-start.tmp" "$dir/hb.kitty-start"; } 2>/dev/null \
         || { failed=$((failed + 1)); continue; }
     fi
+    # A row with no session id is nothing a restore can resume (a registry placeholder written before
+    # the session knew its id), so it never enters the roster (R19).
     if [ "$census" = ok ]; then
-      jq --argjson k "$kp" '[.[] | select(((.kitty_pid // 0) | tonumber? // 0) == $k)]' "$tmpd/all.json" \
-        > "$dir/.hb.roster.json.tmp" 2>/dev/null
+      jq --argjson k "$kp" '[.[] | select(((.kitty_pid // 0) | tonumber? // 0) == $k and ((.session_id // "") != ""))]' \
+        "$tmpd/all.json" > "$dir/.hb.roster.json.tmp" 2>/dev/null
     else
       { cat "$dir/hb.roster.json" 2>/dev/null || echo '[]'; } | jq --argjson alive "$alive" \
-        '[.[]? | select($alive == null or (((.pid // "") | tostring) as $p | $alive[$p] == true))]' \
+        '[.[]? | select((.session_id // "") != "")
+               | select($alive == null or (((.pid // "") | tostring) as $p | $alive[$p] == true))]' \
         > "$dir/.hb.roster.json.tmp" 2>/dev/null
     fi
     if ! jq -e 'type == "array"' "$dir/.hb.roster.json.tmp" >/dev/null 2>&1; then
@@ -548,13 +606,53 @@ hb_tick() {
     { printf '%s\n' "${pw% }" > "$dir/.hb.census.tmp" && _hb_mv "$dir/.hb.census.tmp" "$dir/hb.census"; } 2>/dev/null
     printf '%s\n' "$now" > "$dir/.hb.start.tmp" 2>/dev/null && _hb_mv "$dir/.hb.start.tmp" "$dir/hb.start" \
       && ok=$((ok + 1))
+    [ "$kp" != 0 ] && nk=$((nk + 1))
   done
   rm -rf "$tmpd"
+  _hb_census_log "$root" "$now" "$census" "$tc" "$(( $(date +%s) - t0 ))" "$nk"
   hb_prune
   [ "$census" = ok ] || return 2
   [ "$failed" -gt 0 ] && return 2
   [ "$ok" -gt 0 ] && return 0
   return 1
+}
+
+# hb_tree_refresh <kitty-pid> [socket] — re-read ONE kitty's tree between ticks: hb.kitty-ls.json
+# from one bounded `kitten @ ls`, then the roster backfill from that tree (rows are only ever added).
+# hb.start is not touched, so the tick cadence and hb_pick are unchanged. rc 0 refreshed · 1 nothing
+# to do (no kitten, no directory this boot, kitty not proven) · 2 the ls failed (last good tree kept).
+#
+# WHY (R23, 2026-10-21 restart): the tree was read only on the 300 s tick, and pane 476 opened two
+# minutes after the last read, so the restore placed it from the fallback plan. pane-spawn-log.sh
+# calls this (detached, after a short delay) when a kitty pane opens, and a pane close may call it
+# the same way through `pane-spawn-log.sh tree-refresh`.
+hb_tree_refresh() {
+  local kp="$1" sock="${2:-}" root uuid dir kb tmpd
+  case "$kp" in ''|0|*[!0-9]*) return 1 ;; esac
+  kb="$(_hb_kitten_bin)"; [ -n "$kb" ] && [ -x "$kb" ] || return 1
+  root="$(hb_root)"; uuid="$(_hb_bootuuid)"; [ -n "$uuid" ] || uuid=nouuid
+  dir="$root/$uuid/$kp"
+  [ -d "$dir" ] || return 1
+  _hb_kitty_proven "$kp" "$dir" >/dev/null || return 1
+  [ -n "$sock" ] || sock="$(jq -r '[.[] | .kitty_listen_on // empty][0] // ""' "$dir/hb.roster.json" 2>/dev/null)"
+  [ -n "$sock" ] || sock="unix:/tmp/kitty-$kp"
+  if ! _hb_to "${CC_HB_LS_TIMEOUT:-5}" "$kb" @ --to "$sock" ls > "$dir/.hb.kitty-ls.json.r$$" 2>/dev/null \
+     || ! jq -e 'type == "array"' "$dir/.hb.kitty-ls.json.r$$" >/dev/null 2>&1; then
+    rm -f "$dir/.hb.kitty-ls.json.r$$"; return 2
+  fi
+  _hb_mv "$dir/.hb.kitty-ls.json.r$$" "$dir/hb.kitty-ls.json" || return 2
+  rm -f "$dir/hb.layout-degraded"
+  [ -f "$dir/hb.roster.json" ] || return 0
+  tmpd="$(mktemp -d "${TMPDIR:-/tmp}/hbr.XXXXXX" 2>/dev/null)" || return 0
+  _hb_to 10 "${CC_HB_PS_BIN:-/bin/ps}" -axo pid=,ppid=,args= > "$tmpd/ps.txt" 2>/dev/null || : > "$tmpd/ps.txt"
+  if _hb_roster_backfill "$dir/hb.roster.json" "$dir/hb.kitty-ls.json" "$tmpd/ps.txt" "$kp" "$sock" \
+       > "$dir/.hb.roster.json.r$$" && jq -e 'type == "array"' "$dir/.hb.roster.json.r$$" >/dev/null 2>&1; then
+    _hb_mv "$dir/.hb.roster.json.r$$" "$dir/hb.roster.json"
+  else
+    rm -f "$dir/.hb.roster.json.r$$"
+  fi
+  rm -rf "$tmpd"
+  return 0
 }
 
 hb_prune() {
