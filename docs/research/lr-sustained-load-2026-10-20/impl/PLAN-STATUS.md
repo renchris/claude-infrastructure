@@ -27,7 +27,9 @@ whichever session holds it. Fire kit (template + helper): `impl/lead-kit/` (copi
 | W12b | C | lrsl-w12b | part 1 `ac25e898e` (3/3 paths verified; typed-relaunch-hold 1..9, probe-preconditions 1..13, 6/6 mutants); custody returned 04:31 | W4 typed-relaunch group with `printf terminal > ~/.reso/limit-recover/typed-relaunch-hold.mode` for the run only: 0 HOLD-LOAD | after that run, resolve `debt:typed-relaunch` in `g1-allow.tsv` (slot A); part 2 after packet `db44ab0ebc55` |
 | W14 | A | lrsl-w14 | `4b4edf0de` (10/10 paths; 979 unittest OK, pane-bind-env 33 OK; live shadow census 36/36 agree; custody returned 05:28) | kitty-deaf.json: arm on (`printf on > recon/pane-bind-env.mode` in the rig root) binds 6/6 by env, arm shadow binds none; `--red tree:ef94cd89c@31` | R5 reload step `7f151e71f291`; its now-audit finding (case 15 mutant void since W11) fixed by the lead, `cfdb341d2` |
 | W17 | A | — | PARKED | — | entry trigger unmet: packet `4ab193daae88` unruled (deadline 2026-11-03), R4 not live, no measured wall and no failing guarantee9 cure run. Row stays FILED |
-| W15 | B | lrsl-w15 | IN FLIGHT pane 373 (fired 04:14) | — | lands at mode `off` (packet `0223cae3d185`) |
+| W15 | B | lrsl-w15 | `83e99fccc` + 3 fixups to `01fee6a42` (5/5 paths; repick 1..52, recovery-lane 1..42, 31/31 mutants; custody returned 06:11) | — (a ≥30/core latency bin is owed before mode `on`) | mode `off`; packet `0223cae3d185` sets it |
+| W16 | B | lrsl-w16 | `abb17fa10` `d0ffedbfe` (per-arm rig env, granted `load_lib.py`) + 3 fixups to `721539ac6`, 12/12 paths verified; DONE ping pending | shed-e1 pair | shadow only (packet `76a584cc935b`) |
+| W14f | A | lrsl-w14f | IN FLIGHT pane 451 (fired 07:40). Scope (grown): +census ignores a session row whose pid was reused (H5 root cause, `/tmp/lrsl-h5-splitbrain.md`, 93%) | re-run the W2 guarantee9 pair after it lands | files: `observe_rows.py`, `observe.py`, new `test_session_row_reuse.py` |
 | C2 re-open | — | — | backlog `649ebd06939f`, blocked not-yet-true | — | — |
 
 Next per slot (Phase 0 order and edges): A W14 → W17 · B W15 → W16 (W16 also needs the W5 Part A flip, packet `4ffc4e1e5f1c`) · C done after W12b part 1.
@@ -54,6 +56,13 @@ Next per slot (Phase 0 order and edges): A W14 → W17 · B W15 → W16 (W16 als
 - Tier-L queue order (landing order): W2 g9 · W6 cure · W8 pair · W9 T2 · W10 pair · W4 pair · W11 g9+g30 · W4b move9 ·
   W12b typed-relaunch · W13 g30 idle-fanout · W14 kitty-deaf. At 05:28 kitty fell under both limits (227/230, 601/650)
   and the W2 pair started: run `20261021T102850Z9471`.
+- W2 guarantee9 pair, two tries: `20261021T102850Z9471` (cure 1a7e5ac68) and `20261021T120053Zdc2a` (cure 0ae7363f8),
+  both NO-VERDICT on the premise (20% and 2% of samples ≥15/core; load fell after each spike). Both showed A6 power
+  (H3 XPASS cure, XFAIL red). Both cure arms FAILED hard check H5 with split-brain 1. Root cause, read-only, 93%: pid
+  reuse. `observe_rows.read_session_rows` accepts a stale `sessions/<pid>.json` row without comparing `procStart`
+  (since ab51142a24), and the rig stub leaves its row behind on SIGTERM. The red arm has the same defect and passed only
+  because its records fell in an unread cohort. This is a latent production defect, not a regression from this plan.
+  Fix wave W14f.
 - `lead-kit/brief-template.txt` names the lead's session uuid for detail pings. A recycled lead must rewrite it to its
   own uuid at once; until 04:20 waves sent their long reports to the retired session's mailbox (read it with
   `~/.claude/mailbox/<old uuid>.md`).
