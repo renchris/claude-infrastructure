@@ -75,7 +75,7 @@ COOLDOWN_S = env_int(
 TRIP_CONFIRM_S = 300  # the TTW arm only: two looks >= 5 min apart open (the level arm opens at once, E2)
 RELEASE_CONFIRM_S = 1200  # two looks >= 20 min apart close (release is not !trip)
 # PER-ARM BOUNDS (review D14). Measured on the W16 build, 2026-10-21 ~11:40Z, at priority 31 and
-# load1 86-112 on 10 cores (9-11/core, BELOW the 15-40 premise): a cache-only --shed-band 0.2-0.4 s;
+# a 1-minute load average of 86-112 on 10 cores (9-11/core, BELOW the 15-40 premise): a cache-only --shed-band 0.2-0.4 s;
 # `cc-lr plan --from next --json` (9 live rows) 17.8 s and 34.6 s; `cc-lr move --dry-run` of 2 rows
 # 24.0 s. Each bound sits 7-12x above its reading to cover the premise's 3-4x higher load; the
 # owed Tier-L T6 run re-reads them at 25 and 40/core (a queued batch in the `on` arm) and the shadow
