@@ -1,0 +1,56 @@
+#!/bin/bash
+# kitty-slow — kitty remote-control fault wrapper for the lr-recon rig (LR_SUSTAINED_LOAD W4).
+# Exported as CC_TERM_KITTY (kitty-slow) and LR_KITTEN_BIN (kitten-slow, a symlink to this file).
+#   $LR_RIG/faults/kitty-delay.tsv  wid<TAB>lo<TAB>hi<TAB>k  the first k (default 3) calls naming
+#                                   window wid sleep a draw in [lo,hi] s (tenths)
+#   $LR_RIG/faults/kitty-fail.tsv   wid<TAB>n               the first n send-text calls for wid exit 1
+#                                   without reaching kitty
+# Counters: $LR_RIG/state/kitty-slow/<wid>.{delay,fail}.n. Every FAULTED call is appended to
+# $LR_RIG/state/kitty-delay.log as epoch<TAB>wid<TAB><delay_s|fail><TAB>subcmd. With neither tsv
+# non-empty, or no window id in argv, it execs the real binary before any fork.
+set -u
+real=${LR_RIG_REAL_KITTY:-/Applications/kitty.app/Contents/MacOS/kitty}
+[ "${0##*/}" = kitten-slow ] && real=${real%/*}/kitten
+dly=${LR_RIG:-/nonexistent}/faults/kitty-delay.tsv fl=${LR_RIG:-/nonexistent}/faults/kitty-fail.tsv
+[ -s "$dly" ] || [ -s "$fl" ] || exec "$real" "$@"
+
+wid='' sub='' at=0 val=0
+for a in "$@"; do
+  v=${a#--match=}; v=${v#window_}
+  case $v in id:[0-9]*) v=${v#id:}; [ -n "$wid" ] || wid=${v%%[!0-9]*} ;; esac
+  if [ "$val" = 1 ]; then val=0; continue; fi
+  if [ "$at" = 0 ]; then [ "$a" = @ ] && at=1; continue; fi
+  [ -n "$sub" ] && continue
+  case $a in
+    --to|--password|--password-file|--password-env|--use-password) val=1 ;;
+    -*) ;;
+    *) sub=$a ;;
+  esac
+done
+[ -n "$wid" ] || exec "$real" "$@"
+
+st=$LR_RIG/state/kitty-slow
+tenths() { local i=${1%%.*} f=''; case $1 in *.*) f=${1#*.}; f=${f:0:1} ;; esac; _t=$((10#${i:-0} * 10 + 10#${f:-0})); }
+note() { mkdir -p "$st"; printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$wid" "$1" "${sub:--}" >> "$LR_RIG/state/kitty-delay.log"; }
+count() { local c=0; [ -f "$1" ] && read -r c < "$1"; _c=$((${c:-0} + 1)); }
+
+if [ -s "$dly" ]; then
+  while IFS=$'\t' read -r w lo hi k _ || [ -n "${w:-}" ]; do
+    [ "$w" = "$wid" ] || continue
+    count "$st/$wid.delay.n"
+    [ "$_c" -le "${k:-3}" ] || break
+    tenths "$lo"; l=$_t; tenths "$hi"; h=$_t; [ "$h" -ge "$l" ] || h=$l
+    d=$((l + RANDOM % (h - l + 1))); s=$((d / 10)).$((d % 10))
+    note "$s"; printf '%s\n' "$_c" > "$st/$wid.delay.n"; sleep "$s"; break
+  done < "$dly"
+fi
+if [ "$sub" = send-text ] && [ -s "$fl" ]; then
+  while IFS=$'\t' read -r w n _ || [ -n "${w:-}" ]; do
+    [ "$w" = "$wid" ] || continue
+    count "$st/$wid.fail.n"
+    [ "$_c" -le "${n:-0}" ] || break
+    note fail; printf '%s\n' "$_c" > "$st/$wid.fail.n"
+    printf 'Error: rig fault send_text_fail (n=%s/%s)\n' "$_c" "$n" >&2; exit 1
+  done < "$fl"
+fi
+exec "$real" "$@"
