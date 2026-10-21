@@ -399,8 +399,8 @@ g1_copy_root() {
 @test "G1 lint is green at HEAD with the seeded allowlist, and prints every debt row" {
   run g1_lint
   [ "$status" -eq 0 ] || { printf '%s\n' "$output"; false; }
-  [[ "$output" =~ G1\ PASS\ \(([1-9][0-9]*)\ reads ]]
-  [[ "$output" =~ G1\ debt\ ([0-9]+) ]]
+  [[ "$output" =~ G1\ PASS\ \(([1-9][0-9]*)\ reads ]] || false
+  [[ "$output" =~ G1\ debt\ ([0-9]+) ]] || false
   n="${BASH_REMATCH[1]}"
   [ "$n" -gt 0 ]
   [ "$(printf '%s\n' "$output" | grep -c '^G1 DEBT ')" -eq "$n" ]
@@ -414,7 +414,7 @@ g1_copy_root() {
   printf '\n\ndef g1_planted():\n    return os.getloadavg()[0]\n' >> "$ROOT/scripts/limit-recover/lr_recon/plan.py"
   run g1_lint
   [ "$status" -eq 1 ]
-  [[ "$output" == *"lr_recon/plan.py:"*" in g1_planted(): unlisted load read"* ]]
+  [[ "$output" == *"lr_recon/plan.py:"*" in g1_planted(): unlisted load read"* ]] || false
 }
 
 @test "C3: a 'from os import getloadavg as gl' alias is red at its use (F2)" {
@@ -423,7 +423,7 @@ g1_copy_root() {
     >> "$ROOT/scripts/limit-recover/lr_recon/plan.py"
   run g1_lint
   [ "$status" -eq 1 ]
-  [[ "$output" == *"in g1_alias(): unlisted load read: gl"* ]]
+  [[ "$output" == *"in g1_alias(): unlisted load read: gl"* ]] || false
 }
 
 @test "C3: an emptied allowlist is red" {
@@ -431,8 +431,8 @@ g1_copy_root() {
   grep '^#' "$REPO/tests/rig/g1-allow.tsv" > "$ALLOW"
   run g1_lint
   [ "$status" -eq 1 ]
-  [[ "$output" == *"G1 VIOLATION "* ]]
-  [[ "$output" == *"G1 FAIL ("* ]]
+  [[ "$output" == *"G1 VIOLATION "* ]] || false
+  [[ "$output" == *"G1 FAIL ("* ]] || false
 }
 
 @test "C3: a stale telemetry row (its function no longer exists) is red" {
@@ -440,7 +440,7 @@ g1_copy_root() {
   printf 'scripts/limit-recover/lr_recon/admit.py\tAdmission.g1_gone\ttelemetry\tplanted stale row\n' >> "$ALLOW"
   run g1_lint
   [ "$status" -eq 1 ]
-  [[ "$output" == *"G1 STALE row (no such function): scripts/limit-recover/lr_recon/admit.py"*"Admission.g1_gone"* ]]
+  [[ "$output" == *"G1 STALE row (no such function): scripts/limit-recover/lr_recon/admit.py"*"Admission.g1_gone"* ]] || false
 }
 
 @test "C3: a stale debt row passes and prints RESOLVED (remove row)" {
@@ -448,7 +448,7 @@ g1_copy_root() {
   printf 'scripts/limit-recover/lr_recon/admit.py\tAdmission.g1_gone\tdebt:W99\tplanted resolved debt\n' >> "$ALLOW"
   run g1_lint
   [ "$status" -eq 0 ] || { printf '%s\n' "$output"; false; }
-  [[ "$output" == *"RESOLVED (remove row): scripts/limit-recover/lr_recon/admit.py"*"Admission.g1_gone"* ]]
+  [[ "$output" == *"RESOLVED (remove row): scripts/limit-recover/lr_recon/admit.py"*"Admission.g1_gone"* ]] || false
 }
 
 @test "C3: a bare cc_capacity_admit planted in a rail script is red (Rule 3)" {
@@ -456,7 +456,7 @@ g1_copy_root() {
   printf '\ng1_bare() {\n  cc_capacity_admit g1 "planted"\n}\n' >> "$ROOT/scripts/limit-recover/lr-fleet.sh"
   run g1_lint
   [ "$status" -eq 1 ]
-  [[ "$output" == *"lr-fleet.sh:"*" in g1_bare(): bare capacity call (Rule 3"* ]]
+  [[ "$output" == *"lr-fleet.sh:"*" in g1_bare(): bare capacity call (Rule 3"* ]] || false
 }
 
 @test "C3: \${X:-off} is red once a rail environment sets X (Rule 3, F10)" {
@@ -465,7 +465,7 @@ g1_copy_root() {
     > "$ROOT/launchd/com.example.g1-planted.plist"
   run g1_lint
   [ "$status" -eq 1 ]
-  [[ "$output" == *"lr-fire-resume.sh:"*"\${LR_LOAD_TERM:-off}, but launchd/com.example.g1-planted.plist sets LR_LOAD_TERM"* ]]
+  [[ "$output" == *"lr-fire-resume.sh:"*"\${LR_LOAD_TERM:-off}, but launchd/com.example.g1-planted.plist sets LR_LOAD_TERM"* ]] || false
 }
 
 @test "C3: a capped-bound-stretch row whose function shows no min( cap is red (F12)" {
@@ -474,5 +474,5 @@ g1_copy_root() {
     "$REPO/tests/rig/g1-allow.tsv" > "$ALLOW"
   run g1_lint
   [ "$status" -eq 1 ]
-  [[ "$output" == *"G1 FAIL capped-bound-stretch row has no min(MAX, ...) cap in Clock.load_multiplier()"* ]]
+  [[ "$output" == *"G1 FAIL capped-bound-stretch row has no min(MAX, ...) cap in Clock.load_multiplier()"* ]] || false
 }

@@ -243,8 +243,9 @@ RIGLIB() { python3 "$REPO/tests/rig/rig_lib.py" "$@"; }
   ok='[{"id":1,"tabs":[{"windows":[{"id":10,"cwd":"/tmp/lrh-t1-cure/work"},{"id":11,"cwd":"/private/tmp/lrh-t1-cure/work/s01"}]}]},{"id":2,"tabs":[{"windows":[{"id":20,"cwd":"/Users/x"}]}]},{"id":3,"tabs":[{"windows":[{"id":30,"cwd":"/tmp/lrh-t1-cure/work/s02"}]}]}]'
   bad='[{"id":2,"tabs":[{"windows":[{"id":20,"cwd":"/Users/x"},{"id":21,"cwd":"/tmp/lrh-t1-cure/work/s01"}]}]}]'
   other_arm='[{"id":4,"tabs":[{"windows":[{"id":40,"cwd":"/tmp/lrh-t1-red/work/s01"},{"id":41,"cwd":"/tmp/lrh-t1-cure/work/s01"}]}]}]'
-  run RIGLIB containment "$R" <<< "$ok";        [ "$status" -eq 0 ] && [ -z "$output" ]
-  run RIGLIB containment "$R" <<< "$bad";       [ "$status" -eq 3 ] && [[ "$output" == "os-window 2: rig 21 beside 20" ]]
+  run RIGLIB containment "$R" <<< "$ok";        [ "$status" -eq 0 ]; [ -z "$output" ]
+  run RIGLIB containment "$R" <<< "$bad";       [ "$status" -eq 3 ]
+  [[ "$output" == "os-window 2: rig 21 beside 20" ]] || false
   run RIGLIB containment "$R" <<< "$other_arm"; [ "$status" -eq 3 ]
   run RIGLIB containment "$R" <<< "not json";   [ "$status" -eq 0 ]   # no reading, not a breach
 }
@@ -252,7 +253,8 @@ RIGLIB() { python3 "$REPO/tests/rig/rig_lib.py" "$@"; }
 @test "W1 S4: the launchctl and osascript shims log their argv and do nothing" {
   export LR_RIG="$BATS_TEST_TMPDIR/rig"; mkdir -p "$LR_RIG/state"
   run "$REPO/tests/rig/shims/launchctl" kickstart "gui/$(id -u)/com.reso.lr-reset-poller"
-  [ "$status" -eq 0 ] && [ -z "$output" ]
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
   run "$REPO/tests/rig/shims/osascript" -e 'tell application "kitty" to activate'
   [ "$status" -eq 0 ]
   [ "$(wc -l < "$LR_RIG/state/shims.log" | tr -d ' ')" = 2 ]
