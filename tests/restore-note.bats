@@ -61,9 +61,11 @@ A_TEXT='{"type":"assistant","message":{"content":[{"type":"text","text":"done."}
 use() { jq -cn --arg id "$1" --arg n "$2" --argjson i "$3" '{type:"assistant",message:{content:[{type:"tool_use",id:$id,name:$n,input:$i}]}}'; }
 res() { jq -cn --arg id "$1" --arg t "$2" '{type:"user",message:{content:[{type:"tool_result",tool_use_id:$id,content:$t}]}}'; }
 classify() { # <sid>... → writes $LOST from the real classifier over the fixture ($CL_ARGS: more flags)
-  local s; for s in "$@"; do printf 'next\t%s\t/x\tbr\n' "$s"; done \
+  local s more=()
+  read -r -a more <<< "${CL_ARGS:-}"
+  for s in "$@"; do printf 'next\t%s\t/x\tbr\n' "$s"; done \
     | python3 "$REPO/bin/cc-resume-classify.py" --boot-epoch "$CUT" --wake-lost --lost-json "$LOST" --hb-dir "$BATS_TEST_TMPDIR/hb" \
-        ${CL_ARGS:-} 2> "$BATS_TEST_TMPDIR/classify.err"
+        ${more[@]+"${more[@]}"} 2> "$BATS_TEST_TMPDIR/classify.err"
 }
 verdicts() { printf '%s\n' "$1" | awk -F'\t' '{ print $NF }' | tr '\n' ' '; }
 
