@@ -595,19 +595,19 @@ and a default, as the plan specifies.
 | A7 drive cohort members that turned limited while queued | FILED | packet `4ffc4e1e5f1c` (lane order; default: reconciler first, poller after 10 min). Code: W5 LANDED `a294d2bcb` (`fef98e423` + 2 fixups; reconciler first, poller after a bounded wait, move lane lets go; Part A in shadow until ruled), W13 to come |
 | D1 re-pick honours the router's held verdict | FILED | packet `0223cae3d185`. Code: W15, lands at mode `off` |
 | D2 warning-band shedding | FILED | packets `76a584cc935b` (late-band idle shed, D2b) and `c9a05672e692` (at-the-wall idle fan-out, D2a); step `f259e20643bf` (shadow switch). Code: W13, W16, shadow only |
-| B8 kitty hygiene | FILED | steps `d25661ba57f1` (App Nap key), `7e912ef257cb` (fd headroom), `1c94119a286d` (planned kitty restart); packets `74b9bd774c40` (official 0.49.2), `1ef91f32a58c` (in-kitty fd watcher), `1c7000af9e41` (in-process App Nap test). Agent tools: W7 |
+| B8 kitty hygiene | FILED | steps `d25661ba57f1` (App Nap key), `7e912ef257cb` (fd headroom), `1c94119a286d` (planned kitty restart); packets `74b9bd774c40` (official 0.49.2), `1ef91f32a58c` (in-kitty fd watcher), `1c7000af9e41` (in-process App Nap test). Agent tools LANDED W7 `29fa7e597` (`scripts/kitty-hygiene.sh`, fd-headroom kitten, App Nap reader); router-cache producers' band needs reload step `626ed25b243c` |
 | C1 credential flip | FILED | packet `745e0fdc78e6` (wait for the next wall); steps `bd40ec7f3d4f`, `156c1aa935e7` (leftover `.credentials.json` in two config dirs) |
 | Gap 2 self-recovery from the session's own priority-31 tree | FILED | packet `4ab193daae88` (scope ruling). Code: W17, behind its measured entry trigger |
 | Typed-relaunch load hold (plan closure TR) | FILED | packet `db44ab0ebc55`. Code: W12b part 2 after the ruling |
 | Pass-boundary restart request (A6 lever 11) | FILED | packet `5353dd6e8277` |
 | B1 harness load and windows | FILED | packets `4eee30ac4de4` (background top-up load), `75bb72581c54` (main-terminal windows) |
 | Reconciler reload batches R1-R5, router-cache band RK | FILED | steps `b8bbc2317870` (R1-R5), `626ed25b243c` (RK) |
-| B1 load harness and guarantee tests | IN FLIGHT | W1 (hermetic tier), W4 (live tier), W4b |
+| B1 load harness and guarantee tests | IN FLIGHT | hermetic tier LANDED W1 `e6713c4da`..`2d99d8e93` (Tier G simulation, rig, no-load-wait lint; 783 OK, bats 1..36); live tier W4 and W4b to come |
 | A6 restart safety | LANDED | W2 `1eb5548ac` + `45b8bbfa9` (claim re-stamped to the adopted actuator, exit codes survive a restart); 667 unittest OK, bats 1..21; live once operator reload R1 (`b8bbc2317870`) runs; Tier-L guarantee9 pair owed after W4 |
-| B4 cheap `--place` | IN FLIGHT | client half LANDED W3 `c79df708d` (0.15 CPU-s at priority 31, was 3.0-3.3); holds map W10 to come |
+| B4 cheap `--place` | LANDED | client half W3 `c79df708d` (0.15 CPU-s at priority 31, was 3.0-3.3); holds map W10 `52fc6f2b8` (864 unittest OK, 10/10 mutants); live after reload R3; Tier-L pair owed after W4 |
 | B6 telemetry | LANDED | W6 `8f4ab29f9` + `748186142` (`recon/telemetry.jsonl`, `cc-lr status --rail`); 743 unittest OK, bats 1..39; live after reload R2; Tier-L cure run owed after W4 |
 | B7 pass-scoped `now` audit, and C2-lite (typed delivery retries instead of escalating) | LANDED | W8 `72fc09748` (right clock per decision, no actuator load term, every hold reason mapped); 783 unittest OK, now-audit 1..26, Tier G 1..11, G1 lint 1..9; live after reload R2; Tier-L pair owed after W4 |
-| B2 bounded pass (stage 1) | IN FLIGHT | W9; stage 2 dropped with a re-open trigger (plan § Dropped) |
+| B2 bounded pass (stage 1) | LANDED | W9 `784682330` (pass measured 342.7 s against its 799 s cap, 1426 s with W9 off; 851 unittest OK) + `9700c6213` (bash swap-slot race: 7-11 holders of 6 slots before, 0 in 60 trials after); live after reload R3; stage 2 dropped with a re-open trigger (plan § Dropped) |
 | B3 per-record deadline (rescoped) | IN FLIGHT | W11 |
 | B5 kitty off the pre-commit path | IN FLIGHT | W12 (kernel identity, one-window probe), W14 (kitty-free census binding) |
 | C2 socket transport for the owed prompt | FILED | full transport dropped by the plan (reviewer: "works as specified" ≈ 0%); C2-lite LANDED in W8 `72fc09748`; re-open row `649ebd06939f`, parked not-yet-true until its trigger fires |

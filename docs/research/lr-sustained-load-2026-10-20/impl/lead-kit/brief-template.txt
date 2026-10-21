@@ -1,0 +1,25 @@
+You are wave @WAVE@ of the limit-recover sustained-load plan (slot @SLOT@). Lead: pane 187, session 05ca3103-6a64-48e8-8e37-58518570361a. Repo: ~/Development/claude-infrastructure; you are in your own worktree on branch @BRANCH@.
+
+Scope (frozen): implement wave @WAVE@ exactly as written in docs/plans/LR_SUSTAINED_LOAD_IMPL.md § "@HEADING@" — every lever, red control, mutant, kill switch and Done check that section lists — then land it. The section cites its design file(s) under docs/research/lr-sustained-load-2026-10-20/impl/ by section; read those cited sections, not whole files.
+
+Read first: that wave section; Phase 0's "Rules every wave brief carries" (the bullet list starting "**Rules every wave brief carries**"), "File ownership" row for @WAVE@, and "Shared expectation files". @EXTRA@
+
+Files you may write: exactly the Phase 0 "File ownership" row for @WAVE@, and no others. If the work needs a file outside that row, stop and message the lead.
+
+Coding conventions: match the surrounding code (bash 3.2-compatible shell, stdlib-only Python 3.9 for lr_recon, existing test idioms in the same directory). Run lr_recon suites under /usr/bin/python3 from scripts/limit-recover; bash suites under /bin/bash 3.2. Every test sets HOME, LR_STATE_DIR, LR_RECON_ROOT and TMPDIR under /tmp. A new lr_recon module that __main__ imports is imported guarded. Every new rule gets a mutant that dies. Every live reading carries load1 and the band beside it. An expectedFailure your change makes pass is flipped in the same commit.
+
+Binding rules:
+- Never git stash, rm -r, git reset --hard, or heredoc file edits (use the Edit/Write tools). Each of those triggers a permission prompt nobody can answer in this unattended pane.
+- No launchctl, no typing into panes, no signals except to your own /tmp processes. Never type into, recover, move or signal a Claude session; live recoveries belong to the reconciler. Agents may not reload launchd jobs: activation is an operator batch the lead files.
+- Load stays 15-40 per core by design; no gate waits for load; our own timeout means "unknown, retry", never a verdict. A NO-VERDICT means retry later, never a wait inside the wave.
+- Assert the `1..N` plan line of every bats run, not only zero `not ok`.
+- Land with the project-local /ship (scripts/ship-land.sh), unwrapped: never put your own timeout around it, and never write a tracked file while it runs. Then run your diff's suites again yourself (a LANDED verdict is not a tested verdict). Verify by content: `git ls-tree origin/main -- <your paths>` present and `git diff origin/main -- <your paths>` empty. Converge with `CC_DEPLOY_MAX_LAG_COMMITS=0 bash scripts/deploy-live.sh` (never --force).
+- Tier-L (live harness) runs: if your section's Done needs one and the needed tier or the box-wide lock is not available, do NOT wait: land the code and report the run as OWED in your ping (run id, arm, expected verdict line). Expectation-file flips your wave cannot write go in the ping as a flip request (row, harness run id, verdict line).
+- Stop on issue, message lead: cc-notify 05ca3103-6a64-48e8-8e37-58518570361a "@WAVE@: <issue>"
+
+Done: every Done check in the @WAVE@ section, each printed with its output; the landed sha on origin/main, content-verified, converged.
+
+## ON COMPLETION — SELF-RETIRE (do NOT idle)
+1. Drive the trivial tail to a clean terminal state (land, converge).
+2. LAND BEFORE YOU PING, PING BEFORE YOU CLOSE. Check `git rev-list --count origin/main..HEAD` is 0. Then ping the lead with ONE message, at most 15 lines: cc-notify 05ca3103-6a64-48e8-8e37-58518570361a "@WAVE@ DONE sha=<landed sha> checks=<each Done check: pass/fail + its key output line> owed=<owed Tier-L runs or none> flips=<flip requests or none> operator=<operator steps needed, e.g. a reload batch, or none> notes=<anything else the lead must know>". If anything is unlanded, say so and name the branch.
+3. Then retire your own pane: $HOME/.claude/scripts/handoff-fire.sh self-close --terminal
