@@ -1,4 +1,4 @@
-You are wave @WAVE@ of the limit-recover sustained-load plan (slot @SLOT@). Lead: pane 187, session 05ca3103-6a64-48e8-8e37-58518570361a. Repo: ~/Development/claude-infrastructure; you are in your own worktree on branch @BRANCH@.
+You are wave @WAVE@ of the limit-recover sustained-load plan (slot @SLOT@). Lead: pane 187, session f9f857a3-7047-45f9-8422-d9e853834155. Repo: ~/Development/claude-infrastructure; you are in your own worktree on branch @BRANCH@.
 
 Scope (frozen): implement wave @WAVE@ exactly as written in docs/plans/LR_SUSTAINED_LOAD_IMPL.md § "@HEADING@" — every lever, red control, mutant, kill switch and Done check that section lists — then land it. The section cites its design file(s) under docs/research/lr-sustained-load-2026-10-20/impl/ by section; read those cited sections, not whole files.
 
@@ -15,11 +15,11 @@ Binding rules:
 - Assert the `1..N` plan line of every bats run, not only zero `not ok`.
 - Land with the project-local /ship (scripts/ship-land.sh), unwrapped: never put your own timeout around it, and never write a tracked file while it runs. Then run your diff's suites again yourself (a LANDED verdict is not a tested verdict). Verify by content: `git ls-tree origin/main -- <your paths>` present and `git diff origin/main -- <your paths>` empty. Converge with `CC_DEPLOY_MAX_LAG_COMMITS=0 bash scripts/deploy-live.sh` (never --force).
 - Tier-L (live harness) runs: if your section's Done needs one and the needed tier or the box-wide lock is not available, do NOT wait: land the code and report the run as OWED in your ping (run id, arm, expected verdict line). Expectation-file flips your wave cannot write go in the ping as a flip request (row, harness run id, verdict line).
-- Stop on issue, message lead: cc-notify 05ca3103-6a64-48e8-8e37-58518570361a "@WAVE@: <issue>"
+- Stop on issue, message lead: cc-notify f9f857a3-7047-45f9-8422-d9e853834155 "@WAVE@: <issue>"
 
 Done: every Done check in the @WAVE@ section, each printed with its output; the landed sha on origin/main, content-verified, converged.
 
 ## ON COMPLETION — SELF-RETIRE (do NOT idle)
 1. Drive the trivial tail to a clean terminal state (land, converge).
-2. LAND BEFORE YOU PING, PING BEFORE YOU CLOSE. Check `git rev-list --count origin/main..HEAD` is 0. Then ping the lead with ONE message, at most 15 lines: cc-notify 05ca3103-6a64-48e8-8e37-58518570361a "@WAVE@ DONE sha=<landed sha> checks=<each Done check: pass/fail + its key output line> owed=<owed Tier-L runs or none> flips=<flip requests or none> operator=<operator steps needed, e.g. a reload batch, or none> notes=<anything else the lead must know>". If anything is unlanded, say so and name the branch.
+2. LAND BEFORE YOU PING, PING BEFORE YOU CLOSE. Check `git rev-list --count origin/main..HEAD` is 0. Then ping the lead with ONE message, at most 15 lines: cc-notify f9f857a3-7047-45f9-8422-d9e853834155 "@WAVE@ DONE sha=<landed sha> checks=<each Done check: pass/fail + its key output line> owed=<owed Tier-L runs or none> flips=<flip requests or none> operator=<operator steps needed, e.g. a reload batch, or none> notes=<anything else the lead must know>". If anything is unlanded, say so and name the branch.
 3. Then retire your own pane: $HOME/.claude/scripts/handoff-fire.sh self-close --terminal
