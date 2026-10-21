@@ -739,9 +739,9 @@ stay_why() { jq -r 'select(.class=="recycle-repick-stay") | .why' "$(LOGF)"; }
 
 @test "D1 a re-picked recycle held after the pre-pass voids its own --assign by id" {
   HOLD="$BATS_TEST_TMPDIR/hold-block.sh"
-  { sed -n '/^hf_recycle_repick_void() {/,/^}$/p' "$FIRE"
-    sed -n '/^hf_recycle_hold() {/,/^}$/p' "$FIRE"; } > "$HOLD"
-  grep -q 'hf_recycle_repick_void$' "$HOLD"
+  # ALONE, as six other suites extract it: the void must not depend on a helper they do not carry
+  sed -n '/^hf_recycle_hold() {/,/^}$/p' "$FIRE" > "$HOLD"
+  grep -qF -- '--unassign "$RCY_REPICK_ASSIGN_ID"' "$HOLD"
   run env CC_ACCOUNTS_BIN="$STUB" CC_ACCOUNTS_BIN_EXPLICIT=1 RCY_REPICK_ASSIGN_ID="rp:187:1792574008" \
       bash -c 'set -euo pipefail
         hf_recycle_watcher_committed() { return 1; }; hf_recycle_disarm() { :; }

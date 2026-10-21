@@ -4016,24 +4016,6 @@ rcy_jobs_mail() { # → 0 always; a no-op unless this watcher recorded jobs
   return 0
 }
 
-# A re-picked recycle that is HELD never launches, so the --assign its re-pick placed is a 5-hour
-# claim with no session behind it, and on a lifted-first account one claim flips the dispatch
-# verdict (D1 review R.3 change 6). Void it by the id the pre-pass minted. Advisory and bounded,
-# like the charge itself; a hermetic suite without an opt-in router never reaches the real ledger.
-hf_recycle_repick_void() { # → 0 always
-  local bin="${CC_ACCOUNTS_BIN:-claude-accounts}"
-  [ -n "${RCY_REPICK_ASSIGN_ID:-}" ] || return 0
-  if [ -n "${BATS_TEST_TMPDIR:-}" ] && [ "${CC_ACCOUNTS_BIN_EXPLICIT:-0}" != 1 ]; then return 0; fi
-  command -v "$bin" >/dev/null 2>&1 || return 0
-  if command -v perl >/dev/null 2>&1; then
-    perl -e 'alarm 25; exec @ARGV' "$bin" --unassign "$RCY_REPICK_ASSIGN_ID" >/dev/null 2>&1 || true
-  else
-    "$bin" --unassign "$RCY_REPICK_ASSIGN_ID" >/dev/null 2>&1 || true
-  fi
-  RCY_REPICK_ASSIGN_ID=""
-  return 0
-}
-
 # A HOLD AFTER THE ARM: unconfirm (if owed), disarm, one row, one line, exit 1. Nothing is typed by
 # any caller of this — the row class is recycle-held-<reason> and the detail carries the unconfirm rc.
 hf_recycle_hold() { # $1=reason $2=detail $3=what the operator reads → exit 1
@@ -4065,7 +4047,16 @@ hf_recycle_hold() { # $1=reason $2=detail $3=what the operator reads → exit 1
   if [ -n "${cmdfile:-}" ]; then date +%s > "$cmdfile.exit-aborted" 2>/dev/null || true; fi
   hf_recycle_disarm
   hf_recycle_unconfirm
-  hf_recycle_repick_void
+  # A re-picked recycle that is HELD never launches, so the --assign its re-pick placed is a 5-hour
+  # claim with no session behind it, and on a lifted-first account one claim flips the dispatch
+  # verdict (D1 review R.3 change 6). Void it by the id the pre-pass minted. Advisory and bounded
+  # like the charge; inline rather than a helper, because suites extract this function alone; a
+  # hermetic suite without an opt-in router never reaches the real ledger.
+  if [ -n "${RCY_REPICK_ASSIGN_ID:-}" ] && command -v "${CC_ACCOUNTS_BIN:-claude-accounts}" >/dev/null 2>&1 \
+     && { [ -z "${BATS_TEST_TMPDIR:-}" ] || [ "${CC_ACCOUNTS_BIN_EXPLICIT:-0}" = 1 ]; }; then
+    perl -e 'alarm 25; exec @ARGV' "${CC_ACCOUNTS_BIN:-claude-accounts}" --unassign "$RCY_REPICK_ASSIGN_ID" >/dev/null 2>&1 || true
+    RCY_REPICK_ASSIGN_ID=""
+  fi
   emit_recycle_event "recycle-held-$1" "" "$SID" "$2; unconfirm rc $RCY_UNCONFIRM_RC$snap" || true
   # "The session stays alive" only when the pane says so: at 03:41Z on pane 332 it had been gone
   # for 2.5 minutes when this line said it.
