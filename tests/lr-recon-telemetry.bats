@@ -45,7 +45,7 @@ for i in range(2):
     t.pass_begin(i + 1)
     t.observed(T.Snapshot(wall=0.0, uptime_raw=0.0, procs=procs))
     t.gate("may", "backoff")
-    clk["m"] += 2.0
+    clk["m"] += 31.0  # a full row each: a 2 s pass folds into the 300 s quiet row
     t.pass_end({"mode": "act", "open": 0}, None)
     t.box()
 hb = {"pid": 4321, "lstart": "", "progress": 9, "wall": now - hb_age, "uptime_raw": 0.0,
