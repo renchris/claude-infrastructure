@@ -11,6 +11,7 @@ scripts/limit-recover/lr_recon/admit.py	Admission.enter_active	telemetry	l_open 
 scripts/limit-recover/lr_recon/admit.py	Admission.decide	telemetry	load1/load5/ncpu are accepted for symmetry and deleted unread (`del load1, load5, ncpu`)
 scripts/limit-recover/lr_recon/__main__.py	_admission_period	telemetry	os.getloadavg() is handed to Admission.enter_active, which only records it
 scripts/limit-recover/lr_recon/__main__.py	_admit	telemetry	os.getloadavg() is handed to Admission.decide, which deletes it
+scripts/limit-recover/lr_recon/telemetry.py	Telemetry.__init__	telemetry	binds os.getloadavg as the recorder for the pass/box rows' l1; write-only (B6 P1, lint T11), read by no gate
 scripts/limit-recover/lr_recon/__main__.py	_plan	debt:B2	load1 feeds plan.place_timeout (capped at 120 s) and the log line; the cap lives in place_timeout, so it is not visible here
 scripts/limit-recover/lr_recon/plan.py	place_timeout	capped-bound-stretch	--place bound: min(PLACE_TIMEOUT_MAX_S, ...), 120 s at most
 scripts/limit-recover/lr_recon/observe.py	ps_bound	capped-bound-stretch	ps bound: min(PS_BOUND_MAX_S, ...), 40 s at most; os.getloadavg is a default argument (F2)

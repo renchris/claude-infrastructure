@@ -513,6 +513,38 @@ class SimCase(unittest.TestCase):
                 traces[load1], base, "the decision trace moved with load1=%s" % load1
             )
 
+    # S1 with telemetry (W6): the writer is write-only, so the trace is identical with it on and
+    # off at the top of the load range, and the "on" arm really wrote rows
+    def check_s1_telemetry(self) -> None:
+        from lr_recon import telemetry
+
+        traces = []
+        for on in (False, True):
+            s = self.sim(n=8, t_att=60.0, load1=LOADS[-1])
+            with s.patched():
+                ctx = s.make_ctx()
+                if on:
+                    ctx.telem = telemetry.Telemetry(
+                        s.paths,
+                        env={},
+                        wall=s.wall,
+                        read_pri=lambda pid=None: 31,
+                        census=lambda: None,
+                        thermal=lambda: 1,
+                        pressure=lambda: 1,
+                        kitty_glob=os.path.join(self.tmp, "no-kitty-*"),
+                    )
+                    ctx.telem.start(None, [])
+                s.run(ctx, 24)
+            traces.append(s.trace)
+        self.assertTrue(
+            os.path.exists(s.paths.p(telemetry.FILE)), "telemetry wrote nothing"
+        )
+        self.assertGreaterEqual(sum(1 for e in traces[0] if e[1] == "spawn"), 8)
+        self.assertEqual(
+            traces[1], traces[0], "the decision trace moved with telemetry on"
+        )
+
     # S2: full run_pass — the first attempt's latency is a property of the whole pass
     def check_s2(self) -> None:
         s = self.sim(n=8, t_att=600.0, reveal=lambda i: i)
@@ -709,6 +741,9 @@ class GuaranteeSim(SimCase):
     def test_s1_load_invariance(self) -> None:
         self.check_s1()
 
+    def test_s1_identical_with_telemetry_on(self) -> None:
+        self.check_s1_telemetry()
+
     def test_s2_first_spawn_bound(self) -> None:
         self.check_s2()
 
@@ -739,6 +774,24 @@ class MutantsDie(SimCase):
             with self.assertRaises(AssertionError) as cm:
                 check()
         self.assertIn(why, str(cm.exception))
+
+    def test_s1_telemetry_that_decides(self) -> None:
+        """W6: a writer that touches a decision field (here: every record backed off) moves the trace."""
+        from lr_recon import telemetry
+
+        orig = telemetry.Telemetry.note_states
+
+        def deciding(tel, records, active_of):
+            records = list(records)
+            for r in records:
+                r.next_eligible_at = 4e9
+            return orig(tel, records, active_of)
+
+        self.dies(
+            self.check_s1_telemetry,
+            mock.patch.object(telemetry.Telemetry, "note_states", deciding),
+            why="telemetry on",
+        )
 
     def test_s1_pace_requires_load_below_20_per_core(self) -> None:
         orig = Admission.pace_ok

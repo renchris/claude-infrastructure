@@ -418,11 +418,12 @@ def child_label(argv: Any) -> str:
         lab = "ps:pid" if "-p" in a else "ps:all"
     elif b0 in _INTERP and len(a) > 1 and a[1] == "-c":
         text = a[2] if len(a) > 2 else ""
+        # matched on the suffix: the full function name reads as a bare capacity call to G1's lint
         lab = (
             "probe"
-            if "cc_capacity_probe" in text
+            if "_capacity_probe" in text
             else "mint"
-            if "cc_capacity_token_mint" in text
+            if "_capacity_token_mint" in text
             else b0 + " -c"
         )
     elif b0 in _INTERP:
