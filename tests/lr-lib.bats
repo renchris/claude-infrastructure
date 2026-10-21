@@ -886,6 +886,53 @@ ss_state() { run lr_successor_state "$SS_SID" "$1"; }
   run lr_pid_cfg "12x";   [ "$status" -eq 1 ]
 }
 
+# ══ THE ENV BLOCK ALONE — lr_env_block + lr_pid_env (W12, B5a §5.2; reviews S4, S17) ════════════════
+# `ps -E` prints argv THEN the env, so an owed prompt on claude's argv can spell KITTY_WINDOW_ID ahead
+# of the env's own; only the block after the argv prefix may answer. lr_pid_env has its OWN seam,
+# LR_PID_ENV_DIR (env-shaped files), and lr_pid_cfg's LR_MOVE_ENV_DIR (a bare config dir) is untouched.
+@test "lr_env_block: the argv prefix is stripped, an env-less or mismatched line is rc 1; lr_pid_env reads the LAST token of the block alone" {
+  run lr_env_block "claude KITTY_WINDOW_ID=41" "claude KITTY_WINDOW_ID=41 HOME=/h PATH=/bin KITTY_WINDOW_ID=99"
+  [ "$status" -eq 0 ] || false
+  [ "$(printf '%s\n' "$output" | sed -n 's/^KITTY_WINDOW_ID=//p')" = 99 ] || { echo "$output"; false; }
+  run lr_env_block "claude x" "claude x KITTY_WINDOW_ID=41";      [ "$status" -eq 1 ] || { echo "no HOME/PATH: $output"; false; }
+  run lr_env_block "claude y" "claude x HOME=/h PATH=/bin";        [ "$status" -eq 1 ] || { echo "prefix mismatch: $output"; false; }
+  run lr_env_block "" "HOME=/h";                                   [ "$status" -eq 1 ] || false
+  export LR_PID_ENV_DIR="$BATS_TEST_TMPDIR/penv"; mkdir -p "$LR_PID_ENV_DIR"
+  printf 'HOME=/h PATH=/bin KITTY_WINDOW_ID=7 KITTY_WINDOW_ID=8\n' > "$LR_PID_ENV_DIR/4242"
+  run lr_pid_env 4242 KITTY_WINDOW_ID; [ "$status" -eq 0 ] && [ "$output" = 8 ] || { echo "rc=$status $output"; false; }
+  run lr_pid_env 4242 KITTY_PID;       [ "$status" -eq 0 ] && [ -z "$output" ] || { echo "absent var: rc=$status $output"; false; }
+  printf 'KITTY_WINDOW_ID=7\n' > "$LR_PID_ENV_DIR/4243"
+  run lr_pid_env 4243 KITTY_WINDOW_ID; [ "$status" -eq 1 ] || { echo "no env block: rc=$status"; false; }
+  run lr_pid_env 4244 KITTY_WINDOW_ID; [ "$status" -eq 1 ] || false
+  run lr_pid_env 12x KITTY_WINDOW_ID;  [ "$status" -eq 1 ] || false
+  run lr_pid_env 4242 'BAD;VAR';       [ "$status" -eq 1 ] || false
+}
+
+@test "lr_pid_cfg is byte-identical: it never reads LR_PID_ENV_DIR, and its LR_MOVE_ENV_DIR fixture (a bare dir) still answers" {
+  export LR_PID_ENV_DIR="$BATS_TEST_TMPDIR/penv" LR_MOVE_ENV_DIR="$BATS_TEST_TMPDIR/menv"; mkdir -p "$LR_PID_ENV_DIR" "$LR_MOVE_ENV_DIR"
+  printf 'HOME=/h PATH=/bin CLAUDE_CONFIG_DIR=/wrong\n' > "$LR_PID_ENV_DIR/4242"
+  printf '%s' "$HOME/.claude-tertiary" > "$LR_MOVE_ENV_DIR/4242"
+  run lr_pid_cfg 4242; [ "$status" -eq 0 ] && [ "$output" = "$HOME/.claude-tertiary" ] || { echo "rc=$status $output"; false; }
+}
+
+@test "lr_pid_env, the REAL ps branch: a non-platform child's env block answers, its argv token never does" {
+  unset LR_PID_ENV_DIR
+  # Apple platform binaries show no env block to ps -E (the lr_pid_cfg case above measured it), so
+  # the child must be a non-/bin bash.
+  local b="" c
+  for c in /opt/homebrew/bin/bash /usr/local/bin/bash "$(command -v bash)"; do
+    case "$c" in ''|/bin/*) continue ;; esac
+    if [ -x "$c" ]; then b="$c"; break; fi
+  done
+  [ -n "$b" ] || skip "no non-platform bash (its env would be hidden like /bin/sleep's)"
+  env -i HOME=/h PATH=/bin KITTY_WINDOW_ID=5 "$b" -c 'sleep 45; :' KITTY_WINDOW_ID=9 >/dev/null 2>&1 </dev/null &
+  local c=$!; echo "$c" >> "$BATS_TEST_TMPDIR/hk-pids"
+  sleep 0.5
+  run lr_pid_env "$c" KITTY_WINDOW_ID
+  [ "$status" -eq 0 ] || { echo "rc=$status out=$output"; false; }
+  [ "$output" = 5 ] || { echo "out=$output argv=$(ps -ww -o command= -p "$c")"; false; }
+}
+
 @test "successor_state: the 186452ed shape (source row only, nothing in flight) is husk <pane> <pid>; a fresh handoffs row is in-flight" {
   ss_setup; ss_retired
   local p; p="$(hk_live)"; ss_row "$P168" "$p" claude-secondary "$SRC"

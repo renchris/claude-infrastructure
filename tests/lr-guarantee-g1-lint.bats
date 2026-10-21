@@ -412,7 +412,6 @@ g1_copy_root() {
   n="${BASH_REMATCH[1]}"
   [ "$n" -gt 0 ]
   [ "$(printf '%s\n' "$output" | grep -c '^G1 DEBT ')" -eq "$n" ]
-  printf '%s\n' "$output" | grep -q '^G1 DEBT scripts/handoff-fire.sh hf_lr_admit() debt:W12'
   printf '%s\n' "$output" | grep -q '^G1 DEBT scripts/handoff-fire.sh hf_recycle_load_gate() debt:typed-relaunch'
 }
 

@@ -1127,6 +1127,37 @@ lr_pid_cfg() { # $1=pid → the CLAUDE_CONFIG_DIR it runs under (ps -E, LAST tok
   case "$out" in "~/"*) out="$HOME/${out#\~/}" ;; esac
   printf '%s' "${out:-$HOME/.claude}"
 }
+# ── A PROCESS'S ENVIRONMENT BLOCK, AND ONLY THAT (W12, B5a §5.2; review S4, S17) ────────────────────
+# `ps -E -o command=` prints argv THEN the environment, space-joined, and since a8ebaa7c0 an owed prompt
+# rides claude's argv, so argv can spell `KITTY_WINDOW_ID=7` ahead of the env's own. lr_env_block
+# strips the argv prefix (read by a plain `ps -o command=`) and prints the env tokens one per line;
+# rc 1 when the prefix does not match or the block carries no HOME=/PATH= (no env readable is UNKNOWN,
+# never empty). lr_pid_env reads one variable from that block, LAST token. Its own seam,
+# LR_PID_ENV_DIR/<pid>, holds an env block (KEY=VALUE tokens): lr_pid_cfg and its LR_MOVE_ENV_DIR
+# fixtures (a bare config dir, ~21 suites) stay byte-identical. Here-strings, not `| grep -q`: under
+# pipefail an early grep exit SIGPIPEs its producer and the test reads false exactly when it matches.
+lr_env_block() { # $1=argv (ps -o command=) $2=argv+env (ps -E -o command=) → env tokens, one per line
+  local argv="${1:-}" full="${2:-}" toks
+  [ -n "$argv" ] && [ -n "$full" ] || return 1
+  case "$full" in "$argv "*) ;; *) return 1 ;; esac
+  toks="$(printf '%s\n' "${full#"$argv "}" | tr ' ' '\n')"
+  grep -qE '^(HOME|PATH)=' <<<"$toks" || return 1
+  printf '%s\n' "$toks"
+}
+lr_pid_env() { # $1=pid $2=VAR → the LAST "VAR=" value of its env block (argv excluded); rc 1 when no env block is readable
+  local pid="${1:-}" var="${2:-}" toks argv full
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  case "$var" in ''|*[!A-Za-z0-9_]*) return 1 ;; esac
+  if [ -n "${LR_PID_ENV_DIR:-}" ]; then
+    toks="$(tr ' ' '\n' < "$LR_PID_ENV_DIR/$pid" 2>/dev/null)" || return 1
+    grep -qE '^(HOME|PATH)=' <<<"$toks" || return 1
+  else
+    argv="$(ps -ww -o command= -p "$pid" 2>/dev/null)" || return 1
+    full="$(ps -E -ww -o command= -p "$pid" 2>/dev/null)" || return 1
+    toks="$(lr_env_block "$argv" "$full")" || return 1
+  fi
+  sed -n "s/^$var=//p" <<<"$toks" | tail -1
+}
 lr_successor_state() { # $1=sid $2=source cfg → ONE token line, rc 0 · rc 1 not moved off $2 · rc 2 gate off
   local sid="${1:-}" src="${2:-}" to skey tomb f phase ho holders hp hpane hcfg spane="" spid="" unk=0
   [ -n "$sid" ] && [ -n "$src" ] || return 1

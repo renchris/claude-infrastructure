@@ -328,7 +328,7 @@ fi
 shift
 verb="${1:-}"; shift 2>/dev/null || true
 
-SESSION=""; VERTICAL=0; JSON=0; ANSI=0
+SESSION=""; VERTICAL=0; JSON=0; ANSI=0; ONLY=""; ONLY_SET=0
 # The close-target identity pins. Empty = not supplied = today's unchecked close (see the header).
 EXPECT_CMDLINE=""; EXPECT_GENERATION=""
 # `session tui-submit` payload. Parsed in the SHARED loop for the same reason --json is: an
@@ -365,6 +365,9 @@ while [ $# -gt 0 ]; do
     # `session read --ansi` — the rendering, for readers that must tell faint placeholder text from
     # real input (handoff-fire.sh composer_content). Shared loop, same reason as --json.
     --ansi)       ANSI=1; shift ;;
+    # `session list --only <id>` — ONE window (`ls --match id:<id>`), for handoff-fire's pane_proof
+    # (W12, B5a §5.4a). Shared loop, same reason as --json: an unparsed flag would become ARGS.
+    --only)       ONLY="${2:-}"; ONLY_SET=1; shift 2 2>/dev/null || shift ;;
     --) shift; ARGS+=("$@"); break ;;
     *)  ARGS+=("$1"); shift ;;
   esac
@@ -1381,6 +1384,38 @@ case "$verb" in
     # mktemp with TRAILING Xs — BSD mktemp only substitutes a trailing run, so an embedded template
     # mints a CONSTANT filename shared by every concurrent caller (memory: prescribed-remedy-worse).
     _kt_err="$(mktemp "${TMPDIR:-/tmp}/it2-kitty-stderr.XXXXXX" 2>/dev/null || printf '/tmp/it2-kitty-stderr.%s' "$$")"
+    # --only <id> (W12, B5a §5.4a): ONE window. kitty answers a missing id with rc 1, EMPTY stdout and
+    # "No matching windows" — a definite "enumerated, absent", so it prints an empty listing with rc 0.
+    # Any other failure stays a failure (exit 1), and the id is re-filtered in python so a kitty that
+    # ignored --match cannot pass by luck. A non-numeric id is a usage error (64), never a listing.
+    if [ "$ONLY_SET" = 1 ]; then
+      case "$ONLY" in ''|*[!0-9]*) err "session list --only needs a numeric kitty window id (got '${ONLY}')"; rm -f "$_kt_err" 2>/dev/null; exit 64 ;; esac
+      _kt_out="$(kt ls --match "id:$ONLY" 2>"$_kt_err")"; _kt_rc=$?
+      if [ "$_kt_rc" != 0 ]; then
+        if [ -z "$_kt_out" ] && grep -qi 'No matching windows' "$_kt_err" 2>/dev/null; then
+          rm -f "$_kt_err" 2>/dev/null
+          [ "$JSON" = 1 ] && printf '[]\n'
+          exit 0
+        fi
+        err "kitty ls --match id:$ONLY failed (rc $_kt_rc, binary: $KITTY_BIN)"
+        [ -s "$_kt_err" ] && while IFS= read -r _l; do err "  kitty: $_l"; done < "$_kt_err"
+        rm -f "$_kt_err" 2>/dev/null
+        exit 1
+      fi
+      rm -f "$_kt_err" 2>/dev/null
+      printf '%s' "$_kt_out" | JSON="$JSON" ONLY="$ONLY" python3 -c '
+import json,os,sys
+try: d=json.load(sys.stdin)
+except Exception: sys.exit(1)
+rows=[w for ow in d for t in ow["tabs"] for w in t["windows"] if str(w["id"])==os.environ["ONLY"]]
+if os.environ.get("JSON")=="1":
+    json.dump([{"id": str(w["id"]), "title": w.get("title",""),
+                "cwd": w.get("cwd",""), "pid": w.get("pid")} for w in rows], sys.stdout)
+    sys.stdout.write("\n")
+else:
+    for w in rows: print(w["id"])' || { err "kitty ls --match id:$ONLY returned an unparseable listing"; exit 1; }
+      exit 0
+    fi
     kt ls 2>"$_kt_err" | JSON="$JSON" python3 -c '
 import json,os,sys
 try: d=json.load(sys.stdin)

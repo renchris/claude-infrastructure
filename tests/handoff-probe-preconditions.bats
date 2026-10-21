@@ -134,6 +134,101 @@ seed_limited_transcript() { # $1=dir
   [[ "$output" != *"team:"* ]] || { echo "$output"; false; }
 }
 
+# ══ KERNEL PANE IDENTITY IN THE PRECHECK (W12, B5a §5.2; reviews R-2, S1, S3, S16a) ═══════════════
+# The pane's identity from the registry row and the kernel, through a ps stub (HF_KID_PS_BIN): kitty
+# 610 → root 70001 on ttys777 → claude 70003, the row naming pid 70003. CC_TERM=kitty and a fixture
+# socket are preset in every arm, so no arm can reach a live kitty (the resolver returns at once on a
+# preset CC_TERM, and the kitty probe connects only to the fixture socket, which nothing listens on).
+# A socket FILE (bound, never listened on). Basename bind: Darwin caps sun_path at 104 bytes.
+afunix_file() { /usr/bin/python3 -c 'import os,socket,sys; d,b=os.path.split(os.path.abspath(sys.argv[1])); os.chdir(d); socket.socket(socket.AF_UNIX).bind(b)' "$1"; }
+kid_setup() {
+  export LR_STATE_DIR="$BATS_TEST_TMPDIR/lr" LR_RECON_ROOT="$BATS_TEST_TMPDIR/recon" TMPDIR="$BATS_TEST_TMPDIR/tmp"
+  mkdir -p "$LR_STATE_DIR" "$TMPDIR"
+  KF="$BATS_TEST_TMPDIR/kid"; mkdir -p "$KF"
+  SOCK="$KF/kitty-610"; LS="Wed Oct 21 03:37:41 2026"
+  afunix_file "$SOCK"
+  # shellcheck disable=SC2016  # expanded when the STUB runs
+  printf '%s\n' '#!/bin/bash' 'F="${KID_FIX:?}"; L="${!#}"; printf "%s\n" "$*" >> "$F/calls"' \
+    'if [ -f "$F/sleep" ]; then /bin/sleep "$(cat "$F/sleep")"; fi' \
+    'case "$*" in' \
+    '  "-E -ww -o command= -p "*) cat "$F/env.$L" 2>/dev/null ;;' \
+    '  "-axo pid=,ppid=,stat=,tty=,lstart=,comm=") cat "$F/table" ;;' \
+    '  "-ww -o command= -p "*) cat "$F/argv.$L" 2>/dev/null ;;' \
+    'esac' > "$KF/ps"
+  chmod +x "$KF/ps"
+  printf '%s\n' "  610     1 S    ??       $LS /Applications/kitty.app/Contents/MacOS/kitty" \
+    "70001   610 Ss   ttys777  $LS login" "70002 70001 S    ttys777  $LS -zsh" "70003 70002 S+   ttys777  $LS claude" > "$KF/table"
+  printf 'claude --resume x' > "$KF/argv.70003"
+  printf 'claude --resume x HOME=/h PATH=/bin KITTY_WINDOW_ID=%s KITTY_PID=610 KITTY_LISTEN_ON=unix:%s\n' "$PANE" "$SOCK" > "$KF/env.70003"
+  printf '{"session_id":"%s","pane":"%s","pid":70003,"lstart":"%s","kitty_pid":610}\n' "$SID" "$PANE" "$LS" > "$CC_REGISTRY_DIR/$PANE.json"
+  : > "$BATS_TEST_TMPDIR/netstat.txt"
+  seed_limited_transcript "$ROOT_A"
+}
+# HF_KID_BOUND_S=0 (unbounded) where a case asserts a VERIFIED identity: at load ~170 the 20 s bound
+# honestly fired once (no verdict, fall back), which is the bound's case below, not these.
+kid_probe() { # $@=extra env
+  run env KID_FIX="$KF" HF_KID_PS_BIN="$KF/ps" HF_KID_BOUND_S=0 CC_TERM=kitty CC_TERM_KITTY_TO="unix:$SOCK" \
+      CC_HF_NETSTAT_FILE="$BATS_TEST_TMPDIR/netstat.txt" CC_KITTY_CONNECT_TIMEOUT_S=0 "$@" \
+      bash "$HF" --probe-recycle-preconditions --source-pane "$PANE" --source-session "$SID"
+}
+kid_rows() { jq -c 'select(.class == "recycle-kid-shadow")' "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/null || true; }
+norm() { printf '%s\n' "$1" | sed -E 's/ over [0-9]+s/ over Ns/g'; }
+
+@test "W12 mode on: a verified identity replaces the kitty resolver and the tty/root reads — 'identity: kernel', the root's lstart, the probe on the VERIFIED socket" {
+  kid_setup
+  kid_probe HF_KITTY_OFFPATH=on
+  [[ "$output" == *"identity: kernel (kitty 610 window $PANE root 70001 on ttys777; no terminal round-trip)"* ]] || { echo "$output"; false; }
+  [ "$(grep -c . "$KF/calls")" -eq 3 ] || { cat "$KF/calls"; false; }
+  [ "$(printf '%s\n' "$output" | sed -n 's/^verdict: //p')" = HELD:unreachable ] || { echo "$output"; false; }
+  [[ "$output" == *"kitty_probe: not answering"* ]] || { echo "$output"; false; }
+  [ -z "$(kid_rows)" ] || { echo "mode on writes no shadow row"; false; }
+}
+
+@test "W12 S1: a preset socket naming ANOTHER kitty is overridden by the verified kitty's own, and said so" {
+  kid_setup
+  afunix_file "$KF/kitty-999"
+  run env KID_FIX="$KF" HF_KID_PS_BIN="$KF/ps" HF_KID_BOUND_S=0 CC_TERM=kitty CC_TERM_KITTY_TO="unix:$KF/kitty-999" HF_KITTY_OFFPATH=on \
+      CC_HF_NETSTAT_FILE="$BATS_TEST_TMPDIR/netstat.txt" CC_KITTY_CONNECT_TIMEOUT_S=0 \
+      bash "$HF" --probe-recycle-preconditions --source-pane "$PANE" --source-session "$SID"
+  [[ "$output" == *"CC_TERM_KITTY_TO=unix:$KF/kitty-999 overridden by kitty 610's own socket unix:$SOCK"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"kitty_probe: not answering — the control socket $SOCK did not accept"* ]] || { echo "the probe did not use the verified socket: $output"; false; }
+}
+
+@test "W12 shadow control: the identity runs (3 ps forks, one row with both ttys agreeing) and the output equals mode off's, which runs nothing" {
+  kid_setup
+  kid_probe HF_KITTY_OFFPATH=off; off_out="$(norm "$output")"; off_rc=$status
+  [ ! -s "$KF/calls" ] || { echo "mode off forked the identity: $(cat "$KF/calls")"; false; }
+  [ -z "$(kid_rows)" ] || false
+  kid_probe; sh_out="$(norm "$output")"
+  [ "$status" -eq "$off_rc" ] || { echo "rc shadow=$status off=$off_rc"; false; }
+  [ "$sh_out" = "$off_out" ] || { diff <(printf '%s\n' "$off_out") <(printf '%s\n' "$sh_out"); false; }
+  [ "$(grep -c . "$KF/calls")" -eq 3 ] || { cat "$KF/calls"; false; }
+  r="$(kid_rows)"
+  [[ "$r" == *"kid_rc=0 kernel_tty=ttys777 kitty_tty="*" agree="*"kitty_pid=610"* ]] || { echo "$r"; false; }
+  [ "$(printf '%s\n' "$r" | grep -c .)" -eq 1 ] || { echo "$r"; false; }
+  # …and the instrument can see a difference: mode on's output is not off's
+  kid_probe HF_KITTY_OFFPATH=on
+  [ "$(norm "$output")" != "$off_out" ] || false
+}
+
+@test "W12 R-2: a ps that sleeps past the bound is no verdict — rc 2, logged, today's path runs" {
+  kid_setup
+  printf 4 > "$KF/sleep"
+  kid_probe HF_KID_BOUND_S=1 HANDOFF_IT2_TIMEOUT_BIN="$(command -v gtimeout || command -v timeout)"
+  r="$(kid_rows)"
+  [[ "$r" == *"kid_rc=2 kernel_tty= "*"the identity probe ended rc 124"* ]] || { echo "$r"; echo "$output"; false; }
+  [[ "$output" != *"identity: kernel"* ]] || false
+}
+
+@test "W12 S16a: under a test runner the identity does not run without HF_KID_PS_BIN — no fork, no row" {
+  kid_setup
+  run env KID_FIX="$KF" CC_TERM=kitty CC_TERM_KITTY_TO="unix:$SOCK" HF_KITTY_OFFPATH=on \
+      CC_HF_NETSTAT_FILE="$BATS_TEST_TMPDIR/netstat.txt" CC_KITTY_CONNECT_TIMEOUT_S=0 \
+      bash "$HF" --probe-recycle-preconditions --source-pane "$PANE" --source-session "$SID"
+  [[ "$output" != *"identity: kernel"* ]] || { echo "$output"; false; }
+  [ ! -s "$KF/calls" ] && [ -z "$(kid_rows)" ] || false
+}
+
 @test "subagent_dir_for_sid: a subagents dir in the FIRST of two config roots is FOUND" {
   # The SAME broken idiom, at a PRE-EXISTING site (not W2's), and this one is a safety hold: the
   # recycle gate asks this function whether the dying session still has live subagents. Answering

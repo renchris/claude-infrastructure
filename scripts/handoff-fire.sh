@@ -1186,6 +1186,30 @@ in_kitty() { { [ -n "${KITTY_WINDOW_ID:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}"
 # this is in_kitty() exactly, so every caller that never pins keeps today's behaviour byte-for-byte.
 kitty_identity() { case "${CC_TERM:-}" in kitty) return 0 ;; ?*) return 1 ;; esac; in_kitty; }
 
+# ── KITTY OFF THE PRE-COMMIT PATH: THE SWITCH (W12, B5a §5.1; reviews R-3, S3, S14) ────────────────
+# off ⇒ every B5a path is skipped, today's code byte for byte. shadow ⇒ compute and log, act as today.
+# on ⇒ act. MONOTONE: `off` from the env (HF_KITTY_OFFPATH) or from the file wins over `on` from the
+# other, because a kill switch an inherited env can defeat is not one. The file exists because launchd
+# jobs never see an interactive shell's env; it is read at every call, so flipping it needs no restart.
+# The code default is shadow; the on-flip is a one-line commit after the shadow criterion is met.
+hf_kitty_offpath_mode() { # → off|shadow|on
+  local e="${HF_KITTY_OFFPATH:-}" f=""
+  f="$(head -c 16 "${LR_STATE_DIR:-$HOME/.reso/limit-recover}/kitty-offpath.mode" 2>/dev/null | tr -dc '[:lower:]')" || f=""
+  if [ "$e" = off ] || [ "$f" = off ]; then printf off; return 0; fi
+  case "$e" in shadow|on) printf '%s' "$e"; return 0 ;; esac
+  case "$f" in shadow|on) printf '%s' "$f"; return 0 ;; esac
+  printf shadow
+}
+# The one-window probe (`session list --only P`) rides the same switch and is on only in mode `on`,
+# with its own monotone off: HF_PANE_PROOF_ONLY=off or a pane-proof-only.mode file reading off.
+hf_pane_proof_only_on() { # → 0 pass --only to the probe · 1 do not
+  local f=""
+  [ "$(hf_kitty_offpath_mode)" = on ] || return 1
+  [ "${HF_PANE_PROOF_ONLY:-on}" != off ] || return 1
+  f="$(head -c 16 "${LR_STATE_DIR:-$HOME/.reso/limit-recover}/pane-proof-only.mode" 2>/dev/null | tr -dc '[:lower:]')" || f=""
+  [ "$f" != off ]
+}
+
 # Resolve the kitty binary ABSOLUTELY. Hooks and launchd jobs run with a minimal PATH that excludes
 # Homebrew, so a bare `kitty` does not exist for exactly the AUTOMATED callers this file serves —
 # green where a human tests it, dead where it runs. That is what left a teammate pane open for 3h09m
@@ -2977,7 +3001,14 @@ hf_remote_source_pin() { # $1=pane $2=row pid $3=mode → 0 the row's process is
   # enumerable. as_tty_classified already carries the split (rc 1 ABSENT / rc 3 CANNOT TELL); this
   # only stops throwing it away. rc 2 stays the return code for EVERY refusal, so callers are
   # unchanged — the difference is which action the operator (or the retry) is pointed at.
-  ptty="$(as_tty_classified "$pane")" || prc=$?
+  # A verified kernel identity for this pane (mode on) names its tty with no kitty round-trip; the
+  # ancestry walk below still pins the row's pid to it. Shadow: today's read, logged beside the kernel's.
+  if hf_kid_on_for "$pane"; then
+    ptty="$HF_KID_TTY"
+  else
+    ptty="$(as_tty_classified "$pane")" || prc=$?
+    hf_kid_shadow_row "$pane" "$ptty" "source-pin"
+  fi
   if [ "$prc" = 3 ]; then
     echo "!! $mode REFUSED: RESOLVER-CANNOT-TELL — the terminal never answered when asked to enumerate pane $pane, so nothing is known about it either way. This says nothing about whether the pane is there; PARK and retry rather than treating it as gone. Nothing was typed." >&2; return 2
   fi
@@ -3654,6 +3685,214 @@ hf_focus_gate() { # $1=it2 $2=pane → 0 proceed · 3 held (HF_FOCUS_HOLD HELD:f
   [ "$rc" = 0 ] || return 3
   return 0
 }
+
+# ── KERNEL PANE IDENTITY (W12, B5a §5.2; reviews R-2, S1-S4, S8, S16, S17) ──────────────────────────
+# "Pane P holds the row's claude on tty T", from the registry row and the kernel, with no kitty RPC:
+#   (1) the row pid is alive, not a zombie, and its lstart equals the row's (TZ=UTC, collapsed);
+#   (2) its ENV BLOCK (argv stripped, LAST token) says KITTY_WINDOW_ID=P and KITTY_PID=K, and K equals
+#       the row's kitty_pid when the row names one;
+#   (3) walking ppid from the pid reaches K; the process directly under K is the window root R, alive,
+#       not a zombie, on a controlling tty T;
+#   (4) K is alive, not a zombie, and its comm's basename is kitty; its socket exists (-S) and, when
+#       named kitty-<n>, n is K;
+#   (5) HF_PANE_IDENTITY_FILE (a census identity), when set, agrees on every field it names.
+# rc 0 verified · rc 1 refuted (a fact about the CACHED identity, not the pane) · rc 2 cannot tell. Both
+# negatives fall back to today's kitty path; nothing here is a verdict about the pane.
+# It runs as the `__kid` re-exec under hf_bounded_s (a bash function cannot run under timeout(1), and
+# a subshell cannot hand state back): the child prints KEY=VALUE lines, the parent validates and
+# assigns them. Three ps forks in all, each through HF_KID_PS_BIN: `ps -E` once, the process table
+# with start times once (walked in awk), and the pid's plain argv (what lets the env block be parsed
+# alone). Our own bound firing (124/137) is rc 2: no verdict.
+_hf_kid_no() { printf 'HF_KID_WHY=%s\n' "$2"; return "$1"; }
+hf_kid_probe() { # the __kid body: $1=pane $2=row pid $3=row lstart $4=row kitty_pid → KEY=VALUE lines; rc 0|1|2
+  local pane="${1:-}" pid="${2:-}" rls="${3:-}" rkp="${4:-}" ps="${HF_KID_PS_BIN:-/bin/ps}"
+  local full kpid tab walk pst root rst tty kst kcomm argv pls rootls kls toks wid ekpid sock spath sn cen cf cv
+  pane="${pane##*:}"
+  case "${CC_TERM:-}" in ''|kitty) ;; *) _hf_kid_no 2 "CC_TERM is preset to $CC_TERM"; return $? ;; esac
+  [ "${CC_REMOTE_PANE_TERM:-on}" != off ] || { _hf_kid_no 2 "CC_REMOTE_PANE_TERM=off"; return $?; }
+  case "$pane" in ''|*[!0-9]*) _hf_kid_no 2 "pane id is not a kitty window id"; return $? ;; esac
+  case "$pid" in ''|*[!0-9]*) _hf_kid_no 2 "no row pid"; return $? ;; esac
+  case "$rkp" in *[!0-9]*) _hf_kid_no 2 "row kitty_pid is not a pid"; return $? ;; esac
+  { hf_lr_lib_load && command -v lr_env_block >/dev/null 2>&1; } || { _hf_kid_no 2 "lr-lib unreachable"; return $?; }
+  # fork 1: argv + env. The provisional K is the LAST KITTY_PID token; (2) re-reads it from the env block.
+  full="$("$ps" -E -ww -o command= -p "$pid" 2>/dev/null)" || full=""
+  [ -n "$full" ] || { _hf_kid_no 2 "row pid $pid gone or its env unreadable"; return $?; }
+  kpid="$(printf '%s\n' "$full" | tr ' ' '\n' | sed -n 's/^KITTY_PID=//p' | tail -1)"
+  case "$kpid" in ''|*[!0-9]*) _hf_kid_no 2 "no KITTY_PID in its env"; return $? ;; esac
+  # fork 2: the table with start times (TZ and locale pinned: lstart renders in the ambient locale
+  # otherwise; it is five fields), walked once. Joined with `|` (IFS whitespace collapses empties).
+  tab="$(TZ=UTC LC_ALL=C "$ps" -axo pid=,ppid=,stat=,tty=,lstart=,comm= 2>/dev/null)" || tab=""
+  [ -n "$tab" ] || { _hf_kid_no 2 "process table unreadable"; return $?; }
+  walk="$(printf '%s\n' "$tab" | awk -v pid="$pid" -v k="$kpid" '
+    NF >= 10 { pp[$1] = $2; st[$1] = $3; ty[$1] = $4; ls[$1] = $5 " " $6 " " $7 " " $8 " " $9
+               c = $10; for (i = 11; i <= NF; i++) c = c " " $i; cm[$1] = c }
+    END {
+      if (!(pid in st)) { print "gone"; exit }
+      p = pid; root = ""; n = 0
+      while (n < 64) { q = pp[p]; if (q == "" || q == 0 || q == 1) break; if (q == k) { root = p; break }; p = q; n++ }
+      printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|.\n", st[pid], root, (root != "" ? st[root] : ""), (root != "" ? ty[root] : ""),
+        (k in st ? st[k] : ""), (k in cm ? cm[k] : ""), ls[pid], (root != "" ? ls[root] : ""), (k in ls ? ls[k] : "")
+    }')"
+  [ "$walk" != gone ] || { _hf_kid_no 2 "row pid $pid gone"; return $?; }
+  IFS='|' read -r pst root rst tty kst kcomm pls rootls kls _ <<EOF
+$walk
+EOF
+  case "$pst" in ''|Z*) _hf_kid_no 1 "row pid $pid is a zombie or gone"; return $? ;; esac
+  [ -n "$root" ] || { _hf_kid_no 2 "no ancestor of pid $pid is kitty $kpid"; return $?; }
+  case "$rst" in ''|Z*) _hf_kid_no 1 "window root $root gone or a zombie"; return $? ;; esac
+  tty="${tty#/dev/}"
+  case "$tty" in tty?*) ;; *) _hf_kid_no 2 "window root $root has no tty"; return $? ;; esac
+  case "$tty" in *[!A-Za-z0-9]*) _hf_kid_no 2 "window root $root has no tty"; return $? ;; esac
+  case "$kst" in ''|Z*) _hf_kid_no 2 "kitty $kpid gone or a zombie"; return $? ;; esac
+  [ "${kcomm##*/}" = kitty ] || { _hf_kid_no 1 "pid $kpid is not kitty (${kcomm##*/})"; return $?; }
+  [ -n "$pls" ] && [ -n "$rootls" ] && [ -n "$kls" ] || { _hf_kid_no 2 "an lstart was unreadable"; return $?; }
+  # fork 3: the argv alone, in the SAME single-column rendering `ps -E` prefixes. Measured 2026-10-21 on
+  # a live claude: ps truncates a long argv (8190 chars there) one way in that rendering and another
+  # in a multi-column one (8331), so only this one strips cleanly off the -E line.
+  argv="$("$ps" -ww -o command= -p "$pid" 2>/dev/null)" || argv=""
+  if [ -n "$rls" ] && [ "$(printf '%s' "$rls" | tr -s ' ' | sed 's/^ *//; s/ *$//')" != "$pls" ]; then
+    _hf_kid_no 1 "row lstart is not the live one ($pls)"; return $?
+  fi
+  # (2) on the env block alone: the argv prefix stripped (S17), so a window id rests on the env.
+  toks="$(lr_env_block "$argv" "$full")" || { _hf_kid_no 2 "env block not separable from argv"; return $?; }
+  wid="$(sed -n 's/^KITTY_WINDOW_ID=//p' <<<"$toks" | tail -1)"
+  ekpid="$(sed -n 's/^KITTY_PID=//p' <<<"$toks" | tail -1)"
+  [ "$wid" = "$pane" ] || { _hf_kid_no 1 "env KITTY_WINDOW_ID=${wid:-none} is not pane $pane"; return $?; }
+  [ -n "$ekpid" ] || { _hf_kid_no 2 "no KITTY_PID in the env block"; return $?; }
+  [ "$ekpid" = "$kpid" ] || { _hf_kid_no 1 "env block KITTY_PID=$ekpid is not $kpid"; return $?; }
+  [ -z "$rkp" ] || [ "$rkp" = "$kpid" ] || { _hf_kid_no 1 "env KITTY_PID $kpid is not the row kitty_pid $rkp"; return $?; }
+  # (4) the socket: the env's own, else kitty's default name; it must exist and name this kitty.
+  sock="$(sed -n 's/^KITTY_LISTEN_ON=//p' <<<"$toks" | tail -1)"; sock="${sock:-unix:/tmp/kitty-$kpid}"
+  spath="${sock#unix:}"
+  case "$sock" in unix:/*) ;; *) _hf_kid_no 2 "socket $sock is not a unix path"; return $? ;; esac
+  case "$spath" in *[!A-Za-z0-9_./-]*) _hf_kid_no 2 "socket path has unexpected characters"; return $? ;; esac
+  [ -S "$spath" ] || { _hf_kid_no 2 "socket $spath does not exist"; return $?; }
+  sn="${spath##*/kitty-}"
+  if [ "$sn" != "$spath" ]; then
+    case "$sn" in *[!0-9]*) ;; *) [ "$sn" = "$kpid" ] || { _hf_kid_no 2 "socket $spath names kitty $sn, not $kpid"; return $?; } ;; esac
+  fi
+  # (5) the census identity, each field only when set; the tty normalised (PaneObs carries ttys051).
+  if [ -n "${HF_PANE_IDENTITY_FILE:-}" ]; then
+    cen="$(jq -r '[.window_id, .kitty_pid, .kitty_lstart, .root_pid, .root_lstart, .tty]
+                  | map(if . == null then "" else tostring end) | join("|")' "$HF_PANE_IDENTITY_FILE" 2>/dev/null)" \
+      || { _hf_kid_no 2 "census identity file unreadable"; return $?; }
+    [ -n "$cen" ] || { _hf_kid_no 2 "census identity file unreadable"; return $?; }
+    for cf in window_id:"$pane" kitty_pid:"$kpid" kitty_lstart:"$kls" root_pid:"$root" root_lstart:"$rootls" tty:"$tty"; do
+      cv="${cen%%|*}"; cen="${cen#*|}"
+      [ "${cf%%:*}" != tty ] || cv="${cv#/dev/}"
+      [ "${cf%%:*}" != kitty_lstart ] && [ "${cf%%:*}" != root_lstart ] || cv="$(printf '%s' "$cv" | tr -s ' ' | sed 's/^ *//; s/ *$//')"
+      [ -z "$cv" ] || [ "$cv" = "${cf#*:}" ] || { _hf_kid_no 1 "census identity disagrees on ${cf%%:*} ($cv)"; return $?; }
+    done
+  fi
+  printf 'HF_KID_PANE=%s\nHF_KID_PID=%s\nHF_KID_PID_LS=%s\nHF_KID_KPID=%s\nHF_KID_KLS=%s\n' "$pane" "$pid" "$pls" "$kpid" "$kls"
+  printf 'HF_KID_ROOT=%s\nHF_KID_ROOT_LS=%s\nHF_KID_TTY=/dev/%s\nHF_KID_SOCK=%s\nHF_KID_WHY=verified\n' "$root" "$rootls" "$tty" "$sock"
+  return 0
+}
+HF_KID_OK=0 HF_KID_RC="" HF_KID_FOR="" HF_KID_WHY="" HF_KID_PANE="" HF_KID_PID="" HF_KID_PID_LS="" HF_KID_KPID="" HF_KID_KLS=""
+HF_KID_ROOT="" HF_KID_ROOT_LS="" HF_KID_TTY="" HF_KID_SOCK=""
+# The parent: runs the probe bounded, imports only validated values, exports NOTHING (shadow must be
+# side-effect-free: the caller applies a verified identity, in mode on, with hf_kid_apply).
+# HERMETIC BY REFUSAL (S16a): under a test runner it does not run unless HF_KID_PS_BIN names a fixture,
+# so a suite inside kitty window 41 can never verify its own fixture row {41, $$} against the real
+# process table and bind CC_TERM_KITTY_TO to the runner's own pane.
+hf_kid_bounded() { # $1=pane $2=row pid → 0 verified · 1 refuted · 2 cannot tell; HF_KID_* set, HF_KID_RC the rc
+  local pane="${1:-}" pid="${2:-}" row rls="" rkp="" out="" rc=0 line k v
+  HF_KID_OK=0 HF_KID_RC=2 HF_KID_WHY="" HF_KID_PANE="" HF_KID_PID="" HF_KID_PID_LS="" HF_KID_KPID="" HF_KID_KLS=""
+  HF_KID_ROOT="" HF_KID_ROOT_LS="" HF_KID_TTY="" HF_KID_SOCK="" HF_KID_SHADOW_DONE=0
+  [ "$(hf_kitty_offpath_mode)" != off ] || { HF_KID_RC=""; HF_KID_WHY=off; return 2; }
+  if [ -n "${BATS_TEST_TMPDIR:-}${BATS_VERSION:-}" ] && [ -z "${HF_KID_PS_BIN:-}" ]; then
+    HF_KID_RC=""; HF_KID_WHY="test run without HF_KID_PS_BIN"; return 2
+  fi
+  pane="${pane##*:}"; HF_KID_FOR="$pane"
+  row="$REG_DIR/$pane.json"
+  if [ -f "$row" ] && command -v jq >/dev/null 2>&1; then
+    rls="$(jq -r '.lstart // empty' "$row" 2>/dev/null || true)"
+    rkp="$(jq -r '.kitty_pid // empty | tostring' "$row" 2>/dev/null || true)"
+  fi
+  out="$(hf_bounded_s "${HF_KID_BOUND_S:-20}" "$0" __kid "$pane" "$pid" "$rls" "$rkp" 2>/dev/null)" || rc=$?
+  case "$rc" in
+    0|1|2) ;;
+    *) HF_KID_WHY="the identity probe ended rc $rc (124/137: our own bound fired, no verdict)"; return 2 ;;
+  esac
+  while IFS= read -r line; do
+    k="${line%%=*}"; v="${line#*=}"
+    case "$k" in
+      HF_KID_PANE|HF_KID_PID|HF_KID_KPID|HF_KID_ROOT) case "$v" in ''|*[!0-9]*) rc=2; continue ;; esac ;;
+      HF_KID_PID_LS|HF_KID_KLS|HF_KID_ROOT_LS) case "$v" in ''|*[!A-Za-z0-9:\ ]*) rc=2; continue ;; esac ;;
+      HF_KID_TTY) case "$v" in /dev/tty?*) ;; *) rc=2; continue ;; esac
+                  case "${v#/dev/}" in *[!A-Za-z0-9]*) rc=2; continue ;; esac ;;
+      HF_KID_SOCK) case "$v" in unix:/?*) ;; *) rc=2; continue ;; esac
+                   case "${v#unix:}" in *[!A-Za-z0-9_./-]*) rc=2; continue ;; esac ;;
+      HF_KID_WHY) v="$(printf '%s' "$v" | tr -cd '[:print:]' | cut -c1-200)" ;;
+      *) continue ;;
+    esac
+    printf -v "$k" '%s' "$v"
+  done <<EOF
+$out
+EOF
+  if [ "$rc" = 0 ]; then
+    if [ -z "$HF_KID_PANE" ] || [ "$HF_KID_PANE" != "$pane" ] || [ "$HF_KID_PID" != "$pid" ] || [ -z "$HF_KID_KPID" ] \
+       || [ -z "$HF_KID_ROOT" ] || [ -z "$HF_KID_TTY" ] || [ -z "$HF_KID_SOCK" ] || [ -z "$HF_KID_PID_LS" ]; then
+      rc=2; HF_KID_WHY="the identity probe printed an incomplete or invalid answer"
+    fi
+  fi
+  HF_KID_RC="$rc"
+  [ "$rc" = 0 ] && HF_KID_OK=1
+  return "$rc"
+}
+# Mode on, identity verified for $1: the terminal is bound to the VERIFIED kitty (S1) — CC_TERM=kitty,
+# its socket (a preset naming another kitty is overridden, and said so), and CC_TERM_KITTY_PID, so
+# bin/it2-kitty's prove_target refuses a window in any other kitty instance.
+hf_kid_on_for() { # $1=pane → 0 when mode is on and the identity verified for that pane
+  [ "${HF_KID_OK:-0}" = 1 ] && [ "${HF_KID_PANE:-}" = "${1##*:}" ] && [ "$(hf_kitty_offpath_mode)" = on ]
+}
+hf_kid_apply() { # → always 0
+  if [ -n "${CC_TERM_KITTY_TO:-}" ] && [ "$CC_TERM_KITTY_TO" != "$HF_KID_SOCK" ]; then
+    echo "→ kernel identity: CC_TERM_KITTY_TO=$CC_TERM_KITTY_TO overridden by kitty $HF_KID_KPID's own socket $HF_KID_SOCK" >&2
+  fi
+  CC_TERM=kitty CC_TERM_KITTY_TO="$HF_KID_SOCK" CC_TERM_KITTY_PID="$HF_KID_KPID"
+  export CC_TERM CC_TERM_KITTY_TO CC_TERM_KITTY_PID
+  return 0
+}
+# The shadow row: the kernel verdict beside the kitty-resolved tty, once both exist. The criterion for
+# the on-flip reads these: ≥30 rows with both ttys and 0 with agree=no. Emitted only when the probe ran.
+hf_kid_shadow_row() { # $1=pane $2=kitty-resolved tty (may be empty) $3=where → always 0
+  local kt="${2:-}" agree=-
+  [ -n "${HF_KID_RC:-}" ] && [ "${HF_KID_FOR:-}" = "${1##*:}" ] && [ "${HF_KID_SHADOW_DONE:-0}" != 1 ] || return 0
+  [ "$(hf_kitty_offpath_mode)" = shadow ] || return 0
+  if [ -n "$kt" ] && [ -n "$HF_KID_TTY" ]; then
+    if [ "${kt#/dev/}" = "${HF_KID_TTY#/dev/}" ]; then agree=yes; else agree=no; fi
+  fi
+  emit_recycle_event recycle-kid-shadow "" "${1##*:}" "kid_rc=$HF_KID_RC kernel_tty=${HF_KID_TTY#/dev/} kitty_tty=${kt#/dev/} agree=$agree at=$3 kitty_pid=${HF_KID_KPID:--} kitty_lstart=${HF_KID_KLS:--} root=${HF_KID_ROOT:--} why=$HF_KID_WHY" || true
+  HF_KID_SHADOW_DONE=1
+  return 0
+}
+# KITTY'S BAND (review R-5). Before any advisory proceed past a kitty that did not answer: a kitty main
+# thread in the background band (PRI ≤ 4, App Nap / screen lock) would not drain the successor's output,
+# so proceeding hands the session to a starved terminal. Three bounded `ps -M` samples of the main
+# thread; the majority decides. rc 0 above the band · 1 background-banded · 2 unreadable (no proof).
+hf_kitty_band() { # $1=kitty pid → rc as above; HF_KITTY_BAND_READ = the samples
+  local k="${1:-}" ps="${HF_KID_PS_BIN:-/bin/ps}" i=0 p low=0 high=0
+  HF_KITTY_BAND_READ=""
+  case "$k" in ''|*[!0-9]*) return 2 ;; esac
+  while [ "$i" -lt "${HF_KITTY_BAND_SAMPLES:-3}" ]; do
+    i=$((i + 1))
+    # awk drains (no `exit`): an early exit SIGPIPEs ps and pipefail would turn a good reading into 141
+    p="$(hf_bounded_s 5 "$ps" -M -p "$k" 2>/dev/null | awk 'NR == 2 { print $6 }')" || p=""
+    p="${p%%[!0-9]*}"
+    HF_KITTY_BAND_READ="$HF_KITTY_BAND_READ ${p:-?}"
+    case "$p" in '') ;; *) if [ "$p" -le 4 ]; then low=$((low + 1)); else high=$((high + 1)); fi ;; esac
+  done
+  HF_KITTY_BAND_READ="${HF_KITTY_BAND_READ# }"
+  [ "$((low + high))" -ge 2 ] || return 2
+  [ "$low" -lt "$high" ] || return 1
+  return 0
+}
+if [ "${1:-}" = "__kid" ]; then
+  shift
+  HF_KID_EXIT=0; hf_kid_probe "$@" || HF_KID_EXIT=$?
+  exit "$HF_KID_EXIT"
+fi
 
 # UNCONFIRM — the inverse of `--phase confirm`, owed ONLY when a confirm actually ran in THIS call:
 # confirm retired the source, so a recycle that then stands down must hand the session back, or the
@@ -4418,8 +4657,16 @@ pane_proof() { # $1=it2 shim  $2=pane id  $3=label → 0 reachable, 1 unreachabl
   # Bounded twice, deliberately: hf_bounded caps a wedged terminal API here, and await_pane_proof's
   # own window caps the case where this function never returns at all. Both resolve to "do not
   # kill", which is the only safe direction for a probe that gates an irreversible act.
+  # ONE WINDOW, NOT THE FLEET (W12, B5a §5.4a): on kitty, `--only P` makes bin/it2-kitty ask
+  # `ls --match id:P` — 49 KB instead of 650 KB, 6-10x faster at priority 31 — and a definite "not
+  # there" is still `[]` with rc 0. iTerm2's it2 never sees the flag. Off unless the B5a switch is on.
   t0="$(date +%s)"
-  out="$(hf_bounded "$it2" session list --json 2>"$err")" || rc=$?
+  if kitty_identity && hf_pane_proof_only_on; then
+    out="$(hf_bounded "$it2" session list --json --only "$pane" 2>"$err")" || rc=$?
+  else
+    out="$(hf_bounded "$it2" session list --json 2>"$err")" || rc=$?
+  fi
+  HF_PP_LIST_RC="$rc"
   dt=$(( $(date +%s) - t0 ))
   # JSON first; anything that yields no ids falls back to the bare shape. A rendered table yields
   # neither, and is called by name — it is the failure that cost this item two misdiagnoses.
@@ -11613,7 +11860,22 @@ if [ "${1:-}" = "__recycle" ]; then
   # Definition of done, item 3) without touching the foreground's /exit transport.
   IT2="${HF_WATCHER_IT2:-$HOME/.claude/bin/it2}"
   echo "→ armed: __recycle pid=$$ pgid=$(ps -o pgid= -p $$ | tr -d ' ') sid=$RSID tty=$TTY_PATH caller=${RCY_CALLER_PID:-none}"
-  pane_proof "$IT2" "$RSID" __recycle || exit 1
+  # ADVISORY ON ONE NARROW NO (W12, B5a §5.4b; reviews S6, S17). The foreground exports
+  # HF_PANE_PROOF_ADVISORY=1 only when the move is staged, signal-exiting and identity-verified in mode
+  # on. Then, and only for a listing our own bound killed (rc 124/137), this watcher keeps running and
+  # the foreground decides after the stage. Every other no — UNREACHABLE, a usage rc, a crashed
+  # listing — still exits here. Read once, then un-exported so nothing this watcher spawns inherits it.
+  rcy_pp_adv="${HF_PANE_PROOF_ADVISORY:-0}"; export -n HF_PANE_PROOF_ADVISORY 2>/dev/null || true
+  rcy_pp=0; rcy_pp_advisory=0; HF_PP_LIST_RC=""
+  pane_proof "$IT2" "$RSID" __recycle || rcy_pp=$?
+  if [ "$rcy_pp" != 0 ]; then
+    if [ "$rcy_pp" = 2 ] && [ "$rcy_pp_adv" = 1 ] && { [ "$HF_PP_LIST_RC" = 124 ] || [ "$HF_PP_LIST_RC" = 137 ]; }; then
+      rcy_pp_advisory=1
+      echo "→ pane-probe ADVISORY: the terminal did not answer inside our bound (listing rc $HF_PP_LIST_RC), and this recycle stages its successor and exits by signal — the foreground decides after the stage; this watcher types nothing unless a later bounded probe answers"
+    else
+      exit 1
+    fi
+  fi
   # THE SECOND SITE OF THE SAME DEFECT, and the reason fixing the foreground alone is not a fix.
   # This watcher's whole job is to type a command into the pane once CC is gone, and it decided that
   # with the identical tty-only grep — so with the foreground repaired (expect-wrapped CC now
@@ -12479,6 +12741,12 @@ EOF
       if rcy_succ_epoch="$(hf_succ_claim_epoch "$TTY_PATH" "$rcy_w_t0")"; then rcy_succ=claimed; break; fi
       rcy_cnow="$(date +%s)"
       if at_shell; then [ -n "$rcy_cshell" ] || rcy_cshell="$rcy_cnow"; else rcy_cshell=""; fi
+      # R-10: after an advisory no-answer, the grace alone does not revoke — the typed fallback needs a
+      # terminal that answers, so the revoke waits for one bounded probe that does (or for rcy_cmax).
+      if [ "${rcy_pp_advisory:-0}" = 1 ] && [ -n "$rcy_cshell" ] && [ $(( rcy_cnow - rcy_cshell )) -ge "$rcy_cgrace" ] \
+         && [ $(( rcy_cnow - rcy_c0 )) -lt "$rcy_cmax" ] && ! hf_bounded "$IT2" session list --json >/dev/null 2>&1; then
+        sleep 1; continue
+      fi
       if { [ -n "$rcy_cshell" ] && [ $(( rcy_cnow - rcy_cshell )) -ge "$rcy_cgrace" ]; } \
          || [ $(( rcy_cnow - rcy_c0 )) -ge "$rcy_cmax" ]; then
         if cc_pane_successor_revoke "$TTY_PATH" >/dev/null 2>&1; then rcy_succ=revoked; break; fi
@@ -13652,7 +13920,8 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
   if [ "$PRP_EVIDENCE_SET" = 1 ] && [ "$PRP_VOLUNTARY" != 1 ]; then
     echo "!! --account-evidence is only meaningful with --voluntary" >&2; exit 2
   fi
-  prp_verdict() { echo "verdict: $1"; exit "$2"; }
+  # A verdict reached before the pane's tty was read still leaves its shadow row (W12; a no-op otherwise).
+  prp_verdict() { hf_kid_shadow_row "$PRP_PANE" "" "precheck-verdict-$1"; echo "verdict: $1"; exit "$2"; }
 
   # 1. THE BINDING. Same function self-close and --recycle take; its refusal text is the one
   #    tests/handoff-selfclose-transplanted-source.bats pins.
@@ -13661,6 +13930,9 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
     prp_verdict "REFUSED:registry" 5
   fi
   echo "registry: ok pane=$PRP_PANE session=${PRP_SESSION:0:8}"
+  # Kernel pane identity (W12, B5a §5.2): silent here; in mode on a verified one replaces the kitty
+  # resolver and the tty/root reads below, in shadow it is logged beside them.
+  hf_kid_bounded "$PRP_PANE" "${HF_REMOTE_ROW_PID:-}" || true
 
   # 2. WAS IT A LIMIT? A network death has a retry ladder that may still be running (93-101 min
   #    measured), and a clean session is not owed a recovery at all — recycling either one spends a
@@ -13845,8 +14117,15 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
   # WHICH TERMINAL OWNS PRP_PANE — asked of the PANE, before the ancestry pin gets to answer a
   # different question about this process (W8). A detached or launchd driver has no kitty ancestor,
   # so without this the probe pins iterm2 and reports REFUSED:pane:unknown over a live kitty pane.
-  PRP_TERM_RC=0; hf_remote_pane_term "$PRP_PANE" || PRP_TERM_RC=$?
+  PRP_KID=0; hf_kid_on_for "$PRP_PANE" && PRP_KID=1
+  if [ "$PRP_KID" = 1 ]; then
+    PRP_TERM_RC=0; hf_kid_apply
+    echo "identity: kernel (kitty $HF_KID_KPID window $HF_KID_PANE root $HF_KID_ROOT on ${HF_KID_TTY#/dev/}; no terminal round-trip)"
+  else
+    PRP_TERM_RC=0; hf_remote_pane_term "$PRP_PANE" || PRP_TERM_RC=$?
+  fi
   if [ "$PRP_TERM_RC" != 0 ]; then
+    hf_kid_shadow_row "$PRP_PANE" "" "precheck-resolver-rc-$PRP_TERM_RC"
     # The verdict keeps this verb's established `REFUSED:pane:<state>` / `HELD:pane:<state>` shape —
     # lr-handoff's precheck reads only the part before the first colon (`${state%%:*}`), and
     # tests/lr-handoff-launcher-quoting.bats pins the `REFUSED:pane:` prefix for the unreadable-pane
@@ -13900,7 +14179,12 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
     2) echo "kitty_probe: STUCK — $HF_KPROBE_WHY [$(hf_kprobe_detail)]"; prp_verdict "HELD:wedged" 3 ;;
     *) echo "kitty_probe: not answering — $HF_KPROBE_WHY [$(hf_kprobe_detail)]"; prp_verdict "HELD:unreachable" 3 ;;
   esac
-  PRP_TTY="$(as_tty "$PRP_PANE")"
+  if [ "$PRP_KID" = 1 ]; then
+    PRP_TTY="$HF_KID_TTY"
+  else
+    PRP_TTY="$(as_tty "$PRP_PANE")"
+    hf_kid_shadow_row "$PRP_PANE" "$PRP_TTY" "precheck"
+  fi
   PRP_STATE="$(pane_cc_state "$PRP_TTY")"
   if [ "$PRP_STATE" != cc ]; then
     echo "pane_state: $PRP_STATE (tty ${PRP_TTY:-<unresolved>})"
@@ -13927,7 +14211,10 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
   echo "kitty_pid: ${PRP_KPID:--}"
   echo "kitty_lstart: ${PRP_KLS:--}"
   PRP_ROOT=""
-  if [ "${CC_TERM:-}" = kitty ]; then
+  if [ "$PRP_KID" = 1 ]; then
+    PRP_ROOT="$HF_KID_ROOT"
+    echo "pane_root_lstart: $HF_KID_ROOT_LS"
+  elif [ "${CC_TERM:-}" = kitty ]; then
     PRP_ROOT="$(kt_window_field "$PRP_PANE" pid 2>/dev/null || true)"
     case "$PRP_ROOT" in ''|*[!0-9]*) PRP_ROOT="" ;; esac
   fi
@@ -16248,11 +16535,25 @@ if [ "$RECYCLE" = 1 ]; then
   # call, the launchd poller) has no kitty ancestor by construction. Enumerating the pane answers
   # the question that is actually being asked, and CC_TERM + CC_TERM_KITTY_TO are then inherited by
   # the detached watcher that does the typing.
+  # KERNEL PANE IDENTITY FIRST (W12, B5a §5.2). The bind is file-only, so running it early is free; it
+  # is silent here and runs again, loudly, below. Mode on + verified: the kitty resolver is skipped and
+  # the terminal is bound to the verified kitty. Shadow: computed and logged, nothing skipped. Off:
+  # neither call is made.
   if [ -n "$RCY_SOURCE_PANE" ]; then
-    RCY_TERM_RC=0; hf_remote_pane_term "$RCY_SOURCE_PANE" || RCY_TERM_RC=$?
-    if [ "$RCY_TERM_RC" != 0 ]; then
-      hf_remote_pane_term_say "$RCY_TERM_RC" "$RCY_SOURCE_PANE" --recycle
-      exit 2
+    if [ -n "$RCY_SOURCE_SESSION" ] && [ "$(hf_kitty_offpath_mode)" != off ] \
+       && hf_remote_source_bind "$RCY_SOURCE_PANE" "$RCY_SOURCE_SESSION" --recycle 2>/dev/null; then
+      hf_kid_bounded "$RCY_SOURCE_PANE" "$HF_REMOTE_ROW_PID" || true
+    fi
+    if hf_kid_on_for "$RCY_SOURCE_PANE"; then
+      hf_kid_apply
+      emit_recycle_event recycle-kid-resolved "" "$RCY_SOURCE_PANE" "kernel identity: kitty $HF_KID_KPID window $HF_KID_PANE root $HF_KID_ROOT on ${HF_KID_TTY#/dev/}; no terminal round-trip" || true
+    else
+      RCY_TERM_RC=0; hf_remote_pane_term "$RCY_SOURCE_PANE" || RCY_TERM_RC=$?
+      if [ "$RCY_TERM_RC" != 0 ]; then
+        hf_kid_shadow_row "$RCY_SOURCE_PANE" "" "recycle-resolver-rc-$RCY_TERM_RC"
+        hf_remote_pane_term_say "$RCY_TERM_RC" "$RCY_SOURCE_PANE" --recycle
+        exit 2
+      fi
     fi
   fi
   pin_term_verdict_for_watcher
@@ -17958,7 +18259,10 @@ hf_lr_admit() {
     echo "-- admit-before-spawn: capacity-admit.sh unavailable — the launcher will evaluate its own gate in the pane" >&2
     return 0
   fi
+  # G1 (no recovery decision reads load): the load term rides the rail's own switch, off unless the
+  # driver turned it on, the same spelling lr-fire-resume's in-pane gate uses (W12 closes debt:W12).
   if ! CC_ADMIT_ACTOR=handoff-fire CC_ADMIT_BUDGET_KEY="$sid" CC_ADMIT_WANT_SID="$sid" \
+       CC_ADMIT_LOAD_TERM="${LR_LOAD_TERM:-off}" \
        cc_capacity_admit handoff-fire "fire lr-fire-resume relaunch of $sid"; then
     echo "!! capacity REFUSED this relaunch of ${sid:0:8} BEFORE any pane was opened — $(cc_capacity_admit_reason 2>/dev/null || true)" >&2
     echo "   Nothing was launched. A stranded session is relaunched by limit-recover's queue (lr-fleet --one ${sid:0:8}), never by re-running this fire in a loop." >&2
@@ -19454,6 +19758,15 @@ recycle_fire_commit() {
        # stays: the watcher has not relaunched yet (check 2 saw the subject alive), so its engagement
        # discharges the debt.
        if hf_recycle_subject_gone; then hf_recycle_subject_yield "before the typed /exit" "the resume debt opened above stays for the watcher to discharge"; return 0; fi
+       # A DEFERRED PANE PROBE MAY NOT END IN A TYPED /exit (W12, B5a §5.4c; review S5): the terminal
+       # did not answer, so the exit had to be a signal. Reached only if the claude, the stage or the
+       # pin changed since the stage point. After the subject-gone yield (a claude that already exited
+       # belongs to its watcher), and the debt abandoned first, as the two post-debt holds above do.
+       if [ -n "${RCY_PP_DEFERRED:-}" ]; then
+         [ -n "$rcy_debt_sid" ] && _hf_resume_debt abandon --sid "$rcy_debt_sid" --why "pane probe unanswered and the signal exit declined ($HF_EXIT_SIG_WHY); nothing typed, session alive"
+         hf_recycle_hold unreachable "pane probe unanswered and the signal exit declined ($HF_EXIT_SIG_WHY)" \
+           "the terminal did not answer and the exit would have to be typed"
+       fi
        echo "→ exit: typed /exit — $HF_EXIT_SIG_WHY" ;;
   esac
   # ── /exit, READ BACK (W2b) — see hf_exit_readback. Kill switch HF_EXIT_READBACK=off restores the
@@ -19564,6 +19877,11 @@ recycle_fire() {
      && kitty_identity; then
     tty="$(hf_self_kitty_tty)"
     [ -n "$tty" ] && echo "→ recycle: pane $SID's tty is $tty, read from this process's own ancestry (no terminal round-trip)" >&2
+  fi
+  # The remote form with a verified kernel identity for this pane (W12, mode on): its tty, no kitty read.
+  if [ -z "$tty" ] && [ "${RCY_REMOTE:-0}" = 1 ] && hf_kid_on_for "$SID"; then
+    tty="$HF_KID_TTY"
+    echo "→ recycle: pane $SID's tty is $tty, from the kernel identity (kitty $HF_KID_KPID, root $HF_KID_ROOT; no terminal round-trip)" >&2
   fi
   [ -n "$tty" ] || tty="$(as_tty_classified "$SID")" || tty_rc=$?
   hf_phase tty
@@ -19974,6 +20292,18 @@ recycle_fire_armed() {
   export HF_RCY_ORIG_ARGV_FILE HF_RCY_ORIG_SELF HF_RCY_ORIG_PWD HF_RCY_WATCHER_LOG HF_RCY_TRANSPLANT_CAUSE
   # A carried prompt box (hf_rcy_carry) goes to the watcher, which puts it back on its engaged arms.
   export HF_RCY_CARRY_DIR HF_RCY_CARRY_STATE
+  # THE WATCHER'S PANE PROBE MAY BE ADVISORY (W12, B5a §5.4b) only for a move that stages a successor
+  # and exits by signal, over an identity the kernel verified, in mode on. Exported as 0 otherwise, so
+  # an inherited 1 can never ride into a nested fire (S17).
+  HF_PANE_PROOF_ADVISORY=0
+  case "$(hf_succ_mode)" in
+    resume|transplant)
+      if [ "${RCY_REMOTE:-0}" = 1 ] && hf_kid_on_for "$SID" && [ "${CC_PANE_SUCCESSOR:-on}" != off ] \
+         && [ "${HF_EXIT_ACTUATOR:-signal}" != typed ] && hf_succ_lib_load; then
+        HF_PANE_PROOF_ADVISORY=1
+      fi ;;
+  esac
+  export HF_PANE_PROOF_ADVISORY
   WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$LAUNCH_DIR" "$rcy_old_sid" "$RECYCLE_MARKER" "$FIRE_GOAL" "${PROMPT_FILE_ORIG:-$PROMPT_FILE}" "$RESUME_CFG" "${RESUME_LAUNCHER:+${RCY_SOURCE_SESSION:-$rcy_old_sid}}" "$RCY_T0" "$RCY_SRC_TX" "$RCY_RUN_DIR_ARG" "$RCY_SUBMIT_TOKEN_ARG" "$RCY_CALLER_PID_ARG")"
   if ! await_armed "$log"; then
     hf_recycle_disarm
@@ -20007,16 +20337,40 @@ recycle_fire_armed() {
   # SECOND half of the arm — the pane, not just the log. Until this passes, nothing is killed.
   # Refused vs stalled are different diagnoses (see the self-close arm) and get different lines.
   RCY_PP=0; await_pane_proof "$log" || RCY_PP=$?
+  # DEFERRED, NOT DROPPED (W12, B5a §5.4c; reviews S6, R-5). Only a no-answer (3) whose listing our own
+  # bound killed (rc 124/137, read off the watcher's NO-ANSWER line), and only when the watcher was told
+  # it may stay. Then the verdict waits for the stage: the move proceeds only staged, pinned and
+  # signal-exiting (checked right after hf_succ_stage below). A stalled probe (2), UNREACHABLE (1) and
+  # any other listing rc keep today's hold. First the kitty band: a background-banded main thread
+  # would not drain the successor's output, so that is a hold of its own.
+  RCY_PP_DEFERRED="" RCY_PP_HOLD_WHY=""
+  if [ "$RCY_PP" = 3 ]; then
+    rcy_pp_lrc="$(sed -n 's/^!! pane-NO-ANSWER:.* failed (rc=\([0-9]*\) in .*/\1/p' "$log" 2>/dev/null | awk 'NR <= 1')"
+    case "$rcy_pp_lrc" in
+      124|137)
+        if [ "${HF_PANE_PROOF_ADVISORY:-0}" = 1 ]; then
+          rcy_band_rc=0; hf_kitty_band "$HF_KID_KPID" || rcy_band_rc=$?
+          case "$rcy_band_rc" in
+            0) RCY_PP_DEFERRED=3; RCY_PP=0
+               emit_recycle_event recycle-pane-probe-deferred "" "$SID" "pane probe got no answer (listing rc $rcy_pp_lrc); kitty $HF_KID_KPID main-thread band [$HF_KITTY_BAND_READ]; decided after the stage: the move proceeds only staged, pinned and signal-exiting" || true ;;
+            1) RCY_PP_HOLD_WHY="kitty background-banded: its main thread would not drain the successor's output (B8); kitty $HF_KID_KPID band [$HF_KITTY_BAND_READ]" ;;
+            *) RCY_PP_HOLD_WHY="kitty $HF_KID_KPID main-thread band unreadable [$HF_KITTY_BAND_READ], so the advisory proceed has no proof" ;;
+          esac
+        elif [ "$(hf_kitty_offpath_mode)" = shadow ] && [ "${RCY_REMOTE:-0}" = 1 ] && [ "${HF_KID_OK:-0}" = 1 ] && [ "${HF_KID_FOR:-}" = "${SID##*:}" ]; then
+          emit_recycle_event recycle-pane-probe-deferred-shadow "" "$SID" "shadow: pane probe got no answer (listing rc $rcy_pp_lrc) over a verified kernel identity; mode on would decide after the stage (succ mode $(hf_succ_mode)); held as today" || true
+        fi ;;
+    esac
+  fi
   if [ "$RCY_PP" != 0 ]; then
     hf_recycle_disarm
     case "$RCY_PP" in
       1) emit_recycle_event recycle-refused-unreachable "" "$SID" "the watcher's pane probe answered: pane not enumerated (see $log)" || true ;;
-      3) emit_recycle_event recycle-held-unreachable "" "$SID" "the watcher's pane probe got NO ANSWER from the terminal (failed listing) — not evidence the pane is gone (see $log)" || true ;;
+      3) emit_recycle_event recycle-held-unreachable "" "$SID" "the watcher's pane probe got NO ANSWER from the terminal (failed listing) — not evidence the pane is gone (see $log)${RCY_PP_HOLD_WHY:+; $RCY_PP_HOLD_WHY}" || true ;;
       *) emit_recycle_event recycle-held-unreachable "" "$SID" "the watcher returned no pane verdict inside the window (stalled probe; see $log)" || true ;;
     esac
     if [ "$RCY_PP" = 3 ]; then
       hf_recycle_owed_record "$SID" "the watcher's pane probe got no answer"
-      echo "!! recycle ABORTED: the terminal did not answer the watcher's pane probe for $SID (a failed listing, typically the 10 s bound firing while kitty's socket is stalled) — that is NOT a missing pane. /exit NOT typed, session stays alive. Re-run once the terminal answers: $CMD" >&2
+      echo "!! recycle ABORTED: the terminal did not answer the watcher's pane probe for $SID (a failed listing, typically the 10 s bound firing while kitty's socket is stalled) — that is NOT a missing pane.${RCY_PP_HOLD_WHY:+ Not deferred: $RCY_PP_HOLD_WHY.} /exit NOT typed, session stays alive. Re-run once the terminal answers: $CMD" >&2
     elif [ "$RCY_PP" = 2 ]; then
       echo "!! recycle ABORTED: the watcher returned NO pane verdict for $SID inside the window — it neither reached the pane nor said it could not. That is a STALLED probe, not a refused one; $log names the transport it selected. /exit NOT typed, session stays alive. Run manually: $CMD" >&2
     else
@@ -20128,7 +20482,24 @@ recycle_fire_armed() {
   # the irreversible tail. The watcher is heartbeat-proven and holds the lock, so its pid + lstart is
   # what the consumer's take proves; if the tail aborts, the watcher is disarmed and its EXIT trap
   # revokes the stage (a take would refuse it anyway, the watcher being dead).
-  hf_succ_stage "$tty" "$cmdfile" || true
+  rcy_staged=0; hf_succ_stage "$tty" "$cmdfile" && rcy_staged=1 || true
+  # THE DEFERRED PANE-PROBE VERDICT (W12, B5a §5.4c), decided now, still before the confirm: past a
+  # terminal that did not answer, the move goes on only staged, signal-exiting and with one claude
+  # pinned to signal — the relaunch then needs no keystroke from kitty. Otherwise today's hold, at
+  # today's cost (the watcher's EXIT trap revokes the stage).
+  if [ -n "${RCY_PP_DEFERRED:-}" ]; then
+    rcy_why=""
+    [ "$rcy_staged" = 1 ] || rcy_why="the successor could not be staged"
+    [ -n "$rcy_why" ] || [ "${HF_EXIT_ACTUATOR:-signal}" != typed ] || rcy_why="HF_EXIT_ACTUATOR=typed"
+    [ -n "$rcy_why" ] || hf_exit_signal_pin "$tty" "${RCY_SOURCE_SESSION:-$rcy_old_sid}" || rcy_why="no single claude to signal ($HF_EXIT_SIG_WHY)"
+    if [ -n "$rcy_why" ]; then
+      hf_recycle_disarm
+      emit_recycle_event recycle-held-unreachable "" "$SID" "the watcher's pane probe got NO ANSWER and the relaunch could not avoid the terminal: $rcy_why (see $log)" || true
+      hf_recycle_owed_record "$SID" "the watcher's pane probe got no answer"
+      echo "!! recycle ABORTED: the terminal did not answer the watcher's pane probe for $SID (a failed listing, typically the 10 s bound firing while kitty's socket is stalled) — that is NOT a missing pane. Not deferred: $rcy_why. /exit NOT typed, session stays alive. Re-run once the terminal answers: $CMD" >&2
+      exit 1
+    fi
+  fi
   # THE COMMIT — confirm, the last read, the debt, the /exit — is its own function so a suite can
   # drive the whole irreversible tail over stubs (a full recycle_fire needs a real tty).
   recycle_fire_commit "$rcy_old_sid"

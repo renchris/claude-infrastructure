@@ -304,7 +304,8 @@ teardown() {
 probe() { # $@=extra env
   local cfg="$BATS_TEST_TMPDIR/cfg/projects/-some-repo" psid="a1b2c3d4-0000-4000-8000-000000000001"
   mkdir -p "$BATS_TEST_TMPDIR/reg" "$cfg"
-  printf '{"session_id":"%s","pane":"900"}\n' "$psid" > "$BATS_TEST_TMPDIR/reg/900.json"
+  local row="{\"session_id\":\"$psid\",\"pane\":\"900\"}"; [ -z "${PROBE_ROW:-}" ] || row="$PROBE_ROW"   # T9 names a pid
+  printf '%s\n' "$row" > "$BATS_TEST_TMPDIR/reg/900.json"
   printf '%s\n' '{"type":"user","timestamp":"2026-09-20T00:00:00.000Z","message":{"role":"user","content":"go"}}' \
     '{"type":"assistant","timestamp":"2026-09-20T00:00:01.000Z","isApiErrorMessage":true,"message":{"role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"You'"'"'ve hit your weekly limit · resets 4am (America/Chicago)"}]}}' \
     > "$cfg/$psid.jsonl"
@@ -367,6 +368,38 @@ probe() { # $@=extra env
   probe HF_PRECHECK_TYPED_RELAUNCH=1 CC_PANE_SUCCESSOR=off CC_FIRE_CAPACITY_GATE=on HF_LOAD_PER_CORE=22 HF_PRECHECK_LOAD_PER_CORE=30
   [[ "$output" == *"load: 22/core (bound 24/core)"* ]] || { echo "a precheck bound above the commit's was not capped: $output"; false; }
   [ "$(printf '%s\n' "$output" | sed -n 's/^verdict: //p')" = HELD:wedged ] || { echo "$output"; false; }
+}
+
+# T9 (W12, B5a; reviews R-1, S7): a VERIFIED kernel identity takes kitty off the identity read, never
+# off the probe schedule. A detached caller (LR_INPLACE_AWAIT=0) still asks 5 times over its budget
+# before HELD:unreachable, exactly as without the identity: only a cached-draft proof (K1, not built)
+# could cut that short. The identity is fixtured through a ps stub (HF_KID_PS_BIN): kitty 610 (this
+# suite's $SOCK) → root 70001 on ttys777 → claude 70003, the registry row naming pid 70003.
+@test "T9 mode on, identity verified, kitty deaf, detached: 'identity: kernel' and still 5 probe attempts before HELD:unreachable" {
+  netstat_capture 3
+  fixture_socket "$SOCK" 0
+  local kf="$BATS_TEST_TMPDIR/kid" ls="Wed Oct 21 03:37:41 2026" psid="a1b2c3d4-0000-4000-8000-000000000001" p
+  mkdir -p "$kf"
+  # shellcheck disable=SC2016  # expanded when the STUB runs
+  printf '%s\n' '#!/bin/bash' 'F="${KID_FIX:?}"; L="${!#}"' 'case "$*" in' \
+    '  "-E -ww -o command= -p "*) cat "$F/env.$L" 2>/dev/null ;;' \
+    '  "-axo pid=,ppid=,stat=,tty=,lstart=,comm=") cat "$F/table" ;;' \
+    '  "-ww -o command= -p "*) cat "$F/argv.$L" 2>/dev/null ;;' \
+    'esac' > "$kf/ps"
+  chmod +x "$kf/ps"
+  printf '%s\n' "  610     1 S    ??       $ls /Applications/kitty.app/Contents/MacOS/kitty" \
+    "70001   610 Ss   ttys777  $ls login" "70002 70001 S    ttys777  $ls -zsh" "70003 70002 S+   ttys777  $ls claude" > "$kf/table"
+  printf 'claude --resume x' > "$kf/argv.70003"
+  printf 'claude --resume x HOME=/h PATH=/bin KITTY_WINDOW_ID=900 KITTY_PID=610 KITTY_LISTEN_ON=unix:%s\n' "$SOCK" > "$kf/env.70003"
+  mkdir -p "$BATS_TEST_TMPDIR/reg" "$BATS_TEST_TMPDIR/lr"
+  PROBE_ROW="{\"session_id\":\"$psid\",\"pane\":\"900\",\"pid\":70003,\"lstart\":\"$ls\",\"kitty_pid\":610}"
+  probe KID_FIX="$kf" HF_KID_PS_BIN="$kf/ps" HF_KID_BOUND_S=0 HF_KITTY_OFFPATH=on LR_STATE_DIR="$BATS_TEST_TMPDIR/lr" \
+    LR_INPLACE_AWAIT=0 HF_KPROBE_SLEEP_SCALE=0 HF_KPROBE_BUDGET_S=100000
+  PROBE_ROW=""
+  [ "$status" -eq 3 ] || { echo "status=$status $output"; false; }
+  [[ "$output" == *"identity: kernel (kitty 610 window 900 root 70001 on ttys777"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"kitty_probe: not answering"*"after 5 attempt(s)"*"tries=5]"* ]] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | sed -n 's/^verdict: //p')" = HELD:unreachable ] || { echo "$output"; false; }
 }
 
 @test "a: the self tty is the tty of the ancestor whose parent is \$KITTY_PID, not the caller's" {
