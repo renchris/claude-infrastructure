@@ -63,3 +63,28 @@ run that kept emitting results until the bound fired is a CUT, not a HUNG. This 
 here the per-test bound is 30 s, the tests number 103, and the confirm bound is 300 s.
 Off-box, `cc-backlog add` writes nothing, so this artifact is how the follow-on reaches the store. It
 cites item 291d7ef9a4a1.
+
+## Addendum — re-dispatch at 2026-10-21T20:05Z (fire `claude/fire-20261021T200509Z-78577-1`)
+
+The row was dispatched again **after** this verdict had already landed. Nothing about the premise has
+changed since. Each line below was re-run in a cloud session on a full clone (unshallowed):
+
+- `git merge-base --is-ancestor 13d332d09 origin/main` → 0. This verdict (commit date
+  2026-10-21T17:33Z) is on trunk, and it predates the fire.
+- `git rev-list --count HEAD..origin/main` → 0. `git log dc13d1a09925..origin/main --
+  tests/autonomy-sweep.bats scripts/autonomy-sweep.sh` → empty. The judged bytes are still trunk's bytes.
+- `git rev-parse origin/main:bin/cc-dispatch` = `73b9577e45cd…`, which equals the brief's blob. The
+  dispatcher that fired this second session is trunk, so trunk's dispatcher re-fired a row whose
+  verdict was already on trunk.
+- Seam audit re-run: 139 `"${SWEEP_TO[@]}"` invocations. Every other `$SWEEP` reference is a static
+  read (`grep`/`sed`/`bash -n`/mutant build), and none executes the subject unbounded.
+- `scripts/postland-verify.sh` `confirm_hang` (≈:1689) is unchanged: `bounded "$FILE_TO"` then
+  `[ "$rc" -eq 124 ]`, wall time only. The follow-on above is still **not done and, as far as trunk
+  shows, not filed**. That is why the HUNG can be re-filed against this file on any starved tick.
+  The effect is still live even though the stated cause is refuted
+  (`docs/lessons/cause-refuted-effect-discharged.md`).
+
+**Desk action:** close 291d7ef9a4a1 on `13d332d09` and on this addendum. File the `confirm_hang`
+progress-not-wall-time follow-on as its own row. Until it lands, expect fresh HUNG rows for
+long-running files under the background QoS band. Before treating one as new, check it against this
+artifact. No suite or script code changed in this session.
