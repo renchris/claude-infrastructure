@@ -58,7 +58,7 @@ json.dump(hb, open(paths.heartbeat, "w"))
   run /bin/bash -c 'cd "$LR_DIR" && /usr/bin/python3 -m unittest lr_recon.tests.test_telemetry 2>&1'
   [ "$status" -eq 0 ]
   n="$(printf '%s\n' "$output" | sed -n 's/^Ran \([0-9][0-9]*\) tests* in .*/\1/p')"
-  [ -n "$n" ] && [ "$n" -ge 46 ]
+  [ -n "$n" ] && [ "$n" -ge 46 ] || false
   printf '%s\n' "$output" | grep -qx 'OK'
   /usr/bin/python3 -c 'import sys; assert sys.version_info[:2] == (3, 9), sys.version'
 }
@@ -66,7 +66,7 @@ json.dump(hb, open(paths.heartbeat, "w"))
 @test "T15: an empty root is NO DATA, rc 1, and never ok" {
   run "$LR" status --rail
   [ "$status" -eq 1 ]
-  [[ "${lines[0]}" == "reconciler: NO DATA"* ]]
+  [[ "${lines[0]}" == "reconciler: NO DATA"* ]] || false
   [[ "$output" != *"rail: ok"* ]]
 }
 
@@ -74,9 +74,9 @@ json.dump(hb, open(paths.heartbeat, "w"))
   fixture 0 0 1 1
   run "$LR" status --rail
   [ "$status" -eq 0 ]
-  [[ "${lines[0]}" == "reconciler: ok — "* ]]
-  [[ "${lines[1]}" == "not covered: move lane, boot-resume"* ]]
-  [[ "$output" == *"gates  may:backoff 2"* ]]
+  [[ "${lines[0]}" == "reconciler: ok — "* ]] || false
+  [[ "${lines[1]}" == "not covered: move lane, boot-resume"* ]] || false
+  [[ "$output" == *"gates  may:backoff 2"* ]] || false
   [[ "$output" == *"runnable by base priority 4:9 31:4 of 40 threads"* ]]
 }
 
