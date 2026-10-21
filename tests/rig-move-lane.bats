@@ -90,10 +90,10 @@ runner_lines() { # waits for the detached runner's first line (it is the kick's 
   fake_runner; queue B1
   LR_RIG="$BATS_TEST_TMPDIR/other" run standin
   [ "$status" -eq 2 ]
-  [[ "$output" == *"is not $R"* ]]
+  [[ "$output" == *"is not $R"* ]] || false
   LR_STATE_DIR="$BATS_TEST_TMPDIR/real-lr" run standin
   [ "$status" -eq 2 ]
-  [[ "$output" == *"outside $R"* ]]
+  [[ "$output" == *"outside $R"* ]] || false
   [ -e "$LR_STATE_DIR/move/requests/B1.json" ] && [ ! -e "$R/state/runner.log" ]
 }
 
@@ -101,9 +101,9 @@ runner_lines() { # waits for the detached runner's first line (it is the kick's 
 
 @test "shims: launchctl and osascript log their argv, print nothing and exit 0" {
   run env -i PATH=/usr/bin:/bin LR_RIG="$R" "$R/bin/launchctl" kickstart -k gui/501/com.reso.lr-reset-poller
-  [ "$status" -eq 0 ] && [ -z "$output" ]
+  [ "$status" -eq 0 ] && [ -z "$output" ] || false
   run env -i PATH=/usr/bin:/bin LR_RIG="$R" "$R/bin/osascript" -e 'tell application "kitty" to activate'
-  [ "$status" -eq 0 ] && [ -z "$output" ]
+  [ "$status" -eq 0 ] && [ -z "$output" ] || false
   [ "$(cut -f2- "$R/state/shims.log" | sed -n 1p)" = "$(printf 'launchctl\tkickstart -k gui/501/com.reso.lr-reset-poller')" ]
   [ "$(cut -f2 "$R/state/shims.log" | sed -n 2p)" = osascript ]
 }
@@ -113,14 +113,14 @@ runner_lines() { # waits for the detached runner's first line (it is the kick's 
 @test "idle_fanout_switch: env on AND the arm's recon/idle-fanout.on is created" {
   printf '{"idle_fanout_switch": true, "groups": []}\n' > "$R/m.json"
   run rl switches "$R/m.json" "$R"
-  [ "$status" -eq 0 ] && [ "$output" = on ]
+  [ "$status" -eq 0 ] && [ "$output" = on ] || false
   [ -f "$R/state/idle-fanout.on" ]
 }
 
 @test "idle_fanout (env only) creates no switch file; neither key reads off" {
   printf '{"idle_fanout": true, "groups": []}\n' > "$R/m.json"
   run rl switches "$R/m.json" "$R"
-  [ "$output" = on ] && [ ! -e "$R/state/idle-fanout.on" ]
+  [ "$output" = on ] && [ ! -e "$R/state/idle-fanout.on" ] || false
   printf '{"groups": []}\n' > "$R/m.json"
   run rl switches "$R/m.json" "$R"
   [ "$output" = off ] && [ ! -e "$R/state/idle-fanout.on" ]
@@ -153,26 +153,26 @@ lsf() { # BASE_OFFSET FROM FOR → the table rig_lib writes from a matrix, BASE 
   fake_kitty; lsf -10 0 120
   run "$RIGD/kitten-slow" @ --to unix:/tmp/none ls
   [ "$status" -eq 1 ]
-  [[ "$output" == *"rig fault kitty_ls_fail"* ]]
+  [[ "$output" == *"rig fault kitty_ls_fail"* ]] || false
   [ "$(cut -f2- "$R/state/kitty-delay.log")" = "$(printf -- '-\tls-fail\tls')" ]
 }
 
 @test "kitty_ls_fail: before and after its window, the full ls reaches kitty" {
   fake_kitty; lsf 100 0 120
   run "$RIGD/kitten-slow" @ --to unix:/tmp/none ls
-  [ "$status" -eq 0 ] && [ "$output" = "REAL kitten @ --to unix:/tmp/none ls" ]
+  [ "$status" -eq 0 ] && [ "$output" = "REAL kitten @ --to unix:/tmp/none ls" ] || false
   lsf -1000 0 60
   run "$RIGD/kitten-slow" @ --to unix:/tmp/none ls
-  [ "$status" -eq 0 ] && [ "$output" = "REAL kitten @ --to unix:/tmp/none ls" ]
+  [ "$status" -eq 0 ] && [ "$output" = "REAL kitten @ --to unix:/tmp/none ls" ] || false
   [ ! -e "$R/state/kitty-delay.log" ]
 }
 
 @test "kitty_ls_fail: inside the window a --match ls and an actuator's kitty-slow ls still reach kitty" {
   fake_kitty; lsf -10 0 120
   run "$RIGD/kitten-slow" @ --to unix:/tmp/none ls --match id:7
-  [ "$status" -eq 0 ] && [ "$output" = "REAL kitten @ --to unix:/tmp/none ls --match id:7" ]
+  [ "$status" -eq 0 ] && [ "$output" = "REAL kitten @ --to unix:/tmp/none ls --match id:7" ] || false
   run "$RIGD/kitty-slow" @ --to unix:/tmp/none ls
-  [ "$status" -eq 0 ] && [ "$output" = "REAL kitty @ --to unix:/tmp/none ls" ]
+  [ "$status" -eq 0 ] && [ "$output" = "REAL kitty @ --to unix:/tmp/none ls" ] || false
   [ ! -e "$R/state/kitty-delay.log" ]
 }
 
@@ -191,7 +191,7 @@ lsf() { # BASE_OFFSET FROM FOR → the table rig_lib writes from a matrix, BASE 
 f = json.load(open(sys.argv[2]))
 rig_lib.extra_specs(f, sys.argv[3] + "/specs-extra.json")
 json.dump(rig_lib.expand(f), open(sys.argv[3] + "/specs.json", "w"))' "$RIGD" "$RIGD/faults/move9.json" "$R"
-  [ "$status" -eq 0 ] && [ "$output" = 1 ]
+  [ "$status" -eq 0 ] && [ "$output" = 1 ] || false
   run rl pane-rows "$R"
   [ "$(printf '%s\n' "$output" | grep -c .)" -eq 10 ]
   [ "$(printf '%s\n' "$output" | awk -F'\t' '$1 == 200 { print $4 }')" = .claude-tertiary ]
@@ -317,26 +317,30 @@ t5v() { py -c 'import json,sys; print(json.load(open(sys.argv[1]))["t5"]["v"])' 
   t5_fixture NOTMOVED "$T5_OK" 40 ENGAGED
   run rl t5 "$R"
   [ "$status" -eq 0 ]
-  [[ "$output" == "T5 move lane: PASS · 1 queued member(s) turned limited" ]]
+  [[ "$output" == "T5 move lane: PASS · 1 queued member(s) turned limited" ]] || false
   [ "$(t5v)" = PASS ]
 }
 
 @test "T5 FAIL: held through the slot wait (let go long after its limit)" {
   t5_fixture NOTMOVED "$T5_OK" 400 ENGAGED
   run rl t5 "$R"
-  [[ "$output" == *"FAIL"*"let go 400s after its limit (bound 120s)"* ]]
+  [[ "$output" == *"FAIL"*"let go 400s after its limit (bound 120s)"* ]] || false
   [ "$(t5v)" = FAIL ]
 }
 
 @test "T5 FAIL: still held (no release row), not became-limited, no hand-over, or not driven" {
   t5_fixture "" "" 0 ENGAGED
-  run rl t5 "$R"; [[ "$output" == *"no release: the lane still holds it"* ]]
+  run rl t5 "$R"
+  [[ "$output" == *"no release: the lane still holds it"* ]] || false
   t5_fixture NOTMOVED "slot-wait: no move slot freed in 600s" 40 ENGAGED
-  run rl t5 "$R"; [[ "$output" == *"not let go as became-limited"* ]]
+  run rl t5 "$R"
+  [[ "$output" == *"not let go as became-limited"* ]] || false
   t5_fixture NOTMOVED "became-limited: … Recover it: cc-lr recover subj-000" 40 ENGAGED
-  run rl t5 "$R"; [[ "$output" == *"without handing it to the reconciler"* ]]
+  run rl t5 "$R"
+  [[ "$output" == *"without handing it to the reconciler"* ]] || false
   t5_fixture NOTMOVED "$T5_OK" 40 IMPOSSIBLE
-  run rl t5 "$R"; [[ "$output" == *"not driven by the reconciler (outcome IMPOSSIBLE)"* ]]
+  run rl t5 "$R"
+  [[ "$output" == *"not driven by the reconciler (outcome IMPOSSIBLE)"* ]] || false
   [ "$(t5v)" = FAIL ]
 }
 
