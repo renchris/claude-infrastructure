@@ -21,8 +21,10 @@ whichever session holds it. Fire kit (template + helper): `impl/lead-kit/` (copi
 | W10 | A | lrsl-w10 | `52fc6f2b8` (+ DaemonWiring hermetic) | pair `--red tree:054ca06bb@31`: place events carry `holds=n/n holds_s=` | post-R3 production band report: `/tmp/w10h/holds_report.py` |
 | W4 | B | lrsl-w4 | `30cadb316` `354bd4c04` `da293caf2` (bats 1..58 0 not ok, 34/34 mutants; custody returned 01:49) | own pair guarantee9 `--arms cure,red` (cure-only and pair ran NO-VERDICT: load 9.6-11.2/core, containment) | — |
 | W4b | B | lrsl-w4b | IN FLIGHT pane 359 (fired 2026-10-21 01:21) | — | grants: `load_lib.py`, `stub-claude.py` (standing: W4's rig files except `load-expect.json`/`g1-allow.tsv`), `scripts/lib/pane-placement.sh` (skip rig OS windows, W4 finding) |
-| W12 | C | lrsl-w12 | IN FLIGHT pane 267 (fired 22:40) | — | carries `lr-guarantee-g1-lint.bats:415` deletion |
-| W11 | A | lrsl-w11 | IN FLIGHT pane 304 (fired 23:46) | — | removes `g1-allow.tsv:25` (hf_lr_admit debt:W12) if W12 landed |
+| W12 | C | lrsl-w12 | `c85b7063b` (9/9 paths verified) | — | identity flip to `on` after ≥30 `recycle-kid-shadow` rows in `~/.claude/logs/handoffs.jsonl` with 0 disagreements (0 rows at 03:27): rides W12b if met at its land, else an L commit between W12b and W15 |
+| W11 | A | lrsl-w11 | `b54efff86` `c8c922dc8` `ed6f47072` (925 unittest OK, bats 1..46; custody returned 03:26) | guarantee9 + guarantee30 pairs `--red tree:52fc6f2b8@31` (guarantee30 needs W4b), expect T1 PASS cure / FAIL red | T1 → hard in `load-expect.json` after those runs; `g1-allow.tsv:25` removal routed to W13 |
+| W13 | A | lrsl-w13 | IN FLIGHT pane 363 (fired 02:39) | — | removes `g1-allow.tsv:25` (hf_lr_admit, resolved by W12) |
+| W12b | C | lrsl-w12b | IN FLIGHT pane 368 (fired 03:29) | — | part 1 only; part 2 after packet `db44ab0ebc55` |
 | C2 re-open | — | — | backlog `649ebd06939f`, blocked not-yet-true | — | — |
 
 Next per slot (Phase 0 order and edges): A W13 → W14 → W17 · B W4b → W15 → W16 · C W12b (after W12).
@@ -31,9 +33,11 @@ Next per slot (Phase 0 order and edges): A W13 → W14 → W17 · B W4b → W15 
 
 - R1+R2 reload ran 2026-10-21 02:30Z (`lr-band-reload` verdict=ok, daemon at 31T; restarts.jsonl carries
   `inflight`/`inherited`/`prev_phase`; telemetry rows present).
-- R3 (W9+W10) is DUE now: standing step `b8bbc2317870`, `bash ~/.claude/scripts/limit-recover/lr-band-reload.sh --confirm lr-band --now`.
-  Read-back: heartbeat has `pass_at`, `pages_queued`; the next place event carries `holds=n/n holds_s=`.
-- RK (W7) is DUE: step `626ed25b243c`, dry run `lr-band-reload.sh --keepwarm` then `--confirm keepwarm-band`.
+- R3 (W9+W10) RAN 2026-10-21 ~08:06Z (verdict=ok). Lead read-back 08:08Z: reconciler pid 70188 `pri=31 ok`, heartbeat
+  carries `pass_at` and `pages_queued`; no `place` event since the reload yet, so the `holds=` read is still to do.
+- RK (W7) RAN 2026-10-21 ~08:07Z (verdict=ok; keepwarm and accounts-local at band 31, spawn type interactive).
+- Both steps were closed `done`, including `b8bbc2317870`, which named R1-R5. R4 (after W11+W13) and R5 (after W14)
+  therefore need new steps: the lead files each when its waves land.
 - B8 kitty restart (step `1c94119a286d`): W7's live status WARNs restore-fd-gate (208 lsof rows > CC_RESTORE_FD_MAX 180),
   so a second cc-restore round would stop.
 
