@@ -149,6 +149,10 @@ Every teammate brief follows the agent-teams pre-spawn checklist:
 - `LR_AUDIT_RESUME_PREDICT=off` (W4-wf; default on): lr-audit stops predicting Workflow resume re-spend and offers the old plain resume.
 - `recon/idle-fanout.on` (LR_SUSTAINED_LOAD W13 `ef94cd89c`, D2a): present enables the at-the-wall idle fan-out; absent (the default, packet `c9a05672e692`) leaves it dormant. Remove it to stop.
 - `recon/plan-only-finish.off` (W13, A7 part D): stops the reconciler finishing a plan-only record's own move and handing the fence and claim over. Since W13, removing `recon/autorecover.on` means "no new moves" (a record's own move still finishes); the hard stop stays `recon.on` / `recon/mode`.
+- `~/.reso/limit-recover/shed/mode` (LR_SUSTAINED_LOAD W16 `721539ac6`, D2b late-band idle shed): first token `off|shadow|on`; ABSENT = off, and the poller's kick starts nothing (`rm` it to stop). Shipped for shadow only (packet `76a584cc935b`).
+- `shed/breaker` (W16): written by a shed casualty; demotes `on` to `shadow`, pages once, aborts every unsettled shed batch.
+- `LR_SHED=off` (W16): the poller never kicks `lr-shed.py`, whatever `shed/mode` says.
+- `CC_ROUTE_SHED=off` (W16): the router's shed band row reads `off`, so no account is offered for shedding.
 - `LR_LAUNCH_GUARD=off` skips `lr-fire-resume`'s launch lock and H(sid) re-check (W2c; on by default).
 
 ### Operator steps (filed with `cc-backlog needs`, one command each)
