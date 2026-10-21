@@ -343,10 +343,19 @@ class Paths:
         """The reconciler's OWN zero-human marker (D1.9), created by the operator after the first
         attended reconciler cohort closes clean and never by the daemon. autorecover.on alone keeps
         meaning what it means for the poller's hook lane; the reconciler acts on a non-cc-lr
-        record only when both exist."""
+        record only when both exist. W13 (A7 Part D): removing it means NO NEW MOVES, not stop —
+        an own move in flight finishes and every other record hands its fence and claim over. The
+        hard stop is recon.on or recon/mode (act.may_actuate checks both first)."""
         if self.canary:
             return self.p("canary.on")
         return self.p("autorecover.on")
+
+    @property
+    def idle_fanout_on(self) -> str:
+        """recon/idle-fanout.on: the operator's switch for the at-the-wall idle fan-out (D2a, packet
+        c9a05672e692). A FILE, read every pass, so turning it on or off needs no plist edit and no
+        restart; absent = off. LR_IDLE_FANOUT=off in the environment still wins (the hard kill)."""
+        return self.p("idle-fanout.on")
 
     @property
     def requests(self) -> str:

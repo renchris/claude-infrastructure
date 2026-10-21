@@ -368,6 +368,43 @@ class ReportTest(unittest.TestCase):
             "boot-resume relaunches it in resume mode; in page mode, by hand",
         )
 
+    def test_T_C1_a_plan_only_record_says_nothing_retries_it(self) -> None:
+        """T-C1 (A7 Part C): 3e929a81 sat plan-only in WAIT_DATA reading "the reconciler retries",
+        which nothing did (measured red at ed6f47072, 2026-10-21). CONTROL plan_only=False."""
+        r = rec(1, wait=wait("WAIT_DATA"), plan_only=True)
+        r.sid = "3e929a81-0000-0000-0000-000000000000"
+        text = R.next_action(r)
+        self.assertIn("plan-only", text)
+        self.assertIn("opened while hands-off recovery was off", text)
+        self.assertIn("cc-lr recover 3e929a81", text)
+        r.plan_only = False
+        self.assertEqual(R.next_action(r), "the reconciler retries")
+
+    def test_F_C1_parked_held_and_idle_plan_only_keep_their_words(self) -> None:
+        """F-C1 control: Part C sits after _NEXT and HELD:team and reads kind == limited only, so the
+        4 live PARKED-REBOOT fan-out records keep boot-resume's text (and so does every _NEXT row)."""
+        parked = rec(1, substate="PARKED-REBOOT", wait=wait("PARKED-REBOOT"))
+        for kind in ("idle", "limited"):
+            parked.plan_only, parked.kind = True, kind
+            self.assertEqual(
+                R.next_action(parked),
+                "boot-resume relaunches it in resume mode; in page mode, by hand",
+            )
+        team = rec(2, wait=wait("HELD:team", eta=T0 + 3600), plan_only=True)
+        self.assertTrue(R.next_action(team).startswith("continued in place after "))
+        idle = rec(3, wait=wait("WAIT_DATA"), plan_only=True, kind="idle")
+        self.assertEqual(R.next_action(idle), "the reconciler retries")
+
+    def test_a_plan_only_own_move_in_flight_says_it_finishes(self) -> None:
+        """Part C with Part D: an own move in flight finishes, then stops."""
+        r = rec(1, phase="RELAUNCHED", substate="UNPROMPTED", plan_only=True, attempt=1)
+        r.close["move_attempt"] = 1
+        self.assertIn("finishing its own move, then stops", R.next_action(r))
+        r.close["move_attempt"] = (
+            0  # CONTROL: an earlier attempt's stamp is no move in flight
+        )
+        self.assertIn("cc-lr recover 00000001", R.next_action(r))
+
     def test_a_failed_wake_pages_once_with_its_reason(self) -> None:
         rep = self.reporter()
         r = rec(1, wait=wait("HELD:team", eta=T0 + 3600))

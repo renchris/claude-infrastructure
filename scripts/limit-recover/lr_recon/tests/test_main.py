@@ -720,6 +720,185 @@ class MainTests(unittest.TestCase):
             "the daemon must never create its own zero-human marker",
         )
 
+    # ── W13 (A7 Part D): the off switch never strands the reconciler's own half-done move ──────
+    _SID = "abcdef01-0000-0000-0000-000000000001"
+    # the phase table's action for each own-move phase (phase.py rows 7 and 12); the pass's derive
+    # is pinned to it, because _snap carries no transplant evidence and would re-derive PRE-MOVE
+    _ACTION = {"TRANSPLANTED": "A", "RELAUNCHED": "C", "EXITED": "B", "PRE-MOVE": ""}
+
+    def _own_move_pass(self, phase, substate, move_attempt=1, owned=False, off=False):
+        """T-D2's shape: an own move (close.move_attempt == attempt, plan_only False) whose session
+        is still LIMITED on its source, then recon/autorecover.on is removed (autorecover.on stays)
+        and one act pass runs. Returns (record, [(phase, substate, actuator, verdict)], spawns)."""
+        import time
+
+        self._flags(recon_on=True, autorecover=True, recon_marker=False)
+        finish_off = self.paths.p(M.act.PLAN_ONLY_FINISH_OFF)
+        if off:
+            open(finish_off, "w").close()
+        elif os.path.exists(finish_off):
+            os.unlink(finish_off)
+        rec = T.Record(sid=self._SID, record_id="recon:c:abcdef01:1", origin="hook")
+        rec.kind, rec.source_acct, rec.source_cfg = (
+            "limited",
+            "next3",
+            "/nonexistent-cfg",
+        )
+        rec.target_acct, rec.target_cfg = "next4", os.path.join(self.tmp, "cfg-next4")
+        rec.phase, rec.substate, rec.pane, rec.cwd = phase, substate, (5, 7), self.tmp
+        rec.attempt, rec.plan_only = 1, False
+        rec.bundle = "/x/launch.sh"  # B relaunches with the move's own bundle launcher
+        if move_attempt is not None:
+            rec.close["move_attempt"] = move_attempt
+        rec.timeline.detected = rec.timeline.planned = time.time() - 60
+        rec.updated_at = time.time()
+        ctx = M.Ctx(self.paths, None, self.home)
+        ctx.records = {rec.sid: rec}
+        if owned:
+            self._own(rec)
+        seen = []
+        orig = M.act.may_actuate
+
+        def spy(paths, mode, r, which, *a, **kw):
+            out = orig(paths, mode, r, which, *a, **kw)
+            seen.append((r.phase, r.substate, which, out[1]))
+            return out
+
+        def derive(c, _snap, _now, *_a, **_kw):
+            for r in c.records.values():
+                c.actions[r.sid] = self._ACTION.get(r.phase, "")
+
+        with (
+            mock.patch.object(M.act, "may_actuate", spy),
+            mock.patch.object(M, "_derive", derive),
+        ):
+            _ctx, _s, _am, popen = self._pass(None, mode_file="act\n", ctx=ctx)
+        return ctx.records[self._SID], seen, popen
+
+    def _bash_defers(self, sid):
+        """The BASH fence's verdict (lr-recon-fence.sh defers), as the poller and lr-fleet read it."""
+        import subprocess
+
+        script = os.path.join(
+            os.path.dirname(os.path.abspath(M.__file__)), "..", "lr-recon-fence.sh"
+        )
+        env = {
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "HOME": self.home,
+            "TMPDIR": self.tmp,
+            "LR_STATE_DIR": self.paths.lr_root,
+            "LR_RECON_ROOT": self.paths.root,
+        }
+        cp = subprocess.run(
+            ["/bin/bash", script, "defers", sid],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        reason = [t for t in cp.stderr.split() if t.startswith("reason=")]
+        return cp.returncode, reason[-1][len("reason=") :] if reason else cp.stderr
+
+    def test_T_D2_pulling_the_marker_flips_an_own_move_plan_only(self):
+        """T-D2 (F-D3 matrix), the hypothesis that decides Part D. Each own move's session still
+        buckets LIMITED, so the pass's upsert re-derives plan_only True. Before W13 the re-drive of
+        TRANSPLANTED (row 12's A), RELAUNCHED/UNPROMPTED's C and EXITED's B were each refused
+        ``plan-only`` (measured red at ed6f47072, 2026-10-21), so D ships. With D they finish."""
+        for phase, substate, which in (
+            ("TRANSPLANTED", None, "A"),
+            ("RELAUNCHED", "UNPROMPTED", "C"),
+            ("EXITED", None, "B"),
+        ):
+            rec, seen, popen = self._own_move_pass(phase, substate, owned=True)
+            self.assertTrue(rec.plan_only, (phase, substate))
+            self.assertEqual([w for _p, _s, w, _v in seen], [which], seen)
+            self.assertEqual(seen[0][3], "ok", (phase, seen))
+            self.assertEqual(popen.call_count, 1, (phase, seen))
+            self.assertEqual(popen.call_args[0][2], which)
+            # an own move in flight keeps its fence: it is not handed over
+            self.assertEqual(self._bash_defers(self._SID)[1], "lapsed", phase)
+
+    def test_T_D2_pre_move_in_flight_keeps_its_fence(self):
+        """PRE-MOVE/IN-FLIGHT (the relaunch gap) offers no actuator (act.choose); with the marker
+        gone it is still the reconciler's own move, so the hand-over leaves its fence alone."""
+        rec, seen, popen = self._own_move_pass("PRE-MOVE", "IN-FLIGHT", owned=True)
+        self.assertTrue(rec.plan_only)
+        self.assertEqual(seen, [])
+        popen.assert_not_called()
+        self.assertIsNotNone(M.store.read_fence(self.paths, self._SID))
+        self.assertNotIn("release", [e["ev"] for e in self._events_or_none()])
+
+    def test_T_D2_planned_stays_refused_no_new_moves(self):
+        """The fourth T-D2 row (F-D1's case): a PLANNED record is no move in flight, so removing the
+        marker still means no new moves; a stale move_attempt from an earlier attempt is no pass."""
+        for ma in (None, 0):
+            rec, seen, popen = self._own_move_pass(
+                "PRE-MOVE", "PLANNED", move_attempt=ma
+            )
+            self.assertTrue(rec.plan_only)
+            self.assertEqual([v for _p, _s, _w, v in seen], ["plan-only"], (ma, seen))
+            popen.assert_not_called()
+
+    def test_T_D3_a_plan_only_record_hands_over_its_fence_and_claim(self):
+        """T-D3 (F-D1): a PLANNED record holds owned/<sid> and the run claim; the marker is removed;
+        after one act pass both are gone, the event says ``release plan-only``, and the BASH fence
+        reads ``not-owned``, so the poller lane may drive the session (before W13: ``lapsed`` and a
+        live lr-reconciler claim until the session's own reset closed the record)."""
+        rec, _seen, popen = self._own_move_pass("PRE-MOVE", "PLANNED", None, owned=True)
+        self.assertTrue(rec.plan_only and rec.open)
+        popen.assert_not_called()
+        self.assertIsNone(M.store.read_fence(self.paths, self._SID))
+        self.assertIsNone(M.store.read_claim(self.paths, self._SID))
+        rel = [e for e in self._events() if e["ev"] == "release"]
+        self.assertEqual(
+            [(e["sid"], e.get("detail")) for e in rel], [(self._SID, "plan-only")]
+        )
+        self.assertEqual(self._bash_defers(self._SID), (1, "not-owned"))
+
+    def test_plan_only_finish_off_restores_the_old_gate(self):
+        """Kill switch recon/plan-only-finish.off: every plan-only record is refused again and none
+        is handed over, which is the pre-W13 behaviour exactly (the mutant of both rules)."""
+        self.addCleanup(setattr, M.act, "PLAN_ONLY_FINISH", True)
+        rec, seen, popen = self._own_move_pass(
+            "TRANSPLANTED", None, owned=True, off=True
+        )
+        self.assertEqual([v for _p, _s, _w, v in seen], ["plan-only"])
+        popen.assert_not_called()
+        rec, seen, popen = self._own_move_pass(
+            "PRE-MOVE", "PLANNED", None, owned=True, off=True
+        )
+        self.assertIsNotNone(M.store.read_fence(self.paths, self._SID))
+        self.assertEqual(self._bash_defers(self._SID)[1], "lapsed")
+
+    def test_hand_over_never_touches_a_record_with_a_live_actuator(self):
+        """A plan-only PLANNED record whose own actuator still runs keeps owned/<sid>: deleting it
+        would drop the bash fence's proc-alive rule under a live process."""
+        import time
+
+        now = time.time()
+        ctx = M.Ctx(self.paths, None, self.home)
+        rec = T.Record(
+            sid=self._SID, record_id="r1", plan_only=True, substate="PLANNED"
+        )
+        rec.procs = [T.ProcRole("actuator", 4242, L)]
+        ctx.records = {rec.sid: rec}
+        self._own(rec)
+        live = T.Snapshot(
+            wall=now, uptime_raw=0.0, procs={4242: T.ProcRow(4242, 1, "S", L, "x")}
+        )
+        self.assertEqual(M._release_plan_only(ctx, live), 0)
+        self.assertIsNotNone(M.store.read_fence(self.paths, self._SID))
+        self.assertEqual(
+            M._release_plan_only(ctx, T.Snapshot(wall=now, uptime_raw=0.0)), 1
+        )
+        self.assertIsNone(M.store.read_fence(self.paths, self._SID))
+        rec.plan_only = False  # CONTROL: an acting record is never handed over
+        self._own(rec)
+        self.assertEqual(
+            M._release_plan_only(ctx, T.Snapshot(wall=now, uptime_raw=0.0)), 0
+        )
+
     def test_act_mode_never_claims_a_hook_request_it_may_not_act_on(self):
         """D1.9: the stale NOT_NEEDED claim drains the request from the poller too, so it needs
         recon.on AND acting scope. A hook request survives act mode without either."""

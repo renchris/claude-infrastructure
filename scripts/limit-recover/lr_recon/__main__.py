@@ -24,7 +24,7 @@ import signal
 import subprocess
 import sys
 import time
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Tuple
 
 from lr_recon import (
     act,
@@ -169,6 +169,8 @@ class Ctx:
         self.composer_want: List[
             str
         ] = []  # the sids that asked for a read last pass, in order
+        # D2a: idle composer verdicts kept 60 s per session, at most 4 idle reads per pass
+        self.idle_composer = IdleComposer()
         # --assign-many memo: re-assert only on a changed row set, a failed call, or every 120 s
         self.assign_key: Optional[Tuple[Tuple[str, str, int], ...]] = None
         self.assign_at = 0.0
@@ -361,6 +363,19 @@ def zero_human(paths: T.Paths) -> bool:
     )
 
 
+def fanout_env(paths: T.Paths) -> Mapping[str, str]:
+    """D2a: the effective idle fan-out switch is ``LR_IDLE_FANOUT=on`` OR the operator's file
+    recon/idle-fanout.on, whose absence keeps today's behaviour. An explicit LR_IDLE_FANOUT=off
+    still wins (the hard kill). Computed once per pass (_census) and handed to census.bucket and
+    _read_composer, which read nothing else."""
+    if (
+        os.path.exists(paths.idle_fanout_on)
+        and os.environ.get("LR_IDLE_FANOUT", "") != "off"
+    ):
+        return dict(os.environ, LR_IDLE_FANOUT="on")
+    return os.environ
+
+
 def _census(
     ctx: Ctx,
     snap: T.Snapshot,
@@ -398,6 +413,10 @@ def _census(
     )
     stale_sids = {sid for sid, verdict, _r in stale if verdict == "NOT_NEEDED"}
     autorecover = zero_human(paths)
+    env = fanout_env(paths)  # D2a: once per pass
+    idle_reads = _own(ctx, "idle_composer", None)
+    if idle_reads is not None:
+        idle_reads.begin_pass(now, snap.sessions, _own(ctx, "pass_caps", True))
     for sid, verdict, reason in stale:
         _event(paths, "stale", sid, detail="%s %s" % (verdict, reason))
         req = req_by_sid.get(sid)
@@ -451,8 +470,17 @@ def _census(
             # ahead of the bucket: a record whose session no longer buckets into a record type
             # never reaches upsert, and its pane evidence is read by this pass's derive
             _event(paths, "rebind", s.sid, old.record_id, "pane %d:%d" % tuple(s.pane))
-        _read_composer(s, snap, facts, now, old, _own(ctx, "composer_gate", None))
-        b = census.bucket(s, snap, facts, now)
+        _read_composer(
+            s,
+            snap,
+            facts,
+            now,
+            old,
+            _own(ctx, "composer_gate", None),
+            env=env,
+            idle=idle_reads,
+        )
+        b = census.bucket(s, snap, facts, now, env=env)
         buckets.append(b)
         if (
             b.name == "IMPOSSIBLE"
@@ -937,6 +965,54 @@ def _composer(gate: Optional[ComposerGate], sid: str, pane: T.PaneObs) -> str:
     return gate.read(sid, pane.sock, pane.window_id)
 
 
+IDLE_COMPOSER_TTL_S = (
+    60.0  # D2a (E9): an idle composer verdict is reused this long per session
+)
+IDLE_COMPOSER_READS = 4  # D2a (D16, E9): idle composer reads one pass may start
+
+
+class IdleComposer:
+    """D2a (review D16, E9): with fan-out on, every at-rest session under a fact-covered account had
+    its composer read on every pass (p50 6 s cadence) for the fact's median 10.5 h, focused and
+    occupied panes included, each read up to 5 s on the pass. Now a session's verdict is kept
+    IDLE_COMPOSER_TTL_S, and at most IDLE_COMPOSER_READS idle reads start per pass; the rest return
+    no verdict, which census._idle reads as "not affirmatively empty" (WORKING), the safe side. Every
+    read still goes through the pass's ComposerGate, so it stays inside W9's composer budget. A
+    gate-skipped "unknown" is not kept (no read happened). Limited-session reads are not touched."""
+
+    def __init__(
+        self, ttl_s: float = IDLE_COMPOSER_TTL_S, per_pass: int = IDLE_COMPOSER_READS
+    ) -> None:
+        self.ttl_s, self.per_pass = ttl_s, per_pass
+        self.seen: Dict[str, Tuple[float, str]] = {}
+        self.reads = self.cached = self.capped = 0
+        self.now = 0.0
+
+    def begin_pass(
+        self, now: float, live: Mapping[str, Any], capped: bool = True
+    ) -> None:
+        """``capped`` False (recon/pass-caps.off) lifts the per-pass cap, as for W9's caps."""
+        self.now, self.reads = now, 0
+        self.cached = self.capped = 0
+        self.per_pass = IDLE_COMPOSER_READS if capped else 1 << 30
+        for sid in [s for s in self.seen if s not in live]:
+            del self.seen[sid]
+
+    def read(self, sid: str, fn: Callable[[], str]) -> str:
+        hit = self.seen.get(sid)
+        if hit is not None and 0 <= self.now - hit[0] < self.ttl_s:
+            self.cached += 1
+            return hit[1]
+        if self.reads >= self.per_pass:
+            self.capped += 1
+            return ""
+        self.reads += 1
+        v = fn()
+        if v != "unknown":
+            self.seen[sid] = (self.now, v)
+        return v
+
+
 def _read_composer(
     s: T.SessionObs,
     snap: T.Snapshot,
@@ -944,18 +1020,22 @@ def _read_composer(
     now: float,
     old: Optional[T.Record] = None,
     gate: Optional[ComposerGate] = None,
+    env: Optional[Mapping[str, str]] = None,
+    idle: Optional[IdleComposer] = None,
 ) -> None:
     """The one kitty read per session per pass, spent only where the answer decides a bucket: a
     LIMITED session that is or is about to be a mover (census.bucket holds a draft, W7h), and an
     idle fan-out candidate, which needs an affirmatively EMPTY composer (census._idle) and is read
-    only with fan-out on. ``gate`` (the daemon's per-pass ComposerGate) bounds the reads."""
+    only with fan-out on (``env``: the pass's fanout_env). ``gate`` (the daemon's per-pass
+    ComposerGate) bounds the reads; ``idle`` (D2a) keeps and caps the idle ones."""
+    env = os.environ if env is None else env
     if s.pane and _reads_limited_composer(s, old, snap):
         pane = snap.panes.get("%d:%d" % s.pane)
         if pane is not None and pane.state == "claude":
             s.composer = _composer(gate, s.sid, pane)
         return
     if (
-        os.environ.get("LR_IDLE_FANOUT", "off") != "on"
+        env.get("LR_IDLE_FANOUT", "off") != "on"
         or not s.pane
         or not s.transcript.at_rest
         or (s.transcript.last or {}).get("limit")
@@ -964,7 +1044,10 @@ def _read_composer(
         return
     pane = snap.panes.get("%d:%d" % s.pane)
     if pane is not None and pane.state == "claude":
-        s.composer = _composer(gate, s.sid, pane)
+        if idle is None:
+            s.composer = _composer(gate, s.sid, pane)
+        else:
+            s.composer = idle.read(s.sid, lambda: _composer(gate, s.sid, pane))
 
 
 def _rearm_inputs(rec: T.Record, snap: T.Snapshot) -> Dict[str, str]:
@@ -1615,6 +1698,35 @@ def _lstart_epoch(lstart: str) -> Optional[float]:
         return None
 
 
+IDLE_BOOT_SLOTS = 1  # D2a (D16, E9): the most boot slots idle records hold while a limited one is open
+
+
+def _idle_boot_refusal(ctx: Ctx, rec: T.Record, now: float) -> str:
+    """D2a: an idle move is optional work, a limited relaunch is the guarantee. Idle records take 0
+    boot slots while any overdue limited record waits (W11's slot-priority signal, or an open
+    limited record past its deadline), and at most IDLE_BOOT_SLOTS while any limited record is open,
+    so the limited cohort keeps D_eff >= 5 of the 6 (admit.BootSlots.START). Limited records sort
+    first in _dispatch, so within a pass a limited relaunch never waits on an idle boot. '' = no
+    refusal; nothing is taken either way."""
+    limited = [
+        r
+        for r in ctx.records.values()
+        if r.open and r.kind == "limited" and r.sid != rec.sid
+    ]
+    if not limited:
+        return ""
+    if _own(ctx, "slot_priority_want", "") or any(
+        r.phase not in ("ENGAGED", "MOVED") and admit.overdue(r, now) for r in limited
+    ):
+        return "idle-yields-overdue"
+    held = sum(
+        1
+        for sid in ctx.boots.held
+        if sid != rec.sid and sid in ctx.records and ctx.records[sid].kind == "idle"
+    )
+    return "idle-slot-cap" if held >= IDLE_BOOT_SLOTS else ""
+
+
 def _admit(
     ctx: Ctx, rec: T.Record, which: str, snap: T.Snapshot, now: float
 ) -> Tuple[bool, str]:
@@ -1622,6 +1734,10 @@ def _admit(
     slot, and a limited session's first turn (a move that types its prompt, or a continue) must
     pass Admission.decide: restore budget, CPU brake, per-account pacer, then the probe. The token
     rides to the actuator as LR_ADMIT_TOKEN_PATH."""
+    if which in act.BOOTING and rec.kind == "idle":
+        why = _idle_boot_refusal(ctx, rec, now)
+        if why:
+            return False, why
     if which in act.BOOTING and not ctx.boots.acquire(rec.sid):
         return False, "boot-slots"
     if rec.kind != "limited" or which not in FIRST_TURN:
@@ -2297,6 +2413,33 @@ def _release_terminal(ctx: Ctx) -> int:
     return n
 
 
+def _release_plan_only(ctx: Ctx, snap: T.Snapshot) -> int:
+    """W13 (A7 review F-D1): the HAND-OVER. An open plan-only record that is not finishing its own
+    move (act.own_move_in_flight) gives up owned/<sid> and its run claim, with a ``release
+    plan-only`` event. _release_terminal frees only terminal records and _own_and_charge skips
+    plan-only ones, so before this every PLANNED record kept both when recon/autorecover.on was
+    removed: the poller's fence read heartbeat-fresh, run_claim_take saw a live lr-reconciler, and no
+    lane drove the session until its own reset closed the record. Never while one of its actuators
+    lives (deleting the fence would drop the bash fence's proc-alive rule under it). Keyed by
+    record_id, like _release_terminal. recon/plan-only-finish.off turns it off with Part D."""
+    if not act.PLAN_ONLY_FINISH:
+        return 0
+    n = 0
+    for rec in ctx.records.values():
+        if not rec.open or not rec.plan_only or act.own_move_in_flight(rec):
+            continue
+        if act.live_procs(rec, snap):
+            continue
+        fence = store.read_fence(ctx.paths, rec.sid)
+        if fence is None or fence.record_id != rec.record_id:
+            continue
+        if store.release_fence(ctx.paths, rec.sid, rec.record_id):
+            store.claim_release(ctx.paths, rec.sid, rec.record_id)
+            _event(ctx.paths, "release", rec.sid, rec.record_id, "plan-only")
+            n += 1
+    return n
+
+
 def request_abandon(paths: T.Paths, sid: str, by: str = "operator") -> str:
     """The CLI half of --abandon: one ctl file the running daemon consumes on its next pass."""
     os.makedirs(paths.ctl, 0o700, exist_ok=True)
@@ -2537,6 +2680,8 @@ def _run_pass(ctx: Ctx, force_observe: bool) -> Dict[str, Any]:
     ctx.pass_clock = read_pass_clock(paths)
     ctx.admission.pacer_on_wall = ctx.pass_clock != "pass"
     classify.read_switches(paths.root)
+    # W13: recon/plan-only-finish.off, re-read every pass (no reload)
+    act.PLAN_ONLY_FINISH = not os.path.exists(paths.p(act.PLAN_ONLY_FINISH_OFF))
     # W11: recon/deadline.off | recon/deadline.shadow, re-read every pass (no reload)
     ctx.deadline = admit.deadline_mode(
         paths.p("deadline.off"), paths.p("deadline.shadow")
@@ -2641,6 +2786,7 @@ def _run_pass(ctx: Ctx, force_observe: bool) -> Dict[str, Any]:
     step()
     _ph(ctx, "save")
     _release_terminal(ctx)
+    _release_plan_only(ctx, snap)
     defects = _invariant(ctx, snap, now)
     # one batch: a record whose content did not change is not rewritten (store.save_records)
     store.save_records(paths, list(ctx.records.values()), now)
@@ -2659,6 +2805,11 @@ def _run_pass(ctx: Ctx, force_observe: bool) -> Dict[str, Any]:
         "mints": ctx.pass_mints,
         "composer_reads": gate.reads,
         "composer_skipped": gate.skipped,
+        "idle_composer": [  # D2a: reads, reused verdicts, capped this pass
+            ctx.idle_composer.reads,
+            ctx.idle_composer.cached,
+            ctx.idle_composer.capped,
+        ],
     }
     if mode == "observe":
         store.atomic_write_json(os.path.join(paths.shadow, "last-pass.json"), summary)

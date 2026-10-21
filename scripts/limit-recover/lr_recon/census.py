@@ -6,7 +6,9 @@ step-3 stale reconcile that runs before anything acts.
 
 A focused limited pane MOVES (decision 7, ruled 2026-09-30: move focused panes;
 ``LR_MOVE_FOCUSED=off`` is the kill switch that holds it as HOLD-FOCUS). Idle fan-out stays off
-(``LR_IDLE_FANOUT=on`` to enable). A team lead with live members is HELD:team, unconditionally in v1 (decision 4, ruled
+unless ``env`` says ``LR_IDLE_FANOUT=on``: the daemon passes __main__.fanout_env, which turns it on
+for the operator's file recon/idle-fanout.on (D2a, read every pass; ``LR_IDLE_FANOUT=off`` still
+wins), and nothing here reads os.environ for it when ``env`` is given. A team lead with live members is HELD:team, unconditionally in v1 (decision 4, ruled
 2026-09-30: hold, then continue in place at the reset; a cross-account team move is v2).
 Decision 2 is SETTLED: a pane with live background work holds until the job ends.
 """

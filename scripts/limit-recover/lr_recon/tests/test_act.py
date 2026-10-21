@@ -111,6 +111,78 @@ class ActTests(unittest.TestCase):
         )  # typing a prompt is reversible
         self.assertEqual(g(), (True, "ok"))
 
+    def test_T_D1_plan_only_lets_an_own_move_in_flight_finish(self):
+        """T-D1 (A7 Part D, review F-D2): every allowlisted (phase, actuator) of a move this
+        reconciler spawned for THIS attempt passes the plan-only gate. Before W13 each returned
+        (False, 'plan-only') (measured at ed6f47072, 2026-10-21)."""
+        paths = _paths()
+        open(paths.recon_on, "w").close()
+
+        def g(phase, substate, actuator, move_attempt=1, attempt=1):
+            r = _rec(plan_only=True, phase=phase, substate=substate, attempt=attempt)
+            if move_attempt is not None:
+                r.close["move_attempt"] = move_attempt
+            return A.may_actuate(
+                paths, "act", r, actuator, _snap(), NOW, True, 0, 16, env={}
+            )
+
+        for phase, substate, actuator in (
+            ("TRANSPLANTED", None, "A"),
+            ("TRANSPLANTED", None, "R"),
+            ("EXITED", None, "B"),
+            ("HUSK-RETIRED", "stub", "A-husk"),
+            ("HUSK-RETIRED", "no-stub", "UNCONFIRM"),
+            ("RELAUNCHED", "UNPROMPTED", "C"),
+            ("TARGET-TRANSIENT", None, "C-retry"),
+            ("PANE-GONE", None, "R"),
+            ("PRE-MOVE", "IN-FLIGHT", "R"),
+        ):
+            self.assertEqual(
+                g(phase, substate, actuator), (True, "ok"), (phase, actuator)
+            )
+        # CONTROLS, each still refused: no new move starts while the marker is gone
+        for case in (
+            ("PRE-MOVE", "PLANNED", "A", 1, 1),  # a fresh move
+            (
+                "PRE-MOVE",
+                "PLANNED",
+                "R",
+                1,
+                1,
+            ),  # a fresh move on a launcher-rooted pane
+            ("PRE-MOVE", "IN-FLIGHT", "R", None, 1),  # another lane's: no move_attempt
+            ("PRE-MOVE", "IN-FLIGHT", "R", 1, 2),  # a failed attempt, bumped past it
+            ("TARGET-LIMITED", None, "A", 1, 1),  # a hop: a NEW move from the target
+            ("TARGET-AUTH", None, "A", 1, 1),
+            ("TARGET-AUTH", None, "C", 1, 1),
+            ("EXITED", None, "A", 1, 1),  # an allowlisted phase, a foreign actuator
+            ("RELAUNCHED", "UNPROMPTED", "R", 1, 1),
+        ):
+            self.assertEqual(g(*case), (False, "plan-only"), case)
+        r = _rec(plan_only=True, phase="TRANSPLANTED", attempt=1)
+        r.close["move_attempt"] = 1
+        self.assertTrue(A.own_move_in_flight(r))
+        self.assertFalse(A.own_move_in_flight(_rec(phase="TRANSPLANTED")))
+        r.terminal = T.Terminal(outcome="CLOSED", at=NOW)
+        self.assertFalse(A.own_move_in_flight(r))
+        # kill switch: recon/plan-only-finish.off (read into PLAN_ONLY_FINISH each pass)
+        self.addCleanup(setattr, A, "PLAN_ONLY_FINISH", True)
+        A.PLAN_ONLY_FINISH = False
+        self.assertEqual(g("TRANSPLANTED", None, "A"), (False, "plan-only"))
+
+    def test_the_hard_stop_outranks_an_own_move_finish(self):
+        """With Part D the hard stop stays recon.on / recon/mode (checked before plan-only)."""
+        paths = _paths()
+        r = _rec(plan_only=True, phase="TRANSPLANTED", attempt=1)
+        r.close["move_attempt"] = 1
+        g = lambda mode: A.may_actuate(
+            paths, mode, r, "A", _snap(), NOW, True, 0, 16, env={}
+        )
+        self.assertEqual(g("act"), (False, "recon-off"))
+        open(paths.recon_on, "w").close()
+        self.assertEqual(g("plan"), (False, "mode-plan"))
+        self.assertEqual(g("act"), (True, "ok"))
+
     def test_gate_refuses_a_move_while_the_lead_has_live_members(self):
         """D4.4(d): the last line against a flicker — A never runs over a live member."""
         paths = _paths()

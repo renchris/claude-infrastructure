@@ -20,7 +20,7 @@ import subprocess
 import time
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
-from lr_recon import admit, store
+from lr_recon import act, admit, store
 from lr_recon import types as T
 from lr_recon.clock import run_bounded
 
@@ -204,6 +204,21 @@ def _next_action(rec: T.Record) -> str:
         return "continued in place after %s; paged at %s if not" % (
             _hm(eta),
             _hm(eta + 600),
+        )
+    if rec.plan_only and rec.kind == "limited":
+        # W13 (A7 Part C): nothing in this daemon retries a plan-only record (act.may_actuate
+        # refuses it), so "the reconciler retries" sent the operator waiting (3e929a81, 2026-10-20).
+        # After _NEXT and HELD:team (F-C1): a parked or held record keeps its owner's words, and
+        # the marker may be back since (plan_only is re-derived only on upsert), so say "opened".
+        if act.own_move_in_flight(rec):
+            return (
+                "plan-only: finishing its own move, then stops (hands-off recovery is off for "
+                "the reconciler: no new moves)"
+            )
+        return (
+            "plan-only: opened while hands-off recovery was off for the reconciler "
+            "(recon/autorecover.on), so it does not retry this; the poller lane moves it if "
+            "autorecover.on is set, or run cc-lr recover %s" % rec.sid[:8]
         )
     if st.startswith("WAIT"):
         return "wakes at %s" % _hm(eta) if eta else "the reconciler retries"

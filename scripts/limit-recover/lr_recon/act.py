@@ -73,6 +73,27 @@ KEEPER_OFF = "claim-keeper.off"
 LOAD_TERM_ON = (
     "actuator-load-term.on"  # W8: restores the library's load term for actuators
 )
+# W13 (A7 Part D): removing recon/autorecover.on means "no new moves", never "strand the move half
+# done". plan-only-finish.off restores the old gate (every plan-only record refused, none handed
+# over); __main__ re-reads it every pass into PLAN_ONLY_FINISH. The hard stop stays recon.on/mode.
+PLAN_ONLY_FINISH_OFF = "plan-only-finish.off"
+PLAN_ONLY_FINISH = True
+# The (phase, actuator) pairs that FINISH a move this reconciler spawned (A7 review F-D2): an
+# explicit allowlist, because "past PRE-MOVE" also admits TARGET-LIMITED's A, which is a new move
+# (a hop from the target), and the live-watcher case that leaves A in ctx.actions.
+OWN_MOVE_FINISH = frozenset(
+    {
+        ("TRANSPLANTED", "A"),  # row 12's re-drive to the same target
+        ("TRANSPLANTED", "R"),
+        ("EXITED", "B"),
+        ("HUSK-RETIRED", "A-husk"),
+        ("HUSK-RETIRED", "UNCONFIRM"),
+        ("RELAUNCHED", "C"),
+        ("TARGET-TRANSIENT", "C-retry"),
+        ("PANE-GONE", "R"),
+        ("PRE-MOVE", "R"),  # IN-FLIGHT only (own_move_in_flight)
+    }
+)
 _HEX = re.compile(r"[0-9a-f]{6,32}")
 # The wrapper's own ps row, anchored on its interpreter so a grep or pgrep row that merely quotes
 # the token is never adopted under an actuator name (A6 S-11).
@@ -583,6 +604,25 @@ def _reap_older(d: str, now: float) -> int:
 # ── the gate ────────────────────────────────────────────────────────────────────────────────────
 
 
+def own_move_in_flight(rec: T.Record, actuator: Optional[str] = None) -> bool:
+    """A7 Part D: a move THIS reconciler spawned for this very attempt (close.move_attempt, stamped
+    at __main__._dispatch before the spawn, == rec.attempt) and has not finished: past PRE-MOVE in an
+    OWN_MOVE_FINISH phase, or PRE-MOVE/IN-FLIGHT in its relaunch gap. With ``actuator``, the (phase,
+    actuator) pair must be on the allowlist too. A plan-only IN-FLIGHT record moved by another lane
+    has no move_attempt, and a failed attempt bumped past it, so both stay refused."""
+    if not PLAN_ONLY_FINISH or rec.terminal is not None:
+        return False
+    ma = rec.close.get("move_attempt")
+    if ma is None or ma != rec.attempt:
+        return False
+    if rec.phase == "PRE-MOVE" and rec.substate != "IN-FLIGHT":
+        return False
+    phases = {p for p, _a in OWN_MOVE_FINISH}
+    if actuator is None:
+        return rec.phase in phases
+    return (rec.phase, actuator) in OWN_MOVE_FINISH
+
+
 def may_actuate(
     paths: T.Paths,
     mode: str,
@@ -601,7 +641,7 @@ def may_actuate(
         return False, "recon-off"
     if mode != "act":
         return False, "mode-%s" % mode
-    if rec.plan_only:
+    if rec.plan_only and not own_move_in_flight(rec, actuator):
         return False, "plan-only"
     if not rec.open:
         return False, "terminal"
