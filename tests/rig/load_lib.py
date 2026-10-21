@@ -1663,6 +1663,22 @@ def prod_max_gap(t0: float, t1: float) -> float:
     return max(_gaps(ts) or [0.0])
 
 
+ARM_ENV_KEY = re.compile(r"^LR_RIG_[A-Z0-9_]+$")
+
+
+def arm_env(a: Dict[str, Any]) -> Dict[str, str]:
+    """One arm's own environment, meta.arms[name].env (lr-load-harness.sh --arm-env ARM:K=V): D2 E1's
+    red arm runs today's `--slots 4` (LR_RIG_MOVE_SLOTS=4) while the cure arm keeps the matrix's 1, in
+    one pair. LR_RIG_* names only, values as strings; absent = the arms' shared environment, as before.
+    Applied UNDER the driver's fixed per-arm keys, so it can never move an arm's root, tree or band."""
+    e = a.get("env") if isinstance(a, dict) else None
+    if not isinstance(e, dict):
+        return {}
+    return {
+        k: str(v) for k, v in e.items() if isinstance(k, str) and ARM_ENV_KEY.match(k)
+    }
+
+
 def drive(run: str) -> int:
     """Run one pair (or one arm) end to end from meta.json; writes verdict.line and done.json.
     Every gate fails to NO-VERDICT (rc 3) and never waits for load."""
@@ -1766,6 +1782,7 @@ def _drive(run: str, meta: Dict[str, Any]) -> int:
         for name in [a for a in ("cure", "red") if a in arms]:
             a = arms[name]
             env = dict(os.environ)
+            env.update(arm_env(a))
             env.update(
                 {
                     "LR_RIG_ROOT": a["root"],

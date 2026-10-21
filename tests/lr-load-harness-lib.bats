@@ -468,3 +468,21 @@ assert turn("99999992-0000-4000-8000-000000000002")[-1] == "limit"          # no
 print("ok")' "$RIGD/stub-claude.py" "$HOME/cfg-b" >/dev/null
   [ "$status" -eq 0 ]
 }
+
+@test "arm env (W16, D2 E1's red arm): meta.arms[name].env reaches that arm only, LR_RIG_* names only, under the fixed keys" {
+  run py -c 'import sys
+sys.path.insert(0, sys.argv[1])
+import load_lib as L
+assert L.arm_env({"root": "/tmp/lrh-x-cure"}) == {}                       # absent: the shared env, as before
+assert L.arm_env({"env": {"LR_RIG_MOVE_SLOTS": 4}}) == {"LR_RIG_MOVE_SLOTS": "4"}
+assert L.arm_env({"env": {"HOME": "/x", "PATH": "/y", "lr_rig_x": "1", "LR_RIG_OK": "1"}}) == {"LR_RIG_OK": "1"}
+assert L.arm_env({"env": "LR_RIG_MOVE_SLOTS=4"}) == {}
+src = open(L.__file__).read()
+# applied BEFORE the fixed per-arm keys, so LR_RIG_ROOT/TREE/BAND can never be moved by it
+assert src.index("env.update(arm_env(a))") < src.index("\"LR_RIG_ROOT\": a[\"root\"]")
+print("ok")' "$RIGD"
+  [ "$status" -eq 0 ] && [ "$output" = ok ] || { echo "$output"; false; }
+  # the harness refuses anything but ARM:LR_RIG_NAME=VALUE before it touches anything
+  run /bin/bash "$RIGD/lr-load-harness.sh" run --arm-env red:HOME=/tmp
+  [ "$status" -eq 2 ] && [[ "$output" == *"--arm-env ARM:LR_RIG_NAME=VALUE"* ]] || { echo "rc $status: $output"; false; }
+}

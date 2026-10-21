@@ -6,7 +6,12 @@
 #   bash tests/rig/lr-load-harness.sh preflight [--matrix F] [--arms cure,red] [--selftest]
 #   bash tests/rig/lr-load-harness.sh run --matrix F [--arms cure,red] [--red band|tree:<sha>@31|tree:<sha>@20]
 #        [--bg-topup N] [--df-topup N] [--typed-relaunch] [--kitty main] [--out DIR] [--detach]
+#        [--arm-env ARM:LR_RIG_K=V]…
 #   bash tests/rig/lr-load-harness.sh status ID | wait ID [--max 270] | stop [ID] | calibrate | analyze DIR…
+#
+# --arm-env gives ONE arm its own LR_RIG_* variable (meta.arms[ARM].env, applied by load_lib.arm_env
+# under the driver's fixed per-arm keys). D2 E1's pair: `--arm-env red:LR_RIG_MOVE_SLOTS=4` runs the red
+# arm's shed batch at today's --slots 4 while the cure arm keeps the matrix's 1 (LR_SUSTAINED_LOAD W16).
 #
 # Arms. cure: `git archive HEAD` in /tmp/lr-harness/trees/<sha> (C14: never the live worktree a /ship
 # may be rebasing), at the caller's band, which must read 31 — anything less is
@@ -47,10 +52,16 @@ gate_band() { # sets b: the caller's own band, read first (B1 §4); a clamped pa
 load1() { /usr/sbin/sysctl -n vm.loadavg | awk '{print $2}'; }
 
 cmd="${1:-}"; [ $# -gt 0 ] && shift
-MATRIX="" ARMS="cure,red" RED="band" BG=0 DF=0 TYPED=0 KITTY=main OUT="" DETACH=0 MAXW=270 SELFTEST=0
+MATRIX="" ARMS="cure,red" RED="band" BG=0 DF=0 TYPED=0 KITTY=main OUT="" DETACH=0 MAXW=270 SELFTEST=0 ARM_ENV=""
 parse() {
   while [ $# -gt 0 ]; do
     case "$1" in
+      --arm-env)
+        case "${2:-}" in
+          cure:LR_RIG_*=*|red:LR_RIG_*=*) ARM_ENV="$ARM_ENV$2"$'\n' ;;
+          *) die "--arm-env ARM:LR_RIG_NAME=VALUE (ARM cure|red), not '${2:-}'" ;;
+        esac
+        shift 2 ;;
       --matrix) MATRIX="$2"; shift 2 ;;
       --arms) ARMS="$2"; shift 2 ;;
       --red) RED="$2"; shift 2 ;;
@@ -137,9 +148,9 @@ case "$cmd" in
     printf '%s\n' "$ID" > "$H/last"
     AUTOREC=off; [ -e "$HOME/.reso/limit-recover/recon/autorecover.on" ] && AUTOREC=on   # mirror production (§6.3), read-only
     "${PY[@]}" - "$RUN" "$ID" "$MATRIX" "$ARMS" "$SHA" "$CURE_TREE" "$RED_SHA" "$RED_TREE" "$RED_BAND" \
-      "$SOCK" "$BG" "$DF" "$TYPED" "$AUTOREC" "$OUT" "$HERE" <<'PY' || die "meta"
+      "$SOCK" "$BG" "$DF" "$TYPED" "$AUTOREC" "$OUT" "$HERE" "$ARM_ENV" <<'PY' || die "meta"
 import json, math, os, re, sys, time
-(run, rid, matrix, arms, sha, ctree, rsha, rtree, rband, sock, bg, df, typed, autorec, out, here) = sys.argv[1:]
+(run, rid, matrix, arms, sha, ctree, rsha, rtree, rband, sock, bg, df, typed, autorec, out, here, aenv) = sys.argv[1:]
 sys.path.insert(0, here)
 import rig_lib, load_lib
 f = json.load(open(matrix))
@@ -159,6 +170,12 @@ for a in arms.split(","):
         arm["red"] = {"root": "/tmp/lrh-%s-red" % tag, "tree": rsha, "tree_dir": rtree, "band": rband, "hb_wait_s": hb_red}
     else:
         sys.exit("unknown arm %s" % a)
+for ln in aenv.splitlines():
+    name, _, kv = ln.partition(":")
+    k, _, v = kv.partition("=")
+    if name not in arm:
+        sys.exit("--arm-env %s: no such arm in --arms %s" % (name, arms))
+    arm[name].setdefault("env", {})[k] = v
 now = time.time()
 n_extra = int(f.get("busy_extra") or 0) + sum(b["rows"] for b in rig_lib.batches(f))  # W4b move rows are panes too
 meta = {"id": rid, "matrix": os.path.abspath(matrix), "n": n, "n_extra": n_extra, "arms": arm,
