@@ -3871,17 +3871,19 @@ hf_kid_shadow_row() { # $1=pane $2=kitty-resolved tty (may be empty) $3=where �
 # thread in the background band (PRI ≤ 4, App Nap / screen lock) would not drain the successor's output,
 # so proceeding hands the session to a starved terminal. Three bounded `ps -M` samples of the main
 # thread; the majority decides. rc 0 above the band · 1 background-banded · 2 unreadable (no proof).
-hf_kitty_band() { # $1=kitty pid → rc as above; HF_KITTY_BAND_READ = the samples
-  local k="${1:-}" ps="${HF_KID_PS_BIN:-/bin/ps}" i=0 p low=0 high=0
+# $2 is the lowest band that counts as above (default 5, i.e. ≤ 4 is low); W12b's terminal key asks 31.
+hf_kitty_band() { # $1=kitty pid [$2=floor] → rc as above; HF_KITTY_BAND_READ = the samples
+  local k="${1:-}" floor="${2:-5}" ps="${HF_KID_PS_BIN:-/bin/ps}" i=0 p low=0 high=0
   HF_KITTY_BAND_READ=""
   case "$k" in ''|*[!0-9]*) return 2 ;; esac
+  case "$floor" in ''|*[!0-9]*) floor=5 ;; esac
   while [ "$i" -lt "${HF_KITTY_BAND_SAMPLES:-3}" ]; do
     i=$((i + 1))
     # awk drains (no `exit`): an early exit SIGPIPEs ps and pipefail would turn a good reading into 141
     p="$(hf_bounded_s 5 "$ps" -M -p "$k" 2>/dev/null | awk 'NR == 2 { print $6 }')" || p=""
     p="${p%%[!0-9]*}"
     HF_KITTY_BAND_READ="$HF_KITTY_BAND_READ ${p:-?}"
-    case "$p" in '') ;; *) if [ "$p" -le 4 ]; then low=$((low + 1)); else high=$((high + 1)); fi ;; esac
+    case "$p" in '') ;; *) if [ "$p" -lt "$floor" ]; then low=$((low + 1)); else high=$((high + 1)); fi ;; esac
   done
   HF_KITTY_BAND_READ="${HF_KITTY_BAND_READ# }"
   [ "$((low + high))" -ge 2 ] || return 2
@@ -4419,15 +4421,107 @@ hf_recycle_precheck_load_bound() { # → the precheck's per-core bound; nothing 
     printf "%s", p }'
 }
 
-hf_recycle_load_gate() { # $1=pane tty [$2=bound, the precheck's] → 0 proceed · 1 hold (HF_LOAD_HOLD_WHAT)
-  local bound lpc
+# ── THE TYPED-RELAUNCH HOLD, RE-KEYED (lr-sustained-load 2026-10-20, W12b; REPORT §3.3) ─────────────
+# Under the operator's 15-40/core design band the 24/20 load comparison above never releases, so a move
+# whose stage was refused held HELD:load for good. The harm this hold exists for is one thing: a relaunch
+# TYPED over a backlogged kitty (F1, pane 44, 42-45/core). "Key it on the resource itself, not on load."
+# A mode file chooses the key, read every call:
+#   load      the 24/20 per-core comparison, today's bytes (the code default)
+#   terminal  a bounded `kitty @ ls --match id:<P>` on the verified socket answering within 2 s, AND
+#             kitty's main thread at band ≥ 31 over 3 samples. Either missing holds `unreachable`, a
+#             terminal-side hold the reconciler retries as TRANSIENT (classify._TERMINAL_TRANSIENT),
+#             never HELD:load. A pane that is not kitty's has no such resource: the load comparison
+#             decides there, as today.
+# Monotone: `load` from the env or the file wins, so `printf load > …/typed-relaunch-hold.mode` is the
+# kill switch whatever the env says. Seam HF_TYPED_RELAUNCH_HOLD (load|terminal).
+hf_typed_relaunch_hold_mode() { # → load|terminal
+  local e="${HF_TYPED_RELAUNCH_HOLD:-}" f=""
+  f="$(head -c 16 "${LR_STATE_DIR:-$HOME/.reso/limit-recover}/typed-relaunch-hold.mode" 2>/dev/null | tr -dc '[:lower:]')" || f=""
+  if [ "$e" = load ] || [ "$f" = load ]; then printf load; return 0; fi
+  if [ "$e" = terminal ] || [ "$f" = terminal ]; then printf terminal; return 0; fi
+  printf load
+}
+
+# Is the terminal that would receive the typed relaunch responsive? Both reads are bounded and neither
+# waits for anything to change: our own bound firing is "not responsive" (a hold that is retried), never
+# a verdict about the session. rc 0 responsive · 1 not (HF_TERM_WHY) · 2 not a kitty pane (no resource
+# to key on; the caller falls back to the load comparison). Seams: HF_TR_LS_BOUND_S (2), HF_TR_BAND_MIN
+# (31), the band's own HF_KID_PS_BIN and HF_KITTY_BAND_SAMPLES.
+hf_terminal_responsive() { # $1=pane id (the kitty window id) → rc as above
+  local p="${1##*:}" sock kpid lrc=0 brc=0 b="${HF_TR_LS_BOUND_S:-2}" floor="${HF_TR_BAND_MIN:-31}"
+  HF_TERM_WHY=""
+  kitty_identity || return 2
+  case "$b" in ''|*[!0-9]*) b=2 ;; esac
+  case "$floor" in ''|*[!0-9]*) floor=31 ;; esac
+  sock="${CC_TERM_KITTY_TO:-${KITTY_LISTEN_ON:-}}"
+  case "$sock" in unix:/*) ;; /*) sock="unix:$sock" ;; *) sock="" ;; esac
+  if [ -z "$sock" ]; then HF_TERM_WHY="no verified kitty control socket to ask"; return 1; fi
+  case "$p" in ''|*[!0-9]*) HF_TERM_WHY="pane '${1:-}' carries no kitty window id to match"; return 1 ;; esac
+  hf_bounded_s "$b" "${CC_KITTY_BIN:-${CC_TERM_KITTY:-kitty}}" @ --to "$sock" ls --match "id:$p" >/dev/null 2>&1 || lrc=$?
+  if [ "$lrc" != 0 ]; then
+    HF_TERM_WHY="'kitty @ ls --match id:$p' on ${sock#unix:} did not answer within ${b}s (rc $lrc)"; return 1
+  fi
+  kpid="${HF_KID_KPID:-${CC_TERM_KITTY_PID:-}}"
+  hf_kitty_band "$kpid" "$floor" || brc=$?
+  case "$brc" in
+    0) return 0 ;;
+    1) HF_TERM_WHY="kitty ${kpid}'s main thread is below band ${floor} [$HF_KITTY_BAND_READ], so it would not drain a typed line" ;;
+    *) HF_TERM_WHY="kitty ${kpid:-<pid unknown>}'s main-thread band is unreadable [$HF_KITTY_BAND_READ], so its responsiveness has no proof" ;;
+  esac
+  return 1
+}
+
+# THE STAGE RETRY (G2 R8's follow-up; no ruling needed). A move whose hf_succ_stage refused — "watcher
+# has no readable start time" is a single ps read — types its relaunch, and so meets the hold above. A
+# staged relaunch is exempt from it, so before holding, re-read the watcher's lstart (bounded) and stage
+# ONCE more. Once per recycle (HF_STAGE_RETRIED), and only where a stage can exist: a watcher of ours, a
+# typed-path cmdfile, a non-remote shape and the successor switch on. HF_STAGE_RETRY says what happened,
+# for the hold's row. Kill switch: `touch ~/.reso/limit-recover/stage-retry.off` (or HF_STAGE_RETRY_GATE=off).
+hf_succ_stage_retry() { # $1=pane tty → 0 staged on the retry · 1 not (HF_STAGE_RETRY)
+  local wl
+  HF_STAGE_RETRY=""
+  if [ "${HF_STAGE_RETRY_GATE:-on}" = off ] || [ -e "${LR_STATE_DIR:-$HOME/.reso/limit-recover}/stage-retry.off" ]; then
+    HF_STAGE_RETRY=off; return 1
+  fi
+  { [ -n "${WATCHER_PID:-}" ] && [ -n "${cmdfile:-}" ] && [ -n "${1:-}" ] && command -v hf_succ_stage >/dev/null 2>&1; } \
+    || { HF_STAGE_RETRY=n/a; return 1; }
+  { [ "$(hf_succ_mode)" != remote ] && [ "${CC_PANE_SUCCESSOR:-on}" != off ]; } || { HF_STAGE_RETRY=n/a; return 1; }
+  if [ "${HF_STAGE_RETRIED:-0}" = 1 ]; then HF_STAGE_RETRY=spent; return 1; fi
+  HF_STAGE_RETRIED=1
+  wl="$(TZ=UTC LC_ALL=C hf_bounded_s 5 ps -o lstart= -p "$WATCHER_PID" 2>/dev/null | tr -s ' ' | sed 's/^ *//; s/ *$//' || true)"
+  if [ -z "$wl" ]; then
+    HF_STAGE_RETRY="refused (watcher $WATCHER_PID still has no readable start time)"; return 1
+  fi
+  if hf_succ_stage "$1" "$cmdfile"; then
+    HF_STAGE_RETRY=staged
+    emit_recycle_event recycle-stage-retried "" "${SID:-}" "the first stage was refused; re-read watcher $WATCHER_PID (lstart $wl) and staged on the retry, so the relaunch is keystroke-free and the typed-relaunch hold does not apply" || true
+    return 0
+  fi
+  HF_STAGE_RETRY=refused; return 1
+}
+
+hf_recycle_load_gate() { # $1=pane tty [$2=bound, the precheck's] [$3=pane id, default $SID] → 0 proceed · 1 hold on load · 3 hold, terminal not responsive (HF_LOAD_HOLD_WHAT either way)
+  local bound lpc mode=load trc=0
   HF_LOAD_HOLD_WHAT=""
   bound="${2:-$(hf_recycle_load_bound)}"
   [ -n "$bound" ] || return 0
   if [ -n "${WATCHER_PID:-}" ] && hf_succ_ours_staged "${1:-}" "$WATCHER_PID"; then return 0; fi
+  # W12b: the key (mode file), and a refused stage asked once more before any hold. Both are guarded so
+  # a suite that extracts this function alone keeps today's load comparison.
+  if command -v hf_typed_relaunch_hold_mode >/dev/null 2>&1; then mode="$(hf_typed_relaunch_hold_mode)"; fi
+  if [ "$mode" = terminal ]; then
+    hf_terminal_responsive "${3:-${SID:-}}" || trc=$?
+    case "$trc" in
+      0) return 0 ;;
+      1) if command -v hf_succ_stage_retry >/dev/null 2>&1 && hf_succ_stage_retry "${1:-}"; then return 0; fi
+         HF_LOAD_HOLD_WHAT="terminal not responsive: $HF_TERM_WHY; the relaunch would have to be typed ($(hf_succ_mode) recycle, no successor of ours staged for ${1:-<no tty>})"
+         return 3 ;;
+    esac
+  fi
   # An unreadable load prints nothing, which compares as 0 below and proceeds.
   lpc="$(hf_load_per_core || true)"
   awk -v l="$lpc" -v b="$bound" 'BEGIN { exit !(l + 0 > b + 0) }' || return 0
+  if command -v hf_succ_stage_retry >/dev/null 2>&1 && hf_succ_stage_retry "${1:-}"; then return 0; fi
   HF_LOAD_HOLD_WHAT="load ${lpc}/core is above the ${bound}/core bound and the relaunch would have to be typed ($(hf_succ_mode) recycle, no successor of ours staged for ${1:-<no tty>})"
   return 1
 }
@@ -14162,11 +14256,22 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
       echo "load: not gated (the recycle's load hold is off)"
     else
       PRP_LPC="$(hf_load_per_core || true)"
-      if ! HF_LOAD_PER_CORE="$PRP_LPC" hf_recycle_load_gate "" "$PRP_LB"; then
-        echo "load: ${PRP_LPC}/core is above the ${PRP_LB}/core bound, and this move types its relaunch — held before anything is transplanted"
-        prp_verdict "HELD:load" 3
+      # W12b: under the `terminal` key the same predicate asks the pane's kitty instead (rc 3), and a
+      # terminal that is not responsive is HELD:unreachable here, which the reconciler retries as
+      # TRANSIENT, never HELD:load.
+      PRP_LG_RC=0; HF_LOAD_PER_CORE="$PRP_LPC" hf_recycle_load_gate "" "$PRP_LB" "$PRP_PANE" || PRP_LG_RC=$?
+      case "$PRP_LG_RC" in
+        3) echo "load: not compared (typed-relaunch hold keyed on the terminal) — $HF_LOAD_HOLD_WHAT; held before anything is transplanted"
+           prp_verdict "HELD:unreachable" 3 ;;
+        0) ;;
+        *) echo "load: ${PRP_LPC}/core is above the ${PRP_LB}/core bound, and this move types its relaunch — held before anything is transplanted"
+           prp_verdict "HELD:load" 3 ;;
+      esac
+      if [ "$(hf_typed_relaunch_hold_mode)" = terminal ] && [ -z "$HF_TERM_WHY" ] && kitty_identity; then
+        echo "load: not compared (typed-relaunch hold keyed on the terminal: kitty answered within ${HF_TR_LS_BOUND_S:-2}s, main-thread band [$HF_KITTY_BAND_READ])"
+      else
+        echo "load: ${PRP_LPC:-unreadable}/core (bound ${PRP_LB}/core)"
       fi
-      echo "load: ${PRP_LPC:-unreadable}/core (bound ${PRP_LB}/core)"
     fi
   fi
   #   KITTY next: the recycle's own up-front probe, with its retry for a detached caller (the move
@@ -19708,10 +19813,22 @@ recycle_fire_commit() {
   # exit actuators, so a held recycle owes nothing and the session stays alive. `tty` is
   # recycle_fire's local. Only the gate's own verdict 1 holds: a suite that extracts this function
   # without the gate gets 127, and proceeds as it did before the gate existed.
-  rcy_load_rc=0; hf_recycle_load_gate "${tty:-}" || rcy_load_rc=$?
+  # W12b: the gate may first retry a refused stage (hf_succ_stage_retry), and under the `terminal` key
+  # it holds 3, `unreachable`, a terminal-side hold, instead of on load. A load hold here is after the
+  # confirm, and its row carries a running box-wide count of those (G2 R8, read by W6) plus what the
+  # stage retry did: `held_load_after_confirm=<n> stage_retry=<staged|refused…|off|n/a|spent>`.
+  rcy_load_rc=0; HF_STAGE_RETRY=""; hf_recycle_load_gate "${tty:-}" || rcy_load_rc=$?
   if [ "$rcy_load_rc" = 1 ]; then
     if hf_recycle_subject_gone; then hf_recycle_subject_yield "at the load hold"; return 0; fi
-    hf_recycle_hold load "$HF_LOAD_HOLD_WHAT" "$HF_LOAD_HOLD_WHAT; re-run once the load falls"
+    rcy_hl_f="${LR_STATE_DIR:-$HOME/.reso/limit-recover}/held-load-after-confirm.count"
+    rcy_hl_n="$(head -c 12 "$rcy_hl_f" 2>/dev/null | tr -dc '0-9' || true)"
+    rcy_hl_n=$(( ${rcy_hl_n:-0} + 1 ))
+    { mkdir -p "${rcy_hl_f%/*}" && printf '%s\n' "$rcy_hl_n" > "$rcy_hl_f.$$" && mv -f "$rcy_hl_f.$$" "$rcy_hl_f"; } 2>/dev/null \
+      || rm -f "$rcy_hl_f.$$" 2>/dev/null || true
+    hf_recycle_hold load "$HF_LOAD_HOLD_WHAT; held_load_after_confirm=$rcy_hl_n stage_retry=${HF_STAGE_RETRY:-n/a}" "$HF_LOAD_HOLD_WHAT; re-run once the load falls"
+  elif [ "$rcy_load_rc" = 3 ]; then
+    if hf_recycle_subject_gone; then hf_recycle_subject_yield "at the terminal hold"; return 0; fi
+    hf_recycle_hold unreachable "$HF_LOAD_HOLD_WHAT; stage_retry=${HF_STAGE_RETRY:-n/a}" "$HF_LOAD_HOLD_WHAT; re-run once the terminal answers"
   fi
   # THE RESUME DEBT OPENS HERE, before the point of no return (CLOSE_RESUME_CUSTODY D4). From the
   # /exit on, the only thing standing between this session and silent abandonment is the watcher,

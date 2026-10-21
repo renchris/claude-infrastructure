@@ -33,7 +33,7 @@
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-  HF="$REPO/scripts/handoff-fire.sh"
+  HF="${HF_OVERRIDE:-$REPO/scripts/handoff-fire.sh}"
 
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   # HERMETICITY (land ratchet): no live machine load, and the three seams that do NOT resolve
@@ -154,6 +154,7 @@ kid_setup() {
     '  "-E -ww -o command= -p "*) cat "$F/env.$L" 2>/dev/null ;;' \
     '  "-axo pid=,ppid=,stat=,tty=,lstart=,comm=") cat "$F/table" ;;' \
     '  "-ww -o command= -p "*) cat "$F/argv.$L" 2>/dev/null ;;' \
+    '  "-M -p "*) printf "USER PID TT %%CPU STAT PRI STIME UTIME COMMAND\nchris %s ?? 1.0 S 47T 0:01.00 0:02.00 kitty\n" "$L" ;;' \
     'esac' > "$KF/ps"
   chmod +x "$KF/ps"
   printf '%s\n' "  610     1 S    ??       $LS /Applications/kitty.app/Contents/MacOS/kitty" \
@@ -227,6 +228,38 @@ norm() { printf '%s\n' "$1" | sed -E 's/ over [0-9]+s/ over Ns/g'; }
       bash "$HF" --probe-recycle-preconditions --source-pane "$PANE" --source-session "$SID"
   [[ "$output" != *"identity: kernel"* ]] || { echo "$output"; false; }
   [ ! -s "$KF/calls" ] && [ -z "$(kid_rows)" ] || false
+}
+
+# W12b (docs/plans/LR_SUSTAINED_LOAD_IMPL.md § W12b lever 2): the precheck asks the typed-relaunch hold's
+# own predicate, so under the `terminal` key a move that would type its relaunch (the successor off) at
+# 40/core is decided by the pane's kitty, never by load. RED on the parent (c85b7063b): both terminal
+# cases read HELD:load. The kitty binary is a stub answering per $KF/kitty.rc; ps -M reads band 47.
+tr_probe() { # $1=kitty rc  $@=extra env
+  local krc="$1"; shift
+  printf '%s\n' '#!/bin/bash' "exit $krc" > "$KF/kitty"; chmod +x "$KF/kitty"
+  kid_probe HF_PRECHECK_TYPED_RELAUNCH=1 CC_PANE_SUCCESSOR=off CC_FIRE_CAPACITY_GATE=on HF_LOAD_PER_CORE=40.00 \
+    CC_TERM_KITTY="$KF/kitty" "$@"
+}
+
+@test "W12b precheck, key terminal: a kitty that does not answer is HELD:unreachable before the transplant, never HELD:load" {
+  kid_setup
+  printf terminal > "$LR_STATE_DIR/typed-relaunch-hold.mode"
+  tr_probe 1
+  [ "$(printf '%s\n' "$output" | sed -n 's/^verdict: //p')" = HELD:unreachable ] || { echo "$output"; false; }
+  [[ "$output" == *"load: not compared (typed-relaunch hold keyed on the terminal) — terminal not responsive: 'kitty @ ls --match id:$PANE'"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"kitty_probe:"* ]] || { echo "held by the kitty probe, not by the load step: $output"; false; }
+}
+
+@test "W12b precheck, key terminal: a responsive kitty at 40/core is not held on load; key load (the kill switch) holds HELD:load as today" {
+  kid_setup
+  printf terminal > "$LR_STATE_DIR/typed-relaunch-hold.mode"
+  tr_probe 0
+  [[ "$output" == *"load: not compared (typed-relaunch hold keyed on the terminal: kitty answered within 2s, main-thread band [47 47 47])"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"HELD:load"* ]] || { echo "$output"; false; }
+  printf load > "$LR_STATE_DIR/typed-relaunch-hold.mode"
+  tr_probe 0 HF_TYPED_RELAUNCH_HOLD=terminal
+  [ "$(printf '%s\n' "$output" | sed -n 's/^verdict: //p')" = HELD:load ] || { echo "$output"; false; }
+  [[ "$output" == *"load: 40.00/core is above the 20/core bound, and this move types its relaunch"* ]] || { echo "$output"; false; }
 }
 
 @test "subagent_dir_for_sid: a subagents dir in the FIRST of two config roots is FOUND" {
