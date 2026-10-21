@@ -14471,6 +14471,34 @@ if [ "${1:-}" = "self-close" ]; then
     --dry-run)     SC_DRY=1; shift ;;
     *) echo "!! unknown self-close arg: $1" >&2; exit 1 ;;
   esac; done
+  # ── TERMINAL-INTENT RECORD (reboot-resume R1, 2026-10-21) ──────────────────────────────────────
+  # A session that is retiring itself must not come back as an idle pane after a reboot: on
+  # 2026-10-21 5d19ef73 was inside `self-close --terminal` when the power went and boot-resume
+  # relaunched it. The record is written as self-close STARTS, read by the restore classifier
+  # (verdict RETIRED), and removed on every scripted exit except the two that retire the pane (the
+  # /exit typed, or the confirmed-shell close). A SIGNAL keeps it: a shutdown or the /exit interrupt
+  # is exactly the death the record exists to explain, and bash runs the EXIT trap on those too.
+  # Own-session closes only — a --fired-peer or remote close is retiring someone else's session.
+  # Best-effort throughout: a record that cannot be written never blocks the close.
+  SC_INTENT_FILE="" SC_INTENT_KEEP=0
+  _sc_intent_sid="${CLAUDE_CODE_SESSION_ID:-}"
+  if [ "$SC_DRY" = 0 ] && [ -z "$SC_FIRED_PEER" ] && [ -z "$SC_SOURCE_PANE" ] && [ -n "$_sc_intent_sid" ] \
+     && [ "$_sc_intent_sid" = "$(printf '%s' "$_sc_intent_sid" | tr -cd 'A-Za-z0-9_-')" ]; then
+    _sc_intent_dir="${CC_SELF_CLOSE_INTENT_DIR:-$HOME/.claude/autonomy/self-close-intent}"
+    if mkdir -p "$_sc_intent_dir" 2>/dev/null \
+       && printf 'ts=%s pid=%s pane=%s mode=%s successor=%s\n' "$(date +%s)" "$$" "${SC_SID:-?}" \
+            "$([ "$SC_TERMINAL" = 1 ] && echo terminal || echo successor)" "${SC_SUCCESSOR:-none}" \
+            > "$_sc_intent_dir/$_sc_intent_sid" 2>/dev/null; then
+      SC_INTENT_FILE="$_sc_intent_dir/$_sc_intent_sid"
+      # shellcheck disable=SC2329  # invoked indirectly by the EXIT trap below
+      _sc_intent_exit() { [ "$SC_INTENT_KEEP" = 1 ] || rm -f "$SC_INTENT_FILE" 2>/dev/null; return 0; }
+      trap '_sc_intent_exit' EXIT
+      trap 'SC_INTENT_KEEP=1; exit 129' HUP
+      trap 'SC_INTENT_KEEP=1; exit 130' INT
+      trap 'SC_INTENT_KEEP=1; exit 143' TERM
+    fi
+  fi
+  unset _sc_intent_sid _sc_intent_dir
   # Resolve the terminal verdict HERE — at mode entry, ahead of the FIRST consumer — not just before
   # the watcher detach at :3016. That hoist (item 191d1fc4143c stage 1) fixed SC_TTY, but two as_tty
   # calls run ~160 lines EARLIER and were left unpinned, so on a box where KITTY_* was inherited into
@@ -14505,6 +14533,7 @@ if [ "${1:-}" = "self-close" ]; then
   # A BACKGROUND JOB closing ITSELF has no pane at all: it stops its job (hf_bgjob_self_close).
   if [ -z "$SC_SOURCE_PANE$SC_SOURCE_SESSION$SC_FIRED_PEER" ] && [ "$SC_SID_EXPLICIT" = 0 ] && hf_bgjob_self; then
     hf_bgjob_rc=0; hf_bgjob_self_close || hf_bgjob_rc=$?
+    [ "$hf_bgjob_rc" = 0 ] && SC_INTENT_KEEP=1   # the job stops: the terminal-intent record stays (R1)
     exit "$hf_bgjob_rc"
   fi
   SC_REMOTE_TERM_PANE="${SC_SOURCE_PANE:-$SC_FIRED_PEER}"
@@ -15574,6 +15603,7 @@ MSG
     echo "→ pane $SC_TTY CONFIRMED at a shell prompt (no CC) — skipping /exit, closing pane directly" >&2
     pin_term_verdict_for_watcher
     sc_commit_close_records
+    SC_INTENT_KEEP=1     # the pane retires now: the terminal-intent record stays (R1)
     detach "$SC_LOG" "$0" __selfclose "$SC_SID" "$SC_TTY" "$SC_SUCCESSOR" "$SUC_TTY" "$SUC_PIN" >/dev/null
   else
     pin_term_verdict_for_watcher
@@ -15627,6 +15657,7 @@ MSG
     # Teardown marker BEFORE the first /exit — the crash watchdog must read a planned self-close,
     # not a CRASH (the /exit interrupt kills this pane mid-Bash). Guarded: never blocks the close.
     write_teardown_marker "$SC_SID" "$([ "$SC_TERMINAL" = 1 ] && echo terminal || echo successor)" || true
+    SC_INTENT_KEEP=1     # /exit is typed next; kept unless every transport refuses it (below)
     wrote=0
     for _ in 1 2 3; do
       if as_write "$SC_SID" "/exit" 2>/dev/null; then wrote=1; break; fi
@@ -15636,7 +15667,7 @@ MSG
     # as_write grew its second transport (:973) this is no longer "AppleEvents had a bad minute" — it
     # is BOTH transports refusing 3x each, so the message must not send the next reader hunting the
     # one that is merely listed first (the class f59d4ff3 fixed for the PARKED verdict).
-    [ "$wrote" = 1 ] || { kill "$SC_WATCHER" 2>/dev/null; echo "!! could not type /exit into $SC_SID — every transport tried failed 3x ($(as_write_transports)); watcher disarmed, session stays alive" >&2; exit 1; }
+    [ "$wrote" = 1 ] || { SC_INTENT_KEEP=0; kill "$SC_WATCHER" 2>/dev/null; echo "!! could not type /exit into $SC_SID — every transport tried failed 3x ($(as_write_transports)); watcher disarmed, session stays alive" >&2; exit 1; }
     # Anti-strand best-effort (may not run if the interrupt kills us first — the watcher's CR
     # nudge at 60s covers a stranded /exit).
     osascript -e 'delay 1.5' >/dev/null 2>&1
