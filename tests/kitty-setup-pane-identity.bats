@@ -67,8 +67,23 @@ eval_block() {
   { printf '#!/bin/bash\n'; printf 'exit %s\n' "$1"; } > "$CC_KITTY_BIN_DIR/cc-in-kitty"
   chmod +x "$CC_KITTY_BIN_DIR/cc-in-kitty"
   block_of > "$BATS_TEST_TMPDIR/block.zsh"
-  HOME="$HOME" KITTY_WINDOW_ID=11 ITERM_SESSION_ID="$2" \
+  # KITTY_PID pinned to a pid that is not zsh's parent, so the stub's verdict decides — a suite run
+  # from a kitty pane must not inherit the operator's KITTY_PID into the PPID fast path.
+  HOME="$HOME" KITTY_WINDOW_ID=11 KITTY_PID=999999 ITERM_SESSION_ID="$2" \
     zsh -c "source '$BATS_TEST_TMPDIR/block.zsh'; printf '%s\n' \"\$ITERM_SESSION_ID\""
+}
+
+# The shell whose PARENT is kitty (every ⌘D split): KITTY_PID is set to zsh's own $PPID. The stub
+# answers NO and leaves a marker when run, so a pass proves the fast path decided without the fork.
+eval_block_direct_child() {
+  mkdir -p "$CC_KITTY_BIN_DIR"
+  rm -f "$CC_KITTY_BIN_DIR/cc-in-kitty" "$BATS_TEST_TMPDIR/ran"
+  { printf '#!/bin/bash\n'; printf ': > %q\n' "$BATS_TEST_TMPDIR/ran"; printf 'exit 1\n'; } \
+    > "$CC_KITTY_BIN_DIR/cc-in-kitty"
+  chmod +x "$CC_KITTY_BIN_DIR/cc-in-kitty"
+  block_of > "$BATS_TEST_TMPDIR/block.zsh"
+  HOME="$HOME" KITTY_WINDOW_ID=11 ITERM_SESSION_ID="$1" \
+    zsh -c "export KITTY_PID=\$PPID; source '$BATS_TEST_TMPDIR/block.zsh'; printf '%s\n' \"\$ITERM_SESSION_ID\""
 }
 
 # ── what gets written ────────────────────────────────────────────────────────────────────────────
@@ -114,6 +129,15 @@ eval_block() {
   apply
   run eval_block 1 "w0t15p4:E5D77446-2AE5-4463-929A-7ACBCD97018E"
   [ "$output" = "w0t15p4:E5D77446-2AE5-4463-929A-7ACBCD97018E" ] || { echo "got '$output'"; false; }
+}
+
+@test "REGRESSION ANCHOR: kitty as the DIRECT parent decides without forking cc-in-kitty" {
+  # 2026-10-21: cc-in-kitty's `ps -Ao` blocked a fresh ⌘D pane's .zshrc for 34 s behind a
+  # ready-looking instant prompt. The direct-parent case must never reach that fork.
+  apply
+  run eval_block_direct_child "w0t15p4:E5D77446-2AE5-4463-929A-7ACBCD97018E"
+  [ "$output" = "w0t0p0:11" ] || { echo "got '$output', want w0t0p0:11"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/ran" ] || { echo "cc-in-kitty was forked on the direct-parent path"; false; }
 }
 
 @test "with cc-in-kitty missing it changes nothing — a wrong id is worse than no change" {

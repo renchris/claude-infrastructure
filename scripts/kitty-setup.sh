@@ -357,7 +357,13 @@ read -r -d '' RC_BLOCK <<EOF
 # cc-in-kitty is what decides "inside kitty", by ANCESTRY rather than by \$KITTY_WINDOW_ID — which
 # iTerm2 also inherits, permanently, when it is launched from a kitty pane. If it is missing we
 # change nothing: a WRONG ITERM_SESSION_ID is worse than none, since iTerm2 wrote a correct one.
-if [ -n "\${KITTY_WINDOW_ID:-}" ] && [ -x "$CC_IN_KITTY_RC" ] && "$CC_IN_KITTY_RC"; then
+#
+# The PPID test runs FIRST and forks nothing: kitty as our DIRECT parent is the ancestry proof itself,
+# and it is the case for every ⌘D split (kitty-split-cwd.sh execs this shell). cc-in-kitty's
+# \`ps -Ao\` table walk intermittently blocks 14-245 s on this machine; on the startup path that held
+# a new pane at a ready-looking instant prompt for 34 s on 2026-10-21, echoing every key typed.
+if [ -n "\${KITTY_WINDOW_ID:-}" ] && { { [ "\${KITTY_PID:-1}" != 1 ] && [ "\$PPID" = "\$KITTY_PID" ]; } \\
+     || { [ -x "$CC_IN_KITTY_RC" ] && "$CC_IN_KITTY_RC"; }; }; then
   export ITERM_SESSION_ID="w0t0p0:\$KITTY_WINDOW_ID"
 fi
 #
